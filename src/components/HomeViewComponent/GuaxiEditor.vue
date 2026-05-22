@@ -3307,6 +3307,8 @@ let markdownFeaturesRegistered = false;
 let filesystemPathCompletionRegistered = false;
 const markdownLanguageFeatureDisposables = []
 const filesystemPathCompletionDisposables = []
+const MARKDOWN_LANGUAGE_FEATURES_REGISTRY_KEY = '__guaxi_markdown_language_features_registry__'
+const MARKDOWN_LANGUAGE_FEATURES_VERSION = '2026-05-22-embedded-completion-v8'
 const disposeFeatureDisposables = (items) => {
   if (!Array.isArray(items) || !items.length) return
   while (items.length) {
@@ -3315,6 +3317,70 @@ const disposeFeatureDisposables = (items) => {
       disposable?.dispose?.()
     } catch {
     }
+  }
+}
+const getGlobalLanguageFeatureRegistryHost = () => {
+  try {
+    return globalThis
+  } catch {
+    return null
+  }
+}
+const prepareMarkdownLanguageFeatureRegistration = () => {
+  const host = getGlobalLanguageFeatureRegistryHost()
+  const registry = host?.[MARKDOWN_LANGUAGE_FEATURES_REGISTRY_KEY]
+
+  if (
+    registry?.version === MARKDOWN_LANGUAGE_FEATURES_VERSION
+    && Array.isArray(registry.disposables)
+    && registry.disposables.length
+  ) {
+    markdownFeaturesRegistered = true
+    logger.debug('[MarkdownCompletion] reuse global language feature registration', {
+      version: registry.version,
+      disposableCount: registry.disposables.length,
+    })
+    return false
+  }
+
+  if (Array.isArray(registry?.disposables) && registry.disposables.length) {
+    // 设计说明：
+    // 1. Monaco 的 language provider 是进程级全局注册，不跟 Vue 组件或 Vite HMR 模块生命周期自动绑定。
+    // 2. 热更新/重挂载后如果旧 provider 没有释放，Monaco 会把多套 provider 的候选合并，表现为 `include` 成对重复。
+    // 3. 注册新版本前先清理全局旧版本，保证 Markdown fenced code completion 始终只有一套宿主映射 provider。
+    logger.warn('[MarkdownCompletion] dispose stale global language feature registration', {
+      staleVersion: registry.version || '',
+      nextVersion: MARKDOWN_LANGUAGE_FEATURES_VERSION,
+      staleDisposableCount: registry.disposables.length,
+    })
+    disposeFeatureDisposables(registry.disposables)
+  }
+
+  disposeFeatureDisposables(markdownLanguageFeatureDisposables)
+  markdownFeaturesRegistered = false
+  return true
+}
+const publishMarkdownLanguageFeatureRegistration = () => {
+  const host = getGlobalLanguageFeatureRegistryHost()
+  if (!host) return
+
+  host[MARKDOWN_LANGUAGE_FEATURES_REGISTRY_KEY] = {
+    version: MARKDOWN_LANGUAGE_FEATURES_VERSION,
+    disposables: markdownLanguageFeatureDisposables,
+  }
+  logger.info('[MarkdownCompletion] published global language feature registration', {
+    version: MARKDOWN_LANGUAGE_FEATURES_VERSION,
+    disposableCount: markdownLanguageFeatureDisposables.length,
+  })
+}
+const clearGlobalMarkdownLanguageFeatureRegistration = () => {
+  const host = getGlobalLanguageFeatureRegistryHost()
+  const registry = host?.[MARKDOWN_LANGUAGE_FEATURES_REGISTRY_KEY]
+  if (registry?.disposables === markdownLanguageFeatureDisposables) {
+    delete host[MARKDOWN_LANGUAGE_FEATURES_REGISTRY_KEY]
+    logger.debug('[MarkdownCompletion] cleared global language feature registration', {
+      version: registry.version || '',
+    })
   }
 }
 const filesystemPathCompletionCache = new Map();
@@ -4765,6 +4831,7 @@ const registerFilesystemPathCompletionFeatures = () => {
 
 const registerMarkdownLanguageFeatures = () => {
   if (markdownFeaturesRegistered) return;
+  if (!prepareMarkdownLanguageFeatureRegistration()) return;
   markdownFeaturesRegistered = true;
 
   const createSnippet = (label, insertText, detail) => ({
@@ -5323,6 +5390,8 @@ const registerMarkdownLanguageFeatures = () => {
       return null;
     }
   }));
+
+  publishMarkdownLanguageFeatureRegistration()
 };
 
 const tabBarRef = ref(null)
@@ -7099,12 +7168,12 @@ const getCompletionInsertTextKey = (item) => {
 const buildCompletionDedupKey = (item) => {
   const label = getCompletionItemLabelText(item?.label).trim().toLowerCase()
   const insertText = String(getCompletionInsertTextKey(item) || '').trim().toLowerCase()
-  const filterText = String(item?.filterText || '').trim().toLowerCase()
   // 设计说明：
   // 1. Markdown fenced code block 的补全可能同时经过 VSCode command 和 Guaxi direct LSP provider。
   // 2. clangd 对 `#include` / `#define` 这类候选会返回相同 label/insertText，但不同 detail、kind 或来源元信息。
-  // 3. 菜单展示层应该按“用户看到并会插入什么”去重，因此 key 只保留 label、insertText、filterText。
-  return [label, insertText, filterText].join('::')
+  // 3. `#` 触发时 filterText 还可能在 `include` / `#include` 之间变化；它只影响过滤，不应制造肉眼重复项。
+  // 4. 菜单展示层应该按“用户看到并会插入什么”去重，因此 key 只保留 label、insertText。
+  return [label, insertText].join('::')
 }
 
 const dedupeCompletionSuggestions = (items) => {
@@ -7284,6 +7353,15 @@ const buildEmbeddedCompletionInsertText = (rawInsertText, fallbackLabel, filterC
   if (filterContext?.isMemberAccessContext) return baseInsertText
 
   const prefix = String(filterContext?.filterPrefix || '')
+  if (prefix === '#' && baseInsertText.startsWith('#')) {
+    const normalized = baseInsertText.replace(/^#+/, '')
+    logger.debug('[EmbeddedLsp] normalized preprocessor insert text', {
+      rawInsertText: baseInsertText.slice(0, 80),
+      normalizedInsertText: normalized.slice(0, 80),
+      filterPrefix: prefix,
+    })
+    return normalized
+  }
   if (!prefix || !filterContext?.shouldReplaceFullMemberAccessToken) return baseInsertText
   if (baseInsertText.startsWith(prefix)) return baseInsertText
   return `${prefix}${baseInsertText}`
@@ -18579,6 +18657,7 @@ onUnmounted(() => {
     }
   })
   markdownFenceCompletionModels.clear()
+  clearGlobalMarkdownLanguageFeatureRegistration()
   disposeFeatureDisposables(markdownLanguageFeatureDisposables)
   disposeFeatureDisposables(filesystemPathCompletionDisposables)
   markdownFeaturesRegistered = false
