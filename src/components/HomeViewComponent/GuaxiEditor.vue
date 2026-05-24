@@ -20684,13 +20684,20 @@ onUnmounted(() => {
   color: #7f8898 !important;
 }
 
-:global(:root[data-guaxi-theme='dark'] .editor-wrapper .monaco-editor .current-line),
-:global(:root[data-guaxi-theme='dark'] .editor-wrapper .monaco-editor .view-overlays .current-line),
+/* 设计说明：
+ * 1. 当前行高亮只允许出现在 view-overlays 内容区，避免背景条越过 Monaco 的行号/gutter 区域。
+ * 2. 行号列保留文字高亮，不再铺背景色，这样视觉起点会与正文列对齐。
+ */
+:global(:root[data-guaxi-theme='dark'] .editor-wrapper .monaco-editor .view-overlays .current-line) {
+  background-color: #2c313a !important;
+  border-color: transparent !important;
+}
+
 :global(:root[data-guaxi-theme='dark'] .editor-wrapper .monaco-editor .margin-view-overlays .current-line),
 :global(:root[data-guaxi-theme='dark'] .editor-wrapper .monaco-editor .margin-view-overlays .current-line-margin),
 :global(:root[data-guaxi-theme='dark'] .editor-wrapper .monaco-editor .margin-view-overlays .line-numbers),
 :global(:root[data-guaxi-theme='dark'] .editor-wrapper .monaco-editor .line-numbers.active-line-number) {
-  background-color: #2c313a !important;
+  background-color: transparent !important;
   border-color: transparent !important;
 }
 
