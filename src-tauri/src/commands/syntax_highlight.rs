@@ -16,6 +16,11 @@ const HIGHLIGHT_CACHE_CAPACITY: usize = 1024;
 const MAX_HIGHLIGHT_CODE_BYTES: usize = 512 * 1024;
 static HIGHLIGHT_REQUEST_SEQ: AtomicU64 = AtomicU64::new(1);
 
+// 设计说明：
+// 1. Markdown 源码编辑器中的围栏代码块依赖这里的 tree-sitter capture 名称生成 token span。
+// 2. 各语言 query 常用 `function.method`、`function.macro`、`keyword.return` 等细分名称；
+//    如果没有在白名单中配置，前端只能拿到零散的基础 token，表现为函数/宏/关键字缺色。
+// 3. 这里保留基础名并补齐常见细分名，让 HTML 预览和 Monaco decoration 共用同一套稳定捕获。
 const HIGHLIGHT_NAMES: &[&str] = &[
     "attribute",
     "boolean",
@@ -29,7 +34,19 @@ const HIGHLIGHT_NAMES: &[&str] = &[
     "escape",
     "function",
     "function.builtin",
+    "function.call",
+    "function.macro",
+    "function.method",
+    "function.special",
     "keyword",
+    "keyword.conditional",
+    "keyword.directive",
+    "keyword.exception",
+    "keyword.function",
+    "keyword.import",
+    "keyword.operator",
+    "keyword.repeat",
+    "keyword.return",
     "markup",
     "markup.bold",
     "markup.heading",
@@ -299,8 +316,19 @@ fn css_class_for_highlight(name: &str) -> &'static str {
         "constant" | "constant.builtin" => "hljs-literal",
         "constructor" | "constructor.builtin" => "hljs-title",
         "escape" | "string.escape" => "hljs-subst",
-        "function" | "function.builtin" => "hljs-title function_",
-        "keyword" => "hljs-keyword",
+        "function" | "function.builtin" | "function.call" | "function.method" | "function.special" => {
+            "hljs-title function_"
+        }
+        "function.macro" => "hljs-title function_ hljs-meta",
+        "keyword"
+        | "keyword.conditional"
+        | "keyword.directive"
+        | "keyword.exception"
+        | "keyword.function"
+        | "keyword.import"
+        | "keyword.repeat"
+        | "keyword.return" => "hljs-keyword",
+        "keyword.operator" => "hljs-operator",
         "markup.heading" => "hljs-section",
         "markup.link" | "markup.link.url" => "hljs-link",
         "markup.raw" | "markup.raw.block" | "markup.raw.inline" => "hljs-code",
@@ -640,11 +668,17 @@ fn collect_highlight_token_spans(code: &str, raw_language: &str, debug_id: u64) 
         }
     }
 
+    let mut token_type_counts: HashMap<String, usize> = HashMap::new();
+    for span in &spans {
+        *token_type_counts.entry(span.token_type.clone()).or_insert(0) += 1;
+    }
+
     debug!(
         target: "syntax_highlight",
         debug_id,
         language,
         span_count = spans.len(),
+        token_type_counts = ?token_type_counts,
         elapsed_ms = start.elapsed().as_millis(),
         "tree-sitter token request completed"
     );

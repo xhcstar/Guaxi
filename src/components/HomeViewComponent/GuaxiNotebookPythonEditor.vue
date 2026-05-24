@@ -23,8 +23,10 @@
 
 <script setup>
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import 'monaco-editor/esm/vs/basic-languages/python/python.contribution'
 import { createLogger } from '../../utils/logger'
 import { getLspConnectionState, initLspClient, waitForLspConnection } from '../../monaco/lspClient'
+import { initTextmate } from '../../monaco/textmateLoader'
 import {
   replaceModelContentPreserveUndo,
   retainVsCodeTextModel,
@@ -421,6 +423,11 @@ const mountMonacoEditor = async () => {
         showWords: false,
         snippetsPreventQuickSuggestions: false,
       },
+      // 设计说明：
+      // 1. 探索者模式的 Python Cell 使用独立 Monaco 实例，不一定会经过主编辑器的语言高亮初始化路径。
+      // 2. 这里显式允许 semantic token 上色，再在下方接入同一套 tree-sitter provider，保证 Cell 内源码高亮和编辑模式一致。
+      // 3. 即使 provider 暂时不可用，Monaco 自带 Python tokenizer 仍会作为兜底，不影响编辑和 LSP 能力。
+      'semanticHighlighting.enabled': true,
       tabSize: 4,
       insertSpaces: true,
       fontFamily: 'var(--editor-font-family, "Maple Mono NF CN", "JetBrainsMono Nerd Font Mono", Consolas, monospace)',
@@ -444,6 +451,21 @@ const mountMonacoEditor = async () => {
       wordBasedSuggestions: 'off',
       showWords: false,
     })
+
+    try {
+      await initTextmate(editor, 'python')
+      logger.info('[NotebookPythonEditor] tree-sitter semantic highlight initialized', {
+        cellKey: String(props.cellKey || ''),
+        language: model?.getLanguageId?.() || 'python',
+        uri: String(model?.uri?.toString?.() || ''),
+        theme: currentAppliedTheme,
+      })
+    } catch (error) {
+      logger.warn('[NotebookPythonEditor] tree-sitter semantic highlight init failed, keep Monaco fallback tokenizer', {
+        cellKey: String(props.cellKey || ''),
+        error: String(error?.message || error),
+      })
+    }
 
     contentChangeDisposable = editor.onDidChangeModelContent(() => {
       const nextValue = editor?.getValue?.() || ''
