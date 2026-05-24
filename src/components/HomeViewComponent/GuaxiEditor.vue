@@ -5765,7 +5765,7 @@ const TREE_SITTER_FENCE_HIGHLIGHT_LANGUAGES = new Set([
   'latex',
 ]);
 const EMBEDDED_SEMANTIC_MAX_LINES = 240;
-const EMBEDDED_VISIBLE_BLOCK_LIMIT = 6;
+const EMBEDDED_VISIBLE_BLOCK_LIMIT = 24;
 
 // 设计说明：
 // 1. 源码编辑模式按 VS Code 习惯保留输入时自动建议，用户输入标识符时能及时看到 LSP 候选。
@@ -6902,20 +6902,23 @@ const updateMarkdownFenceSyntaxHighlight = async (targetEditor, reason) => {
   const visibleRanges = typeof targetEditor.getVisibleRanges === 'function'
     ? targetEditor.getVisibleRanges()
     : [];
-  let blocks = [];
+  const allBlocks = getCachedMarkdownFenceBlocks(model);
+  let blocks = visibleRanges.length
+    ? allBlocks.filter((item) => visibleRanges.some((range) => (
+      item.blockEndLine >= range.startLineNumber && item.blockStartLine <= range.endLineNumber
+    )))
+    : allBlocks;
+
   if (ctx) {
-    blocks = [ctx];
-  } else {
-    const allBlocks = getCachedMarkdownFenceBlocks(model);
-    if (visibleRanges.length) {
-      blocks = allBlocks.filter((item) => visibleRanges.some((range) => (
-        item.blockEndLine >= range.startLineNumber && item.blockStartLine <= range.endLineNumber
-      )));
-    } else {
-      blocks = allBlocks;
-    }
+    const sameBlock = (item) => (
+      item?.blockStartLine === ctx.blockStartLine &&
+      item?.blockEndLine === ctx.blockEndLine &&
+      item?.languageId === ctx.languageId
+    );
+    blocks = [ctx, ...blocks.filter((item) => !sameBlock(item))];
   }
-  if (!ctx && blocks.length > EMBEDDED_VISIBLE_BLOCK_LIMIT) {
+
+  if (!visibleRanges.length && blocks.length > EMBEDDED_VISIBLE_BLOCK_LIMIT) {
     blocks = blocks.slice(0, EMBEDDED_VISIBLE_BLOCK_LIMIT);
   }
   if (!blocks.length) {
@@ -6941,15 +6944,23 @@ const updateMarkdownFenceSyntaxHighlight = async (targetEditor, reason) => {
   const rangeKey = visibleRanges
     .map((range) => `${range.startLineNumber}-${range.endLineNumber}`)
     .join('|');
-  const key = ctx
-    ? `${ctx.languageId}:${ctx.blockStartLine}:${ctx.blockEndLine}:${versionId}`
-    : `${versionId}:${rangeKey}`;
+  const blockKey = blocks
+    .map((item) => `${item.languageId}:${item.blockStartLine}:${item.blockEndLine}`)
+    .join('|');
+  const key = `${versionId}:${rangeKey}:${blockKey}`;
   if (state.lastKey === key && reason === 'cursor') return;
   state.lastKey = key;
 
+  logger.debug('[MarkdownFence] syntax highlight blocks resolved', {
+    reason,
+    blockCount: blocks.length,
+    hasCursorBlock: !!ctx,
+    visibleRangeCount: visibleRanges.length,
+    versionId,
+  });
+
   const decorations = [];
   for (const block of blocks) {
-    warmupEmbeddedLspForContext(block);
     const blockText = block.blockText ?? buildMarkdownFenceBlockText(model, block.blockStartLine, block.blockEndLine);
     let appliedTreeSitterTokens = false;
 
@@ -6960,13 +6971,20 @@ const updateMarkdownFenceSyntaxHighlight = async (targetEditor, reason) => {
         blockEndLine: block.blockEndLine,
       });
       if (state.requestSeq !== requestSeq) return;
-      if (spans) {
+      if (spans?.length) {
         appendFenceBaseLineDecorations(decorations, block, model, blockText);
         appendTreeSitterFenceDecorations(decorations, block, model, blockText, spans);
         appliedTreeSitterTokens = true;
         logger.debug('[MarkdownFence][TreeSitter] decorations appended', {
           languageId: block.languageId,
           spanCount: spans.length,
+          blockStartLine: block.blockStartLine,
+          blockEndLine: block.blockEndLine,
+          reason,
+        });
+      } else if (spans) {
+        logger.debug('[MarkdownFence][TreeSitter] empty token spans, fallback to Monaco tokenizer', {
+          languageId: block.languageId,
           blockStartLine: block.blockStartLine,
           blockEndLine: block.blockEndLine,
           reason,
@@ -7026,19 +7044,6 @@ const updateMarkdownFenceSyntaxHighlight = async (targetEditor, reason) => {
     }
 
     if (state.requestSeq !== requestSeq) return;
-
-    const shouldApplySemantic = reason !== 'cursor' && reason !== 'scroll';
-    const semanticBundle = shouldApplySemantic ? await fetchEmbeddedSemanticTokens(block) : null;
-    if (state.requestSeq !== requestSeq) return;
-    if (semanticBundle) {
-      appendEmbeddedSemanticDecorations(
-        decorations,
-        block,
-        model,
-        semanticBundle.semanticTokens,
-        semanticBundle.legend
-      );
-    }
   }
 
   if (state.requestSeq !== requestSeq) return;
@@ -7064,6 +7069,35 @@ const scheduleMarkdownFenceSyntaxHighlight = (targetEditor, reason) => {
       logger.warn('[MarkdownFence] syntax highlight update failed', { reason }, error);
     });
   }, delay);
+};
+
+const forceScheduleMarkdownFenceSyntaxHighlight = (targetEditor, reason) => {
+  if (!targetEditor) return;
+  const state = getMarkdownFenceHighlightState(targetEditor);
+  state.lastKey = '';
+  scheduleMarkdownFenceSyntaxHighlight(targetEditor, reason);
+};
+
+const scheduleMarkdownFenceSyntaxHighlightAfterContentSync = (targetEditor, reason) => {
+  if (!targetEditor) return;
+  // 设计思路：
+  // 1. 打开文件时 Monaco model 内容和可视行范围不是同一帧稳定下来，单次 init 刷新容易在空内容/旧 range 上提前返回。
+  // 2. 这里用两次 requestAnimationFrame 等布局与 visibleRanges 稳定后再强制刷新围栏高亮，避免用户必须滚动才触发。
+  // 3. 再补一个短延迟兜底，应对 VSCode model bridge 后续 pushEditOperations 把内容再次同步进同一 model。
+  const run = (suffix) => {
+    forceScheduleMarkdownFenceSyntaxHighlight(targetEditor, `${reason}:${suffix}`);
+    logger.debug('[MarkdownFence] scheduled after content sync', {
+      reason,
+      suffix,
+      languageId: targetEditor.getModel?.()?.getLanguageId?.() || '',
+      lineCount: targetEditor.getModel?.()?.getLineCount?.() || 0,
+    });
+  };
+
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => run('raf'));
+  });
+  window.setTimeout(() => run('settled'), 160);
 };
 
 const markdownMathHighlightStates = new WeakMap();
@@ -12403,6 +12437,7 @@ const syncSourceEditorContent = (reason = 'manual-sync') => {
       targetEditor.setValue(nextText)
     }
     targetEditor.layout?.()
+    scheduleMarkdownFenceSyntaxHighlightAfterContentSync(targetEditor, reason)
     logger.debug('[Editor] syncSourceEditorContent', {
       reason,
       length: nextText.length,
@@ -12562,7 +12597,10 @@ const updateEditorContent = (content) => {
     reason: 'update-editor-content',
   }) || targetEditor.getModel();
   const currentValue = model ? model.getValue() : targetEditor.getValue();
-  if (currentValue === nextContent) return;
+  if (currentValue === nextContent) {
+    scheduleMarkdownFenceSyntaxHighlightAfterContentSync(targetEditor, 'update-editor-content:unchanged')
+    return;
+  }
 
   sourceEditorProgrammaticSyncDepth += 1
   try {
@@ -12583,6 +12621,7 @@ const updateEditorContent = (content) => {
       length: String(nextContent).length,
       suppressedDepth: sourceEditorProgrammaticSyncDepth,
     })
+    scheduleMarkdownFenceSyntaxHighlightAfterContentSync(targetEditor, 'update-editor-content')
   } finally {
     sourceEditorProgrammaticSyncDepth = Math.max(0, sourceEditorProgrammaticSyncDepth - 1)
   }
