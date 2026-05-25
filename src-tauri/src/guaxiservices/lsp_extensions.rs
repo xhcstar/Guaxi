@@ -20,6 +20,30 @@ use zip::ZipArchive;
 
 use crate::guaxiservices::{bundled_resources, lsp};
 
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+fn apply_lsp_child_process_no_window(cmd: &mut Command, operation: &str) {
+    // 设计说明：
+    // 1. Release 版 Tauri 应用是 Windows GUI 子系统，后台启动 npm.cmd 这类控制台程序时如果不显式隐藏窗口，
+    //    Windows 可能会为短生命周期子进程闪出命令行窗口。
+    // 2. LSP 扩展安装和运行时修复都属于后台任务，stdout/stderr 已由 Rust 收集并写入日志，不需要用户看到控制台。
+    // 3. 只在 Windows 设置 CREATE_NO_WINDOW，其他平台保持原生子进程行为，避免引入跨平台差异。
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        info!(
+            operation = operation,
+            "configured LSP child process to run without a console window"
+        );
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (cmd, operation);
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct CatalogRoot {
     version: u32,
@@ -1487,6 +1511,7 @@ async fn run_shared_node_runtime_npm_install(
 ) -> Result<(), String> {
     let npm = npm_command_name();
     let mut npm_install = Command::new(npm);
+    apply_lsp_child_process_no_window(&mut npm_install, "shared-node-runtime-npm-install");
     apply_proxy_env_to_npm(&mut npm_install);
     let output = npm_install
         .arg("install")
