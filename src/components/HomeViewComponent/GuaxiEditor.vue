@@ -18125,6 +18125,13 @@ const toggleVimMode = () => {
   vimMode.value = !vimMode.value;
 
   nextTick(() => {
+    const currentTheme = document.documentElement?.getAttribute('data-guaxi-theme') || 'light';
+    logger.info('[GuaxiEditor] Vim 模式切换', {
+      enabled: vimMode.value,
+      theme: currentTheme,
+      hasStatusBar: Boolean(vimStatusBar.value)
+    });
+
     if (vimMode.value) {
       if (editor && vimStatusBar.value) {
         vimModeInstance = initVimMode(editor, vimStatusBar.value);
@@ -19314,6 +19321,12 @@ onUnmounted(() => {
   --pycell-var-name: #10233f;
   --pycell-var-type: #0f766e;
   --pycell-var-preview: #506177;
+  /* Vim 状态栏跟随 Guaxi 编辑器主题变量，避免 monaco-vim 默认浅色样式在主题切换后残留。 */
+  --vim-status-bg: var(--guaxi-status-bar-background, var(--guaxi-panel-bg, #f8f8f8));
+  --vim-status-border: var(--guaxi-status-bar-border, var(--guaxi-border, #e0e0e0));
+  --vim-status-fg: var(--guaxi-status-bar-foreground, var(--guaxi-text-primary, #1f2328));
+  --vim-status-input-bg: var(--guaxi-content-bg, #ffffff);
+  --vim-status-input-border: var(--guaxi-border, #d0d7de);
 }
 
 :global(:root[data-guaxi-theme='dark'] .guaxi-editor) {
@@ -19372,6 +19385,11 @@ onUnmounted(() => {
   --pycell-var-name: #e5eefc;
   --pycell-var-type: #5eead4;
   --pycell-var-preview: #c7d4e5;
+  --vim-status-bg: var(--guaxi-status-bar-background, var(--guaxi-panel-bg, #21252b));
+  --vim-status-border: var(--guaxi-status-bar-border, var(--guaxi-border, #3e4451));
+  --vim-status-fg: var(--guaxi-status-bar-foreground, var(--guaxi-text-primary, #abb2bf));
+  --vim-status-input-bg: var(--guaxi-content-bg, #282c34);
+  --vim-status-input-border: var(--guaxi-border, #3e4451);
 }
 
 .editor-header {
@@ -21075,12 +21093,30 @@ onUnmounted(() => {
   left: 0;
   right: 0;
   height: 20px;
-  background-color: var(--toolbar-bg, #f8f8f8);
-  border-top: 1px solid var(--divider-color, #e0e0e0);
+  background-color: var(--vim-status-bg, var(--toolbar-bg, #f8f8f8));
+  border-top: 1px solid var(--vim-status-border, var(--divider-color, #e0e0e0));
+  color: var(--vim-status-fg, var(--guaxi-text-primary, #1f2328));
   padding: 2px 8px;
   font-size: 12px;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
   z-index: 1;
+}
+
+.vim-status-bar :deep(input) {
+  /* monaco-vim 在运行时把命令输入框插入到状态栏内，必须用 :deep 命中这个没有 scoped 属性的节点。 */
+  box-sizing: border-box;
+  height: 16px;
+  margin: 0 2px;
+  background-color: var(--vim-status-input-bg, var(--vim-status-bg, #f8f8f8));
+  border: 1px solid var(--vim-status-input-border, var(--vim-status-border, #e0e0e0));
+  color: var(--vim-status-fg, var(--guaxi-text-primary, #1f2328));
+  caret-color: var(--vim-status-fg, var(--guaxi-text-primary, #1f2328));
+  font: inherit;
+  outline: none;
+}
+
+.vim-status-bar :deep(input:focus) {
+  border-color: var(--vscode-focusBorder, rgba(82, 139, 255, 0.5));
 }
 
 .editor-status-bar {
