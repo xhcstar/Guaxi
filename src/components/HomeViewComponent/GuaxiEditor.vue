@@ -1164,11 +1164,13 @@ const ensureLatexLanguage = () => {
   // 1. Monaco 默认没有内置 latex contribution，仅 register 语言 ID 只能让状态栏显示 LaTeX，编辑区仍近似纯文本。
   // 2. 后端 tree-sitter 语义高亮是异步增强，打开单文件 .tex 时需要先有一层稳定的前端词法高亮兜底。
   // 3. 这里覆盖常见命令、环境、注释、可选参数和数字；更细粒度语义仍交给 syntax_highlight_tokens / texlab。
+  logger.debug('[Editor] configure LaTeX Monarch tokenizer', { languageId: 'latex', existed: exists })
   monaco.languages.setMonarchTokensProvider('latex', {
     tokenizer: {
       root: [
         [/%.*$/, 'comment'],
-        [/\\(?:begin|end)(\s*)(\{)([A-Za-z*_-][\w*:-]*)(\})/, ['keyword', 'white', 'delimiter.bracket', 'type', 'delimiter.bracket']],
+        // Monarch 的 action 数组必须和正则捕获组一一对应：命令、空白、左括号、环境名、右括号共 5 组。
+        [/(\\(?:begin|end))(\s*)(\{)([A-Za-z*_-][\w*:-]*)(\})/, ['keyword', 'white', 'delimiter.bracket', 'type', 'delimiter.bracket']],
         [/\\(?:documentclass|usepackage|usetikzlibrary|input|include|bibliography|bibliographystyle)(?=\s*(?:\[|\{))/, 'keyword'],
         [/\\(?:section|subsection|subsubsection|paragraph|title|author|date|maketitle|tableofcontents|newpage|item|label|ref|eqref|cite|emph|textbf|textit)\b/, 'function'],
         [/\\[A-Za-z@]+\*?/, 'keyword'],
