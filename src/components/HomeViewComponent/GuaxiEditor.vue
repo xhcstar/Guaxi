@@ -1151,14 +1151,36 @@ const outlineStore = useOutlineStore()
 
 const ensureLatexLanguage = () => {
   const exists = monaco.languages.getLanguages().some((lang) => lang.id === 'latex')
-  if (exists) return
-  monaco.languages.register({
-    id: 'latex',
-    extensions: ['.tex', '.ltx', '.latex', '.cls', '.sty'],
-    aliases: ['LaTeX', 'TeX', 'latex', 'tex'],
-    mimetypes: ['text/x-tex', 'text/x-latex']
+  if (!exists) {
+    monaco.languages.register({
+      id: 'latex',
+      extensions: ['.tex', '.ltx', '.latex', '.cls', '.sty'],
+      aliases: ['LaTeX', 'TeX', 'latex', 'tex'],
+      mimetypes: ['text/x-tex', 'text/x-latex']
+    })
+  }
+
+  // 设计说明：
+  // 1. Monaco 默认没有内置 latex contribution，仅 register 语言 ID 只能让状态栏显示 LaTeX，编辑区仍近似纯文本。
+  // 2. 后端 tree-sitter 语义高亮是异步增强，打开单文件 .tex 时需要先有一层稳定的前端词法高亮兜底。
+  // 3. 这里覆盖常见命令、环境、注释、可选参数和数字；更细粒度语义仍交给 syntax_highlight_tokens / texlab。
+  monaco.languages.setMonarchTokensProvider('latex', {
+    tokenizer: {
+      root: [
+        [/%.*$/, 'comment'],
+        [/\\(?:begin|end)(\s*)(\{)([A-Za-z*_-][\w*:-]*)(\})/, ['keyword', 'white', 'delimiter.bracket', 'type', 'delimiter.bracket']],
+        [/\\(?:documentclass|usepackage|usetikzlibrary|input|include|bibliography|bibliographystyle)(?=\s*(?:\[|\{))/, 'keyword'],
+        [/\\(?:section|subsection|subsubsection|paragraph|title|author|date|maketitle|tableofcontents|newpage|item|label|ref|eqref|cite|emph|textbf|textit)\b/, 'function'],
+        [/\\[A-Za-z@]+\*?/, 'keyword'],
+        [/\\./, 'operator'],
+        [/\[[^\]]*\]/, 'attribute'],
+        [/\{|\}/, 'delimiter.bracket'],
+        [/\$+\s*|\s*\$+/, 'string.delimiter'],
+        [/\b\d+(?:\.\d+)?(?:pt|em|ex|cm|mm|in)?\b/, 'number'],
+      ]
+    }
   })
-  logger.info('[Editor] language registered', { languageId: 'latex' })
+  logger.info('[Editor] LaTeX language registered/configured', { languageId: 'latex', existed: exists })
 }
 
 const ensureMermaidLanguage = () => {
@@ -5371,6 +5393,24 @@ const registerMarkdownLanguageFeatures = () => {
     }
   }));
 
+  markdownLanguageFeatureDisposables.push(monaco.languages.registerCompletionItemProvider('latex', {
+    triggerCharacters: ['\\'],
+    provideCompletionItems(model, position) {
+      // 设计说明：
+      // 1. Markdown 内嵌数学块原本已经有 LaTeX 本地 snippets，但独立 .tex 文件只依赖 texlab 时，
+      //    常见命令片段可能为空或延迟返回，用户会看到“没有补全”。
+      // 2. 这里复用同一份 snippets，作为 standalone LaTeX 文件的本地语法补全；texlab direct provider 仍会并行提供项目符号/引用等语义候选。
+      // 3. 只在反斜杠命令前缀下返回，避免污染普通中文/正文输入。
+      const suggestions = getEmbeddedSyntaxSnippetSuggestions('latex', model, position);
+      logger.debug('[LatexCompletion] standalone snippets resolved', {
+        lineNumber: position.lineNumber,
+        column: position.column,
+        suggestionCount: suggestions.length,
+      });
+      return { suggestions: dedupeCompletionSuggestions(suggestions) };
+    }
+  }));
+
   markdownLanguageFeatureDisposables.push(monaco.languages.registerSignatureHelpProvider('markdown', {
     signatureHelpTriggerCharacters: ['(', ',', '{', '['],
     signatureHelpRetriggerCharacters: [','],
@@ -5828,6 +5868,25 @@ const getMarkdownFenceHighlightState = (targetEditor) => {
     markdownFenceHighlightStates.set(targetEditor, state);
   }
   return state;
+};
+
+const directFileSyntaxHighlightStates = new WeakMap();
+const DIRECT_FILE_DECORATION_LANGUAGES = new Set(['latex']);
+
+const getDirectFileSyntaxHighlightState = (targetEditor) => {
+  let state = directFileSyntaxHighlightStates.get(targetEditor);
+  if (!state) {
+    state = { decorations: [], timer: 0, lastKey: '', requestSeq: 0 };
+    directFileSyntaxHighlightStates.set(targetEditor, state);
+  }
+  return state;
+};
+
+const clearDirectFileSyntaxHighlight = (targetEditor) => {
+  if (!targetEditor) return;
+  const state = getDirectFileSyntaxHighlightState(targetEditor);
+  if (!state.decorations?.length) return;
+  state.decorations = targetEditor.deltaDecorations(state.decorations, []);
 };
 
 const clearMarkdownFenceSyntaxHighlight = (targetEditor) => {
@@ -7201,6 +7260,117 @@ const forceScheduleMarkdownFenceSyntaxHighlight = (targetEditor, reason) => {
   scheduleMarkdownFenceSyntaxHighlight(targetEditor, reason);
 };
 
+const updateDirectFileSyntaxHighlight = async (targetEditor, reason) => {
+  if (!targetEditor) return;
+  const model = targetEditor.getModel?.();
+  const languageId = normalizeTreeSitterFenceHighlightLanguage(model?.getLanguageId?.() || '');
+  if (!model || !DIRECT_FILE_DECORATION_LANGUAGES.has(languageId)) {
+    clearDirectFileSyntaxHighlight(targetEditor);
+    return;
+  }
+
+  const visibleRanges = typeof targetEditor.getVisibleRanges === 'function'
+    ? targetEditor.getVisibleRanges()
+    : [];
+  const ranges = visibleRanges.length
+    ? visibleRanges
+    : [{ startLineNumber: 1, endLineNumber: Math.min(model.getLineCount(), 220) }];
+
+  const state = getDirectFileSyntaxHighlightState(targetEditor);
+  const requestSeq = (state.requestSeq || 0) + 1;
+  state.requestSeq = requestSeq;
+  const versionId = typeof model.getVersionId === 'function'
+    ? model.getVersionId()
+    : model.getAlternativeVersionId?.() || 0;
+  const rangeKey = ranges.map((range) => `${range.startLineNumber}-${range.endLineNumber}`).join('|');
+  const key = `${languageId}:${versionId}:${rangeKey}`;
+  if (state.lastKey === key && reason === 'cursor') return;
+  state.lastKey = key;
+
+  const decorations = [];
+  for (const range of ranges) {
+    const startLine = Math.max(1, Number(range.startLineNumber || 1));
+    const endLine = Math.min(model.getLineCount(), Math.max(startLine, Number(range.endLineNumber || startLine)));
+    const lines = [];
+    for (let lineNumber = startLine; lineNumber <= endLine; lineNumber += 1) {
+      lines.push(model.getLineContent(lineNumber));
+    }
+    const blockText = lines.join('\n');
+    const block = {
+      languageId,
+      blockStartLine: startLine,
+      blockEndLine: endLine,
+      blockText,
+    };
+
+    let treeSitterApplied = false;
+    const spans = await fetchTreeSitterFenceTokenSpans(languageId, blockText, {
+      reason: `direct-file:${reason}`,
+      blockStartLine: startLine,
+      blockEndLine: endLine,
+    });
+    if (state.requestSeq !== requestSeq) return;
+    if (spans?.length) {
+      appendTreeSitterFenceDecorations(decorations, block, model, blockText, spans);
+      treeSitterApplied = true;
+    }
+
+    // 设计说明：
+    // 1. 独立 .tex 文件和 Markdown 代码块应该复用同一套 md-fence-token-* 色板，避免同一段 LaTeX 在两个编辑模式下颜色漂移。
+    // 2. 后端 LaTeX fallback scanner 只负责通用 token，documentclass/usepackage/begin 环境名等语法糖由这里补齐。
+    // 3. 只处理当前可视范围，滚动和内容变更再增量刷新，避免大 tex 文件每次编辑都全量装饰。
+    appendLanguageAwareFenceDecorations(decorations, block, model, blockText, `direct-file:${reason}`);
+
+    logger.debug('[DirectSyntaxHighlight] visible block decorated', {
+      languageId,
+      startLine,
+      endLine,
+      treeSitterApplied,
+      decorationCount: decorations.length,
+      reason,
+    });
+  }
+
+  if (state.requestSeq !== requestSeq) return;
+  state.decorations = targetEditor.deltaDecorations(state.decorations || [], decorations);
+  logger.debug('[DirectSyntaxHighlight] applied decorations', {
+    languageId,
+    reason,
+    versionId,
+    rangeCount: ranges.length,
+    decorationCount: decorations.length,
+  });
+};
+
+const scheduleDirectFileSyntaxHighlight = (targetEditor, reason) => {
+  if (!targetEditor) return;
+  const state = getDirectFileSyntaxHighlightState(targetEditor);
+  if (state.timer) {
+    window.clearTimeout(state.timer);
+  }
+  const delay = reason === 'scroll' ? 120 : reason === 'cursor' ? 90 : 60;
+  state.timer = window.setTimeout(() => {
+    state.timer = 0;
+    updateDirectFileSyntaxHighlight(targetEditor, reason).catch((error) => {
+      logger.warn('[DirectSyntaxHighlight] update failed', { reason }, error);
+    });
+  }, delay);
+};
+
+const scheduleSourceSyntaxHighlight = (targetEditor, reason) => {
+  if (!targetEditor) return;
+  const languageId = String(targetEditor.getModel?.()?.getLanguageId?.() || '').trim().toLowerCase();
+  if (languageId === 'markdown') {
+    clearDirectFileSyntaxHighlight(targetEditor);
+    scheduleMarkdownFenceSyntaxHighlight(targetEditor, reason);
+    scheduleMarkdownMathSyntaxHighlight(targetEditor, reason);
+    return;
+  }
+  clearMarkdownFenceSyntaxHighlight(targetEditor);
+  clearMarkdownMathSyntaxHighlight(targetEditor);
+  scheduleDirectFileSyntaxHighlight(targetEditor, reason);
+};
+
 const scheduleMarkdownFenceSyntaxHighlightAfterContentSync = (targetEditor, reason) => {
   if (!targetEditor) return;
   // 设计思路：
@@ -8402,6 +8572,7 @@ const EXT_TO_LANGUAGE = {
   html: 'html',
   htm: 'html',
   md: 'markdown',
+  markdown: 'markdown',
   py: 'python',
   cpp: 'cpp',
   c: 'c',
@@ -8465,8 +8636,18 @@ const MARKDOWN_FENCE_LANG_MAP = {
 }
 
 const resolveMonacoLanguageByPath = (path) => {
-  const ext = String(path || '').split('.').pop()?.toLowerCase() || 'markdown'
-  return EXT_TO_LANGUAGE[ext] || 'markdown'
+  const fileName = String(path || '').split(/[\\/]/).pop() || ''
+  const dotIndex = fileName.lastIndexOf('.')
+  const ext = dotIndex > 0 ? fileName.slice(dotIndex + 1).toLowerCase() : ''
+  const language = EXT_TO_LANGUAGE[ext] || 'plaintext'
+  if (!EXT_TO_LANGUAGE[ext]) {
+    logger.debug('[Editor] file extension resolved to plaintext', {
+      path: String(path || ''),
+      ext,
+      language,
+    })
+  }
+  return language
 }
 
 const resolveFenceLanguageId = (infoRaw) => {
@@ -8549,11 +8730,20 @@ const startLspClientForEditorLanguage = (targetEditor, lang, filePath, requestSo
   })
 }
 
+const shouldPublishEditorLanguageToStatusBar = (targetEditor) => {
+  if (!targetEditor) return false
+  if (targetEditor === getActiveEditor?.()) return true
+  if (targetEditor === editor && fileTreeStore.activeRegion !== 'right') return true
+  if (targetEditor === secondaryEditor && fileTreeStore.activeRegion === 'right') return true
+  return false
+}
+
 const enableLspForEditorLanguage = async (targetEditor, languageId, filePath = '') => {
   if (!targetEditor) return
   const lang = String(languageId || '').trim().toLowerCase()
   if (!lang) return
 
+  ensureLanguagePairingConfig(lang)
   refreshDirectLspSuggestMode(targetEditor, lang)
 
   initTextmate(targetEditor, lang).catch((e) => {
@@ -8581,6 +8771,42 @@ const enableLspForEditorLanguage = async (targetEditor, languageId, filePath = '
   logger.info('[DirectLsp] runtime not ready for known language after snapshot refresh', {
     languageId: lang,
     filePath: String(filePath || ''),
+  })
+}
+
+const activateEditorLanguageFeatures = (targetEditor, reason = 'manual') => {
+  if (!targetEditor) return
+  const model = targetEditor.getModel?.()
+  const languageId = String(model?.getLanguageId?.() || 'plaintext').trim().toLowerCase() || 'plaintext'
+  const filePath = getEditorBoundTabPath(targetEditor)
+
+  // 设计说明：
+  // 1. 切换到 .tex/.py/.html 这类单文件时，Monaco 会直接换成一个已经带 languageId 的新 model。
+  //    这种路径不会触发 onDidChangeModelLanguage，因此不能只靠“语言改变”事件同步状态栏和 LSP。
+  // 2. 这里把 model 切换、文件切换、手动语言切换统一收口，确保状态栏、tree-sitter 语义高亮、
+  //    direct LSP 补全和建议策略都基于当前真实 model language。
+  // 3. 非 Markdown 文件不再套用 Markdown 围栏高亮；Markdown 仍走原有的围栏/数学块补全与高亮链路。
+  if (shouldPublishEditorLanguageToStatusBar(targetEditor)) {
+    editorStore.setLanguage(languageId)
+  }
+
+  void enableLspForEditorLanguage(targetEditor, languageId, filePath)
+  if (languageId === 'markdown') {
+    clearDirectFileSyntaxHighlight(targetEditor)
+    scheduleMarkdownFenceSyntaxHighlightAfterContentSync(targetEditor, reason)
+    scheduleMarkdownMathSyntaxHighlight(targetEditor, reason)
+  } else {
+    clearMarkdownFenceSyntaxHighlight(targetEditor)
+    clearMarkdownMathSyntaxHighlight(targetEditor)
+    scheduleDirectFileSyntaxHighlight(targetEditor, reason)
+  }
+
+  logger.info('[Editor] activated language features for bound model', {
+    reason,
+    languageId,
+    filePath: String(filePath || ''),
+    uri: String(model?.uri?.toString?.() || ''),
+    publishStatusBar: shouldPublishEditorLanguageToStatusBar(targetEditor),
   })
 }
 
@@ -9284,8 +9510,7 @@ const ensureSecondaryEditor = () => {
   })
 
   enableLspForEditorLanguage(secondaryEditor, language, rightPath || '');
-  scheduleMarkdownFenceSyntaxHighlight(secondaryEditor, 'init');
-  scheduleMarkdownMathSyntaxHighlight(secondaryEditor, 'init');
+  scheduleSourceSyntaxHighlight(secondaryEditor, 'init');
   refreshMarkdownSuggestMode(secondaryEditor)
   scheduleRefreshPythonCellManagers()
 
@@ -9310,15 +9535,13 @@ const ensureSecondaryEditor = () => {
     editorStore.setCursorPosition(e.position);
     editorEffectsRight?.updateCursorTarget();
     refreshMarkdownSuggestMode(secondaryEditor)
-    scheduleMarkdownFenceSyntaxHighlight(secondaryEditor, 'cursor');
-    scheduleMarkdownMathSyntaxHighlight(secondaryEditor, 'cursor');
+    scheduleSourceSyntaxHighlight(secondaryEditor, 'cursor');
   });
 
   secondaryEditor.onDidScrollChange(() => {
     editorEffectsRight?.updateCursorTarget();
     refreshMarkdownSuggestMode(secondaryEditor)
-    scheduleMarkdownFenceSyntaxHighlight(secondaryEditor, 'scroll');
-    scheduleMarkdownMathSyntaxHighlight(secondaryEditor, 'scroll');
+    scheduleSourceSyntaxHighlight(secondaryEditor, 'scroll');
   });
 
   secondaryEditor.onDidType((text) => {
@@ -9332,8 +9555,13 @@ const ensureSecondaryEditor = () => {
     const languageId = secondaryEditor?.getModel?.()?.getLanguageId?.() || 'plaintext';
     enableLspForEditorLanguage(secondaryEditor, languageId, rightPath || '');
     refreshMarkdownSuggestMode(secondaryEditor)
-    scheduleMarkdownFenceSyntaxHighlight(secondaryEditor, 'model');
-    scheduleMarkdownMathSyntaxHighlight(secondaryEditor, 'model');
+    scheduleSourceSyntaxHighlight(secondaryEditor, 'model');
+    scheduleRefreshPythonCellManagers()
+  });
+
+  secondaryEditor.onDidChangeModel(() => {
+    activateEditorLanguageFeatures(secondaryEditor, 'secondary-model-changed')
+    refreshMarkdownSuggestMode(secondaryEditor)
     scheduleRefreshPythonCellManagers()
   });
 
@@ -9401,11 +9629,8 @@ const ensureSecondaryEditor = () => {
         rawContent.value = content;
         fileTreeStore.updateTabContent(path, content);
         updateGitDecorations();
-        if (model.getLanguageId() === 'markdown') {
-          refreshMarkdownSuggestMode(secondaryEditor)
-          scheduleMarkdownFenceSyntaxHighlight(secondaryEditor, 'debounced');
-          scheduleMarkdownMathSyntaxHighlight(secondaryEditor, 'debounced');
-        }
+        refreshMarkdownSuggestMode(secondaryEditor)
+        scheduleSourceSyntaxHighlight(secondaryEditor, 'debounced');
         scheduleRefreshPythonCellManagers()
       }, EDITOR_POSTPROCESS_DELAY_MS)
     );
@@ -9735,8 +9960,7 @@ const setupEditorListeners = () => {
   }
   monacoLinkLikeDecorDisposable = installMonacoLinkLikeDecorations(editor, { tag: 'left' });
 
-  scheduleMarkdownFenceSyntaxHighlight(editor, 'init');
-  scheduleMarkdownMathSyntaxHighlight(editor, 'init');
+  scheduleSourceSyntaxHighlight(editor, 'init');
   refreshMarkdownSuggestMode(editor)
   scheduleRefreshPythonCellManagers()
 
@@ -9744,8 +9968,7 @@ const setupEditorListeners = () => {
     editorStore.setCursorPosition(e.position);
     updateTableToolbar();
     refreshMarkdownSuggestMode(editor)
-    scheduleMarkdownFenceSyntaxHighlight(editor, 'cursor');
-    scheduleMarkdownMathSyntaxHighlight(editor, 'cursor');
+    scheduleSourceSyntaxHighlight(editor, 'cursor');
     editorEffectsLeft?.updateCursorTarget();
   });
 
@@ -9849,8 +10072,7 @@ const setupEditorListeners = () => {
         updateTableToolbar();
         scheduleAutoFormatActiveTable();
         refreshMarkdownSuggestMode(editor)
-        scheduleMarkdownFenceSyntaxHighlight(editor, 'debounced');
-        scheduleMarkdownMathSyntaxHighlight(editor, 'debounced');
+        scheduleSourceSyntaxHighlight(editor, 'debounced');
         updateGitDecorations();
         scheduleRefreshPythonCellManagers()
       }, EDITOR_POSTPROCESS_DELAY_MS)
@@ -9873,8 +10095,7 @@ const setupEditorListeners = () => {
     }
     editorEffectsLeft?.updateCursorTarget();
     refreshMarkdownSuggestMode(editor)
-    scheduleMarkdownFenceSyntaxHighlight(editor, 'scroll');
-    scheduleMarkdownMathSyntaxHighlight(editor, 'scroll');
+    scheduleSourceSyntaxHighlight(editor, 'scroll');
     syncRealtimePreviewScroll();
   });
 
@@ -9884,8 +10105,14 @@ const setupEditorListeners = () => {
     enableLspForEditorLanguage(editor, language, selectedFile.value?.path || '');
     updateTableToolbar();
     refreshMarkdownSuggestMode(editor)
-    scheduleMarkdownFenceSyntaxHighlight(editor, 'model');
-    scheduleMarkdownMathSyntaxHighlight(editor, 'model');
+    scheduleSourceSyntaxHighlight(editor, 'model');
+    scheduleRefreshPythonCellManagers()
+  });
+
+  editor.onDidChangeModel(() => {
+    activateEditorLanguageFeatures(editor, 'primary-model-changed')
+    updateTableToolbar();
+    refreshMarkdownSuggestMode(editor)
     scheduleRefreshPythonCellManagers()
   });
 
@@ -12560,7 +12787,7 @@ const syncSourceEditorContent = (reason = 'manual-sync') => {
       targetEditor.setValue(nextText)
     }
     targetEditor.layout?.()
-    scheduleMarkdownFenceSyntaxHighlightAfterContentSync(targetEditor, reason)
+    scheduleSourceSyntaxHighlight(targetEditor, reason)
     logger.debug('[Editor] syncSourceEditorContent', {
       reason,
       length: nextText.length,
@@ -12678,6 +12905,8 @@ const ensureEditorModelBinding = (targetEditor, options = {}) => {
     }
   }
 
+  activateEditorLanguageFeatures(targetEditor, String(options.reason || 'editor-model-binding'))
+
   if (modelOwner) {
     void retainVsCodeTextModel({
       resource: nextModel.uri,
@@ -12721,7 +12950,7 @@ const updateEditorContent = (content) => {
   }) || targetEditor.getModel();
   const currentValue = model ? model.getValue() : targetEditor.getValue();
   if (currentValue === nextContent) {
-    scheduleMarkdownFenceSyntaxHighlightAfterContentSync(targetEditor, 'update-editor-content:unchanged')
+    scheduleSourceSyntaxHighlight(targetEditor, 'update-editor-content:unchanged')
     return;
   }
 
@@ -12744,7 +12973,7 @@ const updateEditorContent = (content) => {
       length: String(nextContent).length,
       suppressedDepth: sourceEditorProgrammaticSyncDepth,
     })
-    scheduleMarkdownFenceSyntaxHighlightAfterContentSync(targetEditor, 'update-editor-content')
+    scheduleSourceSyntaxHighlight(targetEditor, 'update-editor-content')
   } finally {
     sourceEditorProgrammaticSyncDepth = Math.max(0, sourceEditorProgrammaticSyncDepth - 1)
   }
@@ -18817,10 +19046,8 @@ const handleLspSettingChanged = (evt) => {
     hasExplicitEnabled,
   })
   applyMonacoThemeByLsp(enabled)
-  scheduleMarkdownFenceSyntaxHighlight(editor, 'setting')
-  scheduleMarkdownFenceSyntaxHighlight(secondaryEditor, 'setting')
-  scheduleMarkdownMathSyntaxHighlight(editor, 'setting')
-  scheduleMarkdownMathSyntaxHighlight(secondaryEditor, 'setting')
+  scheduleSourceSyntaxHighlight(editor, 'setting')
+  scheduleSourceSyntaxHighlight(secondaryEditor, 'setting')
 
   const mainModel = editor?.getModel?.()
   const rightPath = fileTreeStore.activeTabRight || ''
@@ -18852,10 +19079,8 @@ watch(lspEnabled, (enabled) => {
   refreshDirectLspSuggestMode(editor, editor?.getModel?.()?.getLanguageId?.() || '')
   refreshDirectLspSuggestMode(secondaryEditor, secondaryEditor?.getModel?.()?.getLanguageId?.() || '')
   applyMonacoThemeByLsp(enabled)
-  scheduleMarkdownFenceSyntaxHighlight(editor, 'setting')
-  scheduleMarkdownFenceSyntaxHighlight(secondaryEditor, 'setting')
-  scheduleMarkdownMathSyntaxHighlight(editor, 'setting')
-  scheduleMarkdownMathSyntaxHighlight(secondaryEditor, 'setting')
+  scheduleSourceSyntaxHighlight(editor, 'setting')
+  scheduleSourceSyntaxHighlight(secondaryEditor, 'setting')
 })
 
 // 生命周期
@@ -18917,10 +19142,8 @@ onMounted(() => {
   disposeLspConnectionStateListener = onLspConnectionStateChange(({ languageId, state }) => {
     const normalizedLanguageId = String(languageId || '').trim().toLowerCase()
     if (!LSP_SUPPORTED_LANGUAGES.has(normalizedLanguageId)) return
-    scheduleMarkdownFenceSyntaxHighlight(editor, 'lsp-state')
-    scheduleMarkdownFenceSyntaxHighlight(secondaryEditor, 'lsp-state')
-    scheduleMarkdownMathSyntaxHighlight(editor, 'lsp-state')
-    scheduleMarkdownMathSyntaxHighlight(secondaryEditor, 'lsp-state')
+    scheduleSourceSyntaxHighlight(editor, 'lsp-state')
+    scheduleSourceSyntaxHighlight(secondaryEditor, 'lsp-state')
     if (state !== 'connected') return
     logger.debug('[DirectLsp] connected without auto-opening suggest widget', {
       languageId: normalizedLanguageId,
