@@ -20098,13 +20098,12 @@ onUnmounted(() => {
 }
 
 .python-runtime-panel.is-dark {
-  border-color: rgba(71, 85, 105, 0.72);
-  background:
-    radial-gradient(circle at top left, rgba(30, 41, 59, 0.98), rgba(15, 23, 42, 0.96)),
-    linear-gradient(180deg, rgba(17, 24, 39, 0.96), rgba(15, 23, 42, 0.98));
+  /* 设计说明：Python 工作台是编辑器工具面板，暗色模式应跟随 Guaxi/One Dark 的平面层级，而不是使用独立深蓝渐变。 */
+  border-color: var(--guaxi-border, #3e4451);
+  background: var(--guaxi-panel-bg, #21252b);
   box-shadow:
-    0 22px 48px rgba(2, 6, 23, 0.42),
-    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    0 18px 42px rgba(0, 0, 0, 0.36),
+    inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 
 .python-runtime-panel.is-dark .python-runtime-meta__item,
@@ -20117,18 +20116,18 @@ onUnmounted(() => {
 .python-runtime-panel.is-dark .python-runtime-package-browser,
 .python-runtime-panel.is-dark .python-runtime-package-log,
 .python-runtime-panel.is-dark .python-runtime-package-row {
-  border-color: rgba(71, 85, 105, 0.72);
-  background: rgba(15, 23, 42, 0.68);
+  border-color: var(--guaxi-border, #3e4451);
+  background: var(--guaxi-content-bg, #282c34);
 }
 
 .python-runtime-panel.is-dark .python-runtime-package-log__output {
-  background: rgba(15, 23, 42, 0.68);
-  border-color: rgba(71, 85, 105, 0.72);
+  background: var(--guaxi-content-bg, #282c34);
+  border-color: var(--guaxi-border, #3e4451);
 }
 
 .python-runtime-panel.is-dark .python-runtime-package-log__output.is-error {
-  background: rgba(15, 23, 42, 0.68);
-  border-color: color-mix(in srgb, #ef4444 32%, rgba(71, 85, 105, 0.72));
+  background: var(--guaxi-content-bg, #282c34);
+  border-color: color-mix(in srgb, #e06c75 38%, var(--guaxi-border, #3e4451));
 }
 
 .python-runtime-panel.is-dark .python-runtime-ghost-btn,
@@ -20136,37 +20135,53 @@ onUnmounted(() => {
 .python-runtime-panel.is-dark .python-runtime-install__btn,
 .python-runtime-panel.is-dark .python-runtime-install__input,
 .python-runtime-panel.is-dark .python-runtime-package-browser__search {
-  border-color: rgba(71, 85, 105, 0.72);
-  background: rgba(15, 23, 42, 0.72);
-  color: #e6edf3;
+  border-color: var(--guaxi-border, #3e4451);
+  background: var(--guaxi-panel-bg, #21252b);
+  color: var(--guaxi-text-primary, #abb2bf);
+}
+
+.python-runtime-panel.is-dark .python-runtime-package-row__action {
+  border-color: var(--guaxi-border, #3e4451);
+  background: var(--guaxi-panel-bg, #21252b);
+  color: var(--guaxi-text-primary, #abb2bf);
+}
+
+.python-runtime-panel.is-dark .python-runtime-package-row__action:hover {
+  border-color: color-mix(in srgb, #61afef 42%, var(--guaxi-border, #3e4451));
+  background: color-mix(in srgb, var(--guaxi-panel-bg, #21252b) 84%, #abb2bf 16%);
+}
+
+.python-runtime-panel.is-dark .python-runtime-package-row__action.is-danger {
+  color: #e06c75;
+  border-color: color-mix(in srgb, #e06c75 36%, var(--guaxi-border, #3e4451));
 }
 
 .python-runtime-panel.is-dark .python-runtime-panel__title,
 .python-runtime-panel.is-dark .python-runtime-status-card__value,
 .python-runtime-panel.is-dark .python-runtime-section__title,
 .python-runtime-panel.is-dark .python-runtime-package-row {
-  color: #e6edf3;
+  color: var(--guaxi-text-primary, #abb2bf);
 }
 
 .python-runtime-panel.is-dark .python-runtime-panel__subtitle,
 .python-runtime-panel.is-dark .python-runtime-status-card__label,
 .python-runtime-panel.is-dark .python-runtime-package-browser__empty {
-  color: #94a3b8;
+  color: var(--guaxi-text-secondary, #9da5b4);
 }
 
 .python-runtime-panel.is-dark .python-runtime-status-card.is-success {
-  border-color: rgba(34, 197, 94, 0.3);
-  background: linear-gradient(180deg, rgba(20, 83, 45, 0.48), rgba(20, 83, 45, 0.28));
+  border-color: color-mix(in srgb, #98c379 34%, var(--guaxi-border, #3e4451));
+  background: color-mix(in srgb, var(--guaxi-content-bg, #282c34) 88%, #98c379 12%);
 }
 
 .python-runtime-panel.is-dark .python-runtime-status-card.is-warning {
-  border-color: rgba(245, 158, 11, 0.3);
-  background: linear-gradient(180deg, rgba(120, 53, 15, 0.48), rgba(120, 53, 15, 0.28));
+  border-color: color-mix(in srgb, #e5c07b 34%, var(--guaxi-border, #3e4451));
+  background: color-mix(in srgb, var(--guaxi-content-bg, #282c34) 88%, #e5c07b 12%);
 }
 
 .python-runtime-panel.is-dark .python-runtime-status-card.is-danger {
-  border-color: rgba(244, 63, 94, 0.3);
-  background: linear-gradient(180deg, rgba(127, 29, 29, 0.5), rgba(127, 29, 29, 0.28));
+  border-color: color-mix(in srgb, #e06c75 34%, var(--guaxi-border, #3e4451));
+  background: color-mix(in srgb, var(--guaxi-content-bg, #282c34) 88%, #e06c75 12%);
 }
 
 .python-runtime-panel__header {
@@ -22405,23 +22420,23 @@ onUnmounted(() => {
 :global(:root[data-guaxi-theme='dark']) .python-runtime-package-browser,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-package-log,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-package-row {
-  border-color: rgba(71, 85, 105, 0.72);
-  background: rgba(15, 23, 42, 0.68);
+  border-color: var(--guaxi-border, #3e4451);
+  background: var(--guaxi-content-bg, #282c34);
 }
 
 .dark-mode .python-runtime-package-log__output,
 .dark .python-runtime-package-log__output,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-package-log__output {
-  /* Keep stdout/stderr panels on the same dark-blue card layer as the package rows above. */
-  background: rgba(15, 23, 42, 0.68);
-  border-color: rgba(71, 85, 105, 0.72);
+  /* 设计说明：stdout/stderr 跟随编辑器内容底色，避免 Python 工作台在暗色模式里出现独立深蓝面板层。 */
+  background: var(--guaxi-content-bg, #282c34);
+  border-color: var(--guaxi-border, #3e4451);
 }
 
 .dark-mode .python-runtime-package-log__output.is-error,
 .dark .python-runtime-package-log__output.is-error,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-package-log__output.is-error {
-  background: rgba(15, 23, 42, 0.68);
-  border-color: color-mix(in srgb, #ef4444 32%, rgba(71, 85, 105, 0.72));
+  background: var(--guaxi-content-bg, #282c34);
+  border-color: color-mix(in srgb, #e06c75 38%, var(--guaxi-border, #3e4451));
 }
 
 .dark-mode .python-runtime-ghost-btn,
@@ -22441,9 +22456,31 @@ onUnmounted(() => {
 :global(:root[data-guaxi-theme='dark']) .python-runtime-install__input,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-package-browser__search,
 :global(:root[data-guaxi-theme='dark']) .guaxi-dataframe-btn {
-  border-color: rgba(71, 85, 105, 0.72);
-  background: rgba(15, 23, 42, 0.72);
-  color: #e6edf3;
+  border-color: var(--guaxi-border, #3e4451);
+  background: var(--guaxi-panel-bg, #21252b);
+  color: var(--guaxi-text-primary, #abb2bf);
+}
+
+.dark-mode .python-runtime-package-row__action,
+.dark .python-runtime-package-row__action,
+:global(:root[data-guaxi-theme='dark']) .python-runtime-package-row__action {
+  border-color: var(--guaxi-border, #3e4451);
+  background: var(--guaxi-panel-bg, #21252b);
+  color: var(--guaxi-text-primary, #abb2bf);
+}
+
+.dark-mode .python-runtime-package-row__action:hover,
+.dark .python-runtime-package-row__action:hover,
+:global(:root[data-guaxi-theme='dark']) .python-runtime-package-row__action:hover {
+  border-color: color-mix(in srgb, #61afef 42%, var(--guaxi-border, #3e4451));
+  background: color-mix(in srgb, var(--guaxi-panel-bg, #21252b) 84%, #abb2bf 16%);
+}
+
+.dark-mode .python-runtime-package-row__action.is-danger,
+.dark .python-runtime-package-row__action.is-danger,
+:global(:root[data-guaxi-theme='dark']) .python-runtime-package-row__action.is-danger {
+  color: #e06c75;
+  border-color: color-mix(in srgb, #e06c75 36%, var(--guaxi-border, #3e4451));
 }
 
 .dark-mode .python-runtime-guide__path-value,
@@ -22452,8 +22489,8 @@ onUnmounted(() => {
 .dark .python-runtime-archive-card__path,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-guide__path-value,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-archive-card__path {
-  background: rgba(2, 6, 23, 0.42);
-  color: #e6edf3;
+  background: var(--guaxi-panel-bg, #21252b);
+  color: var(--guaxi-text-primary, #abb2bf);
 }
 
 .dark-mode .python-runtime-guide__step.done,
@@ -22467,39 +22504,38 @@ onUnmounted(() => {
 .dark-mode .python-runtime-package-pill--button:hover,
 .dark .python-runtime-package-pill--button:hover,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-package-pill--button:hover {
-  background: rgba(30, 41, 59, 0.96);
+  background: color-mix(in srgb, var(--guaxi-panel-bg, #21252b) 86%, var(--guaxi-text-primary, #abb2bf) 14%);
 }
 
 .dark-mode .python-runtime-panel,
 .dark .python-runtime-panel,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-panel {
-  background:
-    radial-gradient(circle at top left, rgba(30, 41, 59, 0.98), rgba(15, 23, 42, 0.96)),
-    linear-gradient(180deg, rgba(17, 24, 39, 0.96), rgba(15, 23, 42, 0.98));
+  background: var(--guaxi-panel-bg, #21252b);
+  border-color: var(--guaxi-border, #3e4451);
   box-shadow:
-    0 22px 48px rgba(2, 6, 23, 0.42),
-    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    0 18px 42px rgba(0, 0, 0, 0.36),
+    inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 
 .dark-mode .python-runtime-status-card.is-success,
 .dark .python-runtime-status-card.is-success,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-status-card.is-success {
-  border-color: rgba(34, 197, 94, 0.3);
-  background: linear-gradient(180deg, rgba(20, 83, 45, 0.48), rgba(20, 83, 45, 0.28));
+  border-color: color-mix(in srgb, #98c379 34%, var(--guaxi-border, #3e4451));
+  background: color-mix(in srgb, var(--guaxi-content-bg, #282c34) 88%, #98c379 12%);
 }
 
 .dark-mode .python-runtime-status-card.is-warning,
 .dark .python-runtime-status-card.is-warning,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-status-card.is-warning {
-  border-color: rgba(245, 158, 11, 0.3);
-  background: linear-gradient(180deg, rgba(120, 53, 15, 0.48), rgba(120, 53, 15, 0.28));
+  border-color: color-mix(in srgb, #e5c07b 34%, var(--guaxi-border, #3e4451));
+  background: color-mix(in srgb, var(--guaxi-content-bg, #282c34) 88%, #e5c07b 12%);
 }
 
 .dark-mode .python-runtime-status-card.is-danger,
 .dark .python-runtime-status-card.is-danger,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-status-card.is-danger {
-  border-color: rgba(244, 63, 94, 0.3);
-  background: linear-gradient(180deg, rgba(127, 29, 29, 0.5), rgba(127, 29, 29, 0.28));
+  border-color: color-mix(in srgb, #e06c75 34%, var(--guaxi-border, #3e4451));
+  background: color-mix(in srgb, var(--guaxi-content-bg, #282c34) 88%, #e06c75 12%);
 }
 
 .dark-mode .python-runtime-panel__title,
@@ -22514,7 +22550,7 @@ onUnmounted(() => {
 :global(:root[data-guaxi-theme='dark']) .python-runtime-status-card__value,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-section__title,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-package-row {
-  color: #e6edf3;
+  color: var(--guaxi-text-primary, #abb2bf);
 }
 
 .dark-mode .python-runtime-panel__subtitle,
@@ -22526,11 +22562,11 @@ onUnmounted(() => {
 :global(:root[data-guaxi-theme='dark']) .python-runtime-panel__subtitle,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-status-card__label,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-package-browser__empty {
-  color: #94a3b8;
+  color: var(--guaxi-text-secondary, #9da5b4);
 }
 
 :global(:root[data-guaxi-theme='dark']) .guaxi-dataframe-btn:hover {
-  background: rgba(30, 41, 59, 0.96);
+  background: color-mix(in srgb, var(--guaxi-panel-bg, #21252b) 86%, var(--guaxi-text-primary, #abb2bf) 14%);
 }
 
 :global(:root[data-guaxi-theme='dark']) .guaxi-dataframe-table-wrap {
