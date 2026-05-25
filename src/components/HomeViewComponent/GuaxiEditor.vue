@@ -1313,6 +1313,11 @@ const PYTHON_RUNTIME_RECOMMENDED_PACKAGES = [
   { label: 'matplotlib', value: 'matplotlib', description: '图像与绘图输出' },
   { label: 'openpyxl', value: 'openpyxl', description: 'Excel 读写支持' },
   { label: 'ipython', value: 'ipython', description: '增强交互体验与调试' },
+  { label: 'plotly', value: 'plotly', description: '交互式图表与 HTML 报告输出' },
+  { label: 'sympy', value: 'sympy', description: '数学公式、符号计算与函数绘图' },
+  { label: 'seaborn', value: 'seaborn', description: '统计图表与分布可视化' },
+  { label: 'duckdb', value: 'duckdb', description: '本地分析数据库与 SQL 查询' },
+  { label: 'polars', value: 'polars', description: '高性能数据处理' },
 ]
 const getMonacoThemeName = () => (settingsStore.appearanceTheme === 'dark' ? 'guaxi-dark' : 'guaxi-light')
 const getMarkdownPreviewThemeName = () => (settingsStore.appearanceTheme === 'dark' ? 'dark' : 'default')

@@ -203,10 +203,146 @@ def _summarize_value(value):
         if pandas_module is not None and isinstance(value, pandas_module.DataFrame):
             summary["rows"] = int(len(value.index))
             summary["columns"] = int(len(value.columns))
+            summary["column_names"] = [str(col) for col in value.columns.tolist()]
+            summary["dtypes"] = {str(k): str(v) for k, v in value.dtypes.astype(str).to_dict().items()}
+        elif pandas_module is not None and isinstance(value, pandas_module.Series):
+            summary["rows"] = int(len(value.index))
+            summary["columns"] = 1
+            summary["column_names"] = [str(value.name or "value")]
+            summary["dtypes"] = {str(value.name or "value"): str(value.dtype)}
     except Exception:
         pass
 
     return summary
+
+
+def _hidden_session_var_names():
+    return {
+        "__builtins__",
+        "__guaxi_last_value",
+        "__guaxi_plotly_display__",
+        "__guaxi_pandas_verbose_repr_configured__",
+        "__guaxi_numpy_verbose_repr_configured__",
+        "_",
+        "__",
+        "___",
+        "_result",
+        "_guaxi_session",
+        "_guaxi_inline_matplotlib",
+        "_guaxi_cwd",
+        "_guaxi_sandbox_dir",
+        "_doc_path",
+        "_py_cell_id",
+    }
+
+
+def _is_visible_session_value(name, value):
+    if name in _hidden_session_var_names() or str(name).startswith("__"):
+        return False
+    module_type = type(sys)
+    if isinstance(value, module_type):
+        return False
+    if isinstance(value, type):
+        return False
+    if callable(value):
+        return False
+    return True
+
+
+def _snapshot_session_var_map(globals_dict):
+    output = {}
+    for name in sorted(globals_dict.keys()):
+        try:
+            value = globals_dict.get(name)
+            if not _is_visible_session_value(name, value):
+                continue
+            output[str(name)] = _summarize_value(value)
+        except Exception:
+            output[str(name)] = {
+                "type": "unknown",
+                "preview": "<unavailable>",
+            }
+    return output
+
+
+def _summary_signature(summary):
+    if not isinstance(summary, dict):
+        return ""
+    return json.dumps({
+        "type": summary.get("type"),
+        "shape": summary.get("shape"),
+        "length": summary.get("length"),
+        "rows": summary.get("rows"),
+        "columns": summary.get("columns"),
+        "preview": summary.get("preview"),
+    }, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _analyze_code_symbol_flow(code):
+    # 设计说明：
+    # 1. 前端需要知道“这个 Cell 可能读/写了哪些变量”，从而给下游 Cell 标记过期和展示依赖图。
+    # 2. 这里使用 Python AST 做保守静态分析：能识别 Name 的 Load/Store/Del，但不尝试解析动态 globals()/exec()。
+    # 3. 真实的新增/修改/删除仍由执行前后的变量快照确认，静态分析只作为依赖提示。
+    flow = {
+        "used": [],
+        "assigned": [],
+        "deleted": [],
+    }
+    try:
+        tree = ast.parse(code or "", mode="exec")
+    except Exception:
+        return flow
+
+    used = set()
+    assigned = set()
+    deleted = set()
+    hidden = _hidden_session_var_names()
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Name):
+            continue
+        name = str(node.id or "")
+        if not name or name in hidden or name.startswith("__"):
+            continue
+        if isinstance(node.ctx, ast.Load):
+            used.add(name)
+        elif isinstance(node.ctx, (ast.Store, ast.Param)):
+            assigned.add(name)
+        elif isinstance(node.ctx, ast.Del):
+            deleted.add(name)
+
+    flow["used"] = sorted(used - assigned)
+    flow["assigned"] = sorted(assigned)
+    flow["deleted"] = sorted(deleted)
+    return flow
+
+
+def _build_dataflow_payload(code, before_vars, after_vars):
+    before = before_vars if isinstance(before_vars, dict) else {}
+    after = after_vars if isinstance(after_vars, dict) else {}
+    static_flow = _analyze_code_symbol_flow(code)
+
+    before_names = set(before.keys())
+    after_names = set(after.keys())
+    created = sorted(after_names - before_names)
+    removed = sorted(before_names - after_names)
+    updated = sorted(
+        name
+        for name in before_names.intersection(after_names)
+        if _summary_signature(before.get(name)) != _summary_signature(after.get(name))
+    )
+
+    return {
+        "version": 1,
+        "used": static_flow.get("used") or [],
+        "assigned": static_flow.get("assigned") or [],
+        "deleted": static_flow.get("deleted") or [],
+        "created": created,
+        "updated": updated,
+        "removed": removed,
+        "touched": sorted(set(created + updated + removed + (static_flow.get("assigned") or []))),
+        "after": after,
+    }
 
 
 def _normalize_session_var_names(value):
@@ -231,38 +367,14 @@ def _normalize_session_var_names(value):
 
 def _snapshot_session_vars(globals_dict, selected_names=None):
     items = []
-    module_type = type(sys)
-    hidden_names = {
-        "__builtins__",
-        "__guaxi_last_value",
-        "__guaxi_plotly_display__",
-        "_",
-        "__",
-        "___",
-        "_result",
-        "_guaxi_session",
-        "_guaxi_inline_matplotlib",
-        "__guaxi_pandas_verbose_repr_configured__",
-        "__guaxi_numpy_verbose_repr_configured__",
-        "_guaxi_cwd",
-        "_guaxi_sandbox_dir",
-        "_doc_path",
-        "_py_cell_id",
-    }
 
     candidate_names = selected_names if selected_names is not None else sorted(globals_dict.keys())
     for name in candidate_names:
-        if name in hidden_names or str(name).startswith("__"):
-            continue
         try:
             if name not in globals_dict:
                 continue
             value = globals_dict.get(name)
-            if isinstance(value, module_type):
-                continue
-            if isinstance(value, type):
-                continue
-            if callable(value):
+            if not _is_visible_session_value(name, value):
                 continue
             items.append({"name": str(name), **_summarize_value(value)})
             if len(items) >= 128:
@@ -974,6 +1086,7 @@ def _handle_exec(payload):
     result_repr = None
     result_json = None
     old_cwd = None
+    dataflow_before = _snapshot_session_var_map(globals_dict)
 
     try:
         if sandbox_dir:
@@ -1084,6 +1197,18 @@ def _handle_exec(payload):
                     "__guaxi_display__": display,
                     "__guaxi_result__": result_json,
                 }
+
+        dataflow_after = _snapshot_session_var_map(globals_dict)
+        dataflow_payload = _build_dataflow_payload(code, dataflow_before, dataflow_after)
+        if isinstance(result_json, dict):
+            result_json["__guaxi_dataflow__"] = dataflow_payload
+        elif result_json is None:
+            result_json = {"__guaxi_dataflow__": dataflow_payload}
+        else:
+            result_json = {
+                "__guaxi_result__": result_json,
+                "__guaxi_dataflow__": dataflow_payload,
+            }
 
         if persist:
             _shift_last_results(globals_dict, resolved_session_id)
@@ -1288,6 +1413,41 @@ def _handle_table_export(payload):
             _, _, entry = export_entries[0]
             columns, rows = _table_to_records(entry)
             pd.DataFrame(rows, columns=columns).to_parquet(output_path, index=False)
+        elif export_format in ("sqlite", "db", "duckdb"):
+            try:
+                import pandas as pd
+            except Exception as exc:
+                raise RuntimeError(f"Exporting database files requires pandas: {exc}") from exc
+
+            if export_format == "duckdb":
+                try:
+                    import duckdb
+                except Exception as exc:
+                    raise RuntimeError(f"Exporting DuckDB files requires duckdb: {exc}") from exc
+
+                conn = duckdb.connect(output_path)
+                try:
+                    for index, (_, item_meta, entry) in enumerate(export_entries, start=1):
+                        columns, rows = _table_to_records(entry)
+                        table_name = _normalize_table_key(item_meta.get("table_name"), f"table_{index}")
+                        df = pd.DataFrame(rows, columns=columns)
+                        conn.execute(f'DROP TABLE IF EXISTS "{table_name}"')
+                        conn.register("__guaxi_export_df", df)
+                        conn.execute(f'CREATE TABLE "{table_name}" AS SELECT * FROM __guaxi_export_df')
+                        conn.unregister("__guaxi_export_df")
+                finally:
+                    conn.close()
+            else:
+                import sqlite3
+
+                conn = sqlite3.connect(output_path)
+                try:
+                    for index, (_, item_meta, entry) in enumerate(export_entries, start=1):
+                        columns, rows = _table_to_records(entry)
+                        table_name = _normalize_table_key(item_meta.get("table_name"), f"table_{index}")
+                        pd.DataFrame(rows, columns=columns).to_sql(table_name, conn, if_exists="replace", index=False)
+                finally:
+                    conn.close()
         else:
             raise ValueError(f"Unsupported export format: {export_format}")
 

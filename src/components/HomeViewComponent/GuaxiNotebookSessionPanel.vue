@@ -13,6 +13,9 @@
     <div v-if="inspector.hasActiveCell" class="py-session-panel__toolbar">
       <button type="button" class="py-session-panel__action-btn" @click="requestImportFile">导入文件</button>
       <button type="button" class="py-session-panel__action-btn" @click="requestImportClipboard">导入剪贴板</button>
+      <button type="button" class="py-session-panel__action-btn" @click="requestImportUrl">导入 URL</button>
+      <button type="button" class="py-session-panel__action-btn" @click="generateReport(false)">生成报告</button>
+      <button type="button" class="py-session-panel__action-btn" @click="generateReport(true)">写回报告</button>
     </div>
 
     <div v-if="!inspector.hasActiveCell" class="py-session-panel__empty">
@@ -20,6 +23,29 @@
     </div>
 
     <div v-else class="py-session-panel__body">
+      <section class="py-session-panel__section">
+        <div class="py-session-panel__section-head">
+          <div class="py-session-panel__section-title">数学实验</div>
+          <div class="py-session-panel__section-meta">SymPy / Matplotlib</div>
+        </div>
+        <div class="py-session-panel__math-grid">
+          <input v-model="mathExpression" class="py-session-panel__field wide" placeholder="例如 sin(x) / x 或 x^2 + y^2 = 1" />
+          <select v-model="mathMode" class="py-session-panel__field">
+            <option value="plot2d">绘制曲线</option>
+            <option value="simplify">化简</option>
+            <option value="derivative">求导</option>
+            <option value="integral">积分</option>
+            <option value="solve">求解</option>
+            <option value="evaluate">计算</option>
+          </select>
+          <input v-model="mathVariable" class="py-session-panel__field" placeholder="变量 x" />
+          <input v-model.number="mathRangeMin" class="py-session-panel__field" type="number" placeholder="最小值" />
+          <input v-model.number="mathRangeMax" class="py-session-panel__field" type="number" placeholder="最大值" />
+          <button type="button" class="py-session-panel__action-btn" @click="runMath(false)">生成</button>
+          <button type="button" class="py-session-panel__action-btn" @click="runMath(true)">写回</button>
+        </div>
+      </section>
+
       <section v-if="datasets.length" class="py-session-panel__section">
         <div class="py-session-panel__section-head">
           <div class="py-session-panel__section-title">数据集</div>
@@ -53,6 +79,28 @@
             </div>
 
             <pre class="py-session-panel__preview">{{ item.preview || '' }}</pre>
+
+            <div class="py-session-panel__plotter">
+              <select v-model="getPlotDraft(item).chartType" class="py-session-panel__field">
+                <option v-for="chart in chartTypes" :key="chart.value" :value="chart.value">{{ chart.label }}</option>
+              </select>
+              <select v-model="getPlotDraft(item).x" class="py-session-panel__field">
+                <option value="">X 自动</option>
+                <option v-for="column in getDatasetColumns(item)" :key="`${item.variableName}-x-${column}`" :value="column">{{ column }}</option>
+              </select>
+              <select v-model="getPlotDraft(item).y" class="py-session-panel__field">
+                <option value="">Y 自动</option>
+                <option v-for="column in getDatasetColumns(item)" :key="`${item.variableName}-y-${column}`" :value="column">{{ column }}</option>
+              </select>
+              <select v-model="getPlotDraft(item).color" class="py-session-panel__field">
+                <option value="">颜色自动</option>
+                <option v-for="column in getDatasetColumns(item)" :key="`${item.variableName}-c-${column}`" :value="column">{{ column }}</option>
+              </select>
+              <input v-model="getPlotDraft(item).title" class="py-session-panel__field wide" placeholder="图表标题" />
+              <button type="button" class="py-session-panel__action-btn" @click="plotDataset(item, 'plot-variable')">绘图</button>
+              <button type="button" class="py-session-panel__action-btn" @click="plotDataset(item, 'plot-variable-writeback')">绘图写回</button>
+              <button type="button" class="py-session-panel__action-btn" @click="plotDataset(item, 'plot-variable-export')">绘图导出</button>
+            </div>
           </article>
         </div>
       </section>
@@ -89,6 +137,12 @@
               </button>
             </div>
 
+            <div class="py-session-panel__var-actions">
+              <button type="button" class="py-session-panel__mini-btn" @click="copyVariableObject(item)">复制变量</button>
+              <button type="button" class="py-session-panel__mini-btn" @click="renameVariable(item)">重命名</button>
+              <button type="button" class="py-session-panel__mini-btn danger" @click="deleteVariable(item)">删除</button>
+            </div>
+
             <div class="py-session-panel__meta">
               <span v-if="item.length != null">len {{ item.length }}</span>
               <span v-if="item.rows != null">rows {{ item.rows }}</span>
@@ -105,13 +159,16 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { Icon } from '@iconify/vue'
 import copyIcon from '@iconify-icons/lucide/copy'
 import { useMessage } from 'naive-ui'
 import { createLogger } from '../../utils/logger'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
-import { emitNotebookDataLabAction } from './utils/guaxiNotebookDataLab'
+import {
+  NOTEBOOK_LAB_CHART_TYPES,
+  emitNotebookDataLabAction,
+} from './utils/guaxiNotebookDataLab'
 
 const logger = createLogger('GuaxiNotebookSessionPanel')
 const message = useMessage()
@@ -120,6 +177,13 @@ const rightSiderStore = useRightSiderStore()
 const inspector = computed(() => rightSiderStore.pythonSessionInspector || {})
 const variables = computed(() => (Array.isArray(inspector.value?.variables) ? inspector.value.variables : []))
 const datasets = computed(() => (Array.isArray(inspector.value?.datasets) ? inspector.value.datasets : []))
+const chartTypes = NOTEBOOK_LAB_CHART_TYPES
+const plotDrafts = reactive({})
+const mathExpression = ref('sin(x) / x')
+const mathMode = ref('plot2d')
+const mathVariable = ref('x')
+const mathRangeMin = ref(-20)
+const mathRangeMax = ref(20)
 const summaryLabel = computed(() => {
   if (!inspector.value?.hasActiveCell) {
     return '未选中 Python Cell'
@@ -191,6 +255,14 @@ const emitInspectorAction = (action, extra = {}) => {
 
 const requestImportFile = () => emitInspectorAction('import-file')
 const requestImportClipboard = () => emitInspectorAction('import-clipboard')
+const requestImportUrl = () => {
+  const sourceUrl = String(window.prompt?.('输入要导入的 CSV / JSON / Excel / 文本 URL', '') || '').trim()
+  if (!sourceUrl) return
+  emitInspectorAction('import-url', {
+    sourceUrl,
+    sourceLabel: sourceUrl,
+  })
+}
 const materializeDataset = (item) => emitInspectorAction('materialize-variable', {
   variableName: String(item?.variableName || ''),
   dataKind: String(item?.dataKind || ''),
@@ -203,6 +275,87 @@ const exportDataset = (item) => emitInspectorAction('export-variable', {
   variableName: String(item?.variableName || ''),
   dataKind: String(item?.dataKind || ''),
 })
+
+const getDatasetColumns = (item) => {
+  if (Array.isArray(item?.columnNames) && item.columnNames.length) return item.columnNames
+  const count = Number(item?.columns || 0)
+  if (Number.isFinite(count) && count > 0) {
+    return Array.from({ length: Math.min(count, 12) }, (_, index) => String(index))
+  }
+  return []
+}
+
+const getPlotDraft = (item) => {
+  const key = String(item?.variableName || '')
+  if (!plotDrafts[key]) {
+    const columns = getDatasetColumns(item)
+    plotDrafts[key] = {
+      chartType: String(item?.dataKind || '') === 'table' ? 'line' : 'histogram',
+      x: columns[0] || '',
+      y: columns[1] || columns[0] || '',
+      z: columns[2] || '',
+      color: '',
+      title: `${key || '变量'} 图表`,
+    }
+  }
+  return plotDrafts[key]
+}
+
+const plotDataset = (item, action = 'plot-variable') => {
+  const draft = getPlotDraft(item)
+  emitInspectorAction(action, {
+    variableName: String(item?.variableName || ''),
+    dataKind: String(item?.dataKind || ''),
+    chartType: String(draft.chartType || 'line'),
+    x: String(draft.x || ''),
+    y: String(draft.y || ''),
+    z: String(draft.z || ''),
+    color: String(draft.color || ''),
+    title: String(draft.title || ''),
+  })
+}
+
+const runMath = (writeBack = false) => {
+  const expression = String(mathExpression.value || '').trim()
+  if (!expression) {
+    message.warning('请输入数学公式')
+    return
+  }
+  emitInspectorAction(writeBack ? 'math-writeback' : 'math-evaluate', {
+    expression,
+    mode: String(mathMode.value || 'plot2d'),
+    variable: String(mathVariable.value || 'x'),
+    rangeMin: Number(mathRangeMin.value),
+    rangeMax: Number(mathRangeMax.value),
+  })
+}
+
+const generateReport = (writeBack = false) => emitInspectorAction(writeBack ? 'writeback-report' : 'generate-report', {
+  title: '探索实验室报告',
+})
+
+const renameVariable = (item) => {
+  const variableName = String(item?.name || item?.variableName || '').trim()
+  if (!variableName) return
+  const targetName = String(window.prompt?.(`将变量 ${variableName} 重命名为`, `${variableName}_next`) || '').trim()
+  if (!targetName || targetName === variableName) return
+  emitInspectorAction('variable-rename', { variableName, targetName })
+}
+
+const copyVariableObject = (item) => {
+  const variableName = String(item?.name || item?.variableName || '').trim()
+  if (!variableName) return
+  const targetName = String(window.prompt?.(`复制变量 ${variableName} 为`, `${variableName}_copy`) || '').trim()
+  if (!targetName || targetName === variableName) return
+  emitInspectorAction('variable-copy', { variableName, targetName })
+}
+
+const deleteVariable = (item) => {
+  const variableName = String(item?.name || item?.variableName || '').trim()
+  if (!variableName) return
+  if (!window.confirm?.(`确认删除会话变量 ${variableName}？`)) return
+  emitInspectorAction('variable-delete', { variableName })
+}
 
 // Design notes:
 // 1. Session variables can now be very large, so the copy action is scoped to the
@@ -320,12 +473,13 @@ const copyVariablePreview = async (item) => {
 }
 
 .py-session-panel__action-btn,
-.py-session-panel__icon-btn {
+.py-session-panel__icon-btn,
+.py-session-panel__mini-btn,
+.py-session-panel__field {
   border: 1px solid var(--py-session-border);
   border-radius: 10px;
   background: transparent;
   color: var(--py-session-text);
-  cursor: pointer;
   transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
 }
 
@@ -335,20 +489,67 @@ const copyVariablePreview = async (item) => {
   background: var(--py-session-accent-bg);
   color: var(--py-session-accent-text);
   border-color: color-mix(in srgb, var(--py-session-border-strong) 70%, transparent);
+  cursor: pointer;
 }
 
 .py-session-panel__icon-btn {
   min-height: 28px;
   padding: 0 10px;
   font-size: 12px;
+  cursor: pointer;
+}
+
+.py-session-panel__mini-btn {
+  min-height: 26px;
+  padding: 0 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.py-session-panel__mini-btn.danger {
+  color: #b42318;
+  border-color: color-mix(in srgb, #d92d20 38%, var(--py-session-border));
+}
+
+.py-session-panel__field {
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 10px;
+  background: var(--py-session-preview-bg);
+  outline: none;
+}
+
+.py-session-panel__field:focus {
+  border-color: color-mix(in srgb, var(--py-session-accent-text) 58%, var(--py-session-border));
+}
+
+.py-session-panel__field.wide {
+  grid-column: span 2;
 }
 
 .py-session-panel__action-btn:hover,
 .py-session-panel__icon-btn:hover,
+.py-session-panel__mini-btn:hover,
 .py-session-panel__copy-btn:hover {
   background: var(--py-session-hover-bg);
   border-color: var(--py-session-border-strong);
   transform: translateY(-1px);
+}
+
+.py-session-panel__math-grid,
+.py-session-panel__plotter,
+.py-session-panel__var-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.py-session-panel__plotter {
+  padding-top: 4px;
+}
+
+.py-session-panel__var-actions {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .py-session-panel__body {

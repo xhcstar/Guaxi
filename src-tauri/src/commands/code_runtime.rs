@@ -63,7 +63,17 @@ const AUTO_DOWNLOAD_PYTHON_WINDOWS_PAGE_URL: &str = "https://www.python.org/down
 const GET_PIP_BOOTSTRAP_URL: &str = "https://bootstrap.pypa.io/get-pip.py";
 const PYTHON_PIP_INDEX_URL: &str = "https://pypi.tuna.tsinghua.edu.cn/simple";
 const PYTHON_PIP_TRUSTED_HOST: &str = "pypi.tuna.tsinghua.edu.cn";
-const PYTHON_RUNTIME_RECOMMENDED_PACKAGES: &[&str] = &["pandas", "matplotlib", "openpyxl", "ipython"];
+const PYTHON_RUNTIME_RECOMMENDED_PACKAGES: &[&str] = &[
+    "pandas",
+    "matplotlib",
+    "openpyxl",
+    "ipython",
+    "plotly",
+    "sympy",
+    "seaborn",
+    "duckdb",
+    "polars",
+];
 const PYTHON_RUNTIME_BOOTSTRAP_PACKAGE_NAMES: &[&str] =
     &["pip", "setuptools", "wheel", "virtualenv"];
 

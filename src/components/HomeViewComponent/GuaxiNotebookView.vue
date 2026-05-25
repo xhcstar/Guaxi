@@ -297,6 +297,10 @@
             </div>
           </div>
 
+          <div v-if="getCellSnapshot(cell).meta.staleVariables?.length" class="guaxi-notebook__stale-banner">
+            上游变量已更新：{{ getCellSnapshot(cell).meta.staleVariables.join(', ') }}。建议重新运行当前 Cell。
+          </div>
+
           <GuaxiNotebookPythonEditor
             :cell-key="cell.key"
             :document-path="filePath"
@@ -544,6 +548,10 @@ import {
   buildNotebookLabDatasetDescriptors,
   buildNotebookLabImportPlan,
   buildNotebookLabMaterializeCode,
+  buildNotebookLabMathCode,
+  buildNotebookLabPlotCode,
+  buildNotebookLabReportCode,
+  buildNotebookLabVariableOperationCode,
   decorateNotebookLabOutputModules,
   installNotebookDataLabBridge,
   upsertNotebookLabImportRecord,
@@ -3499,6 +3507,11 @@ const getGuaxiDisplayFromResult = (res) => {
   return value && typeof value === 'object' ? value : null
 }
 
+const getGuaxiDataflowFromResult = (res) => {
+  const value = res?.result_json?.__guaxi_dataflow__
+  return value && typeof value === 'object' ? value : null
+}
+
 const normalizeGuaxiTablePayloadFromResult = (value) => {
   if (!value || typeof value !== 'object') return null
   return {
@@ -3642,6 +3655,73 @@ const patchCellSnapshotLab = (cell, patch = {}) => {
     nextLab.imports = []
   }
   return nextLab
+}
+
+const updateNotebookCellDataflowSnapshot = (cell, dataflow = null, reason = 'unknown') => {
+  if (!cell?.cellId || !dataflow || typeof dataflow !== 'object') return null
+  const snapshot = getCellSnapshot(cell)
+  const nextLab = patchCellSnapshotLab(cell, {
+    dataflow: {
+      ...dataflow,
+      updatedAt: new Date().toISOString(),
+      reason,
+    },
+  })
+  patchPythonCellSnapshot(props.filePath, cell.cellId, {
+    lab: nextLab,
+    meta: {
+      ...(snapshot?.meta || {}),
+      staleVariables: [],
+      staleReason: '',
+    },
+  })
+  logger.info('[NotebookDataflow] cell dataflow snapshot updated', {
+    reason,
+    cellId: String(cell?.cellId || ''),
+    used: Array.isArray(dataflow.used) ? dataflow.used : [],
+    touched: Array.isArray(dataflow.touched) ? dataflow.touched : [],
+  })
+  return nextLab
+}
+
+const markDependentNotebookCellsStale = (sourceCell, dataflow = null, reason = 'unknown') => {
+  if (!sourceCell?.cellId || !dataflow || typeof dataflow !== 'object') return []
+  const touched = new Set(Array.isArray(dataflow.touched) ? dataflow.touched.map((item) => String(item || '').trim()).filter(Boolean) : [])
+  if (!touched.size) return []
+
+  const sourceIndex = notebookCells.value.findIndex((item) => String(item?.cellId || '') === String(sourceCell.cellId || ''))
+  const affected = []
+  notebookCells.value.forEach((cell, index) => {
+    if (cell?.type !== 'python') return
+    if (sourceIndex >= 0 && index <= sourceIndex) return
+    const snapshot = getCellSnapshot(cell)
+    const used = Array.isArray(snapshot?.lab?.dataflow?.used) ? snapshot.lab.dataflow.used : []
+    const staleVariables = used.map((item) => String(item || '').trim()).filter((item) => touched.has(item))
+    if (!staleVariables.length) return
+    patchPythonCellSnapshot(props.filePath, cell.cellId, {
+      meta: {
+        ...(snapshot?.meta || {}),
+        staleVariables,
+        staleReason: `上游 Cell 更新了 ${staleVariables.join(', ')}`,
+      },
+    })
+    affected.push({
+      cellId: String(cell.cellId || ''),
+      cellKey: String(cell.key || ''),
+      staleVariables,
+    })
+  })
+
+  if (affected.length) {
+    logger.info('[NotebookDataflow] downstream cells marked stale', {
+      reason,
+      sourceCellId: String(sourceCell?.cellId || ''),
+      touchedVariables: Array.from(touched),
+      affectedCellCount: affected.length,
+      affectedCellIds: affected.map((item) => item.cellId),
+    })
+  }
+  return affected
 }
 
 const mergeNotebookSessionVarSummaries = (currentItems = [], updatedItems = []) => {
@@ -5143,6 +5223,8 @@ const getTableExportFilters = (table = {}, cell = null) => {
   filters.push({ name: 'JSON', extensions: ['json'] })
   filters.push({ name: 'Excel', extensions: ['xlsx'] })
   filters.push({ name: 'Parquet', extensions: ['parquet'] })
+  filters.push({ name: 'SQLite 数据库', extensions: ['sqlite', 'db'] })
+  filters.push({ name: 'DuckDB 数据库', extensions: ['duckdb'] })
 
   return {
     defaultBase,
@@ -5413,6 +5495,7 @@ const importExternalDataToPythonSession = async (cell, {
   inlineText = '',
   sourceLabel = '',
   variableName = '',
+  sourceUrl = '',
 } = {}) => {
   if (!cell?.key) return
   const requestId = createNotebookActionRequestId('nb-import')
@@ -5430,18 +5513,25 @@ const importExternalDataToPythonSession = async (cell, {
     let selectedPath = ''
     let effectiveText = String(inlineText || '')
     let effectiveLabel = String(sourceLabel || '')
+    let effectiveUrl = String(sourceUrl || '').trim()
 
     if (normalizedSourceType === 'file') {
       const selected = await open({
         multiple: false,
         filters: [{
           name: 'External Data',
-          extensions: ['csv', 'tsv', 'txt', 'xlsx', 'xls', 'json', 'parquet', 'md', 'markdown', 'yaml', 'yml', 'log', 'py', 'js', 'ts'],
+          extensions: ['csv', 'tsv', 'txt', 'xlsx', 'xls', 'json', 'jsonl', 'parquet', 'feather', 'db', 'sqlite', 'sqlite3', 'duckdb', 'md', 'markdown', 'yaml', 'yml', 'log', 'py', 'js', 'ts'],
         }],
       })
       if (!selected) return
       selectedPath = String(selected)
       effectiveLabel = effectiveLabel || (selectedPath.split(/[\\/]/).pop() || selectedPath)
+    } else if (normalizedSourceType === 'url') {
+      if (!effectiveUrl) {
+        effectiveUrl = String(window.prompt?.('输入要导入的 CSV / JSON / Excel / 文本 URL', '') || '').trim()
+      }
+      if (!effectiveUrl) return
+      effectiveLabel = effectiveLabel || effectiveUrl
     } else if (normalizedSourceType === 'clipboard') {
       effectiveText = String(await readClipboardText())
       if (!String(effectiveText || '').trim()) {
@@ -5459,6 +5549,7 @@ const importExternalDataToPythonSession = async (cell, {
       sourceLabel: effectiveLabel,
       variableName,
       text: effectiveText,
+      sourceUrl: effectiveUrl,
     })
     logger.info('[NotebookDataLab] prepared import plan', {
       requestId,
@@ -5500,6 +5591,7 @@ const importExternalDataToPythonSession = async (cell, {
       Array.isArray(snapshot?.sessionVars) ? snapshot.sessionVars : [],
       Array.isArray(result?.session_vars) ? result.session_vars : [],
     )
+    const dataflow = getGuaxiDataflowFromResult(result)
     const previousOutputCount = Array.isArray(snapshot?.outputs) ? snapshot.outputs.length : 0
     const outputText = normalizedSourceType === 'clipboard'
       ? `已将剪贴板数据导入到会话变量 ${importPlan.variableName}，可以在实验室面板中继续生成输出、写回 Markdown 或导出。`
@@ -5534,6 +5626,15 @@ const importExternalDataToPythonSession = async (cell, {
         imports: nextImports,
         lastImportSourceType: importPlan.sourceType,
         lastImportAt: new Date().toISOString(),
+        ...(dataflow
+          ? {
+            dataflow: {
+              ...dataflow,
+              updatedAt: new Date().toISOString(),
+              reason: 'import-data-to-python-session',
+            },
+          }
+          : {}),
       }),
       meta: {
         ...(snapshot?.meta || {}),
@@ -5740,6 +5841,150 @@ const materializeSessionVariableOutput = async (cell, dataset = {}, {
   }
 }
 
+const runNotebookLabGeneratedCode = async (cell, {
+  code = '',
+  source = 'data-lab-action',
+  dataset = {},
+  writeBack = false,
+  exportAfter = false,
+  successMessage = '',
+  labPatch = {},
+} = {}) => {
+  if (!cell?.key || !String(code || '').trim()) return null
+  const requestId = createNotebookActionRequestId('nb-lab-action')
+  setNotebookBusyState(cell, true, `${source}:start:${requestId}`)
+
+  try {
+    const res = await invoke('python_exec', {
+      request: {
+        code: String(code || ''),
+        persist: true,
+        expect_json: true,
+        include_session_vars: true,
+        vars: {
+          _guaxi_session: createPythonSessionId(props.filePath),
+          _doc_path: String(props.filePath || ''),
+          _py_cell_id: String(cell.cellId || ''),
+        },
+      },
+    })
+
+    const outputText = formatPythonExecOutput(res)
+    const display = getGuaxiDisplayFromResult(res)
+    const tables = getGuaxiTablesFromResult(res)
+    const dataframe = tables[0] || null
+    const dataflow = getGuaxiDataflowFromResult(res)
+    const snapshot = getCellSnapshot(cell)
+    const runOutputs = decorateNotebookLabOutputModules(
+      buildPythonCellOutputModules({
+        outputText,
+        display,
+        dataframe,
+        tables,
+        source,
+      }),
+      dataset,
+      source,
+    )
+    const hasRenderableOutput = !!(String(outputText || '').trim() || display || tables.length)
+    const nextOutputs = hasRenderableOutput
+      ? appendPythonCellOutputModules(snapshot?.outputs || [], runOutputs)
+      : (snapshot?.outputs || [])
+    const outputModuleId = String(runOutputs?.[0]?.id || '')
+    const nextSessionVars = resolveNotebookSessionVarsFromExecResult(
+      res,
+      Array.isArray(snapshot?.sessionVars) ? snapshot.sessionVars : [],
+    )
+
+    patchPythonCellSnapshot(props.filePath, cell.cellId, {
+      codeDigest: getNotebookCellContentDigest(cell),
+      outputText: outputText || snapshot?.outputText || '',
+      display: display || snapshot?.display || null,
+      dataframe: dataframe || snapshot?.dataframe || null,
+      outputs: nextOutputs,
+      result: res,
+      sessionVars: nextSessionVars,
+      lab: patchCellSnapshotLab(cell, {
+        ...(labPatch && typeof labPatch === 'object' ? labPatch : {}),
+        ...(dataflow
+          ? {
+            dataflow: {
+              ...dataflow,
+              updatedAt: new Date().toISOString(),
+              reason: source,
+            },
+          }
+          : {}),
+      }),
+      meta: {
+        ...(snapshot?.meta || {}),
+        outputCollapsed: !nextOutputs.length,
+        staleVariables: [],
+        staleReason: '',
+      },
+    })
+
+    if (dataflow) {
+      markDependentNotebookCellsStale(cell, dataflow, `${source}:success`)
+    }
+    if (isActiveNotebookPythonCell(cell) || isNotebookPythonSessionPanelVisible.value) {
+      syncNotebookPythonSessionInspector(cell, `${source}:success`)
+    }
+
+    logger.info('[NotebookDataLab] generated lab action completed', {
+      requestId,
+      source,
+      cellId: String(cell?.cellId || ''),
+      variableName: String(dataset?.variableName || ''),
+      hasTextOutput: !!String(outputText || '').trim(),
+      hasDisplay: !!display,
+      tableCount: tables.length,
+      sessionVarCount: nextSessionVars.length,
+      touchedVariables: Array.isArray(dataflow?.touched) ? dataflow.touched : [],
+      outputModuleCount: nextOutputs.length,
+      touchedVariables: Array.isArray(dataflow?.touched) ? dataflow.touched : [],
+      writeBack,
+      exportAfter,
+    })
+    if (dataflow) {
+      markDependentNotebookCellsStale(targetCell, dataflow, 'import-data-to-python-session')
+    }
+    if (isActiveNotebookPythonCell(targetCell) || isNotebookPythonSessionPanelVisible.value) {
+      syncNotebookPythonSessionInspector(targetCell, 'import-data-to-python-session')
+    }
+
+    bumpRefresh()
+    schedulePersistNotebookSidecar(`${source}-success`)
+
+    if (writeBack && outputModuleId) {
+      await writeCellOutputToMarkdown(cell, outputModuleId)
+    }
+    if (exportAfter && outputModuleId) {
+      await exportCellOutputToFile(cell, outputModuleId)
+    }
+
+    if (res?.ok === false) {
+      message.error('实验室动作执行失败')
+      return { ok: false, outputModuleId }
+    }
+    if (successMessage) message.success(successMessage)
+    return { ok: true, outputModuleId }
+  } catch (error) {
+    logger.error('[NotebookDataLab] generated lab action failed', {
+      requestId,
+      source,
+      cellId: String(cell?.cellId || ''),
+      variableName: String(dataset?.variableName || ''),
+      error: String(error?.message || error),
+    })
+    message.error(`实验室动作失败：${String(error?.message || error)}`)
+    return null
+  } finally {
+    setNotebookBusyState(cell, false, `${source}:finish:${requestId}`)
+    await flushQueuedNotebookPythonActionIfIdle(`${source}:finish:${requestId}`)
+  }
+}
+
 const handleNotebookDataLabActionEvent = async (event) => {
   const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {}
   const targetFilePath = String(detail?.filePath || '').trim()
@@ -5759,6 +6004,7 @@ const handleNotebookDataLabActionEvent = async (event) => {
   const dataset = {
     variableName: String(detail?.variableName || ''),
     dataKind: String(detail?.dataKind || ''),
+    chartType: String(detail?.chartType || ''),
   }
 
   if (detail.action === 'import-file') {
@@ -5769,12 +6015,110 @@ const handleNotebookDataLabActionEvent = async (event) => {
     await importExternalDataToPythonSession(targetCell, { sourceType: 'clipboard' })
     return
   }
+  if (detail.action === 'import-url') {
+    await importExternalDataToPythonSession(targetCell, {
+      sourceType: 'url',
+      sourceUrl: String(detail?.sourceUrl || ''),
+      sourceLabel: String(detail?.sourceLabel || ''),
+      variableName: String(detail?.variableName || ''),
+    })
+    return
+  }
   if (detail.action === 'import-inline-data') {
     await importExternalDataToPythonSession(targetCell, {
       sourceType: String(detail?.sourceType || 'inline'),
       inlineText: String(detail?.text || ''),
       sourceLabel: String(detail?.sourceLabel || ''),
       variableName: String(detail?.variableName || ''),
+    })
+    return
+  }
+  if (detail.action === 'plot-variable' || detail.action === 'plot-variable-writeback' || detail.action === 'plot-variable-export') {
+    const code = buildNotebookLabPlotCode({
+      variableName: String(detail?.variableName || ''),
+      chartType: String(detail?.chartType || 'line'),
+      x: String(detail?.x || ''),
+      y: String(detail?.y || ''),
+      z: String(detail?.z || ''),
+      color: String(detail?.color || ''),
+      title: String(detail?.title || ''),
+    })
+    await runNotebookLabGeneratedCode(targetCell, {
+      code,
+      source: 'data-lab-plot',
+      dataset,
+      writeBack: detail.action === 'plot-variable-writeback',
+      exportAfter: detail.action === 'plot-variable-export',
+      successMessage: '图表已生成',
+      labPatch: {
+        lastPlotVariable: String(detail?.variableName || ''),
+        lastPlotType: String(detail?.chartType || 'line'),
+        lastPlotAt: new Date().toISOString(),
+      },
+    })
+    return
+  }
+  if (detail.action === 'math-evaluate' || detail.action === 'math-writeback') {
+    const code = buildNotebookLabMathCode({
+      expression: String(detail?.expression || ''),
+      mode: String(detail?.mode || 'plot2d'),
+      variable: String(detail?.variable || 'x'),
+      rangeMin: Number(detail?.rangeMin ?? -10),
+      rangeMax: Number(detail?.rangeMax ?? 10),
+    })
+    await runNotebookLabGeneratedCode(targetCell, {
+      code,
+      source: 'data-lab-math',
+      dataset: {
+        variableName: 'math',
+        dataKind: 'math',
+      },
+      writeBack: detail.action === 'math-writeback',
+      successMessage: '数学结果已生成',
+      labPatch: {
+        lastMathExpression: String(detail?.expression || ''),
+        lastMathMode: String(detail?.mode || 'plot2d'),
+        lastMathAt: new Date().toISOString(),
+      },
+    })
+    return
+  }
+  if (detail.action === 'generate-report' || detail.action === 'writeback-report') {
+    const code = buildNotebookLabReportCode({
+      title: String(detail?.title || '探索实验室报告'),
+    })
+    await runNotebookLabGeneratedCode(targetCell, {
+      code,
+      source: 'data-lab-report',
+      dataset: {
+        variableName: 'report',
+        dataKind: 'markdown',
+      },
+      writeBack: detail.action === 'writeback-report',
+      successMessage: '报告草稿已生成',
+      labPatch: {
+        lastReportAt: new Date().toISOString(),
+      },
+    })
+    return
+  }
+  if (detail.action === 'variable-delete' || detail.action === 'variable-rename' || detail.action === 'variable-copy' || detail.action === 'variable-derive') {
+    const variableAction = String(detail.action || '').replace(/^variable-/, '')
+    const code = buildNotebookLabVariableOperationCode({
+      action: variableAction,
+      variableName: String(detail?.variableName || ''),
+      targetName: String(detail?.targetName || ''),
+      expression: String(detail?.expression || ''),
+    })
+    await runNotebookLabGeneratedCode(targetCell, {
+      code,
+      source: 'data-lab-variable-op',
+      dataset,
+      successMessage: '变量操作已完成',
+      labPatch: {
+        lastVariableAction: variableAction,
+        lastVariableActionAt: new Date().toISOString(),
+      },
     })
     return
   }
@@ -5839,6 +6183,7 @@ const runPythonCell = async (cell, { writeBack = false } = {}) => {
       res,
       Array.isArray(snapshot?.sessionVars) ? snapshot.sessionVars : [],
     )
+    const dataflow = getGuaxiDataflowFromResult(res)
     const nextOutputs = hasRenderableOutput
       ? appendPythonCellOutputModules(snapshot?.outputs || [], runOutputs)
       : (snapshot?.outputs || [])
@@ -5853,6 +6198,7 @@ const runPythonCell = async (cell, { writeBack = false } = {}) => {
       hasDataframe: !!dataframe,
       tableCount: tables.length,
       sessionVarCount: nextSessionVars.length,
+      touchedVariables: Array.isArray(dataflow?.touched) ? dataflow.touched : [],
       hideOutput,
       appendedOutputModuleCount: runOutputs.length,
       totalOutputModuleCount: nextOutputs.length,
@@ -5866,11 +6212,25 @@ const runPythonCell = async (cell, { writeBack = false } = {}) => {
       outputs: nextOutputs,
       result: res,
       sessionVars: nextSessionVars,
+      lab: dataflow
+        ? patchCellSnapshotLab(cell, {
+          dataflow: {
+            ...dataflow,
+            updatedAt: new Date().toISOString(),
+            reason: 'run-python-cell',
+          },
+        })
+        : snapshot?.lab || { imports: [] },
       meta: {
         ...(snapshot?.meta || {}),
         outputCollapsed: hideOutput,
+        staleVariables: [],
+        staleReason: '',
       },
     })
+    if (dataflow) {
+      markDependentNotebookCellsStale(cell, dataflow, 'run-python-cell-success')
+    }
     if (isActiveNotebookPythonCell(cell) || isNotebookPythonSessionPanelVisible.value) {
       syncNotebookPythonSessionInspector(cell, 'run-python-cell-success')
     }
@@ -6764,6 +7124,17 @@ defineExpose({
 
 .guaxi-notebook__python-toolbar .guaxi-notebook__icon-btn:not(.primary) {
   background: color-mix(in srgb, var(--guaxi-notebook-btn) 82%, transparent);
+}
+
+.guaxi-notebook__stale-banner {
+  margin: 4px 0 8px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, #d97706 34%, var(--guaxi-notebook-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, #f59e0b 12%, var(--guaxi-notebook-panel) 88%);
+  color: color-mix(in srgb, #92400e 82%, var(--guaxi-notebook-text) 18%);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .guaxi-notebook__panel {
