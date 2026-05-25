@@ -21,6 +21,9 @@ const treeSitterSemanticTokenTypes = [
   'namespace',
   'class',
   'boolean',
+  'constant',
+  'attribute',
+  'builtin',
   'macro',
   'decorator',
   'label',
@@ -87,13 +90,16 @@ const mapTreeSitterTokenType = (tokenType: string) => {
   if (type.includes('operator')) return 'operator'
   if (type.includes('punctuation')) return 'punctuation'
   if (type.includes('type') || type.includes('constructor')) return 'type'
+  if (type.includes('builtin')) return 'builtin'
+  if (type.includes('macro')) return 'macro'
   if (type.includes('function')) return 'function'
   if (type.includes('property') || type.includes('member')) return 'property'
   if (type.includes('parameter')) return 'parameter'
   if (type.includes('module')) return 'namespace'
   if (type.includes('tag')) return 'class'
-  if (type.includes('boolean') || type.includes('constant')) return 'boolean'
-  if (type.includes('macro')) return 'macro'
+  if (type.includes('attribute')) return 'attribute'
+  if (type.includes('boolean')) return 'boolean'
+  if (type.includes('constant')) return 'constant'
   if (type.includes('decorator')) return 'decorator'
   if (type.includes('label')) return 'label'
   return 'variable'

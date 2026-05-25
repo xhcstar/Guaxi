@@ -8910,7 +8910,7 @@ const initEditor = () => {
       keyword: '#a626a4',
       number: '#986801',
       regexp: '#0184bc',
-      operator: '#383a42',
+      operator: '#0184bc',
       punctuation: '#383a42',
       'punctuation.definition': '#383a42',
       'punctuation.bracket': '#383a42',
@@ -8923,9 +8923,12 @@ const initEditor = () => {
       struct: '#c18401',
       function: '#4078f2',
       method: '#4078f2',
-      property: '#4078f2',
+      property: '#e45649',
       parameter: '#986801',
       variable: '#e45649',
+      constant: '#986801',
+      attribute: '#986801',
+      builtin: '#0184bc',
       'variable.readonly': '#986801',
       'variable.defaultLibrary': '#e45649',
       enumMember: '#986801',
@@ -9007,7 +9010,7 @@ const initEditor = () => {
       { token: 'type', foreground: 'e5c07b' },           // Type
       { token: 'delimiter', foreground: 'abb2bf' },           // Delimiter → Main text color
       { token: 'variable', foreground: 'e06c75' },           // Variable
-      { token: 'parameter', foreground: '61afef' },           // Parameter → Function color
+      { token: 'parameter', foreground: 'd19a66' },           // Parameter
       { token: 'function', foreground: '61afef' },           // Function
       { token: 'constant', foreground: 'd19a66' },           // Constant → Number color
       { token: 'class', foreground: 'e5c07b' },           // Class → Type color
@@ -9023,7 +9026,7 @@ const initEditor = () => {
       { token: 'method', foreground: '61afef' },
       { token: 'function.declaration', foreground: '61afef' },
       { token: 'function.defaultLibrary', foreground: '61afef' },
-      { token: 'parameter.declaration', foreground: '61afef' },
+      { token: 'parameter.declaration', foreground: 'd19a66' },
       { token: 'variable.readonly', foreground: 'd19a66' },
       { token: 'variable.defaultLibrary', foreground: 'e06c75' },
       { token: 'type.defaultLibrary', foreground: 'e5c07b' },
@@ -9050,7 +9053,7 @@ const initEditor = () => {
       keyword: '#c678dd',
       number: '#d19a66',
       regexp: '#56b6c2',
-      operator: '#abb2bf',
+      operator: '#56b6c2',
       punctuation: '#abb2bf',
       'punctuation.definition': '#abb2bf',
       'punctuation.bracket': '#abb2bf',
@@ -9063,12 +9066,15 @@ const initEditor = () => {
       struct: '#e5c07b',
       function: '#61afef',
       method: '#61afef',
-      property: '#61afef',
-      parameter: '#61afef',
+      property: '#e06c75',
+      parameter: '#d19a66',
       'function.declaration': '#61afef',
       'function.defaultLibrary': '#61afef',
-      'parameter.declaration': '#61afef',
+      'parameter.declaration': '#d19a66',
       variable: '#e06c75',
+      constant: '#d19a66',
+      attribute: '#d19a66',
+      builtin: '#56b6c2',
       'variable.readonly': '#d19a66',
       'variable.defaultLibrary': '#e06c75',
       enumMember: '#d19a66',
@@ -20932,19 +20938,19 @@ onUnmounted(() => {
 .guaxi-editor :deep(.md-fence-token-keyword) { color: #c678dd; }
 .guaxi-editor :deep(.md-fence-token-string) { color: #98c379; }
 .guaxi-editor :deep(.md-fence-token-number) { color: #d19a66; }
-.guaxi-editor :deep(.md-fence-token-boolean) { color: #56b6c2; }
+.guaxi-editor :deep(.md-fence-token-boolean) { color: #d19a66; }
 .guaxi-editor :deep(.md-fence-token-comment) { color: #5c6370; }
-.guaxi-editor :deep(.md-fence-token-type) { color: #56b6c2; }
+.guaxi-editor :deep(.md-fence-token-type) { color: #e5c07b; }
 .guaxi-editor :deep(.md-fence-token-class) { color: #e5c07b; }
 .guaxi-editor :deep(.md-fence-token-function) { color: #61afef; }
-.guaxi-editor :deep(.md-fence-token-method) { color: #c678dd; }
+.guaxi-editor :deep(.md-fence-token-method) { color: #61afef; }
 .guaxi-editor :deep(.md-fence-token-parameter) { color: #d19a66; }
 .guaxi-editor :deep(.md-fence-token-variable) { color: #e06c75; }
 .guaxi-editor :deep(.md-fence-token-constant) { color: #d19a66; }
 .guaxi-editor :deep(.md-fence-token-regexp) { color: #56b6c2; }
-.guaxi-editor :deep(.md-fence-token-property) { color: #98c379; }
+.guaxi-editor :deep(.md-fence-token-property) { color: #e06c75; }
 .guaxi-editor :deep(.md-fence-token-namespace) { color: #e5c07b; }
-.guaxi-editor :deep(.md-fence-token-macro) { color: #61afef; }
+.guaxi-editor :deep(.md-fence-token-macro) { color: #c678dd; }
 .guaxi-editor :deep(.md-fence-token-tag) { color: #e06c75; }
 .guaxi-editor :deep(.md-fence-token-attribute) { color: #d19a66; }
 .guaxi-editor :deep(.md-fence-token-builtin) { color: #56b6c2; }
@@ -20956,19 +20962,19 @@ onUnmounted(() => {
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-keyword) { color: #c678dd; }
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-string) { color: #98c379; }
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-number) { color: #d19a66; }
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-boolean) { color: #56b6c2; }
+:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-boolean) { color: #d19a66; }
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-comment) { color: #5c6370; }
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-type) { color: #56b6c2; }
+:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-type) { color: #e5c07b; }
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-class) { color: #e5c07b; }
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-function) { color: #61afef; }
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-method) { color: #c678dd; }
+:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-method) { color: #61afef; }
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-parameter) { color: #d19a66; }
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-variable) { color: #e06c75; }
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-constant) { color: #d19a66; }
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-regexp) { color: #56b6c2; }
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-property) { color: #98c379; }
+:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-property) { color: #e06c75; }
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-namespace) { color: #e5c07b; }
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-macro) { color: #61afef; }
+:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-macro) { color: #c678dd; }
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-tag) { color: #e06c75; }
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-attribute) { color: #d19a66; }
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-builtin) { color: #56b6c2; }
@@ -21772,15 +21778,15 @@ onUnmounted(() => {
 .guaxi-editor .monaco-editor .md-fence-token-number { color: #986801 !important; }
 .guaxi-editor .monaco-editor .md-fence-token-boolean { color: #0184bc !important; }
 .guaxi-editor .monaco-editor .md-fence-token-comment { color: #7f848e !important; }
-.guaxi-editor .monaco-editor .md-fence-token-type { color: #0184bc !important; }
+.guaxi-editor .monaco-editor .md-fence-token-type { color: #c18401 !important; }
 .guaxi-editor .monaco-editor .md-fence-token-class { color: #c18401 !important; }
 .guaxi-editor .monaco-editor .md-fence-token-function { color: #4078f2 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-method { color: #a626a4 !important; }
+.guaxi-editor .monaco-editor .md-fence-token-method { color: #4078f2 !important; }
 .guaxi-editor .monaco-editor .md-fence-token-parameter { color: #986801 !important; }
 .guaxi-editor .monaco-editor .md-fence-token-variable { color: #e45649 !important; }
 .guaxi-editor .monaco-editor .md-fence-token-constant { color: #986801 !important; }
 .guaxi-editor .monaco-editor .md-fence-token-regexp { color: #0184bc !important; }
-.guaxi-editor .monaco-editor .md-fence-token-property { color: #50a14f !important; }
+.guaxi-editor .monaco-editor .md-fence-token-property { color: #e45649 !important; }
 .guaxi-editor .monaco-editor .md-fence-token-namespace { color: #c18401 !important; }
 .guaxi-editor .monaco-editor .md-fence-token-macro { color: #4078f2 !important; }
 .guaxi-editor .monaco-editor .md-fence-token-tag { color: #e45649 !important; }
@@ -21794,19 +21800,19 @@ onUnmounted(() => {
 :root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-keyword { color: #c678dd !important; }
 :root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-string { color: #98c379 !important; }
 :root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-number { color: #d19a66 !important; }
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-boolean { color: #56b6c2 !important; }
+:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-boolean { color: #d19a66 !important; }
 :root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-comment { color: #5c6370 !important; }
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-type { color: #56b6c2 !important; }
+:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-type { color: #e5c07b !important; }
 :root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-class { color: #e5c07b !important; }
 :root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-function { color: #61afef !important; }
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-method { color: #c678dd !important; }
+:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-method { color: #61afef !important; }
 :root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-parameter { color: #d19a66 !important; }
 :root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-variable { color: #e06c75 !important; }
 :root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-constant { color: #d19a66 !important; }
 :root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-regexp { color: #56b6c2 !important; }
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-property { color: #98c379 !important; }
+:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-property { color: #e06c75 !important; }
 :root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-namespace { color: #e5c07b !important; }
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-macro { color: #61afef !important; }
+:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-macro { color: #c678dd !important; }
 :root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-tag { color: #e06c75 !important; }
 :root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-attribute { color: #d19a66 !important; }
 :root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-builtin { color: #56b6c2 !important; }

@@ -362,6 +362,269 @@ fn escape_html(source: &str) -> String {
     escaped
 }
 
+fn push_latex_span(spans: &mut Vec<HighlightTokenSpan>, start_byte: usize, end_byte: usize, token_type: &str) {
+    if end_byte > start_byte {
+        spans.push(HighlightTokenSpan {
+            start_byte,
+            end_byte,
+            token_type: token_type.to_string(),
+        });
+    }
+}
+
+fn latex_command_end(code: &str, index: usize) -> usize {
+    let Some(ch) = code[index..].chars().next() else {
+        return index;
+    };
+    let mut end = index + ch.len_utf8();
+    while end < code.len() {
+        let c = code[end..].chars().next().unwrap_or('\0');
+        if c.is_ascii_alphabetic() || c == '@' || c == '*' {
+            end += c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    if end == index + ch.len_utf8() && end < code.len() {
+        end += code[end..].chars().next().unwrap_or('\0').len_utf8();
+    }
+    end
+}
+
+fn latex_command_name(command: &str) -> &str {
+    command
+        .trim_start_matches('\\')
+        .trim_end_matches('*')
+}
+
+fn latex_command_token_type(command_name: &str) -> &'static str {
+    match command_name {
+        "begin" | "end" | "documentclass" | "usepackage" | "usetikzlibrary" | "input" | "include" => "keyword.import",
+        "section" | "subsection" | "subsubsection" | "paragraph" | "title" | "author" | "date" | "maketitle"
+        | "tableofcontents" | "item" | "caption" | "label" | "ref" | "eqref" | "cite" | "emph" | "textbf"
+        | "textit" | "frac" | "sqrt" | "left" | "right" => "function",
+        "int" | "sum" | "prod" | "lim" | "sin" | "cos" | "tan" | "log" | "ln" | "exp" => "function.builtin",
+        _ => "keyword",
+    }
+}
+
+fn latex_is_math_environment(name: &str) -> bool {
+    matches!(
+        name,
+        "align" | "align*" | "aligned" | "equation" | "equation*" | "gather" | "gather*" | "multline"
+            | "multline*" | "split" | "cases" | "matrix" | "pmatrix" | "bmatrix" | "vmatrix" | "Vmatrix"
+    )
+}
+
+fn scan_braced_latex_argument(
+    code: &str,
+    index: usize,
+    content_token_type: &str,
+    spans: &mut Vec<HighlightTokenSpan>,
+) -> Option<(usize, String)> {
+    let mut cursor = index;
+    while cursor < code.len() {
+        let ch = code[cursor..].chars().next().unwrap_or('\0');
+        if !ch.is_whitespace() {
+            break;
+        }
+        cursor += ch.len_utf8();
+    }
+    if !code[cursor..].starts_with('{') {
+        return None;
+    }
+
+    let open = cursor;
+    cursor += 1;
+    let content_start = cursor;
+    let mut depth = 1usize;
+    while cursor < code.len() {
+        let ch = code[cursor..].chars().next().unwrap_or('\0');
+        if ch == '\\' {
+            cursor = latex_command_end(code, cursor);
+            continue;
+        }
+        if ch == '{' {
+            depth += 1;
+        } else if ch == '}' {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                let content_end = cursor;
+                let close = cursor + ch.len_utf8();
+                push_latex_span(spans, open, open + 1, "punctuation.bracket");
+                push_latex_span(spans, content_start, content_end, content_token_type);
+                push_latex_span(spans, cursor, close, "punctuation.bracket");
+                return Some((close, code[content_start..content_end].trim().to_string()));
+            }
+        }
+        cursor += ch.len_utf8();
+    }
+    None
+}
+
+fn scan_optional_latex_argument(code: &str, index: usize, spans: &mut Vec<HighlightTokenSpan>) -> Option<usize> {
+    let mut cursor = index;
+    while cursor < code.len() {
+        let ch = code[cursor..].chars().next().unwrap_or('\0');
+        if !ch.is_whitespace() {
+            break;
+        }
+        cursor += ch.len_utf8();
+    }
+    if !code[cursor..].starts_with('[') {
+        return None;
+    }
+
+    let start = cursor;
+    cursor += 1;
+    while cursor < code.len() {
+        let ch = code[cursor..].chars().next().unwrap_or('\0');
+        cursor += ch.len_utf8();
+        if ch == ']' {
+            push_latex_span(spans, start, cursor, "attribute");
+            return Some(cursor);
+        }
+    }
+    None
+}
+
+fn scan_latex_token_spans(code: &str) -> Vec<HighlightTokenSpan> {
+    // 设计思路：
+    // 1. 这仍然是轻量 fallback scanner，但输出 token 类型要贴近 tree-sitter capture，前端才能按 One Dark 语义色板统一渲染。
+    // 2. LaTeX 文本区只高亮命令和参数，数学区才识别变量/数字/运算符，避免把普通英文段落误染成公式变量。
+    // 3. span 使用 UTF-8 byte offset，和 tree-sitter-highlight 的返回格式保持一致，中文内容不会造成 Monaco 列号偏移。
+    let mut spans = Vec::new();
+    let mut index = 0;
+    let mut math_delimiter_stack: Vec<&'static str> = Vec::new();
+    let mut math_environment_depth = 0usize;
+
+    while index < code.len() {
+        let ch = code[index..].chars().next().unwrap_or('\0');
+        let in_math = !math_delimiter_stack.is_empty() || math_environment_depth > 0;
+
+        if ch == '%' {
+            let end = code[index..].find('\n').map(|n| index + n).unwrap_or(code.len());
+            push_latex_span(&mut spans, index, end, "comment");
+            index = end;
+            continue;
+        }
+
+        if ch == '\\' {
+            if code[index..].starts_with("\\[") || code[index..].starts_with("\\(") {
+                let delimiter = &code[index..index + 2];
+                push_latex_span(&mut spans, index, index + 2, "punctuation.special");
+                math_delimiter_stack.push(if delimiter == "\\[" { "\\]" } else { "\\)" });
+                index += 2;
+                continue;
+            }
+            if code[index..].starts_with("\\]") || code[index..].starts_with("\\)") {
+                push_latex_span(&mut spans, index, index + 2, "punctuation.special");
+                math_delimiter_stack.pop();
+                index += 2;
+                continue;
+            }
+
+            let command_end = latex_command_end(code, index);
+            let command = &code[index..command_end];
+            let command_name = latex_command_name(command);
+            push_latex_span(&mut spans, index, command_end, latex_command_token_type(command_name));
+
+            let mut next = command_end;
+            if let Some(after_optional) = scan_optional_latex_argument(code, next, &mut spans) {
+                next = after_optional;
+            }
+
+            if command_name == "begin" || command_name == "end" {
+                if let Some((after_arg, env_name)) = scan_braced_latex_argument(code, next, "type", &mut spans) {
+                    if latex_is_math_environment(&env_name) {
+                        if command_name == "begin" {
+                            math_environment_depth += 1;
+                        } else {
+                            math_environment_depth = math_environment_depth.saturating_sub(1);
+                        }
+                    }
+                    index = after_arg;
+                    continue;
+                }
+            } else if matches!(command_name, "documentclass" | "usepackage" | "usetikzlibrary" | "input" | "include") {
+                if let Some((after_arg, _)) = scan_braced_latex_argument(code, next, "module", &mut spans) {
+                    index = after_arg;
+                    continue;
+                }
+            } else if matches!(command_name, "section" | "subsection" | "subsubsection" | "paragraph" | "title" | "caption" | "label" | "ref" | "eqref" | "cite") {
+                if let Some((after_arg, _)) = scan_braced_latex_argument(code, next, "variable.parameter", &mut spans) {
+                    index = after_arg;
+                    continue;
+                }
+            }
+
+            index = command_end;
+            continue;
+        }
+
+        if ch == '$' {
+            let is_double = code[index..].starts_with("$$");
+            let end = index + if is_double { 2 } else { 1 };
+            push_latex_span(&mut spans, index, end, "punctuation.special");
+            if math_delimiter_stack.last().copied() == Some(if is_double { "$$" } else { "$" }) {
+                math_delimiter_stack.pop();
+            } else {
+                math_delimiter_stack.push(if is_double { "$$" } else { "$" });
+            }
+            index = end;
+            continue;
+        }
+
+        if "{}[]()".contains(ch) {
+            let end = index + ch.len_utf8();
+            push_latex_span(&mut spans, index, end, "punctuation.bracket");
+            index = end;
+            continue;
+        }
+
+        if in_math && ch.is_ascii_digit() {
+            let start = index;
+            index += ch.len_utf8();
+            while index < code.len() {
+                let c = code[index..].chars().next().unwrap_or('\0');
+                if c.is_ascii_digit() || c == '.' {
+                    index += c.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            push_latex_span(&mut spans, start, index, "number");
+            continue;
+        }
+
+        if in_math && ch.is_ascii_alphabetic() {
+            let start = index;
+            index += ch.len_utf8();
+            while index < code.len() {
+                let c = code[index..].chars().next().unwrap_or('\0');
+                if c.is_ascii_alphanumeric() {
+                    index += c.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            push_latex_span(&mut spans, start, index, "variable");
+            continue;
+        }
+
+        if in_math && "+-=*/^_&|<>".contains(ch) {
+            let end = index + ch.len_utf8();
+            push_latex_span(&mut spans, index, end, "operator");
+            index = end;
+            continue;
+        }
+
+        index += ch.len_utf8();
+    }
+
+    spans
+}
+
 fn wrap_code_html(code_html: String, language: &str, supported: bool) -> String {
     let support_class = if supported { "guaxi-ts-code" } else { "guaxi-ts-code guaxi-ts-code-plain" };
     format!(
@@ -408,7 +671,7 @@ fn render_latex(
     //    轻量 scanner，避免用户的 tex 代码块直接退化成纯文本。
     // 3. 后续如果换成带完整 scanner 与 highlights.scm 的 LaTeX grammar，只需要在
     //    language_specs 中补回标准 HighlightConfiguration。
-    debug!(target: "syntax_highlight", bytes = code.len(), "using latex fallback scanner");
+    debug!(target: "syntax_highlight", debug_id, bytes = code.len(), "using latex html fallback scanner");
     let mut html = String::with_capacity(code.len() + 256);
     let bytes = code.as_bytes();
     let mut index = 0;
@@ -490,75 +753,7 @@ fn collect_latex_token_spans(
     // 2. token 坐标统一返回 UTF-8 byte offset，前端再根据原文映射到 Monaco 的 UTF-16 column，
     //    这样中文和其他多字节字符不会把高亮位置挤偏。
     // 3. 日志记录 span 数量与耗时，便于排查 .tex 文件打开后是否真正命中了后端高亮链路。
-    let mut spans = Vec::new();
-    let bytes = code.as_bytes();
-    let mut index = 0;
-
-    while index < bytes.len() {
-        let ch = code[index..].chars().next().unwrap_or('\0');
-        if ch == '%' {
-            let end = code[index..].find('\n').map(|n| index + n).unwrap_or(code.len());
-            if end > index {
-                spans.push(HighlightTokenSpan {
-                    start_byte: index,
-                    end_byte: end,
-                    token_type: "comment".to_string(),
-                });
-            }
-            index = end;
-            continue;
-        }
-
-        if ch == '\\' {
-            let mut end = index + ch.len_utf8();
-            while end < code.len() {
-                let c = code[end..].chars().next().unwrap_or('\0');
-                if c.is_ascii_alphabetic() || c == '*' {
-                    end += c.len_utf8();
-                } else {
-                    break;
-                }
-            }
-            if end == index + ch.len_utf8() && end < code.len() {
-                end += code[end..].chars().next().unwrap_or('\0').len_utf8();
-            }
-            spans.push(HighlightTokenSpan {
-                start_byte: index,
-                end_byte: end,
-                token_type: "keyword".to_string(),
-            });
-            index = end;
-            continue;
-        }
-
-        if ch == '$' {
-            let end = if code[index..].starts_with("$$") {
-                index + 2
-            } else {
-                index + 1
-            };
-            spans.push(HighlightTokenSpan {
-                start_byte: index,
-                end_byte: end,
-                token_type: "string".to_string(),
-            });
-            index = end;
-            continue;
-        }
-
-        if "{}[]()".contains(ch) {
-            let end = index + ch.len_utf8();
-            spans.push(HighlightTokenSpan {
-                start_byte: index,
-                end_byte: end,
-                token_type: "punctuation".to_string(),
-            });
-            index = end;
-            continue;
-        }
-
-        index += ch.len_utf8();
-    }
+    let spans = scan_latex_token_spans(code);
 
     debug!(
         target: "syntax_highlight",
