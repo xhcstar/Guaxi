@@ -80,6 +80,15 @@
           >
             <Icon :icon="filePlusIcon" width="16" height="16" />
           </button>
+          <button
+            type="button"
+            class="guaxi-notebook__icon-btn"
+            title="新增数学块"
+            aria-label="新增数学块"
+            @click="appendCell('math')"
+          >
+            <Icon :icon="sigmaIcon" width="16" height="16" />
+          </button>
           <template v-if="activeNotebookPythonCell">
             <span class="guaxi-notebook__toolbar-divider" aria-hidden="true"></span>
             <button
@@ -268,6 +277,79 @@
         </div>
       </template>
 
+      <template v-else-if="cell.type === 'math'">
+        <div class="guaxi-notebook__math-layout">
+          <div class="guaxi-notebook__math-toolbar">
+            <span class="guaxi-notebook__math-badge">Math</span>
+            <div class="guaxi-notebook__math-actions">
+              <button type="button" class="guaxi-notebook__panel-btn" @click="runMathCell(cell, false)">生成结果</button>
+              <button type="button" class="guaxi-notebook__panel-btn" @click="runMathCell(cell, true)">生成并写回</button>
+              <button
+                type="button"
+                class="guaxi-notebook__icon-btn danger"
+                title="删除当前数学块"
+                aria-label="删除当前数学块"
+                @click="confirmRemoveCell(cell)"
+              >
+                <Icon :icon="trash2Icon" width="16" height="16" />
+              </button>
+            </div>
+          </div>
+          <textarea
+            class="guaxi-notebook__math-input"
+            :value="cell.expression"
+            spellcheck="false"
+            placeholder="输入 LaTeX / SymPy 公式，例如 sin(x) / x"
+            @input="updateMathCell(cell.key, $event)"
+          ></textarea>
+          <div class="guaxi-notebook__math-preview markdown-body" v-html="getRenderedMathCellHtml(cell)"></div>
+
+          <div v-if="(hasVisibleOutput(cell) || isCellBusy(cell)) && !getCellSnapshot(cell).meta.outputCollapsed" class="guaxi-notebook__panel">
+            <div class="guaxi-notebook__panel-head">
+              <div class="guaxi-notebook__panel-title">数学输出 · {{ getCellOutputModules(cell).length }}</div>
+              <div class="guaxi-notebook__panel-actions">
+                <button type="button" class="guaxi-notebook__panel-btn" @click="insertOutputMarkdownAfterCell(cell)">写回为 Markdown</button>
+                <button type="button" class="guaxi-notebook__panel-btn" @click="exportCellOutputToFile(cell)">导出文件</button>
+              </div>
+            </div>
+            <div class="guaxi-notebook__panel-content">
+              <div v-if="isCellBusy(cell)" class="guaxi-notebook__running-banner">数学引擎正在运行，请稍候...</div>
+              <article
+                v-for="outputModule in getCellOutputModules(cell)"
+                :key="`${cell.key}-${outputModule.id}`"
+                class="guaxi-notebook__output-module"
+              >
+                <div class="guaxi-notebook__output-module-head">
+                  <div class="guaxi-notebook__output-module-copy">
+                    <span class="guaxi-notebook__output-module-title">{{ getNotebookOutputModuleTitle(outputModule) }}</span>
+                    <span class="guaxi-notebook__output-module-summary">{{ getNotebookOutputModuleSummary(outputModule) }}</span>
+                  </div>
+                </div>
+                <div v-if="!outputModule.collapsed" class="guaxi-notebook__output-module-body">
+                  <GuaxiNotebookHtmlOutput
+                    v-if="outputModule.kind === 'html' || outputModule.kind === 'svg'"
+                    :html="outputModule.kind === 'svg' ? outputModule.display?.svg : outputModule.display?.html"
+                    :title="`Math Output ${cell.key || ''}`"
+                  />
+                  <div
+                    v-else-if="outputModule.kind === 'markdown'"
+                    class="guaxi-notebook__output-markdown markdown-body"
+                    v-html="getRenderedOutputMarkdownHtml(cell, outputModule)"
+                  ></div>
+                  <img
+                    v-else-if="outputModule.kind === 'image' && getCellDisplayUrl(cell, outputModule)"
+                    class="guaxi-notebook__display-image"
+                    :src="getCellDisplayUrl(cell, outputModule)"
+                    alt="Math output"
+                  />
+                  <pre v-else class="guaxi-notebook__output-text">{{ buildOutputModuleMarkdownText(outputModule) }}</pre>
+                </div>
+              </article>
+            </div>
+          </div>
+        </div>
+      </template>
+
       <template v-else>
         <div class="guaxi-notebook__python-layout">
           <div class="guaxi-notebook__python-toolbar">
@@ -440,6 +522,15 @@
           >
             <Icon :icon="terminalSquareIcon" width="16" height="16" />
           </button>
+          <button
+            type="button"
+            class="guaxi-notebook__icon-btn"
+            title="在这里插入数学块"
+            aria-label="在这里插入数学块"
+            @click="insertCell(index, 'below', 'math')"
+          >
+            <Icon :icon="sigmaIcon" width="16" height="16" />
+          </button>
         </div>
       </div>
     </template>
@@ -482,6 +573,7 @@ import MarkdownIt from 'markdown-it'
 import { debounce } from 'lodash-es'
 import filePlusIcon from '@iconify-icons/lucide/file-plus'
 import terminalSquareIcon from '@iconify-icons/lucide/terminal-square'
+import sigmaIcon from '@iconify-icons/lucide/sigma'
 import playIcon from '@iconify-icons/lucide/play'
 import checkCircleIcon from '@iconify-icons/lucide/check-circle-2'
 import plusIcon from '@iconify-icons/lucide/plus'
@@ -534,6 +626,7 @@ import {
 import {
   createNotebookCellsFromMarkdown,
   createNotebookMarkdownCell,
+  createNotebookMathCell,
   createNotebookPythonCell,
   normalizeNotebookCells,
   serializeNotebookCells,
@@ -1180,7 +1273,15 @@ const getNotebookCellContentDigest = (cell) => {
   if (cell?.type === 'python') {
     return computeNotebookDigest(String(cell?.code || ''))
   }
+  if (cell?.type === 'math') {
+    return computeNotebookDigest(String(cell?.expression || ''))
+  }
   return computeNotebookDigest(String(cell?.content || ''))
+}
+const createNotebookMathCellId = (cell) => {
+  const cellKey = String(cell?.key || '').trim()
+  const fileKey = computeNotebookDigest(String(props.filePath || '__guaxi_notebook__'))
+  return cellKey ? `math::${fileKey}::${cellKey}` : ''
 }
 const isPythonCellSnapshotFresh = (cell, snapshot) => {
   const currentCodeDigest = getNotebookCellContentDigest(cell)
@@ -1248,6 +1349,13 @@ const cloneNotebookCellsForHistory = (cells = []) => {
         },
       })
     }
+    if (cell?.type === 'math') {
+      return createNotebookMathCell(String(cell?.expression || ''), {
+        key: cell?.key,
+        sourceType: cell?.sourceType,
+        fenceLanguage: cell?.fenceLanguage,
+      })
+    }
     return createNotebookMarkdownCell(String(cell?.content || ''), { key: cell?.key })
   })
 }
@@ -1270,6 +1378,16 @@ const serializeNotebookCellsForSidecar = (cells = []) => {
         relation,
       }
     }
+    if (cell?.type === 'math') {
+      return {
+        type: 'math',
+        key: String(cell?.key || ''),
+        expression: String(cell?.expression || ''),
+        sourceType: String(cell?.sourceType || 'dollar'),
+        fenceLanguage: String(cell?.fenceLanguage || 'math'),
+        relation,
+      }
+    }
     return {
       type: 'markdown',
       key: String(cell?.key || ''),
@@ -1280,9 +1398,9 @@ const serializeNotebookCellsForSidecar = (cells = []) => {
 }
 const serializeNotebookSnapshotsForSidecar = (cells = []) => {
   const snapshots = {}
-  normalizeNotebookCells(cells).forEach((cell) => {
-    if (cell?.type !== 'python') return
-    const cellId = String(cell?.cellId || '')
+  decorateNotebookCells(cells).forEach((cell) => {
+    if (cell?.type !== 'python' && cell?.type !== 'math') return
+    const cellId = String(cell?.cellId || (cell?.type === 'math' ? createNotebookMathCellId(cell) : ''))
     const stableId = getNotebookCellStableId(cell)
     const snapshotKey = stableId || cellId
     if (!snapshotKey) return
@@ -1313,8 +1431,9 @@ const applyNotebookSidecarSnapshots = (cells = [], snapshots = {}) => {
   const nextSnapshots = {}
   let restoredCount = 0
   let skippedCount = 0
-  normalizeNotebookCells(cells).forEach((cell) => {
-    if (cell?.type !== 'python') return
+  const executableCells = decorateNotebookCells(cells).filter((cell) => cell?.type === 'python' || cell?.type === 'math')
+  executableCells.forEach((cell) => {
+    if (cell?.type !== 'python' && cell?.type !== 'math') return
     const cellId = String(cell?.cellId || '')
     const stableId = getNotebookCellStableId(cell)
     if (!cellId && !stableId) return
@@ -1354,8 +1473,8 @@ const applyNotebookSidecarSnapshots = (cells = [], snapshots = {}) => {
     restoredCount += 1
   })
   replacePythonCellSnapshots(props.filePath, nextSnapshots)
-  logger.info('[Notebook] applied sidecar python snapshots', {
-    cellCount: normalizeNotebookCells(cells).filter((cell) => cell?.type === 'python').length,
+  logger.info('[Notebook] applied sidecar executable snapshots', {
+    cellCount: executableCells.length,
     restoredCount,
     skippedCount,
     snapshotCount: Object.keys(snapshots && typeof snapshots === 'object' ? snapshots : {}).length,
@@ -1552,6 +1671,13 @@ const getDisplayDataUrl = (display) => getPythonCellOutputDisplayDataUrl(display
 
 const decorateNotebookCells = (cells = []) => {
   return normalizeNotebookCells(cells).map((cell, index) => {
+    if (cell.type === 'math') {
+      return {
+        ...cell,
+        index,
+        cellId: createNotebookMathCellId(cell),
+      }
+    }
     if (cell.type !== 'python') {
       return {
         ...cell,
@@ -2531,6 +2657,23 @@ const buildNotebookSearchDocuments = (cells = []) => {
       }
     }
 
+    if (cell?.type === 'math') {
+      const outputTexts = getCellOutputModules(cell)
+        .map((outputModule) => buildOutputModuleSearchText(outputModule))
+        .filter(Boolean)
+      const content = [
+        String(cell?.expression || ''),
+        ...outputTexts,
+      ].filter(Boolean).join('\n\n')
+      return {
+        cell_key: String(cell?.key || ''),
+        cell_type: 'math',
+        digest: computeNotebookDigest(content),
+        search_text: content,
+        summary_text: [String(cell?.expression || ''), ...outputTexts.slice(0, 2)].filter(Boolean).join(' ').trim(),
+      }
+    }
+
     const content = String(cell?.content || '')
     return {
       cell_key: String(cell?.key || ''),
@@ -2992,6 +3135,7 @@ const emitCells = (cells, focusKey = '', { deferMarkdownSync = false, recordHist
     focusKey: pendingFocusCellKey.value,
     cellCount: normalizedCells.length,
     markdownCellCount: normalizedCells.filter((cell) => cell.type === 'markdown').length,
+    mathCellCount: normalizedCells.filter((cell) => cell.type === 'math').length,
     pythonCellCount: normalizedCells.filter((cell) => cell.type === 'python').length,
     deferMarkdownSync,
     recordHistory,
@@ -3063,13 +3207,34 @@ const updatePythonCell = (key, payload) => {
   )
 }
 
+const updateMathCell = (key, eventOrValue) => {
+  const value = typeof eventOrValue === 'string' ? eventOrValue : String(eventOrValue?.target?.value || '')
+  logger.debug('[Notebook] update math cell expression', {
+    key: String(key || ''),
+    expressionLength: value.length,
+  })
+  emitCells(
+    notebookCells.value.map((cell) => {
+      if (cell.type !== 'math' || String(cell.key) !== String(key)) return cell
+      return createNotebookMathCell(value, {
+        ...cell,
+        key: cell.key,
+      })
+    }),
+    '',
+    { deferMarkdownSync: true },
+  )
+}
+
 const insertCell = (index, position = 'below', type = 'markdown') => {
   const next = notebookCells.value.slice()
   const newCell = type === 'python'
     ? createNotebookPythonCell({
       code: '',
     })
-    : createNotebookMarkdownCell('')
+    : type === 'math'
+      ? createNotebookMathCell('')
+      : createNotebookMarkdownCell('')
   const offset = position === 'below' ? 1 : 0
   logger.info('[Notebook] insert cell', {
     index,
@@ -3079,6 +3244,8 @@ const insertCell = (index, position = 'below', type = 'markdown') => {
   if (type === 'markdown') {
     editingMarkdownCellKey.value = newCell.key
     clearActiveNotebookPythonCell('insert-markdown-cell')
+  } else if (type === 'math') {
+    clearActiveNotebookPythonCell('insert-math-cell')
   } else {
     setActiveNotebookPythonCellKey(String(newCell.key || ''), 'insert-python-cell')
     revealNotebookTopToolbar('insert-python-cell')
@@ -3115,7 +3282,8 @@ watch(notebookCells, (cells) => {
 const confirmRemoveCell = async (cell) => {
   const targetKey = String(cell?.key || '')
   if (!targetKey) return
-  const confirmed = await confirmDialog(`确定删除这个${cell?.type === 'python' ? ' Python' : ' Markdown'} Cell 吗？`, {
+  const cellTypeLabel = cell?.type === 'python' ? ' Python' : cell?.type === 'math' ? '数学块' : ' Markdown'
+  const confirmed = await confirmDialog(`确定删除这个${cellTypeLabel} Cell 吗？`, {
     title: '确认删除',
     kind: 'warning',
   })
@@ -4023,7 +4191,6 @@ const syncRenderedMarkdownHtml = async (cells, reason = 'unknown') => {
     cellCount: Array.isArray(cells) ? cells.length : 0,
   })
 
-  const previousMarkdownMap = renderedMarkdownHtmlMap.value || {}
   const nextMarkdownMap = {}
   const nextOutputMap = {}
   const renderTasks = []
@@ -4033,15 +4200,19 @@ const syncRenderedMarkdownHtml = async (cells, reason = 'unknown') => {
   let outputRenderCount = 0
 
   for (const cell of Array.isArray(cells) ? cells : []) {
-    if (cell?.type === 'markdown') {
+    if (cell?.type === 'markdown' || cell?.type === 'math') {
       const cellKey = String(cell.key || '')
-      const markdownText = String(cell.content || '')
+      const markdownText = cell?.type === 'math'
+        ? `$$\n${String(cell.expression || '')}\n$$`
+        : String(cell.content || '')
+      const renderReasonPrefix = cell?.type === 'math' ? 'math-cell' : 'markdown-cell'
+      const logCellKind = cell?.type === 'math' ? 'math' : 'markdown'
       const cacheKey = buildNotebookMarkdownCacheKey(markdownText, {
         theme: props.theme,
         filePath: props.filePath,
         basePath: getNotebookBasePath(),
       })
-      if (hasNotebookTocMarker(markdownText)) {
+      if (cell?.type === 'markdown' && hasNotebookTocMarker(markdownText)) {
         renderTasks.push((async () => {
           const renderedHtml = await renderNotebookMarkdownHtmlWithSyntheticToc(
             markdownText,
@@ -4056,16 +4227,14 @@ const syncRenderedMarkdownHtml = async (cells, reason = 'unknown') => {
       const cachedMarkdownHtml = notebookMarkdownRenderCache.get(cacheKey)
       if (typeof cachedMarkdownHtml === 'string' && cachedMarkdownHtml) {
         // 设计说明：
-        // 1. 旧实现只要“当前 cellKey 在上一次渲染 map 中存在”且“cacheKey 已命中”，
-        //    就直接复用 previousMarkdownMap[cellKey]。
-        // 2. 但切换不同文件时，cellKey 很容易重复（例如都叫 markdown-1），
-        //    这样会把“上一份文件”的 HTML 错误复用到“当前文件”上。
-        // 3. 这里改成严格按本次 cacheKey 读取缓存内容，确保命中的永远是当前文件对应的渲染结果。
+        // 1. Markdown Cell 和 Math Cell 共用主 Markdown 渲染链，这样 KaTeX/LaTeX、代码高亮和图片路径解析保持一致。
+        // 2. 缓存命中时仍按 cacheKey 读取，不复用上一轮 map，避免切换文件后同名 cellKey 串内容。
         nextMarkdownMap[cellKey] = decorateNotebookHeadingAnchors(cachedMarkdownHtml, cellKey)
         markdownCacheHitCount += 1
         logger.info('[Notebook] reuse cached markdown html for cell', {
           reason,
           cellKey,
+          cellType: logCellKind,
           cacheKey,
           filePath: props.filePath,
         })
@@ -4074,7 +4243,7 @@ const syncRenderedMarkdownHtml = async (cells, reason = 'unknown') => {
       renderTasks.push((async () => {
         const renderedHtml = await renderMarkdownHtml(
           markdownText,
-          `markdown-cell:${cellKey}`,
+          `${renderReasonPrefix}:${cellKey}`,
         )
         nextMarkdownMap[cellKey] = decorateNotebookHeadingAnchors(renderedHtml, cellKey)
         markdownRenderCount += 1
@@ -4082,7 +4251,7 @@ const syncRenderedMarkdownHtml = async (cells, reason = 'unknown') => {
       continue
     }
 
-    if (cell?.type === 'python') {
+    if (cell?.type === 'python' || cell?.type === 'math') {
       for (const outputModule of getCellOutputModules(cell)) {
         if (outputModule.kind !== 'markdown') continue
         const outputMarkdown = String(outputModule.display?.markdown || '')
@@ -4119,6 +4288,43 @@ const syncRenderedMarkdownHtml = async (cells, reason = 'unknown') => {
     }
   }
 
+  for (const cell of Array.isArray(cells) ? cells : []) {
+    if (cell?.type !== 'math') continue
+    for (const outputModule of getCellOutputModules(cell)) {
+      if (outputModule.kind !== 'markdown') continue
+      const outputMarkdown = String(outputModule.display?.markdown || '')
+      if (!outputMarkdown.trim()) continue
+      const cellKey = String(cell.key || '')
+      const outputMapKey = buildCellOutputModuleCacheKey(cell, outputModule)
+      const cacheKey = buildNotebookMarkdownCacheKey(outputMarkdown, {
+        theme: props.theme,
+        filePath: props.filePath,
+        basePath: getNotebookBasePath(),
+      })
+      const cachedOutputHtml = notebookMarkdownRenderCache.get(cacheKey)
+      if (typeof cachedOutputHtml === 'string' && cachedOutputHtml) {
+        nextOutputMap[outputMapKey] = cachedOutputHtml
+        outputCacheHitCount += 1
+        logger.info('[Notebook] reuse cached markdown output html for math cell module', {
+          reason,
+          cellKey,
+          outputModuleId: String(outputModule.id || ''),
+          cacheKey,
+          filePath: props.filePath,
+        })
+        continue
+      }
+
+      renderTasks.push((async () => {
+        nextOutputMap[outputMapKey] = await renderMarkdownHtml(
+          outputMarkdown,
+          `math-output:${cellKey}:${String(outputModule.id || '')}`,
+        )
+        outputRenderCount += 1
+      })())
+    }
+  }
+
   await Promise.all(renderTasks)
 
   if (renderVersion !== markdownRenderVersion.value) {
@@ -4146,6 +4352,7 @@ const syncRenderedMarkdownHtml = async (cells, reason = 'unknown') => {
 }
 
 const getRenderedMarkdownCellHtml = (cell) => String(renderedMarkdownHtmlMap.value[String(cell?.key || '')] || '')
+const getRenderedMathCellHtml = (cell) => String(renderedMarkdownHtmlMap.value[String(cell?.key || '')] || '')
 
 const getRenderedOutputMarkdownHtml = (cell, outputModule = null) => {
   const targetModule = outputModule || getCellOutputModule(cell)
@@ -4806,7 +5013,7 @@ const getNotebookBusyKeys = (cell) => {
   return cellKey ? [cellKey] : []
 }
 const getNotebookPythonSessionBusyKeys = (cell) => {
-  if (cell?.type !== 'python') return []
+  if (cell?.type !== 'python' && cell?.type !== 'math') return []
   const sessionBusyKey = buildNotebookPythonSessionBusyKey(props.filePath)
   return sessionBusyKey ? [sessionBusyKey] : []
 }
@@ -5205,6 +5412,42 @@ const buildMarkdownOutputFromModule = async (cell, outputModule = null, snapshot
   const text = String(targetModule?.text || resolvedSnapshot?.outputText || '').trim()
   if (!text) return ''
   return `\`\`\`text\n${text}\n\`\`\``
+}
+
+const insertOutputMarkdownAfterCell = async (cell, moduleId = '') => {
+  flushPendingNotebookMarkdown('before-insert-output-markdown-after-cell')
+  const snapshot = getCellSnapshot(cell)
+  const outputModule = getCellOutputModule(cell, moduleId)
+  const markdownOutput = await buildMarkdownOutputFromModule(cell, outputModule, snapshot)
+  if (!markdownOutput) {
+    message.warning('当前输出暂时无法写回为 Markdown')
+    return
+  }
+
+  const targetIndex = notebookCells.value.findIndex((entry) => String(entry?.key || '') === String(cell?.key || ''))
+  if (targetIndex < 0) {
+    logger.error('[Notebook] failed to insert output markdown because source cell is missing', {
+      key: String(cell?.key || ''),
+      cellId: String(cell?.cellId || ''),
+      moduleId: String(outputModule?.id || moduleId || ''),
+    })
+    message.error('没有找到要写回的源 Cell')
+    return
+  }
+
+  const outputCell = createNotebookMarkdownCell(markdownOutput)
+  const nextCells = notebookCells.value.slice()
+  nextCells.splice(targetIndex + 1, 0, outputCell)
+  logger.info('[Notebook] insert output markdown cell after executable cell', {
+    sourceType: String(cell?.type || ''),
+    sourceKey: String(cell?.key || ''),
+    sourceCellId: String(cell?.cellId || ''),
+    outputCellKey: String(outputCell?.key || ''),
+    moduleId: String(outputModule?.id || moduleId || ''),
+    markdownLength: markdownOutput.length,
+  })
+  emitCells(nextCells, outputCell.key)
+  message.success('输出已写回为新的 Markdown Cell')
 }
 
 const getTableExportFilters = (table = {}, cell = null) => {
@@ -5924,13 +6167,6 @@ const runNotebookLabGeneratedCode = async (cell, {
       },
     })
 
-    if (dataflow) {
-      markDependentNotebookCellsStale(cell, dataflow, `${source}:success`)
-    }
-    if (isActiveNotebookPythonCell(cell) || isNotebookPythonSessionPanelVisible.value) {
-      syncNotebookPythonSessionInspector(cell, `${source}:success`)
-    }
-
     logger.info('[NotebookDataLab] generated lab action completed', {
       requestId,
       source,
@@ -5940,24 +6176,27 @@ const runNotebookLabGeneratedCode = async (cell, {
       hasDisplay: !!display,
       tableCount: tables.length,
       sessionVarCount: nextSessionVars.length,
-      touchedVariables: Array.isArray(dataflow?.touched) ? dataflow.touched : [],
       outputModuleCount: nextOutputs.length,
       touchedVariables: Array.isArray(dataflow?.touched) ? dataflow.touched : [],
       writeBack,
       exportAfter,
     })
     if (dataflow) {
-      markDependentNotebookCellsStale(targetCell, dataflow, 'import-data-to-python-session')
+      markDependentNotebookCellsStale(cell, dataflow, `${source}:success`)
     }
-    if (isActiveNotebookPythonCell(targetCell) || isNotebookPythonSessionPanelVisible.value) {
-      syncNotebookPythonSessionInspector(targetCell, 'import-data-to-python-session')
+    if (cell?.type === 'python' && (isActiveNotebookPythonCell(cell) || isNotebookPythonSessionPanelVisible.value)) {
+      syncNotebookPythonSessionInspector(cell, `${source}:success`)
     }
 
     bumpRefresh()
     schedulePersistNotebookSidecar(`${source}-success`)
 
     if (writeBack && outputModuleId) {
-      await writeCellOutputToMarkdown(cell, outputModuleId)
+      if (cell?.type === 'python') {
+        await writeCellOutputToMarkdown(cell, outputModuleId)
+      } else {
+        await insertOutputMarkdownAfterCell(cell, outputModuleId)
+      }
     }
     if (exportAfter && outputModuleId) {
       await exportCellOutputToFile(cell, outputModuleId)
@@ -5983,6 +6222,47 @@ const runNotebookLabGeneratedCode = async (cell, {
     setNotebookBusyState(cell, false, `${source}:finish:${requestId}`)
     await flushQueuedNotebookPythonActionIfIdle(`${source}:finish:${requestId}`)
   }
+}
+
+const runMathCell = async (cell, writeBack = false) => {
+  const expression = String(cell?.expression || '').trim()
+  if (!expression) {
+    message.warning('数学块内容为空')
+    return
+  }
+
+  // 设计说明：
+  // 1. 数学块使用同一个 Python 持久会话执行 SymPy/绘图代码，所以它可以读取前面 Python Cell 已经准备好的变量；
+  // 2. 运行结果仍保存为普通输出模块，写回时插入为新的 Markdown Cell，避免破坏原公式块；
+  // 3. 模式先默认走 plot2d，纯计算表达式也会由后端 builder 同时生成 Markdown 摘要，后续 UI 可以扩展成显式模式选择。
+  const code = buildNotebookLabMathCode({
+    expression,
+    mode: 'plot2d',
+    variable: 'x',
+    rangeMin: -10,
+    rangeMax: 10,
+  })
+  logger.info('[NotebookMath] run math cell', {
+    key: String(cell?.key || ''),
+    cellId: String(cell?.cellId || ''),
+    expressionLength: expression.length,
+    writeBack: !!writeBack,
+  })
+  await runNotebookLabGeneratedCode(cell, {
+    code,
+    source: 'math-block',
+    dataset: {
+      variableName: 'math-block',
+      dataKind: 'math',
+    },
+    writeBack,
+    successMessage: writeBack ? '数学结果已生成并写回' : '数学结果已生成',
+    labPatch: {
+      lastMathExpression: expression,
+      lastMathMode: 'plot2d',
+      lastMathBlockAt: new Date().toISOString(),
+    },
+  })
 }
 
 const handleNotebookDataLabActionEvent = async (event) => {
@@ -6898,6 +7178,69 @@ defineExpose({
   display: grid;
   gap: 6px;
   padding: 0px 0px 0px;
+}
+
+.guaxi-notebook__math-layout {
+  display: grid;
+  gap: 8px;
+  padding: 8px 0 10px;
+}
+
+.guaxi-notebook__math-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 30px;
+}
+
+.guaxi-notebook__math-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, #0891b2 32%, var(--guaxi-notebook-strong-border));
+  border-radius: 7px;
+  background: color-mix(in srgb, #0891b2 10%, var(--guaxi-notebook-panel) 90%);
+  color: color-mix(in srgb, #0e7490 82%, var(--guaxi-notebook-text));
+  font-size: 12px;
+  font-weight: 700;
+  font-family: var(--guaxi-notebook-font);
+}
+
+.guaxi-notebook__math-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.guaxi-notebook__math-input {
+  width: 100%;
+  min-height: 88px;
+  resize: vertical;
+  padding: 10px 12px;
+  border: 1px solid var(--guaxi-notebook-strong-border);
+  border-radius: 8px;
+  outline: none;
+  background: var(--guaxi-notebook-panel-soft);
+  color: var(--guaxi-notebook-text);
+  font-family: var(--guaxi-notebook-mono-font);
+  font-size: 13px;
+  line-height: 1.58;
+}
+
+.guaxi-notebook__math-input:focus {
+  border-color: color-mix(in srgb, #0891b2 52%, var(--guaxi-notebook-primary));
+  box-shadow: 0 0 0 3px color-mix(in srgb, #0891b2 12%, transparent);
+}
+
+.guaxi-notebook__math-preview {
+  min-height: 48px;
+  padding: 10px 12px;
+  border-left: 3px solid color-mix(in srgb, #0891b2 46%, var(--guaxi-notebook-strong-border));
+  background: color-mix(in srgb, #0891b2 5%, transparent);
 }
 
 .guaxi-notebook__markdown-surface {

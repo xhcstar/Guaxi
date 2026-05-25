@@ -20,6 +20,14 @@ pub struct NotebookCell {
     pub code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub meta: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expression: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sourceType")]
+    pub source_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "fenceLanguage")]
+    pub fence_language: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -350,6 +358,154 @@ fn split_markdown_segments(markdown: &str) -> Vec<String> {
     segments
 }
 
+fn parse_math_fence_start(line: &str) -> Option<(char, usize, String)> {
+    let trimmed = line.trim_start();
+    let fence_char = trimmed.chars().next()?;
+    if fence_char != '`' && fence_char != '~' {
+        return None;
+    }
+    let fence_len = trimmed.chars().take_while(|c| *c == fence_char).count();
+    if fence_len < 3 {
+        return None;
+    }
+    let info = trimmed
+        .chars()
+        .skip(fence_len)
+        .collect::<String>()
+        .trim()
+        .to_string();
+    let lang = info
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if matches!(lang.as_str(), "math" | "latex" | "tex") {
+        Some((fence_char, fence_len, lang))
+    } else {
+        None
+    }
+}
+
+fn is_math_fence_end(line: &str, fence_char: char, fence_len: usize) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.chars().take_while(|c| *c == fence_char).count() >= fence_len
+}
+
+fn is_dollar_math_boundary(line: &str) -> bool {
+    line.trim() == "$$"
+}
+
+fn is_bracket_math_start(line: &str) -> bool {
+    line.trim() == "\\["
+}
+
+fn is_bracket_math_end(line: &str) -> bool {
+    line.trim() == "\\]"
+}
+
+fn push_markdown_notebook_cells(cells: &mut Vec<NotebookCell>, markdown: &str, key_prefix: &str) {
+    for (index, content) in split_markdown_segments(markdown).into_iter().enumerate() {
+        cells.push(NotebookCell {
+            cell_type: "markdown".to_string(),
+            key: format!("nb-md-{}-{}", key_prefix, index),
+            content: Some(content),
+            code: None,
+            meta: None,
+            expression: None,
+            source_type: None,
+            fence_language: None,
+        });
+    }
+}
+
+fn split_markdown_into_notebook_cells(markdown: &str, key_prefix: &str) -> Vec<NotebookCell> {
+    let text = normalize_markdown_text(markdown);
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut cells = Vec::new();
+    let mut markdown_start = 0usize;
+    let mut index = 0usize;
+
+    // 设计说明：
+    // 1. Rust 后端是 Notebook 加载时的优先同步路径，所以数学块不能只依赖前端 fallback 解析。
+    // 2. 这里将独立的 ```math/latex/tex```、$$...$$、\[...\] 抽成 math cell，普通 Markdown 仍沿用原有标题/空行切分。
+    // 3. 只识别“独占一行”的数学边界，避免把正文中的行内公式误拆成 cell。
+    while index < lines.len() {
+        let line = lines[index];
+        if let Some((fence_char, fence_len, lang)) = parse_math_fence_start(line) {
+            let mut end_index = None;
+            for cursor in (index + 1)..lines.len() {
+                if is_math_fence_end(lines[cursor], fence_char, fence_len) {
+                    end_index = Some(cursor);
+                    break;
+                }
+            }
+            if let Some(end) = end_index {
+                if end > markdown_start {
+                    let source = lines[markdown_start..index].join("\n");
+                    push_markdown_notebook_cells(&mut cells, &source, &format!("{}-{}", key_prefix, markdown_start));
+                }
+                cells.push(NotebookCell {
+                    cell_type: "math".to_string(),
+                    key: format!("nb-math-{}-{}", key_prefix, index),
+                    content: None,
+                    code: None,
+                    meta: None,
+                    expression: Some(lines[(index + 1)..end].join("\n")),
+                    source_type: Some("fenced".to_string()),
+                    fence_language: Some(lang),
+                });
+                index = end + 1;
+                markdown_start = index;
+                continue;
+            }
+        }
+
+        let is_dollar = is_dollar_math_boundary(line);
+        let is_bracket = is_bracket_math_start(line);
+        if is_dollar || is_bracket {
+            let mut end_index = None;
+            for cursor in (index + 1)..lines.len() {
+                if (is_dollar && is_dollar_math_boundary(lines[cursor]))
+                    || (is_bracket && is_bracket_math_end(lines[cursor]))
+                {
+                    end_index = Some(cursor);
+                    break;
+                }
+            }
+            if let Some(end) = end_index {
+                if end > markdown_start {
+                    let source = lines[markdown_start..index].join("\n");
+                    push_markdown_notebook_cells(&mut cells, &source, &format!("{}-{}", key_prefix, markdown_start));
+                }
+                cells.push(NotebookCell {
+                    cell_type: "math".to_string(),
+                    key: format!("nb-math-{}-{}", key_prefix, index),
+                    content: None,
+                    code: None,
+                    meta: None,
+                    expression: Some(lines[(index + 1)..end].join("\n")),
+                    source_type: Some(if is_dollar { "dollar" } else { "bracket" }.to_string()),
+                    fence_language: Some("math".to_string()),
+                });
+                index = end + 1;
+                markdown_start = index;
+                continue;
+            }
+        }
+
+        index += 1;
+    }
+
+    if markdown_start < lines.len() {
+        let source = lines[markdown_start..].join("\n");
+        push_markdown_notebook_cells(&mut cells, &source, &format!("{}-{}", key_prefix, markdown_start));
+    }
+    cells
+}
+
 fn strip_python_cell_blocks(markdown: &str) -> String {
     let lines: Vec<&str> = markdown.split('\n').collect();
     let mut kept = Vec::new();
@@ -614,17 +770,9 @@ fn build_markdown_cells(markdown: &str) -> Vec<NotebookCell> {
         let start_index = block.start_line.saturating_sub(1);
         let end_exclusive = block.end_line;
         let leading = lines[cursor..start_index].join("\n");
-        let leading_cells = split_markdown_segments(&leading);
+        let leading_cells = split_markdown_into_notebook_cells(&leading, &format!("{}-{}", block_index, cursor));
         if !leading_cells.is_empty() {
-            for (leading_index, content) in leading_cells.iter().enumerate() {
-                cells.push(NotebookCell {
-                    cell_type: "markdown".to_string(),
-                    key: format!("nb-md-{}-{}-{}", block_index, cursor, leading_index),
-                    content: Some(content.clone()),
-                    code: None,
-                    meta: None,
-                });
-            }
+            cells.extend(leading_cells);
         } else if cells.is_empty() {
             cells.push(NotebookCell {
                 cell_type: "markdown".to_string(),
@@ -632,6 +780,9 @@ fn build_markdown_cells(markdown: &str) -> Vec<NotebookCell> {
                 content: Some(String::new()),
                 code: None,
                 meta: None,
+                expression: None,
+                source_type: None,
+                fence_language: None,
             });
         }
 
@@ -647,22 +798,17 @@ fn build_markdown_cells(markdown: &str) -> Vec<NotebookCell> {
             content: None,
             code: Some(block.code.clone()),
             meta: Some(Value::Object(block.meta.clone())),
+            expression: None,
+            source_type: None,
+            fence_language: None,
         });
         cursor = end_exclusive;
     }
 
     let trailing = lines[cursor..].join("\n");
-    let trailing_cells = split_markdown_segments(&trailing);
+    let trailing_cells = split_markdown_into_notebook_cells(&trailing, &format!("tail-{}", cursor));
     if !trailing_cells.is_empty() {
-        for (index, content) in trailing_cells.iter().enumerate() {
-            cells.push(NotebookCell {
-                cell_type: "markdown".to_string(),
-                key: format!("nb-md-tail-{}-{}", cursor, index),
-                content: Some(content.clone()),
-                code: None,
-                meta: None,
-            });
-        }
+        cells.extend(trailing_cells);
     } else if cells.is_empty() || cells.last().map(|cell| cell.cell_type.as_str()) == Some("python") {
         cells.push(NotebookCell {
             cell_type: "markdown".to_string(),
@@ -670,6 +816,9 @@ fn build_markdown_cells(markdown: &str) -> Vec<NotebookCell> {
             content: Some(String::new()),
             code: None,
             meta: None,
+            expression: None,
+            source_type: None,
+            fence_language: None,
         });
     }
 
@@ -679,6 +828,7 @@ fn build_markdown_cells(markdown: &str) -> Vec<NotebookCell> {
 fn cell_digest(cell: &NotebookCell) -> String {
     match cell.cell_type.as_str() {
         "python" => compute_digest(cell.code.as_deref().unwrap_or("")),
+        "math" => compute_digest(cell.expression.as_deref().unwrap_or("")),
         _ => compute_digest(cell.content.as_deref().unwrap_or("")),
     }
 }

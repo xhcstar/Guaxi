@@ -8,6 +8,7 @@
 
 const NOTEBOOK_MARKDOWN_CELL_PREFIX = 'nb-md'
 const NOTEBOOK_PYTHON_CELL_PREFIX = 'nb-py'
+const NOTEBOOK_MATH_CELL_PREFIX = 'nb-math'
 
 const createStableId = (prefix) => {
   const randomPart = Math.random().toString(36).slice(2, 10)
@@ -32,6 +33,16 @@ export const createNotebookPythonCell = (options = {}) => {
   }
 }
 
+export const createNotebookMathCell = (expression = '', options = {}) => ({
+  type: 'math',
+  key: String(options.key || createStableId(NOTEBOOK_MATH_CELL_PREFIX)),
+  expression: String(expression || ''),
+  sourceType: ['fenced', 'bracket', 'dollar'].includes(String(options.sourceType || ''))
+    ? String(options.sourceType)
+    : 'dollar',
+  fenceLanguage: String(options.fenceLanguage || 'math').trim() || 'math',
+})
+
 export const normalizeNotebookCells = (cells = []) => {
   const normalized = []
 
@@ -40,6 +51,11 @@ export const normalizeNotebookCells = (cells = []) => {
 
     if (rawCell.type === 'python') {
       normalized.push(createNotebookPythonCell(rawCell))
+      continue
+    }
+
+    if (rawCell.type === 'math') {
+      normalized.push(createNotebookMathCell(rawCell.expression || rawCell.content || '', rawCell))
       continue
     }
 
@@ -57,6 +73,10 @@ const NOTEBOOK_FENCE_RE = /^\s*(`{3,}|~{3,})/
 const NOTEBOOK_ATX_HEADING_RE = /^\s{0,3}#{1,6}(?:\s+|$)/
 const NOTEBOOK_FRONTMATTER_RE = /^\s*---\s*$/
 const NOTEBOOK_FRONTMATTER_END_RE = /^\s*(---|\.\.\.)\s*$/
+const NOTEBOOK_MATH_FENCE_START_RE = /^\s*(`{3,}|~{3,})\s*(math|latex|tex)(?:\s+.*)?$/i
+const NOTEBOOK_DOLLAR_MATH_RE = /^\s*\$\$\s*$/
+const NOTEBOOK_BRACKET_MATH_START_RE = /^\s*\\\[\s*$/
+const NOTEBOOK_BRACKET_MATH_END_RE = /^\s*\\\]\s*$/
 
 const normalizeNotebookMarkdownText = (markdown = '') => String(markdown || '').replace(/\r\n?/g, '\n')
 
@@ -183,6 +203,82 @@ const splitMarkdownIntoNotebookCellSources = (markdown = '') => {
   return createMarkdownPreviewSegments(markdown).map((segment) => String(segment?.content || ''))
 }
 
+const pushMarkdownCellsFromSource = (cells, markdown = '', keyPrefix = 'md') => {
+  const sources = splitMarkdownIntoNotebookCellSources(markdown)
+  sources.forEach((content, index) => {
+    cells.push(createNotebookMarkdownCell(content, {
+      key: `${NOTEBOOK_MARKDOWN_CELL_PREFIX}-${keyPrefix}-${index}`,
+    }))
+  })
+}
+
+const splitMarkdownIntoNotebookCells = (markdown = '', keyPrefix = 'chunk') => {
+  const text = String(markdown || '').replace(/\r\n?/g, '\n')
+  if (!text) return []
+  const lines = text.split('\n')
+  const cells = []
+  let markdownStart = 0
+
+  const flushMarkdown = (endExclusive) => {
+    if (endExclusive <= markdownStart) return
+    const source = lines.slice(markdownStart, endExclusive).join('\n')
+    pushMarkdownCellsFromSource(cells, source, `${keyPrefix}-${markdownStart}`)
+  }
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = String(lines[index] || '')
+    const fenceMatch = line.match(NOTEBOOK_MATH_FENCE_START_RE)
+    if (fenceMatch) {
+      const fenceText = String(fenceMatch[1] || '')
+      const fenceChar = fenceText[0] || '`'
+      const fenceLength = fenceText.length
+      let endIndex = -1
+      for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+        const closeLine = String(lines[cursor] || '').trim()
+        if (closeLine.startsWith(fenceChar.repeat(fenceLength))) {
+          endIndex = cursor
+          break
+        }
+      }
+      if (endIndex < 0) continue
+      flushMarkdown(index)
+      cells.push(createNotebookMathCell(lines.slice(index + 1, endIndex).join('\n'), {
+        key: `${NOTEBOOK_MATH_CELL_PREFIX}-${keyPrefix}-${index}`,
+        sourceType: 'fenced',
+        fenceLanguage: String(fenceMatch[2] || 'math').toLowerCase(),
+      }))
+      index = endIndex
+      markdownStart = endIndex + 1
+      continue
+    }
+
+    const isDollarMath = NOTEBOOK_DOLLAR_MATH_RE.test(line)
+    const isBracketMath = NOTEBOOK_BRACKET_MATH_START_RE.test(line)
+    if (!isDollarMath && !isBracketMath) continue
+
+    const endRe = isDollarMath ? NOTEBOOK_DOLLAR_MATH_RE : NOTEBOOK_BRACKET_MATH_END_RE
+    let endIndex = -1
+    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+      if (endRe.test(String(lines[cursor] || ''))) {
+        endIndex = cursor
+        break
+      }
+    }
+    if (endIndex < 0) continue
+
+    flushMarkdown(index)
+    cells.push(createNotebookMathCell(lines.slice(index + 1, endIndex).join('\n'), {
+      key: `${NOTEBOOK_MATH_CELL_PREFIX}-${keyPrefix}-${index}`,
+      sourceType: isDollarMath ? 'dollar' : 'bracket',
+    }))
+    index = endIndex
+    markdownStart = endIndex + 1
+  }
+
+  flushMarkdown(lines.length)
+  return cells
+}
+
 const joinCellSource = (parts) => {
   let output = ''
 
@@ -219,6 +315,17 @@ export const serializeNotebookCells = (cells = []) => {
         meta: cell.meta || {},
       })
     }
+    if (cell.type === 'math') {
+      const expression = String(cell.expression || '').replace(/\r\n?/g, '\n')
+      if (cell.sourceType === 'fenced') {
+        const lang = String(cell.fenceLanguage || 'math').trim() || 'math'
+        return `\`\`\`${lang}\n${expression}\n\`\`\``
+      }
+      if (cell.sourceType === 'bracket') {
+        return `\\[\n${expression}\n\\]`
+      }
+      return `$$\n${expression}\n$$`
+    }
     return String(cell.content || '')
   })
 
@@ -237,13 +344,9 @@ export const createNotebookCellsFromMarkdown = (markdown = '', { filePath = '' }
     const endExclusive = Math.max(startIndex, Number(block.endLine || startIndex + 1))
     const leading = lines.slice(cursor, startIndex).join('\n')
 
-    const leadingCells = splitMarkdownIntoNotebookCellSources(leading)
+    const leadingCells = splitMarkdownIntoNotebookCells(leading, `${index}-${cursor}`)
     if (leadingCells.length) {
-      leadingCells.forEach((content, leadingIndex) => {
-        cells.push(createNotebookMarkdownCell(content, {
-          key: `${NOTEBOOK_MARKDOWN_CELL_PREFIX}-${index}-${cursor}-${leadingIndex}`,
-        }))
-      })
+      cells.push(...leadingCells)
     } else if (!cells.length) {
       cells.push(createNotebookMarkdownCell('', {
         key: `${NOTEBOOK_MARKDOWN_CELL_PREFIX}-${index}-${cursor}-empty`,
@@ -268,13 +371,9 @@ export const createNotebookCellsFromMarkdown = (markdown = '', { filePath = '' }
   })
 
   const trailing = lines.slice(cursor).join('\n')
-  const trailingCells = splitMarkdownIntoNotebookCellSources(trailing)
+  const trailingCells = splitMarkdownIntoNotebookCells(trailing, `tail-${cursor}`)
   if (trailingCells.length) {
-    trailingCells.forEach((content, trailingIndex) => {
-      cells.push(createNotebookMarkdownCell(content, {
-        key: `${NOTEBOOK_MARKDOWN_CELL_PREFIX}-tail-${cursor}-${trailingIndex}`,
-      }))
-    })
+    cells.push(...trailingCells)
   } else if (!cells.length || cells[cells.length - 1]?.type === 'python') {
     cells.push(createNotebookMarkdownCell('', {
       key: `${NOTEBOOK_MARKDOWN_CELL_PREFIX}-tail-${cursor}-empty`,
@@ -315,6 +414,16 @@ export const replaceNotebookCell = (cells = [], key, patch = {}) => {
         },
       })
     }
+    if (cell.type === 'math') {
+      return createNotebookMathCell(
+        Object.prototype.hasOwnProperty.call(patch, 'expression') ? patch.expression : cell.expression,
+        {
+          ...cell,
+          ...patch,
+          key: cell.key,
+        },
+      )
+    }
     return createNotebookMarkdownCell(
       Object.prototype.hasOwnProperty.call(patch, 'content') ? patch.content : cell.content,
       { key: cell.key },
@@ -330,7 +439,9 @@ export const insertNotebookCell = (cells = [], index, type = 'markdown') => {
     ? createNotebookPythonCell({
       code: '',
     })
-    : createNotebookMarkdownCell('')
+    : type === 'math'
+      ? createNotebookMathCell('')
+      : createNotebookMarkdownCell('')
   next.splice(insertAt, 0, cell)
   return normalizeNotebookCells(next)
 }

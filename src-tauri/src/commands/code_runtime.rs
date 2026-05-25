@@ -70,6 +70,7 @@ const PYTHON_RUNTIME_RECOMMENDED_PACKAGES: &[&str] = &[
     "ipython",
     "plotly",
     "sympy",
+    "antlr4-python3-runtime",
     "seaborn",
     "duckdb",
     "polars",
