@@ -6332,25 +6332,25 @@ const resolveEmbeddedSemanticTokenClass = (tokenType, tokenModifiers = []) => {
     return 'md-fence-token-constant';
   }
 
-  if (type === 'macro') return 'md-fence-token-macro';
-  if (type === 'namespace' || type === 'module') return 'md-fence-token-namespace';
-  if (type === 'type' || type === 'interface' || type === 'enum' || type === 'struct' || type === 'typeparameter') {
+  if (type.includes('macro')) return 'md-fence-token-macro';
+  if (type.includes('namespace') || type.includes('module')) return 'md-fence-token-namespace';
+  if (type.includes('constructor') || type.includes('class')) return 'md-fence-token-class';
+  if (type.includes('type') || type.includes('interface') || type.includes('enum') || type.includes('struct') || type.includes('typeparameter')) {
     return 'md-fence-token-type';
   }
-  if (type === 'class') return 'md-fence-token-class';
-  if (type === 'parameter') return 'md-fence-token-parameter';
-  if (type === 'property' || type === 'field') return 'md-fence-token-property';
-  if (type === 'variable') return 'md-fence-token-variable';
-  if (type === 'enummember' || type === 'event') return 'md-fence-token-constant';
-  if (type === 'function') return 'md-fence-token-function';
-  if (type === 'method') return 'md-fence-token-method';
-  if (type === 'decorator') return 'md-fence-token-decorator';
-  if (type === 'keyword' || type === 'modifier') return 'md-fence-token-keyword';
-  if (type === 'comment') return 'md-fence-token-comment';
-  if (type === 'string') return 'md-fence-token-string';
-  if (type === 'number') return 'md-fence-token-number';
-  if (type === 'regexp') return 'md-fence-token-regexp';
-  if (type === 'operator') return 'md-fence-token-operator';
+  if (type.includes('variable.parameter') || type.includes('parameter') || type.includes('argument')) return 'md-fence-token-parameter';
+  if (type.includes('variable.member') || type.includes('property') || type.includes('field')) return 'md-fence-token-property';
+  if (type.includes('function.method') || type.includes('method')) return 'md-fence-token-method';
+  if (type.includes('function')) return 'md-fence-token-function';
+  if (type.includes('variable')) return 'md-fence-token-variable';
+  if (type.includes('enummember') || type.includes('event') || type.includes('constant')) return 'md-fence-token-constant';
+  if (type.includes('decorator')) return 'md-fence-token-decorator';
+  if (type.includes('keyword') || type.includes('modifier')) return 'md-fence-token-keyword';
+  if (type.includes('comment')) return 'md-fence-token-comment';
+  if (type.includes('string')) return 'md-fence-token-string';
+  if (type.includes('number')) return 'md-fence-token-number';
+  if (type.includes('regexp')) return 'md-fence-token-regexp';
+  if (type.includes('operator')) return 'md-fence-token-operator';
 
   return '';
 };
@@ -8901,7 +8901,7 @@ const initEditor = () => {
       { token: 'regexp', foreground: '0184bc' },           // RegExp → 用 Operator 相近色
       { token: 'type', foreground: 'c18401' },           // Type
       { token: 'delimiter', foreground: '383a42' },           // Delimiter → Main text color
-      { token: 'variable', foreground: 'e45649' },           // Variable
+      { token: 'variable', foreground: '2b4a73' },           // Variable → 与函数/属性区分，但避免 Python 大片泛红
       { token: 'parameter', foreground: '4078f2' },           // Parameter → Function color
       { token: 'function', foreground: '4078f2' },           // Function
       { token: 'constant', foreground: '986801' },           // Constant → Number color
@@ -8930,15 +8930,19 @@ const initEditor = () => {
       namespace: '#c18401',
       struct: '#c18401',
       function: '#4078f2',
-      method: '#4078f2',
-      property: '#e45649',
+      method: '#0184bc',
+      // 设计说明：
+      // 1. TreeSitter 的 Python 捕获会把大量普通标识符归为 variable/property。
+      // 2. 如果这些基础类型使用红色，编辑模式和 Notebook Python cell 都会出现大片红色，语义层次反而变弱。
+      // 3. 因此普通变量使用正文色，属性/库对象使用青色，函数仍使用蓝色，保证两种模式共享同一套均衡配色。
+      property: '#0184bc',
       parameter: '#986801',
-      variable: '#e45649',
+      variable: '#2b4a73',
       constant: '#986801',
       attribute: '#986801',
       builtin: '#0184bc',
       'variable.readonly': '#986801',
-      'variable.defaultLibrary': '#e45649',
+      'variable.defaultLibrary': '#0184bc',
       enumMember: '#986801',
       boolean: '#986801',
       macro: '#a626a4',
@@ -9017,7 +9021,7 @@ const initEditor = () => {
       { token: 'regexp', foreground: '56b6c2' },           // RegExp → Operator color
       { token: 'type', foreground: 'e5c07b' },           // Type
       { token: 'delimiter', foreground: 'abb2bf' },           // Delimiter → Main text color
-      { token: 'variable', foreground: 'e06c75' },           // Variable
+      { token: 'variable', foreground: 'd7deea' },           // Variable → 与函数/属性区分，但避免 Python 大片泛红
       { token: 'parameter', foreground: 'd19a66' },           // Parameter
       { token: 'function', foreground: '61afef' },           // Function
       { token: 'constant', foreground: 'd19a66' },           // Constant → Number color
@@ -9073,18 +9077,22 @@ const initEditor = () => {
       namespace: '#e5c07b',
       struct: '#e5c07b',
       function: '#61afef',
-      method: '#61afef',
-      property: '#e06c75',
+      method: '#56b6c2',
+      // 设计说明：
+      // 1. TreeSitter 的 Python 捕获会把大量普通标识符归为 variable/property。
+      // 2. 如果这些基础类型使用红色，编辑模式和 Notebook Python cell 都会出现大片红色，语义层次反而变弱。
+      // 3. 因此普通变量使用正文色，属性/库对象使用青色，函数仍使用蓝色，保证两种模式共享同一套均衡配色。
+      property: '#56b6c2',
       parameter: '#d19a66',
       'function.declaration': '#61afef',
       'function.defaultLibrary': '#61afef',
       'parameter.declaration': '#d19a66',
-      variable: '#e06c75',
+      variable: '#d7deea',
       constant: '#d19a66',
       attribute: '#d19a66',
       builtin: '#56b6c2',
       'variable.readonly': '#d19a66',
-      'variable.defaultLibrary': '#e06c75',
+      'variable.defaultLibrary': '#56b6c2',
       enumMember: '#d19a66',
       boolean: '#d19a66',
       macro: '#c678dd',
@@ -9177,6 +9185,11 @@ const initEditor = () => {
     fixedOverflowWidgets: true, // 确保浮动部件可以超出编辑器边界
     wordWrap: 'on',
     renderValidationDecorations: 'on',
+    // 设计说明：
+    // 1. Python/Markdown 代码块中的临时变量很容易被 LSP 标记为 unused/unnecessary。
+    // 2. 默认淡化会让暗色主题下大段源码发灰，和 TreeSitter 语义配色互相干扰。
+    // 3. 保留诊断但关闭未使用代码淡化，保证编辑模式与探索者模式都清晰可读。
+    showUnused: false,
     minimap: {
       enabled: false,  // 启用迷你地图
       showSlider: 'always',
@@ -20984,12 +20997,12 @@ onUnmounted(() => {
 .guaxi-editor :deep(.md-fence-token-type) { color: #e5c07b; }
 .guaxi-editor :deep(.md-fence-token-class) { color: #e5c07b; }
 .guaxi-editor :deep(.md-fence-token-function) { color: #61afef; }
-.guaxi-editor :deep(.md-fence-token-method) { color: #61afef; }
+.guaxi-editor :deep(.md-fence-token-method) { color: #0184bc; }
 .guaxi-editor :deep(.md-fence-token-parameter) { color: #d19a66; }
-.guaxi-editor :deep(.md-fence-token-variable) { color: #e06c75; }
+.guaxi-editor :deep(.md-fence-token-variable) { color: #2b4a73; }
 .guaxi-editor :deep(.md-fence-token-constant) { color: #d19a66; }
 .guaxi-editor :deep(.md-fence-token-regexp) { color: #56b6c2; }
-.guaxi-editor :deep(.md-fence-token-property) { color: #e06c75; }
+.guaxi-editor :deep(.md-fence-token-property) { color: #0184bc; }
 .guaxi-editor :deep(.md-fence-token-namespace) { color: #e5c07b; }
 .guaxi-editor :deep(.md-fence-token-macro) { color: #c678dd; }
 .guaxi-editor :deep(.md-fence-token-tag) { color: #e06c75; }
@@ -21008,12 +21021,12 @@ onUnmounted(() => {
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-type) { color: #e5c07b; }
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-class) { color: #e5c07b; }
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-function) { color: #61afef; }
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-method) { color: #61afef; }
+:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-method) { color: #56b6c2; }
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-parameter) { color: #d19a66; }
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-variable) { color: #e06c75; }
+:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-variable) { color: #d7deea; }
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-constant) { color: #d19a66; }
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-regexp) { color: #56b6c2; }
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-property) { color: #e06c75; }
+:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-property) { color: #56b6c2; }
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-namespace) { color: #e5c07b; }
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-macro) { color: #c678dd; }
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-tag) { color: #e06c75; }
@@ -21840,12 +21853,12 @@ onUnmounted(() => {
 .guaxi-editor .monaco-editor .md-fence-token-type { color: #c18401 !important; }
 .guaxi-editor .monaco-editor .md-fence-token-class { color: #c18401 !important; }
 .guaxi-editor .monaco-editor .md-fence-token-function { color: #4078f2 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-method { color: #4078f2 !important; }
+.guaxi-editor .monaco-editor .md-fence-token-method { color: #0184bc !important; }
 .guaxi-editor .monaco-editor .md-fence-token-parameter { color: #986801 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-variable { color: #e45649 !important; }
+.guaxi-editor .monaco-editor .md-fence-token-variable { color: #2b4a73 !important; }
 .guaxi-editor .monaco-editor .md-fence-token-constant { color: #986801 !important; }
 .guaxi-editor .monaco-editor .md-fence-token-regexp { color: #0184bc !important; }
-.guaxi-editor .monaco-editor .md-fence-token-property { color: #e45649 !important; }
+.guaxi-editor .monaco-editor .md-fence-token-property { color: #0184bc !important; }
 .guaxi-editor .monaco-editor .md-fence-token-namespace { color: #c18401 !important; }
 .guaxi-editor .monaco-editor .md-fence-token-macro { color: #4078f2 !important; }
 .guaxi-editor .monaco-editor .md-fence-token-tag { color: #e45649 !important; }
@@ -21864,12 +21877,12 @@ onUnmounted(() => {
 :root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-type { color: #e5c07b !important; }
 :root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-class { color: #e5c07b !important; }
 :root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-function { color: #61afef !important; }
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-method { color: #61afef !important; }
+:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-method { color: #56b6c2 !important; }
 :root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-parameter { color: #d19a66 !important; }
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-variable { color: #e06c75 !important; }
+:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-variable { color: #d7deea !important; }
 :root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-constant { color: #d19a66 !important; }
 :root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-regexp { color: #56b6c2 !important; }
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-property { color: #e06c75 !important; }
+:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-property { color: #56b6c2 !important; }
 :root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-namespace { color: #e5c07b !important; }
 :root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-macro { color: #c678dd !important; }
 :root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-tag { color: #e06c75 !important; }
@@ -21878,6 +21891,14 @@ onUnmounted(() => {
 :root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-decorator { color: #c678dd !important; }
 :root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-operator { color: #56b6c2 !important; }
 :root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-delimiter { color: #abb2bf !important; }
+
+.guaxi-editor .monaco-editor .squiggly-inline-unnecessary,
+.guaxi-editor .monaco-editor .squiggly-inline-deprecated,
+.guaxi-editor .monaco-editor .codicon-unused,
+.guaxi-editor .monaco-editor .unused {
+  opacity: 1 !important;
+  filter: none !important;
+}
 
 .n-dropdown-menu {
   max-height: 320px;

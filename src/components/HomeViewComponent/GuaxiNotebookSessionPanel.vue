@@ -34,6 +34,7 @@
             class="py-session-panel__math-editor wide"
             :cell-key="`${inspector.cellKey || inspector.cellId || 'session'}-math`"
             :document-path="inspector.filePath || ''"
+            :theme="appearanceTheme"
             placeholder="例如 sin(x) / x 或 x^2 = 1"
           />
           <select v-model="mathMode" class="py-session-panel__field">
@@ -171,6 +172,7 @@ import copyIcon from '@iconify-icons/lucide/copy'
 import { useMessage } from 'naive-ui'
 import { createLogger } from '../../utils/logger'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
+import { useSettingsStore } from '../../stores/settingsStore'
 import GuaxiNotebookMathEditor from './GuaxiNotebookMathEditor.vue'
 import {
   NOTEBOOK_LAB_CHART_TYPES,
@@ -180,8 +182,10 @@ import {
 const logger = createLogger('GuaxiNotebookSessionPanel')
 const message = useMessage()
 const rightSiderStore = useRightSiderStore()
+const settingsStore = useSettingsStore()
 
 const inspector = computed(() => rightSiderStore.pythonSessionInspector || {})
+const appearanceTheme = computed(() => settingsStore.appearanceTheme === 'dark' ? 'dark' : 'light')
 const variables = computed(() => (Array.isArray(inspector.value?.variables) ? inspector.value.variables : []))
 const datasets = computed(() => (Array.isArray(inspector.value?.datasets) ? inspector.value.datasets : []))
 const chartTypes = NOTEBOOK_LAB_CHART_TYPES

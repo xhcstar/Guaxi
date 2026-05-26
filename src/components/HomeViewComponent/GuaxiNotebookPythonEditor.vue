@@ -71,6 +71,8 @@ let blurDisposable = null
 let typeDisposable = null
 let currentAppliedTheme = ''
 let usesVscodeModelBridge = false
+let hostResizeObserver = null
+let serviceRefreshTimer = 0
 
 const NOTEBOOK_PYTHON_SUGGEST_TRIGGER_PATTERN = /[A-Za-z0-9_.:(\[,'"@]/
 
@@ -327,6 +329,33 @@ const ensureHostHeight = () => {
   })
 }
 
+const refreshEditorServices = (reason = 'layout-refresh') => {
+  if (!editor) return
+  window.clearTimeout(serviceRefreshTimer)
+  serviceRefreshTimer = window.setTimeout(() => {
+    if (!editor || !model) return
+    editor.layout()
+    ensureHostHeight()
+    if (usesVscodeModelBridge && model?.uri) {
+      syncVsCodeTextModelOverlay(model.uri, editor.getValue?.() || '', {
+        owner: getNotebookPythonModelOwner(),
+        reason: `notebook-python-${reason}`,
+      })
+    }
+    applyTheme()
+    logger.info('[NotebookPythonEditor] refreshed editor services after layout change', {
+      cellKey: String(props.cellKey || ''),
+      reason,
+      uri: String(model?.uri?.toString?.() || ''),
+      language: String(model?.getLanguageId?.() || ''),
+      lspState: getLspConnectionState('python')?.state || 'unknown',
+    })
+    if (editor.hasTextFocus?.()) {
+      void warmupNotebookPythonCompletion(reason)
+    }
+  }, 80)
+}
+
 // 设计说明：
 // 1. Monaco 默认会“强吃”滚轮事件，鼠标一停在编辑器上，整页滚动体验就会变得很差。
 // 2. 探索模式里 cell 编辑器应该更像嵌入式输入区，因此把滚轮让渡给外层页面，只在编辑器确实需要时再处理。
@@ -409,6 +438,11 @@ const mountMonacoEditor = async () => {
       scrollBeyondLastLine: false,
       wordWrap: 'on',
       // 设计说明：
+      // 1. Pyright 会把运行后的探索代码中大量临时变量、导入和中间对象标记为 unnecessary/unused。
+      // 2. Monaco 默认会把这些标记渲染成半透明，右侧数据实验室展开触发布局/诊断刷新后就会出现大片暗色代码。
+      // 3. 这里关闭“未使用代码淡化”，诊断仍保留，但不再牺牲可读性。
+      showUnused: false,
+      // 设计说明：
       // 1. 探索者模式的 Python Cell 不按源码编辑器的强自动补全策略走，避免鼠标点选单元格时建议框抢焦点。
       // 2. 仍保留 trigger character 和手动补全，输入 `.` 等符号时能像 VS Code 一样立即请求 LSP。
       // 3. 关闭 showWords 后，如果 LSP 尚未就绪，界面会宁可暂时无候选，也不显示误导性的伪语义补全。
@@ -424,9 +458,9 @@ const mountMonacoEditor = async () => {
         snippetsPreventQuickSuggestions: false,
       },
       // 设计说明：
-      // 1. 探索者模式的 Python Cell 使用独立 Monaco 实例，不一定会经过主编辑器的语言高亮初始化路径。
-      // 2. 这里显式允许 semantic token 上色，再在下方接入同一套 tree-sitter provider，保证 Cell 内源码高亮和编辑模式一致。
-      // 3. 即使 provider 暂时不可用，Monaco 自带 Python tokenizer 仍会作为兜底，不影响编辑和 LSP 能力。
+      // 1. 探索者模式的 Python Cell 和编辑模式都使用同一套 TreeSitter semantic token 配色。
+      // 2. 颜色稳定性由全局 `guaxi-*` 主题里的 semanticTokenColors 负责，而不是退回 Monaco 默认 tokenizer。
+      // 3. 这样保留变量、函数、字符串、数字等语义分层，也避免右侧数据实验室展开后出现另一套高亮。
       'semanticHighlighting.enabled': true,
       tabSize: 4,
       insertSpaces: true,
@@ -454,7 +488,7 @@ const mountMonacoEditor = async () => {
 
     try {
       await initTextmate(editor, 'python')
-      logger.info('[NotebookPythonEditor] tree-sitter semantic highlight initialized', {
+      logger.info('[NotebookPythonEditor] tree-sitter semantic highlight initialized with shared theme', {
         cellKey: String(props.cellKey || ''),
         language: model?.getLanguageId?.() || 'python',
         uri: String(model?.uri?.toString?.() || ''),
@@ -485,6 +519,11 @@ const mountMonacoEditor = async () => {
     contentSizeDisposable = editor.onDidContentSizeChange(() => {
       ensureHostHeight()
     })
+
+    hostResizeObserver = new ResizeObserver(() => {
+      refreshEditorServices('host-resize')
+    })
+    hostResizeObserver.observe(host)
 
     focusDisposable = editor.onDidFocusEditorText(() => {
       emit('focus')
@@ -542,6 +581,10 @@ const mountMonacoEditor = async () => {
 
 const disposeMonacoEditor = () => {
   const currentModelUri = model?.uri || null
+  window.clearTimeout(serviceRefreshTimer)
+  serviceRefreshTimer = 0
+  hostResizeObserver?.disconnect?.()
+  hostResizeObserver = null
   contentChangeDisposable?.dispose?.()
   contentChangeDisposable = null
   contentSizeDisposable?.dispose?.()
@@ -634,6 +677,10 @@ watch(() => props.modelValue, (nextValue) => {
   })
   ensureHostHeight()
 })
+
+defineExpose({
+  refreshEditorServices,
+})
 </script>
 
 <style scoped>
@@ -672,5 +719,13 @@ watch(() => props.modelValue, (nextValue) => {
   font-family: var(--editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace);
   font-size: 13px;
   line-height: 1.7;
+}
+
+.guaxi-notebook-python-editor :deep(.squiggly-inline-unnecessary),
+.guaxi-notebook-python-editor :deep(.squiggly-inline-deprecated),
+.guaxi-notebook-python-editor :deep(.codicon-unused),
+.guaxi-notebook-python-editor :deep(.unused) {
+  opacity: 1 !important;
+  filter: none !important;
 }
 </style>

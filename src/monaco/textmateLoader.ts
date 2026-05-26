@@ -15,6 +15,7 @@ const treeSitterSemanticTokenTypes = [
   'punctuation',
   'type',
   'function',
+  'method',
   'property',
   'variable',
   'parameter',
@@ -81,24 +82,32 @@ const normalizeTreeSitterLanguageId = (languageId: string) => {
 
 const mapTreeSitterTokenType = (tokenType: string) => {
   const type = String(tokenType || '').toLowerCase()
+  // 设计说明：
+  // 1. tree-sitter-highlight 返回的是 capture 名称，例如 `function.method`、`variable.member`、`variable.parameter`。
+  // 2. Monaco semantic token legend 需要稳定的有限类型，因此在这里把细分 capture 映射到主题可控的语义槽。
+  // 3. 顺序很重要：先识别更具体的 Python/JS/Rust 捕获，再落到 variable，否则函数、对象成员和参数都会混成一种颜色。
   if (type.includes('comment')) return 'comment'
   if (type.includes('string.escape') || type.includes('escape')) return 'string'
   if (type.includes('string')) return 'string'
+  if (type.includes('keyword.operator')) return 'operator'
   if (type.includes('keyword')) return 'keyword'
   if (type.includes('number')) return 'number'
+  if (type.includes('boolean')) return 'boolean'
   if (type.includes('regexp')) return 'regexp'
   if (type.includes('operator')) return 'operator'
   if (type.includes('punctuation')) return 'punctuation'
-  if (type.includes('type') || type.includes('constructor')) return 'type'
-  if (type.includes('builtin')) return 'builtin'
-  if (type.includes('macro')) return 'macro'
+  if (type.includes('constructor')) return 'class'
+  if (type.includes('class')) return 'class'
+  if (type.includes('type') || type.includes('interface') || type.includes('enum') || type.includes('struct')) return 'type'
+  if (type.includes('variable.parameter') || type.includes('parameter') || type.includes('argument')) return 'parameter'
+  if (type.includes('variable.member') || type.includes('property') || type.includes('member') || type.includes('field')) return 'property'
+  if (type.includes('function.method') || type.includes('method')) return 'method'
   if (type.includes('function')) return 'function'
-  if (type.includes('property') || type.includes('member')) return 'property'
-  if (type.includes('parameter')) return 'parameter'
+  if (type.includes('variable.builtin') || type.includes('builtin') || type.includes('support')) return 'builtin'
+  if (type.includes('macro')) return 'macro'
   if (type.includes('module')) return 'namespace'
   if (type.includes('tag')) return 'class'
   if (type.includes('attribute')) return 'attribute'
-  if (type.includes('boolean')) return 'boolean'
   if (type.includes('constant')) return 'constant'
   if (type.includes('decorator')) return 'decorator'
   if (type.includes('label')) return 'label'
@@ -281,6 +290,11 @@ function ensureTreeSitterSemanticProvider(languageId: string) {
         }
 
         const encoded = encodeTreeSitterSemanticTokens(model, response.spans || [])
+        const mappedTokenTypeCounts = (response.spans || []).reduce<Record<string, number>>((acc, span) => {
+          const mappedType = mapTreeSitterTokenType(span.token_type)
+          acc[mappedType] = (acc[mappedType] || 0) + 1
+          return acc
+        }, {})
         logTreeSitterHighlight('info', 'semantic request success', {
           frontendRequestId,
           backendDebugId: response.debug_id,
@@ -288,6 +302,7 @@ function ensureTreeSitterSemanticProvider(languageId: string) {
           normalized,
           versionId: model.getVersionId(),
           spanCount: response.spans?.length || 0,
+          mappedTokenTypeCounts,
           encodedTokenCount: encoded.length / 5,
           backendElapsedMs: response.elapsed_ms,
           frontendElapsedMs: Math.round(performance.now() - startedAt),

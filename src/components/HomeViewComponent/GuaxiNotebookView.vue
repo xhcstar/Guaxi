@@ -447,6 +447,7 @@
             :document-path="filePath"
             :model-value="cell.code"
             :theme="theme"
+            :ref="(instance) => setPythonEditorRef(cell.key, instance)"
             @update:model-value="updatePythonCell(cell.key, $event)"
             @focus="handleNotebookPythonEditorFocus(cell)"
           />
@@ -778,6 +779,7 @@ const notebookHistoryEntries = ref([])
 const notebookHistoryIndex = ref(-1)
 const notebookHistoryApplying = ref(false)
 const markdownEditorRefMap = new Map()
+const pythonEditorRefMap = new Map()
 const notebookMarkdownRenderCache = new Map()
 const notebookDisplayUrlCache = new Map()
 const notebookMarkdownWorkerPendingTasks = new Map()
@@ -2957,6 +2959,30 @@ const setMarkdownEditorRef = (key, instance) => {
     return
   }
   markdownEditorRefMap.delete(normalizedKey)
+}
+
+const setPythonEditorRef = (key, instance) => {
+  const normalizedKey = String(key || '')
+  if (!normalizedKey) return
+  if (instance) {
+    pythonEditorRefMap.set(normalizedKey, instance)
+    return
+  }
+  pythonEditorRefMap.delete(normalizedKey)
+}
+
+const refreshNotebookPythonEditor = (cell, reason = 'unknown') => {
+  const key = String(cell?.key || '')
+  const editorRef = pythonEditorRefMap.get(key)
+  if (!editorRef?.refreshEditorServices) return
+  window.setTimeout(() => {
+    editorRef.refreshEditorServices(reason)
+  }, 120)
+  logger.debug('[Notebook] scheduled python editor service refresh', {
+    key,
+    cellId: String(cell?.cellId || ''),
+    reason,
+  })
 }
 
 const syncMarkdownEditorValueToCell = (key, reason = 'sync-markdown-editor-value') => {
@@ -5163,6 +5189,7 @@ const openNotebookPythonSessionPanel = (cell, reason = 'unknown') => {
   patchCellMeta(cell, {
     sessionCollapsed: false,
   })
+  refreshNotebookPythonEditor(cell, `open-session-panel:${reason}`)
   logger.info('[Notebook] open data lab panel', {
     reason,
     cellId: payload.cellId,
@@ -5180,6 +5207,7 @@ const closeNotebookPythonSessionPanel = (cell, reason = 'unknown') => {
     patchCellMeta(cell, {
       sessionCollapsed: true,
     })
+    refreshNotebookPythonEditor(cell, `close-session-panel:${reason}`)
   }
   logger.info('[Notebook] close data lab panel', {
     reason,
@@ -5196,9 +5224,11 @@ const toggleCellSession = (cell) => {
   })
   if (nextVisible) {
     openNotebookPythonSessionPanel(cell, 'toolbar-toggle')
+    refreshNotebookPythonEditor(cell, 'data-lab-open')
     return
   }
   closeNotebookPythonSessionPanel(cell, 'toolbar-toggle')
+  refreshNotebookPythonEditor(cell, 'data-lab-close')
 }
 
 const NOTEBOOK_PYTHON_SESSION_BUSY_PREFIX = 'python-session::'
@@ -7344,9 +7374,9 @@ defineExpose({
 
 .guaxi-notebook__cell.is-active-python-cell {
   outline: 2px solid color-mix(in srgb, var(--guaxi-notebook-primary) 72%, transparent);
-  outline-offset: 2px;
-  border-radius: 14px;
-  box-shadow: 0 0 0 5px color-mix(in srgb, var(--guaxi-notebook-primary) 14%, transparent);
+  outline-offset: 0;
+  border-radius: 10px;
+  box-shadow: none;
 }
 
 .guaxi-notebook__cell.is-markdown {
@@ -7362,8 +7392,8 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 24px;
-  margin: 2px 0 4px;
+  min-height: 18px;
+  margin: 0;
   z-index: 3;
 }
 
@@ -7438,14 +7468,14 @@ defineExpose({
 
 .guaxi-notebook__python-layout {
   display: grid;
-  gap: 6px;
-  padding: 0 10px 2px;
+  gap: 4px;
+  padding: 0 2px 1px;
 }
 
 .guaxi-notebook__math-layout {
   display: grid;
-  gap: 8px;
-  padding: 8px 10px 6px;
+  gap: 6px;
+  padding: 4px 2px 3px;
   min-width: 0;
   max-width: 100%;
 }
@@ -7489,8 +7519,8 @@ defineExpose({
 }
 
 .guaxi-notebook__math-preview {
-  min-height: 48px;
-  padding: 10px 12px;
+  min-height: 42px;
+  padding: 8px 10px;
   border-left: 3px solid color-mix(in srgb, #0891b2 46%, var(--guaxi-notebook-strong-border));
   background: color-mix(in srgb, #0891b2 5%, transparent);
   font-size: 18px;
@@ -7736,7 +7766,7 @@ defineExpose({
 
 .guaxi-notebook__panel {
   margin: 0;
-  padding: 10px 0 0;
+  padding: 6px 0 0;
   border-radius: 0;
 }
 
@@ -7752,8 +7782,8 @@ defineExpose({
 
 .guaxi-notebook__panel-content {
   display: grid;
-  gap: 8px;
-  padding-bottom: 2px;
+  gap: 6px;
+  padding-bottom: 0;
 }
 
 .guaxi-notebook__output-module {
@@ -7773,7 +7803,7 @@ defineExpose({
   justify-content: space-between;
   gap: 10px;
   flex-wrap: wrap;
-  padding: 8px 10px;
+  padding: 7px 8px;
   border-bottom: 1px solid color-mix(in srgb, var(--guaxi-notebook-strong-border) 74%, transparent);
 }
 
@@ -7809,7 +7839,7 @@ defineExpose({
 .guaxi-notebook__output-module-body {
   display: grid;
   gap: 8px;
-  padding: 8px 10px 10px;
+  padding: 7px 8px 8px;
 }
 
 .guaxi-notebook__output-markdown {
