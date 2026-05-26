@@ -8896,25 +8896,25 @@ const initEditor = () => {
     rules: [
       { token: 'comment', foreground: 'a0a1a7' },           // Comment
       { token: 'keyword', foreground: 'a626a4' },           // Keyword
-      { token: 'string', foreground: '50a14f' },           // String
+      { token: 'string', foreground: '22863a' },           // String
       { token: 'number', foreground: '986801' },           // Number
       { token: 'regexp', foreground: '0184bc' },           // RegExp → 用 Operator 相近色
-      { token: 'type', foreground: 'c18401' },           // Type
+      { token: 'type', foreground: '6f42c1' },           // Type
       { token: 'delimiter', foreground: '383a42' },           // Delimiter → Main text color
-      { token: 'variable', foreground: '2b4a73' },           // Variable → 与函数/属性区分，但避免 Python 大片泛红
-      { token: 'parameter', foreground: '4078f2' },           // Parameter → Function color
-      { token: 'function', foreground: '4078f2' },           // Function
+      { token: 'variable', foreground: '0550ae' },           // Variable -> light theme still uses a semantic color, not plain text black
+      { token: 'parameter', foreground: '9a6700' },           // Parameter
+      { token: 'function', foreground: '0969da' },           // Function
       { token: 'constant', foreground: '986801' },           // Constant → Number color
-      { token: 'class', foreground: 'c18401' },           // Class → Type color
+      { token: 'class', foreground: '6f42c1' },           // Class → Type color
       { token: 'identifier', foreground: '383a42' },           // Identifier → Main text color
       { token: 'tag', foreground: 'e45649' },           // Tag → Variable color
-      { token: 'attribute.name', foreground: 'c18401' },           // Attribute name → Type color
+      { token: 'attribute.name', foreground: '9a6700' },           // Attribute name
       { token: 'meta.embedded', foreground: 'a0a1a7' }            // Meta embedded → Comment color
     ],
     semanticHighlighting: true,
     semanticTokenColors: {
       comment: '#a0a1a7',
-      string: '#50a14f',
+      string: '#22863a',
       keyword: '#a626a4',
       number: '#986801',
       regexp: '#0184bc',
@@ -8922,27 +8922,27 @@ const initEditor = () => {
       punctuation: '#383a42',
       'punctuation.definition': '#383a42',
       'punctuation.bracket': '#383a42',
-      class: '#c18401',
-      enum: '#c18401',
-      interface: '#c18401',
-      type: '#c18401',
-      typeParameter: '#c18401',
-      namespace: '#c18401',
-      struct: '#c18401',
-      function: '#4078f2',
-      method: '#0184bc',
+      class: '#6f42c1',
+      enum: '#6f42c1',
+      interface: '#6f42c1',
+      type: '#6f42c1',
+      typeParameter: '#6f42c1',
+      namespace: '#6f42c1',
+      struct: '#6f42c1',
+      function: '#0969da',
+      method: '#007c89',
       // 设计说明：
-      // 1. TreeSitter 的 Python 捕获会把大量普通标识符归为 variable/property。
-      // 2. 如果这些基础类型使用红色，编辑模式和 Notebook Python cell 都会出现大片红色，语义层次反而变弱。
-      // 3. 因此普通变量使用正文色，属性/库对象使用青色，函数仍使用蓝色，保证两种模式共享同一套均衡配色。
-      property: '#0184bc',
-      parameter: '#986801',
-      variable: '#2b4a73',
+      // 1. 编辑模式代码围栏和探索者 Python cell 共用 Tree-sitter semantic token。
+      // 2. 亮色主题也必须给 variable/property/function 分配明确颜色，避免回落成大片黑色正文。
+      // 3. 暗色和亮色只在色值上不同，语义类别与 token 流保持一致。
+      property: '#007c89',
+      parameter: '#9a6700',
+      variable: '#0550ae',
       constant: '#986801',
-      attribute: '#986801',
-      builtin: '#0184bc',
+      attribute: '#9a6700',
+      builtin: '#0969da',
       'variable.readonly': '#986801',
-      'variable.defaultLibrary': '#0184bc',
+      'variable.defaultLibrary': '#0969da',
       enumMember: '#986801',
       boolean: '#986801',
       macro: '#a626a4',
@@ -8988,10 +8988,26 @@ const initEditor = () => {
       'editorIndentGuide.activeBackground': '#c5c8ce',
       'editorHoverWidget.background': '#fafafa',
       'editorHoverWidget.border': '#dcdfe4',
-      'editorSuggestWidget.background': '#ffffff',
-      'editorSuggestWidget.border': '#dcdfe4',
-      'editorSuggestWidget.foreground': '#383a42',
-      'editorSuggestWidget.selectedBackground': '#e5e5e6',
+      // 设计说明：
+      // 1. 亮色模式的补全面板需要比正文区域略有层次，但不能用过深的蓝色块压住代码阅读节奏。
+      // 2. Monaco suggest widget 会同时使用 editorSuggestWidget 与 list.* 色值；两组都定义，避免 hover/键盘选中状态落回默认浅灰。
+      // 3. 选中项使用淡蓝背景 + 深色前景，匹配字符使用主题蓝，保证数学块和 Python cell 的补全菜单都清晰可读。
+      'editorSuggestWidget.background': '#fbfdff',
+      'editorSuggestWidget.border': '#b8c7dc',
+      'editorSuggestWidget.foreground': '#1f2937',
+      'editorSuggestWidget.selectedBackground': '#dbeafe',
+      'editorSuggestWidget.selectedForeground': '#0f172a',
+      'editorSuggestWidget.highlightForeground': '#0969da',
+      'editorSuggestWidget.focusHighlightForeground': '#0550ae',
+      'editorSuggestWidget.selectedIconForeground': '#0969da',
+      'editorSuggestWidgetStatus.foreground': '#64748b',
+      'list.activeSelectionBackground': '#dbeafe',
+      'list.activeSelectionForeground': '#0f172a',
+      'list.focusBackground': '#dbeafe',
+      'list.focusForeground': '#0f172a',
+      'list.hoverBackground': '#eff6ff',
+      'list.hoverForeground': '#0f172a',
+      'list.highlightForeground': '#0969da',
       'editorWidget.background': '#ffffff',
       'editorWidget.border': '#dcdfe4',
       'input.background': '#ffffff',
@@ -20989,28 +21005,28 @@ onUnmounted(() => {
 }
 
 .guaxi-editor :deep(.md-fence-token-base) { color: #383a42; }
-.guaxi-editor :deep(.md-fence-token-keyword) { color: #c678dd; }
-.guaxi-editor :deep(.md-fence-token-string) { color: #98c379; }
-.guaxi-editor :deep(.md-fence-token-number) { color: #d19a66; }
-.guaxi-editor :deep(.md-fence-token-boolean) { color: #d19a66; }
-.guaxi-editor :deep(.md-fence-token-comment) { color: #5c6370; }
-.guaxi-editor :deep(.md-fence-token-type) { color: #e5c07b; }
-.guaxi-editor :deep(.md-fence-token-class) { color: #e5c07b; }
-.guaxi-editor :deep(.md-fence-token-function) { color: #61afef; }
-.guaxi-editor :deep(.md-fence-token-method) { color: #0184bc; }
-.guaxi-editor :deep(.md-fence-token-parameter) { color: #d19a66; }
-.guaxi-editor :deep(.md-fence-token-variable) { color: #2b4a73; }
-.guaxi-editor :deep(.md-fence-token-constant) { color: #d19a66; }
-.guaxi-editor :deep(.md-fence-token-regexp) { color: #56b6c2; }
-.guaxi-editor :deep(.md-fence-token-property) { color: #0184bc; }
-.guaxi-editor :deep(.md-fence-token-namespace) { color: #e5c07b; }
-.guaxi-editor :deep(.md-fence-token-macro) { color: #c678dd; }
+.guaxi-editor :deep(.md-fence-token-keyword) { color: #a626a4; }
+.guaxi-editor :deep(.md-fence-token-string) { color: #22863a; }
+.guaxi-editor :deep(.md-fence-token-number) { color: #986801; }
+.guaxi-editor :deep(.md-fence-token-boolean) { color: #986801; }
+.guaxi-editor :deep(.md-fence-token-comment) { color: #6a737d; }
+.guaxi-editor :deep(.md-fence-token-type) { color: #6f42c1; }
+.guaxi-editor :deep(.md-fence-token-class) { color: #6f42c1; }
+.guaxi-editor :deep(.md-fence-token-function) { color: #0969da; }
+.guaxi-editor :deep(.md-fence-token-method) { color: #007c89; }
+.guaxi-editor :deep(.md-fence-token-parameter) { color: #9a6700; }
+.guaxi-editor :deep(.md-fence-token-variable) { color: #0550ae; }
+.guaxi-editor :deep(.md-fence-token-constant) { color: #986801; }
+.guaxi-editor :deep(.md-fence-token-regexp) { color: #007c89; }
+.guaxi-editor :deep(.md-fence-token-property) { color: #007c89; }
+.guaxi-editor :deep(.md-fence-token-namespace) { color: #6f42c1; }
+.guaxi-editor :deep(.md-fence-token-macro) { color: #a626a4; }
 .guaxi-editor :deep(.md-fence-token-tag) { color: #e06c75; }
-.guaxi-editor :deep(.md-fence-token-attribute) { color: #d19a66; }
-.guaxi-editor :deep(.md-fence-token-builtin) { color: #56b6c2; }
-.guaxi-editor :deep(.md-fence-token-decorator) { color: #c678dd; }
-.guaxi-editor :deep(.md-fence-token-operator) { color: #56b6c2; }
-.guaxi-editor :deep(.md-fence-token-delimiter) { color: #abb2bf; }
+.guaxi-editor :deep(.md-fence-token-attribute) { color: #9a6700; }
+.guaxi-editor :deep(.md-fence-token-builtin) { color: #0969da; }
+.guaxi-editor :deep(.md-fence-token-decorator) { color: #a626a4; }
+.guaxi-editor :deep(.md-fence-token-operator) { color: #007c89; }
+.guaxi-editor :deep(.md-fence-token-delimiter) { color: #383a42; }
 
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-base) { color: #abb2bf; }
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-keyword) { color: #c678dd; }
@@ -21846,26 +21862,26 @@ onUnmounted(() => {
  */
 .guaxi-editor .monaco-editor .md-fence-token-base { color: #383a42 !important; }
 .guaxi-editor .monaco-editor .md-fence-token-keyword { color: #a626a4 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-string { color: #50a14f !important; }
+.guaxi-editor .monaco-editor .md-fence-token-string { color: #22863a !important; }
 .guaxi-editor .monaco-editor .md-fence-token-number { color: #986801 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-boolean { color: #0184bc !important; }
-.guaxi-editor .monaco-editor .md-fence-token-comment { color: #7f848e !important; }
-.guaxi-editor .monaco-editor .md-fence-token-type { color: #c18401 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-class { color: #c18401 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-function { color: #4078f2 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-method { color: #0184bc !important; }
-.guaxi-editor .monaco-editor .md-fence-token-parameter { color: #986801 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-variable { color: #2b4a73 !important; }
+.guaxi-editor .monaco-editor .md-fence-token-boolean { color: #986801 !important; }
+.guaxi-editor .monaco-editor .md-fence-token-comment { color: #6a737d !important; }
+.guaxi-editor .monaco-editor .md-fence-token-type { color: #6f42c1 !important; }
+.guaxi-editor .monaco-editor .md-fence-token-class { color: #6f42c1 !important; }
+.guaxi-editor .monaco-editor .md-fence-token-function { color: #0969da !important; }
+.guaxi-editor .monaco-editor .md-fence-token-method { color: #007c89 !important; }
+.guaxi-editor .monaco-editor .md-fence-token-parameter { color: #9a6700 !important; }
+.guaxi-editor .monaco-editor .md-fence-token-variable { color: #0550ae !important; }
 .guaxi-editor .monaco-editor .md-fence-token-constant { color: #986801 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-regexp { color: #0184bc !important; }
-.guaxi-editor .monaco-editor .md-fence-token-property { color: #0184bc !important; }
-.guaxi-editor .monaco-editor .md-fence-token-namespace { color: #c18401 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-macro { color: #4078f2 !important; }
+.guaxi-editor .monaco-editor .md-fence-token-regexp { color: #007c89 !important; }
+.guaxi-editor .monaco-editor .md-fence-token-property { color: #007c89 !important; }
+.guaxi-editor .monaco-editor .md-fence-token-namespace { color: #6f42c1 !important; }
+.guaxi-editor .monaco-editor .md-fence-token-macro { color: #a626a4 !important; }
 .guaxi-editor .monaco-editor .md-fence-token-tag { color: #e45649 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-attribute { color: #986801 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-builtin { color: #0184bc !important; }
+.guaxi-editor .monaco-editor .md-fence-token-attribute { color: #9a6700 !important; }
+.guaxi-editor .monaco-editor .md-fence-token-builtin { color: #0969da !important; }
 .guaxi-editor .monaco-editor .md-fence-token-decorator { color: #a626a4 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-operator { color: #0184bc !important; }
+.guaxi-editor .monaco-editor .md-fence-token-operator { color: #007c89 !important; }
 .guaxi-editor .monaco-editor .md-fence-token-delimiter { color: #383a42 !important; }
 
 :root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-base { color: #abb2bf !important; }
