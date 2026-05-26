@@ -279,3 +279,9 @@ export const togglePythonCellOutputModuleCollapsed = (outputs = [], moduleId = '
     };
   });
 };
+
+export const removePythonCellOutputModule = (outputs = [], moduleId = '') => {
+  const normalizedId = normalizeText(moduleId);
+  if (!normalizedId) return normalizePythonCellOutputModules(outputs);
+  return normalizePythonCellOutputModules(outputs).filter((item) => item.id !== normalizedId);
+};

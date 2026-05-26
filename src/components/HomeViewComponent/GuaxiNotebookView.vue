@@ -282,8 +282,34 @@
           <div class="guaxi-notebook__math-toolbar">
             <span class="guaxi-notebook__math-badge">Math</span>
             <div class="guaxi-notebook__math-actions">
-              <button type="button" class="guaxi-notebook__panel-btn" @click="runMathCell(cell, false)">生成结果</button>
-              <button type="button" class="guaxi-notebook__panel-btn" @click="runMathCell(cell, true)">生成并写回</button>
+              <button
+                type="button"
+                class="guaxi-notebook__panel-btn"
+                title="绘制当前函数图像"
+                aria-label="绘制当前函数图像"
+                @click="runMathCell(cell, false, 'plot2d')"
+              >绘制函数图像</button>
+              <button
+                type="button"
+                class="guaxi-notebook__panel-btn"
+                title="求解当前方程或表达式"
+                aria-label="求解当前方程或表达式"
+                @click="runMathCell(cell, false, 'solve')"
+              >解方程</button>
+              <button
+                type="button"
+                class="guaxi-notebook__panel-btn"
+                title="绘制当前函数图像并写回 Markdown"
+                aria-label="绘制当前函数图像并写回 Markdown"
+                @click="runMathCell(cell, true, 'plot2d')"
+              >绘图写回</button>
+              <button
+                type="button"
+                class="guaxi-notebook__panel-btn"
+                title="求解当前方程并写回 Markdown"
+                aria-label="求解当前方程并写回 Markdown"
+                @click="runMathCell(cell, true, 'solve')"
+              >解方程写回</button>
               <button
                 type="button"
                 class="guaxi-notebook__icon-btn danger"
@@ -295,22 +321,20 @@
               </button>
             </div>
           </div>
-          <textarea
+          <GuaxiNotebookMathEditor
             class="guaxi-notebook__math-input"
-            :value="cell.expression"
-            spellcheck="false"
+            :cell-key="cell.key"
+            :document-path="filePath"
+            :model-value="cell.expression"
+            :theme="theme"
             placeholder="输入 LaTeX / SymPy 公式，例如 sin(x) / x"
-            @input="updateMathCell(cell.key, $event)"
-          ></textarea>
+            @update:model-value="updateMathCell(cell.key, $event)"
+          />
           <div class="guaxi-notebook__math-preview markdown-body" v-html="getRenderedMathCellHtml(cell)"></div>
 
-          <div v-if="(hasVisibleOutput(cell) || isCellBusy(cell)) && !getCellSnapshot(cell).meta.outputCollapsed" class="guaxi-notebook__panel">
+          <div v-if="(hasVisibleOutput(cell) || isCellBusy(cell)) && !getCellSnapshot(cell).meta.outputCollapsed" class="guaxi-notebook__panel guaxi-notebook__panel--math">
             <div class="guaxi-notebook__panel-head">
               <div class="guaxi-notebook__panel-title">数学输出 · {{ getCellOutputModules(cell).length }}</div>
-              <div class="guaxi-notebook__panel-actions">
-                <button type="button" class="guaxi-notebook__panel-btn" @click="insertOutputMarkdownAfterCell(cell)">写回为 Markdown</button>
-                <button type="button" class="guaxi-notebook__panel-btn" @click="exportCellOutputToFile(cell)">导出文件</button>
-              </div>
             </div>
             <div class="guaxi-notebook__panel-content">
               <div v-if="isCellBusy(cell)" class="guaxi-notebook__running-banner">数学引擎正在运行，请稍候...</div>
@@ -318,11 +342,46 @@
                 v-for="outputModule in getCellOutputModules(cell)"
                 :key="`${cell.key}-${outputModule.id}`"
                 class="guaxi-notebook__output-module"
+                :class="{ 'is-collapsed': outputModule.collapsed }"
               >
                 <div class="guaxi-notebook__output-module-head">
                   <div class="guaxi-notebook__output-module-copy">
                     <span class="guaxi-notebook__output-module-title">{{ getNotebookOutputModuleTitle(outputModule) }}</span>
-                    <span class="guaxi-notebook__output-module-summary">{{ getNotebookOutputModuleSummary(outputModule) }}</span>
+                    <span v-if="getNotebookOutputModuleSummary(outputModule)" class="guaxi-notebook__output-module-summary">
+                      {{ getNotebookOutputModuleSummary(outputModule) }}
+                    </span>
+                  </div>
+                  <div class="guaxi-notebook__output-module-actions">
+                    <button
+                      v-if="canCopyOutputModuleText(outputModule)"
+                      type="button"
+                      class="guaxi-notebook__icon-btn guaxi-notebook__panel-icon-btn"
+                      title="复制当前数学输出的文字和 LaTeX 源码"
+                      aria-label="复制当前数学输出的文字和 LaTeX 源码"
+                      @click="copyCellOutputModuleText(cell, outputModule.id)"
+                    >
+                      <Icon :icon="copyIcon" width="14" height="14" />
+                    </button>
+                    <button type="button" class="guaxi-notebook__panel-btn" @click="insertOutputMarkdownAfterCell(cell, outputModule.id)">写回 Markdown</button>
+                    <button type="button" class="guaxi-notebook__panel-btn" @click="exportCellOutputToFile(cell, outputModule.id)">导出文件</button>
+                    <button
+                      type="button"
+                      class="guaxi-notebook__icon-btn guaxi-notebook__panel-icon-btn"
+                      :title="outputModule.collapsed ? '显示当前数学输出' : '隐藏当前数学输出'"
+                      :aria-label="outputModule.collapsed ? '显示当前数学输出' : '隐藏当前数学输出'"
+                      @click="toggleCellOutputModule(cell, outputModule.id)"
+                    >
+                      <Icon :icon="outputModule.collapsed ? eyeIcon : eyeOffIcon" width="14" height="14" />
+                    </button>
+                    <button
+                      type="button"
+                      class="guaxi-notebook__icon-btn guaxi-notebook__panel-icon-btn danger"
+                      title="删除当前数学输出"
+                      aria-label="删除当前数学输出"
+                      @click="deleteCellOutputModule(cell, outputModule.id)"
+                    >
+                      <Icon :icon="trash2Icon" width="14" height="14" />
+                    </button>
                   </div>
                 </div>
                 <div v-if="!outputModule.collapsed" class="guaxi-notebook__output-module-body">
@@ -338,7 +397,7 @@
                   ></div>
                   <img
                     v-else-if="outputModule.kind === 'image' && getCellDisplayUrl(cell, outputModule)"
-                    class="guaxi-notebook__display-image"
+                    class="guaxi-notebook__image"
                     :src="getCellDisplayUrl(cell, outputModule)"
                     alt="Math output"
                   />
@@ -446,6 +505,15 @@
                       @click="toggleCellOutputModule(cell, outputModule.id)"
                     >
                       <Icon :icon="outputModule.collapsed ? eyeIcon : eyeOffIcon" width="14" height="14" />
+                    </button>
+                    <button
+                      type="button"
+                      class="guaxi-notebook__icon-btn guaxi-notebook__panel-icon-btn danger"
+                      title="删除当前输出模块"
+                      aria-label="删除当前输出模块"
+                      @click="deleteCellOutputModule(cell, outputModule.id)"
+                    >
+                      <Icon :icon="trash2Icon" width="14" height="14" />
                     </button>
                   </div>
                 </div>
@@ -598,6 +666,7 @@ import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
 import { useSiderStore } from '../../stores/useSiderStore'
 import GuaxiNotebookPythonEditor from './GuaxiNotebookPythonEditor.vue'
+import GuaxiNotebookMathEditor from './GuaxiNotebookMathEditor.vue'
 import GuaxiNotebookMarkdownEditor from './GuaxiNotebookMarkdownEditor.vue'
 import GuaxiNotebookHtmlOutput from './GuaxiNotebookHtmlOutput.vue'
 import GuaxiNotebookTableOutput from './GuaxiNotebookTableOutput.vue'
@@ -621,6 +690,7 @@ import {
   isPythonCellDisplayOutputKind,
   normalizePythonCellOutputDisplayType,
   normalizePythonCellOutputModules,
+  removePythonCellOutputModule,
   togglePythonCellOutputModuleCollapsed,
 } from './utils/guaxiPythonCellOutputs'
 import {
@@ -731,6 +801,7 @@ let notebookSearchQueryTimer = 0
 let notebookMarkdownWorkerTaskId = 0
 let notebookMermaidRenderCounter = 0
 let notebookTopToolbarHideTimer = 0
+let notebookMathPreviewRenderSeq = 0
 let selectionAudioElement = null
 let selectionAudioObjectUrl = ''
 let selectionTranslateMultiNotFoundWarned = false
@@ -3213,6 +3284,7 @@ const updateMathCell = (key, eventOrValue) => {
     key: String(key || ''),
     expressionLength: value.length,
   })
+  void renderMathCellPreviewImmediately(key, value)
   emitCells(
     notebookCells.value.map((cell) => {
       if (cell.type !== 'math' || String(cell.key) !== String(key)) return cell
@@ -3224,6 +3296,31 @@ const updateMathCell = (key, eventOrValue) => {
     '',
     { deferMarkdownSync: true },
   )
+}
+
+const renderMathCellPreviewImmediately = async (key, expression) => {
+  const normalizedKey = String(key || '')
+  const renderSeq = ++notebookMathPreviewRenderSeq
+  const mathMarkdown = `$$\n${String(expression || '')}\n$$`
+  try {
+    const html = await renderMarkdownHtml(mathMarkdown, `math-cell-live-preview:${normalizedKey}`)
+    if (renderSeq !== notebookMathPreviewRenderSeq) return
+    renderedMarkdownHtmlMap.value = {
+      ...renderedMarkdownHtmlMap.value,
+      [normalizedKey]: html,
+    }
+    logger.debug('[Notebook] rendered live math cell preview', {
+      key: normalizedKey,
+      expressionLength: String(expression || '').length,
+      renderSeq,
+    })
+  } catch (error) {
+    logger.warn('[Notebook] live math preview render failed', {
+      key: normalizedKey,
+      expressionLength: String(expression || '').length,
+      error: String(error?.message || error),
+    })
+  }
 }
 
 const insertCell = (index, position = 'below', type = 'markdown') => {
@@ -3296,6 +3393,45 @@ const confirmRemoveCell = async (cell) => {
   removeCell(targetKey)
 }
 
+const isGuaxiDisplayResultRepr = (value = '') => {
+  const text = String(value || '').trim()
+  return text.startsWith("{'__guaxi_display__'") || text.startsWith('{"__guaxi_display__"')
+}
+
+const parseGuaxiDisplayFromResultRepr = (value = '') => {
+  const text = String(value || '').trim()
+  if (!isGuaxiDisplayResultRepr(text)) return null
+
+  // 设计说明：
+  // 1. 正常路径应由 Python worker 的 `result_json.__guaxi_display__` 传回结构化 display；
+  // 2. 但旧 worker 或某些边界执行会只给 `result_repr`，于是图片 payload 被当成普通文本渲染；
+  // 3. 这里只兜底解析我们自己生成的 display 字典，不尝试通用解析 Python repr，避免误吞用户文本。
+  const typeMatch = text.match(/['"]type['"]\s*:\s*['"]([^'"]+)['"]/)
+  const mimeMatch = text.match(/['"]mime['"]\s*:\s*['"]([^'"]+)['"]/)
+  const dataBase64Match = text.match(/['"]data_base64['"]\s*:\s*['"]([^'"]+)['"]/)
+  const markdownMatch = text.match(/['"]markdown['"]\s*:\s*(['"])([\s\S]*)\1\s*\}\s*\}?$/)
+  const type = String(typeMatch?.[1] || '').trim()
+  if (!type) return null
+  if (type === 'image' && dataBase64Match?.[1]) {
+    return {
+      type: 'image',
+      mime: String(mimeMatch?.[1] || 'image/png').trim() || 'image/png',
+      data_base64: String(dataBase64Match[1] || '').trim(),
+    }
+  }
+  if (type === 'markdown' && markdownMatch?.[2]) {
+    return {
+      type: 'markdown',
+      mime: String(mimeMatch?.[1] || 'text/markdown').trim() || 'text/markdown',
+      markdown: String(markdownMatch[2] || '')
+        .replace(/\\n/g, '\n')
+        .replace(/\\'/g, "'")
+        .replace(/\\"/g, '"'),
+    }
+  }
+  return null
+}
+
 const formatPythonExecOutput = (res) => {
   const chunks = []
   const stdout = String(res?.stdout || '').trim()
@@ -3306,8 +3442,23 @@ const formatPythonExecOutput = (res) => {
   // 设计说明：
   // Python 代码块“正常执行但没有显式输出”时，最后一个表达式可能只是 `None`。
   // 这种值对探索模式用户来说属于噪音，不应该伪装成一次可见输出。
-  if (resultRepr && resultRepr !== 'None' && !stdout.includes(resultRepr)) chunks.push(resultRepr)
+  if (
+    resultRepr
+    && resultRepr !== 'None'
+    && !stdout.includes(resultRepr)
+    && !isGuaxiDisplayResultRepr(resultRepr)
+  ) {
+    chunks.push(resultRepr)
+  }
   return chunks.join('\n\n').trim()
+}
+
+const stripNotebookMathTraceOutput = (text = '') => {
+  return String(text || '')
+    .split(/\r\n?|\n/)
+    .filter((line) => !String(line || '').trim().startsWith('[GuaxiNotebookMath]'))
+    .join('\n')
+    .trim()
 }
 const getNotebookRepoRoot = () => {
   const normalizedFilePath = normalizeNotebookFsPath(props.filePath)
@@ -3672,7 +3823,16 @@ const enhanceNotebookHtmlWithMediaGroups = (html) => {
 
 const getGuaxiDisplayFromResult = (res) => {
   const value = res?.result_json?.__guaxi_display__
-  return value && typeof value === 'object' ? value : null
+  if (value && typeof value === 'object') return value
+  const fallback = parseGuaxiDisplayFromResultRepr(res?.result_repr || '')
+  if (fallback) {
+    logger.info('[NotebookDataLab] recovered guaxi display from result_repr fallback', {
+      type: String(fallback.type || ''),
+      mime: String(fallback.mime || ''),
+      hasDataBase64: !!String(fallback.data_base64 || '').trim(),
+    })
+  }
+  return fallback
 }
 
 const getGuaxiDataflowFromResult = (res) => {
@@ -3751,6 +3911,16 @@ const buildOutputModuleMarkdownText = (outputModule) => {
     return String(outputModule.text || '')
   }
   return ''
+}
+
+const canCopyOutputModuleText = (outputModule) => {
+  return !!String(buildOutputModuleMarkdownText(outputModule) || '').trim()
+}
+
+const buildOutputModuleCopyText = (outputModule) => {
+  // 设计说明：解方程结果由后端整理为 Markdown，其中既包含文字说明也包含 $$...$$ LaTeX。
+  // 复制时保留原始 Markdown，比复制渲染后的 DOM 更适合继续写回文档或发给其他数学工具。
+  return String(buildOutputModuleMarkdownText(outputModule) || '').trim()
 }
 
 const buildOutputModuleSearchText = (outputModule) => {
@@ -4021,6 +4191,10 @@ const getCellDisplayKind = (cell, outputModule = null) => {
 const getCellDisplayUrl = (cell, outputModule = null) => {
   const targetModule = outputModule || getCellOutputModule(cell)
   if (!targetModule) return ''
+  // 富媒体输出可能直接携带 base64。优先即时生成 data URL，避免数学单元在
+  // resolvedDisplayUrlMap 异步同步完成前只显示 image/png 标题而没有实际图像。
+  const directDataUrl = getPythonCellOutputDisplayDataUrl(targetModule?.display || null)
+  if (directDataUrl) return directDataUrl
   return String(resolvedDisplayUrlMap.value[buildCellOutputModuleCacheKey(cell, targetModule)] || '')
 }
 
@@ -4065,12 +4239,23 @@ const syncResolvedDisplayUrls = async (cells, reason = 'unknown') => {
   let resolvedCount = 0
 
   for (const cell of Array.isArray(cells) ? cells : []) {
-    if (cell?.type !== 'python') continue
+    // Python cell 与 math block 共用 outputModule 富媒体结构；数学绘图失败显示为空，
+    // 正是因为这里曾只同步 python 单元，导致 math image 永远没有可渲染 URL。
+    if (!['python', 'math'].includes(String(cell?.type || ''))) continue
     for (const outputModule of getCellOutputModules(cell)) {
       if (!['image', 'audio', 'video'].includes(String(outputModule?.kind || ''))) continue
       const display = outputModule?.display || null
       const mapKey = buildCellOutputModuleCacheKey(cell, outputModule)
       const cacheKey = buildDisplayCacheKey(display)
+      const directDataUrl = getPythonCellOutputDisplayDataUrl(display)
+      if (directDataUrl) {
+        nextMap[mapKey] = directDataUrl
+        if (cacheKey) {
+          notebookDisplayUrlCache.set(cacheKey, directDataUrl)
+        }
+        cacheHitCount += 1
+        continue
+      }
       if (cacheKey && notebookDisplayUrlCache.has(cacheKey)) {
         nextMap[mapKey] = notebookDisplayUrlCache.get(cacheKey)
         cacheHitCount += 1
@@ -4100,6 +4285,7 @@ const syncResolvedDisplayUrls = async (cells, reason = 'unknown') => {
     mediaCount: Object.keys(nextMap).length,
     cacheHitCount,
     resolvedCount,
+    cellTypes: [...new Set((Array.isArray(cells) ? cells : []).map((cell) => String(cell?.type || '')).filter(Boolean))],
   })
 }
 
@@ -4932,6 +5118,40 @@ const toggleCellOutputModule = (cell, moduleId) => {
   schedulePersistNotebookSidecar('toggle-output-module')
 }
 
+const deleteCellOutputModule = (cell, moduleId) => {
+  const snapshot = getCellSnapshot(cell)
+  const nextOutputs = removePythonCellOutputModule(snapshot?.outputs || [], moduleId)
+  const latestOutput = getLatestPythonCellOutputModule(nextOutputs) || null
+  const latestDisplay = nextOutputs.find((item) => isPythonCellDisplayOutputKind(item?.kind)) || null
+  const latestTable = nextOutputs.find((item) => item?.kind === 'table') || null
+  const latestText = nextOutputs.find((item) => item?.kind === 'text') || null
+
+  // 设计说明：
+  // 1. 删除单个输出模块只改变当前 cell 的输出快照，不触碰源码和会话变量；
+  // 2. 同步刷新 legacy 的 outputText/display/dataframe 三个槽位，避免旧逻辑仍拿到已删除模块；
+  // 3. 当最后一个输出被删掉时自动折叠输出面板，让过时结果不再留下空卡片。
+  patchPythonCellSnapshot(props.filePath, cell.cellId, {
+    outputText: String(latestText?.text || ''),
+    display: latestDisplay?.display || null,
+    dataframe: latestTable?.table || null,
+    outputs: nextOutputs,
+    meta: {
+      ...(snapshot?.meta || {}),
+      outputCollapsed: !nextOutputs.length,
+    },
+  })
+  logger.info('[Notebook] deleted output module', {
+    key: String(cell?.key || ''),
+    cellId: String(cell?.cellId || ''),
+    cellType: String(cell?.type || ''),
+    outputModuleId: String(moduleId || ''),
+    nextLatestOutputModuleId: String(latestOutput?.id || ''),
+    outputModuleCount: nextOutputs.length,
+  })
+  bumpRefresh()
+  schedulePersistNotebookSidecar('delete-output-module')
+}
+
 // Design notes:
 // 1. 数据实验室现在挂在共享右侧栏里，而不是 Python Cell 下方的内联变量卡片。
 // 2. 这里仍然把开关状态镜像回 cell meta，保证 notebook sidecar 能稳定记录“该 cell 的实验室面板是否展开”。
@@ -5591,6 +5811,31 @@ const copyPythonCellTextOutput = async (cell, moduleId = '') => {
   message.success('文本输出已复制')
 }
 
+const copyCellOutputModuleText = async (cell, moduleId = '') => {
+  const outputModule = getCellOutputModule(cell, moduleId)
+  const text = buildOutputModuleCopyText(outputModule)
+  if (!text) {
+    message.warning('当前输出没有可复制的文字或 LaTeX 源码')
+    return
+  }
+
+  const copied = await writeClipboardText(text)
+  if (!copied) {
+    message.error('复制输出失败')
+    return
+  }
+
+  logger.info('[Notebook] copied output module markdown text', {
+    cellId: String(cell?.cellId || ''),
+    cellKey: String(cell?.key || ''),
+    cellType: String(cell?.type || ''),
+    outputModuleId: String(outputModule?.id || moduleId || ''),
+    outputKind: String(outputModule?.kind || ''),
+    textLength: text.length,
+  })
+  message.success('输出文字和 LaTeX 源码已复制')
+}
+
 const writeCellOutputToMarkdown = async (cell, moduleId = '') => {
   flushPendingNotebookMarkdown('before-writeback')
   const snapshot = getCellSnapshot(cell)
@@ -6112,7 +6357,10 @@ const runNotebookLabGeneratedCode = async (cell, {
       },
     })
 
-    const outputText = formatPythonExecOutput(res)
+    let outputText = formatPythonExecOutput(res)
+    if (source === 'math-block' || source === 'data-lab-math') {
+      outputText = stripNotebookMathTraceOutput(outputText)
+    }
     const display = getGuaxiDisplayFromResult(res)
     const tables = getGuaxiTablesFromResult(res)
     const dataframe = tables[0] || null
@@ -6224,20 +6472,21 @@ const runNotebookLabGeneratedCode = async (cell, {
   }
 }
 
-const runMathCell = async (cell, writeBack = false) => {
+const runMathCell = async (cell, writeBack = false, mode = 'plot2d') => {
   const expression = String(cell?.expression || '').trim()
   if (!expression) {
     message.warning('数学块内容为空')
     return
   }
+  const mathMode = String(mode || 'plot2d')
 
   // 设计说明：
   // 1. 数学块使用同一个 Python 持久会话执行 SymPy/绘图代码，所以它可以读取前面 Python Cell 已经准备好的变量；
   // 2. 运行结果仍保存为普通输出模块，写回时插入为新的 Markdown Cell，避免破坏原公式块；
-  // 3. 模式先默认走 plot2d，纯计算表达式也会由后端 builder 同时生成 Markdown 摘要，后续 UI 可以扩展成显式模式选择。
+  // 3. UI 现在显式区分“绘制函数图像”和“解方程”，避免一个笼统的生成按钮让执行意图不清晰。
   const code = buildNotebookLabMathCode({
     expression,
-    mode: 'plot2d',
+    mode: mathMode,
     variable: 'x',
     rangeMin: -10,
     rangeMax: 10,
@@ -6246,6 +6495,7 @@ const runMathCell = async (cell, writeBack = false) => {
     key: String(cell?.key || ''),
     cellId: String(cell?.cellId || ''),
     expressionLength: expression.length,
+    mode: mathMode,
     writeBack: !!writeBack,
   })
   await runNotebookLabGeneratedCode(cell, {
@@ -6256,10 +6506,12 @@ const runMathCell = async (cell, writeBack = false) => {
       dataKind: 'math',
     },
     writeBack,
-    successMessage: writeBack ? '数学结果已生成并写回' : '数学结果已生成',
+    successMessage: writeBack
+      ? (mathMode === 'solve' ? '方程结果已生成并写回' : '函数图像已生成并写回')
+      : (mathMode === 'solve' ? '方程结果已生成' : '函数图像已生成'),
     labPatch: {
       lastMathExpression: expression,
-      lastMathMode: 'plot2d',
+      lastMathMode: mathMode,
       lastMathBlockAt: new Date().toISOString(),
     },
   })
@@ -6991,9 +7243,19 @@ defineExpose({
 }
 
 .guaxi-notebook__panel-icon-btn {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+}
+
+.guaxi-notebook__panel-icon-btn.danger {
+  color: #dc2626;
+  background: transparent;
+  border-color: color-mix(in srgb, #dc2626 28%, var(--guaxi-notebook-strong-border));
+}
+
+.guaxi-notebook__panel-icon-btn.danger:hover {
+  background: color-mix(in srgb, #dc2626 10%, var(--guaxi-notebook-panel) 90%);
 }
 
 .guaxi-notebook__search-btn--danger {
@@ -7177,13 +7439,15 @@ defineExpose({
 .guaxi-notebook__python-layout {
   display: grid;
   gap: 6px;
-  padding: 0px 0px 0px;
+  padding: 0 10px 2px;
 }
 
 .guaxi-notebook__math-layout {
   display: grid;
   gap: 8px;
-  padding: 8px 0 10px;
+  padding: 8px 10px 6px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .guaxi-notebook__math-toolbar {
@@ -7192,6 +7456,7 @@ defineExpose({
   justify-content: space-between;
   gap: 10px;
   min-height: 30px;
+  padding: 0 2px;
 }
 
 .guaxi-notebook__math-badge {
@@ -7218,22 +7483,9 @@ defineExpose({
 
 .guaxi-notebook__math-input {
   width: 100%;
-  min-height: 88px;
-  resize: vertical;
-  padding: 10px 12px;
-  border: 1px solid var(--guaxi-notebook-strong-border);
-  border-radius: 8px;
-  outline: none;
-  background: var(--guaxi-notebook-panel-soft);
-  color: var(--guaxi-notebook-text);
-  font-family: var(--guaxi-notebook-mono-font);
-  font-size: 13px;
-  line-height: 1.58;
-}
-
-.guaxi-notebook__math-input:focus {
-  border-color: color-mix(in srgb, #0891b2 52%, var(--guaxi-notebook-primary));
-  box-shadow: 0 0 0 3px color-mix(in srgb, #0891b2 12%, transparent);
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .guaxi-notebook__math-preview {
@@ -7241,6 +7493,8 @@ defineExpose({
   padding: 10px 12px;
   border-left: 3px solid color-mix(in srgb, #0891b2 46%, var(--guaxi-notebook-strong-border));
   background: color-mix(in srgb, #0891b2 5%, transparent);
+  font-size: 18px;
+  fonst-family: var(--guaxi-notebook-font);
 }
 
 .guaxi-notebook__markdown-surface {
@@ -7401,7 +7655,7 @@ defineExpose({
   gap: 10px;
   flex-wrap: wrap;
   min-height: 34px;
-  padding: 4px 2px 2px;
+  padding: 4px 2px 4px;
 }
 
 .guaxi-notebook__python-toolbar-copy {
@@ -7482,8 +7736,12 @@ defineExpose({
 
 .guaxi-notebook__panel {
   margin: 0;
-  padding: 12px 14px;
-  border-radius: 12px;
+  padding: 10px 0 0;
+  border-radius: 0;
+}
+
+.guaxi-notebook__panel--math {
+  padding-bottom: 0;
 }
 
 .guaxi-notebook__insert-actions .guaxi-notebook__icon-btn {
@@ -7495,12 +7753,13 @@ defineExpose({
 .guaxi-notebook__panel-content {
   display: grid;
   gap: 8px;
+  padding-bottom: 2px;
 }
 
 .guaxi-notebook__output-module {
-  border-radius: 12px;
+  border-radius: 8px;
   border: 1px solid var(--guaxi-notebook-strong-border);
-  background: color-mix(in srgb, var(--guaxi-notebook-panel-soft) 86%, var(--guaxi-notebook-panel) 14%);
+  background: color-mix(in srgb, var(--guaxi-notebook-panel-soft) 72%, var(--guaxi-notebook-panel) 28%);
   overflow: hidden;
 }
 
@@ -7514,7 +7773,7 @@ defineExpose({
   justify-content: space-between;
   gap: 10px;
   flex-wrap: wrap;
-  padding: 10px 12px;
+  padding: 8px 10px;
   border-bottom: 1px solid color-mix(in srgb, var(--guaxi-notebook-strong-border) 74%, transparent);
 }
 
@@ -7543,14 +7802,51 @@ defineExpose({
 .guaxi-notebook__output-module-actions {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
 .guaxi-notebook__output-module-body {
   display: grid;
   gap: 8px;
-  padding: 0 12px 10px;
+  padding: 8px 10px 10px;
+}
+
+.guaxi-notebook__output-markdown {
+  min-width: 0;
+  color: var(--guaxi-notebook-text);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.guaxi-notebook__output-markdown :deep(h2),
+.guaxi-notebook__output-markdown :deep(h3) {
+  margin: 8px 0 6px;
+  padding: 0;
+  border-bottom: 0;
+  font-size: 13px;
+  line-height: 1.35;
+  letter-spacing: 0;
+}
+
+.guaxi-notebook__output-markdown :deep(h2) {
+  font-weight: 800;
+}
+
+.guaxi-notebook__output-markdown :deep(h3) {
+  font-weight: 700;
+  color: color-mix(in srgb, var(--guaxi-notebook-text) 82%, var(--guaxi-notebook-primary));
+}
+
+.guaxi-notebook__output-markdown :deep(p),
+.guaxi-notebook__output-markdown :deep(ul) {
+  margin: 6px 0;
+}
+
+.guaxi-notebook__output-markdown :deep(mjx-container) {
+  margin: 8px 0 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .guaxi-notebook__panel-head {
@@ -7559,6 +7855,7 @@ defineExpose({
   justify-content: space-between;
   gap: 10px;
   margin-bottom: 8px;
+  padding: 0 2px;
   flex-wrap: wrap;
 }
 
@@ -7574,7 +7871,7 @@ defineExpose({
 .guaxi-notebook__panel-actions {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 

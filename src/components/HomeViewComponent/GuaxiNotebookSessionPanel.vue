@@ -29,7 +29,13 @@
           <div class="py-session-panel__section-meta">SymPy / Matplotlib</div>
         </div>
         <div class="py-session-panel__math-grid">
-          <input v-model="mathExpression" class="py-session-panel__field wide" placeholder="例如 sin(x) / x 或 x^2 + y^2 = 1" />
+          <GuaxiNotebookMathEditor
+            v-model="mathExpression"
+            class="py-session-panel__math-editor wide"
+            :cell-key="`${inspector.cellKey || inspector.cellId || 'session'}-math`"
+            :document-path="inspector.filePath || ''"
+            placeholder="例如 sin(x) / x 或 x^2 = 1"
+          />
           <select v-model="mathMode" class="py-session-panel__field">
             <option value="plot2d">绘制曲线</option>
             <option value="simplify">化简</option>
@@ -41,8 +47,8 @@
           <input v-model="mathVariable" class="py-session-panel__field" placeholder="变量 x" />
           <input v-model.number="mathRangeMin" class="py-session-panel__field" type="number" placeholder="最小值" />
           <input v-model.number="mathRangeMax" class="py-session-panel__field" type="number" placeholder="最大值" />
-          <button type="button" class="py-session-panel__action-btn" @click="runMath(false)">生成</button>
-          <button type="button" class="py-session-panel__action-btn" @click="runMath(true)">写回</button>
+          <button type="button" class="py-session-panel__action-btn" :title="runMathTitle" @click="runMath(false)">{{ runMathLabel }}</button>
+          <button type="button" class="py-session-panel__action-btn" :title="`${runMathTitle}并写回 Markdown`" @click="runMath(true)">写回{{ runMathLabel }}</button>
         </div>
       </section>
 
@@ -165,6 +171,7 @@ import copyIcon from '@iconify-icons/lucide/copy'
 import { useMessage } from 'naive-ui'
 import { createLogger } from '../../utils/logger'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
+import GuaxiNotebookMathEditor from './GuaxiNotebookMathEditor.vue'
 import {
   NOTEBOOK_LAB_CHART_TYPES,
   emitNotebookDataLabAction,
@@ -184,6 +191,21 @@ const mathMode = ref('plot2d')
 const mathVariable = ref('x')
 const mathRangeMin = ref(-20)
 const mathRangeMax = ref(20)
+const mathModeLabels = {
+  plot2d: '绘制函数图像',
+  simplify: '化简公式',
+  derivative: '求导',
+  integral: '积分',
+  solve: '解方程',
+  evaluate: '计算表达式',
+}
+const runMathLabel = computed(() => mathModeLabels[String(mathMode.value || 'plot2d')] || '生成数学结果')
+const runMathTitle = computed(() => {
+  const mode = String(mathMode.value || 'plot2d')
+  if (mode === 'plot2d') return '绘制当前函数图像'
+  if (mode === 'solve') return '求解当前方程；无解析解时会按当前区间尝试数值解'
+  return runMathLabel.value
+})
 const summaryLabel = computed(() => {
   if (!inspector.value?.hasActiveCell) {
     return '未选中 Python Cell'
@@ -517,6 +539,7 @@ const copyVariablePreview = async (item) => {
   padding: 0 10px;
   background: var(--py-session-preview-bg);
   outline: none;
+  box-sizing: border-box;
 }
 
 .py-session-panel__field:focus {
@@ -525,6 +548,13 @@ const copyVariablePreview = async (item) => {
 
 .py-session-panel__field.wide {
   grid-column: span 2;
+}
+
+.py-session-panel__math-editor {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  grid-column: 1 / -1;
 }
 
 .py-session-panel__action-btn:hover,
@@ -542,6 +572,7 @@ const copyVariablePreview = async (item) => {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+  min-width: 0;
 }
 
 .py-session-panel__plotter {

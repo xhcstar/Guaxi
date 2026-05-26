@@ -1163,9 +1163,13 @@ def _handle_exec(payload):
                             result_json.setdefault("__guaxi_display__", rich_display)
                         elif result_json is None:
                             result_json = {"__guaxi_display__": rich_display}
-                    else:
+                        else:
+                            result_json = {
+                                "__guaxi_display__": rich_display,
+                                "__guaxi_result__": result_json,
+                            }
+                    elif result_json is not None and not isinstance(result_json, dict):
                         result_json = {
-                            "__guaxi_display__": rich_display,
                             "__guaxi_result__": result_json,
                         }
 
