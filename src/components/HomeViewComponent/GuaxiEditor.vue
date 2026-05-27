@@ -1098,6 +1098,7 @@ import * as monaco from 'monaco-editor'
 import { initVimMode } from 'monaco-vim';
 import { initTextmate } from '../../monaco/textmateLoader'
 import { GUAXI_MONACO_SEMANTIC_TOKEN_COLORS, GUAXI_MONACO_THEME_RULES } from '../../monaco/guaxiMonacoThemes'
+import { getGuaxiSyntaxClassForCapture } from '../../monaco/guaxiSyntaxTokens'
 import {
   initLspClient,
   disposeAllLspClients,
@@ -5457,6 +5458,8 @@ const EMBEDDED_COMPLETION_CACHE_TTL_MS = 2500
 const EMBEDDED_COMPLETION_CACHE_VERSION = 'embedded-completion-word-range-v4'
 const embeddedCompletionCacheStates = new WeakMap()
 const embeddedCompletionRetriggerStates = new WeakMap()
+const embeddedCompletionInFlightKeys = new Set()
+const embeddedVirtualModelInitKeys = new Set()
 
 const EMBEDDED_LATEX_COMMAND_FALLBACKS = [
   'alpha',
@@ -5815,6 +5818,7 @@ const TREE_SITTER_FENCE_HIGHLIGHT_LANGUAGES = new Set([
 ]);
 const EMBEDDED_SEMANTIC_MAX_LINES = 240;
 const EMBEDDED_VISIBLE_BLOCK_LIMIT = 24;
+const EMBEDDED_INITIAL_BLOCK_LIMIT = 96;
 
 // 设计说明：
 // 1. 源码编辑模式按 VS Code 习惯保留输入时自动建议，用户输入标识符时能及时看到 LSP 候选。
@@ -5936,32 +5940,9 @@ const shouldSkipMarkdownFenceTokenize = (languageId) => {
 };
 
 const resolveFenceTokenClass = (tokenType) => {
-  const type = String(tokenType || '').toLowerCase();
-  if (!type) return '';
-  if (type.includes('comment')) return 'md-fence-token-comment';
-  if (type.includes('string')) return 'md-fence-token-string';
-  if (type.includes('regexp')) return 'md-fence-token-regexp';
-  if (type === 'function.macro' || type.includes('macro')) return 'md-fence-token-macro';
-  if (type === 'keyword.operator') return 'md-fence-token-operator';
-  if (type.includes('keyword') || type.includes('storage')) return 'md-fence-token-keyword';
-  if (type.includes('number') || type.includes('constant.numeric')) return 'md-fence-token-number';
-  if (type.includes('boolean')) return 'md-fence-token-boolean';
-  if (type.includes('type') || type.includes('interface') || type.includes('enum') || type.includes('struct')) return 'md-fence-token-type';
-  if (type.includes('class') || type.includes('constructor')) return 'md-fence-token-class';
-  if (type.includes('method')) return 'md-fence-token-method';
-  if (type.includes('function.call') || type.includes('function.builtin') || type.includes('function.special') || type.includes('function')) return 'md-fence-token-function';
-  if (type.includes('parameter') || type.includes('argument')) return 'md-fence-token-parameter';
-  if (type.includes('property') || type.includes('field')) return 'md-fence-token-property';
-  if (type.includes('namespace') || type.includes('module') || type.includes('package')) return 'md-fence-token-namespace';
-  if (type.includes('tag')) return 'md-fence-token-tag';
-  if (type.includes('attribute')) return 'md-fence-token-attribute';
-  if (type.includes('constant')) return 'md-fence-token-constant';
-  if (type.includes('builtin') || type.includes('support')) return 'md-fence-token-builtin';
-  if (type.includes('decorator') || type.includes('annotation')) return 'md-fence-token-decorator';
-  if (type.includes('variable') || type.includes('identifier')) return 'md-fence-token-variable';
-  if (type.includes('operator')) return 'md-fence-token-operator';
-  if (type.includes('delimiter') || type.includes('punctuation') || type.includes('bracket')) return 'md-fence-token-delimiter';
-  return '';
+  // 设计说明：Markdown fence、Notebook cell 和 Monaco semantic token 共用同一个 tree-sitter capture mapper。
+  // 这里保留旧函数名作为调用边界，避免散落的 decoration 逻辑继续维护第二份映射表。
+  return getGuaxiSyntaxClassForCapture(tokenType, { prefix: 'md-fence-token' });
 };
 
 const normalizeTreeSitterFenceHighlightLanguage = (languageId) => {
@@ -6052,7 +6033,11 @@ const appendTreeSitterFenceDecorations = (decorations, block, model, blockText, 
     const endByte = Number(span?.end_byte ?? span?.endByte ?? 0);
     if (!Number.isFinite(startByte) || !Number.isFinite(endByte) || endByte <= startByte) continue;
 
-    const className = resolveFenceTokenClass(span?.token_type ?? span?.tokenType ?? '');
+    const className = getGuaxiSyntaxClassForCapture(span?.token_type ?? span?.tokenType ?? '', {
+      prefix: 'md-fence-token',
+      sourceText: blockText,
+      startOffset: startByte,
+    });
     if (!className) continue;
 
     const start = fencePositionFromByteOffset(blockText, index, startByte);
@@ -6333,27 +6318,7 @@ const resolveEmbeddedSemanticTokenClass = (tokenType, tokenModifiers = []) => {
     return 'md-fence-token-constant';
   }
 
-  if (type.includes('macro')) return 'md-fence-token-macro';
-  if (type.includes('namespace') || type.includes('module')) return 'md-fence-token-namespace';
-  if (type.includes('constructor') || type.includes('class')) return 'md-fence-token-class';
-  if (type.includes('type') || type.includes('interface') || type.includes('enum') || type.includes('struct') || type.includes('typeparameter')) {
-    return 'md-fence-token-type';
-  }
-  if (type.includes('variable.parameter') || type.includes('parameter') || type.includes('argument')) return 'md-fence-token-parameter';
-  if (type.includes('variable.member') || type.includes('property') || type.includes('field')) return 'md-fence-token-property';
-  if (type.includes('function.method') || type.includes('method')) return 'md-fence-token-method';
-  if (type.includes('function')) return 'md-fence-token-function';
-  if (type.includes('variable')) return 'md-fence-token-variable';
-  if (type.includes('enummember') || type.includes('event') || type.includes('constant')) return 'md-fence-token-constant';
-  if (type.includes('decorator')) return 'md-fence-token-decorator';
-  if (type.includes('keyword') || type.includes('modifier')) return 'md-fence-token-keyword';
-  if (type.includes('comment')) return 'md-fence-token-comment';
-  if (type.includes('string')) return 'md-fence-token-string';
-  if (type.includes('number')) return 'md-fence-token-number';
-  if (type.includes('regexp')) return 'md-fence-token-regexp';
-  if (type.includes('operator')) return 'md-fence-token-operator';
-
-  return '';
+  return getGuaxiSyntaxClassForCapture(type, { prefix: 'md-fence-token' });
 };
 
 const appendEmbeddedSemanticDecorations = (decorations, embeddedCtx, model, semanticTokens, legend) => {
@@ -6475,6 +6440,16 @@ const prepareEmbeddedVirtualModel = (embeddedCtx) => {
   const hostEditor = getEmbeddedHostEditor();
   if (!hostEditor) return null;
 
+  const initKey = `${embeddedCtx.languageId}:${String(virtualModel.uri?.toString?.() || '')}`;
+  if (embeddedVirtualModelInitKeys.has(initKey)) {
+    logger.debug('[EmbeddedLsp] reused initialized virtual model', {
+      languageId: embeddedCtx.languageId,
+      sourceFilePath,
+      documentUri: virtualModel.uri.toString(),
+    });
+    return virtualModel;
+  }
+
   // 设计说明：
   // 1. Markdown fenced code block 里的补全必须使用 fence 自己的虚拟文档 URI，
   //    不能复用宿主 Markdown 文档 URI，否则 Python/C++ 等 LSP 会一直在错误文档上下文里初始化。
@@ -6484,6 +6459,7 @@ const prepareEmbeddedVirtualModel = (embeddedCtx) => {
     workspacePath: sourceFilePath || virtualModel.uri.toString(),
     requestSource: 'embedded-markdown-fence',
   });
+  embeddedVirtualModelInitKeys.add(initKey);
   logger.info('[EmbeddedLsp] init requested for fenced code block', {
     languageId: embeddedCtx.languageId,
     sourceFilePath,
@@ -7066,6 +7042,15 @@ const getCachedMarkdownFenceBlocks = (model) => {
   return blocks;
 };
 
+const shouldHighlightAllMarkdownFenceBlocks = (reason) => {
+  const key = String(reason || '').toLowerCase();
+  return key.includes('content-sync') ||
+    key.includes('model') ||
+    key.includes('init') ||
+    key.includes('lsp-state') ||
+    key.includes('debounced');
+};
+
 const updateMarkdownFenceSyntaxHighlight = async (targetEditor, reason) => {
   if (!targetEditor) return;
   const model = targetEditor.getModel?.();
@@ -7080,7 +7065,8 @@ const updateMarkdownFenceSyntaxHighlight = async (targetEditor, reason) => {
     ? targetEditor.getVisibleRanges()
     : [];
   const allBlocks = getCachedMarkdownFenceBlocks(model);
-  let blocks = visibleRanges.length
+  const shouldHighlightAllBlocks = shouldHighlightAllMarkdownFenceBlocks(reason);
+  let blocks = !shouldHighlightAllBlocks && visibleRanges.length
     ? allBlocks.filter((item) => visibleRanges.some((range) => (
       item.blockEndLine >= range.startLineNumber && item.blockStartLine <= range.endLineNumber
     )))
@@ -7095,7 +7081,15 @@ const updateMarkdownFenceSyntaxHighlight = async (targetEditor, reason) => {
     blocks = [ctx, ...blocks.filter((item) => !sameBlock(item))];
   }
 
-  if (!visibleRanges.length && blocks.length > EMBEDDED_VISIBLE_BLOCK_LIMIT) {
+  if (blocks.length > EMBEDDED_INITIAL_BLOCK_LIMIT) {
+    logger.info('[MarkdownFence] limited full-document syntax highlight blocks', {
+      reason,
+      blockCount: blocks.length,
+      limit: EMBEDDED_INITIAL_BLOCK_LIMIT,
+      highlightAllBlocks: shouldHighlightAllBlocks,
+    });
+    blocks = blocks.slice(0, EMBEDDED_INITIAL_BLOCK_LIMIT);
+  } else if (!visibleRanges.length && blocks.length > EMBEDDED_VISIBLE_BLOCK_LIMIT) {
     blocks = blocks.slice(0, EMBEDDED_VISIBLE_BLOCK_LIMIT);
   }
   if (!blocks.length) {
@@ -7133,6 +7127,7 @@ const updateMarkdownFenceSyntaxHighlight = async (targetEditor, reason) => {
     blockCount: blocks.length,
     hasCursorBlock: !!ctx,
     visibleRangeCount: visibleRanges.length,
+    highlightAllBlocks: shouldHighlightAllBlocks,
     versionId,
   });
 
@@ -8288,6 +8283,27 @@ const buildEmbeddedReplaceRange = (model, position, embeddedCtx, virtualModel) =
 const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, context) => {
   if (!embeddedCtx) return [];
   const hostEditor = getEmbeddedHostEditor()
+  const completionKey = buildEmbeddedCompletionCacheKey(model, position, embeddedCtx)
+  if (completionKey && embeddedCompletionInFlightKeys.has(completionKey)) {
+    const cachedState = hostEditor ? embeddedCompletionCacheStates.get(hostEditor) : null
+    const cachedSuggestions = cachedState?.key === completionKey && Array.isArray(cachedState?.suggestions)
+      ? cachedState.suggestions
+      : []
+    logger.debug('[EmbeddedLsp] skipped recursive embedded completion request', {
+      languageId: embeddedCtx.languageId,
+      completionKey,
+      cachedSuggestionCount: cachedSuggestions.length,
+      lineNumber: position?.lineNumber || 0,
+      column: position?.column || 0,
+    })
+    return cachedSuggestions
+  }
+  if (completionKey) {
+    embeddedCompletionInFlightKeys.add(completionKey)
+    window.setTimeout(() => {
+      embeddedCompletionInFlightKeys.delete(completionKey)
+    }, 0)
+  }
   const virtualModel = prepareEmbeddedVirtualModel(embeddedCtx);
   if (!virtualModel) return [];
   const ready = await waitForLspConnection(embeddedCtx.languageId, EMBEDDED_LSP_READY_TIMEOUT_MS);
@@ -19172,6 +19188,8 @@ onUnmounted(() => {
     }
   })
   markdownFenceCompletionModels.clear()
+  embeddedCompletionInFlightKeys.clear()
+  embeddedVirtualModelInitKeys.clear()
   clearGlobalMarkdownLanguageFeatureRegistration()
   disposeFeatureDisposables(markdownLanguageFeatureDisposables)
   disposeFeatureDisposables(filesystemPathCompletionDisposables)
@@ -20869,62 +20887,34 @@ onUnmounted(() => {
   color: #d7deea !important;
 }
 
-.guaxi-editor :deep(.md-fence-token-base) { color: #383a42; }
-.guaxi-editor :deep(.md-fence-token-keyword) { color: #a626a4; }
-.guaxi-editor :deep(.md-fence-token-string) { color: #22863a; }
-.guaxi-editor :deep(.md-fence-token-number) { color: #986801; }
-.guaxi-editor :deep(.md-fence-token-boolean) { color: #986801; }
-.guaxi-editor :deep(.md-fence-token-comment) { color: #6a737d; }
-.guaxi-editor :deep(.md-fence-token-type) { color: #6f42c1; }
-.guaxi-editor :deep(.md-fence-token-class) { color: #6f42c1; }
-.guaxi-editor :deep(.md-fence-token-function) { color: #0969da; }
-.guaxi-editor :deep(.md-fence-token-method) { color: #007c89; }
-.guaxi-editor :deep(.md-fence-token-parameter) { color: #9a6700; }
-.guaxi-editor :deep(.md-fence-token-variable) { color: #0550ae; }
-.guaxi-editor :deep(.md-fence-token-constant) { color: #986801; }
-.guaxi-editor :deep(.md-fence-token-regexp) { color: #007c89; }
-.guaxi-editor :deep(.md-fence-token-property) { color: #007c89; }
-.guaxi-editor :deep(.md-fence-token-namespace) { color: #6f42c1; }
-.guaxi-editor :deep(.md-fence-token-macro) { color: #a626a4; }
-.guaxi-editor :deep(.md-fence-token-tag) { color: #e06c75; }
-.guaxi-editor :deep(.md-fence-token-attribute) { color: #9a6700; }
-.guaxi-editor :deep(.md-fence-token-builtin) { color: #0969da; }
-.guaxi-editor :deep(.md-fence-token-decorator) { color: #a626a4; }
-.guaxi-editor :deep(.md-fence-token-operator) { color: #007c89; }
-.guaxi-editor :deep(.md-fence-token-delimiter) { color: #383a42; }
-
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-base) { color: #abb2bf; }
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-keyword) { color: #c678dd; }
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-string) { color: #98c379; }
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-number) { color: #d19a66; }
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-boolean) { color: #d19a66; }
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-comment) { color: #5c6370; }
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-type) { color: #e5c07b; }
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-class) { color: #e5c07b; }
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-function) { color: #61afef; }
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-method) { color: #56b6c2; }
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-parameter) { color: #d19a66; }
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-variable) { color: #d7deea; }
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-constant) { color: #d19a66; }
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-regexp) { color: #56b6c2; }
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-property) { color: #56b6c2; }
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-namespace) { color: #e5c07b; }
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-macro) { color: #c678dd; }
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-tag) { color: #e06c75; }
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-attribute) { color: #d19a66; }
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-builtin) { color: #56b6c2; }
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-decorator) { color: #c678dd; }
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-operator) { color: #56b6c2; }
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-delimiter) { color: #abb2bf; }
+.guaxi-editor :deep(.md-fence-token-base) { color: var(--guaxi-syntax-base); }
+.guaxi-editor :deep(.md-fence-token-keyword) { color: var(--guaxi-syntax-keyword); }
+.guaxi-editor :deep(.md-fence-token-string) { color: var(--guaxi-syntax-string); }
+.guaxi-editor :deep(.md-fence-token-number) { color: var(--guaxi-syntax-number); }
+.guaxi-editor :deep(.md-fence-token-boolean) { color: var(--guaxi-syntax-boolean); }
+.guaxi-editor :deep(.md-fence-token-comment) { color: var(--guaxi-syntax-comment); }
+.guaxi-editor :deep(.md-fence-token-type) { color: var(--guaxi-syntax-type); }
+.guaxi-editor :deep(.md-fence-token-class) { color: var(--guaxi-syntax-class); }
+.guaxi-editor :deep(.md-fence-token-function) { color: var(--guaxi-syntax-function); }
+.guaxi-editor :deep(.md-fence-token-method) { color: var(--guaxi-syntax-method); }
+.guaxi-editor :deep(.md-fence-token-parameter) { color: var(--guaxi-syntax-parameter); }
+.guaxi-editor :deep(.md-fence-token-variable) { color: var(--guaxi-syntax-variable); }
+.guaxi-editor :deep(.md-fence-token-constant) { color: var(--guaxi-syntax-constant); }
+.guaxi-editor :deep(.md-fence-token-regexp) { color: var(--guaxi-syntax-regexp); }
+.guaxi-editor :deep(.md-fence-token-property) { color: var(--guaxi-syntax-property); }
+.guaxi-editor :deep(.md-fence-token-namespace) { color: var(--guaxi-syntax-namespace); }
+.guaxi-editor :deep(.md-fence-token-macro) { color: var(--guaxi-syntax-macro); }
+.guaxi-editor :deep(.md-fence-token-tag) { color: var(--guaxi-syntax-tag); }
+.guaxi-editor :deep(.md-fence-token-attribute) { color: var(--guaxi-syntax-attribute); }
+.guaxi-editor :deep(.md-fence-token-builtin) { color: var(--guaxi-syntax-builtin); }
+.guaxi-editor :deep(.md-fence-token-decorator) { color: var(--guaxi-syntax-decorator); }
+.guaxi-editor :deep(.md-fence-token-operator) { color: var(--guaxi-syntax-operator); }
+.guaxi-editor :deep(.md-fence-token-delimiter) { color: var(--guaxi-syntax-punctuation); }
 
 /* 设计说明：
    1. 未标注语言的 Markdown fenced code block 会按 plaintext 走整行 base 装饰。
    2. Monaco 装饰类位于编辑器内部 DOM，Vue scoped CSS 的 :deep + :global 组合在部分加载顺序下会被亮色 base 覆盖。
    3. 这里使用完整全局选择器和 !important 兜底，确保暗色模式下纯文本代码块始终保持可读亮色。 */
-:global(:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-base) {
-  color: #abb2bf !important;
-}
-
 .editor-split-wrapper {
   flex: 1;
   display: flex;
@@ -21725,53 +21715,29 @@ onUnmounted(() => {
  *    `!important` 而 token 颜色没有同级优先级，最终看到的就会是单色代码块。
  * 3. 这里放在普通 `<style>` 块中，用全局选择器和 `!important` 让 token 颜色稳定覆盖 base 兜底色。
  */
-.guaxi-editor .monaco-editor .md-fence-token-base { color: #383a42 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-keyword { color: #a626a4 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-string { color: #22863a !important; }
-.guaxi-editor .monaco-editor .md-fence-token-number { color: #986801 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-boolean { color: #986801 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-comment { color: #6a737d !important; }
-.guaxi-editor .monaco-editor .md-fence-token-type { color: #6f42c1 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-class { color: #6f42c1 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-function { color: #0969da !important; }
-.guaxi-editor .monaco-editor .md-fence-token-method { color: #007c89 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-parameter { color: #9a6700 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-variable { color: #0550ae !important; }
-.guaxi-editor .monaco-editor .md-fence-token-constant { color: #986801 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-regexp { color: #007c89 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-property { color: #007c89 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-namespace { color: #6f42c1 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-macro { color: #a626a4 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-tag { color: #e45649 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-attribute { color: #9a6700 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-builtin { color: #0969da !important; }
-.guaxi-editor .monaco-editor .md-fence-token-decorator { color: #a626a4 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-operator { color: #007c89 !important; }
-.guaxi-editor .monaco-editor .md-fence-token-delimiter { color: #383a42 !important; }
-
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-base { color: #abb2bf !important; }
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-keyword { color: #c678dd !important; }
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-string { color: #98c379 !important; }
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-number { color: #d19a66 !important; }
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-boolean { color: #d19a66 !important; }
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-comment { color: #5c6370 !important; }
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-type { color: #e5c07b !important; }
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-class { color: #e5c07b !important; }
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-function { color: #61afef !important; }
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-method { color: #56b6c2 !important; }
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-parameter { color: #d19a66 !important; }
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-variable { color: #d7deea !important; }
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-constant { color: #d19a66 !important; }
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-regexp { color: #56b6c2 !important; }
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-property { color: #56b6c2 !important; }
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-namespace { color: #e5c07b !important; }
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-macro { color: #c678dd !important; }
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-tag { color: #e06c75 !important; }
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-attribute { color: #d19a66 !important; }
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-builtin { color: #56b6c2 !important; }
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-decorator { color: #c678dd !important; }
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-operator { color: #56b6c2 !important; }
-:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-delimiter { color: #abb2bf !important; }
+.guaxi-editor .monaco-editor .md-fence-token-base { color: var(--guaxi-syntax-base) !important; }
+.guaxi-editor .monaco-editor .md-fence-token-keyword { color: var(--guaxi-syntax-keyword) !important; }
+.guaxi-editor .monaco-editor .md-fence-token-string { color: var(--guaxi-syntax-string) !important; }
+.guaxi-editor .monaco-editor .md-fence-token-number { color: var(--guaxi-syntax-number) !important; }
+.guaxi-editor .monaco-editor .md-fence-token-boolean { color: var(--guaxi-syntax-boolean) !important; }
+.guaxi-editor .monaco-editor .md-fence-token-comment { color: var(--guaxi-syntax-comment) !important; }
+.guaxi-editor .monaco-editor .md-fence-token-type { color: var(--guaxi-syntax-type) !important; }
+.guaxi-editor .monaco-editor .md-fence-token-class { color: var(--guaxi-syntax-class) !important; }
+.guaxi-editor .monaco-editor .md-fence-token-function { color: var(--guaxi-syntax-function) !important; }
+.guaxi-editor .monaco-editor .md-fence-token-method { color: var(--guaxi-syntax-method) !important; }
+.guaxi-editor .monaco-editor .md-fence-token-parameter { color: var(--guaxi-syntax-parameter) !important; }
+.guaxi-editor .monaco-editor .md-fence-token-variable { color: var(--guaxi-syntax-variable) !important; }
+.guaxi-editor .monaco-editor .md-fence-token-constant { color: var(--guaxi-syntax-constant) !important; }
+.guaxi-editor .monaco-editor .md-fence-token-regexp { color: var(--guaxi-syntax-regexp) !important; }
+.guaxi-editor .monaco-editor .md-fence-token-property { color: var(--guaxi-syntax-property) !important; }
+.guaxi-editor .monaco-editor .md-fence-token-namespace { color: var(--guaxi-syntax-namespace) !important; }
+.guaxi-editor .monaco-editor .md-fence-token-macro { color: var(--guaxi-syntax-macro) !important; }
+.guaxi-editor .monaco-editor .md-fence-token-tag { color: var(--guaxi-syntax-tag) !important; }
+.guaxi-editor .monaco-editor .md-fence-token-attribute { color: var(--guaxi-syntax-attribute) !important; }
+.guaxi-editor .monaco-editor .md-fence-token-builtin { color: var(--guaxi-syntax-builtin) !important; }
+.guaxi-editor .monaco-editor .md-fence-token-decorator { color: var(--guaxi-syntax-decorator) !important; }
+.guaxi-editor .monaco-editor .md-fence-token-operator { color: var(--guaxi-syntax-operator) !important; }
+.guaxi-editor .monaco-editor .md-fence-token-delimiter { color: var(--guaxi-syntax-punctuation) !important; }
 
 .guaxi-editor .monaco-editor .squiggly-inline-unnecessary,
 .guaxi-editor .monaco-editor .squiggly-inline-deprecated,

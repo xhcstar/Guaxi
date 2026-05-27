@@ -29,6 +29,11 @@ import { createLogger } from '../../utils/logger'
 import { getLspConnectionState, initLspClient, waitForLspConnection } from '../../monaco/lspClient'
 import { initTextmate } from '../../monaco/textmateLoader'
 import {
+  GUAXI_SYNTAX_TOKEN_TYPES,
+  getGuaxiSyntaxClassForToken,
+  mapTreeSitterCaptureToGuaxiToken,
+} from '../../monaco/guaxiSyntaxTokens'
+import {
   replaceModelContentPreserveUndo,
   retainVsCodeTextModel,
   releaseVsCodeTextModel,
@@ -80,64 +85,12 @@ let treeSitterDecorationSeq = 1
 
 const NOTEBOOK_PYTHON_SUGGEST_TRIGGER_PATTERN = /[A-Za-z0-9_.:(\[,'"@]/
 
-const NOTEBOOK_TREE_SITTER_TOKEN_CLASS_BY_TYPE = {
-  comment: 'nb-python-token-comment',
-  string: 'nb-python-token-string',
-  keyword: 'nb-python-token-keyword',
-  number: 'nb-python-token-number',
-  regexp: 'nb-python-token-regexp',
-  operator: 'nb-python-token-operator',
-  punctuation: 'nb-python-token-delimiter',
-  type: 'nb-python-token-type',
-  function: 'nb-python-token-function',
-  method: 'nb-python-token-method',
-  property: 'nb-python-token-property',
-  variable: 'nb-python-token-variable',
-  parameter: 'nb-python-token-parameter',
-  namespace: 'nb-python-token-namespace',
-  class: 'nb-python-token-class',
-  boolean: 'nb-python-token-boolean',
-  constant: 'nb-python-token-constant',
-  attribute: 'nb-python-token-attribute',
-  builtin: 'nb-python-token-builtin',
-  macro: 'nb-python-token-macro',
-  decorator: 'nb-python-token-decorator',
-  label: 'nb-python-token-keyword',
-}
-
-const mapNotebookTreeSitterTokenType = (tokenType) => {
-  const type = String(tokenType || '').toLowerCase()
-  // 设计说明：
-  // 1. 这里和编辑模式 fenced code 使用同一套 Tree-sitter capture 归类规则。
-  // 2. Python cell 额外用 decoration 覆盖 Monaco 默认 tokenizer，避免亮色模式下 cell 与编辑模式颜色漂移。
-  // 3. 先识别 method/property/parameter 等细粒度类型，再落到 variable，保证对象、方法、参数层次可见。
-  if (type.includes('comment')) return 'comment'
-  if (type.includes('string.escape') || type.includes('escape')) return 'string'
-  if (type.includes('string')) return 'string'
-  if (type.includes('keyword.operator')) return 'operator'
-  if (type.includes('keyword')) return 'keyword'
-  if (type.includes('number')) return 'number'
-  if (type.includes('boolean')) return 'boolean'
-  if (type.includes('regexp')) return 'regexp'
-  if (type.includes('operator')) return 'operator'
-  if (type.includes('punctuation') || type.includes('delimiter') || type.includes('bracket')) return 'punctuation'
-  if (type.includes('constructor')) return 'class'
-  if (type.includes('class')) return 'class'
-  if (type.includes('type') || type.includes('interface') || type.includes('enum') || type.includes('struct')) return 'type'
-  if (type.includes('variable.parameter') || type.includes('parameter') || type.includes('argument')) return 'parameter'
-  if (type.includes('variable.member') || type.includes('property') || type.includes('member') || type.includes('field')) return 'property'
-  if (type.includes('function.method') || type.includes('method')) return 'method'
-  if (type.includes('function')) return 'function'
-  if (type.includes('variable.builtin') || type.includes('builtin') || type.includes('support')) return 'builtin'
-  if (type.includes('macro')) return 'macro'
-  if (type.includes('module') || type.includes('namespace') || type.includes('package')) return 'namespace'
-  if (type.includes('tag')) return 'class'
-  if (type.includes('attribute')) return 'attribute'
-  if (type.includes('constant')) return 'constant'
-  if (type.includes('decorator') || type.includes('annotation')) return 'decorator'
-  if (type.includes('label')) return 'label'
-  return 'variable'
-}
+const NOTEBOOK_TREE_SITTER_TOKEN_CLASS_BY_TYPE = Object.fromEntries(
+  GUAXI_SYNTAX_TOKEN_TYPES.map((type) => [
+    type,
+    getGuaxiSyntaxClassForToken(type, 'nb-python-token'),
+  ])
+)
 
 const buildNotebookUtf8LineIndex = (text) => {
   const encoder = new TextEncoder()
@@ -195,13 +148,16 @@ const buildNotebookTreeSitterDecorations = (activeModel, spans) => {
 
   for (const span of spans || []) {
     if (!span || span.end_byte <= span.start_byte) continue
-    const mappedType = mapNotebookTreeSitterTokenType(span.token_type)
-    const className = NOTEBOOK_TREE_SITTER_TOKEN_CLASS_BY_TYPE[mappedType]
-    if (!className) continue
-
     const start = notebookPositionFromByteOffset(text, index, span.start_byte)
     const end = notebookPositionFromByteOffset(text, index, span.end_byte)
     if (start.line !== end.line) continue
+
+    const mappedType = mapTreeSitterCaptureToGuaxiToken(span.token_type, {
+      sourceText: text,
+      startOffset: index.lineStartOffsets[start.line] + start.column,
+    })
+    const className = NOTEBOOK_TREE_SITTER_TOKEN_CLASS_BY_TYPE[mappedType]
+    if (!className) continue
 
     const startColumn = start.column + 1
     const endColumn = Math.max(startColumn, end.column + 1)
@@ -942,26 +898,26 @@ defineExpose({
    1. Python cell 在亮色模式下补一层 Tree-sitter decoration，对齐编辑模式代码围栏的 md-fence-token-* 观感。
    2. 暗色模式不叠加这层 decoration，避免 Monaco semantic token 与 decoration 同时染色造成偏蓝。
    3. 两种模式仍然使用同一个 Tree-sitter 后端，只是暗色直接走 Monaco semantic token，亮色额外补齐可读性。 */
-.guaxi-notebook-python-editor :deep(.nb-python-token-keyword) { color: #a626a4 !important; }
-.guaxi-notebook-python-editor :deep(.nb-python-token-string) { color: #22863a !important; }
-.guaxi-notebook-python-editor :deep(.nb-python-token-number) { color: #986801 !important; }
-.guaxi-notebook-python-editor :deep(.nb-python-token-boolean) { color: #986801 !important; }
-.guaxi-notebook-python-editor :deep(.nb-python-token-comment) { color: #6a737d !important; }
-.guaxi-notebook-python-editor :deep(.nb-python-token-type) { color: #6f42c1 !important; }
-.guaxi-notebook-python-editor :deep(.nb-python-token-class) { color: #6f42c1 !important; }
-.guaxi-notebook-python-editor :deep(.nb-python-token-function) { color: #0969da !important; }
-.guaxi-notebook-python-editor :deep(.nb-python-token-method) { color: #007c89 !important; }
-.guaxi-notebook-python-editor :deep(.nb-python-token-parameter) { color: #9a6700 !important; }
-.guaxi-notebook-python-editor :deep(.nb-python-token-variable) { color: #0550ae !important; }
-.guaxi-notebook-python-editor :deep(.nb-python-token-constant) { color: #986801 !important; }
-.guaxi-notebook-python-editor :deep(.nb-python-token-regexp) { color: #007c89 !important; }
-.guaxi-notebook-python-editor :deep(.nb-python-token-property) { color: #007c89 !important; }
-.guaxi-notebook-python-editor :deep(.nb-python-token-namespace) { color: #6f42c1 !important; }
-.guaxi-notebook-python-editor :deep(.nb-python-token-macro) { color: #a626a4 !important; }
-.guaxi-notebook-python-editor :deep(.nb-python-token-attribute) { color: #9a6700 !important; }
-.guaxi-notebook-python-editor :deep(.nb-python-token-builtin) { color: #0969da !important; }
-.guaxi-notebook-python-editor :deep(.nb-python-token-decorator) { color: #a626a4 !important; }
-.guaxi-notebook-python-editor :deep(.nb-python-token-operator) { color: #007c89 !important; }
-.guaxi-notebook-python-editor :deep(.nb-python-token-delimiter) { color: #383a42 !important; }
+.guaxi-notebook-python-editor :deep(.nb-python-token-keyword) { color: var(--guaxi-syntax-keyword) !important; }
+.guaxi-notebook-python-editor :deep(.nb-python-token-string) { color: var(--guaxi-syntax-string) !important; }
+.guaxi-notebook-python-editor :deep(.nb-python-token-number) { color: var(--guaxi-syntax-number) !important; }
+.guaxi-notebook-python-editor :deep(.nb-python-token-boolean) { color: var(--guaxi-syntax-boolean) !important; }
+.guaxi-notebook-python-editor :deep(.nb-python-token-comment) { color: var(--guaxi-syntax-comment) !important; }
+.guaxi-notebook-python-editor :deep(.nb-python-token-type) { color: var(--guaxi-syntax-type) !important; }
+.guaxi-notebook-python-editor :deep(.nb-python-token-class) { color: var(--guaxi-syntax-class) !important; }
+.guaxi-notebook-python-editor :deep(.nb-python-token-function) { color: var(--guaxi-syntax-function) !important; }
+.guaxi-notebook-python-editor :deep(.nb-python-token-method) { color: var(--guaxi-syntax-method) !important; }
+.guaxi-notebook-python-editor :deep(.nb-python-token-parameter) { color: var(--guaxi-syntax-parameter) !important; }
+.guaxi-notebook-python-editor :deep(.nb-python-token-variable) { color: var(--guaxi-syntax-variable) !important; }
+.guaxi-notebook-python-editor :deep(.nb-python-token-constant) { color: var(--guaxi-syntax-constant) !important; }
+.guaxi-notebook-python-editor :deep(.nb-python-token-regexp) { color: var(--guaxi-syntax-regexp) !important; }
+.guaxi-notebook-python-editor :deep(.nb-python-token-property) { color: var(--guaxi-syntax-property) !important; }
+.guaxi-notebook-python-editor :deep(.nb-python-token-namespace) { color: var(--guaxi-syntax-namespace) !important; }
+.guaxi-notebook-python-editor :deep(.nb-python-token-macro) { color: var(--guaxi-syntax-macro) !important; }
+.guaxi-notebook-python-editor :deep(.nb-python-token-attribute) { color: var(--guaxi-syntax-attribute) !important; }
+.guaxi-notebook-python-editor :deep(.nb-python-token-builtin) { color: var(--guaxi-syntax-builtin) !important; }
+.guaxi-notebook-python-editor :deep(.nb-python-token-decorator) { color: var(--guaxi-syntax-decorator) !important; }
+.guaxi-notebook-python-editor :deep(.nb-python-token-operator) { color: var(--guaxi-syntax-operator) !important; }
+.guaxi-notebook-python-editor :deep(.nb-python-token-delimiter) { color: var(--guaxi-syntax-punctuation) !important; }
 
 </style>

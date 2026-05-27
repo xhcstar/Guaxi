@@ -1,34 +1,17 @@
 import * as monaco from 'monaco-editor'
 import { invoke } from '@tauri-apps/api/core'
+import {
+  GUAXI_SYNTAX_TOKEN_TYPES,
+  getGuaxiSyntaxTokenPriority,
+  mapTreeSitterCaptureToGuaxiToken,
+} from './guaxiSyntaxTokens'
 
 const treeSitterSemanticReadyLanguages = new Set<string>()
 const treeSitterSemanticLogged = new Set<string>()
+const treeSitterSemanticUnsupportedLanguages = new Set<string>()
 let treeSitterSemanticRequestSeq = 1
 
-const treeSitterSemanticTokenTypes = [
-  'comment',
-  'string',
-  'keyword',
-  'number',
-  'regexp',
-  'operator',
-  'punctuation',
-  'type',
-  'function',
-  'method',
-  'property',
-  'variable',
-  'parameter',
-  'namespace',
-  'class',
-  'boolean',
-  'constant',
-  'attribute',
-  'builtin',
-  'macro',
-  'decorator',
-  'label',
-]
+const treeSitterSemanticTokenTypes = GUAXI_SYNTAX_TOKEN_TYPES
 
 const treeSitterSemanticLegend: monaco.languages.SemanticTokensLegend = {
   tokenTypes: treeSitterSemanticTokenTypes,
@@ -78,54 +61,6 @@ const normalizeTreeSitterLanguageId = (languageId: string) => {
   if (id === 'javascriptreact') return 'javascript'
   if (id === 'typescriptreact') return 'tsx'
   return id
-}
-
-const mapTreeSitterTokenType = (tokenType: string) => {
-  const type = String(tokenType || '').toLowerCase()
-  // 设计说明：
-  // 1. tree-sitter-highlight 返回的是 capture 名称，例如 `function.method`、`variable.member`、`variable.parameter`。
-  // 2. Monaco semantic token legend 需要稳定的有限类型，因此在这里把细分 capture 映射到主题可控的语义槽。
-  // 3. 顺序很重要：先识别更具体的 Python/JS/Rust 捕获，再落到 variable，否则函数、对象成员和参数都会混成一种颜色。
-  if (type.includes('comment')) return 'comment'
-  if (type.includes('string.escape') || type.includes('escape')) return 'string'
-  if (type.includes('string')) return 'string'
-  if (type.includes('keyword.operator')) return 'operator'
-  if (type.includes('keyword')) return 'keyword'
-  if (type.includes('number')) return 'number'
-  if (type.includes('boolean')) return 'boolean'
-  if (type.includes('regexp')) return 'regexp'
-  if (type.includes('operator')) return 'operator'
-  if (type.includes('punctuation')) return 'punctuation'
-  if (type.includes('constructor')) return 'class'
-  if (type.includes('class')) return 'class'
-  if (type.includes('type') || type.includes('interface') || type.includes('enum') || type.includes('struct')) return 'type'
-  if (type.includes('variable.parameter') || type.includes('parameter') || type.includes('argument')) return 'parameter'
-  if (type.includes('variable.member') || type.includes('property') || type.includes('member') || type.includes('field')) return 'property'
-  if (type.includes('function.method') || type.includes('method')) return 'method'
-  if (type.includes('function')) return 'function'
-  if (type.includes('variable.builtin') || type.includes('builtin') || type.includes('support')) return 'builtin'
-  if (type.includes('macro')) return 'macro'
-  if (type.includes('module')) return 'namespace'
-  if (type.includes('tag')) return 'class'
-  if (type.includes('attribute')) return 'attribute'
-  if (type.includes('constant')) return 'constant'
-  if (type.includes('decorator')) return 'decorator'
-  if (type.includes('label')) return 'label'
-  return 'variable'
-}
-
-const getSemanticTokenPriority = (tokenType: string) => {
-  switch (tokenType) {
-    case 'method':
-    case 'property':
-      return 80
-    case 'function':
-      return 60
-    case 'variable':
-      return 40
-    default:
-      return 50
-  }
 }
 
 const buildUtf8LineIndex = (text: string) => {
@@ -187,39 +122,23 @@ const lineLengthAt = (model: monaco.editor.ITextModel, zeroBasedLine: number) =>
   return model.getLineMaxColumn(lineNumber) - 1
 }
 
-const isDottedMemberSemanticToken = (
-  model: monaco.editor.ITextModel,
-  zeroBasedLine: number,
-  zeroBasedColumn: number
-) => {
-  try {
-    const offset = model.getOffsetAt({
-      lineNumber: zeroBasedLine + 1,
-      column: zeroBasedColumn + 1,
-    })
-    const text = model.getValue()
-    let cursor = offset - 1
-    while (cursor >= 0 && /\s/.test(text[cursor] || '')) cursor -= 1
-    return text[cursor] === '.'
-  } catch {
-    return false
-  }
-}
-
 const mapTreeSitterSemanticTokenType = (
   model: monaco.editor.ITextModel,
   span: { start_byte: number; end_byte: number; token_type: string },
   start: { line: number; column: number }
 ) => {
-  const mapped = mapTreeSitterTokenType(span.token_type)
   // 设计说明：
-  // 1. Python tree-sitter 对 `obj.method()` 经常同时具有“被调用函数”和“对象成员”语义。
-  // 2. Markdown fence 的 decoration 可以让成员色覆盖函数色；Monaco semantic token 不能自然叠加同一区间。
-  // 3. 因此在 semantic token 编码处按源码上下文把点号后的 function 归为 method，和编辑模式最终显示保持一致。
-  if (mapped === 'function' && isDottedMemberSemanticToken(model, start.line, start.column)) {
-    return 'method'
-  }
-  return mapped
+  // 1. semantic token、Markdown fence 和 Notebook light decoration 共用 `mapTreeSitterCaptureToGuaxiToken`。
+  // 2. 这里额外传入源码与起始偏移，让共享 mapper 能把 `obj.method()` 这类点号成员调用归一为 method。
+  // 3. 这样所有已支持语言都先进入同一套 Guaxi token 类型，再交给各自渲染通道。
+  const startOffset = model.getOffsetAt({
+    lineNumber: start.line + 1,
+    column: start.column + 1,
+  })
+  return mapTreeSitterCaptureToGuaxiToken(span.token_type, {
+    sourceText: model.getValue(),
+    startOffset,
+  })
 }
 
 const upsertSemanticTokenRow = (
@@ -232,7 +151,7 @@ const upsertSemanticTokenRow = (
 ) => {
   if (length <= 0) return
   const key = `${line}:${start}:${length}`
-  const priority = getSemanticTokenPriority(tokenType)
+  const priority = getGuaxiSyntaxTokenPriority(tokenType)
   const existing = rowsByRange.get(key)
   if (existing && existing.priority > priority) return
   rowsByRange.set(key, {
@@ -294,10 +213,14 @@ function ensureTreeSitterSemanticProvider(languageId: string) {
   const normalized = normalizeTreeSitterLanguageId(lang)
 
   if (!treeSitterSemanticLanguages.has(normalized)) {
-    logTreeSitterHighlight('warn', 'tree-sitter backend does not support Monaco language', {
-      languageId: lang,
-      normalized,
-    }, true)
+    const unsupportedKey = normalized || lang
+    if (!treeSitterSemanticUnsupportedLanguages.has(unsupportedKey)) {
+      treeSitterSemanticUnsupportedLanguages.add(unsupportedKey)
+      logTreeSitterHighlight('debug', 'tree-sitter backend does not support Monaco language', {
+        languageId: lang,
+        normalized,
+      })
+    }
     return
   }
 
@@ -361,7 +284,7 @@ function ensureTreeSitterSemanticProvider(languageId: string) {
 
         const encoded = encodeTreeSitterSemanticTokens(model, response.spans || [])
         const mappedTokenTypeCounts = (response.spans || []).reduce<Record<string, number>>((acc, span) => {
-          const mappedType = mapTreeSitterTokenType(span.token_type)
+          const mappedType = mapTreeSitterCaptureToGuaxiToken(span.token_type)
           acc[mappedType] = (acc[mappedType] || 0) + 1
           return acc
         }, {})

@@ -340,8 +340,21 @@ export const replaceModelContentPreserveUndo = (
   if (!model || model.isDisposed?.()) return model
 
   const nextContent = String(content ?? '')
-  const currentContent = String(model.getValue?.() || '')
-  if (currentContent === nextContent) return model
+  let currentContent = ''
+  try {
+    currentContent = String(model.getValue?.() || '')
+    if (currentContent === nextContent) return model
+  } catch (error) {
+    logger.warn(`${logPrefix} getValue failed, force content reset`, {
+      uri,
+      owner,
+      reason,
+      length: nextContent.length,
+      error,
+    })
+    model.setValue(nextContent)
+    return model
+  }
 
   const fullRange = typeof model.getFullModelRange === 'function'
     ? model.getFullModelRange()

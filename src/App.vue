@@ -84,6 +84,29 @@ const themeOverrides = computed(() => {
   --guaxi-text-primary: #1f2328;
   --guaxi-text-secondary: #57606a;
   --guaxi-header-shadow: 0px 1px 2px rgba(0, 0, 0, 0.06);
+  --guaxi-syntax-base: #383a42;
+  --guaxi-syntax-comment: #6a737d;
+  --guaxi-syntax-string: #22863a;
+  --guaxi-syntax-keyword: #a626a4;
+  --guaxi-syntax-number: #986801;
+  --guaxi-syntax-boolean: #986801;
+  --guaxi-syntax-regexp: #007c89;
+  --guaxi-syntax-operator: #007c89;
+  --guaxi-syntax-punctuation: #383a42;
+  --guaxi-syntax-type: #6f42c1;
+  --guaxi-syntax-class: #6f42c1;
+  --guaxi-syntax-function: #0969da;
+  --guaxi-syntax-method: #007c89;
+  --guaxi-syntax-property: #007c89;
+  --guaxi-syntax-parameter: #9a6700;
+  --guaxi-syntax-variable: #0550ae;
+  --guaxi-syntax-constant: #986801;
+  --guaxi-syntax-namespace: #6f42c1;
+  --guaxi-syntax-macro: #a626a4;
+  --guaxi-syntax-tag: #e45649;
+  --guaxi-syntax-attribute: #9a6700;
+  --guaxi-syntax-builtin: #0969da;
+  --guaxi-syntax-decorator: #a626a4;
 }
 
 :root[data-guaxi-theme='dark'] {
@@ -95,6 +118,29 @@ const themeOverrides = computed(() => {
   --guaxi-text-primary: #abb2bf;
   --guaxi-text-secondary: #9da5b4;
   --guaxi-header-shadow: 0px 2px 4px rgba(0, 0, 0, 0.35);
+  --guaxi-syntax-base: #abb2bf;
+  --guaxi-syntax-comment: #5c6370;
+  --guaxi-syntax-string: #98c379;
+  --guaxi-syntax-keyword: #c678dd;
+  --guaxi-syntax-number: #d19a66;
+  --guaxi-syntax-boolean: #d19a66;
+  --guaxi-syntax-regexp: #56b6c2;
+  --guaxi-syntax-operator: #56b6c2;
+  --guaxi-syntax-punctuation: #abb2bf;
+  --guaxi-syntax-type: #e5c07b;
+  --guaxi-syntax-class: #e5c07b;
+  --guaxi-syntax-function: #61afef;
+  --guaxi-syntax-method: #56b6c2;
+  --guaxi-syntax-property: #56b6c2;
+  --guaxi-syntax-parameter: #d19a66;
+  --guaxi-syntax-variable: #d7deea;
+  --guaxi-syntax-constant: #d19a66;
+  --guaxi-syntax-namespace: #e5c07b;
+  --guaxi-syntax-macro: #c678dd;
+  --guaxi-syntax-tag: #e06c75;
+  --guaxi-syntax-attribute: #d19a66;
+  --guaxi-syntax-builtin: #56b6c2;
+  --guaxi-syntax-decorator: #c678dd;
 }
 
 html,
