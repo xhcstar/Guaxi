@@ -114,6 +114,20 @@ const mapTreeSitterTokenType = (tokenType: string) => {
   return 'variable'
 }
 
+const getSemanticTokenPriority = (tokenType: string) => {
+  switch (tokenType) {
+    case 'method':
+    case 'property':
+      return 80
+    case 'function':
+      return 60
+    case 'variable':
+      return 40
+    default:
+      return 50
+  }
+}
+
 const buildUtf8LineIndex = (text: string) => {
   const encoder = new TextEncoder()
   const lineStartBytes = [0]
@@ -173,36 +187,92 @@ const lineLengthAt = (model: monaco.editor.ITextModel, zeroBasedLine: number) =>
   return model.getLineMaxColumn(lineNumber) - 1
 }
 
+const isDottedMemberSemanticToken = (
+  model: monaco.editor.ITextModel,
+  zeroBasedLine: number,
+  zeroBasedColumn: number
+) => {
+  try {
+    const offset = model.getOffsetAt({
+      lineNumber: zeroBasedLine + 1,
+      column: zeroBasedColumn + 1,
+    })
+    const text = model.getValue()
+    let cursor = offset - 1
+    while (cursor >= 0 && /\s/.test(text[cursor] || '')) cursor -= 1
+    return text[cursor] === '.'
+  } catch {
+    return false
+  }
+}
+
+const mapTreeSitterSemanticTokenType = (
+  model: monaco.editor.ITextModel,
+  span: { start_byte: number; end_byte: number; token_type: string },
+  start: { line: number; column: number }
+) => {
+  const mapped = mapTreeSitterTokenType(span.token_type)
+  // 设计说明：
+  // 1. Python tree-sitter 对 `obj.method()` 经常同时具有“被调用函数”和“对象成员”语义。
+  // 2. Markdown fence 的 decoration 可以让成员色覆盖函数色；Monaco semantic token 不能自然叠加同一区间。
+  // 3. 因此在 semantic token 编码处按源码上下文把点号后的 function 归为 method，和编辑模式最终显示保持一致。
+  if (mapped === 'function' && isDottedMemberSemanticToken(model, start.line, start.column)) {
+    return 'method'
+  }
+  return mapped
+}
+
+const upsertSemanticTokenRow = (
+  rowsByRange: Map<string, { row: number[]; priority: number }>,
+  line: number,
+  start: number,
+  length: number,
+  tokenIndex: number,
+  tokenType: string
+) => {
+  if (length <= 0) return
+  const key = `${line}:${start}:${length}`
+  const priority = getSemanticTokenPriority(tokenType)
+  const existing = rowsByRange.get(key)
+  if (existing && existing.priority > priority) return
+  rowsByRange.set(key, {
+    row: [line, start, length, tokenIndex, 0],
+    priority,
+  })
+}
+
 const encodeTreeSitterSemanticTokens = (
   model: monaco.editor.ITextModel,
   spans: Array<{ start_byte: number; end_byte: number; token_type: string }>
 ) => {
   const text = model.getValue()
   const index = buildUtf8LineIndex(text)
-  const rows: number[][] = []
+  const rowsByRange = new Map<string, { row: number[]; priority: number }>()
 
   for (const span of spans || []) {
-    const tokenType = mapTreeSitterTokenType(span.token_type)
-    const tokenIndex = treeSitterSemanticTokenTypes.indexOf(tokenType)
-    if (tokenIndex < 0 || span.end_byte <= span.start_byte) continue
-
+    if (span.end_byte <= span.start_byte) continue
     const start = positionFromByteOffset(text, index, span.start_byte)
     const end = positionFromByteOffset(text, index, span.end_byte)
+    const tokenType = mapTreeSitterSemanticTokenType(model, span, start)
+    const tokenIndex = treeSitterSemanticTokenTypes.indexOf(tokenType)
+    if (tokenIndex < 0) continue
+
     if (start.line === end.line) {
       const length = Math.max(0, end.column - start.column)
-      if (length > 0) rows.push([start.line, start.column, length, tokenIndex, 0])
+      upsertSemanticTokenRow(rowsByRange, start.line, start.column, length, tokenIndex, tokenType)
       continue
     }
 
     const firstLength = Math.max(0, lineLengthAt(model, start.line) - start.column)
-    if (firstLength > 0) rows.push([start.line, start.column, firstLength, tokenIndex, 0])
+    upsertSemanticTokenRow(rowsByRange, start.line, start.column, firstLength, tokenIndex, tokenType)
     for (let line = start.line + 1; line < end.line; line += 1) {
       const length = lineLengthAt(model, line)
-      if (length > 0) rows.push([line, 0, length, tokenIndex, 0])
+      upsertSemanticTokenRow(rowsByRange, line, 0, length, tokenIndex, tokenType)
     }
-    if (end.column > 0) rows.push([end.line, 0, end.column, tokenIndex, 0])
+    upsertSemanticTokenRow(rowsByRange, end.line, 0, end.column, tokenIndex, tokenType)
   }
 
+  const rows = Array.from(rowsByRange.values()).map((item) => item.row)
   rows.sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]))
   const data: number[] = []
   let previousLine = 0

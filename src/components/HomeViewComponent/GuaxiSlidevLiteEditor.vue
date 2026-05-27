@@ -185,6 +185,7 @@ import { debounce } from 'lodash-es'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { createLogger } from '../../utils/logger'
+import { GUAXI_MONACO_SEMANTIC_TOKEN_COLORS, GUAXI_MONACO_THEME_RULES } from '../../monaco/guaxiMonacoThemes'
 import { maskPythonCellBlocksForMarkdown } from './utils/guaxiPythonCellSyntax'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useOutlineStore } from '../../stores/outlineStore'
@@ -277,24 +278,10 @@ const ensureGuaxiMonacoThemes = () => {
   monaco.editor.defineTheme('guaxi-light', {
     base: 'vs',
     inherit: true,
-    rules: [
-      { token: 'comment', foreground: 'a0a1a7' },
-      { token: 'keyword', foreground: 'a626a4' },
-      { token: 'string', foreground: '50a14f' },
-      { token: 'number', foreground: '986801' },
-      { token: 'regexp', foreground: '0184bc' },
-      { token: 'type', foreground: 'c18401' },
-      { token: 'delimiter', foreground: '383a42' },
-      { token: 'variable', foreground: 'e45649' },
-      { token: 'parameter', foreground: '4078f2' },
-      { token: 'function', foreground: '4078f2' },
-      { token: 'constant', foreground: '986801' },
-      { token: 'class', foreground: 'c18401' },
-      { token: 'identifier', foreground: '383a42' },
-      { token: 'tag', foreground: 'e45649' },
-      { token: 'attribute.name', foreground: 'c18401' },
-      { token: 'meta.embedded', foreground: 'a0a1a7' }
-    ],
+    // 设计说明：语法 token 色板统一由共享模块提供，避免 Slidev 面板覆盖同名 Monaco theme 后造成 Notebook 高亮漂移。
+    rules: GUAXI_MONACO_THEME_RULES.light,
+    semanticHighlighting: true,
+    semanticTokenColors: GUAXI_MONACO_SEMANTIC_TOKEN_COLORS.light,
     colors: {
       'editor.background': '#fafafa',
       'editor.foreground': '#383a42',
@@ -340,24 +327,10 @@ const ensureGuaxiMonacoThemes = () => {
   monaco.editor.defineTheme('guaxi-dark', {
     base: 'vs-dark',
     inherit: true,
-    rules: [
-      { token: 'comment', foreground: '5c6370' },
-      { token: 'keyword', foreground: 'c678dd' },
-      { token: 'string', foreground: '98c379' },
-      { token: 'number', foreground: 'd19a66' },
-      { token: 'regexp', foreground: '56b6c2' },
-      { token: 'type', foreground: 'e5c07b' },
-      { token: 'delimiter', foreground: 'abb2bf' },
-      { token: 'variable', foreground: 'e06c75' },
-      { token: 'parameter', foreground: '61afef' },
-      { token: 'function', foreground: '61afef' },
-      { token: 'constant', foreground: 'd19a66' },
-      { token: 'class', foreground: 'e5c07b' },
-      { token: 'identifier', foreground: 'abb2bf' },
-      { token: 'tag', foreground: 'e06c75' },
-      { token: 'attribute.name', foreground: 'e5c07b' },
-      { token: 'meta.embedded', foreground: '5c6370' }
-    ],
+    // 设计说明：暗色模式不再维护第二份 token 色板，同名 `guaxi-dark` 无论谁后注册都保持相同 Python 语义色。
+    rules: GUAXI_MONACO_THEME_RULES.dark,
+    semanticHighlighting: true,
+    semanticTokenColors: GUAXI_MONACO_SEMANTIC_TOKEN_COLORS.dark,
     colors: {
       'editor.background': '#282c34',
       'editor.foreground': '#abb2bf',

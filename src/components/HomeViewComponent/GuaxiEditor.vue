@@ -1097,6 +1097,7 @@ import { debounce } from 'lodash-es'
 import * as monaco from 'monaco-editor'
 import { initVimMode } from 'monaco-vim';
 import { initTextmate } from '../../monaco/textmateLoader'
+import { GUAXI_MONACO_SEMANTIC_TOKEN_COLORS, GUAXI_MONACO_THEME_RULES } from '../../monaco/guaxiMonacoThemes'
 import {
   initLspClient,
   disposeAllLspClients,
@@ -8893,63 +8894,10 @@ const initEditor = () => {
   monaco.editor.defineTheme('guaxi-light', {
     base: 'vs',
     inherit: true,
-    rules: [
-      { token: 'comment', foreground: 'a0a1a7' },           // Comment
-      { token: 'keyword', foreground: 'a626a4' },           // Keyword
-      { token: 'string', foreground: '22863a' },           // String
-      { token: 'number', foreground: '986801' },           // Number
-      { token: 'regexp', foreground: '0184bc' },           // RegExp → 用 Operator 相近色
-      { token: 'type', foreground: '6f42c1' },           // Type
-      { token: 'delimiter', foreground: '383a42' },           // Delimiter → Main text color
-      { token: 'variable', foreground: '0550ae' },           // Variable -> light theme still uses a semantic color, not plain text black
-      { token: 'parameter', foreground: '9a6700' },           // Parameter
-      { token: 'function', foreground: '0969da' },           // Function
-      { token: 'constant', foreground: '986801' },           // Constant → Number color
-      { token: 'class', foreground: '6f42c1' },           // Class → Type color
-      { token: 'identifier', foreground: '383a42' },           // Identifier → Main text color
-      { token: 'tag', foreground: 'e45649' },           // Tag → Variable color
-      { token: 'attribute.name', foreground: '9a6700' },           // Attribute name
-      { token: 'meta.embedded', foreground: 'a0a1a7' }            // Meta embedded → Comment color
-    ],
+    // 设计说明：多个组件会重复注册同名 guaxi theme，语法 token 色板必须共用同一份定义。
+    rules: GUAXI_MONACO_THEME_RULES.light,
     semanticHighlighting: true,
-    semanticTokenColors: {
-      comment: '#a0a1a7',
-      string: '#22863a',
-      keyword: '#a626a4',
-      number: '#986801',
-      regexp: '#0184bc',
-      operator: '#0184bc',
-      punctuation: '#383a42',
-      'punctuation.definition': '#383a42',
-      'punctuation.bracket': '#383a42',
-      class: '#6f42c1',
-      enum: '#6f42c1',
-      interface: '#6f42c1',
-      type: '#6f42c1',
-      typeParameter: '#6f42c1',
-      namespace: '#6f42c1',
-      struct: '#6f42c1',
-      function: '#0969da',
-      method: '#007c89',
-      // 设计说明：
-      // 1. 编辑模式代码围栏和探索者 Python cell 共用 Tree-sitter semantic token。
-      // 2. 亮色主题也必须给 variable/property/function 分配明确颜色，避免回落成大片黑色正文。
-      // 3. 暗色和亮色只在色值上不同，语义类别与 token 流保持一致。
-      property: '#007c89',
-      parameter: '#9a6700',
-      variable: '#0550ae',
-      constant: '#986801',
-      attribute: '#9a6700',
-      builtin: '#0969da',
-      'variable.readonly': '#986801',
-      'variable.defaultLibrary': '#0969da',
-      enumMember: '#986801',
-      boolean: '#986801',
-      macro: '#a626a4',
-      decorator: '#a626a4',
-      label: '#a626a4',
-      'string.escape': '#0184bc'
-    },
+    semanticTokenColors: GUAXI_MONACO_SEMANTIC_TOKEN_COLORS.light,
     colors: {
       'editor.background': '#ffffff',
       'editor.foreground': '#383a42',
@@ -9029,93 +8977,10 @@ const initEditor = () => {
   monaco.editor.defineTheme('guaxi-dark', {
     base: 'vs-dark',
     inherit: true,
-    rules: [
-      { token: 'comment', foreground: '5c6370' },           // Comment
-      { token: 'keyword', foreground: 'c678dd' },           // Keyword
-      { token: 'string', foreground: '98c379' },           // String
-      { token: 'number', foreground: 'd19a66' },           // Number
-      { token: 'regexp', foreground: '56b6c2' },           // RegExp → Operator color
-      { token: 'type', foreground: 'e5c07b' },           // Type
-      { token: 'delimiter', foreground: 'abb2bf' },           // Delimiter → Main text color
-      { token: 'variable', foreground: 'd7deea' },           // Variable → 与函数/属性区分，但避免 Python 大片泛红
-      { token: 'parameter', foreground: 'd19a66' },           // Parameter
-      { token: 'function', foreground: '61afef' },           // Function
-      { token: 'constant', foreground: 'd19a66' },           // Constant → Number color
-      { token: 'class', foreground: 'e5c07b' },           // Class → Type color
-      { token: 'identifier', foreground: 'abb2bf' },           // Identifier → Main text color
-      { token: 'tag', foreground: 'e06c75' },           // Tag → Variable color
-      { token: 'attribute.name', foreground: 'e5c07b' },           // Attribute name → Type color
-      { token: 'meta.embedded', foreground: '5c6370' },           // Meta embedded → Comment color
-      { token: 'operator', foreground: '56b6c2' },
-      { token: 'punctuation', foreground: 'abb2bf' },
-      { token: 'punctuation.definition', foreground: 'abb2bf' },
-      { token: 'punctuation.bracket', foreground: 'abb2bf' },
-      { token: 'property', foreground: '61afef' },
-      { token: 'method', foreground: '61afef' },
-      { token: 'function.declaration', foreground: '61afef' },
-      { token: 'function.defaultLibrary', foreground: '61afef' },
-      { token: 'parameter.declaration', foreground: 'd19a66' },
-      { token: 'variable.readonly', foreground: 'd19a66' },
-      { token: 'variable.defaultLibrary', foreground: 'e06c75' },
-      { token: 'type.defaultLibrary', foreground: 'e5c07b' },
-      { token: 'class.defaultLibrary', foreground: 'e5c07b' },
-      { token: 'interface', foreground: 'e5c07b' },
-      { token: 'enum', foreground: 'e5c07b' },
-      { token: 'enumMember', foreground: 'd19a66' },
-      { token: 'namespace', foreground: 'e5c07b' },
-      { token: 'typeParameter', foreground: 'e5c07b' },
-      { token: 'struct', foreground: 'e5c07b' },
-      { token: 'macro', foreground: 'c678dd' },
-      { token: 'decorator', foreground: 'c678dd' },
-      { token: 'label', foreground: 'c678dd' },
-      { token: 'keyword.control', foreground: 'c678dd' },
-      { token: 'keyword.defaultLibrary', foreground: 'c678dd' },
-      { token: 'string.escape', foreground: '56b6c2' },
-      { token: 'number.float', foreground: 'd19a66' },
-      { token: 'boolean', foreground: 'd19a66' }
-    ],
+    // 设计说明：暗色模式 Python 高亮漂移的根因是多个组件维护了不同的 `guaxi-dark` token 表。
+    rules: GUAXI_MONACO_THEME_RULES.dark,
     semanticHighlighting: true,
-    semanticTokenColors: {
-      comment: '#5c6370',
-      string: '#98c379',
-      keyword: '#c678dd',
-      number: '#d19a66',
-      regexp: '#56b6c2',
-      operator: '#56b6c2',
-      punctuation: '#abb2bf',
-      'punctuation.definition': '#abb2bf',
-      'punctuation.bracket': '#abb2bf',
-      class: '#e5c07b',
-      enum: '#e5c07b',
-      interface: '#e5c07b',
-      type: '#e5c07b',
-      typeParameter: '#e5c07b',
-      namespace: '#e5c07b',
-      struct: '#e5c07b',
-      function: '#61afef',
-      method: '#56b6c2',
-      // 设计说明：
-      // 1. TreeSitter 的 Python 捕获会把大量普通标识符归为 variable/property。
-      // 2. 如果这些基础类型使用红色，编辑模式和 Notebook Python cell 都会出现大片红色，语义层次反而变弱。
-      // 3. 因此普通变量使用正文色，属性/库对象使用青色，函数仍使用蓝色，保证两种模式共享同一套均衡配色。
-      property: '#56b6c2',
-      parameter: '#d19a66',
-      'function.declaration': '#61afef',
-      'function.defaultLibrary': '#61afef',
-      'parameter.declaration': '#d19a66',
-      variable: '#d7deea',
-      constant: '#d19a66',
-      attribute: '#d19a66',
-      builtin: '#56b6c2',
-      'variable.readonly': '#d19a66',
-      'variable.defaultLibrary': '#56b6c2',
-      enumMember: '#d19a66',
-      boolean: '#d19a66',
-      macro: '#c678dd',
-      decorator: '#c678dd',
-      label: '#c678dd',
-      'string.escape': '#56b6c2'
-    },
+    semanticTokenColors: GUAXI_MONACO_SEMANTIC_TOKEN_COLORS.dark,
     colors: {
       'editor.background': '#282c34',
       'editor.foreground': '#abb2bf',
