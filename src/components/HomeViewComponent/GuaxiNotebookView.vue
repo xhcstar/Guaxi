@@ -6748,6 +6748,7 @@ const handleNotebookDataLabActionEvent = async (event) => {
       chartType: String(detail?.chartType || 'line'),
       x: String(detail?.x || ''),
       y: String(detail?.y || ''),
+      ySeries: Array.isArray(detail?.ySeries) ? detail.ySeries : [],
       z: String(detail?.z || ''),
       color: String(detail?.color || ''),
       title: String(detail?.title || ''),

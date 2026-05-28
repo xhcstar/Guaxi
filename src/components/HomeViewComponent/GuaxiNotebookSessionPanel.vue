@@ -19,9 +19,18 @@
       当前内存会话里还没有可见变量。运行 Python Cell 后这里会刷新。
     </div>
 
-    <div v-else class="py-session-panel__list">
+    <label v-else class="py-session-panel__search">
+      <Icon :icon="searchIcon" width="15" height="15" />
+      <input v-model="variableSearch" type="text" placeholder="搜索变量、类型或预览" />
+    </label>
+
+    <div v-if="variables.length && !filteredVariables.length" class="py-session-panel__empty">
+      没有匹配的会话变量。
+    </div>
+
+    <div v-else-if="filteredVariables.length" class="py-session-panel__list">
       <article
-        v-for="item in variables"
+        v-for="item in filteredVariables"
         :key="`${inspector.cellId}-${item.name}`"
         class="py-session-panel__card"
       >
@@ -86,18 +95,19 @@
           <span v-if="formatShape(item.shape)">shape {{ formatShape(item.shape) }}</span>
         </div>
 
-        <pre class="py-session-panel__preview">{{ item.preview || '' }}</pre>
+        <pre class="py-session-panel__preview">{{ formatPreviewText(item.preview || '') }}</pre>
       </article>
     </div>
   </section>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { Icon } from '@iconify/vue'
 import copyIcon from '@iconify-icons/lucide/copy'
 import copyPlusIcon from '@iconify-icons/lucide/copy-plus'
 import pencilIcon from '@iconify-icons/lucide/pencil'
+import searchIcon from '@iconify-icons/lucide/search'
 import tableIcon from '@iconify-icons/lucide/table-properties'
 import trashIcon from '@iconify-icons/lucide/trash-2'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
@@ -111,10 +121,25 @@ const logger = createLogger('GuaxiNotebookSessionPanel')
 const message = useMessage()
 const rightSiderStore = useRightSiderStore()
 const settingsStore = useSettingsStore()
+const variableSearch = ref('')
 
 const inspector = computed(() => rightSiderStore.pythonSessionInspector || {})
 const appearanceTheme = computed(() => settingsStore.appearanceTheme === 'dark' ? 'dark' : 'light')
 const variables = computed(() => (Array.isArray(inspector.value?.variables) ? inspector.value.variables : []))
+const filteredVariables = computed(() => {
+  const keyword = String(variableSearch.value || '').trim().toLowerCase()
+  if (!keyword) return variables.value
+  return variables.value.filter((item) => {
+    const haystack = [
+      item?.name,
+      item?.variableName,
+      item?.value_type,
+      item?.type,
+      item?.preview,
+    ].map((value) => String(value || '').toLowerCase()).join(' ')
+    return haystack.includes(keyword)
+  })
+})
 const summaryLabel = computed(() => {
   if (!inspector.value?.hasActiveCell) return '未选中 Python Cell'
   if (String(inspector.value?.cellTitle || '').trim()) return inspector.value.cellTitle
@@ -125,6 +150,20 @@ const summaryLabel = computed(() => {
 const formatShape = (shape) => {
   if (!Array.isArray(shape) || !shape.length) return ''
   return `(${shape.map((item) => String(item ?? '')).join(', ')})`
+}
+
+// 设计说明：
+// 1. 会话变量面板承担快速浏览职责，字符串化预览如果是 JSON，应优先格式化，便于用户在右侧栏直接阅读。
+// 2. 无法解析时保留原 repr，避免破坏 pandas / numpy / Python 对象自身的展示语义。
+// 3. 搜索只在前端快照里过滤，不触发 Python 会话，避免大量变量时输入搜索造成运行时抖动。
+const formatPreviewText = (value) => {
+  const text = String(value || '').trim()
+  if (!text) return ''
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2)
+  } catch {
+    return text
+  }
 }
 
 const writeClipboard = async (text) => {
@@ -373,6 +412,30 @@ const copyVariablePreview = async (item) => {
   color: var(--py-session-muted);
   background: var(--py-session-card-bg);
   line-height: 1.7;
+}
+
+.py-session-panel__search {
+  flex: 0 0 auto;
+  min-height: 34px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  border: 1px solid var(--py-session-border);
+  border-radius: 8px;
+  padding: 0 10px;
+  background: var(--py-session-chip-bg);
+  color: var(--py-session-muted);
+}
+
+.py-session-panel__search input {
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--py-session-text);
+  font: inherit;
 }
 
 .py-session-panel__list {
