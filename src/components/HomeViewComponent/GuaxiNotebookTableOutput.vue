@@ -3,41 +3,55 @@
     <div
       ref="viewportRef"
       class="guaxi-notebook-table-output__viewport"
-      :style="{ '--guaxi-notebook-table-height': `${viewportHeight}px` }"
+      :style="viewportStyle"
       @scroll="handleViewportScroll"
       @wheel.stop="handleViewportWheel"
       @mousemove.stop="handleViewportPointerMove"
       @pointermove.stop="handleViewportPointerMove"
       @mouseleave.stop="handleViewportPointerLeave"
     >
-      <table class="guaxi-notebook-table-output__table" :style="tableStyle">
-        <thead>
-          <tr>
-            <th v-for="column in columns" :key="column">{{ column }}</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-if="topSpacerPx > 0" class="is-spacer" aria-hidden="true">
-            <td :colspan="columnCount" :style="{ height: `${topSpacerPx}px` }"></td>
-          </tr>
-          <tr
+      <div class="guaxi-notebook-table-output__surface" :style="surfaceStyle">
+        <div class="guaxi-notebook-table-output__header" :style="gridStyle">
+          <div
+            v-for="(column, columnIndex) in columns"
+            :key="`${tableIdentity}-header-${columnIndex}`"
+            class="guaxi-notebook-table-output__header-cell"
+            :title="column"
+            @mouseenter="handleCellTooltipEnter($event, column)"
+            @mousemove="handleCellTooltipMove"
+            @mouseleave="hideCellTooltip"
+          >
+            {{ column }}
+          </div>
+        </div>
+        <div class="guaxi-notebook-table-output__body" :style="bodyStyle">
+          <div
             v-for="rowIndex in visibleRowIndexes"
             :key="`${tableIdentity}-${rowIndex}`"
             class="guaxi-notebook-table-output__row"
+            :style="getRowStyle(rowIndex)"
           >
-            <td
+            <div
               v-for="(column, columnIndex) in columns"
               :key="`${tableIdentity}-${rowIndex}-${columnIndex}`"
+              class="guaxi-notebook-table-output__cell"
               :title="getCellDisplayText(rowIndex, columnIndex)"
+              @mouseenter="handleCellTooltipEnter($event, getCellDisplayText(rowIndex, columnIndex))"
+              @mousemove="handleCellTooltipMove"
+              @mouseleave="hideCellTooltip"
             >
               {{ getCellDisplayText(rowIndex, columnIndex) }}
-            </td>
-          </tr>
-          <tr v-if="bottomSpacerPx > 0" class="is-spacer" aria-hidden="true">
-            <td :colspan="columnCount" :style="{ height: `${bottomSpacerPx}px` }"></td>
-          </tr>
-        </tbody>
-      </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div
+      v-if="cellTooltip.visible"
+      class="guaxi-notebook-table-output__tooltip"
+      :style="cellTooltipStyle"
+    >
+      {{ cellTooltip.text }}
     </div>
   </div>
 </template>
@@ -58,10 +72,27 @@ const logger = createLogger('GuaxiNotebookTableOutput')
 const viewportRef = ref(null)
 const loadedRowsMap = ref(new Map())
 const loadError = ref('')
+const viewportMetrics = ref({
+  clientWidth: 0,
+  clientHeight: 0,
+  scrollWidth: 0,
+  scrollHeight: 0,
+  scrollLeft: 0,
+  scrollTop: 0,
+})
+const cellTooltip = ref({
+  visible: false,
+  text: '',
+  x: 0,
+  y: 0,
+})
 const loadingPages = new Set()
 let scrollFrameId = 0
+let resizeObserver = null
+let lastMetricsLogKey = ''
 
 const ROW_HEIGHT = 36
+const HEADER_HEIGHT = 36
 const OVERSCAN_ROWS = 24
 const PAGE_SIZE = 200
 const MAX_VIEWPORT_HEIGHT = 460
@@ -80,6 +111,10 @@ const viewportHeight = computed(() => {
   if (!totalRows.value) return MIN_VIEWPORT_HEIGHT
   return Math.min(MAX_VIEWPORT_HEIGHT, Math.max(MIN_VIEWPORT_HEIGHT, totalRows.value * ROW_HEIGHT))
 })
+const tableWidthPx = computed(() => columnCount.value * MIN_COLUMN_WIDTH)
+const viewportStyle = computed(() => ({
+  '--guaxi-notebook-table-height': `${viewportHeight.value}px`,
+}))
 
 const scrollTop = ref(0)
 const startIndex = computed(() => Math.max(0, Math.floor(scrollTop.value / ROW_HEIGHT) - OVERSCAN_ROWS))
@@ -94,16 +129,26 @@ const visibleRowIndexes = computed(() => {
   }
   return indexes
 })
-const topSpacerPx = computed(() => startIndex.value * ROW_HEIGHT)
-const bottomSpacerPx = computed(() => Math.max(0, (totalRows.value - endIndex.value) * ROW_HEIGHT))
 const tableIdentity = computed(() => [
   String(props.table?.resultHandle || ''),
   String(props.table?.tableKey || ''),
   String(props.table?.manifestPath || ''),
   String(props.table?.tableName || ''),
 ].join(':'))
-const tableStyle = computed(() => ({
-  width: `max(100%, ${columnCount.value * MIN_COLUMN_WIDTH}px)`,
+const gridStyle = computed(() => ({
+  gridTemplateColumns: `repeat(${columnCount.value}, minmax(${MIN_COLUMN_WIDTH}px, 1fr))`,
+}))
+const surfaceStyle = computed(() => ({
+  width: `${tableWidthPx.value}px`,
+  minWidth: '100%',
+  minHeight: `${HEADER_HEIGHT + totalRows.value * ROW_HEIGHT}px`,
+}))
+const bodyStyle = computed(() => ({
+  height: `${totalRows.value * ROW_HEIGHT}px`,
+}))
+const cellTooltipStyle = computed(() => ({
+  left: `${cellTooltip.value.x}px`,
+  top: `${cellTooltip.value.y}px`,
 }))
 
 const resetLoadedRows = () => {
@@ -151,6 +196,49 @@ const getCellDisplayText = (rowIndex, columnIndex) => {
     return columnIndex === 0 ? '加载中...' : ''
   }
   return normalizeCellValue(Array.isArray(row) ? row[columnIndex] : '')
+}
+
+const getRowStyle = (rowIndex) => ({
+  ...gridStyle.value,
+  transform: `translate3d(0, ${rowIndex * ROW_HEIGHT}px, 0)`,
+})
+
+const updateViewportMetrics = (reason = 'unknown') => {
+  const viewport = viewportRef.value
+  if (!(viewport instanceof HTMLElement)) return
+
+  // 设计说明：
+  // 1. 这里保留浏览器默认滚动条，真实滚动与可视滚动条都由同一个 viewport 承担。
+  // 2. 之前横向条消失的根因是父级 grid/flex 宽度链路没有 `min-width: 0`，viewport 拿到的是被右侧面板裁剪前的宽度。
+  // 3. 记录测量值可以在用户反馈截图时确认当前视口是否已经按可见宽度收缩。
+  const nextMetrics = {
+    clientWidth: viewport.clientWidth,
+    clientHeight: viewport.clientHeight,
+    scrollWidth: Math.max(viewport.scrollWidth, tableWidthPx.value),
+    scrollHeight: Math.max(viewport.scrollHeight, HEADER_HEIGHT + totalRows.value * ROW_HEIGHT),
+    scrollLeft: viewport.scrollLeft,
+    scrollTop: viewport.scrollTop,
+  }
+  viewportMetrics.value = nextMetrics
+
+  const metricsLogKey = [
+    nextMetrics.clientWidth,
+    nextMetrics.clientHeight,
+    nextMetrics.scrollWidth,
+    nextMetrics.scrollHeight,
+    tableWidthPx.value,
+  ].join(':')
+  if (metricsLogKey !== lastMetricsLogKey) {
+    lastMetricsLogKey = metricsLogKey
+    logger.info('[NotebookTable] viewport metrics updated', {
+      reason,
+      tableKey: String(props.table?.tableKey || ''),
+      rows: totalRows.value,
+      columns: columnCount.value,
+      tableWidth: tableWidthPx.value,
+      ...nextMetrics,
+    })
+  }
 }
 
 const loadRemoteRows = async (offset, limit) => {
@@ -257,10 +345,12 @@ const handleViewportPointerMove = () => {
 
 const handleViewportPointerLeave = () => {
   // 设计说明：表格区域的离开事件只属于表格自身，不应被解释为 Notebook 根区域离开。
+  hideCellTooltip()
 }
 
 const handleViewportScroll = (event) => {
   const nextScrollTop = Number(event?.target?.scrollTop || 0)
+  updateViewportMetrics('scroll')
   if (scrollFrameId) {
     window.cancelAnimationFrame(scrollFrameId)
   }
@@ -274,6 +364,55 @@ const handleViewportScroll = (event) => {
   })
 }
 
+const moveCellTooltip = (event) => {
+  const viewportWidth = window.innerWidth || 0
+  const viewportHeight = window.innerHeight || 0
+  const tooltipWidth = 420
+  const tooltipHeight = 120
+  const nextX = Math.min(Math.max(12, Number(event?.clientX || 0) + 14), Math.max(12, viewportWidth - tooltipWidth - 12))
+  const nextY = Math.min(Math.max(12, Number(event?.clientY || 0) + 14), Math.max(12, viewportHeight - tooltipHeight - 12))
+  cellTooltip.value = {
+    ...cellTooltip.value,
+    x: nextX,
+    y: nextY,
+  }
+}
+
+const hideCellTooltip = () => {
+  if (!cellTooltip.value.visible) return
+  cellTooltip.value = {
+    visible: false,
+    text: '',
+    x: 0,
+    y: 0,
+  }
+}
+
+const handleCellTooltipEnter = (event, rawText) => {
+  const target = event?.currentTarget
+  const text = String(rawText ?? '')
+  if (!(target instanceof HTMLElement) || !text) {
+    hideCellTooltip()
+    return
+  }
+  if (target.scrollWidth <= target.clientWidth + 1) {
+    hideCellTooltip()
+    return
+  }
+
+  moveCellTooltip(event)
+  cellTooltip.value = {
+    ...cellTooltip.value,
+    visible: true,
+    text,
+  }
+}
+
+const handleCellTooltipMove = (event) => {
+  if (!cellTooltip.value.visible) return
+  moveCellTooltip(event)
+}
+
 watch(
   () => tableIdentity.value,
   async () => {
@@ -281,6 +420,7 @@ watch(
     scrollTop.value = 0
     await nextTick()
     ensureVisibleWindowLoaded()
+    updateViewportMetrics('table-change')
   },
   { immediate: true },
 )
@@ -289,8 +429,24 @@ watch([startIndex, endIndex, totalRows, remoteEnabled], () => {
   ensureVisibleWindowLoaded()
 })
 
+watch([tableWidthPx, viewportHeight], () => {
+  nextTick(() => {
+    updateViewportMetrics('layout-watch')
+  })
+})
+
 onMounted(() => {
   ensureVisibleWindowLoaded()
+  nextTick(() => {
+    updateViewportMetrics('mounted')
+    const viewport = viewportRef.value
+    if (viewport instanceof HTMLElement && typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => {
+        updateViewportMetrics('resize')
+      })
+      resizeObserver.observe(viewport)
+    }
+  })
 })
 
 onBeforeUnmount(() => {
@@ -298,62 +454,139 @@ onBeforeUnmount(() => {
     window.cancelAnimationFrame(scrollFrameId)
     scrollFrameId = 0
   }
+  if (resizeObserver) {
+    resizeObserver.disconnect()
+    resizeObserver = null
+  }
 })
 </script>
 
 <style scoped>
 .guaxi-notebook-table-output {
+  position: relative;
   width: 100%;
   min-width: 0;
 }
 
 .guaxi-notebook-table-output__viewport {
   max-height: var(--guaxi-notebook-table-height, 360px);
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: auto;
   overscroll-behavior: contain;
   contain: layout paint;
   border: none;
   border-radius: 0;
   background: transparent;
+  scrollbar-gutter: stable;
+  scrollbar-width: auto;
+  scrollbar-color: color-mix(in srgb, var(--guaxi-notebook-muted, #94a3b8) 72%, transparent) transparent;
 }
 
-.guaxi-notebook-table-output__table {
-  width: max-content;
+.guaxi-notebook-table-output__viewport::-webkit-scrollbar {
+  width: 13px;
+  height: 13px;
+}
+
+.guaxi-notebook-table-output__viewport::-webkit-scrollbar-track {
+  background: color-mix(in srgb, var(--guaxi-notebook-panel, #ffffff) 72%, transparent);
+}
+
+.guaxi-notebook-table-output__viewport::-webkit-scrollbar-thumb {
+  min-width: 48px;
+  min-height: 48px;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--guaxi-notebook-muted, #94a3b8) 72%, var(--guaxi-notebook-primary, #3b82f6) 14%);
+  background-clip: content-box;
+}
+
+.guaxi-notebook-table-output__viewport::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--guaxi-notebook-muted, #94a3b8) 62%, var(--guaxi-notebook-primary, #3b82f6) 28%);
+  background-clip: content-box;
+}
+
+.guaxi-notebook-table-output__viewport::-webkit-scrollbar-corner {
+  background: color-mix(in srgb, var(--guaxi-notebook-panel, #ffffff) 72%, transparent);
+}
+
+.guaxi-notebook-table-output__surface {
+  position: relative;
   min-width: 100%;
-  table-layout: fixed;
-  border-collapse: separate;
-  border-spacing: 0;
   contain: layout paint;
 }
 
-.guaxi-notebook-table-output__table thead th {
+.guaxi-notebook-table-output__header {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: 2;
+  display: grid;
+  min-height: 36px;
   background: color-mix(in srgb, var(--guaxi-notebook-panel-soft, #f8fafc) 78%, var(--guaxi-notebook-panel, #ffffff) 22%);
 }
 
-.guaxi-notebook-table-output__table th,
-.guaxi-notebook-table-output__table td {
-  min-width: 120px;
+.guaxi-notebook-table-output__body {
+  position: relative;
+  margin-top: 0;
+  min-width: 100%;
+  contain: layout paint;
+}
+
+.guaxi-notebook-table-output__row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: grid;
+  height: 36px;
+  min-width: 100%;
+  will-change: transform;
+}
+
+.guaxi-notebook-table-output__header-cell,
+.guaxi-notebook-table-output__cell {
+  min-width: 0;
   height: 36px;
   padding: 8px 10px;
   border-bottom: 1px solid var(--guaxi-notebook-border, rgba(148, 163, 184, 0.22));
+  border-right: 1px solid var(--guaxi-notebook-border, rgba(148, 163, 184, 0.22));
   text-align: left;
-  vertical-align: top;
   white-space: nowrap;
   line-height: 20px;
-}
-
-.guaxi-notebook-table-output__table td {
-  color: var(--guaxi-notebook-text, #0f172a);
+  box-sizing: border-box;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.guaxi-notebook-table-output__table tr.is-spacer td {
-  padding: 0;
-  border-bottom: none;
-  background: transparent;
+.guaxi-notebook-table-output__header-cell:first-child,
+.guaxi-notebook-table-output__cell:first-child {
+  border-left: 1px solid var(--guaxi-notebook-border, rgba(148, 163, 184, 0.22));
+}
+
+.guaxi-notebook-table-output__header-cell {
+  font-weight: 700;
+  color: var(--guaxi-notebook-text, #0f172a);
+}
+
+.guaxi-notebook-table-output__cell {
+  color: var(--guaxi-notebook-text, #0f172a);
+}
+
+.guaxi-notebook-table-output__tooltip {
+  position: fixed;
+  z-index: 10000;
+  max-width: min(420px, calc(100vw - 24px));
+  max-height: 120px;
+  padding: 8px 10px;
+  border: 1px solid var(--guaxi-notebook-strong-border, rgba(148, 163, 184, 0.36));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--guaxi-notebook-panel, #ffffff) 96%, #0f172a 4%);
+  color: var(--guaxi-notebook-text, #0f172a);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.24);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: auto;
+  pointer-events: none;
 }
 </style>

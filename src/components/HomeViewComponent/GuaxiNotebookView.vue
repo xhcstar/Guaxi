@@ -11,6 +11,7 @@
     ]"
     @mousemove="handleNotebookRootMouseMove"
     @mouseleave="handleNotebookRootMouseLeave"
+    @wheel.capture.passive="handleNotebookRootWheel"
     @click="handleNotebookRenderedClick"
     @mouseup="handleNotebookSelectionMouseUp"
   >
@@ -552,7 +553,7 @@
                     controls
                     preload="metadata"
                   ></video>
-                  <div v-else-if="outputModule.kind === 'table' && outputModule.table" class="guaxi-notebook__dataframe">
+                  <div v-else-if="outputModule.kind === 'table' && outputModule.table" class="guaxi-notebook__dataframe guaxi-notebook__dataframe--virtual-table">
                     <GuaxiNotebookTableOutput :table="outputModule.table" />
                   </div>
                   <pre v-else-if="outputModule.kind === 'text'" class="guaxi-notebook__output-text">{{ outputModule.text }}</pre>
@@ -806,6 +807,7 @@ let notebookSearchQueryTimer = 0
 let notebookMarkdownWorkerTaskId = 0
 let notebookMermaidRenderCounter = 0
 let notebookTopToolbarHideTimer = 0
+let notebookPointerQuietUntil = 0
 let notebookMathPreviewRenderSeq = 0
 let selectionAudioElement = null
 let selectionAudioObjectUrl = ''
@@ -933,6 +935,7 @@ const clearNotebookTopToolbarHideTimer = () => {
 
 const NOTEBOOK_TOP_TOOLBAR_TRIGGER_DISTANCE = 56
 const NOTEBOOK_TOP_TOOLBAR_HIDE_DISTANCE = 120
+const NOTEBOOK_TOP_TOOLBAR_SCROLL_QUIET_MS = 360
 const NOTEBOOK_TOP_TOOLBAR_POINTER_IGNORE_SELECTOR = [
   '.guaxi-notebook-table-output__viewport',
   '.guaxi-notebook__dataframe',
@@ -984,6 +987,7 @@ const resolveNotebookToolbarTriggerRect = () => {
 }
 
 const shouldIgnoreNotebookToolbarPointerEvent = (event) => {
+  if (Date.now() < notebookPointerQuietUntil) return true
   const target = event?.target
   const relatedTarget = event?.relatedTarget
   const ignoredTarget = target instanceof Element && !!target.closest(NOTEBOOK_TOP_TOOLBAR_POINTER_IGNORE_SELECTOR)
@@ -996,6 +1000,17 @@ const shouldIgnoreNotebookToolbarPointerEvent = (event) => {
     })
   }
   return ignored
+}
+
+const handleNotebookRootWheel = (event) => {
+  const target = event?.target
+  const fromTableOutput = target instanceof Element && !!target.closest(NOTEBOOK_TOP_TOOLBAR_POINTER_IGNORE_SELECTOR)
+  notebookPointerQuietUntil = Date.now() + NOTEBOOK_TOP_TOOLBAR_SCROLL_QUIET_MS
+  if (fromTableOutput) {
+    logger.debug('[NotebookToolbar] quiet toolbar pointer tracking during table wheel scroll', {
+      quietMs: NOTEBOOK_TOP_TOOLBAR_SCROLL_QUIET_MS,
+    })
+  }
 }
 
 // 设计说明：
@@ -7594,6 +7609,8 @@ defineExpose({
   display: grid;
   gap: 4px;
   padding: 0 2px 1px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .guaxi-notebook__math-layout {
@@ -7906,11 +7923,13 @@ defineExpose({
 
 .guaxi-notebook__panel-content {
   display: grid;
+  min-width: 0;
   gap: 6px;
   padding-bottom: 0;
 }
 
 .guaxi-notebook__output-module {
+  min-width: 0;
   border-radius: 8px;
   border: 1px solid var(--guaxi-notebook-strong-border);
   background: color-mix(in srgb, var(--guaxi-notebook-panel-soft) 72%, var(--guaxi-notebook-panel) 28%);
@@ -7962,6 +7981,7 @@ defineExpose({
 
 .guaxi-notebook__output-module-body {
   display: grid;
+  min-width: 0;
   gap: 8px;
   padding: 7px 8px 8px;
 }
@@ -8040,6 +8060,17 @@ defineExpose({
   max-height: min(62vh, 720px);
   overflow-x: auto;
   overflow-y: auto;
+}
+
+.guaxi-notebook__dataframe--virtual-table {
+  /* 设计说明：
+   * 1. GuaxiNotebookTableOutput 自带纵向/横向滚动视口，外层 dataframe 再滚动会形成嵌套滚动容器。
+   * 2. 嵌套滚动在 Tauri 的 Chromium 里会让内外层交替合成与重绘，表现为滚一会儿后整个中间区域闪烁。
+   * 3. 表格输出模块因此把滚动职责固定在子组件内部，普通 HTML 表格输出仍沿用上面的 auto 规则。
+   */
+  max-height: none;
+  overflow: hidden;
+  contain: layout paint;
 }
 
 .guaxi-notebook__rich {
