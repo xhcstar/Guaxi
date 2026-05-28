@@ -115,6 +115,7 @@ import { useMessage } from 'naive-ui'
 import { createLogger } from '../../utils/logger'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
 import { useSettingsStore } from '../../stores/settingsStore'
+import { filterVisibleWorkbenchSessionVariables } from './utils/guaxiDataLabWorkbenchClient'
 import { emitNotebookDataLabAction } from './utils/guaxiNotebookDataLab'
 
 const logger = createLogger('GuaxiNotebookSessionPanel')
@@ -125,7 +126,17 @@ const variableSearch = ref('')
 
 const inspector = computed(() => rightSiderStore.pythonSessionInspector || {})
 const appearanceTheme = computed(() => settingsStore.appearanceTheme === 'dark' ? 'dark' : 'light')
-const variables = computed(() => (Array.isArray(inspector.value?.variables) ? inspector.value.variables : []))
+const variables = computed(() => {
+  const rawVariables = Array.isArray(inspector.value?.variables) ? inspector.value.variables : []
+  const visibleVariables = filterVisibleWorkbenchSessionVariables(rawVariables)
+  if (visibleVariables.length !== rawVariables.length) {
+    logger.info('[NotebookSessionPanel] hidden internal session variables', {
+      rawVariableCount: rawVariables.length,
+      visibleVariableCount: visibleVariables.length,
+    })
+  }
+  return visibleVariables
+})
 const filteredVariables = computed(() => {
   const keyword = String(variableSearch.value || '').trim().toLowerCase()
   if (!keyword) return variables.value

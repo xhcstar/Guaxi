@@ -732,6 +732,7 @@ import {
 } from './utils/guaxiPythonCellState'
 import {
   DATA_LAB_SESSION_VARS_UPDATED_EVENT,
+  filterVisibleWorkbenchSessionVariables,
 } from './utils/guaxiDataLabWorkbenchClient'
 import {
   NOTEBOOK_DATALAB_EVENT,
@@ -4205,12 +4206,15 @@ const markDependentNotebookCellsStale = (sourceCell, dataflow = null, reason = '
 
 const mergeNotebookSessionVarSummaries = (currentItems = [], updatedItems = []) => {
   const map = new Map()
+  const visibleCurrentItems = filterVisibleWorkbenchSessionVariables(currentItems)
+  const visibleUpdatedItems = filterVisibleWorkbenchSessionVariables(updatedItems)
 
   // 设计说明：
   // 1. 数据实验室导入现在走“仅回传目标变量摘要”的快路径，不能再用返回值直接覆盖整份会话变量列表。
   // 2. 这里把已有快照与增量更新按变量名合并，既保留旧变量，又让新导入的数据集可以立即出现在右侧实验室面板里。
-  // 3. 统一在前端按名称排序，保证侧栏顺序稳定，避免用户误以为变量丢失或重复。
-  ;(Array.isArray(currentItems) ? currentItems : []).forEach((item) => {
+  // 3. 合并前过滤 `_guaxi_*` / `__guaxi_*` 运行时变量，保证用户只看到自己定义或导入的数据。
+  // 4. 统一在前端按名称排序，保证侧栏顺序稳定，避免用户误以为变量丢失或重复。
+  ;(Array.isArray(visibleCurrentItems) ? visibleCurrentItems : []).forEach((item) => {
     const name = String(item?.name || '').trim()
     if (!name) return
     map.set(name, {
@@ -4219,7 +4223,7 @@ const mergeNotebookSessionVarSummaries = (currentItems = [], updatedItems = []) 
     })
   })
 
-  ;(Array.isArray(updatedItems) ? updatedItems : []).forEach((item) => {
+  ;(Array.isArray(visibleUpdatedItems) ? visibleUpdatedItems : []).forEach((item) => {
     const name = String(item?.name || '').trim()
     if (!name) return
     map.set(name, {
@@ -4242,14 +4246,21 @@ const mergeNotebookSessionVarSummaries = (currentItems = [], updatedItems = []) 
 // 3. 这里改成“字段存在就覆盖，字段缺失就保留上一次快照”，只在后端明确返回数组时才认定为最新会话变量列表。
 const resolveNotebookSessionVarsFromExecResult = (result, previousSessionVars = []) => {
   if (Array.isArray(result?.session_vars)) {
-    return result.session_vars
+    const visibleSessionVars = filterVisibleWorkbenchSessionVariables(result.session_vars)
+    if (visibleSessionVars.length !== result.session_vars.length) {
+      logger.info('[Notebook] hidden internal python session variables from inspector', {
+        rawSessionVarCount: result.session_vars.length,
+        visibleSessionVarCount: visibleSessionVars.length,
+      })
+    }
+    return visibleSessionVars
   }
   logger.warn('[Notebook] python execution response missing session_vars, keep previous snapshot variables', {
     hasResult: !!result,
     resultKeys: result && typeof result === 'object' ? Object.keys(result) : [],
     previousSessionVarCount: Array.isArray(previousSessionVars) ? previousSessionVars.length : 0,
   })
-  return Array.isArray(previousSessionVars) ? previousSessionVars : []
+  return filterVisibleWorkbenchSessionVariables(previousSessionVars)
 }
 
 const buildNotebookPythonSessionInspectorPayload = (cell) => {
@@ -4268,6 +4279,7 @@ const buildNotebookPythonSessionInspectorPayload = (cell) => {
   }
 
   const snapshot = getCellSnapshot(cell)
+  const visibleSessionVars = filterVisibleWorkbenchSessionVariables(snapshot?.sessionVars)
   return {
     filePath: String(props.filePath || ''),
     cellId: String(cell?.cellId || ''),
@@ -4277,10 +4289,10 @@ const buildNotebookPythonSessionInspectorPayload = (cell) => {
     sessionId: createPythonSessionId(props.filePath),
     hasActiveCell: true,
     datasets: buildNotebookLabDatasetDescriptors(
-      Array.isArray(snapshot?.sessionVars) ? snapshot.sessionVars : [],
+      visibleSessionVars,
       Array.isArray(snapshot?.lab?.imports) ? snapshot.lab.imports : [],
     ),
-    variables: Array.isArray(snapshot?.sessionVars) ? snapshot.sessionVars : [],
+    variables: visibleSessionVars,
   }
 }
 

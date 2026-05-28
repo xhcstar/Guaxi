@@ -12,13 +12,40 @@ const logger = createLogger('GuaxiDataLabWorkbenchClient')
 const normalizeText = (value) => String(value == null ? '' : value).trim()
 export const DATA_LAB_SESSION_VARS_UPDATED_EVENT = 'guaxi:data-lab-session-vars-updated'
 
+const WORKBENCH_INTERNAL_VARIABLE_NAMES = new Set([
+  '__builtins__',
+  '_doc_path',
+  '_guaxi_data_workbench',
+  '_guaxi_session',
+  '_py_cell_id',
+  '_result',
+])
+
 export const WORKBENCH_SUPPORTED_EXPORTS = [
-  { label: 'CSV', value: 'csv', extensions: ['csv'] },
-  { label: 'Excel', value: 'xlsx', extensions: ['xlsx'] },
-  { label: 'JSON', value: 'json', extensions: ['json'] },
+  { label: 'CSV', name: 'CSV', value: 'csv', extensions: ['csv'] },
+  { label: 'Excel', name: 'Excel', value: 'xlsx', extensions: ['xlsx'] },
+  { label: 'JSON', name: 'JSON', value: 'json', extensions: ['json'] },
 ]
 
 export const WORKBENCH_CHART_TYPES = NOTEBOOK_LAB_CHART_TYPES
+
+export const isWorkbenchInternalVariableName = (name) => {
+  const value = normalizeText(name)
+  if (!value) return true
+
+  // 设计说明：
+  // 1. 数据工作台和 Notebook 会向 Python 会话注入少量 `_guaxi_*` / `__guaxi_*` 控制变量，用于路由、快照和导出。
+  // 2. 这些变量不是用户主动创建的数据对象，默认展示会挤占变量面板并造成误解，因此统一在会话变量边界过滤。
+  // 3. 不直接屏蔽所有单下划线变量，保留用户自己命名 `_cache`、`_tmp` 之类变量的可见性。
+  return WORKBENCH_INTERNAL_VARIABLE_NAMES.has(value)
+    || value.startsWith('_guaxi_')
+    || value.startsWith('__guaxi_')
+}
+
+export const filterVisibleWorkbenchSessionVariables = (items = []) => {
+  const rawItems = Array.isArray(items) ? items : []
+  return rawItems.filter((item) => !isWorkbenchInternalVariableName(item?.name || item?.variableName))
+}
 
 export const parseWorkbenchRouteQuery = (query = {}) => ({
   sessionId: normalizeText(query.sessionId),
@@ -43,12 +70,14 @@ export const fetchWorkbenchSessionVariables = async ({
     },
   })
   const variables = Array.isArray(response?.session_vars) ? response.session_vars : []
+  const visibleVariables = filterVisibleWorkbenchSessionVariables(variables)
   logger.info('[DataLabWorkbenchClient] fetched session variables', {
     sessionId,
     variableName: name,
-    variableCount: variables.length,
+    variableCount: visibleVariables.length,
+    hiddenInternalVariableCount: Math.max(0, variables.length - visibleVariables.length),
   })
-  return variables
+  return visibleVariables
 }
 
 const buildPythonRequest = (sessionId, code, options = {}) => ({
@@ -243,7 +272,7 @@ export const fetchWorkbenchVariableSnapshot = async ({
   })
   return {
     snapshot: result && typeof result === 'object' ? result : null,
-    sessionVars: Array.isArray(response?.session_vars) ? response.session_vars : [],
+    sessionVars: filterVisibleWorkbenchSessionVariables(response?.session_vars),
   }
 }
 
@@ -362,7 +391,10 @@ export const exportWorkbenchVariable = async ({
   const exportSpec = WORKBENCH_SUPPORTED_EXPORTS.find((item) => item.value === normalizedFormat) || WORKBENCH_SUPPORTED_EXPORTS[0]
   const outputPath = await save({
     defaultPath: `${normalizeText(variableName) || 'guaxi_data'}.${exportSpec.extensions[0]}`,
-    filters: [exportSpec],
+    filters: [{
+      name: exportSpec.name || exportSpec.label || String(exportSpec.value || 'Data').toUpperCase(),
+      extensions: exportSpec.extensions,
+    }],
   })
   if (!outputPath) return null
 
