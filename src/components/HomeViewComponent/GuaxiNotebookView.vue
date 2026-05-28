@@ -1531,7 +1531,11 @@ const serializeNotebookSnapshotsForSidecar = (cells = []) => {
       display: snapshot?.display || null,
       dataframe: snapshot?.dataframe || null,
       outputs: Array.isArray(snapshot?.outputs) ? snapshot.outputs : [],
-      sessionVars: Array.isArray(snapshot?.sessionVars) ? snapshot.sessionVars : [],
+      // 设计说明：
+      // 1. 会话变量只代表当前 Python 进程里的内存对象，关闭文件/窗口后这些对象不应从 sidecar 复活。
+      // 2. sidecar 只负责恢复可写回的输出模块和 UI 折叠状态，避免用户重新打开文件时看到已经不存在的变量。
+      // 3. 运行、导入、工作台保存等真实 Python 会话动作仍会在当前内存里重新写入 sessionVars。
+      sessionVars: [],
       lab: snapshot?.lab && typeof snapshot.lab === 'object'
         ? {
           ...snapshot.lab,
@@ -1577,7 +1581,11 @@ const applyNotebookSidecarSnapshots = (cells = [], snapshots = {}) => {
       display: persisted.display || null,
       dataframe: persisted.dataframe || null,
       outputs: Array.isArray(persisted.outputs) ? persisted.outputs : [],
-      sessionVars: Array.isArray(persisted.sessionVars) ? persisted.sessionVars : [],
+      // 设计说明：
+      // 1. Python Cell 输出可以从 sidecar 恢复，因为它已经是文档视图状态。
+      // 2. 会话变量是 Python worker 内存状态，重开文件后 worker 中对象可能已经销毁。
+      // 3. 因此恢复快照时显式清空 sessionVars，只允许真实运行/导入后重新显示。
+      sessionVars: [],
       lab: persisted?.lab && typeof persisted.lab === 'object'
         ? {
           ...persisted.lab,
@@ -1596,6 +1604,7 @@ const applyNotebookSidecarSnapshots = (cells = [], snapshots = {}) => {
     restoredCount,
     skippedCount,
     snapshotCount: Object.keys(snapshots && typeof snapshots === 'object' ? snapshots : {}).length,
+    restoredSessionVarCount: 0,
   })
 }
 

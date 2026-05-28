@@ -31,6 +31,26 @@ export const parseWorkbenchRouteQuery = (query = {}) => ({
   theme: normalizeText(query.theme),
 })
 
+export const fetchWorkbenchSessionVariables = async ({
+  sessionId = '',
+  variableName = '',
+} = {}) => {
+  const name = normalizeText(variableName)
+  const response = await runWorkbenchPython(sessionId, 'print("[GuaxiDataWorkbench] refreshed session variables")', {
+    sessionVarNames: name ? [name] : undefined,
+    vars: {
+      _guaxi_data_workbench: 'session-vars',
+    },
+  })
+  const variables = Array.isArray(response?.session_vars) ? response.session_vars : []
+  logger.info('[DataLabWorkbenchClient] fetched session variables', {
+    sessionId,
+    variableName: name,
+    variableCount: variables.length,
+  })
+  return variables
+}
+
 const buildPythonRequest = (sessionId, code, options = {}) => ({
   code: String(code || ''),
   persist: options.persist !== false,
@@ -421,6 +441,31 @@ export const writeWorkbenchChartToNotebook = async ({
     variableName,
     chartType: normalizeText(chart.chartType || 'line'),
     writeBack,
+  })
+}
+
+export const emitWorkbenchNotebookAction = async ({
+  context = {},
+  action = '',
+  variableName = '',
+  dataKind = '',
+  extra = {},
+} = {}) => {
+  const payload = {
+    action: normalizeText(action),
+    filePath: normalizeText(context.filePath),
+    cellId: normalizeText(context.cellId),
+    cellKey: normalizeText(context.cellKey),
+    stableId: normalizeText(context.stableId),
+    variableName: normalizeText(variableName || context.variableName),
+    dataKind: normalizeText(dataKind || context.dataKind),
+    ...(extra && typeof extra === 'object' ? extra : {}),
+  }
+  await emitTo('main', 'notebook-data-lab-rpc', payload)
+  logger.info('[DataLabWorkbenchClient] emitted notebook action', {
+    action: payload.action,
+    variableName: payload.variableName,
+    dataKind: payload.dataKind,
   })
 }
 

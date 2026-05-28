@@ -1,195 +1,111 @@
 <template>
   <section class="py-session-panel">
     <header class="py-session-panel__header">
-      <div>
-        <div class="py-session-panel__eyebrow">Data Lab</div>
-        <h3 class="py-session-panel__title">数据实验室</h3>
+      <div class="py-session-panel__title-block">
+        <div class="py-session-panel__eyebrow">Session Vars</div>
+        <h3 class="py-session-panel__title">会话变量</h3>
       </div>
       <div class="py-session-panel__summary">
         <span>{{ summaryLabel }}</span>
+        <span v-if="inspector.hasActiveCell">{{ variables.length }} 个变量</span>
       </div>
     </header>
 
-    <div v-if="inspector.hasActiveCell" class="py-session-panel__toolbar">
-      <button type="button" class="py-session-panel__action-btn" @click="requestImportFile">导入文件</button>
-      <button type="button" class="py-session-panel__action-btn" @click="requestImportClipboard">导入剪贴板</button>
-      <button type="button" class="py-session-panel__action-btn" @click="requestImportUrl">导入 URL</button>
-      <button type="button" class="py-session-panel__action-btn" @click="generateReport(false)">生成报告</button>
-      <button type="button" class="py-session-panel__action-btn" @click="generateReport(true)">写回报告</button>
-    </div>
-
     <div v-if="!inspector.hasActiveCell" class="py-session-panel__empty">
-      选中一个 Python Cell 后，这里会进入探索者实验室模式。你可以把外部文件、剪贴板数据导入当前会话，再把处理结果写回 Markdown 或导出为结构化文件。
+      选中一个 Python Cell 后，会显示当前内存会话里仍然存在的变量。
     </div>
 
-    <div v-else class="py-session-panel__body">
-      <section class="py-session-panel__section">
-        <div class="py-session-panel__section-head">
-          <div class="py-session-panel__section-title">数学实验</div>
-          <div class="py-session-panel__section-meta">SymPy / Matplotlib</div>
-        </div>
-        <div class="py-session-panel__math-grid">
-          <GuaxiNotebookMathEditor
-            v-model="mathExpression"
-            class="py-session-panel__math-editor wide"
-            :cell-key="`${inspector.cellKey || inspector.cellId || 'session'}-math`"
-            :document-path="inspector.filePath || ''"
-            :theme="appearanceTheme"
-            placeholder="例如 sin(x) / x 或 x^2 = 1"
-          />
-          <select v-model="mathMode" class="py-session-panel__field">
-            <option value="plot2d">绘制曲线</option>
-            <option value="simplify">化简</option>
-            <option value="derivative">求导</option>
-            <option value="integral">积分</option>
-            <option value="solve">求解</option>
-            <option value="evaluate">计算</option>
-          </select>
-          <input v-model="mathVariable" class="py-session-panel__field" placeholder="变量 x" />
-          <input v-model.number="mathRangeMin" class="py-session-panel__field" type="number" placeholder="最小值" />
-          <input v-model.number="mathRangeMax" class="py-session-panel__field" type="number" placeholder="最大值" />
-          <button type="button" class="py-session-panel__action-btn" :title="runMathTitle" @click="runMath(false)">{{ runMathLabel }}</button>
-          <button type="button" class="py-session-panel__action-btn" :title="`${runMathTitle}并写回 Markdown`" @click="runMath(true)">写回{{ runMathLabel }}</button>
-        </div>
-      </section>
+    <div v-else-if="!variables.length" class="py-session-panel__empty">
+      当前内存会话里还没有可见变量。运行 Python Cell 后这里会刷新。
+    </div>
 
-      <section v-if="datasets.length" class="py-session-panel__section">
-        <div class="py-session-panel__section-head">
-          <div class="py-session-panel__section-title">数据集</div>
-          <div class="py-session-panel__section-meta">{{ datasets.length }} 个候选对象</div>
-        </div>
-        <div class="py-session-panel__list">
-          <article
-            v-for="item in datasets"
-            :key="`${inspector.cellId}-${item.variableName}`"
-            class="py-session-panel__card py-session-panel__card--dataset"
-          >
-            <div class="py-session-panel__card-head">
-              <div class="py-session-panel__identity">
-                <span class="py-session-panel__name">{{ item.variableName }}</span>
-                <span class="py-session-panel__type">{{ item.valueType || 'value' }}</span>
-              </div>
-              <div class="py-session-panel__dataset-actions">
-                <button
-                  type="button"
-                  class="py-session-panel__copy-btn"
-                  title="在独立数据工作台中查看和编辑"
-                  aria-label="在独立数据工作台中查看和编辑"
-                  @click="openVariableWorkbench(item)"
-                >
-                  <Icon :icon="tableIcon" width="15" height="15" />
-                </button>
-                <button type="button" class="py-session-panel__icon-btn" title="生成输出" @click="materializeDataset(item)">生成输出</button>
-                <button type="button" class="py-session-panel__icon-btn" title="写回 Markdown" @click="writebackDataset(item)">写回</button>
-                <button type="button" class="py-session-panel__icon-btn" title="导出当前对象" @click="exportDataset(item)">导出</button>
-              </div>
-            </div>
-
-            <div class="py-session-panel__meta">
-              <span>{{ item.dataKind || 'value' }}</span>
-              <span v-if="item.length != null">len {{ item.length }}</span>
-              <span v-if="item.rows != null">rows {{ item.rows }}</span>
-              <span v-if="item.columns != null">cols {{ item.columns }}</span>
-              <span v-if="formatShape(item.shape)">shape {{ formatShape(item.shape) }}</span>
-              <span v-if="item.sourceLabel">{{ item.sourceLabel }}</span>
-            </div>
-
-            <pre class="py-session-panel__preview">{{ item.preview || '' }}</pre>
-
-            <div class="py-session-panel__plotter">
-              <select v-model="getPlotDraft(item).chartType" class="py-session-panel__field">
-                <option v-for="chart in chartTypes" :key="chart.value" :value="chart.value">{{ chart.label }}</option>
-              </select>
-              <select v-model="getPlotDraft(item).x" class="py-session-panel__field">
-                <option value="">X 自动</option>
-                <option v-for="column in getDatasetColumns(item)" :key="`${item.variableName}-x-${column}`" :value="column">{{ column }}</option>
-              </select>
-              <select v-model="getPlotDraft(item).y" class="py-session-panel__field">
-                <option value="">Y 自动</option>
-                <option v-for="column in getDatasetColumns(item)" :key="`${item.variableName}-y-${column}`" :value="column">{{ column }}</option>
-              </select>
-              <select v-model="getPlotDraft(item).color" class="py-session-panel__field">
-                <option value="">颜色自动</option>
-                <option v-for="column in getDatasetColumns(item)" :key="`${item.variableName}-c-${column}`" :value="column">{{ column }}</option>
-              </select>
-              <input v-model="getPlotDraft(item).title" class="py-session-panel__field wide" placeholder="图表标题" />
-              <button type="button" class="py-session-panel__action-btn" @click="plotDataset(item, 'plot-variable')">绘图</button>
-              <button type="button" class="py-session-panel__action-btn" @click="plotDataset(item, 'plot-variable-writeback')">绘图写回</button>
-              <button type="button" class="py-session-panel__action-btn" @click="plotDataset(item, 'plot-variable-export')">绘图导出</button>
-            </div>
-          </article>
-        </div>
-      </section>
-
-      <section class="py-session-panel__section">
-        <div class="py-session-panel__section-head">
-          <div class="py-session-panel__section-title">会话变量</div>
-          <div class="py-session-panel__section-meta">{{ variables.length }} 个变量</div>
+    <div v-else class="py-session-panel__list">
+      <article
+        v-for="item in variables"
+        :key="`${inspector.cellId}-${item.name}`"
+        class="py-session-panel__card"
+      >
+        <div class="py-session-panel__card-head">
+          <div class="py-session-panel__identity">
+            <span class="py-session-panel__name">{{ item.name }}</span>
+            <span class="py-session-panel__type">{{ item.value_type || item.type || 'value' }}</span>
+          </div>
+          <div class="py-session-panel__card-actions">
+            <button
+              type="button"
+              class="py-session-panel__tool-btn"
+              title="在独立变量工作台中处理"
+              aria-label="在独立变量工作台中处理"
+              @click="openVariableWorkbench(item)"
+            >
+              <Icon :icon="tableIcon" width="15" height="15" />
+            </button>
+            <button
+              type="button"
+              class="py-session-panel__tool-btn"
+              title="复制变量为新变量"
+              aria-label="复制变量为新变量"
+              @click="copyVariableObject(item)"
+            >
+              <Icon :icon="copyPlusIcon" width="15" height="15" />
+            </button>
+            <button
+              type="button"
+              class="py-session-panel__tool-btn"
+              title="复制变量预览文本"
+              aria-label="复制变量预览文本"
+              @click="copyVariablePreview(item)"
+            >
+              <Icon :icon="copyIcon" width="15" height="15" />
+            </button>
+            <button
+              type="button"
+              class="py-session-panel__tool-btn"
+              title="重命名变量"
+              aria-label="重命名变量"
+              @click="renameVariable(item)"
+            >
+              <Icon :icon="pencilIcon" width="15" height="15" />
+            </button>
+            <button
+              type="button"
+              class="py-session-panel__tool-btn danger"
+              title="删除变量"
+              aria-label="删除变量"
+              @click="deleteVariable(item)"
+            >
+              <Icon :icon="trashIcon" width="15" height="15" />
+            </button>
+          </div>
         </div>
 
-        <div v-if="!variables.length" class="py-session-panel__empty">
-          当前会话里还没有可见变量。
+        <div class="py-session-panel__meta">
+          <span v-if="item.length != null">len {{ item.length }}</span>
+          <span v-if="item.rows != null">rows {{ item.rows }}</span>
+          <span v-if="item.columns != null">cols {{ item.columns }}</span>
+          <span v-if="formatShape(item.shape)">shape {{ formatShape(item.shape) }}</span>
         </div>
 
-        <div v-else class="py-session-panel__list">
-          <article
-            v-for="item in variables"
-            :key="`${inspector.cellId}-${item.name}`"
-            class="py-session-panel__card"
-          >
-            <div class="py-session-panel__card-head">
-              <div class="py-session-panel__identity">
-                <span class="py-session-panel__name">{{ item.name }}</span>
-                <span class="py-session-panel__type">{{ item.value_type || item.type || 'value' }}</span>
-              </div>
-              <button
-                type="button"
-                class="py-session-panel__copy-btn"
-                title="复制变量内容"
-                aria-label="复制变量内容"
-                @click="copyVariablePreview(item)"
-              >
-                <Icon :icon="copyIcon" width="15" height="15" />
-              </button>
-            </div>
-
-            <div class="py-session-panel__var-actions">
-              <button type="button" class="py-session-panel__mini-btn" @click="openVariableWorkbench(item)">工作台</button>
-              <button type="button" class="py-session-panel__mini-btn" @click="copyVariableObject(item)">复制变量</button>
-              <button type="button" class="py-session-panel__mini-btn" @click="renameVariable(item)">重命名</button>
-              <button type="button" class="py-session-panel__mini-btn danger" @click="deleteVariable(item)">删除</button>
-            </div>
-
-            <div class="py-session-panel__meta">
-              <span v-if="item.length != null">len {{ item.length }}</span>
-              <span v-if="item.rows != null">rows {{ item.rows }}</span>
-              <span v-if="item.columns != null">cols {{ item.columns }}</span>
-              <span v-if="formatShape(item.shape)">shape {{ formatShape(item.shape) }}</span>
-            </div>
-
-            <pre class="py-session-panel__preview">{{ item.preview || '' }}</pre>
-          </article>
-        </div>
-      </section>
+        <pre class="py-session-panel__preview">{{ item.preview || '' }}</pre>
+      </article>
     </div>
   </section>
 </template>
 
 <script setup>
-import { computed, reactive, ref } from 'vue'
+import { computed } from 'vue'
 import { Icon } from '@iconify/vue'
 import copyIcon from '@iconify-icons/lucide/copy'
+import copyPlusIcon from '@iconify-icons/lucide/copy-plus'
+import pencilIcon from '@iconify-icons/lucide/pencil'
 import tableIcon from '@iconify-icons/lucide/table-properties'
+import trashIcon from '@iconify-icons/lucide/trash-2'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { useMessage } from 'naive-ui'
 import { createLogger } from '../../utils/logger'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
 import { useSettingsStore } from '../../stores/settingsStore'
-import GuaxiNotebookMathEditor from './GuaxiNotebookMathEditor.vue'
-import {
-  NOTEBOOK_LAB_CHART_TYPES,
-  emitNotebookDataLabAction,
-} from './utils/guaxiNotebookDataLab'
+import { emitNotebookDataLabAction } from './utils/guaxiNotebookDataLab'
 
 const logger = createLogger('GuaxiNotebookSessionPanel')
 const message = useMessage()
@@ -199,39 +115,10 @@ const settingsStore = useSettingsStore()
 const inspector = computed(() => rightSiderStore.pythonSessionInspector || {})
 const appearanceTheme = computed(() => settingsStore.appearanceTheme === 'dark' ? 'dark' : 'light')
 const variables = computed(() => (Array.isArray(inspector.value?.variables) ? inspector.value.variables : []))
-const datasets = computed(() => (Array.isArray(inspector.value?.datasets) ? inspector.value.datasets : []))
-const chartTypes = NOTEBOOK_LAB_CHART_TYPES
-const plotDrafts = reactive({})
-const mathExpression = ref('sin(x) / x')
-const mathMode = ref('plot2d')
-const mathVariable = ref('x')
-const mathRangeMin = ref(-20)
-const mathRangeMax = ref(20)
-const mathModeLabels = {
-  plot2d: '绘制函数图像',
-  simplify: '化简公式',
-  derivative: '求导',
-  integral: '积分',
-  solve: '解方程',
-  evaluate: '计算表达式',
-}
-const runMathLabel = computed(() => mathModeLabels[String(mathMode.value || 'plot2d')] || '生成数学结果')
-const runMathTitle = computed(() => {
-  const mode = String(mathMode.value || 'plot2d')
-  if (mode === 'plot2d') return '绘制当前函数图像'
-  if (mode === 'solve') return '求解当前方程；无解析解时会按当前区间尝试数值解'
-  return runMathLabel.value
-})
 const summaryLabel = computed(() => {
-  if (!inspector.value?.hasActiveCell) {
-    return '未选中 Python Cell'
-  }
-  if (String(inspector.value?.cellTitle || '').trim()) {
-    return inspector.value.cellTitle
-  }
-  if (String(inspector.value?.cellKey || '').trim()) {
-    return `Cell ${inspector.value.cellKey}`
-  }
+  if (!inspector.value?.hasActiveCell) return '未选中 Python Cell'
+  if (String(inspector.value?.cellTitle || '').trim()) return inspector.value.cellTitle
+  if (String(inspector.value?.cellKey || '').trim()) return `Cell ${inspector.value.cellKey}`
   return '当前 Python Cell'
 })
 
@@ -282,7 +169,7 @@ const emitInspectorAction = (action, extra = {}) => {
     ...extra,
   }
   const emitted = emitNotebookDataLabAction(detail)
-  logger.info('[NotebookSessionPanel] emit data lab action', {
+  logger.info('[NotebookSessionPanel] emit session variable action', {
     action: detail.action,
     cellId: detail.cellId,
     variableName: String(detail.variableName || ''),
@@ -291,33 +178,10 @@ const emitInspectorAction = (action, extra = {}) => {
   return emitted
 }
 
-const requestImportFile = () => emitInspectorAction('import-file')
-const requestImportClipboard = () => emitInspectorAction('import-clipboard')
-const requestImportUrl = () => {
-  const sourceUrl = String(window.prompt?.('输入要导入的 CSV / JSON / Excel / 文本 URL', '') || '').trim()
-  if (!sourceUrl) return
-  emitInspectorAction('import-url', {
-    sourceUrl,
-    sourceLabel: sourceUrl,
-  })
-}
-const materializeDataset = (item) => emitInspectorAction('materialize-variable', {
-  variableName: String(item?.variableName || ''),
-  dataKind: String(item?.dataKind || ''),
-})
-const writebackDataset = (item) => emitInspectorAction('writeback-variable', {
-  variableName: String(item?.variableName || ''),
-  dataKind: String(item?.dataKind || ''),
-})
-const exportDataset = (item) => emitInspectorAction('export-variable', {
-  variableName: String(item?.variableName || ''),
-  dataKind: String(item?.dataKind || ''),
-})
-
 const openVariableWorkbench = async (item) => {
   const variableName = String(item?.variableName || item?.name || '').trim()
   if (!variableName) {
-    message.warning('变量名为空，无法打开数据工作台')
+    message.warning('变量名为空，无法打开变量工作台')
     return
   }
   if (!inspector.value?.hasActiveCell) {
@@ -331,8 +195,8 @@ const openVariableWorkbench = async (item) => {
     return
   }
 
-  const dataKind = String(item?.dataKind || '').trim() || 'value'
-  const label = `data-lab-${sessionId.replace(/[^a-zA-Z0-9_:-]/g, '_')}-${variableName.replace(/[^a-zA-Z0-9_:-]/g, '_')}`.slice(0, 120)
+  const dataKind = String(item?.dataKind || item?.value_type || item?.type || '').trim() || 'value'
+  const label = `data-lab-${sessionId.replace(/[^a-zA-Z0-9_:-]/g, '_')}`.slice(0, 110)
   const params = new URLSearchParams({
     sessionId,
     variableName,
@@ -349,13 +213,13 @@ const openVariableWorkbench = async (item) => {
     if (existing) {
       await existing.show()
       await existing.setFocus()
-      logger.info('[NotebookSessionPanel] focus existing data workbench', { label, sessionId, variableName })
+      logger.info('[NotebookSessionPanel] focus existing variable workbench', { label, sessionId, variableName })
       return
     }
 
     const workbench = new WebviewWindow(label, {
       url: `/data-lab-workbench?${params.toString()}`,
-      title: `数据工作台 - ${variableName}`,
+      title: '变量工作台',
       width: 1280,
       height: 820,
       minWidth: 980,
@@ -363,82 +227,24 @@ const openVariableWorkbench = async (item) => {
       visible: true,
     })
     workbench.once('tauri://created', () => {
-      logger.info('[NotebookSessionPanel] data workbench created', { label, sessionId, variableName, dataKind })
+      logger.info('[NotebookSessionPanel] variable workbench created', { label, sessionId, variableName, dataKind })
     })
     workbench.once('tauri://error', (event) => {
-      logger.error('[NotebookSessionPanel] data workbench create failed', {
+      logger.error('[NotebookSessionPanel] variable workbench create failed', {
         label,
         variableName,
         error: String(event?.payload || ''),
       })
-      message.error('打开数据工作台失败')
+      message.error('打开变量工作台失败')
     })
   } catch (error) {
-    logger.error('[NotebookSessionPanel] open data workbench failed', {
+    logger.error('[NotebookSessionPanel] open variable workbench failed', {
       variableName,
       error: String(error?.message || error),
     })
-    message.error('打开数据工作台失败')
+    message.error('打开变量工作台失败')
   }
 }
-
-const getDatasetColumns = (item) => {
-  if (Array.isArray(item?.columnNames) && item.columnNames.length) return item.columnNames
-  const count = Number(item?.columns || 0)
-  if (Number.isFinite(count) && count > 0) {
-    return Array.from({ length: Math.min(count, 12) }, (_, index) => String(index))
-  }
-  return []
-}
-
-const getPlotDraft = (item) => {
-  const key = String(item?.variableName || '')
-  if (!plotDrafts[key]) {
-    const columns = getDatasetColumns(item)
-    plotDrafts[key] = {
-      chartType: String(item?.dataKind || '') === 'table' ? 'line' : 'histogram',
-      x: columns[0] || '',
-      y: columns[1] || columns[0] || '',
-      z: columns[2] || '',
-      color: '',
-      title: `${key || '变量'} 图表`,
-    }
-  }
-  return plotDrafts[key]
-}
-
-const plotDataset = (item, action = 'plot-variable') => {
-  const draft = getPlotDraft(item)
-  emitInspectorAction(action, {
-    variableName: String(item?.variableName || ''),
-    dataKind: String(item?.dataKind || ''),
-    chartType: String(draft.chartType || 'line'),
-    x: String(draft.x || ''),
-    y: String(draft.y || ''),
-    z: String(draft.z || ''),
-    color: String(draft.color || ''),
-    title: String(draft.title || ''),
-  })
-}
-
-const runMath = (writeBack = false) => {
-  const expression = String(mathExpression.value || '').trim()
-  if (!expression) {
-    message.warning('请输入数学公式')
-    return
-  }
-  emitInspectorAction(writeBack ? 'math-writeback' : 'math-evaluate', {
-    expression,
-    mode: String(mathMode.value || 'plot2d'),
-    variable: String(mathVariable.value || 'x'),
-    rangeMin: Number(mathRangeMin.value),
-    rangeMax: Number(mathRangeMax.value),
-  })
-}
-
-const generateReport = (writeBack = false) => emitInspectorAction(writeBack ? 'writeback-report' : 'generate-report', {
-  title: '探索实验室报告',
-})
 
 const renameVariable = (item) => {
   const variableName = String(item?.name || item?.variableName || '').trim()
@@ -463,11 +269,10 @@ const deleteVariable = (item) => {
   emitInspectorAction('variable-delete', { variableName })
 }
 
-// Design notes:
-// 1. Session variables can now be very large, so the copy action is scoped to the
-//    exact preview payload shown in the right panel.
-// 2. The button stays on each card to avoid forcing users to select text inside a
-//    nested scrolling preview region.
+// 设计说明：
+// 1. 会话变量可能很大，右侧面板的复制只复制当前卡片显示的 preview，避免误把大对象完整写入剪贴板导致卡顿。
+// 2. 真正的变量复制走 Python 会话内的 variable-copy 动作，保留类型和结构。
+// 3. 两条路径分别记录日志，便于排查“复制文本”和“复制变量对象”被混用的问题。
 const copyVariablePreview = async (item) => {
   const text = String(item?.preview || '')
   if (!text) {
@@ -486,19 +291,12 @@ const copyVariablePreview = async (item) => {
     variableName: String(item?.name || ''),
     textLength: text.length,
   })
-  message.success(`已复制变量 ${String(item?.name || '')}`)
+  message.success(`已复制变量 ${String(item?.name || '')} 的预览`)
 }
 </script>
 
 <style scoped>
 .py-session-panel {
-  /*
-   * 设计说明：
-   * 1. 右侧面板现在承担“数据实验室”职责，除了变量预览，还要容纳导入按钮、数据集卡片和变量列表。
-   * 2. 这里继续沿用原来的三层表面体系，但把顶部工具条和数据集卡片也纳入同一套局部变量，
-   *    保证亮暗主题下层次清晰，不会出现新区域比旧区域更突兀的情况。
-   * 3. 所有颜色仍然基于应用现有主题变量推导，避免引入新的全局主题状态源。
-   */
   --py-session-text: var(--guaxi-text-primary, #1f2328);
   --py-session-muted: var(--guaxi-text-secondary, #57606a);
   --py-session-border: color-mix(in srgb, var(--guaxi-border, #d0d7de) 78%, transparent);
@@ -507,8 +305,6 @@ const copyVariablePreview = async (item) => {
   --py-session-chip-bg: color-mix(in srgb, var(--guaxi-panel-bg, #ffffff) 82%, var(--guaxi-content-bg, #ffffff) 18%);
   --py-session-preview-bg: color-mix(in srgb, var(--guaxi-content-bg, #ffffff) 88%, var(--guaxi-panel-bg, #ffffff) 12%);
   --py-session-hover-bg: color-mix(in srgb, var(--guaxi-panel-bg, #ffffff) 70%, var(--guaxi-content-bg, #ffffff) 30%);
-  --py-session-accent-bg: color-mix(in srgb, #2f6f55 16%, var(--guaxi-panel-bg, #ffffff) 84%);
-  --py-session-accent-text: #1f5a43;
   --py-session-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
   flex: 1 1 auto;
   min-height: 0;
@@ -528,12 +324,11 @@ const copyVariablePreview = async (item) => {
   --py-session-chip-bg: #303744;
   --py-session-preview-bg: #3a404b;
   --py-session-hover-bg: #353d49;
-  --py-session-accent-bg: rgba(54, 124, 95, 0.22);
-  --py-session-accent-text: #ccebdc;
   --py-session-shadow: 0 16px 36px rgba(0, 0, 0, 0.28);
 }
 
 .py-session-panel__header {
+  flex: 0 0 auto;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -542,9 +337,13 @@ const copyVariablePreview = async (item) => {
   border-bottom: 1px solid var(--py-session-border);
 }
 
+.py-session-panel__title-block {
+  min-width: 0;
+}
+
 .py-session-panel__eyebrow {
   font-size: 11px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0;
   text-transform: uppercase;
   color: var(--py-session-muted);
 }
@@ -566,144 +365,10 @@ const copyVariablePreview = async (item) => {
   color: var(--py-session-muted);
 }
 
-.py-session-panel__session-id {
-  max-width: 100%;
-  word-break: break-all;
-}
-
-.py-session-panel__toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 14px;
-}
-
-.py-session-panel__action-btn,
-.py-session-panel__icon-btn,
-.py-session-panel__mini-btn,
-.py-session-panel__field {
-  border: 1px solid var(--py-session-border);
-  border-radius: 10px;
-  background: transparent;
-  color: var(--py-session-text);
-  transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
-}
-
-.py-session-panel__action-btn {
-  min-height: 34px;
-  padding: 0 12px;
-  background: var(--py-session-accent-bg);
-  color: var(--py-session-accent-text);
-  border-color: color-mix(in srgb, var(--py-session-border-strong) 70%, transparent);
-  cursor: pointer;
-}
-
-.py-session-panel__icon-btn {
-  min-height: 28px;
-  padding: 0 10px;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.py-session-panel__mini-btn {
-  min-height: 26px;
-  padding: 0 8px;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.py-session-panel__mini-btn.danger {
-  color: #b42318;
-  border-color: color-mix(in srgb, #d92d20 38%, var(--py-session-border));
-}
-
-.py-session-panel__field {
-  min-width: 0;
-  min-height: 32px;
-  padding: 0 10px;
-  background: var(--py-session-preview-bg);
-  outline: none;
-  box-sizing: border-box;
-}
-
-.py-session-panel__field:focus {
-  border-color: color-mix(in srgb, var(--py-session-accent-text) 58%, var(--py-session-border));
-}
-
-.py-session-panel__field.wide {
-  grid-column: span 2;
-}
-
-.py-session-panel__math-editor {
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  grid-column: 1 / -1;
-}
-
-.py-session-panel__action-btn:hover,
-.py-session-panel__icon-btn:hover,
-.py-session-panel__mini-btn:hover,
-.py-session-panel__copy-btn:hover {
-  background: var(--py-session-hover-bg);
-  border-color: var(--py-session-border-strong);
-  transform: translateY(-1px);
-}
-
-.py-session-panel__math-grid,
-.py-session-panel__plotter,
-.py-session-panel__var-actions {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  min-width: 0;
-}
-
-.py-session-panel__plotter {
-  padding-top: 4px;
-}
-
-.py-session-panel__var-actions {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
-.py-session-panel__body {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-  display: grid;
-  gap: 18px;
-  margin-top: 16px;
-  padding-right: 2px;
-}
-
-.py-session-panel__section {
-  display: grid;
-  gap: 12px;
-}
-
-.py-session-panel__section-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.py-session-panel__section-title {
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--py-session-text);
-}
-
-.py-session-panel__section-meta {
-  font-size: 12px;
-  color: var(--py-session-muted);
-}
-
 .py-session-panel__empty {
   margin-top: 16px;
   padding: 18px 16px;
-  border-radius: 14px;
+  border-radius: 8px;
   border: 1px dashed var(--py-session-border-strong);
   color: var(--py-session-muted);
   background: var(--py-session-card-bg);
@@ -711,29 +376,31 @@ const copyVariablePreview = async (item) => {
 }
 
 .py-session-panel__list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
   display: grid;
+  align-content: start;
   gap: 12px;
+  margin-top: 16px;
+  padding-right: 2px;
 }
 
 .py-session-panel__card {
   display: grid;
   gap: 10px;
   padding: 14px;
-  border-radius: 14px;
+  border-radius: 8px;
   border: 1px solid var(--py-session-border);
   background: var(--py-session-card-bg);
   box-shadow: var(--py-session-shadow);
-}
-
-.py-session-panel__card--dataset {
-  border-color: color-mix(in srgb, var(--py-session-border-strong) 78%, transparent);
 }
 
 .py-session-panel__card-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 8px;
+  gap: 10px;
 }
 
 .py-session-panel__identity {
@@ -754,18 +421,19 @@ const copyVariablePreview = async (item) => {
   color: var(--py-session-muted);
 }
 
-.py-session-panel__dataset-actions {
+.py-session-panel__card-actions {
+  flex: 0 0 auto;
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 6px;
 }
 
-.py-session-panel__copy-btn {
+.py-session-panel__tool-btn {
   width: 28px;
   height: 28px;
   border: 1px solid var(--py-session-border);
-  border-radius: 9px;
+  border-radius: 8px;
   background: transparent;
   color: var(--py-session-muted);
   display: inline-flex;
@@ -773,6 +441,17 @@ const copyVariablePreview = async (item) => {
   justify-content: center;
   cursor: pointer;
   transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+}
+
+.py-session-panel__tool-btn:hover {
+  background: var(--py-session-hover-bg);
+  border-color: var(--py-session-border-strong);
+  transform: translateY(-1px);
+}
+
+.py-session-panel__tool-btn.danger {
+  color: #b42318;
+  border-color: color-mix(in srgb, #d92d20 38%, var(--py-session-border));
 }
 
 .py-session-panel__meta {
@@ -797,7 +476,7 @@ const copyVariablePreview = async (item) => {
   padding: 12px;
   max-height: 280px;
   overflow: auto;
-  border-radius: 12px;
+  border-radius: 8px;
   border: 1px solid var(--py-session-border);
   background: var(--py-session-preview-bg);
   color: var(--py-session-text);
