@@ -70,6 +70,15 @@
                 <span class="py-session-panel__type">{{ item.valueType || 'value' }}</span>
               </div>
               <div class="py-session-panel__dataset-actions">
+                <button
+                  type="button"
+                  class="py-session-panel__copy-btn"
+                  title="在独立数据工作台中查看和编辑"
+                  aria-label="在独立数据工作台中查看和编辑"
+                  @click="openVariableWorkbench(item)"
+                >
+                  <Icon :icon="tableIcon" width="15" height="15" />
+                </button>
                 <button type="button" class="py-session-panel__icon-btn" title="生成输出" @click="materializeDataset(item)">生成输出</button>
                 <button type="button" class="py-session-panel__icon-btn" title="写回 Markdown" @click="writebackDataset(item)">写回</button>
                 <button type="button" class="py-session-panel__icon-btn" title="导出当前对象" @click="exportDataset(item)">导出</button>
@@ -145,6 +154,7 @@
             </div>
 
             <div class="py-session-panel__var-actions">
+              <button type="button" class="py-session-panel__mini-btn" @click="openVariableWorkbench(item)">工作台</button>
               <button type="button" class="py-session-panel__mini-btn" @click="copyVariableObject(item)">复制变量</button>
               <button type="button" class="py-session-panel__mini-btn" @click="renameVariable(item)">重命名</button>
               <button type="button" class="py-session-panel__mini-btn danger" @click="deleteVariable(item)">删除</button>
@@ -169,6 +179,8 @@
 import { computed, reactive, ref } from 'vue'
 import { Icon } from '@iconify/vue'
 import copyIcon from '@iconify-icons/lucide/copy'
+import tableIcon from '@iconify-icons/lucide/table-properties'
+import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { useMessage } from 'naive-ui'
 import { createLogger } from '../../utils/logger'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
@@ -301,6 +313,74 @@ const exportDataset = (item) => emitInspectorAction('export-variable', {
   variableName: String(item?.variableName || ''),
   dataKind: String(item?.dataKind || ''),
 })
+
+const openVariableWorkbench = async (item) => {
+  const variableName = String(item?.variableName || item?.name || '').trim()
+  if (!variableName) {
+    message.warning('变量名为空，无法打开数据工作台')
+    return
+  }
+  if (!inspector.value?.hasActiveCell) {
+    message.warning('请先选中一个 Python Cell')
+    return
+  }
+
+  const sessionId = String(inspector.value?.sessionId || '').trim()
+  if (!sessionId) {
+    message.warning('当前 Python 会话尚未准备好')
+    return
+  }
+
+  const dataKind = String(item?.dataKind || '').trim() || 'value'
+  const label = `data-lab-${sessionId.replace(/[^a-zA-Z0-9_:-]/g, '_')}-${variableName.replace(/[^a-zA-Z0-9_:-]/g, '_')}`.slice(0, 120)
+  const params = new URLSearchParams({
+    sessionId,
+    variableName,
+    dataKind,
+    filePath: String(inspector.value?.filePath || ''),
+    cellId: String(inspector.value?.cellId || ''),
+    cellKey: String(inspector.value?.cellKey || ''),
+    stableId: String(inspector.value?.stableId || ''),
+    theme: appearanceTheme.value,
+  })
+
+  try {
+    const existing = await WebviewWindow.getByLabel(label)
+    if (existing) {
+      await existing.show()
+      await existing.setFocus()
+      logger.info('[NotebookSessionPanel] focus existing data workbench', { label, sessionId, variableName })
+      return
+    }
+
+    const workbench = new WebviewWindow(label, {
+      url: `/data-lab-workbench?${params.toString()}`,
+      title: `数据工作台 - ${variableName}`,
+      width: 1280,
+      height: 820,
+      minWidth: 980,
+      minHeight: 680,
+      visible: true,
+    })
+    workbench.once('tauri://created', () => {
+      logger.info('[NotebookSessionPanel] data workbench created', { label, sessionId, variableName, dataKind })
+    })
+    workbench.once('tauri://error', (event) => {
+      logger.error('[NotebookSessionPanel] data workbench create failed', {
+        label,
+        variableName,
+        error: String(event?.payload || ''),
+      })
+      message.error('打开数据工作台失败')
+    })
+  } catch (error) {
+    logger.error('[NotebookSessionPanel] open data workbench failed', {
+      variableName,
+      error: String(error?.message || error),
+    })
+    message.error('打开数据工作台失败')
+  }
+}
 
 const getDatasetColumns = (item) => {
   if (Array.isArray(item?.columnNames) && item.columnNames.length) return item.columnNames
@@ -584,7 +664,7 @@ const copyVariablePreview = async (item) => {
 }
 
 .py-session-panel__var-actions {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .py-session-panel__body {

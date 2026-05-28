@@ -18,6 +18,7 @@ import GuaxiKnowledgeBaseManager from '../components/HomeViewComponent/GuaxiKnow
 import GuaxiMarkdownManual from '../components/HomeViewComponent/GuaxiMarkdownManual.vue'
 import GuaxiLanguageLearning from '../components/HomeViewComponent/GuaxiLanguageLearning.vue'
 import FlipboardFeedManager from '../components/SearchViewComponent/FlipboardFeedManager.vue'
+import GuaxiDataLabWorkbench from '../components/HomeViewComponent/GuaxiDataLabWorkbench.vue'
 
 import LifeAlbumApp from '../components/ApplicationViewComponent/apps/LifeAlbumApp.vue'
 import MusicPlayerApp from '../components/ApplicationViewComponent/apps/MusicPlayerApp.vue'
@@ -177,6 +178,11 @@ export const routes = [
     path: '/app/:appId',
     name: 'app-window',
     component: GuaxiAppWindow,
+  },
+  {
+    path: '/data-lab-workbench',
+    name: 'data-lab-workbench',
+    component: GuaxiDataLabWorkbench,
   },
 ];
 

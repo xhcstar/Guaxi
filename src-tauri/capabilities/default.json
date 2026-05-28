@@ -8,6 +8,7 @@
     "template_manager",
     "knowledge_base_manager",
     "resource_repo_manager",
+    "data-lab-*",
     "app-*",
     "git-*",
     "markdown-manual",

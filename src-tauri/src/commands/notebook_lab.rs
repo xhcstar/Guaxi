@@ -58,6 +58,10 @@ fn is_supported_action(action: &str) -> bool {
             | "materialize-variable"
             | "writeback-variable"
             | "export-variable"
+            | "plot-variable"
+            | "plot-variable-writeback"
+            | "plot-variable-export"
+            | "refresh-session-inspector"
     )
 }
 

@@ -632,7 +632,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
-import { listen } from '@tauri-apps/api/event'
+import { emit as emitTauriEvent, listen } from '@tauri-apps/api/event'
 import { useMessage } from 'naive-ui'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { confirm as confirmDialog, open, save } from '@tauri-apps/plugin-dialog'
@@ -707,6 +707,9 @@ import {
   patchPythonCellSnapshot,
   replacePythonCellSnapshots,
 } from './utils/guaxiPythonCellState'
+import {
+  DATA_LAB_SESSION_VARS_UPDATED_EVENT,
+} from './utils/guaxiDataLabWorkbenchClient'
 import {
   NOTEBOOK_DATALAB_EVENT,
   buildNotebookLabDatasetDescriptors,
@@ -4181,6 +4184,43 @@ const syncNotebookPythonSessionInspector = (cell, reason = 'unknown') => {
   return payload
 }
 
+const emitNotebookSessionVarsUpdated = async (cell, variables = [], reason = 'unknown') => {
+  const sessionId = createPythonSessionId(props.filePath)
+  const names = Array.from(new Set(
+    (Array.isArray(variables) ? variables : [])
+      .map((item) => String(item?.name || item?.variableName || '').trim())
+      .filter(Boolean),
+  ))
+  if (!names.length || !sessionId) return
+
+  // 设计说明：
+  // 1. 独立数据工作台和 Notebook 主视图运行在不同 WebView，不能共享响应式 store。
+  // 2. 每次 Python session 中有变量摘要更新时，通过 Tauri 全局事件广播“哪个 session 的哪些变量变了”。
+  // 3. 工作台收到自己关心的变量变更后再从 worker 拉取分页快照，避免把大 DataFrame 直接塞进事件负载。
+  await Promise.all(names.map((variableName) => emitTauriEvent(DATA_LAB_SESSION_VARS_UPDATED_EVENT, {
+    sessionId,
+    variableName,
+    filePath: String(props.filePath || ''),
+    cellId: String(cell?.cellId || ''),
+    cellKey: String(cell?.key || ''),
+    stableId: String(cell?.meta?.id || ''),
+    source: String(reason || 'notebook'),
+    updatedAt: new Date().toISOString(),
+  }).catch((error) => {
+    logger.warn('[NotebookDataLab] emit session var update failed', {
+      reason,
+      variableName,
+      error: String(error?.message || error),
+    })
+  })))
+
+  logger.info('[NotebookDataLab] session var update event emitted', {
+    reason,
+    cellId: String(cell?.cellId || ''),
+    variableNames: names,
+  })
+}
+
 watch(
   [
     () => activeNotebookPythonCellKey.value,
@@ -6174,6 +6214,7 @@ const importExternalDataToPythonSession = async (cell, {
       activeCellChangedDuringImport: activeCellKeyAtStart !== String(activeNotebookPythonCellKey.value || ''),
       activeCellKeyAtFinish: String(activeNotebookPythonCellKey.value || ''),
     })
+    await emitNotebookSessionVarsUpdated(targetCell, result?.session_vars || [{ name: importPlan.variableName }], 'import-data-to-python-session')
     bumpRefresh()
     schedulePersistNotebookSidecar('import-data-to-python-session')
     message.success(`已导入到会话变量 ${importPlan.variableName}`)
@@ -6459,6 +6500,7 @@ const runNotebookLabGeneratedCode = async (cell, {
       writeBack,
       exportAfter,
     })
+    await emitNotebookSessionVarsUpdated(cell, nextSessionVars, `${source}:success`)
     if (dataflow) {
       markDependentNotebookCellsStale(cell, dataflow, `${source}:success`)
     }
@@ -6593,6 +6635,60 @@ const handleNotebookDataLabActionEvent = async (event) => {
       sourceLabel: String(detail?.sourceLabel || ''),
       variableName: String(detail?.variableName || ''),
     })
+    return
+  }
+  if (detail.action === 'refresh-session-inspector') {
+    // 设计说明：
+    // 1. 独立数据工作台和 Notebook 主视图共享同一个 Python session，但它们是两个 WebView。
+    // 2. 工作台保存变量后不能直接改主视图的 Pinia 快照，所以通过统一事件请求主视图重新同步右侧变量面板。
+    // 3. 这里通过一段无输出轻量代码从 worker 拉取最新变量摘要，不重新执行用户 cell，也不追加输出模块。
+    try {
+      const snapshot = getCellSnapshot(targetCell)
+      const variableName = String(detail?.variableName || '').trim()
+      const res = await invoke('python_exec', {
+        request: {
+          code: 'print("[GuaxiDataWorkbench] refreshed notebook inspector")',
+          persist: true,
+          expect_json: true,
+          include_session_vars: true,
+          session_var_names: variableName ? [variableName] : undefined,
+          vars: {
+            _guaxi_session: createPythonSessionId(props.filePath),
+            _doc_path: String(props.filePath || ''),
+            _py_cell_id: String(targetCell.cellId || ''),
+          },
+        },
+      })
+      const nextSessionVars = variableName
+        ? mergeNotebookSessionVarSummaries(
+          Array.isArray(snapshot?.sessionVars) ? snapshot.sessionVars : [],
+          Array.isArray(res?.session_vars) ? res.session_vars : [],
+        )
+        : resolveNotebookSessionVarsFromExecResult(res, Array.isArray(snapshot?.sessionVars) ? snapshot.sessionVars : [])
+      patchPythonCellSnapshot(props.filePath, targetCell.cellId, {
+        sessionVars: nextSessionVars,
+        lab: patchCellSnapshotLab(targetCell, {
+          lastWorkbenchRefreshAt: new Date().toISOString(),
+          lastWorkbenchRefreshVariable: variableName,
+        }),
+      })
+      syncNotebookPythonSessionInspector(targetCell, 'data-workbench-refresh-request')
+      bumpRefresh()
+      schedulePersistNotebookSidecar('data-workbench-refresh')
+      logger.info('[NotebookDataLab] refreshed inspector from data workbench request', {
+        cellId: String(targetCell?.cellId || ''),
+        variableName,
+        updatedSessionVarCount: nextSessionVars.length,
+      })
+      await emitNotebookSessionVarsUpdated(targetCell, nextSessionVars, 'data-workbench-refresh-request')
+    } catch (error) {
+      logger.warn('[NotebookDataLab] refresh inspector from data workbench failed', {
+        cellId: String(targetCell?.cellId || ''),
+        variableName: String(detail?.variableName || ''),
+        error: String(error?.message || error),
+      })
+      syncNotebookPythonSessionInspector(targetCell, 'data-workbench-refresh-fallback')
+    }
     return
   }
   if (detail.action === 'plot-variable' || detail.action === 'plot-variable-writeback' || detail.action === 'plot-variable-export') {
@@ -6793,6 +6889,7 @@ const runPythonCell = async (cell, { writeBack = false } = {}) => {
     if (dataflow) {
       markDependentNotebookCellsStale(cell, dataflow, 'run-python-cell-success')
     }
+    await emitNotebookSessionVarsUpdated(cell, nextSessionVars, 'run-python-cell-success')
     if (isActiveNotebookPythonCell(cell) || isNotebookPythonSessionPanelVisible.value) {
       syncNotebookPythonSessionInspector(cell, 'run-python-cell-success')
     }
