@@ -220,26 +220,86 @@
 
           <section v-else-if="activeTab === 'structure'" class="data-workbench__panel">
             <div class="data-workbench__structure">
-              <div class="data-workbench__structure-board">
-                <div class="data-workbench__structure-root">
-                  <span>{{ activeVariableName || 'value' }}</span>
-                  <strong>{{ activeVariableKindLabel }}</strong>
+              <div class="data-workbench__structure-toolbar">
+                <div>
+                  <strong>{{ structureFocusLabel }}</strong>
+                  <span>{{ structureGraph.nodes.length }} 个节点 · {{ structureGraph.edges.length }} 条关系</span>
                 </div>
-                <div class="data-workbench__structure-grid">
-                  <article
-                    v-for="node in structureCards"
-                    :key="node.key"
-                    class="data-workbench__structure-card"
-                    :class="`is-depth-${Math.min(node.depth, 3)}`"
+                <div class="data-workbench__structure-actions">
+                  <button type="button" class="data-workbench__mini-btn" @click="zoomStructure(0.14)">放大</button>
+                  <button type="button" class="data-workbench__mini-btn" @click="zoomStructure(-0.14)">缩小</button>
+                  <button type="button" class="data-workbench__mini-btn" @click="resetStructureView">重置</button>
+                  <button type="button" class="data-workbench__mini-btn" :disabled="structureFocusPath === 'value'" @click="focusStructureNode('value')">回到根节点</button>
+                </div>
+              </div>
+
+              <div
+                class="data-workbench__structure-canvas"
+                @mousedown="startStructurePan"
+                @wheel.prevent="handleStructureWheel"
+              >
+                <div
+                  class="data-workbench__structure-stage"
+                  :style="structureStageStyle"
+                >
+                  <svg
+                    class="data-workbench__structure-links"
+                    :width="structureGraph.width"
+                    :height="structureGraph.height"
+                    aria-hidden="true"
                   >
-                    <div class="data-workbench__structure-card-head">
-                      <span>{{ node.label }}</span>
-                      <code>{{ node.type }}</code>
-                    </div>
-                    <pre>{{ node.preview }}</pre>
-                  </article>
+                    <path
+                      v-for="edge in structureGraph.edges"
+                      :key="edge.key"
+                      class="data-workbench__structure-link"
+                      :d="edge.path"
+                    />
+                  </svg>
+                  <button
+                    v-for="node in structureGraph.nodes"
+                    :key="node.path"
+                    type="button"
+                    class="data-workbench__structure-node"
+                    :class="{ 'is-selected': node.path === selectedStructurePath, 'has-children': node.childCount }"
+                    :style="{ left: `${node.x}px`, top: `${node.y}px` }"
+                    @mousedown.stop
+                    @click="selectStructureNode(node)"
+                    @dblclick.stop="focusStructureNode(node.path)"
+                  >
+                    <span class="data-workbench__structure-node-title">{{ node.label }}</span>
+                    <code>{{ node.type }}</code>
+                    <small>{{ node.summary }}</small>
+                    <span v-if="node.childCount" class="data-workbench__structure-node-badge">
+                      {{ node.expanded ? '展开' : `${node.childCount} 子项` }}
+                    </span>
+                  </button>
                 </div>
-                <div v-if="!structureCards.length" class="data-workbench__structure-empty">
+                <aside v-if="selectedStructureNode" class="data-workbench__structure-detail">
+                  <div>
+                    <strong>{{ selectedStructureNode.label }}</strong>
+                    <code>{{ selectedStructureNode.type }}</code>
+                  </div>
+                  <pre>{{ selectedStructureNode.preview }}</pre>
+                  <div class="data-workbench__structure-detail-actions">
+                    <button
+                      type="button"
+                      class="data-workbench__mini-btn"
+                      :disabled="!selectedStructureNode.childCount"
+                      @click="toggleStructureNode(selectedStructureNode.path)"
+                    >
+                      {{ selectedStructureNode.expanded ? '收起子节点' : '展开子节点' }}
+                    </button>
+                    <button
+                      type="button"
+                      class="data-workbench__mini-btn"
+                      :disabled="!selectedStructureNode.childCount"
+                      @click="focusStructureNode(selectedStructureNode.path)"
+                    >
+                      聚焦子图
+                    </button>
+                  </div>
+                </aside>
+                <div v-if="!structureGraph.nodes.length" class="data-workbench__structure-empty">
                   {{ prettyPreview || '当前变量没有可展开的结构。' }}
                 </div>
               </div>
@@ -482,6 +542,11 @@ const lastRightPaneWidth = ref(300)
 const leftSidebarCollapsed = ref(false)
 const rightInspectorCollapsed = ref(false)
 const resizingPane = ref('')
+const structureFocusPath = ref('value')
+const selectedStructurePath = ref('value')
+const expandedStructurePaths = ref(new Set(['value']))
+const structurePan = reactive({ x: 36, y: 34, scale: 1 })
+const structureDrag = reactive({ active: false, startX: 0, startY: 0, originX: 0, originY: 0 })
 const chartTypes = WORKBENCH_CHART_TYPES
 const exportFormats = WORKBENCH_SUPPORTED_EXPORTS
 const importOptions = [
@@ -591,30 +656,73 @@ const previewLineCount = computed(() => {
   if (!text) return 0
   return text.split(/\r?\n/).length
 })
-const structureCards = computed(() => {
-  const structure = snapshot.value?.structure
-  const cards = []
-  const visit = (value, label = 'value', depth = 0, path = 'value') => {
-    if (cards.length >= 80 || depth > 4) return
-    const type = getValueType(value)
-    const preview = compactDisplayValue(value)
-    if (path !== 'value') {
-      cards.push({
-        key: path,
-        label,
-        depth,
-        type,
-        preview,
-      })
+const structureRootValue = computed(() => snapshot.value?.structure ?? snapshot.value?.table ?? snapshot.value?.preview ?? null)
+const structureStageStyle = computed(() => ({
+  width: `${structureGraph.value.width}px`,
+  height: `${structureGraph.value.height}px`,
+  transform: `translate(${structurePan.x}px, ${structurePan.y}px) scale(${structurePan.scale})`,
+}))
+const structureFocusLabel = computed(() => {
+  const node = getStructureNodeByPath(structureFocusPath.value)
+  return node?.label || activeVariableName.value || 'value'
+})
+const selectedStructureNode = computed(() => getStructureNodeByPath(selectedStructurePath.value))
+const structureGraph = computed(() => {
+  const root = getStructureNodeByPath(structureFocusPath.value) || createStructureNode(structureRootValue.value, activeVariableName.value || 'value', 'value', 0)
+  if (!root) return { nodes: [], edges: [], width: 960, height: 560 }
+
+  const nodes = []
+  const edges = []
+  const levelCounts = new Map()
+  const maxNodes = 140
+  const collect = (node, depth = 0, parent = null) => {
+    if (!node || nodes.length >= maxNodes || depth > 6) return
+    const levelIndex = levelCounts.get(depth) || 0
+    levelCounts.set(depth, levelIndex + 1)
+    const nextNode = {
+      ...node,
+      graphDepth: depth,
+      levelIndex,
+      expanded: expandedStructurePaths.value.has(node.path),
     }
-    if (!value || typeof value !== 'object') return
-    const entries = Array.isArray(value)
-      ? value.slice(0, 24).map((item, index) => [String(index), item])
-      : Object.entries(value).slice(0, 24)
-    entries.forEach(([key, child]) => visit(child, key, depth + 1, `${path}.${key}`))
+    nodes.push(nextNode)
+    if (parent) edges.push({ from: parent.path, to: node.path, key: `${parent.path}->${node.path}` })
+    if (!nextNode.expanded) return
+    nextNode.children.slice(0, 18).forEach((child) => collect(child, depth + 1, nextNode))
   }
-  visit(structure ?? snapshot.value?.table ?? snapshot.value?.preview, activeVariableName.value || 'value')
-  return cards
+  collect(root)
+
+  const levelGapX = 260
+  const nodeGapY = 126
+  const width = Math.max(920, (Math.max(...nodes.map((node) => node.graphDepth), 0) + 1) * levelGapX + 220)
+  const height = Math.max(560, Math.max(...Array.from(levelCounts.values(), (count) => count * nodeGapY), [0]) + 140)
+  const levelOffsets = new Map()
+  levelCounts.forEach((count, depth) => {
+    levelOffsets.set(depth, Math.max(40, (height - count * nodeGapY) / 2))
+  })
+
+  const positionByPath = new Map()
+  nodes.forEach((node) => {
+    node.x = 40 + node.graphDepth * levelGapX
+    node.y = (levelOffsets.get(node.graphDepth) || 40) + node.levelIndex * nodeGapY
+    positionByPath.set(node.path, node)
+  })
+
+  const shapedEdges = edges.map((edge) => {
+    const from = positionByPath.get(edge.from)
+    const to = positionByPath.get(edge.to)
+    const startX = Number(from?.x || 0) + 210
+    const startY = Number(from?.y || 0) + 42
+    const endX = Number(to?.x || 0)
+    const endY = Number(to?.y || 0) + 42
+    const midX = startX + Math.max(44, (endX - startX) / 2)
+    return {
+      ...edge,
+      path: `M ${startX} ${startY} C ${midX} ${startY}, ${midX} ${endY}, ${endX} ${endY}`,
+    }
+  })
+
+  return { nodes, edges: shapedEdges, width, height }
 })
 
 const tabs = computed(() => [
@@ -636,6 +744,10 @@ watch(chartColumns, (columns) => {
 
 watch(activeVariableName, (name) => {
   context.variableName = String(name || '')
+  structureFocusPath.value = 'value'
+  selectedStructurePath.value = 'value'
+  expandedStructurePaths.value = new Set(['value'])
+  resetStructureView()
 })
 
 const formatShape = (shape) => {
@@ -659,6 +771,40 @@ const getValueType = (value) => {
   return typeof value
 }
 
+const getStructureEntries = (value) => {
+  if (!value || typeof value !== 'object') return []
+  return Array.isArray(value)
+    ? value.map((item, index) => [String(index), item])
+    : Object.entries(value)
+}
+
+const createStructureNode = (value, label = 'value', path = 'value', depth = 0) => {
+  const entries = getStructureEntries(value)
+  return {
+    label: String(label || 'value'),
+    path: String(path || 'value'),
+    depth,
+    type: getValueType(value),
+    summary: entries.length ? `${entries.length} 子项` : compactDisplayValue(value).slice(0, 44),
+    preview: compactDisplayValue(value),
+    childCount: entries.length,
+    children: entries.slice(0, 120).map(([key, child]) => createStructureNode(child, key, `${path}.${key}`, depth + 1)),
+  }
+}
+
+const getStructureNodeByPath = (path) => {
+  const targetPath = String(path || 'value')
+  const root = createStructureNode(structureRootValue.value, activeVariableName.value || 'value', 'value', 0)
+  const stack = [root]
+  while (stack.length) {
+    const node = stack.shift()
+    if (!node) continue
+    if (node.path === targetPath) return node
+    stack.push(...(node.children || []))
+  }
+  return root
+}
+
 const compactDisplayValue = (value) => {
   if (value == null) return String(value)
   if (typeof value === 'string') return value
@@ -668,6 +814,95 @@ const compactDisplayValue = (value) => {
   } catch {
     return String(value)
   }
+}
+
+const clampStructureScale = (value) => Math.min(2.2, Math.max(0.45, Number(value) || 1))
+
+const zoomStructure = (delta) => {
+  structurePan.scale = clampStructureScale(structurePan.scale + Number(delta || 0))
+  logger.info('[DataWorkbench] zoom structure canvas', {
+    variableName: activeVariableName.value,
+    scale: structurePan.scale,
+  })
+}
+
+const resetStructureView = () => {
+  structurePan.x = 36
+  structurePan.y = 34
+  structurePan.scale = 1
+  logger.info('[DataWorkbench] reset structure canvas', {
+    variableName: activeVariableName.value,
+  })
+}
+
+const selectStructureNode = (node) => {
+  selectedStructurePath.value = String(node?.path || 'value')
+  logger.info('[DataWorkbench] selected structure node', {
+    variableName: activeVariableName.value,
+    path: selectedStructurePath.value,
+  })
+}
+
+const toggleStructureNode = (path) => {
+  const normalizedPath = String(path || 'value')
+  const next = new Set(expandedStructurePaths.value)
+  if (next.has(normalizedPath)) {
+    next.delete(normalizedPath)
+  } else {
+    next.add(normalizedPath)
+  }
+  expandedStructurePaths.value = next
+  selectedStructurePath.value = normalizedPath
+  logger.info('[DataWorkbench] toggled structure node', {
+    variableName: activeVariableName.value,
+    path: normalizedPath,
+    expanded: next.has(normalizedPath),
+  })
+}
+
+const focusStructureNode = (path) => {
+  const normalizedPath = String(path || 'value')
+  structureFocusPath.value = normalizedPath
+  selectedStructurePath.value = normalizedPath
+  expandedStructurePaths.value = new Set([normalizedPath])
+  resetStructureView()
+  logger.info('[DataWorkbench] focused structure subgraph', {
+    variableName: activeVariableName.value,
+    path: normalizedPath,
+  })
+}
+
+const startStructurePan = (event) => {
+  structureDrag.active = true
+  structureDrag.startX = Number(event.clientX || 0)
+  structureDrag.startY = Number(event.clientY || 0)
+  structureDrag.originX = structurePan.x
+  structureDrag.originY = structurePan.y
+  window.addEventListener('mousemove', handleStructurePanMove)
+  window.addEventListener('mouseup', stopStructurePan, { once: true })
+}
+
+const handleStructurePanMove = (event) => {
+  if (!structureDrag.active) return
+  structurePan.x = structureDrag.originX + Number(event.clientX || 0) - structureDrag.startX
+  structurePan.y = structureDrag.originY + Number(event.clientY || 0) - structureDrag.startY
+}
+
+const stopStructurePan = () => {
+  if (!structureDrag.active) return
+  structureDrag.active = false
+  window.removeEventListener('mousemove', handleStructurePanMove)
+  logger.info('[DataWorkbench] panned structure canvas', {
+    variableName: activeVariableName.value,
+    x: structurePan.x,
+    y: structurePan.y,
+    scale: structurePan.scale,
+  })
+}
+
+const handleStructureWheel = (event) => {
+  const delta = Number(event.deltaY || 0) > 0 ? -0.08 : 0.08
+  structurePan.scale = clampStructureScale(structurePan.scale + delta)
 }
 
 const cellDisplayValue = (value) => {
@@ -1234,6 +1469,7 @@ onBeforeUnmount(() => {
     unlistenVariableUpdated()
     unlistenVariableUpdated = null
   }
+  window.removeEventListener('mousemove', handleStructurePanMove)
   document.body?.classList?.remove('data-workbench-resizing')
 })
 </script>
@@ -1807,90 +2043,156 @@ onBeforeUnmount(() => {
   background-size: 44px 44px;
 }
 
-.data-workbench__structure-board {
-  min-height: 100%;
+.data-workbench__structure-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: -16px -16px 0;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--dl-border);
+  background: color-mix(in srgb, var(--dl-panel) 88%, transparent);
+  backdrop-filter: blur(10px);
+}
+
+.data-workbench__structure-toolbar > div:first-child {
+  min-width: 0;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 18px;
+  gap: 3px;
 }
 
-.data-workbench__structure-root {
-  justify-self: center;
-  min-width: min(360px, 70%);
-  display: grid;
-  gap: 4px;
-  border: 1px solid color-mix(in srgb, var(--dl-accent) 48%, var(--dl-border));
-  border-radius: 8px;
-  padding: 12px 16px;
-  background: var(--dl-panel);
-  color: var(--dl-text);
-  box-shadow: 0 18px 38px rgba(15, 23, 42, 0.16);
-  text-align: center;
+.data-workbench__structure-toolbar strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.data-workbench__structure-root span {
-  font-size: 18px;
-  font-weight: 800;
-  overflow-wrap: anywhere;
-}
-
-.data-workbench__structure-root strong {
+.data-workbench__structure-toolbar span {
   color: var(--dl-muted);
   font-size: 12px;
 }
 
-.data-workbench__structure-grid {
-  min-height: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  align-content: start;
-  gap: 12px;
+.data-workbench__structure-actions,
+.data-workbench__structure-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
 }
 
-.data-workbench__structure-card {
-  min-width: 0;
+.data-workbench__structure-canvas {
+  position: relative;
+  min-height: calc(100% - 44px);
+  overflow: hidden;
+  cursor: grab;
+}
+
+.data-workbench__structure-canvas:active {
+  cursor: grabbing;
+}
+
+.data-workbench__structure-stage {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+}
+
+.data-workbench__structure-links {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+}
+
+.data-workbench__structure-link {
+  fill: none;
+  stroke: color-mix(in srgb, var(--dl-accent) 42%, var(--dl-border));
+  stroke-width: 2;
+}
+
+.data-workbench__structure-node {
+  position: absolute;
+  width: 210px;
+  min-height: 84px;
   display: grid;
-  gap: 8px;
+  align-content: start;
+  gap: 5px;
   border: 1px solid var(--dl-border);
   border-radius: 8px;
   padding: 10px;
-  background: color-mix(in srgb, var(--dl-panel) 90%, var(--dl-accent-soft) 10%);
-  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.1);
+  background: color-mix(in srgb, var(--dl-panel) 92%, var(--dl-accent-soft) 8%);
+  color: var(--dl-text);
+  text-align: left;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.14);
+  cursor: pointer;
 }
 
-.data-workbench__structure-card.is-depth-2 {
-  margin-top: 12px;
+.data-workbench__structure-node:hover,
+.data-workbench__structure-node.is-selected {
+  border-color: color-mix(in srgb, var(--dl-accent) 60%, var(--dl-border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--dl-accent) 18%, transparent), 0 16px 34px rgba(15, 23, 42, 0.18);
 }
 
-.data-workbench__structure-card.is-depth-3 {
-  margin-top: 24px;
-}
-
-.data-workbench__structure-card-head {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.data-workbench__structure-card-head span {
+.data-workbench__structure-node-title {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-weight: 700;
+  font-weight: 800;
 }
 
-.data-workbench__structure-card-head code {
+.data-workbench__structure-node code,
+.data-workbench__structure-detail code {
   color: var(--dl-muted);
   font-family: var(--editor-font-family, Consolas, monospace);
+  font-size: 12px;
 }
 
-.data-workbench__structure-card pre,
+.data-workbench__structure-node small {
+  color: var(--dl-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.data-workbench__structure-node-badge {
+  justify-self: start;
+  border-radius: 999px;
+  padding: 2px 7px;
+  background: var(--dl-accent-soft);
+  color: var(--dl-text);
+  font-size: 11px;
+}
+
+.data-workbench__structure-detail {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 4;
+  width: min(360px, calc(100% - 28px));
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--dl-border);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--dl-panel);
+  color: var(--dl-text);
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.2);
+}
+
+.data-workbench__structure-detail > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.data-workbench__structure-detail pre,
 .data-workbench__structure-empty {
   margin: 0;
-  max-height: 180px;
+  max-height: 220px;
   overflow: auto;
   border-radius: 7px;
   padding: 9px;
@@ -1901,6 +2203,12 @@ onBeforeUnmount(() => {
   font-family: var(--editor-font-family, Consolas, monospace);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.data-workbench__structure-empty {
+  position: absolute;
+  left: 16px;
+  top: 58px;
 }
 
 .data-workbench__state.is-error {

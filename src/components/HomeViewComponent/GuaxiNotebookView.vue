@@ -429,6 +429,15 @@
             <div class="guaxi-notebook__python-toolbar-actions">
               <button
                 type="button"
+                class="guaxi-notebook__icon-btn"
+                :title="getCellSnapshot(cell).meta.cellCollapsed ? '展开当前 Python Cell' : '折叠当前 Python Cell'"
+                :aria-label="getCellSnapshot(cell).meta.cellCollapsed ? '展开当前 Python Cell' : '折叠当前 Python Cell'"
+                @click="togglePythonCellCollapsed(cell)"
+              >
+                <Icon :icon="getCellSnapshot(cell).meta.cellCollapsed ? chevronRightIcon : chevronDownIcon" width="16" height="16" />
+              </button>
+              <button
+                type="button"
                 class="guaxi-notebook__icon-btn danger"
                 title="删除当前 Python Cell"
                 aria-label="删除当前 Python Cell"
@@ -443,127 +452,138 @@
             上游变量已更新：{{ getCellSnapshot(cell).meta.staleVariables.join(', ') }}。建议重新运行当前 Cell。
           </div>
 
-          <GuaxiNotebookPythonEditor
-            :cell-key="cell.key"
-            :document-path="filePath"
-            :model-value="cell.code"
-            :theme="theme"
-            :ref="(instance) => setPythonEditorRef(cell.key, instance)"
-            @update:model-value="updatePythonCell(cell.key, $event)"
-            @focus="handleNotebookPythonEditorFocus(cell)"
-          />
+          <template v-if="!getCellSnapshot(cell).meta.cellCollapsed">
+            <GuaxiNotebookPythonEditor
+              :cell-key="cell.key"
+              :document-path="filePath"
+              :model-value="cell.code"
+              :theme="theme"
+              :ref="(instance) => setPythonEditorRef(cell.key, instance)"
+              @update:model-value="updatePythonCell(cell.key, $event)"
+              @focus="handleNotebookPythonEditorFocus(cell)"
+            />
 
-          <div v-if="(hasVisibleOutput(cell) || isCellBusy(cell)) && !getCellSnapshot(cell).meta.outputCollapsed" class="guaxi-notebook__panel">
-            <div class="guaxi-notebook__panel-head">
-              <div class="guaxi-notebook__panel-title">输出 · {{ getCellOutputModules(cell).length }}</div>
-              <div class="guaxi-notebook__panel-actions">
-                <button
-                  v-if="getLatestTextOutputModule(cell)"
-                  type="button"
-                  class="guaxi-notebook__icon-btn guaxi-notebook__panel-icon-btn"
-                  title="复制文本输出"
-                  aria-label="复制文本输出"
-                  @click="copyPythonCellTextOutput(cell)"
+            <div v-if="(hasVisibleOutput(cell) || isCellBusy(cell)) && !getCellSnapshot(cell).meta.outputCollapsed" class="guaxi-notebook__panel">
+              <div class="guaxi-notebook__panel-head">
+                <div class="guaxi-notebook__panel-title">输出 · {{ getCellOutputModules(cell).length }}</div>
+                <div class="guaxi-notebook__panel-actions">
+                  <button
+                    v-if="getLatestTextOutputModule(cell)"
+                    type="button"
+                    class="guaxi-notebook__icon-btn guaxi-notebook__panel-icon-btn"
+                    title="复制文本输出"
+                    aria-label="复制文本输出"
+                    @click="copyPythonCellTextOutput(cell)"
+                  >
+                    <Icon :icon="copyIcon" width="14" height="14" />
+                  </button>
+                  <button type="button" class="guaxi-notebook__panel-btn" @click="writeCellOutputToMarkdown(cell)">写回 Markdown</button>
+                  <button type="button" class="guaxi-notebook__panel-btn" @click="exportCellOutputToFile(cell)">导出文件</button>
+                </div>
+              </div>
+              <div class="guaxi-notebook__panel-content">
+                <div v-if="isCellBusy(cell)" class="guaxi-notebook__running-banner">Python 正在运行，请稍候...</div>
+                <div
+                  v-for="outputModule in getCellOutputModules(cell)"
+                  :key="`${cell.key}-${outputModule.id}`"
+                  class="guaxi-notebook__output-module"
+                  :class="{ 'is-collapsed': outputModule.collapsed }"
                 >
-                  <Icon :icon="copyIcon" width="14" height="14" />
-                </button>
-                <button type="button" class="guaxi-notebook__panel-btn" @click="writeCellOutputToMarkdown(cell)">写回 Markdown</button>
-                <button type="button" class="guaxi-notebook__panel-btn" @click="exportCellOutputToFile(cell)">导出文件</button>
-              </div>
-            </div>
-            <div class="guaxi-notebook__panel-content">
-              <div v-if="isCellBusy(cell)" class="guaxi-notebook__running-banner">Python 正在运行，请稍候...</div>
-              <div
-                v-for="outputModule in getCellOutputModules(cell)"
-                :key="`${cell.key}-${outputModule.id}`"
-                class="guaxi-notebook__output-module"
-                :class="{ 'is-collapsed': outputModule.collapsed }"
-              >
-                <div class="guaxi-notebook__output-module-head">
-                  <div class="guaxi-notebook__output-module-copy">
-                    <span class="guaxi-notebook__output-module-title">{{ getNotebookOutputModuleTitle(outputModule) }}</span>
-                    <span v-if="getNotebookOutputModuleSummary(outputModule)" class="guaxi-notebook__output-module-summary">
-                      {{ getNotebookOutputModuleSummary(outputModule) }}
-                    </span>
+                  <div class="guaxi-notebook__output-module-head">
+                    <div class="guaxi-notebook__output-module-copy">
+                      <span class="guaxi-notebook__output-module-title">{{ getNotebookOutputModuleTitle(outputModule) }}</span>
+                      <span v-if="getNotebookOutputModuleSummary(outputModule)" class="guaxi-notebook__output-module-summary">
+                        {{ getNotebookOutputModuleSummary(outputModule) }}
+                      </span>
+                    </div>
+                    <div class="guaxi-notebook__output-module-actions">
+                      <button
+                        v-if="outputModule.kind === 'text'"
+                        type="button"
+                        class="guaxi-notebook__icon-btn guaxi-notebook__panel-icon-btn"
+                        title="复制当前模块文本"
+                        aria-label="复制当前模块文本"
+                        @click="copyPythonCellTextOutput(cell, outputModule.id)"
+                      >
+                        <Icon :icon="copyIcon" width="14" height="14" />
+                      </button>
+                      <button type="button" class="guaxi-notebook__panel-btn" @click="writeCellOutputToMarkdown(cell, outputModule.id)">写回 Markdown</button>
+                      <button type="button" class="guaxi-notebook__panel-btn" @click="exportCellOutputToFile(cell, outputModule.id)">导出文件</button>
+                      <button
+                        type="button"
+                        class="guaxi-notebook__icon-btn guaxi-notebook__panel-icon-btn"
+                        :title="outputModule.collapsed ? '显示当前输出模块' : '隐藏当前输出模块'"
+                        :aria-label="outputModule.collapsed ? '显示当前输出模块' : '隐藏当前输出模块'"
+                        @click="toggleCellOutputModule(cell, outputModule.id)"
+                      >
+                        <Icon :icon="outputModule.collapsed ? eyeIcon : eyeOffIcon" width="14" height="14" />
+                      </button>
+                      <button
+                        type="button"
+                        class="guaxi-notebook__icon-btn guaxi-notebook__panel-icon-btn danger"
+                        title="删除当前输出模块"
+                        aria-label="删除当前输出模块"
+                        @click="deleteCellOutputModule(cell, outputModule.id)"
+                      >
+                        <Icon :icon="trash2Icon" width="14" height="14" />
+                      </button>
+                    </div>
                   </div>
-                  <div class="guaxi-notebook__output-module-actions">
-                    <button
-                      v-if="outputModule.kind === 'text'"
-                      type="button"
-                      class="guaxi-notebook__icon-btn guaxi-notebook__panel-icon-btn"
-                      title="复制当前模块文本"
-                      aria-label="复制当前模块文本"
-                      @click="copyPythonCellTextOutput(cell, outputModule.id)"
-                    >
-                      <Icon :icon="copyIcon" width="14" height="14" />
-                    </button>
-                    <button type="button" class="guaxi-notebook__panel-btn" @click="writeCellOutputToMarkdown(cell, outputModule.id)">写回 Markdown</button>
-                    <button type="button" class="guaxi-notebook__panel-btn" @click="exportCellOutputToFile(cell, outputModule.id)">导出文件</button>
-                    <button
-                      type="button"
-                      class="guaxi-notebook__icon-btn guaxi-notebook__panel-icon-btn"
-                      :title="outputModule.collapsed ? '显示当前输出模块' : '隐藏当前输出模块'"
-                      :aria-label="outputModule.collapsed ? '显示当前输出模块' : '隐藏当前输出模块'"
-                      @click="toggleCellOutputModule(cell, outputModule.id)"
-                    >
-                      <Icon :icon="outputModule.collapsed ? eyeIcon : eyeOffIcon" width="14" height="14" />
-                    </button>
-                    <button
-                      type="button"
-                      class="guaxi-notebook__icon-btn guaxi-notebook__panel-icon-btn danger"
-                      title="删除当前输出模块"
-                      aria-label="删除当前输出模块"
-                      @click="deleteCellOutputModule(cell, outputModule.id)"
-                    >
-                      <Icon :icon="trash2Icon" width="14" height="14" />
-                    </button>
-                  </div>
-                </div>
-                <div v-if="!outputModule.collapsed" class="guaxi-notebook__output-module-body">
-                  <div v-if="outputModule.kind === 'html'" class="guaxi-notebook__rich guaxi-notebook__rich--html">
-                    <GuaxiNotebookHtmlOutput
-                      :html="String(outputModule.display?.html || '')"
-                      :theme="theme"
-                      :title="`Python Cell HTML Output ${cell.cellId || cell.key || ''}`"
+                  <div v-if="!outputModule.collapsed" class="guaxi-notebook__output-module-body">
+                    <div v-if="outputModule.kind === 'html'" class="guaxi-notebook__rich guaxi-notebook__rich--html">
+                      <GuaxiNotebookHtmlOutput
+                        :html="String(outputModule.display?.html || '')"
+                        :theme="theme"
+                        :title="`Python Cell HTML Output ${cell.cellId || cell.key || ''}`"
+                      />
+                    </div>
+                    <div v-else-if="outputModule.kind === 'svg'" class="guaxi-notebook__rich" v-html="String(outputModule.display?.svg || '')"></div>
+                    <div
+                      v-else-if="outputModule.kind === 'markdown'"
+                      class="guaxi-notebook__rich markdown-body"
+                      v-html="getRenderedOutputMarkdownHtml(cell, outputModule)"
+                    ></div>
+                    <img
+                      v-else-if="outputModule.kind === 'image' && getCellDisplayUrl(cell, outputModule)"
+                      class="guaxi-notebook__image"
+                      :src="getCellDisplayUrl(cell, outputModule)"
+                      alt="Python Cell Output"
                     />
+                    <audio
+                      v-else-if="outputModule.kind === 'audio' && getCellDisplayUrl(cell, outputModule)"
+                      class="guaxi-notebook__media"
+                      :src="getCellDisplayUrl(cell, outputModule)"
+                      controls
+                      preload="metadata"
+                    ></audio>
+                    <video
+                      v-else-if="outputModule.kind === 'video' && getCellDisplayUrl(cell, outputModule)"
+                      class="guaxi-notebook__media guaxi-notebook__media--video"
+                      :src="getCellDisplayUrl(cell, outputModule)"
+                      controls
+                      preload="metadata"
+                    ></video>
+                    <div v-else-if="outputModule.kind === 'table' && outputModule.table" class="guaxi-notebook__dataframe guaxi-notebook__dataframe--virtual-table">
+                      <GuaxiNotebookTableOutput :table="outputModule.table" />
+                    </div>
+                    <pre v-else-if="outputModule.kind === 'text'" class="guaxi-notebook__output-text">{{ outputModule.text }}</pre>
                   </div>
-                  <div v-else-if="outputModule.kind === 'svg'" class="guaxi-notebook__rich" v-html="String(outputModule.display?.svg || '')"></div>
-                  <div
-                    v-else-if="outputModule.kind === 'markdown'"
-                    class="guaxi-notebook__rich markdown-body"
-                    v-html="getRenderedOutputMarkdownHtml(cell, outputModule)"
-                  ></div>
-                  <img
-                    v-else-if="outputModule.kind === 'image' && getCellDisplayUrl(cell, outputModule)"
-                    class="guaxi-notebook__image"
-                    :src="getCellDisplayUrl(cell, outputModule)"
-                    alt="Python Cell Output"
-                  />
-                  <audio
-                    v-else-if="outputModule.kind === 'audio' && getCellDisplayUrl(cell, outputModule)"
-                    class="guaxi-notebook__media"
-                    :src="getCellDisplayUrl(cell, outputModule)"
-                    controls
-                    preload="metadata"
-                  ></audio>
-                  <video
-                    v-else-if="outputModule.kind === 'video' && getCellDisplayUrl(cell, outputModule)"
-                    class="guaxi-notebook__media guaxi-notebook__media--video"
-                    :src="getCellDisplayUrl(cell, outputModule)"
-                    controls
-                    preload="metadata"
-                  ></video>
-                  <div v-else-if="outputModule.kind === 'table' && outputModule.table" class="guaxi-notebook__dataframe guaxi-notebook__dataframe--virtual-table">
-                    <GuaxiNotebookTableOutput :table="outputModule.table" />
-                  </div>
-                  <pre v-else-if="outputModule.kind === 'text'" class="guaxi-notebook__output-text">{{ outputModule.text }}</pre>
+                </div>
+                <div v-if="!getCellOutputModules(cell).length && !isCellBusy(cell)" class="guaxi-notebook__empty guaxi-notebook__empty--dashed">
+                  当前还没有输出结果
                 </div>
               </div>
-              <div v-if="!getCellOutputModules(cell).length && !isCellBusy(cell)" class="guaxi-notebook__empty guaxi-notebook__empty--dashed">
-                当前还没有输出结果
-              </div>
             </div>
-          </div>
+          </template>
+          <button
+            v-else
+            type="button"
+            class="guaxi-notebook__python-collapsed-summary"
+            @click="togglePythonCellCollapsed(cell)"
+          >
+            <span>{{ getPythonCellOutlineTitle(cell) }}</span>
+            <code>{{ getPythonCellCodeSummary(cell) }}</code>
+          </button>
         </div>
       </template>
       </div>
@@ -652,6 +672,8 @@ import saveIcon from '@iconify-icons/lucide/save'
 import uploadIcon from '@iconify-icons/lucide/upload'
 import eyeIcon from '@iconify-icons/lucide/eye'
 import eyeOffIcon from '@iconify-icons/lucide/eye-off'
+import chevronDownIcon from '@iconify-icons/lucide/chevron-down'
+import chevronRightIcon from '@iconify-icons/lucide/chevron-right'
 import flaskConicalIcon from '@iconify-icons/lucide/flask-conical'
 import terminalIcon from '@iconify-icons/lucide/terminal'
 import trash2Icon from '@iconify-icons/lucide/trash-2'
@@ -2058,11 +2080,23 @@ const notebookOutlineEntries = computed(() => {
   const cellStartLineMap = buildNotebookCellStartLineMap(notebookCells.value)
 
   for (const cell of Array.isArray(notebookCells.value) ? notebookCells.value : []) {
+    const cellKey = String(cell.key || '')
+    const baseLine = Number(cellStartLineMap.get(cellKey) || 1)
+    if (cell?.type === 'python') {
+      result.push({
+        level: 2,
+        text: getPythonCellOutlineTitle(cell),
+        line: baseLine,
+        cellKey,
+        outlineId: `nb-outline-python-${cellKey}`,
+        kind: 'python-cell',
+      })
+      continue
+    }
+
     if (cell?.type !== 'markdown') continue
 
-    const cellKey = String(cell.key || '')
     const content = String(cell.content || '')
-    const baseLine = Number(cellStartLineMap.get(cellKey) || 1)
     const outlineSource = maskPythonCellBlocksForMarkdown(content)
     const tokens = notebookOutlineMarkdownParser.parse(outlineSource, {})
     let cellHeadingIndex = 0
@@ -2082,6 +2116,7 @@ const notebookOutlineEntries = computed(() => {
         line,
         cellKey,
         outlineId: `nb-outline-${cellKey}-${cellHeadingIndex}`,
+        kind: 'heading',
       })
       cellHeadingIndex += 1
     })
@@ -2107,6 +2142,8 @@ const createNotebookOutlinePayload = () => {
     level: Number(item.level || 0),
     text: String(item.text || ''),
     line: Number(item.line || 0),
+    kind: String(item.kind || 'heading'),
+    cellKey: String(item.cellKey || ''),
   }))
 }
 
@@ -3071,6 +3108,21 @@ const syncMarkdownEditorValueToCell = (key, reason = 'sync-markdown-editor-value
   return true
 }
 
+const getPythonCellCodeSummary = (cell) => {
+  const lines = String(cell?.code || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+  return lines[0] || '空 Python Cell'
+}
+
+const getPythonCellOutlineTitle = (cell) => {
+  const title = String(cell?.meta?.title || '').trim()
+  if (title) return title
+  const summary = getPythonCellCodeSummary(cell)
+  return summary === '空 Python Cell' ? 'Python Cell' : `Python · ${summary}`
+}
+
 const jumpToNotebookOutlineLine = (line, options = {}) => {
   const targetLine = Number(line)
   if (!Number.isFinite(targetLine) || targetLine <= 0) {
@@ -3091,6 +3143,7 @@ const jumpToNotebookOutlineLine = (line, options = {}) => {
   const behavior = options?.behavior || 'smooth'
   const outlineId = String(outlineEntry.outlineId || '')
   const cellKey = String(outlineEntry.cellKey || '')
+  const isPythonCellTarget = String(outlineEntry.kind || '') === 'python-cell'
 
   nextTick(() => {
     const headingTarget = outlineId
@@ -3119,11 +3172,19 @@ const jumpToNotebookOutlineLine = (line, options = {}) => {
       inline: 'nearest',
       behavior,
     })
+    if (isPythonCellTarget && cellKey) {
+      const cell = notebookCells.value.find((item) => String(item?.key || '') === cellKey)
+      if (cell?.type === 'python') {
+        setActiveNotebookPythonCellKey(cellKey, 'outline-python-cell')
+        patchCellMeta(cell, { cellCollapsed: false })
+      }
+    }
 
     logger.info('[Notebook] outline jump applied', {
       line: targetLine,
       outlineId,
       cellKey,
+      kind: String(outlineEntry.kind || 'heading'),
     })
   })
 
@@ -5216,6 +5277,19 @@ const toggleCellOutput = (cell) => {
   })
   patchCellMeta(cell, {
     outputCollapsed: !snapshot.meta.outputCollapsed,
+  })
+}
+
+const togglePythonCellCollapsed = (cell) => {
+  const snapshot = getCellSnapshot(cell)
+  const nextCollapsed = !snapshot.meta.cellCollapsed
+  patchCellMeta(cell, {
+    cellCollapsed: nextCollapsed,
+  })
+  logger.info('[Notebook] toggle python cell collapsed', {
+    key: String(cell?.key || ''),
+    cellId: String(cell?.cellId || ''),
+    collapsed: nextCollapsed,
   })
 }
 
@@ -7902,6 +7976,37 @@ defineExpose({
 
 .guaxi-notebook__python-toolbar .guaxi-notebook__icon-btn:not(.primary) {
   background: color-mix(in srgb, var(--guaxi-notebook-btn) 82%, transparent);
+}
+
+.guaxi-notebook__python-collapsed-summary {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  border: 1px dashed var(--guaxi-notebook-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--guaxi-notebook-panel-soft) 78%, transparent);
+  color: var(--guaxi-notebook-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.guaxi-notebook__python-collapsed-summary:hover {
+  border-color: color-mix(in srgb, var(--guaxi-notebook-primary) 36%, var(--guaxi-notebook-border));
+  background: color-mix(in srgb, var(--guaxi-notebook-panel-soft) 92%, var(--guaxi-notebook-panel) 8%);
+}
+
+.guaxi-notebook__python-collapsed-summary span {
+  font-weight: 700;
+}
+
+.guaxi-notebook__python-collapsed-summary code {
+  min-width: 0;
+  color: var(--guaxi-notebook-muted);
+  font-family: var(--guaxi-notebook-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .guaxi-notebook__stale-banner {

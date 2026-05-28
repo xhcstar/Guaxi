@@ -1,7 +1,11 @@
 <template>
     <div class="outline-panel">
+        <label class="outline-search">
+            <span>搜索</span>
+            <input v-model="outlineSearch" type="text" placeholder="搜索标题或 Python Cell" />
+        </label>
         <div class="outline-scroll">
-            <n-tree :data="outlineTree" key-field="id" label-field="text" :render-label="renderLabel"
+            <n-tree :data="filteredOutlineTree" key-field="id" label-field="text" :render-label="renderLabel"
                 :render-prefix="renderPrefix" :expand-on-click="true" :show-line="true" :virtual-scroll="true"
                 :virtual-scroll-item-height="28" :expanded-keys="expandedKeys"
                 @update:expanded-keys="handleExpandedKeysUpdate" @update:selected-keys="handleSelect"
@@ -13,6 +17,7 @@
 <script setup>
 import { NTree, NIcon } from 'naive-ui'
 import { TextBulletListTree20Filled, List24Filled } from '@vicons/fluent'
+import { Code24Regular } from '@vicons/fluent'
 import { storeToRefs } from 'pinia'
 import { useOutlineStore } from '../../stores/outlineStore'
 import { h, computed, ref, watch } from 'vue'
@@ -44,6 +49,23 @@ function buildTree(flatOutline) {
 }
 
 const outlineTree = computed(() => buildTree(outline.value || []))
+const outlineSearch = ref('')
+const filteredOutlineTree = computed(() => {
+    const keyword = outlineSearch.value.trim().toLowerCase()
+    if (!keyword) return outlineTree.value
+    const filterNodes = (nodes) => {
+        return nodes.reduce((acc, node) => {
+            const children = filterNodes(node.children || [])
+            const matched = String(node.text || '').toLowerCase().includes(keyword)
+                || String(node.kind || '').toLowerCase().includes(keyword)
+            if (matched || children.length) {
+                acc.push({ ...node, children })
+            }
+            return acc
+        }, [])
+    }
+    return filterNodes(outlineTree.value)
+})
 const expandedKeys = ref([])
 const expandedKeysInitialized = ref(false)
 
@@ -62,11 +84,11 @@ function getLevelOneExpandedKeys(tree) {
 }
 
 watch(
-    outlineTree,
+    filteredOutlineTree,
     (tree) => {
         const allKeys = new Set(collectAllKeys(tree))
-        if (!expandedKeysInitialized.value) {
-            expandedKeys.value = getLevelOneExpandedKeys(tree)
+        if (!expandedKeysInitialized.value || outlineSearch.value.trim()) {
+            expandedKeys.value = outlineSearch.value.trim() ? collectAllKeys(tree) : getLevelOneExpandedKeys(tree)
             expandedKeysInitialized.value = true
             return
         }
@@ -79,15 +101,22 @@ watch(
 // 渲染标签
 const renderLabel = ({ option }) => {
     return h('span', {
+        class: [
+            'outline-label',
+            option.kind === 'python-cell' ? 'is-python-cell' : ''
+        ],
         style: {
             fontWeight: option.level === 1 ? 'bold' : 'normal'
         }
-    }, option.text)
+    }, option.kind === 'python-cell' ? `Python Cell · ${option.text}` : option.text)
 }
 
 // 渲染前缀图标
 const renderPrefix = ({ option }) => {
     // 你可以根据不同层级或类型自定义不同图标
+    if (option.kind === 'python-cell') {
+        return h(NIcon, null, { default: () => h(Code24Regular) })
+    }
     if (option.level === 1) {
         return h(NIcon, null, { default: () => h(List24Filled) })
     }
@@ -129,6 +158,33 @@ const handleExpandedKeysUpdate = (keys) => {
     box-sizing: border-box;
 }
 
+.outline-search {
+    flex: 0 0 auto;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+    margin: 8px 8px 4px;
+    border: 1px solid var(--guaxi-border, rgba(128, 128, 128, 0.22));
+    border-radius: 8px;
+    padding: 6px 9px;
+    background: var(--guaxi-header-bg);
+    color: var(--guaxi-text-secondary, #667085);
+}
+
+.outline-search span {
+    font-size: 12px;
+}
+
+.outline-search input {
+    min-width: 0;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: var(--guaxi-text-primary, inherit);
+    font: inherit;
+}
+
 :deep(.n-tree-node-content) {
     border-radius: 6px;
     transition: background 0.2s ease, box-shadow 0.2s ease;
@@ -155,5 +211,9 @@ const handleExpandedKeysUpdate = (keys) => {
 
 :deep(.outline-tree .n-tree-node-content) {
     align-items: flex-start;
+}
+
+:deep(.outline-label.is-python-cell) {
+    color: color-mix(in srgb, var(--guaxi-text-primary, currentColor) 86%, #3b82f6 14%);
 }
 </style>
