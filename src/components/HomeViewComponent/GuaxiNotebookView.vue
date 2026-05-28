@@ -933,6 +933,10 @@ const clearNotebookTopToolbarHideTimer = () => {
 
 const NOTEBOOK_TOP_TOOLBAR_TRIGGER_DISTANCE = 56
 const NOTEBOOK_TOP_TOOLBAR_HIDE_DISTANCE = 120
+const NOTEBOOK_TOP_TOOLBAR_POINTER_IGNORE_SELECTOR = [
+  '.guaxi-notebook-table-output__viewport',
+  '.guaxi-notebook__dataframe',
+].join(', ')
 
 // 设计说明：
 // 1. 探索模式顶部工具条默认压缩成极薄的吸顶感应层，只在鼠标靠近顶部或键盘聚焦时展开。
@@ -979,10 +983,26 @@ const resolveNotebookToolbarTriggerRect = () => {
   return root.getBoundingClientRect()
 }
 
+const shouldIgnoreNotebookToolbarPointerEvent = (event) => {
+  const target = event?.target
+  const relatedTarget = event?.relatedTarget
+  const ignoredTarget = target instanceof Element && !!target.closest(NOTEBOOK_TOP_TOOLBAR_POINTER_IGNORE_SELECTOR)
+  const ignoredRelatedTarget = relatedTarget instanceof Element && !!relatedTarget.closest(NOTEBOOK_TOP_TOOLBAR_POINTER_IGNORE_SELECTOR)
+  const ignored = ignoredTarget || ignoredRelatedTarget
+  if (ignored) {
+    logger.debug('[NotebookToolbar] ignore pointer event from table output surface', {
+      targetClass: target instanceof Element ? String(target.className || '') : '',
+      relatedTargetClass: relatedTarget instanceof Element ? String(relatedTarget.className || '') : '',
+    })
+  }
+  return ignored
+}
+
 // 设计说明：
 // 1. 触发区域改成“探索者滚动视口的顶部一段距离”，而不是隐藏后的 8px 细条，避免工具条实际上不可达。
 // 2. 这里使用 notebook 的滚动宿主边界作为基准，这样文档滚动很深时，鼠标靠近当前可视区顶部依然能唤起工具条。
 const handleNotebookRootMouseMove = (event) => {
+  if (shouldIgnoreNotebookToolbarPointerEvent(event)) return
   const triggerRect = resolveNotebookToolbarTriggerRect()
   if (!triggerRect) return
   const offsetFromTop = Number(event?.clientY || 0) - triggerRect.top
@@ -995,7 +1015,14 @@ const handleNotebookRootMouseMove = (event) => {
   }
 }
 
-const handleNotebookRootMouseLeave = () => {
+const handleNotebookRootMouseLeave = (event) => {
+  if (shouldIgnoreNotebookToolbarPointerEvent(event)) return
+  if (event?.relatedTarget instanceof Node && notebookRootRef.value?.contains?.(event.relatedTarget)) {
+    logger.debug('[NotebookToolbar] ignore synthetic root mouseleave inside notebook', {
+      reason: 'related-target-still-inside-root',
+    })
+    return
+  }
   scheduleHideNotebookTopToolbar('root-mouseleave')
 }
 

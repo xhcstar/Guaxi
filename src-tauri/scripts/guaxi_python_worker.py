@@ -546,6 +546,47 @@ def _build_remote_table_payload(
     }
 
 
+def _prepare_table_artifact_dir(session_id, globals_dict, handle):
+    sandbox_dir = _prepare_session_dir(session_id, globals_dict)
+    if not sandbox_dir:
+        return ""
+
+    artifact_dir = os.path.join(sandbox_dir, ".guaxi-table-artifacts", handle)
+    try:
+        os.makedirs(artifact_dir, exist_ok=True)
+        return artifact_dir
+    except Exception as exc:
+        print(f"[GuaxiPythonWorker] prepare table artifact dir failed: {exc}", file=sys.stderr)
+        return ""
+
+
+def _records_for_artifact(columns, rows):
+    records = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        record = {}
+        for column in columns:
+            record[column] = _normalize_basic(row.get(column))
+        records.append(record)
+    return records
+
+
+def _write_table_artifact(*, artifact_dir, table_key, table_kind, value, columns):
+    if not artifact_dir:
+        return ""
+
+    if table_kind == "dataframe":
+        artifact_path = os.path.join(artifact_dir, f"{table_key}.pkl")
+        value.to_pickle(artifact_path)
+        return artifact_path
+
+    artifact_path = os.path.join(artifact_dir, f"{table_key}.json")
+    with open(artifact_path, "w", encoding="utf-8") as handle_file:
+        json.dump(_records_for_artifact(columns, value if isinstance(value, list) else []), handle_file, ensure_ascii=False)
+    return artifact_path
+
+
 def _extract_table_bundle(result, globals_dict):
     pandas_module = sys.modules.get("pandas")
     source_path = str(globals_dict.get("__guaxi_table_path") or "").strip()
@@ -600,7 +641,8 @@ def _extract_table_bundle(result, globals_dict):
         return None
 
     handle = f"tbl_{uuid.uuid4().hex}"
-    manifest_path = ""
+    artifact_dir = _prepare_table_artifact_dir(session_id, globals_dict, handle)
+    manifest_path = os.path.join(artifact_dir, "manifest.json") if artifact_dir else ""
     table_payloads = []
     registry_tables = {}
     manifest_tables = []
@@ -616,6 +658,17 @@ def _extract_table_bundle(result, globals_dict):
             columns = [str(col) for col in df.columns.tolist()]
             row_count = int(len(df.index))
             dtypes = {str(k): str(v) for k, v in df.dtypes.astype(str).to_dict().items()}
+            try:
+                artifact_path = _write_table_artifact(
+                    artifact_dir=artifact_dir,
+                    table_key=table_key,
+                    table_kind=table_kind,
+                    value=df,
+                    columns=columns,
+                )
+            except Exception as exc:
+                artifact_path = ""
+                print(f"[GuaxiPythonWorker] persist dataframe artifact failed: {exc}", file=sys.stderr)
             registry_tables[table_key] = {
                 "kind": "dataframe",
                 "value": df,
@@ -636,6 +689,17 @@ def _extract_table_bundle(result, globals_dict):
             columns = normalized["columns"]
             row_count = int(normalized["row_count"])
             dtypes = normalized["dtypes"]
+            try:
+                artifact_path = _write_table_artifact(
+                    artifact_dir=artifact_dir,
+                    table_key=table_key,
+                    table_kind=table_kind,
+                    value=spec.get("value"),
+                    columns=columns,
+                )
+            except Exception as exc:
+                artifact_path = ""
+                print(f"[GuaxiPythonWorker] persist records artifact failed: {exc}", file=sys.stderr)
             registry_tables[table_key] = {
                 "kind": "records",
                 "value": spec.get("value"),
@@ -679,6 +743,17 @@ def _extract_table_bundle(result, globals_dict):
         "source_path": source_path,
         "tables": manifest_tables,
     }
+
+    if manifest_path:
+        try:
+            with open(manifest_path, "w", encoding="utf-8") as handle_file:
+                json.dump(manifest, handle_file, ensure_ascii=False)
+        except Exception as exc:
+            print(f"[GuaxiPythonWorker] persist table manifest failed: {exc}", file=sys.stderr)
+            manifest_path = ""
+            manifest["manifest_path"] = ""
+            for payload in table_payloads:
+                payload["manifest_path"] = ""
 
     TABLE_HANDLES[handle] = {
         "manifest": manifest,

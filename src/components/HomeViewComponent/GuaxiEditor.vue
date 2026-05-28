@@ -18679,7 +18679,10 @@ const closeTab = async (path, region) => {
   }
 
   fileTreeStore.closeTab(path, targetRegion);
-  void dropPythonSessionForPath(path, { silent: true, reason: 'close-tab' })
+  logger.info('[PythonRuntime] keep session alive after closing tab', {
+    reason: 'close-tab',
+    targetPath: path,
+  })
   if (fileTreeStore.openTabs.length > 0) {
     const tab = fileTreeStore.openTabs.find(t => t.path === fileTreeStore.activeTab);
     if (tab) {

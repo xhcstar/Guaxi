@@ -5,6 +5,10 @@
       class="guaxi-notebook-table-output__viewport"
       :style="{ '--guaxi-notebook-table-height': `${viewportHeight}px` }"
       @scroll="handleViewportScroll"
+      @wheel.stop="handleViewportWheel"
+      @mousemove.stop="handleViewportPointerMove"
+      @pointermove.stop="handleViewportPointerMove"
+      @mouseleave.stop="handleViewportPointerLeave"
     >
       <table class="guaxi-notebook-table-output__table" :style="tableStyle">
         <thead>
@@ -53,6 +57,7 @@ const props = defineProps({
 const logger = createLogger('GuaxiNotebookTableOutput')
 const viewportRef = ref(null)
 const loadedRowsMap = ref(new Map())
+const loadError = ref('')
 const loadingPages = new Set()
 let scrollFrameId = 0
 
@@ -103,9 +108,11 @@ const tableStyle = computed(() => ({
 
 const resetLoadedRows = () => {
   loadedRowsMap.value = new Map()
+  loadError.value = ''
   loadingPages.clear()
   logger.info('[NotebookTable] reset remote row cache', {
     tableKey: String(props.table?.tableKey || ''),
+    manifestPath: String(props.table?.manifestPath || ''),
     totalRows: totalRows.value,
     remoteEnabled: remoteEnabled.value,
   })
@@ -138,6 +145,9 @@ const normalizeCellValue = (value) => {
 const getCellDisplayText = (rowIndex, columnIndex) => {
   const row = getResolvedRow(rowIndex)
   if (!row) {
+    if (loadError.value) {
+      return columnIndex === 0 ? `加载失败：${loadError.value}` : ''
+    }
     return columnIndex === 0 ? '加载中...' : ''
   }
   return normalizeCellValue(Array.isArray(row) ? row[columnIndex] : '')
@@ -165,6 +175,7 @@ const loadRemoteRows = async (offset, limit) => {
     const rows = Array.isArray(response?.rows) ? response.rows : []
     if (!rows.length) return
 
+    loadError.value = ''
     const nextMap = new Map(loadedRowsMap.value)
     rows.forEach((row, index) => {
       nextMap.set(offset + index, Array.isArray(row) ? row : [])
@@ -177,11 +188,13 @@ const loadRemoteRows = async (offset, limit) => {
       returnedRows: rows.length,
     })
   } catch (error) {
+    loadError.value = String(error?.message || error || '读取表格数据失败')
     logger.error('[NotebookTable] load remote rows failed', {
       tableKey: String(props.table?.tableKey || ''),
+      manifestPath: String(props.table?.manifestPath || ''),
       offset,
       limit,
-      error: String(error?.message || error),
+      error: loadError.value,
     })
   } finally {
     loadingPages.delete(pageKey)
@@ -215,8 +228,35 @@ const ensureVisibleWindowLoaded = () => {
 }
 
 const syncViewportScrollTop = (nextScrollTop) => {
-  scrollTop.value = Number(nextScrollTop || 0)
+  const normalizedScrollTop = Number(nextScrollTop || 0)
+  const nextStartIndex = Math.max(0, Math.floor(normalizedScrollTop / ROW_HEIGHT) - OVERSCAN_ROWS)
+  const nextEndIndex = Math.min(
+    totalRows.value,
+    Math.ceil((normalizedScrollTop + viewportHeight.value) / ROW_HEIGHT) + OVERSCAN_ROWS,
+  )
+
+  // 设计说明：
+  // 1. 视口自身已经负责像素级滚动，Vue 这里只需要在“可见行窗口”跨过行边界时刷新虚拟行。
+  // 2. 如果每个滚动像素都改写响应式 scrollTop，表格 spacer、sticky 表头和父级布局会被高频重算，
+  //    在 Tauri/Chromium 的嵌入式滚动场景里容易出现逐行扫描式闪烁。
+  // 3. 因此这里把刷新粒度收敛到行窗口变化，同时仍然按当前窗口触发远程分页加载。
+  if (nextStartIndex === startIndex.value && nextEndIndex === endIndex.value) return
+  scrollTop.value = normalizedScrollTop
   ensureVisibleWindowLoaded()
+}
+
+const handleViewportWheel = () => {
+  // 设计说明：表格内部滚轮只应该驱动表格视口，不能继续冒泡到 Notebook 根层的工具栏感应区。
+  // 这里不调用 preventDefault，浏览器仍按原生方式滚动当前表格，避免破坏触控板惯性滚动。
+}
+
+const handleViewportPointerMove = () => {
+  // 设计说明：Notebook 根容器通过 mousemove 控制顶部工具栏显隐。表格虚拟滚动时 DOM 行会替换，
+  // 如果鼠标移动事件继续冒泡，工具栏会在滚动过程中反复显隐并触发中间区域重排。
+}
+
+const handleViewportPointerLeave = () => {
+  // 设计说明：表格区域的离开事件只属于表格自身，不应被解释为 Notebook 根区域离开。
 }
 
 const handleViewportScroll = (event) => {
@@ -270,6 +310,8 @@ onBeforeUnmount(() => {
 .guaxi-notebook-table-output__viewport {
   max-height: var(--guaxi-notebook-table-height, 360px);
   overflow: auto;
+  overscroll-behavior: contain;
+  contain: layout paint;
   border: none;
   border-radius: 0;
   background: transparent;
@@ -281,6 +323,7 @@ onBeforeUnmount(() => {
   table-layout: fixed;
   border-collapse: separate;
   border-spacing: 0;
+  contain: layout paint;
 }
 
 .guaxi-notebook-table-output__table thead th {
@@ -299,6 +342,7 @@ onBeforeUnmount(() => {
   text-align: left;
   vertical-align: top;
   white-space: nowrap;
+  line-height: 20px;
 }
 
 .guaxi-notebook-table-output__table td {
