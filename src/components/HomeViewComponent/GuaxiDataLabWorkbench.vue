@@ -52,7 +52,7 @@
       </div>
 
       <div class="data-workbench__actions">
-        <button type="button" class="data-workbench__icon-btn" title="刷新变量和快照" @click="refreshWorkbench">
+        <button type="button" class="data-workbench__icon-btn" title="刷新变量和快照" data-shortcut="Ctrl+R" @click="refreshWorkbench">
           <Icon :icon="refreshIcon" width="17" height="17" />
         </button>
         <button type="button" class="data-workbench__icon-btn" title="生成会话报告" @click="emitNotebookAction('generate-report')">
@@ -65,6 +65,7 @@
           type="button"
           class="data-workbench__icon-btn"
           title="保存当前变量编辑"
+          data-shortcut="Ctrl+S"
           :disabled="!pendingEdits.length || saving"
           @click="saveEdits(false)"
         >
@@ -74,6 +75,7 @@
           type="button"
           class="data-workbench__icon-btn"
           title="另存为新变量"
+          data-shortcut="Ctrl+Shift+S"
           :disabled="!pendingEdits.length || saving"
           @click="saveEdits(true)"
         >
@@ -83,6 +85,7 @@
           type="button"
           class="data-workbench__icon-btn"
           title="撤销最后一次编辑"
+          data-shortcut="Ctrl+Z"
           :disabled="!pendingEdits.length"
           @click="undoLastEdit"
         >
@@ -101,11 +104,12 @@
       <aside class="data-workbench__sidebar" :class="{ 'is-collapsed': leftSidebarCollapsed }">
         <div class="data-workbench__tab-list">
           <button
-            v-for="tab in tabs"
+            v-for="(tab, index) in tabs"
             :key="tab.value"
             type="button"
             class="data-workbench__tab"
             :class="{ 'is-active': activeTab === tab.value }"
+            :title="`${tab.label}（Ctrl+${index + 1}）`"
             @click="selectTab(tab.value)"
           >
             <Icon :icon="tab.icon" width="17" height="17" />
@@ -562,9 +566,9 @@ const variableMenuOpen = ref(false)
 const variableSearch = ref('')
 const editingCellKey = ref('')
 const editingCellDraft = ref('')
-const leftPaneWidth = ref(112)
+const leftPaneWidth = ref(176)
 const rightPaneWidth = ref(300)
-const lastLeftPaneWidth = ref(112)
+const lastLeftPaneWidth = ref(176)
 const lastRightPaneWidth = ref(300)
 const leftSidebarCollapsed = ref(false)
 const rightInspectorCollapsed = ref(false)
@@ -586,7 +590,7 @@ let pendingRemoteReloadTimer = 0
 const workbenchTheme = computed(() => (context.theme === 'dark' ? 'dark' : 'light'))
 // 设计说明：
 // 1. 工作台主体使用 5 列网格：左栏 / 左分隔条 / 主编辑区 / 右分隔条 / 右栏，折叠时只把侧栏列压到 0，保留分隔条按钮。
-// 2. 主编辑区始终是 minmax(0, 1fr)，让用户收起任一侧栏后表格能立即占满可用空间。
+// 2. 左右栏宽度都由响应式变量驱动，并在拖拽中按当前窗口宽度计算上限，避免固定三列把表格、预览或导航挤死。
 // 3. 侧栏宽度仍保留最后一次拖拽值，避免展开后丢失用户调整过的工作区比例。
 const workbenchGridStyle = computed(() => ({
   gridTemplateColumns: `${leftSidebarCollapsed.value ? 0 : leftPaneWidth.value}px 6px minmax(0, 1fr) 6px ${rightInspectorCollapsed.value ? 0 : rightPaneWidth.value}px`,
@@ -1380,6 +1384,65 @@ const exportVariable = async (format) => {
   }
 }
 
+const isWorkbenchEditableShortcutTarget = (target) => (
+  target instanceof HTMLElement
+  && !!target.closest('input, textarea, select, option, [contenteditable="true"]')
+)
+
+const runWorkbenchShortcutAction = async (action, event) => {
+  logger.info('[DataWorkbenchShortcut] trigger workbench shortcut', {
+    action,
+    key: String(event?.key || ''),
+    ctrlKey: !!event?.ctrlKey,
+    metaKey: !!event?.metaKey,
+    shiftKey: !!event?.shiftKey,
+    activeTab: activeTab.value,
+    variableName: activeVariableName.value,
+    pendingCount: pendingEdits.value.length,
+  })
+  if (action === 'refresh') {
+    await refreshWorkbench()
+    return
+  }
+  if (action === 'save') {
+    await saveEdits(false)
+    return
+  }
+  if (action === 'save-as') {
+    await saveEdits(true)
+    return
+  }
+  if (action === 'undo') {
+    undoLastEdit()
+    return
+  }
+  if (action.startsWith('tab:')) {
+    selectTab(action.slice(4))
+  }
+}
+
+const handleWorkbenchShortcutKeydown = (event) => {
+  const key = String(event?.key || '').toLowerCase()
+  const primary = !!(event?.ctrlKey || event?.metaKey)
+  if (!primary || event?.altKey) return
+
+  const editableTarget = isWorkbenchEditableShortcutTarget(event?.target)
+  let action = ''
+  if (key === 'r' && !event.shiftKey) action = 'refresh'
+  else if (key === 's' && event.shiftKey) action = 'save-as'
+  else if (key === 's') action = 'save'
+  else if (!editableTarget && key === 'z' && !event.shiftKey) action = 'undo'
+  else if (!editableTarget && /^[1-5]$/.test(key)) {
+    const tab = tabs.value[Number(key) - 1]
+    if (tab?.value) action = `tab:${tab.value}`
+  }
+
+  if (!action) return
+  event.preventDefault()
+  event.stopPropagation()
+  void runWorkbenchShortcutAction(action, event)
+}
+
 const sendChart = async (writeBack = false) => {
   try {
     await writeWorkbenchChartToNotebook({
@@ -1414,7 +1477,7 @@ const togglePane = (pane) => {
     if (!leftSidebarCollapsed.value) {
       lastLeftPaneWidth.value = leftPaneWidth.value
     } else {
-      leftPaneWidth.value = Math.max(84, lastLeftPaneWidth.value || 112)
+      leftPaneWidth.value = Math.max(132, lastLeftPaneWidth.value || 176)
     }
     leftSidebarCollapsed.value = !leftSidebarCollapsed.value
     logger.info('[DataWorkbench] toggled left sidebar', {
@@ -1452,17 +1515,32 @@ const handleResizeMove = (event) => {
   const root = event.currentTarget
   const rect = root?.getBoundingClientRect?.()
   if (!rect) return
+  const bodyWidth = Math.max(0, Number(rect.width || 0))
+  const minMainWidth = Math.min(680, Math.max(360, bodyWidth * 0.36))
   if (resizingPane.value === 'left') {
-    leftPaneWidth.value = Math.min(180, Math.max(84, Number(event.clientX) - rect.left))
+    const maxLeftWidth = Math.max(176, bodyWidth - rightPaneWidth.value - minMainWidth - 12)
+    leftPaneWidth.value = Math.min(maxLeftWidth, Math.max(132, Number(event.clientX) - rect.left))
     lastLeftPaneWidth.value = leftPaneWidth.value
+    logger.debug('[DataWorkbench] resizing left pane', {
+      leftPaneWidth: leftPaneWidth.value,
+      maxLeftWidth,
+      minMainWidth,
+    })
     return
   }
-  rightPaneWidth.value = Math.min(460, Math.max(240, rect.right - Number(event.clientX)))
+  const maxRightWidth = Math.max(300, bodyWidth - leftPaneWidth.value - minMainWidth - 12)
+  rightPaneWidth.value = Math.min(maxRightWidth, Math.max(240, rect.right - Number(event.clientX)))
   lastRightPaneWidth.value = rightPaneWidth.value
+  logger.debug('[DataWorkbench] resizing right pane', {
+    rightPaneWidth: rightPaneWidth.value,
+    maxRightWidth,
+    minMainWidth,
+  })
 }
 
 onMounted(() => {
   applyWorkbenchTheme()
+  document.addEventListener('keydown', handleWorkbenchShortcutKeydown, true)
   logger.info('[DataWorkbench] mounted', {
     sessionId: context.sessionId,
     variableName: context.variableName,
@@ -1511,6 +1589,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  document.removeEventListener('keydown', handleWorkbenchShortcutKeydown, true)
   if (pendingRemoteReloadTimer) {
     window.clearTimeout(pendingRemoteReloadTimer)
     pendingRemoteReloadTimer = 0
@@ -1765,6 +1844,7 @@ onBeforeUnmount(() => {
 }
 
 .data-workbench__icon-btn {
+  position: relative;
   width: 34px;
   height: 34px;
   border-radius: 8px;
@@ -1774,6 +1854,7 @@ onBeforeUnmount(() => {
 }
 
 .data-workbench__copy-btn {
+  position: relative;
   width: 26px;
   height: 26px;
   border-radius: 7px;
@@ -1806,11 +1887,60 @@ onBeforeUnmount(() => {
   opacity: 0.5;
 }
 
+.data-workbench__icon-btn::after,
+.data-workbench__copy-btn::after,
+.data-workbench__pane-toggle::after,
+.data-workbench__structure-node-toggle::after {
+  content: attr(title) "  " attr(data-shortcut);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  z-index: 60;
+  width: max-content;
+  max-width: min(300px, calc(100vw - 48px));
+  padding: 6px 8px;
+  border-radius: 7px;
+  background: color-mix(in srgb, #111827 92%, transparent);
+  color: #ffffff;
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 5px);
+  transition: opacity 0.14s ease, transform 0.14s ease;
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.22);
+}
+
+/* 设计说明：
+ * 1. 工作台头部操作区贴近独立窗口顶部，tooltip 向上弹出会被窗口边界裁切。
+ * 2. 仅让头部常用 icon 向下弹出，结构图、检查器等内部 icon 保持原来的就近提示方向。
+ */
+.data-workbench__actions .data-workbench__icon-btn::after {
+  top: calc(100% + 8px);
+  bottom: auto;
+  transform: translate(-50%, -5px);
+}
+
+.data-workbench__icon-btn:hover::after,
+.data-workbench__icon-btn:focus-visible::after,
+.data-workbench__copy-btn:hover::after,
+.data-workbench__copy-btn:focus-visible::after,
+.data-workbench__pane-toggle:hover::after,
+.data-workbench__pane-toggle:focus-visible::after,
+.data-workbench__structure-node-toggle:hover::after,
+.data-workbench__structure-node-toggle:focus-visible::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
 .data-workbench__body {
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
-  grid-template-columns: 112px 6px minmax(0, 1fr) 6px 300px;
+  grid-template-columns: 176px 6px minmax(0, 1fr) 6px 300px;
 }
 
 .data-workbench__sidebar,
@@ -1824,7 +1954,14 @@ onBeforeUnmount(() => {
 .data-workbench__sidebar {
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  /*
+   * 设计说明：
+   * 1. 左侧 tab 的 tooltip 通过 ::after 从按钮右侧伸出，展开态不能被侧栏裁切。
+   * 2. 折叠态仍由 .is-collapsed 规则接管 overflow:hidden，避免收起后内容漏出。
+   */
+  position: relative;
+  z-index: 8;
+  overflow: visible;
 }
 
 .data-workbench__sidebar.is-collapsed,
@@ -1910,6 +2047,7 @@ onBeforeUnmount(() => {
 }
 
 .data-workbench__tab {
+  position: relative;
   width: 100%;
   height: 38px;
   border: 1px solid transparent;
@@ -2240,6 +2378,41 @@ onBeforeUnmount(() => {
 .data-workbench__structure-node-toggle:hover {
   border-color: color-mix(in srgb, var(--dl-accent) 58%, var(--dl-border));
   background: var(--dl-accent-soft);
+}
+
+.data-workbench__tab::after {
+  content: attr(title);
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 50%;
+  z-index: 60;
+  /*
+   * 设计说明：
+   * 1. 伪元素挂在 tab 内部，自动宽度会受按钮/侧栏剩余空间影响，导致中文标题被压成竖排。
+   * 2. tab 标题都很短，使用内容宽度展示；max-width 只作为极端长文案的窗口边界兜底。
+   */
+  width: max-content;
+  max-width: min(260px, calc(100vw - 48px));
+  padding: 6px 8px;
+  border-radius: 7px;
+  background: color-mix(in srgb, #111827 92%, transparent);
+  color: #ffffff;
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: center;
+  white-space: nowrap;
+  overflow-wrap: anywhere;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(0, calc(-50% + 5px));
+  transition: opacity 0.14s ease, transform 0.14s ease;
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.22);
+}
+
+.data-workbench__tab:hover::after,
+.data-workbench__tab:focus-visible::after {
+  opacity: 1;
+  transform: translate(0, -50%);
 }
 
 .data-workbench__structure-detail {

@@ -29,7 +29,8 @@
             type="button"
             class="guaxi-notebook__icon-btn"
             :disabled="!canUndoNotebookHistory"
-            title="撤销"
+            data-tooltip="撤销"
+            data-shortcut="Ctrl+Z"
             aria-label="撤销"
             @click="undoNotebookHistory"
           >
@@ -39,7 +40,8 @@
             type="button"
             class="guaxi-notebook__icon-btn"
             :disabled="!canRedoNotebookHistory"
-            title="重做"
+            data-tooltip="重做"
+            data-shortcut="Ctrl+Y"
             aria-label="重做"
             @click="redoNotebookHistory"
           >
@@ -48,7 +50,8 @@
           <button
             type="button"
             class="guaxi-notebook__icon-btn"
-            title="保存当前文档"
+            data-tooltip="保存当前文档"
+            data-shortcut="Ctrl+S"
             aria-label="保存当前文档"
             @click="requestNotebookSave"
           >
@@ -57,7 +60,8 @@
           <button
             type="button"
             class="guaxi-notebook__icon-btn"
-            title="搜索探索模式内容"
+            data-tooltip="搜索探索模式内容"
+            data-shortcut="Ctrl+F"
             aria-label="搜索探索模式内容"
             @click="openNotebookSearch"
           >
@@ -66,7 +70,8 @@
           <button
             type="button"
             class="guaxi-notebook__icon-btn"
-            title="新增 Python Cell"
+            data-tooltip="新增 Python Cell"
+            data-shortcut="Alt+P"
             aria-label="新增 Python Cell"
             @click="appendCell('python')"
           >
@@ -75,7 +80,8 @@
           <button
             type="button"
             class="guaxi-notebook__icon-btn"
-            title="新增 Markdown Cell"
+            data-tooltip="新增 Markdown Cell"
+            data-shortcut="Alt+M"
             aria-label="新增 Markdown Cell"
             @click="appendCell('markdown')"
           >
@@ -84,7 +90,8 @@
           <button
             type="button"
             class="guaxi-notebook__icon-btn"
-            title="新增数学块"
+            data-tooltip="新增数学块"
+            data-shortcut="Alt+K"
             aria-label="新增数学块"
             @click="appendCell('math')"
           >
@@ -96,7 +103,8 @@
               type="button"
               class="guaxi-notebook__icon-btn"
               :disabled="isActiveNotebookPythonSessionBusy"
-              :title="isActiveNotebookPythonSessionBusy ? '当前文档的 Python 会话正在运行，请稍候再导入数据' : '从外部文件导入数据到当前选中的 Python Cell 实验室会话'"
+              :data-tooltip="isActiveNotebookPythonSessionBusy ? '当前文档的 Python 会话正在运行，请稍候再导入数据' : '从外部文件导入数据到当前选中的 Python Cell 实验室会话'"
+              data-shortcut="Alt+I"
               :aria-label="isActiveNotebookPythonSessionBusy ? '当前文档的 Python 会话正在运行，请稍候再导入数据' : '从外部文件导入数据到当前选中的 Python Cell 实验室会话'"
               @click="handleActivePythonToolbarAction('import-table')"
             >
@@ -106,7 +114,8 @@
               type="button"
               class="guaxi-notebook__icon-btn primary"
               :class="{ 'is-busy': isActiveNotebookPythonRunActive }"
-              :title="isActiveNotebookPythonRunActive ? '中断当前探索者 Python Cell 运行，并清理本次后台会话' : (isActiveNotebookPythonSessionBusy ? '当前文档的 Python 会话正在运行，点击后会在空闲时自动运行当前选中的 Python Cell' : '运行当前选中的 Python Cell')"
+              :data-tooltip="isActiveNotebookPythonRunActive ? '中断当前探索者 Python Cell 运行，并清理本次后台会话' : (isActiveNotebookPythonSessionBusy ? '当前文档的 Python 会话正在运行，点击后会在空闲时自动运行当前选中的 Python Cell' : '运行当前选中的 Python Cell')"
+              data-shortcut="Ctrl+Enter"
               :aria-label="isActiveNotebookPythonRunActive ? '中断当前探索者 Python Cell 运行，并清理本次后台会话' : (isActiveNotebookPythonSessionBusy ? '当前文档的 Python 会话正在运行，点击后会在空闲时自动运行当前选中的 Python Cell' : '运行当前选中的 Python Cell')"
               @click="handleActivePythonToolbarAction('run')"
             >
@@ -115,7 +124,8 @@
             <button
               type="button"
               class="guaxi-notebook__icon-btn"
-              :title="isActiveNotebookPythonSessionBusy ? '当前文档的 Python 会话正在运行，点击后会在空闲时自动运行并写回当前选中的 Python Cell' : '运行并将当前选中的 Python Cell 输出写回文档'"
+              :data-tooltip="isActiveNotebookPythonSessionBusy ? '当前文档的 Python 会话正在运行，点击后会在空闲时自动运行并写回当前选中的 Python Cell' : '运行并将当前选中的 Python Cell 输出写回文档'"
+              data-shortcut="Ctrl+Shift+Enter"
               :aria-label="isActiveNotebookPythonSessionBusy ? '当前文档的 Python 会话正在运行，点击后会在空闲时自动运行并写回当前选中的 Python Cell' : '运行并将当前选中的 Python Cell 输出写回文档'"
               @click="handleActivePythonToolbarAction('run-writeback')"
             >
@@ -125,7 +135,8 @@
               type="button"
               class="guaxi-notebook__icon-btn"
               :disabled="!hasVisibleOutput(activeNotebookPythonCell)"
-              :title="activeNotebookPythonCellSnapshot.meta.outputCollapsed ? '显示当前选中 Python Cell 输出' : '隐藏当前选中 Python Cell 输出'"
+              :data-tooltip="activeNotebookPythonCellSnapshot.meta.outputCollapsed ? '显示当前选中 Python Cell 输出' : '隐藏当前选中 Python Cell 输出'"
+              data-shortcut="Alt+O"
               :aria-label="activeNotebookPythonCellSnapshot.meta.outputCollapsed ? '显示当前选中 Python Cell 输出' : '隐藏当前选中 Python Cell 输出'"
               @click="handleActivePythonToolbarAction('toggle-output')"
             >
@@ -134,7 +145,8 @@
             <button
               type="button"
               class="guaxi-notebook__icon-btn"
-              :title="isNotebookPythonSessionPanelVisible ? '隐藏当前选中 Python Cell 数据实验室' : '显示当前选中 Python Cell 数据实验室'"
+              :data-tooltip="isNotebookPythonSessionPanelVisible ? '隐藏当前选中 Python Cell 数据实验室' : '显示当前选中 Python Cell 数据实验室'"
+              data-shortcut="Alt+L"
               :aria-label="isNotebookPythonSessionPanelVisible ? '隐藏当前选中 Python Cell 数据实验室' : '显示当前选中 Python Cell 数据实验室'"
               @click="handleActivePythonToolbarAction('toggle-session')"
             >
@@ -143,7 +155,8 @@
             <button
               type="button"
               class="guaxi-notebook__icon-btn"
-              title="打开 Python 控制台"
+              data-tooltip="打开 Python 控制台"
+              data-shortcut="Alt+T"
               aria-label="打开 Python 控制台"
               @click="handleActivePythonToolbarAction('open-console')"
             >
@@ -183,7 +196,7 @@
         type="button"
         class="guaxi-notebook__selection-tool-btn"
         :disabled="selectionTranslateBusy"
-        title="翻译选中文本"
+        data-tooltip="翻译选中文本"
         aria-label="翻译选中文本"
         @click="openNotebookSelectionTranslatePanel"
       >
@@ -192,7 +205,7 @@
       <button
         type="button"
         class="guaxi-notebook__selection-tool-btn"
-        title="发送到助手"
+        data-tooltip="发送到助手"
         aria-label="发送到助手"
         @click="askNotebookSelectionWithAssistant"
       >
@@ -201,7 +214,7 @@
       <button
         type="button"
         class="guaxi-notebook__selection-tool-btn"
-        title="用 AI 翻译"
+        data-tooltip="用 AI 翻译"
         aria-label="用 AI 翻译"
         @click="sendNotebookSelectionAsAiTranslate"
       >
@@ -211,7 +224,7 @@
         type="button"
         class="guaxi-notebook__selection-tool-btn"
         :disabled="selectionReadAloudBusy"
-        :title="selectionReadAloudBusy ? '正在朗读' : '朗读选中文本'"
+        :data-tooltip="selectionReadAloudBusy ? '正在朗读' : '朗读选中文本'"
         :aria-label="selectionReadAloudBusy ? '正在朗读' : '朗读选中文本'"
         @click="readNotebookSelectionAloud"
       >
@@ -228,6 +241,7 @@
             'is-search-match': isNotebookSearchMatchedCell(cell),
             'is-search-active': isNotebookSearchActiveCell(cell),
             'is-active-python-cell': isActiveNotebookPythonCell(cell),
+            'is-variable-focus-cell': isNotebookVariableFocusedCell(cell),
           },
         ]"
         :data-cell-key="cell.key"
@@ -800,6 +814,7 @@ const notebookSelectionToolbarStyle = ref({ left: '0px', top: '0px' })
 const notebookSelectionText = ref('')
 const notebookTopToolbarRevealed = ref(false)
 const activeNotebookPythonCellKey = ref('')
+const notebookFocusedVariable = ref({ cellKey: '', variableName: '' })
 const notebookMarkdownWorkerRef = ref(null)
 const notebookMarkdownWorkerReady = ref(false)
 const lastEmittedMarkdown = ref(String(props.markdown || '').replace(/\r\n?/g, '\n'))
@@ -833,6 +848,7 @@ let notebookSearchQueryTimer = 0
 let notebookMarkdownWorkerTaskId = 0
 let notebookMermaidRenderCounter = 0
 let notebookTopToolbarHideTimer = 0
+let notebookFocusedVariableTimer = 0
 let notebookPointerQuietUntil = 0
 let notebookMathPreviewRenderSeq = 0
 let selectionAudioElement = null
@@ -3078,6 +3094,60 @@ const refreshNotebookPythonEditor = (cell, reason = 'unknown') => {
     cellId: String(cell?.cellId || ''),
     reason,
   })
+}
+
+const isNotebookVariableFocusedCell = (cell) => (
+  cell?.type === 'python'
+  && String(cell?.key || '') === String(notebookFocusedVariable.value?.cellKey || '')
+  && !!String(notebookFocusedVariable.value?.variableName || '').trim()
+)
+
+const clearNotebookFocusedVariable = () => {
+  if (notebookFocusedVariableTimer) {
+    window.clearTimeout(notebookFocusedVariableTimer)
+    notebookFocusedVariableTimer = 0
+  }
+  notebookFocusedVariable.value = { cellKey: '', variableName: '' }
+}
+
+// 设计说明：
+// 1. 右侧变量列表只知道当前 inspector 的 cell 身份，真正的滚动和 Monaco decoration 必须由 Notebook 主视图完成。
+// 2. 外层 cell 先提供明显选中背景；如果 Monaco 已挂载，再调用编辑器暴露的变量高亮方法定位源码中的变量名。
+// 3. 高亮短暂保留，避免用户后续编辑时误以为变量仍处于“被锁定”状态。
+const focusNotebookVariableInCell = async (cell, variableName, reason = 'session-variable-focus') => {
+  const normalizedName = String(variableName || '').trim()
+  if (cell?.type !== 'python' || !normalizedName) return false
+  activateNotebookCell(cell, `focus-variable:${reason}`)
+  if (getCellSnapshot(cell)?.meta?.cellCollapsed) {
+    patchCellMeta(cell, { cellCollapsed: false })
+  }
+  notebookFocusedVariable.value = {
+    cellKey: String(cell?.key || ''),
+    variableName: normalizedName,
+  }
+  if (notebookFocusedVariableTimer) {
+    window.clearTimeout(notebookFocusedVariableTimer)
+  }
+  notebookFocusedVariableTimer = window.setTimeout(() => {
+    clearNotebookFocusedVariable()
+  }, 4200)
+
+  await nextTick()
+  const root = notebookRootRef.value
+  const target = root?.querySelector?.(`.guaxi-notebook__cell[data-cell-key="${CSS.escape(String(cell?.key || ''))}"]`)
+  if (target instanceof HTMLElement) {
+    target.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' })
+  }
+  const editorRef = pythonEditorRefMap.get(String(cell?.key || ''))
+  const highlighted = !!editorRef?.highlightVariableOccurrences?.(normalizedName, reason)
+  logger.info('[NotebookDataLab] focused session variable source cell', {
+    cellId: String(cell?.cellId || ''),
+    cellKey: String(cell?.key || ''),
+    variableName: normalizedName,
+    editorHighlighted: highlighted,
+    reason,
+  })
+  return true
 }
 
 const syncMarkdownEditorValueToCell = (key, reason = 'sync-markdown-editor-value') => {
@@ -5647,6 +5717,105 @@ const handleActivePythonToolbarAction = async (action) => {
   })
 }
 
+const isNotebookShortcutEditableTarget = (target) => (
+  target instanceof HTMLElement
+  && !!target.closest('input, textarea, select, option, [contenteditable="true"], .monaco-editor textarea')
+)
+
+const runNotebookShortcutAction = async (action, event) => {
+  logger.info('[NotebookShortcut] trigger notebook shortcut', {
+    action,
+    key: String(event?.key || ''),
+    ctrlKey: !!event?.ctrlKey,
+    metaKey: !!event?.metaKey,
+    shiftKey: !!event?.shiftKey,
+    altKey: !!event?.altKey,
+    activeCellKey: String(activeNotebookPythonCellKey.value || ''),
+  })
+  if (action === 'save') {
+    requestNotebookSave()
+    return
+  }
+  if (action === 'search') {
+    await openNotebookSearch()
+    return
+  }
+  if (action === 'undo') {
+    undoNotebookHistory()
+    return
+  }
+  if (action === 'redo') {
+    redoNotebookHistory()
+    return
+  }
+  if (action === 'add-python') {
+    appendCell('python')
+    return
+  }
+  if (action === 'add-markdown') {
+    appendCell('markdown')
+    return
+  }
+  if (action === 'add-math') {
+    appendCell('math')
+    return
+  }
+  if (action === 'import-table') {
+    await handleActivePythonToolbarAction('import-table')
+    return
+  }
+  if (action === 'run') {
+    await handleActivePythonToolbarAction('run')
+    return
+  }
+  if (action === 'run-writeback') {
+    await handleActivePythonToolbarAction('run-writeback')
+    return
+  }
+  if (action === 'toggle-output') {
+    await handleActivePythonToolbarAction('toggle-output')
+    return
+  }
+  if (action === 'toggle-session') {
+    await handleActivePythonToolbarAction('toggle-session')
+    return
+  }
+  if (action === 'open-console') {
+    await handleActivePythonToolbarAction('open-console')
+  }
+}
+
+const handleNotebookShortcutKeydown = (event) => {
+  const root = notebookRootRef.value
+  if (!(root instanceof HTMLElement)) return
+  const target = event?.target
+  if (target instanceof Node && !root.contains(target)) return
+
+  const key = String(event?.key || '').toLowerCase()
+  const primary = !!(event?.ctrlKey || event?.metaKey)
+  const editableTarget = isNotebookShortcutEditableTarget(target)
+  let action = ''
+
+  if (primary && !event.altKey && key === 's') action = 'save'
+  else if (primary && !event.altKey && !event.shiftKey && key === 'enter') action = 'run'
+  else if (primary && !event.altKey && event.shiftKey && key === 'enter') action = 'run-writeback'
+  else if (!editableTarget && primary && !event.altKey && !event.shiftKey && key === 'f') action = 'search'
+  else if (!editableTarget && primary && !event.altKey && !event.shiftKey && key === 'z') action = 'undo'
+  else if (!editableTarget && primary && !event.altKey && !event.shiftKey && key === 'y') action = 'redo'
+  else if (!editableTarget && event.altKey && !primary && !event.shiftKey && key === 'p') action = 'add-python'
+  else if (!editableTarget && event.altKey && !primary && !event.shiftKey && key === 'm') action = 'add-markdown'
+  else if (!editableTarget && event.altKey && !primary && !event.shiftKey && key === 'k') action = 'add-math'
+  else if (!editableTarget && event.altKey && !primary && !event.shiftKey && key === 'i') action = 'import-table'
+  else if (!editableTarget && event.altKey && !primary && !event.shiftKey && key === 'o') action = 'toggle-output'
+  else if (!editableTarget && event.altKey && !primary && !event.shiftKey && key === 'l') action = 'toggle-session'
+  else if (!editableTarget && event.altKey && !primary && !event.shiftKey && key === 't') action = 'open-console'
+
+  if (!action) return
+  event.preventDefault()
+  event.stopPropagation()
+  void runNotebookShortcutAction(action, event)
+}
+
 const getPythonCellOrderIndex = (cell) => {
   const targetKey = String(cell?.key || '')
   if (!targetKey) return -1
@@ -6809,6 +6978,10 @@ const handleNotebookDataLabActionEvent = async (event) => {
     chartType: String(detail?.chartType || ''),
   }
 
+  if (detail.action === 'focus-variable') {
+    await focusNotebookVariableInCell(targetCell, String(detail?.variableName || ''), 'session-panel')
+    return
+  }
   if (detail.action === 'import-file') {
     await importExternalDataToPythonSession(targetCell, { sourceType: 'file' })
     return
@@ -7299,6 +7472,7 @@ onMounted(() => {
   initNotebookMarkdownWorker()
   document.addEventListener('selectionchange', handleNotebookGlobalSelectionChange, true)
   document.addEventListener('mousedown', handleNotebookGlobalMouseDown, true)
+  document.addEventListener('keydown', handleNotebookShortcutKeydown, true)
   window.addEventListener(NOTEBOOK_DATALAB_EVENT, handleNotebookDataLabActionEvent)
   void listen('notebook-data-lab-rpc', (event) => {
     logger.info('[NotebookDataLab] received backend rpc event', {
@@ -7361,7 +7535,9 @@ onBeforeUnmount(() => {
   clearNotebookSelectionState('component-unmount')
   document.removeEventListener('selectionchange', handleNotebookGlobalSelectionChange, true)
   document.removeEventListener('mousedown', handleNotebookGlobalMouseDown, true)
+  document.removeEventListener('keydown', handleNotebookShortcutKeydown, true)
   window.removeEventListener(NOTEBOOK_DATALAB_EVENT, handleNotebookDataLabActionEvent)
+  clearNotebookFocusedVariable()
   if (typeof notebookDataLabRpcUnlisten === 'function') {
     notebookDataLabRpcUnlisten()
     notebookDataLabRpcUnlisten = null
@@ -7527,6 +7703,7 @@ defineExpose({
   padding: 6px 12px;
   box-sizing: border-box;
   backdrop-filter: blur(10px);
+  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.12);
   opacity: 0;
   pointer-events: none;
   transform: translate(-50%, calc(-100% + 8px));
@@ -7635,15 +7812,16 @@ defineExpose({
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px;
+  padding: 7px;
   border: 1px solid color-mix(in srgb, var(--guaxi-notebook-strong-border) 86%, transparent);
-  border-radius: 12px;
+  border-radius: 10px;
   background: color-mix(in srgb, var(--guaxi-notebook-panel) 94%, transparent);
   box-shadow: 0 14px 32px rgba(15, 23, 42, 0.14);
   backdrop-filter: blur(10px);
 }
 
 .guaxi-notebook__selection-tool-btn {
+  position: relative;
   width: 30px;
   height: 30px;
   display: inline-flex;
@@ -7713,7 +7891,13 @@ defineExpose({
   outline: 2px solid color-mix(in srgb, var(--guaxi-notebook-primary) 72%, transparent);
   outline-offset: 0;
   border-radius: 10px;
-  box-shadow: none;
+  background: color-mix(in srgb, var(--guaxi-notebook-primary) 5%, var(--guaxi-notebook-panel) 95%);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--guaxi-notebook-primary) 10%, transparent);
+}
+
+.guaxi-notebook__cell.is-variable-focus-cell {
+  outline-color: color-mix(in srgb, #f59e0b 72%, transparent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, #f59e0b 18%, transparent), var(--guaxi-notebook-shadow);
 }
 
 .guaxi-notebook__cell.is-markdown {
@@ -7971,7 +8155,7 @@ defineExpose({
   color: var(--guaxi-notebook-text);
   padding: 7px 11px;
   cursor: pointer;
-  transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+  transition: background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
   font-family: var(--guaxi-notebook-font);
 }
 
@@ -7979,6 +8163,8 @@ defineExpose({
 .guaxi-notebook__toolbar-btn:hover,
 .guaxi-notebook__icon-btn:hover {
   background: var(--guaxi-notebook-btn-hover);
+  border-color: color-mix(in srgb, var(--guaxi-notebook-primary) 32%, var(--guaxi-notebook-strong-border));
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.09);
   transform: translateY(-1px);
 }
 
@@ -7991,7 +8177,9 @@ defineExpose({
 }
 
 .guaxi-notebook__icon-btn.primary.is-busy {
-  background: var(--guaxi-notebook-danger);
+  color: #ffffff;
+  background: linear-gradient(135deg, #dc2626, #b91c1c);
+  box-shadow: 0 10px 22px rgba(220, 38, 38, 0.22);
 }
 
 .guaxi-notebook__cell-btn.ghost,
@@ -8006,6 +8194,7 @@ defineExpose({
 }
 
 .guaxi-notebook__icon-btn {
+  position: relative;
   width: 30px;
   height: 30px;
   padding: 0;
@@ -8013,6 +8202,60 @@ defineExpose({
   align-items: center;
   justify-content: center;
   border-radius: 9px;
+}
+
+.guaxi-notebook__icon-btn::after,
+.guaxi-notebook__selection-tool-btn::after {
+  content: attr(data-tooltip) "  " attr(data-shortcut);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 9px);
+  z-index: 120;
+  width: max-content;
+  max-width: min(320px, calc(100vw - 48px));
+  padding: 6px 8px;
+  border-radius: 7px;
+  background: color-mix(in srgb, #111827 92%, transparent);
+  color: #ffffff;
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 5px);
+  transition: opacity 0.14s ease, transform 0.14s ease;
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.22);
+}
+
+/* 设计说明：
+ * 1. 顶部悬浮工具条本身贴近 Notebook 顶边，tooltip 向上弹出时容易被父级滚动容器裁掉。
+ * 2. 这里仅让顶部工具条的 icon 提示向下展开；普通 cell 内部 icon 仍沿用向上提示，避免遮住当前输出区域。
+ */
+.guaxi-notebook__toolbar .guaxi-notebook__icon-btn::after {
+  top: calc(100% + 9px);
+  bottom: auto;
+  transform: translate(-50%, -5px);
+}
+
+.guaxi-notebook__icon-btn:not([data-tooltip])::after,
+.guaxi-notebook__selection-tool-btn:not([data-tooltip])::after {
+  display: none;
+}
+
+.guaxi-notebook__icon-btn[title]:not([data-tooltip])::after,
+.guaxi-notebook__selection-tool-btn[title]:not([data-tooltip])::after {
+  content: attr(title);
+  display: block;
+}
+
+.guaxi-notebook__icon-btn:hover::after,
+.guaxi-notebook__icon-btn:focus-visible::after,
+.guaxi-notebook__selection-tool-btn:hover::after,
+.guaxi-notebook__selection-tool-btn:focus-visible::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
 }
 
 .guaxi-notebook__icon-btn:disabled {

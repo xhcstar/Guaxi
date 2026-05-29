@@ -80,7 +80,9 @@ let usesVscodeModelBridge = false
 let hostResizeObserver = null
 let serviceRefreshTimer = 0
 let treeSitterDecorationIds = []
+let variableHighlightDecorationIds = []
 let treeSitterDecorationTimer = 0
+let variableHighlightTimer = 0
 let treeSitterDecorationSeq = 1
 
 const NOTEBOOK_PYTHON_SUGGEST_TRIGGER_PATTERN = /[A-Za-z0-9_.:(\[,'"@]/
@@ -218,6 +220,140 @@ const refreshNotebookTreeSitterDecorations = async (reason = 'manual') => {
       error: String(error?.message || error),
     })
   }
+}
+
+const clearVariableHighlight = () => {
+  if (variableHighlightTimer) {
+    window.clearTimeout(variableHighlightTimer)
+    variableHighlightTimer = 0
+  }
+  if (!editor || !variableHighlightDecorationIds.length) {
+    variableHighlightDecorationIds = []
+    return
+  }
+  variableHighlightDecorationIds = editor.deltaDecorations(variableHighlightDecorationIds, [])
+}
+
+const escapeNotebookVariableSearchPattern = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+const buildVariableHighlightDecorations = (activeModel, variableName) => {
+  const text = activeModel?.getValue?.() || ''
+  const name = String(variableName || '').trim()
+  if (!text || !name || !monacoRef) return []
+
+  const pattern = new RegExp(`(^|[^A-Za-z0-9_])(${escapeNotebookVariableSearchPattern(name)})(?![A-Za-z0-9_])`, 'g')
+  const decorations = []
+  let match = pattern.exec(text)
+  while (match && decorations.length < 160) {
+    const prefixLength = match[1] ? match[1].length : 0
+    const startOffset = match.index + prefixLength
+    const endOffset = startOffset + name.length
+    const start = activeModel.getPositionAt(startOffset)
+    const end = activeModel.getPositionAt(endOffset)
+    decorations.push({
+      range: new monacoRef.Range(start.lineNumber, start.column, end.lineNumber, end.column),
+      options: {
+        inlineClassName: 'nb-python-variable-focus',
+        className: 'nb-python-variable-focus-line',
+        overviewRuler: {
+          color: '#f59e0b',
+          position: monacoRef.editor.OverviewRulerLane.Center,
+        },
+      },
+    })
+    match = pattern.exec(text)
+  }
+  return decorations
+}
+
+const findScrollableNotebookContainer = (element) => {
+  let current = element?.parentElement || null
+  while (current) {
+    const style = window.getComputedStyle(current)
+    const overflowY = `${style.overflowY || ''} ${style.overflow || ''}`
+    if (/(auto|scroll|overlay)/.test(overflowY) && current.scrollHeight > current.clientHeight + 1) {
+      return current
+    }
+    current = current.parentElement
+  }
+  return document.scrollingElement || document.documentElement
+}
+
+const centerEditorLineInPageViewport = (lineNumber, reason = 'variable-highlight') => {
+  if (!editor || !Number.isFinite(Number(lineNumber))) return false
+  const editorElement = editor.getDomNode?.()
+  if (!(editorElement instanceof HTMLElement)) return false
+
+  const linePosition = editor.getScrolledVisiblePosition?.({
+    lineNumber: Number(lineNumber),
+    column: 1,
+  })
+  const editorRect = editorElement.getBoundingClientRect()
+  const targetCenter = linePosition && Number.isFinite(Number(linePosition.top))
+    ? editorRect.top + Number(linePosition.top) + Math.max(10, Number(linePosition.height || 20) / 2)
+    : editorRect.top + editorRect.height / 2
+  const scrollContainer = findScrollableNotebookContainer(editorElement)
+  const containerRect = scrollContainer === document.scrollingElement || scrollContainer === document.documentElement
+    ? { top: 0, height: window.innerHeight }
+    : scrollContainer.getBoundingClientRect()
+  const containerCenter = containerRect.top + containerRect.height / 2
+  const delta = targetCenter - containerCenter
+  if (Math.abs(delta) < 4) return true
+
+  scrollContainer.scrollTo({
+    top: scrollContainer.scrollTop + delta,
+    behavior: 'smooth',
+  })
+  logger.info('[NotebookPythonEditor] centered variable line in notebook viewport', {
+    cellKey: String(props.cellKey || ''),
+    lineNumber: Number(lineNumber),
+    delta: Math.round(delta),
+    reason,
+  })
+  return true
+}
+
+// 设计说明：
+// 1. 右侧会话变量列表点击后需要把用户带回“变量产生/使用的 Cell”，并在源码中给出短暂视觉锚点。
+// 2. 这里在 Python 编辑器内部完成 decoration 和页面滚动聚焦，不改运行逻辑、不触碰预览模式，也不会向 Python 会话写入任何内容。
+// 3. 高亮自动过期，避免用户继续编辑时旧高亮长期停留造成误导。
+const highlightVariableOccurrences = (variableName, reason = 'session-variable-focus') => {
+  if (!editor || !model || !monacoRef) return false
+  clearVariableHighlight()
+
+  const decorations = buildVariableHighlightDecorations(model, variableName)
+  if (!decorations.length) {
+    logger.info('[NotebookPythonEditor] variable highlight skipped because no match was found', {
+      cellKey: String(props.cellKey || ''),
+      variableName: String(variableName || ''),
+      reason,
+    })
+    return false
+  }
+
+  variableHighlightDecorationIds = editor.deltaDecorations([], decorations)
+  const firstRange = decorations[0]?.range
+  if (firstRange) {
+    editor.setPosition?.({
+      lineNumber: firstRange.startLineNumber,
+      column: firstRange.startColumn,
+    })
+    editor.revealLineInCenter?.(firstRange.startLineNumber)
+    window.setTimeout(() => {
+      centerEditorLineInPageViewport(firstRange.startLineNumber, reason)
+    }, 60)
+  }
+  editor.focus?.()
+  variableHighlightTimer = window.setTimeout(() => {
+    clearVariableHighlight()
+  }, 3600)
+  logger.info('[NotebookPythonEditor] highlighted variable occurrences', {
+    cellKey: String(props.cellKey || ''),
+    variableName: String(variableName || ''),
+    matchCount: decorations.length,
+    reason,
+  })
+  return true
 }
 
 const scheduleNotebookTreeSitterDecorations = (reason = 'change') => {
@@ -737,6 +873,7 @@ const disposeMonacoEditor = () => {
   const currentModelUri = model?.uri || null
   window.clearTimeout(serviceRefreshTimer)
   serviceRefreshTimer = 0
+  clearVariableHighlight()
   hostResizeObserver?.disconnect?.()
   hostResizeObserver = null
   contentChangeDisposable?.dispose?.()
@@ -845,6 +982,7 @@ watch(() => props.modelValue, (nextValue) => {
 
 defineExpose({
   refreshEditorServices,
+  highlightVariableOccurrences,
 })
 </script>
 
@@ -919,5 +1057,15 @@ defineExpose({
 .guaxi-notebook-python-editor :deep(.nb-python-token-decorator) { color: var(--guaxi-syntax-decorator) !important; }
 .guaxi-notebook-python-editor :deep(.nb-python-token-operator) { color: var(--guaxi-syntax-operator) !important; }
 .guaxi-notebook-python-editor :deep(.nb-python-token-delimiter) { color: var(--guaxi-syntax-punctuation) !important; }
+
+.guaxi-notebook-python-editor :deep(.nb-python-variable-focus) {
+  border-radius: 4px;
+  background: color-mix(in srgb, #f59e0b 32%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, #f59e0b 56%, transparent);
+}
+
+.guaxi-notebook-python-editor :deep(.nb-python-variable-focus-line) {
+  background: color-mix(in srgb, #f59e0b 7%, transparent);
+}
 
 </style>

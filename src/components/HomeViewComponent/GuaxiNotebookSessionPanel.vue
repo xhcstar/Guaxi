@@ -21,7 +21,7 @@
 
     <label v-else class="py-session-panel__search">
       <Icon :icon="searchIcon" width="15" height="15" />
-      <input v-model="variableSearch" type="text" placeholder="搜索变量、类型或预览" />
+      <input v-model="variableSearch" type="text" placeholder="搜索变量或类型" />
     </label>
 
     <div v-if="variables.length && !filteredVariables.length" class="py-session-panel__empty">
@@ -33,6 +33,12 @@
         v-for="item in filteredVariables"
         :key="`${inspector.cellId}-${item.name}`"
         class="py-session-panel__card"
+        :class="{ 'is-selected': isVariableSelected(item) }"
+        role="button"
+        tabindex="0"
+        @click="focusVariableSource(item)"
+        @keydown.enter.prevent="focusVariableSource(item)"
+        @keydown.space.prevent="focusVariableSource(item)"
       >
         <div class="py-session-panel__card-head">
           <div class="py-session-panel__identity">
@@ -43,45 +49,45 @@
             <button
               type="button"
               class="py-session-panel__tool-btn"
-              title="在独立变量工作台中处理"
+              data-tooltip="打开变量工作台"
               aria-label="在独立变量工作台中处理"
-              @click="openVariableWorkbench(item)"
+              @click.stop="openVariableWorkbench(item)"
             >
               <Icon :icon="tableIcon" width="15" height="15" />
             </button>
             <button
               type="button"
               class="py-session-panel__tool-btn"
-              title="复制变量为新变量"
+              data-tooltip="复制为新变量"
               aria-label="复制变量为新变量"
-              @click="copyVariableObject(item)"
+              @click.stop="copyVariableObject(item)"
             >
               <Icon :icon="copyPlusIcon" width="15" height="15" />
             </button>
             <button
               type="button"
               class="py-session-panel__tool-btn"
-              title="复制变量预览文本"
-              aria-label="复制变量预览文本"
-              @click="copyVariablePreview(item)"
+              data-tooltip="复制美观打印内容"
+              aria-label="复制变量美观打印内容"
+              @click.stop="copyVariablePrettyText(item)"
             >
               <Icon :icon="copyIcon" width="15" height="15" />
             </button>
             <button
               type="button"
               class="py-session-panel__tool-btn"
-              title="重命名变量"
+              data-tooltip="重命名"
               aria-label="重命名变量"
-              @click="renameVariable(item)"
+              @click.stop="renameVariable(item)"
             >
               <Icon :icon="pencilIcon" width="15" height="15" />
             </button>
             <button
               type="button"
               class="py-session-panel__tool-btn danger"
-              title="删除变量"
+              data-tooltip="删除"
               aria-label="删除变量"
-              @click="deleteVariable(item)"
+              @click.stop="deleteVariable(item)"
             >
               <Icon :icon="trashIcon" width="15" height="15" />
             </button>
@@ -95,7 +101,7 @@
           <span v-if="formatShape(item.shape)">shape {{ formatShape(item.shape) }}</span>
         </div>
 
-        <pre class="py-session-panel__preview">{{ formatPreviewText(item.preview || '') }}</pre>
+        <div class="py-session-panel__hint">点击定位到对应 Python Cell</div>
       </article>
     </div>
   </section>
@@ -103,6 +109,7 @@
 
 <script setup>
 import { computed, ref } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
 import { Icon } from '@iconify/vue'
 import copyIcon from '@iconify-icons/lucide/copy'
 import copyPlusIcon from '@iconify-icons/lucide/copy-plus'
@@ -123,6 +130,7 @@ const message = useMessage()
 const rightSiderStore = useRightSiderStore()
 const settingsStore = useSettingsStore()
 const variableSearch = ref('')
+const selectedVariableName = ref('')
 
 const inspector = computed(() => rightSiderStore.pythonSessionInspector || {})
 const appearanceTheme = computed(() => settingsStore.appearanceTheme === 'dark' ? 'dark' : 'light')
@@ -146,7 +154,6 @@ const filteredVariables = computed(() => {
       item?.variableName,
       item?.value_type,
       item?.type,
-      item?.preview,
     ].map((value) => String(value || '').toLowerCase()).join(' ')
     return haystack.includes(keyword)
   })
@@ -163,18 +170,21 @@ const formatShape = (shape) => {
   return `(${shape.map((item) => String(item ?? '')).join(', ')})`
 }
 
-// 设计说明：
-// 1. 会话变量面板承担快速浏览职责，字符串化预览如果是 JSON，应优先格式化，便于用户在右侧栏直接阅读。
-// 2. 无法解析时保留原 repr，避免破坏 pandas / numpy / Python 对象自身的展示语义。
-// 3. 搜索只在前端快照里过滤，不触发 Python 会话，避免大量变量时输入搜索造成运行时抖动。
-const formatPreviewText = (value) => {
-  const text = String(value || '').trim()
-  if (!text) return ''
-  try {
-    return JSON.stringify(JSON.parse(text), null, 2)
-  } catch {
-    return text
-  }
+const getVariableName = (item) => String(item?.name || item?.variableName || '').trim()
+
+const isVariableSelected = (item) => getVariableName(item) === String(selectedVariableName.value || '')
+
+const focusVariableSource = (item) => {
+  const variableName = getVariableName(item)
+  if (!variableName) return
+  selectedVariableName.value = variableName
+  const emitted = emitInspectorAction('focus-variable', { variableName })
+  logger.info('[NotebookSessionPanel] selected session variable and requested notebook focus', {
+    cellId: String(inspector.value?.cellId || ''),
+    cellKey: String(inspector.value?.cellKey || ''),
+    variableName,
+    emitted,
+  })
 }
 
 const writeClipboard = async (text) => {
@@ -305,7 +315,7 @@ const renameVariable = (item) => {
 }
 
 const copyVariableObject = (item) => {
-  const variableName = String(item?.name || item?.variableName || '').trim()
+  const variableName = getVariableName(item)
   if (!variableName) return
   const targetName = String(window.prompt?.(`复制变量 ${variableName} 为`, `${variableName}_copy`) || '').trim()
   if (!targetName || targetName === variableName) return
@@ -313,35 +323,85 @@ const copyVariableObject = (item) => {
 }
 
 const deleteVariable = (item) => {
-  const variableName = String(item?.name || item?.variableName || '').trim()
+  const variableName = getVariableName(item)
   if (!variableName) return
   if (!window.confirm?.(`确认删除会话变量 ${variableName}？`)) return
   emitInspectorAction('variable-delete', { variableName })
 }
 
+const buildVariablePrettyPrintCode = (variableName) => [
+  'import pprint',
+  `__guaxi_copy_name = ${JSON.stringify(variableName)}`,
+  'try:',
+  '    if __guaxi_copy_name not in globals():',
+  '        raise KeyError(f"变量不存在: {__guaxi_copy_name}")',
+  '    __guaxi_copy_value = globals()[__guaxi_copy_name]',
+  '    if hasattr(__guaxi_copy_value, "to_string") and callable(getattr(__guaxi_copy_value, "to_string", None)):',
+  '        __guaxi_copy_text = __guaxi_copy_value.to_string()',
+  '    else:',
+  '        __guaxi_copy_text = pprint.pformat(__guaxi_copy_value, width=100, compact=False, sort_dicts=False)',
+  '    print(str(__guaxi_copy_text))',
+  'finally:',
+  '    for __guaxi_copy_key in ("__guaxi_copy_name", "__guaxi_copy_value", "__guaxi_copy_text", "__guaxi_copy_key"):',
+  '        globals().pop(__guaxi_copy_key, None)',
+].join('\n')
+
 // 设计说明：
-// 1. 会话变量可能很大，右侧面板的复制只复制当前卡片显示的 preview，避免误把大对象完整写入剪贴板导致卡顿。
-// 2. 真正的变量复制走 Python 会话内的 variable-copy 动作，保留类型和结构。
-// 3. 两条路径分别记录日志，便于排查“复制文本”和“复制变量对象”被混用的问题。
-const copyVariablePreview = async (item) => {
-  const text = String(item?.preview || '')
-  if (!text) {
-    message.warning('当前变量没有可复制的文本内容')
+// 1. 右侧变量卡片不再展示 preview，因此“复制”不能继续复制摘要字段，否则用户拿到的是截断内容。
+// 2. 这里只在当前持久 Python 会话里执行一段无状态 pprint/to_string 代码，并在 finally 中清理临时变量。
+// 3. 不追加 Notebook 输出模块，不改预览模式和终端逻辑；前端日志记录复制来源和实际文本长度。
+const copyVariablePrettyText = async (item) => {
+  const variableName = getVariableName(item)
+  const sessionId = String(inspector.value?.sessionId || '').trim()
+  if (!variableName) return
+  if (!sessionId) {
+    message.warning('当前 Python 会话尚未准备好')
     return
   }
 
-  const copied = await writeClipboard(text)
-  if (!copied) {
-    message.error('复制变量内容失败')
-    return
+  try {
+    const response = await invoke('python_exec', {
+      request: {
+        code: buildVariablePrettyPrintCode(variableName),
+        persist: true,
+        expect_json: false,
+        include_session_vars: false,
+        vars: {
+          _guaxi_session: sessionId,
+          _doc_path: String(inspector.value?.filePath || ''),
+          _py_cell_id: String(inspector.value?.cellId || ''),
+        },
+      },
+    })
+    if (!response?.ok) {
+      throw new Error(String(response?.stderr || response?.stdout || '复制变量内容失败'))
+    }
+    const text = String(response?.stdout || response?.result_repr || '').trimEnd()
+    if (!text) {
+      message.warning('当前变量没有可复制的文本内容')
+      return
+    }
+    const copied = await writeClipboard(text)
+    if (!copied) {
+      message.error('复制变量内容失败')
+      return
+    }
+    logger.info('[NotebookSessionPanel] copied variable pretty text', {
+      cellId: String(inspector.value?.cellId || ''),
+      sessionId,
+      variableName,
+      textLength: text.length,
+    })
+    message.success(`已复制变量 ${variableName} 的美观打印内容`)
+  } catch (error) {
+    logger.error('[NotebookSessionPanel] copy variable pretty text failed', {
+      cellId: String(inspector.value?.cellId || ''),
+      sessionId,
+      variableName,
+      error: String(error?.message || error),
+    })
+    message.error(`复制变量内容失败：${String(error?.message || error)}`)
   }
-
-  logger.info('[NotebookSessionPanel] copied variable preview', {
-    cellId: String(inspector.value?.cellId || ''),
-    variableName: String(item?.name || ''),
-    textLength: text.length,
-  })
-  message.success(`已复制变量 ${String(item?.name || '')} 的预览`)
 }
 </script>
 
@@ -353,8 +413,8 @@ const copyVariablePreview = async (item) => {
   --py-session-border-strong: color-mix(in srgb, var(--guaxi-border, #d0d7de) 92%, transparent);
   --py-session-card-bg: color-mix(in srgb, var(--guaxi-panel-bg, #ffffff) 92%, var(--guaxi-content-bg, #ffffff) 8%);
   --py-session-chip-bg: color-mix(in srgb, var(--guaxi-panel-bg, #ffffff) 82%, var(--guaxi-content-bg, #ffffff) 18%);
-  --py-session-preview-bg: color-mix(in srgb, var(--guaxi-content-bg, #ffffff) 88%, var(--guaxi-panel-bg, #ffffff) 12%);
   --py-session-hover-bg: color-mix(in srgb, var(--guaxi-panel-bg, #ffffff) 70%, var(--guaxi-content-bg, #ffffff) 30%);
+  --py-session-selected-bg: color-mix(in srgb, #2563eb 10%, var(--guaxi-panel-bg, #ffffff) 90%);
   --py-session-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
   flex: 1 1 auto;
   min-height: 0;
@@ -372,8 +432,8 @@ const copyVariablePreview = async (item) => {
   --py-session-border-strong: rgba(151, 164, 186, 0.28);
   --py-session-card-bg: #2a303a;
   --py-session-chip-bg: #303744;
-  --py-session-preview-bg: #3a404b;
   --py-session-hover-bg: #353d49;
+  --py-session-selected-bg: color-mix(in srgb, #60a5fa 16%, #2a303a 84%);
   --py-session-shadow: 0 16px 36px rgba(0, 0, 0, 0.28);
 }
 
@@ -455,19 +515,35 @@ const copyVariablePreview = async (item) => {
   overflow: auto;
   display: grid;
   align-content: start;
-  gap: 12px;
+  gap: 8px;
   margin-top: 16px;
   padding-right: 2px;
 }
 
 .py-session-panel__card {
   display: grid;
-  gap: 10px;
-  padding: 14px;
+  gap: 8px;
+  padding: 11px 12px;
   border-radius: 8px;
   border: 1px solid var(--py-session-border);
   background: var(--py-session-card-bg);
   box-shadow: var(--py-session-shadow);
+  cursor: pointer;
+  outline: none;
+  transition: background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.py-session-panel__card:hover,
+.py-session-panel__card:focus-visible {
+  background: var(--py-session-hover-bg);
+  border-color: color-mix(in srgb, #2563eb 32%, var(--py-session-border-strong));
+  transform: translateY(-1px);
+}
+
+.py-session-panel__card.is-selected {
+  background: var(--py-session-selected-bg);
+  border-color: color-mix(in srgb, #2563eb 58%, var(--py-session-border-strong));
+  box-shadow: 0 0 0 3px color-mix(in srgb, #2563eb 14%, transparent), var(--py-session-shadow);
 }
 
 .py-session-panel__card-head {
@@ -485,8 +561,10 @@ const copyVariablePreview = async (item) => {
 
 .py-session-panel__name {
   font-weight: 700;
-  font-size: 15px;
-  word-break: break-word;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--py-session-text);
 }
 
@@ -504,6 +582,7 @@ const copyVariablePreview = async (item) => {
 }
 
 .py-session-panel__tool-btn {
+  position: relative;
   width: 28px;
   height: 28px;
   border: 1px solid var(--py-session-border);
@@ -521,6 +600,36 @@ const copyVariablePreview = async (item) => {
   background: var(--py-session-hover-bg);
   border-color: var(--py-session-border-strong);
   transform: translateY(-1px);
+}
+
+.py-session-panel__tool-btn::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  right: 50%;
+  top: calc(100% + 8px);
+  z-index: 30;
+  width: max-content;
+  max-width: min(240px, calc(100vw - 48px));
+  padding: 6px 8px;
+  border-radius: 7px;
+  background: color-mix(in srgb, #111827 92%, transparent);
+  color: #ffffff;
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(50%, -4px);
+  transition: opacity 0.14s ease, transform 0.14s ease;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.18);
+}
+
+.py-session-panel__tool-btn:hover::after,
+.py-session-panel__tool-btn:focus-visible::after {
+  opacity: 1;
+  transform: translate(50%, 0);
 }
 
 .py-session-panel__tool-btn.danger {
@@ -545,19 +654,8 @@ const copyVariablePreview = async (item) => {
   color: var(--py-session-muted);
 }
 
-.py-session-panel__preview {
-  margin: 0;
-  padding: 12px;
-  max-height: 280px;
-  overflow: auto;
-  border-radius: 8px;
-  border: 1px solid var(--py-session-border);
-  background: var(--py-session-preview-bg);
-  color: var(--py-session-text);
-  font-family: var(--editor-font-family, "Maple Mono NF CN", "JetBrainsMono Nerd Font Mono", Consolas, monospace);
-  font-size: 13px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
+.py-session-panel__hint {
+  font-size: 11px;
+  color: color-mix(in srgb, var(--py-session-muted) 88%, transparent);
 }
 </style>
