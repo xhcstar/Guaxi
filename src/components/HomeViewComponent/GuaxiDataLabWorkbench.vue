@@ -226,10 +226,39 @@
                   <span>{{ structureGraph.nodes.length }} 个节点 · {{ structureGraph.edges.length }} 条关系</span>
                 </div>
                 <div class="data-workbench__structure-actions">
-                  <button type="button" class="data-workbench__mini-btn" @click="zoomStructure(0.14)">放大</button>
-                  <button type="button" class="data-workbench__mini-btn" @click="zoomStructure(-0.14)">缩小</button>
-                  <button type="button" class="data-workbench__mini-btn" @click="resetStructureView">重置</button>
-                  <button type="button" class="data-workbench__mini-btn" :disabled="structureFocusPath === 'value'" @click="focusStructureNode('value')">回到根节点</button>
+                  <button type="button" class="data-workbench__icon-btn" title="放大结构图" @click="zoomStructure(0.14)">
+                    <Icon :icon="zoomInIcon" width="16" height="16" />
+                  </button>
+                  <button type="button" class="data-workbench__icon-btn" title="缩小结构图" @click="zoomStructure(-0.14)">
+                    <Icon :icon="zoomOutIcon" width="16" height="16" />
+                  </button>
+                  <button type="button" class="data-workbench__icon-btn" title="重置视图" @click="resetStructureView">
+                    <Icon :icon="rotateCcwIcon" width="16" height="16" />
+                  </button>
+                  <button type="button" class="data-workbench__icon-btn" title="返回上一级节点" :disabled="!canFocusStructureParent" @click="focusStructureParent">
+                    <Icon :icon="cornerUpLeftIcon" width="16" height="16" />
+                  </button>
+                  <button type="button" class="data-workbench__icon-btn" title="回到根节点" :disabled="structureFocusPath === 'value'" @click="focusStructureNode('value')">
+                    <Icon :icon="homeIcon" width="16" height="16" />
+                  </button>
+                  <button
+                    type="button"
+                    class="data-workbench__icon-btn"
+                    title="展开或收起选中节点"
+                    :disabled="!selectedStructureNode?.childCount"
+                    @click="toggleSelectedStructureNode"
+                  >
+                    <Icon :icon="selectedStructureNode?.expanded ? foldIcon : unfoldIcon" width="16" height="16" />
+                  </button>
+                  <button
+                    type="button"
+                    class="data-workbench__icon-btn"
+                    title="聚焦选中节点"
+                    :disabled="!selectedStructureNode?.childCount"
+                    @click="focusStructureNode(selectedStructureNode.path)"
+                  >
+                    <Icon :icon="focusIcon" width="16" height="16" />
+                  </button>
                 </div>
               </div>
 
@@ -272,6 +301,14 @@
                     <span v-if="node.childCount" class="data-workbench__structure-node-badge">
                       {{ node.expanded ? '展开' : `${node.childCount} 子项` }}
                     </span>
+                    <span
+                      v-if="node.childCount"
+                      class="data-workbench__structure-node-toggle"
+                      :title="node.expanded ? '收起子节点' : '展开子节点'"
+                      @click.stop="toggleStructureNode(node.path)"
+                    >
+                      <Icon :icon="node.expanded ? foldIcon : unfoldIcon" width="14" height="14" />
+                    </span>
                   </button>
                 </div>
                 <aside v-if="selectedStructureNode" class="data-workbench__structure-detail">
@@ -280,24 +317,6 @@
                     <code>{{ selectedStructureNode.type }}</code>
                   </div>
                   <pre>{{ selectedStructureNode.preview }}</pre>
-                  <div class="data-workbench__structure-detail-actions">
-                    <button
-                      type="button"
-                      class="data-workbench__mini-btn"
-                      :disabled="!selectedStructureNode.childCount"
-                      @click="toggleStructureNode(selectedStructureNode.path)"
-                    >
-                      {{ selectedStructureNode.expanded ? '收起子节点' : '展开子节点' }}
-                    </button>
-                    <button
-                      type="button"
-                      class="data-workbench__mini-btn"
-                      :disabled="!selectedStructureNode.childCount"
-                      @click="focusStructureNode(selectedStructureNode.path)"
-                    >
-                      聚焦子图
-                    </button>
-                  </div>
                 </aside>
                 <div v-if="!structureGraph.nodes.length" class="data-workbench__structure-empty">
                   {{ prettyPreview || '当前变量没有可展开的结构。' }}
@@ -494,10 +513,18 @@ import arrowLeftToLineIcon from '@iconify-icons/lucide/arrow-left-to-line'
 import arrowRightToLineIcon from '@iconify-icons/lucide/arrow-right-to-line'
 import clipboardIcon from '@iconify-icons/lucide/clipboard'
 import chevronDownIcon from '@iconify-icons/lucide/chevron-down'
+import cornerUpLeftIcon from '@iconify-icons/lucide/corner-up-left'
 import fileTextIcon from '@iconify-icons/lucide/file-text'
+import focusIcon from '@iconify-icons/lucide/focus'
+import foldIcon from '@iconify-icons/lucide/fold-horizontal'
+import homeIcon from '@iconify-icons/lucide/home'
 import linkIcon from '@iconify-icons/lucide/link'
+import rotateCcwIcon from '@iconify-icons/lucide/rotate-ccw'
 import searchIcon from '@iconify-icons/lucide/search'
+import unfoldIcon from '@iconify-icons/lucide/unfold-horizontal'
 import uploadIcon from '@iconify-icons/lucide/upload'
+import zoomInIcon from '@iconify-icons/lucide/zoom-in'
+import zoomOutIcon from '@iconify-icons/lucide/zoom-out'
 import { useMessage } from 'naive-ui'
 import { useRoute } from 'vue-router'
 import { createLogger } from '../../utils/logger'
@@ -667,6 +694,7 @@ const structureFocusLabel = computed(() => {
   return node?.label || activeVariableName.value || 'value'
 })
 const selectedStructureNode = computed(() => getStructureNodeByPath(selectedStructurePath.value))
+const canFocusStructureParent = computed(() => getStructureParentPath(structureFocusPath.value) !== String(structureFocusPath.value || 'value'))
 const structureGraph = computed(() => {
   const root = getStructureNodeByPath(structureFocusPath.value) || createStructureNode(structureRootValue.value, activeVariableName.value || 'value', 'value', 0)
   if (!root) return { nodes: [], edges: [], width: 960, height: 560 }
@@ -805,6 +833,13 @@ const getStructureNodeByPath = (path) => {
   return root
 }
 
+const getStructureParentPath = (path) => {
+  const normalizedPath = String(path || 'value')
+  if (!normalizedPath || normalizedPath === 'value') return 'value'
+  const dotIndex = normalizedPath.lastIndexOf('.')
+  return dotIndex > 0 ? normalizedPath.slice(0, dotIndex) : 'value'
+}
+
 const compactDisplayValue = (value) => {
   if (value == null) return String(value)
   if (typeof value === 'string') return value
@@ -860,6 +895,11 @@ const toggleStructureNode = (path) => {
   })
 }
 
+const toggleSelectedStructureNode = () => {
+  if (!selectedStructureNode.value?.childCount) return
+  toggleStructureNode(selectedStructureNode.value.path)
+}
+
 const focusStructureNode = (path) => {
   const normalizedPath = String(path || 'value')
   structureFocusPath.value = normalizedPath
@@ -869,6 +909,16 @@ const focusStructureNode = (path) => {
   logger.info('[DataWorkbench] focused structure subgraph', {
     variableName: activeVariableName.value,
     path: normalizedPath,
+  })
+}
+
+const focusStructureParent = () => {
+  const parentPath = getStructureParentPath(structureFocusPath.value)
+  if (parentPath === String(structureFocusPath.value || 'value')) return
+  focusStructureNode(parentPath)
+  logger.info('[DataWorkbench] focused structure parent', {
+    variableName: activeVariableName.value,
+    parentPath,
   })
 }
 
@@ -2075,8 +2125,7 @@ onBeforeUnmount(() => {
   font-size: 12px;
 }
 
-.data-workbench__structure-actions,
-.data-workbench__structure-detail-actions {
+.data-workbench__structure-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -2130,6 +2179,10 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 
+.data-workbench__structure-node.has-children {
+  padding-right: 28px;
+}
+
 .data-workbench__structure-node:hover,
 .data-workbench__structure-node.is-selected {
   border-color: color-mix(in srgb, var(--dl-accent) 60%, var(--dl-border));
@@ -2165,6 +2218,28 @@ onBeforeUnmount(() => {
   background: var(--dl-accent-soft);
   color: var(--dl-text);
   font-size: 11px;
+}
+
+.data-workbench__structure-node-toggle {
+  position: absolute;
+  top: 50%;
+  right: -13px;
+  width: 26px;
+  height: 26px;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--dl-border);
+  border-radius: 999px;
+  background: var(--dl-panel);
+  color: var(--dl-text);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.16);
+}
+
+.data-workbench__structure-node-toggle:hover {
+  border-color: color-mix(in srgb, var(--dl-accent) 58%, var(--dl-border));
+  background: var(--dl-accent-soft);
 }
 
 .data-workbench__structure-detail {

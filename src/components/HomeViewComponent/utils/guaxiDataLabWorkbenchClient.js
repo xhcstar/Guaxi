@@ -297,7 +297,11 @@ export const buildApplyEditsCode = ({
     '    np = None',
     `__guaxi_name = ${JSON.stringify(name)}`,
     `__guaxi_target_name = ${JSON.stringify(targetName)}`,
-    `__guaxi_edits = ${JSON.stringify(safeEdits)}`,
+    // 设计说明：
+    // 1. JavaScript JSON 里的 null/true/false 不能直接作为 Python 字面量执行，否则会触发 NameError。
+    // 2. 这里把编辑队列作为 JSON 字符串交给 Python 的 json.loads 解析，保证 null -> None、true/false -> True/False。
+    // 3. 后续单元格值仍走 __guaxi_parse_value，避免把普通字符串误当成 Python 表达式执行。
+    `__guaxi_edits = json.loads(${JSON.stringify(JSON.stringify(safeEdits))})`,
     'if __guaxi_name not in globals():',
     '    raise KeyError(f"变量不存在: {__guaxi_name}")',
     '__guaxi_value = globals()[__guaxi_name]',
