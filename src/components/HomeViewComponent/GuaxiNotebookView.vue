@@ -105,12 +105,12 @@
             <button
               type="button"
               class="guaxi-notebook__icon-btn primary"
-              :class="{ 'is-busy': isActiveNotebookPythonSessionBusy }"
-              :title="isActiveNotebookPythonSessionBusy ? '当前文档的 Python 会话正在运行，点击后会在空闲时自动运行当前选中的 Python Cell' : '运行当前选中的 Python Cell'"
-              :aria-label="isActiveNotebookPythonSessionBusy ? '当前文档的 Python 会话正在运行，点击后会在空闲时自动运行当前选中的 Python Cell' : '运行当前选中的 Python Cell'"
+              :class="{ 'is-busy': isActiveNotebookPythonRunActive }"
+              :title="isActiveNotebookPythonRunActive ? '中断当前探索者 Python Cell 运行，并清理本次后台会话' : (isActiveNotebookPythonSessionBusy ? '当前文档的 Python 会话正在运行，点击后会在空闲时自动运行当前选中的 Python Cell' : '运行当前选中的 Python Cell')"
+              :aria-label="isActiveNotebookPythonRunActive ? '中断当前探索者 Python Cell 运行，并清理本次后台会话' : (isActiveNotebookPythonSessionBusy ? '当前文档的 Python 会话正在运行，点击后会在空闲时自动运行当前选中的 Python Cell' : '运行当前选中的 Python Cell')"
               @click="handleActivePythonToolbarAction('run')"
             >
-              <Icon :icon="playIcon" width="16" height="16" :class="{ 'guaxi-notebook__busy-spin': isActiveNotebookPythonSessionBusy }" />
+              <Icon :icon="isActiveNotebookPythonRunActive ? squareIcon : playIcon" width="16" height="16" :class="{ 'guaxi-notebook__busy-spin': isActiveNotebookPythonSessionBusy && !isActiveNotebookPythonRunActive }" />
             </button>
             <button
               type="button"
@@ -665,6 +665,7 @@ import filePlusIcon from '@iconify-icons/lucide/file-plus'
 import terminalSquareIcon from '@iconify-icons/lucide/terminal-square'
 import sigmaIcon from '@iconify-icons/lucide/sigma'
 import playIcon from '@iconify-icons/lucide/play'
+import squareIcon from '@iconify-icons/lucide/square'
 import checkCircleIcon from '@iconify-icons/lucide/check-circle-2'
 import plusIcon from '@iconify-icons/lucide/plus'
 import searchIcon from '@iconify-icons/lucide/search'
@@ -776,6 +777,8 @@ const NOTEBOOK_RIGHT_SIDER_VIEW_KEY = 'home'
 const refreshTick = ref(0)
 const pendingFocusCellKey = ref('')
 const busyMap = ref({})
+const notebookActivePythonRun = ref(null)
+const notebookCancelledPythonRunIds = new Set()
 const notebookPendingPythonImport = ref(null)
 const notebookQueuedPythonAction = ref(null)
 const notebookRootRef = ref(null)
@@ -5472,6 +5475,59 @@ const setNotebookBusyState = (cell, nextBusy, reason = 'unknown') => {
 const isCellBusy = (cell) => getNotebookBusyKeys(cell).some((key) => !!busyMap.value[key])
 const isNotebookPythonSessionBusy = (cell) => getNotebookPythonSessionBusyKeys(cell).some((key) => !!busyMap.value[key])
 const isActiveNotebookPythonSessionBusy = computed(() => isNotebookPythonSessionBusy(activeNotebookPythonCell.value))
+const isNotebookPythonRunActive = (cell) => {
+  const activeRun = notebookActivePythonRun.value
+  if (!activeRun || cell?.type !== 'python') return false
+  const cellId = String(cell?.cellId || '').trim()
+  const cellKey = String(cell?.key || '').trim()
+  return (!!cellId && cellId === String(activeRun.cellId || '')) || (!!cellKey && cellKey === String(activeRun.cellKey || ''))
+}
+const isActiveNotebookPythonRunActive = computed(() => isNotebookPythonRunActive(activeNotebookPythonCell.value))
+const cancelNotebookPythonRun = async (cell, reason = 'manual-cancel') => {
+  const activeRun = notebookActivePythonRun.value
+  if (!activeRun?.requestId) {
+    logger.warn('[Notebook] cancel python run ignored because no active run exists', {
+      reason,
+      cellId: String(cell?.cellId || ''),
+      cellKey: String(cell?.key || ''),
+    })
+    return false
+  }
+
+  logger.info('[Notebook] cancelling python cell run', {
+    reason,
+    requestId: activeRun.requestId,
+    sessionId: activeRun.sessionId,
+    cellId: activeRun.cellId,
+    cellKey: activeRun.cellKey,
+  })
+
+  try {
+    notebookCancelledPythonRunIds.add(activeRun.requestId)
+    await invoke('python_runtime_cancel_request', {
+      request: {
+        request_id: activeRun.requestId,
+        session_id: activeRun.sessionId,
+        clear_session: true,
+      },
+    })
+    notebookQueuedPythonAction.value = null
+    setNotebookBusyState(cell || activeNotebookPythonCell.value, false, `cancel-python-cell:${activeRun.requestId}`)
+    notebookActivePythonRun.value = null
+    message.info('已中断当前 Python Cell 运行，并清理后台会话')
+    return true
+  } catch (error) {
+    notebookCancelledPythonRunIds.delete(activeRun.requestId)
+    logger.error('[Notebook] cancel python cell run failed', {
+      reason,
+      requestId: activeRun.requestId,
+      sessionId: activeRun.sessionId,
+      error: String(error?.message || error),
+    })
+    message.error(`中断失败：${String(error?.message || error)}`)
+    return false
+  }
+}
 const queueNotebookPythonAction = (cell, action, reason = 'unknown') => {
   const targetIdentity = getNotebookPythonCellIdentity(cell)
   const queuedRequestId = createNotebookActionRequestId('nb-queued-python')
@@ -5546,6 +5602,11 @@ const handleActivePythonToolbarAction = async (action) => {
   }
 
   activateNotebookCell(targetCell, `toolbar-action:${action}`)
+
+  if (action === 'run' && isNotebookPythonRunActive(targetCell)) {
+    await cancelNotebookPythonRun(targetCell, 'toolbar-run-button')
+    return
+  }
 
   if ((action === 'run' || action === 'run-writeback') && isNotebookPythonSessionBusy(targetCell)) {
     queueNotebookPythonAction(targetCell, action, `toolbar:${action}:session-busy`)
@@ -6945,15 +7006,31 @@ const runPythonCell = async (cell, { writeBack = false } = {}) => {
   }
 
   const requestId = createNotebookActionRequestId('nb-run')
+  const sessionId = createPythonSessionId(props.filePath)
   setNotebookBusyState(cell, true, `run-python-cell:start:${requestId}`)
+  if (!writeBack) {
+    notebookActivePythonRun.value = {
+      requestId,
+      sessionId,
+      cellId: String(cell.cellId || ''),
+      cellKey: String(cell.key || ''),
+      startedAt: Date.now(),
+    }
+    logger.info('[Notebook] registered cancellable python cell run', {
+      requestId,
+      sessionId,
+      cellId: String(cell.cellId || ''),
+      cellKey: String(cell.key || ''),
+    })
+  }
 
   try {
-    const sessionId = createPythonSessionId(props.filePath)
     const res = await invoke('python_exec', {
       request: {
         code: String(cell.code || ''),
         persist: true,
         expect_json: true,
+        request_id: requestId,
         vars: {
           _guaxi_session: sessionId,
           _doc_path: String(props.filePath || ''),
@@ -7045,6 +7122,17 @@ const runPythonCell = async (cell, { writeBack = false } = {}) => {
 
     message.success(writeBack ? '运行完成，输出已写回文档' : '运行完成')
   } catch (error) {
+    if (notebookCancelledPythonRunIds.has(requestId)) {
+      logger.info('[Notebook] python cell run cancelled without writing error output', {
+        requestId,
+        key: String(cell?.key || ''),
+        cellId: String(cell?.cellId || ''),
+        error: String(error?.message || error),
+      })
+      message.info('Python Cell 运行已中断')
+      return
+    }
+
     const snapshot = getCellSnapshot(cell)
     const errorOutputs = appendPythonCellOutputModules(
       snapshot?.outputs || [],
@@ -7084,7 +7172,21 @@ const runPythonCell = async (cell, { writeBack = false } = {}) => {
     schedulePersistNotebookSidecar('run-python-cell-failed')
     message.error(`运行失败：${String(error?.message || error)}`)
   } finally {
+    const wasCancelled = notebookCancelledPythonRunIds.has(requestId)
     setNotebookBusyState(cell, false, `run-python-cell:finish:${requestId}`)
+    if (String(notebookActivePythonRun.value?.requestId || '') === requestId) {
+      notebookActivePythonRun.value = null
+      logger.info('[Notebook] cleared cancellable python cell run', {
+        requestId,
+        cellId: String(cell?.cellId || ''),
+        cellKey: String(cell?.key || ''),
+      })
+    }
+    if (wasCancelled) {
+      notebookCancelledPythonRunIds.delete(requestId)
+      notebookQueuedPythonAction.value = null
+      return
+    }
     await flushQueuedNotebookPythonActionIfIdle(`run-python-cell:finish:${requestId}`)
   }
 }
@@ -7886,6 +7988,10 @@ defineExpose({
   color: #ffffff;
   border-color: transparent;
   background: linear-gradient(135deg, var(--guaxi-notebook-primary), var(--guaxi-notebook-primary-hover));
+}
+
+.guaxi-notebook__icon-btn.primary.is-busy {
+  background: var(--guaxi-notebook-danger);
 }
 
 .guaxi-notebook__cell-btn.ghost,

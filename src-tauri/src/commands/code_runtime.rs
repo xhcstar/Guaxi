@@ -25,6 +25,8 @@ use std::os::windows::process::CommandExt;
 
 static PY_WORKER_STATES: OnceLock<Mutex<HashMap<String, Arc<Mutex<PythonWorkerState>>>>> =
     OnceLock::new();
+static PY_WORKER_ACTIVE_REQUESTS: OnceLock<Mutex<HashMap<String, PythonActiveRequest>>> =
+    OnceLock::new();
 
 const PY_WORKER_FILE_NAME: &str = "guaxi_python_worker.py";
 const PY_WORKER_SOURCE: &str = include_str!("../../scripts/guaxi_python_worker.py");
@@ -83,6 +85,7 @@ pub struct PyExecRequest {
     pub code: String,
     pub persist: bool,
     pub expect_json: bool,
+    pub request_id: Option<String>,
     pub include_session_vars: Option<bool>,
     pub session_var_names: Option<Vec<String>>,
     pub vars: Option<HashMap<String, Value>>,
@@ -199,6 +202,13 @@ pub struct PythonSessionRequest {
     pub session_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct PythonCancelRequest {
+    pub request_id: String,
+    pub session_id: Option<String>,
+    pub clear_session: Option<bool>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct PythonSessionInfo {
     pub session_id: String,
@@ -288,8 +298,20 @@ struct PythonWorkerState {
     stdout: BufReader<ChildStdout>,
 }
 
+#[derive(Debug, Clone)]
+struct PythonActiveRequest {
+    worker_key: String,
+    session_id: String,
+    cell_id: String,
+    pid: u32,
+}
+
 fn python_worker_states_cell() -> &'static Mutex<HashMap<String, Arc<Mutex<PythonWorkerState>>>> {
     PY_WORKER_STATES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn python_worker_active_requests_cell() -> &'static Mutex<HashMap<String, PythonActiveRequest>> {
+    PY_WORKER_ACTIVE_REQUESTS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn python_worker_key_for_session(session_id: &str) -> String {
@@ -2248,6 +2270,79 @@ fn terminate_python_worker_state(worker_key: &str, worker: Arc<Mutex<PythonWorke
     }
 }
 
+fn register_python_active_request(
+    request_id: &str,
+    worker_key: &str,
+    session_id: &str,
+    cell_id: &str,
+    pid: u32,
+) {
+    let normalized_request_id = request_id.trim();
+    if normalized_request_id.is_empty() {
+        return;
+    }
+
+    match python_worker_active_requests_cell().lock() {
+        Ok(mut guard) => {
+            guard.insert(
+                normalized_request_id.to_string(),
+                PythonActiveRequest {
+                    worker_key: worker_key.to_string(),
+                    session_id: session_id.to_string(),
+                    cell_id: cell_id.to_string(),
+                    pid,
+                },
+            );
+            info!(
+                request_id = normalized_request_id,
+                worker_key,
+                session_id,
+                cell_id,
+                pid,
+                "[PythonRuntime] active request registered"
+            );
+        }
+        Err(_) => {
+            warn!(
+                request_id = normalized_request_id,
+                worker_key,
+                "[PythonRuntime] lock active request registry failed during register"
+            );
+        }
+    }
+}
+
+fn unregister_python_active_request(request_id: &str, reason: &str) {
+    let normalized_request_id = request_id.trim();
+    if normalized_request_id.is_empty() {
+        return;
+    }
+
+    match python_worker_active_requests_cell().lock() {
+        Ok(mut guard) => {
+            let removed = guard.remove(normalized_request_id);
+            if let Some(active) = removed {
+                info!(
+                    request_id = normalized_request_id,
+                    worker_key = active.worker_key.as_str(),
+                    session_id = active.session_id.as_str(),
+                    cell_id = active.cell_id.as_str(),
+                    pid = active.pid,
+                    reason,
+                    "[PythonRuntime] active request unregistered"
+                );
+            }
+        }
+        Err(_) => {
+            warn!(
+                request_id = normalized_request_id,
+                reason,
+                "[PythonRuntime] lock active request registry failed during unregister"
+            );
+        }
+    }
+}
+
 fn remove_python_worker_by_key(
     worker_key: &str,
 ) -> Result<Option<Arc<Mutex<PythonWorkerState>>>, String> {
@@ -2366,9 +2461,14 @@ fn send_worker_request(payload: &Value) -> Result<Value, String> {
             .and_then(|vars| vars.get("_py_cell_id"))
             .and_then(Value::as_str)
             .unwrap_or("");
+        let request_id = payload
+            .get("request_id")
+            .and_then(Value::as_str)
+            .unwrap_or("");
         let timeout_secs = python_worker_timeout_secs_for_cmd(worker_cmd);
+        let pid = state.child.id();
         let watchdog = start_python_worker_request_watchdog(
-            state.child.id(),
+            pid,
             worker_cmd.to_string(),
             session_id.to_string(),
             cell_id.to_string(),
@@ -2381,37 +2481,56 @@ fn send_worker_request(payload: &Value) -> Result<Value, String> {
             cmd = worker_cmd,
             session_id,
             cell_id,
+            request_id,
             payload_len = line.len(),
             timeout_secs,
             "[PythonRuntime] sending worker request"
         );
-        state
-            .stdin
-            .write_all(line.as_bytes())
-            .map_err(|e| format!("write worker stdin failed: {e}"))?;
-        state
-            .stdin
-            .write_all(b"\n")
-            .map_err(|e| format!("write worker newline failed: {e}"))?;
-        state
-            .stdin
-            .flush()
-            .map_err(|e| format!("flush worker stdin failed: {e}"))?;
+        register_python_active_request(request_id, worker_key.as_str(), session_id, cell_id, pid);
+
+        let write_result = (|| -> Result<(), String> {
+            state
+                .stdin
+                .write_all(line.as_bytes())
+                .map_err(|e| format!("write worker stdin failed: {e}"))?;
+            state
+                .stdin
+                .write_all(b"\n")
+                .map_err(|e| format!("write worker newline failed: {e}"))?;
+            state
+                .stdin
+                .flush()
+                .map_err(|e| format!("flush worker stdin failed: {e}"))?;
+            Ok(())
+        })();
+        if let Err(error) = write_result {
+            unregister_python_active_request(request_id, "worker-write-failed");
+            return Err(error);
+        }
 
         let mut response_line = String::new();
-        let bytes_read = state
+        let read_result = state
             .stdout
-            .read_line(&mut response_line)
-            .map_err(|e| format!("read worker stdout failed: {e}"))?;
+            .read_line(&mut response_line);
         watchdog.store(true, Ordering::SeqCst);
+        let bytes_read = match read_result {
+            Ok(value) => value,
+            Err(error) => {
+                unregister_python_active_request(request_id, "worker-read-failed");
+                return Err(format!("read worker stdout failed: {error}"));
+            }
+        };
         if bytes_read == 0 {
+            unregister_python_active_request(request_id, "worker-stdout-closed");
             return Err("python worker closed stdout unexpectedly".to_string());
         }
+        unregister_python_active_request(request_id, "worker-response-received");
         info!(
             worker_key = worker_key.as_str(),
             cmd = worker_cmd,
             session_id,
             cell_id,
+            request_id,
             response_len = response_line.len(),
             "[PythonRuntime] received worker response"
         );
@@ -2622,6 +2741,7 @@ pub async fn python_exec(request: PyExecRequest) -> Result<PyExecResponse, Strin
 
     let payload = json!({
         "cmd": "exec",
+        "request_id": request.request_id,
         "code": request.code,
         "persist": request.persist,
         "expect_json": request.expect_json,
@@ -2703,6 +2823,90 @@ pub async fn python_runtime_drop_session(request: PythonSessionRequest) -> Resul
         "[PythonRuntime] session dropped"
     );
     Ok(())
+}
+
+#[command]
+pub async fn python_runtime_cancel_request(request: PythonCancelRequest) -> Result<(), String> {
+    let request_id = request.request_id.trim().to_string();
+    if request_id.is_empty() {
+        return Err("request_id 不能为空".to_string());
+    }
+
+    let requested_session_id = request
+        .session_id
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let clear_session = request.clear_session.unwrap_or(true);
+
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        let active = {
+            let mut guard = python_worker_active_requests_cell()
+                .lock()
+                .map_err(|_| "lock python active request registry failed".to_string())?;
+            guard.remove(&request_id)
+        };
+
+        let active = match active {
+            Some(active) => active,
+            None => {
+                warn!(
+                    request_id = request_id.as_str(),
+                    requested_session_id = requested_session_id.as_str(),
+                    "[PythonRuntime] cancel request ignored because active request was not found"
+                );
+                return Ok(());
+            }
+        };
+
+        if !requested_session_id.is_empty() && requested_session_id != active.session_id {
+            warn!(
+                request_id = request_id.as_str(),
+                requested_session_id = requested_session_id.as_str(),
+                active_session_id = active.session_id.as_str(),
+                "[PythonRuntime] cancel request session mismatch"
+            );
+            return Ok(());
+        }
+
+        let _ = remove_python_worker_by_key(&active.worker_key)?;
+        if let Err(error) = terminate_process_by_pid(active.pid) {
+            warn!(
+                request_id = request_id.as_str(),
+                pid = active.pid,
+                error = error.as_str(),
+                "[PythonRuntime] cancel request process termination reported an error"
+            );
+        }
+
+        if clear_session && !active.session_id.trim().is_empty() {
+            let runtime_dir = python_runtime_dir()?;
+            let sandbox_dir = python_session_sandbox_dir(&runtime_dir, &active.session_id);
+            if sandbox_dir.exists() {
+                remove_path_if_exists(&sandbox_dir)?;
+            }
+            info!(
+                request_id = request_id.as_str(),
+                session_id = active.session_id.as_str(),
+                sandbox_dir = sandbox_dir.to_string_lossy().as_ref(),
+                "[PythonRuntime] cancelled request session sandbox removed"
+            );
+        }
+
+        info!(
+            request_id = request_id.as_str(),
+            worker_key = active.worker_key.as_str(),
+            session_id = active.session_id.as_str(),
+            cell_id = active.cell_id.as_str(),
+            pid = active.pid,
+            clear_session,
+            "[PythonRuntime] active request cancelled"
+        );
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("python_runtime_cancel_request join failed: {e}"))?
 }
 
 #[command]

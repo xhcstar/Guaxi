@@ -548,6 +548,7 @@ async fn main() {
             commands::filetransfer::filetransfer_webrtc_recv_chunk_base64,
             commands::filetransfer::filetransfer_webrtc_recv_complete,
              commands::code_runtime::python_exec,
+             commands::code_runtime::python_runtime_cancel_request,
              commands::code_runtime::python_reset_repl,
              commands::code_runtime::python_runtime_get_session_info,
              commands::code_runtime::python_runtime_drop_session,
