@@ -334,21 +334,19 @@
               <section class="data-workbench__chart-config">
                 <label>
                   <span>图表类型</span>
-                  <select v-model="chartDraft.chartType" class="data-workbench__field">
-                    <option v-for="chart in chartTypes" :key="chart.value" :value="chart.value">{{ chart.label }}</option>
-                  </select>
+                  <GuaxiWorkbenchCombobox v-model="chartDraft.chartType" :options="chartTypes" select-only placeholder="选择图表类型" />
                 </label>
                 <label>
                   <span>X 轴数据</span>
-                  <input v-model="chartDraft.x" class="data-workbench__field" list="workbench-chart-sources" placeholder="例如 index、price_df.date、other_var" />
+                  <GuaxiWorkbenchCombobox v-model="chartDraft.x" :options="chartSourceOptions" placeholder="例如 index、price_df.date、other_var" />
                 </label>
                 <label>
                   <span>Z / 大小</span>
-                  <input v-model="chartDraft.z" class="data-workbench__field" list="workbench-chart-sources" placeholder="可选，例如 volume" />
+                  <GuaxiWorkbenchCombobox v-model="chartDraft.z" :options="chartSourceOptions" placeholder="可选，例如 volume" />
                 </label>
                 <label>
                   <span>颜色分组</span>
-                  <input v-model="chartDraft.color" class="data-workbench__field" list="workbench-chart-sources" placeholder="可选，例如 category" />
+                  <GuaxiWorkbenchCombobox v-model="chartDraft.color" :options="chartSourceOptions" placeholder="可选，例如 category" />
                 </label>
                 <label class="wide">
                   <span>图表标题</span>
@@ -366,7 +364,7 @@
                 </div>
                 <div class="data-workbench__series-list">
                   <div v-for="(series, index) in chartDraft.ySeries" :key="`series-${index}`" class="data-workbench__series-row">
-                    <input v-model="series.source" class="data-workbench__field" list="workbench-chart-sources" placeholder="变量或字段，例如 value、df.score" />
+                    <GuaxiWorkbenchCombobox v-model="series.source" :options="chartSourceOptions" placeholder="变量或字段，例如 value、df.score" />
                     <input v-model="series.label" class="data-workbench__field" placeholder="图例名称，可选" />
                     <button
                       type="button"
@@ -379,9 +377,6 @@
                     </button>
                   </div>
                 </div>
-                <datalist id="workbench-chart-sources">
-                  <option v-for="item in chartSourceOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
-                </datalist>
               </section>
 
               <section class="data-workbench__chart-help">
@@ -532,6 +527,7 @@ import zoomOutIcon from '@iconify-icons/lucide/zoom-out'
 import { useMessage } from 'naive-ui'
 import { useRoute } from 'vue-router'
 import { createLogger } from '../../utils/logger'
+import GuaxiWorkbenchCombobox from './GuaxiWorkbenchCombobox.vue'
 import {
   WORKBENCH_CHART_TYPES,
   WORKBENCH_SUPPORTED_EXPORTS,
@@ -1613,6 +1609,7 @@ onBeforeUnmount(() => {
   --dl-border: rgba(31, 41, 55, 0.13);
   --dl-accent: #2f6f55;
   --dl-accent-soft: rgba(47, 111, 85, 0.13);
+  color-scheme: light;
   height: 100vh;
   min-height: 0;
   display: flex;
@@ -1632,6 +1629,7 @@ onBeforeUnmount(() => {
   --dl-border: rgba(151, 164, 186, 0.2);
   --dl-accent: #77c69f;
   --dl-accent-soft: rgba(119, 198, 159, 0.14);
+  color-scheme: dark;
 }
 
 .data-workbench[data-workbench-theme='light'] {
@@ -1643,6 +1641,7 @@ onBeforeUnmount(() => {
   --dl-border: rgba(31, 41, 55, 0.13);
   --dl-accent: #2f6f55;
   --dl-accent-soft: rgba(47, 111, 85, 0.13);
+  color-scheme: light;
 }
 
 .data-workbench__header {
@@ -2472,9 +2471,9 @@ onBeforeUnmount(() => {
 .data-workbench__form-grid,
 .data-workbench__chart-config {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
   gap: 14px;
-  max-width: 760px;
+  min-width: 0;
 }
 
 .data-workbench__form-grid label,
@@ -2508,12 +2507,14 @@ onBeforeUnmount(() => {
   align-content: start;
   gap: 16px;
   padding: 16px;
+  min-width: 0;
 }
 
 .data-workbench__chart-config,
 .data-workbench__chart-series,
 .data-workbench__chart-help {
-  max-width: 920px;
+  width: 100%;
+  box-sizing: border-box;
   border: 1px solid var(--dl-border);
   border-radius: 8px;
   padding: 14px;
