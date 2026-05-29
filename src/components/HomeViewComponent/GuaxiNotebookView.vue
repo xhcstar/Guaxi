@@ -295,9 +295,16 @@
       <template v-else-if="cell.type === 'math'">
         <div class="guaxi-notebook__math-layout">
           <div class="guaxi-notebook__math-toolbar">
-            <span class="guaxi-notebook__math-badge">
-              <Icon :icon="sigmaIcon" width="13" height="13" />
-              <span>Math</span>
+            <span class="guaxi-notebook__math-badge" :class="{ 'is-busy': isCellBusy(cell) }">
+              <!-- 设计说明：数学块与 Python Cell 都会触发后台执行；运行中复用同一旋转动画，让 Notebook 的执行状态反馈保持一致。 -->
+              <Icon
+                :icon="sigmaIcon"
+                width="13"
+                height="13"
+                class="guaxi-notebook__math-badge-icon"
+                :class="{ 'guaxi-notebook__busy-spin': isCellBusy(cell) }"
+              />
+              <span>{{ isCellBusy(cell) ? '运行中' : 'Math' }}</span>
             </span>
             <div class="guaxi-notebook__math-actions">
               <!-- 主操作：按当前默认设置绘制图像，等价于工具菜单里的“绘制图像”。 -->
@@ -3561,10 +3568,62 @@ const updateMathCell = (key, eventOrValue) => {
   )
 }
 
+const splitMathExpressionForPreview = (expression = '') => {
+  const lines = String(expression || '').replace(/\r\n?/g, '\n').split('\n')
+  const blocks = []
+  let environmentBlock = []
+  let environmentDepth = 0
+
+  const countLatexEnvironmentDelta = (line = '') => {
+    const beginCount = (String(line || '').match(/\\begin\s*\{/g) || []).length
+    const endCount = (String(line || '').match(/\\end\s*\{/g) || []).length
+    return beginCount - endCount
+  }
+
+  const flushEnvironmentBlock = () => {
+    const text = environmentBlock.join('\n').trim()
+    if (text) blocks.push(text)
+    environmentBlock = []
+    environmentDepth = 0
+  }
+
+  for (const rawLine of lines) {
+    const line = String(rawLine || '').trim()
+    if (!line) {
+      if (environmentBlock.length) flushEnvironmentBlock()
+      continue
+    }
+
+    // 设计说明：
+    // 1. 普通多行输入按“每个非空行一个 display math”渲染，用户在编辑器里换行，预览里也能看到换行。
+    // 2. 显式 LaTeX 环境（aligned/cases/matrix 等）内部本来就有自己的换行语义，必须保持为同一个公式块。
+    // 3. 拆分只影响前端预览 Markdown，不改变数学块保存内容，也不影响后端 SymPy/绘图执行。
+    const delta = countLatexEnvironmentDelta(line)
+    if (environmentBlock.length || delta > 0) {
+      environmentBlock.push(line)
+      environmentDepth += delta
+      if (environmentDepth <= 0) flushEnvironmentBlock()
+      continue
+    }
+
+    blocks.push(line)
+  }
+
+  if (environmentBlock.length) flushEnvironmentBlock()
+  return blocks
+}
+
+const buildMathPreviewMarkdown = (expression = '') => {
+  const blocks = splitMathExpressionForPreview(expression)
+  if (!blocks.length) return ''
+  return blocks.map((block) => `$$\n${block}\n$$`).join('\n\n')
+}
+
 const renderMathCellPreviewImmediately = async (key, expression) => {
   const normalizedKey = String(key || '')
   const renderSeq = ++notebookMathPreviewRenderSeq
-  const mathMarkdown = `$$\n${String(expression || '')}\n$$`
+  const mathMarkdown = buildMathPreviewMarkdown(expression)
+  const mathBlockCount = splitMathExpressionForPreview(expression).length
   try {
     const html = await renderMarkdownHtml(mathMarkdown, `math-cell-live-preview:${normalizedKey}`)
     if (renderSeq !== notebookMathPreviewRenderSeq) return
@@ -3575,6 +3634,7 @@ const renderMathCellPreviewImmediately = async (key, expression) => {
     logger.debug('[Notebook] rendered live math cell preview', {
       key: normalizedKey,
       expressionLength: String(expression || '').length,
+      mathBlockCount,
       renderSeq,
     })
   } catch (error) {
@@ -4704,10 +4764,18 @@ const syncRenderedMarkdownHtml = async (cells, reason = 'unknown') => {
     if (cell?.type === 'markdown' || cell?.type === 'math') {
       const cellKey = String(cell.key || '')
       const markdownText = cell?.type === 'math'
-        ? `$$\n${String(cell.expression || '')}\n$$`
+        ? buildMathPreviewMarkdown(cell.expression || '')
         : String(cell.content || '')
       const renderReasonPrefix = cell?.type === 'math' ? 'math-cell' : 'markdown-cell'
       const logCellKind = cell?.type === 'math' ? 'math' : 'markdown'
+      if (cell?.type === 'math') {
+        logger.debug('[Notebook] build math cell preview markdown', {
+          reason,
+          cellKey,
+          expressionLength: String(cell.expression || '').length,
+          mathBlockCount: splitMathExpressionForPreview(cell.expression || '').length,
+        })
+      }
       const cacheKey = buildNotebookMarkdownCacheKey(markdownText, {
         theme: props.theme,
         filePath: props.filePath,
@@ -8173,16 +8241,30 @@ defineExpose({
 .guaxi-notebook__math-badge {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 5px;
-  min-height: 24px;
-  padding: 0 8px;
-  border: 1px solid color-mix(in srgb, #0891b2 32%, var(--guaxi-notebook-strong-border));
-  border-radius: 7px;
-  background: color-mix(in srgb, #0891b2 10%, var(--guaxi-notebook-panel) 90%);
-  color: color-mix(in srgb, #0e7490 82%, var(--guaxi-notebook-text));
-  font-size: 12px;
+  min-width: 52px;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--guaxi-notebook-strong-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--guaxi-notebook-panel-soft) 82%, var(--guaxi-notebook-panel) 18%);
+  color: var(--guaxi-notebook-muted);
+  font-size: 11px;
   font-weight: 700;
   font-family: var(--guaxi-notebook-font);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.guaxi-notebook__math-badge.is-busy {
+  color: #1d4ed8;
+  border-color: color-mix(in srgb, #60a5fa 48%, var(--guaxi-notebook-strong-border));
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.14);
+}
+
+.guaxi-notebook__math-badge-icon {
+  flex: 0 0 auto;
 }
 
 .guaxi-notebook__math-actions {
@@ -8281,12 +8363,34 @@ defineExpose({
 }
 
 .guaxi-notebook__math-preview {
+  min-width: 0;
+  max-width: 100%;
   min-height: 42px;
   padding: 8px 10px;
   border-left: 3px solid color-mix(in srgb, #0891b2 46%, var(--guaxi-notebook-strong-border));
   background: color-mix(in srgb, #0891b2 5%, transparent);
   font-size: 18px;
-  fonst-family: var(--guaxi-notebook-font);
+  font-family: var(--guaxi-notebook-font);
+  overflow-x: auto;
+  overflow-y: hidden;
+  box-sizing: border-box;
+}
+
+/* 设计说明：
+ * 1. MathJax 的 SVG 会把重复多行公式合成为非常宽的节点，必须把滚动边界锁在数学预览内部。
+ * 2. display math 仍保持居中；只有公式本身超过可用宽度时，用户在预览区横向滚动查看。
+ * 3. 这里不缩放公式，避免偏微分、矩阵、分式这类数学内容因为强行压缩而不可读。
+ */
+.guaxi-notebook__math-preview :deep(mjx-container) {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  box-sizing: border-box;
+}
+
+.guaxi-notebook__math-preview :deep(mjx-container > svg) {
+  max-width: none;
 }
 
 .guaxi-notebook__markdown-surface {
@@ -8524,6 +8628,7 @@ defineExpose({
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 5px;
   min-width: 52px;
   height: 24px;
   padding: 0 10px;
@@ -8697,23 +8802,30 @@ defineExpose({
 .guaxi-notebook__output-module-body {
   display: grid;
   min-width: 0;
+  max-width: 100%;
   gap: 8px;
-  padding: 7px 8px 8px;
+  padding: 10px 12px 12px;
+  overflow-x: hidden;
+  box-sizing: border-box;
 }
 
 .guaxi-notebook__output-markdown {
   min-width: 0;
+  max-width: 100%;
   color: var(--guaxi-notebook-text);
-  font-size: 13px;
-  line-height: 1.6;
+  font-size: 15px;
+  line-height: 1.72;
+  overflow-x: auto;
+  overflow-y: hidden;
+  box-sizing: border-box;
 }
 
 .guaxi-notebook__output-markdown :deep(h2),
 .guaxi-notebook__output-markdown :deep(h3) {
-  margin: 8px 0 6px;
+  margin: 10px 0 7px;
   padding: 0;
   border-bottom: 0;
-  font-size: 13px;
+  font-size: 16px;
   line-height: 1.35;
   letter-spacing: 0;
 }
@@ -8729,13 +8841,24 @@ defineExpose({
 
 .guaxi-notebook__output-markdown :deep(p),
 .guaxi-notebook__output-markdown :deep(ul) {
-  margin: 6px 0;
+  margin: 8px 0;
 }
 
 .guaxi-notebook__output-markdown :deep(mjx-container) {
-  margin: 8px 0 4px;
+  max-width: 100%;
+  margin: 10px 0 6px;
+  font-size: 112%;
   overflow-x: auto;
   overflow-y: hidden;
+  box-sizing: border-box;
+}
+
+/* 设计说明：
+ * 1. 数学输出是运行结果，优先保证可读性；正文和标题适度放大，公式再额外放大一点。
+ * 2. 超宽 MathJax SVG 留给输出模块内部滚动，避免把 Notebook 右侧面板整体顶出去。
+ */
+.guaxi-notebook__output-markdown :deep(mjx-container > svg) {
+  max-width: none;
 }
 
 .guaxi-notebook__panel-head {
