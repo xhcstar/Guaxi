@@ -72,7 +72,10 @@ const PYTHON_RUNTIME_RECOMMENDED_PACKAGES: &[&str] = &[
     "ipython",
     "plotly",
     "sympy",
-    "antlr4-python3-runtime",
+    // 版本必须为 4.11.*：sympy 1.14 的 parse_latex 强制要求该主版本，
+    // 装更新的 4.13 会导致 LaTeX 解析报 ImportError（数学块据此判定后端是否可用）。
+    "antlr4-python3-runtime==4.11.1",
+    "scipy",
     "seaborn",
     "duckdb",
     "polars",
@@ -1659,7 +1662,16 @@ fn managed_runtime_marker_exists(runtime_dir: &Path) -> bool {
 }
 
 fn normalize_python_package_name(package: &str) -> String {
-    package.trim().to_ascii_lowercase().replace('_', "-")
+    // 去掉版本约束（==、>=、~= 等）和 extras（[...]），只保留可比较的包名，
+    // 这样 "antlr4-python3-runtime==4.11.1" 能与已安装的 "antlr4-python3-runtime"
+    // 正确匹配，避免每次启动都重复尝试安装。
+    let name = package
+        .trim()
+        .split(|c| matches!(c, '=' | '<' | '>' | '!' | '~' | ' ' | '[' | ';'))
+        .next()
+        .unwrap_or("")
+        .trim();
+    name.to_ascii_lowercase().replace('_', "-")
 }
 
 fn should_skip_python_package_restore(package: &str) -> bool {
@@ -2017,19 +2029,23 @@ fn ensure_managed_python_launch_spec_with_download_version(
         fs::create_dir_all(&runtime_dir).map_err(|e| format!("create python runtime dir failed: {e}"))?;
         create_managed_virtualenv(&base_spec, &venv_dir)?;
         sync_managed_runtime_support_files(&base_spec, &venv_dir)?;
-        for recommended_package in python_runtime_recommended_packages() {
-            if !managed_package_snapshot.iter().any(|item| {
-                normalize_python_package_name(item)
-                    == normalize_python_package_name(&recommended_package)
-            }) {
-                managed_package_snapshot.push(recommended_package);
-            }
-        }
         info!(
             source = base_spec.source.as_str(),
             venv_dir = venv_dir.to_string_lossy().as_ref(),
             "[PythonRuntime] managed virtual environment created from managed bootstrap pipeline"
         );
+    }
+
+    // 推荐依赖按名补齐：对新建和既有运行时都执行。ensure_python_packages_installed
+    // 只安装“缺失”的包（按规范化包名判断），因此这是幂等的——既能让老运行时补上
+    // 后来新增的 scipy 等依赖，又不会在每次启动时重复安装已有包。
+    for recommended_package in python_runtime_recommended_packages() {
+        if !managed_package_snapshot.iter().any(|item| {
+            normalize_python_package_name(item)
+                == normalize_python_package_name(&recommended_package)
+        }) {
+            managed_package_snapshot.push(recommended_package);
+        }
     }
 
     ensure_managed_pip_mirror(&runtime_dir)?;

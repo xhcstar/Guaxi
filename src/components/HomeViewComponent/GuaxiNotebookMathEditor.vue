@@ -202,7 +202,11 @@ const mountMonacoEditor = async () => {
       lineNumbers: 'on',
       lineNumbersMinChars: 3,
       glyphMargin: false,
-      folding: false,
+      // 设计说明：多行方程组 / 分段函数 / 长微分方程常按缩进分层书写，开启折叠后
+      // 可按缩进收起较长的子块，与 Python Cell 的折叠体验保持一致。
+      folding: true,
+      foldingStrategy: 'indentation',
+      showFoldingControls: 'mouseover',
       roundedSelection: false,
       scrollBeyondLastLine: false,
       wordWrap: 'on',

@@ -421,6 +421,85 @@ def _capture_matplotlib_png_base64():
         return None
 
 
+def _iter_matplotlib_animations(globals_dict):
+    """从执行后的命名空间里收集 matplotlib 动画对象。
+
+    设计说明：
+    1. matplotlib 的 ``FuncAnimation`` / ``ArtistAnimation`` 必须保留一个强引用，
+       否则会被垃圾回收而停止播放；用户代码通常会把它赋给一个变量（如 ``ani``）。
+    2. 因此这里遍历全局命名空间寻找 ``matplotlib.animation.Animation`` 实例，
+       同时优先考虑约定变量名 ``_result`` / ``ani`` / ``anim`` / ``animation``，
+       让“最后一个表达式即动画”这种写法也能被捕获。
+    3. 去重时按对象 id 判断，避免同一动画被多次渲染。
+    """
+    animations = []
+    try:
+        if "matplotlib" not in sys.modules:
+            return animations
+        from matplotlib.animation import Animation
+    except Exception:
+        return animations
+
+    seen_ids = set()
+
+    def _consider(candidate):
+        if isinstance(candidate, Animation) and id(candidate) not in seen_ids:
+            seen_ids.add(id(candidate))
+            animations.append(candidate)
+
+    # 约定变量名优先，保证“末行表达式”动画排在最前面。
+    for preferred_name in ("_result", "ani", "anim", "animation"):
+        try:
+            _consider(globals_dict.get(preferred_name))
+        except Exception:
+            pass
+
+    for value in list(globals_dict.values()):
+        try:
+            _consider(value)
+        except Exception:
+            pass
+
+    return animations
+
+
+def _capture_matplotlib_animation_html(globals_dict):
+    """把 matplotlib 动画转成自包含的 HTML（JS 动画播放器）。
+
+    设计说明：
+    1. 采用 ``to_jshtml()`` 而非导出 mp4/gif，零额外依赖（无需 ffmpeg/imagemagick），
+       生成的 HTML 自带播放/暂停控件，可直接塞进前端的 html 输出模块渲染。
+    2. 渲染成功后立即 ``plt.close()`` 关闭所有图窗，避免随后的静态 PNG 捕获
+       再把动画的最后一帧重复输出一次。
+    3. 任意环节失败都安静返回 ``None``，让调用方回退到既有的静态 PNG 路径，
+       绝不因为动画渲染异常而中断整个执行结果。
+    """
+    try:
+        animations = _iter_matplotlib_animations(globals_dict)
+        if not animations:
+            return None
+
+        animation = animations[0]
+        html = animation.to_jshtml()
+        if not html:
+            return None
+
+        try:
+            import matplotlib.pyplot as plt
+
+            plt.close("all")
+        except Exception:
+            pass
+
+        return {
+            "type": "html",
+            "mime": "text/html",
+            "html": html,
+        }
+    except Exception:
+        return None
+
+
 def _maybe_prepare_inline_matplotlib():
     try:
         if "matplotlib" not in sys.modules:
@@ -1260,20 +1339,27 @@ def _handle_exec(payload):
                     "__guaxi_result__": result_json,
                 }
 
-        png_b64 = _capture_matplotlib_png_base64()
-        if png_b64:
-            display = {
-                "type": "image",
-                "mime": "image/png",
-                "data_base64": png_b64,
-            }
+        # 设计说明：matplotlib 富媒体输出按“动画优先于静态图”的顺序捕获。
+        # 1. 先尝试把 FuncAnimation/ArtistAnimation 转成自包含 HTML 播放器；
+        #    成功后内部已 plt.close("all")，因此后续静态 PNG 捕获不会再重复输出末帧。
+        # 2. 没有动画时回退到既有的静态 PNG 路径，保持原有单帧绘图行为不变。
+        mpl_display = _capture_matplotlib_animation_html(globals_dict)
+        if mpl_display is None:
+            png_b64 = _capture_matplotlib_png_base64()
+            if png_b64:
+                mpl_display = {
+                    "type": "image",
+                    "mime": "image/png",
+                    "data_base64": png_b64,
+                }
+        if mpl_display:
             if isinstance(result_json, dict):
-                result_json.setdefault("__guaxi_display__", display)
+                result_json.setdefault("__guaxi_display__", mpl_display)
             elif result_json is None:
-                result_json = {"__guaxi_display__": display}
+                result_json = {"__guaxi_display__": mpl_display}
             else:
                 result_json = {
-                    "__guaxi_display__": display,
+                    "__guaxi_display__": mpl_display,
                     "__guaxi_result__": result_json,
                 }
 

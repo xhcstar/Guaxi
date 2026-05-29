@@ -295,40 +295,84 @@
       <template v-else-if="cell.type === 'math'">
         <div class="guaxi-notebook__math-layout">
           <div class="guaxi-notebook__math-toolbar">
-            <span class="guaxi-notebook__math-badge">Math</span>
+            <span class="guaxi-notebook__math-badge">
+              <Icon :icon="sigmaIcon" width="13" height="13" />
+              <span>Math</span>
+            </span>
             <div class="guaxi-notebook__math-actions">
+              <!-- 主操作：按当前默认设置绘制图像，等价于工具菜单里的“绘制图像”。 -->
               <button
                 type="button"
-                class="guaxi-notebook__panel-btn"
-                title="绘制当前函数图像"
+                class="guaxi-notebook__icon-btn"
+                data-tooltip="绘制当前函数图像"
                 aria-label="绘制当前函数图像"
                 @click="runMathCell(cell, false, 'plot2d')"
-              >绘制函数图像</button>
+              >
+                <Icon :icon="playIcon" width="16" height="16" />
+              </button>
+              <!-- 数学工具下拉菜单：函数/方程、微积分、级数、统计分布、积分变换。 -->
+              <div class="guaxi-notebook__math-menu-anchor">
+                <button
+                  type="button"
+                  class="guaxi-notebook__icon-btn guaxi-notebook__math-menu-trigger"
+                  :class="{ 'is-active': activeMathToolMenuKey === cell.key }"
+                  data-tooltip="数学工具：求解 / 级数 / 分布 / 变换"
+                  aria-label="打开数学工具菜单"
+                  :aria-expanded="activeMathToolMenuKey === cell.key"
+                  @click="toggleMathToolMenu(cell)"
+                >
+                  <Icon :icon="sigmaIcon" width="16" height="16" />
+                  <Icon :icon="chevronDownIcon" width="12" height="12" />
+                </button>
+                <div
+                  v-if="activeMathToolMenuKey === cell.key"
+                  class="guaxi-notebook__math-menu"
+                  role="menu"
+                >
+                  <div
+                    v-for="group in NOTEBOOK_MATH_TOOL_GROUPS"
+                    :key="group.label"
+                    class="guaxi-notebook__math-menu-group"
+                  >
+                    <div class="guaxi-notebook__math-menu-group-title">{{ group.label }}</div>
+                    <button
+                      v-for="item in group.items"
+                      :key="item.mode + item.label"
+                      type="button"
+                      class="guaxi-notebook__math-menu-item"
+                      role="menuitem"
+                      @click="handleMathToolSelect(cell, item.mode)"
+                    >
+                      <span class="guaxi-notebook__math-menu-item-label">{{ item.label }}</span>
+                      <span class="guaxi-notebook__math-menu-item-hint">{{ item.hint }}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <!-- 写回：把绘图结果直接插入为 Markdown Cell，方便沉淀到文档。 -->
               <button
                 type="button"
-                class="guaxi-notebook__panel-btn"
-                title="求解当前方程或表达式"
-                aria-label="求解当前方程或表达式"
-                @click="runMathCell(cell, false, 'solve')"
-              >解方程</button>
-              <button
-                type="button"
-                class="guaxi-notebook__panel-btn"
-                title="绘制当前函数图像并写回 Markdown"
-                aria-label="绘制当前函数图像并写回 Markdown"
+                class="guaxi-notebook__icon-btn"
+                data-tooltip="绘制图像并写回 Markdown"
+                aria-label="绘制图像并写回 Markdown"
                 @click="runMathCell(cell, true, 'plot2d')"
-              >绘图写回</button>
+              >
+                <Icon :icon="saveIcon" width="16" height="16" />
+              </button>
               <button
+                v-if="hasVisibleOutput(cell)"
                 type="button"
-                class="guaxi-notebook__panel-btn"
-                title="求解当前方程并写回 Markdown"
-                aria-label="求解当前方程并写回 Markdown"
-                @click="runMathCell(cell, true, 'solve')"
-              >解方程写回</button>
+                class="guaxi-notebook__icon-btn"
+                :data-tooltip="getCellSnapshot(cell).meta.outputCollapsed ? '显示数学输出' : '隐藏数学输出'"
+                :aria-label="getCellSnapshot(cell).meta.outputCollapsed ? '显示数学输出' : '隐藏数学输出'"
+                @click="toggleMathCellOutputCollapsed(cell)"
+              >
+                <Icon :icon="getCellSnapshot(cell).meta.outputCollapsed ? eyeIcon : eyeOffIcon" width="16" height="16" />
+              </button>
               <button
                 type="button"
                 class="guaxi-notebook__icon-btn danger"
-                title="删除当前数学块"
+                data-tooltip="删除当前数学块"
                 aria-label="删除当前数学块"
                 @click="confirmRemoveCell(cell)"
               >
@@ -815,6 +859,8 @@ const notebookSelectionText = ref('')
 const notebookTopToolbarRevealed = ref(false)
 const activeNotebookPythonCellKey = ref('')
 const notebookFocusedVariable = ref({ cellKey: '', variableName: '' })
+// 数学块工具下拉菜单：记录当前展开菜单所属的数学块 key（空串表示全部收起）。
+const activeMathToolMenuKey = ref('')
 const notebookMarkdownWorkerRef = ref(null)
 const notebookMarkdownWorkerReady = ref(false)
 const lastEmittedMarkdown = ref(String(props.markdown || '').replace(/\r\n?/g, '\n'))
@@ -4865,9 +4911,15 @@ const handleNotebookGlobalSelectionChange = () => {
 }
 
 const handleNotebookGlobalMouseDown = (event) => {
+  const target = event?.target instanceof Element ? event.target : null
+
+  // 数学工具下拉菜单：点击菜单/触发按钮以外的任何位置都收起菜单。
+  if (activeMathToolMenuKey.value && (!target || !target.closest('.guaxi-notebook__math-menu-anchor'))) {
+    closeMathToolMenu()
+  }
+
   if (!notebookSelectionToolbarVisible.value) return
 
-  const target = event?.target instanceof Element ? event.target : null
   if (!target) return
   if (target.closest('.guaxi-notebook__selection-toolbar')) return
   if (target.closest('.pot-selection-translate-panel')) return
@@ -6911,7 +6963,7 @@ const runNotebookLabGeneratedCode = async (cell, {
   }
 }
 
-const runMathCell = async (cell, writeBack = false, mode = 'plot2d') => {
+const runMathCell = async (cell, writeBack = false, mode = 'plot2d', options = {}) => {
   const expression = String(cell?.expression || '').trim()
   if (!expression) {
     message.warning('数学块内容为空')
@@ -6922,14 +6974,33 @@ const runMathCell = async (cell, writeBack = false, mode = 'plot2d') => {
   // 设计说明：
   // 1. 数学块使用同一个 Python 持久会话执行 SymPy/绘图代码，所以它可以读取前面 Python Cell 已经准备好的变量；
   // 2. 运行结果仍保存为普通输出模块，写回时插入为新的 Markdown Cell，避免破坏原公式块；
-  // 3. UI 现在显式区分“绘制函数图像”和“解方程”，避免一个笼统的生成按钮让执行意图不清晰。
+  // 3. 工具栏的下拉菜单按“函数与方程 / 微积分 / 级数 / 统计分布 / 积分变换”分组，
+  //    每个菜单项把对应 mode（及可选的变量名、绘图区间、级数展开点/阶数）透传到这里，
+  //    再交给模块化的 buildNotebookLabMathCode（见 utils/guaxiNotebookMathRuntime.js）生成代码。
   const code = buildNotebookLabMathCode({
     expression,
     mode: mathMode,
-    variable: 'x',
-    rangeMin: -10,
-    rangeMax: 10,
+    variable: String(options.variable || 'x'),
+    rangeMin: Number.isFinite(Number(options.rangeMin)) ? Number(options.rangeMin) : -10,
+    rangeMax: Number.isFinite(Number(options.rangeMax)) ? Number(options.rangeMax) : 10,
+    seriesPoint: Number.isFinite(Number(options.seriesPoint)) ? Number(options.seriesPoint) : 0,
+    seriesOrder: Number.isFinite(Number(options.seriesOrder)) ? Number(options.seriesOrder) : 6,
   })
+  // 各 mode 对应的中文动作名，用于生成「已生成 / 已生成并写回」之类的提示文案。
+  const mathModeLabels = {
+    plot2d: '函数图像',
+    solve: '方程结果',
+    simplify: '化简结果',
+    derivative: '求导结果',
+    integral: '积分结果',
+    series: '级数展开',
+    distribution: '分布图像',
+    dsolve: '微分方程解',
+    transform: '积分变换',
+    laplace: '拉普拉斯变换',
+    fourier: '傅里叶变换',
+  }
+  const mathModeLabel = mathModeLabels[mathMode] || '计算结果'
   logger.info('[NotebookMath] run math cell', {
     key: String(cell?.key || ''),
     cellId: String(cell?.cellId || ''),
@@ -6945,14 +7016,81 @@ const runMathCell = async (cell, writeBack = false, mode = 'plot2d') => {
       dataKind: 'math',
     },
     writeBack,
-    successMessage: writeBack
-      ? (mathMode === 'solve' ? '方程结果已生成并写回' : '函数图像已生成并写回')
-      : (mathMode === 'solve' ? '方程结果已生成' : '函数图像已生成'),
+    successMessage: writeBack ? `${mathModeLabel}已生成并写回` : `${mathModeLabel}已生成`,
     labPatch: {
       lastMathExpression: expression,
       lastMathMode: mathMode,
       lastMathBlockAt: new Date().toISOString(),
     },
+  })
+}
+
+// 数学工具菜单定义（模块化，便于后续扩展更多工具）：
+// 每个分组对应一类数学场景，items 里的 mode 透传给 runMathCell → buildNotebookLabMathCode。
+// hint 会渲染成菜单项的副标题，告诉用户该工具期望的输入写法（初等/高等函数、方程、级数等）。
+const NOTEBOOK_MATH_TOOL_GROUPS = [
+  {
+    label: '函数与方程',
+    items: [
+      { mode: 'plot2d', label: '绘制图像', hint: '初等/高等函数、隐式方程，自动判断 2D/3D/复平面' },
+      { mode: 'solve', label: '求解方程', hint: '方程或方程组，自动选择 solve / nonlinsolve / solveset' },
+      { mode: 'simplify', label: '化简表达式', hint: '对当前表达式做符号化简' },
+    ],
+  },
+  {
+    label: '微积分',
+    items: [
+      { mode: 'derivative', label: '求导数', hint: '对主变量求导' },
+      { mode: 'integral', label: '求不定积分', hint: '对主变量求积分' },
+      { mode: 'dsolve', label: '解微分方程', hint: '如 Eq(Derivative(y(x),x)+y(x),0)，含数值解曲线' },
+    ],
+  },
+  {
+    label: '级数',
+    items: [
+      { mode: 'series', label: '泰勒/幂级数展开', hint: '在展开点处展开并与原函数对比作图' },
+    ],
+  },
+  {
+    label: '统计分布',
+    items: [
+      { mode: 'distribution', label: '绘制分布', hint: 'scipy.stats 写法，如 norm(0,1)、binom(10,0.4)、poisson(3)' },
+    ],
+  },
+  {
+    label: '积分变换',
+    items: [
+      { mode: 'laplace', label: '拉普拉斯变换', hint: '时域函数 f(t)，得到 F(s)' },
+      { mode: 'fourier', label: '傅里叶变换', hint: '时域函数 f(t)，得到 F(ω)' },
+    ],
+  },
+]
+
+// 切换某个数学块的工具下拉菜单展开状态（点击同一个按钮再次点击则收起）。
+const toggleMathToolMenu = (cell) => {
+  const key = String(cell?.key || '')
+  activeMathToolMenuKey.value = activeMathToolMenuKey.value === key ? '' : key
+}
+
+const closeMathToolMenu = () => {
+  activeMathToolMenuKey.value = ''
+}
+
+// 选择菜单项：收起菜单后按指定 mode 运行数学块（writeBack=false，仅生成输出，不污染原公式）。
+const handleMathToolSelect = async (cell, mode) => {
+  closeMathToolMenu()
+  await runMathCell(cell, false, mode)
+}
+
+// 折叠 / 展开数学块的输出面板，复用 Python Cell 的 outputCollapsed 元数据机制。
+const toggleMathCellOutputCollapsed = (cell) => {
+  const snapshot = getCellSnapshot(cell)
+  const nextCollapsed = !snapshot.meta.outputCollapsed
+  patchCellMeta(cell, { outputCollapsed: nextCollapsed })
+  logger.info('[Notebook] toggle math cell output collapsed', {
+    key: String(cell?.key || ''),
+    cellId: String(cell?.cellId || ''),
+    collapsed: nextCollapsed,
   })
 }
 
@@ -8015,6 +8153,7 @@ defineExpose({
 .guaxi-notebook__math-badge {
   display: inline-flex;
   align-items: center;
+  gap: 5px;
   min-height: 24px;
   padding: 0 8px;
   border: 1px solid color-mix(in srgb, #0891b2 32%, var(--guaxi-notebook-strong-border));
@@ -8032,6 +8171,86 @@ defineExpose({
   gap: 6px;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+/* 数学工具下拉菜单：定位锚点 + 分组浮层。 */
+.guaxi-notebook__math-menu-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+/* 触发按钮内含 sigma + chevron 两个图标，固定的 30px 方形按钮塞不下会错位，
+   因此这里放宽宽度并让两个图标紧凑排布。 */
+.guaxi-notebook__math-menu-trigger {
+  width: auto;
+  min-width: 42px;
+  gap: 1px;
+  padding: 0 6px;
+}
+
+.guaxi-notebook__math-menu-anchor .guaxi-notebook__icon-btn.is-active {
+  background: color-mix(in srgb, #0891b2 16%, transparent);
+  color: color-mix(in srgb, #0e7490 86%, var(--guaxi-notebook-text));
+}
+
+.guaxi-notebook__math-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  min-width: 268px;
+  max-width: 340px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--guaxi-notebook-strong-border);
+  border-radius: 10px;
+  background: var(--guaxi-notebook-panel);
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.22);
+}
+
+.guaxi-notebook__math-menu-group + .guaxi-notebook__math-menu-group {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid color-mix(in srgb, var(--guaxi-notebook-strong-border) 60%, transparent);
+}
+
+.guaxi-notebook__math-menu-group-title {
+  padding: 4px 8px 2px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--guaxi-notebook-text) 52%, transparent);
+}
+
+.guaxi-notebook__math-menu-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 7px 8px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--guaxi-notebook-font);
+}
+
+.guaxi-notebook__math-menu-item:hover {
+  background: color-mix(in srgb, #0891b2 12%, transparent);
+}
+
+.guaxi-notebook__math-menu-item-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--guaxi-notebook-text);
+}
+
+.guaxi-notebook__math-menu-item-hint {
+  font-size: 11px;
+  line-height: 1.35;
+  color: color-mix(in srgb, var(--guaxi-notebook-text) 56%, transparent);
 }
 
 .guaxi-notebook__math-input {
