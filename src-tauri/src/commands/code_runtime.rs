@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::hash::{Hash, Hasher};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -299,6 +299,7 @@ struct PythonWorkerState {
     child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
+    stderr_tail: Arc<Mutex<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -2161,7 +2162,7 @@ fn spawn_python_worker(spec: &PythonLaunchSpec) -> Result<PythonWorkerState, Str
         .env("PYTHONIOENCODING", "utf-8")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .current_dir(&spec.runtime_dir);
     apply_python_process_no_window(&mut command);
 
@@ -2177,6 +2178,40 @@ fn spawn_python_worker(spec: &PythonLaunchSpec) -> Result<PythonWorkerState, Str
         .stdout
         .take()
         .ok_or_else(|| "python worker stdout unavailable".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "python worker stderr unavailable".to_string())?;
+    let stderr_tail = Arc::new(Mutex::new(String::new()));
+    let stderr_tail_reader = Arc::clone(&stderr_tail);
+    let worker_script_for_log = worker_script_path.to_string_lossy().to_string();
+    thread::spawn(move || {
+        let mut stderr_reader = BufReader::new(stderr);
+        let mut stderr_text = String::new();
+        match stderr_reader.read_to_string(&mut stderr_text) {
+            Ok(_) => {
+                if stderr_text.trim().is_empty() {
+                    return;
+                }
+                let tail = tail_text_by_chars(&stderr_text, 6000);
+                if let Ok(mut guard) = stderr_tail_reader.lock() {
+                    *guard = tail.clone();
+                }
+                warn!(
+                    worker_script = worker_script_for_log.as_str(),
+                    stderr_tail = tail.as_str(),
+                    "[PythonRuntime] worker stderr captured"
+                );
+            }
+            Err(error) => {
+                warn!(
+                    worker_script = worker_script_for_log.as_str(),
+                    error = %error,
+                    "[PythonRuntime] read worker stderr failed"
+                );
+            }
+        }
+    });
 
     info!(
         python = spec.program.as_str(),
@@ -2189,7 +2224,23 @@ fn spawn_python_worker(spec: &PythonLaunchSpec) -> Result<PythonWorkerState, Str
         child,
         stdin,
         stdout: BufReader::new(stdout),
+        stderr_tail,
     })
+}
+
+fn tail_text_by_chars(text: &str, max_chars: usize) -> String {
+    let mut items = text.chars().rev().take(max_chars).collect::<Vec<_>>();
+    items.reverse();
+    items.into_iter().collect::<String>()
+}
+
+fn python_worker_stderr_tail(state: &PythonWorkerState) -> String {
+    state
+        .stderr_tail
+        .lock()
+        .ok()
+        .map(|guard| guard.trim().to_string())
+        .unwrap_or_default()
 }
 
 fn start_python_worker_request_watchdog(
@@ -2537,8 +2588,31 @@ fn send_worker_request(payload: &Value) -> Result<Value, String> {
             }
         };
         if bytes_read == 0 {
+            let exit_status = match state.child.try_wait() {
+                Ok(Some(status)) => status.to_string(),
+                Ok(None) => "still-running-after-stdout-eof".to_string(),
+                Err(error) => format!("try-wait-failed: {error}"),
+            };
+            let stderr_tail = python_worker_stderr_tail(state);
+            warn!(
+                worker_key = worker_key.as_str(),
+                cmd = worker_cmd,
+                session_id,
+                cell_id,
+                request_id,
+                exit_status = exit_status.as_str(),
+                stderr_tail = stderr_tail.as_str(),
+                "[PythonRuntime] worker stdout closed before response"
+            );
             unregister_python_active_request(request_id, "worker-stdout-closed");
-            return Err("python worker closed stdout unexpectedly".to_string());
+            if stderr_tail.is_empty() {
+                return Err(format!(
+                    "python worker closed stdout unexpectedly, status={exit_status}"
+                ));
+            }
+            return Err(format!(
+                "python worker closed stdout unexpectedly, status={exit_status}, stderr={stderr_tail}"
+            ));
         }
         unregister_python_active_request(request_id, "worker-response-received");
         info!(

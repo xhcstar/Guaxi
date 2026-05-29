@@ -447,6 +447,7 @@
                   <GuaxiNotebookHtmlOutput
                     v-if="outputModule.kind === 'html' || outputModule.kind === 'svg'"
                     :html="outputModule.kind === 'svg' ? outputModule.display?.svg : outputModule.display?.html"
+                    :source-path="outputModule.kind === 'html' ? getCellDisplaySourcePath(outputModule) : ''"
                     :title="`Math Output ${cell.key || ''}`"
                   />
                   <div
@@ -591,6 +592,7 @@
                     <div v-if="outputModule.kind === 'html'" class="guaxi-notebook__rich guaxi-notebook__rich--html">
                       <GuaxiNotebookHtmlOutput
                         :html="String(outputModule.display?.html || '')"
+                        :source-path="getCellDisplaySourcePath(outputModule)"
                         :theme="theme"
                         :title="`Python Cell HTML Output ${cell.cellId || cell.key || ''}`"
                       />
@@ -4163,7 +4165,7 @@ const buildOutputModuleMarkdownText = (outputModule) => {
     return String(outputModule.display?.markdown || '')
   }
   if (outputModule.kind === 'html') {
-    return String(outputModule.display?.html || '')
+    return String(outputModule.display?.html || outputModule.display?.path || outputModule.display?.source_path || '')
   }
   if (outputModule.kind === 'svg') {
     return String(outputModule.display?.svg || '')
@@ -4188,7 +4190,7 @@ const buildOutputModuleSearchText = (outputModule) => {
   if (!outputModule) return ''
   if (outputModule.kind === 'table') return buildOutputModuleMarkdownText(outputModule)
   if (outputModule.kind === 'markdown') return String(outputModule.display?.markdown || '')
-  if (outputModule.kind === 'html') return stripHtmlTags(String(outputModule.display?.html || ''))
+  if (outputModule.kind === 'html') return stripHtmlTags(String(outputModule.display?.html || outputModule.display?.path || outputModule.display?.source_path || ''))
   if (outputModule.kind === 'svg') return stripHtmlTags(String(outputModule.display?.svg || ''))
   if (outputModule.kind === 'text') return String(outputModule.text || '')
   return String(outputModule.summary || '')
@@ -4507,6 +4509,10 @@ const getCellDisplayUrl = (cell, outputModule = null) => {
   return String(resolvedDisplayUrlMap.value[buildCellOutputModuleCacheKey(cell, targetModule)] || '')
 }
 
+const getCellDisplaySourcePath = (outputModule = null) => {
+  return getPythonCellOutputDisplaySourcePath(outputModule?.display || null)
+}
+
 const buildDisplayCacheKey = (display) => {
   const kind = normalizePythonCellOutputDisplayType(display)
   const source = getPythonCellOutputDisplaySourcePath(display)
@@ -4552,7 +4558,7 @@ const syncResolvedDisplayUrls = async (cells, reason = 'unknown') => {
     // 正是因为这里曾只同步 python 单元，导致 math image 永远没有可渲染 URL。
     if (!['python', 'math'].includes(String(cell?.type || ''))) continue
     for (const outputModule of getCellOutputModules(cell)) {
-      if (!['image', 'audio', 'video'].includes(String(outputModule?.kind || ''))) continue
+      if (!['image', 'audio', 'video', 'html'].includes(String(outputModule?.kind || ''))) continue
       const display = outputModule?.display || null
       const mapKey = buildCellOutputModuleCacheKey(cell, outputModule)
       const cacheKey = buildDisplayCacheKey(display)
@@ -6101,6 +6107,11 @@ const buildMarkdownOutputFromModule = async (cell, outputModule = null, snapshot
   const displayType = targetModule?.kind || normalizeDisplayType(display)
   if (displayType === 'markdown' && display?.markdown) return String(display.markdown)
   if (displayType === 'html' && display?.html) return String(display.html)
+  if (displayType === 'html' && getDisplaySourcePath(display)) {
+    const sourcePath = getDisplaySourcePath(display)
+    const reference = encodeURI(getRelativeNotebookPath(sourcePath))
+    return `<iframe src="${escapeHtmlAttribute(reference)}" style="width:100%;min-height:520px;border:0;" loading="lazy"></iframe>`
+  }
   if (displayType === 'svg' && display?.svg) return String(display.svg)
 
   if (['image', 'audio', 'video'].includes(displayType)) {
@@ -6229,6 +6240,15 @@ const buildExportPayloadFromModule = async (cell, outputModule = null, snapshot 
       filters: [{ name: 'HTML', extensions: ['html'] }],
       bytes: new TextEncoder().encode(String(display.html || '')),
       summary: 'html',
+    }
+  }
+  if (displayType === 'html' && getDisplaySourcePath(display)) {
+    const sourcePath = getDisplaySourcePath(display)
+    return {
+      defaultName: sourcePath.split(/[\\/]/).pop() || buildNotebookAssetTarget(String(cell?.cellId || cell?.key || 'export'), 'html').fileName,
+      filters: [{ name: 'HTML', extensions: ['html'] }],
+      bytes: null,
+      summary: sourcePath,
     }
   }
   if (displayType === 'svg' && display?.svg) {

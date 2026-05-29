@@ -421,6 +421,37 @@ def _capture_matplotlib_png_base64():
         return None
 
 
+def _prepare_display_artifact_dir(globals_dict, display_kind):
+    sandbox_dir = str(
+        globals_dict.get("_guaxi_sandbox_dir")
+        or globals_dict.get("_guaxi_cwd")
+        or os.getcwd()
+    ).strip()
+    artifact_root = os.path.join(sandbox_dir, ".guaxi-display-artifacts", str(display_kind or "display"))
+    artifact_dir = os.path.join(artifact_root, uuid.uuid4().hex)
+    os.makedirs(artifact_dir, exist_ok=True)
+    return artifact_dir
+
+
+def _estimate_animation_frame_count(animation):
+    for attr_name in ("_save_count", "save_count"):
+        try:
+            value = getattr(animation, attr_name, None)
+            if isinstance(value, int) and value >= 0:
+                return value
+        except Exception:
+            pass
+
+    try:
+        saved = getattr(animation, "_save_seq", None)
+        if isinstance(saved, (list, tuple)):
+            return len(saved)
+    except Exception:
+        pass
+
+    return None
+
+
 def _iter_matplotlib_animations(globals_dict):
     """从执行后的命名空间里收集 matplotlib 动画对象。
 
@@ -464,25 +495,44 @@ def _iter_matplotlib_animations(globals_dict):
 
 
 def _capture_matplotlib_animation_html(globals_dict):
-    """把 matplotlib 动画转成自包含的 HTML（JS 动画播放器）。
+    """把 matplotlib 动画保存为 HTML 工件（JS 动画播放器）。
 
     设计说明：
-    1. 采用 ``to_jshtml()`` 而非导出 mp4/gif，零额外依赖（无需 ffmpeg/imagemagick），
-       生成的 HTML 自带播放/暂停控件，可直接塞进前端的 html 输出模块渲染。
-    2. 渲染成功后立即 ``plt.close()`` 关闭所有图窗，避免随后的静态 PNG 捕获
-       再把动画的最后一帧重复输出一次。
-    3. 任意环节失败都安静返回 ``None``，让调用方回退到既有的静态 PNG 路径，
-       绝不因为动画渲染异常而中断整个执行结果。
+    1. 旧路径使用 ``to_jshtml()``，会把每一帧 base64 内嵌到字符串，再塞进 JSON 响应；
+       300 帧 3D 动画很容易把 worker 响应做成超大字符串，甚至触发 Python 进程崩溃。
+    2. ``HTMLWriter(embed_frames=False)`` 会把 HTML 和帧图片写到会话沙箱的工件目录，
+       前端 iframe 直接加载 HTML 文件，既保留 2D/3D 动画交互控件，又避免 stdout/JSON 传输大块帧数据。
+    3. 如果已经识别出动画但导出失败，返回 Markdown 错误模块而不是静默降级为静态图；
+       这样用户能明确知道动画链路哪里坏了。
     """
-    try:
-        animations = _iter_matplotlib_animations(globals_dict)
-        if not animations:
-            return None
+    animations = _iter_matplotlib_animations(globals_dict)
+    if not animations:
+        return None
 
+    try:
         animation = animations[0]
-        html = animation.to_jshtml()
-        if not html:
-            return None
+        display_dir = _prepare_display_artifact_dir(globals_dict, "matplotlib-animation")
+        html_path = os.path.join(display_dir, "animation.html")
+        frame_dir = os.path.join(display_dir, "animation_frames")
+
+        from matplotlib.animation import HTMLWriter
+
+        fps = None
+        interval = getattr(animation, "_interval", None)
+        if interval:
+            try:
+                fps = 1000 / float(interval)
+            except Exception:
+                fps = None
+        default_mode = "loop" if getattr(animation, "_repeat", False) else "once"
+        writer = HTMLWriter(
+            fps=fps or 30,
+            embed_frames=False,
+            default_mode=default_mode,
+        )
+        animation.save(html_path, writer=writer, progress_callback=None)
+        if not os.path.exists(html_path):
+            raise FileNotFoundError(f"Matplotlib animation HTML was not created: {html_path}")
 
         try:
             import matplotlib.pyplot as plt
@@ -494,10 +544,21 @@ def _capture_matplotlib_animation_html(globals_dict):
         return {
             "type": "html",
             "mime": "text/html",
-            "html": html,
+            "html": "",
+            "path": html_path,
+            "source_path": html_path,
+            "artifact_path": html_path,
+            "artifact_dir": display_dir,
+            "frame_dir": frame_dir,
+            "renderer": "matplotlib-htmlwriter",
+            "frame_count": _estimate_animation_frame_count(animation),
         }
-    except Exception:
-        return None
+    except BaseException as exc:
+        return {
+            "type": "markdown",
+            "mime": "text/markdown",
+            "markdown": "Matplotlib 动画导出失败。\n\n```text\n" + _format_traceback(exc) + "\n```",
+        }
 
 
 def _maybe_prepare_inline_matplotlib():
@@ -1378,7 +1439,7 @@ def _handle_exec(payload):
         if persist:
             _shift_last_results(globals_dict, resolved_session_id)
 
-    except Exception as exc:
+    except BaseException as exc:
         ok = False
         err_trace = _format_traceback(exc)
     finally:
@@ -1755,7 +1816,7 @@ def main():
         try:
             payload = json.loads(line)
             response = _dispatch(payload)
-        except Exception as exc:
+        except BaseException as exc:
             response = {
                 "ok": False,
                 "stdout": "",

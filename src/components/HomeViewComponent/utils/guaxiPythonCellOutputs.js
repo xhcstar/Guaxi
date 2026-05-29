@@ -108,7 +108,8 @@ const buildDefaultOutputSummary = (kind, { table = null, display = null, text = 
     return `${Math.max(1, normalizeText(display?.markdown).split(/\r\n?|\n/).length)} 行 Markdown`;
   }
   if (normalizedKind === 'html' || normalizedKind === 'svg') {
-    return normalizeText(display?.mime || '');
+    const sourcePath = getPythonCellOutputDisplaySourcePath(display);
+    return normalizeText(display?.mime || sourcePath || '');
   }
   if (['image', 'audio', 'video'].includes(normalizedKind)) {
     return normalizeText(display?.mime || getPythonCellOutputDisplaySourcePath(display) || normalizedKind);
