@@ -162,6 +162,15 @@
             >
               <Icon :icon="terminalIcon" width="16" height="16" />
             </button>
+            <button
+              type="button"
+              class="guaxi-notebook__icon-btn"
+              data-tooltip="打开 Python 官方文档助手"
+              aria-label="打开 Python 官方文档助手"
+              @click="openNotebookUsageAssistant('python', activeNotebookPythonCell, $event)"
+            >
+              <Icon :icon="circleHelpIcon" width="16" height="16" />
+            </button>
           </template>
         </div>
       </div>
@@ -316,6 +325,15 @@
                 @click="runMathCell(cell, false, 'plot2d')"
               >
                 <Icon :icon="playIcon" width="16" height="16" />
+              </button>
+              <button
+                type="button"
+                class="guaxi-notebook__icon-btn"
+                data-tooltip="打开 LaTeX / 数学模块文档助手"
+                aria-label="打开 LaTeX / 数学模块文档助手"
+                @click="openNotebookUsageAssistant('math', cell, $event)"
+              >
+                <Icon :icon="circleHelpIcon" width="16" height="16" />
               </button>
               <!-- 数学工具下拉菜单：函数/方程、微积分、级数、统计分布、积分变换。 -->
               <div class="guaxi-notebook__math-menu-anchor">
@@ -501,6 +519,15 @@
                 @click="togglePythonCellCollapsed(cell)"
               >
                 <Icon :icon="getCellSnapshot(cell).meta.cellCollapsed ? chevronRightIcon : chevronDownIcon" width="16" height="16" />
+              </button>
+              <button
+                type="button"
+                class="guaxi-notebook__icon-btn"
+                title="打开 Python 官方文档助手"
+                aria-label="打开 Python 官方文档助手"
+                @click="openNotebookUsageAssistant('python', cell, $event)"
+              >
+                <Icon :icon="circleHelpIcon" width="16" height="16" />
               </button>
               <button
                 type="button"
@@ -714,6 +741,17 @@
       @update:pos="handleNotebookSelectionTranslatePanelUpdatePos"
       @close="closeNotebookSelectionTranslatePanel"
     />
+    <GuaxiNotebookUsageAssistant
+      :visible="notebookUsageAssistantVisible"
+      :channel="notebookUsageAssistantChannel"
+      :context-content="notebookUsageAssistantContextContent"
+      :anchor-position="notebookUsageAssistantAnchorPosition"
+      :theme="theme"
+      @close="closeNotebookUsageAssistant"
+      @update:channel="(value) => (notebookUsageAssistantChannel = value)"
+      @insert-example="handleNotebookUsageAssistantInsertExample"
+      @ask-assistant="handleNotebookUsageAssistantAsk"
+    />
   </div>
 </template>
 
@@ -752,6 +790,7 @@ import languagesIcon from '@iconify-icons/lucide/languages'
 import messageCircleIcon from '@iconify-icons/lucide/message-circle'
 import botIcon from '@iconify-icons/lucide/bot'
 import volume2Icon from '@iconify-icons/lucide/volume-2'
+import circleHelpIcon from '@iconify-icons/lucide/help-circle'
 import pythonIcon from '@iconify-icons/vscode-icons/file-type-python'
 import { createLogger } from '../../utils/logger'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
@@ -763,6 +802,7 @@ import GuaxiNotebookMarkdownEditor from './GuaxiNotebookMarkdownEditor.vue'
 import GuaxiNotebookHtmlOutput from './GuaxiNotebookHtmlOutput.vue'
 import GuaxiNotebookTableOutput from './GuaxiNotebookTableOutput.vue'
 import GuaxiSelectionTranslatePanel from './GuaxiSelectionTranslatePanel.vue'
+import GuaxiNotebookUsageAssistant from './GuaxiNotebookUsageAssistant.vue'
 import { renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker'
 import {
   createPythonCellId,
@@ -870,6 +910,11 @@ const activeNotebookPythonCellKey = ref('')
 const notebookFocusedVariable = ref({ cellKey: '', variableName: '' })
 // 数学块工具下拉菜单：记录当前展开菜单所属的数学块 key（空串表示全部收起）。
 const activeMathToolMenuKey = ref('')
+// 离线文档助手只挂在探索者 Notebook 表面中，记录触发来源 Cell 以便按上下文搜索完整 Python / 数学文档。
+const notebookUsageAssistantVisible = ref(false)
+const notebookUsageAssistantChannel = ref('python')
+const notebookUsageAssistantCellKey = ref('')
+const notebookUsageAssistantAnchorPosition = ref({ left: null, top: null, width: null, maxHeight: null })
 const notebookMarkdownWorkerRef = ref(null)
 const notebookMarkdownWorkerReady = ref(false)
 const lastEmittedMarkdown = ref(String(props.markdown || '').replace(/\r\n?/g, '\n'))
@@ -917,6 +962,16 @@ const isNotebookTopToolbarVisible = computed(() => notebookTopToolbarRevealed.va
 const activeNotebookPythonCell = computed(() => notebookCells.value.find((cell) => (
   cell?.type === 'python' && String(cell?.key || '') === String(activeNotebookPythonCellKey.value || '')
 )) || null)
+const notebookUsageAssistantContextCell = computed(() => notebookCells.value.find((cell) => (
+  String(cell?.key || '') === String(notebookUsageAssistantCellKey.value || '')
+)) || null)
+const notebookUsageAssistantContextContent = computed(() => {
+  const cell = notebookUsageAssistantContextCell.value
+  if (!cell) return ''
+  if (cell.type === 'math') return String(cell.expression || '')
+  if (cell.type === 'python') return String(cell.code || '')
+  return String(cell.content || '')
+})
 const selectionTranslateMultiAvailable = ref(true)
 const selectionTranslateLangOptions = [
   { label: '自动检测', value: 'auto' },
@@ -5041,6 +5096,12 @@ const handleNotebookSelectionTranslatePanelUpdatePos = (pos) => {
   logger.info('[NotebookSelection] translate panel moved', { left, top })
 }
 
+const clampNotebookViewportValue = (value, min, max) => {
+  if (!Number.isFinite(value)) return min
+  if (!Number.isFinite(min) || !Number.isFinite(max) || max < min) return value
+  return Math.min(Math.max(value, min), max)
+}
+
 const toggleNotebookSelectionTranslatePinned = () => {
   selectionTranslatePinned.value = !selectionTranslatePinned.value
   logger.info('[NotebookSelection] translate panel pin toggled', {
@@ -5126,6 +5187,132 @@ const sendNotebookSelectionToAssistant = (overrideText, options = {}) => {
     disableWebSearch,
   })
   return true
+}
+
+const resolveNotebookUsageAssistantAnchorPosition = (event = null) => {
+  const viewportWidth = Number(window.innerWidth || 0)
+  const viewportHeight = Number(window.innerHeight || 0)
+  const pad = 12
+  const gap = 8
+  const preferredWidth = 520
+  const minWidth = 320
+  const minReadableHeight = 280
+  const maxPanelHeight = 760
+  const rootRect = notebookRootRef.value?.getBoundingClientRect?.()
+  const target = event?.currentTarget instanceof HTMLElement
+    ? event.currentTarget
+    : (event?.target instanceof HTMLElement ? event.target.closest?.('.guaxi-notebook__icon-btn') : null)
+  const targetRect = target?.getBoundingClientRect?.()
+  const safeRootLeft = Number.isFinite(rootRect?.left) ? rootRect.left : 0
+  const safeRootRight = Number.isFinite(rootRect?.right) ? rootRect.right : viewportWidth
+  const safeRootWidth = Math.max(0, safeRootRight - safeRootLeft)
+  const panelWidth = Math.min(preferredWidth, Math.max(minWidth, safeRootWidth - pad * 2), Math.max(minWidth, viewportWidth - pad * 2))
+
+  if (!targetRect || !Number.isFinite(targetRect.left) || !viewportWidth || !viewportHeight) {
+    return {
+      left: Math.max(pad, Math.min(viewportWidth - panelWidth - pad, safeRootRight - panelWidth - pad)),
+      top: 56,
+      width: panelWidth,
+      maxHeight: Math.min(maxPanelHeight, Math.max(240, viewportHeight - 80)),
+    }
+  }
+
+  // 设计说明：
+  // 1. 文档助手由 Cell 内部 icon 触发，面板应出现在触发点附近，而不是固定回 Notebook 顶端。
+  // 2. 横向以触发按钮右边缘对齐并夹在中间阅读区内；纵向优先贴近按钮上沿，空间不足时向上避让。
+  const minLeft = Math.max(pad, safeRootLeft + pad)
+  const maxLeft = Math.min(viewportWidth - panelWidth - pad, safeRootRight - panelWidth - pad)
+  const left = clampNotebookViewportValue(targetRect.right - panelWidth, minLeft, Math.max(minLeft, maxLeft))
+  const desiredTop = targetRect.top - gap
+  const belowRoom = viewportHeight - desiredTop - pad
+  const topRoom = targetRect.bottom - pad
+  const opensNearTargetBelow = belowRoom >= minReadableHeight || belowRoom >= topRoom
+  const maxHeight = Math.min(maxPanelHeight, Math.max(220, opensNearTargetBelow ? belowRoom : topRoom))
+  const top = opensNearTargetBelow
+    ? clampNotebookViewportValue(desiredTop, pad, Math.max(pad, viewportHeight - 220 - pad))
+    : clampNotebookViewportValue(targetRect.bottom + gap - maxHeight, pad, Math.max(pad, viewportHeight - maxHeight - pad))
+
+  return {
+    left,
+    top,
+    width: panelWidth,
+    maxHeight,
+  }
+}
+
+const openNotebookUsageAssistant = (channel = 'python', cell = null, event = null) => {
+  const normalizedChannel = channel === 'math' ? 'math' : 'python'
+  const targetCell = cell || (normalizedChannel === 'python' ? activeNotebookPythonCell.value : null)
+  const anchorPosition = resolveNotebookUsageAssistantAnchorPosition(event)
+  notebookUsageAssistantChannel.value = normalizedChannel
+  notebookUsageAssistantCellKey.value = String(targetCell?.key || '')
+  notebookUsageAssistantAnchorPosition.value = anchorPosition
+  notebookUsageAssistantVisible.value = true
+  closeMathToolMenu()
+  logger.info('[NotebookUsageAssistant] open from notebook cell', {
+    channel: normalizedChannel,
+    cellKey: String(targetCell?.key || ''),
+    cellType: String(targetCell?.type || ''),
+    anchorPosition,
+  })
+}
+
+const closeNotebookUsageAssistant = () => {
+  notebookUsageAssistantVisible.value = false
+  logger.info('[NotebookUsageAssistant] close panel', {
+    channel: notebookUsageAssistantChannel.value,
+    cellKey: notebookUsageAssistantCellKey.value,
+  })
+}
+
+const handleNotebookUsageAssistantInsertExample = ({ channel, example }) => {
+  const cell = notebookUsageAssistantContextCell.value
+  const code = String(example?.code || '').trim()
+  if (!cell || !code) {
+    message.warning('当前没有可插入示例的 Cell')
+    return
+  }
+
+  // 设计说明：
+  // 1. Python 官方文档示例通常是一段可执行代码，追加到当前 Cell 可以保留用户已有实验。
+  // 2. 数学块示例通常就是一个表达式；为空时直接填入，非空时追加新行，避免覆盖用户正在推导的公式。
+  if (channel === 'math' && cell.type === 'math') {
+    const current = String(cell.expression || '').trim()
+    updateMathCell(cell.key, current ? `${current}\n${code}` : code)
+  } else if (cell.type === 'python') {
+    const current = String(cell.code || '').replace(/\s+$/g, '')
+    updatePythonCell(cell.key, current ? `${current}\n\n${code}` : code)
+  } else {
+    message.warning('当前 Cell 类型不支持插入该示例')
+    return
+  }
+
+  logger.info('[NotebookUsageAssistant] inserted example into cell', {
+    channel: String(channel || ''),
+    cellKey: String(cell.key || ''),
+    cellType: String(cell.type || ''),
+    codeLength: code.length,
+  })
+  message.success('示例已插入当前 Cell')
+}
+
+const handleNotebookUsageAssistantAsk = ({ prompt }) => {
+  const text = String(prompt || '').trim()
+  if (!text) {
+    message.warning('没有可发送给助手的文档上下文')
+    return
+  }
+  sendNotebookSelectionToAssistant(text, {
+    autoSend: false,
+    disableWebSearch: true,
+    successMessage: '已将离线文档上下文放入智能助手输入框',
+  })
+  closeNotebookUsageAssistant()
+  logger.info('[NotebookUsageAssistant] draft sent to assistant', {
+    channel: notebookUsageAssistantChannel.value,
+    cellKey: notebookUsageAssistantCellKey.value,
+    promptLength: text.length,
+  })
 }
 
 const askNotebookSelectionWithAssistant = () => {
@@ -8673,6 +8860,36 @@ defineExpose({
   transform: translate(-50%, -5px);
 }
 
+/* 设计说明：
+ * 1. 顶部工具栏在激活 Python Cell 后会接近中间阅读区宽度，首尾按钮的居中 tooltip 容易碰到 shell 的横向裁剪边界。
+ * 2. 首尾提示分别向内展开，既保留 shell 对横向回归的约束，也避免“打开 Python 官方文档助手”等长提示被右边截断。
+ */
+.guaxi-notebook__toolbar-main > .guaxi-notebook__icon-btn:first-child::after {
+  left: 0;
+  transform: translate(0, -5px);
+}
+
+.guaxi-notebook__toolbar-main > .guaxi-notebook__icon-btn:last-child::after {
+  left: auto;
+  right: 0;
+  text-align: left;
+  transform: translate(0, -5px);
+}
+
+/* 设计说明：
+ * 1. Cell 右侧操作区贴近探索者中间区域边界，默认居中的 tooltip 会向右溢出并被相邻布局裁切。
+ * 2. 这些按钮组统一改为右边缘对齐，让提示文字向左展开，避免“删除当前 Python Cell”等长文本被截断。
+ */
+.guaxi-notebook__python-toolbar-actions .guaxi-notebook__icon-btn::after,
+.guaxi-notebook__math-actions .guaxi-notebook__icon-btn::after,
+.guaxi-notebook__panel-actions .guaxi-notebook__icon-btn::after,
+.guaxi-notebook__output-module-actions .guaxi-notebook__icon-btn::after {
+  left: auto;
+  right: 0;
+  text-align: left;
+  transform: translate(0, 5px);
+}
+
 .guaxi-notebook__icon-btn:not([data-tooltip])::after,
 .guaxi-notebook__selection-tool-btn:not([data-tooltip])::after {
   display: none;
@@ -8690,6 +8907,21 @@ defineExpose({
 .guaxi-notebook__selection-tool-btn:focus-visible::after {
   opacity: 1;
   transform: translate(-50%, 0);
+}
+
+.guaxi-notebook__toolbar-main > .guaxi-notebook__icon-btn:first-child:hover::after,
+.guaxi-notebook__toolbar-main > .guaxi-notebook__icon-btn:first-child:focus-visible::after,
+.guaxi-notebook__toolbar-main > .guaxi-notebook__icon-btn:last-child:hover::after,
+.guaxi-notebook__toolbar-main > .guaxi-notebook__icon-btn:last-child:focus-visible::after,
+.guaxi-notebook__python-toolbar-actions .guaxi-notebook__icon-btn:hover::after,
+.guaxi-notebook__python-toolbar-actions .guaxi-notebook__icon-btn:focus-visible::after,
+.guaxi-notebook__math-actions .guaxi-notebook__icon-btn:hover::after,
+.guaxi-notebook__math-actions .guaxi-notebook__icon-btn:focus-visible::after,
+.guaxi-notebook__panel-actions .guaxi-notebook__icon-btn:hover::after,
+.guaxi-notebook__panel-actions .guaxi-notebook__icon-btn:focus-visible::after,
+.guaxi-notebook__output-module-actions .guaxi-notebook__icon-btn:hover::after,
+.guaxi-notebook__output-module-actions .guaxi-notebook__icon-btn:focus-visible::after {
+  transform: translate(0, 0);
 }
 
 .guaxi-notebook__icon-btn:disabled {
@@ -8844,7 +9076,11 @@ defineExpose({
   border-radius: 8px;
   border: 1px solid var(--guaxi-notebook-strong-border);
   background: color-mix(in srgb, var(--guaxi-notebook-panel-soft) 72%, var(--guaxi-notebook-panel) 28%);
-  overflow: hidden;
+  /* 设计说明：
+   * 1. 输出模块头部的复制/折叠/删除按钮也使用同一套 ::after tooltip，浮层需要越过模块边框显示。
+   * 2. 模块正文的超宽内容仍由 .guaxi-notebook__output-module-body 和具体渲染器内部滚动处理，这里只放开浮层裁剪。
+   */
+  overflow: visible;
 }
 
 .guaxi-notebook__output-module.is-collapsed {
