@@ -7846,11 +7846,25 @@ defineExpose({
   display: flex;
   flex-direction: column;
   gap: 6px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   min-height: 100%;
-  padding: 18px;
+  /* 设计说明：
+   * 1. 右侧紧邻页面滚动条，过大的右内边距会在滚动条旁形成一条明显空带。
+   * 2. 左/上/下仍保持原有阅读留白，只单独收窄右侧，让内容边界更贴近滚动区但不贴边。
+   */
+  padding: 8px;
   background: var(--guaxi-notebook-bg, #f6f8fc);
   color: var(--guaxi-notebook-text, #172033);
   font-family: var(--guaxi-notebook-font);
+  box-sizing: border-box;
+  /* 设计说明：
+   * 1. 探索模式外层只负责纵向阅读，不承担横向查看；代码、表格、公式等超宽内容由各自模块内部滚动。
+   * 2. 根节点不能设置 overflow-x:hidden：浏览器会把它变成裁剪/滚动上下文，导致顶部浮动工具栏的隐藏态
+   *    translate 区域被截断，鼠标移到顶部也无法重新命中。
+   * 3. 横向溢出治理下沉到 cell、Monaco、MathJax 和输出模块内部，既保留工具栏浮现，也避免整页横向滚动。
+   */
 }
 
 .guaxi-notebook.theme-dark {
@@ -8096,7 +8110,11 @@ defineExpose({
 
 .guaxi-notebook__cell {
   position: relative;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   overflow: visible;
+  box-sizing: border-box;
   transition: box-shadow 0.18s ease, outline-color 0.18s ease, background-color 0.18s ease;
 }
 

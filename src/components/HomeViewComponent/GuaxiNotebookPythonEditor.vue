@@ -726,6 +726,15 @@ const mountMonacoEditor = async () => {
       scrollBeyondLastLine: false,
       wordWrap: 'on',
       // 设计说明：
+      // 1. 探索者 Python Cell 默认应该随中间区域宽度折行，降低整页横向滚动和代码阅读来回拖动。
+      // 2. Monaco / VSCode service 层可能通过 override 影响 wordWrap，这里显式把两级 override 都固定为 on。
+      // 3. 对超长无空格 token，仍保留编辑器内部水平滚动条作为兜底，不再把外层 Notebook 撑宽。
+      wordWrapOverride1: 'on',
+      wordWrapOverride2: 'on',
+      wrappingIndent: 'same',
+      wrappingStrategy: 'advanced',
+      wordBreak: 'normal',
+      // 设计说明：
       // 1. Pyright 会把运行后的探索代码中大量临时变量、导入和中间对象标记为 unnecessary/unused。
       // 2. Monaco 默认会把这些标记渲染成半透明，右侧数据实验室展开触发布局/诊断刷新后就会出现大片暗色代码。
       // 3. 这里关闭“未使用代码淡化”，诊断仍保留，但不再牺牲可读性。
@@ -990,11 +999,17 @@ defineExpose({
 .guaxi-notebook-python-editor {
   position: relative;
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
   min-height: 48px;
   outline: none;
   border-radius: 12px;
   border: 1px solid color-mix(in srgb, var(--guaxi-notebook-border, rgba(15, 23, 42, 0.1)) 100%, transparent);
   background: color-mix(in srgb, var(--guaxi-notebook-panel-soft, #f8fafc) 92%, transparent);
+  box-sizing: border-box;
+  /* 设计说明：
+     1. Python Cell 内部 Monaco 已保留自己的水平滚动条，用于查看极长代码行。
+     2. 外层宿主必须保持可收缩，否则 Monaco 的 scrollWidth 会继续向上撑大探索模式中间区域。 */
   overflow: hidden;
 }
 
@@ -1012,6 +1027,8 @@ defineExpose({
 
 .guaxi-notebook-python-editor__fallback {
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
   min-height: 48px;
   resize: vertical;
   border: none;
@@ -1022,6 +1039,7 @@ defineExpose({
   font-family: var(--editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace);
   font-size: 13px;
   line-height: 1.7;
+  box-sizing: border-box;
 }
 
 .guaxi-notebook-python-editor :deep(.squiggly-inline-unnecessary),

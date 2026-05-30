@@ -209,8 +209,13 @@ const mountMonacoEditor = async () => {
       showFoldingControls: 'mouseover',
       roundedSelection: false,
       scrollBeyondLastLine: false,
+      // 设计说明：
+      // 1. 数学块输入既可能是可折行的说明文字，也可能是很长的 LaTeX/SymPy 单词串。
+      // 2. `wordWrap:on` 优先让普通长行随容器折行；遇到 Monaco 不能安全断开的长 token 时，
+      //    交给编辑器自己的水平滚动条处理，避免把探索模式中间区域整体撑宽。
       wordWrap: 'on',
       wrappingIndent: 'same',
+      wrappingStrategy: 'advanced',
       quickSuggestions: false,
       wordBasedSuggestions: 'off',
       renderLineHighlight: 'line',
@@ -225,7 +230,7 @@ const mountMonacoEditor = async () => {
       scrollbar: {
         alwaysConsumeMouseWheel: false,
         vertical: 'auto',
-        horizontal: 'hidden',
+        horizontal: 'auto',
         handleMouseWheel: true,
         useShadows: false,
         verticalScrollbarSize: 8,
