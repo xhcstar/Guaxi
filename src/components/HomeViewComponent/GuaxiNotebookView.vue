@@ -3758,7 +3758,7 @@ const parseGuaxiDisplayFromResultRepr = (value = '') => {
 const formatPythonExecOutput = (res) => {
   const chunks = []
   const stdout = String(res?.stdout || '').trim()
-  const stderr = String(res?.stderr || '').trim()
+  const stderr = filterBenignPythonDisplayWarnings(String(res?.stderr || ''), res).trim()
   const resultRepr = String(res?.result_repr || '').trim()
   if (stdout) chunks.push(stdout)
   if (stderr) chunks.push(stderr)
@@ -3774,6 +3774,31 @@ const formatPythonExecOutput = (res) => {
     chunks.push(resultRepr)
   }
   return chunks.join('\n\n').trim()
+}
+
+const isBenignPythonDisplayWarningLine = (line = '') => {
+  return /UserWarning:\s*FigureCanvasAgg is non-interactive,\s*and thus cannot be shown/i.test(String(line || ''))
+}
+
+const filterBenignPythonDisplayWarnings = (text = '', res = null) => {
+  const normalizedText = String(text || '')
+  if (!normalizedText.trim()) return ''
+  // 设计说明：
+  // 1. `plt.show()` 在 Matplotlib Agg 后端会把 FigureCanvasAgg warning 写到 stderr；
+  //    但 worker 已经成功捕获了 image/html display 时，这条 warning 只是在说明当前后端不可交互显示。
+  // 2. 只在本次结果确实存在 display 时过滤，避免真正没有图像/动画输出时吞掉有用的错误信息。
+  // 3. 保留日志计数，后续如果 Matplotlib 文案变化，可以从日志看出过滤是否仍生效。
+  if (!getGuaxiDisplayFromResult(res)) return normalizedText
+  const lines = normalizedText.replace(/\r\n?/g, '\n').split('\n')
+  const keptLines = lines.filter((line) => !isBenignPythonDisplayWarningLine(line))
+  const removedCount = lines.length - keptLines.length
+  if (removedCount > 0) {
+    logger.info('[Notebook] filtered benign matplotlib display warning', {
+      removedCount,
+      displayType: String(getGuaxiDisplayFromResult(res)?.type || getGuaxiDisplayFromResult(res)?.mime || ''),
+    })
+  }
+  return keptLines.join('\n').trim()
 }
 
 const stripNotebookMathTraceOutput = (text = '') => {
@@ -6965,11 +6990,15 @@ const runNotebookLabGeneratedCode = async (cell, {
       Array.isArray(snapshot?.sessionVars) ? snapshot.sessionVars : [],
     )
 
+    // 设计说明：
+    // 1. 数据实验室生成动作的结果应以“本次请求”为准，不能在没有新 display/dataframe 时沿用旧快照；
+    // 2. 否则上一次动画或表格会被 legacy display/dataframe 槽位重新暴露，看起来像当前操作又输出了一遍旧内容；
+    // 3. outputs[] 仍按模块历史保留，legacy 三槽只镜像本次执行实际产生的可见结果。
     patchPythonCellSnapshot(props.filePath, cell.cellId, {
       codeDigest: getNotebookCellContentDigest(cell),
-      outputText: outputText || snapshot?.outputText || '',
-      display: display || snapshot?.display || null,
-      dataframe: dataframe || snapshot?.dataframe || null,
+      outputText,
+      display,
+      dataframe,
       outputs: nextOutputs,
       result: res,
       sessionVars: nextSessionVars,
@@ -7456,9 +7485,15 @@ const runPythonCell = async (cell, { writeBack = false } = {}) => {
       Array.isArray(snapshot?.sessionVars) ? snapshot.sessionVars : [],
     )
     const dataflow = getGuaxiDataflowFromResult(res)
+    const retainedNonExecutionOutputs = Array.isArray(snapshot?.outputs)
+      ? snapshot.outputs.filter((item) => {
+        const source = String(item?.source || '').trim()
+        return source !== 'execution' && source !== 'execution-error'
+      })
+      : []
     const nextOutputs = hasRenderableOutput
-      ? appendPythonCellOutputModules(snapshot?.outputs || [], runOutputs)
-      : (snapshot?.outputs || [])
+      ? appendPythonCellOutputModules(retainedNonExecutionOutputs, runOutputs)
+      : retainedNonExecutionOutputs
     const hideOutput = !nextOutputs.length
     logger.info('[Notebook] python cell executed', {
       requestId,
@@ -7474,6 +7509,7 @@ const runPythonCell = async (cell, { writeBack = false } = {}) => {
       hideOutput,
       appendedOutputModuleCount: runOutputs.length,
       totalOutputModuleCount: nextOutputs.length,
+      prunedExecutionOutputModuleCount: Math.max(0, (Array.isArray(snapshot?.outputs) ? snapshot.outputs.length : 0) - retainedNonExecutionOutputs.length),
     })
 
     patchPythonCellSnapshot(props.filePath, cell.cellId, {
@@ -7914,11 +7950,20 @@ defineExpose({
   z-index: 26;
   display: flex;
   justify-content: center;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   height: var(--guaxi-notebook-toolbar-shell-height);
   min-height: var(--guaxi-notebook-toolbar-shell-height);
   margin: 0 auto 2px;
   transition: height 0.18s ease, min-height 0.18s ease;
-  overflow: visible;
+  /* 设计说明：
+   * 1. 根节点不能用 overflow-x:hidden，否则顶部浮动工具栏的纵向浮现区域会被一起裁掉。
+   * 2. 横向回归来自工具栏 max-content 宽度参与页面 scrollWidth；这里只在 shell 这一层裁掉横向溢出。
+   * 3. overflow-x:clip 不产生新的横向滚动容器，同时保留 overflow-y:visible，鼠标移到顶部仍能命中浮动工具栏。
+   */
+  overflow-x: clip;
+  overflow-y: visible;
 }
 
 .guaxi-notebook__toolbar {
@@ -7932,8 +7977,9 @@ defineExpose({
    * 2. 这里改成按内容宽度强制撑开，再给一个可视区上限，保证顶部工具条既能完整包裹 icon，也不会在窄窗口冲出容器。
    */
   width: max-content;
-  min-width: max-content;
+  min-width: 0;
   max-width: min(var(--guaxi-notebook-toolbar-max-width), calc(100% - 24px));
+  box-sizing: border-box;
   margin: 0;
   /* 设计说明：
    * 1. 顶部工具条需要明确留出上下呼吸感，否则 30px 的 icon 按钮会显得比背景条更高。
@@ -8091,7 +8137,8 @@ defineExpose({
   align-items: center;
   justify-content: center;
   width: max-content;
-  min-width: max-content;
+  min-width: 0;
+  max-width: 100%;
   flex-wrap: nowrap;
   gap: 8px;
 }
@@ -8113,7 +8160,13 @@ defineExpose({
   width: 100%;
   max-width: 100%;
   min-width: 0;
-  overflow: visible;
+  /* 设计说明：
+   * 1. 主编辑器 Monaco 仍保留自己的 `horizontal:auto`，长 token 由编辑器内部滚动查看。
+   * 2. Notebook cell 这一层只阻断子组件的 scrollWidth 继续传到探索者中间界面，避免页面级水平滚动条回归。
+   * 3. delete 按钮、搜索 outline 等交互都在 cell 盒子内完成，所以裁掉横向溢出不会影响顶部浮动工具栏。
+   */
+  overflow-x: clip;
+  overflow-y: visible;
   box-sizing: border-box;
   transition: box-shadow 0.18s ease, outline-color 0.18s ease, background-color 0.18s ease;
 }
@@ -8149,7 +8202,8 @@ defineExpose({
   border-radius: 0;
   background: transparent;
   box-shadow: none;
-  overflow: visible;
+  overflow-x: clip;
+  overflow-y: visible;
 }
 
 .guaxi-notebook__insert-strip {
@@ -8236,7 +8290,11 @@ defineExpose({
   gap: 4px;
   padding: 0 2px 1px;
   min-width: 0;
+  width: 100%;
   max-width: 100%;
+  overflow-x: clip;
+  overflow-y: visible;
+  box-sizing: border-box;
 }
 
 .guaxi-notebook__math-layout {
@@ -8244,7 +8302,11 @@ defineExpose({
   gap: 6px;
   padding: 4px 2px 3px;
   min-width: 0;
+  width: 100%;
   max-width: 100%;
+  overflow-x: clip;
+  overflow-y: visible;
+  box-sizing: border-box;
 }
 
 .guaxi-notebook__math-toolbar {
@@ -8416,7 +8478,11 @@ defineExpose({
   display: grid;
   gap: 6px;
   padding: 0;
-  overflow: visible;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: clip;
+  overflow-y: visible;
+  box-sizing: border-box;
 }
 
 .guaxi-notebook__cell-delete {
@@ -8455,6 +8521,8 @@ defineExpose({
 .guaxi-notebook__markdown-edit-shell {
   display: grid;
   gap: 8px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .guaxi-notebook__python-editor {
@@ -8489,6 +8557,11 @@ defineExpose({
   border-radius: 0;
   background: transparent;
   padding: 6px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: clip;
+  overflow-y: visible;
+  box-sizing: border-box;
   font-family: var(--guaxi-notebook-font);
   font-size: 17px;
   line-height: 1.5;

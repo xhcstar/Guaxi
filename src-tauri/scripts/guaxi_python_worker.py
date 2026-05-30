@@ -452,18 +452,38 @@ def _estimate_animation_frame_count(animation):
     return None
 
 
-def _iter_matplotlib_animations(globals_dict):
-    """从执行后的命名空间里收集 matplotlib 动画对象。
+def _snapshot_matplotlib_animation_ids(globals_dict):
+    """记录执行前已经存在的 matplotlib 动画对象 id。"""
+    try:
+        if "matplotlib" not in sys.modules:
+            return set()
+        from matplotlib.animation import Animation
+    except Exception:
+        return set()
+
+    animation_ids = set()
+    for value in list(globals_dict.values()):
+        try:
+            if isinstance(value, Animation):
+                animation_ids.add(id(value))
+        except Exception:
+            pass
+    return animation_ids
+
+
+def _iter_matplotlib_animations(globals_dict, previous_animation_ids=None, explicit_result_only=False):
+    """从执行后的命名空间里收集本次 matplotlib 动画对象。
 
     设计说明：
     1. matplotlib 的 ``FuncAnimation`` / ``ArtistAnimation`` 必须保留一个强引用，
        否则会被垃圾回收而停止播放；用户代码通常会把它赋给一个变量（如 ``ani``）。
-    2. 因此这里遍历全局命名空间寻找 ``matplotlib.animation.Animation`` 实例，
-       同时优先考虑约定变量名 ``_result`` / ``ani`` / ``anim`` / ``animation``，
-       让“最后一个表达式即动画”这种写法也能被捕获。
-    3. 去重时按对象 id 判断，避免同一动画被多次渲染。
+    2. 持久 session 会保留历史变量；如果无差别遍历全局命名空间，之前 cell 里的 ``ani``
+       会在之后任意 cell 运行时被重复导出。
+    3. 所以默认只收集“本次执行后新出现”的动画对象；如果本次末行表达式明确返回旧动画，
+       调用方会设置 explicit_result_only，只捕获 ``_result`` 指向的对象。
     """
     animations = []
+    previous_animation_ids = set(previous_animation_ids or set())
     try:
         if "matplotlib" not in sys.modules:
             return animations
@@ -473,13 +493,26 @@ def _iter_matplotlib_animations(globals_dict):
 
     seen_ids = set()
 
-    def _consider(candidate):
-        if isinstance(candidate, Animation) and id(candidate) not in seen_ids:
-            seen_ids.add(id(candidate))
-            animations.append(candidate)
+    def _consider(candidate, allow_existing=False):
+        candidate_id = id(candidate)
+        if not isinstance(candidate, Animation) or candidate_id in seen_ids:
+            return
+        if not allow_existing and candidate_id in previous_animation_ids:
+            return
+        seen_ids.add(candidate_id)
+        animations.append(candidate)
 
-    # 约定变量名优先，保证“末行表达式”动画排在最前面。
-    for preferred_name in ("_result", "ani", "anim", "animation"):
+    # 约定变量名优先，保证“末行表达式”动画排在最前面；_result 可显式指向历史动画。
+    result_value = globals_dict.get("_result")
+    try:
+        _consider(result_value, allow_existing=True)
+    except Exception:
+        pass
+
+    if explicit_result_only:
+        return animations
+
+    for preferred_name in ("ani", "anim", "animation"):
         try:
             _consider(globals_dict.get(preferred_name))
         except Exception:
@@ -494,7 +527,7 @@ def _iter_matplotlib_animations(globals_dict):
     return animations
 
 
-def _capture_matplotlib_animation_html(globals_dict):
+def _capture_matplotlib_animation_html(globals_dict, previous_animation_ids=None, explicit_result_only=False):
     """把 matplotlib 动画保存为 HTML 工件（JS 动画播放器）。
 
     设计说明：
@@ -505,7 +538,11 @@ def _capture_matplotlib_animation_html(globals_dict):
     3. 如果已经识别出动画但导出失败，返回 Markdown 错误模块而不是静默降级为静态图；
        这样用户能明确知道动画链路哪里坏了。
     """
-    animations = _iter_matplotlib_animations(globals_dict)
+    animations = _iter_matplotlib_animations(
+        globals_dict,
+        previous_animation_ids=previous_animation_ids,
+        explicit_result_only=explicit_result_only,
+    )
     if not animations:
         return None
 
@@ -1302,6 +1339,7 @@ def _handle_exec(payload):
     result_json = None
     old_cwd = None
     dataflow_before = _snapshot_session_var_map(globals_dict)
+    matplotlib_animation_ids_before = _snapshot_matplotlib_animation_ids(globals_dict)
 
     try:
         if sandbox_dir:
@@ -1404,7 +1442,20 @@ def _handle_exec(payload):
         # 1. 先尝试把 FuncAnimation/ArtistAnimation 转成自包含 HTML 播放器；
         #    成功后内部已 plt.close("all")，因此后续静态 PNG 捕获不会再重复输出末帧。
         # 2. 没有动画时回退到既有的静态 PNG 路径，保持原有单帧绘图行为不变。
-        mpl_display = _capture_matplotlib_animation_html(globals_dict)
+        explicit_animation_result = False
+        try:
+            if "matplotlib" in sys.modules and "_result" in globals_dict:
+                from matplotlib.animation import Animation
+
+                explicit_animation_result = isinstance(globals_dict.get("_result"), Animation)
+        except Exception:
+            explicit_animation_result = False
+
+        mpl_display = _capture_matplotlib_animation_html(
+            globals_dict,
+            previous_animation_ids=matplotlib_animation_ids_before,
+            explicit_result_only=explicit_animation_result,
+        )
         if mpl_display is None:
             png_b64 = _capture_matplotlib_png_base64()
             if png_b64:

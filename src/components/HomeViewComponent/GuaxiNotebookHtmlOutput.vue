@@ -4,7 +4,7 @@
       ref="iframeRef"
       class="guaxi-notebook-html-output__frame"
       :title="title"
-      sandbox="allow-scripts allow-same-origin"
+      :sandbox="iframeSandbox"
       :scrolling="src ? 'auto' : 'no'"
       @load="handleFrameLoad"
     ></iframe>
@@ -43,6 +43,13 @@ const logger = createLogger('GuaxiNotebookHtmlOutput')
 const iframeRef = ref(null)
 let frameHeightSyncTimer = 0
 let syncToken = 0
+
+// 设计说明：
+// 1. HTML/动画输出需要 allow-scripts，否则 Plotly、Matplotlib HTMLWriter 的交互脚本不会执行。
+// 2. 这里刻意不加 allow-same-origin：Chromium 会对 `allow-scripts + allow-same-origin` 发安全警告，
+//    且 srcdoc 文档获得同源能力后理论上可以解除 sandbox。
+// 3. 高度同步改走 iframe 内部 postMessage；父页面只校验 event.source，不依赖 contentDocument 同源访问。
+const iframeSandbox = 'allow-scripts'
 
 const base64ToText = (base64 = '') => {
   const binary = window.atob(String(base64 || ''))
@@ -154,13 +161,24 @@ const buildArtifactSrcDoc = (artifactHtml) => {
       html, body {
         margin: 0;
         padding: 0;
+        width: 100%;
+        max-width: 100%;
+        box-sizing: border-box;
         background: ${background};
         color: ${color};
-        overflow: auto;
+        overflow-x: hidden;
+        overflow-y: auto;
       }
       body {
         font-family: "Maple Mono NF CN", "JetBrainsMono Nerd Font Mono", Consolas, monospace, "Microsoft YaHei", "Courier New";
+        overflow-wrap: anywhere;
       }
+      /* 设计说明：
+       * 1. Matplotlib HTMLWriter 生成的结构通常是 animation + img + controls，但不同版本会混用
+       *    inline style、table-like div 或普通 form controls，默认靠左显示。
+       * 2. iframe 内样式不会污染主应用，因此这里用较强选择器把动画画面、进度条、按钮区统一居中。
+       * 3. 只约束动画 HTML 文档，不影响 Plotly 等普通 HTML 输出。
+       */
       .animation {
         width: 100%;
         box-sizing: border-box;
@@ -170,8 +188,22 @@ const buildArtifactSrcDoc = (artifactHtml) => {
         justify-content: flex-start;
         gap: 12px;
         padding: 8px 12px 16px;
+        text-align: center;
+        overflow-x: hidden;
       }
-      .animation img {
+      .animation > *,
+      .animation div,
+      .animation form,
+      .animation table {
+        max-width: 100%;
+        margin-left: auto !important;
+        margin-right: auto !important;
+        text-align: center;
+        box-sizing: border-box;
+      }
+      .animation img,
+      .animation canvas,
+      .animation video {
         width: auto;
         height: clamp(520px, 62vh, 760px);
         max-width: 100%;
@@ -179,26 +211,40 @@ const buildArtifactSrcDoc = (artifactHtml) => {
         object-fit: contain;
         background: #ffffff;
         display: block;
+        margin-left: auto !important;
+        margin-right: auto !important;
       }
-      .animation .anim-controls {
+      .animation .anim-controls,
+      .animation [class*="controls"],
+      .animation [id*="controls"] {
         width: min(100%, 760px);
         display: flex;
         flex-direction: column;
         align-items: center;
+        justify-content: center;
         gap: 8px;
       }
-      .animation .anim-slider {
+      .animation .anim-slider,
+      .animation input[type="range"] {
         width: min(100%, 620px);
+        display: block;
+        margin-left: auto !important;
+        margin-right: auto !important;
       }
-      .animation .anim-buttons {
+      .animation .anim-buttons,
+      .animation [class*="button"],
+      .animation [id*="button"] {
         display: flex;
         justify-content: center;
+        align-items: center;
         flex-wrap: wrap;
         gap: 6px;
       }
-      .animation .anim-state {
+      .animation .anim-state,
+      .animation [class*="state"] {
         display: flex;
         justify-content: center;
+        align-items: center;
         flex-wrap: wrap;
         gap: 10px;
       }
@@ -260,12 +306,16 @@ const buildSrcDoc = () => {
       html, body {
         margin: 0;
         padding: 0;
+        width: 100%;
+        max-width: 100%;
+        box-sizing: border-box;
         background: ${background};
         color: ${color};
         overflow: hidden;
       }
       body {
         font-family: "Maple Mono NF CN", "JetBrainsMono Nerd Font Mono", Consolas, monospace, "Microsoft YaHei", "Courier New";
+        overflow-wrap: anywhere;
       }
       #guaxi-notebook-html-root {
         width: 100%;
@@ -273,6 +323,58 @@ const buildSrcDoc = () => {
       }
       #guaxi-notebook-html-root > * {
         max-width: 100%;
+      }
+      /* 设计说明：
+       * 1. 有些用户会直接输出 FuncAnimation.to_jshtml()，此时没有 sourcePath，也会走普通 HTML srcdoc。
+       * 2. 这里复用动画居中约束，让内联 HTML 动画和本地 artifact 动画保持一致。
+       */
+      #guaxi-notebook-html-root .animation {
+        width: 100% !important;
+        box-sizing: border-box;
+        display: flex !important;
+        flex-direction: column;
+        align-items: center;
+        justify-content: flex-start;
+        gap: 12px;
+        text-align: center;
+        overflow-x: hidden;
+      }
+      #guaxi-notebook-html-root .animation > *,
+      #guaxi-notebook-html-root .animation div,
+      #guaxi-notebook-html-root .animation form,
+      #guaxi-notebook-html-root .animation table {
+        max-width: 100%;
+        margin-left: auto !important;
+        margin-right: auto !important;
+        text-align: center;
+        box-sizing: border-box;
+      }
+      #guaxi-notebook-html-root .animation img,
+      #guaxi-notebook-html-root .animation canvas,
+      #guaxi-notebook-html-root .animation video {
+        display: block;
+        max-width: 100%;
+        height: auto;
+        object-fit: contain;
+        margin-left: auto !important;
+        margin-right: auto !important;
+      }
+      #guaxi-notebook-html-root .animation .anim-controls,
+      #guaxi-notebook-html-root .animation [class*="controls"],
+      #guaxi-notebook-html-root .animation [id*="controls"] {
+        width: min(100%, 760px);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+      }
+      #guaxi-notebook-html-root .animation .anim-slider,
+      #guaxi-notebook-html-root .animation input[type="range"] {
+        width: min(100%, 620px);
+        display: block;
+        margin-left: auto !important;
+        margin-right: auto !important;
       }
     </style>
   </head>
@@ -399,7 +501,7 @@ const probeFrameHeight = (reason = 'probe') => {
     )
     syncFrameHeight(nextHeight, reason)
   } catch (error) {
-    logger.debug('[NotebookHtmlOutput] probe frame height skipped', {
+    logger.debug('[NotebookHtmlOutput] skipped direct iframe height probe because sandbox is origin-isolated', {
       reason,
       error: String(error?.message || error),
     })
@@ -452,13 +554,22 @@ onBeforeUnmount(() => {
 <style scoped>
 .guaxi-notebook-html-output {
   width: 100%;
+  max-width: 100%;
   min-width: 0;
+  box-sizing: border-box;
+  /* 设计说明：
+   * 1. 动画 HTML 运行在 iframe 内，横向滚动应由 iframe 文档里的内容约束解决。
+   * 2. 外层输出组件只负责占满当前输出模块宽度；这里阻断 iframe/内联控件的 scrollWidth 向 Notebook 外层泄漏。
+   */
+  overflow-x: hidden;
 }
 
 .guaxi-notebook-html-output__frame {
   display: block;
   width: 100%;
+  max-width: 100%;
   min-height: 48px;
+  box-sizing: border-box;
   border: 0;
   background: transparent;
 }
