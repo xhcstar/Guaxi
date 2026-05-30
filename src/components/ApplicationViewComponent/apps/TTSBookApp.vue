@@ -222,7 +222,8 @@
             <n-empty v-if="!currentAudioSrc" description="点击右侧任务队列中的音频按钮即可在这里播放" />
             <template v-else>
               <audio ref="audioRef" class="audio-element" :src="currentAudioSrc" controls preload="metadata"
-                @loadedmetadata="handleAudioMetadata" @timeupdate="handleAudioTimeUpdate" @ended="handleAudioEnded" />
+                @loadedmetadata="handleAudioMetadata" @canplay="handleAudioCanPlay" @play="handleAudioPlay"
+                @timeupdate="handleAudioTimeUpdate" @ended="handleAudioEnded" @error="handleAudioError" />
 
               <div class="subtitle-panel">
                 <div class="subtitle-label">当前字幕</div>
@@ -426,6 +427,11 @@ const rightColWidth = ref(340)
 const middleTopHeight = ref(300)
 const dragState = ref(null)
 let unlistenTtsBookProgress = null
+let currentAudioObjectUrl = ''
+let currentAudioPath = ''
+let currentAudioSourceMode = ''
+let currentAudioFallbackTried = false
+let currentAudioFallbackInFlight = false
 
 const isDarkTheme = computed(() => settingsStore.appearanceTheme === 'dark')
 const totalTasks = computed(() => tasks.value.length)
@@ -752,8 +758,98 @@ const loadSavedTasks = async () => {
   }
 }
 
+const base64ToUint8Array = (b64) => {
+  const binary = atob(String(b64 || ''))
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  return bytes
+}
+
+const revokeCurrentAudioObjectUrl = () => {
+  if (!currentAudioObjectUrl) return
+  try {
+    URL.revokeObjectURL(currentAudioObjectUrl)
+  } catch (e) {
+    logger.warn('[TTSBookApp] revoke audio object url failed:', e)
+  }
+  currentAudioObjectUrl = ''
+}
+
+const getAudioElementState = () => ({
+  networkState: audioRef.value?.networkState || 0,
+  readyState: audioRef.value?.readyState || 0,
+  currentSrcProtocol: String(audioRef.value?.currentSrc || '').split(':')[0],
+  sourceMode: currentAudioSourceMode,
+})
+
+const guessAudioMimeType = (audioPath) => {
+  const ext = String(audioPath || '').split(/[\\/]/).pop()?.split('.').pop()?.toLowerCase() || ''
+  if (ext === 'mp3') return 'audio/mpeg'
+  if (ext === 'flac') return 'audio/flac'
+  if (ext === 'ogg') return 'audio/ogg'
+  if (ext === 'm4a') return 'audio/mp4'
+  return 'audio/wav'
+}
+
+const buildAudioBlobUrlFromPath = async (audioPath, reason = 'fallback') => {
+  const base64 = await invoke('read_file_bytes_base64', { path: audioPath })
+  const bytes = base64ToUint8Array(base64)
+  const contentType = guessAudioMimeType(audioPath)
+  const blob = new Blob([bytes], { type: contentType })
+  const objectUrl = URL.createObjectURL(blob)
+  logger.info('[TTSBookApp] 本地音频已转换为 Blob 播放源', {
+    reason,
+    audioPath,
+    contentType,
+    audioBytes: bytes.byteLength,
+    objectUrlProtocol: objectUrl.split(':')[0],
+  })
+  return objectUrl
+}
+
+const fallbackToBlobAudioSource = async (reason = 'unknown', rawError = null) => {
+  if (currentAudioFallbackTried || currentAudioFallbackInFlight || !currentAudioPath) return false
+  currentAudioFallbackTried = true
+  currentAudioFallbackInFlight = true
+  logger.warn('[TTSBookApp] asset 音频播放失败，尝试 Blob fallback', {
+    reason,
+    audioPath: currentAudioPath,
+    error: String(rawError?.message || rawError || ''),
+    ...getAudioElementState(),
+  })
+  try {
+    const objectUrl = await buildAudioBlobUrlFromPath(currentAudioPath, reason)
+    revokeCurrentAudioObjectUrl()
+    currentAudioObjectUrl = objectUrl
+    currentAudioSourceMode = 'blob'
+    currentAudioSrc.value = objectUrl
+    await nextTick()
+    if (audioRef.value) {
+      audioRef.value.load()
+      await audioRef.value.play()
+    }
+    return true
+  } catch (e) {
+    logger.error('[TTSBookApp] Blob fallback 播放失败', {
+      reason,
+      audioPath: currentAudioPath,
+      error: String(e?.message || e || ''),
+    })
+    return false
+  } finally {
+    currentAudioFallbackInFlight = false
+  }
+}
+
 const handleAudioMetadata = async () => {
   if (!audioRef.value) return
+  logger.info('[TTSBookApp] 音频元数据已加载', {
+    duration: Number(audioRef.value.duration || 0),
+    audioPath: currentAudioPath,
+    ...getAudioElementState(),
+  })
   let subtitleJsonPath = currentSubtitleJsonPath.value
   if (!subtitleJsonPath && currentPlayingTaskId.value) {
     const task = tasks.value.find((item) => item.id === currentPlayingTaskId.value || item.taskId === currentPlayingTaskId.value)
@@ -767,6 +863,31 @@ const handleAudioMetadata = async () => {
   } catch (e) {
     logger.warn('handleAudioMetadata subtitles failed:', e)
   }
+}
+
+const handleAudioCanPlay = () => {
+  logger.info('[TTSBookApp] 音频可播放', {
+    audioPath: currentAudioPath,
+    ...getAudioElementState(),
+  })
+}
+
+const handleAudioPlay = () => {
+  logger.info('[TTSBookApp] 音频开始播放', {
+    audioPath: currentAudioPath,
+    ...getAudioElementState(),
+  })
+}
+
+const handleAudioError = () => {
+  const mediaError = audioRef.value?.error
+  logger.error('[TTSBookApp] 音频元素加载失败', {
+    audioPath: currentAudioPath,
+    mediaErrorCode: mediaError?.code || 0,
+    mediaErrorMessage: mediaError?.message || '',
+    ...getAudioElementState(),
+  })
+  void fallbackToBlobAudioSource('audio-element-error')
 }
 
 const handleAudioTimeUpdate = () => {
@@ -799,16 +920,30 @@ const playTaskAudio = async (task) => {
 
 const loadPlayerSources = async ({ audioPath, jsonPath = '', title = '', taskId = '' }) => {
   try {
-    currentAudioSrc.value = convertFileSrc(audioPath)
+    // 设计说明：TTSBook 的成品音频可能很大，优先使用 Tauri asset URL 交给 WebView 流式读取；
+    // release 下若 CSP 或 asset scope 拒绝加载，再由播放器错误处理切到 Blob fallback。
+    revokeCurrentAudioObjectUrl()
+    currentAudioPath = String(audioPath || '').trim()
+    currentAudioSourceMode = 'asset'
+    currentAudioFallbackTried = false
+    currentAudioFallbackInFlight = false
+    const assetSrc = convertFileSrc(audioPath)
+    currentAudioSrc.value = assetSrc
     currentPlayingTaskId.value = taskId
     currentSubtitleJsonPath.value = jsonPath
     playerTitle.value = title || basename(audioPath)
     currentSubtitleIndex.value = -1
     subtitleTimeline.value = []
+    logger.info('[TTSBookApp] 准备加载播放器音频', {
+      audioPath,
+      jsonPath,
+      taskId,
+      sourceMode: currentAudioSourceMode,
+      assetSrcProtocol: String(assetSrc || '').split(':')[0],
+    })
     await nextTick()
     if (audioRef.value) {
       audioRef.value.load()
-      await audioRef.value.play()
     }
 
     const candidateJsonPaths = jsonPath ? [jsonPath] : findSiblingJsonPath(audioPath)
@@ -816,9 +951,27 @@ const loadPlayerSources = async ({ audioPath, jsonPath = '', title = '', taskId 
       try {
         const manifest = await readJsonFile(candidate)
         subtitleTimeline.value = buildSubtitleTimeline(manifest?.chunks || [], Number(audioRef.value?.duration || 0))
-        if (subtitleTimeline.value.length) break
+        logger.info('[TTSBookApp] 字幕 JSON 已加载', {
+          candidate,
+          chunks: Array.isArray(manifest?.chunks) ? manifest.chunks.length : 0,
+          timelineItems: subtitleTimeline.value.length,
+          duration: Number(audioRef.value?.duration || 0),
+        })
+        if (subtitleTimeline.value.length) {
+          currentSubtitleIndex.value = 0
+          break
+        }
       } catch (e) {
         logger.warn('loadPlayerSources skip json:', candidate, e)
+      }
+    }
+
+    if (audioRef.value) {
+      try {
+        await audioRef.value.play()
+      } catch (playError) {
+        const recovered = await fallbackToBlobAudioSource('asset-play-rejected', playError)
+        if (!recovered) throw playError
       }
     }
   } catch (e) {
@@ -928,6 +1081,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   stopDragging()
+  revokeCurrentAudioObjectUrl()
   if (typeof unlistenTtsBookProgress === 'function') {
     unlistenTtsBookProgress()
     unlistenTtsBookProgress = null

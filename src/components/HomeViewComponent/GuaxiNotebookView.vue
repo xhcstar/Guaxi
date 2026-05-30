@@ -5390,9 +5390,18 @@ const readNotebookSelectionAloud = async () => {
     }
 
     const contentType = String(response?.content_type || 'audio/mpeg')
-    const blob = new Blob([base64ToUint8Array(audioBase64)], { type: contentType })
+    const bytes = base64ToUint8Array(audioBase64)
+    const blob = new Blob([bytes], { type: contentType })
     stopSelectionAudioPlayback()
     selectionAudioObjectUrl = URL.createObjectURL(blob)
+    // 设计说明：release 版 WebView 会严格执行 CSP；这里记录 Blob 音频元信息，
+    // 便于区分“后端合成异常”和“前端 media-src/解码层拒绝加载”。
+    logger.info('[NotebookSelection] text to speech audio prepared', {
+      contentType,
+      audioBytes: bytes.byteLength,
+      responseFormat,
+      objectUrlProtocol: selectionAudioObjectUrl.split(':')[0],
+    })
 
     const audio = new Audio(selectionAudioObjectUrl)
     selectionAudioElement = audio
@@ -5402,11 +5411,25 @@ const readNotebookSelectionAloud = async () => {
         resolve()
       }
       audio.onerror = () => {
+        const mediaError = audio.error
+        logger.error('[NotebookSelection] audio element load failed', {
+          contentType,
+          audioBytes: bytes.byteLength,
+          mediaErrorCode: mediaError?.code || 0,
+          mediaErrorMessage: mediaError?.message || '',
+          networkState: audio.networkState,
+          readyState: audio.readyState,
+          currentSrcProtocol: String(audio.currentSrc || '').split(':')[0],
+        })
         stopSelectionAudioPlayback()
         reject(new Error('音频播放失败'))
       }
     })
 
+    logger.info('[NotebookSelection] start audio playback', {
+      contentType,
+      audioBytes: bytes.byteLength,
+    })
     await audio.play()
     await waitForPlaybackEnd
   } catch (error) {

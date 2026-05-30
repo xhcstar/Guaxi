@@ -57,7 +57,10 @@
                     playsinline
                     :src="activeAudioPlayableSrc"
                     @loadedmetadata="onAudioLoadedMetadata"
+                    @canplay="handleListeningMediaCanPlay('active', $event)"
+                    @play="handleListeningMediaPlay('active', $event)"
                     @timeupdate="handleAudioTimeUpdate"
+                    @error="handleListeningMediaError('active', $event)"
                   >
                     <track
                       v-if="activeMediaSubtitleVttSrc"
@@ -75,7 +78,10 @@
                     controls
                     :src="activeAudioPlayableSrc"
                     @loadedmetadata="onAudioLoadedMetadata"
+                    @canplay="handleListeningMediaCanPlay('active', $event)"
+                    @play="handleListeningMediaPlay('active', $event)"
                     @timeupdate="handleAudioTimeUpdate"
+                    @error="handleListeningMediaError('active', $event)"
                   ></audio>
                 </div>
                 <div class="playback-row">
@@ -603,6 +609,9 @@
                         :src="reviewAudioPlayableSrc"
                         @timeupdate="handleReviewAudioTimeUpdate"
                         @loadedmetadata="handleReviewAudioLoadedMetadata"
+                        @canplay="handleListeningMediaCanPlay('review', $event)"
+                        @play="handleListeningMediaPlay('review', $event)"
+                        @error="handleListeningMediaError('review', $event)"
                       ></audio>
                       <div class="review-phonetic">点击显示答案后可查看完整原文</div>
                     </div>
@@ -1534,7 +1543,13 @@ const handleWindowResizeObserverWarning = (evt) => {
 const resolvePlayableMediaSrc = async (raw) => {
   const cleaned = sanitizeMediaUri(raw)
   if (!cleaned) return ''
-  if (/^(https?:|data:|blob:|asset:)/i.test(cleaned)) return cleaned
+  if (/^(https?:|data:|blob:|asset:)/i.test(cleaned)) {
+    console.info('[LangLearning] media:direct-source', {
+      protocol: cleaned.split(':')[0],
+      sourceKind: inferMediaKindByPath(cleaned),
+    })
+    return cleaned
+  }
   const localPath = normalizeLocalFilePath(
     cleaned.startsWith('file://')
       ? decodeURIComponent(cleaned.replace(/^file:\/\//i, ''))
@@ -1542,6 +1557,10 @@ const resolvePlayableMediaSrc = async (raw) => {
   )
   if (/^[a-zA-Z]:[\\/]/.test(localPath) || localPath.startsWith('/')) {
     if (mediaObjectUrlCache.has(localPath)) {
+      console.info('[LangLearning] media:use-cached-blob', {
+        localPath,
+        protocol: String(mediaObjectUrlCache.get(localPath) || '').split(':')[0],
+      })
       return mediaObjectUrlCache.get(localPath)
     }
     try {
@@ -1552,9 +1571,20 @@ const resolvePlayableMediaSrc = async (raw) => {
         const blob = new Blob([bytes], { type: mime })
         const objectUrl = URL.createObjectURL(blob)
         mediaObjectUrlCache.set(localPath, objectUrl)
+        console.info('[LangLearning] media:local-backend-blob-created', {
+          localPath,
+          mime,
+          bytes: bytes.byteLength,
+          protocol: objectUrl.split(':')[0],
+        })
         return objectUrl
       }
-    } catch {}
+    } catch (err) {
+      console.warn('[LangLearning] media:local-backend-read-failed', {
+        localPath,
+        error: String(err?.message || err || ''),
+      })
+    }
     const candidates = [
       localPath,
       localPath.replace(/\//g, '\\'),
@@ -1566,8 +1596,20 @@ const resolvePlayableMediaSrc = async (raw) => {
         const blob = new Blob([bytes], { type: inferMediaMimeByPath(candidate) })
         const objectUrl = URL.createObjectURL(blob)
         mediaObjectUrlCache.set(localPath, objectUrl)
+        console.info('[LangLearning] media:local-fs-blob-created', {
+          localPath,
+          candidate,
+          bytes: bytes.byteLength,
+          protocol: objectUrl.split(':')[0],
+        })
         return objectUrl
-      } catch {}
+      } catch (err) {
+        console.warn('[LangLearning] media:local-fs-read-failed', {
+          localPath,
+          candidate,
+          error: String(err?.message || err || ''),
+        })
+      }
     }
     return ''
   }
@@ -1575,11 +1617,25 @@ const resolvePlayableMediaSrc = async (raw) => {
 }
 
 const refreshActiveAudioPlayableSrc = async () => {
-  activeAudioPlayableSrc.value = await resolvePlayableMediaSrc(activeAudio.value?.source_uri || '')
+  const sourceUri = activeAudio.value?.source_uri || ''
+  activeAudioPlayableSrc.value = await resolvePlayableMediaSrc(sourceUri)
+  console.info('[LangLearning] activeAudio:playable-src-refreshed', {
+    audioId: activeAudio.value?.id || '',
+    sourceProtocol: sanitizeMediaUri(sourceUri).split(':')[0],
+    playableProtocol: String(activeAudioPlayableSrc.value || '').split(':')[0],
+    hasPlayableSrc: Boolean(activeAudioPlayableSrc.value),
+  })
 }
 
 const refreshReviewAudioPlayableSrc = async () => {
-  reviewAudioPlayableSrc.value = await resolvePlayableMediaSrc(currentReviewItem.value?.payload?.source_uri || '')
+  const sourceUri = currentReviewItem.value?.payload?.source_uri || ''
+  reviewAudioPlayableSrc.value = await resolvePlayableMediaSrc(sourceUri)
+  console.info('[LangLearning] reviewAudio:playable-src-refreshed', {
+    audioId: currentReviewItem.value?.payload?.id || '',
+    sourceProtocol: sanitizeMediaUri(sourceUri).split(':')[0],
+    playableProtocol: String(reviewAudioPlayableSrc.value || '').split(':')[0],
+    hasPlayableSrc: Boolean(reviewAudioPlayableSrc.value),
+  })
 }
 
 const parseClockTimestampToSec = (raw) => {
@@ -3438,11 +3494,65 @@ const handleAudioTimeUpdate = (evt) => {
   currentTranscriptLineIndex.value = resolveTranscriptHighlightIndex(timeline, Number(player.currentTime || 0), -0.03)
 }
 
+const getListeningMediaDebugState = (player) => ({
+  duration: Number(player?.duration || 0),
+  currentTime: Number(player?.currentTime || 0),
+  networkState: player?.networkState || 0,
+  readyState: player?.readyState || 0,
+  currentSrcProtocol: String(player?.currentSrc || '').split(':')[0],
+})
+
+const getListeningMediaContext = (scope) => {
+  if (scope === 'review') {
+    return {
+      scope,
+      audioId: currentReviewItem.value?.payload?.id || '',
+      sourceProtocol: sanitizeMediaUri(currentReviewItem.value?.payload?.source_uri || '').split(':')[0],
+      playableProtocol: String(reviewAudioPlayableSrc.value || '').split(':')[0],
+    }
+  }
+  return {
+    scope,
+    audioId: activeAudio.value?.id || '',
+    sourceProtocol: sanitizeMediaUri(activeAudio.value?.source_uri || '').split(':')[0],
+    playableProtocol: String(activeAudioPlayableSrc.value || '').split(':')[0],
+  }
+}
+
+const handleListeningMediaCanPlay = (scope, evt) => {
+  console.info('[LangLearning] media:canplay', {
+    ...getListeningMediaContext(scope),
+    ...getListeningMediaDebugState(evt?.target),
+  })
+}
+
+const handleListeningMediaPlay = (scope, evt) => {
+  console.info('[LangLearning] media:play', {
+    ...getListeningMediaContext(scope),
+    ...getListeningMediaDebugState(evt?.target),
+  })
+}
+
+const handleListeningMediaError = (scope, evt) => {
+  const player = evt?.target
+  const mediaError = player?.error
+  console.error('[LangLearning] media:error', {
+    ...getListeningMediaContext(scope),
+    ...getListeningMediaDebugState(player),
+    mediaErrorCode: mediaError?.code || 0,
+    mediaErrorMessage: mediaError?.message || '',
+  })
+}
+
 const onAudioLoadedMetadata = (evt) => {
   const player = evt?.target
   if (player && Number.isFinite(player.duration) && player.duration > 0) {
     activeAudioDurationSec.value = Number(player.duration)
   }
+  console.info('[LangLearning] media:loadedmetadata', {
+    ...getListeningMediaContext('active'),
+    ...getListeningMediaDebugState(player),
+  })
   applyAudioPlaybackRate()
 }
 
@@ -3451,6 +3561,10 @@ const handleReviewAudioLoadedMetadata = (evt) => {
   if (player && Number.isFinite(player.duration) && player.duration > 0) {
     reviewAudioDurationSec.value = Number(player.duration)
   }
+  console.info('[LangLearning] media:loadedmetadata', {
+    ...getListeningMediaContext('review'),
+    ...getListeningMediaDebugState(player),
+  })
 }
 
 const handleReviewAudioTimeUpdate = (evt) => {

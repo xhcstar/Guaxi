@@ -1627,6 +1627,14 @@ const readSelectionAloud = async () => {
     const blob = new Blob([bytes], { type: contentType })
     stopSelectionAudioPlayback()
     selectionAudioObjectUrl = URL.createObjectURL(blob)
+    // 设计说明：release 版 WebView 会严格执行 CSP；这里记录 Blob 音频元信息，
+    // 便于区分“后端合成异常”和“前端 media-src/解码层拒绝加载”。
+    logger.info('[GuaxiEditor] 朗读音频已准备', {
+      contentType,
+      audioBytes: bytes.byteLength,
+      responseFormat,
+      objectUrlProtocol: selectionAudioObjectUrl.split(':')[0],
+    })
     const audio = new Audio(selectionAudioObjectUrl)
     selectionAudioElement = audio
     const waitForPlaybackEnd = new Promise((resolve, reject) => {
@@ -1635,9 +1643,23 @@ const readSelectionAloud = async () => {
         resolve()
       }
       audio.onerror = () => {
+        const mediaError = audio.error
+        logger.error('[GuaxiEditor] 音频元素加载失败', {
+          contentType,
+          audioBytes: bytes.byteLength,
+          mediaErrorCode: mediaError?.code || 0,
+          mediaErrorMessage: mediaError?.message || '',
+          networkState: audio.networkState,
+          readyState: audio.readyState,
+          currentSrcProtocol: String(audio.currentSrc || '').split(':')[0],
+        })
         stopSelectionAudioPlayback()
         reject(new Error('音频播放失败'))
       }
+    })
+    logger.info('[GuaxiEditor] 开始播放朗读音频', {
+      contentType,
+      audioBytes: bytes.byteLength,
     })
     await audio.play()
     await waitForPlaybackEnd

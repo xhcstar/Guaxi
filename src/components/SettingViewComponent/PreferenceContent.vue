@@ -691,6 +691,14 @@ const handleTtsTestReadAloud = async () => {
     const blob = new Blob([bytes], { type: contentType })
     stopTtsTestAudioPlayback()
     ttsTestAudioObjectUrl = URL.createObjectURL(blob)
+    // 设计说明：release 版 WebView 会严格执行 CSP；这里记录 Blob 音频元信息，
+    // 便于区分“后端合成异常”和“前端 media-src/解码层拒绝加载”。
+    logger.info('[PreferenceContent] 测试朗读音频已准备', {
+      contentType,
+      audioBytes: bytes.byteLength,
+      responseFormat,
+      objectUrlProtocol: ttsTestAudioObjectUrl.split(':')[0],
+    })
     const audio = new Audio(ttsTestAudioObjectUrl)
     ttsTestAudioElement = audio
     const waitForPlaybackEnd = new Promise((resolve, reject) => {
@@ -699,9 +707,23 @@ const handleTtsTestReadAloud = async () => {
         resolve()
       }
       audio.onerror = () => {
+        const mediaError = audio.error
+        logger.error('[PreferenceContent] 测试朗读音频元素加载失败', {
+          contentType,
+          audioBytes: bytes.byteLength,
+          mediaErrorCode: mediaError?.code || 0,
+          mediaErrorMessage: mediaError?.message || '',
+          networkState: audio.networkState,
+          readyState: audio.readyState,
+          currentSrcProtocol: String(audio.currentSrc || '').split(':')[0],
+        })
         stopTtsTestAudioPlayback()
         reject(new Error('音频播放失败'))
       }
+    })
+    logger.info('[PreferenceContent] 开始播放测试朗读音频', {
+      contentType,
+      audioBytes: bytes.byteLength,
     })
     await audio.play()
     await waitForPlaybackEnd
