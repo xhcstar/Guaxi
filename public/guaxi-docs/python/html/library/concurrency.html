@@ -1,44 +1,45 @@
 <!DOCTYPE html>
 
-<html lang="en" data-content_root="../">
+<html lang="zh-CN" data-content_root="../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta property="og:title" content="Concurrent Execution" />
+<meta property="og:title" content="并发执行" />
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://docs.python.org/3/library/concurrency.html" />
 <meta property="og:site_name" content="Python documentation" />
-<meta property="og:description" content="The modules described in this chapter provide support for concurrent execution of code. The appropriate choice of tool will depend on the task to be executed (CPU bound vs IO bound) and preferred s..." />
+<meta property="og:description" content="本章中描述的模块支持并发执行代码。 适当的工具选择取决于要执行的任务（CPU密集型或IO密集型）和偏好的开发风格（事件驱动的协作式多任务或抢占式多任务处理）。 这是一个概述： threading--- 基于线程的并行- 引言, GIL 和性能的考量, 参考- 线程局部数据, 线程对象, 锁对象, RLock 对象, Condition 对象, Semaphore 对象, Semaphore ..." />
 <meta property="og:image:width" content="1146" />
 <meta property="og:image:height" content="600" />
-<meta property="og:image" content="https://docs.python.org/3.14/_images/social_previews/summary_library_concurrency_f96509bd.png" />
-<meta property="og:image:alt" content="The modules described in this chapter provide support for concurrent execution of code. The appropriate choice of tool will depend on the task to be executed (CPU bound vs IO bound) and preferred s..." />
-<meta name="description" content="The modules described in this chapter provide support for concurrent execution of code. The appropriate choice of tool will depend on the task to be executed (CPU bound vs IO bound) and preferred s..." />
+<meta property="og:image" content="https://docs.python.org/3.13/zh-cn/_images/social_previews/summary_library_concurrency_5e78fcdf.png" />
+<meta property="og:image:alt" content="本章中描述的模块支持并发执行代码。 适当的工具选择取决于要执行的任务（CPU密集型或IO密集型）和偏好的开发风格（事件驱动的协作式多任务或抢占式多任务处理）。 这是一个概述： threading--- 基于线程的并行- 引言, GIL 和性能的考量, 参考- 线程局部数据, 线程对象, 锁对象, RLock 对象, Condition 对象, Semaphore 对象, Semaphore ..." />
+<meta name="description" content="本章中描述的模块支持并发执行代码。 适当的工具选择取决于要执行的任务（CPU密集型或IO密集型）和偏好的开发风格（事件驱动的协作式多任务或抢占式多任务处理）。 这是一个概述： threading--- 基于线程的并行- 引言, GIL 和性能的考量, 参考- 线程局部数据, 线程对象, 锁对象, RLock 对象, Condition 对象, Semaphore 对象, Semaphore ..." />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="theme-color" content="#3776ab">
 
-    <title>Concurrent Execution &#8212; Python 3.14.5 documentation</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>并发执行 &#8212; Python 3.13.13 文档</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
     
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
     <link rel="stylesheet" type="text/css" href="../_static/classic.css?v=234b1a7c" />
     <link rel="stylesheet" type="text/css" href="../_static/pydoctheme.css?v=4365c8fe" />
     <link id="pygments_dark_css" media="(prefers-color-scheme: dark)" rel="stylesheet" type="text/css" href="../_static/pygments_dark.css?v=5349f25f" />
     
-    <script src="../_static/documentation_options.js?v=bcfd2f37"></script>
+    <script src="../_static/documentation_options.js?v=a941be6b"></script>
     <script src="../_static/doctools.js?v=9bcbadda"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/translations.js?v=beaddf03"></script>
     
     <script src="../_static/sidebar.js"></script>
     
     <link rel="search" type="application/opensearchdescription+xml"
-          title="Search within Python 3.14.5 documentation"
+          title="在 Python 3.13.13 文档 中搜索"
           href="../_static/opensearch.xml"/>
-    <link rel="author" title="About these documents" href="../about.html" />
-    <link rel="index" title="Index" href="../genindex.html" />
-    <link rel="search" title="Search" href="../search.html" />
-    <link rel="copyright" title="Copyright" href="../copyright.html" />
-    <link rel="next" title="threading — Thread-based parallelism" href="threading.html" />
-    <link rel="prev" title="cmd — Support for line-oriented command interpreters" href="cmd.html" />
+    <link rel="author" title="关于此文档" href="../about.html" />
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="搜索" href="../search.html" />
+    <link rel="copyright" title="版权" href="../copyright.html" />
+    <link rel="next" title="threading --- 基于线程的并行" href="threading.html" />
+    <link rel="prev" title="cmd --- 对面向行的命令解释器的支持" href="cmd.html" />
     
       
       <script defer file-types="bz2,epub,zip" data-domain="docs.python.org" src="https://analytics.python.org/js/script.file-downloads.outbound-links.js"></script>
@@ -68,7 +69,7 @@
 <body>
 <div class="mobile-nav">
     <input type="checkbox" id="menuToggler" class="toggler__input" aria-controls="navigation"
-           aria-pressed="false" aria-expanded="false" role="button" aria-label="Menu">
+           aria-pressed="false" aria-expanded="false" role="button" aria-label="菜单">
     <nav class="nav-content" role="navigation">
         <label for="menuToggler" class="toggler__label">
             <span></span>
@@ -82,8 +83,8 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" class="search-icon">
                     <path fill-rule="nonzero" fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 001.48-5.34c-.47-2.78-2.79-5-5.59-5.34a6.505 6.505 0 00-7.27 7.27c.34 2.8 2.56 5.12 5.34 5.59a6.5 6.5 0 005.34-1.48l.27.28v.79l4.25 4.25c.41.41 1.08.41 1.49 0 .41-.41.41-1.08 0-1.49L15.5 14zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"></path>
                 </svg>
-                <input placeholder="Quick search" aria-label="Quick search" type="search" name="q">
-                <input type="submit" value="Go">
+                <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q">
+                <input type="submit" value="转到">
             </form>
         </span>
     </nav>
@@ -92,46 +93,36 @@
             <div class="language_switcher_placeholder"></div>
             
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label>
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="cmd.html"
-                          title="previous chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">cmd</span></code> — Support for line-oriented command interpreters</a></p>
+                          title="上一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">cmd</span></code> --- 对面向行的命令解释器的支持</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="threading.html"
-                          title="next chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">threading</span></code> — Thread-based parallelism</a></p>
+                          title="下一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">threading</span></code> --- 基于线程的并行</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "library/concurrency.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/library/concurrency.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/library/concurrency.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
@@ -142,20 +133,20 @@
 
   
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             accesskey="I">index</a></li>
+          <a href="../genindex.html" title="总索引"
+             accesskey="I">索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="threading.html" title="threading — Thread-based parallelism"
-             accesskey="N">next</a> |</li>
+          <a href="threading.html" title="threading --- 基于线程的并行"
+             accesskey="N">下一页</a> |</li>
         <li class="right" >
-          <a href="cmd.html" title="cmd — Support for line-oriented command interpreters"
-             accesskey="P">previous</a> |</li>
+          <a href="cmd.html" title="cmd --- 对面向行的命令解释器的支持"
+             accesskey="P">上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -167,29 +158,29 @@
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-          <li class="nav-item nav-item-1"><a href="index.html" accesskey="U">The Python Standard Library</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href="">Concurrent Execution</a></li>
+          <li class="nav-item nav-item-1"><a href="index.html" accesskey="U">Python 标准库</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">并发执行</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
@@ -202,174 +193,151 @@
           <div class="body" role="main">
             
   <section id="concurrent-execution">
-<span id="concurrency"></span><h1>Concurrent Execution<a class="headerlink" href="#concurrent-execution" title="Link to this heading">¶</a></h1>
-<p>The modules described in this chapter provide support for concurrent
-execution of code. The appropriate choice of tool will depend on the
-task to be executed (CPU bound vs IO bound) and preferred style of
-development (event driven cooperative multitasking vs preemptive
-multitasking). Here’s an overview:</p>
+<span id="concurrency"></span><h1 class="translated">并发执行<a class="headerlink" href="#concurrent-execution" title="Link to this heading">¶</a></h1>
+<p class="translated">本章中描述的模块支持并发执行代码。 适当的工具选择取决于要执行的任务（CPU密集型或IO密集型）和偏好的开发风格（事件驱动的协作式多任务或抢占式多任务处理）。 这是一个概述：</p>
 <div class="toctree-wrapper compound">
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="threading.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">threading</span></code> — Thread-based parallelism</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="threading.html#introduction">Introduction</a></li>
-<li class="toctree-l2"><a class="reference internal" href="threading.html#gil-and-performance-considerations">GIL and performance considerations</a></li>
-<li class="toctree-l2"><a class="reference internal" href="threading.html#reference">Reference</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="threading.html#thread-local-data">Thread-local data</a></li>
-<li class="toctree-l3"><a class="reference internal" href="threading.html#thread-objects">Thread objects</a></li>
-<li class="toctree-l3"><a class="reference internal" href="threading.html#lock-objects">Lock objects</a></li>
-<li class="toctree-l3"><a class="reference internal" href="threading.html#rlock-objects">RLock objects</a></li>
-<li class="toctree-l3"><a class="reference internal" href="threading.html#condition-objects">Condition objects</a></li>
-<li class="toctree-l3"><a class="reference internal" href="threading.html#semaphore-objects">Semaphore objects</a></li>
-<li class="toctree-l3"><a class="reference internal" href="threading.html#semaphore-example"><code class="xref py py-class docutils literal notranslate"><span class="pre">Semaphore</span></code> example</a></li>
-<li class="toctree-l3"><a class="reference internal" href="threading.html#event-objects">Event objects</a></li>
-<li class="toctree-l3"><a class="reference internal" href="threading.html#timer-objects">Timer objects</a></li>
-<li class="toctree-l3"><a class="reference internal" href="threading.html#barrier-objects">Barrier objects</a></li>
+<li class="toctree-l1"><a class="reference internal" href="threading.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">threading</span></code> --- 基于线程的并行</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="threading.html#introduction">引言</a></li>
+<li class="toctree-l2"><a class="reference internal" href="threading.html#gil-and-performance-considerations">GIL 和性能的考量</a></li>
+<li class="toctree-l2"><a class="reference internal" href="threading.html#reference">参考</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="threading.html#thread-local-data">线程局部数据</a></li>
+<li class="toctree-l3"><a class="reference internal" href="threading.html#thread-objects">线程对象</a></li>
+<li class="toctree-l3"><a class="reference internal" href="threading.html#lock-objects">锁对象</a></li>
+<li class="toctree-l3"><a class="reference internal" href="threading.html#rlock-objects">RLock 对象</a></li>
+<li class="toctree-l3"><a class="reference internal" href="threading.html#condition-objects">Condition 对象</a></li>
+<li class="toctree-l3"><a class="reference internal" href="threading.html#semaphore-objects">Semaphore 对象</a></li>
+<li class="toctree-l3"><a class="reference internal" href="threading.html#semaphore-example"><code class="xref py py-class docutils literal notranslate"><span class="pre">Semaphore</span></code> 示例</a></li>
+<li class="toctree-l3"><a class="reference internal" href="threading.html#event-objects">Event 对象</a></li>
+<li class="toctree-l3"><a class="reference internal" href="threading.html#timer-objects">Timer 对象</a></li>
+<li class="toctree-l3"><a class="reference internal" href="threading.html#barrier-objects">Barrier 对象</a></li>
 </ul>
 </li>
-<li class="toctree-l2"><a class="reference internal" href="threading.html#using-locks-conditions-and-semaphores-in-the-with-statement">Using locks, conditions, and semaphores in the <code class="xref std std-keyword docutils literal notranslate"><span class="pre">with</span></code> statement</a></li>
+<li class="toctree-l2"><a class="reference internal" href="threading.html#using-locks-conditions-and-semaphores-in-the-with-statement">在 <code class="xref std std-keyword docutils literal notranslate"><span class="pre">with</span></code> 语句中使用锁、条件和信号量</a></li>
 </ul>
 </li>
-<li class="toctree-l1"><a class="reference internal" href="multiprocessing.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">multiprocessing</span></code> — Process-based parallelism</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="multiprocessing.html#introduction">Introduction</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#the-process-class">The <code class="xref py py-class docutils literal notranslate"><span class="pre">Process</span></code> class</a></li>
-<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#contexts-and-start-methods">Contexts and start methods</a></li>
-<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#exchanging-objects-between-processes">Exchanging objects between processes</a></li>
-<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#synchronization-between-processes">Synchronization between processes</a></li>
-<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#sharing-state-between-processes">Sharing state between processes</a></li>
-<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#using-a-pool-of-workers">Using a pool of workers</a></li>
+<li class="toctree-l1"><a class="reference internal" href="multiprocessing.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">multiprocessing</span></code> --- 基于进程的并行</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="multiprocessing.html#introduction">概述</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#the-process-class"><code class="xref py py-class docutils literal notranslate"><span class="pre">Process</span></code> 类</a></li>
+<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#contexts-and-start-methods">上下文和启动方法</a></li>
+<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#exchanging-objects-between-processes">在进程之间交换对象</a></li>
+<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#synchronization-between-processes">进程间同步</a></li>
+<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#sharing-state-between-processes">进程间共享状态</a></li>
+<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#using-a-pool-of-workers">使用工作进程</a></li>
 </ul>
 </li>
-<li class="toctree-l2"><a class="reference internal" href="multiprocessing.html#reference">Reference</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#global-start-method">Global start method</a></li>
-<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#process-and-exceptions"><code class="xref py py-class docutils literal notranslate"><span class="pre">Process</span></code> and exceptions</a></li>
-<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#pipes-and-queues">Pipes and Queues</a></li>
-<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#miscellaneous">Miscellaneous</a></li>
-<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#connection-objects">Connection Objects</a></li>
-<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#synchronization-primitives">Synchronization primitives</a></li>
-<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#shared-ctypes-objects">Shared <code class="xref py py-mod docutils literal notranslate"><span class="pre">ctypes</span></code> Objects</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="multiprocessing.html#module-multiprocessing.sharedctypes">The <code class="xref py py-mod docutils literal notranslate"><span class="pre">multiprocessing.sharedctypes</span></code> module</a></li>
+<li class="toctree-l2"><a class="reference internal" href="multiprocessing.html#reference">参考</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#global-start-method">全局启动方法</a></li>
+<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#process-and-exceptions"><code class="xref py py-class docutils literal notranslate"><span class="pre">Process</span></code> 和异常</a></li>
+<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#pipes-and-queues">管道和队列</a></li>
+<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#miscellaneous">杂项</a></li>
+<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#connection-objects">连接对象（Connection）</a></li>
+<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#synchronization-primitives">同步原语</a></li>
+<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#shared-ctypes-objects">共享 <code class="xref py py-mod docutils literal notranslate"><span class="pre">ctypes</span></code> 对象</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="multiprocessing.html#module-multiprocessing.sharedctypes"><code class="xref py py-mod docutils literal notranslate"><span class="pre">multiprocessing.sharedctypes</span></code> 模块</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#managers">Managers</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="multiprocessing.html#customized-managers">Customized managers</a></li>
-<li class="toctree-l4"><a class="reference internal" href="multiprocessing.html#using-a-remote-manager">Using a remote manager</a></li>
+<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#managers">管理器</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="multiprocessing.html#customized-managers">自定义管理器</a></li>
+<li class="toctree-l4"><a class="reference internal" href="multiprocessing.html#using-a-remote-manager">使用远程管理器</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#proxy-objects">Proxy Objects</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="multiprocessing.html#cleanup">Cleanup</a></li>
+<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#proxy-objects">代理对象</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="multiprocessing.html#cleanup">清理</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#module-multiprocessing.pool">Process Pools</a></li>
-<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#module-multiprocessing.connection">Listeners and Clients</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="multiprocessing.html#address-formats">Address Formats</a></li>
+<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#module-multiprocessing.pool">进程池</a></li>
+<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#module-multiprocessing.connection">监听器及客户端</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="multiprocessing.html#address-formats">地址格式</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#authentication-keys">Authentication keys</a></li>
-<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#logging">Logging</a></li>
-<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#module-multiprocessing.dummy">The <code class="xref py py-mod docutils literal notranslate"><span class="pre">multiprocessing.dummy</span></code> module</a></li>
+<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#authentication-keys">认证密码</a></li>
+<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#logging">日志记录</a></li>
+<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#module-multiprocessing.dummy"><code class="xref py py-mod docutils literal notranslate"><span class="pre">multiprocessing.dummy</span></code> 模块</a></li>
 </ul>
 </li>
-<li class="toctree-l2"><a class="reference internal" href="multiprocessing.html#programming-guidelines">Programming guidelines</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#all-start-methods">All start methods</a></li>
-<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#the-spawn-and-forkserver-start-methods">The <em>spawn</em> and <em>forkserver</em> start methods</a></li>
+<li class="toctree-l2"><a class="reference internal" href="multiprocessing.html#programming-guidelines">编程指导</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#all-start-methods">所有start方法</a></li>
+<li class="toctree-l3"><a class="reference internal" href="multiprocessing.html#the-spawn-and-forkserver-start-methods"><em>spawn</em> 和 <em>forkserver</em> 启动方式</a></li>
 </ul>
 </li>
-<li class="toctree-l2"><a class="reference internal" href="multiprocessing.html#examples">Examples</a></li>
+<li class="toctree-l2"><a class="reference internal" href="multiprocessing.html#examples">例子</a></li>
 </ul>
 </li>
-<li class="toctree-l1"><a class="reference internal" href="multiprocessing.shared_memory.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">multiprocessing.shared_memory</span></code> — Shared memory for direct access across processes</a></li>
-<li class="toctree-l1"><a class="reference internal" href="concurrent.html">The <code class="xref py py-mod docutils literal notranslate"><span class="pre">concurrent</span></code> package</a></li>
-<li class="toctree-l1"><a class="reference internal" href="concurrent.futures.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">concurrent.futures</span></code> — Launching parallel tasks</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="concurrent.futures.html#executor-objects">Executor Objects</a></li>
+<li class="toctree-l1"><a class="reference internal" href="multiprocessing.shared_memory.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">multiprocessing.shared_memory</span></code> --- 可跨进程直接访问的共享内存</a></li>
+<li class="toctree-l1"><a class="reference internal" href="concurrent.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">concurrent</span></code> 包</a></li>
+<li class="toctree-l1"><a class="reference internal" href="concurrent.futures.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">concurrent.futures</span></code> --- 启动并行任务</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="concurrent.futures.html#executor-objects">Executor 对象</a></li>
 <li class="toctree-l2"><a class="reference internal" href="concurrent.futures.html#threadpoolexecutor">ThreadPoolExecutor</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="concurrent.futures.html#threadpoolexecutor-example">ThreadPoolExecutor Example</a></li>
+<li class="toctree-l3"><a class="reference internal" href="concurrent.futures.html#threadpoolexecutor-example">ThreadPoolExecutor 例子</a></li>
 </ul>
 </li>
-<li class="toctree-l2"><a class="reference internal" href="concurrent.futures.html#interpreterpoolexecutor">InterpreterPoolExecutor</a></li>
 <li class="toctree-l2"><a class="reference internal" href="concurrent.futures.html#processpoolexecutor">ProcessPoolExecutor</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="concurrent.futures.html#processpoolexecutor-example">ProcessPoolExecutor Example</a></li>
+<li class="toctree-l3"><a class="reference internal" href="concurrent.futures.html#processpoolexecutor-example">ProcessPoolExecutor 例子</a></li>
 </ul>
 </li>
-<li class="toctree-l2"><a class="reference internal" href="concurrent.futures.html#future-objects">Future Objects</a></li>
-<li class="toctree-l2"><a class="reference internal" href="concurrent.futures.html#module-functions">Module Functions</a></li>
-<li class="toctree-l2"><a class="reference internal" href="concurrent.futures.html#exception-classes">Exception classes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="concurrent.futures.html#future-objects">Future 对象</a></li>
+<li class="toctree-l2"><a class="reference internal" href="concurrent.futures.html#module-functions">模块函数</a></li>
+<li class="toctree-l2"><a class="reference internal" href="concurrent.futures.html#exception-classes">Exception 类</a></li>
 </ul>
 </li>
-<li class="toctree-l1"><a class="reference internal" href="concurrent.interpreters.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">concurrent.interpreters</span></code> — Multiple interpreters in the same process</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="concurrent.interpreters.html#key-details">Key details</a></li>
-<li class="toctree-l2"><a class="reference internal" href="concurrent.interpreters.html#introduction">Introduction</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="concurrent.interpreters.html#multiple-interpreters-and-isolation">Multiple Interpreters and Isolation</a></li>
-<li class="toctree-l3"><a class="reference internal" href="concurrent.interpreters.html#running-in-an-interpreter">Running in an Interpreter</a></li>
-<li class="toctree-l3"><a class="reference internal" href="concurrent.interpreters.html#concurrency-and-parallelism">Concurrency and Parallelism</a></li>
-<li class="toctree-l3"><a class="reference internal" href="concurrent.interpreters.html#communication-between-interpreters">Communication Between Interpreters</a></li>
-<li class="toctree-l3"><a class="reference internal" href="concurrent.interpreters.html#sharing-objects">“Sharing” Objects</a></li>
+<li class="toctree-l1"><a class="reference internal" href="subprocess.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">subprocess</span></code> --- 子进程管理</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="subprocess.html#using-the-subprocess-module">使用 <code class="xref py py-mod docutils literal notranslate"><span class="pre">subprocess</span></code> 模块</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="subprocess.html#frequently-used-arguments">常用参数</a></li>
+<li class="toctree-l3"><a class="reference internal" href="subprocess.html#popen-constructor">Popen 构造函数</a></li>
+<li class="toctree-l3"><a class="reference internal" href="subprocess.html#exceptions">异常</a></li>
 </ul>
 </li>
-<li class="toctree-l2"><a class="reference internal" href="concurrent.interpreters.html#reference">Reference</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="concurrent.interpreters.html#interpreter-objects">Interpreter objects</a></li>
-<li class="toctree-l3"><a class="reference internal" href="concurrent.interpreters.html#exceptions">Exceptions</a></li>
-<li class="toctree-l3"><a class="reference internal" href="concurrent.interpreters.html#communicating-between-interpreters">Communicating Between Interpreters</a></li>
+<li class="toctree-l2"><a class="reference internal" href="subprocess.html#security-considerations">安全考量</a></li>
+<li class="toctree-l2"><a class="reference internal" href="subprocess.html#popen-objects">Popen 对象</a></li>
+<li class="toctree-l2"><a class="reference internal" href="subprocess.html#windows-popen-helpers">Windows Popen 助手</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="subprocess.html#windows-constants">Windows 常数</a></li>
 </ul>
 </li>
-<li class="toctree-l2"><a class="reference internal" href="concurrent.interpreters.html#basic-usage">Basic usage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="subprocess.html#older-high-level-api">较旧的高阶 API</a></li>
+<li class="toctree-l2"><a class="reference internal" href="subprocess.html#replacing-older-functions-with-the-subprocess-module">使用 <code class="xref py py-mod docutils literal notranslate"><span class="pre">subprocess</span></code> 模块替换旧函数</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="subprocess.html#replacing-bin-sh-shell-command-substitution">替代 <strong class="program">/bin/sh</strong> shell 命令替换</a></li>
+<li class="toctree-l3"><a class="reference internal" href="subprocess.html#replacing-shell-pipeline">替代 shell 管道</a></li>
+<li class="toctree-l3"><a class="reference internal" href="subprocess.html#replacing-os-system">替代 <code class="xref py py-func docutils literal notranslate"><span class="pre">os.system()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="subprocess.html#replacing-the-os-spawn-family">替代 <code class="xref py py-func docutils literal notranslate"><span class="pre">os.spawn</span></code> 函数族</a></li>
+<li class="toctree-l3"><a class="reference internal" href="subprocess.html#replacing-os-popen-os-popen2-os-popen3">替代 <code class="xref py py-func docutils literal notranslate"><span class="pre">os.popen()</span></code>, <code class="xref py py-func docutils literal notranslate"><span class="pre">os.popen2()</span></code>, <code class="xref py py-func docutils literal notranslate"><span class="pre">os.popen3()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="subprocess.html#replacing-functions-from-the-popen2-module">替换来自 <code class="xref py py-mod docutils literal notranslate"><span class="pre">popen2</span></code> 模块的函数</a></li>
 </ul>
 </li>
-<li class="toctree-l1"><a class="reference internal" href="subprocess.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">subprocess</span></code> — Subprocess management</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="subprocess.html#using-the-subprocess-module">Using the <code class="xref py py-mod docutils literal notranslate"><span class="pre">subprocess</span></code> Module</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="subprocess.html#frequently-used-arguments">Frequently Used Arguments</a></li>
-<li class="toctree-l3"><a class="reference internal" href="subprocess.html#popen-constructor">Popen Constructor</a></li>
-<li class="toctree-l3"><a class="reference internal" href="subprocess.html#exceptions">Exceptions</a></li>
-</ul>
-</li>
-<li class="toctree-l2"><a class="reference internal" href="subprocess.html#security-considerations">Security Considerations</a></li>
-<li class="toctree-l2"><a class="reference internal" href="subprocess.html#popen-objects">Popen Objects</a></li>
-<li class="toctree-l2"><a class="reference internal" href="subprocess.html#windows-popen-helpers">Windows Popen Helpers</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="subprocess.html#windows-constants">Windows Constants</a></li>
-</ul>
-</li>
-<li class="toctree-l2"><a class="reference internal" href="subprocess.html#older-high-level-api">Older high-level API</a></li>
-<li class="toctree-l2"><a class="reference internal" href="subprocess.html#replacing-older-functions-with-the-subprocess-module">Replacing Older Functions with the <code class="xref py py-mod docutils literal notranslate"><span class="pre">subprocess</span></code> Module</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="subprocess.html#replacing-bin-sh-shell-command-substitution">Replacing <strong class="program">/bin/sh</strong> shell command substitution</a></li>
-<li class="toctree-l3"><a class="reference internal" href="subprocess.html#replacing-shell-pipeline">Replacing shell pipeline</a></li>
-<li class="toctree-l3"><a class="reference internal" href="subprocess.html#replacing-os-system">Replacing <code class="xref py py-func docutils literal notranslate"><span class="pre">os.system()</span></code></a></li>
-<li class="toctree-l3"><a class="reference internal" href="subprocess.html#replacing-the-os-spawn-family">Replacing the <code class="xref py py-func docutils literal notranslate"><span class="pre">os.spawn</span></code> family</a></li>
-<li class="toctree-l3"><a class="reference internal" href="subprocess.html#replacing-os-popen">Replacing <code class="xref py py-func docutils literal notranslate"><span class="pre">os.popen()</span></code></a></li>
-</ul>
-</li>
-<li class="toctree-l2"><a class="reference internal" href="subprocess.html#legacy-shell-invocation-functions">Legacy Shell Invocation Functions</a></li>
-<li class="toctree-l2"><a class="reference internal" href="subprocess.html#notes">Notes</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="subprocess.html#timeout-behavior">Timeout Behavior</a></li>
-<li class="toctree-l3"><a class="reference internal" href="subprocess.html#converting-an-argument-sequence-to-a-string-on-windows">Converting an argument sequence to a string on Windows</a></li>
-<li class="toctree-l3"><a class="reference internal" href="subprocess.html#disable-use-of-posix-spawn">Disable use of <code class="docutils literal notranslate"><span class="pre">posix_spawn()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="subprocess.html#legacy-shell-invocation-functions">旧式的 Shell 发起函数</a></li>
+<li class="toctree-l2"><a class="reference internal" href="subprocess.html#notes">备注</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="subprocess.html#timeout-behavior">超时行为</a></li>
+<li class="toctree-l3"><a class="reference internal" href="subprocess.html#converting-an-argument-sequence-to-a-string-on-windows">在 Windows 上将参数列表转换为一个字符串</a></li>
+<li class="toctree-l3"><a class="reference internal" href="subprocess.html#disabling-use-of-vfork-or-posix-spawn">禁用 <code class="docutils literal notranslate"><span class="pre">vfork()</span></code> 或 <code class="docutils literal notranslate"><span class="pre">posix_spawn()</span></code></a></li>
 </ul>
 </li>
 </ul>
 </li>
-<li class="toctree-l1"><a class="reference internal" href="sched.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">sched</span></code> — Event scheduler</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="sched.html#scheduler-objects">Scheduler Objects</a></li>
+<li class="toctree-l1"><a class="reference internal" href="sched.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">sched</span></code> --- 事件调度器</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="sched.html#scheduler-objects">调度器对象</a></li>
 </ul>
 </li>
-<li class="toctree-l1"><a class="reference internal" href="queue.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">queue</span></code> — A synchronized queue class</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="queue.html#queue-objects">Queue Objects</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="queue.html#waiting-for-task-completion">Waiting for task completion</a></li>
-<li class="toctree-l3"><a class="reference internal" href="queue.html#terminating-queues">Terminating queues</a></li>
+<li class="toctree-l1"><a class="reference internal" href="queue.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">queue</span></code> --- 同步队列类</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="queue.html#queue-objects">Queue对象</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="queue.html#waiting-for-task-completion">等待任务完成</a></li>
+<li class="toctree-l3"><a class="reference internal" href="queue.html#terminating-queues">终结队列</a></li>
 </ul>
 </li>
-<li class="toctree-l2"><a class="reference internal" href="queue.html#simplequeue-objects">SimpleQueue Objects</a></li>
+<li class="toctree-l2"><a class="reference internal" href="queue.html#simplequeue-objects">SimpleQueue 对象</a></li>
 </ul>
 </li>
-<li class="toctree-l1"><a class="reference internal" href="contextvars.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">contextvars</span></code> — Context Variables</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="contextvars.html#context-variables">Context Variables</a></li>
-<li class="toctree-l2"><a class="reference internal" href="contextvars.html#manual-context-management">Manual Context Management</a></li>
-<li class="toctree-l2"><a class="reference internal" href="contextvars.html#asyncio-support">asyncio support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="contextvars.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">contextvars</span></code> --- 上下文变量</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="contextvars.html#context-variables">上下文变量</a></li>
+<li class="toctree-l2"><a class="reference internal" href="contextvars.html#manual-context-management">手动上下文管理</a></li>
+<li class="toctree-l2"><a class="reference internal" href="contextvars.html#asyncio-support">asyncio 支持</a></li>
 </ul>
 </li>
 </ul>
 </div>
-<p>The following are support modules for some of the above services:</p>
+<p class="translated">以下是上述某些服务的支持模块：</p>
 <div class="toctree-wrapper compound">
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="_thread.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">_thread</span></code> — Low-level threading API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="_thread.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">_thread</span></code> --- 低层级多线程 API</a></li>
 </ul>
 </div>
 </section>
@@ -382,44 +350,34 @@ multitasking). Here’s an overview:</p>
       <div class="sphinxsidebar" role="navigation" aria-label="Main">
         <div class="sphinxsidebarwrapper">
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="cmd.html"
-                          title="previous chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">cmd</span></code> — Support for line-oriented command interpreters</a></p>
+                          title="上一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">cmd</span></code> --- 对面向行的命令解释器的支持</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="threading.html"
-                          title="next chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">threading</span></code> — Thread-based parallelism</a></p>
+                          title="下一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">threading</span></code> --- 基于线程的并行</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "library/concurrency.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/library/concurrency.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/library/concurrency.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
   </div>
         </div>
-<div id="sidebarbutton" title="Collapse sidebar">
+<div id="sidebarbutton" title="折叠边栏">
 <span>«</span>
 </div>
 
@@ -427,20 +385,20 @@ multitasking). Here’s an overview:</p>
       <div class="clearer"></div>
     </div>  
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             >index</a></li>
+          <a href="../genindex.html" title="总索引"
+             >索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="threading.html" title="threading — Thread-based parallelism"
-             >next</a> |</li>
+          <a href="threading.html" title="threading --- 基于线程的并行"
+             >下一页</a> |</li>
         <li class="right" >
-          <a href="cmd.html" title="cmd — Support for line-oriented command interpreters"
-             >previous</a> |</li>
+          <a href="cmd.html" title="cmd --- 对面向行的命令解释器的支持"
+             >上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -452,58 +410,58 @@ multitasking). Here’s an overview:</p>
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-          <li class="nav-item nav-item-1"><a href="index.html" >The Python Standard Library</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href="">Concurrent Execution</a></li>
+          <li class="nav-item nav-item-1"><a href="index.html" >Python 标准库</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">并发执行</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
       </ul>
     </div>  
     <div class="footer">
-    &copy; <a href="../copyright.html">Copyright</a> 2001 Python Software Foundation.
+    &copy; <a href="../copyright.html">版权</a> 2001-2026, Python Software Foundation.
     <br>
-    This page is licensed under the Python Software Foundation License Version 2.
+    本页面采用 Python 软件基金会许可证第 2 版授权。
     <br>
-    Examples, recipes, and other code in the documentation are additionally licensed under the Zero Clause BSD License.
+    文档中的示例、代码片段及其他代码内容额外采用零条款 BSD 许可证授权。
     <br>
     
-      See <a href="/license.html">History and License</a> for more information.<br>
+      更多信息请参阅《<a href="/license.html"> 历史与许可 </a>》。<br>
     
     
     <br>
 
-    The Python Software Foundation is a non-profit corporation.
-<a href="https://www.python.org/psf/donations/">Please donate.</a>
+    Python 软件基金会是一家非营利性公司。
+<a href="https://www.python.org/psf/donations/">请进行捐赠。</a>
 <br>
     <br>
-      Last updated on May 27, 2026 (10:52 UTC).
+      最后更新于5月 25, 2026 (11:48 UTC) 。
     
-      <a href="/bugs.html">Found a bug</a>?
+      <a href="/bugs.html">发现了错误</a>？
     
     <br>
 
-    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3.
+    使用<a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3 创建。
     </div>
 
   </body>

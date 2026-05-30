@@ -1,44 +1,45 @@
 <!DOCTYPE html>
 
-<html lang="en" data-content_root="../">
+<html lang="zh-CN" data-content_root="../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta property="og:title" content="email.encoders: Encoders" />
+<meta property="og:title" content="email.encoders: 编码器" />
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://docs.python.org/3/library/email.encoders.html" />
 <meta property="og:site_name" content="Python documentation" />
-<meta property="og:description" content="Source code: Lib/email/encoders.py This module is part of the legacy ( Compat32) email API. In the new API the functionality is provided by the cte parameter of the set_content() method. This modul..." />
+<meta property="og:description" content="源代码: Lib/email/encoders.py 此模块是旧版 ( Compat32) email API 的组成部分。 在新版 API 中将由 set_content() 方法的 cte 形参提供该功能。 此模块在 Python 3 中已弃用。 这里提供的函数不应被显式地调用，因为 MIMEText 类会在类实例化期间使用_subtype 和_charset 值来设置内容类型和 CTE..." />
 <meta property="og:image:width" content="1146" />
 <meta property="og:image:height" content="600" />
-<meta property="og:image" content="https://docs.python.org/3.14/_images/social_previews/summary_library_email.encoders_6e74c6a3.png" />
-<meta property="og:image:alt" content="Source code: Lib/email/encoders.py This module is part of the legacy ( Compat32) email API. In the new API the functionality is provided by the cte parameter of the set_content() method. This modul..." />
-<meta name="description" content="Source code: Lib/email/encoders.py This module is part of the legacy ( Compat32) email API. In the new API the functionality is provided by the cte parameter of the set_content() method. This modul..." />
+<meta property="og:image" content="https://docs.python.org/3.13/zh-cn/_images/social_previews/summary_library_email.encoders_f78f97b5.png" />
+<meta property="og:image:alt" content="源代码: Lib/email/encoders.py 此模块是旧版 ( Compat32) email API 的组成部分。 在新版 API 中将由 set_content() 方法的 cte 形参提供该功能。 此模块在 Python 3 中已弃用。 这里提供的函数不应被显式地调用，因为 MIMEText 类会在类实例化期间使用_subtype 和_charset 值来设置内容类型和 CTE..." />
+<meta name="description" content="源代码: Lib/email/encoders.py 此模块是旧版 ( Compat32) email API 的组成部分。 在新版 API 中将由 set_content() 方法的 cte 形参提供该功能。 此模块在 Python 3 中已弃用。 这里提供的函数不应被显式地调用，因为 MIMEText 类会在类实例化期间使用_subtype 和_charset 值来设置内容类型和 CTE..." />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="theme-color" content="#3776ab">
 
-    <title>email.encoders: Encoders &#8212; Python 3.14.5 documentation</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>email.encoders: 编码器 &#8212; Python 3.13.13 文档</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
     
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
     <link rel="stylesheet" type="text/css" href="../_static/classic.css?v=234b1a7c" />
     <link rel="stylesheet" type="text/css" href="../_static/pydoctheme.css?v=4365c8fe" />
     <link id="pygments_dark_css" media="(prefers-color-scheme: dark)" rel="stylesheet" type="text/css" href="../_static/pygments_dark.css?v=5349f25f" />
     
-    <script src="../_static/documentation_options.js?v=bcfd2f37"></script>
+    <script src="../_static/documentation_options.js?v=a941be6b"></script>
     <script src="../_static/doctools.js?v=9bcbadda"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/translations.js?v=beaddf03"></script>
     
     <script src="../_static/sidebar.js"></script>
     
     <link rel="search" type="application/opensearchdescription+xml"
-          title="Search within Python 3.14.5 documentation"
+          title="在 Python 3.13.13 文档 中搜索"
           href="../_static/opensearch.xml"/>
-    <link rel="author" title="About these documents" href="../about.html" />
-    <link rel="index" title="Index" href="../genindex.html" />
-    <link rel="search" title="Search" href="../search.html" />
-    <link rel="copyright" title="Copyright" href="../copyright.html" />
-    <link rel="next" title="email.utils: Miscellaneous utilities" href="email.utils.html" />
-    <link rel="prev" title="email.charset: Representing character sets" href="email.charset.html" />
+    <link rel="author" title="关于此文档" href="../about.html" />
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="搜索" href="../search.html" />
+    <link rel="copyright" title="版权" href="../copyright.html" />
+    <link rel="next" title="email.utils: 杂项工具" href="email.utils.html" />
+    <link rel="prev" title="email.charset: 表示字符集" href="email.charset.html" />
     
       
       <script defer file-types="bz2,epub,zip" data-domain="docs.python.org" src="https://analytics.python.org/js/script.file-downloads.outbound-links.js"></script>
@@ -68,7 +69,7 @@
 <body>
 <div class="mobile-nav">
     <input type="checkbox" id="menuToggler" class="toggler__input" aria-controls="navigation"
-           aria-pressed="false" aria-expanded="false" role="button" aria-label="Menu">
+           aria-pressed="false" aria-expanded="false" role="button" aria-label="菜单">
     <nav class="nav-content" role="navigation">
         <label for="menuToggler" class="toggler__label">
             <span></span>
@@ -82,8 +83,8 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" class="search-icon">
                     <path fill-rule="nonzero" fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 001.48-5.34c-.47-2.78-2.79-5-5.59-5.34a6.505 6.505 0 00-7.27 7.27c.34 2.8 2.56 5.12 5.34 5.59a6.5 6.5 0 005.34-1.48l.27.28v.79l4.25 4.25c.41.41 1.08.41 1.49 0 .41-.41.41-1.08 0-1.49L15.5 14zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"></path>
                 </svg>
-                <input placeholder="Quick search" aria-label="Quick search" type="search" name="q">
-                <input type="submit" value="Go">
+                <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q">
+                <input type="submit" value="转到">
             </form>
         </span>
     </nav>
@@ -92,46 +93,36 @@
             <div class="language_switcher_placeholder"></div>
             
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label>
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="email.charset.html"
-                          title="previous chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">email.charset</span></code>: Representing character sets</a></p>
+                          title="上一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">email.charset</span></code>: 表示字符集</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="email.utils.html"
-                          title="next chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">email.utils</span></code>: Miscellaneous utilities</a></p>
+                          title="下一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">email.utils</span></code>: 杂项工具</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "library/email.encoders.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/library/email.encoders.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/library/email.encoders.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
@@ -142,20 +133,20 @@
 
   
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             accesskey="I">index</a></li>
+          <a href="../genindex.html" title="总索引"
+             accesskey="I">索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="email.utils.html" title="email.utils: Miscellaneous utilities"
-             accesskey="N">next</a> |</li>
+          <a href="email.utils.html" title="email.utils: 杂项工具"
+             accesskey="N">下一页</a> |</li>
         <li class="right" >
-          <a href="email.charset.html" title="email.charset: Representing character sets"
-             accesskey="P">previous</a> |</li>
+          <a href="email.charset.html" title="email.charset: 表示字符集"
+             accesskey="P">上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -167,31 +158,31 @@
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-          <li class="nav-item nav-item-1"><a href="index.html" >The Python Standard Library</a> &#187;</li>
-          <li class="nav-item nav-item-2"><a href="netdata.html" >Internet Data Handling</a> &#187;</li>
-          <li class="nav-item nav-item-3"><a href="email.html" accesskey="U"><code class="xref py py-mod docutils literal notranslate"><span class="pre">email</span></code> — An email and MIME handling package</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">email.encoders</span></code>: Encoders</a></li>
+          <li class="nav-item nav-item-1"><a href="index.html" >Python 标准库</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="netdata.html" >互联网数据处理</a> &#187;</li>
+          <li class="nav-item nav-item-3"><a href="email.html" accesskey="U"><code class="xref py py-mod docutils literal notranslate"><span class="pre">email</span></code> --- 电子邮件与 MIME 处理包</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">email.encoders</span></code>: 编码器</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
@@ -204,72 +195,45 @@
           <div class="body" role="main">
             
   <section id="module-email.encoders">
-<span id="email-encoders-encoders"></span><h1><code class="xref py py-mod docutils literal notranslate"><span class="pre">email.encoders</span></code>: Encoders<a class="headerlink" href="#module-email.encoders" title="Link to this heading">¶</a></h1>
-<p><strong>Source code:</strong> <a class="extlink-source reference external" href="https://github.com/python/cpython/tree/3.14/Lib/email/encoders.py">Lib/email/encoders.py</a></p>
+<span id="email-encoders-encoders"></span><h1 class="translated"><code class="xref py py-mod docutils literal notranslate"><span class="pre">email.encoders</span></code>: 编码器<a class="headerlink" href="#module-email.encoders" title="Link to this heading">¶</a></h1>
+<p class="translated"><strong>源代码:</strong> <a class="extlink-source reference external" href="https://github.com/python/cpython/tree/3.13/Lib/email/encoders.py">Lib/email/encoders.py</a></p>
 <hr class="docutils" />
-<p>This module is part of the legacy (<code class="docutils literal notranslate"><span class="pre">Compat32</span></code>) email API.  In the
-new API the functionality is provided by the <em>cte</em> parameter of
-the <a class="reference internal" href="email.message.html#email.message.EmailMessage.set_content" title="email.message.EmailMessage.set_content"><code class="xref py py-meth docutils literal notranslate"><span class="pre">set_content()</span></code></a> method.</p>
-<p>This module is deprecated in Python 3.  The functions provided here
-should not be called explicitly since the <a class="reference internal" href="email.mime.html#email.mime.text.MIMEText" title="email.mime.text.MIMEText"><code class="xref py py-class docutils literal notranslate"><span class="pre">MIMEText</span></code></a>
-class sets the content type and CTE header using the <em>_subtype</em> and <em>_charset</em>
-values passed during the instantiation of that class.</p>
-<p>The remaining text in this section is the original documentation of the module.</p>
-<p>When creating <a class="reference internal" href="email.compat32-message.html#email.message.Message" title="email.message.Message"><code class="xref py py-class docutils literal notranslate"><span class="pre">Message</span></code></a> objects from scratch, you often
-need to encode the payloads for transport through compliant mail servers. This
-is especially true for <em class="mimetype">image/*</em> and <em class="mimetype">text/*</em> type messages
-containing binary data.</p>
-<p>The <a class="reference internal" href="email.html#module-email" title="email: Package supporting the parsing, manipulating, and generating email messages."><code class="xref py py-mod docutils literal notranslate"><span class="pre">email</span></code></a> package provides some convenient encoders in its
-<code class="xref py py-mod docutils literal notranslate"><span class="pre">encoders</span></code> module.  These encoders are actually used by the
-<a class="reference internal" href="email.mime.html#email.mime.audio.MIMEAudio" title="email.mime.audio.MIMEAudio"><code class="xref py py-class docutils literal notranslate"><span class="pre">MIMEAudio</span></code></a> and <a class="reference internal" href="email.mime.html#email.mime.image.MIMEImage" title="email.mime.image.MIMEImage"><code class="xref py py-class docutils literal notranslate"><span class="pre">MIMEImage</span></code></a>
-class constructors to provide default encodings.  All encoder functions take
-exactly one argument, the message object to encode.  They usually extract the
-payload, encode it, and reset the payload to this newly encoded value.  They
-should also set the <em class="mailheader">Content-Transfer-Encoding</em> header as appropriate.</p>
-<p>Note that these functions are not meaningful for a multipart message.  They
-must be applied to individual subparts instead, and will raise a
-<a class="reference internal" href="exceptions.html#TypeError" title="TypeError"><code class="xref py py-exc docutils literal notranslate"><span class="pre">TypeError</span></code></a> if passed a message whose type is multipart.</p>
-<p>Here are the encoding functions provided:</p>
+<p class="translated">此模块是旧版 (<code class="docutils literal notranslate"><span class="pre">Compat32</span></code>) email API 的组成部分。 在新版 API 中将由 <a class="reference internal" href="email.message.html#email.message.EmailMessage.set_content" title="email.message.EmailMessage.set_content"><code class="xref py py-meth docutils literal notranslate"><span class="pre">set_content()</span></code></a> 方法的 <em>cte</em> 形参提供该功能。</p>
+<p class="translated">此模块在 Python 3 中已弃用。 这里提供的函数不应被显式地调用，因为 <a class="reference internal" href="email.mime.html#email.mime.text.MIMEText" title="email.mime.text.MIMEText"><code class="xref py py-class docutils literal notranslate"><span class="pre">MIMEText</span></code></a> 类会在类实例化期间使用 <em>_subtype</em> 和 <em>_charset</em> 值来设置内容类型和 CTE 标头。</p>
+<p class="translated">本节中的其余文本是此模块的原始文档。</p>
+<p class="translated">当创建全新的 <a class="reference internal" href="email.compat32-message.html#email.message.Message" title="email.message.Message"><code class="xref py py-class docutils literal notranslate"><span class="pre">Message</span></code></a> 对象时，你经常需要对载荷编码以便通过兼容的邮件服务器进行传输。 对于包含二进制数据的 <em class="mimetype">image/*</em> 和 <em class="mimetype">text/*</em> 类型的消息来说尤其如此。</p>
+<p class="translated"><a class="reference internal" href="email.html#module-email" title="email: Package supporting the parsing, manipulating, and generating email messages."><code class="xref py py-mod docutils literal notranslate"><span class="pre">email</span></code></a> 包在其 <code class="xref py py-mod docutils literal notranslate"><span class="pre">encoders</span></code> 模块中提供了一些方便的编码器。 这些编码器实际上由 <a class="reference internal" href="email.mime.html#email.mime.audio.MIMEAudio" title="email.mime.audio.MIMEAudio"><code class="xref py py-class docutils literal notranslate"><span class="pre">MIMEAudio</span></code></a> 和 <a class="reference internal" href="email.mime.html#email.mime.image.MIMEImage" title="email.mime.image.MIMEImage"><code class="xref py py-class docutils literal notranslate"><span class="pre">MIMEImage</span></code></a> 类构造器使用以提供默认编码格式。 所有编码器函数都只接受一个参数，即要编码的消息对象。 它们通常会提取有效截荷，对其进行编码，并将载荷重置为新近编码的值。 它们还应当相应地设置 <em class="mailheader">Content-Transfer-Encoding</em> 标头。</p>
+<p class="translated">请注意，这些函数对于多段消息没有意义。 它们必须应用到各个单独的段上面，而不是整体。如果直接传递一个多段类型的消息，会产生一个 <a class="reference internal" href="exceptions.html#TypeError" title="TypeError"><code class="xref py py-exc docutils literal notranslate"><span class="pre">TypeError</span></code></a> 错误。</p>
+<p class="translated">下面是提供的编码函数：</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="email.encoders.encode_quopri">
 <span class="sig-prename descclassname"><span class="pre">email.encoders.</span></span><span class="sig-name descname"><span class="pre">encode_quopri</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">msg</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#email.encoders.encode_quopri" title="Link to this definition">¶</a></dt>
-<dd><p>Encodes the payload into quoted-printable form and sets the
-<em class="mailheader">Content-Transfer-Encoding</em> header to <code class="docutils literal notranslate"><span class="pre">quoted-printable</span></code> <a class="footnote-reference brackets" href="#id2" id="id1" role="doc-noteref"><span class="fn-bracket">[</span>1<span class="fn-bracket">]</span></a>.
-This is a good encoding to use when most of your payload is normal printable
-data, but contains a few unprintable characters.</p>
+<dd><p class="translated">将有效数据编码为经转换的可打印形式，并将 <em class="mailheader">Content-Transfer-Encoding</em> 标头设置为 <code class="docutils literal notranslate"><span class="pre">quoted-printable</span></code> <a class="footnote-reference brackets" href="#id2" id="id1" role="doc-noteref"><span class="fn-bracket">[</span>1<span class="fn-bracket">]</span></a>。 当大多数实际的数据是普通的可打印数据但包含少量不可打印的字符时，这是一个很好的编码。</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="email.encoders.encode_base64">
 <span class="sig-prename descclassname"><span class="pre">email.encoders.</span></span><span class="sig-name descname"><span class="pre">encode_base64</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">msg</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#email.encoders.encode_base64" title="Link to this definition">¶</a></dt>
-<dd><p>Encodes the payload into base64 form and sets the
-<em class="mailheader">Content-Transfer-Encoding</em> header to <code class="docutils literal notranslate"><span class="pre">base64</span></code>.  This is a good
-encoding to use when most of your payload is unprintable data since it is a more
-compact form than quoted-printable.  The drawback of base64 encoding is that it
-renders the text non-human readable.</p>
+<dd><p class="translated">将有效载荷编码为 base64 形式，并将 <em class="mailheader">Content-Transfer-Encoding</em> 标头设为 <code class="docutils literal notranslate"><span class="pre">base64</span></code>。 当你的载荷主要包含不可打印数据时这是一种很好用的编码格式，因为它比 quoted-printable 更紧凑。 base64 编码格式的缺点是它会使文本变成人类不可读的形式。</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="email.encoders.encode_7or8bit">
 <span class="sig-prename descclassname"><span class="pre">email.encoders.</span></span><span class="sig-name descname"><span class="pre">encode_7or8bit</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">msg</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#email.encoders.encode_7or8bit" title="Link to this definition">¶</a></dt>
-<dd><p>This doesn’t actually modify the message’s payload, but it does set the
-<em class="mailheader">Content-Transfer-Encoding</em> header to either <code class="docutils literal notranslate"><span class="pre">7bit</span></code> or <code class="docutils literal notranslate"><span class="pre">8bit</span></code> as
-appropriate, based on the payload data.</p>
+<dd><p class="translated">此函数并不实际改变消息的有效载荷，但它会基于载荷数据将 <em class="mailheader">Content-Transfer-Encoding</em> 标头相应地设为 <code class="docutils literal notranslate"><span class="pre">7bit</span></code> 或 <code class="docutils literal notranslate"><span class="pre">8bit</span></code>。</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="email.encoders.encode_noop">
 <span class="sig-prename descclassname"><span class="pre">email.encoders.</span></span><span class="sig-name descname"><span class="pre">encode_noop</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">msg</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#email.encoders.encode_noop" title="Link to this definition">¶</a></dt>
-<dd><p>This does nothing; it doesn’t even set the
-<em class="mailheader">Content-Transfer-Encoding</em> header.</p>
+<dd><p class="translated">此函数什么都不会做；它甚至不会设置 <em class="mailheader">Content-Transfer-Encoding</em> 标头。</p>
 </dd></dl>
 
-<p class="rubric">Footnotes</p>
+<p class="translated rubric">备注</p>
 <aside class="footnote-list brackets">
 <aside class="footnote brackets" id="id2" role="doc-footnote">
 <span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id1">1</a><span class="fn-bracket">]</span></span>
-<p>Note that encoding with <a class="reference internal" href="#email.encoders.encode_quopri" title="email.encoders.encode_quopri"><code class="xref py py-meth docutils literal notranslate"><span class="pre">encode_quopri()</span></code></a> also encodes all tabs and space
-characters in the data.</p>
+<p class="translated">请注意使用 <a class="reference internal" href="#email.encoders.encode_quopri" title="email.encoders.encode_quopri"><code class="xref py py-meth docutils literal notranslate"><span class="pre">encode_quopri()</span></code></a> 编码格式还会对数据中的所有制表符和空格符进行编码。</p>
 </aside>
 </aside>
 </section>
@@ -282,44 +246,34 @@ characters in the data.</p>
       <div class="sphinxsidebar" role="navigation" aria-label="Main">
         <div class="sphinxsidebarwrapper">
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="email.charset.html"
-                          title="previous chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">email.charset</span></code>: Representing character sets</a></p>
+                          title="上一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">email.charset</span></code>: 表示字符集</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="email.utils.html"
-                          title="next chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">email.utils</span></code>: Miscellaneous utilities</a></p>
+                          title="下一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">email.utils</span></code>: 杂项工具</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "library/email.encoders.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/library/email.encoders.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/library/email.encoders.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
   </div>
         </div>
-<div id="sidebarbutton" title="Collapse sidebar">
+<div id="sidebarbutton" title="折叠边栏">
 <span>«</span>
 </div>
 
@@ -327,20 +281,20 @@ characters in the data.</p>
       <div class="clearer"></div>
     </div>  
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             >index</a></li>
+          <a href="../genindex.html" title="总索引"
+             >索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="email.utils.html" title="email.utils: Miscellaneous utilities"
-             >next</a> |</li>
+          <a href="email.utils.html" title="email.utils: 杂项工具"
+             >下一页</a> |</li>
         <li class="right" >
-          <a href="email.charset.html" title="email.charset: Representing character sets"
-             >previous</a> |</li>
+          <a href="email.charset.html" title="email.charset: 表示字符集"
+             >上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -352,60 +306,60 @@ characters in the data.</p>
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-          <li class="nav-item nav-item-1"><a href="index.html" >The Python Standard Library</a> &#187;</li>
-          <li class="nav-item nav-item-2"><a href="netdata.html" >Internet Data Handling</a> &#187;</li>
-          <li class="nav-item nav-item-3"><a href="email.html" ><code class="xref py py-mod docutils literal notranslate"><span class="pre">email</span></code> — An email and MIME handling package</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">email.encoders</span></code>: Encoders</a></li>
+          <li class="nav-item nav-item-1"><a href="index.html" >Python 标准库</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="netdata.html" >互联网数据处理</a> &#187;</li>
+          <li class="nav-item nav-item-3"><a href="email.html" ><code class="xref py py-mod docutils literal notranslate"><span class="pre">email</span></code> --- 电子邮件与 MIME 处理包</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">email.encoders</span></code>: 编码器</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
       </ul>
     </div>  
     <div class="footer">
-    &copy; <a href="../copyright.html">Copyright</a> 2001 Python Software Foundation.
+    &copy; <a href="../copyright.html">版权</a> 2001-2026, Python Software Foundation.
     <br>
-    This page is licensed under the Python Software Foundation License Version 2.
+    本页面采用 Python 软件基金会许可证第 2 版授权。
     <br>
-    Examples, recipes, and other code in the documentation are additionally licensed under the Zero Clause BSD License.
+    文档中的示例、代码片段及其他代码内容额外采用零条款 BSD 许可证授权。
     <br>
     
-      See <a href="/license.html">History and License</a> for more information.<br>
+      更多信息请参阅《<a href="/license.html"> 历史与许可 </a>》。<br>
     
     
     <br>
 
-    The Python Software Foundation is a non-profit corporation.
-<a href="https://www.python.org/psf/donations/">Please donate.</a>
+    Python 软件基金会是一家非营利性公司。
+<a href="https://www.python.org/psf/donations/">请进行捐赠。</a>
 <br>
     <br>
-      Last updated on May 27, 2026 (10:52 UTC).
+      最后更新于5月 25, 2026 (11:48 UTC) 。
     
-      <a href="/bugs.html">Found a bug</a>?
+      <a href="/bugs.html">发现了错误</a>？
     
     <br>
 
-    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3.
+    使用<a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3 创建。
     </div>
 
   </body>

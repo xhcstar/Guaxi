@@ -7,7 +7,7 @@
     @mousedown.stop
     @click.stop
   >
-    <header class="guaxi-usage-assistant__head">
+    <header class="guaxi-usage-assistant__head" @pointerdown="startPanelDrag">
       <div>
         <div class="guaxi-usage-assistant__title">离线文档助手</div>
         <div class="guaxi-usage-assistant__meta">{{ sourceMetaText }}</div>
@@ -106,11 +106,17 @@
         没有匹配结果，换个关键词试试。
       </div>
     </div>
+    <div
+      class="guaxi-usage-assistant__resize-handle"
+      title="拖动调整大小"
+      aria-hidden="true"
+      @pointerdown="startPanelResize"
+    ></div>
   </aside>
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import searchIcon from '@iconify-icons/lucide/search'
@@ -160,14 +166,16 @@ const results = ref([])
 const loading = ref(false)
 const loadError = ref('')
 const pythonManifest = ref(null)
+const panelRect = ref({ left: null, top: null, width: null, height: null })
+let panelPointerState = null
 let searchRequestSeq = 0
 
 const themeClass = computed(() => (String(props.theme || '').toLowerCase() === 'dark' ? 'theme-dark' : 'theme-light'))
 const panelPositionStyle = computed(() => {
-  const left = Number(props.anchorPosition?.left)
-  const top = Number(props.anchorPosition?.top)
-  const width = Number(props.anchorPosition?.width)
-  const maxHeight = Number(props.anchorPosition?.maxHeight)
+  const left = Number(panelRect.value.left)
+  const top = Number(panelRect.value.top)
+  const width = Number(panelRect.value.width)
+  const height = Number(panelRect.value.height)
   if (!Number.isFinite(left) || !Number.isFinite(top)) return {}
 
   return {
@@ -175,7 +183,8 @@ const panelPositionStyle = computed(() => {
     top: `${Math.max(8, top)}px`,
     right: 'auto',
     width: Number.isFinite(width) ? `${Math.max(280, width)}px` : undefined,
-    maxHeight: Number.isFinite(maxHeight) ? `${Math.max(220, maxHeight)}px` : undefined,
+    height: Number.isFinite(height) ? `${Math.max(220, height)}px` : undefined,
+    maxHeight: 'calc(100vh - 16px)',
   }
 })
 const sourceMetaText = computed(() => {
@@ -183,13 +192,113 @@ const sourceMetaText = computed(() => {
   const manifest = pythonManifest.value
   if (!manifest) return 'Python 官方完整文档索引'
   const lang = manifest.language === 'zh-cn' ? '简体中文' : '英文'
-  return `${manifest.title || 'Python 官方完整文档'} · ${lang} · ${manifest.totalEntries || 0} 页`
+  const version = String(manifest.version || '').trim()
+  const versionText = version ? `Python ${version}` : (manifest.title || 'Python 官方完整文档')
+  return `${versionText} · ${lang} · ${manifest.totalEntries || 0} 页`
 })
 const activeChannelLabel = computed(() => (
   NOTEBOOK_USAGE_GUIDE_CHANNELS.find((item) => item.key === activeChannel.value)?.label || 'Python'
 ))
 
 const normalizeChannel = (value) => (value === 'math' ? 'math' : 'python')
+
+const clampPanelValue = (value, min, max) => {
+  if (!Number.isFinite(value)) return min
+  if (!Number.isFinite(max) || max < min) return value
+  return Math.min(Math.max(value, min), max)
+}
+
+const syncPanelRectFromAnchor = () => {
+  const viewportWidth = Number(window.innerWidth || 0)
+  const viewportHeight = Number(window.innerHeight || 0)
+  const pad = 8
+  const width = clampPanelValue(Number(props.anchorPosition?.width), 320, Math.max(320, viewportWidth - pad * 2))
+  const anchorMaxHeight = Number(props.anchorPosition?.maxHeight)
+  const fallbackHeight = Math.min(620, Math.max(280, viewportHeight - pad * 2))
+  const height = clampPanelValue(
+    Number.isFinite(anchorMaxHeight) ? Math.min(anchorMaxHeight, fallbackHeight) : fallbackHeight,
+    280,
+    Math.max(280, viewportHeight - pad * 2),
+  )
+  const left = clampPanelValue(Number(props.anchorPosition?.left), pad, Math.max(pad, viewportWidth - width - pad))
+  const top = clampPanelValue(Number(props.anchorPosition?.top), pad, Math.max(pad, viewportHeight - height - pad))
+  panelRect.value = { left, top, width, height }
+}
+
+const stopPanelPointerInteraction = () => {
+  if (!panelPointerState) return
+  window.removeEventListener('pointermove', handlePanelPointerMove, true)
+  window.removeEventListener('pointerup', stopPanelPointerInteraction, true)
+  window.removeEventListener('pointercancel', stopPanelPointerInteraction, true)
+  logger.info('[NotebookUsageAssistant] panel transform end', {
+    mode: panelPointerState.mode,
+    rect: panelRect.value,
+  })
+  panelPointerState = null
+}
+
+const handlePanelPointerMove = (event) => {
+  if (!panelPointerState) return
+  event.preventDefault()
+  const viewportWidth = Number(window.innerWidth || 0)
+  const viewportHeight = Number(window.innerHeight || 0)
+  const pad = 8
+  const dx = Number(event.clientX) - panelPointerState.startX
+  const dy = Number(event.clientY) - panelPointerState.startY
+
+  if (panelPointerState.mode === 'drag') {
+    const left = clampPanelValue(panelPointerState.startRect.left + dx, pad, Math.max(pad, viewportWidth - panelPointerState.startRect.width - pad))
+    const top = clampPanelValue(panelPointerState.startRect.top + dy, pad, Math.max(pad, viewportHeight - panelPointerState.startRect.height - pad))
+    panelRect.value = {
+      ...panelRect.value,
+      left,
+      top,
+    }
+    return
+  }
+
+  const width = clampPanelValue(panelPointerState.startRect.width + dx, 320, Math.max(320, viewportWidth - panelPointerState.startRect.left - pad))
+  const height = clampPanelValue(panelPointerState.startRect.height + dy, 280, Math.max(280, viewportHeight - panelPointerState.startRect.top - pad))
+  panelRect.value = {
+    ...panelRect.value,
+    width,
+    height,
+  }
+}
+
+const startPanelPointerInteraction = (event, mode) => {
+  if (event.button !== 0) return
+  event.preventDefault()
+  event.stopPropagation()
+  stopPanelPointerInteraction()
+  panelPointerState = {
+    mode,
+    startX: Number(event.clientX),
+    startY: Number(event.clientY),
+    startRect: {
+      left: Number(panelRect.value.left) || 8,
+      top: Number(panelRect.value.top) || 8,
+      width: Number(panelRect.value.width) || 520,
+      height: Number(panelRect.value.height) || 560,
+    },
+  }
+  window.addEventListener('pointermove', handlePanelPointerMove, true)
+  window.addEventListener('pointerup', stopPanelPointerInteraction, true)
+  window.addEventListener('pointercancel', stopPanelPointerInteraction, true)
+  logger.info('[NotebookUsageAssistant] panel transform start', {
+    mode,
+    rect: panelRect.value,
+  })
+}
+
+const startPanelDrag = (event) => {
+  if (event.target instanceof HTMLElement && event.target.closest('button, input, a, .guaxi-usage-assistant__resize-handle')) return
+  startPanelPointerInteraction(event, 'drag')
+}
+
+const startPanelResize = (event) => {
+  startPanelPointerInteraction(event, 'resize')
+}
 
 const primeQueryFromContext = () => {
   query.value = inferNotebookUsageGuideQuery({
@@ -307,13 +416,20 @@ watch(() => props.channel, (value) => {
 
 watch(() => props.visible, (visible) => {
   if (!visible) return
+  syncPanelRectFromAnchor()
   primeQueryFromContext()
   void runSearch('open')
   logger.info('[NotebookUsageAssistant] open assistant', {
     channel: activeChannel.value,
     contextLength: String(props.contextContent || '').length,
+    rect: panelRect.value,
   })
 })
+
+watch(() => props.anchorPosition, () => {
+  if (!props.visible) return
+  syncPanelRectFromAnchor()
+}, { deep: true })
 
 watch(() => props.contextContent, () => {
   if (!props.visible) return
@@ -323,9 +439,14 @@ watch(() => props.contextContent, () => {
 
 onMounted(() => {
   if (props.visible) {
+    syncPanelRectFromAnchor()
     primeQueryFromContext()
     void runSearch('mounted')
   }
+})
+
+onBeforeUnmount(() => {
+  stopPanelPointerInteraction()
 })
 </script>
 
@@ -340,6 +461,8 @@ onMounted(() => {
   top: 56px;
   z-index: 70;
   width: min(520px, calc(100% - 32px));
+  min-width: 320px;
+  min-height: 280px;
   max-height: min(760px, calc(100vh - 120px));
   display: flex;
   flex-direction: column;
@@ -350,6 +473,7 @@ onMounted(() => {
   box-shadow: 0 24px 60px rgba(15, 23, 42, 0.22);
   overflow: hidden;
   font-family: var(--guaxi-notebook-font, 'Microsoft YaHei', sans-serif);
+  touch-action: none;
 }
 
 .guaxi-usage-assistant.theme-dark {
@@ -372,6 +496,8 @@ onMounted(() => {
   gap: 12px;
   padding: 14px 16px;
   border-bottom: 1px solid var(--guaxi-notebook-border, rgba(148, 163, 184, 0.22));
+  cursor: move;
+  user-select: none;
 }
 
 .guaxi-usage-assistant__title {
@@ -442,12 +568,35 @@ onMounted(() => {
   display: inline-grid;
   place-items: center;
   border-radius: 8px;
+  flex: 0 0 auto;
 }
 
 .guaxi-usage-assistant__body {
   min-height: 0;
+  flex: 1 1 auto;
   overflow: auto;
   padding: 0 12px 14px;
+}
+
+.guaxi-usage-assistant__resize-handle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+  opacity: 0.72;
+}
+
+.guaxi-usage-assistant__resize-handle::before {
+  content: '';
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  width: 9px;
+  height: 9px;
+  border-right: 2px solid var(--guaxi-notebook-muted, #64748b);
+  border-bottom: 2px solid var(--guaxi-notebook-muted, #64748b);
 }
 
 .guaxi-usage-assistant__entry {

@@ -15,7 +15,7 @@ before the release in which the feature becomes standard.
 
 While these future statements are given additional special meaning by the
 Python compiler, they are still executed like any other import statement and
-the :mod:`!__future__` exists and is handled by the import system the same way
+the :mod:`__future__` exists and is handled by the import system the same way
 any other Python module would be. This design serves three purposes:
 
 * To avoid confusing existing tools that analyze import statements and expect to
@@ -23,17 +23,17 @@ any other Python module would be. This design serves three purposes:
 
 * To document when incompatible changes were introduced, and when they will be
   --- or were --- made mandatory.  This is a form of executable documentation, and
-  can be inspected programmatically via importing :mod:`!__future__` and examining
+  can be inspected programmatically via importing :mod:`__future__` and examining
   its contents.
 
 * To ensure that :ref:`future statements <future>` run under releases prior to
-  Python 2.1 at least yield runtime exceptions (the import of :mod:`!__future__`
+  Python 2.1 at least yield runtime exceptions (the import of :mod:`__future__`
   will fail, because there was no module of that name prior to 2.1).
 
 Module Contents
 ---------------
 
-No feature description will ever be deleted from :mod:`!__future__`. Since its
+No feature description will ever be deleted from :mod:`__future__`. Since its
 introduction in Python 2.1 the following features have found their way into the
 language using this mechanism:
 
@@ -81,8 +81,7 @@ language using this mechanism:
    * * .. data:: annotations
      * 3.7.0b1
      * Never [1]_
-     * :pep:`563`: *Postponed evaluation of annotations*,
-       :pep:`649`: *Deferred evaluation of annotations using descriptors*
+     * :pep:`563`: *Postponed evaluation of annotations*
 
 .. XXX Adding a new entry?  Remember to update simple_stmts.rst, too.
 
@@ -131,9 +130,11 @@ language using this mechanism:
 
 .. [1]
    ``from __future__ import annotations`` was previously scheduled to
-   become mandatory in Python 3.10, but the change was delayed and ultimately
-   canceled. This feature will eventually be deprecated and removed. See
-   :pep:`649` and :pep:`749`.
+   become mandatory in Python 3.10, but the Python Steering Council
+   twice decided to delay the change
+   (`announcement for Python 3.10 <https://mail.python.org/archives/list/python-dev@python.org/message/CLVXXPQ2T2LQ5MP2Y53VVQFCXYWQJHKZ/>`__;
+   `announcement for Python 3.11 <https://mail.python.org/archives/list/python-dev@python.org/message/VIZEBX5EYMSYIJNDBF6DMUMZOCWHARSO/>`__).
+   No final decision has been made yet. See also :pep:`563` and :pep:`649`.
 
 
 .. seealso::

@@ -1,44 +1,45 @@
 <!DOCTYPE html>
 
-<html lang="en" data-content_root="../">
+<html lang="zh-CN" data-content_root="../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta property="og:title" content="xml.dom.minidom — Minimal DOM implementation" />
+<meta property="og:title" content="xml.dom.minidom --- 最小化的 DOM 实现" />
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://docs.python.org/3/library/xml.dom.minidom.html" />
 <meta property="og:site_name" content="Python documentation" />
-<meta property="og:description" content="Source code: Lib/xml/dom/minidom.py xml.dom.minidom is a minimal implementation of the Document Object Model interface, with an API similar to that in other languages. It is intended to be simpler ..." />
+<meta property="og:description" content="源代码: Lib/xml/dom/minidom.py xml.dom.minidom 是文档对象模型接口的最小化实现，具有与其他语言类似的 API。 它的目标是比完整 DOM 更简单并且更为小巧。 对于 DOM 还不十分熟悉的用户则应当考虑改用 xml.etree.ElementTree 模块来进行 XML 处理。 DOM 应用程序通常会从将某个 XML 解析为 DOM 开始。 使用 xm..." />
 <meta property="og:image:width" content="1146" />
 <meta property="og:image:height" content="600" />
-<meta property="og:image" content="https://docs.python.org/3.14/_images/social_previews/summary_library_xml.dom.minidom_ce38122f.png" />
-<meta property="og:image:alt" content="Source code: Lib/xml/dom/minidom.py xml.dom.minidom is a minimal implementation of the Document Object Model interface, with an API similar to that in other languages. It is intended to be simpler ..." />
-<meta name="description" content="Source code: Lib/xml/dom/minidom.py xml.dom.minidom is a minimal implementation of the Document Object Model interface, with an API similar to that in other languages. It is intended to be simpler ..." />
+<meta property="og:image" content="https://docs.python.org/3.13/zh-cn/_images/social_previews/summary_library_xml.dom.minidom_8e0117c4.png" />
+<meta property="og:image:alt" content="源代码: Lib/xml/dom/minidom.py xml.dom.minidom 是文档对象模型接口的最小化实现，具有与其他语言类似的 API。 它的目标是比完整 DOM 更简单并且更为小巧。 对于 DOM 还不十分熟悉的用户则应当考虑改用 xml.etree.ElementTree 模块来进行 XML 处理。 DOM 应用程序通常会从将某个 XML 解析为 DOM 开始。 使用 xm..." />
+<meta name="description" content="源代码: Lib/xml/dom/minidom.py xml.dom.minidom 是文档对象模型接口的最小化实现，具有与其他语言类似的 API。 它的目标是比完整 DOM 更简单并且更为小巧。 对于 DOM 还不十分熟悉的用户则应当考虑改用 xml.etree.ElementTree 模块来进行 XML 处理。 DOM 应用程序通常会从将某个 XML 解析为 DOM 开始。 使用 xm..." />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="theme-color" content="#3776ab">
 
-    <title>xml.dom.minidom — Minimal DOM implementation &#8212; Python 3.14.5 documentation</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>xml.dom.minidom --- 最小化的 DOM 实现 &#8212; Python 3.13.13 文档</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
     
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
     <link rel="stylesheet" type="text/css" href="../_static/classic.css?v=234b1a7c" />
     <link rel="stylesheet" type="text/css" href="../_static/pydoctheme.css?v=4365c8fe" />
     <link id="pygments_dark_css" media="(prefers-color-scheme: dark)" rel="stylesheet" type="text/css" href="../_static/pygments_dark.css?v=5349f25f" />
     
-    <script src="../_static/documentation_options.js?v=bcfd2f37"></script>
+    <script src="../_static/documentation_options.js?v=a941be6b"></script>
     <script src="../_static/doctools.js?v=9bcbadda"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/translations.js?v=beaddf03"></script>
     
     <script src="../_static/sidebar.js"></script>
     
     <link rel="search" type="application/opensearchdescription+xml"
-          title="Search within Python 3.14.5 documentation"
+          title="在 Python 3.13.13 文档 中搜索"
           href="../_static/opensearch.xml"/>
-    <link rel="author" title="About these documents" href="../about.html" />
-    <link rel="index" title="Index" href="../genindex.html" />
-    <link rel="search" title="Search" href="../search.html" />
-    <link rel="copyright" title="Copyright" href="../copyright.html" />
-    <link rel="next" title="xml.dom.pulldom — Support for building partial DOM trees" href="xml.dom.pulldom.html" />
-    <link rel="prev" title="xml.dom — The Document Object Model API" href="xml.dom.html" />
+    <link rel="author" title="关于此文档" href="../about.html" />
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="搜索" href="../search.html" />
+    <link rel="copyright" title="版权" href="../copyright.html" />
+    <link rel="next" title="xml.dom.pulldom --- 对构建部分 DOM 树的支持" href="xml.dom.pulldom.html" />
+    <link rel="prev" title="xml.dom --- 文档对象模型 API" href="xml.dom.html" />
     
       
       <script defer file-types="bz2,epub,zip" data-domain="docs.python.org" src="https://analytics.python.org/js/script.file-downloads.outbound-links.js"></script>
@@ -68,7 +69,7 @@
 <body>
 <div class="mobile-nav">
     <input type="checkbox" id="menuToggler" class="toggler__input" aria-controls="navigation"
-           aria-pressed="false" aria-expanded="false" role="button" aria-label="Menu">
+           aria-pressed="false" aria-expanded="false" role="button" aria-label="菜单">
     <nav class="nav-content" role="navigation">
         <label for="menuToggler" class="toggler__label">
             <span></span>
@@ -82,8 +83,8 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" class="search-icon">
                     <path fill-rule="nonzero" fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 001.48-5.34c-.47-2.78-2.79-5-5.59-5.34a6.505 6.505 0 00-7.27 7.27c.34 2.8 2.56 5.12 5.34 5.59a6.5 6.5 0 005.34-1.48l.27.28v.79l4.25 4.25c.41.41 1.08.41 1.49 0 .41-.41.41-1.08 0-1.49L15.5 14zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"></path>
                 </svg>
-                <input placeholder="Quick search" aria-label="Quick search" type="search" name="q">
-                <input type="submit" value="Go">
+                <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q">
+                <input type="submit" value="转到">
             </form>
         </span>
     </nav>
@@ -92,58 +93,48 @@
             <div class="language_switcher_placeholder"></div>
             
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label>
   <div>
-    <h3><a href="../contents.html">Table of Contents</a></h3>
+    <h3><a href="../contents.html">目录</a></h3>
     <ul>
-<li><a class="reference internal" href="#"><code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code> — Minimal DOM implementation</a><ul>
-<li><a class="reference internal" href="#dom-objects">DOM Objects</a></li>
-<li><a class="reference internal" href="#dom-example">DOM Example</a></li>
-<li><a class="reference internal" href="#minidom-and-the-dom-standard">minidom and the DOM standard</a></li>
+<li><a class="reference internal" href="#"><code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code> --- 最小化的 DOM 实现</a><ul>
+<li><a class="reference internal" href="#dom-objects">DOM 对象</a></li>
+<li><a class="reference internal" href="#dom-example">DOM 示例</a></li>
+<li><a class="reference internal" href="#minidom-and-the-dom-standard">minidom 和 DOM 标准</a></li>
 </ul>
 </li>
 </ul>
 
   </div>
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="xml.dom.html"
-                          title="previous chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom</span></code> — The Document Object Model API</a></p>
+                          title="上一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom</span></code> --- 文档对象模型 API</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="xml.dom.pulldom.html"
-                          title="next chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.pulldom</span></code> — Support for building partial DOM trees</a></p>
+                          title="下一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.pulldom</span></code> --- 对构建部分 DOM 树的支持</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "library/xml.dom.minidom.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/library/xml.dom.minidom.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/library/xml.dom.minidom.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
@@ -154,20 +145,20 @@
 
   
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             accesskey="I">index</a></li>
+          <a href="../genindex.html" title="总索引"
+             accesskey="I">索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="xml.dom.pulldom.html" title="xml.dom.pulldom — Support for building partial DOM trees"
-             accesskey="N">next</a> |</li>
+          <a href="xml.dom.pulldom.html" title="xml.dom.pulldom --- 对构建部分 DOM 树的支持"
+             accesskey="N">下一页</a> |</li>
         <li class="right" >
-          <a href="xml.dom.html" title="xml.dom — The Document Object Model API"
-             accesskey="P">previous</a> |</li>
+          <a href="xml.dom.html" title="xml.dom --- 文档对象模型 API"
+             accesskey="P">上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -179,30 +170,30 @@
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-          <li class="nav-item nav-item-1"><a href="index.html" >The Python Standard Library</a> &#187;</li>
-          <li class="nav-item nav-item-2"><a href="markup.html" accesskey="U">Structured Markup Processing Tools</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code> — Minimal DOM implementation</a></li>
+          <li class="nav-item nav-item-1"><a href="index.html" >Python 标准库</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="markup.html" accesskey="U">结构化标记处理工具</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code> --- 最小化的 DOM 实现</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
@@ -215,65 +206,43 @@
           <div class="body" role="main">
             
   <section id="module-xml.dom.minidom">
-<span id="xml-dom-minidom-minimal-dom-implementation"></span><h1><code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code> — Minimal DOM implementation<a class="headerlink" href="#module-xml.dom.minidom" title="Link to this heading">¶</a></h1>
-<p><strong>Source code:</strong> <a class="extlink-source reference external" href="https://github.com/python/cpython/tree/3.14/Lib/xml/dom/minidom.py">Lib/xml/dom/minidom.py</a></p>
+<span id="xml-dom-minidom-minimal-dom-implementation"></span><h1 class="translated"><code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code> --- 最小化的 DOM 实现<a class="headerlink" href="#module-xml.dom.minidom" title="Link to this heading">¶</a></h1>
+<p class="translated"><strong>源代码:</strong> <a class="extlink-source reference external" href="https://github.com/python/cpython/tree/3.13/Lib/xml/dom/minidom.py">Lib/xml/dom/minidom.py</a></p>
 <hr class="docutils" />
-<p><code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code> is a minimal implementation of the Document Object
-Model interface, with an API similar to that in other languages.  It is intended
-to be simpler than the full DOM and also significantly smaller.  Users who are
-not already proficient with the DOM should consider using the
-<a class="reference internal" href="xml.etree.elementtree.html#module-xml.etree.ElementTree" title="xml.etree.ElementTree: Implementation of the ElementTree API."><code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.etree.ElementTree</span></code></a> module for their XML processing instead.</p>
+<p class="translated"><code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code> 是文档对象模型接口的最小化实现，具有与其他语言类似的 API。 它的目标是比完整 DOM 更简单并且更为小巧。 对于 DOM 还不十分熟悉的用户则应当考虑改用 <a class="reference internal" href="xml.etree.elementtree.html#module-xml.etree.ElementTree" title="xml.etree.ElementTree: Implementation of the ElementTree API."><code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.etree.ElementTree</span></code></a> 模块来进行 XML 处理。</p>
 <div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>If you need to parse untrusted or unauthenticated data, see
-<a class="reference internal" href="xml.html#xml-security"><span class="std std-ref">XML security</span></a>.</p>
+<p class="admonition-title">备注</p>
+<p class="translated">如果你需要解析不受信任或未经身份验证的数据，请参阅 <a class="reference internal" href="xml.html#xml-security"><span class="std std-ref">XML 安全</span></a>。</p>
 </div>
-<p>DOM applications typically start by parsing some XML into a DOM.  With
-<code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code>, this is done through the parse functions:</p>
-<div class="highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">xml.dom.minidom</span><span class="w"> </span><span class="kn">import</span> <span class="n">parse</span><span class="p">,</span> <span class="n">parseString</span>
+<p class="translated">DOM 应用程序通常会从将某个 XML 解析为 DOM 开始。 使用 <code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code> 时，这是通过各种解析函数来完成的:</p>
+<div class="translated highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">xml.dom.minidom</span><span class="w"> </span><span class="kn">import</span> <span class="n">parse</span><span class="p">,</span> <span class="n">parseString</span>
 
-<span class="n">dom1</span> <span class="o">=</span> <span class="n">parse</span><span class="p">(</span><span class="s1">&#39;c:</span><span class="se">\\</span><span class="s1">temp</span><span class="se">\\</span><span class="s1">mydata.xml&#39;</span><span class="p">)</span>  <span class="c1"># parse an XML file by name</span>
+<span class="n">dom1</span> <span class="o">=</span> <span class="n">parse</span><span class="p">(</span><span class="s1">&#39;c:</span><span class="se">\\</span><span class="s1">temp</span><span class="se">\\</span><span class="s1">mydata.xml&#39;</span><span class="p">)</span>  <span class="c1"># 解析指定名称的 XML 文件</span>
 
 <span class="n">datasource</span> <span class="o">=</span> <span class="nb">open</span><span class="p">(</span><span class="s1">&#39;c:</span><span class="se">\\</span><span class="s1">temp</span><span class="se">\\</span><span class="s1">mydata.xml&#39;</span><span class="p">)</span>
-<span class="n">dom2</span> <span class="o">=</span> <span class="n">parse</span><span class="p">(</span><span class="n">datasource</span><span class="p">)</span>  <span class="c1"># parse an open file</span>
+<span class="n">dom2</span> <span class="o">=</span> <span class="n">parse</span><span class="p">(</span><span class="n">datasource</span><span class="p">)</span>  <span class="c1"># 解析打开的文件</span>
 
 <span class="n">dom3</span> <span class="o">=</span> <span class="n">parseString</span><span class="p">(</span><span class="s1">&#39;&lt;myxml&gt;Some data&lt;empty/&gt; some more data&lt;/myxml&gt;&#39;</span><span class="p">)</span>
 </pre></div>
 </div>
-<p>The <a class="reference internal" href="#xml.dom.minidom.parse" title="xml.dom.minidom.parse"><code class="xref py py-func docutils literal notranslate"><span class="pre">parse()</span></code></a> function can take either a filename or an open file object.</p>
+<p class="translated"><a class="reference internal" href="#xml.dom.minidom.parse" title="xml.dom.minidom.parse"><code class="xref py py-func docutils literal notranslate"><span class="pre">parse()</span></code></a> 函数可接受一个文件名或者打开的文件对象。</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="xml.dom.minidom.parse">
 <span class="sig-prename descclassname"><span class="pre">xml.dom.minidom.</span></span><span class="sig-name descname"><span class="pre">parse</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">filename_or_file</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">parser</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bufsize</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#xml.dom.minidom.parse" title="Link to this definition">¶</a></dt>
-<dd><p>Return a <code class="xref py py-class docutils literal notranslate"><span class="pre">Document</span></code> from the given input. <em>filename_or_file</em> may be
-either a file name, or a file-like object. <em>parser</em>, if given, must be a SAX2
-parser object. This function will change the document handler of the parser and
-activate namespace support; other parser configuration (like setting an entity
-resolver) must have been done in advance.</p>
+<dd><p class="translated">根据给定的输入返回一个 <code class="xref py py-class docutils literal notranslate"><span class="pre">Document</span></code>。 <em>filename_or_file</em> 可以是一个文件名，或是一个文件型对象。 如果给定 <em>parser</em> 则它必须是一个 SAX2 解析器对象。 此函数将修改解析器的处理程序并激活命名空间支持；其他解析器配置（例如设置一个实体求解器）必须已经提前完成。</p>
 </dd></dl>
 
-<p>If you have XML in a string, you can use the <a class="reference internal" href="#xml.dom.minidom.parseString" title="xml.dom.minidom.parseString"><code class="xref py py-func docutils literal notranslate"><span class="pre">parseString()</span></code></a> function
-instead:</p>
+<p class="translated">如果你将 XML 存放为字符串形式，则可以改用 <a class="reference internal" href="#xml.dom.minidom.parseString" title="xml.dom.minidom.parseString"><code class="xref py py-func docutils literal notranslate"><span class="pre">parseString()</span></code></a> 函数:</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="xml.dom.minidom.parseString">
 <span class="sig-prename descclassname"><span class="pre">xml.dom.minidom.</span></span><span class="sig-name descname"><span class="pre">parseString</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">parser</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#xml.dom.minidom.parseString" title="Link to this definition">¶</a></dt>
-<dd><p>Return a <code class="xref py py-class docutils literal notranslate"><span class="pre">Document</span></code> that represents the <em>string</em>. This method creates an
-<a class="reference internal" href="io.html#io.StringIO" title="io.StringIO"><code class="xref py py-class docutils literal notranslate"><span class="pre">io.StringIO</span></code></a> object for the string and passes that on to <a class="reference internal" href="#xml.dom.minidom.parse" title="xml.dom.minidom.parse"><code class="xref py py-func docutils literal notranslate"><span class="pre">parse()</span></code></a>.</p>
+<dd><p class="translated">返回一个代表 <em>string</em> 的 <code class="xref py py-class docutils literal notranslate"><span class="pre">Document</span></code>。 此方法会为指定字符串创建一个 <a class="reference internal" href="io.html#io.StringIO" title="io.StringIO"><code class="xref py py-class docutils literal notranslate"><span class="pre">io.StringIO</span></code></a> 对象并将其传递给 <a class="reference internal" href="#xml.dom.minidom.parse" title="xml.dom.minidom.parse"><code class="xref py py-func docutils literal notranslate"><span class="pre">parse()</span></code></a>。</p>
 </dd></dl>
 
-<p>Both functions return a <code class="xref py py-class docutils literal notranslate"><span class="pre">Document</span></code> object representing the content of the
-document.</p>
-<p>What the <a class="reference internal" href="#xml.dom.minidom.parse" title="xml.dom.minidom.parse"><code class="xref py py-func docutils literal notranslate"><span class="pre">parse()</span></code></a> and <a class="reference internal" href="#xml.dom.minidom.parseString" title="xml.dom.minidom.parseString"><code class="xref py py-func docutils literal notranslate"><span class="pre">parseString()</span></code></a> functions do is connect an XML
-parser with a “DOM builder” that can accept parse events from any SAX parser and
-convert them into a DOM tree.  The names of the functions are perhaps misleading,
-but are easy to grasp when learning the interfaces.  The parsing of the document
-will be completed before these functions return; it’s simply that these
-functions do not provide a parser implementation themselves.</p>
-<p>You can also create a <code class="xref py py-class docutils literal notranslate"><span class="pre">Document</span></code> by calling a method on a “DOM
-Implementation” object.  You can get this object either by calling the
-<code class="xref py py-func docutils literal notranslate"><span class="pre">getDOMImplementation()</span></code> function in the <a class="reference internal" href="xml.dom.html#module-xml.dom" title="xml.dom: Document Object Model API for Python."><code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom</span></code></a> package or the
-<code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code> module.  Once you have a <code class="xref py py-class docutils literal notranslate"><span class="pre">Document</span></code>, you
-can add child nodes to it to populate the DOM:</p>
-<div class="highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">xml.dom.minidom</span><span class="w"> </span><span class="kn">import</span> <span class="n">getDOMImplementation</span>
+<p class="translated">两个函数均返回一个代表文档内容的 <code class="xref py py-class docutils literal notranslate"><span class="pre">Document</span></code> 对象。object representing the content of the document.</p>
+<p class="translated"><a class="reference internal" href="#xml.dom.minidom.parse" title="xml.dom.minidom.parse"><code class="xref py py-func docutils literal notranslate"><span class="pre">parse()</span></code></a> 和 <a class="reference internal" href="#xml.dom.minidom.parseString" title="xml.dom.minidom.parseString"><code class="xref py py-func docutils literal notranslate"><span class="pre">parseString()</span></code></a> 函数所做的是将 XML 解析器连接到一个“DOM 构建器”，它可以从任意 SAX 解析器接收解析事件并将其转换为 DOM 树结构。 这两个函数的名称可能有些误导性，但在学习此接口时是很容易掌握的。 文档解析操作将在这两个函数返回之前完成；简单地说这两个函数本身并不提供解析器实现。</p>
+<p class="translated">你也可以通过在一个 &quot;DOM 实现&quot; 对象上调用方法来创建 <code class="xref py py-class docutils literal notranslate"><span class="pre">Document</span></code>。 此对象可通过调用 <a class="reference internal" href="xml.dom.html#module-xml.dom" title="xml.dom: Document Object Model API for Python."><code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom</span></code></a> 包或者 <code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code> 模块中的 <code class="xref py py-func docutils literal notranslate"><span class="pre">getDOMImplementation()</span></code> 函数来获取。 一旦你获得了一个 <code class="xref py py-class docutils literal notranslate"><span class="pre">Document</span></code>，你就可以向它添加子节点来填充 DOM:</p>
+<div class="translated highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">xml.dom.minidom</span><span class="w"> </span><span class="kn">import</span> <span class="n">getDOMImplementation</span>
 
 <span class="n">impl</span> <span class="o">=</span> <span class="n">getDOMImplementation</span><span class="p">()</span>
 
@@ -283,47 +252,29 @@ can add child nodes to it to populate the DOM:</p>
 <span class="n">top_element</span><span class="o">.</span><span class="n">appendChild</span><span class="p">(</span><span class="n">text</span><span class="p">)</span>
 </pre></div>
 </div>
-<p>Once you have a DOM document object, you can access the parts of your XML
-document through its properties and methods.  These properties are defined in
-the DOM specification.  The main property of the document object is the
-<code class="xref py py-attr docutils literal notranslate"><span class="pre">documentElement</span></code> property.  It gives you the main element in the XML
-document: the one that holds all others.  Here is an example program:</p>
-<div class="highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="n">dom3</span> <span class="o">=</span> <span class="n">parseString</span><span class="p">(</span><span class="s2">&quot;&lt;myxml&gt;Some data&lt;/myxml&gt;&quot;</span><span class="p">)</span>
+<p class="translated">一旦你得到了 DOM 文档对象，你就可以通过其属性和方法访问对应 XML 文档的各个部分。 这些属性定义在 DOM 规格说明当中；文档对象的主要特征属性是 <code class="xref py py-attr docutils literal notranslate"><span class="pre">documentElement</span></code>。 它给出了 XML 文档中的主元素：即包含了所有其他元素的元素。 以下是一个示例程序:</p>
+<div class="translated highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="n">dom3</span> <span class="o">=</span> <span class="n">parseString</span><span class="p">(</span><span class="s2">&quot;&lt;myxml&gt;Some data&lt;/myxml&gt;&quot;</span><span class="p">)</span>
 <span class="k">assert</span> <span class="n">dom3</span><span class="o">.</span><span class="n">documentElement</span><span class="o">.</span><span class="n">tagName</span> <span class="o">==</span> <span class="s2">&quot;myxml&quot;</span>
 </pre></div>
 </div>
-<p>When you are finished with a DOM tree, you may optionally call the
-<code class="xref py py-meth docutils literal notranslate"><span class="pre">unlink()</span></code> method to encourage early cleanup of the now-unneeded
-objects.  <code class="xref py py-meth docutils literal notranslate"><span class="pre">unlink()</span></code> is an <code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code>-specific
-extension to the DOM API that renders the node and its descendants
-essentially useless.  Otherwise, Python’s garbage collector will
-eventually take care of the objects in the tree.</p>
+<p class="translated">当你完成对一个 DOM 树的处理时，你可以选择调用 <code class="xref py py-meth docutils literal notranslate"><span class="pre">unlink()</span></code> 方法来鼓励尽早清除已不再需要的对象。 <code class="xref py py-meth docutils literal notranslate"><span class="pre">unlink()</span></code> 是针对 DOM API 的 <code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code> 专属扩展，它会将特定节点及其下级标记为不再有用。 在其他情况下，Python 的垃圾回收器将负责最终处理树结构中的对象。</p>
 <div class="admonition seealso">
-<p class="admonition-title">See also</p>
+<p class="admonition-title">参见</p>
 <dl class="simple">
-<dt><a class="reference external" href="https://www.w3.org/TR/REC-DOM-Level-1/">Document Object Model (DOM) Level 1 Specification</a></dt><dd><p>The W3C recommendation for the DOM supported by <code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code>.</p>
+<dt class="translated"><a class="reference external" href="https://www.w3.org/TR/REC-DOM-Level-1/">文档对象模型 (DOM) 第 1 层级规格说明</a></dt><dd><p class="translated">被 <code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code> 所支持的 W3C 针对 DOM 的建议。</p>
 </dd>
 </dl>
 </div>
 <section id="dom-objects">
-<span id="minidom-objects"></span><h2>DOM Objects<a class="headerlink" href="#dom-objects" title="Link to this heading">¶</a></h2>
-<p>The definition of the DOM API for Python is given as part of the <a class="reference internal" href="xml.dom.html#module-xml.dom" title="xml.dom: Document Object Model API for Python."><code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom</span></code></a>
-module documentation.  This section lists the differences between the API and
-<code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code>.</p>
+<span id="minidom-objects"></span><h2 class="translated">DOM 对象<a class="headerlink" href="#dom-objects" title="Link to this heading">¶</a></h2>
+<p class="translated">Python 的 DOM API 定义被作为 <a class="reference internal" href="xml.dom.html#module-xml.dom" title="xml.dom: Document Object Model API for Python."><code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom</span></code></a> 模块文档的一部分给出。  这一节列出了该 API 和 <code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code> 之间的差异。</p>
 <dl class="py method">
 <dt class="sig sig-object py" id="xml.dom.minidom.Node.unlink">
 <span class="sig-prename descclassname"><span class="pre">Node.</span></span><span class="sig-name descname"><span class="pre">unlink</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#xml.dom.minidom.Node.unlink" title="Link to this definition">¶</a></dt>
-<dd><p>Break internal references within the DOM so that it will be garbage collected on
-versions of Python without cyclic GC.  Even when cyclic GC is available, using
-this can make large amounts of memory available sooner, so calling this on DOM
-objects as soon as they are no longer needed is good practice.  This only needs
-to be called on the <code class="xref py py-class docutils literal notranslate"><span class="pre">Document</span></code> object, but may be called on child nodes
-to discard children of that node.</p>
-<p>You can avoid calling this method explicitly by using the <a class="reference internal" href="../reference/compound_stmts.html#with"><code class="xref std std-keyword docutils literal notranslate"><span class="pre">with</span></code></a>
-statement. The following code will automatically unlink <em>dom</em> when the
-<code class="xref std std-keyword docutils literal notranslate"><span class="pre">with</span></code> block is exited:</p>
-<div class="highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="k">with</span> <span class="n">xml</span><span class="o">.</span><span class="n">dom</span><span class="o">.</span><span class="n">minidom</span><span class="o">.</span><span class="n">parse</span><span class="p">(</span><span class="n">datasource</span><span class="p">)</span> <span class="k">as</span> <span class="n">dom</span><span class="p">:</span>
-    <span class="o">...</span> <span class="c1"># Work with dom.</span>
+<dd><p class="translated">破坏 DOM 的内部引用以便它能在没有循环 GC 的 Python 版本上垃圾回收器回收。 即使在循环 GC 可用的时候，使用此方法也可让大量内存更快变为可用，因此当 DOM 对象不再被需要时尽早调用它们的这个方法是很好的做法。 此方法只须在 <code class="xref py py-class docutils literal notranslate"><span class="pre">Document</span></code> 对象上调用，但也可以在下级节点上调用以丢弃该节点的下级节点。</p>
+<p class="translated">你可以通过使用 <a class="reference internal" href="../reference/compound_stmts.html#with"><code class="xref std std-keyword docutils literal notranslate"><span class="pre">with</span></code></a> 语句来避免显式调用此方法。 以下代码会在 <code class="xref std std-keyword docutils literal notranslate"><span class="pre">with</span></code> 代码块退出时自动取消链接 <em>dom</em>:</p>
+<div class="translated highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="k">with</span> <span class="n">xml</span><span class="o">.</span><span class="n">dom</span><span class="o">.</span><span class="n">minidom</span><span class="o">.</span><span class="n">parse</span><span class="p">(</span><span class="n">datasource</span><span class="p">)</span> <span class="k">as</span> <span class="n">dom</span><span class="p">:</span>
+    <span class="o">...</span> <span class="c1"># 操作 dom。</span>
 </pre></div>
 </div>
 </dd></dl>
@@ -331,74 +282,50 @@ statement. The following code will automatically unlink <em>dom</em> when the
 <dl class="py method">
 <dt class="sig sig-object py" id="xml.dom.minidom.Node.writexml">
 <span class="sig-prename descclassname"><span class="pre">Node.</span></span><span class="sig-name descname"><span class="pre">writexml</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">writer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">indent</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">addindent</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">newl</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">encoding</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">standalone</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#xml.dom.minidom.Node.writexml" title="Link to this definition">¶</a></dt>
-<dd><p>Write XML to the writer object.  The writer receives texts but not bytes as input,
-it should have a <code class="xref py py-meth docutils literal notranslate"><span class="pre">write()</span></code> method which matches that of the file object
-interface.  The <em>indent</em> parameter is the indentation of the current node.
-The <em>addindent</em> parameter is the incremental indentation to use for subnodes
-of the current one.  The <em>newl</em> parameter specifies the string to use to
-terminate newlines.</p>
-<p>For the <code class="xref py py-class docutils literal notranslate"><span class="pre">Document</span></code> node, an additional keyword argument <em>encoding</em> can
-be used to specify the encoding field of the XML header.</p>
-<p>Similarly, explicitly stating the <em>standalone</em> argument causes the
-standalone document declarations to be added to the prologue of the XML
-document.
-If the value is set to <code class="docutils literal notranslate"><span class="pre">True</span></code>, <code class="docutils literal notranslate"><span class="pre">standalone=&quot;yes&quot;</span></code> is added,
-otherwise it is set to <code class="docutils literal notranslate"><span class="pre">&quot;no&quot;</span></code>.
-Not stating the argument will omit the declaration from the document.</p>
+<dd><p class="translated">将 XML 写入到写入器对象。 写入器接受文本而非字节串作为输入，它应当具有与文件对象接口相匹配的 <code class="xref py py-meth docutils literal notranslate"><span class="pre">write()</span></code> 方法。 <em>indent</em> 形参是当前节点的缩进层级。 <em>addindent</em> 形参是用于当前节点的下级节点的缩进量。 <em>newl</em> 形参指定用于一行结束的字符串。</p>
+<p class="translated">对于 <code class="xref py py-class docutils literal notranslate"><span class="pre">Document</span></code> 节点，可以使用附加的关键字参数 <em>encoding</em> 来指定 XML 标头的编码格式字段。</p>
+<p class="translated">类似地，显式指明 <em>standalone</em> 参数将会使单独的文档声明被添加到 XML 文档的开头部分。 如果将该值设为 <code class="docutils literal notranslate"><span class="pre">True</span></code>，则会添加 <code class="docutils literal notranslate"><span class="pre">standalone=&quot;yes&quot;</span></code>，否则它会被设为 <code class="docutils literal notranslate"><span class="pre">&quot;no&quot;</span></code>。 未指明该参数将使文档声明被省略。</p>
 <div class="versionchanged">
-<p><span class="versionmodified changed">Changed in version 3.8: </span>The <code class="xref py py-meth docutils literal notranslate"><span class="pre">writexml()</span></code> method now preserves the attribute order specified
-by the user.</p>
+<p><span class="versionmodified changed">在 3.8 版本发生变更: </span><a class="reference internal" href="#xml.dom.minidom.Node.writexml" title="xml.dom.minidom.Node.writexml"><code class="xref py py-meth docutils literal notranslate"><span class="pre">writexml()</span></code></a> 方法现在会保留用户指定的属性顺序。</p>
 </div>
 <div class="versionchanged">
-<p><span class="versionmodified changed">Changed in version 3.9: </span>The <em>standalone</em> parameter was added.</p>
+<p><span class="versionmodified changed">在 3.9 版本发生变更: </span>增加了 <em>standalone</em> 形参。</p>
 </div>
 </dd></dl>
 
 <dl class="py method">
 <dt class="sig sig-object py" id="xml.dom.minidom.Node.toxml">
 <span class="sig-prename descclassname"><span class="pre">Node.</span></span><span class="sig-name descname"><span class="pre">toxml</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">encoding</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">standalone</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#xml.dom.minidom.Node.toxml" title="Link to this definition">¶</a></dt>
-<dd><p>Return a string or byte string containing the XML represented by
-the DOM node.</p>
-<p>With an explicit <em>encoding</em> <a class="footnote-reference brackets" href="#id3" id="id1" role="doc-noteref"><span class="fn-bracket">[</span>1<span class="fn-bracket">]</span></a> argument, the result is a byte
-string in the specified encoding.
-With no <em>encoding</em> argument, the result is a Unicode string, and the
-XML declaration in the resulting string does not specify an
-encoding. Encoding this string in an encoding other than UTF-8 is
-likely incorrect, since UTF-8 is the default encoding of XML.</p>
-<p>The <em>standalone</em> argument behaves exactly as in <a class="reference internal" href="#xml.dom.minidom.Node.writexml" title="xml.dom.minidom.Node.writexml"><code class="xref py py-meth docutils literal notranslate"><span class="pre">writexml()</span></code></a>.</p>
+<dd><p class="translated">返回一个包含 XML DOM 节点所代表的 XML 的字符串或字节串。</p>
+<p class="translated">带有显式的 <em>encoding</em> <a class="footnote-reference brackets" href="#id3" id="id1" role="doc-noteref"><span class="fn-bracket">[</span>1<span class="fn-bracket">]</span></a> 参数时，结果为使用指定编码格式的字节串。 没有 <em>encoding</em> 参数时，结果为 Unicode 字符串，并且结果字符串中的 XML 声明将不指定编码格式。 使用 UTF-8 以外的编码格式对此字符串进行编码通常是不正确的，因为 UTF-8 是 XML 的默认编码格式。</p>
+<p class="translated"><em>standalone</em> 参数的行为与 <a class="reference internal" href="#xml.dom.minidom.Node.writexml" title="xml.dom.minidom.Node.writexml"><code class="xref py py-meth docutils literal notranslate"><span class="pre">writexml()</span></code></a> 中的完全一致。</p>
 <div class="versionchanged">
-<p><span class="versionmodified changed">Changed in version 3.8: </span>The <code class="xref py py-meth docutils literal notranslate"><span class="pre">toxml()</span></code> method now preserves the attribute order specified
-by the user.</p>
+<p><span class="versionmodified changed">在 3.8 版本发生变更: </span><a class="reference internal" href="#xml.dom.minidom.Node.toxml" title="xml.dom.minidom.Node.toxml"><code class="xref py py-meth docutils literal notranslate"><span class="pre">toxml()</span></code></a> 方法现在会保留用户指定的属性顺序。</p>
 </div>
 <div class="versionchanged">
-<p><span class="versionmodified changed">Changed in version 3.9: </span>The <em>standalone</em> parameter was added.</p>
+<p><span class="versionmodified changed">在 3.9 版本发生变更: </span>增加了 <em>standalone</em> 形参。</p>
 </div>
 </dd></dl>
 
 <dl class="py method">
 <dt class="sig sig-object py" id="xml.dom.minidom.Node.toprettyxml">
 <span class="sig-prename descclassname"><span class="pre">Node.</span></span><span class="sig-name descname"><span class="pre">toprettyxml</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">indent</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'\t'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">newl</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'\n'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">encoding</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">standalone</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#xml.dom.minidom.Node.toprettyxml" title="Link to this definition">¶</a></dt>
-<dd><p>Return a pretty-printed version of the document. <em>indent</em> specifies the
-indentation string and defaults to a tabulator; <em>newl</em> specifies the string
-emitted at the end of each line and defaults to <code class="docutils literal notranslate"><span class="pre">\n</span></code>.</p>
-<p>The <em>encoding</em> argument behaves like the corresponding argument of
-<a class="reference internal" href="#xml.dom.minidom.Node.toxml" title="xml.dom.minidom.Node.toxml"><code class="xref py py-meth docutils literal notranslate"><span class="pre">toxml()</span></code></a>.</p>
-<p>The <em>standalone</em> argument behaves exactly as in <a class="reference internal" href="#xml.dom.minidom.Node.writexml" title="xml.dom.minidom.Node.writexml"><code class="xref py py-meth docutils literal notranslate"><span class="pre">writexml()</span></code></a>.</p>
+<dd><p class="translated">返回文档的美化打印版本。 <em>indent</em> 指定缩进字符串并默认为制表符；<em>newl</em> 指定标示每行结束的字符串并默认为 <code class="docutils literal notranslate"><span class="pre">\n</span></code>。</p>
+<p class="translated"><em>encoding</em> 参数的行为类似于 <a class="reference internal" href="#xml.dom.minidom.Node.toxml" title="xml.dom.minidom.Node.toxml"><code class="xref py py-meth docutils literal notranslate"><span class="pre">toxml()</span></code></a> 的对应参数。</p>
+<p class="translated"><em>standalone</em> 参数的行为与 <a class="reference internal" href="#xml.dom.minidom.Node.writexml" title="xml.dom.minidom.Node.writexml"><code class="xref py py-meth docutils literal notranslate"><span class="pre">writexml()</span></code></a> 中的完全一致。</p>
 <div class="versionchanged">
-<p><span class="versionmodified changed">Changed in version 3.8: </span>The <code class="xref py py-meth docutils literal notranslate"><span class="pre">toprettyxml()</span></code> method now preserves the attribute order specified
-by the user.</p>
+<p><span class="versionmodified changed">在 3.8 版本发生变更: </span><a class="reference internal" href="#xml.dom.minidom.Node.toprettyxml" title="xml.dom.minidom.Node.toprettyxml"><code class="xref py py-meth docutils literal notranslate"><span class="pre">toprettyxml()</span></code></a> 方法现在会保留用户指定的属性顺序。</p>
 </div>
 <div class="versionchanged">
-<p><span class="versionmodified changed">Changed in version 3.9: </span>The <em>standalone</em> parameter was added.</p>
+<p><span class="versionmodified changed">在 3.9 版本发生变更: </span>增加了 <em>standalone</em> 形参。</p>
 </div>
 </dd></dl>
 
 </section>
 <section id="dom-example">
-<span id="id2"></span><h2>DOM Example<a class="headerlink" href="#dom-example" title="Link to this heading">¶</a></h2>
-<p>This example program is a fairly realistic example of a simple program. In this
-particular case, we do not take much advantage of the flexibility of the DOM.</p>
-<div class="highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">xml.dom.minidom</span>
+<span id="id2"></span><h2 class="translated">DOM 示例<a class="headerlink" href="#dom-example" title="Link to this heading">¶</a></h2>
+<p class="translated">此示例程序是个相当实际的简单程序示例。 在这个特定情况中，我们没有过多地利用 DOM 的灵活性。</p>
+<div class="translated highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">xml.dom.minidom</span>
 
 <span class="n">document</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;</span><span class="se">\</span>
 <span class="s2">&lt;slideshow&gt;</span>
@@ -466,57 +393,30 @@ particular case, we do not take much advantage of the flexibility of the DOM.</p
 </div>
 </section>
 <section id="minidom-and-the-dom-standard">
-<span id="minidom-and-dom"></span><h2>minidom and the DOM standard<a class="headerlink" href="#minidom-and-the-dom-standard" title="Link to this heading">¶</a></h2>
-<p>The <code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code> module is essentially a DOM 1.0-compatible DOM with
-some DOM 2 features (primarily namespace features).</p>
-<p>Usage of the DOM interface in Python is straight-forward.  The following mapping
-rules apply:</p>
+<span id="minidom-and-dom"></span><h2 class="translated">minidom 和 DOM 标准<a class="headerlink" href="#minidom-and-the-dom-standard" title="Link to this heading">¶</a></h2>
+<p class="translated"><code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code> 模块实际上是兼容 DOM 1.0 的 DOM 并带有部分 DOM 2 特性（主要是命名空间特性）。</p>
+<p class="translated">Python 中 DOM 接口的用法十分直观。 会应用下列映射规则:</p>
 <ul class="simple">
-<li><p>Interfaces are accessed through instance objects. Applications should not
-instantiate the classes themselves; they should use the creator functions
-available on the <code class="xref py py-class docutils literal notranslate"><span class="pre">Document</span></code> object. Derived interfaces support all
-operations (and attributes) from the base interfaces, plus any new operations.</p></li>
-<li><p>Operations are used as methods. Since the DOM uses only <a class="reference internal" href="../reference/expressions.html#in"><code class="xref std std-keyword docutils literal notranslate"><span class="pre">in</span></code></a>
-parameters, the arguments are passed in normal order (from left to right).
-There are no optional arguments. <code class="docutils literal notranslate"><span class="pre">void</span></code> operations return <code class="docutils literal notranslate"><span class="pre">None</span></code>.</p></li>
-<li><p>IDL attributes map to instance attributes. For compatibility with the OMG IDL
-language mapping for Python, an attribute <code class="docutils literal notranslate"><span class="pre">foo</span></code> can also be accessed through
-accessor methods <code class="xref py py-meth docutils literal notranslate"><span class="pre">_get_foo()</span></code> and <code class="xref py py-meth docutils literal notranslate"><span class="pre">_set_foo()</span></code>.  <code class="docutils literal notranslate"><span class="pre">readonly</span></code>
-attributes must not be changed; this is not enforced at runtime.</p></li>
-<li><p>The types <code class="docutils literal notranslate"><span class="pre">short</span> <span class="pre">int</span></code>, <code class="docutils literal notranslate"><span class="pre">unsigned</span> <span class="pre">int</span></code>, <code class="docutils literal notranslate"><span class="pre">unsigned</span> <span class="pre">long</span> <span class="pre">long</span></code>, and
-<code class="docutils literal notranslate"><span class="pre">boolean</span></code> all map to Python integer objects.</p></li>
-<li><p>The type <code class="docutils literal notranslate"><span class="pre">DOMString</span></code> maps to Python strings. <code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code> supports
-either bytes or strings, but will normally produce strings.
-Values of type <code class="docutils literal notranslate"><span class="pre">DOMString</span></code> may also be <code class="docutils literal notranslate"><span class="pre">None</span></code> where allowed to have the IDL
-<code class="docutils literal notranslate"><span class="pre">null</span></code> value by the DOM specification from the W3C.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">const</span></code> declarations map to variables in their respective scope (e.g.
-<code class="docutils literal notranslate"><span class="pre">xml.dom.minidom.Node.PROCESSING_INSTRUCTION_NODE</span></code>); they must not be changed.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">DOMException</span></code> is currently not supported in <code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code>.
-Instead, <code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code> uses standard Python exceptions such as
-<a class="reference internal" href="exceptions.html#TypeError" title="TypeError"><code class="xref py py-exc docutils literal notranslate"><span class="pre">TypeError</span></code></a> and <a class="reference internal" href="exceptions.html#AttributeError" title="AttributeError"><code class="xref py py-exc docutils literal notranslate"><span class="pre">AttributeError</span></code></a>.</p></li>
-<li><p><code class="xref py py-class docutils literal notranslate"><span class="pre">NodeList</span></code> objects are implemented using Python’s built-in list type.
-These objects provide the interface defined in the DOM specification, but with
-earlier versions of Python they do not support the official API.  They are,
-however, much more “Pythonic” than the interface defined in the W3C
-recommendations.</p></li>
+<li><p class="translated">接口是通过实例对象来访问的。 应用程序不应实例化这些类本身；它们应当使用 <code class="xref py py-class docutils literal notranslate"><span class="pre">Document</span></code> 对象提供的创建器函数。 派生的接口支持上级接口的所有操作（和属性），并添加了新的操作。</p></li>
+<li><p class="translated">操作以方法的形式使用。 因由 DOM 只使用 <a class="reference internal" href="../reference/expressions.html#in"><code class="xref std std-keyword docutils literal notranslate"><span class="pre">in</span></code></a> 形参，参数是以正常顺序传入的（从左至右）。 不存在可选参数。 <code class="docutils literal notranslate"><span class="pre">void</span></code> 操作返回 <code class="docutils literal notranslate"><span class="pre">None</span></code>。</p></li>
+<li><p class="translated">IDL 属性会映射到实例属性。 为了兼容针对 Python 的 OMG IDL 语言映射，属性 <code class="docutils literal notranslate"><span class="pre">foo</span></code> 也可通过访问器方法 <code class="xref py py-meth docutils literal notranslate"><span class="pre">_get_foo()</span></code> 和 <code class="xref py py-meth docutils literal notranslate"><span class="pre">_set_foo()</span></code> 来访问。 <code class="docutils literal notranslate"><span class="pre">readonly</span></code> 属性不可被修改；运行时并不强制要求这一点。</p></li>
+<li><p class="translated"><code class="docutils literal notranslate"><span class="pre">short</span> <span class="pre">int</span></code>, <code class="docutils literal notranslate"><span class="pre">unsigned</span> <span class="pre">int</span></code>, <code class="docutils literal notranslate"><span class="pre">unsigned</span> <span class="pre">long</span> <span class="pre">long</span></code> 和 <code class="docutils literal notranslate"><span class="pre">boolean</span></code> 类型都会映射为 Python 整数类型。</p></li>
+<li><p class="translated"><code class="docutils literal notranslate"><span class="pre">DOMString</span></code> 类型会映射为 Python 字符串。 <code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code> 支持字节串或字符串，但通常是产生字符串。 <code class="docutils literal notranslate"><span class="pre">DOMString</span></code> 类型的值也可以为 <code class="docutils literal notranslate"><span class="pre">None</span></code>，W3C 的 DOM 规格说明允许其具有 IDL <code class="docutils literal notranslate"><span class="pre">null</span></code> 值。</p></li>
+<li><p class="translated"><code class="docutils literal notranslate"><span class="pre">const</span></code> 声明会映射为它们各自的作用域内的变量 (例如 <code class="docutils literal notranslate"><span class="pre">xml.dom.minidom.Node.PROCESSING_INSTRUCTION_NODE</span></code>)；它们不可被修改。</p></li>
+<li><p class="translated"><code class="docutils literal notranslate"><span class="pre">DOMException</span></code> 目前不被 <code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code> 所支持。 <code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code> 会改为使用标准 Python 异常例如 <a class="reference internal" href="exceptions.html#TypeError" title="TypeError"><code class="xref py py-exc docutils literal notranslate"><span class="pre">TypeError</span></code></a> 和 <a class="reference internal" href="exceptions.html#AttributeError" title="AttributeError"><code class="xref py py-exc docutils literal notranslate"><span class="pre">AttributeError</span></code></a>。</p></li>
+<li><p class="translated"><code class="xref py py-class docutils literal notranslate"><span class="pre">NodeList</span></code> 对象是使用 Python 内置列表类型来实现的。 这些对象提供了 DOM 规格说明中定义的接口，但在较早版本的 Python 中它们不支持官方 API。 相比在 W3C 建议中定义的接口，它们要更加的 &quot;Pythonic&quot;。</p></li>
 </ul>
-<p>The following interfaces have no implementation in <code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code>:</p>
+<p class="translated">下列接口未在 <code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code> 中实现:</p>
 <ul class="simple">
-<li><p><code class="xref py py-class docutils literal notranslate"><span class="pre">DOMTimeStamp</span></code></p></li>
-<li><p><code class="xref py py-class docutils literal notranslate"><span class="pre">EntityReference</span></code></p></li>
+<li><p class="translated"><code class="xref py py-class docutils literal notranslate"><span class="pre">DOMTimeStamp</span></code></p></li>
+<li><p class="translated"><code class="xref py py-class docutils literal notranslate"><span class="pre">EntityReference</span></code></p></li>
 </ul>
-<p>Most of these reflect information in the XML document that is not of general
-utility to most DOM users.</p>
-<p class="rubric">Footnotes</p>
+<p class="translated">这些接口所反映的 XML 文档信息对于大多数 DOM 用户来说没有什么帮助。</p>
+<p class="translated rubric">备注</p>
 <aside class="footnote-list brackets">
 <aside class="footnote brackets" id="id3" role="doc-footnote">
 <span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id1">1</a><span class="fn-bracket">]</span></span>
-<p>The encoding name included in the XML output should conform to
-the appropriate standards. For example, “UTF-8” is valid, but
-“UTF8” is not valid in an XML document’s declaration, even though
-Python accepts it as an encoding name.
-See <a class="reference external" href="https://www.w3.org/TR/2006/REC-xml11-20060816/#NT-EncodingDecl">https://www.w3.org/TR/2006/REC-xml11-20060816/#NT-EncodingDecl</a>
-and <a class="reference external" href="https://www.iana.org/assignments/character-sets/character-sets.xhtml">https://www.iana.org/assignments/character-sets/character-sets.xhtml</a>.</p>
+<p class="translated">包括在 XML 输出中的编码格式名称应当遵循适当的标准。 例如，&quot;UTF-8&quot; 是有效的，但 &quot;UTF8&quot; 在 XML 文档的声明中是无效的，即使 Python 接受其作为编码格式名称。 详情参见 <a class="reference external" href="https://www.w3.org/TR/2006/REC-xml11-20060816/#NT-EncodingDecl">https://www.w3.org/TR/2006/REC-xml11-20060816/#NT-EncodingDecl</a> 和 <a class="reference external" href="https://www.iana.org/assignments/character-sets/character-sets.xhtml">https://www.iana.org/assignments/character-sets/character-sets.xhtml</a>。</p>
 </aside>
 </aside>
 </section>
@@ -530,56 +430,46 @@ and <a class="reference external" href="https://www.iana.org/assignments/charact
       <div class="sphinxsidebar" role="navigation" aria-label="Main">
         <div class="sphinxsidebarwrapper">
   <div>
-    <h3><a href="../contents.html">Table of Contents</a></h3>
+    <h3><a href="../contents.html">目录</a></h3>
     <ul>
-<li><a class="reference internal" href="#"><code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code> — Minimal DOM implementation</a><ul>
-<li><a class="reference internal" href="#dom-objects">DOM Objects</a></li>
-<li><a class="reference internal" href="#dom-example">DOM Example</a></li>
-<li><a class="reference internal" href="#minidom-and-the-dom-standard">minidom and the DOM standard</a></li>
+<li><a class="reference internal" href="#"><code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code> --- 最小化的 DOM 实现</a><ul>
+<li><a class="reference internal" href="#dom-objects">DOM 对象</a></li>
+<li><a class="reference internal" href="#dom-example">DOM 示例</a></li>
+<li><a class="reference internal" href="#minidom-and-the-dom-standard">minidom 和 DOM 标准</a></li>
 </ul>
 </li>
 </ul>
 
   </div>
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="xml.dom.html"
-                          title="previous chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom</span></code> — The Document Object Model API</a></p>
+                          title="上一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom</span></code> --- 文档对象模型 API</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="xml.dom.pulldom.html"
-                          title="next chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.pulldom</span></code> — Support for building partial DOM trees</a></p>
+                          title="下一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.pulldom</span></code> --- 对构建部分 DOM 树的支持</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "library/xml.dom.minidom.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/library/xml.dom.minidom.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/library/xml.dom.minidom.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
   </div>
         </div>
-<div id="sidebarbutton" title="Collapse sidebar">
+<div id="sidebarbutton" title="折叠边栏">
 <span>«</span>
 </div>
 
@@ -587,20 +477,20 @@ and <a class="reference external" href="https://www.iana.org/assignments/charact
       <div class="clearer"></div>
     </div>  
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             >index</a></li>
+          <a href="../genindex.html" title="总索引"
+             >索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="xml.dom.pulldom.html" title="xml.dom.pulldom — Support for building partial DOM trees"
-             >next</a> |</li>
+          <a href="xml.dom.pulldom.html" title="xml.dom.pulldom --- 对构建部分 DOM 树的支持"
+             >下一页</a> |</li>
         <li class="right" >
-          <a href="xml.dom.html" title="xml.dom — The Document Object Model API"
-             >previous</a> |</li>
+          <a href="xml.dom.html" title="xml.dom --- 文档对象模型 API"
+             >上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -612,59 +502,59 @@ and <a class="reference external" href="https://www.iana.org/assignments/charact
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-          <li class="nav-item nav-item-1"><a href="index.html" >The Python Standard Library</a> &#187;</li>
-          <li class="nav-item nav-item-2"><a href="markup.html" >Structured Markup Processing Tools</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code> — Minimal DOM implementation</a></li>
+          <li class="nav-item nav-item-1"><a href="index.html" >Python 标准库</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="markup.html" >结构化标记处理工具</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">xml.dom.minidom</span></code> --- 最小化的 DOM 实现</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
       </ul>
     </div>  
     <div class="footer">
-    &copy; <a href="../copyright.html">Copyright</a> 2001 Python Software Foundation.
+    &copy; <a href="../copyright.html">版权</a> 2001-2026, Python Software Foundation.
     <br>
-    This page is licensed under the Python Software Foundation License Version 2.
+    本页面采用 Python 软件基金会许可证第 2 版授权。
     <br>
-    Examples, recipes, and other code in the documentation are additionally licensed under the Zero Clause BSD License.
+    文档中的示例、代码片段及其他代码内容额外采用零条款 BSD 许可证授权。
     <br>
     
-      See <a href="/license.html">History and License</a> for more information.<br>
+      更多信息请参阅《<a href="/license.html"> 历史与许可 </a>》。<br>
     
     
     <br>
 
-    The Python Software Foundation is a non-profit corporation.
-<a href="https://www.python.org/psf/donations/">Please donate.</a>
+    Python 软件基金会是一家非营利性公司。
+<a href="https://www.python.org/psf/donations/">请进行捐赠。</a>
 <br>
     <br>
-      Last updated on May 27, 2026 (10:52 UTC).
+      最后更新于5月 25, 2026 (11:48 UTC) 。
     
-      <a href="/bugs.html">Found a bug</a>?
+      <a href="/bugs.html">发现了错误</a>？
     
     <br>
 
-    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3.
+    使用<a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3 创建。
     </div>
 
   </body>

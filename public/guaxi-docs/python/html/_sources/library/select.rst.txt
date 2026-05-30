@@ -18,7 +18,7 @@ it was last read.
 .. note::
 
    The :mod:`selectors` module allows high-level and efficient I/O
-   multiplexing, built upon the :mod:`!select` module primitives. Users are
+   multiplexing, built upon the :mod:`select` module primitives. Users are
    encouraged to use the :mod:`selectors` module instead, unless they want
    precise control over the OS-level primitives used.
 
@@ -328,15 +328,9 @@ Edge and level trigger polling (epoll) objects
    +-------------------------+------------------------------------------------+
    | :const:`EPOLLMSG`       | Ignored.                                       |
    +-------------------------+------------------------------------------------+
-   | :const:`EPOLLWAKEUP`    | Prevents sleep during event waiting.           |
-   +-------------------------+------------------------------------------------+
 
    .. versionadded:: 3.6
       :const:`EPOLLEXCLUSIVE` was added.  It's only supported by Linux Kernel 4.5
-      or later.
-
-   .. versionadded:: 3.14
-      :const:`EPOLLWAKEUP` was added. It's only supported by Linux Kernel 3.5
       or later.
 
 .. method:: epoll.close()

@@ -1,44 +1,45 @@
 <!DOCTYPE html>
 
-<html lang="en" data-content_root="../">
+<html lang="zh-CN" data-content_root="../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta property="og:title" content="7. Using Python on iOS" />
+<meta property="og:title" content="7. 在 iOS 上使用 Python" />
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://docs.python.org/3/using/ios.html" />
 <meta property="og:site_name" content="Python documentation" />
-<meta property="og:description" content="Authors, Russell Keith-Magee (2024-03),. Python on iOS is unlike Python on desktop platforms. On a desktop platform, Python is generally installed as a system resource that can be used by any user ..." />
+<meta property="og:description" content="作者, Russell Keith-Magee (2024-03),. 在 iOS 上的 Python 不同于桌面平台上的 Python。 在桌面平台上，Python 通常是作为系统资源安装并可供该计算机上的任何用户使用。 用户将通过运行 python 可执行文件并在交互提示符下输入命令，或者通过运行 Python 脚本的方式与 Python 进行交互。 在 iOS，不存在作为系统资源安装种..." />
 <meta property="og:image:width" content="1146" />
 <meta property="og:image:height" content="600" />
-<meta property="og:image" content="https://docs.python.org/3.14/_images/social_previews/summary_using_ios_cbb10af8.png" />
-<meta property="og:image:alt" content="Authors, Russell Keith-Magee (2024-03),. Python on iOS is unlike Python on desktop platforms. On a desktop platform, Python is generally installed as a system resource that can be used by any user ..." />
-<meta name="description" content="Authors, Russell Keith-Magee (2024-03),. Python on iOS is unlike Python on desktop platforms. On a desktop platform, Python is generally installed as a system resource that can be used by any user ..." />
+<meta property="og:image" content="https://docs.python.org/3.13/zh-cn/_images/social_previews/summary_using_ios_a21787c0.png" />
+<meta property="og:image:alt" content="作者, Russell Keith-Magee (2024-03),. 在 iOS 上的 Python 不同于桌面平台上的 Python。 在桌面平台上，Python 通常是作为系统资源安装并可供该计算机上的任何用户使用。 用户将通过运行 python 可执行文件并在交互提示符下输入命令，或者通过运行 Python 脚本的方式与 Python 进行交互。 在 iOS，不存在作为系统资源安装种..." />
+<meta name="description" content="作者, Russell Keith-Magee (2024-03),. 在 iOS 上的 Python 不同于桌面平台上的 Python。 在桌面平台上，Python 通常是作为系统资源安装并可供该计算机上的任何用户使用。 用户将通过运行 python 可执行文件并在交互提示符下输入命令，或者通过运行 Python 脚本的方式与 Python 进行交互。 在 iOS，不存在作为系统资源安装种..." />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="theme-color" content="#3776ab">
 
-    <title>7. Using Python on iOS &#8212; Python 3.14.5 documentation</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>7. 在 iOS 上使用 Python &#8212; Python 3.13.13 文档</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
     
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
     <link rel="stylesheet" type="text/css" href="../_static/classic.css?v=234b1a7c" />
     <link rel="stylesheet" type="text/css" href="../_static/pydoctheme.css?v=4365c8fe" />
     <link id="pygments_dark_css" media="(prefers-color-scheme: dark)" rel="stylesheet" type="text/css" href="../_static/pygments_dark.css?v=5349f25f" />
     
-    <script src="../_static/documentation_options.js?v=bcfd2f37"></script>
+    <script src="../_static/documentation_options.js?v=a941be6b"></script>
     <script src="../_static/doctools.js?v=9bcbadda"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/translations.js?v=beaddf03"></script>
     
     <script src="../_static/sidebar.js"></script>
     
     <link rel="search" type="application/opensearchdescription+xml"
-          title="Search within Python 3.14.5 documentation"
+          title="在 Python 3.13.13 文档 中搜索"
           href="../_static/opensearch.xml"/>
-    <link rel="author" title="About these documents" href="../about.html" />
-    <link rel="index" title="Index" href="../genindex.html" />
-    <link rel="search" title="Search" href="../search.html" />
-    <link rel="copyright" title="Copyright" href="../copyright.html" />
-    <link rel="next" title="8. Editors and IDEs" href="editors.html" />
-    <link rel="prev" title="6. Using Python on Android" href="android.html" />
+    <link rel="author" title="关于此文档" href="../about.html" />
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="搜索" href="../search.html" />
+    <link rel="copyright" title="版权" href="../copyright.html" />
+    <link rel="next" title="8. 编辑器和集成开发环境" href="editors.html" />
+    <link rel="prev" title="6. 在Android上使用 Python" href="android.html" />
     
       
       <script defer file-types="bz2,epub,zip" data-domain="docs.python.org" src="https://analytics.python.org/js/script.file-downloads.outbound-links.js"></script>
@@ -68,7 +69,7 @@
 <body>
 <div class="mobile-nav">
     <input type="checkbox" id="menuToggler" class="toggler__input" aria-controls="navigation"
-           aria-pressed="false" aria-expanded="false" role="button" aria-label="Menu">
+           aria-pressed="false" aria-expanded="false" role="button" aria-label="菜单">
     <nav class="nav-content" role="navigation">
         <label for="menuToggler" class="toggler__label">
             <span></span>
@@ -82,8 +83,8 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" class="search-icon">
                     <path fill-rule="nonzero" fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 001.48-5.34c-.47-2.78-2.79-5-5.59-5.34a6.505 6.505 0 00-7.27 7.27c.34 2.8 2.56 5.12 5.34 5.59a6.5 6.5 0 005.34-1.48l.27.28v.79l4.25 4.25c.41.41 1.08.41 1.49 0 .41-.41.41-1.08 0-1.49L15.5 14zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"></path>
                 </svg>
-                <input placeholder="Quick search" aria-label="Quick search" type="search" name="q">
-                <input type="submit" value="Go">
+                <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q">
+                <input type="submit" value="转到">
             </form>
         </span>
     </nav>
@@ -92,74 +93,60 @@
             <div class="language_switcher_placeholder"></div>
             
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label>
   <div>
-    <h3><a href="../contents.html">Table of Contents</a></h3>
+    <h3><a href="../contents.html">目录</a></h3>
     <ul>
-<li><a class="reference internal" href="#">7. Using Python on iOS</a><ul>
-<li><a class="reference internal" href="#python-at-runtime-on-ios">7.1. Python at runtime on iOS</a><ul>
-<li><a class="reference internal" href="#ios-version-compatibility">7.1.1. iOS version compatibility</a></li>
-<li><a class="reference internal" href="#platform-identification">7.1.2. Platform identification</a></li>
-<li><a class="reference internal" href="#standard-library-availability">7.1.3. Standard library availability</a></li>
-<li><a class="reference internal" href="#binary-extension-modules">7.1.4. Binary extension modules</a></li>
-<li><a class="reference internal" href="#compiler-stub-binaries">7.1.5. Compiler stub binaries</a></li>
+<li><a class="reference internal" href="#">7. 在 iOS 上使用 Python</a><ul>
+<li><a class="reference internal" href="#python-at-runtime-on-ios">7.1. iOS 上的 Python 运行时</a><ul>
+<li><a class="reference internal" href="#ios-version-compatibility">7.1.1. iOS 版本兼容性</a></li>
+<li><a class="reference internal" href="#platform-identification">7.1.2. 平台识别</a></li>
+<li><a class="reference internal" href="#standard-library-availability">7.1.3. 标准库可用性</a></li>
+<li><a class="reference internal" href="#binary-extension-modules">7.1.4. 二进制扩展模块</a></li>
+<li><a class="reference internal" href="#compiler-stub-binaries">7.1.5. 编译器存根二进制文件</a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#installing-python-on-ios">7.2. Installing Python on iOS</a><ul>
-<li><a class="reference internal" href="#tools-for-building-ios-apps">7.2.1. Tools for building iOS apps</a></li>
-<li><a class="reference internal" href="#adding-python-to-an-ios-project">7.2.2. Adding Python to an iOS project</a></li>
-<li><a class="reference internal" href="#testing-a-python-package">7.2.3. Testing a Python package</a></li>
+<li><a class="reference internal" href="#installing-python-on-ios">7.2. 在 iOS 上安装 Python</a><ul>
+<li><a class="reference internal" href="#tools-for-building-ios-apps">7.2.1. 构建 iOS 应用程序的工具</a></li>
+<li><a class="reference internal" href="#adding-python-to-an-ios-project">7.2.2. 在 iOS 项目中添加 Python</a></li>
+<li><a class="reference internal" href="#testing-a-python-package">7.2.3. 测试 Python 软件包</a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#app-store-compliance">7.3. App Store Compliance</a><ul>
-<li><a class="reference internal" href="#incompatible-code-in-the-standard-library">7.3.1. Incompatible code in the standard library</a></li>
-<li><a class="reference internal" href="#privacy-manifests">7.3.2. Privacy manifests</a></li>
-</ul>
-</li>
+<li><a class="reference internal" href="#app-store-compliance">7.3. App Store 合规性</a></li>
 </ul>
 </li>
 </ul>
 
   </div>
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="android.html"
-                          title="previous chapter"><span class="section-number">6. </span>Using Python on Android</a></p>
+                          title="上一章"><span class="section-number">6. </span>在Android上使用 Python</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="editors.html"
-                          title="next chapter"><span class="section-number">8. </span>Editors and IDEs</a></p>
+                          title="下一章"><span class="section-number">8. </span>编辑器和集成开发环境</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "using/ios.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/using/ios.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/using/ios.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
@@ -170,20 +157,20 @@
 
   
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             accesskey="I">index</a></li>
+          <a href="../genindex.html" title="总索引"
+             accesskey="I">索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="editors.html" title="8. Editors and IDEs"
-             accesskey="N">next</a> |</li>
+          <a href="editors.html" title="8. 编辑器和集成开发环境"
+             accesskey="N">下一页</a> |</li>
         <li class="right" >
-          <a href="android.html" title="6. Using Python on Android"
-             accesskey="P">previous</a> |</li>
+          <a href="android.html" title="6. 在Android上使用 Python"
+             accesskey="P">上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -195,29 +182,29 @@
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-          <li class="nav-item nav-item-1"><a href="index.html" accesskey="U">Python Setup and Usage</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href=""><span class="section-number">7. </span>Using Python on iOS</a></li>
+          <li class="nav-item nav-item-1"><a href="index.html" accesskey="U">Python安装和使用</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href=""><span class="section-number">7. </span>在 iOS 上使用 Python</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
@@ -230,320 +217,210 @@
           <div class="body" role="main">
             
   <section id="using-python-on-ios">
-<span id="using-ios"></span><h1><span class="section-number">7. </span>Using Python on iOS<a class="headerlink" href="#using-python-on-ios" title="Link to this heading">¶</a></h1>
+<span id="using-ios"></span><h1 class="translated"><span class="section-number">7. </span>在 iOS 上使用 Python<a class="headerlink" href="#using-python-on-ios" title="Link to this heading">¶</a></h1>
 <dl class="field-list simple">
-<dt class="field-odd">Authors<span class="colon">:</span></dt>
-<dd class="field-odd"><p>Russell Keith-Magee (2024-03)</p>
+<dt class="field-odd translated">作者<span class="colon">:</span></dt>
+<dd class="field-odd translated"><p class="translated">Russell Keith-Magee (2024-03)</p>
 </dd>
 </dl>
-<p>Python on iOS is unlike Python on desktop platforms. On a desktop platform,
-Python is generally installed as a system resource that can be used by any user
-of that computer. Users then interact with Python by running a <strong class="program">python</strong>
-executable and entering commands at an interactive prompt, or by running a
-Python script.</p>
-<p>On iOS, there is no concept of installing as a system resource. The only unit
-of software distribution is an “app”. There is also no console where you could
-run a <strong class="program">python</strong> executable, or interact with a Python REPL.</p>
-<p>As a result, the only way you can use Python on iOS is in embedded mode - that
-is, by writing a native iOS application, and embedding a Python interpreter
-using <code class="docutils literal notranslate"><span class="pre">libPython</span></code>, and invoking Python code using the <a class="reference internal" href="../extending/embedding.html#embedding"><span class="std std-ref">Python embedding
-API</span></a>. The full Python interpreter, the standard library, and all
-your Python code is then packaged as a standalone bundle that can be
-distributed via the iOS App Store.</p>
-<p>If you’re looking to experiment for the first time with writing an iOS app in
-Python, projects such as <a class="reference external" href="https://beeware.org">BeeWare</a> and <a class="reference external" href="https://kivy.org">Kivy</a> will provide a much more approachable user experience.
-These projects manage the complexities associated with getting an iOS project
-running, so you only need to deal with the Python code itself.</p>
+<p class="translated">在 iOS 上的 Python 不同于桌面平台上的 Python。 在桌面平台上，Python 通常是作为系统资源安装并可供该计算机上的任何用户使用。 用户将通过运行 <strong class="program">python</strong> 可执行文件并在交互提示符下输入命令，或者通过运行 Python 脚本的方式与 Python 进行交互。</p>
+<p class="translated">在 iOS，不存在作为系统资源安装种概念。 唯一的软件分发单元是 &quot;app&quot;。 也不存在可以让你运行 <strong class="program">python</strong> 可执行文件，或与 Python REPL 进行交互的控制台。</p>
+<p class="translated">因此，你在 iOS 上使用 Python 的唯一方式是嵌入模式 —— 也就是说，通过编写原生的 iOS 应用，并使用 <code class="docutils literal notranslate"><span class="pre">libPython</span></code> 嵌入一个 Python 解释器，然后使用 <a class="reference internal" href="../extending/embedding.html#embedding"><span class="std std-ref">Python 嵌入式 API</span></a> 来唤起 Python 代码。 完整的 Python 解释器、标准库，以及所有 Python 代码都将被打包为可通过 iOS App Store 发布的独立软件包。</p>
+<p class="translated">如果你想要上手尝试以 Python 来编写 iOS app，像 <a class="reference external" href="https://beeware.org">BeeWare</a> 和 <a class="reference external" href="https://kivy.org">Kivy</a> 这样的项目将提供更方便的用户体验。 这些项目能够管理支持 iOS 项目运行的相关复杂问题，这样你只需要处理 Python 代码本身。</p>
 <section id="python-at-runtime-on-ios">
-<h2><span class="section-number">7.1. </span>Python at runtime on iOS<a class="headerlink" href="#python-at-runtime-on-ios" title="Link to this heading">¶</a></h2>
+<h2 class="translated"><span class="section-number">7.1. </span>iOS 上的 Python 运行时<a class="headerlink" href="#python-at-runtime-on-ios" title="Link to this heading">¶</a></h2>
 <section id="ios-version-compatibility">
-<h3><span class="section-number">7.1.1. </span>iOS version compatibility<a class="headerlink" href="#ios-version-compatibility" title="Link to this heading">¶</a></h3>
-<p>The minimum supported iOS version is specified at compile time, using the
-<a class="reference internal" href="configure.html#cmdoption-host"><code class="xref std std-option docutils literal notranslate"><span class="pre">--host</span></code></a> option to <code class="docutils literal notranslate"><span class="pre">configure</span></code>. By default, when compiled for iOS,
-Python will be compiled with a minimum supported iOS version of 13.0. To use a
-different minimum iOS version, provide the version number as part of the
-<code class="xref std std-option docutils literal notranslate"><span class="pre">--host</span></code> argument - for example,
-<code class="docutils literal notranslate"><span class="pre">--host=arm64-apple-ios15.4-simulator</span></code> would compile an ARM64 simulator build
-with a deployment target of 15.4.</p>
+<h3 class="translated"><span class="section-number">7.1.1. </span>iOS 版本兼容性<a class="headerlink" href="#ios-version-compatibility" title="Link to this heading">¶</a></h3>
+<p class="translated">受支持的最低 iOS 版本是在编译时指定的，对 <code class="docutils literal notranslate"><span class="pre">configure</span></code> 使用 <a class="reference internal" href="configure.html#cmdoption-host"><code class="xref std std-option docutils literal notranslate"><span class="pre">--host</span></code></a> 选项。 在默认情况下，当针对 iOS 编译时，Python 编译将设置受支持的最低 iOS 版本为 13.0。 我使用不同的最低 iOS 版本，请将版本号作为 <code class="xref std std-option docutils literal notranslate"><span class="pre">--host</span></code> 参数的一部分提供 —— 例如，<code class="docutils literal notranslate"><span class="pre">--host=arm64-apple-ios15.4-simulator</span></code> 将编译一份部署目标为 15.4 的 ARM64 模拟器构建版。</p>
 </section>
 <section id="platform-identification">
-<h3><span class="section-number">7.1.2. </span>Platform identification<a class="headerlink" href="#platform-identification" title="Link to this heading">¶</a></h3>
-<p>When executing on iOS, <code class="docutils literal notranslate"><span class="pre">sys.platform</span></code> will report as <code class="docutils literal notranslate"><span class="pre">ios</span></code>. This value will
-be returned on an iPhone or iPad, regardless of whether the app is running on
-the simulator or a physical device.</p>
-<p>Information about the specific runtime environment, including the iOS version,
-device model, and whether the device is a simulator, can be obtained using
-<a class="reference internal" href="../library/platform.html#platform.ios_ver" title="platform.ios_ver"><code class="xref py py-func docutils literal notranslate"><span class="pre">platform.ios_ver()</span></code></a>. <a class="reference internal" href="../library/platform.html#platform.system" title="platform.system"><code class="xref py py-func docutils literal notranslate"><span class="pre">platform.system()</span></code></a> will report <code class="docutils literal notranslate"><span class="pre">iOS</span></code> or
-<code class="docutils literal notranslate"><span class="pre">iPadOS</span></code>, depending on the device.</p>
-<p><a class="reference internal" href="../library/os.html#os.uname" title="os.uname"><code class="xref py py-func docutils literal notranslate"><span class="pre">os.uname()</span></code></a> reports kernel-level details; it will report a name of
-<code class="docutils literal notranslate"><span class="pre">Darwin</span></code>.</p>
+<h3 class="translated"><span class="section-number">7.1.2. </span>平台识别<a class="headerlink" href="#platform-identification" title="Link to this heading">¶</a></h3>
+<p class="translated">当在 iOS 上执行时，<code class="docutils literal notranslate"><span class="pre">sys.platform</span></code> 将报告为 <code class="docutils literal notranslate"><span class="pre">ios</span></code>。 无论 app 是在模拟器还是物理设备上运行，都将在 iPhone 或 iPad 上返回该值。</p>
+<p class="translated">有关特定运行时环境的信息，包括 iOS 版本、设备型号以及设备是否为模拟器，可使用 <a class="reference internal" href="../library/platform.html#platform.ios_ver" title="platform.ios_ver"><code class="xref py py-func docutils literal notranslate"><span class="pre">platform.ios_ver()</span></code></a> 来获取。 <a class="reference internal" href="../library/platform.html#platform.system" title="platform.system"><code class="xref py py-func docutils literal notranslate"><span class="pre">platform.system()</span></code></a> 将根据具体设备报告为 <code class="docutils literal notranslate"><span class="pre">iOS</span></code> 或 <code class="docutils literal notranslate"><span class="pre">iPadOS</span></code>。</p>
+<p class="translated"><a class="reference internal" href="../library/os.html#os.uname" title="os.uname"><code class="xref py py-func docutils literal notranslate"><span class="pre">os.uname()</span></code></a> 报告内核等级的详情；它将报告系统名称 <code class="docutils literal notranslate"><span class="pre">Darwin</span></code>。</p>
 </section>
 <section id="standard-library-availability">
-<h3><span class="section-number">7.1.3. </span>Standard library availability<a class="headerlink" href="#standard-library-availability" title="Link to this heading">¶</a></h3>
-<p>The Python standard library has some notable omissions and restrictions on
-iOS. See the <a class="reference internal" href="../library/intro.html#mobile-availability"><span class="std std-ref">API availability guide for iOS</span></a> for
-details.</p>
+<h3 class="translated"><span class="section-number">7.1.3. </span>标准库可用性<a class="headerlink" href="#standard-library-availability" title="Link to this heading">¶</a></h3>
+<p class="translated">Python 标准库在standard library has some notable omissions and restrictions on iOS 上有一点需要注意的缺失和限制。 请参阅 <a class="reference internal" href="../library/intro.html#mobile-availability"><span class="std std-ref">针对 iOS 的 API 可用性指南</span></a> 了解详情。</p>
 </section>
 <section id="binary-extension-modules">
-<h3><span class="section-number">7.1.4. </span>Binary extension modules<a class="headerlink" href="#binary-extension-modules" title="Link to this heading">¶</a></h3>
-<p>One notable difference about iOS as a platform is that App Store distribution
-imposes hard requirements on the packaging of an application. One of these
-requirements governs how binary extension modules are distributed.</p>
-<p>The iOS App Store requires that <em>all</em> binary modules in an iOS app must be
-dynamic libraries, contained in a framework with appropriate metadata, stored
-in the <code class="docutils literal notranslate"><span class="pre">Frameworks</span></code> folder of the packaged app. There can be only a single
-binary per framework, and there can be no executable binary material outside
-the <code class="docutils literal notranslate"><span class="pre">Frameworks</span></code> folder.</p>
-<p>This conflicts with the usual Python approach for distributing binaries, which
-allows a binary extension module to be loaded from any location on
-<code class="docutils literal notranslate"><span class="pre">sys.path</span></code>. To ensure compliance with App Store policies, an iOS project must
-post-process any Python packages, converting <code class="docutils literal notranslate"><span class="pre">.so</span></code> binary modules into
-individual standalone frameworks with appropriate metadata and signing. For
-details on how to perform this post-processing, see the guide for <a class="reference internal" href="#adding-ios"><span class="std std-ref">adding
-Python to your project</span></a>.</p>
-<p>To help Python discover binaries in their new location, the original <code class="docutils literal notranslate"><span class="pre">.so</span></code>
-file on <code class="docutils literal notranslate"><span class="pre">sys.path</span></code> is replaced with a <code class="docutils literal notranslate"><span class="pre">.fwork</span></code> file. This file is a text
-file containing the location of the framework binary, relative to the app
-bundle. To allow the framework to resolve back to the original location, the
-framework must contain a <code class="docutils literal notranslate"><span class="pre">.origin</span></code> file that contains the location of the
-<code class="docutils literal notranslate"><span class="pre">.fwork</span></code> file, relative to the app bundle.</p>
-<p>For example, consider the case of an import <code class="docutils literal notranslate"><span class="pre">from</span> <span class="pre">foo.bar</span> <span class="pre">import</span> <span class="pre">_whiz</span></code>,
-where <code class="docutils literal notranslate"><span class="pre">_whiz</span></code> is implemented with the binary module
-<code class="docutils literal notranslate"><span class="pre">sources/foo/bar/_whiz.abi3.so</span></code>, with <code class="docutils literal notranslate"><span class="pre">sources</span></code> being the location
-registered on <code class="docutils literal notranslate"><span class="pre">sys.path</span></code>, relative to the application bundle. This module
-<em>must</em> be distributed as <code class="docutils literal notranslate"><span class="pre">Frameworks/foo.bar._whiz.framework/foo.bar._whiz</span></code>
-(creating the framework name from the full import path of the module), with an
-<code class="docutils literal notranslate"><span class="pre">Info.plist</span></code> file in the <code class="docutils literal notranslate"><span class="pre">.framework</span></code> directory identifying the binary as a
-framework. The <code class="docutils literal notranslate"><span class="pre">foo.bar._whiz</span></code> module would be represented in the original
-location with a <code class="docutils literal notranslate"><span class="pre">sources/foo/bar/_whiz.abi3.fwork</span></code> marker file, containing
-the path <code class="docutils literal notranslate"><span class="pre">Frameworks/foo.bar._whiz/foo.bar._whiz</span></code>. The framework would also
-contain <code class="docutils literal notranslate"><span class="pre">Frameworks/foo.bar._whiz.framework/foo.bar._whiz.origin</span></code>, containing
-the path to the <code class="docutils literal notranslate"><span class="pre">.fwork</span></code> file.</p>
-<p>When running on iOS, the Python interpreter will install an
-<a class="reference internal" href="../library/importlib.html#importlib.machinery.AppleFrameworkLoader" title="importlib.machinery.AppleFrameworkLoader"><code class="xref py py-class docutils literal notranslate"><span class="pre">AppleFrameworkLoader</span></code></a> that is able to read and
-import <code class="docutils literal notranslate"><span class="pre">.fwork</span></code> files. Once imported, the <code class="docutils literal notranslate"><span class="pre">__file__</span></code> attribute of the
-binary module will report as the location of the <code class="docutils literal notranslate"><span class="pre">.fwork</span></code> file. However, the
-<a class="reference internal" href="../library/importlib.html#importlib.machinery.ModuleSpec" title="importlib.machinery.ModuleSpec"><code class="xref py py-class docutils literal notranslate"><span class="pre">ModuleSpec</span></code></a> for the loaded module will report the
-<code class="docutils literal notranslate"><span class="pre">origin</span></code> as the location of the binary in the framework folder.</p>
+<h3 class="translated"><span class="section-number">7.1.4. </span>二进制扩展模块<a class="headerlink" href="#binary-extension-modules" title="Link to this heading">¶</a></h3>
+<p class="translated">作为一个平台的 iOS 与别家的显著不同之处在于 App Store 分发机制对应用的打包方式设置了硬性要求。其中一项要求规定了应当如何分发二进制扩展模块。</p>
+<p class="translated">iOS App Store 要求 iOS app 中的 <em>所有</em> 二进制模块都必须为动态库，包含在具有适当元数据的框架中，保存于被打包 app 的 <code class="docutils literal notranslate"><span class="pre">Frameworks</span></code> 文件夹下。 每个框架只能有一个二进制模块，而在 <code class="docutils literal notranslate"><span class="pre">Frameworks</span></code> 文件夹之外不能有可执行的二进制文件。</p>
+<p class="translated">这与 Python 通常用于发布二进制文件的方式存在冲突，此方式允许从 <code class="docutils literal notranslate"><span class="pre">sys.path</span></code> 上的任何位置加载二进制扩展模块。 为确保符合 App Store 的政策，iOS 项目必须对任何 Python 包进行后期处理，将 <code class="docutils literal notranslate"><span class="pre">.so</span></code> 二进制模块转换为具有适当元数据和签名的单个独立框架。 有关如何执行后期处理的更多细节，请参阅 <a class="reference internal" href="#adding-ios"><span class="std std-ref">将 Python 添加到你的项目</span></a> 指南。</p>
+<p class="translated">为帮助 Python 在新位置中发现二进制文件，在 <code class="docutils literal notranslate"><span class="pre">sys.path</span></code> 中的原始 <code class="docutils literal notranslate"><span class="pre">.so</span></code> 文件将替换为 <code class="docutils literal notranslate"><span class="pre">.fwork</span></code> 文件。 此文件是一个包含框架二进制文件相对于 app 捆绑包位置的文本文件。 为允许框架将其解析回原始位置，框架必须包含一个 <code class="docutils literal notranslate"><span class="pre">.origin</span></code> 文件，其中包含 <code class="docutils literal notranslate"><span class="pre">.fwork</span></code> 相对对 app 捆绑包的位置。</p>
+<p class="translated">例如，考虑导入 <code class="docutils literal notranslate"><span class="pre">from</span> <span class="pre">foo.bar</span> <span class="pre">import</span> <span class="pre">_whiz</span></code> 的情况，其中 <code class="docutils literal notranslate"><span class="pre">_whiz</span></code> 是使用二进制模块 <code class="docutils literal notranslate"><span class="pre">sources/foo/bar/_whiz.abi3.so</span></code> 实现的，这里 <code class="docutils literal notranslate"><span class="pre">sources</span></code> 是在 <code class="docutils literal notranslate"><span class="pre">sys.path</span></code> 中注册的相对于 app 包的位置。 此模块 <em>必须</em> 发布为 <code class="docutils literal notranslate"><span class="pre">Frameworks/foo.bar._whiz.framework/foo.bar._whiz</span></code> (根据模块的完整导入路径创建框架名称)，并通过 <code class="docutils literal notranslate"><span class="pre">.framework</span></code> 目录中的 <code class="docutils literal notranslate"><span class="pre">Info.plist</span></code> 文件将二进制文件标识为一个框架。 <code class="docutils literal notranslate"><span class="pre">foo.bar._whiz</span></code> 模块在原始位置中以一个 <code class="docutils literal notranslate"><span class="pre">sources/foo/bar/_whiz.abi3.fwork</span></code> 标记文件来代表，其中包含路径 <code class="docutils literal notranslate"><span class="pre">Frameworks/foo.bar._whiz/foo.bar._whiz</span></code>。 该框架还要包含 <code class="docutils literal notranslate"><span class="pre">Frameworks/foo.bar._whiz.framework/foo.bar._whiz.origin</span></code>，其中包含 <code class="docutils literal notranslate"><span class="pre">.fwork</span></code> 文件的路径。</p>
+<p class="translated">当在 iOS 上运行时，Python 解释器将安装一个能够读取并导入 <code class="docutils literal notranslate"><span class="pre">.fwork</span></code> 文件的 <a class="reference internal" href="../library/importlib.html#importlib.machinery.AppleFrameworkLoader" title="importlib.machinery.AppleFrameworkLoader"><code class="xref py py-class docutils literal notranslate"><span class="pre">AppleFrameworkLoader</span></code></a>。 一旦被导入，该二进制模块的 <code class="docutils literal notranslate"><span class="pre">__file__</span></code> 属性将报告为 <code class="docutils literal notranslate"><span class="pre">.fwork</span></code> 文件的位置。 不过，被加载模块的 <a class="reference internal" href="../library/importlib.html#importlib.machinery.ModuleSpec" title="importlib.machinery.ModuleSpec"><code class="xref py py-class docutils literal notranslate"><span class="pre">ModuleSpec</span></code></a> 则会将 <code class="docutils literal notranslate"><span class="pre">origin</span></code> 报告为框架文件夹下的二进制文件的位置。</p>
 </section>
 <section id="compiler-stub-binaries">
-<h3><span class="section-number">7.1.5. </span>Compiler stub binaries<a class="headerlink" href="#compiler-stub-binaries" title="Link to this heading">¶</a></h3>
-<p>Xcode doesn’t expose explicit compilers for iOS; instead, it uses an <code class="docutils literal notranslate"><span class="pre">xcrun</span></code>
-script that resolves to a full compiler path (e.g., <code class="docutils literal notranslate"><span class="pre">xcrun</span> <span class="pre">--sdk</span> <span class="pre">iphoneos</span>
-<span class="pre">clang</span></code> to get the <code class="docutils literal notranslate"><span class="pre">clang</span></code> for an iPhone device). However, using this script
-poses two problems:</p>
+<h3 class="translated"><span class="section-number">7.1.5. </span>编译器存根二进制文件<a class="headerlink" href="#compiler-stub-binaries" title="Link to this heading">¶</a></h3>
+<p class="translated">Xcode 不会暴露针对 iOS 的显式编译器；作为替代，它会使用一个能解析出完整编译器路径的 <code class="docutils literal notranslate"><span class="pre">xcrun</span></code> 脚本 (例如，<code class="docutils literal notranslate"><span class="pre">xcrun</span> <span class="pre">--sdk</span> <span class="pre">iphoneos</span> <span class="pre">clang</span></code> 将获得针对 iPhone 设备的 <code class="docutils literal notranslate"><span class="pre">clang</span></code>)。 不过，使用此脚本会导致两个问题：</p>
 <ul class="simple">
-<li><p>The output of <code class="docutils literal notranslate"><span class="pre">xcrun</span></code> includes paths that are machine specific, resulting
-in a sysconfig module that cannot be shared between users; and</p></li>
-<li><p>It results in <code class="docutils literal notranslate"><span class="pre">CC</span></code>/<code class="docutils literal notranslate"><span class="pre">CPP</span></code>/<code class="docutils literal notranslate"><span class="pre">LD</span></code>/<code class="docutils literal notranslate"><span class="pre">AR</span></code> definitions that include spaces.
-There is a lot of C ecosystem tooling that assumes that you can split a
-command line at the first space to get the path to the compiler executable;
-this isn’t the case when using <code class="docutils literal notranslate"><span class="pre">xcrun</span></code>.</p></li>
+<li><p class="translated"><code class="docutils literal notranslate"><span class="pre">xcrun</span></code> 的输出包括特定机器专属的路径，这导致无法在用户之间共享 sysconfig 模块；并且</p></li>
+<li><p class="translated">它会导致包括空格的 <code class="docutils literal notranslate"><span class="pre">CC</span></code>/<code class="docutils literal notranslate"><span class="pre">CPP</span></code>/<code class="docutils literal notranslate"><span class="pre">LD</span></code>/<code class="docutils literal notranslate"><span class="pre">AR</span></code> 定义。 有大量 C 生态系统工具假定你可以在第一个空格处拆分命令行来获取编译器可执行文件的路径；当使用 <code class="docutils literal notranslate"><span class="pre">xcrun</span></code> 这是不行的。</p></li>
 </ul>
-<p>To avoid these problems, Python provided stubs for these tools. These stubs are
-shell script wrappers around the underingly <code class="docutils literal notranslate"><span class="pre">xcrun</span></code> tools, distributed in a
-<code class="docutils literal notranslate"><span class="pre">bin</span></code> folder distributed alongside the compiled iOS framework. These scripts
-are relocatable, and will always resolve to the appropriate local system paths.
-By including these scripts in the bin folder that accompanies a framework, the
-contents of the <code class="docutils literal notranslate"><span class="pre">sysconfig</span></code> module becomes useful for end-users to compile
-their own modules. When compiling third-party Python modules for iOS, you
-should ensure these stub binaries are on your path.</p>
+<p class="translated">为避免这些问题，Python 提供了针对这些工具的程序段。 这些代码段是在下层 <code class="docutils literal notranslate"><span class="pre">xcrun</span></code> 工具之上的 shell 脚本包装器，发布在随同已编译的 iOS 框架一起分发的 <code class="docutils literal notranslate"><span class="pre">bin</span></code> 文件夹中。 这些脚本可以被重新调整位置，并且总是会解析到正确的本机系统路径。 通过在配合框架的 bin 文件夹中包括这些脚本，<code class="docutils literal notranslate"><span class="pre">sysconfig</span></code> 模块的内容将可适用于要编译他们自己的模块的最终用户。 在为 iOS 编译第三方 Python 模块时，你应当确保这些程序段二进制文件位于你的路径中。</p>
 </section>
 </section>
 <section id="installing-python-on-ios">
-<h2><span class="section-number">7.2. </span>Installing Python on iOS<a class="headerlink" href="#installing-python-on-ios" title="Link to this heading">¶</a></h2>
+<h2 class="translated"><span class="section-number">7.2. </span>在 iOS 上安装 Python<a class="headerlink" href="#installing-python-on-ios" title="Link to this heading">¶</a></h2>
 <section id="tools-for-building-ios-apps">
-<h3><span class="section-number">7.2.1. </span>Tools for building iOS apps<a class="headerlink" href="#tools-for-building-ios-apps" title="Link to this heading">¶</a></h3>
-<p>Building for iOS requires the use of Apple’s Xcode tooling. It is strongly
-recommended that you use the most recent stable release of Xcode. This will
-require the use of the most (or second-most) recently released macOS version,
-as Apple does not maintain Xcode for older macOS versions. The Xcode Command
-Line Tools are not sufficient for iOS development; you need a <em>full</em> Xcode
-install.</p>
-<p>If you want to run your code on the iOS simulator, you’ll also need to install
-an iOS Simulator Platform. You should be prompted to select an iOS Simulator
-Platform when you first run Xcode. Alternatively, you can add an iOS Simulator
-Platform by selecting from the Platforms tab of the Xcode Settings panel.</p>
+<h3 class="translated"><span class="section-number">7.2.1. </span>构建 iOS 应用程序的工具<a class="headerlink" href="#tools-for-building-ios-apps" title="Link to this heading">¶</a></h3>
+<p class="translated">针对 iOS 构建需要使用 Apple 的 Xcode 工具集。 强烈建议你使用 Xcode 最新稳定发布版。 这将需要使用最新（或者次新）发布的 macOS 版本，因为 Apple 不会为更旧的 macOS 版本维护 Xcode。 Xcode 命令行工具对于 iOS 开发来说是不够的；你需要 <em>完整的</em> Xcode 安装版。</p>
+<p class="translated">如果你想要在 iOS 模拟器上运行你的代码，你还需要安装 iOS 模拟器平台。 当你首次运行 Xcode 应该会提示你选择一个 iOS 模拟器平台。 或者，你也可以通过在 Settings 面板的 Platforms 选项卡中添加一个 iOS 模拟器平台。</p>
 </section>
 <section id="adding-python-to-an-ios-project">
-<span id="adding-ios"></span><h3><span class="section-number">7.2.2. </span>Adding Python to an iOS project<a class="headerlink" href="#adding-python-to-an-ios-project" title="Link to this heading">¶</a></h3>
-<p>Python can be added to any iOS project, using either Swift or Objective C. The
-following examples will use Objective C; if you are using Swift, you may find a
-library like <a class="reference external" href="https://github.com/pvieito/PythonKit">PythonKit</a> to be
-helpful.</p>
-<p>To add Python to an iOS Xcode project:</p>
+<span id="adding-ios"></span><h3 class="translated"><span class="section-number">7.2.2. </span>在 iOS 项目中添加 Python<a class="headerlink" href="#adding-python-to-an-ios-project" title="Link to this heading">¶</a></h3>
+<p class="translated">Python 可以被添加到任何 iOS 项目，不论它是使用 Swift 还是 Objective C。 下面的例子将使用 Objective C；如果你是使用 Swift，你可能会发现 <a class="reference external" href="https://github.com/pvieito/PythonKit">PythonKit</a> 这样的库非常有用。</p>
+<p class="translated">要在 iOS Xcode 项目中添加 Python：</p>
 <ol class="arabic">
-<li><p>Build or obtain a Python <code class="docutils literal notranslate"><span class="pre">XCFramework</span></code>. See the instructions in
-<a class="extlink-source reference external" href="https://github.com/python/cpython/tree/3.14/Apple/iOS/README.md">Apple/iOS/README.md</a> (in the CPython source distribution) for details on
-how to build a Python <code class="docutils literal notranslate"><span class="pre">XCFramework</span></code>. At a minimum, you will need a build
-that supports <code class="docutils literal notranslate"><span class="pre">arm64-apple-ios</span></code>, plus one of either
-<code class="docutils literal notranslate"><span class="pre">arm64-apple-ios-simulator</span></code> or <code class="docutils literal notranslate"><span class="pre">x86_64-apple-ios-simulator</span></code>.</p></li>
-<li><p>Drag the <code class="docutils literal notranslate"><span class="pre">XCframework</span></code> into your iOS project. In the following
-instructions, we’ll assume you’ve dropped the <code class="docutils literal notranslate"><span class="pre">XCframework</span></code> into the root
-of your project; however, you can use any other location that you want by
-adjusting paths as needed.</p></li>
-<li><p>Add your application code as a folder in your Xcode project. In the
-following instructions, we’ll assume that your user code is in a folder
-named <code class="docutils literal notranslate"><span class="pre">app</span></code> in the root of your project; you can use any other location by
-adjusting paths as needed. Ensure that this folder is associated with your
-app target.</p></li>
-<li><p>Select the app target by selecting the root node of your Xcode project, then
-the target name in the sidebar that appears.</p></li>
-<li><p>In the “General” settings, under “Frameworks, Libraries and Embedded
-Content”, add <code class="docutils literal notranslate"><span class="pre">Python.xcframework</span></code>, with “Embed &amp; Sign” selected.</p></li>
-<li><p>In the “Build Settings” tab, modify the following:</p>
+<li><p class="translated">构建或是获取一个 Python <code class="docutils literal notranslate"><span class="pre">XCFramework</span></code>。 请参阅 <a class="extlink-source reference external" href="https://github.com/python/cpython/tree/3.13/iOS/README.rst">iOS/README.rst</a> (在 CPython 源代码发布包中) 中的说明了解有关如何构建 Python <code class="docutils literal notranslate"><span class="pre">XCFramework</span></code> 的细节。 要满足最基本要求，你需要一个支持 <code class="docutils literal notranslate"><span class="pre">arm64-apple-ios</span></code>，再加上 <code class="docutils literal notranslate"><span class="pre">arm64-apple-ios-simulator</span></code> 或 <code class="docutils literal notranslate"><span class="pre">x86_64-apple-ios-simulator</span></code> 之一的构建版。</p></li>
+<li><p class="translated">将 <code class="docutils literal notranslate"><span class="pre">XCframework</span></code> 拖到你的 iOS 项目中。 在下面的说明中，我们将假定你已将 <code class="docutils literal notranslate"><span class="pre">XCframework</span></code> 放到你的项目的根目录下；不过，你也可以通过按需调整路径来使用任何其他你想要的位置。</p></li>
+<li><p class="translated">将 <code class="docutils literal notranslate"><span class="pre">iOS/Resources/dylib-Info-template.plist</span></code> 文件拖到你的项目中，并确保它已关联到 app 目标。</p></li>
+<li><p class="translated">将你的应用程序代码作为一个文件夹添加到你的 Xcode 项目中。 在下面的说明中，我们将假定你的用户代码位于你的项目中名为 <code class="docutils literal notranslate"><span class="pre">app</span></code> 的文件夹；你也可以通过按需调整路径来使用任何其他位置。 请确保该文件夹已关联到你的 app 目标。</p></li>
+<li><p class="translated">通过选择你的 Xcode 项目的根节点来选择 app 目标，然后在边栏中出现的目标名称进行选择。</p></li>
+<li><p class="translated">在 &quot;General&quot; 设置中，在 &quot;Frameworks, Libraries and Embedded Content&quot; 之下，增加了 <code class="docutils literal notranslate"><span class="pre">Python.xcframework</span></code>，并选中 &quot;Embed &amp; Sign&quot;。</p></li>
+<li><p class="translated">在&quot;构建设置&quot;选项卡中，修改以下内容：</p>
 <ul class="simple">
-<li><p>Build Options</p>
+<li><p class="translated">构建选项</p>
 <ul>
-<li><p>User Script Sandboxing: No</p></li>
-<li><p>Enable Testability: Yes</p></li>
+<li><p class="translated">用户脚本沙盒：否</p></li>
+<li><p class="translated">启用可测试性：是</p></li>
 </ul>
 </li>
-<li><p>Search Paths</p>
+<li><p class="translated">搜索路径</p>
 <ul>
-<li><p>Framework Search Paths: <code class="docutils literal notranslate"><span class="pre">$(PROJECT_DIR)</span></code></p></li>
-<li><p>Header Search Paths: <code class="docutils literal notranslate"><span class="pre">&quot;$(BUILT_PRODUCTS_DIR)/Python.framework/Headers&quot;</span></code></p></li>
+<li><p class="translated">框架搜索路径： <code class="docutils literal notranslate"><span class="pre">$(PROJECT_DIR)</span></code></p></li>
+<li><p class="translated">头文件搜索路径： <code class="docutils literal notranslate"><span class="pre">&quot;$(BUILT_PRODUCTS_DIR)/Python.framework/Headers&quot;</span></code></p></li>
 </ul>
 </li>
-<li><p>Apple Clang - Warnings - All languages</p>
+<li><p class="translated">Apple Clang - 警告 - 所有语言</p>
 <ul>
-<li><p>Quoted Include In Framework Header: No</p></li>
+<li><p class="translated">引用包含在框架头文件中：否</p></li>
 </ul>
 </li>
 </ul>
 </li>
-<li><p>Add a build step that processes the Python standard library, and your own
-Python binary dependencies. In the “Build Phases” tab, add a new “Run
-Script” build step <em>before</em> the “Embed Frameworks” step, but <em>after</em> the
-“Copy Bundle Resources” step. Name the step “Process Python libraries”,
-disable the “Based on dependency analysis” checkbox, and set the script
-content to:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">set</span><span class="w"> </span>-e
-<span class="nb">source</span><span class="w"> </span><span class="nv">$PROJECT_DIR</span>/Python.xcframework/build/build_utils.sh
-install_python<span class="w"> </span>Python.xcframework<span class="w"> </span>app
+<li><p class="translated">添加一个用于将 Python 标准库拷贝到你的 app 中的构建步骤。 在 &quot;Build Phases&quot; 选项卡中，在 &quot;Embed Frameworks&quot; 步骤 <em>之前</em>，&quot;Copy Bundle Resources&quot; 步骤 <em>之后</em> 添加一个新的 &quot;Run Script&quot; 构建步骤。 将该步骤命名为 &quot;Install Target Specific Python Standard Library&quot;，取消 &quot;Based on dependency analysis&quot; 复选框，并将脚本内容设为：</p>
+<div class="translated highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">set</span><span class="w"> </span>-e
+
+mkdir<span class="w"> </span>-p<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CODESIGNING_FOLDER_PATH</span><span class="s2">/python/lib&quot;</span>
+<span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$EFFECTIVE_PLATFORM_NAME</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;-iphonesimulator&quot;</span><span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;Installing Python modules for iOS Simulator&quot;</span>
+<span class="w">    </span>rsync<span class="w"> </span>-au<span class="w"> </span>--delete<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$PROJECT_DIR</span><span class="s2">/Python.xcframework/ios-arm64_x86_64-simulator/lib/&quot;</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CODESIGNING_FOLDER_PATH</span><span class="s2">/python/lib/&quot;</span>
+<span class="k">else</span>
+<span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;Installing Python modules for iOS Device&quot;</span>
+<span class="w">    </span>rsync<span class="w"> </span>-au<span class="w"> </span>--delete<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$PROJECT_DIR</span><span class="s2">/Python.xcframework/ios-arm64/lib/&quot;</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CODESIGNING_FOLDER_PATH</span><span class="s2">/python/lib/&quot;</span>
+<span class="k">fi</span>
 </pre></div>
 </div>
-<p>If you have placed your XCframework somewhere other than the root of your
-project, modify the path to the first argument.</p>
+<p class="translated">请注意 XCframework 中的模拟器名称 &quot;slice&quot; 可能有所不同，具体取决于你的 <code class="docutils literal notranslate"><span class="pre">XCFramework</span></code> 所支持的 CPU 架构。</p>
 </li>
-<li><p>Add Objective C code to initialize and use a Python interpreter in embedded
-mode. You should ensure that:</p>
-<ul class="simple">
-<li><p>UTF-8 mode (<a class="reference internal" href="../c-api/init_config.html#c.PyPreConfig.utf8_mode" title="PyPreConfig.utf8_mode"><code class="xref c c-member docutils literal notranslate"><span class="pre">PyPreConfig.utf8_mode</span></code></a>) is <em>enabled</em>;</p></li>
-<li><p>Buffered stdio (<a class="reference internal" href="../c-api/init_config.html#c.PyConfig.buffered_stdio" title="PyConfig.buffered_stdio"><code class="xref c c-member docutils literal notranslate"><span class="pre">PyConfig.buffered_stdio</span></code></a>) is <em>disabled</em>;</p></li>
-<li><p>Writing bytecode (<a class="reference internal" href="../c-api/init_config.html#c.PyConfig.write_bytecode" title="PyConfig.write_bytecode"><code class="xref c c-member docutils literal notranslate"><span class="pre">PyConfig.write_bytecode</span></code></a>) is <em>disabled</em>;</p></li>
-<li><p>Signal handlers (<a class="reference internal" href="../c-api/init_config.html#c.PyConfig.install_signal_handlers" title="PyConfig.install_signal_handlers"><code class="xref c c-member docutils literal notranslate"><span class="pre">PyConfig.install_signal_handlers</span></code></a>) are <em>enabled</em>;</p></li>
-<li><p>System logging (<a class="reference internal" href="../c-api/init_config.html#c.PyConfig.use_system_logger" title="PyConfig.use_system_logger"><code class="xref c c-member docutils literal notranslate"><span class="pre">PyConfig.use_system_logger</span></code></a>) is <em>enabled</em>
-(optional, but strongly recommended; this is enabled by default);</p></li>
-<li><p><span class="target" id="index-0"></span><a class="reference internal" href="cmdline.html#envvar-PYTHONHOME"><code class="xref std std-envvar docutils literal notranslate"><span class="pre">PYTHONHOME</span></code></a> for the interpreter is configured to point at the
-<code class="docutils literal notranslate"><span class="pre">python</span></code> subfolder of your app’s bundle; and</p></li>
-<li><p>The <span class="target" id="index-1"></span><a class="reference internal" href="cmdline.html#envvar-PYTHONPATH"><code class="xref std std-envvar docutils literal notranslate"><span class="pre">PYTHONPATH</span></code></a> for the interpreter includes:</p>
-<ul>
-<li><p>the <code class="docutils literal notranslate"><span class="pre">python/lib/python3.X</span></code> subfolder of your app’s bundle,</p></li>
-<li><p>the <code class="docutils literal notranslate"><span class="pre">python/lib/python3.X/lib-dynload</span></code> subfolder of your app’s bundle, and</p></li>
-<li><p>the <code class="docutils literal notranslate"><span class="pre">app</span></code> subfolder of your app’s bundle</p></li>
-</ul>
+<li><p class="translated">再添加第二个用于将标准库中的二进制扩展模块处理为 &quot;Framework&quot; 格式的构建步骤。 紧随你在第 8 步添加的步骤 <em>之后立即</em> 添加一个 &quot;Run Script&quot; 构建步骤，命名为 &quot;Prepare Python Binary Modules&quot;。 它应当取消选择 &quot;Based on dependency analysis&quot;，并将脚本内容设为：</p>
+<div class="translated highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">set</span><span class="w"> </span>-e
+
+install_dylib<span class="w"> </span><span class="o">()</span><span class="w"> </span><span class="o">{</span>
+<span class="w">    </span><span class="nv">INSTALL_BASE</span><span class="o">=</span><span class="nv">$1</span>
+<span class="w">    </span><span class="nv">FULL_EXT</span><span class="o">=</span><span class="nv">$2</span>
+
+<span class="w">    </span><span class="c1"># 扩展文件的名称</span>
+<span class="w">    </span><span class="nv">EXT</span><span class="o">=</span><span class="k">$(</span>basename<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$FULL_EXT</span><span class="s2">&quot;</span><span class="k">)</span>
+<span class="w">    </span><span class="c1"># 扩展文件相对与捆绑包的位置</span>
+<span class="w">    </span><span class="nv">RELATIVE_EXT</span><span class="o">=</span><span class="si">${</span><span class="nv">FULL_EXT</span><span class="p">#</span><span class="nv">$CODESIGNING_FOLDER_PATH</span><span class="p">/</span><span class="si">}</span>
+<span class="w">    </span><span class="c1"># 扩展文件相对于安装目录的路径</span>
+<span class="w">    </span><span class="nv">PYTHON_EXT</span><span class="o">=</span><span class="si">${</span><span class="nv">RELATIVE_EXT</span><span class="p">/</span><span class="nv">$INSTALL_BASE</span><span class="p">/</span><span class="si">}</span>
+<span class="w">    </span><span class="c1"># 扩展模块带点号的完整名称，根据文件目录来构造。</span>
+<span class="w">    </span><span class="nv">FULL_MODULE_NAME</span><span class="o">=</span><span class="k">$(</span><span class="nb">echo</span><span class="w"> </span><span class="nv">$PYTHON_EXT</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>cut<span class="w"> </span>-d<span class="w"> </span><span class="s2">&quot;.&quot;</span><span class="w"> </span>-f<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>tr<span class="w"> </span><span class="s2">&quot;/&quot;</span><span class="w"> </span><span class="s2">&quot;.&quot;</span><span class="k">)</span><span class="p">;</span>
+<span class="w">    </span><span class="c1"># 捆绑包标识；未实际使用，但为 Xcode 框架打包所必需</span>
+<span class="w">    </span><span class="nv">FRAMEWORK_BUNDLE_ID</span><span class="o">=</span><span class="k">$(</span><span class="nb">echo</span><span class="w"> </span><span class="nv">$PRODUCT_BUNDLE_IDENTIFIER</span>.<span class="nv">$FULL_MODULE_NAME</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>tr<span class="w"> </span><span class="s2">&quot;_&quot;</span><span class="w"> </span><span class="s2">&quot;-&quot;</span><span class="k">)</span>
+<span class="w">    </span><span class="c1"># 框架文件夹的名称。</span>
+<span class="w">    </span><span class="nv">FRAMEWORK_FOLDER</span><span class="o">=</span><span class="s2">&quot;Frameworks/</span><span class="nv">$FULL_MODULE_NAME</span><span class="s2">.framework&quot;</span>
+
+<span class="w">    </span><span class="c1"># 如果框架文件夹不存在，则创建它。</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span>!<span class="w"> </span>-d<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CODESIGNING_FOLDER_PATH</span><span class="s2">/</span><span class="nv">$FRAMEWORK_FOLDER</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">        </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;Creating framework for </span><span class="nv">$RELATIVE_EXT</span><span class="s2">&quot;</span>
+<span class="w">        </span>mkdir<span class="w"> </span>-p<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CODESIGNING_FOLDER_PATH</span><span class="s2">/</span><span class="nv">$FRAMEWORK_FOLDER</span><span class="s2">&quot;</span>
+<span class="w">        </span>cp<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CODESIGNING_FOLDER_PATH</span><span class="s2">/dylib-Info-template.plist&quot;</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CODESIGNING_FOLDER_PATH</span><span class="s2">/</span><span class="nv">$FRAMEWORK_FOLDER</span><span class="s2">/Info.plist&quot;</span>
+<span class="w">        </span>plutil<span class="w"> </span>-replace<span class="w"> </span>CFBundleExecutable<span class="w"> </span>-string<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$FULL_MODULE_NAME</span><span class="s2">&quot;</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CODESIGNING_FOLDER_PATH</span><span class="s2">/</span><span class="nv">$FRAMEWORK_FOLDER</span><span class="s2">/Info.plist&quot;</span>
+<span class="w">        </span>plutil<span class="w"> </span>-replace<span class="w"> </span>CFBundleIdentifier<span class="w"> </span>-string<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$FRAMEWORK_BUNDLE_ID</span><span class="s2">&quot;</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CODESIGNING_FOLDER_PATH</span><span class="s2">/</span><span class="nv">$FRAMEWORK_FOLDER</span><span class="s2">/Info.plist&quot;</span>
+<span class="w">    </span><span class="k">fi</span>
+
+<span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;Installing binary for </span><span class="nv">$FRAMEWORK_FOLDER</span><span class="s2">/</span><span class="nv">$FULL_MODULE_NAME</span><span class="s2">&quot;</span>
+<span class="w">    </span>mv<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$FULL_EXT</span><span class="s2">&quot;</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CODESIGNING_FOLDER_PATH</span><span class="s2">/</span><span class="nv">$FRAMEWORK_FOLDER</span><span class="s2">/</span><span class="nv">$FULL_MODULE_NAME</span><span class="s2">&quot;</span>
+<span class="w">    </span><span class="c1"># 创建占位用 .fwork 文件指明 .so 所在位置</span>
+<span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$FRAMEWORK_FOLDER</span><span class="s2">/</span><span class="nv">$FULL_MODULE_NAME</span><span class="s2">&quot;</span><span class="w"> </span>&gt;<span class="w"> </span><span class="si">${</span><span class="nv">FULL_EXT</span><span class="p">%.so</span><span class="si">}</span>.fwork
+<span class="w">    </span><span class="c1"># 在框架中创建指向 .so 文件位置的反向引用</span>
+<span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">RELATIVE_EXT</span><span class="p">%.so</span><span class="si">}</span><span class="s2">.fwork&quot;</span><span class="w"> </span>&gt;<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CODESIGNING_FOLDER_PATH</span><span class="s2">/</span><span class="nv">$FRAMEWORK_FOLDER</span><span class="s2">/</span><span class="nv">$FULL_MODULE_NAME</span><span class="s2">.origin&quot;</span>
+<span class="w"> </span><span class="o">}</span>
+
+<span class="w"> </span><span class="nv">PYTHON_VER</span><span class="o">=</span><span class="k">$(</span>ls<span class="w"> </span>-1<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CODESIGNING_FOLDER_PATH</span><span class="s2">/python/lib&quot;</span><span class="k">)</span>
+<span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;Install Python </span><span class="nv">$PYTHON_VER</span><span class="s2"> standard library extension modules...&quot;</span>
+<span class="w"> </span>find<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CODESIGNING_FOLDER_PATH</span><span class="s2">/python/lib/</span><span class="nv">$PYTHON_VER</span><span class="s2">/lib-dynload&quot;</span><span class="w"> </span>-name<span class="w"> </span><span class="s2">&quot;*.so&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="k">while</span><span class="w"> </span><span class="nb">read</span><span class="w"> </span>FULL_EXT<span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<span class="w">    </span>install_dylib<span class="w"> </span>python/lib/<span class="nv">$PYTHON_VER</span>/lib-dynload/<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$FULL_EXT</span><span class="s2">&quot;</span>
+<span class="w"> </span><span class="k">done</span>
+
+<span class="w"> </span><span class="c1"># 清理 dylib 模板</span>
+<span class="w"> </span>rm<span class="w"> </span>-f<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CODESIGNING_FOLDER_PATH</span><span class="s2">/dylib-Info-template.plist&quot;</span>
+
+<span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;Signing frameworks as </span><span class="nv">$EXPANDED_CODE_SIGN_IDENTITY_NAME</span><span class="s2"> (</span><span class="nv">$EXPANDED_CODE_SIGN_IDENTITY</span><span class="s2">)...&quot;</span>
+<span class="w"> </span>find<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CODESIGNING_FOLDER_PATH</span><span class="s2">/Frameworks&quot;</span><span class="w"> </span>-name<span class="w"> </span><span class="s2">&quot;*.framework&quot;</span><span class="w"> </span>-exec<span class="w"> </span>/usr/bin/codesign<span class="w"> </span>--force<span class="w"> </span>--sign<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$EXPANDED_CODE_SIGN_IDENTITY</span><span class="s2">&quot;</span><span class="w"> </span><span class="si">${</span><span class="nv">OTHER_CODE_SIGN_FLAGS</span><span class="k">:-</span><span class="si">}</span><span class="w"> </span>-o<span class="w"> </span>runtime<span class="w"> </span>--timestamp<span class="o">=</span>none<span class="w"> </span>--preserve-metadata<span class="o">=</span>identifier,entitlements,flags<span class="w"> </span>--generate-entitlement-der<span class="w"> </span><span class="s2">&quot;{}&quot;</span><span class="w"> </span><span class="se">\;</span>
+</pre></div>
+</div>
 </li>
-</ul>
-<p>Your app’s bundle location can be determined using <code class="docutils literal notranslate"><span class="pre">[[NSBundle</span> <span class="pre">mainBundle]</span>
-<span class="pre">resourcePath]</span></code>.</p>
-</li>
+<li><p class="translated">添加 Objective C 代码来初始化并使用嵌入模式的 Python 解释器。 你应当确保：</p></li>
 </ol>
-<p>Steps 7 and 8 of these instructions assume that you have a single folder of
-pure Python application code, named <code class="docutils literal notranslate"><span class="pre">app</span></code>. If you have third-party binary
-modules in your app, some additional steps will be required:</p>
+<blockquote>
+<div><ul class="simple">
+<li><p class="translated">UTF-8 模式 (<a class="reference internal" href="../c-api/init_config.html#c.PyPreConfig.utf8_mode" title="PyPreConfig.utf8_mode"><code class="xref c c-member docutils literal notranslate"><span class="pre">PyPreConfig.utf8_mode</span></code></a>) <em>已启用</em>;</p></li>
+<li><p class="translated">带缓冲的 stdio (<a class="reference internal" href="../c-api/init_config.html#c.PyConfig.buffered_stdio" title="PyConfig.buffered_stdio"><code class="xref c c-member docutils literal notranslate"><span class="pre">PyConfig.buffered_stdio</span></code></a>) <em>已禁用</em>;</p></li>
+<li><p class="translated">写入字节码 (<a class="reference internal" href="../c-api/init_config.html#c.PyConfig.write_bytecode" title="PyConfig.write_bytecode"><code class="xref c c-member docutils literal notranslate"><span class="pre">PyConfig.write_bytecode</span></code></a>) <em>已禁用</em>;</p></li>
+<li><p class="translated">信号处理器 (<a class="reference internal" href="../c-api/init_config.html#c.PyConfig.install_signal_handlers" title="PyConfig.install_signal_handlers"><code class="xref c c-member docutils literal notranslate"><span class="pre">PyConfig.install_signal_handlers</span></code></a>) <em>已启用</em>;</p></li>
+<li><p class="translated">用于解释器的 <span class="target" id="index-8"></span><a class="reference internal" href="cmdline.html#envvar-PYTHONHOME"><code class="xref std std-envvar docutils literal notranslate"><span class="pre">PYTHONHOME</span></code></a> 将被配置为指向你的 app 捆绑包的 <code class="docutils literal notranslate"><span class="pre">python</span></code> 子文件夹；并且</p></li>
+<li><p class="translated">用于解释器的 <span class="target" id="index-9"></span><a class="reference internal" href="cmdline.html#envvar-PYTHONPATH"><code class="xref std std-envvar docutils literal notranslate"><span class="pre">PYTHONPATH</span></code></a> 包括：</p>
+<ul>
+<li><p class="translated">你的 app 的封包的 <code class="docutils literal notranslate"><span class="pre">python/lib/python3.X</span></code> 子文件夹，</p></li>
+<li><p class="translated">你的 app 的封包的 <code class="docutils literal notranslate"><span class="pre">python/lib/python3.X/lib-dynload</span></code> 子文件夹，以及</p></li>
+<li><p class="translated">你的 app 的封包的 <code class="docutils literal notranslate"><span class="pre">app</span></code> 子文件夹</p></li>
+</ul>
+</li>
+</ul>
+<p class="translated">你的 app 捆绑包的位置可使用 <code class="docutils literal notranslate"><span class="pre">[[NSBundle</span> <span class="pre">mainBundle]</span> <span class="pre">resourcePath]</span></code> 来确定。</p>
+</div></blockquote>
+<p class="translated">这些说明的步骤 8, 9 和 10 均假定你有一个单独的纯 Python 应用程序代码文件夹，其名称为 <code class="docutils literal notranslate"><span class="pre">app</span></code>。 如果在你的 app 中还存在第三方二进制模块，则还需要一些额外的步骤：</p>
 <ul class="simple">
-<li><p>You need to ensure that any folders containing third-party binaries are
-either associated with the app target, or are explicitly copied as part of
-step 7. Step 7 should also purge any binaries that are not appropriate for
-the platform a specific build is targeting (i.e., delete any device binaries
-if you’re building an app targeting the simulator).</p></li>
-<li><p>If you’re using a separate folder for third-party packages, ensure that
-folder is added to the end of the call to <code class="docutils literal notranslate"><span class="pre">install_python</span></code> in step 7, and
-as part of the <span class="target" id="index-2"></span><a class="reference internal" href="cmdline.html#envvar-PYTHONPATH"><code class="xref std std-envvar docutils literal notranslate"><span class="pre">PYTHONPATH</span></code></a> configuration in step 8.</p></li>
-<li><p>If any of the folders that contain third-party packages will contain <code class="docutils literal notranslate"><span class="pre">.pth</span></code>
-files, you should add that folder as a <em>site directory</em> (using
-<a class="reference internal" href="../library/site.html#site.addsitedir" title="site.addsitedir"><code class="xref py py-meth docutils literal notranslate"><span class="pre">site.addsitedir()</span></code></a>), rather than adding to <span class="target" id="index-3"></span><a class="reference internal" href="cmdline.html#envvar-PYTHONPATH"><code class="xref std std-envvar docutils literal notranslate"><span class="pre">PYTHONPATH</span></code></a> or
-<a class="reference internal" href="../library/sys.html#sys.path" title="sys.path"><code class="xref py py-attr docutils literal notranslate"><span class="pre">sys.path</span></code></a> directly.</p></li>
+<li><p class="translated">你需要确保任何包含第二方二进制文件的文件夹均已关联到 app 目标，或已作为第 8 步的一部分被拷贝。 第 8 步还应当清理任何对于特定构建目标的平台来说不适用的二进制文件（即当你要构建以该模拟器为目标的 app 就应删除任何设备二进制文件）。</p></li>
+<li><p class="translated">任何包含第三方二进制文件的文件夹都必须通过第 9 步处理为框架形式。 可以拷贝并调整对于处理 <code class="docutils literal notranslate"><span class="pre">lib-dynload</span></code> 文件夹的 <code class="docutils literal notranslate"><span class="pre">install_dylib</span></code> 唤起的代码以符合这一目的。</p></li>
+<li><p class="translated">如果你使用了单独的文件夹来放置第三方包，请确保该文件夹已在第 10 步中作为 <span class="target" id="index-10"></span><a class="reference internal" href="cmdline.html#envvar-PYTHONPATH"><code class="xref std std-envvar docutils literal notranslate"><span class="pre">PYTHONPATH</span></code></a> 配置的一部分被包括在内。</p></li>
+<li><p class="translated">如果有任何包含第三方包的文件夹包含了 <code class="docutils literal notranslate"><span class="pre">.pth</span></code> 文件，你应当将该文件夹添加为 <em>site 目录</em> (使用 <a class="reference internal" href="../library/site.html#site.addsitedir" title="site.addsitedir"><code class="xref py py-meth docutils literal notranslate"><span class="pre">site.addsitedir()</span></code></a>)，而不是直接添加到 <span class="target" id="index-11"></span><a class="reference internal" href="cmdline.html#envvar-PYTHONPATH"><code class="xref std std-envvar docutils literal notranslate"><span class="pre">PYTHONPATH</span></code></a> 或 <a class="reference internal" href="../library/sys.html#sys.path" title="sys.path"><code class="xref py py-attr docutils literal notranslate"><span class="pre">sys.path</span></code></a>。</p></li>
 </ul>
 </section>
 <section id="testing-a-python-package">
-<h3><span class="section-number">7.2.3. </span>Testing a Python package<a class="headerlink" href="#testing-a-python-package" title="Link to this heading">¶</a></h3>
-<p>The CPython source tree contains <a class="extlink-source reference external" href="https://github.com/python/cpython/tree/3.14/Apple/iOS/testbed">a testbed project</a> that
-is used to run the CPython test suite on the iOS simulator. This testbed can also
-be used as a testbed project for running your Python library’s test suite on iOS.</p>
-<p>After building or obtaining an iOS XCFramework (see <a class="extlink-source reference external" href="https://github.com/python/cpython/tree/3.14/Apple/iOS/README.md">Apple/iOS/README.md</a>
-for details), create a clone of the Python iOS testbed project. If you used the
-<code class="docutils literal notranslate"><span class="pre">Apple</span></code> build script to build the XCframework, you can run:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span>python<span class="w"> </span>cross-build/iOS/testbed<span class="w"> </span>clone<span class="w"> </span>--app<span class="w"> </span>&lt;path/to/module1&gt;<span class="w"> </span>--app<span class="w"> </span>&lt;path/to/module2&gt;<span class="w"> </span>app-testbed
+<h3 class="translated"><span class="section-number">7.2.3. </span>测试 Python 软件包<a class="headerlink" href="#testing-a-python-package" title="Link to this heading">¶</a></h3>
+<p class="translated">CPython 源码树包含一个 <a class="extlink-source reference external" href="https://github.com/python/cpython/tree/3.13/iOS/testbed">testbed 项目</a> 用于在 iOS 模拟器上运行 CPython 测试套件。 这个 testbed 还可被用作在 iOS 上运行你的 Python 库的测试套件的 testbed 项目。</p>
+<p class="translated">在构建或获取 iOS XCFramework (请参见 <a class="extlink-source reference external" href="https://github.com/python/cpython/tree/3.13/iOS/README.rst">iOS/README.rst</a> 了解详情) 之后，通过运行以下命令创建 Python iOS testbed 项目的克隆：</p>
+<div class="translated highlight-bash notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span>python<span class="w"> </span>iOS/testbed<span class="w"> </span>clone<span class="w"> </span>--framework<span class="w"> </span>&lt;path/to/Python.xcframework&gt;<span class="w"> </span>--app<span class="w"> </span>&lt;path/to/module1&gt;<span class="w"> </span>--app<span class="w"> </span>&lt;path/to/module2&gt;<span class="w"> </span>app-testbed
 </pre></div>
 </div>
-<p>Or, if you’ve sourced your own XCframework, by running:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span>python<span class="w"> </span>Apple/testbed<span class="w"> </span>clone<span class="w"> </span>--platform<span class="w"> </span>iOS<span class="w"> </span>--framework<span class="w"> </span>&lt;path/to/Python.xcframework&gt;<span class="w"> </span>--app<span class="w"> </span>&lt;path/to/module1&gt;<span class="w"> </span>--app<span class="w"> </span>&lt;path/to/module2&gt;<span class="w"> </span>app-testbed
+<p class="translated">你将需要将 <code class="docutils literal notranslate"><span class="pre">iOS/testbed</span></code> 引用修改为指向 CPython 源码树的相应目录；任何使用 <code class="docutils literal notranslate"><span class="pre">--app</span></code> 旗标指定的文件夹都将被拷贝到克隆的 testbed 项目中。 结果 testbed 将在 <code class="docutils literal notranslate"><span class="pre">app-testbed</span></code> 文件夹中被创建。 在本示例中，<code class="docutils literal notranslate"><span class="pre">module1</span></code> 和 <code class="docutils literal notranslate"><span class="pre">module2</span></code> 将成为运行时可导入的模块。 如果你的项目还有额外的依赖项，它们可以被安装到 <code class="docutils literal notranslate"><span class="pre">app-testbed/iOSTestbed/app_packages</span></code> 文件夹中 (使用类似 <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">--target</span> <span class="pre">app-testbed/iOSTestbed/app_packages</span></code> 的命令)。</p>
+<p class="translated">你可以随后使用 <code class="docutils literal notranslate"><span class="pre">app-testbed</span></code> 文件夹来运行你的 app 的测试套件，举例来说，如果 <code class="docutils literal notranslate"><span class="pre">module1.tests</span></code> 是你的测试套件的入口点，你可以运行：</p>
+<div class="translated highlight-bash notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span>python<span class="w"> </span>app-testbed<span class="w"> </span>run<span class="w"> </span>--<span class="w"> </span>module1.tests
 </pre></div>
 </div>
-<p>Any folders specified with the <code class="docutils literal notranslate"><span class="pre">--app</span></code> flag will be copied into the cloned
-testbed project. The resulting testbed will be created in the <code class="docutils literal notranslate"><span class="pre">app-testbed</span></code>
-folder. In this example, the <code class="docutils literal notranslate"><span class="pre">module1</span></code> and <code class="docutils literal notranslate"><span class="pre">module2</span></code> would be importable
-modules at runtime. If your project has additional dependencies, they can be
-installed into the <code class="docutils literal notranslate"><span class="pre">app-testbed/Testbed/app_packages</span></code> folder (using <code class="docutils literal notranslate"><span class="pre">pip</span>
-<span class="pre">install</span> <span class="pre">--target</span> <span class="pre">app-testbed/Testbed/app_packages</span></code> or similar).</p>
-<p>You can then use the <code class="docutils literal notranslate"><span class="pre">app-testbed</span></code> folder to run the test suite for your app,
-For example, if <code class="docutils literal notranslate"><span class="pre">module1.tests</span></code> was the entry point to your test suite, you
-could run:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span>python<span class="w"> </span>app-testbed<span class="w"> </span>run<span class="w"> </span>--<span class="w"> </span>module1.tests
+<p class="translated">这相当于在桌面 Python 构建版上运行 <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">-m</span> <span class="pre">module1.tests</span></code>。 任何在 <code class="docutils literal notranslate"><span class="pre">--</span></code> 之后的参数都将被传给 testbed 就像它们是桌面机上 <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">-m</span></code> 的参数那样。</p>
+<p class="translated">你还可以通过运行以下命令在 Xcode 中打开这个 testbed 项目：</p>
+<div class="translated highlight-bash notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span>open<span class="w"> </span>app-testbed/iOSTestbed.xcodeproj
 </pre></div>
 </div>
-<p>This is the equivalent of running <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">-m</span> <span class="pre">module1.tests</span></code> on a desktop
-Python build. Any arguments after the <code class="docutils literal notranslate"><span class="pre">--</span></code> will be passed to the testbed as
-if they were arguments to <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">-m</span></code> on a desktop machine.</p>
-<p>You can also open the testbed project in Xcode by running:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span>open<span class="w"> </span>app-testbed/iOSTestbed.xcodeproj
-</pre></div>
-</div>
-<p>This will allow you to use the full Xcode suite of tools for debugging.</p>
-<p>The arguments used to run the test suite are defined as part of the test plan.
-To modify the test plan, select the test plan node of the project tree (it
-should be the first child of the root node), and select the “Configurations”
-tab. Modify the “Arguments Passed On Launch” value to change the testing
-arguments.</p>
-<p>The test plan also disables parallel testing, and specifies the use of the
-<code class="docutils literal notranslate"><span class="pre">Testbed.lldbinit</span></code> file for providing configuration of the debugger. The
-default debugger configuration disables automatic breakpoints on the
-<code class="docutils literal notranslate"><span class="pre">SIGINT</span></code>, <code class="docutils literal notranslate"><span class="pre">SIGUSR1</span></code>, <code class="docutils literal notranslate"><span class="pre">SIGUSR2</span></code>, and <code class="docutils literal notranslate"><span class="pre">SIGXFSZ</span></code> signals.</p>
+<p class="translated">这将允许你使用完整的 Xcode 工具套件进行调试。</p>
+<p class="translated">用于运行测试套件的参数是在测试计划中定义的。要修改测试计划，请选择项目树中的测试计划节点（它应该是根节点的第一个子节点），然后选择&quot;配置&quot;选项卡。修改&quot;启动时传递的参数&quot;值即可更改测试参数。</p>
+<p class="translated">该测试计划还会禁用并行测试，并指定使用 <code class="docutils literal notranslate"><span class="pre">iOSTestbed.lldbinit</span></code> 文件来提供调试器配置。默认的调试器配置会禁用针对 <code class="docutils literal notranslate"><span class="pre">SIGINT</span></code>、<code class="docutils literal notranslate"><span class="pre">SIGUSR1</span></code>、<code class="docutils literal notranslate"><span class="pre">SIGUSR2</span></code> 和 <code class="docutils literal notranslate"><span class="pre">SIGXFSZ</span></code> 信号的自动断点。</p>
 </section>
 </section>
 <section id="app-store-compliance">
-<h2><span class="section-number">7.3. </span>App Store Compliance<a class="headerlink" href="#app-store-compliance" title="Link to this heading">¶</a></h2>
-<p>The only mechanism for distributing apps to third-party iOS devices is to
-submit the app to the iOS App Store; apps submitted for distribution must pass
-Apple’s app review process. This process includes a set of automated validation
-rules that inspect the submitted application bundle for problematic code. There
-are some steps that must be taken to ensure that your app will be able to pass
-these validation steps.</p>
-<section id="incompatible-code-in-the-standard-library">
-<h3><span class="section-number">7.3.1. </span>Incompatible code in the standard library<a class="headerlink" href="#incompatible-code-in-the-standard-library" title="Link to this heading">¶</a></h3>
-<p>The Python standard library contains some code that is known to violate these
-automated rules. While these violations appear to be false positives, Apple’s
-review rules cannot be challenged; so, it is necessary to modify the Python
-standard library for an app to pass App Store review.</p>
-<p>The Python source tree contains
-<a class="extlink-source reference external" href="https://github.com/python/cpython/tree/3.14/Mac/Resources/app-store-compliance.patch">a patch file</a> that will remove
-all code that is known to cause issues with the App Store review process. This
-patch is applied automatically when building for iOS.</p>
-</section>
-<section id="privacy-manifests">
-<h3><span class="section-number">7.3.2. </span>Privacy manifests<a class="headerlink" href="#privacy-manifests" title="Link to this heading">¶</a></h3>
-<p>In April 2025, Apple introduced a requirement for <a class="reference external" href="https://developer.apple.com/support/third-party-SDK-requirements">certain third-party
-libraries to provide a Privacy Manifest</a>.
-As a result, if you have a binary module that uses one of the affected
-libraries, you must provide an <code class="docutils literal notranslate"><span class="pre">.xcprivacy</span></code> file for that library.
-OpenSSL is one library affected by this requirement, but there are others.</p>
-<p>If you produce a binary module named <code class="docutils literal notranslate"><span class="pre">mymodule.so</span></code>, and use you the Xcode
-build script described in step 7 above, you can place a <code class="docutils literal notranslate"><span class="pre">mymodule.xcprivacy</span></code>
-file next to <code class="docutils literal notranslate"><span class="pre">mymodule.so</span></code>, and the privacy manifest will be installed into
-the required location when the binary module is converted into a framework.</p>
-</section>
+<h2 class="translated"><span class="section-number">7.3. </span>App Store 合规性<a class="headerlink" href="#app-store-compliance" title="Link to this heading">¶</a></h2>
+<p class="translated">将 app 发布到第三方 iOS 设备的唯一机制是将 app 提交到 iOS App Store；提交发布的 app 必须通过 Apple 的 app 审核进程。 此进程包括一组在所提交的应用程序包中自动检查有问题代码的验证规则。</p>
+<p class="translated">Python 标准库包含了一些已知会违反这些自动规则的代码。 虽然这些违规情况看来是属于误报，但 Apple 的审核规则是不可挑战的；因此，有必要修改 Python 标准库以便 app 能够通过 App Store 的审核。</p>
+<p class="translated">Python 源代码树包含 <a class="extlink-source reference external" href="https://github.com/python/cpython/tree/3.13/Mac/Resources/app-store-compliance.patch">一个补丁文件</a> 可移除所有已知的会导致 App Store 审核过程出现问题的代码。 这个补丁会在针对 iOS 进行构建时自动应用。</p>
 </section>
 </section>
 
@@ -555,72 +432,58 @@ the required location when the binary module is converted into a framework.</p>
       <div class="sphinxsidebar" role="navigation" aria-label="Main">
         <div class="sphinxsidebarwrapper">
   <div>
-    <h3><a href="../contents.html">Table of Contents</a></h3>
+    <h3><a href="../contents.html">目录</a></h3>
     <ul>
-<li><a class="reference internal" href="#">7. Using Python on iOS</a><ul>
-<li><a class="reference internal" href="#python-at-runtime-on-ios">7.1. Python at runtime on iOS</a><ul>
-<li><a class="reference internal" href="#ios-version-compatibility">7.1.1. iOS version compatibility</a></li>
-<li><a class="reference internal" href="#platform-identification">7.1.2. Platform identification</a></li>
-<li><a class="reference internal" href="#standard-library-availability">7.1.3. Standard library availability</a></li>
-<li><a class="reference internal" href="#binary-extension-modules">7.1.4. Binary extension modules</a></li>
-<li><a class="reference internal" href="#compiler-stub-binaries">7.1.5. Compiler stub binaries</a></li>
+<li><a class="reference internal" href="#">7. 在 iOS 上使用 Python</a><ul>
+<li><a class="reference internal" href="#python-at-runtime-on-ios">7.1. iOS 上的 Python 运行时</a><ul>
+<li><a class="reference internal" href="#ios-version-compatibility">7.1.1. iOS 版本兼容性</a></li>
+<li><a class="reference internal" href="#platform-identification">7.1.2. 平台识别</a></li>
+<li><a class="reference internal" href="#standard-library-availability">7.1.3. 标准库可用性</a></li>
+<li><a class="reference internal" href="#binary-extension-modules">7.1.4. 二进制扩展模块</a></li>
+<li><a class="reference internal" href="#compiler-stub-binaries">7.1.5. 编译器存根二进制文件</a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#installing-python-on-ios">7.2. Installing Python on iOS</a><ul>
-<li><a class="reference internal" href="#tools-for-building-ios-apps">7.2.1. Tools for building iOS apps</a></li>
-<li><a class="reference internal" href="#adding-python-to-an-ios-project">7.2.2. Adding Python to an iOS project</a></li>
-<li><a class="reference internal" href="#testing-a-python-package">7.2.3. Testing a Python package</a></li>
+<li><a class="reference internal" href="#installing-python-on-ios">7.2. 在 iOS 上安装 Python</a><ul>
+<li><a class="reference internal" href="#tools-for-building-ios-apps">7.2.1. 构建 iOS 应用程序的工具</a></li>
+<li><a class="reference internal" href="#adding-python-to-an-ios-project">7.2.2. 在 iOS 项目中添加 Python</a></li>
+<li><a class="reference internal" href="#testing-a-python-package">7.2.3. 测试 Python 软件包</a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#app-store-compliance">7.3. App Store Compliance</a><ul>
-<li><a class="reference internal" href="#incompatible-code-in-the-standard-library">7.3.1. Incompatible code in the standard library</a></li>
-<li><a class="reference internal" href="#privacy-manifests">7.3.2. Privacy manifests</a></li>
-</ul>
-</li>
+<li><a class="reference internal" href="#app-store-compliance">7.3. App Store 合规性</a></li>
 </ul>
 </li>
 </ul>
 
   </div>
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="android.html"
-                          title="previous chapter"><span class="section-number">6. </span>Using Python on Android</a></p>
+                          title="上一章"><span class="section-number">6. </span>在Android上使用 Python</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="editors.html"
-                          title="next chapter"><span class="section-number">8. </span>Editors and IDEs</a></p>
+                          title="下一章"><span class="section-number">8. </span>编辑器和集成开发环境</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "using/ios.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/using/ios.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/using/ios.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
   </div>
         </div>
-<div id="sidebarbutton" title="Collapse sidebar">
+<div id="sidebarbutton" title="折叠边栏">
 <span>«</span>
 </div>
 
@@ -628,20 +491,20 @@ the required location when the binary module is converted into a framework.</p>
       <div class="clearer"></div>
     </div>  
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             >index</a></li>
+          <a href="../genindex.html" title="总索引"
+             >索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="editors.html" title="8. Editors and IDEs"
-             >next</a> |</li>
+          <a href="editors.html" title="8. 编辑器和集成开发环境"
+             >下一页</a> |</li>
         <li class="right" >
-          <a href="android.html" title="6. Using Python on Android"
-             >previous</a> |</li>
+          <a href="android.html" title="6. 在Android上使用 Python"
+             >上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -653,58 +516,58 @@ the required location when the binary module is converted into a framework.</p>
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-          <li class="nav-item nav-item-1"><a href="index.html" >Python Setup and Usage</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href=""><span class="section-number">7. </span>Using Python on iOS</a></li>
+          <li class="nav-item nav-item-1"><a href="index.html" >Python安装和使用</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href=""><span class="section-number">7. </span>在 iOS 上使用 Python</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
       </ul>
     </div>  
     <div class="footer">
-    &copy; <a href="../copyright.html">Copyright</a> 2001 Python Software Foundation.
+    &copy; <a href="../copyright.html">版权</a> 2001-2026, Python Software Foundation.
     <br>
-    This page is licensed under the Python Software Foundation License Version 2.
+    本页面采用 Python 软件基金会许可证第 2 版授权。
     <br>
-    Examples, recipes, and other code in the documentation are additionally licensed under the Zero Clause BSD License.
+    文档中的示例、代码片段及其他代码内容额外采用零条款 BSD 许可证授权。
     <br>
     
-      See <a href="/license.html">History and License</a> for more information.<br>
+      更多信息请参阅《<a href="/license.html"> 历史与许可 </a>》。<br>
     
     
     <br>
 
-    The Python Software Foundation is a non-profit corporation.
-<a href="https://www.python.org/psf/donations/">Please donate.</a>
+    Python 软件基金会是一家非营利性公司。
+<a href="https://www.python.org/psf/donations/">请进行捐赠。</a>
 <br>
     <br>
-      Last updated on May 27, 2026 (10:52 UTC).
+      最后更新于5月 25, 2026 (11:48 UTC) 。
     
-      <a href="/bugs.html">Found a bug</a>?
+      <a href="/bugs.html">发现了错误</a>？
     
     <br>
 
-    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3.
+    使用<a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3 创建。
     </div>
 
   </body>

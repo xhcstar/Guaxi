@@ -190,15 +190,14 @@ However, the following will succeed::
 Annotation scopes
 -----------------
 
-:term:`Annotations <annotation>`, :ref:`type parameter lists <type-params>`
-and :keyword:`type` statements
+:ref:`Type parameter lists <type-params>` and :keyword:`type` statements
 introduce *annotation scopes*, which behave mostly like function scopes,
-but with some exceptions discussed below.
+but with some exceptions discussed below. :term:`Annotations <annotation>`
+currently do not use annotation scopes, but they are expected to use
+annotation scopes in Python 3.13 when :pep:`649` is implemented.
 
 Annotation scopes are used in the following contexts:
 
-* :term:`Function annotations <function annotation>`.
-* :term:`Variable annotations <variable annotation>`.
 * Type parameter lists for :ref:`generic type aliases <generic-type-aliases>`.
 * Type parameter lists for :ref:`generic functions <generic-functions>`.
   A generic function's annotations are
@@ -237,23 +236,17 @@ Annotation scopes differ from function scopes in the following ways:
    Annotation scopes are also used for type parameter defaults, as
    introduced by :pep:`696`.
 
-.. versionchanged:: 3.14
-   Annotation scopes are now also used for annotations, as specified in
-   :pep:`649` and :pep:`749`.
-
 .. _lazy-evaluation:
 
 Lazy evaluation
 ---------------
 
-Most annotation scopes are *lazily evaluated*. This includes annotations,
-the values of type aliases created through the :keyword:`type` statement, and
-the bounds, constraints, and default values of type
+The values of type aliases created through the :keyword:`type` statement are
+*lazily evaluated*. The same applies to the bounds, constraints, and default values of type
 variables created through the :ref:`type parameter syntax <type-params>`.
 This means that they are not evaluated when the type alias or type variable is
-created, or when the object carrying annotations is created. Instead, they
-are only evaluated when necessary, for example when the ``__value__``
-attribute on a type alias is accessed.
+created. Instead, they are only evaluated when doing so is necessary to resolve
+an attribute access.
 
 Example:
 
@@ -578,8 +571,7 @@ Once a program is running, new Python threads can be created using the
 :mod:`threading` module (on platforms and Python implementations that
 support threads).  Additional processes can be created using the
 :mod:`os`, :mod:`subprocess`, and :mod:`multiprocessing` modules.
-Interpreters can be created and used with the
-:mod:`~concurrent.interpreters` module.  Coroutines (async) can
+Coroutines (async) can
 be run using :mod:`asyncio` in each interpreter, typically only
 in a single thread (often the main thread).
 

@@ -1,4 +1,4 @@
-Pending removal in Python 3.13
+Pending Removal in Python 3.13
 ------------------------------
 
 Modules (see :pep:`594`):

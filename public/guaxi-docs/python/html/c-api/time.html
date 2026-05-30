@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 
-<html lang="en" data-content_root="../">
+<html lang="zh-CN" data-content_root="../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -8,37 +8,38 @@
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://docs.python.org/3/c-api/time.html" />
 <meta property="og:site_name" content="Python documentation" />
-<meta property="og:description" content="The clock C API provides access to system clocks. It is similar to the Python time module. For C API related to the datetime module, see DateTime Objects. Types: Clock Functions: The following func..." />
+<meta property="og:description" content="时钟 C API 提供对系统时钟的访问。它类似于 Python time 模块。 有关与 datetime 模块相关的 C API，请参阅 DateTime 对象 。 类型: 时钟函数: 以下函数采用指向 PyTime_t 的指针，并将其设置为特定时钟的值。 每个时钟的详细信息在相应的 Python 函数的文档中给出。 成功时函数返回``0``，失败时返回``-1``（设置一个异常）。 在整..." />
 <meta property="og:image:width" content="1146" />
 <meta property="og:image:height" content="600" />
-<meta property="og:image" content="https://docs.python.org/3.14/_images/social_previews/summary_c-api_time_4fd27cc3.png" />
-<meta property="og:image:alt" content="The clock C API provides access to system clocks. It is similar to the Python time module. For C API related to the datetime module, see DateTime Objects. Types: Clock Functions: The following func..." />
-<meta name="description" content="The clock C API provides access to system clocks. It is similar to the Python time module. For C API related to the datetime module, see DateTime Objects. Types: Clock Functions: The following func..." />
+<meta property="og:image" content="https://docs.python.org/3.13/zh-cn/_images/social_previews/summary_c-api_time_6a702b97.png" />
+<meta property="og:image:alt" content="时钟 C API 提供对系统时钟的访问。它类似于 Python time 模块。 有关与 datetime 模块相关的 C API，请参阅 DateTime 对象 。 类型: 时钟函数: 以下函数采用指向 PyTime_t 的指针，并将其设置为特定时钟的值。 每个时钟的详细信息在相应的 Python 函数的文档中给出。 成功时函数返回``0``，失败时返回``-1``（设置一个异常）。 在整..." />
+<meta name="description" content="时钟 C API 提供对系统时钟的访问。它类似于 Python time 模块。 有关与 datetime 模块相关的 C API，请参阅 DateTime 对象 。 类型: 时钟函数: 以下函数采用指向 PyTime_t 的指针，并将其设置为特定时钟的值。 每个时钟的详细信息在相应的 Python 函数的文档中给出。 成功时函数返回``0``，失败时返回``-1``（设置一个异常）。 在整..." />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="theme-color" content="#3776ab">
 
-    <title>PyTime C API &#8212; Python 3.14.5 documentation</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PyTime C API &#8212; Python 3.13.13 文档</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
     
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
     <link rel="stylesheet" type="text/css" href="../_static/classic.css?v=234b1a7c" />
     <link rel="stylesheet" type="text/css" href="../_static/pydoctheme.css?v=4365c8fe" />
     <link id="pygments_dark_css" media="(prefers-color-scheme: dark)" rel="stylesheet" type="text/css" href="../_static/pygments_dark.css?v=5349f25f" />
     
-    <script src="../_static/documentation_options.js?v=bcfd2f37"></script>
+    <script src="../_static/documentation_options.js?v=a941be6b"></script>
     <script src="../_static/doctools.js?v=9bcbadda"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/translations.js?v=beaddf03"></script>
     
     <script src="../_static/sidebar.js"></script>
     
     <link rel="search" type="application/opensearchdescription+xml"
-          title="Search within Python 3.14.5 documentation"
+          title="在 Python 3.13.13 文档 中搜索"
           href="../_static/opensearch.xml"/>
-    <link rel="author" title="About these documents" href="../about.html" />
-    <link rel="index" title="Index" href="../genindex.html" />
-    <link rel="search" title="Search" href="../search.html" />
-    <link rel="copyright" title="Copyright" href="../copyright.html" />
-    <link rel="next" title="Support for Perf Maps" href="perfmaps.html" />
-    <link rel="prev" title="Codec registry and support functions" href="codec.html" />
+    <link rel="author" title="关于此文档" href="../about.html" />
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="搜索" href="../search.html" />
+    <link rel="copyright" title="版权" href="../copyright.html" />
+    <link rel="next" title="对 Perf Maps 的支持" href="perfmaps.html" />
+    <link rel="prev" title="编解码器注册与支持功能" href="codec.html" />
     
       
       <script defer file-types="bz2,epub,zip" data-domain="docs.python.org" src="https://analytics.python.org/js/script.file-downloads.outbound-links.js"></script>
@@ -68,7 +69,7 @@
 <body>
 <div class="mobile-nav">
     <input type="checkbox" id="menuToggler" class="toggler__input" aria-controls="navigation"
-           aria-pressed="false" aria-expanded="false" role="button" aria-label="Menu">
+           aria-pressed="false" aria-expanded="false" role="button" aria-label="菜单">
     <nav class="nav-content" role="navigation">
         <label for="menuToggler" class="toggler__label">
             <span></span>
@@ -82,8 +83,8 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" class="search-icon">
                     <path fill-rule="nonzero" fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 001.48-5.34c-.47-2.78-2.79-5-5.59-5.34a6.505 6.505 0 00-7.27 7.27c.34 2.8 2.56 5.12 5.34 5.59a6.5 6.5 0 005.34-1.48l.27.28v.79l4.25 4.25c.41.41 1.08.41 1.49 0 .41-.41.41-1.08 0-1.49L15.5 14zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"></path>
                 </svg>
-                <input placeholder="Quick search" aria-label="Quick search" type="search" name="q">
-                <input type="submit" value="Go">
+                <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q">
+                <input type="submit" value="转到">
             </form>
         </span>
     </nav>
@@ -92,59 +93,49 @@
             <div class="language_switcher_placeholder"></div>
             
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label>
   <div>
-    <h3><a href="../contents.html">Table of Contents</a></h3>
+    <h3><a href="../contents.html">目录</a></h3>
     <ul>
 <li><a class="reference internal" href="#">PyTime C API</a><ul>
-<li><a class="reference internal" href="#types">Types</a></li>
-<li><a class="reference internal" href="#clock-functions">Clock Functions</a></li>
-<li><a class="reference internal" href="#raw-clock-functions">Raw Clock Functions</a></li>
-<li><a class="reference internal" href="#conversion-functions">Conversion functions</a></li>
+<li><a class="reference internal" href="#types">类型</a></li>
+<li><a class="reference internal" href="#clock-functions">时钟函数</a></li>
+<li><a class="reference internal" href="#raw-clock-functions">原始时钟函数</a></li>
+<li><a class="reference internal" href="#conversion-functions">转换函数</a></li>
 </ul>
 </li>
 </ul>
 
   </div>
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="codec.html"
-                          title="previous chapter">Codec registry and support functions</a></p>
+                          title="上一章">编解码器注册与支持功能</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="perfmaps.html"
-                          title="next chapter">Support for Perf Maps</a></p>
+                          title="下一章">对 Perf Maps 的支持</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "c-api/time.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/c-api/time.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/c-api/time.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
@@ -155,20 +146,20 @@
 
   
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             accesskey="I">index</a></li>
+          <a href="../genindex.html" title="总索引"
+             accesskey="I">索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="perfmaps.html" title="Support for Perf Maps"
-             accesskey="N">next</a> |</li>
+          <a href="perfmaps.html" title="对 Perf Maps 的支持"
+             accesskey="N">下一页</a> |</li>
         <li class="right" >
-          <a href="codec.html" title="Codec registry and support functions"
-             accesskey="P">previous</a> |</li>
+          <a href="codec.html" title="编解码器注册与支持功能"
+             accesskey="P">上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -180,30 +171,30 @@
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-          <li class="nav-item nav-item-1"><a href="index.html" >Python/C API reference manual</a> &#187;</li>
-          <li class="nav-item nav-item-2"><a href="utilities.html" accesskey="U">Utilities</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="index.html" >Python/C API 参考手册</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="utilities.html" accesskey="U">工具</a> &#187;</li>
         <li class="nav-item nav-item-this"><a href="">PyTime C API</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
@@ -216,117 +207,91 @@
           <div class="body" role="main">
             
   <section id="pytime-c-api">
-<span id="c-api-time"></span><h1>PyTime C API<a class="headerlink" href="#pytime-c-api" title="Link to this heading">¶</a></h1>
+<span id="c-api-time"></span><h1 class="translated">PyTime C API<a class="headerlink" href="#pytime-c-api" title="Link to this heading">¶</a></h1>
 <div class="versionadded">
 <p><span class="versionmodified added">Added in version 3.13.</span></p>
 </div>
-<p>The clock C API provides access to system clocks.
-It is similar to the Python <a class="reference internal" href="../library/time.html#module-time" title="time: Time access and conversions."><code class="xref py py-mod docutils literal notranslate"><span class="pre">time</span></code></a> module.</p>
-<p>For C API related to the <a class="reference internal" href="../library/datetime.html#module-datetime" title="datetime: Basic date and time types."><code class="xref py py-mod docutils literal notranslate"><span class="pre">datetime</span></code></a> module, see <a class="reference internal" href="datetime.html#datetimeobjects"><span class="std std-ref">DateTime Objects</span></a>.</p>
+<p class="translated">时钟 C API 提供对系统时钟的访问。它类似于 Python <a class="reference internal" href="../library/time.html#module-time" title="time: Time access and conversions."><code class="xref py py-mod docutils literal notranslate"><span class="pre">time</span></code></a> 模块。</p>
+<p class="translated">有关与 <a class="reference internal" href="../library/datetime.html#module-datetime" title="datetime: Basic date and time types."><code class="xref py py-mod docutils literal notranslate"><span class="pre">datetime</span></code></a> 模块相关的 C API，请参阅 <a class="reference internal" href="datetime.html#datetimeobjects"><span class="std std-ref">DateTime 对象</span></a>。</p>
 <section id="types">
-<h2>Types<a class="headerlink" href="#types" title="Link to this heading">¶</a></h2>
+<h2 class="translated">类型<a class="headerlink" href="#types" title="Link to this heading">¶</a></h2>
 <dl class="c type">
 <dt class="sig sig-object c" id="c.PyTime_t">
 <span class="k"><span class="pre">type</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">PyTime_t</span></span></span><a class="headerlink" href="#c.PyTime_t" title="Link to this definition">¶</a><br /></dt>
-<dd><p>A timestamp or duration in nanoseconds, represented as a signed 64-bit
-integer.</p>
-<p>The reference point for timestamps depends on the clock used. For example,
-<a class="reference internal" href="#c.PyTime_Time" title="PyTime_Time"><code class="xref c c-func docutils literal notranslate"><span class="pre">PyTime_Time()</span></code></a> returns timestamps relative to the UNIX epoch.</p>
-<p>The supported range is around [-292.3 years; +292.3 years].
-Using the Unix epoch (January 1st, 1970) as reference, the supported date
-range is around [1677-09-21; 2262-04-11].
-The exact limits are exposed as constants:</p>
+<dd><p class="translated">以纳秒为单位的时间戳或持续时间，表示为带符号的 64 位整数。</p>
+<p class="translated">时间戳的参考点取决于所使用的时钟。 例如，<a class="reference internal" href="#c.PyTime_Time" title="PyTime_Time"><code class="xref c c-func docutils literal notranslate"><span class="pre">PyTime_Time()</span></code></a> 返回相对于 UNIX 纪元的时间戳。</p>
+<p class="translated">支持的范围约为[-292.3年； +292.3 年]。以Unix纪元（1970年1月1日）为参考，支持的日期范围约为[1677-09-21； 2262-04-11]。确切的限制以常数形式公开：</p>
 </dd></dl>
 
 <dl class="c var">
 <dt class="sig sig-object c" id="c.PyTime_MIN">
 <a class="reference internal" href="#c.PyTime_t" title="PyTime_t"><span class="n"><span class="pre">PyTime_t</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">PyTime_MIN</span></span></span><a class="headerlink" href="#c.PyTime_MIN" title="Link to this definition">¶</a><br /></dt>
-<dd><p>Minimum value of <a class="reference internal" href="#c.PyTime_t" title="PyTime_t"><code class="xref c c-type docutils literal notranslate"><span class="pre">PyTime_t</span></code></a>.</p>
+<dd><p class="translated"><a class="reference internal" href="#c.PyTime_t" title="PyTime_t"><code class="xref c c-type docutils literal notranslate"><span class="pre">PyTime_t</span></code></a> 的最小值。</p>
 </dd></dl>
 
 <dl class="c var">
 <dt class="sig sig-object c" id="c.PyTime_MAX">
 <a class="reference internal" href="#c.PyTime_t" title="PyTime_t"><span class="n"><span class="pre">PyTime_t</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">PyTime_MAX</span></span></span><a class="headerlink" href="#c.PyTime_MAX" title="Link to this definition">¶</a><br /></dt>
-<dd><p>Maximum value of <a class="reference internal" href="#c.PyTime_t" title="PyTime_t"><code class="xref c c-type docutils literal notranslate"><span class="pre">PyTime_t</span></code></a>.</p>
+<dd><p class="translated"><a class="reference internal" href="#c.PyTime_t" title="PyTime_t"><code class="xref c c-type docutils literal notranslate"><span class="pre">PyTime_t</span></code></a> 的最大值。</p>
 </dd></dl>
 
 </section>
 <section id="clock-functions">
-<h2>Clock Functions<a class="headerlink" href="#clock-functions" title="Link to this heading">¶</a></h2>
-<p>The following functions take a pointer to a <span class="c-expr sig sig-inline c"><a class="reference internal" href="#c.PyTime_t" title="PyTime_t"><span class="n">PyTime_t</span></a></span> that they
-set to the value of a particular clock.
-Details of each clock are given in the documentation of the corresponding
-Python function.</p>
-<p>The functions return <code class="docutils literal notranslate"><span class="pre">0</span></code> on success, or <code class="docutils literal notranslate"><span class="pre">-1</span></code> (with an exception set)
-on failure.</p>
-<p>On integer overflow, they set the <a class="reference internal" href="exceptions.html#c.PyExc_OverflowError" title="PyExc_OverflowError"><code class="xref c c-data docutils literal notranslate"><span class="pre">PyExc_OverflowError</span></code></a> exception and
-set <code class="docutils literal notranslate"><span class="pre">*result</span></code> to the value clamped to the <code class="docutils literal notranslate"><span class="pre">[PyTime_MIN;</span> <span class="pre">PyTime_MAX]</span></code>
-range.
-(On current systems, integer overflows are likely caused by misconfigured
-system time.)</p>
-<p>As any other C API (unless otherwise specified), the functions must be called
-with an <a class="reference internal" href="../glossary.html#term-attached-thread-state"><span class="xref std std-term">attached thread state</span></a>.</p>
+<h2 class="translated">时钟函数<a class="headerlink" href="#clock-functions" title="Link to this heading">¶</a></h2>
+<p class="translated">以下函数采用指向 <span class="c-expr sig sig-inline c"><a class="reference internal" href="#c.PyTime_t" title="PyTime_t"><span class="n">PyTime_t</span></a></span> 的指针，并将其设置为特定时钟的值。 每个时钟的详细信息在相应的 Python 函数的文档中给出。</p>
+<p class="translated">成功时函数返回``0``，失败时返回``-1``（设置一个异常）。</p>
+<p class="translated">在整数溢出时，他们设置 <a class="reference internal" href="exceptions.html#c.PyExc_OverflowError" title="PyExc_OverflowError"><code class="xref c c-data docutils literal notranslate"><span class="pre">PyExc_OverflowError</span></code></a> 异常，并将 <code class="docutils literal notranslate"><span class="pre">*result</span></code> 设置为 <code class="docutils literal notranslate"><span class="pre">[PyTime_MIN;</span> <span class="pre">PyTime_MAX]</span></code> 范围内的值。 （在当前系统上，整数溢出可能是由于系统时间配置错误引起的。）</p>
+<p class="translated">与任何其他 C API 一样（除非另有说明），必须使用持有的 <a class="reference internal" href="../glossary.html#term-GIL"><span class="xref std std-term">GIL</span></a>  来调用函数。</p>
 <dl class="c function">
 <dt class="sig sig-object c" id="c.PyTime_Monotonic">
 <span class="kt"><span class="pre">int</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">PyTime_Monotonic</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="#c.PyTime_t" title="PyTime_t"><span class="n"><span class="pre">PyTime_t</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">result</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PyTime_Monotonic" title="Link to this definition">¶</a><br /></dt>
-<dd><p>Read the monotonic clock.
-See <a class="reference internal" href="../library/time.html#time.monotonic" title="time.monotonic"><code class="xref py py-func docutils literal notranslate"><span class="pre">time.monotonic()</span></code></a> for important details on this clock.</p>
+<dd><p class="translated">读取单调时间。有关该时钟的重要详细信息，请参阅 <a class="reference internal" href="../library/time.html#time.monotonic" title="time.monotonic"><code class="xref py py-func docutils literal notranslate"><span class="pre">time.monotonic()</span></code></a>。</p>
 </dd></dl>
 
 <dl class="c function">
 <dt class="sig sig-object c" id="c.PyTime_PerfCounter">
 <span class="kt"><span class="pre">int</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">PyTime_PerfCounter</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="#c.PyTime_t" title="PyTime_t"><span class="n"><span class="pre">PyTime_t</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">result</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PyTime_PerfCounter" title="Link to this definition">¶</a><br /></dt>
-<dd><p>Read the performance counter.
-See <a class="reference internal" href="../library/time.html#time.perf_counter" title="time.perf_counter"><code class="xref py py-func docutils literal notranslate"><span class="pre">time.perf_counter()</span></code></a> for important details on this clock.</p>
+<dd><p class="translated">读取性能计数器。有关该时钟的重要详细信息，请参阅 <a class="reference internal" href="../library/time.html#time.perf_counter" title="time.perf_counter"><code class="xref py py-func docutils literal notranslate"><span class="pre">time.perf_counter()</span></code></a>。</p>
 </dd></dl>
 
 <dl class="c function">
 <dt class="sig sig-object c" id="c.PyTime_Time">
 <span class="kt"><span class="pre">int</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">PyTime_Time</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="#c.PyTime_t" title="PyTime_t"><span class="n"><span class="pre">PyTime_t</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">result</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PyTime_Time" title="Link to this definition">¶</a><br /></dt>
-<dd><p>Read the “wall clock” time.
-See <a class="reference internal" href="../library/time.html#time.time" title="time.time"><code class="xref py py-func docutils literal notranslate"><span class="pre">time.time()</span></code></a> for details important on this clock.</p>
+<dd><p class="translated">读取“Wall Clock” 时间。有关该时钟的重要详细信息，请参阅 <code class="xref py py-func docutils literal notranslate"><span class="pre">time.time`()</span></code>。</p>
 </dd></dl>
 
 </section>
 <section id="raw-clock-functions">
-<h2>Raw Clock Functions<a class="headerlink" href="#raw-clock-functions" title="Link to this heading">¶</a></h2>
-<p>Similar to clock functions, but don’t set an exception on error and don’t
-require the caller to have an <a class="reference internal" href="../glossary.html#term-attached-thread-state"><span class="xref std std-term">attached thread state</span></a>.</p>
-<p>On success, the functions return <code class="docutils literal notranslate"><span class="pre">0</span></code>.</p>
-<p>On failure, they set <code class="docutils literal notranslate"><span class="pre">*result</span></code> to <code class="docutils literal notranslate"><span class="pre">0</span></code> and return <code class="docutils literal notranslate"><span class="pre">-1</span></code>, <em>without</em> setting
-an exception. To get the cause of the error, <a class="reference internal" href="../glossary.html#term-attached-thread-state"><span class="xref std std-term">attach</span></a> a <a class="reference internal" href="../glossary.html#term-thread-state"><span class="xref std std-term">thread state</span></a>,
-and call the regular (non-<code class="docutils literal notranslate"><span class="pre">Raw</span></code>) function. Note that the regular function may succeed after
-the <code class="docutils literal notranslate"><span class="pre">Raw</span></code> one failed.</p>
+<h2 class="translated">原始时钟函数<a class="headerlink" href="#raw-clock-functions" title="Link to this heading">¶</a></h2>
+<p class="translated">与时钟函数类似，但不设置错误异常，也不要求调用者持有 GIL。</p>
+<p class="translated">成功时，函数返回 <code class="docutils literal notranslate"><span class="pre">0</span></code>。</p>
+<p class="translated">失败时，它们将 <code class="docutils literal notranslate"><span class="pre">*result</span></code> 设置为 <code class="docutils literal notranslate"><span class="pre">0</span></code> 并返回 <code class="docutils literal notranslate"><span class="pre">-1</span></code>， <em>不</em> 设置异常。 要了解错误原因，请获取 GIL 并调用常规 (非 <code class="docutils literal notranslate"><span class="pre">Raw</span></code>) 函数。 请注意，常规函数可能会在 <code class="docutils literal notranslate"><span class="pre">Raw</span></code> 函数失败后成功。</p>
 <dl class="c function">
 <dt class="sig sig-object c" id="c.PyTime_MonotonicRaw">
 <span class="kt"><span class="pre">int</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">PyTime_MonotonicRaw</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="#c.PyTime_t" title="PyTime_t"><span class="n"><span class="pre">PyTime_t</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">result</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PyTime_MonotonicRaw" title="Link to this definition">¶</a><br /></dt>
-<dd><p>Similar to <a class="reference internal" href="#c.PyTime_Monotonic" title="PyTime_Monotonic"><code class="xref c c-func docutils literal notranslate"><span class="pre">PyTime_Monotonic()</span></code></a>,
-but don’t set an exception on error and don’t require an <a class="reference internal" href="../glossary.html#term-attached-thread-state"><span class="xref std std-term">attached thread state</span></a>.</p>
+<dd><p class="translated">与 <a class="reference internal" href="#c.PyTime_Monotonic" title="PyTime_Monotonic"><code class="xref c c-func docutils literal notranslate"><span class="pre">PyTime_Monotonic()</span></code></a> 类似，但在错误时不设置异常，并且不需要持有 GIL。</p>
 </dd></dl>
 
 <dl class="c function">
 <dt class="sig sig-object c" id="c.PyTime_PerfCounterRaw">
 <span class="kt"><span class="pre">int</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">PyTime_PerfCounterRaw</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="#c.PyTime_t" title="PyTime_t"><span class="n"><span class="pre">PyTime_t</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">result</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PyTime_PerfCounterRaw" title="Link to this definition">¶</a><br /></dt>
-<dd><p>Similar to <a class="reference internal" href="#c.PyTime_PerfCounter" title="PyTime_PerfCounter"><code class="xref c c-func docutils literal notranslate"><span class="pre">PyTime_PerfCounter()</span></code></a>,
-but don’t set an exception on error and don’t require an <a class="reference internal" href="../glossary.html#term-attached-thread-state"><span class="xref std std-term">attached thread state</span></a>.</p>
+<dd><p class="translated">与 <a class="reference internal" href="#c.PyTime_PerfCounter" title="PyTime_PerfCounter"><code class="xref c c-func docutils literal notranslate"><span class="pre">PyTime_PerfCounter()</span></code></a> 类似，但在错误时不设置异常，并且不需要持有 GIL。</p>
 </dd></dl>
 
 <dl class="c function">
 <dt class="sig sig-object c" id="c.PyTime_TimeRaw">
 <span class="kt"><span class="pre">int</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">PyTime_TimeRaw</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="#c.PyTime_t" title="PyTime_t"><span class="n"><span class="pre">PyTime_t</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">result</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PyTime_TimeRaw" title="Link to this definition">¶</a><br /></dt>
-<dd><p>Similar to <a class="reference internal" href="#c.PyTime_Time" title="PyTime_Time"><code class="xref c c-func docutils literal notranslate"><span class="pre">PyTime_Time()</span></code></a>,
-but don’t set an exception on error and don’t require an <a class="reference internal" href="../glossary.html#term-attached-thread-state"><span class="xref std std-term">attached thread state</span></a>.</p>
+<dd><p class="translated">与 <a class="reference internal" href="#c.PyTime_Time" title="PyTime_Time"><code class="xref c c-func docutils literal notranslate"><span class="pre">PyTime_Time()</span></code></a> 类似，但在错误时不设置异常，并且不需要持有 GIL。</p>
 </dd></dl>
 
 </section>
 <section id="conversion-functions">
-<h2>Conversion functions<a class="headerlink" href="#conversion-functions" title="Link to this heading">¶</a></h2>
+<h2 class="translated">转换函数<a class="headerlink" href="#conversion-functions" title="Link to this heading">¶</a></h2>
 <dl class="c function">
 <dt class="sig sig-object c" id="c.PyTime_AsSecondsDouble">
 <span class="kt"><span class="pre">double</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">PyTime_AsSecondsDouble</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="#c.PyTime_t" title="PyTime_t"><span class="n"><span class="pre">PyTime_t</span></span></a><span class="w"> </span><span class="n"><span class="pre">t</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PyTime_AsSecondsDouble" title="Link to this definition">¶</a><br /></dt>
-<dd><p>Convert a timestamp to a number of seconds as a C <span class="c-expr sig sig-inline c"><span class="kt">double</span></span>.</p>
-<p>The function cannot fail, but note that <span class="c-expr sig sig-inline c"><span class="kt">double</span></span> has limited
-accuracy for large values.</p>
+<dd><p class="translated">将时间戳转换为 C <span class="c-expr sig sig-inline c"><span class="kt">double</span></span> 形式的秒数。</p>
+<p class="translated">该函数不会失败，但请注意 <span class="c-expr sig sig-inline c"><span class="kt">double</span></span> 对于大值的精度有限。</p>
 </dd></dl>
 
 </section>
@@ -340,57 +305,47 @@ accuracy for large values.</p>
       <div class="sphinxsidebar" role="navigation" aria-label="Main">
         <div class="sphinxsidebarwrapper">
   <div>
-    <h3><a href="../contents.html">Table of Contents</a></h3>
+    <h3><a href="../contents.html">目录</a></h3>
     <ul>
 <li><a class="reference internal" href="#">PyTime C API</a><ul>
-<li><a class="reference internal" href="#types">Types</a></li>
-<li><a class="reference internal" href="#clock-functions">Clock Functions</a></li>
-<li><a class="reference internal" href="#raw-clock-functions">Raw Clock Functions</a></li>
-<li><a class="reference internal" href="#conversion-functions">Conversion functions</a></li>
+<li><a class="reference internal" href="#types">类型</a></li>
+<li><a class="reference internal" href="#clock-functions">时钟函数</a></li>
+<li><a class="reference internal" href="#raw-clock-functions">原始时钟函数</a></li>
+<li><a class="reference internal" href="#conversion-functions">转换函数</a></li>
 </ul>
 </li>
 </ul>
 
   </div>
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="codec.html"
-                          title="previous chapter">Codec registry and support functions</a></p>
+                          title="上一章">编解码器注册与支持功能</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="perfmaps.html"
-                          title="next chapter">Support for Perf Maps</a></p>
+                          title="下一章">对 Perf Maps 的支持</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "c-api/time.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/c-api/time.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/c-api/time.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
   </div>
         </div>
-<div id="sidebarbutton" title="Collapse sidebar">
+<div id="sidebarbutton" title="折叠边栏">
 <span>«</span>
 </div>
 
@@ -398,20 +353,20 @@ accuracy for large values.</p>
       <div class="clearer"></div>
     </div>  
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             >index</a></li>
+          <a href="../genindex.html" title="总索引"
+             >索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="perfmaps.html" title="Support for Perf Maps"
-             >next</a> |</li>
+          <a href="perfmaps.html" title="对 Perf Maps 的支持"
+             >下一页</a> |</li>
         <li class="right" >
-          <a href="codec.html" title="Codec registry and support functions"
-             >previous</a> |</li>
+          <a href="codec.html" title="编解码器注册与支持功能"
+             >上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -423,59 +378,59 @@ accuracy for large values.</p>
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-          <li class="nav-item nav-item-1"><a href="index.html" >Python/C API reference manual</a> &#187;</li>
-          <li class="nav-item nav-item-2"><a href="utilities.html" >Utilities</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="index.html" >Python/C API 参考手册</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="utilities.html" >工具</a> &#187;</li>
         <li class="nav-item nav-item-this"><a href="">PyTime C API</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
       </ul>
     </div>  
     <div class="footer">
-    &copy; <a href="../copyright.html">Copyright</a> 2001 Python Software Foundation.
+    &copy; <a href="../copyright.html">版权</a> 2001-2026, Python Software Foundation.
     <br>
-    This page is licensed under the Python Software Foundation License Version 2.
+    本页面采用 Python 软件基金会许可证第 2 版授权。
     <br>
-    Examples, recipes, and other code in the documentation are additionally licensed under the Zero Clause BSD License.
+    文档中的示例、代码片段及其他代码内容额外采用零条款 BSD 许可证授权。
     <br>
     
-      See <a href="/license.html">History and License</a> for more information.<br>
+      更多信息请参阅《<a href="/license.html"> 历史与许可 </a>》。<br>
     
     
     <br>
 
-    The Python Software Foundation is a non-profit corporation.
-<a href="https://www.python.org/psf/donations/">Please donate.</a>
+    Python 软件基金会是一家非营利性公司。
+<a href="https://www.python.org/psf/donations/">请进行捐赠。</a>
 <br>
     <br>
-      Last updated on May 27, 2026 (10:52 UTC).
+      最后更新于5月 25, 2026 (11:48 UTC) 。
     
-      <a href="/bugs.html">Found a bug</a>?
+      <a href="/bugs.html">发现了错误</a>？
     
     <br>
 
-    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3.
+    使用<a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3 创建。
     </div>
 
   </body>

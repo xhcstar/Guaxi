@@ -36,7 +36,7 @@ the :mod:`glob` module.)
 
    Since different operating systems have different path name conventions, there
    are several versions of this module in the standard library.  The
-   :mod:`!os.path` module is always the path module suitable for the operating
+   :mod:`os.path` module is always the path module suitable for the operating
    system Python is running on, and therefore usable for local paths.  However,
    you can also import and use the individual modules if you want to manipulate
    a path that is *always* in one of the different formats.  They all have the
@@ -466,7 +466,7 @@ the :mod:`glob` module.)
    .. versionchanged:: 3.10
       The *strict* parameter was added.
 
-   .. versionchanged:: 3.14
+   .. versionchanged:: 3.13.4
       The :py:data:`~os.path.ALLOW_MISSING` value for the *strict* parameter
       was added.
 
@@ -474,7 +474,7 @@ the :mod:`glob` module.)
 
    Special value used for the *strict* argument in :func:`realpath`.
 
-   .. versionadded:: 3.14
+   .. versionadded:: 3.13.4
 
 .. function:: relpath(path, start=os.curdir)
 

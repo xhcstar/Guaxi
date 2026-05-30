@@ -1,44 +1,45 @@
 <!DOCTYPE html>
 
-<html lang="en" data-content_root="../">
+<html lang="zh-CN" data-content_root="../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta property="og:title" content="pyclbr — Python module browser support" />
+<meta property="og:title" content="pyclbr --- Python 模块浏览器支持" />
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://docs.python.org/3/library/pyclbr.html" />
 <meta property="og:site_name" content="Python documentation" />
-<meta property="og:description" content="Source code: Lib/pyclbr.py The pyclbr module provides limited information about the functions, classes, and methods defined in a Python-coded module. The information is sufficient to implement a mo..." />
+<meta property="og:description" content="源代码: Lib/pyclbr.py pyclbr 模块提供了对于以 Python 编写的模块中定义的函数、类和方法的受限信息。 这种信息足够用来实现一个模块浏览器。 这种信息是从 Python 源代码中直接提取而非通过导入模块，因此该模块可以安全地用于不受信任的代码。 此限制使得非 Python 实现的模块无法使用此模块，包括所有标准和可选的扩展模块。 这些函数所返回的描述器是 Funct..." />
 <meta property="og:image:width" content="1146" />
 <meta property="og:image:height" content="600" />
-<meta property="og:image" content="https://docs.python.org/3.14/_images/social_previews/summary_library_pyclbr_1bf152fc.png" />
-<meta property="og:image:alt" content="Source code: Lib/pyclbr.py The pyclbr module provides limited information about the functions, classes, and methods defined in a Python-coded module. The information is sufficient to implement a mo..." />
-<meta name="description" content="Source code: Lib/pyclbr.py The pyclbr module provides limited information about the functions, classes, and methods defined in a Python-coded module. The information is sufficient to implement a mo..." />
+<meta property="og:image" content="https://docs.python.org/3.13/zh-cn/_images/social_previews/summary_library_pyclbr_bda0ab72.png" />
+<meta property="og:image:alt" content="源代码: Lib/pyclbr.py pyclbr 模块提供了对于以 Python 编写的模块中定义的函数、类和方法的受限信息。 这种信息足够用来实现一个模块浏览器。 这种信息是从 Python 源代码中直接提取而非通过导入模块，因此该模块可以安全地用于不受信任的代码。 此限制使得非 Python 实现的模块无法使用此模块，包括所有标准和可选的扩展模块。 这些函数所返回的描述器是 Funct..." />
+<meta name="description" content="源代码: Lib/pyclbr.py pyclbr 模块提供了对于以 Python 编写的模块中定义的函数、类和方法的受限信息。 这种信息足够用来实现一个模块浏览器。 这种信息是从 Python 源代码中直接提取而非通过导入模块，因此该模块可以安全地用于不受信任的代码。 此限制使得非 Python 实现的模块无法使用此模块，包括所有标准和可选的扩展模块。 这些函数所返回的描述器是 Funct..." />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="theme-color" content="#3776ab">
 
-    <title>pyclbr — Python module browser support &#8212; Python 3.14.5 documentation</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>pyclbr --- Python 模块浏览器支持 &#8212; Python 3.13.13 文档</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
     
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
     <link rel="stylesheet" type="text/css" href="../_static/classic.css?v=234b1a7c" />
     <link rel="stylesheet" type="text/css" href="../_static/pydoctheme.css?v=4365c8fe" />
     <link id="pygments_dark_css" media="(prefers-color-scheme: dark)" rel="stylesheet" type="text/css" href="../_static/pygments_dark.css?v=5349f25f" />
     
-    <script src="../_static/documentation_options.js?v=bcfd2f37"></script>
+    <script src="../_static/documentation_options.js?v=a941be6b"></script>
     <script src="../_static/doctools.js?v=9bcbadda"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/translations.js?v=beaddf03"></script>
     
     <script src="../_static/sidebar.js"></script>
     
     <link rel="search" type="application/opensearchdescription+xml"
-          title="Search within Python 3.14.5 documentation"
+          title="在 Python 3.13.13 文档 中搜索"
           href="../_static/opensearch.xml"/>
-    <link rel="author" title="About these documents" href="../about.html" />
-    <link rel="index" title="Index" href="../genindex.html" />
-    <link rel="search" title="Search" href="../search.html" />
-    <link rel="copyright" title="Copyright" href="../copyright.html" />
-    <link rel="next" title="py_compile — Compile Python source files" href="py_compile.html" />
-    <link rel="prev" title="tabnanny — Detection of ambiguous indentation" href="tabnanny.html" />
+    <link rel="author" title="关于此文档" href="../about.html" />
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="搜索" href="../search.html" />
+    <link rel="copyright" title="版权" href="../copyright.html" />
+    <link rel="next" title="py_compile --- 编译 Python 源文件" href="py_compile.html" />
+    <link rel="prev" title="tabnanny --- 检测有歧义的缩进" href="tabnanny.html" />
     
       
       <script defer file-types="bz2,epub,zip" data-domain="docs.python.org" src="https://analytics.python.org/js/script.file-downloads.outbound-links.js"></script>
@@ -68,7 +69,7 @@
 <body>
 <div class="mobile-nav">
     <input type="checkbox" id="menuToggler" class="toggler__input" aria-controls="navigation"
-           aria-pressed="false" aria-expanded="false" role="button" aria-label="Menu">
+           aria-pressed="false" aria-expanded="false" role="button" aria-label="菜单">
     <nav class="nav-content" role="navigation">
         <label for="menuToggler" class="toggler__label">
             <span></span>
@@ -82,8 +83,8 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" class="search-icon">
                     <path fill-rule="nonzero" fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 001.48-5.34c-.47-2.78-2.79-5-5.59-5.34a6.505 6.505 0 00-7.27 7.27c.34 2.8 2.56 5.12 5.34 5.59a6.5 6.5 0 005.34-1.48l.27.28v.79l4.25 4.25c.41.41 1.08.41 1.49 0 .41-.41.41-1.08 0-1.49L15.5 14zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"></path>
                 </svg>
-                <input placeholder="Quick search" aria-label="Quick search" type="search" name="q">
-                <input type="submit" value="Go">
+                <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q">
+                <input type="submit" value="转到">
             </form>
         </span>
     </nav>
@@ -92,57 +93,47 @@
             <div class="language_switcher_placeholder"></div>
             
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label>
   <div>
-    <h3><a href="../contents.html">Table of Contents</a></h3>
+    <h3><a href="../contents.html">目录</a></h3>
     <ul>
-<li><a class="reference internal" href="#"><code class="xref py py-mod docutils literal notranslate"><span class="pre">pyclbr</span></code> — Python module browser support</a><ul>
-<li><a class="reference internal" href="#function-objects">Function Objects</a></li>
-<li><a class="reference internal" href="#class-objects">Class Objects</a></li>
+<li><a class="reference internal" href="#"><code class="xref py py-mod docutils literal notranslate"><span class="pre">pyclbr</span></code> --- Python 模块浏览器支持</a><ul>
+<li><a class="reference internal" href="#function-objects">Function 对象</a></li>
+<li><a class="reference internal" href="#class-objects">Class 对象</a></li>
 </ul>
 </li>
 </ul>
 
   </div>
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="tabnanny.html"
-                          title="previous chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">tabnanny</span></code> — Detection of ambiguous indentation</a></p>
+                          title="上一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">tabnanny</span></code> --- 检测有歧义的缩进</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="py_compile.html"
-                          title="next chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">py_compile</span></code> — Compile Python source files</a></p>
+                          title="下一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">py_compile</span></code> --- 编译 Python 源文件</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "library/pyclbr.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/library/pyclbr.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/library/pyclbr.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
@@ -153,20 +144,20 @@
 
   
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             accesskey="I">index</a></li>
+          <a href="../genindex.html" title="总索引"
+             accesskey="I">索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="py_compile.html" title="py_compile — Compile Python source files"
-             accesskey="N">next</a> |</li>
+          <a href="py_compile.html" title="py_compile --- 编译 Python 源文件"
+             accesskey="N">下一页</a> |</li>
         <li class="right" >
-          <a href="tabnanny.html" title="tabnanny — Detection of ambiguous indentation"
-             accesskey="P">previous</a> |</li>
+          <a href="tabnanny.html" title="tabnanny --- 检测有歧义的缩进"
+             accesskey="P">上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -178,30 +169,30 @@
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-          <li class="nav-item nav-item-1"><a href="index.html" >The Python Standard Library</a> &#187;</li>
-          <li class="nav-item nav-item-2"><a href="language.html" accesskey="U">Python Language Services</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">pyclbr</span></code> — Python module browser support</a></li>
+          <li class="nav-item nav-item-1"><a href="index.html" >Python 标准库</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="language.html" accesskey="U">Python 语言服务</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">pyclbr</span></code> --- Python 模块浏览器支持</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
@@ -214,86 +205,61 @@
           <div class="body" role="main">
             
   <section id="module-pyclbr">
-<span id="pyclbr-python-module-browser-support"></span><h1><code class="xref py py-mod docutils literal notranslate"><span class="pre">pyclbr</span></code> — Python module browser support<a class="headerlink" href="#module-pyclbr" title="Link to this heading">¶</a></h1>
-<p><strong>Source code:</strong> <a class="extlink-source reference external" href="https://github.com/python/cpython/tree/3.14/Lib/pyclbr.py">Lib/pyclbr.py</a></p>
+<span id="pyclbr-python-module-browser-support"></span><h1 class="translated"><code class="xref py py-mod docutils literal notranslate"><span class="pre">pyclbr</span></code> --- Python 模块浏览器支持<a class="headerlink" href="#module-pyclbr" title="Link to this heading">¶</a></h1>
+<p class="translated"><strong>源代码:</strong> <a class="extlink-source reference external" href="https://github.com/python/cpython/tree/3.13/Lib/pyclbr.py">Lib/pyclbr.py</a></p>
 <hr class="docutils" />
-<p>The <code class="xref py py-mod docutils literal notranslate"><span class="pre">pyclbr</span></code> module provides limited information about the
-functions, classes, and methods defined in a Python-coded module.  The
-information is sufficient to implement a module browser.  The
-information is extracted from the Python source code rather than by
-importing the module, so this module is safe to use with untrusted code.
-This restriction makes it impossible to use this module with modules not
-implemented in Python, including all standard and optional extension
-modules.</p>
+<p class="translated"><code class="xref py py-mod docutils literal notranslate"><span class="pre">pyclbr</span></code> 模块提供了对于以 Python 编写的模块中定义的函数、类和方法的受限信息。 这种信息足够用来实现一个模块浏览器。 这种信息是从 Python 源代码中直接提取而非通过导入模块，因此该模块可以安全地用于不受信任的代码。 此限制使得非 Python 实现的模块无法使用此模块，包括所有标准和可选的扩展模块。</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="pyclbr.readmodule">
 <span class="sig-prename descclassname"><span class="pre">pyclbr.</span></span><span class="sig-name descname"><span class="pre">readmodule</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">module</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">path</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#pyclbr.readmodule" title="Link to this definition">¶</a></dt>
-<dd><p>Return a dictionary mapping module-level class names to class
-descriptors.  If possible, descriptors for imported base classes are
-included.  Parameter <em>module</em> is a string with the name of the module
-to read; it may be the name of a module within a package.  If given,
-<em>path</em> is a sequence of directory paths prepended to <code class="docutils literal notranslate"><span class="pre">sys.path</span></code>,
-which is used to locate the module source code.</p>
-<p>This function is the original interface and is only kept for back
-compatibility.  It returns a filtered version of the following.</p>
+<dd><p class="translated">返回一个将模块层级的类名映射到类描述器的字典。 如果可能，将会包括已导入基类的描述器。 形参 <em>module</em> 为要读取模块名称的字符串；它可能是某个包内部的模块名称。 <em>path</em> 如果给出则为添加到 <code class="docutils literal notranslate"><span class="pre">sys.path</span></code> 开头的目录路径序列，它会被用于定位模块的源代码。</p>
+<p class="translated">此函数为原始接口，仅保留用于向下兼容。 它会返回以下内容的过滤版本。</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="pyclbr.readmodule_ex">
 <span class="sig-prename descclassname"><span class="pre">pyclbr.</span></span><span class="sig-name descname"><span class="pre">readmodule_ex</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">module</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">path</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#pyclbr.readmodule_ex" title="Link to this definition">¶</a></dt>
-<dd><p>Return a dictionary-based tree containing a function or class
-descriptors for each function and class defined in the module with a
-<code class="docutils literal notranslate"><span class="pre">def</span></code> or <code class="docutils literal notranslate"><span class="pre">class</span></code> statement.  The returned dictionary maps
-module-level function and class names to their descriptors.  Nested
-objects are entered into the children dictionary of their parent.  As
-with readmodule, <em>module</em> names the module to be read and <em>path</em> is
-prepended to sys.path.  If the module being read is a package, the
-returned dictionary has a key <code class="docutils literal notranslate"><span class="pre">'__path__'</span></code> whose value is a list
-containing the package search path.</p>
+<dd><p class="translated">返回一个基于字典的树，其中包含与模块中每个用 <code class="docutils literal notranslate"><span class="pre">def</span></code> 或 <code class="docutils literal notranslate"><span class="pre">class</span></code> 语句定义的函数和类相对应的函数和类描述器。 被返回的字典会将模块层级的函数和类名映射到它们的描述器。 嵌套的对象会被输入到它们的上级子目录中。 与 readmodule 一样，<em>module</em> 指明要读取的模块而 <em>path</em> 会被添加到 sys.path。 如果被读取的模块是一个包，则返回的字典将具有 <code class="docutils literal notranslate"><span class="pre">'__path__'</span></code> 键，其值是一个包含包搜索路径的列表。</p>
 </dd></dl>
 
 <div class="versionadded">
-<p><span class="versionmodified added">Added in version 3.7: </span>Descriptors for nested definitions.  They are accessed through the
-new children attribute.  Each has a new parent attribute.</p>
+<p><span class="versionmodified added">Added in version 3.7: </span>嵌套定义的描述器。 它们通过新的子属性来访问。 每个定义都会有一个新的上级属性。</p>
 </div>
-<p>The descriptors returned by these functions are instances of
-Function and Class classes.  Users are not expected to create instances
-of these classes.</p>
+<p class="translated">这些函数所返回的描述器是 Function 和 Class 类的实例。 用户不应自行创建这些类的实例。</p>
 <section id="function-objects">
-<span id="pyclbr-function-objects"></span><h2>Function Objects<a class="headerlink" href="#function-objects" title="Link to this heading">¶</a></h2>
+<span id="pyclbr-function-objects"></span><h2 class="translated">Function 对象<a class="headerlink" href="#function-objects" title="Link to this heading">¶</a></h2>
 <dl class="py class">
 <dt class="sig sig-object py" id="pyclbr.Function">
 <em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">pyclbr.</span></span><span class="sig-name descname"><span class="pre">Function</span></span><a class="headerlink" href="#pyclbr.Function" title="Link to this definition">¶</a></dt>
-<dd><p>Class <code class="xref py py-class docutils literal notranslate"><span class="pre">Function</span></code> instances describe functions defined by def
-statements.  They have the following attributes:</p>
+<dd><p class="translated"><code class="xref py py-class docutils literal notranslate"><span class="pre">Function</span></code> 类的实例描述了由 def 语句所定义的函数。 它们具有下列属性：</p>
 <dl class="py attribute">
 <dt class="sig sig-object py" id="pyclbr.Function.file">
 <span class="sig-name descname"><span class="pre">file</span></span><a class="headerlink" href="#pyclbr.Function.file" title="Link to this definition">¶</a></dt>
-<dd><p>Name of the file in which the function is defined.</p>
+<dd><p class="translated">函数定义所在的文件名称。</p>
 </dd></dl>
 
 <dl class="py attribute">
 <dt class="sig sig-object py" id="pyclbr.Function.module">
 <span class="sig-name descname"><span class="pre">module</span></span><a class="headerlink" href="#pyclbr.Function.module" title="Link to this definition">¶</a></dt>
-<dd><p>The name of the module defining the function described.</p>
+<dd><p class="translated">定义了所描述函数的模块名称。</p>
 </dd></dl>
 
 <dl class="py attribute">
 <dt class="sig sig-object py" id="pyclbr.Function.name">
 <span class="sig-name descname"><span class="pre">name</span></span><a class="headerlink" href="#pyclbr.Function.name" title="Link to this definition">¶</a></dt>
-<dd><p>The name of the function.</p>
+<dd><p class="translated">函数名称。</p>
 </dd></dl>
 
 <dl class="py attribute">
 <dt class="sig sig-object py" id="pyclbr.Function.lineno">
 <span class="sig-name descname"><span class="pre">lineno</span></span><a class="headerlink" href="#pyclbr.Function.lineno" title="Link to this definition">¶</a></dt>
-<dd><p>The line number in the file where the definition starts.</p>
+<dd><p class="translated">定义在文件中起始位置的行号。</p>
 </dd></dl>
 
 <dl class="py attribute">
 <dt class="sig sig-object py" id="pyclbr.Function.parent">
 <span class="sig-name descname"><span class="pre">parent</span></span><a class="headerlink" href="#pyclbr.Function.parent" title="Link to this definition">¶</a></dt>
-<dd><p>For top-level functions, <code class="docutils literal notranslate"><span class="pre">None</span></code>.  For nested functions, the parent.</p>
+<dd><p class="translated">对于最高层级函数为 <code class="docutils literal notranslate"><span class="pre">None</span></code>。 对于嵌套函数则为上级函数。</p>
 <div class="versionadded">
 <p><span class="versionmodified added">Added in version 3.7.</span></p>
 </div>
@@ -302,8 +268,7 @@ statements.  They have the following attributes:</p>
 <dl class="py attribute">
 <dt class="sig sig-object py" id="pyclbr.Function.children">
 <span class="sig-name descname"><span class="pre">children</span></span><a class="headerlink" href="#pyclbr.Function.children" title="Link to this definition">¶</a></dt>
-<dd><p>A <a class="reference internal" href="stdtypes.html#dict" title="dict"><code class="xref py py-class docutils literal notranslate"><span class="pre">dictionary</span></code></a> mapping names to descriptors for nested functions and
-classes.</p>
+<dd><p class="translated">一个将名称映射到针对嵌套函数和类的描述器的 <a class="reference internal" href="stdtypes.html#dict" title="dict"><code class="xref py py-class docutils literal notranslate"><span class="pre">字典</span></code></a>。</p>
 <div class="versionadded">
 <p><span class="versionmodified added">Added in version 3.7.</span></p>
 </div>
@@ -312,8 +277,7 @@ classes.</p>
 <dl class="py attribute">
 <dt class="sig sig-object py" id="pyclbr.Function.is_async">
 <span class="sig-name descname"><span class="pre">is_async</span></span><a class="headerlink" href="#pyclbr.Function.is_async" title="Link to this definition">¶</a></dt>
-<dd><p><code class="docutils literal notranslate"><span class="pre">True</span></code> for functions that are defined with the
-<a class="reference internal" href="../reference/compound_stmts.html#async-def"><code class="xref std std-keyword docutils literal notranslate"><span class="pre">async</span></code></a> prefix, <code class="docutils literal notranslate"><span class="pre">False</span></code> otherwise.</p>
+<dd><p class="translated"><code class="docutils literal notranslate"><span class="pre">True</span></code> 针对使用 <a class="reference internal" href="../reference/compound_stmts.html#async-def"><code class="xref std std-keyword docutils literal notranslate"><span class="pre">async</span></code></a> 前缀定义的函数，其他情况下为 <code class="docutils literal notranslate"><span class="pre">False</span></code>。</p>
 <div class="versionadded">
 <p><span class="versionmodified added">Added in version 3.10.</span></p>
 </div>
@@ -323,41 +287,39 @@ classes.</p>
 
 </section>
 <section id="class-objects">
-<span id="pyclbr-class-objects"></span><h2>Class Objects<a class="headerlink" href="#class-objects" title="Link to this heading">¶</a></h2>
+<span id="pyclbr-class-objects"></span><h2 class="translated">Class 对象<a class="headerlink" href="#class-objects" title="Link to this heading">¶</a></h2>
 <dl class="py class">
 <dt class="sig sig-object py" id="pyclbr.Class">
 <em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">pyclbr.</span></span><span class="sig-name descname"><span class="pre">Class</span></span><a class="headerlink" href="#pyclbr.Class" title="Link to this definition">¶</a></dt>
-<dd><p>Class <code class="xref py py-class docutils literal notranslate"><span class="pre">Class</span></code> instances describe classes defined by class
-statements.  They have the same attributes as <a class="reference internal" href="#pyclbr.Function" title="pyclbr.Function"><code class="xref py py-class docutils literal notranslate"><span class="pre">Functions</span></code></a>
-and two more.</p>
+<dd><p class="translated"><code class="xref py py-class docutils literal notranslate"><span class="pre">Class</span></code> 类的实例描述了由 class 语句所定义的类。 它们具有与 <a class="reference internal" href="#pyclbr.Function" title="pyclbr.Function"><code class="xref py py-class docutils literal notranslate"><span class="pre">Function</span></code></a> 相同的属性以及两个额外属性。</p>
 <dl class="py attribute">
 <dt class="sig sig-object py" id="pyclbr.Class.file">
 <span class="sig-name descname"><span class="pre">file</span></span><a class="headerlink" href="#pyclbr.Class.file" title="Link to this definition">¶</a></dt>
-<dd><p>Name of the file in which the class is defined.</p>
+<dd><p class="translated">类定义所在的文件名称。</p>
 </dd></dl>
 
 <dl class="py attribute">
 <dt class="sig sig-object py" id="pyclbr.Class.module">
 <span class="sig-name descname"><span class="pre">module</span></span><a class="headerlink" href="#pyclbr.Class.module" title="Link to this definition">¶</a></dt>
-<dd><p>The name of the module defining the class described.</p>
+<dd><p class="translated">定义了所描述类的模块名称。</p>
 </dd></dl>
 
 <dl class="py attribute">
 <dt class="sig sig-object py" id="pyclbr.Class.name">
 <span class="sig-name descname"><span class="pre">name</span></span><a class="headerlink" href="#pyclbr.Class.name" title="Link to this definition">¶</a></dt>
-<dd><p>The name of the class.</p>
+<dd><p class="translated">类名称。</p>
 </dd></dl>
 
 <dl class="py attribute">
 <dt class="sig sig-object py" id="pyclbr.Class.lineno">
 <span class="sig-name descname"><span class="pre">lineno</span></span><a class="headerlink" href="#pyclbr.Class.lineno" title="Link to this definition">¶</a></dt>
-<dd><p>The line number in the file where the definition starts.</p>
+<dd><p class="translated">定义在文件中起始位置的行号。</p>
 </dd></dl>
 
 <dl class="py attribute">
 <dt class="sig sig-object py" id="pyclbr.Class.parent">
 <span class="sig-name descname"><span class="pre">parent</span></span><a class="headerlink" href="#pyclbr.Class.parent" title="Link to this definition">¶</a></dt>
-<dd><p>For top-level classes, <code class="docutils literal notranslate"><span class="pre">None</span></code>.  For nested classes, the parent.</p>
+<dd><p class="translated">对于最高层级类为 <code class="docutils literal notranslate"><span class="pre">None</span></code>。 对于嵌套的类则为上级类。</p>
 <div class="versionadded">
 <p><span class="versionmodified added">Added in version 3.7.</span></p>
 </div>
@@ -366,8 +328,7 @@ and two more.</p>
 <dl class="py attribute">
 <dt class="sig sig-object py" id="pyclbr.Class.children">
 <span class="sig-name descname"><span class="pre">children</span></span><a class="headerlink" href="#pyclbr.Class.children" title="Link to this definition">¶</a></dt>
-<dd><p>A dictionary mapping names to descriptors for nested functions and
-classes.</p>
+<dd><p class="translated">将名称映射到嵌套函数和类描述器的字典。</p>
 <div class="versionadded">
 <p><span class="versionmodified added">Added in version 3.7.</span></p>
 </div>
@@ -376,20 +337,13 @@ classes.</p>
 <dl class="py attribute">
 <dt class="sig sig-object py" id="pyclbr.Class.super">
 <span class="sig-name descname"><span class="pre">super</span></span><a class="headerlink" href="#pyclbr.Class.super" title="Link to this definition">¶</a></dt>
-<dd><p>A list of <code class="xref py py-class docutils literal notranslate"><span class="pre">Class</span></code> objects which describe the immediate base
-classes of the class being described.  Classes which are named as
-superclasses but which are not discoverable by <a class="reference internal" href="#pyclbr.readmodule_ex" title="pyclbr.readmodule_ex"><code class="xref py py-func docutils literal notranslate"><span class="pre">readmodule_ex()</span></code></a>
-are listed as a string with the class name instead of as
-<code class="xref py py-class docutils literal notranslate"><span class="pre">Class</span></code> objects.</p>
+<dd><p class="translated">一个由 <code class="xref py py-class docutils literal notranslate"><span class="pre">Class</span></code> 对象组成的列表，这些对象描述了相应类的直接基类。 被指定为超类但无法被 <a class="reference internal" href="#pyclbr.readmodule_ex" title="pyclbr.readmodule_ex"><code class="xref py py-func docutils literal notranslate"><span class="pre">readmodule_ex()</span></code></a> 发现的类会作为类名字符串而非 <code class="xref py py-class docutils literal notranslate"><span class="pre">Class</span></code> 对象列出。</p>
 </dd></dl>
 
 <dl class="py attribute">
 <dt class="sig sig-object py" id="pyclbr.Class.methods">
 <span class="sig-name descname"><span class="pre">methods</span></span><a class="headerlink" href="#pyclbr.Class.methods" title="Link to this definition">¶</a></dt>
-<dd><p>A <a class="reference internal" href="stdtypes.html#dict" title="dict"><code class="xref py py-class docutils literal notranslate"><span class="pre">dictionary</span></code></a> mapping method names to line numbers.
-This can be derived from the newer <a class="reference internal" href="#pyclbr.Class.children" title="pyclbr.Class.children"><code class="xref py py-attr docutils literal notranslate"><span class="pre">children</span></code></a> dictionary,
-but remains for
-back-compatibility.</p>
+<dd><p class="translated">一个将方法名映射到行号的 <a class="reference internal" href="stdtypes.html#dict" title="dict"><code class="xref py py-class docutils literal notranslate"><span class="pre">字典</span></code></a>。 此属性可从更新的 <a class="reference internal" href="#pyclbr.Class.children" title="pyclbr.Class.children"><code class="xref py py-attr docutils literal notranslate"><span class="pre">children</span></code></a> 字典中获取，但被保留用于向下兼容。</p>
 </dd></dl>
 
 </dd></dl>
@@ -405,55 +359,45 @@ back-compatibility.</p>
       <div class="sphinxsidebar" role="navigation" aria-label="Main">
         <div class="sphinxsidebarwrapper">
   <div>
-    <h3><a href="../contents.html">Table of Contents</a></h3>
+    <h3><a href="../contents.html">目录</a></h3>
     <ul>
-<li><a class="reference internal" href="#"><code class="xref py py-mod docutils literal notranslate"><span class="pre">pyclbr</span></code> — Python module browser support</a><ul>
-<li><a class="reference internal" href="#function-objects">Function Objects</a></li>
-<li><a class="reference internal" href="#class-objects">Class Objects</a></li>
+<li><a class="reference internal" href="#"><code class="xref py py-mod docutils literal notranslate"><span class="pre">pyclbr</span></code> --- Python 模块浏览器支持</a><ul>
+<li><a class="reference internal" href="#function-objects">Function 对象</a></li>
+<li><a class="reference internal" href="#class-objects">Class 对象</a></li>
 </ul>
 </li>
 </ul>
 
   </div>
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="tabnanny.html"
-                          title="previous chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">tabnanny</span></code> — Detection of ambiguous indentation</a></p>
+                          title="上一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">tabnanny</span></code> --- 检测有歧义的缩进</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="py_compile.html"
-                          title="next chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">py_compile</span></code> — Compile Python source files</a></p>
+                          title="下一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">py_compile</span></code> --- 编译 Python 源文件</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "library/pyclbr.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/library/pyclbr.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/library/pyclbr.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
   </div>
         </div>
-<div id="sidebarbutton" title="Collapse sidebar">
+<div id="sidebarbutton" title="折叠边栏">
 <span>«</span>
 </div>
 
@@ -461,20 +405,20 @@ back-compatibility.</p>
       <div class="clearer"></div>
     </div>  
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             >index</a></li>
+          <a href="../genindex.html" title="总索引"
+             >索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="py_compile.html" title="py_compile — Compile Python source files"
-             >next</a> |</li>
+          <a href="py_compile.html" title="py_compile --- 编译 Python 源文件"
+             >下一页</a> |</li>
         <li class="right" >
-          <a href="tabnanny.html" title="tabnanny — Detection of ambiguous indentation"
-             >previous</a> |</li>
+          <a href="tabnanny.html" title="tabnanny --- 检测有歧义的缩进"
+             >上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -486,59 +430,59 @@ back-compatibility.</p>
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-          <li class="nav-item nav-item-1"><a href="index.html" >The Python Standard Library</a> &#187;</li>
-          <li class="nav-item nav-item-2"><a href="language.html" >Python Language Services</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">pyclbr</span></code> — Python module browser support</a></li>
+          <li class="nav-item nav-item-1"><a href="index.html" >Python 标准库</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="language.html" >Python 语言服务</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">pyclbr</span></code> --- Python 模块浏览器支持</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
       </ul>
     </div>  
     <div class="footer">
-    &copy; <a href="../copyright.html">Copyright</a> 2001 Python Software Foundation.
+    &copy; <a href="../copyright.html">版权</a> 2001-2026, Python Software Foundation.
     <br>
-    This page is licensed under the Python Software Foundation License Version 2.
+    本页面采用 Python 软件基金会许可证第 2 版授权。
     <br>
-    Examples, recipes, and other code in the documentation are additionally licensed under the Zero Clause BSD License.
+    文档中的示例、代码片段及其他代码内容额外采用零条款 BSD 许可证授权。
     <br>
     
-      See <a href="/license.html">History and License</a> for more information.<br>
+      更多信息请参阅《<a href="/license.html"> 历史与许可 </a>》。<br>
     
     
     <br>
 
-    The Python Software Foundation is a non-profit corporation.
-<a href="https://www.python.org/psf/donations/">Please donate.</a>
+    Python 软件基金会是一家非营利性公司。
+<a href="https://www.python.org/psf/donations/">请进行捐赠。</a>
 <br>
     <br>
-      Last updated on May 27, 2026 (10:52 UTC).
+      最后更新于5月 25, 2026 (11:48 UTC) 。
     
-      <a href="/bugs.html">Found a bug</a>?
+      <a href="/bugs.html">发现了错误</a>？
     
     <br>
 
-    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3.
+    使用<a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3 创建。
     </div>
 
   </body>

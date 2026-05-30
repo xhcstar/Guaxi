@@ -2,6 +2,43 @@ const normalizeGuideText = (value = '') => String(value || '').trim()
 
 const lowerGuideText = (value = '') => normalizeGuideText(value).toLowerCase()
 
+const GUIDE_QUERY_ALIASES = {
+  数组: ['array', 'ndarray', 'numpy'],
+  矩阵: ['array', 'matrix', 'numpy'],
+  绘图: ['plot', 'matplotlib', 'pyplot', 'figure'],
+  图像: ['plot', 'matplotlib', 'figure'],
+  列表: ['list'],
+  字典: ['dict', 'dictionary'],
+  集合: ['set'],
+  元组: ['tuple'],
+  字符串: ['str', 'string'],
+  函数: ['function', 'def'],
+  参数: ['argument', 'parameter'],
+  模块: ['module', 'import'],
+  导入: ['import', 'module'],
+  循环: ['for', 'while', 'loop'],
+  条件: ['if', 'else', 'match'],
+  异常: ['exception', 'try', 'except'],
+  文件: ['file', 'open', 'pathlib'],
+  路径: ['path', 'pathlib', 'os.path'],
+  正则: ['re', 'regex', 'regular expression'],
+  时间: ['datetime', 'time'],
+  随机: ['random'],
+  统计: ['statistics', 'mean', 'median'],
+  异步: ['asyncio', 'async', 'await'],
+  array: ['数组'],
+  ndarray: ['数组', 'numpy'],
+  plot: ['绘图', 'matplotlib'],
+  pyplot: ['绘图', 'matplotlib'],
+  list: ['列表'],
+  dict: ['字典'],
+  tuple: ['元组'],
+  set: ['集合'],
+  function: ['函数', 'def'],
+  import: ['导入', '模块'],
+  asyncio: ['异步'],
+}
+
 export const NOTEBOOK_USAGE_GUIDE_CHANNELS = [
   {
     key: 'python',
@@ -251,7 +288,7 @@ let pythonOfficialDocsManifestPromise = null
 let pythonOfficialDocsEntriesPromise = null
 
 const fetchGuideJson = async (url) => {
-  const response = await fetch(url, { cache: 'force-cache' })
+  const response = await fetch(url, { cache: 'no-cache' })
   if (!response.ok) {
     throw new Error(`读取离线文档索引失败：${response.status} ${response.statusText}`)
   }
@@ -285,23 +322,111 @@ export const loadPythonOfficialDocsEntries = async () => {
 }
 
 const tokenizeGuideQuery = (query = '') => {
-  return lowerGuideText(query)
+  const tokens = lowerGuideText(query)
     .split(/[\s,.;:，。；：()（）/\\[\]{}]+/)
     .map((item) => item.trim())
     .filter(Boolean)
+  const expanded = []
+  for (const token of tokens) {
+    expanded.push(token)
+    const aliases = GUIDE_QUERY_ALIASES[token] || []
+    expanded.push(...aliases.map((item) => lowerGuideText(item)).filter(Boolean))
+  }
+  return Array.from(new Set(expanded))
 }
 
 const scoreGuideEntry = (entry, tokens = []) => {
   if (!tokens.length) return 0
-  const haystack = lowerGuideText([
-    entry.title,
-    entry.summary,
-    entry.group,
-    entry.sourceTitle,
-    ...(entry.keywords || []),
-    ...(entry.examples || []).map((item) => item.code),
+  const title = lowerGuideText(entry.title)
+  const summary = lowerGuideText(entry.summary)
+  const group = lowerGuideText(entry.group)
+  const sourceTitle = lowerGuideText(entry.sourceTitle)
+  const keywords = lowerGuideText((entry.keywords || []).join(' '))
+  const examples = lowerGuideText((entry.examples || []).map((item) => item.code).join(' '))
+  return tokens.reduce((score, token) => {
+    let nextScore = score
+    if (title === token) nextScore += 24
+    else if (title.includes(token)) nextScore += 12
+    if (group.includes(token)) nextScore += 8
+    if (keywords.includes(token)) nextScore += 8
+    if (summary.includes(token)) nextScore += 4
+    if (sourceTitle.includes(token)) nextScore += 3
+    if (examples.includes(token)) nextScore += 2
+    return nextScore
+  }, 0)
+}
+
+const scorePythonOfficialDocEntry = (entry, tokens = [], rawQuery = '') => {
+  const title = lowerGuideText(entry?.title)
+  const kind = lowerGuideText(entry?.kind)
+  const path = lowerGuideText(entry?.path)
+  const pathSegments = path.split(/[/.#_-]+/).filter(Boolean)
+  const headings = lowerGuideText((Array.isArray(entry?.headings) ? entry.headings : []).join(' '))
+  const excerpt = lowerGuideText(entry?.excerpt)
+  const searchText = lowerGuideText(entry?.searchText || [
+    entry?.title,
+    entry?.kind,
+    entry?.path,
+    ...(Array.isArray(entry?.headings) ? entry.headings : []),
+    entry?.excerpt,
   ].join(' '))
-  return tokens.reduce((score, token) => score + (haystack.includes(token) ? 1 : 0), 0)
+  const phrase = lowerGuideText(rawQuery)
+  const hasToken = (text, token) => {
+    if (!token) return false
+    if (/^[a-z0-9_.-]+$/i.test(token)) {
+      const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      return new RegExp(`(^|[^a-z0-9_])${escaped}([^a-z0-9_]|$)`, 'i').test(text)
+    }
+    return text.includes(token)
+  }
+
+  if (!tokens.length) {
+    if (path === 'tutorial/index.html') return 42
+    if (path === 'library/functions.html' || path === 'library/stdtypes.html') return 38
+    if (path === 'library/index.html') return 34
+    if (path.startsWith('tutorial/')) return 26
+    if (path.startsWith('library/')) return 22
+    if (path.startsWith('reference/')) return 18
+    return 0
+  }
+
+  let score = 0
+
+  if (phrase) {
+    if (title === phrase) score += 50
+    else if (title.includes(phrase)) score += 28
+    if (path.includes(phrase)) score += 18
+    if (headings.includes(phrase)) score += 14
+  }
+
+  for (const token of tokens) {
+    if (!token) continue
+    if (title === token) score += 34
+    else if (title.startsWith(token)) score += 24
+    else if (hasToken(title, token)) score += 16
+
+    if (pathSegments.includes(token)) score += 26
+    else if (hasToken(path, token)) score += 12
+
+    if (hasToken(headings, token)) score += 10
+    if (hasToken(kind, token)) score += 5
+    if (hasToken(excerpt, token)) score += 4
+    if (hasToken(searchText, token)) score += 1
+  }
+
+  // 设计说明：
+  // 1. Python 官方文档首页、about、404 等页面包含大量公共导航词，低权重命中时容易污染结果。
+  // 2. 对这些泛页面做轻微降权，保留精确命中能力，同时让库/教程/参考章节优先浮上来。
+  if (/^(404|about|bugs|copyright|download|contents|genindex|search)\.html$/.test(path)) {
+    score -= 12
+  }
+  if (path.startsWith('library/') && (tokens.some((token) => pathSegments.includes(token)) || title.includes(tokens[0] || ''))) {
+    score += 8
+  }
+  if (path.startsWith('tutorial/') || path.startsWith('reference/')) {
+    score += 3
+  }
+  return Math.max(0, score)
 }
 
 export const queryNotebookUsageGuide = ({ channel = 'python', query = '', limit = 12 } = {}) => {
@@ -321,24 +446,26 @@ export const queryNotebookUsageGuide = ({ channel = 'python', query = '', limit 
 export const queryPythonOfficialDocs = async ({ query = '', limit = 20 } = {}) => {
   const { manifest, entries } = await loadPythonOfficialDocsEntries()
   const tokens = tokenizeGuideQuery(query)
-  const scoredEntries = (Array.isArray(entries) ? entries : [])
+  const officialEntries = (Array.isArray(entries) ? entries : [])
     .map((entry) => {
-      const searchText = String(entry?.searchText || [
-        entry?.title,
-        entry?.kind,
-        entry?.path,
-        ...(Array.isArray(entry?.headings) ? entry.headings : []),
-        entry?.excerpt,
-      ].join(' ')).toLowerCase()
-      const score = tokens.length
-        ? tokens.reduce((total, token) => total + (searchText.includes(token) ? 1 : 0), 0)
-        : 1
+      const score = scorePythonOfficialDocEntry(entry, tokens, query)
       return {
         ...entry,
         score,
       }
     })
     .filter((entry) => entry.score > 0)
+  const curatedEntries = queryNotebookUsageGuide({ channel: 'python', query, limit: 8 })
+    .map((entry) => ({
+      ...entry,
+      kind: entry.group || 'Python 模块帮助',
+      excerpt: entry.summary,
+      // 设计说明：Python 官方完整文档不包含 NumPy / pandas / matplotlib 等第三方库。
+      // 这些本地结构化条目作为补充结果参与同一排序，避免模块查询落到无关的语言参考页。
+      score: Number(entry.score || 0) * 10,
+    }))
+    .filter((entry) => !tokens.length || entry.score > 0)
+  const scoredEntries = [...officialEntries, ...curatedEntries]
     .sort((a, b) => b.score - a.score || String(a.path || '').localeCompare(String(b.path || ''), 'en-US'))
     .slice(0, Math.max(1, Number(limit) || 20))
   return {

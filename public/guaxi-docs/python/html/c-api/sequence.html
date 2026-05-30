@@ -1,42 +1,43 @@
 <!DOCTYPE html>
 
-<html lang="en" data-content_root="../">
+<html lang="zh-CN" data-content_root="../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta property="og:title" content="Sequence Protocol" />
+<meta property="og:title" content="序列协议" />
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://docs.python.org/3/c-api/sequence.html" />
 <meta property="og:site_name" content="Python documentation" />
 <meta property="og:image:width" content="1146" />
 <meta property="og:image:height" content="600" />
-<meta property="og:image" content="https://docs.python.org/3.14/_images/social_previews/summary_c-api_sequence_2430fc35.png" />
+<meta property="og:image" content="https://docs.python.org/3.13/zh-cn/_images/social_previews/summary_c-api_sequence_5c341774.png" />
 <meta property="og:image:alt" content="" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="theme-color" content="#3776ab">
 
-    <title>Sequence Protocol &#8212; Python 3.14.5 documentation</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>序列协议 &#8212; Python 3.13.13 文档</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
     
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
     <link rel="stylesheet" type="text/css" href="../_static/classic.css?v=234b1a7c" />
     <link rel="stylesheet" type="text/css" href="../_static/pydoctheme.css?v=4365c8fe" />
     <link id="pygments_dark_css" media="(prefers-color-scheme: dark)" rel="stylesheet" type="text/css" href="../_static/pygments_dark.css?v=5349f25f" />
     
-    <script src="../_static/documentation_options.js?v=bcfd2f37"></script>
+    <script src="../_static/documentation_options.js?v=a941be6b"></script>
     <script src="../_static/doctools.js?v=9bcbadda"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/translations.js?v=beaddf03"></script>
     
     <script src="../_static/sidebar.js"></script>
     
     <link rel="search" type="application/opensearchdescription+xml"
-          title="Search within Python 3.14.5 documentation"
+          title="在 Python 3.13.13 文档 中搜索"
           href="../_static/opensearch.xml"/>
-    <link rel="author" title="About these documents" href="../about.html" />
-    <link rel="index" title="Index" href="../genindex.html" />
-    <link rel="search" title="Search" href="../search.html" />
-    <link rel="copyright" title="Copyright" href="../copyright.html" />
-    <link rel="next" title="Mapping Protocol" href="mapping.html" />
-    <link rel="prev" title="Number Protocol" href="number.html" />
+    <link rel="author" title="关于此文档" href="../about.html" />
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="搜索" href="../search.html" />
+    <link rel="copyright" title="版权" href="../copyright.html" />
+    <link rel="next" title="映射协议" href="mapping.html" />
+    <link rel="prev" title="数字协议" href="number.html" />
     
       
       <script defer file-types="bz2,epub,zip" data-domain="docs.python.org" src="https://analytics.python.org/js/script.file-downloads.outbound-links.js"></script>
@@ -66,7 +67,7 @@
 <body>
 <div class="mobile-nav">
     <input type="checkbox" id="menuToggler" class="toggler__input" aria-controls="navigation"
-           aria-pressed="false" aria-expanded="false" role="button" aria-label="Menu">
+           aria-pressed="false" aria-expanded="false" role="button" aria-label="菜单">
     <nav class="nav-content" role="navigation">
         <label for="menuToggler" class="toggler__label">
             <span></span>
@@ -80,8 +81,8 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" class="search-icon">
                     <path fill-rule="nonzero" fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 001.48-5.34c-.47-2.78-2.79-5-5.59-5.34a6.505 6.505 0 00-7.27 7.27c.34 2.8 2.56 5.12 5.34 5.59a6.5 6.5 0 005.34-1.48l.27.28v.79l4.25 4.25c.41.41 1.08.41 1.49 0 .41-.41.41-1.08 0-1.49L15.5 14zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"></path>
                 </svg>
-                <input placeholder="Quick search" aria-label="Quick search" type="search" name="q">
-                <input type="submit" value="Go">
+                <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q">
+                <input type="submit" value="转到">
             </form>
         </span>
     </nav>
@@ -90,46 +91,36 @@
             <div class="language_switcher_placeholder"></div>
             
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label>
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="number.html"
-                          title="previous chapter">Number Protocol</a></p>
+                          title="上一章">数字协议</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="mapping.html"
-                          title="next chapter">Mapping Protocol</a></p>
+                          title="下一章">映射协议</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "c-api/sequence.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/c-api/sequence.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/c-api/sequence.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
@@ -140,20 +131,20 @@
 
   
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             accesskey="I">index</a></li>
+          <a href="../genindex.html" title="总索引"
+             accesskey="I">索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="mapping.html" title="Mapping Protocol"
-             accesskey="N">next</a> |</li>
+          <a href="mapping.html" title="映射协议"
+             accesskey="N">下一页</a> |</li>
         <li class="right" >
-          <a href="number.html" title="Number Protocol"
-             accesskey="P">previous</a> |</li>
+          <a href="number.html" title="数字协议"
+             accesskey="P">上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -165,30 +156,30 @@
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-          <li class="nav-item nav-item-1"><a href="index.html" >Python/C API reference manual</a> &#187;</li>
-          <li class="nav-item nav-item-2"><a href="abstract.html" accesskey="U">Abstract Objects Layer</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href="">Sequence Protocol</a></li>
+          <li class="nav-item nav-item-1"><a href="index.html" >Python/C API 参考手册</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="abstract.html" accesskey="U">抽象对象层</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">序列协议</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
@@ -201,15 +192,11 @@
           <div class="body" role="main">
             
   <section id="sequence-protocol">
-<span id="sequence"></span><h1>Sequence Protocol<a class="headerlink" href="#sequence-protocol" title="Link to this heading">¶</a></h1>
+<span id="sequence"></span><h1 class="translated">序列协议<a class="headerlink" href="#sequence-protocol" title="Link to this heading">¶</a></h1>
 <dl class="c function">
 <dt class="sig sig-object c" id="c.PySequence_Check">
 <span class="kt"><span class="pre">int</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">PySequence_Check</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">o</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PySequence_Check" title="Link to this definition">¶</a><br /></dt>
-<dd><em class="stableabi"> Part of the <a class="reference internal" href="stable.html#stable"><span class="std std-ref">Stable ABI</span></a>.</em><p>Return <code class="docutils literal notranslate"><span class="pre">1</span></code> if the object provides the sequence protocol, and <code class="docutils literal notranslate"><span class="pre">0</span></code> otherwise.
-Note that it returns <code class="docutils literal notranslate"><span class="pre">1</span></code> for Python classes with a <a class="reference internal" href="../reference/datamodel.html#object.__getitem__" title="object.__getitem__"><code class="xref py py-meth docutils literal notranslate"><span class="pre">__getitem__()</span></code></a>
-method, unless they are <a class="reference internal" href="../library/stdtypes.html#dict" title="dict"><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code></a> subclasses, since in general it
-is impossible to determine what type of keys the class supports.  This
-function always succeeds.</p>
+<dd><em class="stableabi"> 属于 <a class="reference internal" href="stable.html#stable"><span class="std std-ref">稳定 ABI</span></a>.</em><p class="translated">如果对象提供了序列协议则返回 <code class="docutils literal notranslate"><span class="pre">1</span></code>，否则返回 <code class="docutils literal notranslate"><span class="pre">0</span></code>。 请注意对于具有 <a class="reference internal" href="../reference/datamodel.html#object.__getitem__" title="object.__getitem__"><code class="xref py py-meth docutils literal notranslate"><span class="pre">__getitem__()</span></code></a> 方法的 Python 类返回 <code class="docutils literal notranslate"><span class="pre">1</span></code> ，除非它们是 <a class="reference internal" href="../library/stdtypes.html#dict" title="dict"><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code></a> 的子类，因为在通常情况下无法确定这种类支持哪种键类型。 该函数总是会成功执行。</p>
 </dd></dl>
 
 <dl class="c function">
@@ -217,183 +204,131 @@ function always succeeds.</p>
 <a class="reference internal" href="intro.html#c.Py_ssize_t" title="Py_ssize_t"><span class="n"><span class="pre">Py_ssize_t</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">PySequence_Size</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">o</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PySequence_Size" title="Link to this definition">¶</a><br /></dt>
 <dt class="sig sig-object c" id="c.PySequence_Length">
 <a class="reference internal" href="intro.html#c.Py_ssize_t" title="Py_ssize_t"><span class="n"><span class="pre">Py_ssize_t</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">PySequence_Length</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">o</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PySequence_Length" title="Link to this definition">¶</a><br /></dt>
-<dd><em class="stableabi"> Part of the <a class="reference internal" href="stable.html#stable"><span class="std std-ref">Stable ABI</span></a>.</em><p id="index-0">Returns the number of objects in sequence <em>o</em> on success, and <code class="docutils literal notranslate"><span class="pre">-1</span></code> on
-failure.  This is equivalent to the Python expression <code class="docutils literal notranslate"><span class="pre">len(o)</span></code>.</p>
+<dd><em class="stableabi"> 属于 <a class="reference internal" href="stable.html#stable"><span class="std std-ref">稳定 ABI</span></a>.</em><p class="translated" id="index-0">成功时返回序列中*o*的对象数,失败时返回 <code class="docutils literal notranslate"><span class="pre">-1</span></code> . 相当于Python的 <code class="docutils literal notranslate"><span class="pre">len(o)</span></code> 表达式.</p>
 </dd></dl>
 
 <dl class="c function">
 <dt class="sig sig-object c" id="c.PySequence_Concat">
 <a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="sig-name descname"><span class="n"><span class="pre">PySequence_Concat</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">o1</span></span>, <a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">o2</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PySequence_Concat" title="Link to this definition">¶</a><br /></dt>
-<dd><em class="refcount return_new_ref">Return value: New reference.</em><em class="stableabi"> Part of the <a class="reference internal" href="stable.html#stable"><span class="std std-ref">Stable ABI</span></a>.</em><p>Return the concatenation of <em>o1</em> and <em>o2</em> on success, and <code class="docutils literal notranslate"><span class="pre">NULL</span></code> on failure.
-This is the equivalent of the Python expression <code class="docutils literal notranslate"><span class="pre">o1</span> <span class="pre">+</span> <span class="pre">o2</span></code>.</p>
+<dd><em class="refcount return_new_ref">返回值：新的引用。</em><em class="stableabi"> 属于 <a class="reference internal" href="stable.html#stable"><span class="std std-ref">稳定 ABI</span></a>.</em><p class="translated">成功时返回 <em>o1</em> 和 <em>o2</em> 的拼接，失败时返回 <code class="docutils literal notranslate"><span class="pre">NULL</span></code>。 这等价于 Python 表达式 <code class="docutils literal notranslate"><span class="pre">o1</span> <span class="pre">+</span> <span class="pre">o2</span></code>。</p>
 </dd></dl>
 
 <dl class="c function">
 <dt class="sig sig-object c" id="c.PySequence_Repeat">
 <a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="sig-name descname"><span class="n"><span class="pre">PySequence_Repeat</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">o</span></span>, <a class="reference internal" href="intro.html#c.Py_ssize_t" title="Py_ssize_t"><span class="n"><span class="pre">Py_ssize_t</span></span></a><span class="w"> </span><span class="n"><span class="pre">count</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PySequence_Repeat" title="Link to this definition">¶</a><br /></dt>
-<dd><em class="refcount return_new_ref">Return value: New reference.</em><em class="stableabi"> Part of the <a class="reference internal" href="stable.html#stable"><span class="std std-ref">Stable ABI</span></a>.</em><p>Return the result of repeating sequence object <em>o</em> <em>count</em> times, or <code class="docutils literal notranslate"><span class="pre">NULL</span></code> on
-failure.  This is the equivalent of the Python expression <code class="docutils literal notranslate"><span class="pre">o</span> <span class="pre">*</span> <span class="pre">count</span></code>.</p>
+<dd><em class="refcount return_new_ref">返回值：新的引用。</em><em class="stableabi"> 属于 <a class="reference internal" href="stable.html#stable"><span class="std std-ref">稳定 ABI</span></a>.</em><p class="translated">返回序列对象 <em>o</em> 重复 <em>count</em> 次的结果，失败时返回 <code class="docutils literal notranslate"><span class="pre">NULL</span></code>。 这等价于 Python 表达式 <code class="docutils literal notranslate"><span class="pre">o</span> <span class="pre">*</span> <span class="pre">count</span></code>。</p>
 </dd></dl>
 
 <dl class="c function">
 <dt class="sig sig-object c" id="c.PySequence_InPlaceConcat">
 <a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="sig-name descname"><span class="n"><span class="pre">PySequence_InPlaceConcat</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">o1</span></span>, <a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">o2</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PySequence_InPlaceConcat" title="Link to this definition">¶</a><br /></dt>
-<dd><em class="refcount return_new_ref">Return value: New reference.</em><em class="stableabi"> Part of the <a class="reference internal" href="stable.html#stable"><span class="std std-ref">Stable ABI</span></a>.</em><p>Return the concatenation of <em>o1</em> and <em>o2</em> on success, and <code class="docutils literal notranslate"><span class="pre">NULL</span></code> on failure.
-The operation is done <em>in-place</em> when <em>o1</em> supports it.  This is the equivalent
-of the Python expression <code class="docutils literal notranslate"><span class="pre">o1</span> <span class="pre">+=</span> <span class="pre">o2</span></code>.</p>
+<dd><em class="refcount return_new_ref">返回值：新的引用。</em><em class="stableabi"> 属于 <a class="reference internal" href="stable.html#stable"><span class="std std-ref">稳定 ABI</span></a>.</em><p class="translated">成功时返回 <em>o1</em> 和 <em>o2</em> 的拼接，失败时返回 <code class="docutils literal notranslate"><span class="pre">NULL</span></code>。 在 <em>o1</em> 支持的情况下操作将 <em>原地</em> 完成。 这等价于 Python 表达式 <code class="docutils literal notranslate"><span class="pre">o1</span> <span class="pre">+=</span> <span class="pre">o2</span></code>。</p>
 </dd></dl>
 
 <dl class="c function">
 <dt class="sig sig-object c" id="c.PySequence_InPlaceRepeat">
 <a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="sig-name descname"><span class="n"><span class="pre">PySequence_InPlaceRepeat</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">o</span></span>, <a class="reference internal" href="intro.html#c.Py_ssize_t" title="Py_ssize_t"><span class="n"><span class="pre">Py_ssize_t</span></span></a><span class="w"> </span><span class="n"><span class="pre">count</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PySequence_InPlaceRepeat" title="Link to this definition">¶</a><br /></dt>
-<dd><em class="refcount return_new_ref">Return value: New reference.</em><em class="stableabi"> Part of the <a class="reference internal" href="stable.html#stable"><span class="std std-ref">Stable ABI</span></a>.</em><p>Return the result of repeating sequence object <em>o</em> <em>count</em> times, or <code class="docutils literal notranslate"><span class="pre">NULL</span></code> on
-failure.  The operation is done <em>in-place</em> when <em>o</em> supports it.  This is the
-equivalent of the Python expression <code class="docutils literal notranslate"><span class="pre">o</span> <span class="pre">*=</span> <span class="pre">count</span></code>.</p>
+<dd><em class="refcount return_new_ref">返回值：新的引用。</em><em class="stableabi"> 属于 <a class="reference internal" href="stable.html#stable"><span class="std std-ref">稳定 ABI</span></a>.</em><p class="translated">Return the result of repeating sequence object返回序列对象 <em>o</em> 重复 <em>count</em> 次的结果，失败时返回 <code class="docutils literal notranslate"><span class="pre">NULL</span></code>。 在 <em>o</em> 支持的情况下该操作会 <em>原地</em> 完成。 这等价于 Python 表达式 <code class="docutils literal notranslate"><span class="pre">o</span> <span class="pre">*=</span> <span class="pre">count</span></code>。</p>
 </dd></dl>
 
 <dl class="c function">
 <dt class="sig sig-object c" id="c.PySequence_GetItem">
 <a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="sig-name descname"><span class="n"><span class="pre">PySequence_GetItem</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">o</span></span>, <a class="reference internal" href="intro.html#c.Py_ssize_t" title="Py_ssize_t"><span class="n"><span class="pre">Py_ssize_t</span></span></a><span class="w"> </span><span class="n"><span class="pre">i</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PySequence_GetItem" title="Link to this definition">¶</a><br /></dt>
-<dd><em class="refcount return_new_ref">Return value: New reference.</em><em class="stableabi"> Part of the <a class="reference internal" href="stable.html#stable"><span class="std std-ref">Stable ABI</span></a>.</em><p>Return the <em>i</em>th element of <em>o</em>, or <code class="docutils literal notranslate"><span class="pre">NULL</span></code> on failure. This is the equivalent of
-the Python expression <code class="docutils literal notranslate"><span class="pre">o[i]</span></code>.</p>
+<dd><em class="refcount return_new_ref">返回值：新的引用。</em><em class="stableabi"> 属于 <a class="reference internal" href="stable.html#stable"><span class="std std-ref">稳定 ABI</span></a>.</em><p class="translated">返回 <em>o</em> 中的第 <em>i</em> 号元素，失败时返回 <code class="docutils literal notranslate"><span class="pre">NULL</span></code>。 这等价于 Python 表达式 <code class="docutils literal notranslate"><span class="pre">o[i]</span></code>。</p>
 </dd></dl>
 
 <dl class="c function">
 <dt class="sig sig-object c" id="c.PySequence_GetSlice">
 <a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="sig-name descname"><span class="n"><span class="pre">PySequence_GetSlice</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">o</span></span>, <a class="reference internal" href="intro.html#c.Py_ssize_t" title="Py_ssize_t"><span class="n"><span class="pre">Py_ssize_t</span></span></a><span class="w"> </span><span class="n"><span class="pre">i1</span></span>, <a class="reference internal" href="intro.html#c.Py_ssize_t" title="Py_ssize_t"><span class="n"><span class="pre">Py_ssize_t</span></span></a><span class="w"> </span><span class="n"><span class="pre">i2</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PySequence_GetSlice" title="Link to this definition">¶</a><br /></dt>
-<dd><em class="refcount return_new_ref">Return value: New reference.</em><em class="stableabi"> Part of the <a class="reference internal" href="stable.html#stable"><span class="std std-ref">Stable ABI</span></a>.</em><p>Return the slice of sequence object <em>o</em> between <em>i1</em> and <em>i2</em>, or <code class="docutils literal notranslate"><span class="pre">NULL</span></code> on
-failure. This is the equivalent of the Python expression <code class="docutils literal notranslate"><span class="pre">o[i1:i2]</span></code>.</p>
+<dd><em class="refcount return_new_ref">返回值：新的引用。</em><em class="stableabi"> 属于 <a class="reference internal" href="stable.html#stable"><span class="std std-ref">稳定 ABI</span></a>.</em><p class="translated">返回序列对象 <em>o</em> 的 <em>i1</em> 到 <em>i2</em> 的切片，失败时返回 <code class="docutils literal notranslate"><span class="pre">NULL</span></code>。 这等价于 Python 表达式 <code class="docutils literal notranslate"><span class="pre">o[i1:i2]</span></code>。</p>
 </dd></dl>
 
 <dl class="c function">
 <dt class="sig sig-object c" id="c.PySequence_SetItem">
 <span class="kt"><span class="pre">int</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">PySequence_SetItem</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">o</span></span>, <a class="reference internal" href="intro.html#c.Py_ssize_t" title="Py_ssize_t"><span class="n"><span class="pre">Py_ssize_t</span></span></a><span class="w"> </span><span class="n"><span class="pre">i</span></span>, <a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">v</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PySequence_SetItem" title="Link to this definition">¶</a><br /></dt>
-<dd><em class="stableabi"> Part of the <a class="reference internal" href="stable.html#stable"><span class="std std-ref">Stable ABI</span></a>.</em><p>Assign object <em>v</em> to the <em>i</em>th element of <em>o</em>.  Raise an exception
-and return <code class="docutils literal notranslate"><span class="pre">-1</span></code> on failure; return <code class="docutils literal notranslate"><span class="pre">0</span></code> on success.  This
-is the equivalent of the Python statement <code class="docutils literal notranslate"><span class="pre">o[i]</span> <span class="pre">=</span> <span class="pre">v</span></code>.  This function <em>does
-not</em> steal a reference to <em>v</em>.</p>
-<p>If <em>v</em> is <code class="docutils literal notranslate"><span class="pre">NULL</span></code>, the element is deleted, but this feature is
-deprecated in favour of using <a class="reference internal" href="#c.PySequence_DelItem" title="PySequence_DelItem"><code class="xref c c-func docutils literal notranslate"><span class="pre">PySequence_DelItem()</span></code></a>.</p>
+<dd><em class="stableabi"> 属于 <a class="reference internal" href="stable.html#stable"><span class="std std-ref">稳定 ABI</span></a>.</em><p class="translated">将对象 <em>v</em> 赋值给 <em>o</em> 的第 <em>i</em> 号元素。 失败时会引发异常并返回 <code class="docutils literal notranslate"><span class="pre">-1</span></code>；成功时返回 <code class="docutils literal notranslate"><span class="pre">0</span></code>。 这相当于 Python 语句 <code class="docutils literal notranslate"><span class="pre">o[i]</span> <span class="pre">=</span> <span class="pre">v</span></code>。 此函数 <em>不会</em> 改变对 <em>v</em> 的引用。</p>
+<p class="translated">如果 <em>v</em> 为 <code class="docutils literal notranslate"><span class="pre">NULL</span></code>，元素将被删除，但是此特性已被弃用而应改用 <a class="reference internal" href="#c.PySequence_DelItem" title="PySequence_DelItem"><code class="xref c c-func docutils literal notranslate"><span class="pre">PySequence_DelItem()</span></code></a>。</p>
 </dd></dl>
 
 <dl class="c function">
 <dt class="sig sig-object c" id="c.PySequence_DelItem">
 <span class="kt"><span class="pre">int</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">PySequence_DelItem</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">o</span></span>, <a class="reference internal" href="intro.html#c.Py_ssize_t" title="Py_ssize_t"><span class="n"><span class="pre">Py_ssize_t</span></span></a><span class="w"> </span><span class="n"><span class="pre">i</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PySequence_DelItem" title="Link to this definition">¶</a><br /></dt>
-<dd><em class="stableabi"> Part of the <a class="reference internal" href="stable.html#stable"><span class="std std-ref">Stable ABI</span></a>.</em><p>Delete the <em>i</em>th element of object <em>o</em>.  Returns <code class="docutils literal notranslate"><span class="pre">-1</span></code> on failure.  This is the
-equivalent of the Python statement <code class="docutils literal notranslate"><span class="pre">del</span> <span class="pre">o[i]</span></code>.</p>
+<dd><em class="stableabi"> 属于 <a class="reference internal" href="stable.html#stable"><span class="std std-ref">稳定 ABI</span></a>.</em><p class="translated">删除对象 <em>o</em> 的第 <em>i</em> 号元素。 失败时返回 <code class="docutils literal notranslate"><span class="pre">-1</span></code>。 这相当于 Python 语句 <code class="docutils literal notranslate"><span class="pre">del</span> <span class="pre">o[i]</span></code>。</p>
 </dd></dl>
 
 <dl class="c function">
 <dt class="sig sig-object c" id="c.PySequence_SetSlice">
 <span class="kt"><span class="pre">int</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">PySequence_SetSlice</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">o</span></span>, <a class="reference internal" href="intro.html#c.Py_ssize_t" title="Py_ssize_t"><span class="n"><span class="pre">Py_ssize_t</span></span></a><span class="w"> </span><span class="n"><span class="pre">i1</span></span>, <a class="reference internal" href="intro.html#c.Py_ssize_t" title="Py_ssize_t"><span class="n"><span class="pre">Py_ssize_t</span></span></a><span class="w"> </span><span class="n"><span class="pre">i2</span></span>, <a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">v</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PySequence_SetSlice" title="Link to this definition">¶</a><br /></dt>
-<dd><em class="stableabi"> Part of the <a class="reference internal" href="stable.html#stable"><span class="std std-ref">Stable ABI</span></a>.</em><p>Assign the sequence object <em>v</em> to the slice in sequence object <em>o</em> from <em>i1</em> to
-<em>i2</em>.  This is the equivalent of the Python statement <code class="docutils literal notranslate"><span class="pre">o[i1:i2]</span> <span class="pre">=</span> <span class="pre">v</span></code>.</p>
+<dd><em class="stableabi"> 属于 <a class="reference internal" href="stable.html#stable"><span class="std std-ref">稳定 ABI</span></a>.</em><p class="translated">将序列对象 <em>v</em> 赋值给序列对象 <em>o</em> 的从 <em>i1</em> 到 <em>i2</em> 切片。 这相当于 Python 语句 <code class="docutils literal notranslate"><span class="pre">o[i1:i2]</span> <span class="pre">=</span> <span class="pre">v</span></code>。</p>
 </dd></dl>
 
 <dl class="c function">
 <dt class="sig sig-object c" id="c.PySequence_DelSlice">
 <span class="kt"><span class="pre">int</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">PySequence_DelSlice</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">o</span></span>, <a class="reference internal" href="intro.html#c.Py_ssize_t" title="Py_ssize_t"><span class="n"><span class="pre">Py_ssize_t</span></span></a><span class="w"> </span><span class="n"><span class="pre">i1</span></span>, <a class="reference internal" href="intro.html#c.Py_ssize_t" title="Py_ssize_t"><span class="n"><span class="pre">Py_ssize_t</span></span></a><span class="w"> </span><span class="n"><span class="pre">i2</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PySequence_DelSlice" title="Link to this definition">¶</a><br /></dt>
-<dd><em class="stableabi"> Part of the <a class="reference internal" href="stable.html#stable"><span class="std std-ref">Stable ABI</span></a>.</em><p>Delete the slice in sequence object <em>o</em> from <em>i1</em> to <em>i2</em>.  Returns <code class="docutils literal notranslate"><span class="pre">-1</span></code> on
-failure.  This is the equivalent of the Python statement <code class="docutils literal notranslate"><span class="pre">del</span> <span class="pre">o[i1:i2]</span></code>.</p>
+<dd><em class="stableabi"> 属于 <a class="reference internal" href="stable.html#stable"><span class="std std-ref">稳定 ABI</span></a>.</em><p class="translated">删除序列对象 <em>o</em> 的从 <em>i1</em> 到 <em>i2</em> 的切片。 失败时返回 <code class="docutils literal notranslate"><span class="pre">-1</span></code>。 这相当于 Python 语句 <code class="docutils literal notranslate"><span class="pre">del</span> <span class="pre">o[i1:i2]</span></code>。</p>
 </dd></dl>
 
 <dl class="c function">
 <dt class="sig sig-object c" id="c.PySequence_Count">
 <a class="reference internal" href="intro.html#c.Py_ssize_t" title="Py_ssize_t"><span class="n"><span class="pre">Py_ssize_t</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">PySequence_Count</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">o</span></span>, <a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">value</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PySequence_Count" title="Link to this definition">¶</a><br /></dt>
-<dd><em class="stableabi"> Part of the <a class="reference internal" href="stable.html#stable"><span class="std std-ref">Stable ABI</span></a>.</em><p>Return the number of occurrences of <em>value</em> in <em>o</em>, that is, return the number
-of keys for which <code class="docutils literal notranslate"><span class="pre">o[key]</span> <span class="pre">==</span> <span class="pre">value</span></code>.  On failure, return <code class="docutils literal notranslate"><span class="pre">-1</span></code>.  This is
-equivalent to the Python expression <code class="docutils literal notranslate"><span class="pre">o.count(value)</span></code>.</p>
+<dd><em class="stableabi"> 属于 <a class="reference internal" href="stable.html#stable"><span class="std std-ref">稳定 ABI</span></a>.</em><p class="translated">返回 <em>value</em> 在 <em>o</em> 中出现的次数，即返回使得 <code class="docutils literal notranslate"><span class="pre">o[key]</span> <span class="pre">==</span> <span class="pre">value</span></code> 的键的数量。 失败时返回 <code class="docutils literal notranslate"><span class="pre">-1</span></code>。 这相当于 Python 表达式 <code class="docutils literal notranslate"><span class="pre">o.count(value)</span></code>。</p>
 </dd></dl>
 
 <dl class="c function">
 <dt class="sig sig-object c" id="c.PySequence_Contains">
 <span class="kt"><span class="pre">int</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">PySequence_Contains</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">o</span></span>, <a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">value</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PySequence_Contains" title="Link to this definition">¶</a><br /></dt>
-<dd><em class="stableabi"> Part of the <a class="reference internal" href="stable.html#stable"><span class="std std-ref">Stable ABI</span></a>.</em><p>Determine if <em>o</em> contains <em>value</em>.  If an item in <em>o</em> is equal to <em>value</em>,
-return <code class="docutils literal notranslate"><span class="pre">1</span></code>, otherwise return <code class="docutils literal notranslate"><span class="pre">0</span></code>. On error, return <code class="docutils literal notranslate"><span class="pre">-1</span></code>.  This is
-equivalent to the Python expression <code class="docutils literal notranslate"><span class="pre">value</span> <span class="pre">in</span> <span class="pre">o</span></code>.</p>
-</dd></dl>
-
-<dl class="c function">
-<dt class="sig sig-object c" id="c.PySequence_In">
-<span class="kt"><span class="pre">int</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">PySequence_In</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">o</span></span>, <a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">value</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PySequence_In" title="Link to this definition">¶</a><br /></dt>
-<dd><em class="stableabi"> Part of the <a class="reference internal" href="stable.html#stable"><span class="std std-ref">Stable ABI</span></a>.</em><p>Alias for <a class="reference internal" href="#c.PySequence_Contains" title="PySequence_Contains"><code class="xref c c-func docutils literal notranslate"><span class="pre">PySequence_Contains()</span></code></a>.</p>
-<div class="versionchanged soft-deprecated">
-<p><span class="versionmodified soft-deprecated"><a class="reference internal" href="../glossary.html#term-soft-deprecated">Soft deprecated</a> since version 3.14: </span>The function should no longer be used to write new code.</p>
-</div>
+<dd><em class="stableabi"> 属于 <a class="reference internal" href="stable.html#stable"><span class="std std-ref">稳定 ABI</span></a>.</em><p class="translated">确定 <em>o</em> 是否包含 <em>value</em>。 如果 <em>o</em> 中的某一项等于 <em>value</em>，则返回 <code class="docutils literal notranslate"><span class="pre">1</span></code>，否则返回 <code class="docutils literal notranslate"><span class="pre">0</span></code>。 出错时，返回 <code class="docutils literal notranslate"><span class="pre">-1</span></code>。 这相当于 Python 表达式 <code class="docutils literal notranslate"><span class="pre">value</span> <span class="pre">in</span> <span class="pre">o</span></code>。</p>
 </dd></dl>
 
 <dl class="c function">
 <dt class="sig sig-object c" id="c.PySequence_Index">
 <a class="reference internal" href="intro.html#c.Py_ssize_t" title="Py_ssize_t"><span class="n"><span class="pre">Py_ssize_t</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">PySequence_Index</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">o</span></span>, <a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">value</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PySequence_Index" title="Link to this definition">¶</a><br /></dt>
-<dd><em class="stableabi"> Part of the <a class="reference internal" href="stable.html#stable"><span class="std std-ref">Stable ABI</span></a>.</em><p>Return the first index <em>i</em> for which <code class="docutils literal notranslate"><span class="pre">o[i]</span> <span class="pre">==</span> <span class="pre">value</span></code>.  On error, return
-<code class="docutils literal notranslate"><span class="pre">-1</span></code>.    This is equivalent to the Python expression <code class="docutils literal notranslate"><span class="pre">o.index(value)</span></code>.</p>
+<dd><em class="stableabi"> 属于 <a class="reference internal" href="stable.html#stable"><span class="std std-ref">稳定 ABI</span></a>.</em><p class="translated">返回第一个索引*i*,其中 <code class="docutils literal notranslate"><span class="pre">o[i]</span> <span class="pre">==</span> <span class="pre">value</span></code> .出错时,返回 <code class="docutils literal notranslate"><span class="pre">-1</span></code> .相当于Python的 <code class="docutils literal notranslate"><span class="pre">o.index(value)</span></code> 表达式.</p>
 </dd></dl>
 
 <dl class="c function">
 <dt class="sig sig-object c" id="c.PySequence_List">
 <a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="sig-name descname"><span class="n"><span class="pre">PySequence_List</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">o</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PySequence_List" title="Link to this definition">¶</a><br /></dt>
-<dd><em class="refcount return_new_ref">Return value: New reference.</em><em class="stableabi"> Part of the <a class="reference internal" href="stable.html#stable"><span class="std std-ref">Stable ABI</span></a>.</em><p>Return a list object with the same contents as the sequence or iterable <em>o</em>,
-or <code class="docutils literal notranslate"><span class="pre">NULL</span></code> on failure.  The returned list is guaranteed to be new.  This is
-equivalent to the Python expression <code class="docutils literal notranslate"><span class="pre">list(o)</span></code>.</p>
+<dd><em class="refcount return_new_ref">返回值：新的引用。</em><em class="stableabi"> 属于 <a class="reference internal" href="stable.html#stable"><span class="std std-ref">稳定 ABI</span></a>.</em><p class="translated">返回一个列表对象，其内容与序列或可迭代对象 <em>o</em> 相同，失败时返回 <code class="docutils literal notranslate"><span class="pre">NULL</span></code>。 返回的列表保证是一个新对象。 这等价于 Python 表达式 <code class="docutils literal notranslate"><span class="pre">list(o)</span></code>。</p>
 </dd></dl>
 
 <dl class="c function">
 <dt class="sig sig-object c" id="c.PySequence_Tuple">
 <a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="sig-name descname"><span class="n"><span class="pre">PySequence_Tuple</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">o</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PySequence_Tuple" title="Link to this definition">¶</a><br /></dt>
-<dd><em class="refcount return_new_ref">Return value: New reference.</em><em class="stableabi"> Part of the <a class="reference internal" href="stable.html#stable"><span class="std std-ref">Stable ABI</span></a>.</em><p id="index-1">Return a tuple object with the same contents as the sequence or iterable <em>o</em>,
-or <code class="docutils literal notranslate"><span class="pre">NULL</span></code> on failure.  If <em>o</em> is a tuple, a new reference will be returned,
-otherwise a tuple will be constructed with the appropriate contents.  This is
-equivalent to the Python expression <code class="docutils literal notranslate"><span class="pre">tuple(o)</span></code>.</p>
+<dd><em class="refcount return_new_ref">返回值：新的引用。</em><em class="stableabi"> 属于 <a class="reference internal" href="stable.html#stable"><span class="std std-ref">稳定 ABI</span></a>.</em><p class="translated" id="index-1">返回一个元组对象，其内容与序列或可迭代对象 <em>o</em> 相同，失败时返回 <code class="docutils literal notranslate"><span class="pre">NULL</span></code>。 如果 <em>o</em> 为元组，则将返回一个新的引用，在其他情况下将使用适当的内容构造一个元组。 这等价于 Python 表达式 <code class="docutils literal notranslate"><span class="pre">tuple(o)</span></code>。</p>
 </dd></dl>
 
 <dl class="c function">
 <dt class="sig sig-object c" id="c.PySequence_Fast">
 <a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="sig-name descname"><span class="n"><span class="pre">PySequence_Fast</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">o</span></span>, <span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="kt"><span class="pre">char</span></span><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">m</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PySequence_Fast" title="Link to this definition">¶</a><br /></dt>
-<dd><em class="refcount return_new_ref">Return value: New reference.</em><em class="stableabi"> Part of the <a class="reference internal" href="stable.html#stable"><span class="std std-ref">Stable ABI</span></a>.</em><p>Return the sequence or iterable <em>o</em> as an object usable by the other
-<code class="docutils literal notranslate"><span class="pre">PySequence_Fast*</span></code> family of functions. If the object is not a sequence or
-iterable, raises <a class="reference internal" href="../library/exceptions.html#TypeError" title="TypeError"><code class="xref py py-exc docutils literal notranslate"><span class="pre">TypeError</span></code></a> with <em>m</em> as the message text. Returns
-<code class="docutils literal notranslate"><span class="pre">NULL</span></code> on failure.</p>
-<p>The <code class="docutils literal notranslate"><span class="pre">PySequence_Fast*</span></code> functions are thus named because they assume
-<em>o</em> is a <a class="reference internal" href="tuple.html#c.PyTupleObject" title="PyTupleObject"><code class="xref c c-type docutils literal notranslate"><span class="pre">PyTupleObject</span></code></a> or a <a class="reference internal" href="list.html#c.PyListObject" title="PyListObject"><code class="xref c c-type docutils literal notranslate"><span class="pre">PyListObject</span></code></a> and access
-the data fields of <em>o</em> directly.</p>
-<p>As a CPython implementation detail, if <em>o</em> is already a sequence or list, it
-will be returned.</p>
+<dd><em class="refcount return_new_ref">返回值：新的引用。</em><em class="stableabi"> 属于 <a class="reference internal" href="stable.html#stable"><span class="std std-ref">稳定 ABI</span></a>.</em><p class="translated">将序列或可迭代对象 <em>o</em> 作为其他 <code class="docutils literal notranslate"><span class="pre">PySequence_Fast*</span></code> 函数族可用的对象返回。 如果该对象不是序列或可迭代对象，则会引发 <a class="reference internal" href="../library/exceptions.html#TypeError" title="TypeError"><code class="xref py py-exc docutils literal notranslate"><span class="pre">TypeError</span></code></a> 并将 <em>m</em> 作为消息文本。 失败时返回 <code class="docutils literal notranslate"><span class="pre">NULL</span></code>。</p>
+<p class="translated"><code class="docutils literal notranslate"><span class="pre">PySequence_Fast*</span></code> 函数之所以这样命名，是因为它们会假定 <em>o</em> 是一个 <a class="reference internal" href="tuple.html#c.PyTupleObject" title="PyTupleObject"><code class="xref c c-type docutils literal notranslate"><span class="pre">PyTupleObject</span></code></a> 或 <a class="reference internal" href="list.html#c.PyListObject" title="PyListObject"><code class="xref c c-type docutils literal notranslate"><span class="pre">PyListObject</span></code></a> 并直接访问 <em>o</em> 的数据字段。</p>
+<p class="translated">作为 CPython 的实现细节，如果 <em>o</em> 已经是一个序列或列表，它将被直接返回。</p>
 </dd></dl>
 
 <dl class="c function">
 <dt class="sig sig-object c" id="c.PySequence_Fast_GET_SIZE">
 <a class="reference internal" href="intro.html#c.Py_ssize_t" title="Py_ssize_t"><span class="n"><span class="pre">Py_ssize_t</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">PySequence_Fast_GET_SIZE</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">o</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PySequence_Fast_GET_SIZE" title="Link to this definition">¶</a><br /></dt>
-<dd><p>Returns the length of <em>o</em>, assuming that <em>o</em> was returned by
-<a class="reference internal" href="#c.PySequence_Fast" title="PySequence_Fast"><code class="xref c c-func docutils literal notranslate"><span class="pre">PySequence_Fast()</span></code></a> and that <em>o</em> is not <code class="docutils literal notranslate"><span class="pre">NULL</span></code>.  The size can also be
-retrieved by calling <a class="reference internal" href="#c.PySequence_Size" title="PySequence_Size"><code class="xref c c-func docutils literal notranslate"><span class="pre">PySequence_Size()</span></code></a> on <em>o</em>, but
-<a class="reference internal" href="#c.PySequence_Fast_GET_SIZE" title="PySequence_Fast_GET_SIZE"><code class="xref c c-func docutils literal notranslate"><span class="pre">PySequence_Fast_GET_SIZE()</span></code></a> is faster because it can assume <em>o</em> is a
-list or tuple.</p>
+<dd><p class="translated">在 <em>o</em> 由 <a class="reference internal" href="#c.PySequence_Fast" title="PySequence_Fast"><code class="xref c c-func docutils literal notranslate"><span class="pre">PySequence_Fast()</span></code></a> 返回且 <em>o</em> 不为 <code class="docutils literal notranslate"><span class="pre">NULL</span></code> 的情况下返回 <em>o</em> 长度。 也可以通过在  <em>o</em> 上调用 <a class="reference internal" href="#c.PySequence_Size" title="PySequence_Size"><code class="xref c c-func docutils literal notranslate"><span class="pre">PySequence_Size()</span></code></a> 来获取大小，但是 <a class="reference internal" href="#c.PySequence_Fast_GET_SIZE" title="PySequence_Fast_GET_SIZE"><code class="xref c c-func docutils literal notranslate"><span class="pre">PySequence_Fast_GET_SIZE()</span></code></a> 的速度更快因为它可以假定 <em>o</em> 为列表或元组。</p>
 </dd></dl>
 
 <dl class="c function">
 <dt class="sig sig-object c" id="c.PySequence_Fast_GET_ITEM">
 <a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="sig-name descname"><span class="n"><span class="pre">PySequence_Fast_GET_ITEM</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">o</span></span>, <a class="reference internal" href="intro.html#c.Py_ssize_t" title="Py_ssize_t"><span class="n"><span class="pre">Py_ssize_t</span></span></a><span class="w"> </span><span class="n"><span class="pre">i</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PySequence_Fast_GET_ITEM" title="Link to this definition">¶</a><br /></dt>
-<dd><em class="refcount return_borrowed_ref">Return value: Borrowed reference.</em><p>Return the <em>i</em>th element of <em>o</em>, assuming that <em>o</em> was returned by
-<a class="reference internal" href="#c.PySequence_Fast" title="PySequence_Fast"><code class="xref c c-func docutils literal notranslate"><span class="pre">PySequence_Fast()</span></code></a>, <em>o</em> is not <code class="docutils literal notranslate"><span class="pre">NULL</span></code>, and that <em>i</em> is within bounds.</p>
+<dd><em class="refcount return_borrowed_ref">返回值：借入的引用。</em><p class="translated">在 <em>o</em> 由 <a class="reference internal" href="#c.PySequence_Fast" title="PySequence_Fast"><code class="xref c c-func docutils literal notranslate"><span class="pre">PySequence_Fast()</span></code></a> 返回且 <em>o</em> 不 <code class="docutils literal notranslate"><span class="pre">NULL</span></code>，并且 <em>i</em> d在索引范围内的情况下返回 <em>o</em> 的第 <em>i</em> 号元素。</p>
 </dd></dl>
 
 <dl class="c function">
 <dt class="sig sig-object c" id="c.PySequence_Fast_ITEMS">
 <a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="p"><span class="pre">*</span></span><span class="sig-name descname"><span class="n"><span class="pre">PySequence_Fast_ITEMS</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">o</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PySequence_Fast_ITEMS" title="Link to this definition">¶</a><br /></dt>
-<dd><p>Return the underlying array of PyObject pointers.  Assumes that <em>o</em> was returned
-by <a class="reference internal" href="#c.PySequence_Fast" title="PySequence_Fast"><code class="xref c c-func docutils literal notranslate"><span class="pre">PySequence_Fast()</span></code></a> and <em>o</em> is not <code class="docutils literal notranslate"><span class="pre">NULL</span></code>.</p>
-<p>Note, if a list gets resized, the reallocation may relocate the items array.
-So, only use the underlying array pointer in contexts where the sequence
-cannot change.</p>
+<dd><p class="translated">返回 PyObject 指针的底层数组。 假设 <em>o</em> 由 <a class="reference internal" href="#c.PySequence_Fast" title="PySequence_Fast"><code class="xref c c-func docutils literal notranslate"><span class="pre">PySequence_Fast()</span></code></a> 返回且 <em>o</em> 不为 <code class="docutils literal notranslate"><span class="pre">NULL</span></code>。</p>
+<p class="translated">请注意,如果列表调整大小,重新分配可能会重新定位items数组.因此,仅在序列无法更改的上下文中使用基础数组指针.</p>
 </dd></dl>
 
 <dl class="c function">
 <dt class="sig sig-object c" id="c.PySequence_ITEM">
 <a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="sig-name descname"><span class="n"><span class="pre">PySequence_ITEM</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="structures.html#c.PyObject" title="PyObject"><span class="n"><span class="pre">PyObject</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n"><span class="pre">o</span></span>, <a class="reference internal" href="intro.html#c.Py_ssize_t" title="Py_ssize_t"><span class="n"><span class="pre">Py_ssize_t</span></span></a><span class="w"> </span><span class="n"><span class="pre">i</span></span><span class="sig-paren">)</span><a class="headerlink" href="#c.PySequence_ITEM" title="Link to this definition">¶</a><br /></dt>
-<dd><em class="refcount return_new_ref">Return value: New reference.</em><p>Return the <em>i</em>th element of <em>o</em> or <code class="docutils literal notranslate"><span class="pre">NULL</span></code> on failure. Faster form of
-<a class="reference internal" href="#c.PySequence_GetItem" title="PySequence_GetItem"><code class="xref c c-func docutils literal notranslate"><span class="pre">PySequence_GetItem()</span></code></a> but without checking that
-<a class="reference internal" href="#c.PySequence_Check" title="PySequence_Check"><code class="xref c c-func docutils literal notranslate"><span class="pre">PySequence_Check()</span></code></a> on <em>o</em> is true and without adjustment for negative
-indices.</p>
+<dd><em class="refcount return_new_ref">返回值：新的引用。</em><p class="translated">返回 <em>o</em> 的第 <em>i</em> 个元素或在失败时返回 <code class="docutils literal notranslate"><span class="pre">NULL</span></code>。 此形式比 <a class="reference internal" href="#c.PySequence_GetItem" title="PySequence_GetItem"><code class="xref c c-func docutils literal notranslate"><span class="pre">PySequence_GetItem()</span></code></a> 理馔，但不会检查 <em>o</em> 上的 <a class="reference internal" href="#c.PySequence_Check" title="PySequence_Check"><code class="xref c c-func docutils literal notranslate"><span class="pre">PySequence_Check()</span></code></a> 是否为真值，也不会对负序号进行调整。</p>
 </dd></dl>
 
 </section>
@@ -406,44 +341,34 @@ indices.</p>
       <div class="sphinxsidebar" role="navigation" aria-label="Main">
         <div class="sphinxsidebarwrapper">
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="number.html"
-                          title="previous chapter">Number Protocol</a></p>
+                          title="上一章">数字协议</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="mapping.html"
-                          title="next chapter">Mapping Protocol</a></p>
+                          title="下一章">映射协议</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "c-api/sequence.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/c-api/sequence.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/c-api/sequence.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
   </div>
         </div>
-<div id="sidebarbutton" title="Collapse sidebar">
+<div id="sidebarbutton" title="折叠边栏">
 <span>«</span>
 </div>
 
@@ -451,20 +376,20 @@ indices.</p>
       <div class="clearer"></div>
     </div>  
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             >index</a></li>
+          <a href="../genindex.html" title="总索引"
+             >索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="mapping.html" title="Mapping Protocol"
-             >next</a> |</li>
+          <a href="mapping.html" title="映射协议"
+             >下一页</a> |</li>
         <li class="right" >
-          <a href="number.html" title="Number Protocol"
-             >previous</a> |</li>
+          <a href="number.html" title="数字协议"
+             >上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -476,59 +401,59 @@ indices.</p>
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-          <li class="nav-item nav-item-1"><a href="index.html" >Python/C API reference manual</a> &#187;</li>
-          <li class="nav-item nav-item-2"><a href="abstract.html" >Abstract Objects Layer</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href="">Sequence Protocol</a></li>
+          <li class="nav-item nav-item-1"><a href="index.html" >Python/C API 参考手册</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="abstract.html" >抽象对象层</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">序列协议</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
       </ul>
     </div>  
     <div class="footer">
-    &copy; <a href="../copyright.html">Copyright</a> 2001 Python Software Foundation.
+    &copy; <a href="../copyright.html">版权</a> 2001-2026, Python Software Foundation.
     <br>
-    This page is licensed under the Python Software Foundation License Version 2.
+    本页面采用 Python 软件基金会许可证第 2 版授权。
     <br>
-    Examples, recipes, and other code in the documentation are additionally licensed under the Zero Clause BSD License.
+    文档中的示例、代码片段及其他代码内容额外采用零条款 BSD 许可证授权。
     <br>
     
-      See <a href="/license.html">History and License</a> for more information.<br>
+      更多信息请参阅《<a href="/license.html"> 历史与许可 </a>》。<br>
     
     
     <br>
 
-    The Python Software Foundation is a non-profit corporation.
-<a href="https://www.python.org/psf/donations/">Please donate.</a>
+    Python 软件基金会是一家非营利性公司。
+<a href="https://www.python.org/psf/donations/">请进行捐赠。</a>
 <br>
     <br>
-      Last updated on May 27, 2026 (10:52 UTC).
+      最后更新于5月 25, 2026 (11:48 UTC) 。
     
-      <a href="/bugs.html">Found a bug</a>?
+      <a href="/bugs.html">发现了错误</a>？
     
     <br>
 
-    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3.
+    使用<a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3 创建。
     </div>
 
   </body>

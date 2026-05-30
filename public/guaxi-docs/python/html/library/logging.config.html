@@ -1,44 +1,45 @@
 <!DOCTYPE html>
 
-<html lang="en" data-content_root="../">
+<html lang="zh-CN" data-content_root="../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta property="og:title" content="logging.config — Logging configuration" />
+<meta property="og:title" content="logging.config --- 日志记录配置" />
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://docs.python.org/3/library/logging.config.html" />
 <meta property="og:site_name" content="Python documentation" />
-<meta property="og:description" content="Source code: Lib/logging/config.py Important: This page contains only reference information. For tutorials, please see Basic Tutorial, Advanced Tutorial, Logging Cookbook. This section describes th..." />
+<meta property="og:description" content="源代码： Lib/logging/config.py Important: 此页面仅包含参考信息。有关教程，请参阅 基础教程, 进阶教程, 日志记录操作手册. 这一节描述了用于配置 logging 模块的 API。 配置函数: 下列函数可配置 logging 模块。 它们位于 logging.config 模块中。 它们的使用是可选的 --- 要配置 logging 模块你可以使用这些函数，..." />
 <meta property="og:image:width" content="1146" />
 <meta property="og:image:height" content="600" />
-<meta property="og:image" content="https://docs.python.org/3.14/_images/social_previews/summary_library_logging.config_34dbd393.png" />
-<meta property="og:image:alt" content="Source code: Lib/logging/config.py Important: This page contains only reference information. For tutorials, please see Basic Tutorial, Advanced Tutorial, Logging Cookbook. This section describes th..." />
-<meta name="description" content="Source code: Lib/logging/config.py Important: This page contains only reference information. For tutorials, please see Basic Tutorial, Advanced Tutorial, Logging Cookbook. This section describes th..." />
+<meta property="og:image" content="https://docs.python.org/3.13/zh-cn/_images/social_previews/summary_library_logging.config_3de7f01e.png" />
+<meta property="og:image:alt" content="源代码： Lib/logging/config.py Important: 此页面仅包含参考信息。有关教程，请参阅 基础教程, 进阶教程, 日志记录操作手册. 这一节描述了用于配置 logging 模块的 API。 配置函数: 下列函数可配置 logging 模块。 它们位于 logging.config 模块中。 它们的使用是可选的 --- 要配置 logging 模块你可以使用这些函数，..." />
+<meta name="description" content="源代码： Lib/logging/config.py Important: 此页面仅包含参考信息。有关教程，请参阅 基础教程, 进阶教程, 日志记录操作手册. 这一节描述了用于配置 logging 模块的 API。 配置函数: 下列函数可配置 logging 模块。 它们位于 logging.config 模块中。 它们的使用是可选的 --- 要配置 logging 模块你可以使用这些函数，..." />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="theme-color" content="#3776ab">
 
-    <title>logging.config — Logging configuration &#8212; Python 3.14.5 documentation</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>logging.config --- 日志记录配置 &#8212; Python 3.13.13 文档</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
     
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
     <link rel="stylesheet" type="text/css" href="../_static/classic.css?v=234b1a7c" />
     <link rel="stylesheet" type="text/css" href="../_static/pydoctheme.css?v=4365c8fe" />
     <link id="pygments_dark_css" media="(prefers-color-scheme: dark)" rel="stylesheet" type="text/css" href="../_static/pygments_dark.css?v=5349f25f" />
     
-    <script src="../_static/documentation_options.js?v=bcfd2f37"></script>
+    <script src="../_static/documentation_options.js?v=a941be6b"></script>
     <script src="../_static/doctools.js?v=9bcbadda"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/translations.js?v=beaddf03"></script>
     
     <script src="../_static/sidebar.js"></script>
     
     <link rel="search" type="application/opensearchdescription+xml"
-          title="Search within Python 3.14.5 documentation"
+          title="在 Python 3.13.13 文档 中搜索"
           href="../_static/opensearch.xml"/>
-    <link rel="author" title="About these documents" href="../about.html" />
-    <link rel="index" title="Index" href="../genindex.html" />
-    <link rel="search" title="Search" href="../search.html" />
-    <link rel="copyright" title="Copyright" href="../copyright.html" />
-    <link rel="next" title="logging.handlers — Logging handlers" href="logging.handlers.html" />
-    <link rel="prev" title="logging — Logging facility for Python" href="logging.html" />
+    <link rel="author" title="关于此文档" href="../about.html" />
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="搜索" href="../search.html" />
+    <link rel="copyright" title="版权" href="../copyright.html" />
+    <link rel="next" title="logging.handlers --- 日志处理器" href="logging.handlers.html" />
+    <link rel="prev" title="logging --- Python 的日志记录工具" href="logging.html" />
     
       
       <script defer file-types="bz2,epub,zip" data-domain="docs.python.org" src="https://analytics.python.org/js/script.file-downloads.outbound-links.js"></script>
@@ -68,7 +69,7 @@
 <body>
 <div class="mobile-nav">
     <input type="checkbox" id="menuToggler" class="toggler__input" aria-controls="navigation"
-           aria-pressed="false" aria-expanded="false" role="button" aria-label="Menu">
+           aria-pressed="false" aria-expanded="false" role="button" aria-label="菜单">
     <nav class="nav-content" role="navigation">
         <label for="menuToggler" class="toggler__label">
             <span></span>
@@ -82,8 +83,8 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" class="search-icon">
                     <path fill-rule="nonzero" fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 001.48-5.34c-.47-2.78-2.79-5-5.59-5.34a6.505 6.505 0 00-7.27 7.27c.34 2.8 2.56 5.12 5.34 5.59a6.5 6.5 0 005.34-1.48l.27.28v.79l4.25 4.25c.41.41 1.08.41 1.49 0 .41-.41.41-1.08 0-1.49L15.5 14zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"></path>
                 </svg>
-                <input placeholder="Quick search" aria-label="Quick search" type="search" name="q">
-                <input type="submit" value="Go">
+                <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q">
+                <input type="submit" value="转到">
             </form>
         </span>
     </nav>
@@ -92,70 +93,60 @@
             <div class="language_switcher_placeholder"></div>
             
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label>
   <div>
-    <h3><a href="../contents.html">Table of Contents</a></h3>
+    <h3><a href="../contents.html">目录</a></h3>
     <ul>
-<li><a class="reference internal" href="#"><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging.config</span></code> — Logging configuration</a><ul>
-<li><a class="reference internal" href="#configuration-functions">Configuration functions</a></li>
-<li><a class="reference internal" href="#security-considerations">Security considerations</a></li>
-<li><a class="reference internal" href="#configuration-dictionary-schema">Configuration dictionary schema</a><ul>
-<li><a class="reference internal" href="#dictionary-schema-details">Dictionary Schema Details</a></li>
-<li><a class="reference internal" href="#incremental-configuration">Incremental Configuration</a></li>
-<li><a class="reference internal" href="#object-connections">Object connections</a></li>
-<li><a class="reference internal" href="#user-defined-objects">User-defined objects</a></li>
-<li><a class="reference internal" href="#handler-configuration-order">Handler configuration order</a></li>
-<li><a class="reference internal" href="#access-to-external-objects">Access to external objects</a></li>
-<li><a class="reference internal" href="#access-to-internal-objects">Access to internal objects</a></li>
-<li><a class="reference internal" href="#import-resolution-and-custom-importers">Import resolution and custom importers</a></li>
-<li><a class="reference internal" href="#configuring-queuehandler-and-queuelistener">Configuring QueueHandler and QueueListener</a></li>
+<li><a class="reference internal" href="#"><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging.config</span></code> --- 日志记录配置</a><ul>
+<li><a class="reference internal" href="#configuration-functions">配置函数</a></li>
+<li><a class="reference internal" href="#security-considerations">安全考量</a></li>
+<li><a class="reference internal" href="#configuration-dictionary-schema">配置字典架构</a><ul>
+<li><a class="reference internal" href="#dictionary-schema-details">字典架构细节</a></li>
+<li><a class="reference internal" href="#incremental-configuration">增量配置</a></li>
+<li><a class="reference internal" href="#object-connections">对象连接</a></li>
+<li><a class="reference internal" href="#user-defined-objects">用户定义对象</a></li>
+<li><a class="reference internal" href="#handler-configuration-order">处理器配置顺序</a></li>
+<li><a class="reference internal" href="#access-to-external-objects">访问外部对象</a></li>
+<li><a class="reference internal" href="#access-to-internal-objects">访问内部对象</a></li>
+<li><a class="reference internal" href="#import-resolution-and-custom-importers">导入解析与定制导入器</a></li>
+<li><a class="reference internal" href="#configuring-queuehandler-and-queuelistener">配置 QueueHandler 和 QueueListener</a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#configuration-file-format">Configuration file format</a></li>
+<li><a class="reference internal" href="#configuration-file-format">配置文件格式</a></li>
 </ul>
 </li>
 </ul>
 
   </div>
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="logging.html"
-                          title="previous chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging</span></code> — Logging facility for Python</a></p>
+                          title="上一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging</span></code> --- Python 的日志记录工具</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="logging.handlers.html"
-                          title="next chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging.handlers</span></code> — Logging handlers</a></p>
+                          title="下一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging.handlers</span></code> --- 日志处理器</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "library/logging.config.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/library/logging.config.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/library/logging.config.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
@@ -166,20 +157,20 @@
 
   
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             accesskey="I">index</a></li>
+          <a href="../genindex.html" title="总索引"
+             accesskey="I">索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="logging.handlers.html" title="logging.handlers — Logging handlers"
-             accesskey="N">next</a> |</li>
+          <a href="logging.handlers.html" title="logging.handlers --- 日志处理器"
+             accesskey="N">下一页</a> |</li>
         <li class="right" >
-          <a href="logging.html" title="logging — Logging facility for Python"
-             accesskey="P">previous</a> |</li>
+          <a href="logging.html" title="logging --- Python 的日志记录工具"
+             accesskey="P">上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -191,30 +182,30 @@
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-          <li class="nav-item nav-item-1"><a href="index.html" >The Python Standard Library</a> &#187;</li>
-          <li class="nav-item nav-item-2"><a href="allos.html" accesskey="U">Generic Operating System Services</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging.config</span></code> — Logging configuration</a></li>
+          <li class="nav-item nav-item-1"><a href="index.html" >Python 标准库</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="allos.html" accesskey="U">通用操作系统服务</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging.config</span></code> --- 日志记录配置</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
@@ -227,67 +218,42 @@
           <div class="body" role="main">
             
   <section id="module-logging.config">
-<span id="logging-config-logging-configuration"></span><h1><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging.config</span></code> — Logging configuration<a class="headerlink" href="#module-logging.config" title="Link to this heading">¶</a></h1>
-<p><strong>Source code:</strong> <a class="extlink-source reference external" href="https://github.com/python/cpython/tree/3.14/Lib/logging/config.py">Lib/logging/config.py</a></p>
+<span id="logging-config-logging-configuration"></span><h1 class="translated"><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging.config</span></code> --- 日志记录配置<a class="headerlink" href="#module-logging.config" title="Link to this heading">¶</a></h1>
+<p class="translated"><strong>源代码：</strong> <a class="extlink-source reference external" href="https://github.com/python/cpython/tree/3.13/Lib/logging/config.py">Lib/logging/config.py</a></p>
 <aside class="sidebar">
 <p class="sidebar-title">Important</p>
-<p>This page contains only reference information. For tutorials,
-please see</p>
+<p class="translated">此页面仅包含参考信息。有关教程，请参阅</p>
 <ul class="simple">
-<li><p><a class="reference internal" href="../howto/logging.html#logging-basic-tutorial"><span class="std std-ref">Basic Tutorial</span></a></p></li>
-<li><p><a class="reference internal" href="../howto/logging.html#logging-advanced-tutorial"><span class="std std-ref">Advanced Tutorial</span></a></p></li>
-<li><p><a class="reference internal" href="../howto/logging-cookbook.html#logging-cookbook"><span class="std std-ref">Logging Cookbook</span></a></p></li>
+<li><p class="translated"><a class="reference internal" href="../howto/logging.html#logging-basic-tutorial"><span class="std std-ref">基础教程</span></a></p></li>
+<li><p class="translated"><a class="reference internal" href="../howto/logging.html#logging-advanced-tutorial"><span class="std std-ref">进阶教程</span></a></p></li>
+<li><p class="translated"><a class="reference internal" href="../howto/logging-cookbook.html#logging-cookbook"><span class="std std-ref">日志记录操作手册</span></a></p></li>
 </ul>
 </aside>
 <hr class="docutils" />
-<p>This section describes the API for configuring the logging module.</p>
+<p class="translated">这一节描述了用于配置 logging 模块的 API。</p>
 <section id="configuration-functions">
-<span id="logging-config-api"></span><h2>Configuration functions<a class="headerlink" href="#configuration-functions" title="Link to this heading">¶</a></h2>
-<p>The following functions configure the logging module. They are located in the
-<code class="xref py py-mod docutils literal notranslate"><span class="pre">logging.config</span></code> module.  Their use is optional — you can configure the
-logging module using these functions or by making calls to the main API (defined
-in <a class="reference internal" href="logging.html#module-logging" title="logging: Flexible event logging system for applications."><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging</span></code></a> itself) and defining handlers which are declared either in
-<code class="xref py py-mod docutils literal notranslate"><span class="pre">logging</span></code> or <a class="reference internal" href="logging.handlers.html#module-logging.handlers" title="logging.handlers: Handlers for the logging module."><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging.handlers</span></code></a>.</p>
+<span id="logging-config-api"></span><h2 class="translated">配置函数<a class="headerlink" href="#configuration-functions" title="Link to this heading">¶</a></h2>
+<p class="translated">下列函数可配置 logging 模块。 它们位于 <code class="xref py py-mod docutils literal notranslate"><span class="pre">logging.config</span></code> 模块中。 它们的使用是可选的 --- 要配置 logging 模块你可以使用这些函数，也可以通过调用主 API (在 <a class="reference internal" href="logging.html#module-logging" title="logging: Flexible event logging system for applications."><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging</span></code></a> 本身定义) 并定义在 <code class="xref py py-mod docutils literal notranslate"><span class="pre">logging</span></code> 或 <a class="reference internal" href="logging.handlers.html#module-logging.handlers" title="logging.handlers: Handlers for the logging module."><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging.handlers</span></code></a> 中声明的处理器。</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="logging.config.dictConfig">
 <span class="sig-prename descclassname"><span class="pre">logging.config.</span></span><span class="sig-name descname"><span class="pre">dictConfig</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">config</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#logging.config.dictConfig" title="Link to this definition">¶</a></dt>
-<dd><p>Takes the logging configuration from a dictionary.  The contents of
-this dictionary are described in <a class="reference internal" href="#logging-config-dictschema"><span class="std std-ref">Configuration dictionary schema</span></a>
-below.</p>
-<p>If an error is encountered during configuration, this function will
-raise a <a class="reference internal" href="exceptions.html#ValueError" title="ValueError"><code class="xref py py-exc docutils literal notranslate"><span class="pre">ValueError</span></code></a>, <a class="reference internal" href="exceptions.html#TypeError" title="TypeError"><code class="xref py py-exc docutils literal notranslate"><span class="pre">TypeError</span></code></a>, <a class="reference internal" href="exceptions.html#AttributeError" title="AttributeError"><code class="xref py py-exc docutils literal notranslate"><span class="pre">AttributeError</span></code></a>
-or <a class="reference internal" href="exceptions.html#ImportError" title="ImportError"><code class="xref py py-exc docutils literal notranslate"><span class="pre">ImportError</span></code></a> with a suitably descriptive message.  The
-following is a (possibly incomplete) list of conditions which will
-raise an error:</p>
+<dd><p class="translated">从一个字典获取日志记录配置。 字典的内容描述见下文的 <a class="reference internal" href="#logging-config-dictschema"><span class="std std-ref">配置字典架构</span></a>。</p>
+<p class="translated">如果在配置期间遇到错误，此函数将引发 <a class="reference internal" href="exceptions.html#ValueError" title="ValueError"><code class="xref py py-exc docutils literal notranslate"><span class="pre">ValueError</span></code></a>, <a class="reference internal" href="exceptions.html#TypeError" title="TypeError"><code class="xref py py-exc docutils literal notranslate"><span class="pre">TypeError</span></code></a>, <a class="reference internal" href="exceptions.html#AttributeError" title="AttributeError"><code class="xref py py-exc docutils literal notranslate"><span class="pre">AttributeError</span></code></a> 或 <a class="reference internal" href="exceptions.html#ImportError" title="ImportError"><code class="xref py py-exc docutils literal notranslate"><span class="pre">ImportError</span></code></a> 并附带适当的描述性消息。 下面是将会引发错误的（可能不完整的）条件列表:</p>
 <ul class="simple">
-<li><p>A <code class="docutils literal notranslate"><span class="pre">level</span></code> which is not a string or which is a string not
-corresponding to an actual logging level.</p></li>
-<li><p>A <code class="docutils literal notranslate"><span class="pre">propagate</span></code> value which is not a boolean.</p></li>
-<li><p>An id which does not have a corresponding destination.</p></li>
-<li><p>A non-existent handler id found during an incremental call.</p></li>
-<li><p>An invalid logger name.</p></li>
-<li><p>Inability to resolve to an internal or external object.</p></li>
+<li><p class="translated"><code class="docutils literal notranslate"><span class="pre">level</span></code> 不是字符串或者不是对应于实际日志记录级别的字符串。</p></li>
+<li><p class="translated"><code class="docutils literal notranslate"><span class="pre">propagate</span></code> 值不是布尔类型。</p></li>
+<li><p class="translated">id 没有对应的目标。</p></li>
+<li><p class="translated">在增量调用期间发现不存在的处理器 id。</p></li>
+<li><p class="translated">无效的日志记录器名称。</p></li>
+<li><p class="translated">无法解析为内部或外部对象。</p></li>
 </ul>
-<p>Parsing is performed by the <code class="xref py py-class docutils literal notranslate"><span class="pre">DictConfigurator</span></code> class, whose
-constructor is passed the dictionary used for configuration, and
-has a <code class="xref py py-meth docutils literal notranslate"><span class="pre">configure()</span></code> method.  The <code class="xref py py-mod docutils literal notranslate"><span class="pre">logging.config</span></code> module
-has a callable attribute <code class="xref py py-attr docutils literal notranslate"><span class="pre">dictConfigClass</span></code>
-which is initially set to <code class="xref py py-class docutils literal notranslate"><span class="pre">DictConfigurator</span></code>.
-You can replace the value of <code class="xref py py-attr docutils literal notranslate"><span class="pre">dictConfigClass</span></code> with a
-suitable implementation of your own.</p>
-<p><code class="xref py py-func docutils literal notranslate"><span class="pre">dictConfig()</span></code> calls <code class="xref py py-attr docutils literal notranslate"><span class="pre">dictConfigClass</span></code> passing
-the specified dictionary, and then calls the <code class="xref py py-meth docutils literal notranslate"><span class="pre">configure()</span></code> method on
-the returned object to put the configuration into effect:</p>
-<div class="highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">dictConfig</span><span class="p">(</span><span class="n">config</span><span class="p">):</span>
+<p class="translated">解析由 <code class="xref py py-class docutils literal notranslate"><span class="pre">DictConfigurator</span></code> 类执行，该类的构造器可传入用于配置的字典，并且具有 <code class="xref py py-meth docutils literal notranslate"><span class="pre">configure()</span></code> 方法。 <code class="xref py py-mod docutils literal notranslate"><span class="pre">logging.config</span></code> 模块具有可调用属性 <code class="xref py py-attr docutils literal notranslate"><span class="pre">dictConfigClass</span></code>，其初始值设为 <code class="xref py py-class docutils literal notranslate"><span class="pre">DictConfigurator</span></code>。 你可以使用你自己的适当实现来替换 <code class="xref py py-attr docutils literal notranslate"><span class="pre">dictConfigClass</span></code> 的值。</p>
+<p class="translated"><a class="reference internal" href="#logging.config.dictConfig" title="logging.config.dictConfig"><code class="xref py py-func docutils literal notranslate"><span class="pre">dictConfig()</span></code></a> 会调用 <code class="xref py py-attr docutils literal notranslate"><span class="pre">dictConfigClass</span></code> 并传入指定的字典，然后在所返回的对象上调用 <code class="xref py py-meth docutils literal notranslate"><span class="pre">configure()</span></code> 方法以使配置生效:</p>
+<div class="translated highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">dictConfig</span><span class="p">(</span><span class="n">config</span><span class="p">):</span>
     <span class="n">dictConfigClass</span><span class="p">(</span><span class="n">config</span><span class="p">)</span><span class="o">.</span><span class="n">configure</span><span class="p">()</span>
 </pre></div>
 </div>
-<p>For example, a subclass of <code class="xref py py-class docutils literal notranslate"><span class="pre">DictConfigurator</span></code> could call
-<code class="docutils literal notranslate"><span class="pre">DictConfigurator.__init__()</span></code> in its own <code class="xref py py-meth docutils literal notranslate"><span class="pre">__init__()</span></code>, then
-set up custom prefixes which would be usable in the subsequent
-<code class="xref py py-meth docutils literal notranslate"><span class="pre">configure()</span></code> call. <code class="xref py py-attr docutils literal notranslate"><span class="pre">dictConfigClass</span></code> would be bound to
-this new subclass, and then <code class="xref py py-func docutils literal notranslate"><span class="pre">dictConfig()</span></code> could be called exactly as
-in the default, uncustomized state.</p>
+<p class="translated">例如，<code class="xref py py-class docutils literal notranslate"><span class="pre">DictConfigurator</span></code> 的子类可以在它自己的 <code class="xref py py-meth docutils literal notranslate"><span class="pre">__init__()</span></code> 中调用 <code class="docutils literal notranslate"><span class="pre">DictConfigurator.__init__()</span></code>，然后设置可以在后续 <code class="xref py py-meth docutils literal notranslate"><span class="pre">configure()</span></code> 调用中使用的自定义前缀。 <code class="xref py py-attr docutils literal notranslate"><span class="pre">dictConfigClass</span></code> 将被绑定到这个新的子类，然后就能以与在默认的未定制状态下完全相同的方式调用 <a class="reference internal" href="#logging.config.dictConfig" title="logging.config.dictConfig"><code class="xref py py-func docutils literal notranslate"><span class="pre">dictConfig()</span></code></a>。</p>
 <div class="versionadded">
 <p><span class="versionmodified added">Added in version 3.2.</span></p>
 </div>
@@ -296,61 +262,31 @@ in the default, uncustomized state.</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="logging.config.fileConfig">
 <span class="sig-prename descclassname"><span class="pre">logging.config.</span></span><span class="sig-name descname"><span class="pre">fileConfig</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">fname</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">defaults</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">disable_existing_loggers</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">encoding</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#logging.config.fileConfig" title="Link to this definition">¶</a></dt>
-<dd><p>Reads the logging configuration from a <a class="reference internal" href="configparser.html#module-configparser" title="configparser: Configuration file parser."><code class="xref py py-mod docutils literal notranslate"><span class="pre">configparser</span></code></a>-format file. The
-format of the file should be as described in
-<a class="reference internal" href="#logging-config-fileformat"><span class="std std-ref">Configuration file format</span></a>.
-This function can be called several times from an application, allowing an
-end user to select from various pre-canned configurations (if the developer
-provides a mechanism to present the choices and load the chosen
-configuration).</p>
-<p>It will raise <a class="reference internal" href="exceptions.html#FileNotFoundError" title="FileNotFoundError"><code class="xref py py-exc docutils literal notranslate"><span class="pre">FileNotFoundError</span></code></a> if the file
-doesn’t exist and <a class="reference internal" href="exceptions.html#RuntimeError" title="RuntimeError"><code class="xref py py-exc docutils literal notranslate"><span class="pre">RuntimeError</span></code></a> if the file is invalid or
-empty.</p>
+<dd><p class="translated">从一个 <a class="reference internal" href="configparser.html#module-configparser" title="configparser: Configuration file parser."><code class="xref py py-mod docutils literal notranslate"><span class="pre">configparser</span></code></a> 格式文件中读取日志记录配置。 文件格式应当与 <a class="reference internal" href="#logging-config-fileformat"><span class="std std-ref">配置文件格式</span></a> 中的描述一致。 此函数可在应用程序中被多次调用，以允许最终用户在多个预设配置中进行选择（如果开发者提供了展示选项并加载选定配置的机制）。</p>
+<p class="translated">如果文件不存在将引发 <a class="reference internal" href="exceptions.html#FileNotFoundError" title="FileNotFoundError"><code class="xref py py-exc docutils literal notranslate"><span class="pre">FileNotFoundError</span></code></a> 而如果文件无效或为空则将引发 <a class="reference internal" href="exceptions.html#RuntimeError" title="RuntimeError"><code class="xref py py-exc docutils literal notranslate"><span class="pre">RuntimeError</span></code></a>。</p>
 <dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>fname</strong> – A filename, or a file-like object, or an instance derived
-from <a class="reference internal" href="configparser.html#configparser.RawConfigParser" title="configparser.RawConfigParser"><code class="xref py py-class docutils literal notranslate"><span class="pre">RawConfigParser</span></code></a>. If a
-<code class="xref py py-class docutils literal notranslate"><span class="pre">RawConfigParser</span></code>-derived instance is passed, it is used as
-is. Otherwise, a <a class="reference internal" href="configparser.html#configparser.ConfigParser" title="configparser.ConfigParser"><code class="xref py py-class docutils literal notranslate"><span class="pre">ConfigParser</span></code></a> is
-instantiated, and the configuration read by it from the
-object passed in <code class="docutils literal notranslate"><span class="pre">fname</span></code>. If that has a <a class="reference internal" href="readline.html#module-readline" title="readline: GNU readline support for Python."><code class="xref py py-meth docutils literal notranslate"><span class="pre">readline()</span></code></a>
-method, it is assumed to be a file-like object and read using
-<a class="reference internal" href="configparser.html#configparser.ConfigParser.read_file" title="configparser.ConfigParser.read_file"><code class="xref py py-meth docutils literal notranslate"><span class="pre">read_file()</span></code></a>; otherwise,
-it is assumed to be a filename and passed to
-<a class="reference internal" href="configparser.html#configparser.ConfigParser.read" title="configparser.ConfigParser.read"><code class="xref py py-meth docutils literal notranslate"><span class="pre">read()</span></code></a>.</p></li>
-<li><p><strong>defaults</strong> – Defaults to be passed to the <code class="xref py py-class docutils literal notranslate"><span class="pre">ConfigParser</span></code> can be specified
-in this argument.</p></li>
-<li><p><strong>disable_existing_loggers</strong> – If specified as <code class="docutils literal notranslate"><span class="pre">False</span></code>, loggers which
-exist when this call is made are left
-enabled. The default is <code class="docutils literal notranslate"><span class="pre">True</span></code> because this
-enables old behaviour in a
-backward-compatible way. This behaviour is to
-disable any existing non-root loggers unless
-they or their ancestors are explicitly named
-in the logging configuration.</p></li>
-<li><p><strong>encoding</strong> – The encoding used to open file when <em>fname</em> is filename.</p></li>
+<dt class="field-odd untranslated">参数<span class="colon">:</span></dt>
+<dd class="field-odd untranslated"><ul class="simple">
+<li><p><strong>fname</strong> -- 一个文件名，或一个文件型对象，或是一个派生自 <a class="reference internal" href="configparser.html#configparser.RawConfigParser" title="configparser.RawConfigParser"><code class="xref py py-class docutils literal notranslate"><span class="pre">RawConfigParser</span></code></a> 的实例。 如果传入了一个派生自 <code class="xref py py-class docutils literal notranslate"><span class="pre">RawConfigParser</span></code> 的实例，它会被原样使用。 否则，将会实例化一个 <a class="reference internal" href="configparser.html#configparser.ConfigParser" title="configparser.ConfigParser"><code class="xref py py-class docutils literal notranslate"><span class="pre">ConfigParser</span></code></a>，并且它会从作为 <code class="docutils literal notranslate"><span class="pre">fname</span></code> 传入的对象中读取配置。 如果存在 <a class="reference internal" href="readline.html#module-readline" title="readline: GNU readline support for Python."><code class="xref py py-meth docutils literal notranslate"><span class="pre">readline()</span></code></a> 方法，则它会被当作一个文件型对象并使用 <a class="reference internal" href="configparser.html#configparser.ConfigParser.read_file" title="configparser.ConfigParser.read_file"><code class="xref py py-meth docutils literal notranslate"><span class="pre">read_file()</span></code></a> 来读取；在其他情况下，它会被当作一个文件名并传递给 <a class="reference internal" href="configparser.html#configparser.ConfigParser.read" title="configparser.ConfigParser.read"><code class="xref py py-meth docutils literal notranslate"><span class="pre">read()</span></code></a>。</p></li>
+<li><p><strong>defaults</strong> -- 要传给 <code class="xref py py-class docutils literal notranslate"><span class="pre">ConfigParser</span></code> 的默认值可在此参数中指定。</p></li>
+<li><p><strong>disable_existing_loggers</strong> -- 如果指定为 <code class="docutils literal notranslate"><span class="pre">False</span></code>，则当执行此调用时已存在的日志记录器会保持启用。 默认值为 <code class="docutils literal notranslate"><span class="pre">True</span></code> 因为这将以向下兼容方式启用旧行为。 此行为是禁用任何现有的非根日志记录器除非它们或它们的上级在日志记录配置中被显式地命名。</p></li>
+<li><p><strong>encoding</strong> -- 当 <em>fname</em> 为文件名时被用于打开文件的编码格式。</p></li>
 </ul>
 </dd>
 </dl>
 <div class="versionchanged">
-<p><span class="versionmodified changed">Changed in version 3.4: </span>An instance of a subclass of <a class="reference internal" href="configparser.html#configparser.RawConfigParser" title="configparser.RawConfigParser"><code class="xref py py-class docutils literal notranslate"><span class="pre">RawConfigParser</span></code></a> is
-  now accepted as a value for <code class="docutils literal notranslate"><span class="pre">fname</span></code>. This facilitates:</p>
+<p><span class="versionmodified changed">在 3.4 版本发生变更: </span>现在接受 <a class="reference internal" href="configparser.html#configparser.RawConfigParser" title="configparser.RawConfigParser"><code class="xref py py-class docutils literal notranslate"><span class="pre">RawConfigParser</span></code></a> 子类的实例作为 <code class="docutils literal notranslate"><span class="pre">fname</span></code> 的值。 这有助于:</p>
 <blockquote>
 <div><ul class="simple">
-<li><p>Use of a configuration file where logging configuration is just part
-of the overall application configuration.</p></li>
-<li><p>Use of a configuration read from a file, and then modified by the using
-application (e.g. based on command-line parameters or other aspects
-of the runtime environment) before being passed to <code class="docutils literal notranslate"><span class="pre">fileConfig</span></code>.</p></li>
+<li><p class="translated">使用一个配置文件，其中日志记录配置只是全部应用程序配置的一部分。</p></li>
+<li><p class="translated">使用从一个文件读取的配置，它随后会在被传给 <code class="docutils literal notranslate"><span class="pre">fileConfig</span></code> 之前由使用配置的应用程序来修改（例如基于命令行参数或运行时环境的其他部分）。</p></li>
 </ul>
 </div></blockquote>
 <div class="versionchanged">
-<p><span class="versionmodified changed">Changed in version 3.10: </span>Added the <em>encoding</em> parameter.</p>
+<p><span class="versionmodified changed">在 3.10 版本发生变更: </span>增加了 <em>encoding</em> 形参。</p>
 </div>
 <div class="versionchanged">
-<p><span class="versionmodified changed">Changed in version 3.12: </span>An exception will be thrown if the provided file
-doesn’t exist or is invalid or empty.</p>
+<p><span class="versionmodified changed">在 3.12 版本发生变更: </span>如果所提供的文件不存在或无效或为空则将抛出一个异常。</p>
 </div>
 </div>
 </dd></dl>
@@ -358,157 +294,72 @@ doesn’t exist or is invalid or empty.</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="logging.config.listen">
 <span class="sig-prename descclassname"><span class="pre">logging.config.</span></span><span class="sig-name descname"><span class="pre">listen</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">port</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">DEFAULT_LOGGING_CONFIG_PORT</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">verify</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#logging.config.listen" title="Link to this definition">¶</a></dt>
-<dd><p>Starts up a socket server on the specified port, and listens for new
-configurations. If no port is specified, the module’s default
-<code class="xref py py-const docutils literal notranslate"><span class="pre">DEFAULT_LOGGING_CONFIG_PORT</span></code> is used. Logging configurations will be
-sent as a file suitable for processing by <a class="reference internal" href="#logging.config.dictConfig" title="logging.config.dictConfig"><code class="xref py py-func docutils literal notranslate"><span class="pre">dictConfig()</span></code></a> or
-<a class="reference internal" href="#logging.config.fileConfig" title="logging.config.fileConfig"><code class="xref py py-func docutils literal notranslate"><span class="pre">fileConfig()</span></code></a>. Returns a <a class="reference internal" href="threading.html#threading.Thread" title="threading.Thread"><code class="xref py py-class docutils literal notranslate"><span class="pre">Thread</span></code></a> instance on which
-you can call <a class="reference internal" href="threading.html#threading.Thread.start" title="threading.Thread.start"><code class="xref py py-meth docutils literal notranslate"><span class="pre">start()</span></code></a> to start the server, and which
-you can <a class="reference internal" href="threading.html#threading.Thread.join" title="threading.Thread.join"><code class="xref py py-meth docutils literal notranslate"><span class="pre">join()</span></code></a> when appropriate. To stop the server,
-call <a class="reference internal" href="#logging.config.stopListening" title="logging.config.stopListening"><code class="xref py py-func docutils literal notranslate"><span class="pre">stopListening()</span></code></a>.</p>
-<p>The <code class="docutils literal notranslate"><span class="pre">verify</span></code> argument, if specified, should be a callable which should
-verify whether bytes received across the socket are valid and should be
-processed. This could be done by encrypting and/or signing what is sent
-across the socket, such that the <code class="docutils literal notranslate"><span class="pre">verify</span></code> callable can perform
-signature verification and/or decryption. The <code class="docutils literal notranslate"><span class="pre">verify</span></code> callable is called
-with a single argument - the bytes received across the socket - and should
-return the bytes to be processed, or <code class="docutils literal notranslate"><span class="pre">None</span></code> to indicate that the bytes should
-be discarded. The returned bytes could be the same as the passed in bytes
-(e.g. when only verification is done), or they could be completely different
-(perhaps if decryption were performed).</p>
-<p>To send a configuration to the socket, read in the configuration file and
-send it to the socket as a sequence of bytes preceded by a four-byte length
-string packed in binary using <code class="docutils literal notranslate"><span class="pre">struct.pack('&gt;L',</span> <span class="pre">n)</span></code>.</p>
+<dd><p class="translated">在指定的端口上启动套接字服务器，并监听新的配置。 如果未指定端口，则会使用模块默认的 <code class="xref py py-const docutils literal notranslate"><span class="pre">DEFAULT_LOGGING_CONFIG_PORT</span></code>。 日志记录配置将作为适合由 <a class="reference internal" href="#logging.config.dictConfig" title="logging.config.dictConfig"><code class="xref py py-func docutils literal notranslate"><span class="pre">dictConfig()</span></code></a> 或 <a class="reference internal" href="#logging.config.fileConfig" title="logging.config.fileConfig"><code class="xref py py-func docutils literal notranslate"><span class="pre">fileConfig()</span></code></a> 进行处理的文件来发送。 返回一个 <a class="reference internal" href="threading.html#threading.Thread" title="threading.Thread"><code class="xref py py-class docutils literal notranslate"><span class="pre">Thread</span></code></a> 实例，你可以在该实例上调用 <a class="reference internal" href="threading.html#threading.Thread.start" title="threading.Thread.start"><code class="xref py py-meth docutils literal notranslate"><span class="pre">start()</span></code></a> 来启动服务器，对该服务器你可以在适当的时候执行 <a class="reference internal" href="threading.html#threading.Thread.join" title="threading.Thread.join"><code class="xref py py-meth docutils literal notranslate"><span class="pre">join()</span></code></a>。 要停止该服务器，请调用 <a class="reference internal" href="#logging.config.stopListening" title="logging.config.stopListening"><code class="xref py py-func docutils literal notranslate"><span class="pre">stopListening()</span></code></a>。</p>
+<p class="translated">如果指定 <code class="docutils literal notranslate"><span class="pre">verify</span></code> 参数，则它应当是一个可调用对象，该对象应当验证通过套接字接收的字节数据是否有效且应被处理。 这可以通过对通过套接字发送的内容进行加密和/或签名来完成，这样 <code class="docutils literal notranslate"><span class="pre">verify</span></code> 可调用对象就能执行签名验证和/或解密。 <code class="docutils literal notranslate"><span class="pre">verify</span></code> 可调用对象的调用会附带一个参数 —— 通过套接字接收的字节数据 —— 并应当返回要处理的字节数据，或者返回 <code class="docutils literal notranslate"><span class="pre">None</span></code> 来指明这些字节数据应当被丢弃。 返回的字节数据可以与传入的字节数据相同（例如在只执行验证的时候），或者也可以完全不同（例如在可能执行了解密的时候）。</p>
+<p class="translated">要将配置发送到套接字，请读取配置文件并将其作为字节序列发送到套接字，字节序列要以使用 <code class="docutils literal notranslate"><span class="pre">struct.pack('&gt;L',</span> <span class="pre">n)</span></code> 打包为二进制格式的四字节长度的字符串打头。</p>
 <div class="admonition note" id="logging-eval-security">
-<p class="admonition-title">Note</p>
-<p>Because portions of the configuration are passed through
-<a class="reference internal" href="functions.html#eval" title="eval"><code class="xref py py-func docutils literal notranslate"><span class="pre">eval()</span></code></a>, use of this function may open its users to a security risk.
-While the function only binds to a socket on <code class="docutils literal notranslate"><span class="pre">localhost</span></code>, and so does
-not accept connections from remote machines, there are scenarios where
-untrusted code could be run under the account of the process which calls
-<code class="xref py py-func docutils literal notranslate"><span class="pre">listen()</span></code>. Specifically, if the process calling <code class="xref py py-func docutils literal notranslate"><span class="pre">listen()</span></code> runs
-on a multi-user machine where users cannot trust each other, then a
-malicious user could arrange to run essentially arbitrary code in a
-victim user’s process, simply by connecting to the victim’s
-<code class="xref py py-func docutils literal notranslate"><span class="pre">listen()</span></code> socket and sending a configuration which runs whatever
-code the attacker wants to have executed in the victim’s process. This is
-especially easy to do if the default port is used, but not hard even if a
-different port is used. To avoid the risk of this happening, use the
-<code class="docutils literal notranslate"><span class="pre">verify</span></code> argument to <code class="xref py py-func docutils literal notranslate"><span class="pre">listen()</span></code> to prevent unrecognised
-configurations from being applied.</p>
+<p class="admonition-title">备注</p>
+<p class="translated">因为配置的各部分是通过 <a class="reference internal" href="functions.html#eval" title="eval"><code class="xref py py-func docutils literal notranslate"><span class="pre">eval()</span></code></a> 传递的，使用此函数可能让用户面临安全风险。虽然此函数仅绑定到 <code class="docutils literal notranslate"><span class="pre">localhost</span></code> 上的套接字，因此并不接受来自远端机器的连接，但在某些场景中不受信任的代码可以在调用 <a class="reference internal" href="#logging.config.listen" title="logging.config.listen"><code class="xref py py-func docutils literal notranslate"><span class="pre">listen()</span></code></a> 的进程的账户下运行。具体来说，如果如果调用 <code class="xref py py-func docutils literal notranslate"><span class="pre">listen()</span></code> 的进程在用户无法彼此信任的多用户机器上运行，则恶意用户就能简单地通过连接到受害者的 <code class="xref py py-func docutils literal notranslate"><span class="pre">listen()</span></code> 套接字并发送运行攻击者想在受害者的进程上执行的任何代码的配置的方式，安排运行几乎任意的代码。如果是使用默认端口这会特别容易做到，即便使用了不同端口也不难做到。要避免发生这种情况的风险，请在 <code class="xref py py-func docutils literal notranslate"><span class="pre">listen()</span></code> 中使用 <code class="docutils literal notranslate"><span class="pre">verify</span></code> 参数来防止未经认可的配置被应用。</p>
 </div>
 <div class="versionchanged">
-<p><span class="versionmodified changed">Changed in version 3.4: </span>The <code class="docutils literal notranslate"><span class="pre">verify</span></code> argument was added.</p>
+<p><span class="versionmodified changed">在 3.4 版本发生变更: </span>添加了 <code class="docutils literal notranslate"><span class="pre">verify</span></code> 参数。</p>
 </div>
 <div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>If you want to send configurations to the listener which don’t
-disable existing loggers, you will need to use a JSON format for
-the configuration, which will use <a class="reference internal" href="#logging.config.dictConfig" title="logging.config.dictConfig"><code class="xref py py-func docutils literal notranslate"><span class="pre">dictConfig()</span></code></a> for configuration.
-This method allows you to specify <code class="docutils literal notranslate"><span class="pre">disable_existing_loggers</span></code> as
-<code class="docutils literal notranslate"><span class="pre">False</span></code> in the configuration you send.</p>
+<p class="admonition-title">备注</p>
+<p class="translated">如果你希望将配置发送给未禁用现有日志记录器的监听器，你将需要使用 JSON 格式的配置，该格式将使用 <a class="reference internal" href="#logging.config.dictConfig" title="logging.config.dictConfig"><code class="xref py py-func docutils literal notranslate"><span class="pre">dictConfig()</span></code></a> 进行配置。 此方法允许你在你发送的配置中将 <code class="docutils literal notranslate"><span class="pre">disable_existing_loggers</span></code> 指定为 <code class="docutils literal notranslate"><span class="pre">False</span></code>。</p>
 </div>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="logging.config.stopListening">
 <span class="sig-prename descclassname"><span class="pre">logging.config.</span></span><span class="sig-name descname"><span class="pre">stopListening</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#logging.config.stopListening" title="Link to this definition">¶</a></dt>
-<dd><p>Stops the listening server which was created with a call to <a class="reference internal" href="#logging.config.listen" title="logging.config.listen"><code class="xref py py-func docutils literal notranslate"><span class="pre">listen()</span></code></a>.
-This is typically called before calling <code class="xref py py-meth docutils literal notranslate"><span class="pre">join()</span></code> on the return value from
-<code class="xref py py-func docutils literal notranslate"><span class="pre">listen()</span></code>.</p>
+<dd><p class="translated">停止通过对 <a class="reference internal" href="#logging.config.listen" title="logging.config.listen"><code class="xref py py-func docutils literal notranslate"><span class="pre">listen()</span></code></a> 的调用所创建的监听服务器。 此函数的调用通常会先于在 <code class="xref py py-func docutils literal notranslate"><span class="pre">listen()</span></code> 的返回值上调用 <code class="xref py py-meth docutils literal notranslate"><span class="pre">join()</span></code>。</p>
 </dd></dl>
 
 </section>
 <section id="security-considerations">
-<h2>Security considerations<a class="headerlink" href="#security-considerations" title="Link to this heading">¶</a></h2>
-<p>The logging configuration functionality tries to offer convenience, and in part this
-is done by offering the ability to convert text in configuration files into Python
-objects used in logging configuration - for example, as described in
-<a class="reference internal" href="#logging-config-dict-userdef"><span class="std std-ref">User-defined objects</span></a>. However, these same mechanisms (importing
-callables from user-defined modules and calling them with parameters from the
-configuration) could be used to invoke any code you like, and for this reason you
-should treat configuration files from untrusted sources with <em>extreme caution</em> and
-satisfy yourself that nothing bad can happen if you load them, before actually loading
-them.</p>
+<h2 class="translated">安全考量<a class="headerlink" href="#security-considerations" title="Link to this heading">¶</a></h2>
+<p class="translated">日志配置功能试图提供便利，从某种角度来说，这是通过将配置文件中的文本转换为日志配置中使用的 Python 对象来完成的 —— 如 <a class="reference internal" href="#logging-config-dict-userdef"><span class="std std-ref">用户定义对象</span></a> 中所述。但是，这些相同的机制（从用户定义的模块中导入可调用对象并使用配置中的参数调用它们）可用于调用您指定的任何代码，因此您应该*非常谨慎*地处理来自非信任源的配置文件。并且在实际加载前，您应该确信加载不会导致坏事情。</p>
 </section>
 <section id="configuration-dictionary-schema">
-<span id="logging-config-dictschema"></span><h2>Configuration dictionary schema<a class="headerlink" href="#configuration-dictionary-schema" title="Link to this heading">¶</a></h2>
-<p>Describing a logging configuration requires listing the various
-objects to create and the connections between them; for example, you
-may create a handler named ‘console’ and then say that the logger
-named ‘startup’ will send its messages to the ‘console’ handler.
-These objects aren’t limited to those provided by the <a class="reference internal" href="logging.html#module-logging" title="logging: Flexible event logging system for applications."><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging</span></code></a>
-module because you might write your own formatter or handler class.
-The parameters to these classes may also need to include external
-objects such as <code class="docutils literal notranslate"><span class="pre">sys.stderr</span></code>.  The syntax for describing these
-objects and connections is defined in <a class="reference internal" href="#logging-config-dict-connections"><span class="std std-ref">Object connections</span></a>
-below.</p>
+<span id="logging-config-dictschema"></span><h2 class="translated">配置字典架构<a class="headerlink" href="#configuration-dictionary-schema" title="Link to this heading">¶</a></h2>
+<p class="translated">描述日志记录配置需要列出要创建的不同对象及它们之间的连接；例如，你可以创建一个名为 'console' 的处理器，然后名为 'startup' 的日志记录器将可以把它的消息发送给 'console' 处理器。 这些对象并不仅限于 <a class="reference internal" href="logging.html#module-logging" title="logging: Flexible event logging system for applications."><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging</span></code></a> 模块所提供的对象，因为你还可以编写你自己的格式化或处理器类。 这些类的形参可能还需要包括 <code class="docutils literal notranslate"><span class="pre">sys.stderr</span></code> 这样的外部对象。 描述这些对象和连接的语法会在下面的 <a class="reference internal" href="#logging-config-dict-connections"><span class="std std-ref">对象连接</span></a> 中定义。</p>
 <section id="dictionary-schema-details">
-<h3>Dictionary Schema Details<a class="headerlink" href="#dictionary-schema-details" title="Link to this heading">¶</a></h3>
-<p>The dictionary passed to <a class="reference internal" href="#logging.config.dictConfig" title="logging.config.dictConfig"><code class="xref py py-func docutils literal notranslate"><span class="pre">dictConfig()</span></code></a> must contain the following
-keys:</p>
+<h3 class="translated">字典架构细节<a class="headerlink" href="#dictionary-schema-details" title="Link to this heading">¶</a></h3>
+<p class="translated">传给 <a class="reference internal" href="#logging.config.dictConfig" title="logging.config.dictConfig"><code class="xref py py-func docutils literal notranslate"><span class="pre">dictConfig()</span></code></a> 的字典必须包含以下的键:</p>
 <ul class="simple">
-<li><p><em>version</em> - to be set to an integer value representing the schema
-version.  The only valid value at present is 1, but having this key
-allows the schema to evolve while still preserving backwards
-compatibility.</p></li>
+<li><p class="translated"><em>version</em> - 应设为代表架构版本的整数值。 目前唯一有效的值是 1，使用此键可允许架构在继续演化的同时保持向下兼容性。</p></li>
 </ul>
-<p>All other keys are optional, but if present they will be interpreted
-as described below.  In all cases below where a ‘configuring dict’ is
-mentioned, it will be checked for the special <code class="docutils literal notranslate"><span class="pre">'()'</span></code> key to see if a
-custom instantiation is required.  If so, the mechanism described in
-<a class="reference internal" href="#logging-config-dict-userdef"><span class="std std-ref">User-defined objects</span></a> below is used to create an instance;
-otherwise, the context is used to determine what to instantiate.</p>
+<p class="translated">所有其他键都是可选项，但如存在它们将根据下面的描述来解读。 在下面提到 'configuring dict' 的所有情况下，都将检查它的特殊键 <code class="docutils literal notranslate"><span class="pre">'()'</span></code> 以确定是否需要自定义实例化。 如果需要，则会使用下面 <a class="reference internal" href="#logging-config-dict-userdef"><span class="std std-ref">用户定义对象</span></a> 所描述的机制来创建一个实例；否则，会使用上下文来确定要实例化的对象。</p>
 <ul id="logging-config-dictschema-formatters">
-<li><p><em>formatters</em> - the corresponding value will be a dict in which each
-key is a formatter id and each value is a dict describing how to
-configure the corresponding <a class="reference internal" href="logging.html#logging.Formatter" title="logging.Formatter"><code class="xref py py-class docutils literal notranslate"><span class="pre">Formatter</span></code></a> instance.</p>
-<p>The configuring dict is searched for the following optional keys
-which correspond to the arguments passed to create a
-<a class="reference internal" href="logging.html#logging.Formatter" title="logging.Formatter"><code class="xref py py-class docutils literal notranslate"><span class="pre">Formatter</span></code></a> object:</p>
+<li><p class="translated"><em>formatters</em> - 对应的值将是一个字典，其中每个键是一个格式器 ID 而每个值则是一个描述如何配置相应 <a class="reference internal" href="logging.html#logging.Formatter" title="logging.Formatter"><code class="xref py py-class docutils literal notranslate"><span class="pre">Formatter</span></code></a> 实例的字典。</p>
+<p class="translated">在配置字典中搜索以下可选键，这些键对应于创建 <a class="reference internal" href="logging.html#logging.Formatter" title="logging.Formatter"><code class="xref py py-class docutils literal notranslate"><span class="pre">Formatter</span></code></a> 对象时传入的参数。:</p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">format</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">datefmt</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">style</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">validate</span></code> (since version &gt;=3.8)</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">defaults</span></code> (since version &gt;=3.12)</p></li>
+<li><p class="translated"><code class="docutils literal notranslate"><span class="pre">format</span></code></p></li>
+<li><p class="translated"><code class="docutils literal notranslate"><span class="pre">datefmt</span></code></p></li>
+<li><p class="translated"><code class="docutils literal notranslate"><span class="pre">style</span></code></p></li>
+<li><p class="translated"><code class="docutils literal notranslate"><span class="pre">validate</span></code> (从版本 &gt;=3.8 起)</p></li>
+<li><p class="translated"><code class="docutils literal notranslate"><span class="pre">defaults</span></code> (版本 &gt;=3.12)</p></li>
 </ul>
-<p>An optional <code class="docutils literal notranslate"><span class="pre">class</span></code> key indicates the name of the formatter’s
-class (as a dotted module and class name).  The instantiation
-arguments are as for <a class="reference internal" href="logging.html#logging.Formatter" title="logging.Formatter"><code class="xref py py-class docutils literal notranslate"><span class="pre">Formatter</span></code></a>, thus this key is
-most useful for instantiating a customised subclass of
-<code class="xref py py-class docutils literal notranslate"><span class="pre">Formatter</span></code>.  For example, the alternative class
-might present exception tracebacks in an expanded or condensed
-format.  If your formatter requires different or extra configuration
-keys, you should use <a class="reference internal" href="#logging-config-dict-userdef"><span class="std std-ref">User-defined objects</span></a>.</p>
+<p class="translated">可选的 <code class="docutils literal notranslate"><span class="pre">class</span></code> 键指定格式化器类的名称（形式为带点号的模块名和类名）。 实例化的参数与 <a class="reference internal" href="logging.html#logging.Formatter" title="logging.Formatter"><code class="xref py py-class docutils literal notranslate"><span class="pre">Formatter</span></code></a> 的相同，因此这个键对于实例化自定义的 <code class="xref py py-class docutils literal notranslate"><span class="pre">Formatter</span></code> 子类最为有用。 如果，替代类可能 会以扩展和精简格式呈现异常回溯信息。 如果你的格式化器需要不同的或额外的配置键，你应当使用 <a class="reference internal" href="#logging-config-dict-userdef"><span class="std std-ref">用户定义对象</span></a>。</p>
 </li>
-<li><p><em>filters</em> - the corresponding value will be a dict in which each key
-is a filter id and each value is a dict describing how to configure
-the corresponding Filter instance.</p>
-<p>The configuring dict is searched for the key <code class="docutils literal notranslate"><span class="pre">name</span></code> (defaulting to the
-empty string) and this is used to construct a <a class="reference internal" href="logging.html#logging.Filter" title="logging.Filter"><code class="xref py py-class docutils literal notranslate"><span class="pre">logging.Filter</span></code></a>
-instance.</p>
+<li><p class="translated"><em>filters</em> - 对应的值将是一个字典，其中每个键是一个过滤器 ID 而每个值则是一个描述如何配置相应 Filter 实例的字典。</p>
+<p class="translated">将在配置字典中搜索键 <code class="docutils literal notranslate"><span class="pre">name</span></code> (默认值为空字符串) 并且该键会被用于构造 <a class="reference internal" href="logging.html#logging.Filter" title="logging.Filter"><code class="xref py py-class docutils literal notranslate"><span class="pre">logging.Filter</span></code></a> 实例。</p>
 </li>
-<li><p><em>handlers</em> - the corresponding value will be a dict in which each
-key is a handler id and each value is a dict describing how to
-configure the corresponding Handler instance.</p>
-<p>The configuring dict is searched for the following keys:</p>
+<li><p class="translated"><em>handlers</em> - 对应的值将是一个字典，其中每个键是一个处理器 ID 而每个值则是一个描述如何配置相应 Handler 实例的字典。</p>
+<p class="translated">将在配置字典中搜索下列键:</p>
 <ul>
-<li><p><code class="docutils literal notranslate"><span class="pre">class</span></code> (mandatory).  This is the fully qualified name of the
-handler class.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">level</span></code> (optional).  The level of the handler.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">formatter</span></code> (optional).  The id of the formatter for this
-handler.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">filters</span></code> (optional).  A list of ids of the filters for this
-handler.</p>
+<li><p class="translated"><code class="docutils literal notranslate"><span class="pre">class</span></code> (强制)。 这是处理器类的完整限定名称。</p></li>
+<li><p class="translated"><code class="docutils literal notranslate"><span class="pre">level</span></code> (可选)。 处理器的级别。</p></li>
+<li><p class="translated"><code class="docutils literal notranslate"><span class="pre">formatter</span></code> (可选)。 处理器所对应格式化器的 ID。</p></li>
+<li><p class="translated"><code class="docutils literal notranslate"><span class="pre">filters</span></code> (可选)。 由处理器所对应过滤器的 ID 组成的列表。</p>
 <div class="versionchanged">
-<p><span class="versionmodified changed">Changed in version 3.11: </span><code class="docutils literal notranslate"><span class="pre">filters</span></code> can take filter instances in addition to ids.</p>
+<p><span class="versionmodified changed">在 3.11 版本发生变更: </span><code class="docutils literal notranslate"><span class="pre">filters</span></code> 除了 id 以外还能接受 filter 实例。</p>
 </div>
 </li>
 </ul>
-<p>All <em>other</em> keys are passed through as keyword arguments to the
-handler’s constructor.  For example, given the snippet:</p>
-<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">handlers</span><span class="p">:</span>
+<p class="translated">所有 <em>其他</em> 键会被作为关键字参数传递给处理器类的构造器。 例如，给定如下配置:</p>
+<div class="translated highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">handlers</span><span class="p">:</span>
 <span class="w">  </span><span class="nt">console</span><span class="p">:</span>
 <span class="w">    </span><span class="nt">class </span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">logging.StreamHandler</span>
 <span class="w">    </span><span class="nt">formatter</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">brief</span>
@@ -523,140 +374,67 @@ handler’s constructor.  For example, given the snippet:</p>
 <span class="w">    </span><span class="nt">backupCount</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3</span>
 </pre></div>
 </div>
-<p>the handler with id <code class="docutils literal notranslate"><span class="pre">console</span></code> is instantiated as a
-<a class="reference internal" href="logging.handlers.html#logging.StreamHandler" title="logging.StreamHandler"><code class="xref py py-class docutils literal notranslate"><span class="pre">logging.StreamHandler</span></code></a>, using <code class="docutils literal notranslate"><span class="pre">sys.stdout</span></code> as the underlying
-stream.  The handler with id <code class="docutils literal notranslate"><span class="pre">file</span></code> is instantiated as a
-<a class="reference internal" href="logging.handlers.html#logging.handlers.RotatingFileHandler" title="logging.handlers.RotatingFileHandler"><code class="xref py py-class docutils literal notranslate"><span class="pre">logging.handlers.RotatingFileHandler</span></code></a> with the keyword arguments
-<code class="docutils literal notranslate"><span class="pre">filename='logconfig.log',</span> <span class="pre">maxBytes=1024,</span> <span class="pre">backupCount=3</span></code>.</p>
+<p class="translated">ID 为 <code class="docutils literal notranslate"><span class="pre">console</span></code> 的处理器会被实例化为 <a class="reference internal" href="logging.handlers.html#logging.StreamHandler" title="logging.StreamHandler"><code class="xref py py-class docutils literal notranslate"><span class="pre">logging.StreamHandler</span></code></a>，并使用 <code class="docutils literal notranslate"><span class="pre">sys.stdout</span></code> 作为下层流。 ID 为 <code class="docutils literal notranslate"><span class="pre">file</span></code> 的处理器会被实例化为 <a class="reference internal" href="logging.handlers.html#logging.handlers.RotatingFileHandler" title="logging.handlers.RotatingFileHandler"><code class="xref py py-class docutils literal notranslate"><span class="pre">logging.handlers.RotatingFileHandler</span></code></a>，并附带关键字参数 <code class="docutils literal notranslate"><span class="pre">filename='logconfig.log',</span> <span class="pre">maxBytes=1024,</span> <span class="pre">backupCount=3</span></code>。</p>
 </li>
-<li><p><em>loggers</em> - the corresponding value will be a dict in which each key
-is a logger name and each value is a dict describing how to
-configure the corresponding Logger instance.</p>
-<p>The configuring dict is searched for the following keys:</p>
+<li><p class="translated"><em>loggers</em> - 对应的值将是一个字典，其中每个键是一个日志记录器名称而每个值则是一个描述如何配置相应 Logger 实例的字典。</p>
+<p class="translated">将在配置字典中搜索下列键:</p>
 <ul>
-<li><p><code class="docutils literal notranslate"><span class="pre">level</span></code> (optional).  The level of the logger.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">propagate</span></code> (optional).  The propagation setting of the logger.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">filters</span></code> (optional).  A list of ids of the filters for this
-logger.</p>
+<li><p class="translated"><code class="docutils literal notranslate"><span class="pre">level</span></code> (可选)。 日志记录器的级别。</p></li>
+<li><p class="translated"><code class="docutils literal notranslate"><span class="pre">propagate</span></code> (可选)。 日志记录器的传播设置。</p></li>
+<li><p class="translated"><code class="docutils literal notranslate"><span class="pre">filters</span></code> (可选)。 由日志记录器对应过滤器的 ID 组成的列表。</p>
 <div class="versionchanged">
-<p><span class="versionmodified changed">Changed in version 3.11: </span><code class="docutils literal notranslate"><span class="pre">filters</span></code> can take filter instances in addition to ids.</p>
+<p><span class="versionmodified changed">在 3.11 版本发生变更: </span><code class="docutils literal notranslate"><span class="pre">filters</span></code> 除了 id 以外还能接受 filter 实例。</p>
 </div>
 </li>
-<li><p><code class="docutils literal notranslate"><span class="pre">handlers</span></code> (optional).  A list of ids of the handlers for this
-logger.</p></li>
+<li><p class="translated"><code class="docutils literal notranslate"><span class="pre">handlers</span></code> (可选)。 由日志记录器对应处理器的 ID 组成的列表。</p></li>
 </ul>
-<p>The specified loggers will be configured according to the level,
-propagation, filters and handlers specified.</p>
+<p class="translated">指定的记录器将根据指定的级别、传播、过滤器和处理器来配置。</p>
 </li>
-<li><p><em>root</em> - this will be the configuration for the root logger.
-Processing of the configuration will be as for any logger, except
-that the <code class="docutils literal notranslate"><span class="pre">propagate</span></code> setting will not be applicable.</p></li>
-<li><p><em>incremental</em> - whether the configuration is to be interpreted as
-incremental to the existing configuration.  This value defaults to
-<code class="docutils literal notranslate"><span class="pre">False</span></code>, which means that the specified configuration replaces the
-existing configuration with the same semantics as used by the
-existing <a class="reference internal" href="#logging.config.fileConfig" title="logging.config.fileConfig"><code class="xref py py-func docutils literal notranslate"><span class="pre">fileConfig()</span></code></a> API.</p>
-<p>If the specified value is <code class="docutils literal notranslate"><span class="pre">True</span></code>, the configuration is processed
-as described in the section on <a class="reference internal" href="#logging-config-dict-incremental"><span class="std std-ref">Incremental Configuration</span></a>.</p>
+<li><p class="translated"><em>root</em> - 这将成为根日志记录器对应的配置。 配置的处理方式将与所有日志记录器一致，除了 <code class="docutils literal notranslate"><span class="pre">propagate</span></code> 设置将不可用之外。</p></li>
+<li><p class="translated"><em>incremental</em> - 配置是否要被解读为在现有配置上新增。 该值默认为 <code class="docutils literal notranslate"><span class="pre">False</span></code>，这意味着指定的配置将以与当前 <a class="reference internal" href="#logging.config.fileConfig" title="logging.config.fileConfig"><code class="xref py py-func docutils literal notranslate"><span class="pre">fileConfig()</span></code></a> API 所使用的相同语义来替代现有的配置。</p>
+<p class="translated">如果指定的值为 <code class="docutils literal notranslate"><span class="pre">True</span></code>，配置会按照 <a class="reference internal" href="#logging-config-dict-incremental"><span class="std std-ref">增量配置</span></a> 部分所描述的方式来处理。</p>
 </li>
-<li><p><em>disable_existing_loggers</em> - whether any existing non-root loggers are
-to be disabled. This setting mirrors the parameter of the same name in
-<a class="reference internal" href="#logging.config.fileConfig" title="logging.config.fileConfig"><code class="xref py py-func docutils literal notranslate"><span class="pre">fileConfig()</span></code></a>. If absent, this parameter defaults to <code class="docutils literal notranslate"><span class="pre">True</span></code>.
-This value is ignored if <em>incremental</em> is <code class="docutils literal notranslate"><span class="pre">True</span></code>.</p></li>
+<li><p class="translated"><em>disable_existing_loggers</em> - 是否要禁用任何现有的非根日志记录器。 该设置对应于 <a class="reference internal" href="#logging.config.fileConfig" title="logging.config.fileConfig"><code class="xref py py-func docutils literal notranslate"><span class="pre">fileConfig()</span></code></a> 中的同名形参。 如果省略，则此形参默认为 <code class="docutils literal notranslate"><span class="pre">True</span></code>。 如果 <em>incremental</em> 为 <code class="docutils literal notranslate"><span class="pre">True</span></code> 则该省会被忽略。</p></li>
 </ul>
 </section>
 <section id="incremental-configuration">
-<span id="logging-config-dict-incremental"></span><h3>Incremental Configuration<a class="headerlink" href="#incremental-configuration" title="Link to this heading">¶</a></h3>
-<p>It is difficult to provide complete flexibility for incremental
-configuration.  For example, because objects such as filters
-and formatters are anonymous, once a configuration is set up, it is
-not possible to refer to such anonymous objects when augmenting a
-configuration.</p>
-<p>Furthermore, there is not a compelling case for arbitrarily altering
-the object graph of loggers, handlers, filters, formatters at
-run-time, once a configuration is set up; the verbosity of loggers and
-handlers can be controlled just by setting levels (and, in the case of
-loggers, propagation flags).  Changing the object graph arbitrarily in
-a safe way is problematic in a multi-threaded environment; while not
-impossible, the benefits are not worth the complexity it adds to the
-implementation.</p>
-<p>Thus, when the <code class="docutils literal notranslate"><span class="pre">incremental</span></code> key of a configuration dict is present
-and is <code class="docutils literal notranslate"><span class="pre">True</span></code>, the system will completely ignore any <code class="docutils literal notranslate"><span class="pre">formatters</span></code> and
-<code class="docutils literal notranslate"><span class="pre">filters</span></code> entries, and process only the <code class="docutils literal notranslate"><span class="pre">level</span></code>
-settings in the <code class="docutils literal notranslate"><span class="pre">handlers</span></code> entries, and the <code class="docutils literal notranslate"><span class="pre">level</span></code> and
-<code class="docutils literal notranslate"><span class="pre">propagate</span></code> settings in the <code class="docutils literal notranslate"><span class="pre">loggers</span></code> and <code class="docutils literal notranslate"><span class="pre">root</span></code> entries.</p>
-<p>Using a value in the configuration dict lets configurations to be sent
-over the wire as pickled dicts to a socket listener. Thus, the logging
-verbosity of a long-running application can be altered over time with
-no need to stop and restart the application.</p>
+<span id="logging-config-dict-incremental"></span><h3 class="translated">增量配置<a class="headerlink" href="#incremental-configuration" title="Link to this heading">¶</a></h3>
+<p class="translated">为增量配置提供完全的灵活性是很困难的。 例如，由于过滤器和格式化器这样的对象是匿名的，一旦完成配置，在增加配置时就不可能引用这些匿名对象。</p>
+<p class="translated">此外，一旦完成了配置，在运行时任意改变日志记录器、处理器、过滤器、格式化器的对象图就不是很有必要；日志记录器和处理器的详细程度只需通过设置级别即可实现控制（对于日志记录器则可设置传播旗标）。 在多线程环境中以安全的方式任意改变对象图也许会导致问题；虽然并非不可能，但这样做的好处不足以抵销其所增加的实现复杂度。</p>
+<p class="translated">这样，当配置字典的 <code class="docutils literal notranslate"><span class="pre">incremental</span></code> 键存在且为 <code class="docutils literal notranslate"><span class="pre">True</span></code> 时，系统将完全忽略任何 <code class="docutils literal notranslate"><span class="pre">formatters</span></code> 和 <code class="docutils literal notranslate"><span class="pre">filters</span></code> 条目，并仅会处理 <code class="docutils literal notranslate"><span class="pre">handlers</span></code> 条目中的 <code class="docutils literal notranslate"><span class="pre">level</span></code> 设置，以及 <code class="docutils literal notranslate"><span class="pre">loggers</span></code> 和 <code class="docutils literal notranslate"><span class="pre">root</span></code> 条目中的 <code class="docutils literal notranslate"><span class="pre">level</span></code> 和 <code class="docutils literal notranslate"><span class="pre">propagate</span></code> 设置。</p>
+<p class="translated">使用配置字典中的值可让配置以封存字典对象的形式通过线路传送给套接字监听器。 这样，长时间运行的应用程序的日志记录的详细程度可随时间改变而无须停止并重新启动应用程序。</p>
 </section>
 <section id="object-connections">
-<span id="logging-config-dict-connections"></span><h3>Object connections<a class="headerlink" href="#object-connections" title="Link to this heading">¶</a></h3>
-<p>The schema describes a set of logging objects - loggers,
-handlers, formatters, filters - which are connected to each other in
-an object graph.  Thus, the schema needs to represent connections
-between the objects.  For example, say that, once configured, a
-particular logger has attached to it a particular handler.  For the
-purposes of this discussion, we can say that the logger represents the
-source, and the handler the destination, of a connection between the
-two.  Of course in the configured objects this is represented by the
-logger holding a reference to the handler.  In the configuration dict,
-this is done by giving each destination object an id which identifies
-it unambiguously, and then using the id in the source object’s
-configuration to indicate that a connection exists between the source
-and the destination object with that id.</p>
-<p>So, for example, consider the following YAML snippet:</p>
-<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">formatters</span><span class="p">:</span>
+<span id="logging-config-dict-connections"></span><h3 class="translated">对象连接<a class="headerlink" href="#object-connections" title="Link to this heading">¶</a></h3>
+<p class="translated">该架构描述了一组日志记录对象 —— 日志记录器、处理器、格式化器、过滤器 —— 它们在对象图中彼此连接。 因此，该架构需要能表示对象之间的连接。 例如，在配置完成后，一个特定的日志记录器关联到了一个特定的处理器。 出于讨论的目的，我们可以说该日志记录器代表两者间连接的源头，而处理器则代表对应的目标。 当然在已配置对象中这是由包含对处理器的引用的日志记录器来代表的。 在配置字典中，这是通过给每个目标对象一个 ID 来无歧义地标识它，然后在源头对象中使用该 ID 来实现的。</p>
+<p class="translated">因此，举例来说，考虑以下 YAML 代码段:</p>
+<div class="translated highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">formatters</span><span class="p">:</span>
 <span class="w">  </span><span class="nt">brief</span><span class="p">:</span>
-<span class="w">    </span><span class="c1"># configuration for formatter with id &#39;brief&#39; goes here</span>
+<span class="w">    </span><span class="c1"># 以下为针对格式化器 id &#39;brief&#39; 的配置</span>
 <span class="w">  </span><span class="nt">precise</span><span class="p">:</span>
-<span class="w">    </span><span class="c1"># configuration for formatter with id &#39;precise&#39; goes here</span>
+<span class="w">    </span><span class="c1"># 以下为针对格式化器 &#39;precise&#39; 的配置</span>
 <span class="nt">handlers</span><span class="p">:</span>
-<span class="w">  </span><span class="nt">h1</span><span class="p">:</span><span class="w"> </span><span class="c1">#This is an id</span>
-<span class="w">   </span><span class="c1"># configuration of handler with id &#39;h1&#39; goes here</span>
+<span class="w">  </span><span class="nt">h1</span><span class="p">:</span><span class="w"> </span><span class="c1"># 这是一个 id</span>
+<span class="w">   </span><span class="c1"># 以下是针对处理器 id &#39;h1&#39; 的配置</span>
 <span class="w">   </span><span class="nt">formatter</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">brief</span>
-<span class="w">  </span><span class="nt">h2</span><span class="p">:</span><span class="w"> </span><span class="c1">#This is another id</span>
-<span class="w">   </span><span class="c1"># configuration of handler with id &#39;h2&#39; goes here</span>
+<span class="w">  </span><span class="nt">h2</span><span class="p">:</span><span class="w"> </span><span class="c1"># 这是另一个 id</span>
+<span class="w">   </span><span class="c1"># 以下是针对处理器 id &#39;h2&#39; 的配置</span>
 <span class="w">   </span><span class="nt">formatter</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">precise</span>
 <span class="nt">loggers</span><span class="p">:</span>
 <span class="w">  </span><span class="nt">foo.bar.baz</span><span class="p">:</span>
-<span class="w">    </span><span class="c1"># other configuration for logger &#39;foo.bar.baz&#39;</span>
+<span class="w">    </span><span class="c1"># 针对日志记录器 &#39;foo.bar.baz&#39; 的其它配置</span>
 <span class="w">    </span><span class="nt">handlers</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">h1</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">h2</span><span class="p p-Indicator">]</span>
 </pre></div>
 </div>
-<p>(Note: YAML used here because it’s a little more readable than the
-equivalent Python source form for the dictionary.)</p>
-<p>The ids for loggers are the logger names which would be used
-programmatically to obtain a reference to those loggers, e.g.
-<code class="docutils literal notranslate"><span class="pre">foo.bar.baz</span></code>.  The ids for Formatters and Filters can be any string
-value (such as <code class="docutils literal notranslate"><span class="pre">brief</span></code>, <code class="docutils literal notranslate"><span class="pre">precise</span></code> above) and they are transient,
-in that they are only meaningful for processing the configuration
-dictionary and used to determine connections between objects, and are
-not persisted anywhere when the configuration call is complete.</p>
-<p>The above snippet indicates that logger named <code class="docutils literal notranslate"><span class="pre">foo.bar.baz</span></code> should
-have two handlers attached to it, which are described by the handler
-ids <code class="docutils literal notranslate"><span class="pre">h1</span></code> and <code class="docutils literal notranslate"><span class="pre">h2</span></code>. The formatter for <code class="docutils literal notranslate"><span class="pre">h1</span></code> is that described by id
-<code class="docutils literal notranslate"><span class="pre">brief</span></code>, and the formatter for <code class="docutils literal notranslate"><span class="pre">h2</span></code> is that described by id
-<code class="docutils literal notranslate"><span class="pre">precise</span></code>.</p>
+<p class="translated">（注：这里使用 YAML 是因为它的可读性比表示字典的等价 Python 源码形式更好。）</p>
+<p class="translated">日志记录器 ID 就是日志记录器的名称，它会在程序中被用来获取对日志记录器的引用，例如 <code class="docutils literal notranslate"><span class="pre">foo.bar.baz</span></code>。 格式化器和过滤器的 ID 可以是任意字符串值 (例如上面的 <code class="docutils literal notranslate"><span class="pre">brief</span></code>, <code class="docutils literal notranslate"><span class="pre">precise</span></code>) 并且它们是瞬态的，因为它们仅对处理配置字典有意义并会被用来确定对象之间的连接，而当配置调用完成时不会在任何地方保留。</p>
+<p class="translated">上面的代码片段指明名为 <code class="docutils literal notranslate"><span class="pre">foo.bar.baz</span></code> 的日志记录器应当关联到两个处理器，它们的 ID 是 <code class="docutils literal notranslate"><span class="pre">h1</span></code> 和 <code class="docutils literal notranslate"><span class="pre">h2</span></code>。 <code class="docutils literal notranslate"><span class="pre">h1</span></code> 的格式化器的 ID 是 <code class="docutils literal notranslate"><span class="pre">brief</span></code>，而 <code class="docutils literal notranslate"><span class="pre">h2</span></code> 的格式化器的 ID 是 <code class="docutils literal notranslate"><span class="pre">precise</span></code>。</p>
 </section>
 <section id="user-defined-objects">
-<span id="logging-config-dict-userdef"></span><h3>User-defined objects<a class="headerlink" href="#user-defined-objects" title="Link to this heading">¶</a></h3>
-<p>The schema supports user-defined objects for handlers, filters and
-formatters.  (Loggers do not need to have different types for
-different instances, so there is no support in this configuration
-schema for user-defined logger classes.)</p>
-<p>Objects to be configured are described by dictionaries
-which detail their configuration.  In some places, the logging system
-will be able to infer from the context how an object is to be
-instantiated, but when a user-defined object is to be instantiated,
-the system will not know how to do this.  In order to provide complete
-flexibility for user-defined object instantiation, the user needs
-to provide a ‘factory’ - a callable which is called with a
-configuration dictionary and which returns the instantiated object.
-This is signalled by an absolute import path to the factory being
-made available under the special key <code class="docutils literal notranslate"><span class="pre">'()'</span></code>.  Here’s a concrete
-example:</p>
-<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">formatters</span><span class="p">:</span>
+<span id="logging-config-dict-userdef"></span><h3 class="translated">用户定义对象<a class="headerlink" href="#user-defined-objects" title="Link to this heading">¶</a></h3>
+<p class="translated">此架构支持用户定义对象作为处理器、过滤器和格式化器。 （日志记录器的不同实例不需要具有不同类型，因此这个配置架构并不支持用户定义日志记录器类。）</p>
+<p class="translated">要配置的对象是由字典描述的，其中包含它们的配置详情。 在某些地方，日志记录系统将能够从上下文中推断出如何实例化一个对象，但是当要实例化一个用户自定义对象时，系统将不知道要如何做。 为了提供用户自定义对象实例化的完全灵活性，用户需要提供一个‘工厂’函数 —— 即在调用时传入配置字典并返回实例化对象的可调用对象。 这是用一个通过特殊键 <code class="docutils literal notranslate"><span class="pre">'()'</span></code> 来访问的工厂函数的绝对导入路径来标示的。 下面是一个实际的例子:</p>
+<div class="translated highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">formatters</span><span class="p">:</span>
 <span class="w">  </span><span class="nt">brief</span><span class="p">:</span>
 <span class="w">    </span><span class="nt">format</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;%(message)s&#39;</span>
 <span class="w">  </span><span class="nt">default</span><span class="p">:</span>
@@ -669,31 +447,21 @@ example:</p>
 <span class="w">      </span><span class="nt">answer</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">42</span>
 </pre></div>
 </div>
-<p>The above YAML snippet defines three formatters.  The first, with id
-<code class="docutils literal notranslate"><span class="pre">brief</span></code>, is a standard <a class="reference internal" href="logging.html#logging.Formatter" title="logging.Formatter"><code class="xref py py-class docutils literal notranslate"><span class="pre">logging.Formatter</span></code></a> instance with the
-specified format string.  The second, with id <code class="docutils literal notranslate"><span class="pre">default</span></code>, has a
-longer format and also defines the time format explicitly, and will
-result in a <code class="xref py py-class docutils literal notranslate"><span class="pre">logging.Formatter</span></code> initialized with those two format
-strings.  Shown in Python source form, the <code class="docutils literal notranslate"><span class="pre">brief</span></code> and <code class="docutils literal notranslate"><span class="pre">default</span></code>
-formatters have configuration sub-dictionaries:</p>
-<div class="highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<p class="translated">上面的 YAML 代码片段定义了三个格式化器。 第一个的 ID 为 <code class="docutils literal notranslate"><span class="pre">brief</span></code>，是带有特殊格式字符串的标准 <a class="reference internal" href="logging.html#logging.Formatter" title="logging.Formatter"><code class="xref py py-class docutils literal notranslate"><span class="pre">logging.Formatter</span></code></a> 实例。 第二个的 ID 为 <code class="docutils literal notranslate"><span class="pre">default</span></code>，具有更长的格式同时还显式地定义了时间格式，并将最终实例化一个带有这两个格式字符串的 <code class="xref py py-class docutils literal notranslate"><span class="pre">logging.Formatter</span></code>。 以 Python 源代码形式显示的 <code class="docutils literal notranslate"><span class="pre">brief</span></code> 和 <code class="docutils literal notranslate"><span class="pre">default</span></code> 格式化器分别具有下列配置子字典:</p>
+<div class="translated highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
   <span class="s1">&#39;format&#39;</span> <span class="p">:</span> <span class="s1">&#39;</span><span class="si">%(message)s</span><span class="s1">&#39;</span>
 <span class="p">}</span>
 </pre></div>
 </div>
-<p>and:</p>
-<div class="highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<p class="translated">和:</p>
+<div class="translated highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
   <span class="s1">&#39;format&#39;</span> <span class="p">:</span> <span class="s1">&#39;</span><span class="si">%(asctime)s</span><span class="s1"> </span><span class="si">%(levelname)-8s</span><span class="s1"> </span><span class="si">%(name)-15s</span><span class="s1"> </span><span class="si">%(message)s</span><span class="s1">&#39;</span><span class="p">,</span>
   <span class="s1">&#39;datefmt&#39;</span> <span class="p">:</span> <span class="s1">&#39;%Y-%m-</span><span class="si">%d</span><span class="s1"> %H:%M:%S&#39;</span>
 <span class="p">}</span>
 </pre></div>
 </div>
-<p>respectively, and as these dictionaries do not contain the special key
-<code class="docutils literal notranslate"><span class="pre">'()'</span></code>, the instantiation is inferred from the context: as a result,
-standard <a class="reference internal" href="logging.html#logging.Formatter" title="logging.Formatter"><code class="xref py py-class docutils literal notranslate"><span class="pre">logging.Formatter</span></code></a> instances are created.  The
-configuration sub-dictionary for the third formatter, with id
-<code class="docutils literal notranslate"><span class="pre">custom</span></code>, is:</p>
-<div class="highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<p class="translated">并且由于这些字典不包含特殊键 <code class="docutils literal notranslate"><span class="pre">'()'</span></code>，实例化方式是从上下文中推断出来的：结果会创建标准的 <a class="reference internal" href="logging.html#logging.Formatter" title="logging.Formatter"><code class="xref py py-class docutils literal notranslate"><span class="pre">logging.Formatter</span></code></a> 实例。 第三个格式器的 ID 为 <code class="docutils literal notranslate"><span class="pre">custom</span></code>，对应配置子字典为:</p>
+<div class="translated highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
   <span class="s1">&#39;()&#39;</span> <span class="p">:</span> <span class="s1">&#39;my.package.customFormatterFactory&#39;</span><span class="p">,</span>
   <span class="s1">&#39;bar&#39;</span> <span class="p">:</span> <span class="s1">&#39;baz&#39;</span><span class="p">,</span>
   <span class="s1">&#39;spam&#39;</span> <span class="p">:</span> <span class="mf">99.9</span><span class="p">,</span>
@@ -701,38 +469,20 @@ configuration sub-dictionary for the third formatter, with id
 <span class="p">}</span>
 </pre></div>
 </div>
-<p>and this contains the special key <code class="docutils literal notranslate"><span class="pre">'()'</span></code>, which means that
-user-defined instantiation is wanted.  In this case, the specified
-factory callable will be used. If it is an actual callable it will be
-used directly - otherwise, if you specify a string (as in the example)
-the actual callable will be located using normal import mechanisms.
-The callable will be called with the <strong>remaining</strong> items in the
-configuration sub-dictionary as keyword arguments.  In the above
-example, the formatter with id <code class="docutils literal notranslate"><span class="pre">custom</span></code> will be assumed to be
-returned by the call:</p>
-<div class="highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="n">my</span><span class="o">.</span><span class="n">package</span><span class="o">.</span><span class="n">customFormatterFactory</span><span class="p">(</span><span class="n">bar</span><span class="o">=</span><span class="s1">&#39;baz&#39;</span><span class="p">,</span> <span class="n">spam</span><span class="o">=</span><span class="mf">99.9</span><span class="p">,</span> <span class="n">answer</span><span class="o">=</span><span class="mi">42</span><span class="p">)</span>
+<p class="translated">并且它包含特殊键 <code class="docutils literal notranslate"><span class="pre">'()'</span></code>，这意味着需要用户自定义实例化方式。 在此情况下，将使用指定的工厂可调用对象。 如果它本身就是一个可调用对象则将被直接使用 —— 否则如果你指定了一个字符串（如这个例子所示）则将使用正常的导入机制来定位实例的可调用对象。 调用该可调用对象将传入配置子字典中 <strong>剩余的</strong> 条目作为关键字参数。 在上面的例子中，调用将预期返回 ID 为 <code class="docutils literal notranslate"><span class="pre">custom</span></code> 的格式化器:</p>
+<div class="translated highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="n">my</span><span class="o">.</span><span class="n">package</span><span class="o">.</span><span class="n">customFormatterFactory</span><span class="p">(</span><span class="n">bar</span><span class="o">=</span><span class="s1">&#39;baz&#39;</span><span class="p">,</span> <span class="n">spam</span><span class="o">=</span><span class="mf">99.9</span><span class="p">,</span> <span class="n">answer</span><span class="o">=</span><span class="mi">42</span><span class="p">)</span>
 </pre></div>
 </div>
 <div class="admonition warning">
-<p class="admonition-title">Warning</p>
-<p>The values for keys such as <code class="docutils literal notranslate"><span class="pre">bar</span></code>, <code class="docutils literal notranslate"><span class="pre">spam</span></code> and <code class="docutils literal notranslate"><span class="pre">answer</span></code> in
-the above example should not be configuration dictionaries or references such
-as <code class="docutils literal notranslate"><span class="pre">cfg://foo</span></code> or <code class="docutils literal notranslate"><span class="pre">ext://bar</span></code>, because they will not be processed by the
-configuration machinery, but passed to the callable as-is.</p>
+<p class="admonition-title">警告</p>
+<p class="translated">上面示例中 <code class="docutils literal notranslate"><span class="pre">bar</span></code>, <code class="docutils literal notranslate"><span class="pre">spam</span></code> 和 <code class="docutils literal notranslate"><span class="pre">answer</span></code> 等键的值不应是配置目录或引用如 <code class="docutils literal notranslate"><span class="pre">cfg://foo</span></code> 或 <code class="docutils literal notranslate"><span class="pre">ext://bar</span></code>，因为它们将不会被配置机制所处理，而是被原样传给可调用对象。</p>
 </div>
-<p>The key <code class="docutils literal notranslate"><span class="pre">'()'</span></code> has been used as the special key because it is not a
-valid keyword parameter name, and so will not clash with the names of
-the keyword arguments used in the call.  The <code class="docutils literal notranslate"><span class="pre">'()'</span></code> also serves as a
-mnemonic that the corresponding value is a callable.</p>
+<p class="translated">将 <code class="docutils literal notranslate"><span class="pre">'()'</span></code> 用作特殊键是因为它不是一个有效的关键字形参名称，这样就不会与调用中使用的关键字参数发生冲突。 <code class="docutils literal notranslate"><span class="pre">'()'</span></code> 还被用作表明对应值为可调用对象的助记符。</p>
 <div class="versionchanged">
-<p><span class="versionmodified changed">Changed in version 3.11: </span>The <code class="docutils literal notranslate"><span class="pre">filters</span></code> member of <code class="docutils literal notranslate"><span class="pre">handlers</span></code> and <code class="docutils literal notranslate"><span class="pre">loggers</span></code> can take
-filter instances in addition to ids.</p>
+<p><span class="versionmodified changed">在 3.11 版本发生变更: </span><code class="docutils literal notranslate"><span class="pre">handlers</span></code> 和 <code class="docutils literal notranslate"><span class="pre">loggers</span></code> 的 <code class="docutils literal notranslate"><span class="pre">filters</span></code> 成员除了 id 以外还能接受 filter 实例。</p>
 </div>
-<p>You can also specify a special key <code class="docutils literal notranslate"><span class="pre">'.'</span></code> whose value is a
-mapping of attribute names to values. If found, the specified attributes will
-be set on the user-defined object before it is returned. Thus, with the
-following configuration:</p>
-<div class="highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<p class="translated">你还可以指定一个特殊键 <code class="docutils literal notranslate"><span class="pre">'.'</span></code>，其值是一个从属性名称到对应值的映射。 如果找到，则指定的属性在被返回之前将在用户自定义对象上设置。 因此，使用以下配置:</p>
+<div class="translated highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
   <span class="s1">&#39;()&#39;</span> <span class="p">:</span> <span class="s1">&#39;my.package.customFormatterFactory&#39;</span><span class="p">,</span>
   <span class="s1">&#39;bar&#39;</span> <span class="p">:</span> <span class="s1">&#39;baz&#39;</span><span class="p">,</span>
   <span class="s1">&#39;spam&#39;</span> <span class="p">:</span> <span class="mf">99.9</span><span class="p">,</span>
@@ -744,92 +494,36 @@ following configuration:</p>
 <span class="p">}</span>
 </pre></div>
 </div>
-<p>the returned formatter will have attribute <code class="docutils literal notranslate"><span class="pre">foo</span></code> set to <code class="docutils literal notranslate"><span class="pre">'bar'</span></code> and
-attribute <code class="docutils literal notranslate"><span class="pre">baz</span></code> set to <code class="docutils literal notranslate"><span class="pre">'bozz'</span></code>.</p>
+<p class="translated">被返回的格式化器的 <code class="docutils literal notranslate"><span class="pre">foo</span></code> 属性将设为 <code class="docutils literal notranslate"><span class="pre">'bar'</span></code> 而 <code class="docutils literal notranslate"><span class="pre">baz</span></code> 属性将设为 <code class="docutils literal notranslate"><span class="pre">'bozz'</span></code>。</p>
 <div class="admonition warning">
-<p class="admonition-title">Warning</p>
-<p>The values for attributes such as <code class="docutils literal notranslate"><span class="pre">foo</span></code> and <code class="docutils literal notranslate"><span class="pre">baz</span></code> in
-the above example should not be configuration dictionaries or references such
-as <code class="docutils literal notranslate"><span class="pre">cfg://foo</span></code> or <code class="docutils literal notranslate"><span class="pre">ext://bar</span></code>, because they will not be processed by the
-configuration machinery, but set as attribute values as-is.</p>
+<p class="admonition-title">警告</p>
+<p class="translated">上面示例中 <code class="docutils literal notranslate"><span class="pre">foo</span></code> 和 <code class="docutils literal notranslate"><span class="pre">baz</span></code> 等属性的值不应是配置目录或引用如 <code class="docutils literal notranslate"><span class="pre">cfg://foo</span></code> 或 <code class="docutils literal notranslate"><span class="pre">ext://bar</span></code>，因为它们将不会被配置机制所处理，而是被原样设置为属性。</p>
 </div>
 </section>
 <section id="handler-configuration-order">
-<span id="handler-config-dict-order"></span><h3>Handler configuration order<a class="headerlink" href="#handler-configuration-order" title="Link to this heading">¶</a></h3>
-<p>Handlers are configured in alphabetical order of their keys, and a configured
-handler replaces the configuration dictionary in (a working copy of) the
-<code class="docutils literal notranslate"><span class="pre">handlers</span></code> dictionary in the schema. If you use a construct such as
-<code class="docutils literal notranslate"><span class="pre">cfg://handlers.foo</span></code>, then initially <code class="docutils literal notranslate"><span class="pre">handlers['foo']</span></code> points to the
-configuration dictionary for the handler named <code class="docutils literal notranslate"><span class="pre">foo</span></code>, and later (once that
-handler has been configured) it points to the configured handler instance.
-Thus, <code class="docutils literal notranslate"><span class="pre">cfg://handlers.foo</span></code> could resolve to either a dictionary or a handler
-instance. In general, it is wise to name handlers in a way such that dependent
-handlers are configured <em>after</em> any handlers they depend on; that allows
-something like <code class="docutils literal notranslate"><span class="pre">cfg://handlers.foo</span></code> to be used in configuring a handler that
-depends on handler <code class="docutils literal notranslate"><span class="pre">foo</span></code>. If that dependent handler were named <code class="docutils literal notranslate"><span class="pre">bar</span></code>,
-problems would result, because the configuration of <code class="docutils literal notranslate"><span class="pre">bar</span></code> would be attempted
-before that of <code class="docutils literal notranslate"><span class="pre">foo</span></code>, and <code class="docutils literal notranslate"><span class="pre">foo</span></code> would not yet have been configured.
-However, if the dependent handler were named <code class="docutils literal notranslate"><span class="pre">foobar</span></code>, it would be configured
-after <code class="docutils literal notranslate"><span class="pre">foo</span></code>, with the result that <code class="docutils literal notranslate"><span class="pre">cfg://handlers.foo</span></code> would resolve to
-configured handler <code class="docutils literal notranslate"><span class="pre">foo</span></code>, and not its configuration dictionary.</p>
+<span id="handler-config-dict-order"></span><h3 class="translated">处理器配置顺序<a class="headerlink" href="#handler-configuration-order" title="Link to this heading">¶</a></h3>
+<p class="translated">处理器按其键的字母顺序进行配置，而已配置的处理器将替换配置方案内部 <code class="docutils literal notranslate"><span class="pre">handlers</span></code> 字典（的一个工作副本）中的配置字典。 如果你使用 <code class="docutils literal notranslate"><span class="pre">cfg://handlers.foo</span></code> 这样的构造，那么在初始状态下 <code class="docutils literal notranslate"><span class="pre">handlers['foo']</span></code> 会指向具名为 <code class="docutils literal notranslate"><span class="pre">foo</span></code> 的处理器的配置字典，随后（一旦配置了该处理器）它将指向已配置的处理器实例。 因此，<code class="docutils literal notranslate"><span class="pre">cfg://handlers.foo</span></code> 可以解析为一个字典或处理器实例。 通常来说，对于带依赖的处理器采用在它们所依赖的任何处理器完成配置 <em>之后</em> 再进行配置的方式来命名处理器是一种明智的做法；这将允许使用 <code class="docutils literal notranslate"><span class="pre">cfg://handlers.foo</span></code> 这样的构造来配置依赖于处理器 <code class="docutils literal notranslate"><span class="pre">foo</span></code> 的处理器。 如果这个带依赖的处理器被具名为 <code class="docutils literal notranslate"><span class="pre">bar</span></code>，则会导致问题，因为 <code class="docutils literal notranslate"><span class="pre">bar</span></code> 的配置将在 <code class="docutils literal notranslate"><span class="pre">foo</span></code> 的配置之前被尝试使用，而 <code class="docutils literal notranslate"><span class="pre">foo</span></code> 将尚未配置完成。 但是，如果带依赖的处理器被具名为 <code class="docutils literal notranslate"><span class="pre">foobar</span></code>，则它将在 <code class="docutils literal notranslate"><span class="pre">foo</span></code> 之后被配置，结果就是 <code class="docutils literal notranslate"><span class="pre">cfg://handlers.foo</span></code> 将被解析为已配置的处理器 <code class="docutils literal notranslate"><span class="pre">foo</span></code>，而不是其配置字典。</p>
 </section>
 <section id="access-to-external-objects">
-<span id="logging-config-dict-externalobj"></span><h3>Access to external objects<a class="headerlink" href="#access-to-external-objects" title="Link to this heading">¶</a></h3>
-<p>There are times where a configuration needs to refer to objects
-external to the configuration, for example <code class="docutils literal notranslate"><span class="pre">sys.stderr</span></code>.  If the
-configuration dict is constructed using Python code, this is
-straightforward, but a problem arises when the configuration is
-provided via a text file (e.g. JSON, YAML).  In a text file, there is
-no standard way to distinguish <code class="docutils literal notranslate"><span class="pre">sys.stderr</span></code> from the literal string
-<code class="docutils literal notranslate"><span class="pre">'sys.stderr'</span></code>.  To facilitate this distinction, the configuration
-system looks for certain special prefixes in string values and
-treat them specially.  For example, if the literal string
-<code class="docutils literal notranslate"><span class="pre">'ext://sys.stderr'</span></code> is provided as a value in the configuration,
-then the <code class="docutils literal notranslate"><span class="pre">ext://</span></code> will be stripped off and the remainder of the
-value processed using normal import mechanisms.</p>
-<p>The handling of such prefixes is done in a way analogous to protocol
-handling: there is a generic mechanism to look for prefixes which
-match the regular expression <code class="docutils literal notranslate"><span class="pre">^(?P&lt;prefix&gt;[a-z]+)://(?P&lt;suffix&gt;.*)$</span></code>
-whereby, if the <code class="docutils literal notranslate"><span class="pre">prefix</span></code> is recognised, the <code class="docutils literal notranslate"><span class="pre">suffix</span></code> is processed
-in a prefix-dependent manner and the result of the processing replaces
-the string value.  If the prefix is not recognised, then the string
-value will be left as-is.</p>
+<span id="logging-config-dict-externalobj"></span><h3 class="translated">访问外部对象<a class="headerlink" href="#access-to-external-objects" title="Link to this heading">¶</a></h3>
+<p class="translated">有时一个配置需要引用配置以外的对象，例如 <code class="docutils literal notranslate"><span class="pre">sys.stderr</span></code>。 如果配置字典是使用 Python 代码构造的，这会很直观，但是当配置是通过文本文件（例如 JSON, YAML）提供的时候就会引发问题。 在一个文本文件中，没有将 <code class="docutils literal notranslate"><span class="pre">sys.stderr</span></code> 与字符串字面值 <code class="docutils literal notranslate"><span class="pre">'sys.stderr'</span></code> 区分开来的标准方式。  为了实现这种区分，配置系统会在字符串值中查找规定的特殊前缀并对其做特殊处理。 例如，如果在配置中将字符串字面值 <code class="docutils literal notranslate"><span class="pre">'ext://sys.stderr'</span></code> 作为一个值来提供，则 <code class="docutils literal notranslate"><span class="pre">ext://</span></code> 将被去除而该值的剩余部分将使用正常导入机制来处理。</p>
+<p class="translated">此类前缀的处理方式类似于协议处理：存在一种通用机制来查找与正则表达式 <code class="docutils literal notranslate"><span class="pre">^(?P&lt;prefix&gt;[a-z]+)://(?P&lt;suffix&gt;.*)$</span></code> 相匹配的前缀，如果识别出了 <code class="docutils literal notranslate"><span class="pre">prefix</span></code>，则 <code class="docutils literal notranslate"><span class="pre">suffix</span></code> 会以与前缀相对应的方式来处理并且处理的结果将替代原字符串值。 如果未识别出前缀，则原字符串将保持不变。</p>
 </section>
 <section id="access-to-internal-objects">
-<span id="logging-config-dict-internalobj"></span><h3>Access to internal objects<a class="headerlink" href="#access-to-internal-objects" title="Link to this heading">¶</a></h3>
-<p>As well as external objects, there is sometimes also a need to refer
-to objects in the configuration.  This will be done implicitly by the
-configuration system for things that it knows about.  For example, the
-string value <code class="docutils literal notranslate"><span class="pre">'DEBUG'</span></code> for a <code class="docutils literal notranslate"><span class="pre">level</span></code> in a logger or handler will
-automatically be converted to the value <code class="docutils literal notranslate"><span class="pre">logging.DEBUG</span></code>, and the
-<code class="docutils literal notranslate"><span class="pre">handlers</span></code>, <code class="docutils literal notranslate"><span class="pre">filters</span></code> and <code class="docutils literal notranslate"><span class="pre">formatter</span></code> entries will take an
-object id and resolve to the appropriate destination object.</p>
-<p>However, a more generic mechanism is needed for user-defined
-objects which are not known to the <a class="reference internal" href="logging.html#module-logging" title="logging: Flexible event logging system for applications."><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging</span></code></a> module.  For
-example, consider <a class="reference internal" href="logging.handlers.html#logging.handlers.MemoryHandler" title="logging.handlers.MemoryHandler"><code class="xref py py-class docutils literal notranslate"><span class="pre">logging.handlers.MemoryHandler</span></code></a>, which takes
-a <code class="docutils literal notranslate"><span class="pre">target</span></code> argument which is another handler to delegate to. Since
-the system already knows about this class, then in the configuration,
-the given <code class="docutils literal notranslate"><span class="pre">target</span></code> just needs to be the object id of the relevant
-target handler, and the system will resolve to the handler from the
-id.  If, however, a user defines a <code class="docutils literal notranslate"><span class="pre">my.package.MyHandler</span></code> which has
-an <code class="docutils literal notranslate"><span class="pre">alternate</span></code> handler, the configuration system would not know that
-the <code class="docutils literal notranslate"><span class="pre">alternate</span></code> referred to a handler.  To cater for this, a generic
-resolution system allows the user to specify:</p>
-<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">handlers</span><span class="p">:</span>
+<span id="logging-config-dict-internalobj"></span><h3 class="translated">访问内部对象<a class="headerlink" href="#access-to-internal-objects" title="Link to this heading">¶</a></h3>
+<p class="translated">除了外部对象，有时还需要引用配置中的对象。 这将由配置系统针对它所了解的内容隐式地完成。 例如，在日志记录器或处理器中表示 <code class="docutils literal notranslate"><span class="pre">level</span></code> 的字符串值 <code class="docutils literal notranslate"><span class="pre">'DEBUG'</span></code> 将被自动转换为值 <code class="docutils literal notranslate"><span class="pre">logging.DEBUG</span></code>，而 <code class="docutils literal notranslate"><span class="pre">handlers</span></code>, <code class="docutils literal notranslate"><span class="pre">filters</span></code> 和 <code class="docutils literal notranslate"><span class="pre">formatter</span></code> 条目将接受一个对象 ID 并解析为适当的目标对象。</p>
+<p class="translated">但是，对于 <a class="reference internal" href="logging.html#module-logging" title="logging: Flexible event logging system for applications."><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging</span></code></a> 模块所不了解的用户自定义对象则需要一种更通用的机制。 例如，考虑 <a class="reference internal" href="logging.handlers.html#logging.handlers.MemoryHandler" title="logging.handlers.MemoryHandler"><code class="xref py py-class docutils literal notranslate"><span class="pre">logging.handlers.MemoryHandler</span></code></a>，它接受一个 <code class="docutils literal notranslate"><span class="pre">target</span></code> 参数即其所委托的另一个处理器。 由于系统已经知道存在该类，因而在配置中，给定的 <code class="docutils literal notranslate"><span class="pre">target</span></code> 只需为相应目标处理器的的对象 ID 即可，而系统将根据该 ID 解析出处理器。 但是，如果用户定义了一个具有 <code class="docutils literal notranslate"><span class="pre">alternate</span></code> 处理器的 <code class="docutils literal notranslate"><span class="pre">my.package.MyHandler</span></code>，则配置程序将不知道 <code class="docutils literal notranslate"><span class="pre">alternate</span></code> 指向的是一个处理器。 为了应对这种情况，通用解析系统允许用户指定:</p>
+<div class="translated highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">handlers</span><span class="p">:</span>
 <span class="w">  </span><span class="nt">file</span><span class="p">:</span>
-<span class="w">    </span><span class="c1"># configuration of file handler goes here</span>
+<span class="w">    </span><span class="c1"># 以下是文件处理器的配置</span>
 
 <span class="w">  </span><span class="nt">custom</span><span class="p">:</span>
 <span class="w">    </span><span class="nt">()</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">my.package.MyHandler</span>
 <span class="w">    </span><span class="nt">alternate</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">cfg://handlers.file</span>
 </pre></div>
 </div>
-<p>The literal string <code class="docutils literal notranslate"><span class="pre">'cfg://handlers.file'</span></code> will be resolved in an
-analogous way to strings with the <code class="docutils literal notranslate"><span class="pre">ext://</span></code> prefix, but looking
-in the configuration itself rather than the import namespace.  The
-mechanism allows access by dot or by index, in a similar way to
-that provided by <code class="docutils literal notranslate"><span class="pre">str.format</span></code>.  Thus, given the following snippet:</p>
-<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">handlers</span><span class="p">:</span>
+<p class="translated">字符串字面值 <code class="docutils literal notranslate"><span class="pre">'cfg://handlers.file'</span></code> 将按照与 <code class="docutils literal notranslate"><span class="pre">ext://</span></code> 前缀类似的方式被解析为结果字符串，但查找操作是在配置自身而不是在导入命名空间中进行。 该机制允许按点号或按索引来访问，与 <code class="docutils literal notranslate"><span class="pre">str.format</span></code> 所提供的方式类似。 这样，给定以下代码段:</p>
+<div class="translated highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">handlers</span><span class="p">:</span>
 <span class="w">  </span><span class="nt">email</span><span class="p">:</span>
 <span class="w">    </span><span class="nt">class</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">logging.handlers.SMTPHandler</span>
 <span class="w">    </span><span class="nt">mailhost</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">localhost</span>
@@ -840,59 +534,24 @@ that provided by <code class="docutils literal notranslate"><span class="pre">st
 <span class="w">    </span><span class="nt">subject</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Houston, we have a problem.</span>
 </pre></div>
 </div>
-<p>in the configuration, the string <code class="docutils literal notranslate"><span class="pre">'cfg://handlers'</span></code> would resolve to
-the dict with key <code class="docutils literal notranslate"><span class="pre">handlers</span></code>, the string <code class="docutils literal notranslate"><span class="pre">'cfg://handlers.email</span></code>
-would resolve to the dict with key <code class="docutils literal notranslate"><span class="pre">email</span></code> in the <code class="docutils literal notranslate"><span class="pre">handlers</span></code> dict,
-and so on.  The string <code class="docutils literal notranslate"><span class="pre">'cfg://handlers.email.toaddrs[1]</span></code> would
-resolve to <code class="docutils literal notranslate"><span class="pre">'dev_team&#64;domain.tld'</span></code> and the string
-<code class="docutils literal notranslate"><span class="pre">'cfg://handlers.email.toaddrs[0]'</span></code> would resolve to the value
-<code class="docutils literal notranslate"><span class="pre">'support_team&#64;domain.tld'</span></code>. The <code class="docutils literal notranslate"><span class="pre">subject</span></code> value could be accessed
-using either <code class="docutils literal notranslate"><span class="pre">'cfg://handlers.email.subject'</span></code> or, equivalently,
-<code class="docutils literal notranslate"><span class="pre">'cfg://handlers.email[subject]'</span></code>.  The latter form only needs to be
-used if the key contains spaces or non-alphanumeric characters. Please note
-that the characters <code class="docutils literal notranslate"><span class="pre">[</span></code> and <code class="docutils literal notranslate"><span class="pre">]</span></code> are not allowed in the keys. If an
-index value consists only of decimal digits, access will be attempted
-using the corresponding integer value, falling back to the string
-value if needed.</p>
-<p>Given a string <code class="docutils literal notranslate"><span class="pre">cfg://handlers.myhandler.mykey.123</span></code>, this will
-resolve to <code class="docutils literal notranslate"><span class="pre">config_dict['handlers']['myhandler']['mykey']['123']</span></code>.
-If the string is specified as <code class="docutils literal notranslate"><span class="pre">cfg://handlers.myhandler.mykey[123]</span></code>,
-the system will attempt to retrieve the value from
-<code class="docutils literal notranslate"><span class="pre">config_dict['handlers']['myhandler']['mykey'][123]</span></code>, and fall back
-to <code class="docutils literal notranslate"><span class="pre">config_dict['handlers']['myhandler']['mykey']['123']</span></code> if that
-fails.</p>
+<p class="translated">在该配置中，字符串 <code class="docutils literal notranslate"><span class="pre">'cfg://handlers'</span></code> 将解析为包含 <code class="docutils literal notranslate"><span class="pre">handlers</span></code> 键的字典，字符串 <code class="docutils literal notranslate"><span class="pre">'cfg://handlers.email</span></code> 将解析为 <code class="docutils literal notranslate"><span class="pre">handlers</span></code> 字典中包含 <code class="docutils literal notranslate"><span class="pre">email</span></code> 键的字典，依此类推。 字符串 <code class="docutils literal notranslate"><span class="pre">'cfg://handlers.email.toaddrs[1]</span></code> 将解析为 <code class="docutils literal notranslate"><span class="pre">'dev_team&#64;domain.tld'</span></code> 而字符串 <code class="docutils literal notranslate"><span class="pre">'cfg://handlers.email.toaddrs[0]'</span></code> 将解析为值 <code class="docutils literal notranslate"><span class="pre">'support_team&#64;domain.tld'</span></code>。 <code class="docutils literal notranslate"><span class="pre">subject</span></code> 值可以使用 <code class="docutils literal notranslate"><span class="pre">'cfg://handlers.email.subject'</span></code> 或者等价的 <code class="docutils literal notranslate"><span class="pre">'cfg://handlers.email[subject]'</span></code> 来访问。 后一种形式仅在键包含空格或非字母数字类字符的情况下才需要使用。 请注意字符 <code class="docutils literal notranslate"><span class="pre">[</span></code> 和 <code class="docutils literal notranslate"><span class="pre">]</span></code> 不允许在键中使用。 如果一个索引仅由十进制数码构成，则将尝试使用相应的整数值来访问，如有必要则将回退为字符串值。</p>
+<p class="translated">给定字符串 <code class="docutils literal notranslate"><span class="pre">cfg://handlers.myhandler.mykey.123</span></code>，这将解析为 <code class="docutils literal notranslate"><span class="pre">config_dict['handlers']['myhandler']['mykey']['123']</span></code>。 如果字符串被指定为 <code class="docutils literal notranslate"><span class="pre">cfg://handlers.myhandler.mykey[123]</span></code>，系统将尝试从 <code class="docutils literal notranslate"><span class="pre">config_dict['handlers']['myhandler']['mykey'][123]</span></code> 中提取值，并在尝试失败时回退为 <code class="docutils literal notranslate"><span class="pre">config_dict['handlers']['myhandler']['mykey']['123']</span></code>。</p>
 </section>
 <section id="import-resolution-and-custom-importers">
-<span id="logging-import-resolution"></span><h3>Import resolution and custom importers<a class="headerlink" href="#import-resolution-and-custom-importers" title="Link to this heading">¶</a></h3>
-<p>Import resolution, by default, uses the builtin <a class="reference internal" href="functions.html#import__" title="__import__"><code class="xref py py-func docutils literal notranslate"><span class="pre">__import__()</span></code></a> function
-to do its importing. You may want to replace this with your own importing
-mechanism: if so, you can replace the <code class="xref py py-attr docutils literal notranslate"><span class="pre">importer</span></code> attribute of the
-<code class="xref py py-class docutils literal notranslate"><span class="pre">DictConfigurator</span></code> or its superclass, the
-<code class="xref py py-class docutils literal notranslate"><span class="pre">BaseConfigurator</span></code> class. However, you need to be
-careful because of the way functions are accessed from classes via
-descriptors. If you are using a Python callable to do your imports, and you
-want to define it at class level rather than instance level, you need to wrap
-it with <a class="reference internal" href="functions.html#staticmethod" title="staticmethod"><code class="xref py py-func docutils literal notranslate"><span class="pre">staticmethod()</span></code></a>. For example:</p>
-<div class="highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">importlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">import_module</span>
+<span id="logging-import-resolution"></span><h3 class="translated">导入解析与定制导入器<a class="headerlink" href="#import-resolution-and-custom-importers" title="Link to this heading">¶</a></h3>
+<p class="translated">导入解析默认使用内置的 <a class="reference internal" href="functions.html#import__" title="__import__"><code class="xref py py-func docutils literal notranslate"><span class="pre">__import__()</span></code></a> 函数来执行导入。 你可能想要将其替换为你自己的导入机制：如果是这样的话，你可以替换 <code class="xref py py-class docutils literal notranslate"><span class="pre">DictConfigurator</span></code> 或其超类 <code class="xref py py-class docutils literal notranslate"><span class="pre">BaseConfigurator</span></code> 类的 <code class="xref py py-attr docutils literal notranslate"><span class="pre">importer</span></code> 属性。 但是你必须小心谨慎，因为函数是从类中通过描述器方式来访问的。 如果你使用 Python 可调用对象来执行导入，并且你希望在类层级而不是在实例层级上定义它，则你需要用 <a class="reference internal" href="functions.html#staticmethod" title="staticmethod"><code class="xref py py-func docutils literal notranslate"><span class="pre">staticmethod()</span></code></a> 来装饰它。 例如:</p>
+<div class="translated highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">importlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">import_module</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">logging.config</span><span class="w"> </span><span class="kn">import</span> <span class="n">BaseConfigurator</span>
 
 <span class="n">BaseConfigurator</span><span class="o">.</span><span class="n">importer</span> <span class="o">=</span> <span class="nb">staticmethod</span><span class="p">(</span><span class="n">import_module</span><span class="p">)</span>
 </pre></div>
 </div>
-<p>You don’t need to wrap with <a class="reference internal" href="functions.html#staticmethod" title="staticmethod"><code class="xref py py-func docutils literal notranslate"><span class="pre">staticmethod()</span></code></a> if you’re setting the import
-callable on a configurator <em>instance</em>.</p>
+<p class="translated">如果你是在一个配置器的 <em>实例</em> 上设置导入可调用对象则你不需要用 <a class="reference internal" href="functions.html#staticmethod" title="staticmethod"><code class="xref py py-func docutils literal notranslate"><span class="pre">staticmethod()</span></code></a> 来装饰。</p>
 </section>
 <section id="configuring-queuehandler-and-queuelistener">
-<span id="configure-queue"></span><h3>Configuring QueueHandler and QueueListener<a class="headerlink" href="#configuring-queuehandler-and-queuelistener" title="Link to this heading">¶</a></h3>
-<p>If you want to configure a <a class="reference internal" href="logging.handlers.html#logging.handlers.QueueHandler" title="logging.handlers.QueueHandler"><code class="xref py py-class docutils literal notranslate"><span class="pre">QueueHandler</span></code></a>, noting that this
-is normally used in conjunction with a <a class="reference internal" href="logging.handlers.html#logging.handlers.QueueListener" title="logging.handlers.QueueListener"><code class="xref py py-class docutils literal notranslate"><span class="pre">QueueListener</span></code></a>, you
-can configure both together. After the configuration, the <code class="docutils literal notranslate"><span class="pre">QueueListener</span></code> instance
-will be available as the <a class="reference internal" href="logging.handlers.html#logging.handlers.QueueHandler.listener" title="logging.handlers.QueueHandler.listener"><code class="xref py py-attr docutils literal notranslate"><span class="pre">listener</span></code></a> attribute of
-the created handler, and that in turn will be available to you using
-<a class="reference internal" href="logging.html#logging.getHandlerByName" title="logging.getHandlerByName"><code class="xref py py-func docutils literal notranslate"><span class="pre">getHandlerByName()</span></code></a> and passing the name you have used for the
-<code class="docutils literal notranslate"><span class="pre">QueueHandler</span></code> in your configuration. The dictionary schema for configuring the pair
-is shown in the example YAML snippet below.</p>
-<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">handlers</span><span class="p">:</span>
+<span id="configure-queue"></span><h3 class="translated">配置 QueueHandler 和 QueueListener<a class="headerlink" href="#configuring-queuehandler-and-queuelistener" title="Link to this heading">¶</a></h3>
+<p class="translated">如果你想要配置一个 <a class="reference internal" href="logging.handlers.html#logging.handlers.QueueHandler" title="logging.handlers.QueueHandler"><code class="xref py py-class docutils literal notranslate"><span class="pre">QueueHandler</span></code></a>，请注意它通常是与 <a class="reference internal" href="logging.handlers.html#logging.handlers.QueueListener" title="logging.handlers.QueueListener"><code class="xref py py-class docutils literal notranslate"><span class="pre">QueueListener</span></code></a> 一起使用的，你可以同时配置这两者。 配置完成之后，<code class="docutils literal notranslate"><span class="pre">QueueListener</span></code> 实例将可作为所创建的处理器的 <a class="reference internal" href="logging.handlers.html#logging.handlers.QueueHandler.listener" title="logging.handlers.QueueHandler.listener"><code class="xref py py-attr docutils literal notranslate"><span class="pre">listener</span></code></a> 属性来访问，而你也将可以使用 <a class="reference internal" href="logging.html#logging.getHandlerByName" title="logging.getHandlerByName"><code class="xref py py-func docutils literal notranslate"><span class="pre">getHandlerByName()</span></code></a> 来访问它并将你所使用的名称作为配置中的 <code class="docutils literal notranslate"><span class="pre">QueueHandler</span></code> 传入。 用于配置这两者的字典规格显示在下面的 YAML 实例代码段中。</p>
+<div class="translated highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">handlers</span><span class="p">:</span>
 <span class="w">  </span><span class="nt">qhand</span><span class="p">:</span>
 <span class="w">    </span><span class="nt">class</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">logging.handlers.QueueHandler</span>
 <span class="w">    </span><span class="nt">queue</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">my.module.queue_factory</span>
@@ -903,77 +562,39 @@ is shown in the example YAML snippet below.</p>
 <span class="w">      </span><span class="l l-Scalar l-Scalar-Plain">...</span>
 </pre></div>
 </div>
-<p>The <code class="docutils literal notranslate"><span class="pre">queue</span></code> and <code class="docutils literal notranslate"><span class="pre">listener</span></code> keys are optional.</p>
-<p>If the <code class="docutils literal notranslate"><span class="pre">queue</span></code> key is present, the corresponding value can be one of the following:</p>
+<p class="translated"><code class="docutils literal notranslate"><span class="pre">queue</span></code> 和 <code class="docutils literal notranslate"><span class="pre">listener</span></code> 键是可选的。</p>
+<p class="translated">如果存在 <code class="docutils literal notranslate"><span class="pre">queue</span></code> 键，相应的值可以是下列几项之一:</p>
 <ul>
-<li><p>An object implementing the <a class="reference internal" href="queue.html#queue.Queue.put_nowait" title="queue.Queue.put_nowait"><code class="xref py py-meth docutils literal notranslate"><span class="pre">Queue.put_nowait</span></code></a>
-and <a class="reference internal" href="queue.html#queue.Queue.get" title="queue.Queue.get"><code class="xref py py-meth docutils literal notranslate"><span class="pre">Queue.get</span></code></a> public API. For instance, this may be
-an actual instance of <a class="reference internal" href="queue.html#queue.Queue" title="queue.Queue"><code class="xref py py-class docutils literal notranslate"><span class="pre">queue.Queue</span></code></a> or a subclass thereof, or a proxy
-obtained by <a class="reference internal" href="multiprocessing.html#multiprocessing.managers.SyncManager.Queue" title="multiprocessing.managers.SyncManager.Queue"><code class="xref py py-meth docutils literal notranslate"><span class="pre">multiprocessing.managers.SyncManager.Queue()</span></code></a>.</p>
-<p>This is of course only possible if you are constructing or modifying
-the configuration dictionary in code.</p>
+<li><p class="translated">一个实现 <a class="reference internal" href="queue.html#queue.Queue.put_nowait" title="queue.Queue.put_nowait"><code class="xref py py-meth docutils literal notranslate"><span class="pre">Queue.put_nowait</span></code></a> 和 <a class="reference internal" href="queue.html#queue.Queue.get" title="queue.Queue.get"><code class="xref py py-meth docutils literal notranslate"><span class="pre">Queue.get</span></code></a> 公有 API 的对象。 例如，这可以是一个 <a class="reference internal" href="queue.html#queue.Queue" title="queue.Queue"><code class="xref py py-class docutils literal notranslate"><span class="pre">queue.Queue</span></code></a> 或其子类的具体实例，或者是一个由 <a class="reference internal" href="multiprocessing.html#multiprocessing.managers.SyncManager.Queue" title="multiprocessing.managers.SyncManager.Queue"><code class="xref py py-meth docutils literal notranslate"><span class="pre">multiprocessing.managers.SyncManager.Queue()</span></code></a> 获取的代理对象。</p>
+<p class="translated">这当然仅在你通过代码中构造或修改配置字典时才是可能的。</p>
 </li>
-<li><p>A string that resolves to a callable which, when called with no arguments, returns
-the queue instance to use. That callable could be a <a class="reference internal" href="queue.html#queue.Queue" title="queue.Queue"><code class="xref py py-class docutils literal notranslate"><span class="pre">queue.Queue</span></code></a> subclass
-or a function which returns a suitable queue instance,
-such as <code class="docutils literal notranslate"><span class="pre">my.module.queue_factory()</span></code>.</p></li>
-<li><p>A dict with a <code class="docutils literal notranslate"><span class="pre">'()'</span></code> key which is constructed in the usual way as discussed in
-<a class="reference internal" href="#logging-config-dict-userdef"><span class="std std-ref">User-defined objects</span></a>. The result of this construction should be a
-<a class="reference internal" href="queue.html#queue.Queue" title="queue.Queue"><code class="xref py py-class docutils literal notranslate"><span class="pre">queue.Queue</span></code></a> instance.</p></li>
+<li><p class="translated">一个将被求值为可调用对象的字符串，当不带任何参数被调用时，它将返回要使用的队列实例。 该可调用对象可以是一个 <a class="reference internal" href="queue.html#queue.Queue" title="queue.Queue"><code class="xref py py-class docutils literal notranslate"><span class="pre">queue.Queue</span></code></a> 子类或是一个返回适当的队列实例的函数，如 <code class="docutils literal notranslate"><span class="pre">my.module.queue_factory()</span></code>。</p></li>
+<li><p class="translated">一个带有 <code class="docutils literal notranslate"><span class="pre">'()'</span></code> 键的字典，它使用 <a class="reference internal" href="#logging-config-dict-userdef"><span class="std std-ref">用户定义对象</span></a> 中所介绍的通常方式构造。 这样构造的结果应当是一个 <a class="reference internal" href="queue.html#queue.Queue" title="queue.Queue"><code class="xref py py-class docutils literal notranslate"><span class="pre">queue.Queue</span></code></a> 实例。</p></li>
 </ul>
-<p>If the  <code class="docutils literal notranslate"><span class="pre">queue</span></code> key is absent, a standard unbounded <a class="reference internal" href="queue.html#queue.Queue" title="queue.Queue"><code class="xref py py-class docutils literal notranslate"><span class="pre">queue.Queue</span></code></a> instance is
-created and used.</p>
-<p>If the <code class="docutils literal notranslate"><span class="pre">listener</span></code> key is present, the corresponding value can be one of the following:</p>
+<p class="translated">如果没有  <code class="docutils literal notranslate"><span class="pre">queue</span></code> 键，则会创建并使用一个标准的未绑定 <a class="reference internal" href="queue.html#queue.Queue" title="queue.Queue"><code class="xref py py-class docutils literal notranslate"><span class="pre">queue.Queue</span></code></a> 实例。</p>
+<p class="translated">如果存在 <code class="docutils literal notranslate"><span class="pre">listener</span></code> 键，则相应的值可以是下列几项中的一个:</p>
 <ul class="simple">
-<li><p>A subclass of <a class="reference internal" href="logging.handlers.html#logging.handlers.QueueListener" title="logging.handlers.QueueListener"><code class="xref py py-class docutils literal notranslate"><span class="pre">logging.handlers.QueueListener</span></code></a>. This is of course only
-possible if you are constructing or modifying the configuration dictionary in
-code.</p></li>
-<li><p>A string which resolves to a class which is a subclass of <code class="docutils literal notranslate"><span class="pre">QueueListener</span></code>, such as
-<code class="docutils literal notranslate"><span class="pre">'my.package.CustomListener'</span></code>.</p></li>
-<li><p>A dict with a <code class="docutils literal notranslate"><span class="pre">'()'</span></code> key which is constructed in the usual way as discussed in
-<a class="reference internal" href="#logging-config-dict-userdef"><span class="std std-ref">User-defined objects</span></a>. The result of this construction should be a
-callable with the same signature as the <code class="docutils literal notranslate"><span class="pre">QueueListener</span></code> initializer.</p></li>
+<li><p class="translated">一个 <a class="reference internal" href="logging.handlers.html#logging.handlers.QueueListener" title="logging.handlers.QueueListener"><code class="xref py py-class docutils literal notranslate"><span class="pre">logging.handlers.QueueListener</span></code></a> 的子类。 这当然仅在你通过代码构造或修改配置字典时才是可能的。</p></li>
+<li><p class="translated">一个将被求值为属于 <code class="docutils literal notranslate"><span class="pre">QueueListener</span></code> 的子类的类的字符串，例如 <code class="docutils literal notranslate"><span class="pre">'my.package.CustomListener'</span></code>。</p></li>
+<li><p class="translated">一个带有 <code class="docutils literal notranslate"><span class="pre">'()'</span></code> 键的字典，它使用 <a class="reference internal" href="#logging-config-dict-userdef"><span class="std std-ref">用户定义对象</span></a> 中所介绍的通常方式构造。 这样构造的结果应当是一个与 <code class="docutils literal notranslate"><span class="pre">QueueListener</span></code> 初始化器具有相同签名的可调用对象。</p></li>
 </ul>
-<p>If the <code class="docutils literal notranslate"><span class="pre">listener</span></code> key is absent, <a class="reference internal" href="logging.handlers.html#logging.handlers.QueueListener" title="logging.handlers.QueueListener"><code class="xref py py-class docutils literal notranslate"><span class="pre">logging.handlers.QueueListener</span></code></a> is used.</p>
-<p>The values under the <code class="docutils literal notranslate"><span class="pre">handlers</span></code> key are the names of other handlers in the
-configuration (not shown in the above snippet) which will be passed to the queue
-listener.</p>
-<p>Any custom queue handler and listener classes will need to be defined with the same
-initialization signatures as <a class="reference internal" href="logging.handlers.html#logging.handlers.QueueHandler" title="logging.handlers.QueueHandler"><code class="xref py py-class docutils literal notranslate"><span class="pre">QueueHandler</span></code></a> and
-<a class="reference internal" href="logging.handlers.html#logging.handlers.QueueListener" title="logging.handlers.QueueListener"><code class="xref py py-class docutils literal notranslate"><span class="pre">QueueListener</span></code></a>.</p>
+<p class="translated">如果不存在 <code class="docutils literal notranslate"><span class="pre">listener</span></code> 键，则会使用 <a class="reference internal" href="logging.handlers.html#logging.handlers.QueueListener" title="logging.handlers.QueueListener"><code class="xref py py-class docutils literal notranslate"><span class="pre">logging.handlers.QueueListener</span></code></a>。</p>
+<p class="translated">在 <code class="docutils literal notranslate"><span class="pre">handlers</span></code> 键之下的值是配置中其他处理器的名称（未显示在上面的代码片段中），它们将被传给队列监听器。</p>
+<p class="translated">任何队列处理器和监听器类都需要定义为具有与 <a class="reference internal" href="logging.handlers.html#logging.handlers.QueueHandler" title="logging.handlers.QueueHandler"><code class="xref py py-class docutils literal notranslate"><span class="pre">QueueHandler</span></code></a> 和 <a class="reference internal" href="logging.handlers.html#logging.handlers.QueueListener" title="logging.handlers.QueueListener"><code class="xref py py-class docutils literal notranslate"><span class="pre">QueueListener</span></code></a> 相同的初始化签名。</p>
 <div class="versionadded">
 <p><span class="versionmodified added">Added in version 3.12.</span></p>
 </div>
 </section>
 </section>
 <section id="configuration-file-format">
-<span id="logging-config-fileformat"></span><h2>Configuration file format<a class="headerlink" href="#configuration-file-format" title="Link to this heading">¶</a></h2>
-<p>The configuration file format understood by <a class="reference internal" href="#logging.config.fileConfig" title="logging.config.fileConfig"><code class="xref py py-func docutils literal notranslate"><span class="pre">fileConfig()</span></code></a> is based on
-<a class="reference internal" href="configparser.html#module-configparser" title="configparser: Configuration file parser."><code class="xref py py-mod docutils literal notranslate"><span class="pre">configparser</span></code></a> functionality. The file must contain sections called
-<code class="docutils literal notranslate"><span class="pre">[loggers]</span></code>, <code class="docutils literal notranslate"><span class="pre">[handlers]</span></code> and <code class="docutils literal notranslate"><span class="pre">[formatters]</span></code> which identify by name the
-entities of each type which are defined in the file. For each such entity, there
-is a separate section which identifies how that entity is configured.  Thus, for
-a logger named <code class="docutils literal notranslate"><span class="pre">log01</span></code> in the <code class="docutils literal notranslate"><span class="pre">[loggers]</span></code> section, the relevant
-configuration details are held in a section <code class="docutils literal notranslate"><span class="pre">[logger_log01]</span></code>. Similarly, a
-handler called <code class="docutils literal notranslate"><span class="pre">hand01</span></code> in the <code class="docutils literal notranslate"><span class="pre">[handlers]</span></code> section will have its
-configuration held in a section called <code class="docutils literal notranslate"><span class="pre">[handler_hand01]</span></code>, while a formatter
-called <code class="docutils literal notranslate"><span class="pre">form01</span></code> in the <code class="docutils literal notranslate"><span class="pre">[formatters]</span></code> section will have its configuration
-specified in a section called <code class="docutils literal notranslate"><span class="pre">[formatter_form01]</span></code>. The root logger
-configuration must be specified in a section called <code class="docutils literal notranslate"><span class="pre">[logger_root]</span></code>.</p>
+<span id="logging-config-fileformat"></span><h2 class="translated">配置文件格式<a class="headerlink" href="#configuration-file-format" title="Link to this heading">¶</a></h2>
+<p class="translated"><a class="reference internal" href="#logging.config.fileConfig" title="logging.config.fileConfig"><code class="xref py py-func docutils literal notranslate"><span class="pre">fileConfig()</span></code></a> 所能理解的配置文件格式是基于 <a class="reference internal" href="configparser.html#module-configparser" title="configparser: Configuration file parser."><code class="xref py py-mod docutils literal notranslate"><span class="pre">configparser</span></code></a> 功能的。 该文件必须包含 <code class="docutils literal notranslate"><span class="pre">[loggers]</span></code>, <code class="docutils literal notranslate"><span class="pre">[handlers]</span></code> 和 <code class="docutils literal notranslate"><span class="pre">[formatters]</span></code> 等小节，它们通过名称来标识文件中定义的每种类型的实体。 对于每个这样的实体，都有单独的小节来标识实体的配置方式。 因此，对于 <code class="docutils literal notranslate"><span class="pre">[loggers]</span></code> 小节中名为 <code class="docutils literal notranslate"><span class="pre">log01</span></code> 的日志记录器，相应的配置详情保存在 <code class="docutils literal notranslate"><span class="pre">[logger_log01]</span></code> 小节中。 类似地，对于 <code class="docutils literal notranslate"><span class="pre">[handlers]</span></code> 小节中名为 <code class="docutils literal notranslate"><span class="pre">hand01</span></code> 的处理器，其配置将保存在名为 <code class="docutils literal notranslate"><span class="pre">[handler_hand01]</span></code> 的小节中，而对于 <code class="docutils literal notranslate"><span class="pre">[formatters]</span></code> 小节中名为 <code class="docutils literal notranslate"><span class="pre">form01</span></code> 的格式化器，其配置将在名为 <code class="docutils literal notranslate"><span class="pre">[formatter_form01]</span></code> 的小节中指定。 根日志记录器的配置必须在名为 <code class="docutils literal notranslate"><span class="pre">[logger_root]</span></code> 的小节中指定。</p>
 <div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>The <a class="reference internal" href="#logging.config.fileConfig" title="logging.config.fileConfig"><code class="xref py py-func docutils literal notranslate"><span class="pre">fileConfig()</span></code></a> API is older than the <a class="reference internal" href="#logging.config.dictConfig" title="logging.config.dictConfig"><code class="xref py py-func docutils literal notranslate"><span class="pre">dictConfig()</span></code></a> API and does
-not provide functionality to cover certain aspects of logging. For example,
-you cannot configure <a class="reference internal" href="logging.html#logging.Filter" title="logging.Filter"><code class="xref py py-class docutils literal notranslate"><span class="pre">Filter</span></code></a> objects, which provide for
-filtering of messages beyond simple integer levels, using <code class="xref py py-func docutils literal notranslate"><span class="pre">fileConfig()</span></code>.
-If you need to have instances of <code class="xref py py-class docutils literal notranslate"><span class="pre">Filter</span></code> in your logging
-configuration, you will need to use <code class="xref py py-func docutils literal notranslate"><span class="pre">dictConfig()</span></code>. Note that future
-enhancements to configuration functionality will be added to
-<code class="xref py py-func docutils literal notranslate"><span class="pre">dictConfig()</span></code>, so it’s worth considering transitioning to this newer
-API when it’s convenient to do so.</p>
+<p class="admonition-title">备注</p>
+<p class="translated"><a class="reference internal" href="#logging.config.fileConfig" title="logging.config.fileConfig"><code class="xref py py-func docutils literal notranslate"><span class="pre">fileConfig()</span></code></a> API 比 <a class="reference internal" href="#logging.config.dictConfig" title="logging.config.dictConfig"><code class="xref py py-func docutils literal notranslate"><span class="pre">dictConfig()</span></code></a> API 更旧因而没有提供涵盖日志记录特定方面的功能。 例如，你无法配置 <a class="reference internal" href="logging.html#logging.Filter" title="logging.Filter"><code class="xref py py-class docutils literal notranslate"><span class="pre">Filter</span></code></a> 对象，该对象使用 <code class="xref py py-func docutils literal notranslate"><span class="pre">fileConfig()</span></code> 提供超出简单整数级别的消息过滤功能。 如果你想要在你的日志记录配置中包含 <code class="xref py py-class docutils literal notranslate"><span class="pre">Filter</span></code> 的实例，你将必须使用 <code class="xref py py-func docutils literal notranslate"><span class="pre">dictConfig()</span></code>。 请注意未来还将向 <code class="xref py py-func docutils literal notranslate"><span class="pre">dictConfig()</span></code> 添加对配置功能的强化，因此值得考虑在方便的时候转换到这个新 API。</p>
 </div>
-<p>Examples of these sections in the file are given below.</p>
-<div class="highlight-ini notranslate"><div class="highlight"><pre><span></span><span class="k">[loggers]</span>
+<p class="translated">在文件中这些小节的例子如下所示。</p>
+<div class="translated highlight-ini notranslate"><div class="highlight"><pre><span></span><span class="k">[loggers]</span>
 <span class="na">keys</span><span class="o">=</span><span class="s">root,log02,log03,log04,log05,log06,log07</span>
 
 <span class="k">[handlers]</span>
@@ -983,62 +604,36 @@ API when it’s convenient to do so.</p>
 <span class="na">keys</span><span class="o">=</span><span class="s">form01,form02,form03,form04,form05,form06,form07,form08,form09</span>
 </pre></div>
 </div>
-<p>The root logger must specify a level and a list of handlers. An example of a
-root logger section is given below.</p>
-<div class="highlight-ini notranslate"><div class="highlight"><pre><span></span><span class="k">[logger_root]</span>
+<p class="translated">根日志记录器必须指定一个级别和一个处理器列表。 根日志小节的例子如下所示。</p>
+<div class="translated highlight-ini notranslate"><div class="highlight"><pre><span></span><span class="k">[logger_root]</span>
 <span class="na">level</span><span class="o">=</span><span class="s">NOTSET</span>
 <span class="na">handlers</span><span class="o">=</span><span class="s">hand01</span>
 </pre></div>
 </div>
-<p>The <code class="docutils literal notranslate"><span class="pre">level</span></code> entry can be one of <code class="docutils literal notranslate"><span class="pre">DEBUG,</span> <span class="pre">INFO,</span> <span class="pre">WARNING,</span> <span class="pre">ERROR,</span> <span class="pre">CRITICAL</span></code> or
-<code class="docutils literal notranslate"><span class="pre">NOTSET</span></code>. For the root logger only, <code class="docutils literal notranslate"><span class="pre">NOTSET</span></code> means that all messages will be
-logged. Level values are <a class="reference internal" href="functions.html#func-eval"><span class="std std-ref">evaluated</span></a> in the context of the <code class="docutils literal notranslate"><span class="pre">logging</span></code>
-package’s namespace.</p>
-<p>The <code class="docutils literal notranslate"><span class="pre">handlers</span></code> entry is a comma-separated list of handler names, which must
-appear in the <code class="docutils literal notranslate"><span class="pre">[handlers]</span></code> section. These names must appear in the
-<code class="docutils literal notranslate"><span class="pre">[handlers]</span></code> section and have corresponding sections in the configuration
-file.</p>
-<p>For loggers other than the root logger, some additional information is required.
-This is illustrated by the following example.</p>
-<div class="highlight-ini notranslate"><div class="highlight"><pre><span></span><span class="k">[logger_parser]</span>
+<p class="translated"><code class="docutils literal notranslate"><span class="pre">level</span></code> 条目可以为 <code class="docutils literal notranslate"><span class="pre">DEBUG,</span> <span class="pre">INFO,</span> <span class="pre">WARNING,</span> <span class="pre">ERROR,</span> <span class="pre">CRITICAL</span></code> 或 <code class="docutils literal notranslate"><span class="pre">NOTSET</span></code> 之一。 作为仅适用于根日志记录器的设置，<code class="docutils literal notranslate"><span class="pre">NOTSET</span></code> 表示将会记录所有消息。 级别值会在 <code class="docutils literal notranslate"><span class="pre">logging</span></code> 包命名空间的上下文中 <a class="reference internal" href="functions.html#func-eval"><span class="std std-ref">进行求值</span></a>。</p>
+<p class="translated"><code class="docutils literal notranslate"><span class="pre">handlers</span></code> 条目是以逗号分隔的处理器名称列表，它必须出现于 <code class="docutils literal notranslate"><span class="pre">[handlers]</span></code> 小节并且在配置文件中有相应的小节。</p>
+<p class="translated">对于根日志记录器以外的日志记录器，还需要某些附加信息。 下面的例子演示了这些信息。</p>
+<div class="translated highlight-ini notranslate"><div class="highlight"><pre><span></span><span class="k">[logger_parser]</span>
 <span class="na">level</span><span class="o">=</span><span class="s">DEBUG</span>
 <span class="na">handlers</span><span class="o">=</span><span class="s">hand01</span>
 <span class="na">propagate</span><span class="o">=</span><span class="s">1</span>
 <span class="na">qualname</span><span class="o">=</span><span class="s">compiler.parser</span>
 </pre></div>
 </div>
-<p>The <code class="docutils literal notranslate"><span class="pre">level</span></code> and <code class="docutils literal notranslate"><span class="pre">handlers</span></code> entries are interpreted as for the root logger,
-except that if a non-root logger’s level is specified as <code class="docutils literal notranslate"><span class="pre">NOTSET</span></code>, the system
-consults loggers higher up the hierarchy to determine the effective level of the
-logger. The <code class="docutils literal notranslate"><span class="pre">propagate</span></code> entry is set to 1 to indicate that messages must
-propagate to handlers higher up the logger hierarchy from this logger, or 0 to
-indicate that messages are <strong>not</strong> propagated to handlers up the hierarchy. The
-<code class="docutils literal notranslate"><span class="pre">qualname</span></code> entry is the hierarchical channel name of the logger, that is to
-say the name used by the application to get the logger.</p>
-<p>Sections which specify handler configuration are exemplified by the following.</p>
-<div class="highlight-ini notranslate"><div class="highlight"><pre><span></span><span class="k">[handler_hand01]</span>
+<p class="translated"><code class="docutils literal notranslate"><span class="pre">level</span></code> 和 <code class="docutils literal notranslate"><span class="pre">handlers</span></code> 条目的解释方式与根日志记录器的一致，不同之处在于如果一个非根日志记录器的级别被指定为 <code class="docutils literal notranslate"><span class="pre">NOTSET</span></code>，则系统会咨询更高层级的日志记录器来确定该日志记录器的有效级别。 <code class="docutils literal notranslate"><span class="pre">propagate</span></code> 条目设为 1 表示消息必须从此日志记录器传播到更高层级的处理器，设为 0 表示消息 <strong>不会</strong> 传播到更高层级的处理器。 <code class="docutils literal notranslate"><span class="pre">qualname</span></code> 条目是日志记录器的层级通道名称，也就是应用程序获取日志记录器所用的名称。</p>
+<p class="translated">指定处理器配置的小节说明如下。</p>
+<div class="translated highlight-ini notranslate"><div class="highlight"><pre><span></span><span class="k">[handler_hand01]</span>
 <span class="na">class</span><span class="o">=</span><span class="s">StreamHandler</span>
 <span class="na">level</span><span class="o">=</span><span class="s">NOTSET</span>
 <span class="na">formatter</span><span class="o">=</span><span class="s">form01</span>
 <span class="na">args</span><span class="o">=</span><span class="s">(sys.stdout,)</span>
 </pre></div>
 </div>
-<p>The <code class="docutils literal notranslate"><span class="pre">class</span></code> entry indicates the handler’s class (as determined by <a class="reference internal" href="functions.html#eval" title="eval"><code class="xref py py-func docutils literal notranslate"><span class="pre">eval()</span></code></a>
-in the <code class="docutils literal notranslate"><span class="pre">logging</span></code> package’s namespace). The <code class="docutils literal notranslate"><span class="pre">level</span></code> is interpreted as for
-loggers, and <code class="docutils literal notranslate"><span class="pre">NOTSET</span></code> is taken to mean ‘log everything’.</p>
-<p>The <code class="docutils literal notranslate"><span class="pre">formatter</span></code> entry indicates the key name of the formatter for this
-handler. If blank, a default formatter (<code class="docutils literal notranslate"><span class="pre">logging._defaultFormatter</span></code>) is used.
-If a name is specified, it must appear in the <code class="docutils literal notranslate"><span class="pre">[formatters]</span></code> section and have
-a corresponding section in the configuration file.</p>
-<p>The <code class="docutils literal notranslate"><span class="pre">args</span></code> entry, when <a class="reference internal" href="functions.html#func-eval"><span class="std std-ref">evaluated</span></a> in the context of the <code class="docutils literal notranslate"><span class="pre">logging</span></code>
-package’s namespace, is the list of arguments to the constructor for the handler
-class. Refer to the constructors for the relevant handlers, or to the examples
-below, to see how typical entries are constructed. If not provided, it defaults
-to <code class="docutils literal notranslate"><span class="pre">()</span></code>.</p>
-<p>The optional <code class="docutils literal notranslate"><span class="pre">kwargs</span></code> entry, when <a class="reference internal" href="functions.html#func-eval"><span class="std std-ref">evaluated</span></a> in the context of the
-<code class="docutils literal notranslate"><span class="pre">logging</span></code> package’s namespace, is the keyword argument dict to the constructor
-for the handler class. If not provided, it defaults to <code class="docutils literal notranslate"><span class="pre">{}</span></code>.</p>
-<div class="highlight-ini notranslate"><div class="highlight"><pre><span></span><span class="k">[handler_hand02]</span>
+<p class="translated"><code class="docutils literal notranslate"><span class="pre">class</span></code> 条目指明处理器的类（由 <code class="docutils literal notranslate"><span class="pre">logging</span></code> 包命名空间中的 <a class="reference internal" href="functions.html#eval" title="eval"><code class="xref py py-func docutils literal notranslate"><span class="pre">eval()</span></code></a> 来确定）。 <code class="docutils literal notranslate"><span class="pre">level</span></code> 会以与日志记录器相同的方式来解读，<code class="docutils literal notranslate"><span class="pre">NOTSET</span></code> 会被视为表示‘记录一切消息’。</p>
+<p class="translated"><code class="docutils literal notranslate"><span class="pre">formatter</span></code> 条目指明此处理器的格式化器的键名称。 如为空白，则会使用默认的格式化器 (<code class="docutils literal notranslate"><span class="pre">logging._defaultFormatter</span></code>)。 如果指定了名称，则它必须出现于 <code class="docutils literal notranslate"><span class="pre">[formatters]</span></code> 小节并且在配置文件中有相应的小节。</p>
+<p class="translated"><code class="docutils literal notranslate"><span class="pre">args</span></code> 条目，当在 <code class="docutils literal notranslate"><span class="pre">logging</span></code> 包命名空间的上下文中被 <a class="reference internal" href="functions.html#func-eval"><span class="std std-ref">求值</span></a> 时，将是传给处理器类构造器的参数列表。 请参阅相应处理器的构造器说明，或是下面的示例，以了解典型的条目是如何构造的。 如果未提供，则其默认值为 <code class="docutils literal notranslate"><span class="pre">()</span></code>。</p>
+<p class="translated">可选的 <code class="docutils literal notranslate"><span class="pre">kwargs</span></code> 条目，当在 <code class="docutils literal notranslate"><span class="pre">logging</span></code> 包命名空间的上下文中被 <a class="reference internal" href="functions.html#func-eval"><span class="std std-ref">求值</span></a> 时，将是传给处理器的构造器的关键字参数字典。 如果未提供，则其默认值为 <code class="docutils literal notranslate"><span class="pre">{}</span></code>。</p>
+<div class="translated highlight-ini notranslate"><div class="highlight"><pre><span></span><span class="k">[handler_hand02]</span>
 <span class="na">class</span><span class="o">=</span><span class="s">FileHandler</span>
 <span class="na">level</span><span class="o">=</span><span class="s">DEBUG</span>
 <span class="na">formatter</span><span class="o">=</span><span class="s">form02</span>
@@ -1090,8 +685,8 @@ for the handler class. If not provided, it defaults to <code class="docutils lit
 <span class="na">kwargs</span><span class="o">=</span><span class="s">{&#39;secure&#39;: True}</span>
 </pre></div>
 </div>
-<p>Sections which specify formatter configuration are typified by the following.</p>
-<div class="highlight-ini notranslate"><div class="highlight"><pre><span></span><span class="k">[formatter_form01]</span>
+<p class="translated">指定格式化器配置的小节说明如下。</p>
+<div class="translated highlight-ini notranslate"><div class="highlight"><pre><span></span><span class="k">[formatter_form01]</span>
 <span class="na">format</span><span class="o">=</span><span class="s">F1 %(asctime)s %(levelname)s %(message)s %(customfield)s</span>
 <span class="na">datefmt</span><span class="o">=</span>
 <span class="na">style</span><span class="o">=</span><span class="s">%</span>
@@ -1100,25 +695,18 @@ for the handler class. If not provided, it defaults to <code class="docutils lit
 <span class="na">class</span><span class="o">=</span><span class="s">logging.Formatter</span>
 </pre></div>
 </div>
-<p>The arguments for the formatter configuration are the same as the keys
-in the dictionary schema <a class="reference internal" href="#logging-config-dictschema-formatters"><span class="std std-ref">formatters section</span></a>.</p>
-<p>The <code class="docutils literal notranslate"><span class="pre">defaults</span></code> entry, when <a class="reference internal" href="functions.html#func-eval"><span class="std std-ref">evaluated</span></a> in the context of
-the <code class="docutils literal notranslate"><span class="pre">logging</span></code> package’s namespace, is a dictionary of default values for
-custom formatting fields. If not provided, it defaults to <code class="docutils literal notranslate"><span class="pre">None</span></code>.</p>
+<p class="translated">用于格式化器配置的参数与字典规范 <a class="reference internal" href="#logging-config-dictschema-formatters"><span class="std std-ref">格式化器部分</span></a> 中的键相同。</p>
+<p class="translated"><code class="docutils literal notranslate"><span class="pre">defaults</span></code> 条目，当在 <code class="docutils literal notranslate"><span class="pre">logging</span></code> 包的命名空间的上下文中 <a class="reference internal" href="functions.html#func-eval"><span class="std std-ref">求值</span></a> 时，将是一个由自定义格式化字段的默认值组成的字典。 如果未提供，则默认为 <code class="docutils literal notranslate"><span class="pre">None</span></code>。</p>
 <div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>Due to the use of <a class="reference internal" href="functions.html#eval" title="eval"><code class="xref py py-func docutils literal notranslate"><span class="pre">eval()</span></code></a> as described above, there are
-potential security risks which result from using the <a class="reference internal" href="#logging.config.listen" title="logging.config.listen"><code class="xref py py-func docutils literal notranslate"><span class="pre">listen()</span></code></a> to send
-and receive configurations via sockets. The risks are limited to where
-multiple users with no mutual trust run code on the same machine; see the
-<code class="xref py py-func docutils literal notranslate"><span class="pre">listen()</span></code> documentation for more information.</p>
+<p class="admonition-title">备注</p>
+<p class="translated">由于如上所述使用了 <a class="reference internal" href="functions.html#eval" title="eval"><code class="xref py py-func docutils literal notranslate"><span class="pre">eval()</span></code></a>，因此使用 <a class="reference internal" href="#logging.config.listen" title="logging.config.listen"><code class="xref py py-func docutils literal notranslate"><span class="pre">listen()</span></code></a> 通过套接字来发送和接收配置会导致潜在的安全风险。 此风险仅限于相互间没有信任的多个用户在同一台机器上运行代码的情况；请参阅 <code class="xref py py-func docutils literal notranslate"><span class="pre">listen()</span></code> 了解更多信息。</p>
 </div>
 <div class="admonition seealso">
-<p class="admonition-title">See also</p>
+<p class="admonition-title">参见</p>
 <dl class="simple">
-<dt>Module <a class="reference internal" href="logging.html#module-logging" title="logging: Flexible event logging system for applications."><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging</span></code></a></dt><dd><p>API reference for the logging module.</p>
+<dt class="translated">模块 <a class="reference internal" href="logging.html#module-logging" title="logging: Flexible event logging system for applications."><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging</span></code></a></dt><dd><p class="translated">日志记录模块的 API 参考。</p>
 </dd>
-<dt>Module <a class="reference internal" href="logging.handlers.html#module-logging.handlers" title="logging.handlers: Handlers for the logging module."><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging.handlers</span></code></a></dt><dd><p>Useful handlers included with the logging module.</p>
+<dt class="translated"><a class="reference internal" href="logging.handlers.html#module-logging.handlers" title="logging.handlers: Handlers for the logging module."><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging.handlers</span></code></a> 模块</dt><dd><p class="translated">日志记录模块附带的有用处理器。</p>
 </dd>
 </dl>
 </div>
@@ -1133,68 +721,58 @@ multiple users with no mutual trust run code on the same machine; see the
       <div class="sphinxsidebar" role="navigation" aria-label="Main">
         <div class="sphinxsidebarwrapper">
   <div>
-    <h3><a href="../contents.html">Table of Contents</a></h3>
+    <h3><a href="../contents.html">目录</a></h3>
     <ul>
-<li><a class="reference internal" href="#"><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging.config</span></code> — Logging configuration</a><ul>
-<li><a class="reference internal" href="#configuration-functions">Configuration functions</a></li>
-<li><a class="reference internal" href="#security-considerations">Security considerations</a></li>
-<li><a class="reference internal" href="#configuration-dictionary-schema">Configuration dictionary schema</a><ul>
-<li><a class="reference internal" href="#dictionary-schema-details">Dictionary Schema Details</a></li>
-<li><a class="reference internal" href="#incremental-configuration">Incremental Configuration</a></li>
-<li><a class="reference internal" href="#object-connections">Object connections</a></li>
-<li><a class="reference internal" href="#user-defined-objects">User-defined objects</a></li>
-<li><a class="reference internal" href="#handler-configuration-order">Handler configuration order</a></li>
-<li><a class="reference internal" href="#access-to-external-objects">Access to external objects</a></li>
-<li><a class="reference internal" href="#access-to-internal-objects">Access to internal objects</a></li>
-<li><a class="reference internal" href="#import-resolution-and-custom-importers">Import resolution and custom importers</a></li>
-<li><a class="reference internal" href="#configuring-queuehandler-and-queuelistener">Configuring QueueHandler and QueueListener</a></li>
+<li><a class="reference internal" href="#"><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging.config</span></code> --- 日志记录配置</a><ul>
+<li><a class="reference internal" href="#configuration-functions">配置函数</a></li>
+<li><a class="reference internal" href="#security-considerations">安全考量</a></li>
+<li><a class="reference internal" href="#configuration-dictionary-schema">配置字典架构</a><ul>
+<li><a class="reference internal" href="#dictionary-schema-details">字典架构细节</a></li>
+<li><a class="reference internal" href="#incremental-configuration">增量配置</a></li>
+<li><a class="reference internal" href="#object-connections">对象连接</a></li>
+<li><a class="reference internal" href="#user-defined-objects">用户定义对象</a></li>
+<li><a class="reference internal" href="#handler-configuration-order">处理器配置顺序</a></li>
+<li><a class="reference internal" href="#access-to-external-objects">访问外部对象</a></li>
+<li><a class="reference internal" href="#access-to-internal-objects">访问内部对象</a></li>
+<li><a class="reference internal" href="#import-resolution-and-custom-importers">导入解析与定制导入器</a></li>
+<li><a class="reference internal" href="#configuring-queuehandler-and-queuelistener">配置 QueueHandler 和 QueueListener</a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#configuration-file-format">Configuration file format</a></li>
+<li><a class="reference internal" href="#configuration-file-format">配置文件格式</a></li>
 </ul>
 </li>
 </ul>
 
   </div>
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="logging.html"
-                          title="previous chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging</span></code> — Logging facility for Python</a></p>
+                          title="上一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging</span></code> --- Python 的日志记录工具</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="logging.handlers.html"
-                          title="next chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging.handlers</span></code> — Logging handlers</a></p>
+                          title="下一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging.handlers</span></code> --- 日志处理器</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "library/logging.config.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/library/logging.config.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/library/logging.config.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
   </div>
         </div>
-<div id="sidebarbutton" title="Collapse sidebar">
+<div id="sidebarbutton" title="折叠边栏">
 <span>«</span>
 </div>
 
@@ -1202,20 +780,20 @@ multiple users with no mutual trust run code on the same machine; see the
       <div class="clearer"></div>
     </div>  
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             >index</a></li>
+          <a href="../genindex.html" title="总索引"
+             >索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="logging.handlers.html" title="logging.handlers — Logging handlers"
-             >next</a> |</li>
+          <a href="logging.handlers.html" title="logging.handlers --- 日志处理器"
+             >下一页</a> |</li>
         <li class="right" >
-          <a href="logging.html" title="logging — Logging facility for Python"
-             >previous</a> |</li>
+          <a href="logging.html" title="logging --- Python 的日志记录工具"
+             >上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -1227,59 +805,59 @@ multiple users with no mutual trust run code on the same machine; see the
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-          <li class="nav-item nav-item-1"><a href="index.html" >The Python Standard Library</a> &#187;</li>
-          <li class="nav-item nav-item-2"><a href="allos.html" >Generic Operating System Services</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging.config</span></code> — Logging configuration</a></li>
+          <li class="nav-item nav-item-1"><a href="index.html" >Python 标准库</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="allos.html" >通用操作系统服务</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging.config</span></code> --- 日志记录配置</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
       </ul>
     </div>  
     <div class="footer">
-    &copy; <a href="../copyright.html">Copyright</a> 2001 Python Software Foundation.
+    &copy; <a href="../copyright.html">版权</a> 2001-2026, Python Software Foundation.
     <br>
-    This page is licensed under the Python Software Foundation License Version 2.
+    本页面采用 Python 软件基金会许可证第 2 版授权。
     <br>
-    Examples, recipes, and other code in the documentation are additionally licensed under the Zero Clause BSD License.
+    文档中的示例、代码片段及其他代码内容额外采用零条款 BSD 许可证授权。
     <br>
     
-      See <a href="/license.html">History and License</a> for more information.<br>
+      更多信息请参阅《<a href="/license.html"> 历史与许可 </a>》。<br>
     
     
     <br>
 
-    The Python Software Foundation is a non-profit corporation.
-<a href="https://www.python.org/psf/donations/">Please donate.</a>
+    Python 软件基金会是一家非营利性公司。
+<a href="https://www.python.org/psf/donations/">请进行捐赠。</a>
 <br>
     <br>
-      Last updated on May 27, 2026 (10:52 UTC).
+      最后更新于5月 25, 2026 (11:48 UTC) 。
     
-      <a href="/bugs.html">Found a bug</a>?
+      <a href="/bugs.html">发现了错误</a>？
     
     <br>
 
-    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3.
+    使用<a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3 创建。
     </div>
 
   </body>

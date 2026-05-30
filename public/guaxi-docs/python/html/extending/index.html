@@ -1,44 +1,45 @@
 <!DOCTYPE html>
 
-<html lang="en" data-content_root="../">
+<html lang="zh-CN" data-content_root="../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta property="og:title" content="Extending and Embedding the Python Interpreter" />
+<meta property="og:title" content="扩展和嵌入 Python 解释器" />
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://docs.python.org/3/extending/index.html" />
 <meta property="og:site_name" content="Python documentation" />
-<meta property="og:description" content="This document describes how to write modules in C or C++ to extend the Python interpreter with new modules. Those modules can not only define new functions but also new object types and their metho..." />
+<meta property="og:description" content="本文档描述了如何使用 C 或 C++ 编写模块以使用新模块来扩展 Python 解释器的功能。 这些模块不仅可以定义新的函数，还可以定义新的对象类型及其方法。 该文档还描述了如何将 Python 解释器嵌入到另一个应用程序中，以用作扩展语言。 最后，它展示了如何编译和链接扩展模块，以便它们可以动态地（在运行时）加载到解释器中，如果底层操作系统支持此特性的话。 本文档假设你具备有关 Pytho..." />
 <meta property="og:image:width" content="1146" />
 <meta property="og:image:height" content="600" />
-<meta property="og:image" content="https://docs.python.org/3.14/_images/social_previews/summary_extending_index_cce66b56.png" />
-<meta property="og:image:alt" content="This document describes how to write modules in C or C++ to extend the Python interpreter with new modules. Those modules can not only define new functions but also new object types and their metho..." />
-<meta name="description" content="This document describes how to write modules in C or C++ to extend the Python interpreter with new modules. Those modules can not only define new functions but also new object types and their metho..." />
+<meta property="og:image" content="https://docs.python.org/3.13/zh-cn/_images/social_previews/summary_extending_index_839ad2af.png" />
+<meta property="og:image:alt" content="本文档描述了如何使用 C 或 C++ 编写模块以使用新模块来扩展 Python 解释器的功能。 这些模块不仅可以定义新的函数，还可以定义新的对象类型及其方法。 该文档还描述了如何将 Python 解释器嵌入到另一个应用程序中，以用作扩展语言。 最后，它展示了如何编译和链接扩展模块，以便它们可以动态地（在运行时）加载到解释器中，如果底层操作系统支持此特性的话。 本文档假设你具备有关 Pytho..." />
+<meta name="description" content="本文档描述了如何使用 C 或 C++ 编写模块以使用新模块来扩展 Python 解释器的功能。 这些模块不仅可以定义新的函数，还可以定义新的对象类型及其方法。 该文档还描述了如何将 Python 解释器嵌入到另一个应用程序中，以用作扩展语言。 最后，它展示了如何编译和链接扩展模块，以便它们可以动态地（在运行时）加载到解释器中，如果底层操作系统支持此特性的话。 本文档假设你具备有关 Pytho..." />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="theme-color" content="#3776ab">
 
-    <title>Extending and Embedding the Python Interpreter &#8212; Python 3.14.5 documentation</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>扩展和嵌入 Python 解释器 &#8212; Python 3.13.13 文档</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
     
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
     <link rel="stylesheet" type="text/css" href="../_static/classic.css?v=234b1a7c" />
     <link rel="stylesheet" type="text/css" href="../_static/pydoctheme.css?v=4365c8fe" />
     <link id="pygments_dark_css" media="(prefers-color-scheme: dark)" rel="stylesheet" type="text/css" href="../_static/pygments_dark.css?v=5349f25f" />
     
-    <script src="../_static/documentation_options.js?v=bcfd2f37"></script>
+    <script src="../_static/documentation_options.js?v=a941be6b"></script>
     <script src="../_static/doctools.js?v=9bcbadda"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/translations.js?v=beaddf03"></script>
     
     <script src="../_static/sidebar.js"></script>
     
     <link rel="search" type="application/opensearchdescription+xml"
-          title="Search within Python 3.14.5 documentation"
+          title="在 Python 3.13.13 文档 中搜索"
           href="../_static/opensearch.xml"/>
-    <link rel="author" title="About these documents" href="../about.html" />
-    <link rel="index" title="Index" href="../genindex.html" />
-    <link rel="search" title="Search" href="../search.html" />
-    <link rel="copyright" title="Copyright" href="../copyright.html" />
-    <link rel="next" title="1. Extending Python with C or C++" href="extending.html" />
-    <link rel="prev" title="Security Considerations" href="../library/security_warnings.html" />
+    <link rel="author" title="关于此文档" href="../about.html" />
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="搜索" href="../search.html" />
+    <link rel="copyright" title="版权" href="../copyright.html" />
+    <link rel="next" title="1. 使用 C 或 C++ 扩展 Python" href="extending.html" />
+    <link rel="prev" title="安全考量" href="../library/security_warnings.html" />
     
       
       <script defer file-types="bz2,epub,zip" data-domain="docs.python.org" src="https://analytics.python.org/js/script.file-downloads.outbound-links.js"></script>
@@ -68,7 +69,7 @@
 <body>
 <div class="mobile-nav">
     <input type="checkbox" id="menuToggler" class="toggler__input" aria-controls="navigation"
-           aria-pressed="false" aria-expanded="false" role="button" aria-label="Menu">
+           aria-pressed="false" aria-expanded="false" role="button" aria-label="菜单">
     <nav class="nav-content" role="navigation">
         <label for="menuToggler" class="toggler__label">
             <span></span>
@@ -82,8 +83,8 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" class="search-icon">
                     <path fill-rule="nonzero" fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 001.48-5.34c-.47-2.78-2.79-5-5.59-5.34a6.505 6.505 0 00-7.27 7.27c.34 2.8 2.56 5.12 5.34 5.59a6.5 6.5 0 005.34-1.48l.27.28v.79l4.25 4.25c.41.41 1.08.41 1.49 0 .41-.41.41-1.08 0-1.49L15.5 14zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"></path>
                 </svg>
-                <input placeholder="Quick search" aria-label="Quick search" type="search" name="q">
-                <input type="submit" value="Go">
+                <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q">
+                <input type="submit" value="转到">
             </form>
         </span>
     </nav>
@@ -92,58 +93,48 @@
             <div class="language_switcher_placeholder"></div>
             
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label>
   <div>
-    <h3><a href="../contents.html">Table of Contents</a></h3>
+    <h3><a href="../contents.html">目录</a></h3>
     <ul>
-<li><a class="reference internal" href="#">Extending and Embedding the Python Interpreter</a><ul>
-<li><a class="reference internal" href="#recommended-third-party-tools">Recommended third party tools</a></li>
-<li><a class="reference internal" href="#creating-extensions-without-third-party-tools">Creating extensions without third party tools</a></li>
-<li><a class="reference internal" href="#embedding-the-cpython-runtime-in-a-larger-application">Embedding the CPython runtime in a larger application</a></li>
+<li><a class="reference internal" href="#">扩展和嵌入 Python 解释器</a><ul>
+<li><a class="reference internal" href="#recommended-third-party-tools">推荐的第三方工具</a></li>
+<li><a class="reference internal" href="#creating-extensions-without-third-party-tools">不使用第三方工具创建扩展</a></li>
+<li><a class="reference internal" href="#embedding-the-cpython-runtime-in-a-larger-application">在更大的应用程序中嵌入 CPython 运行时</a></li>
 </ul>
 </li>
 </ul>
 
   </div>
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="../library/security_warnings.html"
-                          title="previous chapter">Security Considerations</a></p>
+                          title="上一章">安全考量</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="extending.html"
-                          title="next chapter"><span class="section-number">1. </span>Extending Python with C or C++</a></p>
+                          title="下一章"><span class="section-number">1. </span>使用 C 或 C++ 扩展 Python</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "extending/index.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/extending/index.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/extending/index.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
@@ -154,20 +145,20 @@
 
   
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             accesskey="I">index</a></li>
+          <a href="../genindex.html" title="总索引"
+             accesskey="I">索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="extending.html" title="1. Extending Python with C or C++"
-             accesskey="N">next</a> |</li>
+          <a href="extending.html" title="1. 使用 C 或 C++ 扩展 Python"
+             accesskey="N">下一页</a> |</li>
         <li class="right" >
-          <a href="../library/security_warnings.html" title="Security Considerations"
-             accesskey="P">previous</a> |</li>
+          <a href="../library/security_warnings.html" title="安全考量"
+             accesskey="P">上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -179,28 +170,28 @@
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-        <li class="nav-item nav-item-this"><a href="">Extending and Embedding the Python Interpreter</a></li>
+        <li class="nav-item nav-item-this"><a href="">扩展和嵌入 Python 解释器</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
@@ -213,100 +204,81 @@
           <div class="body" role="main">
             
   <section id="extending-and-embedding-the-python-interpreter">
-<span id="extending-index"></span><h1>Extending and Embedding the Python Interpreter<a class="headerlink" href="#extending-and-embedding-the-python-interpreter" title="Link to this heading">¶</a></h1>
-<p>This document describes how to write modules in C or C++ to extend the Python
-interpreter with new modules.  Those modules can not only define new functions
-but also new object types and their methods.  The document also describes how
-to embed the Python interpreter in another application, for use as an extension
-language.  Finally, it shows how to compile and link extension modules so that
-they can be loaded dynamically (at run time) into the interpreter, if the
-underlying operating system supports this feature.</p>
-<p>This document assumes basic knowledge about Python.  For an informal
-introduction to the language, see <a class="reference internal" href="../tutorial/index.html#tutorial-index"><span class="std std-ref">The Python Tutorial</span></a>.  <a class="reference internal" href="../reference/index.html#reference-index"><span class="std std-ref">The Python Language Reference</span></a>
-gives a more formal definition of the language.  <a class="reference internal" href="../library/index.html#library-index"><span class="std std-ref">The Python Standard Library</span></a> documents
-the existing object types, functions and modules (both built-in and written in
-Python) that give the language its wide application range.</p>
-<p>For a detailed description of the whole Python/C API, see the separate
-<a class="reference internal" href="../c-api/index.html#c-api-index"><span class="std std-ref">Python/C API reference manual</span></a>.</p>
+<span id="extending-index"></span><h1 class="translated">扩展和嵌入 Python 解释器<a class="headerlink" href="#extending-and-embedding-the-python-interpreter" title="Link to this heading">¶</a></h1>
+<p class="translated">本文档描述了如何使用 C 或 C++ 编写模块以使用新模块来扩展 Python 解释器的功能。 这些模块不仅可以定义新的函数，还可以定义新的对象类型及其方法。 该文档还描述了如何将 Python 解释器嵌入到另一个应用程序中，以用作扩展语言。 最后，它展示了如何编译和链接扩展模块，以便它们可以动态地（在运行时）加载到解释器中，如果底层操作系统支持此特性的话。</p>
+<p class="translated">本文档假设你具备有关 Python 的基本知识。有关该语言的非正式介绍，请参阅 <a class="reference internal" href="../tutorial/index.html#tutorial-index"><span class="std std-ref">Python 教程</span></a> 。 <a class="reference internal" href="../reference/index.html#reference-index"><span class="std std-ref">Python 语言参考手册</span></a> 给出了更正式的语言定义。 <a class="reference internal" href="../library/index.html#library-index"><span class="std std-ref">Python 标准库</span></a> 包含现有的对象类型、函数和模块（内置和用 Python 编写）的文档，使语言具有广泛的应用范围。</p>
+<p class="translated">关于整个 Python/C API 的详细介绍，请参阅独立的 <a class="reference internal" href="../c-api/index.html#c-api-index"><span class="std std-ref">Python/C API 参考手册</span></a> 。</p>
 <section id="recommended-third-party-tools">
-<h2>Recommended third party tools<a class="headerlink" href="#recommended-third-party-tools" title="Link to this heading">¶</a></h2>
-<p>This guide only covers the basic tools for creating extensions provided
-as part of this version of CPython. Some <a class="reference internal" href="../c-api/intro.html#c-api-tools"><span class="std std-ref">third party tools</span></a> offer both simpler and more sophisticated approaches to creating
-C and C++ extensions for Python.</p>
+<h2 class="translated">推荐的第三方工具<a class="headerlink" href="#recommended-third-party-tools" title="Link to this heading">¶</a></h2>
+<p class="translated">本指南仅介绍了作为此 CPython 版本的一部分提供的用于创建扩展的基本工具。 某些 <a class="reference internal" href="../c-api/intro.html#c-api-tools"><span class="std std-ref">第三方工具</span></a> 提供了更简单或更复杂的方式来为 Python 创建 C 和 C++ 扩展。</p>
 </section>
 <section id="creating-extensions-without-third-party-tools">
-<h2>Creating extensions without third party tools<a class="headerlink" href="#creating-extensions-without-third-party-tools" title="Link to this heading">¶</a></h2>
-<p>This section of the guide covers creating C and C++ extensions without
-assistance from third party tools. It is intended primarily for creators
-of those tools, rather than being a recommended way to create your own
-C extensions.</p>
+<h2 class="translated">不使用第三方工具创建扩展<a class="headerlink" href="#creating-extensions-without-third-party-tools" title="Link to this heading">¶</a></h2>
+<p class="translated">本指南的这一部分包括在没有第三方工具帮助的情况下创建 C 和 C ++ 扩展。它主要用于这些工具的创建者，而不是建议你创建自己的 C 扩展的方法。</p>
 <div class="admonition seealso">
-<p class="admonition-title">See also</p>
-<p><span class="target" id="index-0"></span><a class="pep reference external" href="https://peps.python.org/pep-0489/"><strong>PEP 489</strong></a> – Multi-phase extension module initialization</p>
+<p class="admonition-title">参见</p>
+<p class="translated"><span class="target" id="index-2"></span><a class="pep reference external" href="https://peps.python.org/pep-0489/"><strong>PEP 489</strong></a> -- 多阶段扩展模块初始化</p>
 </div>
 <div class="toctree-wrapper compound">
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="extending.html">1. Extending Python with C or C++</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="extending.html#a-simple-example">1.1. A Simple Example</a></li>
-<li class="toctree-l2"><a class="reference internal" href="extending.html#intermezzo-errors-and-exceptions">1.2. Intermezzo: Errors and Exceptions</a></li>
-<li class="toctree-l2"><a class="reference internal" href="extending.html#back-to-the-example">1.3. Back to the Example</a></li>
-<li class="toctree-l2"><a class="reference internal" href="extending.html#the-module-s-method-table-and-initialization-function">1.4. The Module’s Method Table and Initialization Function</a></li>
-<li class="toctree-l2"><a class="reference internal" href="extending.html#compilation-and-linkage">1.5. Compilation and Linkage</a></li>
-<li class="toctree-l2"><a class="reference internal" href="extending.html#calling-python-functions-from-c">1.6. Calling Python Functions from C</a></li>
-<li class="toctree-l2"><a class="reference internal" href="extending.html#extracting-parameters-in-extension-functions">1.7. Extracting Parameters in Extension Functions</a></li>
-<li class="toctree-l2"><a class="reference internal" href="extending.html#keyword-parameters-for-extension-functions">1.8. Keyword Parameters for Extension Functions</a></li>
-<li class="toctree-l2"><a class="reference internal" href="extending.html#building-arbitrary-values">1.9. Building Arbitrary Values</a></li>
-<li class="toctree-l2"><a class="reference internal" href="extending.html#reference-counts">1.10. Reference Counts</a></li>
-<li class="toctree-l2"><a class="reference internal" href="extending.html#writing-extensions-in-c">1.11. Writing Extensions in C++</a></li>
-<li class="toctree-l2"><a class="reference internal" href="extending.html#providing-a-c-api-for-an-extension-module">1.12. Providing a C API for an Extension Module</a></li>
+<li class="toctree-l1"><a class="reference internal" href="extending.html">1. 使用 C 或 C++ 扩展 Python</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="extending.html#a-simple-example">1.1. 一个简单的例子</a></li>
+<li class="toctree-l2"><a class="reference internal" href="extending.html#intermezzo-errors-and-exceptions">1.2. 关于错误和异常</a></li>
+<li class="toctree-l2"><a class="reference internal" href="extending.html#back-to-the-example">1.3. 回到例子</a></li>
+<li class="toctree-l2"><a class="reference internal" href="extending.html#the-module-s-method-table-and-initialization-function">1.4. 模块方法表和初始化函数</a></li>
+<li class="toctree-l2"><a class="reference internal" href="extending.html#compilation-and-linkage">1.5. 编译和链接</a></li>
+<li class="toctree-l2"><a class="reference internal" href="extending.html#calling-python-functions-from-c">1.6. 在C中调用Python函数</a></li>
+<li class="toctree-l2"><a class="reference internal" href="extending.html#extracting-parameters-in-extension-functions">1.7. 提取扩展函数的参数</a></li>
+<li class="toctree-l2"><a class="reference internal" href="extending.html#keyword-parameters-for-extension-functions">1.8. 给扩展函数的关键字参数</a></li>
+<li class="toctree-l2"><a class="reference internal" href="extending.html#building-arbitrary-values">1.9. 构造任意值</a></li>
+<li class="toctree-l2"><a class="reference internal" href="extending.html#reference-counts">1.10. 引用计数</a></li>
+<li class="toctree-l2"><a class="reference internal" href="extending.html#writing-extensions-in-c">1.11. 在C++中编写扩展</a></li>
+<li class="toctree-l2"><a class="reference internal" href="extending.html#providing-a-c-api-for-an-extension-module">1.12. 给扩展模块提供C API</a></li>
 </ul>
 </li>
-<li class="toctree-l1"><a class="reference internal" href="newtypes_tutorial.html">2. Defining Extension Types: Tutorial</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="newtypes_tutorial.html#the-basics">2.1. The Basics</a></li>
-<li class="toctree-l2"><a class="reference internal" href="newtypes_tutorial.html#adding-data-and-methods-to-the-basic-example">2.2. Adding data and methods to the Basic example</a></li>
-<li class="toctree-l2"><a class="reference internal" href="newtypes_tutorial.html#providing-finer-control-over-data-attributes">2.3. Providing finer control over data attributes</a></li>
-<li class="toctree-l2"><a class="reference internal" href="newtypes_tutorial.html#supporting-cyclic-garbage-collection">2.4. Supporting cyclic garbage collection</a></li>
-<li class="toctree-l2"><a class="reference internal" href="newtypes_tutorial.html#subclassing-other-types">2.5. Subclassing other types</a></li>
+<li class="toctree-l1"><a class="reference internal" href="newtypes_tutorial.html">2. 自定义扩展类型：教程</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="newtypes_tutorial.html#the-basics">2.1. 基础</a></li>
+<li class="toctree-l2"><a class="reference internal" href="newtypes_tutorial.html#adding-data-and-methods-to-the-basic-example">2.2. 向基本示例添加数据和方法</a></li>
+<li class="toctree-l2"><a class="reference internal" href="newtypes_tutorial.html#providing-finer-control-over-data-attributes">2.3. 提供对于数据属性的更精细控制</a></li>
+<li class="toctree-l2"><a class="reference internal" href="newtypes_tutorial.html#supporting-cyclic-garbage-collection">2.4. 支持循环垃圾回收</a></li>
+<li class="toctree-l2"><a class="reference internal" href="newtypes_tutorial.html#subclassing-other-types">2.5. 子类化其他类型</a></li>
 </ul>
 </li>
-<li class="toctree-l1"><a class="reference internal" href="newtypes.html">3. Defining Extension Types: Assorted Topics</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="newtypes.html#finalization-and-de-allocation">3.1. Finalization and De-allocation</a></li>
-<li class="toctree-l2"><a class="reference internal" href="newtypes.html#object-presentation">3.2. Object Presentation</a></li>
-<li class="toctree-l2"><a class="reference internal" href="newtypes.html#attribute-management">3.3. Attribute Management</a></li>
-<li class="toctree-l2"><a class="reference internal" href="newtypes.html#object-comparison">3.4. Object Comparison</a></li>
-<li class="toctree-l2"><a class="reference internal" href="newtypes.html#abstract-protocol-support">3.5. Abstract Protocol Support</a></li>
-<li class="toctree-l2"><a class="reference internal" href="newtypes.html#weak-reference-support">3.6. Weak Reference Support</a></li>
-<li class="toctree-l2"><a class="reference internal" href="newtypes.html#more-suggestions">3.7. More Suggestions</a></li>
+<li class="toctree-l1"><a class="reference internal" href="newtypes.html">3. 定义扩展类型：已分类主题</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="newtypes.html#finalization-and-de-allocation">3.1. 终结和内存释放</a></li>
+<li class="toctree-l2"><a class="reference internal" href="newtypes.html#object-presentation">3.2. 对象展示</a></li>
+<li class="toctree-l2"><a class="reference internal" href="newtypes.html#attribute-management">3.3. 属性管理</a></li>
+<li class="toctree-l2"><a class="reference internal" href="newtypes.html#object-comparison">3.4. 对象比较</a></li>
+<li class="toctree-l2"><a class="reference internal" href="newtypes.html#abstract-protocol-support">3.5. 抽象协议支持</a></li>
+<li class="toctree-l2"><a class="reference internal" href="newtypes.html#weak-reference-support">3.6. 弱引用支持</a></li>
+<li class="toctree-l2"><a class="reference internal" href="newtypes.html#more-suggestions">3.7. 更多建议</a></li>
 </ul>
 </li>
-<li class="toctree-l1"><a class="reference internal" href="building.html">4. Building C and C++ Extensions</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="building.html#building-c-and-c-extensions-with-setuptools">4.1. Building C and C++ Extensions with setuptools</a></li>
+<li class="toctree-l1"><a class="reference internal" href="building.html">4. 构建 C/C++ 扩展</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="building.html#building-c-and-c-extensions-with-setuptools">4.1. 使用 setuptools 构建 C 和 C++ 扩展</a></li>
 </ul>
 </li>
-<li class="toctree-l1"><a class="reference internal" href="windows.html">5. Building C and C++ Extensions on Windows</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="windows.html#a-cookbook-approach">5.1. A Cookbook Approach</a></li>
-<li class="toctree-l2"><a class="reference internal" href="windows.html#differences-between-unix-and-windows">5.2. Differences Between Unix and Windows</a></li>
-<li class="toctree-l2"><a class="reference internal" href="windows.html#using-dlls-in-practice">5.3. Using DLLs in Practice</a></li>
+<li class="toctree-l1"><a class="reference internal" href="windows.html">5. 在 Windows 上构建 C 和 C++ 扩展</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="windows.html#a-cookbook-approach">5.1. 菜谱式说明</a></li>
+<li class="toctree-l2"><a class="reference internal" href="windows.html#differences-between-unix-and-windows">5.2. Unix 和 Windows 之间的差异</a></li>
+<li class="toctree-l2"><a class="reference internal" href="windows.html#using-dlls-in-practice">5.3. DLL 的实际使用</a></li>
 </ul>
 </li>
 </ul>
 </div>
 </section>
 <section id="embedding-the-cpython-runtime-in-a-larger-application">
-<h2>Embedding the CPython runtime in a larger application<a class="headerlink" href="#embedding-the-cpython-runtime-in-a-larger-application" title="Link to this heading">¶</a></h2>
-<p>Sometimes, rather than creating an extension that runs inside the Python
-interpreter as the main application, it is desirable to instead embed
-the CPython runtime inside a larger application. This section covers
-some of the details involved in doing that successfully.</p>
+<h2 class="translated">在更大的应用程序中嵌入 CPython 运行时<a class="headerlink" href="#embedding-the-cpython-runtime-in-a-larger-application" title="Link to this heading">¶</a></h2>
+<p class="translated">有时，不是要创建在 Python 解释器中作为主应用程序运行的扩展，而是希望将 CPython 运行时嵌入到更大的应用程序中。 本节介绍了成功完成此操作所涉及的一些细节。</p>
 <div class="toctree-wrapper compound">
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="embedding.html">1. Embedding Python in Another Application</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="embedding.html#very-high-level-embedding">1.1. Very High Level Embedding</a></li>
-<li class="toctree-l2"><a class="reference internal" href="embedding.html#beyond-very-high-level-embedding-an-overview">1.2. Beyond Very High Level Embedding: An overview</a></li>
-<li class="toctree-l2"><a class="reference internal" href="embedding.html#pure-embedding">1.3. Pure Embedding</a></li>
-<li class="toctree-l2"><a class="reference internal" href="embedding.html#extending-embedded-python">1.4. Extending Embedded Python</a></li>
-<li class="toctree-l2"><a class="reference internal" href="embedding.html#embedding-python-in-c">1.5. Embedding Python in C++</a></li>
-<li class="toctree-l2"><a class="reference internal" href="embedding.html#compiling-and-linking-under-unix-like-systems">1.6. Compiling and Linking under Unix-like systems</a></li>
+<li class="toctree-l1"><a class="reference internal" href="embedding.html">1. 在其它应用程序嵌入 Python</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="embedding.html#very-high-level-embedding">1.1. 高层次的嵌入</a></li>
+<li class="toctree-l2"><a class="reference internal" href="embedding.html#beyond-very-high-level-embedding-an-overview">1.2. 突破高层次嵌入的限制：概述</a></li>
+<li class="toctree-l2"><a class="reference internal" href="embedding.html#pure-embedding">1.3. 只做嵌入</a></li>
+<li class="toctree-l2"><a class="reference internal" href="embedding.html#extending-embedded-python">1.4. 对嵌入 Python 功能进行扩展</a></li>
+<li class="toctree-l2"><a class="reference internal" href="embedding.html#embedding-python-in-c">1.5. 在 C++ 中嵌入 Python</a></li>
+<li class="toctree-l2"><a class="reference internal" href="embedding.html#compiling-and-linking-under-unix-like-systems">1.6. 在类 Unix 系统中编译和链接</a></li>
 </ul>
 </li>
 </ul>
@@ -322,56 +294,46 @@ some of the details involved in doing that successfully.</p>
       <div class="sphinxsidebar" role="navigation" aria-label="Main">
         <div class="sphinxsidebarwrapper">
   <div>
-    <h3><a href="../contents.html">Table of Contents</a></h3>
+    <h3><a href="../contents.html">目录</a></h3>
     <ul>
-<li><a class="reference internal" href="#">Extending and Embedding the Python Interpreter</a><ul>
-<li><a class="reference internal" href="#recommended-third-party-tools">Recommended third party tools</a></li>
-<li><a class="reference internal" href="#creating-extensions-without-third-party-tools">Creating extensions without third party tools</a></li>
-<li><a class="reference internal" href="#embedding-the-cpython-runtime-in-a-larger-application">Embedding the CPython runtime in a larger application</a></li>
+<li><a class="reference internal" href="#">扩展和嵌入 Python 解释器</a><ul>
+<li><a class="reference internal" href="#recommended-third-party-tools">推荐的第三方工具</a></li>
+<li><a class="reference internal" href="#creating-extensions-without-third-party-tools">不使用第三方工具创建扩展</a></li>
+<li><a class="reference internal" href="#embedding-the-cpython-runtime-in-a-larger-application">在更大的应用程序中嵌入 CPython 运行时</a></li>
 </ul>
 </li>
 </ul>
 
   </div>
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="../library/security_warnings.html"
-                          title="previous chapter">Security Considerations</a></p>
+                          title="上一章">安全考量</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="extending.html"
-                          title="next chapter"><span class="section-number">1. </span>Extending Python with C or C++</a></p>
+                          title="下一章"><span class="section-number">1. </span>使用 C 或 C++ 扩展 Python</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "extending/index.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/extending/index.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/extending/index.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
   </div>
         </div>
-<div id="sidebarbutton" title="Collapse sidebar">
+<div id="sidebarbutton" title="折叠边栏">
 <span>«</span>
 </div>
 
@@ -379,20 +341,20 @@ some of the details involved in doing that successfully.</p>
       <div class="clearer"></div>
     </div>  
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             >index</a></li>
+          <a href="../genindex.html" title="总索引"
+             >索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="extending.html" title="1. Extending Python with C or C++"
-             >next</a> |</li>
+          <a href="extending.html" title="1. 使用 C 或 C++ 扩展 Python"
+             >下一页</a> |</li>
         <li class="right" >
-          <a href="../library/security_warnings.html" title="Security Considerations"
-             >previous</a> |</li>
+          <a href="../library/security_warnings.html" title="安全考量"
+             >上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -404,57 +366,57 @@ some of the details involved in doing that successfully.</p>
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-        <li class="nav-item nav-item-this"><a href="">Extending and Embedding the Python Interpreter</a></li>
+        <li class="nav-item nav-item-this"><a href="">扩展和嵌入 Python 解释器</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
       </ul>
     </div>  
     <div class="footer">
-    &copy; <a href="../copyright.html">Copyright</a> 2001 Python Software Foundation.
+    &copy; <a href="../copyright.html">版权</a> 2001-2026, Python Software Foundation.
     <br>
-    This page is licensed under the Python Software Foundation License Version 2.
+    本页面采用 Python 软件基金会许可证第 2 版授权。
     <br>
-    Examples, recipes, and other code in the documentation are additionally licensed under the Zero Clause BSD License.
+    文档中的示例、代码片段及其他代码内容额外采用零条款 BSD 许可证授权。
     <br>
     
-      See <a href="/license.html">History and License</a> for more information.<br>
+      更多信息请参阅《<a href="/license.html"> 历史与许可 </a>》。<br>
     
     
     <br>
 
-    The Python Software Foundation is a non-profit corporation.
-<a href="https://www.python.org/psf/donations/">Please donate.</a>
+    Python 软件基金会是一家非营利性公司。
+<a href="https://www.python.org/psf/donations/">请进行捐赠。</a>
 <br>
     <br>
-      Last updated on May 27, 2026 (10:52 UTC).
+      最后更新于5月 25, 2026 (11:48 UTC) 。
     
-      <a href="/bugs.html">Found a bug</a>?
+      <a href="/bugs.html">发现了错误</a>？
     
     <br>
 
-    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3.
+    使用<a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3 创建。
     </div>
 
   </body>

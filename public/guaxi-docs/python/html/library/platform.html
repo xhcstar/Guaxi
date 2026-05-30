@@ -1,44 +1,45 @@
 <!DOCTYPE html>
 
-<html lang="en" data-content_root="../">
+<html lang="zh-CN" data-content_root="../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta property="og:title" content="platform —  Access to underlying platform’s identifying data" />
+<meta property="og:title" content="platform ---  访问底层平台的标识数据" />
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://docs.python.org/3/library/platform.html" />
 <meta property="og:site_name" content="Python documentation" />
-<meta property="og:description" content="Source code: Lib/platform.py Cross platform: Java platform: Windows platform: macOS platform: iOS platform: Unix platforms: Linux platforms: Android platform: Command-line usage: platform can also ..." />
+<meta property="og:description" content="源代码： Lib/platform.py 跨平台: Java 平台: Windows 平台: macOS 平台: iOS 平台: Unix 平台: Linux 平台: Android 平台: 命令行用法: platform 也可使用解释器的-m 开关直接唤起: 可以接受以下选项： 你还可以传入一个或多个位置参数 ( terse, nonaliased) 来显式控制输出格式。 其行为与它们所对..." />
 <meta property="og:image:width" content="1146" />
 <meta property="og:image:height" content="600" />
-<meta property="og:image" content="https://docs.python.org/3.14/_images/social_previews/summary_library_platform_311c68e7.png" />
-<meta property="og:image:alt" content="Source code: Lib/platform.py Cross platform: Java platform: Windows platform: macOS platform: iOS platform: Unix platforms: Linux platforms: Android platform: Command-line usage: platform can also ..." />
-<meta name="description" content="Source code: Lib/platform.py Cross platform: Java platform: Windows platform: macOS platform: iOS platform: Unix platforms: Linux platforms: Android platform: Command-line usage: platform can also ..." />
+<meta property="og:image" content="https://docs.python.org/3.13/zh-cn/_images/social_previews/summary_library_platform_f728d03c.png" />
+<meta property="og:image:alt" content="源代码： Lib/platform.py 跨平台: Java 平台: Windows 平台: macOS 平台: iOS 平台: Unix 平台: Linux 平台: Android 平台: 命令行用法: platform 也可使用解释器的-m 开关直接唤起: 可以接受以下选项： 你还可以传入一个或多个位置参数 ( terse, nonaliased) 来显式控制输出格式。 其行为与它们所对..." />
+<meta name="description" content="源代码： Lib/platform.py 跨平台: Java 平台: Windows 平台: macOS 平台: iOS 平台: Unix 平台: Linux 平台: Android 平台: 命令行用法: platform 也可使用解释器的-m 开关直接唤起: 可以接受以下选项： 你还可以传入一个或多个位置参数 ( terse, nonaliased) 来显式控制输出格式。 其行为与它们所对..." />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="theme-color" content="#3776ab">
 
-    <title>platform — Access to underlying platform’s identifying data &#8212; Python 3.14.5 documentation</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>platform --- 访问底层平台的标识数据 &#8212; Python 3.13.13 文档</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
     
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
     <link rel="stylesheet" type="text/css" href="../_static/classic.css?v=234b1a7c" />
     <link rel="stylesheet" type="text/css" href="../_static/pydoctheme.css?v=4365c8fe" />
     <link id="pygments_dark_css" media="(prefers-color-scheme: dark)" rel="stylesheet" type="text/css" href="../_static/pygments_dark.css?v=5349f25f" />
     
-    <script src="../_static/documentation_options.js?v=bcfd2f37"></script>
+    <script src="../_static/documentation_options.js?v=a941be6b"></script>
     <script src="../_static/doctools.js?v=9bcbadda"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/translations.js?v=beaddf03"></script>
     
     <script src="../_static/sidebar.js"></script>
     
     <link rel="search" type="application/opensearchdescription+xml"
-          title="Search within Python 3.14.5 documentation"
+          title="在 Python 3.13.13 文档 中搜索"
           href="../_static/opensearch.xml"/>
-    <link rel="author" title="About these documents" href="../about.html" />
-    <link rel="index" title="Index" href="../genindex.html" />
-    <link rel="search" title="Search" href="../search.html" />
-    <link rel="copyright" title="Copyright" href="../copyright.html" />
-    <link rel="next" title="errno — Standard errno system symbols" href="errno.html" />
-    <link rel="prev" title="logging.handlers — Logging handlers" href="logging.handlers.html" />
+    <link rel="author" title="关于此文档" href="../about.html" />
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="搜索" href="../search.html" />
+    <link rel="copyright" title="版权" href="../copyright.html" />
+    <link rel="next" title="errno --- 标准 errno 系统符号" href="errno.html" />
+    <link rel="prev" title="logging.handlers --- 日志处理器" href="logging.handlers.html" />
     
       
       <script defer file-types="bz2,epub,zip" data-domain="docs.python.org" src="https://analytics.python.org/js/script.file-downloads.outbound-links.js"></script>
@@ -68,7 +69,7 @@
 <body>
 <div class="mobile-nav">
     <input type="checkbox" id="menuToggler" class="toggler__input" aria-controls="navigation"
-           aria-pressed="false" aria-expanded="false" role="button" aria-label="Menu">
+           aria-pressed="false" aria-expanded="false" role="button" aria-label="菜单">
     <nav class="nav-content" role="navigation">
         <label for="menuToggler" class="toggler__label">
             <span></span>
@@ -82,8 +83,8 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" class="search-icon">
                     <path fill-rule="nonzero" fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 001.48-5.34c-.47-2.78-2.79-5-5.59-5.34a6.505 6.505 0 00-7.27 7.27c.34 2.8 2.56 5.12 5.34 5.59a6.5 6.5 0 005.34-1.48l.27.28v.79l4.25 4.25c.41.41 1.08.41 1.49 0 .41-.41.41-1.08 0-1.49L15.5 14zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"></path>
                 </svg>
-                <input placeholder="Quick search" aria-label="Quick search" type="search" name="q">
-                <input type="submit" value="Go">
+                <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q">
+                <input type="submit" value="转到">
             </form>
         </span>
     </nav>
@@ -92,64 +93,54 @@
             <div class="language_switcher_placeholder"></div>
             
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label>
   <div>
-    <h3><a href="../contents.html">Table of Contents</a></h3>
+    <h3><a href="../contents.html">目录</a></h3>
     <ul>
-<li><a class="reference internal" href="#"><code class="xref py py-mod docutils literal notranslate"><span class="pre">platform</span></code> —  Access to underlying platform’s identifying data</a><ul>
-<li><a class="reference internal" href="#cross-platform">Cross platform</a></li>
-<li><a class="reference internal" href="#java-platform">Java platform</a></li>
-<li><a class="reference internal" href="#windows-platform">Windows platform</a></li>
-<li><a class="reference internal" href="#macos-platform">macOS platform</a></li>
-<li><a class="reference internal" href="#ios-platform">iOS platform</a></li>
-<li><a class="reference internal" href="#unix-platforms">Unix platforms</a></li>
-<li><a class="reference internal" href="#linux-platforms">Linux platforms</a></li>
-<li><a class="reference internal" href="#android-platform">Android platform</a></li>
-<li><a class="reference internal" href="#command-line-usage">Command-line usage</a></li>
+<li><a class="reference internal" href="#"><code class="xref py py-mod docutils literal notranslate"><span class="pre">platform</span></code> ---  访问底层平台的标识数据</a><ul>
+<li><a class="reference internal" href="#cross-platform">跨平台</a></li>
+<li><a class="reference internal" href="#java-platform">Java 平台</a></li>
+<li><a class="reference internal" href="#windows-platform">Windows 平台</a></li>
+<li><a class="reference internal" href="#macos-platform">macOS 平台</a></li>
+<li><a class="reference internal" href="#ios-platform">iOS 平台</a></li>
+<li><a class="reference internal" href="#unix-platforms">Unix 平台</a></li>
+<li><a class="reference internal" href="#linux-platforms">Linux 平台</a></li>
+<li><a class="reference internal" href="#android-platform">Android 平台</a></li>
+<li><a class="reference internal" href="#command-line-usage">命令行用法</a></li>
 </ul>
 </li>
 </ul>
 
   </div>
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="logging.handlers.html"
-                          title="previous chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging.handlers</span></code> — Logging handlers</a></p>
+                          title="上一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging.handlers</span></code> --- 日志处理器</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="errno.html"
-                          title="next chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">errno</span></code> — Standard errno system symbols</a></p>
+                          title="下一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">errno</span></code> --- 标准 errno 系统符号</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "library/platform.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/library/platform.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/library/platform.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
@@ -160,20 +151,20 @@
 
   
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             accesskey="I">index</a></li>
+          <a href="../genindex.html" title="总索引"
+             accesskey="I">索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="errno.html" title="errno — Standard errno system symbols"
-             accesskey="N">next</a> |</li>
+          <a href="errno.html" title="errno --- 标准 errno 系统符号"
+             accesskey="N">下一页</a> |</li>
         <li class="right" >
-          <a href="logging.handlers.html" title="logging.handlers — Logging handlers"
-             accesskey="P">previous</a> |</li>
+          <a href="logging.handlers.html" title="logging.handlers --- 日志处理器"
+             accesskey="P">上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -185,30 +176,30 @@
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-          <li class="nav-item nav-item-1"><a href="index.html" >The Python Standard Library</a> &#187;</li>
-          <li class="nav-item nav-item-2"><a href="allos.html" accesskey="U">Generic Operating System Services</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">platform</span></code> —  Access to underlying platform’s identifying data</a></li>
+          <li class="nav-item nav-item-1"><a href="index.html" >Python 标准库</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="allos.html" accesskey="U">通用操作系统服务</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">platform</span></code> ---  访问底层平台的标识数据</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
@@ -221,39 +212,27 @@
           <div class="body" role="main">
             
   <section id="module-platform">
-<span id="platform-access-to-underlying-platform-s-identifying-data"></span><h1><code class="xref py py-mod docutils literal notranslate"><span class="pre">platform</span></code> —  Access to underlying platform’s identifying data<a class="headerlink" href="#module-platform" title="Link to this heading">¶</a></h1>
-<p><strong>Source code:</strong> <a class="extlink-source reference external" href="https://github.com/python/cpython/tree/3.14/Lib/platform.py">Lib/platform.py</a></p>
+<span id="platform-access-to-underlying-platform-s-identifying-data"></span><h1 class="translated"><code class="xref py py-mod docutils literal notranslate"><span class="pre">platform</span></code> ---  访问底层平台的标识数据<a class="headerlink" href="#module-platform" title="Link to this heading">¶</a></h1>
+<p class="translated"><strong>源代码：</strong> <a class="extlink-source reference external" href="https://github.com/python/cpython/tree/3.13/Lib/platform.py">Lib/platform.py</a></p>
 <hr class="docutils" />
 <div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>Specific platforms listed alphabetically, with Linux included in the Unix
-section.</p>
+<p class="admonition-title">备注</p>
+<p class="translated">特定平台按字母顺序排列，Linux 包括在 Unix 小节之中。</p>
 </div>
 <section id="cross-platform">
-<h2>Cross platform<a class="headerlink" href="#cross-platform" title="Link to this heading">¶</a></h2>
+<h2 class="translated">跨平台<a class="headerlink" href="#cross-platform" title="Link to this heading">¶</a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="platform.architecture">
 <span class="sig-prename descclassname"><span class="pre">platform.</span></span><span class="sig-name descname"><span class="pre">architecture</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">executable</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">sys.executable</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bits</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">linkage</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#platform.architecture" title="Link to this definition">¶</a></dt>
-<dd><p>Queries the given executable (defaults to the Python interpreter binary) for
-various architecture information.</p>
-<p>Returns a tuple <code class="docutils literal notranslate"><span class="pre">(bits,</span> <span class="pre">linkage)</span></code> which contain information about the bit
-architecture and the linkage format used for the executable. Both values are
-returned as strings.</p>
-<p>Values that cannot be determined are returned as given by the parameter presets.
-If bits is given as <code class="docutils literal notranslate"><span class="pre">''</span></code>, the <code class="docutils literal notranslate"><span class="pre">sizeof(pointer)</span></code> (or
-<code class="docutils literal notranslate"><span class="pre">sizeof(long)</span></code> on Python version &lt; 1.5.2) is used as indicator for the
-supported pointer size.</p>
-<p>The function relies on the system’s <code class="file docutils literal notranslate"><span class="pre">file</span></code> command to do the actual work.
-This is available on most if not all Unix  platforms and some non-Unix platforms
-and then only if the executable points to the Python interpreter.  Reasonable
-defaults are used when the above needs are not met.</p>
+<dd><p class="translated">查询给定的可执行文件（默认为 Python 解释器二进制码文件）来获取各种架构信息。</p>
+<p class="translated">返回一个元素 <code class="docutils literal notranslate"><span class="pre">(bits,</span> <span class="pre">linkage)</span></code>，其中包含可执行文件所使用的位架构和链接格式信息。 这两个值均以字符串形式返回。</p>
+<p class="translated">无法确定的值将返回为形参预设所给出的值。 如果给出的位数为 <code class="docutils literal notranslate"><span class="pre">''</span></code>，则会使用 <code class="docutils literal notranslate"><span class="pre">sizeof(pointer)</span></code> (或者当 Python 版本 &lt; 1.5.2 时为 <code class="docutils literal notranslate"><span class="pre">sizeof(long)</span></code>) 作为所支持的指针大小的提示。</p>
+<p class="translated">此函数依赖于系统的 <code class="file docutils literal notranslate"><span class="pre">file</span></code> 命令来执行实际的操作。 这在几乎所有 Unix 平台和某些非 Unix 平台上只有当可执行文件指向 Python 解释器时才可用。 当以上要求不满足时将会使用合理的默认值。</p>
 <div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>On macOS (and perhaps other platforms), executable files may be
-universal files containing multiple architectures.</p>
-<p>To get at the “64-bitness” of the current interpreter, it is more
-reliable to query the <a class="reference internal" href="sys.html#sys.maxsize" title="sys.maxsize"><code class="xref py py-data docutils literal notranslate"><span class="pre">sys.maxsize</span></code></a> attribute:</p>
-<div class="highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="n">is_64bits</span> <span class="o">=</span> <span class="n">sys</span><span class="o">.</span><span class="n">maxsize</span> <span class="o">&gt;</span> <span class="mi">2</span><span class="o">**</span><span class="mi">32</span>
+<p class="admonition-title">备注</p>
+<p class="translated">在 macOS (也许还有其他平台) 上，可执行文件可能是包含多种架构的通用文件。</p>
+<p class="translated">要获取当前解释器的“64 位性”，更可靠的做法是查询 <a class="reference internal" href="sys.html#sys.maxsize" title="sys.maxsize"><code class="xref py py-data docutils literal notranslate"><span class="pre">sys.maxsize</span></code></a> 属性:</p>
+<div class="translated highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="n">is_64bits</span> <span class="o">=</span> <span class="n">sys</span><span class="o">.</span><span class="n">maxsize</span> <span class="o">&gt;</span> <span class="mi">2</span><span class="o">**</span><span class="mi">32</span>
 </pre></div>
 </div>
 </div>
@@ -262,200 +241,147 @@ reliable to query the <a class="reference internal" href="sys.html#sys.maxsize" 
 <dl class="py function">
 <dt class="sig sig-object py" id="platform.machine">
 <span class="sig-prename descclassname"><span class="pre">platform.</span></span><span class="sig-name descname"><span class="pre">machine</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#platform.machine" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the machine type, e.g. <code class="docutils literal notranslate"><span class="pre">'AMD64'</span></code>. An empty string is returned if the
-value cannot be determined.</p>
-<p>The output is platform-dependent and may differ in casing and naming conventions.</p>
+<dd><p class="translated">返回机器类型，例如 <code class="docutils literal notranslate"><span class="pre">'AMD64'</span></code> 。 如果该值无法确定则会返回一个空字符串。</p>
+<p class="translated">输出内容依赖于具体平台并可能在大小写和命名惯例方面有所差异。</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="platform.node">
 <span class="sig-prename descclassname"><span class="pre">platform.</span></span><span class="sig-name descname"><span class="pre">node</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#platform.node" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the computer’s network name (may not be fully qualified!). An empty
-string is returned if the value cannot be determined.</p>
+<dd><p class="translated">返回计算机的网络名称（可能不是完整限定名称！）。 如果该值无法确定则会返回一个空字符串。</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="platform.platform">
 <span class="sig-prename descclassname"><span class="pre">platform.</span></span><span class="sig-name descname"><span class="pre">platform</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">aliased</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">terse</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#platform.platform" title="Link to this definition">¶</a></dt>
-<dd><p>Returns a single string identifying the underlying platform with as much useful
-information as possible.</p>
-<p>The output is intended to be <em>human readable</em> rather than machine parseable. It
-may look different on different platforms and this is intended.</p>
-<p>If <em>aliased</em> is true, the function will use aliases for various platforms that
-report system names which differ from their common names, for example SunOS will
-be reported as Solaris.  The <a class="reference internal" href="#platform.system_alias" title="platform.system_alias"><code class="xref py py-func docutils literal notranslate"><span class="pre">system_alias()</span></code></a> function is used to implement
-this.</p>
-<p>Setting <em>terse</em> to true causes the function to return only the absolute minimum
-information needed to identify the platform.</p>
+<dd><p class="translated">返回一个标识底层平台的字符串，其中带有尽可能多的有用信息。</p>
+<p class="translated">输出信息的目标是“人类易读”而非机器易解析。 它在不同平台上可能看起来不一致，这是有意为之的。</p>
+<p class="translated">如果 <em>aliased</em> 为真值，此函数将使用各种平台不同与其通常名称的别名来报告系统名称，例如 SunOS 将被报告为 Solaris。 <a class="reference internal" href="#platform.system_alias" title="platform.system_alias"><code class="xref py py-func docutils literal notranslate"><span class="pre">system_alias()</span></code></a> 函数将被用于实现此功能。</p>
+<p class="translated">将 <em>terse</em> 设为真值将导致此函数只返回标识平台所必须的最小量信息。</p>
 <div class="versionchanged">
-<p><span class="versionmodified changed">Changed in version 3.8: </span>On macOS, the function now uses <a class="reference internal" href="#platform.mac_ver" title="platform.mac_ver"><code class="xref py py-func docutils literal notranslate"><span class="pre">mac_ver()</span></code></a>, if it returns a
-non-empty release string, to get the macOS version rather than the darwin
-version.</p>
+<p><span class="versionmodified changed">在 3.8 版本发生变更: </span>在 macOS 上，此函数现在会在 <a class="reference internal" href="#platform.mac_ver" title="platform.mac_ver"><code class="xref py py-func docutils literal notranslate"><span class="pre">mac_ver()</span></code></a> 返回的发布版字符串非空时使用它，以便获取 macOS 版本而非 darwin 版本。</p>
 </div>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="platform.processor">
 <span class="sig-prename descclassname"><span class="pre">platform.</span></span><span class="sig-name descname"><span class="pre">processor</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#platform.processor" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the (real) processor name, e.g. <code class="docutils literal notranslate"><span class="pre">'amdk6'</span></code>.</p>
-<p>An empty string is returned if the value cannot be determined. Note that many
-platforms do not provide this information or simply return the same value as for
-<a class="reference internal" href="#platform.machine" title="platform.machine"><code class="xref py py-func docutils literal notranslate"><span class="pre">machine()</span></code></a>.  NetBSD does this.</p>
+<dd><p class="translated">返回（真实的）处理器名称，例如 <code class="docutils literal notranslate"><span class="pre">'amdk6'</span></code>。</p>
+<p class="translated">如果该值无法确定则将返回空字符串。 请注意许多平台都不提供此信息或是简单地返回与 <a class="reference internal" href="#platform.machine" title="platform.machine"><code class="xref py py-func docutils literal notranslate"><span class="pre">machine()</span></code></a> 相同的值。 NetBSD 则会提供此信息。</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="platform.python_build">
 <span class="sig-prename descclassname"><span class="pre">platform.</span></span><span class="sig-name descname"><span class="pre">python_build</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#platform.python_build" title="Link to this definition">¶</a></dt>
-<dd><p>Returns a tuple <code class="docutils literal notranslate"><span class="pre">(buildno,</span> <span class="pre">builddate)</span></code> stating the Python build number and
-date as strings.</p>
+<dd><p class="translated">返回一个元组 <code class="docutils literal notranslate"><span class="pre">(buildno,</span> <span class="pre">builddate)</span></code>，以字符串表示的 Python 编译代码和日期。</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="platform.python_compiler">
 <span class="sig-prename descclassname"><span class="pre">platform.</span></span><span class="sig-name descname"><span class="pre">python_compiler</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#platform.python_compiler" title="Link to this definition">¶</a></dt>
-<dd><p>Returns a string identifying the compiler used for compiling Python.</p>
+<dd><p class="translated">返回一个标识用于编译 Python 的编译器的的字符串。</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="platform.python_branch">
 <span class="sig-prename descclassname"><span class="pre">platform.</span></span><span class="sig-name descname"><span class="pre">python_branch</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#platform.python_branch" title="Link to this definition">¶</a></dt>
-<dd><p>Returns a string identifying the Python implementation SCM branch.</p>
+<dd><p class="translated">返回一个标识 Python 实现的 SCM 分支的字符串。</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="platform.python_implementation">
 <span class="sig-prename descclassname"><span class="pre">platform.</span></span><span class="sig-name descname"><span class="pre">python_implementation</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#platform.python_implementation" title="Link to this definition">¶</a></dt>
-<dd><p>Returns a string identifying the Python implementation. Possible return values
-are: ‘CPython’, ‘IronPython’, ‘Jython’, ‘PyPy’.</p>
+<dd><p class="translated">返回一个标识 Python 实现的字符串。 可能的返回值有: 'CPython', 'IronPython', 'Jython', 'PyPy'。</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="platform.python_revision">
 <span class="sig-prename descclassname"><span class="pre">platform.</span></span><span class="sig-name descname"><span class="pre">python_revision</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#platform.python_revision" title="Link to this definition">¶</a></dt>
-<dd><p>Returns a string identifying the Python implementation SCM revision.</p>
+<dd><p class="translated">返回一个标识 Python 实现的 SCM 修订版的字符串。</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="platform.python_version">
 <span class="sig-prename descclassname"><span class="pre">platform.</span></span><span class="sig-name descname"><span class="pre">python_version</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#platform.python_version" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the Python version as string <code class="docutils literal notranslate"><span class="pre">'major.minor.patchlevel'</span></code>.</p>
-<p>Note that unlike the Python <code class="docutils literal notranslate"><span class="pre">sys.version</span></code>, the returned value will always
-include the patchlevel (it defaults to 0).</p>
+<dd><p class="translated">将 Python 版本以字符串 <code class="docutils literal notranslate"><span class="pre">'major.minor.patchlevel'</span></code> 形式返回。</p>
+<p class="translated">请注意此返回值不同于 Python <code class="docutils literal notranslate"><span class="pre">sys.version</span></code>，它将总是包括 patchlevel (默认为 0)。</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="platform.python_version_tuple">
 <span class="sig-prename descclassname"><span class="pre">platform.</span></span><span class="sig-name descname"><span class="pre">python_version_tuple</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#platform.python_version_tuple" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the Python version as tuple <code class="docutils literal notranslate"><span class="pre">(major,</span> <span class="pre">minor,</span> <span class="pre">patchlevel)</span></code> of strings.</p>
-<p>Note that unlike the Python <code class="docutils literal notranslate"><span class="pre">sys.version</span></code>, the returned value will always
-include the patchlevel (it defaults to <code class="docutils literal notranslate"><span class="pre">'0'</span></code>).</p>
+<dd><p class="translated">将 Python 版本以字符串元组 <code class="docutils literal notranslate"><span class="pre">(major,</span> <span class="pre">minor,</span> <span class="pre">patchlevel)</span></code> 形式返回。</p>
+<p class="translated">请注意此返回值不同于 Python <code class="docutils literal notranslate"><span class="pre">sys.version</span></code>，它将总是包括 patchlevel (默认为 <code class="docutils literal notranslate"><span class="pre">'0'</span></code>)。</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="platform.release">
 <span class="sig-prename descclassname"><span class="pre">platform.</span></span><span class="sig-name descname"><span class="pre">release</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#platform.release" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the system’s release, e.g. <code class="docutils literal notranslate"><span class="pre">'2.2.0'</span></code> or <code class="docutils literal notranslate"><span class="pre">'NT'</span></code>. An empty string is
-returned if the value cannot be determined.</p>
+<dd><p class="translated">返回系统的发布版本，例如 <code class="docutils literal notranslate"><span class="pre">'2.2.0'</span></code> 或 <code class="docutils literal notranslate"><span class="pre">'NT'</span></code>，如果该值无法确定则将返回一个空字符串。</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="platform.system">
 <span class="sig-prename descclassname"><span class="pre">platform.</span></span><span class="sig-name descname"><span class="pre">system</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#platform.system" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the system/OS name, such as <code class="docutils literal notranslate"><span class="pre">'Linux'</span></code>, <code class="docutils literal notranslate"><span class="pre">'Darwin'</span></code>, <code class="docutils literal notranslate"><span class="pre">'Java'</span></code>,
-<code class="docutils literal notranslate"><span class="pre">'Windows'</span></code>. An empty string is returned if the value cannot be determined.</p>
-<p>On iOS and Android, this returns the user-facing OS name (i.e, <code class="docutils literal notranslate"><span class="pre">'iOS</span></code>,
-<code class="docutils literal notranslate"><span class="pre">'iPadOS'</span></code> or <code class="docutils literal notranslate"><span class="pre">'Android'</span></code>). To obtain the kernel name (<code class="docutils literal notranslate"><span class="pre">'Darwin'</span></code> or
-<code class="docutils literal notranslate"><span class="pre">'Linux'</span></code>), use <a class="reference internal" href="os.html#os.uname" title="os.uname"><code class="xref py py-func docutils literal notranslate"><span class="pre">os.uname()</span></code></a>.</p>
+<dd><p class="translated">返回系统平台/OS的名称，例如 <code class="docutils literal notranslate"><span class="pre">'Linux'</span></code>, <code class="docutils literal notranslate"><span class="pre">'Darwin'</span></code>, <code class="docutils literal notranslate"><span class="pre">'Java'</span></code>, <code class="docutils literal notranslate"><span class="pre">'Windows'</span></code>。 如果该值无法确定则将返回一个空字符串。</p>
+<p class="translated">在 iOS 和 Android 上，这将返回面向用户的 OS 名称 (即 <code class="docutils literal notranslate"><span class="pre">'iOS</span></code>, <code class="docutils literal notranslate"><span class="pre">'iPadOS'</span></code> 或 <code class="docutils literal notranslate"><span class="pre">'Android'</span></code>)。 要获取内核名称 (<code class="docutils literal notranslate"><span class="pre">'Darwin'</span></code> 或 <code class="docutils literal notranslate"><span class="pre">'Linux'</span></code>)，请使用 <a class="reference internal" href="os.html#os.uname" title="os.uname"><code class="xref py py-func docutils literal notranslate"><span class="pre">os.uname()</span></code></a>。</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="platform.system_alias">
 <span class="sig-prename descclassname"><span class="pre">platform.</span></span><span class="sig-name descname"><span class="pre">system_alias</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">system</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">release</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">version</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#platform.system_alias" title="Link to this definition">¶</a></dt>
-<dd><p>Returns <code class="docutils literal notranslate"><span class="pre">(system,</span> <span class="pre">release,</span> <span class="pre">version)</span></code> aliased to common marketing names used
-for some systems.  It also does some reordering of the information in some cases
-where it would otherwise cause confusion.</p>
+<dd><p class="translated">返回别名为某些系统所使用的常见营销名称的 <code class="docutils literal notranslate"><span class="pre">(system,</span> <span class="pre">release,</span> <span class="pre">version)</span></code>。 它还会在可能导致混淆的情况下对信息进行一些重排序操作。</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="platform.version">
 <span class="sig-prename descclassname"><span class="pre">platform.</span></span><span class="sig-name descname"><span class="pre">version</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#platform.version" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the system’s release version, e.g. <code class="docutils literal notranslate"><span class="pre">'#3</span> <span class="pre">on</span> <span class="pre">degas'</span></code>. An empty string is
-returned if the value cannot be determined.</p>
-<p>On iOS and Android, this is the user-facing OS version. To obtain the
-Darwin or Linux kernel version, use <a class="reference internal" href="os.html#os.uname" title="os.uname"><code class="xref py py-func docutils literal notranslate"><span class="pre">os.uname()</span></code></a>.</p>
+<dd><p class="translated">返回系统的发布版本信息，例如 <code class="docutils literal notranslate"><span class="pre">'#3</span> <span class="pre">on</span> <span class="pre">degas'</span></code>。 如果该值无法确定则将返回一个空字符串。</p>
+<p class="translated">在 iOS 和 Android 上，这将是面向用户的 OS 版本号。 要获取 Darwin 或 Linux 内核版本号，请使用 <a class="reference internal" href="os.html#os.uname" title="os.uname"><code class="xref py py-func docutils literal notranslate"><span class="pre">os.uname()</span></code></a>。</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="platform.uname">
 <span class="sig-prename descclassname"><span class="pre">platform.</span></span><span class="sig-name descname"><span class="pre">uname</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#platform.uname" title="Link to this definition">¶</a></dt>
-<dd><p>Fairly portable uname interface. Returns a <a class="reference internal" href="collections.html#collections.namedtuple" title="collections.namedtuple"><code class="xref py py-func docutils literal notranslate"><span class="pre">namedtuple()</span></code></a>
-containing six attributes: <a class="reference internal" href="#platform.system" title="platform.system"><code class="xref py py-attr docutils literal notranslate"><span class="pre">system</span></code></a>, <a class="reference internal" href="#platform.node" title="platform.node"><code class="xref py py-attr docutils literal notranslate"><span class="pre">node</span></code></a>, <a class="reference internal" href="#platform.release" title="platform.release"><code class="xref py py-attr docutils literal notranslate"><span class="pre">release</span></code></a>,
-<a class="reference internal" href="#platform.version" title="platform.version"><code class="xref py py-attr docutils literal notranslate"><span class="pre">version</span></code></a>, <a class="reference internal" href="#platform.machine" title="platform.machine"><code class="xref py py-attr docutils literal notranslate"><span class="pre">machine</span></code></a>, and <a class="reference internal" href="#platform.processor" title="platform.processor"><code class="xref py py-attr docutils literal notranslate"><span class="pre">processor</span></code></a>.</p>
-<p><a class="reference internal" href="#platform.processor" title="platform.processor"><code class="xref py py-attr docutils literal notranslate"><span class="pre">processor</span></code></a> is resolved late, on demand.</p>
-<p>Note: the first two attribute names differ from the names presented by
-<a class="reference internal" href="os.html#os.uname" title="os.uname"><code class="xref py py-func docutils literal notranslate"><span class="pre">os.uname()</span></code></a>, where they are named <code class="xref py py-attr docutils literal notranslate"><span class="pre">sysname</span></code> and
-<code class="xref py py-attr docutils literal notranslate"><span class="pre">nodename</span></code>.</p>
-<p>Entries which cannot be determined are set to <code class="docutils literal notranslate"><span class="pre">''</span></code>.</p>
+<dd><p class="translated">具有高可移植性的 uname 接口。 返回包含六个属性的 <a class="reference internal" href="collections.html#collections.namedtuple" title="collections.namedtuple"><code class="xref py py-func docutils literal notranslate"><span class="pre">namedtuple()</span></code></a>: <a class="reference internal" href="#platform.system" title="platform.system"><code class="xref py py-attr docutils literal notranslate"><span class="pre">system</span></code></a>, <a class="reference internal" href="#platform.node" title="platform.node"><code class="xref py py-attr docutils literal notranslate"><span class="pre">node</span></code></a>, <a class="reference internal" href="#platform.release" title="platform.release"><code class="xref py py-attr docutils literal notranslate"><span class="pre">release</span></code></a>, <a class="reference internal" href="#platform.version" title="platform.version"><code class="xref py py-attr docutils literal notranslate"><span class="pre">version</span></code></a>, <a class="reference internal" href="#platform.machine" title="platform.machine"><code class="xref py py-attr docutils literal notranslate"><span class="pre">machine</span></code></a> 和 <a class="reference internal" href="#platform.processor" title="platform.processor"><code class="xref py py-attr docutils literal notranslate"><span class="pre">processor</span></code></a>。</p>
+<p class="translated"><a class="reference internal" href="#platform.processor" title="platform.processor"><code class="xref py py-attr docutils literal notranslate"><span class="pre">processor</span></code></a> 将根据需要延后获取。</p>
+<p class="translated">注意：前两个属性名称与 <a class="reference internal" href="os.html#os.uname" title="os.uname"><code class="xref py py-func docutils literal notranslate"><span class="pre">os.uname()</span></code></a> 所提供的名称不同，后者是被命名为 <code class="xref py py-attr docutils literal notranslate"><span class="pre">sysname</span></code> 和 <code class="xref py py-attr docutils literal notranslate"><span class="pre">nodename</span></code>。</p>
+<p class="translated">无法确定的条目会被设为 <code class="docutils literal notranslate"><span class="pre">''</span></code>。</p>
 <div class="versionchanged">
-<p><span class="versionmodified changed">Changed in version 3.3: </span>Result changed from a tuple to a <a class="reference internal" href="collections.html#collections.namedtuple" title="collections.namedtuple"><code class="xref py py-func docutils literal notranslate"><span class="pre">namedtuple()</span></code></a>.</p>
+<p><span class="versionmodified changed">在 3.3 版本发生变更: </span>结果由元组改为 <a class="reference internal" href="collections.html#collections.namedtuple" title="collections.namedtuple"><code class="xref py py-func docutils literal notranslate"><span class="pre">namedtuple()</span></code></a> 。</p>
 </div>
 <div class="versionchanged">
-<p><span class="versionmodified changed">Changed in version 3.9: </span><a class="reference internal" href="#platform.processor" title="platform.processor"><code class="xref py py-attr docutils literal notranslate"><span class="pre">processor</span></code></a> is resolved late instead of immediately.</p>
-</div>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py" id="platform.invalidate_caches">
-<span class="sig-prename descclassname"><span class="pre">platform.</span></span><span class="sig-name descname"><span class="pre">invalidate_caches</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#platform.invalidate_caches" title="Link to this definition">¶</a></dt>
-<dd><p>Clear out the internal cache of information, such as the <a class="reference internal" href="#platform.uname" title="platform.uname"><code class="xref py py-func docutils literal notranslate"><span class="pre">uname()</span></code></a>.
-This is typically useful when the platform’s <a class="reference internal" href="#platform.node" title="platform.node"><code class="xref py py-func docutils literal notranslate"><span class="pre">node()</span></code></a> is changed
-by an external process and one needs to retrieve the updated value.</p>
-<div class="versionadded">
-<p><span class="versionmodified added">Added in version 3.14.</span></p>
+<p><span class="versionmodified changed">在 3.9 版本发生变更: </span><a class="reference internal" href="#platform.processor" title="platform.processor"><code class="xref py py-attr docutils literal notranslate"><span class="pre">processor</span></code></a> 将延后而不是立即被获取。</p>
 </div>
 </dd></dl>
 
 </section>
 <section id="java-platform">
-<h2>Java platform<a class="headerlink" href="#java-platform" title="Link to this heading">¶</a></h2>
+<h2 class="translated">Java 平台<a class="headerlink" href="#java-platform" title="Link to this heading">¶</a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="platform.java_ver">
 <span class="sig-prename descclassname"><span class="pre">platform.</span></span><span class="sig-name descname"><span class="pre">java_ver</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">release</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">vendor</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">vminfo</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">('',</span> <span class="pre">'',</span> <span class="pre">'')</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">osinfo</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">('',</span> <span class="pre">'',</span> <span class="pre">'')</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#platform.java_ver" title="Link to this definition">¶</a></dt>
-<dd><p>Version interface for Jython.</p>
-<p>Returns a tuple <code class="docutils literal notranslate"><span class="pre">(release,</span> <span class="pre">vendor,</span> <span class="pre">vminfo,</span> <span class="pre">osinfo)</span></code> with <em>vminfo</em> being a
-tuple <code class="docutils literal notranslate"><span class="pre">(vm_name,</span> <span class="pre">vm_release,</span> <span class="pre">vm_vendor)</span></code> and <em>osinfo</em> being a tuple
-<code class="docutils literal notranslate"><span class="pre">(os_name,</span> <span class="pre">os_version,</span> <span class="pre">os_arch)</span></code>. Values which cannot be determined are set to
-the defaults given as parameters (which all default to <code class="docutils literal notranslate"><span class="pre">''</span></code>).</p>
+<dd><p class="translated">Jython 的版本接口</p>
+<p class="translated">返回一个元组 <code class="docutils literal notranslate"><span class="pre">(release,</span> <span class="pre">vendor,</span> <span class="pre">vminfo,</span> <span class="pre">osinfo)</span></code>，其中 <em>vminfo</em> 为元组 <code class="docutils literal notranslate"><span class="pre">(vm_name,</span> <span class="pre">vm_release,</span> <span class="pre">vm_vendor)</span></code> 而 <em>osinfo</em> 为元组 <code class="docutils literal notranslate"><span class="pre">(os_name,</span> <span class="pre">os_version,</span> <span class="pre">os_arch)</span></code>。 无法确定的值将设为由形参所给出的默认值 (默认均为 <code class="docutils literal notranslate"><span class="pre">''</span></code>)。</p>
 <div class="deprecated-removed">
-<p><span class="versionmodified deprecated">Deprecated since version 3.13, will be removed in version 3.15: </span>It was largely untested, had a confusing API,
-and was only useful for Jython support.</p>
+<p><span class="versionmodified deprecated">从 3.13 版起不建议使用，将在 3.15 版中移除: </span>它基本上未经测试，具有令人迷惑的 API，并且仅适用于 Jython 支持。</p>
 </div>
 </dd></dl>
 
 </section>
 <section id="windows-platform">
-<h2>Windows platform<a class="headerlink" href="#windows-platform" title="Link to this heading">¶</a></h2>
+<h2 class="translated">Windows 平台<a class="headerlink" href="#windows-platform" title="Link to this heading">¶</a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="platform.win32_ver">
 <span class="sig-prename descclassname"><span class="pre">platform.</span></span><span class="sig-name descname"><span class="pre">win32_ver</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">release</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">version</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">csd</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ptype</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#platform.win32_ver" title="Link to this definition">¶</a></dt>
-<dd><p>Get additional version information from the Windows Registry and return a tuple
-<code class="docutils literal notranslate"><span class="pre">(release,</span> <span class="pre">version,</span> <span class="pre">csd,</span> <span class="pre">ptype)</span></code> referring to OS release, version number,
-CSD level (service pack) and OS type (multi/single processor). Values which
-cannot be determined are set to the defaults given as parameters (which all
-default to an empty string).</p>
-<p>As a hint: <em>ptype</em> is <code class="docutils literal notranslate"><span class="pre">'Uniprocessor</span> <span class="pre">Free'</span></code> on single processor NT machines
-and <code class="docutils literal notranslate"><span class="pre">'Multiprocessor</span> <span class="pre">Free'</span></code> on multi processor machines. The <code class="docutils literal notranslate"><span class="pre">'Free'</span></code> refers
-to the OS version being free of debugging code. It could also state <code class="docutils literal notranslate"><span class="pre">'Checked'</span></code>
-which means the OS version uses debugging code, i.e. code that checks arguments,
-ranges, etc.</p>
+<dd><p class="translated">从 Windows 注册表获取额外的版本信息并返回一个元组 <code class="docutils literal notranslate"><span class="pre">(release,</span> <span class="pre">version,</span> <span class="pre">csd,</span> <span class="pre">ptype)</span></code> 表示 OS 发行版, 版本号, CSD 级别 (Service Pack) 和 OS 类型 (多个/单个处理器)。无法确定的值被设置为作为参数给出的默认值（这些参数都默认为一个空字符串）。</p>
+<p class="translated">一点提示: <em>ptype</em> 在单处理器的 NT 机器上为 <code class="docutils literal notranslate"><span class="pre">'Uniprocessor</span> <span class="pre">Free'</span></code> 而在多处理器的机器上则为 <code class="docutils literal notranslate"><span class="pre">'Multiprocessor</span> <span class="pre">Free'</span></code>。 <code class="docutils literal notranslate"><span class="pre">'Free'</span></code> 是指该 OS 版本不包含调试代码。 它还可能包含 <code class="docutils literal notranslate"><span class="pre">'Checked'</span></code> 表示该 OS 版本使用了调试代码，即检测参数、范围等的代码。</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="platform.win32_edition">
 <span class="sig-prename descclassname"><span class="pre">platform.</span></span><span class="sig-name descname"><span class="pre">win32_edition</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#platform.win32_edition" title="Link to this definition">¶</a></dt>
-<dd><p>Returns a string representing the current Windows edition, or <code class="docutils literal notranslate"><span class="pre">None</span></code> if the
-value cannot be determined.  Possible values include but are not limited to
-<code class="docutils literal notranslate"><span class="pre">'Enterprise'</span></code>, <code class="docutils literal notranslate"><span class="pre">'IoTUAP'</span></code>, <code class="docutils literal notranslate"><span class="pre">'ServerStandard'</span></code>, and <code class="docutils literal notranslate"><span class="pre">'nanoserver'</span></code>.</p>
+<dd><p class="translated">返回一个代表当前 Windows 版本的字符串，或者在该值无法确定时返回 <code class="docutils literal notranslate"><span class="pre">None</span></code> 。 可能的值包括但不限于 <code class="docutils literal notranslate"><span class="pre">'Enterprise'</span></code>, <code class="docutils literal notranslate"><span class="pre">'IoTUAP'</span></code>, <code class="docutils literal notranslate"><span class="pre">'ServerStandard'</span></code> 和 <code class="docutils literal notranslate"><span class="pre">'nanoserver'</span></code>。</p>
 <div class="versionadded">
 <p><span class="versionmodified added">Added in version 3.8.</span></p>
 </div>
@@ -464,8 +390,7 @@ value cannot be determined.  Possible values include but are not limited to
 <dl class="py function">
 <dt class="sig sig-object py" id="platform.win32_is_iot">
 <span class="sig-prename descclassname"><span class="pre">platform.</span></span><span class="sig-name descname"><span class="pre">win32_is_iot</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#platform.win32_is_iot" title="Link to this definition">¶</a></dt>
-<dd><p>Return <code class="docutils literal notranslate"><span class="pre">True</span></code> if the Windows edition returned by <a class="reference internal" href="#platform.win32_edition" title="platform.win32_edition"><code class="xref py py-func docutils literal notranslate"><span class="pre">win32_edition()</span></code></a>
-is recognized as an IoT edition.</p>
+<dd><p class="translated">如果 <a class="reference internal" href="#platform.win32_edition" title="platform.win32_edition"><code class="xref py py-func docutils literal notranslate"><span class="pre">win32_edition()</span></code></a> 返回的 Windows 版本被识别为 IoT 版则返回 <code class="docutils literal notranslate"><span class="pre">True</span></code>。</p>
 <div class="versionadded">
 <p><span class="versionmodified added">Added in version 3.8.</span></p>
 </div>
@@ -473,79 +398,57 @@ is recognized as an IoT edition.</p>
 
 </section>
 <section id="macos-platform">
-<h2>macOS platform<a class="headerlink" href="#macos-platform" title="Link to this heading">¶</a></h2>
+<h2 class="translated">macOS 平台<a class="headerlink" href="#macos-platform" title="Link to this heading">¶</a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="platform.mac_ver">
 <span class="sig-prename descclassname"><span class="pre">platform.</span></span><span class="sig-name descname"><span class="pre">mac_ver</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">release</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">versioninfo</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">('',</span> <span class="pre">'',</span> <span class="pre">'')</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">machine</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#platform.mac_ver" title="Link to this definition">¶</a></dt>
-<dd><p>Get macOS version information and return it as tuple <code class="docutils literal notranslate"><span class="pre">(release,</span> <span class="pre">versioninfo,</span>
-<span class="pre">machine)</span></code> with <em>versioninfo</em> being a tuple <code class="docutils literal notranslate"><span class="pre">(version,</span> <span class="pre">dev_stage,</span>
-<span class="pre">non_release_version)</span></code>.</p>
-<p>Entries which cannot be determined are set to <code class="docutils literal notranslate"><span class="pre">''</span></code>.  All tuple entries are
-strings.</p>
+<dd><p class="translated">获取 macOS 版本信息并将其返回为元组 <code class="docutils literal notranslate"><span class="pre">(release,</span> <span class="pre">versioninfo,</span> <span class="pre">machine)</span></code>，其中 <em>versioninfo</em> 是一个元组 <code class="docutils literal notranslate"><span class="pre">(version,</span> <span class="pre">dev_stage,</span> <span class="pre">non_release_version)</span></code>。</p>
+<p class="translated">无法确定的条目会被设为 <code class="docutils literal notranslate"><span class="pre">''</span></code>。 所有元组条目均为字符串。</p>
 </dd></dl>
 
 </section>
 <section id="ios-platform">
-<h2>iOS platform<a class="headerlink" href="#ios-platform" title="Link to this heading">¶</a></h2>
+<h2 class="translated">iOS 平台<a class="headerlink" href="#ios-platform" title="Link to this heading">¶</a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="platform.ios_ver">
 <span class="sig-prename descclassname"><span class="pre">platform.</span></span><span class="sig-name descname"><span class="pre">ios_ver</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">system</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">release</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">model</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">is_simulator</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#platform.ios_ver" title="Link to this definition">¶</a></dt>
-<dd><p>Get iOS version information and return it as a
-<a class="reference internal" href="collections.html#collections.namedtuple" title="collections.namedtuple"><code class="xref py py-func docutils literal notranslate"><span class="pre">namedtuple()</span></code></a> with the following attributes:</p>
+<dd><p class="translated">获取 iOS 版本信息并将其以具有下列属性的 <a class="reference internal" href="collections.html#collections.namedtuple" title="collections.namedtuple"><code class="xref py py-func docutils literal notranslate"><span class="pre">namedtuple()</span></code></a> 形式返回：</p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">system</span></code> is the OS name; either <code class="docutils literal notranslate"><span class="pre">'iOS'</span></code> or <code class="docutils literal notranslate"><span class="pre">'iPadOS'</span></code>.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">release</span></code> is the iOS version number as a string (e.g., <code class="docutils literal notranslate"><span class="pre">'17.2'</span></code>).</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">model</span></code> is the device model identifier; this will be a string like
-<code class="docutils literal notranslate"><span class="pre">'iPhone13,2'</span></code> for a physical device, or <code class="docutils literal notranslate"><span class="pre">'iPhone'</span></code> on a simulator.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">is_simulator</span></code> is a boolean describing if the app is running on a
-simulator or a physical device.</p></li>
+<li><p class="translated"><code class="docutils literal notranslate"><span class="pre">system</span></code> 为 OS 名称；为 <code class="docutils literal notranslate"><span class="pre">'iOS'</span></code> 或 <code class="docutils literal notranslate"><span class="pre">'iPadOS'</span></code>。</p></li>
+<li><p class="translated"><code class="docutils literal notranslate"><span class="pre">release</span></code> 为字符串形式的 iOS 版本号 (例如 <code class="docutils literal notranslate"><span class="pre">'17.2'</span></code>)。</p></li>
+<li><p class="translated"><code class="docutils literal notranslate"><span class="pre">model</span></code> 为设备型号标识符；这对物理设备来说将是如 <code class="docutils literal notranslate"><span class="pre">'iPhone13,2'</span></code> 形式的字符串，或者对于模拟器来说则为 <code class="docutils literal notranslate"><span class="pre">'iPhone'</span></code>。</p></li>
+<li><p class="translated"><code class="docutils literal notranslate"><span class="pre">is_simulator</span></code> 是一个描述 app 是运行在模拟器上还是物理设备上的布尔值。</p></li>
 </ul>
-<p>Entries which cannot be determined are set to the defaults given as
-parameters.</p>
+<p class="translated">无法确定的条目会被设为由形参所给出的默认值。</p>
 </dd></dl>
 
 </section>
 <section id="unix-platforms">
-<h2>Unix platforms<a class="headerlink" href="#unix-platforms" title="Link to this heading">¶</a></h2>
+<h2 class="translated">Unix 平台<a class="headerlink" href="#unix-platforms" title="Link to this heading">¶</a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="platform.libc_ver">
 <span class="sig-prename descclassname"><span class="pre">platform.</span></span><span class="sig-name descname"><span class="pre">libc_ver</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">executable</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">sys.executable</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">lib</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">version</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chunksize</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">16384</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#platform.libc_ver" title="Link to this definition">¶</a></dt>
-<dd><p>Tries to determine the libc version against which the file executable (defaults
-to the Python interpreter) is linked.  Returns a tuple of strings <code class="docutils literal notranslate"><span class="pre">(lib,</span>
-<span class="pre">version)</span></code> which default to the given parameters in case the lookup fails.</p>
-<p>Note that this function has intimate knowledge of how different libc versions
-add symbols to the executable is probably only usable for executables compiled
-using <strong class="program">gcc</strong>.</p>
-<p>The file is read and scanned in chunks of <em>chunksize</em> bytes.</p>
+<dd><p class="translated">尝试确定可执行文件（默认为 Python 解释器）所链接到的 libc 版本。 返回一个字符串元组 <code class="docutils literal notranslate"><span class="pre">(lib,</span> <span class="pre">version)</span></code>，当查找失败时其默认值将设为给定的形参值。</p>
+<p class="translated">请注意此函数对于不同 libc 版本向可执行文件添加符号的方式有深层的关联，可能仅适用于使用 <strong class="program">gcc</strong> 编译出来的可执行文件。</p>
+<p class="translated">文件将按 <em>chunksize</em> 个字节的分块来读取和扫描。</p>
 </dd></dl>
 
 </section>
 <section id="linux-platforms">
-<h2>Linux platforms<a class="headerlink" href="#linux-platforms" title="Link to this heading">¶</a></h2>
+<h2 class="translated">Linux 平台<a class="headerlink" href="#linux-platforms" title="Link to this heading">¶</a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="platform.freedesktop_os_release">
 <span class="sig-prename descclassname"><span class="pre">platform.</span></span><span class="sig-name descname"><span class="pre">freedesktop_os_release</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#platform.freedesktop_os_release" title="Link to this definition">¶</a></dt>
-<dd><p>Get operating system identification from <code class="docutils literal notranslate"><span class="pre">os-release</span></code> file and return
-it as a dict. The <code class="docutils literal notranslate"><span class="pre">os-release</span></code> file is a <a class="reference external" href="https://www.freedesktop.org/software/systemd/man/os-release.html">freedesktop.org standard</a> and
-is available in most Linux distributions. A noticeable exception is
-Android and Android-based distributions.</p>
-<p>Raises <a class="reference internal" href="exceptions.html#OSError" title="OSError"><code class="xref py py-exc docutils literal notranslate"><span class="pre">OSError</span></code></a> or subclass when neither <code class="docutils literal notranslate"><span class="pre">/etc/os-release</span></code> nor
-<code class="docutils literal notranslate"><span class="pre">/usr/lib/os-release</span></code> can be read.</p>
-<p>On success, the function returns a dictionary where keys and values are
-strings. Values have their special characters like <code class="docutils literal notranslate"><span class="pre">&quot;</span></code> and <code class="docutils literal notranslate"><span class="pre">$</span></code>
-unquoted. The fields <code class="docutils literal notranslate"><span class="pre">NAME</span></code>, <code class="docutils literal notranslate"><span class="pre">ID</span></code>, and <code class="docutils literal notranslate"><span class="pre">PRETTY_NAME</span></code> are always
-defined according to the standard. All other fields are optional. Vendors
-may include additional fields.</p>
-<p>Note that fields like <code class="docutils literal notranslate"><span class="pre">NAME</span></code>, <code class="docutils literal notranslate"><span class="pre">VERSION</span></code>, and <code class="docutils literal notranslate"><span class="pre">VARIANT</span></code> are strings
-suitable for presentation to users. Programs should use fields like
-<code class="docutils literal notranslate"><span class="pre">ID</span></code>, <code class="docutils literal notranslate"><span class="pre">ID_LIKE</span></code>, <code class="docutils literal notranslate"><span class="pre">VERSION_ID</span></code>, or <code class="docutils literal notranslate"><span class="pre">VARIANT_ID</span></code> to identify
-Linux distributions.</p>
-<p>Example:</p>
-<div class="highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">get_like_distro</span><span class="p">():</span>
+<dd><p class="translated">从 <code class="docutils literal notranslate"><span class="pre">os-release</span></code> 文件获取操作系统标识并将其作为一个字典返回。 <code class="docutils literal notranslate"><span class="pre">os-release</span></code> 文件是 <a class="reference external" href="https://www.freedesktop.org/software/systemd/man/os-release.html">freedesktop.org 标准</a> 并在大多数 Linux 发行版上可用。 一个重要的例外是 Android 和基于 Android 的发行版。</p>
+<p class="translated">当 <code class="docutils literal notranslate"><span class="pre">/etc/os-release</span></code> 或 <code class="docutils literal notranslate"><span class="pre">/usr/lib/os-release</span></code> 均无法读取时将引发 <a class="reference internal" href="exceptions.html#OSError" title="OSError"><code class="xref py py-exc docutils literal notranslate"><span class="pre">OSError</span></code></a> 或其子类。</p>
+<p class="translated">成功时，该函数将返回一个字典，其中键和值均为字符串。 值当中的特殊字符例如 <code class="docutils literal notranslate"><span class="pre">&quot;</span></code> 和 <code class="docutils literal notranslate"><span class="pre">{TX-PL-LABEL}#x60;</span></code> 会被复原。 字段 <code class="docutils literal notranslate"><span class="pre">NAME</span></code>, <code class="docutils literal notranslate"><span class="pre">ID</span></code> 和 <code class="docutils literal notranslate"><span class="pre">PRETTY_NAME</span></code> 总是会按照标准来定义。 所有其他字段都是可选的。  厂商可能会包括额外的字段。</p>
+<p class="translated">请注意 <code class="docutils literal notranslate"><span class="pre">NAME</span></code>, <code class="docutils literal notranslate"><span class="pre">VERSION</span></code> 和 <code class="docutils literal notranslate"><span class="pre">VARIANT</span></code> 等字段是适用于向用户展示的字符串。 程序应当使用 <code class="docutils literal notranslate"><span class="pre">ID</span></code>, <code class="docutils literal notranslate"><span class="pre">ID_LIKE</span></code>, <code class="docutils literal notranslate"><span class="pre">VERSION_ID</span></code> 或 <code class="docutils literal notranslate"><span class="pre">VARIANT_ID</span></code> 等字段来标识 Linux 发行版。</p>
+<p class="translated">示例:</p>
+<div class="translated highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">get_like_distro</span><span class="p">():</span>
     <span class="n">info</span> <span class="o">=</span> <span class="n">platform</span><span class="o">.</span><span class="n">freedesktop_os_release</span><span class="p">()</span>
     <span class="n">ids</span> <span class="o">=</span> <span class="p">[</span><span class="n">info</span><span class="p">[</span><span class="s2">&quot;ID&quot;</span><span class="p">]]</span>
     <span class="k">if</span> <span class="s2">&quot;ID_LIKE&quot;</span> <span class="ow">in</span> <span class="n">info</span><span class="p">:</span>
-        <span class="c1"># ids are space separated and ordered by precedence</span>
+        <span class="c1"># ids 以空格分隔并按优先级排序</span>
         <span class="n">ids</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">info</span><span class="p">[</span><span class="s2">&quot;ID_LIKE&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">split</span><span class="p">())</span>
     <span class="k">return</span> <span class="n">ids</span>
 </pre></div>
@@ -557,27 +460,20 @@ Linux distributions.</p>
 
 </section>
 <section id="android-platform">
-<h2>Android platform<a class="headerlink" href="#android-platform" title="Link to this heading">¶</a></h2>
+<h2 class="translated">Android 平台<a class="headerlink" href="#android-platform" title="Link to this heading">¶</a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="platform.android_ver">
 <span class="sig-prename descclassname"><span class="pre">platform.</span></span><span class="sig-name descname"><span class="pre">android_ver</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">release</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">api_level</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">manufacturer</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">model</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">is_emulator</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#platform.android_ver" title="Link to this definition">¶</a></dt>
-<dd><p>Get Android device information. Returns a <a class="reference internal" href="collections.html#collections.namedtuple" title="collections.namedtuple"><code class="xref py py-func docutils literal notranslate"><span class="pre">namedtuple()</span></code></a>
-with the following attributes. Values which cannot be determined are set to
-the defaults given as parameters.</p>
+<dd><p class="translated">获取 Android 设备信息。 返回一个具有下列属性的 <a class="reference internal" href="collections.html#collections.namedtuple" title="collections.namedtuple"><code class="xref py py-func docutils literal notranslate"><span class="pre">namedtuple()</span></code></a>。 无法确定的值会被设为由形参给出的默认值 。</p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">release</span></code> - Android version, as a string (e.g. <code class="docutils literal notranslate"><span class="pre">&quot;14&quot;</span></code>).</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">api_level</span></code> - API level of the running device, as an integer (e.g. <code class="docutils literal notranslate"><span class="pre">34</span></code>
-for Android 14). To get the API level which Python was built against, see
-<a class="reference internal" href="sys.html#sys.getandroidapilevel" title="sys.getandroidapilevel"><code class="xref py py-func docutils literal notranslate"><span class="pre">sys.getandroidapilevel()</span></code></a>.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">manufacturer</span></code> - <a class="reference external" href="https://developer.android.com/reference/android/os/Build#MANUFACTURER">Manufacturer name</a>.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">model</span></code> - <a class="reference external" href="https://developer.android.com/reference/android/os/Build#MODEL">Model name</a> –
-typically the marketing name or model number.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">device</span></code> - <a class="reference external" href="https://developer.android.com/reference/android/os/Build#DEVICE">Device name</a> –
-typically the model number or a codename.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">is_emulator</span></code> - <code class="docutils literal notranslate"><span class="pre">True</span></code> if the device is an emulator; <code class="docutils literal notranslate"><span class="pre">False</span></code> if it’s
-a physical device.</p></li>
+<li><p class="translated"><code class="docutils literal notranslate"><span class="pre">release</span></code> - 为字符串形式的 Android 版本 (例如 <code class="docutils literal notranslate"><span class="pre">&quot;14&quot;</span></code>)。</p></li>
+<li><p class="translated"><code class="docutils literal notranslate"><span class="pre">api_level</span></code> - 正在运行的设备的 API 级别，为整数形式 (例如 <code class="docutils literal notranslate"><span class="pre">34</span></code> 对应 Android 14)。 要获取构建 Python 所使用的 API 级别，参见 <a class="reference internal" href="sys.html#sys.getandroidapilevel" title="sys.getandroidapilevel"><code class="xref py py-func docutils literal notranslate"><span class="pre">sys.getandroidapilevel()</span></code></a>。</p></li>
+<li><p class="translated"><code class="docutils literal notranslate"><span class="pre">manufacturer</span></code> - <a class="reference external" href="https://developer.android.com/reference/android/os/Build#MANUFACTURER">厂商名称</a>。</p></li>
+<li><p class="translated"><code class="docutils literal notranslate"><span class="pre">model</span></code> - <a class="reference external" href="https://developer.android.com/reference/android/os/Build#MODEL">型号名称</a> – 通常为商业名称或型号数字。</p></li>
+<li><p class="translated"><code class="docutils literal notranslate"><span class="pre">device</span></code> - <a class="reference external" href="https://developer.android.com/reference/android/os/Build#DEVICE">设备名称</a> – 通常为型号数字或代号名。</p></li>
+<li><p class="translated"><code class="docutils literal notranslate"><span class="pre">is_emulator</span></code> - 如果设备为模拟器则为 <code class="docutils literal notranslate"><span class="pre">True</span></code>，如果为物理设备则为 <code class="docutils literal notranslate"><span class="pre">False</span></code>。</p></li>
 </ul>
-<p>Google maintains a <a class="reference external" href="https://storage.googleapis.com/play_public/supported_devices.html">list of known model and device names</a>.</p>
+<p class="translated">Google 维护了一个 <a class="reference external" href="https://storage.googleapis.com/play_public/supported_devices.html">已知型号和设备名称列表</a>。</p>
 <div class="versionadded">
 <p><span class="versionmodified added">Added in version 3.13.</span></p>
 </div>
@@ -585,31 +481,25 @@ a physical device.</p></li>
 
 </section>
 <section id="command-line-usage">
-<span id="platform-cli"></span><h2>Command-line usage<a class="headerlink" href="#command-line-usage" title="Link to this heading">¶</a></h2>
-<p><code class="xref py py-mod docutils literal notranslate"><span class="pre">platform</span></code> can also be invoked directly using the <a class="reference internal" href="../using/cmdline.html#cmdoption-m"><code class="xref std std-option docutils literal notranslate"><span class="pre">-m</span></code></a>
-switch of the interpreter:</p>
-<div class="highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="n">python</span> <span class="o">-</span><span class="n">m</span> <span class="n">platform</span> <span class="p">[</span><span class="o">--</span><span class="n">terse</span><span class="p">]</span> <span class="p">[</span><span class="o">--</span><span class="n">nonaliased</span><span class="p">]</span> <span class="p">[{</span><span class="n">nonaliased</span><span class="p">,</span><span class="n">terse</span><span class="p">}</span> <span class="o">...</span><span class="p">]</span>
+<span id="platform-cli"></span><h2 class="translated">命令行用法<a class="headerlink" href="#command-line-usage" title="Link to this heading">¶</a></h2>
+<p class="translated"><code class="xref py py-mod docutils literal notranslate"><span class="pre">platform</span></code> 也可使用解释器的 <a class="reference internal" href="../using/cmdline.html#cmdoption-m"><code class="xref std std-option docutils literal notranslate"><span class="pre">-m</span></code></a> 开关直接唤起:</p>
+<div class="translated highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="n">python</span> <span class="o">-</span><span class="n">m</span> <span class="n">platform</span> <span class="p">[</span><span class="o">--</span><span class="n">terse</span><span class="p">]</span> <span class="p">[</span><span class="o">--</span><span class="n">nonaliased</span><span class="p">]</span> <span class="p">[{</span><span class="n">nonaliased</span><span class="p">,</span><span class="n">terse</span><span class="p">}</span> <span class="o">...</span><span class="p">]</span>
 </pre></div>
 </div>
-<p>The following options are accepted:</p>
+<p class="translated">可以接受以下选项：</p>
 <dl class="std option">
 <dt class="sig sig-object std" id="cmdoption-platform-terse">
 <span class="sig-name descname"><span class="pre">--terse</span></span><span class="sig-prename descclassname"></span><a class="headerlink" href="#cmdoption-platform-terse" title="Link to this definition">¶</a></dt>
-<dd><p>Print terse information about the platform. This is equivalent to
-calling <a class="reference internal" href="#platform.platform" title="platform.platform"><code class="xref py py-func docutils literal notranslate"><span class="pre">platform.platform()</span></code></a> with the <em>terse</em> argument set to <code class="docutils literal notranslate"><span class="pre">True</span></code>.</p>
+<dd><p class="translated">打印有关平台的简洁信息。 这等价于调用 <a class="reference internal" href="#platform.platform" title="platform.platform"><code class="xref py py-func docutils literal notranslate"><span class="pre">platform.platform()</span></code></a> 并将 <em>terse</em> 参数设为 <code class="docutils literal notranslate"><span class="pre">True</span></code>。</p>
 </dd></dl>
 
 <dl class="std option">
 <dt class="sig sig-object std" id="cmdoption-platform-nonaliased">
 <span class="sig-name descname"><span class="pre">--nonaliased</span></span><span class="sig-prename descclassname"></span><a class="headerlink" href="#cmdoption-platform-nonaliased" title="Link to this definition">¶</a></dt>
-<dd><p>Print platform information without system/OS name aliasing. This is
-equivalent to calling <a class="reference internal" href="#platform.platform" title="platform.platform"><code class="xref py py-func docutils literal notranslate"><span class="pre">platform.platform()</span></code></a> with the <em>aliased</em> argument
-set to <code class="docutils literal notranslate"><span class="pre">True</span></code>.</p>
+<dd><p class="translated">打印不带系统/OS名称别名的平台信息。 这等价于调用 <a class="reference internal" href="#platform.platform" title="platform.platform"><code class="xref py py-func docutils literal notranslate"><span class="pre">platform.platform()</span></code></a> 并将 <em>aliased</em> 参数设为 <code class="docutils literal notranslate"><span class="pre">True</span></code>。</p>
 </dd></dl>
 
-<p>You can also pass one or more positional arguments (<code class="docutils literal notranslate"><span class="pre">terse</span></code>, <code class="docutils literal notranslate"><span class="pre">nonaliased</span></code>)
-to explicitly control the output format. These behave similarly to their
-corresponding options.</p>
+<p class="translated">你还可以传入一个或多个位置参数 (<code class="docutils literal notranslate"><span class="pre">terse</span></code>, <code class="docutils literal notranslate"><span class="pre">nonaliased</span></code>) 来显式控制输出格式。 其行为与它们所对应的选项类似。</p>
 </section>
 </section>
 
@@ -621,62 +511,52 @@ corresponding options.</p>
       <div class="sphinxsidebar" role="navigation" aria-label="Main">
         <div class="sphinxsidebarwrapper">
   <div>
-    <h3><a href="../contents.html">Table of Contents</a></h3>
+    <h3><a href="../contents.html">目录</a></h3>
     <ul>
-<li><a class="reference internal" href="#"><code class="xref py py-mod docutils literal notranslate"><span class="pre">platform</span></code> —  Access to underlying platform’s identifying data</a><ul>
-<li><a class="reference internal" href="#cross-platform">Cross platform</a></li>
-<li><a class="reference internal" href="#java-platform">Java platform</a></li>
-<li><a class="reference internal" href="#windows-platform">Windows platform</a></li>
-<li><a class="reference internal" href="#macos-platform">macOS platform</a></li>
-<li><a class="reference internal" href="#ios-platform">iOS platform</a></li>
-<li><a class="reference internal" href="#unix-platforms">Unix platforms</a></li>
-<li><a class="reference internal" href="#linux-platforms">Linux platforms</a></li>
-<li><a class="reference internal" href="#android-platform">Android platform</a></li>
-<li><a class="reference internal" href="#command-line-usage">Command-line usage</a></li>
+<li><a class="reference internal" href="#"><code class="xref py py-mod docutils literal notranslate"><span class="pre">platform</span></code> ---  访问底层平台的标识数据</a><ul>
+<li><a class="reference internal" href="#cross-platform">跨平台</a></li>
+<li><a class="reference internal" href="#java-platform">Java 平台</a></li>
+<li><a class="reference internal" href="#windows-platform">Windows 平台</a></li>
+<li><a class="reference internal" href="#macos-platform">macOS 平台</a></li>
+<li><a class="reference internal" href="#ios-platform">iOS 平台</a></li>
+<li><a class="reference internal" href="#unix-platforms">Unix 平台</a></li>
+<li><a class="reference internal" href="#linux-platforms">Linux 平台</a></li>
+<li><a class="reference internal" href="#android-platform">Android 平台</a></li>
+<li><a class="reference internal" href="#command-line-usage">命令行用法</a></li>
 </ul>
 </li>
 </ul>
 
   </div>
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="logging.handlers.html"
-                          title="previous chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging.handlers</span></code> — Logging handlers</a></p>
+                          title="上一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">logging.handlers</span></code> --- 日志处理器</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="errno.html"
-                          title="next chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">errno</span></code> — Standard errno system symbols</a></p>
+                          title="下一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">errno</span></code> --- 标准 errno 系统符号</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "library/platform.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/library/platform.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/library/platform.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
   </div>
         </div>
-<div id="sidebarbutton" title="Collapse sidebar">
+<div id="sidebarbutton" title="折叠边栏">
 <span>«</span>
 </div>
 
@@ -684,20 +564,20 @@ corresponding options.</p>
       <div class="clearer"></div>
     </div>  
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             >index</a></li>
+          <a href="../genindex.html" title="总索引"
+             >索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="errno.html" title="errno — Standard errno system symbols"
-             >next</a> |</li>
+          <a href="errno.html" title="errno --- 标准 errno 系统符号"
+             >下一页</a> |</li>
         <li class="right" >
-          <a href="logging.handlers.html" title="logging.handlers — Logging handlers"
-             >previous</a> |</li>
+          <a href="logging.handlers.html" title="logging.handlers --- 日志处理器"
+             >上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -709,59 +589,59 @@ corresponding options.</p>
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-          <li class="nav-item nav-item-1"><a href="index.html" >The Python Standard Library</a> &#187;</li>
-          <li class="nav-item nav-item-2"><a href="allos.html" >Generic Operating System Services</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">platform</span></code> —  Access to underlying platform’s identifying data</a></li>
+          <li class="nav-item nav-item-1"><a href="index.html" >Python 标准库</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="allos.html" >通用操作系统服务</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">platform</span></code> ---  访问底层平台的标识数据</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
       </ul>
     </div>  
     <div class="footer">
-    &copy; <a href="../copyright.html">Copyright</a> 2001 Python Software Foundation.
+    &copy; <a href="../copyright.html">版权</a> 2001-2026, Python Software Foundation.
     <br>
-    This page is licensed under the Python Software Foundation License Version 2.
+    本页面采用 Python 软件基金会许可证第 2 版授权。
     <br>
-    Examples, recipes, and other code in the documentation are additionally licensed under the Zero Clause BSD License.
+    文档中的示例、代码片段及其他代码内容额外采用零条款 BSD 许可证授权。
     <br>
     
-      See <a href="/license.html">History and License</a> for more information.<br>
+      更多信息请参阅《<a href="/license.html"> 历史与许可 </a>》。<br>
     
     
     <br>
 
-    The Python Software Foundation is a non-profit corporation.
-<a href="https://www.python.org/psf/donations/">Please donate.</a>
+    Python 软件基金会是一家非营利性公司。
+<a href="https://www.python.org/psf/donations/">请进行捐赠。</a>
 <br>
     <br>
-      Last updated on May 27, 2026 (10:52 UTC).
+      最后更新于5月 25, 2026 (11:48 UTC) 。
     
-      <a href="/bugs.html">Found a bug</a>?
+      <a href="/bugs.html">发现了错误</a>？
     
     <br>
 
-    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3.
+    使用<a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3 创建。
     </div>
 
   </body>

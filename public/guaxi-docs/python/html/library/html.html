@@ -1,44 +1,45 @@
 <!DOCTYPE html>
 
-<html lang="en" data-content_root="../">
+<html lang="zh-CN" data-content_root="../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta property="og:title" content="html — HyperText Markup Language support" />
+<meta property="og:title" content="html --- 超文本标记语言支持" />
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://docs.python.org/3/library/html.html" />
 <meta property="og:site_name" content="Python documentation" />
-<meta property="og:description" content="Source code: Lib/html/__init__.py This module defines utilities to manipulate HTML. Submodules in the html package are: html.parser – HTML/XHTML parser with lenient parsing mode, html.entities – HT..." />
+<meta property="og:description" content="源码： Lib/html/__init__.py 该模块定义了操作HTML的工具。 html 包中的子模块是： html.parser —— 具有宽松解析模式的HTML / XHTML解析器, html.entities-- HTML 实体定义." />
 <meta property="og:image:width" content="1146" />
 <meta property="og:image:height" content="600" />
-<meta property="og:image" content="https://docs.python.org/3.14/_images/social_previews/summary_library_html_3e8388a0.png" />
-<meta property="og:image:alt" content="Source code: Lib/html/__init__.py This module defines utilities to manipulate HTML. Submodules in the html package are: html.parser – HTML/XHTML parser with lenient parsing mode, html.entities – HT..." />
-<meta name="description" content="Source code: Lib/html/__init__.py This module defines utilities to manipulate HTML. Submodules in the html package are: html.parser – HTML/XHTML parser with lenient parsing mode, html.entities – HT..." />
+<meta property="og:image" content="https://docs.python.org/3.13/zh-cn/_images/social_previews/summary_library_html_6ee3becc.png" />
+<meta property="og:image:alt" content="源码： Lib/html/__init__.py 该模块定义了操作HTML的工具。 html 包中的子模块是： html.parser —— 具有宽松解析模式的HTML / XHTML解析器, html.entities-- HTML 实体定义." />
+<meta name="description" content="源码： Lib/html/__init__.py 该模块定义了操作HTML的工具。 html 包中的子模块是： html.parser —— 具有宽松解析模式的HTML / XHTML解析器, html.entities-- HTML 实体定义." />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="theme-color" content="#3776ab">
 
-    <title>html — HyperText Markup Language support &#8212; Python 3.14.5 documentation</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>html --- 超文本标记语言支持 &#8212; Python 3.13.13 文档</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
     
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
     <link rel="stylesheet" type="text/css" href="../_static/classic.css?v=234b1a7c" />
     <link rel="stylesheet" type="text/css" href="../_static/pydoctheme.css?v=4365c8fe" />
     <link id="pygments_dark_css" media="(prefers-color-scheme: dark)" rel="stylesheet" type="text/css" href="../_static/pygments_dark.css?v=5349f25f" />
     
-    <script src="../_static/documentation_options.js?v=bcfd2f37"></script>
+    <script src="../_static/documentation_options.js?v=a941be6b"></script>
     <script src="../_static/doctools.js?v=9bcbadda"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/translations.js?v=beaddf03"></script>
     
     <script src="../_static/sidebar.js"></script>
     
     <link rel="search" type="application/opensearchdescription+xml"
-          title="Search within Python 3.14.5 documentation"
+          title="在 Python 3.13.13 文档 中搜索"
           href="../_static/opensearch.xml"/>
-    <link rel="author" title="About these documents" href="../about.html" />
-    <link rel="index" title="Index" href="../genindex.html" />
-    <link rel="search" title="Search" href="../search.html" />
-    <link rel="copyright" title="Copyright" href="../copyright.html" />
-    <link rel="next" title="html.parser — Simple HTML and XHTML parser" href="html.parser.html" />
-    <link rel="prev" title="Structured Markup Processing Tools" href="markup.html" />
+    <link rel="author" title="关于此文档" href="../about.html" />
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="搜索" href="../search.html" />
+    <link rel="copyright" title="版权" href="../copyright.html" />
+    <link rel="next" title="html.parser --- 简单的 HTML 和 XHTML 解析器" href="html.parser.html" />
+    <link rel="prev" title="结构化标记处理工具" href="markup.html" />
     
       
       <script defer file-types="bz2,epub,zip" data-domain="docs.python.org" src="https://analytics.python.org/js/script.file-downloads.outbound-links.js"></script>
@@ -68,7 +69,7 @@
 <body>
 <div class="mobile-nav">
     <input type="checkbox" id="menuToggler" class="toggler__input" aria-controls="navigation"
-           aria-pressed="false" aria-expanded="false" role="button" aria-label="Menu">
+           aria-pressed="false" aria-expanded="false" role="button" aria-label="菜单">
     <nav class="nav-content" role="navigation">
         <label for="menuToggler" class="toggler__label">
             <span></span>
@@ -82,8 +83,8 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" class="search-icon">
                     <path fill-rule="nonzero" fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 001.48-5.34c-.47-2.78-2.79-5-5.59-5.34a6.505 6.505 0 00-7.27 7.27c.34 2.8 2.56 5.12 5.34 5.59a6.5 6.5 0 005.34-1.48l.27.28v.79l4.25 4.25c.41.41 1.08.41 1.49 0 .41-.41.41-1.08 0-1.49L15.5 14zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"></path>
                 </svg>
-                <input placeholder="Quick search" aria-label="Quick search" type="search" name="q">
-                <input type="submit" value="Go">
+                <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q">
+                <input type="submit" value="转到">
             </form>
         </span>
     </nav>
@@ -92,46 +93,36 @@
             <div class="language_switcher_placeholder"></div>
             
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label>
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="markup.html"
-                          title="previous chapter">Structured Markup Processing Tools</a></p>
+                          title="上一章">结构化标记处理工具</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="html.parser.html"
-                          title="next chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">html.parser</span></code> — Simple HTML and XHTML parser</a></p>
+                          title="下一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">html.parser</span></code> --- 简单的 HTML 和 XHTML 解析器</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "library/html.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/library/html.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/library/html.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
@@ -142,20 +133,20 @@
 
   
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             accesskey="I">index</a></li>
+          <a href="../genindex.html" title="总索引"
+             accesskey="I">索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="html.parser.html" title="html.parser — Simple HTML and XHTML parser"
-             accesskey="N">next</a> |</li>
+          <a href="html.parser.html" title="html.parser --- 简单的 HTML 和 XHTML 解析器"
+             accesskey="N">下一页</a> |</li>
         <li class="right" >
-          <a href="markup.html" title="Structured Markup Processing Tools"
-             accesskey="P">previous</a> |</li>
+          <a href="markup.html" title="结构化标记处理工具"
+             accesskey="P">上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -167,30 +158,30 @@
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-          <li class="nav-item nav-item-1"><a href="index.html" >The Python Standard Library</a> &#187;</li>
-          <li class="nav-item nav-item-2"><a href="markup.html" accesskey="U">Structured Markup Processing Tools</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">html</span></code> — HyperText Markup Language support</a></li>
+          <li class="nav-item nav-item-1"><a href="index.html" >Python 标准库</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="markup.html" accesskey="U">结构化标记处理工具</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">html</span></code> --- 超文本标记语言支持</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
@@ -203,20 +194,14 @@
           <div class="body" role="main">
             
   <section id="module-html">
-<span id="html-hypertext-markup-language-support"></span><h1><code class="xref py py-mod docutils literal notranslate"><span class="pre">html</span></code> — HyperText Markup Language support<a class="headerlink" href="#module-html" title="Link to this heading">¶</a></h1>
-<p><strong>Source code:</strong> <a class="extlink-source reference external" href="https://github.com/python/cpython/tree/3.14/Lib/html/__init__.py">Lib/html/__init__.py</a></p>
+<span id="html-hypertext-markup-language-support"></span><h1 class="translated"><code class="xref py py-mod docutils literal notranslate"><span class="pre">html</span></code> --- 超文本标记语言支持<a class="headerlink" href="#module-html" title="Link to this heading">¶</a></h1>
+<p class="translated"><strong>源码：</strong> <a class="extlink-source reference external" href="https://github.com/python/cpython/tree/3.13/Lib/html/__init__.py">Lib/html/__init__.py</a></p>
 <hr class="docutils" />
-<p>This module defines utilities to manipulate HTML.</p>
+<p class="translated">该模块定义了操作HTML的工具。</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="html.escape">
 <span class="sig-prename descclassname"><span class="pre">html.</span></span><span class="sig-name descname"><span class="pre">escape</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">s</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">quote</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#html.escape" title="Link to this definition">¶</a></dt>
-<dd><p>Convert the characters <code class="docutils literal notranslate"><span class="pre">&amp;</span></code>, <code class="docutils literal notranslate"><span class="pre">&lt;</span></code> and <code class="docutils literal notranslate"><span class="pre">&gt;</span></code> in string <em>s</em> to HTML-safe
-sequences.  Use this if you need to display text that might contain such
-characters in HTML.  If the optional flag <em>quote</em> is true (the default), the
-characters (<code class="docutils literal notranslate"><span class="pre">&quot;</span></code>) and (<code class="docutils literal notranslate"><span class="pre">'</span></code>) are also translated; this helps for inclusion
-in an HTML attribute value delimited by quotes, as in <code class="docutils literal notranslate"><span class="pre">&lt;a</span> <span class="pre">href=&quot;...&quot;&gt;</span></code>.
-If <em>quote</em> is set to false, the characters (<code class="docutils literal notranslate"><span class="pre">&quot;</span></code>) and (<code class="docutils literal notranslate"><span class="pre">'</span></code>) are not
-translated.</p>
+<dd><p class="translated">将字符串 <em>s</em> 中的字符 <code class="docutils literal notranslate"><span class="pre">&amp;</span></code>、<code class="docutils literal notranslate"><span class="pre">&lt;</span></code> 和 <code class="docutils literal notranslate"><span class="pre">&gt;</span></code> 转换为 HTML 安全序列。当需要在 HTML 中显示可能包含此类字符的文本时，应使用此方法。如果可选参数 <em>quote</em> 为 True（默认值），则字符（<code class="docutils literal notranslate"><span class="pre">&quot;</span></code>）和（<code class="docutils literal notranslate"><span class="pre">'</span></code>）也会被转义，这有助于将其包含在用引号分隔的 HTML 属性值中，例如 <code class="docutils literal notranslate"><span class="pre">&lt;a</span> <span class="pre">href=&quot;...&quot;&gt;</span></code>。如果 <em>quote</em> 设为 False，则字符（<code class="docutils literal notranslate"><span class="pre">&quot;</span></code>）和（<code class="docutils literal notranslate"><span class="pre">'</span></code>）不会被转义。</p>
 <div class="versionadded">
 <p><span class="versionmodified added">Added in version 3.2.</span></p>
 </div>
@@ -225,21 +210,17 @@ translated.</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="html.unescape">
 <span class="sig-prename descclassname"><span class="pre">html.</span></span><span class="sig-name descname"><span class="pre">unescape</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#html.unescape" title="Link to this definition">¶</a></dt>
-<dd><p>Convert all named and numeric character references (e.g. <code class="docutils literal notranslate"><span class="pre">&amp;gt;</span></code>,
-<code class="docutils literal notranslate"><span class="pre">&amp;#62;</span></code>, <code class="docutils literal notranslate"><span class="pre">&amp;#x3e;</span></code>) in the string <em>s</em> to the corresponding Unicode
-characters.  This function uses the rules defined by the HTML 5 standard
-for both valid and invalid character references, and the <a class="reference internal" href="html.entities.html#html.entities.html5" title="html.entities.html5"><code class="xref py py-data docutils literal notranslate"><span class="pre">list</span> <span class="pre">of</span>
-<span class="pre">HTML</span> <span class="pre">5</span> <span class="pre">named</span> <span class="pre">character</span> <span class="pre">references</span></code></a>.</p>
+<dd><p class="translated">将字符串 <em>s</em> 中的所有命名和数字字符引用 (例如 <code class="docutils literal notranslate"><span class="pre">&amp;gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">&amp;#62;</span></code>, <code class="docutils literal notranslate"><span class="pre">&amp;#x3e;</span></code>) 转换为相应的Unicode字符。 此函数使用HTML 5标准为有效和无效字符引用定义的规则，以及 <a class="reference internal" href="html.entities.html#html.entities.html5" title="html.entities.html5"><code class="xref py py-data docutils literal notranslate"><span class="pre">HTML</span> <span class="pre">5</span> <span class="pre">命名字符引用列表</span></code></a>。</p>
 <div class="versionadded">
 <p><span class="versionmodified added">Added in version 3.4.</span></p>
 </div>
 </dd></dl>
 
 <hr class="docutils" />
-<p>Submodules in the <code class="docutils literal notranslate"><span class="pre">html</span></code> package are:</p>
+<p class="translated"><code class="docutils literal notranslate"><span class="pre">html</span></code> 包中的子模块是：</p>
 <ul class="simple">
-<li><p><a class="reference internal" href="html.parser.html#module-html.parser" title="html.parser: A simple parser that can handle HTML and XHTML."><code class="xref py py-mod docutils literal notranslate"><span class="pre">html.parser</span></code></a> – HTML/XHTML parser with lenient parsing mode</p></li>
-<li><p><a class="reference internal" href="html.entities.html#module-html.entities" title="html.entities: Definitions of HTML general entities."><code class="xref py py-mod docutils literal notranslate"><span class="pre">html.entities</span></code></a> – HTML entity definitions</p></li>
+<li><p class="translated"><a class="reference internal" href="html.parser.html#module-html.parser" title="html.parser: A simple parser that can handle HTML and XHTML."><code class="xref py py-mod docutils literal notranslate"><span class="pre">html.parser</span></code></a> —— 具有宽松解析模式的HTML / XHTML解析器</p></li>
+<li><p class="translated"><a class="reference internal" href="html.entities.html#module-html.entities" title="html.entities: Definitions of HTML general entities."><code class="xref py py-mod docutils literal notranslate"><span class="pre">html.entities</span></code></a> -- HTML 实体定义</p></li>
 </ul>
 </section>
 
@@ -251,44 +232,34 @@ for both valid and invalid character references, and the <a class="reference int
       <div class="sphinxsidebar" role="navigation" aria-label="Main">
         <div class="sphinxsidebarwrapper">
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="markup.html"
-                          title="previous chapter">Structured Markup Processing Tools</a></p>
+                          title="上一章">结构化标记处理工具</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="html.parser.html"
-                          title="next chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">html.parser</span></code> — Simple HTML and XHTML parser</a></p>
+                          title="下一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">html.parser</span></code> --- 简单的 HTML 和 XHTML 解析器</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "library/html.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/library/html.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/library/html.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
   </div>
         </div>
-<div id="sidebarbutton" title="Collapse sidebar">
+<div id="sidebarbutton" title="折叠边栏">
 <span>«</span>
 </div>
 
@@ -296,20 +267,20 @@ for both valid and invalid character references, and the <a class="reference int
       <div class="clearer"></div>
     </div>  
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             >index</a></li>
+          <a href="../genindex.html" title="总索引"
+             >索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="html.parser.html" title="html.parser — Simple HTML and XHTML parser"
-             >next</a> |</li>
+          <a href="html.parser.html" title="html.parser --- 简单的 HTML 和 XHTML 解析器"
+             >下一页</a> |</li>
         <li class="right" >
-          <a href="markup.html" title="Structured Markup Processing Tools"
-             >previous</a> |</li>
+          <a href="markup.html" title="结构化标记处理工具"
+             >上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -321,59 +292,59 @@ for both valid and invalid character references, and the <a class="reference int
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-          <li class="nav-item nav-item-1"><a href="index.html" >The Python Standard Library</a> &#187;</li>
-          <li class="nav-item nav-item-2"><a href="markup.html" >Structured Markup Processing Tools</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">html</span></code> — HyperText Markup Language support</a></li>
+          <li class="nav-item nav-item-1"><a href="index.html" >Python 标准库</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="markup.html" >结构化标记处理工具</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">html</span></code> --- 超文本标记语言支持</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
       </ul>
     </div>  
     <div class="footer">
-    &copy; <a href="../copyright.html">Copyright</a> 2001 Python Software Foundation.
+    &copy; <a href="../copyright.html">版权</a> 2001-2026, Python Software Foundation.
     <br>
-    This page is licensed under the Python Software Foundation License Version 2.
+    本页面采用 Python 软件基金会许可证第 2 版授权。
     <br>
-    Examples, recipes, and other code in the documentation are additionally licensed under the Zero Clause BSD License.
+    文档中的示例、代码片段及其他代码内容额外采用零条款 BSD 许可证授权。
     <br>
     
-      See <a href="/license.html">History and License</a> for more information.<br>
+      更多信息请参阅《<a href="/license.html"> 历史与许可 </a>》。<br>
     
     
     <br>
 
-    The Python Software Foundation is a non-profit corporation.
-<a href="https://www.python.org/psf/donations/">Please donate.</a>
+    Python 软件基金会是一家非营利性公司。
+<a href="https://www.python.org/psf/donations/">请进行捐赠。</a>
 <br>
     <br>
-      Last updated on May 27, 2026 (10:52 UTC).
+      最后更新于5月 25, 2026 (11:48 UTC) 。
     
-      <a href="/bugs.html">Found a bug</a>?
+      <a href="/bugs.html">发现了错误</a>？
     
     <br>
 
-    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3.
+    使用<a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3 创建。
     </div>
 
   </body>

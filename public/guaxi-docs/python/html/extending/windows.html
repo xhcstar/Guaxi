@@ -1,44 +1,45 @@
 <!DOCTYPE html>
 
-<html lang="en" data-content_root="../">
+<html lang="zh-CN" data-content_root="../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta property="og:title" content="5. Building C and C++ Extensions on Windows" />
+<meta property="og:title" content="5. 在 Windows 上构建 C 和 C++ 扩展" />
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://docs.python.org/3/extending/windows.html" />
 <meta property="og:site_name" content="Python documentation" />
-<meta property="og:description" content="This chapter briefly explains how to create a Windows extension module for Python using Microsoft Visual C++, and follows with more detailed background information on how it works. The explanatory ..." />
+<meta property="og:description" content="这一章简要介绍了如何使用 Microsoft Visual C++ 创建 Python 的 Windows 扩展模块，然后再提供有关其工作机理的详细背景信息。 这些说明材料同时适用于 Windows 程序员学习构建 Python 扩展以及 Unix 程序员学习如何生成在 Unix 和 Windows 上均能成功构建的软件。 鼓励模块作者使用 distutils 方式来构建扩展模块，而不使用本..." />
 <meta property="og:image:width" content="1146" />
 <meta property="og:image:height" content="600" />
-<meta property="og:image" content="https://docs.python.org/3.14/_images/social_previews/summary_extending_windows_7606f5e8.png" />
-<meta property="og:image:alt" content="This chapter briefly explains how to create a Windows extension module for Python using Microsoft Visual C++, and follows with more detailed background information on how it works. The explanatory ..." />
-<meta name="description" content="This chapter briefly explains how to create a Windows extension module for Python using Microsoft Visual C++, and follows with more detailed background information on how it works. The explanatory ..." />
+<meta property="og:image" content="https://docs.python.org/3.13/zh-cn/_images/social_previews/summary_extending_windows_08c84b27.png" />
+<meta property="og:image:alt" content="这一章简要介绍了如何使用 Microsoft Visual C++ 创建 Python 的 Windows 扩展模块，然后再提供有关其工作机理的详细背景信息。 这些说明材料同时适用于 Windows 程序员学习构建 Python 扩展以及 Unix 程序员学习如何生成在 Unix 和 Windows 上均能成功构建的软件。 鼓励模块作者使用 distutils 方式来构建扩展模块，而不使用本..." />
+<meta name="description" content="这一章简要介绍了如何使用 Microsoft Visual C++ 创建 Python 的 Windows 扩展模块，然后再提供有关其工作机理的详细背景信息。 这些说明材料同时适用于 Windows 程序员学习构建 Python 扩展以及 Unix 程序员学习如何生成在 Unix 和 Windows 上均能成功构建的软件。 鼓励模块作者使用 distutils 方式来构建扩展模块，而不使用本..." />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="theme-color" content="#3776ab">
 
-    <title>5. Building C and C++ Extensions on Windows &#8212; Python 3.14.5 documentation</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>5. 在 Windows 上构建 C 和 C++ 扩展 &#8212; Python 3.13.13 文档</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
     
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
     <link rel="stylesheet" type="text/css" href="../_static/classic.css?v=234b1a7c" />
     <link rel="stylesheet" type="text/css" href="../_static/pydoctheme.css?v=4365c8fe" />
     <link id="pygments_dark_css" media="(prefers-color-scheme: dark)" rel="stylesheet" type="text/css" href="../_static/pygments_dark.css?v=5349f25f" />
     
-    <script src="../_static/documentation_options.js?v=bcfd2f37"></script>
+    <script src="../_static/documentation_options.js?v=a941be6b"></script>
     <script src="../_static/doctools.js?v=9bcbadda"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/translations.js?v=beaddf03"></script>
     
     <script src="../_static/sidebar.js"></script>
     
     <link rel="search" type="application/opensearchdescription+xml"
-          title="Search within Python 3.14.5 documentation"
+          title="在 Python 3.13.13 文档 中搜索"
           href="../_static/opensearch.xml"/>
-    <link rel="author" title="About these documents" href="../about.html" />
-    <link rel="index" title="Index" href="../genindex.html" />
-    <link rel="search" title="Search" href="../search.html" />
-    <link rel="copyright" title="Copyright" href="../copyright.html" />
-    <link rel="next" title="1. Embedding Python in Another Application" href="embedding.html" />
-    <link rel="prev" title="4. Building C and C++ Extensions" href="building.html" />
+    <link rel="author" title="关于此文档" href="../about.html" />
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="搜索" href="../search.html" />
+    <link rel="copyright" title="版权" href="../copyright.html" />
+    <link rel="next" title="1. 在其它应用程序嵌入 Python" href="embedding.html" />
+    <link rel="prev" title="4. 构建 C/C++ 扩展" href="building.html" />
     
       
       <script defer file-types="bz2,epub,zip" data-domain="docs.python.org" src="https://analytics.python.org/js/script.file-downloads.outbound-links.js"></script>
@@ -68,7 +69,7 @@
 <body>
 <div class="mobile-nav">
     <input type="checkbox" id="menuToggler" class="toggler__input" aria-controls="navigation"
-           aria-pressed="false" aria-expanded="false" role="button" aria-label="Menu">
+           aria-pressed="false" aria-expanded="false" role="button" aria-label="菜单">
     <nav class="nav-content" role="navigation">
         <label for="menuToggler" class="toggler__label">
             <span></span>
@@ -82,8 +83,8 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" class="search-icon">
                     <path fill-rule="nonzero" fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 001.48-5.34c-.47-2.78-2.79-5-5.59-5.34a6.505 6.505 0 00-7.27 7.27c.34 2.8 2.56 5.12 5.34 5.59a6.5 6.5 0 005.34-1.48l.27.28v.79l4.25 4.25c.41.41 1.08.41 1.49 0 .41-.41.41-1.08 0-1.49L15.5 14zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"></path>
                 </svg>
-                <input placeholder="Quick search" aria-label="Quick search" type="search" name="q">
-                <input type="submit" value="Go">
+                <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q">
+                <input type="submit" value="转到">
             </form>
         </span>
     </nav>
@@ -92,58 +93,48 @@
             <div class="language_switcher_placeholder"></div>
             
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label>
   <div>
-    <h3><a href="../contents.html">Table of Contents</a></h3>
+    <h3><a href="../contents.html">目录</a></h3>
     <ul>
-<li><a class="reference internal" href="#">5. Building C and C++ Extensions on Windows</a><ul>
-<li><a class="reference internal" href="#a-cookbook-approach">5.1. A Cookbook Approach</a></li>
-<li><a class="reference internal" href="#differences-between-unix-and-windows">5.2. Differences Between Unix and Windows</a></li>
-<li><a class="reference internal" href="#using-dlls-in-practice">5.3. Using DLLs in Practice</a></li>
+<li><a class="reference internal" href="#">5. 在 Windows 上构建 C 和 C++ 扩展</a><ul>
+<li><a class="reference internal" href="#a-cookbook-approach">5.1. 菜谱式说明</a></li>
+<li><a class="reference internal" href="#differences-between-unix-and-windows">5.2. Unix 和 Windows 之间的差异</a></li>
+<li><a class="reference internal" href="#using-dlls-in-practice">5.3. DLL 的实际使用</a></li>
 </ul>
 </li>
 </ul>
 
   </div>
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="building.html"
-                          title="previous chapter"><span class="section-number">4. </span>Building C and C++ Extensions</a></p>
+                          title="上一章"><span class="section-number">4. </span>构建 C/C++ 扩展</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="embedding.html"
-                          title="next chapter"><span class="section-number">1. </span>Embedding Python in Another Application</a></p>
+                          title="下一章"><span class="section-number">1. </span>在其它应用程序嵌入 Python</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "extending/windows.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/extending/windows.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/extending/windows.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
@@ -154,20 +145,20 @@
 
   
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             accesskey="I">index</a></li>
+          <a href="../genindex.html" title="总索引"
+             accesskey="I">索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="embedding.html" title="1. Embedding Python in Another Application"
-             accesskey="N">next</a> |</li>
+          <a href="embedding.html" title="1. 在其它应用程序嵌入 Python"
+             accesskey="N">下一页</a> |</li>
         <li class="right" >
-          <a href="building.html" title="4. Building C and C++ Extensions"
-             accesskey="P">previous</a> |</li>
+          <a href="building.html" title="4. 构建 C/C++ 扩展"
+             accesskey="P">上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -179,29 +170,29 @@
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-          <li class="nav-item nav-item-1"><a href="index.html" accesskey="U">Extending and Embedding the Python Interpreter</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href=""><span class="section-number">5. </span>Building C and C++ Extensions on Windows</a></li>
+          <li class="nav-item nav-item-1"><a href="index.html" accesskey="U">扩展和嵌入 Python 解释器</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href=""><span class="section-number">5. </span>在 Windows 上构建 C 和 C++ 扩展</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
@@ -214,137 +205,39 @@
           <div class="body" role="main">
             
   <section id="building-c-and-c-extensions-on-windows">
-<span id="building-on-windows"></span><h1><span class="section-number">5. </span>Building C and C++ Extensions on Windows<a class="headerlink" href="#building-c-and-c-extensions-on-windows" title="Link to this heading">¶</a></h1>
-<p>This chapter briefly explains how to create a Windows extension module for
-Python using Microsoft Visual C++, and follows with more detailed background
-information on how it works.  The explanatory material is useful for both the
-Windows programmer learning to build Python extensions and the Unix programmer
-interested in producing software which can be successfully built on both Unix
-and Windows.</p>
-<p>Module authors are encouraged to use the distutils approach for building
-extension modules, instead of the one described in this section. You will still
-need the C compiler that was used to build Python; typically Microsoft Visual
-C++.</p>
+<span id="building-on-windows"></span><h1 class="translated"><span class="section-number">5. </span>在 Windows 上构建 C 和 C++ 扩展<a class="headerlink" href="#building-c-and-c-extensions-on-windows" title="Link to this heading">¶</a></h1>
+<p class="translated">这一章简要介绍了如何使用 Microsoft Visual C++ 创建 Python 的 Windows 扩展模块，然后再提供有关其工作机理的详细背景信息。 这些说明材料同时适用于 Windows 程序员学习构建 Python 扩展以及 Unix 程序员学习如何生成在 Unix 和 Windows 上均能成功构建的软件。</p>
+<p class="translated">鼓励模块作者使用 distutils 方式来构建扩展模块，而不使用本节所描述的方式。 你仍将需要使用 C 编译器来构建 Python；通常为 Microsoft Visual C++。</p>
 <div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>This chapter mentions a number of filenames that include an encoded Python
-version number.  These filenames are represented with the version number shown
-as <code class="docutils literal notranslate"><span class="pre">XY</span></code>; in practice, <code class="docutils literal notranslate"><span class="pre">'X'</span></code> will be the major version number and <code class="docutils literal notranslate"><span class="pre">'Y'</span></code>
-will be the minor version number of the Python release you’re working with.  For
-example, if you are using Python 2.2.1, <code class="docutils literal notranslate"><span class="pre">XY</span></code> will actually be <code class="docutils literal notranslate"><span class="pre">22</span></code>.</p>
+<p class="admonition-title">备注</p>
+<p class="translated">这一章提及了多个包括已编码 Python 版本号的文件名。 这些文件名以显示为 <code class="docutils literal notranslate"><span class="pre">XY</span></code> 的版本号来代表；在实践中，<code class="docutils literal notranslate"><span class="pre">'X'</span></code> 将为你所使用的 Python 发布版的主版本号而 <code class="docutils literal notranslate"><span class="pre">'Y'</span></code> 将为次版本号。 例如，如果你所使用的是 Python 2.2.1，<code class="docutils literal notranslate"><span class="pre">XY</span></code> 将为 <code class="docutils literal notranslate"><span class="pre">22</span></code>。</p>
 </div>
 <section id="a-cookbook-approach">
-<span id="win-cookbook"></span><h2><span class="section-number">5.1. </span>A Cookbook Approach<a class="headerlink" href="#a-cookbook-approach" title="Link to this heading">¶</a></h2>
-<p>There are two approaches to building extension modules on Windows, just as there
-are on Unix: use the <code class="docutils literal notranslate"><span class="pre">setuptools</span></code> package to control the build process, or
-do things manually.  The setuptools approach works well for most extensions;
-documentation on using <code class="docutils literal notranslate"><span class="pre">setuptools</span></code> to build and package extension modules
-is available in <a class="reference internal" href="building.html#setuptools-index"><span class="std std-ref">Building C and C++ Extensions with setuptools</span></a>.  If you find you really need to do
-things manually, it may be instructive to study the project file for the
-<a class="extlink-source reference external" href="https://github.com/python/cpython/tree/3.14/PCbuild/winsound.vcxproj">winsound</a> standard library module.</p>
+<span id="win-cookbook"></span><h2 class="translated"><span class="section-number">5.1. </span>菜谱式说明<a class="headerlink" href="#a-cookbook-approach" title="Link to this heading">¶</a></h2>
+<p class="translated">与在 Unix 上一样，在 Windows 上构造扩展模块也有两种方式：使用 <code class="docutils literal notranslate"><span class="pre">setuptools</span></code> 包来控制构建过程，或者全手动操作。 setuptools 方式适用于大多数扩展；使用 <code class="docutils literal notranslate"><span class="pre">setuptools</span></code> 构建和打包扩展模块的文档见 <a class="reference internal" href="building.html#setuptools-index"><span class="std std-ref">使用 setuptools 构建 C 和 C++ 扩展</span></a>。 如果你发现你真的需要手动操作，那么研究一下 <a class="extlink-source reference external" href="https://github.com/python/cpython/tree/3.13/PCbuild/winsound.vcxproj">winsound</a> 标准库模块的项目文件可能会很有帮助。standard library module.</p>
 </section>
 <section id="differences-between-unix-and-windows">
-<span id="dynamic-linking"></span><h2><span class="section-number">5.2. </span>Differences Between Unix and Windows<a class="headerlink" href="#differences-between-unix-and-windows" title="Link to this heading">¶</a></h2>
-<p>Unix and Windows use completely different paradigms for run-time loading of
-code.  Before you try to build a module that can be dynamically loaded, be aware
-of how your system works.</p>
-<p>In Unix, a shared object (<code class="file docutils literal notranslate"><span class="pre">.so</span></code>) file contains code to be used by the
-program, and also the names of functions and data that it expects to find in the
-program.  When the file is joined to the program, all references to those
-functions and data in the file’s code are changed to point to the actual
-locations in the program where the functions and data are placed in memory.
-This is basically a link operation.</p>
-<p>In Windows, a dynamic-link library (<code class="file docutils literal notranslate"><span class="pre">.dll</span></code>) file has no dangling
-references.  Instead, an access to functions or data goes through a lookup
-table.  So the DLL code does not have to be fixed up at runtime to refer to the
-program’s memory; instead, the code already uses the DLL’s lookup table, and the
-lookup table is modified at runtime to point to the functions and data.</p>
-<p>In Unix, there is only one type of library file (<code class="file docutils literal notranslate"><span class="pre">.a</span></code>) which contains code
-from several object files (<code class="file docutils literal notranslate"><span class="pre">.o</span></code>).  During the link step to create a shared
-object file (<code class="file docutils literal notranslate"><span class="pre">.so</span></code>), the linker may find that it doesn’t know where an
-identifier is defined.  The linker will look for it in the object files in the
-libraries; if it finds it, it will include all the code from that object file.</p>
-<p>In Windows, there are two types of library, a static library and an import
-library (both called <code class="file docutils literal notranslate"><span class="pre">.lib</span></code>).  A static library is like a Unix <code class="file docutils literal notranslate"><span class="pre">.a</span></code>
-file; it contains code to be included as necessary. An import library is
-basically used only to reassure the linker that a certain identifier is legal,
-and will be present in the program when the DLL is loaded.  So the linker uses
-the information from the import library to build the lookup table for using
-identifiers that are not included in the DLL.  When an application or a DLL is
-linked, an import library may be generated, which will need to be used for all
-future DLLs that depend on the symbols in the application or DLL.</p>
-<p>Suppose you are building two dynamic-load modules, B and C, which should share
-another block of code A.  On Unix, you would <em>not</em> pass <code class="file docutils literal notranslate"><span class="pre">A.a</span></code> to the
-linker for <code class="file docutils literal notranslate"><span class="pre">B.so</span></code> and <code class="file docutils literal notranslate"><span class="pre">C.so</span></code>; that would cause it to be included
-twice, so that B and C would each have their own copy.  In Windows, building
-<code class="file docutils literal notranslate"><span class="pre">A.dll</span></code> will also build <code class="file docutils literal notranslate"><span class="pre">A.lib</span></code>.  You <em>do</em> pass <code class="file docutils literal notranslate"><span class="pre">A.lib</span></code> to the
-linker for B and C.  <code class="file docutils literal notranslate"><span class="pre">A.lib</span></code> does not contain code; it just contains
-information which will be used at runtime to access A’s code.</p>
-<p>In Windows, using an import library is sort of like using <code class="docutils literal notranslate"><span class="pre">import</span> <span class="pre">spam</span></code>; it
-gives you access to spam’s names, but does not create a separate copy.  On Unix,
-linking with a library is more like <code class="docutils literal notranslate"><span class="pre">from</span> <span class="pre">spam</span> <span class="pre">import</span> <span class="pre">*</span></code>; it does create a
-separate copy.</p>
-<dl class="c macro">
-<dt class="sig sig-object c" id="c.Py_NO_LINK_LIB">
-<span class="sig-name descname"><span class="n"><span class="pre">Py_NO_LINK_LIB</span></span></span><a class="headerlink" href="#c.Py_NO_LINK_LIB" title="Link to this definition">¶</a><br /></dt>
-<dd><p>Turn off the implicit, <code class="docutils literal notranslate"><span class="pre">#pragma</span></code>-based linkage with the Python
-library, performed inside CPython header files.</p>
-<div class="versionadded">
-<p><span class="versionmodified added">Added in version 3.14.</span></p>
-</div>
-</dd></dl>
-
+<span id="dynamic-linking"></span><h2 class="translated"><span class="section-number">5.2. </span>Unix 和 Windows 之间的差异<a class="headerlink" href="#differences-between-unix-and-windows" title="Link to this heading">¶</a></h2>
+<p class="translated">Unix 和 Windows 对于代码的运行时加载使用了完全不同的范式。 在你尝试构建可动态加载的模块之前，要先了解你所用系统是如何工作的。</p>
+<p class="translated">在 Unix 中，一个共享对象 (<code class="file docutils literal notranslate"><span class="pre">.so</span></code>) 文件中包含将由程序来使用的代码，也包含在程序中可被找到的函数名称和数据。 当文件被合并到程序中时，对在文件代码中这些函数和数据的全部引用都会被改为指向程序中函数和数据在内存中所放置的实际位置。 这基本上是一个链接操作。</p>
+<p class="translated">在 Windows 中，一个动态链接库 (<code class="file docutils literal notranslate"><span class="pre">.dll</span></code>) 文件中没有悬挂的引用。 而是通过一个查找表执行对函数或数据的访问。 因此在运行时 DLL 代码不必在运行时进行修改；相反地，代码已经使用了 DLL 的查找表，并且在运行时查找表会被修改以指向特定的函数和数据。</p>
+<p class="translated">在 Unix 中，只存在一种库文件 (<code class="file docutils literal notranslate"><span class="pre">.a</span></code>)，它包含来自多个对象文件 (<code class="file docutils literal notranslate"><span class="pre">.o</span></code>) 的代码。 在创建共享对象文件 (<code class="file docutils literal notranslate"><span class="pre">.so</span></code>) 的链接阶段，链接器可能会发现它不知道某个标识符是在哪里定义的。 链接器将在各个库的对象文件中查找它；如果找到了它，链接器将会包括来自该对象文件的所有代码。</p>
+<p class="translated">在 Windows 中，存在两种库类型，静态库和导入库 (扩展名都是 <code class="file docutils literal notranslate"><span class="pre">.lib</span></code>)。 静态库类似于 Unix 的 <code class="file docutils literal notranslate"><span class="pre">.a</span></code> 文件；它包含在必要时可被包括的代码。 导入库基本上仅用于让链接器能确保特定标识符是合法的，并且将在 DLL 被加载时出现于程序中。 这样链接器可使用来自导入库的信息构建查找表以便使用未包括在 DLL 中的标识符。 当一个应用程序或  DLL 被链接时，可能会生成一个导入库，它将需要被用于应用程序或 DLL 中未来所有依赖于这些符号的 DLL。</p>
+<p class="translated">假设你正在编译两个动态加载模块 B 和 C，它们应当共享另一个代码块 A。 在 Unix 上，你 <em>不应</em> 将 <code class="file docutils literal notranslate"><span class="pre">A.a</span></code> 传给链接器作为 <code class="file docutils literal notranslate"><span class="pre">B.so</span></code> 和 <code class="file docutils literal notranslate"><span class="pre">C.so</span></code>；那会导致它被包括两次，这样 B 和 C 将分别拥有它们自己的副本。 在 Windows 上，编译 <code class="file docutils literal notranslate"><span class="pre">A.dll</span></code> 将同时编译 <code class="file docutils literal notranslate"><span class="pre">A.lib</span></code>。 你 <em>应当</em> 将 <code class="file docutils literal notranslate"><span class="pre">A.lib</span></code> 传给链接器用于 B 和 C。 <code class="file docutils literal notranslate"><span class="pre">A.lib</span></code> 并不包含代码；它只包含将在运行时被用于访问 A 的代码的信息。</p>
+<p class="translated">在 Windows 上，使用导入库有点像是使用 <code class="docutils literal notranslate"><span class="pre">import</span> <span class="pre">spam</span></code>；它让你可以访问 spam 中的名称，但并不会创建一个单独副本。 在 Unix 上，链接到一个库更像是 <code class="docutils literal notranslate"><span class="pre">from</span> <span class="pre">spam</span> <span class="pre">import</span> <span class="pre">*</span></code>；它会创建一个单独副本。</p>
 </section>
 <section id="using-dlls-in-practice">
-<span id="win-dlls"></span><h2><span class="section-number">5.3. </span>Using DLLs in Practice<a class="headerlink" href="#using-dlls-in-practice" title="Link to this heading">¶</a></h2>
-<p>Windows Python is built in Microsoft Visual C++; using other compilers may or
-may not work.  The rest of this section is MSVC++ specific.</p>
-<p>When creating DLLs in Windows, you can use the CPython library in two ways:</p>
-<ol class="arabic">
-<li><p>By default, inclusion of <code class="file docutils literal notranslate"><span class="pre">PC/pyconfig.h</span></code> directly or via
-<code class="file docutils literal notranslate"><span class="pre">Python.h</span></code> triggers an implicit, configure-aware link with the
-library.  The header file chooses <code class="file docutils literal notranslate"><span class="pre">pythonXY_d.lib</span></code> for Debug,
-<code class="file docutils literal notranslate"><span class="pre">pythonXY.lib</span></code> for Release, and <code class="file docutils literal notranslate"><span class="pre">pythonX.lib</span></code> for Release with
-the <a class="reference internal" href="../c-api/stable.html#stable-application-binary-interface"><span class="std std-ref">Limited API</span></a> enabled.</p>
-<p>To build two DLLs, spam and ni (which uses C functions found in spam), you
-could use these commands:</p>
-<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="n">cl</span><span class="w"> </span><span class="o">/</span><span class="n">LD</span><span class="w"> </span><span class="o">/</span><span class="n">I</span><span class="o">/</span><span class="n">python</span><span class="o">/</span><span class="n">include</span><span class="w"> </span><span class="n">spam</span><span class="p">.</span><span class="n">c</span>
-<span class="n">cl</span><span class="w"> </span><span class="o">/</span><span class="n">LD</span><span class="w"> </span><span class="o">/</span><span class="n">I</span><span class="o">/</span><span class="n">python</span><span class="o">/</span><span class="n">include</span><span class="w"> </span><span class="n">ni</span><span class="p">.</span><span class="n">c</span><span class="w"> </span><span class="n">spam</span><span class="p">.</span><span class="n">lib</span>
+<span id="win-dlls"></span><h2 class="translated"><span class="section-number">5.3. </span>DLL 的实际使用<a class="headerlink" href="#using-dlls-in-practice" title="Link to this heading">¶</a></h2>
+<p class="translated">Windows Python 是在 Microsoft Visual C++ 中构建的；使用其他编译器可能会也可能不会工作。本节的其余部分是针对 MSVC++ 的。</p>
+<p class="translated">当在 Windows 中创建 DLL 时，你必须将 <code class="file docutils literal notranslate"><span class="pre">pythonXY.lib</span></code> 传给链接器。 要编译两个 DLL，spam 和 ni (会使用 spam 中找到的 C 函数)，你应当使用以下命令:</p>
+<div class="translated highlight-c notranslate"><div class="highlight"><pre><span></span><span class="n">cl</span><span class="w"> </span><span class="o">/</span><span class="n">LD</span><span class="w"> </span><span class="o">/</span><span class="n">I</span><span class="o">/</span><span class="n">python</span><span class="o">/</span><span class="n">include</span><span class="w"> </span><span class="n">spam</span><span class="p">.</span><span class="n">c</span><span class="w"> </span><span class="p">..</span><span class="o">/</span><span class="n">libs</span><span class="o">/</span><span class="n">pythonXY</span><span class="p">.</span><span class="n">lib</span>
+<span class="n">cl</span><span class="w"> </span><span class="o">/</span><span class="n">LD</span><span class="w"> </span><span class="o">/</span><span class="n">I</span><span class="o">/</span><span class="n">python</span><span class="o">/</span><span class="n">include</span><span class="w"> </span><span class="n">ni</span><span class="p">.</span><span class="n">c</span><span class="w"> </span><span class="n">spam</span><span class="p">.</span><span class="n">lib</span><span class="w"> </span><span class="p">..</span><span class="o">/</span><span class="n">libs</span><span class="o">/</span><span class="n">pythonXY</span><span class="p">.</span><span class="n">lib</span>
 </pre></div>
 </div>
-<p>The first command created three files: <code class="file docutils literal notranslate"><span class="pre">spam.obj</span></code>, <code class="file docutils literal notranslate"><span class="pre">spam.dll</span></code>
-and <code class="file docutils literal notranslate"><span class="pre">spam.lib</span></code>.  <code class="file docutils literal notranslate"><span class="pre">Spam.dll</span></code> does not contain any Python
-functions (such as <a class="reference internal" href="../c-api/arg.html#c.PyArg_ParseTuple" title="PyArg_ParseTuple"><code class="xref c c-func docutils literal notranslate"><span class="pre">PyArg_ParseTuple()</span></code></a>), but it does know how to find
-the Python code thanks to the implicitly linked <code class="file docutils literal notranslate"><span class="pre">pythonXY.lib</span></code>.</p>
-<p>The second command created <code class="file docutils literal notranslate"><span class="pre">ni.dll</span></code> (and <code class="file docutils literal notranslate"><span class="pre">.obj</span></code> and
-<code class="file docutils literal notranslate"><span class="pre">.lib</span></code>), which knows how to find the necessary functions from spam,
-and also from the Python executable.</p>
-</li>
-<li><p>Manually by defining <a class="reference internal" href="#c.Py_NO_LINK_LIB" title="Py_NO_LINK_LIB"><code class="xref c c-macro docutils literal notranslate"><span class="pre">Py_NO_LINK_LIB</span></code></a> macro before including
-<code class="file docutils literal notranslate"><span class="pre">Python.h</span></code>. You must pass <code class="file docutils literal notranslate"><span class="pre">pythonXY.lib</span></code> to the linker.</p>
-<p>To build two DLLs, spam and ni (which uses C functions found in spam), you
-could use these commands:</p>
-<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="n">cl</span><span class="w"> </span><span class="o">/</span><span class="n">LD</span><span class="w"> </span><span class="o">/</span><span class="n">DPy_NO_LINK_LIB</span><span class="w"> </span><span class="o">/</span><span class="n">I</span><span class="o">/</span><span class="n">python</span><span class="o">/</span><span class="n">include</span><span class="w"> </span><span class="n">spam</span><span class="p">.</span><span class="n">c</span><span class="w"> </span><span class="p">..</span><span class="o">/</span><span class="n">libs</span><span class="o">/</span><span class="n">pythonXY</span><span class="p">.</span><span class="n">lib</span>
-<span class="n">cl</span><span class="w"> </span><span class="o">/</span><span class="n">LD</span><span class="w"> </span><span class="o">/</span><span class="n">DPy_NO_LINK_LIB</span><span class="w"> </span><span class="o">/</span><span class="n">I</span><span class="o">/</span><span class="n">python</span><span class="o">/</span><span class="n">include</span><span class="w"> </span><span class="n">ni</span><span class="p">.</span><span class="n">c</span><span class="w"> </span><span class="n">spam</span><span class="p">.</span><span class="n">lib</span><span class="w"> </span><span class="p">..</span><span class="o">/</span><span class="n">libs</span><span class="o">/</span><span class="n">pythonXY</span><span class="p">.</span><span class="n">lib</span>
-</pre></div>
-</div>
-<p>The first command created three files: <code class="file docutils literal notranslate"><span class="pre">spam.obj</span></code>, <code class="file docutils literal notranslate"><span class="pre">spam.dll</span></code>
-and <code class="file docutils literal notranslate"><span class="pre">spam.lib</span></code>.  <code class="file docutils literal notranslate"><span class="pre">Spam.dll</span></code> does not contain any Python
-functions (such as <a class="reference internal" href="../c-api/arg.html#c.PyArg_ParseTuple" title="PyArg_ParseTuple"><code class="xref c c-func docutils literal notranslate"><span class="pre">PyArg_ParseTuple()</span></code></a>), but it does know how to find
-the Python code thanks to <code class="file docutils literal notranslate"><span class="pre">pythonXY.lib</span></code>.</p>
-<p>The second command created <code class="file docutils literal notranslate"><span class="pre">ni.dll</span></code> (and <code class="file docutils literal notranslate"><span class="pre">.obj</span></code> and
-<code class="file docutils literal notranslate"><span class="pre">.lib</span></code>), which knows how to find the necessary functions from spam,
-and also from the Python executable.</p>
-</li>
-</ol>
-<p>Not every identifier is exported to the lookup table.  If you want any other
-modules (including Python) to be able to see your identifiers, you have to say
-<code class="docutils literal notranslate"><span class="pre">_declspec(dllexport)</span></code>, as in <code class="docutils literal notranslate"><span class="pre">void</span> <span class="pre">_declspec(dllexport)</span> <span class="pre">initspam(void)</span></code> or
-<code class="docutils literal notranslate"><span class="pre">PyObject</span> <span class="pre">_declspec(dllexport)</span> <span class="pre">*NiGetSpamData(void)</span></code>.</p>
-<p>Developer Studio will throw in a lot of import libraries that you do not really
-need, adding about 100K to your executable.  To get rid of them, use the Project
-Settings dialog, Link tab, to specify <em>ignore default libraries</em>.  Add the
-correct <code class="file docutils literal notranslate"><span class="pre">msvcrt</span><em><span class="pre">xx</span></em><span class="pre">.lib</span></code> to the list of libraries.</p>
+<p class="translated">第一条命令创建了三个文件: <code class="file docutils literal notranslate"><span class="pre">spam.obj</span></code>, <code class="file docutils literal notranslate"><span class="pre">spam.dll</span></code> 和 <code class="file docutils literal notranslate"><span class="pre">spam.lib</span></code>。 <code class="file docutils literal notranslate"><span class="pre">Spam.dll</span></code> 不包含任何 Python 函数 (例如 <a class="reference internal" href="../c-api/arg.html#c.PyArg_ParseTuple" title="PyArg_ParseTuple"><code class="xref c c-func docutils literal notranslate"><span class="pre">PyArg_ParseTuple()</span></code></a>)，但它通过 <code class="file docutils literal notranslate"><span class="pre">pythonXY.lib</span></code> 可以知道如何找到所需的 Python 代码。</p>
+<p class="translated">第二条命令创建了 <code class="file docutils literal notranslate"><span class="pre">ni.dll</span></code> (以及 <code class="file docutils literal notranslate"><span class="pre">.obj</span></code> 和 <code class="file docutils literal notranslate"><span class="pre">.lib</span></code>)，它知道如何从 spam 以及 Python 可执行文件中找到所需的函数。</p>
+<p class="translated">不是每个标识符都会被导出到查找表。 如果你想要任何其他模块（包括 Python）都能看到你的标识符，你必须写上 <code class="docutils literal notranslate"><span class="pre">_declspec(dllexport)</span></code>，就如在 <code class="docutils literal notranslate"><span class="pre">void</span> <span class="pre">_declspec(dllexport)</span> <span class="pre">initspam(void)</span></code> 或 <code class="docutils literal notranslate"><span class="pre">PyObject</span> <span class="pre">_declspec(dllexport)</span> <span class="pre">*NiGetSpamData(void)</span></code> 中一样。</p>
+<p class="translated">Developer Studio 会添加很多你并不真正需要的导入库，命名你的可执行文件大小增加约 100K。 要摆脱它们，请使用项目设置对话框中的链接选项卡指定 <em>忽略默认库</em>。 将正确的 <code class="file docutils literal notranslate"><span class="pre">msvcrt</span><em><span class="pre">xx</span></em><span class="pre">.lib</span></code> 添加到库列表中。</p>
 </section>
 </section>
 
@@ -356,56 +249,46 @@ correct <code class="file docutils literal notranslate"><span class="pre">msvcrt
       <div class="sphinxsidebar" role="navigation" aria-label="Main">
         <div class="sphinxsidebarwrapper">
   <div>
-    <h3><a href="../contents.html">Table of Contents</a></h3>
+    <h3><a href="../contents.html">目录</a></h3>
     <ul>
-<li><a class="reference internal" href="#">5. Building C and C++ Extensions on Windows</a><ul>
-<li><a class="reference internal" href="#a-cookbook-approach">5.1. A Cookbook Approach</a></li>
-<li><a class="reference internal" href="#differences-between-unix-and-windows">5.2. Differences Between Unix and Windows</a></li>
-<li><a class="reference internal" href="#using-dlls-in-practice">5.3. Using DLLs in Practice</a></li>
+<li><a class="reference internal" href="#">5. 在 Windows 上构建 C 和 C++ 扩展</a><ul>
+<li><a class="reference internal" href="#a-cookbook-approach">5.1. 菜谱式说明</a></li>
+<li><a class="reference internal" href="#differences-between-unix-and-windows">5.2. Unix 和 Windows 之间的差异</a></li>
+<li><a class="reference internal" href="#using-dlls-in-practice">5.3. DLL 的实际使用</a></li>
 </ul>
 </li>
 </ul>
 
   </div>
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="building.html"
-                          title="previous chapter"><span class="section-number">4. </span>Building C and C++ Extensions</a></p>
+                          title="上一章"><span class="section-number">4. </span>构建 C/C++ 扩展</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="embedding.html"
-                          title="next chapter"><span class="section-number">1. </span>Embedding Python in Another Application</a></p>
+                          title="下一章"><span class="section-number">1. </span>在其它应用程序嵌入 Python</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "extending/windows.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/extending/windows.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/extending/windows.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
   </div>
         </div>
-<div id="sidebarbutton" title="Collapse sidebar">
+<div id="sidebarbutton" title="折叠边栏">
 <span>«</span>
 </div>
 
@@ -413,20 +296,20 @@ correct <code class="file docutils literal notranslate"><span class="pre">msvcrt
       <div class="clearer"></div>
     </div>  
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             >index</a></li>
+          <a href="../genindex.html" title="总索引"
+             >索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="embedding.html" title="1. Embedding Python in Another Application"
-             >next</a> |</li>
+          <a href="embedding.html" title="1. 在其它应用程序嵌入 Python"
+             >下一页</a> |</li>
         <li class="right" >
-          <a href="building.html" title="4. Building C and C++ Extensions"
-             >previous</a> |</li>
+          <a href="building.html" title="4. 构建 C/C++ 扩展"
+             >上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -438,58 +321,58 @@ correct <code class="file docutils literal notranslate"><span class="pre">msvcrt
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-          <li class="nav-item nav-item-1"><a href="index.html" >Extending and Embedding the Python Interpreter</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href=""><span class="section-number">5. </span>Building C and C++ Extensions on Windows</a></li>
+          <li class="nav-item nav-item-1"><a href="index.html" >扩展和嵌入 Python 解释器</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href=""><span class="section-number">5. </span>在 Windows 上构建 C 和 C++ 扩展</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
       </ul>
     </div>  
     <div class="footer">
-    &copy; <a href="../copyright.html">Copyright</a> 2001 Python Software Foundation.
+    &copy; <a href="../copyright.html">版权</a> 2001-2026, Python Software Foundation.
     <br>
-    This page is licensed under the Python Software Foundation License Version 2.
+    本页面采用 Python 软件基金会许可证第 2 版授权。
     <br>
-    Examples, recipes, and other code in the documentation are additionally licensed under the Zero Clause BSD License.
+    文档中的示例、代码片段及其他代码内容额外采用零条款 BSD 许可证授权。
     <br>
     
-      See <a href="/license.html">History and License</a> for more information.<br>
+      更多信息请参阅《<a href="/license.html"> 历史与许可 </a>》。<br>
     
     
     <br>
 
-    The Python Software Foundation is a non-profit corporation.
-<a href="https://www.python.org/psf/donations/">Please donate.</a>
+    Python 软件基金会是一家非营利性公司。
+<a href="https://www.python.org/psf/donations/">请进行捐赠。</a>
 <br>
     <br>
-      Last updated on May 27, 2026 (10:52 UTC).
+      最后更新于5月 25, 2026 (11:48 UTC) 。
     
-      <a href="/bugs.html">Found a bug</a>?
+      <a href="/bugs.html">发现了错误</a>？
     
     <br>
 
-    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3.
+    使用<a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3 创建。
     </div>
 
   </body>

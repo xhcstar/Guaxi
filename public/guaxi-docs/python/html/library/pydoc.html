@@ -1,44 +1,45 @@
 <!DOCTYPE html>
 
-<html lang="en" data-content_root="../">
+<html lang="zh-CN" data-content_root="../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta property="og:title" content="pydoc — Documentation generator and online help system" />
+<meta property="og:title" content="pydoc --- 文档生成器和在线帮助系统" />
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://docs.python.org/3/library/pydoc.html" />
 <meta property="og:site_name" content="Python documentation" />
-<meta property="og:description" content="Source code: Lib/pydoc.py The pydoc module automatically generates documentation from Python modules. The documentation can be presented as pages of text on the console, served to a web browser, or..." />
+<meta property="og:description" content="源代码: Lib/pydoc.py pydoc 模块会根据 Python 模块自动生成文档。 生成的文档可在控制台中显示为文本页面，提供给 Web 浏览器或者保存为 HTML 文件。 对于模块、类、函数和方法，显示的文档内容取自对象的文档字符串（即 the__doc__ 属性），并会递归地从其带有文档的成员中获取。 如果没有文档字符串，则 pydoc 会尝试从源文件中类、函数或方法的定义上方..." />
 <meta property="og:image:width" content="1146" />
 <meta property="og:image:height" content="600" />
-<meta property="og:image" content="https://docs.python.org/3.14/_images/social_previews/summary_library_pydoc_9a04d044.png" />
-<meta property="og:image:alt" content="Source code: Lib/pydoc.py The pydoc module automatically generates documentation from Python modules. The documentation can be presented as pages of text on the console, served to a web browser, or..." />
-<meta name="description" content="Source code: Lib/pydoc.py The pydoc module automatically generates documentation from Python modules. The documentation can be presented as pages of text on the console, served to a web browser, or..." />
+<meta property="og:image" content="https://docs.python.org/3.13/zh-cn/_images/social_previews/summary_library_pydoc_d02d5485.png" />
+<meta property="og:image:alt" content="源代码: Lib/pydoc.py pydoc 模块会根据 Python 模块自动生成文档。 生成的文档可在控制台中显示为文本页面，提供给 Web 浏览器或者保存为 HTML 文件。 对于模块、类、函数和方法，显示的文档内容取自对象的文档字符串（即 the__doc__ 属性），并会递归地从其带有文档的成员中获取。 如果没有文档字符串，则 pydoc 会尝试从源文件中类、函数或方法的定义上方..." />
+<meta name="description" content="源代码: Lib/pydoc.py pydoc 模块会根据 Python 模块自动生成文档。 生成的文档可在控制台中显示为文本页面，提供给 Web 浏览器或者保存为 HTML 文件。 对于模块、类、函数和方法，显示的文档内容取自对象的文档字符串（即 the__doc__ 属性），并会递归地从其带有文档的成员中获取。 如果没有文档字符串，则 pydoc 会尝试从源文件中类、函数或方法的定义上方..." />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="theme-color" content="#3776ab">
 
-    <title>pydoc — Documentation generator and online help system &#8212; Python 3.14.5 documentation</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>pydoc --- 文档生成器和在线帮助系统 &#8212; Python 3.13.13 文档</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
     
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
     <link rel="stylesheet" type="text/css" href="../_static/classic.css?v=234b1a7c" />
     <link rel="stylesheet" type="text/css" href="../_static/pydoctheme.css?v=4365c8fe" />
     <link id="pygments_dark_css" media="(prefers-color-scheme: dark)" rel="stylesheet" type="text/css" href="../_static/pygments_dark.css?v=5349f25f" />
     
-    <script src="../_static/documentation_options.js?v=bcfd2f37"></script>
+    <script src="../_static/documentation_options.js?v=a941be6b"></script>
     <script src="../_static/doctools.js?v=9bcbadda"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/translations.js?v=beaddf03"></script>
     
     <script src="../_static/sidebar.js"></script>
     
     <link rel="search" type="application/opensearchdescription+xml"
-          title="Search within Python 3.14.5 documentation"
+          title="在 Python 3.13.13 文档 中搜索"
           href="../_static/opensearch.xml"/>
-    <link rel="author" title="About these documents" href="../about.html" />
-    <link rel="index" title="Index" href="../genindex.html" />
-    <link rel="search" title="Search" href="../search.html" />
-    <link rel="copyright" title="Copyright" href="../copyright.html" />
-    <link rel="next" title="Python Development Mode" href="devmode.html" />
-    <link rel="prev" title="typing — Support for type hints" href="typing.html" />
+    <link rel="author" title="关于此文档" href="../about.html" />
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="搜索" href="../search.html" />
+    <link rel="copyright" title="版权" href="../copyright.html" />
+    <link rel="next" title="Python 开发模式" href="devmode.html" />
+    <link rel="prev" title="typing --- 对类型提示的支持" href="typing.html" />
     
       
       <script defer file-types="bz2,epub,zip" data-domain="docs.python.org" src="https://analytics.python.org/js/script.file-downloads.outbound-links.js"></script>
@@ -68,7 +69,7 @@
 <body>
 <div class="mobile-nav">
     <input type="checkbox" id="menuToggler" class="toggler__input" aria-controls="navigation"
-           aria-pressed="false" aria-expanded="false" role="button" aria-label="Menu">
+           aria-pressed="false" aria-expanded="false" role="button" aria-label="菜单">
     <nav class="nav-content" role="navigation">
         <label for="menuToggler" class="toggler__label">
             <span></span>
@@ -82,8 +83,8 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" class="search-icon">
                     <path fill-rule="nonzero" fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 001.48-5.34c-.47-2.78-2.79-5-5.59-5.34a6.505 6.505 0 00-7.27 7.27c.34 2.8 2.56 5.12 5.34 5.59a6.5 6.5 0 005.34-1.48l.27.28v.79l4.25 4.25c.41.41 1.08.41 1.49 0 .41-.41.41-1.08 0-1.49L15.5 14zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"></path>
                 </svg>
-                <input placeholder="Quick search" aria-label="Quick search" type="search" name="q">
-                <input type="submit" value="Go">
+                <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q">
+                <input type="submit" value="转到">
             </form>
         </span>
     </nav>
@@ -92,46 +93,36 @@
             <div class="language_switcher_placeholder"></div>
             
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label>
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="typing.html"
-                          title="previous chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">typing</span></code> — Support for type hints</a></p>
+                          title="上一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">typing</span></code> --- 对类型提示的支持</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="devmode.html"
-                          title="next chapter">Python Development Mode</a></p>
+                          title="下一章">Python 开发模式</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "library/pydoc.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/library/pydoc.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/library/pydoc.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
@@ -142,20 +133,20 @@
 
   
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             accesskey="I">index</a></li>
+          <a href="../genindex.html" title="总索引"
+             accesskey="I">索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="devmode.html" title="Python Development Mode"
-             accesskey="N">next</a> |</li>
+          <a href="devmode.html" title="Python 开发模式"
+             accesskey="N">下一页</a> |</li>
         <li class="right" >
-          <a href="typing.html" title="typing — Support for type hints"
-             accesskey="P">previous</a> |</li>
+          <a href="typing.html" title="typing --- 对类型提示的支持"
+             accesskey="P">上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -167,30 +158,30 @@
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-          <li class="nav-item nav-item-1"><a href="index.html" >The Python Standard Library</a> &#187;</li>
-          <li class="nav-item nav-item-2"><a href="development.html" accesskey="U">Development Tools</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">pydoc</span></code> — Documentation generator and online help system</a></li>
+          <li class="nav-item nav-item-1"><a href="index.html" >Python 标准库</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="development.html" accesskey="U">开发工具</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">pydoc</span></code> --- 文档生成器和在线帮助系统</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
@@ -203,90 +194,39 @@
           <div class="body" role="main">
             
   <section id="module-pydoc">
-<span id="pydoc-documentation-generator-and-online-help-system"></span><h1><code class="xref py py-mod docutils literal notranslate"><span class="pre">pydoc</span></code> — Documentation generator and online help system<a class="headerlink" href="#module-pydoc" title="Link to this heading">¶</a></h1>
-<p><strong>Source code:</strong> <a class="extlink-source reference external" href="https://github.com/python/cpython/tree/3.14/Lib/pydoc.py">Lib/pydoc.py</a></p>
+<span id="pydoc-documentation-generator-and-online-help-system"></span><h1 class="translated"><code class="xref py py-mod docutils literal notranslate"><span class="pre">pydoc</span></code> --- 文档生成器和在线帮助系统<a class="headerlink" href="#module-pydoc" title="Link to this heading">¶</a></h1>
+<p class="translated"><strong>源代码:</strong> <a class="extlink-source reference external" href="https://github.com/python/cpython/tree/3.13/Lib/pydoc.py">Lib/pydoc.py</a></p>
 <hr class="docutils" id="index-0" />
-<p>The <code class="xref py py-mod docutils literal notranslate"><span class="pre">pydoc</span></code> module automatically generates documentation from Python
-modules.  The documentation can be presented as pages of text on the console,
-served to a web browser, or saved to HTML files.</p>
-<p>For modules, classes, functions and methods, the displayed documentation is
-derived from the docstring (i.e. the <a class="reference internal" href="stdtypes.html#definition.__doc__" title="definition.__doc__"><code class="xref py py-attr docutils literal notranslate"><span class="pre">__doc__</span></code></a> attribute) of the object,
-and recursively of its documentable members.  If there is no docstring,
-<code class="xref py py-mod docutils literal notranslate"><span class="pre">pydoc</span></code> tries to obtain a description from the block of comment lines just
-above the definition of the class, function or method in the source file, or at
-the top of the module (see <a class="reference internal" href="inspect.html#inspect.getcomments" title="inspect.getcomments"><code class="xref py py-func docutils literal notranslate"><span class="pre">inspect.getcomments()</span></code></a>).</p>
-<p>The built-in function <a class="reference internal" href="functions.html#help" title="help"><code class="xref py py-func docutils literal notranslate"><span class="pre">help()</span></code></a> invokes the online help system in the
-interactive interpreter, which uses <code class="xref py py-mod docutils literal notranslate"><span class="pre">pydoc</span></code> to generate its documentation
-as text on the console.  The same text documentation can also be viewed from
-outside the Python interpreter by running <strong class="program">pydoc</strong> as a script at the
-operating system’s command prompt. For example, running</p>
-<div class="highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="n">python</span> <span class="o">-</span><span class="n">m</span> <span class="n">pydoc</span> <span class="n">sys</span>
+<p class="translated"><code class="xref py py-mod docutils literal notranslate"><span class="pre">pydoc</span></code> 模块会根据 Python 模块自动生成文档。 生成的文档可在控制台中显示为文本页面，提供给 Web 浏览器或者保存为 HTML 文件。</p>
+<p class="translated">对于模块、类、函数和方法，显示的文档内容取自对象的文档字符串（即 the <a class="reference internal" href="stdtypes.html#definition.__doc__" title="definition.__doc__"><code class="xref py py-attr docutils literal notranslate"><span class="pre">__doc__</span></code></a> 属性），并会递归地从其带有文档的成员中获取。  如果没有文档字符串，则 <code class="xref py py-mod docutils literal notranslate"><span class="pre">pydoc</span></code> 会尝试从源文件中类、函数或方法的定义上方，或者模块最上方的注释行代码块获取描述文本（参见 <a class="reference internal" href="inspect.html#inspect.getcomments" title="inspect.getcomments"><code class="xref py py-func docutils literal notranslate"><span class="pre">inspect.getcomments()</span></code></a>。）</p>
+<p class="translated">内置函数 <a class="reference internal" href="functions.html#help" title="help"><code class="xref py py-func docutils literal notranslate"><span class="pre">help()</span></code></a> 会唤起交互式解释器的在线帮助系统，该系统使用 <code class="xref py py-mod docutils literal notranslate"><span class="pre">pydoc</span></code> 在控制台上生成文本形式的文档内容。 同样的文本文档也可以在 Python 解释器以外通过在操作系统的命令提示符中以脚本方式运行 <strong class="program">pydoc</strong> 来查看。 例如，运行</p>
+<div class="translated highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="n">python</span> <span class="o">-</span><span class="n">m</span> <span class="n">pydoc</span> <span class="n">sys</span>
 </pre></div>
 </div>
-<p>at a shell prompt will display documentation on the <a class="reference internal" href="sys.html#module-sys" title="sys: Access system-specific parameters and functions."><code class="xref py py-mod docutils literal notranslate"><span class="pre">sys</span></code></a> module, in a
-style similar to the manual pages shown by the Unix <strong class="program">man</strong> command.  The
-argument to <strong class="program">pydoc</strong> can be the name of a function, module, or package,
-or a dotted reference to a class, method, or function within a module or module
-in a package.  If the argument to <strong class="program">pydoc</strong> looks like a path (that is,
-it contains the path separator for your operating system, such as a slash in
-Unix), and refers to an existing Python source file, then documentation is
-produced for that file.</p>
+<p class="translated">在终端提示符下将通过 <a class="reference internal" href="sys.html#module-sys" title="sys: Access system-specific parameters and functions."><code class="xref py py-mod docutils literal notranslate"><span class="pre">sys</span></code></a> 模块显示文档内容，其样式类似于 Unix <strong class="program">man</strong> 命令所显示的指南页面。 <strong class="program">pydoc</strong> 的参数可以为函数、模块、包，或带点号的对模块中的类、方法或函数以及包中的模块的引用。 如果传给 <strong class="program">pydoc</strong> 的参数像是一个路径（即包含所在操作系统的路径分隔符，例如 Unix 的正斜杠），并且其指向一个现有的 Python 源文件，则会为该文件生成文档内容。</p>
 <div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>In order to find objects and their documentation, <code class="xref py py-mod docutils literal notranslate"><span class="pre">pydoc</span></code> imports the
-module(s) to be documented.  Therefore, any code on module level will be
-executed on that occasion.  Use an <code class="docutils literal notranslate"><span class="pre">if</span> <span class="pre">__name__</span> <span class="pre">==</span> <span class="pre">'__main__':</span></code> guard to
-only execute code when a file is invoked as a script and not just imported.</p>
+<p class="admonition-title">备注</p>
+<p class="translated">为了找到对象及其文档的内容，<code class="xref py py-mod docutils literal notranslate"><span class="pre">pydoc</span></code> 会导入文档所属的模块。 因而，在此情况下任何模块层级的代码都将被执行。 请使用 <code class="docutils literal notranslate"><span class="pre">if</span> <span class="pre">__name__</span> <span class="pre">==</span> <span class="pre">'__main__':</span></code> 来确保特定代码仅在文件是作为脚本被唤起而不是被导入时执行。</p>
 </div>
-<p>When printing output to the console, <strong class="program">pydoc</strong> attempts to paginate the
-output for easier reading.  If either the <span class="target" id="index-1"></span><code class="xref std std-envvar docutils literal notranslate"><span class="pre">MANPAGER</span></code> or the
-<span class="target" id="index-2"></span><code class="xref std std-envvar docutils literal notranslate"><span class="pre">PAGER</span></code> environment variable is set, <strong class="program">pydoc</strong> will use its
-value as a pagination program. When both are set, <span class="target" id="index-3"></span><code class="xref std std-envvar docutils literal notranslate"><span class="pre">MANPAGER</span></code> is used.</p>
-<p>Specifying a <code class="docutils literal notranslate"><span class="pre">-w</span></code> flag before the argument will cause HTML documentation
-to be written out to a file in the current directory, instead of displaying text
-on the console.</p>
-<p>Specifying a <code class="docutils literal notranslate"><span class="pre">-k</span></code> flag before the argument will search the synopsis
-lines of all available modules for the keyword given as the argument, again in a
-manner similar to the Unix <strong class="program">man</strong> command.  The synopsis line of a
-module is the first line of its documentation string.</p>
-<p>You can also use <strong class="program">pydoc</strong> to start an HTTP server on the local machine
-that will serve documentation to visiting web browsers.  <strong class="program">python -m pydoc -p 1234</strong>
-will start a HTTP server on port 1234, allowing you to browse the
-documentation at <code class="docutils literal notranslate"><span class="pre">http://localhost:1234/</span></code> in your preferred web browser.
-Specifying <code class="docutils literal notranslate"><span class="pre">0</span></code> as the port number will select an arbitrary unused port.</p>
-<p><strong class="program">python -m pydoc -n &lt;hostname&gt;</strong> will start the server listening at the given
-hostname.  By default the hostname is ‘localhost’ but if you want the server to
-be reached from other machines, you may want to change the host name that the
-server responds to.  During development this is especially useful if you want
-to run pydoc from within a container.</p>
-<p><strong class="program">python -m pydoc -b</strong> will start the server and additionally open a web
-browser to a module index page.  Each served page has a navigation bar at the
-top where you can <em>Get</em> help on an individual item, <em>Search</em> all modules with a
-keyword in their synopsis line, and go to the <em>Module index</em>, <em>Topics</em> and
-<em>Keywords</em> pages.</p>
-<p>When <strong class="program">pydoc</strong> generates documentation, it uses the current environment
-and path to locate modules.  Thus, invoking <strong class="program">pydoc spam</strong>
-documents precisely the version of the module you would get if you started the
-Python interpreter and typed <code class="docutils literal notranslate"><span class="pre">import</span> <span class="pre">spam</span></code>.</p>
-<p>Module docs for core modules are assumed to reside in
-<code class="docutils literal notranslate"><span class="pre">https://docs.python.org/X.Y/library/</span></code> where <code class="docutils literal notranslate"><span class="pre">X</span></code> and <code class="docutils literal notranslate"><span class="pre">Y</span></code> are the
-major and minor version numbers of the Python interpreter.  This can
-be overridden by setting the <code class="xref std std-envvar docutils literal notranslate"><span class="pre">PYTHONDOCS</span></code> environment variable
-to a different URL or to a local directory containing the Library
-Reference Manual pages.</p>
+<p class="translated">当将输出打印到控制台时，<strong class="program">pydoc</strong> 会尝试对输出进行分页以更容易阅读。 如果设置了 <span class="target" id="index-7"></span><code class="xref std std-envvar docutils literal notranslate"><span class="pre">MANPAGER</span></code> 或 <span class="target" id="index-8"></span><code class="xref std std-envvar docutils literal notranslate"><span class="pre">PAGER</span></code> 环境变量，<strong class="program">pydoc</strong> 将使用其值作为分页程序。 当两者均被设置时，将使用 <span class="target" id="index-9"></span><code class="xref std std-envvar docutils literal notranslate"><span class="pre">MANPAGER</span></code>。</p>
+<p class="translated">在参数前指定 <code class="docutils literal notranslate"><span class="pre">-w</span></code> 旗标将把 HTML 文档写入到当前目录下的一个文件中，而不是在控制台中显示文本。</p>
+<p class="translated">在参数前指定 <code class="docutils literal notranslate"><span class="pre">-k</span></code> 旗标将在全部可用模块的提要行中搜索参数所给定的关键字，具体方式同样类似于 Unix <strong class="program">man</strong> 命令。 模块的提要行就是其文档字符串的第一行。</p>
+<p class="translated">你还可以使用 <strong class="program">pydoc</strong> 在本机上启动一个 HTTP 服务器并向来访的 Web 浏览器展示文档。 <strong class="program">python -m pydoc -p 1234</strong> 将在 1234 端口上启动 HTTP 服务器，允许在你所用的 Web 浏览器上通过 <code class="docutils literal notranslate"><span class="pre">http://localhost:1234/</span></code> 来浏览文档。 指定 <code class="docutils literal notranslate"><span class="pre">0</span></code> 作为端口号将任意选择一个未使用的端口。</p>
+<p class="translated"><strong class="program">python -m pydoc -n &lt;hostname&gt;</strong> 将启动在给定主机名上监听的服务器。 默认的主机名为 'localhost' 但是如果你希望能从其他机器上搜索该服务器，你可能会想要改变服务器所响应的主机名。 在开发阶段此特性会特别有用，如果你想要在一个容器中运行 pydoc 的话。</p>
+<p class="translated"><strong class="program">python -m pydoc -b</strong> 将启动服务器并额外打开一个 Web 浏览器访问模块索引页。 所发布的每个页面顶端都带有导航栏，你可以点击 <em>Get</em> 来获取特定条目的帮助信息，点击 <em>Search</em> 在所有模块的摘要行中搜索某个关键词，或点击 <em>Module index</em>, <em>Topics</em> 和 <em>Keywords</em> 前往相应的页面。</p>
+<p class="translated">当 <strong class="program">pydoc</strong> 生成文档内容时，它会使用当前环境和路径来定位模块。 因此，唤起 <strong class="program">pydoc spam</strong> 得到的文档版本会与你启动 Python 解释器并输入 <code class="docutils literal notranslate"><span class="pre">import</span> <span class="pre">spam</span></code> 时得到的模块版本完全相同。</p>
+<p class="translated">核心模块的模块文档应当位于 <code class="docutils literal notranslate"><span class="pre">https://docs.python.org/X.Y/library/</span></code> 其中 <code class="docutils literal notranslate"><span class="pre">X</span></code> 和 <code class="docutils literal notranslate"><span class="pre">Y</span></code> 是 Python 解释器的主要和次要版本号。 这可以通过将 <code class="xref std std-envvar docutils literal notranslate"><span class="pre">PYTHONDOCS</span></code> 环境变量设为不同的 URL 或包含标准库参考指南页面的本地目录来覆盖。</p>
 <div class="versionchanged">
-<p><span class="versionmodified changed">Changed in version 3.2: </span>Added the <code class="docutils literal notranslate"><span class="pre">-b</span></code> option.</p>
+<p><span class="versionmodified changed">在 3.2 版本发生变更: </span>添加 <code class="docutils literal notranslate"><span class="pre">-b</span></code> 选项。</p>
 </div>
 <div class="versionchanged">
-<p><span class="versionmodified changed">Changed in version 3.3: </span>The <code class="docutils literal notranslate"><span class="pre">-g</span></code> command line option was removed.</p>
+<p><span class="versionmodified changed">在 3.3 版本发生变更: </span>命令行选项 <code class="docutils literal notranslate"><span class="pre">-g</span></code> 已经移除。</p>
 </div>
 <div class="versionchanged">
-<p><span class="versionmodified changed">Changed in version 3.4: </span><code class="xref py py-mod docutils literal notranslate"><span class="pre">pydoc</span></code> now uses <a class="reference internal" href="inspect.html#inspect.signature" title="inspect.signature"><code class="xref py py-func docutils literal notranslate"><span class="pre">inspect.signature()</span></code></a> rather than
-<a class="reference internal" href="inspect.html#inspect.getfullargspec" title="inspect.getfullargspec"><code class="xref py py-func docutils literal notranslate"><span class="pre">inspect.getfullargspec()</span></code></a> to extract signature information from
-callables.</p>
+<p><span class="versionmodified changed">在 3.4 版本发生变更: </span>现在 <code class="xref py py-mod docutils literal notranslate"><span class="pre">pydoc</span></code> 会使用 <a class="reference internal" href="inspect.html#inspect.signature" title="inspect.signature"><code class="xref py py-func docutils literal notranslate"><span class="pre">inspect.signature()</span></code></a> 而不是 <a class="reference internal" href="inspect.html#inspect.getfullargspec" title="inspect.getfullargspec"><code class="xref py py-func docutils literal notranslate"><span class="pre">inspect.getfullargspec()</span></code></a> 来从可调用对象中提取签名信息。</p>
 </div>
 <div class="versionchanged">
-<p><span class="versionmodified changed">Changed in version 3.7: </span>Added the <code class="docutils literal notranslate"><span class="pre">-n</span></code> option.</p>
+<p><span class="versionmodified changed">在 3.7 版本发生变更: </span>添加 <code class="docutils literal notranslate"><span class="pre">-n</span></code> 选项。</p>
 </div>
 </section>
 
@@ -298,44 +238,34 @@ callables.</p>
       <div class="sphinxsidebar" role="navigation" aria-label="Main">
         <div class="sphinxsidebarwrapper">
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="typing.html"
-                          title="previous chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">typing</span></code> — Support for type hints</a></p>
+                          title="上一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">typing</span></code> --- 对类型提示的支持</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="devmode.html"
-                          title="next chapter">Python Development Mode</a></p>
+                          title="下一章">Python 开发模式</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "library/pydoc.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/library/pydoc.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/library/pydoc.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
   </div>
         </div>
-<div id="sidebarbutton" title="Collapse sidebar">
+<div id="sidebarbutton" title="折叠边栏">
 <span>«</span>
 </div>
 
@@ -343,20 +273,20 @@ callables.</p>
       <div class="clearer"></div>
     </div>  
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             >index</a></li>
+          <a href="../genindex.html" title="总索引"
+             >索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="devmode.html" title="Python Development Mode"
-             >next</a> |</li>
+          <a href="devmode.html" title="Python 开发模式"
+             >下一页</a> |</li>
         <li class="right" >
-          <a href="typing.html" title="typing — Support for type hints"
-             >previous</a> |</li>
+          <a href="typing.html" title="typing --- 对类型提示的支持"
+             >上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -368,59 +298,59 @@ callables.</p>
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-          <li class="nav-item nav-item-1"><a href="index.html" >The Python Standard Library</a> &#187;</li>
-          <li class="nav-item nav-item-2"><a href="development.html" >Development Tools</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">pydoc</span></code> — Documentation generator and online help system</a></li>
+          <li class="nav-item nav-item-1"><a href="index.html" >Python 标准库</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="development.html" >开发工具</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">pydoc</span></code> --- 文档生成器和在线帮助系统</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
       </ul>
     </div>  
     <div class="footer">
-    &copy; <a href="../copyright.html">Copyright</a> 2001 Python Software Foundation.
+    &copy; <a href="../copyright.html">版权</a> 2001-2026, Python Software Foundation.
     <br>
-    This page is licensed under the Python Software Foundation License Version 2.
+    本页面采用 Python 软件基金会许可证第 2 版授权。
     <br>
-    Examples, recipes, and other code in the documentation are additionally licensed under the Zero Clause BSD License.
+    文档中的示例、代码片段及其他代码内容额外采用零条款 BSD 许可证授权。
     <br>
     
-      See <a href="/license.html">History and License</a> for more information.<br>
+      更多信息请参阅《<a href="/license.html"> 历史与许可 </a>》。<br>
     
     
     <br>
 
-    The Python Software Foundation is a non-profit corporation.
-<a href="https://www.python.org/psf/donations/">Please donate.</a>
+    Python 软件基金会是一家非营利性公司。
+<a href="https://www.python.org/psf/donations/">请进行捐赠。</a>
 <br>
     <br>
-      Last updated on May 27, 2026 (10:52 UTC).
+      最后更新于5月 25, 2026 (11:48 UTC) 。
     
-      <a href="/bugs.html">Found a bug</a>?
+      <a href="/bugs.html">发现了错误</a>？
     
     <br>
 
-    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3.
+    使用<a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3 创建。
     </div>
 
   </body>

@@ -1,44 +1,45 @@
 <!DOCTYPE html>
 
-<html lang="en" data-content_root="../">
+<html lang="zh-CN" data-content_root="../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta property="og:title" content="Superseded Modules" />
+<meta property="og:title" content="被取代的模块" />
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://docs.python.org/3/library/superseded.html" />
 <meta property="og:site_name" content="Python documentation" />
-<meta property="og:description" content="The modules described in this chapter have been superseded by other modules for most use cases, and are retained primarily to preserve backwards compatibility. Modules may appear in this chapter be..." />
+<meta property="og:description" content="本章介绍的模块在大部分场合下都已被其他模块所取代，它们被保留主要是为了能够向下兼容。 某些模块出现在本章中可能是因为它们只覆盖了某个问题空间的有限子集，而更为普遍应用的解决方案存在于标准库的其他地方 (例如， getopt 覆盖了非常特定的 &quot;在 Python 中模拟 C getopt() API&quot; 任务，而不是如 optparse 和 argparse 所提供的更为宽泛..." />
 <meta property="og:image:width" content="1146" />
 <meta property="og:image:height" content="600" />
-<meta property="og:image" content="https://docs.python.org/3.14/_images/social_previews/summary_library_superseded_98c8e5f6.png" />
-<meta property="og:image:alt" content="The modules described in this chapter have been superseded by other modules for most use cases, and are retained primarily to preserve backwards compatibility. Modules may appear in this chapter be..." />
-<meta name="description" content="The modules described in this chapter have been superseded by other modules for most use cases, and are retained primarily to preserve backwards compatibility. Modules may appear in this chapter be..." />
+<meta property="og:image" content="https://docs.python.org/3.13/zh-cn/_images/social_previews/summary_library_superseded_4b1f4c99.png" />
+<meta property="og:image:alt" content="本章介绍的模块在大部分场合下都已被其他模块所取代，它们被保留主要是为了能够向下兼容。 某些模块出现在本章中可能是因为它们只覆盖了某个问题空间的有限子集，而更为普遍应用的解决方案存在于标准库的其他地方 (例如， getopt 覆盖了非常特定的 &quot;在 Python 中模拟 C getopt() API&quot; 任务，而不是如 optparse 和 argparse 所提供的更为宽泛..." />
+<meta name="description" content="本章介绍的模块在大部分场合下都已被其他模块所取代，它们被保留主要是为了能够向下兼容。 某些模块出现在本章中可能是因为它们只覆盖了某个问题空间的有限子集，而更为普遍应用的解决方案存在于标准库的其他地方 (例如， getopt 覆盖了非常特定的 &quot;在 Python 中模拟 C getopt() API&quot; 任务，而不是如 optparse 和 argparse 所提供的更为宽泛..." />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="theme-color" content="#3776ab">
 
-    <title>Superseded Modules &#8212; Python 3.14.5 documentation</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>被取代的模块 &#8212; Python 3.13.13 文档</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
     
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
     <link rel="stylesheet" type="text/css" href="../_static/classic.css?v=234b1a7c" />
     <link rel="stylesheet" type="text/css" href="../_static/pydoctheme.css?v=4365c8fe" />
     <link id="pygments_dark_css" media="(prefers-color-scheme: dark)" rel="stylesheet" type="text/css" href="../_static/pygments_dark.css?v=5349f25f" />
     
-    <script src="../_static/documentation_options.js?v=bcfd2f37"></script>
+    <script src="../_static/documentation_options.js?v=a941be6b"></script>
     <script src="../_static/doctools.js?v=9bcbadda"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/translations.js?v=beaddf03"></script>
     
     <script src="../_static/sidebar.js"></script>
     
     <link rel="search" type="application/opensearchdescription+xml"
-          title="Search within Python 3.14.5 documentation"
+          title="在 Python 3.13.13 文档 中搜索"
           href="../_static/opensearch.xml"/>
-    <link rel="author" title="About these documents" href="../about.html" />
-    <link rel="index" title="Index" href="../genindex.html" />
-    <link rel="search" title="Search" href="../search.html" />
-    <link rel="copyright" title="Copyright" href="../copyright.html" />
-    <link rel="next" title="getopt — C-style parser for command line options" href="getopt.html" />
-    <link rel="prev" title="Modules command-line interface (CLI)" href="cmdline.html" />
+    <link rel="author" title="关于此文档" href="../about.html" />
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="搜索" href="../search.html" />
+    <link rel="copyright" title="版权" href="../copyright.html" />
+    <link rel="next" title="getopt --- C 风格的命令行选项解析器" href="getopt.html" />
+    <link rel="prev" title="模块命令行界面（CLI）" href="cmdline.html" />
     
       
       <script defer file-types="bz2,epub,zip" data-domain="docs.python.org" src="https://analytics.python.org/js/script.file-downloads.outbound-links.js"></script>
@@ -68,7 +69,7 @@
 <body>
 <div class="mobile-nav">
     <input type="checkbox" id="menuToggler" class="toggler__input" aria-controls="navigation"
-           aria-pressed="false" aria-expanded="false" role="button" aria-label="Menu">
+           aria-pressed="false" aria-expanded="false" role="button" aria-label="菜单">
     <nav class="nav-content" role="navigation">
         <label for="menuToggler" class="toggler__label">
             <span></span>
@@ -82,8 +83,8 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" class="search-icon">
                     <path fill-rule="nonzero" fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 001.48-5.34c-.47-2.78-2.79-5-5.59-5.34a6.505 6.505 0 00-7.27 7.27c.34 2.8 2.56 5.12 5.34 5.59a6.5 6.5 0 005.34-1.48l.27.28v.79l4.25 4.25c.41.41 1.08.41 1.49 0 .41-.41.41-1.08 0-1.49L15.5 14zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"></path>
                 </svg>
-                <input placeholder="Quick search" aria-label="Quick search" type="search" name="q">
-                <input type="submit" value="Go">
+                <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q">
+                <input type="submit" value="转到">
             </form>
         </span>
     </nav>
@@ -92,46 +93,36 @@
             <div class="language_switcher_placeholder"></div>
             
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label>
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="cmdline.html"
-                          title="previous chapter">Modules command-line interface (CLI)</a></p>
+                          title="上一章">模块命令行界面（CLI）</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="getopt.html"
-                          title="next chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">getopt</span></code> — C-style parser for command line options</a></p>
+                          title="下一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">getopt</span></code> --- C 风格的命令行选项解析器</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "library/superseded.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/library/superseded.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/library/superseded.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
@@ -142,20 +133,20 @@
 
   
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             accesskey="I">index</a></li>
+          <a href="../genindex.html" title="总索引"
+             accesskey="I">索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="getopt.html" title="getopt — C-style parser for command line options"
-             accesskey="N">next</a> |</li>
+          <a href="getopt.html" title="getopt --- C 风格的命令行选项解析器"
+             accesskey="N">下一页</a> |</li>
         <li class="right" >
-          <a href="cmdline.html" title="Modules command-line interface (CLI)"
-             accesskey="P">previous</a> |</li>
+          <a href="cmdline.html" title="模块命令行界面（CLI）"
+             accesskey="P">上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -167,29 +158,29 @@
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-          <li class="nav-item nav-item-1"><a href="index.html" accesskey="U">The Python Standard Library</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href="">Superseded Modules</a></li>
+          <li class="nav-item nav-item-1"><a href="index.html" accesskey="U">Python 标准库</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">被取代的模块</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
@@ -202,23 +193,13 @@
           <div class="body" role="main">
             
   <section id="superseded-modules">
-<span id="superseded"></span><h1>Superseded Modules<a class="headerlink" href="#superseded-modules" title="Link to this heading">¶</a></h1>
-<p>The modules described in this chapter have been superseded by other modules
-for most use cases, and are retained primarily to preserve backwards compatibility.</p>
-<p>Modules may appear in this chapter because they only cover a limited subset of
-a problem space, and a more generally applicable solution is available elsewhere
-in the standard library (for example, <a class="reference internal" href="getopt.html#module-getopt" title="getopt: Portable parser for command line options; support both short and long option names."><code class="xref py py-mod docutils literal notranslate"><span class="pre">getopt</span></code></a> covers the very specific
-task of “mimic the C <code class="xref c c-func docutils literal notranslate"><span class="pre">getopt()</span></code> API in Python”, rather than the broader
-command line option parsing and argument parsing capabilities offered by
-<a class="reference internal" href="optparse.html#module-optparse" title="optparse: Command-line option parsing library."><code class="xref py py-mod docutils literal notranslate"><span class="pre">optparse</span></code></a> and <a class="reference internal" href="argparse.html#module-argparse" title="argparse: Command-line option and argument parsing library."><code class="xref py py-mod docutils literal notranslate"><span class="pre">argparse</span></code></a>).</p>
-<p>Alternatively, modules may appear in this chapter because they are deprecated
-outright, and awaiting removal in a future release, or they are
-<a class="reference internal" href="../glossary.html#term-soft-deprecated"><span class="xref std std-term">soft deprecated</span></a> and their use is actively discouraged in new projects.
-With the removal of various obsolete modules through <span class="target" id="index-0"></span><a class="pep reference external" href="https://peps.python.org/pep-0594/"><strong>PEP 594</strong></a>, there are
-currently no modules in this latter category.</p>
+<span id="superseded"></span><h1 class="translated">被取代的模块<a class="headerlink" href="#superseded-modules" title="Link to this heading">¶</a></h1>
+<p class="translated">本章介绍的模块在大部分场合下都已被其他模块所取代，它们被保留主要是为了能够向下兼容。</p>
+<p class="translated">某些模块出现在本章中可能是因为它们只覆盖了某个问题空间的有限子集，而更为普遍应用的解决方案存在于标准库的其他地方 (例如，<a class="reference internal" href="getopt.html#module-getopt" title="getopt: Portable parser for command line options; support both short and long option names."><code class="xref py py-mod docutils literal notranslate"><span class="pre">getopt</span></code></a> 覆盖了非常特定的 &quot;在 Python 中模拟 C <code class="xref c c-func docutils literal notranslate"><span class="pre">getopt()</span></code> API&quot; 任务，而不是如 <a class="reference internal" href="optparse.html#module-optparse" title="optparse: Command-line option parsing library."><code class="xref py py-mod docutils literal notranslate"><span class="pre">optparse</span></code></a> 和 <a class="reference internal" href="argparse.html#module-argparse" title="argparse: Command-line option and argument parsing library."><code class="xref py py-mod docutils literal notranslate"><span class="pre">argparse</span></code></a> 所提供的更为宽泛的命令行选项解析和参数解析功能)。</p>
+<p class="translated">另外，某些模块出现在本章中也可能是因为它们已被弃用，并将在未来的发布版中被移除，或者它们已被 <a class="reference internal" href="../glossary.html#term-soft-deprecated"><span class="xref std std-term">soft deprecated</span></a> 并且不再鼓励在新项目中使用。 随着多个过时模块根据 <span class="target" id="index-2"></span><a class="pep reference external" href="https://peps.python.org/pep-0594/"><strong>PEP 594</strong></a> 被移除，目前已不存在属于此类情况的模块。</p>
 <div class="toctree-wrapper compound">
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="getopt.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">getopt</span></code> — C-style parser for command line options</a></li>
+<li class="toctree-l1"><a class="reference internal" href="getopt.html"><code class="xref py py-mod docutils literal notranslate"><span class="pre">getopt</span></code> --- C 风格的命令行选项解析器</a></li>
 </ul>
 </div>
 </section>
@@ -231,44 +212,34 @@ currently no modules in this latter category.</p>
       <div class="sphinxsidebar" role="navigation" aria-label="Main">
         <div class="sphinxsidebarwrapper">
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="cmdline.html"
-                          title="previous chapter">Modules command-line interface (CLI)</a></p>
+                          title="上一章">模块命令行界面（CLI）</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="getopt.html"
-                          title="next chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">getopt</span></code> — C-style parser for command line options</a></p>
+                          title="下一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">getopt</span></code> --- C 风格的命令行选项解析器</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "library/superseded.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/library/superseded.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/library/superseded.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
   </div>
         </div>
-<div id="sidebarbutton" title="Collapse sidebar">
+<div id="sidebarbutton" title="折叠边栏">
 <span>«</span>
 </div>
 
@@ -276,20 +247,20 @@ currently no modules in this latter category.</p>
       <div class="clearer"></div>
     </div>  
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             >index</a></li>
+          <a href="../genindex.html" title="总索引"
+             >索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="getopt.html" title="getopt — C-style parser for command line options"
-             >next</a> |</li>
+          <a href="getopt.html" title="getopt --- C 风格的命令行选项解析器"
+             >下一页</a> |</li>
         <li class="right" >
-          <a href="cmdline.html" title="Modules command-line interface (CLI)"
-             >previous</a> |</li>
+          <a href="cmdline.html" title="模块命令行界面（CLI）"
+             >上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -301,58 +272,58 @@ currently no modules in this latter category.</p>
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-          <li class="nav-item nav-item-1"><a href="index.html" >The Python Standard Library</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href="">Superseded Modules</a></li>
+          <li class="nav-item nav-item-1"><a href="index.html" >Python 标准库</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">被取代的模块</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
       </ul>
     </div>  
     <div class="footer">
-    &copy; <a href="../copyright.html">Copyright</a> 2001 Python Software Foundation.
+    &copy; <a href="../copyright.html">版权</a> 2001-2026, Python Software Foundation.
     <br>
-    This page is licensed under the Python Software Foundation License Version 2.
+    本页面采用 Python 软件基金会许可证第 2 版授权。
     <br>
-    Examples, recipes, and other code in the documentation are additionally licensed under the Zero Clause BSD License.
+    文档中的示例、代码片段及其他代码内容额外采用零条款 BSD 许可证授权。
     <br>
     
-      See <a href="/license.html">History and License</a> for more information.<br>
+      更多信息请参阅《<a href="/license.html"> 历史与许可 </a>》。<br>
     
     
     <br>
 
-    The Python Software Foundation is a non-profit corporation.
-<a href="https://www.python.org/psf/donations/">Please donate.</a>
+    Python 软件基金会是一家非营利性公司。
+<a href="https://www.python.org/psf/donations/">请进行捐赠。</a>
 <br>
     <br>
-      Last updated on May 27, 2026 (10:52 UTC).
+      最后更新于5月 25, 2026 (11:48 UTC) 。
     
-      <a href="/bugs.html">Found a bug</a>?
+      <a href="/bugs.html">发现了错误</a>？
     
     <br>
 
-    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3.
+    使用<a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3 创建。
     </div>
 
   </body>

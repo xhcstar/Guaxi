@@ -20,7 +20,7 @@ can be disabled by calling ``gc.disable()``.  To debug a leaking program call
 ``gc.DEBUG_SAVEALL``, causing garbage-collected objects to be saved in
 gc.garbage for inspection.
 
-The :mod:`!gc` module provides the following functions:
+The :mod:`gc` module provides the following functions:
 
 
 .. function:: enable()
@@ -53,12 +53,6 @@ The :mod:`!gc` module provides the following functions:
    The effect of calling ``gc.collect()`` while the interpreter is already
    performing a collection is undefined.
 
-   .. versionchanged:: 3.14
-      ``generation=1`` performs an increment of collection.
-
-   .. versionchanged:: 3.14.5
-      ``generation=1`` performs collection of the middle generation.
-
 
 .. function:: set_debug(flags)
 
@@ -80,12 +74,6 @@ The :mod:`!gc` module provides the following functions:
 
    .. versionchanged:: 3.8
       New *generation* parameter.
-
-   .. versionchanged:: 3.14
-      Generation 1 is removed
-
-   .. versionchanged:: 3.14.5
-      Generation 1 is reintroduced to maintain GC behavior from 3.13.
 
    .. audit-event:: gc.get_objects generation gc.get_objects
 
@@ -126,19 +114,6 @@ The :mod:`!gc` module provides the following functions:
    examined, then generation ``1`` is examined as well.
    With the third generation, things are a bit more complicated,
    see `Collecting the oldest generation <https://github.com/python/cpython/blob/ff0ef0a54bef26fc507fbf9b7a6009eb7d3f17f5/InternalDocs/garbage_collector.md#collecting-the-oldest-generation>`_ for more information.
-
-   In the free-threaded build, the increase in process memory usage is also
-   checked before running the collector.  If the memory usage has not increased
-   by 10% since the last collection and the net number of object allocations
-   has not exceeded 40 times *threshold0*, the collection is not run.
-
-   See `Garbage collector design <https://github.com/python/cpython/blob/3.14/InternalDocs/garbage_collector.md>`_ for more information.
-
-   .. versionchanged:: 3.14
-      *threshold2* is ignored
-
-   .. versionchanged:: 3.14.5
-      *threshold2* is restored to match Python 3.13 behavior.
 
 
 .. function:: get_count()
@@ -204,6 +179,8 @@ The :mod:`!gc` module provides the following functions:
       >>> gc.is_tracked({})
       False
       >>> gc.is_tracked({"a": 1})
+      False
+      >>> gc.is_tracked({"a": []})
       True
 
    .. versionadded:: 3.1

@@ -1,44 +1,45 @@
 <!DOCTYPE html>
 
-<html lang="en" data-content_root="../">
+<html lang="zh-CN" data-content_root="../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta property="og:title" content="16. Appendix" />
+<meta property="og:title" content="16. 附录" />
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://docs.python.org/3/tutorial/appendix.html" />
 <meta property="og:site_name" content="Python documentation" />
-<meta property="og:description" content="Interactive Mode: There are two variants of the interactive REPL. The classic basic interpreter is supported on all platforms with minimal line control capabilities. Since Python 3.13, a new intera..." />
+<meta property="og:description" content="交互模式: 交互式 REPL 有两个变种版本。 经典的基本解释器在所有平台上受到支持，具有最小化的行控制功能。 在 Windows 上，或在具有 curses 支持的类 Unix 系统上，从 Python 3.13 开始默认会使用一个新的交互式 shell。 它支持彩色、多行编辑、历史浏览和粘贴模式。 要禁用彩色，请参阅 控制颜色 了解详情。 功能键将提供一些附加功能。 F1 是进入交互式帮..." />
 <meta property="og:image:width" content="1146" />
 <meta property="og:image:height" content="600" />
-<meta property="og:image" content="https://docs.python.org/3.14/_images/social_previews/summary_tutorial_appendix_6c41129c.png" />
-<meta property="og:image:alt" content="Interactive Mode: There are two variants of the interactive REPL. The classic basic interpreter is supported on all platforms with minimal line control capabilities. Since Python 3.13, a new intera..." />
-<meta name="description" content="Interactive Mode: There are two variants of the interactive REPL. The classic basic interpreter is supported on all platforms with minimal line control capabilities. Since Python 3.13, a new intera..." />
+<meta property="og:image" content="https://docs.python.org/3.13/zh-cn/_images/social_previews/summary_tutorial_appendix_b01dd96f.png" />
+<meta property="og:image:alt" content="交互模式: 交互式 REPL 有两个变种版本。 经典的基本解释器在所有平台上受到支持，具有最小化的行控制功能。 在 Windows 上，或在具有 curses 支持的类 Unix 系统上，从 Python 3.13 开始默认会使用一个新的交互式 shell。 它支持彩色、多行编辑、历史浏览和粘贴模式。 要禁用彩色，请参阅 控制颜色 了解详情。 功能键将提供一些附加功能。 F1 是进入交互式帮..." />
+<meta name="description" content="交互模式: 交互式 REPL 有两个变种版本。 经典的基本解释器在所有平台上受到支持，具有最小化的行控制功能。 在 Windows 上，或在具有 curses 支持的类 Unix 系统上，从 Python 3.13 开始默认会使用一个新的交互式 shell。 它支持彩色、多行编辑、历史浏览和粘贴模式。 要禁用彩色，请参阅 控制颜色 了解详情。 功能键将提供一些附加功能。 F1 是进入交互式帮..." />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="theme-color" content="#3776ab">
 
-    <title>16. Appendix &#8212; Python 3.14.5 documentation</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>16. 附录 &#8212; Python 3.13.13 文档</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
     
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
     <link rel="stylesheet" type="text/css" href="../_static/classic.css?v=234b1a7c" />
     <link rel="stylesheet" type="text/css" href="../_static/pydoctheme.css?v=4365c8fe" />
     <link id="pygments_dark_css" media="(prefers-color-scheme: dark)" rel="stylesheet" type="text/css" href="../_static/pygments_dark.css?v=5349f25f" />
     
-    <script src="../_static/documentation_options.js?v=bcfd2f37"></script>
+    <script src="../_static/documentation_options.js?v=a941be6b"></script>
     <script src="../_static/doctools.js?v=9bcbadda"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/translations.js?v=beaddf03"></script>
     
     <script src="../_static/sidebar.js"></script>
     
     <link rel="search" type="application/opensearchdescription+xml"
-          title="Search within Python 3.14.5 documentation"
+          title="在 Python 3.13.13 文档 中搜索"
           href="../_static/opensearch.xml"/>
-    <link rel="author" title="About these documents" href="../about.html" />
-    <link rel="index" title="Index" href="../genindex.html" />
-    <link rel="search" title="Search" href="../search.html" />
-    <link rel="copyright" title="Copyright" href="../copyright.html" />
-    <link rel="next" title="Python Setup and Usage" href="../using/index.html" />
-    <link rel="prev" title="15. Floating-Point Arithmetic: Issues and Limitations" href="floatingpoint.html" />
+    <link rel="author" title="关于此文档" href="../about.html" />
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="搜索" href="../search.html" />
+    <link rel="copyright" title="版权" href="../copyright.html" />
+    <link rel="next" title="Python安装和使用" href="../using/index.html" />
+    <link rel="prev" title="15. 浮点算术：争议和限制" href="floatingpoint.html" />
     
       
       <script defer file-types="bz2,epub,zip" data-domain="docs.python.org" src="https://analytics.python.org/js/script.file-downloads.outbound-links.js"></script>
@@ -68,7 +69,7 @@
 <body>
 <div class="mobile-nav">
     <input type="checkbox" id="menuToggler" class="toggler__input" aria-controls="navigation"
-           aria-pressed="false" aria-expanded="false" role="button" aria-label="Menu">
+           aria-pressed="false" aria-expanded="false" role="button" aria-label="菜单">
     <nav class="nav-content" role="navigation">
         <label for="menuToggler" class="toggler__label">
             <span></span>
@@ -82,8 +83,8 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" class="search-icon">
                     <path fill-rule="nonzero" fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 001.48-5.34c-.47-2.78-2.79-5-5.59-5.34a6.505 6.505 0 00-7.27 7.27c.34 2.8 2.56 5.12 5.34 5.59a6.5 6.5 0 005.34-1.48l.27.28v.79l4.25 4.25c.41.41 1.08.41 1.49 0 .41-.41.41-1.08 0-1.49L15.5 14zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"></path>
                 </svg>
-                <input placeholder="Quick search" aria-label="Quick search" type="search" name="q">
-                <input type="submit" value="Go">
+                <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q">
+                <input type="submit" value="转到">
             </form>
         </span>
     </nav>
@@ -92,22 +93,22 @@
             <div class="language_switcher_placeholder"></div>
             
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label>
   <div>
-    <h3><a href="../contents.html">Table of Contents</a></h3>
+    <h3><a href="../contents.html">目录</a></h3>
     <ul>
-<li><a class="reference internal" href="#">16. Appendix</a><ul>
-<li><a class="reference internal" href="#interactive-mode">16.1. Interactive Mode</a><ul>
-<li><a class="reference internal" href="#error-handling">16.1.1. Error Handling</a></li>
-<li><a class="reference internal" href="#executable-python-scripts">16.1.2. Executable Python Scripts</a></li>
-<li><a class="reference internal" href="#the-interactive-startup-file">16.1.3. The Interactive Startup File</a></li>
-<li><a class="reference internal" href="#the-customization-modules">16.1.4. The Customization Modules</a></li>
+<li><a class="reference internal" href="#">16. 附录</a><ul>
+<li><a class="reference internal" href="#interactive-mode">16.1. 交互模式</a><ul>
+<li><a class="reference internal" href="#error-handling">16.1.1. 错误处理</a></li>
+<li><a class="reference internal" href="#executable-python-scripts">16.1.2. 可执行的Python脚本</a></li>
+<li><a class="reference internal" href="#the-interactive-startup-file">16.1.3. 交互式启动文件</a></li>
+<li><a class="reference internal" href="#the-customization-modules">16.1.4. 定制模块</a></li>
 </ul>
 </li>
 </ul>
@@ -116,38 +117,28 @@
 
   </div>
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="floatingpoint.html"
-                          title="previous chapter"><span class="section-number">15. </span>Floating-Point Arithmetic:  Issues and Limitations</a></p>
+                          title="上一章"><span class="section-number">15. </span>浮点算术：争议和限制</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="../using/index.html"
-                          title="next chapter">Python Setup and Usage</a></p>
+                          title="下一章">Python安装和使用</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "tutorial/appendix.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/tutorial/appendix.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/tutorial/appendix.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
@@ -158,20 +149,20 @@
 
   
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             accesskey="I">index</a></li>
+          <a href="../genindex.html" title="总索引"
+             accesskey="I">索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="../using/index.html" title="Python Setup and Usage"
-             accesskey="N">next</a> |</li>
+          <a href="../using/index.html" title="Python安装和使用"
+             accesskey="N">下一页</a> |</li>
         <li class="right" >
-          <a href="floatingpoint.html" title="15. Floating-Point Arithmetic: Issues and Limitations"
-             accesskey="P">previous</a> |</li>
+          <a href="floatingpoint.html" title="15. 浮点算术：争议和限制"
+             accesskey="P">上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -183,29 +174,29 @@
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-          <li class="nav-item nav-item-1"><a href="index.html" accesskey="U">The Python Tutorial</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href=""><span class="section-number">16. </span>Appendix</a></li>
+          <li class="nav-item nav-item-1"><a href="index.html" accesskey="U">Python 教程</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href=""><span class="section-number">16. </span>附录</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
@@ -218,87 +209,37 @@
           <div class="body" role="main">
             
   <section id="appendix">
-<span id="tut-appendix"></span><h1><span class="section-number">16. </span>Appendix<a class="headerlink" href="#appendix" title="Link to this heading">¶</a></h1>
+<span id="tut-appendix"></span><h1 class="translated"><span class="section-number">16. </span>附录<a class="headerlink" href="#appendix" title="Link to this heading">¶</a></h1>
 <section id="interactive-mode">
-<span id="tut-interac"></span><h2><span class="section-number">16.1. </span>Interactive Mode<a class="headerlink" href="#interactive-mode" title="Link to this heading">¶</a></h2>
-<p>There are two variants of the interactive <a class="reference internal" href="../glossary.html#term-REPL"><span class="xref std std-term">REPL</span></a>.  The classic
-basic interpreter is supported on all platforms with minimal line
-control capabilities.</p>
-<p>Since Python 3.13, a new interactive shell is used by default.
-This one supports color, multiline editing, history browsing, and
-paste mode.  To disable color, see <a class="reference internal" href="../using/cmdline.html#using-on-controlling-color"><span class="std std-ref">Controlling color</span></a> for
-details.  Function keys provide some additional functionality.
-<kbd class="kbd docutils literal notranslate">F1</kbd> enters the interactive help browser <a class="reference internal" href="../library/pydoc.html#module-pydoc" title="pydoc: Documentation generator and online help system."><code class="xref py py-mod docutils literal notranslate"><span class="pre">pydoc</span></code></a>.
-<kbd class="kbd docutils literal notranslate">F2</kbd> allows for browsing command-line history with neither output nor the
-<a class="reference internal" href="../glossary.html#term-0"><span class="xref std std-term">&gt;&gt;&gt;</span></a> and <a class="reference internal" href="../glossary.html#term-..."><span class="xref std std-term">…</span></a> prompts. <kbd class="kbd docutils literal notranslate">F3</kbd> enters “paste mode”, which
-makes pasting larger blocks of code easier. Press <kbd class="kbd docutils literal notranslate">F3</kbd> to return to
-the regular prompt.</p>
-<p>When using the new interactive shell, exit the shell by typing <kbd class="kbd docutils literal notranslate">exit</kbd>
-or <kbd class="kbd docutils literal notranslate">quit</kbd>. Adding call parentheses after those commands is not
-required.</p>
-<p>If the new interactive shell is not desired, it can be disabled via
-the <span class="target" id="index-0"></span><a class="reference internal" href="../using/cmdline.html#envvar-PYTHON_BASIC_REPL"><code class="xref std std-envvar docutils literal notranslate"><span class="pre">PYTHON_BASIC_REPL</span></code></a> environment variable.</p>
+<span id="tut-interac"></span><h2 class="translated"><span class="section-number">16.1. </span>交互模式<a class="headerlink" href="#interactive-mode" title="Link to this heading">¶</a></h2>
+<p class="translated">交互式 <a class="reference internal" href="../glossary.html#term-REPL"><span class="xref std std-term">REPL</span></a> 有两个变种版本。 经典的基本解释器在所有平台上受到支持，具有最小化的行控制功能。</p>
+<p class="translated">在 Windows 上，或在具有 <a class="reference internal" href="../library/curses.html#module-curses" title="curses: An interface to the curses library, providing portable terminal handling."><code class="xref py py-mod docutils literal notranslate"><span class="pre">curses</span></code></a> 支持的类 Unix 系统上，从 Python 3.13 开始默认会使用一个新的交互式 shell。 它支持彩色、多行编辑、历史浏览和粘贴模式。 要禁用彩色，请参阅 <a class="reference internal" href="../using/cmdline.html#using-on-controlling-color"><span class="std std-ref">控制颜色</span></a> 了解详情。 功能键将提供一些附加功能。 <kbd class="kbd docutils literal notranslate">F1</kbd> 是进入交互式帮助浏览器 <a class="reference internal" href="../library/pydoc.html#module-pydoc" title="pydoc: Documentation generator and online help system."><code class="xref py py-mod docutils literal notranslate"><span class="pre">pydoc</span></code></a>。 <kbd class="kbd docutils literal notranslate">F2</kbd> 允许浏览不带输出也不带 <a class="reference internal" href="../glossary.html#term-0"><span class="xref std std-term">&gt;&gt;&gt;</span></a> 和 <a class="reference internal" href="../glossary.html#term-..."><span class="xref std std-term">...</span></a> 提示符的命令行历史。 <kbd class="kbd docutils literal notranslate">F3</kbd> 是进入“粘贴模式”，这可以更方便地粘贴大段代码。 按 <kbd class="kbd docutils literal notranslate">F3</kbd> 将返回常规提示符。</p>
+<p class="translated">当使用新的交互式 shell 时，可通过键入 <kbd class="kbd docutils literal notranslate">exit</kbd> 或 <kbd class="kbd docutils literal notranslate">quit</kbd> 退出 shell。 不再需要在这些命令之后添加代表调用的圆括号。</p>
+<p class="translated">如果不想要新的交互式 shell，可以通过 <span class="target" id="index-14"></span><a class="reference internal" href="../using/cmdline.html#envvar-PYTHON_BASIC_REPL"><code class="xref std std-envvar docutils literal notranslate"><span class="pre">PYTHON_BASIC_REPL</span></code></a> 环境变量禁用它。</p>
 <section id="error-handling">
-<span id="tut-error"></span><h3><span class="section-number">16.1.1. </span>Error Handling<a class="headerlink" href="#error-handling" title="Link to this heading">¶</a></h3>
-<p>When an error occurs, the interpreter prints an error message and a stack trace.
-In interactive mode, it then returns to the primary prompt; when input came from
-a file, it exits with a nonzero exit status after printing the stack trace.
-(Exceptions handled by an <a class="reference internal" href="../reference/compound_stmts.html#except"><code class="xref std std-keyword docutils literal notranslate"><span class="pre">except</span></code></a> clause in a <a class="reference internal" href="../reference/compound_stmts.html#try"><code class="xref std std-keyword docutils literal notranslate"><span class="pre">try</span></code></a> statement
-are not errors in this context.)  Some errors are unconditionally fatal and
-cause an exit with a nonzero exit status; this applies to internal inconsistencies and
-some cases of running out of memory.  All error messages are written to the
-standard error stream; normal output from executed commands is written to
-standard output.</p>
-<p>Typing the interrupt character (usually <kbd class="kbd docutils literal notranslate">Control</kbd>-<kbd class="kbd docutils literal notranslate">C</kbd> or <kbd class="kbd docutils literal notranslate">Delete</kbd>) to the primary or
-secondary prompt cancels the input and returns to the primary prompt. <a class="footnote-reference brackets" href="#id2" id="id1" role="doc-noteref"><span class="fn-bracket">[</span>1<span class="fn-bracket">]</span></a>
-Typing an interrupt while a command is executing raises the
-<a class="reference internal" href="../library/exceptions.html#KeyboardInterrupt" title="KeyboardInterrupt"><code class="xref py py-exc docutils literal notranslate"><span class="pre">KeyboardInterrupt</span></code></a> exception, which may be handled by a <a class="reference internal" href="../reference/compound_stmts.html#try"><code class="xref std std-keyword docutils literal notranslate"><span class="pre">try</span></code></a>
-statement.</p>
+<span id="tut-error"></span><h3 class="translated"><span class="section-number">16.1.1. </span>错误处理<a class="headerlink" href="#error-handling" title="Link to this heading">¶</a></h3>
+<p class="translated">当发生错误时，解释器会打印错误消息和栈回溯。 在交互模式下，将返回到主提示符；当输入是来自文件的时候，它将在打印栈回溯之后退出并附带一个非零的退出状态码。 （由 <a class="reference internal" href="../reference/compound_stmts.html#try"><code class="xref std std-keyword docutils literal notranslate"><span class="pre">try</span></code></a> 语句中 <a class="reference internal" href="../reference/compound_stmts.html#except"><code class="xref std std-keyword docutils literal notranslate"><span class="pre">except</span></code></a> 子句所处理的异常在此上下文中不属于错误。） 有些错误属于无条件致命错误，会导致程序附带非零状态码退出；这适用于内部一致性丧失以及某些内存耗尽的情况等。 所有错误消息都将被写入到标准错误流；来自被执行命令的正常输出测会被写入到标准输出。</p>
+<p class="translated">将中断字符（通常为 <kbd class="kbd docutils literal notranslate">Control</kbd>-<kbd class="kbd docutils literal notranslate">C</kbd> 或 <kbd class="kbd docutils literal notranslate">Delete</kbd> ）键入主要或辅助提示符会取消输入并返回主提示符。 <a class="footnote-reference brackets" href="#id2" id="id1" role="doc-noteref"><span class="fn-bracket">[</span>1<span class="fn-bracket">]</span></a> 在执行命令时键入中断引发的 <a class="reference internal" href="../library/exceptions.html#KeyboardInterrupt" title="KeyboardInterrupt"><code class="xref py py-exc docutils literal notranslate"><span class="pre">KeyboardInterrupt</span></code></a> 异常，可以由 <a class="reference internal" href="../reference/compound_stmts.html#try"><code class="xref std std-keyword docutils literal notranslate"><span class="pre">try</span></code></a> 语句处理。</p>
 </section>
 <section id="executable-python-scripts">
-<span id="tut-scripts"></span><h3><span class="section-number">16.1.2. </span>Executable Python Scripts<a class="headerlink" href="#executable-python-scripts" title="Link to this heading">¶</a></h3>
-<p>On BSD’ish Unix systems, Python scripts can be made directly executable, like
-shell scripts, by putting the line</p>
-<div class="highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="ch">#!/usr/bin/env python3</span>
+<span id="tut-scripts"></span><h3 class="translated"><span class="section-number">16.1.2. </span>可执行的Python脚本<a class="headerlink" href="#executable-python-scripts" title="Link to this heading">¶</a></h3>
+<p class="translated">在 BSD 等类Unix系统上，Python 脚本可以像 shell 脚本一样直接执行，通过在第一行添加：</p>
+<div class="translated highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="ch">#!/usr/bin/env python3</span>
 </pre></div>
 </div>
-<p>(assuming that the interpreter is on the user’s <span class="target" id="index-1"></span><code class="xref std std-envvar docutils literal notranslate"><span class="pre">PATH</span></code>) at the beginning
-of the script and giving the file an executable mode.  The <code class="docutils literal notranslate"><span class="pre">#!</span></code> must be the
-first two characters of the file.  On some platforms, this first line must end
-with a Unix-style line ending (<code class="docutils literal notranslate"><span class="pre">'\n'</span></code>), not a Windows (<code class="docutils literal notranslate"><span class="pre">'\r\n'</span></code>) line
-ending.  Note that the hash, or pound, character, <code class="docutils literal notranslate"><span class="pre">'#'</span></code>, is used to start a
-comment in Python.</p>
-<p>The script can be given an executable mode, or permission, using the
-<strong class="program">chmod</strong> command.</p>
-<div class="highlight-shell-session notranslate"><div class="highlight"><pre><span></span><span class="gp">$ </span>chmod<span class="w"> </span>+x<span class="w"> </span>myscript.py
+<p class="translated">（假设解释器位于用户的 <span class="target" id="index-15"></span><code class="xref std std-envvar docutils literal notranslate"><span class="pre">PATH</span></code> ）脚本的开头，并将文件设置为可执行。 <code class="docutils literal notranslate"><span class="pre">#!</span></code> 必须是文件的前两个字符。在某些平台上，第一行必须以Unix样式的行结尾（<code class="docutils literal notranslate"><span class="pre">'\n'</span></code>）结束，而不是以Windows（<code class="docutils literal notranslate"><span class="pre">'\r\n'</span></code>）行结尾。注意，“散列字符”，或者说“磅字符”， <code class="docutils literal notranslate"><span class="pre">'#'</span></code> ，在Python中代表注释开始。</p>
+<p class="translated">可以使用 <strong class="program">chmod</strong> 命令为脚本提供可执行模式或权限。</p>
+<div class="translated highlight-shell-session notranslate"><div class="highlight"><pre><span></span><span class="gp">$ </span>chmod<span class="w"> </span>+x<span class="w"> </span>myscript.py
 </pre></div>
 </div>
-<p>On Windows systems, there is no notion of an “executable mode”.  The Python
-installer automatically associates <code class="docutils literal notranslate"><span class="pre">.py</span></code> files with <code class="docutils literal notranslate"><span class="pre">python.exe</span></code> so that
-a double-click on a Python file will run it as a script.  The extension can
-also be <code class="docutils literal notranslate"><span class="pre">.pyw</span></code>, in that case, the console window that normally appears is
-suppressed.</p>
+<p class="translated">在Windows系统上，没有“可执行模式”的概念。 Python安装程序自动将 <code class="docutils literal notranslate"><span class="pre">.py</span></code> 文件与 <code class="docutils literal notranslate"><span class="pre">python.exe</span></code> 相关联，这样双击Python文件就会将其作为脚本运行。扩展也可以是 <code class="docutils literal notranslate"><span class="pre">.pyw</span></code> ，在这种情况下，会隐藏通常出现的控制台窗口。</p>
 </section>
 <section id="the-interactive-startup-file">
-<span id="tut-startup"></span><h3><span class="section-number">16.1.3. </span>The Interactive Startup File<a class="headerlink" href="#the-interactive-startup-file" title="Link to this heading">¶</a></h3>
-<p>When you use Python interactively, it is frequently handy to have some standard
-commands executed every time the interpreter is started.  You can do this by
-setting an environment variable named <span class="target" id="index-2"></span><a class="reference internal" href="../using/cmdline.html#envvar-PYTHONSTARTUP"><code class="xref std std-envvar docutils literal notranslate"><span class="pre">PYTHONSTARTUP</span></code></a> to the name of a
-file containing your start-up commands.  This is similar to the <code class="file docutils literal notranslate"><span class="pre">.profile</span></code>
-feature of the Unix shells.</p>
-<p>This file is only read in interactive sessions, not when Python reads commands
-from a script, and not when <code class="file docutils literal notranslate"><span class="pre">/dev/tty</span></code> is given as the explicit source of
-commands (which otherwise behaves like an interactive session).  It is executed
-in the same namespace where interactive commands are executed, so that objects
-that it defines or imports can be used without qualification in the interactive
-session. You can also change the prompts <code class="docutils literal notranslate"><span class="pre">sys.ps1</span></code> and <code class="docutils literal notranslate"><span class="pre">sys.ps2</span></code> in this
-file.</p>
-<p>If you want to read an additional start-up file from the current directory, you
-can program this in the global start-up file using code like <code class="docutils literal notranslate"><span class="pre">if</span>
-<span class="pre">os.path.isfile('.pythonrc.py'):</span> <span class="pre">exec(open('.pythonrc.py').read())</span></code>.
-If you want to use the startup file in a script, you must do this explicitly
-in the script:</p>
-<div class="highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<span id="tut-startup"></span><h3 class="translated"><span class="section-number">16.1.3. </span>交互式启动文件<a class="headerlink" href="#the-interactive-startup-file" title="Link to this heading">¶</a></h3>
+<p class="translated">当您以交互模式使用 Python 时，您可能会希望在每次启动解释器时，解释器先执行几条您预先编写的命令，然后您再以交互模式继续使用。您可以通过将名为 <span class="target" id="index-16"></span><a class="reference internal" href="../using/cmdline.html#envvar-PYTHONSTARTUP"><code class="xref std std-envvar docutils literal notranslate"><span class="pre">PYTHONSTARTUP</span></code></a> 的环境变量设置为包含启动命令的文件的文件名来实现。这类似于 Unix shell 的 <code class="file docutils literal notranslate"><span class="pre">.profile</span></code> 功能。</p>
+<p class="translated">Python 只有在交互模式时，才会读取此文件，而非在从脚本读指令或是将 <code class="file docutils literal notranslate"><span class="pre">/dev/tty</span></code> 显式作为被运行的 Python 脚本的文件名时（后者反而表现得像一个交互式会话）。这个文件与交互式指令共享相同的命名空间，所以它定义或导入的对象可以在交互式会话中直接使用。您也可以在该文件中更改提示符 <code class="docutils literal notranslate"><span class="pre">sys.ps1</span></code> 和 <code class="docutils literal notranslate"><span class="pre">sys.ps2</span></code>。</p>
+<p class="translated">如果您想 <em>从当前目录中</em> 读取一个额外的启动文件，您可以在上文所说的全局启动文件中编写像 <code class="docutils literal notranslate"><span class="pre">if</span> <span class="pre">os.path.isfile('.pythonrc.py'):</span> <span class="pre">exec(open('.pythonrc.py').read())</span></code> 这样的代码。如果要在脚本中使用启动文件，则必须在脚本中显式执行此操作：</p>
+<div class="translated highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
 <span class="n">filename</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;PYTHONSTARTUP&#39;</span><span class="p">)</span>
 <span class="k">if</span> <span class="n">filename</span> <span class="ow">and</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isfile</span><span class="p">(</span><span class="n">filename</span><span class="p">):</span>
     <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">filename</span><span class="p">)</span> <span class="k">as</span> <span class="n">fobj</span><span class="p">:</span>
@@ -308,27 +249,20 @@ in the script:</p>
 </div>
 </section>
 <section id="the-customization-modules">
-<span id="tut-customize"></span><h3><span class="section-number">16.1.4. </span>The Customization Modules<a class="headerlink" href="#the-customization-modules" title="Link to this heading">¶</a></h3>
-<p>Python provides two hooks to let you customize it: <span class="target" id="index-3"></span>sitecustomize and
-<span class="target" id="index-4"></span>usercustomize.  To see how it works, you need first to find the location
-of your user site-packages directory.  Start Python and run this code:</p>
-<div class="highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span><span class="w"> </span><span class="nn">site</span>
+<span id="tut-customize"></span><h3 class="translated"><span class="section-number">16.1.4. </span>定制模块<a class="headerlink" href="#the-customization-modules" title="Link to this heading">¶</a></h3>
+<p class="translated">Python 提供了两个钩子供你进行自定义: <span class="target" id="index-17"></span>sitecustomize 和 <span class="target" id="index-18"></span>usercustomize。 要了解它是如何工作的，首先需要找到用户 site-packages 目录的位置。 启动 Python 并运行以下代码:</p>
+<div class="translated highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span><span class="w"> </span><span class="nn">site</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">site</span><span class="o">.</span><span class="n">getusersitepackages</span><span class="p">()</span>
 <span class="go">&#39;/home/user/.local/lib/python3.x/site-packages&#39;</span>
 </pre></div>
 </div>
-<p>Now you can create a file named <code class="file docutils literal notranslate"><span class="pre">usercustomize.py</span></code> in that directory and
-put anything you want in it.  It will affect every invocation of Python, unless
-it is started with the <a class="reference internal" href="../using/cmdline.html#cmdoption-s"><code class="xref std std-option docutils literal notranslate"><span class="pre">-s</span></code></a> option to disable the automatic import.</p>
-<p><span class="target" id="index-5"></span>sitecustomize works in the same way, but is typically created by an
-administrator of the computer in the global site-packages directory, and is
-imported before <span class="target" id="index-6"></span>usercustomize.  See the documentation of the <a class="reference internal" href="../library/site.html#module-site" title="site: Module responsible for site-specific configuration."><code class="xref py py-mod docutils literal notranslate"><span class="pre">site</span></code></a>
-module for more details.</p>
-<p class="rubric">Footnotes</p>
+<p class="translated">现在，您可以在该目录中创建一个名为 <code class="file docutils literal notranslate"><span class="pre">usercustomize.py</span></code> 的文件，并将所需内容放入其中。它会影响Python的每次启动，除非它以 <a class="reference internal" href="../using/cmdline.html#cmdoption-s"><code class="xref std std-option docutils literal notranslate"><span class="pre">-s</span></code></a> 选项启动，以禁用自动导入。</p>
+<p class="translated"><span class="target" id="index-19"></span>sitecustomize 的工作方式相同，但通常由计算机管理员在全局 site-packages 目录中创建，并在 <span class="target" id="index-20"></span>usercustomize 之前导入。 更多细节请参阅 <a class="reference internal" href="../library/site.html#module-site" title="site: Module responsible for site-specific configuration."><code class="xref py py-mod docutils literal notranslate"><span class="pre">site</span></code></a> 模块的文档。</p>
+<p class="translated rubric">备注</p>
 <aside class="footnote-list brackets">
 <aside class="footnote brackets" id="id2" role="doc-footnote">
 <span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id1">1</a><span class="fn-bracket">]</span></span>
-<p>A problem with the GNU Readline package may prevent this.</p>
+<p class="translated">GNU Readline 包的问题可能会阻止这种情况。</p>
 </aside>
 </aside>
 </section>
@@ -343,14 +277,14 @@ module for more details.</p>
       <div class="sphinxsidebar" role="navigation" aria-label="Main">
         <div class="sphinxsidebarwrapper">
   <div>
-    <h3><a href="../contents.html">Table of Contents</a></h3>
+    <h3><a href="../contents.html">目录</a></h3>
     <ul>
-<li><a class="reference internal" href="#">16. Appendix</a><ul>
-<li><a class="reference internal" href="#interactive-mode">16.1. Interactive Mode</a><ul>
-<li><a class="reference internal" href="#error-handling">16.1.1. Error Handling</a></li>
-<li><a class="reference internal" href="#executable-python-scripts">16.1.2. Executable Python Scripts</a></li>
-<li><a class="reference internal" href="#the-interactive-startup-file">16.1.3. The Interactive Startup File</a></li>
-<li><a class="reference internal" href="#the-customization-modules">16.1.4. The Customization Modules</a></li>
+<li><a class="reference internal" href="#">16. 附录</a><ul>
+<li><a class="reference internal" href="#interactive-mode">16.1. 交互模式</a><ul>
+<li><a class="reference internal" href="#error-handling">16.1.1. 错误处理</a></li>
+<li><a class="reference internal" href="#executable-python-scripts">16.1.2. 可执行的Python脚本</a></li>
+<li><a class="reference internal" href="#the-interactive-startup-file">16.1.3. 交互式启动文件</a></li>
+<li><a class="reference internal" href="#the-customization-modules">16.1.4. 定制模块</a></li>
 </ul>
 </li>
 </ul>
@@ -359,44 +293,34 @@ module for more details.</p>
 
   </div>
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="floatingpoint.html"
-                          title="previous chapter"><span class="section-number">15. </span>Floating-Point Arithmetic:  Issues and Limitations</a></p>
+                          title="上一章"><span class="section-number">15. </span>浮点算术：争议和限制</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="../using/index.html"
-                          title="next chapter">Python Setup and Usage</a></p>
+                          title="下一章">Python安装和使用</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "tutorial/appendix.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/tutorial/appendix.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/tutorial/appendix.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
   </div>
         </div>
-<div id="sidebarbutton" title="Collapse sidebar">
+<div id="sidebarbutton" title="折叠边栏">
 <span>«</span>
 </div>
 
@@ -404,20 +328,20 @@ module for more details.</p>
       <div class="clearer"></div>
     </div>  
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             >index</a></li>
+          <a href="../genindex.html" title="总索引"
+             >索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="../using/index.html" title="Python Setup and Usage"
-             >next</a> |</li>
+          <a href="../using/index.html" title="Python安装和使用"
+             >下一页</a> |</li>
         <li class="right" >
-          <a href="floatingpoint.html" title="15. Floating-Point Arithmetic: Issues and Limitations"
-             >previous</a> |</li>
+          <a href="floatingpoint.html" title="15. 浮点算术：争议和限制"
+             >上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -429,58 +353,58 @@ module for more details.</p>
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-          <li class="nav-item nav-item-1"><a href="index.html" >The Python Tutorial</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href=""><span class="section-number">16. </span>Appendix</a></li>
+          <li class="nav-item nav-item-1"><a href="index.html" >Python 教程</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href=""><span class="section-number">16. </span>附录</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
       </ul>
     </div>  
     <div class="footer">
-    &copy; <a href="../copyright.html">Copyright</a> 2001 Python Software Foundation.
+    &copy; <a href="../copyright.html">版权</a> 2001-2026, Python Software Foundation.
     <br>
-    This page is licensed under the Python Software Foundation License Version 2.
+    本页面采用 Python 软件基金会许可证第 2 版授权。
     <br>
-    Examples, recipes, and other code in the documentation are additionally licensed under the Zero Clause BSD License.
+    文档中的示例、代码片段及其他代码内容额外采用零条款 BSD 许可证授权。
     <br>
     
-      See <a href="/license.html">History and License</a> for more information.<br>
+      更多信息请参阅《<a href="/license.html"> 历史与许可 </a>》。<br>
     
     
     <br>
 
-    The Python Software Foundation is a non-profit corporation.
-<a href="https://www.python.org/psf/donations/">Please donate.</a>
+    Python 软件基金会是一家非营利性公司。
+<a href="https://www.python.org/psf/donations/">请进行捐赠。</a>
 <br>
     <br>
-      Last updated on May 27, 2026 (10:52 UTC).
+      最后更新于5月 25, 2026 (11:48 UTC) 。
     
-      <a href="/bugs.html">Found a bug</a>?
+      <a href="/bugs.html">发现了错误</a>？
     
     <br>
 
-    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3.
+    使用<a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3 创建。
     </div>
 
   </body>

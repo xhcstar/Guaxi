@@ -39,7 +39,8 @@ IDLE has the following features:
 
 The IDLE application is implemented in the :mod:`idlelib` package.
 
-.. include:: ../includes/optional-module.rst
+This is an optional module. If it is missing from your copy of CPython, look for documentation from your distributor (that is, whoever provided Python to you).
+If you are the distributor, see Requirements for optional modules.
 
 Menus
 -----

@@ -1,44 +1,45 @@
 <!DOCTYPE html>
 
-<html lang="en" data-content_root="../">
+<html lang="zh-CN" data-content_root="../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta property="og:title" content="pty — Pseudo-terminal utilities" />
+<meta property="og:title" content="pty --- 伪终端工具" />
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://docs.python.org/3/library/pty.html" />
 <meta property="og:site_name" content="Python documentation" />
-<meta property="og:description" content="Source code: Lib/pty.py The pty module defines operations for handling the pseudo-terminal concept: starting another process and being able to write to and read from its controlling terminal progra..." />
+<meta property="og:description" content="源代码: Lib/pty.py pty 模块定义了一些处理“伪终端”概念的操作：启动另一个进程并能以程序方式在其控制终端中进行读写。 Availability: Unix. 伪终端处理高度依赖于具体平台。 此代码主要针对 Linux, FreeBSD 和 macOS 进行了测试（它应当也能在其他 POSIX 平台上工作，但是未经充分测试）。 pty 模块定义了下列函数: 示例: 以下程序的作..." />
 <meta property="og:image:width" content="1146" />
 <meta property="og:image:height" content="600" />
-<meta property="og:image" content="https://docs.python.org/3.14/_images/social_previews/summary_library_pty_14ddfbb8.png" />
-<meta property="og:image:alt" content="Source code: Lib/pty.py The pty module defines operations for handling the pseudo-terminal concept: starting another process and being able to write to and read from its controlling terminal progra..." />
-<meta name="description" content="Source code: Lib/pty.py The pty module defines operations for handling the pseudo-terminal concept: starting another process and being able to write to and read from its controlling terminal progra..." />
+<meta property="og:image" content="https://docs.python.org/3.13/zh-cn/_images/social_previews/summary_library_pty_80d03266.png" />
+<meta property="og:image:alt" content="源代码: Lib/pty.py pty 模块定义了一些处理“伪终端”概念的操作：启动另一个进程并能以程序方式在其控制终端中进行读写。 Availability: Unix. 伪终端处理高度依赖于具体平台。 此代码主要针对 Linux, FreeBSD 和 macOS 进行了测试（它应当也能在其他 POSIX 平台上工作，但是未经充分测试）。 pty 模块定义了下列函数: 示例: 以下程序的作..." />
+<meta name="description" content="源代码: Lib/pty.py pty 模块定义了一些处理“伪终端”概念的操作：启动另一个进程并能以程序方式在其控制终端中进行读写。 Availability: Unix. 伪终端处理高度依赖于具体平台。 此代码主要针对 Linux, FreeBSD 和 macOS 进行了测试（它应当也能在其他 POSIX 平台上工作，但是未经充分测试）。 pty 模块定义了下列函数: 示例: 以下程序的作..." />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="theme-color" content="#3776ab">
 
-    <title>pty — Pseudo-terminal utilities &#8212; Python 3.14.5 documentation</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>pty --- 伪终端工具 &#8212; Python 3.13.13 文档</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
     
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
     <link rel="stylesheet" type="text/css" href="../_static/classic.css?v=234b1a7c" />
     <link rel="stylesheet" type="text/css" href="../_static/pydoctheme.css?v=4365c8fe" />
     <link id="pygments_dark_css" media="(prefers-color-scheme: dark)" rel="stylesheet" type="text/css" href="../_static/pygments_dark.css?v=5349f25f" />
     
-    <script src="../_static/documentation_options.js?v=bcfd2f37"></script>
+    <script src="../_static/documentation_options.js?v=a941be6b"></script>
     <script src="../_static/doctools.js?v=9bcbadda"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/translations.js?v=beaddf03"></script>
     
     <script src="../_static/sidebar.js"></script>
     
     <link rel="search" type="application/opensearchdescription+xml"
-          title="Search within Python 3.14.5 documentation"
+          title="在 Python 3.13.13 文档 中搜索"
           href="../_static/opensearch.xml"/>
-    <link rel="author" title="About these documents" href="../about.html" />
-    <link rel="index" title="Index" href="../genindex.html" />
-    <link rel="search" title="Search" href="../search.html" />
-    <link rel="copyright" title="Copyright" href="../copyright.html" />
-    <link rel="next" title="fcntl — The fcntl and ioctl system calls" href="fcntl.html" />
-    <link rel="prev" title="tty — Terminal control functions" href="tty.html" />
+    <link rel="author" title="关于此文档" href="../about.html" />
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="搜索" href="../search.html" />
+    <link rel="copyright" title="版权" href="../copyright.html" />
+    <link rel="next" title="fcntl --- fcntl 和 ioctl 系统调用" href="fcntl.html" />
+    <link rel="prev" title="tty --- 终端控制函数" href="tty.html" />
     
       
       <script defer file-types="bz2,epub,zip" data-domain="docs.python.org" src="https://analytics.python.org/js/script.file-downloads.outbound-links.js"></script>
@@ -68,7 +69,7 @@
 <body>
 <div class="mobile-nav">
     <input type="checkbox" id="menuToggler" class="toggler__input" aria-controls="navigation"
-           aria-pressed="false" aria-expanded="false" role="button" aria-label="Menu">
+           aria-pressed="false" aria-expanded="false" role="button" aria-label="菜单">
     <nav class="nav-content" role="navigation">
         <label for="menuToggler" class="toggler__label">
             <span></span>
@@ -82,8 +83,8 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" class="search-icon">
                     <path fill-rule="nonzero" fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 001.48-5.34c-.47-2.78-2.79-5-5.59-5.34a6.505 6.505 0 00-7.27 7.27c.34 2.8 2.56 5.12 5.34 5.59a6.5 6.5 0 005.34-1.48l.27.28v.79l4.25 4.25c.41.41 1.08.41 1.49 0 .41-.41.41-1.08 0-1.49L15.5 14zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"></path>
                 </svg>
-                <input placeholder="Quick search" aria-label="Quick search" type="search" name="q">
-                <input type="submit" value="Go">
+                <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q">
+                <input type="submit" value="转到">
             </form>
         </span>
     </nav>
@@ -92,56 +93,46 @@
             <div class="language_switcher_placeholder"></div>
             
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label>
   <div>
-    <h3><a href="../contents.html">Table of Contents</a></h3>
+    <h3><a href="../contents.html">目录</a></h3>
     <ul>
-<li><a class="reference internal" href="#"><code class="xref py py-mod docutils literal notranslate"><span class="pre">pty</span></code> — Pseudo-terminal utilities</a><ul>
-<li><a class="reference internal" href="#example">Example</a></li>
+<li><a class="reference internal" href="#"><code class="xref py py-mod docutils literal notranslate"><span class="pre">pty</span></code> --- 伪终端工具</a><ul>
+<li><a class="reference internal" href="#example">示例</a></li>
 </ul>
 </li>
 </ul>
 
   </div>
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="tty.html"
-                          title="previous chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">tty</span></code> — Terminal control functions</a></p>
+                          title="上一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">tty</span></code> --- 终端控制函数</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="fcntl.html"
-                          title="next chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">fcntl</span></code> — The <code class="docutils literal notranslate"><span class="pre">fcntl</span></code> and <code class="docutils literal notranslate"><span class="pre">ioctl</span></code> system calls</a></p>
+                          title="下一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">fcntl</span></code> --- <code class="docutils literal notranslate"><span class="pre">fcntl</span></code> 和 <code class="docutils literal notranslate"><span class="pre">ioctl</span></code> 系统调用</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "library/pty.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/library/pty.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/library/pty.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
@@ -152,20 +143,20 @@
 
   
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             accesskey="I">index</a></li>
+          <a href="../genindex.html" title="总索引"
+             accesskey="I">索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="fcntl.html" title="fcntl — The fcntl and ioctl system calls"
-             accesskey="N">next</a> |</li>
+          <a href="fcntl.html" title="fcntl --- fcntl 和 ioctl 系统调用"
+             accesskey="N">下一页</a> |</li>
         <li class="right" >
-          <a href="tty.html" title="tty — Terminal control functions"
-             accesskey="P">previous</a> |</li>
+          <a href="tty.html" title="tty --- 终端控制函数"
+             accesskey="P">上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -177,30 +168,30 @@
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-          <li class="nav-item nav-item-1"><a href="index.html" >The Python Standard Library</a> &#187;</li>
-          <li class="nav-item nav-item-2"><a href="unix.html" accesskey="U">Unix-specific services</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">pty</span></code> — Pseudo-terminal utilities</a></li>
+          <li class="nav-item nav-item-1"><a href="index.html" >Python 标准库</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="unix.html" accesskey="U">Unix 专属服务</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">pty</span></code> --- 伪终端工具</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
@@ -213,84 +204,51 @@
           <div class="body" role="main">
             
   <section id="module-pty">
-<span id="pty-pseudo-terminal-utilities"></span><h1><code class="xref py py-mod docutils literal notranslate"><span class="pre">pty</span></code> — Pseudo-terminal utilities<a class="headerlink" href="#module-pty" title="Link to this heading">¶</a></h1>
-<p><strong>Source code:</strong> <a class="extlink-source reference external" href="https://github.com/python/cpython/tree/3.14/Lib/pty.py">Lib/pty.py</a></p>
+<span id="pty-pseudo-terminal-utilities"></span><h1 class="translated"><code class="xref py py-mod docutils literal notranslate"><span class="pre">pty</span></code> --- 伪终端工具<a class="headerlink" href="#module-pty" title="Link to this heading">¶</a></h1>
+<p class="translated"><strong>源代码:</strong> <a class="extlink-source reference external" href="https://github.com/python/cpython/tree/3.13/Lib/pty.py">Lib/pty.py</a></p>
 <hr class="docutils" />
-<p>The <code class="xref py py-mod docutils literal notranslate"><span class="pre">pty</span></code> module defines operations for handling the pseudo-terminal
-concept: starting another process and being able to write to and read from its
-controlling terminal programmatically.</p>
+<p class="translated"><code class="xref py py-mod docutils literal notranslate"><span class="pre">pty</span></code> 模块定义了一些处理“伪终端”概念的操作：启动另一个进程并能以程序方式在其控制终端中进行读写。</p>
 <div class="availability docutils container">
-<p><a class="reference internal" href="intro.html#availability"><span class="std std-ref">Availability</span></a>: Unix.</p>
+<p class="translated"><a class="reference internal" href="intro.html#availability"><span class="std std-ref">Availability</span></a>: Unix.</p>
 </div>
-<p>Pseudo-terminal handling is highly platform dependent. This code is mainly
-tested on Linux, FreeBSD, and macOS (it is supposed to work on other POSIX
-platforms but it’s not been thoroughly tested).</p>
-<p>The <code class="xref py py-mod docutils literal notranslate"><span class="pre">pty</span></code> module defines the following functions:</p>
+<p class="translated">伪终端处理高度依赖于具体平台。 此代码主要针对 Linux, FreeBSD 和 macOS 进行了测试（它应当也能在其他 POSIX 平台上工作，但是未经充分测试）。</p>
+<p class="translated"><code class="xref py py-mod docutils literal notranslate"><span class="pre">pty</span></code> 模块定义了下列函数:</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="pty.fork">
 <span class="sig-prename descclassname"><span class="pre">pty.</span></span><span class="sig-name descname"><span class="pre">fork</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#pty.fork" title="Link to this definition">¶</a></dt>
-<dd><p>Fork. Connect the child’s controlling terminal to a pseudo-terminal. Return
-value is <code class="docutils literal notranslate"><span class="pre">(pid,</span> <span class="pre">fd)</span></code>. Note that the child  gets <em>pid</em> 0, and the <em>fd</em> is
-<em>invalid</em>. The parent’s return value is the <em>pid</em> of the child, and <em>fd</em> is a
-file descriptor connected to the child’s controlling terminal (and also to the
-child’s standard input and output).</p>
+<dd><p class="translated">分叉。 将子进程的控制终端连接到一个伪终端。 返回值为 <code class="docutils literal notranslate"><span class="pre">(pid,</span> <span class="pre">fd)</span></code>。 请注意子进程获得 <em>pid</em> 0 而 <em>fd</em> 为 <em>invalid</em>。 父进程返回值为子进程的 <em>pid</em> 而 <em>fd</em> 为一个连接到子进程的控制终端（并同时连接到子进程的标准输入和输出）的文件描述符。</p>
 <div class="admonition warning">
-<p class="admonition-title">Warning</p>
-<p>On macOS the use of this function is unsafe when mixed with using
-higher-level system APIs, and that includes using <a class="reference internal" href="urllib.request.html#module-urllib.request" title="urllib.request: Extensible library for opening URLs."><code class="xref py py-mod docutils literal notranslate"><span class="pre">urllib.request</span></code></a>.</p>
+<p class="admonition-title">警告</p>
+<p class="translated">在 macOS 上将此函数与高层级的系统 API 混用是不安全的，包括 <a class="reference internal" href="urllib.request.html#module-urllib.request" title="urllib.request: Extensible library for opening URLs."><code class="xref py py-mod docutils literal notranslate"><span class="pre">urllib.request</span></code></a>。</p>
 </div>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="pty.openpty">
 <span class="sig-prename descclassname"><span class="pre">pty.</span></span><span class="sig-name descname"><span class="pre">openpty</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#pty.openpty" title="Link to this definition">¶</a></dt>
-<dd><p>Open a new pseudo-terminal pair, using <a class="reference internal" href="os.html#os.openpty" title="os.openpty"><code class="xref py py-func docutils literal notranslate"><span class="pre">os.openpty()</span></code></a> if possible, or
-emulation code for generic Unix systems. Return a pair of file descriptors
-<code class="docutils literal notranslate"><span class="pre">(master,</span> <span class="pre">slave)</span></code>, for the master and the slave end, respectively.</p>
+<dd><p class="translated">打开一个新的伪终端对，如果可能将使用 <a class="reference internal" href="os.html#os.openpty" title="os.openpty"><code class="xref py py-func docutils literal notranslate"><span class="pre">os.openpty()</span></code></a>，或是针对通用 Unix 系统的模拟代码。 返回一个文件描述符对 <code class="docutils literal notranslate"><span class="pre">(master,</span> <span class="pre">slave)</span></code>，分别表示主从两端。</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="pty.spawn">
 <span class="sig-prename descclassname"><span class="pre">pty.</span></span><span class="sig-name descname"><span class="pre">spawn</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">argv</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">master_read</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">stdin_read</span></span></em><span class="optional">]</span><span class="optional">]</span><span class="sig-paren">)</span><a class="headerlink" href="#pty.spawn" title="Link to this definition">¶</a></dt>
-<dd><p>Spawn a process, and connect its controlling terminal with the current
-process’s standard io. This is often used to baffle programs which insist on
-reading from the controlling terminal. It is expected that the process
-spawned behind the pty will eventually terminate, and when it does <em>spawn</em>
-will return.</p>
-<p>A loop copies STDIN of the current process to the child and data received
-from the child to STDOUT of the current process. It is not signaled to the
-child if STDIN of the current process closes down.</p>
-<p>The functions <em>master_read</em> and <em>stdin_read</em> are passed a file descriptor
-which they should read from, and they should always return a byte string. In
-order to force spawn to return before the child process exits an
-empty byte array should be returned to signal end of file.</p>
-<p>The default implementation for both functions will read and return up to 1024
-bytes each time the function is called. The <em>master_read</em> callback is passed
-the pseudoterminal’s master file descriptor to read output from the child
-process, and <em>stdin_read</em> is passed file descriptor 0, to read from the
-parent process’s standard input.</p>
-<p>Returning an empty byte string from either callback is interpreted as an
-end-of-file (EOF) condition, and that callback will not be called after
-that. If <em>stdin_read</em> signals EOF the controlling terminal can no longer
-communicate with the parent process OR the child process. Unless the child
-process will quit without any input, <em>spawn</em> will then loop forever. If
-<em>master_read</em> signals EOF the same behavior results (on linux at least).</p>
-<p>Return the exit status value from <a class="reference internal" href="os.html#os.waitpid" title="os.waitpid"><code class="xref py py-func docutils literal notranslate"><span class="pre">os.waitpid()</span></code></a> on the child process.</p>
-<p><a class="reference internal" href="os.html#os.waitstatus_to_exitcode" title="os.waitstatus_to_exitcode"><code class="xref py py-func docutils literal notranslate"><span class="pre">os.waitstatus_to_exitcode()</span></code></a> can be used to convert the exit status into
-an exit code.</p>
-<p class="audit-hook">Raises an <a class="reference internal" href="sys.html#auditing"><span class="std std-ref">auditing event</span></a> <code class="docutils literal notranslate"><span class="pre">pty.spawn</span></code> with argument <code class="docutils literal notranslate"><span class="pre">argv</span></code>.</p>
+<dd><p class="translated">生成一个进程，并将其控制终端连接到当前进程的标准 io。 这常被用来应对坚持要从控制终端读取数据的程序。 在 pty 背后生成的进程预期最后将被终止，而且当它被终止时 <em>spawn</em> 将会返回。</p>
+<p class="translated">将当前进程的 STDIN 拷贝到子进程并将从子进程接收的数据拷贝到当前进程的 STDOUT 的循环。 如果当前进程的 STDIN 关闭则它不会向子进程发信号。</p>
+<p class="translated"><em>master_read</em> 和 <em>stdin_read</em> 函数会被传入一个文件描述符供它们读取内容，并且它们总是应当返回一个字节串。 为了强制 spawn 在子进程退出之前返回，应当返回一个空字节数组来提示文件的结束。</p>
+<p class="translated">两个函数的默认实现在每次函数被调用时将读取并返回至多 1024 个字节。 会向 <em>master_read</em> 回调传入伪终端的主文件描述符以从子进程读取输出，而向 <em>stdin_read</em> 传入文件描述符 0 以从父进程的标准输入读取数据。</p>
+<p class="translated">从两个回调返回空字节串会被解读为文件结束 (EOF) 条件，在此之后回调将不再被调用。 如果 <em>stdin_read</em> 发出 EOF 信号则控制终端就不能再与父进程或子进程进行通信。 除非子进程将不带任何输入就退出，否则随后 <em>spawn</em> 将一直循环下去。 如果 <em>master_read</em> 发出 EOF 信号则会有相同的行为结果（至少是在 Linux 上）。</p>
+<p class="translated">从子进程中的 <a class="reference internal" href="os.html#os.waitpid" title="os.waitpid"><code class="xref py py-func docutils literal notranslate"><span class="pre">os.waitpid()</span></code></a> 返回退出状态值。</p>
+<p class="translated"><a class="reference internal" href="os.html#os.waitstatus_to_exitcode" title="os.waitstatus_to_exitcode"><code class="xref py py-func docutils literal notranslate"><span class="pre">os.waitstatus_to_exitcode()</span></code></a> 可被用来将退出状态转换为退出码。</p>
+<p class="audit-hook translated">引发一个 <a class="reference internal" href="sys.html#auditing"><span class="std std-ref">审计事件</span></a> <code class="docutils literal notranslate"><span class="pre">pty.spawn</span></code> 并附带参数 <code class="docutils literal notranslate"><span class="pre">argv</span></code>。</p>
 <div class="versionchanged">
-<p><span class="versionmodified changed">Changed in version 3.4: </span><code class="xref py py-func docutils literal notranslate"><span class="pre">spawn()</span></code> now returns the status value from <a class="reference internal" href="os.html#os.waitpid" title="os.waitpid"><code class="xref py py-func docutils literal notranslate"><span class="pre">os.waitpid()</span></code></a>
-on the child process.</p>
+<p><span class="versionmodified changed">在 3.4 版本发生变更: </span><a class="reference internal" href="#pty.spawn" title="pty.spawn"><code class="xref py py-func docutils literal notranslate"><span class="pre">spawn()</span></code></a> 现在会从子进程的 <a class="reference internal" href="os.html#os.waitpid" title="os.waitpid"><code class="xref py py-func docutils literal notranslate"><span class="pre">os.waitpid()</span></code></a> 返回状态值。</p>
 </div>
 </dd></dl>
 
 <section id="example">
-<h2>Example<a class="headerlink" href="#example" title="Link to this heading">¶</a></h2>
-<p>The following program acts like the Unix command <em class="manpage"><a class="manpage reference external" href="https://manpages.debian.org/script(1)">script(1)</a></em>, using a
-pseudo-terminal to record all input and output of a terminal session in a
-“typescript”.</p>
-<div class="highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">argparse</span>
+<h2 class="translated">示例<a class="headerlink" href="#example" title="Link to this heading">¶</a></h2>
+<p class="translated">以下程序的作用类似于 Unix 命令 <em class="manpage"><a class="manpage reference external" href="https://manpages.debian.org/script(1)">script(1)</a></em>，它使用一个伪终端来记录一个 &quot;typescript&quot; 里终端进程的所有输入和输出:</p>
+<div class="translated highlight-python3 notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">argparse</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">pty</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">sys</span>
@@ -332,54 +290,44 @@ pseudo-terminal to record all input and output of a terminal session in a
       <div class="sphinxsidebar" role="navigation" aria-label="Main">
         <div class="sphinxsidebarwrapper">
   <div>
-    <h3><a href="../contents.html">Table of Contents</a></h3>
+    <h3><a href="../contents.html">目录</a></h3>
     <ul>
-<li><a class="reference internal" href="#"><code class="xref py py-mod docutils literal notranslate"><span class="pre">pty</span></code> — Pseudo-terminal utilities</a><ul>
-<li><a class="reference internal" href="#example">Example</a></li>
+<li><a class="reference internal" href="#"><code class="xref py py-mod docutils literal notranslate"><span class="pre">pty</span></code> --- 伪终端工具</a><ul>
+<li><a class="reference internal" href="#example">示例</a></li>
 </ul>
 </li>
 </ul>
 
   </div>
   <div>
-    <h4>Previous topic</h4>
+    <h4>上一主题</h4>
     <p class="topless"><a href="tty.html"
-                          title="previous chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">tty</span></code> — Terminal control functions</a></p>
+                          title="上一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">tty</span></code> --- 终端控制函数</a></p>
   </div>
   <div>
-    <h4>Next topic</h4>
+    <h4>下一主题</h4>
     <p class="topless"><a href="fcntl.html"
-                          title="next chapter"><code class="xref py py-mod docutils literal notranslate"><span class="pre">fcntl</span></code> — The <code class="docutils literal notranslate"><span class="pre">fcntl</span></code> and <code class="docutils literal notranslate"><span class="pre">ioctl</span></code> system calls</a></p>
+                          title="下一章"><code class="xref py py-mod docutils literal notranslate"><span class="pre">fcntl</span></code> --- <code class="docutils literal notranslate"><span class="pre">fcntl</span></code> 和 <code class="docutils literal notranslate"><span class="pre">ioctl</span></code> 系统调用</a></p>
   </div>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const title = document.querySelector('meta[property="og:title"]').content;
-        const elements = document.querySelectorAll('.improvepage');
-        const pageurl = window.location.href.split('?')[0];
-        elements.forEach(element => {
-            const url = new URL(element.href.split('?')[0].replace("-nojs", ""));
-            url.searchParams.set('pagetitle', title);
-            url.searchParams.set('pageurl', pageurl);
-            url.searchParams.set('pagesource', "library/pty.rst");
-            element.href = url.toString();
-        });
-    });
-  </script>
   <div role="note" aria-label="source link">
-    <h3>This page</h3>
+    <h3>当前页</h3>
     <ul class="this-page-menu">
-      <li><a href="../bugs.html">Report a bug</a></li>
-      <li><a class="improvepage" href="../improve-page-nojs.html">Improve this page</a></li>
+      <li><a href="../bugs.html">报告代码错误</a></li>
       <li>
         <a href="https://github.com/python/cpython/blob/main/Doc/library/pty.rst?plain=1"
-            rel="nofollow">Show source
+            rel="nofollow">显示源码
         </a>
+      </li>
+      
+      <li>
+        <a href="https://github.com/python/python-docs-zh-CN/blob/3.13/library/pty.po?plain=1"
+           rel="nofollow">显示翻译源</a>
       </li>
       
     </ul>
   </div>
         </div>
-<div id="sidebarbutton" title="Collapse sidebar">
+<div id="sidebarbutton" title="折叠边栏">
 <span>«</span>
 </div>
 
@@ -387,20 +335,20 @@ pseudo-terminal to record all input and output of a terminal session in a
       <div class="clearer"></div>
     </div>  
     <div class="related" role="navigation" aria-label="Related">
-      <h3>Navigation</h3>
+      <h3>导航</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
-          <a href="../genindex.html" title="General Index"
-             >index</a></li>
+          <a href="../genindex.html" title="总索引"
+             >索引</a></li>
         <li class="right" >
-          <a href="../py-modindex.html" title="Python Module Index"
-             >modules</a> |</li>
+          <a href="../py-modindex.html" title="Python 模块索引"
+             >模块</a> |</li>
         <li class="right" >
-          <a href="fcntl.html" title="fcntl — The fcntl and ioctl system calls"
-             >next</a> |</li>
+          <a href="fcntl.html" title="fcntl --- fcntl 和 ioctl 系统调用"
+             >下一页</a> |</li>
         <li class="right" >
-          <a href="tty.html" title="tty — Terminal control functions"
-             >previous</a> |</li>
+          <a href="tty.html" title="tty --- 终端控制函数"
+             >上一页</a> |</li>
 
           <li><img src="../_static/py.svg" alt="Python logo" style="vertical-align: middle; margin-top: -1px"></li>
           <li><a href="https://www.python.org/">Python</a> &#187;</li>
@@ -412,59 +360,59 @@ pseudo-terminal to record all input and output of a terminal session in a
               
           </li>
     <li id="cpython-language-and-version">
-      <a href="../index.html">3.14.5 Documentation</a> &#187;
+      <a href="../index.html">3.13.13 Documentation</a> &#187;
     </li>
 
-          <li class="nav-item nav-item-1"><a href="index.html" >The Python Standard Library</a> &#187;</li>
-          <li class="nav-item nav-item-2"><a href="unix.html" >Unix-specific services</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">pty</span></code> — Pseudo-terminal utilities</a></li>
+          <li class="nav-item nav-item-1"><a href="index.html" >Python 标准库</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="unix.html" >Unix 专属服务</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href=""><code class="xref py py-mod docutils literal notranslate"><span class="pre">pty</span></code> --- 伪终端工具</a></li>
                 <li class="right">
                     
 
     <div class="inline-search" role="search">
         <form class="inline-search" action="../search.html" method="get">
-          <input placeholder="Quick search" aria-label="Quick search" type="search" name="q" id="search-box">
-          <input type="submit" value="Go">
+          <input placeholder="快速搜索" aria-label="快速搜索" type="search" name="q" id="search-box">
+          <input type="submit" value="转到">
         </form>
     </div>
                      |
                 </li>
             <li class="right">
 <label class="theme-selector-label">
-    Theme
+    主题
     <select class="theme-selector" oninput="activateTheme(this.value)">
-        <option value="auto" selected>Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="auto" selected>自动</option>
+        <option value="light">明亮</option>
+        <option value="dark">黑暗</option>
     </select>
 </label> |</li>
             
       </ul>
     </div>  
     <div class="footer">
-    &copy; <a href="../copyright.html">Copyright</a> 2001 Python Software Foundation.
+    &copy; <a href="../copyright.html">版权</a> 2001-2026, Python Software Foundation.
     <br>
-    This page is licensed under the Python Software Foundation License Version 2.
+    本页面采用 Python 软件基金会许可证第 2 版授权。
     <br>
-    Examples, recipes, and other code in the documentation are additionally licensed under the Zero Clause BSD License.
+    文档中的示例、代码片段及其他代码内容额外采用零条款 BSD 许可证授权。
     <br>
     
-      See <a href="/license.html">History and License</a> for more information.<br>
+      更多信息请参阅《<a href="/license.html"> 历史与许可 </a>》。<br>
     
     
     <br>
 
-    The Python Software Foundation is a non-profit corporation.
-<a href="https://www.python.org/psf/donations/">Please donate.</a>
+    Python 软件基金会是一家非营利性公司。
+<a href="https://www.python.org/psf/donations/">请进行捐赠。</a>
 <br>
     <br>
-      Last updated on May 27, 2026 (10:52 UTC).
+      最后更新于5月 25, 2026 (11:48 UTC) 。
     
-      <a href="/bugs.html">Found a bug</a>?
+      <a href="/bugs.html">发现了错误</a>？
     
     <br>
 
-    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3.
+    使用<a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3 创建。
     </div>
 
   </body>

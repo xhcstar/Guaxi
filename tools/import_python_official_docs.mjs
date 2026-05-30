@@ -7,9 +7,11 @@ import { fileURLToPath } from 'node:url'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const PROJECT_ROOT = path.resolve(__dirname, '..')
-const DEFAULT_SOURCE_URL = 'https://docs.python.org/zh-cn/3/archives/python-3.14-docs-html.zip'
-const FALLBACK_SOURCE_URL = 'https://docs.python.org/3/archives/python-3.14-docs-html.zip'
-const DEFAULT_VERSION = '3.14'
+const DEFAULT_PYTHON_DOCS_VERSION = '3.13.13'
+const DEFAULT_PYTHON_DOCS_SERIES = '3.13'
+const DEFAULT_SOURCE_URL = `https://docs.python.org/zh-cn/${DEFAULT_PYTHON_DOCS_SERIES}/archives/python-${DEFAULT_PYTHON_DOCS_SERIES}-docs-html.zip`
+const FALLBACK_SOURCE_URL = `https://docs.python.org/${DEFAULT_PYTHON_DOCS_SERIES}/archives/python-${DEFAULT_PYTHON_DOCS_SERIES}-docs-html.zip`
+const DEFAULT_VERSION = DEFAULT_PYTHON_DOCS_VERSION
 const DOCS_PUBLIC_ROOT = path.join(PROJECT_ROOT, 'public', 'guaxi-docs', 'python')
 const CACHE_ROOT = path.join(PROJECT_ROOT, '.cache', 'guaxi-docs', 'python')
 const CHUNK_SIZE = 120
