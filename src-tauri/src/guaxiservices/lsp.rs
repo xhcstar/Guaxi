@@ -392,7 +392,14 @@ fn lsp_binary_spec(name: &str) -> Option<LspBinarySpec> {
             asset_regex: r"rust-analyzer-x86_64-pc-windows-msvc\.zip$",
             bin_name: "rust-analyzer.exe",
             asset_kind: LspAssetKind::Zip,
-            direct_url: None,
+            // 设计说明：
+            // 1. rust-analyzer 的 VSCode/OpenVSX 扩展包不稳定内置 Windows 原生二进制，安装后仍需要补齐
+            //    LspRuntimes/lsp/rust-analyzer/rust-analyzer.exe 才能通过真实启动检查。
+            // 2. 以前这里通过 GitHub releases/latest API 查找 asset，匿名请求很容易在连续安装/调试时触发限流，
+            //    导致扩展包已下载成功但运行时验证必定回滚。
+            // 3. 固定到当前 catalog 验证过的 Windows x64 压缩包直链，下载时不再依赖 GitHub API；后续升级只需要
+            //    更新这个 release tag，同时保留 repo/asset_regex 作为人工维护时的来源说明。
+            direct_url: Some("https://github.com/rust-lang/rust-analyzer/releases/download/2026-05-25/rust-analyzer-x86_64-pc-windows-msvc.zip"),
         }),
         "clangd" => Some(LspBinarySpec {
             repo: "clangd/clangd",
