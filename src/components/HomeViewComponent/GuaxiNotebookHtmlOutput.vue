@@ -42,7 +42,10 @@ const props = defineProps({
 const logger = createLogger('GuaxiNotebookHtmlOutput')
 const iframeRef = ref(null)
 let frameHeightSyncTimer = 0
+let frameDiagnosticsTimer = 0
 let syncToken = 0
+let lastFrameDiagnostics = null
+let hasHeightMessageForCurrentFrame = false
 
 // 设计说明：
 // 1. HTML/动画输出需要 allow-scripts，否则 Plotly、Matplotlib HTMLWriter 的交互脚本不会执行。
@@ -50,6 +53,59 @@ let syncToken = 0
 //    且 srcdoc 文档获得同源能力后理论上可以解除 sandbox。
 // 3. 高度同步改走 iframe 内部 postMessage；父页面只校验 event.source，不依赖 contentDocument 同源访问。
 const iframeSandbox = 'allow-scripts'
+
+const collectHtmlDiagnostics = (html = '', { sourcePath = '', sourceUrl = '', reason = '' } = {}) => {
+  const rawHtml = String(html || '')
+  return {
+    reason: String(reason || ''),
+    sourcePath: String(sourcePath || ''),
+    sourceUrl: String(sourceUrl || ''),
+    htmlLength: rawHtml.length,
+    inlineScriptCount: (rawHtml.match(/<script\b/gi) || []).length,
+    dataUrlCount: (rawHtml.match(/data:/gi) || []).length,
+    blobUrlCount: (rawHtml.match(/blob:/gi) || []).length,
+    hasMatplotlibAnimation: /matplotlib|animation_frames|anim-controls|FuncAnimation|frames\s*=|new\s+Array\(/i.test(rawHtml),
+    hasHtml5Video: /<video\b|video\/mp4|video\/webm/i.test(rawHtml),
+  }
+}
+
+const rememberFrameDiagnostics = (diagnostics) => {
+  lastFrameDiagnostics = diagnostics && typeof diagnostics === 'object' ? { ...diagnostics } : null
+  hasHeightMessageForCurrentFrame = false
+}
+
+const scheduleFrameDiagnosticsProbe = (reason = 'diagnostics-probe') => {
+  if (frameDiagnosticsTimer) {
+    window.clearTimeout(frameDiagnosticsTimer)
+  }
+  frameDiagnosticsTimer = window.setTimeout(() => {
+    frameDiagnosticsTimer = 0
+    const iframe = iframeRef.value
+    if (!(iframe instanceof HTMLIFrameElement) || !lastFrameDiagnostics) return
+    const currentHeight = Number.parseFloat(String(iframe.style.height || '0')) || 0
+    // 设计思路：
+    // 1. release 模式通常不能打开 DevTools，因此这里把“脚本可能被 CSP 拦截”的可观测信号写入前端日志。
+    // 2. matplotlib 动画 iframe 正常执行时会通过 postMessage 回传高度；如果长时间没有回传且仍停在初始高度，
+    //    基本可以判断 iframe 内联脚本没有运行，最常见原因就是 release CSP。
+    // 3. 这里只记录摘要，不写入完整 HTML，避免日志文件被 base64 动画帧撑爆。
+    if (!hasHeightMessageForCurrentFrame && lastFrameDiagnostics.inlineScriptCount > 0 && currentHeight <= 80) {
+      logger.warn('[NotebookHtmlOutput] iframe html scripts may be blocked before height handshake', {
+        reason,
+        currentHeight,
+        sandbox: iframeSandbox,
+        ...lastFrameDiagnostics,
+      })
+    } else {
+      logger.info('[NotebookHtmlOutput] iframe html diagnostics probe completed', {
+        reason,
+        currentHeight,
+        hasHeightMessage: hasHeightMessageForCurrentFrame,
+        sandbox: iframeSandbox,
+        ...lastFrameDiagnostics,
+      })
+    }
+  }, 1600)
+}
 
 const base64ToText = (base64 = '') => {
   const binary = window.atob(String(base64 || ''))
@@ -439,12 +495,16 @@ const syncFrameContent = async (reason = 'unknown') => {
       const html = base64ToText(htmlBase64)
       const inlinedHtml = await inlineLocalAnimationFrames(html, sourcePath, token)
       if (token !== syncToken) return
+      const diagnostics = collectHtmlDiagnostics(inlinedHtml, { sourcePath, reason })
+      rememberFrameDiagnostics(diagnostics)
       iframe.srcdoc = buildArtifactSrcDoc(inlinedHtml)
       logger.info('[NotebookHtmlOutput] synced local artifact html into iframe srcdoc', {
         reason,
         sourcePath,
         htmlLength: inlinedHtml.length,
+        diagnostics,
       })
+      scheduleFrameDiagnosticsProbe('local-artifact-srcdoc')
     } catch (error) {
       logger.error('[NotebookHtmlOutput] sync local artifact html failed', {
         reason,
@@ -457,6 +517,7 @@ const syncFrameContent = async (reason = 'unknown') => {
   }
   const sourceUrl = String(props.src || '').trim()
   if (sourceUrl) {
+    rememberFrameDiagnostics(collectHtmlDiagnostics('', { sourceUrl, reason }))
     iframe.removeAttribute('srcdoc')
     iframe.src = sourceUrl
     iframe.style.height = '520px'
@@ -467,19 +528,24 @@ const syncFrameContent = async (reason = 'unknown') => {
     return
   }
   const srcdoc = buildSrcDoc()
+  const diagnostics = collectHtmlDiagnostics(props.html, { reason })
+  rememberFrameDiagnostics(diagnostics)
   iframe.removeAttribute('src')
   iframe.srcdoc = srcdoc
   iframe.style.height = '48px'
   logger.info('[NotebookHtmlOutput] synced iframe srcdoc', {
     reason,
     htmlLength: String(props.html || '').length,
+    diagnostics,
   })
+  scheduleFrameDiagnosticsProbe('inline-srcdoc')
 }
 
 const syncFrameHeight = (height, reason = 'message') => {
   const iframe = iframeRef.value
   if (!(iframe instanceof HTMLIFrameElement)) return
   const nextHeight = Math.max(48, Number(height || 0))
+  hasHeightMessageForCurrentFrame = true
   iframe.style.height = `${nextHeight}px`
   logger.debug('[NotebookHtmlOutput] synced iframe height', {
     reason,
@@ -547,6 +613,10 @@ onBeforeUnmount(() => {
   if (frameHeightSyncTimer) {
     window.clearTimeout(frameHeightSyncTimer)
     frameHeightSyncTimer = 0
+  }
+  if (frameDiagnosticsTimer) {
+    window.clearTimeout(frameDiagnosticsTimer)
+    frameDiagnosticsTimer = 0
   }
 })
 </script>
