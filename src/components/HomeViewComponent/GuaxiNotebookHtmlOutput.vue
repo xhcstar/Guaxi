@@ -46,6 +46,7 @@ let frameDiagnosticsTimer = 0
 let syncToken = 0
 let lastFrameDiagnostics = null
 let hasHeightMessageForCurrentFrame = false
+let frameBlobUrl = ''
 
 // 设计说明：
 // 1. HTML/动画输出需要 allow-scripts，否则 Plotly、Matplotlib HTMLWriter 的交互脚本不会执行。
@@ -114,6 +115,39 @@ const base64ToText = (base64 = '') => {
     bytes[index] = binary.charCodeAt(index)
   }
   return new TextDecoder('utf-8').decode(bytes)
+}
+
+const revokeFrameBlobUrl = (reason = 'unknown') => {
+  if (!frameBlobUrl) return
+  try {
+    URL.revokeObjectURL(frameBlobUrl)
+    logger.debug('[NotebookHtmlOutput] revoked iframe blob url', { reason })
+  } catch (error) {
+    logger.warn('[NotebookHtmlOutput] failed to revoke iframe blob url', {
+      reason,
+      error: String(error?.message || error),
+    })
+  }
+  frameBlobUrl = ''
+}
+
+const writeFrameHtmlDocument = (iframe, html, reason = 'html-output') => {
+  if (!(iframe instanceof HTMLIFrameElement)) return
+  const htmlText = String(html || '')
+  // 设计说明：
+  // 1. release WebView2 中 iframe srcdoc 会继承主页面 CSP，matplotlib HTMLWriter 的内联脚本容易被拦截。
+  // 2. data:text/html;base64 能绕过 srcdoc，但动画帧内联后 URL 可能过长；Blob URL 没有这个长度压力。
+  // 3. iframe 仍保持 sandbox="allow-scripts"，第三方 HTML 只在隔离文档中执行；日志只记录长度，不写完整 HTML。
+  revokeFrameBlobUrl(`${reason}:before-write`)
+  const blob = new Blob([htmlText], { type: 'text/html;charset=utf-8' })
+  frameBlobUrl = URL.createObjectURL(blob)
+  iframe.removeAttribute('srcdoc')
+  iframe.src = frameBlobUrl
+  logger.info('[NotebookHtmlOutput] wrote iframe html through blob url', {
+    reason,
+    htmlLength: htmlText.length,
+    blobSize: blob.size,
+  })
 }
 
 const normalizeLocalPath = (path = '') => String(path || '').replace(/\\/g, '/')
@@ -497,27 +531,31 @@ const syncFrameContent = async (reason = 'unknown') => {
       if (token !== syncToken) return
       const diagnostics = collectHtmlDiagnostics(inlinedHtml, { sourcePath, reason })
       rememberFrameDiagnostics(diagnostics)
-      iframe.srcdoc = buildArtifactSrcDoc(inlinedHtml)
-      logger.info('[NotebookHtmlOutput] synced local artifact html into iframe srcdoc', {
+      writeFrameHtmlDocument(iframe, buildArtifactSrcDoc(inlinedHtml), 'local-artifact-blob-url')
+      logger.info('[NotebookHtmlOutput] synced local artifact html into iframe blob url', {
         reason,
         sourcePath,
         htmlLength: inlinedHtml.length,
         diagnostics,
       })
-      scheduleFrameDiagnosticsProbe('local-artifact-srcdoc')
+      scheduleFrameDiagnosticsProbe('local-artifact-blob-url')
     } catch (error) {
       logger.error('[NotebookHtmlOutput] sync local artifact html failed', {
         reason,
         sourcePath,
         error: String(error?.message || error),
       })
-      iframe.srcdoc = buildSrcDoc()
+      const fallbackHtml = buildSrcDoc()
+      rememberFrameDiagnostics(collectHtmlDiagnostics(props.html, { sourcePath, reason: `${reason}:fallback` }))
+      writeFrameHtmlDocument(iframe, fallbackHtml, 'local-artifact-fallback-blob-url')
+      scheduleFrameDiagnosticsProbe('local-artifact-fallback-blob-url')
     }
     return
   }
   const sourceUrl = String(props.src || '').trim()
   if (sourceUrl) {
     rememberFrameDiagnostics(collectHtmlDiagnostics('', { sourceUrl, reason }))
+    revokeFrameBlobUrl('external-source')
     iframe.removeAttribute('srcdoc')
     iframe.src = sourceUrl
     iframe.style.height = '520px'
@@ -530,15 +568,14 @@ const syncFrameContent = async (reason = 'unknown') => {
   const srcdoc = buildSrcDoc()
   const diagnostics = collectHtmlDiagnostics(props.html, { reason })
   rememberFrameDiagnostics(diagnostics)
-  iframe.removeAttribute('src')
-  iframe.srcdoc = srcdoc
+  writeFrameHtmlDocument(iframe, srcdoc, 'inline-blob-url')
   iframe.style.height = '48px'
-  logger.info('[NotebookHtmlOutput] synced iframe srcdoc', {
+  logger.info('[NotebookHtmlOutput] synced iframe blob url', {
     reason,
     htmlLength: String(props.html || '').length,
     diagnostics,
   })
-  scheduleFrameDiagnosticsProbe('inline-srcdoc')
+  scheduleFrameDiagnosticsProbe('inline-blob-url')
 }
 
 const syncFrameHeight = (height, reason = 'message') => {
@@ -618,6 +655,7 @@ onBeforeUnmount(() => {
     window.clearTimeout(frameDiagnosticsTimer)
     frameDiagnosticsTimer = 0
   }
+  revokeFrameBlobUrl('before-unmount')
 })
 </script>
 
