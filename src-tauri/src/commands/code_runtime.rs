@@ -68,6 +68,14 @@ const PYTHON_PIP_TRUSTED_HOST: &str = "pypi.tuna.tsinghua.edu.cn";
 const PYTHON_RUNTIME_RECOMMENDED_PACKAGES: &[&str] = &[
     "pandas",
     "matplotlib",
+    // Matplotlib 动画在没有系统 ffmpeg 时会回退到 PillowWriter；
+    // imageio-ffmpeg 则让 notebook 动画优先稳定导出为 mp4，避免依赖用户机器环境。
+    "Pillow",
+    "imageio-ffmpeg",
+    // Python cell 的动画捕获链路会直接识别 moviepy.VideoClip；
+    // manim 则通过生成的媒体文件路径回传，默认安装后用户可直接在 cell 内创作动画。
+    "moviepy",
+    "manim",
     "openpyxl",
     "ipython",
     "plotly",
@@ -77,6 +85,9 @@ const PYTHON_RUNTIME_RECOMMENDED_PACKAGES: &[&str] = &[
     "antlr4-python3-runtime==4.11.1",
     "scipy",
     "seaborn",
+    // pandas 的 parquet / feather 导入导出需要 pyarrow 或 fastparquet。
+    // 默认选择 pyarrow，覆盖 notebook 数据实验室和 Python cell 的表格工作流。
+    "pyarrow",
     "duckdb",
     "polars",
 ];
@@ -2048,6 +2059,11 @@ fn ensure_managed_python_launch_spec_with_download_version(
             managed_package_snapshot.push(recommended_package);
         }
     }
+    info!(
+        package_count = managed_package_snapshot.len(),
+        packages = managed_package_snapshot.join(", ").as_str(),
+        "[PythonRuntime] prepared managed runtime package ensure list"
+    );
 
     ensure_managed_pip_mirror(&runtime_dir)?;
     let managed_spec = managed_python_launch_spec(&runtime_dir, base_spec.source.clone())?;

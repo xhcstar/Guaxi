@@ -1313,12 +1313,18 @@ const PYTHON_CONSOLE_MAXIMIZED_STORAGE_KEY = 'guaxi_python_console_maximized'
 const PYTHON_RUNTIME_RECOMMENDED_PACKAGES = [
   { label: 'pandas', value: 'pandas', description: '数据表格与文件导入导出' },
   { label: 'matplotlib', value: 'matplotlib', description: '图像与绘图输出' },
+  { label: 'Pillow', value: 'Pillow', description: 'Matplotlib 动画 GIF 回退与图像处理' },
+  { label: 'imageio-ffmpeg', value: 'imageio-ffmpeg', description: '动画与视频输出的内置 ffmpeg 支持' },
+  { label: 'moviepy', value: 'moviepy', description: '视频剪辑与 VideoClip 动画输出' },
+  { label: 'manim', value: 'manim', description: '数学动画创作与媒体文件输出' },
   { label: 'openpyxl', value: 'openpyxl', description: 'Excel 读写支持' },
   { label: 'ipython', value: 'ipython', description: '增强交互体验与调试' },
   { label: 'plotly', value: 'plotly', description: '交互式图表与 HTML 报告输出' },
   { label: 'sympy', value: 'sympy', description: '数学公式、符号计算与函数绘图' },
   { label: 'antlr4-python3-runtime', value: 'antlr4-python3-runtime', description: 'LaTeX 数学公式解析支持' },
+  { label: 'scipy', value: 'scipy', description: '科学计算、统计分布与微分方程数值解' },
   { label: 'seaborn', value: 'seaborn', description: '统计图表与分布可视化' },
+  { label: 'pyarrow', value: 'pyarrow', description: 'Parquet 与 Feather 表格文件支持' },
   { label: 'duckdb', value: 'duckdb', description: '本地分析数据库与 SQL 查询' },
   { label: 'polars', value: 'polars', description: '高性能数据处理' },
 ]
