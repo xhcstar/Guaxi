@@ -1,829 +1,135 @@
 // ============================================================================
-// guaxiNotebookMathRuntime.js —— 探索笔记本「数学块」Python 运行时代码生成器
+// guaxiNotebookMathRuntime.js —— 探索笔记本「数学块」运行时 bootstrap 生成器
 // ----------------------------------------------------------------------------
-// 设计目标（模块化，便于后续扩展更多数学工具）：
-//   1. 数学块输入的是 LaTeX / SymPy 风格的「表达式或方程」，而非完整 Python 脚本。
-//      本模块把它编译成一段「受控的、可复现的」Python 程序，交给 worker 执行，
-//      所有符号计算都委托给 SymPy，数值/绘图委托给 NumPy + Matplotlib。
-//   2. 整个程序按「公共基座 + 各工具分区」拆分：解析、符号表、绘图、求解等
-//      每一块都是独立的 section builder（返回 Python 源码行数组），新增数学工具
-//      （级数 / 统计分布 / 微分方程 / 积分变换 …）时只需新增一个 section 与一个
-//      mode 分支，不必改动其它部分。
-//   3. 所有面向用户的文案、注释均为中文（UTF-8）。生成的 Python 同样保留中文注释，
-//      方便在 worker 日志里排查问题。
+// 设计说明（v2，命令式数学工作区）：
+//   1. 数学块的全部计算逻辑现在位于真实、可测试的 Python 引擎模块
+//      `src-tauri/scripts/guaximath_engine.py`（符号/数值/交互绘图、命令库等）。
+//   2. 本文件不再用 JS 字符串拼接几百行 Python，而是只生成一段极小的 bootstrap：
+//        - 优先 `import guaximath_engine`（worker 已把它和自身放进 sys.path，一次加载常驻）；
+//        - 失败则 exec 由 Vite `?raw` 内联进来的引擎源码（带版本守卫，同一会话只 exec 一次），
+//          保证开发期 / 未物化时仍可用。
+//      最终调用 `guaximath_engine.run(source, options, ns=globals())`，把返回的 display
+//      写入会话全局 `__guaxi_plotly_display__`，worker 统一转发为 result_json.__guaxi_display__。
+//   3. 工作区变量持久化在会话 globals 的 `__GUAXIMATH_WS__` 里，跨多次运行 / 多个数学块复用。
 //
-// 输出协议：执行结束后向命名空间写入 `__guaxi_plotly_display__`，由 worker 统一
-//   读取并转发给前端输出模块：
-//     - { type: 'markdown', ... } 用于公式 / 解 / 文字结果（含内嵌 $$LaTeX$$）。
-//     - { type: 'image', mime: 'image/png', data_base64 } 用于绘图结果。
+// 与旧版的差异：
+//   - 入参从「单表达式 + 单 mode」变为「整段 source（多行命令/赋值/裸表达式）+ options」。
+//   - 旧的 mode 仍可通过 options.mode 透传（向后兼容工具栏的快捷动作），引擎可据此包裹一层调用。
 // ============================================================================
+
+// Vite 原生支持 `?raw`：构建时把引擎源码作为字符串内联进前端包，仅用于「import 失败」兜底。
+import GUAXIMATH_ENGINE_SOURCE from '../../../../src-tauri/scripts/guaximath_engine.py?raw'
 
 const normalizeText = (value) => String(value == null ? '' : value).trim()
 
-// ---------------------------------------------------------------------------
-// [基座 1] 模块导入 + 运行时自愈
-// ---------------------------------------------------------------------------
-// 设计说明：
-//   SymPy 的 `parse_latex` 依赖 `antlr4-python3-runtime`（且 sympy 1.14 强制要求
-//   版本号以 4.11 开头）。部分历史 runtime 在引入该依赖前就已创建，venv 里并没有
-//   安装它，导致 `parse_latex` 抛 ImportError → 退回正则兜底。这里在程序最开头做
-//   一次「按需补装」：仅当 import 失败时才联网安装（带清华镜像源，与 Rust 端
-//   PYTHON_PIP_INDEX_URL 一致），安装失败也不报错，后续解析会自动走纯 SymPy 兜底。
-const buildImportSection = () => [
-  'import math',
-  'import base64',
-  'import io',
-  'import re',
-  'import sys',
-  'import subprocess',
-  'import numpy as np',
-  'import sympy as sp',
-  'from sympy.parsing.sympy_parser import (',
-  '    parse_expr, standard_transformations,',
-  '    implicit_multiplication_application, convert_xor,',
-  ')',
-  '',
-  'def __guaxi_ensure_latex_backend():',
-  '    """确保 sympy.parse_latex 可用：缺少 / 版本不匹配的 antlr4 运行时则按需补装。',
-  '',
-  '    返回 True 表示 LaTeX 解析后端可用；False 表示需要走纯 SymPy 兜底。',
-  '    判定标准是「parse_latex 能否真正解析一条样例」，而不是单纯能否 import antlr4——',
-  '    因为 sympy 1.14 强制要求 antlr4-python3-runtime 版本号以 4.11 开头，',
-  '    装了 4.13 之类的版本同样会让 parse_latex 抛 ImportError。',
-  '    任何异常都被吞掉并返回 False，绝不让补装过程影响数学块本身的执行。',
-  '    """',
-  '    def __guaxi_latex_probe():',
-  '        try:',
-  '            from sympy.parsing.latex import parse_latex',
-  '            parse_latex("x^{2}")',
-  '            return True',
-  '        except Exception:',
-  '            return False',
-  '    if __guaxi_latex_probe():',
-  '        return True',
-  '    try:',
-  '        print("[GuaxiNotebookMath] 正在补装 antlr4-python3-runtime==4.11.1（用于 LaTeX 解析）…")',
-  '        subprocess.run(',
-  '            [sys.executable, "-m", "pip", "install",',
-  '             "antlr4-python3-runtime==4.11.1",',
-  '             "-i", "https://pypi.tuna.tsinghua.edu.cn/simple",',
-  '             "--trusted-host", "pypi.tuna.tsinghua.edu.cn",',
-  '             "--quiet", "--disable-pip-version-check"],',
-  '            check=True,',
-  '            stdout=subprocess.PIPE,',
-  '            stderr=subprocess.PIPE,',
-  '            timeout=180,',
-  '        )',
-  '        import importlib',
-  '        importlib.invalidate_caches()',
-  '        # 卸载可能已缓存的旧 antlr4 子模块，确保重新加载到 4.11.1。',
-  '        for __guaxi_mod_name in [m for m in list(sys.modules) if m == "antlr4" or m.startswith("antlr4.")]:',
-  '            sys.modules.pop(__guaxi_mod_name, None)',
-  '        return __guaxi_latex_probe()',
-  '    except Exception as __guaxi_install_error:',
-  '        print(f"[GuaxiNotebookMath] antlr4 补装失败，改用纯 SymPy 兜底解析：{__guaxi_install_error}")',
-  '        return False',
-  '__guaxi_latex_backend_ready = __guaxi_ensure_latex_backend()',
-]
+// 与引擎里的 ENGINE_VERSION 保持一致；版本变化时兜底路径会强制重新 exec。
+const GUAXIMATH_ENGINE_VERSION = '1.0.0'
+
+// 把引擎源码安全地内嵌进生成的 Python：用 base64 规避所有转义/缩进问题。
+const encodeEngineSourceBase64 = (source) => {
+  const text = String(source || '')
+  if (typeof TextEncoder !== 'undefined' && typeof btoa === 'function') {
+    const bytes = new TextEncoder().encode(text)
+    let binary = ''
+    for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i])
+    return btoa(binary)
+  }
+  // Node / SSR 兜底
+  // eslint-disable-next-line no-undef
+  return Buffer.from(text, 'utf-8').toString('base64')
+}
+
+// 把若干「快捷动作」mode 映射成对应的 source 改写，向后兼容旧工具栏的一键操作。
+// 例如选中「求导」时，把整段表达式包成 diff(<expr>)。多行 / 已是命令的内容则原样执行。
+const MATH_MODE_WRAPPERS = {
+  simplify: (expr) => `simplify(${expr})`,
+  derivative: (expr) => `diff(${expr})`,
+  integral: (expr) => `integrate(${expr})`,
+  solve: (expr) => `solve(${expr})`,
+  series: (expr, o) => `taylor(${expr}, x, ${Number(o.seriesPoint) || 0}, ${Number(o.seriesOrder) || 6})`,
+  plot2d: (expr) => `plot(${expr})`,
+  distribution: (expr) => expr, // 引擎已提供 Normal/Binomial 等构造器，直接执行
+  laplace: (expr) => `laplace(${expr})`,
+  fourier: (expr) => `fourier(${expr})`,
+  dsolve: (expr) => `dsolve(${expr})`,
+}
+
+// 把一段任意文本编码为 Python 字符串字面量（JSON 兼容 Python 的字符串语法）。
+const toPyStr = (value) => JSON.stringify(String(value == null ? '' : value))
 
 // ---------------------------------------------------------------------------
-// [基座 2] 符号表（locals）
+// 主入口：生成数学块运行时 bootstrap（极小，真正逻辑在 guaximath_engine.py）
 // ---------------------------------------------------------------------------
-// 设计说明：
-//   parse_expr 需要一份 local_dict 把名字映射到 SymPy 对象。这里覆盖三类名字：
-//     1. 常用单字母/约定变量（x y z t … 以及主变量 variable）。
-//     2. 全量希腊字母（alpha…omega，含大写 Alpha…Omega）——这是修复
-//        「\theta、\cos\theta 解析失败」的关键：兜底翻译会把 \theta 还原成 theta，
-//        必须在符号表里有对应符号，否则 parse_expr 仍会失败。
-//     3. 常用函数 / 变换 / 矩阵构造器。
-const buildSymbolTableSection = () => [
-  '__guaxi_math_var = sp.symbols(__guaxi_math_var_name)',
-  '__guaxi_math_default_symbols = sp.symbols("x y z t u v w r s k m n p q a b c d")',
-  '__guaxi_math_locals = {str(sym): sym for sym in __guaxi_math_default_symbols}',
-  '# 全量希腊字母（小写 + 大写），与兜底解析里的反斜杠命令翻译保持一一对应。',
-  '# 注意：lambda 是 Python 关键字，会让 parse_expr 失败，因此希腊字母 λ 统一用',
-  '# SymPy 约定拼写 lamda / Lamda（其 LaTeX 输出仍是 \\lambda / \\Lambda）。',
-  '__guaxi_greek_names = [',
-  '    "alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta",',
-  '    "iota", "kappa", "lamda", "mu", "nu", "xi", "omicron", "pi", "rho",',
-  '    "sigma", "tau", "upsilon", "phi", "chi", "psi", "omega",',
-  '    "varepsilon", "vartheta", "varphi", "varrho", "varsigma", "varpi",',
-  '    "Gamma", "Delta", "Theta", "Lamda", "Xi", "Pi", "Sigma",',
-  '    "Upsilon", "Phi", "Psi", "Omega",',
-  ']',
-  'for __guaxi_greek in __guaxi_greek_names:',
-  '    __guaxi_math_locals.setdefault(__guaxi_greek, sp.Symbol(__guaxi_greek))',
-  '__guaxi_math_locals[__guaxi_math_var_name] = __guaxi_math_var',
-  '__guaxi_math_locals.update({',
-  '    "pi": sp.pi, "E": sp.E, "I": sp.I, "oo": sp.oo, "infty": sp.oo,',
-  '    "sin": sp.sin, "cos": sp.cos, "tan": sp.tan, "cot": sp.cot,',
-  '    "sec": sp.sec, "csc": sp.csc,',
-  '    "asin": sp.asin, "acos": sp.acos, "atan": sp.atan, "atan2": sp.atan2,',
-  '    "sinh": sp.sinh, "cosh": sp.cosh, "tanh": sp.tanh,',
-  '    "asinh": sp.asinh, "acosh": sp.acosh, "atanh": sp.atanh,',
-  '    "exp": sp.exp, "log": sp.log, "ln": sp.log, "sqrt": sp.sqrt,',
-  '    "Abs": sp.Abs, "sign": sp.sign, "floor": sp.floor, "ceiling": sp.ceiling,',
-  '    "factorial": sp.factorial, "gamma": sp.gamma, "erf": sp.erf, "Min": sp.Min, "Max": sp.Max,',
-  '    "Eq": sp.Eq, "Derivative": sp.Derivative, "Integral": sp.Integral, "Sum": sp.Sum, "Product": sp.Product,',
-  '    "Function": sp.Function, "DiracDelta": sp.DiracDelta, "Heaviside": sp.Heaviside,',
-  '    "fourier_transform": sp.fourier_transform, "inverse_fourier_transform": sp.inverse_fourier_transform,',
-  '    "laplace_transform": sp.laplace_transform, "inverse_laplace_transform": sp.inverse_laplace_transform,',
-  '    "series": lambda expr, var=None, x0=0, n=6: sp.series(expr, var or __guaxi_math_var, x0, int(n)).removeO(),',
-  '    "taylor": lambda expr, var=None, x0=0, n=6: sp.series(expr, var or __guaxi_math_var, x0, int(n)).removeO(),',
-  '    "Matrix": sp.Matrix, "Array": sp.Array,',
-  '})',
-  'for __guaxi_func_name in ["f", "g", "h", "y", "psi", "Psi", "phi", "Phi", "A", "Efield", "Bfield"]:',
-  '    __guaxi_math_locals.setdefault(__guaxi_func_name, sp.Function(__guaxi_func_name))',
-]
-
-export { normalizeText, buildImportSection, buildSymbolTableSection }
-
-// ---------------------------------------------------------------------------
-// [基座 3] 表达式解析（修复「\theta / \cos\theta 解析失败」的核心分区）
-// ---------------------------------------------------------------------------
-// 设计说明：
-//   主路径 —— 当 antlr 后端可用时，优先用 SymPy 官方的 parse_latex，它能正确处理
-//     隐式乘法、上下标、`=`（自动返回 Eq）等，是最稳的 LaTeX→表达式途径。
-//   兜底路径 —— 当 antlr 不可用（如离线）时，把 LaTeX 文本翻译成纯 SymPy 文本。
-//     这里的「铁律」是：交给 parse_expr 之前，字符串中绝不允许残留任何裸反斜杠，
-//     否则 Python tokenizer 会把 `\` 当作行连接符抛
-//     `unexpected character after line continuation character`（即用户遇到的报错）。
-//     因此最后一步无条件把所有残留 `\` 替换为空格。
-const buildParserSection = () => [
-  'def __guaxi_order_partial_variables(__guaxi_variables):',
-  '    """按数学书写习惯稳定偏导自变量顺序，避免同一函数在不同项里生成 u(t, x) / u(x, t) 两套对象。"""',
-  '    __guaxi_preferred_order = ["x", "y", "z", "t", "r", "s", "u", "v", "w"]',
-  '    __guaxi_seen = []',
-  '    for __guaxi_name in __guaxi_preferred_order + list(__guaxi_variables):',
-  '        if __guaxi_name in __guaxi_variables and __guaxi_name not in __guaxi_seen:',
-  '            __guaxi_seen.append(__guaxi_name)',
-  '    return __guaxi_seen',
-  'def __guaxi_convert_latex_partial_derivatives(__guaxi_src):',
-  '    """把常见 LaTeX 偏导分式改写成 SymPy Derivative(...) 文本。"""',
-  '    __guaxi_text = str(__guaxi_src or "")',
-  '    if "\\\\partial" not in __guaxi_text:',
-  '        return __guaxi_text',
-  '    __guaxi_pattern = re.compile(r"\\\\frac\\s*\\{\\s*\\\\partial(?:\\s*\\^\\s*\\{?(\\d+)\\}?)?\\s*([A-Za-z][A-Za-z0-9_]*)(?:\\s*\\(([^{}()]*)\\))?\\s*\\}\\s*\\{\\s*((?:\\\\partial\\s*[A-Za-z][A-Za-z0-9_]*(?:\\s*\\^\\s*\\{?\\d+\\}?)?\\s*)+)\\s*\\}")',
-  '    __guaxi_matches = list(__guaxi_pattern.finditer(__guaxi_text))',
-  '    if not __guaxi_matches:',
-  '        return __guaxi_text',
-  '    __guaxi_function_vars = {}',
-  '    for __guaxi_match in __guaxi_matches:',
-  '        __guaxi_func_name = __guaxi_match.group(2)',
-  '        __guaxi_declared_args = [part.strip() for part in str(__guaxi_match.group(3) or "").split(",") if part.strip()]',
-  '        __guaxi_vars = __guaxi_function_vars.setdefault(__guaxi_func_name, [])',
-  '        for __guaxi_arg in __guaxi_declared_args:',
-  '            if __guaxi_arg not in __guaxi_vars:',
-  '                __guaxi_vars.append(__guaxi_arg)',
-  '        for __guaxi_var_match in re.finditer(r"\\\\partial\\s*([A-Za-z][A-Za-z0-9_]*)(?:\\s*\\^\\s*\\{?(\\d+)\\}?)?", __guaxi_match.group(4)):',
-  '            __guaxi_var_name = __guaxi_var_match.group(1)',
-  '            if __guaxi_var_name not in __guaxi_vars:',
-  '                __guaxi_vars.append(__guaxi_var_name)',
-  '    def __guaxi_rewrite_partial(__guaxi_match):',
-  '        __guaxi_func_name = __guaxi_match.group(2)',
-  '        __guaxi_math_locals[__guaxi_func_name] = sp.Function(__guaxi_func_name)',
-  '        __guaxi_vars = __guaxi_order_partial_variables(__guaxi_function_vars.get(__guaxi_func_name, []))',
-  '        __guaxi_func_call = f"{__guaxi_func_name}({\', \'.join(__guaxi_vars)})" if __guaxi_vars else f"{__guaxi_func_name}(__guaxi_math_var)"',
-  '        __guaxi_derivative_args = []',
-  '        __guaxi_total_denominator_order = 0',
-  '        for __guaxi_var_match in re.finditer(r"\\\\partial\\s*([A-Za-z][A-Za-z0-9_]*)(?:\\s*\\^\\s*\\{?(\\d+)\\}?)?", __guaxi_match.group(4)):',
-  '            __guaxi_var_name = __guaxi_var_match.group(1)',
-  '            __guaxi_order = int(__guaxi_var_match.group(2) or "1")',
-  '            __guaxi_total_denominator_order += __guaxi_order',
-  '            __guaxi_derivative_args.append(__guaxi_var_name if __guaxi_order == 1 else f"{__guaxi_var_name}, {__guaxi_order}")',
-  '        __guaxi_numerator_order = int(__guaxi_match.group(1) or __guaxi_total_denominator_order or "1")',
-  '        if __guaxi_numerator_order != __guaxi_total_denominator_order:',
-  '            print(f"[GuaxiNotebookMath] 偏导阶数不一致，仍按分母变量解析：numerator={__guaxi_numerator_order}, denominator={__guaxi_total_denominator_order}")',
-  '        return f"Derivative({__guaxi_func_call}, {\', \'.join(__guaxi_derivative_args)})"',
-  '    __guaxi_converted = __guaxi_pattern.sub(__guaxi_rewrite_partial, __guaxi_text)',
-  '    if __guaxi_converted != __guaxi_text:',
-  '        print("[GuaxiNotebookMath] 已将 LaTeX 偏导转换为 SymPy Derivative 形式")',
-  '    return __guaxi_converted',
-  'def __guaxi_latex_to_sympy_text(__guaxi_src):',
-  '    """把 LaTeX 文本尽力翻译成纯 SymPy 文本（兜底路径，不依赖 antlr）。"""',
-  '    __guaxi_s = str(__guaxi_src or "").strip()',
-  '    __guaxi_s = __guaxi_convert_latex_partial_derivatives(__guaxi_s)',
-  '    # 1) 去掉纯排版/装饰命令（不影响语义）。',
-  '    __guaxi_s = re.sub(r"\\\\(?:left|right|displaystyle|textstyle|limits|big|Big|bigg|Bigg|,|;|:|!|quad|qquad)", " ", __guaxi_s)',
-  '    __guaxi_s = re.sub(r"\\\\(?:mathrm|mathbf|mathit|mathcal|operatorname|text)\\s*\\{([^{}]*)\\}", r"\\1", __guaxi_s)',
-  '    # 2) 分式 \\frac{a}{b}/\\dfrac/\\tfrac，循环处理嵌套。',
-  '    for _ in range(8):',
-  '        __guaxi_next = re.sub(r"\\\\[dt]?frac\\s*\\{([^{}]+)\\}\\s*\\{([^{}]+)\\}", r"((\\1)/(\\2))", __guaxi_s)',
-  '        if __guaxi_next == __guaxi_s:',
-  '            break',
-  '        __guaxi_s = __guaxi_next',
-  '    # 3) 根式 \\sqrt[n]{a} 与 \\sqrt{a}。',
-  '    __guaxi_s = re.sub(r"\\\\sqrt\\s*\\[([^\\]]+)\\]\\s*\\{([^{}]+)\\}", r"((\\2)**(1/(\\1)))", __guaxi_s)',
-  '    __guaxi_s = re.sub(r"\\\\sqrt\\s*\\{([^{}]+)\\}", r"sqrt(\\1)", __guaxi_s)',
-  '    # 4) 运算符号。',
-  '    __guaxi_s = re.sub(r"\\\\(?:cdot|times|ast)", "*", __guaxi_s)',
-  '    __guaxi_s = re.sub(r"\\\\div", "/", __guaxi_s)',
-  '    # 5) 函数命令统一成 name(arg)：覆盖 \\cos{..}、\\cos\\theta、\\cos x 三种写法。',
-  '    __guaxi_funcs = "sin|cos|tan|cot|sec|csc|sinh|cosh|tanh|arcsin|arccos|arctan|asin|acos|atan|exp|log|ln|abs"',
-  '    __guaxi_s = re.sub(r"\\\\(" + __guaxi_funcs + r")\\s*\\{([^{}]+)\\}", r"\\1(\\2)", __guaxi_s)',
-  '    __guaxi_s = re.sub(r"\\\\(" + __guaxi_funcs + r")\\s*\\\\([A-Za-z]+)", r"\\1(\\2)", __guaxi_s)',
-  '    __guaxi_s = re.sub(r"\\\\(" + __guaxi_funcs + r")(?![A-Za-z])", r"\\1", __guaxi_s)',
-  '    # 6) 上下标花括号：a^{...} -> a**(...)，a_{...} -> a_...（去花括号）。',
-  '    __guaxi_s = re.sub(r"\\^\\s*\\{([^{}]+)\\}", r"**(\\1)", __guaxi_s)',
-  '    __guaxi_s = re.sub(r"_\\s*\\{([^{}]+)\\}", r"_\\1", __guaxi_s)',
-  '    # 7) 其余残留命令（希腊字母等）：去掉反斜杠，保留名字（已在符号表登记为符号/函数）。',
-  '    __guaxi_s = re.sub(r"\\\\([A-Za-z]+)", r"\\1", __guaxi_s)',
-  '    # 8) 铁律：清除任何仍然残留的裸反斜杠，杜绝 tokenizer 行连接符报错。',
-  '    __guaxi_s = __guaxi_s.replace("\\\\", " ")',
-  '    return __guaxi_s.strip()',
-  'def __guaxi_parse_plain(__guaxi_plain):',
-  '    """把已翻译的纯文本交给 SymPy parse_expr（带隐式乘法与 ^ 幂运算支持）。"""',
-  '    __guaxi_plain = str(__guaxi_plain or "").strip().replace("^", "**")',
-  '    __guaxi_plain = __guaxi_plain.replace("\\\\", " ")  # 双保险',
-  '    return parse_expr(',
-  '        __guaxi_plain,',
-  '        local_dict=__guaxi_math_locals,',
-  '        transformations=standard_transformations + (implicit_multiplication_application, convert_xor),',
-  '    )',
-  'def __guaxi_strip_math_wrappers(__guaxi_text):',
-  '    """剥离 $$ … $$ / \\\\[ … \\\\] / $ … $ / equation 环境等外层包裹。"""',
-  '    __guaxi_text = str(__guaxi_text or "").strip()',
-  '    __guaxi_text = re.sub(r"^\\\\begin\\{equation\\*?\\}", "", __guaxi_text).strip()',
-  '    __guaxi_text = re.sub(r"\\\\end\\{equation\\*?\\}$", "", __guaxi_text).strip()',
-  '    if __guaxi_text.startswith("$$") and __guaxi_text.endswith("$$"):',
-  '        __guaxi_text = __guaxi_text[2:-2].strip()',
-  '    if __guaxi_text.startswith("\\\\[") and __guaxi_text.endswith("\\\\]"):',
-  '        __guaxi_text = __guaxi_text[2:-2].strip()',
-  '    if __guaxi_text.startswith("$") and __guaxi_text.endswith("$"):',
-  '        __guaxi_text = __guaxi_text[1:-1].strip()',
-  '    return __guaxi_text',
-  'def __guaxi_register_callable_symbols(__guaxi_text):',
-  '    """把输入里以 name(...) 形式出现的名字临时登记为 SymPy 未知函数。',
-  '',
-  '    背景：默认符号表把 x y z … 注册成 Symbol，导致 `y(x)` 被解析成乘法 y*x，',
-  '    微分方程里的未知函数 y(x) 因此无法识别。这里扫描 `名字(` 模式，',
-  '    在解析前把这些名字覆盖为 sp.Function，使 `Eq(Derivative(y(x),x)+y(x),0)` 正确成形。',
-  '    已知的内置函数名（sin/cos/exp/Eq/Derivative 等）保持不变，避免覆盖。',
-  '    """',
-  '    __guaxi_reserved = {"Eq", "Derivative", "Integral", "Sum", "Product", "Function",',
-  '                        "Matrix", "Array", "Abs", "Min", "Max", "sqrt", "exp", "log", "ln",',
-  '                        "sin", "cos", "tan", "cot", "sec", "csc", "asin", "acos", "atan", "atan2",',
-  '                        "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "sign", "floor", "ceiling",',
-  '                        "factorial", "gamma", "erf", "DiracDelta", "Heaviside", "series", "taylor",',
-  '                        "fourier_transform", "inverse_fourier_transform",',
-  '                        "laplace_transform", "inverse_laplace_transform"}',
-  '    for __guaxi_callee in set(re.findall(r"([A-Za-z_][A-Za-z0-9_]*)\\s*\\(", str(__guaxi_text or ""))):',
-  '        if __guaxi_callee not in __guaxi_reserved:',
-  '            __guaxi_math_locals[__guaxi_callee] = sp.Function(__guaxi_callee)',
-  'def __guaxi_parse_math_expr(__guaxi_text):',
-  '    """解析单条表达式/方程：antlr 优先，失败回退纯文本翻译。"""',
-  '    __guaxi_text = __guaxi_strip_math_wrappers(__guaxi_text)',
-  '    if not __guaxi_text:',
-  '        raise ValueError("数学表达式为空。")',
-  '    __guaxi_register_callable_symbols(__guaxi_text)',
-  '    # 仅当文本含反斜杠（真正的 LaTeX 命令）时才走 parse_latex；否则交给 SymPy 兜底，',
-  '    # 因为 parse_latex 不认识 Eq/Derivative/y(x) 这类 SymPy 函数语法，会把 y(x) 误判成 x*y。',
-  '    # 兜底翻译对无反斜杠输入是无害的（仅做 ^->**、=->Eq、隐式乘法等 SymPy 友好转换）。',
-  '    __guaxi_looks_latex = "\\\\" in __guaxi_text',
-  '    __guaxi_has_latex_partial = "\\\\partial" in __guaxi_text',
-  '    if __guaxi_latex_backend_ready and __guaxi_looks_latex and not __guaxi_has_latex_partial:',
-  '        try:',
-  '            from sympy.parsing.latex import parse_latex',
-  '            return parse_latex(__guaxi_text)',
-  '        except Exception as __guaxi_latex_error:',
-  '            print(f"[GuaxiNotebookMath] parse_latex 回退到兜底解析：{__guaxi_latex_error}")',
-  '    __guaxi_plain = __guaxi_latex_to_sympy_text(__guaxi_text)',
-  '    if "=" in __guaxi_plain and not re.search(r"[<>!]=|==", __guaxi_plain):',
-  '        __guaxi_left, __guaxi_right = __guaxi_plain.split("=", 1)',
-  '        return sp.Eq(__guaxi_parse_plain(__guaxi_left), __guaxi_parse_plain(__guaxi_right))',
-  '    return __guaxi_parse_plain(__guaxi_plain)',
-  'def __guaxi_split_math_items(__guaxi_text):',
-  '    """按 ; 或换行拆分方程组/多表达式；保留 LaTeX 内部不含这些分隔符的整体。"""',
-  '    return [part.strip() for part in re.split(r"[;\\n]+", str(__guaxi_text or "")) if part.strip()]',
-  '__guaxi_math_expr_text = __guaxi_strip_math_wrappers(__guaxi_math_expr_raw)',
-  '# distribution 模式使用 scipy.stats 语法（如 norm(0,1)），不是合法 SymPy 表达式，',
-  '# 因此跳过统一的 SymPy 解析，交由 __guaxi_run_distribution 自行解析参数。',
-  'if __guaxi_math_mode == "distribution":',
-  '    __guaxi_math_items = []',
-  '    __guaxi_math_expr = None',
-  'else:',
-  '    __guaxi_math_items = [__guaxi_parse_math_expr(__guaxi_item) for __guaxi_item in __guaxi_split_math_items(__guaxi_math_expr_text)]',
-  '    __guaxi_math_expr = __guaxi_math_items[0] if len(__guaxi_math_items) == 1 else __guaxi_math_items',
-  '__guaxi_math_lines = [f"公式：`{__guaxi_math_expr_raw}`"]',
-]
-
-// ---------------------------------------------------------------------------
-// [基座 4] 通用助手：LaTeX 区块、自由符号、解描述、求解器
-// ---------------------------------------------------------------------------
-const buildHelperSection = () => [
-  'def __guaxi_latex_block(__guaxi_label, __guaxi_value):',
-  '    return f"{__guaxi_label}\\n\\n$$\\n{sp.latex(__guaxi_value)}\\n$$"',
-  'def __guaxi_expr_free_symbols(__guaxi_value):',
-  '    if isinstance(__guaxi_value, (list, tuple, set)):',
-  '        __guaxi_symbols = set()',
-  '        for __guaxi_item in __guaxi_value:',
-  '            __guaxi_symbols.update(__guaxi_expr_free_symbols(__guaxi_item))',
-  '        return __guaxi_symbols',
-  '    return set(getattr(__guaxi_value, "free_symbols", set()) or set())',
-  'def __guaxi_normalize_transform_result(__guaxi_value):',
-  '    # laplace_transform/fourier_transform 返回 (F, 条件, 收敛域) 元组，取主结果。',
-  '    if isinstance(__guaxi_value, tuple) and __guaxi_value:',
-  '        return __guaxi_value[0]',
-  '    return __guaxi_value',
-  'def __guaxi_value_has_derivative(__guaxi_value):',
-  '    """递归判断表达式里是否包含 Derivative。"""',
-  '    if isinstance(__guaxi_value, (list, tuple, set)):',
-  '        return any(__guaxi_value_has_derivative(item) for item in __guaxi_value)',
-  '    return bool(getattr(__guaxi_value, "has", lambda *_: False)(sp.Derivative))',
-  'def __guaxi_value_has_partial_differential(__guaxi_value):',
-  '    """识别偏微分方程：未知函数带多个自变量，或同一导数项包含多个不同微分变量。"""',
-  '    __guaxi_items = __guaxi_value if isinstance(__guaxi_value, (list, tuple, set)) else [__guaxi_value]',
-  '    for __guaxi_item in __guaxi_items:',
-  '        for __guaxi_derivative in getattr(__guaxi_item, "atoms", lambda *_: set())(sp.Derivative):',
-  '            __guaxi_derivative_symbols = {str(sym) for sym in getattr(__guaxi_derivative, "variables", [])}',
-  '            if len(__guaxi_derivative_symbols) > 1:',
-  '                return True',
-  '            __guaxi_expr = getattr(__guaxi_derivative, "expr", None)',
-  '            for __guaxi_function in getattr(__guaxi_expr, "atoms", lambda *_: set())(sp.Function):',
-  '                if len(getattr(__guaxi_function, "free_symbols", set()) or set()) > 1:',
-  '                    return True',
-  '    return False',
-  'def __guaxi_try_symbolic_solve(__guaxi_expr):',
-  '    """统一的解析求解入口：自动在 solve / nonlinsolve / solveset / dsolve 间选择。"""',
-  '    __guaxi_symbols = sorted(__guaxi_expr_free_symbols(__guaxi_expr), key=lambda sym: str(sym))',
-  '    __guaxi_targets = [__guaxi_math_var] if __guaxi_math_var in __guaxi_symbols else __guaxi_symbols',
-  '    if __guaxi_value_has_derivative(__guaxi_expr):',
-  '        if __guaxi_value_has_partial_differential(__guaxi_expr):',
-  '            print("[GuaxiNotebookMath] solve 模式识别到 PDE，跳过代数求解以避免生成不可读伪解")',
-  '            return ("pde-unsupported", __guaxi_expr)',
-  '        try:',
-  '            if isinstance(__guaxi_expr, (list, tuple)):',
-  '                return ("dsolve", [sp.dsolve(item) for item in __guaxi_expr])',
-  '            return ("dsolve", sp.dsolve(__guaxi_expr))',
-  '        except Exception as __guaxi_dsolve_error:',
-  '            return ("error", f"dsolve: {__guaxi_dsolve_error}")',
-  '    try:',
-  '        return ("solve", sp.solve(__guaxi_expr, __guaxi_targets, dict=True))',
-  '    except Exception as __guaxi_solve_error:',
-  '        try:',
-  '            __guaxi_equations = __guaxi_expr if isinstance(__guaxi_expr, (list, tuple)) else [__guaxi_expr]',
-  '            return ("nonlinsolve", sp.nonlinsolve(__guaxi_equations, __guaxi_targets))',
-  '        except Exception as __guaxi_nonlin_error:',
-  '            try:',
-  '                return ("solveset", sp.solveset(__guaxi_expr, __guaxi_math_var, domain=sp.S.Complexes))',
-  '            except Exception as __guaxi_solveset_error:',
-  '                return ("error", f"solve: {__guaxi_solve_error}; nonlinsolve: {__guaxi_nonlin_error}; solveset: {__guaxi_solveset_error}")',
-  'def __guaxi_describe_solution(__guaxi_kind, __guaxi_value):',
-  '    __guaxi_lines = ["## 方程解析解", "", f"求解器：`{__guaxi_kind}`", ""]',
-  '    if __guaxi_kind == "pde-unsupported":',
-  '        return ["## 方程解析", "", "已识别为偏微分方程。当前“求解方程”工具优先处理代数方程与常微分方程；偏微分方程需要补充边界/初始条件后使用专门的 PDE 数值或符号流程。", "", __guaxi_latex_block("已识别方程：", __guaxi_value)]',
-  '    if isinstance(__guaxi_value, list) and all(isinstance(item, dict) for item in __guaxi_value):',
-  '        if not __guaxi_value:',
-  '            return ["没有找到解析解。可以补充初值、边界条件或数值求解区间后再尝试。"]',
-  '        for __guaxi_index, __guaxi_solution in enumerate(__guaxi_value, start=1):',
-  '            __guaxi_lines.append(f"### 解 {__guaxi_index}")',
-  '            __guaxi_lines.append("")',
-  '            for __guaxi_symbol, __guaxi_expr_value in __guaxi_solution.items():',
-  '                __guaxi_lines.append(f"$$\\n{sp.latex(sp.Eq(__guaxi_symbol, __guaxi_expr_value))}\\n$$")',
-  '            __guaxi_lines.append("")',
-  '        return __guaxi_lines',
-  '    if isinstance(__guaxi_value, (list, tuple, set, sp.FiniteSet)) and not isinstance(__guaxi_value, sp.Basic):',
-  '        __guaxi_values = list(__guaxi_value)',
-  '        if not __guaxi_values:',
-  '            return ["没有找到解析解。可以补充初值、边界条件或数值求解区间后再尝试。"]',
-  '        for __guaxi_index, __guaxi_item in enumerate(__guaxi_values, start=1):',
-  '            __guaxi_lines.append(f"### 解 {__guaxi_index}")',
-  '            __guaxi_lines.append("")',
-  '            __guaxi_lines.append(f"$$\\n{sp.latex(__guaxi_item)}\\n$$")',
-  '        return __guaxi_lines',
-  '    __guaxi_lines.append(f"$$\\n{sp.latex(__guaxi_value)}\\n$$")',
-  '    return __guaxi_lines',
-]
-
-// ---------------------------------------------------------------------------
-// [基座 5] 绘图基础设施（Matplotlib 配置 / 网格求值 / 存图）
-// ---------------------------------------------------------------------------
-const buildPlotInfraSection = () => [
-  'def __guaxi_configure_matplotlib():',
-  '    import matplotlib',
-  '    matplotlib.use("Agg", force=True)',
-  '    import matplotlib.pyplot as plt',
-  '    # 中文字体候选 + 正常显示负号，保证标题/坐标轴里的中文与负号不乱码。',
-  '    plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "Noto Sans CJK SC", "Source Han Sans SC", "Arial Unicode MS", "DejaVu Sans"]',
-  '    plt.rcParams["axes.unicode_minus"] = False',
-  '    return plt',
-  'def __guaxi_save_current_figure(__guaxi_plt):',
-  '    __guaxi_buffer = io.BytesIO()',
-  '    __guaxi_plt.savefig(__guaxi_buffer, format="png", dpi=150, bbox_inches="tight")',
-  '    __guaxi_plt.close("all")',
-  '    return base64.b64encode(__guaxi_buffer.getvalue()).decode("ascii")',
-  'def __guaxi_eval_grid(__guaxi_expr, __guaxi_symbols, __guaxi_values):',
-  '    __guaxi_callable = sp.lambdify(__guaxi_symbols, __guaxi_expr, "numpy")',
-  '    __guaxi_result = np.asarray(__guaxi_callable(*__guaxi_values), dtype=np.complex128)',
-  '    if __guaxi_result.shape == ():',
-  '        __guaxi_result = np.full_like(np.asarray(__guaxi_values[0], dtype=np.complex128), __guaxi_result, dtype=np.complex128)',
-  '    return __guaxi_result',
-  'def __guaxi_plot_candidate(__guaxi_expr):',
-  '    """把一条表达式/方程规整成「可绘制对象」。',
-  '',
-  '    规则：',
-  '      - `y = f(x)`、`z = f(x, y)` 视为函数定义，绘制右侧函数；',
-  '      - `x**2 + y**2 = 1` 这类无法识别因变量的式子保留为 Equality（走隐式等值线）；',
-  '      - 含 Derivative 的先 dsolve 取解析解再绘制；',
-  '      - 变换结果元组取主结果，最后做一次 simplify。',
-  '    """',
-  '    __guaxi_candidate = __guaxi_expr',
-  '    if isinstance(__guaxi_candidate, (list, tuple)):',
-  '        __guaxi_candidate = __guaxi_candidate[0] if __guaxi_candidate else 0',
-  '    if isinstance(__guaxi_candidate, sp.Equality):',
-  '        if isinstance(__guaxi_candidate.lhs, sp.Symbol) and __guaxi_candidate.lhs not in __guaxi_candidate.rhs.free_symbols:',
-  '            __guaxi_candidate = __guaxi_candidate.rhs',
-  '        elif isinstance(__guaxi_candidate.rhs, sp.Symbol) and __guaxi_candidate.rhs not in __guaxi_candidate.lhs.free_symbols:',
-  '            __guaxi_candidate = __guaxi_candidate.lhs',
-  '        else:',
-  '            __guaxi_eq_symbols = set(__guaxi_candidate.free_symbols or set())',
-  '            if len(__guaxi_eq_symbols) >= 2 and __guaxi_candidate.lhs != __guaxi_math_var and __guaxi_candidate.rhs != __guaxi_math_var:',
-  '                return __guaxi_candidate',
-  '            if __guaxi_candidate.lhs == __guaxi_math_var:',
-  '                __guaxi_candidate = __guaxi_candidate.rhs',
-  '            elif __guaxi_candidate.rhs == __guaxi_math_var:',
-  '                __guaxi_candidate = __guaxi_candidate.lhs',
-  '            elif len(__guaxi_candidate.rhs.free_symbols - {__guaxi_math_var}) <= len(__guaxi_candidate.lhs.free_symbols - {__guaxi_math_var}):',
-  '                __guaxi_candidate = __guaxi_candidate.rhs',
-  '            else:',
-  '                __guaxi_candidate = __guaxi_candidate.lhs',
-  '    if getattr(__guaxi_candidate, "has", lambda *_: False)(sp.Derivative):',
-  '        __guaxi_candidate = sp.dsolve(__guaxi_candidate).rhs',
-  '    __guaxi_candidate = __guaxi_normalize_transform_result(__guaxi_candidate)',
-  '    if hasattr(__guaxi_candidate, "doit"):',
-  '        __guaxi_candidate = __guaxi_candidate.doit()',
-  '    return sp.simplify(__guaxi_normalize_transform_result(__guaxi_candidate))',
-  'def __guaxi_prepare_plot_candidates(__guaxi_expr):',
-  '    __guaxi_source = __guaxi_expr if isinstance(__guaxi_expr, (list, tuple)) else [__guaxi_expr]',
-  '    __guaxi_candidates = []',
-  '    for __guaxi_item in __guaxi_source:',
-  '        try:',
-  '            __guaxi_candidates.append(__guaxi_plot_candidate(__guaxi_item))',
-  '        except Exception as __guaxi_plot_item_error:',
-  '            print(f"[GuaxiNotebookMath] 跳过无法绘制的项：{__guaxi_plot_item_error}")',
-  '    if not __guaxi_candidates:',
-  '        raise ValueError("没有可绘制的数学表达式。")',
-  '    return __guaxi_candidates',
-]
-
-// ---------------------------------------------------------------------------
-// [工具] plot2d —— 自适应绘图：1D 曲线 / 二元隐式 / 复平面 / 3D 曲面
-// ---------------------------------------------------------------------------
-const buildPlotMathSection = () => [
-  'def __guaxi_plot_math_expr(__guaxi_expr):',
-  '    __guaxi_plt = __guaxi_configure_matplotlib()',
-  '    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401',
-  '    __guaxi_candidates = __guaxi_prepare_plot_candidates(__guaxi_expr)',
-  '    __guaxi_all_symbols = sorted(set().union(*[set(getattr(item, "free_symbols", set()) or set()) for item in __guaxi_candidates]), key=lambda sym: str(sym))',
-  '    __guaxi_preferred = [sym for sym in __guaxi_all_symbols if str(sym) == __guaxi_math_var_name]',
-  '    __guaxi_plot_symbols = (__guaxi_preferred + [sym for sym in __guaxi_all_symbols if sym not in __guaxi_preferred])[:2]',
-  '    if not __guaxi_plot_symbols:',
-  '        __guaxi_plot_symbols = [__guaxi_math_var]',
-  '    __guaxi_extra_plot_symbols = [sym for sym in __guaxi_all_symbols if sym not in __guaxi_plot_symbols]',
-  '    if __guaxi_extra_plot_symbols:',
-  '        __guaxi_subs = {sym: 0 for sym in __guaxi_extra_plot_symbols}',
-  '        __guaxi_candidates = [item.subs(__guaxi_subs) if hasattr(item, "subs") else item for item in __guaxi_candidates]',
-  '        print("[GuaxiNotebookMath] 已把额外符号固定为 0：" + ", ".join(str(sym) for sym in __guaxi_extra_plot_symbols))',
-  '    __guaxi_x = __guaxi_plot_symbols[0]',
-  '    __guaxi_y = __guaxi_plot_symbols[1] if len(__guaxi_plot_symbols) > 1 else None',
-  '    __guaxi_xs = np.linspace(__guaxi_math_min, __guaxi_math_max, 700)',
-  '    __guaxi_title = __guaxi_math_expr_raw',
-  '    if __guaxi_y is None:',
-  '        __guaxi_plt.figure(figsize=(8.8, 4.9))',
-  '        for __guaxi_item in __guaxi_candidates:',
-  '            __guaxi_values = __guaxi_eval_grid(__guaxi_item, [__guaxi_x], [__guaxi_xs])',
-  '            if np.iscomplexobj(__guaxi_values) and np.nanmax(np.abs(np.imag(__guaxi_values))) > 1e-9:',
-  '                __guaxi_plt.plot(__guaxi_xs, np.real(__guaxi_values), label=f"Re({sp.sstr(__guaxi_item)})")',
-  '                __guaxi_plt.plot(__guaxi_xs, np.imag(__guaxi_values), label=f"Im({sp.sstr(__guaxi_item)})")',
-  '            else:',
-  '                __guaxi_plt.plot(__guaxi_xs, np.real(__guaxi_values), label=sp.sstr(__guaxi_item))',
-  '        __guaxi_plt.axhline(0, color="#888", linewidth=0.8)',
-  '        __guaxi_plt.axvline(0, color="#888", linewidth=0.8)',
-  '        __guaxi_plt.grid(True, alpha=0.28)',
-  '        __guaxi_plt.title(__guaxi_title)',
-  '        __guaxi_plt.xlabel(str(__guaxi_x))',
-  '        __guaxi_plt.ylabel("f(" + str(__guaxi_x) + ")")',
-  '        if len(__guaxi_candidates) > 1:',
-  '            __guaxi_plt.legend(loc="best")',
-  '        __guaxi_plt.tight_layout()',
-  '        return __guaxi_save_current_figure(__guaxi_plt), f"曲线图：`{__guaxi_x} ∈ [{__guaxi_math_min}, {__guaxi_math_max}]`"',
-  '    __guaxi_ys = np.linspace(__guaxi_math_min, __guaxi_math_max, 260)',
-  '    __guaxi_X, __guaxi_Y = np.meshgrid(__guaxi_xs, __guaxi_ys)',
-  '    __guaxi_first = __guaxi_candidates[0]',
-  '    if isinstance(__guaxi_first, sp.Equality) or len(__guaxi_candidates) > 1:',
-  '        __guaxi_plt.figure(figsize=(7.2, 6.2))',
-  '        for __guaxi_item in __guaxi_candidates:',
-  '            __guaxi_implicit = (__guaxi_item.lhs - __guaxi_item.rhs) if isinstance(__guaxi_item, sp.Equality) else __guaxi_item',
-  '            __guaxi_values = np.real(__guaxi_eval_grid(__guaxi_implicit, [__guaxi_x, __guaxi_y], [__guaxi_X, __guaxi_Y]))',
-  '            __guaxi_plt.contour(__guaxi_X, __guaxi_Y, __guaxi_values, levels=[0], linewidths=1.8)',
-  '        __guaxi_plt.axhline(0, color="#888", linewidth=0.8)',
-  '        __guaxi_plt.axvline(0, color="#888", linewidth=0.8)',
-  '        __guaxi_plt.grid(True, alpha=0.24)',
-  '        __guaxi_plt.title(__guaxi_title)',
-  '        __guaxi_plt.xlabel(str(__guaxi_x))',
-  '        __guaxi_plt.ylabel(str(__guaxi_y))',
-  '        __guaxi_plt.tight_layout()',
-  '        return __guaxi_save_current_figure(__guaxi_plt), f"二维隐式图：`{__guaxi_x}, {__guaxi_y} ∈ [{__guaxi_math_min}, {__guaxi_math_max}]`"',
-  '    __guaxi_Z = __guaxi_eval_grid(__guaxi_first, [__guaxi_x, __guaxi_y], [__guaxi_X, __guaxi_Y])',
-  '    if np.iscomplexobj(__guaxi_Z) and np.nanmax(np.abs(np.imag(__guaxi_Z))) > 1e-9:',
-  '        __guaxi_fig, (__guaxi_ax1, __guaxi_ax2) = __guaxi_plt.subplots(1, 2, figsize=(10.8, 4.8), constrained_layout=True)',
-  '        __guaxi_im1 = __guaxi_ax1.imshow(np.abs(__guaxi_Z), extent=[__guaxi_math_min, __guaxi_math_max, __guaxi_math_min, __guaxi_math_max], origin="lower", aspect="auto", cmap="viridis")',
-  '        __guaxi_ax1.set_title("幅值 |f|")',
-  '        __guaxi_ax1.set_xlabel(str(__guaxi_x))',
-  '        __guaxi_ax1.set_ylabel(str(__guaxi_y))',
-  '        __guaxi_fig.colorbar(__guaxi_im1, ax=__guaxi_ax1, fraction=0.046)',
-  '        __guaxi_im2 = __guaxi_ax2.imshow(np.angle(__guaxi_Z), extent=[__guaxi_math_min, __guaxi_math_max, __guaxi_math_min, __guaxi_math_max], origin="lower", aspect="auto", cmap="twilight")',
-  '        __guaxi_ax2.set_title("相位 arg(f)")',
-  '        __guaxi_ax2.set_xlabel(str(__guaxi_x))',
-  '        __guaxi_ax2.set_ylabel(str(__guaxi_y))',
-  '        __guaxi_fig.colorbar(__guaxi_im2, ax=__guaxi_ax2, fraction=0.046)',
-  '        __guaxi_fig.suptitle(__guaxi_title)',
-  '        return __guaxi_save_current_figure(__guaxi_plt), f"复变量图：`{__guaxi_x}, {__guaxi_y} ∈ [{__guaxi_math_min}, {__guaxi_math_max}]`"',
-  '    __guaxi_fig = __guaxi_plt.figure(figsize=(8.4, 6.2))',
-  '    __guaxi_ax = __guaxi_fig.add_subplot(111, projection="3d")',
-  '    __guaxi_ax.plot_surface(__guaxi_X, __guaxi_Y, np.real(__guaxi_Z), cmap="viridis", linewidth=0, antialiased=True, alpha=0.92)',
-  '    __guaxi_ax.set_title(__guaxi_title)',
-  '    __guaxi_ax.set_xlabel(str(__guaxi_x))',
-  '    __guaxi_ax.set_ylabel(str(__guaxi_y))',
-  '    __guaxi_ax.set_zlabel("f")',
-  '    __guaxi_fig.tight_layout()',
-  '    return __guaxi_save_current_figure(__guaxi_plt), f"三维曲面：`{__guaxi_x}, {__guaxi_y} ∈ [{__guaxi_math_min}, {__guaxi_math_max}]`"',
-]
-
-// ---------------------------------------------------------------------------
-// [工具] series —— 幂级数 / 泰勒展开：展开式 + 截断逼近对比图
-// ---------------------------------------------------------------------------
-const buildSeriesSection = () => [
-  'def __guaxi_run_series(__guaxi_expr):',
-  '    """对单变量函数做 x0 处的级数展开，返回 (markdown 行列表, png_base64 或 None)。"""',
-  '    __guaxi_target = __guaxi_expr[0] if isinstance(__guaxi_expr, (list, tuple)) else __guaxi_expr',
-  '    if isinstance(__guaxi_target, sp.Equality):',
-  '        __guaxi_target = __guaxi_target.rhs',
-  '    __guaxi_symbols = sorted(__guaxi_expr_free_symbols(__guaxi_target), key=lambda sym: str(sym))',
-  '    __guaxi_var = __guaxi_math_var if __guaxi_math_var in __guaxi_symbols else (__guaxi_symbols[0] if __guaxi_symbols else __guaxi_math_var)',
-  '    __guaxi_full = sp.series(__guaxi_target, __guaxi_var, __guaxi_math_series_point, __guaxi_math_series_order)',
-  '    __guaxi_poly = __guaxi_full.removeO()',
-  '    __guaxi_lines = ["## 级数展开", "",',
-  '                     f"在 `{__guaxi_var} = {__guaxi_math_series_point}` 处展开到 {__guaxi_math_series_order} 阶：", ""]',
-  '    __guaxi_lines.append(__guaxi_latex_block("含余项：", __guaxi_full))',
-  '    __guaxi_lines.append(__guaxi_latex_block("截断多项式：", __guaxi_poly))',
-  '    __guaxi_png = None',
-  '    try:',
-  '        __guaxi_plt = __guaxi_configure_matplotlib()',
-  '        __guaxi_xs = np.linspace(__guaxi_math_min, __guaxi_math_max, 600)',
-  '        __guaxi_plt.figure(figsize=(8.8, 4.9))',
-  '        __guaxi_exact = np.real(__guaxi_eval_grid(__guaxi_target, [__guaxi_var], [__guaxi_xs]))',
-  '        __guaxi_approx = np.real(__guaxi_eval_grid(__guaxi_poly, [__guaxi_var], [__guaxi_xs]))',
-  '        __guaxi_plt.plot(__guaxi_xs, __guaxi_exact, label="原函数", linewidth=2.0)',
-  '        __guaxi_plt.plot(__guaxi_xs, __guaxi_approx, "--", label=f"{__guaxi_math_series_order} 阶逼近", linewidth=1.8)',
-  '        __guaxi_plt.axhline(0, color="#888", linewidth=0.8)',
-  '        __guaxi_plt.axvline(float(__guaxi_math_series_point), color="#c0392b", linewidth=0.8, alpha=0.6)',
-  '        __guaxi_plt.grid(True, alpha=0.28)',
-  '        __guaxi_plt.legend(loc="best")',
-  '        __guaxi_plt.title(f"级数逼近：{__guaxi_math_expr_raw}")',
-  '        __guaxi_plt.tight_layout()',
-  '        __guaxi_png = __guaxi_save_current_figure(__guaxi_plt)',
-  '    except Exception as __guaxi_series_plot_error:',
-  '        print(f"[GuaxiNotebookMath] 级数逼近图绘制失败：{__guaxi_series_plot_error}")',
-  '    return __guaxi_lines, __guaxi_png',
-]
-
-// ---------------------------------------------------------------------------
-// [工具] distribution —— 统计分布：优先 scipy.stats，缺失时回退 sympy.stats
-// ---------------------------------------------------------------------------
-// 输入约定：直接写 scipy.stats 的分布构造，如 `norm(0, 1)`、`binom(10, 0.4)`、
-//   `expon(scale=2)`、`poisson(3)`。本工具按名字解析，绘制 PDF/PMF 与 CDF。
-const buildDistributionSection = () => [
-  'def __guaxi_run_distribution(__guaxi_raw):',
-  '    """绘制常见统计分布的 PDF/PMF 与 CDF。返回 (markdown 行, png_base64 或 None)。"""',
-  '    __guaxi_text = __guaxi_strip_math_wrappers(__guaxi_raw).strip()',
-  '    __guaxi_match = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\\s*\\((.*)\\)\\s*$", __guaxi_text, re.S)',
-  '    if not __guaxi_match:',
-  '        return (["无法识别分布。请按 `分布名(参数)` 书写，例如 `norm(0, 1)`、`binom(10, 0.4)`、`poisson(3)`。"], None)',
-  '    __guaxi_name = __guaxi_match.group(1).lower()',
-  '    __guaxi_arg_text = __guaxi_match.group(2).strip()',
-  '    __guaxi_lines = ["## 统计分布", "", f"分布：`{__guaxi_text}`", ""]',
-  '    try:',
-  '        from scipy import stats as __guaxi_scipy_stats',
-  '    except Exception as __guaxi_scipy_error:',
-  '        __guaxi_lines.append(f"未检测到 scipy（{__guaxi_scipy_error}）。请确认 Python 运行时已安装 scipy 后重试。")',
-  '        return (__guaxi_lines, None)',
-  '    __guaxi_dist_factory = getattr(__guaxi_scipy_stats, __guaxi_name, None)',
-  '    if __guaxi_dist_factory is None:',
-  '        return ([f"scipy.stats 中没有名为 `{__guaxi_name}` 的分布。"], None)',
-  '    # 用受控命名空间解析参数，仅暴露数值与常量，避免执行任意代码。',
-  '    __guaxi_arg_ns = {"__builtins__": {}, "pi": math.pi, "e": math.e, "inf": math.inf, "sqrt": math.sqrt}',
-  '    try:',
-  '        __guaxi_args = eval(f"__guaxi__pack__({__guaxi_arg_text})", {"__guaxi__pack__": lambda *a, **k: (a, k), "__builtins__": {}}, __guaxi_arg_ns) if __guaxi_arg_text else ((), {})',
-  '    except Exception as __guaxi_arg_error:',
-  '        return ([f"分布参数解析失败：{__guaxi_arg_error}"], None)',
-  '    __guaxi_pos, __guaxi_kw = __guaxi_args',
-  '    __guaxi_dist = __guaxi_dist_factory(*__guaxi_pos, **__guaxi_kw)',
-  '    # scipy 中离散分布工厂是 rv_discrete 实例（如 binom/poisson），连续分布是 rv_continuous。',
-  '    __guaxi_is_discrete = isinstance(__guaxi_dist_factory, __guaxi_scipy_stats.rv_discrete)',
-  '    try:',
-  '        __guaxi_mean = float(__guaxi_dist.mean())',
-  '        __guaxi_var_value = float(__guaxi_dist.var())',
-  '        __guaxi_lines.append(f"- 期望 E[X] = {__guaxi_mean:.4g}")',
-  '        __guaxi_lines.append(f"- 方差 D[X] = {__guaxi_var_value:.4g}")',
-  '    except Exception:',
-  '        pass',
-  '    __guaxi_png = None',
-  '    try:',
-  '        __guaxi_plt = __guaxi_configure_matplotlib()',
-  '        __guaxi_lo, __guaxi_hi = __guaxi_dist.ppf(0.001), __guaxi_dist.ppf(0.999)',
-  '        if not np.isfinite(__guaxi_lo): __guaxi_lo = __guaxi_math_min',
-  '        if not np.isfinite(__guaxi_hi): __guaxi_hi = __guaxi_math_max',
-  '        __guaxi_fig, (__guaxi_ax1, __guaxi_ax2) = __guaxi_plt.subplots(1, 2, figsize=(10.6, 4.6), constrained_layout=True)',
-  '        if __guaxi_is_discrete:',
-  '            __guaxi_ks = np.arange(int(np.floor(__guaxi_lo)), int(np.ceil(__guaxi_hi)) + 1)',
-  '            __guaxi_ax1.bar(__guaxi_ks, __guaxi_dist.pmf(__guaxi_ks), color="#2980b9", alpha=0.85)',
-  '            __guaxi_ax1.set_title("概率质量函数 PMF")',
-  '            __guaxi_ax2.step(__guaxi_ks, __guaxi_dist.cdf(__guaxi_ks), where="post", color="#c0392b")',
-  '        else:',
-  '            __guaxi_grid = np.linspace(__guaxi_lo, __guaxi_hi, 500)',
-  '            __guaxi_ax1.plot(__guaxi_grid, __guaxi_dist.pdf(__guaxi_grid), color="#2980b9", linewidth=2.0)',
-  '            __guaxi_ax1.fill_between(__guaxi_grid, __guaxi_dist.pdf(__guaxi_grid), alpha=0.18, color="#2980b9")',
-  '            __guaxi_ax1.set_title("概率密度函数 PDF")',
-  '            __guaxi_ax2.plot(__guaxi_grid, __guaxi_dist.cdf(__guaxi_grid), color="#c0392b", linewidth=2.0)',
-  '        __guaxi_ax1.grid(True, alpha=0.28)',
-  '        __guaxi_ax2.set_title("累积分布函数 CDF")',
-  '        __guaxi_ax2.grid(True, alpha=0.28)',
-  '        __guaxi_fig.suptitle(f"统计分布：{__guaxi_text}")',
-  '        __guaxi_png = __guaxi_save_current_figure(__guaxi_plt)',
-  '    except Exception as __guaxi_dist_plot_error:',
-  '        __guaxi_lines.append(f"分布绘图失败：{__guaxi_dist_plot_error}")',
-  '    return (__guaxi_lines, __guaxi_png)',
-]
-
-// ---------------------------------------------------------------------------
-// [工具] dsolve —— 微分方程：解析解 dsolve + 数值解 scipy.solve_ivp
-// ---------------------------------------------------------------------------
-// 输入约定：用 SymPy 写法，如 `Eq(Derivative(y(x), x, x) + y(x), 0)`、
-//   `Derivative(y(t), t) + y(t) - sin(t)`。含初值时可写成方程组（用 ; 分隔）。
-const buildDsolveSection = () => [
-  'def __guaxi_run_dsolve(__guaxi_expr):',
-  '    """求解 ODE：先给解析解；若退化为一阶可数值化，则叠加 solve_ivp 数值曲线。"""',
-  '    __guaxi_lines = ["## 微分方程", ""]',
-  '    __guaxi_eqs = __guaxi_expr if isinstance(__guaxi_expr, (list, tuple)) else [__guaxi_expr]',
-  '    __guaxi_solutions = []',
-  '    for __guaxi_eq in __guaxi_eqs:',
-  '        try:',
-  '            __guaxi_sol = sp.dsolve(__guaxi_eq)',
-  '            __guaxi_solutions.append(__guaxi_sol)',
-  '            __guaxi_lines.append(__guaxi_latex_block("解析解：", __guaxi_sol))',
-  '        except Exception as __guaxi_dsolve_error:',
-  '            __guaxi_lines.append(f"该方程的解析解求解失败：{__guaxi_dsolve_error}")',
-  '    __guaxi_png = None',
-  '    try:',
-  '        from scipy.integrate import solve_ivp as __guaxi_solve_ivp',
-  '        # 仅对「单个一阶 ODE：y\' = g(x, y)」做数值演示，初值默认 y(x0)=1。',
-  '        __guaxi_eq0 = __guaxi_eqs[0]',
-  '        __guaxi_rel = __guaxi_eq0 if isinstance(__guaxi_eq0, sp.Equality) else sp.Eq(__guaxi_eq0, 0)',
-  '        __guaxi_funcs = list(__guaxi_rel.atoms(sp.Function))',
-  '        if len(__guaxi_funcs) == 1:',
-  '            __guaxi_yf = __guaxi_funcs[0]',
-  '            __guaxi_ivar = list(__guaxi_yf.free_symbols)[0]',
-  '            __guaxi_dydx = sp.Derivative(__guaxi_yf, __guaxi_ivar)',
-  '            __guaxi_solved = sp.solve(__guaxi_rel, __guaxi_dydx)',
-  '            if len(__guaxi_solved) == 1:',
-  '                __guaxi_yy = sp.Symbol("__guaxi_yy")',
-  '                __guaxi_rhs = __guaxi_solved[0].subs(__guaxi_yf, __guaxi_yy)',
-  '                __guaxi_rhs_fn = sp.lambdify((__guaxi_ivar, __guaxi_yy), __guaxi_rhs, "numpy")',
-  '                __guaxi_t_span = (float(__guaxi_math_min), float(__guaxi_math_max))',
-  '                __guaxi_t_eval = np.linspace(__guaxi_t_span[0], __guaxi_t_span[1], 400)',
-  '                __guaxi_num = __guaxi_solve_ivp(lambda __t, __y: [__guaxi_rhs_fn(__t, __y[0])], __guaxi_t_span, [1.0], t_eval=__guaxi_t_eval)',
-  '                __guaxi_plt = __guaxi_configure_matplotlib()',
-  '                __guaxi_plt.figure(figsize=(8.8, 4.9))',
-  '                __guaxi_plt.plot(__guaxi_num.t, __guaxi_num.y[0], color="#2980b9", linewidth=2.0, label="数值解 y(x0)=1")',
-  '                __guaxi_plt.axhline(0, color="#888", linewidth=0.8)',
-  '                __guaxi_plt.grid(True, alpha=0.28)',
-  '                __guaxi_plt.legend(loc="best")',
-  '                __guaxi_plt.title(f"数值解：{__guaxi_math_expr_raw}")',
-  '                __guaxi_plt.tight_layout()',
-  '                __guaxi_png = __guaxi_save_current_figure(__guaxi_plt)',
-  '                __guaxi_lines.append("已用 `scipy.solve_ivp` 在给定区间绘制数值解（默认初值 y(x0)=1）。")',
-  '    except Exception as __guaxi_numeric_error:',
-  '        print(f"[GuaxiNotebookMath] 数值解绘制跳过：{__guaxi_numeric_error}")',
-  '    return (__guaxi_lines, __guaxi_png)',
-]
-
-// ---------------------------------------------------------------------------
-// [工具] transform —— 积分变换：拉普拉斯 / 傅里叶（正变换）
-// ---------------------------------------------------------------------------
-// 输入约定：写时域函数，如 `exp(-t)`、`sin(t)`、`Heaviside(t)`；
-//   通过 mode 选择 transform，子类型由表达式里是否出现约定变量推断，
-//   默认对 t 做拉普拉斯变换得到 F(s)。
-const buildTransformSection = () => [
-  'def __guaxi_run_transform(__guaxi_expr, __guaxi_kind):',
-  '    """对单变量函数做拉普拉斯或傅里叶正变换。"""',
-  '    __guaxi_target = __guaxi_expr[0] if isinstance(__guaxi_expr, (list, tuple)) else __guaxi_expr',
-  '    if isinstance(__guaxi_target, sp.Equality):',
-  '        __guaxi_target = __guaxi_target.rhs',
-  '    __guaxi_t = __guaxi_math_locals.get("t", sp.Symbol("t"))',
-  '    if __guaxi_kind == "fourier":',
-  '        __guaxi_w = sp.Symbol("omega")',
-  '        __guaxi_value = sp.fourier_transform(__guaxi_target, __guaxi_t, __guaxi_w)',
-  '        return [__guaxi_latex_block("傅里叶变换 F(ω)：", __guaxi_value)]',
-  '    __guaxi_s = sp.Symbol("s")',
-  '    __guaxi_value = sp.laplace_transform(__guaxi_target, __guaxi_t, __guaxi_s, noconds=True)',
-  '    return [__guaxi_latex_block("拉普拉斯变换 F(s)：", __guaxi_value)]',
-]
-
-// ---------------------------------------------------------------------------
-// [调度] 按 mode 执行对应工具，并组装 __guaxi_plotly_display__ 输出
-// ---------------------------------------------------------------------------
-// 设计说明：
-//   每个分支只负责「计算 + 往 __guaxi_math_lines 追加 markdown / 设置 __guaxi_image_base64」。
-//   末尾统一决定输出 markdown 还是 image：纯绘图(plot2d/distribution/series 出图时)走
-//   image；其余走 markdown。新增工具时在此加一个 elif 分支即可。
-const buildDispatchSection = () => [
-  '__guaxi_image_base64 = None',
-  'if __guaxi_math_mode == "simplify":',
-  '    __guaxi_math_lines.append(__guaxi_latex_block("化简结果：", sp.simplify(__guaxi_math_expr)))',
-  'elif __guaxi_math_mode == "derivative":',
-  '    __guaxi_math_lines.append(__guaxi_latex_block("导数：", sp.diff(__guaxi_math_expr, __guaxi_math_var)))',
-  'elif __guaxi_math_mode == "integral":',
-  '    __guaxi_math_lines.append(__guaxi_latex_block("积分：", sp.integrate(__guaxi_math_expr, __guaxi_math_var)))',
-  'elif __guaxi_math_mode == "solve":',
-  '    __guaxi_solve_kind, __guaxi_solve_value = __guaxi_try_symbolic_solve(__guaxi_math_expr)',
-  '    if __guaxi_solve_kind == "error":',
-  '        __guaxi_math_lines.append("当前方程超出自动解析求解范围。可补充边界/初始条件，或改写为 `Eq(...)`、方程组、`Derivative(...)` 形式。")',
-  '        __guaxi_math_lines.append(f"`{__guaxi_solve_value}`")',
-  '    elif __guaxi_solve_value in ([], sp.EmptySet):',
-  '        __guaxi_math_lines.append("没有找到解析解。可调整变量、区间或补充条件后尝试数值解。")',
-  '    else:',
-  '        __guaxi_math_lines.extend(__guaxi_describe_solution(__guaxi_solve_kind, __guaxi_solve_value))',
-  'elif __guaxi_math_mode == "series":',
-  '    __guaxi_series_lines, __guaxi_image_base64 = __guaxi_run_series(__guaxi_math_expr)',
-  '    __guaxi_math_lines.extend(__guaxi_series_lines)',
-  'elif __guaxi_math_mode == "distribution":',
-  '    __guaxi_dist_lines, __guaxi_image_base64 = __guaxi_run_distribution(__guaxi_math_expr_raw)',
-  '    __guaxi_math_lines.extend(__guaxi_dist_lines)',
-  'elif __guaxi_math_mode == "dsolve":',
-  '    __guaxi_ds_lines, __guaxi_image_base64 = __guaxi_run_dsolve(__guaxi_math_expr)',
-  '    __guaxi_math_lines.extend(__guaxi_ds_lines)',
-  'elif __guaxi_math_mode in ("transform", "laplace", "fourier"):',
-  '    __guaxi_tf_kind = "fourier" if __guaxi_math_mode == "fourier" else "laplace"',
-  '    __guaxi_math_lines.extend(__guaxi_run_transform(__guaxi_math_expr, __guaxi_tf_kind))',
-  'elif __guaxi_math_mode == "plot2d":',
-  '    __guaxi_image_base64, __guaxi_plot_note = __guaxi_plot_math_expr(__guaxi_math_expr)',
-  '    __guaxi_math_lines.append(__guaxi_plot_note)',
-  '    print(f"[GuaxiNotebookMath] 已生成绘图，字节数={len(base64.b64decode(__guaxi_image_base64))}")',
-  'else:',
-  '    __guaxi_math_lines.append(__guaxi_latex_block("计算结果：", sp.N(__guaxi_math_expr)))',
-  '# 输出协议：plot2d 纯图走 image；其余（含 series/distribution 这类“图+文字”）走 markdown，',
-  '# 并把 PNG 以 data URI 内嵌进 markdown，保证文字说明与图像在同一输出模块里。',
-  'if __guaxi_math_mode == "plot2d" and __guaxi_image_base64:',
-  '    __guaxi_plotly_display__ = {"type": "image", "mime": "image/png", "data_base64": __guaxi_image_base64}',
-  'else:',
-  '    if __guaxi_image_base64:',
-  '        __guaxi_math_lines.append(f"![figure](data:image/png;base64,{__guaxi_image_base64})")',
-  '    __guaxi_plotly_display__ = {"type": "markdown", "mime": "text/markdown", "markdown": "\\n\\n".join(__guaxi_math_lines)}',
-  '_result = None',
-]
-
-// ---------------------------------------------------------------------------
-// 主入口：组装所有分区为最终 Python 程序
-// ---------------------------------------------------------------------------
+//   入参：
+//     source   —— 数学块整段文本（命令式工作区源码）。
+//     mode     —— 可选，工具栏快捷动作；提供时把单表达式包一层（见 MATH_MODE_WRAPPERS）。
+//     variable / rangeMin / rangeMax / seriesPoint / seriesOrder —— 绘图 / 级数等选项。
+//   兼容：仍接受旧字段 `expression`（等价于 source）。
 export const buildNotebookLabMathCode = ({
+  source = '',
   expression = '',
-  mode = 'plot2d',
+  mode = '',
   variable = 'x',
   rangeMin = -10,
   rangeMax = 10,
   seriesPoint = 0,
   seriesOrder = 6,
 } = {}) => {
-  const expr = normalizeText(expression)
-  if (!expr) return ''
-  const header = [
-    // 运行时参数（由前端工具栏 / 弹窗传入），全部以受控字面量写入，杜绝注入。
-    `__guaxi_math_expr_raw = ${JSON.stringify(expr)}`,
-    `__guaxi_math_mode = ${JSON.stringify(normalizeText(mode || 'plot2d'))}`,
-    `__guaxi_math_var_name = ${JSON.stringify(normalizeText(variable || 'x'))}`,
-    `__guaxi_math_min = ${Number.isFinite(Number(rangeMin)) ? Number(rangeMin) : -10}`,
-    `__guaxi_math_max = ${Number.isFinite(Number(rangeMax)) ? Number(rangeMax) : 10}`,
-    `__guaxi_math_series_point = ${Number.isFinite(Number(seriesPoint)) ? Number(seriesPoint) : 0}`,
-    `__guaxi_math_series_order = ${Math.max(1, Math.min(30, Number.parseInt(seriesOrder, 10) || 6))}`,
-  ]
+  const rawSource = normalizeText(source || expression)
+  if (!rawSource) return ''
+
+  const options = {
+    variable: normalizeText(variable || 'x'),
+    rangeMin: Number.isFinite(Number(rangeMin)) ? Number(rangeMin) : -10,
+    rangeMax: Number.isFinite(Number(rangeMax)) ? Number(rangeMax) : 10,
+    seriesPoint: Number.isFinite(Number(seriesPoint)) ? Number(seriesPoint) : 0,
+    seriesOrder: Math.max(1, Math.min(30, Number.parseInt(seriesOrder, 10) || 6)),
+  }
+
+  // 工具栏快捷动作：仅当 source 是「单条、不含换行、且不像已写好的命令」时才包裹，
+  // 避免破坏用户在工作区里写的多行程序。
+  const wrapper = MATH_MODE_WRAPPERS[normalizeText(mode)]
+  const looksLikeProgram = /\n/.test(rawSource) || /[A-Za-z_]\w*\s*\(/.test(rawSource) || /=/.test(rawSource)
+  const effectiveSource = (wrapper && !looksLikeProgram) ? wrapper(rawSource, options) : rawSource
+
+  const engineBase64 = encodeEngineSourceBase64(GUAXIMATH_ENGINE_SOURCE)
+  const optionsJson = JSON.stringify(options)
+
+  // 生成的 Python：受控字面量写入，杜绝注入。
   return [
-    ...buildImportSection(),
-    ...header,
-    ...buildSymbolTableSection(),
-    ...buildParserSection(),
-    ...buildHelperSection(),
-    ...buildPlotInfraSection(),
-    ...buildPlotMathSection(),
-    ...buildSeriesSection(),
-    ...buildDistributionSection(),
-    ...buildDsolveSection(),
-    ...buildTransformSection(),
-    ...buildDispatchSection(),
+    '# === Guaxi 数学工作区 bootstrap（自动生成，逻辑在 guaximath_engine.py）===',
+    'import json as __gx_json',
+    `__gx_engine_version = ${toPyStr(GUAXIMATH_ENGINE_VERSION)}`,
+    `__gx_source = ${toPyStr(effectiveSource)}`,
+    `__gx_options = __gx_json.loads(${toPyStr(optionsJson)})`,
+    '',
+    '# 1) 优先用 worker 已物化、随 import 常驻的真实引擎模块',
+    '__gx_engine = None',
+    'try:',
+    '    import guaximath_engine as __gx_engine',
+    '    if getattr(__gx_engine, "ENGINE_VERSION", None) != __gx_engine_version:',
+    '        __gx_engine = None  # 版本不符则走内联兜底，避免新旧逻辑串台',
+    'except Exception:',
+    '    __gx_engine = None',
+    '',
+    '# 2) 兜底：exec 由前端 ?raw 内联进来的引擎源码（同一会话只 exec 一次，版本守卫）',
+    'if __gx_engine is None:',
+    '    if globals().get("__GUAXIMATH_INLINE_VERSION__") != __gx_engine_version:',
+    '        import base64 as __gx_b64',
+    `        __gx_src = __gx_b64.b64decode(${toPyStr(engineBase64)}).decode("utf-8")`,
+    '        __gx_mod_ns = {"__name__": "guaximath_engine_inline"}',
+    '        exec(compile(__gx_src, "<guaximath_engine_inline>", "exec"), __gx_mod_ns)',
+    '        globals()["__GUAXIMATH_INLINE__"] = __gx_mod_ns',
+    '        globals()["__GUAXIMATH_INLINE_VERSION__"] = __gx_engine_version',
+    '    __gx_inline = globals().get("__GUAXIMATH_INLINE__") or {}',
+    '    class __GxInlineEngine:  # 轻量包装，统一 .run 接口',
+    '        run = staticmethod(__gx_inline.get("run"))',
+    '    __gx_engine = __GxInlineEngine',
+    '',
+    '# 3) 执行并把 display 交给 worker 转发',
+    '__guaxi_plotly_display__ = __gx_engine.run(__gx_source, __gx_options, globals())',
+    '_result = None',
   ].join('\n')
 }
 
-
-
-
-
+export { normalizeText }

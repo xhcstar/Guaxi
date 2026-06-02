@@ -316,13 +316,13 @@
               <span>{{ isCellBusy(cell) ? '运行中' : 'Math' }}</span>
             </span>
             <div class="guaxi-notebook__math-actions">
-              <!-- 主操作：按当前默认设置绘制图像，等价于工具菜单里的“绘制图像”。 -->
+              <!-- 主操作：运行数学工作区（逐行计算 / 绘图）。 -->
               <button
                 type="button"
                 class="guaxi-notebook__icon-btn"
-                data-tooltip="绘制当前函数图像"
-                aria-label="绘制当前函数图像"
-                @click="runMathCell(cell, false, 'plot2d')"
+                data-tooltip="运行数学工作区（逐行计算 / 绘图）"
+                aria-label="运行数学工作区"
+                @click="runMathCell(cell, false)"
               >
                 <Icon :icon="playIcon" width="16" height="16" />
               </button>
@@ -341,7 +341,7 @@
                   type="button"
                   class="guaxi-notebook__icon-btn guaxi-notebook__math-menu-trigger"
                   :class="{ 'is-active': activeMathToolMenuKey === cell.key }"
-                  data-tooltip="数学工具：求解 / 级数 / 分布 / 变换"
+                  data-tooltip="插入命令：微积分 / 线代 / 概率 / 绘图"
                   aria-label="打开数学工具菜单"
                   :aria-expanded="activeMathToolMenuKey === cell.key"
                   @click="toggleMathToolMenu(cell)"
@@ -362,11 +362,11 @@
                     <div class="guaxi-notebook__math-menu-group-title">{{ group.label }}</div>
                     <button
                       v-for="item in group.items"
-                      :key="item.mode + item.label"
+                      :key="item.label"
                       type="button"
                       class="guaxi-notebook__math-menu-item"
                       role="menuitem"
-                      @click="handleMathToolSelect(cell, item.mode)"
+                      @click="handleMathToolSelect(cell, item.snippet)"
                     >
                       <span class="guaxi-notebook__math-menu-item-label">{{ item.label }}</span>
                       <span class="guaxi-notebook__math-menu-item-hint">{{ item.hint }}</span>
@@ -374,13 +374,13 @@
                   </div>
                 </div>
               </div>
-              <!-- 写回：把绘图结果直接插入为 Markdown Cell，方便沉淀到文档。 -->
+              <!-- 写回：运行并把结果插入为 Markdown Cell，方便沉淀到文档。 -->
               <button
                 type="button"
                 class="guaxi-notebook__icon-btn"
-                data-tooltip="绘制图像并写回 Markdown"
-                aria-label="绘制图像并写回 Markdown"
-                @click="runMathCell(cell, true, 'plot2d')"
+                data-tooltip="运行并写回 Markdown"
+                aria-label="运行并写回 Markdown"
+                @click="runMathCell(cell, true)"
               >
                 <Icon :icon="saveIcon" width="16" height="16" />
               </button>
@@ -411,7 +411,7 @@
             :document-path="filePath"
             :model-value="cell.expression"
             :theme="theme"
-            placeholder="输入 LaTeX / SymPy 公式，例如 sin(x) / x"
+            placeholder="数学工作区：每行写赋值 / 表达式 / 命令&#10;f = sin(x)/x&#10;limit(f, x, 0)&#10;plot(f, (x,-10,10))"
             @update:model-value="updateMathCell(cell.key, $event)"
           />
           <div class="guaxi-notebook__math-preview markdown-body" v-html="getRenderedMathCellHtml(cell)"></div>
@@ -7510,49 +7510,34 @@ const runNotebookLabGeneratedCode = async (cell, {
   }
 }
 
-const runMathCell = async (cell, writeBack = false, mode = 'plot2d', options = {}) => {
-  const expression = String(cell?.expression || '').trim()
-  if (!expression) {
-    message.warning('数学块内容为空')
+const runMathCell = async (cell, writeBack = false, mode = '', options = {}) => {
+  const source = String(cell?.expression || '').trim()
+  if (!source) {
+    message.warning('数学工作区为空')
     return
   }
-  const mathMode = String(mode || 'plot2d')
 
-  // 设计说明：
-  // 1. 数学块使用同一个 Python 持久会话执行 SymPy/绘图代码，所以它可以读取前面 Python Cell 已经准备好的变量；
-  // 2. 运行结果仍保存为普通输出模块，写回时插入为新的 Markdown Cell，避免破坏原公式块；
-  // 3. 工具栏的下拉菜单按“函数与方程 / 微积分 / 级数 / 统计分布 / 积分变换”分组，
-  //    每个菜单项把对应 mode（及可选的变量名、绘图区间、级数展开点/阶数）透传到这里，
-  //    再交给模块化的 buildNotebookLabMathCode（见 utils/guaxiNotebookMathRuntime.js）生成代码。
+  // 设计说明（命令式数学工作区 v2）：
+  // 1. 数学块是一个高级数学 REPL：整段文本（多行命令/赋值/裸表达式）作为 source 交给
+  //    真实的 Python 引擎模块 guaximath_engine.py 执行（见 utils/guaxiNotebookMathRuntime.js）。
+  // 2. 它复用同一个 Python 持久会话，可读取前面 Python Cell 的变量；工作区里定义的符号
+  //    （f = sin(x)/x 等）也会跨多次运行 / 多个数学块持久复用。
+  // 3. mode 为可选的「工具栏快捷动作」：仅当内容是单条表达式时，引擎侧会据此包一层
+  //    （如 diff(<expr>)）；多行 / 已是命令的工作区程序则原样逐行执行。
   const code = buildNotebookLabMathCode({
-    expression,
-    mode: mathMode,
+    source,
+    mode: String(mode || ''),
     variable: String(options.variable || 'x'),
     rangeMin: Number.isFinite(Number(options.rangeMin)) ? Number(options.rangeMin) : -10,
     rangeMax: Number.isFinite(Number(options.rangeMax)) ? Number(options.rangeMax) : 10,
     seriesPoint: Number.isFinite(Number(options.seriesPoint)) ? Number(options.seriesPoint) : 0,
     seriesOrder: Number.isFinite(Number(options.seriesOrder)) ? Number(options.seriesOrder) : 6,
   })
-  // 各 mode 对应的中文动作名，用于生成「已生成 / 已生成并写回」之类的提示文案。
-  const mathModeLabels = {
-    plot2d: '函数图像',
-    solve: '方程结果',
-    simplify: '化简结果',
-    derivative: '求导结果',
-    integral: '积分结果',
-    series: '级数展开',
-    distribution: '分布图像',
-    dsolve: '微分方程解',
-    transform: '积分变换',
-    laplace: '拉普拉斯变换',
-    fourier: '傅里叶变换',
-  }
-  const mathModeLabel = mathModeLabels[mathMode] || '计算结果'
-  logger.info('[NotebookMath] run math cell', {
+  logger.info('[NotebookMath] run math workspace', {
     key: String(cell?.key || ''),
     cellId: String(cell?.cellId || ''),
-    expressionLength: expression.length,
-    mode: mathMode,
+    sourceLength: source.length,
+    mode: String(mode || ''),
     writeBack: !!writeBack,
   })
   await runNotebookLabGeneratedCode(cell, {
@@ -7563,52 +7548,57 @@ const runMathCell = async (cell, writeBack = false, mode = 'plot2d', options = {
       dataKind: 'math',
     },
     writeBack,
-    successMessage: writeBack ? `${mathModeLabel}已生成并写回` : `${mathModeLabel}已生成`,
+    successMessage: writeBack ? '数学结果已生成并写回' : '数学结果已生成',
     labPatch: {
-      lastMathExpression: expression,
-      lastMathMode: mathMode,
+      lastMathExpression: source,
       lastMathBlockAt: new Date().toISOString(),
     },
   })
 }
 
-// 数学工具菜单定义（模块化，便于后续扩展更多工具）：
-// 每个分组对应一类数学场景，items 里的 mode 透传给 runMathCell → buildNotebookLabMathCode。
-// hint 会渲染成菜单项的副标题，告诉用户该工具期望的输入写法（初等/高等函数、方程、级数等）。
+// 数学命令速查 / 片段菜单（命令式工作区 v2）：
+// 每个分组对应一类数学场景，点击 item 会把 snippet 模板插入数学块（便于按命令式工作区书写）。
+// 真正的计算逻辑在 Python 引擎 guaximath_engine.py 里，新增学科 = 加命令 + 加一条 snippet。
 const NOTEBOOK_MATH_TOOL_GROUPS = [
-  {
-    label: '函数与方程',
-    items: [
-      { mode: 'plot2d', label: '绘制图像', hint: '初等/高等函数、隐式方程，自动判断 2D/3D/复平面' },
-      { mode: 'solve', label: '求解方程', hint: '方程或方程组，自动选择 solve / nonlinsolve / solveset' },
-      { mode: 'simplify', label: '化简表达式', hint: '对当前表达式做符号化简' },
-    ],
-  },
   {
     label: '微积分',
     items: [
-      { mode: 'derivative', label: '求导数', hint: '对主变量求导' },
-      { mode: 'integral', label: '求不定积分', hint: '对主变量求积分' },
-      { mode: 'dsolve', label: '解微分方程', hint: '如 Eq(Derivative(y(x),x)+y(x),0)，含数值解曲线' },
+      { snippet: 'limit(sin(x)/x, x, 0)', label: '求极限', hint: 'limit(表达式, 变量, 趋近点)' },
+      { snippet: 'diff(sin(x)*exp(x), x)', label: '求导数', hint: 'diff(表达式, 变量[, 阶数])' },
+      { snippet: 'integrate(x**2, x)', label: '不定积分', hint: 'integrate(表达式, 变量)' },
+      { snippet: 'integrate(exp(-x**2), (x, -oo, oo))', label: '定积分', hint: 'integrate(f, (变量, 下限, 上限))' },
+      { snippet: 'taylor(cos(x), x, 0, 8)', label: '泰勒展开', hint: 'taylor(f, 变量, 展开点, 阶数)' },
+      { snippet: 'solve(x**2 - 5*x + 6)', label: '解方程', hint: 'solve(方程或表达式[, vars=变量])' },
+      { snippet: 'dsolve(Eq(Derivative(y(x), x, x) + y(x), 0))', label: '解微分方程', hint: 'dsolve(Eq(...))' },
     ],
   },
   {
-    label: '级数',
+    label: '线性代数',
     items: [
-      { mode: 'series', label: '泰勒/幂级数展开', hint: '在展开点处展开并与原函数对比作图' },
+      { snippet: 'A = matrix([[2, 1], [1, 2]])', label: '定义矩阵', hint: 'A = matrix([[...], [...]])' },
+      { snippet: 'det(A)', label: '行列式', hint: 'det(A)' },
+      { snippet: 'inv(A)', label: '逆矩阵', hint: 'inv(A)' },
+      { snippet: 'eig(A)', label: '特征值/向量', hint: 'eig(A)' },
+      { snippet: 'rref(A)', label: '行最简形 RREF', hint: 'rref(A) / rank(A)' },
+      { snippet: 'linsolve(matrix([[1, 1], [1, -1]]), matrix([3, 1]))', label: '解线性方程组', hint: 'linsolve(A, b)' },
+      { snippet: 'svd(A)', label: 'SVD 分解', hint: 'svd(A) / qr(A) / lu(A)' },
     ],
   },
   {
-    label: '统计分布',
+    label: '概率统计',
     items: [
-      { mode: 'distribution', label: '绘制分布', hint: 'scipy.stats 写法，如 norm(0,1)、binom(10,0.4)、poisson(3)' },
+      { snippet: 'Normal(0, 1)', label: '正态分布', hint: 'Normal(μ, σ) 画 PDF/CDF' },
+      { snippet: 'Binomial(10, 0.4)', label: '二项分布', hint: 'Binomial(n, p)' },
+      { snippet: 'Poisson(3)', label: '泊松分布', hint: 'Poisson(λ)' },
+      { snippet: 'expectation(Normal(0, 1))', label: '期望/方差', hint: 'expectation(...) / variance(...)' },
     ],
   },
   {
-    label: '积分变换',
+    label: '绘图（交互）',
     items: [
-      { mode: 'laplace', label: '拉普拉斯变换', hint: '时域函数 f(t)，得到 F(s)' },
-      { mode: 'fourier', label: '傅里叶变换', hint: '时域函数 f(t)，得到 F(ω)' },
+      { snippet: 'plot(sin(x), (x, -10, 10))', label: '一维曲线', hint: 'plot(f, (x, a, b))' },
+      { snippet: 'plot([sin(x), cos(x)], (x, -pi, pi))', label: '多条曲线', hint: 'plot([f, g], (x, a, b))' },
+      { snippet: 'plot(x**2 + y**2, (x, -3, 3), (y, -3, 3))', label: '三维曲面', hint: 'plot(f, (x,..), (y,..))' },
     ],
   },
 ]
@@ -7623,10 +7613,18 @@ const closeMathToolMenu = () => {
   activeMathToolMenuKey.value = ''
 }
 
-// 选择菜单项：收起菜单后按指定 mode 运行数学块（writeBack=false，仅生成输出，不污染原公式）。
-const handleMathToolSelect = async (cell, mode) => {
+// 选择菜单项：把命令片段插入数学块（追加到末尾新行），方便按命令式工作区书写后再运行。
+const handleMathToolSelect = (cell, snippet) => {
   closeMathToolMenu()
-  await runMathCell(cell, false, mode)
+  const text = String(snippet || '').trim()
+  if (!text) return
+  const current = String(cell?.expression || '')
+  const next = current.trim() ? `${current.replace(/\s+$/, '')}\n${text}` : text
+  updateMathCell(cell.key, next)
+  logger.info('[NotebookMath] insert command snippet', {
+    key: String(cell?.key || ''),
+    snippet: text,
+  })
 }
 
 // 折叠 / 展开数学块的输出面板，复用 Python Cell 的 outputCollapsed 元数据机制。

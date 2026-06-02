@@ -2307,6 +2307,14 @@ def _dispatch(payload):
 
 
 def main():
+    # 让 worker 自身所在目录进入 sys.path，使随它一起物化的数学引擎
+    # guaximath_engine.py 可被 `import guaximath_engine` 直接加载（一次常驻会话）。
+    try:
+        _worker_dir = os.path.dirname(os.path.abspath(__file__))
+        if _worker_dir and _worker_dir not in sys.path:
+            sys.path.insert(0, _worker_dir)
+    except Exception:
+        pass
     try:
         sys.stdin.reconfigure(encoding="utf-8", errors="replace")
     except Exception:

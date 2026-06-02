@@ -30,6 +30,10 @@ static PY_WORKER_ACTIVE_REQUESTS: OnceLock<Mutex<HashMap<String, PythonActiveReq
 
 const PY_WORKER_FILE_NAME: &str = "guaxi_python_worker.py";
 const PY_WORKER_SOURCE: &str = include_str!("../../scripts/guaxi_python_worker.py");
+// 数学块「命令式工作区」引擎：作为真实 Python 模块随 worker 一起物化到同一目录，
+// worker 启动时把该目录加入 sys.path，从而 `import guaximath_engine` 一次常驻会话。
+const GUAXIMATH_ENGINE_FILE_NAME: &str = "guaximath_engine.py";
+const GUAXIMATH_ENGINE_SOURCE: &str = include_str!("../../scripts/guaximath_engine.py");
 const PY_WORKER_REQUEST_TIMEOUT_SECS: u64 = 45;
 const PY_WORKER_EXEC_TIMEOUT_SECS: u64 = 300;
 const PY_WORKER_TABLE_IO_TIMEOUT_SECS: u64 = 180;
@@ -2145,6 +2149,21 @@ fn ensure_worker_script(runtime_dir: &Path) -> Result<PathBuf, String> {
         fs::write(&script_path, PY_WORKER_SOURCE)
             .map_err(|e| format!("write python worker script failed: {e}"))?;
         info!(worker_script = %script_path.to_string_lossy(), "[PythonRuntime] worker script refreshed");
+    }
+    // 把数学引擎模块物化到 worker 同一目录（worker 已将该目录加入 sys.path）。
+    // 仅在内容变化时重写，避免每次启动都触碰磁盘。失败不致命：bootstrap 侧有 ?raw 内联兜底。
+    let engine_path = runtime_dir.join(GUAXIMATH_ENGINE_FILE_NAME);
+    let engine_needs_write = match fs::read_to_string(&engine_path) {
+        Ok(existing) => existing != GUAXIMATH_ENGINE_SOURCE,
+        Err(_) => true,
+    };
+    if engine_needs_write {
+        if let Err(e) = fs::write(&engine_path, GUAXIMATH_ENGINE_SOURCE) {
+            warn!(engine_script = %engine_path.to_string_lossy(), error = %e,
+                  "[PythonRuntime] write guaximath engine failed, will fall back to inline source");
+        } else {
+            info!(engine_script = %engine_path.to_string_lossy(), "[PythonRuntime] guaximath engine refreshed");
+        }
     }
     Ok(script_path)
 }

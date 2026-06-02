@@ -45,7 +45,7 @@ const props = defineProps({
   },
   placeholder: {
     type: String,
-    default: '输入 LaTeX / SymPy 公式，例如 sin(x) / x',
+    default: '数学工作区：每行写赋值 / 表达式 / 命令，例如\nf = sin(x)/x\nlimit(f, x, 0)\nplot(f, (x,-10,10))',
   },
 })
 
