@@ -690,6 +690,12 @@ const ensureGuaxiMonacoThemes = () => {
       'editorWidget.background': '#ffffff',
       'editorWidget.border': '#e0e0e0',
       'editorGutter.background': '#fafafa',
+      // 设计说明：Git diff 的整行背景保持低透明度，优先保证注释/灰色文本可读；
+      // 字符级差异略强一点，便于在浅色主题中精确定位实际变更。
+      'diffEditor.insertedLineBackground': '#28a74510',
+      'diffEditor.removedLineBackground': '#cb243110',
+      'diffEditor.insertedTextBackground': '#28a74526',
+      'diffEditor.removedTextBackground': '#cb243126',
       'scrollbar.shadow': '#00000033'
     }
   })
@@ -735,12 +741,18 @@ const ensureGuaxiMonacoThemes = () => {
       'input.placeholderForeground': '#7f8898',
       'focusBorder': '#528bff80',
       'editorGutter.background': '#282c34',
+      // 设计说明：暗色 diff 中红/绿背景容易和注释 token 叠加变浑浊；
+      // 线级颜色只做轻提示，字符级颜色保留稍高对比，贴近 VS Code 的阅读体验。
+      'diffEditor.insertedLineBackground': '#28a74512',
+      'diffEditor.removedLineBackground': '#cb243112',
+      'diffEditor.insertedTextBackground': '#28a7452e',
+      'diffEditor.removedTextBackground': '#cb24312e',
       'scrollbar.shadow': '#00000066'
     }
   })
 
   guaxiMonacoThemesReady = true
-  frontendLogger.info('[DiffTheme] Monaco themes registered with GitPanel dark overrides')
+  frontendLogger.info('[DiffTheme] Monaco themes registered with readable low-alpha diff highlights')
 }
 
 const getMonacoTheme = () => {
@@ -4098,21 +4110,23 @@ onUnmounted(() => {
   height: 100%;
 }
 
-/* 差异高亮样式 */
-.monaco-editor .line-insert {
-  background-color: rgba(155, 185, 85, 0.2);
+/* 差异高亮样式
+   设计说明：这里是 Monaco DOM 装饰的兜底颜色。整行背景必须足够透明，
+   避免和注释、行号、选区叠加后降低可读性；字符级背景稍强用于精确识别变更。 */
+.gitkraken-container .monaco-editor .line-insert {
+  background-color: rgba(40, 167, 69, 0.06);
 }
 
-.monaco-editor .line-delete {
-  background-color: rgba(255, 0, 0, 0.2);
+.gitkraken-container .monaco-editor .line-delete {
+  background-color: rgba(203, 36, 49, 0.06);
 }
 
-.monaco-editor .char-insert {
-  background-color: rgba(155, 185, 85, 0.3);
+.gitkraken-container .monaco-editor .char-insert {
+  background-color: rgba(40, 167, 69, 0.16);
 }
 
-.monaco-editor .char-delete {
-  background-color: rgba(255, 0, 0, 0.3);
+.gitkraken-container .monaco-editor .char-delete {
+  background-color: rgba(203, 36, 49, 0.16);
 }
 
 /* 分隔线样式 */
@@ -4644,21 +4658,21 @@ onUnmounted(() => {
   background-color: var(--git-monaco-bg) !important;
 }
 
-/* 差异高亮样式 */
-.monaco-editor .char-delete {
-  background-color: rgba(203, 36, 49, 0.1) !important;
+/* 差异高亮样式：仅作用于 Git 面板，避免覆盖 Notebook/主编辑器中的 Monaco 实例。 */
+.gitkraken-container .monaco-editor .char-delete {
+  background-color: rgba(203, 36, 49, 0.16) !important;
 }
 
-.monaco-editor .char-insert {
-  background-color: rgba(40, 167, 69, 0.1) !important;
+.gitkraken-container .monaco-editor .char-insert {
+  background-color: rgba(40, 167, 69, 0.16) !important;
 }
 
-.monaco-editor .line-delete {
-  background-color: rgba(203, 36, 49, 0.05) !important;
+.gitkraken-container .monaco-editor .line-delete {
+  background-color: rgba(203, 36, 49, 0.06) !important;
 }
 
-.monaco-editor .line-insert {
-  background-color: rgba(40, 167, 69, 0.05) !important;
+.gitkraken-container .monaco-editor .line-insert {
+  background-color: rgba(40, 167, 69, 0.06) !important;
 }
 
 /* 添加加载状态样式 */
