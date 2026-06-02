@@ -1085,7 +1085,7 @@ import { dirname, homeDir } from '@tauri-apps/api/path'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { renderMarkdown, addCopyButtons, addMediaViewerButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
 import { createGuaxiPythonCellEditorManager } from './utils/guaxiPythonCellEditor'
-import { buildPythonCellBlock, createPythonCellId, createPythonCellStableId, createPythonSessionId, dataframeToMarkdownTable, maskPythonCellBlocksForMarkdown, parsePythonCellBlocks, transformPythonCellBlocksForPreview } from './utils/guaxiPythonCellSyntax'
+import { buildPythonCellBlock, createPythonCellId, createPythonCellStableId, createPythonSessionId, dataframeToMarkdownTable, maskPythonCellBlocksForMarkdown, parsePythonCellBlocks } from './utils/guaxiPythonCellSyntax'
 import { getPythonCellSnapshot, patchPythonCellSnapshot } from './utils/guaxiPythonCellState'
 import { createMarkdownPreviewSegments } from './utils/guaxiNotebookCells'
 import Vditor from 'vditor'
@@ -17259,9 +17259,13 @@ const performPreviewRender = async (content, requestId = 0, reason = 'scheduled'
       appearanceTheme: settingsStore.appearanceTheme,
       path: renderFilePath,
     })
-    const previewSource = transformPythonCellBlocksForPreview(content, {
-      filePath: renderFilePath,
-    })
+    // 设计说明：
+    // 1. 预览模式只渲染纯 Markdown 正文，Python Cell（<!--py-->...<!--/py--> 哨兵块）属于探索者模式的
+    //    可执行单元，其源码与运行输出不应出现在预览里——除非用户已用“写回 Markdown”把结果固化成正文。
+    // 2. 这里用 maskPythonCellBlocksForMarkdown 把 Cell 区域整体替换成空行：既隐藏了源码，又逐行保留行号，
+    //    保证预览点击联动、目录锚点、搜索定位仍然准确。
+    // 3. 普通 ```python / ```bash 等围栏代码块不在此哨兵语法内，照常高亮渲染，不受影响。
+    const previewSource = maskPythonCellBlocksForMarkdown(content)
     const processed = preprocessObsidianWikilinks(previewSource);
     const containsTocMarker = hasPreviewTocMarker(processed)
     let previewHtml = ''
