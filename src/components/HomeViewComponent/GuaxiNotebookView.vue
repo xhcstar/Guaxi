@@ -326,6 +326,17 @@
               >
                 <Icon :icon="playIcon" width="16" height="16" />
               </button>
+              <!-- 预览模式切换：公式渲染(默认) <-> 命令模式(按代码展示，不渲染 LaTeX)。 -->
+              <button
+                type="button"
+                class="guaxi-notebook__icon-btn"
+                :class="{ 'is-active': getMathCellPreviewMode(cell) === 'command' }"
+                :data-tooltip="getMathCellPreviewMode(cell) === 'command' ? '当前：命令模式预览（点击切回公式渲染）' : '当前：公式渲染（点击切到命令模式）'"
+                :aria-label="getMathCellPreviewMode(cell) === 'command' ? '切换到公式预览' : '切换到命令模式预览'"
+                @click="toggleMathCellPreviewMode(cell)"
+              >
+                <Icon :icon="getMathCellPreviewMode(cell) === 'command' ? sigmaIcon : terminalIcon" width="16" height="16" />
+              </button>
               <button
                 type="button"
                 class="guaxi-notebook__icon-btn"
@@ -818,6 +829,7 @@ import {
 import {
   appendPythonCellOutputModules,
   buildPythonCellOutputModules,
+  createPythonCellOutputModule,
   getLatestPythonCellOutputModule,
   getLatestPythonCellOutputModuleByKind,
   getPythonCellOutputDisplayDataUrl,
@@ -913,6 +925,8 @@ const activeNotebookPythonCellKey = ref('')
 const notebookFocusedVariable = ref({ cellKey: '', variableName: '' })
 // 数学块工具下拉菜单：记录当前展开菜单所属的数学块 key（空串表示全部收起）。
 const activeMathToolMenuKey = ref('')
+// 每个数学块的预览模式：'latex'（默认，按公式渲染）/ 'command'（命令式工作区，按代码展示，不渲染 LaTeX）。
+const notebookMathPreviewModeMap = ref({})
 // 离线文档助手只挂在探索者 Notebook 表面中，记录触发来源 Cell 以便按上下文搜索完整 Python / 数学文档。
 const notebookUsageAssistantVisible = ref(false)
 const notebookUsageAssistantChannel = ref('python')
@@ -3884,7 +3898,16 @@ const splitMathExpressionForPreview = (expression = '') => {
   return blocks
 }
 
-const buildMathPreviewMarkdown = (expression = '') => {
+const buildMathPreviewMarkdown = (expression = '', mode = 'latex') => {
+  // 数学块预览有两种模式（由工具栏图标切换，默认 latex）：
+  //   - 'latex'  ：把内容按 LaTeX 公式渲染（每行/每个环境一个 $$...$$），适合写公式时实时看渲染效果。
+  //   - 'command'：命令式工作区模式，内容是「赋值 / 表达式 / 命令」的程序，不按 LaTeX 渲染，
+  //                而是以代码块展示源码；真正的结果在点「运行」后输出。
+  const text = String(expression || '').trim()
+  if (!text) return ''
+  if (String(mode) === 'command') {
+    return `\`\`\`python\n${text}\n\`\`\``
+  }
   const blocks = splitMathExpressionForPreview(expression)
   if (!blocks.length) return ''
   return blocks.map((block) => `$$\n${block}\n$$`).join('\n\n')
@@ -3893,7 +3916,8 @@ const buildMathPreviewMarkdown = (expression = '') => {
 const renderMathCellPreviewImmediately = async (key, expression) => {
   const normalizedKey = String(key || '')
   const renderSeq = ++notebookMathPreviewRenderSeq
-  const mathMarkdown = buildMathPreviewMarkdown(expression)
+  const previewMode = notebookMathPreviewModeMap.value[normalizedKey] === 'command' ? 'command' : 'latex'
+  const mathMarkdown = buildMathPreviewMarkdown(expression, previewMode)
   const mathBlockCount = splitMathExpressionForPreview(expression).length
   try {
     const html = await renderMarkdownHtml(mathMarkdown, `math-cell-live-preview:${normalizedKey}`)
@@ -5060,7 +5084,7 @@ const syncRenderedMarkdownHtml = async (cells, reason = 'unknown') => {
     if (cell?.type === 'markdown' || cell?.type === 'math') {
       const cellKey = String(cell.key || '')
       const markdownText = cell?.type === 'math'
-        ? buildMathPreviewMarkdown(cell.expression || '')
+        ? buildMathPreviewMarkdown(cell.expression || '', getMathCellPreviewMode(cell))
         : String(cell.content || '')
       const renderReasonPrefix = cell?.type === 'math' ? 'math-cell' : 'markdown-cell'
       const logCellKind = cell?.type === 'math' ? 'math' : 'markdown'
@@ -7395,21 +7419,31 @@ const runNotebookLabGeneratedCode = async (cell, {
       outputText = stripNotebookMathTraceOutput(outputText)
     }
     const display = getGuaxiDisplayFromResult(res)
+    // 数学工作区（math-block）的引擎可能一次返回「多个 display」（数组）：
+    // 符号结果走 markdown（MathJax，跟随暗色主题），每张图单独走 html（交互 Plotly）。
+    // 这里把数组拆成多个输出模块；其它来源仍按单 display 处理，避免影响数据实验室其余链路。
+    const displayList = Array.isArray(display)
+      ? display.filter((item) => item && typeof item === 'object')
+      : []
     const tables = getGuaxiTablesFromResult(res)
     const dataframe = tables[0] || null
     const dataflow = getGuaxiDataflowFromResult(res)
     const snapshot = getCellSnapshot(cell)
-    const runOutputs = decorateNotebookLabOutputModules(
-      buildPythonCellOutputModules({
-        outputText,
-        display,
-        dataframe,
-        tables,
-        source,
-      }),
-      dataset,
-      source,
-    )
+    const legacyDisplay = displayList.length ? null : display
+    const builtRunOutputs = displayList.length
+      ? [
+        ...displayList
+          .map((item) => createPythonCellOutputModule({
+            kind: normalizePythonCellOutputDisplayType(item),
+            source,
+            display: item,
+          }))
+          .filter(Boolean),
+        // 表格与文本仍走统一构造（display 置空，避免与上面的多 display 重复）。
+        ...buildPythonCellOutputModules({ outputText, display: null, dataframe, tables, source }),
+      ]
+      : buildPythonCellOutputModules({ outputText, display, dataframe, tables, source })
+    const runOutputs = decorateNotebookLabOutputModules(builtRunOutputs, dataset, source)
     const hasRenderableOutput = !!(String(outputText || '').trim() || display || tables.length)
     const nextOutputs = hasRenderableOutput
       ? appendPythonCellOutputModules(snapshot?.outputs || [], runOutputs)
@@ -7427,7 +7461,7 @@ const runNotebookLabGeneratedCode = async (cell, {
     patchPythonCellSnapshot(props.filePath, cell.cellId, {
       codeDigest: getNotebookCellContentDigest(cell),
       outputText,
-      display,
+      display: legacyDisplay,
       dataframe,
       outputs: nextOutputs,
       result: res,
@@ -7532,6 +7566,7 @@ const runMathCell = async (cell, writeBack = false, mode = '', options = {}) => 
     rangeMax: Number.isFinite(Number(options.rangeMax)) ? Number(options.rangeMax) : 10,
     seriesPoint: Number.isFinite(Number(options.seriesPoint)) ? Number(options.seriesPoint) : 0,
     seriesOrder: Number.isFinite(Number(options.seriesOrder)) ? Number(options.seriesOrder) : 6,
+    theme: props.theme,
   })
   logger.info('[NotebookMath] run math workspace', {
     key: String(cell?.key || ''),
@@ -7602,6 +7637,24 @@ const NOTEBOOK_MATH_TOOL_GROUPS = [
     ],
   },
 ]
+
+// 读取某个数学块的预览模式（默认 latex）。
+const getMathCellPreviewMode = (cell) => (
+  notebookMathPreviewModeMap.value[String(cell?.key || '')] === 'command' ? 'command' : 'latex'
+)
+
+// 切换数学块预览模式：latex（公式渲染）<-> command（命令模式，不渲染 LaTeX，按代码展示），并立即刷新预览。
+const toggleMathCellPreviewMode = (cell) => {
+  const key = String(cell?.key || '')
+  if (!key) return
+  const next = getMathCellPreviewMode(cell) === 'command' ? 'latex' : 'command'
+  notebookMathPreviewModeMap.value = {
+    ...notebookMathPreviewModeMap.value,
+    [key]: next,
+  }
+  void renderMathCellPreviewImmediately(key, cell?.expression || '')
+  logger.info('[NotebookMath] toggle math preview mode', { key, mode: next })
+}
 
 // 切换某个数学块的工具下拉菜单展开状态（点击同一个按钮再次点击则收起）。
 const toggleMathToolMenu = (cell) => {

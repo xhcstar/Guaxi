@@ -148,6 +148,10 @@ class RunContext:
         return value if value is not None else default
 
     @property
+    def theme(self):
+        return str(self.opt("theme", "light") or "light").lower()
+
+    @property
     def range_min(self):
         try:
             return float(self.opt("rangeMin", -10))
@@ -951,23 +955,8 @@ def _persist_workspace(ns, workspace):
 # ===========================================================================
 # 渲染层：结果块 → display 字典
 # ===========================================================================
-def _latex_to_svg_data_uri(tex_str):
-    """用 matplotlib mathtext 把 LaTeX 渲成 SVG（行内公式，离线、无新依赖）。失败抛异常。"""
-    import matplotlib
-    matplotlib.use("Agg", force=True)
-    import matplotlib.pyplot as plt
-    fig = plt.figure(figsize=(0.01, 0.01))
-    fig.patch.set_alpha(0)
-    fig.text(0.0, 0.0, f"${tex_str}$", fontsize=16)
-    buf = io.BytesIO()
-    fig.savefig(buf, format="svg", bbox_inches="tight", pad_inches=0.05, transparent=True)
-    plt.close(fig)
-    svg = buf.getvalue().decode("utf-8")
-    return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii")
-
-
 def _render_markdown(blocks):
-    """无图：合成 markdown，交给 App 内置 MathJax 渲染。"""
+    """符号 / 文字结果合成 markdown，交给 App 内置 MathJax 渲染（矩阵 OK，且跟随暗色主题）。"""
     lines = []
     for b in blocks:
         kind = b["kind"]
@@ -980,58 +969,57 @@ def _render_markdown(blocks):
             if label:
                 lines.append(f"**{label}**")
             lines.append(f"$$\n{b['tex']}\n$$")
+        elif kind == "figure" and b.get("caption"):
+            lines.append(f"*{b['caption']}*")
     return {"type": "markdown", "mime": "text/markdown", "markdown": "\n\n".join(lines)}
 
 
-def _render_html(blocks):
-    """含图：合成自包含 HTML（Plotly 交互图 + 行内公式 SVG）。"""
-    parts = ["<!doctype html><html><head><meta charset='utf-8'>",
-             "<style>body{font-family:'Microsoft YaHei',sans-serif;margin:8px;color:#1f2329;}"
-             "h3{margin:14px 0 6px;font-size:15px;}"
-             ".gx-latex{margin:8px 0;}.gx-latex img{max-width:100%;vertical-align:middle;}"
-             ".gx-text{margin:6px 0;white-space:pre-wrap;}"
-             ".gx-cap{color:#888;font-size:12px;margin:2px 0 10px;}</style></head><body>"]
-    plotly_included = False
-    for b in blocks:
-        kind = b["kind"]
-        if kind == "heading":
-            parts.append(f"<h3>{_escape(b['text'])}</h3>")
-        elif kind == "text":
-            parts.append(f"<div class='gx-text'>{_escape(b['text'])}</div>")
-        elif kind == "latex":
-            label = b.get("label") or ""
-            if label:
-                parts.append(f"<div class='gx-text'><b>{_escape(label)}</b></div>")
-            try:
-                uri = _latex_to_svg_data_uri(b["tex"])
-                parts.append(f"<div class='gx-latex'><img src='{uri}' alt='公式'/></div>")
-            except Exception:
-                parts.append(f"<div class='gx-text'>$ {_escape(b['tex'])} $</div>")
-        elif kind == "figure":
-            if b.get("fig") is not None and _HAS_PLOTLY:
-                html = pio.to_html(b["fig"], include_plotlyjs=(not plotly_included),
-                                   full_html=False, config={"responsive": True})
-                plotly_included = True
-                parts.append(html)
-            elif b.get("png"):
-                parts.append(f"<div><img style='max-width:100%' src='data:image/png;base64,{b['png']}'/></div>")
-            if b.get("caption"):
-                parts.append(f"<div class='gx-cap'>{_escape(b['caption'])}</div>")
-    parts.append("</body></html>")
-    return {"type": "html", "mime": "text/html", "html": "".join(parts)}
+def _render_figure_html(block, theme="light"):
+    """单张图渲染为独立 html display（交互 Plotly，自包含 plotly.js）。
 
-
-def _escape(text):
-    return (str(text).replace("&", "&amp;").replace("<", "&lt;")
-            .replace(">", "&gt;"))
+    设计说明：Plotly 图固定使用亮色主题——它在独立 iframe 里渲染，与 App 主题解耦，
+    保持浅色背景以获得稳定、清晰的绘图观感（theme 参数保留以备将来需要）。
+    """
+    fig = block.get("fig")
+    if fig is not None and _HAS_PLOTLY:
+        html = pio.to_html(fig, include_plotlyjs=True, full_html=False, config={"responsive": True})
+        return {"type": "html", "mime": "text/html", "html": html}
+    if block.get("png"):
+        return {"type": "image", "mime": "image/png", "data_base64": block["png"]}
+    return {"type": "markdown", "mime": "text/markdown", "markdown": "（图像不可用）"}
 
 
 def _render(ctx):
+    """把结果块按「图」切分成若干 display：
+
+      - 连续的符号 / 文字块 → 合成一个 markdown display（走 App MathJax，跟随主题）；
+      - 每张图 → 单独一个 html display（交互 Plotly，主题独立）。
+
+    返回单个 display 字典（仅一段时，向后兼容）或 display 字典列表（多段时）。
+    这样既修复了「矩阵公式渲染不了」（交给 MathJax），也修复了「非绘图区不跟随暗色」。
+    """
     blocks = ctx.blocks
     if not blocks:
         return {"type": "markdown", "mime": "text/markdown", "markdown": "（无输出）"}
-    has_figure = any(b["kind"] == "figure" for b in blocks)
-    return _render_html(blocks) if has_figure else _render_markdown(blocks)
+    segments = []  # [('md', [blocks]) | ('fig', block)]
+    buf = []
+    for b in blocks:
+        if b["kind"] == "figure":
+            if buf:
+                segments.append(("md", buf))
+                buf = []
+            segments.append(("fig", b))
+        else:
+            buf.append(b)
+    if buf:
+        segments.append(("md", buf))
+    displays = []
+    for kind, payload in segments:
+        if kind == "md":
+            displays.append(_render_markdown(payload))
+        else:
+            displays.append(_render_figure_html(payload, ctx.theme))
+    return displays[0] if len(displays) == 1 else displays
 
 
 # ===========================================================================

@@ -74,6 +74,7 @@ export const buildNotebookLabMathCode = ({
   rangeMax = 10,
   seriesPoint = 0,
   seriesOrder = 6,
+  theme = 'light',
 } = {}) => {
   const rawSource = normalizeText(source || expression)
   if (!rawSource) return ''
@@ -84,6 +85,8 @@ export const buildNotebookLabMathCode = ({
     rangeMax: Number.isFinite(Number(rangeMax)) ? Number(rangeMax) : 10,
     seriesPoint: Number.isFinite(Number(seriesPoint)) ? Number(seriesPoint) : 0,
     seriesOrder: Math.max(1, Math.min(30, Number.parseInt(seriesOrder, 10) || 6)),
+    // 主题透传：暗色模式下交互图用 plotly_dark，与 App 主题协调（符号结果走 markdown 自动跟随主题）。
+    theme: String(theme || 'light').toLowerCase() === 'dark' ? 'dark' : 'light',
   }
 
   // 工具栏快捷动作：仅当 source 是「单条、不含换行、且不像已写好的命令」时才包裹，
