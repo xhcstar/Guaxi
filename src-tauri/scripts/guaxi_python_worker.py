@@ -598,6 +598,292 @@ def _capture_matplotlib_animation_html(globals_dict, previous_animation_ids=None
         }
 
 
+def _resolve_ffmpeg_binary():
+    """解析一个可用的 ffmpeg 可执行文件路径，不依赖用户系统是否安装。
+
+    查找顺序：
+    1. 随 Python 运行时打包的 ffmpeg（与当前解释器同级的 Scripts 目录）。
+    2. ``imageio-ffmpeg`` 自带的静态二进制（构建时随依赖引入即可，无需系统安装）。
+    3. 系统 PATH 兜底。
+    全部失败返回 None；调用方会改用 Pillow 直接导出 GIF（无需 ffmpeg），
+    因此“没有 ffmpeg”不会导致动画无法显示，只是退化为 GIF。
+    """
+    cached = getattr(_resolve_ffmpeg_binary, "_cache", None)
+    if cached is not None:
+        return cached or None
+
+    import shutil
+
+    exe_name = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+    candidates = []
+    try:
+        interpreter_dir = os.path.dirname(sys.executable)
+        candidates.append(os.path.join(interpreter_dir, exe_name))
+        candidates.append(os.path.join(interpreter_dir, "ffmpeg", exe_name))
+    except Exception:
+        pass
+
+    # 按需下载缓存目录（缺失时下载的静态 ffmpeg 落在这里，下次直接命中）。
+    try:
+        candidates.append(os.path.join(_ffmpeg_cache_dir(), exe_name))
+    except Exception:
+        pass
+
+    try:
+        import imageio_ffmpeg
+
+        candidates.append(imageio_ffmpeg.get_ffmpeg_exe())
+    except Exception:
+        pass
+
+    try:
+        found = shutil.which("ffmpeg")
+        if found:
+            candidates.append(found)
+    except Exception:
+        pass
+
+    resolved = ""
+    for candidate in candidates:
+        try:
+            if candidate and os.path.exists(candidate):
+                resolved = candidate
+                break
+        except Exception:
+            pass
+
+    if resolved:
+        # 同步给 moviepy / imageio，使其在无系统 ffmpeg 时也能复用同一个二进制。
+        os.environ.setdefault("IMAGEIO_FFMPEG_EXE", resolved)
+        os.environ.setdefault("FFMPEG_BINARY", resolved)
+
+    _resolve_ffmpeg_binary._cache = resolved
+    return resolved or None
+
+
+def _animation_default_fps(animation, fallback=30):
+    interval = getattr(animation, "_interval", None)
+    if interval:
+        try:
+            value = 1000.0 / float(interval)
+            if value > 0:
+                return value
+        except Exception:
+            pass
+    return fallback
+
+
+def _build_media_display(path, mime, renderer, display_dir=None, frame_count=None):
+    """统一构造媒体输出模块（前端用原生 <video>/<img> 渲染，不依赖内联脚本）。"""
+    is_video = str(mime or "").startswith("video/")
+    display = {
+        "type": "video" if is_video else "image",
+        "mime": mime,
+        "path": path,
+        "source_path": path,
+        "artifact_path": path,
+        "renderer": renderer,
+    }
+    if display_dir:
+        display["artifact_dir"] = display_dir
+    if frame_count is not None:
+        display["frame_count"] = frame_count
+    return display
+
+
+def _export_matplotlib_animation_media(animation, display_dir):
+    """把 matplotlib 动画导出为媒体文件：优先 mp4(ffmpeg)，无 ffmpeg 时回退 gif(Pillow)。
+
+    返回 ``(path, mime, renderer)``。GIF 路径只依赖 Pillow，保证“零 ffmpeg”也能出图。
+    """
+    fps = _animation_default_fps(animation)
+    safe_fps = max(1, int(round(fps)))
+    ffmpeg_path = _resolve_ffmpeg_binary()
+
+    if ffmpeg_path:
+        try:
+            import matplotlib
+
+            matplotlib.rcParams["animation.ffmpeg_path"] = ffmpeg_path
+            from matplotlib.animation import FFMpegWriter
+
+            mp4_path = os.path.join(display_dir, "animation.mp4")
+            writer = FFMpegWriter(fps=safe_fps, bitrate=-1)
+            animation.save(mp4_path, writer=writer, progress_callback=None)
+            if os.path.exists(mp4_path) and os.path.getsize(mp4_path) > 0:
+                return mp4_path, "video/mp4", "matplotlib-ffmpeg"
+        except BaseException:
+            # 任何 ffmpeg 失败都落到 GIF 兜底，保证动画仍能显示。
+            pass
+
+    from matplotlib.animation import PillowWriter
+
+    gif_path = os.path.join(display_dir, "animation.gif")
+    animation.save(gif_path, writer=PillowWriter(fps=safe_fps), progress_callback=None)
+    if not (os.path.exists(gif_path) and os.path.getsize(gif_path) > 0):
+        raise FileNotFoundError(f"Matplotlib animation media was not created: {gif_path}")
+    return gif_path, "image/gif", "matplotlib-pillow"
+
+
+def _capture_matplotlib_animation_display(globals_dict, previous_animation_ids=None, explicit_result_only=False):
+    """matplotlib 动画生产者：导出为 mp4/gif 媒体文件。"""
+    animations = _iter_matplotlib_animations(
+        globals_dict,
+        previous_animation_ids=previous_animation_ids,
+        explicit_result_only=explicit_result_only,
+    )
+    if not animations:
+        return None
+
+    try:
+        animation = animations[0]
+        display_dir = _prepare_display_artifact_dir(globals_dict, "matplotlib-animation")
+        path, mime, renderer = _export_matplotlib_animation_media(animation, display_dir)
+        try:
+            import matplotlib.pyplot as plt
+
+            plt.close("all")
+        except Exception:
+            pass
+        return _build_media_display(
+            path,
+            mime,
+            renderer,
+            display_dir=display_dir,
+            frame_count=_estimate_animation_frame_count(animation),
+        )
+    except BaseException:
+        # 媒体导出彻底失败时，回退到旧的 HTMLWriter 交互播放器（仅作为最后兜底）。
+        return _capture_matplotlib_animation_html(
+            globals_dict,
+            previous_animation_ids=previous_animation_ids,
+            explicit_result_only=explicit_result_only,
+        )
+
+
+def _capture_moviepy_animation_display(globals_dict):
+    """moviepy 生产者：把 VideoClip 导出为 mp4（无 ffmpeg 时回退 gif）。"""
+    if "moviepy" not in sys.modules:
+        return None
+    try:
+        from moviepy.video.VideoClip import VideoClip
+    except Exception:
+        return None
+
+    clip = None
+    candidate = globals_dict.get("_result")
+    if isinstance(candidate, VideoClip):
+        clip = candidate
+    else:
+        for name in ("clip", "video", "animation", "ani", "anim"):
+            value = globals_dict.get(name)
+            if isinstance(value, VideoClip):
+                clip = value
+                break
+    if clip is None:
+        return None
+
+    try:
+        display_dir = _prepare_display_artifact_dir(globals_dict, "moviepy-animation")
+        ffmpeg_path = _resolve_ffmpeg_binary()
+        if ffmpeg_path:
+            try:
+                mp4_path = os.path.join(display_dir, "animation.mp4")
+                clip.write_videofile(mp4_path, codec="libx264", audio=False, logger=None)
+                if os.path.exists(mp4_path) and os.path.getsize(mp4_path) > 0:
+                    return _build_media_display(mp4_path, "video/mp4", "moviepy-ffmpeg", display_dir=display_dir)
+            except BaseException:
+                pass
+        gif_path = os.path.join(display_dir, "animation.gif")
+        clip.write_gif(gif_path, logger=None)
+        if os.path.exists(gif_path) and os.path.getsize(gif_path) > 0:
+            return _build_media_display(gif_path, "image/gif", "moviepy-gif", display_dir=display_dir)
+        raise FileNotFoundError("moviepy animation media was not created")
+    except BaseException as exc:
+        return {
+            "type": "markdown",
+            "mime": "text/markdown",
+            "markdown": "moviepy 动画导出失败。\n\n```text\n" + _format_traceback(exc) + "\n```",
+        }
+
+
+_ANIMATION_MEDIA_EXTS = {
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".mov": "video/quicktime",
+    ".m4v": "video/x-m4v",
+    ".ogv": "video/ogg",
+    ".gif": "image/gif",
+    ".apng": "image/apng",
+}
+
+
+def _capture_media_filepath_display(globals_dict):
+    """通用媒体文件生产者：用户代码（含 manim 等）产出的 mp4/webm/gif 文件路径直接透传。
+
+    约定：把生成的媒体文件路径作为末行表达式返回，或赋值给
+    ``video_path`` / ``animation_path`` / ``output_path`` / ``media_path``。
+    文件会被复制进会话沙箱工件目录，确保位于前端 asset 协议作用域内可加载。
+    """
+    raw_paths = []
+    candidate = globals_dict.get("_result")
+    if isinstance(candidate, (str, os.PathLike)):
+        raw_paths.append(str(candidate))
+    for name in ("video_path", "animation_path", "output_path", "media_path"):
+        value = globals_dict.get(name)
+        if isinstance(value, (str, os.PathLike)):
+            raw_paths.append(str(value))
+
+    for raw in raw_paths:
+        try:
+            path = str(raw or "").strip().strip('"').strip("'")
+            if not path:
+                continue
+            ext = os.path.splitext(path)[1].lower()
+            mime = _ANIMATION_MEDIA_EXTS.get(ext)
+            if not mime or not os.path.isfile(path):
+                continue
+            import shutil
+
+            display_dir = _prepare_display_artifact_dir(globals_dict, "media-file")
+            dest = os.path.join(display_dir, "animation" + ext)
+            shutil.copyfile(path, dest)
+            renderer = "manim" if "manim" in sys.modules else "media-file"
+            return _build_media_display(dest, mime, renderer, display_dir=display_dir)
+        except Exception:
+            continue
+    return None
+
+
+def _capture_cell_animation_display(globals_dict, previous_animation_ids=None, explicit_result_only=False):
+    """通用动画捕获框架：按生产者顺序探测，返回首个命中的媒体输出（video/image）。
+
+    设计说明：
+    1. 统一产出“媒体文件 + 原生 <video>/<img>”而非 iframe 内联脚本播放器：
+       既高性能，又不受 release CSP / iframe sandbox 限制，debug 与 release 行为一致。
+    2. 生产者可插拔：matplotlib / moviepy / 已生成媒体文件路径(含 manim 产物)。
+       后续接入新动画类型只需新增一个 _capture_* 生产者并登记到这里。
+    3. 没有任何动画时返回 None，调用方继续走静态图等既有路径。
+    """
+    producers = (
+        lambda: _capture_matplotlib_animation_display(
+            globals_dict,
+            previous_animation_ids=previous_animation_ids,
+            explicit_result_only=explicit_result_only,
+        ),
+        lambda: _capture_moviepy_animation_display(globals_dict),
+        lambda: _capture_media_filepath_display(globals_dict),
+    )
+    for produce in producers:
+        try:
+            display = produce()
+        except BaseException:
+            display = None
+        if display:
+            return display
+    return None
+
+
 def _maybe_prepare_inline_matplotlib():
     try:
         if "matplotlib" not in sys.modules:
@@ -1438,9 +1724,9 @@ def _handle_exec(payload):
                     "__guaxi_result__": result_json,
                 }
 
-        # 设计说明：matplotlib 富媒体输出按“动画优先于静态图”的顺序捕获。
-        # 1. 先尝试把 FuncAnimation/ArtistAnimation 转成自包含 HTML 播放器；
-        #    成功后内部已 plt.close("all")，因此后续静态 PNG 捕获不会再重复输出末帧。
+        # 设计说明：富媒体输出按“动画优先于静态图”的顺序捕获。
+        # 1. 通用动画框架优先把 matplotlib / moviepy / manim 等动画导出为 mp4/gif 媒体文件，
+        #    前端用原生 <video>/<img> 播放；成功后内部已 plt.close("all")，静态 PNG 捕获不会重复输出末帧。
         # 2. 没有动画时回退到既有的静态 PNG 路径，保持原有单帧绘图行为不变。
         explicit_animation_result = False
         try:
@@ -1451,7 +1737,7 @@ def _handle_exec(payload):
         except Exception:
             explicit_animation_result = False
 
-        mpl_display = _capture_matplotlib_animation_html(
+        mpl_display = _capture_cell_animation_display(
             globals_dict,
             previous_animation_ids=matplotlib_animation_ids_before,
             explicit_result_only=explicit_animation_result,

@@ -27,7 +27,8 @@
           "**/Libraries/**",
           "**/Note/**",
           "**/doc/**",
-          "**/images/**"
+          "**/images/**",
+          "**/.guaxi-display-artifacts/**"
         ]
       }
     }

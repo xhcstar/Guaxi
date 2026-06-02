@@ -655,6 +655,10 @@
                       class="guaxi-notebook__media guaxi-notebook__media--video"
                       :src="getCellDisplayUrl(cell, outputModule)"
                       controls
+                      loop
+                      autoplay
+                      muted
+                      playsinline
                       preload="metadata"
                     ></video>
                     <div v-else-if="outputModule.kind === 'table' && outputModule.table" class="guaxi-notebook__dataframe guaxi-notebook__dataframe--virtual-table">
