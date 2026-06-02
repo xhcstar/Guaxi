@@ -598,6 +598,180 @@ def _capture_matplotlib_animation_html(globals_dict, previous_animation_ids=None
         }
 
 
+def _ffmpeg_cache_dir():
+    """返回一个可写的 ffmpeg 缓存目录（按需下载的静态二进制落在这里）。
+
+    优先放在 python 运行时 venv 根目录下，便于 ``_resolve_ffmpeg_binary`` 复用；
+    不可写时回退到系统临时目录。可用 ``GUAXI_FFMPEG_DIR`` 环境变量覆盖。
+    """
+    override = str(os.environ.get("GUAXI_FFMPEG_DIR") or "").strip()
+    candidates = []
+    if override:
+        candidates.append(override)
+    else:
+        try:
+            venv_root = os.path.dirname(os.path.dirname(sys.executable))
+            candidates.append(os.path.join(venv_root, ".guaxi-ffmpeg"))
+        except Exception:
+            pass
+
+    import tempfile
+
+    candidates.append(os.path.join(tempfile.gettempdir(), "guaxi-ffmpeg"))
+
+    for path in candidates:
+        try:
+            os.makedirs(path, exist_ok=True)
+            probe = os.path.join(path, ".write-test")
+            with open(probe, "w", encoding="utf-8") as handle:
+                handle.write("ok")
+            os.remove(probe)
+            return path
+        except Exception:
+            continue
+
+    fallback = os.path.join(tempfile.gettempdir(), "guaxi-ffmpeg")
+    os.makedirs(fallback, exist_ok=True)
+    return fallback
+
+
+def _ffmpeg_download_sources():
+    """返回 ``(url, kind)`` 候选列表，kind ∈ {'exe','zip'}；可用 env 覆盖。"""
+    sources = []
+    override = str(os.environ.get("GUAXI_FFMPEG_DOWNLOAD_URL") or "").strip()
+    if override:
+        sources.append((override, "zip" if override.lower().endswith(".zip") else "exe"))
+
+    import platform
+
+    system = platform.system().lower()
+    is_64 = sys.maxsize > 2 ** 32
+
+    if system == "windows":
+        sources.append((
+            "https://github.com/imageio/imageio-binaries/raw/master/ffmpeg/ffmpeg-win64-v4.2.2.exe",
+            "exe",
+        ))
+        sources.append((
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip",
+            "zip",
+        ))
+    elif system == "darwin":
+        sources.append((
+            "https://github.com/imageio/imageio-binaries/raw/master/ffmpeg/ffmpeg-osx64-v4.2.2",
+            "exe",
+        ))
+    else:
+        name = "ffmpeg-linux64-v4.2.2" if is_64 else "ffmpeg-linux32-v4.2.2"
+        sources.append((
+            f"https://github.com/imageio/imageio-binaries/raw/master/ffmpeg/{name}",
+            "exe",
+        ))
+    return sources
+
+
+def _verify_ffmpeg(path):
+    try:
+        result = subprocess.run(
+            [path, "-version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=20,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _download_ffmpeg_on_demand():
+    """缺失 ffmpeg 时按需下载一个静态二进制到缓存目录，离线/失败则返回 None。
+
+    可用 ``GUAXI_FFMPEG_NO_DOWNLOAD=1`` 关闭下载（强制走 gif 兜底）。
+    """
+    if str(os.environ.get("GUAXI_FFMPEG_NO_DOWNLOAD") or "").strip().lower() in ("1", "true", "yes"):
+        return None
+
+    import urllib.request
+
+    dest_dir = _ffmpeg_cache_dir()
+    exe_name = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+    final_path = os.path.join(dest_dir, exe_name)
+
+    if os.path.exists(final_path) and _verify_ffmpeg(final_path):
+        return final_path
+
+    for url, kind in _ffmpeg_download_sources():
+        tmp_path = os.path.join(dest_dir, "ffmpeg.download.tmp")
+        try:
+            request = urllib.request.Request(url, headers={"User-Agent": "guaxi-ffmpeg-fetch"})
+            with urllib.request.urlopen(request, timeout=120) as response, open(tmp_path, "wb") as out:
+                shutil.copyfileobj(response, out)
+
+            if kind == "zip":
+                import zipfile
+
+                with zipfile.ZipFile(tmp_path) as archive:
+                    member = next(
+                        (
+                            name for name in archive.namelist()
+                            if name.replace("\\", "/").lower().endswith("bin/" + exe_name)
+                            or os.path.basename(name).lower() == exe_name
+                        ),
+                        "",
+                    )
+                    if not member:
+                        raise FileNotFoundError("ffmpeg not found in archive")
+                    with archive.open(member) as src, open(final_path + ".part", "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                os.replace(final_path + ".part", final_path)
+            else:
+                os.replace(tmp_path, final_path)
+
+            if os.name != "nt":
+                try:
+                    os.chmod(final_path, 0o755)
+                except Exception:
+                    pass
+
+            if _verify_ffmpeg(final_path):
+                return final_path
+            try:
+                os.remove(final_path)
+            except Exception:
+                pass
+        except Exception:
+            continue
+        finally:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
+    return None
+
+
+def _ensure_ffmpeg_binary():
+    """解析可用 ffmpeg；找不到时按需下载（保证 mp4 在有网时一定可用）。"""
+    cached = getattr(_ensure_ffmpeg_binary, "_cache", None)
+    if cached is not None:
+        return cached or None
+
+    resolved = _resolve_ffmpeg_binary()
+    if not resolved:
+        try:
+            resolved = _download_ffmpeg_on_demand()
+        except Exception:
+            resolved = None
+        if resolved:
+            os.environ.setdefault("IMAGEIO_FFMPEG_EXE", resolved)
+            os.environ.setdefault("FFMPEG_BINARY", resolved)
+            # 修正 _resolve_ffmpeg_binary 之前缓存的“未找到”结果，使后续调用命中。
+            _resolve_ffmpeg_binary._cache = resolved
+
+    _ensure_ffmpeg_binary._cache = resolved or ""
+    return resolved or None
+
+
 def _resolve_ffmpeg_binary():
     """解析一个可用的 ffmpeg 可执行文件路径，不依赖用户系统是否安装。
 
@@ -698,7 +872,7 @@ def _export_matplotlib_animation_media(animation, display_dir):
     """
     fps = _animation_default_fps(animation)
     safe_fps = max(1, int(round(fps)))
-    ffmpeg_path = _resolve_ffmpeg_binary()
+    ffmpeg_path = _ensure_ffmpeg_binary()
 
     if ffmpeg_path:
         try:
@@ -785,7 +959,7 @@ def _capture_moviepy_animation_display(globals_dict):
 
     try:
         display_dir = _prepare_display_artifact_dir(globals_dict, "moviepy-animation")
-        ffmpeg_path = _resolve_ffmpeg_binary()
+        ffmpeg_path = _ensure_ffmpeg_binary()
         if ffmpeg_path:
             try:
                 mp4_path = os.path.join(display_dir, "animation.mp4")

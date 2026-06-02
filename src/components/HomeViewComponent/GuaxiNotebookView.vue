@@ -766,7 +766,6 @@ import { emit as emitTauriEvent, listen } from '@tauri-apps/api/event'
 import { useMessage } from 'naive-ui'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { confirm as confirmDialog, open, save } from '@tauri-apps/plugin-dialog'
-import { readFile, writeFile } from '@tauri-apps/plugin-fs'
 import mermaid from 'mermaid'
 import MarkdownIt from 'markdown-it'
 import { debounce } from 'lodash-es'
@@ -6974,7 +6973,10 @@ const exportCellOutputToFile = async (cell, moduleId = '') => {
       })
       if (!outputPath) return
 
-      const sourceBytes = await readFile(String(payload.summary || ''))
+      // 设计说明：动画/音视频/HTML 等输出的源文件位于会话沙箱 .guaxi-display-artifacts 目录，
+      // 不在 plugin-fs 的作用域内。统一改用后端命令 readBytesFromPath(read_file_bytes_base64) 读取，
+      // 与 GuaxiNotebookHtmlOutput / 写回逻辑一致，确保 debug/release 都能把 mp4/gif 像图片一样另存。
+      const sourceBytes = await readBytesFromPath(String(payload.summary || ''), 'export-existing-file')
       await writeBytesToPath(outputPath, sourceBytes, 'export-existing-file')
       logger.info('[Notebook] export existing output file to new path', {
         cellId: String(cell?.cellId || ''),
