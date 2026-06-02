@@ -927,6 +927,12 @@ const notebookSidecarLoadVersion = ref(0)
 const notebookHistoryEntries = ref([])
 const notebookHistoryIndex = ref(-1)
 const notebookHistoryApplying = ref(false)
+const notebookReadingLocationBackStack = ref([])
+const notebookReadingLocationForwardStack = ref([])
+let lastRecordedNotebookReadingLocationKey = ''
+let lastRecordedNotebookReadingLocationAt = 0
+let suppressNotebookReadingLocationRecording = false
+const maxNotebookReadingLocationHistory = 200
 const markdownEditorRefMap = new Map()
 const pythonEditorRefMap = new Map()
 const notebookMarkdownRenderCache = new Map()
@@ -1058,6 +1064,9 @@ const isNotebookInteractiveTarget = (target) => (
 )
 
 const handleNotebookCellPointerDown = (cell, event) => {
+  if (!isNotebookInteractiveTarget(event?.target)) {
+    recordNotebookReadingLocation('cell-pointerdown')
+  }
   if (cell?.type === 'python') {
     activateNotebookCell(cell, isNotebookInteractiveTarget(event?.target) ? 'python-interactive-pointerdown' : 'python-cell-pointerdown')
     return
@@ -2281,6 +2290,207 @@ const createNotebookOutlinePayload = () => {
   }))
 }
 
+const getNotebookScrollHost = () => {
+  const root = notebookRootRef.value
+  if (!(root instanceof HTMLElement)) return null
+
+  const candidates = [
+    root.parentElement,
+    root,
+  ].filter((item) => item instanceof HTMLElement)
+
+  return candidates.find((item) => item.scrollHeight > item.clientHeight + 1) || candidates[0] || null
+}
+
+const getNotebookCellStartLine = (cellKey) => {
+  const normalizedKey = String(cellKey || '').trim()
+  if (!normalizedKey) return 0
+  const outlineEntry = notebookOutlineEntries.value.find((item) => String(item?.cellKey || '') === normalizedKey)
+  if (outlineEntry && Number(outlineEntry.line || 0) > 0) return Number(outlineEntry.line || 0)
+  return Number(buildNotebookCellStartLineMap(notebookCells.value).get(normalizedKey) || 0)
+}
+
+const getNotebookReadingLocationFromElement = (element, scrollHost = getNotebookScrollHost()) => {
+  const target = element instanceof HTMLElement ? element : null
+  const cell = target?.closest?.('.guaxi-notebook__cell')
+  const cellKey = String(cell?.getAttribute?.('data-cell-key') || '')
+  const outlineLine = Number(target?.getAttribute?.('data-guaxi-outline-line') || 0)
+  const lineNumber = Number.isFinite(outlineLine) && outlineLine > 0
+    ? outlineLine
+    : getNotebookCellStartLine(cellKey)
+  const scrollTop = Number(scrollHost?.scrollTop)
+  const scrollHeight = Number(scrollHost?.scrollHeight)
+  const scrollRatio = scrollHeight > 0 && Number.isFinite(scrollTop) ? scrollTop / scrollHeight : 0
+  return {
+    path: String(props.filePath || ''),
+    scrollTop: Number.isFinite(scrollTop) ? scrollTop : 0,
+    scrollRatio,
+    lineNumber: Number.isFinite(lineNumber) && lineNumber > 0 ? lineNumber : 1,
+    cellKey,
+  }
+}
+
+const getCurrentNotebookReadingLocation = () => {
+  const root = notebookRootRef.value
+  const scrollHost = getNotebookScrollHost()
+  if (!(root instanceof HTMLElement) || !(scrollHost instanceof HTMLElement)) return null
+  const path = String(props.filePath || '')
+  if (!path) return null
+
+  const hostRect = scrollHost.getBoundingClientRect()
+  const candidates = Array.from(root.querySelectorAll(
+    'h1[data-guaxi-outline-line], h2[data-guaxi-outline-line], h3[data-guaxi-outline-line], h4[data-guaxi-outline-line], h5[data-guaxi-outline-line], h6[data-guaxi-outline-line], .guaxi-notebook__cell',
+  ) || [])
+  let best = null
+  let bestScore = Number.POSITIVE_INFINITY
+
+  for (const candidate of candidates) {
+    if (!(candidate instanceof HTMLElement)) continue
+    const rect = candidate.getBoundingClientRect()
+    const visible = rect.bottom > hostRect.top + 8 && rect.top < hostRect.bottom - 8
+    const score = Math.abs(rect.top - hostRect.top) + (visible ? 0 : 100000)
+    if (score < bestScore) {
+      bestScore = score
+      best = candidate
+    }
+  }
+
+  return getNotebookReadingLocationFromElement(best || root, scrollHost)
+}
+
+const isSameNotebookReadingLocation = (a, b) => {
+  if (!a || !b) return false
+  if (String(a.path || '') !== String(b.path || '')) return false
+  const aTop = Number(a.scrollTop)
+  const bTop = Number(b.scrollTop)
+  if (Number.isFinite(aTop) && Number.isFinite(bTop)) {
+    return Math.round(aTop / 8) === Math.round(bTop / 8)
+  }
+  const aLine = Number(a.lineNumber || 0)
+  const bLine = Number(b.lineNumber || 0)
+  return aLine > 0 && aLine === bLine && String(a.cellKey || '') === String(b.cellKey || '')
+}
+
+const recordNotebookReadingLocation = (reason = 'unknown', overrideLocation = null) => {
+  if (suppressNotebookReadingLocationRecording) return false
+  const location = overrideLocation || getCurrentNotebookReadingLocation()
+  if (!location) return false
+
+  const now = Date.now()
+  const scrollTop = Number(location.scrollTop)
+  const scrollTopKey = Number.isFinite(scrollTop) ? Math.round(scrollTop / 8) : 0
+  const key = `${location.path}:${scrollTopKey}:${location.cellKey || ''}`
+  if (key === lastRecordedNotebookReadingLocationKey && now - lastRecordedNotebookReadingLocationAt < 350) {
+    return false
+  }
+
+  const back = notebookReadingLocationBackStack.value
+  const last = back[back.length - 1]
+  if (last && isSameNotebookReadingLocation(last, location)) {
+    lastRecordedNotebookReadingLocationKey = key
+    lastRecordedNotebookReadingLocationAt = now
+    return false
+  }
+
+  back.push({
+    ...location,
+    scrollTop: Number.isFinite(scrollTop) ? scrollTop : 0,
+    scrollTopKey,
+    ts: now,
+    reason: String(reason || ''),
+  })
+  if (back.length > maxNotebookReadingLocationHistory) back.shift()
+  notebookReadingLocationForwardStack.value = []
+  lastRecordedNotebookReadingLocationKey = key
+  lastRecordedNotebookReadingLocationAt = now
+  logger.info('[NotebookNav] recorded reading location', {
+    reason,
+    path: location.path,
+    lineNumber: location.lineNumber,
+    cellKey: location.cellKey,
+    historyLength: back.length,
+  })
+  return true
+}
+
+const goToNotebookReadingLocation = async (location, { source = 'shortcut' } = {}) => {
+  if (!location) return false
+  const scrollHost = getNotebookScrollHost()
+  const root = notebookRootRef.value
+  if (!(scrollHost instanceof HTMLElement) || !(root instanceof HTMLElement)) return false
+  if (String(location.path || '') && String(location.path || '') !== String(props.filePath || '')) return false
+
+  suppressNotebookReadingLocationRecording = true
+  try {
+    await nextTick()
+    const scrollTop = Number(location.scrollTop)
+    if (Number.isFinite(scrollTop)) {
+      const maxTop = Math.max(0, scrollHost.scrollHeight - scrollHost.clientHeight)
+      scrollHost.scrollTop = Math.min(Math.max(0, scrollTop), maxTop)
+    } else if (String(location.cellKey || '').trim()) {
+      const target = root.querySelector(`.guaxi-notebook__cell[data-cell-key="${CSS.escape(String(location.cellKey || ''))}"]`)
+      if (target instanceof HTMLElement) {
+        target.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' })
+      }
+    } else if (Number(location.lineNumber || 0) > 0) {
+      jumpToNotebookOutlineLine(location.lineNumber, { behavior: 'smooth', recordHistory: false })
+    }
+
+    logger.info('[NotebookNav] applied reading location', {
+      source,
+      path: String(location.path || ''),
+      lineNumber: Number(location.lineNumber || 0),
+      cellKey: String(location.cellKey || ''),
+      scrollTop: Number.isFinite(scrollTop) ? scrollTop : 'na',
+    })
+    return true
+  } finally {
+    window.setTimeout(() => {
+      suppressNotebookReadingLocationRecording = false
+    }, 0)
+  }
+}
+
+const navigateToPreviousNotebookReadingLocation = async () => {
+  const current = getCurrentNotebookReadingLocation()
+  if (!current) return false
+
+  const back = notebookReadingLocationBackStack.value
+  const forward = notebookReadingLocationForwardStack.value
+  const last = back[back.length - 1]
+  if (!last || !isSameNotebookReadingLocation(last, current)) {
+    back.push({ ...current, ts: Date.now(), reason: 'implicit-current' })
+    if (back.length > maxNotebookReadingLocationHistory) back.shift()
+  }
+
+  if (back.length < 2) {
+    message.info('没有上一个探索者阅读位置')
+    return false
+  }
+
+  const from = back.pop()
+  forward.push(from)
+  const target = back[back.length - 1]
+  return goToNotebookReadingLocation(target, { source: 'alt-left' })
+}
+
+const navigateToNextNotebookReadingLocation = async () => {
+  const forward = notebookReadingLocationForwardStack.value
+  if (!forward.length) {
+    message.info('没有下一个探索者阅读位置')
+    return false
+  }
+
+  const target = forward.pop()
+  const back = notebookReadingLocationBackStack.value
+  const last = back[back.length - 1]
+  if (!last || !isSameNotebookReadingLocation(last, target)) {
+    back.push(target)
+    if (back.length > maxNotebookReadingLocationHistory) back.shift()
+  }
+  return goToNotebookReadingLocation(target, { source: 'alt-right' })
+}
+
 // 设计说明：
 // 1. 探索者模式是按 Cell 分段渲染的，markdown-it 的 TOC 插件拿不到“整篇文档”的标题上下文，
 //    因此不能直接复用单 Cell 的目录输出。
@@ -3332,6 +3542,9 @@ const jumpToNotebookOutlineLine = (line, options = {}) => {
   const outlineId = String(outlineEntry.outlineId || '')
   const cellKey = String(outlineEntry.cellKey || '')
   const isPythonCellTarget = String(outlineEntry.kind || '') === 'python-cell'
+  if (options?.recordHistory !== false) {
+    recordNotebookReadingLocation('outline-jump')
+  }
 
   nextTick(() => {
     const headingTarget = outlineId
@@ -5639,6 +5852,7 @@ const handleNotebookRenderedClick = async (event) => {
     const outlineId = decodeURIComponent(href.slice(1))
     const root = notebookRootRef.value
     if (!(root instanceof HTMLElement) || !outlineId) return
+    recordNotebookReadingLocation('toc-anchor')
 
     const escapedId = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
       ? CSS.escape(outlineId)
@@ -8037,6 +8251,12 @@ defineExpose({
   },
   save() {
     requestNotebookSave()
+  },
+  navigateReadingBack() {
+    return navigateToPreviousNotebookReadingLocation()
+  },
+  navigateReadingForward() {
+    return navigateToNextNotebookReadingLocation()
   },
   canUndo() {
     return canUndoNotebookHistory.value

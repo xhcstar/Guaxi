@@ -2445,6 +2445,31 @@ const navigateToNextPreviewLocation = async () => {
   await goToPreviewLocation(target, { source: 'alt-right' });
 };
 
+const isNotebookSurfaceActiveForReadingNavigation = () => (
+  editorSurfaceMode.value === 'notebook' &&
+  canUseNotebookSurface.value &&
+  showEditor.value &&
+  !!notebookViewRef.value
+)
+
+const navigateToPreviousNotebookReadingLocation = async () => {
+  const handled = !!(await notebookViewRef.value?.navigateReadingBack?.())
+  logger.info('[NotebookNav] routed alt-left to notebook surface', {
+    handled,
+    filePath: String(selectedFile.value?.path || fileTreeStore.activeTab || ''),
+  })
+  return handled
+}
+
+const navigateToNextNotebookReadingLocation = async () => {
+  const handled = !!(await notebookViewRef.value?.navigateReadingForward?.())
+  logger.info('[NotebookNav] routed alt-right to notebook surface', {
+    handled,
+    filePath: String(selectedFile.value?.path || fileTreeStore.activeTab || ''),
+  })
+  return handled
+}
+
 const getCurrentEditLocation = () => {
   if (!editor) return null;
   const path = fileTreeStore.activeTab || selectedFile.value?.path;
@@ -13149,11 +13174,14 @@ const handleKeyDown = (e) => {
     const isAltRight = k === 'ArrowRight' || k === 'Right' || k === 'BrowserForward' || c === 'ArrowRight';
 
     const previewOnly = mode.value === 'preview' && showPreview.value && !showEditor.value;
+    const notebookReadingOnly = isNotebookSurfaceActiveForReadingNavigation();
 
     if (isAltLeft) {
       e.preventDefault();
       e.stopPropagation();
-      if (previewOnly) {
+      if (notebookReadingOnly) {
+        void navigateToPreviousNotebookReadingLocation();
+      } else if (previewOnly) {
         navigateToPreviousPreviewLocation();
       } else {
         navigateToPreviousEditLocation();
@@ -13164,7 +13192,9 @@ const handleKeyDown = (e) => {
     if (isAltRight) {
       e.preventDefault();
       e.stopPropagation();
-      if (previewOnly) {
+      if (notebookReadingOnly) {
+        void navigateToNextNotebookReadingLocation();
+      } else if (previewOnly) {
         navigateToNextPreviewLocation();
       } else {
         navigateToNextEditLocation();
