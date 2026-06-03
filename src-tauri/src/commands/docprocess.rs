@@ -1271,9 +1271,6 @@ fn chromium_pdf_candidates() -> Vec<PathBuf> {
             candidates.push(PathBuf::from(&local_app_data).join("Microsoft/Edge/Application/msedge.exe"));
             candidates.push(PathBuf::from(&local_app_data).join("Google/Chrome/Application/chrome.exe"));
         }
-        candidates.push(PathBuf::from("msedge"));
-        candidates.push(PathBuf::from("chrome"));
-        candidates.push(PathBuf::from("chromium"));
     }
 
     #[cfg(target_os = "macos")]
@@ -1298,16 +1295,23 @@ fn chromium_pdf_candidates() -> Vec<PathBuf> {
 
 fn select_chromium_for_pdf_export() -> Result<PathBuf, String> {
     for candidate in chromium_pdf_candidates() {
-        let should_probe = candidate.components().count() == 1 || candidate.is_file();
-        if !should_probe {
-            continue;
-        }
-        if can_execute_program(&candidate) {
+        if candidate.is_file() {
             info!(
                 browser = %candidate.display(),
-                "[ExportPdf] selected chromium browser"
+                "[ExportPdf] selected chromium browser by existing executable"
             );
             return Ok(candidate);
+        }
+
+        #[cfg(not(windows))]
+        {
+            if candidate.components().count() == 1 && can_execute_program(&candidate) {
+                info!(
+                    browser = %candidate.display(),
+                    "[ExportPdf] selected chromium browser from PATH"
+                );
+                return Ok(candidate);
+            }
         }
     }
 
@@ -1345,9 +1349,15 @@ fn run_chromium_print_to_pdf(
         .current_dir(base_dir)
         .arg(headless_arg)
         .arg("--disable-gpu")
+        .arg("--no-startup-window")
         .arg("--no-first-run")
         .arg("--no-default-browser-check")
         .arg("--disable-extensions")
+        .arg("--disable-background-mode")
+        .arg("--disable-component-update")
+        .arg("--disable-sync")
+        .arg("--metrics-recording-only")
+        .arg("--mute-audio")
         .arg("--allow-file-access-from-files")
         .arg(profile_arg)
         .arg(output_arg)
@@ -1365,7 +1375,39 @@ fn run_chromium_print_to_pdf(
         if !stderr_text.is_empty() {
             warn!(stderr = stderr_text.as_str(), "[ExportPdf] chromium stderr");
         }
-        return Ok(());
+
+        // 设计说明：
+        // 1. 某些 Edge/Chrome 版本会以 0 退出码结束，但没有真正写出 --print-to-pdf 指定的文件。
+        // 2. 把产物校验放到单次浏览器调用内部，才能让 --headless=new 失败时继续重试传统 --headless。
+        // 3. 日志中保留 stdout/stderr，方便区分“浏览器成功退出但无产物”和“命令执行失败”。
+        match fs::metadata(output_path) {
+            Ok(meta) if meta.len() > 0 => {
+                info!(
+                    output = %output_path.display(),
+                    bytes = meta.len(),
+                    headless = headless_arg,
+                    "[ExportPdf] chromium produced pdf"
+                );
+                return Ok(());
+            }
+            Ok(_) => {
+                warn!(
+                    output = %output_path.display(),
+                    headless = headless_arg,
+                    "[ExportPdf] chromium exited successfully but output pdf is empty"
+                );
+                return Err(format!("浏览器 PDF 导出未生成有效文件：{} 字节", 0));
+            }
+            Err(err) => {
+                warn!(
+                    output = %output_path.display(),
+                    headless = headless_arg,
+                    error = %err,
+                    "[ExportPdf] chromium exited successfully but output pdf is missing"
+                );
+                return Err(format!("浏览器 PDF 导出未生成输出文件: {err}"));
+            }
+        }
     }
 
     error!(
@@ -1427,8 +1469,9 @@ pub async fn export_rendered_html_pdf(
 
     // 设计说明：
     // 1. 优先使用新版 Chromium 的 --headless=new，能更接近现代浏览器渲染路径。
-    // 2. 部分旧版 Chrome/Edge 不认识该参数，失败后回退到传统 --headless。
-    // 3. 输出后检查文件大小，避免浏览器成功退出但没有真正写出 PDF 的假成功。
+    // 2. 部分旧版 Chrome/Edge 不认识该参数，或者 0 退出但不写 PDF；单次调用会校验产物。
+    // 3. 若第一种 headless 没有有效产物，继续回退到传统 --headless。
+    let _ = fs::remove_file(&output);
     let first = run_chromium_print_to_pdf(
         &browser,
         &html_path,

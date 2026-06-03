@@ -18253,6 +18253,78 @@ ${baseTag}
     overflow-x: auto;
   }
 
+  /* 设计说明：
+     预览 worker 已经把代码块渲染成 highlight.js 的 hljs-* token，
+     导出外壳必须内置一份浅色高亮主题，否则 PDF/HTML 里会只剩结构而没有颜色。 */
+  .export-content pre.hljs,
+  .export-content .hljs {
+    color: #24292f;
+    background: #f6f8fa;
+  }
+
+  .export-content .hljs-doctag,
+  .export-content .hljs-keyword,
+  .export-content .hljs-meta .hljs-keyword,
+  .export-content .hljs-template-tag,
+  .export-content .hljs-template-variable,
+  .export-content .hljs-type,
+  .export-content .hljs-variable.language_ {
+    color: #cf222e;
+  }
+
+  .export-content .hljs-title,
+  .export-content .hljs-title.class_,
+  .export-content .hljs-title.class_.inherited__,
+  .export-content .hljs-title.function_ {
+    color: #8250df;
+  }
+
+  .export-content .hljs-attr,
+  .export-content .hljs-attribute,
+  .export-content .hljs-literal,
+  .export-content .hljs-meta,
+  .export-content .hljs-number,
+  .export-content .hljs-operator,
+  .export-content .hljs-selector-attr,
+  .export-content .hljs-selector-class,
+  .export-content .hljs-selector-id,
+  .export-content .hljs-variable {
+    color: #0550ae;
+  }
+
+  .export-content .hljs-regexp,
+  .export-content .hljs-string,
+  .export-content .hljs-meta .hljs-string {
+    color: #0a3069;
+  }
+
+  .export-content .hljs-built_in,
+  .export-content .hljs-symbol {
+    color: #953800;
+  }
+
+  .export-content .hljs-comment,
+  .export-content .hljs-code,
+  .export-content .hljs-formula {
+    color: #6e7781;
+  }
+
+  .export-content .hljs-name,
+  .export-content .hljs-quote,
+  .export-content .hljs-selector-tag,
+  .export-content .hljs-selector-pseudo {
+    color: #116329;
+  }
+
+  .export-content .hljs-subst {
+    color: #24292f;
+  }
+
+  .export-content .hljs-section {
+    color: #0550ae;
+    font-weight: 700;
+  }
+
   .export-content table {
     border-collapse: collapse;
     width: 100%;
@@ -18753,31 +18825,22 @@ const exportMarkdownRenderedHtml = async (context, outputPath) => {
 
 const exportMarkdownRenderedPdf = async (context, outputPath) => {
   const html = await renderMarkdownForExportHtml(context)
-  try {
-    logger.info('[Export] export rendered html as pdf', {
-      inputPath: context.inputPath,
-      outputPath,
-      htmlLength: html.length,
-    })
-    await invoke('export_rendered_html_pdf', {
-      html,
-      inputPath: context.inputPath,
-      outputPath,
-    })
-  } catch (error) {
-    // 设计说明：
-    // 1. 浏览器 PDF 依赖本机 Edge/Chrome，少数机器可能没有可用 headless 浏览器。
-    // 2. 这里保留 Pandoc PDF 作为兜底，宁可质量略低也不让用户导出动作直接中断。
-    logger.warn('[Export] rendered pdf failed, fallback to pandoc pdf', {
-      inputPath: context.inputPath,
-      outputPath,
-      error: String(error?.message || error),
-    })
-    await invoke('export_markdown_pdf_pandoc', {
-      inputPath: context.inputPath,
-      outputPath,
-    })
-  }
+  logger.info('[Export] export rendered html as pdf', {
+    inputPath: context.inputPath,
+    outputPath,
+    htmlLength: html.length,
+  })
+
+  // 设计说明：
+  // 1. PDF 的目标是“预览同源高保真导出”，因此只走浏览器 HTML -> PDF 链路。
+  // 2. 之前浏览器失败后自动回退 Pandoc，会把问题转移到 LaTeX 字体/公式解析上，
+  //    例如数学字符 𝜃 会触发 Missing character / Missing $ inserted，反而让用户看到错误引擎的报错。
+  // 3. 这里保留清晰日志，不再隐式兜底；如果浏览器导出失败，就直接暴露真实的静默浏览器导出错误。
+  await invoke('export_rendered_html_pdf', {
+    html,
+    inputPath: context.inputPath,
+    outputPath,
+  })
 }
 
 const exportMarkdownPandoc = async (context, outputPath) => {
