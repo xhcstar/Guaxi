@@ -1349,7 +1349,9 @@ fn run_chromium_print_to_pdf(
         .current_dir(base_dir)
         .arg(headless_arg)
         .arg("--disable-gpu")
-        .arg("--no-startup-window")
+        // 注意：不要加 `--no-startup-window`。该参数会让 Edge/Chrome 在后台启动且不创建窗口、
+        // 不加载页面，配合 headless `--print-to-pdf` 时浏览器会以退出码 0 “成功”结束，但根本
+        // 不会渲染 HTML、也不会写出 PDF，导致随后读取输出文件报 os error 2（找不到文件）。
         .arg("--no-first-run")
         .arg("--no-default-browser-check")
         .arg("--disable-extensions")
