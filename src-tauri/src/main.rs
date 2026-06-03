@@ -236,6 +236,7 @@ async fn main() {
             commands::docprocess::get_converted_pdf_page,
             commands::docprocess::load_markdown_content,
             commands::docprocess::search_paginated_markdown,
+            commands::docprocess::export_rendered_html_pdf,
             commands::docprocess::export_markdown_pdf_pandoc,
             commands::docprocess::export_markdown_pandoc,
             commands::docprocess::export_tex_pdf_tectonic,

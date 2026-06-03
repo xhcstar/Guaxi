@@ -18146,15 +18146,56 @@ const toggleVimMode = () => {
   });
 };
 
-const buildPrintHtml = (bodyHtml, title) => {
+const escapeExportHtml = (value) => String(value ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;')
+
+const pathToFileHref = (path) => {
+  const raw = String(path || '').trim()
+  if (!raw) return ''
+  const normalized = raw.replace(/\\/g, '/')
+  const withTrailingSlash = normalized.endsWith('/') ? normalized : `${normalized}/`
+  const withLeadingSlash = /^[A-Za-z]:\//.test(withTrailingSlash)
+    ? `/${withTrailingSlash}`
+    : withTrailingSlash
+  return `file://${encodeURI(withLeadingSlash).replace(/#/g, '%23')}`
+}
+
+const getParentDirectoryPath = (path) => {
+  const raw = String(path || '').trim()
+  if (!raw) return ''
+  const index = Math.max(raw.lastIndexOf('/'), raw.lastIndexOf('\\'))
+  return index >= 0 ? raw.slice(0, index) : ''
+}
+
+const getCurrentExportMarkdown = () => {
+  flushPythonCellDrafts()
+  const targetEditor = getActiveEditor()
+  if (previewMode.value === 'realtime' && realtimeVditor) {
+    return realtimeVditor.getValue()
+  }
+  if (targetEditor?.getValue) {
+    return targetEditor.getValue()
+  }
+  return String(rawContent.value || selectedFile.value?.content || '')
+}
+
+const buildPrintHtml = (bodyHtml, title, options = {}) => {
   const now = new Date();
   const dateStr = now.toLocaleString();
+  const safeTitle = escapeExportHtml(title || '未命名文档')
+  const baseHref = String(options?.baseHref || '').trim()
+  const baseTag = baseHref ? `<base href="${escapeExportHtml(baseHref)}" />` : ''
 
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
-<title>${title}</title>
+${baseTag}
+<title>${safeTitle}</title>
 <style>
   @page {
     size: A4;
@@ -18524,7 +18565,7 @@ const buildPrintHtml = (bodyHtml, title) => {
 <body>
   <div class="export-root">
     <div class="export-header">
-      <div class="export-title">${title}</div>
+      <div class="export-title">${safeTitle}</div>
       <div class="export-meta">导出时间：${dateStr}</div>
     </div>
     <div class="export-content">${bodyHtml}</div>
@@ -18573,116 +18614,236 @@ const exportOptions = [
   { label: '导出为 纯文本 (.txt)', key: 'txt' }
 ];
 
-const handleExportSelect = async (format) => {
+const EXPORT_FORMAT_CONFIG = {
+  pdf: { ext: 'pdf', filterName: 'PDF 文件' },
+  docx: { ext: 'docx', filterName: 'Word 文件' },
+  html: { ext: 'html', filterName: 'HTML 文件' },
+  tex: { ext: 'tex', filterName: 'LaTeX 文件' },
+  epub: { ext: 'epub', filterName: 'EPUB 文件' },
+  odt: { ext: 'odt', filterName: 'ODT 文件' },
+  txt: { ext: 'txt', filterName: '文本文件' },
+}
+
+const prepareExportContext = async (format) => {
   if (!selectedFile.value || !selectedFile.value.path) {
-    message.warning('当前没有选中的文件');
-    return;
+    message.warning('当前没有选中的文件')
+    return null
   }
 
-  const path = selectedFile.value.path || '';
-  const ext = path.split('.').pop()?.toLowerCase() || '';
-
-  if (mode.value === 'edit' && editor) {
-    saveContent();
-  }
-
-  // 说明：.tex 文件导出 PDF 走 tectonic（不走 pandoc）
+  const inputPath = String(selectedFile.value.path || '')
+  const ext = inputPath.split('.').pop()?.toLowerCase() || ''
   const isTexFile = ext === 'tex'
-  const isMarkdownFile = ext === 'md'
+  const isMarkdownFile = ext === 'md' || ext === 'markdown'
+  const config = EXPORT_FORMAT_CONFIG[format] || { ext: String(format || 'txt'), filterName: '导出文件' }
 
   if (!isMarkdownFile && !(isTexFile && format === 'pdf')) {
     if (isTexFile) {
       message.warning('当前为 .tex 文件，仅支持导出为 PDF')
     } else {
-      message.warning('仅支持对 Markdown(.md) 文件进行导出')
+      message.warning('仅支持对 Markdown(.md/.markdown) 文件进行导出')
     }
-    return
+    logger.warn('[Export] rejected unsupported file type', {
+      format,
+      inputPath,
+      ext,
+      isTexFile,
+      isMarkdownFile,
+    })
+    return null
   }
 
-  const formatExtMap = {
-    pdf: 'pdf',
-    docx: 'docx',
-    html: 'html',
-    tex: 'tex',
-    epub: 'epub',
-    odt: 'odt',
-    txt: 'txt'
-  };
-
-  const extName = formatExtMap[format] || format;
-
-  let filterName = '';
-  switch (format) {
-    case 'pdf':
-      filterName = 'PDF 文件';
-      break;
-    case 'docx':
-      filterName = 'Word 文件';
-      break;
-    case 'html':
-      filterName = 'HTML 文件';
-      break;
-    case 'tex':
-      filterName = 'LaTeX 文件';
-      break;
-    case 'epub':
-      filterName = 'EPUB 文件';
-      break;
-    case 'odt':
-      filterName = 'ODT 文件';
-      break;
-    case 'txt':
-      filterName = '文本文件';
-      break;
-    default:
-      filterName = '导出文件';
+  const markdown = isMarkdownFile ? getCurrentExportMarkdown() : ''
+  if (isMarkdownFile && !markdown.trim()) {
+    logger.warn('[Export] markdown content is empty', { format, inputPath })
   }
 
+  // 设计说明：
+  // 1. Pandoc/tectonic 仍然从磁盘读取文件，因此导出前需要等待保存完成，避免读到旧内容。
+  // 2. HTML/PDF 同源渲染直接使用当前编辑器内容，保存只是为了让外部资源和当前 tab 状态保持一致。
+  if (mode.value === 'edit' && editor) {
+    logger.info('[Export] save current content before export', { format, inputPath })
+    await saveContent()
+  }
+
+  return {
+    format,
+    inputPath,
+    extName: config.ext,
+    filterName: config.filterName,
+    isTexFile,
+    isMarkdownFile,
+    markdown,
+    title: (selectedFile.value?.name || inputPath.split(/[\\/]/).pop() || '未命名文档').replace(/\.(md|markdown|tex)$/i, ''),
+    baseHref: pathToFileHref(getParentDirectoryPath(inputPath)),
+  }
+}
+
+const chooseExportOutputPath = async (context) => {
+  const inputPath = String(context?.inputPath || '')
+  const extName = String(context?.extName || context?.format || 'txt')
+  let defaultPath = inputPath
+
+  if (/\.(md|markdown|tex)$/i.test(defaultPath)) {
+    defaultPath = defaultPath.replace(/\.(md|markdown|tex)$/i, `.${extName}`)
+  } else {
+    defaultPath = `${defaultPath}.${extName}`
+  }
+
+  logger.info('[Export] opening save dialog', {
+    format: context.format,
+    inputPath,
+    defaultPath,
+    extName,
+  })
+
+  return save({
+    defaultPath,
+    filters: [
+      {
+        name: context.filterName,
+        extensions: [extName],
+      },
+    ],
+  })
+}
+
+const renderMarkdownForExportHtml = async (context) => {
+  const markdown = String(context?.markdown || '')
+  logger.info('[Export] render markdown to export html start', {
+    inputPath: context.inputPath,
+    markdownLength: markdown.length,
+  })
+
+  // 设计说明：
+  // 1. PDF/HTML 导出复用预览渲染器，不再走 Pandoc 的 Markdown 解析。
+  // 2. 这样 Mermaid、MathJax、highlight.js、代码单元输出等最终 DOM 会和软件内预览保持同源。
+  // 3. buildPrintHtml 只负责补齐可打印页面外壳、打印 CSS 和 base href，不再参与 Markdown 语义转换。
+  const bodyHtml = await renderPreviewMarkdown(
+    markdown,
+    {
+      math: true,
+      mermaid: true,
+      codeHighlight: true,
+    },
+    'export-rendered-html',
+  )
+  const html = buildPrintHtml(bodyHtml, context.title, { baseHref: context.baseHref })
+
+  logger.info('[Export] render markdown to export html complete', {
+    inputPath: context.inputPath,
+    bodyHtmlLength: bodyHtml.length,
+    htmlLength: html.length,
+  })
+
+  return html
+}
+
+const exportMarkdownRenderedHtml = async (context, outputPath) => {
+  const html = await renderMarkdownForExportHtml(context)
+  const { writeFile } = await import('@tauri-apps/plugin-fs')
+  const bytes = new TextEncoder().encode(html)
+
+  logger.info('[Export] write rendered html', {
+    inputPath: context.inputPath,
+    outputPath,
+    bytes: bytes.byteLength,
+  })
+  await writeFile(outputPath, bytes)
+}
+
+const exportMarkdownRenderedPdf = async (context, outputPath) => {
+  const html = await renderMarkdownForExportHtml(context)
   try {
-    let defaultPath = path;
-    if (path.toLowerCase().endsWith('.md')) {
-      defaultPath = path.slice(0, -3) + '.' + extName;
-    } else {
-      defaultPath = path + '.' + extName;
-    }
+    logger.info('[Export] export rendered html as pdf', {
+      inputPath: context.inputPath,
+      outputPath,
+      htmlLength: html.length,
+    })
+    await invoke('export_rendered_html_pdf', {
+      html,
+      inputPath: context.inputPath,
+      outputPath,
+    })
+  } catch (error) {
+    // 设计说明：
+    // 1. 浏览器 PDF 依赖本机 Edge/Chrome，少数机器可能没有可用 headless 浏览器。
+    // 2. 这里保留 Pandoc PDF 作为兜底，宁可质量略低也不让用户导出动作直接中断。
+    logger.warn('[Export] rendered pdf failed, fallback to pandoc pdf', {
+      inputPath: context.inputPath,
+      outputPath,
+      error: String(error?.message || error),
+    })
+    await invoke('export_markdown_pdf_pandoc', {
+      inputPath: context.inputPath,
+      outputPath,
+    })
+  }
+}
 
-    const outputPath = await save({
-      defaultPath,
-      filters: [
-        {
-          name: filterName,
-          extensions: [extName]
-        }
-      ]
-    });
+const exportMarkdownPandoc = async (context, outputPath) => {
+  logger.info('[Export] export markdown via pandoc', {
+    inputPath: context.inputPath,
+    outputPath,
+    format: context.format,
+  })
+  await invoke('export_markdown_pandoc', {
+    inputPath: context.inputPath,
+    outputPath,
+    format: context.format,
+  })
+}
+
+const exportTexPdf = async (context, outputPath) => {
+  logger.info('[Export] export tex pdf via tectonic', {
+    inputPath: context.inputPath,
+    outputPath,
+  })
+  await invoke('export_tex_pdf_tectonic', {
+    inputPath: context.inputPath,
+    outputPath,
+  })
+}
+
+const handleExportSelect = async (format) => {
+  try {
+    const context = await prepareExportContext(format)
+    if (!context) return
+
+    const outputPath = await chooseExportOutputPath(context)
 
     if (!outputPath) {
-      message.info('已取消导出');
-      return;
+      logger.info('[Export] cancelled', { format })
+      message.info('已取消导出')
+      return
     }
 
-    if (isTexFile && format === 'pdf') {
-      await invoke('export_tex_pdf_tectonic', {
-        inputPath: path,
-        outputPath
-      })
+    logger.info('[Export] start', {
+      format,
+      inputPath: context.inputPath,
+      outputPath,
+    })
+
+    if (context.isTexFile && format === 'pdf') {
+      await exportTexPdf(context, outputPath)
     } else if (format === 'pdf') {
-      await invoke('export_markdown_pdf_pandoc', {
-        inputPath: path,
-        outputPath
-      });
+      await exportMarkdownRenderedPdf(context, outputPath)
+    } else if (format === 'html') {
+      await exportMarkdownRenderedHtml(context, outputPath)
     } else {
-      await invoke('export_markdown_pandoc', {
-        inputPath: path,
-        outputPath,
-        format
-      });
+      await exportMarkdownPandoc(context, outputPath)
     }
 
-    message.success(`已导出为 ${filterName}`);
+    logger.info('[Export] complete', {
+      format,
+      outputPath,
+    })
+    message.success(`已导出为 ${context.filterName}`)
   } catch (error) {
-    logger.error('导出 Markdown 失败:', error);
-    message.error('导出 Markdown 失败');
+    logger.error('[Export] failed', {
+      format,
+      error: String(error?.message || error),
+    })
+    message.error(`导出失败：${String(error?.message || error)}`)
   }
 };
 

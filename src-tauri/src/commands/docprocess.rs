@@ -1187,6 +1187,295 @@ pub async fn export_markdown_pdf_pandoc(
     export_markdown_pandoc(input_path, output_path, "pdf".to_string()).await
 }
 
+fn escape_html_attr(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn percent_encode_file_url_path(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for b in value.as_bytes() {
+        match *b {
+            b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'_'
+            | b'.'
+            | b'~'
+            | b'/'
+            | b':' => encoded.push(*b as char),
+            other => encoded.push_str(&format!("%{other:02X}")),
+        }
+    }
+    encoded
+}
+
+fn path_to_file_url(path: &Path) -> String {
+    let raw = path.to_string_lossy().replace('\\', "/");
+    let normalized = if cfg!(windows) && raw.as_bytes().get(1) == Some(&b':') {
+        format!("/{raw}")
+    } else {
+        raw
+    };
+    format!("file://{}", percent_encode_file_url_path(&normalized))
+}
+
+fn inject_export_base_href(html: &str, input_path: &Path) -> String {
+    if html.to_ascii_lowercase().contains("<base ") {
+        return html.to_string();
+    }
+
+    let base_dir = input_path.parent().unwrap_or_else(|| Path::new("."));
+    let mut base_href = path_to_file_url(base_dir);
+    if !base_href.ends_with('/') {
+        base_href.push('/');
+    }
+    let base_tag = format!(r#"<base href="{}" />"#, escape_html_attr(&base_href));
+
+    // 设计说明：
+    // 1. 前端生成的是“预览同源 HTML”，里面的图片可能仍然是相对路径。
+    // 2. 后端会把 HTML 写入临时目录再交给 Chromium 打印，若不补 base href，
+    //    相对图片会错误地指向临时目录，导致 PDF 缺图。
+    // 3. 即使前端已经传了 base，这里也做一次兜底，保证后端命令可以独立运行。
+    if let Some(index) = html.to_ascii_lowercase().find("<head>") {
+        let insert_at = index + "<head>".len();
+        let mut next = String::with_capacity(html.len() + base_tag.len() + 1);
+        next.push_str(&html[..insert_at]);
+        next.push('\n');
+        next.push_str(&base_tag);
+        next.push_str(&html[insert_at..]);
+        next
+    } else {
+        html.to_string()
+    }
+}
+
+fn chromium_pdf_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    #[cfg(windows)]
+    {
+        if let Ok(program_files) = std::env::var("PROGRAMFILES") {
+            candidates.push(PathBuf::from(&program_files).join("Microsoft/Edge/Application/msedge.exe"));
+            candidates.push(PathBuf::from(&program_files).join("Google/Chrome/Application/chrome.exe"));
+        }
+        if let Ok(program_files_x86) = std::env::var("PROGRAMFILES(X86)") {
+            candidates.push(PathBuf::from(&program_files_x86).join("Microsoft/Edge/Application/msedge.exe"));
+            candidates.push(PathBuf::from(&program_files_x86).join("Google/Chrome/Application/chrome.exe"));
+        }
+        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+            candidates.push(PathBuf::from(&local_app_data).join("Microsoft/Edge/Application/msedge.exe"));
+            candidates.push(PathBuf::from(&local_app_data).join("Google/Chrome/Application/chrome.exe"));
+        }
+        candidates.push(PathBuf::from("msedge"));
+        candidates.push(PathBuf::from("chrome"));
+        candidates.push(PathBuf::from("chromium"));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        candidates.push(PathBuf::from("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"));
+        candidates.push(PathBuf::from("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"));
+        candidates.push(PathBuf::from("microsoft-edge"));
+        candidates.push(PathBuf::from("google-chrome"));
+        candidates.push(PathBuf::from("chromium"));
+    }
+
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        candidates.push(PathBuf::from("microsoft-edge"));
+        candidates.push(PathBuf::from("google-chrome"));
+        candidates.push(PathBuf::from("chromium"));
+        candidates.push(PathBuf::from("chromium-browser"));
+    }
+
+    candidates
+}
+
+fn select_chromium_for_pdf_export() -> Result<PathBuf, String> {
+    for candidate in chromium_pdf_candidates() {
+        let should_probe = candidate.components().count() == 1 || candidate.is_file();
+        if !should_probe {
+            continue;
+        }
+        if can_execute_program(&candidate) {
+            info!(
+                browser = %candidate.display(),
+                "[ExportPdf] selected chromium browser"
+            );
+            return Ok(candidate);
+        }
+    }
+
+    Err("未找到可用的 Edge/Chrome/Chromium，无法使用浏览器高保真导出 PDF".to_string())
+}
+
+fn run_chromium_print_to_pdf(
+    browser: &Path,
+    html_path: &Path,
+    output_path: &Path,
+    profile_dir: &Path,
+    base_dir: &Path,
+    headless_arg: &str,
+) -> Result<(), String> {
+    let html_url = path_to_file_url(html_path);
+    let output_arg = format!("--print-to-pdf={}", output_path.to_string_lossy());
+    let profile_arg = format!("--user-data-dir={}", profile_dir.to_string_lossy());
+
+    let mut cmd = Command::new(browser);
+
+    #[cfg(windows)]
+    // 设计说明：release 模式下调用 Edge/Chrome 这类外部程序时，必须禁用控制台窗口；
+    // 否则 Windows 会短暂弹出黑色命令行窗口，导出 PDF 时体验非常割裂。
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    info!(
+        browser = %browser.display(),
+        html = %html_path.display(),
+        output = %output_path.display(),
+        headless = headless_arg,
+        "[ExportPdf] running chromium print-to-pdf"
+    );
+
+    let output = cmd
+        .current_dir(base_dir)
+        .arg(headless_arg)
+        .arg("--disable-gpu")
+        .arg("--no-first-run")
+        .arg("--no-default-browser-check")
+        .arg("--disable-extensions")
+        .arg("--allow-file-access-from-files")
+        .arg(profile_arg)
+        .arg(output_arg)
+        .arg(html_url)
+        .output()
+        .map_err(|e| format!("启动浏览器 PDF 导出失败: {e}"))?;
+
+    let stdout_text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr_text = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+    if output.status.success() {
+        if !stdout_text.is_empty() {
+            info!(stdout = stdout_text.as_str(), "[ExportPdf] chromium stdout");
+        }
+        if !stderr_text.is_empty() {
+            warn!(stderr = stderr_text.as_str(), "[ExportPdf] chromium stderr");
+        }
+        return Ok(());
+    }
+
+    error!(
+        status = ?output.status.code(),
+        stdout = stdout_text.as_str(),
+        stderr = stderr_text.as_str(),
+        headless = headless_arg,
+        "[ExportPdf] chromium print-to-pdf failed"
+    );
+    Err(format!(
+        "浏览器 PDF 导出失败 (code={:?}): {}",
+        output.status.code(),
+        if stderr_text.is_empty() { stdout_text } else { stderr_text }
+    ))
+}
+
+#[tauri::command]
+pub async fn export_rendered_html_pdf(
+    html: String,
+    input_path: String,
+    output_path: String,
+) -> Result<(), String> {
+    let input = PathBuf::from(input_path.trim());
+    let output = PathBuf::from(output_path.trim());
+    let base_dir = input.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+
+    if html.trim().is_empty() {
+        return Err("导出的 HTML 内容为空".to_string());
+    }
+
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("创建 PDF 输出目录失败: {e}"))?;
+    }
+
+    let browser = select_chromium_for_pdf_export()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?;
+    let tmp_dir = std::env::temp_dir()
+        .join("guaxi_rendered_html_pdf")
+        .join(format!("{}", now.as_millis()));
+    let profile_dir = tmp_dir.join("profile");
+    fs::create_dir_all(&profile_dir)
+        .map_err(|e| format!("创建浏览器临时目录失败: {e}"))?;
+
+    let html_path = tmp_dir.join("export.html");
+    let html_with_base = inject_export_base_href(&html, &input);
+    fs::write(&html_path, html_with_base.as_bytes())
+        .map_err(|e| format!("写入临时 HTML 失败: {e}"))?;
+
+    info!(
+        input = %input.display(),
+        output = %output.display(),
+        html = %html_path.display(),
+        html_len = html.len(),
+        "[ExportPdf] rendered html pdf export start"
+    );
+
+    // 设计说明：
+    // 1. 优先使用新版 Chromium 的 --headless=new，能更接近现代浏览器渲染路径。
+    // 2. 部分旧版 Chrome/Edge 不认识该参数，失败后回退到传统 --headless。
+    // 3. 输出后检查文件大小，避免浏览器成功退出但没有真正写出 PDF 的假成功。
+    let first = run_chromium_print_to_pdf(
+        &browser,
+        &html_path,
+        &output,
+        &profile_dir,
+        &base_dir,
+        "--headless=new",
+    );
+    if first.is_err() {
+        warn!(
+            error = first.as_ref().err().map(|e| e.as_str()).unwrap_or("unknown"),
+            "[ExportPdf] retry chromium print-to-pdf with legacy headless"
+        );
+        run_chromium_print_to_pdf(
+            &browser,
+            &html_path,
+            &output,
+            &profile_dir,
+            &base_dir,
+            "--headless",
+        )?;
+    }
+
+    let size = fs::metadata(&output)
+        .map_err(|e| format!("PDF 导出后未找到输出文件: {e}"))?
+        .len();
+    if size == 0 {
+        return Err("PDF 导出完成但文件大小为 0".to_string());
+    }
+
+    info!(
+        output = %output.display(),
+        bytes = size,
+        "[ExportPdf] rendered html pdf export complete"
+    );
+
+    if let Err(err) = fs::remove_dir_all(&tmp_dir) {
+        warn!(
+            tmp_dir = %tmp_dir.display(),
+            error = %err,
+            "[ExportPdf] cleanup temp dir failed"
+        );
+    }
+
+    Ok(())
+}
+
 fn find_tectonic_exe_for_export() -> Result<(PathBuf, bool), String> {
     #[cfg(windows)]
     {
