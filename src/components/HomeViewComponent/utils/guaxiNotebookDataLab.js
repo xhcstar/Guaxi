@@ -1396,24 +1396,36 @@ def __guaxi_an_int(key, default):
 def __guaxi_an_title(fallback):
     return str(__guaxi_an_spec.get('title') or fallback)
 
+# 设计说明：分析输出 = 交互图 + 结论表，作为「两个独立 display」返回（worker 的 __guaxi_display__ 数组）。
+# 1. 图用 fig._repr_html_()——与「绘图」tab 完全相同的已验证渲染路径（切勿用 pio.to_html(include_plotlyjs=True)
+#    再拼接，那会在 iframe 里破坏 plotly 初始化，报 plugins/makeCalcdata undefined）。
+# 2. 结论表是独立的小段 HTML（不含 plotly），单独成模块，排版精美且与图互不干扰。
+# 3. 取不到 _repr_html_ 时兜底回退 _result = fig（无摘要），保证至少出图。
 def __guaxi_an_html(fig, summary_html=''):
     try:
-        import plotly.io as pio
-        fig_html = pio.to_html(fig, include_plotlyjs=True, full_html=False, config={'responsive': True})
-        return {'__guaxi_display__': {'type': 'html', 'mime': 'text/html', 'html': summary_html + fig_html}}
+        fig_html = fig._repr_html_()
     except Exception:
+        fig_html = None
+    if not isinstance(fig_html, str) or not fig_html.strip():
         return fig
+    displays = [{'type': 'html', 'mime': 'text/html', 'html': fig_html}]
+    if summary_html:
+        displays.append({'type': 'html', 'mime': 'text/html', 'html': summary_html})
+    return {'__guaxi_display__': displays}
 
 def __guaxi_an_table_html(title, rows, headers):
-    th = ''.join('<th style="text-align:left;padding:4px 10px;border-bottom:1px solid #ddd">' + str(h) + '</th>' for h in headers)
+    # 主题中性样式：边框/底色用 currentColor 透明度，文字 inherit，亮/暗主题都清晰。
+    cell = 'padding:6px 12px;border-bottom:1px solid rgba(128,128,128,0.22);text-align:left;white-space:nowrap'
+    th = ''.join('<th style="' + cell + ';font-weight:700">' + str(h) + '</th>' for h in headers)
     trs = ''
     for r in rows:
-        tds = ''.join('<td style="padding:4px 10px;border-bottom:1px solid #eee">' + str(c) + '</td>' for c in r)
-        trs += '<tr>' + tds + '</tr>'
-    return ('<div style="font-family:system-ui,Microsoft YaHei,sans-serif;margin:0 0 10px">'
-            '<div style="font-weight:700;margin:4px 0 6px">' + str(title) + '</div>'
-            '<table style="border-collapse:collapse;font-size:13px">'
-            '<thead><tr>' + th + '</tr></thead><tbody>' + trs + '</tbody></table></div>')
+        cells = r if isinstance(r, (list, tuple)) else [r]
+        trs += '<tr>' + ''.join('<td style="' + cell + '">' + str(c) + '</td>' for c in cells) + '</tr>'
+    return ('<div style="font-family:system-ui,\'Microsoft YaHei\',sans-serif;color:inherit;margin:2px 0 6px">'
+            '<div style="font-weight:700;font-size:14px;margin:0 0 8px">' + str(title) + '</div>'
+            '<div style="overflow:auto"><table style="border-collapse:collapse;font-size:13px;min-width:100%">'
+            '<thead><tr style="background:rgba(128,128,128,0.12)">' + th + '</tr></thead>'
+            '<tbody>' + trs + '</tbody></table></div></div>')
 
 def __guaxi_an_need(mod, label):
     try:
