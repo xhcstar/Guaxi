@@ -188,7 +188,7 @@ const panelPositionStyle = computed(() => {
   }
 })
 const sourceMetaText = computed(() => {
-  if (activeChannel.value !== 'python') return 'LaTeX / SymPy / 数学块本地索引'
+  if (activeChannel.value !== 'python') return '数学块离线手册 · 微积分/线代/复变/几何/数值/仿真'
   const manifest = pythonManifest.value
   if (!manifest) return 'Python 官方完整文档索引'
   const lang = manifest.language === 'zh-cn' ? '简体中文' : '英文'
