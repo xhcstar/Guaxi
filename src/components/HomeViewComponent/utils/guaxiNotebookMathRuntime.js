@@ -23,7 +23,7 @@ import GUAXIMATH_ENGINE_SOURCE from '../../../../src-tauri/scripts/guaximath_eng
 const normalizeText = (value) => String(value == null ? '' : value).trim()
 
 // 与引擎里的 ENGINE_VERSION 保持一致；版本变化时兜底路径会强制重新 exec。
-const GUAXIMATH_ENGINE_VERSION = '1.0.0'
+const GUAXIMATH_ENGINE_VERSION = '1.1.0'
 
 // 把引擎源码安全地内嵌进生成的 Python：用 base64 规避所有转义/缩进问题。
 const encodeEngineSourceBase64 = (source) => {

@@ -346,6 +346,17 @@
               >
                 <Icon :icon="circleHelpIcon" width="16" height="16" />
               </button>
+              <!-- 数学工作区面板：查看工作区变量 / 数值·仿真工作台（独立承载层，不影响 Python Cell 面板）。 -->
+              <button
+                type="button"
+                class="guaxi-notebook__icon-btn"
+                :class="{ 'is-active': isNotebookMathWorkspacePanelVisible && activeMathWorkspaceCellKey === cell.key }"
+                data-tooltip="打开数学工作区面板（工作区变量 / 数值·仿真工作台）"
+                aria-label="打开数学工作区面板"
+                @click="toggleMathWorkspacePanel(cell)"
+              >
+                <Icon :icon="panelRightIcon" width="16" height="16" />
+              </button>
               <!-- 数学工具下拉菜单：函数/方程、微积分、级数、统计分布、积分变换。 -->
               <div class="guaxi-notebook__math-menu-anchor">
                 <button
@@ -805,11 +816,13 @@ import messageCircleIcon from '@iconify-icons/lucide/message-circle'
 import botIcon from '@iconify-icons/lucide/bot'
 import volume2Icon from '@iconify-icons/lucide/volume-2'
 import circleHelpIcon from '@iconify-icons/lucide/help-circle'
+import panelRightIcon from '@iconify-icons/lucide/panel-right'
 import pythonIcon from '@iconify-icons/vscode-icons/file-type-python'
 import { createLogger } from '../../utils/logger'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
 import { useSiderStore } from '../../stores/useSiderStore'
+import { useMathWorkspaceStore } from '../../stores/mathWorkspaceStore'
 import GuaxiNotebookPythonEditor from './GuaxiNotebookPythonEditor.vue'
 import GuaxiNotebookMathEditor from './GuaxiNotebookMathEditor.vue'
 import GuaxiNotebookMarkdownEditor from './GuaxiNotebookMarkdownEditor.vue'
@@ -894,7 +907,11 @@ const notebookOutlineMarkdownParser = new MarkdownIt()
 const fileTreeStore = useFileTreeStore()
 const rightSiderStore = useRightSiderStore()
 const siderStore = useSiderStore()
+// 数学块承载层专用 store（与 Python Cell 的 rightSiderStore 解耦，仅借用右侧区域/新窗口）。
+const mathWorkspaceStore = useMathWorkspaceStore()
 const NOTEBOOK_RIGHT_SIDER_VIEW_KEY = 'home'
+// 当前被「数学工作区」面板选中的数学块 key（自成一套，不与 activeNotebookPythonCellKey 混用）。
+const activeMathWorkspaceCellKey = ref('')
 
 const refreshTick = ref(0)
 const pendingFocusCellKey = ref('')
@@ -1031,6 +1048,12 @@ const activeNotebookPythonCellSnapshot = computed(() => {
 const isNotebookPythonSessionPanelVisible = computed(() => (
   rightSiderStore.isOpen
   && rightSiderStore.panel === 'python-session'
+  && siderStore.isRightSiderCollapsed?.[NOTEBOOK_RIGHT_SIDER_VIEW_KEY] === false
+))
+// 数学工作区面板可见性：与 Python 面板互斥（panel 不同），互不干扰。
+const isNotebookMathWorkspacePanelVisible = computed(() => (
+  rightSiderStore.isOpen
+  && rightSiderStore.panel === 'math-workspace'
   && siderStore.isRightSiderCollapsed?.[NOTEBOOK_RIGHT_SIDER_VIEW_KEY] === false
 ))
 
@@ -6083,6 +6106,112 @@ const toggleCellSession = (cell) => {
   refreshNotebookPythonEditor(cell, 'data-lab-close')
 }
 
+// ===========================================================================
+// 数学块承载层（右侧「数学工作区」面板）—— 与 Python Cell 的面板完全独立：
+//   · 用独立 store mathWorkspaceStore，不读写 rightSiderStore.pythonSessionInspector；
+//   · 仅借用通用的 setPanel/open/close 与右侧区域折叠开关；
+//   · 通过一次无状态 python_exec 探测会话里的 __GUAXIMATH_WS__ / __GUAXIMATH_CARRIERS__。
+// ===========================================================================
+const buildMathWorkspaceInspectorCode = () => [
+  'import json as __mws_json',
+  '__mws_ws = globals().get("__GUAXIMATH_WS__", {}) or {}',
+  '__mws_carriers = globals().get("__GUAXIMATH_CARRIERS__", {}) or {}',
+  '__mws_syms = []',
+  'for __mws_k, __mws_v in __mws_ws.items():',
+  '    __mws_syms.append({"name": str(__mws_k), "type": type(__mws_v).__name__})',
+  '__mws_out = {"symbols": __mws_syms, "carriers": [__mws_v for __mws_v in __mws_carriers.values() if isinstance(__mws_v, dict)]}',
+  'print("__GUAXI_MWS__" + __mws_json.dumps(__mws_out, ensure_ascii=False, default=str))',
+  'for __mws_key in ("__mws_json","__mws_ws","__mws_carriers","__mws_syms","__mws_out","__mws_k","__mws_v","__mws_key"):',
+  '    globals().pop(__mws_key, None)',
+].join('\n')
+
+const syncMathWorkspaceInspector = async (cell, reason = 'unknown') => {
+  const sessionId = String(createPythonSessionId(props.filePath) || '').trim()
+  const payloadBase = {
+    filePath: String(props.filePath || ''),
+    cellId: String(cell?.cellId || ''),
+    cellKey: String(cell?.key || ''),
+    stableId: getNotebookCellStableId(cell),
+    cellTitle: '',
+    sessionId,
+    hasActiveCell: !!cell,
+  }
+  // 先用基础信息占位，保证面板立刻有上下文；再异步探测会话刷新符号 / carrier。
+  mathWorkspaceStore.setInspector({
+    ...payloadBase,
+    workspaceSymbols: mathWorkspaceStore.inspector.workspaceSymbols,
+    carriers: mathWorkspaceStore.inspector.carriers,
+  })
+  if (!sessionId || !cell) return
+  try {
+    const res = await invoke('python_exec', {
+      request: {
+        code: buildMathWorkspaceInspectorCode(),
+        persist: true,
+        expect_json: false,
+        include_session_vars: false,
+        vars: {
+          _guaxi_session: sessionId,
+          _doc_path: String(props.filePath || ''),
+          _py_cell_id: String(cell?.cellId || ''),
+        },
+      },
+    })
+    const stdout = String(res?.stdout || '')
+    const marker = stdout.indexOf('__GUAXI_MWS__')
+    let parsed = { symbols: [], carriers: [] }
+    if (marker >= 0) {
+      const jsonLine = stdout.slice(marker + '__GUAXI_MWS__'.length).split('\n')[0]
+      parsed = JSON.parse(jsonLine)
+    }
+    mathWorkspaceStore.setInspector({
+      ...payloadBase,
+      workspaceSymbols: Array.isArray(parsed.symbols) ? parsed.symbols : [],
+      carriers: Array.isArray(parsed.carriers) ? parsed.carriers : [],
+    })
+    logger.info('[NotebookMath] synced math workspace inspector', {
+      reason,
+      cellKey: payloadBase.cellKey,
+      symbolCount: Array.isArray(parsed.symbols) ? parsed.symbols.length : 0,
+      carrierCount: Array.isArray(parsed.carriers) ? parsed.carriers.length : 0,
+    })
+  } catch (error) {
+    logger.warn('[NotebookMath] sync math workspace inspector failed', {
+      reason,
+      error: String(error?.message || error),
+    })
+  }
+}
+
+const openMathWorkspacePanel = (cell, reason = 'unknown') => {
+  activeMathWorkspaceCellKey.value = String(cell?.key || '')
+  rightSiderStore.setPanel('math-workspace')
+  rightSiderStore.open()
+  siderStore.setRightSiderCollapsed(NOTEBOOK_RIGHT_SIDER_VIEW_KEY, false)
+  void syncMathWorkspaceInspector(cell, `open:${reason}`)
+  logger.info('[NotebookMath] open math workspace panel', {
+    reason,
+    cellKey: String(cell?.key || ''),
+  })
+}
+
+const closeMathWorkspacePanel = (reason = 'unknown') => {
+  if (rightSiderStore.panel === 'math-workspace') {
+    rightSiderStore.close()
+    siderStore.setRightSiderCollapsed(NOTEBOOK_RIGHT_SIDER_VIEW_KEY, true)
+  }
+  logger.info('[NotebookMath] close math workspace panel', { reason })
+}
+
+const toggleMathWorkspacePanel = (cell) => {
+  const sameCell = String(activeMathWorkspaceCellKey.value || '') === String(cell?.key || '')
+  if (isNotebookMathWorkspacePanelVisible.value && sameCell) {
+    closeMathWorkspacePanel('toolbar-toggle')
+    return
+  }
+  openMathWorkspacePanel(cell, 'toolbar-toggle')
+}
+
 const NOTEBOOK_PYTHON_SESSION_BUSY_PREFIX = 'python-session::'
 const createNotebookActionRequestId = (prefix = 'nb-task') => [
   prefix,
@@ -7589,6 +7718,11 @@ const runMathCell = async (cell, writeBack = false, mode = '', options = {}) => 
       lastMathBlockAt: new Date().toISOString(),
     },
   })
+  // 运行后若数学工作区面板可见，刷新该块的工作区变量 / carrier（独立链路，不触碰 Python 面板）。
+  if (isNotebookMathWorkspacePanelVisible.value) {
+    activeMathWorkspaceCellKey.value = String(cell?.key || '')
+    void syncMathWorkspaceInspector(cell, 'after-run')
+  }
 }
 
 // 数学命令速查 / 片段菜单（命令式工作区 v2）：
@@ -7634,6 +7768,63 @@ const NOTEBOOK_MATH_TOOL_GROUPS = [
       { snippet: 'plot(sin(x), (x, -10, 10))', label: '一维曲线', hint: 'plot(f, (x, a, b))' },
       { snippet: 'plot([sin(x), cos(x)], (x, -pi, pi))', label: '多条曲线', hint: 'plot([f, g], (x, a, b))' },
       { snippet: 'plot(x**2 + y**2, (x, -3, 3), (y, -3, 3))', label: '三维曲面', hint: 'plot(f, (x,..), (y,..))' },
+    ],
+  },
+  {
+    label: '复变函数',
+    items: [
+      { snippet: 'residue(1/(z**2 + 1), z, I)', label: '留数', hint: 'residue(f, z, z0)' },
+      { snippet: 'laurent(1/(z*(z - 1)), z, 0, 6)', label: '洛朗展开', hint: 'laurent(f, z, z0, n)' },
+      { snippet: 'contour_integral(1/(z**2 + 1), z, poles=[I])', label: '围道积分', hint: 'contour_integral(f, z, poles=[...])' },
+      { snippet: 'conformal(z**2, z)', label: '共形映射', hint: "conformal(f, z) → f'(z)" },
+      { snippet: 'cauchy_riemann(x**2 - y**2, 2*x*y, x, y)', label: '柯西-黎曼', hint: 'cauchy_riemann(u, v, x, y)' },
+    ],
+  },
+  {
+    label: '数学物理方法',
+    items: [
+      { snippet: 'laplace(exp(-2*t), t, s)', label: '拉普拉斯变换', hint: 'laplace(f, t, s) / inverse_laplace(F, s, t)' },
+      { snippet: 'fourier(exp(-x**2), x, k)', label: '傅里叶变换', hint: 'fourier(f, x, k) / inverse_fourier(F, k, x)' },
+      { snippet: 'besselj(0, x)', label: '特殊函数', hint: 'besselj / legendre / hermite / laguerre ...' },
+      { snippet: 'separate_variables(x*y + x)', label: '分离变量', hint: 'separate_variables(expr)' },
+      { snippet: 'greens_function(x, xi, 1)', label: '格林函数', hint: 'greens_function(x, xi, L)（1D Dirichlet）' },
+    ],
+  },
+  {
+    label: '张量 / 微分几何',
+    items: [
+      { snippet: 'g = metric([[1, 0], [0, r**2]], [r, theta])', label: '定义度规', hint: 'g = metric([[...]], [坐标])' },
+      { snippet: 'christoffel(g, [r, theta])', label: 'Christoffel 符号', hint: 'christoffel(g, [坐标])' },
+      { snippet: 'ricci(g, [r, theta])', label: 'Ricci / 标量曲率', hint: 'ricci(g, ..) / ricci_scalar(g, ..)' },
+      { snippet: 'geodesic_equations(g, [r, theta])', label: '测地线方程', hint: 'geodesic_equations(g, [坐标])' },
+      { snippet: 'gaussian_curvature([a*cos(u)*sin(v), a*sin(u)*sin(v), a*cos(v)], (u, v))', label: '曲面曲率', hint: 'gaussian_curvature / mean_curvature(r, (u,v))' },
+    ],
+  },
+  {
+    label: '矩阵论 / 泛函',
+    items: [
+      { snippet: 'jordan(matrix([[2, 1], [0, 2]]))', label: 'Jordan 标准形', hint: 'jordan(A)' },
+      { snippet: 'matrix_exp(matrix([[0, 1], [0, 0]]))', label: '矩阵指数', hint: 'matrix_exp(A)' },
+      { snippet: 'schur(matrix([[2, 1], [1, 2]]))', label: 'Schur 分解', hint: 'schur(A)（数值）' },
+      { snippet: 'gram_schmidt([matrix([1, 1, 0]), matrix([1, 0, 1])])', label: 'Gram-Schmidt', hint: 'gram_schmidt([v1, v2, ...])' },
+      { snippet: "l2_approx(exp(x), 'legendre', x, -1, 1, 3)", label: 'L² 最佳逼近', hint: "l2_approx(f, 'legendre'/'fourier', x, a, b, n)" },
+    ],
+  },
+  {
+    label: '数值计算',
+    items: [
+      { snippet: 'nintegrate(exp(-x**2), (x, -5, 5))', label: '数值积分', hint: 'nintegrate(f, (x, a, b))' },
+      { snippet: 'nsolve(x**3 - x - 2, 1.5)', label: '数值求根', hint: 'nsolve(f, x0, tol=.., maxiter=..)' },
+      { snippet: 'minimize((x - 3)**2 + 1, 0)', label: '数值优化', hint: 'minimize(f, x0, method=..)' },
+      { snippet: 'lstsq(matrix([[1, 1], [1, 2], [1, 3]]), matrix([1, 2, 2]))', label: '最小二乘', hint: 'lstsq(A, b)' },
+      { snippet: 'odeint(-y, 1, (t, 0, 5))', label: 'ODE 数值解', hint: 'odeint(rhs, y0, (t, a, b), n=..)' },
+    ],
+  },
+  {
+    label: '仿真（轻量）',
+    items: [
+      { snippet: 'odeint([y, -x], [1, 0], (t, 0, 6.283), vars=[x, y])', label: 'ODE 系统', hint: 'odeint([f, g], [x0, y0], (t, a, b), vars=[x, y])' },
+      { snippet: 'phase_portrait([y, -x], (x, -3, 3), (y, -3, 3))', label: '相图 / 向量场', hint: 'phase_portrait([f, g], (x,..), (y,..))' },
     ],
   },
 ]

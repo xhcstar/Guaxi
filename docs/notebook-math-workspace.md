@@ -135,11 +135,83 @@ Normal(0, 1)
 引擎以真实 Python 模块随应用一起物化、`import` 一次常驻会话（性能）；
 若未物化，前端会用内联源码兜底，保证可用。新增学科只需在引擎里加命令、在速查菜单加一条模板。
 
-## 规划（后续阶段）
+## 命令速查（阶段二：复变函数 / 数学物理方法）
 
-- 阶段二：复变函数（留数 / 洛朗级数 / 共形映射）+ 数学物理方法（积分变换 / 特殊函数 / PDE 分离变量 / 格林函数）。
-- 阶段三：张量分析 + 微分几何（曲率、第一第二基本形式、测地线、Christoffel/Riemann/Ricci）。
-- 阶段四：矩阵论（Jordan 标准形、矩阵函数、Schur）+ 泛函分析（内积空间、正交化、算子谱、L² 逼近）。
+### 复变函数
+| 命令 | 示例 | 说明 |
+| --- | --- | --- |
+| `residue(f, z, z0)` | `residue(1/(z**2+1), z, I)` | 留数 |
+| `laurent(f, z, z0, n)` | `laurent(1/(z*(z-1)), z, 0, 6)` | 洛朗 / 幂级数展开（含留数） |
+| `contour_integral(f, z, poles=[...])` | `contour_integral(1/(z**2+1), z, poles=[I])` | 围道积分（留数定理 2πi·Σ Res） |
+| `conformal(f, z)` | `conformal(z**2, z)` | 共形映射：给出 f'(z)（f'≠0 处保角） |
+| `cauchy_riemann(u, v, x, y)` | `cauchy_riemann(x**2-y**2, 2*x*y, x, y)` | 柯西–黎曼方程 |
+
+### 数学物理方法
+| 命令 | 示例 | 说明 |
+| --- | --- | --- |
+| `laplace / inverse_laplace` | `laplace(exp(-2*t), t, s)` | 拉普拉斯（逆）变换 |
+| `fourier / inverse_fourier` | `fourier(exp(-x**2), x, k)` | 傅里叶（逆）变换 |
+| `mellin(f, x, s)` | `mellin(exp(-x), x, s)` | 梅林变换 |
+| `besselj/legendre/hermite/laguerre/chebyshevt` | `besselj(0, x)` | 特殊函数 |
+| `separate_variables(expr)` | `separate_variables(x*y + x)` | 分离变量 |
+| `greens_function(x, xi, L)` | `greens_function(x, xi, 1)` | 1D Dirichlet 拉普拉斯算子的格林函数 |
+
+## 命令速查（阶段三：张量分析 / 微分几何）
+
+> 约定：度规 `g` 为 n×n 矩阵，坐标写成符号列表 `[r, theta]`；曲面用参数化向量 `r(u,v)`。
+
+| 命令 | 示例 | 说明 |
+| --- | --- | --- |
+| `metric(rows, coords)` | `g = metric([[1,0],[0,r**2]], [r, theta])` | 定义度规张量 |
+| `christoffel(g, coords)` | `christoffel(g, [r, theta])` | Christoffel 符号 Γ^k_{ij} |
+| `riemann(g, coords)` | `riemann(g, [r, theta])` | Riemann 曲率张量 R^l_{ijk} |
+| `ricci / ricci_scalar` | `ricci_scalar(g, [theta, phi])` | Ricci 张量 / 标量曲率（球面 R=2/a²） |
+| `geodesic_equations(g, coords)` | `geodesic_equations(g, [r, theta])` | 测地线方程组 |
+| `first_/second_fundamental_form(r, (u,v))` | `first_fundamental_form([u, v, u**2+v**2], (u, v))` | 第一 / 第二基本形式 |
+| `gaussian_curvature / mean_curvature(r, (u,v))` | `gaussian_curvature([a*cos(u)*sin(v), a*sin(u)*sin(v), a*cos(v)], (u, v))` | 高斯 / 平均曲率 |
+
+## 命令速查（阶段四：矩阵论 / 泛函分析）
+
+| 命令 | 示例 | 说明 |
+| --- | --- | --- |
+| `jordan(A)` | `jordan(matrix([[2,1],[0,2]]))` | Jordan 标准形 A = P J P⁻¹ |
+| `matrix_exp(A)` | `matrix_exp(matrix([[0,1],[0,0]]))` | 矩阵指数（符号；失败回退数值） |
+| `schur(A)` | `schur(matrix([[2,1],[1,2]]))` | Schur 分解（数值） |
+| `is_diagonalizable / cond(A)` | `cond(matrix([[2,0],[0,3]]))` | 可对角化判定 / 条件数 |
+| `inner_product(u, v, ...)` | `inner_product(x, x, var=x, a=-1, b=1)` | 向量内积 / 函数 L² 内积 |
+| `norm(v, ...)` | `norm(matrix([3,4]))` | 范数（向量 / 函数 L²） |
+| `gram_schmidt([...])` | `gram_schmidt([matrix([1,1,0]), matrix([1,0,1])])` | 正交化（`orthonormal=True` 单位化） |
+| `operator_spectrum(A)` | `operator_spectrum(matrix([[2,0],[0,-3]]))` | 算子谱（特征值 + 谱半径） |
+| `l2_approx(f, basis, var, a, b, n)` | `l2_approx(exp(x), 'legendre', x, -1, 1, 3)` | L² 最佳逼近（legendre / fourier 基） |
+
+## 命令速查（数值计算 / 仿真）
+
+> 数值计算依赖 `scipy`；这些命令给出**数值**结果，并附「收敛过程」表与残差-迭代交互图。
+
+| 命令 | 示例 | 说明 |
+| --- | --- | --- |
+| `nintegrate(f, (x,a,b))` | `nintegrate(exp(-x**2), (x, -5, 5))` | 数值积分（quad，附误差） |
+| `nsolve(f, x0)` | `nsolve(x**3 - x - 2, 1.5)` | 数值求根（Newton，附收敛历史） |
+| `minimize(f, x0, method=..)` | `minimize((x-3)**2 + 1, 0)` | 数值优化（附迭代历史） |
+| `lstsq(A, b)` | `lstsq(matrix([[1,1],[1,2],[1,3]]), matrix([1,2,2]))` | 最小二乘解 |
+| `odeint(rhs, y0, (t,a,b), n=..)` | `odeint(-y, 1, (t, 0, 5))` | ODE 数值解（标量 / 系统，画轨迹） |
+| `phase_portrait([f,g], (x,..), (y,..))` | `phase_portrait([y, -x], (x,-3,3), (y,-3,3))` | 二维相图 / 向量场（仿真，轻量） |
+
+> 仿真与几何当前为**轻量但可扩展**版本：仿真先支持 ODE 轨迹与相图，几何先支持核心曲率量；
+> 引擎按学科分节（`_commands_<subject>`），新增能力 = 加一个命令函数，不影响其它学科。
+
+## carrier 升级：内联 → 右侧面板 → 独立工作台
+
+数学块默认把所有结果**内联**显示在单元格下方。对「重型」结果（数值解的迭代历史、ODE/相图等仿真），
+引擎会额外登记一个 **carrier**（活在会话里，不进显示结果），于是可以逐级升级承载：
+
+1. **内联**（默认）：公式、矩阵、单张图、收敛表都在单元格里。
+2. **右侧面板**：选中数学块后可在右侧打开「数学工作区」面板，查看工作区变量与可复跑的 carrier；
+   便宜的参数微调（精度 / 容差）在这里就地重跑。
+3. **独立工作台窗口**：最重的仿真回放 / 多参数扫描在独立窗口里进行（参数滑块、收敛动画、逐帧回放）。
+
+> 该承载层是数学模块**独立**实现的，与探索者模式里 Python Cell 的右侧面板 / 变量工作台
+> 互不影响、互不复用——只是同样利用了「右侧区域」与「新窗口」这两处通用位置。
 
 ## 故障排查
 

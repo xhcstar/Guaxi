@@ -29,7 +29,7 @@ import json
 import re
 import sys
 
-ENGINE_VERSION = "1.0.0"
+ENGINE_VERSION = "1.1.0"
 
 # ---------------------------------------------------------------------------
 # 基础库（引擎只加载一次，这里直接 import；缺失时给出中文提示而非崩溃）
@@ -141,6 +141,33 @@ class RunContext:
     def __init__(self, options):
         self.options = options or {}
         self.blocks = []  # 结果块列表
+        # 会话引用与「重型对象登记表」（carrier）。run() 注入；脱离会话时为 None（如 _persist_workspace 探测）。
+        # 重型对象（数值解迭代历史、仿真轨迹）登记在会话 globals 的 __GUAXIMATH_CARRIERS__ 里，
+        # 供右侧面板 / 独立工作台读取——不进 display 字典，不改 display 协议。
+        self.session = None
+        self.carriers = None
+
+    def add_carrier(self, kind, command, label="", params=None, summary="", solution_var=""):
+        """登记一个可在面板/工作台里复跑或回放的重型结果。值必须 JSON 安全（前端要读）。
+
+        返回 carrier key（无会话时返回空串、不报错）。
+        """
+        if self.carriers is None or self.session is None:
+            return ""
+        seq = int(self.session.get("__GUAXIMATH_CARRIER_SEQ__", 0)) + 1
+        self.session["__GUAXIMATH_CARRIER_SEQ__"] = seq
+        key = f"{command}_{seq}"
+        self.carriers[key] = {
+            "key": key,
+            "kind": str(kind or "numeric"),
+            "command": str(command or ""),
+            "label": str(label or command or ""),
+            "params": params if isinstance(params, dict) else {},
+            "summary": str(summary or ""),
+            "solutionVar": str(solution_var or ""),
+            "seq": seq,
+        }
+        return key
 
     # 选项读取（带默认值）
     def opt(self, key, default):
@@ -298,6 +325,55 @@ def _free_symbols(value):
             acc |= _free_symbols(item)
         return acc
     return set(getattr(value, "free_symbols", set()) or set())
+
+
+# ---------------------------------------------------------------------------
+# 模块级共享 helper（供阶段二/三/四各学科命令复用，避免与阶段一闭包重复）
+# ---------------------------------------------------------------------------
+def _as_sym(name_or_sym):
+    """把名字/符号统一成 sp.Symbol。"""
+    if isinstance(name_or_sym, sp.Symbol):
+        return name_or_sym
+    return sp.Symbol(str(name_or_sym))
+
+
+def _as_matrix(rows):
+    """把列表 / 矩阵统一成 sp.Matrix（已是矩阵则原样返回）。"""
+    if isinstance(rows, sp.MatrixBase):
+        return rows
+    try:
+        return sp.Matrix(rows)
+    except Exception as exc:  # noqa: BLE001
+        raise GuaxiMathError(f"无法构造矩阵：{exc}")
+
+
+def _coords_list(coords):
+    """坐标参数（名字/符号的列表）统一成 [Symbol, ...]。"""
+    if isinstance(coords, sp.MatrixBase):
+        coords = list(coords)
+    if not isinstance(coords, (list, tuple)) or not coords:
+        raise GuaxiMathError("请提供坐标列表，例如 [r, theta]。")
+    return [_as_sym(c) for c in coords]
+
+
+def _pick_var(expr, preferred="x"):
+    """从表达式自由符号里挑一个变量：优先 preferred，否则取字典序首个，再否则造一个。"""
+    syms = sorted(_free_symbols(expr), key=str)
+    for s in syms:
+        if str(s) == preferred:
+            return s
+    if syms:
+        return syms[0]
+    return sp.Symbol(preferred)
+
+
+def _as_vec(value):
+    """把 3 维（或任意维）向量参数统一成列向量 Matrix（支持 list / Matrix）。"""
+    if isinstance(value, sp.MatrixBase):
+        return value if value.shape[1] == 1 else value.T
+    if isinstance(value, (list, tuple)):
+        return sp.Matrix(list(value))
+    raise GuaxiMathError("请提供向量，例如 [cos(u)*sin(v), sin(u)*sin(v), cos(v)]。")
 
 
 # ===========================================================================
@@ -515,9 +591,128 @@ class DistResult(Renderable):
             ctx.text("（plotly 不可用，已跳过分布图）")
 
 
+class SeriesResult(Renderable):
+    """洛朗 / 幂级数展开 + 可选留数（复变阶段）。"""
+
+    def __init__(self, series_expr, residue=None, title="级数展开"):
+        self.series_expr = series_expr
+        self.residue = residue
+        self.title = title
+
+    def render(self, ctx):
+        ctx.heading(self.title)
+        ctx.latex(self.series_expr)
+        if self.residue is not None:
+            ctx.latex_raw(f"\\operatorname{{Res}} = {sp.latex(self.residue)}")
+
+
+class TensorResult(Renderable):
+    """带标签的指标分量集合（Christoffel / Riemann / Ricci 等张量阶段）。
+
+    components: dict[tuple[int,...], value]，只收非零分量。
+    coords:     坐标符号列表，用于把下标渲染成坐标名（Γ^{r}_{θθ} 等）。
+    fmt:        (idx, coord_latex_names) -> str，返回左端 LaTeX；缺省给 T_{...}。
+    """
+
+    def __init__(self, title, components, coords, fmt=None):
+        self.title = title
+        self.components = components
+        self.coords = list(coords or [])
+        self.fmt = fmt
+
+    def render(self, ctx):
+        ctx.heading(self.title)
+        if not self.components:
+            ctx.text("所有分量均为 0。")
+            return
+        names = [sp.latex(c) for c in self.coords]
+        for idx, val in self.components.items():
+            if self.fmt is not None:
+                lhs = self.fmt(idx, names)
+            else:
+                lhs = "T_{" + "".join(names[i] for i in idx) + "}"
+            ctx.latex_raw(f"{lhs} = {sp.latex(val)}")
+
+
+class NumericResult(Renderable):
+    """数值计算结果：数值 + 收敛历史表 + 可选残差-迭代图（数值阶段 / 仿真阶段共用）。
+
+    value      : SymPy 标量/矩阵 或 数值。
+    iterations : [{"n":int, "x":..., "residual":float}, ...]，可空。
+    """
+
+    def __init__(self, value, iterations=None, method="", tol=None,
+                 converged=None, title="数值结果", note=""):
+        self.value = value
+        self.iterations = iterations or []
+        self.method = method
+        self.tol = tol
+        self.converged = converged
+        self.title = title
+        self.note = note
+
+    def render(self, ctx):
+        ctx.heading(self.title)
+        if isinstance(self.value, (sp.Basic, sp.MatrixBase)):
+            ctx.latex(self.value)
+        elif self.value is not None:
+            ctx.latex(sp.sympify(self.value))
+        status = []
+        if self.method:
+            status.append(f"方法：{self.method}")
+        if self.converged is not None:
+            status.append("已收敛" if self.converged else "未收敛")
+        if self.tol is not None:
+            status.append(f"容差 {self.tol:g}")
+        if self.note:
+            status.append(self.note)
+        if status:
+            ctx.text("（" + "，".join(status) + "）")
+        # 收敛历史 → markdown 表格（走 MathJax/markdown 文本块）。
+        if self.iterations:
+            rows = ["| n | x | 残差 |", "| --- | --- | --- |"]
+            for it in self.iterations[:50]:
+                xv = it.get("x")
+                if isinstance(xv, (list, tuple)):
+                    xs = "(" + ", ".join(f"{float(v):.6g}" for v in xv) + ")"
+                else:
+                    try:
+                        xs = f"{float(xv):.6g}"
+                    except Exception:  # noqa: BLE001
+                        xs = str(xv)
+                rows.append(f"| {it.get('n')} | {xs} | {float(it.get('residual', 0)):.3e} |")
+            ctx.text("\n".join(rows))
+            # 残差-迭代图（对数 y），plotly 可用时给一张交互图。
+            if _HAS_PLOTLY and len(self.iterations) > 1:
+                ns_ = [it.get("n") for it in self.iterations]
+                rs_ = [max(float(it.get("residual", 0)), 1e-300) for it in self.iterations]
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=ns_, y=rs_, mode="lines+markers", name="残差"))
+                fig.update_layout(title="收敛过程（残差 vs 迭代）", height=380,
+                                  xaxis_title="迭代 n", yaxis_title="残差",
+                                  yaxis_type="log")
+                ctx.blocks.append({"kind": "figure", "fig": fig, "png": None, "caption": ""})
+
+
+class Simulator:
+    """仿真器扩展基类（轻量占位 / 明确扩展缝）。
+
+    子类实现 derivatives(t, state) -> list 即可接入 odeint / phase_portrait；
+    后续可在此基础上扩展为带媒体回放的重型仿真（接 guaxi_python_worker.py 的媒体产出）。
+    本轮不强制使用——内置 odeint/phase_portrait 直接吃表达式，Simulator 仅为后续扩展预留。
+    """
+
+    name = "simulator"
+
+    def derivatives(self, t, state):  # pragma: no cover - 抽象
+        raise NotImplementedError
+
+
 # ===========================================================================
 # 命令库 —— 阶段 1：高数 / 线代 / 概率统计
 # 每个学科 = 往这里加函数；命令通过 build_namespace 注入受控命名空间。
+# 阶段 2/3/4 的学科命令拆到本文件后面的 _commands_<subject>(ctx) 里，
+# 由 _build_commands 末尾统一 merge（保持单文件、按学科分节）。
 # ===========================================================================
 def _build_commands(ctx):
     """构造命令字典。命令返回 SymPy 对象（自动 LaTeX）或 Renderable（自渲染）。"""
@@ -728,7 +923,619 @@ def _build_commands(ctx):
         # 绘图与杂项
         "plot": plot, "tex": tex, "N": N,
     }
+    # 阶段 2/3/4：按学科分节 merge（每个 _commands_<subject> 返回一个命令字典）。
+    for _group in (
+        _commands_complex,
+        _commands_physics,
+        _commands_geometry,
+        _commands_matrixtheory,
+        _commands_functional,
+        _commands_numerical,
+        _commands_sim,
+    ):
+        commands.update(_group(ctx))
     return commands
+
+
+# ===========================================================================
+# 命令库 —— 阶段 2a：复变函数（留数 / 洛朗级数 / 共形映射）
+# ===========================================================================
+def _commands_complex(ctx):
+    def residue(expr, z=None, z0=0):
+        expr = _to_expr(expr)
+        z = _as_sym(z) if z is not None else _pick_var(expr, "z")
+        try:
+            return sp.residue(expr, z, sp.sympify(z0))
+        except Exception as exc:  # noqa: BLE001
+            raise GuaxiMathError(f"求留数失败：{exc}")
+
+    def laurent(expr, z=None, z0=0, n=6):
+        expr = _to_expr(expr)
+        z = _as_sym(z) if z is not None else _pick_var(expr, "z")
+        try:
+            ser = sp.series(expr, z, sp.sympify(z0), int(n))
+        except Exception as exc:  # noqa: BLE001
+            raise GuaxiMathError(f"洛朗/级数展开失败：{exc}")
+        try:
+            res = sp.residue(expr, z, sp.sympify(z0))
+        except Exception:  # noqa: BLE001
+            res = None
+        return SeriesResult(ser, residue=res, title="洛朗展开")
+
+    def contour_integral(expr, z=None, poles=None):
+        expr = _to_expr(expr)
+        z = _as_sym(z) if z is not None else _pick_var(expr, "z")
+        if not poles:
+            raise GuaxiMathError("请提供围道内的极点列表，例如 contour_integral(f, z, poles=[0, I])。")
+        if not isinstance(poles, (list, tuple)):
+            poles = [poles]
+        total = sum(sp.residue(expr, z, sp.sympify(p)) for p in poles)
+        return 2 * sp.pi * sp.I * total
+
+    def conformal(expr, z=None):
+        expr = _to_expr(expr)
+        z = _as_sym(z) if z is not None else _pick_var(expr, "z")
+        # 共形映射在 f'(z)≠0 处保角，这里给出导数（结果块自带「共形映射 f'」标题）。
+        return sp.diff(expr, z)
+
+    def cauchy_riemann(u, v, x=None, y=None):
+        u = _to_expr(u)
+        v = _to_expr(v)
+        x = _as_sym(x) if x is not None else _pick_var(u, "x")
+        y = _as_sym(y) if y is not None else _pick_var(u, "y")
+        return [
+            sp.Eq(sp.diff(u, x), sp.diff(v, y)),
+            sp.Eq(sp.diff(u, y), -sp.diff(v, x)),
+        ]
+
+    return {
+        "residue": residue, "laurent": laurent, "contour_integral": contour_integral,
+        "conformal": conformal, "cauchy_riemann": cauchy_riemann,
+    }
+
+
+# ===========================================================================
+# 命令库 —— 阶段 2b：数学物理方法（积分变换 / 特殊函数 / 分离变量 / 格林函数）
+# ===========================================================================
+def _commands_physics(ctx):
+    def laplace(expr, t=None, s=None):
+        expr = _to_expr(expr)
+        t = _as_sym(t) if t is not None else _pick_var(expr, "t")
+        s = _as_sym(s) if s is not None else sp.Symbol("s")
+        try:
+            return sp.laplace_transform(expr, t, s, noconds=True)
+        except Exception as exc:  # noqa: BLE001
+            raise GuaxiMathError(f"拉普拉斯变换失败：{exc}")
+
+    def inverse_laplace(expr, s=None, t=None):
+        expr = _to_expr(expr)
+        s = _as_sym(s) if s is not None else _pick_var(expr, "s")
+        t = _as_sym(t) if t is not None else sp.Symbol("t")
+        try:
+            return sp.inverse_laplace_transform(expr, s, t, noconds=True)
+        except Exception as exc:  # noqa: BLE001
+            raise GuaxiMathError(f"拉普拉斯逆变换失败：{exc}")
+
+    def fourier(expr, x=None, k=None):
+        expr = _to_expr(expr)
+        x = _as_sym(x) if x is not None else _pick_var(expr, "x")
+        k = _as_sym(k) if k is not None else sp.Symbol("k")
+        try:
+            return sp.fourier_transform(expr, x, k)
+        except Exception as exc:  # noqa: BLE001
+            raise GuaxiMathError(f"傅里叶变换失败：{exc}")
+
+    def inverse_fourier(expr, k=None, x=None):
+        expr = _to_expr(expr)
+        k = _as_sym(k) if k is not None else _pick_var(expr, "k")
+        x = _as_sym(x) if x is not None else sp.Symbol("x")
+        try:
+            return sp.inverse_fourier_transform(expr, k, x)
+        except Exception as exc:  # noqa: BLE001
+            raise GuaxiMathError(f"傅里叶逆变换失败：{exc}")
+
+    def mellin(expr, x=None, s=None):
+        expr = _to_expr(expr)
+        x = _as_sym(x) if x is not None else _pick_var(expr, "x")
+        s = _as_sym(s) if s is not None else sp.Symbol("s")
+        try:
+            out = sp.mellin_transform(expr, x, s)
+            return out[0] if isinstance(out, tuple) else out
+        except Exception as exc:  # noqa: BLE001
+            raise GuaxiMathError(f"梅林变换失败：{exc}")
+
+    def separate_variables(expr, *symbols):
+        expr = _to_expr(expr)
+        try:
+            return sp.separatevars(expr, symbols=list(symbols) or None, force=True)
+        except Exception as exc:  # noqa: BLE001
+            raise GuaxiMathError(f"分离变量失败：{exc}")
+
+    def greens_function(x=None, xi=None, L=1):
+        # 标准 1D 算子 -d²/dx² 在 [0, L] 上、Dirichlet 边界 u(0)=u(L)=0 的格林函数。
+        x = _as_sym(x) if x is not None else sp.Symbol("x")
+        xi = _as_sym(xi) if xi is not None else sp.Symbol("xi")
+        L = sp.sympify(L)
+        return sp.Piecewise(
+            (x * (L - xi) / L, x <= xi),
+            (xi * (L - x) / L, True),
+        )
+
+    return {
+        "laplace": laplace, "inverse_laplace": inverse_laplace,
+        "fourier": fourier, "inverse_fourier": inverse_fourier, "mellin": mellin,
+        "separate_variables": separate_variables, "greens_function": greens_function,
+        # 特殊函数：直接暴露 SymPy 函数对象，调用即得未求值/已求值表达式（自动 LaTeX）。
+        "besselj": sp.besselj, "bessely": sp.bessely,
+        "legendre": sp.legendre, "hermite": sp.hermite, "laguerre": sp.laguerre,
+        "chebyshevt": sp.chebyshevt, "chebyshevu": sp.chebyshevu, "Ynm": sp.Ynm,
+    }
+
+
+# ===========================================================================
+# 命令库 —— 阶段 3：张量分析 + 微分几何（轻量、可扩展：加曲率量 = 加一个函数）
+# 约定：度规 g 为 n×n sp.Matrix，coords 为坐标符号列表 [r, theta, ...]。
+# ===========================================================================
+def _christoffel_array(g, X):
+    """返回完整 Christoffel 数组 Gamma[k][i][j]（含零分量，供曲率张量内部求和）。"""
+    n = len(X)
+    ginv = g.inv()
+    Gamma = [[[sp.Integer(0)] * n for _ in range(n)] for _ in range(n)]
+    for k in range(n):
+        for i in range(n):
+            for j in range(n):
+                s = sp.Integer(0)
+                for l in range(n):
+                    s += ginv[k, l] * (sp.diff(g[j, l], X[i])
+                                       + sp.diff(g[i, l], X[j])
+                                       - sp.diff(g[i, j], X[l]))
+                Gamma[k][i][j] = sp.simplify(s / 2)
+    return Gamma
+
+
+def _commands_geometry(ctx):
+    def metric(rows, coords=None):  # noqa: ARG001 - coords 仅为书写习惯，实际逐命令再传
+        return _as_matrix(rows)
+
+    def christoffel(g, coords):
+        g = _as_matrix(g)
+        X = _coords_list(coords)
+        Gamma = _christoffel_array(g, X)
+        comps = {(k, i, j): Gamma[k][i][j]
+                 for k in range(len(X)) for i in range(len(X)) for j in range(len(X))
+                 if Gamma[k][i][j] != 0}
+        fmt = lambda idx, nm: f"\\Gamma^{{{nm[idx[0]]}}}_{{{nm[idx[1]]}{nm[idx[2]]}}}"  # noqa: E731
+        return TensorResult("Christoffel 符号 Γ^k_{ij}", comps, X, fmt=fmt)
+
+    def _riemann_array(g, X):
+        n = len(X)
+        G = _christoffel_array(g, X)
+        # R^l_{ijk} = ∂_i Γ^l_{jk} - ∂_j Γ^l_{ik} + Γ^l_{im}Γ^m_{jk} - Γ^l_{jm}Γ^m_{ik}
+        R = [[[[sp.Integer(0)] * n for _ in range(n)] for _ in range(n)] for _ in range(n)]
+        for l in range(n):
+            for i in range(n):
+                for j in range(n):
+                    for k in range(n):
+                        term = sp.diff(G[l][j][k], X[i]) - sp.diff(G[l][i][k], X[j])
+                        for m in range(n):
+                            term += G[l][i][m] * G[m][j][k] - G[l][j][m] * G[m][i][k]
+                        R[l][i][j][k] = sp.simplify(term)
+        return R
+
+    def riemann(g, coords):
+        g = _as_matrix(g)
+        X = _coords_list(coords)
+        R = _riemann_array(g, X)
+        n = len(X)
+        comps = {(l, i, j, k): R[l][i][j][k]
+                 for l in range(n) for i in range(n) for j in range(n) for k in range(n)
+                 if R[l][i][j][k] != 0}
+        fmt = lambda idx, nm: f"R^{{{nm[idx[0]]}}}_{{{nm[idx[1]]}{nm[idx[2]]}{nm[idx[3]]}}}"  # noqa: E731
+        return TensorResult("Riemann 曲率张量 R^l_{ijk}", comps, X, fmt=fmt)
+
+    def ricci(g, coords):
+        g = _as_matrix(g)
+        X = _coords_list(coords)
+        R = _riemann_array(g, X)
+        n = len(X)
+        # Ricci 缩并：R_{jk} = R^i_{ijk}（上指标与第一个下指标缩并，标准符号约定，
+        # 使 2D 曲面满足 R = 2K，球面 R = +2/a²）。
+        Ric = sp.zeros(n, n)
+        for j in range(n):
+            for k in range(n):
+                Ric[j, k] = sp.simplify(sum(R[i][i][j][k] for i in range(n)))
+        return Ric
+
+    def ricci_scalar(g, coords):
+        g = _as_matrix(g)
+        X = _coords_list(coords)
+        Ric = ricci(g, X)
+        ginv = g.inv()
+        n = len(X)
+        return sp.simplify(sum(ginv[j, k] * Ric[j, k] for j in range(n) for k in range(n)))
+
+    # —— 曲面局部几何（参数曲面 r(u, v)）—— #
+    def _surface_forms(r, params):
+        r = _as_vec(r)
+        if not isinstance(params, (list, tuple)) or len(params) < 2:
+            raise GuaxiMathError("请提供两个参数，例如 (u, v)。")
+        u, v = _as_sym(params[0]), _as_sym(params[1])
+        ru, rv = r.diff(u), r.diff(v)
+        E, F, G = sp.simplify(ru.dot(ru)), sp.simplify(ru.dot(rv)), sp.simplify(rv.dot(rv))
+        n = ru.cross(rv)
+        nrm = sp.sqrt(n.dot(n))
+        unit = n / nrm
+        ruu, ruv, rvv = r.diff(u, 2), ru.diff(v), r.diff(v, 2)
+        L, M, N = sp.simplify(ruu.dot(unit)), sp.simplify(ruv.dot(unit)), sp.simplify(rvv.dot(unit))
+        return E, F, G, L, M, N
+
+    def first_fundamental_form(r, params):
+        E, F, G, _L, _M, _N = _surface_forms(r, params)
+        return DecompResult("第一基本形式 (E, F, G)", [("E =", E), ("F =", F), ("G =", G)])
+
+    def second_fundamental_form(r, params):
+        _E, _F, _G, L, M, N = _surface_forms(r, params)
+        return DecompResult("第二基本形式 (L, M, N)", [("L =", L), ("M =", M), ("N =", N)])
+
+    def gaussian_curvature(r, params):
+        E, F, G, L, M, N = _surface_forms(r, params)
+        return sp.simplify((L * N - M ** 2) / (E * G - F ** 2))
+
+    def mean_curvature(r, params):
+        E, F, G, L, M, N = _surface_forms(r, params)
+        return sp.simplify((E * N - 2 * F * M + G * L) / (2 * (E * G - F ** 2)))
+
+    def geodesic_equations(g, coords, param="s"):
+        g = _as_matrix(g)
+        X = _coords_list(coords)
+        s = _as_sym(param)
+        G = _christoffel_array(g, X)
+        n = len(X)
+        funcs = [sp.Function(str(X[a]))(s) for a in range(n)]
+        eqs = []
+        for k in range(n):
+            acc = sp.diff(funcs[k], s, 2)
+            for i in range(n):
+                for j in range(n):
+                    gijk = G[k][i][j].subs({X[a]: funcs[a] for a in range(n)})
+                    if gijk != 0:
+                        acc += gijk * sp.diff(funcs[i], s) * sp.diff(funcs[j], s)
+            eqs.append(sp.Eq(sp.simplify(acc), 0))
+        return eqs
+
+    return {
+        "metric": metric, "christoffel": christoffel, "riemann": riemann,
+        "ricci": ricci, "ricci_scalar": ricci_scalar,
+        "first_fundamental_form": first_fundamental_form,
+        "second_fundamental_form": second_fundamental_form,
+        "gaussian_curvature": gaussian_curvature, "mean_curvature": mean_curvature,
+        "geodesic_equations": geodesic_equations,
+    }
+
+
+# ===========================================================================
+# 命令库 —— 阶段 4a：矩阵论（Jordan 标准形 / 矩阵函数 / Schur）
+# ===========================================================================
+def _commands_matrixtheory(ctx):
+    def jordan(M):
+        M = _as_matrix(M)
+        try:
+            P, J = M.jordan_form()
+        except Exception as exc:  # noqa: BLE001
+            raise GuaxiMathError(f"Jordan 标准形失败：{exc}")
+        return DecompResult("Jordan 标准形 M = P J P⁻¹", [("P =", P), ("J =", J)])
+
+    def matrix_exp(M):
+        M = _as_matrix(M)
+        try:
+            return M.exp()
+        except Exception:  # noqa: BLE001
+            # 符号矩阵指数失败 → 退化为数值（scipy）。
+            try:
+                from scipy.linalg import expm
+                A = np.array(M.evalf().tolist(), dtype=complex)
+                return sp.Matrix(np.round(expm(A), 6))
+            except Exception as exc:  # noqa: BLE001
+                raise GuaxiMathError(f"矩阵指数失败：{exc}")
+
+    def schur(M):
+        M = _as_matrix(M)
+        try:
+            from scipy.linalg import schur as _schur
+        except Exception as exc:  # noqa: BLE001
+            raise GuaxiMathError(f"Schur 分解需要 scipy（{exc}）。")
+        try:
+            A = np.array(M.evalf().tolist(), dtype=float)
+        except Exception as exc:  # noqa: BLE001
+            raise GuaxiMathError(f"Schur 分解需要数值矩阵：{exc}")
+        T, Z = _schur(A)
+        return DecompResult("Schur 分解（数值）M = Z T Zᵀ", [
+            ("T =", sp.Matrix(np.round(T, 6))),
+            ("Z =", sp.Matrix(np.round(Z, 6))),
+        ])
+
+    def is_diagonalizable(M):
+        M = _as_matrix(M)
+        return sp.sympify(bool(M.is_diagonalizable()))
+
+    def cond(M):
+        M = _as_matrix(M)
+        try:
+            A = np.array(M.evalf().tolist(), dtype=float)
+        except Exception as exc:  # noqa: BLE001
+            raise GuaxiMathError(f"条件数需要数值矩阵：{exc}")
+        return sp.Float(float(np.linalg.cond(A)))
+
+    return {
+        "jordan": jordan, "matrix_exp": matrix_exp, "schur": schur,
+        "is_diagonalizable": is_diagonalizable, "cond": cond,
+    }
+
+
+# ===========================================================================
+# 命令库 —— 阶段 4b：泛函分析（内积空间 / 正交化 / 算子谱 / L² 逼近）
+# ===========================================================================
+def _commands_functional(ctx):
+    def inner_product(u, v, var=None, a=-1, b=1, weight=1):
+        # 向量内积；或函数 L² 内积 ∫ u·conj(v)·weight dx。
+        if isinstance(u, (sp.MatrixBase, list, tuple)) and isinstance(v, (sp.MatrixBase, list, tuple)):
+            uu, vv = _as_vec(u), _as_vec(v)
+            return sp.simplify(uu.dot(vv.conjugate()))
+        u, v, w = _to_expr(u), _to_expr(v), _to_expr(weight)
+        x = _as_sym(var) if var is not None else _pick_var(u * v, "x")
+        return sp.integrate(u * sp.conjugate(v) * w, (x, sp.sympify(a), sp.sympify(b)))
+
+    def gram_schmidt(vectors, orthonormal=False):
+        if not isinstance(vectors, (list, tuple)) or not vectors:
+            raise GuaxiMathError("请提供向量列表，例如 gram_schmidt([matrix([1,1,0]), matrix([1,0,1])])。")
+        try:
+            out = sp.GramSchmidt([_as_vec(v) for v in vectors], bool(orthonormal))
+        except Exception as exc:  # noqa: BLE001
+            raise GuaxiMathError(f"正交化失败：{exc}")
+        return DecompResult("Gram–Schmidt 正交化", [("", v) for v in out])
+
+    def norm(v, var=None, a=-1, b=1, weight=1):
+        if isinstance(v, (sp.MatrixBase, list, tuple)):
+            return sp.simplify(_as_vec(v).norm())
+        v, w = _to_expr(v), _to_expr(weight)
+        x = _as_sym(var) if var is not None else _pick_var(v, "x")
+        return sp.sqrt(sp.integrate(v * sp.conjugate(v) * w, (x, sp.sympify(a), sp.sympify(b))))
+
+    def operator_spectrum(M):
+        M = _as_matrix(M)
+        eigs = M.eigenvals()
+        vals = sp.Matrix(list(eigs.keys()))
+        return DecompResult("算子谱（特征值 / 谱半径）", [
+            ("特征值 =", vals),
+            ("谱半径 =", sp.Max(*[sp.Abs(k) for k in eigs.keys()])),
+        ])
+
+    def project(u, v):
+        uu, vv = _as_vec(u), _as_vec(v)
+        coeff = uu.dot(vv.conjugate()) / vv.dot(vv.conjugate())
+        return sp.simplify(coeff) * vv
+
+    def l2_approx(f, basis="legendre", var=None, a=-1, b=1, n=5):
+        f = _to_expr(f)
+        x = _as_sym(var) if var is not None else _pick_var(f, "x")
+        n = int(n)
+        if str(basis).lower() == "legendre":
+            phis = [sp.legendre(k, x) for k in range(n + 1)]
+        elif str(basis).lower() == "fourier":
+            phis = [sp.Integer(1)] + [g for k in range(1, n + 1)
+                                      for g in (sp.cos(k * x), sp.sin(k * x))]
+        else:
+            raise GuaxiMathError("basis 仅支持 'legendre' 或 'fourier'。")
+        approx = sp.Integer(0)
+        for phi in phis:
+            num = sp.integrate(f * phi, (x, sp.sympify(a), sp.sympify(b)))
+            den = sp.integrate(phi * phi, (x, sp.sympify(a), sp.sympify(b)))
+            if den != 0:
+                approx += sp.nsimplify(num / den) * phi
+        return sp.simplify(approx)
+
+    return {
+        "inner_product": inner_product, "gram_schmidt": gram_schmidt, "norm": norm,
+        "operator_spectrum": operator_spectrum, "project": project, "l2_approx": l2_approx,
+    }
+
+
+# ===========================================================================
+# 命令库 —— 阶段 B（样板）：数值计算（积分 / ODE / 求根 / 优化 / 最小二乘）
+# 重型结果登记 carrier，可在右侧面板 / 独立工作台里复跑、调精度、看收敛过程。
+# ===========================================================================
+def _commands_numerical(ctx):
+    def nintegrate(f, rng=None):
+        f = _to_expr(f)
+        if rng is None:
+            raise GuaxiMathError("数值积分需要区间，例如 nintegrate(exp(-x**2), (x, -5, 5))。")
+        sym, a, b = _coerce_range(rng)
+        from scipy.integrate import quad
+        fn = sp.lambdify(sym, f, "numpy")
+        val, err = quad(lambda t: float(np.real(fn(t))), a, b)
+        return NumericResult(sp.Float(val), method="quad", title="数值积分",
+                             converged=True, note=f"绝对误差≈{err:.2e}")
+
+    def nsolve(f, x0, tol=1e-10, maxiter=50):
+        f = _to_expr(f)
+        x = _pick_var(f, "x")
+        fn = sp.lambdify(x, f, "numpy")
+        fpn = sp.lambdify(x, sp.diff(f, x), "numpy")
+        xi = float(x0)
+        iters = []
+        converged = False
+        for k in range(int(maxiter)):
+            fv = float(np.real(fn(xi)))
+            iters.append({"n": k, "x": xi, "residual": abs(fv)})
+            if abs(fv) < float(tol):
+                converged = True
+                break
+            d = float(np.real(fpn(xi)))
+            if d == 0:
+                break
+            xi = xi - fv / d
+        key = ctx.add_carrier("numeric", "nsolve", label="数值求根",
+                              params={"x0": float(x0), "tol": float(tol), "maxiter": int(maxiter),
+                                      "expr": sp.sstr(f), "var": str(x)},
+                              summary=f"root≈{xi:.6g}")
+        return NumericResult(sp.Float(xi), iterations=iters, method="Newton",
+                             tol=float(tol), converged=converged, title="数值求根",
+                             note=f"工作台键 {key}" if key else "")
+
+    def minimize(f, x0, method="BFGS", tol=1e-8, maxiter=200):
+        from scipy.optimize import minimize as _min
+        f = _to_expr(f)
+        syms = sorted(_free_symbols(f), key=str)
+        if not syms:
+            raise GuaxiMathError("目标函数没有变量。")
+        fn = sp.lambdify(syms, f, "numpy")
+        x0v = np.atleast_1d(np.array(x0 if isinstance(x0, (list, tuple)) else [x0], dtype=float))
+
+        def obj(v):
+            return float(np.real(fn(*np.atleast_1d(v))))
+
+        iters = []
+
+        def cb(xk):
+            iters.append({"n": len(iters), "x": [float(v) for v in np.atleast_1d(xk)],
+                          "residual": obj(xk)})
+
+        res = _min(obj, x0v, method=str(method), tol=float(tol),
+                   callback=cb, options={"maxiter": int(maxiter)})
+        value = sp.Float(float(res.x[0])) if res.x.size == 1 else sp.Matrix(np.round(res.x, 8))
+        key = ctx.add_carrier("numeric", "minimize", label="数值优化",
+                              params={"x0": [float(v) for v in x0v], "method": str(method),
+                                      "tol": float(tol), "maxiter": int(maxiter),
+                                      "expr": sp.sstr(f), "vars": [str(s) for s in syms]},
+                              summary=f"f*≈{float(res.fun):.6g}")
+        return NumericResult(value, iterations=iters, method=str(method), tol=float(tol),
+                             converged=bool(res.success), title="数值优化",
+                             note=(f"f*≈{float(res.fun):.6g}" + (f"，工作台键 {key}" if key else "")))
+
+    def lstsq(A, b):
+        try:
+            Am = np.array(_as_matrix(A).evalf().tolist(), dtype=float)
+            bm = np.array(_as_matrix(b).evalf().tolist(), dtype=float).reshape(-1)
+        except Exception as exc:  # noqa: BLE001
+            raise GuaxiMathError(f"最小二乘需要数值矩阵：{exc}")
+        sol, res, rank, _sv = np.linalg.lstsq(Am, bm, rcond=None)
+        note = f"秩 {int(rank)}" + (f"，残差平方和≈{float(res[0]):.4g}" if np.size(res) else "")
+        return NumericResult(sp.Matrix(np.round(sol, 6)), method="lstsq",
+                             title="最小二乘解", converged=True, note=note)
+
+    def odeint(rhs, y0, trange, n=200, vars=None):
+        from scipy.integrate import solve_ivp
+        sym_t, a, b = _coerce_range(trange)
+        is_system = isinstance(rhs, (list, tuple))
+        if is_system:
+            exprs = [_to_expr(r) for r in rhs]
+            if vars:
+                state = [_as_sym(v) for v in vars]
+            else:
+                fs = sorted(_free_symbols(exprs) - {sym_t}, key=str)
+                state = fs[:len(exprs)]
+            if len(state) != len(exprs):
+                raise GuaxiMathError("状态变量个数与方程个数不一致，请用 vars=[...] 指定。")
+            y0v = [float(v) for v in (y0 if isinstance(y0, (list, tuple)) else [y0])]
+            fns = [sp.lambdify([sym_t] + state, ex, "numpy") for ex in exprs]
+
+            def rhs_fn(t, Y):
+                return [float(np.real(fn(t, *Y))) for fn in fns]
+        else:
+            ex = _to_expr(rhs)
+            yv = _as_sym(vars[0]) if vars else sp.Symbol("y")
+            state = [yv]
+            y0v = [float(y0 if not isinstance(y0, (list, tuple)) else y0[0])]
+            fn = sp.lambdify([sym_t, yv], ex, "numpy")
+
+            def rhs_fn(t, Y):
+                return [float(np.real(fn(t, Y[0])))]
+
+        ts = np.linspace(a, b, int(n))
+        sol = solve_ivp(rhs_fn, (a, b), y0v, t_eval=ts, dense_output=False)
+        if not sol.success:
+            raise GuaxiMathError(f"ODE 数值求解失败：{sol.message}")
+        # 把解数组 stash 成会话变量，供工作台逐帧回放（轻量仿真扩展缝）。
+        sol_var = ""
+        if ctx.session is not None:
+            seq = int(ctx.session.get("__GUAXIMATH_CARRIER_SEQ__", 0)) + 1
+            sol_var = f"__gx_ode_sol_{seq}"
+            ctx.session[sol_var] = {"t": sol.t.tolist(), "y": sol.y.tolist(),
+                                    "state": [str(s) for s in state]}
+        key = ctx.add_carrier("simulation", "odeint", label="ODE 数值解",
+                              params={"rhs": [sp.sstr(_to_expr(r)) for r in (rhs if is_system else [rhs])],
+                                      "y0": y0v, "trange": [str(sym_t), a, b], "n": int(n),
+                                      "state": [str(s) for s in state]},
+                              summary=f"{len(state)} 维，t∈[{a:g},{b:g}]",
+                              solution_var=sol_var)
+        # 内联轨迹图：各分量随 t。
+        fig = None
+        if _HAS_PLOTLY:
+            fig = go.Figure()
+            for i, s in enumerate(state):
+                fig.add_trace(go.Scatter(x=sol.t, y=sol.y[i], mode="lines", name=str(s)))
+            fig.update_layout(title="ODE 数值解（分量 vs t）", height=420,
+                              xaxis_title=str(sym_t), yaxis_title="state", hovermode="x unified")
+            ctx.blocks.append({"kind": "heading", "text": "ODE 数值解"})
+            ctx.text(f"（{len(state)} 维系统，t∈[{a:g}, {b:g}]，{int(n)} 个采样点"
+                     + (f"，工作台键 {key}" if key else "") + "）")
+            ctx.blocks.append({"kind": "figure", "fig": fig, "png": None, "caption": ""})
+            return None  # 已直接写入结果块
+        return NumericResult(sp.Float(float(sol.y[0][-1])), method="solve_ivp",
+                             converged=True, title="ODE 数值解",
+                             note=f"末值≈{float(sol.y[0][-1]):.6g}")
+
+    return {
+        "nintegrate": nintegrate, "nsolve": nsolve, "minimize": minimize,
+        "lstsq": lstsq, "odeint": odeint,
+    }
+
+
+# ===========================================================================
+# 命令库 —— 阶段 B（样板）：仿真（轻量、可扩展：相图 / 轨迹 + Simulator 扩展缝）
+# ===========================================================================
+def _commands_sim(ctx):
+    def phase_portrait(rhs, xr, yr, density=18, vars=None):
+        if not isinstance(rhs, (list, tuple)) or len(rhs) != 2:
+            raise GuaxiMathError("相图需要二维系统，例如 phase_portrait([y, -x], (x,-3,3), (y,-3,3))。")
+        exprs = [_to_expr(r) for r in rhs]
+        if vars:
+            state = [_as_sym(v) for v in vars]
+        else:
+            fs = sorted(_free_symbols(exprs), key=str)
+            state = fs[:2]
+        if len(state) != 2:
+            raise GuaxiMathError("无法推断两个状态变量，请用 vars=[x, y] 指定。")
+        xsym, ysym = state
+        (_sx, x0, x1) = _coerce_range(xr if _looks_like_range(xr) else (xsym, xr[0], xr[1]))
+        (_sy, y0, y1) = _coerce_range(yr if _looks_like_range(yr) else (ysym, yr[0], yr[1]))
+        d = max(5, int(density))
+        xs = np.linspace(x0, x1, d)
+        ys = np.linspace(y0, y1, d)
+        X, Y = np.meshgrid(xs, ys)
+        fu = sp.lambdify([xsym, ysym], exprs[0], "numpy")
+        fv = sp.lambdify([xsym, ysym], exprs[1], "numpy")
+        U = np.real(fu(X, Y) + 0 * X)
+        V = np.real(fv(X, Y) + 0 * Y)
+        key = ctx.add_carrier("simulation", "phase_portrait", label="相图 / 向量场",
+                              params={"rhs": [sp.sstr(e) for e in exprs],
+                                      "xr": [str(xsym), x0, x1], "yr": [str(ysym), y0, y1],
+                                      "density": d, "state": [str(s) for s in state]},
+                              summary="二维向量场")
+        if not _HAS_PLOTLY:
+            raise GuaxiMathError("绘制相图需要 plotly，请先安装。")
+        import plotly.figure_factory as ff
+        mag = np.hypot(U, V)
+        scale = 0.3 / (np.nanmax(mag) or 1.0)
+        fig = ff.create_quiver(X, Y, U, V, scale=scale, arrow_scale=0.4,
+                               line=dict(width=1), name="向量场")
+        fig.update_layout(title="相图（向量场）", height=480,
+                          xaxis_title=str(xsym), yaxis_title=str(ysym))
+        ctx.text("相图 / 向量场" + (f"（工作台键 {key}）" if key else ""))
+        ctx.blocks.append({"kind": "figure", "fig": fig, "png": None, "caption": ""})
+        return None
+
+    return {"phase_portrait": phase_portrait}
 
 
 # ===========================================================================
@@ -823,6 +1630,24 @@ _COMMAND_LABELS = {
     "transpose": "转置矩阵", "charpoly": "特征多项式", "eigenvalues": "特征值",
     "expectation": "期望 E[X]", "variance": "方差 D[X]", "N": "数值结果",
     "tex": "表达式", "factorial": "阶乘",
+    # 阶段 2a 复变函数
+    "residue": "留数", "laurent": "洛朗展开", "contour_integral": "围道积分",
+    "conformal": "共形映射 f'(z)", "cauchy_riemann": "柯西–黎曼方程",
+    # 阶段 2b 数学物理方法
+    "laplace": "拉普拉斯变换", "inverse_laplace": "拉普拉斯逆变换",
+    "fourier": "傅里叶变换", "inverse_fourier": "傅里叶逆变换", "mellin": "梅林变换",
+    "separate_variables": "分离变量", "greens_function": "格林函数",
+    "besselj": "贝塞尔函数", "legendre": "勒让德多项式", "hermite": "厄米多项式",
+    "laguerre": "拉盖尔多项式", "chebyshevt": "切比雪夫多项式",
+    # 阶段 3 张量 / 微分几何
+    "ricci": "Ricci 张量", "ricci_scalar": "标量曲率",
+    "gaussian_curvature": "高斯曲率", "mean_curvature": "平均曲率",
+    "geodesic_equations": "测地线方程",
+    # 阶段 4a 矩阵论
+    "matrix_exp": "矩阵指数", "is_diagonalizable": "可对角化", "cond": "条件数",
+    # 阶段 4b 泛函分析
+    "inner_product": "内积", "norm": "范数", "project": "投影",
+    "l2_approx": "L² 最佳逼近",
 }
 
 
@@ -1058,6 +1883,8 @@ def run(source, options=None, ns=None):
     ns = ns if isinstance(ns, dict) else {}
     workspace = ns.setdefault("__GUAXIMATH_WS__", {})
     ctx = RunContext(options)
+    ctx.session = ns
+    ctx.carriers = ns.setdefault("__GUAXIMATH_CARRIERS__", {})
     source = str(source or "")
     if not source.strip():
         return {"type": "markdown", "mime": "text/markdown", "markdown": "（数学块为空）"}
