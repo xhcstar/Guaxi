@@ -10,12 +10,101 @@
 
 当前支持的动作：
 
+- `import-source` ⭐ 统一导入入口（推荐，覆盖文件 / 数据库 / API / 剪贴板 / 自定义脚本）
 - `import-file`
 - `import-clipboard`
 - `import-inline-data`
 - `materialize-variable`
 - `writeback-variable`
 - `export-variable`
+
+## 统一数据导入抽象（Import Spec / Dataset Descriptor）
+
+`import-source` 用一份可序列化的 **Import Spec** 描述“从哪取数 + 怎么解析”，覆盖三类数据：
+
+- **标准结构化**：`csv` / `tsv` / `excel` / `parquet` / `feather` / `database`（SQLite/Postgres/MySQL/DuckDB）
+- **半结构化**：`json` / `jsonl` / `api-json` / `api-csv` / `api-text` / `logline`（正则逐行解析日志）
+- **非标准 / 私有**：`custom`（用户提供 `def load(source)` 内联片段或外部 `.py` 文件，处理私有协议 / 二进制 / 混合文本）
+
+### Import Spec 字段
+
+```jsonc
+{
+  "category": "file | database | api | clipboard | script",
+  "format":   "csv|tsv|excel|parquet|feather|database|json|jsonl|api-json|api-csv|api-text|logline|custom|auto",
+  "variableName": "目标会话变量名（留空按来源自动命名）",
+  "sourceLabel":  "来源显示名",
+  "source": {
+    "path": "本地文件路径",
+    "url": "HTTP URL",
+    "text": "内联文本（剪贴板/日志/JSON）",
+    "connStr": "数据库连接串，如 sqlite:///x.db、postgresql+psycopg2://user:pwd@host/db",
+    "table": "表名", "query": "自定义 SQL",
+    "method": "GET|POST…", "headers": { "K": "V" }, "body": "请求体", "auth": "Bearer Token", "jsonPath": "data.items",
+    "scriptText": "def load(source): ...", "scriptPath": "/path/to/loader.py", "entry": "load"
+  },
+  "options": {
+    "encoding": "utf-8", "sep": ",", "header": "infer | none",
+    "sheet": "工作表名或序号", "jsonPath": "data.items",
+    "logPattern": "(?P<ts>\\S+) (?P<level>\\w+) (?P<msg>.*)"
+  }
+}
+```
+
+> `format: "auto"` 会让 Python 运行时按文件扩展名 / URL / 内容自动推断；旧的 `import-file` /
+> `import-url` / `import-clipboard` 即等价于带 `auto` 的 Import Spec。
+
+### Dataset Descriptor（导入结果记账）
+
+导入成功后会写入 Cell 的 lab 导入记录，结构如下，便于后续“重新导入”与结构分析：
+
+```jsonc
+{
+  "variableName": "sales_df",
+  "dataKind": "table | structured | text | value",
+  "sourceType": "file",
+  "sourceLabel": "sales.xlsx",
+  "source": { "category": "file", "format": "excel", "label": "sales.xlsx" },
+  "schema": { "columns": ["month", "revenue"], "dtypes": {"revenue": "int64"}, "rowCount": 12, "shape": [12, 2] },
+  "options": { "sheet": "2026" },
+  "spec":   { /* 完整 Import Spec，可原样复跑 */ },
+  "importedAt": "2026-06-03T10:00:00.000Z"
+}
+```
+
+### import-source 示例
+
+```js
+await invoke('notebook_data_lab_rpc', {
+  request: {
+    action: 'import-source',
+    filePath: 'E:/Record/source/Vue/guaxi/test/MarkdownTest.md',
+    stableId: 'py-rs-44dd7ef0-1704',
+    spec: {
+      category: 'database',
+      format: 'database',
+      variableName: 'orders',
+      source: { connStr: 'sqlite:///E:/data/shop.db', table: 'orders' },
+    },
+    clientId: 'frontend-demo',
+  },
+})
+```
+
+```bash
+# 远程 API（JSON）→ 取 data.items 子数组并表格化
+curl -X POST "http://127.0.0.1:8888/api/notebook/data-lab/action" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "action": "import-source",
+    "filePath": "E:/Record/source/Vue/guaxi/test/MarkdownTest.md",
+    "stableId": "py-rs-44dd7ef0-1704",
+    "spec": {
+      "category": "api", "format": "api-json", "variableName": "api_rows",
+      "source": { "url": "https://example.com/api/list", "method": "GET", "headers": {"Accept": "application/json"}, "jsonPath": "data.items" }
+    }
+  }'
+```
 
 ## 接口总览
 
@@ -45,6 +134,7 @@
 | `sourceType` | `string` | `file` / `clipboard` / `inline` 等 |
 | `sourceLabel` | `string` | 来源显示名 |
 | `text` | `string` | 内联导入文本 |
+| `spec` | `object` | `import-source` 专用，完整 Import Spec（见下） |
 | `clientId` | `string` | 调用方 id，便于日志追踪 |
 
 ## curl 示例

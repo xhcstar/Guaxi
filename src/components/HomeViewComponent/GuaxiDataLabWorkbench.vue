@@ -488,6 +488,13 @@
         </section>
       </aside>
     </section>
+
+    <GuaxiDataImportDialog
+      v-model:open="importDialogOpen"
+      :session-id="context.sessionId"
+      :category="importDialogCategory"
+      @confirm="handleImportConfirm"
+    />
   </main>
 </template>
 
@@ -511,13 +518,15 @@ import xIcon from '@iconify-icons/lucide/x'
 import arrowLeftToLineIcon from '@iconify-icons/lucide/arrow-left-to-line'
 import arrowRightToLineIcon from '@iconify-icons/lucide/arrow-right-to-line'
 import clipboardIcon from '@iconify-icons/lucide/clipboard'
+import databaseIcon from '@iconify-icons/lucide/database'
+import globeIcon from '@iconify-icons/lucide/globe'
+import codeIcon from '@iconify-icons/lucide/code-2'
 import chevronDownIcon from '@iconify-icons/lucide/chevron-down'
 import cornerUpLeftIcon from '@iconify-icons/lucide/corner-up-left'
 import fileTextIcon from '@iconify-icons/lucide/file-text'
 import focusIcon from '@iconify-icons/lucide/focus'
 import foldIcon from '@iconify-icons/lucide/fold-horizontal'
 import homeIcon from '@iconify-icons/lucide/home'
-import linkIcon from '@iconify-icons/lucide/link'
 import rotateCcwIcon from '@iconify-icons/lucide/rotate-ccw'
 import searchIcon from '@iconify-icons/lucide/search'
 import unfoldIcon from '@iconify-icons/lucide/unfold-horizontal'
@@ -528,11 +537,13 @@ import { useMessage } from 'naive-ui'
 import { useRoute } from 'vue-router'
 import { createLogger } from '../../utils/logger'
 import GuaxiWorkbenchCombobox from './GuaxiWorkbenchCombobox.vue'
+import GuaxiDataImportDialog from './GuaxiDataImportDialog.vue'
 import {
   WORKBENCH_CHART_TYPES,
   WORKBENCH_SUPPORTED_EXPORTS,
   DATA_LAB_SESSION_VARS_UPDATED_EVENT,
   applyWorkbenchEdits,
+  emitWorkbenchImportSource,
   emitWorkbenchNotebookAction,
   emitWorkbenchVariableUpdated,
   fetchWorkbenchSessionVariables,
@@ -576,11 +587,17 @@ const structurePan = reactive({ x: 36, y: 34, scale: 1 })
 const structureDrag = reactive({ active: false, startX: 0, startY: 0, originX: 0, originY: 0 })
 const chartTypes = WORKBENCH_CHART_TYPES
 const exportFormats = WORKBENCH_SUPPORTED_EXPORTS
+// 设计说明：导入入口按数据来源分类（标准结构化 / 半结构化 / 私有格式），
+// 每张卡片打开统一的导入向导（GuaxiDataImportDialog），由向导完成格式选择、配置、探测与确认。
 const importOptions = [
-  { label: '文件', value: 'file', summary: 'CSV / JSON / Excel / 文本', icon: uploadIcon },
-  { label: '剪贴板', value: 'clipboard', summary: '表格文本或结构化文本', icon: clipboardIcon },
-  { label: 'URL', value: 'url', summary: '远程 CSV / JSON / Excel / 文本', icon: linkIcon },
+  { label: '文件', value: 'file', summary: 'CSV / Excel / Parquet / JSON', icon: uploadIcon },
+  { label: '数据库', value: 'database', summary: 'SQLite / Postgres / MySQL', icon: databaseIcon },
+  { label: 'API & URL', value: 'api', summary: 'HTTP 接口 / 远程文件 / 日志', icon: globeIcon },
+  { label: '剪贴板', value: 'clipboard', summary: '表格 / JSON / 文本', icon: clipboardIcon },
+  { label: '自定义脚本', value: 'script', summary: '私有协议 / 二进制 / 混合文本', icon: codeIcon },
 ]
+const importDialogOpen = ref(false)
+const importDialogCategory = ref('file')
 let unlistenVariableUpdated = null
 let pendingRemoteReloadTimer = 0
 const workbenchTheme = computed(() => (context.theme === 'dark' ? 'dark' : 'light'))
@@ -1179,31 +1196,29 @@ const emitNotebookAction = async (action, extra = {}) => {
   }
 }
 
-const requestImportOption = async (item) => {
-  const value = String(item?.value || '')
-  // 设计说明：
-  // 1. 导入和导出都采用“配置数组 + 卡片区域”的结构，后续扩展新的数据源时只需要追加配置和 action 映射。
-  // 2. 顶部工具栏只保留跨工作区的轻量命令，避免导入方式增多后挤占窗口标题区域。
-  // 3. URL 这类需要额外参数的导入方式在这里收集参数，再复用统一的 Notebook RPC 通道。
-  logger.info('[DataWorkbench] import option selected', {
-    value,
-    label: String(item?.label || ''),
-  })
-  if (value === 'file') {
-    await emitNotebookAction('import-file')
-    return
-  }
-  if (value === 'clipboard') {
-    await emitNotebookAction('import-clipboard')
-    return
-  }
-  if (value === 'url') {
-    const sourceUrl = String(window.prompt?.('输入要导入的 CSV / JSON / Excel / 文本 URL', '') || '').trim()
-    if (!sourceUrl) return
-    await emitNotebookAction('import-url', {
-      sourceUrl,
-      sourceLabel: sourceUrl,
+// 设计说明：
+// 1. 所有导入入口都打开统一的导入向导，由向导按 IMPORT_FORMATS 渲染表单、探测预览并产出 Import Spec。
+// 2. 向导确认后通过 emitWorkbenchImportSource 把完整 Spec 发往主窗口 Notebook 执行与记账，
+//    工作台只负责交互与探测（探测在本会话只读执行），不重复实现解析逻辑。
+const requestImportOption = (item) => {
+  const value = String(item?.value || '') || 'file'
+  logger.info('[DataWorkbench] open import dialog', { value, label: String(item?.label || '') })
+  importDialogCategory.value = value
+  importDialogOpen.value = true
+}
+
+const handleImportConfirm = async (spec) => {
+  try {
+    const result = await emitWorkbenchImportSource({ context, spec })
+    logger.info('[DataWorkbench] import source dispatched', {
+      category: result?.category,
+      format: result?.format,
+      variableName: result?.variableName,
     })
+    message.success(`已发送导入请求：${result?.variableName || ''}`)
+  } catch (error) {
+    logger.error('[DataWorkbench] dispatch import source failed', { error: String(error?.message || error) })
+    message.error(`导入失败：${String(error?.message || error)}`)
   }
 }
 

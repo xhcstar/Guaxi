@@ -872,8 +872,10 @@ import {
 } from './utils/guaxiDataLabWorkbenchClient'
 import {
   NOTEBOOK_DATALAB_EVENT,
+  classifyNotebookLabVariable,
   buildNotebookLabDatasetDescriptors,
   buildNotebookLabImportPlan,
+  buildNotebookLabImportPlanFromSpec,
   buildNotebookLabMaterializeCode,
   buildNotebookLabMathCode,
   buildNotebookLabPlotCode,
@@ -7219,10 +7221,16 @@ const importExternalDataToPythonSession = async (cell, {
   sourceLabel = '',
   variableName = '',
   sourceUrl = '',
+  spec = null,
 } = {}) => {
   if (!cell?.key) return
   const requestId = createNotebookActionRequestId('nb-import')
-  const normalizedSourceType = String(sourceType || 'file').trim().toLowerCase()
+  // 设计说明：传入完整 Import Spec 时（导入向导/import-source 动作）直接据此构造执行计划，
+  // 跳过旧的 sourceType 取数分支与文件对话框（路径/选项已由向导解析并确认）。
+  const importSpec = spec && typeof spec === 'object' && Object.keys(spec).length ? spec : null
+  const normalizedSourceType = importSpec
+    ? String(importSpec.category || 'file').trim().toLowerCase()
+    : String(sourceType || 'file').trim().toLowerCase()
   const targetIdentity = getNotebookPythonCellIdentity(cell)
   const activeCellKeyAtStart = String(activeNotebookPythonCellKey.value || '')
   notebookPendingPythonImport.value = {
@@ -7233,47 +7241,52 @@ const importExternalDataToPythonSession = async (cell, {
   setNotebookBusyState(cell, true, `import-data:start:${requestId}`)
 
   try {
-    let selectedPath = ''
-    let effectiveText = String(inlineText || '')
-    let effectiveLabel = String(sourceLabel || '')
-    let effectiveUrl = String(sourceUrl || '').trim()
+    let importPlan
+    if (importSpec) {
+      importPlan = buildNotebookLabImportPlanFromSpec(importSpec)
+    } else {
+      let selectedPath = ''
+      let effectiveText = String(inlineText || '')
+      let effectiveLabel = String(sourceLabel || '')
+      let effectiveUrl = String(sourceUrl || '').trim()
 
-    if (normalizedSourceType === 'file') {
-      const selected = await open({
-        multiple: false,
-        filters: [{
-          name: 'External Data',
-          extensions: ['csv', 'tsv', 'txt', 'xlsx', 'xls', 'json', 'jsonl', 'parquet', 'feather', 'db', 'sqlite', 'sqlite3', 'duckdb', 'md', 'markdown', 'yaml', 'yml', 'log', 'py', 'js', 'ts'],
-        }],
+      if (normalizedSourceType === 'file') {
+        const selected = await open({
+          multiple: false,
+          filters: [{
+            name: 'External Data',
+            extensions: ['csv', 'tsv', 'txt', 'xlsx', 'xls', 'json', 'jsonl', 'parquet', 'feather', 'db', 'sqlite', 'sqlite3', 'duckdb', 'md', 'markdown', 'yaml', 'yml', 'log', 'py', 'js', 'ts'],
+          }],
+        })
+        if (!selected) return
+        selectedPath = String(selected)
+        effectiveLabel = effectiveLabel || (selectedPath.split(/[\\/]/).pop() || selectedPath)
+      } else if (normalizedSourceType === 'url') {
+        if (!effectiveUrl) {
+          effectiveUrl = String(window.prompt?.('输入要导入的 CSV / JSON / Excel / 文本 URL', '') || '').trim()
+        }
+        if (!effectiveUrl) return
+        effectiveLabel = effectiveLabel || effectiveUrl
+      } else if (normalizedSourceType === 'clipboard') {
+        effectiveText = String(await readClipboardText())
+        if (!String(effectiveText || '').trim()) {
+          message.warning('剪贴板里没有可导入的文本数据')
+          return
+        }
+        effectiveLabel = effectiveLabel || 'clipboard'
+      } else if (!String(effectiveText || '').trim()) {
+        throw new Error('缺少可导入的数据内容')
+      }
+
+      importPlan = buildNotebookLabImportPlan({
+        sourceType: normalizedSourceType,
+        sourcePath: selectedPath,
+        sourceLabel: effectiveLabel,
+        variableName,
+        text: effectiveText,
+        sourceUrl: effectiveUrl,
       })
-      if (!selected) return
-      selectedPath = String(selected)
-      effectiveLabel = effectiveLabel || (selectedPath.split(/[\\/]/).pop() || selectedPath)
-    } else if (normalizedSourceType === 'url') {
-      if (!effectiveUrl) {
-        effectiveUrl = String(window.prompt?.('输入要导入的 CSV / JSON / Excel / 文本 URL', '') || '').trim()
-      }
-      if (!effectiveUrl) return
-      effectiveLabel = effectiveLabel || effectiveUrl
-    } else if (normalizedSourceType === 'clipboard') {
-      effectiveText = String(await readClipboardText())
-      if (!String(effectiveText || '').trim()) {
-        message.warning('剪贴板里没有可导入的文本数据')
-        return
-      }
-      effectiveLabel = effectiveLabel || 'clipboard'
-    } else if (!String(effectiveText || '').trim()) {
-      throw new Error('缺少可导入的数据内容')
     }
-
-    const importPlan = buildNotebookLabImportPlan({
-      sourceType: normalizedSourceType,
-      sourcePath: selectedPath,
-      sourceLabel: effectiveLabel,
-      variableName,
-      text: effectiveText,
-      sourceUrl: effectiveUrl,
-    })
     logger.info('[NotebookDataLab] prepared import plan', {
       requestId,
       sourceType: normalizedSourceType,
@@ -7318,7 +7331,7 @@ const importExternalDataToPythonSession = async (cell, {
     const previousOutputCount = Array.isArray(snapshot?.outputs) ? snapshot.outputs.length : 0
     const outputText = normalizedSourceType === 'clipboard'
       ? `已将剪贴板数据导入到会话变量 ${importPlan.variableName}，可以在实验室面板中继续生成输出、写回 Markdown 或导出。`
-      : `已将外部文件 ${importPlan.sourceLabel} 导入到会话变量 ${importPlan.variableName}，可以在实验室面板中继续生成输出、写回 Markdown 或导出。`
+      : `已将数据源 ${importPlan.sourceLabel} 导入到会话变量 ${importPlan.variableName}，可以在实验室面板中继续生成输出、写回 Markdown 或导出。`
     const nextOutputs = appendPythonCellOutputModules(
       snapshot?.outputs || [],
       buildPythonCellOutputModules({
@@ -7329,13 +7342,38 @@ const importExternalDataToPythonSession = async (cell, {
         source: 'data-lab-import',
       }),
     )
-    const nextImports = upsertNotebookLabImportRecord(getCellLabImports(targetCell), {
+    // 设计说明：用导入后回传的会话变量摘要补全 Dataset Descriptor（dataKind/schema），
+    // 连同完整 Import Spec 一并记账，便于后续“重新导入”与结构分析。
+    const importedVarSummary = (Array.isArray(result?.session_vars) ? result.session_vars : [])
+      .find((item) => String(item?.name || '') === importPlan.variableName) || null
+    const importedDataKind = importedVarSummary ? classifyNotebookLabVariable(importedVarSummary) : 'value'
+    const importDescriptor = {
       variableName: importPlan.variableName,
       sourceType: importPlan.sourceType,
       sourceLabel: importPlan.sourceLabel,
-      dataKind: 'value',
+      dataKind: importedDataKind,
       importedAt: new Date().toISOString(),
-    })
+    }
+    if (importPlan.spec) {
+      importDescriptor.source = {
+        category: importPlan.spec.category,
+        format: importPlan.spec.format,
+        label: importPlan.spec.sourceLabel,
+      }
+      importDescriptor.options = importPlan.spec.options || {}
+      importDescriptor.spec = importPlan.spec
+      if (importedVarSummary) {
+        importDescriptor.schema = {
+          columns: Array.isArray(importedVarSummary.column_names)
+            ? importedVarSummary.column_names.map((column) => String(column ?? ''))
+            : [],
+          dtypes: importedVarSummary.dtypes && typeof importedVarSummary.dtypes === 'object' ? { ...importedVarSummary.dtypes } : {},
+          rowCount: importedVarSummary.rows ?? importedVarSummary.length ?? null,
+          shape: Array.isArray(importedVarSummary.shape) ? [...importedVarSummary.shape] : [],
+        }
+      }
+    }
+    const nextImports = upsertNotebookLabImportRecord(getCellLabImports(targetCell), importDescriptor)
 
     patchPythonCellSnapshot(props.filePath, targetCell.cellId, {
       codeDigest: getNotebookCellContentDigest(targetCell),
@@ -7957,6 +7995,12 @@ const handleNotebookDataLabActionEvent = async (event) => {
 
   if (detail.action === 'focus-variable') {
     await focusNotebookVariableInCell(targetCell, String(detail?.variableName || ''), 'session-panel')
+    return
+  }
+  if (detail.action === 'import-source') {
+    await importExternalDataToPythonSession(targetCell, {
+      spec: detail?.spec && typeof detail.spec === 'object' ? detail.spec : {},
+    })
     return
   }
   if (detail.action === 'import-file') {

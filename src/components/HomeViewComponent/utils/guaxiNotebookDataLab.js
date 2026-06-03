@@ -62,13 +62,19 @@ export const classifyNotebookLabVariable = (item = {}) => {
 }
 
 export const upsertNotebookLabImportRecord = (imports = [], record = null) => {
+  // 设计说明：导入记录现在承载完整 Dataset Descriptor（source/format/schema/options/spec），
+  // 既兼容旧的 sourceType/sourceLabel/dataKind 扁平字段，也支持后续“重新导入”与结构分析。
   const normalizedRecord = record && typeof record === 'object'
     ? {
       variableName: normalizeText(record.variableName || record.name),
-      sourceType: normalizeText(record.sourceType || 'unknown'),
-      sourceLabel: normalizeText(record.sourceLabel || ''),
+      sourceType: normalizeText(record.sourceType || record?.source?.category || 'unknown'),
+      sourceLabel: normalizeText(record.sourceLabel || record?.source?.label || ''),
       dataKind: normalizeText(record.dataKind || 'value'),
       importedAt: normalizeText(record.importedAt || new Date().toISOString()),
+      ...(record.source && typeof record.source === 'object' ? { source: { ...record.source } } : {}),
+      ...(record.schema && typeof record.schema === 'object' ? { schema: { ...record.schema } } : {}),
+      ...(record.options && typeof record.options === 'object' ? { options: { ...record.options } } : {}),
+      ...(record.spec && typeof record.spec === 'object' ? { spec: { ...record.spec } } : {}),
     }
     : null
   if (!normalizedRecord?.variableName) {
@@ -116,139 +122,758 @@ export const buildNotebookLabDatasetDescriptors = (sessionVars = [], imports = [
   })
 }
 
-const buildFileImportCode = ({ sourcePath = '', variableName = '', sourceLabel = '' } = {}) => {
+// ============================================================================
+// 统一数据导入抽象层（Import Spec + Dataset Descriptor）
+// ----------------------------------------------------------------------------
+// 设计说明：
+// 1. 所有导入方式（文件 / 数据库 / API / 剪贴板 / 自定义脚本）都被抽象成一份可
+//    序列化的 Import Spec，描述“从哪取数 + 怎么解析”；它既能走 RPC，又能存档复跑。
+// 2. IMPORT_FORMATS 是声明式注册表，同时驱动导入向导的动态表单与 Python 代码生成，
+//    新增格式 = 往注册表加一条 + 在运行时加一个分支。
+// 3. 真正解析逻辑放在 Python 运行时（IMPORT_RUNTIME_PY / IMPORT_PROBE_RUNTIME_PY），
+//    整体包在 `__guaxi_*` 前缀的函数里，局部变量不会泄漏成会话变量。
+// ============================================================================
+
+export const IMPORT_CATEGORIES = [
+  { id: 'file', label: '文件', icon: 'file', summary: 'CSV / Excel / Parquet / JSON / 文本' },
+  { id: 'database', label: '数据库', icon: 'database', summary: 'SQLite / Postgres / MySQL / DuckDB' },
+  { id: 'api', label: 'API & URL', icon: 'globe', summary: 'HTTP 接口 / 远程文件' },
+  { id: 'clipboard', label: '剪贴板', icon: 'clipboard', summary: '表格 / JSON / 文本' },
+  { id: 'script', label: '自定义脚本', icon: 'code', summary: '私有协议 / 二进制 / 混合文本' },
+]
+
+const HEADER_FIELD_OPTIONS = [
+  { value: 'infer', label: '第一行作表头' },
+  { value: 'none', label: '无表头' },
+]
+const HTTP_METHOD_OPTIONS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'].map((value) => ({ value, label: value }))
+
+// 每个格式的 fields 用点号路径（source.* / options.*）声明，向导据此读写嵌套 Spec。
+// type: text | textarea | number | select | file | code | kv | sheet | table | clipboard
+export const IMPORT_FORMATS = [
+  {
+    id: 'csv', category: 'file', label: 'CSV / 分隔文本', needsProbe: true,
+    accept: ['csv', 'tsv', 'txt'],
+    fields: [
+      { key: 'source.path', label: '数据文件', type: 'file', accept: ['csv', 'tsv', 'txt'], required: true },
+      { key: 'options.encoding', label: '编码', type: 'text', placeholder: '留空自动（utf-8 / gbk …）' },
+      { key: 'options.sep', label: '分隔符', type: 'text', placeholder: '留空自动；\\t 表示制表符' },
+      { key: 'options.header', label: '表头', type: 'select', default: 'infer', options: HEADER_FIELD_OPTIONS },
+    ],
+  },
+  {
+    id: 'excel', category: 'file', label: 'Excel 工作簿', needsProbe: true,
+    accept: ['xlsx', 'xls'],
+    fields: [
+      { key: 'source.path', label: '数据文件', type: 'file', accept: ['xlsx', 'xls'], required: true },
+      { key: 'options.sheet', label: '工作表', type: 'sheet', placeholder: '点“探测”后选择，留空取第一张' },
+    ],
+  },
+  {
+    id: 'parquet', category: 'file', label: 'Parquet / Feather',
+    accept: ['parquet', 'feather'],
+    fields: [
+      { key: 'source.path', label: '数据文件', type: 'file', accept: ['parquet', 'feather'], required: true },
+    ],
+  },
+  {
+    id: 'json', category: 'file', label: 'JSON / JSONL', needsProbe: true,
+    accept: ['json', 'jsonl'],
+    fields: [
+      { key: 'source.path', label: '数据文件', type: 'file', accept: ['json', 'jsonl'], required: true },
+      { key: 'options.jsonPath', label: 'JSON 路径', type: 'text', placeholder: '例如 data.items（留空取根）' },
+    ],
+  },
+  {
+    id: 'database', category: 'database', label: '数据库连接', needsProbe: true,
+    fields: [
+      { key: 'source.connStr', label: '连接串', type: 'text', placeholder: 'sqlite:///路径 或 postgresql+psycopg2://user:pwd@host/db' },
+      { key: 'source.path', label: '或 SQLite/DuckDB 文件', type: 'file', accept: ['db', 'sqlite', 'sqlite3', 'duckdb'] },
+      { key: 'source.table', label: '表名', type: 'table', placeholder: '点“探测”后选择' },
+      { key: 'source.query', label: '自定义 SQL', type: 'textarea', placeholder: '留空则 select * from 选定表' },
+    ],
+  },
+  {
+    id: 'api-json', category: 'api', label: 'API（JSON 响应）', needsProbe: true,
+    fields: [
+      { key: 'source.url', label: 'URL', type: 'text', required: true, placeholder: 'https://example.com/api/data' },
+      { key: 'source.method', label: '方法', type: 'select', default: 'GET', options: HTTP_METHOD_OPTIONS },
+      { key: 'source.headers', label: '请求头', type: 'kv' },
+      { key: 'source.auth', label: 'Token', type: 'text', placeholder: '可选，自动加 Authorization: Bearer …' },
+      { key: 'source.body', label: '请求体', type: 'textarea', placeholder: 'POST/PUT 时的 JSON 文本' },
+      { key: 'source.jsonPath', label: 'JSON 路径', type: 'text', placeholder: '例如 data.items（留空取根）' },
+    ],
+  },
+  {
+    id: 'api-csv', category: 'api', label: '远程 CSV',
+    fields: [
+      { key: 'source.url', label: 'URL', type: 'text', required: true },
+      { key: 'source.method', label: '方法', type: 'select', default: 'GET', options: HTTP_METHOD_OPTIONS },
+      { key: 'source.headers', label: '请求头', type: 'kv' },
+      { key: 'source.auth', label: 'Token', type: 'text', placeholder: '可选' },
+    ],
+  },
+  {
+    id: 'api-text', category: 'api', label: '远程文本 / 原始响应',
+    fields: [
+      { key: 'source.url', label: 'URL', type: 'text', required: true },
+      { key: 'source.method', label: '方法', type: 'select', default: 'GET', options: HTTP_METHOD_OPTIONS },
+      { key: 'source.headers', label: '请求头', type: 'kv' },
+      { key: 'source.auth', label: 'Token', type: 'text', placeholder: '可选' },
+    ],
+  },
+  {
+    id: 'logline', category: 'api', label: '日志（正则逐行解析）', needsProbe: true,
+    fields: [
+      { key: 'source.path', label: '日志文件', type: 'file', accept: ['log', 'txt'] },
+      { key: 'source.text', label: '或粘贴日志', type: 'textarea', placeholder: '直接粘贴日志文本', clipboard: true },
+      { key: 'options.logPattern', label: '解析正则', type: 'text', required: true, placeholder: '带命名分组，如 (?P<ts>\\S+) (?P<level>\\w+) (?P<msg>.*)' },
+    ],
+  },
+  {
+    id: 'clipboard', category: 'clipboard', label: '剪贴板内容', needsProbe: true,
+    fields: [
+      { key: 'source.text', label: '内容', type: 'textarea', placeholder: '粘贴表格（Excel/CSV）、JSON 或文本', clipboard: true, required: true },
+    ],
+  },
+  {
+    id: 'custom', category: 'script', label: '自定义脚本', needsProbe: true,
+    fields: [
+      { key: 'source.scriptText', label: '脚本（内联）', type: 'code', placeholder: 'def load(source):\n    raw = source.read_bytes()\n    # 解析私有协议 / 二进制 / 混合文本\n    return value' },
+      { key: 'source.scriptPath', label: '或脚本文件', type: 'file', accept: ['py'] },
+      { key: 'source.entry', label: '入口函数', type: 'text', default: 'load' },
+      { key: 'source.path', label: '数据文件 → source.path', type: 'file' },
+      { key: 'source.url', label: '数据 URL → source.url', type: 'text' },
+    ],
+  },
+]
+
+export const getImportFormatsByCategory = (category) => {
+  const id = normalizeText(category)
+  return IMPORT_FORMATS.filter((item) => item.category === id)
+}
+
+export const getImportFormat = (formatId) => {
+  const id = normalizeText(formatId)
+  return IMPORT_FORMATS.find((item) => item.id === id) || null
+}
+
+const DEFAULT_VAR_BY_CATEGORY = {
+  file: 'data_item',
+  database: 'db_table',
+  api: 'api_data',
+  clipboard: 'clipboard_data',
+  script: 'custom_data',
+}
+
+const deriveImportLabel = (source = {}, category = '') => {
+  const path = normalizeText(source?.path)
+  if (path) return path.split(/[\\/]/).pop() || path
+  const url = normalizeText(source?.url)
+  if (url) return url
+  const connStr = normalizeText(source?.connStr)
+  if (connStr) return connStr
+  return normalizeText(category) || 'data'
+}
+
+// 把任意输入规整成标准 Import Spec，保证 category/format/variableName/sourceLabel 齐全，
+// source/options 为对象。format 缺省留 'auto'，由 Python 运行时按扩展名/内容推断。
+export const normalizeImportSpec = (spec = {}) => {
+  const input = spec && typeof spec === 'object' ? spec : {}
+  const source = input.source && typeof input.source === 'object' ? { ...input.source } : {}
+  const options = input.options && typeof input.options === 'object' ? { ...input.options } : {}
+  const category = normalizeText(input.category) || 'file'
+  const format = normalizeText(input.format) || 'auto'
+  const sourceLabel = normalizeText(input.sourceLabel) || deriveImportLabel(source, category)
+  const fallbackVar = DEFAULT_VAR_BY_CATEGORY[category] || 'data_item'
+  const variableName = clampVariableName(
+    input.variableName || buildImportVariableName(sourceLabel, fallbackVar),
+    fallbackVar,
+  )
+  return { category, format, variableName, sourceLabel, source, options }
+}
+
+// 只读探测：列 Excel sheet / DB 表 / 嗅探 CSV 编码分隔符 / 预览 JSON·日志·脚本结果。
+// 绝不写入 globals()，结果以 JSON 返回。
+const IMPORT_PROBE_RUNTIME_PY = String.raw`
+def __guaxi_probe():
+    import json, io
+    spec = __guaxi_spec
+    cat = str(spec.get('category') or 'file')
+    fmt = str(spec.get('format') or '')
+    src = spec.get('source') or {}
+    opt = spec.get('options') or {}
+    N = 20
+    try:
+        import pandas as pd
+    except Exception:
+        pd = None
+    out = {'category': cat, 'format': fmt, 'ok': True}
+
+    def http():
+        import urllib.request
+        url = str(src.get('url') or '')
+        if not url:
+            raise ValueError('请提供请求 URL')
+        method = str(src.get('method') or 'GET').upper()
+        headers = src.get('headers') or {}
+        body = src.get('body')
+        auth = src.get('auth')
+        data = None
+        if body not in (None, ''):
+            data = json.dumps(body).encode('utf-8') if isinstance(body, (dict, list)) else str(body).encode('utf-8')
+        req = urllib.request.Request(url, data=data, method=method)
+        if isinstance(headers, dict):
+            for hk, hv in headers.items():
+                if str(hk).strip():
+                    req.add_header(str(hk), str(hv))
+        if auth not in (None, ''):
+            token = str(auth)
+            req.add_header('Authorization', token if token.lower().startswith(('bearer ', 'basic ')) else 'Bearer ' + token)
+        with urllib.request.urlopen(req) as resp:
+            return resp.read()
+
+    def jpath(obj, path):
+        import re
+        path = str(path or '').strip()
+        if not path:
+            return obj
+        cur = obj
+        for tok in re.findall(r'[^.\[\]]+', path):
+            if cur is None:
+                break
+            if isinstance(cur, dict):
+                cur = cur.get(tok)
+            elif isinstance(cur, (list, tuple)):
+                try:
+                    cur = cur[int(tok)]
+                except Exception:
+                    cur = None
+            else:
+                cur = None
+        return cur
+
+    try:
+        if fmt == 'excel':
+            xl = pd.ExcelFile(str(src.get('path') or ''))
+            out['sheets'] = [str(s) for s in xl.sheet_names]
+        elif cat == 'database' or fmt in ('database', 'sqlite', 'sql'):
+            conn_str = str(src.get('connStr') or '').strip()
+            path = str(src.get('path') or '').strip()
+            tables = []
+            if conn_str:
+                from sqlalchemy import create_engine, inspect
+                eng = create_engine(conn_str)
+                try:
+                    insp = inspect(eng)
+                    for t in insp.get_table_names():
+                        try:
+                            cols = [str(c['name']) for c in insp.get_columns(t)]
+                        except Exception:
+                            cols = []
+                        tables.append({'name': str(t), 'columns': cols})
+                finally:
+                    eng.dispose()
+            elif path:
+                import sqlite3
+                conn = sqlite3.connect(path)
+                try:
+                    rows = conn.execute("select name from sqlite_master where type='table' order by name").fetchall()
+                    for (name,) in rows:
+                        try:
+                            info = conn.execute('PRAGMA table_info("' + str(name) + '")').fetchall()
+                            cols = [str(c[1]) for c in info]
+                        except Exception:
+                            cols = []
+                        tables.append({'name': str(name), 'columns': cols})
+                finally:
+                    conn.close()
+            else:
+                raise ValueError('请提供连接串或 SQLite 文件')
+            out['tables'] = tables
+        elif fmt in ('csv', 'tsv'):
+            from pathlib import Path
+            path = str(src.get('path') or '')
+            raw = Path(path).read_bytes()[:65536] if path else str(src.get('text') or '').encode('utf-8')
+            enc = str(opt.get('encoding') or '')
+            tried = [enc] if enc else ['utf-8', 'gbk', 'latin-1']
+            text = None
+            used = None
+            for e in tried:
+                try:
+                    text = raw.decode(e)
+                    used = e
+                    break
+                except Exception:
+                    continue
+            if text is None:
+                text = raw.decode('utf-8', errors='replace')
+                used = 'utf-8'
+            sep = opt.get('sep')
+            if not sep:
+                if fmt == 'tsv':
+                    sep = '\t'
+                else:
+                    import csv as _csv
+                    try:
+                        sep = _csv.Sniffer().sniff(text[:4096], delimiters=',;\t|').delimiter
+                    except Exception:
+                        sep = ','
+            elif sep == '\\t':
+                sep = '\t'
+            df = pd.read_csv(io.StringIO(text), sep=sep, nrows=N)
+            out['encoding'] = used
+            out['sep'] = '\\t' if sep == '\t' else sep
+            out['columns'] = [str(c) for c in df.columns]
+            out['sample'] = json.loads(df.head(N).to_json(orient='records', force_ascii=False))
+        elif fmt in ('json', 'jsonl') or fmt.startswith('api') or cat in ('api', 'clipboard'):
+            if cat == 'api' or fmt.startswith('api'):
+                raw_text = http().decode(str(opt.get('encoding') or 'utf-8'), errors='replace')
+            elif src.get('path'):
+                from pathlib import Path
+                raw_text = Path(str(src.get('path'))).read_text(encoding=str(opt.get('encoding') or 'utf-8'))
+            else:
+                raw_text = str(src.get('text') or '')
+            data = None
+            if fmt == 'jsonl':
+                data = [json.loads(ln) for ln in raw_text.splitlines() if ln.strip()]
+            else:
+                try:
+                    data = json.loads(raw_text)
+                except Exception:
+                    out['topType'] = 'text'
+                    out['preview'] = raw_text[:2000]
+                    return out
+            data = jpath(data, src.get('jsonPath') or opt.get('jsonPath'))
+            out['topType'] = type(data).__name__
+            if isinstance(data, dict):
+                out['keys'] = [str(k) for k in list(data.keys())[:100]]
+            if isinstance(data, (list, dict)):
+                try:
+                    out['length'] = len(data)
+                except Exception:
+                    pass
+            if pd is not None:
+                try:
+                    df = pd.DataFrame(data)
+                    if len(df.columns):
+                        out['columns'] = [str(c) for c in df.columns]
+                        out['sample'] = json.loads(df.head(N).to_json(orient='records', force_ascii=False))
+                except Exception:
+                    pass
+            out['preview'] = json.dumps(data, ensure_ascii=False, indent=2, default=str)[:2000]
+        elif fmt == 'logline':
+            import re
+            pattern = str(opt.get('logPattern') or '')
+            if not pattern:
+                raise ValueError('请提供日志解析正则 logPattern')
+            rx = re.compile(pattern)
+            path = str(src.get('path') or '')
+            if path:
+                from pathlib import Path
+                lines = Path(path).read_text(encoding=str(opt.get('encoding') or 'utf-8'), errors='replace').splitlines()
+            else:
+                lines = str(src.get('text') or '').splitlines()
+            rows = []
+            matched = 0
+            for ln in lines:
+                m = rx.search(ln)
+                if not m:
+                    continue
+                matched += 1
+                gd = m.groupdict()
+                rows.append(gd if gd else {('g%d' % (i + 1)): g for i, g in enumerate(m.groups())})
+                if len(rows) >= N:
+                    pass
+            out['total'] = len(lines)
+            out['matched'] = matched
+            out['rows'] = rows[:N]
+            if rows:
+                out['columns'] = [str(c) for c in rows[0].keys()]
+        elif cat == 'script' or fmt == 'custom':
+            value, kind = __guaxi_eval_custom(src, opt, http)
+            out['kind'] = kind
+            if pd is not None and isinstance(value, (pd.DataFrame, pd.Series)):
+                df = value.to_frame() if isinstance(value, pd.Series) else value
+                out['columns'] = [str(c) for c in df.columns]
+                out['sample'] = json.loads(df.head(N).to_json(orient='records', force_ascii=False))
+                out['length'] = int(len(df.index))
+            else:
+                out['preview'] = json.dumps(value, ensure_ascii=False, indent=2, default=str)[:2000] if isinstance(value, (dict, list)) else str(value)[:2000]
+        else:
+            out['note'] = '该格式无需探测，可直接导入'
+    except Exception as e:
+        out['ok'] = False
+        out['error'] = type(e).__name__ + ': ' + str(e)
+    return out
+
+
+def __guaxi_eval_custom(src, opt, http):
+    code = str(src.get('scriptText') or '')
+    spath = str(src.get('scriptPath') or '')
+    if not code.strip() and spath:
+        from pathlib import Path
+        code = Path(spath).read_text(encoding='utf-8')
+    if not code.strip():
+        raise ValueError('请提供脚本内容或脚本文件')
+    entry = str(src.get('entry') or 'load') or 'load'
+
+    class SourceCtx:
+        def __init__(self):
+            self.path = str(src.get('path') or '')
+            self.url = str(src.get('url') or '')
+            self.text = str(src.get('text') or '')
+            self.options = opt
+            self.source = src
+
+        def read_bytes(self):
+            from pathlib import Path
+            if self.path:
+                return Path(self.path).read_bytes()
+            if self.url:
+                return http()
+            return self.text.encode('utf-8')
+
+        def read_text(self, encoding='utf-8'):
+            if self.text:
+                return self.text
+            return self.read_bytes().decode(encoding, errors='replace')
+
+    ns = {}
+    exec(code, ns)
+    fn = ns.get(entry)
+    if not callable(fn):
+        raise ValueError('脚本中未找到入口函数 ' + entry + '(source)')
+    value = fn(SourceCtx())
+    try:
+        import pandas as pd
+    except Exception:
+        pd = None
+    if pd is not None and isinstance(value, (pd.DataFrame, pd.Series)):
+        kind = 'table'
+    elif isinstance(value, str):
+        kind = 'text'
+    elif isinstance(value, (dict, list, tuple, set)):
+        kind = 'structured'
+    else:
+        kind = 'value'
+    return value, kind
+
+
+_result = __guaxi_probe()
+`
+
+// 统一导入执行：按 format 分发解析，写入会话变量并打印日志；整体包在函数里避免局部泄漏。
+const IMPORT_RUNTIME_PY = String.raw`
+def __guaxi_run_import():
+    import json, io
+    spec = __guaxi_spec
+    cat = str(spec.get('category') or 'file')
+    fmt = str(spec.get('format') or '')
+    src = spec.get('source') or {}
+    opt = spec.get('options') or {}
+    try:
+        import pandas as pd
+    except Exception:
+        pd = None
+
+    def need_pd():
+        if pd is None:
+            raise RuntimeError('当前 Python 环境缺少 pandas，无法解析表格数据')
+
+    def infer_kind(v):
+        if pd is not None and isinstance(v, (pd.DataFrame, pd.Series)):
+            return 'table'
+        if isinstance(v, str):
+            return 'text'
+        if isinstance(v, (dict, list, tuple, set)):
+            return 'structured'
+        return 'value'
+
+    def to_table(v):
+        if pd is not None and isinstance(v, (pd.DataFrame, pd.Series)):
+            return v, 'table'
+        if pd is not None:
+            try:
+                df = pd.DataFrame(v)
+                if len(df.columns):
+                    return df, 'table'
+            except Exception:
+                pass
+        return v, infer_kind(v)
+
+    def jpath(obj, path):
+        import re
+        path = str(path or '').strip()
+        if not path:
+            return obj
+        cur = obj
+        for tok in re.findall(r'[^.\[\]]+', path):
+            if cur is None:
+                break
+            if isinstance(cur, dict):
+                cur = cur.get(tok)
+            elif isinstance(cur, (list, tuple)):
+                try:
+                    cur = cur[int(tok)]
+                except Exception:
+                    cur = None
+            else:
+                cur = None
+        return cur
+
+    def http():
+        import urllib.request
+        url = str(src.get('url') or '')
+        if not url:
+            raise ValueError('请提供请求 URL')
+        method = str(src.get('method') or 'GET').upper()
+        headers = src.get('headers') or {}
+        body = src.get('body')
+        auth = src.get('auth')
+        data = None
+        if body not in (None, ''):
+            data = json.dumps(body).encode('utf-8') if isinstance(body, (dict, list)) else str(body).encode('utf-8')
+        req = urllib.request.Request(url, data=data, method=method)
+        if isinstance(headers, dict):
+            for hk, hv in headers.items():
+                if str(hk).strip():
+                    req.add_header(str(hk), str(hv))
+        if auth not in (None, ''):
+            token = str(auth)
+            req.add_header('Authorization', token if token.lower().startswith(('bearer ', 'basic ')) else 'Bearer ' + token)
+        with urllib.request.urlopen(req) as resp:
+            return resp.read()
+
+    def read_text(path):
+        from pathlib import Path
+        return Path(path).read_text(encoding=str(opt.get('encoding') or 'utf-8'))
+
+    class SourceCtx:
+        def __init__(self):
+            self.path = str(src.get('path') or '')
+            self.url = str(src.get('url') or '')
+            self.text = str(src.get('text') or '')
+            self.options = opt
+            self.source = src
+
+        def read_bytes(self):
+            from pathlib import Path
+            if self.path:
+                return Path(self.path).read_bytes()
+            if self.url:
+                return http()
+            return self.text.encode('utf-8')
+
+        def read_text(self, encoding='utf-8'):
+            if self.text:
+                return self.text
+            return self.read_bytes().decode(encoding, errors='replace')
+
+    path = str(src.get('path') or '')
+
+    if fmt in ('', 'auto'):
+        target = path or str(src.get('url') or '')
+        head = target.split('?')[0].split('#')[0].lower()
+        ext = head.rsplit('.', 1)[-1] if '.' in head else ''
+        mapping = {
+            'csv': 'csv', 'tsv': 'tsv', 'txt': 'text',
+            'xlsx': 'excel', 'xls': 'excel',
+            'parquet': 'parquet', 'feather': 'feather',
+            'json': 'json', 'jsonl': 'jsonl',
+            'db': 'database', 'sqlite': 'database', 'sqlite3': 'database', 'duckdb': 'database',
+            'md': 'text', 'markdown': 'text', 'yaml': 'text', 'yml': 'text',
+            'log': 'text', 'py': 'text', 'js': 'text', 'ts': 'text',
+        }
+        fmt = mapping.get(ext, '')
+        if not fmt:
+            if src.get('text') not in (None, ''):
+                fmt = 'clipboard'
+            elif src.get('url'):
+                fmt = 'api-text'
+            else:
+                fmt = 'text'
+
+    if fmt in ('csv', 'tsv'):
+        need_pd()
+        sep = opt.get('sep')
+        if not sep:
+            sep = '\t' if fmt == 'tsv' else ','
+        elif sep == '\\t':
+            sep = '\t'
+        enc = str(opt.get('encoding') or 'utf-8')
+        header = 0 if str(opt.get('header') or 'infer') != 'none' else None
+        if path:
+            return pd.read_csv(path, sep=sep, encoding=enc, header=header), 'table'
+        return pd.read_csv(io.StringIO(str(src.get('text') or '')), sep=sep, header=header), 'table'
+
+    if fmt == 'excel':
+        need_pd()
+        sheet = opt.get('sheet')
+        if sheet in (None, ''):
+            sheet = 0
+        elif str(sheet).isdigit():
+            sheet = int(sheet)
+        return pd.read_excel(path, sheet_name=sheet), 'table'
+
+    if fmt == 'parquet':
+        need_pd()
+        return pd.read_parquet(path), 'table'
+
+    if fmt == 'feather':
+        need_pd()
+        return pd.read_feather(path), 'table'
+
+    if fmt == 'jsonl':
+        need_pd()
+        if path:
+            return pd.read_json(path, lines=True), 'table'
+        return pd.read_json(io.StringIO(str(src.get('text') or '')), lines=True), 'table'
+
+    if fmt == 'json':
+        raw = read_text(path) if path else str(src.get('text') or '')
+        data = jpath(json.loads(raw), opt.get('jsonPath') or src.get('jsonPath'))
+        value, kind = to_table(data)
+        if kind != 'table':
+            return data, 'structured'
+        return value, kind
+
+    if cat == 'database' or fmt in ('database', 'sqlite', 'sql'):
+        need_pd()
+        conn_str = str(src.get('connStr') or '').strip()
+        db_path = str(src.get('path') or '').strip()
+        table = str(src.get('table') or '').strip()
+        query = str(src.get('query') or '').strip()
+        if conn_str:
+            from sqlalchemy import create_engine
+            eng = create_engine(conn_str)
+            try:
+                if not query:
+                    if not table:
+                        from sqlalchemy import inspect
+                        names = inspect(eng).get_table_names()
+                        if not names:
+                            raise ValueError('数据库中没有可用的表')
+                        table = names[0]
+                    query = 'select * from "' + table + '"'
+                return pd.read_sql(query, eng), 'table'
+            finally:
+                eng.dispose()
+        if db_path:
+            import sqlite3
+            conn = sqlite3.connect(db_path)
+            try:
+                if not query:
+                    if not table:
+                        rows = conn.execute("select name from sqlite_master where type='table' order by name").fetchall()
+                        if not rows:
+                            raise ValueError('数据库文件中没有可用的表')
+                        table = str(rows[0][0])
+                    query = 'select * from "' + table + '"'
+                return pd.read_sql_query(query, conn), 'table'
+            finally:
+                conn.close()
+        raise ValueError('请提供数据库连接串或 SQLite 文件路径')
+
+    if fmt.startswith('api'):
+        raw = http()
+        enc = str(opt.get('encoding') or 'utf-8')
+        if fmt == 'api-csv':
+            need_pd()
+            return pd.read_csv(io.StringIO(raw.decode(enc, errors='replace'))), 'table'
+        if fmt == 'api-text':
+            return raw.decode(enc, errors='replace'), 'text'
+        data = jpath(json.loads(raw.decode(enc, errors='replace')), src.get('jsonPath') or opt.get('jsonPath'))
+        value, kind = to_table(data)
+        if kind != 'table':
+            return data, 'structured'
+        return value, kind
+
+    if fmt == 'logline':
+        need_pd()
+        import re
+        pattern = str(opt.get('logPattern') or '')
+        if not pattern:
+            raise ValueError('请提供日志解析正则 logPattern')
+        rx = re.compile(pattern)
+        if path:
+            lines = read_text(path).splitlines()
+        else:
+            lines = str(src.get('text') or '').splitlines()
+        rows = []
+        for ln in lines:
+            m = rx.search(ln)
+            if not m:
+                continue
+            gd = m.groupdict()
+            rows.append(gd if gd else {('g%d' % (i + 1)): g for i, g in enumerate(m.groups())})
+        return pd.DataFrame(rows), 'table'
+
+    if cat == 'clipboard' or fmt == 'clipboard':
+        text = str(src.get('text') or '')
+        try:
+            data = json.loads(text)
+            value, kind = to_table(data)
+            return (value, kind) if kind == 'table' else (data, 'structured')
+        except Exception:
+            pass
+        if pd is not None and '\n' in text.strip():
+            try:
+                first = text.strip().splitlines()[0]
+                sep = '\t' if '\t' in first else (';' if ';' in first and ',' not in first else ',')
+                df = pd.read_csv(io.StringIO(text), sep=sep)
+                if len(df.columns) > 1 or len(df.index) > 0:
+                    return df, 'table'
+            except Exception:
+                pass
+        return text, 'text'
+
+    if cat == 'script' or fmt == 'custom':
+        code = str(src.get('scriptText') or '')
+        spath = str(src.get('scriptPath') or '')
+        if not code.strip() and spath:
+            from pathlib import Path
+            code = Path(spath).read_text(encoding='utf-8')
+        if not code.strip():
+            raise ValueError('请提供脚本内容或脚本文件')
+        entry = str(src.get('entry') or 'load') or 'load'
+        ns = {}
+        exec(code, ns)
+        fn = ns.get(entry)
+        if not callable(fn):
+            raise ValueError('脚本中未找到入口函数 ' + entry + '(source)')
+        value = fn(SourceCtx())
+        return value, infer_kind(value)
+
+    if fmt == 'text':
+        if path:
+            return read_text(path), 'text'
+        if src.get('url'):
+            return http().decode(str(opt.get('encoding') or 'utf-8'), errors='replace'), 'text'
+        return str(src.get('text') or ''), 'text'
+
+    raise ValueError('Unsupported import format: ' + (fmt or '(empty)'))
+
+
+__guaxi_value, __guaxi_kind = __guaxi_run_import()
+globals()[__guaxi_spec['variableName']] = __guaxi_value
+print('[GuaxiNotebookLab] imported source=' + str(__guaxi_spec.get('sourceLabel')) + ' var=' + str(__guaxi_spec['variableName']) + ' kind=' + str(__guaxi_kind))
+_result = None
+`
+
+const buildSpecHeaderPy = (spec) => {
+  const normalized = normalizeImportSpec(spec)
   return [
-    'from pathlib import Path',
     'import json',
-    'import pandas as pd',
-    `__guaxi_lab_source_path = ${JSON.stringify(String(sourcePath || ''))}`,
-    `__guaxi_lab_var_name = ${JSON.stringify(String(variableName || 'data_item'))}`,
-    `__guaxi_lab_source_label = ${JSON.stringify(String(sourceLabel || sourcePath || 'file'))}`,
-    "__guaxi_lab_kind = 'value'",
-    '__guaxi_lab_path = Path(__guaxi_lab_source_path)',
-    '__guaxi_lab_ext = __guaxi_lab_path.suffix.lower()',
-    "if __guaxi_lab_ext in ('.csv', '.tsv', '.xlsx', '.xls', '.parquet', '.feather', '.db', '.sqlite', '.sqlite3', '.duckdb'):",
-    "    if __guaxi_lab_ext == '.csv':",
-    '        __guaxi_lab_value = pd.read_csv(__guaxi_lab_source_path)',
-    "    elif __guaxi_lab_ext == '.tsv':",
-    "        __guaxi_lab_value = pd.read_csv(__guaxi_lab_source_path, sep='\\t')",
-    "    elif __guaxi_lab_ext in ('.xlsx', '.xls'):",
-    '        __guaxi_lab_value = pd.read_excel(__guaxi_lab_source_path, sheet_name=0)',
-    "    elif __guaxi_lab_ext == '.parquet':",
-    '        __guaxi_lab_value = pd.read_parquet(__guaxi_lab_source_path)',
-    "    elif __guaxi_lab_ext == '.feather':",
-    '        __guaxi_lab_value = pd.read_feather(__guaxi_lab_source_path)',
-    '    else:',
-    '        import sqlite3',
-    '        __guaxi_lab_conn = sqlite3.connect(__guaxi_lab_source_path)',
-    "        __guaxi_lab_tables = pd.read_sql_query(\"select name from sqlite_master where type='table' order by name\", __guaxi_lab_conn)",
-    '        if __guaxi_lab_tables.empty:',
-    "            raise ValueError('No table found in database file')",
-    '        __guaxi_lab_table_name = str(__guaxi_lab_tables.iloc[0, 0])',
-    '        __guaxi_lab_value = pd.read_sql_query(f\'select * from "{__guaxi_lab_table_name}"\', __guaxi_lab_conn)',
-    '        __guaxi_lab_conn.close()',
-    "    __guaxi_lab_kind = 'table'",
-    "elif __guaxi_lab_ext in ('.json',):",
-    "    __guaxi_lab_text = __guaxi_lab_path.read_text(encoding='utf-8')",
-    '    __guaxi_lab_value = json.loads(__guaxi_lab_text)',
-    "    __guaxi_lab_kind = 'structured'",
-    '    try:',
-    '        __guaxi_lab_df = pd.DataFrame(__guaxi_lab_value)',
-    '        if len(__guaxi_lab_df.columns):',
-    '            __guaxi_lab_value = __guaxi_lab_df',
-    "            __guaxi_lab_kind = 'table'",
-    '    except Exception:',
-    '        pass',
-    "elif __guaxi_lab_ext in ('.md', '.markdown', '.yaml', '.yml', '.log', '.py', '.js', '.ts', '.txt'):",
-    "    __guaxi_lab_value = __guaxi_lab_path.read_text(encoding='utf-8')",
-    "    __guaxi_lab_kind = 'text'",
-    'else:',
-    "    raise ValueError(f'Unsupported external data format: {__guaxi_lab_ext or __guaxi_lab_source_path}')",
-    'globals()[__guaxi_lab_var_name] = __guaxi_lab_value',
-    'print(',
-    "    f'[GuaxiNotebookLab] imported source={__guaxi_lab_source_label} '",
-    "    f'var={__guaxi_lab_var_name} kind={__guaxi_lab_kind}'",
-    ')',
-    '_result = None',
+    `__guaxi_spec = json.loads(${JSON.stringify(JSON.stringify(normalized))})`,
   ].join('\n')
 }
 
-const buildUrlImportCode = ({ sourceUrl = '', variableName = '', sourceLabel = '' } = {}) => {
-  return [
-    'import json',
-    'import pandas as pd',
-    `__guaxi_lab_source_url = ${JSON.stringify(String(sourceUrl || ''))}`,
-    `__guaxi_lab_var_name = ${JSON.stringify(String(variableName || 'remote_data'))}`,
-    `__guaxi_lab_source_label = ${JSON.stringify(String(sourceLabel || sourceUrl || 'url'))}`,
-    "__guaxi_lab_ext = __guaxi_lab_source_url.split('?')[0].split('#')[0].lower().rsplit('.', 1)[-1] if '.' in __guaxi_lab_source_url.split('?')[0] else ''",
-    "if __guaxi_lab_ext in ('csv', 'tsv'):",
-    "    __guaxi_lab_value = pd.read_csv(__guaxi_lab_source_url, sep='\\t' if __guaxi_lab_ext == 'tsv' else ',')",
-    "    __guaxi_lab_kind = 'table'",
-    "elif __guaxi_lab_ext in ('xlsx', 'xls'):",
-    '    __guaxi_lab_value = pd.read_excel(__guaxi_lab_source_url, sheet_name=0)',
-    "    __guaxi_lab_kind = 'table'",
-    "elif __guaxi_lab_ext in ('json', 'jsonl'):",
-    "    if __guaxi_lab_ext == 'jsonl':",
-    '        __guaxi_lab_value = pd.read_json(__guaxi_lab_source_url, lines=True)',
-    "        __guaxi_lab_kind = 'table'",
-    '    else:',
-    '        try:',
-    '            __guaxi_lab_value = pd.read_json(__guaxi_lab_source_url)',
-    "            __guaxi_lab_kind = 'table'",
-    '        except Exception:',
-    '            import urllib.request',
-    '            with urllib.request.urlopen(__guaxi_lab_source_url) as __guaxi_lab_resp:',
-    "                __guaxi_lab_value = json.loads(__guaxi_lab_resp.read().decode('utf-8'))",
-    "            __guaxi_lab_kind = 'structured'",
-    'else:',
-    '    import urllib.request',
-    '    with urllib.request.urlopen(__guaxi_lab_source_url) as __guaxi_lab_resp:',
-    "        __guaxi_lab_value = __guaxi_lab_resp.read().decode('utf-8')",
-    "    __guaxi_lab_kind = 'text'",
-    'globals()[__guaxi_lab_var_name] = __guaxi_lab_value',
-    'print(',
-    "    f'[GuaxiNotebookLab] imported source={__guaxi_lab_source_label} '",
-    "    f'var={__guaxi_lab_var_name} kind={__guaxi_lab_kind}'",
-    ')',
-    '_result = None',
-  ].join('\n')
-}
+// 生成只读探测代码：列 sheet/表、嗅探 CSV、预览 JSON/日志/脚本结果。
+export const buildImportProbeCode = (spec = {}) => `${buildSpecHeaderPy(spec)}\n${IMPORT_PROBE_RUNTIME_PY}`
 
-const buildInlineImportCode = ({
-  variableName = '',
-  sourceLabel = '',
-  text = '',
-  sourceType = 'inline',
-} = {}) => {
-  return [
-    'import json',
-    'import pandas as pd',
-    `__guaxi_lab_var_name = ${JSON.stringify(String(variableName || 'data_item'))}`,
-    `__guaxi_lab_source_label = ${JSON.stringify(String(sourceLabel || sourceType || 'inline'))}`,
-    `__guaxi_lab_raw_text = ${JSON.stringify(String(text || ''))}`,
-    "__guaxi_lab_kind = 'text'",
-    '__guaxi_lab_value = __guaxi_lab_raw_text',
-    'try:',
-    '    __guaxi_lab_json = json.loads(__guaxi_lab_raw_text)',
-    '    __guaxi_lab_value = __guaxi_lab_json',
-    "    __guaxi_lab_kind = 'structured'",
-    '    try:',
-    '        __guaxi_lab_df = pd.DataFrame(__guaxi_lab_json)',
-    '        if len(__guaxi_lab_df.columns):',
-    '            __guaxi_lab_value = __guaxi_lab_df',
-    "            __guaxi_lab_kind = 'table'",
-    '    except Exception:',
-    '        pass',
-    'except Exception:',
-    '    pass',
-    'globals()[__guaxi_lab_var_name] = __guaxi_lab_value',
-    'print(',
-    "    f'[GuaxiNotebookLab] imported source={__guaxi_lab_source_label} '",
-    "    f'var={__guaxi_lab_var_name} kind={__guaxi_lab_kind}'",
-    ')',
-    '_result = None',
-  ].join('\n')
-}
+// 生成统一导入代码：按 Import Spec 解析并写入会话变量。
+export const buildImportCode = (spec = {}) => `${buildSpecHeaderPy(spec)}\n${IMPORT_RUNTIME_PY}`
 
 export const buildNotebookLabImportPlan = ({
   sourceType = 'file',
@@ -259,48 +884,37 @@ export const buildNotebookLabImportPlan = ({
   sourceUrl = '',
 } = {}) => {
   const normalizedSourceType = normalizeText(sourceType || 'file').toLowerCase()
-  const normalizedSourceLabel = normalizeText(sourceLabel || sourcePath || normalizedSourceType)
-  const nextVariableName = clampVariableName(
-    variableName || buildImportVariableName(normalizedSourceLabel, normalizedSourceType === 'clipboard' ? 'clipboard_data' : 'data_item'),
-    'data_item',
-  )
-
-  if (normalizedSourceType === 'file') {
-    return {
-      sourceType: 'file',
-      sourceLabel: normalizedSourceLabel,
-      variableName: nextVariableName,
-      code: buildFileImportCode({
-        sourcePath,
-        sourceLabel: normalizedSourceLabel,
-        variableName: nextVariableName,
-      }),
-    }
-  }
-
-  if (normalizedSourceType === 'url') {
-    return {
-      sourceType: 'url',
-      sourceLabel: normalizedSourceLabel || sourceUrl,
-      variableName: nextVariableName,
-      code: buildUrlImportCode({
-        sourceUrl,
-        sourceLabel: normalizedSourceLabel || sourceUrl,
-        variableName: nextVariableName,
-      }),
-    }
-  }
-
+  const categoryByType = { file: 'file', url: 'api', clipboard: 'clipboard', inline: 'clipboard' }
+  const category = categoryByType[normalizedSourceType] || 'clipboard'
+  const source = {}
+  if (category === 'file') source.path = sourcePath
+  else if (category === 'api') source.url = sourceUrl
+  else source.text = text
+  const spec = normalizeImportSpec({
+    category,
+    format: category === 'clipboard' ? 'clipboard' : 'auto',
+    variableName,
+    sourceLabel: sourceLabel || sourcePath || sourceUrl || normalizedSourceType,
+    source,
+  })
   return {
     sourceType: normalizedSourceType || 'inline',
-    sourceLabel: normalizedSourceLabel,
-    variableName: nextVariableName,
-    code: buildInlineImportCode({
-      variableName: nextVariableName,
-      sourceLabel: normalizedSourceLabel,
-      text,
-      sourceType: normalizedSourceType || 'inline',
-    }),
+    sourceLabel: spec.sourceLabel,
+    variableName: spec.variableName,
+    code: buildImportCode(spec),
+    spec,
+  }
+}
+
+// 直接从完整 Import Spec 构造导入计划（供导入向导/RPC 使用）。
+export const buildNotebookLabImportPlanFromSpec = (spec = {}) => {
+  const normalized = normalizeImportSpec(spec)
+  return {
+    sourceType: normalized.category,
+    sourceLabel: normalized.sourceLabel,
+    variableName: normalized.variableName,
+    code: buildImportCode(normalized),
+    spec: normalized,
   }
 }
 

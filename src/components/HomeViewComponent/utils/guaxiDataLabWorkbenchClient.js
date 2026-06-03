@@ -5,6 +5,8 @@ import { createLogger } from '../../../utils/logger'
 import {
   NOTEBOOK_LAB_CHART_TYPES,
   buildNotebookLabPlotCode,
+  buildImportProbeCode,
+  normalizeImportSpec,
 } from './guaxiNotebookDataLab'
 
 const logger = createLogger('GuaxiDataLabWorkbenchClient')
@@ -505,6 +507,52 @@ export const emitWorkbenchNotebookAction = async ({
     variableName: payload.variableName,
     dataKind: payload.dataKind,
   })
+}
+
+// 只读探测导入源：在当前会话直接执行探测代码，列 sheet/表、嗅探 CSV、预览 JSON/日志/脚本，
+// 不写入任何会话变量，结果直接返回给导入向导用于配置确认。
+export const probeWorkbenchImportSource = async ({ sessionId = '', spec = {} } = {}) => {
+  const normalizedSpec = normalizeImportSpec(spec)
+  const code = buildImportProbeCode(normalizedSpec)
+  const response = await runWorkbenchPython(sessionId, code, {
+    includeSessionVars: false,
+    vars: {
+      _guaxi_data_workbench: 'import-probe',
+    },
+  })
+  const result = extractGuaxiResult(response)
+  logger.info('[DataLabWorkbenchClient] probed import source', {
+    sessionId,
+    category: normalizedSpec.category,
+    format: normalizedSpec.format,
+    ok: result?.ok !== false,
+  })
+  if (result && result.ok === false) {
+    throw new Error(String(result.error || '探测失败'))
+  }
+  return result && typeof result === 'object' ? result : {}
+}
+
+// 把导入向导产出的完整 Import Spec 发往主窗口 Notebook 执行与记账（统一 import-source 动作）。
+export const emitWorkbenchImportSource = async ({ context = {}, spec = {} } = {}) => {
+  const normalizedSpec = normalizeImportSpec(spec)
+  await emitTo('main', 'notebook-data-lab-rpc', {
+    action: 'import-source',
+    filePath: normalizeText(context.filePath),
+    cellId: normalizeText(context.cellId),
+    cellKey: normalizeText(context.cellKey),
+    stableId: normalizeText(context.stableId),
+    variableName: normalizedSpec.variableName,
+    sourceType: normalizedSpec.category,
+    sourceLabel: normalizedSpec.sourceLabel,
+    spec: normalizedSpec,
+  })
+  logger.info('[DataLabWorkbenchClient] emitted import-source action', {
+    category: normalizedSpec.category,
+    format: normalizedSpec.format,
+    variableName: normalizedSpec.variableName,
+  })
+  return normalizedSpec
 }
 
 export const requestNotebookInspectorRefresh = async (context = {}) => {
