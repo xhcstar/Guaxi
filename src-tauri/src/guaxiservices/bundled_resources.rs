@@ -410,7 +410,27 @@ pub fn ensure_relative_dir(relative_dir: &str) -> Result<PathBuf, String> {
             return Ok(root);
         }
         let suffix = normalized.trim_start_matches("utils/").replace('/', std::path::MAIN_SEPARATOR_STR);
-        return Ok(root.join(suffix));
+        let resolved = root.join(&suffix);
+
+        // Dev/调试回退：
+        // - `target/debug/utils` 经常已经存在并含有运行期生成的子目录（python_runtime 等），
+        //   于是 ensure_utils_ready_internal 会直接返回它、不再回退到源码树。
+        // - 但 pandoc.exe / tectonic 这类随源码走的工具只存在于 `src-tauri/utils`，
+        //   导致导出 docx/tex/epub 等报 “pandoc executable not found at .../target/debug/utils/...”。
+        // - 因此当解析到的文件在 target 下并不存在时，回退到源码树的同名文件。
+        #[cfg(debug_assertions)]
+        {
+            if !resolved.exists() {
+                if let Some(dev_root) = dev_source_utils_root() {
+                    let dev_resolved = dev_root.join(&suffix);
+                    if dev_resolved.exists() {
+                        return Ok(dev_resolved);
+                    }
+                }
+            }
+        }
+
+        return Ok(resolved);
     }
 
     Ok(exe_dir()?.join(relative_dir))

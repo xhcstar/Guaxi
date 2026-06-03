@@ -1184,7 +1184,7 @@ pub async fn export_markdown_pdf_pandoc(
     input_path: String,
     output_path: String,
 ) -> Result<(), String> {
-    export_markdown_pandoc(input_path, output_path, "pdf".to_string()).await
+    export_markdown_pandoc(input_path, output_path, "pdf".to_string(), None).await
 }
 
 fn escape_html_attr(value: &str) -> String {
@@ -1349,6 +1349,10 @@ fn run_chromium_print_to_pdf(
         .current_dir(base_dir)
         .arg(headless_arg)
         .arg("--disable-gpu")
+        // 设计说明：让 Chromium 依据页面 H1~H6 标题结构生成 PDF 书签大纲（document outline），
+        // 这样导出的 PDF 在阅读器“书签 / 大纲”面板里可以直接按标题层级导航。
+        // 该开关只在现代 headless（--headless=new）下生效，旧版会忽略未知开关，因此始终携带是安全的。
+        .arg("--generate-pdf-document-outline")
         // 注意：不要加 `--no-startup-window`。该参数会让 Edge/Chrome 在后台启动且不创建窗口、
         // 不加载页面，配合 headless `--print-to-pdf` 时浏览器会以退出码 0 “成功”结束，但根本
         // 不会渲染 HTML、也不会写出 PDF，导致随后读取输出文件报 os error 2（找不到文件）。
@@ -1654,10 +1658,14 @@ pub async fn export_markdown_pandoc(
     input_path: String,
     output_path: String,
     format: String,
+    source_markdown: Option<String>,
 ) -> Result<(), String> {
     info!(
-        "Exporting markdown via pandoc: input={}, output={}, format={}",
-        input_path, output_path, format
+        "Exporting markdown via pandoc: input={}, output={}, format={}, source_override={}",
+        input_path,
+        output_path,
+        format,
+        source_markdown.is_some()
     );
 
     let current_exe = std::env::current_exe()
@@ -1679,7 +1687,8 @@ pub async fn export_markdown_pandoc(
         ));
     }
 
-    let (processed_md_path, tmp_dir) = preprocess_markdown(&input_path).await?;
+    let (processed_md_path, tmp_dir) =
+        preprocess_markdown(&input_path, source_markdown.as_deref()).await?;
     info!(
         processed_md_path = processed_md_path.to_string_lossy().as_ref(),
         tmp_dir = tmp_dir.to_string_lossy().as_ref(),
@@ -1762,6 +1771,17 @@ pub async fn export_markdown_pandoc(
         cmd.arg("-t").arg("latex");
     } else if format == "txt" {
         cmd.arg("-t").arg("plain");
+    }
+
+    // 设计说明：
+    // 1. Word(docx)/ODT/EPUB 这类“可导航文档”需要一份按标题层级生成的目录，
+    //    导出后才能在 Word 导航窗格、电子书阅读器目录里直接跳转。
+    // 2. pandoc 会把 Markdown 的 #/##/### 映射成对应的标题样式，再据此生成 TOC；
+    //    `--toc-depth=3` 控制目录最深收录到三级标题，避免目录过长。
+    // 3. 纯文本(txt)没有目录概念，PDF 走浏览器高保真链路（由 Chromium 生成书签大纲），
+    //    都不在这里处理。
+    if matches!(format.as_str(), "docx" | "odt" | "epub") {
+        cmd.arg("--toc").arg("--toc-depth=3");
     }
 
     if let Some(lua) = lua_filter_str {
@@ -1980,9 +2000,18 @@ fn clamp_static_toc_for_pdf(markdown: &str, max_indent_levels: usize) -> (String
 
 async fn preprocess_markdown(
     input_path: &str,
+    source_override: Option<&str>,
 ) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
-    let content = std::fs::read_to_string(input_path)
-        .map_err(|e| format!("读取 Markdown 失败: {}", e))?;
+    // 设计说明：
+    // - 常规导出从磁盘读取 Markdown 原文。
+    // - 当前端已经把 ```mermaid``` 代码块预渲染成图片并替换成图片引用时（pandoc 自身无法渲染
+    //   mermaid），会通过 source_override 传入“处理过的 Markdown”，这里直接采用它，
+    //   但 input_path 仍指向原文件，用于解析相对图片资源路径（--resource-path）。
+    let content = match source_override {
+        Some(text) => text.to_string(),
+        None => std::fs::read_to_string(input_path)
+            .map_err(|e| format!("读取 Markdown 失败: {}", e))?,
+    };
     let static_content = preprocess_markdown_for_static_render(&content);
     let (static_content, toc_clamped) = clamp_static_toc_for_pdf(&static_content, 3);
     info!(

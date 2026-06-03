@@ -29,24 +29,6 @@ export const EXPORT_SHELL_CSS = `
     padding: 12px 8px 24px 8px;
   }
 
-  .export-header {
-    margin-bottom: 24px;
-    padding-bottom: 12px;
-    border-bottom: 1px solid #e0e0e0;
-  }
-
-  .export-title {
-    font-size: 22px;
-    font-weight: 600;
-    margin: 0 0 4px 0;
-    word-break: break-all;
-  }
-
-  .export-meta {
-    font-size: 12px;
-    color: #666666;
-  }
-
   .export-content {
     font-size: 16px;
     line-height: 1.6;
@@ -153,6 +135,19 @@ export const EXPORT_SHELL_CSS = `
     body {
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
+    }
+
+    /* 设计说明：
+       PDF（浏览器打印）里 overflow-x: auto 的横向滚动条无法操作，超宽代码行会被直接截断。
+       因此打印时让代码块强制软换行、取消横向滚动，保证每一行都完整出现在 PDF 中。 */
+    .export-content pre,
+    .export-content pre.hljs,
+    .export-content pre code,
+    .export-content pre.hljs code {
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+      overflow: visible;
     }
   }
 `;

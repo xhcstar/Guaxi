@@ -18185,8 +18185,8 @@ const getCurrentExportMarkdown = () => {
 }
 
 const buildPrintHtml = (bodyHtml, title, options = {}) => {
-  const now = new Date();
-  const dateStr = now.toLocaleString();
+  // 说明：<title> 仅作为页面元信息（PDF 文档标题），导出正文按用户要求直接以文档内容开头，
+  // 不再插入文件名标题和“导出时间”这类页眉。
   const safeTitle = escapeExportHtml(title || '未命名文档')
   const baseHref = String(options?.baseHref || '').trim()
   const baseTag = baseHref ? `<base href="${escapeExportHtml(baseHref)}" />` : ''
@@ -18202,10 +18202,6 @@ ${baseTag}
 </head>
 <body>
   <div class="export-root">
-    <div class="export-header">
-      <div class="export-title">${safeTitle}</div>
-      <div class="export-meta">导出时间：${dateStr}</div>
-    </div>
     <div class="export-content">${bodyHtml}</div>
   </div>
 </body>
@@ -18345,6 +18341,42 @@ const chooseExportOutputPath = async (context) => {
   })
 }
 
+// 设计说明：
+// 1. 预览渲染器会给 Python/代码单元加上“运行 / 运行并写回 / 显示结果”工具条和隐藏的输出占位符，
+//    这些都是软件内交互用的，导出成 PDF/HTML 后既无法点击、也不该出现在最终文档里。
+// 2. 这里在导出前把这些交互节点从渲染后的 DOM 中剔除，只保留代码本身和已有正文内容。
+const stripInteractiveExportArtifacts = (bodyHtml) => {
+  const html = String(bodyHtml || '')
+  if (!html.trim()) return html
+
+  try {
+    const template = document.createElement('template')
+    template.innerHTML = html
+    const removableSelectors = [
+      '.guaxi-pycell-toolbar',
+      '.guaxi-codecell-toolbar',
+      '.guaxi-pycell-output',
+      '.guaxi-codecell-output',
+    ]
+    let removed = 0
+    template.content
+      .querySelectorAll(removableSelectors.join(','))
+      .forEach((node) => {
+        node.remove()
+        removed += 1
+      })
+
+    if (!removed) return html
+    logger.info('[Export] stripped interactive cell artifacts', { removed })
+    return template.innerHTML
+  } catch (error) {
+    logger.warn('[Export] strip interactive artifacts failed, keep original html', {
+      error: String(error?.message || error),
+    })
+    return html
+  }
+}
+
 const renderMarkdownForExportHtml = async (context) => {
   const markdown = String(context?.markdown || '')
   logger.info('[Export] render markdown to export html start', {
@@ -18356,7 +18388,7 @@ const renderMarkdownForExportHtml = async (context) => {
   // 1. PDF/HTML 导出复用预览渲染器，不再走 Pandoc 的 Markdown 解析。
   // 2. 这样 Mermaid、MathJax、highlight.js、代码单元输出等最终 DOM 会和软件内预览保持同源。
   // 3. buildPrintHtml 只负责补齐可打印页面外壳、打印 CSS 和 base href，不再参与 Markdown 语义转换。
-  const bodyHtml = await renderPreviewMarkdown(
+  const rawBodyHtml = await renderPreviewMarkdown(
     markdown,
     {
       math: true,
@@ -18365,6 +18397,7 @@ const renderMarkdownForExportHtml = async (context) => {
     },
     'export-rendered-html',
   )
+  const bodyHtml = stripInteractiveExportArtifacts(rawBodyHtml)
   const html = buildPrintHtml(bodyHtml, context.title, { baseHref: context.baseHref })
 
   logger.info('[Export] render markdown to export html complete', {
@@ -18409,16 +18442,167 @@ const exportMarkdownRenderedPdf = async (context, outputPath) => {
   })
 }
 
+// 设计说明：
+// 1. pandoc 本身不认识 mermaid，导出 Word/EPUB/ODT 等格式时 ```mermaid``` 会原样变成代码块。
+// 2. 这里在前端复用 mermaid 把图表渲染成 SVG，再栅格化为 PNG（白底、放大若干倍保证清晰），
+//    写到临时目录后，把原 Markdown 里的 mermaid 代码块替换成对应的图片引用。
+// 3. PNG 用绝对路径引用，pandoc 不依赖 resource-path 也能找到；原文里的相对图片仍按原目录解析。
+const MERMAID_EXPORT_FONT_FAMILY =
+  '"Trebuchet MS", "Noto Sans SC", "Microsoft YaHei", "PingFang SC", "Helvetica Neue", Arial, sans-serif'
+
+const rasterizeMermaidSvgToPng = async (svg, scale = 2) => {
+  const svgText = String(svg || '')
+  if (!svgText.trim()) throw new Error('empty mermaid svg')
+
+  // 优先用 viewBox 推断尺寸，回退到 width/height 属性，最后兜底一个合理默认值。
+  let width = 0
+  let height = 0
+  const viewBox = svgText.match(/viewBox="([\d.\s-]+)"/i)
+  if (viewBox) {
+    const parts = viewBox[1].trim().split(/[\s,]+/).map(Number)
+    if (parts.length === 4 && Number.isFinite(parts[2]) && Number.isFinite(parts[3])) {
+      width = parts[2]
+      height = parts[3]
+    }
+  }
+  if (!width || !height) {
+    const w = Number(svgText.match(/\bwidth="([\d.]+)/i)?.[1])
+    const h = Number(svgText.match(/\bheight="([\d.]+)/i)?.[1])
+    if (Number.isFinite(w) && w > 0) width = w
+    if (Number.isFinite(h) && h > 0) height = h
+  }
+  if (!width) width = 800
+  if (!height) height = 600
+
+  const blob = new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  try {
+    const image = new Image()
+    image.width = width
+    image.height = height
+    await new Promise((resolve, reject) => {
+      image.onload = () => resolve()
+      image.onerror = () => reject(new Error('load mermaid svg failed'))
+      image.src = url
+    })
+
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(width * scale))
+    canvas.height = Math.max(1, Math.round(height * scale))
+    const ctx = canvas.getContext('2d')
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height)
+
+    const pngBlob = await new Promise((resolve, reject) => {
+      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('mermaid toBlob failed'))), 'image/png')
+    })
+    return new Uint8Array(await pngBlob.arrayBuffer())
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}
+
+const prerenderMermaidForPandoc = async (markdown) => {
+  const text = String(markdown || '')
+  if (!text.includes('```mermaid') && !text.includes('~~~mermaid')) return text
+
+  // 收集所有 mermaid 代码块（支持 ``` 和 ~~~ 两种围栏）。
+  const fenceRe = /(`{3,}|~{3,})[ \t]*mermaid[^\n]*\n([\s\S]*?)\n?\1/g
+  const blocks = []
+  let match
+  while ((match = fenceRe.exec(text)) !== null) {
+    blocks.push({ full: match[0], code: match[2] })
+  }
+  if (!blocks.length) return text
+
+  let tempDir
+  let join
+  let writeFile
+  let mkdir
+  let baseDir
+  try {
+    ;({ tempDir, join } = await import('@tauri-apps/api/path'))
+    ;({ writeFile, mkdir } = await import('@tauri-apps/plugin-fs'))
+    baseDir = await join(await tempDir(), 'guaxi_export_mermaid', String(Date.now()))
+    await mkdir(baseDir, { recursive: true })
+  } catch (error) {
+    logger.warn('[Export] prepare mermaid temp dir failed, keep source blocks', {
+      error: String(error?.message || error),
+    })
+    return text
+  }
+
+  try {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: 'default',
+      securityLevel: 'loose',
+      themeVariables: { background: '#ffffff', fontFamily: MERMAID_EXPORT_FONT_FAMILY },
+      // 关键：默认 mermaid 用 <foreignObject> 渲染 HTML 文本标签，
+      // 而把 SVG 画到 canvas 栅格化时浏览器会把 foreignObject 画成空白，导致导出的 PNG 丢字。
+      // 强制使用 SVG <text> 标签后，标签文字才能正确出现在栅格化结果里。
+      htmlLabels: false,
+      flowchart: { htmlLabels: false },
+    })
+  } catch (error) {
+    logger.debug('[Export] mermaid.initialize for export failed (continue)', {
+      error: String(error?.message || error),
+    })
+  }
+
+  let result = text
+  let rendered = 0
+  let failures = 0
+  for (let i = 0; i < blocks.length; i += 1) {
+    const block = blocks[i]
+    const source = String(block.code || '').trim()
+    if (!source) continue
+    try {
+      const renderId = `guaxi-export-mermaid-${Date.now()}-${i}`
+      const out = await Promise.resolve(mermaid.render(renderId, source))
+      const svg = typeof out === 'string' ? out : String(out?.svg || '')
+      const png = await rasterizeMermaidSvgToPng(svg)
+      const filePath = await join(baseDir, `mermaid_${i + 1}.png`)
+      await writeFile(filePath, png)
+      const ref = `![mermaid diagram](${filePath.replace(/\\/g, '/')})`
+      // 用函数式 replace，避免文件路径里出现 $ 时被当成替换占位符。
+      result = result.replace(block.full, () => ref)
+      rendered += 1
+    } catch (error) {
+      failures += 1
+      logger.warn('[Export] mermaid prerender failed, keep source block', {
+        index: i,
+        error: String(error?.message || error),
+      })
+    }
+  }
+
+  logger.info('[Export] mermaid prerendered for pandoc export', {
+    total: blocks.length,
+    rendered,
+    failures,
+  })
+  return result
+}
+
 const exportMarkdownPandoc = async (context, outputPath) => {
   logger.info('[Export] export markdown via pandoc', {
     inputPath: context.inputPath,
     outputPath,
     format: context.format,
   })
+
+  // 只有当确实把 mermaid 替换成图片后才传 sourceMarkdown；否则保持后端从磁盘读原文的既有行为。
+  const originalMarkdown = String(context?.markdown || '')
+  const processedMarkdown = await prerenderMermaidForPandoc(originalMarkdown)
+  const sourceMarkdown = processedMarkdown !== originalMarkdown ? processedMarkdown : null
+
   await invoke('export_markdown_pandoc', {
     inputPath: context.inputPath,
     outputPath,
     format: context.format,
+    sourceMarkdown,
   })
 }
 
