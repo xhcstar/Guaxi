@@ -117,7 +117,7 @@ fn normalize_markdown_text(markdown: &str) -> String {
     markdown.replace("\r\n", "\n").replace('\r', "\n")
 }
 
-fn strip_output_blocks(markdown: &str) -> String {
+pub fn strip_output_blocks(markdown: &str) -> String {
     let lines: Vec<&str> = markdown.split('\n').collect();
     let mut kept = Vec::new();
     let mut inside_output = false;
@@ -291,7 +291,7 @@ fn parse_math_cell_blocks(markdown: &str) -> Vec<MathBlock> {
     blocks
 }
 
-fn strip_math_cell_blocks(markdown: &str) -> String {
+pub fn strip_math_cell_blocks(markdown: &str) -> String {
     let lines: Vec<&str> = markdown.split('\n').collect();
     let mut kept = Vec::new();
     let mut inside_math_cell = false;
@@ -502,7 +502,7 @@ fn split_markdown_into_notebook_cells(markdown: &str, key_prefix: &str) -> Vec<N
     cells
 }
 
-fn strip_python_cell_blocks(markdown: &str) -> String {
+pub fn strip_python_cell_blocks(markdown: &str) -> String {
     let lines: Vec<&str> = markdown.split('\n').collect();
     let mut kept = Vec::new();
     let mut inside_py_cell = false;
