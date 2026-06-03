@@ -88,6 +88,11 @@ const PYTHON_RUNTIME_RECOMMENDED_PACKAGES: &[&str] = &[
     // 装更新的 4.13 会导致 LaTeX 解析报 ImportError（数学块据此判定后端是否可用）。
     "antlr4-python3-runtime==4.11.1",
     "scipy",
+    // 数据实验室「分析」工作台的关系/规律发现依赖：scikit-learn 提供降维(PCA/t-SNE)、
+    // 聚类(KMeans/DBSCAN)、互信息、特征重要性；statsmodels 提供 Granger 因果、自相关/偏自相关。
+    // 缺失时分析方法会给中文提示并降级，但默认安装让开箱即用。
+    "scikit-learn",
+    "statsmodels",
     "seaborn",
     // pandas 的 parquet / feather 导入导出需要 pyarrow 或 fastparquet。
     // 默认选择 pyarrow，覆盖 notebook 数据实验室和 Python cell 的表格工作流。

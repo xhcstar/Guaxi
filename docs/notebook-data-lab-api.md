@@ -17,6 +17,47 @@
 - `materialize-variable`
 - `writeback-variable`
 - `export-variable`
+- `analyze-variable` ⭐ 关系/规律发现（相关性 / 因果 / 统计 / 高维）
+
+## 关系/规律发现（Analysis Spec）
+
+`analyze-variable` 把数据工作台的「分析」工作台请求发往 Notebook 执行：在会话内对**一组特征**
+跑相关性 / 因果 / 统计 / 高维分析，产出**交互式 Plotly 图 + 结论摘要**。notebook 侧据 spec 用
+`buildAnalysisCode` 重新生成代码（与 `plot-variable` 一致，不执行 RPC 里传的 code）。
+
+Analysis Spec 字段：
+
+```jsonc
+{
+  "method": "corr_matrix|scatter_matrix|mutual_info|lag_corr|pca|tsne|cluster_kmeans|parallel|feature_importance|dist_fit|regression|hypothesis|profile|granger|acf|auto_insight",
+  "features": ["col | var | var.field", ...],  // 高维输入，跨变量按行索引对齐
+  "target":   "col | var.field",               // 回归/特征重要性/互信息 的目标
+  "group":    "col | var.field",               // 假设检验分组
+  "color":    "col | var.field",               // 散点矩阵/降维 着色
+  "timeIndex":"col | var.field",               // 因果/时序 的时间轴
+  "primaryVariable": "当前变量（作为列名 fallback）",
+  "title": "标题",
+  "options": { "corrMethod":"pearson|spearman|kendall", "nComponents":2|3, "k":3, "maxLag":10, "polyDegree":1, "test":"ttest|anova|chi2", "dist":"norm", "topN":10 }
+}
+```
+
+> 高级方法依赖 `scikit-learn` / `statsmodels` / `scipy`（已随包安装）；缺库时方法会给中文提示并降级，
+> 不会崩溃。动作名加 `-writeback` 后缀即把交互图 + 结论写回当前 Markdown Cell。
+
+```js
+await invoke('notebook_data_lab_rpc', {
+  request: {
+    action: 'analyze-variable',
+    filePath: 'E:/Record/source/Vue/guaxi/test/MarkdownTest.md',
+    stableId: 'py-rs-44dd7ef0-1704',
+    method: 'corr_matrix',
+    features: ['sales_df.revenue', 'sales_df.cost', 'ads_df.spend'],
+    options: { corrMethod: 'spearman' },
+    primaryVariable: 'sales_df',
+    clientId: 'frontend-demo',
+  },
+})
+```
 
 ## 统一数据导入抽象（Import Spec / Dataset Descriptor）
 

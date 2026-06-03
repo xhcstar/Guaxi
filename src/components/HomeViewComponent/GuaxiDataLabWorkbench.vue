@@ -331,69 +331,187 @@
 
           <section v-else-if="activeTab === 'chart'" class="data-workbench__panel data-workbench__chart-panel">
             <div class="data-workbench__chart-builder">
-              <section class="data-workbench__chart-config">
-                <label>
-                  <span>图表类型</span>
-                  <GuaxiWorkbenchCombobox v-model="chartDraft.chartType" :options="chartTypes" select-only placeholder="选择图表类型" />
-                </label>
-                <label>
-                  <span>X 轴数据</span>
-                  <GuaxiWorkbenchCombobox v-model="chartDraft.x" :options="chartSourceOptions" placeholder="例如 index、price_df.date、other_var" />
-                </label>
-                <label>
-                  <span>Z / 大小</span>
-                  <GuaxiWorkbenchCombobox v-model="chartDraft.z" :options="chartSourceOptions" placeholder="可选，例如 volume" />
-                </label>
-                <label>
-                  <span>颜色分组</span>
-                  <GuaxiWorkbenchCombobox v-model="chartDraft.color" :options="chartSourceOptions" placeholder="可选，例如 category" />
-                </label>
-                <label class="wide">
-                  <span>图表标题</span>
-                  <input v-model="chartDraft.title" class="data-workbench__field" />
-                </label>
-              </section>
-
-              <section class="data-workbench__chart-series">
-                <div class="data-workbench__chart-section-head">
-                  <h2>Y 轴序列</h2>
-                  <button type="button" class="data-workbench__mini-btn" @click="addChartSeries">
-                    <Icon :icon="plusIcon" width="14" height="14" />
-                    添加序列
+              <!-- 分析意图：分组 + 方法选择 -->
+              <section class="data-workbench__analysis-methods">
+                <div class="data-workbench__analysis-groups">
+                  <button
+                    v-for="grp in analysisGroups"
+                    :key="grp.id"
+                    type="button"
+                    class="data-workbench__analysis-group"
+                    :class="{ 'is-active': grp.id === analysisGroup }"
+                    :title="grp.summary"
+                    @click="selectAnalysisGroup(grp.id)"
+                  >
+                    {{ grp.label }}
                   </button>
                 </div>
-                <div class="data-workbench__series-list">
-                  <div v-for="(series, index) in chartDraft.ySeries" :key="`series-${index}`" class="data-workbench__series-row">
-                    <GuaxiWorkbenchCombobox v-model="series.source" :options="chartSourceOptions" placeholder="变量或字段，例如 value、df.score" />
-                    <input v-model="series.label" class="data-workbench__field" placeholder="图例名称，可选" />
-                    <button
-                      type="button"
-                      class="data-workbench__icon-btn"
-                      title="删除序列"
-                      :disabled="chartDraft.ySeries.length <= 1"
-                      @click="removeChartSeries(index)"
-                    >
-                      <Icon :icon="xIcon" width="15" height="15" />
-                    </button>
-                  </div>
+                <div class="data-workbench__analysis-method-grid">
+                  <button
+                    v-for="m in analysisMethodsForGroup"
+                    :key="m.id"
+                    type="button"
+                    class="data-workbench__analysis-method"
+                    :class="{ 'is-active': m.id === analysisDraft.method }"
+                    @click="selectAnalysisMethod(m.id)"
+                  >
+                    <strong>{{ m.label }}</strong>
+                    <span>{{ m.desc }}</span>
+                    <em v-if="m.lib !== 'base'" class="data-workbench__analysis-lib">需 {{ m.lib }}</em>
+                  </button>
                 </div>
               </section>
 
-              <section class="data-workbench__chart-help">
-                <strong>数据源写法</strong>
-                <span>字段可直接写字段名；跨变量可写变量名或变量.字段。多个 Y 序列会自动按行索引对齐。</span>
-              </section>
+              <!-- 基础图表：保留原坐标轴表单 -->
+              <template v-if="analysisGroup === 'chart'">
+                <section class="data-workbench__chart-config">
+                  <label>
+                    <span>图表类型</span>
+                    <GuaxiWorkbenchCombobox v-model="chartDraft.chartType" :options="chartTypes" select-only placeholder="选择图表类型" />
+                  </label>
+                  <label>
+                    <span>X 轴数据</span>
+                    <GuaxiWorkbenchCombobox v-model="chartDraft.x" :options="chartSourceOptions" placeholder="例如 index、price_df.date、other_var" />
+                  </label>
+                  <label>
+                    <span>Z / 大小</span>
+                    <GuaxiWorkbenchCombobox v-model="chartDraft.z" :options="chartSourceOptions" placeholder="可选，例如 volume" />
+                  </label>
+                  <label>
+                    <span>颜色分组</span>
+                    <GuaxiWorkbenchCombobox v-model="chartDraft.color" :options="chartSourceOptions" placeholder="可选，例如 category" />
+                  </label>
+                  <label class="wide">
+                    <span>图表标题</span>
+                    <input v-model="chartDraft.title" class="data-workbench__field" />
+                  </label>
+                </section>
 
-              <div class="data-workbench__chart-actions">
-                <button type="button" class="data-workbench__action-btn" @click="sendChart(false)">
-                  <Icon :icon="chartIcon" width="16" height="16" />
-                  绘图到 Cell
-                </button>
-                <button type="button" class="data-workbench__action-btn" @click="sendChart(true)">
-                  <Icon :icon="sendIcon" width="16" height="16" />
-                  绘图写回
-                </button>
-              </div>
+                <section class="data-workbench__chart-series">
+                  <div class="data-workbench__chart-section-head">
+                    <h2>Y 轴序列</h2>
+                    <button type="button" class="data-workbench__mini-btn" @click="addChartSeries">
+                      <Icon :icon="plusIcon" width="14" height="14" />
+                      添加序列
+                    </button>
+                  </div>
+                  <div class="data-workbench__series-list">
+                    <div v-for="(series, index) in chartDraft.ySeries" :key="`series-${index}`" class="data-workbench__series-row">
+                      <GuaxiWorkbenchCombobox v-model="series.source" :options="chartSourceOptions" placeholder="变量或字段，例如 value、df.score" />
+                      <input v-model="series.label" class="data-workbench__field" placeholder="图例名称，可选" />
+                      <button
+                        type="button"
+                        class="data-workbench__icon-btn"
+                        title="删除序列"
+                        :disabled="chartDraft.ySeries.length <= 1"
+                        @click="removeChartSeries(index)"
+                      >
+                        <Icon :icon="xIcon" width="15" height="15" />
+                      </button>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="data-workbench__chart-help">
+                  <strong>数据源写法</strong>
+                  <span>字段可直接写字段名；跨变量可写变量名或变量.字段。多个 Y 序列会自动按行索引对齐。</span>
+                </section>
+
+                <div class="data-workbench__chart-actions">
+                  <button type="button" class="data-workbench__action-btn" @click="sendChart(false)">
+                    <Icon :icon="chartIcon" width="16" height="16" />
+                    绘图到 Cell
+                  </button>
+                  <button type="button" class="data-workbench__action-btn" @click="sendChart(true)">
+                    <Icon :icon="sendIcon" width="16" height="16" />
+                    绘图写回
+                  </button>
+                </div>
+              </template>
+
+              <!-- 分析方法：特征集 + 角色表单 -->
+              <template v-else>
+                <section class="data-workbench__chart-config">
+                  <!-- 特征集多选 -->
+                  <label class="wide">
+                    <span>特征集（多选，支持跨变量；高维分析的输入）</span>
+                    <div class="data-workbench__feature-chips">
+                      <span v-for="(feat, index) in analysisDraft.features" :key="`feat-${index}`" class="data-workbench__feature-chip">
+                        {{ feat }}
+                        <button type="button" title="移除" @click="removeAnalysisFeature(index)">
+                          <Icon :icon="xIcon" width="12" height="12" />
+                        </button>
+                      </span>
+                      <span v-if="!analysisDraft.features.length" class="data-workbench__muted">尚未选择特征</span>
+                    </div>
+                    <div class="data-workbench__feature-add">
+                      <GuaxiWorkbenchCombobox v-model="featureToAdd" :options="chartSourceOptions" placeholder="选择列/变量后回车或点添加" />
+                      <button type="button" class="data-workbench__mini-btn" @click="addAnalysisFeature">
+                        <Icon :icon="plusIcon" width="13" height="13" /> 添加
+                      </button>
+                    </div>
+                  </label>
+
+                  <label v-if="activeMethodNeeds('target')">
+                    <span>目标 target（回归/重要性/着色）</span>
+                    <GuaxiWorkbenchCombobox v-model="analysisDraft.target" :options="chartSourceOptions" placeholder="例如 price、label" />
+                  </label>
+                  <label v-if="activeMethodNeeds('group')">
+                    <span>分组 group</span>
+                    <GuaxiWorkbenchCombobox v-model="analysisDraft.group" :options="chartSourceOptions" placeholder="例如 category" />
+                  </label>
+                  <label v-if="activeMethodNeeds('color')">
+                    <span>颜色/标签 color</span>
+                    <GuaxiWorkbenchCombobox v-model="analysisDraft.color" :options="chartSourceOptions" placeholder="可选，分组着色" />
+                  </label>
+                  <label v-if="activeMethodNeeds('timeIndex')">
+                    <span>时间/顺序轴 timeIndex</span>
+                    <GuaxiWorkbenchCombobox v-model="analysisDraft.timeIndex" :options="chartSourceOptions" placeholder="时间序列分析所需" />
+                  </label>
+
+                  <!-- 方法选项（由注册表 fields 渲染） -->
+                  <label v-for="field in activeMethodFields" :key="field.key">
+                    <span>{{ field.label }}</span>
+                    <select
+                      v-if="field.type === 'select'"
+                      class="data-workbench__field"
+                      :value="getAnalysisOption(field.key, field.default)"
+                      @change="setAnalysisOption(field.key, $event.target.value)"
+                    >
+                      <option v-for="opt in field.options || []" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                    </select>
+                    <input
+                      v-else
+                      class="data-workbench__field"
+                      :type="field.type === 'number' ? 'number' : 'text'"
+                      :value="getAnalysisOption(field.key, field.default)"
+                      @input="setAnalysisOption(field.key, $event.target.value)"
+                    />
+                  </label>
+
+                  <label class="wide">
+                    <span>标题</span>
+                    <input v-model="analysisDraft.title" class="data-workbench__field" :placeholder="activeMethod?.label || ''" />
+                  </label>
+                </section>
+
+                <section class="data-workbench__chart-help">
+                  <strong>{{ activeMethod?.label || '分析' }}</strong>
+                  <span>{{ activeMethod?.desc || '' }}</span>
+                  <span v-if="analysisHint" class="data-workbench__analysis-hint">{{ analysisHint }}</span>
+                </section>
+
+                <div class="data-workbench__chart-actions">
+                  <button type="button" class="data-workbench__action-btn" :disabled="!!analysisHint" @click="sendAnalysis(false)">
+                    <Icon :icon="chartIcon" width="16" height="16" />
+                    运行到 Cell
+                  </button>
+                  <button type="button" class="data-workbench__action-btn" :disabled="!!analysisHint" @click="sendAnalysis(true)">
+                    <Icon :icon="sendIcon" width="16" height="16" />
+                    运行并写回
+                  </button>
+                </div>
+              </template>
             </div>
           </section>
 
@@ -560,7 +678,13 @@ import {
   parseWorkbenchRouteQuery,
   requestNotebookInspectorRefresh,
   writeWorkbenchChartToNotebook,
+  writeWorkbenchAnalysisToNotebook,
 } from './utils/guaxiDataLabWorkbenchClient'
+import {
+  ANALYSIS_GROUPS,
+  getAnalysisMethod,
+  getAnalysisMethodsByGroup,
+} from './utils/guaxiNotebookDataLab'
 
 const logger = createLogger('GuaxiDataLabWorkbench')
 const message = useMessage()
@@ -633,6 +757,36 @@ const chartDraft = reactive({
   z: '',
   color: '',
   title: '',
+})
+
+// 分析工作台状态：意图(分组) + 方法 + 特征集 + 角色 + 方法选项。
+const analysisGroups = ANALYSIS_GROUPS
+const analysisGroup = ref('relation')
+const analysisDraft = reactive({
+  method: 'corr_matrix',
+  features: [],
+  target: '',
+  group: '',
+  color: '',
+  timeIndex: '',
+  title: '',
+  options: {},
+})
+const featureToAdd = ref('')
+const analysisMethodsForGroup = computed(() => getAnalysisMethodsByGroup(analysisGroup.value))
+const activeMethod = computed(() => getAnalysisMethod(analysisDraft.method))
+const activeMethodFields = computed(() => activeMethod.value?.fields || [])
+const activeMethodNeeds = (role) => (activeMethod.value?.needs || []).includes(role)
+const analysisHint = computed(() => {
+  const m = activeMethod.value
+  if (!m) return ''
+  if ((m.needs || []).includes('features') && analysisDraft.features.length < (m.minFeatures || 1)) {
+    return `该方法至少需要 ${m.minFeatures || 1} 个特征`
+  }
+  if ((m.needs || []).includes('target') && !analysisDraft.target) return '该方法需要选择目标 target'
+  if ((m.needs || []).includes('group') && !analysisDraft.group) return '该方法需要选择分组 group'
+  if ((m.needs || []).includes('timeIndex') && !analysisDraft.timeIndex) return '该方法需要选择时间/顺序轴 timeIndex'
+  return ''
 })
 
 const tableState = computed(() => {
@@ -789,7 +943,7 @@ const tabs = computed(() => [
   { label: '导入', value: 'import', icon: uploadIcon },
   { label: '数据', value: 'data', icon: tableIcon },
   { label: '结构', value: 'structure', icon: treeIcon },
-  { label: '绘图', value: 'chart', icon: chartIcon },
+  { label: '分析', value: 'chart', icon: chartIcon },
   { label: '导出', value: 'export', icon: downloadIcon },
 ])
 
@@ -1493,6 +1647,78 @@ const sendChart = async (writeBack = false) => {
   } catch (error) {
     logger.error('[DataWorkbench] send chart failed', { error: String(error?.message || error) })
     message.error(`绘图失败：${String(error?.message || error)}`)
+  }
+}
+
+// —— 分析工作台交互 ——
+const selectAnalysisGroup = (groupId) => {
+  analysisGroup.value = String(groupId || 'relation')
+  if (groupId === 'chart') return
+  const first = getAnalysisMethodsByGroup(analysisGroup.value)[0]
+  if (first) selectAnalysisMethod(first.id)
+}
+
+const selectAnalysisMethod = (methodId) => {
+  analysisDraft.method = String(methodId || '')
+  // 切换方法时用注册表默认值初始化方法专属选项，避免上一个方法的选项残留。
+  const method = getAnalysisMethod(analysisDraft.method)
+  const nextOptions = {}
+  ;(method?.fields || []).forEach((field) => {
+    if (field.default != null) {
+      const name = String(field.key).split('.').pop()
+      nextOptions[name] = field.default
+    }
+  })
+  analysisDraft.options = nextOptions
+  logger.info('[DataWorkbench] selected analysis method', { method: analysisDraft.method })
+}
+
+const addAnalysisFeature = () => {
+  const value = String(featureToAdd.value || '').trim()
+  if (!value || analysisDraft.features.includes(value)) {
+    featureToAdd.value = ''
+    return
+  }
+  analysisDraft.features.push(value)
+  featureToAdd.value = ''
+}
+
+const removeAnalysisFeature = (index) => {
+  analysisDraft.features.splice(index, 1)
+}
+
+const optionKeyName = (key) => String(key).split('.').pop()
+const getAnalysisOption = (key, fallback = '') => {
+  const name = optionKeyName(key)
+  const value = analysisDraft.options[name]
+  return value == null || value === '' ? (fallback ?? '') : value
+}
+const setAnalysisOption = (key, value) => {
+  analysisDraft.options[optionKeyName(key)] = value
+}
+
+const sendAnalysis = async (writeBack = false) => {
+  if (analysisHint.value) {
+    message.warning(analysisHint.value)
+    return
+  }
+  try {
+    const spec = await writeWorkbenchAnalysisToNotebook({
+      context,
+      analysis: {
+        ...analysisDraft,
+        features: analysisDraft.features.map((source) => ({ source })),
+        primaryVariable: activeVariableName.value,
+        title: analysisDraft.title || activeMethod.value?.label || '',
+      },
+      writeBack,
+    })
+    await focusMainWindow(writeBack ? 'analysis-writeback' : 'analysis-output')
+    logger.info('[DataWorkbench] sent analysis', { method: spec?.method, writeBack })
+    message.success(writeBack ? '分析结果已写回当前 Cell' : '分析请求已发送到当前 Cell')
+  } catch (error) {
+    logger.error('[DataWorkbench] send analysis failed', { error: String(error?.message || error) })
+    message.error(`分析失败：${String(error?.message || error)}`)
   }
 }
 
@@ -2597,6 +2823,136 @@ onBeforeUnmount(() => {
 
 .data-workbench__chart-help strong {
   color: var(--dl-text);
+}
+
+/* —— 分析工作台 —— */
+.data-workbench__analysis-methods {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--dl-border);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--dl-panel);
+}
+
+.data-workbench__analysis-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.data-workbench__analysis-group {
+  min-height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--dl-border);
+  border-radius: 999px;
+  background: var(--dl-panel-2);
+  color: var(--dl-muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.data-workbench__analysis-group.is-active {
+  color: var(--dl-text);
+  border-color: color-mix(in srgb, var(--dl-accent) 55%, var(--dl-border));
+  background: var(--dl-accent-soft);
+}
+
+.data-workbench__analysis-method-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
+}
+
+.data-workbench__analysis-method {
+  position: relative;
+  display: grid;
+  gap: 3px;
+  align-content: start;
+  text-align: left;
+  border: 1px solid var(--dl-border);
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: var(--dl-panel);
+  color: var(--dl-text);
+  cursor: pointer;
+}
+
+.data-workbench__analysis-method:hover,
+.data-workbench__analysis-method.is-active {
+  border-color: color-mix(in srgb, var(--dl-accent) 50%, var(--dl-border));
+  background: var(--dl-accent-soft);
+}
+
+.data-workbench__analysis-method strong {
+  font-size: 13px;
+}
+
+.data-workbench__analysis-method span {
+  color: var(--dl-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.data-workbench__analysis-lib {
+  justify-self: start;
+  margin-top: 2px;
+  border-radius: 999px;
+  padding: 1px 7px;
+  background: var(--dl-panel-2);
+  color: var(--dl-muted);
+  font-size: 10px;
+  font-style: normal;
+}
+
+.data-workbench__feature-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 34px;
+  align-items: center;
+  border: 1px solid var(--dl-border);
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: var(--dl-panel-2);
+}
+
+.data-workbench__feature-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 999px;
+  padding: 3px 6px 3px 10px;
+  background: var(--dl-accent-soft);
+  color: var(--dl-text);
+  font-size: 12px;
+}
+
+.data-workbench__feature-chip button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  padding: 2px;
+  background: transparent;
+  color: var(--dl-muted);
+  cursor: pointer;
+}
+
+.data-workbench__feature-chip button:hover {
+  color: var(--dl-text);
+}
+
+.data-workbench__feature-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.data-workbench__analysis-hint {
+  color: #d92d20 !important;
 }
 
 .data-workbench__operation-grid {

@@ -1145,6 +1145,628 @@ const buildExportHeaderPy = (spec) => [
 // 生成统一导出代码：按 Export Spec 把会话变量落盘 / 写库 / 跑脚本。
 export const buildExportCode = (spec = {}) => `${buildExportHeaderPy(spec)}\n${EXPORT_RUNTIME_PY}`
 
+// ============================================================================
+// 关系/规律发现 · 分析工作台（Analysis Spec + 方法注册表）
+// ----------------------------------------------------------------------------
+// 设计说明：
+// 1. 把「手动选坐标轴绘图」升级为「选分析意图 → 选一组特征(高维) + 角色 → 出交互图 + 结论」。
+// 2. ANALYSIS_METHODS 声明式注册表同时驱动分析面板 UI 与 Python 代码生成。
+// 3. 每个方法产出 plotly 图 + 结论摘要，合成单个 HTML display（复用 worker 的 __guaxi_display__ 管线）。
+// 4. 高级方法按需 import（sklearn/statsmodels/scipy），缺库给中文提示并降级，不强制依赖。
+// ============================================================================
+
+export const ANALYSIS_GROUPS = [
+  { id: 'relation', label: '相关性 / 关系', summary: '相关矩阵、散点矩阵、互信息、滞后相关' },
+  { id: 'structure', label: '高维结构', summary: '降维投影、聚类、平行坐标、特征重要性' },
+  { id: 'stats', label: '统计规律 / 回归', summary: '分布拟合、回归、假设检验、描述画像' },
+  { id: 'causal', label: '因果 / 时间序列', summary: 'Granger 因果、自相关' },
+  { id: 'insight', label: '一键洞察', summary: '自动排出最强关系与候选规律' },
+  { id: 'chart', label: '基础图表', summary: '手动指定坐标轴的 23 种图表' },
+]
+
+const CORR_METHOD_FIELD = {
+  key: 'options.corrMethod', label: '相关系数', type: 'select', default: 'pearson',
+  options: [
+    { value: 'pearson', label: 'Pearson（线性）' },
+    { value: 'spearman', label: 'Spearman（秩）' },
+    { value: 'kendall', label: 'Kendall' },
+  ],
+}
+const N_COMPONENTS_FIELD = {
+  key: 'options.nComponents', label: '投影维度', type: 'select', default: '2',
+  options: [{ value: '2', label: '2D' }, { value: '3', label: '3D' }],
+}
+
+// needs：声明该方法需要的角色，驱动 UI 显示哪些角色输入；
+// minFeatures：特征集最少列数；lib：依赖库（缺失时运行时给中文提示）。
+export const ANALYSIS_METHODS = [
+  // —— 相关性 / 关系 ——
+  {
+    id: 'corr_matrix', group: 'relation', label: '相关矩阵热力图', lib: 'base', minFeatures: 2,
+    needs: ['features'], fields: [CORR_METHOD_FIELD],
+    desc: '计算特征两两相关系数并以热力图呈现，附最强相关对排名。',
+  },
+  {
+    id: 'scatter_matrix', group: 'relation', label: '散点矩阵 SPLOM', lib: 'base', minFeatures: 2,
+    needs: ['features', 'color'], fields: [],
+    desc: '特征两两散点 + 对角分布，可按颜色分组观察聚集与关系。',
+  },
+  {
+    id: 'mutual_info', group: 'relation', label: '互信息（非线性关联）', lib: 'sklearn', minFeatures: 1,
+    needs: ['features', 'target'], fields: [],
+    desc: '衡量每个特征与目标的非线性依赖强度，捕捉相关系数漏掉的关系。',
+  },
+  {
+    id: 'lag_corr', group: 'relation', label: '滞后互相关', lib: 'base', minFeatures: 2,
+    needs: ['features', 'timeIndex'], fields: [{ key: 'options.maxLag', label: '最大滞后', type: 'number', default: 10 }],
+    desc: '在不同时间滞后下计算两序列相关，找领先/滞后关系。',
+  },
+  // —— 高维结构 ——
+  {
+    id: 'pca', group: 'structure', label: 'PCA 主成分投影', lib: 'sklearn', minFeatures: 3,
+    needs: ['features', 'color'], fields: [N_COMPONENTS_FIELD],
+    desc: '线性降维到 2D/3D 散点，附各主成分方差解释率。',
+  },
+  {
+    id: 'tsne', group: 'structure', label: 't-SNE 流形投影', lib: 'sklearn', minFeatures: 3,
+    needs: ['features', 'color'], fields: [N_COMPONENTS_FIELD, { key: 'options.perplexity', label: 'perplexity', type: 'number', default: 30 }],
+    desc: '非线性降维，擅长显示局部聚集结构（计算较慢）。',
+  },
+  {
+    id: 'cluster_kmeans', group: 'structure', label: 'KMeans 聚类', lib: 'sklearn', minFeatures: 2,
+    needs: ['features'], fields: [{ key: 'options.k', label: '簇数 k', type: 'number', default: 3 }],
+    desc: '无监督聚类并用 PCA 投影着色展示，附轮廓系数评估。',
+  },
+  {
+    id: 'parallel', group: 'structure', label: '平行坐标', lib: 'base', minFeatures: 2,
+    needs: ['features', 'color'], fields: [],
+    desc: '每条折线一个样本，跨多维观察趋势与分组差异。',
+  },
+  {
+    id: 'feature_importance', group: 'structure', label: '特征重要性', lib: 'sklearn', minFeatures: 1,
+    needs: ['features', 'target'], fields: [],
+    desc: '随机森林评估各特征对目标的预测贡献并排名。',
+  },
+  // —— 统计规律 / 回归 ——
+  {
+    id: 'dist_fit', group: 'stats', label: '分布拟合 / QQ', lib: 'scipy', minFeatures: 1,
+    needs: ['features'], fields: [{
+      key: 'options.dist', label: '分布', type: 'select', default: 'norm',
+      options: ['norm', 'lognorm', 'expon', 'gamma', 'uniform'].map((v) => ({ value: v, label: v })),
+    }],
+    desc: '直方图 + 拟合 PDF + QQ 图，并给拟合优度（KS 检验）。',
+  },
+  {
+    id: 'regression', group: 'stats', label: '回归拟合', lib: 'base', minFeatures: 1,
+    needs: ['features', 'target'], fields: [{ key: 'options.polyDegree', label: '多项式次数', type: 'number', default: 1 }],
+    desc: '对目标做 OLS / 多项式回归，给 R²、系数与残差图。',
+  },
+  {
+    id: 'hypothesis', group: 'stats', label: '假设检验', lib: 'scipy', minFeatures: 1,
+    needs: ['features', 'group'], fields: [{
+      key: 'options.test', label: '检验', type: 'select', default: 'ttest',
+      options: [
+        { value: 'ttest', label: '独立样本 t 检验' },
+        { value: 'anova', label: '单因素 ANOVA' },
+        { value: 'chi2', label: '卡方独立性' },
+      ],
+    }],
+    desc: '按分组比较特征是否有显著差异，给统计量与 p 值。',
+  },
+  {
+    id: 'profile', group: 'stats', label: '描述性画像', lib: 'base', minFeatures: 1,
+    needs: ['features'], fields: [],
+    desc: '每个特征的均值/分位/偏度/峰度/缺失率/唯一值，快速体检。',
+  },
+  // —— 因果 / 时间序列 ——
+  {
+    id: 'granger', group: 'causal', label: 'Granger 因果矩阵', lib: 'statsmodels', minFeatures: 2,
+    needs: ['features', 'timeIndex'], fields: [{ key: 'options.maxLag', label: '最大滞后', type: 'number', default: 5 }],
+    desc: '检验一个序列是否有助于预测另一个（格兰杰因果），输出 p 值矩阵。',
+  },
+  {
+    id: 'acf', group: 'causal', label: '自相关 ACF / PACF', lib: 'statsmodels', minFeatures: 1,
+    needs: ['features', 'timeIndex'], fields: [{ key: 'options.maxLag', label: '最大滞后', type: 'number', default: 20 }],
+    desc: '序列与自身滞后的相关，识别周期性与记忆长度。',
+  },
+  // —— 一键洞察 ——
+  {
+    id: 'auto_insight', group: 'insight', label: '自动洞察', lib: 'base', minFeatures: 2,
+    needs: ['features'], fields: [{ key: 'options.topN', label: '关系数', type: 'number', default: 10 }],
+    desc: '自动跑相关矩阵 + 排出最强关系、标常量/高缺失列、给候选规律排名。',
+  },
+]
+
+export const getAnalysisMethodsByGroup = (group) => {
+  const id = normalizeText(group)
+  return ANALYSIS_METHODS.filter((item) => item.group === id)
+}
+
+export const getAnalysisMethod = (methodId) => {
+  const id = normalizeText(methodId)
+  return ANALYSIS_METHODS.find((item) => item.id === id) || null
+}
+
+export const normalizeAnalysisSpec = (spec = {}) => {
+  const input = spec && typeof spec === 'object' ? spec : {}
+  const features = (Array.isArray(input.features) ? input.features : [])
+    .map((item) => normalizeText(item?.source || item))
+    .filter(Boolean)
+  return {
+    method: normalizeText(input.method) || 'corr_matrix',
+    features,
+    target: normalizeText(input.target),
+    group: normalizeText(input.group),
+    color: normalizeText(input.color),
+    timeIndex: normalizeText(input.timeIndex),
+    primaryVariable: normalizeText(input.primaryVariable || input.variableName),
+    title: normalizeText(input.title),
+    options: input.options && typeof input.options === 'object' ? { ...input.options } : {},
+  }
+}
+
+// 共享前导：跨变量解析 + 按角色构造对齐后的特征矩阵 __guaxi_an_df（沿用绘图器的 resolve 思路）。
+const ANALYSIS_PRELUDE_PY = String.raw`
+import json
+import numpy as np
+import pandas as pd
+
+def __guaxi_an_to_series(value, label='value'):
+    if isinstance(value, pd.DataFrame):
+        return value.iloc[:, 0].reset_index(drop=True) if len(value.columns) == 1 else value.reset_index(drop=True)
+    if isinstance(value, pd.Series):
+        return value.reset_index(drop=True)
+    if isinstance(value, np.ndarray):
+        return pd.Series(value, name=label) if value.ndim == 1 else pd.DataFrame(value).reset_index(drop=True)
+    if isinstance(value, (list, tuple)):
+        return pd.Series(list(value), name=label)
+    return pd.Series([value], name=label)
+
+def __guaxi_an_primary_df():
+    name = __guaxi_an_spec.get('primaryVariable') or ''
+    if name and name in globals():
+        v = globals()[name]
+        if isinstance(v, pd.DataFrame):
+            return v.copy()
+        if isinstance(v, pd.Series):
+            return v.to_frame(name=str(v.name or 'value'))
+        try:
+            return pd.DataFrame(v)
+        except Exception:
+            return None
+    return None
+
+def __guaxi_an_resolve(expr):
+    expr = str(expr or '').strip()
+    if not expr:
+        return None
+    fb = __guaxi_an_fallback
+    if fb is not None and expr in fb.columns:
+        return fb[expr].reset_index(drop=True)
+    if '.' in expr:
+        var_name, field = expr.split('.', 1)
+        src = globals().get(var_name)
+        if src is not None:
+            if isinstance(src, pd.DataFrame) and field in src.columns:
+                return src[field].reset_index(drop=True)
+            if isinstance(src, pd.Series) and field in ('value', str(src.name or '')):
+                return src.reset_index(drop=True)
+            if isinstance(src, dict) and field in src:
+                return __guaxi_an_to_series(src[field], field)
+            try:
+                return __guaxi_an_to_series(getattr(src, field), field)
+            except Exception:
+                pass
+    if expr in globals():
+        return __guaxi_an_to_series(globals()[expr], expr)
+    if fb is not None and expr in fb.columns:
+        return fb[expr].reset_index(drop=True)
+    return None
+
+__guaxi_an_fallback = __guaxi_an_primary_df()
+
+def __guaxi_an_build_features():
+    cols = {}
+    for expr in (__guaxi_an_spec.get('features') or []):
+        s = __guaxi_an_resolve(expr)
+        if s is not None:
+            cols[str(expr)] = pd.Series(s).reset_index(drop=True)
+    if not cols and __guaxi_an_fallback is not None:
+        return __guaxi_an_fallback.select_dtypes(include='number').reset_index(drop=True)
+    return pd.DataFrame(cols)
+
+def __guaxi_an_role(role):
+    expr = __guaxi_an_spec.get(role) or ''
+    s = __guaxi_an_resolve(expr)
+    return pd.Series(s).reset_index(drop=True) if s is not None else None
+
+def __guaxi_an_numeric(df):
+    return df.apply(pd.to_numeric, errors='coerce')
+
+def __guaxi_an_opt(key, default=None):
+    v = (__guaxi_an_spec.get('options') or {}).get(key)
+    return default if v in (None, '') else v
+
+def __guaxi_an_int(key, default):
+    try:
+        return int(float(__guaxi_an_opt(key, default)))
+    except Exception:
+        return default
+
+def __guaxi_an_title(fallback):
+    return str(__guaxi_an_spec.get('title') or fallback)
+
+def __guaxi_an_html(fig, summary_html=''):
+    try:
+        import plotly.io as pio
+        fig_html = pio.to_html(fig, include_plotlyjs=True, full_html=False, config={'responsive': True})
+        return {'__guaxi_display__': {'type': 'html', 'mime': 'text/html', 'html': summary_html + fig_html}}
+    except Exception:
+        return fig
+
+def __guaxi_an_table_html(title, rows, headers):
+    th = ''.join('<th style="text-align:left;padding:4px 10px;border-bottom:1px solid #ddd">' + str(h) + '</th>' for h in headers)
+    trs = ''
+    for r in rows:
+        tds = ''.join('<td style="padding:4px 10px;border-bottom:1px solid #eee">' + str(c) + '</td>' for c in r)
+        trs += '<tr>' + tds + '</tr>'
+    return ('<div style="font-family:system-ui,Microsoft YaHei,sans-serif;margin:0 0 10px">'
+            '<div style="font-weight:700;margin:4px 0 6px">' + str(title) + '</div>'
+            '<table style="border-collapse:collapse;font-size:13px">'
+            '<thead><tr>' + th + '</tr></thead><tbody>' + trs + '</tbody></table></div>')
+
+def __guaxi_an_need(mod, label):
+    try:
+        return __import__(mod)
+    except Exception:
+        raise RuntimeError('该分析方法需要 ' + label + '，当前 Python 运行时未安装。请在运行时安装后重试。')
+`
+
+// 各分析方法主体：按 method 分发，产出 _result（HTML display 或 fig）。
+const ANALYSIS_RUNTIME_PY = String.raw`
+def __guaxi_run_analysis():
+    import plotly.express as px
+    import plotly.graph_objects as go
+    method = str(__guaxi_an_spec.get('method') or 'corr_matrix')
+    df = __guaxi_an_build_features()
+    if df is None or df.shape[1] == 0:
+        raise ValueError('没有可用的特征列，请先选择特征或确认变量可表格化')
+    title = __guaxi_an_title(method)
+
+    if method == 'corr_matrix':
+        num = __guaxi_an_numeric(df).dropna(how='all', axis=1)
+        cm = str(__guaxi_an_opt('corrMethod', 'pearson'))
+        corr = num.corr(method=cm)
+        fig = px.imshow(corr, text_auto='.2f', color_continuous_scale='RdBu', zmin=-1, zmax=1, title=title + '（' + cm + '）')
+        pairs = []
+        cols = list(corr.columns)
+        for i in range(len(cols)):
+            for j in range(i + 1, len(cols)):
+                v = corr.iloc[i, j]
+                if pd.notna(v):
+                    pairs.append((cols[i], cols[j], float(v)))
+        pairs.sort(key=lambda t: abs(t[2]), reverse=True)
+        rows = [(a, b, round(v, 4)) for a, b, v in pairs[:10]]
+        summary = __guaxi_an_table_html('最强相关对', rows, ['特征 A', '特征 B', '相关系数'])
+        return __guaxi_an_html(fig, summary)
+
+    if method == 'scatter_matrix':
+        num = __guaxi_an_numeric(df)
+        color = __guaxi_an_role('color')
+        plot_df = num.copy()
+        color_col = None
+        if color is not None:
+            plot_df['__color'] = color.values
+            color_col = '__color'
+        fig = px.scatter_matrix(plot_df, dimensions=list(num.columns), color=color_col, title=title)
+        fig.update_traces(diagonal_visible=False, showupperhalf=False)
+        return __guaxi_an_html(fig)
+
+    if method == 'mutual_info':
+        __guaxi_an_need('sklearn', 'scikit-learn')
+        from sklearn.feature_selection import mutual_info_regression, mutual_info_classif
+        target = __guaxi_an_role('target')
+        if target is None:
+            raise ValueError('互信息需要选择目标(target)')
+        X = __guaxi_an_numeric(df).fillna(0.0)
+        y = pd.Series(target).reset_index(drop=True)
+        idx = X.index[:len(y)]
+        X = X.loc[idx]
+        y = y.iloc[:len(X)]
+        if y.dtype == object or y.nunique() <= max(2, int(len(y) * 0.05)):
+            yc = y.astype('category').cat.codes
+            mi = mutual_info_classif(X, yc, random_state=0)
+        else:
+            mi = mutual_info_regression(X, pd.to_numeric(y, errors='coerce').fillna(0.0), random_state=0)
+        order = np.argsort(mi)[::-1]
+        cols = [list(X.columns)[i] for i in order]
+        vals = [float(mi[i]) for i in order]
+        fig = px.bar(x=vals, y=cols, orientation='h', title=title + '（互信息）', labels={'x': '互信息', 'y': '特征'})
+        fig.update_yaxes(autorange='reversed')
+        rows = [(c, round(v, 4)) for c, v in zip(cols, vals)]
+        return __guaxi_an_html(fig, __guaxi_an_table_html('互信息排名', rows, ['特征', '互信息']))
+
+    if method == 'lag_corr':
+        num = __guaxi_an_numeric(df)
+        if num.shape[1] < 2:
+            raise ValueError('滞后互相关需要至少 2 个特征')
+        a = num.iloc[:, 0]
+        b = num.iloc[:, 1]
+        max_lag = __guaxi_an_int('maxLag', 10)
+        lags = list(range(-max_lag, max_lag + 1))
+        vals = []
+        for lag in lags:
+            vals.append(float(a.corr(b.shift(lag))))
+        fig = px.bar(x=lags, y=vals, title=title + '：' + str(num.columns[0]) + ' vs ' + str(num.columns[1]),
+                     labels={'x': '滞后(b 相对 a)', 'y': '相关系数'})
+        best = max(range(len(lags)), key=lambda i: abs(vals[i]) if not np.isnan(vals[i]) else -1)
+        summary = __guaxi_an_table_html('最强滞后', [(lags[best], round(vals[best], 4))], ['滞后', '相关系数'])
+        return __guaxi_an_html(fig, summary)
+
+    if method in ('pca', 'tsne'):
+        __guaxi_an_need('sklearn', 'scikit-learn')
+        from sklearn.preprocessing import StandardScaler
+        X = __guaxi_an_numeric(df).dropna()
+        if X.shape[1] < 2:
+            raise ValueError('降维需要至少 2 个数值特征')
+        Xs = StandardScaler().fit_transform(X)
+        n = 3 if str(__guaxi_an_opt('nComponents', '2')) == '3' else 2
+        color = __guaxi_an_role('color')
+        cser = pd.Series(color).reset_index(drop=True).loc[X.index] if color is not None else None
+        summary = ''
+        if method == 'pca':
+            from sklearn.decomposition import PCA
+            comp = PCA(n_components=n).fit(Xs)
+            emb = comp.transform(Xs)
+            ev = comp.explained_variance_ratio_
+            summary = __guaxi_an_table_html('方差解释率',
+                [('PC' + str(i + 1), round(float(ev[i]), 4)) for i in range(n)] + [('累计', round(float(ev.sum()), 4))],
+                ['主成分', '解释率'])
+        else:
+            from sklearn.manifold import TSNE
+            perp = min(__guaxi_an_int('perplexity', 30), max(5, len(Xs) - 1))
+            emb = TSNE(n_components=n, perplexity=perp, init='pca', random_state=0).fit_transform(Xs)
+        axis = ['维度1', '维度2', '维度3'][:n]
+        edf = pd.DataFrame(emb, columns=axis)
+        if cser is not None:
+            edf['分组'] = cser.values
+        cc = '分组' if cser is not None else None
+        if n == 3:
+            fig = px.scatter_3d(edf, x=axis[0], y=axis[1], z=axis[2], color=cc, title=title)
+        else:
+            fig = px.scatter(edf, x=axis[0], y=axis[1], color=cc, title=title)
+        return __guaxi_an_html(fig, summary)
+
+    if method == 'cluster_kmeans':
+        __guaxi_an_need('sklearn', 'scikit-learn')
+        from sklearn.preprocessing import StandardScaler
+        from sklearn.cluster import KMeans
+        from sklearn.decomposition import PCA
+        from sklearn.metrics import silhouette_score
+        X = __guaxi_an_numeric(df).dropna()
+        k = max(2, __guaxi_an_int('k', 3))
+        Xs = StandardScaler().fit_transform(X)
+        labels = KMeans(n_clusters=k, n_init=10, random_state=0).fit_predict(Xs)
+        try:
+            sil = silhouette_score(Xs, labels)
+        except Exception:
+            sil = float('nan')
+        emb = PCA(n_components=2).fit_transform(Xs) if Xs.shape[1] > 2 else Xs
+        edf = pd.DataFrame(emb[:, :2], columns=['维度1', '维度2'])
+        edf['簇'] = [str(l) for l in labels]
+        fig = px.scatter(edf, x='维度1', y='维度2', color='簇', title=title + '（k=' + str(k) + '）')
+        rows = [('簇数', k), ('轮廓系数', round(float(sil), 4) if sil == sil else 'N/A')]
+        return __guaxi_an_html(fig, __guaxi_an_table_html('聚类评估', rows, ['指标', '值']))
+
+    if method == 'parallel':
+        num = __guaxi_an_numeric(df)
+        color = __guaxi_an_role('color')
+        plot_df = num.copy()
+        cc = None
+        if color is not None:
+            cseries = pd.Series(color).reset_index(drop=True)
+            if cseries.dtype == object:
+                cseries = cseries.astype('category').cat.codes
+            plot_df['__color'] = pd.to_numeric(cseries, errors='coerce').values
+            cc = '__color'
+        fig = px.parallel_coordinates(plot_df, dimensions=list(num.columns), color=cc, title=title)
+        return __guaxi_an_html(fig)
+
+    if method == 'feature_importance':
+        __guaxi_an_need('sklearn', 'scikit-learn')
+        from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+        target = __guaxi_an_role('target')
+        if target is None:
+            raise ValueError('特征重要性需要选择目标(target)')
+        X = __guaxi_an_numeric(df).fillna(0.0)
+        y = pd.Series(target).reset_index(drop=True).iloc[:len(X)]
+        X = X.iloc[:len(y)]
+        if y.dtype == object or y.nunique() <= max(2, int(len(y) * 0.05)):
+            model = RandomForestClassifier(n_estimators=200, random_state=0).fit(X, y.astype('category').cat.codes)
+        else:
+            model = RandomForestRegressor(n_estimators=200, random_state=0).fit(X, pd.to_numeric(y, errors='coerce').fillna(0.0))
+        imp = model.feature_importances_
+        order = np.argsort(imp)[::-1]
+        cols = [list(X.columns)[i] for i in order]
+        vals = [float(imp[i]) for i in order]
+        fig = px.bar(x=vals, y=cols, orientation='h', title=title + '（随机森林）', labels={'x': '重要性', 'y': '特征'})
+        fig.update_yaxes(autorange='reversed')
+        rows = [(c, round(v, 4)) for c, v in zip(cols, vals)]
+        return __guaxi_an_html(fig, __guaxi_an_table_html('特征重要性', rows, ['特征', '重要性']))
+
+    if method == 'dist_fit':
+        __guaxi_an_need('scipy', 'scipy')
+        from scipy import stats as st
+        num = __guaxi_an_numeric(df)
+        s = num.iloc[:, 0].dropna()
+        dname = str(__guaxi_an_opt('dist', 'norm'))
+        dist = getattr(st, dname)
+        params = dist.fit(s)
+        ks = st.kstest(s, dname, args=params)
+        xs = np.linspace(float(s.min()), float(s.max()), 200)
+        pdf = dist.pdf(xs, *params)
+        fig = go.Figure()
+        fig.add_trace(go.Histogram(x=s, histnorm='probability density', name='样本', opacity=0.6))
+        fig.add_trace(go.Scatter(x=xs, y=pdf, name=dname + ' 拟合', mode='lines'))
+        fig.update_layout(title=title + '：' + str(num.columns[0]) + ' ~ ' + dname)
+        rows = [('KS 统计量', round(float(ks.statistic), 4)), ('p 值', round(float(ks.pvalue), 4)),
+                ('结论', '不能拒绝该分布' if ks.pvalue > 0.05 else '与该分布有显著差异')]
+        return __guaxi_an_html(fig, __guaxi_an_table_html('拟合优度（KS 检验）', rows, ['指标', '值']))
+
+    if method == 'regression':
+        target = __guaxi_an_role('target')
+        if target is None:
+            raise ValueError('回归需要选择目标(target)')
+        num = __guaxi_an_numeric(df)
+        x = num.iloc[:, 0]
+        y = pd.to_numeric(pd.Series(target).reset_index(drop=True), errors='coerce')
+        m = pd.concat([x.rename('x'), y.rename('y')], axis=1).dropna()
+        deg = max(1, __guaxi_an_int('polyDegree', 1))
+        coef = np.polyfit(m['x'], m['y'], deg)
+        pred = np.polyval(coef, m['x'])
+        ss_res = float(np.sum((m['y'] - pred) ** 2))
+        ss_tot = float(np.sum((m['y'] - m['y'].mean()) ** 2))
+        r2 = 1 - ss_res / ss_tot if ss_tot else float('nan')
+        order = np.argsort(m['x'].values)
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=m['x'], y=m['y'], mode='markers', name='样本'))
+        fig.add_trace(go.Scatter(x=m['x'].values[order], y=pred.values[order] if hasattr(pred, 'values') else np.asarray(pred)[order], mode='lines', name='拟合'))
+        fig.update_layout(title=title + '：' + str(num.columns[0]) + ' → target（' + str(deg) + ' 次）')
+        crows = [('R²', round(float(r2), 4))] + [('系数 x^' + str(deg - i), round(float(c), 4)) for i, c in enumerate(coef)]
+        return __guaxi_an_html(fig, __guaxi_an_table_html('回归结果', crows, ['项', '值']))
+
+    if method == 'hypothesis':
+        __guaxi_an_need('scipy', 'scipy')
+        from scipy import stats as st
+        group = __guaxi_an_role('group')
+        if group is None:
+            raise ValueError('假设检验需要选择分组(group)')
+        num = __guaxi_an_numeric(df)
+        col = num.iloc[:, 0]
+        g = pd.Series(group).reset_index(drop=True).iloc[:len(col)]
+        test = str(__guaxi_an_opt('test', 'ttest'))
+        groups = [col[g == lvl].dropna() for lvl in pd.unique(g.dropna())]
+        if test == 'chi2':
+            ct = pd.crosstab(col, g)
+            chi2, p, dof, _ = st.chi2_contingency(ct)
+            stat, name = chi2, '卡方'
+            fig = px.imshow(ct, text_auto=True, title=title + '：列联表')
+        elif test == 'anova':
+            stat, p = st.f_oneway(*[grp for grp in groups if len(grp) > 1])
+            name = 'F'
+            fig = px.box(pd.DataFrame({'值': col, '分组': g}), x='分组', y='值', title=title + '：ANOVA')
+        else:
+            stat, p = st.ttest_ind(groups[0], groups[1], equal_var=False)
+            name = 't'
+            fig = px.box(pd.DataFrame({'值': col, '分组': g}), x='分组', y='值', title=title + '：t 检验')
+        rows = [(name + ' 统计量', round(float(stat), 4)), ('p 值', round(float(p), 4)),
+                ('结论', '存在显著差异' if p < 0.05 else '无显著差异')]
+        return __guaxi_an_html(fig, __guaxi_an_table_html('假设检验', rows, ['指标', '值']))
+
+    if method == 'profile':
+        num = __guaxi_an_numeric(df)
+        rows = []
+        for c in df.columns:
+            s = num[c] if c in num.columns else pd.to_numeric(df[c], errors='coerce')
+            rows.append((c, round(float(s.mean()), 3) if s.notna().any() else 'N/A',
+                         round(float(s.std()), 3) if s.notna().any() else 'N/A',
+                         round(float(s.skew()), 3) if s.notna().sum() > 2 else 'N/A',
+                         round(float(s.kurt()), 3) if s.notna().sum() > 3 else 'N/A',
+                         round(float(df[c].isna().mean()), 3), int(df[c].nunique())))
+        miss = pd.DataFrame({'特征': list(df.columns), '缺失率': [float(df[c].isna().mean()) for c in df.columns]})
+        fig = px.bar(miss, x='特征', y='缺失率', title=title + '：缺失率')
+        summary = __guaxi_an_table_html('描述性画像', rows, ['特征', '均值', '标准差', '偏度', '峰度', '缺失率', '唯一值'])
+        return __guaxi_an_html(fig, summary)
+
+    if method == 'granger':
+        __guaxi_an_need('statsmodels', 'statsmodels')
+        from statsmodels.tsa.stattools import grangercausalitytests
+        num = __guaxi_an_numeric(df).dropna()
+        cols = list(num.columns)
+        if len(cols) < 2:
+            raise ValueError('Granger 因果需要至少 2 个序列')
+        max_lag = __guaxi_an_int('maxLag', 5)
+        mat = pd.DataFrame(np.ones((len(cols), len(cols))), index=cols, columns=cols)
+        for i, ci in enumerate(cols):
+            for j, cj in enumerate(cols):
+                if i == j:
+                    mat.iloc[i, j] = np.nan
+                    continue
+                try:
+                    res = grangercausalitytests(num[[ci, cj]], maxlag=max_lag, verbose=False)
+                    pmin = min(res[l][0]['ssr_ftest'][1] for l in res)
+                    mat.iloc[i, j] = float(pmin)
+                except Exception:
+                    mat.iloc[i, j] = np.nan
+        fig = px.imshow(mat, text_auto='.3f', color_continuous_scale='Blues_r', title=title + '：行→列 因果 p 值（越小越显著）')
+        sig = []
+        for i, ci in enumerate(cols):
+            for j, cj in enumerate(cols):
+                v = mat.iloc[i, j]
+                if i != j and pd.notna(v) and v < 0.05:
+                    sig.append((ci + ' → ' + cj, round(float(v), 4)))
+        sig.sort(key=lambda t: t[1])
+        return __guaxi_an_html(fig, __guaxi_an_table_html('显著因果关系（p<0.05）', sig[:10] or [('无', '-')], ['关系', 'p 值']))
+
+    if method == 'acf':
+        __guaxi_an_need('statsmodels', 'statsmodels')
+        from statsmodels.tsa.stattools import acf, pacf
+        num = __guaxi_an_numeric(df)
+        s = num.iloc[:, 0].dropna()
+        max_lag = min(__guaxi_an_int('maxLag', 20), max(1, len(s) // 2 - 1))
+        a = acf(s, nlags=max_lag)
+        try:
+            p = pacf(s, nlags=max_lag)
+        except Exception:
+            p = a
+        lags = list(range(len(a)))
+        fig = go.Figure()
+        fig.add_trace(go.Bar(x=lags, y=a, name='ACF'))
+        fig.add_trace(go.Bar(x=list(range(len(p))), y=p, name='PACF'))
+        fig.update_layout(title=title + '：' + str(num.columns[0]) + ' 自相关', barmode='group')
+        return __guaxi_an_html(fig)
+
+    if method == 'auto_insight':
+        num = __guaxi_an_numeric(df).dropna(how='all', axis=1)
+        corr = num.corr()
+        cols = list(corr.columns)
+        pairs = []
+        for i in range(len(cols)):
+            for j in range(i + 1, len(cols)):
+                v = corr.iloc[i, j]
+                if pd.notna(v):
+                    pairs.append((cols[i], cols[j], float(v)))
+        pairs.sort(key=lambda t: abs(t[2]), reverse=True)
+        topn = __guaxi_an_int('topN', 10)
+        const_cols = [c for c in df.columns if df[c].nunique(dropna=True) <= 1]
+        miss_cols = [(c, round(float(df[c].isna().mean()), 3)) for c in df.columns if df[c].isna().mean() > 0.3]
+        fig = px.imshow(corr, text_auto='.2f', color_continuous_scale='RdBu', zmin=-1, zmax=1, title=__guaxi_an_title('自动洞察：相关概览'))
+        parts = [__guaxi_an_table_html('最强关系排名', [(a, b, round(v, 4)) for a, b, v in pairs[:topn]] or [('无', '-', '-')], ['特征 A', '特征 B', '相关系数'])]
+        if const_cols:
+            parts.append(__guaxi_an_table_html('常量列（无信息）', [(c,) for c in const_cols], ['特征']))
+        if miss_cols:
+            parts.append(__guaxi_an_table_html('高缺失列（>30%）', miss_cols, ['特征', '缺失率']))
+        return __guaxi_an_html(fig, ''.join(parts))
+
+    raise ValueError('Unsupported analysis method: ' + method)
+
+
+_result = __guaxi_run_analysis()
+print('[GuaxiNotebookLab] analyzed method=' + str(__guaxi_an_spec.get('method')) + ' features=' + str(len(__guaxi_an_spec.get('features') or [])))
+`
+
+const buildAnalysisHeaderPy = (spec) => [
+  'import json',
+  `__guaxi_an_spec = json.loads(${JSON.stringify(JSON.stringify(normalizeAnalysisSpec(spec)))})`,
+].join('\n')
+
+// 生成分析代码：按 Analysis Spec 构造特征矩阵并按方法产出交互图 + 结论摘要。
+export const buildAnalysisCode = (spec = {}) => [
+  buildAnalysisHeaderPy(spec),
+  ANALYSIS_PRELUDE_PY,
+  ANALYSIS_RUNTIME_PY,
+].join('\n')
+
 export const buildNotebookLabImportPlan = ({
   sourceType = 'file',
   sourcePath = '',

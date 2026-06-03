@@ -9,6 +9,7 @@ import {
   buildExportCode,
   normalizeImportSpec,
   normalizeExportSpec,
+  normalizeAnalysisSpec,
   getExportFormat,
 } from './guaxiNotebookDataLab'
 
@@ -477,6 +478,40 @@ export const writeWorkbenchChartToNotebook = async ({
     chartType: normalizeText(chart.chartType || 'line'),
     writeBack,
   })
+}
+
+// 把分析工作台产出的完整 Analysis Spec 发往主窗口 Notebook 执行（analyze-variable 动作）。
+// notebook 侧据 spec 调 buildAnalysisCode 重新生成代码并执行，产出交互图 + 结论摘要。
+export const writeWorkbenchAnalysisToNotebook = async ({
+  context = {},
+  analysis = {},
+  writeBack = false,
+} = {}) => {
+  const spec = normalizeAnalysisSpec({ ...analysis, primaryVariable: analysis.primaryVariable || context.variableName })
+  await emitTo('main', 'notebook-data-lab-rpc', {
+    action: writeBack ? 'analyze-variable-writeback' : 'analyze-variable',
+    filePath: normalizeText(context.filePath),
+    cellId: normalizeText(context.cellId),
+    cellKey: normalizeText(context.cellKey),
+    stableId: normalizeText(context.stableId),
+    variableName: normalizeText(context.variableName),
+    dataKind: 'analysis',
+    method: spec.method,
+    features: spec.features,
+    target: spec.target,
+    group: spec.group,
+    color: spec.color,
+    timeIndex: spec.timeIndex,
+    primaryVariable: spec.primaryVariable,
+    title: spec.title,
+    options: spec.options,
+  })
+  logger.info('[DataLabWorkbenchClient] emitted analysis action to notebook', {
+    method: spec.method,
+    featureCount: spec.features.length,
+    writeBack,
+  })
+  return spec
 }
 
 export const emitWorkbenchNotebookAction = async ({

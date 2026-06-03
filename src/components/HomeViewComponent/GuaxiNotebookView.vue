@@ -873,6 +873,7 @@ import {
 import {
   NOTEBOOK_DATALAB_EVENT,
   classifyNotebookLabVariable,
+  buildAnalysisCode,
   buildNotebookLabDatasetDescriptors,
   buildNotebookLabImportPlan,
   buildNotebookLabImportPlanFromSpec,
@@ -8105,6 +8106,34 @@ const handleNotebookDataLabActionEvent = async (event) => {
         lastPlotVariable: String(detail?.variableName || ''),
         lastPlotType: String(detail?.chartType || 'line'),
         lastPlotAt: new Date().toISOString(),
+      },
+    })
+    return
+  }
+  if (detail.action === 'analyze-variable' || detail.action === 'analyze-variable-writeback') {
+    const code = buildAnalysisCode({
+      method: String(detail?.method || 'corr_matrix'),
+      features: Array.isArray(detail?.features) ? detail.features : [],
+      target: String(detail?.target || ''),
+      group: String(detail?.group || ''),
+      color: String(detail?.color || ''),
+      timeIndex: String(detail?.timeIndex || ''),
+      primaryVariable: String(detail?.primaryVariable || detail?.variableName || ''),
+      title: String(detail?.title || ''),
+      options: detail?.options && typeof detail.options === 'object' ? detail.options : {},
+    })
+    await runNotebookLabGeneratedCode(targetCell, {
+      code,
+      source: 'data-lab-analysis',
+      dataset: {
+        variableName: String(detail?.variableName || detail?.primaryVariable || 'analysis'),
+        dataKind: 'analysis',
+      },
+      writeBack: detail.action === 'analyze-variable-writeback',
+      successMessage: '分析结果已生成',
+      labPatch: {
+        lastAnalysisMethod: String(detail?.method || ''),
+        lastAnalysisAt: new Date().toISOString(),
       },
     })
     return
