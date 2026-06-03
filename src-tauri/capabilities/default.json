@@ -9,6 +9,7 @@
     "knowledge_base_manager",
     "resource_repo_manager",
     "data-lab-*",
+    "math-lab-*",
     "app-*",
     "git-*",
     "markdown-manual",

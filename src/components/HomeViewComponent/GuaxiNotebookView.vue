@@ -4887,6 +4887,15 @@ watch(
   { immediate: true },
 )
 
+// 文件切换时，清理上一份文件的数学块会话状态，保证切回 / 重开时是新数据而非过时旧值。
+// （clearMathSessionState 在 setup 后段定义；watch 回调延迟执行，引用安全。）
+watch(() => props.filePath, (nextPath, prevPath) => {
+  const prev = String(prevPath || '').trim()
+  if (prev && prev !== String(nextPath || '').trim()) {
+    void clearMathSessionState(prev, 'file-change')
+  }
+})
+
 const isActiveNotebookPythonCell = (cell) => {
   if (cell?.type !== 'python') return false
   return String(cell?.key || '') === String(activeNotebookPythonCellKey.value || '')
@@ -6210,6 +6219,47 @@ const toggleMathWorkspacePanel = (cell) => {
     return
   }
   openMathWorkspacePanel(cell, 'toolbar-toggle')
+}
+
+// 文件关闭 / 切换时清理数学块在会话里的状态，保证下次加载是全新数据而不是过时旧值。
+// 设计说明：数学状态与 Python Cell 共用同一持久会话，但这里**只清理数学自己的键**
+// （__GUAXIMATH_WS__ / __GUAXIMATH_CARRIERS__ / __GUAXIMATH_CARRIER_SEQ__ / 暂存的 __gx_ode_sol_*），
+// 不动 Python Cell 的变量、也不丢弃整个会话——保持两套模块解耦。引擎模块与内联版本标记是代码不是数据，保留。
+const buildMathSessionClearCode = () => [
+  'for __mws_k in ("__GUAXIMATH_WS__", "__GUAXIMATH_CARRIERS__", "__GUAXIMATH_CARRIER_SEQ__"):',
+  '    globals().pop(__mws_k, None)',
+  'for __mws_n in [__mws_x for __mws_x in list(globals()) if __mws_x.startswith("__gx_ode_sol_")]:',
+  '    globals().pop(__mws_n, None)',
+  'globals().pop("__mws_k", None)',
+  'globals().pop("__mws_n", None)',
+].join('\n')
+
+const clearMathSessionState = async (filePath, reason = 'unknown') => {
+  const targetPath = String(filePath || '').trim()
+  // 先同步清空前端面板状态（与会话无关），让面板立即回到空态。
+  if (isNotebookMathWorkspacePanelVisible.value) closeMathWorkspacePanel(`clear:${reason}`)
+  mathWorkspaceStore.clear()
+  activeMathWorkspaceCellKey.value = ''
+  const sessionId = String(createPythonSessionId(targetPath) || '').trim()
+  if (!sessionId) return
+  try {
+    await invoke('python_exec', {
+      request: {
+        code: buildMathSessionClearCode(),
+        persist: true,
+        expect_json: false,
+        include_session_vars: false,
+        vars: { _guaxi_session: sessionId, _doc_path: targetPath },
+      },
+    })
+    logger.info('[NotebookMath] cleared math session state', { reason, sessionId, targetPath })
+  } catch (error) {
+    logger.warn('[NotebookMath] clear math session state failed', {
+      reason,
+      targetPath,
+      error: String(error?.message || error),
+    })
+  }
 }
 
 const NOTEBOOK_PYTHON_SESSION_BUSY_PREFIX = 'python-session::'
@@ -8456,6 +8506,8 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   clearNotebookTopToolbarHideTimer()
+  // 笔记本关闭时清理本文件的数学块会话状态（与 Python Cell 解耦，只清数学自己的键）。
+  void clearMathSessionState(props.filePath, 'unmount')
   if (notebookSearchIndexSyncTimer) {
     window.clearTimeout(notebookSearchIndexSyncTimer)
     notebookSearchIndexSyncTimer = 0
