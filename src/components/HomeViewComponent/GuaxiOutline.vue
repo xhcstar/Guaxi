@@ -2,7 +2,7 @@
     <div class="outline-panel">
         <label class="outline-search">
             <span>搜索</span>
-            <input v-model="outlineSearch" type="text" placeholder="搜索标题或 Python Cell" />
+            <input v-model="outlineSearch" type="text" placeholder="搜索标题、Python Cell 或 Math Cell" />
         </label>
         <div class="outline-scroll">
             <n-tree :data="filteredOutlineTree" key-field="id" label-field="text" :render-label="renderLabel"
@@ -103,19 +103,26 @@ const renderLabel = ({ option }) => {
     return h('span', {
         class: [
             'outline-label',
-            option.kind === 'python-cell' ? 'is-python-cell' : ''
+            option.kind === 'python-cell' ? 'is-python-cell' : '',
+            option.kind === 'math-cell' ? 'is-math-cell' : '',
         ],
         style: {
             fontWeight: option.level === 1 ? 'bold' : 'normal'
         }
-    }, option.kind === 'python-cell' ? `Python Cell · ${option.text}` : option.text)
+    }, option.kind === 'python-cell'
+        ? `Python Cell · ${option.text}`
+        : option.kind === 'math-cell'
+            ? `Math Cell · ${option.text}`
+            : option.text)
 }
 
 // 渲染前缀图标
 const renderPrefix = ({ option }) => {
-    // 你可以根据不同层级或类型自定义不同图标
     if (option.kind === 'python-cell') {
         return h(NIcon, null, { default: () => h(Code24Regular) })
+    }
+    if (option.kind === 'math-cell') {
+        return h(NIcon, null, { default: () => h('span', { class: 'outline-math-icon' }, 'Σ') })
     }
     if (option.level === 1) {
         return h(NIcon, null, { default: () => h(List24Filled) })
@@ -215,5 +222,15 @@ const handleExpandedKeysUpdate = (keys) => {
 
 :deep(.outline-label.is-python-cell) {
     color: color-mix(in srgb, var(--guaxi-text-primary, currentColor) 86%, #3b82f6 14%);
+}
+
+:deep(.outline-label.is-math-cell) {
+    color: color-mix(in srgb, var(--guaxi-text-primary, currentColor) 86%, #0891b2 14%);
+}
+
+.outline-math-icon {
+    font-weight: 700;
+    font-size: 14px;
+    color: #0891b2;
 }
 </style>

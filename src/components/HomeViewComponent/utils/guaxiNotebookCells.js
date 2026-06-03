@@ -5,6 +5,13 @@
   normalizePythonCellMeta,
   parsePythonCellBlocks,
 } from './guaxiPythonCellSyntax'
+import {
+  buildMathCellBlock,
+  buildMathCellReferenceBlock,
+  createMathCellId,
+  normalizeMathCellMeta,
+  parseMathCellBlocks,
+} from './guaxiMathCellSyntax'
 
 const NOTEBOOK_MARKDOWN_CELL_PREFIX = 'nb-md'
 const NOTEBOOK_PYTHON_CELL_PREFIX = 'nb-py'
@@ -33,15 +40,24 @@ export const createNotebookPythonCell = (options = {}) => {
   }
 }
 
-export const createNotebookMathCell = (expression = '', options = {}) => ({
-  type: 'math',
-  key: String(options.key || createStableId(NOTEBOOK_MATH_CELL_PREFIX)),
-  expression: String(expression || ''),
-  sourceType: ['fenced', 'bracket', 'dollar'].includes(String(options.sourceType || ''))
-    ? String(options.sourceType)
-    : 'dollar',
-  fenceLanguage: String(options.fenceLanguage || 'math').trim() || 'math',
-})
+export const createNotebookMathCell = (expression = '', options = {}) => {
+  const meta = normalizeMathCellMeta(options.meta || {})
+  const cell = {
+    type: 'math',
+    key: String(options.key || createStableId(NOTEBOOK_MATH_CELL_PREFIX)),
+    expression: String(expression || ''),
+    sourceType: ['fenced', 'bracket', 'dollar', 'marker'].includes(String(options.sourceType || ''))
+      ? String(options.sourceType)
+      : 'marker',
+    fenceLanguage: String(options.fenceLanguage || 'math').trim() || 'math',
+    meta,
+  }
+  // 保留 block 引用，用于 cellId 生成和位置追踪（marker 类型从 parseMathCellBlocks 获取）
+  if (options.block && typeof options.block === 'object') {
+    cell.block = options.block
+  }
+  return cell
+}
 
 export const normalizeNotebookCells = (cells = []) => {
   const normalized = []
@@ -73,11 +89,6 @@ const NOTEBOOK_FENCE_RE = /^\s*(`{3,}|~{3,})/
 const NOTEBOOK_ATX_HEADING_RE = /^\s{0,3}#{1,6}(?:\s+|$)/
 const NOTEBOOK_FRONTMATTER_RE = /^\s*---\s*$/
 const NOTEBOOK_FRONTMATTER_END_RE = /^\s*(---|\.\.\.)\s*$/
-const NOTEBOOK_MATH_FENCE_START_RE = /^\s*(`{3,}|~{3,})\s*(math|latex|tex)(?:\s+.*)?$/i
-const NOTEBOOK_DOLLAR_MATH_RE = /^\s*\$\$\s*$/
-const NOTEBOOK_BRACKET_MATH_START_RE = /^\s*\\\[\s*$/
-const NOTEBOOK_BRACKET_MATH_END_RE = /^\s*\\\]\s*$/
-
 const normalizeNotebookMarkdownText = (markdown = '') => String(markdown || '').replace(/\r\n?/g, '\n')
 
 const detectFenceState = (line, state) => {
@@ -225,55 +236,12 @@ const splitMarkdownIntoNotebookCells = (markdown = '', keyPrefix = 'chunk') => {
     pushMarkdownCellsFromSource(cells, source, `${keyPrefix}-${markdownStart}`)
   }
 
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = String(lines[index] || '')
-    const fenceMatch = line.match(NOTEBOOK_MATH_FENCE_START_RE)
-    if (fenceMatch) {
-      const fenceText = String(fenceMatch[1] || '')
-      const fenceChar = fenceText[0] || '`'
-      const fenceLength = fenceText.length
-      let endIndex = -1
-      for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
-        const closeLine = String(lines[cursor] || '').trim()
-        if (closeLine.startsWith(fenceChar.repeat(fenceLength))) {
-          endIndex = cursor
-          break
-        }
-      }
-      if (endIndex < 0) continue
-      flushMarkdown(index)
-      cells.push(createNotebookMathCell(lines.slice(index + 1, endIndex).join('\n'), {
-        key: `${NOTEBOOK_MATH_CELL_PREFIX}-${keyPrefix}-${index}`,
-        sourceType: 'fenced',
-        fenceLanguage: String(fenceMatch[2] || 'math').toLowerCase(),
-      }))
-      index = endIndex
-      markdownStart = endIndex + 1
-      continue
-    }
-
-    const isDollarMath = NOTEBOOK_DOLLAR_MATH_RE.test(line)
-    const isBracketMath = NOTEBOOK_BRACKET_MATH_START_RE.test(line)
-    if (!isDollarMath && !isBracketMath) continue
-
-    const endRe = isDollarMath ? NOTEBOOK_DOLLAR_MATH_RE : NOTEBOOK_BRACKET_MATH_END_RE
-    let endIndex = -1
-    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
-      if (endRe.test(String(lines[cursor] || ''))) {
-        endIndex = cursor
-        break
-      }
-    }
-    if (endIndex < 0) continue
-
-    flushMarkdown(index)
-    cells.push(createNotebookMathCell(lines.slice(index + 1, endIndex).join('\n'), {
-      key: `${NOTEBOOK_MATH_CELL_PREFIX}-${keyPrefix}-${index}`,
-      sourceType: isDollarMath ? 'dollar' : 'bracket',
-    }))
-    index = endIndex
-    markdownStart = endIndex + 1
-  }
+  // 设计说明：
+  // 1. $$...$$ / \[...\] / ```math 代码块不再自动创建 math cell，
+  //    而是作为普通 Markdown 内容保留在 markdown cell 中。
+  // 2. Math cell 现在只能通过 <!--math-->...<!--/math--> 注释语法显式创建。
+  // 3. splitMarkdownIntoNotebookCells 只负责按标题/段落切分 markdown cell，
+  //    不再负责检测数学块。
 
   flushMarkdown(lines.length)
   return cells
@@ -317,6 +285,18 @@ export const serializeNotebookCells = (cells = []) => {
     }
     if (cell.type === 'math') {
       const expression = String(cell.expression || '').replace(/\r\n?/g, '\n')
+      // 设计说明：
+      // 1. marker 类型使用 <!--math-->...<!--/math--> 注释语法序列化，
+      //    与 Python Cell 的 <!--py--> 语法对称。
+      // 2. Math 表达式通常较短，直接在 Markdown 中内联存储，
+      //    避免模式切换时依赖 sidecar 导致表达式丢失。
+      // 3. 旧式 fenced / bracket / dollar 序列化保留作为降级路径。
+      if (cell.sourceType === 'marker') {
+        return buildMathCellBlock({
+          expression,
+          meta: cell.meta || {},
+        })
+      }
       if (cell.sourceType === 'fenced') {
         const lang = String(cell.fenceLanguage || 'math').trim() || 'math'
         return `\`\`\`${lang}\n${expression}\n\`\`\``
@@ -335,37 +315,61 @@ export const serializeNotebookCells = (cells = []) => {
 export const createNotebookCellsFromMarkdown = (markdown = '', { filePath = '' } = {}) => {
   const text = String(markdown || '').replace(/\r\n?/g, '\n')
   const lines = text.split('\n')
-  const blocks = parsePythonCellBlocks(text)
+
+  // 设计说明：
+  // 1. 同时解析 Python Cell（<!--py-->）和 Math Cell（<!--math-->）标记块。
+  // 2. 合并后按行号排序，逐一插入 cells 数组；块之间的 Markdown 文本拆分为 markdown cells。
+  // 3. $$、\[、```math 不再被识别为 math cell —— 它们现在作为普通 Markdown 内容保留。
+  const pyBlocks = parsePythonCellBlocks(text)
+  const mathBlocks = parseMathCellBlocks(text)
+
+  const allBlocks = [
+    ...pyBlocks.map((b) => ({ ...b, blockType: 'python' })),
+    ...mathBlocks.map((b) => ({ ...b, blockType: 'math' })),
+  ].sort((a, b) => a.startLine - b.startLine)
+
   const cells = []
   let cursor = 0
 
-  blocks.forEach((block, index) => {
+  allBlocks.forEach((block) => {
     const startIndex = Math.max(0, Number(block.startLine || 1) - 1)
     const endExclusive = Math.max(startIndex, Number(block.endLine || startIndex + 1))
-    const leading = lines.slice(cursor, startIndex).join('\n')
 
-    const leadingCells = splitMarkdownIntoNotebookCells(leading, `${index}-${cursor}`)
+    // 跳过已被前一个块覆盖的区域（理论上不应重叠，但做防护）
+    if (startIndex < cursor) return
+
+    const leading = lines.slice(cursor, startIndex).join('\n')
+    const leadingCells = splitMarkdownIntoNotebookCells(leading, `${block.blockType}-${cursor}`)
     if (leadingCells.length) {
       cells.push(...leadingCells)
     } else if (!cells.length) {
       cells.push(createNotebookMarkdownCell('', {
-        key: `${NOTEBOOK_MARKDOWN_CELL_PREFIX}-${index}-${cursor}-empty`,
+        key: `${NOTEBOOK_MARKDOWN_CELL_PREFIX}-${block.blockType}-${cursor}-empty`,
       }))
     }
 
-    const meta = normalizePythonCellMeta(block.meta || {})
-    if (!meta.id) {
-      meta.id = createPythonCellStableId()
+    if (block.blockType === 'python') {
+      const meta = normalizePythonCellMeta(block.meta || {})
+      if (!meta.id) {
+        meta.id = createPythonCellStableId()
+      }
+      cells.push({
+        type: 'python',
+        key: String(meta.id),
+        code: String(block.code || ''),
+        meta,
+        block,
+        cellId: createPythonCellId(filePath, { ...block, meta }),
+      })
+    } else if (block.blockType === 'math') {
+      const meta = normalizeMathCellMeta(block.meta || {})
+      cells.push(createNotebookMathCell(block.expression || '', {
+        key: `${NOTEBOOK_MATH_CELL_PREFIX}-${block.blockType}-${startIndex}`,
+        sourceType: 'marker',
+        meta,
+        block,
+      }))
     }
-
-    cells.push({
-      type: 'python',
-      key: String(meta.id),
-      code: String(block.code || ''),
-      meta,
-      block,
-      cellId: createPythonCellId(filePath, { ...block, meta }),
-    })
 
     cursor = endExclusive
   })
@@ -374,29 +378,35 @@ export const createNotebookCellsFromMarkdown = (markdown = '', { filePath = '' }
   const trailingCells = splitMarkdownIntoNotebookCells(trailing, `tail-${cursor}`)
   if (trailingCells.length) {
     cells.push(...trailingCells)
-  } else if (!cells.length || cells[cells.length - 1]?.type === 'python') {
+  } else if (!cells.length || (cells[cells.length - 1]?.type !== 'markdown')) {
     cells.push(createNotebookMarkdownCell('', {
       key: `${NOTEBOOK_MARKDOWN_CELL_PREFIX}-tail-${cursor}-empty`,
     }))
   }
 
   return normalizeNotebookCells(cells).map((cell, index) => {
-    if (cell.type !== 'python') {
+    if (cell.type === 'python') {
+      const block = parsePythonCellBlocks(serializeNotebookCells([cell]))[0] || null
       return {
         ...cell,
         index,
+        block,
+        cellId: createPythonCellId(filePath, {
+          ...(block || {}),
+          meta: cell.meta,
+        }),
       }
     }
-
-    const block = parsePythonCellBlocks(serializeNotebookCells([cell]))[0] || null
+    if (cell.type === 'math') {
+      return {
+        ...cell,
+        index,
+        cellId: createMathCellId(filePath, cell.block || {}),
+      }
+    }
     return {
       ...cell,
       index,
-      block,
-      cellId: createPythonCellId(filePath, {
-        ...(block || {}),
-        meta: cell.meta,
-      }),
     }
   })
 }

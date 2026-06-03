@@ -840,6 +840,9 @@ import {
   replacePythonCellBlock,
 } from './utils/guaxiPythonCellSyntax'
 import {
+  maskMathCellBlocksForMarkdown,
+} from './utils/guaxiMathCellSyntax'
+import {
   appendPythonCellOutputModules,
   buildPythonCellOutputModules,
   createPythonCellOutputModule,
@@ -1676,6 +1679,9 @@ const cloneNotebookCellsForHistory = (cells = []) => {
         key: cell?.key,
         sourceType: cell?.sourceType,
         fenceLanguage: cell?.fenceLanguage,
+        meta: {
+          ...(cell.meta || {}),
+        },
       })
     }
     return createNotebookMarkdownCell(String(cell?.content || ''), { key: cell?.key })
@@ -1705,8 +1711,9 @@ const serializeNotebookCellsForSidecar = (cells = []) => {
         type: 'math',
         key: String(cell?.key || ''),
         expression: String(cell?.expression || ''),
-        sourceType: String(cell?.sourceType || 'dollar'),
+        sourceType: String(cell?.sourceType || 'marker'),
         fenceLanguage: String(cell?.fenceLanguage || 'math'),
+        meta: cell?.meta && typeof cell.meta === 'object' ? { ...cell.meta } : {},
         relation,
       }
     }
@@ -2276,10 +2283,22 @@ const notebookOutlineEntries = computed(() => {
       continue
     }
 
+    if (cell?.type === 'math') {
+      result.push({
+        level: 2,
+        text: getMathCellOutlineTitle(cell),
+        line: baseLine,
+        cellKey,
+        outlineId: `nb-outline-math-${cellKey}`,
+        kind: 'math-cell',
+      })
+      continue
+    }
+
     if (cell?.type !== 'markdown') continue
 
     const content = String(cell.content || '')
-    const outlineSource = maskPythonCellBlocksForMarkdown(content)
+    const outlineSource = maskMathCellBlocksForMarkdown(maskPythonCellBlocksForMarkdown(content))
     const tokens = notebookOutlineMarkdownParser.parse(outlineSource, {})
     let cellHeadingIndex = 0
 
@@ -3560,6 +3579,21 @@ const getPythonCellOutlineTitle = (cell) => {
   return summary === '空 Python Cell' ? 'Python Cell' : `Python · ${summary}`
 }
 
+const getMathCellExpressionSummary = (cell) => {
+  const lines = String(cell?.expression || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+  return lines[0] || '空 Math Cell'
+}
+
+const getMathCellOutlineTitle = (cell) => {
+  const title = String(cell?.meta?.title || '').trim()
+  if (title) return title
+  const summary = getMathCellExpressionSummary(cell)
+  return summary === '空 Math Cell' ? 'Math Cell' : `Math · ${summary}`
+}
+
 const jumpToNotebookOutlineLine = (line, options = {}) => {
   const targetLine = Number(line)
   if (!Number.isFinite(targetLine) || targetLine <= 0) {
@@ -4205,7 +4239,7 @@ const extractNotebookLinkCardExcerpt = (content = '') => {
   return '打开关联内容'
 }
 const buildNotebookLinkCardTitle = (content, absPath, fallbackText = '') => {
-  const heading = maskPythonCellBlocksForMarkdown(content).match(/^\s{0,3}#{1,6}\s+(.+)$/m)
+  const heading = maskMathCellBlocksForMarkdown(maskPythonCellBlocksForMarkdown(content)).match(/^\s{0,3}#{1,6}\s+(.+)$/m)
   if (heading?.[1]) {
     return String(heading[1] || '').replace(/\s+#+\s*$/, '').trim()
   }
