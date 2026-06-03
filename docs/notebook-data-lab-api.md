@@ -54,6 +54,28 @@
 > `format: "auto"` 会让 Python 运行时按文件扩展名 / URL / 内容自动推断；旧的 `import-file` /
 > `import-url` / `import-clipboard` 即等价于带 `auto` 的 Import Spec。
 
+### 数据导出（Export Spec，工作台内执行）
+
+导出与导入对称，但**不经 RPC 桥**：导出向导在数据工作台会话内直接执行（`runWorkbenchExportSpec` →
+`buildExportCode(spec)` → `python_exec`），向导用保存对话框解析 `target.path` 后即落盘 / 写库 / 跑脚本。
+
+Export Spec 字段：
+
+```jsonc
+{
+  "format": "csv|tsv|excel|parquet|feather|json|jsonl|markdown|html|database|custom",
+  "variableName": "要导出的会话变量",
+  "target": {
+    "path": "输出文件路径",
+    "connStr": "数据库连接串", "table": "目标表名",
+    "scriptText": "def dump(value, target): ...", "scriptPath": "/path/to/dumper.py", "entry": "dump"
+  },
+  "options": { "encoding": "utf-8-sig", "sep": ",", "index": false, "sheet": "Sheet1", "orient": "records", "indent": 2, "ifExists": "fail|replace|append" }
+}
+```
+
+自定义导出脚本约定 `def dump(value, target)`，`target` 暴露 `.path` 与 `.write_bytes()/.write_text()`。
+
 ### Dataset Descriptor（导入结果记账）
 
 导入成功后会写入 Cell 的 lab 导入记录，结构如下，便于后续“重新导入”与结构分析：

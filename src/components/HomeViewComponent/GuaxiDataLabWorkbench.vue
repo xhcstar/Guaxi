@@ -400,15 +400,15 @@
           <section v-else-if="activeTab === 'export'" class="data-workbench__panel">
             <div class="data-workbench__operation-grid">
               <button
-                v-for="item in exportFormats"
+                v-for="item in exportOptions"
                 :key="item.value"
                 type="button"
                 class="data-workbench__operation-card"
-                @click="exportVariable(item.value)"
+                @click="requestExportOption(item)"
               >
-                <Icon :icon="downloadIcon" width="20" height="20" />
+                <Icon :icon="item.icon" width="20" height="20" />
                 <strong>{{ item.label }}</strong>
-                <span>.{{ item.extensions[0] }}</span>
+                <span>{{ item.summary }}</span>
               </button>
             </div>
           </section>
@@ -495,6 +495,14 @@
       :category="importDialogCategory"
       @confirm="handleImportConfirm"
     />
+
+    <GuaxiDataExportDialog
+      v-model:open="exportDialogOpen"
+      :session-id="context.sessionId"
+      :variable-name="activeVariableName"
+      :category="exportDialogCategory"
+      @confirm="handleExportConfirm"
+    />
   </main>
 </template>
 
@@ -538,16 +546,16 @@ import { useRoute } from 'vue-router'
 import { createLogger } from '../../utils/logger'
 import GuaxiWorkbenchCombobox from './GuaxiWorkbenchCombobox.vue'
 import GuaxiDataImportDialog from './GuaxiDataImportDialog.vue'
+import GuaxiDataExportDialog from './GuaxiDataExportDialog.vue'
 import {
   WORKBENCH_CHART_TYPES,
-  WORKBENCH_SUPPORTED_EXPORTS,
   DATA_LAB_SESSION_VARS_UPDATED_EVENT,
   applyWorkbenchEdits,
   emitWorkbenchImportSource,
   emitWorkbenchNotebookAction,
   emitWorkbenchVariableUpdated,
   fetchWorkbenchSessionVariables,
-  exportWorkbenchVariable,
+  runWorkbenchExportSpec,
   fetchWorkbenchVariableSnapshot,
   parseWorkbenchRouteQuery,
   requestNotebookInspectorRefresh,
@@ -586,7 +594,14 @@ const expandedStructurePaths = ref(new Set(['value']))
 const structurePan = reactive({ x: 36, y: 34, scale: 1 })
 const structureDrag = reactive({ active: false, startX: 0, startY: 0, originX: 0, originY: 0 })
 const chartTypes = WORKBENCH_CHART_TYPES
-const exportFormats = WORKBENCH_SUPPORTED_EXPORTS
+// 设计说明：导出入口与导入对称，按目标分类（文件 / 数据库 / 自定义脚本）打开统一导出向导。
+const exportOptions = [
+  { label: '文件', value: 'file', summary: 'CSV / Excel / Parquet / JSON / Markdown', icon: downloadIcon },
+  { label: '数据库', value: 'database', summary: '写入 SQL 数据表', icon: databaseIcon },
+  { label: '自定义脚本', value: 'script', summary: '私有协议 / 二进制格式', icon: codeIcon },
+]
+const exportDialogOpen = ref(false)
+const exportDialogCategory = ref('file')
 // 设计说明：导入入口按数据来源分类（标准结构化 / 半结构化 / 私有格式），
 // 每张卡片打开统一的导入向导（GuaxiDataImportDialog），由向导完成格式选择、配置、探测与确认。
 const importOptions = [
@@ -1379,18 +1394,30 @@ const saveEdits = async (saveAsNew = false) => {
   }
 }
 
-const exportVariable = async (format) => {
+// 设计说明：导出与导入对称，入口卡片打开统一导出向导，向导按 EXPORT_FORMATS 渲染配置，
+// 确认后通过 runWorkbenchExportSpec 在本会话直接落盘 / 写库 / 跑脚本。
+const requestExportOption = (item) => {
+  if (!activeVariableName.value) {
+    message.warning('请先选择要导出的变量')
+    return
+  }
+  const value = String(item?.value || '') || 'file'
+  logger.info('[DataWorkbench] open export dialog', { value, variableName: activeVariableName.value })
+  exportDialogCategory.value = value
+  exportDialogOpen.value = true
+}
+
+const handleExportConfirm = async (spec) => {
   try {
-    const outputPath = await exportWorkbenchVariable({
-      sessionId: context.sessionId,
-      variableName: activeVariableName.value,
-      format,
+    const result = await runWorkbenchExportSpec({ sessionId: context.sessionId, spec })
+    logger.info('[DataWorkbench] export done', {
+      format: spec?.format,
+      variableName: spec?.variableName,
+      outputPath: result?.outputPath || '',
     })
-    if (outputPath) {
-      message.success('变量已导出')
-    }
+    message.success(result?.outputPath ? `已导出到 ${result.outputPath}` : '变量已导出')
   } catch (error) {
-    logger.error('[DataWorkbench] export failed', { error: String(error?.message || error), format })
+    logger.error('[DataWorkbench] export failed', { error: String(error?.message || error), format: spec?.format })
     message.error(`导出失败：${String(error?.message || error)}`)
   }
 }

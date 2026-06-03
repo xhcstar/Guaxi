@@ -6,7 +6,10 @@ import {
   NOTEBOOK_LAB_CHART_TYPES,
   buildNotebookLabPlotCode,
   buildImportProbeCode,
+  buildExportCode,
   normalizeImportSpec,
+  normalizeExportSpec,
+  getExportFormat,
 } from './guaxiNotebookDataLab'
 
 const logger = createLogger('GuaxiDataLabWorkbenchClient')
@@ -388,56 +391,48 @@ export const emitWorkbenchVariableUpdated = async ({
   logger.info('[DataLabWorkbenchClient] emitted variable updated event', payload)
 }
 
+// 按完整 Export Spec 在当前会话直接执行导出（落盘 / 写库 / 自定义脚本）。
+// target.path 等已由导出向导（含 save 对话框）解析好，这里只负责执行并回传结果。
+export const runWorkbenchExportSpec = async ({ sessionId = '', spec = {} } = {}) => {
+  const normalizedSpec = normalizeExportSpec(spec)
+  const code = buildExportCode(normalizedSpec)
+  const response = await runWorkbenchPython(sessionId, code, {
+    includeSessionVars: false,
+    vars: {
+      _guaxi_data_workbench: 'export',
+    },
+  })
+  const result = extractGuaxiResult(response)
+  logger.info('[DataLabWorkbenchClient] exported variable via spec', {
+    sessionId,
+    variableName: normalizedSpec.variableName,
+    format: normalizedSpec.format,
+    outputPath: result?.outputPath || '',
+  })
+  return result && typeof result === 'object' ? result : { outputPath: normalizedSpec.target.path || '', format: normalizedSpec.format }
+}
+
+// 旧的一键导出（CSV/Excel/JSON）：保留入口，先弹保存对话框再委托统一执行器。
 export const exportWorkbenchVariable = async ({
   sessionId = '',
   variableName = '',
   format = 'csv',
 } = {}) => {
   const normalizedFormat = normalizeText(format || 'csv').toLowerCase()
-  const exportSpec = WORKBENCH_SUPPORTED_EXPORTS.find((item) => item.value === normalizedFormat) || WORKBENCH_SUPPORTED_EXPORTS[0]
+  const formatSpec = getExportFormat(normalizedFormat === 'xlsx' ? 'excel' : normalizedFormat)
+  const ext = formatSpec?.ext?.[0] || (normalizedFormat === 'xlsx' ? 'xlsx' : normalizedFormat)
   const outputPath = await save({
-    defaultPath: `${normalizeText(variableName) || 'guaxi_data'}.${exportSpec.extensions[0]}`,
-    filters: [{
-      name: exportSpec.name || exportSpec.label || String(exportSpec.value || 'Data').toUpperCase(),
-      extensions: exportSpec.extensions,
-    }],
+    defaultPath: `${normalizeText(variableName) || 'guaxi_data'}.${ext}`,
+    filters: [{ name: String(formatSpec?.label || ext).toUpperCase(), extensions: [ext] }],
   })
   if (!outputPath) return null
 
-  const code = [
-    'import json',
-    'from pathlib import Path',
-    'try:',
-    '    import pandas as pd',
-    'except Exception:',
-    '    pd = None',
-    `__guaxi_name = ${JSON.stringify(normalizeText(variableName))}`,
-    `__guaxi_output = ${JSON.stringify(String(outputPath || ''))}`,
-    `__guaxi_format = ${JSON.stringify(normalizedFormat)}`,
-    'if __guaxi_name not in globals():',
-    '    raise KeyError(f"变量不存在: {__guaxi_name}")',
-    '__guaxi_value = globals()[__guaxi_name]',
-    'Path(__guaxi_output).parent.mkdir(parents=True, exist_ok=True)',
-    'if pd is not None and isinstance(__guaxi_value, pd.Series):',
-    '    __guaxi_value = __guaxi_value.to_frame(name=str(__guaxi_value.name or "value"))',
-    'if pd is not None and isinstance(__guaxi_value, pd.DataFrame):',
-    '    if __guaxi_format == "xlsx":',
-    '        __guaxi_value.to_excel(__guaxi_output, index=False)',
-    '    elif __guaxi_format == "json":',
-    '        __guaxi_value.to_json(__guaxi_output, orient="records", force_ascii=False, indent=2)',
-    '    else:',
-    '        __guaxi_value.to_csv(__guaxi_output, index=False, encoding="utf-8-sig")',
-    'else:',
-    '    with open(__guaxi_output, "w", encoding="utf-8") as __guaxi_f:',
-    '        json.dump(__guaxi_value, __guaxi_f, ensure_ascii=False, indent=2, default=str)',
-    'print(f"[GuaxiDataWorkbench] exported variable={__guaxi_name} path={__guaxi_output} format={__guaxi_format}")',
-    '_result = {"outputPath": __guaxi_output, "format": __guaxi_format}',
-  ].join('\n')
-
-  await runWorkbenchPython(sessionId, code, {
-    includeSessionVars: false,
-    vars: {
-      _guaxi_data_workbench: 'export',
+  await runWorkbenchExportSpec({
+    sessionId,
+    spec: {
+      format: formatSpec?.id || (normalizedFormat === 'xlsx' ? 'excel' : normalizedFormat),
+      variableName: normalizeText(variableName),
+      target: { path: String(outputPath || '') },
     },
   })
   logger.info('[DataLabWorkbenchClient] exported variable', { sessionId, variableName, format: normalizedFormat, outputPath })

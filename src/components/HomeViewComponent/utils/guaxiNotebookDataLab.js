@@ -875,6 +875,276 @@ export const buildImportProbeCode = (spec = {}) => `${buildSpecHeaderPy(spec)}\n
 // 生成统一导入代码：按 Import Spec 解析并写入会话变量。
 export const buildImportCode = (spec = {}) => `${buildSpecHeaderPy(spec)}\n${IMPORT_RUNTIME_PY}`
 
+// ============================================================================
+// 统一数据导出抽象（Export Spec）—— 与导入对称：声明式注册表驱动 UI + Python 代码生成。
+// 导出直接在工作台会话执行（不经 Notebook），向导确认即落盘/写库。
+// ============================================================================
+
+export const EXPORT_CATEGORIES = [
+  { id: 'file', label: '文件', icon: 'file', summary: 'CSV / Excel / Parquet / JSON / Markdown / HTML' },
+  { id: 'database', label: '数据库', icon: 'database', summary: '写入 SQL 数据表' },
+  { id: 'script', label: '自定义脚本', icon: 'code', summary: '私有协议 / 二进制 / 自定义序列化' },
+]
+
+const EXPORT_INDEX_FIELD = {
+  key: 'options.index',
+  label: '行索引',
+  type: 'select',
+  default: 'false',
+  options: [{ value: 'false', label: '不含' }, { value: 'true', label: '包含' }],
+}
+const EXPORT_ORIENT_OPTIONS = ['records', 'columns', 'index', 'split', 'values', 'table'].map((value) => ({ value, label: value }))
+const EXPORT_IF_EXISTS_OPTIONS = [
+  { value: 'fail', label: '已存在则报错' },
+  { value: 'replace', label: '覆盖重建' },
+  { value: 'append', label: '追加' },
+]
+const exportSaveField = (ext) => ({ key: 'target.path', label: '导出到', type: 'save', ext, required: true })
+
+export const EXPORT_FORMATS = [
+  {
+    id: 'csv', category: 'file', label: 'CSV', ext: ['csv'],
+    fields: [
+      exportSaveField(['csv']),
+      { key: 'options.encoding', label: '编码', type: 'text', placeholder: '默认 utf-8-sig' },
+      { key: 'options.sep', label: '分隔符', type: 'text', placeholder: '默认逗号；\\t 表示制表符' },
+      EXPORT_INDEX_FIELD,
+    ],
+  },
+  { id: 'tsv', category: 'file', label: 'TSV', ext: ['tsv'], fields: [exportSaveField(['tsv']), EXPORT_INDEX_FIELD] },
+  {
+    id: 'excel', category: 'file', label: 'Excel', ext: ['xlsx'],
+    fields: [
+      exportSaveField(['xlsx']),
+      { key: 'options.sheet', label: '工作表名', type: 'text', default: 'Sheet1' },
+      EXPORT_INDEX_FIELD,
+    ],
+  },
+  { id: 'parquet', category: 'file', label: 'Parquet', ext: ['parquet'], fields: [exportSaveField(['parquet'])] },
+  { id: 'feather', category: 'file', label: 'Feather', ext: ['feather'], fields: [exportSaveField(['feather'])] },
+  {
+    id: 'json', category: 'file', label: 'JSON', ext: ['json'],
+    fields: [
+      exportSaveField(['json']),
+      { key: 'options.orient', label: '结构(orient)', type: 'select', default: 'records', options: EXPORT_ORIENT_OPTIONS },
+      { key: 'options.indent', label: '缩进', type: 'number', default: 2 },
+    ],
+  },
+  { id: 'jsonl', category: 'file', label: 'JSON Lines', ext: ['jsonl'], fields: [exportSaveField(['jsonl'])] },
+  { id: 'markdown', category: 'file', label: 'Markdown 表格', ext: ['md'], fields: [exportSaveField(['md']), EXPORT_INDEX_FIELD] },
+  { id: 'html', category: 'file', label: 'HTML 表格', ext: ['html'], fields: [exportSaveField(['html']), EXPORT_INDEX_FIELD] },
+  {
+    id: 'database', category: 'database', label: '数据库表',
+    fields: [
+      { key: 'target.connStr', label: '连接串', type: 'text', required: true, placeholder: 'sqlite:///路径 或 postgresql+psycopg2://user:pwd@host/db' },
+      { key: 'target.table', label: '目标表名', type: 'text', required: true },
+      { key: 'options.ifExists', label: '已存在', type: 'select', default: 'fail', options: EXPORT_IF_EXISTS_OPTIONS },
+      EXPORT_INDEX_FIELD,
+    ],
+  },
+  {
+    id: 'custom', category: 'script', label: '自定义脚本',
+    fields: [
+      { key: 'target.scriptText', label: '脚本（内联）', type: 'code', placeholder: 'def dump(value, target):\n    # 写出私有 / 二进制格式\n    target.write_bytes(serialize(value))' },
+      { key: 'target.scriptPath', label: '或脚本文件', type: 'file', accept: ['py'] },
+      { key: 'target.entry', label: '入口函数', type: 'text', default: 'dump' },
+      { key: 'target.path', label: '输出路径（可选）', type: 'save', ext: [] },
+    ],
+  },
+]
+
+export const getExportFormatsByCategory = (category) => {
+  const id = normalizeText(category)
+  return EXPORT_FORMATS.filter((item) => item.category === id)
+}
+
+export const getExportFormat = (formatId) => {
+  const id = normalizeText(formatId)
+  return EXPORT_FORMATS.find((item) => item.id === id) || null
+}
+
+export const normalizeExportSpec = (spec = {}) => {
+  const input = spec && typeof spec === 'object' ? spec : {}
+  const target = input.target && typeof input.target === 'object' ? { ...input.target } : {}
+  const options = input.options && typeof input.options === 'object' ? { ...input.options } : {}
+  const format = normalizeText(input.format) || 'csv'
+  const variableName = normalizeText(input.variableName)
+  return { format, variableName, target, options }
+}
+
+// 统一导出执行：读取会话变量，按 Export Spec 落盘 / 写库 / 跑自定义脚本；包在函数里避免泄漏。
+const EXPORT_RUNTIME_PY = String.raw`
+def __guaxi_run_export():
+    import json
+    spec = __guaxi_export_spec
+    fmt = str(spec.get('format') or 'csv')
+    var = str(spec.get('variableName') or '')
+    tgt = spec.get('target') or {}
+    opt = spec.get('options') or {}
+    if not var or var not in globals():
+        raise KeyError('变量不存在: ' + var)
+    value = globals()[var]
+    try:
+        import pandas as pd
+    except Exception:
+        pd = None
+
+    def truthy(x, default=False):
+        if x is None or x == '':
+            return default
+        return str(x).strip().lower() in ('1', 'true', 'yes', 't', 'y', '是')
+
+    def as_frame(v):
+        if pd is None:
+            return None
+        if isinstance(v, pd.DataFrame):
+            return v
+        if isinstance(v, pd.Series):
+            return v.to_frame(name=str(v.name or 'value'))
+        try:
+            return pd.DataFrame(v)
+        except Exception:
+            return None
+
+    def need_frame():
+        df = as_frame(value)
+        if df is None:
+            raise TypeError('当前变量无法导出为表格，请改用 JSON 或自定义脚本')
+        return df
+
+    path = str(tgt.get('path') or '')
+    if path:
+        from pathlib import Path
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+    index = truthy(opt.get('index'), False)
+    enc = str(opt.get('encoding') or 'utf-8-sig')
+    out = path
+
+    if fmt in ('csv', 'tsv'):
+        if not path:
+            raise ValueError('请提供导出路径')
+        sep = opt.get('sep')
+        if not sep:
+            sep = '\t' if fmt == 'tsv' else ','
+        elif sep == '\\t':
+            sep = '\t'
+        need_frame().to_csv(path, index=index, sep=sep, encoding=enc)
+    elif fmt == 'excel':
+        if not path:
+            raise ValueError('请提供导出路径')
+        need_frame().to_excel(path, index=index, sheet_name=str(opt.get('sheet') or 'Sheet1'))
+    elif fmt == 'parquet':
+        if not path:
+            raise ValueError('请提供导出路径')
+        need_frame().to_parquet(path)
+    elif fmt == 'feather':
+        if not path:
+            raise ValueError('请提供导出路径')
+        need_frame().reset_index(drop=True).to_feather(path)
+    elif fmt == 'json':
+        if not path:
+            raise ValueError('请提供导出路径')
+        try:
+            indent = int(opt.get('indent') or 2)
+        except Exception:
+            indent = 2
+        df = as_frame(value)
+        if df is not None and not isinstance(value, (dict, list)):
+            df.to_json(path, orient=str(opt.get('orient') or 'records'), force_ascii=False, indent=indent)
+        else:
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(value, f, ensure_ascii=False, indent=indent, default=str)
+    elif fmt == 'jsonl':
+        if not path:
+            raise ValueError('请提供导出路径')
+        need_frame().to_json(path, orient='records', lines=True, force_ascii=False)
+    elif fmt == 'markdown':
+        if not path:
+            raise ValueError('请提供导出路径')
+        df = need_frame()
+        try:
+            text = df.to_markdown(index=index)
+        except Exception:
+            cols = [str(c) for c in df.columns]
+            lines = ['| ' + ' | '.join(cols) + ' |', '| ' + ' | '.join(['---'] * len(cols)) + ' |']
+            for _, row in df.iterrows():
+                lines.append('| ' + ' | '.join(str(x) for x in row.tolist()) + ' |')
+            text = '\n'.join(lines)
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(text)
+    elif fmt == 'html':
+        if not path:
+            raise ValueError('请提供导出路径')
+        need_frame().to_html(path, index=index)
+    elif fmt == 'database':
+        conn_str = str(tgt.get('connStr') or '')
+        table = str(tgt.get('table') or '')
+        if not conn_str or not table:
+            raise ValueError('请提供数据库连接串与目标表名')
+        from sqlalchemy import create_engine
+        eng = create_engine(conn_str)
+        try:
+            need_frame().to_sql(table, eng, if_exists=str(opt.get('ifExists') or 'fail'), index=index)
+        finally:
+            eng.dispose()
+        out = conn_str + ' :: ' + table
+    elif fmt == 'custom':
+        code = str(tgt.get('scriptText') or '')
+        spath = str(tgt.get('scriptPath') or '')
+        if not code.strip() and spath:
+            from pathlib import Path
+            code = Path(spath).read_text(encoding='utf-8')
+        if not code.strip():
+            raise ValueError('请提供导出脚本内容或脚本文件')
+        entry = str(tgt.get('entry') or 'dump') or 'dump'
+
+        class TargetCtx:
+            def __init__(self):
+                self.path = path
+                self.options = opt
+                self.target = tgt
+
+            def write_bytes(self, b):
+                from pathlib import Path
+                if not self.path:
+                    raise ValueError('请提供输出路径')
+                Path(self.path).parent.mkdir(parents=True, exist_ok=True)
+                Path(self.path).write_bytes(b)
+                return self.path
+
+            def write_text(self, t, encoding='utf-8'):
+                from pathlib import Path
+                if not self.path:
+                    raise ValueError('请提供输出路径')
+                Path(self.path).parent.mkdir(parents=True, exist_ok=True)
+                Path(self.path).write_text(t, encoding=encoding)
+                return self.path
+
+        ns = {}
+        exec(code, ns)
+        fn = ns.get(entry)
+        if not callable(fn):
+            raise ValueError('脚本中未找到入口函数 ' + entry + '(value, target)')
+        ret = fn(value, TargetCtx())
+        out = str(ret) if ret else (path or 'custom')
+    else:
+        raise ValueError('Unsupported export format: ' + fmt)
+    return out
+
+
+__guaxi_export_out = __guaxi_run_export()
+print('[GuaxiNotebookLab] exported var=' + str(__guaxi_export_spec.get('variableName')) + ' format=' + str(__guaxi_export_spec.get('format')) + ' target=' + str(__guaxi_export_out))
+_result = {'outputPath': __guaxi_export_out, 'format': __guaxi_export_spec.get('format')}
+`
+
+const buildExportHeaderPy = (spec) => [
+  'import json',
+  `__guaxi_export_spec = json.loads(${JSON.stringify(JSON.stringify(normalizeExportSpec(spec)))})`,
+].join('\n')
+
+// 生成统一导出代码：按 Export Spec 把会话变量落盘 / 写库 / 跑脚本。
+export const buildExportCode = (spec = {}) => `${buildExportHeaderPy(spec)}\n${EXPORT_RUNTIME_PY}`
+
 export const buildNotebookLabImportPlan = ({
   sourceType = 'file',
   sourcePath = '',
