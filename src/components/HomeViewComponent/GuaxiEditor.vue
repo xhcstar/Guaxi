@@ -17762,7 +17762,7 @@ const previewModeOptions = [
   { label: '编辑模式 (Ctrl+1)', key: 'edit', icon: () => h(Icon, { icon: filePenLineIcon, width: 16, height: 16 }) },
   { label: '预览模式 (Ctrl+2)', key: 'preview', icon: () => h(Icon, { icon: eyeIcon, width: 16, height: 16 }) },
   { label: '分屏预览 (Ctrl+3)', key: 'split', icon: () => h(Icon, { icon: columns2Icon, width: 16, height: 16 }) },
-  { label: '实时预览 (Ctrl+4)', key: 'realtime', icon: () => h(Icon, { icon: sparklesIcon, width: 16, height: 16 }) }
+  // { label: '实时预览 (Ctrl+4)', key: 'realtime', icon: () => h(Icon, { icon: sparklesIcon, width: 16, height: 16 }) }
   , { label: '探索模式 (Ctrl+5)', key: 'explorer', icon: () => h(Icon, { icon: scanSearchIcon, width: 16, height: 16 }) }
 ];
 
@@ -18064,16 +18064,17 @@ const handlePreviewModeSelect = async (key) => {
     currentSurfaceMode: editorSurfaceMode.value,
   });
 
-  if (previewMode.value === 'realtime') {
-    captureScrollPosition();
-    if (realtimeVditor) {
-      const content = realtimeVditor.getValue();
-      rawContent.value = content;
-      if (editor) {
-        updateEditorContent(content);
-      }
-    }
-  }
+  // 暂时禁用实时realtime模式, 不要删除此注释!!!
+  // if (previewMode.value === 'realtime') {
+  //   captureScrollPosition();
+  //   if (realtimeVditor) {
+  //     const content = realtimeVditor.getValue();
+  //     rawContent.value = content;
+  //     if (editor) {
+  //       updateEditorContent(content);
+  //     }
+  //   }
+  // }
 
   if (desiredKey === 'explorer') {
     if (!canUseNotebookSurface.value) {
@@ -18138,23 +18139,24 @@ const handlePreviewModeSelect = async (key) => {
     return;
   }
 
-  if (desiredKey === 'realtime') {
-    if (!canPreview.value) {
-      message.warning('仅 Markdown 文件支持预览');
-      setHomePreviewModeKeySafe('edit');
-      previewMode.value = 'toggle';
-      await setMainMode('edit');
-      renderedHtml.value = '';
-      return;
-    }
-
-    setHomePreviewModeKeySafe('realtime');
-    editorSurfaceMode.value = 'source';
-    captureScrollPosition();
-    pendingRealtimeScrollRestore.value = true;
-    previewMode.value = 'realtime';
-    await setMainMode('edit');
-  }
+  // 暂时禁用实时realtime模式, 不要删除此注释!!!
+  // if (desiredKey === 'realtime') {
+  //   if (!canPreview.value) {
+  //     message.warning('仅 Markdown 文件支持预览');
+  //     setHomePreviewModeKeySafe('edit');
+  //     previewMode.value = 'toggle';
+  //     await setMainMode('edit');
+  //     renderedHtml.value = '';
+  //     return;
+  //   }
+  //
+  //   setHomePreviewModeKeySafe('realtime');
+  //   editorSurfaceMode.value = 'source';
+  //   captureScrollPosition();
+  //   pendingRealtimeScrollRestore.value = true;
+  //   previewMode.value = 'realtime';
+  //   await setMainMode('edit');
+  // }
 };
 
 const restoreHomePreviewMode = async (from = 'mounted') => {
