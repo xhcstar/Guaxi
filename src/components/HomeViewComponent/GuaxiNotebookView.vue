@@ -460,8 +460,26 @@
                     >
                       <Icon :icon="copyIcon" width="14" height="14" />
                     </button>
-                    <!-- 数学输出不写回源 Markdown（只存 cellmeta 侧数据），仅保留导出文件能力。 -->
-                    <button type="button" class="guaxi-notebook__panel-btn" @click="exportCellOutputToFile(cell, outputModule.id)">导出文件</button>
+                    <!-- 写回 Markdown：用户显式把数学输出作为新 Markdown Cell 插入到当前块之后。
+                         （注意：进入探索者模式不会自动写回，这是手动操作。） -->
+                    <button
+                      type="button"
+                      class="guaxi-notebook__icon-btn guaxi-notebook__panel-icon-btn"
+                      title="写回到 Markdown 文档"
+                      aria-label="写回到 Markdown 文档"
+                      @click="insertOutputMarkdownAfterCell(cell, outputModule.id)"
+                    >
+                      <Icon :icon="fileInputIcon" width="14" height="14" />
+                    </button>
+                    <button
+                      type="button"
+                      class="guaxi-notebook__icon-btn guaxi-notebook__panel-icon-btn"
+                      title="导出为文件"
+                      aria-label="导出为文件"
+                      @click="exportCellOutputToFile(cell, outputModule.id)"
+                    >
+                      <Icon :icon="fileOutputIcon" width="14" height="14" />
+                    </button>
                     <button
                       type="button"
                       class="guaxi-notebook__icon-btn guaxi-notebook__panel-icon-btn"
@@ -584,8 +602,24 @@
                   >
                     <Icon :icon="copyIcon" width="14" height="14" />
                   </button>
-                  <button type="button" class="guaxi-notebook__panel-btn" @click="writeCellOutputToMarkdown(cell)">写回 Markdown</button>
-                  <button type="button" class="guaxi-notebook__panel-btn" @click="exportCellOutputToFile(cell)">导出文件</button>
+                  <button
+                    type="button"
+                    class="guaxi-notebook__icon-btn guaxi-notebook__panel-icon-btn"
+                    title="写回到 Markdown 文档"
+                    aria-label="写回到 Markdown 文档"
+                    @click="writeCellOutputToMarkdown(cell)"
+                  >
+                    <Icon :icon="fileInputIcon" width="14" height="14" />
+                  </button>
+                  <button
+                    type="button"
+                    class="guaxi-notebook__icon-btn guaxi-notebook__panel-icon-btn"
+                    title="导出为文件"
+                    aria-label="导出为文件"
+                    @click="exportCellOutputToFile(cell)"
+                  >
+                    <Icon :icon="fileOutputIcon" width="14" height="14" />
+                  </button>
                 </div>
               </div>
               <div class="guaxi-notebook__panel-content">
@@ -614,8 +648,24 @@
                       >
                         <Icon :icon="copyIcon" width="14" height="14" />
                       </button>
-                      <button type="button" class="guaxi-notebook__panel-btn" @click="writeCellOutputToMarkdown(cell, outputModule.id)">写回 Markdown</button>
-                      <button type="button" class="guaxi-notebook__panel-btn" @click="exportCellOutputToFile(cell, outputModule.id)">导出文件</button>
+                      <button
+                        type="button"
+                        class="guaxi-notebook__icon-btn guaxi-notebook__panel-icon-btn"
+                        title="写回到 Markdown 文档"
+                        aria-label="写回到 Markdown 文档"
+                        @click="writeCellOutputToMarkdown(cell, outputModule.id)"
+                      >
+                        <Icon :icon="fileInputIcon" width="14" height="14" />
+                      </button>
+                      <button
+                        type="button"
+                        class="guaxi-notebook__icon-btn guaxi-notebook__panel-icon-btn"
+                        title="导出为文件"
+                        aria-label="导出为文件"
+                        @click="exportCellOutputToFile(cell, outputModule.id)"
+                      >
+                        <Icon :icon="fileOutputIcon" width="14" height="14" />
+                      </button>
                       <button
                         type="button"
                         class="guaxi-notebook__icon-btn guaxi-notebook__panel-icon-btn"
@@ -777,6 +827,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import { emit as emitTauriEvent, listen } from '@tauri-apps/api/event'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import { useMessage } from 'naive-ui'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { confirm as confirmDialog, open, save } from '@tauri-apps/plugin-dialog'
@@ -809,6 +860,8 @@ import botIcon from '@iconify-icons/lucide/bot'
 import volume2Icon from '@iconify-icons/lucide/volume-2'
 import circleHelpIcon from '@iconify-icons/lucide/help-circle'
 import panelRightIcon from '@iconify-icons/lucide/panel-right'
+import fileInputIcon from '@iconify-icons/lucide/file-input'
+import fileOutputIcon from '@iconify-icons/lucide/file-output'
 import pythonIcon from '@iconify-icons/vscode-icons/file-type-python'
 import { createLogger } from '../../utils/logger'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
@@ -1247,6 +1300,10 @@ const NOTEBOOK_SELECTION_IGNORE_SELECTOR = '.guaxi-notebook__toolbar, .guaxi-not
 const escapeHtmlAttribute = (raw) => String(raw || '')
   .replace(/&/g, '&amp;')
   .replace(/"/g, '&quot;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+const escapeHtmlText = (raw) => String(raw || '')
+  .replace(/&/g, '&amp;')
   .replace(/</g, '&lt;')
   .replace(/>/g, '&gt;')
 const base64ToUint8Array = (b64) => {
@@ -6006,7 +6063,22 @@ const handleNotebookRenderedClick = async (event) => {
     }
     return
   }
-  if (isNotebookHttpUrl(href)) return
+  if (isNotebookHttpUrl(href)) {
+    // 设计说明：http(s) 链接（如交互式图表的“查看交互版本”）必须用系统浏览器打开，
+    // 否则会把当前 WebView 页面整个导航走（应用界面被替换）。这里拦截后交给 Tauri opener。
+    event.preventDefault()
+    event.stopPropagation()
+    try {
+      await openUrl(href)
+    } catch (error) {
+      logger.error('[NotebookLinkCard] open external url failed', {
+        href,
+        error: String(error?.message || error),
+      })
+      message.error('打开浏览器失败')
+    }
+    return
+  }
 
   // 设计说明：
   // 1. `guaxi://wikilink` 是应用内协议，浏览器层并没有注册 handler。
@@ -6965,6 +7037,30 @@ const ensureNotebookTableRowsMaterialized = async (table = null) => {
   }
 }
 
+// 交互式图表写回标记：居中静态图 + 右上角小图标（点击用系统浏览器打开交互版）。
+// 设计说明：
+// 1. 用自包含内联样式的 HTML，保证预览 / 探索者 / 导出三处都一致渲染（不依赖外部 CSS class）。
+// 2. 链接带 target="_blank"，且点击由 notebook/preview 的链接拦截器统一改走系统浏览器，
+//    不会把当前 WebView 页面导航走。
+// 3. 图标用内联 SVG（外部链接图标），不依赖图标库，导出到 Word/EPUB 时也能显示。
+const buildInteractiveArtifactMarkup = (pngUrl, htmlUrl) => {
+  const safePng = String(pngUrl || '').trim()
+  const safeHtml = String(htmlUrl || '').trim()
+  if (!safePng && !safeHtml) return '> 交互式图表无法写回（资源入库失败）'
+
+  const externalIcon = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>'
+  const iconLink = safeHtml
+    ? `<a href="${escapeHtmlAttribute(safeHtml)}" target="_blank" rel="noopener noreferrer" title="在浏览器中查看交互版本" aria-label="在浏览器中查看交互版本" style="position:absolute;top:8px;right:8px;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:8px;background:rgba(15,23,42,0.55);color:#fff;text-decoration:none;backdrop-filter:blur(2px);">${externalIcon}</a>`
+    : ''
+
+  if (!safePng) {
+    // 没有静态图时，退化为单独一个“在浏览器查看交互版”的图标按钮（仍居中）。
+    return `<div style="text-align:center;margin:8px 0;"><a href="${escapeHtmlAttribute(safeHtml)}" target="_blank" rel="noopener noreferrer" title="在浏览器中查看交互版本" aria-label="在浏览器中查看交互版本" style="display:inline-flex;align-items:center;gap:6px;color:var(--guaxi-text-secondary,#667085);text-decoration:none;">${externalIcon}<span>查看交互版本</span></a></div>`
+  }
+
+  return `<div style="text-align:center;margin:8px 0;"><span style="position:relative;display:inline-block;max-width:100%;"><img src="${escapeHtmlAttribute(safePng)}" alt="交互图表静态预览" style="max-width:100%;height:auto;display:block;" />${iconLink}</span></div>`
+}
+
 const buildMarkdownOutputFromModule = async (cell, outputModule = null, snapshot = null) => {
   const resolvedSnapshot = snapshot || getCellSnapshot(cell)
   const targetModule = outputModule || getCellOutputModule(cell)
@@ -6981,11 +7077,12 @@ const buildMarkdownOutputFromModule = async (cell, outputModule = null, snapshot
 
   // 设计说明（统一产物写回 · 交互式 HTML）：
   // plotly 等交互输出绝不再把整段 HTML/JS 内联进源 Markdown。改为：
-  //   1) 把交互图栅格化成静态 PNG → 资源库 → ![](pngUrl)；
-  //   2) 把交互 HTML 整体入库 → 追加 [查看交互版本](htmlUrl)。
+  //   1) 把交互图栅格化成静态 PNG → 资源库 → 居中显示的静态图；
+  //   2) 把交互 HTML 整体入库 → 在静态图右上角放一个小图标按钮，点击用系统浏览器打开交互版。
   // 两者任一失败都降级，但永不内联原始 HTML。
   if (displayType === 'html' && display?.html) {
-    const parts = []
+    let pngUrl = ''
+    let htmlUrl = ''
     try {
       const png = await rasterizePlotlyHtmlToPng(String(display.html))
       if (png) {
@@ -6997,7 +7094,7 @@ const buildMarkdownOutputFromModule = async (cell, outputModule = null, snapshot
           cellId,
           source: 'python-cell-output',
         })
-        parts.push(`![交互图表静态预览](${stored.url})`)
+        pngUrl = stored.url
       }
     } catch (error) {
       logger.warn('[Notebook] rasterize interactive html to png failed, keep interactive link only', {
@@ -7006,15 +7103,14 @@ const buildMarkdownOutputFromModule = async (cell, outputModule = null, snapshot
       })
     }
     try {
-      const htmlUrl = await registerInteractiveHtmlResource(String(display.html), cellId)
-      parts.push(`[查看交互版本](${htmlUrl})`)
+      htmlUrl = await registerInteractiveHtmlResource(String(display.html), cellId)
     } catch (error) {
       logger.error('[Notebook] register interactive html resource failed', {
         cellId,
         error: String(error?.message || error),
       })
     }
-    return parts.length ? parts.join('\n\n') : '> 交互式图表无法写回（资源入库失败）'
+    return buildInteractiveArtifactMarkup(pngUrl, htmlUrl)
   }
   if (displayType === 'html' && getDisplaySourcePath(display)) {
     // 基于文件的交互 HTML（如 matplotlib htmlwriter 动画）：整文件入库后插入链接，
@@ -7038,29 +7134,74 @@ const buildMarkdownOutputFromModule = async (cell, outputModule = null, snapshot
     const asset = await serializeDisplayAssetForMarkdown(display, cellId)
     if (asset?.reference) {
       if (displayType === 'image') {
+        // 图片走 Markdown 图片语法；纯图片段落的居中由渲染器 CSS（:has(img)）统一处理。
         return `![Python Cell 输出](${asset.reference})`
       }
+      // 音频 / 视频用居中容器包裹，与图片布局保持一致（CSS 的 :has(img) 命中不到这两类，
+      // 因此这里显式用内联样式的 <div> 居中，预览 / 探索者 / 导出三处都生效）。
       if (displayType === 'audio') {
-        return `<audio controls src="${escapeHtmlAttribute(asset.reference)}"></audio>`
+        return `<div style="text-align:center;margin:8px 0;"><audio controls src="${escapeHtmlAttribute(asset.reference)}"></audio></div>`
       }
       if (displayType === 'video') {
-        return `<video controls src="${escapeHtmlAttribute(asset.reference)}"></video>`
+        return `<div style="text-align:center;margin:8px 0;"><video controls src="${escapeHtmlAttribute(asset.reference)}" style="max-width:100%;height:auto;"></video></div>`
       }
     }
   }
 
-  // 其它产物（附件 / 未识别的二进制）：统一入资源库后以链接插入，绝不内联。
+  // 其它产物（附件 / 未识别的二进制）：统一入资源库后以链接插入，绝不内联；同样居中显示。
   if (display && (getDisplaySourcePath(display) || getDisplayDataUrl(display))) {
     const asset = await serializeDisplayAssetForMarkdown(display, cellId)
     if (asset?.reference) {
       const name = String(getDisplaySourcePath(display) || '').split(/[\\/]/).pop() || '附件'
-      return `[${name}](${asset.reference})`
+      return `<div style="text-align:center;margin:8px 0;"><a href="${escapeHtmlAttribute(asset.reference)}">${escapeHtmlText(name)}</a></div>`
     }
   }
 
   const text = String(targetModule?.text || resolvedSnapshot?.outputText || '').trim()
   if (!text) return ''
   return `\`\`\`text\n${text}\n\`\`\``
+}
+
+// 把某个输出模块的内容作为一个新的 Markdown Cell 插入到当前 Cell 之后。
+// 设计说明：
+// 1. 这是用户显式触发的“写回 Markdown”——与“进入探索者模式自动写 $$”是两码事，后者已禁止。
+// 2. Math Cell 没有 Python Cell 的受管 <!--output--> 块机制（writeCellOutputToMarkdown 依赖
+//    python 源块定位），因此数学输出写回采用“插入新 Markdown Cell”的方式。
+// 3. 产物统一经 buildMarkdownOutputFromModule（绘图入资源库转图片、文本转代码块、LaTeX 转 $$ 等）。
+const insertOutputMarkdownAfterCell = async (cell, moduleId = '') => {
+  flushPendingNotebookMarkdown('before-insert-output-markdown-after-cell')
+  const snapshot = getCellSnapshot(cell)
+  const outputModule = getCellOutputModule(cell, moduleId)
+  const markdownOutput = await buildMarkdownOutputFromModule(cell, outputModule, snapshot)
+  if (!markdownOutput) {
+    message.warning('当前输出暂时无法写回为 Markdown')
+    return
+  }
+
+  const targetIndex = notebookCells.value.findIndex((entry) => String(entry?.key || '') === String(cell?.key || ''))
+  if (targetIndex < 0) {
+    logger.error('[Notebook] failed to insert output markdown because source cell is missing', {
+      key: String(cell?.key || ''),
+      cellId: String(cell?.cellId || ''),
+      moduleId: String(outputModule?.id || moduleId || ''),
+    })
+    message.error('没有找到要写回的源 Cell')
+    return
+  }
+
+  const outputCell = createNotebookMarkdownCell(markdownOutput)
+  const nextCells = notebookCells.value.slice()
+  nextCells.splice(targetIndex + 1, 0, outputCell)
+  logger.info('[Notebook] insert output markdown cell after executable cell', {
+    sourceType: String(cell?.type || ''),
+    sourceKey: String(cell?.key || ''),
+    sourceCellId: String(cell?.cellId || ''),
+    outputCellKey: String(outputCell?.key || ''),
+    moduleId: String(outputModule?.id || moduleId || ''),
+    markdownLength: markdownOutput.length,
+  })
+  emitCells(nextCells, outputCell.key)
+  message.success('输出已写回为新的 Markdown Cell')
 }
 
 const getTableExportFilters = (table = {}, cell = null) => {

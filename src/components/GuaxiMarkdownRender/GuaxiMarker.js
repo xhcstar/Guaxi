@@ -3,6 +3,8 @@ import markdownItMathjax from "markdown-it-mathjax3";
 import mermaid from "mermaid";
 import hljs from "highlight.js";
 import "highlight.js/styles/atom-one-light.css";
+// 暗色 One Dark 代码配色 + 纯图片段落布局（作用域限定，详见文件内说明）。
+import "./guaxiMarkdownExtras.css";
 import { initMathJax, renderMath } from "./mathjaxConfig";
 import { createLogger } from '../../utils/logger'
 
