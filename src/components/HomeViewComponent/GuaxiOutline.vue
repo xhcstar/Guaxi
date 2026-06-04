@@ -93,7 +93,15 @@ watch(
             return
         }
 
-        expandedKeys.value = expandedKeys.value.filter((key) => allKeys.has(key))
+        const survived = expandedKeys.value.filter((key) => allKeys.has(key))
+        // 设计说明：节点 id 含行号，模式切换（源码大纲 ↔ 探索者大纲）会让整棵树的 id 全变，
+        // 之前展开的 key 一个都不剩。这种“整棵被替换”的场景恢复成默认展开一级标题，
+        // 避免切换后大纲整棵收起；普通的同源内容更新（id 不变）则保留用户的展开状态。
+        if (expandedKeys.value.length > 0 && survived.length === 0 && tree.length > 0) {
+            expandedKeys.value = getLevelOneExpandedKeys(tree)
+        } else {
+            expandedKeys.value = survived
+        }
     },
     { immediate: true }
 )

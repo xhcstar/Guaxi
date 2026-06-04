@@ -18546,6 +18546,163 @@ const rasterizeMermaidSvgToPng = async (svg, scale = 2) => {
   }
 }
 
+// 设计说明（块级数学公式导出）：
+// 很多 EPUB 阅读器不渲染 MathML，复杂环境（\begin{aligned} 等）会退化成 LaTeX 源码。
+// 这里用 MathJax 把 TeX 转成 SVG（纯 <path>，不含 foreignObject，能在本应用 WebView 里稳定栅格化），
+// 再栅格化为 PNG，按图片插回——与 mermaid 导出同一套路，保证任何阅读器都能正确显示公式。
+// MathJax(mathjax-full) 已是本项目依赖（预览经 markdown-it-mathjax3 使用），此处惰性加载。
+let mathjaxSvgConverterPromise = null
+const getMathjaxSvgConverter = async () => {
+  if (mathjaxSvgConverterPromise) return mathjaxSvgConverterPromise
+  mathjaxSvgConverterPromise = (async () => {
+    const [{ mathjax }, { TeX }, { SVG }, { liteAdaptor }, { RegisterHTMLHandler }, { AllPackages }] = await Promise.all([
+      import('mathjax-full/js/mathjax.js'),
+      import('mathjax-full/js/input/tex.js'),
+      import('mathjax-full/js/output/svg.js'),
+      import('mathjax-full/js/adaptors/liteAdaptor.js'),
+      import('mathjax-full/js/handlers/html.js'),
+      import('mathjax-full/js/input/tex/AllPackages.js'),
+    ])
+    const adaptor = liteAdaptor()
+    RegisterHTMLHandler(adaptor)
+    const texInput = new TeX({ packages: AllPackages })
+    // fontCache:'none' 让每个 SVG 自包含字形路径，便于单独栅格化（不依赖共享 <defs>）。
+    const svgOutput = new SVG({ fontCache: 'none' })
+    const doc = mathjax.document('', { InputJax: texInput, OutputJax: svgOutput })
+    return { adaptor, doc }
+  })()
+  return mathjaxSvgConverterPromise
+}
+
+const convertTexToSvg = async (latex, display) => {
+  const { adaptor, doc } = await getMathjaxSvgConverter()
+  const node = doc.convert(String(latex || ''), { display: !!display })
+  // node 是 <mjx-container>，内部首个子元素即 <svg>。
+  const svgNode = adaptor.firstChild(node)
+  const svg = svgNode ? adaptor.outerHTML(svgNode) : ''
+  if (!svg.trim()) throw new Error('mathjax produced empty svg')
+  return svg
+}
+
+const rasterizeMathSvgToPng = async (svgHtml, scale = 3) => {
+  let svg = normalizeMermaidSvgForRaster(svgHtml)
+  if (!svg.trim()) throw new Error('empty math svg')
+  // MathJax SVG 的 width/height 用 ex 单位（1ex≈8px）。换算成像素再栅格化，
+  // 否则按 viewBox（MathJax 内部单位，数值很大）会得到异常尺寸。
+  const PX_PER_EX = 8
+  const exWidth = Number(svg.match(/\bwidth="([\d.]+)ex"/i)?.[1])
+  const exHeight = Number(svg.match(/\bheight="([\d.]+)ex"/i)?.[1])
+  let width = Number.isFinite(exWidth) && exWidth > 0 ? Math.ceil(exWidth * PX_PER_EX) : 0
+  let height = Number.isFinite(exHeight) && exHeight > 0 ? Math.ceil(exHeight * PX_PER_EX) : 0
+  if (!width || !height) {
+    const vb = String(svg.match(/viewBox="([\d.\s-]+)"/i)?.[1] || '').trim().split(/[\s,]+/).map(Number)
+    if (vb.length === 4 && Number.isFinite(vb[2]) && Number.isFinite(vb[3])) {
+      width = width || Math.max(1, Math.ceil(vb[2] / 100))
+      height = height || Math.max(1, Math.ceil(vb[3] / 100))
+    }
+  }
+  if (!width) width = 240
+  if (!height) height = 64
+  // 用明确像素尺寸替换 ex 尺寸，让 <img> 以确定大小解码（viewBox 保留维持比例）。
+  svg = svg
+    .replace(/\bwidth="[^"]*"/i, `width="${width}"`)
+    .replace(/\bheight="[^"]*"/i, `height="${height}"`)
+  const { image, revoke } = await decodeMermaidSvgImage(svg, width, height)
+  try {
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(width * scale))
+    canvas.height = Math.max(1, Math.round(height * scale))
+    const ctx = canvas.getContext('2d')
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height)
+    const pngBlob = await new Promise((resolve, reject) => {
+      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('math toBlob failed'))), 'image/png')
+    })
+    return { bytes: new Uint8Array(await pngBlob.arrayBuffer()), width, height }
+  } finally {
+    revoke?.()
+  }
+}
+
+// 把 Markdown 里的“块级”数学公式（$$...$$ 与 \[...\]）预渲染成 PNG 图片再交给 pandoc。
+// 只处理块级公式：行内 $...$ 交给 pandoc 默认（在常见阅读器里能正常显示），且行内正则易误伤货币符号。
+const prerenderDisplayMathForPandoc = async (markdown) => {
+  const text = String(markdown || '')
+  if (!text.includes('$$') && !text.includes('\\[')) return text
+
+  const blocks = []
+  const dollarRe = /\$\$([\s\S]+?)\$\$/g
+  let match
+  while ((match = dollarRe.exec(text)) !== null) {
+    if (String(match[1] || '').trim()) blocks.push({ full: match[0], tex: match[1] })
+  }
+  const bracketRe = /\\\[([\s\S]+?)\\\]/g
+  while ((match = bracketRe.exec(text)) !== null) {
+    if (String(match[1] || '').trim()) blocks.push({ full: match[0], tex: match[1] })
+  }
+  if (!blocks.length) return text
+
+  let baseDir
+  let join
+  let writeFile
+  let mkdir
+  try {
+    const pathApi = await import('@tauri-apps/api/path')
+    join = pathApi.join
+    ;({ writeFile, mkdir } = await import('@tauri-apps/plugin-fs'))
+    baseDir = await join(await pathApi.tempDir(), 'guaxi_export_math', String(Date.now()))
+    await mkdir(baseDir, { recursive: true })
+  } catch (error) {
+    logger.warn('[Export] prepare math temp dir failed, keep source blocks', {
+      error: String(error?.message || error),
+    })
+    return text
+  }
+
+  let result = text
+  let rendered = 0
+  let failures = 0
+  let firstError = ''
+  for (let i = 0; i < blocks.length; i += 1) {
+    const tex = String(blocks[i].tex || '').trim()
+    if (!tex) continue
+    try {
+      const svg = await convertTexToSvg(tex, true)
+      const { bytes, width } = await rasterizeMathSvgToPng(svg)
+      const filePath = await join(baseDir, `math_${i + 1}.png`)
+      await writeFile(filePath, bytes)
+      // 显示宽度按逻辑像素@96dpi 换算成英寸并封顶，避免长公式溢出页面。
+      const displayWidthIn = Math.min(6, Math.max(0.4, width / 96))
+      const ref = `![math](${filePath.replace(/\\/g, '/')}){width=${displayWidthIn.toFixed(2)}in}`
+      result = result.replace(blocks[i].full, () => ref)
+      rendered += 1
+    } catch (error) {
+      failures += 1
+      if (!firstError) firstError = String(error?.message || error)
+      logger.warn('[Export] math prerender failed, keep source block', {
+        index: i,
+        error: String(error?.message || error),
+      })
+    }
+  }
+
+  logger.info('[Export] display math prerendered for pandoc export', {
+    total: blocks.length,
+    rendered,
+    failures,
+  })
+  if (blocks.length > 0 && rendered === 0) {
+    logger.warn('[Export] all math blocks failed to prerender; pandoc output may keep source', {
+      total: blocks.length,
+      failures,
+      firstError,
+    })
+    message.warning(`数学公式导出渲染失败（${firstError || '未知错误'}），成品中可能保留源码`)
+  }
+  return result
+}
+
 const prerenderMermaidForPandoc = async (markdown) => {
   const text = String(markdown || '')
   if (!text.includes('```mermaid') && !text.includes('~~~mermaid')) return text
@@ -18594,37 +18751,80 @@ const prerenderMermaidForPandoc = async (markdown) => {
     })
   }
 
+  // 设计说明（关键修复）：
+  // 导出栅格化改用与软件内预览 / 各阅读器一致的 mermaid.run({ nodes })——它把图渲染进
+  // 真实(隐藏)DOM 节点。脱离 DOM 的 mermaid.render(id, text) 在无头/导出上下文里经常抛错
+  // （正是“PDF 预览能出图、pandoc 导出不出图”的根因，错误被 catch 吞掉后整块退回源码）。
+  // 渲染进真实 DOM 后再读取其中真正布局好的 <svg> 去栅格化，可靠性显著提升。
+  const host = document.createElement('div')
+  host.setAttribute('aria-hidden', 'true')
+  host.style.cssText = 'position:fixed;left:-99999px;top:0;width:1200px;visibility:hidden;background:#ffffff;'
+  document.body.appendChild(host)
+
   let result = text
   let rendered = 0
   let failures = 0
-  for (let i = 0; i < blocks.length; i += 1) {
-    const block = blocks[i]
-    const source = String(block.code || '').trim()
-    if (!source) continue
-    try {
-      const renderId = `guaxi-export-mermaid-${Date.now()}-${i}`
-      const out = await Promise.resolve(mermaid.render(renderId, source))
-      const rawSvg = typeof out === 'string' ? out : String(out?.svg || '')
-      if (!rawSvg.trim()) throw new Error('mermaid render produced empty svg')
-      // 与软件内预览同源：把字体显式写进 SVG，避免栅格化后文字字体丢失。
-      const svg = rawSvg.replace(
-        /<svg\b/i,
-        `<svg font-family='${MERMAID_EXPORT_FONT_FAMILY.replace(/"/g, "'")}'`,
-      )
-      const png = await rasterizeMermaidSvgToPng(svg)
-      const filePath = await join(baseDir, `mermaid_${i + 1}.png`)
-      await writeFile(filePath, png)
-      const ref = `![mermaid diagram](${filePath.replace(/\\/g, '/')})`
-      // 用函数式 replace，避免文件路径里出现 $ 时被当成替换占位符。
-      result = result.replace(block.full, () => ref)
-      rendered += 1
-    } catch (error) {
-      failures += 1
-      logger.warn('[Export] mermaid prerender failed, keep source block', {
-        index: i,
-        error: String(error?.message || error),
-      })
+  let firstError = ''
+  try {
+    for (let i = 0; i < blocks.length; i += 1) {
+      const source = String(blocks[i].code || '').trim()
+      if (!source) continue
+      const node = document.createElement('div')
+      node.className = 'mermaid'
+      node.textContent = source
+      host.appendChild(node)
+      try {
+        await mermaid.run({ nodes: [node] })
+        const svgEl = node.querySelector('svg')
+        if (!svgEl) throw new Error('mermaid.run produced no svg')
+        // 关键：把 SVG 固化成明确的像素尺寸。mermaid 默认给的是 viewBox + style:max-width，
+        // 没有 width/height 属性时，作为 <img> 加载再画到 canvas 常常按 0 尺寸绘制 → 栅格化失败/空白。
+        let bboxWidth = 0
+        let bboxHeight = 0
+        try {
+          const bbox = svgEl.getBBox?.()
+          bboxWidth = Math.ceil(Number(bbox?.width || 0))
+          bboxHeight = Math.ceil(Number(bbox?.height || 0))
+        } catch (bboxError) {
+          logger.debug('[Export] mermaid getBBox failed (continue)', {
+            error: String(bboxError?.message || bboxError),
+          })
+        }
+        const viewBoxParts = String(svgEl.getAttribute('viewBox') || '').split(/[\s,]+/).map(Number)
+        const fallbackWidth = viewBoxParts.length === 4 && Number.isFinite(viewBoxParts[2]) ? viewBoxParts[2] : 0
+        const fallbackHeight = viewBoxParts.length === 4 && Number.isFinite(viewBoxParts[3]) ? viewBoxParts[3] : 0
+        const finalWidth = Math.max(1, bboxWidth || fallbackWidth || Math.ceil(svgEl.clientWidth) || 800)
+        const finalHeight = Math.max(1, bboxHeight || fallbackHeight || Math.ceil(svgEl.clientHeight) || 600)
+        svgEl.setAttribute('width', String(finalWidth))
+        svgEl.setAttribute('height', String(finalHeight))
+        svgEl.style.maxWidth = 'none'
+        // 与软件内预览同源：把字体显式写进 SVG，避免栅格化后文字字体丢失。
+        svgEl.setAttribute('font-family', MERMAID_EXPORT_FONT_FAMILY)
+        const png = await rasterizeMermaidSvgToPng(svgEl.outerHTML)
+        const filePath = await join(baseDir, `mermaid_${i + 1}.png`)
+        await writeFile(filePath, png)
+        // 设计说明（尺寸）：PNG 以 scale=2 栅格化，像素宽是逻辑宽的 2 倍；pandoc/Word 默认按
+        // 像素@96dpi 摆放图片 → 图会大一倍甚至超出页宽。这里用 pandoc 图片属性 {width=..in}
+        // 显式指定显示宽度（只给宽、高按比例自动缩放），并按逻辑宽换算成英寸后封顶到正文宽度(~6in)，
+        // 避免溢出页面。
+        const displayWidthIn = Math.min(6, Math.max(1, finalWidth / 96))
+        const ref = `![mermaid diagram](${filePath.replace(/\\/g, '/')}){width=${displayWidthIn.toFixed(2)}in}`
+        // 用函数式 replace，避免文件路径里出现 $ 时被当成替换占位符。
+        result = result.replace(blocks[i].full, () => ref)
+        rendered += 1
+      } catch (error) {
+        failures += 1
+        if (!firstError) firstError = String(error?.message || error)
+        logger.warn('[Export] mermaid prerender failed, keep source block', {
+          index: i,
+          error: String(error?.message || error),
+        })
+      } finally {
+        node.remove()
+      }
     }
+  } finally {
+    host.remove()
   }
 
   logger.info('[Export] mermaid prerendered for pandoc export', {
@@ -18633,13 +18833,14 @@ const prerenderMermaidForPandoc = async (markdown) => {
     failures,
   })
   // 设计说明：若一张都没渲染成功，pandoc 端只能拿到原始 ```mermaid 源码（显示为代码块）。
-  // 这里显式告警 + 提示用户，避免“导出成 Word/EPUB 后 mermaid 还是源码”这一问题被静默吞掉。
+  // 这里显式告警 + 把真实错误带出来，避免“导出成 Word/EPUB 后 mermaid 还是源码”被静默吞掉。
   if (blocks.length > 0 && rendered === 0) {
     logger.warn('[Export] all mermaid blocks failed to prerender; pandoc output will keep source code', {
       total: blocks.length,
       failures,
+      firstError,
     })
-    message.warning('Mermaid 图表导出渲染失败，成品中将保留源码，请检查图表语法或重试')
+    message.warning(`Mermaid 图表导出渲染失败（${firstError || '未知错误'}），成品中将保留源码`)
   }
   return result
 }
@@ -18653,7 +18854,12 @@ const exportMarkdownPandoc = async (context, outputPath) => {
 
   // 只有当确实把 mermaid 替换成图片后才传 sourceMarkdown；否则保持后端从磁盘读原文的既有行为。
   const originalMarkdown = String(context?.markdown || '')
-  const processedMarkdown = await prerenderMermaidForPandoc(originalMarkdown)
+  let processedMarkdown = await prerenderMermaidForPandoc(originalMarkdown)
+  // 设计说明：EPUB 阅读器普遍不渲染 MathML，块级公式会退化成 LaTeX 源码，
+  // 这里把块级数学公式预渲染成图片（docx 走 OMML、PDF 走浏览器，均无需此步）。
+  if (context.format === 'epub') {
+    processedMarkdown = await prerenderDisplayMathForPandoc(processedMarkdown)
+  }
   const sourceMarkdown = processedMarkdown !== originalMarkdown ? processedMarkdown : null
 
   await invoke('export_markdown_pandoc', {
@@ -18979,19 +19185,19 @@ const syncNotebookOutlineState = async (reason = 'unknown') => {
   }
 
   await nextTick()
+  // 设计说明：notebook 大纲本身已经包含 Markdown 标题 + Python Cell / Math Cell 条目，
+  // 因此探索者模式直接采用 notebook 大纲，绝不回退到源码大纲——
+  // 源码大纲的行号与 notebook 不同，会让大纲树节点 id 抖动、展开状态被清空，
+  // 还会出现“探索者模式却显示源码大纲”。notebook 尚未就绪时本次为空，
+  // 由 NotebookView 的 outline-change 事件随后补齐。
   const outline = notebookViewRef.value?.getOutline?.() || []
   const normalizedOutline = Array.isArray(outline) ? outline : []
-  const fallbackOutline = normalizedOutline.length
-    ? normalizedOutline
-    : extractMarkdownOutlineEntries(rawContent.value, selectedFile.value?.path || activeTab.value?.path || '', `${reason}-fallback-source`)
-  outlineStore.setOutline(fallbackOutline)
+  outlineStore.setOutline(normalizedOutline)
   outlineStore.setJumpToLine(jumpToLine)
 
   logger.info('[Outline] synced notebook outline state', {
     reason,
-    count: fallbackOutline.length,
-    notebookCount: normalizedOutline.length,
-    usedSourceFallback: !normalizedOutline.length && fallbackOutline.length > 0,
+    count: normalizedOutline.length,
     hasNotebookView: !!notebookViewRef.value,
   })
   return true
@@ -18999,16 +19205,12 @@ const syncNotebookOutlineState = async (reason = 'unknown') => {
 
 const handleNotebookOutlineChange = (outline) => {
   if (!(editorSurfaceMode.value === 'notebook' && canUseNotebookSurface.value)) return
+  // 直接采用 notebook 大纲，不回退源码大纲（理由见 syncNotebookOutlineState）。
   const normalizedOutline = Array.isArray(outline) ? outline : []
-  const finalOutline = normalizedOutline.length
-    ? normalizedOutline
-    : extractMarkdownOutlineEntries(rawContent.value, selectedFile.value?.path || activeTab.value?.path || '', 'notebook-outline-event-fallback')
-  outlineStore.setOutline(finalOutline)
+  outlineStore.setOutline(normalizedOutline)
   outlineStore.setJumpToLine(jumpToLine)
   logger.info('[Outline] received notebook outline change event', {
-    count: finalOutline.length,
-    notebookCount: normalizedOutline.length,
-    usedSourceFallback: !normalizedOutline.length && finalOutline.length > 0,
+    count: normalizedOutline.length,
     surfaceMode: editorSurfaceMode.value,
   })
 }
@@ -19045,6 +19247,11 @@ function jumpToLine(line) {
 // 1. 源码编辑模式沿用现有 markdown-it 解析，保证大纲结果和普通编辑/预览模式一致。
 // 2. 探索者模式改为优先从 notebook 视图读取大纲与跳转目标，避免点击大纲后把用户带回隐藏的源码编辑器。
 // 3. 这里保留日志，后续如果再出现“大纲为空/跳转无效”，可以直接从模式分支上定位问题。
+// 4. 只监听 surfaceMode（探索者 vs 源码），不监听 mode/previewMode：
+//    编辑↔预览共用同一份源码大纲，无需切换；而把 previewMode 纳入依赖会在探索者模式下被
+//    其它 watcher 反复重置触发，导致用源码大纲覆盖 notebook 大纲、大纲树节点 id 抖动、
+//    展开状态被清空（“切一次就卡住、子条目无法展开”）。探索者大纲的实时更新由
+//    NotebookView 的 outline-change 事件（immediate+deep）负责。
 watch([() => fileTreeStore.activeTab, rawContent, editorSurfaceMode, canUseNotebookSurface, notebookViewRef], async ([tabPath, content, surfaceMode, notebookEnabled]) => {
   if (surfaceMode === 'notebook' && notebookEnabled) {
     generateOutlineDebounced.cancel?.()

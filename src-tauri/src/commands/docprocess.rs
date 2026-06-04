@@ -1729,7 +1729,9 @@ pub async fn export_markdown_pandoc(
         // 1. 导出链路需要显式保留 fenced code blocks，否则 Mermaid 代码块里以 `---` 开头的配置
         //    会被 Pandoc 误判为 YAML metadata，最终触发 “did not find expected <document start>”。
         // 2. 这里补上常用 Markdown 扩展，保证导出解析结果更接近软件内预览。
-        .arg("markdown+hard_line_breaks+raw_html+implicit_figures+fenced_code_blocks+backtick_code_blocks+pipe_tables+task_lists+footnotes+tex_math_dollars")
+        // 3. tex_math_dollars 只认 $...$ / $$...$$；很多文档里的行间公式写成 \[...\] / \(...\)，
+        //    必须额外开 tex_math_single_backslash，否则这些公式会被原样当作源码输出（EPUB 尤其明显）。
+        .arg("markdown+hard_line_breaks+raw_html+implicit_figures+fenced_code_blocks+backtick_code_blocks+pipe_tables+task_lists+footnotes+tex_math_dollars+tex_math_single_backslash")
         .arg("--resource-path")
         .arg(input_dir_str)
         // 设计说明：
@@ -1782,6 +1784,32 @@ pub async fn export_markdown_pandoc(
     //    都不在这里处理。
     if matches!(format.as_str(), "docx" | "odt" | "epub") {
         cmd.arg("--toc").arg("--toc-depth=3");
+    }
+
+    // 设计说明：
+    // 1. EPUB 阅读器默认 CSS 下 <pre> 不折行，超出页宽的代码会被直接截断（既不折行也无横向滚动）。
+    // 2. 这里写一份只作用于 EPUB 的样式，让代码块软换行 + 长 token 强制断行，保证完整可读。
+    // 3. CSS 写进本次导出的临时目录（导出完成后随 tmp_dir 一起清理）。
+    if format == "epub" {
+        // 设计说明（数学公式）：
+        // 块级公式（$$\begin{aligned}...$$ 等）改由前端用 MathJax 预渲染成 PNG 图片再交给 pandoc，
+        // 因为很多 EPUB 阅读器并不渲染 MathML，复杂环境会退化成 LaTeX 源码。行内简单公式
+        // 仍走 pandoc 默认（在常见阅读器里能正常显示），故这里不再传 --mathml（它会把行内公式
+        // 也变成阅读器不一定支持的 MathML）。
+
+        let epub_css_path = tmp_dir.join("guaxi-epub.css");
+        let epub_css = "pre, pre code, code { white-space: pre-wrap; word-wrap: break-word; overflow-wrap: break-word; word-break: break-word; } pre { padding: 0.6em 0.8em; } img { max-width: 100%; height: auto; }";
+        match std::fs::write(&epub_css_path, epub_css) {
+            Ok(_) => {
+                cmd.arg("--css").arg(&epub_css_path);
+            }
+            Err(error) => {
+                warn!(
+                    error = %error,
+                    "[DocExport] failed to write epub wrap stylesheet; code blocks may overflow"
+                );
+            }
+        }
     }
 
     if let Some(lua) = lua_filter_str {

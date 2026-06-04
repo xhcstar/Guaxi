@@ -724,13 +724,21 @@ pub fn preprocess_markdown_for_static_render(markdown: &str) -> String {
             continue;
         }
 
+        // 设计说明（关键）：
+        // 绝不能把锚点 <a id></a> 放在标题行的“上一行”单独成行。CommonMark / pandoc 会把这种
+        // 裸 HTML 标签当作 HTML block 起点，且该 block 会一直延伸到下一个空行——于是紧跟其后的
+        // `### 标题` 会被整体吞进 HTML block，被原样输出（### 不再被识别为标题），
+        // 进而 pandoc --toc 也无法收集到标题、Word/EPUB 生成不出导航书签。
+        // 这里改为把锚点“内联”到标题行尾：pandoc 解析为标题内的 inline raw HTML，
+        // 既保留标题语义（书签正常），又能让注入式 TOC 的 [title](#anchor) 正确跳转。
+        let mut heading_anchor: Option<String> = None;
         while heading_iter
             .peek()
             .map(|item| item.line_index == line_index)
             .unwrap_or(false)
         {
             if let Some(item) = heading_iter.next() {
-                output.push(format!(r#"<a id="{}"></a>"#, item.anchor));
+                heading_anchor = Some(item.anchor.clone());
             }
         }
 
@@ -750,7 +758,12 @@ pub fn preprocess_markdown_for_static_render(markdown: &str) -> String {
             continue;
         }
 
-        output.push(replace_static_wikilinks(raw_line));
+        let rendered_line = replace_static_wikilinks(raw_line);
+        if let Some(anchor) = heading_anchor {
+            output.push(format!("{} <a id=\"{}\"></a>", rendered_line.trim_end(), anchor));
+        } else {
+            output.push(rendered_line);
+        }
     }
 
     output.join("\n")

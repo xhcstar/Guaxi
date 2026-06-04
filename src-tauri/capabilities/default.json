@@ -55,6 +55,27 @@
     "global-shortcut:allow-is-registered",
     "global-shortcut:allow-register",
     "global-shortcut:allow-unregister",
-    "core:window:allow-hide"
+    "core:window:allow-hide",
+    {
+      "identifier": "fs:allow-mkdir",
+      "allow": [
+        { "path": "$TEMP" },
+        { "path": "$TEMP/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-write-file",
+      "allow": [
+        { "path": "$TEMP" },
+        { "path": "$TEMP/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-remove",
+      "allow": [
+        { "path": "$TEMP" },
+        { "path": "$TEMP/**" }
+      ]
+    }
   ]
 }
