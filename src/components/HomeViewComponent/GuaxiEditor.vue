@@ -656,10 +656,13 @@
           <button class="preview-search-btn" type="button" @click="focusNextPreviewSearchMatch">下一个</button>
           <button class="preview-search-btn preview-search-close" type="button" @click="closePreviewSearch">关闭</button>
         </div>
-        <div v-html="renderedHtml" class="preview" ref="previewContainer" @click="handlePreviewClick"
-          :style="{ '--guaxi-preview-zoom': previewZoom }"
+        <div class="preview" ref="previewContainer" @click="handlePreviewClick"
           @wheel="handlePreviewWheelZoom"
-          @mouseup="handlePreviewSelectionMouseUp"></div>
+          @mouseup="handlePreviewSelectionMouseUp">
+          <!-- 缩放层（Q5）：用 CSS zoom 缩放整段内容（文字+图片+表格等），zoom 会重排，
+               不像 transform:scale 破坏换行/滚动；缩放层放在滚动容器内部，避免缩放滚动容器自身导致 flex 溢出。 -->
+          <div class="preview-zoom-layer" :style="{ zoom: previewZoom }" v-html="renderedHtml"></div>
+        </div>
         <div v-show="previewFloatingToolbarVisible" class="floating-md-toolbar" :style="previewFloatingToolbarStyle"
           @mousedown.prevent>
           <n-tooltip placement="top" trigger="hover">
@@ -8976,6 +8979,56 @@ const computeNotebookSentinelFoldRanges = (text) => {
   return ranges
 }
 
+// 设计说明（标题折叠 · 对应 Q2 补充）：
+// standalone monaco-editor 的 markdown 只带 Monarch 高亮，并不内置「按 #/##/### 标题层级折叠」的
+// FoldingRangeProvider，所以标题左侧不会出现折叠箭头。这里自己按 ATX 标题计算折叠区间：
+// 每个标题折叠到「下一个同级或更高级标题之前」（或文末）。代码围栏内的 # 不算标题。
+const computeMarkdownHeadingFoldRanges = (text) => {
+  const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n')
+  const ranges = []
+  const stack = [] // { level, startIndex }
+  let inFence = false
+  let fenceToken = ''
+
+  const closeTo = (level, endIndexExclusive) => {
+    while (stack.length && stack[stack.length - 1].level >= level) {
+      const top = stack.pop()
+      const endIndex = endIndexExclusive - 1
+      if (endIndex > top.startIndex) {
+        ranges.push({ start: top.startIndex + 1, end: endIndex + 1 })
+      }
+    }
+  }
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i]
+    const fenceMatch = line.match(/^\s*(```+|~~~+)/)
+    if (fenceMatch) {
+      const token = fenceMatch[1][0]
+      if (!inFence) { inFence = true; fenceToken = token }
+      else if (token === fenceToken) { inFence = false; fenceToken = '' }
+      continue
+    }
+    if (inFence) continue
+
+    const headingMatch = line.match(/^ {0,3}(#{1,6})\s/)
+    if (!headingMatch) continue
+    const level = headingMatch[1].length
+    // 新标题出现时，先收掉所有同级/更深级的未闭合标题区间（在本行之前结束）。
+    closeTo(level, i)
+    stack.push({ level, startIndex: i })
+  }
+  // 文末收尾：剩余标题折叠到文档末行。
+  while (stack.length) {
+    const top = stack.pop()
+    const endIndex = lines.length - 1
+    if (endIndex > top.startIndex) {
+      ranges.push({ start: top.startIndex + 1, end: endIndex + 1 })
+    }
+  }
+  return ranges
+}
+
 let notebookSentinelFoldingProviderRegistered = false
 const ensureNotebookSentinelFoldingProvider = () => {
   if (notebookSentinelFoldingProviderRegistered) return
@@ -8983,13 +9036,21 @@ const ensureNotebookSentinelFoldingProvider = () => {
     monaco.languages.registerFoldingRangeProvider('markdown', {
       provideFoldingRanges(model) {
         try {
-          return computeNotebookSentinelFoldRanges(model.getValue()).map((range) => ({
+          const text = model.getValue()
+          // 哨兵块标记为 Region（默认会被 autoFoldNotebookSentinels 折叠）；
+          // 标题区间不带 Region 类型（不会被默认折叠），只提供可手动折叠的箭头。
+          const sentinelRanges = computeNotebookSentinelFoldRanges(text).map((range) => ({
             start: range.start,
             end: range.end,
             kind: monaco.languages.FoldingRangeKind.Region,
           }))
+          const headingRanges = computeMarkdownHeadingFoldRanges(text).map((range) => ({
+            start: range.start,
+            end: range.end,
+          }))
+          return [...sentinelRanges, ...headingRanges]
         } catch (error) {
-          logger.warn('[Editor] notebook sentinel folding provider failed', { error: String(error?.message || error) })
+          logger.warn('[Editor] markdown folding provider failed', { error: String(error?.message || error) })
           return []
         }
       },
@@ -21574,8 +21635,7 @@ onUnmounted(() => {
   flex: 1 1 auto;
   min-height: 0;
   padding: 12px;
-  /* 字号随缩放因子变化（Q5）；用 em/rem 排版的子元素会随之等比缩放，且不破坏自动换行与滚动。 */
-  font-size: calc(17px * var(--guaxi-preview-zoom, 1));
+  font-size: 17px;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
   line-height: 1.5;
   overflow-y: auto;
@@ -21586,6 +21646,12 @@ onUnmounted(() => {
   /* 主预览内容区和分栏预览共用这一层，显式继承主题底色以保证切主题立即生效。 */
   background: var(--guaxi-content-bg, #ffffff);
   color: var(--guaxi-text-primary, #1f2328);
+}
+
+/* 预览缩放层（Q5）：默认 zoom:1，由 previewZoom 驱动。缩放层撑满预览宽度，
+   zoom 会重排，max-width:100% 的图片在缩放后仍能适配，不会横向溢出。 */
+.preview-zoom-layer {
+  width: 100%;
 }
 
 .preview a,
