@@ -6,9 +6,9 @@
   parsePythonCellBlocks,
 } from './guaxiPythonCellSyntax'
 import {
-  buildMathCellBlock,
   buildMathCellReferenceBlock,
   createMathCellId,
+  createMathCellStableId,
   normalizeMathCellMeta,
   parseMathCellBlocks,
 } from './guaxiMathCellSyntax'
@@ -42,9 +42,13 @@ export const createNotebookPythonCell = (options = {}) => {
 
 export const createNotebookMathCell = (expression = '', options = {}) => {
   const meta = normalizeMathCellMeta(options.meta || {})
+  // 设计说明：与 Python Cell 对称，数学块必须有稳定 meta.id —— 探索者模式下
+  // 源 Markdown 只保留引用块，cellmeta 表达式回填与输出快照恢复都按这个 id 匹配。
+  const stableId = String(meta.id || options.stableId || createMathCellStableId())
+  meta.id = stableId
   const cell = {
     type: 'math',
-    key: String(options.key || createStableId(NOTEBOOK_MATH_CELL_PREFIX)),
+    key: String(options.key || stableId),
     expression: String(expression || ''),
     sourceType: ['fenced', 'bracket', 'dollar', 'marker'].includes(String(options.sourceType || ''))
       ? String(options.sourceType)
@@ -286,14 +290,14 @@ export const serializeNotebookCells = (cells = []) => {
     if (cell.type === 'math') {
       const expression = String(cell.expression || '').replace(/\r\n?/g, '\n')
       // 设计说明：
-      // 1. marker 类型使用 <!--math-->...<!--/math--> 注释语法序列化，
-      //    与 Python Cell 的 <!--py--> 语法对称。
-      // 2. Math 表达式通常较短，直接在 Markdown 中内联存储，
-      //    避免模式切换时依赖 sidecar 导致表达式丢失。
-      // 3. 旧式 fenced / bracket / dollar 序列化保留作为降级路径。
+      // 1. 探索者模式保存时不再把数学表达式写回 Markdown 正文，而是写入同名 `.cellmeta`，
+      //    与 Python Cell 的引用块方案完全对称。
+      // 2. Markdown 仅保留 <!--math {"id","storage":"cellmeta"}--> 引用块作为 cell 的位置锚点，
+      //    既不污染源码模式，也避免数学输出被当作 $$ 公式渲染。
+      // 3. 旧文档里的完整 <!--math-->...<!--/math--> 块仍能在加载时解析，下一次保存自动迁移为引用块。
+      // 4. 旧式 fenced / bracket / dollar 序列化保留作为降级路径。
       if (cell.sourceType === 'marker') {
-        return buildMathCellBlock({
-          expression,
+        return buildMathCellReferenceBlock({
           meta: cell.meta || {},
         })
       }
@@ -363,8 +367,13 @@ export const createNotebookCellsFromMarkdown = (markdown = '', { filePath = '' }
       })
     } else if (block.blockType === 'math') {
       const meta = normalizeMathCellMeta(block.meta || {})
+      if (!meta.id) {
+        meta.id = createMathCellStableId()
+      }
+      // 与 Python Cell 对称：用稳定 meta.id 作为 key，保证编辑后 cellmeta 表达式回填
+      // 与输出快照仍能跨次加载匹配（位置型 key 会随行号漂移而失配）。
       cells.push(createNotebookMathCell(block.expression || '', {
-        key: `${NOTEBOOK_MATH_CELL_PREFIX}-${block.blockType}-${startIndex}`,
+        key: String(meta.id),
         sourceType: 'marker',
         meta,
         block,

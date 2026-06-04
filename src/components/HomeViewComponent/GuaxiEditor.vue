@@ -18379,10 +18379,16 @@ const stripInteractiveExportArtifacts = (bodyHtml) => {
 }
 
 const renderMarkdownForExportHtml = async (context) => {
-  const markdown = String(context?.markdown || '')
+  const rawMarkdown = String(context?.markdown || '')
+  // 设计说明：
+  // 探索者模式下数学块 / Python Cell 的真实存储是 <!--math--> / <!--py--> 哨兵块（源码或表达式），
+  // 它们只是“可执行单元”的源，不应出现在导出成品里。这里复用与软件内预览同款的遮罩，
+  // 把 Cell 区域整体替换成空行（保留行号），保证导出与预览同源、且不会把数学源码 / $$ 渲染进 PDF/HTML。
+  const markdown = maskMathCellBlocksForMarkdown(maskPythonCellBlocksForMarkdown(rawMarkdown))
   logger.info('[Export] render markdown to export html start', {
     inputPath: context.inputPath,
     markdownLength: markdown.length,
+    rawMarkdownLength: rawMarkdown.length,
   })
 
   // 设计说明：
@@ -18451,8 +18457,54 @@ const exportMarkdownRenderedPdf = async (context, outputPath) => {
 const MERMAID_EXPORT_FONT_FAMILY =
   '"Trebuchet MS", "Noto Sans SC", "Microsoft YaHei", "PingFang SC", "Helvetica Neue", Arial, sans-serif'
 
+// 设计说明：
+// mermaid.render 产出的 SVG 偶尔缺少根 xmlns 命名空间，
+// 直接当作 <img> 资源加载时浏览器会判定为非法 SVG 触发 onerror，
+// 导致导出栅格化整块失败、最终回退成源码（这正是 Word/EPUB 里 mermaid 还是代码的根因）。
+// 这里补齐命名空间，让 SVG 能稳定作为图片解码。
+const normalizeMermaidSvgForRaster = (svg) => {
+  let svgText = String(svg || '')
+  if (!svgText.trim()) return ''
+  if (!/xmlns=/.test(svgText)) {
+    svgText = svgText.replace(/<svg\b/i, '<svg xmlns="http://www.w3.org/2000/svg"')
+  }
+  if (!/xmlns:xlink=/.test(svgText)) {
+    svgText = svgText.replace(/<svg\b/i, '<svg xmlns:xlink="http://www.w3.org/1999/xlink"')
+  }
+  return svgText
+}
+
+const decodeMermaidSvgImage = async (svgText, width, height) => {
+  const loadImage = (src) => new Promise((resolve, reject) => {
+    const image = new Image()
+    image.width = width
+    image.height = height
+    image.onload = () => resolve(image)
+    image.onerror = () => reject(new Error('load mermaid svg failed'))
+    image.src = src
+  })
+
+  // 优先用 base64 data URL：相比 blob: URL，在 Tauri/Electron webview 里把 SVG 解码为图片更稳定。
+  try {
+    const dataUrl = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svgText)))}`
+    return { image: await loadImage(dataUrl), revoke: null }
+  } catch (dataUrlError) {
+    logger.debug('[Export] mermaid data-url decode failed, fallback to blob url', {
+      error: String(dataUrlError?.message || dataUrlError),
+    })
+    const blob = new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    try {
+      return { image: await loadImage(url), revoke: () => URL.revokeObjectURL(url) }
+    } catch (blobError) {
+      URL.revokeObjectURL(url)
+      throw blobError
+    }
+  }
+}
+
 const rasterizeMermaidSvgToPng = async (svg, scale = 2) => {
-  const svgText = String(svg || '')
+  const svgText = normalizeMermaidSvgForRaster(svg)
   if (!svgText.trim()) throw new Error('empty mermaid svg')
 
   // 优先用 viewBox 推断尺寸，回退到 width/height 属性，最后兜底一个合理默认值。
@@ -18475,18 +18527,8 @@ const rasterizeMermaidSvgToPng = async (svg, scale = 2) => {
   if (!width) width = 800
   if (!height) height = 600
 
-  const blob = new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
+  const { image, revoke } = await decodeMermaidSvgImage(svgText, width, height)
   try {
-    const image = new Image()
-    image.width = width
-    image.height = height
-    await new Promise((resolve, reject) => {
-      image.onload = () => resolve()
-      image.onerror = () => reject(new Error('load mermaid svg failed'))
-      image.src = url
-    })
-
     const canvas = document.createElement('canvas')
     canvas.width = Math.max(1, Math.round(width * scale))
     canvas.height = Math.max(1, Math.round(height * scale))
@@ -18500,7 +18542,7 @@ const rasterizeMermaidSvgToPng = async (svg, scale = 2) => {
     })
     return new Uint8Array(await pngBlob.arrayBuffer())
   } finally {
-    URL.revokeObjectURL(url)
+    revoke?.()
   }
 }
 
@@ -18562,7 +18604,13 @@ const prerenderMermaidForPandoc = async (markdown) => {
     try {
       const renderId = `guaxi-export-mermaid-${Date.now()}-${i}`
       const out = await Promise.resolve(mermaid.render(renderId, source))
-      const svg = typeof out === 'string' ? out : String(out?.svg || '')
+      const rawSvg = typeof out === 'string' ? out : String(out?.svg || '')
+      if (!rawSvg.trim()) throw new Error('mermaid render produced empty svg')
+      // 与软件内预览同源：把字体显式写进 SVG，避免栅格化后文字字体丢失。
+      const svg = rawSvg.replace(
+        /<svg\b/i,
+        `<svg font-family='${MERMAID_EXPORT_FONT_FAMILY.replace(/"/g, "'")}'`,
+      )
       const png = await rasterizeMermaidSvgToPng(svg)
       const filePath = await join(baseDir, `mermaid_${i + 1}.png`)
       await writeFile(filePath, png)
@@ -18584,6 +18632,15 @@ const prerenderMermaidForPandoc = async (markdown) => {
     rendered,
     failures,
   })
+  // 设计说明：若一张都没渲染成功，pandoc 端只能拿到原始 ```mermaid 源码（显示为代码块）。
+  // 这里显式告警 + 提示用户，避免“导出成 Word/EPUB 后 mermaid 还是源码”这一问题被静默吞掉。
+  if (blocks.length > 0 && rendered === 0) {
+    logger.warn('[Export] all mermaid blocks failed to prerender; pandoc output will keep source code', {
+      total: blocks.length,
+      failures,
+    })
+    message.warning('Mermaid 图表导出渲染失败，成品中将保留源码，请检查图表语法或重试')
+  }
   return result
 }
 

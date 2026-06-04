@@ -66,6 +66,11 @@ export const serializeMathCellMeta = (meta = {}) => {
   return `<!--math ${json}-->`;
 };
 
+// 设计说明：与 Python Cell 的 createPythonCellStableId 对称，
+// 为数学块生成稳定 id。探索者模式下源 Markdown 只保留引用块，
+// cellmeta 侧数据与输出快照的跨次加载匹配都依赖这个稳定 id。
+export const createMathCellStableId = () => `math-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
 export const buildMathCellBlock = ({
   expression = '',
   meta = {},

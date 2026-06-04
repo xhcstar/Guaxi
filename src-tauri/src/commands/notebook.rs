@@ -851,9 +851,21 @@ fn build_markdown_cells(markdown: &str) -> Vec<NotebookCell> {
             }
             "math" => {
                 let meta = block.meta.clone();
+                // 与 Python Cell 对称：优先用稳定 meta.id 作为 key，保证 cellmeta 表达式回填
+                // 与输出快照能跨次加载稳定匹配（位置型 key 会随行号漂移失配）。
+                let stable_id = meta
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let key = if stable_id.is_empty() {
+                    format!("nb-math-{}-{}", block.block_type, start_index)
+                } else {
+                    stable_id
+                };
                 cells.push(NotebookCell {
                     cell_type: "math".to_string(),
-                    key: format!("nb-math-{}-{}", block.block_type, start_index),
+                    key,
                     content: None,
                     code: None,
                     meta: Some(Value::Object(meta)),
@@ -907,6 +919,51 @@ fn cell_stable_id(cell: &NotebookCell) -> String {
         .to_string()
 }
 
+fn cell_meta_storage(cell: &NotebookCell) -> String {
+    cell.meta
+        .as_ref()
+        .and_then(Value::as_object)
+        .and_then(|meta| meta.get("storage"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+// 把 sidecar 持久化的 meta 作为底，再用扫描结果的 meta 覆盖（源文件里手工改过的字段优先）。
+fn merge_persisted_meta(persisted: Option<Value>, current: Option<Value>) -> Option<Value> {
+    match (persisted, current) {
+        (Some(Value::Object(mut persisted_meta)), Some(Value::Object(current_meta))) => {
+            for (key, value) in current_meta {
+                persisted_meta.insert(key, value);
+            }
+            Some(Value::Object(persisted_meta))
+        }
+        (_, Some(current)) => Some(current),
+        (persisted, None) => persisted,
+    }
+}
+
+// 在 sidecar 的某一类型 cell 中按 stable-id / 内容 digest 找到对应的持久化 cell。
+fn find_persisted_cell(
+    cell: &NotebookCell,
+    by_stable_id: &std::collections::HashMap<String, NotebookCell>,
+    by_digest: &std::collections::HashMap<String, Vec<NotebookCell>>,
+) -> Option<NotebookCell> {
+    let stable_id = cell_stable_id(cell);
+    if !stable_id.is_empty() {
+        if let Some(found) = by_stable_id.get(&stable_id) {
+            return Some(found.clone());
+        }
+    }
+    let candidates = by_digest.get(&cell_digest(cell))?;
+    if candidates.len() == 1 {
+        Some(candidates[0].clone())
+    } else {
+        None
+    }
+}
+
 fn reconcile_cells_with_sidecar(scanned_cells: Vec<NotebookCell>, sidecar: Option<&NotebookSidecarPayload>) -> Vec<NotebookCell> {
     let Some(sidecar_payload) = sidecar else {
         return scanned_cells;
@@ -915,76 +972,65 @@ fn reconcile_cells_with_sidecar(scanned_cells: Vec<NotebookCell>, sidecar: Optio
         return scanned_cells;
     }
 
-    let mut by_stable_id = std::collections::HashMap::new();
-    let mut by_code_digest: std::collections::HashMap<String, Vec<NotebookCell>> = std::collections::HashMap::new();
+    // 设计说明：Python Cell 与 Math Cell 都采用「源 Markdown 只存引用块、正文存 .cellmeta」的方案，
+    // 因此这里按类型分别建立 stable-id / 内容 digest 索引（python 用 code，math 用 expression）。
+    let mut py_by_stable_id = std::collections::HashMap::new();
+    let mut py_by_digest: std::collections::HashMap<String, Vec<NotebookCell>> = std::collections::HashMap::new();
+    let mut math_by_stable_id = std::collections::HashMap::new();
+    let mut math_by_digest: std::collections::HashMap<String, Vec<NotebookCell>> = std::collections::HashMap::new();
     for cell in &sidecar_payload.cells {
-        if cell.cell_type != "python" {
-            continue;
-        }
         let stable_id = cell_stable_id(cell);
-        if !stable_id.is_empty() {
-            by_stable_id.insert(stable_id, cell.clone());
+        match cell.cell_type.as_str() {
+            "python" => {
+                if !stable_id.is_empty() {
+                    py_by_stable_id.insert(stable_id, cell.clone());
+                }
+                py_by_digest.entry(cell_digest(cell)).or_default().push(cell.clone());
+            }
+            "math" => {
+                if !stable_id.is_empty() {
+                    math_by_stable_id.insert(stable_id, cell.clone());
+                }
+                math_by_digest.entry(cell_digest(cell)).or_default().push(cell.clone());
+            }
+            _ => {}
         }
-        by_code_digest
-            .entry(cell_digest(cell))
-            .or_default()
-            .push(cell.clone());
     }
 
     scanned_cells
         .into_iter()
-        .map(|cell| {
-            if cell.cell_type != "python" {
-                return cell;
-            }
-            let stable_id = cell_stable_id(&cell);
-            let persisted = if !stable_id.is_empty() {
-                by_stable_id.get(&stable_id).cloned()
-            } else {
-                None
-            }
-            .or_else(|| {
-                let digest = cell_digest(&cell);
-                let candidates = by_code_digest.get(&digest)?;
-                if candidates.len() == 1 {
-                    Some(candidates[0].clone())
-                } else {
-                    None
-                }
-            });
-
-            if let Some(persisted_cell) = persisted {
+        .map(|cell| match cell.cell_type.as_str() {
+            "python" => {
+                let Some(persisted_cell) = find_persisted_cell(&cell, &py_by_stable_id, &py_by_digest) else {
+                    return cell;
+                };
                 let mut next = cell.clone();
-                // 设计说明：
-                // 1. 新版探索者模式允许 Markdown 只保存 Python Cell 引用块，代码正文保存在 `.cellmeta`。
-                // 2. 当前扫描结果如果是 `storage: cellmeta` 且代码为空，就从 sidecar 中恢复代码。
-                // 3. 旧版完整源码块仍按 Markdown 内容优先，避免 sidecar 覆盖用户刚在源文件里手工修改的代码。
-                let current_storage = cell
-                    .meta
-                    .as_ref()
-                    .and_then(Value::as_object)
-                    .and_then(|meta| meta.get("storage"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .trim()
-                    .to_string();
+                // 引用块（storage=cellmeta 且代码为空）从 sidecar 恢复代码；
+                // 旧版完整源码块按 Markdown 内容优先，避免覆盖用户在源文件里的手工修改。
                 let current_code_empty = cell.code.as_deref().unwrap_or("").is_empty();
                 let persisted_code = persisted_cell.code.clone().unwrap_or_default();
-                if current_storage == "cellmeta" && current_code_empty && !persisted_code.is_empty() {
+                if cell_meta_storage(&cell) == "cellmeta" && current_code_empty && !persisted_code.is_empty() {
                     next.code = Some(persisted_code);
                 }
-                if let (Some(Value::Object(mut persisted_meta)), Some(Value::Object(current_meta))) =
-                    (persisted_cell.meta.clone(), cell.meta.clone())
-                {
-                    for (key, value) in current_meta {
-                        persisted_meta.insert(key, value);
-                    }
-                    next.meta = Some(Value::Object(persisted_meta));
-                }
+                next.meta = merge_persisted_meta(persisted_cell.meta.clone(), cell.meta.clone());
                 next
-            } else {
-                cell
             }
+            "math" => {
+                let Some(persisted_cell) = find_persisted_cell(&cell, &math_by_stable_id, &math_by_digest) else {
+                    return cell;
+                };
+                let mut next = cell.clone();
+                // 引用块（storage=cellmeta 且表达式为空）从 sidecar 恢复数学表达式；
+                // 旧版内联块自带表达式，保持原样。
+                let current_expr_empty = cell.expression.as_deref().unwrap_or("").is_empty();
+                let persisted_expr = persisted_cell.expression.clone().unwrap_or_default();
+                if cell_meta_storage(&cell) == "cellmeta" && current_expr_empty && !persisted_expr.is_empty() {
+                    next.expression = Some(persisted_expr);
+                }
+                next.meta = merge_persisted_meta(persisted_cell.meta.clone(), cell.meta.clone());
+                next
+            }
+            _ => cell,
         })
         .collect()
 }

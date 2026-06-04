@@ -396,16 +396,8 @@
                   </div>
                 </div>
               </div>
-              <!-- 写回：运行并把结果插入为 Markdown Cell，方便沉淀到文档。 -->
-              <button
-                type="button"
-                class="guaxi-notebook__icon-btn"
-                data-tooltip="运行并写回 Markdown"
-                aria-label="运行并写回 Markdown"
-                @click="runMathCell(cell, true)"
-              >
-                <Icon :icon="saveIcon" width="16" height="16" />
-              </button>
+              <!-- 设计说明：数学块与 Python Cell 对称，表达式与输出只存 cellmeta 侧数据，
+                   绝不写入源 Markdown（避免被预览/导出当作 $$ 公式渲染），因此不再提供「运行并写回」。 -->
               <button
                 v-if="hasVisibleOutput(cell)"
                 type="button"
@@ -468,7 +460,7 @@
                     >
                       <Icon :icon="copyIcon" width="14" height="14" />
                     </button>
-                    <button type="button" class="guaxi-notebook__panel-btn" @click="insertOutputMarkdownAfterCell(cell, outputModule.id)">写回 Markdown</button>
+                    <!-- 数学输出不写回源 Markdown（只存 cellmeta 侧数据），仅保留导出文件能力。 -->
                     <button type="button" class="guaxi-notebook__panel-btn" @click="exportCellOutputToFile(cell, outputModule.id)">导出文件</button>
                     <button
                       type="button"
@@ -1831,23 +1823,76 @@ const reconcileNotebookCellsWithSidecar = (markdownCells = [], sidecar = null) =
 
   const sidecarPythonByStableId = new Map()
   const sidecarPythonByCodeDigest = new Map()
+  // 设计说明：数学块与 Python Cell 对称 —— 源 Markdown 只保留引用块，表达式存 sidecar。
+  // 这里为数学块单独建索引（按稳定 id / 表达式 digest），用于加载时回填表达式。
+  const sidecarMathByStableId = new Map()
+  const sidecarMathByDigest = new Map()
   sidecarCells.forEach((cell) => {
-    if (cell?.type !== 'python') return
     const stableId = getNotebookCellStableId(cell)
-    const codeDigest = getNotebookCellContentDigest(cell)
-    if (stableId) {
-      sidecarPythonByStableId.set(stableId, cell)
+    const contentDigest = getNotebookCellContentDigest(cell)
+    if (cell?.type === 'python') {
+      if (stableId) {
+        sidecarPythonByStableId.set(stableId, cell)
+      }
+      if (contentDigest) {
+        const bucket = sidecarPythonByCodeDigest.get(contentDigest) || []
+        bucket.push(cell)
+        sidecarPythonByCodeDigest.set(contentDigest, bucket)
+      }
+      return
     }
-    if (codeDigest) {
-      const bucket = sidecarPythonByCodeDigest.get(codeDigest) || []
-      bucket.push(cell)
-      sidecarPythonByCodeDigest.set(codeDigest, bucket)
+    if (cell?.type === 'math') {
+      if (stableId) {
+        sidecarMathByStableId.set(stableId, cell)
+      }
+      if (contentDigest) {
+        const bucket = sidecarMathByDigest.get(contentDigest) || []
+        bucket.push(cell)
+        sidecarMathByDigest.set(contentDigest, bucket)
+      }
     }
   })
 
   let stableIdMatchedCount = 0
   let codeDigestMatchedCount = 0
+  let mathRestoredCount = 0
   const reconciledCells = normalizedMarkdownCells.map((cell) => {
+    if (cell?.type === 'math') {
+      const stableId = getNotebookCellStableId(cell)
+      const currentStorage = String(cell?.meta?.storage || '').trim()
+      const currentExpression = String(cell?.expression || '')
+      // 只有引用块（storage=cellmeta 且正文为空）才需要从 sidecar 回填，
+      // 旧式内联块自带表达式，保持原样即可。
+      if (currentStorage !== 'cellmeta' || currentExpression) {
+        return cell
+      }
+      let persistedCell = stableId ? sidecarMathByStableId.get(stableId) : null
+      if (!persistedCell) {
+        const digestCandidates = sidecarMathByDigest.get(getNotebookCellContentDigest(cell)) || []
+        if (digestCandidates.length === 1) {
+          persistedCell = digestCandidates[0]
+        }
+      }
+      const persistedExpression = String(persistedCell?.expression || '')
+      if (!persistedExpression) {
+        return cell
+      }
+      mathRestoredCount += 1
+      logger.info('[Notebook] restored math cell expression from sidecar reference block', {
+        stableId,
+        expressionLength: persistedExpression.length,
+      })
+      return createNotebookMathCell(persistedExpression, {
+        ...cell,
+        expression: persistedExpression,
+        key: cell.key,
+        meta: {
+          ...(persistedCell.meta || {}),
+          ...(cell.meta || {}),
+          id: getNotebookCellStableId(persistedCell) || stableId,
+        },
+      })
+    }
     if (cell?.type !== 'python') {
       return cell
     }
@@ -1898,8 +1943,10 @@ const reconcileNotebookCellsWithSidecar = (markdownCells = [], sidecar = null) =
   logger.info('[Notebook] reconciled notebook cells with sidecar', {
     markdownCellCount: normalizedMarkdownCells.filter((cell) => cell?.type === 'markdown').length,
     pythonCellCount: normalizedMarkdownCells.filter((cell) => cell?.type === 'python').length,
+    mathCellCount: normalizedMarkdownCells.filter((cell) => cell?.type === 'math').length,
     stableIdMatchedCount,
     codeDigestMatchedCount,
+    mathRestoredCount,
   })
   return reconciledCells
 }
@@ -6814,6 +6861,70 @@ const serializeDisplayAssetForMarkdown = async (display, cellId) => {
   }
 }
 
+// 设计说明（交互式图表静态化）：
+// 1. plotly 等交互输出的 HTML 片段里已内联 plotly.js（include_plotlyjs=True），
+//    因此可以挂进一个隐藏 iframe，等 Plotly 完成首帧绘制后用 Plotly.toImage 取静态 PNG。
+// 2. 这样源 Markdown 只插入 ![](图片url)（+ 交互版链接），绝不内联大段 HTML/JS。
+// 3. 与 GuaxiEditor 的 rasterizeMermaidSvgToPng 思路一致：浏览器栅格化 + 资源入库。
+const rasterizePlotlyHtmlToPng = async (html, { timeoutMs = 8000 } = {}) => {
+  const fragment = String(html || '')
+  if (!fragment.trim()) return null
+  const iframe = document.createElement('iframe')
+  iframe.setAttribute('aria-hidden', 'true')
+  iframe.style.position = 'fixed'
+  iframe.style.left = '-10000px'
+  iframe.style.top = '0'
+  iframe.style.width = '1024px'
+  iframe.style.height = '768px'
+  iframe.style.border = '0'
+  iframe.style.visibility = 'hidden'
+  iframe.srcdoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>html,body{margin:0;padding:0;background:#fff;}</style></head><body>${fragment}</body></html>`
+  document.body.appendChild(iframe)
+  try {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('plotly iframe load timeout')), timeoutMs)
+      iframe.onload = () => { clearTimeout(timer); resolve() }
+      iframe.onerror = () => { clearTimeout(timer); reject(new Error('plotly iframe load failed')) }
+    })
+    const win = iframe.contentWindow
+    const docRef = iframe.contentDocument || win?.document
+    if (!win || !docRef) return null
+    // 轮询等待 Plotly 加载并完成首帧绘制（gd._fullLayout 出现即认为已绘制）。
+    const deadline = Date.now() + timeoutMs
+    let gd = null
+    while (Date.now() < deadline) {
+      gd = docRef.querySelector('.plotly-graph-div')
+      if (win.Plotly && gd && gd._fullLayout) break
+      await new Promise((r) => setTimeout(r, 120))
+    }
+    if (!win.Plotly || !gd || !gd._fullLayout) return null
+    const width = Math.max(1, Math.round(gd.clientWidth || gd._fullLayout?.width || 1024))
+    const height = Math.max(1, Math.round(gd.clientHeight || gd._fullLayout?.height || 768))
+    const dataUrl = await win.Plotly.toImage(gd, { format: 'png', width, height, scale: 2 })
+    const matched = String(dataUrl || '').match(/^data:[^;]+;base64,(.+)$/i)
+    if (!matched) return null
+    return base64ToUint8Array(matched[1])
+  } finally {
+    iframe.remove()
+  }
+}
+
+// 把交互式 HTML（字节）整体写入资源库，返回可访问 URL；用于「查看交互版本」链接。
+const registerInteractiveHtmlResource = async (htmlOrBytes, cellId) => {
+  const bytes = htmlOrBytes instanceof Uint8Array
+    ? htmlOrBytes
+    : new TextEncoder().encode(String(htmlOrBytes || ''))
+  const stored = await registerResourceFile({
+    bytes,
+    resourceType: 'file',
+    extension: 'html',
+    ownerFilePath: props.filePath,
+    cellId,
+    source: 'python-cell-interactive',
+  })
+  return stored.url
+}
+
 const ensureNotebookTableRowsMaterialized = async (table = null) => {
   if (!table || typeof table !== 'object') return null
   const expectedRowCount = Math.max(0, Number(table.rowCount || 0))
@@ -6865,17 +6976,66 @@ const buildMarkdownOutputFromModule = async (cell, outputModule = null, snapshot
 
   const display = targetModule?.display || resolvedSnapshot?.display || null
   const displayType = targetModule?.kind || normalizeDisplayType(display)
+  const cellId = String(cell?.cellId || cell?.key || '')
   if (displayType === 'markdown' && display?.markdown) return String(display.markdown)
-  if (displayType === 'html' && display?.html) return String(display.html)
+
+  // 设计说明（统一产物写回 · 交互式 HTML）：
+  // plotly 等交互输出绝不再把整段 HTML/JS 内联进源 Markdown。改为：
+  //   1) 把交互图栅格化成静态 PNG → 资源库 → ![](pngUrl)；
+  //   2) 把交互 HTML 整体入库 → 追加 [查看交互版本](htmlUrl)。
+  // 两者任一失败都降级，但永不内联原始 HTML。
+  if (displayType === 'html' && display?.html) {
+    const parts = []
+    try {
+      const png = await rasterizePlotlyHtmlToPng(String(display.html))
+      if (png) {
+        const stored = await registerResourceFile({
+          bytes: png,
+          resourceType: 'image',
+          extension: 'png',
+          ownerFilePath: props.filePath,
+          cellId,
+          source: 'python-cell-output',
+        })
+        parts.push(`![交互图表静态预览](${stored.url})`)
+      }
+    } catch (error) {
+      logger.warn('[Notebook] rasterize interactive html to png failed, keep interactive link only', {
+        cellId,
+        error: String(error?.message || error),
+      })
+    }
+    try {
+      const htmlUrl = await registerInteractiveHtmlResource(String(display.html), cellId)
+      parts.push(`[查看交互版本](${htmlUrl})`)
+    } catch (error) {
+      logger.error('[Notebook] register interactive html resource failed', {
+        cellId,
+        error: String(error?.message || error),
+      })
+    }
+    return parts.length ? parts.join('\n\n') : '> 交互式图表无法写回（资源入库失败）'
+  }
   if (displayType === 'html' && getDisplaySourcePath(display)) {
+    // 基于文件的交互 HTML（如 matplotlib htmlwriter 动画）：整文件入库后插入链接，
+    // 不再用相对 iframe 引用（文档移动即失效），也保持源 Markdown 干净。
     const sourcePath = getDisplaySourcePath(display)
-    const reference = encodeURI(getRelativeNotebookPath(sourcePath))
-    return `<iframe src="${escapeHtmlAttribute(reference)}" style="width:100%;min-height:520px;border:0;" loading="lazy"></iframe>`
+    try {
+      const bytes = await readBytesFromPath(sourcePath, 'markdown-writeback-html-source')
+      const htmlUrl = await registerInteractiveHtmlResource(bytes, cellId)
+      return `[查看交互版本](${htmlUrl})`
+    } catch (error) {
+      logger.error('[Notebook] register interactive html file failed', {
+        cellId,
+        error: String(error?.message || error),
+      })
+      return '> 交互式图表无法写回（资源入库失败）'
+    }
   }
   if (displayType === 'svg' && display?.svg) return String(display.svg)
 
   if (['image', 'audio', 'video'].includes(displayType)) {
-    const asset = await serializeDisplayAssetForMarkdown(display, String(cell?.cellId || cell?.key || ''))
+    const asset = await serializeDisplayAssetForMarkdown(display, cellId)
     if (asset?.reference) {
       if (displayType === 'image') {
         return `![Python Cell 输出](${asset.reference})`
@@ -6889,45 +7049,18 @@ const buildMarkdownOutputFromModule = async (cell, outputModule = null, snapshot
     }
   }
 
+  // 其它产物（附件 / 未识别的二进制）：统一入资源库后以链接插入，绝不内联。
+  if (display && (getDisplaySourcePath(display) || getDisplayDataUrl(display))) {
+    const asset = await serializeDisplayAssetForMarkdown(display, cellId)
+    if (asset?.reference) {
+      const name = String(getDisplaySourcePath(display) || '').split(/[\\/]/).pop() || '附件'
+      return `[${name}](${asset.reference})`
+    }
+  }
+
   const text = String(targetModule?.text || resolvedSnapshot?.outputText || '').trim()
   if (!text) return ''
   return `\`\`\`text\n${text}\n\`\`\``
-}
-
-const insertOutputMarkdownAfterCell = async (cell, moduleId = '') => {
-  flushPendingNotebookMarkdown('before-insert-output-markdown-after-cell')
-  const snapshot = getCellSnapshot(cell)
-  const outputModule = getCellOutputModule(cell, moduleId)
-  const markdownOutput = await buildMarkdownOutputFromModule(cell, outputModule, snapshot)
-  if (!markdownOutput) {
-    message.warning('当前输出暂时无法写回为 Markdown')
-    return
-  }
-
-  const targetIndex = notebookCells.value.findIndex((entry) => String(entry?.key || '') === String(cell?.key || ''))
-  if (targetIndex < 0) {
-    logger.error('[Notebook] failed to insert output markdown because source cell is missing', {
-      key: String(cell?.key || ''),
-      cellId: String(cell?.cellId || ''),
-      moduleId: String(outputModule?.id || moduleId || ''),
-    })
-    message.error('没有找到要写回的源 Cell')
-    return
-  }
-
-  const outputCell = createNotebookMarkdownCell(markdownOutput)
-  const nextCells = notebookCells.value.slice()
-  nextCells.splice(targetIndex + 1, 0, outputCell)
-  logger.info('[Notebook] insert output markdown cell after executable cell', {
-    sourceType: String(cell?.type || ''),
-    sourceKey: String(cell?.key || ''),
-    sourceCellId: String(cell?.cellId || ''),
-    outputCellKey: String(outputCell?.key || ''),
-    moduleId: String(outputModule?.id || moduleId || ''),
-    markdownLength: markdownOutput.length,
-  })
-  emitCells(nextCells, outputCell.key)
-  message.success('输出已写回为新的 Markdown Cell')
 }
 
 const getTableExportFilters = (table = {}, cell = null) => {
@@ -7764,10 +7897,13 @@ const runNotebookLabGeneratedCode = async (cell, {
     schedulePersistNotebookSidecar(`${source}-success`)
 
     if (writeBack && outputModuleId) {
+      // 设计说明：
+      // 1. Python Cell 写回是把产物写入受管 <!--output--> 块（且经资源库统一处理）。
+      // 2. 数学块与 Python Cell 对称：表达式与输出只存 cellmeta 侧数据，
+      //    绝不把内容或 $$ 公式写进源 Markdown（否则会被预览/导出当作真正的数学公式渲染）。
+      //    因此数学块即使带 writeBack 也不写回源文件，输出仅留在 outputModule + sidecar 快照。
       if (cell?.type === 'python') {
         await writeCellOutputToMarkdown(cell, outputModuleId)
-      } else {
-        await insertOutputMarkdownAfterCell(cell, outputModuleId)
       }
     }
     if (exportAfter && outputModuleId) {
