@@ -32,7 +32,7 @@
 
 
       <div class="toolbar">
-        <div v-if="previewMode !== 'realtime' && editorSurfaceMode !== 'notebook'" class="toolbar-editing-actions">
+        <div v-if="previewMode !== 'realtime' && editorSurfaceMode !== 'notebook'" class="toolbar-editing-actions" :class="{ 'is-preview-readonly': isPreviewOnlyReadonly }">
           <n-dropdown trigger="click" :options="headingOptions" @select="handleHeadingSelect">
             <n-tooltip placement="top" trigger="hover">
               <template #trigger>
@@ -657,6 +657,8 @@
           <button class="preview-search-btn preview-search-close" type="button" @click="closePreviewSearch">关闭</button>
         </div>
         <div v-html="renderedHtml" class="preview" ref="previewContainer" @click="handlePreviewClick"
+          :style="{ '--guaxi-preview-zoom': previewZoom }"
+          @wheel="handlePreviewWheelZoom"
           @mouseup="handlePreviewSelectionMouseUp"></div>
         <div v-show="previewFloatingToolbarVisible" class="floating-md-toolbar" :style="previewFloatingToolbarStyle"
           @mousedown.prevent>
@@ -1258,6 +1260,11 @@ let previewRenderRequestId = 0
 const EDITOR_CONTENT_SYNC_DELAY_MS = 0
 const EDITOR_POSTPROCESS_DELAY_MS = 220
 const previewContainer = ref(null);
+// 预览区缩放（Q5）：用字号缩放因子驱动 .preview，保持自动换行/滚动正常（不用 transform:scale）。
+const PREVIEW_ZOOM_MIN = 0.5;
+const PREVIEW_ZOOM_MAX = 3;
+const PREVIEW_ZOOM_STEP = 0.1;
+const previewZoom = ref(1);
 const pythonRuntimeAnchorRef = ref(null)
 const pythonRuntimePanelRef = ref(null)
 const pythonRuntimePopoverVisible = ref(false)
@@ -8872,9 +8879,11 @@ const activateEditorLanguageFeatures = (targetEditor, reason = 'manual') => {
 
   void enableLspForEditorLanguage(targetEditor, languageId, filePath)
   if (languageId === 'markdown') {
+    ensureNotebookSentinelFoldingProvider()
     clearDirectFileSyntaxHighlight(targetEditor)
     scheduleMarkdownFenceSyntaxHighlightAfterContentSync(targetEditor, reason)
     scheduleMarkdownMathSyntaxHighlight(targetEditor, reason)
+    autoFoldNotebookSentinels(targetEditor, reason)
   } else {
     clearMarkdownFenceSyntaxHighlight(targetEditor)
     clearMarkdownMathSyntaxHighlight(targetEditor)
@@ -8929,6 +8938,99 @@ const ensureLanguagePairingConfig = (languageId) => {
   } catch (e) {
     logger.warn('[Editor] failed to configure language pairing', { languageId: id, error: e })
   }
+}
+
+// 设计说明（编辑模式折叠探索者哨兵块 · 对应问题 4）：
+// 1. 探索者模式会在源 Markdown 里插入三类“管理用”哨兵区块：
+//    - Math Cell：  <!--math {...}--> ... <!--/math-->
+//    - Python Cell：<!--py {...}-->   ... <!--/py-->
+//    - Python 输出：<!-- guaxi:pyout:...:start --> ... <!-- guaxi:pyout:...:end -->
+//    这些标记是 cell 定位 / 输出回填的必要锚点（不能删，删了切回探索者模式会丢内容），
+//    但在“编辑模式”直接阅读源码时它们很占地方。
+// 2. 这里给 markdown 注册一个 FoldingRangeProvider，把每段哨兵块识别成一个可折叠 region，
+//    再在文件载入后默认折叠，既保留标记又让正文清爽。
+const NOTEBOOK_SENTINEL_FOLD_RULES = [
+  { startRe: /^\s*<!--\s*math(?:\s+\{.*\})?\s*-->\s*$/, endRe: /^\s*<!--\s*\/math\s*-->\s*$/ },
+  { startRe: /^\s*<!--\s*py(?:\s+\{.*\})?\s*-->\s*$/, endRe: /^\s*<!--\s*\/py\s*-->\s*$/ },
+  { startRe: /^\s*<!--\s*guaxi:pyout:.*:start\s*-->\s*$/, endRe: /^\s*<!--\s*guaxi:pyout:.*:end\s*-->\s*$/ },
+]
+
+// 扫描文本，返回每个哨兵块的起止行号（1-based），用于折叠提供器与默认折叠。
+const computeNotebookSentinelFoldRanges = (text) => {
+  const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n')
+  const ranges = []
+  for (let i = 0; i < lines.length; i += 1) {
+    const rule = NOTEBOOK_SENTINEL_FOLD_RULES.find((item) => item.startRe.test(lines[i]))
+    if (!rule) continue
+    let endIndex = -1
+    for (let j = i + 1; j < lines.length; j += 1) {
+      if (rule.endRe.test(lines[j])) { endIndex = j; break }
+    }
+    if (endIndex < 0) continue
+    // Monaco 折叠要求 end > start（同一行的空块无法折叠），单行块跳过即可。
+    if (endIndex > i) {
+      ranges.push({ start: i + 1, end: endIndex + 1 })
+    }
+    i = endIndex
+  }
+  return ranges
+}
+
+let notebookSentinelFoldingProviderRegistered = false
+const ensureNotebookSentinelFoldingProvider = () => {
+  if (notebookSentinelFoldingProviderRegistered) return
+  try {
+    monaco.languages.registerFoldingRangeProvider('markdown', {
+      provideFoldingRanges(model) {
+        try {
+          return computeNotebookSentinelFoldRanges(model.getValue()).map((range) => ({
+            start: range.start,
+            end: range.end,
+            kind: monaco.languages.FoldingRangeKind.Region,
+          }))
+        } catch (error) {
+          logger.warn('[Editor] notebook sentinel folding provider failed', { error: String(error?.message || error) })
+          return []
+        }
+      },
+    })
+    notebookSentinelFoldingProviderRegistered = true
+    logger.info('[Editor] registered notebook sentinel folding provider for markdown')
+  } catch (error) {
+    logger.warn('[Editor] failed to register notebook sentinel folding provider', { error: String(error?.message || error) })
+  }
+}
+
+// 在文件载入 / 切换后，把哨兵块默认折叠起来。
+// 用 selectionLines（0-based 起始行）直接驱动内置 editor.fold action，针对性折叠，不影响用户其它折叠操作。
+const collapsedSentinelSignatureByEditor = new WeakMap()
+const autoFoldNotebookSentinels = (targetEditor, reason = 'manual') => {
+  if (!targetEditor) return
+  const model = targetEditor.getModel?.()
+  if (!model || model.getLanguageId?.() !== 'markdown') return
+
+  const ranges = computeNotebookSentinelFoldRanges(model.getValue())
+  if (!ranges.length) return
+
+  // 同一份内容只自动折叠一次，避免每次内容同步都强行把用户手动展开的块再次折叠。
+  const signature = `${model.uri?.toString?.() || ''}::${ranges.map((r) => `${r.start}-${r.end}`).join(',')}`
+  if (collapsedSentinelSignatureByEditor.get(targetEditor) === signature) return
+
+  const selectionLines = ranges.map((range) => range.start - 1)
+  // 折叠提供器是异步计算的，稍作延迟确保 ranges 已就绪后再触发内置折叠 action。
+  window.setTimeout(() => {
+    if (targetEditor.getModel?.() !== model) return
+    try {
+      targetEditor.trigger('guaxi-auto-fold', 'editor.fold', { selectionLines })
+      collapsedSentinelSignatureByEditor.set(targetEditor, signature)
+      logger.info('[Editor] auto-folded notebook sentinel blocks', {
+        reason,
+        count: selectionLines.length,
+      })
+    } catch (error) {
+      logger.warn('[Editor] auto-fold notebook sentinel blocks failed', { reason, error: String(error?.message || error) })
+    }
+  }, 120)
 }
 
 // 初始化编辑器
@@ -9149,6 +9251,14 @@ const initEditor = () => {
     },
     glyphMargin: true, // 启用行号左侧边栏
     lineDecorationsWidth: 6,
+    // 设计说明（折叠 · 对应 Q2）：
+    // 1. 'auto' 会同时启用语言内置折叠（Markdown 按 #/##/### 标题层级折叠）与已注册的
+    //    FoldingRangeProvider（探索者哨兵块 math/py/pyout）。
+    // 2. 标题折叠默认展开；只有哨兵块由 autoFoldNotebookSentinels 在载入后默认折叠。
+    folding: true,
+    foldingStrategy: 'auto',
+    showFoldingControls: 'mouseover',
+    foldingHighlight: true,
     scrollbar: {
       vertical: 'auto',
       horizontal: 'auto',
@@ -10474,6 +10584,13 @@ const ensureMarkdownEditor = (targetEditor = getActiveEditor()) => {
     message.warning('没有可编辑的文档');
     return false;
   }
+  // 设计说明（Q4）：预览-only 模式（previewMode==='toggle' 且 mode==='preview'）下源编辑器被隐藏，
+  // 但实例仍持有内容。此时工具栏的加粗/斜体/插入表格等写操作会改动隐藏的源文档，造成预览与源不一致。
+  // 这里在所有格式化写操作的统一入口处拦截，提示用户切回编辑模式。
+  if (previewMode.value === 'toggle' && mode.value === 'preview' && !showEditor.value) {
+    message.warning('预览模式下不可编辑，请切换到编辑模式后再使用工具栏');
+    return false;
+  }
   const model = targetEditor.getModel();
   if (!model) return false;
   const languageId = model.getLanguageId();
@@ -10950,6 +11067,23 @@ const getSelectedTextForTranslate = () => {
 
   return '';
 };
+
+// 预览区缩放（Q5）——统一的缩放因子设置入口，clamp 到 [PREVIEW_ZOOM_MIN, PREVIEW_ZOOM_MAX]。
+const setPreviewZoom = (nextZoom) => {
+  const clamped = Math.min(PREVIEW_ZOOM_MAX, Math.max(PREVIEW_ZOOM_MIN, Number(nextZoom) || 1))
+  // 取一位小数，避免浮点误差累积成 1.0000000004 这种值。
+  previewZoom.value = Math.round(clamped * 100) / 100
+}
+const adjustPreviewZoom = (delta) => setPreviewZoom(previewZoom.value + delta)
+const resetPreviewZoom = () => setPreviewZoom(1)
+
+// Ctrl + 鼠标滚轮缩放预览（按住 Ctrl/Cmd 时拦截，避免与页面滚动冲突）。
+const handlePreviewWheelZoom = (e) => {
+  if (!(e.ctrlKey || e.metaKey)) return
+  if (!showPreview.value || previewMode.value === 'realtime') return
+  e.preventDefault()
+  adjustPreviewZoom(e.deltaY < 0 ? PREVIEW_ZOOM_STEP : -PREVIEW_ZOOM_STEP)
+}
 
 const handlePreviewSelectionMouseUp = (e) => {
   if (!showPreview.value || previewMode.value === 'realtime') return
@@ -13129,6 +13263,25 @@ const handleKeyDown = (e) => {
   }
 
   if (e.ctrlKey && !e.altKey && !e.metaKey) {
+    // 预览区缩放快捷键（Q5）：仅在预览可见时拦截 Ctrl+= / Ctrl+- / Ctrl+0（复位）。
+    if (showPreview.value && previewMode.value !== 'realtime') {
+      if (e.key === '=' || e.key === '+') {
+        e.preventDefault();
+        adjustPreviewZoom(PREVIEW_ZOOM_STEP);
+        return;
+      }
+      if (e.key === '-' || e.key === '_') {
+        e.preventDefault();
+        adjustPreviewZoom(-PREVIEW_ZOOM_STEP);
+        return;
+      }
+      if (e.key === '0') {
+        e.preventDefault();
+        resetPreviewZoom();
+        return;
+      }
+    }
+
     if (e.key === '1') {
       e.preventDefault();
       handlePreviewModeSelect('edit');
@@ -17578,6 +17731,11 @@ const showEditor = computed(() => {
   return previewMode.value === 'toggle' ? mode.value === 'edit' : true;
 });
 
+// 预览-only（toggle 模式下的纯预览）时工具栏写操作应禁用，仅作视觉置灰提示（Q4）。
+const isPreviewOnlyReadonly = computed(() =>
+  previewMode.value === 'toggle' && mode.value === 'preview' && !showEditor.value
+);
+
 const showPreview = computed(() => {
   if (!selectedFile.value || !canPreview.value) return false;
   if (previewMode.value === 'realtime') return false;
@@ -19782,6 +19940,11 @@ onUnmounted(() => {
   height: 0;
 }
 
+/* 预览-only 模式：工具栏写操作不可用，置灰提示（仍可点击以弹出说明 · Q4）。 */
+.toolbar-editing-actions.is-preview-readonly {
+  opacity: 0.45;
+}
+
 .floating-md-toolbar {
   position: absolute;
   z-index: 9;
@@ -21411,7 +21574,8 @@ onUnmounted(() => {
   flex: 1 1 auto;
   min-height: 0;
   padding: 12px;
-  font-size: 17px;
+  /* 字号随缩放因子变化（Q5）；用 em/rem 排版的子元素会随之等比缩放，且不破坏自动换行与滚动。 */
+  font-size: calc(17px * var(--guaxi-preview-zoom, 1));
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
   line-height: 1.5;
   overflow-y: auto;

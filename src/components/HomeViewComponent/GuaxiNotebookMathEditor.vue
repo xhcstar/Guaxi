@@ -106,6 +106,35 @@ const ensureLatexLanguage = () => {
       ],
     },
   })
+
+  // 设计说明：
+  // 1. LaTeX/SymPy 表达式里括号、引号成对出现频繁（\frac{}{}、矩阵、分段函数、字符串参数），
+  //    因此为自定义 latex 语言补齐 autoClosingPairs / surroundingPairs，开启 Monaco 的成对自动补全与环绕。
+  // 2. `$` 也成对使用（行内/行间公式定界符），一并纳入自动闭合。
+  // 3. notInString 让引号内不再二次补全，避免在已有字符串里输入引号时插入多余符号。
+  monacoRef.languages.setLanguageConfiguration('latex', {
+    brackets: [
+      ['{', '}'],
+      ['[', ']'],
+      ['(', ')'],
+    ],
+    autoClosingPairs: [
+      { open: '{', close: '}' },
+      { open: '[', close: ']' },
+      { open: '(', close: ')' },
+      { open: '$', close: '$' },
+      { open: '"', close: '"', notIn: ['string'] },
+      { open: "'", close: "'", notIn: ['string'] },
+    ],
+    surroundingPairs: [
+      { open: '{', close: '}' },
+      { open: '[', close: ']' },
+      { open: '(', close: ')' },
+      { open: '$', close: '$' },
+      { open: '"', close: '"' },
+      { open: "'", close: "'" },
+    ],
+  })
   logger.info('[NotebookMathEditor] LaTeX language ready', {
     cellKey: String(props.cellKey || ''),
     existed: exists,
@@ -197,6 +226,13 @@ const mountMonacoEditor = async () => {
       language: 'latex',
       minimap: { enabled: false },
       automaticLayout: true,
+      // 设计说明：配合上面的 latex 语言配置，开启括号/引号成对自动补全、删除联动与选区环绕，
+      // 让数学块的输入体验与主编辑器一致。
+      autoClosingBrackets: 'always',
+      autoClosingQuotes: 'always',
+      autoClosingDelete: 'auto',
+      autoClosingOvertype: 'auto',
+      autoSurround: 'languageDefined',
       // 设计说明：数学块与 Python Cell 都承担“可执行源码”的角色，因此保留行号，
       // 方便用户在多行方程组、微分方程和积分方程报错时对齐后端 traceback。
       lineNumbers: 'on',

@@ -875,7 +875,7 @@ import GuaxiNotebookHtmlOutput from './GuaxiNotebookHtmlOutput.vue'
 import GuaxiNotebookTableOutput from './GuaxiNotebookTableOutput.vue'
 import GuaxiSelectionTranslatePanel from './GuaxiSelectionTranslatePanel.vue'
 import GuaxiNotebookUsageAssistant from './GuaxiNotebookUsageAssistant.vue'
-import { renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker'
+import { renderMarkdown, addCopyButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
 import {
   createPythonCellId,
   createPythonSessionId,
@@ -7049,16 +7049,23 @@ const buildInteractiveArtifactMarkup = (pngUrl, htmlUrl) => {
   if (!safePng && !safeHtml) return '> 交互式图表无法写回（资源入库失败）'
 
   const externalIcon = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>'
+
+  // 设计说明（icon 排布 · 对应问题 1）：
+  // 1. 图片右上角被多个承载层的按钮占用：预览模式的媒体「查看/导出」按钮、
+  //    探索者模式的 cell 删除按钮、代码块复制按钮，全部固定贴在右上角。
+  // 2. 因此把「查看交互版本」入口放到图片右下角——那里没有任何按钮竞争，
+  //    在预览模式和探索者模式下都不会与右上角按钮重叠。
   const iconLink = safeHtml
-    ? `<a href="${escapeHtmlAttribute(safeHtml)}" target="_blank" rel="noopener noreferrer" title="在浏览器中查看交互版本" aria-label="在浏览器中查看交互版本" style="position:absolute;top:8px;right:8px;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:8px;background:rgba(15,23,42,0.55);color:#fff;text-decoration:none;backdrop-filter:blur(2px);">${externalIcon}</a>`
+    ? `<a class="guaxi-figure-action--interactive" href="${escapeHtmlAttribute(safeHtml)}" target="_blank" rel="noopener noreferrer" title="在浏览器中查看交互版本" aria-label="在浏览器中查看交互版本" style="position:absolute;bottom:10px;right:10px;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:8px;background:rgba(15,23,42,0.62);color:#fff;text-decoration:none;box-shadow:0 4px 12px rgba(15,23,42,0.18);backdrop-filter:blur(2px);z-index:11;">${externalIcon}</a>`
     : ''
 
   if (!safePng) {
-    // 没有静态图时，退化为单独一个“在浏览器查看交互版”的图标按钮（仍居中）。
-    return `<div style="text-align:center;margin:8px 0;"><a href="${escapeHtmlAttribute(safeHtml)}" target="_blank" rel="noopener noreferrer" title="在浏览器中查看交互版本" aria-label="在浏览器中查看交互版本" style="display:inline-flex;align-items:center;gap:6px;color:var(--guaxi-text-secondary,#667085);text-decoration:none;">${externalIcon}<span>查看交互版本</span></a></div>`
+    // 没有静态图时，单独居中显示交互版入口（带文案，避免孤立图标无上下文）。
+    return `<div style="text-align:center;margin:8px 0;"><a class="guaxi-figure-action--interactive" href="${escapeHtmlAttribute(safeHtml)}" target="_blank" rel="noopener noreferrer" title="在浏览器中查看交互版本" aria-label="在浏览器中查看交互版本" style="display:inline-flex;align-items:center;gap:6px;color:var(--guaxi-text-secondary,#667085);text-decoration:none;">${externalIcon}<span>查看交互版本</span></a></div>`
   }
 
-  return `<div style="text-align:center;margin:8px 0;"><span style="position:relative;display:inline-block;max-width:100%;"><img src="${escapeHtmlAttribute(safePng)}" alt="交互图表静态预览" style="max-width:100%;height:auto;display:block;" />${iconLink}</span></div>`
+  // 有静态图：静态图居中显示，交互版入口固定在静态图右下角。
+  return `<div style="text-align:center;margin:8px 0;"><span class="guaxi-interactive-figure" style="position:relative;display:inline-block;max-width:100%;"><img src="${escapeHtmlAttribute(safePng)}" alt="交互图表静态预览" style="max-width:100%;height:auto;display:block;" />${iconLink}</span></div>`
 }
 
 const buildMarkdownOutputFromModule = async (cell, outputModule = null, snapshot = null) => {
@@ -8825,12 +8832,31 @@ watch(notebookSearchKeyword, () => {
   scheduleNotebookSearchQuery('keyword-change')
 })
 
+// 设计说明（Q3）：探索者模式 cell 用 worker 渲染、buttons:false，所以渲染结果里没有复制按钮。
+// 这里在渲染结果落 DOM 后，对每个 Markdown cell 预览区与输出富文本区补挂复制按钮（addCopyButtons 幂等）。
+// 复制按钮的具体位置由作用域 CSS 控制（移到左上角，避开右上角的 cell 删除按钮）。
+const injectNotebookCopyButtons = (reason = 'unknown') => {
+  const root = notebookRootRef.value
+  if (!(root instanceof HTMLElement)) return
+  const containers = root.querySelectorAll('.guaxi-notebook__markdown-preview, .guaxi-notebook__rich')
+  if (!containers.length) return
+  containers.forEach((container) => {
+    try {
+      addCopyButtons(container, { theme: props.theme })
+    } catch (error) {
+      logger.warn('[Notebook] inject copy buttons failed', { reason, error: String(error?.message || error) })
+    }
+  })
+}
+
 watch(
   [renderedMarkdownHtmlMap, renderedOutputMarkdownHtmlMap],
   () => {
-    if (!notebookSearchVisible.value || !String(notebookSearchKeyword.value || '').trim()) return
     nextTick(() => {
-      applyNotebookSearchDomHighlights('rendered-html-watch')
+      injectNotebookCopyButtons('rendered-html-watch')
+      if (notebookSearchVisible.value && String(notebookSearchKeyword.value || '').trim()) {
+        applyNotebookSearchDomHighlights('rendered-html-watch')
+      }
     })
   },
   { deep: false },
@@ -9603,7 +9629,8 @@ defineExpose({
   position: absolute;
   top: 10px;
   right: 10px;
-  z-index: 4;
+  /* 高于代码块复制按钮(z-index:10)，保证删除按钮在代码块上也能点到（问题 3）。 */
+  z-index: 12;
   width: 30px;
   height: 30px;
   display: inline-flex;
@@ -9630,6 +9657,18 @@ defineExpose({
 .guaxi-notebook__cell-delete:hover {
   background: color-mix(in srgb, #ef4444 12%, var(--guaxi-notebook-panel) 88%);
   border-color: color-mix(in srgb, #ef4444 28%, var(--guaxi-notebook-strong-border));
+}
+
+/* 设计说明（探索者模式代码块复制按钮与删除按钮避让 · 对应问题 3）：
+ * 1. 复制按钮（addCopyButtons 注入）保持在代码块「右上角」（其默认 right:12/top:12），符合用户预期。
+ * 2. Markdown cell 的删除按钮也在右上角（cell top:10/right:10）。两者只有在「代码块位于 cell 顶部」时才会同处一角。
+ * 3. 因此对「以代码块开头」的 cell 在顶部预留一段空白，把代码块整体下移，
+ *    让删除按钮浮在代码块上方的留白处、复制按钮落在代码块内的右上角，二者上下错开、互不遮挡，
+ *    且不改动代码块本身的宽度（满足“不缩短代码块宽度”的约束）。
+ * 4. addCopyButtons 会把 <pre> 包进 div.guaxi-code-block-anchor，故首元素既可能是 <pre> 也可能是该包裹层，两种都要匹配。 */
+.guaxi-notebook__markdown-surface:has(.guaxi-notebook__markdown-preview > pre:first-child),
+.guaxi-notebook__markdown-surface:has(.guaxi-notebook__markdown-preview > .guaxi-code-block-anchor:first-child) {
+  padding-top: 34px;
 }
 
 .guaxi-notebook__markdown-edit-shell {
