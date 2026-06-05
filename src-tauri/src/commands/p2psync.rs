@@ -6,14 +6,21 @@ use blake3::Hasher;
 use chrono::{DateTime, Duration, Utc};
 use copia::{Sync, SyncBuilder};
 use hex;
-use iroh::SecretKey;
-use serde::{Deserialize, Serialize};
+use iroh::{
+    endpoint::{presets, Connection, RecvStream, SendStream},
+    Endpoint, EndpointAddr, SecretKey,
+};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use std::time::Duration as StdDuration;
 use tauri::{AppHandle, Emitter};
+use tokio::sync::Mutex;
+use tokio::time::timeout;
 use tracing::info;
 use uuid::Uuid;
 use walkdir::WalkDir;
@@ -23,7 +30,20 @@ const P2P_STATE_FILE: &str = "state.json";
 const P2P_MANIFEST_FILE: &str = "manifest.json";
 const P2P_TMP_DIR: &str = "tmp";
 const P2P_BLOCK_SIZE: usize = 64 * 1024;
+const P2P_ALPN: &[u8] = b"guaxi/p2p-sync/1";
+const P2P_ONLINE_TIMEOUT_SECS: u64 = 12;
+const P2P_FRAME_LIMIT: usize = 1024 * 1024;
+/// 清单可能包含上万个文件条目，单帧上限放宽到 256MiB。
+const P2P_MANIFEST_FRAME_LIMIT: usize = 256 * 1024 * 1024;
+/// 文件体按固定块流式收发，避免把整文件读进内存。
+const P2P_CHUNK_SIZE: usize = 256 * 1024;
 const RESOURCE_REPO_SYNC_PROGRESS_EVENT: &str = "resource_repo_sync_progress";
+
+struct P2PEndpointRuntime {
+    endpoint: Endpoint,
+}
+
+static P2P_ENDPOINT: OnceLock<Mutex<Option<P2PEndpointRuntime>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy)]
 enum P2PSyncTargetKind {
@@ -124,6 +144,73 @@ struct P2PTicketPayload {
     expires_at: Option<String>,
     #[serde(default)]
     address_hint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum P2PWireRequest {
+    Probe {
+        device_id: String,
+        device_name: String,
+        peer_id: String,
+        address_hint: String,
+    },
+    Pair {
+        ticket_id: String,
+        device_id: String,
+        device_name: String,
+        peer_id: String,
+        address_hint: String,
+    },
+    /// 请求对端返回某个同步目标的清单（用于 diff）。
+    Manifest {
+        target: String,
+    },
+    /// 从对端拉取一个文件，响应为文件头 + 原始字节流。
+    PullFile {
+        target: String,
+        rel: String,
+    },
+    /// 向对端推送一个文件，请求帧后紧跟原始字节流。
+    PushFile {
+        target: String,
+        rel: String,
+        size: u64,
+        blake3: String,
+        mtime_ms: i64,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct P2PWireResponse {
+    ok: bool,
+    message: String,
+    device_id: String,
+    device_name: String,
+    peer_id: String,
+    address_hint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct P2PManifestResponse {
+    ok: bool,
+    message: String,
+    manifest: Option<P2PManifest>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct P2PFileHeader {
+    ok: bool,
+    message: String,
+    size: u64,
+    blake3: String,
+    mtime_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct P2PAck {
+    ok: bool,
+    message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -293,6 +380,396 @@ fn decode_ticket(ticket: &str) -> Result<P2PTicketPayload, String> {
     serde_json::from_slice(&raw).map_err(|e| format!("解析 P2P Ticket 失败: {e}"))
 }
 
+fn encode_endpoint_addr(addr: &EndpointAddr) -> Result<String, String> {
+    let bytes = serde_json::to_vec(addr).map_err(|e| format!("序列化 iroh 地址失败: {e}"))?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
+}
+
+fn decode_endpoint_addr(address_hint: &str) -> Result<EndpointAddr, String> {
+    let trimmed = address_hint.trim();
+    if trimmed.is_empty() {
+        return Err("缺少 iroh 可拨号地址；请在对端启动 P2P 服务后重新生成 Ticket".to_string());
+    }
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(trimmed)
+        .map_err(|e| format!("解码 iroh 地址失败，请重新配对: {e}"))?;
+    serde_json::from_slice(&bytes).map_err(|e| format!("解析 iroh 地址失败，请重新配对: {e}"))
+}
+
+fn endpoint_runtime() -> &'static Mutex<Option<P2PEndpointRuntime>> {
+    P2P_ENDPOINT.get_or_init(|| Mutex::new(None))
+}
+
+fn upsert_trusted_peer(
+    state: &mut P2PStateFile,
+    peer_id: String,
+    device_id: String,
+    device_name: String,
+    address_hint: String,
+    online_status: String,
+    status_detail: String,
+) {
+    let now = Utc::now().to_rfc3339();
+    if let Some(peer) = state.trusted_peers.iter_mut().find(|p| p.peer_id == peer_id) {
+        peer.device_id = device_id;
+        peer.device_name = device_name;
+        if !address_hint.trim().is_empty() {
+            peer.address_hint = address_hint;
+        }
+        peer.online_status = online_status;
+        peer.status_detail = status_detail;
+        peer.last_checked_at = now;
+    } else {
+        state.trusted_peers.push(P2PTrustedPeer {
+            peer_id,
+            device_id,
+            device_name,
+            added_at: now.clone(),
+            address_hint,
+            online_status,
+            status_detail,
+            last_checked_at: now,
+        });
+    }
+}
+
+/// 写入一帧控制消息：4 字节小端长度前缀 + JSON 负载。不调用 finish，方便同一条
+/// 流后续继续写文件体。
+async fn write_control<T: Serialize>(
+    send: &mut SendStream,
+    value: &T,
+    context: &str,
+) -> Result<(), String> {
+    let payload = serde_json::to_vec(value).map_err(|e| format!("{context} 序列化失败: {e}"))?;
+    let len = payload.len() as u32;
+    send.write_all(&len.to_le_bytes())
+        .await
+        .map_err(|e| format!("{context} 写入长度失败: {e}"))?;
+    send.write_all(&payload)
+        .await
+        .map_err(|e| format!("{context} 写入失败: {e}"))?;
+    Ok(())
+}
+
+/// 读取一帧控制消息（长度前缀 + JSON），不会越界读取后续的文件体。
+async fn read_control<T: DeserializeOwned>(
+    recv: &mut RecvStream,
+    limit: usize,
+    context: &str,
+) -> Result<T, String> {
+    let mut len_buf = [0_u8; 4];
+    recv.read_exact(&mut len_buf)
+        .await
+        .map_err(|e| format!("{context} 读取长度失败: {e}"))?;
+    let len = u32::from_le_bytes(len_buf) as usize;
+    if len > limit {
+        return Err(format!("{context} 超过协议帧大小限制"));
+    }
+    let mut buf = vec![0_u8; len];
+    recv.read_exact(&mut buf)
+        .await
+        .map_err(|e| format!("{context} 读取失败: {e}"))?;
+    serde_json::from_slice(&buf).map_err(|e| format!("{context} 解析失败: {e}"))
+}
+
+/// 从磁盘按块把文件体写入流，O(1) 内存。
+async fn send_file_body(send: &mut SendStream, path: &Path, size: u64) -> Result<(), String> {
+    let mut f =
+        fs::File::open(path).map_err(|e| format!("打开待发送文件失败 {}: {e}", path.display()))?;
+    let mut remaining = size;
+    let mut buf = vec![0_u8; P2P_CHUNK_SIZE];
+    while remaining > 0 {
+        let want = remaining.min(buf.len() as u64) as usize;
+        f.read_exact(&mut buf[..want])
+            .map_err(|e| format!("读取待发送文件失败 {}: {e}", path.display()))?;
+        send.write_all(&buf[..want])
+            .await
+            .map_err(|e| format!("发送文件体失败 {}: {e}", path.display()))?;
+        remaining -= want as u64;
+    }
+    Ok(())
+}
+
+/// 从流按块读取文件体写入临时文件，O(1) 内存。
+async fn recv_file_body(recv: &mut RecvStream, out: &mut fs::File, size: u64) -> Result<(), String> {
+    let mut remaining = size;
+    let mut buf = vec![0_u8; P2P_CHUNK_SIZE];
+    while remaining > 0 {
+        let want = remaining.min(buf.len() as u64) as usize;
+        recv.read_exact(&mut buf[..want])
+            .await
+            .map_err(|e| format!("接收文件体失败: {e}"))?;
+        out.write_all(&buf[..want])
+            .map_err(|e| format!("写入临时文件失败: {e}"))?;
+        remaining -= want as u64;
+    }
+    Ok(())
+}
+
+/// 处理一条入站 bi 流。每条流以一个 P2PWireRequest 控制帧开头，按类型分派。
+async fn handle_incoming_stream(
+    endpoint: Endpoint,
+    mut send: SendStream,
+    mut recv: RecvStream,
+) -> Result<(), String> {
+    let request: P2PWireRequest = read_control(&mut recv, P2P_FRAME_LIMIT, "P2P 请求").await?;
+    let self_address_hint = encode_endpoint_addr(&endpoint.addr()).unwrap_or_default();
+
+    match request {
+        P2PWireRequest::Probe {
+            device_id,
+            device_name,
+            peer_id,
+            address_hint,
+        } => {
+            info!(peer_id, device_id, device_name, "[P2PSync] received peer probe");
+            let mut state = read_state_file()?;
+            upsert_trusted_peer(
+                &mut state,
+                peer_id,
+                device_id,
+                device_name,
+                address_hint,
+                "online".to_string(),
+                "在线检测握手成功".to_string(),
+            );
+            write_state_file(&state)?;
+            let response = P2PWireResponse {
+                ok: true,
+                message: "在线检测成功".to_string(),
+                device_id: get_device_id(),
+                device_name: p2p_device_name(),
+                peer_id: endpoint.id().to_string(),
+                address_hint: self_address_hint,
+            };
+            write_control(&mut send, &response, "P2P 响应").await?;
+        }
+        P2PWireRequest::Pair {
+            ticket_id,
+            device_id,
+            device_name,
+            peer_id,
+            address_hint,
+        } => {
+            info!(
+                peer_id, device_id, device_name, ticket_id,
+                "[P2PSync] received pairing request"
+            );
+            let mut state = read_state_file()?;
+            upsert_trusted_peer(
+                &mut state,
+                peer_id,
+                device_id,
+                device_name,
+                address_hint,
+                "online".to_string(),
+                "配对握手成功".to_string(),
+            );
+            for pending in &mut state.pending_tickets {
+                if pending.ticket_id == ticket_id {
+                    pending.used = true;
+                }
+            }
+            write_state_file(&state)?;
+            let response = P2PWireResponse {
+                ok: true,
+                message: "配对成功".to_string(),
+                device_id: get_device_id(),
+                device_name: p2p_device_name(),
+                peer_id: endpoint.id().to_string(),
+                address_hint: self_address_hint,
+            };
+            write_control(&mut send, &response, "P2P 响应").await?;
+        }
+        P2PWireRequest::Manifest { target } => {
+            let response = match target_from_key(&target).and_then(|t| scan_manifest(&t)) {
+                Ok(manifest) => P2PManifestResponse {
+                    ok: true,
+                    message: "ok".to_string(),
+                    manifest: Some(manifest),
+                },
+                Err(e) => P2PManifestResponse {
+                    ok: false,
+                    message: e,
+                    manifest: None,
+                },
+            };
+            write_control(&mut send, &response, "P2P 清单响应").await?;
+        }
+        P2PWireRequest::PullFile { target, rel } => match serve_pull(&target, &rel) {
+            Ok((path, size, blake3, mtime_ms)) => {
+                let header = P2PFileHeader {
+                    ok: true,
+                    message: "ok".to_string(),
+                    size,
+                    blake3,
+                    mtime_ms,
+                };
+                write_control(&mut send, &header, "P2P 文件头").await?;
+                send_file_body(&mut send, &path, size).await?;
+            }
+            Err(e) => {
+                let header = P2PFileHeader {
+                    ok: false,
+                    message: e,
+                    size: 0,
+                    blake3: String::new(),
+                    mtime_ms: 0,
+                };
+                write_control(&mut send, &header, "P2P 文件头").await?;
+            }
+        },
+        P2PWireRequest::PushFile {
+            target,
+            rel,
+            size,
+            blake3,
+            mtime_ms,
+        } => {
+            let ack = match accept_push(&target, &rel, &mut recv, size, &blake3, mtime_ms).await {
+                Ok(message) => P2PAck { ok: true, message },
+                Err(e) => P2PAck {
+                    ok: false,
+                    message: e,
+                },
+            };
+            write_control(&mut send, &ack, "P2P 推送响应").await?;
+        }
+    }
+
+    send.finish()
+        .map_err(|e| format!("P2P 响应完成发送失败: {e}"))?;
+    Ok(())
+}
+
+fn spawn_p2p_accept_loop(endpoint: Endpoint) {
+    tokio::spawn(async move {
+        info!("[P2PSync] iroh accept loop started");
+        while let Some(incoming) = endpoint.accept().await {
+            let endpoint = endpoint.clone();
+            tokio::spawn(async move {
+                let connection = match incoming.await {
+                    Ok(connection) => connection,
+                    Err(err) => {
+                        info!(error = %err, "[P2PSync] incoming connection failed");
+                        return;
+                    }
+                };
+                // 单个连接上可能并发多条 bi 流（清单 + 多个文件），循环 accept 直到连接关闭。
+                loop {
+                    match connection.accept_bi().await {
+                        Ok((send, recv)) => {
+                            let endpoint = endpoint.clone();
+                            tokio::spawn(async move {
+                                if let Err(err) =
+                                    handle_incoming_stream(endpoint, send, recv).await
+                                {
+                                    info!(error = err, "[P2PSync] incoming stream failed");
+                                }
+                            });
+                        }
+                        Err(err) => {
+                            info!(error = %err, "[P2PSync] connection closed");
+                            break;
+                        }
+                    }
+                }
+            });
+        }
+        info!("[P2PSync] iroh accept loop stopped");
+    });
+}
+
+async fn ensure_p2p_endpoint() -> Result<Endpoint, String> {
+    let runtime = endpoint_runtime();
+    {
+        let guard = runtime.lock().await;
+        if let Some(runtime) = guard.as_ref() {
+            return Ok(runtime.endpoint.clone());
+        }
+    }
+
+    let mut state = read_state_file()?;
+    let key = ensure_secret_key(&mut state)?;
+    write_state_file(&state)?;
+
+    info!("[P2PSync] starting iroh endpoint");
+    // presets::N0 配置了 n0 的中继服务器 + DNS 节点发现，既能在局域网内直连打洞，
+    // 也能在公网通过中继回退，满足"局域网/互联网都能同步"的要求。
+    let endpoint = Endpoint::builder(presets::N0)
+        .secret_key(key)
+        .alpns(vec![P2P_ALPN.to_vec()])
+        .bind()
+        .await
+        .map_err(|e| format!("启动 iroh P2P Endpoint 失败: {e}"))?;
+
+    // 等待 endpoint 完成中继/直连地址发现，确保后续生成的 Ticket 携带可拨号地址。
+    let _ = timeout(StdDuration::from_secs(P2P_ONLINE_TIMEOUT_SECS), endpoint.online()).await;
+    info!(peer_id = endpoint.id().to_string(), "[P2PSync] iroh endpoint ready");
+    spawn_p2p_accept_loop(endpoint.clone());
+
+    let mut guard = runtime.lock().await;
+    *guard = Some(P2PEndpointRuntime {
+        endpoint: endpoint.clone(),
+    });
+    Ok(endpoint)
+}
+
+async fn current_p2p_address_hint(endpoint: &Endpoint) -> Result<String, String> {
+    encode_endpoint_addr(&endpoint.addr())
+}
+
+async fn connect_peer(endpoint: &Endpoint, peer: &P2PTrustedPeer) -> Result<Connection, String> {
+    let addr = decode_endpoint_addr(&peer.address_hint)?;
+    let connection = timeout(
+        StdDuration::from_secs(P2P_ONLINE_TIMEOUT_SECS),
+        endpoint.connect(addr, P2P_ALPN),
+    )
+    .await
+    .map_err(|_| format!("连接设备 {} 超时", peer.device_name))?
+    .map_err(|e| format!("连接设备 {} 失败: {e}", peer.device_name))?;
+    Ok(connection)
+}
+
+/// 在一条连接上做一次"请求 -> 响应"的控制消息往返。
+async fn request_response<Req, Res>(
+    connection: &Connection,
+    request: &Req,
+    response_limit: usize,
+) -> Result<Res, String>
+where
+    Req: Serialize,
+    Res: DeserializeOwned,
+{
+    let (mut send, mut recv) = timeout(
+        StdDuration::from_secs(P2P_ONLINE_TIMEOUT_SECS),
+        connection.open_bi(),
+    )
+    .await
+    .map_err(|_| "打开 P2P 传输通道超时".to_string())?
+    .map_err(|e| format!("打开 P2P 传输通道失败: {e}"))?;
+
+    write_control(&mut send, request, "P2P 请求").await?;
+    send.finish()
+        .map_err(|e| format!("P2P 请求完成发送失败: {e}"))?;
+
+    timeout(
+        StdDuration::from_secs(P2P_ONLINE_TIMEOUT_SECS),
+        read_control::<Res>(&mut recv, response_limit, "P2P 响应"),
+    )
+    .await
+    .map_err(|_| "等待 P2P 响应超时".to_string())?
+}
+
+async fn send_wire_request(
+    endpoint: &Endpoint,
+    peer: &P2PTrustedPeer,
+    request: &P2PWireRequest,
+) -> Result<P2PWireResponse, String> {
+    let connection = connect_peer(endpoint, peer).await?;
+    request_response::<P2PWireRequest, P2PWireResponse>(&connection, request, P2P_FRAME_LIMIT).await
+}
+
 fn target_for(kind: P2PSyncTargetKind) -> Result<P2PSyncTarget, String> {
     match kind {
         P2PSyncTargetKind::ResourceRepo => {
@@ -316,6 +793,32 @@ fn target_for(kind: P2PSyncTargetKind) -> Result<P2PSyncTarget, String> {
             })
         }
     }
+}
+
+fn target_from_key(key: &str) -> Result<P2PSyncTarget, String> {
+    match key {
+        "resource_repo" => target_for(P2PSyncTargetKind::ResourceRepo),
+        "knowledge_base" => target_for(P2PSyncTargetKind::KnowledgeBase),
+        other => Err(format!("未知的同步目标: {other}")),
+    }
+}
+
+/// 把相对路径安全地拼到根目录下，拒绝绝对路径与 `..` 穿越。
+fn safe_join(root: &Path, rel: &str) -> Result<PathBuf, String> {
+    let normalized = rel.replace('\\', "/");
+    if normalized.is_empty() {
+        return Err("空的相对路径".to_string());
+    }
+    for comp in normalized.split('/') {
+        if comp.is_empty() || comp == "." || comp == ".." {
+            return Err(format!("非法的相对路径: {rel}"));
+        }
+    }
+    // 拒绝盘符等绝对路径形式。
+    if normalized.starts_with('/') || normalized.contains(':') {
+        return Err(format!("非法的相对路径: {rel}"));
+    }
+    Ok(root.join(PathBuf::from(&normalized)))
 }
 
 fn manifest_path(target: &P2PSyncTarget) -> PathBuf {
@@ -388,7 +891,8 @@ fn scan_manifest_with_progress(
         if should_skip(target, &rel) {
             continue;
         }
-        let meta = fs::metadata(path).map_err(|e| format!("读取文件元数据失败 {}: {e}", path.display()))?;
+        let meta =
+            fs::metadata(path).map_err(|e| format!("读取文件元数据失败 {}: {e}", path.display()))?;
         total_files += 1;
         total_bytes = total_bytes.saturating_add(meta.len());
     }
@@ -400,7 +904,10 @@ fn scan_manifest_with_progress(
             target,
             "scan",
             "running",
-            format!("开始扫描 {}：{} 个文件，{} 字节", target.label, total_files, total_bytes),
+            format!(
+                "开始扫描 {}：{} 个文件，{} 字节",
+                target.label, total_files, total_bytes
+            ),
             0,
             total_files,
             0,
@@ -422,7 +929,8 @@ fn scan_manifest_with_progress(
         if should_skip(target, &rel) {
             continue;
         }
-        let meta = fs::metadata(path).map_err(|e| format!("读取文件元数据失败 {}: {e}", path.display()))?;
+        let meta =
+            fs::metadata(path).map_err(|e| format!("读取文件元数据失败 {}: {e}", path.display()))?;
         let hash = hash_file(path)?;
         scanned_files += 1;
         scanned_bytes = scanned_bytes.saturating_add(meta.len());
@@ -435,14 +943,19 @@ fn scan_manifest_with_progress(
             },
         );
 
-        if emit_progress && (scanned_files == total_files || scanned_files == 1 || scanned_files % 25 == 0) {
+        if emit_progress
+            && (scanned_files == total_files || scanned_files == 1 || scanned_files % 25 == 0)
+        {
             emit_p2p_progress(
                 app,
                 run_id,
                 target,
                 "scan",
                 "running",
-                format!("正在扫描 {}：{}/{} 个文件", target.label, scanned_files, total_files),
+                format!(
+                    "正在扫描 {}：{}/{} 个文件",
+                    target.label, scanned_files, total_files
+                ),
                 scanned_files,
                 total_files,
                 scanned_bytes,
@@ -498,7 +1011,8 @@ fn write_manifest(target: &P2PSyncTarget, manifest: &P2PManifest) -> Result<(), 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建 P2P manifest 目录失败: {e}"))?;
     }
-    let raw = serde_json::to_string_pretty(manifest).map_err(|e| format!("序列化 P2P manifest 失败: {e}"))?;
+    let raw = serde_json::to_string_pretty(manifest)
+        .map_err(|e| format!("序列化 P2P manifest 失败: {e}"))?;
     fs::write(&path, raw).map_err(|e| format!("写入 P2P manifest 失败: {e}"))?;
     info!(target = target.key, path = %path.to_string_lossy(), "[P2PSync] manifest saved");
     Ok(())
@@ -506,7 +1020,10 @@ fn write_manifest(target: &P2PSyncTarget, manifest: &P2PManifest) -> Result<(), 
 
 fn conflict_path(original: &Path, device_name: &str) -> PathBuf {
     let ts = Utc::now().format("%Y%m%d-%H%M%S").to_string();
-    let stem = original.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
+    let stem = original
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("file");
     let ext = original.extension().and_then(|s| s.to_str()).unwrap_or("");
     let name = if ext.is_empty() {
         format!("{stem}.conflict.{device_name}.{ts}")
@@ -516,70 +1033,213 @@ fn conflict_path(original: &Path, device_name: &str) -> PathBuf {
     original.with_file_name(name)
 }
 
-/// 生产同步的写入入口：所有来自对端的文件都先进入临时文件，使用 copia 的块级差异
-/// 生成目标内容，再做 BLAKE3 校验，最后 rename 原子替换，避免中断时污染原文件。
-///
-/// 当前函数先封装本地块级 patch 流程；接入 iroh stream 后，只需要把 `remote_path`
-/// 替换成从对端流中读取 signature/delta 的数据源，落盘安全策略不变。
-fn apply_block_delta_with_copia(
+/// 校验临时文件的 BLAKE3，再原子替换目标文件。若目标已存在且与新内容不同，
+/// 先把本地副本另存为 `.conflict` 备份，避免覆盖时丢数据。
+fn finalize_incoming_file(
     target: &P2PSyncTarget,
     rel: &str,
-    remote_path: &Path,
+    tmp: &Path,
     expected_hash: &str,
 ) -> Result<(), String> {
-    let dest = target.root.join(PathBuf::from(rel));
-    let tmp_dir = target.root.join(P2P_META_DIR).join(P2P_TMP_DIR);
-    fs::create_dir_all(&tmp_dir).map_err(|e| format!("创建 P2P 临时目录失败: {e}"))?;
-    let tmp = tmp_dir.join(format!("{}.tmp", Uuid::new_v4()));
-
-    let sync = SyncBuilder::new().block_size(P2P_BLOCK_SIZE).build();
-    let basis = if dest.exists() {
-        fs::read(&dest).map_err(|e| format!("读取 P2P basis 文件失败 {}: {e}", dest.display()))?
-    } else {
-        Vec::new()
-    };
-    let source =
-        fs::read(remote_path).map_err(|e| format!("读取 P2P 对端文件失败 {}: {e}", remote_path.display()))?;
-
-    let signature = sync
-        .signature(Cursor::new(basis.as_slice()))
-        .map_err(|e| format!("生成 copia 块签名失败 {rel}: {e}"))?;
-    let delta = sync
-        .delta(Cursor::new(source.as_slice()), &signature)
-        .map_err(|e| format!("生成 copia delta 失败 {rel}: {e}"))?;
-
-    let mut patched = Vec::with_capacity(source.len());
-    sync.patch(Cursor::new(basis.as_slice()), &delta, &mut patched)
-        .map_err(|e| format!("应用 copia patch 失败 {rel}: {e}"))?;
-
-    let mut out = fs::File::create(&tmp)
-        .map_err(|e| format!("创建 P2P 临时文件失败 {}: {e}", tmp.display()))?;
-    out.write_all(&patched)
-        .map_err(|e| format!("写入 P2P 临时文件失败 {}: {e}", tmp.display()))?;
-    out.flush()
-        .map_err(|e| format!("刷新 P2P 临时文件失败 {}: {e}", tmp.display()))?;
-
-    let actual = hash_file(&tmp)?;
+    let actual = hash_file(tmp)?;
     if actual != expected_hash {
-        let _ = fs::remove_file(&tmp);
+        let _ = fs::remove_file(tmp);
         return Err(format!(
-            "P2P 块级同步校验失败：{} 期望 {} 实际 {}",
+            "P2P 文件校验失败：{} 期望 {} 实际 {}",
             rel, expected_hash, actual
         ));
     }
 
-    if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("创建目标目录失败 {}: {e}", parent.display()))?;
+    let dest = safe_join(&target.root, rel)?;
+    if dest.exists() {
+        if let Ok(cur) = hash_file(&dest) {
+            if cur != expected_hash {
+                let backup = conflict_path(&dest, &p2p_device_name());
+                match fs::copy(&dest, &backup) {
+                    Ok(_) => info!(
+                        target = target.key,
+                        rel,
+                        backup = %backup.to_string_lossy(),
+                        "[P2PSync] kept local copy as conflict backup before overwrite"
+                    ),
+                    Err(e) => info!(
+                        target = target.key,
+                        rel,
+                        error = e.to_string(),
+                        "[P2PSync] failed to keep conflict backup"
+                    ),
+                }
+            }
+        }
     }
-    fs::rename(&tmp, &dest).map_err(|e| format!("原子替换目标文件失败 {}: {e}", dest.display()))?;
-    info!(
-        target = target.key,
-        rel,
-        basis_bytes = basis.len(),
-        source_bytes = source.len(),
-        "[P2PSync] file applied with copia block delta"
-    );
+
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("创建目标目录失败 {}: {e}", parent.display()))?;
+    }
+    fs::rename(tmp, &dest).map_err(|e| format!("原子替换目标文件失败 {}: {e}", dest.display()))?;
     Ok(())
+}
+
+/// 服务端：定位待拉取文件，返回 (路径, 大小, 哈希, mtime)。
+fn serve_pull(target_key: &str, rel: &str) -> Result<(PathBuf, u64, String, i64), String> {
+    let target = target_from_key(target_key)?;
+    if should_skip(&target, rel) {
+        return Err(format!("该文件不在同步范围内: {rel}"));
+    }
+    let path = safe_join(&target.root, rel)?;
+    if !path.is_file() {
+        return Err(format!("文件不存在: {rel}"));
+    }
+    let meta =
+        fs::metadata(&path).map_err(|e| format!("读取文件元数据失败 {}: {e}", path.display()))?;
+    let hash = hash_file(&path)?;
+    let mtime = file_mtime_ms(&path)?;
+    Ok((path, meta.len(), hash, mtime))
+}
+
+/// 服务端：把对端推送的文件体收进临时文件并原子落盘。
+async fn accept_push(
+    target_key: &str,
+    rel: &str,
+    recv: &mut RecvStream,
+    size: u64,
+    expected_hash: &str,
+    _mtime_ms: i64,
+) -> Result<String, String> {
+    let target = target_from_key(target_key)?;
+    if should_skip(&target, rel) {
+        return Err(format!("该文件不在同步范围内: {rel}"));
+    }
+    // 提前校验路径合法性。
+    let _ = safe_join(&target.root, rel)?;
+
+    let tmp_dir = target.root.join(P2P_META_DIR).join(P2P_TMP_DIR);
+    fs::create_dir_all(&tmp_dir).map_err(|e| format!("创建 P2P 临时目录失败: {e}"))?;
+    let tmp = tmp_dir.join(format!("{}.tmp", Uuid::new_v4()));
+
+    {
+        let mut out = fs::File::create(&tmp)
+            .map_err(|e| format!("创建 P2P 临时文件失败 {}: {e}", tmp.display()))?;
+        recv_file_body(recv, &mut out, size).await?;
+        out.flush()
+            .map_err(|e| format!("刷新 P2P 临时文件失败 {}: {e}", tmp.display()))?;
+    }
+
+    finalize_incoming_file(&target, rel, &tmp, expected_hash)?;
+    info!(target = target.key, rel, size, "[P2PSync] accepted pushed file");
+    Ok(format!("已接收 {rel}"))
+}
+
+/// 客户端：请求对端清单。
+async fn fetch_remote_manifest(
+    connection: &Connection,
+    target_key: &str,
+) -> Result<P2PManifest, String> {
+    let resp: P2PManifestResponse = request_response(
+        connection,
+        &P2PWireRequest::Manifest {
+            target: target_key.to_string(),
+        },
+        P2P_MANIFEST_FRAME_LIMIT,
+    )
+    .await?;
+    if !resp.ok {
+        return Err(resp.message);
+    }
+    resp.manifest.ok_or_else(|| "对端未返回清单".to_string())
+}
+
+/// 客户端：从对端拉取单个文件并原子落盘。
+async fn pull_file(
+    connection: &Connection,
+    target: &P2PSyncTarget,
+    rel: &str,
+) -> Result<u64, String> {
+    let (mut send, mut recv) = timeout(
+        StdDuration::from_secs(P2P_ONLINE_TIMEOUT_SECS),
+        connection.open_bi(),
+    )
+    .await
+    .map_err(|_| "打开拉取通道超时".to_string())?
+    .map_err(|e| format!("打开拉取通道失败: {e}"))?;
+
+    write_control(
+        &mut send,
+        &P2PWireRequest::PullFile {
+            target: target.key.to_string(),
+            rel: rel.to_string(),
+        },
+        "P2P 拉取请求",
+    )
+    .await?;
+    send.finish()
+        .map_err(|e| format!("拉取请求完成发送失败: {e}"))?;
+
+    let header: P2PFileHeader = read_control(&mut recv, P2P_FRAME_LIMIT, "P2P 文件头").await?;
+    if !header.ok {
+        return Err(header.message);
+    }
+
+    let tmp_dir = target.root.join(P2P_META_DIR).join(P2P_TMP_DIR);
+    fs::create_dir_all(&tmp_dir).map_err(|e| format!("创建 P2P 临时目录失败: {e}"))?;
+    let tmp = tmp_dir.join(format!("{}.tmp", Uuid::new_v4()));
+    {
+        let mut out = fs::File::create(&tmp)
+            .map_err(|e| format!("创建 P2P 临时文件失败 {}: {e}", tmp.display()))?;
+        recv_file_body(&mut recv, &mut out, header.size).await?;
+        out.flush()
+            .map_err(|e| format!("刷新 P2P 临时文件失败 {}: {e}", tmp.display()))?;
+    }
+
+    finalize_incoming_file(target, rel, &tmp, &header.blake3)?;
+    info!(target = target.key, rel, size = header.size, "[P2PSync] pulled file");
+    Ok(header.size)
+}
+
+/// 客户端：把本地单个文件推送给对端。
+async fn push_file(
+    connection: &Connection,
+    target: &P2PSyncTarget,
+    rel: &str,
+) -> Result<u64, String> {
+    let path = safe_join(&target.root, rel)?;
+    let meta =
+        fs::metadata(&path).map_err(|e| format!("读取文件元数据失败 {}: {e}", path.display()))?;
+    let hash = hash_file(&path)?;
+    let mtime = file_mtime_ms(&path)?;
+    let size = meta.len();
+
+    let (mut send, mut recv) = timeout(
+        StdDuration::from_secs(P2P_ONLINE_TIMEOUT_SECS),
+        connection.open_bi(),
+    )
+    .await
+    .map_err(|_| "打开推送通道超时".to_string())?
+    .map_err(|e| format!("打开推送通道失败: {e}"))?;
+
+    write_control(
+        &mut send,
+        &P2PWireRequest::PushFile {
+            target: target.key.to_string(),
+            rel: rel.to_string(),
+            size,
+            blake3: hash,
+            mtime_ms: mtime,
+        },
+        "P2P 推送请求",
+    )
+    .await?;
+    send_file_body(&mut send, &path, size).await?;
+    send.finish()
+        .map_err(|e| format!("推送完成发送失败: {e}"))?;
+
+    let ack: P2PAck = read_control(&mut recv, P2P_FRAME_LIMIT, "P2P 推送响应").await?;
+    if !ack.ok {
+        return Err(ack.message);
+    }
+    info!(target = target.key, rel, size, "[P2PSync] pushed file");
+    Ok(size)
 }
 
 fn run_copia_block_delta_self_check() -> Result<(), String> {
@@ -589,12 +1249,6 @@ fn run_copia_block_delta_self_check() -> Result<(), String> {
     }
     fs::create_dir_all(&root).map_err(|e| format!("创建 P2P 块级差异自检目录失败: {e}"))?;
 
-    let target = P2PSyncTarget {
-        kind: P2PSyncTargetKind::ResourceRepo,
-        key: "p2p_self_check",
-        label: "P2P 自检",
-        root: root.clone(),
-    };
     let basis = root.join("basis.txt");
     let source = root.join("source.txt");
     fs::write(&basis, b"guaxi p2p old block\nsame tail")
@@ -602,10 +1256,20 @@ fn run_copia_block_delta_self_check() -> Result<(), String> {
     fs::write(&source, b"guaxi p2p new block\nsame tail")
         .map_err(|e| format!("写入 P2P source 自检文件失败: {e}"))?;
 
-    let expected_hash = hash_file(&source)?;
-    apply_block_delta_with_copia(&target, "basis.txt", &source, &expected_hash)?;
-    let final_hash = hash_file(&basis)?;
-    if final_hash != expected_hash {
+    // 用 copia 做一次本地块级 signature/delta/patch 往返，确认差异引擎可用。
+    let sync = SyncBuilder::new().block_size(P2P_BLOCK_SIZE).build();
+    let basis_bytes = fs::read(&basis).map_err(|e| format!("读取 P2P basis 自检文件失败: {e}"))?;
+    let source_bytes = fs::read(&source).map_err(|e| format!("读取 P2P source 自检文件失败: {e}"))?;
+    let signature = sync
+        .signature(Cursor::new(basis_bytes.as_slice()))
+        .map_err(|e| format!("生成 copia 块签名失败: {e}"))?;
+    let delta = sync
+        .delta(Cursor::new(source_bytes.as_slice()), &signature)
+        .map_err(|e| format!("生成 copia delta 失败: {e}"))?;
+    let mut patched = Vec::with_capacity(source_bytes.len());
+    sync.patch(Cursor::new(basis_bytes.as_slice()), &delta, &mut patched)
+        .map_err(|e| format!("应用 copia patch 失败: {e}"))?;
+    if patched != source_bytes {
         return Err("P2P copia 块级差异自检结果不一致".to_string());
     }
 
@@ -644,7 +1308,22 @@ fn verify_target(target: P2PSyncTarget) -> Result<String, String> {
     ))
 }
 
-fn sync_target_local_plan(
+/// 更新某个可信设备的在线状态并持久化。
+fn update_peer_status(peer_id: &str, online_status: &str, status_detail: &str) {
+    if let Ok(mut state) = read_state_file() {
+        if let Some(peer) = state.trusted_peers.iter_mut().find(|p| p.peer_id == peer_id) {
+            peer.online_status = online_status.to_string();
+            peer.status_detail = status_detail.to_string();
+            peer.last_checked_at = Utc::now().to_rfc3339();
+            let _ = write_state_file(&state);
+        }
+    }
+}
+
+/// 真正执行一次跨设备双向同步：扫描本地清单，对每个可信设备拉取远端清单做 diff，
+/// 按 mtime 后写优先把变化的文件拉/推过去；冲突文件保留 `.conflict` 备份。
+/// 局域网走直连、互联网走中继，均由 iroh 自动选择。
+async fn run_p2p_sync(
     app: Option<&AppHandle>,
     run_id: &str,
     target: P2PSyncTarget,
@@ -664,152 +1343,215 @@ fn sync_target_local_plan(
     );
     run_copia_block_delta_self_check()?;
 
-    let state = read_state_file()?;
-    let trusted_peers = state.trusted_peers.len() as u64;
-    let online_peers = state
-        .trusted_peers
-        .iter()
-        .filter(|p| p.online_status == "online")
-        .count() as u64;
-    emit_p2p_progress(
-        app,
-        run_id,
-        &target,
-        "connect",
-        if online_peers > 0 { "success" } else { "waiting" },
-        format!("可信设备 {} 个，当前在线 {} 个", trusted_peers, online_peers),
-        online_peers,
-        trusted_peers,
-        0,
-        0,
-        "",
-    );
+    let endpoint = ensure_p2p_endpoint().await?;
+    let _ = timeout(StdDuration::from_secs(P2P_ONLINE_TIMEOUT_SECS), endpoint.online()).await;
 
-    let manifest = scan_manifest_with_progress(&target, app, run_id, true)?;
-    let base = read_manifest(&target)?;
-    let mut stats = P2PSyncStats::default();
-    let mut planned_bytes = 0_u64;
-    let mut planned_files = 0_u64;
-
-    emit_p2p_progress(
-        app,
-        run_id,
-        &target,
-        "plan",
-        "running",
-        "正在计算同步计划",
-        0,
-        manifest.files.len() as u64,
-        0,
-        0,
-        "",
-    );
-
-    if let Some(base) = base {
-        let keys: BTreeSet<String> = manifest
-            .files
-            .keys()
-            .chain(base.files.keys())
-            .cloned()
-            .collect();
-        for key in keys {
-            match (manifest.files.get(&key), base.files.get(&key)) {
-                (Some(a), Some(b)) if a.blake3 == b.blake3 => stats.skipped += 1,
-                (Some(a), Some(_)) => {
-                    stats.uploaded += 1;
-                    planned_files += 1;
-                    planned_bytes = planned_bytes.saturating_add(a.size);
-                }
-                (Some(a), None) => {
-                    stats.uploaded += 1;
-                    planned_files += 1;
-                    planned_bytes = planned_bytes.saturating_add(a.size);
-                }
-                (None, Some(_)) => {
-                    stats.conflicts += 1;
-                    let candidate = conflict_path(&target.root.join(PathBuf::from(&key)), &p2p_device_name());
-                    info!(
-                        target = target.key,
-                        rel = key,
-                        conflict_candidate = %candidate.to_string_lossy(),
-                        "[P2PSync] local deletion is kept as conflict candidate; delete propagation requires confirmation"
-                    );
-                }
-                (None, None) => stats.skipped += 1,
-            }
-        }
-    } else {
-        stats.uploaded = manifest.files.len() as u32;
-        planned_files = manifest.files.len() as u64;
-        planned_bytes = manifest.files.values().map(|f| f.size).sum();
+    let peers = read_state_file()?.trusted_peers;
+    if peers.is_empty() {
+        emit_p2p_progress(
+            app,
+            run_id,
+            &target,
+            "complete",
+            "waiting",
+            "尚无可信设备，请先完成配对",
+            0,
+            0,
+            0,
+            0,
+            "",
+        );
+        let manifest = scan_manifest(&target)?;
+        write_manifest(&target, &manifest)?;
+        return Ok(format!("{} 暂无可信设备，未发生跨设备传输。", target.label));
     }
 
-    emit_p2p_progress(
-        app,
-        run_id,
-        &target,
-        "plan",
-        "success",
-        format!(
-            "同步计划完成：待发送 {} 个文件，{} 字节；冲突/删除待确认 {} 个",
-            planned_files, planned_bytes, stats.conflicts
-        ),
-        planned_files,
-        manifest.files.len() as u64,
-        planned_bytes,
-        planned_bytes,
-        "",
-    );
+    let local = scan_manifest_with_progress(&target, app, run_id, true)?;
 
-    emit_p2p_progress(
-        app,
-        run_id,
-        &target,
-        "transfer",
-        if online_peers > 0 { "running" } else { "waiting" },
-        if online_peers > 0 {
-            "已生成 P2P 传输计划，等待 iroh 传输会话消费计划"
-        } else {
-            "没有可确认在线的可信设备，资源库内容尚未开始跨设备传输"
-        },
-        0,
-        planned_files,
-        0,
-        planned_bytes,
-        "",
-    );
+    let mut stats = P2PSyncStats::default();
+    let mut online = 0_u64;
+    let mut errors: Vec<String> = Vec::new();
 
-    write_manifest(&target, &manifest)?;
+    for peer in &peers {
+        emit_p2p_progress(
+            app,
+            run_id,
+            &target,
+            "connect",
+            "running",
+            format!("正在连接 {}", peer.device_name),
+            online,
+            peers.len() as u64,
+            0,
+            0,
+            "",
+        );
+
+        let connection = match connect_peer(&endpoint, peer).await {
+            Ok(c) => c,
+            Err(e) => {
+                update_peer_status(&peer.peer_id, "offline", &e);
+                errors.push(format!("{}: {}", peer.device_name, e));
+                continue;
+            }
+        };
+        online += 1;
+        update_peer_status(&peer.peer_id, "online", "同步连接成功");
+
+        let remote = match fetch_remote_manifest(&connection, target.key).await {
+            Ok(m) => m,
+            Err(e) => {
+                errors.push(format!("{} 获取清单失败: {}", peer.device_name, e));
+                connection.close(0u32.into(), b"manifest failed");
+                continue;
+            }
+        };
+
+        // 计算 diff：以 mtime 较新者为准（last-writer-wins）。哈希相同直接跳过。
+        let keys: BTreeSet<String> = local
+            .files
+            .keys()
+            .chain(remote.files.keys())
+            .cloned()
+            .collect();
+        let mut pulls: Vec<String> = Vec::new();
+        let mut pushes: Vec<String> = Vec::new();
+        for key in keys {
+            match (local.files.get(&key), remote.files.get(&key)) {
+                (Some(l), Some(r)) if l.blake3 == r.blake3 => stats.skipped += 1,
+                (Some(l), Some(r)) => {
+                    if r.modified_unix_ms > l.modified_unix_ms {
+                        pulls.push(key);
+                    } else {
+                        pushes.push(key);
+                    }
+                }
+                (None, Some(_)) => pulls.push(key),
+                (Some(_), None) => pushes.push(key),
+                (None, None) => {}
+            }
+        }
+
+        let plan_total = (pulls.len() + pushes.len()) as u64;
+        emit_p2p_progress(
+            app,
+            run_id,
+            &target,
+            "plan",
+            "success",
+            format!(
+                "与 {} 的同步计划：拉取 {} 个，推送 {} 个",
+                peer.device_name,
+                pulls.len(),
+                pushes.len()
+            ),
+            0,
+            plan_total,
+            0,
+            0,
+            "",
+        );
+
+        let mut done = 0_u64;
+        for rel in &pulls {
+            emit_p2p_progress(
+                app,
+                run_id,
+                &target,
+                "transfer",
+                "running",
+                format!("从 {} 拉取 {}", peer.device_name, rel),
+                done,
+                plan_total,
+                0,
+                0,
+                rel.clone(),
+            );
+            match pull_file(&connection, &target, rel).await {
+                Ok(_) => stats.downloaded += 1,
+                Err(e) => errors.push(format!("拉取 {} 失败: {}", rel, e)),
+            }
+            done += 1;
+        }
+        for rel in &pushes {
+            emit_p2p_progress(
+                app,
+                run_id,
+                &target,
+                "transfer",
+                "running",
+                format!("向 {} 推送 {}", peer.device_name, rel),
+                done,
+                plan_total,
+                0,
+                0,
+                rel.clone(),
+            );
+            match push_file(&connection, &target, rel).await {
+                Ok(_) => stats.uploaded += 1,
+                Err(e) => errors.push(format!("推送 {} 失败: {}", rel, e)),
+            }
+            done += 1;
+        }
+
+        // 主动关闭连接，触发对端 accept_bi 退出。
+        connection.close(0u32.into(), b"sync done");
+    }
+
+    // 同步后重扫一次并把清单作为新的对比基准持久化。
+    let final_manifest = scan_manifest(&target)?;
+    write_manifest(&target, &final_manifest)?;
+
+    let status = if online == 0 {
+        "error"
+    } else if errors.is_empty() {
+        "success"
+    } else {
+        "skipped"
+    };
     emit_p2p_progress(
         app,
         run_id,
         &target,
         "complete",
-        if online_peers > 0 { "success" } else { "waiting" },
-        if online_peers > 0 {
-            "本地同步计划已保存；传输层会继续按计划发送"
-        } else {
-            "本地同步计划已保存；请先让可信设备在线后再开始传输"
-        },
-        planned_files,
-        planned_files,
-        planned_bytes,
-        planned_bytes,
+        status,
+        format!(
+            "{} 同步完成：下载 {}，上传 {}，跳过 {}，在线设备 {}/{}",
+            target.label,
+            stats.downloaded,
+            stats.uploaded,
+            stats.skipped,
+            online,
+            peers.len()
+        ),
+        stats.downloaded as u64 + stats.uploaded as u64,
+        stats.downloaded as u64 + stats.uploaded as u64,
+        0,
+        0,
         "",
     );
-    Ok(format!(
-        "{} P2P 同步计划完成：待发送 {} 个文件，{} 字节；删除/冲突需确认 {}，跳过 {}。{}",
+
+    if online == 0 {
+        return Err(format!(
+            "{} 同步失败：没有任何可信设备在线。{}",
+            target.label,
+            errors.first().cloned().unwrap_or_default()
+        ));
+    }
+
+    let mut summary = format!(
+        "{} P2P 同步完成：下载 {}，上传 {}，跳过 {}，在线设备 {}/{}。",
         target.label,
+        stats.downloaded,
         stats.uploaded,
-        planned_bytes,
-        stats.conflicts,
         stats.skipped,
-        if online_peers > 0 {
-            "检测到在线设备，等待传输会话执行。"
-        } else {
-            "当前没有可确认在线设备，尚未跨设备传输。"
-        }
-    ))
+        online,
+        peers.len()
+    );
+    if !errors.is_empty() {
+        summary.push_str(&format!("部分项未完成：{}", errors.join("；")));
+    }
+    Ok(summary)
 }
 
 #[tauri::command]
@@ -838,19 +1580,33 @@ pub async fn p2p_sync_status() -> Result<P2PStatus, String> {
 #[tauri::command]
 pub async fn p2p_sync_test_connection() -> Result<String, String> {
     let mut state = read_state_file()?;
-    let key = ensure_secret_key(&mut state)?;
+    ensure_secret_key(&mut state)?;
+    write_state_file(&state)?;
+    let endpoint = ensure_p2p_endpoint().await?;
+    let address_hint = current_p2p_address_hint(&endpoint).await?;
     run_copia_block_delta_self_check()?;
-    let peer_id = key.public().to_string();
+    let peer_id = endpoint.id().to_string();
     let peers = state.trusted_peers.len();
-    info!(peer_id, peers, "[P2PSync] iroh identity ready");
-    Ok(format!("P2P 身份可用：Peer ID {}，可信设备 {} 个", peer_id, peers))
+    info!(
+        peer_id,
+        peers,
+        address_hint_len = address_hint.len(),
+        "[P2PSync] iroh endpoint and copia delta ready"
+    );
+    Ok(format!(
+        "P2P Endpoint 可用：Peer ID {}，可信设备 {} 个，地址提示 {} 字节",
+        peer_id,
+        peers,
+        address_hint.len()
+    ))
 }
 
 #[tauri::command]
 pub async fn p2p_sync_create_ticket() -> Result<P2PTicketResponse, String> {
     let mut state = read_state_file()?;
-    let key = ensure_secret_key(&mut state)?;
-    let peer_id = key.public().to_string();
+    let endpoint = ensure_p2p_endpoint().await?;
+    let peer_id = endpoint.id().to_string();
+    let address_hint = current_p2p_address_hint(&endpoint).await?;
     let (mode, ttl, _, _) = p2p_config_values();
     let created_at = Utc::now();
     let expires_at = if mode.trim().eq_ignore_ascii_case("permanent") {
@@ -867,7 +1623,7 @@ pub async fn p2p_sync_create_ticket() -> Result<P2PTicketResponse, String> {
         device_name: p2p_device_name(),
         created_at: created_at.to_rfc3339(),
         expires_at: expires_at.clone(),
-        address_hint: String::new(),
+        address_hint,
     };
     let ticket = encode_ticket(&payload)?;
     state.pending_tickets.push(P2PPendingTicket {
@@ -882,6 +1638,7 @@ pub async fn p2p_sync_create_ticket() -> Result<P2PTicketResponse, String> {
         peer_id,
         ticket_id = payload.ticket_id,
         expires_at = expires_at.clone().unwrap_or_else(|| "permanent".to_string()),
+        address_hint_len = payload.address_hint.len(),
         "[P2PSync] created pairing ticket"
     );
     Ok(P2PTicketResponse {
@@ -906,32 +1663,57 @@ pub async fn p2p_sync_join_ticket(ticket: String) -> Result<String, String> {
             return Err("P2P Ticket 已过期".to_string());
         }
     }
+    if payload.address_hint.trim().is_empty() {
+        return Err("P2P Ticket 缺少 iroh 可拨号地址；请在对端升级后重新生成 Ticket".to_string());
+    }
 
     let mut state = read_state_file()?;
-    if !state.trusted_peers.iter().any(|p| p.peer_id == payload.peer_id) {
-        state.trusted_peers.push(P2PTrustedPeer {
-            peer_id: payload.peer_id.clone(),
-            device_id: payload.device_id.clone(),
-            device_name: payload.device_name.clone(),
-            added_at: Utc::now().to_rfc3339(),
-            address_hint: payload.address_hint.clone(),
-            online_status: "unknown".to_string(),
-            status_detail: if payload.address_hint.trim().is_empty() {
-                "缺少 iroh 可拨号地址；请在对端启动 P2P 服务后重新生成新版 Ticket".to_string()
-            } else {
-                "尚未检测".to_string()
-            },
-            last_checked_at: String::new(),
-        });
-        write_state_file(&state)?;
-        info!(
-            peer_id = payload.peer_id,
-            device_id = payload.device_id,
-            device_name = payload.device_name,
-            "[P2PSync] trusted peer added from ticket"
-        );
+    let endpoint = ensure_p2p_endpoint().await?;
+    let local_address_hint = current_p2p_address_hint(&endpoint).await?;
+    let peer = P2PTrustedPeer {
+        peer_id: payload.peer_id.clone(),
+        device_id: payload.device_id.clone(),
+        device_name: payload.device_name.clone(),
+        added_at: Utc::now().to_rfc3339(),
+        address_hint: payload.address_hint.clone(),
+        online_status: "unknown".to_string(),
+        status_detail: "配对握手中".to_string(),
+        last_checked_at: String::new(),
+    };
+    let response = send_wire_request(
+        &endpoint,
+        &peer,
+        &P2PWireRequest::Pair {
+            ticket_id: payload.ticket_id.clone(),
+            device_id: get_device_id(),
+            device_name: p2p_device_name(),
+            peer_id: endpoint.id().to_string(),
+            address_hint: local_address_hint,
+        },
+    )
+    .await?;
+    if !response.ok {
+        return Err(format!("P2P 配对被对端拒绝: {}", response.message));
     }
-    Ok(format!("已信任设备：{}", payload.device_name))
+
+    upsert_trusted_peer(
+        &mut state,
+        response.peer_id.clone(),
+        response.device_id.clone(),
+        response.device_name.clone(),
+        response.address_hint.clone(),
+        "online".to_string(),
+        "配对握手成功".to_string(),
+    );
+    write_state_file(&state)?;
+    info!(
+        peer_id = response.peer_id,
+        device_id = response.device_id,
+        device_name = response.device_name,
+        ticket_id = payload.ticket_id,
+        "[P2PSync] trusted peer added after live pairing"
+    );
+    Ok(format!("已连接并信任设备：{}", payload.device_name))
 }
 
 #[tauri::command]
@@ -946,6 +1728,8 @@ pub async fn p2p_sync_probe_peers() -> Result<Vec<P2PTrustedPeer>, String> {
     let checked_at = Utc::now().to_rfc3339();
 
     // 先确认本机 P2P 基础能力正常，否则远端检测没有意义。
+    let endpoint = ensure_p2p_endpoint().await?;
+    let local_address_hint = current_p2p_address_hint(&endpoint).await?;
     run_copia_block_delta_self_check()?;
 
     for peer in &mut state.trusted_peers {
@@ -963,10 +1747,49 @@ pub async fn p2p_sync_probe_peers() -> Result<Vec<P2PTrustedPeer>, String> {
             continue;
         }
 
-        // 这里保留真实 iroh 拨号检测的入口。当前版本的 Ticket 尚未携带完整 NodeAddr，
-        // 所以不能把“有 Peer ID”伪装成“在线”。后续接入长驻 Endpoint 后在此处 connect。
-        peer.online_status = "unknown".to_string();
-        peer.status_detail = "已保存地址提示，但当前版本尚未启用长驻 iroh 拨号检测".to_string();
+        let request = P2PWireRequest::Probe {
+            device_id: get_device_id(),
+            device_name: p2p_device_name(),
+            peer_id: endpoint.id().to_string(),
+            address_hint: local_address_hint.clone(),
+        };
+        match send_wire_request(&endpoint, peer, &request).await {
+            Ok(response) if response.ok => {
+                peer.peer_id = response.peer_id;
+                peer.device_id = response.device_id;
+                peer.device_name = response.device_name;
+                if !response.address_hint.trim().is_empty() {
+                    peer.address_hint = response.address_hint;
+                }
+                peer.online_status = "online".to_string();
+                peer.status_detail = "在线检测握手成功".to_string();
+                info!(
+                    peer_id = peer.peer_id,
+                    device_name = peer.device_name,
+                    "[P2PSync] peer probe online"
+                );
+            }
+            Ok(response) => {
+                peer.online_status = "offline".to_string();
+                peer.status_detail = format!("在线检测被对端拒绝: {}", response.message);
+                info!(
+                    peer_id = peer.peer_id,
+                    device_name = peer.device_name,
+                    detail = peer.status_detail,
+                    "[P2PSync] peer probe rejected"
+                );
+            }
+            Err(err) => {
+                peer.online_status = "offline".to_string();
+                peer.status_detail = err;
+                info!(
+                    peer_id = peer.peer_id,
+                    device_name = peer.device_name,
+                    detail = peer.status_detail,
+                    "[P2PSync] peer probe offline"
+                );
+            }
+        }
         changed = true;
     }
 
@@ -982,7 +1805,10 @@ pub async fn p2p_sync_remove_peer(peer_id: String) -> Result<String, String> {
     let before = state.trusted_peers.len();
     state.trusted_peers.retain(|p| p.peer_id != peer_id);
     write_state_file(&state)?;
-    Ok(format!("已移除 {} 个设备", before.saturating_sub(state.trusted_peers.len())))
+    Ok(format!(
+        "已移除 {} 个设备",
+        before.saturating_sub(state.trusted_peers.len())
+    ))
 }
 
 #[tauri::command]
@@ -990,7 +1816,7 @@ pub async fn p2p_sync_resource_repo_now(app: AppHandle) -> Result<String, String
     let run_id = Uuid::new_v4().to_string();
     let target = target_for(P2PSyncTargetKind::ResourceRepo)?;
     info!(run_id, target = target.key, "[P2PSync] resource repo sync requested");
-    sync_target_local_plan(Some(&app), &run_id, target)
+    run_p2p_sync(Some(&app), &run_id, target).await
 }
 
 #[tauri::command]
@@ -1003,12 +1829,28 @@ pub async fn p2p_sync_knowledge_base_now(app: AppHandle) -> Result<String, Strin
     let run_id = Uuid::new_v4().to_string();
     let target = target_for(P2PSyncTargetKind::KnowledgeBase)?;
     info!(run_id, target = target.key, "[P2PSync] knowledge base emergency sync requested");
-    sync_target_local_plan(Some(&app), &run_id, target)
+    run_p2p_sync(Some(&app), &run_id, target).await
 }
 
 #[tauri::command]
 pub async fn p2p_sync_verify_knowledge_base() -> Result<String, String> {
     verify_target(target_for(P2PSyncTargetKind::KnowledgeBase)?)
+}
+
+/// 应用启动时调用：若同步后端是 P2P，则提前绑定 endpoint 并启动 accept loop，
+/// 使本机即便没有打开设置页也能接收对端的配对/探测/同步请求。
+pub async fn p2p_autostart_if_enabled() {
+    let cfg = get_resource_repo_sync_config();
+    if !cfg.provider.trim().eq_ignore_ascii_case("p2p") {
+        return;
+    }
+    match ensure_p2p_endpoint().await {
+        Ok(endpoint) => info!(
+            peer_id = endpoint.id().to_string(),
+            "[P2PSync] endpoint auto-started at app launch"
+        ),
+        Err(e) => info!(error = e, "[P2PSync] endpoint auto-start failed"),
+    }
 }
 
 #[cfg(test)]
@@ -1047,7 +1889,17 @@ mod tests {
     }
 
     #[test]
-    fn copia_block_delta_apply_replaces_file_atomically() {
+    fn safe_join_rejects_traversal() {
+        let root = PathBuf::from("root");
+        assert!(safe_join(&root, "a/b.txt").is_ok());
+        assert!(safe_join(&root, "../escape").is_err());
+        assert!(safe_join(&root, "/abs").is_err());
+        assert!(safe_join(&root, "a/../b").is_err());
+        assert!(safe_join(&root, "C:/x").is_err());
+    }
+
+    #[test]
+    fn finalize_incoming_file_replaces_atomically_and_verifies() {
         let root = env::temp_dir().join(format!("guaxi-p2p-test-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).expect("create root");
         let target = P2PSyncTarget {
@@ -1056,16 +1908,20 @@ mod tests {
             label: "资源库",
             root: root.clone(),
         };
-        let local = root.join("a.txt");
-        let remote = root.join("remote-a.txt");
-        fs::write(&local, b"hello old block\nsame tail").expect("write local");
-        fs::write(&remote, b"hello new block\nsame tail").expect("write remote");
-        let expected = hash_file(&remote).expect("hash remote");
+        let tmp = root.join("incoming.tmp");
+        fs::write(&tmp, b"hello new block\nsame tail").expect("write tmp");
+        let expected = hash_file(&tmp).expect("hash tmp");
 
-        apply_block_delta_with_copia(&target, "a.txt", &remote, &expected).expect("apply block delta");
+        finalize_incoming_file(&target, "a.txt", &tmp, &expected).expect("finalize");
 
-        let content = fs::read(&local).expect("read local");
+        let content = fs::read(root.join("a.txt")).expect("read dest");
         assert_eq!(content, b"hello new block\nsame tail");
+        assert!(!tmp.exists(), "tmp should be renamed away");
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn copia_self_check_passes() {
+        run_copia_block_delta_self_check().expect("copia self check");
     }
 }

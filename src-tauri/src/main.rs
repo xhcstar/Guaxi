@@ -596,6 +596,10 @@ async fn main() {
                 }
             });
 
+            tauri::async_runtime::spawn(async {
+                commands::p2psync::p2p_autostart_if_enabled().await;
+            });
+
             #[cfg(desktop)]
             {
                 use tauri_plugin_global_shortcut::ShortcutState;
