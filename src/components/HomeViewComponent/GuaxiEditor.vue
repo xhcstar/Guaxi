@@ -364,7 +364,7 @@
                   <Icon :icon="previewModeIcon" width="16" height="16" />
                 </n-button>
               </template>
-              {{ previewModeLabel }} (Ctrl+1/2/3/4/5)
+              {{ previewModeLabel }} (Ctrl+1/2/3/5)
             </n-tooltip>
           </n-dropdown>
 
