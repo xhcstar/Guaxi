@@ -13,6 +13,7 @@ use std::env;
 use std::fs;
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
+use tauri::{AppHandle, Emitter};
 use tracing::info;
 use uuid::Uuid;
 use walkdir::WalkDir;
@@ -22,6 +23,7 @@ const P2P_STATE_FILE: &str = "state.json";
 const P2P_MANIFEST_FILE: &str = "manifest.json";
 const P2P_TMP_DIR: &str = "tmp";
 const P2P_BLOCK_SIZE: usize = 64 * 1024;
+const RESOURCE_REPO_SYNC_PROGRESS_EVENT: &str = "resource_repo_sync_progress";
 
 #[derive(Debug, Clone, Copy)]
 enum P2PSyncTargetKind {
@@ -37,12 +39,36 @@ struct P2PSyncTarget {
     root: PathBuf,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ResourceRepoSyncProgress {
+    pub run_id: String,
+    pub provider: String,
+    pub target: String,
+    pub phase: String,
+    pub status: String,
+    pub message: String,
+    pub current: u64,
+    pub total: u64,
+    pub bytes_current: u64,
+    pub bytes_total: u64,
+    pub file_path: String,
+    pub at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct P2PTrustedPeer {
     pub peer_id: String,
     pub device_id: String,
     pub device_name: String,
     pub added_at: String,
+    #[serde(default)]
+    pub address_hint: String,
+    #[serde(default)]
+    pub online_status: String,
+    #[serde(default)]
+    pub status_detail: String,
+    #[serde(default)]
+    pub last_checked_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,6 +122,8 @@ struct P2PTicketPayload {
     device_name: String,
     created_at: String,
     expires_at: Option<String>,
+    #[serde(default)]
+    address_hint: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,6 +133,60 @@ struct P2PManifest {
     device_id: String,
     updated_at: String,
     files: BTreeMap<String, P2PFileEntry>,
+}
+
+fn emit_sync_progress(app: Option<&AppHandle>, progress: ResourceRepoSyncProgress) {
+    info!(
+        run_id = progress.run_id,
+        provider = progress.provider,
+        target = progress.target,
+        phase = progress.phase,
+        status = progress.status,
+        current = progress.current,
+        total = progress.total,
+        bytes_current = progress.bytes_current,
+        bytes_total = progress.bytes_total,
+        file_path = progress.file_path,
+        message = progress.message,
+        "[P2PSync][Progress]"
+    );
+    if let Some(app) = app {
+        if let Err(e) = app.emit(RESOURCE_REPO_SYNC_PROGRESS_EVENT, progress) {
+            info!("[P2PSync][Progress] emit failed: {}", e);
+        }
+    }
+}
+
+fn emit_p2p_progress(
+    app: Option<&AppHandle>,
+    run_id: &str,
+    target: &P2PSyncTarget,
+    phase: &str,
+    status: &str,
+    message: impl Into<String>,
+    current: u64,
+    total: u64,
+    bytes_current: u64,
+    bytes_total: u64,
+    file_path: impl Into<String>,
+) {
+    emit_sync_progress(
+        app,
+        ResourceRepoSyncProgress {
+            run_id: run_id.to_string(),
+            provider: "p2p".to_string(),
+            target: target.key.to_string(),
+            phase: phase.to_string(),
+            status: status.to_string(),
+            message: message.into(),
+            current,
+            total,
+            bytes_current,
+            bytes_total,
+            file_path: file_path.into(),
+            at: Utc::now().to_rfc3339(),
+        },
+    );
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -283,8 +365,53 @@ fn file_mtime_ms(path: &Path) -> Result<i64, String> {
 }
 
 fn scan_manifest(target: &P2PSyncTarget) -> Result<P2PManifest, String> {
+    scan_manifest_with_progress(target, None, "", false)
+}
+
+fn scan_manifest_with_progress(
+    target: &P2PSyncTarget,
+    app: Option<&AppHandle>,
+    run_id: &str,
+    emit_progress: bool,
+) -> Result<P2PManifest, String> {
     let device_id = get_device_id();
+    let mut total_files = 0_u64;
+    let mut total_bytes = 0_u64;
+
+    for entry in WalkDir::new(&target.root).follow_links(false) {
+        let entry = entry.map_err(|e| format!("统计目录失败: {e}"))?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let path = entry.path();
+        let rel = rel_path(&target.root, path)?;
+        if should_skip(target, &rel) {
+            continue;
+        }
+        let meta = fs::metadata(path).map_err(|e| format!("读取文件元数据失败 {}: {e}", path.display()))?;
+        total_files += 1;
+        total_bytes = total_bytes.saturating_add(meta.len());
+    }
+
+    if emit_progress {
+        emit_p2p_progress(
+            app,
+            run_id,
+            target,
+            "scan",
+            "running",
+            format!("开始扫描 {}：{} 个文件，{} 字节", target.label, total_files, total_bytes),
+            0,
+            total_files,
+            0,
+            total_bytes,
+            "",
+        );
+    }
+
     let mut files = BTreeMap::new();
+    let mut scanned_files = 0_u64;
+    let mut scanned_bytes = 0_u64;
     for entry in WalkDir::new(&target.root).follow_links(false) {
         let entry = entry.map_err(|e| format!("扫描目录失败: {e}"))?;
         if !entry.file_type().is_file() {
@@ -296,21 +423,56 @@ fn scan_manifest(target: &P2PSyncTarget) -> Result<P2PManifest, String> {
             continue;
         }
         let meta = fs::metadata(path).map_err(|e| format!("读取文件元数据失败 {}: {e}", path.display()))?;
+        let hash = hash_file(path)?;
+        scanned_files += 1;
+        scanned_bytes = scanned_bytes.saturating_add(meta.len());
         files.insert(
-            rel,
+            rel.clone(),
             P2PFileEntry {
                 size: meta.len(),
                 modified_unix_ms: file_mtime_ms(path)?,
-                blake3: hash_file(path)?,
+                blake3: hash,
             },
         );
+
+        if emit_progress && (scanned_files == total_files || scanned_files == 1 || scanned_files % 25 == 0) {
+            emit_p2p_progress(
+                app,
+                run_id,
+                target,
+                "scan",
+                "running",
+                format!("正在扫描 {}：{}/{} 个文件", target.label, scanned_files, total_files),
+                scanned_files,
+                total_files,
+                scanned_bytes,
+                total_bytes,
+                rel,
+            );
+        }
     }
     info!(
         target = target.key,
         root = %target.root.to_string_lossy(),
         count = files.len(),
+        bytes_total = total_bytes,
         "[P2PSync] local manifest scanned"
     );
+    if emit_progress {
+        emit_p2p_progress(
+            app,
+            run_id,
+            target,
+            "scan",
+            "success",
+            format!("扫描完成：{} 个文件", files.len()),
+            scanned_files,
+            total_files,
+            scanned_bytes,
+            total_bytes,
+            "",
+        );
+    }
     Ok(P2PManifest {
         version: 1,
         target: target.key.to_string(),
@@ -482,10 +644,67 @@ fn verify_target(target: P2PSyncTarget) -> Result<String, String> {
     ))
 }
 
-fn sync_target_local_plan(target: P2PSyncTarget) -> Result<String, String> {
-    let manifest = scan_manifest(&target)?;
+fn sync_target_local_plan(
+    app: Option<&AppHandle>,
+    run_id: &str,
+    target: P2PSyncTarget,
+) -> Result<String, String> {
+    emit_p2p_progress(
+        app,
+        run_id,
+        &target,
+        "connect",
+        "running",
+        "确认本机 P2P 身份与块级差异链路",
+        0,
+        0,
+        0,
+        0,
+        "",
+    );
+    run_copia_block_delta_self_check()?;
+
+    let state = read_state_file()?;
+    let trusted_peers = state.trusted_peers.len() as u64;
+    let online_peers = state
+        .trusted_peers
+        .iter()
+        .filter(|p| p.online_status == "online")
+        .count() as u64;
+    emit_p2p_progress(
+        app,
+        run_id,
+        &target,
+        "connect",
+        if online_peers > 0 { "success" } else { "waiting" },
+        format!("可信设备 {} 个，当前在线 {} 个", trusted_peers, online_peers),
+        online_peers,
+        trusted_peers,
+        0,
+        0,
+        "",
+    );
+
+    let manifest = scan_manifest_with_progress(&target, app, run_id, true)?;
     let base = read_manifest(&target)?;
     let mut stats = P2PSyncStats::default();
+    let mut planned_bytes = 0_u64;
+    let mut planned_files = 0_u64;
+
+    emit_p2p_progress(
+        app,
+        run_id,
+        &target,
+        "plan",
+        "running",
+        "正在计算同步计划",
+        0,
+        manifest.files.len() as u64,
+        0,
+        0,
+        "",
+    );
+
     if let Some(base) = base {
         let keys: BTreeSet<String> = manifest
             .files
@@ -496,8 +715,16 @@ fn sync_target_local_plan(target: P2PSyncTarget) -> Result<String, String> {
         for key in keys {
             match (manifest.files.get(&key), base.files.get(&key)) {
                 (Some(a), Some(b)) if a.blake3 == b.blake3 => stats.skipped += 1,
-                (Some(_), Some(_)) => stats.uploaded += 1,
-                (Some(_), None) => stats.uploaded += 1,
+                (Some(a), Some(_)) => {
+                    stats.uploaded += 1;
+                    planned_files += 1;
+                    planned_bytes = planned_bytes.saturating_add(a.size);
+                }
+                (Some(a), None) => {
+                    stats.uploaded += 1;
+                    planned_files += 1;
+                    planned_bytes = planned_bytes.saturating_add(a.size);
+                }
                 (None, Some(_)) => {
                     stats.conflicts += 1;
                     let candidate = conflict_path(&target.root.join(PathBuf::from(&key)), &p2p_device_name());
@@ -513,11 +740,75 @@ fn sync_target_local_plan(target: P2PSyncTarget) -> Result<String, String> {
         }
     } else {
         stats.uploaded = manifest.files.len() as u32;
+        planned_files = manifest.files.len() as u64;
+        planned_bytes = manifest.files.values().map(|f| f.size).sum();
     }
+
+    emit_p2p_progress(
+        app,
+        run_id,
+        &target,
+        "plan",
+        "success",
+        format!(
+            "同步计划完成：待发送 {} 个文件，{} 字节；冲突/删除待确认 {} 个",
+            planned_files, planned_bytes, stats.conflicts
+        ),
+        planned_files,
+        manifest.files.len() as u64,
+        planned_bytes,
+        planned_bytes,
+        "",
+    );
+
+    emit_p2p_progress(
+        app,
+        run_id,
+        &target,
+        "transfer",
+        if online_peers > 0 { "running" } else { "waiting" },
+        if online_peers > 0 {
+            "已生成 P2P 传输计划，等待 iroh 传输会话消费计划"
+        } else {
+            "没有可确认在线的可信设备，资源库内容尚未开始跨设备传输"
+        },
+        0,
+        planned_files,
+        0,
+        planned_bytes,
+        "",
+    );
+
     write_manifest(&target, &manifest)?;
+    emit_p2p_progress(
+        app,
+        run_id,
+        &target,
+        "complete",
+        if online_peers > 0 { "success" } else { "waiting" },
+        if online_peers > 0 {
+            "本地同步计划已保存；传输层会继续按计划发送"
+        } else {
+            "本地同步计划已保存；请先让可信设备在线后再开始传输"
+        },
+        planned_files,
+        planned_files,
+        planned_bytes,
+        planned_bytes,
+        "",
+    );
     Ok(format!(
-        "{} P2P 同步计划完成：待发送 {}，删除/冲突需确认 {}，跳过 {}。等待可信设备在线后通过 iroh 传输。",
-        target.label, stats.uploaded, stats.conflicts, stats.skipped
+        "{} P2P 同步计划完成：待发送 {} 个文件，{} 字节；删除/冲突需确认 {}，跳过 {}。{}",
+        target.label,
+        stats.uploaded,
+        planned_bytes,
+        stats.conflicts,
+        stats.skipped,
+        if online_peers > 0 {
+            "检测到在线设备，等待传输会话执行。"
+        } else {
+            "当前没有可确认在线设备，尚未跨设备传输。"
+        }
     ))
 }
 
@@ -576,6 +867,7 @@ pub async fn p2p_sync_create_ticket() -> Result<P2PTicketResponse, String> {
         device_name: p2p_device_name(),
         created_at: created_at.to_rfc3339(),
         expires_at: expires_at.clone(),
+        address_hint: String::new(),
     };
     let ticket = encode_ticket(&payload)?;
     state.pending_tickets.push(P2PPendingTicket {
@@ -622,6 +914,14 @@ pub async fn p2p_sync_join_ticket(ticket: String) -> Result<String, String> {
             device_id: payload.device_id.clone(),
             device_name: payload.device_name.clone(),
             added_at: Utc::now().to_rfc3339(),
+            address_hint: payload.address_hint.clone(),
+            online_status: "unknown".to_string(),
+            status_detail: if payload.address_hint.trim().is_empty() {
+                "缺少 iroh 可拨号地址；请在对端启动 P2P 服务后重新生成新版 Ticket".to_string()
+            } else {
+                "尚未检测".to_string()
+            },
+            last_checked_at: String::new(),
         });
         write_state_file(&state)?;
         info!(
@@ -640,6 +940,43 @@ pub async fn p2p_sync_list_peers() -> Result<Vec<P2PTrustedPeer>, String> {
 }
 
 #[tauri::command]
+pub async fn p2p_sync_probe_peers() -> Result<Vec<P2PTrustedPeer>, String> {
+    let mut state = read_state_file()?;
+    let mut changed = false;
+    let checked_at = Utc::now().to_rfc3339();
+
+    // 先确认本机 P2P 基础能力正常，否则远端检测没有意义。
+    run_copia_block_delta_self_check()?;
+
+    for peer in &mut state.trusted_peers {
+        peer.last_checked_at = checked_at.clone();
+        if peer.address_hint.trim().is_empty() {
+            peer.online_status = "unknown".to_string();
+            peer.status_detail =
+                "缺少 iroh 可拨号地址；请使用新版 Ticket 重新配对后再检测在线状态".to_string();
+            changed = true;
+            info!(
+                peer_id = peer.peer_id,
+                device_name = peer.device_name,
+                "[P2PSync] peer probe skipped because address hint is empty"
+            );
+            continue;
+        }
+
+        // 这里保留真实 iroh 拨号检测的入口。当前版本的 Ticket 尚未携带完整 NodeAddr，
+        // 所以不能把“有 Peer ID”伪装成“在线”。后续接入长驻 Endpoint 后在此处 connect。
+        peer.online_status = "unknown".to_string();
+        peer.status_detail = "已保存地址提示，但当前版本尚未启用长驻 iroh 拨号检测".to_string();
+        changed = true;
+    }
+
+    if changed {
+        write_state_file(&state)?;
+    }
+    Ok(state.trusted_peers)
+}
+
+#[tauri::command]
 pub async fn p2p_sync_remove_peer(peer_id: String) -> Result<String, String> {
     let mut state = read_state_file()?;
     let before = state.trusted_peers.len();
@@ -649,8 +986,11 @@ pub async fn p2p_sync_remove_peer(peer_id: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub async fn p2p_sync_resource_repo_now() -> Result<String, String> {
-    sync_target_local_plan(target_for(P2PSyncTargetKind::ResourceRepo)?)
+pub async fn p2p_sync_resource_repo_now(app: AppHandle) -> Result<String, String> {
+    let run_id = Uuid::new_v4().to_string();
+    let target = target_for(P2PSyncTargetKind::ResourceRepo)?;
+    info!(run_id, target = target.key, "[P2PSync] resource repo sync requested");
+    sync_target_local_plan(Some(&app), &run_id, target)
 }
 
 #[tauri::command]
@@ -659,8 +999,11 @@ pub async fn p2p_sync_verify_resource_repo() -> Result<String, String> {
 }
 
 #[tauri::command]
-pub async fn p2p_sync_knowledge_base_now() -> Result<String, String> {
-    sync_target_local_plan(target_for(P2PSyncTargetKind::KnowledgeBase)?)
+pub async fn p2p_sync_knowledge_base_now(app: AppHandle) -> Result<String, String> {
+    let run_id = Uuid::new_v4().to_string();
+    let target = target_for(P2PSyncTargetKind::KnowledgeBase)?;
+    info!(run_id, target = target.key, "[P2PSync] knowledge base emergency sync requested");
+    sync_target_local_plan(Some(&app), &run_id, target)
 }
 
 #[tauri::command]
@@ -682,6 +1025,7 @@ mod tests {
             device_name: "Laptop".to_string(),
             created_at: "2026-06-05T00:00:00Z".to_string(),
             expires_at: None,
+            address_hint: String::new(),
         };
         let encoded = encode_ticket(&payload).expect("encode ticket");
         let decoded = decode_ticket(&encoded).expect("decode ticket");

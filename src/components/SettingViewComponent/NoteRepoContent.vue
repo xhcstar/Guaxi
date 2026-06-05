@@ -133,19 +133,67 @@
                 <n-input-number v-model:value="p2pSyncIntervalMinutes" :disabled="loading" :min="30" :step="30" placeholder="720" />
               </n-form-item>
               <n-form-item label="本机 Peer ID">
-                <n-input :value="p2pStatus?.peer_id || ''" readonly placeholder="保存并刷新后生成" />
+                <div class="copy-field">
+                  <n-input :value="p2pStatus?.peer_id || ''" readonly placeholder="保存并刷新后生成" />
+                  <n-tooltip trigger="hover">
+                    <template #trigger>
+                      <n-button quaternary circle :disabled="!p2pStatus?.peer_id" @click="copyP2PValue(p2pStatus?.peer_id, '本机 Peer ID')">
+                        <template #icon>
+                          <n-icon :component="Copy20Regular" />
+                        </template>
+                      </n-button>
+                    </template>
+                    复制本机 Peer ID
+                  </n-tooltip>
+                </div>
+              </n-form-item>
+              <n-form-item label="P2P 状态">
+                <n-space vertical style="width: 100%">
+                  <n-alert :type="p2pStatusAlertType" :show-icon="false">
+                    {{ p2pStatusText }}
+                  </n-alert>
+                  <n-space>
+                    <n-tag :type="p2pStatus?.enabled ? 'success' : 'warning'">
+                      {{ p2pStatus?.enabled ? '已启用 P2P' : '未启用 P2P' }}
+                    </n-tag>
+                    <n-tag type="info">iroh {{ p2pStatus?.iroh_version || '0.98.2' }}</n-tag>
+                    <n-tag :type="p2pTicketValidityMode === 'permanent' ? 'warning' : 'success'">
+                      Ticket {{ p2pTicketValidityMode === 'permanent' ? '永久有效' : `${p2pTicketTtlMinutes || 10} 分钟有效` }}
+                    </n-tag>
+                  </n-space>
+                </n-space>
               </n-form-item>
               <n-form-item label="配对 Ticket">
-                <n-input v-model:value="p2pTicketText" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" :disabled="loading" placeholder="点击创建 Ticket，或粘贴另一台设备的 Ticket" />
+                <div class="copy-field copy-field--textarea">
+                  <n-input v-model:value="p2pTicketText" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" :disabled="loading" placeholder="点击创建 Ticket，或粘贴另一台设备的 Ticket" />
+                  <n-tooltip trigger="hover">
+                    <template #trigger>
+                      <n-button quaternary circle :disabled="!p2pTicketText" @click="copyP2PValue(p2pTicketText, '配对 Ticket')">
+                        <template #icon>
+                          <n-icon :component="Copy20Regular" />
+                        </template>
+                      </n-button>
+                    </template>
+                    复制配对 Ticket
+                  </n-tooltip>
+                </div>
               </n-form-item>
               <n-form-item label="P2P 操作">
                 <n-space>
+                  <n-button :disabled="loading" @click="handleResourceRepoSyncSave">保存配置</n-button>
+                  <n-button :disabled="loading" @click="handleResourceRepoSyncTest">测试连接</n-button>
                   <n-button :disabled="loading" @click="handleP2PRefreshStatus">刷新状态</n-button>
-                  <n-button :disabled="loading" @click="handleP2PCreateTicket">创建 Ticket</n-button>
+                  <n-button :disabled="loading" @click="handleP2PProbePeers">检测设备在线</n-button>
+                  <n-button :disabled="loading || !p2pCanCreateTicket" @click="handleP2PCreateTicket">创建 Ticket</n-button>
                   <n-button :disabled="loading || !p2pTicketText" @click="handleP2PJoinTicket">加入 Ticket</n-button>
-                  <n-button :disabled="loading" @click="handleP2PVerifyResourceRepo">校验资源库</n-button>
-                  <n-button :disabled="loading" type="warning" @click="handleP2PSyncKnowledgeBase">应急同步知识库</n-button>
-                  <n-button :disabled="loading" @click="handleP2PVerifyKnowledgeBase">校验知识库</n-button>
+                </n-space>
+              </n-form-item>
+              <n-form-item label="同步操作">
+                <n-space>
+                  <n-button :disabled="loading || !p2pReady" type="primary" @click="handleResourceRepoSyncNow">同步资源库</n-button>
+                  <n-button :disabled="loading || !p2pReady" @click="handleP2PVerifyResourceRepo">校验资源库</n-button>
+                  <n-button :disabled="loading || !p2pReady" type="warning" @click="handleP2PSyncKnowledgeBase">应急同步知识库</n-button>
+                  <n-button :disabled="loading || !p2pReady" @click="handleP2PVerifyKnowledgeBase">校验知识库</n-button>
                 </n-space>
               </n-form-item>
               <n-form-item label="可信设备">
@@ -156,7 +204,23 @@
                   <n-list v-else bordered>
                     <n-list-item v-for="peer in p2pTrustedPeers" :key="peer.peer_id">
                       <n-space justify="space-between" align="center" style="width: 100%">
-                        <span>{{ peer.device_name }}（{{ peer.peer_id }}）</span>
+                        <span>{{ peer.device_name }}（{{ shortPeerId(peer.peer_id) }}）</span>
+                        <n-space align="center">
+                          <n-tag :type="peerStatusTagType(peer.online_status)">
+                            {{ peerStatusText(peer.online_status) }}
+                          </n-tag>
+                          <n-text depth="3">{{ peer.status_detail || '尚未检测' }}</n-text>
+                          <n-tooltip trigger="hover">
+                            <template #trigger>
+                              <n-button size="small" quaternary circle :disabled="!peer.peer_id" @click="copyP2PValue(peer.peer_id, `${peer.device_name || '设备'} Peer ID`)">
+                                <template #icon>
+                                  <n-icon :component="Copy20Regular" />
+                                </template>
+                              </n-button>
+                            </template>
+                            复制设备 Peer ID
+                          </n-tooltip>
+                        </n-space>
                         <n-button size="small" :disabled="loading" @click="handleP2PRemovePeer(peer.peer_id)">移除</n-button>
                       </n-space>
                     </n-list-item>
@@ -192,7 +256,7 @@
               </n-form-item>
             </template>
 
-            <n-form-item label="操作">
+            <n-form-item v-if="syncProvider !== 'p2p'" label="操作">
               <n-space>
                 <n-button :disabled="loading" @click="handleResourceRepoSyncSave">保存</n-button>
                 <n-button :disabled="loading" @click="handleResourceRepoSyncTest">测试连接</n-button>
@@ -313,6 +377,7 @@ import {
   NTag,
 } from 'naive-ui';
 import {
+  Copy20Regular,
   FolderAdd20Regular,
   Folder20Regular,
   DocumentEdit16Regular,
@@ -501,6 +566,62 @@ const syncUi = computed(() => {
   }
   return { alertType: 'default', tagType: 'default', tagText: '未运行', title: '资源库同步未运行' }
 })
+
+const p2pReady = computed(() => {
+  return syncProvider.value === 'p2p' && Boolean(p2pStatus.value?.peer_id)
+})
+
+const p2pCanCreateTicket = computed(() => {
+  return syncProvider.value === 'p2p'
+})
+
+const p2pStatusAlertType = computed(() => {
+  if (syncProvider.value !== 'p2p') return 'warning'
+  if (!p2pStatus.value?.peer_id) return 'warning'
+  return 'success'
+})
+
+const p2pStatusText = computed(() => {
+  if (syncProvider.value !== 'p2p') return '当前同步后端不是 P2P，请先选择 P2P 设备同步并保存配置。'
+  if (!p2pStatus.value?.peer_id) return '尚未生成本机 P2P 身份，请保存配置或刷新状态。'
+  const peers = p2pTrustedPeers.value.length
+  return `本机 P2P 身份已就绪，可信设备 ${peers} 个。在线检测需要对端使用新版 Ticket 并保持 P2P 服务在线。`
+})
+
+const shortPeerId = (peerId) => {
+  const s = String(peerId || '')
+  if (s.length <= 18) return s
+  return `${s.slice(0, 8)}…${s.slice(-8)}`
+}
+
+const peerStatusTagType = (status) => {
+  const s = String(status || 'unknown')
+  if (s === 'online') return 'success'
+  if (s === 'offline') return 'error'
+  return 'warning'
+}
+
+const peerStatusText = (status) => {
+  const s = String(status || 'unknown')
+  if (s === 'online') return '在线'
+  if (s === 'offline') return '离线'
+  return '未知'
+}
+
+const copyP2PValue = async (value, label) => {
+  const text = String(value || '')
+  if (!text) return
+  const action = `复制${label}`
+  try {
+    await navigator.clipboard.writeText(text)
+    setSyncState({ status: 'success', action, at: nowLabel(), detail: '已复制到剪贴板' })
+    logger.info('[NoteRepoContent][P2PSync] copied value', { label, length: text.length })
+  } catch (error) {
+    const msg = formatInvokeError(error)
+    logger.error('[NoteRepoContent][P2PSync] copy value failed:', error)
+    setSyncState({ status: 'error', action, at: nowLabel(), detail: msg || '复制失败' })
+  }
+}
 
 // 打开文件浏览器选择文件库根目录
 const handleOpenFileBrowserForLibraryRoot = async () => {
@@ -874,6 +995,31 @@ const handleP2PJoinTicket = async () => {
   }
 }
 
+const handleP2PProbePeers = async () => {
+  const action = '检测 P2P 设备在线'
+  try {
+    loading.value = true
+    setSyncState({ status: 'running', action, at: nowLabel(), detail: '' })
+    const peers = await invoke('p2p_sync_probe_peers')
+    p2pTrustedPeers.value = Array.isArray(peers) ? peers : []
+    await handleP2PRefreshStatus(false)
+    const online = p2pTrustedPeers.value.filter((p) => String(p?.online_status || '') === 'online').length
+    const unknown = p2pTrustedPeers.value.filter((p) => String(p?.online_status || 'unknown') === 'unknown').length
+    setSyncState({
+      status: unknown > 0 ? 'skipped' : 'success',
+      action,
+      at: nowLabel(),
+      detail: `在线 ${online}，未知 ${unknown}，共 ${p2pTrustedPeers.value.length} 个设备`,
+    })
+  } catch (error) {
+    const msg = formatInvokeError(error)
+    logger.error('[NoteRepoContent][P2PSync] probe peers failed:', error)
+    setSyncState({ status: 'error', action, at: nowLabel(), detail: msg })
+  } finally {
+    loading.value = false
+  }
+}
+
 const handleP2PRemovePeer = async (peerId) => {
   const action = '移除 P2P 设备'
   try {
@@ -939,8 +1085,17 @@ const handleResourceRepoSyncTest = async () => {
     loading.value = true;
     setSyncState({ status: 'running', action, at: nowLabel(), detail: '' })
 
+    if (syncProvider.value === 'p2p') {
+      await invoke('set_resource_repo_sync_config', {
+        configInput: buildResourceRepoSyncConfig(),
+      });
+    }
+
     const res = await invoke('resource_repo_test_connection');
     const text = typeof res === 'string' ? res : '连接正常'
+    if (syncProvider.value === 'p2p') {
+      await handleP2PRefreshStatus(false)
+    }
     setSyncState({ status: 'success', action, at: nowLabel(), detail: text })
   } catch (error) {
     const msg = formatInvokeError(error)
@@ -992,6 +1147,22 @@ const handleResourceRepoSyncNow = async () => {
   margin-top: 4px;
   color: var(--guaxi-text-secondary);
   font-size: 13px;
+}
+
+.copy-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 32px;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.copy-field--textarea {
+  align-items: start;
+}
+
+.copy-field--textarea :deep(.n-button) {
+  margin-top: 2px;
 }
 
 .tip {

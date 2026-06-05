@@ -312,6 +312,7 @@ async fn main() {
             commands::p2psync::p2p_sync_create_ticket,
             commands::p2psync::p2p_sync_join_ticket,
             commands::p2psync::p2p_sync_list_peers,
+            commands::p2psync::p2p_sync_probe_peers,
             commands::p2psync::p2p_sync_remove_peer,
             commands::p2psync::p2p_sync_resource_repo_now,
             commands::p2psync::p2p_sync_verify_resource_repo,

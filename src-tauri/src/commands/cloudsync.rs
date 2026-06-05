@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use tracing::{error, info, warn};
 use url::Url;
 use walkdir::WalkDir;
+use tauri::AppHandle;
 
 fn normalize_url_base(raw: &str) -> String {
     raw.trim().trim_end_matches('/').to_string()
@@ -701,7 +702,7 @@ async fn webdav_get_bytes(
 }
 
 #[tauri::command]
-pub async fn resource_repo_sync_now() -> Result<String, String> {
+pub async fn resource_repo_sync_now(app: AppHandle) -> Result<String, String> {
     let cfg = get_resource_repo_sync_config();
     let provider = cfg.provider.trim().to_lowercase();
     let prefer_pull = cfg.prefer_pull;
@@ -716,7 +717,7 @@ pub async fn resource_repo_sync_now() -> Result<String, String> {
     }
 
     if provider == "p2p" {
-        return p2psync::p2p_sync_resource_repo_now().await;
+        return p2psync::p2p_sync_resource_repo_now(app).await;
     }
 
     if provider == "syncthing" {

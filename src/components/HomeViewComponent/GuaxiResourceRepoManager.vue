@@ -50,6 +50,33 @@
               </n-space>
             </n-card>
 
+            <n-card size="small" title="同步进度">
+              <n-space vertical>
+                <n-space align="center" justify="space-between">
+                  <n-space align="center">
+                    <n-tag :type="syncProgress.provider === 'p2p' ? 'success' : 'default'" size="small">
+                      {{ syncProgress.provider === 'p2p' ? 'P2P 同步' : '其他同步' }}
+                    </n-tag>
+                    <n-tag :type="syncProgressTagType" size="small">{{ syncProgressStatusText }}</n-tag>
+                  </n-space>
+                  <n-text depth="3">{{ syncProgress.phase || 'idle' }}</n-text>
+                </n-space>
+                <n-progress
+                  type="line"
+                  :percentage="syncProgressPercent"
+                  :processing="syncProgress.status === 'running'"
+                  :status="syncProgressBarStatus"
+                />
+                <div class="sync-progress-meta">
+                  <div>{{ syncProgress.message || '尚未收到后端同步进度事件' }}</div>
+                  <div>文件：{{ syncProgress.current || 0 }}/{{ syncProgress.total || 0 }}</div>
+                  <div>数据：{{ formatBytes(syncProgress.bytes_current || 0) }}/{{ formatBytes(syncProgress.bytes_total || 0) }}</div>
+                  <div v-if="syncProgress.file_path">当前：{{ syncProgress.file_path }}</div>
+                  <div v-if="syncProgress.at">时间：{{ syncProgress.at }}</div>
+                </div>
+              </n-space>
+            </n-card>
+
             <n-card size="small" title="详情">
               <n-space vertical>
                 <n-text depth="3">选中路径：</n-text>
@@ -66,8 +93,9 @@
 <script setup>
 import { createLogger } from '../../utils/logger'
 import { computed, h, onMounted, onUnmounted, ref } from 'vue'
-import { NButton, NCard, NMessageProvider, NSpace, NSpin, NTag, NText, NTree, useMessage } from 'naive-ui'
+import { NButton, NCard, NMessageProvider, NProgress, NSpace, NSpin, NTag, NText, NTree, useMessage } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { Folder20Regular, Document20Regular } from '@vicons/fluent'
 import { NIcon } from 'naive-ui'
 
@@ -117,7 +145,22 @@ const writeSyncState = (next) => {
 
 const syncState = ref(readSyncState())
 const syncStateRaw = ref('')
+const syncProgress = ref({
+  run_id: '',
+  provider: '',
+  target: '',
+  phase: '',
+  status: 'idle',
+  message: '',
+  current: 0,
+  total: 0,
+  bytes_current: 0,
+  bytes_total: 0,
+  file_path: '',
+  at: '',
+})
 let syncPollTimer = null
+let syncProgressUnlisten = null
 
 const applySyncState = (next, source) => {
   if (!next) return
@@ -194,6 +237,75 @@ const syncUi = computed(() => {
   }
   return { tagType: 'default', tagText: '未运行', title: '资源库同步未运行' }
 })
+
+const syncProgressPercent = computed(() => {
+  const total = Number(syncProgress.value?.total || 0)
+  const current = Number(syncProgress.value?.current || 0)
+  if (total > 0) return Math.max(0, Math.min(100, Math.round((current / total) * 100)))
+  const bytesTotal = Number(syncProgress.value?.bytes_total || 0)
+  const bytesCurrent = Number(syncProgress.value?.bytes_current || 0)
+  if (bytesTotal > 0) return Math.max(0, Math.min(100, Math.round((bytesCurrent / bytesTotal) * 100)))
+  return syncProgress.value?.status === 'success' ? 100 : 0
+})
+
+const syncProgressBarStatus = computed(() => {
+  const s = String(syncProgress.value?.status || 'idle')
+  if (s === 'error') return 'error'
+  if (s === 'success') return 'success'
+  if (s === 'waiting') return 'warning'
+  return 'default'
+})
+
+const syncProgressTagType = computed(() => {
+  const s = String(syncProgress.value?.status || 'idle')
+  if (s === 'success') return 'success'
+  if (s === 'error') return 'error'
+  if (s === 'waiting') return 'warning'
+  if (s === 'running') return 'info'
+  return 'default'
+})
+
+const syncProgressStatusText = computed(() => {
+  const s = String(syncProgress.value?.status || 'idle')
+  if (s === 'success') return '完成'
+  if (s === 'error') return '失败'
+  if (s === 'waiting') return '等待'
+  if (s === 'running') return '进行中'
+  return '未开始'
+})
+
+const formatBytes = (value) => {
+  const n = Number(value || 0)
+  if (!Number.isFinite(n) || n <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let size = n
+  let idx = 0
+  while (size >= 1024 && idx < units.length - 1) {
+    size /= 1024
+    idx += 1
+  }
+  return `${size.toFixed(idx === 0 ? 0 : 1)} ${units[idx]}`
+}
+
+const applySyncProgress = (payload, source) => {
+  if (!payload) return
+  const next = {
+    run_id: String(payload.run_id || ''),
+    provider: String(payload.provider || ''),
+    target: String(payload.target || ''),
+    phase: String(payload.phase || ''),
+    status: String(payload.status || 'idle'),
+    message: String(payload.message || ''),
+    current: Number(payload.current || 0),
+    total: Number(payload.total || 0),
+    bytes_current: Number(payload.bytes_current || 0),
+    bytes_total: Number(payload.bytes_total || 0),
+    file_path: String(payload.file_path || ''),
+    at: String(payload.at || ''),
+  }
+  syncProgress.value = next
+  logger.info('[ResourceRepoManager] sync progress update', { source, progress: next })
+}
 
 const loading = ref(false)
 const loadingTree = ref(false)
@@ -333,9 +445,25 @@ const testConnection = async () => {
   try {
     loading.value = true
     setSyncState({ status: 'running', action, at: nowLabel(), detail: '' })
+    applySyncProgress({
+      provider: 'unknown',
+      phase: 'connect',
+      status: 'running',
+      message: '正在测试同步连接',
+      at: nowLabel(),
+    }, 'local-test')
 
     const res = await invoke('resource_repo_test_connection')
     const text = typeof res === 'string' ? res : '连接正常'
+    applySyncProgress({
+      provider: text.includes('P2P') ? 'p2p' : 'other',
+      phase: 'connect',
+      status: 'success',
+      message: text,
+      current: 1,
+      total: 1,
+      at: nowLabel(),
+    }, 'local-test')
     setSyncState({ status: 'success', action, at: nowLabel(), detail: text })
     message.success(text)
   } catch (e) {
@@ -353,9 +481,27 @@ const syncNow = async () => {
   try {
     loading.value = true
     setSyncState({ status: 'running', action, at: nowLabel(), detail: '' })
+    applySyncProgress({
+      provider: 'unknown',
+      phase: 'start',
+      status: 'running',
+      message: '正在启动资源库同步',
+      at: nowLabel(),
+    }, 'local-sync')
 
     const res = await invoke('resource_repo_sync_now')
     const text = typeof res === 'string' ? res : '同步完成'
+    if (syncProgress.value.provider !== 'p2p') {
+      applySyncProgress({
+        provider: 'other',
+        phase: 'complete',
+        status: 'success',
+        message: text,
+        current: 1,
+        total: 1,
+        at: nowLabel(),
+      }, 'local-sync')
+    }
     setSyncState({ status: 'success', action, at: nowLabel(), detail: text })
     message.success(text)
   } catch (e) {
@@ -375,6 +521,15 @@ onMounted(async () => {
   refreshSyncStateFromStorage('mounted')
 
   try {
+    syncProgressUnlisten = await listen('resource_repo_sync_progress', (event) => {
+      applySyncProgress(event?.payload, 'tauri-event')
+    })
+    logger.info('[ResourceRepoManager] resource_repo_sync_progress listener registered')
+  } catch (e) {
+    logger.warn('[ResourceRepoManager] register sync progress listener failed', e)
+  }
+
+  try {
     syncPollTimer = setInterval(() => {
       refreshSyncStateFromStorage('poll')
     }, 800)
@@ -388,6 +543,15 @@ onMounted(async () => {
 onUnmounted(() => {
   window.removeEventListener('guaxi:resource-repo-sync-state', handleSyncStateEvent)
   window.removeEventListener('storage', handleStorageEvent)
+
+  try {
+    if (syncProgressUnlisten) {
+      syncProgressUnlisten()
+      syncProgressUnlisten = null
+    }
+  } catch (e) {
+    logger.warn('[ResourceRepoManager] stop sync progress listener failed', e)
+  }
 
   try {
     if (syncPollTimer) {
@@ -480,5 +644,14 @@ onUnmounted(() => {
   font-size: 12px;
   color: var(--guaxi-text-secondary);
   line-height: 1.25;
+}
+
+.sync-progress-meta {
+  display: grid;
+  gap: 4px;
+  color: var(--guaxi-text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  word-break: break-all;
 }
 </style>
