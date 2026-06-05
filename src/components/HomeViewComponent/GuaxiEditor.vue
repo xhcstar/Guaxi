@@ -17380,6 +17380,8 @@ const enhancePreviewHtmlWithMediaGroups = (html) => {
   const blocks = Array.from(root.querySelectorAll('p'))
   let mediaGroupCount = 0
   let mediaItemCount = 0
+  let singleMediaGroupCount = 0
+  let galleryMediaGroupCount = 0
   let preservedAuthoredHtmlBlockCount = 0
 
   const isWhitespaceNode = (node) => {
@@ -17441,6 +17443,11 @@ const enhancePreviewHtmlWithMediaGroups = (html) => {
     block.classList.toggle('is-gallery', mediaItems.length > 1)
     block.setAttribute('data-guaxi-media-count', String(mediaItems.length))
     block.style.setProperty('--guaxi-media-count', String(mediaItems.length))
+    if (mediaItems.length === 1) {
+      singleMediaGroupCount += 1
+    } else {
+      galleryMediaGroupCount += 1
+    }
 
     for (const item of mediaItems) {
       // 设计说明：
@@ -17466,6 +17473,8 @@ const enhancePreviewHtmlWithMediaGroups = (html) => {
   logger.info('[Preview] enhanced media groups', {
     mediaGroupCount,
     mediaItemCount,
+    singleMediaGroupCount,
+    galleryMediaGroupCount,
     preservedAuthoredHtmlBlockCount,
   })
   return root.innerHTML
@@ -23487,15 +23496,20 @@ onUnmounted(() => {
 
 .preview .guaxi-media-group.is-single {
   display: block !important;
-  width: min(100%, 760px);
+  width: 100%;
+  max-width: 100%;
   gap: 0;
 }
 
 .preview .guaxi-media-group.is-gallery {
   display: grid !important;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 320px));
+  /* 设计说明：
+   * 1. 图集/相邻图片需要先保证列宽一致，否则图片按各自原始宽度显示时会显得参差。
+   * 2. 使用 1fr 等宽列恢复“网格对齐”的视觉秩序，同时保留容器最大宽度，避免多图过度拉宽。
+   */
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
   justify-content: center !important;
-  justify-items: center;
+  justify-items: stretch;
   align-items: start;
   padding-left: 6px;
   padding-right: 6px;
@@ -23526,14 +23540,19 @@ onUnmounted(() => {
   display: flex;
   flex: 0 1 auto;
   min-width: 0;
-  width: fit-content;
-  max-width: min(100%, 760px);
+  width: 100%;
+  max-width: 100%;
   margin-left: auto;
   margin-right: auto;
   padding: 0;
   border: none;
   background: transparent;
   box-shadow: none;
+}
+
+.preview .guaxi-media-group.is-gallery > .guaxi-media-group__item {
+  width: 100%;
+  max-width: 100%;
 }
 
 .preview .guaxi-media-group__image {
@@ -23548,9 +23567,14 @@ onUnmounted(() => {
 }
 
 .preview .guaxi-media-group.is-single .guaxi-media-group__image {
+  /* 设计说明：
+   * 1. 单张 Markdown 图片是阅读区的主体内容，不应被固定 760px 或视口高度上限提前压缩。
+   * 2. 这里让图片优先按原始宽高展示；只有原图超过当前预览宽度时才收缩到容器内。
+   * 3. `width: auto` 可以避免短图被强行放大，`max-width: 100%` 则让大图尽量占满可用区域。
+   */
   width: auto;
-  max-width: min(100%, 760px);
-  max-height: min(72vh, 640px);
+  max-width: 100%;
+  max-height: none;
 }
 
 :global(:root[data-guaxi-theme='dark']) .preview .guaxi-media-group__item {

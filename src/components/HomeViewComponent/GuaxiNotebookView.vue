@@ -4538,6 +4538,8 @@ const enhanceNotebookHtmlWithMediaGroups = (html) => {
   const blocks = Array.from(root.querySelectorAll('p'))
   let mediaGroupCount = 0
   let mediaItemCount = 0
+  let singleMediaGroupCount = 0
+  let galleryMediaGroupCount = 0
   let preservedAuthoredHtmlBlockCount = 0
 
   const isWhitespaceNode = (node) => {
@@ -4597,6 +4599,11 @@ const enhanceNotebookHtmlWithMediaGroups = (html) => {
     block.classList.toggle('is-gallery', mediaItems.length > 1)
     block.setAttribute('data-guaxi-media-count', String(mediaItems.length))
     block.style.setProperty('--guaxi-media-count', String(mediaItems.length))
+    if (mediaItems.length === 1) {
+      singleMediaGroupCount += 1
+    } else {
+      galleryMediaGroupCount += 1
+    }
 
     for (const item of mediaItems) {
       // 设计说明：
@@ -4623,6 +4630,8 @@ const enhanceNotebookHtmlWithMediaGroups = (html) => {
     filePath: props.filePath,
     mediaGroupCount,
     mediaItemCount,
+    singleMediaGroupCount,
+    galleryMediaGroupCount,
     preservedAuthoredHtmlBlockCount,
   })
   return root.innerHTML
@@ -10426,16 +10435,22 @@ defineExpose({
 .guaxi-notebook__markdown-preview :deep(.guaxi-media-group.is-single),
 .guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group.is-single) {
   display: block !important;
-  width: min(100%, 760px) !important;
+  width: 100% !important;
+  max-width: 100%;
   gap: 0;
 }
 
 .guaxi-notebook__markdown-preview :deep(.guaxi-media-group.is-gallery),
 .guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group.is-gallery) {
   display: grid !important;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 320px));
+  /* 设计说明：
+   * 1. 探索者模式中的 Markdown Cell 是分段渲染的，相邻图片常在同一个媒体组中出现。
+   * 2. 图集使用等宽 1fr 列，避免每张图按原始宽度各自收缩造成左右边缘不齐。
+   * 3. 单图不走这里的网格规则，继续按原始尺寸优先、只在超过阅读宽度时收缩。
+   */
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
   justify-content: center !important;
-  justify-items: center;
+  justify-items: stretch;
   align-items: start;
   padding-left: 6px;
   padding-right: 6px;
@@ -10469,14 +10484,20 @@ defineExpose({
   display: flex;
   flex: 0 1 auto;
   min-width: 0;
-  width: fit-content;
-  max-width: min(100%, 760px);
+  width: 100%;
+  max-width: 100%;
   margin-left: auto;
   margin-right: auto;
   padding: 0;
   border: none;
   background: transparent;
   box-shadow: none;
+}
+
+.guaxi-notebook__markdown-preview :deep(.guaxi-media-group.is-gallery > .guaxi-media-group__item),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group.is-gallery > .guaxi-media-group__item) {
+  width: 100%;
+  max-width: 100%;
 }
 
 .guaxi-notebook__markdown-preview :deep(.guaxi-media-group__image),
@@ -10493,9 +10514,13 @@ defineExpose({
 
 .guaxi-notebook__markdown-preview :deep(.guaxi-media-group.is-single .guaxi-media-group__image),
 .guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group.is-single .guaxi-media-group__image) {
+  /* 设计说明：
+   * 1. 探索者模式的单张 Markdown 图片应和普通预览一致：优先保持原始宽高，不再被 760px/视口高度限制提前压缩。
+   * 2. `width: auto` 避免短图被放大；`max-width: 100%` 让大图尽量占满当前 Markdown Cell 的阅读宽度。
+   */
   width: auto;
-  max-width: min(100%, 760px);
-  max-height: min(72vh, 640px);
+  max-width: 100%;
+  max-height: none;
 }
 
 .guaxi-notebook.theme-dark .guaxi-notebook__markdown-preview :deep(.guaxi-media-group__item),
