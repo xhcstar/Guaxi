@@ -116,7 +116,56 @@
               <n-switch v-model:value="preferPull" :disabled="loading" />
             </n-form-item>
 
-            <template v-if="syncProvider === 'webdav'">
+            <template v-if="syncProvider === 'p2p'">
+              <n-form-item label="本机名称">
+                <n-input v-model:value="p2pDeviceName" :disabled="loading" placeholder="例如：Laptop / Desktop" />
+              </n-form-item>
+              <n-form-item label="Ticket 有效期">
+                <n-select v-model:value="p2pTicketValidityMode" :options="p2pTicketValidityOptions" :disabled="loading" />
+              </n-form-item>
+              <n-form-item v-if="p2pTicketValidityMode === 'expires'" label="有效分钟数">
+                <n-input-number v-model:value="p2pTicketTtlMinutes" :disabled="loading" :min="1" :step="10" placeholder="10" />
+              </n-form-item>
+              <n-form-item label="自动同步资源库">
+                <n-switch v-model:value="p2pAutoSyncResourceRepo" :disabled="loading" />
+              </n-form-item>
+              <n-form-item label="同步间隔（分钟）">
+                <n-input-number v-model:value="p2pSyncIntervalMinutes" :disabled="loading" :min="30" :step="30" placeholder="720" />
+              </n-form-item>
+              <n-form-item label="本机 Peer ID">
+                <n-input :value="p2pStatus?.peer_id || ''" readonly placeholder="保存并刷新后生成" />
+              </n-form-item>
+              <n-form-item label="配对 Ticket">
+                <n-input v-model:value="p2pTicketText" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" :disabled="loading" placeholder="点击创建 Ticket，或粘贴另一台设备的 Ticket" />
+              </n-form-item>
+              <n-form-item label="P2P 操作">
+                <n-space>
+                  <n-button :disabled="loading" @click="handleP2PRefreshStatus">刷新状态</n-button>
+                  <n-button :disabled="loading" @click="handleP2PCreateTicket">创建 Ticket</n-button>
+                  <n-button :disabled="loading || !p2pTicketText" @click="handleP2PJoinTicket">加入 Ticket</n-button>
+                  <n-button :disabled="loading" @click="handleP2PVerifyResourceRepo">校验资源库</n-button>
+                  <n-button :disabled="loading" type="warning" @click="handleP2PSyncKnowledgeBase">应急同步知识库</n-button>
+                  <n-button :disabled="loading" @click="handleP2PVerifyKnowledgeBase">校验知识库</n-button>
+                </n-space>
+              </n-form-item>
+              <n-form-item label="可信设备">
+                <n-space vertical style="width: 100%">
+                  <n-alert v-if="!p2pTrustedPeers.length" type="default" :show-icon="false">
+                    暂无可信设备
+                  </n-alert>
+                  <n-list v-else bordered>
+                    <n-list-item v-for="peer in p2pTrustedPeers" :key="peer.peer_id">
+                      <n-space justify="space-between" align="center" style="width: 100%">
+                        <span>{{ peer.device_name }}（{{ peer.peer_id }}）</span>
+                        <n-button size="small" :disabled="loading" @click="handleP2PRemovePeer(peer.peer_id)">移除</n-button>
+                      </n-space>
+                    </n-list-item>
+                  </n-list>
+                </n-space>
+              </n-form-item>
+            </template>
+
+            <template v-else-if="syncProvider === 'webdav'">
               <n-form-item label="WebDAV URL">
                 <n-input v-model:value="webdavUrl" :disabled="loading" placeholder="例如：https://dav.jianguoyun.com/dav" />
               </n-form-item>
@@ -252,6 +301,7 @@ import {
   NButton,
   NIcon,
   NInput,
+  NInputNumber,
   NSpace,
   NAlert,
   NTooltip,
@@ -303,10 +353,25 @@ const syncthingApiUrl = ref('');
 const syncthingApiKey = ref('');
 const syncthingFolderId = ref('');
 
+const p2pDeviceName = ref('');
+const p2pTicketValidityMode = ref('expires');
+const p2pTicketTtlMinutes = ref(10);
+const p2pAutoSyncResourceRepo = ref(false);
+const p2pSyncIntervalMinutes = ref(720);
+const p2pTicketText = ref('');
+const p2pStatus = ref(null);
+const p2pTrustedPeers = ref([]);
+
 const syncProviderOptions = [
   { label: '不启用', value: 'none' },
+  { label: 'P2P 设备同步', value: 'p2p' },
   { label: '坚果云 WebDAV', value: 'webdav' },
   { label: 'Syncthing API', value: 'syncthing' },
+];
+
+const p2pTicketValidityOptions = [
+  { label: '有期限', value: 'expires' },
+  { label: '永久有效', value: 'permanent' },
 ];
 
 // 知识库远程仓库配置
@@ -548,6 +613,15 @@ onMounted(async () => {
     syncthingApiKey.value = cfg?.syncthing?.api_key ? String(cfg.syncthing.api_key) : '';
     syncthingFolderId.value = cfg?.syncthing?.folder_id ? String(cfg.syncthing.folder_id) : '';
 
+    p2pDeviceName.value = cfg?.p2p?.device_name ? String(cfg.p2p.device_name) : '';
+    p2pTicketValidityMode.value = cfg?.p2p?.ticket_validity_mode ? String(cfg.p2p.ticket_validity_mode) : 'expires';
+    p2pTicketTtlMinutes.value = Number(cfg?.p2p?.ticket_ttl_minutes || 10);
+    p2pAutoSyncResourceRepo.value = Boolean(cfg?.p2p?.auto_sync_resource_repo);
+    p2pSyncIntervalMinutes.value = Number(cfg?.p2p?.sync_interval_minutes || 720);
+    if (syncProvider.value === 'p2p') {
+      await handleP2PRefreshStatus(false);
+    }
+
     logger.info('[NoteRepoContent][ResourceRepoSync] loaded', {
       provider: syncProvider.value,
       preferPull: preferPull.value,
@@ -555,6 +629,8 @@ onMounted(async () => {
       webdavRemoteBasePath: webdavRemoteBasePath.value,
       syncthingApiUrl: syncthingApiUrl.value,
       syncthingFolderId: syncthingFolderId.value,
+      p2pDeviceName: p2pDeviceName.value,
+      p2pTicketValidityMode: p2pTicketValidityMode.value,
     });
   } catch (error) {
     logger.error('加载资源库同步配置失败:', error);
@@ -727,8 +803,112 @@ const buildResourceRepoSyncConfig = () => {
       api_key: String(syncthingApiKey.value || ''),
       folder_id: String(syncthingFolderId.value || '').trim(),
     },
+    p2p: {
+      device_name: String(p2pDeviceName.value || '').trim(),
+      ticket_validity_mode: String(p2pTicketValidityMode.value || 'expires'),
+      ticket_ttl_minutes: Math.max(1, Number(p2pTicketTtlMinutes.value || 10)),
+      auto_sync_resource_repo: Boolean(p2pAutoSyncResourceRepo.value),
+      sync_interval_minutes: Math.max(30, Number(p2pSyncIntervalMinutes.value || 720)),
+    },
   }
 }
+
+const handleP2PRefreshStatus = async (withUi = true) => {
+  const action = '刷新 P2P 状态'
+  try {
+    if (withUi) {
+      loading.value = true
+      setSyncState({ status: 'running', action, at: nowLabel(), detail: '' })
+    }
+    const status = await invoke('p2p_sync_status')
+    p2pStatus.value = status || null
+    p2pTrustedPeers.value = Array.isArray(status?.trusted_peers) ? status.trusted_peers : []
+    if (withUi) {
+      setSyncState({ status: 'success', action, at: nowLabel(), detail: `可信设备 ${p2pTrustedPeers.value.length} 个` })
+    }
+  } catch (error) {
+    const msg = formatInvokeError(error)
+    logger.error('[NoteRepoContent][P2PSync] refresh status failed:', error)
+    if (withUi) {
+      setSyncState({ status: 'error', action, at: nowLabel(), detail: msg })
+    }
+  } finally {
+    if (withUi) loading.value = false
+  }
+}
+
+const handleP2PCreateTicket = async () => {
+  const action = '创建 P2P Ticket'
+  try {
+    loading.value = true
+    setSyncState({ status: 'running', action, at: nowLabel(), detail: '' })
+    await invoke('set_resource_repo_sync_config', { configInput: buildResourceRepoSyncConfig() })
+    const res = await invoke('p2p_sync_create_ticket')
+    p2pTicketText.value = String(res?.ticket || '')
+    await handleP2PRefreshStatus(false)
+    const expiry = res?.expires_at ? `有效期至 ${res.expires_at}` : '永久有效'
+    setSyncState({ status: 'success', action, at: nowLabel(), detail: expiry })
+  } catch (error) {
+    const msg = formatInvokeError(error)
+    logger.error('[NoteRepoContent][P2PSync] create ticket failed:', error)
+    setSyncState({ status: 'error', action, at: nowLabel(), detail: msg })
+  } finally {
+    loading.value = false
+  }
+}
+
+const handleP2PJoinTicket = async () => {
+  const action = '加入 P2P Ticket'
+  try {
+    loading.value = true
+    setSyncState({ status: 'running', action, at: nowLabel(), detail: '' })
+    const res = await invoke('p2p_sync_join_ticket', { ticket: String(p2pTicketText.value || '') })
+    await handleP2PRefreshStatus(false)
+    setSyncState({ status: 'success', action, at: nowLabel(), detail: typeof res === 'string' ? res : '已加入可信设备' })
+  } catch (error) {
+    const msg = formatInvokeError(error)
+    logger.error('[NoteRepoContent][P2PSync] join ticket failed:', error)
+    setSyncState({ status: 'error', action, at: nowLabel(), detail: msg })
+  } finally {
+    loading.value = false
+  }
+}
+
+const handleP2PRemovePeer = async (peerId) => {
+  const action = '移除 P2P 设备'
+  try {
+    loading.value = true
+    setSyncState({ status: 'running', action, at: nowLabel(), detail: '' })
+    const res = await invoke('p2p_sync_remove_peer', { peerId })
+    await handleP2PRefreshStatus(false)
+    setSyncState({ status: 'success', action, at: nowLabel(), detail: typeof res === 'string' ? res : '已移除' })
+  } catch (error) {
+    const msg = formatInvokeError(error)
+    logger.error('[NoteRepoContent][P2PSync] remove peer failed:', error)
+    setSyncState({ status: 'error', action, at: nowLabel(), detail: msg })
+  } finally {
+    loading.value = false
+  }
+}
+
+const runP2PAction = async (action, command) => {
+  try {
+    loading.value = true
+    setSyncState({ status: 'running', action, at: nowLabel(), detail: '' })
+    const res = await invoke(command)
+    setSyncState({ status: 'success', action, at: nowLabel(), detail: typeof res === 'string' ? res : '完成' })
+  } catch (error) {
+    const msg = formatInvokeError(error)
+    logger.error(`[NoteRepoContent][P2PSync] ${action} failed:`, error)
+    setSyncState({ status: 'error', action, at: nowLabel(), detail: msg })
+  } finally {
+    loading.value = false
+  }
+}
+
+const handleP2PVerifyResourceRepo = () => runP2PAction('P2P 校验资源库', 'p2p_sync_verify_resource_repo')
+const handleP2PSyncKnowledgeBase = () => runP2PAction('P2P 应急同步知识库', 'p2p_sync_knowledge_base_now')
+const handleP2PVerifyKnowledgeBase = () => runP2PAction('P2P 校验知识库', 'p2p_sync_verify_knowledge_base')
 
 const handleResourceRepoSyncSave = async () => {
   const action = '保存配置'
@@ -739,6 +919,9 @@ const handleResourceRepoSyncSave = async () => {
     await invoke('set_resource_repo_sync_config', {
       configInput: buildResourceRepoSyncConfig(),
     });
+    if (syncProvider.value === 'p2p') {
+      await handleP2PRefreshStatus(false)
+    }
 
     setSyncState({ status: 'success', action, at: nowLabel(), detail: '配置已保存' })
   } catch (error) {

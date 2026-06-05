@@ -215,6 +215,44 @@ pub struct SyncthingSyncConfig {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct P2PSyncConfig {
+    #[serde(default)]
+    pub device_name: String,
+    #[serde(default = "default_p2p_ticket_validity_mode")]
+    pub ticket_validity_mode: String,
+    #[serde(default = "default_p2p_ticket_ttl_minutes")]
+    pub ticket_ttl_minutes: u64,
+    #[serde(default)]
+    pub auto_sync_resource_repo: bool,
+    #[serde(default = "default_p2p_sync_interval_minutes")]
+    pub sync_interval_minutes: u64,
+}
+
+impl Default for P2PSyncConfig {
+    fn default() -> Self {
+        Self {
+            device_name: String::new(),
+            ticket_validity_mode: default_p2p_ticket_validity_mode(),
+            ticket_ttl_minutes: default_p2p_ticket_ttl_minutes(),
+            auto_sync_resource_repo: false,
+            sync_interval_minutes: default_p2p_sync_interval_minutes(),
+        }
+    }
+}
+
+fn default_p2p_ticket_validity_mode() -> String {
+    "expires".to_string()
+}
+
+fn default_p2p_ticket_ttl_minutes() -> u64 {
+    10
+}
+
+fn default_p2p_sync_interval_minutes() -> u64 {
+    720
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ResourceRepoSyncConfig {
     #[serde(default)]
     pub provider: String,
@@ -224,6 +262,8 @@ pub struct ResourceRepoSyncConfig {
     pub webdav: WebDavSyncConfig,
     #[serde(default)]
     pub syncthing: SyncthingSyncConfig,
+    #[serde(default)]
+    pub p2p: P2PSyncConfig,
 }
 
 impl Default for ResourceRepoSyncConfig {
@@ -233,6 +273,7 @@ impl Default for ResourceRepoSyncConfig {
             prefer_pull: false,
             webdav: WebDavSyncConfig::default(),
             syncthing: SyncthingSyncConfig::default(),
+            p2p: P2PSyncConfig::default(),
         }
     }
 }

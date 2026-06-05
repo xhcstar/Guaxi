@@ -1,4 +1,5 @@
 use crate::commands::settingview::{get_image_bed_root, get_resource_repo_sync_config};
+use crate::commands::p2psync;
 use regex::Regex;
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{Client, Method};
@@ -584,6 +585,10 @@ pub async fn resource_repo_test_connection() -> Result<String, String> {
         return Err("未启用资源库同步后端".to_string());
     }
 
+    if provider == "p2p" {
+        return p2psync::p2p_sync_test_connection().await;
+    }
+
     if provider == "webdav" {
         if cfg.webdav.url.trim().is_empty() {
             return Err("WebDAV URL 不能为空".to_string());
@@ -708,6 +713,10 @@ pub async fn resource_repo_sync_now() -> Result<String, String> {
 
     if provider == "none" || provider.is_empty() {
         return Err("未启用资源库同步后端".to_string());
+    }
+
+    if provider == "p2p" {
+        return p2psync::p2p_sync_resource_repo_now().await;
     }
 
     if provider == "syncthing" {

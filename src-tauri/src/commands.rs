@@ -11,6 +11,7 @@ pub mod templateview;
 pub mod resource_repo_window;
 pub mod slidev;
 pub mod cloudsync;
+pub mod p2psync;
 pub mod statisticview;
 pub mod guaxiscreencap;
 pub mod translator;
