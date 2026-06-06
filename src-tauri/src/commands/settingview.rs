@@ -226,6 +226,14 @@ pub struct P2PSyncConfig {
     pub auto_sync_resource_repo: bool,
     #[serde(default = "default_p2p_sync_interval_minutes")]
     pub sync_interval_minutes: u64,
+    #[serde(default = "default_p2p_transfer_concurrency")]
+    pub transfer_concurrency: u32,
+    #[serde(default = "default_p2p_idle_timeout_secs")]
+    pub idle_timeout_secs: u64,
+    #[serde(default = "default_p2p_enable_block_delta")]
+    pub enable_block_delta: bool,
+    #[serde(default = "default_p2p_auto_propagate_trust")]
+    pub auto_propagate_trust: bool,
 }
 
 impl Default for P2PSyncConfig {
@@ -236,6 +244,10 @@ impl Default for P2PSyncConfig {
             ticket_ttl_minutes: default_p2p_ticket_ttl_minutes(),
             auto_sync_resource_repo: false,
             sync_interval_minutes: default_p2p_sync_interval_minutes(),
+            transfer_concurrency: default_p2p_transfer_concurrency(),
+            idle_timeout_secs: default_p2p_idle_timeout_secs(),
+            enable_block_delta: default_p2p_enable_block_delta(),
+            auto_propagate_trust: default_p2p_auto_propagate_trust(),
         }
     }
 }
@@ -250,6 +262,22 @@ fn default_p2p_ticket_ttl_minutes() -> u64 {
 
 fn default_p2p_sync_interval_minutes() -> u64 {
     720
+}
+
+fn default_p2p_transfer_concurrency() -> u32 {
+    6
+}
+
+fn default_p2p_idle_timeout_secs() -> u64 {
+    30
+}
+
+fn default_p2p_enable_block_delta() -> bool {
+    true
+}
+
+fn default_p2p_auto_propagate_trust() -> bool {
+    true
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

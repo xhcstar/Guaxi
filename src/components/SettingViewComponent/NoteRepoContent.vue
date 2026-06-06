@@ -132,6 +132,18 @@
               <n-form-item label="同步间隔（分钟）">
                 <n-input-number v-model:value="p2pSyncIntervalMinutes" :disabled="loading" :min="30" :step="30" placeholder="720" />
               </n-form-item>
+              <n-form-item label="并发传输数">
+                <n-input-number v-model:value="p2pTransferConcurrency" :disabled="loading" :min="1" :max="32" :step="1" placeholder="6" />
+              </n-form-item>
+              <n-form-item label="连接空闲超时（秒）">
+                <n-input-number v-model:value="p2pIdleTimeoutSecs" :disabled="loading" :min="15" :step="5" placeholder="30" />
+              </n-form-item>
+              <n-form-item label="块级增量传输">
+                <n-switch v-model:value="p2pEnableBlockDelta" :disabled="loading" />
+              </n-form-item>
+              <n-form-item label="自动组网（信任传播）">
+                <n-switch v-model:value="p2pAutoPropagateTrust" :disabled="loading" />
+              </n-form-item>
               <n-form-item label="本机 Peer ID">
                 <div class="copy-field">
                   <n-input :value="p2pStatus?.peer_id || ''" readonly placeholder="保存并刷新后生成" />
@@ -423,6 +435,10 @@ const p2pTicketValidityMode = ref('expires');
 const p2pTicketTtlMinutes = ref(10);
 const p2pAutoSyncResourceRepo = ref(false);
 const p2pSyncIntervalMinutes = ref(720);
+const p2pTransferConcurrency = ref(6);
+const p2pIdleTimeoutSecs = ref(30);
+const p2pEnableBlockDelta = ref(true);
+const p2pAutoPropagateTrust = ref(true);
 const p2pTicketText = ref('');
 const p2pStatus = ref(null);
 const p2pTrustedPeers = ref([]);
@@ -739,6 +755,10 @@ onMounted(async () => {
     p2pTicketTtlMinutes.value = Number(cfg?.p2p?.ticket_ttl_minutes || 10);
     p2pAutoSyncResourceRepo.value = Boolean(cfg?.p2p?.auto_sync_resource_repo);
     p2pSyncIntervalMinutes.value = Number(cfg?.p2p?.sync_interval_minutes || 720);
+    p2pTransferConcurrency.value = Number(cfg?.p2p?.transfer_concurrency || 6);
+    p2pIdleTimeoutSecs.value = Number(cfg?.p2p?.idle_timeout_secs || 30);
+    p2pEnableBlockDelta.value = cfg?.p2p?.enable_block_delta !== false;
+    p2pAutoPropagateTrust.value = cfg?.p2p?.auto_propagate_trust !== false;
     if (syncProvider.value === 'p2p') {
       await handleP2PRefreshStatus(false);
     }
@@ -930,6 +950,10 @@ const buildResourceRepoSyncConfig = () => {
       ticket_ttl_minutes: Math.max(1, Number(p2pTicketTtlMinutes.value || 10)),
       auto_sync_resource_repo: Boolean(p2pAutoSyncResourceRepo.value),
       sync_interval_minutes: Math.max(30, Number(p2pSyncIntervalMinutes.value || 720)),
+      transfer_concurrency: Math.min(32, Math.max(1, Number(p2pTransferConcurrency.value || 6))),
+      idle_timeout_secs: Math.max(15, Number(p2pIdleTimeoutSecs.value || 30)),
+      enable_block_delta: Boolean(p2pEnableBlockDelta.value),
+      auto_propagate_trust: Boolean(p2pAutoPropagateTrust.value),
     },
   }
 }
