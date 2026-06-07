@@ -108,14 +108,49 @@
           </div>
         </n-list-item>
       </n-list>
+
+      <n-text v-if="categorizedProgresses.sync.length" strong>同步任务</n-text>
+      <n-list v-if="categorizedProgresses.sync.length" hoverable>
+        <n-list-item v-for="(progress, index) in categorizedProgresses.sync" :key="'sync-' + index" class="task-item"
+          :class="{ 'task-item-completed': progress.current >= 100, 'task-item-failed': isFailed(progress) }">
+          <div class="task-content">
+            <div class="task-header">
+              <n-text strong class="task-filename">{{ progress.fileName }}</n-text>
+              <n-tag v-if="progress.cancelled" size="small" type="warning" class="task-tag">已终止</n-tag>
+              <n-tag v-else-if="isFailed(progress)" size="small" type="error" class="task-tag">失败</n-tag>
+              <n-tag v-else-if="progress.current < 100" size="small" type="info" class="task-tag">同步中</n-tag>
+              <n-tag v-else size="small" type="success" class="task-tag">已完成</n-tag>
+              <!-- 终止按钮：仅进行中可终止 -->
+              <n-tooltip v-if="canCancel(progress)" trigger="hover">
+                <template #trigger>
+                  <n-button text size="tiny" type="error" class="task-cancel-btn"
+                    :disabled="progress.cancelling" @click="handleCancelSync(progress)">
+                    <template #icon>
+                      <n-icon :size="18"><DismissCircle20Regular /></n-icon>
+                    </template>
+                  </n-button>
+                </template>
+                {{ progress.cancelling ? '终止中…' : '终止同步' }}
+              </n-tooltip>
+            </div>
+            <n-progress type="line" :percentage="progress.current" :indicator-placement="'inside'"
+              :status="progress.cancelled ? 'warning' : (isFailed(progress) ? 'error' : (progress.current >= 100 ? 'success' : 'info'))" :height="15" class="task-progress" />
+            <n-text depth="3" class="task-message">
+              <n-icon size="14" class="task-message-icon"><InfoCircleFilled /></n-icon>
+              {{ progress.message }}
+            </n-text>
+          </div>
+        </n-list-item>
+      </n-list>
     </n-drawer-content>
   </n-drawer>
 </template>
 
 <script setup>
 import { computed } from 'vue'
-import { NDrawer, NDrawerContent, NList, NListItem, NText, NTag, NProgress, NIcon, NButton, NSpace } from 'naive-ui'
+import { NDrawer, NDrawerContent, NList, NListItem, NText, NTag, NProgress, NIcon, NButton, NSpace, NTooltip } from 'naive-ui'
 import { InfoCircleFilled } from '@vicons/antd'
+import { DismissCircle20Regular } from '@vicons/fluent'
 
 const props = defineProps({
   show: {
@@ -134,10 +169,15 @@ const props = defineProps({
       backup: [],
       recovery: [],
       import: [],
-      export: []
+      export: [],
+      sync: []
     })
   },
   clearFailedTasks: {
+    type: Function,
+    default: null
+  },
+  cancelSync: {
     type: Function,
     default: null
   }
@@ -147,6 +187,22 @@ defineEmits(['update:show'])
 
 const isFailed = (progress) => {
   return Boolean(progress?.failed || progress?.message?.includes('失败'))
+}
+
+// 仅进行中（未完成、未失败、未终止）的同步任务可终止。
+const canCancel = (progress) => {
+  return Boolean(
+    progress &&
+    progress.current < 100 &&
+    !isFailed(progress) &&
+    !progress.cancelled
+  )
+}
+
+const handleCancelSync = (progress) => {
+  if (typeof props.cancelSync === 'function') {
+    props.cancelSync(progress?.id)
+  }
 }
 
 const failedTaskCount = computed(() => {

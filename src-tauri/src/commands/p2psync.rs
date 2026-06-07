@@ -15,7 +15,7 @@ use iroh::{
     Endpoint, EndpointAddr, SecretKey,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::env;
 use std::fs;
 use std::io::{Cursor, Read, SeekFrom};
@@ -57,6 +57,35 @@ struct P2PEndpointRuntime {
 }
 
 static P2P_ENDPOINT: OnceLock<Mutex<Option<P2PEndpointRuntime>>> = OnceLock::new();
+
+/// 正在被请求取消的同步 run_id 集合。同步循环在检查点轮询该集合实现"终止"。
+static SYNC_CANCEL: OnceLock<std::sync::Mutex<HashSet<String>>> = OnceLock::new();
+
+fn sync_cancel_set() -> &'static std::sync::Mutex<HashSet<String>> {
+    SYNC_CANCEL.get_or_init(|| std::sync::Mutex::new(HashSet::new()))
+}
+
+/// 请求取消指定 run_id 的同步。
+fn request_sync_cancel(run_id: &str) {
+    if let Ok(mut set) = sync_cancel_set().lock() {
+        set.insert(run_id.to_string());
+    }
+}
+
+/// 查询某 run_id 是否被请求取消。
+fn is_sync_cancelled(run_id: &str) -> bool {
+    sync_cancel_set()
+        .lock()
+        .map(|set| set.contains(run_id))
+        .unwrap_or(false)
+}
+
+/// 同步结束时清理取消标记。
+fn clear_sync_cancel(run_id: &str) {
+    if let Ok(mut set) = sync_cancel_set().lock() {
+        set.remove(run_id);
+    }
+}
 
 #[derive(Debug, Clone)]
 struct P2PSyncTarget {
@@ -2041,6 +2070,9 @@ async fn run_p2p_sync(
     // 注意：同步循环里会因 gossip 学到新设备并写回状态文件，但本轮仍按起始快照
     // 的 peers 同步；新设备在下一轮（或下次同步）纳入，符合最终一致。
     for peer in &peers {
+        if is_sync_cancelled(run_id) {
+            break;
+        }
         emit_p2p_progress(
             app,
             run_id,
@@ -2149,6 +2181,11 @@ async fn run_p2p_sync(
             let plan_total = plan_total;
             Some(
                 async move {
+                    // 已请求终止：跳过本文件传输（保留已完成文件与半截 .part 供续传）。
+                    if is_sync_cancelled(&run_id) {
+                        done.fetch_add(1, Ordering::Relaxed);
+                        return;
+                    }
                     let cur = done.load(Ordering::Relaxed);
                     emit_p2p_progress(
                         app_owned.as_ref(),
@@ -2202,6 +2239,11 @@ async fn run_p2p_sync(
             let plan_total = plan_total;
             Some(
                 async move {
+                    // 已请求终止：跳过本文件传输。
+                    if is_sync_cancelled(&run_id) {
+                        done.fetch_add(1, Ordering::Relaxed);
+                        return;
+                    }
                     let cur = done.load(Ordering::Relaxed);
                     emit_p2p_progress(
                         app_owned.as_ref(),
@@ -2254,8 +2296,9 @@ async fn run_p2p_sync(
         }
 
         // 文件传输完成后，若需要则双向交换数据库记录（仅资源库 + 指定 knowledge_repo）。
+        // 已请求终止则跳过记录交换。
         if let Some(ref kr) = knowledge_repo {
-            if !kr.trim().is_empty() {
+            if !kr.trim().is_empty() && !is_sync_cancelled(run_id) {
                 emit_p2p_progress(
                     app,
                     run_id,
@@ -2289,23 +2332,29 @@ async fn run_p2p_sync(
         link.close().await;
     }
 
-    // 同步后重扫一次并把清单作为新的对比基准持久化。
+    // 是否被用户终止（在清理标记前读取）。
+    let cancelled = is_sync_cancelled(run_id);
+    clear_sync_cancel(run_id);
+
+    // 同步后重扫一次并把清单作为新的对比基准持久化（即便被终止，也保留已完成部分的快照）。
     let final_manifest = scan_manifest(&target)?;
     write_manifest(&target, &final_manifest)?;
 
-    let status = if online == 0 {
+    let status = if cancelled {
+        "cancelled"
+    } else if online == 0 {
         "error"
     } else if errors.is_empty() {
         "success"
     } else {
         "skipped"
     };
-    emit_p2p_progress(
-        app,
-        run_id,
-        &target,
-        "complete",
-        status,
+    let complete_message = if cancelled {
+        format!(
+            "{} 同步已终止：已完成下载 {}，上传 {}（已完成部分已保留，可再次同步续传）",
+            target.label, stats.downloaded, stats.uploaded
+        )
+    } else {
         format!(
             "{} 同步完成：下载 {}，上传 {}，跳过 {}，在线设备 {}/{}",
             target.label,
@@ -2314,13 +2363,28 @@ async fn run_p2p_sync(
             stats.skipped,
             online,
             peers.len()
-        ),
+        )
+    };
+    emit_p2p_progress(
+        app,
+        run_id,
+        &target,
+        "complete",
+        status,
+        complete_message,
         stats.downloaded as u64 + stats.uploaded as u64,
         stats.downloaded as u64 + stats.uploaded as u64,
         0,
         0,
         "",
     );
+
+    if cancelled {
+        return Ok(format!(
+            "{} 同步已终止：下载 {}，上传 {}。已完成部分已保留，可再次同步续传。",
+            target.label, stats.downloaded, stats.uploaded
+        ));
+    }
 
     if online == 0 {
         return Err(format!(
@@ -2712,6 +2776,15 @@ pub async fn p2p_sync_custom_now(app: AppHandle, key: String) -> Result<String, 
 #[tauri::command]
 pub async fn p2p_sync_verify_custom(key: String) -> Result<String, String> {
     verify_target(target_from_key(&key)?)
+}
+
+/// 终止正在进行的同步（按 run_id）。同步循环会在下一个检查点干净地停止，
+/// 已完成的文件保留、半截文件保留 .part 以便下次续传。
+#[tauri::command]
+pub fn p2p_sync_cancel(run_id: String) -> Result<(), String> {
+    info!(run_id, "[P2PSync] cancel requested");
+    request_sync_cancel(&run_id);
+    Ok(())
 }
 
 /// 应用启动时调用：若同步后端是 P2P，则提前绑定 endpoint 并启动 accept loop，

@@ -61,6 +61,28 @@ export function useProgress({ store, message }) {
     message.info(`已清除失败任务: ${removed} 个`);
   };
 
+  // 终止正在进行的同步任务（按 run_id）。后端在检查点干净停止，已完成部分保留。
+  const cancelSyncTask = async (runId) => {
+    if (!runId) return;
+    const idx = progresses.value.findIndex(
+      (p) => p.type === "sync" && p.id === runId
+    );
+    if (idx !== -1) {
+      // 即时反馈"终止中"。
+      progresses.value[idx] = { ...progresses.value[idx], cancelling: true };
+    }
+    try {
+      await invoke("p2p_sync_cancel", { runId });
+      message.info("已请求终止同步，将在当前文件完成后停止");
+    } catch (error) {
+      logger.error("[sync] 终止同步失败", error);
+      message.error(`终止同步失败: ${error.message || error}`);
+      if (idx !== -1) {
+        progresses.value[idx] = { ...progresses.value[idx], cancelling: false };
+      }
+    }
+  };
+
   listen("backup_progress", (event) => {
     const db = event.payload.databaseType || "资料库";
     let idx = progresses.value.findIndex(
@@ -162,6 +184,107 @@ export function useProgress({ store, message }) {
         }, 3000);
       }
     });
+
+    // 资源库/资料库 P2P 同步进度。后端字段：run_id/target/phase/status/message/current/total。
+    const syncTargetLabels = {
+      resource_repo: "资源库",
+      knowledge_base: "知识库",
+      libraries_root: "文件库",
+      template: "模板库",
+      slidev: "Slidev",
+    };
+    // 各阶段映射到一个基线百分比，传输阶段按 current/total 细化。
+    const syncPhaseBaseline = {
+      connect: 5,
+      scan: 15,
+      plan: 30,
+      transfer: 40,
+      records: 90,
+      complete: 100,
+    };
+    const computeSyncPercent = (payload) => {
+      const phase = String(payload.phase || "");
+      const status = String(payload.status || "");
+      if (
+        phase === "complete" ||
+        status === "success" ||
+        status === "error" ||
+        status === "skipped" ||
+        status === "waiting"
+      ) {
+        return 100;
+      }
+      if (phase === "transfer" && Number(payload.total) > 0) {
+        const pct = Math.round((Number(payload.current) / Number(payload.total)) * 100);
+        // 传输阶段限定在 40..89，避免与基线阶段重叠或过早显示 100。
+        return Math.min(89, Math.max(40, pct));
+      }
+      return syncPhaseBaseline[phase] ?? 10;
+    };
+
+    listen("resource_repo_sync_progress", async (event) => {
+      const payload = event.payload || {};
+      const runId = payload.run_id || "sync";
+      const label = syncTargetLabels[payload.target] || payload.target || "同步";
+      const fileName = `${label} 同步`;
+      const percent = computeSyncPercent(payload);
+      const status = String(payload.status || "");
+      const failed = status === "error";
+      const cancelled = status === "cancelled";
+
+      let idx = progresses.value.findIndex(
+        (p) => p.type === "sync" && p.id === runId
+      );
+      if (idx === -1) {
+        progresses.value.push({
+          show: true,
+          current: 0,
+          total: 100,
+          message: payload.message || "开始同步...",
+          fileName,
+          type: "sync",
+          id: runId,
+        });
+        idx = progresses.value.length - 1;
+      }
+      progresses.value[idx] = {
+        ...progresses.value[idx],
+        current: percent,
+        message: payload.message || progresses.value[idx].message,
+        fileName,
+        failed,
+        cancelled,
+        // 收到终止回执后清除"终止中"瞬时态。
+        cancelling: cancelled ? false : progresses.value[idx].cancelling,
+      };
+
+      // 同步成功完成：刷新左侧知识库列表与中间文件表，完成视图刷新。
+      if (payload.phase === "complete" && payload.status === "success") {
+        try {
+          await store.fetchRepos();
+          await store.fetchFiles(store.currentDatabase);
+        } catch (e) {
+          logger.error("[sync] 同步后刷新视图失败", e);
+        }
+      }
+
+      // 成功完成 3 秒后自动移除；失败或被终止则保留供查看。
+      if (percent >= 100 && !failed && !cancelled) {
+        setTimeout(() => {
+          const i = progresses.value.findIndex(
+            (p) => p.type === "sync" && p.id === runId
+          );
+          if (
+            i !== -1 &&
+            progresses.value[i]?.current >= 100 &&
+            !progresses.value[i]?.failed &&
+            !progresses.value[i]?.cancelled
+          ) {
+            progresses.value.splice(i, 1);
+          }
+        }, 3000);
+      }
+    });
   }
 
   // 新增：计算属性 - 按任务类型分类
@@ -215,6 +338,13 @@ export function useProgress({ store, message }) {
           progress.name?.includes("导出") ||
           progress.message?.includes("导出") ||
           progress.fileName?.includes("导出")
+      ),
+      // 同步任务
+      sync: tasks.filter(
+        (progress) =>
+          progress.type === "sync" ||
+          progress.taskType === "sync" ||
+          progress.fileName?.includes("同步")
       ),
     };
   });
@@ -513,6 +643,11 @@ export function useProgress({ store, message }) {
         completed: categorized.export.filter((p) => p.current >= 100).length,
         inProgress: categorized.export.filter((p) => p.current < 100).length,
       },
+      sync: {
+        total: categorized.sync.length,
+        completed: categorized.sync.filter((p) => p.current >= 100).length,
+        inProgress: categorized.sync.filter((p) => p.current < 100).length,
+      },
     };
   };
 
@@ -585,6 +720,7 @@ export function useProgress({ store, message }) {
     clearFailedTasks,
     exportConversionReport,
     retryFailedTasks,
+    cancelSyncTask, // 终止同步任务
 
     // 新增：分类任务相关属性
     categorizedProgresses, // 分类后的任务

@@ -326,6 +326,7 @@ async fn main() {
             commands::p2psync::p2p_sync_verify_slidev,
             commands::p2psync::p2p_sync_custom_now,
             commands::p2psync::p2p_sync_verify_custom,
+            commands::p2psync::p2p_sync_cancel,
             commands::templateview::open_application_window,
             commands::templateview::emit_template_insert,
             commands::templateview::list_templates,

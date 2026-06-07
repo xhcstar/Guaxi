@@ -289,11 +289,11 @@ export function useFileOperations({ store, message }) {
   };
 
   // P2P 在线同步：文件库根目录
+  // 进度与完成提示由任务列表（useProgress 监听 resource_repo_sync_progress）负责，这里仅发起调用。
   const syncLibrariesRoot = async () => {
     try {
-      message.info("开始同步文件库根目录...");
-      const result = await invoke("p2p_sync_libraries_root_now");
-      message.success(typeof result === "string" ? result : "文件库同步完成");
+      message.info("开始同步文件库根目录，进度见任务列表...");
+      await invoke("p2p_sync_libraries_root_now");
     } catch (error) {
       logger.error("文件库同步失败:", error);
       message.error(`文件库同步失败: ${error.message || error}`);
@@ -301,15 +301,12 @@ export function useFileOperations({ store, message }) {
   };
 
   // P2P 在线同步：当前资料库（资源库文件 + 当前 knowledge_repo 的数据库记录）
+  // 进度显示与同步完成后的视图刷新均由 useProgress 的事件监听处理，这里仅发起调用 + 错误兜底。
   const syncCurrentRepo = async () => {
     try {
-      message.info("开始同步当前资料库（文件 + 记录）...");
+      message.info("开始同步当前资料库（文件 + 记录），进度见任务列表...");
       const knowledgeRepo = store.currentDatabase || null;
-      const result = await invoke("p2p_sync_resource_repo_now", { knowledgeRepo });
-      message.success(typeof result === "string" ? result : "资料库同步完成");
-      // 记录可能已变化，刷新当前库数据
-      await store.fetchFiles(store.currentDatabase);
-      await store.fetchRepos();
+      await invoke("p2p_sync_resource_repo_now", { knowledgeRepo });
     } catch (error) {
       logger.error("资料库同步失败:", error);
       message.error(`资料库同步失败: ${error.message || error}`);
