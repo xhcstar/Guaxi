@@ -288,11 +288,11 @@ export function useFileOperations({ store, message }) {
     }
   };
 
-  // P2P 在线同步：文件库根目录
-  // 进度与完成提示由任务列表（useProgress 监听 resource_repo_sync_progress）负责，这里仅发起调用。
+  // P2P 在线同步：文件库根目录（所有库的文件 + 所有库的数据库记录）
+  // 后端固定按 "ALL" 导出记录；进度与完成刷新由任务列表（useProgress 监听）负责，这里仅发起调用。
   const syncLibrariesRoot = async () => {
     try {
-      message.info("开始同步文件库根目录，进度见任务列表...");
+      message.info("开始同步文件库（所有库文件 + 记录），进度见任务列表...");
       await invoke("p2p_sync_libraries_root_now");
     } catch (error) {
       logger.error("文件库同步失败:", error);

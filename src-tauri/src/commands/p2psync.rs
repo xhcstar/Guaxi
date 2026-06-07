@@ -2295,8 +2295,8 @@ async fn run_p2p_sync(
             errors.append(&mut te);
         }
 
-        // 文件传输完成后，若需要则双向交换数据库记录（仅资源库 + 指定 knowledge_repo）。
-        // 已请求终止则跳过记录交换。
+        // 文件传输完成后，若需要则双向交换数据库记录：
+        // 资源库传当前 knowledge_repo，文件库根目录传 "ALL"（所有库）。已请求终止则跳过。
         if let Some(ref kr) = knowledge_repo {
             if !kr.trim().is_empty() && !is_sync_cancelled(run_id) {
                 emit_p2p_progress(
@@ -2730,8 +2730,9 @@ pub async fn p2p_sync_verify_knowledge_base() -> Result<String, String> {
 pub async fn p2p_sync_libraries_root_now(app: AppHandle) -> Result<String, String> {
     let run_id = Uuid::new_v4().to_string();
     let target = target_from_key("libraries_root")?;
-    info!(run_id, target = %target.key, "[P2PSync] libraries root sync requested");
-    run_p2p_sync(Some(&app), &run_id, target, None).await
+    info!(run_id, target = %target.key, "[P2PSync] libraries root sync requested (all libraries + records)");
+    // 文件库根目录承载所有库的文件，记录用 "ALL" 导出所有库的数据库记录，实现"同步所有库的数据和文件"。
+    run_p2p_sync(Some(&app), &run_id, target, Some("ALL".to_string())).await
 }
 
 #[tauri::command]

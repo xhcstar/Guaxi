@@ -140,7 +140,7 @@ const backupOptions = [
 ]
 
 const syncOptions = [
-  { label: '同步文件库根目录（仅文件）', key: 'libraries' },
+  { label: '同步全部库（所有文件 + 记录）', key: 'libraries' },
   { label: '同步当前资料库（文件 + 记录）', key: 'current_repo' }
 ]
 </script>
