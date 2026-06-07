@@ -4,7 +4,7 @@
     <!-- 顶部工具栏 -->
     <TopToolbar :progresses="progresses" :categorized-progresses="categorizedProgresses"
       @toggle-task-list="toggleTaskList" @backup-database="backupDatabase" @recover-database="recoverDatabase"
-      @import-items="importItems" @export-items="exportItems" />
+      @import-items="importItems" @export-items="exportItems" @sync-repo="handleSyncRepo" />
 
     <!-- 任务列表抽屉 -->
     <TaskListDrawer :show="showTaskList" @update:show="showTaskList = $event" :progresses="progresses" :categorized-progresses="categorizedProgresses" :clear-failed-tasks="clearFailedTasks" />
@@ -186,7 +186,7 @@ const {
   checkedRowKeys
 } = useTableConfig({ store, message, ShowOrEdit })
 
-const { backupDatabase: backupDatabaseOp, recoverDatabase: recoverDatabaseOp, importItems: importItemsOp, exportItems: exportItemsOp } = useFileOperations({ store, message })
+const { backupDatabase: backupDatabaseOp, recoverDatabase: recoverDatabaseOp, importItems: importItemsOp, exportItems: exportItemsOp, syncLibrariesRoot: syncLibrariesRootOp, syncCurrentRepo: syncCurrentRepoOp } = useFileOperations({ store, message })
 
 const sortMode = ref(null)
 
@@ -260,6 +260,18 @@ const exportItems = async () => {
     await exportItemsOp(checkedRowKeys.value)
   } catch (error) {
     logger.error('导出失败:', error)
+  }
+}
+
+const handleSyncRepo = async (key) => {
+  try {
+    if (key === 'libraries') {
+      await syncLibrariesRootOp()
+    } else if (key === 'current_repo') {
+      await syncCurrentRepoOp()
+    }
+  } catch (error) {
+    logger.error('同步失败:', error)
   }
 }
 

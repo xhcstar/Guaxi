@@ -355,9 +355,10 @@
                     <span v-else>即将支持</span>
                   </n-tooltip>
                   <n-switch
-                    v-model:value="dir.enabled"
+                    :value="dir.enabled"
                     :disabled="loading"
                     size="small"
+                    @update:value="(v) => handleToggleDirEnabled(dir, v)"
                   />
                   <n-button
                     v-if="dir.removable"
@@ -923,21 +924,6 @@ const syncDirectories = computed(() => {
       verifyCommand: 'p2p_sync_verify_knowledge_base',
     },
     {
-      id: 'libraries_root',
-      type: 'libraries_root',
-      label: '文件库根目录',
-      icon: Folder20Regular,
-      iconColor: syncDirIconColors.libraries_root,
-      path: librariesRoot.value || PRESET_DEFAULT_PATH_LABELS.libraries_root,
-      isConfigured: Boolean(librariesRoot.value),
-      enabled: syncDirEnabled.value.libraries_root,
-      isDefault: true,
-      removable: false,
-      hasBackendSupport: false,
-      syncCommand: null,
-      verifyCommand: null,
-    },
-    {
       id: 'template',
       type: 'template',
       label: '模板库',
@@ -948,9 +934,9 @@ const syncDirectories = computed(() => {
       enabled: syncDirEnabled.value.template,
       isDefault: true,
       removable: false,
-      hasBackendSupport: false,
-      syncCommand: null,
-      verifyCommand: null,
+      hasBackendSupport: true,
+      syncCommand: 'p2p_sync_template_now',
+      verifyCommand: 'p2p_sync_verify_template',
     },
     {
       id: 'slidev',
@@ -963,9 +949,9 @@ const syncDirectories = computed(() => {
       enabled: syncDirEnabled.value.slidev,
       isDefault: true,
       removable: false,
-      hasBackendSupport: false,
-      syncCommand: null,
-      verifyCommand: null,
+      hasBackendSupport: true,
+      syncCommand: 'p2p_sync_slidev_now',
+      verifyCommand: 'p2p_sync_verify_slidev',
     },
   ]
 
@@ -982,9 +968,11 @@ const syncDirectories = computed(() => {
       enabled: custom.enabled !== false,
       isDefault: false,
       removable: true,
-      hasBackendSupport: false,
-      syncCommand: null,
-      verifyCommand: null,
+      // 自定义目录需路径已选才可同步；同步时传 custom:<id> 作为 key
+      hasBackendSupport: Boolean(custom.path),
+      syncCommand: 'p2p_sync_custom_now',
+      syncArgs: { key: 'custom:' + custom.id },
+      verifyCommand: 'p2p_sync_verify_custom',
     })
   }
 
@@ -1000,6 +988,17 @@ const hasAnyDirSyncing = computed(() => {
 })
 
 // 添加自定义同步目录
+// 将自定义目录写入后端配置，使 P2P 同步能按 id 解析其路径。
+const persistCustomDirsToBackend = async () => {
+  try {
+    await invoke('set_resource_repo_sync_config', {
+      configInput: buildResourceRepoSyncConfig(),
+    })
+  } catch (e) {
+    logger.error('[NoteRepoContent] persist custom dirs to backend failed', e)
+  }
+}
+
 const handleAddCustomSyncDir = async () => {
   try {
     const selectedPath = await open({
@@ -1019,15 +1018,31 @@ const handleAddCustomSyncDir = async () => {
       enabled: true,
     })
     saveCustomSyncDirs()
+    await persistCustomDirsToBackend()
   } catch (e) {
     logger.error('[NoteRepoContent] add custom sync dir failed', e)
   }
 }
 
 // 移除自定义同步目录
-const handleRemoveCustomSyncDir = (id) => {
+const handleRemoveCustomSyncDir = async (id) => {
   customSyncDirs.value = customSyncDirs.value.filter(d => d.id !== id)
   saveCustomSyncDirs()
+  await persistCustomDirsToBackend()
+}
+
+// 切换某个同步目录的启用状态，立即写回真实响应式源并持久化（无需点击保存配置）
+const handleToggleDirEnabled = (dir, value) => {
+  if (dir.type === 'custom') {
+    const target = customSyncDirs.value.find(d => d.id === dir.id)
+    if (target) {
+      target.enabled = value
+      saveCustomSyncDirs()
+    }
+  } else if (dir.id in syncDirEnabled.value) {
+    syncDirEnabled.value[dir.id] = value
+    saveSyncDirEnabled()
+  }
 }
 
 // 同步单个目录（非阻塞，仅锁定当前目录；后端自行解析默认路径）
@@ -1042,7 +1057,7 @@ const handleSyncSingleDir = async (dir) => {
   setSyncState({ status: 'running', action, at: nowLabel(), detail: `正在同步 ${dir.label}…` })
 
   try {
-    const res = await invoke(dir.syncCommand)
+    const res = await invoke(dir.syncCommand, dir.syncArgs || undefined)
     if (syncAbortFlags.value[dir.id]) {
       setDirState(dir.id, { status: 'skipped', action, at: nowLabel(), detail: '用户取消' })
       setSyncState({ status: 'skipped', action: `取消${action}`, at: nowLabel(), detail: '用户取消' })
@@ -1086,7 +1101,7 @@ const handleSyncAllEnabled = async () => {
     setDirState(dir.id, { status: 'running', action: `同步${dir.label}`, at: nowLabel(), detail: `正在同步 ${dir.label}…` })
 
     try {
-      const res = await invoke(dir.syncCommand)
+      const res = await invoke(dir.syncCommand, dir.syncArgs || undefined)
       if (syncAbortFlags.value[dir.id]) {
         setDirState(dir.id, { status: 'skipped', action, at: nowLabel(), detail: '用户取消' })
         continue
@@ -1249,6 +1264,25 @@ onMounted(async () => {
     p2pIdleTimeoutSecs.value = Number(cfg?.p2p?.idle_timeout_secs || 30);
     p2pEnableBlockDelta.value = cfg?.p2p?.enable_block_delta !== false;
     p2pAutoPropagateTrust.value = cfg?.p2p?.auto_propagate_trust !== false;
+
+    // 合并后端配置中的自定义目录与本地（localStorage）记录，确保两端一致。
+    // 后端的 custom_sync_dirs 是 P2P 同步解析路径的依据，需补齐本地新增但未落库的项。
+    const backendDirs = Array.isArray(cfg?.p2p?.custom_sync_dirs) ? cfg.p2p.custom_sync_dirs : [];
+    const localById = new Map(customSyncDirs.value.map(d => [d.id, d]));
+    for (const bd of backendDirs) {
+      if (bd?.id && !localById.has(bd.id)) {
+        customSyncDirs.value.push({ id: bd.id, label: bd.label || '自定义目录', path: bd.path || '', enabled: true });
+        localById.set(bd.id, true);
+      }
+    }
+    saveCustomSyncDirs();
+    // 本地有但后端缺失的有效目录，回写后端，使其可被同步解析。
+    const backendIds = new Set(backendDirs.map(d => d?.id));
+    const hasLocalOnly = customSyncDirs.value.some(d => d.id && String(d.path || '').trim() && !backendIds.has(d.id));
+    if (hasLocalOnly) {
+      await persistCustomDirsToBackend();
+    }
+
     if (syncProvider.value === 'p2p') {
       await handleP2PRefreshStatus(false);
     }
@@ -1444,6 +1478,13 @@ const buildResourceRepoSyncConfig = () => {
       idle_timeout_secs: Math.max(15, Number(p2pIdleTimeoutSecs.value || 30)),
       enable_block_delta: Boolean(p2pEnableBlockDelta.value),
       auto_propagate_trust: Boolean(p2pAutoPropagateTrust.value),
+      custom_sync_dirs: customSyncDirs.value
+        .filter(d => d && d.id && String(d.path || '').trim())
+        .map(d => ({
+          id: String(d.id),
+          label: String(d.label || ''),
+          path: String(d.path || ''),
+        })),
     },
   }
 }

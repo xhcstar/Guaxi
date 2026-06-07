@@ -1,5 +1,6 @@
 use crate::commands::settingview::{
-    get_device_id, get_image_bed_root, get_knowledge_bases_root, get_resource_repo_sync_config,
+    get_device_id, get_image_bed_root, get_knowledge_bases_root, get_libraries_root,
+    get_resource_repo_sync_config, get_slidev_repo_root, get_template_repo_path,
 };
 use base64::Engine as _;
 use blake3::Hasher;
@@ -37,6 +38,8 @@ const P2P_BLOCK_SIZE: usize = 64 * 1024;
 const P2P_ALPN: &[u8] = b"guaxi/p2p-sync/2";
 const P2P_ONLINE_TIMEOUT_SECS: u64 = 12;
 const P2P_FRAME_LIMIT: usize = 1024 * 1024;
+/// 数据库记录 bundle 可能远大于普通控制帧，用更大的读取上限（64MB）。
+const P2P_BUNDLE_FRAME_LIMIT: usize = 64 * 1024 * 1024;
 /// 清单可能包含上万个文件条目，单帧上限放宽到 256MiB。
 const P2P_MANIFEST_FRAME_LIMIT: usize = 256 * 1024 * 1024;
 /// 块级 signature/delta 帧上限，单文件签名/差异不应超过此值。
@@ -55,17 +58,10 @@ struct P2PEndpointRuntime {
 
 static P2P_ENDPOINT: OnceLock<Mutex<Option<P2PEndpointRuntime>>> = OnceLock::new();
 
-#[derive(Debug, Clone, Copy)]
-enum P2PSyncTargetKind {
-    ResourceRepo,
-    KnowledgeBase,
-}
-
 #[derive(Debug, Clone)]
 struct P2PSyncTarget {
-    kind: P2PSyncTargetKind,
-    key: &'static str,
-    label: &'static str,
+    key: String,
+    label: String,
     root: PathBuf,
 }
 
@@ -211,6 +207,15 @@ enum P2PWireRequest {
         blake3: String,
         mtime_ms: i64,
     },
+    /// 请求对端导出某 knowledge_repo 的数据库记录 bundle（JSON）。
+    RepoBundle {
+        knowledge_repo: String,
+    },
+    /// 把本机的数据库记录 bundle 推送给对端合并。
+    PushRepoBundle {
+        knowledge_repo: String,
+        bundle_json: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -230,6 +235,14 @@ struct P2PManifestResponse {
     ok: bool,
     message: String,
     manifest: Option<P2PManifest>,
+}
+
+/// 数据库记录 bundle 响应：bundle 以 JSON 字符串内嵌，避免跨模块暴露结构体。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct P2PRepoBundleResponse {
+    ok: bool,
+    message: String,
+    bundle_json: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -830,6 +843,37 @@ async fn handle_incoming_stream(
             };
             write_control(&mut send, &ack, "P2P 推送响应").await?;
         }
+        P2PWireRequest::RepoBundle { knowledge_repo } => {
+            let response = match collect_repo_bundle_json(&knowledge_repo) {
+                Ok(json) => P2PRepoBundleResponse {
+                    ok: true,
+                    message: "ok".to_string(),
+                    bundle_json: Some(json),
+                },
+                Err(e) => P2PRepoBundleResponse {
+                    ok: false,
+                    message: e,
+                    bundle_json: None,
+                },
+            };
+            write_control(&mut send, &response, "P2P 记录响应").await?;
+        }
+        P2PWireRequest::PushRepoBundle {
+            knowledge_repo,
+            bundle_json,
+        } => {
+            let ack = match apply_repo_bundle_json(&bundle_json) {
+                Ok(n) => P2PAck {
+                    ok: true,
+                    message: format!("已合并 {knowledge_repo} 的 {n} 条记录"),
+                },
+                Err(e) => P2PAck {
+                    ok: false,
+                    message: e,
+                },
+            };
+            write_control(&mut send, &ack, "P2P 记录推送响应").await?;
+        }
     }
 
     send.finish()
@@ -971,35 +1015,96 @@ async fn send_wire_request(
     request_response::<P2PWireRequest, P2PWireResponse>(&connection, request, P2P_FRAME_LIMIT).await
 }
 
-fn target_for(kind: P2PSyncTargetKind) -> Result<P2PSyncTarget, String> {
-    match kind {
-        P2PSyncTargetKind::ResourceRepo => {
-            let root = PathBuf::from(get_image_bed_root());
-            fs::create_dir_all(&root).map_err(|e| format!("创建资源库目录失败: {e}"))?;
-            Ok(P2PSyncTarget {
-                kind,
-                key: "resource_repo",
-                label: "资源库",
-                root,
-            })
-        }
-        P2PSyncTargetKind::KnowledgeBase => {
-            let root = PathBuf::from(get_knowledge_bases_root());
-            fs::create_dir_all(&root).map_err(|e| format!("创建知识库目录失败: {e}"))?;
-            Ok(P2PSyncTarget {
-                kind,
-                key: "knowledge_base",
-                label: "知识库",
-                root,
-            })
-        }
-    }
+/// 采集某 knowledge_repo 的数据库记录 bundle 并序列化为 JSON（复用 backup 模块逻辑）。
+fn collect_repo_bundle_json(knowledge_repo: &str) -> Result<String, String> {
+    let bundle = crate::commands::backup::collect_repo_bundle(knowledge_repo)?;
+    crate::commands::backup::repo_bundle_to_json(&bundle)
 }
 
+/// 把对端传来的 bundle JSON 合并进本地数据库，返回合并的 imported_files 条数。
+fn apply_repo_bundle_json(json: &str) -> Result<usize, String> {
+    let bundle = crate::commands::backup::repo_bundle_from_json(json)?;
+    crate::commands::backup::apply_repo_bundle(&bundle)
+}
+
+/// 与单个对端双向交换某 knowledge_repo 的数据库记录：
+/// 1) 拉取对端 bundle 并合并到本地；2) 把本机 bundle 推给对端合并。
+/// 返回 (本地合并条数, 推送给对端条数提示文本)。
+async fn exchange_repo_bundle(
+    connection: &Connection,
+    knowledge_repo: &str,
+) -> Result<(usize, String), String> {
+    // 1) 拉取对端记录
+    let pull_req = P2PWireRequest::RepoBundle {
+        knowledge_repo: knowledge_repo.to_string(),
+    };
+    let pull_resp: P2PRepoBundleResponse =
+        request_response(connection, &pull_req, P2P_BUNDLE_FRAME_LIMIT).await?;
+    let mut merged = 0_usize;
+    if pull_resp.ok {
+        if let Some(json) = pull_resp.bundle_json {
+            merged = apply_repo_bundle_json(&json)?;
+        }
+    } else {
+        return Err(format!("对端导出记录失败: {}", pull_resp.message));
+    }
+
+    // 2) 推送本机记录给对端
+    let local_json = collect_repo_bundle_json(knowledge_repo)?;
+    let push_req = P2PWireRequest::PushRepoBundle {
+        knowledge_repo: knowledge_repo.to_string(),
+        bundle_json: local_json,
+    };
+    let push_ack: P2PAck =
+        request_response(connection, &push_req, P2P_BUNDLE_FRAME_LIMIT).await?;
+    if !push_ack.ok {
+        return Err(format!("推送记录到对端失败: {}", push_ack.message));
+    }
+    Ok((merged, push_ack.message))
+}
+
+/// 统一构造一个同步目标：确保根目录存在后返回 target。
+fn make_target(key: &str, label: &str, root: String) -> Result<P2PSyncTarget, String> {
+    let root = PathBuf::from(root);
+    fs::create_dir_all(&root).map_err(|e| format!("创建「{label}」目录失败: {e}"))?;
+    Ok(P2PSyncTarget {
+        key: key.to_string(),
+        label: label.to_string(),
+        root,
+    })
+}
+
+/// 在 P2P 同步配置中按 id 查找自定义目录。
+fn custom_dir_root(id: &str) -> Result<(String, String), String> {
+    let cfg = get_resource_repo_sync_config();
+    cfg.p2p
+        .custom_sync_dirs
+        .iter()
+        .find(|d| d.id == id)
+        .filter(|d| !d.path.trim().is_empty())
+        .map(|d| {
+            let label = if d.label.trim().is_empty() {
+                d.id.clone()
+            } else {
+                d.label.clone()
+            };
+            (label, d.path.clone())
+        })
+        .ok_or_else(|| format!("未找到自定义同步目录: {id}"))
+}
+
+/// 同步目标的唯一解析入口。支持固定 key 与 `custom:<id>` 形式的自定义目录。
 fn target_from_key(key: &str) -> Result<P2PSyncTarget, String> {
+    if let Some(id) = key.strip_prefix("custom:") {
+        let (label, path) = custom_dir_root(id)?;
+        return make_target(key, &label, path);
+    }
     match key {
-        "resource_repo" => target_for(P2PSyncTargetKind::ResourceRepo),
-        "knowledge_base" => target_for(P2PSyncTargetKind::KnowledgeBase),
+        "resource_repo" => make_target(key, "资源库", get_image_bed_root()),
+        "knowledge_base" => make_target(key, "知识库", get_knowledge_bases_root()),
+        "libraries_root" => make_target(key, "文件库", get_libraries_root()),
+        "template" => make_target(key, "模板库", get_template_repo_path()),
+        "slidev" => make_target(key, "Slidev", get_slidev_repo_root()),
         other => Err(format!("未知的同步目标: {other}")),
     }
 }
@@ -1037,7 +1142,7 @@ fn should_skip(target: &P2PSyncTarget, rel: &str) -> bool {
     let normalized = rel.replace('\\', "/");
     normalized == P2P_META_DIR
         || normalized.starts_with(&format!("{P2P_META_DIR}/"))
-        || matches!(target.kind, P2PSyncTargetKind::KnowledgeBase)
+        || target.key == "knowledge_base"
             && (normalized == ".git" || normalized.starts_with(".git/"))
 }
 
@@ -1176,7 +1281,7 @@ fn scan_manifest_with_progress(
         }
     }
     info!(
-        target = target.key,
+        target = %target.key,
         root = %target.root.to_string_lossy(),
         count = files.len(),
         bytes_total = total_bytes,
@@ -1225,7 +1330,7 @@ fn write_manifest(target: &P2PSyncTarget, manifest: &P2PManifest) -> Result<(), 
     let raw = serde_json::to_string_pretty(manifest)
         .map_err(|e| format!("序列化 P2P manifest 失败: {e}"))?;
     fs::write(&path, raw).map_err(|e| format!("写入 P2P manifest 失败: {e}"))?;
-    info!(target = target.key, path = %path.to_string_lossy(), "[P2PSync] manifest saved");
+    info!(target = %target.key, path = %path.to_string_lossy(), "[P2PSync] manifest saved");
     Ok(())
 }
 
@@ -1268,13 +1373,13 @@ fn finalize_incoming_file(
                 let backup = conflict_path(&dest, &p2p_device_name());
                 match fs::copy(&dest, &backup) {
                     Ok(_) => info!(
-                        target = target.key,
+                        target = %target.key,
                         rel,
                         backup = %backup.to_string_lossy(),
                         "[P2PSync] kept local copy as conflict backup before overwrite"
                     ),
                     Err(e) => info!(
-                        target = target.key,
+                        target = %target.key,
                         rel,
                         error = e.to_string(),
                         "[P2PSync] failed to keep conflict backup"
@@ -1422,7 +1527,7 @@ async fn accept_push(
     }
 
     finalize_incoming_file_async(&target, rel, &tmp, expected_hash).await?;
-    info!(target = target.key, rel, size, "[P2PSync] accepted pushed file");
+    info!(target = %target.key, rel, size, "[P2PSync] accepted pushed file");
     Ok(format!("已接收 {rel}"))
 }
 
@@ -1534,7 +1639,7 @@ async fn pull_file_full(
 
     finalize_incoming_file_async(target, rel, &part, &header.blake3).await?;
     info!(
-        target = target.key,
+        target = %target.key,
         rel,
         size = header.size,
         resumed_from = offset,
@@ -1603,7 +1708,7 @@ async fn pull_file_delta(
     .map_err(|e| format!("patch 任务执行失败: {e}"))??;
 
     finalize_incoming_file_async(target, rel, &tmp, &resp.blake3).await?;
-    info!(target = target.key, rel, size, "[P2PSync] pulled file via block delta");
+    info!(target = %target.key, rel, size, "[P2PSync] pulled file via block delta");
     Ok(size)
 }
 
@@ -1620,7 +1725,7 @@ async fn pull_file(
         match pull_file_delta(connection, target, rel).await {
             Ok(n) => return Ok(n),
             Err(e) => {
-                info!(target = target.key, rel, error = e, "[P2PSync] delta pull failed, falling back to full");
+                info!(target = %target.key, rel, error = e, "[P2PSync] delta pull failed, falling back to full");
             }
         }
     }
@@ -1665,7 +1770,7 @@ async fn push_file(
     if !ack.ok {
         return Err(ack.message);
     }
-    info!(target = target.key, rel, size, "[P2PSync] pushed file");
+    info!(target = %target.key, rel, size, "[P2PSync] pushed file");
     Ok(size)
 }
 
@@ -1885,6 +1990,7 @@ async fn run_p2p_sync(
     app: Option<&AppHandle>,
     run_id: &str,
     target: P2PSyncTarget,
+    knowledge_repo: Option<String>,
 ) -> Result<String, String> {
     emit_p2p_progress(
         app,
@@ -1930,6 +2036,7 @@ async fn run_p2p_sync(
     let mut stats = P2PSyncStats::default();
     let mut online = 0_u64;
     let mut errors: Vec<String> = Vec::new();
+    let mut records_merged = 0_usize;
 
     // 注意：同步循环里会因 gossip 学到新设备并写回状态文件，但本轮仍按起始快照
     // 的 peers 同步；新设备在下一轮（或下次同步）纳入，符合最终一致。
@@ -1963,7 +2070,7 @@ async fn run_p2p_sync(
         // 顺带交换可信设备列表，推动全网状组网。
         exchange_peer_gossip(&endpoint, &connection, &peer.peer_id).await;
 
-        let remote = match fetch_remote_manifest(&connection, target.key).await {
+        let remote = match fetch_remote_manifest(&connection, &target.key).await {
             Ok(m) => m,
             Err(e) => {
                 errors.push(format!("{} 获取清单失败: {}", peer.device_name, e));
@@ -2146,6 +2253,38 @@ async fn run_p2p_sync(
             errors.append(&mut te);
         }
 
+        // 文件传输完成后，若需要则双向交换数据库记录（仅资源库 + 指定 knowledge_repo）。
+        if let Some(ref kr) = knowledge_repo {
+            if !kr.trim().is_empty() {
+                emit_p2p_progress(
+                    app,
+                    run_id,
+                    &target,
+                    "records",
+                    "running",
+                    format!("与 {} 交换数据库记录…", peer.device_name),
+                    0,
+                    0,
+                    0,
+                    0,
+                    "",
+                );
+                match link.current().await {
+                    Ok(conn) => match exchange_repo_bundle(&conn, kr).await {
+                        Ok((merged, _push_msg)) => {
+                            records_merged += merged;
+                        }
+                        Err(e) => {
+                            errors.push(format!("{} 记录同步失败: {}", peer.device_name, e));
+                        }
+                    },
+                    Err(e) => {
+                        errors.push(format!("{} 记录同步连接失败: {}", peer.device_name, e));
+                    }
+                }
+            }
+        }
+
         // 主动关闭连接，触发对端 accept_bi 退出。
         link.close().await;
     }
@@ -2200,6 +2339,9 @@ async fn run_p2p_sync(
         online,
         peers.len()
     );
+    if knowledge_repo.as_deref().map(|s| !s.trim().is_empty()).unwrap_or(false) {
+        summary.push_str(&format!("合并数据库记录 {} 条。", records_merged));
+    }
     if !errors.is_empty() {
         summary.push_str(&format!("部分项未完成：{}", errors.join("；")));
     }
@@ -2492,29 +2634,84 @@ pub async fn p2p_sync_remove_peer(peer_id: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub async fn p2p_sync_resource_repo_now(app: AppHandle) -> Result<String, String> {
+pub async fn p2p_sync_resource_repo_now(
+    app: AppHandle,
+    knowledge_repo: Option<String>,
+) -> Result<String, String> {
     let run_id = Uuid::new_v4().to_string();
-    let target = target_for(P2PSyncTargetKind::ResourceRepo)?;
-    info!(run_id, target = target.key, "[P2PSync] resource repo sync requested");
-    run_p2p_sync(Some(&app), &run_id, target).await
+    let target = target_from_key("resource_repo")?;
+    info!(run_id, target = %target.key, knowledge_repo = ?knowledge_repo, "[P2PSync] resource repo sync requested");
+    run_p2p_sync(Some(&app), &run_id, target, knowledge_repo).await
 }
 
 #[tauri::command]
 pub async fn p2p_sync_verify_resource_repo() -> Result<String, String> {
-    verify_target(target_for(P2PSyncTargetKind::ResourceRepo)?)
+    verify_target(target_from_key("resource_repo")?)
 }
 
 #[tauri::command]
 pub async fn p2p_sync_knowledge_base_now(app: AppHandle) -> Result<String, String> {
     let run_id = Uuid::new_v4().to_string();
-    let target = target_for(P2PSyncTargetKind::KnowledgeBase)?;
-    info!(run_id, target = target.key, "[P2PSync] knowledge base emergency sync requested");
-    run_p2p_sync(Some(&app), &run_id, target).await
+    let target = target_from_key("knowledge_base")?;
+    info!(run_id, target = %target.key, "[P2PSync] knowledge base emergency sync requested");
+    run_p2p_sync(Some(&app), &run_id, target, None).await
 }
 
 #[tauri::command]
 pub async fn p2p_sync_verify_knowledge_base() -> Result<String, String> {
-    verify_target(target_for(P2PSyncTargetKind::KnowledgeBase)?)
+    verify_target(target_from_key("knowledge_base")?)
+}
+
+#[tauri::command]
+pub async fn p2p_sync_libraries_root_now(app: AppHandle) -> Result<String, String> {
+    let run_id = Uuid::new_v4().to_string();
+    let target = target_from_key("libraries_root")?;
+    info!(run_id, target = %target.key, "[P2PSync] libraries root sync requested");
+    run_p2p_sync(Some(&app), &run_id, target, None).await
+}
+
+#[tauri::command]
+pub async fn p2p_sync_verify_libraries_root() -> Result<String, String> {
+    verify_target(target_from_key("libraries_root")?)
+}
+
+#[tauri::command]
+pub async fn p2p_sync_template_now(app: AppHandle) -> Result<String, String> {
+    let run_id = Uuid::new_v4().to_string();
+    let target = target_from_key("template")?;
+    info!(run_id, target = %target.key, "[P2PSync] template sync requested");
+    run_p2p_sync(Some(&app), &run_id, target, None).await
+}
+
+#[tauri::command]
+pub async fn p2p_sync_verify_template() -> Result<String, String> {
+    verify_target(target_from_key("template")?)
+}
+
+#[tauri::command]
+pub async fn p2p_sync_slidev_now(app: AppHandle) -> Result<String, String> {
+    let run_id = Uuid::new_v4().to_string();
+    let target = target_from_key("slidev")?;
+    info!(run_id, target = %target.key, "[P2PSync] slidev sync requested");
+    run_p2p_sync(Some(&app), &run_id, target, None).await
+}
+
+#[tauri::command]
+pub async fn p2p_sync_verify_slidev() -> Result<String, String> {
+    verify_target(target_from_key("slidev")?)
+}
+
+#[tauri::command]
+pub async fn p2p_sync_custom_now(app: AppHandle, key: String) -> Result<String, String> {
+    let run_id = Uuid::new_v4().to_string();
+    let target = target_from_key(&key)?;
+    info!(run_id, target = %target.key, "[P2PSync] custom dir sync requested");
+    run_p2p_sync(Some(&app), &run_id, target, None).await
+}
+
+#[tauri::command]
+pub async fn p2p_sync_verify_custom(key: String) -> Result<String, String> {
+    verify_target(target_from_key(&key)?)
 }
 
 /// 应用启动时调用：若同步后端是 P2P，则提前绑定 endpoint 并启动 accept loop，
@@ -2558,9 +2755,8 @@ mod tests {
     #[test]
     fn skip_knowledge_git_and_p2p_meta() {
         let target = P2PSyncTarget {
-            kind: P2PSyncTargetKind::KnowledgeBase,
-            key: "knowledge_base",
-            label: "知识库",
+            key: "knowledge_base".to_string(),
+            label: "知识库".to_string(),
             root: PathBuf::from("x"),
         };
         assert!(should_skip(&target, ".git/config"));
@@ -2583,9 +2779,8 @@ mod tests {
         let root = env::temp_dir().join(format!("guaxi-p2p-test-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).expect("create root");
         let target = P2PSyncTarget {
-            kind: P2PSyncTargetKind::ResourceRepo,
-            key: "resource_repo",
-            label: "资源库",
+            key: "resource_repo".to_string(),
+            label: "资源库".to_string(),
             root: root.clone(),
         };
         let tmp = root.join("incoming.tmp");
@@ -2608,9 +2803,8 @@ mod tests {
     #[test]
     fn part_path_is_stable_per_rel() {
         let target = P2PSyncTarget {
-            kind: P2PSyncTargetKind::ResourceRepo,
-            key: "resource_repo",
-            label: "资源库",
+            key: "resource_repo".to_string(),
+            label: "资源库".to_string(),
             root: PathBuf::from("root"),
         };
         let a = part_path(&target, "images/2026/a.png");

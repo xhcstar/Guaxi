@@ -717,7 +717,7 @@ pub async fn resource_repo_sync_now(app: AppHandle) -> Result<String, String> {
     }
 
     if provider == "p2p" {
-        return p2psync::p2p_sync_resource_repo_now(app).await;
+        return p2psync::p2p_sync_resource_repo_now(app, None).await;
     }
 
     if provider == "syncthing" {

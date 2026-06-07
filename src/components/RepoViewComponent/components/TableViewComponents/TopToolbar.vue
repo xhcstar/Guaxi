@@ -47,6 +47,20 @@
           从备份恢复 ({{ categorizedProgresses.recovery.length }})
         </n-tooltip>
 
+        <!-- P2P 同步按钮 -->
+        <n-dropdown trigger="click" :options="syncOptions" @select="(key) => $emit('sync-repo', key)">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-button text size="small" class="toolbar-button">
+                <template #icon>
+                  <n-icon :component="ArrowSync20Regular" :size="18" />
+                </template>
+              </n-button>
+            </template>
+            在线同步
+          </n-tooltip>
+        </n-dropdown>
+
         <!-- 导入任务按钮 -->
         <n-tooltip trigger="hover">
           <template #trigger>
@@ -89,7 +103,8 @@ import {
   SaveSync20Regular,
   BoxArrowLeft20Regular,
   TextBulletListAdd20Filled,
-  SignOut20Regular
+  SignOut20Regular,
+  ArrowSync20Regular
 } from '@vicons/fluent'
 
 defineProps({
@@ -115,12 +130,18 @@ defineEmits([
   'backup-database',
   'recover-database',
   'import-items',
-  'export-items'
+  'export-items',
+  'sync-repo'
 ])
 
 const backupOptions = [
   { label: '备份当前库', key: 'current' },
   { label: '备份所有库', key: 'all' }
+]
+
+const syncOptions = [
+  { label: '同步文件库根目录（仅文件）', key: 'libraries' },
+  { label: '同步当前资料库（文件 + 记录）', key: 'current_repo' }
 ]
 </script>
 

@@ -38,7 +38,7 @@ pub struct ImportResult {
     pub importedCount: usize,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct ImportedFileExport {
     id: i32,
     uuid: Option<String>,
@@ -55,7 +55,7 @@ struct ImportedFileExport {
     deleted: Option<i32>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct NoteExport {
     id: i32,
     uuid: Option<String>,
@@ -75,14 +75,14 @@ struct NoteExport {
     deleted: Option<i32>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct DeviceExport {
     device_uuid: String,
     name: Option<String>,
     is_active: i32,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct DeletionEventExport {
     object_type: String,
     object_uuid: String,
@@ -90,7 +90,7 @@ struct DeletionEventExport {
     deleted_at: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct BackupManifest {
     version: u32,
     knowledge_repo: String,
@@ -101,6 +101,15 @@ struct BackupManifest {
     devices: Vec<DeviceExport>,
     #[serde(default)]
     deletion_events: Vec<DeletionEventExport>,
+}
+
+/// 跨设备同步用的数据库记录 bundle：清单 + 笔记链接。
+/// 字段保持私有；p2psync 仅通过 `repo_bundle_to_json` / `repo_bundle_from_json` 传递。
+#[derive(Serialize, Deserialize, Clone)]
+pub struct RepoSyncBundle {
+    manifest: BackupManifest,
+    #[serde(default)]
+    note_links: Vec<NoteLink>,
 }
 
 #[allow(non_snake_case)]
@@ -136,7 +145,7 @@ struct NotesTagRel {
     tag_id: i32,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct NoteLink {
     id: i32,
     source_note_id: i32,
@@ -343,6 +352,131 @@ fn collect_repo_data(repo: &str) -> Result<BackupManifest, String> {
         devices,
         deletion_events,
     })
+}
+
+/// 收集 notes_links 表中、两端笔记都落在给定 note id 集合内的链接。
+fn collect_note_links(
+    conn: &rusqlite::Connection,
+    note_ids: &std::collections::HashSet<i32>,
+) -> Result<Vec<NoteLink>, String> {
+    let mut stmt = conn
+        .prepare("SELECT id, source_note_id, target_note_id, context FROM notes_links")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(NoteLink {
+                id: row.get(0)?,
+                source_note_id: row.get(1)?,
+                target_note_id: row.get(2)?,
+                context: row.get::<_, Option<String>>(3)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    let mut links = Vec::new();
+    for r in rows {
+        let link = r.map_err(|e| e.to_string())?;
+        if note_ids.contains(&link.source_note_id) && note_ids.contains(&link.target_note_id) {
+            links.push(link);
+        }
+    }
+    Ok(links)
+}
+
+/// 应用 manifest 中的 notes_links（按笔记 hash / name+repo 解析到本地 id 后插入）。
+fn apply_note_links(
+    conn: &rusqlite::Connection,
+    manifest: &BackupManifest,
+    note_links: &[NoteLink],
+) -> Result<(), String> {
+    for l in note_links.iter() {
+        let src_note = manifest.notes.iter().find(|n| n.id == l.source_note_id);
+        let tgt_note = manifest.notes.iter().find(|n| n.id == l.target_note_id);
+        let resolve = |n: &NoteExport| -> Result<Option<i32>, String> {
+            if let Some(ref h) = n.hash {
+                conn.query_row("SELECT id FROM notes WHERE hash = ?", params![h], |row| row.get(0))
+                    .optional()
+                    .map_err(|e| e.to_string())
+            } else {
+                conn.query_row(
+                    "SELECT id FROM notes WHERE note_file_name = ? AND knowledge_repo = ?",
+                    params![n.note_file_name, n.knowledge_repo],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| e.to_string())
+            }
+        };
+        let sid: Option<i32> = match src_note {
+            Some(n) => resolve(n)?,
+            None => None,
+        };
+        let tid: Option<i32> = match tgt_note {
+            Some(n) => resolve(n)?,
+            None => None,
+        };
+        if let (Some(source_id), Some(target_id)) = (sid, tid) {
+            let exists: Option<i32> = conn
+                .query_row(
+                    "SELECT id FROM notes_links WHERE source_note_id = ? AND target_note_id = ?",
+                    params![source_id, target_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?;
+            if exists.is_none() {
+                conn.execute(
+                    "INSERT INTO notes_links (source_note_id, target_note_id, context) VALUES (?, ?, ?)",
+                    params![source_id, target_id, l.context.clone()],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 采集某 knowledge_repo 的数据库记录 bundle（供 P2P 在线同步使用，纯内存，不触碰文件）。
+pub fn collect_repo_bundle(knowledge_repo: &str) -> Result<RepoSyncBundle, String> {
+    let conn = init_db().map_err(|e| e.to_string())?;
+    let manifest = collect_repo_data(knowledge_repo)?;
+    let note_ids: std::collections::HashSet<i32> = manifest.notes.iter().map(|n| n.id).collect();
+    let note_links = collect_note_links(&conn, &note_ids)?;
+    Ok(RepoSyncBundle {
+        manifest,
+        note_links,
+    })
+}
+
+/// 把对端传来的记录 bundle 合并进本地数据库（复用备份恢复的 upsert 策略，仅 DB，不触碰文件）。
+/// 返回合并的 imported_files 条数。
+pub fn apply_repo_bundle(bundle: &RepoSyncBundle) -> Result<usize, String> {
+    let conn = init_db().map_err(|e| e.to_string())?;
+    for d in bundle.manifest.devices.iter() {
+        upsert_device(&conn, d)?;
+    }
+    for e in bundle.manifest.deletion_events.iter() {
+        upsert_deletion_event(&conn, e)?;
+    }
+    for f in bundle.manifest.imported_files.iter() {
+        upsert_imported_file(&conn, f)?;
+    }
+    for n in bundle.manifest.notes.iter() {
+        // 笔记可能因关联的 imported_file 尚未同步而失败，跳过单条不影响整体。
+        if let Err(e) = upsert_note(&conn, n) {
+            debug!("apply_repo_bundle skip note: {}", e);
+        }
+    }
+    apply_note_links(&conn, &bundle.manifest, &bundle.note_links)?;
+    Ok(bundle.manifest.imported_files.len())
+}
+
+/// p2psync 通过 JSON 字符串传递 bundle，避免跨模块暴露内部结构体字段。
+pub fn repo_bundle_to_json(bundle: &RepoSyncBundle) -> Result<String, String> {
+    serde_json::to_string(bundle).map_err(|e| e.to_string())
+}
+
+pub fn repo_bundle_from_json(json: &str) -> Result<RepoSyncBundle, String> {
+    serde_json::from_str(json).map_err(|e| e.to_string())
 }
 
 fn load_devices_and_deletion_events(

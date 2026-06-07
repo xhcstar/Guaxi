@@ -288,6 +288,34 @@ export function useFileOperations({ store, message }) {
     }
   };
 
+  // P2P 在线同步：文件库根目录
+  const syncLibrariesRoot = async () => {
+    try {
+      message.info("开始同步文件库根目录...");
+      const result = await invoke("p2p_sync_libraries_root_now");
+      message.success(typeof result === "string" ? result : "文件库同步完成");
+    } catch (error) {
+      logger.error("文件库同步失败:", error);
+      message.error(`文件库同步失败: ${error.message || error}`);
+    }
+  };
+
+  // P2P 在线同步：当前资料库（资源库文件 + 当前 knowledge_repo 的数据库记录）
+  const syncCurrentRepo = async () => {
+    try {
+      message.info("开始同步当前资料库（文件 + 记录）...");
+      const knowledgeRepo = store.currentDatabase || null;
+      const result = await invoke("p2p_sync_resource_repo_now", { knowledgeRepo });
+      message.success(typeof result === "string" ? result : "资料库同步完成");
+      // 记录可能已变化，刷新当前库数据
+      await store.fetchFiles(store.currentDatabase);
+      await store.fetchRepos();
+    } catch (error) {
+      logger.error("资料库同步失败:", error);
+      message.error(`资料库同步失败: ${error.message || error}`);
+    }
+  };
+
   return {
     backupDatabase,
     recoverDatabase,
@@ -300,5 +328,7 @@ export function useFileOperations({ store, message }) {
     cleanupTempFiles,
     validateFileIntegrity,
     gcDeletedItems,
+    syncLibrariesRoot,
+    syncCurrentRepo,
   };
 }

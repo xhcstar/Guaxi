@@ -214,6 +214,17 @@ pub struct SyncthingSyncConfig {
     pub folder_id: String,
 }
 
+/// 用户自定义的同步目录。两台设备需配置相同的 `id` 才能配对该目录。
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct CustomSyncDir {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub path: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct P2PSyncConfig {
     #[serde(default)]
@@ -234,6 +245,8 @@ pub struct P2PSyncConfig {
     pub enable_block_delta: bool,
     #[serde(default = "default_p2p_auto_propagate_trust")]
     pub auto_propagate_trust: bool,
+    #[serde(default)]
+    pub custom_sync_dirs: Vec<CustomSyncDir>,
 }
 
 impl Default for P2PSyncConfig {
@@ -248,6 +261,7 @@ impl Default for P2PSyncConfig {
             idle_timeout_secs: default_p2p_idle_timeout_secs(),
             enable_block_delta: default_p2p_enable_block_delta(),
             auto_propagate_trust: default_p2p_auto_propagate_trust(),
+            custom_sync_dirs: Vec::new(),
         }
     }
 }
