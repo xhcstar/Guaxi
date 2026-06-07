@@ -16,7 +16,7 @@ use base64::{engine::general_purpose, Engine as _};
 use keyring::Entry;
 use rand::rngs::OsRng;
 use rand::TryRngCore;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 use zip::ZipArchive;
 
@@ -812,7 +812,7 @@ pub fn load_config() -> AppConfig {
     const KEYRING_USER_PREFIX: &str = "guaxi_config_master_key:";
 
     let config_path = get_config_path();
-    info!(
+    debug!(
         config_path = config_path.to_string_lossy().as_ref(),
         "loading guaxi_config.json"
     );

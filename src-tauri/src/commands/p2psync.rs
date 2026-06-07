@@ -15,14 +15,14 @@ use iroh::{
     Endpoint, EndpointAddr, SecretKey,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::io::{Cursor, Read, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::time::Duration as StdDuration;
+use std::time::{Duration as StdDuration, Instant};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
 use tokio::time::timeout;
@@ -1122,20 +1122,51 @@ fn custom_dir_root(id: &str) -> Result<(String, String), String> {
         .ok_or_else(|| format!("未找到自定义同步目录: {id}"))
 }
 
+/// 同步目标 (label, root 路径) 的短时缓存。一次同步会对每个文件解析一次 target，
+/// 而解析要走 load_config（读盘 + keyring 解密），数百文件叠加开销显著。缓存 TTL 内
+/// 复用解析结果，避免热路径反复 load_config。配置变更最多延迟 TTL 生效，对同步无碍。
+const TARGET_RESOLVE_TTL: StdDuration = StdDuration::from_secs(10);
+static TARGET_RESOLVE_CACHE: OnceLock<std::sync::Mutex<HashMap<String, (String, String, Instant)>>> =
+    OnceLock::new();
+
+fn target_resolve_cache() -> &'static std::sync::Mutex<HashMap<String, (String, String, Instant)>> {
+    TARGET_RESOLVE_CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+/// 解析 key 对应的 (label, root 路径)，命中 TTL 内缓存则直接返回，否则读配置并写缓存。
+fn resolve_target_label_root(key: &str) -> Result<(String, String), String> {
+    if let Ok(cache) = target_resolve_cache().lock() {
+        if let Some((label, root, at)) = cache.get(key) {
+            if at.elapsed() < TARGET_RESOLVE_TTL {
+                return Ok((label.clone(), root.clone()));
+            }
+        }
+    }
+
+    let (label, root) = if let Some(id) = key.strip_prefix("custom:") {
+        let (label, path) = custom_dir_root(id)?;
+        (label, path)
+    } else {
+        match key {
+            "resource_repo" => ("资源库".to_string(), get_image_bed_root()),
+            "knowledge_base" => ("知识库".to_string(), get_knowledge_bases_root()),
+            "libraries_root" => ("文件库".to_string(), get_libraries_root()),
+            "template" => ("模板库".to_string(), get_template_repo_path()),
+            "slidev" => ("Slidev".to_string(), get_slidev_repo_root()),
+            other => return Err(format!("未知的同步目标: {other}")),
+        }
+    };
+
+    if let Ok(mut cache) = target_resolve_cache().lock() {
+        cache.insert(key.to_string(), (label.clone(), root.clone(), Instant::now()));
+    }
+    Ok((label, root))
+}
+
 /// 同步目标的唯一解析入口。支持固定 key 与 `custom:<id>` 形式的自定义目录。
 fn target_from_key(key: &str) -> Result<P2PSyncTarget, String> {
-    if let Some(id) = key.strip_prefix("custom:") {
-        let (label, path) = custom_dir_root(id)?;
-        return make_target(key, &label, path);
-    }
-    match key {
-        "resource_repo" => make_target(key, "资源库", get_image_bed_root()),
-        "knowledge_base" => make_target(key, "知识库", get_knowledge_bases_root()),
-        "libraries_root" => make_target(key, "文件库", get_libraries_root()),
-        "template" => make_target(key, "模板库", get_template_repo_path()),
-        "slidev" => make_target(key, "Slidev", get_slidev_repo_root()),
-        other => Err(format!("未知的同步目标: {other}")),
-    }
+    let (label, root) = resolve_target_label_root(key)?;
+    make_target(key, &label, root)
 }
 
 /// 把相对路径安全地拼到根目录下，拒绝绝对路径与 `..` 穿越。
