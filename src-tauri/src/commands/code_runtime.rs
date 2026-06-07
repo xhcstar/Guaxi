@@ -54,6 +54,7 @@ fn python_worker_timeout_secs_for_cmd(worker_cmd: &str) -> u64 {
     match worker_cmd {
         "exec" => PY_WORKER_EXEC_TIMEOUT_SECS,
         "table_slice" | "table_export" | "import_table" => PY_WORKER_TABLE_IO_TIMEOUT_SECS,
+        "extract_article" => PY_WORKER_TABLE_IO_TIMEOUT_SECS,
         _ => PY_WORKER_REQUEST_TIMEOUT_SECS,
     }
 }
@@ -2668,6 +2669,82 @@ fn send_worker_request(payload: &Value) -> Result<Value, String> {
         serde_json::from_str::<Value>(response_line.trim())
             .map_err(|e| format!("parse worker response failed: {e}"))
     })
+}
+
+/// 工业级正文抽取：调用常驻 Python worker 的 trafilatura handler，把原始 HTML
+/// 清洗成高质量图文。返回 worker 的 `article` 对象（serde_json::Value）。
+///
+/// 设计：复用既有 worker 协议（`send_worker_request`）。trafilatura 未安装时
+/// worker 会返回 `{"ok": false, "error": "trafilatura unavailable..."}`，调用方
+/// （flipboard 抽取层）据此回退到本地 Rust 抽取，保证链路不中断。
+pub fn extract_article_via_python(html: &str, url: &str) -> Result<Value, String> {
+    let payload = json!({
+        "cmd": "extract_article",
+        "html": html,
+        "url": url,
+        // 固定 worker key，避免污染用户的交互式会话 worker。
+        "session_id": "__guaxi_flipboard_extract__",
+    });
+    let response = send_worker_request(&payload)?;
+    let ok = response.get("ok").and_then(Value::as_bool).unwrap_or(false);
+    if !ok {
+        let err = response
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown extract error")
+            .to_string();
+        return Err(err);
+    }
+    response
+        .get("article")
+        .cloned()
+        .ok_or_else(|| "extract response missing article".to_string())
+}
+
+/// 确保 trafilatura 已安装到管理化运行时（best-effort，幂等）。
+/// 已安装则快速返回；缺失则 pip 安装（清华镜像）。失败不致命——
+/// 调用方会回退到本地抽取。返回是否安装成功。
+#[allow(dead_code)] // 由 P3 爬虫初始化 / P7 设置面板触发
+pub fn ensure_trafilatura_installed() -> Result<bool, String> {
+    let spec = resolve_python_launch_spec()?;
+    // 先探测是否已可导入，避免每次都跑 pip。
+    let mut probe = Command::new(&spec.program);
+    probe
+        .args(&spec.base_args)
+        .args(["-c", "import trafilatura"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    apply_python_process_no_window(&mut probe);
+    if let Ok(status) = probe.status() {
+        if status.success() {
+            return Ok(true);
+        }
+    }
+
+    let _ = ensure_pip_available(&spec)?;
+    info!("[PythonRuntime] installing trafilatura for flipboard extraction");
+    let mut command = Command::new(&spec.program);
+    command
+        .args(&spec.base_args)
+        .args([
+            "-m",
+            "pip",
+            "install",
+            "-i",
+            PYTHON_PIP_INDEX_URL,
+            "--trusted-host",
+            PYTHON_PIP_TRUSTED_HOST,
+            "trafilatura",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    apply_python_process_no_window(&mut command);
+    let output = command
+        .output()
+        .map_err(|e| format!("install trafilatura failed: {e}"))?;
+    // 安装后 worker 进程内的解释器已缓存旧的 import 失败，重启 worker 让其重新加载。
+    let _ = clear_python_worker();
+    Ok(output.status.success())
 }
 
 fn send_one_shot_worker_request(payload: &Value) -> Result<Value, String> {

@@ -1,9 +1,9 @@
 use chrono::Utc;
 use crate::commands::flipboard_pipeline::{
-    articles_fingerprint, assemble_readable_article, build_site_discovery,
+    articles_fingerprint, build_site_discovery,
     classify_category_by_text_and_url, compact_plain_text, default_scheduler_policy,
-    feed_interval_secs, is_noise_paragraph, load_feed_records_from_website_markdown,
-    site_readability_image_selectors, site_readability_paragraph_selectors, should_run_feed,
+    feed_interval_secs, load_feed_records_from_website_markdown,
+    should_run_feed,
     unix_now, update_schedule_after_failure, update_schedule_after_success, FeedScheduleState,
     SiteSeedInput,
 };
@@ -141,10 +141,70 @@ fn open_article_cache_db() -> Result<Connection, String> {
             ON article_cache(category, updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_article_cache_feed_time
             ON article_cache(feed_id, updated_at DESC);
+        CREATE TABLE IF NOT EXISTS crawl_queue (
+            feed_id TEXT NOT NULL,
+            url TEXT NOT NULL,
+            depth INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'pending',
+            kind TEXT NOT NULL DEFAULT 'page',
+            discovered_at INTEGER NOT NULL DEFAULT 0,
+            fetched_at INTEGER NOT NULL DEFAULT 0,
+            error TEXT,
+            PRIMARY KEY(feed_id, url)
+        );
+        CREATE INDEX IF NOT EXISTS idx_crawl_queue_status
+            ON crawl_queue(feed_id, status, depth);
         "#,
     )
     .map_err(|e| e.to_string())?;
+    ensure_article_columns(&conn)?;
     Ok(conn)
+}
+
+/// 向后兼容迁移：旧 article_cache 表缺少工业级管线新增列时，逐列 ADD COLUMN。
+/// SQLite 无 `ADD COLUMN IF NOT EXISTS`，故先用 PRAGMA table_info 探测已有列。
+/// 新列只能追加在末尾，否则 row_to_article 的按位读取会错位。
+fn ensure_article_columns(conn: &Connection) -> Result<(), String> {
+    let mut existing: HashSet<String> = HashSet::new();
+    {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(article_cache)")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|e| e.to_string())?;
+        for r in rows {
+            if let Ok(name) = r {
+                existing.insert(name);
+            }
+        }
+    }
+    // (列名, 列定义)，顺序须与 SELECT / row_to_article 末尾顺序一致。
+    let columns: &[(&str, &str)] = &[
+        ("clean_content_html", "TEXT NOT NULL DEFAULT ''"),
+        ("clean_content_markdown", "TEXT NOT NULL DEFAULT ''"),
+        ("lead_image", "TEXT"),
+        ("content_images", "TEXT NOT NULL DEFAULT '[]'"),
+        ("relevance_score", "INTEGER NOT NULL DEFAULT -1"),
+        ("tags", "TEXT NOT NULL DEFAULT '[]'"),
+        ("summary", "TEXT NOT NULL DEFAULT ''"),
+        ("render_mode", "TEXT NOT NULL DEFAULT ''"),
+    ];
+    for (name, decl) in columns {
+        if !existing.contains(*name) {
+            conn.execute(
+                &format!("ALTER TABLE article_cache ADD COLUMN {} {}", name, decl),
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    }
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_article_cache_relevance \
+         ON article_cache(relevance_score DESC, updated_at DESC);",
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn save_articles_to_cache(feed_id: &str, items: &[Article]) -> Result<(), String> {
@@ -155,12 +215,16 @@ fn save_articles_to_cache(feed_id: &str, items: &[Article]) -> Result<(), String
     let tx = conn.transaction().map_err(|e| e.to_string())?;
     let now = unix_now();
     for a in items {
+        let content_images_json = serde_json::to_string(&a.content_images).unwrap_or_else(|_| "[]".to_string());
+        let tags_json = serde_json::to_string(&a.tags).unwrap_or_else(|_| "[]".to_string());
         tx.execute(
             r#"
             INSERT INTO article_cache
-                (id, feed_id, title, description, content, source, url, image_url, published_at, category, author, read_count, likes, updated_at)
+                (id, feed_id, title, description, content, source, url, image_url, published_at, category, author, read_count, likes, updated_at,
+                 clean_content_html, clean_content_markdown, lead_image, content_images, relevance_score, tags, summary, render_mode)
             VALUES
-                (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                 ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
             ON CONFLICT(feed_id, url) DO UPDATE SET
                 id=excluded.id,
                 title=excluded.title,
@@ -173,7 +237,15 @@ fn save_articles_to_cache(feed_id: &str, items: &[Article]) -> Result<(), String
                 author=excluded.author,
                 read_count=excluded.read_count,
                 likes=excluded.likes,
-                updated_at=excluded.updated_at
+                updated_at=excluded.updated_at,
+                clean_content_html=excluded.clean_content_html,
+                clean_content_markdown=excluded.clean_content_markdown,
+                lead_image=excluded.lead_image,
+                content_images=excluded.content_images,
+                relevance_score=excluded.relevance_score,
+                tags=excluded.tags,
+                summary=excluded.summary,
+                render_mode=excluded.render_mode
             "#,
             params![
                 a.id,
@@ -189,7 +261,15 @@ fn save_articles_to_cache(feed_id: &str, items: &[Article]) -> Result<(), String
                 a.author,
                 a.read_count,
                 a.likes,
-                now
+                now,
+                a.clean_content_html,
+                a.clean_content_markdown,
+                a.lead_image,
+                content_images_json,
+                a.relevance_score,
+                tags_json,
+                a.summary,
+                a.render_mode
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -231,6 +311,11 @@ fn cleanup_old_cached_articles_if_due(now: i64) -> Result<(), String> {
 }
 
 fn row_to_article(row: &rusqlite::Row<'_>) -> rusqlite::Result<Article> {
+    // 列顺序须与各 SELECT 一致：
+    // 12 clean_content_html, 13 clean_content_markdown, 14 lead_image,
+    // 15 content_images, 16 relevance_score, 17 tags, 18 summary, 19 render_mode
+    let content_images_json: String = row.get(15).unwrap_or_default();
+    let tags_json: String = row.get(17).unwrap_or_default();
     Ok(Article {
         id: row.get(0)?,
         title: row.get(1)?,
@@ -244,6 +329,14 @@ fn row_to_article(row: &rusqlite::Row<'_>) -> rusqlite::Result<Article> {
         author: row.get(9)?,
         read_count: row.get(10)?,
         likes: row.get(11)?,
+        clean_content_html: row.get(12).unwrap_or_default(),
+        clean_content_markdown: row.get(13).unwrap_or_default(),
+        lead_image: row.get(14).ok(),
+        content_images: serde_json::from_str(&content_images_json).unwrap_or_default(),
+        relevance_score: row.get(16).unwrap_or(-1),
+        tags: serde_json::from_str(&tags_json).unwrap_or_default(),
+        summary: row.get(18).unwrap_or_default(),
+        render_mode: row.get(19).unwrap_or_default(),
     })
 }
 
@@ -260,7 +353,7 @@ fn load_cached_articles_by_feed_ids(
     let category = category.unwrap_or("").trim().to_string();
     for feed_id in feed_ids {
         let mut sql = String::from(
-            "SELECT id,title,description,content,source,url,image_url,published_at,category,author,read_count,likes \
+            "SELECT id,title,description,content,source,url,image_url,published_at,category,author,read_count,likes,clean_content_html,clean_content_markdown,lead_image,content_images,relevance_score,tags,summary,render_mode \
              FROM article_cache WHERE feed_id = ?1",
         );
         if !category.is_empty() && category != "all" {
@@ -315,7 +408,7 @@ fn load_cached_articles(
     let conn = open_article_cache_db()?;
     let category = category.unwrap_or("").trim().to_string();
     let mut sql = String::from(
-        "SELECT id,title,description,content,source,url,image_url,published_at,category,author,read_count,likes \
+        "SELECT id,title,description,content,source,url,image_url,published_at,category,author,read_count,likes,clean_content_html,clean_content_markdown,lead_image,content_images,relevance_score,tags,summary,render_mode \
          FROM article_cache WHERE 1=1",
     );
     if !category.is_empty() && category != "all" {
@@ -356,7 +449,7 @@ fn load_cached_article_detail(id: &str, url: Option<&str>) -> Result<Option<Arti
     if !id.trim().is_empty() {
         let mut stmt = conn
             .prepare(
-                "SELECT id,title,description,content,source,url,image_url,published_at,category,author,read_count,likes \
+                "SELECT id,title,description,content,source,url,image_url,published_at,category,author,read_count,likes,clean_content_html,clean_content_markdown,lead_image,content_images,relevance_score,tags,summary,render_mode \
                  FROM article_cache WHERE id = ?1 ORDER BY updated_at DESC LIMIT 1",
             )
             .map_err(|e| e.to_string())?;
@@ -371,7 +464,7 @@ fn load_cached_article_detail(id: &str, url: Option<&str>) -> Result<Option<Arti
     if let Some(url_text) = url.map(|s| s.trim()).filter(|s| !s.is_empty()) {
         let mut stmt = conn
             .prepare(
-                "SELECT id,title,description,content,source,url,image_url,published_at,category,author,read_count,likes \
+                "SELECT id,title,description,content,source,url,image_url,published_at,category,author,read_count,likes,clean_content_html,clean_content_markdown,lead_image,content_images,relevance_score,tags,summary,render_mode \
                  FROM article_cache WHERE url = ?1 ORDER BY updated_at DESC LIMIT 1",
             )
             .map_err(|e| e.to_string())?;
@@ -429,6 +522,7 @@ fn merge_feeds_from_website_markdown(feeds: &mut Vec<FeedSource>) {
                         include_keywords: None,
                         exclude_keywords: None,
                         remark: Some(format!("website.md:{}|base={}", category, r.base_url)),
+                        ..Default::default()
                     });
                     added += 1;
                 }
@@ -605,6 +699,62 @@ pub struct Article {
     pub author: Option<String>,
     pub read_count: u32,
     pub likes: u32,
+    // ===== 工业级抓取管线新增字段（均带 serde default，向后兼容旧 JSON / 旧缓存行）=====
+    /// 清洗后的正文 HTML（内联 <img>，URL 已绝对化）。前端优先渲染此字段。
+    #[serde(default)]
+    pub clean_content_html: String,
+    /// 清洗后的正文 Markdown（供 KB 导出 / LLM 输入）。
+    #[serde(default)]
+    pub clean_content_markdown: String,
+    /// 头图（区别于 image_url 缩略图）。
+    #[serde(default)]
+    pub lead_image: Option<String>,
+    /// 正文内联图片 URL（有序）。
+    #[serde(default)]
+    pub content_images: Vec<String>,
+    /// 相关性分数 0-100；-1 表示未评分。
+    #[serde(default = "default_relevance_score")]
+    pub relevance_score: i32,
+    /// LLM / 规则生成的标签。
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// 摘要。
+    #[serde(default)]
+    pub summary: String,
+    /// 渲染来源："http" | "chrome" | "rss"。
+    #[serde(default)]
+    pub render_mode: String,
+}
+
+fn default_relevance_score() -> i32 {
+    -1
+}
+
+impl Default for Article {
+    fn default() -> Self {
+        Article {
+            id: String::new(),
+            title: String::new(),
+            description: String::new(),
+            content: String::new(),
+            source: String::new(),
+            url: String::new(),
+            image_url: None,
+            published_at: String::new(),
+            category: String::new(),
+            author: None,
+            read_count: 0,
+            likes: 0,
+            clean_content_html: String::new(),
+            clean_content_markdown: String::new(),
+            lead_image: None,
+            content_images: Vec::new(),
+            relevance_score: -1,
+            tags: Vec::new(),
+            summary: String::new(),
+            render_mode: String::new(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -632,6 +782,44 @@ pub struct FeedSource {
     pub exclude_keywords: Option<String>,
     #[serde(default)]
     pub remark: Option<String>,
+    // ===== 工业级抓取管线新增（均带 serde default，向后兼容旧 feeds.json）=====
+    /// 用户的兴趣描述，用于 LLM/本地相关性打分。
+    #[serde(default)]
+    pub interest_profile: Option<String>,
+    /// 相关性阈值 0-100；低于该分的文章被丢弃。0 = 不过滤。
+    #[serde(default)]
+    pub relevance_threshold: i32,
+    /// 爬虫配置（JSON 字符串：max_depth/max_pages_per_tick/...），仅 site_crawl 用。
+    #[serde(default)]
+    pub crawl_cfg: Option<String>,
+    /// 渲染会话 profile 名（登录墙复用）。
+    #[serde(default)]
+    pub render_profile: Option<String>,
+    /// 是否对该源启用 LLM 增强（摘要/标签/清洗）。
+    #[serde(default)]
+    pub llm_enhance: bool,
+}
+
+impl Default for FeedSource {
+    fn default() -> Self {
+        FeedSource {
+            id: String::new(),
+            name: String::new(),
+            url: String::new(),
+            category: "all".to_string(),
+            enabled: true,
+            source_type: String::new(),
+            fetch_interval: None,
+            include_keywords: None,
+            exclude_keywords: None,
+            remark: None,
+            interest_profile: None,
+            relevance_threshold: 0,
+            crawl_cfg: None,
+            render_profile: None,
+            llm_enhance: false,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -892,6 +1080,7 @@ fn get_default_feeds() -> Vec<FeedSource> {
                 include_keywords: t.include_keywords,
                 exclude_keywords: t.exclude_keywords,
                 remark: t.remark,
+                ..Default::default()
             });
         }
     }
@@ -1136,6 +1325,7 @@ pub async fn ensure_category_default_feeds(category: String, force: Option<bool>
                     "auto_generated_for_category={}",
                     normalized_category
                 )),
+                ..Default::default()
             });
             created += 1;
         }
@@ -1248,6 +1438,7 @@ fn generate_mock_articles() -> Vec<Article> {
             author: Some(authors[i % authors.len()].to_string()),
             read_count: (i * 100) as u32,
             likes: (i * 50) as u32,
+            ..Default::default()
         });
     }
 
@@ -1493,6 +1684,7 @@ pub async fn generate_feeds_for_platforms(
                 include_keywords: t.include_keywords,
                 exclude_keywords: t.exclude_keywords,
                 remark: t.remark,
+                ..Default::default()
             };
 
             existing_urls.insert(url_norm);
@@ -1534,6 +1726,16 @@ pub struct FeedSourceInput {
     pub exclude_keywords: Option<String>,
     pub remark: Option<String>,
     pub enabled: Option<bool>,
+    #[serde(default)]
+    pub interest_profile: Option<String>,
+    #[serde(default)]
+    pub relevance_threshold: Option<i32>,
+    #[serde(default)]
+    pub crawl_cfg: Option<String>,
+    #[serde(default)]
+    pub render_profile: Option<String>,
+    #[serde(default)]
+    pub llm_enhance: Option<bool>,
 }
 
 #[command]
@@ -1587,6 +1789,11 @@ pub async fn add_feed(input: FeedSourceInput) -> Result<(), String> {
         include_keywords: input.include_keywords,
         exclude_keywords: input.exclude_keywords,
         remark: input.remark,
+        interest_profile: input.interest_profile,
+        relevance_threshold: input.relevance_threshold.unwrap_or(0),
+        crawl_cfg: input.crawl_cfg,
+        render_profile: input.render_profile,
+        llm_enhance: input.llm_enhance.unwrap_or(false),
     };
 
     feeds_lock.push(new_feed);
@@ -1631,6 +1838,7 @@ pub async fn add_site(seed_url: String, category: String) -> Result<Vec<FeedSour
                         include_keywords: x.include_keywords,
                         exclude_keywords: None,
                         remark: Some(format!("site_category_discovery={}", base)),
+                        ..Default::default()
                     });
                 }
             }
@@ -1665,6 +1873,7 @@ pub async fn add_site(seed_url: String, category: String) -> Result<Vec<FeedSour
             include_keywords: b.include_keywords,
             exclude_keywords: None,
             remark: b.remark,
+            ..Default::default()
         }));
     }
 
@@ -1752,6 +1961,7 @@ pub async fn import_feeds_from_website_markdown(path: Option<String>) -> Result<
             include_keywords: None,
             exclude_keywords: None,
             remark: Some(format!("imported_from={}", path.display())),
+            ..Default::default()
         };
         feeds_lock.push(feed.clone());
         created.push(feed);
@@ -1853,6 +2063,15 @@ pub async fn update_feed(input: FeedSourceInput) -> Result<(), String> {
         target.include_keywords = input.include_keywords;
         target.exclude_keywords = input.exclude_keywords;
         target.remark = input.remark;
+        target.interest_profile = input.interest_profile;
+        if let Some(threshold) = input.relevance_threshold {
+            target.relevance_threshold = threshold;
+        }
+        target.crawl_cfg = input.crawl_cfg;
+        target.render_profile = input.render_profile;
+        if let Some(enhance) = input.llm_enhance {
+            target.llm_enhance = enhance;
+        }
 
         target.id.clone()
     };
@@ -1915,31 +2134,35 @@ fn filter_articles_by_keywords(articles: Vec<Article>, feed: &FeedSource) -> Vec
         .map(split_keywords)
         .unwrap_or_default();
 
-    if include.is_empty() && exclude.is_empty() {
-        return articles;
-    }
+    // 关键词预筛（include/exclude）。
+    let pre_filtered: Vec<Article> = if include.is_empty() && exclude.is_empty() {
+        articles
+    } else {
+        articles
+            .into_iter()
+            .filter(|a| {
+                let text = format!(
+                    "{} {} {}",
+                    a.title.to_lowercase(),
+                    a.description.to_lowercase(),
+                    a.content.to_lowercase()
+                );
 
-    articles
-        .into_iter()
-        .filter(|a| {
-            let text = format!(
-                "{} {} {}",
-                a.title.to_lowercase(),
-                a.description.to_lowercase(),
-                a.content.to_lowercase()
-            );
+                if !include.is_empty() && !include.iter().any(|k| text.contains(k)) {
+                    return false;
+                }
 
-            if !include.is_empty() && !include.iter().any(|k| text.contains(k)) {
-                return false;
-            }
+                if exclude.iter().any(|k| text.contains(k)) {
+                    return false;
+                }
 
-            if exclude.iter().any(|k| text.contains(k)) {
-                return false;
-            }
+                true
+            })
+            .collect()
+    };
 
-            true
-        })
-        .collect()
+    // 相关性打分 + 阈值过滤（P2 本地优先；P6 由 LLM 覆盖）。
+    apply_relevance(pre_filtered, feed)
 }
 
 fn score_article_for_topic(article: &Article, topic_tokens: &[String]) -> usize {
@@ -1964,6 +2187,66 @@ fn score_article_for_topic(article: &Article, topic_tokens: &[String]) -> usize 
             score
         })
         .sum()
+}
+
+/// 本地相关性评分（0-100），基于兴趣描述里的关键词命中。
+/// 这是 P2 的"本地优先"实现；P6 会用 LLM 打分覆盖更精细的语义相关性。
+/// 无兴趣描述时返回 -1（未评分，不参与过滤）。
+fn local_relevance_score(article: &Article, interest_profile: Option<&str>) -> i32 {
+    let profile = match interest_profile {
+        Some(p) if !p.trim().is_empty() => p.trim().to_lowercase(),
+        _ => return -1,
+    };
+    // 把兴趣描述拆成词元（中英文混合：按空白/标点/常见分隔切分）。
+    let tokens: Vec<String> = profile
+        .split(|c: char| c.is_whitespace() || ",.，。、；;/|".contains(c))
+        .map(|s| s.trim())
+        .filter(|s| s.chars().count() >= 2)
+        .map(|s| s.to_string())
+        .collect();
+    if tokens.is_empty() {
+        return -1;
+    }
+
+    let title = article.title.to_lowercase();
+    let description = article.description.to_lowercase();
+    let content = article.content.to_lowercase();
+
+    let mut hit_tokens = 0usize;
+    let mut weighted = 0usize;
+    for t in &tokens {
+        let in_title = title.contains(t);
+        let in_desc = description.contains(t);
+        let in_content = content.contains(t);
+        if in_title || in_desc || in_content {
+            hit_tokens += 1;
+        }
+        weighted += if in_title { 5 } else { 0 };
+        weighted += if in_desc { 3 } else { 0 };
+        weighted += if in_content { 1 } else { 0 };
+    }
+
+    if hit_tokens == 0 {
+        return 0;
+    }
+    // 覆盖率（命中词元比例）占主导，再叠加加权命中强度。
+    let coverage = (hit_tokens as f64 / tokens.len() as f64) * 70.0;
+    let intensity = (weighted as f64).min(30.0); // 上限 30
+    (coverage + intensity).round().clamp(0.0, 100.0) as i32
+}
+
+/// 为一批文章打本地相关性分，并按阈值过滤。阈值 <=0 时只打分不过滤。
+fn apply_relevance(mut articles: Vec<Article>, feed: &FeedSource) -> Vec<Article> {
+    let profile = feed.interest_profile.as_deref();
+    let threshold = feed.relevance_threshold;
+    for a in articles.iter_mut() {
+        let score = local_relevance_score(a, profile);
+        a.relevance_score = score;
+    }
+    if threshold > 0 {
+        articles.retain(|a| a.relevance_score < 0 || a.relevance_score >= threshold);
+    }
+    articles
 }
 
 fn normalize_category_filter(category: &Option<String>) -> Option<String> {
@@ -2163,6 +2446,8 @@ fn write_kb_markdown_note(path: &PathBuf, content: &str) -> Result<String, Strin
     Ok(path.to_string_lossy().to_string())
 }
 
+// 仍被站点发现等路径以及 P3 爬虫层使用。
+#[allow(dead_code)]
 fn resolve_url(base: &Url, raw: &str) -> Option<String> {
     let value = raw.trim();
     if value.is_empty() || value.starts_with("javascript:") || value.starts_with("data:") {
@@ -2191,6 +2476,7 @@ fn extract_meta_content(document: &Html, selector_text: &str) -> Option<String> 
         .filter(|v| !v.is_empty())
 }
 
+#[allow(dead_code)]
 fn looks_like_media_link(url: &str) -> bool {
     let u = url.to_lowercase();
     u.contains("youtube.com")
@@ -2213,133 +2499,70 @@ async fn hydrate_article_readable_content(article: &Article) -> Result<Article, 
         return Err(format!("fetch article html failed: {}", resp.status()));
     }
     let html = resp.text().await.map_err(|e| e.to_string())?;
-    let document = Html::parse_document(&html);
 
-    let page_title = Selector::parse("h1")
-        .ok()
-        .and_then(|sel| {
-            document
-                .select(&sel)
-                .next()
-                .map(|el| compact_plain_text(&el.text().collect::<String>()))
-        })
-        .filter(|v| !v.is_empty());
-
-    let lead = article
-        .description
-        .trim()
-        .to_string()
-        .split_whitespace()
-        .collect::<Vec<&str>>()
-        .join(" ");
-    let lead = if lead.is_empty() {
-        extract_meta_content(&document, "meta[property='og:description']")
-            .or_else(|| extract_meta_content(&document, "meta[name='description']"))
-            .unwrap_or_default()
-    } else {
-        lead
-    };
-
-    let text_selectors = site_readability_paragraph_selectors(article.url.as_str());
-    let mut paragraphs = Vec::new();
-    let mut text_seen = HashSet::new();
-    for sel_text in &text_selectors {
-        let selector = match Selector::parse(sel_text) {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
-        for el in document.select(&selector) {
-            let text = compact_plain_text(&el.text().collect::<String>());
-            if is_noise_paragraph(&text) {
-                continue;
-            }
-            let key = text.to_lowercase();
-            if !text_seen.insert(key) {
-                continue;
-            }
-            paragraphs.push(text);
-            if paragraphs.len() >= 24 {
-                break;
-            }
-        }
-        if paragraphs.len() >= 24 {
-            break;
-        }
-    }
-
-    let mut image_links = Vec::new();
-    let mut image_seen = HashSet::new();
-    for img_sel_text in &site_readability_image_selectors(article.url.as_str()) {
-        if let Ok(img_sel) = Selector::parse(img_sel_text) {
-            for img in document.select(&img_sel) {
-                let src = img
-                    .value()
-                    .attr("src")
-                    .or_else(|| img.value().attr("data-src"))
-                    .or_else(|| img.value().attr("data-original"))
-                    .unwrap_or("");
-                if let Some(abs) = resolve_url(&parsed, src) {
-                    if image_seen.insert(abs.clone()) {
-                        image_links.push(abs);
-                    }
-                }
-                if image_links.len() >= 6 {
-                    break;
-                }
-            }
-            if image_links.len() >= 6 {
-                break;
-            }
-        }
-    }
-
-    let mut media_links = Vec::new();
-    let mut media_seen = HashSet::new();
-    if let Ok(a_sel) = Selector::parse("a[href]") {
-        for a in document.select(&a_sel) {
-            let href = a.value().attr("href").unwrap_or("");
-            if let Some(abs) = resolve_url(&parsed, href) {
-                if looks_like_media_link(&abs) && media_seen.insert(abs.clone()) {
-                    media_links.push(abs);
-                }
-            }
-            if media_links.len() >= 8 {
-                break;
-            }
-        }
-    }
-
-    if let Ok(iframe_sel) = Selector::parse("iframe[src], video[src], source[src]") {
-        for node in document.select(&iframe_sel) {
-            let src = node.value().attr("src").unwrap_or("");
-            if let Some(abs) = resolve_url(&parsed, src) {
-                if looks_like_media_link(&abs) && media_seen.insert(abs.clone()) {
-                    media_links.push(abs);
-                }
-            }
-            if media_links.len() >= 8 {
-                break;
-            }
-        }
-    }
-
-    let content = assemble_readable_article(&lead, &paragraphs, &image_links, &media_links, &article.url);
-    let desc = if !lead.is_empty() {
-        lead
-    } else if !content.is_empty() {
-        trim_to_chars(&content, 180)
-    } else {
-        article.description.clone()
-    };
+    // 工业级抽取：trafilatura（主）/ scraper（降级），保留内联图片。
+    // worker 协议是同步 stdin/stdout，放到阻塞线程池执行。
+    let base_url = article.url.clone();
+    let html_for_extract = html.clone();
+    let extracted = tokio::task::spawn_blocking(move || {
+        crate::commands::flipboard_extract::extract(&html_for_extract, &base_url)
+    })
+    .await
+    .map_err(|e| format!("extract task join failed: {e}"))?;
 
     let mut enriched = article.clone();
-    if let Some(t) = page_title {
-        if !t.is_empty() && (enriched.title == "无标题" || enriched.title.trim().len() < 4) {
-            enriched.title = t;
+
+    match extracted {
+        Ok(ex) => {
+            if let Some(t) = ex.title.as_ref() {
+                if !t.is_empty() && (enriched.title == "无标题" || enriched.title.trim().len() < 4) {
+                    enriched.title = t.clone();
+                }
+            }
+            enriched.clean_content_html = ex.clean_html.clone();
+            enriched.clean_content_markdown = ex.markdown.clone();
+            enriched.content_images = ex.images.clone();
+            enriched.lead_image = ex.lead_image.clone();
+            enriched.render_mode = ex.engine.to_string();
+            if let Some(by) = ex.byline {
+                if enriched.author.is_none() && !by.is_empty() {
+                    enriched.author = Some(by);
+                }
+            }
+            // content 作为纯文本镜像（搜索/旧字段兼容）。
+            if !ex.plain_text.is_empty() {
+                enriched.content = ex.plain_text.clone();
+            }
+            // description：优先 excerpt，其次正文截断。
+            let desc = ex
+                .excerpt
+                .filter(|s| !s.is_empty())
+                .or_else(|| {
+                    if !ex.plain_text.is_empty() {
+                        Some(trim_to_chars(&ex.plain_text, 180))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| article.description.clone());
+            enriched.description = desc;
+            if enriched.image_url.is_none() {
+                enriched.image_url = ex.lead_image.or_else(|| ex.images.first().cloned());
+            }
+        }
+        Err(e) => {
+            // 抽取彻底失败：退回到旧的 meta 描述兜底，避免空白。
+            warn!("flipboard: extract failed for {}: {}", article.url, e);
+            let document = Html::parse_document(&html);
+            let lead = extract_meta_content(&document, "meta[property='og:description']")
+                .or_else(|| extract_meta_content(&document, "meta[name='description']"))
+                .unwrap_or_default();
+            if !lead.is_empty() {
+                enriched.description = lead;
+            }
         }
     }
-    enriched.description = desc;
-    enriched.content = content;
+
     enriched.category = classify_category_by_text_and_url(
         &enriched.category,
         &enriched.title,
@@ -2347,9 +2570,6 @@ async fn hydrate_article_readable_content(article: &Article) -> Result<Article, 
         &enriched.url,
         &enriched.source,
     );
-    if enriched.image_url.is_none() {
-        enriched.image_url = image_links.first().cloned();
-    }
     Ok(enriched)
 }
 
@@ -2591,6 +2811,7 @@ async fn fetch_rss_feed_internal(feed: &FeedSource) -> Result<Vec<Article>, Stri
             author: None,
             read_count: 0,
             likes: 0,
+            ..Default::default()
         });
     }
 
@@ -2795,6 +3016,7 @@ async fn fetch_html_and_extract_articles(feed: &FeedSource) -> Result<Vec<Articl
                 author: None,
                 read_count: 0,
                 likes: 0,
+                ..Default::default()
             });
         }
 
@@ -2909,6 +3131,7 @@ async fn fetch_zhihu_fallback(feed: &FeedSource) -> Result<Vec<Article>, String>
             author: None,
             read_count: 0,
             likes: 0,
+            ..Default::default()
         });
 
         if articles.len() >= 50 {
@@ -3042,6 +3265,7 @@ async fn fetch_bilibili_fallback(feed: &FeedSource) -> Result<Vec<Article>, Stri
             author,
             read_count: views as u32,
             likes: likes as u32,
+            ..Default::default()
         });
 
         if articles.len() >= 50 {
@@ -3197,6 +3421,7 @@ fn extract_zhihu_articles_from_json(feed: &FeedSource, v: &serde_json::Value) ->
             author: None,
             read_count: 0,
             likes: 0,
+            ..Default::default()
         });
 
         if articles.len() >= 50 {
@@ -3291,6 +3516,7 @@ fn extract_bilibili_articles_from_json(feed: &FeedSource, v: &serde_json::Value)
             author,
             read_count: views as u32,
             likes: likes as u32,
+            ..Default::default()
         });
 
         if articles.len() >= 50 {
@@ -3385,8 +3611,714 @@ async fn crawl_bilibili_when_rss_unavailable(feed: &FeedSource) -> Result<CrawlR
     }
 }
 
+// ===== 整站深度抓取（site_crawl）爬虫管线 =====
+
+#[derive(Debug, Clone)]
+struct CrawlConfig {
+    max_depth: u32,
+    max_pages_per_tick: u32,
+    max_queue: u32,
+    same_domain_only: bool,
+    rate_delay_ms: u64,
+    respect_robots: bool,
+}
+
+impl Default for CrawlConfig {
+    fn default() -> Self {
+        CrawlConfig {
+            max_depth: 3,
+            max_pages_per_tick: 8,
+            max_queue: 2000,
+            same_domain_only: true,
+            rate_delay_ms: 1200,
+            respect_robots: true,
+        }
+    }
+}
+
+impl CrawlConfig {
+    /// 从 feed.crawl_cfg(JSON) 解析配置，缺省回退默认。
+    fn from_feed(feed: &FeedSource) -> Self {
+        let mut cfg = CrawlConfig::default();
+        if let Some(raw) = feed.crawl_cfg.as_deref() {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) {
+                if let Some(x) = v.get("max_depth").and_then(|x| x.as_u64()) {
+                    cfg.max_depth = x.clamp(1, 8) as u32;
+                }
+                if let Some(x) = v.get("max_pages_per_tick").and_then(|x| x.as_u64()) {
+                    cfg.max_pages_per_tick = x.clamp(1, 64) as u32;
+                }
+                if let Some(x) = v.get("max_queue").and_then(|x| x.as_u64()) {
+                    cfg.max_queue = x.clamp(10, 100_000) as u32;
+                }
+                if let Some(x) = v.get("same_domain_only").and_then(|x| x.as_bool()) {
+                    cfg.same_domain_only = x;
+                }
+                if let Some(x) = v.get("rate_delay_ms").and_then(|x| x.as_u64()) {
+                    cfg.rate_delay_ms = x.clamp(0, 60_000);
+                }
+                if let Some(x) = v.get("respect_robots").and_then(|x| x.as_bool()) {
+                    cfg.respect_robots = x;
+                }
+            }
+        }
+        cfg
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CrawlQueueStats {
+    pub pending: u32,
+    pub done: u32,
+    pub error: u32,
+    pub total: u32,
+}
+
+#[derive(Debug, Clone)]
+struct CrawlItem {
+    url: String,
+    depth: u32,
+}
+
+/// 把种子 URL 写入队列（depth 0）。
+fn seed_crawl_queue(conn: &Connection, feed_id: &str, seed_url: &str) -> Result<(), String> {
+    let now = unix_now();
+    conn.execute(
+        "INSERT OR IGNORE INTO crawl_queue (feed_id, url, depth, status, kind, discovered_at) \
+         VALUES (?1, ?2, 0, 'pending', 'page', ?3)",
+        params![feed_id, seed_url, now],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 队列里某 feed 的待抓取条数。
+fn crawl_queue_pending_count(conn: &Connection, feed_id: &str) -> Result<u32, String> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM crawl_queue WHERE feed_id = ?1 AND status = 'pending'",
+        params![feed_id],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|n| n as u32)
+    .map_err(|e| e.to_string())
+}
+
+fn crawl_queue_total(conn: &Connection, feed_id: &str) -> Result<u32, String> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM crawl_queue WHERE feed_id = ?1",
+        params![feed_id],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|n| n as u32)
+    .map_err(|e| e.to_string())
+}
+
+/// 取出最多 budget 条 pending，并在事务内标记 fetching，避免并发重复处理。
+fn claim_pending(conn: &mut Connection, feed_id: &str, budget: u32) -> Result<Vec<CrawlItem>, String> {
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    let items: Vec<CrawlItem> = {
+        let mut stmt = tx
+            .prepare(
+                "SELECT url, depth FROM crawl_queue \
+                 WHERE feed_id = ?1 AND status = 'pending' \
+                 ORDER BY depth ASC, discovered_at ASC LIMIT ?2",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![feed_id, budget as i64], |row| {
+                Ok(CrawlItem {
+                    url: row.get(0)?,
+                    depth: row.get::<_, i64>(1)? as u32,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+    let now = unix_now();
+    for item in &items {
+        tx.execute(
+            "UPDATE crawl_queue SET status = 'fetching', fetched_at = ?3 \
+             WHERE feed_id = ?1 AND url = ?2",
+            params![feed_id, item.url, now],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(items)
+}
+
+fn mark_crawl_done(conn: &Connection, feed_id: &str, url: &str) {
+    let _ = conn.execute(
+        "UPDATE crawl_queue SET status = 'done', error = NULL WHERE feed_id = ?1 AND url = ?2",
+        params![feed_id, url],
+    );
+}
+
+fn mark_crawl_error(conn: &Connection, feed_id: &str, url: &str, err: &str) {
+    let _ = conn.execute(
+        "UPDATE crawl_queue SET status = 'error', error = ?3 WHERE feed_id = ?1 AND url = ?2",
+        params![feed_id, url, err],
+    );
+}
+
+/// 把页面内发现的链接入队（同域过滤 + 噪声过滤 + 深度/队列上限）。
+fn enqueue_links(
+    conn: &Connection,
+    feed_id: &str,
+    parent_depth: u32,
+    base: &Url,
+    links: &[String],
+    cfg: &CrawlConfig,
+) -> usize {
+    if parent_depth + 1 > cfg.max_depth {
+        return 0;
+    }
+    let total = crawl_queue_total(conn, feed_id).unwrap_or(0);
+    if total >= cfg.max_queue {
+        return 0;
+    }
+    let mut budget_left = (cfg.max_queue - total) as usize;
+    let now = unix_now();
+    let mut added = 0usize;
+    let base_host = base.host_str().unwrap_or("").to_lowercase();
+
+    for raw in links {
+        if budget_left == 0 {
+            break;
+        }
+        let abs = match resolve_url(base, raw) {
+            Some(u) => u,
+            None => continue,
+        };
+        let parsed = match Url::parse(&abs) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        if parsed.scheme() != "http" && parsed.scheme() != "https" {
+            continue;
+        }
+        if cfg.same_domain_only {
+            let host = parsed.host_str().unwrap_or("").to_lowercase();
+            if host != base_host && !host.ends_with(&format!(".{}", base_host)) {
+                continue;
+            }
+        }
+        if is_noise_crawl_path(parsed.path()) {
+            continue;
+        }
+        // 规范化：去掉 fragment 与常见跟踪参数。
+        let normalized = normalize_crawl_url(&parsed);
+        let kind = classify_crawl_url(&normalized);
+        let res = conn.execute(
+            "INSERT OR IGNORE INTO crawl_queue (feed_id, url, depth, status, kind, discovered_at) \
+             VALUES (?1, ?2, ?3, 'pending', ?4, ?5)",
+            params![feed_id, normalized, (parent_depth + 1) as i64, kind, now],
+        );
+        if let Ok(n) = res {
+            if n > 0 {
+                added += 1;
+                budget_left -= 1;
+            }
+        }
+    }
+    added
+}
+
+/// 去掉 fragment 和 utm_* 等跟踪参数，便于去重。
+fn normalize_crawl_url(parsed: &Url) -> String {
+    let mut u = parsed.clone();
+    u.set_fragment(None);
+    let kept: Vec<(String, String)> = u
+        .query_pairs()
+        .filter(|(k, _)| {
+            let k = k.to_lowercase();
+            !(k.starts_with("utm_") || k == "spm" || k == "ref" || k == "from")
+        })
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect();
+    if kept.is_empty() {
+        u.set_query(None);
+    } else {
+        let qs = kept
+            .iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect::<Vec<_>>()
+            .join("&");
+        u.set_query(Some(&qs));
+    }
+    u.to_string()
+}
+
+/// 启发式判断 URL 像文章页还是导航页。
+fn classify_crawl_url(url: &str) -> &'static str {
+    let path = Url::parse(url)
+        .ok()
+        .map(|u| u.path().to_lowercase())
+        .unwrap_or_default();
+    // 含数字 id 段 / 带 slug 的较深路径 → 文章页。
+    let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    let has_id = segs.iter().any(|s| s.chars().any(|c| c.is_ascii_digit()) && s.len() >= 4);
+    let has_slug = segs.iter().any(|s| s.contains('-') && s.len() >= 8);
+    if has_id || has_slug || segs.len() >= 3 {
+        "article"
+    } else {
+        "page"
+    }
+}
+
+/// 爬虫噪声路径过滤：登录/标签/分类/搜索/静态资源等不抓正文。
+fn is_noise_crawl_path(path: &str) -> bool {
+    let p = path.to_lowercase();
+    p.starts_with("/tag/")
+        || p.starts_with("/tags/")
+        || p.starts_with("/category/")
+        || p.starts_with("/categories/")
+        || p.starts_with("/login")
+        || p.starts_with("/signin")
+        || p.starts_with("/signup")
+        || p.starts_with("/register")
+        || p.starts_with("/search")
+        || p.starts_with("/cart")
+        || p.starts_with("/account")
+        || p.starts_with("/wp-admin")
+        || p.starts_with("/wp-login")
+        || p.ends_with(".css")
+        || p.ends_with(".js")
+        || p.ends_with(".png")
+        || p.ends_with(".jpg")
+        || p.ends_with(".jpeg")
+        || p.ends_with(".gif")
+        || p.ends_with(".svg")
+        || p.ends_with(".ico")
+        || p.ends_with(".pdf")
+        || p.ends_with(".zip")
+}
+
+/// 抓取 robots.txt 并解析 sitemap，返回发现的 URL（best-effort）。
+/// 不持有数据库连接，避免跨 await 的 !Send 问题；入队由调用方完成。
+async fn expand_from_sitemap(base: &Url, cfg: &CrawlConfig) -> Vec<String> {
+    // robots.txt
+    let robots_url = match base.join("/robots.txt") {
+        Ok(u) => u,
+        Err(_) => return Vec::new(),
+    };
+    let mut sitemaps: Vec<String> = Vec::new();
+    if let Ok(resp) = HTTP_CLIENT.get(robots_url).send().await {
+        if resp.status().is_success() {
+            if let Ok(text) = resp.text().await {
+                for line in text.lines() {
+                    let l = line.trim();
+                    if l.to_lowercase().starts_with("sitemap:") {
+                        if let Some(idx) = l.find(':') {
+                            let url = l[idx + 1..].trim().to_string();
+                            if url.starts_with("http") {
+                                sitemaps.push(url);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // 默认尝试 /sitemap.xml
+    if sitemaps.is_empty() {
+        if let Ok(u) = base.join("/sitemap.xml") {
+            sitemaps.push(u.to_string());
+        }
+    }
+
+    let mut discovered: Vec<String> = Vec::new();
+    for sm in sitemaps.iter().take(5) {
+        collect_sitemap_locs(sm, &mut discovered, 0).await;
+        if discovered.len() >= cfg.max_queue as usize {
+            break;
+        }
+    }
+    discovered
+}
+
+/// 递归解析 sitemap（含 sitemap-index 一层），收集 <loc>。
+async fn collect_sitemap_locs(sitemap_url: &str, out: &mut Vec<String>, depth: u32) {
+    if depth > 1 || out.len() >= 5000 {
+        return;
+    }
+    let resp = match HTTP_CLIENT.get(sitemap_url).send().await {
+        Ok(r) if r.status().is_success() => r,
+        _ => return,
+    };
+    let body = match resp.text().await {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+    let is_index = body.contains("<sitemapindex");
+    // 简单提取 <loc>...</loc>
+    let mut locs = Vec::new();
+    for cap in body.split("<loc>").skip(1) {
+        if let Some(end) = cap.find("</loc>") {
+            let loc = cap[..end].trim().to_string();
+            if loc.starts_with("http") {
+                locs.push(loc);
+            }
+        }
+    }
+    if is_index {
+        for loc in locs.into_iter().take(20) {
+            Box::pin(collect_sitemap_locs(&loc, out, depth + 1)).await;
+            if out.len() >= 5000 {
+                break;
+            }
+        }
+    } else {
+        out.extend(locs);
+    }
+}
+
+/// 提取页面内的所有链接（<a href>）。
+fn extract_page_links(html: &str, base: &Url) -> Vec<String> {
+    let document = Html::parse_document(html);
+    let mut links = Vec::new();
+    if let Ok(sel) = Selector::parse("a[href]") {
+        for a in document.select(&sel) {
+            if let Some(href) = a.value().attr("href") {
+                if let Some(abs) = resolve_url(base, href) {
+                    links.push(abs);
+                }
+            }
+        }
+    }
+    links
+}
+
+/// 一次调度 tick 内对某个 site_crawl feed 的抓取：取预算条 URL，渲染→抽取→相关性，
+/// 并把页内链接入队。返回本批新文章。
+async fn crawl_tick_for_feed(feed: &FeedSource) -> Result<Vec<Article>, String> {
+    let cfg = CrawlConfig::from_feed(feed);
+    let base = Url::parse(feed.url.trim())
+        .or_else(|_| Url::parse(&format!("https://{}", feed.url.trim())))
+        .map_err(|e| format!("invalid seed url: {}", e))?;
+
+    // 1. 队列为空：种子 + sitemap 展开。
+    //    注意：Connection 是 !Sync，绝不能跨 .await 持有，否则 future 非 Send。
+    let need_sitemap = {
+        let conn = open_article_cache_db()?;
+        let pending = crawl_queue_pending_count(&conn, &feed.id).unwrap_or(0);
+        let total = crawl_queue_total(&conn, &feed.id).unwrap_or(0);
+        if total == 0 {
+            seed_crawl_queue(&conn, &feed.id, &normalize_crawl_url(&base))?;
+        }
+        pending == 0 && total <= 1
+    };
+    if need_sitemap {
+        // 首次：尝试 sitemap 展开（best-effort）。先异步收集，再开连接入队。
+        let discovered = expand_from_sitemap(&base, &cfg).await;
+        if !discovered.is_empty() {
+            let conn = open_article_cache_db()?;
+            enqueue_links(&conn, &feed.id, 0, &base, &discovered, &cfg);
+        }
+    }
+
+    // 2. 取预算条 pending。
+    let items = {
+        let mut conn = open_article_cache_db()?;
+        claim_pending(&mut conn, &feed.id, cfg.max_pages_per_tick)?
+    };
+    if items.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut produced: Vec<Article> = Vec::new();
+    for item in items {
+        // 限速。
+        if cfg.rate_delay_ms > 0 {
+            sleep(Duration::from_millis(cfg.rate_delay_ms)).await;
+        }
+        let _ = cfg.respect_robots; // robots 在 sitemap 阶段已用；逐页校验在 P7 补强。
+
+        let page_url = item.url.clone();
+        // 混合抓取：HTTP 优先，JS 站/空壳升级无头 Chrome 渲染。
+        let render_profile = feed
+            .render_profile
+            .clone()
+            .unwrap_or_else(|| feed.id.clone());
+        let rendered = crate::commands::flipboard_render::fetch_page(
+            &HTTP_CLIENT,
+            &page_url,
+            false,
+            &render_profile,
+        )
+        .await;
+        let (html, render_mode) = match rendered {
+            Ok(page) => (page.html, page.mode),
+            Err(e) => {
+                let conn = open_article_cache_db()?;
+                mark_crawl_error(&conn, &feed.id, &page_url, &format!("render: {}", e));
+                continue;
+            }
+        };
+
+        // 入队页内链接（BFS 扩展）。
+        let links = extract_page_links(&html, &base);
+        {
+            let conn = open_article_cache_db()?;
+            enqueue_links(&conn, &feed.id, item.depth, &base, &links, &cfg);
+        }
+
+        // 文章页才抽取正文；导航页只扩链接。
+        if item.kind_is_article() {
+            let base_url = page_url.clone();
+            let html_for_extract = html.clone();
+            let extracted = tokio::task::spawn_blocking(move || {
+                crate::commands::flipboard_extract::extract(&html_for_extract, &base_url)
+            })
+            .await
+            .map_err(|e| format!("extract join: {e}"))?;
+
+            match extracted {
+                Ok(ex) if !ex.clean_html.trim().is_empty() => {
+                    let mut article = Article {
+                        id: format!("crawl-{:x}", md5_like_hash(&page_url)),
+                        title: ex.title.clone().unwrap_or_else(|| "无标题".to_string()),
+                        description: ex
+                            .excerpt
+                            .clone()
+                            .unwrap_or_else(|| trim_to_chars(&ex.plain_text, 180)),
+                        content: ex.plain_text.clone(),
+                        source: feed.name.clone(),
+                        url: page_url.clone(),
+                        image_url: ex.lead_image.clone().or_else(|| ex.images.first().cloned()),
+                        published_at: ex
+                            .published
+                            .clone()
+                            .unwrap_or_else(|| Utc::now().to_rfc3339()),
+                        category: feed.category.clone(),
+                        author: ex.byline.clone(),
+                        clean_content_html: ex.clean_html.clone(),
+                        clean_content_markdown: ex.markdown.clone(),
+                        lead_image: ex.lead_image.clone(),
+                        content_images: ex.images.clone(),
+                        render_mode: format!("{}+{}", render_mode, ex.engine),
+                        ..Default::default()
+                    };
+                    article.category = classify_category_by_text_and_url(
+                        &article.category,
+                        &article.title,
+                        &article.description,
+                        &article.url,
+                        &article.source,
+                    );
+
+                    // LLM 增强（可选）：摘要 / 标签 / 相关性 / 二次清洗。
+                    if feed.llm_enhance && crate::commands::flipboard_llm::has_budget() {
+                        let interest = feed.interest_profile.clone().unwrap_or_default();
+                        if let Some(llm) = crate::commands::flipboard_llm::enhance(
+                            &article.title,
+                            &article.clean_content_markdown,
+                            &interest,
+                        )
+                        .await
+                        {
+                            if !llm.summary.is_empty() {
+                                article.summary = llm.summary;
+                            }
+                            if !llm.tags.is_empty() {
+                                article.tags = llm.tags;
+                            }
+                            if llm.relevance >= 0 {
+                                article.relevance_score = llm.relevance;
+                            }
+                            if let Some(cleaned) = llm.cleaned_markdown {
+                                article.clean_content_markdown = cleaned.clone();
+                                article.clean_content_html =
+                                    crate::commands::flipboard_extract::markdown_to_html(
+                                        &cleaned, &page_url,
+                                    );
+                            }
+                        }
+                    }
+                    // 本地相关性兜底（LLM 未给分时）。
+                    if article.relevance_score < 0 {
+                        article.relevance_score =
+                            local_relevance_score(&article, feed.interest_profile.as_deref());
+                    }
+                    // 阈值过滤。
+                    if feed.relevance_threshold > 0
+                        && article.relevance_score >= 0
+                        && article.relevance_score < feed.relevance_threshold
+                    {
+                        let conn = open_article_cache_db()?;
+                        mark_crawl_done(&conn, &feed.id, &page_url);
+                        continue;
+                    }
+
+                    produced.push(article);
+                    let conn = open_article_cache_db()?;
+                    mark_crawl_done(&conn, &feed.id, &page_url);
+                }
+                Ok(_) => {
+                    let conn = open_article_cache_db()?;
+                    // 抽取为空：标 done（非文章页），不报错。
+                    mark_crawl_done(&conn, &feed.id, &page_url);
+                }
+                Err(e) => {
+                    let conn = open_article_cache_db()?;
+                    mark_crawl_error(&conn, &feed.id, &page_url, &e);
+                }
+            }
+        } else {
+            let conn = open_article_cache_db()?;
+            mark_crawl_done(&conn, &feed.id, &page_url);
+        }
+    }
+
+    Ok(produced)
+}
+
+/// 轻量 URL 哈希，用于生成稳定的文章 id（非加密）。
+fn md5_like_hash(s: &str) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    s.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// 查询某 feed 的爬虫队列统计。
+fn read_crawl_queue_stats(feed_id: &str) -> Result<CrawlQueueStats, String> {
+    let conn = open_article_cache_db()?;
+    let mut stats = CrawlQueueStats::default();
+    let mut stmt = conn
+        .prepare("SELECT status, COUNT(*) FROM crawl_queue WHERE feed_id = ?1 GROUP BY status")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![feed_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u32))
+        })
+        .map_err(|e| e.to_string())?;
+    for r in rows {
+        if let Ok((status, count)) = r {
+            stats.total += count;
+            match status.as_str() {
+                "pending" | "fetching" => stats.pending += count,
+                "done" => stats.done += count,
+                "error" => stats.error += count,
+                _ => {}
+            }
+        }
+    }
+    Ok(stats)
+}
+
+/// 创建一个整站深度抓取源并把种子 URL 入队。
+#[command]
+pub async fn start_site_crawl(
+    seed_url: String,
+    category: Option<String>,
+    interest: Option<String>,
+    crawl_cfg: Option<String>,
+    render_profile: Option<String>,
+) -> Result<FeedSource, String> {
+    ensure_feeds_initialized();
+
+    let base = Url::parse(seed_url.trim())
+        .or_else(|_| Url::parse(&format!("https://{}", seed_url.trim())))
+        .map_err(|e| format!("无效主站 URL: {}", e))?;
+    let host = base.host_str().unwrap_or("site").to_string();
+    let category = category
+        .map(|c| c.trim().to_string())
+        .filter(|c| !c.is_empty())
+        .unwrap_or_else(|| "all".to_string());
+
+    let feed = FeedSource {
+        id: format!("crawl-{:x}", md5_like_hash(&format!("{}|{}", base, category))),
+        name: format!("整站抓取 · {}", host),
+        url: base.to_string(),
+        category,
+        enabled: true,
+        source_type: "site_crawl".to_string(),
+        fetch_interval: Some(30),
+        interest_profile: interest.filter(|s| !s.trim().is_empty()),
+        crawl_cfg: crawl_cfg.filter(|s| !s.trim().is_empty()),
+        render_profile: render_profile.filter(|s| !s.trim().is_empty()),
+        remark: Some(format!("site_crawl_seed={}", base)),
+        ..Default::default()
+    };
+
+    {
+        let mut feeds_lock = FEEDS.lock().unwrap();
+        if let Some(existing) = feeds_lock.iter_mut().find(|f| f.id == feed.id) {
+            *existing = feed.clone();
+        } else {
+            feeds_lock.push(feed.clone());
+        }
+        if let Err(e) = save_feeds_to_config(&feeds_lock) {
+            warn!("flipboard: save_feeds_to_config failed after start_site_crawl: {}", e);
+        }
+    }
+
+    // 立刻种子入队（首次 tick 会做 sitemap 展开）。
+    {
+        let conn = open_article_cache_db()?;
+        seed_crawl_queue(&conn, &feed.id, &normalize_crawl_url(&base))?;
+    }
+
+    info!("flipboard: start_site_crawl created feed {} for {}", feed.id, base);
+    Ok(feed)
+}
+
+/// 查询整站抓取进度。
+#[command]
+pub async fn get_crawl_progress(feed_id: String) -> Result<CrawlQueueStats, String> {
+    read_crawl_queue_stats(feed_id.trim())
+}
+
+/// 重置某 feed 的爬虫队列（清空已发现链接，便于重爬）。
+#[command]
+pub async fn reset_crawl_queue(feed_id: String) -> Result<(), String> {
+    let conn = open_article_cache_db()?;
+    conn.execute(
+        "DELETE FROM crawl_queue WHERE feed_id = ?1",
+        params![feed_id.trim()],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 确保无头 Chromium 就绪（首次会触发下载），返回可执行路径。
+#[command]
+pub async fn ensure_chromium_ready() -> Result<String, String> {
+    crate::commands::flipboard_render::ensure_chromium_ready().await
+}
+
+/// 打开可见登录窗口供用户手动登录一次；会话(cookie)持久化到该 profile。
+/// profile 一般传 feed.id 或站点名。
+#[command]
+pub async fn open_login_session(profile: String, login_url: String) -> Result<(), String> {
+    crate::commands::flipboard_render::open_login_window(profile.trim(), login_url.trim()).await
+}
+
+impl CrawlItem {
+    fn kind_is_article(&self) -> bool {
+        classify_crawl_url(&self.url) == "article"
+    }
+}
+
 async fn collect_articles_for_feed(feed: &FeedSource) -> Result<Vec<Article>, String> {
     let source_type = feed.source_type.trim().to_lowercase();
+
+    // 整站深度抓取：走专门的爬虫管线（持久化队列 + BFS + 抽取）。
+    if source_type == "site_crawl" {
+        return match crawl_tick_for_feed(feed).await {
+            Ok(list) => {
+                let out = filter_articles_by_keywords(list, feed);
+                record_feed_health_success(feed, "site_crawl", out.len());
+                Ok(out)
+            }
+            Err(e) => {
+                record_feed_health_failure(feed, "site_crawl", e.clone());
+                Ok(Vec::new())
+            }
+        };
+    }
 
     match source_type.as_str() {
         "zhihu" => {
@@ -3756,6 +4688,7 @@ pub async fn fetch_rss_feed(url: String) -> Result<Vec<Article>, String> {
         include_keywords: None,
         exclude_keywords: None,
         remark: None,
+        ..Default::default()
     };
     fetch_rss_feed_internal(&feed).await
 }

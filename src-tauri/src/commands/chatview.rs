@@ -373,8 +373,8 @@ pub struct SpeechToTextResponse {
 
 #[derive(Serialize, Debug)]
 pub struct ChatResponse {
-    answer: String,
-    sessionid: String,
+    pub answer: String,
+    pub sessionid: String,
 }
 
 #[derive(Serialize, Debug, Clone)]

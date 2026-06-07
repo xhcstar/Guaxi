@@ -67,6 +67,15 @@
 
           <h1 class="article-title">{{ currentArticle.title }}</h1>
 
+          <div class="article-enrichment"
+            v-if="currentArticle.summary || (currentArticle.tags && currentArticle.tags.length) || currentArticle.relevance_score >= 0">
+            <div class="enrich-row" v-if="currentArticle.relevance_score >= 0">
+              <span class="relevance-chip" :class="relevanceClass">相关度 {{ currentArticle.relevance_score }}</span>
+              <span v-for="tag in (currentArticle.tags || [])" :key="tag" class="tag-chip">{{ tag }}</span>
+            </div>
+            <p class="article-summary" v-if="currentArticle.summary">{{ currentArticle.summary }}</p>
+          </div>
+
           <div class="article-image" v-if="currentArticle.image_url">
             <img :src="currentArticle.image_url" :alt="currentArticle.title" loading="lazy" />
           </div>
@@ -195,6 +204,9 @@ const toEmbedUrl = (url) => {
 }
 
 const formattedContent = computed(() => {
+  // 工业级抽取产出的干净 HTML（内联图片）优先；回退到旧的 content 纯文本。
+  const cleanHtml = String(props.currentArticle?.clean_content_html || '').trim()
+  if (cleanHtml) return cleanHtml
   const raw = String(props.currentArticle?.content || '').trim()
   if (!raw) return ''
   if (/<(p|img|h1|h2|h3|ul|ol|li|blockquote|a)(\s|>)/i.test(raw)) {
@@ -238,6 +250,14 @@ const toggleBookmark = () => {
     store.toggleBookmark(props.currentArticle)
   }
 }
+
+const relevanceClass = computed(() => {
+  const s = Number(props.currentArticle?.relevance_score)
+  if (!Number.isFinite(s) || s < 0) return ''
+  if (s >= 70) return 'rel-high'
+  if (s >= 40) return 'rel-mid'
+  return 'rel-low'
+})
 
 const closeReader = () => {
   emit('close')
@@ -342,6 +362,51 @@ const formatTime = (timeString) => {
   margin-bottom: 24px;
 }
 
+.article-enrichment {
+  margin-bottom: 20px;
+}
+
+.enrich-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.relevance-chip {
+  font-size: 12px;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--guaxi-text-secondary);
+}
+
+.relevance-chip.rel-high { background: #18a058; }
+.relevance-chip.rel-mid { background: #f0a020; }
+.relevance-chip.rel-low { background: #909399; }
+
+.tag-chip {
+  font-size: 12px;
+  padding: 2px 10px;
+  border-radius: 12px;
+  background: var(--guaxi-panel-bg);
+  border: 1px solid var(--guaxi-border);
+  color: var(--guaxi-text-secondary);
+}
+
+.article-summary {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--guaxi-text-secondary);
+  padding: 12px 16px;
+  background: var(--guaxi-panel-bg);
+  border-left: 3px solid var(--guaxi-link, #4c8bf5);
+  border-radius: 6px;
+  margin: 0;
+}
+
 .article-image {
   margin: 32px 0;
 }
@@ -382,6 +447,40 @@ const formatTime = (timeString) => {
   font-weight: 600;
   margin: 1.5em 0 0.5em;
   color: var(--guaxi-text-primary);
+}
+
+.article-content :deep(img) {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 12px auto 20px;
+  border-radius: 8px;
+}
+
+.article-content :deep(blockquote) {
+  margin: 1em 0;
+  padding: 0.5em 1em;
+  border-left: 3px solid var(--guaxi-border);
+  color: var(--guaxi-text-secondary);
+}
+
+.article-content :deep(pre) {
+  background: var(--guaxi-panel-bg);
+  padding: 12px;
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.article-content :deep(table) {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1em 0;
+}
+
+.article-content :deep(td),
+.article-content :deep(th) {
+  border: 1px solid var(--guaxi-border);
+  padding: 6px 10px;
 }
 
 .article-content :deep(.media-placeholder) {

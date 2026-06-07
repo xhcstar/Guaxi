@@ -2289,6 +2289,113 @@ def _handle_import_table(payload):
         return {"ok": False, "error": _format_traceback(exc)}
 
 
+def _handle_extract_article(payload):
+    """工业级正文抽取：用 trafilatura 把原始 HTML 清洗成高质量图文。
+
+    输入：{"html": "<原始页面 HTML>", "url": "<原文 URL，供相对链接绝对化>"}
+    输出：{"ok": True, "article": {
+            title, markdown, html, text, lead_image, images[], byline,
+            published, lang, excerpt
+        }}
+    trafilatura 缺失/抽取失败时返回 {"ok": False, "error": ...}，
+    由 Rust 侧回退到本地 scraper 抽取，保证链路不中断。
+    """
+    html = str(payload.get("html") or "")
+    url = str(payload.get("url") or "").strip() or None
+    if not html.strip():
+        return {"ok": False, "error": "empty html"}
+
+    try:
+        import trafilatura
+        from trafilatura.settings import use_config
+    except Exception as exc:
+        return {"ok": False, "error": f"trafilatura unavailable: {exc}"}
+
+    try:
+        cfg = use_config()
+        # 不做最小长度截断，保留尽量完整的正文；关闭信号量超时（worker 已有看门狗）。
+        cfg.set("DEFAULT", "MIN_EXTRACTED_SIZE", "0")
+        cfg.set("DEFAULT", "MIN_OUTPUT_SIZE", "0")
+        cfg.set("DEFAULT", "EXTRACTION_TIMEOUT", "0")
+
+        # Markdown 正文（含图片/链接）。
+        markdown = trafilatura.extract(
+            html,
+            url=url,
+            output_format="markdown",
+            include_images=True,
+            include_links=True,
+            include_formatting=True,
+            include_tables=True,
+            favor_precision=True,
+            config=cfg,
+        ) or ""
+
+        # 结构化元数据 + HTML 正文。
+        meta = trafilatura.bare_extraction(
+            html,
+            url=url,
+            with_metadata=True,
+            include_images=True,
+            include_links=True,
+            include_formatting=True,
+            include_tables=True,
+            favor_precision=True,
+            config=cfg,
+        )
+
+        def _meta_get(key):
+            if meta is None:
+                return None
+            if isinstance(meta, dict):
+                return meta.get(key)
+            return getattr(meta, key, None)
+
+        title = _meta_get("title")
+        byline = _meta_get("author")
+        published = _meta_get("date")
+        excerpt = _meta_get("description") or _meta_get("excerpt")
+        lang = _meta_get("language")
+        lead_image = _meta_get("image")
+        body_html = _meta_get("body") or _meta_get("text") or ""
+        plain_text = _meta_get("text") or ""
+
+        # 从 markdown 里收集图片 URL（![](url) 与裸 http 图片链接）。
+        images = []
+        seen = set()
+        for m in re.finditer(r"!\[[^\]]*\]\(([^)\s]+)", markdown):
+            u = m.group(1).strip()
+            if u and u not in seen:
+                seen.add(u)
+                images.append(u)
+        if lead_image and lead_image not in seen:
+            images.insert(0, lead_image)
+            seen.add(lead_image)
+        if not lead_image and images:
+            lead_image = images[0]
+
+        if not (markdown.strip() or str(body_html).strip()):
+            return {"ok": False, "error": "trafilatura produced empty content"}
+
+        return {
+            "ok": True,
+            "article": {
+                "title": title or "",
+                "markdown": markdown,
+                "html": str(body_html or ""),
+                "text": str(plain_text or ""),
+                "lead_image": lead_image or "",
+                "images": images,
+                "byline": byline or "",
+                "published": published or "",
+                "lang": lang or "",
+                "excerpt": excerpt or "",
+            },
+        }
+    except Exception as exc:
+        return {"ok": False, "error": _format_traceback(exc)}
+
+
 def _dispatch(payload):
     cmd = str(payload.get("cmd") or "").strip()
     if cmd == "exec":
@@ -2303,6 +2410,8 @@ def _dispatch(payload):
         return _handle_table_slice(payload)
     if cmd == "table_export":
         return _handle_table_export(payload)
+    if cmd == "extract_article":
+        return _handle_extract_article(payload)
     return {"ok": False, "error": f"Unknown worker command: {cmd}"}
 
 

@@ -32,6 +32,21 @@
         <n-input v-model:value="form.excludeKeywords" placeholder="多个关键字使用逗号分隔，将过滤掉包含这些词的内容" />
       </n-form-item>
 
+      <n-form-item label="兴趣描述（相关性筛选）" path="interestProfile">
+        <n-input v-model:value="form.interestProfile" type="textarea"
+          placeholder="描述你感兴趣的主题，例如：大模型推理优化、RAG、向量数据库。系统会据此为每篇内容打相关性分。"
+          :autosize="{ minRows: 2, maxRows: 4 }" />
+      </n-form-item>
+
+      <n-grid :cols="2" :x-gap="16">
+        <n-form-item-gi label="相关度阈值（低于则丢弃，0=不过滤）" path="relevanceThreshold">
+          <n-slider v-model:value="form.relevanceThreshold" :min="0" :max="100" :step="5" />
+        </n-form-item-gi>
+        <n-form-item-gi label="LLM 增强（摘要 / 标签 / 精筛）" path="llmEnhance">
+          <n-switch v-model:value="form.llmEnhance" />
+        </n-form-item-gi>
+      </n-grid>
+
       <n-form-item label="备注" path="remark">
         <n-input v-model:value="form.remark" type="textarea" placeholder="记录来源说明、登录方式、抓取规则等补充信息"
           :autosize="{ minRows: 2, maxRows: 4 }" />
@@ -106,11 +121,15 @@ const form = ref({
   fetchInterval: 60,
   includeKeywords: '',
   excludeKeywords: '',
+  interestProfile: '',
+  relevanceThreshold: 0,
+  llmEnhance: false,
   remark: ''
 })
 
 const sourceTypeOptions = [
   { label: 'RSS / Atom', value: 'rss' },
+  { label: '整站深度抓取', value: 'site_crawl' },
   { label: 'Spider 网页探索', value: 'spider' },
   { label: '知乎', value: 'zhihu' },
   { label: 'B 站', value: 'bilibili' },
@@ -216,6 +235,9 @@ const resetForm = () => {
     fetchInterval,
     includeKeywords,
     excludeKeywords,
+    interestProfile: initial.interest_profile || '',
+    relevanceThreshold: Number.isFinite(initial.relevance_threshold) ? initial.relevance_threshold : 0,
+    llmEnhance: !!initial.llm_enhance,
     remark
   }
 }
@@ -242,6 +264,9 @@ const handleSubmit = async () => {
       fetchInterval: Number(form.value.fetchInterval),
       includeKeywords: form.value.includeKeywords.trim(),
       excludeKeywords: form.value.excludeKeywords.trim(),
+      interestProfile: form.value.interestProfile.trim(),
+      relevanceThreshold: Number(form.value.relevanceThreshold) || 0,
+      llmEnhance: !!form.value.llmEnhance,
       remark: form.value.remark.trim()
     }
     logger.info('FeedSourceConfigDialog: submit', payload)

@@ -201,6 +201,10 @@ pub fn compact_plain_text(raw: &str) -> String {
     raw.split_whitespace().collect::<Vec<&str>>().join(" ")
 }
 
+/// @deprecated 旧的"片段拼接"正文组装：把图片降级成纯文本链接列表。
+/// 已被 `flipboard_extract`（trafilatura/scraper，保留内联图片）取代，保留作为
+/// 最终兜底，勿在新代码中使用。
+#[allow(dead_code)]
 pub fn assemble_readable_article(
     lead: &str,
     paragraphs: &[String],
@@ -326,6 +330,7 @@ pub fn articles_fingerprint(items: &[(&str, &str)]) -> String {
     format!("{:x}", hasher.finish())
 }
 
+#[allow(dead_code)]
 pub fn site_readability_paragraph_selectors(url: &str) -> Vec<&'static str> {
     let u = url.to_lowercase();
     if u.contains("zhihu.com") {
@@ -361,6 +366,7 @@ pub fn site_readability_paragraph_selectors(url: &str) -> Vec<&'static str> {
     ]
 }
 
+#[allow(dead_code)]
 pub fn site_readability_image_selectors(url: &str) -> Vec<&'static str> {
     let u = url.to_lowercase();
     if u.contains("zhihu.com") {
@@ -376,6 +382,7 @@ pub fn site_readability_image_selectors(url: &str) -> Vec<&'static str> {
     ]
 }
 
+#[allow(dead_code)]
 pub fn is_noise_paragraph(text: &str) -> bool {
     let s = text.to_lowercase();
     s.is_empty()

@@ -146,8 +146,19 @@ export const useFlipboardStore = () => {
       .map(x => x.trim().toLowerCase())
       .filter(Boolean)
     const sourceWeight = buildSourcePreference()
+    // 相关性优先：已评分(>=0)的文章按相关分降序排在前；未评分(-1)的退回原排序逻辑。
+    const relevanceCmp = (a, b) => {
+      const ra = Number.isFinite(a?.relevance_score) ? a.relevance_score : -1
+      const rb = Number.isFinite(b?.relevance_score) ? b.relevance_score : -1
+      if (ra < 0 && rb < 0) return 0
+      if (ra < 0) return 1
+      if (rb < 0) return -1
+      return rb - ra
+    }
     if (tokens.length) {
       merged.sort((a, b) => {
+        const rc = relevanceCmp(a, b)
+        if (rc !== 0) return rc
         const sa = scoreByTopic(a, tokens)
         const sb = scoreByTopic(b, tokens)
         if (sb !== sa) return sb - sa
@@ -158,6 +169,8 @@ export const useFlipboardStore = () => {
       })
     } else {
       merged.sort((a, b) => {
+        const rc = relevanceCmp(a, b)
+        if (rc !== 0) return rc
         const pa = scoreByPreference(a, sourceWeight)
         const pb = scoreByPreference(b, sourceWeight)
         if (pb !== pa) return pb - pa
@@ -430,6 +443,67 @@ export const useFlipboardStore = () => {
     }
   }
 
+  // 启动整站深度抓取源
+  const startSiteCrawl = async ({ seedUrl, category, interest, crawlCfg, renderProfile } = {}) => {
+    try {
+      console.log('FlipboardStore: startSiteCrawl', { seedUrl, category })
+      const feed = await invoke('start_site_crawl', {
+        seedUrl,
+        category: category || null,
+        interest: interest || null,
+        crawlCfg: crawlCfg || null,
+        renderProfile: renderProfile || null
+      })
+      await fetchFeeds()
+      return feed
+    } catch (error) {
+      console.error('FlipboardStore: startSiteCrawl failed:', error)
+      throw error
+    }
+  }
+
+  // 查询整站抓取进度
+  const getCrawlProgress = async (feedId) => {
+    try {
+      return await invoke('get_crawl_progress', { feedId })
+    } catch (error) {
+      console.error('FlipboardStore: getCrawlProgress failed:', error)
+      return { pending: 0, done: 0, error: 0, total: 0 }
+    }
+  }
+
+  // 重置爬虫队列（重爬）
+  const resetCrawlQueue = async (feedId) => {
+    try {
+      await invoke('reset_crawl_queue', { feedId })
+      return true
+    } catch (error) {
+      console.error('FlipboardStore: resetCrawlQueue failed:', error)
+      throw error
+    }
+  }
+
+  // 确保无头 Chromium 就绪（首次会下载）
+  const ensureChromiumReady = async () => {
+    try {
+      return await invoke('ensure_chromium_ready')
+    } catch (error) {
+      console.error('FlipboardStore: ensureChromiumReady failed:', error)
+      throw error
+    }
+  }
+
+  // 打开登录会话窗口（登录墙站点）
+  const openLoginSession = async (profile, loginUrl) => {
+    try {
+      await invoke('open_login_session', { profile, loginUrl })
+      return true
+    } catch (error) {
+      console.error('FlipboardStore: openLoginSession failed:', error)
+      throw error
+    }
+  }
+
   // 启用/禁用订阅源
   const setFeedEnabled = async (id, enabled) => {
     try {
@@ -697,6 +771,11 @@ export const useFlipboardStore = () => {
     addFeed,
     addSite,
     generateFeedsByPlatform,
+    startSiteCrawl,
+    getCrawlProgress,
+    resetCrawlQueue,
+    ensureChromiumReady,
+    openLoginSession,
     setFeedEnabled,
     updateFeed,
     deleteFeed,
