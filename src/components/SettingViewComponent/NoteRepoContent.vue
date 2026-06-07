@@ -146,6 +146,23 @@
               <n-form-item label="自动组网（信任传播）">
                 <n-switch v-model:value="p2pAutoPropagateTrust" :disabled="loading" />
               </n-form-item>
+              <n-form-item label="中继模式">
+                <n-space vertical style="width: 100%">
+                  <n-select v-model:value="p2pRelayMode" :options="p2pRelayModeOptions" :disabled="loading" />
+                  <n-text depth="3" style="font-size: 12px;">
+                    默认走 n0 公共中继（海外，国内可能不稳）；「仅局域网」要求两台设备在同一网络、完全不走中继；「自定义中继」需自行部署 iroh-relay（建议放国内云主机）。修改后需重启应用生效。
+                  </n-text>
+                </n-space>
+              </n-form-item>
+              <n-form-item v-if="p2pRelayMode === 'custom'" label="自定义中继地址">
+                <n-input
+                  v-model:value="p2pCustomRelayUrls"
+                  type="textarea"
+                  :autosize="{ minRows: 2, maxRows: 4 }"
+                  :disabled="loading"
+                  placeholder="每行一个，例如：https://relay.example.com（需与本应用 iroh 版本一致的自部署中继）"
+                />
+              </n-form-item>
               <n-form-item label="本机 Peer ID">
                 <div class="copy-field">
                   <n-input :value="p2pStatus?.peer_id || ''" readonly placeholder="保存并刷新后生成" />
@@ -576,6 +593,8 @@ const p2pTransferConcurrency = ref(6);
 const p2pIdleTimeoutSecs = ref(30);
 const p2pEnableBlockDelta = ref(true);
 const p2pAutoPropagateTrust = ref(true);
+const p2pRelayMode = ref('default');
+const p2pCustomRelayUrls = ref('');
 const p2pTicketText = ref('');
 const p2pStatus = ref(null);
 const p2pTrustedPeers = ref([]);
@@ -590,6 +609,12 @@ const syncProviderOptions = [
 const p2pTicketValidityOptions = [
   { label: '有期限', value: 'expires' },
   { label: '永久有效', value: 'permanent' },
+];
+
+const p2pRelayModeOptions = [
+  { label: '默认（n0 公共中继）', value: 'default' },
+  { label: '自定义中继（自部署）', value: 'custom' },
+  { label: '仅局域网（禁用中继）', value: 'lan_only' },
 ];
 
 // 知识库远程仓库配置
@@ -1264,6 +1289,8 @@ onMounted(async () => {
     p2pIdleTimeoutSecs.value = Number(cfg?.p2p?.idle_timeout_secs || 30);
     p2pEnableBlockDelta.value = cfg?.p2p?.enable_block_delta !== false;
     p2pAutoPropagateTrust.value = cfg?.p2p?.auto_propagate_trust !== false;
+    p2pRelayMode.value = cfg?.p2p?.relay_mode ? String(cfg.p2p.relay_mode) : 'default';
+    p2pCustomRelayUrls.value = cfg?.p2p?.custom_relay_urls ? String(cfg.p2p.custom_relay_urls) : '';
 
     // 合并后端配置中的自定义目录与本地（localStorage）记录，确保两端一致。
     // 后端的 custom_sync_dirs 是 P2P 同步解析路径的依据，需补齐本地新增但未落库的项。
@@ -1478,6 +1505,8 @@ const buildResourceRepoSyncConfig = () => {
       idle_timeout_secs: Math.max(15, Number(p2pIdleTimeoutSecs.value || 30)),
       enable_block_delta: Boolean(p2pEnableBlockDelta.value),
       auto_propagate_trust: Boolean(p2pAutoPropagateTrust.value),
+      relay_mode: String(p2pRelayMode.value || 'default'),
+      custom_relay_urls: String(p2pCustomRelayUrls.value || '').trim(),
       custom_sync_dirs: customSyncDirs.value
         .filter(d => d && d.id && String(d.path || '').trim())
         .map(d => ({

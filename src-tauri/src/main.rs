@@ -151,13 +151,17 @@ fn start_log_cleanup() {
 async fn main() {
     let has_debug_flag = std::env::args().any(|arg| arg == "--debug");
     let enable_verbose_logs = cfg!(debug_assertions) || has_debug_flag;
+    // iroh 的中继重连与网络探测在国内环境会大量打 WARN（relay 断连、net_report 等），
+    // 但属于正常瞬态行为，统一降到 error 级别避免刷屏；真正致命错误仍可见。可用 RUST_LOG 覆盖。
+    let iroh_noise_filter =
+        "iroh::net_report=error,iroh::socket::transports::relay=error,iroh_relay=warn,iroh::magicsock=warn";
     let default_filter = if enable_verbose_logs {
-        "guaxi=debug,guaxi_lib=debug,html5ever=warn,selectors=warn,reqwest=info,warn"
+        format!("guaxi=debug,guaxi_lib=debug,html5ever=warn,selectors=warn,reqwest=info,{iroh_noise_filter},warn")
     } else {
-        "guaxi=info,guaxi_lib=info,warn"
+        format!("guaxi=info,guaxi_lib=info,{iroh_noise_filter},warn")
     };
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_filter));
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&default_filter));
 
     // 创建文件 appender - 禁用 ANSI 颜色
     let file_appender = tracing_appender::rolling::daily("logs", "logfile.log");

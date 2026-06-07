@@ -247,6 +247,16 @@ pub struct P2PSyncConfig {
     pub auto_propagate_trust: bool,
     #[serde(default)]
     pub custom_sync_dirs: Vec<CustomSyncDir>,
+    /// 中继模式："default"(n0 公共中继) | "custom"(自部署中继) | "lan_only"(禁用中继，仅局域网直连)。
+    #[serde(default = "default_p2p_relay_mode")]
+    pub relay_mode: String,
+    /// 自定义中继地址，多个以换行或逗号分隔。仅 relay_mode == "custom" 时生效。
+    #[serde(default)]
+    pub custom_relay_urls: String,
+}
+
+fn default_p2p_relay_mode() -> String {
+    "default".to_string()
 }
 
 impl Default for P2PSyncConfig {
@@ -262,6 +272,8 @@ impl Default for P2PSyncConfig {
             enable_block_delta: default_p2p_enable_block_delta(),
             auto_propagate_trust: default_p2p_auto_propagate_trust(),
             custom_sync_dirs: Vec::new(),
+            relay_mode: default_p2p_relay_mode(),
+            custom_relay_urls: String::new(),
         }
     }
 }

@@ -12,7 +12,7 @@ use iroh::{
         presets, Connection, ConnectOptions, IdleTimeout, QuicTransportConfig, RecvStream,
         SendStream,
     },
-    Endpoint, EndpointAddr, SecretKey,
+    Endpoint, EndpointAddr, RelayMode, RelayUrl, SecretKey,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -508,6 +508,49 @@ fn p2p_auto_propagate_trust() -> bool {
     get_resource_repo_sync_config().p2p.auto_propagate_trust
 }
 
+/// 根据用户配置解析中继模式：
+/// - "lan_only" → 禁用中继（仅局域网直连/打洞）
+/// - "custom"   → 使用用户填写的自部署中继（解析失败的逐个跳过；全部无效则回退默认）
+/// - 其它       → None，表示沿用 presets::N0 的默认 n0 中继
+fn p2p_relay_mode_override() -> Option<RelayMode> {
+    let cfg = get_resource_repo_sync_config();
+    let mode = cfg.p2p.relay_mode.trim().to_lowercase();
+    match mode.as_str() {
+        "lan_only" => {
+            info!("[P2PSync] relay mode: LAN only (relays disabled)");
+            Some(RelayMode::Disabled)
+        }
+        "custom" => {
+            let urls: Vec<RelayUrl> = cfg
+                .p2p
+                .custom_relay_urls
+                .split(|c| c == '\n' || c == ',' || c == ';')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .filter_map(|s| match s.parse::<RelayUrl>() {
+                    Ok(u) => Some(u),
+                    Err(e) => {
+                        warn_p2p_relay(s, &format!("{e}"));
+                        None
+                    }
+                })
+                .collect();
+            if urls.is_empty() {
+                info!("[P2PSync] relay mode: custom but no valid URL, falling back to default n0 relays");
+                None
+            } else {
+                info!(count = urls.len(), "[P2PSync] relay mode: custom relays");
+                Some(RelayMode::custom(urls))
+            }
+        }
+        _ => None,
+    }
+}
+
+fn warn_p2p_relay(url: &str, err: &str) {
+    info!(url, error = err, "[P2PSync] invalid custom relay URL, skipped");
+}
+
 /// 构造统一的 QUIC 传输参数：拉长 idle 超时、保持 5s 心跳、在 Windows 上关闭
 /// UDP GSO 分段（规避 `sendmsg 10040` WSAEMSGSIZE）。连接两端需使用一致配置。
 fn build_transport_config() -> QuicTransportConfig {
@@ -964,10 +1007,15 @@ async fn ensure_p2p_endpoint() -> Result<Endpoint, String> {
     info!("[P2PSync] starting iroh endpoint");
     // presets::N0 配置了 n0 的中继服务器 + DNS 节点发现，既能在局域网内直连打洞，
     // 也能在公网通过中继回退，满足"局域网/互联网都能同步"的要求。
-    let endpoint = Endpoint::builder(presets::N0)
+    let mut builder = Endpoint::builder(presets::N0)
         .secret_key(key)
         .alpns(vec![P2P_ALPN.to_vec()])
-        .transport_config(build_transport_config())
+        .transport_config(build_transport_config());
+    // 按用户配置覆盖中继模式（仅局域网 / 自定义中继）；默认沿用 n0 公共中继。
+    if let Some(relay_mode) = p2p_relay_mode_override() {
+        builder = builder.relay_mode(relay_mode);
+    }
+    let endpoint = builder
         .bind()
         .await
         .map_err(|e| format!("启动 iroh P2P Endpoint 失败: {e}"))?;
@@ -1150,7 +1198,16 @@ fn resolve_target_label_root(key: &str) -> Result<(String, String), String> {
         match key {
             "resource_repo" => ("资源库".to_string(), get_image_bed_root()),
             "knowledge_base" => ("知识库".to_string(), get_knowledge_bases_root()),
-            "libraries_root" => ("文件库".to_string(), get_libraries_root()),
+            // 文件库的实际文件存放在 <libraries_root>/Libraries 下（与 backup.rs、repoview.rs
+            // 等一致）。同步根必须锚定到该 Libraries 子目录，否则会把 libraries_root 下的其它
+            // 内容也纳入同步，且相对路径会带上各机不同的父级目录名，导致对端写入错位、产生残留目录。
+            "libraries_root" => (
+                "文件库".to_string(),
+                PathBuf::from(get_libraries_root())
+                    .join("Libraries")
+                    .to_string_lossy()
+                    .to_string(),
+            ),
             "template" => ("模板库".to_string(), get_template_repo_path()),
             "slidev" => ("Slidev".to_string(), get_slidev_repo_root()),
             other => return Err(format!("未知的同步目标: {other}")),
