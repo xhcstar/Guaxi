@@ -289,7 +289,7 @@
                 <n-icon
                   :component="dir.icon"
                   :size="22"
-                  :color="dir.enabled && dir.path ? dir.iconColor : 'var(--n-text-color-disabled)'"
+                  :color="dir.enabled ? dir.iconColor : 'var(--n-text-color-disabled)'"
                 />
               </template>
 
@@ -299,41 +299,41 @@
                   <n-tag :type="dir.isDefault ? 'info' : 'success'" size="tiny" :bordered="false">
                     {{ dir.isDefault ? '默认' : '自定义' }}
                   </n-tag>
-                  <n-tag v-if="!dir.path" type="warning" size="tiny" :bordered="false">
-                    未配置路径
+                  <n-tag v-if="!dir.isConfigured" type="warning" size="tiny" :bordered="false">
+                    默认路径
                   </n-tag>
                 </n-space>
                 <n-text depth="3" style="font-size: 12px; word-break: break-all;">
-                  {{ dir.path || '请先在上方各配置段中设置对应根目录，或通过右侧按钮浏览选择' }}
+                  {{ dir.path }}
+                </n-text>
+                <!-- 单目录同步状态 / 进度 -->
+                <n-text
+                  v-if="syncDirStatusUi(dir.id)"
+                  :type="syncDirStatusUi(dir.id).type"
+                  depth="2"
+                  style="font-size: 11px;"
+                >
+                  {{ syncDirStatusUi(dir.id).text }}
                 </n-text>
               </n-space>
 
               <template #suffix>
                 <n-space align="center" :size="6">
-                  <n-tooltip
-                    v-if="!dir.hasBackendSupport || !dir.path || syncProvider !== 'p2p'"
-                    :disabled="dir.hasBackendSupport && dir.path && syncProvider === 'p2p'"
-                    trigger="hover"
-                  >
-                    <template #trigger>
-                      <n-button
-                        size="tiny"
-                        :disabled="true"
-                      >
-                        <template #icon>
-                          <n-icon :component="ArrowSync20Regular" :size="14" />
-                        </template>
-                        同步
-                      </n-button>
-                    </template>
-                    <span v-if="!dir.path">请先在上方配置该目录的根路径</span>
-                    <span v-else-if="syncProvider !== 'p2p'">当前同步后端不支持单目录同步</span>
-                    <span v-else>即将支持</span>
-                  </n-tooltip>
+                  <!-- 同步中：显示取消按钮 -->
                   <n-button
-                    v-else
+                    v-if="isDirSyncing(dir.id)"
                     size="tiny"
-                    :disabled="loading || !dir.enabled || !p2pReady"
+                    type="warning"
+                    quaternary
+                    @click="handleCancelSyncDir(dir.id, dir.label)"
+                  >
+                    取消
+                  </n-button>
+                  <!-- 可同步：功能按钮（后端自行解析默认路径，前端无需校验 path） -->
+                  <n-button
+                    v-else-if="dir.hasBackendSupport && syncProvider === 'p2p'"
+                    size="tiny"
+                    :disabled="!dir.enabled || !p2pReady"
                     @click="handleSyncSingleDir(dir)"
                   >
                     <template #icon>
@@ -341,6 +341,19 @@
                     </template>
                     同步
                   </n-button>
+                  <!-- 暂不支持：禁用并提示 -->
+                  <n-tooltip v-else trigger="hover">
+                    <template #trigger>
+                      <n-button size="tiny" :disabled="true">
+                        <template #icon>
+                          <n-icon :component="ArrowSync20Regular" :size="14" />
+                        </template>
+                        同步
+                      </n-button>
+                    </template>
+                    <span v-if="syncProvider !== 'p2p'">请先选择 P2P 同步后端</span>
+                    <span v-else>即将支持</span>
+                  </n-tooltip>
                   <n-switch
                     v-model:value="dir.enabled"
                     :disabled="loading"
@@ -364,16 +377,26 @@
           </n-list>
 
           <n-space justify="space-between" style="margin-top: 10px;">
-            <n-button dashed size="small" @click="handleAddCustomSyncDir" :disabled="loading">
-              <template #icon>
-                <n-icon :component="Add20Regular" />
-              </template>
-              添加自定义目录
-            </n-button>
+            <n-space :size="8">
+              <n-button dashed size="small" @click="handleAddCustomSyncDir" :disabled="loading">
+                <template #icon>
+                  <n-icon :component="Add20Regular" />
+                </template>
+                添加自定义目录
+              </n-button>
+              <n-button
+                v-if="hasAnyDirSyncing"
+                size="small"
+                type="warning"
+                @click="handleCancelAllSync"
+              >
+                取消所有同步
+              </n-button>
+            </n-space>
             <n-button
               type="primary"
               size="small"
-              :disabled="loading || !hasAnySyncEnabled || syncProvider !== 'p2p' || !p2pReady"
+              :disabled="loading || hasAnyDirSyncing || !hasAnySyncEnabled || syncProvider !== 'p2p' || !p2pReady"
               @click="handleSyncAllEnabled"
             >
               <template #icon>
@@ -601,6 +624,48 @@ const syncDirIconColors = {
   custom: '#6b7280',
 }
 
+// ---- 每个目录独立的同步状态 ----
+const syncDirStates = ref({})
+
+const getDirState = (dirId) => {
+  return syncDirStates.value[dirId] || null
+}
+
+const setDirState = (dirId, patch) => {
+  syncDirStates.value = {
+    ...syncDirStates.value,
+    [dirId]: { ...(syncDirStates.value[dirId] || {}), ...patch }
+  }
+}
+
+const isDirSyncing = (dirId) => {
+  return syncDirStates.value[dirId]?.status === 'running'
+}
+
+// 取消同步标记
+const syncAbortFlags = ref({})
+
+const handleCancelSyncDir = (dirId, label) => {
+  syncAbortFlags.value[dirId] = true
+  setDirState(dirId, {
+    status: 'skipped',
+    action: `取消同步${label || ''}`,
+    at: nowLabel(),
+    detail: '用户取消'
+  })
+}
+
+const syncDirStatusUi = (dirId) => {
+  const s = getDirState(dirId)
+  if (!s) return null
+  const status = String(s.status || '')
+  if (status === 'running') return { type: 'info', text: s.detail || '同步中…' }
+  if (status === 'success') return { type: 'success', text: s.detail || '完成' }
+  if (status === 'error') return { type: 'error', text: s.detail || '失败' }
+  if (status === 'skipped') return { type: 'warning', text: s.detail || '已跳过' }
+  return null
+}
+
 // 从 localStorage 加载自定义同步目录
 const loadCustomSyncDirs = () => {
   try {
@@ -815,6 +880,15 @@ const copyP2PValue = async (value, label) => {
 }
 
 // ---- 同步目录列表（预置 + 自定义） ----
+// 预置目录的后端默认路径标签（仅用于 UI 展示，实际路径由后端解析）
+const PRESET_DEFAULT_PATH_LABELS = {
+  resource_repo: 'ResourceRepo（程序目录下）',
+  knowledge_base: 'KnowledgeBases（程序目录下）',
+  libraries_root: 'Libraries（程序目录下）',
+  template: 'Template（程序目录下）',
+  slidev: 'SlideRepo（程序目录下）',
+}
+
 const syncDirectories = computed(() => {
   const dirs = [
     {
@@ -823,7 +897,9 @@ const syncDirectories = computed(() => {
       label: '资源库',
       icon: Image20Regular,
       iconColor: syncDirIconColors.resource_repo,
-      path: resourceRoot.value,
+      // 后端有默认路径，前端空值时展示默认标签
+      path: resourceRoot.value || PRESET_DEFAULT_PATH_LABELS.resource_repo,
+      isConfigured: Boolean(resourceRoot.value),
       enabled: syncDirEnabled.value.resource_repo,
       isDefault: true,
       removable: false,
@@ -837,7 +913,8 @@ const syncDirectories = computed(() => {
       label: '应急知识库',
       icon: BookOpen20Regular,
       iconColor: syncDirIconColors.knowledge_base,
-      path: knowledgeBasesRoot.value,
+      path: knowledgeBasesRoot.value || PRESET_DEFAULT_PATH_LABELS.knowledge_base,
+      isConfigured: Boolean(knowledgeBasesRoot.value),
       enabled: syncDirEnabled.value.knowledge_base,
       isDefault: true,
       removable: false,
@@ -851,7 +928,8 @@ const syncDirectories = computed(() => {
       label: '文件库根目录',
       icon: Folder20Regular,
       iconColor: syncDirIconColors.libraries_root,
-      path: librariesRoot.value,
+      path: librariesRoot.value || PRESET_DEFAULT_PATH_LABELS.libraries_root,
+      isConfigured: Boolean(librariesRoot.value),
       enabled: syncDirEnabled.value.libraries_root,
       isDefault: true,
       removable: false,
@@ -865,7 +943,8 @@ const syncDirectories = computed(() => {
       label: '模板库',
       icon: Document20Regular,
       iconColor: syncDirIconColors.template,
-      path: templateRepoPath.value,
+      path: templateRepoPath.value || PRESET_DEFAULT_PATH_LABELS.template,
+      isConfigured: Boolean(templateRepoPath.value),
       enabled: syncDirEnabled.value.template,
       isDefault: true,
       removable: false,
@@ -879,7 +958,8 @@ const syncDirectories = computed(() => {
       label: 'Slidev PPT 源文件',
       icon: SlideLayout20Regular,
       iconColor: syncDirIconColors.slidev,
-      path: slidevRepoRoot.value,
+      path: slidevRepoRoot.value || PRESET_DEFAULT_PATH_LABELS.slidev,
+      isConfigured: Boolean(slidevRepoRoot.value),
       enabled: syncDirEnabled.value.slidev,
       isDefault: true,
       removable: false,
@@ -897,7 +977,8 @@ const syncDirectories = computed(() => {
       label: custom.label || '自定义目录',
       icon: FolderAdd20Regular,
       iconColor: syncDirIconColors.custom,
-      path: custom.path || '',
+      path: custom.path || '未选择目录',
+      isConfigured: Boolean(custom.path),
       enabled: custom.enabled !== false,
       isDefault: false,
       removable: true,
@@ -911,7 +992,11 @@ const syncDirectories = computed(() => {
 })
 
 const hasAnySyncEnabled = computed(() => {
-  return syncDirectories.value.some(d => d.enabled && d.path)
+  return syncDirectories.value.some(d => d.enabled && d.hasBackendSupport)
+})
+
+const hasAnyDirSyncing = computed(() => {
+  return syncDirectories.value.some(d => isDirSyncing(d.id))
 })
 
 // 添加自定义同步目录
@@ -945,56 +1030,95 @@ const handleRemoveCustomSyncDir = (id) => {
   saveCustomSyncDirs()
 }
 
-// 同步单个目录
+// 同步单个目录（非阻塞，仅锁定当前目录；后端自行解析默认路径）
 const handleSyncSingleDir = async (dir) => {
-  if (!dir.syncCommand || !dir.path) return
+  if (!dir.syncCommand) return
+  if (isDirSyncing(dir.id)) return
 
   const action = `同步${dir.label}`
+  syncAbortFlags.value[dir.id] = false
+  setDirState(dir.id, { status: 'running', action, at: nowLabel(), detail: `正在同步 ${dir.label}…` })
+  // 同时更新全局状态（兼容旧状态栏）
+  setSyncState({ status: 'running', action, at: nowLabel(), detail: `正在同步 ${dir.label}…` })
+
   try {
-    loading.value = true
-    setSyncState({ status: 'running', action, at: nowLabel(), detail: `正在同步 ${dir.label}…` })
     const res = await invoke(dir.syncCommand)
-    setSyncState({ status: 'success', action, at: nowLabel(), detail: typeof res === 'string' ? res : '同步完成' })
+    if (syncAbortFlags.value[dir.id]) {
+      setDirState(dir.id, { status: 'skipped', action, at: nowLabel(), detail: '用户取消' })
+      setSyncState({ status: 'skipped', action: `取消${action}`, at: nowLabel(), detail: '用户取消' })
+      return
+    }
+    const msg = typeof res === 'string' ? res : '同步完成'
+    setDirState(dir.id, { status: 'success', action, at: nowLabel(), detail: msg })
+    setSyncState({ status: 'success', action, at: nowLabel(), detail: `${dir.label}: ${msg}` })
   } catch (error) {
+    if (syncAbortFlags.value[dir.id]) {
+      setDirState(dir.id, { status: 'skipped', action, at: nowLabel(), detail: '用户取消' })
+      return
+    }
     const msg = formatInvokeError(error)
     logger.error(`[NoteRepoContent] sync ${dir.label} failed:`, error)
-    setSyncState({ status: 'error', action, at: nowLabel(), detail: msg })
-  } finally {
-    loading.value = false
+    setDirState(dir.id, { status: 'error', action, at: nowLabel(), detail: msg })
+    setSyncState({ status: 'error', action, at: nowLabel(), detail: `${dir.label}: ${msg}` })
   }
 }
 
-// 同步所有已启用的目录
+// 同步所有已启用的目录（串行，每个目录独立状态）
 const handleSyncAllEnabled = async () => {
-  const enabled = syncDirectories.value.filter(d => d.enabled && d.path && d.hasBackendSupport)
+  // 防止与正在进行的单目录同步冲突
+  if (hasAnyDirSyncing.value) return
+
+  const enabled = syncDirectories.value.filter(d => d.enabled && d.hasBackendSupport)
   if (!enabled.length) {
     setSyncState({ status: 'skipped', action: '同步所有', at: nowLabel(), detail: '没有后端支持的已启用目录' })
     return
   }
 
   const action = '同步所有已启用目录'
-  try {
-    loading.value = true
-    setSyncState({ status: 'running', action, at: nowLabel(), detail: `正在同步 ${enabled.length} 个目录…` })
+  syncAbortFlags.value['__all__'] = false
+  setSyncState({ status: 'running', action, at: nowLabel(), detail: `正在同步 ${enabled.length} 个目录…` })
 
-    const errors = []
-    for (const dir of enabled) {
-      try {
-        await invoke(dir.syncCommand)
-      } catch (e) {
-        errors.push(`${dir.label}: ${formatInvokeError(e)}`)
+  const errors = []
+  for (const dir of enabled) {
+    if (syncAbortFlags.value['__all__']) break
+
+    syncAbortFlags.value[dir.id] = false
+    setDirState(dir.id, { status: 'running', action: `同步${dir.label}`, at: nowLabel(), detail: `正在同步 ${dir.label}…` })
+
+    try {
+      const res = await invoke(dir.syncCommand)
+      if (syncAbortFlags.value[dir.id]) {
+        setDirState(dir.id, { status: 'skipped', action, at: nowLabel(), detail: '用户取消' })
+        continue
       }
+      setDirState(dir.id, { status: 'success', action, at: nowLabel(), detail: typeof res === 'string' ? res : '同步完成' })
+    } catch (e) {
+      if (syncAbortFlags.value[dir.id]) {
+        setDirState(dir.id, { status: 'skipped', action, at: nowLabel(), detail: '用户取消' })
+        continue
+      }
+      const msg = formatInvokeError(e)
+      errors.push(`${dir.label}: ${msg}`)
+      setDirState(dir.id, { status: 'error', action, at: nowLabel(), detail: msg })
     }
+  }
 
-    if (errors.length) {
-      setSyncState({ status: 'error', action, at: nowLabel(), detail: errors.join('; ') })
-    } else {
-      setSyncState({ status: 'success', action, at: nowLabel(), detail: `${enabled.length} 个目录同步完成` })
+  if (syncAbortFlags.value['__all__']) {
+    setSyncState({ status: 'skipped', action, at: nowLabel(), detail: '批量同步已取消' })
+  } else if (errors.length) {
+    setSyncState({ status: 'error', action, at: nowLabel(), detail: errors.join('; ') })
+  } else {
+    setSyncState({ status: 'success', action, at: nowLabel(), detail: `${enabled.length} 个目录同步完成` })
+  }
+}
+
+// 取消所有正在进行的同步
+const handleCancelAllSync = () => {
+  syncAbortFlags.value['__all__'] = true
+  for (const dir of syncDirectories.value) {
+    if (isDirSyncing(dir.id)) {
+      handleCancelSyncDir(dir.id, dir.label)
     }
-  } catch (error) {
-    setSyncState({ status: 'error', action, at: nowLabel(), detail: formatInvokeError(error) })
-  } finally {
-    loading.value = false
   }
 }
 
