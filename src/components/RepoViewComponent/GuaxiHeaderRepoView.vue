@@ -21,7 +21,6 @@
     <!-- 右侧：功能图标 -->
     <div class="header-right">
       <n-icon class="header-icon" size="20" :component="TextBulletListLtr20Filled"></n-icon>
-      <n-icon class="header-icon" size="20" :component="Screenshot24Regular" @click="CaptureScreenshot"></n-icon>
       <n-icon class="header-icon" size="20" :component="PanelRightContract24Regular" @click="toggleRightSider"></n-icon>
     </div>
   </div>
