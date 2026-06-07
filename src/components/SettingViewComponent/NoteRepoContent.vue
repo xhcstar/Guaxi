@@ -87,9 +87,11 @@
         <n-divider />
 
         <div>
-          <h3>资源库同步（云存储连接器）</h3>
+          <div class="section-header">
+            <h3>资源同步</h3>
+          </div>
           <p class="description">
-            用于在不同设备间同步 ResourceRepo 目录内容。建议先配置连接器，再手动触发同步。
+            在不同设备间同步指定目录的内容。支持 P2P、WebDAV 和 Syncthing 等多种同步后端。
           </p>
 
           <n-alert :type="syncUi.alertType" :show-icon="true" class="sync-status-alert" style="max-width: 95%;">
@@ -200,14 +202,6 @@
                   <n-button :disabled="loading || !p2pTicketText" @click="handleP2PJoinTicket">加入 Ticket</n-button>
                 </n-space>
               </n-form-item>
-              <n-form-item label="同步操作">
-                <n-space>
-                  <n-button :disabled="loading || !p2pReady" type="primary" @click="handleResourceRepoSyncNow">同步资源库</n-button>
-                  <n-button :disabled="loading || !p2pReady" @click="handleP2PVerifyResourceRepo">校验资源库</n-button>
-                  <n-button :disabled="loading || !p2pReady" type="warning" @click="handleP2PSyncKnowledgeBase">应急同步知识库</n-button>
-                  <n-button :disabled="loading || !p2pReady" @click="handleP2PVerifyKnowledgeBase">校验知识库</n-button>
-                </n-space>
-              </n-form-item>
               <n-form-item label="可信设备">
                 <n-space vertical style="width: 100%">
                   <n-alert v-if="!p2pTrustedPeers.length" type="default" :show-icon="false">
@@ -270,12 +264,124 @@
 
             <n-form-item v-if="syncProvider !== 'p2p'" label="操作">
               <n-space>
-                <n-button :disabled="loading" @click="handleResourceRepoSyncSave">保存</n-button>
+                <n-button :disabled="loading" @click="handleResourceRepoSyncSave">保存配置</n-button>
                 <n-button :disabled="loading" @click="handleResourceRepoSyncTest">测试连接</n-button>
-                <n-button :disabled="loading" type="primary" @click="handleResourceRepoSyncNow">立即同步</n-button>
               </n-space>
             </n-form-item>
           </n-form>
+        </div>
+
+        <n-divider />
+
+        <!-- 同步目录列表 -->
+        <div>
+          <div class="section-header">
+            <h3>同步目录</h3>
+          </div>
+          <p class="description">
+            勾选需要同步的目录，通过下方同步按钮或自动同步机制完成跨设备同步。
+            <br />预置目录的根路径请在上方对应配置段中设置；自定义目录可直接通过文件浏览器选取。
+          </p>
+
+          <n-list hoverable style="margin-top: 8px;">
+            <n-list-item v-for="dir in syncDirectories" :key="dir.id" style="padding: 10px 14px;">
+              <template #prefix>
+                <n-icon
+                  :component="dir.icon"
+                  :size="22"
+                  :color="dir.enabled && dir.path ? dir.iconColor : 'var(--n-text-color-disabled)'"
+                />
+              </template>
+
+              <n-space vertical :size="2" style="flex: 1; min-width: 0;">
+                <n-space align="center" :size="6">
+                  <n-text strong style="font-size: 14px;">{{ dir.label }}</n-text>
+                  <n-tag :type="dir.isDefault ? 'info' : 'success'" size="tiny" :bordered="false">
+                    {{ dir.isDefault ? '默认' : '自定义' }}
+                  </n-tag>
+                  <n-tag v-if="!dir.path" type="warning" size="tiny" :bordered="false">
+                    未配置路径
+                  </n-tag>
+                </n-space>
+                <n-text depth="3" style="font-size: 12px; word-break: break-all;">
+                  {{ dir.path || '请先在上方各配置段中设置对应根目录，或通过右侧按钮浏览选择' }}
+                </n-text>
+              </n-space>
+
+              <template #suffix>
+                <n-space align="center" :size="6">
+                  <n-tooltip
+                    v-if="!dir.hasBackendSupport || !dir.path || syncProvider !== 'p2p'"
+                    :disabled="dir.hasBackendSupport && dir.path && syncProvider === 'p2p'"
+                    trigger="hover"
+                  >
+                    <template #trigger>
+                      <n-button
+                        size="tiny"
+                        :disabled="true"
+                      >
+                        <template #icon>
+                          <n-icon :component="ArrowSync20Regular" :size="14" />
+                        </template>
+                        同步
+                      </n-button>
+                    </template>
+                    <span v-if="!dir.path">请先在上方配置该目录的根路径</span>
+                    <span v-else-if="syncProvider !== 'p2p'">当前同步后端不支持单目录同步</span>
+                    <span v-else>即将支持</span>
+                  </n-tooltip>
+                  <n-button
+                    v-else
+                    size="tiny"
+                    :disabled="loading || !dir.enabled || !p2pReady"
+                    @click="handleSyncSingleDir(dir)"
+                  >
+                    <template #icon>
+                      <n-icon :component="ArrowSync20Regular" :size="14" />
+                    </template>
+                    同步
+                  </n-button>
+                  <n-switch
+                    v-model:value="dir.enabled"
+                    :disabled="loading"
+                    size="small"
+                  />
+                  <n-button
+                    v-if="dir.removable"
+                    text
+                    size="tiny"
+                    @click="handleRemoveCustomSyncDir(dir.id)"
+                    :disabled="loading"
+                    type="error"
+                  >
+                    <template #icon>
+                      <n-icon :component="Dismiss20Regular" :size="16" />
+                    </template>
+                  </n-button>
+                </n-space>
+              </template>
+            </n-list-item>
+          </n-list>
+
+          <n-space justify="space-between" style="margin-top: 10px;">
+            <n-button dashed size="small" @click="handleAddCustomSyncDir" :disabled="loading">
+              <template #icon>
+                <n-icon :component="Add20Regular" />
+              </template>
+              添加自定义目录
+            </n-button>
+            <n-button
+              type="primary"
+              size="small"
+              :disabled="loading || !hasAnySyncEnabled || syncProvider !== 'p2p' || !p2pReady"
+              @click="handleSyncAllEnabled"
+            >
+              <template #icon>
+                <n-icon :component="ArrowSync20Regular" :size="16" />
+              </template>
+              同步所有已启用目录
+            </n-button>
+          </n-space>
         </div>
 
         <n-divider />
@@ -368,7 +474,7 @@
 
 <script setup>
 import { createLogger } from '../../utils/logger'
-import { computed, ref, onMounted, onUnmounted } from 'vue';
+import { computed, ref, onMounted, onUnmounted, watch } from 'vue';
 import {
   NCard,
   NList,
@@ -393,6 +499,13 @@ import {
   FolderAdd20Regular,
   Folder20Regular,
   DocumentEdit16Regular,
+  Image20Regular,
+  BookOpen20Regular,
+  Document20Regular,
+  SlideLayout20Regular,
+  Add20Regular,
+  Dismiss20Regular,
+  ArrowSync20Regular,
 } from '@vicons/fluent';
 import { repoStore } from '../../stores/repoStore'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -463,6 +576,68 @@ const knowledgeBasesGitEmail = ref('');
 const loading = ref(false);
 
 const RESOURCE_REPO_SYNC_STATUS_KEY = 'guaxi:resourceRepoSyncStatus:v1'
+const CUSTOM_SYNC_DIRS_KEY = 'guaxi:customSyncDirs:v1'
+const SYNC_DIR_ENABLED_KEY = 'guaxi:syncDirEnabled:v1'
+
+// 自定义同步目录列表
+const customSyncDirs = ref([])
+
+// 预置同步目录的启用状态
+const syncDirEnabled = ref({
+  resource_repo: true,
+  knowledge_base: false,
+  libraries_root: false,
+  template: false,
+  slidev: false,
+})
+
+// 各类型图标映射色
+const syncDirIconColors = {
+  resource_repo: '#7c3aed',
+  knowledge_base: '#2563eb',
+  libraries_root: '#059669',
+  template: '#d97706',
+  slidev: '#dc2626',
+  custom: '#6b7280',
+}
+
+// 从 localStorage 加载自定义同步目录
+const loadCustomSyncDirs = () => {
+  try {
+    const raw = localStorage.getItem(CUSTOM_SYNC_DIRS_KEY)
+    if (raw) customSyncDirs.value = JSON.parse(raw)
+  } catch (e) {
+    logger.warn('[NoteRepoContent] load custom sync dirs failed', e)
+  }
+}
+
+const saveCustomSyncDirs = () => {
+  try {
+    localStorage.setItem(CUSTOM_SYNC_DIRS_KEY, JSON.stringify(customSyncDirs.value))
+  } catch (e) {
+    logger.warn('[NoteRepoContent] save custom sync dirs failed', e)
+  }
+}
+
+const loadSyncDirEnabled = () => {
+  try {
+    const raw = localStorage.getItem(SYNC_DIR_ENABLED_KEY)
+    if (raw) {
+      const saved = JSON.parse(raw)
+      syncDirEnabled.value = { ...syncDirEnabled.value, ...saved }
+    }
+  } catch (e) {
+    logger.warn('[NoteRepoContent] load sync dir enabled failed', e)
+  }
+}
+
+const saveSyncDirEnabled = () => {
+  try {
+    localStorage.setItem(SYNC_DIR_ENABLED_KEY, JSON.stringify(syncDirEnabled.value))
+  } catch (e) {
+    logger.warn('[NoteRepoContent] save sync dir enabled failed', e)
+  }
+}
 
 const nowLabel = () => {
   try {
@@ -569,18 +744,18 @@ const setSyncState = (patch) => {
 const syncUi = computed(() => {
   const s = String(syncState.value?.status || 'idle')
   if (s === 'running') {
-    return { alertType: 'info', tagType: 'info', tagText: '进行中', title: '资源库同步进行中…' }
+    return { alertType: 'info', tagType: 'info', tagText: '进行中', title: '资源同步进行中…' }
   }
   if (s === 'success') {
-    return { alertType: 'success', tagType: 'success', tagText: '成功', title: '资源库同步状态正常' }
+    return { alertType: 'success', tagType: 'success', tagText: '成功', title: '资源同步状态正常' }
   }
   if (s === 'error') {
-    return { alertType: 'error', tagType: 'error', tagText: '失败', title: '资源库同步失败' }
+    return { alertType: 'error', tagType: 'error', tagText: '失败', title: '资源同步失败' }
   }
   if (s === 'skipped') {
-    return { alertType: 'warning', tagType: 'warning', tagText: '跳过', title: '资源库同步已跳过' }
+    return { alertType: 'warning', tagType: 'warning', tagText: '跳过', title: '资源同步已跳过' }
   }
-  return { alertType: 'default', tagType: 'default', tagText: '未运行', title: '资源库同步未运行' }
+  return { alertType: 'default', tagType: 'default', tagText: '未运行', title: '资源同步未运行' }
 })
 
 const p2pReady = computed(() => {
@@ -639,6 +814,190 @@ const copyP2PValue = async (value, label) => {
   }
 }
 
+// ---- 同步目录列表（预置 + 自定义） ----
+const syncDirectories = computed(() => {
+  const dirs = [
+    {
+      id: 'resource_repo',
+      type: 'resource_repo',
+      label: '资源库',
+      icon: Image20Regular,
+      iconColor: syncDirIconColors.resource_repo,
+      path: resourceRoot.value,
+      enabled: syncDirEnabled.value.resource_repo,
+      isDefault: true,
+      removable: false,
+      hasBackendSupport: true,
+      syncCommand: 'p2p_sync_resource_repo_now',
+      verifyCommand: 'p2p_sync_verify_resource_repo',
+    },
+    {
+      id: 'knowledge_base',
+      type: 'knowledge_base',
+      label: '应急知识库',
+      icon: BookOpen20Regular,
+      iconColor: syncDirIconColors.knowledge_base,
+      path: knowledgeBasesRoot.value,
+      enabled: syncDirEnabled.value.knowledge_base,
+      isDefault: true,
+      removable: false,
+      hasBackendSupport: true,
+      syncCommand: 'p2p_sync_knowledge_base_now',
+      verifyCommand: 'p2p_sync_verify_knowledge_base',
+    },
+    {
+      id: 'libraries_root',
+      type: 'libraries_root',
+      label: '文件库根目录',
+      icon: Folder20Regular,
+      iconColor: syncDirIconColors.libraries_root,
+      path: librariesRoot.value,
+      enabled: syncDirEnabled.value.libraries_root,
+      isDefault: true,
+      removable: false,
+      hasBackendSupport: false,
+      syncCommand: null,
+      verifyCommand: null,
+    },
+    {
+      id: 'template',
+      type: 'template',
+      label: '模板库',
+      icon: Document20Regular,
+      iconColor: syncDirIconColors.template,
+      path: templateRepoPath.value,
+      enabled: syncDirEnabled.value.template,
+      isDefault: true,
+      removable: false,
+      hasBackendSupport: false,
+      syncCommand: null,
+      verifyCommand: null,
+    },
+    {
+      id: 'slidev',
+      type: 'slidev',
+      label: 'Slidev PPT 源文件',
+      icon: SlideLayout20Regular,
+      iconColor: syncDirIconColors.slidev,
+      path: slidevRepoRoot.value,
+      enabled: syncDirEnabled.value.slidev,
+      isDefault: true,
+      removable: false,
+      hasBackendSupport: false,
+      syncCommand: null,
+      verifyCommand: null,
+    },
+  ]
+
+  // 追加自定义目录
+  for (const custom of customSyncDirs.value) {
+    dirs.push({
+      id: custom.id,
+      type: 'custom',
+      label: custom.label || '自定义目录',
+      icon: FolderAdd20Regular,
+      iconColor: syncDirIconColors.custom,
+      path: custom.path || '',
+      enabled: custom.enabled !== false,
+      isDefault: false,
+      removable: true,
+      hasBackendSupport: false,
+      syncCommand: null,
+      verifyCommand: null,
+    })
+  }
+
+  return dirs
+})
+
+const hasAnySyncEnabled = computed(() => {
+  return syncDirectories.value.some(d => d.enabled && d.path)
+})
+
+// 添加自定义同步目录
+const handleAddCustomSyncDir = async () => {
+  try {
+    const selectedPath = await open({
+      directory: true,
+      multiple: false,
+    })
+    if (!selectedPath) return
+
+    const id = 'custom_' + Date.now()
+    const segments = selectedPath.replace(/\\/g, '/').split('/').filter(Boolean)
+    const label = segments[segments.length - 1] || '自定义目录'
+
+    customSyncDirs.value.push({
+      id,
+      label,
+      path: selectedPath,
+      enabled: true,
+    })
+    saveCustomSyncDirs()
+  } catch (e) {
+    logger.error('[NoteRepoContent] add custom sync dir failed', e)
+  }
+}
+
+// 移除自定义同步目录
+const handleRemoveCustomSyncDir = (id) => {
+  customSyncDirs.value = customSyncDirs.value.filter(d => d.id !== id)
+  saveCustomSyncDirs()
+}
+
+// 同步单个目录
+const handleSyncSingleDir = async (dir) => {
+  if (!dir.syncCommand || !dir.path) return
+
+  const action = `同步${dir.label}`
+  try {
+    loading.value = true
+    setSyncState({ status: 'running', action, at: nowLabel(), detail: `正在同步 ${dir.label}…` })
+    const res = await invoke(dir.syncCommand)
+    setSyncState({ status: 'success', action, at: nowLabel(), detail: typeof res === 'string' ? res : '同步完成' })
+  } catch (error) {
+    const msg = formatInvokeError(error)
+    logger.error(`[NoteRepoContent] sync ${dir.label} failed:`, error)
+    setSyncState({ status: 'error', action, at: nowLabel(), detail: msg })
+  } finally {
+    loading.value = false
+  }
+}
+
+// 同步所有已启用的目录
+const handleSyncAllEnabled = async () => {
+  const enabled = syncDirectories.value.filter(d => d.enabled && d.path && d.hasBackendSupport)
+  if (!enabled.length) {
+    setSyncState({ status: 'skipped', action: '同步所有', at: nowLabel(), detail: '没有后端支持的已启用目录' })
+    return
+  }
+
+  const action = '同步所有已启用目录'
+  try {
+    loading.value = true
+    setSyncState({ status: 'running', action, at: nowLabel(), detail: `正在同步 ${enabled.length} 个目录…` })
+
+    const errors = []
+    for (const dir of enabled) {
+      try {
+        await invoke(dir.syncCommand)
+      } catch (e) {
+        errors.push(`${dir.label}: ${formatInvokeError(e)}`)
+      }
+    }
+
+    if (errors.length) {
+      setSyncState({ status: 'error', action, at: nowLabel(), detail: errors.join('; ') })
+    } else {
+      setSyncState({ status: 'success', action, at: nowLabel(), detail: `${enabled.length} 个目录同步完成` })
+    }
+  } catch (error) {
+    setSyncState({ status: 'error', action, at: nowLabel(), detail: formatInvokeError(error) })
+  } finally {
+    loading.value = false
+  }
+}
+
 // 打开文件浏览器选择文件库根目录
 const handleOpenFileBrowserForLibraryRoot = async () => {
   try {
@@ -659,6 +1018,10 @@ const handleOpenFileBrowserForLibraryRoot = async () => {
 };
 
 // 加载配置
+// 监听同步目录启用状态变化，自动持久化
+watch(syncDirEnabled, () => saveSyncDirEnabled(), { deep: true })
+watch(customSyncDirs, () => saveCustomSyncDirs(), { deep: true })
+
 onMounted(async () => {
   window.addEventListener('guaxi:resource-repo-sync-state', handleSyncStateEvent)
   window.addEventListener('storage', handleStorageEvent)
@@ -672,6 +1035,9 @@ onMounted(async () => {
   } catch (e) {
     logger.warn('[NoteRepoContent][ResourceRepoSync] start sync state poll failed', e)
   }
+
+  loadCustomSyncDirs()
+  loadSyncDirEnabled()
 
   librariesRoot.value = await invoke('get_libraries_root');
 
@@ -1222,5 +1588,22 @@ const handleResourceRepoSyncNow = async () => {
   font-size: 12px;
   color: var(--guaxi-text-secondary);
   line-height: 1.25;
+}
+
+.sync-dirs-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 95%;
+  margin-bottom: 4px;
+}
+
+.sync-dirs-header h4 {
+  margin: 0;
+}
+
+/* Sync directory list item hover effect */
+.sync-dirs-list .n-list-item {
+  transition: background-color 0.15s ease;
 }
 </style>
