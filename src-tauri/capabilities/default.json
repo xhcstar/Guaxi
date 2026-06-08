@@ -16,7 +16,8 @@
     "life-habits",
     "tools-file-transfer",
     "slidev_manager",
-    "language_learning"
+    "language_learning",
+    "flipboard_feeds"
   ],
   "permissions": [
     "core:default",
