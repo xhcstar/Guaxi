@@ -349,6 +349,52 @@ fn cleanup_old_cached_articles_if_due(now: i64) -> Result<(), String> {
     Ok(())
 }
 
+/// 启动清理：删除所有未收藏的缓存文章，仅保留 keep_urls（用户收藏）。
+/// 由前端在启动时携带收藏 URL 列表调用，避免缓存无限增长占用磁盘。
+#[command]
+pub async fn purge_unbookmarked_articles(keep_urls: Vec<String>) -> Result<usize, String> {
+    let conn = open_article_cache_db()?;
+
+    let keep: Vec<String> = keep_urls
+        .into_iter()
+        .map(|u| u.trim().to_string())
+        .filter(|u| !u.is_empty())
+        .collect();
+
+    let removed = if keep.is_empty() {
+        conn.execute("DELETE FROM article_cache", [])
+            .map_err(|e| e.to_string())?
+    } else {
+        // 构造 IN 占位符 (?1, ?2, ...)，按 url 保留收藏项。
+        let placeholders = (1..=keep.len())
+            .map(|i| format!("?{}", i))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "DELETE FROM article_cache WHERE url NOT IN ({})",
+            placeholders
+        );
+        let params_vec: Vec<&dyn rusqlite::ToSql> =
+            keep.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        conn.execute(&sql, params_vec.as_slice())
+            .map_err(|e| e.to_string())?
+    };
+
+    // 同步内存中的 ARTICLES（仅保留收藏的，避免重启前内存仍持旧数据）。
+    {
+        let keep_set: HashSet<String> = keep.iter().map(|u| u.to_lowercase()).collect();
+        let mut lock = ARTICLES.lock().unwrap();
+        lock.retain(|a| keep_set.contains(&a.url.trim().to_lowercase()));
+    }
+
+    info!(
+        "flipboard: purge_unbookmarked_articles removed {} rows, kept {} bookmarked",
+        removed,
+        keep.len()
+    );
+    Ok(removed)
+}
+
 fn row_to_article(row: &rusqlite::Row<'_>) -> rusqlite::Result<Article> {
     // 列顺序须与各 SELECT 一致：
     // 12 clean_content_html, 13 clean_content_markdown, 14 lead_image,
@@ -4379,7 +4425,18 @@ pub async fn ensure_chromium_ready() -> Result<String, String> {
 /// profile 一般传 feed.id 或站点名。
 #[command]
 pub async fn open_login_session(profile: String, login_url: String) -> Result<(), String> {
-    crate::commands::flipboard_render::open_login_window(profile.trim(), login_url.trim()).await
+    crate::commands::flipboard_render::open_login_window(profile.trim(), login_url.trim())
+        .await
+        .map_err(|e| {
+            warn!("flipboard: open_login_session failed: {}", e);
+            if e.contains("launch chrome failed") || e.contains("status") {
+                "无法启动浏览器登录窗口。请确认已安装 Chrome 或 Edge（程序会优先使用系统浏览器）；\
+                 知乎/小红书等站点有强反爬风控，即使登录也可能无法稳定抓取，建议改用 RSS 源。"
+                    .to_string()
+            } else {
+                e
+            }
+        })
 }
 
 impl CrawlItem {

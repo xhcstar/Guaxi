@@ -42,6 +42,22 @@
 
         <n-tooltip placement="bottom" trigger="hover">
           <template #trigger>
+            <n-button
+              circle
+              size="small"
+              :disabled="!currentArticle?.url"
+              @click="openInBrowser"
+            >
+              <n-icon>
+                <OpenIcon />
+              </n-icon>
+            </n-button>
+          </template>
+          用浏览器打开原文
+        </n-tooltip>
+
+        <n-tooltip placement="bottom" trigger="hover">
+          <template #trigger>
             <n-button circle size="small">
               <n-icon>
                 <ShareIcon />
@@ -65,7 +81,19 @@
             </div>
           </div>
 
-          <h1 class="article-title">{{ currentArticle.title }}</h1>
+          <h1 class="article-title">
+            {{ currentArticle.title }}
+            <n-tooltip placement="top" trigger="hover" v-if="currentArticle.url">
+              <template #trigger>
+                <n-button text class="title-open-btn" @click="openInBrowser">
+                  <n-icon size="18">
+                    <OpenIcon />
+                  </n-icon>
+                </n-button>
+              </template>
+              用浏览器打开原文
+            </n-tooltip>
+          </h1>
 
           <div class="article-enrichment"
             v-if="currentArticle.summary || (currentArticle.tags && currentArticle.tags.length) || currentArticle.relevance_score >= 0">
@@ -92,6 +120,12 @@
           </div>
         </n-alert>
 
+        <!-- 正文后台加载提示（点击已即时打开，正文异步 hydrate） -->
+        <div v-if="isHydratingDetail" class="hydrate-tip">
+          <n-spin size="small" />
+          <span>正在加载完整正文…</span>
+        </div>
+
         <!-- 文章内容 -->
         <div class="article-body">
           <SelectionNotesPanel
@@ -105,7 +139,7 @@
               class="article-content"
               v-html="formattedContent"
               @mouseup="selectionNotesRef?.handleSelectionMouseUp?.()"
-              @dblclick="selectionNotesRef?.toggleNotesPanel?.()"
+              @dblclick="handleContentDblClick"
             ></div>
           </SelectionNotesPanel>
         </div>
@@ -142,20 +176,23 @@
 
 <script setup>
 import { computed, ref } from 'vue'
-import { useMessage } from 'naive-ui'
+import { NSpin, useMessage } from 'naive-ui'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import { useFlipboardStore } from '../../stores/flipboardStore.js'
 import SelectionNotesPanel from './SelectionNotesPanel.vue'
 import {
   BookmarkOutline,
   ShareSocialOutline,
   CloseOutline,
-  DocumentTextOutline
+  DocumentTextOutline,
+  OpenOutline
 } from '@vicons/ionicons5'
 
 const BookmarkIcon = BookmarkOutline
 const ShareIcon = ShareSocialOutline
 const CloseIcon = CloseOutline
 const DocumentTextIcon = DocumentTextOutline
+const OpenIcon = OpenOutline
 
 const props = defineProps({
   currentArticle: {
@@ -174,6 +211,7 @@ const store = useFlipboardStore()
 const message = useMessage()
 const selectionNotesRef = ref(null)
 const loginBusy = ref(false)
+const isHydratingDetail = computed(() => store.isHydratingDetail.value)
 
 const handleOpenLogin = async () => {
   const article = props.currentArticle
@@ -298,6 +336,41 @@ const relevanceClass = computed(() => {
   if (s >= 40) return 'rel-mid'
   return 'rel-low'
 })
+
+// 双击正文中的句子/段落：直接把该块文本插入笔记，无需手动选择。
+const handleContentDblClick = (event) => {
+  // 若用户实际是在拖选文字（有选区），走原有选择逻辑，不抢双击。
+  const sel = window.getSelection?.()
+  const selectedText = sel ? String(sel.toString() || '').trim() : ''
+  if (selectedText) {
+    selectionNotesRef.value?.handleSelectionMouseUp?.()
+    return
+  }
+
+  // 向上找到最近的块级元素（p/h1-h4/li/blockquote/pre）。
+  let el = event.target
+  const blockTags = new Set(['P', 'H1', 'H2', 'H3', 'H4', 'LI', 'BLOCKQUOTE', 'PRE'])
+  while (el && el !== event.currentTarget && !blockTags.has(el.tagName)) {
+    el = el.parentElement
+  }
+  const text = el && el !== event.currentTarget ? String(el.innerText || el.textContent || '').trim() : ''
+  if (text) {
+    selectionNotesRef.value?.insertBlockText?.(text)
+  } else {
+    // 没命中具体块：退回打开/关闭笔记面板。
+    selectionNotesRef.value?.toggleNotesPanel?.()
+  }
+}
+
+const openInBrowser = async () => {
+  const url = String(props.currentArticle?.url || '').trim()
+  if (!url) return
+  try {
+    await openUrl(url)
+  } catch (error) {
+    message.error(`打开链接失败：${error?.message || error}`, { duration: 2500 })
+  }
+}
 
 const closeReader = () => {
   emit('close')
@@ -465,6 +538,15 @@ const formatTime = (timeString) => {
   color: var(--guaxi-text-primary);
 }
 
+.hydrate-tip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--guaxi-text-secondary, #64748b);
+}
+
 .login-wall-alert {
   margin: 0 0 16px;
 }
@@ -479,6 +561,38 @@ const formatTime = (timeString) => {
 
 .article-content {
   max-width: none;
+}
+
+.title-open-btn {
+  margin-left: 8px;
+  vertical-align: middle;
+  color: var(--guaxi-text-secondary, #64748b);
+}
+
+.title-open-btn:hover {
+  color: var(--guaxi-primary, #2563eb);
+}
+
+/* 双击插入：句子/段落块悬停高亮，提示可双击收集 */
+.article-content :deep(p),
+.article-content :deep(li),
+.article-content :deep(h2),
+.article-content :deep(h3),
+.article-content :deep(blockquote),
+.article-content :deep(pre) {
+  border-radius: 6px;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+  cursor: text;
+}
+
+.article-content :deep(p:hover),
+.article-content :deep(li:hover),
+.article-content :deep(h2:hover),
+.article-content :deep(h3:hover),
+.article-content :deep(blockquote:hover),
+.article-content :deep(pre:hover) {
+  background: var(--guaxi-header-bg, rgba(37, 99, 235, 0.06));
+  box-shadow: inset 0 0 0 1px var(--guaxi-border, rgba(37, 99, 235, 0.15));
 }
 
 .article-content :deep(p) {

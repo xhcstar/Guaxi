@@ -540,6 +540,7 @@ async fn main() {
             commands::flipboard::reset_crawl_queue,
             commands::flipboard::ensure_chromium_ready,
             commands::flipboard::open_login_session,
+            commands::flipboard::purge_unbookmarked_articles,
             commands::todo::todo_init,
             commands::todo::todo_get_snapshot,
             commands::todo::todo_upsert_list,

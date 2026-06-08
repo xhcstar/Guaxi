@@ -36,6 +36,34 @@ static RENDER_SEMAPHORE: Lazy<Semaphore> = Lazy::new(|| Semaphore::new(3));
 /// 全局共享的 Chrome 实例（懒启动）。`None` 表示尚未启动。
 static BROWSER: OnceCell<Arc<Mutex<Option<BrowserHandle>>>> = OnceCell::const_new();
 
+/// Chrome 熔断器：无头渲染连续启动失败若干次后，本进程内停用 Chrome 升级，
+/// 后续抓取干净降级到 HTTP，避免反复崩溃 + 刷屏 WS 错误日志拖慢 UI。
+static HEADLESS_DISABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static HEADLESS_FAIL_COUNT: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+/// 连续失败达到该阈值即熔断。
+const HEADLESS_FAIL_THRESHOLD: u32 = 2;
+
+fn headless_disabled() -> bool {
+    HEADLESS_DISABLED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn note_headless_failure() {
+    let n = HEADLESS_FAIL_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    if n >= HEADLESS_FAIL_THRESHOLD {
+        HEADLESS_DISABLED.store(true, std::sync::atomic::Ordering::Relaxed);
+        warn!(
+            "flipboard_render: headless Chrome disabled after {} failures; falling back to HTTP-only for this session",
+            n
+        );
+    }
+}
+
+fn note_headless_success() {
+    HEADLESS_FAIL_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
 struct BrowserHandle {
     browser: Browser,
     /// 驱动 CDP 事件循环的后台任务句柄。
@@ -104,7 +132,13 @@ async fn ensure_chromium_executable() -> Result<PathBuf, String> {
                     }
                 }
             }
-            // 2. 自动下载到应用数据目录。
+            // 2. 系统已安装的 Chrome / Edge（比自动下载的 snapshot 与 CDP 协议更稳，
+            //    可避免 "WS Invalid message" 协议不匹配与启动崩溃）。
+            if let Some(pb) = find_system_chrome() {
+                info!("flipboard_render: using system browser at {:?}", pb);
+                return Ok(pb);
+            }
+            // 3. 自动下载到应用数据目录。
             let download_dir = chromium_download_dir()?;
             tokio::fs::create_dir_all(&download_dir)
                 .await
@@ -125,6 +159,26 @@ async fn ensure_chromium_executable() -> Result<PathBuf, String> {
         })
         .await
         .cloned()
+}
+
+/// 探测系统已安装的 Chrome / Edge（Windows 常见安装路径）。
+fn find_system_chrome() -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    let envs = [
+        std::env::var("PROGRAMFILES").ok(),
+        std::env::var("PROGRAMFILES(X86)").ok(),
+        std::env::var("LOCALAPPDATA").ok(),
+    ];
+    let rel = [
+        r"Google\Chrome\Application\chrome.exe",
+        r"Microsoft\Edge\Application\msedge.exe",
+    ];
+    for base in envs.iter().flatten() {
+        for r in rel.iter() {
+            candidates.push(PathBuf::from(base).join(r));
+        }
+    }
+    candidates.into_iter().find(|p| p.exists())
 }
 
 fn chromium_download_dir() -> Result<PathBuf, String> {
@@ -228,12 +282,22 @@ async fn shared_browser(profile: &str) -> Result<Arc<Mutex<Option<BrowserHandle>
 
 /// 用无头 Chrome 渲染一个 URL，返回最终 DOM。
 async fn render_with_chrome(url: &str, profile: &str) -> Result<RenderedPage, String> {
+    if headless_disabled() {
+        return Err("headless chrome disabled (circuit breaker)".to_string());
+    }
+
     let _permit = RENDER_SEMAPHORE
         .acquire()
         .await
         .map_err(|e| format!("semaphore: {e}"))?;
 
-    let cell = shared_browser(profile).await?;
+    let cell = match shared_browser(profile).await {
+        Ok(c) => c,
+        Err(e) => {
+            note_headless_failure();
+            return Err(e);
+        }
+    };
     let guard = cell.lock().await;
     let handle = guard.as_ref().ok_or_else(|| "browser not available".to_string())?;
 
@@ -288,6 +352,8 @@ async fn render_with_chrome(url: &str, profile: &str) -> Result<RenderedPage, St
     let final_url = page.url().await.ok().flatten().unwrap_or_else(|| url.to_string());
     let html = page.content().await.map_err(|e| format!("content: {e}"))?;
     let _ = page.close().await;
+
+    note_headless_success();
 
     Ok(RenderedPage {
         html,

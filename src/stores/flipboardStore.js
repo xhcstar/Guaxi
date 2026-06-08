@@ -16,6 +16,7 @@ let store
 export const useFlipboardStore = () => {
   if (store) return store
   let activeFetchToken = 0
+  let activeDetailToken = 0
   const inMemoryArticleCache = new Map()
   // 状态
   const articles = ref([])
@@ -31,6 +32,7 @@ export const useFlipboardStore = () => {
   const currentView = ref('grid') // 'grid' | 'list' | 'magazine'
   const feedHealth = ref([])
   const collectionsPanelVisible = ref(false)
+  const isHydratingDetail = ref(false)
 
   const scoreByTopic = (article, topicTokens) => {
     if (!topicTokens.length) return 0
@@ -324,21 +326,36 @@ export const useFlipboardStore = () => {
   }
 
   // 获取单个文章详情
+  // 立即用列表已有数据打开面板，正文在后台 hydrate 完成后再替换，避免“点击无反应”。
   const fetchArticleDetail = async (articleRef) => {
     const articleId = typeof articleRef === 'string' ? articleRef : String(articleRef?.id || '')
     const articleUrl = typeof articleRef === 'string' ? null : String(articleRef?.url || '').trim() || null
-    isLoading.value = true
+
+    // 1. 先用点击时已有的对象立刻渲染（RSS 已带标题/摘要/部分正文）。
+    if (typeof articleRef === 'object' && articleRef) {
+      currentArticle.value = articleRef
+      addToReadingHistory(articleRef)
+    }
+
+    // 2. 后台请求完整正文（可能触发渲染/抽取，较慢），完成后替换。
+    isHydratingDetail.value = true
+    const fetchToken = ++activeDetailToken
     try {
       const data = await invoke('get_article_detail', { id: articleId, url: articleUrl })
-      currentArticle.value = data
-
-      // 添加到阅读历史
-      addToReadingHistory(data)
+      // 仅当用户仍停留在同一篇文章时才覆盖，避免快速切换时旧请求回填。
+      if (fetchToken === activeDetailToken) {
+        currentArticle.value = data
+        addToReadingHistory(data)
+      }
+      return data
     } catch (error) {
       console.error('Failed to fetch article detail:', error)
-      throw error
+      // 已有 base 渲染则不抛错打断 UI；完全没有才抛。
+      if (!currentArticle.value) throw error
     } finally {
-      isLoading.value = false
+      if (fetchToken === activeDetailToken) {
+        isHydratingDetail.value = false
+      }
     }
   }
 
@@ -715,9 +732,27 @@ export const useFlipboardStore = () => {
       .slice(0, 10)
   })
 
+  // 启动清理：仅保留收藏文章，其余缓存全部删除（避免磁盘/数据库无限增长）。
+  // 每次进程启动只跑一次。
+  const purgeUnbookmarkedOnce = async () => {
+    if (window.__flipboardPurgedThisSession) return
+    window.__flipboardPurgedThisSession = true
+    try {
+      const keepUrls = (Array.isArray(bookmarks.value) ? bookmarks.value : [])
+        .map(b => String(b?.url || '').trim())
+        .filter(Boolean)
+      const removed = await invoke('purge_unbookmarked_articles', { keepUrls })
+      console.log('FlipboardStore: purged unbookmarked cached articles', { removed, kept: keepUrls.length })
+    } catch (error) {
+      console.warn('FlipboardStore: purge_unbookmarked_articles failed:', error)
+    }
+  }
+
   // 初始化
   const init = async () => {
     loadLocalData()
+    // 先清理未收藏缓存，再拉取（拉取会重新填充当前分类的新鲜内容）。
+    await purgeUnbookmarkedOnce()
     await fetchCategories()
     try {
       await importFeedsFromWebsiteMarkdown(null)
@@ -749,6 +784,7 @@ export const useFlipboardStore = () => {
     currentView,
     feedHealth,
     collectionsPanelVisible,
+    isHydratingDetail,
 
     // 计算属性
     filteredArticles,

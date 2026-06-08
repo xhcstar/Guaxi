@@ -681,10 +681,24 @@ onMounted(async () => {
   await loadNotesFromFile()
 })
 
-// 将 handleSelectionMouseUp / toggleNotesPanel 暴露给父组件
+/**
+ * 双击插入：父组件传入一段文本（句子/段落），直接生成一张笔记卡片，无需手动选择。
+ * 插入后自动展开笔记面板，让用户看到结果。
+ */
+const insertBlockText = async (text) => {
+  const safe = String(text || '').trim()
+  if (!safe) return
+  await addToNotes({ type: 'text', content: safe, originalMarkdown: safe })
+  if (!showNotes.value) {
+    showNotes.value = true
+  }
+}
+
+// 将 handleSelectionMouseUp / toggleNotesPanel / insertBlockText 暴露给父组件
 defineExpose({
   handleSelectionMouseUp,
-  toggleNotesPanel
+  toggleNotesPanel,
+  insertBlockText
 })
 </script>
 
