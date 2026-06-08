@@ -116,8 +116,10 @@ import { invoke } from '@tauri-apps/api/core'
 import { join } from '@tauri-apps/api/path'
 import { NCard, NButton, NIcon, NText, useMessage } from 'naive-ui'
 import { AddOutline as Add, SaveOutline as Save, CloseOutline as Close, TrashOutline as Trash } from '@vicons/ionicons5'
+import { useFlipboardCollectionsStore } from '../../stores/flipboardCollectionsStore.js'
 
 const logger = createLogger('SelectionNotesPanel')
+const collections = useFlipboardCollectionsStore()
 /**
  * props.articleId     用于区分每篇文章的笔记存储 key
  * props.articleTitle  用于生成默认卡片标题
@@ -128,6 +130,14 @@ const props = defineProps({
     required: true
   },
   articleTitle: {
+    type: String,
+    default: ''
+  },
+  sourceUrl: {
+    type: String,
+    default: ''
+  },
+  category: {
     type: String,
     default: ''
   }
@@ -543,6 +553,18 @@ const showNoteAddedBubble = () => {
  */
 const persistNotes = async () => {
   await saveNotesToFile()
+  // 同步到统一收集索引（全局搜索 / 插入主页编辑器）。
+  try {
+    await collections.syncArticleNotes({
+      articleId: props.articleId,
+      articleTitle: props.articleTitle,
+      sourceUrl: props.sourceUrl,
+      category: props.category,
+      cards: noteCards.value
+    })
+  } catch (e) {
+    logger.warn('[SelectionNotesPanel] sync collections index failed', e)
+  }
 }
 
 /**

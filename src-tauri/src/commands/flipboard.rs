@@ -100,6 +100,45 @@ fn feed_http_cache_path() -> Result<PathBuf, String> {
     Ok(config_dir.join("flipboard_http_cache.json"))
 }
 
+/// 预置源 schema 版本。每次更换内置源清单时 +1，会触发一次性迁移：
+/// 清掉旧的机器生成源（builtin-/auto-/website-），写入新的 curated 源。
+/// 用户手动添加（f*/sd*）的源不受影响。
+const FEEDS_SCHEMA_VERSION: u32 = 2;
+
+fn flipboard_feeds_version_path() -> Result<PathBuf, String> {
+    let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
+    let base_dir = exe_path
+        .parent()
+        .ok_or_else(|| "无法获取可执行文件目录".to_string())?;
+    let config_dir = base_dir.join("config");
+    if !config_dir.exists() {
+        fs::create_dir_all(&config_dir).map_err(|e| e.to_string())?;
+    }
+    Ok(config_dir.join("flipboard_feeds_version.txt"))
+}
+
+fn read_feeds_schema_version() -> u32 {
+    flipboard_feeds_version_path()
+        .ok()
+        .and_then(|p| fs::read_to_string(p).ok())
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .unwrap_or(0)
+}
+
+fn write_feeds_schema_version(version: u32) {
+    if let Ok(path) = flipboard_feeds_version_path() {
+        if let Err(e) = fs::write(&path, version.to_string()) {
+            warn!("flipboard: write feeds schema version failed: {}", e);
+        }
+    }
+}
+
+/// 机器生成的预置源 id 前缀（区别于用户手动添加的 f*/sd*）。
+fn is_preconfigured_feed_id(id: &str) -> bool {
+    let id = id.trim();
+    id.starts_with("builtin-") || id.starts_with("auto-") || id.starts_with("website-")
+}
+
 fn article_cache_db_path() -> Result<PathBuf, String> {
     let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
     let base_dir = exe_path
@@ -337,6 +376,7 @@ fn row_to_article(row: &rusqlite::Row<'_>) -> rusqlite::Result<Article> {
         tags: serde_json::from_str(&tags_json).unwrap_or_default(),
         summary: row.get(18).unwrap_or_default(),
         render_mode: row.get(19).unwrap_or_default(),
+        login_required: false,
     })
 }
 
@@ -544,56 +584,72 @@ fn merge_feeds_from_website_markdown(feeds: &mut Vec<FeedSource>) {
     }
 }
 
-/// 从配置文件加载订阅源；如果文件不存在则返回默认订阅源
-fn load_feeds_from_config() -> Result<Vec<FeedSource>, String> {
+/// 从配置文件加载订阅源；如果文件不存在则返回默认订阅源。
+/// 返回值第二项表示是否需要把结果写回磁盘（首次初始化或发生了迁移时为 true）。
+fn load_feeds_from_config() -> Result<(Vec<FeedSource>, bool), String> {
     let path = flipboard_config_path()?;
-    let mut feeds: Vec<FeedSource> = if !path.exists() {
+
+    // 没有配置文件：全新安装，直接使用 curated 默认源。
+    if !path.exists() {
         info!(
-            "flipboard: feeds config not found, use default feeds: {}",
+            "flipboard: feeds config not found, use curated default feeds: {}",
             path.display()
         );
-        get_default_feeds()
-    } else {
-        let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-        serde_json::from_str(&content).map_err(|e| e.to_string())?
-    };
-    let defaults = get_default_feeds();
-    let mut existing_keys: HashSet<String> = feeds
-        .iter()
-        .map(|f| {
-            format!(
+        let mut feeds = get_default_feeds();
+        merge_feeds_from_website_markdown(&mut feeds);
+        return Ok((feeds, true));
+    }
+
+    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let mut feeds: Vec<FeedSource> =
+        serde_json::from_str(&content).map_err(|e| e.to_string())?;
+
+    let stored_version = read_feeds_schema_version();
+    let migrating = stored_version < FEEDS_SCHEMA_VERSION;
+
+    if migrating {
+        // 一次性迁移：清掉所有旧的机器生成源（rsshub/知乎/小红书/微信等），
+        // 保留用户手动添加的源（f*/sd*），再写入新的 curated 源。
+        let before = feeds.len();
+        feeds.retain(|f| !is_preconfigured_feed_id(&f.id));
+        let purged = before - feeds.len();
+
+        let mut existing_keys: HashSet<String> = feeds
+            .iter()
+            .map(|f| {
+                format!(
+                    "{}|{}|{}",
+                    f.url.trim().to_lowercase(),
+                    f.category.trim().to_lowercase(),
+                    f.source_type.trim().to_lowercase()
+                )
+            })
+            .collect();
+
+        let mut added = 0usize;
+        for d in get_default_feeds() {
+            let key = format!(
                 "{}|{}|{}",
-                f.url.trim().to_lowercase(),
-                f.category.trim().to_lowercase(),
-                f.source_type.trim().to_lowercase()
-            )
-        })
-        .collect();
-
-    let mut merged_count = 0usize;
-    for d in defaults {
-        let key = format!(
-            "{}|{}|{}",
-            d.url.trim().to_lowercase(),
-            d.category.trim().to_lowercase(),
-            d.source_type.trim().to_lowercase()
-        );
-        if existing_keys.insert(key) {
-            feeds.push(d);
-            merged_count += 1;
+                d.url.trim().to_lowercase(),
+                d.category.trim().to_lowercase(),
+                d.source_type.trim().to_lowercase()
+            );
+            if existing_keys.insert(key) {
+                feeds.push(d);
+                added += 1;
+            }
         }
-    }
 
-    if merged_count > 0 {
         info!(
-            "flipboard: merged {} builtin feeds into current config snapshot",
-            merged_count
+            "flipboard: migrated feeds schema {} -> {} (purged {} legacy preset feeds, added {} curated feeds)",
+            stored_version, FEEDS_SCHEMA_VERSION, purged, added
         );
     }
+    // 非迁移路径：不再无条件合并默认源，尊重用户后续的删除/启停操作。
 
     merge_feeds_from_website_markdown(&mut feeds);
 
-    Ok(feeds)
+    Ok((feeds, migrating))
 }
 
 /// 将当前订阅源写回配置文件
@@ -659,9 +715,15 @@ fn ensure_feeds_initialized() {
     let mut feeds_lock = FEEDS.lock().unwrap();
 
     match load_feeds_from_config() {
-        Ok(list) => {
+        Ok((list, should_persist)) => {
             info!("flipboard: loaded {} feeds from config", list.len());
             *feeds_lock = list;
+            if should_persist {
+                if let Err(se) = save_feeds_to_config(&feeds_lock) {
+                    warn!("flipboard: persist feeds after migration failed: {}", se);
+                }
+                write_feeds_schema_version(FEEDS_SCHEMA_VERSION);
+            }
         }
         Err(e) => {
             warn!(
@@ -672,6 +734,7 @@ fn ensure_feeds_initialized() {
             if let Err(se) = save_feeds_to_config(&feeds_lock) {
                 warn!("flipboard: save default feeds config failed: {}", se);
             }
+            write_feeds_schema_version(FEEDS_SCHEMA_VERSION);
         }
     }
 
@@ -724,6 +787,9 @@ pub struct Article {
     /// 渲染来源："http" | "chrome" | "rss"。
     #[serde(default)]
     pub render_mode: String,
+    /// 命中登录墙：正文抓取被登录/验证页拦截，需用户登录后重试。
+    #[serde(default)]
+    pub login_required: bool,
 }
 
 fn default_relevance_score() -> i32 {
@@ -753,6 +819,7 @@ impl Default for Article {
             tags: Vec::new(),
             summary: String::new(),
             render_mode: String::new(),
+            login_required: false,
         }
     }
 }
@@ -1022,73 +1089,182 @@ fn get_default_categories() -> Vec<Category> {
 }
 
 // 获取默认RSS源
+/// 经过实测验证的高质量内置源（单一数据源）：(显示名, URL, source_type, category)。
+/// 旧的 rsshub/知乎/小红书/微信等低质量与登录墙源已全部移除。
+fn curated_feeds() -> Vec<(&'static str, &'static str, &'static str, &'static str)> {
+    vec![
+        // ===== 科技 technology =====
+        ("少数派", "https://sspai.com/feed", "rss", "technology"),
+        ("爱范儿", "https://www.ifanr.com/feed", "rss", "technology"),
+        ("36氪", "https://36kr.com/feed", "rss", "technology"),
+        ("The Verge", "https://www.theverge.com/rss/index.xml", "rss", "technology"),
+        ("Ars Technica", "https://feeds.arstechnica.com/arstechnica/index", "rss", "technology"),
+        ("TechCrunch", "https://techcrunch.com/feed/", "rss", "technology"),
+        ("Wired", "https://www.wired.com/feed/rss", "rss", "technology"),
+        ("MIT Technology Review", "https://www.technologyreview.com/feed/", "rss", "technology"),
+        ("Engadget", "https://www.engadget.com/rss.xml", "rss", "technology"),
+        ("阮一峰周刊", "https://www.ruanyifeng.com/blog/atom.xml", "rss", "technology"),
+        // ===== 计算机 computer =====
+        ("Hacker News", "https://hnrss.org/frontpage", "rss", "computer"),
+        ("Lobsters", "https://lobste.rs/rss", "rss", "computer"),
+        ("InfoQ", "https://feed.infoq.com/", "rss", "computer"),
+        ("Martin Fowler", "https://martinfowler.com/feed.atom", "rss", "computer"),
+        ("The Pragmatic Engineer", "https://blog.pragmaticengineer.com/rss/", "rss", "computer"),
+        ("CSS-Tricks", "https://css-tricks.com/feed/", "rss", "computer"),
+        ("Smashing Magazine", "https://www.smashingmagazine.com/feed/", "rss", "computer"),
+        ("Julia Evans", "https://jvns.ca/atom.xml", "rss", "computer"),
+        ("GitHub Trending", "https://github.com/trending", "spider", "computer"),
+        ("酷壳 CoolShell", "https://coolshell.cn/feed", "rss", "computer"),
+        // ===== AI =====
+        ("arXiv cs.AI", "https://rss.arxiv.org/rss/cs.AI", "rss", "ai"),
+        ("arXiv cs.LG", "https://rss.arxiv.org/rss/cs.LG", "rss", "ai"),
+        ("arXiv cs.CL", "https://rss.arxiv.org/rss/cs.CL", "rss", "ai"),
+        ("Hugging Face Blog", "https://huggingface.co/blog/feed.xml", "rss", "ai"),
+        ("BAIR Blog", "https://bair.berkeley.edu/blog/feed.xml", "rss", "ai"),
+        ("The Gradient", "https://thegradient.pub/rss/", "rss", "ai"),
+        ("Import AI", "https://importai.substack.com/feed", "rss", "ai"),
+        ("MIT News AI", "https://news.mit.edu/topic/mitartificial-intelligence2-rss.xml", "rss", "ai"),
+        ("Machine Learning Mastery", "https://machinelearningmastery.com/feed/", "rss", "ai"),
+        ("Lil'Log", "https://lilianweng.github.io/index.xml", "rss", "ai"),
+        // ===== 数学 math =====
+        ("arXiv math", "https://rss.arxiv.org/rss/math", "rss", "math"),
+        ("Terence Tao", "https://terrytao.wordpress.com/feed/", "rss", "math"),
+        ("Quanta Magazine", "https://www.quantamagazine.org/feed/", "rss", "math"),
+        ("Gowers's Weblog", "https://gowers.wordpress.com/feed/", "rss", "math"),
+        ("Math ∩ Programming", "https://www.jeremykun.com/index.xml", "rss", "math"),
+        ("AMS Blog on Math Blogs", "https://blogs.ams.org/blogonmathblogs/feed/", "rss", "math"),
+        ("John Baez Azimuth", "https://johncarlosbaez.wordpress.com/feed/", "rss", "math"),
+        ("3Blue1Brown", "https://www.youtube.com/feeds/videos.xml?channel_id=UCYO_jab_esuFRV4b17AJtAw", "rss", "math"),
+        ("Numberphile", "https://www.youtube.com/feeds/videos.xml?user=numberphile", "rss", "math"),
+        ("Wikipedia 数学门户", "https://en.wikipedia.org/wiki/Portal:Mathematics", "spider", "math"),
+        // ===== 物理 physics =====
+        ("arXiv astro-ph", "https://rss.arxiv.org/rss/astro-ph", "rss", "physics"),
+        ("arXiv quant-ph", "https://rss.arxiv.org/rss/quant-ph", "rss", "physics"),
+        ("arXiv hep-th", "https://rss.arxiv.org/rss/hep-th", "rss", "physics"),
+        ("Physics World", "https://physicsworld.com/feed/", "rss", "physics"),
+        ("APS Physics", "http://feeds.aps.org/rss/recent/physics.xml", "rss", "physics"),
+        ("Quanta Magazine (物理)", "https://www.quantamagazine.org/feed/", "rss", "physics"),
+        ("Sean Carroll", "https://www.preposterousuniverse.com/blog/feed/", "rss", "physics"),
+        ("Shtetl-Optimized", "https://scottaaronson.blog/?feed=rss2", "rss", "physics"),
+        ("Symmetry Magazine", "https://www.symmetrymagazine.org/feed", "rss", "physics"),
+        ("NASA APOD", "https://apod.nasa.gov/apod.rss", "rss", "physics"),
+        // ===== 医学 medicine =====
+        ("The Lancet", "https://www.thelancet.com/rssfeed/lancet_current.xml", "rss", "medicine"),
+        ("BMJ", "https://www.bmj.com/rss/current.xml", "rss", "medicine"),
+        ("STAT News", "https://www.statnews.com/feed/", "rss", "medicine"),
+        ("ScienceDaily 健康医学", "https://rss.sciencedaily.com/health_medicine.xml", "rss", "medicine"),
+        ("Nature Medicine", "https://www.nature.com/nm.rss", "rss", "medicine"),
+        ("Medscape", "https://www.medscape.com/cx/rssfeeds/2700.xml", "rss", "medicine"),
+        ("KevinMD", "https://www.kevinmd.com/feed", "rss", "medicine"),
+        ("Harvard Health", "https://www.health.harvard.edu/blog/feed", "rss", "medicine"),
+        ("NEJM", "https://www.nejm.org/action/showFeed?jc=nejm&type=etoc&feed=rss", "rss", "medicine"),
+        ("MedlinePlus What's New", "https://medlineplus.gov/feeds/whatsnew_en.xml", "rss", "medicine"),
+        ("CDC MMWR", "https://tools.cdc.gov/api/v2/resources/media/342778.rss", "rss", "medicine"),
+        // ===== 商业 business =====
+        ("Knowledge at Wharton", "https://knowledge.wharton.upenn.edu/feed/", "rss", "business"),
+        ("McKinsey Insights", "https://www.mckinsey.com/insights/rss", "rss", "business"),
+        ("钛媒体", "https://www.tmtpost.com/feed", "rss", "business"),
+        ("Stratechery", "https://stratechery.com/feed/", "rss", "business"),
+        ("36氪 (商业)", "https://36kr.com/feed", "rss", "business"),
+        ("VentureBeat", "https://feeds.feedburner.com/venturebeat/SZYF", "rss", "business"),
+        ("Business Insider", "https://www.businessinsider.com/rss", "rss", "business"),
+        ("Inc.com", "https://www.inc.com/rss/", "rss", "business"),
+        ("Bloomberg Business", "https://feeds.bloomberg.com/business/news.rss", "rss", "business"),
+        ("HBS Working Knowledge", "https://hbswk.hbs.edu/rss/all.xml", "rss", "business"),
+        ("Forbes Business", "https://www.forbes.com/business/feed/", "rss", "business"),
+        ("36氪快讯", "https://36kr.com/feed-newsflash", "rss", "business"),
+        // ===== 金融 finance =====
+        ("CNBC Top News", "https://www.cnbc.com/id/100003114/device/rss/rss.html", "rss", "finance"),
+        ("Marginal Revolution", "https://marginalrevolution.com/feed", "rss", "finance"),
+        ("A Wealth of Common Sense", "https://awealthofcommonsense.com/feed/", "rss", "finance"),
+        ("Calculated Risk", "https://www.calculatedriskblog.com/feeds/posts/default", "rss", "finance"),
+        ("The Big Picture", "https://ritholtz.com/feed/", "rss", "finance"),
+        ("Federal Reserve", "https://www.federalreserve.gov/feeds/press_all.xml", "rss", "finance"),
+        ("Investing.com", "https://www.investing.com/rss/news.rss", "rss", "finance"),
+        ("Seeking Alpha", "https://seekingalpha.com/feed.xml", "rss", "finance"),
+        ("The Economist Finance", "https://www.economist.com/finance-and-economics/rss.xml", "rss", "finance"),
+        ("MarketWatch Top Stories", "https://feeds.content.dowjones.io/public/rss/mw_topstories", "rss", "finance"),
+        ("Financial Times Home", "https://www.ft.com/rss/home", "rss", "finance"),
+        ("WSJ Markets", "https://feeds.a.dj.com/rss/RSSMarketsMain.xml", "rss", "finance"),
+        // ===== 法律 law =====
+        ("SCOTUSblog", "https://www.scotusblog.com/feed/", "rss", "law"),
+        ("Volokh Conspiracy", "https://reason.com/volokh/feed/", "rss", "law"),
+        ("Above the Law", "https://abovethelaw.com/feed/", "rss", "law"),
+        ("JURIST", "https://www.jurist.org/news/feed/", "rss", "law"),
+        ("EFF Deeplinks", "https://www.eff.org/rss/updates.xml", "rss", "law"),
+        ("Harvard Law Review", "https://harvardlawreview.org/feed/", "rss", "law"),
+        ("Balkinization", "https://balkin.blogspot.com/feeds/posts/default", "rss", "law"),
+        ("SCOTUSblog Petitions", "https://www.scotusblog.com/category/cases-in-the-pipeline/feed/", "rss", "law"),
+        ("SCOTUSblog Featured", "https://www.scotusblog.com/category/featured/feed/", "rss", "law"),
+        ("Reason", "https://reason.com/feed/", "rss", "law"),
+        ("ACLU News", "https://www.aclu.org/news/feed", "rss", "law"),
+        ("Just Security", "https://www.justsecurity.org/feed/", "rss", "law"),
+        // ===== 教育 education =====
+        ("EdSurge", "https://www.edsurge.com/articles_rss", "rss", "education"),
+        ("Inside Higher Ed", "https://www.insidehighered.com/rss.xml", "rss", "education"),
+        ("Khan Academy Blog", "https://blog.khanacademy.org/feed/", "rss", "education"),
+        ("The Hechinger Report", "https://hechingerreport.org/feed/", "rss", "education"),
+        ("eLearning Industry", "https://elearningindustry.com/feed", "rss", "education"),
+        ("TeachThought", "https://www.teachthought.com/feed/", "rss", "education"),
+        ("Education Next", "https://www.educationnext.org/feed/", "rss", "education"),
+        ("Class Central", "https://www.classcentral.com/report/feed/", "rss", "education"),
+        ("MindShift", "https://ww2.kqed.org/mindshift/feed/", "rss", "education"),
+        ("Higher Ed Dive", "https://www.highereddive.com/feeds/news/", "rss", "education"),
+        // ===== 生活 lifestyle =====
+        ("少数派 (生活)", "https://sspai.com/feed", "rss", "lifestyle"),
+        ("Lifehacker", "https://lifehacker.com/rss", "rss", "lifestyle"),
+        ("Mark Manson", "https://markmanson.net/feed", "rss", "lifestyle"),
+        ("The Kitchn", "https://www.thekitchn.com/main.rss", "rss", "lifestyle"),
+        ("Apartment Therapy", "https://www.apartmenttherapy.com/main.rss", "rss", "lifestyle"),
+        ("Longreads", "https://longreads.com/feed/", "rss", "lifestyle"),
+        ("The Art of Manliness", "https://www.artofmanliness.com/feed/", "rss", "lifestyle"),
+        ("NYT Well", "https://rss.nytimes.com/services/xml/rss/nyt/Well.xml", "rss", "lifestyle"),
+        ("mindbodygreen", "https://www.mindbodygreen.com/rss.xml", "rss", "lifestyle"),
+        ("Lifehack", "https://lifehack.org/feed", "rss", "lifestyle"),
+        ("Becoming Minimalist", "https://www.becomingminimalist.com/feed/", "rss", "lifestyle"),
+        ("Nutrition Stripped", "https://nutritionstripped.com/feed/", "rss", "lifestyle"),
+        ("Breaking Muscle", "https://breakingmuscle.com/feed/", "rss", "lifestyle"),
+        // ===== 游戏/娱乐 entertainment =====
+        ("IGN", "https://feeds.ign.com/ign/all", "rss", "entertainment"),
+        ("GameSpot", "https://www.gamespot.com/feeds/news/", "rss", "entertainment"),
+        ("Polygon", "https://www.polygon.com/rss/index.xml", "rss", "entertainment"),
+        ("Kotaku", "https://kotaku.com/rss", "rss", "entertainment"),
+        ("Rock Paper Shotgun", "https://www.rockpapershotgun.com/feed", "rss", "entertainment"),
+        ("PC Gamer", "https://www.pcgamer.com/rss/", "rss", "entertainment"),
+        ("Eurogamer", "https://www.eurogamer.net/feed", "rss", "entertainment"),
+        ("机核 GCORES", "https://www.gcores.com/rss", "rss", "entertainment"),
+        ("Variety", "https://variety.com/feed/", "rss", "entertainment"),
+        ("The Hollywood Reporter", "https://www.hollywoodreporter.com/feed/", "rss", "entertainment"),
+    ]
+}
+
 fn get_default_feeds() -> Vec<FeedSource> {
-    let platform_category_pairs: Vec<(&str, &str)> = vec![
-        ("zhihu", "technology"),
-        ("zhihu", "business"),
-        ("zhihu", "finance"),
-        ("zhihu", "ai"),
-        ("zhihu", "computer"),
-        ("zhihu", "education"),
-        ("zhihu", "lifestyle"),
-        ("bilibili", "all"),
-        ("bilibili", "entertainment"),
-        ("bilibili", "education"),
-        ("quora", "technology"),
-        ("quora", "business"),
-        ("quora", "finance"),
-        ("quora", "law"),
-        ("quora", "education"),
-        ("quora", "medicine"),
-        ("xiaohongshu", "lifestyle"),
-        ("xiaohongshu", "entertainment"),
-        ("wechat", "technology"),
-        ("wechat", "business"),
-        ("wechat", "medicine"),
-        ("wechat", "education"),
-        ("arxiv", "ai"),
-        ("arxiv", "computer"),
-        ("arxiv", "math"),
-        ("arxiv", "physics"),
-        ("hackernews", "technology"),
-        ("hackernews", "computer"),
-        ("github_trending", "technology"),
-        ("github_trending", "computer"),
-        ("wikipedia", "all"),
-        ("wikipedia", "math"),
-        ("wikipedia", "physics"),
-        ("wikipedia", "law"),
-        ("nature", "medicine"),
-        ("nature", "physics"),
-        ("who", "medicine"),
-        ("coursera", "education"),
-    ];
-
     let mut default_feeds = Vec::new();
+    let mut per_category_idx: HashMap<&str, usize> = HashMap::new();
 
-    for (platform, category) in platform_category_pairs {
-        let templates = build_default_feeds_for_platform(platform);
-        for (idx, t) in templates.into_iter().enumerate() {
-            default_feeds.push(FeedSource {
-                id: format!("builtin-{}-{}-{}", platform, category, idx),
-                name: format!("{} ({})", t.name, category),
-                url: t.url,
-                category: category.to_string(),
-                enabled: true,
-                source_type: t.source_type,
-                fetch_interval: Some(60),
-                include_keywords: t.include_keywords,
-                exclude_keywords: t.exclude_keywords,
-                remark: t.remark,
-                ..Default::default()
-            });
-        }
+    for (name, url, source_type, category) in curated_feeds() {
+        let idx = per_category_idx.entry(category).or_insert(0);
+        default_feeds.push(FeedSource {
+            id: format!("builtin-{}-{}", category, idx),
+            name: name.to_string(),
+            url: url.to_string(),
+            category: category.to_string(),
+            enabled: true,
+            source_type: source_type.to_string(),
+            fetch_interval: Some(60),
+            include_keywords: None,
+            exclude_keywords: None,
+            remark: Some("curated_builtin".to_string()),
+            ..Default::default()
+        });
+        *idx += 1;
     }
 
     default_feeds
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct PlatformFeedTemplate {
     name: String,
     url: String,
@@ -1098,155 +1274,10 @@ struct PlatformFeedTemplate {
     remark: Option<String>,
 }
 
-fn build_default_feeds_for_platform(platform: &str) -> Vec<PlatformFeedTemplate> {
-    match platform {
-        "zhihu" => vec![
-            PlatformFeedTemplate {
-                name: "知乎 - 热榜".to_string(),
-                url: "https://rsshub.app/zhihu/hotlist".to_string(),
-                source_type: "zhihu".to_string(),
-                include_keywords: None,
-                exclude_keywords: None,
-                remark: Some("自动生成的知乎综合热榜信息源".to_string()),
-            },
-            PlatformFeedTemplate {
-                name: "知乎 - 日报精选".to_string(),
-                url: "https://rsshub.app/zhihu/daily".to_string(),
-                source_type: "zhihu".to_string(),
-                include_keywords: None,
-                exclude_keywords: None,
-                remark: Some("自动生成的知乎日报精选信息源".to_string()),
-            },
-        ],
-        "bilibili" => vec![
-            PlatformFeedTemplate {
-                name: "B站 - 综合热门".to_string(),
-                url: "https://rsshub.app/bilibili/popular/all".to_string(),
-                source_type: "bilibili".to_string(),
-                include_keywords: None,
-                exclude_keywords: None,
-                remark: Some("自动生成的 B 站综合热门信息源".to_string()),
-            },
-            PlatformFeedTemplate {
-                name: "B站 - 日排行".to_string(),
-                url: "https://rsshub.app/bilibili/ranking/0/0/1".to_string(),
-                source_type: "bilibili".to_string(),
-                include_keywords: None,
-                exclude_keywords: None,
-                remark: Some("自动生成的 B 站日排行信息源".to_string()),
-            },
-        ],
-        "arxiv" => vec![
-            PlatformFeedTemplate {
-                name: "arXiv - CS.AI".to_string(),
-                url: "https://rss.arxiv.org/rss/cs.AI".to_string(),
-                source_type: "rss".to_string(),
-                include_keywords: None,
-                exclude_keywords: None,
-                remark: Some("自动生成的 arXiv 人工智能论文源".to_string()),
-            },
-            PlatformFeedTemplate {
-                name: "arXiv - CS.LG".to_string(),
-                url: "https://rss.arxiv.org/rss/cs.LG".to_string(),
-                source_type: "rss".to_string(),
-                include_keywords: None,
-                exclude_keywords: None,
-                remark: Some("自动生成的 arXiv 机器学习论文源".to_string()),
-            },
-        ],
-        "hackernews" => vec![PlatformFeedTemplate {
-            name: "Hacker News".to_string(),
-            url: "https://hnrss.org/frontpage".to_string(),
-            source_type: "rss".to_string(),
-            include_keywords: None,
-            exclude_keywords: None,
-            remark: Some("自动生成的 Hacker News 前沿技术源".to_string()),
-        }],
-        "github_trending" => vec![PlatformFeedTemplate {
-            name: "GitHub Trending".to_string(),
-            url: "https://github.com/trending".to_string(),
-            source_type: "spider".to_string(),
-            include_keywords: None,
-            exclude_keywords: None,
-            remark: Some("自动生成的 GitHub 热门仓库网页探索源".to_string()),
-        }],
-        "wikipedia" => vec![PlatformFeedTemplate {
-            name: "Wikipedia - Featured".to_string(),
-            url: "https://en.wikipedia.org/wiki/Wikipedia:Featured_articles".to_string(),
-            source_type: "spider".to_string(),
-            include_keywords: None,
-            exclude_keywords: None,
-            remark: Some("自动生成的 Wikipedia 精选条目网页探索源".to_string()),
-        }],
-        "nature" => vec![PlatformFeedTemplate {
-            name: "Nature - Latest Research".to_string(),
-            url: "https://www.nature.com/nature/research-articles".to_string(),
-            source_type: "spider".to_string(),
-            include_keywords: None,
-            exclude_keywords: None,
-            remark: Some("自动生成的 Nature 最新研究网页探索源".to_string()),
-        }],
-        "who" => vec![PlatformFeedTemplate {
-            name: "WHO - News".to_string(),
-            url: "https://www.who.int/news".to_string(),
-            source_type: "spider".to_string(),
-            include_keywords: None,
-            exclude_keywords: None,
-            remark: Some("自动生成的 WHO 医学与公共卫生网页探索源".to_string()),
-        }],
-        "coursera" => vec![PlatformFeedTemplate {
-            name: "Coursera Blog".to_string(),
-            url: "https://blog.coursera.org/".to_string(),
-            source_type: "spider".to_string(),
-            include_keywords: None,
-            exclude_keywords: None,
-            remark: Some("自动生成的课程与学习趋势网页探索源".to_string()),
-        }],
-        "quora" => vec![PlatformFeedTemplate {
-            name: "Quora - Discover".to_string(),
-            url: "https://www.quora.com/".to_string(),
-            source_type: "spider".to_string(),
-            include_keywords: None,
-            exclude_keywords: None,
-            remark: Some("自动生成的 Quora 问题洞察网页探索源".to_string()),
-        }],
-        "xiaohongshu" => vec![PlatformFeedTemplate {
-            name: "小红书 - 发现".to_string(),
-            url: "https://www.xiaohongshu.com/explore".to_string(),
-            source_type: "spider".to_string(),
-            include_keywords: None,
-            exclude_keywords: None,
-            remark: Some("自动生成的小红书内容发现网页探索源".to_string()),
-        }],
-        "wechat" => vec![PlatformFeedTemplate {
-            name: "微信公众号 - 搜索".to_string(),
-            url: "https://weixin.sogou.com/".to_string(),
-            source_type: "spider".to_string(),
-            include_keywords: None,
-            exclude_keywords: None,
-            remark: Some("自动生成的微信公众号入口网页探索源".to_string()),
-        }],
-        _ => Vec::new(),
-    }
-}
-
-fn default_platforms_for_category(category: &str) -> Vec<&'static str> {
-    match category {
-        "technology" => vec!["hackernews", "github_trending", "zhihu", "quora"],
-        "business" => vec!["zhihu", "quora", "wechat"],
-        "entertainment" => vec!["bilibili", "xiaohongshu"],
-        "lifestyle" => vec!["xiaohongshu", "wechat", "zhihu"],
-        "computer" => vec!["github_trending", "hackernews", "arxiv"],
-        "math" => vec!["arxiv", "wikipedia"],
-        "physics" => vec!["arxiv", "nature", "wikipedia"],
-        "ai" => vec!["arxiv", "github_trending", "zhihu"],
-        "finance" => vec!["zhihu", "quora", "wechat"],
-        "medicine" => vec!["nature", "who", "wechat"],
-        "law" => vec!["quora", "wikipedia", "zhihu"],
-        "education" => vec!["coursera", "zhihu", "bilibili"],
-        "all" => vec!["zhihu", "bilibili", "quora", "wechat"],
-        _ => vec!["zhihu", "quora", "wikipedia"],
-    }
+fn build_default_feeds_for_platform(_platform: &str) -> Vec<PlatformFeedTemplate> {
+    // 旧的 rsshub / 知乎 / B站 / 小红书 / 微信 / Quora 等低质量与登录墙平台模板已全部移除，
+    // 内置源统一由 curated_feeds() 提供。简易“按平台生成”入口因此不再产出内置模板。
+    Vec::new()
 }
 
 #[command]
@@ -1291,44 +1322,44 @@ pub async fn ensure_category_default_feeds(category: String, force: Option<bool>
         })
         .collect();
 
-    let platforms = default_platforms_for_category(&normalized_category);
     let mut created = 0usize;
-    for platform in platforms {
-        let templates = build_default_feeds_for_platform(platform);
-        for (idx, t) in templates.into_iter().enumerate() {
-            let key = format!(
-                "{}|{}|{}",
-                t.url.trim().to_lowercase(),
-                normalized_category.to_lowercase(),
-                t.source_type.trim().to_lowercase()
-            );
-            if !existing_keys.insert(key) {
-                continue;
-            }
-
-            feeds_lock.push(FeedSource {
-                id: format!(
-                    "auto-{}-{}-{}",
-                    normalized_category,
-                    platform,
-                    Utc::now().timestamp_millis() + idx as i64
-                ),
-                name: format!("{} ({})", t.name, normalized_category),
-                url: t.url,
-                category: normalized_category.clone(),
-                enabled: true,
-                source_type: t.source_type,
-                fetch_interval: Some(60),
-                include_keywords: t.include_keywords,
-                exclude_keywords: t.exclude_keywords,
-                remark: Some(format!(
-                    "auto_generated_for_category={}",
-                    normalized_category
-                )),
-                ..Default::default()
-            });
-            created += 1;
+    let mut seq = 0i64;
+    for (name, url, source_type, cat) in curated_feeds() {
+        if cat != normalized_category {
+            continue;
         }
+        let key = format!(
+            "{}|{}|{}",
+            url.trim().to_lowercase(),
+            normalized_category.to_lowercase(),
+            source_type.trim().to_lowercase()
+        );
+        if !existing_keys.insert(key) {
+            continue;
+        }
+
+        feeds_lock.push(FeedSource {
+            id: format!(
+                "auto-{}-{}",
+                normalized_category,
+                Utc::now().timestamp_millis() + seq
+            ),
+            name: name.to_string(),
+            url: url.to_string(),
+            category: normalized_category.clone(),
+            enabled: true,
+            source_type: source_type.to_string(),
+            fetch_interval: Some(60),
+            include_keywords: None,
+            exclude_keywords: None,
+            remark: Some(format!(
+                "auto_generated_for_category={}",
+                normalized_category
+            )),
+            ..Default::default()
+        });
+        created += 1;
+        seq += 1;
     }
 
     if created > 0 {
@@ -2492,13 +2523,58 @@ fn looks_like_media_link(url: &str) -> bool {
         || u.ends_with(".webm")
 }
 
-async fn hydrate_article_readable_content(article: &Article) -> Result<Article, String> {
-    let parsed = Url::parse(article.url.trim()).map_err(|e| e.to_string())?;
-    let resp = HTTP_CLIENT.get(parsed.clone()).send().await.map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!("fetch article html failed: {}", resp.status()));
+/// 用站点 host 作为渲染会话 profile，使同站文章复用同一份持久登录态。
+fn render_profile_for_url(url: &str) -> String {
+    Url::parse(url.trim())
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h.to_string()))
+        .unwrap_or_else(|| "default".to_string())
+}
+
+/// 登录墙启发式判断：抽取后正文极薄，且页面/URL 命中登录、验证、人机校验等特征。
+fn looks_like_login_wall(html: &str, plain_text: &str, final_url: &str) -> bool {
+    if plain_text.chars().filter(|c| !c.is_whitespace()).count() >= 300 {
+        return false;
     }
-    let html = resp.text().await.map_err(|e| e.to_string())?;
+    let hay = format!("{} {}", html, final_url).to_lowercase();
+    const SIGNS: &[&str] = &[
+        "请登录",
+        "登录后",
+        "登录查看",
+        "登录后继续",
+        "扫码登录",
+        "请先登录",
+        "需要登录",
+        "captcha",
+        "验证码",
+        "人机验证",
+        "安全验证",
+        "您的访问出现异常",
+        "sign in to continue",
+        "please log in",
+        "please sign in",
+        "log in to continue",
+        "/login",
+        "/signin",
+        "accounts.google.com",
+        "as a paid subscriber",
+        "subscribe to read",
+    ];
+    SIGNS.iter().any(|s| hay.contains(s))
+}
+
+async fn hydrate_article_readable_content(article: &Article) -> Result<Article, String> {
+    // 混合抓取：HTTP 优先，JS 站/空壳/登录墙升级到无头 Chrome，并复用该站持久登录态。
+    let profile = render_profile_for_url(&article.url);
+    let rendered = crate::commands::flipboard_render::fetch_page(
+        &HTTP_CLIENT,
+        article.url.trim(),
+        false,
+        &profile,
+    )
+    .await?;
+    let html = rendered.html;
+    let final_url = rendered.final_url;
 
     // 工业级抽取：trafilatura（主）/ scraper（降级），保留内联图片。
     // worker 协议是同步 stdin/stdout，放到阻塞线程池执行。
@@ -2570,6 +2646,16 @@ async fn hydrate_article_readable_content(article: &Article) -> Result<Article, 
         &enriched.url,
         &enriched.source,
     );
+
+    // 登录墙判定：正文抽取后仍极薄且命中登录/验证特征，标记需登录供前端引导。
+    enriched.login_required = looks_like_login_wall(&html, &enriched.content, &final_url);
+    if enriched.login_required {
+        warn!(
+            "flipboard: login wall detected for {} (final={})",
+            article.url, final_url
+        );
+    }
+
     Ok(enriched)
 }
 

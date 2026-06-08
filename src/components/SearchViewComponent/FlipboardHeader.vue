@@ -93,6 +93,18 @@
 
         <n-tooltip placement="bottom" trigger="hover">
           <template #trigger>
+            <n-button class="header-circle-btn" circle size="small" @click="toggleCollections"
+              :type="collectionsVisible ? 'primary' : 'default'">
+              <n-icon>
+                <CollectionsIcon />
+              </n-icon>
+            </n-button>
+          </template>
+          我的收集
+        </n-tooltip>
+
+        <n-tooltip placement="bottom" trigger="hover">
+          <template #trigger>
             <n-button class="header-circle-btn" circle size="small" @click="refreshArticles" :disabled="isLoading">
               <n-icon :class="{ 'refresh-spin': isLoading }">
                 <RefreshIcon />
@@ -118,7 +130,8 @@ import {
   ListOutline,
   NewspaperOutline,
   RefreshOutline,
-  PulseOutline
+  PulseOutline,
+  BookmarksOutline
 } from '@vicons/ionicons5'
 
 const logger = createLogger('FlipboardHeader')
@@ -128,6 +141,7 @@ const ListIcon = ListOutline
 const MagazineIcon = NewspaperOutline
 const RefreshIcon = RefreshOutline
 const HealthIcon = PulseOutline
+const CollectionsIcon = BookmarksOutline
 
 const store = useFlipboardStore()
 const siderStore = useSiderStore()
@@ -136,6 +150,11 @@ const viewKey = 'search'
 const searchQuery = computed(() => store.searchQuery.value)
 const currentView = computed(() => store.currentView.value)
 const isLoading = computed(() => store.isLoading.value)
+const collectionsVisible = computed(() => store.collectionsPanelVisible.value)
+
+const toggleCollections = () => {
+  store.collectionsPanelVisible.value = !store.collectionsPanelVisible.value
+}
 
 const feedHealth = computed(() => {
   const list = store.feedHealth?.value

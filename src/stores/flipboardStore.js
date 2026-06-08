@@ -30,6 +30,7 @@ export const useFlipboardStore = () => {
   const searchQuery = ref('')
   const currentView = ref('grid') // 'grid' | 'list' | 'magazine'
   const feedHealth = ref([])
+  const collectionsPanelVisible = ref(false)
 
   const scoreByTopic = (article, topicTokens) => {
     if (!topicTokens.length) return 0
@@ -747,6 +748,7 @@ export const useFlipboardStore = () => {
     searchQuery,
     currentView,
     feedHealth,
+    collectionsPanelVisible,
 
     // 计算属性
     filteredArticles,

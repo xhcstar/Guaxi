@@ -16,6 +16,12 @@
       <!-- 中间内容区域 + 右侧阅读区域交给 ReadingCoordinator 统一协调 -->
       <ReadingCoordinator view-key="search" />
     </div>
+
+    <!-- 我的收集：统一笔记库（可搜索 / 插入主页编辑器） -->
+    <CollectionsPanel
+      :visible="collectionsPanelVisible"
+      @close="collectionsPanelVisible = false"
+    />
   </div>
 </template>
 
@@ -26,6 +32,7 @@ import { useSiderStore } from '../stores/useSiderStore'
 import SearchViewSidebar from '../components/SearchViewComponent/SearchViewSidebar.vue'
 import FlipboardHeader from "../components/SearchViewComponent/FlipboardHeader.vue"
 import ReadingCoordinator from "../components/SearchViewComponent/ReadingCoordinator.vue"
+import CollectionsPanel from "../components/SearchViewComponent/CollectionsPanel.vue"
 
 // 使用 store
 const store = useFlipboardStore()
@@ -67,6 +74,10 @@ const filteredArticles = computed(() => store.filteredArticles.value)
 const currentArticle = computed(() => store.currentArticle.value)
 const currentView = computed(() => store.currentView.value)
 const isLoading = computed(() => store.isLoading.value)
+const collectionsPanelVisible = computed({
+  get: () => store.collectionsPanelVisible.value,
+  set: (val) => { store.collectionsPanelVisible.value = val }
+})
 
 
 const handleArticleSelect = async (article) => {

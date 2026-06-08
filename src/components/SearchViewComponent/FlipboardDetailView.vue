@@ -81,12 +81,25 @@
           </div>
         </div>
 
+        <!-- 登录墙提示：抓取命中登录/验证页时引导用户登录一次 -->
+        <n-alert v-if="currentArticle.login_required" type="warning" class="login-wall-alert"
+          title="该内容需要登录后才能完整抓取">
+          <div class="login-wall-body">
+            <span>此站点疑似登录墙或反爬限制。登录一次后会话会被保存，之后可正常抓取同站内容。</span>
+            <n-button size="small" type="primary" :loading="loginBusy" @click="handleOpenLogin">
+              打开登录
+            </n-button>
+          </div>
+        </n-alert>
+
         <!-- 文章内容 -->
         <div class="article-body">
           <SelectionNotesPanel
             ref="selectionNotesRef"
             :article-id="currentArticle.id"
             :article-title="currentArticle.title"
+            :source-url="currentArticle.url"
+            :category="currentArticle.category"
           >
             <div
               class="article-content"
@@ -129,6 +142,7 @@
 
 <script setup>
 import { computed, ref } from 'vue'
+import { useMessage } from 'naive-ui'
 import { useFlipboardStore } from '../../stores/flipboardStore.js'
 import SelectionNotesPanel from './SelectionNotesPanel.vue'
 import {
@@ -157,7 +171,33 @@ const props = defineProps({
 const emit = defineEmits(['close', 'article-select'])
 
 const store = useFlipboardStore()
+const message = useMessage()
 const selectionNotesRef = ref(null)
+const loginBusy = ref(false)
+
+const handleOpenLogin = async () => {
+  const article = props.currentArticle
+  if (!article?.url) return
+  loginBusy.value = true
+  try {
+    // profile 用文章 host，与后端 render_profile_for_url 对齐，登录态同站复用。
+    let profile = 'default'
+    try {
+      profile = new URL(article.url).host || 'default'
+    } catch {
+      profile = 'default'
+    }
+    await store.ensureChromiumReady()
+    await store.openLoginSession(profile, article.url)
+    message.success('登录窗口已关闭，正在重新抓取…', { duration: 2000 })
+    // 重新抓取该文章详情，验证登录态是否生效。
+    await store.fetchArticleDetail({ id: article.id, url: article.url })
+  } catch (error) {
+    message.error(`打开登录失败：${error?.message || error}`, { duration: 3000 })
+  } finally {
+    loginBusy.value = false
+  }
+}
 
 const isCurrentBookmarked = computed(() => {
   return props.currentArticle ? store.isBookmarked(props.currentArticle.id) : false
@@ -423,6 +463,18 @@ const formatTime = (timeString) => {
   line-height: 1.8;
   font-size: 1.125rem;
   color: var(--guaxi-text-primary);
+}
+
+.login-wall-alert {
+  margin: 0 0 16px;
+}
+
+.login-wall-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .article-content {
