@@ -28,6 +28,8 @@ pub struct RenderedPage {
     #[allow(dead_code)]
     pub final_url: String,
     pub mode: &'static str,
+    /// 命中登录墙 / 验证码 / 风控页（提示调用方需要登录或人工验证）。
+    pub blocked: bool,
 }
 
 /// 同时最多打开的 Chrome 标签页数（Chrome 每页吃内存，保守限制）。
@@ -71,32 +73,191 @@ struct BrowserHandle {
     profile: String,
 }
 
-/// stealth 脚本：抹掉常见的自动化指纹。业界 puppeteer-extra-stealth 的精简版。
+/// stealth 脚本：全面抹除自动化/无头指纹（参考 puppeteer-extra-stealth /
+/// undetected-chromedriver / Crawl4AI 的规避集合）。纯 JS，导航前注入，
+/// 对每个新 document 生效。覆盖 webdriver / chrome / plugins / WebGL /
+/// userAgentData / 硬件 / 权限 / cdc_ 痕迹 / headless 窗口尺寸等指纹向量。
 const STEALTH_SCRIPT: &str = r#"
-Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en'] });
-Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-window.chrome = { runtime: {} };
-const originalQuery = window.navigator.permissions && window.navigator.permissions.query;
-if (originalQuery) {
-  window.navigator.permissions.query = (parameters) => (
-    parameters.name === 'notifications'
-      ? Promise.resolve({ state: Notification.permission })
-      : originalQuery(parameters)
-  );
-}
+(() => {
+  const def = (obj, prop, get) => { try { Object.defineProperty(obj, prop, { get, configurable: true }); } catch (e) {} };
+
+  // 1. navigator.webdriver -> false（并尝试从原型删除）
+  def(Navigator.prototype, 'webdriver', () => false);
+  try { delete Navigator.prototype.webdriver; } catch (e) {}
+
+  // 2. 语言
+  def(navigator, 'languages', () => ['zh-CN', 'zh', 'en-US', 'en']);
+
+  // 3. plugins / mimeTypes（真实 PDF 阅读器集合）
+  const mkPlugin = (name, desc) => ({ name, filename: 'internal-pdf-viewer', description: desc, length: 1 });
+  const plugins = [
+    mkPlugin('PDF Viewer', 'Portable Document Format'),
+    mkPlugin('Chrome PDF Viewer', 'Portable Document Format'),
+    mkPlugin('Chromium PDF Viewer', 'Portable Document Format'),
+    mkPlugin('Microsoft Edge PDF Viewer', 'Portable Document Format'),
+    mkPlugin('WebKit built-in PDF', 'Portable Document Format'),
+  ];
+  def(navigator, 'plugins', () => {
+    const arr = plugins.slice();
+    arr.item = (i) => arr[i];
+    arr.namedItem = (n) => arr.find(p => p.name === n) || null;
+    arr.refresh = () => {};
+    return arr;
+  });
+  def(navigator, 'mimeTypes', () => {
+    const arr = [{ type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format' }];
+    arr.item = (i) => arr[i];
+    arr.namedItem = (n) => arr.find(m => m.type === n) || null;
+    return arr;
+  });
+
+  // 4. window.chrome 完整对象
+  if (!window.chrome) window.chrome = {};
+  window.chrome.runtime = window.chrome.runtime || {};
+  window.chrome.app = window.chrome.app || {
+    isInstalled: false,
+    InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' },
+    RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' },
+  };
+  window.chrome.csi = window.chrome.csi || function () { return {}; };
+  window.chrome.loadTimes = window.chrome.loadTimes || function () { return {}; };
+
+  // 5. permissions.query
+  try {
+    const orig = window.navigator.permissions && window.navigator.permissions.query;
+    if (orig) {
+      window.navigator.permissions.query = (p) => (
+        p && p.name === 'notifications'
+          ? Promise.resolve({ state: Notification.permission })
+          : orig(p)
+      );
+    }
+  } catch (e) {}
+
+  // 6. 硬件 / 平台指纹
+  def(navigator, 'hardwareConcurrency', () => 8);
+  def(navigator, 'deviceMemory', () => 8);
+  def(navigator, 'platform', () => 'Win32');
+  def(navigator, 'maxTouchPoints', () => 0);
+  def(navigator, 'vendor', () => 'Google Inc.');
+
+  // 7. userAgentData（Client Hints，与 UA 一致）
+  try {
+    const uaData = {
+      brands: [
+        { brand: 'Chromium', version: '124' },
+        { brand: 'Google Chrome', version: '124' },
+        { brand: 'Not-A.Brand', version: '99' },
+      ],
+      mobile: false,
+      platform: 'Windows',
+      getHighEntropyValues: () => Promise.resolve({
+        architecture: 'x86', bitness: '64', model: '', platform: 'Windows',
+        platformVersion: '15.0.0', uaFullVersion: '124.0.0.0',
+        fullVersionList: [
+          { brand: 'Chromium', version: '124.0.0.0' },
+          { brand: 'Google Chrome', version: '124.0.0.0' },
+          { brand: 'Not-A.Brand', version: '99.0.0.0' },
+        ],
+      }),
+      toJSON: () => ({}),
+    };
+    def(navigator, 'userAgentData', () => uaData);
+  } catch (e) {}
+
+  // 8. WebGL vendor/renderer 伪装
+  const spoofWebGL = (proto) => {
+    if (!proto) return;
+    const getParam = proto.getParameter;
+    proto.getParameter = function (p) {
+      if (p === 37445) return 'Google Inc. (Intel)';
+      if (p === 37446) return 'ANGLE (Intel, Intel(R) UHD Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)';
+      return getParam.apply(this, [p]);
+    };
+  };
+  try { spoofWebGL(WebGLRenderingContext.prototype); } catch (e) {}
+  try { spoofWebGL(window.WebGL2RenderingContext && WebGL2RenderingContext.prototype); } catch (e) {}
+
+  // 9. 移除 cdc_ 自动化痕迹（ChromeDriver 注入物）
+  try {
+    for (const k of Object.keys(window)) {
+      if (/^[$_]?cdc_/.test(k) || k.includes('cdc_adoQpoasnfa76pfcZLmcfl')) {
+        try { delete window[k]; } catch (e) {}
+      }
+    }
+  } catch (e) {}
+
+  // 10. headless 下 outerWidth/Height 常为 0
+  try {
+    if (window.outerWidth === 0) def(window, 'outerWidth', () => window.innerWidth);
+    if (window.outerHeight === 0) def(window, 'outerHeight', () => window.innerHeight + 85);
+  } catch (e) {}
+
+  // 11. navigator.connection（部分检测会查）
+  try {
+    def(navigator, 'connection', () => ({ effectiveType: '4g', rtt: 50, downlink: 10, saveData: false }));
+  } catch (e) {}
+})();
 "#;
 
-/// 已知 JS 重度渲染 / 登录墙站点的 host 关键字。
+/// 已知 JS 重度渲染 / 登录墙站点的 host 关键字（含 MediaCrawler 目标平台）。
 fn host_needs_render(url: &str) -> bool {
     let u = url.to_lowercase();
-    u.contains("zhihu.com")
-        || u.contains("xiaohongshu.com")
-        || u.contains("bilibili.com")
-        || u.contains("mp.weixin.qq.com")
-        || u.contains("weibo.com")
-        || u.contains("twitter.com")
-        || u.contains("x.com")
+    [
+        "zhihu.com",
+        "xiaohongshu.com",
+        "xhscdn.com",
+        "douyin.com",
+        "kuaishou.com",
+        "bilibili.com",
+        "mp.weixin.qq.com",
+        "weibo.com",
+        "weibo.cn",
+        "tieba.baidu.com",
+        "twitter.com",
+        "x.com",
+        "instagram.com",
+        "facebook.com",
+        "medium.com",
+        "quora.com",
+    ]
+    .iter()
+    .any(|h| u.contains(h))
+}
+
+/// 判断渲染后的页面是否是登录墙 / 验证码 / 风控页。
+fn looks_like_block_page(html: &str) -> bool {
+    let l = html.to_lowercase();
+    // 文本越短越可疑；但只要命中明确标记即判为受阻。
+    let markers = [
+        "captcha",
+        "recaptcha",
+        "hcaptcha",
+        "cf-challenge",
+        "cf-browser-verification",
+        "just a moment",
+        "checking your browser",
+        "unusual traffic",
+        "security check",
+        "verify you are human",
+        "滑动验证",
+        "滑块验证",
+        "完成安全验证",
+        "请完成验证",
+        "拖动滑块",
+        "访问验证",
+        "人机验证",
+        "环境异常",
+        "请登录",
+        "登录后查看",
+        "登录后继续",
+        "扫码登录",
+        "sign in to continue",
+        "log in to continue",
+        "please log in",
+        "please sign in",
+    ];
+    markers.iter().any(|m| l.contains(m))
 }
 
 /// 判断 HTTP 抓到的 body 是否"太薄"（疑似 JS 空壳），需要升级渲染。
@@ -213,18 +374,40 @@ async fn launch_browser(profile: &str, headless: bool) -> Result<Browser, String
         .await
         .map_err(|e| format!("create profile dir failed: {e}"))?;
 
+    // 现代 Chrome UA（不含 "HeadlessChrome"，避免最直接的指纹）。
+    let ua = "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+        (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
     let mut builder = BrowserConfig::builder()
         .chrome_executable(exec)
         .user_data_dir(user_data)
         .window_size(1366, 900)
         .request_timeout(Duration::from_secs(30))
+        // ===== 反自动化检测旗标集合（参考 undetected-chromedriver / Crawl4AI）=====
         .arg("--disable-blink-features=AutomationControlled")
-        .arg("--disable-gpu")
+        .arg("--disable-features=IsolateOrigins,site-per-process,AutomationControlled,Translate,TranslateUI,OptimizationHints")
+        .arg("--disable-infobars")
+        .arg("--disable-popup-blocking")
+        .arg("--disable-notifications")
+        .arg("--disable-background-timer-throttling")
+        .arg("--disable-backgrounding-occluded-windows")
+        .arg("--disable-renderer-backgrounding")
+        .arg("--disable-ipc-flooding-protection")
+        .arg("--no-service-autorun")
+        .arg("--password-store=basic")
+        .arg("--use-mock-keychain")
         .arg("--no-first-run")
         .arg("--no-default-browser-check")
+        .arg("--disable-gpu")
         .arg("--disable-dev-shm-usage")
         .arg("--lang=zh-CN")
-        .arg("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
+        .arg("--window-size=1366,900")
+        .arg(ua);
+
+    // 可选代理（IP 轮换）：环境变量 GUAXI_RENDER_PROXY=http://host:port 或 socks5://...
+    if let Some(proxy) = render_proxy() {
+        builder = builder.arg(format!("--proxy-server={}", proxy));
+    }
 
     if headless {
         builder = builder.new_headless_mode();
@@ -247,6 +430,19 @@ async fn launch_browser(profile: &str, headless: bool) -> Result<Browser, String
     });
 
     Ok(browser)
+}
+
+/// 可选渲染代理（环境变量）。后续可扩展为按 feed 配置。
+fn render_proxy() -> Option<String> {
+    for var in ["GUAXI_RENDER_PROXY", "GUAXI_HTTP_PROXY"] {
+        if let Ok(p) = std::env::var(var) {
+            let p = p.trim().to_string();
+            if !p.is_empty() {
+                return Some(p);
+            }
+        }
+    }
+    None
 }
 
 /// 获取一个可用的共享浏览器（headless 抓取用，profile 固定）。
@@ -328,26 +524,34 @@ async fn render_with_chrome(url: &str, profile: &str) -> Result<RenderedPage, St
         return Err(e);
     }
 
-    // 自动滚动触发懒加载（最多几屏），并给网络一点时间。
+    // 人类行为模拟：随机步长滚动 + 随机鼠标移动 + 随机间隔，触发懒加载并降低风控。
     let _ = page
         .evaluate(
             r#"
             new Promise((resolve) => {
+              const rand = (a, b) => a + Math.random() * (b - a);
               let total = 0;
-              const step = 800;
-              const timer = setInterval(() => {
-                window.scrollBy(0, step);
-                total += step;
-                if (total >= document.body.scrollHeight || total > 8000) {
-                  clearInterval(timer);
-                  resolve(true);
-                }
-              }, 200);
+              const maxScroll = Math.min((document.body && document.body.scrollHeight) || 4000, 12000);
+              const tick = () => {
+                try {
+                  window.scrollBy(0, rand(280, 900));
+                  total += 600;
+                  const ev = new MouseEvent('mousemove', {
+                    clientX: rand(40, (window.innerWidth || 1200) - 40),
+                    clientY: rand(40, (window.innerHeight || 800) - 40),
+                    bubbles: true,
+                  });
+                  document.dispatchEvent(ev);
+                } catch (e) {}
+                if (total >= maxScroll) { try { window.scrollTo(0, 0); } catch (e) {} resolve(true); }
+                else setTimeout(tick, rand(120, 360));
+              };
+              setTimeout(tick, rand(200, 500));
             })
             "#,
         )
         .await;
-    tokio::time::sleep(Duration::from_millis(600)).await;
+    tokio::time::sleep(Duration::from_millis(700)).await;
 
     let final_url = page.url().await.ok().flatten().unwrap_or_else(|| url.to_string());
     let html = page.content().await.map_err(|e| format!("content: {e}"))?;
@@ -355,10 +559,16 @@ async fn render_with_chrome(url: &str, profile: &str) -> Result<RenderedPage, St
 
     note_headless_success();
 
+    let blocked = looks_like_block_page(&html);
+    if blocked {
+        warn!("flipboard_render: page looks blocked (login/captcha): {}", url);
+    }
+
     Ok(RenderedPage {
         html,
         final_url,
         mode: "chrome",
+        blocked,
     })
 }
 
@@ -382,6 +592,7 @@ pub async fn fetch_page(
                             html: body,
                             final_url,
                             mode: "http",
+                            blocked: false,
                         });
                     }
                     // 太薄 → 升级渲染；渲染失败则退回 HTTP body。
@@ -389,10 +600,12 @@ pub async fn fetch_page(
                         Ok(rendered) => return Ok(rendered),
                         Err(e) => {
                             warn!("flipboard_render: chrome render failed ({}), fallback to http body", e);
+                            let blocked = looks_like_block_page(&body);
                             return Ok(RenderedPage {
                                 html: body,
                                 final_url,
                                 mode: "http",
+                                blocked,
                             });
                         }
                     }
@@ -405,17 +618,37 @@ pub async fn fetch_page(
     render_with_chrome(url, profile).await
 }
 
+/// 关闭并清空共享 Chrome 实例（登录前后调用，避免 user_data_dir 被占用，
+/// 并让下次抓取以最新 cookie 重新启动）。
+async fn reset_shared_browser() {
+    if let Some(cell) = BROWSER.get() {
+        let mut guard = cell.lock().await;
+        if let Some(old) = guard.take() {
+            let mut b = old.browser;
+            let _ = b.close().await;
+        }
+    }
+}
+
 /// 以可见窗口打开登录页，供用户手动登录一次；cookie 落盘到该 profile 的 user_data_dir。
 /// 返回后即关闭浏览器实例（会话已持久化在磁盘）。
+///
+/// 关键：登录用的可见实例与后续无头抓取实例**共用同一 user_data_dir**，Chrome 不允许
+/// 两个实例同时占用同一 profile。因此登录前先关掉共享无头实例（释放占用），登录后再关掉
+/// 可见实例并清空共享句柄——下次抓取会以登录后的最新 cookie 重新启动。这正是 MediaCrawler
+/// “持久化登录上下文 + 复用真实页面”的做法。
 pub async fn open_login_window(profile: &str, login_url: &str) -> Result<(), String> {
+    // 释放共享无头实例对该 profile 的占用。
+    reset_shared_browser().await;
+
     let mut browser = launch_browser(profile, false).await?;
     let page = browser
         .new_page(login_url)
         .await
         .map_err(|e| format!("new_page: {e}"))?;
     let _ = page.add_init_script(STEALTH_SCRIPT).await;
-    // 给用户充足时间登录（最多 5 分钟）；窗口可见，用户登录后会话即持久化。
-    // 这里不阻塞太久——前端可在用户确认后调用一次抓取来验证。
+    // 给用户充足时间登录（最多 5 分钟）；窗口可见，用户可扫码/输密码/过验证码，
+    // 登录后会话即持久化到 user_data_dir。
     let _ = tokio::time::timeout(Duration::from_secs(300), async {
         // 轮询：直到页面 URL 变化（登录跳转）或超时。
         let start_url = page.url().await.ok().flatten().unwrap_or_default();
@@ -431,6 +664,9 @@ pub async fn open_login_window(profile: &str, login_url: &str) -> Result<(), Str
     })
     .await;
     let _ = browser.close().await;
+
+    // 清空共享句柄，确保下次抓取以登录后的最新 cookie 重新启动。
+    reset_shared_browser().await;
     Ok(())
 }
 

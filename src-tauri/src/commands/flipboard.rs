@@ -4308,7 +4308,26 @@ async fn process_crawl_item(
     )
     .await;
     let (html, render_mode) = match rendered {
-        Ok(page) => (page.html, page.mode),
+        Ok(page) => {
+            if page.blocked {
+                // 命中登录墙/验证码：标记队列并记录健康，提示用户为该源登录。
+                if let Ok(conn) = open_article_cache_db() {
+                    mark_crawl_error(
+                        &conn,
+                        &feed.id,
+                        &page_url,
+                        "blocked: 需要登录或人工验证（请为该源点击\"登录\"）",
+                    );
+                }
+                record_feed_health_failure(
+                    feed,
+                    "blocked",
+                    "命中登录墙/验证码，请为该源登录后重试".to_string(),
+                );
+                return None;
+            }
+            (page.html, page.mode)
+        }
         Err(e) => {
             if let Ok(conn) = open_article_cache_db() {
                 mark_crawl_error(&conn, &feed.id, &page_url, &format!("render: {}", e));
