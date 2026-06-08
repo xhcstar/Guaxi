@@ -20,6 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::{command, AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tokio::sync::Semaphore;
+use futures_util::StreamExt;
 use tokio::time::{sleep, Duration};
 use tracing::{error, info, warn};
 use url::Url;
@@ -314,6 +315,88 @@ fn save_articles_to_cache(feed_id: &str, items: &[Article]) -> Result<(), String
         .map_err(|e| e.to_string())?;
     }
     tx.commit().map_err(|e| e.to_string())
+}
+
+/// 把深解析(hydrate)后的完整内容回写到所有匹配该 URL 的缓存行（按 url 更新，
+/// 无需 feed_id）。让"二次打开秒开"且卡片列表后续直接拿到完整图文。
+fn persist_hydrated_article(a: &Article) -> Result<(), String> {
+    let url = a.url.trim();
+    if url.is_empty() {
+        return Ok(());
+    }
+    let conn = open_article_cache_db()?;
+    let content_images_json =
+        serde_json::to_string(&a.content_images).unwrap_or_else(|_| "[]".to_string());
+    let tags_json = serde_json::to_string(&a.tags).unwrap_or_else(|_| "[]".to_string());
+    conn.execute(
+        r#"
+        UPDATE article_cache SET
+            title = ?2,
+            description = ?3,
+            content = ?4,
+            image_url = ?5,
+            category = ?6,
+            author = ?7,
+            clean_content_html = ?8,
+            clean_content_markdown = ?9,
+            lead_image = ?10,
+            content_images = ?11,
+            summary = ?12,
+            render_mode = ?13,
+            relevance_score = CASE WHEN ?14 >= 0 THEN ?14 ELSE relevance_score END,
+            tags = CASE WHEN ?15 = '[]' THEN tags ELSE ?15 END
+        WHERE url = ?1
+        "#,
+        params![
+            url,
+            a.title,
+            a.description,
+            a.content,
+            a.image_url,
+            a.category,
+            a.author,
+            a.clean_content_html,
+            a.clean_content_markdown,
+            a.lead_image,
+            content_images_json,
+            a.summary,
+            a.render_mode,
+            a.relevance_score,
+            tags_json,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 后台预热：对一批文章里"内容薄 + 相关性高"的前 max 篇做深解析(hydrate)并就地替换、
+/// 回写缓存。每个 feed 每 tick 仅预热少量，避免拖慢调度。
+async fn preheat_thin_articles(list: &mut [Article], feed: &FeedSource, max: usize) {
+    if max == 0 || list.is_empty() {
+        return;
+    }
+    let interest = feed.interest_profile.as_deref();
+    let mut candidates: Vec<usize> = list
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| {
+            a.clean_content_html.trim().is_empty() && a.content.trim().chars().count() < 200
+        })
+        .map(|(i, _)| i)
+        .collect();
+    // 相关性高者优先预热。
+    candidates.sort_by_key(|&i| std::cmp::Reverse(local_relevance_score(&list[i], interest)));
+    for &i in candidates.iter().take(max) {
+        match hydrate_article_readable_content(&list[i]).await {
+            Ok(enriched) => {
+                let _ = persist_hydrated_article(&enriched);
+                list[i] = enriched;
+            }
+            Err(e) => {
+                warn!("flipboard: preheat hydrate failed for {}: {}", list[i].url, e);
+            }
+        }
+    }
 }
 
 fn cleanup_old_cached_articles_if_due(now: i64) -> Result<(), String> {
@@ -1560,7 +1643,11 @@ pub async fn get_articles(
 }
 
 #[command]
-pub async fn get_article_detail(id: String, url: Option<String>) -> Result<Article, String> {
+pub async fn get_article_detail(
+    id: String,
+    url: Option<String>,
+    force: Option<bool>,
+) -> Result<Article, String> {
     let id_trim = id.trim().to_string();
     let url_trim = url
         .as_deref()
@@ -1596,7 +1683,11 @@ pub async fn get_article_detail(id: String, url: Option<String>) -> Result<Artic
 
     let content = base_article.content.trim();
     let desc = base_article.description.trim();
-    let need_hydrate = content.is_empty() || content.len() < 180 || (!desc.is_empty() && content == desc);
+    let force_reparse = force.unwrap_or(false);
+    let need_hydrate = force_reparse
+        || content.is_empty()
+        || content.len() < 180
+        || (!desc.is_empty() && content == desc);
 
     if !need_hydrate {
         return Ok(base_article);
@@ -1604,11 +1695,17 @@ pub async fn get_article_detail(id: String, url: Option<String>) -> Result<Artic
 
     match hydrate_article_readable_content(&base_article).await {
         Ok(enriched) => {
-            let mut lock = ARTICLES.lock().unwrap();
-            if let Some(slot) = lock.iter_mut().find(|a| a.id == id_trim || a.url == enriched.url) {
-                *slot = enriched.clone();
-            } else {
-                lock.push(enriched.clone());
+            {
+                let mut lock = ARTICLES.lock().unwrap();
+                if let Some(slot) = lock.iter_mut().find(|a| a.id == id_trim || a.url == enriched.url) {
+                    *slot = enriched.clone();
+                } else {
+                    lock.push(enriched.clone());
+                }
+            }
+            // 回写缓存：二次打开秒开 + 卡片列表后续直接有完整图文。
+            if let Err(e) = persist_hydrated_article(&enriched) {
+                warn!("flipboard: persist hydrated article failed: {}", e);
             }
             Ok(enriched)
         }
@@ -1640,11 +1737,16 @@ pub async fn search_articles(
                 }
             }
 
-            // 搜索匹配
+            // 搜索匹配（覆盖标题/摘要/正文/来源/LLM摘要/标签）。
             article.title.to_lowercase().contains(&query_lower)
                 || article.description.to_lowercase().contains(&query_lower)
                 || article.content.to_lowercase().contains(&query_lower)
                 || article.source.to_lowercase().contains(&query_lower)
+                || article.summary.to_lowercase().contains(&query_lower)
+                || article
+                    .tags
+                    .iter()
+                    .any(|t| t.to_lowercase().contains(&query_lower))
         })
         .cloned()
         .collect();
@@ -3759,14 +3861,17 @@ impl Default for CrawlConfig {
     fn default() -> Self {
         CrawlConfig {
             max_depth: 3,
-            max_pages_per_tick: 8,
+            max_pages_per_tick: 16,
             max_queue: 2000,
             same_domain_only: true,
-            rate_delay_ms: 1200,
+            rate_delay_ms: 400,
             respect_robots: true,
         }
     }
 }
+
+/// 单次 tick 内并行抓取/解析的页面数（在 rate_delay 之上再叠加并发以提速）。
+const CRAWL_PAGE_CONCURRENCY: usize = 4;
 
 impl CrawlConfig {
     /// 从 feed.crawl_cfg(JSON) 解析配置，缺省回退默认。
@@ -4158,151 +4263,184 @@ async fn crawl_tick_for_feed(feed: &FeedSource) -> Result<Vec<Article>, String> 
         return Ok(Vec::new());
     }
 
-    let mut produced: Vec<Article> = Vec::new();
-    for item in items {
-        // 限速。
-        if cfg.rate_delay_ms > 0 {
-            sleep(Duration::from_millis(cfg.rate_delay_ms)).await;
-        }
-        let _ = cfg.respect_robots; // robots 在 sitemap 阶段已用；逐页校验在 P7 补强。
-
-        let page_url = item.url.clone();
-        // 混合抓取：HTTP 优先，JS 站/空壳升级无头 Chrome 渲染。
-        let render_profile = feed
-            .render_profile
-            .clone()
-            .unwrap_or_else(|| feed.id.clone());
-        let rendered = crate::commands::flipboard_render::fetch_page(
-            &HTTP_CLIENT,
-            &page_url,
-            false,
-            &render_profile,
-        )
+    // 3. 并发处理本批页面（在 rate_delay 之上再叠加 CRAWL_PAGE_CONCURRENCY 并发提速）。
+    let render_profile = feed
+        .render_profile
+        .clone()
+        .unwrap_or_else(|| feed.id.clone());
+    let base_ref = &base;
+    let cfg_ref = &cfg;
+    let profile_ref = render_profile.as_str();
+    let produced: Vec<Article> = futures_util::stream::iter(items.into_iter())
+        .map(|item| async move {
+            process_crawl_item(feed, base_ref, cfg_ref, profile_ref, item).await
+        })
+        .buffer_unordered(CRAWL_PAGE_CONCURRENCY)
+        .filter_map(|x| async move { x })
+        .collect()
         .await;
-        let (html, render_mode) = match rendered {
-            Ok(page) => (page.html, page.mode),
-            Err(e) => {
-                let conn = open_article_cache_db()?;
-                mark_crawl_error(&conn, &feed.id, &page_url, &format!("render: {}", e));
-                continue;
-            }
-        };
-
-        // 入队页内链接（BFS 扩展）。
-        let links = extract_page_links(&html, &base);
-        {
-            let conn = open_article_cache_db()?;
-            enqueue_links(&conn, &feed.id, item.depth, &base, &links, &cfg);
-        }
-
-        // 文章页才抽取正文；导航页只扩链接。
-        if item.kind_is_article() {
-            let base_url = page_url.clone();
-            let html_for_extract = html.clone();
-            let extracted = tokio::task::spawn_blocking(move || {
-                crate::commands::flipboard_extract::extract(&html_for_extract, &base_url)
-            })
-            .await
-            .map_err(|e| format!("extract join: {e}"))?;
-
-            match extracted {
-                Ok(ex) if !ex.clean_html.trim().is_empty() => {
-                    let mut article = Article {
-                        id: format!("crawl-{:x}", md5_like_hash(&page_url)),
-                        title: ex.title.clone().unwrap_or_else(|| "无标题".to_string()),
-                        description: ex
-                            .excerpt
-                            .clone()
-                            .unwrap_or_else(|| trim_to_chars(&ex.plain_text, 180)),
-                        content: ex.plain_text.clone(),
-                        source: feed.name.clone(),
-                        url: page_url.clone(),
-                        image_url: ex.lead_image.clone().or_else(|| ex.images.first().cloned()),
-                        published_at: ex
-                            .published
-                            .clone()
-                            .unwrap_or_else(|| Utc::now().to_rfc3339()),
-                        category: feed.category.clone(),
-                        author: ex.byline.clone(),
-                        clean_content_html: ex.clean_html.clone(),
-                        clean_content_markdown: ex.markdown.clone(),
-                        lead_image: ex.lead_image.clone(),
-                        content_images: ex.images.clone(),
-                        render_mode: format!("{}+{}", render_mode, ex.engine),
-                        ..Default::default()
-                    };
-                    article.category = classify_category_by_text_and_url(
-                        &article.category,
-                        &article.title,
-                        &article.description,
-                        &article.url,
-                        &article.source,
-                    );
-
-                    // LLM 增强（可选）：摘要 / 标签 / 相关性 / 二次清洗。
-                    if feed.llm_enhance && crate::commands::flipboard_llm::has_budget() {
-                        let interest = feed.interest_profile.clone().unwrap_or_default();
-                        if let Some(llm) = crate::commands::flipboard_llm::enhance(
-                            &article.title,
-                            &article.clean_content_markdown,
-                            &interest,
-                        )
-                        .await
-                        {
-                            if !llm.summary.is_empty() {
-                                article.summary = llm.summary;
-                            }
-                            if !llm.tags.is_empty() {
-                                article.tags = llm.tags;
-                            }
-                            if llm.relevance >= 0 {
-                                article.relevance_score = llm.relevance;
-                            }
-                            if let Some(cleaned) = llm.cleaned_markdown {
-                                article.clean_content_markdown = cleaned.clone();
-                                article.clean_content_html =
-                                    crate::commands::flipboard_extract::markdown_to_html(
-                                        &cleaned, &page_url,
-                                    );
-                            }
-                        }
-                    }
-                    // 本地相关性兜底（LLM 未给分时）。
-                    if article.relevance_score < 0 {
-                        article.relevance_score =
-                            local_relevance_score(&article, feed.interest_profile.as_deref());
-                    }
-                    // 阈值过滤。
-                    if feed.relevance_threshold > 0
-                        && article.relevance_score >= 0
-                        && article.relevance_score < feed.relevance_threshold
-                    {
-                        let conn = open_article_cache_db()?;
-                        mark_crawl_done(&conn, &feed.id, &page_url);
-                        continue;
-                    }
-
-                    produced.push(article);
-                    let conn = open_article_cache_db()?;
-                    mark_crawl_done(&conn, &feed.id, &page_url);
-                }
-                Ok(_) => {
-                    let conn = open_article_cache_db()?;
-                    // 抽取为空：标 done（非文章页），不报错。
-                    mark_crawl_done(&conn, &feed.id, &page_url);
-                }
-                Err(e) => {
-                    let conn = open_article_cache_db()?;
-                    mark_crawl_error(&conn, &feed.id, &page_url, &e);
-                }
-            }
-        } else {
-            let conn = open_article_cache_db()?;
-            mark_crawl_done(&conn, &feed.id, &page_url);
-        }
-    }
 
     Ok(produced)
+}
+
+/// 处理单个爬取页面：渲染→抽取→相关性/LLM→入队链接→标记队列状态。
+/// 自行处理所有错误（标记 crawl error），返回 None；产出文章时返回 Some(Article)。
+/// 不跨 await 持有 SQLite 连接（!Sync），保证 future Send，可并发。
+async fn process_crawl_item(
+    feed: &FeedSource,
+    base: &Url,
+    cfg: &CrawlConfig,
+    render_profile: &str,
+    item: CrawlItem,
+) -> Option<Article> {
+    if cfg.rate_delay_ms > 0 {
+        sleep(Duration::from_millis(cfg.rate_delay_ms)).await;
+    }
+    let _ = cfg.respect_robots; // robots 在 sitemap 阶段已用；逐页校验后续补强。
+
+    let page_url = item.url.clone();
+    // 混合抓取：HTTP 优先，JS 站/空壳升级无头 Chrome 渲染。
+    let rendered = crate::commands::flipboard_render::fetch_page(
+        &HTTP_CLIENT,
+        &page_url,
+        false,
+        render_profile,
+    )
+    .await;
+    let (html, render_mode) = match rendered {
+        Ok(page) => (page.html, page.mode),
+        Err(e) => {
+            if let Ok(conn) = open_article_cache_db() {
+                mark_crawl_error(&conn, &feed.id, &page_url, &format!("render: {}", e));
+            }
+            return None;
+        }
+    };
+
+    // 入队页内链接（BFS 扩展）。
+    let links = extract_page_links(&html, base);
+    if let Ok(conn) = open_article_cache_db() {
+        enqueue_links(&conn, &feed.id, item.depth, base, &links, cfg);
+    }
+
+    // 导航页只扩链接、不抽正文。
+    if !item.kind_is_article() {
+        if let Ok(conn) = open_article_cache_db() {
+            mark_crawl_done(&conn, &feed.id, &page_url);
+        }
+        return None;
+    }
+
+    let base_url = page_url.clone();
+    let html_for_extract = html.clone();
+    let extracted = match tokio::task::spawn_blocking(move || {
+        crate::commands::flipboard_extract::extract(&html_for_extract, &base_url)
+    })
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            if let Ok(conn) = open_article_cache_db() {
+                mark_crawl_error(&conn, &feed.id, &page_url, &format!("extract join: {e}"));
+            }
+            return None;
+        }
+    };
+
+    match extracted {
+        Ok(ex) if !ex.clean_html.trim().is_empty() => {
+            let mut article = Article {
+                id: format!("crawl-{:x}", md5_like_hash(&page_url)),
+                title: ex.title.clone().unwrap_or_else(|| "无标题".to_string()),
+                description: ex
+                    .excerpt
+                    .clone()
+                    .unwrap_or_else(|| trim_to_chars(&ex.plain_text, 180)),
+                content: ex.plain_text.clone(),
+                source: feed.name.clone(),
+                url: page_url.clone(),
+                image_url: ex.lead_image.clone().or_else(|| ex.images.first().cloned()),
+                published_at: ex
+                    .published
+                    .clone()
+                    .unwrap_or_else(|| Utc::now().to_rfc3339()),
+                category: feed.category.clone(),
+                author: ex.byline.clone(),
+                clean_content_html: ex.clean_html.clone(),
+                clean_content_markdown: ex.markdown.clone(),
+                lead_image: ex.lead_image.clone(),
+                content_images: ex.images.clone(),
+                render_mode: format!("{}+{}", render_mode, ex.engine),
+                ..Default::default()
+            };
+            article.category = classify_category_by_text_and_url(
+                &article.category,
+                &article.title,
+                &article.description,
+                &article.url,
+                &article.source,
+            );
+
+            // LLM 增强（可选）：摘要 / 标签 / 相关性 / 二次清洗。
+            if feed.llm_enhance && crate::commands::flipboard_llm::has_budget() {
+                let interest = feed.interest_profile.clone().unwrap_or_default();
+                if let Some(llm) = crate::commands::flipboard_llm::enhance(
+                    &article.title,
+                    &article.clean_content_markdown,
+                    &interest,
+                )
+                .await
+                {
+                    if !llm.summary.is_empty() {
+                        article.summary = llm.summary;
+                    }
+                    if !llm.tags.is_empty() {
+                        article.tags = llm.tags;
+                    }
+                    if llm.relevance >= 0 {
+                        article.relevance_score = llm.relevance;
+                    }
+                    if let Some(cleaned) = llm.cleaned_markdown {
+                        article.clean_content_markdown = cleaned.clone();
+                        article.clean_content_html =
+                            crate::commands::flipboard_extract::markdown_to_html(&cleaned, &page_url);
+                    }
+                }
+            }
+            // 本地相关性兜底（LLM 未给分时）。
+            if article.relevance_score < 0 {
+                article.relevance_score =
+                    local_relevance_score(&article, feed.interest_profile.as_deref());
+            }
+            // 阈值过滤。
+            if feed.relevance_threshold > 0
+                && article.relevance_score >= 0
+                && article.relevance_score < feed.relevance_threshold
+            {
+                if let Ok(conn) = open_article_cache_db() {
+                    mark_crawl_done(&conn, &feed.id, &page_url);
+                }
+                return None;
+            }
+
+            if let Ok(conn) = open_article_cache_db() {
+                mark_crawl_done(&conn, &feed.id, &page_url);
+            }
+            Some(article)
+        }
+        Ok(_) => {
+            if let Ok(conn) = open_article_cache_db() {
+                mark_crawl_done(&conn, &feed.id, &page_url);
+            }
+            None
+        }
+        Err(e) => {
+            if let Ok(conn) = open_article_cache_db() {
+                mark_crawl_error(&conn, &feed.id, &page_url, &e);
+            }
+            None
+        }
+    }
 }
 
 /// 轻量 URL 哈希，用于生成稳定的文章 id（非加密）。
@@ -4686,7 +4824,17 @@ pub async fn run_feed_scheduler_tick(
                     _ => t.clone(),
                 });
             }
-            let res = collect_articles_for_feed(&effective_feed).await;
+            let res = match collect_articles_for_feed(&effective_feed).await {
+                Ok(mut list) => {
+                    // 后台预热（两者结合模型）：非整站源对最相关的少量"内容薄"文章
+                    // 提前深解析，让用户点开即有现成全文。site_crawl 已产出全文，跳过。
+                    if effective_feed.source_type.trim().to_lowercase() != "site_crawl" {
+                        preheat_thin_articles(&mut list, &effective_feed, 2).await;
+                    }
+                    Ok(list)
+                }
+                Err(e) => Err(e),
+            };
             Ok::<(FeedSource, Result<Vec<Article>, String>), String>((feed, res))
         }));
     }
@@ -5173,7 +5321,7 @@ pub async fn create_kb_note_from_article_ids(
 
     let mut count = 0usize;
     for (idx, id) in article_ids.iter().enumerate() {
-        let article = get_article_detail(id.to_string(), None).await?;
+        let article = get_article_detail(id.to_string(), None, None).await?;
         if idx > 0 {
             md.push_str("\n---\n\n");
         }
@@ -5299,5 +5447,34 @@ pub async fn create_flipboard_feed_window(
     window.show().map_err(|e| format!("显示窗口失败: {}", e))?;
     window.set_focus().ok();
 
+    Ok(())
+}
+
+/// 在内置浏览器窗口里打开文章原网页（真实页面，人类友好浏览）。
+/// 复用各处已用的 WebviewWindowBuilder + External URL 模式。
+#[command]
+pub async fn open_article_in_browser(app: AppHandle, url: String) -> Result<(), String> {
+    let url = url.trim().to_string();
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err("无效的文章 URL".to_string());
+    }
+    let external = url
+        .parse()
+        .map_err(|e| format!("解析 URL 失败: {}", e))?;
+    let label = format!("article-browser-{:x}", md5_like_hash(&url));
+
+    if let Some(w) = app.get_webview_window(&label) {
+        w.show().ok();
+        w.set_focus().ok();
+        return Ok(());
+    }
+
+    let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(external))
+        .title(&url)
+        .inner_size(1100.0, 800.0)
+        .min_inner_size(820.0, 560.0)
+        .build()
+        .map_err(|e| format!("创建浏览器窗口失败: {}", e))?;
+    window.set_focus().ok();
     Ok(())
 }

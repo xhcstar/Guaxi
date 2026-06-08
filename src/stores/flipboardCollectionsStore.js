@@ -78,6 +78,13 @@ export const useFlipboardCollectionsStore = () => {
     if (!aid) return
     await load()
 
+    // 保留该文章旧条目的「收藏夹」标记（按 entry id），避免重新编辑笔记后丢失收藏。
+    const prevFavorites = new Map(
+      entries.value
+        .filter(e => String(e.articleId) === aid)
+        .map(e => [String(e.id), !!e.favorite])
+    )
+
     // 先移除该文章的旧条目，再写入当前卡片。
     entries.value = entries.value.filter(e => String(e.articleId) !== aid)
 
@@ -85,8 +92,9 @@ export const useFlipboardCollectionsStore = () => {
     for (const card of list) {
       const content = String(card?.content || '').trim()
       if (!content || content === '点击编辑内容...') continue
+      const entryId = `${aid}::${card.id}`
       entries.value.push({
-        id: `${aid}::${card.id}`,
+        id: entryId,
         articleId: aid,
         cardId: String(card.id || ''),
         title: String(card?.title || articleTitle || '未命名笔记'),
@@ -94,6 +102,7 @@ export const useFlipboardCollectionsStore = () => {
         sourceUrl: String(sourceUrl || ''),
         sourceTitle: String(articleTitle || ''),
         category: String(category || ''),
+        favorite: prevFavorites.get(entryId) || false,
         timestamp: card?.timestamp || new Date().toISOString()
       })
     }
@@ -105,6 +114,17 @@ export const useFlipboardCollectionsStore = () => {
     await load()
     entries.value = entries.value.filter(e => e.id !== entryId)
     await save()
+  }
+
+  /** 切换某条笔记的「收藏夹」标记（长久保留）。 */
+  const toggleFavorite = async (entryId) => {
+    await load()
+    const hit = entries.value.find(e => e.id === entryId)
+    if (hit) {
+      hit.favorite = !hit.favorite
+      await save()
+    }
+    return hit?.favorite || false
   }
 
   /** 生成带来源引用的 Markdown，供复制/插入主页编辑器。 */
@@ -137,14 +157,19 @@ export const useFlipboardCollectionsStore = () => {
     )
   })
 
+  /** 收藏夹：仅 favorite=true 的条目（在 filteredEntries 基础上再筛）。 */
+  const favoriteEntries = computed(() => filteredEntries.value.filter(e => !!e.favorite))
+
   store = {
     entries,
     searchQuery,
     filteredEntries,
+    favoriteEntries,
     load,
     save,
     syncArticleNotes,
     removeEntry,
+    toggleFavorite,
     buildMarkdown
   }
   return store

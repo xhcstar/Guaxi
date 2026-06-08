@@ -21,7 +21,7 @@
               </n-icon>
             </n-button>
           </template>
-          收藏/取消收藏
+          收藏文章/取消收藏
         </n-tooltip>
 
         <n-tooltip placement="bottom" trigger="hover">
@@ -53,7 +53,24 @@
               </n-icon>
             </n-button>
           </template>
-          用浏览器打开原文
+          在内置浏览器打开原网页
+        </n-tooltip>
+
+        <n-tooltip placement="bottom" trigger="hover">
+          <template #trigger>
+            <n-button
+              circle
+              size="small"
+              :loading="reparsing"
+              :disabled="!currentArticle?.url || reparsing"
+              @click="reparseArticle"
+            >
+              <n-icon>
+                <RefreshIcon />
+              </n-icon>
+            </n-button>
+          </template>
+          重新深解析（重新抓取完整图文）
         </n-tooltip>
 
         <n-tooltip placement="bottom" trigger="hover">
@@ -185,7 +202,8 @@ import {
   ShareSocialOutline,
   CloseOutline,
   DocumentTextOutline,
-  OpenOutline
+  OpenOutline,
+  RefreshOutline
 } from '@vicons/ionicons5'
 
 const BookmarkIcon = BookmarkOutline
@@ -193,6 +211,7 @@ const ShareIcon = ShareSocialOutline
 const CloseIcon = CloseOutline
 const DocumentTextIcon = DocumentTextOutline
 const OpenIcon = OpenOutline
+const RefreshIcon = RefreshOutline
 
 const props = defineProps({
   currentArticle: {
@@ -366,9 +385,29 @@ const openInBrowser = async () => {
   const url = String(props.currentArticle?.url || '').trim()
   if (!url) return
   try {
-    await openUrl(url)
+    // 优先在内置浏览器窗口打开真实网页（人类友好浏览）。
+    await store.openArticleInBrowser(url)
   } catch (error) {
-    message.error(`打开链接失败：${error?.message || error}`, { duration: 2500 })
+    // 退回系统浏览器。
+    try {
+      await openUrl(url)
+    } catch (e2) {
+      message.error(`打开链接失败：${e2?.message || e2}`, { duration: 2500 })
+    }
+  }
+}
+
+const reparsing = ref(false)
+const reparseArticle = async () => {
+  if (!props.currentArticle) return
+  reparsing.value = true
+  try {
+    await store.reparseArticle(props.currentArticle)
+    message.success('已重新深解析', { duration: 1500 })
+  } catch (error) {
+    message.error(`深解析失败：${error?.message || error}`, { duration: 2500 })
+  } finally {
+    reparsing.value = false
   }
 }
 

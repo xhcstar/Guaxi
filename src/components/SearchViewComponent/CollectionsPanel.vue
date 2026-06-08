@@ -1,8 +1,23 @@
 <template>
   <div class="collections-panel" :class="{ 'collections-panel-visible': visible }">
     <div class="collections-header">
-      <h3>我的收集</h3>
+      <h3>{{ activeTab === 'favorites' ? '收藏夹' : '我的收集' }}</h3>
       <n-button text size="small" @click="$emit('close')">关闭</n-button>
+    </div>
+
+    <div class="collections-tabs">
+      <n-button
+        size="tiny"
+        :type="activeTab === 'all' ? 'primary' : 'default'"
+        :tertiary="activeTab !== 'all'"
+        @click="activeTab = 'all'"
+      >全部笔记</n-button>
+      <n-button
+        size="tiny"
+        :type="activeTab === 'favorites' ? 'primary' : 'default'"
+        :tertiary="activeTab !== 'favorites'"
+        @click="activeTab = 'favorites'"
+      >收藏夹 ({{ favoriteCount }})</n-button>
     </div>
 
     <div class="collections-search">
@@ -21,9 +36,9 @@
 
     <n-scrollbar class="collections-body">
       <div v-if="!entries.length" class="collections-empty">
-        <n-empty size="small" description="还没有收集任何笔记">
+        <n-empty size="small" :description="activeTab === 'favorites' ? '收藏夹还是空的' : '还没有收集任何笔记'">
           <template #extra>
-            <span class="empty-tip">在文章里选中文字 → “+ 笔记”，即可收集到这里</span>
+            <span class="empty-tip">{{ activeTab === 'favorites' ? '在笔记卡片上点 ☆ 收藏，长久保留在这里' : '在文章里选中文字 → “+ 笔记”，即可收集到这里' }}</span>
           </template>
         </n-empty>
       </div>
@@ -37,7 +52,17 @@
         :bordered="true"
       >
         <template #header-extra>
-          <span class="collection-cat" v-if="entry.category">{{ entry.category }}</span>
+          <div class="collection-header-extra">
+            <span class="collection-cat" v-if="entry.category">{{ entry.category }}</span>
+            <n-button
+              text
+              size="small"
+              :title="entry.favorite ? '取消收藏' : '加入收藏夹'"
+              @click="toggleFavorite(entry)"
+            >
+              <span :class="['fav-star', { 'fav-on': entry.favorite }]">{{ entry.favorite ? '★' : '☆' }}</span>
+            </n-button>
+          </div>
         </template>
 
         <div class="collection-content">{{ truncate(entry.content) }}</div>
@@ -66,7 +91,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { NInput, NIcon, NScrollbar, NCard, NButton, NText, NEmpty, useMessage } from 'naive-ui'
 import { SearchOutline as SearchIcon, LinkOutline as LinkIcon } from '@vicons/ionicons5'
 import { useFlipboardCollectionsStore } from '../../stores/flipboardCollectionsStore.js'
@@ -87,7 +112,18 @@ const collections = useFlipboardCollectionsStore()
 const editorStore = useEditorStore()
 const message = useMessage()
 
-const entries = computed(() => collections.filteredEntries.value)
+const activeTab = ref('all') // 'all' | 'favorites'
+const entries = computed(() =>
+  activeTab.value === 'favorites'
+    ? collections.favoriteEntries.value
+    : collections.filteredEntries.value
+)
+const favoriteCount = computed(() => collections.favoriteEntries.value.length)
+
+const toggleFavorite = async (entry) => {
+  const on = await collections.toggleFavorite(entry.id)
+  message.success(on ? '已加入收藏夹' : '已移出收藏夹', { duration: 1000 })
+}
 
 const truncate = (text) => {
   const s = String(text || '')
@@ -176,6 +212,28 @@ onMounted(() => {
 .collections-search {
   padding: 10px 12px;
   border-bottom: 1px solid var(--guaxi-border, #e5e7eb);
+}
+
+.collections-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px 0;
+}
+
+.collection-header-extra {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fav-star {
+  font-size: 16px;
+  color: var(--guaxi-text-secondary, #94a3b8);
+  line-height: 1;
+}
+
+.fav-star.fav-on {
+  color: #f0a020;
 }
 
 .collections-body {

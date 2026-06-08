@@ -327,7 +327,7 @@ export const useFlipboardStore = () => {
 
   // 获取单个文章详情
   // 立即用列表已有数据打开面板，正文在后台 hydrate 完成后再替换，避免“点击无反应”。
-  const fetchArticleDetail = async (articleRef) => {
+  const fetchArticleDetail = async (articleRef, force = false) => {
     const articleId = typeof articleRef === 'string' ? articleRef : String(articleRef?.id || '')
     const articleUrl = typeof articleRef === 'string' ? null : String(articleRef?.url || '').trim() || null
 
@@ -341,7 +341,7 @@ export const useFlipboardStore = () => {
     isHydratingDetail.value = true
     const fetchToken = ++activeDetailToken
     try {
-      const data = await invoke('get_article_detail', { id: articleId, url: articleUrl })
+      const data = await invoke('get_article_detail', { id: articleId, url: articleUrl, force: !!force })
       // 仅当用户仍停留在同一篇文章时才覆盖，避免快速切换时旧请求回填。
       if (fetchToken === activeDetailToken) {
         currentArticle.value = data
@@ -356,6 +356,22 @@ export const useFlipboardStore = () => {
       if (fetchToken === activeDetailToken) {
         isHydratingDetail.value = false
       }
+    }
+  }
+
+  // 重新深解析当前文章（强制 re-hydrate）
+  const reparseArticle = async (articleRef) => {
+    return fetchArticleDetail(articleRef, true)
+  }
+
+  // 在内置浏览器窗口打开原网页
+  const openArticleInBrowser = async (url) => {
+    try {
+      await invoke('open_article_in_browser', { url })
+      return true
+    } catch (error) {
+      console.error('FlipboardStore: openArticleInBrowser failed:', error)
+      throw error
     }
   }
 
@@ -797,6 +813,8 @@ export const useFlipboardStore = () => {
     fetchArticles,
     fetchTopicKnowledge,
     fetchArticleDetail,
+    reparseArticle,
+    openArticleInBrowser,
     searchArticles,
     searchArticlesLocal,
     fetchCategories,

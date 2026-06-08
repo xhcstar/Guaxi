@@ -100,6 +100,9 @@ const PYTHON_RUNTIME_RECOMMENDED_PACKAGES: &[&str] = &[
     "pyarrow",
     "duckdb",
     "polars",
+    // Flipboard 正文抽取金标准引擎：默认安装，让"收集完整图文"开箱即用；
+    // 未装时 flipboard_extract 也会后台自动 pip 安装并临时降级到 Rust scraper。
+    "trafilatura",
 ];
 const PYTHON_RUNTIME_BOOTSTRAP_PACKAGE_NAMES: &[&str] =
     &["pip", "setuptools", "wheel", "virtualenv"];
