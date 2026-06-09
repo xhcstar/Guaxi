@@ -113,11 +113,11 @@ kgraph 子系统重建了一套分层架构来解决这些问题:
 
 `embedding.rs` 复用项目已有的 `utils/llama/llama-server`,**另起一个实例**(端口 18081,`--embedding --pooling mean`),与聊天用的 deepseek 实例(18080)互不干扰。
 
-- **双模型可切换**:默认 `multilingual-e5-small`(384 维,中英文,集成显卡可跑),可选 `bge-m3`(1024 维,术语质量更强)。`kg_set_embedding_model` 写入 `kg_settings`。
+- **双模型可切换**:默认 `bge-m3`(1024 维,中英文 + 专业术语质量最强,~634MB),可选 `multilingual-e5-small`(384 维,轻量 ~131MB,集成显卡更快)。`kg_set_embedding_model` 写入 `kg_settings`。
 - **缺模型自动下载**:`ensure_model_present` 在模型文件不存在时自动从 HuggingFace 下载到 `utils/Models/embedding/`,原子落盘,无需用户手动安装。
 - **前缀**:e5 系列对 query/passage 加前缀(`embed_texts(is_query)`),bge-m3 不需要。
 
-> 运行时依赖:需要机器上有 `llama-server` 二进制(项目已打包)并能启动 embedding 实例。首次会下载约 120MB(e5-small)模型。
+> 运行时依赖:需要机器上有 `llama-server` 二进制(项目已打包)并能启动 embedding 实例。首次会自动下载模型(默认 bge-m3 约 634MB;可切换为 e5-small 约 131MB)。
 
 ---
 

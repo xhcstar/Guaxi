@@ -57,7 +57,7 @@ pub const MODEL_E5_SMALL: EmbedModel = EmbedModel {
     query_prefix: "query: ",
     passage_prefix: "passage: ",
     download_url:
-        "https://huggingface.co/Yixuan-Wang/multilingual-e5-small-gguf/resolve/main/multilingual-e5-small.Q8_0.gguf",
+        "https://huggingface.co/cstr/multilingual-e5-small-GGUF/resolve/main/multilingual-e5-small-q8_0.gguf",
 };
 
 pub const MODEL_BGE_M3: EmbedModel = EmbedModel {
@@ -77,10 +77,10 @@ pub fn model_by_key(key: &str) -> Option<EmbedModel> {
     all_models().into_iter().find(|m| m.key == key)
 }
 
-/// 当前激活模型:读取 kg_settings.embedding_model,缺省 multilingual-e5-small。
+/// 当前激活模型:读取 kg_settings.embedding_model,缺省 bge-m3(中英混合+术语质量更强)。
 pub fn active_model() -> EmbedModel {
     let key = crate::commands::kgraph::get_kg_setting("embedding_model").unwrap_or_default();
-    model_by_key(key.trim()).unwrap_or(MODEL_E5_SMALL)
+    model_by_key(key.trim()).unwrap_or(MODEL_BGE_M3)
 }
 
 fn embedding_model_dir() -> Result<PathBuf, String> {
@@ -198,7 +198,13 @@ pub struct EmbeddingServiceStatus {
 async fn ensure_model_present(model: &EmbedModel) -> Result<PathBuf, String> {
     let dest = model_path(model)?;
     if dest.is_file() {
-        return Ok(dest);
+        // 校验已存在文件大小,过小视为上次下载残缺,删除重下
+        let ok = fs::metadata(&dest).map(|m| m.len() >= 8_000_000).unwrap_or(false);
+        if ok {
+            return Ok(dest);
+        }
+        warn!("embedding 模型文件异常(过小),删除后重新下载: {}", dest.to_string_lossy());
+        let _ = fs::remove_file(&dest);
     }
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -218,6 +224,14 @@ async fn ensure_model_present(model: &EmbedModel) -> Result<PathBuf, String> {
         return Err(format!("自动下载 embedding 模型失败,HTTP {}", resp.status()));
     }
     let bytes = resp.bytes().await.map_err(|e| format!("下载读取失败: {e}"))?;
+    // 体积健全性校验:GGUF 模型至少几十 MB;过小说明拿到的是错误页/重定向占位
+    if bytes.len() < 8_000_000 {
+        return Err(format!(
+            "下载内容异常(仅 {} 字节),可能是错误页或链接失效,已放弃。URL={}",
+            bytes.len(),
+            model.download_url
+        ));
+    }
     let tmp = dest.with_extension("part");
     fs::write(&tmp, &bytes).map_err(|e| e.to_string())?;
     fs::rename(&tmp, &dest).map_err(|e| e.to_string())?;
