@@ -354,6 +354,18 @@ const feeds = computed(() => {
   return Array.isArray(list) ? list : []
 })
 
+// feed_id -> 健康状态，用于“抓取状态”列展示 RSS/spider 源的最近抓取结果。
+const healthMap = computed(() => {
+  const list = store.feedHealth?.value
+  const map = {}
+  if (Array.isArray(list)) {
+    for (const h of list) {
+      if (h?.feed_id) map[String(h.feed_id)] = h
+    }
+  }
+  return map
+})
+
 const categoryOptions = computed(() => {
   const options = categories.value.map(x => ({
     label: x?.name || '',
@@ -484,16 +496,44 @@ const columns = computed(() => {
       }
     },
     {
-      title: () => h('span', { style: titleStyle }, '抓取进度'),
+      title: () => h('span', { style: titleStyle }, '抓取状态'),
       key: 'crawl_progress',
-      width: 140,
+      width: 160,
       render: (row) => {
+        const id = String(row?.id || '')
         const isCrawl = String(row?.source_type || '') === 'site_crawl'
-        if (!isCrawl) return h('span', { style: { color: 'var(--guaxi-text-secondary)' } }, '—')
-        const p = crawlProgress.value[String(row?.id || '')]
-        if (!p) return h('span', { style: { color: 'var(--guaxi-text-secondary)' } }, '等待中')
-        const errPart = p.error > 0 ? `，失败 ${p.error}` : ''
-        return h('span', { style: { fontSize: '12px' } }, `${p.done}/${p.total}${errPart}`)
+
+        // 整站深抓：显示爬虫队列进度。
+        if (isCrawl) {
+          const p = crawlProgress.value[id]
+          if (!p) return h('span', { style: { color: 'var(--guaxi-text-secondary)' } }, '等待中')
+          const errPart = p.error > 0 ? `，失败 ${p.error}` : ''
+          return h('span', { style: { fontSize: '12px' } }, `${p.done}/${p.total}${errPart}`)
+        }
+
+        // RSS / spider：显示最近一次抓取的健康状态（来自 feedHealth）。
+        const hl = healthMap.value[id]
+        if (!row?.enabled) {
+          return h('span', { style: { color: 'var(--guaxi-text-secondary)', fontSize: '12px' } }, '已禁用')
+        }
+        if (!hl) {
+          return h('span', { style: { color: 'var(--guaxi-text-secondary)', fontSize: '12px' } }, '未抓取')
+        }
+        if (hl.last_error) {
+          return h(
+            'span',
+            { style: { color: '#e88080', fontSize: '12px' }, title: String(hl.last_error) },
+            '失败'
+          )
+        }
+        const count = Number(hl.last_item_count || 0)
+        const method = String(hl.last_method || '').trim()
+        const label = count > 0 ? `正常 · ${count} 条` : '正常'
+        return h(
+          'span',
+          { style: { color: '#63b37b', fontSize: '12px' }, title: method ? `方式：${method}` : '' },
+          label
+        )
       }
     },
     {
@@ -543,18 +583,28 @@ const iconAction = ({ icon, tip, type, disabled, onClick }) =>
 
 const scrollX = computed(() => {
   // 与 columns.width 对齐；留一点余量避免布局抖动
-  return 44 + 180 + 360 + 120 + 90 + 140 + 230 + 24
+  return 44 + 180 + 360 + 120 + 90 + 160 + 230 + 24
 })
 
 const handleLogin = async (row) => {
   const id = String(row?.id || '')
   const url = String(row?.url || '')
   if (!id || !url) return
+  // profile 必须与抓取时一致（默认按站点 host），否则登录 cookie 与抓取目录不匹配。
+  let profile = String(row?.render_profile || '').trim()
+  if (!profile) {
+    try {
+      profile = new URL(url).host || id
+    } catch {
+      profile = id
+    }
+  }
   busyIds.value.add(id)
   try {
-    message.info('正在打开登录窗口，请在弹出的浏览器中完成登录…')
-    await store.openLoginSession(id, url)
-    message.success('登录会话已保存，后续抓取将复用该登录态')
+    await store.openLoginSession(profile, url)
+    message.info('已打开登录浏览器，请在其中完成登录；登录后点该源的"重新抓取"即可使用登录态', {
+      duration: 6000
+    })
   } catch (e) {
     logger.error('FlipboardFeedManager: login failed', e)
     message.error(String(e || '登录失败'))
@@ -584,6 +634,11 @@ const refresh = async () => {
     logger.info('FlipboardFeedManager: refresh start')
     await store.fetchCategories()
     await store.fetchFeeds()
+    try {
+      await store.fetchFeedHealth()
+    } catch (e) {
+      logger.warn('FlipboardFeedManager: fetchFeedHealth failed', e)
+    }
     logger.info('FlipboardFeedManager: refresh done', {
       categories: store.categories?.value?.length,
       feeds: store.feeds?.value?.length
@@ -748,9 +803,12 @@ onMounted(async () => {
   filterCategory.value = (props.category || '').trim() || ''
   logger.info('FlipboardFeedManager: mounted', { category: props.category })
   await refresh()
-  // 整站抓取进度轮询（每 6 秒）。
+  // 整站抓取进度 + 健康状态轮询（每 6 秒）。
   await pollCrawlProgress()
-  crawlPollTimer = setInterval(pollCrawlProgress, 6000)
+  crawlPollTimer = setInterval(() => {
+    pollCrawlProgress()
+    store.fetchFeedHealth().catch(() => {})
+  }, 6000)
 })
 
 onUnmounted(() => {

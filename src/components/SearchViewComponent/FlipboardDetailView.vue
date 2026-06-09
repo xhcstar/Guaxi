@@ -232,11 +232,10 @@ const handleOpenLogin = async () => {
     } catch {
       profile = 'default'
     }
-    await store.ensureChromiumReady()
     await store.openLoginSession(profile, article.url)
-    message.success('登录窗口已关闭，正在重新抓取…', { duration: 2000 })
-    // 重新抓取该文章详情，验证登录态是否生效。
-    await store.fetchArticleDetail({ id: article.id, url: article.url })
+    message.info('已打开登录浏览器，请在其中完成登录（扫码 / 账号密码均可），登录后回到这里重新打开该文章即可抓取正文', {
+      duration: 6000
+    })
   } catch (error) {
     message.error(`打开登录失败：${error?.message || error}`, { duration: 3000 })
   } finally {

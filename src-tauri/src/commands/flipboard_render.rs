@@ -752,35 +752,36 @@ async fn reset_shared_browser() {
 /// 可见实例并清空共享句柄——下次抓取会以登录后的最新 cookie 重新启动。这正是 MediaCrawler
 /// “持久化登录上下文 + 复用真实页面”的做法。
 pub async fn open_login_window(profile: &str, login_url: &str) -> Result<(), String> {
-    // 释放共享无头实例对该 profile 的占用。
+    // 释放共享无头实例对该 profile 的占用（Chrome 不允许两实例共用同一 user_data_dir）。
     reset_shared_browser().await;
 
-    let mut browser = launch_browser(profile, false).await?;
-    let page = browser
-        .new_page(login_url)
+    let exec = ensure_chromium_executable().await?;
+    let user_data = chrome_profile_dir(profile)?;
+    tokio::fs::create_dir_all(&user_data)
         .await
-        .map_err(|e| format!("new_page: {e}"))?;
-    let _ = page.add_init_script(STEALTH_SCRIPT).await;
-    // 给用户充足时间登录（最多 5 分钟）；窗口可见，用户可扫码/输密码/过验证码，
-    // 登录后会话即持久化到 user_data_dir。
-    let _ = tokio::time::timeout(Duration::from_secs(300), async {
-        // 轮询：直到页面 URL 变化（登录跳转）或超时。
-        let start_url = page.url().await.ok().flatten().unwrap_or_default();
-        loop {
-            tokio::time::sleep(Duration::from_secs(3)).await;
-            let cur = page.url().await.ok().flatten().unwrap_or_default();
-            if cur != start_url && !cur.is_empty() {
-                // 已发生跳转，多等一会儿让 cookie 落盘。
-                tokio::time::sleep(Duration::from_secs(2)).await;
-                break;
-            }
-        }
-    })
-    .await;
-    let _ = browser.close().await;
+        .map_err(|e| format!("create profile dir failed: {e}"))?;
+    clean_singleton_locks(&user_data);
 
-    // 清空共享句柄，确保下次抓取以登录后的最新 cookie 重新启动。
-    reset_shared_browser().await;
+    // 关键：用普通可见进程直接启动浏览器（不走 CDP / DevTools）。
+    // 这样登录窗口完全由用户掌控——扫码 / 输密码 / 过验证码都行，且 DevTools WebSocket
+    // 重置不会把窗口关掉。用户登录后 cookie 持久化到该 user_data_dir，后续无头抓取复用。
+    // 这正是 MediaCrawler “持久化登录上下文 + 真实浏览器手动登录” 的核心做法。
+    // 不传任何自动化旗标（--enable-automation 等），降低被风控识别的概率。
+    let mut cmd = std::process::Command::new(&exec);
+    cmd.arg(format!("--user-data-dir={}", user_data.display()))
+        .arg("--no-first-run")
+        .arg("--no-default-browser-check")
+        .arg("--start-maximized")
+        .arg("--new-window")
+        .arg(login_url);
+    cmd.spawn()
+        .map_err(|e| format!("启动登录浏览器失败：{e}"))?;
+
+    info!(
+        "flipboard_render: launched standalone login browser for profile {} ({})",
+        profile, login_url
+    );
+    // 立即返回：登录由用户在该窗口内自行完成，cookie 落盘后下次抓取自动复用。
     Ok(())
 }
 

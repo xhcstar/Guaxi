@@ -4407,10 +4407,12 @@ async fn crawl_tick_for_feed(feed: &FeedSource) -> Result<Vec<Article>, String> 
     }
 
     // 3. 并发处理本批页面（在 rate_delay 之上再叠加 CRAWL_PAGE_CONCURRENCY 并发提速）。
+    // profile 默认按站点 host 区分，使其与"自动登录"窗口保存 cookie 的目录一致，登录后即可复用。
     let render_profile = feed
         .render_profile
         .clone()
-        .unwrap_or_else(|| feed.id.clone());
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| render_profile_for_url(&feed.url));
     let base_ref = &base;
     let cfg_ref = &cfg;
     let profile_ref = render_profile.as_str();
