@@ -46,9 +46,13 @@ pub struct EmbedModel {
     /// e5 系列需要 "query: " / "passage: " 前缀;bge-m3 不需要。
     pub query_prefix: &'static str,
     pub passage_prefix: &'static str,
-    /// 缺模型时的下载地址(HuggingFace GGUF)。真机可用性需验证。
-    pub download_url: &'static str,
+    /// HuggingFace 仓库与文件名。下载时按多镜像拼装 URL。
+    pub repo: &'static str,
+    pub remote_file: &'static str,
 }
+
+/// 下载镜像主机(顺序尝试)。国内优先 hf-mirror,失败回退官方站。
+const MIRROR_HOSTS: [&str; 2] = ["https://hf-mirror.com", "https://huggingface.co"];
 
 pub const MODEL_E5_SMALL: EmbedModel = EmbedModel {
     key: "multilingual-e5-small",
@@ -56,8 +60,8 @@ pub const MODEL_E5_SMALL: EmbedModel = EmbedModel {
     dim: 384,
     query_prefix: "query: ",
     passage_prefix: "passage: ",
-    download_url:
-        "https://huggingface.co/cstr/multilingual-e5-small-GGUF/resolve/main/multilingual-e5-small-q8_0.gguf",
+    repo: "cstr/multilingual-e5-small-GGUF",
+    remote_file: "multilingual-e5-small-q8_0.gguf",
 };
 
 pub const MODEL_BGE_M3: EmbedModel = EmbedModel {
@@ -66,8 +70,26 @@ pub const MODEL_BGE_M3: EmbedModel = EmbedModel {
     dim: 1024,
     query_prefix: "",
     passage_prefix: "",
-    download_url: "https://huggingface.co/gpustack/bge-m3-GGUF/resolve/main/bge-m3-Q8_0.gguf",
+    repo: "gpustack/bge-m3-GGUF",
+    remote_file: "bge-m3-Q8_0.gguf",
 };
+
+/// 构造该模型的候选下载 URL 列表:用户自定义直链(kg_settings) → 各镜像。
+fn model_download_urls(model: &EmbedModel) -> Vec<String> {
+    let mut urls: Vec<String> = Vec::new();
+    if let Some(custom) =
+        crate::commands::kgraph::get_kg_setting(&format!("embedding_url_{}", model.key))
+    {
+        let c = custom.trim();
+        if !c.is_empty() {
+            urls.push(c.to_string());
+        }
+    }
+    for host in MIRROR_HOSTS {
+        urls.push(format!("{host}/{}/resolve/main/{}", model.repo, model.remote_file));
+    }
+    urls
+}
 
 pub fn all_models() -> [EmbedModel; 2] {
     [MODEL_E5_SMALL, MODEL_BGE_M3]
@@ -194,7 +216,7 @@ pub struct EmbeddingServiceStatus {
     pub model_present: bool,
 }
 
-/// 确保模型文件就位:不存在则自动下载(原子落盘)。返回模型文件路径。
+/// 确保模型文件就位:不存在则自动下载(多镜像逐个尝试,原子落盘)。返回模型文件路径。
 async fn ensure_model_present(model: &EmbedModel) -> Result<PathBuf, String> {
     let dest = model_path(model)?;
     if dest.is_file() {
@@ -209,34 +231,51 @@ async fn ensure_model_present(model: &EmbedModel) -> Result<PathBuf, String> {
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    warn!("embedding 模型缺失,自动下载: {} → {}", model.key, dest.to_string_lossy());
 
+    let urls = model_download_urls(model);
     let client = ClientBuilder::new()
         .timeout(Duration::from_secs(7200))
         .build()
         .map_err(|e| e.to_string())?;
-    let resp = client
-        .get(model.download_url)
-        .send()
-        .await
-        .map_err(|e| format!("自动下载 embedding 模型请求失败: {e}"))?;
-    if !resp.status().is_success() {
-        return Err(format!("自动下载 embedding 模型失败,HTTP {}", resp.status()));
+
+    let mut last_err = String::new();
+    for url in &urls {
+        warn!("embedding 模型缺失,尝试下载: {} ← {}", model.key, url);
+        match download_to(&client, url, &dest).await {
+            Ok(n) => {
+                warn!("embedding 模型下载完成: {} ({} bytes) via {}", model.key, n, url);
+                return Ok(dest);
+            }
+            Err(e) => {
+                warn!("下载失败(将尝试下一个镜像): {} :: {}", url, e);
+                last_err = e;
+            }
+        }
     }
-    let bytes = resp.bytes().await.map_err(|e| format!("下载读取失败: {e}"))?;
-    // 体积健全性校验:GGUF 模型至少几十 MB;过小说明拿到的是错误页/重定向占位
+    Err(format!(
+        "embedding 模型 {} 所有镜像下载均失败。最后错误:{}。可在设置写入 kg_settings.embedding_url_{} 指定可达直链,或手动放入 {}",
+        model.key, last_err, model.key, dest.to_string_lossy()
+    ))
+}
+
+/// 从单个 URL 下载到目标(.part 原子落盘 + 体积健全性校验)。返回字节数。
+async fn download_to(
+    client: &reqwest::Client,
+    url: &str,
+    dest: &std::path::Path,
+) -> Result<u64, String> {
+    let resp = client.get(url).send().await.map_err(|e| format!("请求失败: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let bytes = resp.bytes().await.map_err(|e| format!("读取失败: {e}"))?;
     if bytes.len() < 8_000_000 {
-        return Err(format!(
-            "下载内容异常(仅 {} 字节),可能是错误页或链接失效,已放弃。URL={}",
-            bytes.len(),
-            model.download_url
-        ));
+        return Err(format!("内容异常(仅 {} 字节),疑似错误页/重定向占位", bytes.len()));
     }
     let tmp = dest.with_extension("part");
     fs::write(&tmp, &bytes).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, &dest).map_err(|e| e.to_string())?;
-    warn!("embedding 模型下载完成: {} ({} bytes)", model.key, bytes.len());
-    Ok(dest)
+    fs::rename(&tmp, dest).map_err(|e| e.to_string())?;
+    Ok(bytes.len() as u64)
 }
 
 /// 确保 embedding 服务就绪(模型缺失会自动下载,然后按需启动 llama-server 的 embedding 实例)。
