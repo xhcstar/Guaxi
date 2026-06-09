@@ -289,11 +289,23 @@ const remove = async (entry) => {
   message.success('已删除', { duration: 1000 })
 }
 
-onMounted(() => {
+let unlistenExternal = null
+onMounted(async () => {
   collections.load()
+  // 监听"浏览器打开原文"窗口双击采集的内容，写入收集库。
+  try {
+    const { listen } = await import('@tauri-apps/api/event')
+    unlistenExternal = await listen('flipboard-external-note', async (e) => {
+      await collections.addCapturedNote(e?.payload || {})
+      message.success('已从网页采集到「我的收集」', { duration: 1500 })
+    })
+  } catch (err) {
+    logger.warn('listen flipboard-external-note failed', err)
+  }
 })
 
 onBeforeUnmount(() => {
+  if (unlistenExternal) { try { unlistenExternal() } catch {} }
   document.removeEventListener('mousemove', onResizeMove)
   document.removeEventListener('mouseup', stopResize)
 })

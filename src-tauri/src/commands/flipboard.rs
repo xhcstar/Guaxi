@@ -18,7 +18,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use tauri::{command, AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{command, AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tokio::sync::Semaphore;
 use futures_util::StreamExt;
 use tokio::time::{sleep, Duration};
@@ -183,7 +183,7 @@ fn feed_http_cache_path() -> Result<PathBuf, String> {
 /// 预置源 schema 版本。每次更换内置源清单时 +1，会触发一次性迁移：
 /// 清掉旧的机器生成源（builtin-/auto-/website-），写入新的 curated 源。
 /// 用户手动添加（f*/sd*）的源不受影响。
-const FEEDS_SCHEMA_VERSION: u32 = 2;
+const FEEDS_SCHEMA_VERSION: u32 = 3;
 
 fn flipboard_feeds_version_path() -> Result<PathBuf, String> {
     let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -1443,6 +1443,46 @@ fn curated_feeds() -> Vec<(&'static str, &'static str, &'static str, &'static st
         ("机核 GCORES", "https://www.gcores.com/rss", "rss", "entertainment"),
         ("Variety", "https://variety.com/feed/", "rss", "entertainment"),
         ("The Hollywood Reporter", "https://www.hollywoodreporter.com/feed/", "rss", "entertainment"),
+
+        // ===== 知识性平台 / 问答 / 百科（区别于资讯新闻）=====
+        // 计算机 / 编程 Q&A
+        ("Stack Overflow 问答", "https://stackoverflow.com/feeds", "rss", "computer"),
+        ("Server Fault 问答", "https://serverfault.com/feeds", "rss", "computer"),
+        ("Computer Science SE", "https://cs.stackexchange.com/feeds", "rss", "computer"),
+        // AI / 数据科学 Q&A
+        ("Cross Validated (统计/ML)", "https://stats.stackexchange.com/feeds", "rss", "ai"),
+        ("Data Science SE", "https://datascience.stackexchange.com/feeds", "rss", "ai"),
+        ("AI Stack Exchange", "https://ai.stackexchange.com/feeds", "rss", "ai"),
+        // 数学 Q&A + 研究
+        ("Mathematics SE 问答", "https://math.stackexchange.com/feeds", "rss", "math"),
+        ("MathOverflow 研究级问答", "https://mathoverflow.net/feeds", "rss", "math"),
+        // 物理 Q&A
+        ("Physics SE 问答", "https://physics.stackexchange.com/feeds", "rss", "physics"),
+        ("Astronomy SE 问答", "https://astronomy.stackexchange.com/feeds", "rss", "physics"),
+        // 医学 / 健康 Q&A
+        ("Health/Medical SE", "https://medicalsciences.stackexchange.com/feeds", "rss", "medicine"),
+        // 法律 Q&A
+        ("Law Stack Exchange 问答", "https://law.stackexchange.com/feeds", "rss", "law"),
+        // 商业 / 创业 Q&A
+        ("Workplace SE", "https://workplace.stackexchange.com/feeds", "rss", "business"),
+        // 金融 Q&A
+        ("Personal Finance SE", "https://money.stackexchange.com/feeds", "rss", "finance"),
+        ("Quant Finance SE", "https://quant.stackexchange.com/feeds", "rss", "finance"),
+        // 教育 / 通识 / 百科 / 哲学
+        ("斯坦福哲学百科 (SEP)", "https://plato.stanford.edu/rss/sep.xml", "rss", "education"),
+        ("Wikipedia 每日精选", "https://en.wikipedia.org/w/api.php?action=featuredfeed&feed=featured&feedformat=atom", "rss", "education"),
+        ("Wikipedia 历史上的今天", "https://en.wikipedia.org/w/api.php?action=featuredfeed&feed=onthisday&feedformat=atom", "rss", "education"),
+        ("Aeon 思想长文", "https://aeon.co/feed.rss", "rss", "education"),
+        ("Big Think", "https://bigthink.com/feed/", "rss", "education"),
+        ("Open Culture", "https://www.openculture.com/feed", "rss", "education"),
+        ("Arts & Letters Daily", "https://aldaily.com/feed/", "rss", "education"),
+        ("Stephen Wolfram Writings", "https://writings.stephenwolfram.com/feed/", "rss", "education"),
+        // 综合知识 / 科普
+        ("Smithsonian Magazine", "https://www.smithsonianmag.com/rss/latest_articles/", "rss", "lifestyle"),
+        ("ScienceAlert", "https://www.sciencealert.com/feed", "rss", "physics"),
+        // 知识社区（需登录/动态渲染，走 spider；命中登录墙会引导登录）
+        ("知乎 - 专栏", "https://zhuanlan.zhihu.com/", "spider", "education"),
+        ("Quora", "https://www.quora.com/", "spider", "education"),
     ]
 }
 
@@ -5641,12 +5681,164 @@ pub async fn open_article_in_browser(app: AppHandle, url: String) -> Result<(), 
         return Ok(());
     }
 
+    let source_url = url.clone();
+    let app_for_nav = app.clone();
     let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(external))
         .title(&url)
         .inner_size(1100.0, 800.0)
         .min_inner_size(820.0, 560.0)
+        // 注入双击采集脚本：在外部网页里双击段落/图片/视频即可发送到主窗口的「我的收集」。
+        .initialization_script(EXTERNAL_DBLCLICK_SCRIPT)
+        // 拦截 guaxinote:// 伪导航：解析采集载荷 → 转发事件给主窗口 → 取消导航。
+        .on_navigation(move |nav_url| {
+            let s = nav_url.as_str();
+            if let Some(rest) = s.strip_prefix("guaxinote://capture/") {
+                if let Ok(decoded) = urlencoding_decode(rest) {
+                    if let Ok(mut payload) =
+                        serde_json::from_str::<serde_json::Value>(&decoded)
+                    {
+                        if let Some(obj) = payload.as_object_mut() {
+                            obj.insert(
+                                "sourceUrl".to_string(),
+                                serde_json::Value::String(source_url.clone()),
+                            );
+                        }
+                        let _ = app_for_nav.emit("flipboard-external-note", payload);
+                    }
+                }
+                return false; // 取消导航，页面保持原样。
+            }
+            true
+        })
         .build()
         .map_err(|e| format!("创建浏览器窗口失败: {}", e))?;
     window.set_focus().ok();
     Ok(())
+}
+
+/// 注入到“浏览器打开原文”窗口的脚本：双击段落/图片/视频 → 通过 guaxinote:// 伪导航
+/// 把采集内容发回主程序。不向外部页面暴露任何 Tauri 命令，安全可控。
+const EXTERNAL_DBLCLICK_SCRIPT: &str = r#"
+(function () {
+  if (window.__guaxiNoteCaptureInstalled) return;
+  window.__guaxiNoteCaptureInstalled = true;
+
+  // 注入交互视觉：文字选中高亮 + 段落/句子悬停高亮，提示可双击采集。
+  function injectStyle() {
+    try {
+      if (document.getElementById('__guaxi_capture_style')) return;
+      var st = document.createElement('style');
+      st.id = '__guaxi_capture_style';
+      st.textContent =
+        '::selection{background:rgba(37,99,235,.28)!important;color:inherit!important;}' +
+        '.__guaxi_hover{outline:2px solid rgba(37,99,235,.55)!important;' +
+        'outline-offset:2px;background:rgba(37,99,235,.06)!important;cursor:copy!important;border-radius:4px;}';
+      (document.head || document.documentElement).appendChild(st);
+    } catch (e) {}
+  }
+  if (document.head) injectStyle();
+  document.addEventListener('DOMContentLoaded', injectStyle);
+
+  function toast(text, ok) {
+    try {
+      var d = document.createElement('div');
+      d.textContent = text;
+      d.style.cssText = 'position:fixed;right:20px;bottom:20px;z-index:2147483647;'
+        + 'background:' + (ok === false ? 'rgba(239,68,68,.96)' : 'rgba(34,197,94,.96)') + ';'
+        + 'color:#fff;padding:8px 16px;border-radius:999px;'
+        + 'font-size:13px;box-shadow:0 8px 24px rgba(22,163,74,.45);font-family:sans-serif;';
+      document.body.appendChild(d);
+      setTimeout(function(){ d.remove(); }, 1400);
+    } catch (e) {}
+  }
+
+  var blocks = { P:1, H1:1, H2:1, H3:1, H4:1, H5:1, LI:1, BLOCKQUOTE:1, PRE:1, FIGURE:1, ARTICLE:1, SECTION:1, TD:1 };
+  function nearestBlock(node) {
+    var el = node;
+    while (el && el !== document.body && !blocks[el.tagName]) el = el.parentElement;
+    return (el && el !== document.body) ? el : null;
+  }
+
+  // 悬停高亮当前块。
+  var hovered = null;
+  document.addEventListener('mouseover', function (ev) {
+    var b = nearestBlock(ev.target);
+    if (b === hovered) return;
+    if (hovered) hovered.classList.remove('__guaxi_hover');
+    hovered = b;
+    if (hovered) hovered.classList.add('__guaxi_hover');
+  }, true);
+  document.addEventListener('mouseout', function () {
+    if (hovered) { hovered.classList.remove('__guaxi_hover'); hovered = null; }
+  }, true);
+
+  function send(payload) {
+    try {
+      var enc = encodeURIComponent(JSON.stringify(payload));
+      // 顶层导航到自定义 scheme：Rust 的 on_navigation 会拦截并取消，页面不会真跳转。
+      // （iframe 子框架的未知 scheme 不会触发 on_navigation，故必须用顶层导航。）
+      window.location.href = 'guaxinote://capture/' + enc;
+      toast('已添加到「我的收集」');
+    } catch (e) { toast('采集失败', false); }
+  }
+
+  document.addEventListener('dblclick', function (ev) {
+    var sel = (window.getSelection && window.getSelection().toString() || '').trim();
+    if (sel) { send({ type: 'text', content: sel, originalMarkdown: sel }); return; }
+
+    var t = ev.target;
+    if (t && t.tagName === 'IMG' && t.src) {
+      send({ type: 'image', content: t.src, originalMarkdown: '![' + (t.alt || '图片') + '](' + t.src + ')' });
+      return;
+    }
+    var el = nearestBlock(t);
+    if (!el) return;
+
+    var media = el.querySelector && el.querySelector('iframe[src], video source[src], video[src]');
+    var murl = media && (media.src || (media.getAttribute && media.getAttribute('src')));
+    if (murl) { send({ type: 'video', content: murl, originalMarkdown: '[▶ 视频](' + murl + ')' }); return; }
+
+    var text = (el.innerText || el.textContent || '').trim();
+    var img = el.querySelector && el.querySelector('img[src]');
+    if (img && img.src && text.length < 12) {
+      send({ type: 'image', content: img.src, originalMarkdown: '![' + (img.alt || '图片') + '](' + img.src + ')' });
+      return;
+    }
+    if (text) { send({ type: 'text', content: text, originalMarkdown: text }); }
+  }, true);
+})();
+"#;
+
+/// 轻量 percent-decode（只处理 %XX 与 + 号），用于解析 guaxinote:// 载荷。
+fn urlencoding_decode(s: &str) -> Result<String, String> {
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' if i + 2 < bytes.len() => {
+                let hi = (bytes[i + 1] as char).to_digit(16);
+                let lo = (bytes[i + 2] as char).to_digit(16);
+                match (hi, lo) {
+                    (Some(h), Some(l)) => {
+                        out.push((h * 16 + l) as u8);
+                        i += 3;
+                    }
+                    _ => {
+                        out.push(bytes[i]);
+                        i += 1;
+                    }
+                }
+            }
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            c => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).map_err(|e| e.to_string())
 }

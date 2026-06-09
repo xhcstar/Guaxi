@@ -116,6 +116,38 @@ export const useFlipboardCollectionsStore = () => {
     await save()
   }
 
+  /**
+   * 直接追加一条采集笔记（用于"浏览器打开原文"窗口双击采集等场景）。
+   * payload: { type:'text'|'image'|'video', content, originalMarkdown, sourceUrl, sourceTitle, category }
+   */
+  let captureSeq = 0
+  const addCapturedNote = async (payload = {}) => {
+    const content = String(payload.originalMarkdown || payload.content || '').trim()
+    if (!content) return
+    await load()
+    captureSeq += 1
+    const ts = new Date().toISOString()
+    const sourceUrl = String(payload.sourceUrl || '')
+    let sourceTitle = String(payload.sourceTitle || '')
+    if (!sourceTitle && sourceUrl) {
+      try { sourceTitle = new URL(sourceUrl).host } catch { sourceTitle = sourceUrl }
+    }
+    const typeLabel = payload.type === 'image' ? '图片' : payload.type === 'video' ? '视频' : '摘录'
+    entries.value.push({
+      id: `capture::${Date.now()}::${captureSeq}`,
+      articleId: '',
+      type: 'note',
+      title: `${sourceTitle || '网页'} - ${typeLabel}`,
+      content,
+      sourceUrl,
+      sourceTitle,
+      category: String(payload.category || ''),
+      favorite: false,
+      timestamp: ts
+    })
+    await save()
+  }
+
   /** 把一篇文章作为「收藏」条目写入收集库（卡片点收藏 icon 时调用）。 */
   const bookmarkEntryId = (articleId) => `bookmark::${String(articleId)}`
 
@@ -229,6 +261,7 @@ export const useFlipboardCollectionsStore = () => {
     load,
     save,
     syncArticleNotes,
+    addCapturedNote,
     removeEntry,
     toggleFavorite,
     upsertBookmarkArticle,
