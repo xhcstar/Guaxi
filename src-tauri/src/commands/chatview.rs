@@ -847,6 +847,25 @@ fn build_kb_agent_prompt(request: &KbMetaAgentRequest, task: &str) -> Result<Str
     ))
 }
 
+/// 通用 LLM 补全入口(供知识图谱抽取等复用)。按 modelid 路由到对应后端,
+/// 远程 API 失败时自动回退本地 DeepSeek,体现“本地优先 + 外部 API 预留”的分层后端。
+pub async fn kg_llm_complete(
+    modelid: i32,
+    prompt: &str,
+    sessionid: &str,
+) -> Result<(String, String), String> {
+    let model = ChatModel::try_from(modelid).unwrap_or(ChatModel::LOCALDEEPSEEK);
+    match kb_agent_call_model(model, prompt, sessionid).await {
+        Ok(rsp) => Ok((rsp.answer, rsp.sessionid)),
+        Err(e) => {
+            // 远程/付费后端失败 → 回退本地模型,保证可用性
+            warn!("kg_llm_complete modelid={} 失败,回退本地 DeepSeek: {}", modelid, e);
+            let rsp = kb_agent_call_model(ChatModel::LOCALDEEPSEEK, prompt, sessionid).await?;
+            Ok((rsp.answer, rsp.sessionid))
+        }
+    }
+}
+
 async fn kb_agent_call_model(model: ChatModel, prompt: &str, sessionid: &str) -> Result<ChatResponse, String> {
     match model {
         ChatModel::CHATGPT => get_answer_from_chatgpt(prompt, sessionid).await,

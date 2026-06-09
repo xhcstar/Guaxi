@@ -768,6 +768,7 @@ pub fn after_write_file(path: &Path, content: &str) -> Result<(), String> {
         write_file_meta_file(&meta_path, &meta)?;
     }
 
+    crate::commands::kgraph::mark_kb_dirty(&kb_name);
     Ok(())
 }
 
@@ -830,6 +831,7 @@ pub fn after_create_path(path: &Path, is_dir: bool, content: Option<&str>) -> Re
         }
     }
 
+    crate::commands::kgraph::mark_kb_dirty(&kb_name);
     Ok(())
 }
 
@@ -855,6 +857,7 @@ pub fn after_delete_path(path: &Path, is_dir: bool) -> Result<(), String> {
         if meta_dir.exists() {
             let _ = fs::remove_dir_all(&meta_dir);
         }
+        crate::commands::kgraph::drop_kb_index(&kb_name);
         return Ok(());
     }
 
@@ -872,6 +875,7 @@ pub fn after_delete_path(path: &Path, is_dir: bool) -> Result<(), String> {
     }
 
     let _ = sync_kb_meta_from_fs(&kb_name, &kb_dir, None)?;
+    crate::commands::kgraph::mark_kb_dirty(&kb_name);
     Ok(())
 }
 
@@ -920,6 +924,8 @@ pub fn after_move_path(source_path: &Path, destination_path: &Path) -> Result<()
             }
 
             let _ = sync_kb_meta_from_fs(&new_name, destination_path, None)?;
+            crate::commands::kgraph::drop_kb_index(&old_name);
+            crate::commands::kgraph::mark_kb_dirty(&new_name);
             return Ok(());
         }
     }
@@ -1000,10 +1006,12 @@ pub fn after_move_path(source_path: &Path, destination_path: &Path) -> Result<()
     if let Some(kb_name) = src_kb {
         let kb_dir = root.join(&kb_name);
         let _ = sync_kb_meta_from_fs(&kb_name, &kb_dir, None);
+        crate::commands::kgraph::mark_kb_dirty(&kb_name);
     }
     if let Some(kb_name) = dst_kb {
         let kb_dir = root.join(&kb_name);
         let _ = sync_kb_meta_from_fs(&kb_name, &kb_dir, None);
+        crate::commands::kgraph::mark_kb_dirty(&kb_name);
     }
 
     Ok(())

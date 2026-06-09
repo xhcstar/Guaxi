@@ -6,6 +6,14 @@
       <div class="logo-text">Guaxi</div>
     </div>
 
+    <!-- 中间:图谱视图切换 -->
+    <div class="header-center">
+      <div class="kg-switch">
+        <button :class="{ on: kbStore.graphViewMode === 'kg3d' }" @click="kbStore.graphViewMode = 'kg3d'">工业图谱</button>
+        <button :class="{ on: kbStore.graphViewMode === 'classic' }" @click="kbStore.graphViewMode = 'classic'">经典视图</button>
+      </div>
+    </div>
+
     <!-- 右侧：功能图标 -->
     <div class="header-right">
       <n-icon class="header-icon" size="20" :component="Screenshot24Regular"></n-icon>
@@ -17,6 +25,7 @@
 <script setup>
 import { useSiderStore } from '../../stores/useSiderStore'
 import { useSiderHotkeys } from '../../composables/useSiderHotkeys'
+import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
 
 
 import {
@@ -27,6 +36,7 @@ import {
 
 const viewKey = 'brain'
 const siderStore = useSiderStore();
+const kbStore = useKnowledgeBaseStore();
 
 const toggleLeftSider = () => {
   siderStore.toggleLeftSider(viewKey)
@@ -74,6 +84,34 @@ useSiderHotkeys({
   gap: 8px;
   min-width: 200px;
   justify-content: flex-end;
+}
+
+.header-center {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+}
+.kg-switch {
+  display: inline-flex;
+  gap: 3px;
+  background: rgba(127, 127, 127, 0.14);
+  border-radius: 7px;
+  padding: 2px;
+}
+.kg-switch button {
+  padding: 2px 12px;
+  font-size: 12px;
+  line-height: 18px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--guaxi-text-primary);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.kg-switch button.on {
+  background: #1f6feb;
+  color: #fff;
 }
 
 .header-icon {
