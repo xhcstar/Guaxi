@@ -1,6 +1,7 @@
 import { ref, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { createLogger } from '../utils/logger'
+import { useFlipboardCollectionsStore } from './flipboardCollectionsStore.js'
 
 const logger = createLogger('flipboardStore')
 const console = {
@@ -33,6 +34,11 @@ export const useFlipboardStore = () => {
   const feedHealth = ref([])
   const collectionsPanelVisible = ref(false)
   const isHydratingDetail = ref(false)
+  // 收集面板点击条目时，请求阅读区打开该文章（ReadingCoordinator 监听）。
+  const pendingReaderArticle = ref(null)
+  const openReaderForArticle = (articleRef) => {
+    pendingReaderArticle.value = articleRef
+  }
 
   const scoreByTopic = (article, topicTokens) => {
     if (!topicTokens.length) return 0
@@ -551,6 +557,54 @@ export const useFlipboardStore = () => {
     }
   }
 
+  // 批量删除订阅源
+  const deleteFeeds = async (ids) => {
+    try {
+      const removed = await invoke('delete_feeds', { ids })
+      await fetchFeeds()
+      return removed
+    } catch (error) {
+      console.error('FlipboardStore: deleteFeeds failed:', error)
+      throw error
+    }
+  }
+
+  // 终止单个源的抓取任务
+  const stopFeedTask = async (feedId) => {
+    try {
+      await invoke('stop_feed_task', { feedId })
+      return true
+    } catch (error) {
+      console.error('FlipboardStore: stopFeedTask failed:', error)
+      throw error
+    }
+  }
+
+  // 终止全部抓取任务
+  const stopAllFeedTasks = async () => {
+    try {
+      await invoke('stop_all_feed_tasks')
+      isLoading.value = false
+      isRefreshing.value = false
+      return true
+    } catch (error) {
+      console.error('FlipboardStore: stopAllFeedTasks failed:', error)
+      throw error
+    }
+  }
+
+  // 批量启用/禁用订阅源
+  const setFeedsEnabled = async (ids, enabled) => {
+    try {
+      const changed = await invoke('set_feeds_enabled', { ids, enabled })
+      await fetchFeeds()
+      return changed
+    } catch (error) {
+      console.error('FlipboardStore: setFeedsEnabled failed:', error)
+      throw error
+    }
+  }
+
   // 更新信息源
   const updateFeed = async (source) => {
     try {
@@ -577,23 +631,31 @@ export const useFlipboardStore = () => {
     }
   }
 
-  // 添加书签
+  // 添加书签（同时写入「我的收集」收藏夹，便于在收集面板中查看/管理）
   const addBookmark = (article) => {
     if (!bookmarks.value.some(b => b.id === article.id)) {
-      bookmarks.value.push({
-        ...article,
-        bookmarkedAt: new Date().toISOString()
-      })
+      const entry = { ...article, bookmarkedAt: new Date().toISOString() }
+      bookmarks.value.push(entry)
       saveBookmarks()
+      try {
+        useFlipboardCollectionsStore().upsertBookmarkArticle(entry)
+      } catch (e) {
+        console.warn('FlipboardStore: sync bookmark to collections failed:', e)
+      }
     }
   }
 
-  // 移除书签
+  // 移除书签（同时从收集库移除对应收藏条目）
   const removeBookmark = (articleId) => {
     const index = bookmarks.value.findIndex(b => b.id === articleId)
     if (index !== -1) {
       bookmarks.value.splice(index, 1)
       saveBookmarks()
+      try {
+        useFlipboardCollectionsStore().removeBookmarkArticle(articleId)
+      } catch (e) {
+        console.warn('FlipboardStore: remove bookmark from collections failed:', e)
+      }
     }
   }
 
@@ -669,6 +731,13 @@ export const useFlipboardStore = () => {
 
       if (savedHistory) {
         readingHistory.value = JSON.parse(savedHistory)
+      }
+
+      // 启动时把收藏夹与「我的收集」收集库对齐（保证收藏卡片在收集面板可见）。
+      try {
+        useFlipboardCollectionsStore().syncBookmarks(bookmarks.value)
+      } catch (e) {
+        console.warn('FlipboardStore: syncBookmarks failed:', e)
       }
     } catch (error) {
       console.error('Failed to load local data:', error)
@@ -767,6 +836,14 @@ export const useFlipboardStore = () => {
   // 初始化
   const init = async () => {
     loadLocalData()
+    // 后台预热渲染引擎：提前解析/探测可用浏览器（系统 Chrome/Edge 优先，必要时下载），
+    // 让首次需要 JS 渲染的抓取无需等待。不阻塞主流程。
+    if (!window.__flipboardEngineWarmed) {
+      window.__flipboardEngineWarmed = true
+      invoke('ensure_chromium_ready').catch(e =>
+        console.warn('FlipboardStore: warm render engine failed:', e)
+      )
+    }
     // 先清理未收藏缓存，再拉取（拉取会重新填充当前分类的新鲜内容）。
     await purgeUnbookmarkedOnce()
     await fetchCategories()
@@ -801,6 +878,8 @@ export const useFlipboardStore = () => {
     feedHealth,
     collectionsPanelVisible,
     isHydratingDetail,
+    pendingReaderArticle,
+    openReaderForArticle,
 
     // 计算属性
     filteredArticles,
@@ -833,8 +912,12 @@ export const useFlipboardStore = () => {
     ensureChromiumReady,
     openLoginSession,
     setFeedEnabled,
+    setFeedsEnabled,
+    stopFeedTask,
+    stopAllFeedTasks,
     updateFeed,
     deleteFeed,
+    deleteFeeds,
     addBookmark,
     removeBookmark,
     isBookmarked,

@@ -4,9 +4,11 @@
 
       <div class="image-overlay">
         <div class="category-badge">{{ article.category }}</div>
-        <button class="bookmark-btn" :class="{ bookmarked: isBookmarked }" @click.stop="toggleBookmark">
+        <button class="bookmark-btn" :class="{ bookmarked: isBookmarked }" @click.stop="toggleBookmark"
+          :title="isBookmarked ? '取消收藏' : '收藏'">
           <n-icon size="16">
-            <BookmarkIcon />
+            <BookmarkFilledIcon v-if="isBookmarked" />
+            <BookmarkIcon v-else />
           </n-icon>
         </button>
       </div>
@@ -31,9 +33,10 @@
 
       <div class="card-footer">
         <div class="actions">
-          <button class="action-btn" @click.stop="toggleBookmark">
-            <n-icon size="14" :class="{ bookmarked: isBookmarked }">
-              <BookmarkIcon />
+          <button class="action-btn" :class="{ bookmarked: isBookmarked }" @click.stop="toggleBookmark">
+            <n-icon size="14">
+              <BookmarkFilledIcon v-if="isBookmarked" />
+              <BookmarkIcon v-else />
             </n-icon>
             {{ isBookmarked ? '已收藏' : '收藏' }}
           </button>
@@ -52,9 +55,10 @@
 <script setup>
 import { computed } from 'vue'
 import { useFlipboardStore } from '../../stores/flipboardStore.js'
-import { BookmarkOutline, ShareSocialOutline } from '@vicons/ionicons5'
+import { BookmarkOutline, Bookmark, ShareSocialOutline } from '@vicons/ionicons5'
 
 const BookmarkIcon = BookmarkOutline
+const BookmarkFilledIcon = Bookmark
 const ShareIcon = ShareSocialOutline
 
 const props = defineProps({
@@ -188,6 +192,12 @@ const formatTime = (timeString) => {
 }
 
 .bookmark-btn.bookmarked {
+  color: #ff6b6b;
+  background: rgba(255, 107, 107, 0.12);
+  border-color: #ff6b6b;
+}
+
+.action-btn.bookmarked {
   color: #ff6b6b;
 }
 

@@ -77,13 +77,15 @@ const isLoading = computed(() => store.isLoading.value)
 
 /** 交互：点击卡片进入阅读模式，并展开右侧面板 */
 const handleArticleSelect = async (article) => {
+  logger.info('ReadingCoordinator: enter reading mode', { articleId: article?.id })
+  // 立即展开面板并进入阅读模式（哪怕正文还在后台加载），避免“点击无反应”。
+  if (isRightSiderCollapsed.value) {
+    isRightSiderCollapsed.value = false
+  }
+  isReadingMode.value = true
+  // currentArticle 由 fetchArticleDetail 内部立即用列表数据回填，正文随后异步替换。
   try {
-    logger.info('ReadingCoordinator: enter reading mode', { articleId: article?.id })
     await store.fetchArticleDetail(article)
-    if (isRightSiderCollapsed.value) {
-      isRightSiderCollapsed.value = false
-    }
-    isReadingMode.value = true
   } catch (error) {
     logger.error('ReadingCoordinator: failed to load article detail', error)
   }
@@ -106,6 +108,23 @@ const handleRelatedArticleSelect = async (article) => {
     logger.error('ReadingCoordinator: failed to load related article detail', error)
   }
 }
+
+/** 收集面板请求打开某篇文章：进入阅读模式并加载（类似浏览器收藏夹点击） */
+watch(() => store.pendingReaderArticle.value, (article) => {
+  if (article) {
+    handleArticleSelect(article)
+    store.pendingReaderArticle.value = null
+  }
+})
+
+/** 切换知识领域分类时：退出阅读模式，回到卡片列表页（即使当前正在看正文） */
+watch(() => store.selectedCategory.value, () => {
+  if (isReadingMode.value) {
+    isReadingMode.value = false
+    isRightSiderCollapsed.value = true
+    store.currentArticle.value = null
+  }
+})
 
 /** 视图模式切换（网格/杂志/列表）时退出阅读模式，恢复中间内容区域显示 */
 watch(() => store.currentView.value, () => {

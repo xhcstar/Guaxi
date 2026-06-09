@@ -5,31 +5,75 @@
 
       <n-space align="center" :wrap="true">
         <n-select v-model:value="filterCategory" size="small" clearable placeholder="筛选分类" :options="categoryOptions"
-          :disabled="loading" style="width: 180px" />
+          :disabled="loading" style="width: 160px" />
 
         <n-input v-model:value="keyword" size="small" clearable placeholder="搜索名称 / URL" :disabled="loading"
-          style="width: 260px" />
+          style="width: 240px">
+          <template #prefix>
+            <n-icon :component="SearchIcon" />
+          </template>
+        </n-input>
 
-        <n-button size="small" @click="refresh" :loading="loading">
-          刷新
-        </n-button>
+        <n-tooltip trigger="hover">
+          <template #trigger>
+            <n-button size="small" circle @click="refresh" :loading="loading">
+              <n-icon :component="RefreshIcon" />
+            </n-button>
+          </template>
+          刷新列表
+        </n-tooltip>
+
+        <n-tooltip trigger="hover">
+          <template #trigger>
+            <n-button size="small" circle type="error" secondary @click="stopAll" :loading="stoppingAll">
+              <n-icon :component="StopIcon" />
+            </n-button>
+          </template>
+          终止全部抓取任务
+        </n-tooltip>
 
         <n-button type="primary" size="small" @click="openSimpleDialog" :disabled="loading">
-          快速添加信息源
+          <template #icon><n-icon :component="AddIcon" /></template>
+          快速添加
         </n-button>
 
         <n-button type="primary" size="small" ghost @click="openCrawlDialog" :disabled="loading">
-          整站深度抓取
+          <template #icon><n-icon :component="CrawlIcon" /></template>
+          整站深抓
         </n-button>
 
         <n-button size="small" @click="openAddDialog" :disabled="loading">
+          <template #icon><n-icon :component="ConfigIcon" /></template>
           高级配置
         </n-button>
       </n-space>
     </div>
 
+    <!-- 批量操作条：选中条目后出现 -->
+    <transition name="fade">
+      <div v-if="checkedRowKeys.length" class="batch-bar">
+        <span class="batch-count">已选 {{ checkedRowKeys.length }} 项</span>
+        <n-space :size="8">
+          <n-button size="small" secondary @click="batchSetEnabled(true)" :loading="batchLoading">
+            <template #icon><n-icon :component="EnableIcon" /></template>
+            批量启用
+          </n-button>
+          <n-button size="small" secondary @click="batchSetEnabled(false)" :loading="batchLoading">
+            <template #icon><n-icon :component="DisableIcon" /></template>
+            批量禁用
+          </n-button>
+          <n-button size="small" type="error" @click="batchDelete" :loading="batchLoading">
+            <template #icon><n-icon :component="TrashIcon" /></template>
+            批量删除
+          </n-button>
+          <n-button size="small" quaternary @click="checkedRowKeys = []">取消选择</n-button>
+        </n-space>
+      </div>
+    </transition>
+
     <n-data-table class="table" :columns="columns" :data="filteredFeeds" :row-key="rowKey" :loading="loading"
-      :pagination="pagination" :scroll-x="scrollX" :bordered="false" :striped="true" />
+      :pagination="pagination" :scroll-x="scrollX" :bordered="false" :striped="true"
+      v-model:checked-row-keys="checkedRowKeys" />
 
     <FeedSourceConfigDialog :show="showDialog" :categories="categories" :default-category="filterCategory || 'all'"
       :initial-feed="editingFeed" @update:show="val => (showDialog = val)" @submit="handleDialogSubmit"
@@ -106,7 +150,22 @@ import { createLogger } from '../../utils/logger'
  * - FeedSourceConfigDialog 收集了更多字段（sourceType/fetchInterval/keywords/remark），当前仅使用 name/url/categoryId 参与后端调用
  */
 import { computed, h, onMounted, onUnmounted, ref } from 'vue'
-import { NButton, NSwitch, NTag, NModal, NForm, NFormItem, NSelect, createDiscreteApi } from 'naive-ui'
+import { NButton, NSwitch, NTag, NModal, NForm, NFormItem, NSelect, NIcon, NTooltip, darkTheme, createDiscreteApi } from 'naive-ui'
+import { useSettingsStore } from '../../stores/settingsStore'
+import {
+  SearchOutline as SearchIcon,
+  RefreshOutline as RefreshIcon,
+  AddCircleOutline as AddIcon,
+  GlobeOutline as CrawlIcon,
+  OptionsOutline as ConfigIcon,
+  CreateOutline as EditIcon,
+  LogInOutline as LoginIcon,
+  ReloadOutline as RecrawlIcon,
+  TrashOutline as TrashIcon,
+  CheckmarkCircleOutline as EnableIcon,
+  CloseCircleOutline as DisableIcon,
+  StopCircleOutline as StopIcon
+} from '@vicons/ionicons5'
 import { useFlipboardStore } from '../../stores/flipboardStore.js'
 import FeedSourceConfigDialog from './FeedSourceConfigDialog.vue'
 
@@ -121,7 +180,14 @@ const props = defineProps({
 })
 
 const store = useFlipboardStore()
-const { message, dialog } = createDiscreteApi(['message', 'dialog'])
+const settingsStore = useSettingsStore()
+// 让独立的 message/dialog 跟随应用主题（暗色模式下提示文字清晰可读）。
+const discreteConfigProviderProps = computed(() => ({
+  theme: settingsStore.appearanceTheme === 'dark' ? darkTheme : null
+}))
+const { message, dialog } = createDiscreteApi(['message', 'dialog'], {
+  configProviderProps: discreteConfigProviderProps
+})
 
 const loading = ref(false)
 const keyword = ref('')
@@ -188,6 +254,75 @@ const handleCrawlSubmit = async () => {
 
 // 行级别的“忙碌”集合：避免用户连续点击导致重复请求
 const busyIds = ref(new Set())
+
+// 批量选择 / 批量操作
+const checkedRowKeys = ref([])
+const batchLoading = ref(false)
+const stoppingAll = ref(false)
+
+const stopAll = async () => {
+  stoppingAll.value = true
+  try {
+    await store.stopAllFeedTasks()
+    message.success('已请求终止全部抓取任务')
+  } catch (e) {
+    logger.error('FlipboardFeedManager: stop all failed', e)
+    message.error(String(e || '终止失败'))
+  } finally {
+    stoppingAll.value = false
+  }
+}
+
+const stopFeed = async (row) => {
+  const id = String(row?.id || '')
+  if (!id) return
+  try {
+    await store.stopFeedTask(id)
+    message.success('已请求终止该源的抓取')
+  } catch (e) {
+    logger.error('FlipboardFeedManager: stop feed failed', e)
+    message.error(String(e || '终止失败'))
+  }
+}
+
+const batchDelete = () => {
+  const ids = checkedRowKeys.value.map(String).filter(Boolean)
+  if (!ids.length) return
+  dialog.warning({
+    title: '批量删除',
+    content: `确定删除选中的 ${ids.length} 个知识源吗？此操作不可撤销。`,
+    positiveText: '删除',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      batchLoading.value = true
+      try {
+        const removed = await store.deleteFeeds(ids)
+        message.success(`已删除 ${removed} 个知识源`)
+        checkedRowKeys.value = []
+      } catch (e) {
+        logger.error('FlipboardFeedManager: batch delete failed', e)
+        message.error(String(e || '批量删除失败'))
+      } finally {
+        batchLoading.value = false
+      }
+    }
+  })
+}
+
+const batchSetEnabled = async (enabled) => {
+  const ids = checkedRowKeys.value.map(String).filter(Boolean)
+  if (!ids.length) return
+  batchLoading.value = true
+  try {
+    const changed = await store.setFeedsEnabled(ids, enabled)
+    message.success(`已${enabled ? '启用' : '禁用'} ${changed} 个知识源`)
+  } catch (e) {
+    logger.error('FlipboardFeedManager: batch set enabled failed', e)
+    message.error(String(e || '批量操作失败'))
+  } finally {
+    batchLoading.value = false
+  }
+}
 
 // 整站抓取进度：feedId -> { pending, done, error, total }
 const crawlProgress = ref({})
@@ -282,6 +417,11 @@ const columns = computed(() => {
 
   return [
     {
+      type: 'selection',
+      width: 44,
+      fixed: 'left'
+    },
+    {
       title: () => h('span', { style: titleStyle }, '名称'),
       key: 'name',
       width: 180,
@@ -359,73 +499,51 @@ const columns = computed(() => {
     {
       title: () => h('span', { style: titleStyle }, '操作'),
       key: 'actions',
-      width: 280,
+      width: 230,
       render: (row) => {
         const id = String(row?.id || '')
         const isBusy = busyIds.value.has(id)
         const isCrawl = String(row?.source_type || '') === 'site_crawl'
 
-        const buttons = [
-          h(
-            NButton,
-            {
-              size: 'tiny',
-              secondary: true,
-              disabled: isBusy,
-              onClick: () => openEditDialog(row)
-            },
-            { default: () => '编辑' }
-          )
-        ]
+        const buttons = [iconAction({ icon: EditIcon, tip: '编辑', disabled: isBusy, onClick: () => openEditDialog(row) })]
 
         if (isCrawl) {
           buttons.push(
-            h(
-              NButton,
-              {
-                size: 'tiny',
-                secondary: true,
-                disabled: isBusy,
-                onClick: () => handleLogin(row)
-              },
-              { default: () => '登录' }
-            ),
-            h(
-              NButton,
-              {
-                size: 'tiny',
-                secondary: true,
-                disabled: isBusy,
-                onClick: () => handleRecrawl(row)
-              },
-              { default: () => '重爬' }
-            )
+            iconAction({ icon: LoginIcon, tip: '登录该站', disabled: isBusy, onClick: () => handleLogin(row) }),
+            iconAction({ icon: RecrawlIcon, tip: '重新抓取', disabled: isBusy, onClick: () => handleRecrawl(row) }),
+            iconAction({ icon: StopIcon, tip: '终止抓取', type: 'warning', onClick: () => stopFeed(row) })
           )
         }
 
         buttons.push(
-          h(
-            NButton,
-            {
-              size: 'tiny',
-              type: 'error',
-              secondary: true,
-              disabled: isBusy,
-              onClick: () => confirmDelete(row)
-            },
-            { default: () => '删除' }
-          )
+          iconAction({ icon: TrashIcon, tip: '删除', type: 'error', disabled: isBusy, onClick: () => confirmDelete(row) })
         )
 
-        return h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } }, buttons)
+        return h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'nowrap' } }, buttons)
       }
     }
   ]
 })
 
+// 渲染一个带 tooltip 的圆形图标操作按钮（供表格 render 复用）。
+const iconAction = ({ icon, tip, type, disabled, onClick }) =>
+  h(
+    NTooltip,
+    { trigger: 'hover' },
+    {
+      trigger: () =>
+        h(
+          NButton,
+          { size: 'small', circle: true, tertiary: true, type, disabled, onClick },
+          { icon: () => h(NIcon, null, { default: () => h(icon) }) }
+        ),
+      default: () => tip
+    }
+  )
+
 const scrollX = computed(() => {
   // 与 columns.width 对齐；留一点余量避免布局抖动
-  return 180 + 360 + 120 + 90 + 140 + 280 + 24
+  return 44 + 180 + 360 + 120 + 90 + 140 + 230 + 24
 })
 
 const handleLogin = async (row) => {
@@ -667,6 +785,23 @@ onUnmounted(() => {
   color: var(--guaxi-text-primary);
 }
 
+.batch-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.12), rgba(118, 75, 162, 0.12));
+  border: 1px solid rgba(102, 126, 234, 0.3);
+}
+
+.batch-count {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--guaxi-text-primary);
+}
+
 .table {
   flex: 1 1 auto;
   min-height: 0;
@@ -674,5 +809,16 @@ onUnmounted(() => {
   border: 1px solid var(--guaxi-border);
   border-radius: 10px;
   padding: 8px;
+}
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
 }
 </style>

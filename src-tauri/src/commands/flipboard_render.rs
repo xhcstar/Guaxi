@@ -14,7 +14,7 @@ use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::fetcher::{BrowserFetcher, BrowserFetcherOptions};
 use futures_util::StreamExt;
 use once_cell::sync::Lazy;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, OnceCell, Semaphore};
@@ -38,25 +38,39 @@ static RENDER_SEMAPHORE: Lazy<Semaphore> = Lazy::new(|| Semaphore::new(3));
 /// 全局共享的 Chrome 实例（懒启动）。`None` 表示尚未启动。
 static BROWSER: OnceCell<Arc<Mutex<Option<BrowserHandle>>>> = OnceCell::const_new();
 
-/// Chrome 熔断器：无头渲染连续启动失败若干次后，本进程内停用 Chrome 升级，
-/// 后续抓取干净降级到 HTTP，避免反复崩溃 + 刷屏 WS 错误日志拖慢 UI。
-static HEADLESS_DISABLED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+/// Chrome 熔断器：仅在浏览器**确实**连续启动失败时短暂暂停，避免无意义的反复崩溃；
+/// 冷却后自动恢复（绝不永久降级）。正常环境下因启动稳定，几乎不会触发。
 static HEADLESS_FAIL_COUNT: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0);
-/// 连续失败达到该阈值即熔断。
-const HEADLESS_FAIL_THRESHOLD: u32 = 2;
+static HEADLESS_DISABLED_UNTIL: Lazy<std::sync::Mutex<Option<std::time::Instant>>> =
+    Lazy::new(|| std::sync::Mutex::new(None));
+/// 连续失败达到该阈值才进入冷却（提高阈值，避免“动不动就降级”）。
+const HEADLESS_FAIL_THRESHOLD: u32 = 6;
+/// 冷却时长：到点自动恢复并清零计数。
+const HEADLESS_COOLDOWN: Duration = Duration::from_secs(90);
 
 fn headless_disabled() -> bool {
-    HEADLESS_DISABLED.load(std::sync::atomic::Ordering::Relaxed)
+    let mut guard = HEADLESS_DISABLED_UNTIL.lock().unwrap();
+    match *guard {
+        Some(until) if std::time::Instant::now() < until => true,
+        Some(_) => {
+            // 冷却结束：自动恢复。
+            *guard = None;
+            HEADLESS_FAIL_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
+            false
+        }
+        None => false,
+    }
 }
 
 fn note_headless_failure() {
     let n = HEADLESS_FAIL_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
     if n >= HEADLESS_FAIL_THRESHOLD {
-        HEADLESS_DISABLED.store(true, std::sync::atomic::Ordering::Relaxed);
+        *HEADLESS_DISABLED_UNTIL.lock().unwrap() =
+            Some(std::time::Instant::now() + HEADLESS_COOLDOWN);
         warn!(
-            "flipboard_render: headless Chrome disabled after {} failures; falling back to HTTP-only for this session",
+            "flipboard_render: headless Chrome paused for {}s after {} failures (will auto-recover)",
+            HEADLESS_COOLDOWN.as_secs(),
             n
         );
     }
@@ -64,6 +78,7 @@ fn note_headless_failure() {
 
 fn note_headless_success() {
     HEADLESS_FAIL_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
+    *HEADLESS_DISABLED_UNTIL.lock().unwrap() = None;
 }
 
 struct BrowserHandle {
@@ -279,67 +294,205 @@ fn body_is_thin(html: &str) -> bool {
         || lower.contains("enable javascript")
 }
 
-/// 解析 Chromium 可执行路径：环境变量 > 自动下载缓存。首次会触发下载。
+/// 解析一个**实测可用**的浏览器：环境变量 > 系统 Chrome/Edge > 随包下载 Chromium。
+/// 对每个候选执行真实启动探测（probe），只缓存能真正拉起 + 建立 CDP 连接的那个，
+/// 从根本上避免“选了个起不来的浏览器然后一直降级”。
 async fn ensure_chromium_executable() -> Result<PathBuf, String> {
     static CHROME_PATH: OnceCell<PathBuf> = OnceCell::const_new();
     CHROME_PATH
         .get_or_try_init(|| async {
-            // 1. 环境变量覆盖（用户已装 Chrome/Edge）。
+            let mut candidates: Vec<PathBuf> = Vec::new();
+            // 1. 环境变量显式指定。
             for var in ["GUAXI_CHROME_PATH", "CHROME_PATH"] {
                 if let Ok(p) = std::env::var(var) {
                     let pb = PathBuf::from(p);
-                    if pb.exists() {
-                        return Ok(pb);
+                    if pb.exists() && !candidates.contains(&pb) {
+                        candidates.push(pb);
                     }
                 }
             }
-            // 2. 系统已安装的 Chrome / Edge（比自动下载的 snapshot 与 CDP 协议更稳，
-            //    可避免 "WS Invalid message" 协议不匹配与启动崩溃）。
-            if let Some(pb) = find_system_chrome() {
-                info!("flipboard_render: using system browser at {:?}", pb);
-                return Ok(pb);
+            // 2. 系统已安装的 Chrome / Edge（全部候选，Chrome 优先）。
+            for pb in find_system_browsers() {
+                if !candidates.contains(&pb) {
+                    candidates.push(pb);
+                }
             }
-            // 3. 自动下载到应用数据目录。
+
+            // 逐个实测启动，选第一个真正能用的。
+            for cand in &candidates {
+                if probe_browser(cand).await {
+                    info!("flipboard_render: verified working browser: {:?}", cand);
+                    return Ok(cand.clone());
+                }
+                warn!(
+                    "flipboard_render: browser candidate failed launch probe, skipping: {:?}",
+                    cand
+                );
+            }
+
+            // 3. 系统浏览器都不可用 → 下载随包 Chromium 并实测。
             let download_dir = chromium_download_dir()?;
             tokio::fs::create_dir_all(&download_dir)
                 .await
                 .map_err(|e| format!("create chromium dir failed: {e}"))?;
-            info!("flipboard_render: fetching headless Chromium into {:?}", download_dir);
+            info!(
+                "flipboard_render: no working system browser, fetching bundled Chromium into {:?}",
+                download_dir
+            );
             let fetcher = BrowserFetcher::new(
                 BrowserFetcherOptions::builder()
                     .with_path(&download_dir)
                     .build()
                     .map_err(|e| format!("fetcher options: {e}"))?,
             );
-            let info = fetcher
+            let dl = fetcher
                 .fetch()
                 .await
                 .map_err(|e| format!("download chromium failed: {e}"))?;
-            info!("flipboard_render: chromium ready at {:?}", info.executable_path);
-            Ok(info.executable_path)
+            let exec = dl.executable_path;
+            if probe_browser(&exec).await {
+                info!("flipboard_render: verified bundled Chromium: {:?}", exec);
+            } else {
+                warn!(
+                    "flipboard_render: bundled Chromium failed probe; will still try on demand: {:?}",
+                    exec
+                );
+            }
+            Ok(exec)
         })
         .await
         .cloned()
 }
 
-/// 探测系统已安装的 Chrome / Edge（Windows 常见安装路径）。
-fn find_system_chrome() -> Option<PathBuf> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    let envs = [
+/// 探测系统已安装的 Chrome / Edge（Windows 常见安装路径），返回所有存在的候选（Chrome 优先）。
+fn find_system_browsers() -> Vec<PathBuf> {
+    let bases: Vec<String> = [
         std::env::var("PROGRAMFILES").ok(),
         std::env::var("PROGRAMFILES(X86)").ok(),
         std::env::var("LOCALAPPDATA").ok(),
-    ];
-    let rel = [
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let rels = [
         r"Google\Chrome\Application\chrome.exe",
         r"Microsoft\Edge\Application\msedge.exe",
     ];
-    for base in envs.iter().flatten() {
-        for r in rel.iter() {
-            candidates.push(PathBuf::from(base).join(r));
+    let mut out: Vec<PathBuf> = Vec::new();
+    for rel in rels.iter() {
+        for base in bases.iter() {
+            let p = PathBuf::from(base).join(rel);
+            if p.exists() && !out.contains(&p) {
+                out.push(p);
+            }
         }
     }
-    candidates.into_iter().find(|p| p.exists())
+    out
+}
+
+/// 清理上次未正常关闭残留的“单实例锁”文件。这些残留会让新 Chrome 误以为已有实例在跑，
+/// 启动即退出（典型表现：status 21 / "exited before websocket URL could be resolved"）。
+fn clean_singleton_locks(dir: &Path) {
+    for name in [
+        "SingletonLock",
+        "SingletonSocket",
+        "SingletonCookie",
+        "lockfile",
+        "DevToolsActivePort",
+    ] {
+        let _ = std::fs::remove_file(dir.join(name));
+    }
+}
+
+/// 统一构建启动配置。`--remote-allow-origins=*` 是 Chrome 111+ 接受 DevTools WebSocket 的必需项
+/// （缺失会导致连接被拒 / "WS Invalid message" / 握手失败）。
+fn build_browser_config(
+    exec: &Path,
+    user_data: &Path,
+    headless: bool,
+) -> Result<BrowserConfig, String> {
+    let ua = "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+        (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
+    let mut builder = BrowserConfig::builder()
+        .chrome_executable(exec)
+        .user_data_dir(user_data)
+        .window_size(1366, 900)
+        .request_timeout(Duration::from_secs(30))
+        // Chrome 111+ DevTools WebSocket 必需，否则连接被拒。
+        .arg("--remote-allow-origins=*")
+        // ===== 反自动化检测旗标集合（参考 undetected-chromedriver / Crawl4AI）=====
+        .arg("--disable-blink-features=AutomationControlled")
+        .arg("--disable-features=IsolateOrigins,site-per-process,AutomationControlled,Translate,TranslateUI,OptimizationHints")
+        .arg("--disable-infobars")
+        .arg("--disable-popup-blocking")
+        .arg("--disable-notifications")
+        .arg("--disable-background-timer-throttling")
+        .arg("--disable-backgrounding-occluded-windows")
+        .arg("--disable-renderer-backgrounding")
+        .arg("--disable-ipc-flooding-protection")
+        .arg("--no-service-autorun")
+        .arg("--password-store=basic")
+        .arg("--use-mock-keychain")
+        .arg("--no-first-run")
+        .arg("--no-default-browser-check")
+        .arg("--disable-gpu")
+        .arg("--disable-dev-shm-usage")
+        .arg("--lang=zh-CN")
+        .arg("--window-size=1366,900")
+        .arg(ua);
+
+    // 可选代理（IP 轮换）：环境变量 GUAXI_RENDER_PROXY=http://host:port 或 socks5://...
+    if let Some(proxy) = render_proxy() {
+        builder = builder.arg(format!("--proxy-server={}", proxy));
+    }
+
+    if headless {
+        builder = builder.new_headless_mode();
+    } else {
+        builder = builder.with_head();
+    }
+
+    builder
+        .no_sandbox()
+        .build()
+        .map_err(|e| format!("browser config: {e}"))
+}
+
+/// 实测探测：尝试以无头模式真正启动该浏览器并打开一个空白页，验证可用性。
+async fn probe_browser(exec: &Path) -> bool {
+    let user_data = match chrome_profile_dir("__probe__") {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+    let _ = tokio::fs::create_dir_all(&user_data).await;
+    clean_singleton_locks(&user_data);
+
+    let config = match build_browser_config(exec, &user_data, true) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    match tokio::time::timeout(Duration::from_secs(20), Browser::launch(config)).await {
+        Ok(Ok((mut browser, mut handler))) => {
+            let h = tokio::spawn(async move {
+                while let Some(ev) = handler.next().await {
+                    if ev.is_err() {
+                        break;
+                    }
+                }
+            });
+            // 真正建立一次 CDP 调用，确认 WebSocket 通了。
+            let ok = tokio::time::timeout(Duration::from_secs(10), browser.new_page("about:blank"))
+                .await
+                .map(|r| r.is_ok())
+                .unwrap_or(false);
+            let _ = browser.close().await;
+            h.abort();
+            ok
+        }
+        _ => false,
+    }
 }
 
 fn chromium_download_dir() -> Result<PathBuf, String> {
@@ -373,49 +526,10 @@ async fn launch_browser(profile: &str, headless: bool) -> Result<Browser, String
     tokio::fs::create_dir_all(&user_data)
         .await
         .map_err(|e| format!("create profile dir failed: {e}"))?;
+    // 清理上次未正常关闭残留的单实例锁，避免 Chrome 启动即退出（status 21）。
+    clean_singleton_locks(&user_data);
 
-    // 现代 Chrome UA（不含 "HeadlessChrome"，避免最直接的指纹）。
-    let ua = "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
-        (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
-
-    let mut builder = BrowserConfig::builder()
-        .chrome_executable(exec)
-        .user_data_dir(user_data)
-        .window_size(1366, 900)
-        .request_timeout(Duration::from_secs(30))
-        // ===== 反自动化检测旗标集合（参考 undetected-chromedriver / Crawl4AI）=====
-        .arg("--disable-blink-features=AutomationControlled")
-        .arg("--disable-features=IsolateOrigins,site-per-process,AutomationControlled,Translate,TranslateUI,OptimizationHints")
-        .arg("--disable-infobars")
-        .arg("--disable-popup-blocking")
-        .arg("--disable-notifications")
-        .arg("--disable-background-timer-throttling")
-        .arg("--disable-backgrounding-occluded-windows")
-        .arg("--disable-renderer-backgrounding")
-        .arg("--disable-ipc-flooding-protection")
-        .arg("--no-service-autorun")
-        .arg("--password-store=basic")
-        .arg("--use-mock-keychain")
-        .arg("--no-first-run")
-        .arg("--no-default-browser-check")
-        .arg("--disable-gpu")
-        .arg("--disable-dev-shm-usage")
-        .arg("--lang=zh-CN")
-        .arg("--window-size=1366,900")
-        .arg(ua);
-
-    // 可选代理（IP 轮换）：环境变量 GUAXI_RENDER_PROXY=http://host:port 或 socks5://...
-    if let Some(proxy) = render_proxy() {
-        builder = builder.arg(format!("--proxy-server={}", proxy));
-    }
-
-    if headless {
-        builder = builder.new_headless_mode();
-    } else {
-        builder = builder.with_head();
-    }
-
-    let config = builder.no_sandbox().build().map_err(|e| format!("browser config: {e}"))?;
+    let config = build_browser_config(&exec, &user_data, headless)?;
     let (browser, mut handler) = Browser::launch(config)
         .await
         .map_err(|e| format!("launch chrome failed: {e}"))?;

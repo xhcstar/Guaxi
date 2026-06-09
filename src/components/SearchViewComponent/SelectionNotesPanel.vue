@@ -20,77 +20,13 @@
       </div>
     </div>
 
-    <!-- 笔记面板：与阅读器一致的“我的笔记”布局 -->
-    <div class="notes-panel" :class="{ 'notes-panel-visible': showNotes }">
-      <div class="notes-header">
-        <h3>我的笔记</h3>
-        <button @click="toggleNotesPanel" class="close-btn" type="button">
-          关闭
-        </button>
-      </div>
-
-      <div class="notes-content">
-        <n-card v-for="(card, index) in noteCards" :key="card.id" class="note-card" size="small" :title="card.title"
-          :bordered="true" :segmented="{ content: true, footer: 'soft' }" header-style="padding: 12px 16px;"
-          content-style="padding: 0;">
-          <template #header-extra>
-            <div class="card-actions" v-if="activeCardIndex === index">
-              <n-button size="tiny" type="primary" @click.stop="saveCardEdit(index)" title="保存" :disabled="selectionBusy">
-                <template #icon>
-                  <n-icon :component="Save" />
-                </template>
-              </n-button>
-              <n-button size="tiny" tertiary @click.stop="exitEditMode(index)" title="退出编辑">
-                <template #icon>
-                  <n-icon :component="Close" />
-                </template>
-              </n-button>
-              <n-button size="tiny" type="error" tertiary @click.stop="deleteCard(index)" title="删除">
-                <template #icon>
-                  <n-icon :component="Trash" />
-                </template>
-              </n-button>
-            </div>
-          </template>
-
-          <!-- 非复合笔记：展示模式 -->
-          <div v-if="card.type !== 'composite' && activeCardIndex !== index" class="note-content"
-            :contenteditable="false" v-html="card.content" @click="enterEditMode(index)"></div>
-
-          <!-- 非复合笔记：编辑模式 -->
-          <div v-else-if="card.type !== 'composite' && activeCardIndex === index" class="note-content">
-            <textarea class="note-editor" v-model="card.content" @keydown.meta.s.prevent="saveCardEdit(index)"
-              @keydown.ctrl.s.prevent="saveCardEdit(index)"></textarea>
-          </div>
-
-          <!-- 复合笔记渲染：这里简化为直接显示 content 字段 -->
-          <div v-else class="note-content" @click="enterEditMode(index)">
-            <pre class="composite-note-content">{{ card.content }}</pre>
-          </div>
-
-          <template #footer>
-            <n-text depth="3" style="font-size: 12px;">
-              {{ formatTime(card.timestamp) }}
-            </n-text>
-          </template>
-        </n-card>
-
-        <div class="add-card-container">
-          <n-button type="primary" dashed block @click="addNewCard">
-            <template #icon>
-              <n-icon :component="Add" />
-            </template>
-            添加新卡片
-          </n-button>
-        </div>
-      </div>
-    </div>
+    <!-- 笔记的展示与管理已统一到右上角「我的收集」面板，这里只负责采集。 -->
 
     <!-- 添加笔记的提示气泡 -->
     <transition name="fade">
       <div v-if="showNoteBubble" class="note-added-bubble">
         <div class="bubble-content">
-          <span>已添加到笔记</span>
+          <span>已收集到「我的收集」</span>
         </div>
       </div>
     </transition>
@@ -685,13 +621,20 @@ onMounted(async () => {
  * 双击插入：父组件传入一段文本（句子/段落），直接生成一张笔记卡片，无需手动选择。
  * 插入后自动展开笔记面板，让用户看到结果。
  */
-const insertBlockText = async (text) => {
-  const safe = String(text || '').trim()
-  if (!safe) return
-  await addToNotes({ type: 'text', content: safe, originalMarkdown: safe })
-  if (!showNotes.value) {
-    showNotes.value = true
+const insertBlockText = async (input) => {
+  // 兼容两种调用：传字符串（纯文本）或传 {type, content, originalMarkdown}（图片/视频等复杂格式）。
+  let payload
+  if (typeof input === 'string') {
+    const safe = input.trim()
+    if (!safe) return
+    payload = { type: 'text', content: safe, originalMarkdown: safe }
+  } else if (input && typeof input === 'object') {
+    if (!String(input.content || input.originalMarkdown || '').trim()) return
+    payload = input
+  } else {
+    return
   }
+  await addToNotes(payload)
 }
 
 // 将 handleSelectionMouseUp / toggleNotesPanel / insertBlockText 暴露给父组件

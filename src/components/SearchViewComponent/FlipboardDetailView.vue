@@ -15,29 +15,15 @@
 
         <n-tooltip placement="bottom" trigger="hover">
           <template #trigger>
-            <n-button circle size="small" @click="toggleBookmark" :type="isCurrentBookmarked ? 'primary' : 'default'">
+            <n-button circle size="small" class="bookmark-toggle" :class="{ 'is-on': isCurrentBookmarked }"
+              @click="toggleBookmark">
               <n-icon>
-                <BookmarkIcon />
+                <BookmarkFilledIcon v-if="isCurrentBookmarked" />
+                <BookmarkIcon v-else />
               </n-icon>
             </n-button>
           </template>
-          收藏文章/取消收藏
-        </n-tooltip>
-
-        <n-tooltip placement="bottom" trigger="hover">
-          <template #trigger>
-            <n-button
-              circle
-              size="small"
-              :disabled="!currentArticle"
-              @click="selectionNotesRef?.toggleNotesPanel?.()"
-            >
-              <n-icon>
-                <DocumentTextIcon />
-              </n-icon>
-            </n-button>
-          </template>
-          笔记
+          {{ isCurrentBookmarked ? '取消收藏' : '收藏文章' }}
         </n-tooltip>
 
         <n-tooltip placement="bottom" trigger="hover">
@@ -199,6 +185,7 @@ import { useFlipboardStore } from '../../stores/flipboardStore.js'
 import SelectionNotesPanel from './SelectionNotesPanel.vue'
 import {
   BookmarkOutline,
+  Bookmark,
   ShareSocialOutline,
   CloseOutline,
   DocumentTextOutline,
@@ -207,6 +194,7 @@ import {
 } from '@vicons/ionicons5'
 
 const BookmarkIcon = BookmarkOutline
+const BookmarkFilledIcon = Bookmark
 const ShareIcon = ShareSocialOutline
 const CloseIcon = CloseOutline
 const DocumentTextIcon = DocumentTextOutline
@@ -366,18 +354,52 @@ const handleContentDblClick = (event) => {
     return
   }
 
-  // 向上找到最近的块级元素（p/h1-h4/li/blockquote/pre）。
+  // 直接双击图片：收集该图片。
+  const target = event.target
+  if (target && target.tagName === 'IMG' && target.src) {
+    selectionNotesRef.value?.insertBlockText?.({
+      type: 'image',
+      content: target.src,
+      originalMarkdown: `![${target.alt || '图片'}](${target.src})`
+    })
+    return
+  }
+
+  // 向上找到最近的块级元素（p/h1-h4/li/blockquote/pre/figure/div）。
   let el = event.target
-  const blockTags = new Set(['P', 'H1', 'H2', 'H3', 'H4', 'LI', 'BLOCKQUOTE', 'PRE'])
+  const blockTags = new Set(['P', 'H1', 'H2', 'H3', 'H4', 'LI', 'BLOCKQUOTE', 'PRE', 'FIGURE', 'DIV'])
   while (el && el !== event.currentTarget && !blockTags.has(el.tagName)) {
     el = el.parentElement
   }
-  const text = el && el !== event.currentTarget ? String(el.innerText || el.textContent || '').trim() : ''
+  if (!el || el === event.currentTarget) return
+
+  const text = String(el.innerText || el.textContent || '').trim()
+
+  // 块内含视频（iframe / video）：收集视频链接。
+  const media = el.querySelector?.('iframe[src], video source[src], video[src]')
+  const mediaUrl = media?.src || media?.getAttribute?.('src') || ''
+  if (mediaUrl) {
+    selectionNotesRef.value?.insertBlockText?.({
+      type: 'video',
+      content: mediaUrl,
+      originalMarkdown: `[▶ 视频](${mediaUrl})`
+    })
+    return
+  }
+
+  // 块内主要是图片（文字很少）：收集图片。
+  const img = el.querySelector?.('img[src]')
+  if (img?.src && text.length < 12) {
+    selectionNotesRef.value?.insertBlockText?.({
+      type: 'image',
+      content: img.src,
+      originalMarkdown: `![${img.alt || '图片'}](${img.src})`
+    })
+    return
+  }
+
   if (text) {
     selectionNotesRef.value?.insertBlockText?.(text)
-  } else {
-    // 没命中具体块：退回打开/关闭笔记面板。
-    selectionNotesRef.value?.toggleNotesPanel?.()
   }
 }
 
@@ -450,6 +472,7 @@ const formatTime = (timeString) => {
   display: flex;
   gap: 8px;
   align-items: center;
+  justify-content: flex-end;
 }
 
 .reader-actions .n-button {
@@ -462,6 +485,14 @@ const formatTime = (timeString) => {
 .reader-actions .n-button:hover {
   background: var(--guaxi-content-bg);
   color: var(--guaxi-text-primary);
+}
+
+/* 收藏激活态：金色高亮，点击后状态变化清晰可见 */
+.reader-actions .n-button.bookmark-toggle.is-on,
+.reader-actions .n-button.bookmark-toggle.is-on:hover {
+  background: rgba(240, 160, 32, 0.14);
+  color: #f0a020;
+  border-color: #f0a020;
 }
 
 .close-btn {
@@ -612,16 +643,19 @@ const formatTime = (timeString) => {
   color: var(--guaxi-primary, #2563eb);
 }
 
-/* 双击插入：句子/段落块悬停高亮，提示可双击收集 */
+/* 双击插入：句子/段落块悬停时柔和高亮 + 左侧强调条，提示可双击收集 */
 .article-content :deep(p),
 .article-content :deep(li),
 .article-content :deep(h2),
 .article-content :deep(h3),
 .article-content :deep(blockquote),
 .article-content :deep(pre) {
-  border-radius: 6px;
-  transition: background 0.15s ease, box-shadow 0.15s ease;
-  cursor: text;
+  border-radius: 8px;
+  padding: 4px 10px;
+  margin-left: -10px;
+  margin-right: -10px;
+  box-shadow: inset 3px 0 0 transparent;
+  transition: background 0.18s ease, box-shadow 0.18s ease;
 }
 
 .article-content :deep(p:hover),
@@ -630,8 +664,13 @@ const formatTime = (timeString) => {
 .article-content :deep(h3:hover),
 .article-content :deep(blockquote:hover),
 .article-content :deep(pre:hover) {
-  background: var(--guaxi-header-bg, rgba(37, 99, 235, 0.06));
-  box-shadow: inset 0 0 0 1px var(--guaxi-border, rgba(37, 99, 235, 0.15));
+  background: rgba(37, 99, 235, 0.05);
+  box-shadow: inset 3px 0 0 rgba(37, 99, 235, 0.55);
+}
+
+/* 选中文字的高亮色，统一品牌色 */
+.article-content :deep(::selection) {
+  background: rgba(37, 99, 235, 0.22);
 }
 
 .article-content :deep(p) {

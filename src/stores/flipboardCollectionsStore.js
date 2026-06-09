@@ -116,6 +116,63 @@ export const useFlipboardCollectionsStore = () => {
     await save()
   }
 
+  /** 把一篇文章作为「收藏」条目写入收集库（卡片点收藏 icon 时调用）。 */
+  const bookmarkEntryId = (articleId) => `bookmark::${String(articleId)}`
+
+  const upsertBookmarkArticle = async (article) => {
+    const aid = String(article?.id || '').trim()
+    if (!aid) return
+    await load()
+    const entry = {
+      id: bookmarkEntryId(aid),
+      articleId: aid,
+      type: 'bookmark',
+      title: String(article?.title || '未命名文章'),
+      content: String(article?.description || article?.summary || article?.content || '').trim(),
+      sourceUrl: String(article?.url || ''),
+      sourceTitle: String(article?.source || article?.title || ''),
+      category: String(article?.category || ''),
+      favorite: true,
+      timestamp: article?.bookmarkedAt || new Date().toISOString()
+    }
+    const idx = entries.value.findIndex(e => e.id === entry.id)
+    if (idx >= 0) entries.value.splice(idx, 1, entry)
+    else entries.value.push(entry)
+    await save()
+  }
+
+  const removeBookmarkArticle = async (articleId) => {
+    await removeEntry(bookmarkEntryId(articleId))
+  }
+
+  /** 启动时把收藏夹（localStorage 文章）与收集库的 bookmark 条目对齐。 */
+  const syncBookmarks = async (bookmarks) => {
+    await load()
+    const list = Array.isArray(bookmarks) ? bookmarks : []
+    const wantIds = new Set(list.map(b => bookmarkEntryId(b?.id)))
+    // 移除已取消收藏的 bookmark 条目（保留所有 note 条目）。
+    entries.value = entries.value.filter(e => e.type !== 'bookmark' || wantIds.has(e.id))
+    for (const b of list) {
+      const id = bookmarkEntryId(b?.id)
+      const entry = {
+        id,
+        articleId: String(b?.id || ''),
+        type: 'bookmark',
+        title: String(b?.title || '未命名文章'),
+        content: String(b?.description || b?.summary || b?.content || '').trim(),
+        sourceUrl: String(b?.url || ''),
+        sourceTitle: String(b?.source || b?.title || ''),
+        category: String(b?.category || ''),
+        favorite: true,
+        timestamp: b?.bookmarkedAt || new Date().toISOString()
+      }
+      const idx = entries.value.findIndex(e => e.id === id)
+      if (idx >= 0) entries.value.splice(idx, 1, entry)
+      else entries.value.push(entry)
+    }
+    await save()
+  }
+
   /** 切换某条笔记的「收藏夹」标记（长久保留）。 */
   const toggleFavorite = async (entryId) => {
     await load()
@@ -157,6 +214,9 @@ export const useFlipboardCollectionsStore = () => {
     )
   })
 
+  /** 「全部笔记」：只含笔记条目（排除卡片收藏的整篇文章）。 */
+  const noteEntries = computed(() => filteredEntries.value.filter(e => e.type !== 'bookmark'))
+
   /** 收藏夹：仅 favorite=true 的条目（在 filteredEntries 基础上再筛）。 */
   const favoriteEntries = computed(() => filteredEntries.value.filter(e => !!e.favorite))
 
@@ -164,12 +224,16 @@ export const useFlipboardCollectionsStore = () => {
     entries,
     searchQuery,
     filteredEntries,
+    noteEntries,
     favoriteEntries,
     load,
     save,
     syncArticleNotes,
     removeEntry,
     toggleFavorite,
+    upsertBookmarkArticle,
+    removeBookmarkArticle,
+    syncBookmarks,
     buildMarkdown
   }
   return store

@@ -43,6 +43,85 @@ static FEED_HTTP_CACHE: Lazy<Mutex<HashMap<String, FeedHttpCacheState>>> =
 static SCHEDULER_LOOP_STARTED: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
 static SCHEDULER_ENABLED: AtomicBool = AtomicBool::new(true);
 static LAST_CACHE_CLEANUP_AT: Lazy<Mutex<i64>> = Lazy::new(|| Mutex::new(0));
+
+// ===== 抓取任务取消（用户可随时终止，避免后台操作卡住或跑错配置无法停止）=====
+static CANCEL_ALL_TASKS: AtomicBool = AtomicBool::new(false);
+static CANCELLED_FEED_IDS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+// 每个 host 本会话内是否已主动弹出过登录窗口（避免反复弹窗）。
+static LOGIN_PROMPTED_HOSTS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+
+/// 某个 feed 的抓取是否被请求终止。
+fn is_task_cancelled(feed_id: &str) -> bool {
+    if CANCEL_ALL_TASKS.load(Ordering::Relaxed) {
+        return true;
+    }
+    CANCELLED_FEED_IDS
+        .lock()
+        .map(|s| s.contains(feed_id.trim()))
+        .unwrap_or(false)
+}
+
+/// 新一轮抓取开始时清除历史的“停止”标记，使停止只作用于当时在跑的任务。
+fn reset_task_cancellation() {
+    CANCEL_ALL_TASKS.store(false, Ordering::Relaxed);
+    if let Ok(mut s) = CANCELLED_FEED_IDS.lock() {
+        s.clear();
+    }
+}
+
+/// 清除单个 feed 的停止标记（重爬 / 重新启动该源时调用）。
+fn clear_feed_cancel(feed_id: &str) {
+    if let Ok(mut s) = CANCELLED_FEED_IDS.lock() {
+        s.remove(feed_id.trim());
+    }
+}
+
+/// 命中登录墙时，本会话内对该 host 仅主动弹出一次登录窗口（非阻塞）。
+fn maybe_prompt_login(url: &str) {
+    let host = match Url::parse(url.trim()).ok().and_then(|u| u.host_str().map(|h| h.to_string())) {
+        Some(h) => h,
+        None => return,
+    };
+    {
+        let mut set = match LOGIN_PROMPTED_HOSTS.lock() {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        if set.contains(&host) {
+            return;
+        }
+        set.insert(host.clone());
+    }
+    let login_url = url.trim().to_string();
+    let profile = host.clone();
+    // 后台弹出可见登录窗口，不阻塞抓取流程。
+    tokio::spawn(async move {
+        info!("flipboard: auto-opening login window for host {}", profile);
+        if let Err(e) =
+            crate::commands::flipboard_render::open_login_window(&profile, &login_url).await
+        {
+            warn!("flipboard: auto login window failed for {}: {}", profile, e);
+        }
+    });
+}
+
+/// 终止指定 feed 的抓取任务。
+#[command]
+pub async fn stop_feed_task(feed_id: String) -> Result<(), String> {
+    if let Ok(mut s) = CANCELLED_FEED_IDS.lock() {
+        s.insert(feed_id.trim().to_string());
+    }
+    info!("flipboard: stop_feed_task requested for {}", feed_id);
+    Ok(())
+}
+
+/// 终止全部抓取任务。
+#[command]
+pub async fn stop_all_feed_tasks() -> Result<(), String> {
+    CANCEL_ALL_TASKS.store(true, Ordering::Relaxed);
+    info!("flipboard: stop_all_feed_tasks requested");
+    Ok(())
+}
 const CACHE_RETENTION_SECONDS: i64 = 60 * 60 * 24 * 7;
 const CACHE_CLEANUP_INTERVAL_SECONDS: i64 = 60 * 60 * 24 * 7;
 static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
@@ -2294,6 +2373,55 @@ pub async fn delete_feed(id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// 批量删除订阅源。返回实际删除的数量；只保存一次配置。
+#[command]
+pub async fn delete_feeds(ids: Vec<String>) -> Result<usize, String> {
+    ensure_feeds_initialized();
+    let id_set: HashSet<String> = ids.into_iter().map(|s| s.trim().to_string()).collect();
+    if id_set.is_empty() {
+        return Ok(0);
+    }
+
+    let mut feeds_lock = FEEDS.lock().unwrap();
+    let before = feeds_lock.len();
+    feeds_lock.retain(|f| !id_set.contains(f.id.trim()));
+    let removed = before - feeds_lock.len();
+
+    if removed > 0 {
+        if let Err(e) = save_feeds_to_config(&feeds_lock) {
+            warn!("flipboard: save_feeds_to_config failed after delete_feeds: {}", e);
+        }
+    }
+    info!("flipboard: delete_feeds removed {}, remaining {}", removed, feeds_lock.len());
+    Ok(removed)
+}
+
+/// 批量启用/禁用订阅源。返回受影响的数量；只保存一次配置。
+#[command]
+pub async fn set_feeds_enabled(ids: Vec<String>, enabled: bool) -> Result<usize, String> {
+    ensure_feeds_initialized();
+    let id_set: HashSet<String> = ids.into_iter().map(|s| s.trim().to_string()).collect();
+    if id_set.is_empty() {
+        return Ok(0);
+    }
+
+    let mut feeds_lock = FEEDS.lock().unwrap();
+    let mut changed = 0usize;
+    for f in feeds_lock.iter_mut() {
+        if id_set.contains(f.id.trim()) && f.enabled != enabled {
+            f.enabled = enabled;
+            changed += 1;
+        }
+    }
+    if changed > 0 {
+        if let Err(e) = save_feeds_to_config(&feeds_lock) {
+            warn!("flipboard: save_feeds_to_config failed after set_feeds_enabled: {}", e);
+        }
+    }
+    info!("flipboard: set_feeds_enabled changed {} to {}", changed, enabled);
+    Ok(changed)
+}
+
 fn split_keywords(raw: &str) -> Vec<String> {
     raw.split(|c: char| c == ',' || c.is_whitespace())
         .filter(|s| !s.is_empty())
@@ -2802,6 +2930,8 @@ async fn hydrate_article_readable_content(article: &Article) -> Result<Article, 
             "flipboard: login wall detected for {} (final={})",
             article.url, final_url
         );
+        // 首次命中即主动弹出登录窗口（每 host 一次），用户登录后再次打开即可正常抓取。
+        maybe_prompt_login(&article.url);
     }
 
     Ok(enriched)
@@ -2816,6 +2946,10 @@ pub async fn fetch_knowledge_from_feed_ids(
     force: Option<bool>,
 ) -> Result<Vec<Article>, String> {
     ensure_feeds_initialized();
+    // 仅在用户主动强制刷新时清除历史“停止”标记；普通加载不清，使停止能持续生效。
+    if force == Some(true) {
+        reset_task_cancellation();
+    }
 
     let feed_id_set: HashSet<String> = feed_ids
         .into_iter()
@@ -2855,6 +2989,10 @@ pub async fn fetch_knowledge_from_feed_ids(
     let now = unix_now();
 
     for feed in &feeds {
+        // 用户随时可终止：命中则跳过剩余源，前端立即解除等待。
+        if is_task_cancelled(&feed.id) {
+            continue;
+        }
         if !force {
             let has_cache = has_cached_articles_for_feed(&feed.id).unwrap_or(false);
             let has_category_cache = if let Some(cat) = category_ref {
@@ -4229,6 +4367,11 @@ fn extract_page_links(html: &str, base: &Url) -> Vec<String> {
 /// 一次调度 tick 内对某个 site_crawl feed 的抓取：取预算条 URL，渲染→抽取→相关性，
 /// 并把页内链接入队。返回本批新文章。
 async fn crawl_tick_for_feed(feed: &FeedSource) -> Result<Vec<Article>, String> {
+    // 该源被请求终止：消费一次性标记并跳过本轮。
+    if is_task_cancelled(&feed.id) {
+        clear_feed_cancel(&feed.id);
+        return Ok(Vec::new());
+    }
     let cfg = CrawlConfig::from_feed(feed);
     let base = Url::parse(feed.url.trim())
         .or_else(|_| Url::parse(&format!("https://{}", feed.url.trim())))
@@ -4293,6 +4436,10 @@ async fn process_crawl_item(
     render_profile: &str,
     item: CrawlItem,
 ) -> Option<Article> {
+    // 用户已请求终止该任务：立即跳过，不再渲染抓取。
+    if is_task_cancelled(&feed.id) {
+        return None;
+    }
     if cfg.rate_delay_ms > 0 {
         sleep(Duration::from_millis(cfg.rate_delay_ms)).await;
     }
@@ -4324,6 +4471,8 @@ async fn process_crawl_item(
                     "blocked",
                     "命中登录墙/验证码，请为该源登录后重试".to_string(),
                 );
+                // 首次命中即主动弹出登录窗口（每 host 一次），无需用户手动找入口。
+                maybe_prompt_login(&page_url);
                 return None;
             }
             (page.html, page.mode)
@@ -4563,6 +4712,8 @@ pub async fn get_crawl_progress(feed_id: String) -> Result<CrawlQueueStats, Stri
 /// 重置某 feed 的爬虫队列（清空已发现链接，便于重爬）。
 #[command]
 pub async fn reset_crawl_queue(feed_id: String) -> Result<(), String> {
+    // 重爬即重新启用该源：清除其“停止”标记。
+    clear_feed_cancel(&feed_id);
     let conn = open_article_cache_db()?;
     conn.execute(
         "DELETE FROM crawl_queue WHERE feed_id = ?1",

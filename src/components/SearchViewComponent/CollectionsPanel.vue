@@ -1,8 +1,18 @@
 <template>
-  <div class="collections-panel" :class="{ 'collections-panel-visible': visible }">
+  <div class="collections-panel" :class="{ 'collections-panel-visible': visible }"
+    :style="{ width: panelWidth + 'px' }">
+    <!-- 左侧拖拽把手：拖动改变面板宽度 -->
+    <div class="panel-resize-handle" @mousedown="startResize"></div>
     <div class="collections-header">
       <h3>{{ activeTab === 'favorites' ? '收藏夹' : '我的收集' }}</h3>
-      <n-button text size="small" @click="$emit('close')">关闭</n-button>
+      <n-tooltip trigger="hover" :z-index="10050">
+        <template #trigger>
+          <n-button circle size="small" tertiary @click="$emit('close')">
+            <n-icon :component="CloseIcon" />
+          </n-button>
+        </template>
+        关闭面板
+      </n-tooltip>
     </div>
 
     <div class="collections-tabs">
@@ -54,18 +64,24 @@
         <template #header-extra>
           <div class="collection-header-extra">
             <span class="collection-cat" v-if="entry.category">{{ entry.category }}</span>
-            <n-button
-              text
-              size="small"
-              :title="entry.favorite ? '取消收藏' : '加入收藏夹'"
-              @click="toggleFavorite(entry)"
-            >
-              <span :class="['fav-star', { 'fav-on': entry.favorite }]">{{ entry.favorite ? '★' : '☆' }}</span>
-            </n-button>
+            <n-tooltip trigger="hover" :z-index="10050">
+              <template #trigger>
+                <n-button text size="small" @click="toggleFavorite(entry)">
+                  <span :class="['fav-star', { 'fav-on': entry.favorite }]">{{ entry.favorite ? '★' : '☆' }}</span>
+                </n-button>
+              </template>
+              {{ entry.favorite ? '取消收藏' : '加入收藏夹' }}
+            </n-tooltip>
           </div>
         </template>
 
-        <div class="collection-content">{{ truncate(entry.content) }}</div>
+        <div class="collection-content" @click="openEntry(entry)" title="点击在正文区查看原文">
+          <img v-if="entryImage(entry)" :src="entryImage(entry)" class="collection-media-img" loading="lazy" />
+          <div v-else-if="entryVideo(entry)" class="collection-media-video">
+            <n-icon :component="PlayIcon" size="16" /> 视频内容（点击查看原文）
+          </div>
+          <span v-else>{{ truncate(entry.content) }}</span>
+        </div>
 
         <div class="collection-source" v-if="entry.sourceTitle || entry.sourceUrl">
           <n-icon :component="LinkIcon" size="13" />
@@ -79,9 +95,30 @@
           <div class="collection-actions">
             <n-text depth="3" class="collection-time">{{ formatTime(entry.timestamp) }}</n-text>
             <div class="collection-btns">
-              <n-button size="tiny" tertiary @click="copyMarkdown(entry)">复制 MD</n-button>
-              <n-button size="tiny" type="primary" @click="insertToEditor(entry)">插入文档</n-button>
-              <n-button size="tiny" type="error" tertiary @click="remove(entry)">删除</n-button>
+              <n-tooltip trigger="hover" :z-index="10050">
+                <template #trigger>
+                  <n-button size="small" circle tertiary @click="copyMarkdown(entry)">
+                    <n-icon :component="CopyIcon" />
+                  </n-button>
+                </template>
+                复制 Markdown
+              </n-tooltip>
+              <n-tooltip trigger="hover" :z-index="10050">
+                <template #trigger>
+                  <n-button size="small" circle type="primary" @click="insertToEditor(entry)">
+                    <n-icon :component="InsertIcon" />
+                  </n-button>
+                </template>
+                插入主页文档
+              </n-tooltip>
+              <n-tooltip trigger="hover" :z-index="10050">
+                <template #trigger>
+                  <n-button size="small" circle type="error" tertiary @click="remove(entry)">
+                    <n-icon :component="TrashIcon" />
+                  </n-button>
+                </template>
+                删除
+              </n-tooltip>
             </div>
           </div>
         </template>
@@ -91,10 +128,19 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
-import { NInput, NIcon, NScrollbar, NCard, NButton, NText, NEmpty, useMessage } from 'naive-ui'
-import { SearchOutline as SearchIcon, LinkOutline as LinkIcon } from '@vicons/ionicons5'
+import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
+import { NInput, NIcon, NScrollbar, NCard, NButton, NText, NEmpty, NTooltip, useMessage } from 'naive-ui'
+import {
+  SearchOutline as SearchIcon,
+  LinkOutline as LinkIcon,
+  CopyOutline as CopyIcon,
+  AddOutline as InsertIcon,
+  TrashOutline as TrashIcon,
+  CloseOutline as CloseIcon,
+  PlayCircleOutline as PlayIcon
+} from '@vicons/ionicons5'
 import { useFlipboardCollectionsStore } from '../../stores/flipboardCollectionsStore.js'
+import { useFlipboardStore } from '../../stores/flipboardStore.js'
 import { useEditorStore } from '../../stores/editorStore'
 import { createLogger } from '../../utils/logger'
 
@@ -109,18 +155,55 @@ defineProps({
 defineEmits(['close'])
 
 const collections = useFlipboardCollectionsStore()
+const flipboard = useFlipboardStore()
 const editorStore = useEditorStore()
 const message = useMessage()
+
+// 面板宽度（可拖拽，持久化）
+const panelWidth = ref(Number(localStorage.getItem('flipboard_collections_width')) || 340)
+let resizing = false
+let resizeStartX = 0
+let resizeStartWidth = 0
+
+const onResizeMove = (e) => {
+  if (!resizing) return
+  // 把手在左侧：向左拖动增大宽度。
+  const delta = resizeStartX - e.clientX
+  panelWidth.value = Math.max(280, Math.min(720, resizeStartWidth + delta))
+}
+
+const stopResize = () => {
+  if (!resizing) return
+  resizing = false
+  document.removeEventListener('mousemove', onResizeMove)
+  document.removeEventListener('mouseup', stopResize)
+  localStorage.setItem('flipboard_collections_width', String(panelWidth.value))
+}
+
+const startResize = (e) => {
+  resizing = true
+  resizeStartX = e.clientX
+  resizeStartWidth = panelWidth.value
+  document.addEventListener('mousemove', onResizeMove)
+  document.addEventListener('mouseup', stopResize)
+  e.preventDefault()
+}
 
 const activeTab = ref('all') // 'all' | 'favorites'
 const entries = computed(() =>
   activeTab.value === 'favorites'
     ? collections.favoriteEntries.value
-    : collections.filteredEntries.value
+    : collections.noteEntries.value
 )
 const favoriteCount = computed(() => collections.favoriteEntries.value.length)
 
 const toggleFavorite = async (entry) => {
+  // 卡片收藏（整篇文章）：点星即取消收藏，与卡片 icon 状态联动。
+  if (entry.type === 'bookmark') {
+    flipboard.removeBookmark(entry.articleId)
+    message.success('已取消收藏', { duration: 1000 })
+    return
+  }
   const on = await collections.toggleFavorite(entry.id)
   message.success(on ? '已加入收藏夹' : '已移出收藏夹', { duration: 1000 })
 }
@@ -128,6 +211,36 @@ const toggleFavorite = async (entry) => {
 const truncate = (text) => {
   const s = String(text || '')
   return s.length > 220 ? s.slice(0, 220) + '…' : s
+}
+
+// 从笔记内容里识别图片 / 视频 markdown，用于在收集面板里直接预览复杂格式。
+const IMG_RE = /!\[[^\]]*\]\(([^)]+)\)/
+const VIDEO_RE = /\[(?:▶\s*)?视频\]\(([^)]+)\)/
+const entryImage = (e) => {
+  const m = IMG_RE.exec(String(e?.content || ''))
+  return m ? m[1] : ''
+}
+const entryVideo = (e) => {
+  const m = VIDEO_RE.exec(String(e?.content || ''))
+  return m ? m[1] : ''
+}
+
+// 点击条目：在正文阅读区重新打开原文（类似浏览器收藏夹）。
+const openEntry = (entry) => {
+  let articleRef = null
+  if (entry.type === 'bookmark') {
+    const list = Array.isArray(flipboard.bookmarks.value) ? flipboard.bookmarks.value : []
+    const full = list.find(b => String(b?.id) === String(entry.articleId))
+    articleRef = full || { id: entry.articleId, url: entry.sourceUrl, title: entry.sourceTitle }
+  } else if (entry.articleId || entry.sourceUrl) {
+    articleRef = { id: entry.articleId, url: entry.sourceUrl, title: entry.sourceTitle }
+  }
+  if (!articleRef || (!articleRef.id && !articleRef.url)) {
+    message.warning('该条目没有可打开的来源', { duration: 1500 })
+    return
+  }
+  flipboard.openReaderForArticle(articleRef)
+  flipboard.collectionsPanelVisible.value = false
 }
 
 const formatTime = (t) => {
@@ -167,12 +280,22 @@ const insertToEditor = async (entry) => {
 }
 
 const remove = async (entry) => {
-  await collections.removeEntry(entry.id)
+  if (entry.type === 'bookmark') {
+    // 整篇收藏：删除即取消卡片收藏（联动 localStorage + 收集库）。
+    flipboard.removeBookmark(entry.articleId)
+  } else {
+    await collections.removeEntry(entry.id)
+  }
   message.success('已删除', { duration: 1000 })
 }
 
 onMounted(() => {
   collections.load()
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('mousemove', onResizeMove)
+  document.removeEventListener('mouseup', stopResize)
 })
 </script>
 
@@ -180,7 +303,7 @@ onMounted(() => {
 .collections-panel {
   position: fixed;
   top: 64px;
-  right: -380px;
+  right: 0;
   width: 340px;
   height: calc(100% - 64px);
   background: var(--guaxi-panel-bg, #fff);
@@ -188,12 +311,30 @@ onMounted(() => {
   box-shadow: -4px 0 24px rgba(15, 23, 42, 0.12);
   display: flex;
   flex-direction: column;
-  transition: right 0.25s ease;
+  transform: translateX(100%);
+  transition: transform 0.25s ease;
   z-index: 9997;
 }
 
 .collections-panel-visible {
-  right: 0;
+  transform: translateX(0);
+}
+
+.panel-resize-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 5px;
+  height: 100%;
+  cursor: ew-resize;
+  z-index: 2;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+
+.panel-resize-handle:hover {
+  background: var(--guaxi-primary, #2563eb);
+  opacity: 0.4;
 }
 
 .collections-header {
@@ -252,6 +393,13 @@ onMounted(() => {
 
 .collection-card {
   margin-bottom: 12px;
+  border-radius: 10px;
+  transition: box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.collection-card:hover {
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.1);
+  transform: translateY(-1px);
 }
 
 .collection-cat {
@@ -267,6 +415,30 @@ onMounted(() => {
   line-height: 1.6;
   color: var(--guaxi-text-primary, #0f172a);
   white-space: pre-wrap;
+  cursor: pointer;
+}
+
+.collection-content:hover {
+  color: var(--guaxi-primary, #2563eb);
+}
+
+.collection-media-img {
+  max-width: 100%;
+  max-height: 160px;
+  border-radius: 8px;
+  object-fit: cover;
+  display: block;
+}
+
+.collection-media-video {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--guaxi-text-secondary, #64748b);
+  padding: 8px 10px;
+  border: 1px dashed var(--guaxi-border, #e5e7eb);
+  border-radius: 8px;
 }
 
 .collection-source {

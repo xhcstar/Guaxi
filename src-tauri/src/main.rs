@@ -154,7 +154,7 @@ async fn main() {
     // iroh 的中继重连与网络探测在国内环境会大量打 WARN（relay 断连、net_report 等），
     // 但属于正常瞬态行为，统一降到 error 级别避免刷屏；真正致命错误仍可见。可用 RUST_LOG 覆盖。
     let iroh_noise_filter =
-        "iroh::net_report=error,iroh::socket::transports::relay=error,iroh_relay=warn,iroh::magicsock=warn";
+        "iroh::net_report=error,iroh::socket::transports::relay=error,iroh_relay=warn,iroh::magicsock=warn,chromiumoxide::handler=error,chromiumoxide::conn=error,chromiumoxide::browser=error";
     let default_filter = if enable_verbose_logs {
         format!("guaxi=debug,guaxi_lib=debug,html5ever=warn,selectors=warn,reqwest=info,{iroh_noise_filter},warn")
     } else {
@@ -542,6 +542,10 @@ async fn main() {
             commands::flipboard::open_login_session,
             commands::flipboard::open_article_in_browser,
             commands::flipboard::purge_unbookmarked_articles,
+            commands::flipboard::delete_feeds,
+            commands::flipboard::set_feeds_enabled,
+            commands::flipboard::stop_feed_task,
+            commands::flipboard::stop_all_feed_tasks,
             commands::todo::todo_init,
             commands::todo::todo_get_snapshot,
             commands::todo::todo_upsert_list,
