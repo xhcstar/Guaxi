@@ -1,6 +1,11 @@
 // 知识图谱布局器:优先使用后端固化坐标(kg_load_layout),缺失的节点用 d3-force-3d
 // 现场补算,然后把结果回存(kg_save_layout)。支持多视角(relation/tag/time/importance)
 // 各自独立的坐标缓存,使视角切换可以做平滑 GSAP 转场。
+//
+// 力导向(relation 视角)计算成本最高,采用三级回退,任一层失败自动降级,保证零功能损失:
+//   1. 后端 Rust kg_compute_layout(rayon 并行,最快、零主线程开销)
+//   2. 前端 Web Worker(d3-force-3d,不阻塞 UI)
+//   3. 主线程同步(原实现,最终兜底)
 import {
   forceSimulation,
   forceManyBody,
@@ -8,6 +13,70 @@ import {
   forceCenter,
   forceCollide,
 } from "d3-force-3d";
+
+// ─── 力导向 Worker(单例 + 任务队列 + 失败回退)───
+let layoutWorker = null;
+let workerUsable = true;
+let workerSeq = 0;
+const workerPending = new Map();
+
+function getLayoutWorker() {
+  if (!workerUsable) return null;
+  if (layoutWorker) return layoutWorker;
+  try {
+    layoutWorker = new Worker(new URL("../../workers/kgForceLayoutWorker.js", import.meta.url), {
+      type: "module",
+    });
+    layoutWorker.onmessage = (event) => {
+      const { id, ok, points, error } = event.data || {};
+      const task = workerPending.get(id);
+      if (!task) return;
+      workerPending.delete(id);
+      if (ok) task.resolve(points);
+      else task.reject(new Error(error || "layout worker failed"));
+    };
+    layoutWorker.onerror = () => {
+      workerUsable = false;
+      for (const t of workerPending.values()) t.reject(new Error("layout worker error"));
+      workerPending.clear();
+    };
+    return layoutWorker;
+  } catch (e) {
+    workerUsable = false;
+    return null;
+  }
+}
+
+// 用 Worker 跑力导向;失败抛错由上层回退主线程
+function computeForceLayoutInWorker(nodes, edges, pos) {
+  const worker = getLayoutWorker();
+  if (!worker) return Promise.reject(new Error("no worker"));
+  const id = ++workerSeq;
+  const wnodes = nodes.map((n) => {
+    const seed = pos.get(n.id);
+    return seed ? { id: n.id, x: seed.x, y: seed.y, z: seed.z } : { id: n.id };
+  });
+  const links = edges.map((e) => ({ source: e.from, target: e.to, strength: e.strength ?? 0.3 }));
+  return new Promise((resolve, reject) => {
+    workerPending.set(id, {
+      resolve: (points) => {
+        for (const p of points) pos.set(p.id, { x: p.x, y: p.y, z: p.z });
+        resolve(pos);
+      },
+      reject,
+    });
+    worker.postMessage({ id, nodes: wnodes, links });
+  });
+}
+
+// 组件卸载时调用,释放 Worker
+export function disposeLayoutWorker() {
+  if (layoutWorker) {
+    try { layoutWorker.terminate(); } catch (e) { /* ignore */ }
+    layoutWorker = null;
+  }
+  workerPending.clear();
+}
 
 /**
  * 取得某视角下每个节点的目标坐标 Map<node_id,{x,y,z}>。
@@ -41,7 +110,7 @@ export async function resolveLayout(store, kbName, view, graph, ctx = {}, opts =
 
   // 2. 视角决定布局策略
   if (view === "relation") {
-    computeForceLayout(nodes, edges, pos);
+    await computeForceLayout(store, kbName, nodes, edges, pos, opts);
   } else if (view === "importance") {
     computeRadialByMetric(nodes, pos, (n) => n.pagerank ?? 0);
   } else if (view === "time") {
@@ -54,25 +123,55 @@ export async function resolveLayout(store, kbName, view, graph, ctx = {}, opts =
       return `type:${n.type}`;
     });
   } else {
-    computeForceLayout(nodes, edges, pos);
+    await computeForceLayout(store, kbName, nodes, edges, pos, opts);
   }
 
-  // 3. 回存(只存本视角全部节点)
-  try {
-    const points = nodes.map((n) => {
-      const p = pos.get(n.id) || { x: 0, y: 0, z: 0 };
-      return { node_id: n.id, x: p.x, y: p.y, z: p.z };
-    });
-    await store.kgSaveLayout(kbName, view, points);
-  } catch (e) {
-    /* 存储失败不致命 */
+  // 3. 回存(只存本视角全部节点)。后端 kg_compute_layout 已自行回存时跳过,避免重复写。
+  if (!pos._savedByBackend) {
+    try {
+      const points = nodes.map((n) => {
+        const p = pos.get(n.id) || { x: 0, y: 0, z: 0 };
+        return { node_id: n.id, x: p.x, y: p.y, z: p.z };
+      });
+      await store.kgSaveLayout(kbName, view, points);
+    } catch (e) {
+      /* 存储失败不致命 */
+    }
   }
 
   return pos;
 }
 
-// relation 视角:d3-force-3d 物理布局
-function computeForceLayout(nodes, edges, pos) {
+// relation 视角:三级回退(后端 Rust → 前端 Worker → 主线程同步)
+async function computeForceLayout(store, kbName, nodes, edges, pos, opts) {
+  // 2a. 后端 Rust 计算(最优)。后端会直接写入 kg_layout 缓存。
+  if (store && typeof store.kgComputeLayout === "function") {
+    try {
+      const points = await store.kgComputeLayout(kbName, "relation", opts.force === true);
+      if (Array.isArray(points) && points.length) {
+        for (const p of points) pos.set(p.node_id ?? p.id, { x: p.x, y: p.y, z: p.z });
+        // 标记后端已存,避免上层重复回存
+        Object.defineProperty(pos, "_savedByBackend", { value: true, enumerable: false });
+        return;
+      }
+    } catch (e) {
+      /* 后端不可用 → 回退前端 */
+    }
+  }
+  // 2b. 前端 Worker
+  try {
+    await computeForceLayoutInWorker(nodes, edges, pos);
+    return;
+  } catch (e) {
+    /* worker 不可用 → 回退主线程同步 */
+  }
+  // 2c. 主线程同步(兜底)
+  computeForceLayoutSync(nodes, edges, pos);
+}
+
+
+// relation 视角:d3-force-3d 物理布局(主线程同步兜底实现)
+function computeForceLayoutSync(nodes, edges, pos) {
   const simNodes = nodes.map((n) => {
     const seed = pos.get(n.id);
     return seed ? { id: n.id, x: seed.x, y: seed.y, z: seed.z } : { id: n.id };

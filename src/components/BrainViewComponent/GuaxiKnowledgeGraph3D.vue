@@ -136,7 +136,7 @@
 </template>
 
 <script setup>
-import { onMounted, onBeforeUnmount, ref, shallowRef, watch, markRaw, computed } from "vue";
+import { onMounted, onBeforeUnmount, onActivated, onDeactivated, ref, shallowRef, watch, markRaw, computed } from "vue";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { CSS2DRenderer, CSS2DObject } from "three/examples/jsm/renderers/CSS2DRenderer.js";
@@ -153,7 +153,7 @@ import {
 import { useKnowledgeBaseStore } from "../../stores/knowledgeBaseStore";
 import { useFileTreeStore } from "../../stores/fileTreeStore";
 import { useEditorStore } from "../../stores/editorStore";
-import { resolveLayout } from "./kgLayout";
+import { resolveLayout, disposeLayoutWorker } from "./kgLayout";
 
 const props = defineProps({
   kbName: { type: String, default: "" },
@@ -333,6 +333,7 @@ function applyTheme() {
   // 切换浅/深色根类,驱动 CSS 覆盖层配色
   const root = canvasWrap.value?.closest(".kg3d-root");
   if (root) root.classList.toggle("kg3d-light", !themeColors.isDark);
+  requestRender();
 }
 
 function initThree() {
@@ -347,8 +348,15 @@ function initThree() {
   camera = new THREE.PerspectiveCamera(60, w / h, 0.1, 100000);
   camera.position.set(0, 80, 320);
 
-  renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  // 高 DPR 屏关抗锯齿省显存/带宽(节点是球体,锯齿不明显);独显优先
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  renderer = new THREE.WebGLRenderer({
+    antialias: dpr < 1.5,
+    powerPreference: "high-performance",
+    stencil: false,
+    depth: true,
+  });
+  renderer.setPixelRatio(dpr);
   renderer.setSize(w, h);
   wrap.appendChild(renderer.domElement);
 
@@ -362,6 +370,10 @@ function initThree() {
   controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
+  // 任何相机交互(拖拽/缩放/平移)标脏,触发按需渲染
+  controls.addEventListener("change", () => requestRender());
+  // gsap 动画期间(相机飞行、morph、pop)持续标脏:只要有活跃 tween 就保持渲染
+  gsap.ticker.add(gsapDirtyTick);
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.85));
   const dir = new THREE.DirectionalLight(0xffffff, 0.6);
@@ -393,22 +405,67 @@ function initThree() {
     attributeFilter: ["class", "data-theme", "style"],
   });
 
+  startLoop();
+}
+
+// ───────── 渲染循环:按需渲染 + 可暂停 ─────────
+// dirtyUntil: 在此时间戳前持续渲染(交互/数据变更后给一小段窗口让动画走完);
+// 持续需要渲染的状态(飞行/发光脉冲/时间轴播放)直接标脏。静止时只空跑 rAF 检查、不调用昂贵的 render。
+let dirtyUntil = 0;
+let loopRunning = false;
+
+function requestRender(ms = 260) {
+  // 用 performance.now 与循环里的 now 同源
+  dirtyUntil = Math.max(dirtyUntil, (typeof performance !== "undefined" ? performance.now() : Date.now()) + ms);
+}
+
+// gsap ticker:只要全局时间轴上有活跃动画就持续标脏(覆盖相机飞行/morph/pop 等)
+function gsapDirtyTick() {
+  if (gsap.globalTimeline.getChildren(true, true, false).length > 0) {
+    requestRender(120);
+  }
+}
+
+function startLoop() {
+  if (loopRunning) return;
+  loopRunning = true;
+  lastFrameTime = 0;
+  requestRender(300); // 切回/初始化先渲染一段
   const loop = (now) => {
+    if (!loopRunning) return;
     raf = requestAnimationFrame(loop);
     const dt = lastFrameTime ? Math.min(0.05, (now - lastFrameTime) / 1000) : 0.016;
     lastFrameTime = now;
+
+    let dirty = now < dirtyUntil;
     if (flyMode.value) {
       updateFlight(dt);
+      dirty = true;
     } else {
-      controls.update();
+      controls.update(); // 阻尼/惯性靠 'change' 事件已标脏的 dirtyUntil 窗口覆盖
     }
+    if (glowSprites.length) {
+      updateGlow(dt); // 发光脉冲是连续动画
+      dirty = true;
+    }
+    if (timelinePlaying.value) dirty = true;
+
+    if (!dirty) return; // 静止:跳过昂贵的渲染,仅保留极廉价的 rAF 检查
+
     updateLabelLod();
-    updateGlow(dt);
     if (++minimapTick % 12 === 0) drawMinimap();
     renderer.render(scene, camera);
     labelRenderer.render(scene, camera);
   };
-  loop(0);
+  raf = requestAnimationFrame(loop);
+}
+
+function stopLoop() {
+  loopRunning = false;
+  if (raf) {
+    cancelAnimationFrame(raf);
+    raf = null;
+  }
 }
 
 // 径向渐变光晕贴图(中心亮、边缘透明)
@@ -483,6 +540,7 @@ function onResize() {
   camera.updateProjectionMatrix();
   renderer.setSize(w, h);
   labelRenderer.setSize(w, h);
+  requestRender();
 }
 
 function disposeGraphObjects() {
@@ -563,6 +621,7 @@ function buildMeshes() {
   buildEdges();
   applyTypeVisibility();
   rebuildLabels();
+  requestRender();
 }
 
 function baseRadius(n) {
@@ -655,6 +714,7 @@ function applyTypeVisibility() {
   }
   rebuildEdgesForVisible(visIds);
   rebuildLabels();
+  requestRender();
 }
 
 // 重建主边集合:跳过任一端点被过滤掉的边
@@ -807,6 +867,7 @@ function syncInstancePositions() {
     const n = nodeById.get(l.userData.nodeId);
     if (p && n) l.position.set(p.x, p.y + baseRadius(n) + 2, p.z);
   }
+  requestRender();
 }
 
 // ───────── 交互:拾取 ─────────
@@ -843,10 +904,12 @@ function onPointerMove(ev) {
   if (hovered && (!node || hovered.node.id !== node.id)) {
     restoreInstanceScale(hovered.mesh, hovered.inst, hovered.node);
     hovered = null;
+    requestRender();
   }
   if (node && hit && (!hovered || hovered.node.id !== node.id)) {
     hovered = { mesh: hit.object, inst: hit.instanceId, node };
     bumpInstanceScale(hit.object, hit.instanceId, node, 1.6);
+    requestRender();
   }
   renderer.domElement.style.cursor = node ? "pointer" : flyMode.value ? "none" : "default";
 }
@@ -1113,6 +1176,7 @@ function applyHighlight(idSet, opts = {}) {
   glowPrimaryId = primary ?? null;
   rebuildGlow();
   if (opts.frame !== false) frameNodes(highlightedIds);
+  requestRender();
 }
 
 // 构建发光叠加边:若给了有序 pathIds 则只连相邻路径段,否则连强调集内部的所有原始边。
@@ -1202,6 +1266,7 @@ function resetHighlight() {
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   }
+  requestRender();
 }
 
 function focusEgo() {
@@ -1705,6 +1770,7 @@ function applyTimeline() {
   if (evolutionActive && !showAll) {
     statusText.value = `知识演化 · ${timelineLabel.value} · 已显现 ${visCount}/${nodeList.length}`;
   }
+  requestRender();
 }
 
 // 新生节点回落:把放大的实例平滑缩回正常尺寸与颜色
@@ -1953,17 +2019,38 @@ function focusCommunity(cid) {
   statusText.value = `聚焦社区:${members.length} 个节点`;
 }
 
+// 页面可见性:标签页切到后台时停渲染,切回时恢复
+function onVisibilityChange() {
+  if (document.hidden) stopLoop();
+  else { startLoop(); onResize(); }
+}
+
 onMounted(async () => {
   initThree();
+  document.addEventListener("visibilitychange", onVisibilityChange);
+  // 错峰:先让路由切换那一帧把页面框架画出来,再异步拉数据+布局,首屏不卡
+  await new Promise((r) => requestAnimationFrame(() => r()));
   await loadGraph();
 });
 
+// KeepAlive:被缓存(切到其它页面)时停掉渲染循环,切回时恢复
+onActivated(() => {
+  startLoop();
+  onResize();
+});
+onDeactivated(() => {
+  stopLoop();
+  if (flyMode.value) exitFlyMode();
+});
+
 onBeforeUnmount(() => {
-  cancelAnimationFrame(raf);
+  stopLoop();
   if (timelinePlayTimer) clearInterval(timelinePlayTimer);
   if (themeObserver) themeObserver.disconnect();
   if (resizeObserver) resizeObserver.disconnect();
   if (flyMode.value) exitFlyMode();
+  gsap.ticker.remove(gsapDirtyTick);
+  document.removeEventListener("visibilitychange", onVisibilityChange);
   window.removeEventListener("resize", onResize);
   if (renderer) {
     renderer.domElement.removeEventListener("click", onClick);
@@ -1973,6 +2060,7 @@ onBeforeUnmount(() => {
     renderer.dispose();
   }
   if (glowTexture) { glowTexture.dispose(); glowTexture = null; }
+  disposeLayoutWorker();
 });
 
 defineExpose({ reload: loadGraph });

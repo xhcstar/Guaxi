@@ -237,6 +237,11 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", {
       const name = kbName || this.selectedKnowledgeBase?.knowledge_base_name;
       return await invoke("kg_load_layout", { kbName: name, view });
     },
+    // 后端 Rust 力导向布局(relation 视角)。返回 [{node_id,x,y,z}],并已写入 kg_layout 缓存。
+    async kgComputeLayout(kbName, view = "relation", force = false) {
+      const name = kbName || this.selectedKnowledgeBase?.knowledge_base_name;
+      return await invoke("kg_compute_layout", { kbName: name, view, force });
+    },
 
     async fetchKnowledgeBases() {
       this.loading = true;

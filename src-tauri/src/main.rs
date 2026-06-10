@@ -454,6 +454,7 @@ async fn main() {
             commands::kgraph::kg_communities,
             commands::kgraph::kg_save_layout,
             commands::kgraph::kg_load_layout,
+            commands::kgraph::kg_compute_layout,
             commands::slidev::slidev_get_env_status,
             commands::slidev::slidev_start_dev,
             commands::slidev::slidev_stop_dev,

@@ -2810,6 +2810,168 @@ pub struct LayoutOut {
     pub z: f64,
 }
 
+/// 在内存图上做 3D 力导向布局(Fruchterman-Reingold 变体,rayon 并行斥力)。
+/// 把最重的布局计算放到 Rust 后台,前端零开销直接取坐标。结果写入 kg_layout 缓存。
+fn force_layout_3d(mem: &MemGraph, iterations: usize) -> Vec<(String, f64, f64, f64)> {
+    let n = mem.nodes.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    // 初始位置:黄金角球面散布(确定性,避免 Math.random;同库可复现)
+    let golden = std::f64::consts::PI * (3.0 - 5.0_f64.sqrt());
+    let r0 = 10.0 + (n as f64).sqrt() * 6.0;
+    let mut px: Vec<f64> = Vec::with_capacity(n);
+    let mut py: Vec<f64> = Vec::with_capacity(n);
+    let mut pz: Vec<f64> = Vec::with_capacity(n);
+    for i in 0..n {
+        let t = i as f64 / n as f64;
+        let theta = i as f64 * golden;
+        let phi = (1.0 - 2.0 * t).acos();
+        px.push(r0 * phi.sin() * theta.cos());
+        py.push(r0 * (1.0 - 2.0 * t));
+        pz.push(r0 * phi.sin() * theta.sin());
+    }
+
+    // 边表(索引化)
+    let mut elinks: Vec<(usize, usize, f64)> = Vec::new();
+    for e in &mem.edges {
+        if let (Some(&a), Some(&b)) = (mem.pos.get(&e.from), mem.pos.get(&e.to)) {
+            if a != b {
+                elinks.push((a, b, e.strength.max(0.05)));
+            }
+        }
+    }
+
+    // FR 参数:理想边长 k,斥力 k^2/d,引力 d^2/k
+    let area = (n as f64) * 800.0;
+    let k = (area / n as f64).cbrt().max(12.0);
+    let mut temp = k * 2.0;
+    let cool = temp / (iterations as f64 + 1.0);
+
+    for _ in 0..iterations {
+        // 斥力(并行):每个节点对其余节点求斥力位移。O(n^2),但在 Rust+rayon 下数千节点可接受。
+        let disp: Vec<(f64, f64, f64)> = (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let (xi, yi, zi) = (px[i], py[i], pz[i]);
+                let (mut dx, mut dy, mut dz) = (0.0, 0.0, 0.0);
+                for j in 0..n {
+                    if i == j {
+                        continue;
+                    }
+                    let mut ddx = xi - px[j];
+                    let mut ddy = yi - py[j];
+                    let mut ddz = zi - pz[j];
+                    let mut dist2 = ddx * ddx + ddy * ddy + ddz * ddz;
+                    if dist2 < 0.01 {
+                        // 重合时给一个确定性微扰
+                        ddx = ((i * 13 + 7) % 17) as f64 - 8.0;
+                        ddy = ((i * 7 + 3) % 17) as f64 - 8.0;
+                        ddz = ((i * 11 + 5) % 17) as f64 - 8.0;
+                        dist2 = ddx * ddx + ddy * ddy + ddz * ddz + 0.01;
+                    }
+                    let dist = dist2.sqrt();
+                    let force = (k * k) / dist; // 斥力
+                    dx += (ddx / dist) * force;
+                    dy += (ddy / dist) * force;
+                    dz += (ddz / dist) * force;
+                }
+                (dx, dy, dz)
+            })
+            .collect();
+
+        let mut dxv: Vec<f64> = disp.iter().map(|d| d.0).collect();
+        let mut dyv: Vec<f64> = disp.iter().map(|d| d.1).collect();
+        let mut dzv: Vec<f64> = disp.iter().map(|d| d.2).collect();
+
+        // 引力(沿边,串行累加避免数据竞争)
+        for &(a, b, s) in &elinks {
+            let ddx = px[a] - px[b];
+            let ddy = py[a] - py[b];
+            let ddz = pz[a] - pz[b];
+            let dist = (ddx * ddx + ddy * ddy + ddz * ddz).sqrt().max(0.01);
+            let force = (dist * dist) / k * s; // 引力(按边强度加权)
+            let fx = (ddx / dist) * force;
+            let fy = (ddy / dist) * force;
+            let fz = (ddz / dist) * force;
+            dxv[a] -= fx;
+            dyv[a] -= fy;
+            dzv[a] -= fz;
+            dxv[b] += fx;
+            dyv[b] += fy;
+            dzv[b] += fz;
+        }
+
+        // 限幅(温度)并更新位置
+        for i in 0..n {
+            let d = (dxv[i] * dxv[i] + dyv[i] * dyv[i] + dzv[i] * dzv[i]).sqrt();
+            if d > 1e-6 {
+                let lim = d.min(temp);
+                px[i] += (dxv[i] / d) * lim;
+                py[i] += (dyv[i] / d) * lim;
+                pz[i] += (dzv[i] / d) * lim;
+            }
+        }
+        temp = (temp - cool).max(k * 0.05);
+    }
+
+    (0..n)
+        .map(|i| (mem.nodes[i].id.clone(), px[i], py[i], pz[i]))
+        .collect()
+}
+
+/// 命令:后端计算 relation 视角力导向布局并写入缓存,返回坐标。
+/// force=false 且已有缓存时直接返回缓存,避免重复计算。
+#[tauri::command]
+pub async fn kg_compute_layout(
+    kb_name: String,
+    view: Option<String>,
+    force: Option<bool>,
+) -> Result<Vec<LayoutOut>, String> {
+    let view = view.unwrap_or_else(|| "relation".to_string());
+    let view = if view.trim().is_empty() { "relation".to_string() } else { view };
+
+    // 非 relation 视角后端暂不接管(径向/时间/聚类很轻,前端算),返回空让前端回退
+    if view != "relation" {
+        return Ok(Vec::new());
+    }
+
+    // 已有缓存且非强制 → 直接复用
+    if !force.unwrap_or(false) {
+        let cached = kg_load_layout(kb_name.clone(), view.clone())?;
+        if !cached.is_empty() {
+            return Ok(cached);
+        }
+    }
+
+    let mem = load_mem_graph(&kb_name)?;
+    let n = mem.nodes.len();
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+    // 规模自适应迭代次数(节点越多迭代略减,控制总耗时)
+    let iterations = if n > 4000 {
+        80
+    } else if n > 1500 {
+        120
+    } else {
+        180
+    };
+
+    let coords = force_layout_3d(&mem, iterations);
+    let points: Vec<LayoutPoint> = coords
+        .iter()
+        .map(|(id, x, y, z)| LayoutPoint { node_id: id.clone(), x: *x, y: *y, z: *z })
+        .collect();
+    // 写入缓存(复用 kg_save_layout 逻辑)
+    let _ = kg_save_layout(kb_name.clone(), view.clone(), points);
+
+    Ok(coords
+        .into_iter()
+        .map(|(node_id, x, y, z)| LayoutOut { node_id, x, y, z })
+        .collect())
+}
+
 /// 命令:读取某视角已缓存的布局坐标。
 #[tauri::command]
 pub fn kg_load_layout(kb_name: String, view: String) -> Result<Vec<LayoutOut>, String> {
