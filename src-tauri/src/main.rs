@@ -567,6 +567,8 @@ async fn main() {
             commands::flipboard::set_feeds_enabled,
             commands::flipboard::stop_feed_task,
             commands::flipboard::stop_all_feed_tasks,
+            commands::flipboard::get_pending_logins,
+            commands::flipboard::dismiss_pending_login,
             commands::todo::todo_init,
             commands::todo::todo_get_snapshot,
             commands::todo::todo_upsert_list,

@@ -34,6 +34,10 @@ export const useFlipboardStore = () => {
   const feedHealth = ref([])
   const collectionsPanelVisible = ref(false)
   const isHydratingDetail = ref(false)
+  // 后台抓取总开关（用户掌控；持久化，默认关闭）。
+  const scrapingEnabled = ref(localStorage.getItem('flipboard_scraping_enabled') === '1')
+  // 待登录队列（后台命中登录墙时入队，由用户主动打开，不再自动弹窗）。
+  const pendingLogins = ref([])
   // 收集面板点击条目时，请求阅读区打开该文章（ReadingCoordinator 监听）。
   const pendingReaderArticle = ref(null)
   const openReaderForArticle = (articleRef) => {
@@ -569,6 +573,60 @@ export const useFlipboardStore = () => {
     }
   }
 
+  // 后台抓取总开关：开/关后台调度器，并持久化用户选择。
+  const setScrapingEnabled = async (enabled) => {
+    try {
+      await invoke('set_feed_scheduler_enabled', { enabled: !!enabled })
+      scrapingEnabled.value = !!enabled
+      localStorage.setItem('flipboard_scraping_enabled', enabled ? '1' : '0')
+      if (!enabled) {
+        // 关闭时顺带终止当前在跑的任务，避免遗留任务继续。
+        try { await invoke('stop_all_feed_tasks') } catch (e) { /* ignore */ }
+      }
+      return scrapingEnabled.value
+    } catch (error) {
+      console.error('FlipboardStore: setScrapingEnabled failed:', error)
+      throw error
+    }
+  }
+
+  // 拉取待登录队列
+  const fetchPendingLogins = async () => {
+    try {
+      const list = await invoke('get_pending_logins')
+      pendingLogins.value = Array.isArray(list) ? list : []
+      return pendingLogins.value
+    } catch (error) {
+      console.error('FlipboardStore: fetchPendingLogins failed:', error)
+      return pendingLogins.value
+    }
+  }
+
+  // 主动打开某个待登录项的浏览器，并从队列移除
+  const openPendingLogin = async (item) => {
+    const host = String(item?.host || '').trim()
+    const url = String(item?.url || '').trim()
+    if (!host || !url) return
+    try {
+      await invoke('open_login_session', { profile: host, loginUrl: url })
+    } catch (error) {
+      console.error('FlipboardStore: openPendingLogin failed:', error)
+      throw error
+    } finally {
+      await dismissPendingLogin(host)
+    }
+  }
+
+  // 从待登录队列忽略某项
+  const dismissPendingLogin = async (host) => {
+    try {
+      await invoke('dismiss_pending_login', { host: String(host || '').trim() })
+    } catch (error) {
+      console.warn('FlipboardStore: dismissPendingLogin failed:', error)
+    }
+    pendingLogins.value = pendingLogins.value.filter(p => p.host !== host)
+  }
+
   // 终止单个源的抓取任务
   const stopFeedTask = async (feedId) => {
     try {
@@ -836,6 +894,12 @@ export const useFlipboardStore = () => {
   // 初始化
   const init = async () => {
     loadLocalData()
+    // 把持久化的"后台抓取总开关"同步到后端（后端默认关闭，由用户掌控）。
+    try {
+      await invoke('set_feed_scheduler_enabled', { enabled: scrapingEnabled.value })
+    } catch (e) {
+      console.warn('FlipboardStore: apply scraping pref failed:', e)
+    }
     // 后台预热渲染引擎：提前解析/探测可用浏览器（系统 Chrome/Edge 优先，必要时下载），
     // 让首次需要 JS 渲染的抓取无需等待。不阻塞主流程。
     if (!window.__flipboardEngineWarmed) {
@@ -880,6 +944,12 @@ export const useFlipboardStore = () => {
     isHydratingDetail,
     pendingReaderArticle,
     openReaderForArticle,
+    scrapingEnabled,
+    pendingLogins,
+    setScrapingEnabled,
+    fetchPendingLogins,
+    openPendingLogin,
+    dismissPendingLogin,
 
     // 计算属性
     filteredArticles,

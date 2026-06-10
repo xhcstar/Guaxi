@@ -41,14 +41,23 @@ static FEED_SCHEDULE: Lazy<Mutex<HashMap<String, FeedScheduleState>>> =
 static FEED_HTTP_CACHE: Lazy<Mutex<HashMap<String, FeedHttpCacheState>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 static SCHEDULER_LOOP_STARTED: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
-static SCHEDULER_ENABLED: AtomicBool = AtomicBool::new(true);
+// 后台抓取总开关：默认关闭，由用户在 Flipboard 顶部主动开启，避免后台大量任务不受管控。
+static SCHEDULER_ENABLED: AtomicBool = AtomicBool::new(false);
 static LAST_CACHE_CLEANUP_AT: Lazy<Mutex<i64>> = Lazy::new(|| Mutex::new(0));
 
 // ===== 抓取任务取消（用户可随时终止，避免后台操作卡住或跑错配置无法停止）=====
 static CANCEL_ALL_TASKS: AtomicBool = AtomicBool::new(false);
 static CANCELLED_FEED_IDS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
-// 每个 host 本会话内是否已主动弹出过登录窗口（避免反复弹窗）。
+// 每个 host 本会话内是否已加入过登录队列（避免反复入队打扰）。
 static LOGIN_PROMPTED_HOSTS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+// 待登录队列：后台抓取命中登录墙时不再自动弹窗，而是入队，由用户在顶部主动打开。
+static PENDING_LOGINS: Lazy<Mutex<Vec<PendingLogin>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingLogin {
+    pub host: String,
+    pub url: String,
+}
 
 /// 某个 feed 的抓取是否被请求终止。
 fn is_task_cancelled(feed_id: &str) -> bool {
@@ -76,7 +85,8 @@ fn clear_feed_cancel(feed_id: &str) {
     }
 }
 
-/// 命中登录墙时，本会话内对该 host 仅主动弹出一次登录窗口（非阻塞）。
+/// 命中登录墙时，不再自动弹窗，而是把该 host 加入"待登录队列"（每 host 本会话仅入队一次），
+/// 由用户在 Flipboard 顶部主动打开，避免后台频繁弹浏览器打扰。
 fn maybe_prompt_login(url: &str) {
     let host = match Url::parse(url.trim()).ok().and_then(|u| u.host_str().map(|h| h.to_string())) {
         Some(h) => h,
@@ -93,16 +103,31 @@ fn maybe_prompt_login(url: &str) {
         set.insert(host.clone());
     }
     let login_url = url.trim().to_string();
-    let profile = host.clone();
-    // 后台弹出可见登录窗口，不阻塞抓取流程。
-    tokio::spawn(async move {
-        info!("flipboard: auto-opening login window for host {}", profile);
-        if let Err(e) =
-            crate::commands::flipboard_render::open_login_window(&profile, &login_url).await
-        {
-            warn!("flipboard: auto login window failed for {}: {}", profile, e);
+    if let Ok(mut q) = PENDING_LOGINS.lock() {
+        if !q.iter().any(|p| p.host == host) {
+            q.push(PendingLogin {
+                host: host.clone(),
+                url: login_url,
+            });
         }
-    });
+    }
+    info!("flipboard: queued login request for host {}", host);
+}
+
+/// 获取待登录队列（前端顶部"待登录"图标展示并由用户主动触发）。
+#[command]
+pub async fn get_pending_logins() -> Result<Vec<PendingLogin>, String> {
+    Ok(PENDING_LOGINS.lock().map(|q| q.clone()).unwrap_or_default())
+}
+
+/// 从待登录队列移除某个 host（用户已处理/忽略）。
+#[command]
+pub async fn dismiss_pending_login(host: String) -> Result<(), String> {
+    let h = host.trim();
+    if let Ok(mut q) = PENDING_LOGINS.lock() {
+        q.retain(|p| p.host != h);
+    }
+    Ok(())
 }
 
 /// 终止指定 feed 的抓取任务。

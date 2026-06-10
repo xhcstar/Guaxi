@@ -91,6 +91,46 @@
           </div>
         </n-tooltip>
 
+        <!-- 后台抓取总开关 -->
+        <n-tooltip placement="bottom" trigger="hover">
+          <template #trigger>
+            <n-button class="header-circle-btn" circle size="small" @click="toggleScraping"
+              :type="scrapingEnabled ? 'success' : 'default'" :loading="scrapingBusy">
+              <n-icon>
+                <PauseIcon v-if="scrapingEnabled" />
+                <PlayIcon v-else />
+              </n-icon>
+            </n-button>
+          </template>
+          {{ scrapingEnabled ? '后台抓取：开（点击关闭）' : '后台抓取：关（点击开启）' }}
+        </n-tooltip>
+
+        <!-- 待登录队列 -->
+        <n-popover trigger="click" placement="bottom-end" :show="loginPopoverVisible"
+          @update:show="onLoginPopoverToggle" :z-index="11000">
+          <template #trigger>
+            <n-badge :value="pendingLogins.length" :max="99" :show="pendingLogins.length > 0">
+              <n-button class="header-circle-btn" circle size="small"
+                :type="pendingLogins.length ? 'warning' : 'default'">
+                <n-icon>
+                  <LoginIcon />
+                </n-icon>
+              </n-button>
+            </n-badge>
+          </template>
+          <div class="login-queue">
+            <div class="login-queue-title">待登录站点</div>
+            <div v-if="!pendingLogins.length" class="login-queue-empty">暂无需要登录的站点</div>
+            <div v-for="item in pendingLogins" :key="item.host" class="login-queue-item">
+              <span class="login-queue-host" :title="item.url">{{ item.host }}</span>
+              <div class="login-queue-actions">
+                <n-button size="tiny" type="primary" @click="openLogin(item)">打开登录</n-button>
+                <n-button size="tiny" tertiary @click="ignoreLogin(item)">忽略</n-button>
+              </div>
+            </div>
+          </div>
+        </n-popover>
+
         <n-tooltip placement="bottom" trigger="hover">
           <template #trigger>
             <n-button class="header-circle-btn" circle size="small" @click="toggleCollections"
@@ -120,7 +160,8 @@
 
 <script setup>
 import { createLogger } from '../../utils/logger'
-import { computed } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
+import { useMessage } from 'naive-ui'
 import { useFlipboardStore } from '../../stores/flipboardStore.js'
 import { useSiderStore } from '../../stores/useSiderStore'
 import { PanelLeftContract24Regular } from '@vicons/fluent'
@@ -131,7 +172,10 @@ import {
   NewspaperOutline,
   RefreshOutline,
   PulseOutline,
-  BookmarksOutline
+  BookmarksOutline,
+  PlayOutline,
+  PauseOutline,
+  LogInOutline
 } from '@vicons/ionicons5'
 
 const logger = createLogger('FlipboardHeader')
@@ -142,10 +186,59 @@ const MagazineIcon = NewspaperOutline
 const RefreshIcon = RefreshOutline
 const HealthIcon = PulseOutline
 const CollectionsIcon = BookmarksOutline
+const PlayIcon = PlayOutline
+const PauseIcon = PauseOutline
+const LoginIcon = LogInOutline
 
 const store = useFlipboardStore()
 const siderStore = useSiderStore()
+const message = useMessage()
 const viewKey = 'search'
+
+// 后台抓取总开关
+const scrapingEnabled = computed(() => store.scrapingEnabled.value)
+const scrapingBusy = ref(false)
+const toggleScraping = async () => {
+  scrapingBusy.value = true
+  try {
+    const next = !store.scrapingEnabled.value
+    await store.setScrapingEnabled(next)
+    message.success(next ? '已开启后台抓取' : '已关闭后台抓取', { duration: 1500 })
+  } catch (e) {
+    message.error('切换失败', { duration: 1500 })
+  } finally {
+    scrapingBusy.value = false
+  }
+}
+
+// 待登录队列
+const pendingLogins = computed(() => store.pendingLogins.value)
+const loginPopoverVisible = ref(false)
+const onLoginPopoverToggle = (v) => {
+  loginPopoverVisible.value = v
+  if (v) store.fetchPendingLogins()
+}
+const openLogin = async (item) => {
+  try {
+    await store.openPendingLogin(item)
+    message.info('已打开登录浏览器，请完成登录后关闭该窗口', { duration: 4000 })
+  } catch (e) {
+    message.error('打开登录失败', { duration: 2000 })
+  }
+  loginPopoverVisible.value = false
+}
+const ignoreLogin = async (item) => {
+  await store.dismissPendingLogin(item.host)
+}
+
+let loginPollTimer = null
+onMounted(() => {
+  store.fetchPendingLogins()
+  loginPollTimer = setInterval(() => store.fetchPendingLogins(), 8000)
+})
+onBeforeUnmount(() => {
+  if (loginPollTimer) clearInterval(loginPollTimer)
+})
 
 const searchQuery = computed(() => store.searchQuery.value)
 const currentView = computed(() => store.currentView.value)
@@ -395,5 +488,47 @@ const toggleLeftSidebar = () => {
 .header-right .n-button:hover {
   background: var(--guaxi-content-bg);
   border-color: var(--guaxi-border);
+}
+
+.login-queue {
+  min-width: 260px;
+  max-width: 340px;
+}
+
+.login-queue-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--guaxi-text-primary);
+}
+
+.login-queue-empty {
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+  padding: 8px 0;
+}
+
+.login-queue-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 0;
+  border-top: 1px solid var(--guaxi-border);
+}
+
+.login-queue-host {
+  font-size: 13px;
+  color: var(--guaxi-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 160px;
+}
+
+.login-queue-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
 }
 </style>
