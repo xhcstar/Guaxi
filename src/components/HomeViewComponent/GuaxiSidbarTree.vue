@@ -11,11 +11,11 @@ import GuaxiFileTree from './GuaxiFileTree.vue';
 
 </script>
 
-<style scope>
+<style scoped>
 .tree-column {
   flex: 1;
   padding: 0;
-  overflow-y: auto;
+  overflow: hidden;
   height: 100%;
   min-height: 0;
   display: flex;

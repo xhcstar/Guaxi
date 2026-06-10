@@ -57,7 +57,7 @@
 
     <div class="repo-body">
       <div v-if="activeRepoPathItem" class="active-repo-wrapper"
-        :style="fileTreeStore.isRepoExpanded(activeRepoPathItem) ? { '--active-repo-max-height': activeRepoMaxHeight + 'px' } : undefined">
+        :class="{ expanded: fileTreeStore.isRepoExpanded(activeRepoPathItem) }">
         <div class="repo-item" @click="toggleRepo(activeRepoPathItem)">
           <div class="repo-title">
             <n-icon size="16" class="repo-icon">
@@ -105,14 +105,24 @@
           </div>
         </div>
 
-        <n-collapse-transition>
-          <div v-if="fileTreeStore.isRepoExpanded(activeRepoPathItem)" class="active-tree-container" @wheel.stop>
-            <n-tree ref="treeRef" v-model:expanded-keys="expandedKeys" v-model:selected-keys="selectedKeys" :data="fileTree" key-field="id" :render-label="renderLabel"
-              :render-prefix="renderPrefix" :expand-on-click="true" :show-line="true"
-              @update:selected-keys="handleSelect" :node-props="nodeProps" virtual-scroll
-              :virtual-scroll-item-height="28" class="tree-component" />
-          </div>
-        </n-collapse-transition>
+        <div v-if="fileTreeStore.isRepoExpanded(activeRepoPathItem)" class="active-tree-container" @wheel.stop>
+          <GuaxiVirtualFileTree
+            ref="treeRef"
+            class="tree-component"
+            :nodes="fileTree"
+            v-model:expanded-keys="expandedKeys"
+            v-model:selected-keys="selectedKeys"
+            :editing-id="editingId"
+            v-model:edit-name="editName"
+            :root-id="fileTreeStore.activeRepoPath"
+            @open-file="handleOpenFile"
+            @load-children="handleLoadChildren"
+            @contextmenu="handleNodeContextMenu"
+            @rename-commit="handleBlur"
+            @rename-cancel="cancelEditing"
+            @move="handleDropMove"
+          />
+        </div>
       </div>
 
       <n-scrollbar ref="repoScrollbarRef" class="repo-scroll-container">
@@ -197,17 +207,18 @@
 
 <script setup>
 import { createLogger } from '../../utils/logger'
-import { NTree, NIcon, useMessage, NModal, NForm, NFormItem, NInput, NButton, NSpace } from 'naive-ui'
+import { NIcon, useMessage, NModal, NForm, NFormItem, NInput, NButton, NSpace } from 'naive-ui'
 import { DocumentTextOutline, FolderOutline, AddOutline, TrashOutline, CreateOutline, MoveOutline, FolderOpenOutline, GlobeOutline, SettingsOutline, GitBranchOutline, DownloadOutline } from '@vicons/ionicons5'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore';
+import GuaxiVirtualFileTree from './GuaxiVirtualFileTree.vue';
 import { useSettingsStore } from '../../stores/settingsStore'
 import { h, ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { open, confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { listen } from '@tauri-apps/api/event'
-import { NList, NListItem, NCollapseTransition, NText, NTooltip, NIconWrapper } from 'naive-ui'
+import { NList, NListItem, NText, NTooltip, NIconWrapper } from 'naive-ui'
 import { RefreshOutline as RefreshIcon, ChevronDownOutline as ChevronDownIcon, ChevronForwardOutline as ChevronForwardIcon } from '@vicons/ionicons5'
 import { Folder20Regular as FolderIcon, ChannelAdd20Regular as FileAddIcon, FolderAdd20Regular as FolderAddIcon } from '@vicons/fluent'
 
@@ -989,111 +1000,153 @@ const sortFileTree = (tree) => {
     });
 };
 
-// 渲染文件树图标
-const renderPrefix = ({ option }) => {
-  const icon = option.is_directory ? FolderOutline : DocumentTextOutline
-  return h(NIcon, null, { default: () => h(icon) })
+// ─────────── 虚拟文件树事件处理 ───────────
+
+// 打开文件(虚拟树 open-file 事件):等价旧 handleSelect 的文件分支
+const handleOpenFile = async (node) => {
+  if (!node) return
+  const normalizedKey = normalizePath(node.id)
+  if (isHiddenPath(normalizedKey)) return
+
+  selectedKeys.value = [node.id]
+
+  const existingTab = fileTreeStore.openTabs.find(tab => normalizePath(tab.path) === normalizedKey)
+  if (existingTab) {
+    fileTreeStore.setActiveTab(existingTab.path)
+    lastSelectedKey.value = node.id
+    return
+  }
+  lastSelectedKey.value = node.id
+
+  if (editingNode.value || node.isNew) return
+
+  try {
+    const res = await fileTreeStore.fetchFileContent(node.id)
+    if (res?.ok) {
+      await fileTreeStore.openFileInTab(node.id, res.content, { unsupported: !!res.unsupported })
+      if (res.unsupported) {
+        message.warning('不支持打开该文件类型（仅支持文本/Markdown）')
+      }
+    } else {
+      message.warning('文件不存在或已被删除')
+      await handleFileRemoved(node.id)
+    }
+  } catch (error) {
+    logger.error('处理文件选中时出错:', error)
+  }
 }
 
-const handleSelect = async (keys) => {
-  logger.info('触发选中事件, keys 参数:', keys);
+// 目录展开懒加载(虚拟树 load-children 事件):等价旧 handleSelect 的目录分支
+const handleLoadChildren = async (node) => {
+  if (!node?.is_directory) return
+  selectedKeys.value = [node.id]
+  if (editingNode.value || node.isNew) return
+  try {
+    const dirId = normalizePath(node.id)
+    await fileTreeStore.fetchFileTree(dirId, { force: true })
+    const filteredChildren = filterHiddenTree(fileTreeStore.fileTree)
+    node.children = sortFileTree(normalizeTreeIds(filteredChildren))
+    await scrollToKey(dirId)
+  } catch (error) {
+    logger.error('加载子目录内容失败:', error)
+  }
+}
 
-  // 1. 处理空选中情况
-  if (!keys || keys.length === 0) {
-    if (isTreeLoading.value) {
-      logger.info('空选中（加载中），忽略本次清空事件');
-      return;
+// 右键菜单(虚拟树 contextmenu 事件):等价旧 nodeProps 的逻辑
+const handleNodeContextMenu = ({ node, x, y }) => {
+  selectedNode.value = node
+
+  const nodePath = normalizePath(node.id)
+  const canOpenInBrowser = !node.is_directory && isMarkdownFilePath(nodePath)
+  const openInBrowserOpt = contextMenuOptions.value.find(o => o.key === 'openInBrowser')
+  if (openInBrowserOpt) openInBrowserOpt.disabled = !canOpenInBrowser
+
+  const canImportAsTemplate = !node.is_directory && isMarkdownFilePath(nodePath)
+  const importOpt = contextMenuOptions.value.find(o => o.key === 'importAsTemplate')
+  if (importOpt) importOpt.disabled = !canImportAsTemplate
+
+  isContextMenuVisible.value = true
+  contextMenuPosition.value = { x, y }
+}
+
+// 取消内联编辑(虚拟树 rename-cancel 事件):等价旧 handleKeydown 的 Escape 分支
+const cancelEditing = async () => {
+  if (editingNode.value && editingNode.value.isNew) {
+    const node = editingNode.value
+    const parentNode = findParentNode(fileTree.value, node.id)
+    let parentPath = parentNode ? parentNode.id : null
+
+    if (!parentNode) {
+      parentPath = normalizePath(node.id).split('/').slice(0, -1).join('/')
+      if (!parentPath || parentPath === normalizePath(fileTreeStore.activeRepoPath)) {
+        await loadFileTree()
+      } else {
+        await refreshDirectory(parentPath)
+      }
+    } else {
+      parentNode.children = parentNode.children.filter(n => n.id !== node.id)
+      if (normalizePath(parentPath) === normalizePath(fileTreeStore.activeRepoPath)) {
+        await loadFileTree()
+      } else {
+        await refreshDirectory(parentPath)
+      }
     }
-    logger.info('空选中，清空选中状态');
-    lastSelectedKey.value = null;
-    selectedKeys.value = [];
-    return;
   }
+  editingNode.value = null
+  editName.value = ''
+}
 
-  const selectedKey = keys[0];
-  const normalizedKey = normalizePath(selectedKey);
-
-  // 检查是否是隐藏路径
-  if (isHiddenPath(normalizedKey)) {
-    logger.info('跳过隐藏目录/文件:', normalizedKey);
-    return;
-  }
-
-  // 2. 防抖处理 - 仅当已存在标签页时忽略重复选中
-  if (normalizedKey === normalizePath(lastSelectedKey.value)) {
-    const existingTab = fileTreeStore.openTabs.find(tab => normalizePath(tab.path) === normalizedKey)
-    if (existingTab) {
-      logger.info('忽略重复选中（已打开标签页）:', normalizedKey);
-      fileTreeStore.setActiveTab(existingTab.path)
-      return;
-    }
-  }
-
-  // 3. 更新选中状态
-  selectedKeys.value = [selectedKey];
-  lastSelectedKey.value = selectedKey;
-
-  logger.info('查找选中节点, key:', normalizedKey);
-  const selectedNode = findNodeById(fileTree.value, normalizedKey);
-
-  if (!selectedNode) {
-    logger.warn('未找到选中节点');
-    lastSelectedKey.value = null;
-    selectedKeys.value = [];
-    return;
-  }
-
-  logger.info('找到选中节点:', selectedNode);
-
-  if (editingNode.value || selectedNode.isNew) {
-    lastSelectedKey.value = null
+// 拖拽移动(虚拟树 move 事件):把 sourceId 移动到 targetDirId
+const handleDropMove = async (sourceId, targetDirId) => {
+  const sourcePath = normalizePath(sourceId)
+  const targetDir = normalizePath(targetDirId)
+  if (!sourcePath || !targetDir) return
+  if (isHiddenPath(sourcePath)) return
+  if (sourcePath === targetDir || targetDir === sourcePath || targetDir.startsWith(`${sourcePath}/`)) {
+    message.warning('不能移动到自身或其子目录')
     return
   }
 
-  if (!selectedNode.is_directory) {
-    try {
-      // 检查是否已存在标签页
-      const existingTab = fileTreeStore.openTabs.find(tab => tab.path === selectedNode.id);
-      if (existingTab) {
-        logger.info('文件已在标签页中打开');
-        fileTreeStore.setActiveTab(selectedNode.id);
-        return;
+  const name = sourcePath.split('/').pop()
+  const destinationPath = normalizePath(`${targetDir}/${name}`)
+  const sourceParent = sourcePath.split('/').slice(0, -1).join('/') || normalizePath(fileTreeStore.activeRepoPath)
+  if (destinationPath === sourcePath) return
+  if (normalizePath(sourceParent) === targetDir) return // 已在目标目录
+
+  try {
+    await invoke('move_path', { sourcePath, destinationPath })
+
+    // 更新打开的标签页路径(文件本身或目录前缀)
+    fileTreeStore.openTabs.forEach((tab) => {
+      const tp = normalizePath(tab.path)
+      if (tp === sourcePath) {
+        const wasActive = normalizePath(fileTreeStore.activeTab) === tp
+        tab.path = destinationPath
+        tab.fileName = name
+        if (wasActive) fileTreeStore.setActiveTab(destinationPath)
+      } else if (tp.startsWith(`${sourcePath}/`)) {
+        const np = destinationPath + tp.slice(sourcePath.length)
+        const wasActive = normalizePath(fileTreeStore.activeTab) === tp
+        tab.path = np
+        if (wasActive) fileTreeStore.setActiveTab(np)
       }
+    })
 
-      // 获取文件内容
-      const res = await fileTreeStore.fetchFileContent(selectedNode.id)
-      if (res?.ok) {
-        await fileTreeStore.openFileInTab(selectedNode.id, res.content, {
-          unsupported: !!res.unsupported
-        })
-        if (res.unsupported) {
-          message.warning('不支持打开该文件类型（仅支持文本/Markdown）')
-        }
-      } else {
-        message.warning('文件不存在或已被删除')
-        await handleFileRemoved(selectedNode.id)
-      }
-    } catch (error) {
-      logger.error('处理文件选中时出错:', error);
-    }
-  } else {
-    try {
-      const dirId = normalizePath(selectedNode.id)
+    if (!expandedKeys.value.includes(targetDir)) expandedKeys.value.push(targetDir)
+    await refreshDirectory(sourceParent)
+    await refreshDirectory(targetDir)
 
-      await fileTreeStore.fetchFileTree(dirId, { force: true });
-      const filteredChildren = filterHiddenTree(fileTreeStore.fileTree);
-      selectedNode.children = sortFileTree(normalizeTreeIds(filteredChildren));
-
-      if (!expandedKeys.value.includes(dirId) && Array.isArray(selectedNode.children) && selectedNode.children.length > 0) {
-        ensureExpandedForDir(dirId)
-      }
-
-      await scrollToKey(dirId)
-    } catch (error) {
-      logger.error('加载子目录内容失败:', error);
-    }
+    selectedKeys.value = [destinationPath]
+    lastSelectedKey.value = destinationPath
+    logger.info('[DnDMove] success', { sourcePath, destinationPath })
+    message.success('移动成功')
+  } catch (error) {
+    logger.error('拖拽移动失败:', error)
+    message.error(`移动失败: ${error.message || error}`)
+    await refreshDirectory(sourceParent)
+    await refreshDirectory(targetDir)
   }
-};
+}
 
 // 递归查找节点
 const findNodeById = (tree, targetId) => {
@@ -1131,31 +1184,6 @@ const findNodeById = (tree, targetId) => {
   return dfs(tree);
 };
 
-const nodeProps = ({ option }) => ({
-  // 处理右键点击
-  onContextmenu: (e) => {
-    e.preventDefault()
-    e.stopPropagation()
-    selectedNode.value = option
-
-    const nodePath = normalizePath(option.id)
-    const canOpenInBrowser = !option.is_directory && isMarkdownFilePath(nodePath)
-    const openInBrowserOpt = contextMenuOptions.value.find(o => o.key === 'openInBrowser')
-    if (openInBrowserOpt) {
-      openInBrowserOpt.disabled = !canOpenInBrowser
-    }
-
-    const canImportAsTemplate = !option.is_directory && isMarkdownFilePath(nodePath)
-    const importOpt = contextMenuOptions.value.find(o => o.key === 'importAsTemplate')
-    if (importOpt) {
-      importOpt.disabled = !canImportAsTemplate
-    }
-
-    isContextMenuVisible.value = true
-    contextMenuPosition.value = { x: e.clientX, y: e.clientY }
-    logger.info('节点右键菜单触发:', option.name)
-  }
-})
 
 // 处理右键菜单选择
 const handleContextMenuSelect = async (key) => {
@@ -1223,6 +1251,8 @@ const handleClickoutside = () => {
 const editingNode = ref(null)
 // 添加一个 ref 来存储编辑中的名称
 const editName = ref('')
+// 传给虚拟文件树:当前处于编辑态的节点 id
+const editingId = computed(() => editingNode.value?.id ?? null)
 
 // 修改后的 addNode 函数
 const addNode = async (parentId, isDirectory = false) => {
@@ -1507,65 +1537,10 @@ const startEditing = (node) => {
   logger.info('startEditing ==> ', node);
 }
 
-const renderLabel = ({ option }) => {
-  // 用 id 判断是否为正在编辑的节点
-  if (editingNode.value && normalizePath(editingNode.value.id) === normalizePath(option.id)) {
-    logger.info('EEE ======> renderLabel editingNode.value:', editingNode.value);
-    return h('input', {
-      class: 'editable-input',
-      'data-node-id': normalizePath(option.id),
-      value: editName.value,
-      onInput: (e) => (editName.value = e.target.value),
-      onBlur: handleBlur,
-      onKeydown: handleKeydown,
-    })
-  } else {
-    // logger.info('======> renderLabel option:', option);
-    // logger.info('======> renderLabel editingNode.value:', editingNode.value);
-    return option.name
-  }
-}
-
 watch(editingNode, async (val) => {
   if (!val) return
   await focusEditingInput(val.id)
 })
-
-// 处理输入框的 keydown 事件
-const handleKeydown = async (e) => {
-  logger.info('handleKeydown triggered'); // 添加日志
-  if (e.key === 'Enter') {
-    e.target.blur(); // 触发 input 失焦事件
-  } else if (e.key === 'Escape') {
-    // 取消编辑
-    if (editingNode.value && editingNode.value.isNew) {
-      const node = editingNode.value;
-      let parentNode = findParentNode(fileTree.value, node.id);
-      let parentPath = parentNode ? parentNode.id : null;
-
-      // 新增：如果 parentNode 没找到，直接用路径推断父目录
-      if (!parentNode) {
-        parentPath = normalizePath(node.id).split('/').slice(0, -1).join('/');
-        // 根目录特殊处理
-        if (!parentPath || parentPath === normalizePath(fileTreeStore.activeRepoPath)) {
-          await loadFileTree();
-        } else {
-          await refreshDirectory(parentPath);
-        }
-      } else {
-        parentNode.children = parentNode.children.filter(n => n.id !== node.id);
-        // 根目录下刷新整个树，否则刷新父目录
-        if (normalizePath(parentPath) === normalizePath(fileTreeStore.activeRepoPath)) {
-          await loadFileTree();
-        } else {
-          await refreshDirectory(parentPath);
-        }
-      }
-    }
-    editingNode.value = null;
-    editName.value = '';
-  }
-};
 
 const moveNode = async (node) => {
   const targetDirectoryPath = await selectTargetPath();
@@ -1978,7 +1953,8 @@ const handleFileRemoved = async (filePath) => {
     fileTreeStore.closeTab(p)
   }
 
-  await refreshDirectory(parentPath || fileTreeStore.activeRepoPath)
+  // 仅做就地移除,不再全量刷新父目录:避免重建子节点导致已展开目录被收起。
+  // 磁盘删除已完成,乐观移除即可保持树与展开状态一致。
 };
 
 // 清理函数
@@ -2247,14 +2223,14 @@ onUnmounted(() => {
 }
 
 .file-tree-container {
-  height: calc(100% - var(--scrollbar-height, 42px));
+  height: 100%;
   display: flex;
   flex-direction: column;
   background-color: var(--guaxi-panel-bg);
   border: 1px solid var(--guaxi-border);
-  border-radius: 8px;
+  border-radius: 14px;
   overflow: hidden;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05), 0 10px 28px rgba(0, 0, 0, 0.06);
   font-family: 'Maple Mono NF CN','JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
 }
 
@@ -2309,10 +2285,21 @@ onUnmounted(() => {
 
 .active-repo-wrapper {
   background-color: var(--guaxi-panel-bg);
-  border-left: 3px solid #1890ff;
-  box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.08);
-  border-bottom: 1px solid var(--n-border-color);
+  border: 1px solid var(--guaxi-border);
+  border-radius: 12px;
+  margin: 6px 6px 4px 6px;
+  box-shadow: 0 1px 6px rgba(7, 118, 161, 0.06);
+  overflow: hidden;
 }
+
+/* 激活的知识库展开后占满剩余高度 */
+.active-repo-wrapper.expanded {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 
 .active-repo-wrapper .repo-actions {
   opacity: 1;
@@ -2330,11 +2317,10 @@ onUnmounted(() => {
 }
 
 .active-tree-container {
-  height: var(--active-repo-max-height, 360px);
-  padding: 8px 0 8px 24px;
-  border-left: 1px dashed var(--n-border-color);
-  overflow-y: auto;
-  overflow-x: hidden;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 2px 2px 6px 2px;
+  overflow: hidden;
   overscroll-behavior: contain;
 }
 
@@ -2343,18 +2329,24 @@ onUnmounted(() => {
 }
 
 .repo-scroll-container {
-  flex: 1;
-  height: 0;
+  flex: 0 1 auto;
+  max-height: 42%;
   min-height: 0;
   background-color: transparent;
 }
 
 :deep(.repo-scroll-container .n-scrollbar-rail) {
-  width: 6px;
+  width: 7px;
+  right: 2px;
 }
 
 :deep(.repo-scroll-container .n-scrollbar-rail__scrollbar) {
-  border-radius: 3px;
+  border-radius: 8px;
+  background-color: rgba(140, 140, 150, 0.4);
+}
+
+:deep(.repo-scroll-container .n-scrollbar-rail__scrollbar:hover) {
+  background-color: rgba(120, 120, 130, 0.6);
 }
 
 .repo-list {
@@ -2363,12 +2355,12 @@ onUnmounted(() => {
 }
 
 .repo-list-item {
-  padding: 8px 12px;
-  transition: all 0.2s ease;
-  border-radius: 6px;
-  border-bottom: 1px solid var(--n-border-color);
+  padding: 9px 12px;
+  transition: background-color 0.18s ease, box-shadow 0.18s ease;
+  border-radius: 13px;
+  border: 1px solid transparent;
   position: relative;
-  margin: 2px 0;
+  margin: 5px 6px;
   overflow: hidden;
 }
 
@@ -2431,9 +2423,6 @@ onUnmounted(() => {
   height: 100%;
 }
 
-:deep(.repo-list-item.active.expanded .tree-component .n-tree__empty) {
-  height: 100%;
-}
 
 /* 暗色模式下选中状态更明显 */
 .dark-mode .repo-list-item.active {
@@ -2492,47 +2481,7 @@ onUnmounted(() => {
 
 .tree-component {
   width: 100%;
-}
-
-:deep(.tree-component .n-tree-node) {
-  padding: 0;
-}
-
-:deep(.tree-component .n-tree-node-content) {
-  margin: 2px 6px;
-  padding: 4px 8px;
-  border-radius: 6px;
-  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
-}
-
-:deep(.tree-component .n-tree-node-content__text) {
-  font-size: 13px;
-  line-height: 1.35;
-  font-family: 'Maple Mono NF CN','JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
-}
-
-:deep(.tree-component .n-tree-node-content:hover) {
-  background: var(--guaxi-header-bg);
-  box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.18), 0 2px 12px 0 rgba(7, 118, 161, 0.1);
-  transform: scale(1.01);
-}
-
-:deep(.tree-component .n-tree-node--selected .n-tree-node-content) {
-  background: var(--guaxi-header-bg);
-  box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.26), 0 2px 12px 0 rgba(7, 118, 161, 0.14);
-  animation: file-tree-select-pop 160ms ease-out;
-}
-
-@keyframes file-tree-select-pop {
-  from {
-    transform: scale(1);
-  }
-  60% {
-    transform: scale(1.02);
-  }
-  to {
-    transform: scale(1.01);
-  }
+  height: 100%;
 }
 
 /* 编辑输入框样式 */
