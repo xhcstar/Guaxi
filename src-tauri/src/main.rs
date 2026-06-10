@@ -447,6 +447,8 @@ async fn main() {
             commands::kgraph::kg_suggest_tags,
             commands::kgraph::kg_confirm_relation,
             commands::kgraph::kg_add_tag,
+            commands::kgraph::kg_remove_tag,
+            commands::kgraph::kg_remove_relation,
             commands::kg_llm::kg_extract_concepts,
             commands::kgraph::kg_detect_communities,
             commands::kgraph::kg_communities,

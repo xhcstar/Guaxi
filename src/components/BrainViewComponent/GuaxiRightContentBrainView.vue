@@ -1,6 +1,9 @@
 <template>
   <div ref="rightSiderContentRef" class="right-sider-content">
-    <div class="panel">
+    <!-- 工业图谱模式:渲染 kg3d 操作面板;经典模式:沿用原有节点/搜索/筛选面板 -->
+    <GuaxiKg3dOpsPanel v-if="store.graphViewMode === 'kg3d'" />
+
+    <div v-else class="panel">
       <n-card title="节点信息" size="small" class="node-info-card">
         <n-space v-if="selectedGraphNode" vertical>
           <n-tag :type="getNodeTagType(selectedGraphNode.type)" size="small">
@@ -95,6 +98,7 @@ import {
 } from 'naive-ui'
 
 import { SearchOutline } from '@vicons/ionicons5'
+import GuaxiKg3dOpsPanel from './GuaxiKg3dOpsPanel.vue'
 
 const logger = createLogger('GuaxiRightContentBrainView')
 const store = useKnowledgeBaseStore()

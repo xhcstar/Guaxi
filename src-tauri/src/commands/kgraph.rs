@@ -2452,6 +2452,59 @@ pub fn kg_add_tag(
     Ok(())
 }
 
+/// 删除某节点上的一个标签(用户在图谱中手动移除)。
+#[tauri::command]
+pub fn kg_remove_tag(kb_name: String, node_id: String, tag: String) -> Result<(), String> {
+    let tag = tag.trim().to_string();
+    if tag.is_empty() {
+        return Err("标签不能为空".to_string());
+    }
+    let conn = ensure_kg_db()?;
+    conn.execute(
+        "DELETE FROM kg_node_tags WHERE kb_name=?1 AND node_id=?2 AND tag=?3",
+        rusqlite::params![kb_name, node_id, tag],
+    )
+    .map_err(|e| e.to_string())?;
+    MEM_CACHE.write().remove(&kb_name);
+    Ok(())
+}
+
+/// 删除一条关系边。relation 省略时删除该有向对之间的所有边类型;
+/// 仅作用于用户/语义产生的边(source∈ manual/semantic/related/llm),结构性边(contains/next)不允许删除。
+#[tauri::command]
+pub fn kg_remove_relation(
+    kb_name: String,
+    from_id: String,
+    to_id: String,
+    relation: Option<String>,
+) -> Result<usize, String> {
+    let conn = ensure_kg_db()?;
+    let protected = ["contains", "next"];
+    let n = match relation {
+        Some(rel) if !rel.trim().is_empty() => {
+            let rel = rel.trim();
+            if protected.contains(&rel) {
+                return Err(format!("结构性关系 {rel} 不可手动删除"));
+            }
+            conn.execute(
+                "DELETE FROM kg_edges WHERE kb_name=?1 AND from_id=?2 AND to_id=?3 AND edge_type=?4 \
+                 AND edge_type NOT IN ('contains','next')",
+                rusqlite::params![kb_name, from_id, to_id, rel],
+            )
+            .map_err(|e| e.to_string())?
+        }
+        _ => conn
+            .execute(
+                "DELETE FROM kg_edges WHERE kb_name=?1 AND from_id=?2 AND to_id=?3 \
+                 AND edge_type NOT IN ('contains','next')",
+                rusqlite::params![kb_name, from_id, to_id],
+            )
+            .map_err(|e| e.to_string())?,
+    };
+    MEM_CACHE.write().remove(&kb_name);
+    Ok(n)
+}
+
 // ─────────────────────── 社区检测(Louvain)───────────────────────
 //
 // 在加权无向图上做多层 Louvain 模块度优化,把强关联知识点聚成社区,

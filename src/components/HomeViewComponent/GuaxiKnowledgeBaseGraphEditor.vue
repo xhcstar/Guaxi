@@ -170,6 +170,38 @@
                 <n-button v-if="selectedKey && selectedKey !== graphRootKey" @click="enterSubGraph(selectedKey)">子图</n-button>
                 <n-button @click="clearSelected">清除</n-button>
               </n-button-group>
+
+              <!-- 标签 / 关联:与知识图谱属性对应,可增删 -->
+              <template v-if="selectedNodeKind !== 'dir'">
+                <div class="ge-sub">标签 / 分类</div>
+                <div class="ge-tags">
+                  <n-tag
+                    v-for="t in nodeMetaTags"
+                    :key="t"
+                    size="small"
+                    closable
+                    @close="removeNodeTag(t)"
+                  >#{{ t }}</n-tag>
+                  <span v-if="!nodeMetaTags.length" class="ge-empty">暂无标签</span>
+                </div>
+                <div class="ge-add">
+                  <n-input v-model:value="nodeNewTag" size="tiny" placeholder="添加标签…" @keyup.enter="addNodeTag" />
+                  <n-button size="tiny" @click="addNodeTag">＋</n-button>
+                </div>
+
+                <div class="ge-sub">关联节点</div>
+                <div class="ge-tags">
+                  <n-tag
+                    v-for="r in nodeMetaRelated"
+                    :key="r"
+                    size="small"
+                    type="info"
+                    closable
+                    @close="removeNodeRelated(r)"
+                  >{{ r }}</n-tag>
+                  <span v-if="!nodeMetaRelated.length" class="ge-empty">暂无关联</span>
+                </div>
+              </template>
             </n-space>
             <n-text v-else depth="3">点击图谱中的节点查看属性</n-text>
           </n-card>
@@ -456,6 +488,93 @@ watch(selectedNode, (n) => {
 }, { immediate: true })
 
 const fileContentCache = new Map()
+
+// 选中节点的元数据(标签/关联/分类),与知识图谱属性对应
+const nodeMeta = ref(null) // { file_tags, related_nodes, structure_nodes }
+const nodeMetaTags = ref([])
+const nodeMetaRelated = ref([])
+const nodeNewTag = ref('')
+
+const loadMetaForNode = async (n) => {
+  nodeMeta.value = null
+  nodeMetaTags.value = []
+  nodeMetaRelated.value = []
+  const kbName = props.selectedKbName
+  if (!n || !kbName) return
+  const kind = String(n.kind || '')
+  // 仅文件/段落有文件级元数据;目录节点没有
+  if (kind === 'dir') return
+  const relPath = String(n.relPath || n.key || '')
+  if (!relPath) return
+  try {
+    const meta = await invoke('kbmeta_read_file_meta', { knowledgeBaseName: kbName, relPath: extractFileRel(relPath) })
+    nodeMeta.value = meta
+    if (kind === 'paragraph') {
+      // 段落:取对应 structure_node 的标签/关联
+      const sid = String(n.stableId || '')
+      const sn = (meta?.structure_nodes || []).find(
+        (x) => String(x?.attrs?.stable_id || '') === sid
+      )
+      nodeMetaTags.value = Array.isArray(sn?.tags) ? [...sn.tags] : []
+      nodeMetaRelated.value = Array.isArray(sn?.related_nodes) ? [...sn.related_nodes] : []
+    } else {
+      nodeMetaTags.value = Array.isArray(meta?.file_tags) ? [...meta.file_tags] : []
+      nodeMetaRelated.value = Array.isArray(meta?.related_nodes) ? [...meta.related_nodes] : []
+    }
+  } catch (e) {
+    logger.warn('[KBGraphEditor] load node meta failed', { error: String(e?.message || e) })
+  }
+}
+
+const extractFileRel = (key) => {
+  const k = String(key || '')
+  const idx = k.indexOf('/__para__/')
+  return idx >= 0 ? k.slice(0, idx) : k
+}
+
+// 保存当前节点标签/关联回 meta 文件
+const persistNodeMeta = async () => {
+  const n = selectedNode.value
+  const kbName = props.selectedKbName
+  if (!n || !kbName || !nodeMeta.value) return
+  const kind = String(n.kind || '')
+  const relPath = extractFileRel(String(n.relPath || n.key || ''))
+  const meta = JSON.parse(JSON.stringify(nodeMeta.value))
+  if (kind === 'paragraph') {
+    const sid = String(n.stableId || '')
+    const sn = (meta.structure_nodes || []).find((x) => String(x?.attrs?.stable_id || '') === sid)
+    if (sn) {
+      sn.tags = [...nodeMetaTags.value]
+      sn.related_nodes = [...nodeMetaRelated.value]
+    }
+  } else {
+    meta.file_tags = [...nodeMetaTags.value]
+    meta.related_nodes = [...nodeMetaRelated.value]
+  }
+  try {
+    await invoke('kbmeta_save_file_meta', { knowledgeBaseName: kbName, relPath, meta })
+    nodeMeta.value = meta
+    message.success('已保存')
+  } catch (e) {
+    message.error(String(e?.message || '保存失败'))
+  }
+}
+
+const addNodeTag = async () => {
+  const t = nodeNewTag.value.trim()
+  if (!t || nodeMetaTags.value.includes(t)) { nodeNewTag.value = ''; return }
+  nodeMetaTags.value = [...nodeMetaTags.value, t]
+  nodeNewTag.value = ''
+  await persistNodeMeta()
+}
+const removeNodeTag = async (t) => {
+  nodeMetaTags.value = nodeMetaTags.value.filter((x) => x !== t)
+  await persistNodeMeta()
+}
+const removeNodeRelated = async (r) => {
+  nodeMetaRelated.value = nodeMetaRelated.value.filter((x) => x !== r)
+  await persistNodeMeta()
+}
 
 const nodeContentLoading = ref(false)
 const nodeContentText = ref('')
@@ -866,6 +985,7 @@ const loadTextForNode = async (n) => {
 }
 
 watch(selectedNode, (n) => {
+  loadMetaForNode(n)
   loadTextForNode(n)
 }, { immediate: true })
 
@@ -2286,6 +2406,11 @@ const deleteSelectedNode = async () => {
   gap: 6px;
   overflow: hidden;
 }
+
+.ge-sub { font-size: 12px; opacity: 0.6; margin: 8px 0 2px; }
+.ge-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.ge-empty { font-size: 12px; opacity: 0.5; }
+.ge-add { display: flex; gap: 4px; align-items: center; margin-top: 4px; }
 
 .node-expanded-title {
   font-size: 13px;

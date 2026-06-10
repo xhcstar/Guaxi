@@ -349,10 +349,50 @@ fn merge_attrs(scanned: &serde_json::Value, user: &serde_json::Value) -> serde_j
     serde_json::Value::Object(out)
 }
 
+/// 是否为探索者模式哨兵块开始标记:<!--py-->/<!--py {json}-->/<!--math.../<!--pyout...
+fn is_sentinel_open(lt: &str) -> bool {
+    let s = lt.trim();
+    if !s.starts_with("<!--") {
+        return false;
+    }
+    let inner = s[4..].trim_start();
+    // 排除结束标记(以 / 开头)
+    if inner.starts_with('/') {
+        return false;
+    }
+    for kw in ["py", "math", "pyout"] {
+        if inner == kw
+            || inner.starts_with(&format!("{kw} "))
+            || inner.starts_with(&format!("{kw}-->"))
+            || inner.starts_with(&format!("{kw}\t"))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// 是否为哨兵块结束标记:<!--/py-->/<!--/math-->/<!--/pyout-->
+fn is_sentinel_close(lt: &str) -> bool {
+    let s = lt.trim();
+    if !s.starts_with("<!--") {
+        return false;
+    }
+    let inner = s[4..].trim_start();
+    if !inner.starts_with('/') {
+        return false;
+    }
+    let kw = inner[1..].trim_start().trim_end_matches("-->").trim();
+    matches!(kw, "py" | "math" | "pyout")
+}
+
 fn scan_markdown_structure(file_rel: &str, content: &str) -> Vec<FileStructureNode> {
     let mut out: Vec<FileStructureNode> = Vec::new();
 
     let mut in_fence = false;
+    // 探索者模式的可执行哨兵块(<!--py-->/<!--math-->/<!--pyout--> ... <!--/...-->)
+    // 是为 Notebook 等模式提供的特殊语法,知识点结构解析时应整体跳过,不当作章节/段落节点。
+    let mut sentinel_depth: u32 = 0;
 
     let mut para_lines: Vec<String> = Vec::new();
     let mut para_start_line: u32 = 0;
@@ -413,6 +453,34 @@ fn scan_markdown_structure(file_rel: &str, content: &str) -> Vec<FileStructureNo
             continue;
         }
         if in_fence {
+            continue;
+        }
+
+        // 哨兵块边界:结束标记 <!--/py-->/<!--/math-->/<!--/pyout--> 先退栈;
+        // 开始标记 <!--py ...-->/<!--math ...-->/<!--pyout ...--> 入栈。块体整体不进结构。
+        if is_sentinel_close(lt) {
+            flush_para(
+                line_num.saturating_sub(1),
+                &mut para_lines,
+                &mut para_start_line,
+                &last_section,
+                &mut out,
+            );
+            sentinel_depth = sentinel_depth.saturating_sub(1);
+            continue;
+        }
+        if is_sentinel_open(lt) {
+            flush_para(
+                line_num.saturating_sub(1),
+                &mut para_lines,
+                &mut para_start_line,
+                &last_section,
+                &mut out,
+            );
+            sentinel_depth += 1;
+            continue;
+        }
+        if sentinel_depth > 0 {
             continue;
         }
 

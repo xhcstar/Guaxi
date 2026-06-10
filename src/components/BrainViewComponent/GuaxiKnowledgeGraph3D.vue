@@ -16,27 +16,47 @@
             placeholder="搜索 / 语义检索…"
             @keyup.enter="runSearch"
           />
-          <select v-model="view" class="tb-sel" @change="switchView">
-            <option value="relation">关系视角</option>
-            <option value="tag">分类视角</option>
-            <option value="time">时间视角</option>
-            <option value="importance">重要度视角</option>
+          <select v-model="view" class="tb-sel" @change="switchView" title="换一种方式摆放知识点">
+            <option value="relation">按关联摆放</option>
+            <option value="tag">按主题分组</option>
+            <option value="time">按时间排列</option>
+            <option value="importance">按重要程度</option>
           </select>
-          <button class="tb-btn" :class="{ active: pathMode }" @click="togglePathMode" title="两点连线:依次点两个节点">路径</button>
-          <button class="tb-btn" :class="{ active: collapsed }" @click="toggleCollapse" title="按社区折叠为超级节点">折叠</button>
-          <button class="tb-btn" @click="rebuildIndexAndReload" title="重建图索引">重建</button>
-          <button class="tb-btn" @click="runCommunities" title="社区检测着色">社区</button>
-          <button class="tb-btn" @click="runEmbed" title="生成/更新向量(首次会自动下载模型)">向量</button>
-          <button class="tb-btn" @click="runExtract" title="用 AI 抽取概念与关系">概念</button>
+          <button
+            v-for="b in toolButtons"
+            :key="b.key"
+            class="tb-iconbtn"
+            :class="{ active: b.active() }"
+            :title="b.tip"
+            :aria-label="b.label"
+            @click="b.run"
+          >
+            <component :is="b.icon" class="tb-ico" />
+          </button>
         </div>
       </div>
 
-      <!-- 类型过滤 -->
+      <!-- 类型过滤 + 标签过滤 -->
       <div class="kg3d-filters">
         <label v-for="t in allTypes" :key="t.key" class="flt">
           <input type="checkbox" :checked="visibleTypes.has(t.key)" @change="toggleType(t.key)" />
           <span class="flt-dot" :style="{ background: t.color }"></span>{{ t.label }}
         </label>
+        <div v-if="tagFilterOptions.length" class="tag-filter">
+          <button class="tag-filter-btn" :class="{ active: selectedTagFilter.length }" @click="tagDropdownOpen = !tagDropdownOpen">
+            标签筛选{{ selectedTagFilter.length ? `(${selectedTagFilter.length})` : "" }} ▾
+          </button>
+          <div v-if="tagDropdownOpen" class="tag-filter-menu">
+            <div class="tag-filter-head">
+              <span>按标签筛选(可多选)</span>
+              <a v-if="selectedTagFilter.length" @click="selectedTagFilter = []; onTagFilterChange()">清除</a>
+            </div>
+            <label v-for="o in tagFilterOptions" :key="o.value" class="tag-filter-item">
+              <input type="checkbox" :value="o.value" v-model="selectedTagFilter" @change="onTagFilterChange" />
+              <span>{{ o.label }}</span>
+            </label>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -71,19 +91,34 @@
         <span>度 {{ selected.degree }} · PR {{ (selected.pagerank || 0).toFixed(4) }}</span>
       </div>
       <div v-if="selected.tags && selected.tags.length" class="pn-tags">
-        <span v-for="tg in selected.tags" :key="tg" class="pn-tag">#{{ tg }}</span>
+        <span v-for="tg in selected.tags" :key="tg" class="pn-tag">
+          #{{ tg }}<i class="pn-tagx" title="删除标签" @click="removeTag(tg)">×</i>
+        </span>
       </div>
       <div class="pn-actions">
         <button @click="suggestRelations">推荐关联</button>
         <button @click="suggestTags">推荐标签</button>
         <button @click="focusEgo">聚焦邻居</button>
       </div>
+      <div class="pn-actions" style="margin-top:6px;">
+        <button v-if="canOpenNode(selected)" @click="openNodeInEditor(selected)">打开</button>
+        <button @click="toggleBookmark(selected)">{{ isBookmarked(selected) ? '取消收藏' : '收藏' }}</button>
+        <button @click="loadNodeRelations">关联列表</button>
+      </div>
+      <div v-if="nodeRelations.length" class="pn-suggest">
+        <div class="pn-sub">已有关联(点名称高亮 · ×删除)</div>
+        <div v-for="r in nodeRelations" :key="r.to + r.type" class="pn-srow">
+          <span class="pn-sname pn-link" :title="r.to_name || r.to" @click="highlightPair(r.toId ?? r.to)">{{ r.to_name || r.to }}</span>
+          <span class="pn-sscore">{{ r.type }}</span>
+          <button v-if="r.deletable" class="pn-del" title="删除关系" @click="removeRelation(r)">×</button>
+        </div>
+      </div>
       <div v-if="suggestions.length" class="pn-suggest">
-        <div class="pn-sub">关联建议</div>
+        <div class="pn-sub">关联建议(点名称预览高亮)</div>
         <div v-for="s in suggestions" :key="s.to" class="pn-srow">
-          <span class="pn-sname" :title="s.to_name">{{ s.to_name }}</span>
+          <span class="pn-sname pn-link" :title="s.to_name" @click="highlightPair(s.to)">{{ s.to_name }}</span>
           <span class="pn-sscore">{{ s.score.toFixed(2) }}</span>
-          <button @click="confirmRelation(s)">＋</button>
+          <button title="建立关联" @click="confirmRelation(s)">＋</button>
         </div>
       </div>
       <div v-if="tagSuggestions.length" class="pn-suggest">
@@ -101,12 +136,23 @@
 </template>
 
 <script setup>
-import { onMounted, onBeforeUnmount, ref, shallowRef } from "vue";
+import { onMounted, onBeforeUnmount, ref, shallowRef, watch, markRaw, computed } from "vue";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { CSS2DRenderer, CSS2DObject } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import gsap from "gsap";
+import { storeToRefs } from "pinia";
+import {
+  Airplane24Regular,
+  Flowchart24Regular,
+  Group24Regular,
+  Sparkle24Regular,
+  BrainCircuit24Regular,
+  ArrowSync24Regular,
+} from "@vicons/fluent";
 import { useKnowledgeBaseStore } from "../../stores/knowledgeBaseStore";
+import { useFileTreeStore } from "../../stores/fileTreeStore";
+import { useEditorStore } from "../../stores/editorStore";
 import { resolveLayout } from "./kgLayout";
 
 const props = defineProps({
@@ -114,6 +160,9 @@ const props = defineProps({
 });
 
 const store = useKnowledgeBaseStore();
+const fileTreeStore = useFileTreeStore();
+const editorStore = useEditorStore();
+const { kg3dActionRequest } = storeToRefs(store);
 
 const TYPE_COLORS = {
   "knowledge-base": 0xf39c12,
@@ -141,8 +190,13 @@ const collapsed = ref(false);
 const selected = ref(null);
 const suggestions = ref([]);
 const tagSuggestions = ref([]);
+const nodeRelations = ref([]);
 const statusText = ref("");
 const visibleTypes = shallowRef(new Set(["directory", "file", "section", "paragraph", "concept"]));
+// 标签过滤:为空=不按标签过滤;非空=只显示带任一所选标签的节点
+const selectedTagFilter = ref([]);
+const tagFilterOptions = ref([]); // [{ label, value }],来自当前图的所有标签
+const tagDropdownOpen = ref(false);
 const breadcrumb = ref([{ id: "kb_root", label: "全库" }]);
 const timelineValue = ref(100);
 const timelineLabel = ref("全部");
@@ -158,6 +212,13 @@ let minimapTick = 0;
 let scene, camera, renderer, labelRenderer, controls, raf;
 let typeMeshes = {}; // type -> InstancedMesh
 let edgeLines = null;
+let highlightEdges = null; // 高亮/路径边的发光叠加层
+let highlightedIds = new Set(); // 当前强调的节点集合(用于 sync 时放大)
+let glowGroup = null; // 高亮节点的发光光晕(Sprite,加色混合)
+let glowSprites = []; // [{ sprite, nodeId, base, primary }]
+let glowTexture = null; // 共享的径向渐变贴图
+let glowPulse = 0; // 呼吸相位
+let glowPrimaryId = null; // 当前主高亮节点(发光最强)
 let nodeList = []; // [{...node, _pos:{x,y,z}, _type, _inst}]
 let nodeById = new Map();
 let edgeList = [];
@@ -167,12 +228,78 @@ let pathPick = [];
 let curPositions = new Map(); // node_id -> {x,y,z}
 let themeColors = { bg: 0x0b0e14, edge: 0x4a5568, isDark: true };
 let themeObserver = null;
+let resizeObserver = null; // 监听画布容器尺寸变化(边栏展开/收缩)
 let lastProj = null; // 小地图投影参数,用于点击反投影
+// hover 高亮状态
+let hovered = null; // { mesh, inst, node }
+const tmpRay = new THREE.Raycaster();
+const tmpMouse = new THREE.Vector2();
+// 飞行模式(PointerLock 第一人称)
+const flyMode = ref(false);
+let flyKeys = { w: false, a: false, s: false, d: false, q: false, e: false, shift: false };
+let flyYaw = 0;
+let flyPitch = 0;
+let lastFrameTime = 0;
+// 知识演化:进入演化态时记录"新出现"节点用于波纹高亮
+let evolutionActive = false;
+let prevVisibleIds = new Set();
 const tmpMat = new THREE.Matrix4();
 const tmpColor = new THREE.Color();
 const tmpVec = new THREE.Vector3();
 const tmpQuat = new THREE.Quaternion();
 const tmpScale = new THREE.Vector3();
+
+// 工具条按钮:图标 + 通俗提示。函数声明已被提升,这里引用是安全的。
+const toolButtons = [
+  {
+    key: "fly",
+    label: "自由漫游",
+    tip: "自由漫游:用 W/A/S/D 在知识里穿行,鼠标控制看向哪里(按 Esc 退出)",
+    icon: markRaw(Airplane24Regular),
+    active: () => flyMode.value,
+    run: () => toggleFlyMode(),
+  },
+  {
+    key: "path",
+    label: "找两点之间的路",
+    tip: "找两点之间的路:依次点两个知识点,自动连出它们之间的最短关联路径并高亮",
+    icon: markRaw(Flowchart24Regular),
+    active: () => pathMode.value,
+    run: () => togglePathMode(),
+  },
+  {
+    key: "collapse",
+    label: "按主题收拢",
+    tip: "按主题收拢:把同一主题的知识点合成一个大球俯瞰全局(双击大球展开);未分组时会自动先分组",
+    icon: markRaw(Group24Regular),
+    active: () => collapsed.value,
+    run: () => toggleCollapse(),
+  },
+  {
+    key: "community",
+    label: "自动分组上色",
+    tip: "自动分组上色:把紧密相关的知识点归到同一主题,并用不同颜色区分",
+    icon: markRaw(Sparkle24Regular),
+    active: () => false,
+    run: () => runCommunities(),
+  },
+  {
+    key: "concept",
+    label: "AI 提炼概念",
+    tip: "AI 提炼概念:让 AI 从文档里找出关键概念和它们之间的关系,补进图里(需要时会自动先生成向量)",
+    icon: markRaw(BrainCircuit24Regular),
+    active: () => false,
+    run: () => runExtract(),
+  },
+  {
+    key: "rebuild",
+    label: "重新扫描",
+    tip: "重新扫描:重新读取知识库,刷新整张图",
+    icon: markRaw(ArrowSync24Regular),
+    active: () => false,
+    run: () => rebuildIndexAndReload(),
+  },
+];
 
 function typeColor(t) {
   return "#" + (TYPE_COLORS[t] ?? TYPE_COLORS.unknown).toString(16).padStart(6, "0");
@@ -241,9 +368,22 @@ function initThree() {
   dir.position.set(120, 200, 160);
   scene.add(dir);
 
+  // 发光光晕层(加色混合 sprite),用于让选中/高亮节点真正"发光"
+  glowTexture = makeGlowTexture();
+  glowGroup = new THREE.Group();
+  glowGroup.renderOrder = 998;
+  scene.add(glowGroup);
+
   renderer.domElement.addEventListener("click", onClick);
   renderer.domElement.addEventListener("dblclick", onDblClick);
+  renderer.domElement.addEventListener("mousemove", onPointerMove);
   window.addEventListener("resize", onResize);
+
+  // 画布容器尺寸随边栏展开/收缩变化时,window.resize 不会触发,改用 ResizeObserver。
+  if (typeof ResizeObserver !== "undefined") {
+    resizeObserver = new ResizeObserver(() => onResize());
+    resizeObserver.observe(wrap);
+  }
 
   // 监听根节点 class/属性变化,主题切换时重新配色
   applyTheme();
@@ -253,21 +393,92 @@ function initThree() {
     attributeFilter: ["class", "data-theme", "style"],
   });
 
-  const loop = () => {
+  const loop = (now) => {
     raf = requestAnimationFrame(loop);
-    controls.update();
+    const dt = lastFrameTime ? Math.min(0.05, (now - lastFrameTime) / 1000) : 0.016;
+    lastFrameTime = now;
+    if (flyMode.value) {
+      updateFlight(dt);
+    } else {
+      controls.update();
+    }
     updateLabelLod();
+    updateGlow(dt);
     if (++minimapTick % 12 === 0) drawMinimap();
     renderer.render(scene, camera);
     labelRenderer.render(scene, camera);
   };
-  loop();
+  loop(0);
+}
+
+// 径向渐变光晕贴图(中心亮、边缘透明)
+function makeGlowTexture() {
+  const size = 128;
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = size;
+  const ctx = cv.getContext("2d");
+  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  g.addColorStop(0, "rgba(255,255,255,1)");
+  g.addColorStop(0.25, "rgba(255,255,255,0.7)");
+  g.addColorStop(0.55, "rgba(255,255,255,0.25)");
+  g.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+// 为高亮集重建光晕 sprite(主节点用更亮的青色,其余用节点本色)
+function rebuildGlow() {
+  if (!glowGroup) return;
+  for (const g of glowSprites) glowGroup.remove(g.sprite);
+  for (const g of glowSprites) g.sprite.material.dispose();
+  glowSprites = [];
+  if (!highlightedIds.size) return;
+  for (const id of highlightedIds) {
+    const n = nodeById.get(id);
+    const p = curPositions.get(id);
+    if (!n || !p) continue;
+    const isPrimary = id === glowPrimaryId;
+    const col = isPrimary ? new THREE.Color(0x6fe3ff) : colorForNode(n).lerp(new THREE.Color(0xffffff), 0.35);
+    const mat = new THREE.SpriteMaterial({
+      map: glowTexture,
+      color: col,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      depthTest: false,
+      opacity: 0.9,
+    });
+    const sprite = new THREE.Sprite(mat);
+    sprite.position.set(p.x, p.y, p.z);
+    const base = baseRadius(n) * (isPrimary ? 9 : 6);
+    sprite.scale.set(base, base, 1);
+    glowGroup.add(sprite);
+    glowSprites.push({ sprite, nodeId: id, base, primary: isPrimary });
+  }
+}
+
+// 呼吸脉动 + 跟随节点位置(morph 时也对齐)
+function updateGlow(dt) {
+  if (!glowSprites.length) return;
+  glowPulse += dt * 3.2;
+  const pulse = 1 + Math.sin(glowPulse) * 0.16;
+  for (const g of glowSprites) {
+    const p = curPositions.get(g.nodeId);
+    if (p) g.sprite.position.set(p.x, p.y, p.z);
+    const s = g.base * pulse;
+    g.sprite.scale.set(s, s, 1);
+    g.sprite.material.opacity = (g.primary ? 0.95 : 0.75) * (0.82 + 0.18 * Math.sin(glowPulse));
+  }
 }
 
 function onResize() {
   if (!renderer || !canvasWrap.value) return;
   const w = canvasWrap.value.clientWidth;
   const h = canvasWrap.value.clientHeight;
+  if (w === 0 || h === 0) return; // 容器被折叠为 0,跳过避免相机比例 NaN
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
   renderer.setSize(w, h);
@@ -287,6 +498,21 @@ function disposeGraphObjects() {
     edgeLines.material.dispose();
     edgeLines = null;
   }
+  if (highlightEdges) {
+    scene.remove(highlightEdges);
+    highlightEdges.geometry.dispose();
+    highlightEdges.material.dispose();
+    highlightEdges = null;
+  }
+  if (glowGroup) {
+    for (const g of glowSprites) {
+      glowGroup.remove(g.sprite);
+      g.sprite.material.dispose();
+    }
+  }
+  glowSprites = [];
+  glowPrimaryId = null;
+  highlightedIds = new Set();
   for (const l of labelObjs) scene.remove(l);
   labelObjs = [];
 }
@@ -368,34 +594,89 @@ function rebuildLabels() {
     .slice(0, Math.min(60, nodeList.length));
   const set = new Set(important.map((n) => n.id));
   if (selected.value) set.add(selected.value.id);
+  // 强调集中的节点始终显示标签
+  for (const id of highlightedIds) set.add(id);
   for (const n of nodeList) {
     if (!set.has(n.id)) continue;
+    if (n._hidden) continue; // 被过滤掉的节点不显示标签
     const p = curPositions.get(n.id);
     if (!p) continue;
+    const hl = highlightedIds.has(n.id);
     const div = document.createElement("div");
-    div.className = "kg3d-label";
+    div.className = hl ? "kg3d-label kg3d-label-hl" : "kg3d-label";
     div.textContent = n.name?.length > 18 ? n.name.slice(0, 18) + "…" : n.name;
     const obj = new CSS2DObject(div);
-    obj.position.set(p.x, p.y + baseRadius(n) + 2, p.z);
+    const r = baseRadius(n) * (n._hlMul ?? 1);
+    obj.position.set(p.x, p.y + r + 2, p.z);
     obj.userData.nodeId = n.id;
+    obj.userData.hl = hl;
     scene.add(obj);
     labelObjs.push(obj);
   }
 }
 
 function updateLabelLod() {
-  // 距离过远的标签隐藏
+  // 距离过远的标签隐藏(强调标签不受距离限制,始终可见)
   for (const l of labelObjs) {
+    if (l.userData.hl) { l.element.style.opacity = "1"; continue; }
     const d = camera.position.distanceTo(l.position);
     l.element.style.opacity = d > 600 ? "0" : "0.92";
   }
 }
 
-function applyTypeVisibility() {
-  for (const [type, mesh] of Object.entries(typeMeshes)) {
-    const vis = visibleTypes.value.has(type);
-    mesh.visible = vis;
+// 节点是否通过当前过滤(类型 + 标签)。知识库根节点始终保留为骨架。
+function nodePassesFilter(n) {
+  if (n.type === "knowledge-base") return true;
+  if (!visibleTypes.value.has(n.type)) return false;
+  const tags = selectedTagFilter.value;
+  if (tags.length) {
+    const nt = Array.isArray(n.tags) ? n.tags : [];
+    if (!tags.some((t) => nt.includes(t))) return false;
   }
+  return true;
+}
+
+// 应用过滤:隐藏的节点缩到 0(而非整组 mesh.visible),边只连两端都可见的节点。
+function applyTypeVisibility() {
+  const visIds = new Set();
+  for (const [, mesh] of Object.entries(typeMeshes)) {
+    const arr = mesh.userData.nodes;
+    arr.forEach((n, i) => {
+      const ok = nodePassesFilter(n);
+      n._hidden = !ok;
+      if (ok) visIds.add(n.id);
+      const p = curPositions.get(n.id) || { x: 0, y: 0, z: 0 };
+      const s = ok ? baseRadius(n) * (n._scaleMul ?? 1) * (n._hlMul ?? 1) : 0;
+      tmpMat.compose(tmpVec.set(p.x, p.y, p.z), tmpQuat.identity(), tmpScale.set(s, s, s));
+      mesh.setMatrixAt(i, tmpMat);
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.visible = true; // 始终渲染,靠缩放隐藏个别节点
+  }
+  rebuildEdgesForVisible(visIds);
+  rebuildLabels();
+}
+
+// 重建主边集合:跳过任一端点被过滤掉的边
+function rebuildEdgesForVisible(visIds) {
+  if (!edgeLines) return;
+  const pos = edgeLines.geometry.getAttribute("position");
+  let k = 0;
+  for (const e of edgeList) {
+    const a = curPositions.get(e.from);
+    const b = curPositions.get(e.to);
+    if (!a || !b) continue;
+    const show = visIds.has(e.from) && visIds.has(e.to);
+    if (show) {
+      pos.array[k++] = a.x; pos.array[k++] = a.y; pos.array[k++] = a.z;
+      pos.array[k++] = b.x; pos.array[k++] = b.y; pos.array[k++] = b.z;
+    } else {
+      // 收成零长度线段,等价隐藏
+      pos.array[k++] = a.x; pos.array[k++] = a.y; pos.array[k++] = a.z;
+      pos.array[k++] = a.x; pos.array[k++] = a.y; pos.array[k++] = a.z;
+    }
+  }
+  pos.needsUpdate = true;
 }
 
 // ───────── 数据加载 ─────────
@@ -429,6 +710,7 @@ async function loadGraph(rootId = "kb_root", maxDepth = 99) {
     fullNodeList = null;
     fullEdgeList = null;
     computeTimeBounds();
+    refreshTagFilterOptions();
     buildMeshes();
     statusText.value = `节点 ${nodeList.length} · 边 ${edgeList.length}${data.truncated ? " (已截断)" : ""}`;
     fitCamera();
@@ -501,7 +783,7 @@ function syncInstancePositions() {
     const arr = mesh.userData.nodes;
     arr.forEach((n, i) => {
       const p = curPositions.get(n.id) || { x: 0, y: 0, z: 0 };
-      const s = baseRadius(n) * (n._scaleMul ?? 1);
+      const s = baseRadius(n) * (n._scaleMul ?? 1) * (n._hlMul ?? 1);
       tmpMat.compose(tmpVec.set(p.x, p.y, p.z), tmpQuat.identity(), tmpScale.set(s, s, s));
       mesh.setMatrixAt(i, tmpMat);
     });
@@ -544,7 +826,142 @@ function pickNode(ev) {
   return arr[h.instanceId] || null;
 }
 
+// ───────── 交互:hover 高亮 ─────────
+function onPointerMove(ev) {
+  if (flyMode.value) return; // 飞行模式下鼠标用于转向,不做拾取
+  const rect = renderer.domElement.getBoundingClientRect();
+  tmpMouse.set(
+    ((ev.clientX - rect.left) / rect.width) * 2 - 1,
+    -((ev.clientY - rect.top) / rect.height) * 2 + 1
+  );
+  tmpRay.setFromCamera(tmpMouse, camera);
+  const meshes = Object.values(typeMeshes).filter((m) => m.visible);
+  const hits = tmpRay.intersectObjects(meshes, false);
+  const hit = hits.length ? hits[0] : null;
+  const node = hit ? hit.object.userData.nodes[hit.instanceId] : null;
+
+  if (hovered && (!node || hovered.node.id !== node.id)) {
+    restoreInstanceScale(hovered.mesh, hovered.inst, hovered.node);
+    hovered = null;
+  }
+  if (node && hit && (!hovered || hovered.node.id !== node.id)) {
+    hovered = { mesh: hit.object, inst: hit.instanceId, node };
+    bumpInstanceScale(hit.object, hit.instanceId, node, 1.6);
+  }
+  renderer.domElement.style.cursor = node ? "pointer" : flyMode.value ? "none" : "default";
+}
+
+function bumpInstanceScale(mesh, inst, node, mul) {
+  const p = curPositions.get(node.id) || { x: 0, y: 0, z: 0 };
+  const s = baseRadius(node) * (node._scaleMul ?? 1) * mul;
+  tmpMat.compose(tmpVec.set(p.x, p.y, p.z), tmpQuat.identity(), tmpScale.set(s, s, s));
+  mesh.setMatrixAt(inst, tmpMat);
+  mesh.instanceMatrix.needsUpdate = true;
+  const c = colorForNode(node).multiplyScalar(1.6);
+  mesh.setColorAt(inst, c);
+  if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+}
+
+function restoreInstanceScale(mesh, inst, node) {
+  const p = curPositions.get(node.id) || { x: 0, y: 0, z: 0 };
+  const s = baseRadius(node) * (node._scaleMul ?? 1);
+  tmpMat.compose(tmpVec.set(p.x, p.y, p.z), tmpQuat.identity(), tmpScale.set(s, s, s));
+  mesh.setMatrixAt(inst, tmpMat);
+  mesh.instanceMatrix.needsUpdate = true;
+  mesh.setColorAt(inst, colorForNode(node));
+  if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+}
+
+// ───────── 飞行模式(PointerLock 第一人称)─────────
+function toggleFlyMode() {
+  flyMode.value = !flyMode.value;
+  if (flyMode.value) {
+    // 用当前相机朝向初始化 yaw/pitch
+    const dir = new THREE.Vector3();
+    camera.getWorldDirection(dir);
+    flyYaw = Math.atan2(dir.x, dir.z);
+    flyPitch = Math.asin(THREE.MathUtils.clamp(dir.y, -1, 1));
+    controls.enabled = false;
+    renderer.domElement.requestPointerLock?.();
+    document.addEventListener("pointerlockchange", onPointerLockChange);
+    window.addEventListener("keydown", onFlyKeyDown);
+    window.addEventListener("keyup", onFlyKeyUp);
+    document.addEventListener("mousemove", onFlyMouseMove);
+    statusText.value = "飞行模式:WASD 平移 · 鼠标转向 · Q/E 升降 · Shift 加速 · Esc 退出";
+  } else {
+    exitFlyMode();
+  }
+}
+
+function exitFlyMode() {
+  flyMode.value = false;
+  controls.enabled = true;
+  if (document.pointerLockElement) document.exitPointerLock?.();
+  document.removeEventListener("pointerlockchange", onPointerLockChange);
+  window.removeEventListener("keydown", onFlyKeyDown);
+  window.removeEventListener("keyup", onFlyKeyUp);
+  document.removeEventListener("mousemove", onFlyMouseMove);
+  flyKeys = { w: false, a: false, s: false, d: false, q: false, e: false, shift: false };
+  renderer.domElement.style.cursor = "default";
+  // 让 orbit target 落到相机前方,避免回到轨道模式时镜头跳变
+  const dir = new THREE.Vector3();
+  camera.getWorldDirection(dir);
+  controls.target.copy(camera.position).addScaledVector(dir, 60);
+  statusText.value = "";
+}
+
+function onPointerLockChange() {
+  // 用户按 Esc 退出指针锁 → 同步退出飞行模式
+  if (!document.pointerLockElement && flyMode.value) exitFlyMode();
+}
+
+function onFlyMouseMove(ev) {
+  if (!flyMode.value) return;
+  const sens = 0.0022;
+  flyYaw -= ev.movementX * sens;
+  flyPitch -= ev.movementY * sens;
+  const lim = Math.PI / 2 - 0.05;
+  flyPitch = THREE.MathUtils.clamp(flyPitch, -lim, lim);
+}
+
+function onFlyKeyDown(ev) {
+  const k = ev.key.toLowerCase();
+  if (k === "escape") { exitFlyMode(); return; }
+  if (k in flyKeys) { flyKeys[k] = true; ev.preventDefault(); }
+  if (k === "shift") flyKeys.shift = true;
+}
+function onFlyKeyUp(ev) {
+  const k = ev.key.toLowerCase();
+  if (k in flyKeys) flyKeys[k] = false;
+  if (k === "shift") flyKeys.shift = false;
+}
+
+function updateFlight(dt) {
+  // 由 yaw/pitch 重建朝向
+  const forward = new THREE.Vector3(
+    Math.sin(flyYaw) * Math.cos(flyPitch),
+    Math.sin(flyPitch),
+    Math.cos(flyYaw) * Math.cos(flyPitch)
+  ).normalize();
+  const right = new THREE.Vector3().crossVectors(forward, camera.up).normalize();
+  // 飞行速度:常速更快,Shift 冲刺更猛(按场景尺度调高,避免"挪不动")
+  const speed = (flyKeys.shift ? 1200 : 460) * dt;
+  const move = new THREE.Vector3();
+  if (flyKeys.w) move.add(forward);
+  if (flyKeys.s) move.sub(forward);
+  if (flyKeys.d) move.add(right);
+  if (flyKeys.a) move.sub(right);
+  if (flyKeys.e) move.y += 1;
+  if (flyKeys.q) move.y -= 1;
+  if (move.lengthSq() > 0) {
+    move.normalize().multiplyScalar(speed);
+    camera.position.add(move);
+  }
+  camera.lookAt(camera.position.clone().add(forward));
+}
+
 async function onClick(ev) {
+  if (flyMode.value) return; // 飞行模式不触发节点选择
   const node = pickNode(ev);
   if (!node) return;
   if (pathMode.value) {
@@ -564,18 +981,70 @@ function selectNode(node) {
   selected.value = node;
   suggestions.value = [];
   tagSuggestions.value = [];
-  highlightEgo(node.id);
+  nodeRelations.value = [];
+  store.setKg3dRelations([]);
+  store.setKg3dSuggestions([]);
+  // 高亮选中节点及其邻居(主节点发光),并把镜头拉近取景,飞行模式下不抢镜头
+  highlightEgo(node.id, { frame: !flyMode.value });
   rebuildLabels();
-  const p = curPositions.get(node.id);
-  if (p) {
-    gsap.to(controls.target, { x: p.x, y: p.y, z: p.z, duration: 0.6 });
-  }
+  store.setKg3dSelected(node); // 发布到通信总线,右侧边栏据此渲染操作面板
 }
 
 function clearSelection() {
   selected.value = null;
   resetHighlight();
   rebuildLabels();
+  store.setKg3dSelected(null);
+}
+
+// 是否可在编辑器中打开(目录/知识库节点没有可跳转的文件)
+function canOpenNode(n) {
+  if (!n) return false;
+  const path = n.file_path || n.abs_path || n.rel_path || n.path;
+  return !!path && ["file", "section", "paragraph", "concept"].includes(n.type);
+}
+
+// 按文件路径在当前图中查找对应节点(用于文件树点击定位)。优先匹配 file/directory 节点。
+function findNodeByPath(rawPath) {
+  const norm = (p) => String(p || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  const target = norm(rawPath);
+  if (!target) return null;
+  let best = null;
+  for (const n of nodeList) {
+    const abs = norm(n.abs_path || n.file_path || n.path);
+    const rel = norm(n.rel_path);
+    // 绝对路径相等,或绝对路径以该节点相对路径结尾
+    const hit = (abs && abs === target) || (rel && (target === rel || target.endsWith("/" + rel)));
+    if (!hit) continue;
+    const isContainer = ["directory", "file", "knowledge-base"].includes(n.type);
+    if (!best || isContainer) best = n;
+    if (best && ["directory", "file", "knowledge-base"].includes(best.type)) break;
+  }
+  return best;
+}
+
+// 在主界面编辑器中打开节点对应文件并跳转到对应行
+async function openNodeInEditor(node) {
+  const n = node || selected.value;
+  if (!canOpenNode(n)) return;
+  const path = n.file_path || n.abs_path || n.rel_path || n.path;
+  const lineNumber = Number(n.start_line || 1);
+  try {
+    await fileTreeStore.openFileInTab(path);
+    const content = fileTreeStore.selectedFile?.content || "";
+    editorStore.setFile({
+      path,
+      content,
+      highlightInfo: {
+        lineNumber,
+        matches: [{ start: 0, end: 1000000 }],
+        text: n.name || "",
+      },
+    });
+    window.location.hash = "/";
+  } catch (e) {
+    statusText.value = "打开失败:" + (e?.message || e);
+  }
 }
 
 async function onDblClick(ev) {
@@ -600,7 +1069,7 @@ async function drillTo(i) {
 }
 
 // ───────── 高亮 / ego ─────────
-async function highlightEgo(nodeId) {
+async function highlightEgo(nodeId, opts = {}) {
   const name = props.kbName || store.selectedKnowledgeBase?.knowledge_base_name;
   let egoIds = new Set([nodeId]);
   try {
@@ -609,31 +1078,134 @@ async function highlightEgo(nodeId) {
   } catch (e) {
     /* 退化:只高亮自身 */
   }
-  applyHighlight(egoIds);
+  applyHighlight(egoIds, { primary: nodeId, frame: opts.frame === true });
 }
 
-function applyHighlight(idSet) {
+// 强调一组节点:高亮集放大 + 提亮,其余大幅压暗缩小,并(可选)给定一条/多条"链路"
+// 用更亮的发光边连起来;最后把相机取景到强调集的包围盒,让效果直观可见。
+// opts: { primary: 主节点id(最亮最大), pathIds: [按顺序的链路节点id], frame: 是否取景 }
+function applyHighlight(idSet, opts = {}) {
+  highlightedIds = idSet instanceof Set ? idSet : new Set(idSet);
+  const primary = opts.primary;
   for (const [, mesh] of Object.entries(typeMeshes)) {
     const arr = mesh.userData.nodes;
     arr.forEach((n, i) => {
+      const on = highlightedIds.has(n.id);
       const c = colorForNode(n);
-      if (!idSet.has(n.id)) c.multiplyScalar(0.25);
+      if (on) {
+        c.multiplyScalar(n.id === primary ? 2.6 : 1.7);
+      } else {
+        c.multiplyScalar(0.12);
+      }
       mesh.setColorAt(i, c);
+      // 放大强调节点(主节点更大),压小背景节点
+      const mul = on ? (n.id === primary ? 2.6 : 1.9) : 0.55;
+      n._hlMul = mul;
+      const p = curPositions.get(n.id) || { x: 0, y: 0, z: 0 };
+      const s = baseRadius(n) * (n._scaleMul ?? 1) * mul;
+      tmpMat.compose(tmpVec.set(p.x, p.y, p.z), tmpQuat.identity(), tmpScale.set(s, s, s));
+      mesh.setMatrixAt(i, tmpMat);
     });
+    mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   }
+  buildHighlightEdges(idSet, opts.pathIds);
+  glowPrimaryId = primary ?? null;
+  rebuildGlow();
+  if (opts.frame !== false) frameNodes(highlightedIds);
+}
+
+// 构建发光叠加边:若给了有序 pathIds 则只连相邻路径段,否则连强调集内部的所有原始边。
+function buildHighlightEdges(idSet, pathIds) {
+  if (highlightEdges) {
+    scene.remove(highlightEdges);
+    highlightEdges.geometry.dispose();
+    highlightEdges.material.dispose();
+    highlightEdges = null;
+  }
+  const positions = [];
+  const pushSeg = (aId, bId) => {
+    const a = curPositions.get(aId);
+    const b = curPositions.get(bId);
+    if (a && b) positions.push(a.x, a.y, a.z, b.x, b.y, b.z);
+  };
+  if (Array.isArray(pathIds) && pathIds.length > 1) {
+    for (let i = 0; i < pathIds.length - 1; i++) pushSeg(pathIds[i], pathIds[i + 1]);
+  } else {
+    for (const e of edgeList) {
+      if (idSet.has(e.from) && idSet.has(e.to)) pushSeg(e.from, e.to);
+    }
+  }
+  if (!positions.length) return;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  const mat = new THREE.LineBasicMaterial({
+    color: 0x39d0ff,
+    transparent: true,
+    opacity: 0.95,
+    depthTest: false,
+    depthWrite: false,
+  });
+  highlightEdges = new THREE.LineSegments(geo, mat);
+  highlightEdges.renderOrder = 999;
+  scene.add(highlightEdges);
+}
+
+// 相机取景到一组节点:计算包围盒,把 target 移到中心、相机拉到合适距离。
+function frameNodes(idSet) {
+  const ids = idSet instanceof Set ? idSet : new Set(idSet);
+  if (!ids.size) return;
+  const box = new THREE.Box3();
+  let any = false;
+  for (const id of ids) {
+    const p = curPositions.get(id);
+    if (p) { box.expandByPoint(tmpVec.set(p.x, p.y, p.z)); any = true; }
+  }
+  if (!any) return;
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3()).length();
+  // 拉近镜头:小集合(单点/两点)用很近的固定距离,确保看得清且能看到发光;
+  // 大集合按包围盒放大但仍偏紧,避免节点显得很小。
+  const dist = THREE.MathUtils.clamp(size * 0.85 + 26, 34, 260);
+  const dir = camera.position.clone().sub(controls.target).normalize();
+  if (!isFinite(dir.x) || dir.lengthSq() < 1e-6) dir.set(0.3, 0.4, 1).normalize();
+  gsap.to(controls.target, { x: center.x, y: center.y, z: center.z, duration: 0.85, ease: "power2.out" });
+  gsap.to(camera.position, {
+    x: center.x + dir.x * dist,
+    y: center.y + dir.y * dist + size * 0.1,
+    z: center.z + dir.z * dist,
+    duration: 0.85,
+    ease: "power2.out",
+  });
 }
 
 function resetHighlight() {
+  highlightedIds = new Set();
+  glowPrimaryId = null;
+  rebuildGlow();
+  if (highlightEdges) {
+    scene.remove(highlightEdges);
+    highlightEdges.geometry.dispose();
+    highlightEdges.material.dispose();
+    highlightEdges = null;
+  }
   for (const [, mesh] of Object.entries(typeMeshes)) {
     const arr = mesh.userData.nodes;
-    arr.forEach((n, i) => mesh.setColorAt(i, colorForNode(n)));
+    arr.forEach((n, i) => {
+      n._hlMul = 1;
+      mesh.setColorAt(i, colorForNode(n));
+      const p = curPositions.get(n.id) || { x: 0, y: 0, z: 0 };
+      const s = baseRadius(n) * (n._scaleMul ?? 1);
+      tmpMat.compose(tmpVec.set(p.x, p.y, p.z), tmpQuat.identity(), tmpScale.set(s, s, s));
+      mesh.setMatrixAt(i, tmpMat);
+    });
+    mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   }
 }
 
 function focusEgo() {
-  if (selected.value) highlightEgo(selected.value.id);
+  if (selected.value) highlightEgo(selected.value.id, { frame: true });
 }
 
 // ───────── 搜索 / 最短路 ─────────
@@ -662,6 +1234,13 @@ async function runSearch() {
   }
 }
 
+// 选中节点后聚焦它本身:发光 + 拉近镜头(单点也要看得清)
+function focusSingle(nodeId) {
+  const ids = new Set([nodeId]);
+  // ego 邻居也带上,让上下文一起亮起来
+  applyHighlight(ids, { primary: nodeId, frame: true });
+}
+
 function flyTo(nodeId) {
   const p = curPositions.get(nodeId);
   if (!p) return;
@@ -677,9 +1256,11 @@ async function runShortestPath(a, b) {
       statusText.value = "两节点之间无连通路径";
       return;
     }
-    const ids = new Set((res.nodes || []).map((n) => n.id));
-    applyHighlight(ids);
-    statusText.value = `最短路径:${res.hops} 跳`;
+    const orderedIds = (res.nodes || []).map((n) => n.id);
+    const ids = new Set(orderedIds);
+    applyHighlight(ids, { primary: orderedIds[0], pathIds: orderedIds, frame: true });
+    rebuildLabels();
+    statusText.value = `最短路径:${res.hops} 跳 · 已高亮 ${orderedIds.length} 个节点`;
   } catch (e) {
     statusText.value = "路径查询失败";
   }
@@ -692,15 +1273,55 @@ function togglePathMode() {
 }
 
 // ───────── 建议 / 确认 ─────────
+// 关联/标签建议都依赖向量。失败大多是没生成向量,这里自动补一次再重试,不麻烦用户。
+let embedAutoTried = false;
+async function ensureEmbeddingsThen(retryFn) {
+  if (embedAutoTried) return false;
+  embedAutoTried = true;
+  statusText.value = "首次使用,正在自动生成向量(可能较久)…";
+  try {
+    await store.kgEmbedKb(props.kbName || store.selectedKnowledgeBase?.knowledge_base_name);
+    await retryFn();
+    return true;
+  } catch (e) {
+    statusText.value = "自动生成向量失败:" + (e?.message || e);
+    return false;
+  }
+}
+
 async function suggestRelations() {
   if (!selected.value) return;
   const name = props.kbName || store.selectedKnowledgeBase?.knowledge_base_name;
   try {
     suggestions.value = await store.kgSuggestRelations(name, selected.value.id, 8, 0.55);
-    if (!suggestions.value.length) statusText.value = "暂无关联建议(可能未生成 embedding)";
+    store.setKg3dSuggestions(suggestions.value);
+    if (!suggestions.value.length) {
+      // 没结果:可能没向量,自动补一次再试
+      const ok = await ensureEmbeddingsThen(async () => {
+        suggestions.value = await store.kgSuggestRelations(name, selected.value.id, 8, 0.55);
+        store.setKg3dSuggestions(suggestions.value);
+      });
+      if (!suggestions.value.length) statusText.value = ok ? "暂无关联建议" : "暂无关联建议(可能未生成向量)";
+    } else {
+      // 有建议:把它们一起高亮出来,让用户直观看到候选
+      highlightSuggestionSet();
+    }
   } catch (e) {
-    statusText.value = "需要先生成 embedding:" + (e?.message || e);
+    await ensureEmbeddingsThen(async () => {
+      suggestions.value = await store.kgSuggestRelations(name, selected.value.id, 8, 0.55);
+      store.setKg3dSuggestions(suggestions.value);
+      highlightSuggestionSet();
+    });
   }
+}
+
+// 把当前节点 + 所有建议关联节点一起高亮(主节点发光),并取景
+function highlightSuggestionSet() {
+  if (!selected.value || !suggestions.value.length) return;
+  const ids = new Set([selected.value.id]);
+  for (const s of suggestions.value) ids.add(s.to);
+  applyHighlight(ids, { primary: selected.value.id, frame: true });
+  rebuildLabels();
 }
 
 async function suggestTags() {
@@ -708,9 +1329,16 @@ async function suggestTags() {
   const name = props.kbName || store.selectedKnowledgeBase?.knowledge_base_name;
   try {
     tagSuggestions.value = await store.kgSuggestTags(name, selected.value.id, null, 6, 0.5);
-    if (!tagSuggestions.value.length) statusText.value = "暂无标签建议";
+    if (!tagSuggestions.value.length) {
+      const ok = await ensureEmbeddingsThen(async () => {
+        tagSuggestions.value = await store.kgSuggestTags(name, selected.value.id, null, 6, 0.5);
+      });
+      if (!tagSuggestions.value.length) statusText.value = ok ? "暂无标签建议" : "暂无标签建议(可能未生成向量)";
+    }
   } catch (e) {
-    statusText.value = "标签建议失败:" + (e?.message || e);
+    await ensureEmbeddingsThen(async () => {
+      tagSuggestions.value = await store.kgSuggestTags(name, selected.value.id, null, 6, 0.5);
+    });
   }
 }
 
@@ -718,6 +1346,11 @@ async function confirmRelation(s) {
   const name = props.kbName || store.selectedKnowledgeBase?.knowledge_base_name;
   await store.kgConfirmRelation(name, s.from, s.to, "related", s.score);
   suggestions.value = suggestions.value.filter((x) => x.to !== s.to);
+  store.setKg3dSuggestions(suggestions.value);
+  // 本地补一条边,使高亮/关系列表立即反映,无需整图重建
+  if (!edgeList.some((e) => e.from === s.from && e.to === s.to && (e.type || "related") === "related")) {
+    edgeList.push({ from: s.from, to: s.to, type: "related", strength: s.score ?? 0.5, source: "manual" });
+  }
   statusText.value = "已建立关联";
 }
 
@@ -729,6 +1362,89 @@ async function confirmTag(s) {
   tagSuggestions.value = tagSuggestions.value.filter((x) => x.tag !== s.tag);
 }
 
+// ───────── 删除标签 / 关系 ─────────
+async function removeTag(tag) {
+  if (!selected.value) return;
+  const name = props.kbName || store.selectedKnowledgeBase?.knowledge_base_name;
+  try {
+    await store.kgRemoveTag(name, selected.value.id, tag);
+    selected.value.tags = (selected.value.tags || []).filter((t) => t !== tag);
+    statusText.value = `已删除标签 #${tag}`;
+  } catch (e) {
+    statusText.value = "删除标签失败:" + (e?.message || e);
+  }
+}
+
+// 拉取当前节点已有关系(从内存边集,标注哪些可删除:非结构性边)
+async function loadNodeRelations() {
+  if (!selected.value) return;
+  const id = selected.value.id;
+  const rels = [];
+  const seen = new Set();
+  for (const e of edgeList) {
+    let other = null;
+    if (e.from === id) other = e.to;
+    else if (e.to === id) other = e.from;
+    else continue;
+    const key = other + "|" + (e.type || "");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const on = nodeById.get(other);
+    const deletable = !["contains", "next"].includes(e.type) &&
+      (e.from === id); // 仅对从本节点出发的非结构边提供删除
+    rels.push({ to: other, to_name: on?.name, type: e.type || "related", deletable, from: e.from, toId: e.to });
+  }
+  nodeRelations.value = rels;
+  store.setKg3dRelations(rels);
+  if (!rels.length) statusText.value = "该节点暂无关系边";
+}
+
+async function removeRelation(r) {
+  const name = props.kbName || store.selectedKnowledgeBase?.knowledge_base_name;
+  try {
+    await store.kgRemoveRelation(name, r.from ?? selected.value.id, r.toId ?? r.to, r.type);
+    nodeRelations.value = nodeRelations.value.filter((x) => !(x.to === r.to && x.type === r.type));
+    store.setKg3dRelations(nodeRelations.value);
+    edgeList = edgeList.filter((e) => !(e.from === (r.from ?? selected.value.id) && e.to === (r.toId ?? r.to) && (e.type || "related") === r.type));
+    syncInstancePositions();
+    statusText.value = "已删除关系";
+  } catch (e) {
+    statusText.value = "删除关系失败:" + (e?.message || e);
+  }
+}
+
+// 点击关联/建议节点:把当前节点与目标节点及其连线一起高亮放大并取景。
+// 优先用最短路径串起两者(经过的中间节点也高亮),拿不到则只连两点。
+async function highlightPair(targetId) {
+  if (!selected.value || !targetId) return;
+  const fromId = selected.value.id;
+  const name = props.kbName || store.selectedKnowledgeBase?.knowledge_base_name;
+  let pathIds = [fromId, targetId];
+  const ids = new Set([fromId, targetId]);
+  try {
+    const res = await store.kgShortestPath(name, fromId, targetId);
+    if (res && res.found && Array.isArray(res.nodes) && res.nodes.length) {
+      pathIds = res.nodes.map((n) => n.id);
+      for (const id of pathIds) ids.add(id);
+    }
+  } catch (e) {
+    /* 退化为直连两点 */
+  }
+  applyHighlight(ids, { primary: fromId, pathIds, frame: true });
+  rebuildLabels();
+  const tname = nodeById.get(targetId)?.name || targetId;
+  statusText.value = `高亮:${selected.value.name} ↔ ${tname}${pathIds.length > 2 ? ` (${pathIds.length - 1} 跳)` : ""}`;
+}
+
+// ───────── 收藏 ─────────
+function isBookmarked(n) {
+  return !!n && store.kg3dBookmarks.some((x) => x.id === n.id);
+}
+function toggleBookmark(n) {
+  if (!n) return;
+  store.toggleKg3dBookmark(n);
+}
+
 // ───────── 工具条动作 ─────────
 function toggleType(t) {
   const next = new Set(visibleTypes.value);
@@ -736,6 +1452,27 @@ function toggleType(t) {
   else next.add(t);
   visibleTypes.value = next;
   applyTypeVisibility();
+}
+
+function onTagFilterChange() {
+  applyTypeVisibility();
+}
+
+// 从当前图收集所有标签作为下拉选项
+function refreshTagFilterOptions() {
+  const counts = new Map();
+  for (const n of nodeList) {
+    for (const t of Array.isArray(n.tags) ? n.tags : []) {
+      const s = String(t || "").trim();
+      if (s) counts.set(s, (counts.get(s) || 0) + 1);
+    }
+  }
+  tagFilterOptions.value = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "zh"))
+    .map(([tag, c]) => ({ label: `${tag} (${c})`, value: tag }));
+  // 清掉已不存在的已选标签
+  const valid = new Set(tagFilterOptions.value.map((o) => o.value));
+  selectedTagFilter.value = selectedTagFilter.value.filter((t) => valid.has(t));
 }
 
 async function rebuildIndexAndReload() {
@@ -860,55 +1597,159 @@ function drawMinimap() {
 }
 
 // ───────── 时间轴回放 ─────────
+// 演化模式:timeMode=true 用真实时间;否则用结构顺序(深度→重要度)作为"显现顺序",
+// 避免所有节点时间戳缺失/雷同时,回放一直空白、最后突然全冒出来。
+let evoTimeMode = true;
+
 function computeTimeBounds() {
-  let min = Infinity, max = -Infinity;
+  const times = [];
   for (const n of nodeList) {
-    const raw = n.modified_at || n.created_at;
-    const t = raw ? Date.parse(raw) : NaN;
-    if (Number.isFinite(t)) {
-      if (t < min) min = t;
-      if (t > max) max = t;
-    }
+    const t = rawNodeTimeMs(n);
+    if (t != null) times.push(t);
   }
-  timeBounds = isFinite(min) && max > min ? { min, max } : { min: 0, max: 1 };
+  const min = times.length ? Math.min(...times) : 0;
+  const max = times.length ? Math.max(...times) : 1;
+  // 有效时间需要:足够多节点有时间戳 且 时间跨度不退化(> 1 分钟)
+  const coverage = nodeList.length ? times.length / nodeList.length : 0;
+  evoTimeMode = coverage >= 0.4 && max - min > 60_000;
+  timeBounds = evoTimeMode ? { min, max } : { min: 0, max: 1 };
+
+  if (evoTimeMode) {
+    for (const n of nodeList) {
+      const t = rawNodeTimeMs(n);
+      n._evoFrac = t == null ? 0 : (t - min) / Math.max(1, max - min);
+    }
+  } else {
+    // 结构顺序:根/目录先出现,然后按深度、再按重要度逐层展开
+    const ordered = [...nodeList].sort((a, b) => {
+      const da = a.depth ?? 99, db = b.depth ?? 99;
+      if (da !== db) return da - db;
+      return (b.pagerank || 0) - (a.pagerank || 0);
+    });
+    const m = Math.max(1, ordered.length - 1);
+    ordered.forEach((n, i) => { n._evoFrac = i / m; });
+  }
+
   timelineValue.value = 100;
   timelineLabel.value = "全部";
 }
 
+function rawNodeTimeMs(n) {
+  const raw = n.modified_at || n.created_at;
+  const t = raw ? Date.parse(raw) : NaN;
+  return Number.isFinite(t) ? t : null;
+}
+
 function applyTimeline() {
   const frac = timelineValue.value / 100;
-  const cutoff = timeBounds.min + (timeBounds.max - timeBounds.min) * frac;
-  timelineLabel.value =
-    timelineValue.value >= 100 ? "全部" : new Date(cutoff).toLocaleDateString();
-  // 修改时间晚于 cutoff 的节点淡出(scale→0)
+  const showAll = timelineValue.value >= 100;
+  if (evoTimeMode) {
+    const cutoffMs = timeBounds.min + (timeBounds.max - timeBounds.min) * frac;
+    timelineLabel.value = showAll ? "全部" : new Date(cutoffMs).toLocaleDateString();
+  } else {
+    timelineLabel.value = showAll ? "全部" : `进度 ${Math.round(frac * 100)}%`;
+  }
+
+  // 计算当前可见集合,识别相对上一帧"新出现"的节点用于波纹高亮
+  const nowVisible = new Set();
+  let visCount = 0;
   for (const [, mesh] of Object.entries(typeMeshes)) {
     const arr = mesh.userData.nodes;
     arr.forEach((n, i) => {
-      const raw = n.modified_at || n.created_at;
-      const t = raw ? Date.parse(raw) : NaN;
-      const hidden = Number.isFinite(t) && t > cutoff && timelineValue.value < 100;
-      n._scaleMul = hidden ? 0 : 1;
+      // 按 _evoFrac 决定该节点是否已"显现":显现阈值 <= 当前进度;被类型/标签过滤的不显现
+      const ef = n._evoFrac ?? 0;
+      const visible = !n._hidden && (showAll || ef <= frac);
+      if (visible) { nowVisible.add(n.id); visCount++; }
+      const justBorn = evolutionActive && visible && !prevVisibleIds.has(n.id) && !showAll;
+      n._scaleMul = visible ? 1 : 0;
       const p = curPositions.get(n.id) || { x: 0, y: 0, z: 0 };
-      const s = baseRadius(n) * n._scaleMul;
+      // 新生节点做一次 pop 放大 + 高亮闪光
+      const popMul = justBorn ? 2.2 : 1;
+      const s = baseRadius(n) * n._scaleMul * popMul;
       tmpMat.compose(tmpVec.set(p.x, p.y, p.z), tmpQuat.identity(), tmpScale.set(s, s, s));
       mesh.setMatrixAt(i, tmpMat);
+      if (justBorn) {
+        mesh.setColorAt(i, colorForNode(n).multiplyScalar(2.4));
+        // 回落动画:下一帧用 gsap 缩回正常大小/颜色
+        gsapPopBack(mesh, i, n);
+      } else if (visible) {
+        mesh.setColorAt(i, colorForNode(n));
+      }
     });
     mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   }
+
+  // 边随端点可见而出现:不可见端点的边收起
+  if (edgeLines) {
+    const pos = edgeLines.geometry.getAttribute("position");
+    let k = 0;
+    for (const e of edgeList) {
+      const a = curPositions.get(e.from);
+      const b = curPositions.get(e.to);
+      const both = nowVisible.has(e.from) && nowVisible.has(e.to);
+      if (!a || !b) continue;
+      if (both) {
+        pos.array[k++] = a.x; pos.array[k++] = a.y; pos.array[k++] = a.z;
+        pos.array[k++] = b.x; pos.array[k++] = b.y; pos.array[k++] = b.z;
+      } else {
+        // 折叠到原点外不可见(0 长度线段)
+        pos.array[k++] = a.x; pos.array[k++] = a.y; pos.array[k++] = a.z;
+        pos.array[k++] = a.x; pos.array[k++] = a.y; pos.array[k++] = a.z;
+      }
+    }
+    pos.needsUpdate = true;
+  }
+
+  prevVisibleIds = nowVisible;
+  if (evolutionActive && !showAll) {
+    statusText.value = `知识演化 · ${timelineLabel.value} · 已显现 ${visCount}/${nodeList.length}`;
+  }
+}
+
+// 新生节点回落:把放大的实例平滑缩回正常尺寸与颜色
+function gsapPopBack(mesh, i, n) {
+  const prog = { t: 0 };
+  gsap.to(prog, {
+    t: 1,
+    duration: 0.7,
+    ease: "back.out(2)",
+    onUpdate() {
+      if (n._scaleMul === 0) return; // 已被收起
+      const p = curPositions.get(n.id) || { x: 0, y: 0, z: 0 };
+      const popMul = 2.2 - 1.2 * prog.t;
+      const s = baseRadius(n) * popMul;
+      tmpMat.compose(tmpVec.set(p.x, p.y, p.z), tmpQuat.identity(), tmpScale.set(s, s, s));
+      mesh.setMatrixAt(i, tmpMat);
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.setColorAt(i, colorForNode(n).multiplyScalar(2.4 - 1.4 * prog.t));
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    },
+  });
 }
 
 function toggleTimelinePlay() {
   timelinePlaying.value = !timelinePlaying.value;
   if (timelinePlaying.value) {
+    // 进入演化态:从头开始,逐步显现
+    evolutionActive = true;
+    prevVisibleIds = new Set();
     if (timelineValue.value >= 100) timelineValue.value = 0;
+    applyTimeline();
     timelinePlayTimer = setInterval(() => {
-      timelineValue.value = Math.min(100, timelineValue.value + 2);
+      timelineValue.value = Math.min(100, timelineValue.value + 1.5);
       applyTimeline();
-      if (timelineValue.value >= 100) toggleTimelinePlay();
-    }, 120);
+      if (timelineValue.value >= 100) {
+        // 播放结束:停在全显并退出演化态
+        evolutionActive = false;
+        toggleTimelinePlay();
+        statusText.value = "知识演化回放完成";
+      }
+    }, 140);
   } else if (timelinePlayTimer) {
     clearInterval(timelinePlayTimer);
     timelinePlayTimer = null;
+    evolutionActive = false;
   }
 }
 
@@ -928,11 +1769,16 @@ async function toggleCollapse() {
     fitCamera();
     return;
   }
-  // 需要社区数据
-  const hasComm = nodeList.some((n) => n.community_id != null);
+  // 需要社区数据:没有就自动先做一次分组,不麻烦用户二次操作
+  let hasComm = nodeList.some((n) => n.community_id != null);
   if (!hasComm) {
-    statusText.value = "请先点「社区」做社区检测";
-    return;
+    statusText.value = "未分组,正在自动按主题分组…";
+    await runCommunities();
+    hasComm = nodeList.some((n) => n.community_id != null);
+    if (!hasComm) {
+      statusText.value = "自动分组失败,无法收拢";
+      return;
+    }
   }
   buildCollapsedGraph();
 }
@@ -1017,6 +1863,96 @@ function expandCommunity(cid) {
   statusText.value = `展开社区:${members.length} 个节点(点「折叠」返回总览)`;
 }
 
+// 边栏 → kg3d 的动作总线
+watch(kg3dActionRequest, (req) => {
+  if (!req) return;
+  const { type, payload } = req;
+  switch (type) {
+    case "select": {
+      const n = nodeById.get(payload?.id);
+      if (n) selectNode(n);
+      break;
+    }
+    case "selectByPath": {
+      const n = findNodeByPath(payload?.path);
+      if (n) {
+        selectNode(n);
+        statusText.value = `已定位:${n.name}`;
+      } else {
+        statusText.value = "图中未找到该文件对应的节点(可能未建索引或已折叠)";
+      }
+      break;
+    }
+    case "flyTo":
+      if (payload?.id) flyTo(payload.id);
+      break;
+    case "open":
+      openNodeInEditor(payload?.node || selected.value);
+      break;
+    case "suggestRelations":
+      suggestRelations();
+      break;
+    case "suggestTags":
+      suggestTags();
+      break;
+    case "focusEgo":
+      focusEgo();
+      break;
+    case "addTag":
+      if (payload?.tag && selected.value) {
+        store.kgAddTag(props.kbName || store.selectedKnowledgeBase?.knowledge_base_name, selected.value.id, payload.tag, "manual", 1.0).then(() => {
+          if (!selected.value.tags) selected.value.tags = [];
+          if (!selected.value.tags.includes(payload.tag)) selected.value.tags.push(payload.tag);
+        });
+      }
+      break;
+    case "removeTag":
+      if (payload?.tag) removeTag(payload.tag);
+      break;
+    case "loadRelations":
+      loadNodeRelations();
+      break;
+    case "removeRelation":
+      if (payload) removeRelation(payload);
+      break;
+    case "highlightPair":
+      if (payload?.targetId) highlightPair(payload.targetId);
+      break;
+    case "switchView":
+      if (payload?.view) { view.value = payload.view; switchView(); }
+      break;
+    case "reload":
+      loadGraph(breadcrumb.value[breadcrumb.value.length - 1].id);
+      break;
+    case "community":
+      runCommunities();
+      break;
+    case "embed":
+      runEmbed();
+      break;
+    case "focusCommunity":
+      focusCommunity(payload?.community_id);
+      break;
+  }
+});
+
+// 聚焦某社区:高亮其成员、连其内部边并取景
+function focusCommunity(cid) {
+  if (cid == null) return;
+  const members = nodeList.filter((n) => (n.community_id ?? -1) === cid);
+  const ids = new Set(members.map((n) => n.id));
+  if (!ids.size) return;
+  // 以社区内 PageRank 最高的节点为主节点
+  let primary = members[0]?.id;
+  let bestPr = -1;
+  for (const m of members) {
+    if ((m.pagerank || 0) > bestPr) { bestPr = m.pagerank || 0; primary = m.id; }
+  }
+  applyHighlight(ids, { primary, frame: true });
+  rebuildLabels();
+  statusText.value = `聚焦社区:${members.length} 个节点`;
+}
+
 onMounted(async () => {
   initThree();
   await loadGraph();
@@ -1026,13 +1962,17 @@ onBeforeUnmount(() => {
   cancelAnimationFrame(raf);
   if (timelinePlayTimer) clearInterval(timelinePlayTimer);
   if (themeObserver) themeObserver.disconnect();
+  if (resizeObserver) resizeObserver.disconnect();
+  if (flyMode.value) exitFlyMode();
   window.removeEventListener("resize", onResize);
   if (renderer) {
     renderer.domElement.removeEventListener("click", onClick);
     renderer.domElement.removeEventListener("dblclick", onDblClick);
+    renderer.domElement.removeEventListener("mousemove", onPointerMove);
     disposeGraphObjects();
     renderer.dispose();
   }
+  if (glowTexture) { glowTexture.dispose(); glowTexture = null; }
 });
 
 defineExpose({ reload: loadGraph });
@@ -1083,6 +2023,23 @@ defineExpose({ reload: loadGraph });
 .tb-sel { padding: 4px 6px; border-radius: 6px; background: #161b22; color: #e6edf3; border: 1px solid #30363d; }
 .tb-btn { padding: 4px 10px; border-radius: 6px; background: #161b22; color: #e6edf3; border: 1px solid #30363d; cursor: pointer; white-space: nowrap; }
 .tb-btn.active { background: #1f6feb; border-color: #1f6feb; }
+.tb-iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 7px;
+  background: #161b22;
+  color: #e6edf3;
+  border: 1px solid #30363d;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.12s ease;
+}
+.tb-iconbtn:hover { background: #21303f; transform: translateY(-1px); }
+.tb-iconbtn.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+.tb-ico { width: 17px; height: 17px; }
 .kg3d-filters {
   display: flex;
   gap: 12px;
@@ -1090,18 +2047,44 @@ defineExpose({ reload: loadGraph });
 }
 .flt { display: flex; align-items: center; gap: 4px; cursor: pointer; white-space: nowrap; }
 .flt-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.tag-filter { position: relative; }
+.tag-filter-btn {
+  padding: 2px 10px; border-radius: 6px; cursor: pointer; white-space: nowrap;
+  background: #161b22; color: #e6edf3; border: 1px solid #30363d; font-size: 12px;
+}
+.tag-filter-btn.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+.tag-filter-menu {
+  position: absolute; top: 26px; left: 0; z-index: 20;
+  min-width: 180px; max-height: 280px; overflow: auto;
+  background: rgba(22, 27, 34, 0.98); border: 1px solid #30363d; border-radius: 8px;
+  padding: 6px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.tag-filter-head { display: flex; justify-content: space-between; align-items: center; font-size: 11px; opacity: 0.7; margin-bottom: 4px; }
+.tag-filter-head a { cursor: pointer; color: #58a6ff; }
+.tag-filter-item { display: flex; align-items: center; gap: 6px; padding: 3px 4px; border-radius: 5px; cursor: pointer; font-size: 12px; }
+.tag-filter-item:hover { background: rgba(127, 127, 127, 0.14); }
 .kg3d-panel {
   position: absolute;
   top: 96px;
   right: 12px;
   width: 280px;
-  max-height: calc(100% - 120px);
-  overflow: auto;
+  /* 上下都锚定,内容超高时面板内部滚动,绝不挤出屏幕 */
+  max-height: calc(100% - 160px);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
   z-index: 6;
   background: rgba(22, 27, 34, 0.92);
   border: 1px solid #30363d;
   border-radius: 10px;
   padding: 10px;
+}
+/* 关联/标签建议、已有关系列表各自限高,长列表内部滚动 */
+.kg3d-panel .pn-suggest {
+  max-height: 220px;
+  overflow-y: auto;
+  flex: 0 0 auto;
 }
 .pn-head { display: flex; align-items: center; gap: 6px; }
 .pn-type { font-size: 11px; padding: 1px 6px; border-radius: 4px; color: #0b0e14; }
@@ -1109,13 +2092,19 @@ defineExpose({ reload: loadGraph });
 .pn-x { cursor: pointer; opacity: 0.6; }
 .pn-meta { font-size: 11px; opacity: 0.7; margin: 6px 0; display: flex; flex-direction: column; gap: 2px; }
 .pn-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
-.pn-tag { font-size: 11px; background: #21262d; padding: 1px 6px; border-radius: 10px; }
+.pn-tag { font-size: 11px; background: #21262d; padding: 1px 6px; border-radius: 10px; display: inline-flex; align-items: center; gap: 3px; }
+.pn-tagx { cursor: pointer; opacity: 0.55; font-style: normal; font-size: 13px; line-height: 1; }
+.pn-tagx:hover { opacity: 1; color: #f85149; }
+.pn-del { width: 22px; border-radius: 4px; background: #6e1f1f; color: #fff; border: none; cursor: pointer; }
+.pn-del:hover { background: #b62324; }
 .pn-actions { display: flex; gap: 6px; }
 .pn-actions button { flex: 1; padding: 4px; border-radius: 6px; background: #21262d; color: #e6edf3; border: 1px solid #30363d; cursor: pointer; }
 .pn-suggest { margin-top: 8px; }
 .pn-sub { font-size: 11px; opacity: 0.6; margin-bottom: 4px; }
 .pn-srow { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
 .pn-sname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.pn-link { cursor: pointer; }
+.pn-link:hover { color: #58a6ff; text-decoration: underline; }
 .pn-sscore { font-size: 11px; opacity: 0.6; }
 .pn-srow button { width: 22px; border-radius: 4px; background: #1f6feb; color: #fff; border: none; cursor: pointer; }
 .kg3d-status {
@@ -1171,6 +2160,16 @@ defineExpose({ reload: loadGraph });
   pointer-events: none;
   white-space: nowrap;
 }
+:deep(.kg3d-label-hl) {
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: rgba(31, 111, 235, 0.85);
+  box-shadow: 0 0 10px rgba(57, 208, 255, 0.7);
+  text-shadow: 0 1px 2px #000;
+}
 
 /* ───────── 亮色模式覆盖 ───────── */
 .kg3d-root.kg3d-light {
@@ -1181,16 +2180,22 @@ defineExpose({ reload: loadGraph });
 }
 .kg3d-light .tb-search,
 .kg3d-light .tb-sel,
-.kg3d-light .tb-btn {
+.kg3d-light .tb-btn,
+.kg3d-light .tb-iconbtn {
   background: #ffffff;
   color: #1f2328;
   border-color: #d0d7de;
 }
-.kg3d-light .tb-btn.active {
+.kg3d-light .tb-btn.active,
+.kg3d-light .tb-iconbtn.active {
   background: #1f6feb;
   color: #fff;
   border-color: #1f6feb;
 }
+.kg3d-light .tb-iconbtn:hover { background: #eef2f6; }
+.kg3d-light .tag-filter-btn { background: #ffffff; color: #1f2328; border-color: #d0d7de; }
+.kg3d-light .tag-filter-btn.active { background: #1f6feb; color: #fff; border-color: #1f6feb; }
+.kg3d-light .tag-filter-menu { background: #ffffff; border-color: #d0d7de; color: #1f2328; }
 .kg3d-light .kg3d-panel {
   background: rgba(255, 255, 255, 0.95);
   border-color: #d0d7de;

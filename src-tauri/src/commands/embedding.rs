@@ -338,8 +338,13 @@ async fn ensure_embed_server_started() -> Result<EmbedModel, String> {
                 .arg("99")
                 .arg("--ctx-size")
                 .arg("8192")
+                // 逻辑批与物理批都提到 ctx 大小:embedding 模型为非因果注意力,
+                // 整条输入序列必须落在单个物理批(ubatch)内,默认 512 会导致
+                // 超过 512 token 的段落报 500 "input is too large ... increase the physical batch size"。
                 .arg("--batch-size")
-                .arg("512")
+                .arg("8192")
+                .arg("--ubatch-size")
+                .arg("8192")
                 .stdout(Stdio::from(log_file))
                 .stderr(Stdio::from(log_err))
                 .stdin(Stdio::null());
@@ -445,9 +450,9 @@ pub async fn embed_texts(texts: &[String], is_query: bool) -> Result<Vec<Vec<f32
         let input: Vec<String> = chunk
             .iter()
             .map(|t| {
-                let t = t.trim();
+                let t = truncate_for_embedding(t.trim());
                 if prefix.is_empty() {
-                    t.to_string()
+                    t
                 } else {
                     format!("{prefix}{t}")
                 }
@@ -474,6 +479,17 @@ pub async fn embed_texts(texts: &[String], is_query: bool) -> Result<Vec<Vec<f32
         }
     }
     Ok(out)
+}
+
+/// 按字符粗略截断,确保单条输入不超过模型上下文(8192 token)。
+/// CJK 最坏约 1 token/字,取 6000 字上限留足余量;ASCII 占 token 更少,保守不影响。
+/// 仅对极端超长段落生效,正常段落原样通过。
+fn truncate_for_embedding(t: &str) -> String {
+    const MAX_CHARS: usize = 6000;
+    if t.chars().count() <= MAX_CHARS {
+        return t.to_string();
+    }
+    t.chars().take(MAX_CHARS).collect()
 }
 
 /// L2 归一化,便于用点积近似余弦相似度。

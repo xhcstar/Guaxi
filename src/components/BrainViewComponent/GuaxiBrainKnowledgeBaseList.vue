@@ -140,6 +140,10 @@ const handleTreeSelect = (keys) => {
   const key = Array.isArray(keys) ? keys[0] : null;
   if (key) {
     store.setSelectedTreeNodeKey(key);
+    // 工业图谱模式:请求在中间图中定位并高亮对应节点
+    if (store.graphViewMode === 'kg3d') {
+      store.requestKg3dAction('selectByPath', { path: key });
+    }
   }
 };
 
@@ -160,9 +164,25 @@ const refreshList = async () => {
   }
 };
 
+// 不在知识图谱文件树中展示的内部/元数据文件
+function isHiddenTreeNode(node) {
+  const name = String(node?.name || '');
+  if (!name) return false;
+  const lower = name.toLowerCase();
+  // 隐藏:.meta / .cellmeta / 其它元数据与隐藏文件
+  if (name.startsWith('.')) return true;
+  if (lower.endsWith('.cellmeta') || lower.endsWith('.meta')) return true;
+  if (lower.endsWith('_meta.json')) return true;
+  if (name === '.meta' || name === '.git') return true;
+  return false;
+}
+
 // 转换树形数据结构
 function convertToTreeNode(node) {
   const key = String(node.path || '').replace(/\\/g, '/');
+  const kids = Array.isArray(node.children)
+    ? node.children.filter((c) => !isHiddenTreeNode(c)).map(convertToTreeNode)
+    : undefined;
   return {
     label: node.name,
     key,
@@ -172,7 +192,7 @@ function convertToTreeNode(node) {
       { size: 16 },
       { default: () => h(node.is_dir ? BookListIcon : DocumentIcon) }
     ),
-    children: node.children ? node.children.map(convertToTreeNode) : undefined
+    children: kids
   };
 }
 

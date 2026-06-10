@@ -62,6 +62,16 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", {
 
     // 图谱视图模式:classic(经典) | kg3d(工业,默认)
     graphViewMode: "kg3d",
+
+    // ─── 工业图谱(kg3d)与左右边栏共享的通信总线 ───
+    // kg3d 组件把当前选中节点发布到这里,供右侧边栏渲染操作面板;
+    // 边栏通过 requestKg3dAction 反向驱动 kg3d 做视图动作(聚焦/打开/刷新等)。
+    kg3dSelected: null,
+    kg3dActionRequest: null, // { type, payload, ts }
+    kg3dRelations: [], // 当前选中节点已有关系(由 kg3d 组件发布,供右栏渲染)
+    kg3dSuggestions: [], // 当前关联建议
+    kg3dHistory: [], // 最近访问节点 [{id,name,type,ts}]
+    kg3dBookmarks: [], // 收藏节点 [{id,name,type}]
   }),
 
   actions: {
@@ -194,6 +204,14 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", {
       const name = kbName || this.selectedKnowledgeBase?.knowledge_base_name;
       return await invoke("kg_add_tag", { kbName: name, nodeId, tag, source, score });
     },
+    async kgRemoveTag(kbName, nodeId, tag) {
+      const name = kbName || this.selectedKnowledgeBase?.knowledge_base_name;
+      return await invoke("kg_remove_tag", { kbName: name, nodeId, tag });
+    },
+    async kgRemoveRelation(kbName, fromId, toId, relation = null) {
+      const name = kbName || this.selectedKnowledgeBase?.knowledge_base_name;
+      return await invoke("kg_remove_relation", { kbName: name, fromId, toId, relation });
+    },
     async kgEmbedKb(kbName) {
       const name = kbName || this.selectedKnowledgeBase?.knowledge_base_name;
       return await invoke("kg_embed_kb", { kbName: name });
@@ -276,6 +294,38 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", {
 
     setSelectedGraphNode(node) {
       this.selectedGraphNode = node || null;
+    },
+
+    // ─── kg3d 通信总线 ───
+    // kg3d 组件选中节点时调用,边栏据此渲染操作面板,并写入访问历史。
+    setKg3dSelected(node) {
+      this.kg3dSelected = node || null;
+      if (node && node.id) {
+        const entry = { id: node.id, name: node.name, type: node.type, ts: Date.now() };
+        this.kg3dHistory = [entry, ...this.kg3dHistory.filter((x) => x.id !== node.id)].slice(0, 30);
+      }
+    },
+    // 边栏 → kg3d 的动作请求(focus/open/suggestRelations/suggestTags/reload/flyTo...)
+    requestKg3dAction(type, payload = null) {
+      this.kg3dActionRequest = { type, payload, ts: Date.now() };
+    },
+    setKg3dRelations(rels) {
+      this.kg3dRelations = Array.isArray(rels) ? rels : [];
+    },
+    setKg3dSuggestions(list) {
+      this.kg3dSuggestions = Array.isArray(list) ? list : [];
+    },
+    toggleKg3dBookmark(node) {
+      if (!node || !node.id) return;
+      const exists = this.kg3dBookmarks.some((x) => x.id === node.id);
+      if (exists) {
+        this.kg3dBookmarks = this.kg3dBookmarks.filter((x) => x.id !== node.id);
+      } else {
+        this.kg3dBookmarks = [
+          { id: node.id, name: node.name, type: node.type },
+          ...this.kg3dBookmarks,
+        ].slice(0, 50);
+      }
     },
 
     /**
