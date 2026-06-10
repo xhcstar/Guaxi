@@ -9,8 +9,8 @@
     <!-- 中间:图谱视图切换 -->
     <div class="header-center">
       <div class="kg-switch">
-        <button :class="{ on: kbStore.graphViewMode === 'kg3d' }" @click="kbStore.graphViewMode = 'kg3d'">工业图谱</button>
-        <button :class="{ on: kbStore.graphViewMode === 'classic' }" @click="kbStore.graphViewMode = 'classic'">经典视图</button>
+        <!-- <button :class="{ on: kbStore.graphViewMode === 'kg3d' }" @click="kbStore.graphViewMode = 'kg3d'">工业图谱</button> -->
+        <!-- <button :class="{ on: kbStore.graphViewMode === 'classic' }" @click="kbStore.graphViewMode = 'classic'">经典视图</button> -->
       </div>
     </div>
 
