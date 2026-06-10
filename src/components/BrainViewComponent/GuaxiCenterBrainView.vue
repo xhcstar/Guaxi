@@ -1,13 +1,11 @@
 <template>
   <div class="text-aera">
-    <GuaxiKnowledgeBaseGraph v-if="store.graphViewMode === 'classic'" />
-    <GuaxiKnowledgeGraph3D v-else :kb-name="kbName" />
+    <GuaxiKnowledgeGraph3D :kb-name="kbName" />
   </div>
 </template>
 
 <script setup>
 import { computed } from 'vue';
-import GuaxiKnowledgeBaseGraph from './GuaxiKnowledgeBaseGraph.vue';
 import GuaxiKnowledgeGraph3D from './GuaxiKnowledgeGraph3D.vue';
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore';
 

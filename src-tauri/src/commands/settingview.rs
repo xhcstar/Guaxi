@@ -2433,6 +2433,7 @@ pub fn set_knowledge_bases_remote_config(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn is_knowledge_bases_root_path(path: &str) -> bool {
     let kb = get_knowledge_bases_root();
     let kb_canon = PathBuf::from(kb).canonicalize().ok();
@@ -2462,10 +2463,6 @@ pub fn set_knowledge_bases_root(path: String) -> Result<(), String> {
 
     if !root_path.exists() {
         fs::create_dir_all(&root_path).map_err(|e| e.to_string())?;
-    }
-    let meta_path = root_path.join(".meta");
-    if !meta_path.exists() {
-        fs::create_dir_all(&meta_path).map_err(|e| e.to_string())?;
     }
 
     let mut config = load_config();

@@ -212,6 +212,26 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", {
       const name = kbName || this.selectedKnowledgeBase?.knowledge_base_name;
       return await invoke("kg_remove_relation", { kbName: name, fromId, toId, relation });
     },
+    // 人工知识层(可移植快照)导出 / 导入 —— 供管理器查看与多机同步收尾使用。
+    async kgExportManual(kbName) {
+      const name = kbName || this.selectedKnowledgeBase?.knowledge_base_name;
+      return await invoke("kg_export_manual", { kbName: name });
+    },
+    async kgImportManual(kbName, bundle = null) {
+      const name = kbName || this.selectedKnowledgeBase?.knowledge_base_name;
+      return await invoke("kg_import_manual", { kbName: name, bundle });
+    },
+    async kgWriteManualSnapshot(kbName) {
+      const name = kbName || this.selectedKnowledgeBase?.knowledge_base_name;
+      return await invoke("kg_write_manual_snapshot", { kbName: name });
+    },
+    // 机制B(行级精细同步)开关 —— 默认关闭,启用后知识库同步会额外双向按行合并人工层。
+    async kgGetManualSync() {
+      return await invoke("kg_get_manual_sync");
+    },
+    async kgSetManualSync(enabled) {
+      return await invoke("kg_set_manual_sync", { enabled });
+    },
     async kgEmbedKb(kbName) {
       const name = kbName || this.selectedKnowledgeBase?.knowledge_base_name;
       return await invoke("kg_embed_kb", { kbName: name });

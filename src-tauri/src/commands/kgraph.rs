@@ -538,19 +538,6 @@ fn kg_rel_path(root: &Path, abs: &Path) -> String {
         .replace('\\', "/")
 }
 
-fn kg_sanitize_meta_stem(name: &str) -> String {
-    let trimmed = name.trim().trim_matches(|c| c == ' ' || c == '.');
-    if trimmed.is_empty() {
-        return "_".to_string();
-    }
-    let mut out = String::with_capacity(trimmed.len());
-    for ch in trimmed.chars() {
-        let ok = ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ' ' | '@' | '+' | '=');
-        out.push(if ok { ch } else { '_' });
-    }
-    let out2 = out.trim().trim_matches(|c| c == ' ' || c == '.').to_string();
-    if out2.is_empty() { "_".to_string() } else { out2 }
-}
 
 fn kg_excerpt_one_line(s: &str, max_chars: usize) -> String {
     let mut out = String::new();
@@ -736,47 +723,7 @@ struct BuildAccum {
     file_by_relpath: HashMap<String, String>, // 小写 rel(含/不含扩展名) → file node_id
     file_by_stem: HashMap<String, String>,     // 小写文件名(stem) → file node_id(首个)
     section_in_file: HashMap<(String, String), String>, // (file_node, 小写标题) → section node_id
-    // .meta 关系与标签
-    related_by_stable: HashMap<String, Vec<String>>, // from stable_id → [to stable_id/ref]
     stable_to_node: HashMap<String, String>,         // stable_id → 节点 id(section/para)
-}
-
-#[derive(serde::Deserialize)]
-struct MetaStructLite {
-    attrs: serde_json::Value,
-    #[serde(default)]
-    tags: Vec<String>,
-    #[serde(default)]
-    related_nodes: Vec<String>,
-}
-#[derive(serde::Deserialize)]
-struct MetaFileLite {
-    #[serde(default)]
-    file_tags: Vec<String>,
-    #[serde(default)]
-    structure_nodes: Vec<MetaStructLite>,
-}
-
-fn normalize_related_ref(s: &str) -> Option<String> {
-    let t = s.trim();
-    if t.is_empty() {
-        return None;
-    }
-    let t = t
-        .strip_prefix("para_")
-        .or_else(|| t.strip_prefix("section_"))
-        .or_else(|| t.strip_prefix("node_"))
-        .unwrap_or(t)
-        .trim();
-    if t.is_empty() { None } else { Some(t.to_string()) }
-}
-
-/// 读取某文件的 .meta(file_tags / 结构节点 tags / related_nodes)。
-fn load_file_meta(meta_dir: &Path, rel: &str) -> Option<MetaFileLite> {
-    let key = kg_sanitize_meta_stem(&rel.replace('/', "__"));
-    let p = meta_dir.join(format!("{key}_meta.json"));
-    let s = fs::read_to_string(&p).ok()?;
-    serde_json::from_str::<MetaFileLite>(&s).ok()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -785,7 +732,6 @@ fn walk_build(
     cur: &Path,
     parent_id: &str,
     parent_depth: i64,
-    meta_dir: &Path,
     acc: &mut BuildAccum,
 ) -> Result<(), String> {
     let mut entries: Vec<PathBuf> = fs::read_dir(cur)
@@ -821,7 +767,7 @@ fn walk_build(
                 source: "structural".into(),
                 src_file: None,
             });
-            walk_build(base, &path, &id, parent_depth + 1, meta_dir, acc)?;
+            walk_build(base, &path, &id, parent_depth + 1, acc)?;
             continue;
         }
 
@@ -872,31 +818,6 @@ fn walk_build(
         };
 
         let (sections, paragraphs) = parse_structure(&rel, &content);
-        let file_meta = load_file_meta(meta_dir, &rel);
-
-        // 文件级标签(.meta file_tags)
-        if let Some(m) = &file_meta {
-            for t in &m.file_tags {
-                let t = t.trim();
-                if !t.is_empty() {
-                    acc.tags.push(TagRow { node_id: file_node.clone(), tag: t.into(), source: "manual".into() });
-                }
-            }
-        }
-        // .meta 结构节点的 tags / related_nodes,按 stable_id 索引
-        let mut meta_tags_by_sid: HashMap<String, Vec<String>> = HashMap::new();
-        if let Some(m) = &file_meta {
-            for n in &m.structure_nodes {
-                let Some(sid) = n.attrs.get("stable_id").and_then(|v| v.as_str()) else { continue };
-                if !n.tags.is_empty() {
-                    meta_tags_by_sid.insert(sid.to_string(), n.tags.clone());
-                }
-                let tos: Vec<String> = n.related_nodes.iter().filter_map(|x| normalize_related_ref(x)).collect();
-                if !tos.is_empty() {
-                    acc.related_by_stable.entry(sid.to_string()).or_default().extend(tos);
-                }
-            }
-        }
 
         // section 节点
         for sec in &sections {
@@ -926,9 +847,6 @@ fn walk_build(
                 source: "structural".into(),
                 src_file: Some(rel.clone()),
             });
-            for t in meta_tags_by_sid.get(&sec.stable_id).cloned().unwrap_or_default() {
-                acc.tags.push(TagRow { node_id: sec_id.clone(), tag: t, source: "manual".into() });
-            }
         }
 
         // paragraph 节点 + contains + next
@@ -964,9 +882,6 @@ fn walk_build(
                 source: "structural".into(),
                 src_file: Some(rel.clone()),
             });
-            for t in meta_tags_by_sid.get(&p.stable_id).cloned().unwrap_or_default() {
-                acc.tags.push(TagRow { node_id: p_id.clone(), tag: t, source: "manual".into() });
-            }
             if let Some(prev) = prev_para.take() {
                 acc.edges.push(EdgeRow {
                     from_id: prev,
@@ -1062,26 +977,6 @@ fn resolve_refs_to_edges(acc: &mut BuildAccum) {
         }
     }
     acc.edges.append(&mut link_edges);
-
-    // .meta related_nodes → related 边
-    let related = std::mem::take(&mut acc.related_by_stable);
-    for (from_sid, tos) in related {
-        let Some(from_id) = acc.stable_to_node.get(&from_sid).cloned() else { continue };
-        for to_ref in tos {
-            let Some(to_id) = acc.stable_to_node.get(&to_ref).cloned() else { continue };
-            if from_id == to_id {
-                continue;
-            }
-            acc.edges.push(EdgeRow {
-                from_id: from_id.clone(),
-                to_id,
-                edge_type: "related".into(),
-                strength: 0.26,
-                source: "manual".into(),
-                src_file: None,
-            });
-        }
-    }
 }
 
 /// 全量构建某知识库的图索引,物化进 SQLite。返回 (节点数, 边数)。
@@ -1091,12 +986,9 @@ pub fn build_kb_index(kb_name: &str) -> Result<(usize, usize), String> {
     if !kb_dir.exists() {
         return Err(format!("知识库不存在: {kb_name}"));
     }
-    let meta_dir = root
-        .join(".meta")
-        .join(format!("{}_meta", kg_sanitize_meta_stem(kb_name)));
 
     let mut conn = ensure_kg_db()?;
-    let r = build_into_conn(&mut conn, kb_name, &kb_dir, &meta_dir)?;
+    let r = build_into_conn(&mut conn, kb_name, &kb_dir)?;
     MEM_CACHE.write().remove(kb_name);
     Ok(r)
 }
@@ -1106,7 +998,6 @@ fn build_into_conn(
     conn: &mut Connection,
     kb_name: &str,
     kb_dir: &Path,
-    meta_dir: &Path,
 ) -> Result<(usize, usize), String> {
     let mut acc = BuildAccum::default();
     // kb 根节点
@@ -1120,7 +1011,7 @@ fn build_into_conn(
         ..Default::default()
     });
 
-    walk_build(kb_dir, kb_dir, "kb_root", 0, meta_dir, &mut acc)?;
+    walk_build(kb_dir, kb_dir, "kb_root", 0, &mut acc)?;
     resolve_refs_to_edges(&mut acc);
 
     // 去重边(同 from/to/type 取首个)并统计度
@@ -1192,7 +1083,7 @@ fn build_into_conn(
         let mut stmt = tx
             .prepare(
                 "SELECT node_id,tag,source,score FROM kg_node_tags \
-                 WHERE kb_name=?1 AND source IN ('zeroshot','llm')",
+                 WHERE kb_name=?1 AND source IN ('manual','zeroshot','llm')",
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
@@ -1366,6 +1257,67 @@ pub fn drop_kb_index(kb_name: &str) {
         }
         Ok(())
     })();
+}
+
+// ─────────────────────── 文件 CRUD 钩子(取代旧 kbmeta 钩子) ───────────────────────
+//
+// 文件增删改移后由 fileprocess / flipboard / knowledgebase 调用,负责维护图索引的
+// 脏标记与生命周期。kgraph 自行解析 .md,不再依赖任何 .meta 侧车。
+
+/// 从绝对路径解析其所属知识库名(知识库根下的顶层目录名);非库内路径返回 None。
+fn kb_name_from_path(path: &Path) -> Option<String> {
+    let rel = path.strip_prefix(kb_root_dir()).ok()?;
+    let first = rel.components().next()?;
+    let name = first.as_os_str().to_string_lossy().to_string();
+    if name.is_empty() || name.starts_with('.') {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+/// 路径是否为某知识库的根目录(parent 恰为知识库根)。
+fn is_kb_root_path(path: &Path) -> bool {
+    path.parent().map(|p| p == kb_root_dir()).unwrap_or(false)
+}
+
+pub fn after_write_file(path: &Path, _content: &str) -> Result<(), String> {
+    if let Some(kb) = kb_name_from_path(path) {
+        mark_kb_dirty(&kb);
+    }
+    Ok(())
+}
+
+pub fn after_create_path(path: &Path, _is_dir: bool, _content: Option<&str>) -> Result<(), String> {
+    if let Some(kb) = kb_name_from_path(path) {
+        mark_kb_dirty(&kb);
+    }
+    Ok(())
+}
+
+pub fn after_delete_path(path: &Path, _is_dir: bool) -> Result<(), String> {
+    if let Some(kb) = kb_name_from_path(path) {
+        if is_kb_root_path(path) {
+            drop_kb_index(&kb);
+        } else {
+            mark_kb_dirty(&kb);
+        }
+    }
+    Ok(())
+}
+
+pub fn after_move_path(src: &Path, dst: &Path) -> Result<(), String> {
+    if let Some(kb) = kb_name_from_path(src) {
+        if is_kb_root_path(src) {
+            drop_kb_index(&kb);
+        } else {
+            mark_kb_dirty(&kb);
+        }
+    }
+    if let Some(kb) = kb_name_from_path(dst) {
+        mark_kb_dirty(&kb);
+    }
+    Ok(())
 }
 
 /// 查询前调用:若索引缺失 / schema 过期 / 被标记为脏,则触发一次全量重建。
@@ -2426,6 +2378,7 @@ pub fn kg_confirm_relation(
     )
     .map_err(|e| e.to_string())?;
     MEM_CACHE.write().remove(&kb_name);
+    write_manual_snapshot(&kb_name);
     Ok(())
 }
 
@@ -2449,6 +2402,7 @@ pub fn kg_add_tag(
     )
     .map_err(|e| e.to_string())?;
     MEM_CACHE.write().remove(&kb_name);
+    write_manual_snapshot(&kb_name);
     Ok(())
 }
 
@@ -2466,6 +2420,7 @@ pub fn kg_remove_tag(kb_name: String, node_id: String, tag: String) -> Result<()
     )
     .map_err(|e| e.to_string())?;
     MEM_CACHE.write().remove(&kb_name);
+    write_manual_snapshot(&kb_name);
     Ok(())
 }
 
@@ -2502,7 +2457,417 @@ pub fn kg_remove_relation(
             .map_err(|e| e.to_string())?,
     };
     MEM_CACHE.write().remove(&kb_name);
+    write_manual_snapshot(&kb_name);
     Ok(n)
+}
+
+// ─────────────────────── 人工知识层导出 / 导入(可移植同步) ───────────────────────
+//
+// kg_index.db 是本地派生固化索引;其中“无法从 .md 重建”的人工 / LLM 产物
+// (manual/llm/semantic 边、manual/zeroshot/llm 标签、concept 概念节点)是唯一需要
+// 跨机同步的知识。这里把这层序列化为每个知识库一个 `manual.kgraph.json` 快照,随知识库
+// 目录走现有文件同步(机制A);导入语义为“整层替换”(whole-layer LWW),天然携带删除。
+// 所有节点标识(file_/dir_/section_/para_/concept_ + 哈希)均跨机一致,因此无需重映射。
+
+const MANUAL_SNAPSHOT_FILE: &str = ".manual.kgraph.json";
+const MANUAL_SNAPSHOT_VERSION: u32 = 1;
+
+fn default_strength() -> f64 {
+    0.5
+}
+fn default_score() -> f64 {
+    1.0
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
+pub struct ManualEdge {
+    pub from_id: String,
+    pub to_id: String,
+    pub edge_type: String,
+    #[serde(default = "default_strength")]
+    pub strength: f64,
+    pub source: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
+pub struct ManualTag {
+    pub node_id: String,
+    pub tag: String,
+    pub source: String,
+    #[serde(default = "default_score")]
+    pub score: f64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
+pub struct ManualConcept {
+    pub node_id: String,
+    pub name: String,
+    #[serde(default)]
+    pub content_hash: Option<String>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
+pub struct ManualBundle {
+    #[serde(default)]
+    pub version: u32,
+    #[serde(default)]
+    pub kb_name: String,
+    #[serde(default)]
+    pub exported_at: String,
+    #[serde(default)]
+    pub edges: Vec<ManualEdge>,
+    #[serde(default)]
+    pub tags: Vec<ManualTag>,
+    #[serde(default)]
+    pub concepts: Vec<ManualConcept>,
+}
+
+fn manual_snapshot_path(kb_name: &str) -> PathBuf {
+    kb_root_dir().join(kb_name).join(MANUAL_SNAPSHOT_FILE)
+}
+
+/// 从 kg_index.db 读取某知识库的人工知识层(可移植快照)。
+pub fn export_manual_bundle(kb_name: &str) -> Result<ManualBundle, String> {
+    let conn = ensure_kg_db()?;
+
+    let mut edges = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT from_id,to_id,edge_type,strength,source FROM kg_edges \
+                 WHERE kb_name=?1 AND source IN ('manual','llm','semantic')",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([kb_name], |r| {
+                Ok(ManualEdge {
+                    from_id: r.get(0)?,
+                    to_id: r.get(1)?,
+                    edge_type: r.get(2)?,
+                    strength: r.get(3)?,
+                    source: r.get(4)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            edges.push(row.map_err(|e| e.to_string())?);
+        }
+    }
+
+    let mut tags = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT node_id,tag,source,score FROM kg_node_tags \
+                 WHERE kb_name=?1 AND source IN ('manual','zeroshot','llm')",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([kb_name], |r| {
+                Ok(ManualTag {
+                    node_id: r.get(0)?,
+                    tag: r.get(1)?,
+                    source: r.get(2)?,
+                    score: r.get(3)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            tags.push(row.map_err(|e| e.to_string())?);
+        }
+    }
+
+    let mut concepts = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT node_id,name,content_hash FROM kg_nodes \
+                 WHERE kb_name=?1 AND node_type='concept'",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([kb_name], |r| {
+                Ok(ManualConcept {
+                    node_id: r.get(0)?,
+                    name: r.get(1)?,
+                    content_hash: r.get(2)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            concepts.push(row.map_err(|e| e.to_string())?);
+        }
+    }
+
+    Ok(ManualBundle {
+        version: MANUAL_SNAPSHOT_VERSION,
+        kb_name: kb_name.to_string(),
+        exported_at: Local::now().to_rfc3339(),
+        edges,
+        tags,
+        concepts,
+    })
+}
+
+/// 把当前 DB 的人工层快照写回知识库目录(随文件同步)。最佳努力,绝不阻断保存。
+pub fn write_manual_snapshot(kb_name: &str) {
+    let _ = (|| -> Result<(), String> {
+        let kb_dir = kb_root_dir().join(kb_name);
+        if !kb_dir.exists() {
+            return Ok(());
+        }
+        let bundle = export_manual_bundle(kb_name)?;
+        let p = manual_snapshot_path(kb_name);
+        // 人工层为空且本来就没有快照文件 → 不创建空文件,减少同步噪声;
+        // 若文件已存在则写入空快照,使“清空”能经由 LWW 传播到其它机器。
+        if bundle.edges.is_empty()
+            && bundle.tags.is_empty()
+            && bundle.concepts.is_empty()
+            && !p.exists()
+        {
+            return Ok(());
+        }
+        let json = serde_json::to_string_pretty(&bundle).map_err(|e| e.to_string())?;
+        fs::write(&p, json).map_err(|e| e.to_string())?;
+        Ok(())
+    })();
+}
+
+/// 读取磁盘上的人工层快照(可能不存在)。
+pub fn read_manual_snapshot(kb_name: &str) -> Result<Option<ManualBundle>, String> {
+    let p = manual_snapshot_path(kb_name);
+    if !p.exists() {
+        return Ok(None);
+    }
+    let s = fs::read_to_string(&p).map_err(|e| e.to_string())?;
+    let b: ManualBundle = serde_json::from_str(&s).map_err(|e| e.to_string())?;
+    Ok(Some(b))
+}
+
+/// 用快照整层替换某知识库的人工层(机制A:whole-layer LWW,天然携带删除),随后标脏待重建。
+/// 导入的边/标签即使端点暂不存在也先落库;下次重建会保留端点存在者并丢弃悬挂项。
+pub fn import_manual_bundle(kb_name: &str, bundle: &ManualBundle) -> Result<(), String> {
+    let mut conn = ensure_kg_db()?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+    tx.execute(
+        "DELETE FROM kg_edges WHERE kb_name=?1 AND source IN ('manual','llm','semantic')",
+        [kb_name],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute(
+        "DELETE FROM kg_node_tags WHERE kb_name=?1 AND source IN ('manual','zeroshot','llm')",
+        [kb_name],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute(
+        "DELETE FROM kg_nodes WHERE kb_name=?1 AND node_type='concept'",
+        [kb_name],
+    )
+    .map_err(|e| e.to_string())?;
+
+    let now = Local::now().to_rfc3339();
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT OR IGNORE INTO kg_nodes (kb_name,node_id,node_type,name,depth,content_hash,degree,created_at,modified_at) \
+                 VALUES (?1,?2,'concept',?3,1,?4,0,?5,?5)",
+            )
+            .map_err(|e| e.to_string())?;
+        for c in &bundle.concepts {
+            stmt.execute(rusqlite::params![kb_name, c.node_id, c.name, c.content_hash, now])
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT OR IGNORE INTO kg_edges (kb_name,from_id,to_id,edge_type,strength,source) \
+                 VALUES (?1,?2,?3,?4,?5,?6)",
+            )
+            .map_err(|e| e.to_string())?;
+        for e in &bundle.edges {
+            stmt.execute(rusqlite::params![
+                kb_name, e.from_id, e.to_id, e.edge_type, e.strength, e.source
+            ])
+            .map_err(|e| e.to_string())?;
+        }
+    }
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT OR IGNORE INTO kg_node_tags (kb_name,node_id,tag,source,score) \
+                 VALUES (?1,?2,?3,?4,?5)",
+            )
+            .map_err(|e| e.to_string())?;
+        for t in &bundle.tags {
+            stmt.execute(rusqlite::params![kb_name, t.node_id, t.tag, t.source, t.score])
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    mark_kb_dirty(kb_name);
+    invalidate_kb_caches(kb_name);
+    Ok(())
+}
+
+/// 导出某知识库的人工层(前端可用于查看 / 备份)。
+#[tauri::command]
+pub fn kg_export_manual(kb_name: String) -> Result<ManualBundle, String> {
+    export_manual_bundle(&kb_name)
+}
+
+/// 导入人工层:bundle 省略时从磁盘 manual.kgraph.json 读取(机制A 同步收尾用)。
+/// 返回是否实际执行了导入。
+#[tauri::command]
+pub fn kg_import_manual(kb_name: String, bundle: Option<ManualBundle>) -> Result<bool, String> {
+    let b = match bundle {
+        Some(b) => b,
+        None => match read_manual_snapshot(&kb_name)? {
+            Some(b) => b,
+            None => return Ok(false),
+        },
+    };
+    import_manual_bundle(&kb_name, &b)?;
+    Ok(true)
+}
+
+/// 把当前 DB 人工层快照落盘(写命令已自动调用;此命令供前端显式触发)。
+#[tauri::command]
+pub fn kg_write_manual_snapshot(kb_name: String) -> Result<(), String> {
+    write_manual_snapshot(&kb_name);
+    Ok(())
+}
+
+/// 枚举知识库根下的所有知识库名(顶层目录,跳过隐藏与元数据目录)。
+pub fn list_kb_names() -> Vec<String> {
+    let mut out = Vec::new();
+    if let Ok(rd) = fs::read_dir(kb_root_dir()) {
+        for ent in rd.flatten() {
+            if !ent.path().is_dir() {
+                continue;
+            }
+            let name = ent.file_name().to_string_lossy().to_string();
+            if name.is_empty() || name.starts_with('.') {
+                continue;
+            }
+            out.push(name);
+        }
+    }
+    out
+}
+
+#[derive(serde::Serialize)]
+pub struct KgKbSummary {
+    pub knowledge_base_name: String,
+    pub knowledge_base_location: String,
+    pub file_count: i64,
+    pub dir_count: i64,
+}
+
+fn count_fs_entries(dir: &Path, files: &mut i64, dirs: &mut i64) {
+    if let Ok(rd) = fs::read_dir(dir) {
+        for ent in rd.flatten() {
+            let name = ent.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
+                continue;
+            }
+            let p = ent.path();
+            if p.is_dir() {
+                *dirs += 1;
+                count_fs_entries(&p, files, dirs);
+            } else if p.is_file() {
+                *files += 1;
+            }
+        }
+    }
+}
+
+/// 轻量统计各知识库的文件 / 目录数(替代旧 kbmeta_sync_all,供统计面板使用)。
+#[tauri::command]
+pub fn kg_kb_summaries() -> Result<Vec<KgKbSummary>, String> {
+    let root = kb_root_dir();
+    let mut out = Vec::new();
+    for name in list_kb_names() {
+        let kb_dir = root.join(&name);
+        let (mut files, mut dirs) = (0i64, 0i64);
+        count_fs_entries(&kb_dir, &mut files, &mut dirs);
+        out.push(KgKbSummary {
+            knowledge_base_name: name,
+            knowledge_base_location: kb_dir.to_string_lossy().to_string(),
+            file_count: files,
+            dir_count: dirs,
+        });
+    }
+    Ok(out)
+}
+
+/// 机制B(可选,行级合并)开关:存于 kg_settings。
+pub fn manual_sync_enabled() -> bool {
+    get_kg_setting("p2p_manual_sync").as_deref() == Some("1")
+}
+
+#[tauri::command]
+pub fn kg_set_manual_sync(enabled: bool) -> Result<(), String> {
+    set_kg_setting("p2p_manual_sync", if enabled { "1" } else { "0" })
+}
+
+#[tauri::command]
+pub fn kg_get_manual_sync() -> Result<bool, String> {
+    Ok(manual_sync_enabled())
+}
+
+/// 机制B:按行合并对端人工层(INSERT OR IGNORE,无墓碑,删除不传播),随后标脏待重建。
+/// 返回实际新增的行数。合并后刷新本机快照,使机制A/B 结果保持一致。
+pub fn merge_manual_bundle(kb_name: &str, bundle: &ManualBundle) -> Result<usize, String> {
+    let mut conn = ensure_kg_db()?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    let now = Local::now().to_rfc3339();
+    let mut merged = 0usize;
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT OR IGNORE INTO kg_nodes (kb_name,node_id,node_type,name,depth,content_hash,degree,created_at,modified_at) \
+                 VALUES (?1,?2,'concept',?3,1,?4,0,?5,?5)",
+            )
+            .map_err(|e| e.to_string())?;
+        for c in &bundle.concepts {
+            merged += stmt
+                .execute(rusqlite::params![kb_name, c.node_id, c.name, c.content_hash, now])
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT OR IGNORE INTO kg_edges (kb_name,from_id,to_id,edge_type,strength,source) \
+                 VALUES (?1,?2,?3,?4,?5,?6)",
+            )
+            .map_err(|e| e.to_string())?;
+        for e in &bundle.edges {
+            merged += stmt
+                .execute(rusqlite::params![kb_name, e.from_id, e.to_id, e.edge_type, e.strength, e.source])
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT OR IGNORE INTO kg_node_tags (kb_name,node_id,tag,source,score) \
+                 VALUES (?1,?2,?3,?4,?5)",
+            )
+            .map_err(|e| e.to_string())?;
+        for t in &bundle.tags {
+            merged += stmt
+                .execute(rusqlite::params![kb_name, t.node_id, t.tag, t.source, t.score])
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    mark_kb_dirty(kb_name);
+    invalidate_kb_caches(kb_name);
+    write_manual_snapshot(kb_name);
+    Ok(merged)
 }
 
 // ─────────────────────── 社区检测(Louvain)───────────────────────
@@ -3076,11 +3441,10 @@ mod extract_tests {
         )
         .unwrap();
         fs::write(kb.join("b.md"), "# Topic B\n\nsome content about b\n").unwrap();
-        let meta_dir = dir.path().join("__no_meta__");
 
         let mut conn = Connection::open_in_memory().unwrap();
         init_kg_schema(&conn).unwrap();
-        let (nc, ec) = build_into_conn(&mut conn, "TestKB", kb, &meta_dir).unwrap();
+        let (nc, ec) = build_into_conn(&mut conn, "TestKB", kb).unwrap();
         assert!(nc >= 6, "expected kb+2 files+2 sections+paras, got {nc}");
         assert!(ec >= 4, "expected contains+link edges, got {ec}");
 

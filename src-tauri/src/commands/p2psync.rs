@@ -245,6 +245,15 @@ enum P2PWireRequest {
         knowledge_repo: String,
         bundle_json: String,
     },
+    /// 请求对端导出某 kgraph 知识库的人工知识层 bundle(JSON)。
+    KgManualBundle {
+        kb_name: String,
+    },
+    /// 把本机的 kgraph 人工层 bundle 推送给对端按行合并(机制B,无墓碑)。
+    PushKgManualBundle {
+        kb_name: String,
+        bundle_json: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -946,6 +955,34 @@ async fn handle_incoming_stream(
             };
             write_control(&mut send, &ack, "P2P 记录推送响应").await?;
         }
+        P2PWireRequest::KgManualBundle { kb_name } => {
+            let response = match kg_manual_bundle_json(&kb_name) {
+                Ok(json) => P2PRepoBundleResponse {
+                    ok: true,
+                    message: "ok".to_string(),
+                    bundle_json: Some(json),
+                },
+                Err(e) => P2PRepoBundleResponse {
+                    ok: false,
+                    message: e,
+                    bundle_json: None,
+                },
+            };
+            write_control(&mut send, &response, "P2P 人工层响应").await?;
+        }
+        P2PWireRequest::PushKgManualBundle { kb_name, bundle_json } => {
+            let ack = match kg_manual_merge_json(&kb_name, &bundle_json) {
+                Ok(n) => P2PAck {
+                    ok: true,
+                    message: format!("已合并 {kb_name} 人工层 {n} 行"),
+                },
+                Err(e) => P2PAck {
+                    ok: false,
+                    message: e,
+                },
+            };
+            write_control(&mut send, &ack, "P2P 人工层推送响应").await?;
+        }
     }
 
     send.finish()
@@ -1138,6 +1175,50 @@ async fn exchange_repo_bundle(
         return Err(format!("推送记录到对端失败: {}", push_ack.message));
     }
     Ok((merged, push_ack.message))
+}
+
+fn kg_manual_bundle_json(kb_name: &str) -> Result<String, String> {
+    let bundle = crate::commands::kgraph::export_manual_bundle(kb_name)?;
+    serde_json::to_string(&bundle).map_err(|e| e.to_string())
+}
+
+fn kg_manual_merge_json(kb_name: &str, json: &str) -> Result<usize, String> {
+    let bundle: crate::commands::kgraph::ManualBundle =
+        serde_json::from_str(json).map_err(|e| e.to_string())?;
+    crate::commands::kgraph::merge_manual_bundle(kb_name, &bundle)
+}
+
+/// 机制B:与单个对端双向按行合并某 kgraph 知识库的人工知识层(无墓碑)。
+/// 返回本地新增的行数。
+async fn exchange_kg_manual_bundle(
+    connection: &Connection,
+    kb_name: &str,
+) -> Result<usize, String> {
+    let pull_req = P2PWireRequest::KgManualBundle {
+        kb_name: kb_name.to_string(),
+    };
+    let pull_resp: P2PRepoBundleResponse =
+        request_response(connection, &pull_req, P2P_BUNDLE_FRAME_LIMIT).await?;
+    let mut merged = 0_usize;
+    if pull_resp.ok {
+        if let Some(json) = pull_resp.bundle_json {
+            merged = kg_manual_merge_json(kb_name, &json)?;
+        }
+    } else {
+        return Err(format!("对端导出人工层失败: {}", pull_resp.message));
+    }
+
+    let local_json = kg_manual_bundle_json(kb_name)?;
+    let push_req = P2PWireRequest::PushKgManualBundle {
+        kb_name: kb_name.to_string(),
+        bundle_json: local_json,
+    };
+    let push_ack: P2PAck =
+        request_response(connection, &push_req, P2P_BUNDLE_FRAME_LIMIT).await?;
+    if !push_ack.ok {
+        return Err(format!("推送人工层到对端失败: {}", push_ack.message));
+    }
+    Ok(merged)
 }
 
 /// 统一构造一个同步目标：确保根目录存在后返回 target。
@@ -2412,6 +2493,33 @@ async fn run_p2p_sync(
                     Err(e) => {
                         errors.push(format!("{} 记录同步连接失败: {}", peer.device_name, e));
                     }
+                }
+            }
+        }
+
+        // 机制B(可选):知识库目录同步后,双向按行合并各 KB 的 kgraph 人工知识层。
+        if target.key == "knowledge_base"
+            && crate::commands::kgraph::manual_sync_enabled()
+            && !is_sync_cancelled(run_id)
+        {
+            match link.current().await {
+                Ok(conn) => {
+                    for kb in crate::commands::kgraph::list_kb_names() {
+                        match exchange_kg_manual_bundle(&conn, &kb).await {
+                            Ok(n) => {
+                                records_merged += n;
+                            }
+                            Err(e) => {
+                                errors.push(format!(
+                                    "{} 人工层同步失败({}): {}",
+                                    peer.device_name, kb, e
+                                ));
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    errors.push(format!("{} 人工层同步连接失败: {}", peer.device_name, e));
                 }
             }
         }

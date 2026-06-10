@@ -138,8 +138,8 @@ pub fn create_knowledge_base(input: KnowledgeBaseInput) -> Result<(), String> {
     let meta_file = kb_meta_dir.join("meta.json");
     fs::write(meta_file, serde_json::to_string_pretty(&meta).unwrap()).map_err(|e| e.to_string())?;
 
-    // 额外：为“知识库管理器”生成根目录元数据（KnowledgeBases/.meta/xxx_meta/xxx_meta.json）
-    crate::commands::kbmeta::init_kb_meta_for_new_kb(&input.knowledge_base_name, &kb_dir, &now)?;
+    // 新建知识库后标记图索引为脏,下次查询惰性重建(kgraph 自解析 .md,无需 .meta)。
+    crate::commands::kgraph::mark_kb_dirty(&input.knowledge_base_name);
 
     // 7. 写入数据库
     let conn = init_db().map_err(|e| e.to_string())?;

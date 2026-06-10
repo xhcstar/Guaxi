@@ -268,6 +268,7 @@ pub async fn kg_extract_concepts(
             if abs.is_file() {
                 let (c, r) = extract_one_file(&kb_name, rp, &abs.to_string_lossy(), modelid, &mut sessionid).await?;
                 invalidate_kb_caches(&kb_name);
+                crate::commands::kgraph::write_manual_snapshot(&kb_name);
                 return Ok(KgExtractResult { kb_name, files_processed: 1, concepts: c, relations: r, failures: 0 });
             }
         }
@@ -293,6 +294,7 @@ pub async fn kg_extract_concepts(
     }
 
     invalidate_kb_caches(&kb_name);
+    crate::commands::kgraph::write_manual_snapshot(&kb_name);
     info!(
         "kg_extract_concepts done kb={} files={} concepts={} relations={} fail={}",
         kb_name, processed, concepts, relations, failures

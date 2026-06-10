@@ -1,6 +1,7 @@
 <template>
   <n-message-provider placement="bottom">
     <div class="page">
+      <!-- 顶部工具栏 -->
       <div class="header">
         <div class="header-left">
           <div class="title">知识库管理器</div>
@@ -15,23 +16,12 @@
             style="width: 240px"
             @update:value="handleKbChange"
           />
+          <n-text v-if="graphMeta.returned" depth="3" class="meta-hint">
+            {{ graphMeta.returned }} / {{ graphMeta.total }} 节点{{ graphMeta.truncated ? '(已截断)' : '' }}
+          </n-text>
         </div>
-        <n-space size="small" align="center">
-          <n-tooltip v-if="viewMode === 'graph'" trigger="hover">
-            <template #trigger>
-              <n-icon-wrapper
-                :size="28"
-                :border-radius="8"
-                class="header-icon"
-                :class="{ active: !graphLeftVisible }"
-                @click="graphLeftVisible = !graphLeftVisible"
-              >
-                <n-icon :component="PanelLeftContract24Regular" size="18" />
-              </n-icon-wrapper>
-            </template>
-            {{ graphLeftVisible ? '隐藏左侧面板' : '显示左侧面板' }}
-          </n-tooltip>
 
+        <n-space size="small" align="center">
           <n-tooltip trigger="hover">
             <template #trigger>
               <n-icon-wrapper :size="28" :border-radius="8" class="header-icon" @click="refresh">
@@ -43,11 +33,38 @@
 
           <n-tooltip trigger="hover">
             <template #trigger>
-              <n-icon-wrapper :size="28" :border-radius="8" class="header-icon" @click="syncAll">
-                <n-icon :component="SyncOutline" size="18" />
+              <n-icon-wrapper :size="28" :border-radius="8" class="header-icon" @click="rebuildIndex">
+                <n-icon :component="HammerOutline" size="18" />
               </n-icon-wrapper>
             </template>
-            同步全部元数据
+            重建图索引
+          </n-tooltip>
+
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-icon-wrapper :size="28" :border-radius="8" class="header-icon" @click="embedKb">
+                <n-icon :component="SparklesOutline" size="18" />
+              </n-icon-wrapper>
+            </template>
+            生成 / 更新向量嵌入
+          </n-tooltip>
+
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-icon-wrapper :size="28" :border-radius="8" class="header-icon" @click="detectCommunities">
+                <n-icon :component="GitNetworkOutline" size="18" />
+              </n-icon-wrapper>
+            </template>
+            社区检测
+          </n-tooltip>
+
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-icon-wrapper :size="28" :border-radius="8" class="header-icon" @click="extractConcepts">
+                <n-icon :component="BulbOutline" size="18" />
+              </n-icon-wrapper>
+            </template>
+            LLM 概念抽取
           </n-tooltip>
 
           <n-tooltip trigger="hover">
@@ -56,1700 +73,706 @@
                 :size="28"
                 :border-radius="8"
                 class="header-icon"
-                :class="{ active: viewMode === 'graph' }"
-                @click="toggleViewMode"
+                :class="{ active: syncing }"
+                @click="syncNow"
               >
-                <n-icon :component="viewMode === 'meta' ? LayersOutline : ListOutline" size="18" />
+                <n-icon :component="SyncOutline" size="18" />
               </n-icon-wrapper>
             </template>
-            {{ viewMode === 'meta' ? '切换到图形编辑模式' : '切换到元数据模式' }}
+            多机同步(.md + 人工知识层)
           </n-tooltip>
 
-          <n-tooltip v-if="viewMode === 'graph'" trigger="hover">
+          <n-tooltip trigger="hover">
             <template #trigger>
-              <n-icon-wrapper
-                :size="28"
-                :border-radius="8"
-                class="header-icon"
-                :class="{ active: !graphRightVisible }"
-                @click="graphRightVisible = !graphRightVisible"
-              >
-                <n-icon :component="PanelRightContract24Regular" size="18" />
-              </n-icon-wrapper>
+              <n-switch v-model:value="manualSyncEnabled" size="small" @update:value="toggleManualSync">
+                <template #checked>精细</template>
+                <template #unchecked>精细</template>
+              </n-switch>
             </template>
-            {{ graphRightVisible ? '隐藏右侧面板' : '显示右侧面板' }}
+            机制B:行级精细同步(并发编辑更友好;删除不传播)
           </n-tooltip>
         </n-space>
       </div>
 
-      <div v-if="viewMode === 'meta'" class="main">
-        <div class="left">
-          <div class="left-body">
-            <n-tree
-              v-if="treeData.length"
-              class="kb-tree"
-              block-line
-              :data="treeData"
-              :expanded-keys="expandedKeys"
-              :selected-keys="selectedKeys"
-              @update:expanded-keys="expandedKeys = $event"
-              @update:selected-keys="handleSelectNode"
-            />
-
-            <div v-else class="empty">
-              请选择一个知识库
-            </div>
-          </div>
-        </div>
-
-        <div class="right">
-          <div class="editor-header">
-            <div class="editor-title">{{ editorTitle }}</div>
-            <n-space justify="end">
-              <n-button size="small" @click="reloadCurrent" :disabled="loading || !selectedKbName">重新加载</n-button>
-              <n-button size="small" tertiary @click="runKbMetaAgent" :loading="kbAgentProcessing" :disabled="loading || kbAgentProcessing || !canRunKbAgent">AI整理</n-button>
-              <n-button type="primary" size="small" @click="saveCurrent" :disabled="loading || !canSave">保存</n-button>
-            </n-space>
-          </div>
-
-          <div v-if="showBatchStatusPanel" class="batch-panel">
-            <div class="batch-progress-head">
-              <div class="batch-progress-title">批处理进度</div>
-              <div class="batch-progress-text">{{ batchProgressDone }}/{{ batchProgressTotal }} ({{ batchProgressPercent }}%)</div>
-            </div>
-            <div v-if="batchProgressPhaseText" class="batch-progress-phase">{{ batchProgressPhaseText }}</div>
-            <n-progress
-              type="line"
-              :percentage="batchProgressPercent"
-              :processing="batchProgressVisible"
-              :height="10"
-              indicator-placement="inside"
-            />
-            <div class="batch-status-list">
-              <div v-for="item in batchFileStatuses" :key="item.relPath" class="batch-status-item">
-                <div class="batch-status-main">
-                  <div class="batch-status-path">{{ item.relPath }}</div>
-                  <n-tag size="small" :type="batchStatusTagType(item.status)">{{ batchStatusLabel(item.status) }}</n-tag>
-                </div>
-                <div v-if="item.reason" class="batch-status-reason">{{ item.reason }}</div>
-              </div>
-            </div>
-          </div>
-
-          <div class="editor-body">
-            <div v-if="!selectedKbName" class="empty">请选择一个知识库</div>
-
-            <n-form v-else-if="currentKind === 'kb' && kbDraft" :model="kbDraft" label-placement="left" label-width="96">
-              <n-form-item label="知识库名">
-                <n-input :value="kbDraft.knowledge_base_name" disabled />
-              </n-form-item>
-              <n-form-item label="类型">
-                <n-input v-model:value="kbDraft.knowledge_base_type" placeholder="例如：技术 / 学习 / 项目" />
-              </n-form-item>
-              <n-form-item label="路径">
-                <n-input :value="kbDraft.knowledge_base_location" disabled />
-              </n-form-item>
-              <n-form-item label="创建时间">
-                <n-input :value="kbDraft.created_at" disabled />
-              </n-form-item>
-              <n-form-item label="修改时间">
-                <n-input :value="kbDraft.modified_at" disabled />
-              </n-form-item>
-              <n-form-item label="文件数">
-                <n-input :value="String(kbDraft.stats?.file_count ?? '')" disabled />
-              </n-form-item>
-              <n-form-item label="目录数">
-                <n-input :value="String(kbDraft.stats?.dir_count ?? '')" disabled />
-              </n-form-item>
-            </n-form>
-
-            <n-form v-else-if="currentKind === 'file' && fileDraft" :model="fileDraft" label-placement="left" label-width="96">
-              <n-form-item label="文件名">
-                <n-input :value="fileDraft.file_name" disabled />
-              </n-form-item>
-              <n-form-item label="相对路径">
-                <n-input :value="fileDraft.rel_path" disabled />
-              </n-form-item>
-              <n-form-item label="创建时间">
-                <n-input :value="fileDraft.created_at" disabled />
-              </n-form-item>
-              <n-form-item label="修改时间">
-                <n-input :value="fileDraft.modified_at" disabled />
-              </n-form-item>
-
-              <n-form-item label="文件标签">
-                <n-dynamic-tags v-model:value="fileDraft.file_tags" />
-              </n-form-item>
-              <n-form-item label="关联节点">
-                <n-dynamic-tags v-model:value="fileDraft.related_nodes" />
-              </n-form-item>
-
-              <n-form-item label="结构节点">
-                <n-collapse v-if="fileDraft.structure_nodes?.length">
-                  <n-collapse-item
-                    v-for="(n, idx) in fileDraft.structure_nodes"
-                    :key="n.stable_id || `${n.level}-${n.title}-${idx}`"
-                    :title="n.display_title || n.title"
-                  >
-                    <n-form-item label="标签">
-                      <n-dynamic-tags v-model:value="n.tags" />
-                    </n-form-item>
-                    <n-form-item label="关联">
-                      <n-dynamic-tags v-model:value="n.related_nodes" />
-                    </n-form-item>
-                    <n-form-item label="属性(JSON)">
-                      <n-input v-model:value="n.attrs_json" type="textarea" :autosize="{ minRows: 2, maxRows: 8 }" placeholder="{ }" />
-                    </n-form-item>
-                  </n-collapse-item>
-                </n-collapse>
-                <div v-else class="empty">该文件没有可扫描的 Markdown 结构</div>
-              </n-form-item>
-            </n-form>
-          </div>
-        </div>
+      <div v-if="busyText" class="busy-bar">
+        <n-spin :size="14" />
+        <span class="busy-text">{{ busyText }}</span>
       </div>
 
-      <GuaxiKnowledgeBaseGraphEditor
-        v-else
-        v-model:selected-kb-name="selectedKbName"
-        v-model:expanded-keys="expandedKeys"
-        v-model:selected-keys="selectedKeys"
-        v-model:left-visible="graphLeftVisible"
-        v-model:right-visible="graphRightVisible"
-        :loading="loading"
-        :kb-options="kbOptions"
-        :tree-data="treeData"
-        :kb-location="currentKbLocation"
-        :root-key="ROOT_KEY"
-        @kb-change="handleKbChange"
-        @patch-tree="handleGraphPatchTree"
-        @reload="handleGraphReload"
-      />
+      <div class="main">
+        <!-- 左:节点列表 + 语义检索 -->
+        <div class="left">
+          <div class="left-toolbar">
+            <n-input
+              v-model:value="search"
+              size="small"
+              clearable
+              placeholder="按名称过滤 / 回车语义检索"
+              @keyup.enter="semanticSearch"
+            >
+              <template #prefix><n-icon :component="SearchOutline" /></template>
+            </n-input>
+            <n-select
+              v-model:value="typeFilter"
+              size="small"
+              multiple
+              :options="typeOptions"
+              placeholder="类型"
+              style="margin-top: 8px"
+            />
+          </div>
+
+          <n-scrollbar class="node-scroll">
+            <div v-if="semanticResults.length" class="section-label">语义检索结果</div>
+            <div
+              v-for="n in semanticResults"
+              :key="'s-' + n.id"
+              class="node-row"
+              :class="{ selected: selectedNode && selectedNode.id === n.id }"
+              @click="selectNode(n)"
+            >
+              <span class="node-type" :data-t="n.type">{{ typeLabel(n.type) }}</span>
+              <span class="node-name">{{ n.name || n.id }}</span>
+              <span class="node-score">{{ (n.score || 0).toFixed(2) }}</span>
+            </div>
+
+            <div v-if="semanticResults.length" class="section-label">全部节点</div>
+            <div
+              v-for="n in filteredNodes"
+              :key="n.id"
+              class="node-row"
+              :class="{ selected: selectedNode && selectedNode.id === n.id }"
+              @click="selectNode(n)"
+            >
+              <span class="node-type" :data-t="n.type">{{ typeLabel(n.type) }}</span>
+              <span class="node-name">{{ n.name || n.id }}</span>
+              <span v-if="n.tags && n.tags.length" class="node-tagcount">#{{ n.tags.length }}</span>
+            </div>
+
+            <div v-if="!filteredNodes.length && !semanticResults.length" class="empty">
+              {{ selectedKbName ? '无节点,试试重建图索引' : '请选择一个知识库' }}
+            </div>
+          </n-scrollbar>
+        </div>
+
+        <!-- 右:选中节点编辑 -->
+        <div class="right">
+          <div v-if="!selectedNode" class="empty big">在左侧选择一个知识点进行编辑</div>
+
+          <template v-else>
+            <div class="editor-head">
+              <span class="node-type" :data-t="selectedNode.type">{{ typeLabel(selectedNode.type) }}</span>
+              <span class="editor-title">{{ selectedNode.name || selectedNode.id }}</span>
+            </div>
+            <div class="node-meta">
+              <span v-if="selectedNode.rel_path">路径:{{ selectedNode.rel_path }}</span>
+              <span>度:{{ selectedNode.degree ?? 0 }}</span>
+              <span>PageRank:{{ (selectedNode.pagerank || 0).toFixed(4) }}</span>
+              <span v-if="selectedNode.community_id != null">社区:{{ selectedNode.community_id }}</span>
+            </div>
+
+            <n-scrollbar class="editor-scroll">
+              <!-- 标签 -->
+              <div class="block">
+                <div class="block-head">
+                  <span class="block-title">标签</span>
+                  <n-tooltip trigger="hover">
+                    <template #trigger>
+                      <n-button text @click="loadTagSuggestions" :loading="tagSugLoading">
+                        <template #icon><n-icon :component="BulbOutline" /></template>
+                      </n-button>
+                    </template>
+                    推荐相关标签
+                  </n-tooltip>
+                </div>
+                <n-space size="small" :wrap="true">
+                  <n-tag
+                    v-for="t in selectedTags"
+                    :key="t"
+                    closable
+                    size="medium"
+                    @close="removeTag(t)"
+                  >{{ t }}</n-tag>
+                  <n-input
+                    v-model:value="newTag"
+                    size="small"
+                    placeholder="新标签↵"
+                    style="width: 140px"
+                    @keyup.enter="addTag"
+                  />
+                </n-space>
+                <div v-if="tagSuggestions.length" class="suggest-row">
+                  <span class="suggest-label">建议:</span>
+                  <n-tag
+                    v-for="s in tagSuggestions"
+                    :key="'ts-' + s.tag"
+                    size="small"
+                    type="info"
+                    class="suggest-tag"
+                    @click="acceptTagSuggestion(s)"
+                  >+ {{ s.tag }} ({{ s.score.toFixed(2) }})</n-tag>
+                </div>
+              </div>
+
+              <!-- 关系 -->
+              <div class="block">
+                <div class="block-head">
+                  <span class="block-title">关系</span>
+                  <n-tooltip trigger="hover">
+                    <template #trigger>
+                      <n-button text @click="loadRelationSuggestions" :loading="relSugLoading">
+                        <template #icon><n-icon :component="BulbOutline" /></template>
+                      </n-button>
+                    </template>
+                    推荐相关关系
+                  </n-tooltip>
+                </div>
+
+                <div v-for="(e, i) in selectedEdges" :key="'e-' + i" class="edge-row">
+                  <span class="edge-dir">{{ e.dir }}</span>
+                  <span class="edge-type">{{ edgeTypeLabel(e.type) }}</span>
+                  <span class="edge-target">{{ e.otherName }}</span>
+                  <span class="edge-source">{{ sourceLabel(e.source) }}</span>
+                  <n-tooltip v-if="e.removable" trigger="hover">
+                    <template #trigger>
+                      <n-button text type="error" @click="removeRelation(e)">
+                        <template #icon><n-icon :component="TrashOutline" /></template>
+                      </n-button>
+                    </template>
+                    删除该关系
+                  </n-tooltip>
+                </div>
+                <div v-if="!selectedEdges.length" class="muted">暂无关系</div>
+
+                <div class="add-relation">
+                  <n-select
+                    v-model:value="relationTarget"
+                    size="small"
+                    filterable
+                    clearable
+                    placeholder="选择目标节点新建关系"
+                    :options="relationTargetOptions"
+                    style="flex: 1"
+                  />
+                  <n-tooltip trigger="hover">
+                    <template #trigger>
+                      <n-select
+                        v-model:value="relationType"
+                        size="small"
+                        filterable
+                        tag
+                        :options="relationTypeOptions"
+                        placeholder="关系类型"
+                        style="width: 130px"
+                      />
+                    </template>
+                    选择内置关系类型,或直接输入自定义类型
+                  </n-tooltip>
+                  <n-tooltip trigger="hover">
+                    <template #trigger>
+                      <n-button size="small" type="primary" :disabled="!relationTarget" @click="confirmRelation">
+                        <template #icon><n-icon :component="AddOutline" /></template>
+                      </n-button>
+                    </template>
+                    新建关系
+                  </n-tooltip>
+                </div>
+
+                <div v-if="relationSuggestions.length" class="suggest-row">
+                  <span class="suggest-label">建议:</span>
+                  <n-tag
+                    v-for="s in relationSuggestions"
+                    :key="'rs-' + s.to"
+                    size="small"
+                    type="info"
+                    class="suggest-tag"
+                    @click="acceptRelationSuggestion(s)"
+                  >+ {{ s.to_name }} ({{ s.score.toFixed(2) }})</n-tag>
+                </div>
+              </div>
+            </n-scrollbar>
+          </template>
+        </div>
+      </div>
     </div>
   </n-message-provider>
 </template>
 
 <script setup>
-import { createLogger } from '../../utils/logger'
-import { computed, onMounted, ref, watch } from 'vue'
-import { NButton, NCollapse, NCollapseItem, NDynamicTags, NForm, NFormItem, NIcon, NIconWrapper, NInput, NProgress, NSelect, NSpace, NTag, NTooltip, NTree, createDiscreteApi } from 'naive-ui'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import {
+  NButton, NIcon, NIconWrapper, NInput, NScrollbar, NSelect, NSpace, NSpin,
+  NSwitch, NTag, NText, NTooltip, NMessageProvider, createDiscreteApi,
+} from 'naive-ui'
+import {
+  RefreshOutline, SyncOutline, SearchOutline, HammerOutline, SparklesOutline,
+  GitNetworkOutline, BulbOutline, AddOutline, TrashOutline,
+} from '@vicons/ionicons5'
 import { invoke } from '@tauri-apps/api/core'
-import { LayersOutline, ListOutline, RefreshOutline, SyncOutline } from '@vicons/ionicons5'
-import { PanelLeftContract24Regular, PanelRightContract24Regular } from '@vicons/fluent'
-import GuaxiKnowledgeBaseGraphEditor from './GuaxiKnowledgeBaseGraphEditor.vue'
-import { useRightSiderStore } from '../../stores/rightSiderStore'
+import { listen } from '@tauri-apps/api/event'
+import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
+import { createLogger } from '../../utils/logger'
 
 const logger = createLogger('GuaxiKnowledgeBaseManager')
-// 顶部工具条使用 createDiscreteApi，避免依赖组件上下文
 const { message } = createDiscreteApi(['message'])
-const rightSiderStore = useRightSiderStore()
+const store = useKnowledgeBaseStore()
 
-// 主界面模式：meta（当前 JSON/表单编辑） / graph（图形化目录树编辑）
-const viewMode = ref('graph')
-
-// 图形模式下左右面板显隐
-const graphLeftVisible = ref(true)
-const graphRightVisible = ref(false)
-
-const toggleViewMode = () => {
-  const next = viewMode.value === 'meta' ? 'graph' : 'meta'
-  viewMode.value = next
-
-  if (next === 'graph') {
-    graphLeftVisible.value = true
-    graphRightVisible.value = false
-
-    // 图形模式默认不全展开，只保留根节点展开；选中节点会在图形面板内按需展开并聚焦
-    expandedKeys.value = [ROOT_KEY]
-    if (!Array.isArray(selectedKeys.value) || !selectedKeys.value.length) {
-      selectedKeys.value = [ROOT_KEY]
-    }
-  }
+const STRUCTURAL_EDGES = ['contains', 'next']
+const TYPE_LABELS = {
+  'knowledge-base': '知识库', directory: '目录', file: '文件',
+  section: '章节', paragraph: '段落', concept: '概念',
 }
+const typeLabel = (t) => TYPE_LABELS[t] || t
+const typeOptions = Object.entries(TYPE_LABELS).map(([value, label]) => ({ label, value }))
 
-const ROOT_KEY = '__kb_root__'
+// 内置关系类型(值为存储用英文,标签为中文);用户也可在下拉框直接输入自定义类型。
+const RELATION_TYPES = [
+  { value: 'related', label: '相关' },
+  { value: 'prerequisite', label: '前置(先修)' },
+  { value: 'elaborates', label: '阐述' },
+  { value: 'contradicts', label: '矛盾' },
+  { value: 'part-of', label: '部分' },
+  { value: 'similar', label: '相似' },
+  { value: 'mention', label: '提及' },
+]
+const relationTypeOptions = RELATION_TYPES.map((r) => ({ label: r.label, value: r.value }))
+
+const EDGE_TYPE_LABELS = {
+  contains: '包含', next: '后续', link: '链接', mention: '提及', tag: '标签',
+  related: '相关', prerequisite: '前置', elaborates: '阐述', contradicts: '矛盾',
+  'part-of': '部分', similar: '相似',
+}
+const edgeTypeLabel = (t) => EDGE_TYPE_LABELS[t] || t
+
+const SOURCE_LABELS = {
+  manual: '手动', llm: 'AI', semantic: '语义', structural: '结构',
+  wikilink: '链接', mdlink: '链接', inline: '行内', zeroshot: '推断', related: '相关',
+}
+const sourceLabel = (s) => SOURCE_LABELS[s] || s
 
 const loading = ref(false)
-const kbRootPath = ref('')
-const kbList = ref([])
+const busyText = ref('')
+const syncing = ref(false)
+const manualSyncEnabled = ref(false)
 
-const selectedKbName = ref('')
-const kbMeta = ref(null)
-const kbDraft = ref(null)
+const selectedKbName = ref(null)
+const kbOptions = ref([])
 
-const treeData = ref([])
-const expandedKeys = ref(['__kb_root__'])
-const selectedKeys = ref(['__kb_root__'])
-
-const currentKind = ref('')
-const currentRelPath = ref('')
-
-const fileDraft = ref(null)
-const kbAgentProcessing = ref(false)
-const kbAgentSessionId = ref('')
-const batchProgressVisible = ref(false)
-const batchProgressTotal = ref(0)
-const batchProgressDone = ref(0)
-const batchProgressPhase = ref('')
-const batchFileStatuses = ref([])
-
-const canSave = computed(() => {
-  if (!selectedKbName.value) return false
-  if (currentKind.value === 'kb') return !!kbDraft.value
-  if (currentKind.value === 'file') return !!fileDraft.value
-  return false
+const nodes = ref([])
+const edges = ref([])
+const graphMeta = ref({ total: 0, returned: 0, truncated: false })
+const nodeMap = computed(() => {
+  const m = new Map()
+  for (const n of nodes.value) m.set(n.id, n)
+  return m
 })
 
-const kbAgentModelId = computed(() => {
-  const n = Number(rightSiderStore?.assistant?.modelId)
-  return Number.isFinite(n) ? n : 5
+const search = ref('')
+const typeFilter = ref([])
+const semanticResults = ref([])
+
+const selectedNode = ref(null)
+const newTag = ref('')
+const tagSuggestions = ref([])
+const tagSugLoading = ref(false)
+const relationSuggestions = ref([])
+const relSugLoading = ref(false)
+const relationTarget = ref(null)
+const relationType = ref('related')
+
+const filteredNodes = computed(() => {
+  const q = search.value.trim().toLowerCase()
+  const types = typeFilter.value
+  return nodes.value.filter((n) => {
+    if (types.length && !types.includes(n.type)) return false
+    if (q && !(n.name || '').toLowerCase().includes(q) && !(n.id || '').toLowerCase().includes(q)) return false
+    return true
+  }).slice(0, 800)
 })
 
-const batchProgressPercent = computed(() => {
-  const total = Number(batchProgressTotal.value || 0)
-  if (!total) return 0
-  return Math.min(100, Math.max(0, Math.round((Number(batchProgressDone.value || 0) / total) * 100)))
-})
+const selectedTags = computed(() => (selectedNode.value?.tags) || [])
 
-const showBatchStatusPanel = computed(() => {
-  return batchProgressVisible.value || (Array.isArray(batchFileStatuses.value) && batchFileStatuses.value.length > 0)
-})
-
-const batchProgressPhaseText = computed(() => {
-  const phase = String(batchProgressPhase.value || '')
-  if (!phase) return ''
-  return `阶段：${phase}`
-})
-
-const batchStatusLabel = (status) => {
-  const s = String(status || '').toLowerCase()
-  if (s === 'success') return '成功'
-  if (s === 'degraded') return '降级'
-  if (s === 'failed') return '失败'
-  if (s === 'running') return '处理中'
-  return '待处理'
-}
-
-const batchStatusTagType = (status) => {
-  const s = String(status || '').toLowerCase()
-  if (s === 'success') return 'success'
-  if (s === 'degraded') return 'warning'
-  if (s === 'failed') return 'error'
-  if (s === 'running') return 'info'
-  return 'default'
-}
-
-const startBatchStatus = (relPaths) => {
-  const list = Array.isArray(relPaths) ? relPaths : []
-  batchProgressVisible.value = true
-  batchProgressTotal.value = list.length * 2
-  batchProgressDone.value = 0
-  batchProgressPhase.value = '预加载文件元数据与内容'
-  batchFileStatuses.value = list.map(relPath => ({
-    relPath: String(relPath || ''),
-    status: 'pending',
-    reason: ''
-  }))
-}
-
-const patchBatchStatus = (relPath, status, reason = '') => {
-  const key = String(relPath || '')
-  const idx = batchFileStatuses.value.findIndex(x => String(x?.relPath || '') === key)
-  const next = { relPath: key, status: String(status || 'pending'), reason: String(reason || '') }
-  if (idx < 0) batchFileStatuses.value = [...batchFileStatuses.value, next]
-  else batchFileStatuses.value[idx] = next
-  batchFileStatuses.value = [...batchFileStatuses.value]
-}
-
-const tickBatchProgress = (step = 1) => {
-  const s = Math.max(1, Number(step || 1))
-  batchProgressDone.value = Math.min(batchProgressTotal.value, Number(batchProgressDone.value || 0) + s)
-}
-
-const isMarkdownRelPath = (relPath) => {
-  const p = String(relPath || '').trim().toLowerCase()
-  return p.endsWith('.md') || p.endsWith('.markdown')
-}
-
-const toAbsPathByRel = (relPath) => {
-  const base = String(currentKbLocation.value || '').replace(/\\/g, '/').replace(/\/+$/, '')
-  const rel = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '')
-  if (!base || !rel) return ''
-  return `${base}/${rel}`
-}
-
-const canRunKbAgent = computed(() => {
-  if (!selectedKbName.value) return false
-  if (currentKind.value === 'kb') return !!kbDraft.value
-  if (currentKind.value === 'file') return !!fileDraft.value && isMarkdownRelPath(currentRelPath.value)
-  return false
-})
-
-const kbOptions = computed(() => {
-  return kbList.value.map(x => ({
-    label: x?.knowledge_base_name || '',
-    value: x?.knowledge_base_name || ''
-  })).filter(x => x.value)
-})
-
-const editorTitle = computed(() => {
-  if (!selectedKbName.value) return ''
-  if (currentKind.value === 'file' && currentRelPath.value) {
-    const name = String(currentRelPath.value).split('/').pop() || currentRelPath.value
-    return `${name}_meta.json`
-  }
-  return `${selectedKbName.value}_meta.json`
-})
-
-const buildTreeNodes = (node) => {
+const selectedEdges = computed(() => {
+  const node = selectedNode.value
   if (!node) return []
-  const kids = Array.isArray(node.children) ? node.children : []
-  return kids.map(ch => ({
-    key: ch.rel_path,
-    label: ch.name,
-    isDir: !!ch.is_dir,
-    children: ch.is_dir ? buildTreeNodes(ch) : undefined
-  }))
-}
-
-// 段落节点：使用“文件相对路径/__para__/stable_id”作为 key，便于随文件/目录重命名同步 remap
-const PARA_SEG = '__para__'
-const PARA_MARK = `/${PARA_SEG}/`
-
-const normalizeRelKey = (p) => String(p || '').replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '')
-
-const extractFileRelPathFromTreeKey = (key) => {
-  const k = String(key || '')
-  if (!k || k === ROOT_KEY) return ''
-  const idx = k.indexOf(PARA_MARK)
-  return idx >= 0 ? k.slice(0, idx) : k
-}
-
-const findTreeNodeByKey = (root, key) => {
-  const k = String(key || '')
-  if (!root || !k) return null
-
-  const dfs = (n) => {
-    if (!n) return null
-    if (String(n.key || '') === k) return n
-    const kids = Array.isArray(n.children) ? n.children : []
-    for (const ch of kids) {
-      const hit = dfs(ch)
-      if (hit) return hit
-    }
-    return null
-  }
-
-  return dfs(root)
-}
-
-const fileParagraphChildrenCache = new Map()
-
-const makeParagraphChildrenFromFileMeta = (fileRelPath, meta) => {
-  const rel = normalizeRelKey(fileRelPath)
-  const nodes = Array.isArray(meta?.structure_nodes) ? meta.structure_nodes : []
   const out = []
-
-  nodes.forEach((n, idx) => {
-    const title = String(n?.title || '').trim()
-    const level = Number(n?.level || 0)
-    const attrs = (n?.attrs && typeof n.attrs === 'object') ? n.attrs : {}
-    const kind = String(attrs?.kind || (level > 0 ? 'section' : 'paragraph'))
-    if (kind !== 'paragraph') return
-
-    const stableId = typeof attrs?.stable_id === 'string' && attrs.stable_id
-      ? attrs.stable_id
-      : `idx_${idx}`
-
-    const start = attrs?.start_line
-    const end = attrs?.end_line
-
-    const display = title
-      ? `P L${start ?? ''}-${end ?? ''} ${title}`
-      : `P L${start ?? ''}-${end ?? ''}`
-
+  for (const e of edges.value) {
+    let other = null
+    let dir = ''
+    if (e.from === node.id) { other = e.to; dir = '→' }
+    else if (e.to === node.id) { other = e.from; dir = '←' }
+    else continue
+    const on = nodeMap.value.get(other)
+    const removable = !STRUCTURAL_EDGES.includes(e.type) && e.source !== 'structural'
     out.push({
-      key: `${rel}/${PARA_SEG}/${stableId}`,
-      label: display,
-      isDir: false,
-      kind: 'paragraph',
-      isParagraph: true,
-      stableId,
-      startLine: start,
-      endLine: end
+      from: e.from, to: e.to, type: e.type, source: e.source, dir,
+      otherName: on ? (on.name || other) : other, removable,
     })
-  })
-
+  }
   return out
-}
-
-const applyParagraphChildrenToTree = (fileRelPath, children) => {
-  const rel = normalizeRelKey(fileRelPath)
-  const root = Array.isArray(treeData.value) ? treeData.value[0] : null
-  if (!root || !rel) return false
-
-  const fileNode = findTreeNodeByKey(root, rel)
-  if (!fileNode || fileNode.isDir) return false
-
-  const nextChildren = Array.isArray(children) ? children : []
-  fileNode.children = nextChildren.length ? nextChildren : undefined
-
-  // 触发树组件刷新（深层对象变更在某些情况下不会立刻触发 n-tree 重绘）
-  treeData.value = [...(treeData.value || [])]
-  return true
-}
-
-const ensureParagraphChildrenForFile = async (fileRelPath) => {
-  const rel = normalizeRelKey(fileRelPath)
-  if (!rel || !selectedKbName.value) return false
-
-  const root = Array.isArray(treeData.value) ? treeData.value[0] : null
-  if (!root) return false
-
-  const fileNode = findTreeNodeByKey(root, rel)
-  if (!fileNode || fileNode.isDir) return false
-
-  if (Array.isArray(fileNode.children) && fileNode.children.some(ch => String(ch?.kind || '') === 'paragraph')) {
-    return true
-  }
-
-  if (fileParagraphChildrenCache.has(rel)) {
-    const cached = fileParagraphChildrenCache.get(rel)
-    applyParagraphChildrenToTree(rel, cached)
-    return true
-  }
-
-  try {
-    logger.info('[KBManager] load paragraph nodes', { relPath: rel })
-    const meta = await invoke('kbmeta_read_file_meta', { knowledgeBaseName: selectedKbName.value, relPath: rel })
-    const children = makeParagraphChildrenFromFileMeta(rel, meta)
-    fileParagraphChildrenCache.set(rel, children)
-    applyParagraphChildrenToTree(rel, children)
-
-    if (children.length) {
-      expandedKeys.value = Array.from(new Set([...(expandedKeys.value || []), ROOT_KEY, rel]))
-    }
-
-    logger.info('[KBManager] paragraph nodes ready', { relPath: rel, count: children.length })
-    return true
-  } catch (e) {
-    logger.error('[KBManager] load paragraph nodes failed:', e)
-    return false
-  }
-}
-
-const deepClone = (v) => (v == null ? v : JSON.parse(JSON.stringify(v)))
-
-const uniqueStringList = (arr) => {
-  const list = Array.isArray(arr) ? arr : []
-  const normalized = list.map(x => String(x || '').trim()).filter(Boolean)
-  return Array.from(new Set(normalized))
-}
-
-const mergeUniqueStringList = (base, patch) => {
-  return uniqueStringList([...(Array.isArray(base) ? base : []), ...(Array.isArray(patch) ? patch : [])])
-}
-
-const pickResultArray = (obj, names) => {
-  if (!obj || typeof obj !== 'object') return []
-  for (const key of names) {
-    const v = obj?.[key]
-    if (Array.isArray(v)) return v
-  }
-  return []
-}
-
-const pickResultValue = (obj, names) => {
-  if (!obj || typeof obj !== 'object') return undefined
-  for (const key of names) {
-    if (Object.prototype.hasOwnProperty.call(obj, key)) return obj[key]
-  }
-  return undefined
-}
-
-const relationHint = (toStableId, relation) => {
-  const toId = String(toStableId || '').trim()
-  const rel = String(relation || '').trim()
-  if (!toId) return ''
-  return rel ? `${toId}(${rel})` : toId
-}
-
-const makeFileDraft = (meta) => {
-  const d = deepClone(meta) || {}
-  d.file_tags = Array.isArray(d.file_tags) ? d.file_tags : []
-  d.related_nodes = Array.isArray(d.related_nodes) ? d.related_nodes : []
-  const nodes = Array.isArray(d.structure_nodes) ? d.structure_nodes : []
-
-  d.structure_nodes = nodes.map(n => {
-    const title = String(n?.title || '')
-    const level = Number(n?.level || 0)
-    const attrs = (n?.attrs && typeof n.attrs === 'object') ? n.attrs : {}
-    const kind = String(attrs?.kind || (level > 0 ? 'section' : 'paragraph'))
-    const stable_id = typeof attrs?.stable_id === 'string' ? attrs.stable_id : ''
-    const start = attrs?.start_line
-    const end = attrs?.end_line
-
-    const display_title = kind === 'paragraph'
-      ? `P L${start ?? ''}-${end ?? ''} ${title}`
-      : `H${level} ${title}`
-
-    return {
-      title,
-      level,
-      kind,
-      stable_id,
-      tags: Array.isArray(n?.tags) ? n.tags : [],
-      related_nodes: Array.isArray(n?.related_nodes) ? n.related_nodes : [],
-      attrs_json: JSON.stringify(n?.attrs ?? {}, null, 2),
-      display_title
-    }
-  }).filter(n => n.title)
-
-  return d
-}
-
-const parseAttrsJsonObject = (raw) => {
-  const text = String(raw || '').trim()
-  if (!text) return {}
-  try {
-    const parsed = JSON.parse(text)
-    return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {}
-  } catch (e) {
-    logger.warn('[KBManager] parse attrs_json failed, fallback empty object', e)
-    return {}
-  }
-}
-
-const buildFileMetaForKbAgent = (draft) => {
-  const d = deepClone(draft) || {}
-  const nodes = Array.isArray(d.structure_nodes) ? d.structure_nodes : []
-  const structure_nodes = nodes.map(n => {
-    const attrs = parseAttrsJsonObject(n?.attrs_json)
-    const stable_id = String(n?.stable_id || '').trim()
-    if (stable_id && !attrs.stable_id) attrs.stable_id = stable_id
-    return {
-      title: String(n?.title || ''),
-      level: Number(n?.level || 0),
-      tags: uniqueStringList(n?.tags),
-      related_nodes: uniqueStringList(n?.related_nodes),
-      attrs
-    }
-  })
-
-  return {
-    file_name: String(d.file_name || ''),
-    rel_path: String(d.rel_path || currentRelPath.value || ''),
-    file_tags: uniqueStringList(d.file_tags),
-    related_nodes: uniqueStringList(d.related_nodes),
-    structure_nodes
-  }
-}
-
-const applyKbAgentResultToKbDraft = (result) => {
-  if (!kbDraft.value || !result || typeof result !== 'object') return false
-  let changed = false
-  const next = deepClone(kbDraft.value)
-  const nextType = String(pickResultValue(result, ['knowledge_base_type', 'knowledgeBaseType', 'kb_type', 'kbType']) || '').trim()
-  if (nextType && next.knowledge_base_type !== nextType) {
-    next.knowledge_base_type = nextType
-    changed = true
-  }
-  if (changed) kbDraft.value = next
-  return changed
-}
-
-const applyKbAgentResultToFileDraft = (result) => {
-  if (!fileDraft.value || !result || typeof result !== 'object') return false
-  let changed = false
-  const next = deepClone(fileDraft.value)
-
-  const fileTags = pickResultArray(result, ['file_tags', 'fileTags'])
-  if (fileTags.length) {
-    const merged = mergeUniqueStringList(next.file_tags, fileTags)
-    if (JSON.stringify(merged) !== JSON.stringify(uniqueStringList(next.file_tags))) {
-      next.file_tags = merged
-      changed = true
-    }
-  }
-
-  const fileRelated = pickResultArray(result, ['related_nodes', 'relatedNodes'])
-  if (fileRelated.length) {
-    const merged = mergeUniqueStringList(next.related_nodes, fileRelated)
-    if (JSON.stringify(merged) !== JSON.stringify(uniqueStringList(next.related_nodes))) {
-      next.related_nodes = merged
-      changed = true
-    }
-  }
-
-  const patches = pickResultArray(result, ['structure_nodes', 'structureNodes', 'nodes'])
-  if (patches.length && Array.isArray(next.structure_nodes)) {
-    for (const patch of patches) {
-      if (!patch || typeof patch !== 'object') continue
-      const stableId = String(pickResultValue(patch, ['stable_id', 'stableId', 'id', 'node_id']) || '').trim()
-      const title = String(pickResultValue(patch, ['title', 'name']) || '').trim()
-      const level = Number(pickResultValue(patch, ['level']) || 0)
-      const hit = next.structure_nodes.find(n => {
-        if (stableId && String(n?.stable_id || '').trim() === stableId) return true
-        if (title && Number(n?.level || 0) === level && String(n?.title || '').trim() === title) return true
-        return false
-      })
-      if (!hit) continue
-
-      const patchTags = pickResultArray(patch, ['tags'])
-      if (patchTags.length) {
-        const merged = mergeUniqueStringList(hit.tags, patchTags)
-        if (JSON.stringify(merged) !== JSON.stringify(uniqueStringList(hit.tags))) {
-          hit.tags = merged
-          changed = true
-        }
-      }
-
-      const patchRelated = pickResultArray(patch, ['related_nodes', 'relatedNodes'])
-      if (patchRelated.length) {
-        const merged = mergeUniqueStringList(hit.related_nodes, patchRelated)
-        if (JSON.stringify(merged) !== JSON.stringify(uniqueStringList(hit.related_nodes))) {
-          hit.related_nodes = merged
-          changed = true
-        }
-      }
-
-      const attrsPatch = pickResultValue(patch, ['attrs_patch', 'attrsPatch', 'attrs'])
-      if (attrsPatch && typeof attrsPatch === 'object' && !Array.isArray(attrsPatch)) {
-        const currentAttrs = parseAttrsJsonObject(hit.attrs_json)
-        const mergedAttrs = { ...currentAttrs, ...attrsPatch }
-        const nextJson = JSON.stringify(mergedAttrs, null, 2)
-        if (nextJson !== String(hit.attrs_json || '')) {
-          hit.attrs_json = nextJson
-          changed = true
-        }
-      }
-    }
-  }
-
-  const knowledgeRelations = pickResultArray(result, ['knowledge_relations', 'knowledgeRelations', 'relations'])
-  if (knowledgeRelations.length && Array.isArray(next.structure_nodes)) {
-    for (const edge of knowledgeRelations) {
-      if (!edge || typeof edge !== 'object') continue
-      const fromId = String(pickResultValue(edge, ['from_stable_id', 'fromStableId', 'from']) || '').trim()
-      const toId = String(pickResultValue(edge, ['to_stable_id', 'toStableId', 'to']) || '').trim()
-      const hint = relationHint(toId, pickResultValue(edge, ['relation', 'type', 'label']))
-      if (!fromId || !hint) continue
-      const fromNode = next.structure_nodes.find(n => String(n?.stable_id || '').trim() === fromId)
-      if (!fromNode) continue
-      const merged = mergeUniqueStringList(fromNode.related_nodes, [hint])
-      if (JSON.stringify(merged) !== JSON.stringify(uniqueStringList(fromNode.related_nodes))) {
-        fromNode.related_nodes = merged
-        changed = true
-      }
-    }
-  }
-
-  if (changed) fileDraft.value = next
-  return changed
-}
-
-const applyKbAgentResultToRawFileMeta = (fileMeta, result) => {
-  if (!fileMeta || typeof fileMeta !== 'object') return { ok: false, changed: false, meta: fileMeta }
-  if (!result || typeof result !== 'object') return { ok: false, changed: false, meta: fileMeta }
-  let changed = false
-  const next = deepClone(fileMeta)
-
-  const fileTags = pickResultArray(result, ['file_tags', 'fileTags'])
-  if (fileTags.length) {
-    const merged = mergeUniqueStringList(next.file_tags, fileTags)
-    if (JSON.stringify(merged) !== JSON.stringify(uniqueStringList(next.file_tags))) {
-      next.file_tags = merged
-      changed = true
-    }
-  }
-
-  const fileRelated = pickResultArray(result, ['related_nodes', 'relatedNodes'])
-  if (fileRelated.length) {
-    const merged = mergeUniqueStringList(next.related_nodes, fileRelated)
-    if (JSON.stringify(merged) !== JSON.stringify(uniqueStringList(next.related_nodes))) {
-      next.related_nodes = merged
-      changed = true
-    }
-  }
-
-  const patches = pickResultArray(result, ['structure_nodes', 'structureNodes', 'nodes'])
-  const nodes = Array.isArray(next.structure_nodes) ? next.structure_nodes : []
-  if (patches.length && nodes.length) {
-    for (const patch of patches) {
-      if (!patch || typeof patch !== 'object') continue
-      const stableId = String(pickResultValue(patch, ['stable_id', 'stableId', 'id', 'node_id']) || '').trim()
-      const title = String(pickResultValue(patch, ['title', 'name']) || '').trim()
-      const level = Number(pickResultValue(patch, ['level']) || 0)
-      const hit = nodes.find(n => {
-        const attrs = (n?.attrs && typeof n.attrs === 'object') ? n.attrs : {}
-        const sid = String(attrs?.stable_id || '').trim()
-        if (stableId && sid === stableId) return true
-        if (title && Number(n?.level || 0) === level && String(n?.title || '').trim() === title) return true
-        return false
-      })
-      if (!hit) continue
-
-      const patchTags = pickResultArray(patch, ['tags'])
-      if (patchTags.length) {
-        const merged = mergeUniqueStringList(hit.tags, patchTags)
-        if (JSON.stringify(merged) !== JSON.stringify(uniqueStringList(hit.tags))) {
-          hit.tags = merged
-          changed = true
-        }
-      }
-
-      const patchRelated = pickResultArray(patch, ['related_nodes', 'relatedNodes'])
-      if (patchRelated.length) {
-        const merged = mergeUniqueStringList(hit.related_nodes, patchRelated)
-        if (JSON.stringify(merged) !== JSON.stringify(uniqueStringList(hit.related_nodes))) {
-          hit.related_nodes = merged
-          changed = true
-        }
-      }
-
-      const attrsPatch = pickResultValue(patch, ['attrs_patch', 'attrsPatch', 'attrs'])
-      if (attrsPatch && typeof attrsPatch === 'object' && !Array.isArray(attrsPatch)) {
-        const attrs = (hit?.attrs && typeof hit.attrs === 'object') ? hit.attrs : {}
-        hit.attrs = { ...attrs, ...attrsPatch }
-        changed = true
-      }
-    }
-  }
-
-  const knowledgeRelations = pickResultArray(result, ['knowledge_relations', 'knowledgeRelations', 'relations'])
-  if (knowledgeRelations.length && nodes.length) {
-    for (const edge of knowledgeRelations) {
-      if (!edge || typeof edge !== 'object') continue
-      const fromId = String(pickResultValue(edge, ['from_stable_id', 'fromStableId', 'from']) || '').trim()
-      const toId = String(pickResultValue(edge, ['to_stable_id', 'toStableId', 'to']) || '').trim()
-      const hint = relationHint(toId, pickResultValue(edge, ['relation', 'type', 'label']))
-      if (!fromId || !hint) continue
-      const fromNode = nodes.find(n => {
-        const attrs = (n?.attrs && typeof n.attrs === 'object') ? n.attrs : {}
-        return String(attrs?.stable_id || '').trim() === fromId
-      })
-      if (!fromNode) continue
-      const merged = mergeUniqueStringList(fromNode.related_nodes, [hint])
-      if (JSON.stringify(merged) !== JSON.stringify(uniqueStringList(fromNode.related_nodes))) {
-        fromNode.related_nodes = merged
-        changed = true
-      }
-    }
-  }
-
-  return { ok: true, changed, meta: next }
-}
-
-const collectFileRelPathsFromTreeNode = (node, out = []) => {
-  if (!node || typeof node !== 'object') return out
-  const isDir = !!node.isDir
-  const key = String(node.key || '')
-  if (!isDir && key && key !== ROOT_KEY && !key.includes(PARA_MARK)) {
-    out.push(normalizeRelKey(key))
-    return out
-  }
-  const kids = Array.isArray(node.children) ? node.children : []
-  for (const ch of kids) collectFileRelPathsFromTreeNode(ch, out)
-  return out
-}
-
-const AGENT_FILE_CONTENT_LIMIT = 12000
-const AGENT_CONTEXT_EXCERPT_LIMIT = 1000
-const AGENT_CONTEXT_MAX_FILES = 18
-
-const parentDirOfRelPath = (relPath) => {
-  const rel = normalizeRelKey(relPath)
-  const i = rel.lastIndexOf('/')
-  return i >= 0 ? rel.slice(0, i) : ''
-}
-
-const topDirOfRelPath = (relPath) => {
-  const rel = normalizeRelKey(relPath)
-  const i = rel.indexOf('/')
-  return i >= 0 ? rel.slice(0, i) : rel
-}
-
-const pickContextFilesForTarget = (targetRelPath, entries) => {
-  const target = normalizeRelKey(targetRelPath)
-  const targetParent = parentDirOfRelPath(target)
-  const targetTop = topDirOfRelPath(target)
-  const arr = Array.isArray(entries) ? entries : []
-
-  const scored = arr
-    .filter(x => normalizeRelKey(x?.rel_path) && normalizeRelKey(x?.rel_path) !== target)
-    .map(x => {
-      const rel = normalizeRelKey(x.rel_path)
-      const parent = parentDirOfRelPath(rel)
-      const top = topDirOfRelPath(rel)
-      let score = 0
-      if (parent && targetParent && parent === targetParent) score += 10
-      if (top && targetTop && top === targetTop) score += 4
-      const tagsA = new Set((x.file_tags || []).map(v => String(v || '').trim()).filter(Boolean))
-      const tagsB = new Set()
-      for (const t of arr) {
-        if (normalizeRelKey(t?.rel_path) === target) {
-          for (const vv of (t.file_tags || [])) tagsB.add(String(vv || '').trim())
-          break
-        }
-      }
-      for (const tg of tagsA) {
-        if (tg && tagsB.has(tg)) score += 1
-      }
-      return { score, data: x }
-    })
-    .sort((a, b) => b.score - a.score)
-    .slice(0, AGENT_CONTEXT_MAX_FILES)
-    .map(x => x.data)
-
-  return scored
-}
-
-const runKbMetaAgent = async () => {
-  if (!canRunKbAgent.value || !selectedKbName.value) return
-
-  const task = currentKind.value === 'file' ? 'file' : 'kb'
-  const kbMetaPayload = deepClone(kbDraft.value || kbMeta.value || {})
-  const fileMetaPayload = task === 'file' ? buildFileMetaForKbAgent(fileDraft.value) : null
-
-  try {
-    kbAgentProcessing.value = true
-    logger.info('[KBManager] kbmeta_agent_process start', {
-      task,
-      kbName: selectedKbName.value,
-      relPath: currentRelPath.value,
-      modelid: kbAgentModelId.value
-    })
-
-    if (task === 'kb') {
-      const root = Array.isArray(treeData.value) ? treeData.value[0] : null
-      const relPaths = Array.from(new Set(collectFileRelPathsFromTreeNode(root, [])))
-        .filter(Boolean)
-        .filter(isMarkdownRelPath)
-      startBatchStatus(relPaths)
-      if (!relPaths.length) {
-        batchProgressVisible.value = false
-        message.info('当前知识库没有可处理的 Markdown 文件')
-        return
-      }
-
-      const fileMetaMap = new Map()
-      const fileContentMap = new Map()
-      for (const relPath of relPaths) {
-        try {
-          const currentMeta = await invoke('kbmeta_read_file_meta', {
-            knowledgeBaseName: selectedKbName.value,
-            relPath
-          })
-          fileMetaMap.set(relPath, currentMeta)
-          const absPath = toAbsPathByRel(relPath)
-          if (absPath) {
-            const content = await invoke('read_file_content', { path: absPath })
-            fileContentMap.set(relPath, String(content || '').slice(0, AGENT_FILE_CONTENT_LIMIT))
-          }
-        } catch (e) {
-          logger.warn('[KBManager] read file meta failed in batch pre-load', { relPath, error: String(e?.message || e) })
-        } finally {
-          tickBatchProgress()
-        }
-      }
-
-      const kbContextFiles = Array.from(fileMetaMap.entries()).map(([relPath, meta]) => ({
-        rel_path: relPath,
-        file_tags: Array.isArray(meta?.file_tags) ? meta.file_tags : [],
-        related_nodes: Array.isArray(meta?.related_nodes) ? meta.related_nodes : [],
-        content_excerpt: String(fileContentMap.get(relPath) || '').slice(0, AGENT_CONTEXT_EXCERPT_LIMIT),
-        structure_outline: Array.isArray(meta?.structure_nodes)
-          ? meta.structure_nodes.slice(0, 20).map(n => ({
-            title: String(n?.title || ''),
-            level: Number(n?.level || 0),
-            stable_id: String(n?.attrs?.stable_id || '')
-          }))
-          : []
-      }))
-
-      let updatedCount = 0
-      batchProgressPhase.value = '调用AI分析与写回'
-      for (const relPath of relPaths) {
-        try {
-          patchBatchStatus(relPath, 'running', '正在请求模型')
-          logger.info('[KBManager] batch file start', { relPath })
-          const currentMeta = fileMetaMap.get(relPath)
-          if (!currentMeta) {
-            patchBatchStatus(relPath, 'failed', '文件元数据缺失')
-            continue
-          }
-          const response = await invoke('kbmeta_agent_process', {
-            request: {
-              modelid: kbAgentModelId.value,
-              sessionid: kbAgentSessionId.value,
-              task: 'file',
-              kb_name: selectedKbName.value,
-              rel_path: relPath,
-              kb_meta: kbMetaPayload,
-              file_meta: currentMeta,
-              kb_context_files: pickContextFilesForTarget(relPath, kbContextFiles),
-              file_content: String(fileContentMap.get(relPath) || '')
-            }
-          })
-
-          if (response?.sessionid) kbAgentSessionId.value = String(response.sessionid)
-          const result = response?.result
-          logger.info('[KBManager] batch kbmeta_agent_process result keys', { relPath, keys: Object.keys(result || {}) })
-          const applied = applyKbAgentResultToRawFileMeta(currentMeta, result)
-          if (applied.ok && applied.changed) {
-            await invoke('kbmeta_save_file_meta', {
-              knowledgeBaseName: selectedKbName.value,
-              relPath,
-              meta: applied.meta
-            })
-            updatedCount += 1
-            const isDegraded = !String(response?.raw_answer || '').trim()
-            patchBatchStatus(relPath, isDegraded ? 'degraded' : 'success', isDegraded ? '已降级补全（模型结果不可用）' : '已更新')
-          } else if (applied.ok) {
-            patchBatchStatus(relPath, 'success', '无可应用变更')
-          } else {
-            patchBatchStatus(relPath, 'failed', 'AI 返回结果不可用')
-          }
-        } catch (e) {
-          const reason = String(e?.message || e)
-          logger.warn('[KBManager] batch kbmeta_agent_process failed on file', { relPath, error: reason })
-          patchBatchStatus(relPath, 'failed', reason)
-        } finally {
-          tickBatchProgress()
-        }
-      }
-
-      await loadKbMeta(selectedKbName.value)
-      batchProgressDone.value = batchProgressTotal.value
-      batchProgressPhase.value = '已完成'
-      batchProgressVisible.value = false
-      if (updatedCount > 0) {
-        message.success(`AI 已批量更新 ${updatedCount} 个文件元数据`)
-      } else {
-        message.info('AI 已完成分析，但没有可应用的变更')
-      }
-      return
-    }
-
-    const root = Array.isArray(treeData.value) ? treeData.value[0] : null
-    const allRelPaths = Array.from(new Set(collectFileRelPathsFromTreeNode(root, [])))
-      .filter(Boolean)
-      .filter(isMarkdownRelPath)
-    const kbContextFiles = []
-    const fileContentMap = new Map()
-    for (const relPath of allRelPaths) {
-      try {
-        const meta = await invoke('kbmeta_read_file_meta', {
-          knowledgeBaseName: selectedKbName.value,
-          relPath
-        })
-        const absPath = toAbsPathByRel(relPath)
-        let fileContent = ''
-        if (absPath) {
-          fileContent = String(await invoke('read_file_content', { path: absPath }) || '')
-          fileContentMap.set(relPath, fileContent.slice(0, AGENT_FILE_CONTENT_LIMIT))
-        }
-        kbContextFiles.push({
-          rel_path: relPath,
-          file_tags: Array.isArray(meta?.file_tags) ? meta.file_tags : [],
-          related_nodes: Array.isArray(meta?.related_nodes) ? meta.related_nodes : [],
-          content_excerpt: fileContent.slice(0, AGENT_CONTEXT_EXCERPT_LIMIT),
-          structure_outline: Array.isArray(meta?.structure_nodes)
-            ? meta.structure_nodes.slice(0, 20).map(n => ({
-              title: String(n?.title || ''),
-              level: Number(n?.level || 0),
-              stable_id: String(n?.attrs?.stable_id || '')
-            }))
-            : []
-        })
-      } catch (e) {
-        logger.warn('[KBManager] read file meta failed in single context', { relPath, error: String(e?.message || e) })
-      }
-    }
-
-    const response = await invoke('kbmeta_agent_process', {
-      request: {
-        modelid: kbAgentModelId.value,
-        sessionid: kbAgentSessionId.value,
-        task,
-        kb_name: selectedKbName.value,
-        rel_path: currentRelPath.value,
-        kb_meta: kbMetaPayload,
-        file_meta: fileMetaPayload,
-        kb_context_files: pickContextFilesForTarget(currentRelPath.value, kbContextFiles),
-        file_content: String(fileContentMap.get(currentRelPath.value) || '')
-      }
-    })
-
-    if (response?.sessionid) kbAgentSessionId.value = String(response.sessionid)
-
-    const result = response?.result
-    logger.info('[KBManager] kbmeta_agent_process result keys', { keys: Object.keys(result || {}) })
-    const changed = applyKbAgentResultToFileDraft(result)
-
-    if (changed) {
-      message.success('AI 建议已应用到当前草稿，请点击保存落盘')
-    } else {
-      message.info('AI 已完成分析，但没有可应用的变更')
-    }
-  } catch (e) {
-    logger.error('[KBManager] kbmeta_agent_process failed:', e)
-    message.error(String(e?.message || 'AI 处理失败'))
-  } finally {
-    kbAgentProcessing.value = false
-    if (task !== 'kb') {
-      batchProgressVisible.value = false
-    }
-  }
-}
-
-const loadKbMeta = async (kbName) => {
-  const meta = await invoke('kbmeta_read_kb_meta', { knowledgeBaseName: kbName })
-  kbMeta.value = meta
-  kbDraft.value = deepClone(meta)
-  fileDraft.value = null
-
-  // 切换知识库时清空段落缓存，避免跨 KB 串数据
-  fileParagraphChildrenCache.clear()
-
-  const rootNode = meta?.tree
-  treeData.value = rootNode ? [{
-    key: ROOT_KEY,
-    label: rootNode.name || kbName,
-    isDir: true,
-    children: buildTreeNodes(rootNode)
-  }] : []
-
-  expandedKeys.value = treeData.value.length ? [ROOT_KEY] : []
-  selectedKeys.value = treeData.value.length ? [ROOT_KEY] : []
-
-  currentKind.value = 'kb'
-  currentRelPath.value = ''
-
-  logger.info('[KBManager] kb meta loaded', { kbName, hasTree: !!rootNode })
-}
-
-const refresh = async () => {
-  try {
-    loading.value = true
-    const [root, list] = await Promise.all([
-      invoke('get_knowledge_bases_root'),
-      invoke('kbmeta_sync_all')
-    ])
-    kbRootPath.value = typeof root === 'string' ? root : ''
-    kbList.value = Array.isArray(list) ? list : []
-  } catch (e) {
-    logger.error('加载知识库元数据失败:', e)
-    message.error('加载知识库元数据失败')
-  } finally {
-    loading.value = false
-  }
-}
-
-const syncAll = async () => {
-  await refresh()
-  message.success('已同步')
-}
-
-const handleKbChange = async (kbName) => {
-  if (!kbName) {
-    selectedKbName.value = ''
-    kbMeta.value = null
-    kbDraft.value = null
-    fileDraft.value = null
-    treeData.value = []
-    expandedKeys.value = []
-    selectedKeys.value = []
-    currentKind.value = ''
-    currentRelPath.value = ''
-
-    fileParagraphChildrenCache.clear()
-    return
-  }
-
-  try {
-    loading.value = true
-    await loadKbMeta(kbName)
-  } catch (e) {
-    logger.error('加载知识库配置失败:', e)
-    message.error('加载知识库配置失败')
-  } finally {
-    loading.value = false
-  }
-}
-
-const handleSelectNode = async (keys, options) => {
-  selectedKeys.value = Array.isArray(keys) ? keys : []
-  const opt = Array.isArray(options) ? options[0] : null
-  if (!opt || !selectedKbName.value) return
-
-  if (opt.isDir) {
-    currentKind.value = 'kb'
-    currentRelPath.value = ''
-    fileDraft.value = null
-    kbDraft.value = deepClone(kbMeta.value)
-    return
-  }
-
-  try {
-    loading.value = true
-    currentKind.value = 'file'
-    currentRelPath.value = String(opt.key || '')
-    const meta = await invoke('kbmeta_read_file_meta', {
-      knowledgeBaseName: selectedKbName.value,
-      relPath: currentRelPath.value
-    })
-    kbDraft.value = null
-    fileDraft.value = makeFileDraft(meta)
-
-    // 元数据模式下：选中文件时直接把段落节点挂到树上（避免再发一次请求）
-    const paras = makeParagraphChildrenFromFileMeta(currentRelPath.value, meta)
-    fileParagraphChildrenCache.set(normalizeRelKey(currentRelPath.value), paras)
-    applyParagraphChildrenToTree(currentRelPath.value, paras)
-
-    if (paras.length) {
-      expandedKeys.value = Array.from(new Set([...(expandedKeys.value || []), ROOT_KEY, normalizeRelKey(currentRelPath.value)]))
-    }
-  } catch (e) {
-    logger.error('读取文件配置失败:', e)
-    message.error('读取文件配置失败')
-  } finally {
-    loading.value = false
-  }
-}
-
-const reloadCurrent = async () => {
-  if (!selectedKbName.value) return
-  try {
-    loading.value = true
-    if (currentKind.value === 'file' && currentRelPath.value) {
-      const meta = await invoke('kbmeta_read_file_meta', {
-        knowledgeBaseName: selectedKbName.value,
-        relPath: currentRelPath.value
-      })
-      kbDraft.value = null
-      fileDraft.value = makeFileDraft(meta)
-      return
-    }
-
-    await loadKbMeta(selectedKbName.value)
-  } catch (e) {
-    logger.error('重新加载失败:', e)
-    message.error('重新加载失败')
-  } finally {
-    loading.value = false
-  }
-}
-
-const currentKbLocation = computed(() => {
-  const kbName = selectedKbName.value
-  if (!kbName) return ''
-
-  const hit = Array.isArray(kbList.value)
-    ? kbList.value.find(x => x?.knowledge_base_name === kbName)
-    : null
-
-  return String(hit?.knowledge_base_location || kbMeta.value?.knowledge_base_location || '')
 })
 
-const expandToRelPath = (relPath) => {
-  const p = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '')
-  if (!p) return
-  const parts = p.split('/').filter(Boolean)
-  const keys = [ROOT_KEY]
-  for (let i = 0; i < Math.max(parts.length - 1, 0); i++) {
-    keys.push(parts.slice(0, i + 1).join('/'))
-  }
-  expandedKeys.value = Array.from(new Set([...(expandedKeys.value || []), ...keys]))
-}
+const relationTargetOptions = computed(() => {
+  const cur = selectedNode.value?.id
+  return nodes.value
+    .filter((n) => n.id !== cur)
+    .slice(0, 1000)
+    .map((n) => ({ label: `${typeLabel(n.type)} · ${n.name || n.id}`, value: n.id }))
+})
 
-const basenameOfRel = (relPath) => {
-  const s = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '')
-  return s.split('/').filter(Boolean).pop() || ''
-}
-
-const remapKey = (key, oldKey, newKey) => {
-  const k = String(key || '')
-  const oldK = String(oldKey || '')
-  const newK = String(newKey || '')
-
-  if (!k || k === ROOT_KEY) return k
-  if (!oldK || !newK) return k
-
-  if (k === oldK) return newK
-  if (k.startsWith(`${oldK}/`)) return `${newK}${k.slice(oldK.length)}`
-  return k
-}
-
-const patchTreeAfterRename = (treeRoot, oldKey, newKey) => {
-  const oldK = String(oldKey || '')
-  const newK = String(newKey || '')
-  if (!treeRoot || !oldK || !newK) return false
-
-  const patchDescendants = (node) => {
-    const kids = Array.isArray(node?.children) ? node.children : []
-    for (const ch of kids) {
-      ch.key = remapKey(ch.key, oldK, newK)
-
-      // 段落节点 label 是展示文本（例如行号+标题），不应该被 basename 覆盖
-      if (String(ch?.kind || '') !== 'paragraph') {
-        const base = basenameOfRel(ch.key)
-        if (base) ch.label = base
-      }
-
-      patchDescendants(ch)
-    }
-  }
-
-  const dfs = (node) => {
-    if (!node) return false
-    if (String(node.key || '') === oldK) {
-      node.key = newK
-      const base = basenameOfRel(newK)
-      if (base) node.label = base
-      patchDescendants(node)
-      return true
-    }
-
-    const kids = Array.isArray(node.children) ? node.children : []
-    for (const ch of kids) {
-      if (dfs(ch)) return true
-    }
-    return false
-  }
-
-  return dfs(treeRoot)
-}
-
-const handleGraphPatchTree = (payload) => {
-  const oldKey = String(payload?.oldKey || '')
-  const newKey = String(payload?.newKey || '')
-
-  if (!oldKey || !newKey) {
-    logger.warn('[KBManager] patch-tree invalid payload', payload)
-    return
-  }
-
-  const root = Array.isArray(treeData.value) ? treeData.value[0] : null
-  if (!root) {
-    logger.warn('[KBManager] patch-tree missed: empty tree', payload)
-    return
-  }
-
-  const ok = patchTreeAfterRename(root, oldKey, newKey)
-  if (!ok) {
-    logger.warn('[KBManager] patch-tree missed: node not found', payload)
-    return
-  }
-
-  selectedKeys.value = (Array.isArray(selectedKeys.value) ? selectedKeys.value : []).map(k => remapKey(k, oldKey, newKey))
-
-  const remappedExpanded = (Array.isArray(expandedKeys.value) ? expandedKeys.value : []).map(k => remapKey(k, oldKey, newKey))
-  expandedKeys.value = Array.from(new Set([ROOT_KEY, ...remappedExpanded]))
-
-  if (currentRelPath.value) currentRelPath.value = remapKey(currentRelPath.value, oldKey, newKey)
-
-  if (!selectedKeys.value.length) selectedKeys.value = [newKey]
-  expandToRelPath(newKey)
-
-  logger.info('[KBManager] patch-tree ok', { oldKey, newKey })
-}
-
-// 图形模式：选中节点时按需补齐段落节点（避免启动时扫描全库）
-watch(() => selectedKeys.value, async (keys) => {
-  if (!selectedKbName.value) return
-
-  const rawKey = Array.isArray(keys) ? String(keys[0] || '') : ''
-  const fileRel = extractFileRelPathFromTreeKey(rawKey)
-  if (!fileRel || fileRel === ROOT_KEY) return
-
-  const root = Array.isArray(treeData.value) ? treeData.value[0] : null
-  const node = root ? findTreeNodeByKey(root, fileRel) : null
-  if (!node || node.isDir) return
-
-  await ensureParagraphChildrenForFile(fileRel)
-}, { deep: false })
-
-const handleGraphReload = async (payload) => {
-  if (!selectedKbName.value) return
-
+async function refresh() {
+  loading.value = true
   try {
-    loading.value = true
-    await loadKbMeta(selectedKbName.value)
-
-    const nextKey = payload?.selectKey
-    if (nextKey) {
-      selectedKeys.value = [nextKey]
-      expandToRelPath(nextKey)
-    }
+    const list = await store.fetchKnowledgeBases()
+    const arr = Array.isArray(list) ? list : store.knowledgeBases
+    kbOptions.value = (arr || []).map((kb) => ({
+      label: kb.knowledge_base_name, value: kb.knowledge_base_name,
+    }))
+    if (selectedKbName.value) await loadGraph()
   } catch (e) {
-    logger.error('图形模式刷新树失败:', e)
-    message.error('图形模式刷新树失败')
+    logger.error('refresh failed', e)
+    message.error('刷新失败')
   } finally {
     loading.value = false
   }
 }
 
-const saveCurrent = async () => {
+async function handleKbChange(name) {
+  selectedKbName.value = name
+  selectedNode.value = null
+  semanticResults.value = []
+  if (name) await loadGraph()
+  else { nodes.value = []; edges.value = [] }
+}
+
+async function loadGraph() {
   if (!selectedKbName.value) return
-
+  loading.value = true
+  busyText.value = '加载知识图谱…'
   try {
-    loading.value = true
-
-    if (currentKind.value === 'file' && currentRelPath.value && fileDraft.value) {
-      const payload = deepClone(fileDraft.value)
-      payload.file_tags = Array.isArray(payload.file_tags) ? payload.file_tags : []
-      payload.related_nodes = Array.isArray(payload.related_nodes) ? payload.related_nodes : []
-
-      const nodes = Array.isArray(payload.structure_nodes) ? payload.structure_nodes : []
-      payload.structure_nodes = nodes.map(n => {
-        let attrs = {}
-        const raw = String(n?.attrs_json || '').trim()
-        if (raw) {
-          try {
-            attrs = JSON.parse(raw)
-          } catch (e) {
-            const prefix = n?.kind === 'paragraph' ? 'P' : `H${n.level}`
-            throw new Error(`结构节点属性 JSON 不正确: ${prefix} ${n.title}`)
-          }
-        }
-        return {
-          title: String(n?.title || ''),
-          level: Number(n?.level || 0),
-          tags: Array.isArray(n?.tags) ? n.tags : [],
-          attrs,
-          related_nodes: Array.isArray(n?.related_nodes) ? n.related_nodes : []
-        }
-      })
-
-      await invoke('kbmeta_save_file_meta', {
-        knowledgeBaseName: selectedKbName.value,
-        relPath: currentRelPath.value,
-        meta: payload
-      })
-      message.success('已保存')
-      await reloadCurrent()
-      return
+    const data = await store.kgQueryGraph(selectedKbName.value, null)
+    nodes.value = data?.nodes || []
+    edges.value = data?.edges || []
+    graphMeta.value = {
+      total: data?.total_nodes || 0,
+      returned: data?.returned_nodes || nodes.value.length,
+      truncated: !!data?.truncated,
     }
-
-    if (currentKind.value === 'kb' && kbDraft.value) {
-      const payload = deepClone(kbDraft.value)
-      await invoke('kbmeta_save_kb_meta', { meta: payload })
-      message.success('已保存')
-      await loadKbMeta(selectedKbName.value)
-      return
+    if (selectedNode.value) {
+      selectedNode.value = nodeMap.value.get(selectedNode.value.id) || null
     }
   } catch (e) {
-    logger.error('保存失败:', e)
-    message.error(String(e?.message || '保存失败'))
+    logger.error('loadGraph failed', e)
+    message.error('加载图谱失败:' + (e?.message || e))
   } finally {
     loading.value = false
+    busyText.value = ''
+  }
+}
+
+function selectNode(n) {
+  selectedNode.value = nodeMap.value.get(n.id) || n
+  tagSuggestions.value = []
+  relationSuggestions.value = []
+  relationTarget.value = null
+  relationType.value = 'related'
+}
+
+async function withBusy(text, fn) {
+  busyText.value = text
+  try {
+    return await fn()
+  } catch (e) {
+    logger.error(text + ' failed', e)
+    message.error(text + '失败:' + (e?.message || e))
+  } finally {
+    busyText.value = ''
+  }
+}
+
+// ───── 标签编辑 ─────
+async function addTag() {
+  const tag = newTag.value.trim()
+  const node = selectedNode.value
+  if (!tag || !node) return
+  await withBusy('添加标签', async () => {
+    await store.kgAddTag(selectedKbName.value, node.id, tag, 'manual', 1.0)
+    if (!node.tags) node.tags = []
+    if (!node.tags.includes(tag)) node.tags.push(tag)
+    newTag.value = ''
+  })
+}
+
+async function removeTag(tag) {
+  const node = selectedNode.value
+  if (!node) return
+  await withBusy('删除标签', async () => {
+    await store.kgRemoveTag(selectedKbName.value, node.id, tag)
+    node.tags = (node.tags || []).filter((t) => t !== tag)
+  })
+}
+
+async function loadTagSuggestions() {
+  const node = selectedNode.value
+  if (!node) return
+  tagSugLoading.value = true
+  try {
+    const list = await store.kgSuggestTags(selectedKbName.value, node.id)
+    const have = new Set(node.tags || [])
+    tagSuggestions.value = (list || []).filter((s) => !have.has(s.tag))
+  } catch (e) {
+    logger.error('suggest tags failed', e)
+    message.error('标签建议失败(需先生成向量嵌入)')
+  } finally {
+    tagSugLoading.value = false
+  }
+}
+
+async function acceptTagSuggestion(s) {
+  newTag.value = s.tag
+  await addTag()
+  tagSuggestions.value = tagSuggestions.value.filter((x) => x.tag !== s.tag)
+}
+
+// ───── 关系编辑 ─────
+async function confirmRelation() {
+  const node = selectedNode.value
+  const to = relationTarget.value
+  if (!node || !to) return
+  const rel = String(relationType.value || 'related').trim() || 'related'
+  await withBusy('新建关系', async () => {
+    await store.kgConfirmRelation(selectedKbName.value, node.id, to, rel, 0.5)
+    edges.value.push({ from: node.id, to, type: rel, strength: 0.5, source: 'manual' })
+    relationTarget.value = null
+  })
+}
+
+async function removeRelation(e) {
+  await withBusy('删除关系', async () => {
+    await store.kgRemoveRelation(selectedKbName.value, e.from, e.to, e.type)
+    edges.value = edges.value.filter(
+      (x) => !(x.from === e.from && x.to === e.to && x.type === e.type),
+    )
+  })
+}
+
+async function loadRelationSuggestions() {
+  const node = selectedNode.value
+  if (!node) return
+  relSugLoading.value = true
+  try {
+    const list = await store.kgSuggestRelations(selectedKbName.value, node.id)
+    relationSuggestions.value = list || []
+  } catch (e) {
+    logger.error('suggest relations failed', e)
+    message.error('关系建议失败(需先生成向量嵌入)')
+  } finally {
+    relSugLoading.value = false
+  }
+}
+
+async function acceptRelationSuggestion(s) {
+  const node = selectedNode.value
+  if (!node) return
+  await withBusy('采纳建议关系', async () => {
+    await store.kgConfirmRelation(selectedKbName.value, node.id, s.to, 'related', s.score)
+    edges.value.push({ from: node.id, to: s.to, type: 'related', strength: s.score, source: 'manual' })
+    relationSuggestions.value = relationSuggestions.value.filter((x) => x.to !== s.to)
+  })
+}
+
+// ───── 语义检索 ─────
+async function semanticSearch() {
+  const q = search.value.trim()
+  if (!q || !selectedKbName.value) { semanticResults.value = []; return }
+  await withBusy('语义检索', async () => {
+    const list = await store.kgSemanticSearch(selectedKbName.value, q, 20)
+    semanticResults.value = list || []
+  })
+}
+
+// ───── 处理动作 ─────
+async function rebuildIndex() {
+  if (!selectedKbName.value) return
+  await withBusy('重建图索引', async () => {
+    await store.kgEnsureIndex(selectedKbName.value)
+    await loadGraph()
+    message.success('图索引已重建')
+  })
+}
+
+async function embedKb() {
+  if (!selectedKbName.value) return
+  await withBusy('生成向量嵌入(首次较慢)', async () => {
+    const r = await store.kgEmbedKb(selectedKbName.value)
+    message.success('嵌入完成:' + (r?.embedded_count ?? '') + ' 节点')
+  })
+}
+
+async function detectCommunities() {
+  if (!selectedKbName.value) return
+  await withBusy('社区检测', async () => {
+    await store.kgDetectCommunities(selectedKbName.value)
+    await loadGraph()
+    message.success('社区检测完成')
+  })
+}
+
+async function extractConcepts() {
+  if (!selectedKbName.value) return
+  await withBusy('LLM 概念抽取(较慢)', async () => {
+    const r = await store.kgExtractConcepts(selectedKbName.value)
+    await loadGraph()
+    message.success(`概念抽取:${r?.concepts ?? 0} 概念 / ${r?.relations ?? 0} 关系`)
+  })
+}
+
+// ───── 多机同步(机制A:文件同步 + 人工层导入)─────
+let unlistenSync = null
+async function syncNow() {
+  if (syncing.value) return
+  syncing.value = true
+  busyText.value = '正在与其它设备同步…'
+  try {
+    await invoke('p2p_sync_knowledge_base_now')
+    // 文件落地后,把各知识库的人工层快照导入本机 DB(整层替换,天然携带删除)
+    await importAllManual()
+    if (selectedKbName.value) await loadGraph()
+    message.success('同步完成')
+  } catch (e) {
+    logger.error('sync failed', e)
+    message.error('同步失败:' + (e?.message || e))
+  } finally {
+    syncing.value = false
+    busyText.value = ''
+  }
+}
+
+async function toggleManualSync(val) {
+  try {
+    await store.kgSetManualSync(val)
+    message.success(val ? '已开启行级精细同步' : '已关闭行级精细同步')
+  } catch (e) {
+    manualSyncEnabled.value = !val
+    message.error('切换失败:' + (e?.message || e))
+  }
+}
+
+async function importAllManual() {
+  const names = kbOptions.value.map((o) => o.value)
+  for (const name of names) {
+    try {
+      await store.kgImportManual(name, null)
+    } catch (e) {
+      logger.warn('import manual failed for ' + name, e)
+    }
   }
 }
 
 onMounted(async () => {
   await refresh()
+  try {
+    manualSyncEnabled.value = await store.kgGetManualSync()
+  } catch (e) {
+    logger.warn('get manual sync flag failed', e)
+  }
+  try {
+    unlistenSync = await listen('resource_repo_sync_progress', (ev) => {
+      const p = ev.payload || {}
+      if (p.target && String(p.target).includes('knowledge') && p.message) {
+        busyText.value = `同步:${p.message}`
+      }
+    })
+  } catch (e) {
+    logger.warn('listen sync progress failed', e)
+  }
+})
+
+onUnmounted(() => {
+  if (unlistenSync) { try { unlistenSync() } catch (_) { /* noop */ } }
 })
 </script>
 
 <style scoped>
-:global(html),
-:global(body),
-:global(#app) {
-  height: 100%;
-  overflow: hidden;
-}
-
-:global(body) {
-  margin: 0;
-}
-
 .page {
-  height: 100vh;
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  padding: 12px;
-  box-sizing: border-box;
-  gap: 10px;
-  overflow: hidden;
-  background: var(--guaxi-content-bg);
-  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
+  height: 100vh;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei';
+  background: var(--n-color, #1e1e1e);
 }
-
 .header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--n-divider-color, #333);
   gap: 12px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  background: var(--guaxi-panel-bg);
-  border: 1px solid var(--guaxi-border);
-  box-shadow: 0 8px 24px rgba(16, 24, 40, 0.06);
-  color: var(--guaxi-text-primary);
 }
+.header-left { display: flex; align-items: center; gap: 12px; }
+.title { font-size: 15px; font-weight: 600; }
+.meta-hint { font-size: 12px; }
+.header-icon { cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.header-icon.active { outline: 2px solid var(--n-primary-color, #63e2b7); }
 
-.header-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
+.busy-bar { display: flex; align-items: center; gap: 8px; padding: 4px 16px; font-size: 12px; opacity: 0.85; }
+.busy-text { opacity: 0.8; }
 
-.title {
-  font-size: 16px;
-  font-weight: 650;
-  letter-spacing: 0.2px;
-}
-
-.header-icon {
-  cursor: pointer;
-  border: 1px solid var(--guaxi-border);
-  background: var(--guaxi-header-bg);
-  transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
-  color: var(--guaxi-text-primary);
-}
-
-.header-icon:hover {
-  background: var(--guaxi-header-bg);
-  box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.16), 0 2px 12px rgba(7, 118, 161, 0.08);
-  transform: scale(1.02);
-}
-
-.header-icon.active {
-  background: rgba(24, 160, 88, 0.10);
-  box-shadow: 0 0 0 3px rgba(24, 160, 88, 0.18), 0 2px 12px rgba(16, 24, 40, 0.08);
-  color: rgba(24, 160, 88, 0.95);
-}
-
-.path {
-  font-size: 12px;
-  opacity: 0.8;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  padding: 6px 10px;
-  border-radius: 10px;
-  background: var(--guaxi-panel-bg);
-  border: 1px solid var(--guaxi-border);
-}
-
-.main {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  grid-template-columns: 360px 1fr;
-  gap: 12px;
-  overflow: hidden;
-}
-
+.main { flex: 1; display: flex; min-height: 0; }
 .left {
-  min-height: 0;
+  width: 320px;
+  border-right: 1px solid var(--n-divider-color, #333);
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  overflow: hidden;
-  border: 1px solid var(--guaxi-border);
-  border-radius: 10px;
-  padding: 10px;
-  background: var(--guaxi-panel-bg);
-  box-shadow: 0 8px 24px rgba(16, 24, 40, 0.06);
-}
-
-.left-body {
-  flex: 1;
   min-height: 0;
-  overflow: auto;
-  padding: 2px 0;
 }
+.left-toolbar { padding: 10px; }
+.node-scroll { flex: 1; min-height: 0; }
+.right { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 12px 16px; }
 
-.right {
-  min-height: 0;
-  overflow: hidden;
-  border: 1px solid var(--guaxi-border);
-  border-radius: 10px;
-  padding: 12px;
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  background: var(--guaxi-panel-bg);
-  box-shadow: 0 10px 28px rgba(16, 24, 40, 0.08);
-}
-
-.editor-body {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-}
-
-.editor-header {
+.section-label { padding: 9px 10px 5px; font-size: 13px; opacity: 0.55; }
+.node-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--guaxi-border);
-}
-
-.editor-title {
-  font-weight: 650;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.batch-panel {
-  border: 1px solid var(--guaxi-border);
-  border-radius: 10px;
-  background: var(--guaxi-header-bg);
-  padding: 10px;
-  display: flex;
-  flex-direction: column;
   gap: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  font-size: 15px;
+  border-radius: 6px;
 }
+.node-row:hover { background: var(--n-color-hover, rgba(255,255,255,0.06)); }
+.node-row.selected { background: var(--n-primary-color-hover, rgba(99,226,183,0.18)); }
+.node-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node-type {
+  font-size: 12px; padding: 2px 6px; border-radius: 4px;
+  background: rgba(125,125,125,0.25); white-space: nowrap;
+}
+.node-type[data-t='concept'] { background: rgba(240,180,80,0.3); }
+.node-type[data-t='file'] { background: rgba(99,160,226,0.3); }
+.node-type[data-t='section'] { background: rgba(150,99,226,0.3); }
+.node-score, .node-tagcount { font-size: 13px; opacity: 0.6; }
 
-.batch-progress-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
+.editor-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.editor-title { font-size: 18px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node-meta { display: flex; flex-wrap: wrap; gap: 14px; font-size: 14px; opacity: 0.65; margin-bottom: 12px; }
+.editor-scroll { flex: 1; min-height: 0; }
 
-.batch-progress-title {
-  font-weight: 600;
-  font-size: 13px;
-}
+.block { border: 1px solid var(--n-divider-color, #333); border-radius: 8px; padding: 14px; margin-bottom: 14px; }
+.block-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.block-title { font-size: 16px; font-weight: 600; }
 
-.batch-progress-text {
-  font-size: 12px;
-  opacity: 0.75;
-}
+.edge-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 15px; }
+.edge-dir { opacity: 0.6; }
+.edge-type { color: var(--n-primary-color, #63e2b7); }
+.edge-target { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.edge-source { font-size: 12px; opacity: 0.5; }
+.add-relation { display: flex; gap: 6px; align-items: center; margin-top: 12px; }
 
-.batch-progress-phase {
-  font-size: 12px;
-  opacity: 0.75;
-  line-height: 1.2;
-}
+.suggest-row { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.suggest-label { font-size: 13px; opacity: 0.55; }
+.suggest-tag { cursor: pointer; font-size: 13px; }
 
-.batch-status-list {
-  max-height: 220px;
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding-right: 2px;
-}
-
-.batch-status-item {
-  border: 1px solid var(--guaxi-border);
-  border-radius: 8px;
-  padding: 6px 8px;
-  background: var(--guaxi-panel-bg);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.batch-status-main {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.batch-status-path {
-  font-size: 12px;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.batch-status-reason {
-  font-size: 12px;
-  opacity: 0.75;
-  line-height: 1.35;
-  word-break: break-word;
-}
-
-.empty {
-  font-size: 12px;
-  opacity: 0.75;
-  padding: 10px 10px;
-  border-radius: 10px;
-  border: 1px dashed var(--guaxi-border);
-  background: var(--guaxi-header-bg);
-}
-
-.row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.row-name {
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sub {
-  font-size: 12px;
-  opacity: 0.7;
-  margin-top: 2px;
-}
-
-.active {
-  background: rgba(24, 160, 88, 0.08);
-}
-
-.detail {
-  display: flex;
-  flex-direction: column;
-}
-
-:deep(.kb-tree .n-tree-node) {
-  padding: 0;
-}
-
-:deep(.kb-tree .n-tree-node-content) {
-  margin: 2px 6px;
-  padding: 4px 8px;
-  border-radius: 8px;
-  transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
-}
-
-:deep(.kb-tree .n-tree-node-content__text) {
-  font-size: 13px;
-  line-height: 1.35;
-  font-family: 'Maple Mono NF CN','JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', system-ui;
-}
-
-:deep(.kb-tree .n-tree-node-content:hover) {
-  background: var(--guaxi-header-bg);
-  box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.16), 0 2px 12px rgba(7, 118, 161, 0.08);
-  transform: scale(1.01);
-}
-
-:deep(.kb-tree .n-tree-node--selected .n-tree-node-content) {
-  background: var(--guaxi-header-bg);
-  box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.24), 0 2px 12px rgba(7, 118, 161, 0.12);
-  animation: kb-tree-select-pop 160ms ease-out;
-}
-
-@keyframes kb-tree-select-pop {
-  from {
-    transform: scale(1);
-  }
-  60% {
-    transform: scale(1.02);
-  }
-  to {
-    transform: scale(1.01);
-  }
-}
+.muted { font-size: 14px; opacity: 0.5; }
+.empty { padding: 20px; text-align: center; opacity: 0.55; font-size: 15px; }
+.empty.big { margin: auto; }
 </style>

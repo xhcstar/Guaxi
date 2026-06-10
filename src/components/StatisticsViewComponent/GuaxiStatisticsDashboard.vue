@@ -1161,10 +1161,10 @@ async function loadKbSummaries(opts) {
   const reason = String(opts?.reason || "manual");
   const forceSnapshot = !!opts?.forceSnapshot;
 
-  const list = await invoke("kbmeta_sync_all");
+  const list = await invoke("kg_kb_summaries");
   const arr = Array.isArray(list) ? list : [];
   kbSummaries.value = arr;
-  logger.info("[statistics] kbmeta_sync_all", { kbCount: arr.length, reason, forceSnapshot });
+  logger.info("[statistics] kg_kb_summaries", { kbCount: arr.length, reason, forceSnapshot });
   recordVolumeSnapshotIfNeeded({ force: forceSnapshot });
 }
 

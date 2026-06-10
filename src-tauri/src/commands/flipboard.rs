@@ -2803,7 +2803,7 @@ fn build_kb_note_path(kb_name: &str, file_stem: &str) -> Result<PathBuf, String>
     let notes_dir = kb_dir.join("Collected");
     if !notes_dir.exists() {
         fs::create_dir_all(&notes_dir).map_err(|e| e.to_string())?;
-        let _ = crate::commands::kbmeta::after_create_path(&notes_dir, true, None);
+        let _ = crate::commands::kgraph::after_create_path(&notes_dir, true, None);
     }
     Ok(notes_dir.join(format!("{}.md", file_stem)))
 }
@@ -2813,8 +2813,8 @@ fn write_kb_markdown_note(path: &PathBuf, content: &str) -> Result<String, Strin
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     fs::write(path, content).map_err(|e| e.to_string())?;
-    let _ = crate::commands::kbmeta::after_create_path(path, false, Some(content));
-    let _ = crate::commands::kbmeta::after_write_file(path, content);
+    let _ = crate::commands::kgraph::after_create_path(path, false, Some(content));
+    let _ = crate::commands::kgraph::after_write_file(path, content);
     Ok(path.to_string_lossy().to_string())
 }
 

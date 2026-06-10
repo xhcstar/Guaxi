@@ -8,7 +8,7 @@ use tracing::{info, warn};
 use base64::engine::general_purpose;
 use base64::Engine as _;
 
-use crate::commands::kbmeta;
+use crate::commands::kgraph;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FileNode {
@@ -183,7 +183,7 @@ pub fn write_file_content(path: String, content: String) -> Result<(), String> {
     let path = normalize_path(&path);
     fs::write(&path, &content).map_err(|e| e.to_string())?;
 
-    if let Err(e) = kbmeta::after_write_file(&path, &content) {
+    if let Err(e) = kgraph::after_write_file(&path, &content) {
         warn!(error = %e, path = %path.display(), "kbmeta after_write_file failed");
     }
 
@@ -212,7 +212,7 @@ pub fn create_directory(path: String) -> Result<(), String> {
     let path = normalize_path(&path);
     fs::create_dir_all(&path).map_err(|e| e.to_string())?;
 
-    if let Err(e) = kbmeta::after_create_path(&path, true, None) {
+    if let Err(e) = kgraph::after_create_path(&path, true, None) {
         warn!(error = %e, path = %path.display(), "kbmeta after_create_path failed");
     }
 
@@ -233,7 +233,7 @@ pub fn create_file(path: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
         .map(|_| ())?;
 
-    if let Err(e) = kbmeta::after_create_path(&path, false, None) {
+    if let Err(e) = kgraph::after_create_path(&path, false, None) {
         warn!(error = %e, path = %path.display(), "kbmeta after_create_path failed");
     }
 
@@ -251,7 +251,7 @@ pub fn delete_path(path: String) -> Result<(), String> {
         fs::remove_file(&path).map_err(|e| e.to_string())?;
     }
 
-    if let Err(e) = kbmeta::after_delete_path(&path, is_dir) {
+    if let Err(e) = kgraph::after_delete_path(&path, is_dir) {
         warn!(error = %e, path = %path.display(), "kbmeta after_delete_path failed");
     }
 
@@ -266,7 +266,7 @@ pub fn move_path(source_path: String, destination_path: String) -> Result<(), St
     info!("move_path: {} -> {}", source_path.display(), destination_path.display());
     std::fs::rename(&source_path, &destination_path).map_err(|e| e.to_string())?;
 
-    if let Err(e) = kbmeta::after_move_path(&source_path, &destination_path) {
+    if let Err(e) = kgraph::after_move_path(&source_path, &destination_path) {
         warn!(error = %e, src = %source_path.display(), dst = %destination_path.display(), "kbmeta after_move_path failed");
     }
 
@@ -290,7 +290,7 @@ pub async fn create_file_with_content(
 
     fs::write(&path, &content).map_err(|e| format!("写入文件失败: {}", e))?;
 
-    if let Err(e) = kbmeta::after_create_path(&path, false, Some(&content)) {
+    if let Err(e) = kgraph::after_create_path(&path, false, Some(&content)) {
         warn!(error = %e, path = %path.display(), "kbmeta after_create_path failed");
     }
 
@@ -337,7 +337,7 @@ pub fn rename_directory(old_path: String, new_path: String) -> Result<(), String
     // 4. 执行重命名
     fs::rename(&old_path, &new_path).map_err(|e| format!("重命名目录失败: {}", e))?;
 
-    if let Err(e) = kbmeta::after_move_path(&old_path, &new_path) {
+    if let Err(e) = kgraph::after_move_path(&old_path, &new_path) {
         warn!(error = %e, src = %old_path.display(), dst = %new_path.display(), "kbmeta after_move_path failed");
     }
 
@@ -380,7 +380,7 @@ pub fn rename_path(old_path: String, new_path: String) -> Result<(), String> {
     // 4. 执行重命名
     fs::rename(&old_path, &new_path).map_err(|e| format!("重命名失败: {}", e))?;
 
-    if let Err(e) = kbmeta::after_move_path(&old_path, &new_path) {
+    if let Err(e) = kgraph::after_move_path(&old_path, &new_path) {
         warn!(error = %e, src = %old_path.display(), dst = %new_path.display(), "kbmeta after_move_path failed");
     }
 
