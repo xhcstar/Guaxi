@@ -55,7 +55,7 @@
       </div>
     </div>
 
-    <div class="repo-body">
+    <div class="repo-body" :class="{ 'active-filled': isActiveRepoExpanded }">
       <div v-if="activeRepoPathItem" class="active-repo-wrapper"
         :class="{ expanded: fileTreeStore.isRepoExpanded(activeRepoPathItem) }">
         <div class="repo-item" @click="toggleRepo(activeRepoPathItem)">
@@ -98,10 +98,6 @@
               </template>
               删除知识库
             </n-tooltip>
-            <n-icon size="15" class="expand-icon">
-              <chevron-down-icon v-if="fileTreeStore.isRepoExpanded(activeRepoPathItem)" />
-              <chevron-forward-icon v-else />
-            </n-icon>
           </div>
         </div>
 
@@ -118,6 +114,7 @@
             @open-file="handleOpenFile"
             @load-children="handleLoadChildren"
             @contextmenu="handleNodeContextMenu"
+            @blank-contextmenu="handleBlankContextMenu"
             @rename-commit="handleBlur"
             @rename-cancel="cancelEditing"
             @move="handleDropMove"
@@ -125,8 +122,9 @@
         </div>
       </div>
 
-      <n-scrollbar ref="repoScrollbarRef" class="repo-scroll-container">
-        <n-list bordered class="repo-list">
+      <div v-show="!isActiveRepoExpanded" class="repo-scroll-wrapper">
+        <n-scrollbar ref="repoScrollbarRef" class="repo-scroll-container">
+          <n-list class="repo-list" :show-divider="false">
           <n-list-item v-for="path in inactiveRepoPaths" :key="path" class="repo-list-item">
             <div class="repo-item" @click="toggleRepo(path)">
               <div class="repo-title">
@@ -168,18 +166,17 @@
                   </template>
                   删除知识库
                 </n-tooltip>
-                <n-icon size="15" class="expand-icon">
-                  <chevron-forward-icon />
-                </n-icon>
               </div>
             </div>
           </n-list-item>
-        </n-list>
-      </n-scrollbar>
+          </n-list>
+        </n-scrollbar>
+      </div>
     </div>
 
     <!-- 右键菜单 -->
-    <n-dropdown v-model:show="isContextMenuVisible" :options="contextMenuOptions" placement="bottom-start"
+    <n-dropdown v-model:show="isContextMenuVisible" :options="activeContextMenuOptions" placement="bottom-start"
+      class="file-tree-context-menu"
       :x="contextMenuPosition.x" :y="contextMenuPosition.y" @select="handleContextMenuSelect"
       @clickoutside="handleClickoutside" />
 
@@ -346,6 +343,11 @@ const inactiveRepoPaths = computed(() => {
   return list.filter(p => normalizePath(p) !== activeNorm)
 })
 
+// 激活的知识库是否展开：展开时让其文件树占满剩余高度，未激活条目退到底部待用户激活。
+const isActiveRepoExpanded = computed(() =>
+  !!activeRepoPathItem.value && fileTreeStore.isRepoExpanded(activeRepoPathItem.value)
+)
+
 const updateActiveRepoMaxHeight = () => {
   const el = fileTreeContainerRef.value
   if (!el) return
@@ -376,6 +378,7 @@ const isTreeLoading = ref(false)
 const isContextMenuVisible = ref(false)
 const contextMenuPosition = ref({ x: 0, y: 0 })
 const selectedNode = ref(null) // 当前右键点击的节点
+const menuMode = ref('node') // 'node' = 右键某节点；'blank' = 右键空白处
 
 // 已展开的目录
 const expandedKeys = ref([])
@@ -557,6 +560,14 @@ const contextMenuOptions = ref([
     icon: () => h(NIcon, null, { default: () => h(GlobeOutline) })
   },
 ])
+
+// 空白处右键只保留"新建文件/新建文件夹"
+const activeContextMenuOptions = computed(() => {
+  if (menuMode.value === 'blank') {
+    return contextMenuOptions.value.filter(o => o.key === 'addFile' || o.key === 'addFolder')
+  }
+  return contextMenuOptions.value
+})
 
 const isHiddenPath = (path) => {
   if (!path) return false;
@@ -903,6 +914,10 @@ const toggleRepo = async (path) => {
 const loadRepoTree = async (path) => {
   // logger.info('[API] 加载仓库树')
   try {
+    // 切换/加载仓库时清空上一个仓库残留的展开/选中状态，
+    // 否则虚拟树会按旧 key 把目录显示成"已展开箭头"，但其子节点并未加载。
+    expandedKeys.value = []
+    selectedKeys.value = []
     // 无论数据是否为空都重新加载
     await loadFileTree()
     // 确保仓库在加载后保持展开状态
@@ -1065,6 +1080,15 @@ const handleNodeContextMenu = ({ node, x, y }) => {
   const importOpt = contextMenuOptions.value.find(o => o.key === 'importAsTemplate')
   if (importOpt) importOpt.disabled = !canImportAsTemplate
 
+  isContextMenuVisible.value = true
+  contextMenuPosition.value = { x, y }
+  menuMode.value = 'node'
+}
+
+// 文件树空白处右键：未选中任何节点，新建的文件/目录落在当前仓库根目录下
+const handleBlankContextMenu = ({ x, y }) => {
+  selectedNode.value = null
+  menuMode.value = 'blank'
   isContextMenuVisible.value = true
   contextMenuPosition.value = { x, y }
 }
@@ -2146,14 +2170,14 @@ onUnmounted(() => {
 
 /* 新增的标题栏样式 */
 .list-header {
+  flex: 0 0 auto;
   display: flex;
   justify-content: space-between;
   align-items: center;
   padding: 12px 14px;
   margin-bottom: 0;
   background-color: var(--guaxi-header-bg);
-  border-top-left-radius: 8px;
-  border-top-right-radius: 8px;
+  border-radius: 0;
   border-bottom: 1px solid var(--guaxi-border);
 }
 
@@ -2224,11 +2248,16 @@ onUnmounted(() => {
 
 .file-tree-container {
   height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   background-color: var(--guaxi-panel-bg);
   border: 1px solid var(--guaxi-border);
-  border-radius: 14px;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  border-bottom-left-radius: 0px;
+  border-bottom-right-radius: 0px;
   overflow: hidden;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05), 0 10px 28px rgba(0, 0, 0, 0.06);
   font-family: 'Maple Mono NF CN','JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
@@ -2276,23 +2305,40 @@ onUnmounted(() => {
 }
 
 .repo-body {
-  flex: 1;
-  height: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
   display: flex;
   flex-direction: column;
-  min-height: 0;
+  position: relative;
 }
 
 .active-repo-wrapper {
   background-color: var(--guaxi-panel-bg);
   border: 1px solid var(--guaxi-border);
-  border-radius: 12px;
-  margin: 6px 6px 4px 6px;
+  border-radius: 10px;
+  margin-top: 4px;
+  margin-bottom: 0px;
+  margin-left: 2px;
+  margin-right: 1px;
   box-shadow: 0 1px 6px rgba(7, 118, 161, 0.06);
   overflow: hidden;
+  box-sizing: border-box;
+  /* 收起态：按内容自然高度，绝不被下方列表挤压变矮 */
+  flex: 0 0 auto;
 }
 
-/* 激活的知识库展开后占满剩余高度 */
+/* 激活的知识库展开后占满剩余高度。
+   repo-body 已是确定高度(925px)的定位锚点，这里用绝对定位铺满，
+   彻底绕开 flex-grow 在某些渲染帧下不生效、塌成内容高度的问题。 */
+.repo-body.active-filled .active-repo-wrapper.expanded {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 非占满态（激活条目收起时不会展开，此分支基本用于兜底）保持流式布局 */
 .active-repo-wrapper.expanded {
   flex: 1 1 auto;
   min-height: 0;
@@ -2312,8 +2358,14 @@ onUnmounted(() => {
   font-weight: 500;
 }
 
-.active-repo-wrapper .repo-item {
+/* 激活条目展开时头部用大一点的内边距 */
+.active-repo-wrapper.expanded .repo-item {
   padding: 12px 12px;
+}
+
+/* 激活条目收起时，补齐与未激活条目（list-item 5px + repo-item 4px）一致的高度 */
+.active-repo-wrapper:not(.expanded) .repo-item {
+  padding: 9px 12px;
 }
 
 .active-tree-container {
@@ -2328,9 +2380,22 @@ onUnmounted(() => {
   height: 100%;
 }
 
+/* 未激活条目列表：
+   - 激活条目已展开时，通过 v-show 整体隐藏（n-scrollbar 根节点非元素，v-show 必须挂在外层 div 上）；
+   - 激活条目收起（或无激活条目）时，立即从底部顶上来填满剩余空间，排在激活条目之后待用户激活。 */
+.repo-scroll-wrapper {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* 顶部淡出遮罩：未激活条目向上滚动越过顶边时平滑淡出，
+     避免在激活条目下方出现生硬的半截被裁切的条目。 */
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 14px);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 14px);
+}
+
 .repo-scroll-container {
-  flex: 0 1 auto;
-  max-height: 42%;
+  flex: 1 1 auto;
   min-height: 0;
   background-color: transparent;
 }
@@ -2352,26 +2417,39 @@ onUnmounted(() => {
 .repo-list {
   border-radius: 0;
   background-color: transparent;
+  margin-right: 8px;
 }
 
+/* 去掉 naive n-list-item__main 内部默认内边距，避免内容（尤其右侧图标）被推出卡片圆角外 */
+:deep(.repo-list-item .n-list-item__main) {
+  padding: 0;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+/* 未激活条目沿用激活条目的圆润卡片风格 */
 .repo-list-item {
-  padding: 9px 12px;
-  transition: background-color 0.18s ease, box-shadow 0.18s ease;
-  border-radius: 13px;
-  border: 1px solid transparent;
+  padding: 5px 12px;
+  transition: background-color 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+  border-radius: 12px;
+  border: 1px solid var(--guaxi-border);
+  background-color: var(--guaxi-panel-bg);
+  box-shadow: 0 1px 6px rgba(7, 118, 161, 0.06);
   position: relative;
-  margin: 5px 6px;
+  margin: 4px;
   overflow: hidden;
+  box-sizing: border-box;
 }
 
 .repo-list-item:last-child {
-  border-bottom: none;
+  border-bottom: 1px solid var(--guaxi-border);
 }
 
 /* 鼠标悬停效果 - 添加发光边框和背景 */
 .repo-list-item:hover {
   background-color: var(--guaxi-header-bg);
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 1px 6px rgba(7, 118, 161, 0.06), inset 0 0 0 1px rgba(0, 0, 0, 0.08);
 }
 
 /* 鼠标悬停时的文字和图标效果 */
@@ -2397,32 +2475,6 @@ onUnmounted(() => {
   z-index: 3;
 }
 
-.repo-list-item.active.expanded {
-  height: var(--active-repo-max-height, 360px);
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-:deep(.repo-list-item.active.expanded > .n-list-item__main) {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  overflow: hidden;
-}
-
-.repo-list-item.active.expanded .tree-container {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  overscroll-behavior: contain;
-}
-
-.repo-list-item.active.expanded .tree-component {
-  height: 100%;
-}
-
 
 /* 暗色模式下选中状态更明显 */
 .dark-mode .repo-list-item.active {
@@ -2444,6 +2496,8 @@ onUnmounted(() => {
   justify-content: space-between;
   align-items: center;
   width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   cursor: pointer;
   padding: 4px 0;
 }
@@ -2599,5 +2653,15 @@ onUnmounted(() => {
 .kb-manager-icon.active {
   color: var(--n-color-primary, #1890ff);
   background-color: var(--n-color-primary-suppl, #e6f7ff);
+}
+</style>
+
+<!-- 右键菜单 teleport 到 body，scoped 样式无法命中，这里用全局样式统一字体与文件树一致 -->
+<style>
+.file-tree-context-menu.n-dropdown,
+.file-tree-context-menu .n-dropdown-option,
+.file-tree-context-menu .n-dropdown-option-body,
+.file-tree-context-menu .n-dropdown-option-body__label {
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
 }
 </style>

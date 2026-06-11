@@ -1,26 +1,33 @@
 <template>
   <div class="guaxi-content">
-    <n-layout has-sider>
-      <!-- 左侧边栏 -->
-      <n-layout-sider v-model:collapsed="isLeftSiderCollapsed" :width="leftSiderbarWidth" collapse-mode="width"
-        :collapsed-width="0" bordered>
-        <GuaxiSidebar />
+    <div class="layout-row">
+      <!-- 左侧边栏（原生实现，不依赖 naive-ui，保证高度链可控） -->
+      <div
+        class="app-sider left"
+        :class="{ collapsed: isLeftSiderCollapsed }"
+        :style="{ width: isLeftSiderCollapsed ? '0px' : leftSiderbarWidth + 'px' }"
+      >
+        <div class="app-sider-content">
+          <GuaxiSidebar />
+        </div>
         <div class="sider-resize-handle" @mousedown="onMouseDownLeftSidebar" />
-      </n-layout-sider>
+      </div>
 
       <!-- 中间内容 -->
       <GuaxiCenter />
 
-      <!-- 右侧边栏 -->
-      <!-- <n-layout has-sider sider-placement="right"> -->
-      <n-layout-sider v-model:collapsed="isRightSiderCollapsed" :width="rightSiderbarWidth" collapse-mode="width"
-        :collapsed-width="0" bordered content-style="padding: 0; height: 100%; display: flex; flex-direction: column; overflow: hidden;" :native-scrollbar="false"
-        style="height: 100%; position: relative;">
-        <GuaxiRightContent />
+      <!-- 右侧边栏（原生实现） -->
+      <div
+        class="app-sider right"
+        :class="{ collapsed: isRightSiderCollapsed }"
+        :style="{ width: isRightSiderCollapsed ? '0px' : rightSiderbarWidth + 'px' }"
+      >
+        <div class="app-sider-content">
+          <GuaxiRightContent />
+        </div>
         <div class="sidebar-dragger right" @mousedown="onMouseDownRightSidebar" />
-      </n-layout-sider>
-      <!-- </n-layout> -->
-    </n-layout>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -145,24 +152,59 @@ const onMouseDownRightSidebar = (event) => {
   overflow: hidden;
 }
 
-.guaxi-content :deep(.n-layout) {
+/* 横向布局：左栏 + 中间内容 + 右栏 */
+.layout-row {
   flex: 1 1 auto;
   min-height: 0;
-  height: 100%;
+  display: flex;
+  align-items: stretch;
+  width: 100%;
   overflow: hidden;
+  background-color: var(--guaxi-content-bg);
 }
 
-.guaxi-content :deep(.n-layout-content) {
+/* 侧边栏：固定宽度、整列高度，内部用纵向 flex 把高度交给内容 */
+.app-sider {
+  position: relative;
+  flex: 0 0 auto;
+  align-self: stretch;
   min-height: 0;
-  overflow: hidden;
+  height: 100%;
+  box-sizing: border-box;
+  background: var(--guaxi-content-bg);
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+  transition: width 0.2s ease;
+  will-change: width;
 }
 
-.n-layout-sider {
-  position: relative;
-  background: var(--guaxi-content-bg);
-  will-change: width;
+.app-sider.left {
+  border-right: 1px solid var(--guaxi-border);
+}
+
+.app-sider.right {
+  border-left: 1px solid var(--guaxi-border);
+  max-width: 100vw;
+}
+
+.app-sider.collapsed {
+  border-width: 0;
+}
+
+/* 内容包裹层：用绝对定位铺满侧边栏，按父元素的"实际渲染尺寸"撑开，
+   不依赖百分比高度在 flex 链上的解析，从根本上杜绝塌成内容高度的问题。 */
+.app-sider-content {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 拖动时禁用过渡，避免跟手延迟 */
+body.resizing .app-sider {
+  transition: none !important;
 }
 
 .sider-resize-handle {
@@ -192,6 +234,12 @@ const onMouseDownRightSidebar = (event) => {
 .sidebar-dragger.right:hover {
   background-color: rgba(0, 0, 0, 0.1);
 }
+
+/* 折叠时隐藏拖动条 */
+.app-sider.collapsed .sider-resize-handle,
+.app-sider.collapsed .sidebar-dragger.right {
+  display: none;
+}
 </style>
 
 <style>
@@ -202,17 +250,6 @@ body.resizing {
 
 body.resizing * {
   pointer-events: none;
-}
-
-.n-layout-sider[sider-placement="right"] {
-  transition: width 0.2s;
-  will-change: width;
-  max-width: 100vw;
-  box-sizing: border-box;
-}
-
-body.resizing .n-layout-sider {
-  transition: none !important;
 }
 
 body.resizing .sider-resize-handle,

@@ -1,5 +1,5 @@
 <template>
-  <div ref="rootRef" class="vtree" @scroll="onScroll">
+  <div ref="rootRef" class="vtree" @scroll="onScroll" @contextmenu="onBlankContext">
     <div class="vtree-spacer" :style="{ height: totalHeight + 'px' }">
       <div class="vtree-window" :style="{ transform: `translateY(${offsetY}px)` }">
         <div
@@ -66,18 +66,18 @@
     </div>
 
     <div v-if="!flat.length" class="vtree-empty">空目录</div>
-  </div>
 
-  <teleport to="body">
-    <div
-      v-if="dragging"
-      class="vtree-ghost"
-      :style="{ left: ghost.x + 14 + 'px', top: ghost.y + 10 + 'px' }"
-    >
-      <span class="ghost-ico">{{ ghost.isDir ? '📁' : '📄' }}</span>
-      <span class="ghost-text">{{ ghost.text }}</span>
-    </div>
-  </teleport>
+    <teleport to="body">
+      <div
+        v-if="dragging"
+        class="vtree-ghost"
+        :style="{ left: ghost.x + 14 + 'px', top: ghost.y + 10 + 'px' }"
+      >
+        <span class="ghost-ico">{{ ghost.isDir ? '📁' : '📄' }}</span>
+        <span class="ghost-text">{{ ghost.text }}</span>
+      </div>
+    </teleport>
+  </div>
 </template>
 
 <script setup>
@@ -96,7 +96,7 @@ const props = defineProps({
 
 const emit = defineEmits([
   'update:expandedKeys', 'update:selectedKeys', 'update:editName',
-  'open-file', 'load-children', 'contextmenu', 'rename-commit', 'rename-cancel', 'move',
+  'open-file', 'load-children', 'contextmenu', 'blank-contextmenu', 'rename-commit', 'rename-cancel', 'move',
 ])
 
 const OVERSCAN = 8
@@ -189,6 +189,14 @@ function onRowContext(e, node) {
   e.stopPropagation()
   emit('update:selectedKeys', [node.id])
   emit('contextmenu', { node, x: e.clientX, y: e.clientY })
+}
+
+// 文件树空白处右键：未命中任何行，按"当前仓库根目录"上下文处理
+function onBlankContext(e) {
+  if (e.target && e.target.closest && e.target.closest('.vtree-row')) return
+  e.preventDefault()
+  emit('update:selectedKeys', [])
+  emit('blank-contextmenu', { x: e.clientX, y: e.clientY })
 }
 
 function onEditKeydown(e) {
@@ -393,7 +401,7 @@ onBeforeUnmount(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.4;
   letter-spacing: 0.1px;
 }
@@ -404,7 +412,7 @@ onBeforeUnmount(() => {
   border: 1px solid var(--n-color-primary, #0a84ff);
   border-radius: 6px;
   padding: 1px 6px;
-  font-size: 13px;
+  font-size: 14px;
   outline: none;
   background: var(--guaxi-panel-bg, #fff);
   color: var(--guaxi-text-primary, inherit);
