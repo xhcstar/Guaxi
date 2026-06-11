@@ -30,6 +30,32 @@
           Git 操作
         </n-tooltip>
 
+        <n-dropdown trigger="click" :options="openMenuOptions" class="file-tree-context-menu" @select="handleOpenMenuSelect">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-icon-wrapper :size="18" :border-radius="6" class="open-icon">
+                <n-icon :component="OpenIcon" size="16" />
+              </n-icon-wrapper>
+            </template>
+            打开文件 / 目录
+          </n-tooltip>
+        </n-dropdown>
+
+        <n-tooltip trigger="hover">
+          <template #trigger>
+            <n-icon-wrapper
+              :size="18"
+              :border-radius="6"
+              class="mode-toggle-icon"
+              :class="{ active: viewMode === 'plain' }"
+              @click="toggleViewMode"
+            >
+              <n-icon :component="viewMode === 'plain' ? LibraryOutline : SwapHorizontalOutline" size="16" />
+            </n-icon-wrapper>
+          </template>
+          {{ viewMode === 'plain' ? '切换回知识库模式' : '切换到文件编辑模式' }}
+        </n-tooltip>
+
         <n-tooltip trigger="hover">
           <template #trigger>
             <n-icon-wrapper :size="18" :border-radius="6" class="refresh-icon" @click="refreshAll">
@@ -55,7 +81,7 @@
       </div>
     </div>
 
-    <div class="repo-body" :class="{ 'active-filled': isActiveRepoExpanded }">
+    <div v-if="viewMode === 'kb'" class="repo-body" :class="{ 'active-filled': isActiveRepoExpanded }">
       <div v-if="activeRepoPathItem" class="active-repo-wrapper"
         :class="{ expanded: fileTreeStore.isRepoExpanded(activeRepoPathItem) }">
         <div class="repo-item" @click="toggleRepo(activeRepoPathItem)">
@@ -174,6 +200,72 @@
       </div>
     </div>
 
+    <!-- 普通文件编辑模式：外部目录树 / 打开历史列表 -->
+    <div v-else class="repo-body plain-body">
+      <!-- 已激活某个外部目录：显示其文件树 -->
+      <div v-if="externalDir" class="external-dir-wrapper">
+        <div class="external-dir-header">
+          <div class="repo-title" :title="externalDir">
+            <n-icon size="16" class="repo-icon"><FolderIcon /></n-icon>
+            {{ getDirDisplayName(externalDir) }}
+          </div>
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click="backToHistory">
+                <n-icon :component="TimeOutline" size="16" />
+              </n-icon-wrapper>
+            </template>
+            返回历史列表
+          </n-tooltip>
+        </div>
+        <div class="active-tree-container" @wheel.stop>
+          <GuaxiVirtualFileTree
+            class="tree-component"
+            :nodes="externalDirTree"
+            v-model:expanded-keys="externalExpandedKeys"
+            v-model:selected-keys="externalSelectedKeys"
+            :root-id="externalDir"
+            @open-file="handleExternalOpenFile"
+            @load-children="handleExternalLoadChildren"
+          />
+        </div>
+      </div>
+
+      <!-- 未激活外部目录：显示打开历史列表 -->
+      <div v-else class="history-wrapper">
+        <div class="history-header">
+          <span class="history-title">打开历史</span>
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-icon-wrapper :size="18" :border-radius="6" class="action-icon" @click="clearOpenHistory">
+                <n-icon :component="TrashOutline" size="16" />
+              </n-icon-wrapper>
+            </template>
+            清空历史记录
+          </n-tooltip>
+        </div>
+        <n-scrollbar class="repo-scroll-container">
+          <div v-if="!openHistory.length" class="history-empty">
+            暂无历史，点击上方“打开”选择一个目录
+          </div>
+          <div
+            v-for="path in openHistory"
+            :key="path"
+            class="repo-list-item history-item"
+            @click="handleHistoryItemClick(path)"
+          >
+            <div class="repo-item">
+              <div class="repo-title" :title="path">
+                <n-icon size="16" class="repo-icon"><FolderIcon /></n-icon>
+                <span class="history-name">{{ getDirDisplayName(path) }}</span>
+              </div>
+            </div>
+            <div class="history-path">{{ path }}</div>
+          </div>
+        </n-scrollbar>
+      </div>
+    </div>
+
     <!-- 右键菜单 -->
     <n-dropdown v-model:show="isContextMenuVisible" :options="activeContextMenuOptions" placement="bottom-start"
       class="file-tree-context-menu"
@@ -205,7 +297,7 @@
 <script setup>
 import { createLogger } from '../../utils/logger'
 import { NIcon, useMessage, NModal, NForm, NFormItem, NInput, NButton, NSpace } from 'naive-ui'
-import { DocumentTextOutline, FolderOutline, AddOutline, TrashOutline, CreateOutline, MoveOutline, FolderOpenOutline, GlobeOutline, SettingsOutline, GitBranchOutline, DownloadOutline } from '@vicons/ionicons5'
+import { DocumentTextOutline, FolderOutline, AddOutline, TrashOutline, CreateOutline, MoveOutline, FolderOpenOutline, GlobeOutline, SettingsOutline, GitBranchOutline, DownloadOutline, FolderOpenOutline as OpenIcon, DocumentOutline, SwapHorizontalOutline, LibraryOutline, TimeOutline } from '@vicons/ionicons5'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore';
 import GuaxiVirtualFileTree from './GuaxiVirtualFileTree.vue';
@@ -324,6 +416,54 @@ const fileTreeContainerRef = ref(null)
 const repoScrollbarRef = ref(null)
 const activeRepoMaxHeight = ref(360)
 const activeRepoResizeObserver = ref(null)
+
+// ───── 视图模式：'kb' 知识库模式（默认） / 'plain' 普通文件编辑模式 ─────
+const viewMode = ref('kb')
+// plain 模式下当前激活的外部目录（为空则显示历史列表）
+const externalDir = ref(null)
+const externalDirTree = ref([])
+const externalExpandedKeys = ref([])
+const externalSelectedKeys = ref([])
+
+// 打开历史（持久化在 localStorage）
+const OPEN_HISTORY_KEY = 'guaxi_filetree_open_dir_history'
+const openHistory = ref([])
+
+const loadOpenHistory = () => {
+  try {
+    const raw = localStorage.getItem(OPEN_HISTORY_KEY)
+    const arr = raw ? JSON.parse(raw) : []
+    openHistory.value = Array.isArray(arr) ? arr.filter(Boolean) : []
+  } catch {
+    openHistory.value = []
+  }
+}
+
+const persistOpenHistory = () => {
+  try {
+    localStorage.setItem(OPEN_HISTORY_KEY, JSON.stringify(openHistory.value))
+  } catch (e) {
+    logger.warn('保存打开历史失败', e)
+  }
+}
+
+const pushOpenHistory = (dirPath) => {
+  const norm = normalizePath(dirPath)
+  if (!norm) return
+  openHistory.value = [norm, ...openHistory.value.filter(p => normalizePath(p) !== norm)].slice(0, 50)
+  persistOpenHistory()
+}
+
+const clearOpenHistory = () => {
+  openHistory.value = []
+  persistOpenHistory()
+}
+
+// "打开"下拉菜单
+const openMenuOptions = [
+  { label: '打开文件', key: 'openFile', icon: () => h(NIcon, null, { default: () => h(DocumentOutline) }) },
+  { label: '打开目录', key: 'openDir', icon: () => h(NIcon, null, { default: () => h(FolderOpenOutline) }) },
+]
 
 const activeRepoPathItem = computed(() => {
   const list = Array.isArray(fileTreeStore.repopathlist) ? fileTreeStore.repopathlist : []
@@ -1065,6 +1205,124 @@ const handleLoadChildren = async (node) => {
   } catch (error) {
     logger.error('加载子目录内容失败:', error)
   }
+}
+
+// ───── "打开"菜单 / 模式切换 / 外部目录树 ─────
+const handleOpenMenuSelect = async (key) => {
+  if (key === 'openFile') await openExternalFile()
+  else if (key === 'openDir') await openExternalDir()
+}
+
+// 打开文件：直接在主编辑区打开用户通过文件浏览器选择的文件
+const openExternalFile = async () => {
+  try {
+    const picked = await open({ directory: false, multiple: false, title: '打开文件' })
+    if (!picked) return
+    const filePath = Array.isArray(picked) ? picked[0] : picked
+    if (!filePath) return
+    const res = await fileTreeStore.fetchFileContent(filePath)
+    if (res?.ok) {
+      await fileTreeStore.openFileInTab(filePath, res.content, { unsupported: !!res.unsupported })
+      if (res.unsupported) message.warning('不支持打开该文件类型（仅支持文本/Markdown）')
+    } else {
+      message.error('无法打开该文件')
+    }
+  } catch (error) {
+    logger.error('打开文件失败:', error)
+    message.error('打开文件失败')
+  }
+}
+
+// 打开目录：把知识编辑区切换为该外部目录对应的文件树，并记入历史
+const openExternalDir = async () => {
+  try {
+    const picked = await open({ directory: true, multiple: false, title: '打开目录' })
+    if (!picked) return
+    const dirPath = Array.isArray(picked) ? picked[0] : picked
+    if (!dirPath) return
+    pushOpenHistory(dirPath)
+    await activateExternalDir(dirPath)
+  } catch (error) {
+    logger.error('打开目录失败:', error)
+    message.error('打开目录失败')
+  }
+}
+
+// 激活某个外部目录的文件树（进入 plain 模式并展示其目录树）
+const activateExternalDir = async (dirPath) => {
+  const norm = normalizePath(dirPath)
+  viewMode.value = 'plain'
+  externalDir.value = norm
+  externalExpandedKeys.value = []
+  externalSelectedKeys.value = []
+  externalDirTree.value = []
+  try {
+    await fileTreeStore.fetchFileTree(norm, { force: true })
+    const filtered = filterHiddenTree(fileTreeStore.fileTree)
+    externalDirTree.value = sortFileTree(normalizeTreeIds(filtered))
+  } catch (error) {
+    logger.error('加载外部目录树失败:', error)
+    message.error('加载目录失败')
+  }
+}
+
+// 切换视图模式：kb ⇄ plain
+const toggleViewMode = () => {
+  if (viewMode.value === 'kb') {
+    viewMode.value = 'plain'
+    // 进入 plain 模式：若没有已激活的外部目录则展示历史列表
+  } else {
+    viewMode.value = 'kb'
+    externalDir.value = null
+  }
+}
+
+// plain 模式下点击历史条目，激活其文件树
+const handleHistoryItemClick = async (path) => {
+  pushOpenHistory(path)
+  await activateExternalDir(path)
+}
+
+// plain 模式：返回历史列表（清掉当前激活的外部目录）
+const backToHistory = () => {
+  externalDir.value = null
+  externalDirTree.value = []
+}
+
+// 外部目录树：打开文件
+const handleExternalOpenFile = async (node) => {
+  if (!node || node.is_directory) return
+  externalSelectedKeys.value = [node.id]
+  try {
+    const res = await fileTreeStore.fetchFileContent(node.id)
+    if (res?.ok) {
+      await fileTreeStore.openFileInTab(node.id, res.content, { unsupported: !!res.unsupported })
+      if (res.unsupported) message.warning('不支持打开该文件类型（仅支持文本/Markdown）')
+    } else {
+      message.warning('文件不存在或已被删除')
+    }
+  } catch (error) {
+    logger.error('打开外部文件失败:', error)
+  }
+}
+
+// 外部目录树：懒加载子目录
+const handleExternalLoadChildren = async (node) => {
+  if (!node?.is_directory) return
+  externalSelectedKeys.value = [node.id]
+  try {
+    const dirId = normalizePath(node.id)
+    await fileTreeStore.fetchFileTree(dirId, { force: true })
+    const filtered = filterHiddenTree(fileTreeStore.fileTree)
+    node.children = sortFileTree(normalizeTreeIds(filtered))
+  } catch (error) {
+    logger.error('加载外部子目录失败:', error)
+  }
+}
+
+const getDirDisplayName = (path) => {
+  const p = String(path || '')
+  return p.split(/[\\/]/).filter(Boolean).pop() || p
 }
 
 // 右键菜单(虚拟树 contextmenu 事件):等价旧 nodeProps 的逻辑
@@ -2055,6 +2313,9 @@ watch(
 
 // 初始化时获取文件树数据
 onMounted(async () => {
+  // 0. 载入打开历史
+  loadOpenHistory()
+
   // 1. 初始化知识库
   await initializeRepositories()
 
@@ -2632,6 +2893,8 @@ onUnmounted(() => {
 .refresh-icon,
 .browser-icon,
 .git-icon,
+.open-icon,
+.mode-toggle-icon,
 .kb-manager-icon {
   color: var(--guaxi-text-secondary);
   background-color: transparent;
@@ -2649,10 +2912,109 @@ onUnmounted(() => {
 .browser-icon.active,
 .git-icon:hover,
 .git-icon.active,
+.open-icon:hover,
+.open-icon.active,
+.mode-toggle-icon:hover,
+.mode-toggle-icon.active,
 .kb-manager-icon:hover,
 .kb-manager-icon.active {
   color: var(--n-color-primary, #1890ff);
   background-color: var(--n-color-primary-suppl, #e6f7ff);
+}
+
+/* ───── 普通文件编辑模式：外部目录树 / 历史列表 ───── */
+.plain-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.external-dir-wrapper {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin: 6px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 12px;
+  background-color: var(--guaxi-panel-bg);
+  box-shadow: 0 1px 6px rgba(7, 118, 161, 0.06);
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.external-dir-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--guaxi-border);
+}
+
+.external-dir-header .repo-title {
+  color: #1890ff;
+  font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.external-dir-header .repo-title span,
+.history-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-wrapper {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.history-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  color: var(--guaxi-text-secondary);
+}
+
+.history-title {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.history-empty {
+  padding: 24px 16px;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--guaxi-text-secondary);
+  opacity: 0.7;
+}
+
+.history-item {
+  flex-direction: column;
+  align-items: stretch;
+  cursor: pointer;
+}
+
+.history-item .repo-item {
+  padding: 2px 0;
+}
+
+.history-path {
+  margin-top: 2px;
+  padding-left: 24px;
+  font-size: 11px;
+  color: var(--guaxi-text-secondary);
+  opacity: 0.7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>
 
