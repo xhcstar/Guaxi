@@ -1653,6 +1653,89 @@ pub async fn export_tex_pdf_tectonic(input_path: String, output_path: String) ->
     Ok(())
 }
 
+/// 为 LaTeX 实时预览构建 PDF：
+/// - `source_path`：当前 .tex 文件路径（用于定位其所在目录，保证 \input/图片等相对依赖可解析）。
+/// - `content`：编辑器当前内容（未必已落盘）；写入源目录下的临时 .tex 再编译，从而支持"实时预览"。
+/// 返回生成的 PDF 临时文件路径，前端用 read_file_bytes_base64 读取后用 pdf.js 渲染。
+#[tauri::command]
+pub async fn build_tex_pdf_preview(source_path: String, content: String) -> Result<String, String> {
+    let source = PathBuf::from(source_path.trim());
+    let input_dir = source
+        .parent()
+        .map(|p| p.to_path_buf())
+        .filter(|p| p.is_dir())
+        .ok_or_else(|| "无法定位 .tex 文件所在目录".to_string())?;
+
+    // 临时源文件名：放在源目录里（让相对路径依赖可用），用固定前缀避免污染。
+    let stem = source
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("preview")
+        .to_string();
+    let tmp_stem = format!(".guaxi_preview_{stem}");
+    let tmp_tex = input_dir.join(format!("{tmp_stem}.tex"));
+
+    fs::write(&tmp_tex, content.as_bytes())
+        .map_err(|e| format!("写入预览临时文件失败: {e}"))?;
+
+    let (tectonic_path, is_bundled) = find_tectonic_exe_for_export()?;
+
+    let tmp_base = std::env::temp_dir().join("guaxi_tectonic_preview");
+    let _ = fs::create_dir_all(&tmp_base);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?;
+    let outdir = tmp_base.join(format!("{}", now.as_nanos()));
+    let _ = fs::remove_dir_all(&outdir);
+    fs::create_dir_all(&outdir).map_err(|e| format!("创建预览输出目录失败: {e}"))?;
+
+    let mut cmd = Command::new(&tectonic_path);
+
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    cmd.current_dir(&input_dir)
+        .arg("-X")
+        .arg("compile")
+        .arg("--outdir")
+        .arg(&outdir)
+        .arg("--untrusted")
+        .arg(&tmp_tex);
+
+    let out = cmd.output();
+
+    // 无论成功失败都清理源目录里的临时 .tex
+    let _ = fs::remove_file(&tmp_tex);
+
+    let out = out.map_err(|e| format!("启动 tectonic 失败: {e} (path={})", tectonic_path.display()))?;
+
+    if !out.status.success() {
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        let mut hint = String::new();
+        if !is_bundled {
+            hint.push_str("\n\nHint: 未找到内置 tectonic，可将对应平台二进制放到 src-tauri/utils 下，或确保系统 PATH 中存在 tectonic。");
+        }
+        return Err(format!(
+            "tectonic 构建失败 (code={:?})\n{}\n{}{}",
+            out.status.code(),
+            stdout,
+            stderr,
+            hint
+        ));
+    }
+
+    let pdf_path = outdir.join(format!("{tmp_stem}.pdf"));
+    if !pdf_path.is_file() {
+        return Err(format!(
+            "tectonic 构建完成但未找到 PDF: {}",
+            pdf_path.to_string_lossy()
+        ));
+    }
+
+    Ok(pdf_path.to_string_lossy().to_string())
+}
+
 #[tauri::command]
 pub async fn export_markdown_pandoc(
     input_path: String,

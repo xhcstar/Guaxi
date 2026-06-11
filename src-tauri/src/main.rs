@@ -244,6 +244,7 @@ async fn main() {
             commands::docprocess::export_markdown_pdf_pandoc,
             commands::docprocess::export_markdown_pandoc,
             commands::docprocess::export_tex_pdf_tectonic,
+            commands::docprocess::build_tex_pdf_preview,
             commands::markdown_reader_doc_process::markdown_reader_load_markdown_file,
             commands::word_reader_doc_process::read_word_file,
             commands::epub_reader_doc_process::read_epub_file,

@@ -368,6 +368,15 @@
             </n-tooltip>
           </n-dropdown>
 
+          <n-tooltip v-if="isTexFile" placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text :type="latexPreviewVisible ? 'primary' : 'default'" @click="toggleLatexPreview">
+                <n-icon :component="LatexPreviewIcon" size="18" />
+              </n-button>
+            </template>
+            {{ latexPreviewVisible ? '关闭 LaTeX 预览' : 'LaTeX 预览' }}
+          </n-tooltip>
+
           <n-dropdown trigger="click" :options="exportOptions" @select="handleExportSelect">
             <n-tooltip placement="top" trigger="hover">
               <template #trigger>
@@ -943,6 +952,16 @@
         <GuaxiEditorStatusBar class="editor-status-bar" />
       </div>
 
+      <GuaxiLatexPreview
+        v-if="isTexFile && latexPreviewVisible"
+        class="latex-preview-pane"
+        :pdf-path="latexPreviewRealPdfPath"
+        :building="latexPreviewBuilding"
+        :error-text="latexPreviewError"
+        @rebuild="buildLatexPreview"
+        @export="handleLatexExport"
+      />
+
       <transition name="python-console-slide">
         <div
           v-if="pythonConsoleVisible"
@@ -1037,11 +1056,12 @@ import { useSiderStore } from '../../stores/useSiderStore'
 import GuaxiEditorStatusBar from './GuaxiEditorStatusBar.vue'
 import GuaxiSelectionTranslatePanel from './GuaxiSelectionTranslatePanel.vue'
 import GuaxiNotebookView from './GuaxiNotebookView.vue'
+import GuaxiLatexPreview from './GuaxiLatexPreview.vue'
 import GuaxiTerminalPanel from './GuaxiTerminalPanel.vue'
 import { EXPORT_SHELL_CSS, EXPORT_PYCELL_CSS } from './guaxiExportStyles'
 import { NTooltip, NIcon, useMessage, NDropdown, NPopover, NInputNumber, NBreadcrumb, NBreadcrumbItem } from 'naive-ui'
 import { Icon } from '@iconify/vue'
-import { EyeOutline, LogoVimeo, CloseOutline, ExitOutline, SaveOutline, ArrowBackOutline, ArrowForwardOutline } from '@vicons/ionicons5'
+import { EyeOutline, LogoVimeo, CloseOutline, ExitOutline, SaveOutline, ArrowBackOutline, ArrowForwardOutline, DocumentTextOutline as LatexPreviewIcon } from '@vicons/ionicons5'
 import { DocumentEdit16Regular, Edit16Filled, Image28Regular } from '@vicons/fluent'
 // Iconify local icon imports (lucide + mdi) to preserve original visuals without runtime network fetch
 import headingIcon from '@iconify-icons/lucide/heading'
@@ -1983,6 +2003,7 @@ const syncRealtimeValueToRawContent = debounce((value) => {
   rawContent.value = value;
   const path = fileTreeStore.activeTab;
   if (path) fileTreeStore.updateTabContent(path, value);
+  scheduleLatexPreviewRebuild();
 }, 120);
 
 let editor = null;
@@ -10190,6 +10211,7 @@ const setupEditorListeners = () => {
       const path = getEditorBoundTabPath(editor);
       rawContent.value = content;
       if (path) fileTreeStore.updateTabContent(path, content);
+      scheduleLatexPreviewRebuild();
       void retainVsCodeTextModel({
         resource: model.uri,
         content,
@@ -13225,6 +13247,11 @@ const saveContent = async () => {
     if (lastPreviewRenderedSource.value !== content) {
       renderDebounced(content);
     }
+  }
+
+  // LaTeX 预览：保存后立即重建（与防抖实时构建互补）
+  if (latexPreviewVisible.value && isTexFile.value) {
+    buildLatexPreview();
   }
 };
 
@@ -17641,12 +17668,90 @@ const canPreview = computed(() => {
   return editorStore.language === 'markdown';
 });
 
+// ───── LaTeX 预览 ─────
+const isTexFile = computed(() => {
+  const path = selectedFile.value?.path || ''
+  return /\.tex$/i.test(path)
+})
+const latexPreviewVisible = ref(false)
+const latexPreviewPdfPath = ref('')
+const latexPreviewBuilding = ref(false)
+const latexPreviewError = ref('')
+let latexBuildDebounceTimer = null
+let latexBuildSeq = 0
+
+const toggleLatexPreview = () => {
+  latexPreviewVisible.value = !latexPreviewVisible.value
+  if (latexPreviewVisible.value) {
+    // 打开时立即构建一次
+    buildLatexPreview()
+  }
+}
+
+const getCurrentTexContent = () => {
+  const targetEditor = getActiveEditor()
+  if (targetEditor) return targetEditor.getValue()
+  return rawContent.value || activeTabContent.value || ''
+}
+
+const buildLatexPreview = async () => {
+  const sourcePath = selectedFile.value?.path || fileTreeStore.activeTab || ''
+  if (!sourcePath || !/\.tex$/i.test(sourcePath)) return
+  const seq = ++latexBuildSeq
+  latexPreviewBuilding.value = true
+  latexPreviewError.value = ''
+  try {
+    const content = getCurrentTexContent()
+    const pdfPath = await invoke('build_tex_pdf_preview', { sourcePath, content })
+    if (seq !== latexBuildSeq) return // 被更晚的构建取代
+    // 加 query 触发 pane 的 watch（即便路径相同也重新加载）
+    latexPreviewPdfPath.value = `${pdfPath}?v=${seq}`
+  } catch (err) {
+    if (seq !== latexBuildSeq) return
+    latexPreviewError.value = String(err?.message || err || '构建失败')
+    logger.error('[LatexPreview] build failed', { error: latexPreviewError.value })
+  } finally {
+    if (seq === latexBuildSeq) latexPreviewBuilding.value = false
+  }
+}
+
+// 实时预览：编辑停顿后防抖重建
+const scheduleLatexPreviewRebuild = () => {
+  if (!latexPreviewVisible.value || !isTexFile.value) return
+  if (latexBuildDebounceTimer) clearTimeout(latexBuildDebounceTimer)
+  latexBuildDebounceTimer = setTimeout(() => {
+    latexBuildDebounceTimer = null
+    buildLatexPreview()
+  }, 1200)
+}
+
+// pdfPath 去掉 query 后的真实路径（供 pane 读取）
+const latexPreviewRealPdfPath = computed(() => String(latexPreviewPdfPath.value).split('?')[0])
+
+// 导出预览 PDF：复用现有的 tex→pdf 导出流程（从已保存源文件干净构建）
+const handleLatexExport = async () => {
+  // 确保先保存，导出从磁盘读取源文件
+  try { await saveContent() } catch { /* noop */ }
+  await handleExportSelect('pdf')
+}
+
 const lastSelectedFilePath = ref(null)
 let skipPreviousTabSyncOnce = false
 
 // 监听文件选择
 watch(selectedFile, async (newFile) => {
   flushPythonCellDrafts()
+  // 切到非 .tex 文件时关闭 LaTeX 预览，避免空分屏；切到 .tex 且预览开启则重建
+  {
+    const p = newFile?.path || ''
+    if (!/\.tex$/i.test(p)) {
+      latexPreviewVisible.value = false
+      latexPreviewPdfPath.value = ''
+      latexPreviewError.value = ''
+    } else if (latexPreviewVisible.value) {
+      nextTick(() => buildLatexPreview())
+    }
+  }
   if (newFile) {
     const nextPath = newFile.path || '';
     const prevPath = lastSelectedFilePath.value || '';
@@ -19625,6 +19730,10 @@ onUnmounted(() => {
     window.clearTimeout(previewRenderTimer)
     previewRenderTimer = null
   }
+  if (latexBuildDebounceTimer) {
+    clearTimeout(latexBuildDebounceTimer)
+    latexBuildDebounceTimer = null
+  }
   disposePreviewMarkdownWorker('editor-unmount')
   if (notebookDiskPersistTimer) {
     const pendingNotebookContent = String(rawContent.value ?? '')
@@ -21129,6 +21238,14 @@ onUnmounted(() => {
 
 .editor-content.realtime {
   flex-direction: column;
+}
+
+/* LaTeX 预览分屏：与编辑器并列，占右半区 */
+.latex-preview-pane {
+  flex: 1 1 0;
+  min-width: 0;
+  width: 0;
+  border-left: 1px solid var(--guaxi-border, #3e4451);
 }
 
 .realtime-vditor {
