@@ -145,8 +145,26 @@ const themeOverrides = computed(() => {
 
 html,
 body {
+  /*
+   * 根布局设计说明：
+   * 1. 应用内部的文件树、编辑器等面板各自管理滚动，浏览器文档本身不参与滚动。
+   * 2. 清除 body 默认的 8px 外边距，避免页面使用满高布局时产生额外高度。
+   * 3. 建立 html -> body -> #app 的完整高度链，页面组件可以稳定继承窗口高度。
+   */
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
   background: var(--guaxi-app-bg);
   color: var(--guaxi-text-primary);
+}
+
+#app {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 pre,
