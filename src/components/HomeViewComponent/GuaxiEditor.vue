@@ -371,7 +371,7 @@
           <n-tooltip v-if="isTexFile" placement="top" trigger="hover">
             <template #trigger>
               <n-button text :type="latexPreviewVisible ? 'primary' : 'default'" @click="toggleLatexPreview">
-                <n-icon :component="LatexPreviewIcon" size="18" />
+                <Icon :icon="texFileIcon" width="18" height="18" />
               </n-button>
             </template>
             {{ latexPreviewVisible ? '关闭 LaTeX 预览' : 'LaTeX 预览' }}
@@ -644,7 +644,7 @@
       </div>
     </div>
 
-    <div class="editor-content" :class="previewMode">
+    <div class="editor-content" :class="[previewMode, { 'has-latex-preview': isTexFile && latexPreviewVisible }]" ref="editorContentRef">
       <div v-if="showEditorEmptyState" class="editor-empty">请选择一个文件以开始编辑</div>
       <div v-show="selectedFile && previewMode === 'realtime' && canPreview" id="realtime-vditor"
         class="realtime-vditor">
@@ -952,12 +952,21 @@
         <GuaxiEditorStatusBar class="editor-status-bar" />
       </div>
 
+      <div
+        v-if="isTexFile && latexPreviewVisible"
+        class="latex-preview-resizer"
+        :class="{ dragging: latexPreviewResizing }"
+        @mousedown="startResizeLatexPreview"
+      />
+
       <GuaxiLatexPreview
         v-if="isTexFile && latexPreviewVisible"
         class="latex-preview-pane"
+        :style="{ flex: `0 0 ${latexPreviewWidth}px` }"
         :pdf-path="latexPreviewRealPdfPath"
         :building="latexPreviewBuilding"
         :error-text="latexPreviewError"
+        :theme="settingsStore.appearanceTheme"
         @rebuild="buildLatexPreview"
         @export="handleLatexExport"
       />
@@ -1061,7 +1070,7 @@ import GuaxiTerminalPanel from './GuaxiTerminalPanel.vue'
 import { EXPORT_SHELL_CSS, EXPORT_PYCELL_CSS } from './guaxiExportStyles'
 import { NTooltip, NIcon, useMessage, NDropdown, NPopover, NInputNumber, NBreadcrumb, NBreadcrumbItem } from 'naive-ui'
 import { Icon } from '@iconify/vue'
-import { EyeOutline, LogoVimeo, CloseOutline, ExitOutline, SaveOutline, ArrowBackOutline, ArrowForwardOutline, DocumentTextOutline as LatexPreviewIcon } from '@vicons/ionicons5'
+import { EyeOutline, LogoVimeo, CloseOutline, ExitOutline, SaveOutline, ArrowBackOutline, ArrowForwardOutline } from '@vicons/ionicons5'
 import { DocumentEdit16Regular, Edit16Filled, Image28Regular } from '@vicons/fluent'
 // Iconify local icon imports (lucide + mdi) to preserve original visuals without runtime network fetch
 import headingIcon from '@iconify-icons/lucide/heading'
@@ -1101,6 +1110,7 @@ import trash2Icon from '@iconify-icons/lucide/trash-2'
 import mermaid from 'mermaid'
 import folderIcon from '@iconify-icons/lucide/folder'
 import fileTextIcon from '@iconify-icons/lucide/file-text'
+import texFileIcon from '@iconify-icons/vscode-icons/file-type-tex'
 import hashIcon from '@iconify-icons/lucide/hash'
 
 import tableRowPlusAfter from '@iconify-icons/mdi/table-row-plus-after'
@@ -1517,6 +1527,7 @@ const secondaryEditorContainer = ref(null);
 const editorWrapperRef = ref(null);
 const editorHeaderRef = ref(null);
 const previewShellRef = ref(null);
+const editorContentRef = ref(null);
 const previewSearchInputRef = ref(null)
 const floatingToolbarVisible = ref(false);
 const floatingToolbarStyle = ref({ left: '0px', top: '0px' });
@@ -17680,6 +17691,58 @@ const latexPreviewError = ref('')
 let latexBuildDebounceTimer = null
 let latexBuildSeq = 0
 
+// 预览面板宽度（与编辑器之间可拖拽调整）
+const LATEX_PREVIEW_WIDTH_STORAGE_KEY = 'guaxi:latexPreviewWidth'
+const LATEX_PREVIEW_MIN_WIDTH = 320
+const readStoredLatexPreviewWidth = () => {
+  try {
+    const raw = Number(window.localStorage.getItem(LATEX_PREVIEW_WIDTH_STORAGE_KEY))
+    if (Number.isFinite(raw) && raw >= LATEX_PREVIEW_MIN_WIDTH) return raw
+  } catch { /* noop */ }
+  return 560
+}
+const latexPreviewWidth = ref(readStoredLatexPreviewWidth())
+const latexPreviewResizing = ref(false)
+let latexPreviewResizeStartX = 0
+let latexPreviewResizeStartWidth = 0
+
+const clampLatexPreviewWidth = (width) => {
+  const container = editorContentRef.value
+  const total = container ? container.getBoundingClientRect().width : window.innerWidth
+  // 给编辑器至少留 280px，预览最小 320px
+  const max = Math.max(LATEX_PREVIEW_MIN_WIDTH, total - 280)
+  return Math.min(max, Math.max(LATEX_PREVIEW_MIN_WIDTH, Math.round(width)))
+}
+
+const handleResizeLatexPreviewMove = (event) => {
+  if (!latexPreviewResizing.value) return
+  // 面板在右侧：向左拖（clientX 变小）应增大宽度
+  const delta = latexPreviewResizeStartX - Number(event?.clientX || 0)
+  const next = clampLatexPreviewWidth(latexPreviewResizeStartWidth + delta)
+  if (next === latexPreviewWidth.value) return
+  latexPreviewWidth.value = next
+}
+
+const stopResizeLatexPreview = () => {
+  if (!latexPreviewResizing.value) return
+  latexPreviewResizing.value = false
+  document.body.style.userSelect = ''
+  document.body.style.cursor = ''
+  window.removeEventListener('mousemove', handleResizeLatexPreviewMove, true)
+  window.removeEventListener('mouseup', stopResizeLatexPreview, true)
+  try { window.localStorage.setItem(LATEX_PREVIEW_WIDTH_STORAGE_KEY, String(latexPreviewWidth.value)) } catch { /* noop */ }
+}
+
+const startResizeLatexPreview = (event) => {
+  latexPreviewResizing.value = true
+  latexPreviewResizeStartX = Number(event?.clientX || 0)
+  latexPreviewResizeStartWidth = Number(latexPreviewWidth.value || 560)
+  document.body.style.userSelect = 'none'
+  document.body.style.cursor = 'col-resize'
+  window.addEventListener('mousemove', handleResizeLatexPreviewMove, true)
+  window.addEventListener('mouseup', stopResizeLatexPreview, true)
+}
+
 const toggleLatexPreview = () => {
   latexPreviewVisible.value = !latexPreviewVisible.value
   if (latexPreviewVisible.value) {
@@ -21240,12 +21303,46 @@ onUnmounted(() => {
   flex-direction: column;
 }
 
-/* LaTeX 预览分屏：与编辑器并列，占右半区 */
-.latex-preview-pane {
+/* LaTeX 预览分屏：与编辑器并列，宽度由内联 flex-basis 控制，可拖拽 */
+.editor-content.has-latex-preview {
+  flex-direction: row;
+}
+
+.editor-content.has-latex-preview > .editor-wrapper {
   flex: 1 1 0;
   min-width: 0;
   width: 0;
+}
+
+.latex-preview-resizer {
+  flex: 0 0 5px;
+  cursor: col-resize;
+  background: var(--guaxi-border, #3e4451);
+  position: relative;
+  z-index: 5;
+  transition: background-color 0.15s;
+}
+.latex-preview-resizer:hover,
+.latex-preview-resizer.dragging {
+  background: var(--n-color-primary, #61afef);
+}
+/* 加宽热区，便于命中 */
+.latex-preview-resizer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -4px;
+  right: -4px;
+}
+
+.latex-preview-pane {
+  min-width: 0;
   border-left: 1px solid var(--guaxi-border, #3e4451);
+}
+
+.editor-content.has-latex-preview.dragging-latex {
+  cursor: col-resize;
 }
 
 .realtime-vditor {
