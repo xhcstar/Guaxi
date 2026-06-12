@@ -3830,6 +3830,10 @@ const exitMarkdownEditMode = (key, reason = 'manual-exit') => {
 // 2. 这里把“本地 cell 状态更新”和“整篇 Markdown 回写”拆开：输入时先只更新本地，再稍后批量 flush。
 // 3. 插入、删除、运行写回这类结构性操作仍保持立即同步，避免用户感知到延迟。
 const flushNotebookMarkdown = (reason = 'unknown') => {
+  // 先把防抖中的 cell 内容编辑落地，避免序列化出旧内容
+  if (pendingCellContentEdits.size) {
+    applyPendingCellContentEdits()
+  }
   const nextMarkdown = serializeNotebookCells(notebookCells.value)
   lastEmittedMarkdown.value = normalizeNotebookMarkdownText(nextMarkdown)
   emit('update:markdown', nextMarkdown)
@@ -3953,27 +3957,30 @@ const updateMarkdownCell = (key, event) => {
   const value = typeof event === 'string'
     ? event
     : String(event?.target?.value || '')
-  emitCells(
-    notebookCells.value.map((cell) => {
-      if (cell.type !== 'markdown' || String(cell.key) !== String(key)) return cell
-      return createNotebookMarkdownCell(value, { key: cell.key })
-    }),
-    '',
-    { deferMarkdownSync: true },
-  )
+  queueCellContentEdit(String(key), 'markdown', value)
 }
 
-const updatePythonCell = (key, payload) => {
-  if (payload?.target) {
-    resizeTextareaToContent(payload.target)
-  }
-  const value = typeof payload === 'string'
-    ? payload
-    : String(payload?.target?.value || '')
-  const targetCell = notebookCells.value.find((cell) => cell?.type === 'python' && String(cell?.key || '') === String(key))
-  if (targetCell) {
+// ───── Cell 内容编辑：防抖重建 ─────
+// 设计说明：
+// 1. 之前每敲一个字符都 emitCells()，会整份重排 94 个 cell、重渲染所有 markdown、跑 tree-sitter、记历史、写 sidecar，
+//    在主线程同步执行 → 大文档卡顿；这一重渲染还会打断正在聚焦 cell 的 IME 组合 → 中文只能交替输入。
+// 2. 编辑期间 cell 的 Monaco 编辑器本身持有最新内容（回声守卫已避免外部回写），因此把整份重建防抖到停顿后再做一次即可。
+// 3. 运行 cell / 保存 / markdown 同步等任何读取 cell 内容的操作前，必须先 flushPendingCellContentEdits() 落地，避免读到旧内容。
+const pendingCellContentEdits = new Map()
+
+const applyPendingCellContentEdits = () => {
+  if (!pendingCellContentEdits.size) return
+  const edits = new Map(pendingCellContentEdits)
+  pendingCellContentEdits.clear()
+
+  edits.forEach((edit, key) => {
+    if (edit.type !== 'python') return
+    const targetCell = notebookCells.value.find(
+      (cell) => cell?.type === 'python' && String(cell?.key || '') === String(key),
+    )
+    if (!targetCell) return
     const currentDigest = getNotebookCellContentDigest(targetCell)
-    const nextDigest = computeNotebookDigest(value)
+    const nextDigest = computeNotebookDigest(edit.value)
     if (currentDigest !== nextDigest) {
       const currentSnapshot = getPythonCellSnapshot(props.filePath, targetCell.cellId)
       patchPythonCellSnapshot(
@@ -3983,18 +3990,45 @@ const updatePythonCell = (key, payload) => {
       )
       bumpRefresh()
     }
-  }
+  })
+
   emitCells(
     notebookCells.value.map((cell) => {
-      if (cell.type !== 'python' || String(cell.key) !== String(key)) return cell
-      return createNotebookPythonCell({
-        ...cell,
-        code: value,
-      })
+      const edit = edits.get(String(cell.key))
+      if (!edit) return cell
+      if (edit.type === 'python' && cell.type === 'python') {
+        return createNotebookPythonCell({ ...cell, code: edit.value })
+      }
+      if (edit.type === 'markdown' && cell.type === 'markdown') {
+        return createNotebookMarkdownCell(edit.value, { key: cell.key })
+      }
+      return cell
     }),
     '',
     { deferMarkdownSync: true },
   )
+}
+
+const debouncedApplyPendingCellContentEdits = debounce(applyPendingCellContentEdits, 250)
+
+const flushPendingCellContentEdits = () => {
+  debouncedApplyPendingCellContentEdits.cancel()
+  applyPendingCellContentEdits()
+}
+
+const queueCellContentEdit = (key, type, value) => {
+  pendingCellContentEdits.set(String(key), { type, value })
+  debouncedApplyPendingCellContentEdits()
+}
+
+const updatePythonCell = (key, payload) => {
+  if (payload?.target) {
+    resizeTextareaToContent(payload.target)
+  }
+  const value = typeof payload === 'string'
+    ? payload
+    : String(payload?.target?.value || '')
+  queueCellContentEdit(String(key), 'python', value)
 }
 
 const updateMathCell = (key, eventOrValue) => {
@@ -8549,6 +8583,16 @@ const handleNotebookDataLabActionEvent = async (event) => {
 }
 
 const runPythonCell = async (cell, { writeBack = false } = {}) => {
+  // 运行前先把防抖中的编辑落地，并重新取到该 cell 的最新内容（emitCells 会重建 cell 对象）
+  if (pendingCellContentEdits.size) {
+    applyPendingCellContentEdits()
+    const refreshed = notebookCells.value.find(
+      (item) => item?.type === 'python'
+        && (String(item?.cellId || '') === String(cell?.cellId || '')
+          || String(item?.key || '') === String(cell?.key || '')),
+    )
+    if (refreshed) cell = refreshed
+  }
   flushPendingNotebookMarkdown('before-run-python-cell')
   if (!cell?.code) {
     message.warning('Python 代码为空')
@@ -8925,6 +8969,10 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   clearNotebookTopToolbarHideTimer()
+  // 落地防抖中的 cell 内容编辑，避免关闭/切换时丢失最后一段输入
+  if (pendingCellContentEdits.size) {
+    applyPendingCellContentEdits()
+  }
   // 笔记本关闭时清理本文件的数学块会话状态（与 Python Cell 解耦，只清数学自己的键）。
   void clearMathSessionState(props.filePath, 'unmount')
   if (notebookSearchIndexSyncTimer) {

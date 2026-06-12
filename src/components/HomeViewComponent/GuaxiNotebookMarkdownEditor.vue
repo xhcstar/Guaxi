@@ -28,11 +28,12 @@ import 'monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution'
 import 'monaco-editor/esm/vs/editor/contrib/clipboard/browser/clipboard.js'
 import 'monaco-editor/esm/vs/editor/standalone/browser/quickAccess/standaloneCommandsQuickAccess.js'
 import { createLogger } from '../../utils/logger'
-import { initLspClient } from '../../monaco/lspClient'
+import { initLspClient, setLspImeComposing } from '../../monaco/lspClient'
 import {
   replaceModelContentPreserveUndo,
   retainVsCodeTextModel,
   releaseVsCodeTextModel,
+  setBridgeImeComposing,
 } from '../../monaco/vscodeModelBridge'
 
 const props = defineProps({
@@ -69,6 +70,12 @@ let contentChangeDisposable = null
 let contentSizeDisposable = null
 let focusDisposable = null
 let blurDisposable = null
+let compositionStartDisposable = null
+let compositionEndDisposable = null
+let imeDomCleanup = null
+let imeComposing = false
+let savedQuickSuggestionsDuringIme
+let lastEmittedModelValue = null
 let currentAppliedTheme = ''
 let mountMonacoEditorPromise = null
 let usesVscodeModelBridge = false
@@ -383,6 +390,7 @@ const mountMonacoEditor = async () => {
 
       contentChangeDisposable = editor.onDidChangeModelContent(() => {
         const nextValue = editor?.getValue?.() || ''
+        lastEmittedModelValue = nextValue
         emit('update:modelValue', nextValue)
       })
 
@@ -404,6 +412,42 @@ const mountMonacoEditor = async () => {
       editor.addCommand(monacoRef.KeyMod.CtrlCmd | monacoRef.KeyCode.Enter, () => {
         emit('request-exit', 'ctrl-enter')
       })
+
+      // IME 组合守卫：监听底层 textarea 原生 composition 事件（Monaco 事件在本 webview 不一定触发），
+      // 组合期间置位标志让共享补全 provider 跳过、并关闭已弹出的补全框，避免打断中文输入。
+      const onImeStart = () => {
+        if (imeComposing) return
+        imeComposing = true
+        setLspImeComposing(true)
+        setBridgeImeComposing(true)
+        try { editor?.trigger?.('ime', 'hideSuggestWidget', null) } catch { /* noop */ }
+      }
+      const onImeEnd = () => {
+        if (!imeComposing) return
+        imeComposing = false
+        setLspImeComposing(false)
+        setBridgeImeComposing(false)
+      }
+      // 搜狗等输入法 composition 事件时序不稳，用 keydown 的 isComposing/229 兜底
+      const onImeKeyDown = (event) => {
+        if (event && (event.isComposing === true || event.keyCode === 229)) {
+          onImeStart()
+          try { editor?.trigger?.('ime', 'hideSuggestWidget', null) } catch { /* noop */ }
+        }
+      }
+      const editorDom = editor.getDomNode?.()
+      if (editorDom) {
+        editorDom.addEventListener('compositionstart', onImeStart, true)
+        editorDom.addEventListener('compositionend', onImeEnd, true)
+        editorDom.addEventListener('keydown', onImeKeyDown, true)
+        imeDomCleanup = () => {
+          editorDom.removeEventListener('compositionstart', onImeStart, true)
+          editorDom.removeEventListener('compositionend', onImeEnd, true)
+          editorDom.removeEventListener('keydown', onImeKeyDown, true)
+        }
+      }
+      compositionStartDisposable = editor.onDidCompositionStart?.(onImeStart)
+      compositionEndDisposable = editor.onDidCompositionEnd?.(onImeEnd)
 
       editorReady.value = true
       await nextTick()
@@ -448,6 +492,19 @@ const disposeMonacoEditor = () => {
   focusDisposable = null
   blurDisposable?.dispose?.()
   blurDisposable = null
+  compositionStartDisposable?.dispose?.()
+  compositionStartDisposable = null
+  compositionEndDisposable?.dispose?.()
+  compositionEndDisposable = null
+  if (imeDomCleanup) {
+    try { imeDomCleanup() } catch { /* noop */ }
+    imeDomCleanup = null
+  }
+  if (imeComposing) {
+    imeComposing = false
+    setLspImeComposing(false)
+    setBridgeImeComposing(false)
+  }
   editor?.dispose?.()
   editor = null
   if (usesVscodeModelBridge && currentModelUri) {
@@ -519,6 +576,8 @@ watch(() => props.theme, () => {
 
 watch(() => props.modelValue, (nextValue) => {
   if (!editor || !model) return
+  // 自己编辑的回声：父组件回流的就是我们刚 emit 的值，绝不回写。
+  if (nextValue === lastEmittedModelValue) return
   const normalizedValue = String(nextValue || '')
   const currentValue = model.getValue()
   if (currentValue === normalizedValue) return

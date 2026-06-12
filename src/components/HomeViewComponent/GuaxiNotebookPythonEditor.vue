@@ -26,7 +26,7 @@ import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import 'monaco-editor/esm/vs/basic-languages/python/python.contribution'
 import { createLogger } from '../../utils/logger'
-import { getLspConnectionState, initLspClient, waitForLspConnection } from '../../monaco/lspClient'
+import { getLspConnectionState, initLspClient, waitForLspConnection, setLspImeComposing } from '../../monaco/lspClient'
 import { initTextmate } from '../../monaco/textmateLoader'
 import {
   GUAXI_SYNTAX_TOKEN_TYPES,
@@ -38,6 +38,7 @@ import {
   retainVsCodeTextModel,
   releaseVsCodeTextModel,
   syncVsCodeTextModelOverlay,
+  setBridgeImeComposing,
 } from '../../monaco/vscodeModelBridge'
 
 const props = defineProps({
@@ -75,6 +76,14 @@ let contentSizeDisposable = null
 let focusDisposable = null
 let blurDisposable = null
 let typeDisposable = null
+let compositionStartDisposable = null
+let compositionEndDisposable = null
+let imeDomCleanup = null
+let imeComposing = false
+let savedQuickSuggestionsDuringIme
+// 记录最近一次向父组件 emit 的内容；当 props.modelValue 回流的值与之相等时，
+// 说明这是「自己编辑的回声」，绝不能再回写 model（否则用旧值全量替换正在编辑的 model，回退输入、卡顿、打断中文）。
+let lastEmittedModelValue = null
 let currentAppliedTheme = ''
 let usesVscodeModelBridge = false
 let hostResizeObserver = null
@@ -82,6 +91,7 @@ let serviceRefreshTimer = 0
 let treeSitterDecorationIds = []
 let variableHighlightDecorationIds = []
 let treeSitterDecorationTimer = 0
+let overlaySyncTimer = 0
 let variableHighlightTimer = 0
 let treeSitterDecorationSeq = 1
 
@@ -356,12 +366,38 @@ const highlightVariableOccurrences = (variableName, reason = 'session-variable-f
   return true
 }
 
+// 大 cell 阈值（行数）：超过即对每键 O(n) 的 overlay 同步/高亮加大防抖，保证万行 cell 输入流畅。
+const LARGE_NOTEBOOK_CELL_LINE_THRESHOLD = 2000
+const isLargeNotebookCell = () => {
+  try {
+    return !!model && typeof model.getLineCount === 'function' && model.getLineCount() > LARGE_NOTEBOOK_CELL_LINE_THRESHOLD
+  } catch {
+    return false
+  }
+}
+
+// 立刻把（可能正在防抖中的）overlay 内容同步给 LSP，补全前调用，保证候选基于最新代码。
+const flushOverlaySyncNow = () => {
+  if (overlaySyncTimer) {
+    window.clearTimeout(overlaySyncTimer)
+    overlaySyncTimer = 0
+  }
+  if (usesVscodeModelBridge && model?.uri && editor) {
+    syncVsCodeTextModelOverlay(model.uri, editor.getValue?.() || '', {
+      owner: getNotebookPythonModelOwner(),
+      reason: 'notebook-python-overlay-flush',
+    })
+  }
+}
+
 const scheduleNotebookTreeSitterDecorations = (reason = 'change') => {
   if (treeSitterDecorationTimer) window.clearTimeout(treeSitterDecorationTimer)
+  // 大 cell：把整篇高亮的后端往返从 120ms 拉长到 400ms，减少打字时的全量重算。
+  const delay = isLargeNotebookCell() ? 400 : 120
   treeSitterDecorationTimer = window.setTimeout(() => {
     treeSitterDecorationTimer = 0
     void refreshNotebookTreeSitterDecorations(reason)
-  }, 120)
+  }, delay)
 }
 
 const getNotebookSuggestControllerState = () => {
@@ -487,6 +523,8 @@ const shouldNotebookPythonTriggerSuggestOnType = (text) => {
 
 const triggerNotebookPythonSuggest = (reason = 'manual') => {
   if (!editor || !monacoRef) return
+  // 触发补全前确保 overlay 已是最新（大 cell 时 overlay 同步是防抖的）。
+  flushOverlaySyncNow()
   try {
     const disposeTrace = attachNotebookSuggestTrace(reason)
     editor.trigger('guaxi-notebook-python', 'editor.action.triggerSuggest', {})
@@ -721,6 +759,9 @@ const mountMonacoEditor = async () => {
       language: 'python',
       minimap: { enabled: false },
       automaticLayout: true,
+      // 大 cell 性能：万行 Python 也不卡 tokenize
+      largeFileOptimizations: true,
+      maxTokenizationLineLength: 2000,
       lineNumbers: 'on',
       roundedSelection: false,
       scrollBeyondLastLine: false,
@@ -805,12 +846,27 @@ const mountMonacoEditor = async () => {
         // 设计说明：
         // 1. Notebook Python cell 绑定的是 `file://.../.guaxi-notebook/*.py` 虚拟文件。
         // 2. Python LSP 补全读取的是 VSCode 文件服务里的 overlay 内容，而不是只看 Monaco editor 当前缓冲区。
-        // 3. 每次编辑都同步 overlay，避免 LSP 仍拿旧代码计算补全，表现成请求成功但候选为 0。
-        syncVsCodeTextModelOverlay(model.uri, nextValue, {
-          owner: getNotebookPythonModelOwner(),
-          reason: 'notebook-python-content-change',
-        })
+        // 3. 每次编辑都同步 overlay；但 overlay 写入是 O(n)，万行 cell 每键同步会卡，
+        //    故大 cell 改为短防抖(150ms)，补全前会强制 flush（flushOverlaySyncNow）保证候选不丢。
+        if (isLargeNotebookCell()) {
+          if (overlaySyncTimer) window.clearTimeout(overlaySyncTimer)
+          overlaySyncTimer = window.setTimeout(() => {
+            overlaySyncTimer = 0
+            if (usesVscodeModelBridge && model?.uri) {
+              syncVsCodeTextModelOverlay(model.uri, editor?.getValue?.() || '', {
+                owner: getNotebookPythonModelOwner(),
+                reason: 'notebook-python-content-change-debounced',
+              })
+            }
+          }, 150)
+        } else {
+          syncVsCodeTextModelOverlay(model.uri, nextValue, {
+            owner: getNotebookPythonModelOwner(),
+            reason: 'notebook-python-content-change',
+          })
+        }
       }
+      lastEmittedModelValue = nextValue
       emit('update:modelValue', nextValue)
       scheduleNotebookTreeSitterDecorations('content-change')
     })
@@ -844,12 +900,61 @@ const mountMonacoEditor = async () => {
     })
 
     typeDisposable = editor.onDidType((text) => {
+      // IME 组合期间不触发补全，避免打断中文输入
+      if (imeComposing) return
       if (!shouldNotebookPythonTriggerSuggestOnType(text)) return
       window.setTimeout(() => {
         if (!editor?.hasTextFocus?.()) return
         triggerNotebookPythonSuggest(`type:${text}`)
       }, 0)
     })
+
+    // IME 组合守卫：监听底层 textarea 原生 composition 事件（Monaco 的事件在本 webview 不一定触发），
+    // 组合期间置位标志让补全/onDidType 跳过、并关闭已弹出的补全框，避免打断中文输入。
+    const onImeStart = () => {
+      if (imeComposing) return
+      imeComposing = true
+      setLspImeComposing(true)
+      setBridgeImeComposing(true)
+      try { editor?.trigger?.('ime', 'hideSuggestWidget', null) } catch { /* noop */ }
+    }
+    const onImeEnd = () => {
+      if (!imeComposing) return
+      imeComposing = false
+      setLspImeComposing(false)
+      setBridgeImeComposing(false)
+      // 组合结束后把最终内容回写到 overlay，确保 LSP 看到最新文本
+      try {
+        if (usesVscodeModelBridge && model?.uri) {
+          syncVsCodeTextModelOverlay(model.uri, editor?.getValue?.() || '', {
+            owner: getNotebookPythonModelOwner(),
+            reason: 'ime-composition-end-resync',
+          })
+        }
+      } catch (error) {
+        logger.debug('[NotebookPythonEditor] composition end resync failed', error)
+      }
+    }
+    // 搜狗等输入法 composition 事件时序不稳，用 keydown 的 isComposing/229 兜底：组合中每次按键都置位并关闭补全框
+    const onImeKeyDown = (event) => {
+      if (event && (event.isComposing === true || event.keyCode === 229)) {
+        onImeStart()
+        try { editor?.trigger?.('ime', 'hideSuggestWidget', null) } catch { /* noop */ }
+      }
+    }
+    const editorDom = editor.getDomNode?.()
+    if (editorDom) {
+      editorDom.addEventListener('compositionstart', onImeStart, true)
+      editorDom.addEventListener('compositionend', onImeEnd, true)
+      editorDom.addEventListener('keydown', onImeKeyDown, true)
+      imeDomCleanup = () => {
+        editorDom.removeEventListener('compositionstart', onImeStart, true)
+        editorDom.removeEventListener('compositionend', onImeEnd, true)
+        editorDom.removeEventListener('keydown', onImeKeyDown, true)
+      }
+    }
+    compositionStartDisposable = editor.onDidCompositionStart?.(onImeStart)
+    compositionEndDisposable = editor.onDidCompositionEnd?.(onImeEnd)
 
     editorReady.value = true
     await nextTick()
@@ -893,6 +998,12 @@ const disposeMonacoEditor = () => {
     window.clearTimeout(treeSitterDecorationTimer)
     treeSitterDecorationTimer = 0
   }
+  // 销毁前把防抖中的 overlay 内容落地，避免丢失最后一段编辑对 LSP 的同步
+  flushOverlaySyncNow()
+  if (overlaySyncTimer) {
+    window.clearTimeout(overlaySyncTimer)
+    overlaySyncTimer = 0
+  }
   if (editor && treeSitterDecorationIds.length) {
     treeSitterDecorationIds = editor.deltaDecorations(treeSitterDecorationIds, [])
   } else {
@@ -904,6 +1015,20 @@ const disposeMonacoEditor = () => {
   blurDisposable = null
   typeDisposable?.dispose?.()
   typeDisposable = null
+  compositionStartDisposable?.dispose?.()
+  compositionStartDisposable = null
+  compositionEndDisposable?.dispose?.()
+  compositionEndDisposable = null
+  if (imeDomCleanup) {
+    try { imeDomCleanup() } catch { /* noop */ }
+    imeDomCleanup = null
+  }
+  // 若在组合中途销毁，确保全局组合计数被正确释放
+  if (imeComposing) {
+    imeComposing = false
+    setLspImeComposing(false)
+    setBridgeImeComposing(false)
+  }
   editor?.dispose?.()
   editor = null
   if (usesVscodeModelBridge && currentModelUri) {
@@ -967,6 +1092,8 @@ watch(() => props.theme, () => {
 
 watch(() => props.modelValue, (nextValue) => {
   if (!editor || !model) return
+  // 自己编辑的回声：父组件回流的就是我们刚 emit 的值，绝不回写（否则全量替换正在编辑的 model，回退输入、卡顿、打断中文）。
+  if (nextValue === lastEmittedModelValue) return
   const normalizedValue = String(nextValue || '')
   const currentValue = model.getValue()
   if (currentValue === normalizedValue) return

@@ -38,6 +38,17 @@ type LspClientEntry = {
 }
 const lspClients = new Map<string, LspClientEntry>()
 const lspRetryBlockedUntil = new Map<string, number>()
+// IME 组合输入计数：>0 表示有编辑器正处于中文等输入法组合中。
+// 组合期间补全/语义请求一律快速返回，避免在主线程上做 LSP 往返打断 IME、造成输入卡顿与交替失败。
+let imeCompositionActiveCount = 0
+export const setLspImeComposing = (composing: boolean) => {
+  if (composing) {
+    imeCompositionActiveCount += 1
+  } else {
+    imeCompositionActiveCount = Math.max(0, imeCompositionActiveCount - 1)
+  }
+}
+export const isAnyLspImeComposing = () => imeCompositionActiveCount > 0
 const LSP_RETRY_BACKOFF_MS = 15000
 const logger = createLogger('lspClient')
 const lspDisabled = new Set<string>()
@@ -48,8 +59,11 @@ const LSP_FAILURE_THRESHOLD = 3
 const LSP_STOP_TIMEOUT_MS = 350
 const lspFailureTracker = new Map<string, { count: number; firstAt: number }>()
 const directCompletionProviderDisposables = new Map<string, monaco.IDisposable>()
-const directSyncedDocuments = new Map<string, { version: number; content: string; languageId: string }>()
-const DIRECT_LSP_SYNC_SETTLE_MS = 35
+const directSyncedDocuments = new Map<string, { version: number; content: string; languageId: string; modelVersionId?: number }>()
+// 补全前文档同步的「沉降」等待：原 35ms 是每次补全的固定延迟。
+// 降到 8ms：足够让 didChange 通知在补全请求前被服务端按序处理，又显著降低补全可感延迟。
+// 内容未变时根本不会走到这里（synchronizeDirectLspTextDocument 有 previous.content===content 早退）。
+const DIRECT_LSP_SYNC_SETTLE_MS = 8
 const DIRECT_LSP_CLIENT_READY_TIMEOUT_MS = 1500
 
 const LSP_TO_MONACO_COMPLETION_KIND: Record<number, monaco.languages.CompletionItemKind> = {
@@ -498,11 +512,22 @@ const synchronizeDirectLspTextDocument = async (
 ) => {
   const uri = String(model.uri?.toString?.() || entry.documentUri || '')
   const normalizedLanguageId = normalizeLanguageId(languageId)
-  const content = String(model.getValue?.() || '')
   if (!uri || !entry.client) return false
 
   const syncKey = `${clientKey}:${uri}`
   const previous = directSyncedDocuments.get(syncKey)
+  // O(1) 短路：model 版本号未变且语言未变，说明文档与上次同步一致，无需 getValue()/再发 didChange。
+  // 对百万行文档尤为关键——避免每次补全都全量取串。
+  const currentModelVersionId = typeof model.getVersionId === 'function' ? model.getVersionId() : undefined
+  if (
+    previous
+    && currentModelVersionId != null
+    && previous.modelVersionId === currentModelVersionId
+    && previous.languageId === normalizedLanguageId
+  ) {
+    return true
+  }
+  const content = String(model.getValue?.() || '')
   const clientWithNotifications = entry.client as unknown as {
     sendNotification: (type: typeof DidOpenTextDocumentNotification.type | typeof DidChangeTextDocumentNotification.type, params: unknown) => Promise<void>
   }
@@ -524,7 +549,7 @@ const synchronizeDirectLspTextDocument = async (
           text: content,
         },
       })
-      directSyncedDocuments.set(syncKey, { version, content, languageId: normalizedLanguageId })
+      directSyncedDocuments.set(syncKey, { version, content, languageId: normalizedLanguageId, modelVersionId: currentModelVersionId })
       logger.info('[LSP] direct text document opened before completion', {
         languageId: normalizedLanguageId,
         clientKey,
@@ -546,7 +571,7 @@ const synchronizeDirectLspTextDocument = async (
       },
       contentChanges: [{ text: content }],
     })
-    directSyncedDocuments.set(syncKey, { version, content, languageId: normalizedLanguageId })
+    directSyncedDocuments.set(syncKey, { version, content, languageId: normalizedLanguageId, modelVersionId: currentModelVersionId })
     logger.info('[LSP] direct text document changed before completion', {
       languageId: normalizedLanguageId,
       clientKey,
@@ -580,6 +605,10 @@ export const provideDirectLspCompletionSuggestions = async (
   context: monaco.languages.CompletionContext | undefined,
   token: monaco.CancellationToken | undefined
 ) => {
+  // IME 组合期间直接放弃补全：避免在主线程做 LSP 往返打断中文输入、造成卡顿与交替失败。
+  if (isAnyLspImeComposing()) {
+    return []
+  }
   const normalizedLanguageId = normalizeLanguageId(languageId)
   const clientKey = getLspClientKey(normalizedLanguageId)
   const entry = lspClients.get(clientKey)
@@ -745,6 +774,8 @@ export const provideLspSemanticTokens = async (
   model: monaco.editor.ITextModel,
   token: monaco.CancellationToken | undefined
 ): Promise<monaco.languages.SemanticTokens | null> => {
+  // IME 组合期间跳过语义着色请求，避免主线程 LSP 往返打断中文输入。
+  if (isAnyLspImeComposing()) return null
   const normalizedLanguageId = normalizeLanguageId(languageId)
   const clientKey = getLspClientKey(normalizedLanguageId)
   const entry = lspClients.get(clientKey)

@@ -113,7 +113,8 @@ const positionFromByteOffset = (
     column += char.length
     offset += char.length
   }
-  return { line, column }
+  // charOffset：该字节位置对应的「字符偏移」（在传入的 text 内），供 token 映射判断点号成员调用。
+  return { line, column, charOffset: lineStartOffset + column }
 }
 
 const lineLengthAt = (model: monaco.editor.ITextModel, zeroBasedLine: number) => {
@@ -123,21 +124,15 @@ const lineLengthAt = (model: monaco.editor.ITextModel, zeroBasedLine: number) =>
 }
 
 const mapTreeSitterSemanticTokenType = (
-  model: monaco.editor.ITextModel,
   span: { start_byte: number; end_byte: number; token_type: string },
-  start: { line: number; column: number }
+  // 局部源码段（发给后端的那段 code）与该 span 在其中的字符偏移；
+  // 避免每个 span 都 model.getValue()（O(spans×n)），只用局部段做 obj.method() 归一。
+  localText: string,
+  localStartOffset: number,
 ) => {
-  // 设计说明：
-  // 1. semantic token、Markdown fence 和 Notebook light decoration 共用 `mapTreeSitterCaptureToGuaxiToken`。
-  // 2. 这里额外传入源码与起始偏移，让共享 mapper 能把 `obj.method()` 这类点号成员调用归一为 method。
-  // 3. 这样所有已支持语言都先进入同一套 Guaxi token 类型，再交给各自渲染通道。
-  const startOffset = model.getOffsetAt({
-    lineNumber: start.line + 1,
-    column: start.column + 1,
-  })
   return mapTreeSitterCaptureToGuaxiToken(span.token_type, {
-    sourceText: model.getValue(),
-    startOffset,
+    sourceText: localText,
+    startOffset: localStartOffset,
   })
 }
 
@@ -162,9 +157,13 @@ const upsertSemanticTokenRow = (
 
 const encodeTreeSitterSemanticTokens = (
   model: monaco.editor.ITextModel,
-  spans: Array<{ start_byte: number; end_byte: number; token_type: string }>
+  spans: Array<{ start_byte: number; end_byte: number; token_type: string }>,
+  // 0 基行偏移：spans 的字节偏移相对于传入后端的 code 段；range 高亮时该 code 段从 model 的第 lineOffset 行开始。
+  lineOffset = 0,
+  // 与发给后端完全一致的 code 段（document=全文，range=可视区段），保证字节偏移→位置换算不错位。
+  sourceCode?: string,
 ) => {
-  const text = model.getValue()
+  const text = typeof sourceCode === 'string' ? sourceCode : model.getValue()
   const index = buildUtf8LineIndex(text)
   const rowsByRange = new Map<string, { row: number[]; priority: number }>()
 
@@ -172,23 +171,23 @@ const encodeTreeSitterSemanticTokens = (
     if (span.end_byte <= span.start_byte) continue
     const start = positionFromByteOffset(text, index, span.start_byte)
     const end = positionFromByteOffset(text, index, span.end_byte)
-    const tokenType = mapTreeSitterSemanticTokenType(model, span, start)
+    const tokenType = mapTreeSitterSemanticTokenType(span, text, start.charOffset)
     const tokenIndex = treeSitterSemanticTokenTypes.indexOf(tokenType)
     if (tokenIndex < 0) continue
 
     if (start.line === end.line) {
       const length = Math.max(0, end.column - start.column)
-      upsertSemanticTokenRow(rowsByRange, start.line, start.column, length, tokenIndex, tokenType)
+      upsertSemanticTokenRow(rowsByRange, start.line + lineOffset, start.column, length, tokenIndex, tokenType)
       continue
     }
 
-    const firstLength = Math.max(0, lineLengthAt(model, start.line) - start.column)
-    upsertSemanticTokenRow(rowsByRange, start.line, start.column, firstLength, tokenIndex, tokenType)
+    const firstLength = Math.max(0, lineLengthAt(model, start.line + lineOffset) - start.column)
+    upsertSemanticTokenRow(rowsByRange, start.line + lineOffset, start.column, firstLength, tokenIndex, tokenType)
     for (let line = start.line + 1; line < end.line; line += 1) {
-      const length = lineLengthAt(model, line)
-      upsertSemanticTokenRow(rowsByRange, line, 0, length, tokenIndex, tokenType)
+      const length = lineLengthAt(model, line + lineOffset)
+      upsertSemanticTokenRow(rowsByRange, line + lineOffset, 0, length, tokenIndex, tokenType)
     }
-    upsertSemanticTokenRow(rowsByRange, end.line, 0, end.column, tokenIndex, tokenType)
+    upsertSemanticTokenRow(rowsByRange, end.line + lineOffset, 0, end.column, tokenIndex, tokenType)
   }
 
   const rows = Array.from(rowsByRange.values()).map((item) => item.row)
@@ -230,97 +229,60 @@ function ensureTreeSitterSemanticProvider(languageId: string) {
   }
   treeSitterSemanticReadyLanguages.add(lang)
 
-  monaco.languages.registerDocumentSemanticTokensProvider(lang, {
+  // 向后端请求一段 code 的高亮 span，并按 model 的绝对偏移编码成 Monaco semantic tokens。
+  // lineOffset：该段 code 在 model 中的起始行（0 基）。
+  const fetchAndEncode = async (
+    model: monaco.editor.ITextModel,
+    code: string,
+    lineOffset: number,
+    cancellationToken?: monaco.CancellationToken,
+  ): Promise<Uint32Array> => {
+    if (cancellationToken?.isCancellationRequested) return new Uint32Array()
+    try {
+      const response = await invoke<{
+        debug_id?: number
+        elapsed_ms?: number
+        supported: boolean
+        spans: Array<{ start_byte: number; end_byte: number; token_type: string }>
+      }>('syntax_highlight_tokens', {
+        request: { code, language: normalized },
+      })
+      if (cancellationToken?.isCancellationRequested || !response?.supported) {
+        return new Uint32Array()
+      }
+      return encodeTreeSitterSemanticTokens(model, response.spans || [], lineOffset, code)
+    } catch (error) {
+      logTreeSitterHighlight('warn', 'semantic request failed', { languageId: lang, normalized, error }, true)
+      return new Uint32Array()
+    }
+  }
+
+  // 只注册 Range(可视区) provider：
+  // 1. Monaco 仅当「无 document provider 产出完整 token」时才用 viewport(range) 高亮可视区（含上下缓冲区）。
+  //    若同时注册 document provider，它返回任何结果（含空）都会标记 hasCompleteSemanticTokens=true，
+  //    从而让 range provider 被跳过——大文档就会完全无高亮。故这里彻底改用 range provider。
+  // 2. 小文件几乎整篇都在视口内，效果与整篇高亮一致；大文件只对可视区请求后端 → O(全文) 降为 O(视口)。
+  //    滚动时 Monaco 自动对新可视区再请求。
+  monaco.languages.registerDocumentRangeSemanticTokensProvider(lang, {
     getLegend: () => treeSitterSemanticLegend,
-    async provideDocumentSemanticTokens(model, _lastResultId, cancellationToken) {
-      const frontendRequestId = treeSitterSemanticRequestSeq++
-      const startedAt = performance.now()
-      const code = model.getValue()
-      logTreeSitterHighlight('info', 'semantic request start', {
-        frontendRequestId,
-        languageId: lang,
-        normalized,
-        uri: String(model.uri || ''),
-        versionId: model.getVersionId(),
-        lineCount: model.getLineCount(),
-        codeLength: code.length,
-      }, true)
-
-      if (cancellationToken?.isCancellationRequested) {
-        logTreeSitterHighlight('info', 'semantic request cancelled before backend invoke', {
-          frontendRequestId,
-          languageId: lang,
-          normalized,
-        }, true)
-        return { data: new Uint32Array() }
-      }
-
-      try {
-        const response = await invoke<{
-          debug_id?: number
-          elapsed_ms?: number
-          supported: boolean
-          spans: Array<{ start_byte: number; end_byte: number; token_type: string }>
-        }>('syntax_highlight_tokens', {
-          request: {
-            code,
-            language: normalized,
-          },
-        })
-
-        if (cancellationToken?.isCancellationRequested || !response?.supported) {
-          logTreeSitterHighlight('warn', 'semantic request returned no usable tokens', {
-            frontendRequestId,
-            backendDebugId: response?.debug_id,
-            languageId: lang,
-            normalized,
-            supported: !!response?.supported,
-            cancelled: !!cancellationToken?.isCancellationRequested,
-            backendElapsedMs: response?.elapsed_ms,
-            frontendElapsedMs: Math.round(performance.now() - startedAt),
-          }, true)
-          return { data: new Uint32Array() }
-        }
-
-        const encoded = encodeTreeSitterSemanticTokens(model, response.spans || [])
-        const mappedTokenTypeCounts = (response.spans || []).reduce<Record<string, number>>((acc, span) => {
-          const mappedType = mapTreeSitterCaptureToGuaxiToken(span.token_type)
-          acc[mappedType] = (acc[mappedType] || 0) + 1
-          return acc
-        }, {})
-        logTreeSitterHighlight('info', 'semantic request success', {
-          frontendRequestId,
-          backendDebugId: response.debug_id,
-          languageId: lang,
-          normalized,
-          versionId: model.getVersionId(),
-          spanCount: response.spans?.length || 0,
-          mappedTokenTypeCounts,
-          encodedTokenCount: encoded.length / 5,
-          backendElapsedMs: response.elapsed_ms,
-          frontendElapsedMs: Math.round(performance.now() - startedAt),
-        }, true)
-        return {
-          data: encoded,
-          resultId: `${model.getVersionId()}`,
-        }
-      } catch (error) {
-        logTreeSitterHighlight('warn', 'semantic request failed', {
-          frontendRequestId,
-          languageId: lang,
-          normalized,
-          frontendElapsedMs: Math.round(performance.now() - startedAt),
-          error,
-        }, true)
-        return { data: new Uint32Array() }
-      }
+    async provideDocumentRangeSemanticTokens(model, range, cancellationToken) {
+      const startLine = Math.max(1, range.startLineNumber)
+      const endLine = Math.min(model.getLineCount(), range.endLineNumber)
+      const code = model.getValueInRange({
+        startLineNumber: startLine,
+        startColumn: 1,
+        endLineNumber: endLine,
+        endColumn: model.getLineMaxColumn(endLine),
+      })
+      if (cancellationToken?.isCancellationRequested) return { data: new Uint32Array() }
+      const encoded = await fetchAndEncode(model, code, startLine - 1, cancellationToken)
+      return { data: encoded }
     },
-    releaseDocumentSemanticTokens() {},
   })
 
   if (!treeSitterSemanticLogged.has(lang)) {
     treeSitterSemanticLogged.add(lang)
-    logTreeSitterHighlight('info', 'semantic provider registered', {
+    logTreeSitterHighlight('info', 'semantic provider registered (range only)', {
       languageId: lang,
       normalized,
       legend: treeSitterSemanticTokenTypes,

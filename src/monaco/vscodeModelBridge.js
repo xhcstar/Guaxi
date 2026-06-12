@@ -14,6 +14,19 @@ const logger = createLogger('vscodeModelBridge')
 const textEncoder = new TextEncoder()
 const vscodeModelBridgeEntries = new Map()
 
+// IME 组合输入计数：>0 表示某个编辑器正处于中文等输入法组合中。
+// 组合期间禁止对 Monaco text model 做全量替换（pushEditOperations/setValue），
+// 否则会取消正在进行的组合，造成「只能交替输入中文」「首字失败」与卡顿。
+let bridgeImeComposingCount = 0
+export const setBridgeImeComposing = (composing) => {
+  if (composing) {
+    bridgeImeComposingCount += 1
+  } else {
+    bridgeImeComposingCount = Math.max(0, bridgeImeComposingCount - 1)
+  }
+}
+export const isBridgeImeComposing = () => bridgeImeComposingCount > 0
+
 let overlayProvider = null
 let overlayDisposable = null
 let virtualModelProvider = null
@@ -339,6 +352,12 @@ export const replaceModelContentPreserveUndo = (
 ) => {
   if (!model || model.isDisposed?.()) return model
 
+  // IME 组合期间绝不替换 model 内容：会取消正在进行的中文组合（交替/首字失败、卡顿）。
+  // 组合结束后编辑器的 onDidChangeModelContent 链路会再次触发同步，内容不会丢失。
+  if (isBridgeImeComposing()) {
+    return model
+  }
+
   const nextContent = String(content ?? '')
   let currentContent = ''
   try {
@@ -439,7 +458,7 @@ const applyLanguageId = (entry, languageId, reason, owner) => {
   return getEntryModel(entry)
 }
 
-const ensureMonacoTextModel = (uri, content, languageId, reason, owner) => {
+const ensureMonacoTextModel = (uri, content, languageId, reason, owner, skipModelContentSync = false) => {
   const nextContent = String(content ?? '')
   const nextLanguageId = String(languageId || '').trim()
   let model = monaco.editor.getModel(uri)
@@ -459,21 +478,27 @@ const ensureMonacoTextModel = (uri, content, languageId, reason, owner) => {
   if (nextLanguageId && model.getLanguageId?.() !== nextLanguageId) {
     monaco.editor.setModelLanguage(model, nextLanguageId)
   }
-  replaceModelContentPreserveUndo(model, nextContent, {
-    logPrefix: '[VSCodeModelBridge] ensure Monaco text model',
-    uri: uri.toString(),
-    owner,
-    reason,
-  })
+  // model 已存在且内容来源就是用户正在编辑的它本身时，绝不回写（见 syncModelContent 说明）。
+  if (!skipModelContentSync) {
+    replaceModelContentPreserveUndo(model, nextContent, {
+      logPrefix: '[VSCodeModelBridge] ensure Monaco text model',
+      uri: uri.toString(),
+      owner,
+      reason,
+    })
+  }
   return model
 }
 
-const syncModelContent = (entry, content, reason, owner) => {
+const syncModelContent = (entry, content, reason, owner, skipModelContentSync = false) => {
   const model = getEntryModel(entry)
   if (!model) return null
 
   const nextContent = String(content ?? '')
-  if (model.getValue() !== nextContent) {
+  // skipModelContentSync：内容来源就是用户正在编辑的那个 Monaco model（主/副编辑器、Notebook cell）时，
+  // 绝不能回写 model。异步执行到这里时用户可能已多敲了字符，用旧 content 全量替换会回退输入、
+  // 重置光标/IME 预编辑状态，造成「中文只能交替输入」和大文档卡顿。此时只更新 overlay 供 LSP 读取。
+  if (!skipModelContentSync && model.getValue() !== nextContent) {
     replaceModelContentPreserveUndo(model, nextContent, {
       logPrefix: '[VSCodeModelBridge] model content synchronized',
       uri: entry.uri.toString(),
@@ -492,6 +517,8 @@ export const retainVsCodeTextModel = async ({
   languageId = '',
   owner = 'global',
   reason = 'manual',
+  // 当 content 来源就是用户正在编辑的 Monaco model 时置 true：只更新 overlay/保留引用，绝不回写 model。
+  skipModelContentSync = false,
 } = {}) => {
   const uri = normalizeResourceUri(resource)
   if (!uri) return null
@@ -513,7 +540,7 @@ export const retainVsCodeTextModel = async ({
   try {
     ensureOverlayProviderRegistered()
     overlayProvider.ensureFile(uri, content)
-    ensureMonacoTextModel(uri, content, languageId, reason, ownerKey)
+    ensureMonacoTextModel(uri, content, languageId, reason, ownerKey, skipModelContentSync)
 
     if (!entry) {
       const ref = await createModelReference(uri)
@@ -544,7 +571,7 @@ export const retainVsCodeTextModel = async ({
 
   entry.owners.add(ownerKey)
   applyLanguageId(entry, languageId, reason, ownerKey)
-  const bridgeModel = syncModelContent(entry, content, reason, ownerKey) || getEntryModel(entry)
+  const bridgeModel = syncModelContent(entry, content, reason, ownerKey, skipModelContentSync) || getEntryModel(entry)
   const monacoBackedModel = getMonacoBackedModel(uri)
 
   // 设计说明：
@@ -564,12 +591,15 @@ export const retainVsCodeTextModel = async ({
         languageId: nextLanguageId,
       })
     }
-    replaceModelContentPreserveUndo(monacoBackedModel, content, {
-      logPrefix: '[VSCodeModelBridge] keep Monaco-backed model synchronized',
-      uri: uriKey,
-      owner: ownerKey,
-      reason,
-    })
+    // 内容来源就是这个正在编辑的 model 时跳过回写（否则每次输入都用旧内容全量替换，回退输入、卡顿、打断中文）。
+    if (!skipModelContentSync) {
+      replaceModelContentPreserveUndo(monacoBackedModel, content, {
+        logPrefix: '[VSCodeModelBridge] keep Monaco-backed model synchronized',
+        uri: uriKey,
+        owner: ownerKey,
+        reason,
+      })
+    }
     if (bridgeModel && bridgeModel !== monacoBackedModel) {
       logger.info('[VSCodeModelBridge] preferred Monaco-backed model for editor attachment', {
         uri: uriKey,

@@ -1147,7 +1147,8 @@ import {
   resetLspDisabled,
   provideDirectLspCompletionSuggestions,
   provideLspSemanticTokens,
-  getLspSemanticTokensLegend
+  getLspSemanticTokensLegend,
+  setLspImeComposing
 } from '../../monaco/lspClient'
 import {
   LSP_SUPPORTED_LANGUAGES,
@@ -1159,6 +1160,7 @@ import {
   releaseVsCodeTextModel,
   disposeAllVsCodeTextModelsForOwner,
   replaceModelContentPreserveUndo,
+  setBridgeImeComposing,
 } from '../../monaco/vscodeModelBridge'
 // 更新所有语言导入路径
 import 'monaco-editor/esm/vs/basic-languages/python/python.contribution'
@@ -1338,6 +1340,8 @@ let previewRenderTimer = null
 let previewRenderRequestId = 0
 const EDITOR_CONTENT_SYNC_DELAY_MS = 0
 const EDITOR_POSTPROCESS_DELAY_MS = 220
+// 大文档下「全文专属」分析（markdown 诊断 / git 未保存行装饰）的 idle 延迟：输入停顿这么久才跑一次。
+const LARGE_DOC_IDLE_ANALYSIS_DELAY_MS = 1500
 const previewContainer = ref(null);
 // 预览区缩放（Q5）：用字号缩放因子驱动 .preview，保持自动换行/滚动正常（不用 transform:scale）。
 const PREVIEW_ZOOM_MIN = 0.5;
@@ -6675,6 +6679,81 @@ const refreshMarkdownSuggestMode = (targetEditor) => {
   targetEditor.updateOptions(inEmbeddedMarkdown ? EMBEDDED_WORD_SUGGEST_OPTIONS : DEFAULT_WORD_SUGGEST_OPTIONS);
 };
 
+// ───── IME 组合输入守卫 ─────
+// 设计说明：
+// 1. Monaco 0.52 在中文输入法组合期间，quickSuggestions 触发的补全请求/widget 渲染会打断 IME，
+//    表现为「一次成功一次失败」交替输入。英文是单字符直接输入，不经组合，故不受影响。
+// 2. 这里在 compositionstart 时临时关闭 quickSuggestions，compositionend 后还原，
+//    只改这一个键、不影响各区域的其它 suggest 配置。
+// 3. 同时用 editorImeComposing 标志让项目自身的 onDidType 触发逻辑在组合期间整体跳过。
+const editorImeComposingMap = new WeakMap()
+
+const isEditorImeComposing = (targetEditor) => !!(targetEditor && editorImeComposingMap.get(targetEditor)?.composing)
+
+const setupImeCompositionGuard = (targetEditor) => {
+  if (!targetEditor || typeof targetEditor.onDidCompositionStart !== 'function') return
+  if (editorImeComposingMap.has(targetEditor)) return
+  const state = { composing: false }
+  editorImeComposingMap.set(targetEditor, state)
+
+  const hideWidget = () => {
+    try { targetEditor.trigger?.('ime', 'hideSuggestWidget', null) } catch { /* noop */ }
+  }
+  const onStart = () => {
+    if (state.composing) return
+    state.composing = true
+    setLspImeComposing(true)
+    setBridgeImeComposing(true)
+    // 关键：组合开始时关闭已经弹出的补全框，避免它在中文组合过程中拦截/打断输入。
+    // 只关 widget、不改 options、不改 model，不会影响正在进行的组合。
+    hideWidget()
+  }
+  const onEnd = () => {
+    if (!state.composing) return
+    state.composing = false
+    setLspImeComposing(false)
+    setBridgeImeComposing(false)
+    // 组合结束后补一次内容回写，确保期间被跳过的 bridge/overlay 同步追平
+    try {
+      const m = targetEditor.getModel?.()
+      if (m) {
+        void retainVsCodeTextModel({
+          resource: m.uri,
+          content: m.getValue?.() || '',
+          languageId: m.getLanguageId?.() || 'plaintext',
+          owner: targetEditor === secondaryEditor ? SECONDARY_EDITOR_VSCODE_MODEL_OWNER : PRIMARY_EDITOR_VSCODE_MODEL_OWNER,
+          reason: 'ime-composition-end-resync',
+          skipModelContentSync: true,
+        })
+      }
+    } catch (error) {
+      logger.debug('[IME] composition end resync failed', error)
+    }
+  }
+  // 搜狗等输入法的 compositionstart/end 在 WebView 里时序不稳，单靠它会漏。
+  // keydown 的 isComposing / keyCode 229 是「正处于输入法组合」的可靠信号：
+  // 组合中的每一次按键都置位标志并强制关闭补全框，确保补全框永不拦截搜狗的空格/数字选词键。
+  const onKeyDownCapture = (event) => {
+    if (event && (event.isComposing === true || event.keyCode === 229)) {
+      onStart()
+      hideWidget()
+    }
+  }
+
+  // 设计说明：
+  // 1. 实测 Monaco 的 onDidCompositionStart/End 在本 webview 里不一定触发，导致组合标志从未置位、补全照样打断中文。
+  // 2. 这里直接监听底层输入 textarea 的原生 compositionstart/compositionend/keydown（会冒泡到 editor DOM），最可靠。
+  // 3. 同时保留 Monaco 的事件作为冗余兜底。
+  const dom = targetEditor.getDomNode?.()
+  if (dom) {
+    dom.addEventListener('compositionstart', onStart, true)
+    dom.addEventListener('compositionend', onEnd, true)
+    dom.addEventListener('keydown', onKeyDownCapture, true)
+  }
+  targetEditor.onDidCompositionStart(onStart)
+  targetEditor.onDidCompositionEnd(onEnd)
+}
+
 const refreshDirectLspSuggestMode = (targetEditor, languageId) => {
   if (!targetEditor || typeof targetEditor.updateOptions !== 'function') return;
   const lang = String(languageId || targetEditor.getModel?.()?.getLanguageId?.() || '').trim().toLowerCase();
@@ -7113,7 +7192,7 @@ const shouldTriggerEmbeddedSuggestOnType = (text) => {
 };
 
 const maybeTriggerEmbeddedSuggestOnType = (targetEditor, text) => {
-  if (!targetEditor || !shouldTriggerEmbeddedSuggestOnType(text)) return;
+  if (!targetEditor || isEditorImeComposing(targetEditor) || !shouldTriggerEmbeddedSuggestOnType(text)) return;
 
   const model = targetEditor.getModel?.();
   const position = targetEditor.getPosition?.();
@@ -7139,7 +7218,7 @@ const maybeTriggerEmbeddedSuggestOnType = (targetEditor, text) => {
 };
 
 const maybeTriggerDirectLspSuggestOnType = (targetEditor, text) => {
-  if (!targetEditor || !shouldTriggerEmbeddedSuggestOnType(text)) return;
+  if (!targetEditor || isEditorImeComposing(targetEditor) || !shouldTriggerEmbeddedSuggestOnType(text)) return;
 
   const model = targetEditor.getModel?.();
   const position = targetEditor.getPosition?.();
@@ -7185,8 +7264,23 @@ const getCachedMarkdownFenceBlocks = (model) => {
   return blocks;
 };
 
-const shouldHighlightAllMarkdownFenceBlocks = (reason) => {
+// 大文档阈值（行数）：超过即启用「大文档自适应降级」。≤该值的文件行为完全不变。
+const LARGE_DOCUMENT_LINE_THRESHOLD = 50000;
+const isLargeDocument = (model) => {
+  try {
+    return !!model && typeof model.getLineCount === 'function' && model.getLineCount() > LARGE_DOCUMENT_LINE_THRESHOLD;
+  } catch {
+    return false;
+  }
+};
+
+const shouldHighlightAllMarkdownFenceBlocks = (reason, model) => {
   const key = String(reason || '').toLowerCase();
+  // 大文档：内容编辑(debounced)时只高亮可视区，避免每次按键全量装饰所有代码块。
+  // 首次加载(init/content-sync/model)仍全量一次，保证打开即整篇着色。
+  if (isLargeDocument(model) && (key.includes('debounced') || key.includes('lsp-state'))) {
+    return false;
+  }
   return key.includes('content-sync') ||
     key.includes('model') ||
     key.includes('init') ||
@@ -7208,7 +7302,7 @@ const updateMarkdownFenceSyntaxHighlight = async (targetEditor, reason) => {
     ? targetEditor.getVisibleRanges()
     : [];
   const allBlocks = getCachedMarkdownFenceBlocks(model);
-  const shouldHighlightAllBlocks = shouldHighlightAllMarkdownFenceBlocks(reason);
+  const shouldHighlightAllBlocks = shouldHighlightAllMarkdownFenceBlocks(reason, model);
   let blocks = !shouldHighlightAllBlocks && visibleRanges.length
     ? allBlocks.filter((item) => visibleRanges.some((range) => (
       item.blockEndLine >= range.startLineNumber && item.blockStartLine <= range.endLineNumber
@@ -8897,6 +8991,14 @@ const startLspClientForEditorLanguage = (targetEditor, lang, filePath, requestSo
     filePath: String(filePath || ''),
     requestSource,
   })
+  // 若该语言此前已建立连接（复用 client），不会再触发 connected 事件，这里补一次语义着色 provider 注册。
+  if (getLspConnectionState(lang).state === 'connected') {
+    ensureLspSemanticTokensProvider(String(lang || '').trim().toLowerCase())
+  } else {
+    waitForLspConnection(lang, 4000).then((connected) => {
+      if (connected) ensureLspSemanticTokensProvider(String(lang || '').trim().toLowerCase())
+    }).catch(() => { /* noop */ })
+  }
 }
 
 const shouldPublishEditorLanguageToStatusBar = (targetEditor) => {
@@ -9375,6 +9477,9 @@ const initEditor = () => {
     autoClosingOvertype: 'auto',
     autoSurround: 'languageDefined',
     automaticLayout: true,  // 自动布局
+    // 大文件性能：开启 Monaco 内置大文件优化；限制超长行 tokenize，避免单行过长导致卡死。
+    largeFileOptimizations: true,
+    maxTokenizationLineLength: 2000,
     scrollBeyondLastColumn: 40, // 允许水平滚动超出最后一列
     fixedOverflowWidgets: true, // 确保浮动部件可以超出编辑器边界
     wordWrap: 'on',
@@ -9488,6 +9593,7 @@ const initEditor = () => {
   // 注册编辑器实例到store
   editorStore.setEditorInstance(editor);
   editorStore.setLanguage(language);
+  setupImeCompositionGuard(editor)
   logger.debug('[Editor] Monaco editor instance registered')
 
   if (editorEffectsLeft) {
@@ -9741,6 +9847,7 @@ const ensureSecondaryEditor = () => {
   enableLspForEditorLanguage(secondaryEditor, language, rightPath || '');
   scheduleSourceSyntaxHighlight(secondaryEditor, 'init');
   refreshMarkdownSuggestMode(secondaryEditor)
+  setupImeCompositionGuard(secondaryEditor)
   scheduleRefreshPythonCellManagers()
 
   if (editorEffectsRight) {
@@ -9836,6 +9943,7 @@ const ensureSecondaryEditor = () => {
         languageId: model.getLanguageId?.() || 'plaintext',
         owner: SECONDARY_EDITOR_VSCODE_MODEL_OWNER,
         reason: 'secondary-editor-immediate-sync',
+        skipModelContentSync: true,
       })
       logger.debug('[Editor] synced right source content immediately', {
         path,
@@ -10280,6 +10388,23 @@ const setupEditorListeners = () => {
       }, 0);
     });
 
+    // overlay 同步是 O(n)（全文写入文件服务）。大文档下改为输入停顿后再同步，
+    // 补全自身在请求前会直接 didChange 最新内容给 LSP，不依赖 overlay 每键刷新。
+    const syncPrimaryOverlayNow = () => {
+      if (!editor) return;
+      const m = editor.getModel?.();
+      if (!m) return;
+      void retainVsCodeTextModel({
+        resource: m.uri,
+        content: m.getValue(),
+        languageId: m.getLanguageId?.() || 'plaintext',
+        owner: PRIMARY_EDITOR_VSCODE_MODEL_OWNER,
+        reason: 'primary-editor-immediate-sync',
+        skipModelContentSync: true,
+      });
+    };
+    const syncPrimaryOverlayIdle = debounce(syncPrimaryOverlayNow, 400);
+
     // 设计说明：
     // 1. 预览区依赖 rawContent 变化触发刷新，如果这里也等重分析 debounce 完成，分栏模式就会出现“输入后明显滞后”的问题。
     // 2. 因此源文本与 tab 脏数据先即时同步，问题分析、语法高亮和 Git 装饰继续防抖，兼顾响应速度与整体开销。
@@ -10295,18 +10420,30 @@ const setupEditorListeners = () => {
       rawContent.value = content;
       if (path) fileTreeStore.updateTabContent(path, content);
       scheduleLatexPreviewRebuild();
-      void retainVsCodeTextModel({
-        resource: model.uri,
-        content,
-        languageId: model.getLanguageId?.() || 'plaintext',
-        owner: PRIMARY_EDITOR_VSCODE_MODEL_OWNER,
-        reason: 'primary-editor-immediate-sync',
-      })
+      if (isLargeDocument(model)) {
+        syncPrimaryOverlayIdle();
+      } else {
+        syncPrimaryOverlayNow();
+      }
       logger.debug('[Editor] synced source content immediately', {
         path: String(path || ''),
         length: content.length,
       });
     });
+
+    // 大文档「全文专属」分析（markdown 诊断 / git 未保存行装饰）改为长 idle 才跑一次，
+    // 避免每次防抖都对百万行做 O(n) 的 md.parse / diff。可视区高亮与轻量操作仍按常规防抖。
+    const runWholeDocAnalysis = () => {
+      if (!editor) return;
+      const m = editor.getModel?.();
+      if (!m) return;
+      const content = m.getValue();
+      const languageId = m.getLanguageId() || 'plaintext';
+      const problems = analyzeContentForProblems(content, m, languageId);
+      editorStore.setProblems(problems);
+      updateGitDecorations();
+    };
+    const scheduleWholeDocAnalysisIdle = debounce(runWholeDocAnalysis, LARGE_DOC_IDLE_ANALYSIS_DELAY_MS);
 
     model.onDidChangeContent(
       debounce(() => {
@@ -10318,8 +10455,12 @@ const setupEditorListeners = () => {
         }
         const content = model.getValue();
         const languageId = model.getLanguageId() || 'plaintext';
-        const problems = analyzeContentForProblems(content, model, languageId);
-        editorStore.setProblems(problems);
+        const largeDoc = isLargeDocument(model);
+        if (!largeDoc) {
+          // 常规文件：保持原行为，每次防抖做问题分析 + git 装饰。
+          const problems = analyzeContentForProblems(content, model, languageId);
+          editorStore.setProblems(problems);
+        }
         rawContent.value = content;
         const path = getEditorBoundTabPath(editor);
         if (path) fileTreeStore.updateTabContent(path, content);
@@ -10328,7 +10469,12 @@ const setupEditorListeners = () => {
         scheduleAutoFormatActiveTable();
         refreshMarkdownSuggestMode(editor)
         scheduleSourceSyntaxHighlight(editor, 'debounced');
-        updateGitDecorations();
+        if (largeDoc) {
+          // 大文档：问题分析 + git 装饰延后到输入停顿后一次性跑。
+          scheduleWholeDocAnalysisIdle();
+        } else {
+          updateGitDecorations();
+        }
         scheduleRefreshPythonCellManagers()
       }, EDITOR_POSTPROCESS_DELAY_MS)
     );
@@ -10420,6 +10566,8 @@ const setupEditorListeners = () => {
 
     editorEffectsLeft?.spawnExplosionAtCursor(text);
     editorEffectsLeft?.updateCursorTarget();
+    // IME 组合期间不主动触发任何补全，避免打断中文输入
+    if (isEditorImeComposing(editor)) return;
     maybeTriggerEmbeddedSuggestOnType(editor, text)
     maybeTriggerDirectLspSuggestOnType(editor, text)
 
@@ -19675,6 +19823,10 @@ function generateOutline(content, filePath, reason = 'unknown') {
 const generateOutlineDebounced = debounce(({ content, filePath, reason }) => {
   generateOutline(content, filePath, reason || 'debounced')
 }, 200)
+// 大文档：大纲生成延后到输入停顿（与诊断/git 一致），避免每次编辑都 O(n) 解析整篇。
+const generateOutlineIdleDebounced = debounce(({ content, filePath, reason }) => {
+  generateOutline(content, filePath, reason || 'idle')
+}, LARGE_DOC_IDLE_ANALYSIS_DELAY_MS)
 
 const syncNotebookOutlineState = async (reason = 'unknown') => {
   if (!(editorSurfaceMode.value === 'notebook' && canUseNotebookSurface.value)) {
@@ -19762,11 +19914,14 @@ watch([() => fileTreeStore.activeTab, rawContent, editorSurfaceMode, canUseNoteb
     contentLength: String(content || '').length,
     surfaceMode: String(surfaceMode || ''),
   })
-  generateOutlineDebounced({
-    content,
-    filePath: String(tabPath || selectedFile.value?.path || ''),
-    reason: 'watch-source-outline-state',
-  })
+  const outlineFilePath = String(tabPath || selectedFile.value?.path || '')
+  if (isLargeDocument(editor?.getModel?.())) {
+    generateOutlineDebounced.cancel?.()
+    generateOutlineIdleDebounced({ content, filePath: outlineFilePath, reason: 'watch-source-outline-state-large' })
+  } else {
+    generateOutlineIdleDebounced.cancel?.()
+    generateOutlineDebounced({ content, filePath: outlineFilePath, reason: 'watch-source-outline-state' })
+  }
 }, { immediate: true })
 
 const handleLspSettingChanged = (evt) => {
