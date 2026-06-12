@@ -651,6 +651,7 @@ fn is_downloadable_fallback(server_id: &str) -> bool {
             | "rust-analyzer"
             | "lua-language-server"
             | "texlab"
+            | "tinymist"
             | "marksman"
             | "mermaid-lsp"
             | "ruff"

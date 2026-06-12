@@ -368,13 +368,13 @@
             </n-tooltip>
           </n-dropdown>
 
-          <n-tooltip v-if="isTexFile" placement="top" trigger="hover">
+          <n-tooltip v-if="isPdfPreviewDoc" placement="top" trigger="hover">
             <template #trigger>
               <n-button text :type="latexPreviewVisible ? 'primary' : 'default'" @click="toggleLatexPreview">
-                <Icon :icon="texFileIcon" width="18" height="18" />
+                <Icon :icon="isTypFile ? typFileIcon : texFileIcon" width="18" height="18" />
               </n-button>
             </template>
-            {{ latexPreviewVisible ? '关闭 LaTeX 预览' : 'LaTeX 预览' }}
+            {{ latexPreviewVisible ? `关闭 ${pdfPreviewLabel} 预览` : `${pdfPreviewLabel} 预览` }}
           </n-tooltip>
 
           <n-dropdown trigger="click" :options="exportOptions" @select="handleExportSelect">
@@ -644,7 +644,7 @@
       </div>
     </div>
 
-    <div class="editor-content" :class="[previewMode, { 'has-latex-preview': isTexFile && latexPreviewVisible }]" ref="editorContentRef">
+    <div class="editor-content" :class="[previewMode, { 'has-latex-preview': isPdfPreviewDoc && latexPreviewVisible }]" ref="editorContentRef">
       <div v-if="showEditorEmptyState" class="editor-empty">请选择一个文件以开始编辑</div>
       <div v-show="selectedFile && previewMode === 'realtime' && canPreview" id="realtime-vditor"
         class="realtime-vditor">
@@ -953,20 +953,21 @@
       </div>
 
       <div
-        v-if="isTexFile && latexPreviewVisible"
+        v-if="isPdfPreviewDoc && latexPreviewVisible"
         class="latex-preview-resizer"
         :class="{ dragging: latexPreviewResizing }"
         @mousedown="startResizeLatexPreview"
       />
 
       <GuaxiLatexPreview
-        v-if="isTexFile && latexPreviewVisible"
+        v-if="isPdfPreviewDoc && latexPreviewVisible"
         class="latex-preview-pane"
         :style="{ flex: `0 0 ${latexPreviewWidth}px` }"
         :pdf-path="latexPreviewRealPdfPath"
         :building="latexPreviewBuilding"
         :error-text="latexPreviewError"
         :theme="settingsStore.appearanceTheme"
+        :title-label="pdfPreviewLabel"
         @rebuild="buildLatexPreview"
         @export="handleLatexExport"
       />
@@ -1111,6 +1112,7 @@ import mermaid from 'mermaid'
 import folderIcon from '@iconify-icons/lucide/folder'
 import fileTextIcon from '@iconify-icons/lucide/file-text'
 import texFileIcon from '@iconify-icons/vscode-icons/file-type-tex'
+import typFileIcon from '@iconify-icons/lucide/file-type-2'
 import hashIcon from '@iconify-icons/lucide/hash'
 
 import tableRowPlusAfter from '@iconify-icons/mdi/table-row-plus-after'
@@ -1143,7 +1145,9 @@ import {
   onLspConnectionStateChange,
   waitForLspConnection,
   resetLspDisabled,
-  provideDirectLspCompletionSuggestions
+  provideDirectLspCompletionSuggestions,
+  provideLspSemanticTokens,
+  getLspSemanticTokensLegend
 } from '../../monaco/lspClient'
 import {
   LSP_SUPPORTED_LANGUAGES,
@@ -1256,8 +1260,50 @@ const ensureMermaidLanguage = () => {
   logger.info('[Editor] language registered', { languageId: 'mermaid' })
 }
 
+const ensureTypstLanguage = () => {
+  const exists = monaco.languages.getLanguages().some((lang) => lang.id === 'typst')
+  if (!exists) {
+    monaco.languages.register({
+      id: 'typst',
+      extensions: ['.typ'],
+      aliases: ['Typst', 'typst'],
+      mimetypes: ['text/x-typst']
+    })
+  }
+  // 设计说明：
+  // 1. Monaco 没有内置 typst 词法，仅注册语言 ID 编辑区接近纯文本。
+  // 2. 这里提供一层稳定的前端词法兜底（注释、标记标题、函数调用 #..、变量 $..$、关键字、字符串、数字）。
+  // 3. 更精确的语义高亮与补全交给 tinymist LSP（异步增强）。
+  monaco.languages.setMonarchTokensProvider('typst', {
+    tokenizer: {
+      root: [
+        [/\/\/.*$/, 'comment'],
+        [/\/\*/, 'comment', '@comment'],
+        [/^\s*=+\s.*$/, 'keyword'], // 标题 = / == / ===
+        [/(#)(let|set|show|import|include|if|else|for|while|return|break|continue|in|as|context|none|auto|true|false)\b/, ['operator', 'keyword']],
+        [/#[A-Za-z_][\w-]*/, 'function'], // 函数调用 #func
+        [/\$[^$]*\$/, 'string'], // 行内公式
+        [/\*[^*]+\*/, 'strong'], // *加粗*
+        [/_[^_]+_/, 'emphasis'], // _强调_
+        [/`[^`]*`/, 'string'], // raw
+        [/"(?:[^"\\]|\\.)*"/, 'string'],
+        [/@[A-Za-z_][\w-]*/, 'variable'], // 引用 @label
+        [/\b\d+(?:\.\d+)?(?:pt|mm|cm|in|em|fr|deg|%)?\b/, 'number'],
+        [/[{}[\]()]/, 'delimiter.bracket'],
+      ],
+      comment: [
+        [/[^/*]+/, 'comment'],
+        [/\*\//, 'comment', '@pop'],
+        [/[/*]/, 'comment'],
+      ],
+    }
+  })
+  logger.info('[Editor] Typst language registered/configured', { languageId: 'typst', existed: exists })
+}
+
 ensureLatexLanguage()
 ensureMermaidLanguage()
+ensureTypstLanguage()
 // 添加 GitPanel 组件引用
 const gitPanel = ref(null)
 
@@ -8714,6 +8760,7 @@ const EXT_TO_LANGUAGE = {
   latex: 'latex',
   cls: 'latex',
   sty: 'latex',
+  typ: 'typst',
   mmd: 'mermaid',
   mermaid: 'mermaid',
   toml: 'ini',
@@ -9866,6 +9913,31 @@ let gitDiffOriginalModel = null
 let gitDiffModifiedModel = null
 let gitDecorationsSeq = 0
 let disposeLspConnectionStateListener = null
+// 仅对 LSP 语义着色语言（如 typst，无 tree-sitter grammar）按 server legend 注册一次 Monaco 语义着色 provider。
+const LSP_SEMANTIC_TOKEN_LANGUAGES = new Set(['typst'])
+const lspSemanticTokenProviderDisposables = new Map()
+
+const ensureLspSemanticTokensProvider = (languageId) => {
+  const lang = String(languageId || '').trim().toLowerCase()
+  if (!LSP_SEMANTIC_TOKEN_LANGUAGES.has(lang)) return
+  if (lspSemanticTokenProviderDisposables.has(lang)) return
+  // legend 来自 server 的 initialize 结果，必须在已连接后才可用。
+  const legend = getLspSemanticTokensLegend(lang)
+  if (!legend) return
+  const disposable = monaco.languages.registerDocumentSemanticTokensProvider(lang, {
+    getLegend: () => legend,
+    async provideDocumentSemanticTokens(model, _lastResultId, token) {
+      const result = await provideLspSemanticTokens(lang, model, token)
+      return result || { data: new Uint32Array() }
+    },
+    releaseDocumentSemanticTokens() {},
+  })
+  lspSemanticTokenProviderDisposables.set(lang, disposable)
+  logger.info('[DirectLsp] registered LSP semantic tokens provider', {
+    languageId: lang,
+    tokenTypeCount: legend.tokenTypes.length,
+  })
+}
 
 const ensureGitDiffEditor = (languageId) => {
   const lang = languageId || 'plaintext'
@@ -13260,8 +13332,8 @@ const saveContent = async () => {
     }
   }
 
-  // LaTeX 预览：保存后立即重建（与防抖实时构建互补）
-  if (latexPreviewVisible.value && isTexFile.value) {
+  // LaTeX/Typst 预览：保存后立即重建（与防抖实时构建互补）
+  if (latexPreviewVisible.value && isPdfPreviewDoc.value) {
     buildLatexPreview();
   }
 };
@@ -17684,6 +17756,13 @@ const isTexFile = computed(() => {
   const path = selectedFile.value?.path || ''
   return /\.tex$/i.test(path)
 })
+const isTypFile = computed(() => {
+  const path = selectedFile.value?.path || ''
+  return /\.typ$/i.test(path)
+})
+// 可用 PDF 预览面板的文档类型（.tex / .typ）
+const isPdfPreviewDoc = computed(() => isTexFile.value || isTypFile.value)
+const pdfPreviewLabel = computed(() => (isTypFile.value ? 'Typst' : 'LaTeX'))
 const latexPreviewVisible = ref(false)
 const latexPreviewPdfPath = ref('')
 const latexPreviewBuilding = ref(false)
@@ -17759,13 +17838,15 @@ const getCurrentTexContent = () => {
 
 const buildLatexPreview = async () => {
   const sourcePath = selectedFile.value?.path || fileTreeStore.activeTab || ''
-  if (!sourcePath || !/\.tex$/i.test(sourcePath)) return
+  const isTyp = /\.typ$/i.test(sourcePath)
+  if (!sourcePath || !(/\.tex$/i.test(sourcePath) || isTyp)) return
   const seq = ++latexBuildSeq
   latexPreviewBuilding.value = true
   latexPreviewError.value = ''
   try {
     const content = getCurrentTexContent()
-    const pdfPath = await invoke('build_tex_pdf_preview', { sourcePath, content })
+    const command = isTyp ? 'build_typ_pdf_preview' : 'build_tex_pdf_preview'
+    const pdfPath = await invoke(command, { sourcePath, content })
     if (seq !== latexBuildSeq) return // 被更晚的构建取代
     // 加 query 触发 pane 的 watch（即便路径相同也重新加载）
     latexPreviewPdfPath.value = `${pdfPath}?v=${seq}`
@@ -17780,7 +17861,7 @@ const buildLatexPreview = async () => {
 
 // 实时预览：编辑停顿后防抖重建
 const scheduleLatexPreviewRebuild = () => {
-  if (!latexPreviewVisible.value || !isTexFile.value) return
+  if (!latexPreviewVisible.value || !isPdfPreviewDoc.value) return
   if (latexBuildDebounceTimer) clearTimeout(latexBuildDebounceTimer)
   latexBuildDebounceTimer = setTimeout(() => {
     latexBuildDebounceTimer = null
@@ -17791,7 +17872,7 @@ const scheduleLatexPreviewRebuild = () => {
 // pdfPath 去掉 query 后的真实路径（供 pane 读取）
 const latexPreviewRealPdfPath = computed(() => String(latexPreviewPdfPath.value).split('?')[0])
 
-// 导出预览 PDF：复用现有的 tex→pdf 导出流程（从已保存源文件干净构建）
+// 导出预览 PDF：复用现有导出流程（从已保存源文件干净构建，.tex 走 tectonic，.typ 走 typst）
 const handleLatexExport = async () => {
   // 确保先保存，导出从磁盘读取源文件
   try { await saveContent() } catch { /* noop */ }
@@ -17804,10 +17885,10 @@ let skipPreviousTabSyncOnce = false
 // 监听文件选择
 watch(selectedFile, async (newFile) => {
   flushPythonCellDrafts()
-  // 切到非 .tex 文件时关闭 LaTeX 预览，避免空分屏；切到 .tex 且预览开启则重建
+  // 切到非 .tex/.typ 文件时关闭预览，避免空分屏；切到可预览文档且预览开启则重建
   {
     const p = newFile?.path || ''
-    if (!/\.tex$/i.test(p)) {
+    if (!/\.(tex|typ)$/i.test(p)) {
       latexPreviewVisible.value = false
       latexPreviewPdfPath.value = ''
       latexPreviewError.value = ''
@@ -18666,12 +18747,15 @@ const prepareExportContext = async (format) => {
   const inputPath = String(selectedFile.value.path || '')
   const ext = inputPath.split('.').pop()?.toLowerCase() || ''
   const isTexFile = ext === 'tex'
+  const isTypFileExport = ext === 'typ'
   const isMarkdownFile = ext === 'md' || ext === 'markdown'
   const config = EXPORT_FORMAT_CONFIG[format] || { ext: String(format || 'txt'), filterName: '导出文件' }
 
-  if (!isMarkdownFile && !(isTexFile && format === 'pdf')) {
+  if (!isMarkdownFile && !((isTexFile || isTypFileExport) && format === 'pdf')) {
     if (isTexFile) {
       message.warning('当前为 .tex 文件，仅支持导出为 PDF')
+    } else if (isTypFileExport) {
+      message.warning('当前为 .typ 文件，仅支持导出为 PDF')
     } else {
       message.warning('仅支持对 Markdown(.md/.markdown) 文件进行导出')
     }
@@ -18680,6 +18764,7 @@ const prepareExportContext = async (format) => {
       inputPath,
       ext,
       isTexFile,
+      isTypFile: isTypFileExport,
       isMarkdownFile,
     })
     return null
@@ -18704,9 +18789,10 @@ const prepareExportContext = async (format) => {
     extName: config.ext,
     filterName: config.filterName,
     isTexFile,
+    isTypFile: isTypFileExport,
     isMarkdownFile,
     markdown,
-    title: (selectedFile.value?.name || inputPath.split(/[\\/]/).pop() || '未命名文档').replace(/\.(md|markdown|tex)$/i, ''),
+    title: (selectedFile.value?.name || inputPath.split(/[\\/]/).pop() || '未命名文档').replace(/\.(md|markdown|tex|typ)$/i, ''),
     baseHref: pathToFileHref(getParentDirectoryPath(inputPath)),
   }
 }
@@ -18716,8 +18802,8 @@ const chooseExportOutputPath = async (context) => {
   const extName = String(context?.extName || context?.format || 'txt')
   let defaultPath = inputPath
 
-  if (/\.(md|markdown|tex)$/i.test(defaultPath)) {
-    defaultPath = defaultPath.replace(/\.(md|markdown|tex)$/i, `.${extName}`)
+  if (/\.(md|markdown|tex|typ)$/i.test(defaultPath)) {
+    defaultPath = defaultPath.replace(/\.(md|markdown|tex|typ)$/i, `.${extName}`)
   } else {
     defaultPath = `${defaultPath}.${extName}`
   }
@@ -19279,6 +19365,17 @@ const exportTexPdf = async (context, outputPath) => {
   })
 }
 
+const exportTypPdf = async (context, outputPath) => {
+  logger.info('[Export] export typ pdf via typst', {
+    inputPath: context.inputPath,
+    outputPath,
+  })
+  await invoke('export_typ_pdf', {
+    inputPath: context.inputPath,
+    outputPath,
+  })
+}
+
 const handleExportSelect = async (format) => {
   try {
     const context = await prepareExportContext(format)
@@ -19300,6 +19397,8 @@ const handleExportSelect = async (format) => {
 
     if (context.isTexFile && format === 'pdf') {
       await exportTexPdf(context, outputPath)
+    } else if (context.isTypFile && format === 'pdf') {
+      await exportTypPdf(context, outputPath)
     } else if (format === 'pdf') {
       await exportMarkdownRenderedPdf(context, outputPath)
     } else if (format === 'html') {
@@ -19778,6 +19877,8 @@ onMounted(() => {
     scheduleSourceSyntaxHighlight(editor, 'lsp-state')
     scheduleSourceSyntaxHighlight(secondaryEditor, 'lsp-state')
     if (state !== 'connected') return
+    // 连接后 legend 才可用，对 typst 这类靠 LSP 语义着色的语言注册 semantic tokens provider。
+    ensureLspSemanticTokensProvider(normalizedLanguageId)
     logger.debug('[DirectLsp] connected without auto-opening suggest widget', {
       languageId: normalizedLanguageId,
     })
@@ -19819,6 +19920,10 @@ onUnmounted(() => {
   window.removeEventListener('keydown', handlePythonRuntimeWorkbenchKeydown, true)
   disposeLspConnectionStateListener?.()
   disposeLspConnectionStateListener = null
+  lspSemanticTokenProviderDisposables.forEach((disposable) => {
+    try { disposable?.dispose?.() } catch { /* noop */ }
+  })
+  lspSemanticTokenProviderDisposables.clear()
   clearPreviewSelectionState()
   destroyRealtimeVditor();
 

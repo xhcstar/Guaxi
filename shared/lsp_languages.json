@@ -39,6 +39,15 @@
     "auto_download": true
   },
   {
+    "language": "typst",
+    "server": "tinymist",
+    "bin_name": "tinymist",
+    "args": [
+      "lsp"
+    ],
+    "auto_download": true
+  },
+  {
     "language": "python",
     "server": "pyright",
     "bin_name": "pyright-langserver",

@@ -9,6 +9,7 @@ import {
   CompletionRequest,
   DidChangeTextDocumentNotification,
   DidOpenTextDocumentNotification,
+  SemanticTokensRequest,
 } from 'vscode-languageserver-protocol'
 import {
   toSocket,
@@ -694,6 +695,114 @@ export const provideDirectLspCompletionSuggestions = async (
       })
     }
     return []
+  }
+}
+
+// ───── LSP 语义着色（semantic tokens）─────
+// 设计说明：
+// 1. 本项目编辑器着色默认走后端 tree-sitter，但 typst 没有 tree-sitter grammar；
+//    tinymist 已通过 LSP 提供高质量 semantic tokens，这里把它接到 Monaco 的 DocumentSemanticTokensProvider。
+// 2. 复用已建立的共享 LSP client（与补全同一条），按需取 server 在 initialize 时声明的 legend 解码 token 类型。
+// 3. LSP 的 semantic tokens data 是 5 元组 delta 编码（deltaLine, deltaStartChar, length, tokenType, tokenModifiers），
+//    Monaco 的 provider 期望同样的 5 元组 delta 编码，因此 data 可直接透传，只需把 legend 透传给 getLegend()。
+
+type LspSemanticLegend = {
+  tokenTypes: string[]
+  tokenModifiers: string[]
+}
+
+const getServerSemanticLegend = (client: MonacoLanguageClient | null): LspSemanticLegend | null => {
+  const initResult = (client as unknown as {
+    initializeResult?: {
+      capabilities?: {
+        semanticTokensProvider?: {
+          legend?: { tokenTypes?: string[]; tokenModifiers?: string[] }
+          full?: unknown
+        }
+      }
+    }
+  } | null)?.initializeResult
+  const provider = initResult?.capabilities?.semanticTokensProvider
+  const legend = provider?.legend
+  if (!legend || !Array.isArray(legend.tokenTypes) || !legend.tokenTypes.length) return null
+  return {
+    tokenTypes: legend.tokenTypes,
+    tokenModifiers: Array.isArray(legend.tokenModifiers) ? legend.tokenModifiers : [],
+  }
+}
+
+export const getLspSemanticTokensLegend = (languageId: string): monaco.languages.SemanticTokensLegend | null => {
+  const normalizedLanguageId = normalizeLanguageId(languageId)
+  const clientKey = getLspClientKey(normalizedLanguageId)
+  const entry = lspClients.get(clientKey)
+  const legend = getServerSemanticLegend(entry?.client || null)
+  if (!legend) return null
+  return { tokenTypes: legend.tokenTypes, tokenModifiers: legend.tokenModifiers }
+}
+
+export const provideLspSemanticTokens = async (
+  languageId: string,
+  model: monaco.editor.ITextModel,
+  token: monaco.CancellationToken | undefined
+): Promise<monaco.languages.SemanticTokens | null> => {
+  const normalizedLanguageId = normalizeLanguageId(languageId)
+  const clientKey = getLspClientKey(normalizedLanguageId)
+  const entry = lspClients.get(clientKey)
+  if (!entry?.client || entry.disposed) return null
+
+  const documentUri = String(model.uri?.toString?.() || entry.documentUri || '')
+  const ready = await ensureLspClientReadyForDirectRequest(
+    entry,
+    clientKey,
+    normalizedLanguageId,
+    documentUri
+  )
+  if (!ready || token?.isCancellationRequested) return null
+
+  const legend = getServerSemanticLegend(entry.client)
+  if (!legend) {
+    logger.debug('[LSP] semantic tokens unavailable: server has no legend', {
+      languageId: normalizedLanguageId,
+      clientKey,
+    })
+    return null
+  }
+
+  try {
+    const synced = await synchronizeDirectLspTextDocument(entry, clientKey, normalizedLanguageId, model)
+    if (!synced || token?.isCancellationRequested) return null
+
+    const result = await (entry.client as unknown as {
+      sendRequest: (type: typeof SemanticTokensRequest.type, params: unknown, token?: unknown) => Promise<unknown>
+    }).sendRequest(
+      SemanticTokensRequest.type,
+      { textDocument: { uri: documentUri } },
+      token
+    )
+    if (token?.isCancellationRequested) return null
+
+    const data = (result as { data?: number[] } | null)?.data
+    if (!Array.isArray(data) || !data.length) {
+      return { data: new Uint32Array() }
+    }
+    logger.debug('[LSP] semantic tokens resolved', {
+      languageId: normalizedLanguageId,
+      clientKey,
+      tokenCount: Math.floor(data.length / 5),
+    })
+    return { data: Uint32Array.from(data) }
+  } catch (error) {
+    logger.warn('[LSP] semantic tokens request failed', {
+      languageId: normalizedLanguageId,
+      clientKey,
+      error: String((error as Error)?.message || error),
+    })
+    if (isLspClientNotRunningError(error)) {
+      cleanupLspClientEntry(clientKey, normalizedLanguageId, 'semantic-tokens-client-not-running', {
+        suppressRetryBackoff: true,
+      })
+    }
+    return null
   }
 }
 

@@ -415,6 +415,14 @@ fn lsp_binary_spec(name: &str) -> Option<LspBinarySpec> {
             asset_kind: LspAssetKind::Zip,
             direct_url: Some("https://github.com/latex-lsp/texlab/releases/download/v5.25.1/texlab-x86_64-windows.zip"),
         }),
+        "tinymist" => Some(LspBinarySpec {
+            repo: "Myriad-Dreamin/tinymist",
+            asset_regex: r"tinymist-x86_64-pc-windows-msvc\.zip$",
+            bin_name: "tinymist.exe",
+            asset_kind: LspAssetKind::Zip,
+            // tinymist 的 MINOR 版本与 typst 对齐：本项目用 typst 0.14.2，故选 tinymist 0.14.x。
+            direct_url: Some("https://github.com/Myriad-Dreamin/tinymist/releases/download/v0.14.18/tinymist-x86_64-pc-windows-msvc.zip"),
+        }),
         "lua-language-server" => Some(LspBinarySpec {
             repo: "LuaLS/lua-language-server",
             asset_regex: r"win32-x64\.zip$",
@@ -1137,6 +1145,12 @@ fn lsp_probe_document_for_language(language: &str) -> LspProbeDocument {
             "\\documentclass{article}\n\\begin{document}\n\\ref{".to_string(),
             2,
             5,
+        ),
+        "typst" => (
+            "typ",
+            "#let guaxi = 1\n#guaxi".to_string(),
+            1,
+            6,
         ),
         _ => ("txt", "guaxi".to_string(), 0, 5),
     };

@@ -1,7 +1,7 @@
 <template>
   <div class="latex-preview" :class="`theme-${theme}`">
     <div class="latex-preview__toolbar">
-      <span class="latex-preview__title">LaTeX 预览</span>
+      <span class="latex-preview__title">{{ titleLabel }} 预览</span>
       <span class="latex-preview__status" :class="statusTone">{{ statusText }}</span>
       <div class="latex-preview__spacer" />
 
@@ -106,6 +106,8 @@ const props = defineProps({
   errorText: { type: String, default: '' },
   // 主题：'light' | 'dark'
   theme: { type: String, default: 'light' },
+  // 标题前缀（'LaTeX' / 'Typst'）
+  titleLabel: { type: String, default: 'LaTeX' },
 })
 
 defineEmits(['export', 'rebuild'])

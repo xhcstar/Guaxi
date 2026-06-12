@@ -142,6 +142,31 @@
       }
     },
     {
+      "id": "myriad-dreamin.tinymist",
+      "display_name": "Tinymist Typst",
+      "description": "Typst language support powered by Tinymist.",
+      "open_vsx": "myriad-dreamin.tinymist",
+      "vscode_marketplace": "myriad-dreamin.tinymist",
+      "languages": ["typst"],
+      "compatibility_level": "A",
+      "recommended": true,
+      "lsp": {
+        "server_id": "tinymist",
+        "runtime": "binary",
+        "bin_name": "tinymist",
+        "args": ["lsp"],
+        "entry_paths": [
+          "tinymist.exe",
+          "bin/tinymist.exe",
+          "tinymist",
+          "bin/tinymist"
+        ],
+        "resolve_order": ["extension_entry", "downloadable_server"],
+        "fallback_server": "tinymist",
+        "fallback_bin_name": "tinymist"
+      }
+    },
+    {
       "id": "mads-hartmann.bash-ide-vscode",
       "display_name": "Bash IDE",
       "description": "Shell language support through bash-language-server.",
