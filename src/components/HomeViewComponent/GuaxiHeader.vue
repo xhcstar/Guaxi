@@ -75,6 +75,13 @@
 
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
+          <n-icon class="header-icon" size="20" :component="TaskListSquareLtr20Regular" @click="openTaskManager" />
+        </template>
+        任务管理面板
+      </n-tooltip>
+
+      <n-tooltip placement="bottom" trigger="hover">
+        <template #trigger>
           <n-icon class="header-icon" size="20" @click="openLanguageLearningWindow">
             <svg viewBox="0 0 24 24" width="18" height="18">
               <path fill="none" stroke="currentColor" stroke-width="1.8" d="M4 5.5A2.5 2.5 0 0 1 6.5 3H11v16H6.5A2.5 2.5 0 0 0 4 21V5.5zm16 0A2.5 2.5 0 0 0 17.5 3H13v16h4.5A2.5 2.5 0 0 1 20 21V5.5zM8 8h2m-2 3h2m6-3h-2m2 3h-2" />
@@ -288,6 +295,7 @@ import {
   BookAdd20Regular,
   Box20Regular,
   Folder20Regular,
+  TaskListSquareLtr20Regular,
   PanelLeftContract24Regular,
   PanelRightContract24Regular
 } from '@vicons/fluent'
@@ -561,6 +569,24 @@ async function openResourceRepoManager() {
     }
     logger.error('打开资源库管理失败:', err)
     message.error('打开资源库管理失败')
+  }
+}
+
+async function openTaskManager() {
+  try {
+    await invoke('create_task_manager_window', {
+      label: 'task_manager',
+      title: '任务管理面板',
+      theme: settingsStore.appearanceTheme,
+    })
+  } catch (err) {
+    const msg = String(err?.message || err || '')
+    if (msg.includes('已存在')) {
+      message.info('任务管理面板已打开')
+      return
+    }
+    logger.error('打开任务管理面板失败:', err)
+    message.error('打开任务管理面板失败')
   }
 }
 

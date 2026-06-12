@@ -303,6 +303,39 @@ fn is_valid_directory(path: &Path) -> bool {
 }
 
 #[tauri::command]
+pub fn copy_path(source_path: String, destination_path: String) -> Result<(), String> {
+    let source_path = normalize_path(&source_path);
+    let destination_path = normalize_path(&destination_path);
+    if let Some(parent) = destination_path.parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
+        }
+    }
+    let meta = fs::metadata(&source_path).map_err(|e| e.to_string())?;
+    if meta.is_dir() {
+        copy_dir_recursive(&source_path, &destination_path)?;
+    } else {
+        fs::copy(&source_path, &destination_path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+    fs::create_dir_all(dst).map_err(|e| e.to_string())?;
+    for entry in fs::read_dir(src).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if from.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else {
+            fs::copy(&from, &to).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub fn rename_directory(old_path: String, new_path: String) -> Result<(), String> {
     let old_path = normalize_path(&old_path);
     let new_path = normalize_path(&new_path);

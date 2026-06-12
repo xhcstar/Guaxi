@@ -17,7 +17,8 @@
     "tools-file-transfer",
     "slidev_manager",
     "language_learning",
-    "flipboard_feeds"
+    "flipboard_feeds",
+    "task_manager"
   ],
   "permissions": [
     "core:default",

@@ -17,6 +17,7 @@ import ServerContent from './ServerContent.vue';
 import AboutContent from './AboutContent.vue';
 import LLMModalSetting from './LLMModalSetting.vue';
 import GuaxiManual from './GuaxiManual.vue';
+import TaskManagerContent from './TaskManagerContent.vue';
 import { useSettingsStore } from '../../stores/settingsStore';
 
 const settingsStore = useSettingsStore();
@@ -34,6 +35,8 @@ const currentComponent = computed(() => {
       return AboutContent;
     case 'llm':
       return LLMModalSetting;
+    case 'taskmanager':
+      return TaskManagerContent;
     case 'manual':
       return GuaxiManual;
     default:

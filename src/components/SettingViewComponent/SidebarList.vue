@@ -14,7 +14,7 @@
 import { ref, h } from 'vue';
 import { NMenu, NIcon } from 'naive-ui';
 import { InformationCircleOutline, BookOutline } from '@vicons/ionicons5';
-import { FolderAdd20Regular, Image28Regular, Server24Regular, Key24Regular } from '@vicons/fluent';
+import { FolderAdd20Regular, Image28Regular, Server24Regular, Key24Regular, TaskListSquareLtr20Regular } from '@vicons/fluent';
 import { useSettingsStore } from '../../stores/settingsStore';
 
 const settingsStore = useSettingsStore();
@@ -41,6 +41,11 @@ const menuOptions = [
     label: '大模型',
     key: 'llm',
     icon: () => h(NIcon, { component: Key24Regular, size: 24 }),
+  },
+  {
+    label: '任务管理',
+    key: 'taskmanager',
+    icon: () => h(NIcon, { component: TaskListSquareLtr20Regular, size: 24 }),
   },
   {
     label: '关于',

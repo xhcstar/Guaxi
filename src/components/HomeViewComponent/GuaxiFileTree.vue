@@ -3,7 +3,7 @@
     <!-- 工具栏 -->
     <div class="list-header">
       <div class="title-container">
-        <n-text class="repo-title-header">知识编辑</n-text>
+        <n-text class="repo-title-header">{{ modeTitle }}</n-text>
       </div>
       <div class="header-actions">
         <n-tooltip trigger="hover">
@@ -47,13 +47,13 @@
               :size="18"
               :border-radius="6"
               class="mode-toggle-icon"
-              :class="{ active: viewMode === 'plain' }"
+              :class="{ active: viewMode !== 'kb' }"
               @click="toggleViewMode"
             >
-              <n-icon :component="viewMode === 'plain' ? LibraryOutline : SwapHorizontalOutline" size="16" />
+              <n-icon :component="modeToggleIcon" size="16" />
             </n-icon-wrapper>
           </template>
-          {{ viewMode === 'plain' ? '切换回知识库模式' : '切换到文件编辑模式' }}
+          {{ modeToggleTooltip }}
         </n-tooltip>
 
         <n-tooltip trigger="hover">
@@ -200,25 +200,136 @@
       </div>
     </div>
 
-    <!-- 普通文件编辑模式：外部目录树 / 打开历史列表 -->
-    <div v-else class="repo-body plain-body">
-      <!-- 已激活某个外部目录：显示其文件树 -->
-      <div v-if="externalDir" class="external-dir-wrapper">
-        <div class="external-dir-header">
+    <!-- 任务编辑模式：与知识库一致——激活的分类占满整列，收起后其它分类以列表显示在其后 -->
+    <div v-else-if="viewMode === 'task'" class="repo-body" :class="{ 'active-filled': taskActiveExpanded }">
+      <div class="active-repo-wrapper" :class="{ expanded: taskActiveExpanded }">
+        <div class="repo-item" @click="toggleActiveTaskCat">
+          <div class="repo-title" :title="catPathOf(activeTaskCat)">
+            <n-icon size="16" class="repo-icon"><FolderIcon /></n-icon>
+            {{ catZhOf(activeTaskCat) }}
+          </div>
+          <div class="repo-actions">
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="taskCatImport(activeTaskCat)">
+                  <n-icon :component="DownloadOutline" size="16" />
+                </n-icon-wrapper>
+              </template>
+              导入文件
+            </n-tooltip>
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="taskCatAddFile(activeTaskCat)">
+                  <n-icon :component="FileAddIcon" size="16" />
+                </n-icon-wrapper>
+              </template>
+              新建文件
+            </n-tooltip>
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="taskCatAddFolder(activeTaskCat)">
+                  <n-icon :component="FolderAddIcon" size="16" />
+                </n-icon-wrapper>
+              </template>
+              新建文件夹
+            </n-tooltip>
+          </div>
+        </div>
+
+        <div v-if="taskActiveExpanded" class="active-tree-container" @wheel.stop>
+          <GuaxiVirtualFileTree
+            class="tree-component"
+            :nodes="taskCatTrees[activeTaskCat]"
+            v-model:expanded-keys="taskCatExpandedKeys[activeTaskCat]"
+            v-model:selected-keys="taskCatSelectedKeys[activeTaskCat]"
+            :root-id="catPathOf(activeTaskCat)"
+            @open-file="handleTaskOpenFile"
+            @load-children="handleTaskLoadChildren"
+            @contextmenu="(p) => openGenContextMenu('task', p)"
+            @blank-contextmenu="(p) => openGenBlankMenu('task', p, catPathOf(activeTaskCat))"
+          />
+        </div>
+      </div>
+
+      <div v-show="!taskActiveExpanded" class="repo-scroll-wrapper">
+        <n-scrollbar class="repo-scroll-container">
+          <n-list class="repo-list" :show-divider="false">
+            <n-list-item v-for="cat in inactiveTaskCats" :key="cat.key" class="repo-list-item">
+              <div class="repo-item" @click="activateTaskCat(cat.key)">
+                <div class="repo-title" :title="catPathOf(cat.key)">
+                  <n-icon size="16" class="repo-icon"><FolderIcon /></n-icon>
+                  {{ cat.zh }}
+                </div>
+                <div class="repo-actions">
+                  <n-tooltip trigger="hover">
+                    <template #trigger>
+                      <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="taskCatImport(cat.key)">
+                        <n-icon :component="DownloadOutline" size="16" />
+                      </n-icon-wrapper>
+                    </template>
+                    导入文件
+                  </n-tooltip>
+                  <n-tooltip trigger="hover">
+                    <template #trigger>
+                      <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="taskCatAddFile(cat.key)">
+                        <n-icon :component="FileAddIcon" size="16" />
+                      </n-icon-wrapper>
+                    </template>
+                    新建文件
+                  </n-tooltip>
+                  <n-tooltip trigger="hover">
+                    <template #trigger>
+                      <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="taskCatAddFolder(cat.key)">
+                        <n-icon :component="FolderAddIcon" size="16" />
+                      </n-icon-wrapper>
+                    </template>
+                    新建文件夹
+                  </n-tooltip>
+                </div>
+              </div>
+            </n-list-item>
+          </n-list>
+        </n-scrollbar>
+      </div>
+    </div>
+
+    <!-- 普通文件编辑模式：与知识库一致——激活目录占满整列，收起后打开历史列表显示在其后 -->
+    <div v-else class="repo-body plain-body" :class="{ 'active-filled': plainActiveExpanded }">
+      <!-- 已激活某个外部目录：根条目可展开收缩 + 操作图标（与知识库模式一致） -->
+      <div v-if="externalDir" class="active-repo-wrapper" :class="{ expanded: plainRootExpanded }">
+        <div class="repo-item" @click="plainRootExpanded = !plainRootExpanded">
           <div class="repo-title" :title="externalDir">
             <n-icon size="16" class="repo-icon"><FolderIcon /></n-icon>
             {{ getDirDisplayName(externalDir) }}
           </div>
-          <n-tooltip trigger="hover">
-            <template #trigger>
-              <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click="backToHistory">
-                <n-icon :component="TimeOutline" size="16" />
-              </n-icon-wrapper>
-            </template>
-            返回历史列表
-          </n-tooltip>
+          <div class="repo-actions">
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="plainHeaderImport">
+                  <n-icon :component="DownloadOutline" size="16" />
+                </n-icon-wrapper>
+              </template>
+              导入文件
+            </n-tooltip>
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="plainHeaderAddFile">
+                  <n-icon :component="FileAddIcon" size="16" />
+                </n-icon-wrapper>
+              </template>
+              新建文件
+            </n-tooltip>
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="plainHeaderAddFolder">
+                  <n-icon :component="FolderAddIcon" size="16" />
+                </n-icon-wrapper>
+              </template>
+              新建文件夹
+            </n-tooltip>
+          </div>
         </div>
-        <div class="active-tree-container" @wheel.stop>
+        <div v-if="plainRootExpanded" class="active-tree-container" @wheel.stop>
           <GuaxiVirtualFileTree
             class="tree-component"
             :nodes="externalDirTree"
@@ -227,12 +338,14 @@
             :root-id="externalDir"
             @open-file="handleExternalOpenFile"
             @load-children="handleExternalLoadChildren"
+            @contextmenu="(p) => openGenContextMenu('plain', p)"
+            @blank-contextmenu="(p) => openGenBlankMenu('plain', p)"
           />
         </div>
       </div>
 
-      <!-- 未激活外部目录：显示打开历史列表 -->
-      <div v-else class="history-wrapper">
+      <!-- 收起或未激活外部目录：显示打开历史列表（点击历史条目激活，等价知识库切换仓库） -->
+      <div v-show="!plainActiveExpanded" class="history-wrapper">
         <div class="history-header">
           <span class="history-title">打开历史</span>
           <n-tooltip trigger="hover">
@@ -272,6 +385,19 @@
       :x="contextMenuPosition.x" :y="contextMenuPosition.y" @select="handleContextMenuSelect"
       @clickoutside="handleClickoutside" />
 
+    <!-- 文件编辑 / 任务模式 通用右键菜单 -->
+    <n-dropdown v-model:show="genMenuVisible" :options="genMenuOptions" placement="bottom-start"
+      class="file-tree-context-menu"
+      :x="genMenuPos.x" :y="genMenuPos.y" @select="handleGenMenuSelect"
+      @clickoutside="closeGenMenu" />
+
+    <!-- 通用命名弹窗（新建/重命名） -->
+    <n-modal v-model:show="nameModal.visible" preset="dialog" :title="nameModal.title" :mask-closable="false"
+      positive-text="确定" negative-text="取消" @positive-click="confirmNameModal" @negative-click="cancelNameModal">
+      <n-input v-model:value="nameModal.value" :placeholder="nameModal.placeholder" @keyup.enter="confirmNameModal" autofocus />
+    </n-modal>
+
+
     <n-modal v-model:show="importTemplateModalVisible" preset="dialog" title="导入Markdown文件" :mask-closable="false">
       <div class="import-template-modal-content">
         <n-form label-placement="left" label-width="auto" :show-require-mark="false">
@@ -297,12 +423,12 @@
 <script setup>
 import { createLogger } from '../../utils/logger'
 import { NIcon, useMessage, NModal, NForm, NFormItem, NInput, NButton, NSpace } from 'naive-ui'
-import { DocumentTextOutline, FolderOutline, AddOutline, TrashOutline, CreateOutline, MoveOutline, FolderOpenOutline, GlobeOutline, SettingsOutline, GitBranchOutline, DownloadOutline, FolderOpenOutline as OpenIcon, DocumentOutline, SwapHorizontalOutline, LibraryOutline, TimeOutline } from '@vicons/ionicons5'
+import { DocumentTextOutline, FolderOutline, AddOutline, TrashOutline, CreateOutline, MoveOutline, FolderOpenOutline, GlobeOutline, SettingsOutline, GitBranchOutline, DownloadOutline, FolderOpenOutline as OpenIcon, DocumentOutline, SwapHorizontalOutline, LibraryOutline, TimeOutline, ListOutline, CheckboxOutline } from '@vicons/ionicons5'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore';
 import GuaxiVirtualFileTree from './GuaxiVirtualFileTree.vue';
 import { useSettingsStore } from '../../stores/settingsStore'
-import { h, ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { h, ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { open, confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
 import { openUrl } from '@tauri-apps/plugin-opener'
@@ -417,13 +543,36 @@ const repoScrollbarRef = ref(null)
 const activeRepoMaxHeight = ref(360)
 const activeRepoResizeObserver = ref(null)
 
-// ───── 视图模式：'kb' 知识库模式（默认） / 'plain' 普通文件编辑模式 ─────
+// ───── 视图模式：'kb' 知识库模式（默认） / 'plain' 普通文件编辑模式 / 'task' 任务编辑模式 ─────
 const viewMode = ref('kb')
 // plain 模式下当前激活的外部目录（为空则显示历史列表）
 const externalDir = ref(null)
 const externalDirTree = ref([])
 const externalExpandedKeys = ref([])
 const externalSelectedKeys = ref([])
+// 激活的外部目录根条目是否展开（与知识库模式一致，可点击收缩）
+const plainRootExpanded = ref(true)
+// 是否处于「激活目录已展开占满」态：用于控制历史列表的显隐（与知识库 isActiveRepoExpanded 一致）
+const plainActiveExpanded = computed(() => !!externalDir.value && plainRootExpanded.value)
+
+// ───── 任务编辑模式：三类根（工作/生活/学习）映射到 work/life/study 子目录 ─────
+// 与知识库模式一致：每个分类渲染为一个可展开/收缩、带操作图标的「仓库」条目。
+const TASK_CATEGORIES = [
+  { key: 'work', zh: '工作' },
+  { key: 'life', zh: '生活' },
+  { key: 'study', zh: '学习' },
+]
+const taskRootPath = ref('')
+const taskCategoryPaths = ref({ work: '', life: '', study: '' })
+// 与知识库模式一致：同一时刻只有一个「激活」分类，激活后占满整列；收起时其它分类以列表形式显示在其后。
+const activeTaskCat = ref('work')
+const taskActiveExpanded = ref(true)
+const taskCatTrees = reactive({ work: [], life: [], study: [] })
+const taskCatExpandedKeys = reactive({ work: [], life: [], study: [] })
+const taskCatSelectedKeys = reactive({ work: [], life: [], study: [] })
+const catPathOf = (key) => normalizePath(taskCategoryPaths.value[key] || '')
+const catZhOf = (key) => (TASK_CATEGORIES.find((c) => c.key === key)?.zh) || key
+const inactiveTaskCats = computed(() => TASK_CATEGORIES.filter((c) => c.key !== activeTaskCat.value))
 
 // 打开历史（持久化在 localStorage）
 const OPEN_HISTORY_KEY = 'guaxi_filetree_open_dir_history'
@@ -1253,6 +1402,7 @@ const activateExternalDir = async (dirPath) => {
   const norm = normalizePath(dirPath)
   viewMode.value = 'plain'
   externalDir.value = norm
+  plainRootExpanded.value = true
   externalExpandedKeys.value = []
   externalSelectedKeys.value = []
   externalDirTree.value = []
@@ -1266,14 +1416,128 @@ const activateExternalDir = async (dirPath) => {
   }
 }
 
-// 切换视图模式：kb ⇄ plain
+// 切换视图模式：kb → plain → task → kb（三态轮转）
 const toggleViewMode = () => {
   if (viewMode.value === 'kb') {
     viewMode.value = 'plain'
-    // 进入 plain 模式：若没有已激活的外部目录则展示历史列表
+  } else if (viewMode.value === 'plain') {
+    viewMode.value = 'task'
+    externalDir.value = null
+    activateTaskMode()
   } else {
     viewMode.value = 'kb'
     externalDir.value = null
+  }
+}
+
+// 模式切换图标 / 提示 / 标题（三态轮转）
+const modeToggleIcon = computed(() => {
+  if (viewMode.value === 'kb') return SwapHorizontalOutline   // kb → plain
+  if (viewMode.value === 'plain') return CheckboxOutline      // plain → task
+  return LibraryOutline                                       // task → kb
+})
+const modeToggleTooltip = computed(() => {
+  if (viewMode.value === 'kb') return '切换到文件编辑模式'
+  if (viewMode.value === 'plain') return '切换到任务编辑模式'
+  return '切换回知识库模式'
+})
+const modeTitle = computed(() => {
+  if (viewMode.value === 'plain') return '文件编辑'
+  if (viewMode.value === 'task') return '任务编辑'
+  return '知识编辑'
+})
+
+// 进入任务编辑模式：加载三类目录路径，默认展开「工作」并加载其 .org 文件树
+const activateTaskMode = async () => {
+  try {
+    const dirs = await invoke('task_ensure_dirs')
+    taskRootPath.value = dirs?.root || ''
+    const cats = dirs?.categories || {}
+    taskCategoryPaths.value = {
+      work: cats.work || '',
+      life: cats.life || '',
+      study: cats.study || '',
+    }
+  } catch (error) {
+    logger.error('初始化任务目录失败:', error)
+    message.error('初始化任务目录失败')
+    return
+  }
+  // 触发一次后端扫描索引（看板/统计数据源）
+  invoke('task_scan_and_index').catch((e) => logger.warn('任务扫描失败', e))
+
+  // 重置三类树，默认激活「工作」并展开
+  for (const c of TASK_CATEGORIES) {
+    taskCatTrees[c.key] = []
+    taskCatExpandedKeys[c.key] = []
+    taskCatSelectedKeys[c.key] = []
+  }
+  activeTaskCat.value = 'work'
+  taskActiveExpanded.value = true
+  await loadTaskCat('work')
+}
+
+// 加载某分类根目录下的 .org 文件树
+const loadTaskCat = async (key) => {
+  const dir = catPathOf(key)
+  if (!dir) return
+  try {
+    taskCatTrees[key] = await fetchDirChildren(dir, true)
+  } catch (error) {
+    logger.error('加载任务分类失败:', error)
+  }
+}
+
+// 激活某分类（占满整列并展开，首次加载其文件树）——等价知识库模式激活一个仓库
+const activateTaskCat = async (key) => {
+  activeTaskCat.value = key
+  taskActiveExpanded.value = true
+  if (!taskCatTrees[key] || !taskCatTrees[key].length) {
+    await loadTaskCat(key)
+  }
+}
+
+// 点击激活分类标题：展开/收缩（收缩后其它分类以列表显示在其后）
+const toggleActiveTaskCat = () => {
+  taskActiveExpanded.value = !taskActiveExpanded.value
+}
+
+// 过滤出目录与 .org 文件（目录保留以便逐层展开）
+const filterOrgTree = (nodes) => {
+  if (!Array.isArray(nodes)) return []
+  const out = []
+  for (const n of nodes) {
+    if (n.is_directory) {
+      out.push({ ...n, children: filterOrgTree(n.children || []) })
+    } else if (String(n.name || n.id || '').toLowerCase().endsWith('.org')) {
+      out.push(n)
+    }
+  }
+  return out
+}
+
+// 任务模式：懒加载子目录（更新该节点 children）
+const handleTaskLoadChildren = async (node) => {
+  if (!node?.is_directory) return
+  try {
+    node.children = await fetchDirChildren(node.id, true)
+  } catch (error) {
+    logger.error('加载任务子目录失败:', error)
+  }
+}
+
+// 任务模式：在主编辑区打开 .org 文件
+const handleTaskOpenFile = async (node) => {
+  if (!node || node.is_directory) return
+  try {
+    const res = await fileTreeStore.fetchFileContent(node.id)
+    if (res?.ok) {
+      await fileTreeStore.openFileInTab(node.id, res.content, { unsupported: !!res.unsupported })
+    } else {
+      message.warning('文件不存在或已被删除')
+    }
+  } catch (error) {
+    logger.error('打开任务文件失败:', error)
   }
 }
 
@@ -1288,6 +1552,238 @@ const backToHistory = () => {
   externalDir.value = null
   externalDirTree.value = []
 }
+
+// ───── 文件编辑模式 / 任务模式：通用文件操作（新建/导入/重命名/删除）+ 右键菜单 ─────
+// 设计：plain/task 两种模式的文件树不复用 kb 的内联编辑机制（其深度绑定 fileTree/activeRepoPath），
+// 改用轻量的命名弹窗 + 同一套后端命令（create_file_with_content / create_directory / move_path /
+// delete_path / copy_path / open_in_file_explorer），并在操作后增量刷新对应子树。
+
+const parentDirOf = (id) => normalizePath(id).split('/').slice(0, -1).join('/')
+
+// 命名输入弹窗
+const nameModal = ref({ visible: false, title: '', value: '', placeholder: '', resolve: null })
+const promptName = (title, initial = '', placeholder = '') => {
+  return new Promise((resolve) => {
+    nameModal.value = { visible: true, title, value: initial, placeholder, resolve }
+  })
+}
+const confirmNameModal = () => {
+  const r = nameModal.value.resolve
+  const v = (nameModal.value.value || '').trim()
+  nameModal.value.visible = false
+  if (r) r(v || null)
+}
+const cancelNameModal = () => {
+  const r = nameModal.value.resolve
+  nameModal.value.visible = false
+  if (r) r(null)
+}
+
+// 抓取某目录的子节点（可选只保留目录与 .org）
+const fetchDirChildren = async (dirPath, orgOnly = false) => {
+  await fileTreeStore.fetchFileTree(normalizePath(dirPath), { force: true })
+  let nodes = sortFileTree(normalizeTreeIds(filterHiddenTree(fileTreeStore.fileTree)))
+  if (orgOnly) nodes = filterOrgTree(nodes)
+  return nodes
+}
+
+// 刷新指定模式下某目录的子树
+const refreshModeDir = async (mode, dirPath) => {
+  const target = normalizePath(dirPath)
+  if (mode === 'plain') {
+    const root = normalizePath(externalDir.value)
+    if (!target || target === root) {
+      externalDirTree.value = await fetchDirChildren(root)
+      return
+    }
+    const node = findNodeById(externalDirTree.value, target)
+    if (node) {
+      node.children = await fetchDirChildren(target)
+      if (!externalExpandedKeys.value.includes(target)) {
+        externalExpandedKeys.value = [...externalExpandedKeys.value, target]
+      }
+    } else {
+      externalDirTree.value = await fetchDirChildren(root)
+    }
+  } else {
+    // 任务模式：定位到所属分类树
+    const catKey = taskCatOfPath(target)
+    if (catKey) {
+      const catPath = catPathOf(catKey)
+      if (target === catPath) {
+        taskCatTrees[catKey] = await fetchDirChildren(catPath, true)
+      } else {
+        const node = findNodeById(taskCatTrees[catKey], target)
+        if (node) {
+          node.children = await fetchDirChildren(target, true)
+          if (!taskCatExpandedKeys[catKey].includes(target)) {
+            taskCatExpandedKeys[catKey] = [...taskCatExpandedKeys[catKey], target]
+          }
+        } else {
+          taskCatTrees[catKey] = await fetchDirChildren(catPath, true)
+        }
+      }
+    }
+    // 任务数据变更 → 后端重索引，刷新看板/统计
+    invoke('task_scan_and_index').catch((e) => logger.warn('任务重索引失败', e))
+  }
+}
+
+// 判断路径属于哪个任务分类
+const taskCatOfPath = (p) => {
+  const n = normalizePath(p)
+  for (const c of TASK_CATEGORIES) {
+    const cp = catPathOf(c.key)
+    if (cp && (n === cp || n.startsWith(`${cp}/`))) return c.key
+  }
+  return null
+}
+
+const genAddFile = async (mode, dir) => {
+  const name = await promptName('新建文件', mode === 'task' ? 'todo.org' : '', '输入文件名，例如 notes.md / todo.org')
+  if (!name) return
+  const path = normalizePath(`${dir}/${name}`)
+  await invoke('create_file_with_content', { path, content: '' })
+  await refreshModeDir(mode, dir)
+  // 新建后直接打开
+  try {
+    const res = await fileTreeStore.fetchFileContent(path)
+    if (res?.ok) await fileTreeStore.openFileInTab(path, res.content, { unsupported: !!res.unsupported })
+  } catch {}
+  message.success('已新建文件')
+}
+
+const genAddFolder = async (mode, dir) => {
+  const name = await promptName('新建文件夹', '', '输入文件夹名')
+  if (!name) return
+  const path = normalizePath(`${dir}/${name}`)
+  await invoke('create_directory', { path })
+  await refreshModeDir(mode, dir)
+  message.success('已新建文件夹')
+}
+
+const genImportFile = async (mode, dir) => {
+  const picked = await open({ multiple: true, title: '导入文件' })
+  if (!picked) return
+  const list = Array.isArray(picked) ? picked : [picked]
+  let ok = 0
+  for (const src of list) {
+    const name = String(src).split(/[\\/]/).filter(Boolean).pop()
+    if (!name) continue
+    const dest = normalizePath(`${dir}/${name}`)
+    try {
+      await invoke('copy_path', { sourcePath: src, destinationPath: dest })
+      ok++
+    } catch (e) {
+      logger.error('导入文件失败:', e)
+    }
+  }
+  await refreshModeDir(mode, dir)
+  message.success(`已导入 ${ok} 个文件`)
+}
+
+const genRename = async (mode, node) => {
+  const name = await promptName('重命名', node.name || '', '输入新名称')
+  if (!name || name === node.name) return
+  const parent = parentDirOf(node.id)
+  const dest = normalizePath(`${parent}/${name}`)
+  await invoke('move_path', { sourcePath: normalizePath(node.id), destinationPath: dest })
+  // 同步已打开标签页的路径
+  const srcPath = normalizePath(node.id)
+  fileTreeStore.openTabs.forEach((tab) => {
+    const tp = normalizePath(tab.path)
+    if (tp === srcPath) {
+      const wasActive = normalizePath(fileTreeStore.activeTab) === tp
+      tab.path = dest
+      tab.fileName = name
+      if (wasActive) fileTreeStore.setActiveTab(dest)
+    } else if (tp.startsWith(`${srcPath}/`)) {
+      const np = dest + tp.slice(srcPath.length)
+      const wasActive = normalizePath(fileTreeStore.activeTab) === tp
+      tab.path = np
+      if (wasActive) fileTreeStore.setActiveTab(np)
+    }
+  })
+  await refreshModeDir(mode, parent)
+  message.success('已重命名')
+}
+
+const genDelete = async (mode, node) => {
+  const yes = await confirmDialog(`确定删除「${node.name}」吗？此操作不可撤销。`, { title: '删除确认', kind: 'warning', okLabel: '删除', cancelLabel: '取消' })
+  if (!yes) return
+  await invoke('delete_path', { path: normalizePath(node.id) })
+  await refreshModeDir(mode, parentDirOf(node.id))
+  message.success('已删除')
+}
+
+const genOpenExplorer = async (node) => {
+  const p = normalizePath(node.id)
+  const target = node.is_directory ? p : parentDirOf(p)
+  if (target) await invoke('open_in_file_explorer', { path: target })
+}
+
+// 通用右键菜单
+const genMenuVisible = ref(false)
+const genMenuPos = ref({ x: 0, y: 0 })
+const genMenuContext = ref({ mode: 'plain', node: null, isBlank: false })
+const genMenuOptions = computed(() => {
+  const { node, isBlank } = genMenuContext.value
+  const base = [
+    { label: '新建文件', key: 'addFile', icon: () => h(NIcon, null, { default: () => h(AddOutline) }) },
+    { label: '新建文件夹', key: 'addFolder', icon: () => h(NIcon, null, { default: () => h(FolderOpenOutline) }) },
+    { label: '导入文件', key: 'importFile', icon: () => h(NIcon, null, { default: () => h(DownloadOutline) }) },
+  ]
+  if (node && !isBlank) {
+    base.push(
+      { label: '重命名', key: 'rename', icon: () => h(NIcon, null, { default: () => h(CreateOutline) }) },
+      { label: '删除', key: 'delete', icon: () => h(NIcon, null, { default: () => h(TrashOutline) }) },
+      { label: '在文件浏览器中打开', key: 'openInExplorer', icon: () => h(NIcon, null, { default: () => h(FolderOutline) }) },
+    )
+  }
+  return base
+})
+const actionDirForContext = () => {
+  const { mode, node, rootOverride } = genMenuContext.value
+  if (node) return node.is_directory ? normalizePath(node.id) : parentDirOf(node.id)
+  if (rootOverride) return normalizePath(rootOverride)
+  return mode === 'plain' ? normalizePath(externalDir.value) : catPathOf('work')
+}
+const openGenContextMenu = (mode, { node, x, y }) => {
+  genMenuContext.value = { mode, node, isBlank: false, rootOverride: '' }
+  genMenuPos.value = { x, y }
+  genMenuVisible.value = true
+}
+const openGenBlankMenu = (mode, { x, y }, rootOverride = '') => {
+  genMenuContext.value = { mode, node: null, isBlank: true, rootOverride }
+  genMenuPos.value = { x, y }
+  genMenuVisible.value = true
+}
+const closeGenMenu = () => { genMenuVisible.value = false }
+const handleGenMenuSelect = async (key) => {
+  genMenuVisible.value = false
+  const { mode, node } = genMenuContext.value
+  const dir = actionDirForContext()
+  try {
+    if (key === 'addFile') await genAddFile(mode, dir)
+    else if (key === 'addFolder') await genAddFolder(mode, dir)
+    else if (key === 'importFile') await genImportFile(mode, dir)
+    else if (key === 'rename' && node) await genRename(mode, node)
+    else if (key === 'delete' && node) await genDelete(mode, node)
+    else if (key === 'openInExplorer' && node) await genOpenExplorer(node)
+  } catch (e) {
+    logger.error('文件操作失败:', e)
+    message.error('操作失败: ' + (e?.message || e))
+  }
+}
+
+// 头部动作图标：plain 作用于外部目录根；task 每个分类作用于该分类根目录
+const plainHeaderAddFile = () => genAddFile('plain', normalizePath(externalDir.value))
+const plainHeaderAddFolder = () => genAddFolder('plain', normalizePath(externalDir.value))
+const plainHeaderImport = () => genImportFile('plain', normalizePath(externalDir.value))
+const taskCatAddFile = (key) => genAddFile('task', catPathOf(key))
+const taskCatAddFolder = (key) => genAddFolder('task', catPathOf(key))
+const taskCatImport = (key) => genImportFile('task', catPathOf(key))
+
 
 // 外部目录树：打开文件
 const handleExternalOpenFile = async (node) => {

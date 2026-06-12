@@ -17,6 +17,7 @@ import GuaxiSlidevManager from '../components/HomeViewComponent/GuaxiSlidevManag
 import GuaxiKnowledgeBaseManager from '../components/HomeViewComponent/GuaxiKnowledgeBaseManager.vue'
 import GuaxiMarkdownManual from '../components/HomeViewComponent/GuaxiMarkdownManual.vue'
 import GuaxiLanguageLearning from '../components/HomeViewComponent/GuaxiLanguageLearning.vue'
+import GuaxiTaskManagerPage from '../views/GuaxiTaskManagerPage.vue'
 import FlipboardFeedManager from '../components/SearchViewComponent/FlipboardFeedManager.vue'
 import GuaxiDataLabWorkbench from '../components/HomeViewComponent/GuaxiDataLabWorkbench.vue'
 import GuaxiMathWorkbench from '../components/HomeViewComponent/GuaxiMathWorkbench.vue'
@@ -161,6 +162,11 @@ export const routes = [
     path: '/language-learning',
     name: 'language-learning',
     component: GuaxiLanguageLearning,
+  },
+  {
+    path: '/task-manager',
+    name: 'task-manager',
+    component: GuaxiTaskManagerPage,
   },
   {
     path: '/kb-manager',
