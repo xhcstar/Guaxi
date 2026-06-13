@@ -195,6 +195,15 @@
           </button>
           <div @mousedown.stop @click.stop>
             <n-select
+              class="composer-task-select"
+              size="small"
+              :value="task"
+              :options="taskOptions"
+              @update:value="handleTaskChange"
+            />
+          </div>
+          <div @mousedown.stop @click.stop>
+            <n-select
               class="composer-model-select"
               size="small"
               :value="modelId"
@@ -276,6 +285,15 @@ const messages = computed(() => rightSiderStore.assistant.messages)
 const pending = computed(() => rightSiderStore.assistant.pending)
 const modelId = computed(() => rightSiderStore.assistant.modelId)
 const webSearchEnabled = computed(() => rightSiderStore.assistant.webSearchEnabled)
+const task = computed(() => rightSiderStore.assistant.task || 'chat')
+const taskOptions = [
+  { value: 'chat', label: '对话' },
+  { value: 'write', label: '文档编写' },
+  { value: 'translate', label: '翻译' },
+  { value: 'organize', label: '知识整理' },
+  { value: 'classify', label: '分类' },
+  { value: 'tag', label: '打标签' },
+]
 const canSend = computed(() => !pending.value && question.value.trim().length > 0)
 const canClickSend = computed(() => pending.value || question.value.trim().length > 0)
 const modelOptions = computed(() => {
@@ -406,6 +424,71 @@ const toggleWebMessageCollapse = (messageId) => {
 
 const handleModelChange = (value) => {
   rightSiderStore.setAssistantModelId(value)
+}
+
+const handleTaskChange = (value) => {
+  rightSiderStore.setAssistantTask(value)
+  // 非对话类任务默认切到本地 LocalQwen(id 9)，用户仍可手动改回其它模型
+  if (value && value !== 'chat') {
+    rightSiderStore.setAssistantModelId(9)
+  }
+}
+
+// 取当前编辑器文档：优先选区，其次全文
+const getCurrentDocContext = () => {
+  const editor = editorStore.editorInstance
+  const result = { selection: '', full: '' }
+  try {
+    const model = editor?.getModel?.()
+    if (model) {
+      result.full = String(model.getValue() || '')
+      const sel = editor?.getSelection?.()
+      if (sel && typeof model.getValueInRange === 'function') {
+        result.selection = String(model.getValueInRange(sel) || '')
+      }
+    }
+  } catch (err) {
+    logger.warn('[assistant] read editor doc failed', err)
+  }
+  if (!result.full) {
+    result.full = String(editorStore.currentFile?.content || '')
+  }
+  return result
+}
+
+// 取 Agent 任务的输入文本：选区 > 全文
+const resolveAgentDocText = () => {
+  const ctx = getCurrentDocContext()
+  return (ctx.selection && ctx.selection.trim()) ? ctx.selection : ctx.full
+}
+
+// 构造散文类 Agent 任务（write/translate/organize）的提示词
+const buildProseAgentPrompt = (taskName, instruction) => {
+  const docText = resolveAgentDocText().trim()
+  const userText = String(instruction || '').trim()
+  if (taskName === 'translate') {
+    const body = userText || docText
+    return [
+      '你是专业翻译助手。请将下面的内容翻译为目标语言；若用户未指明目标语言，则中文译为英文、其它语言译为中文。',
+      '只输出译文本身，保留原有 Markdown 结构，不要添加解释。',
+      docText && userText ? `\n[用户补充要求]\n${userText}` : '',
+      `\n[待翻译内容]\n${body}`,
+    ].filter(Boolean).join('\n')
+  }
+  if (taskName === 'organize') {
+    return [
+      '你是知识整理助手。请把下面的内容整理为结构清晰的 Markdown 笔记：提炼要点、合理分节、必要时用列表与表格。',
+      '保留关键信息，不要编造内容。',
+      userText ? `\n[整理要求]\n${userText}` : '',
+      `\n[原始内容]\n${docText}`,
+    ].filter(Boolean).join('\n')
+  }
+  // write
+  return [
+    '你是文档编写助手。请根据下面的要求撰写或续写 Markdown 文档内容，语言简洁专业。',
+    `\n[写作要求]\n${userText}`,
+    docText ? `\n[当前文档参考]\n${docText}` : '',
+  ].filter(Boolean).join('\n')
 }
 
 const handleWebSearchEnabledChange = (value) => {
@@ -1145,8 +1228,11 @@ const sendQuestion = async () => {
 
   const selectedModelId = Number(modelId.value)
   const isWebModel = WEB_MODEL_IDS.has(selectedModelId)
+  const currentTask = task.value
+  const isStructuredTask = currentTask === 'classify' || currentTask === 'tag'
+  const isProseAgentTask = currentTask === 'write' || currentTask === 'translate' || currentTask === 'organize'
   const sessionId = rightSiderStore.assistant.sessionId || `${Date.now()}-${Math.random().toString(16).slice(2)}`
-  const shouldUseWebSearch = webSearchEnabled.value && !disableWebSearchNextSend.value
+  const shouldUseWebSearch = webSearchEnabled.value && !disableWebSearchNextSend.value && currentTask === 'chat'
   disableWebSearchNextSend.value = false
 
   currentRequestModelId.value = selectedModelId
@@ -1166,11 +1252,46 @@ const sendQuestion = async () => {
     if (Number(modelId.value) === 6) {
       await invoke('ensure_local_deepseek_service')
     }
+    if (Number(modelId.value) === 9) {
+      await invoke('ensure_local_qwen_service')
+    }
+
+    // 结构化 Agent 任务（分类 / 打标签）：走非流式 doc_agent_process
+    if (isStructuredTask) {
+      const docText = (resolveAgentDocText().trim() || rawQuestion)
+      const res = await invoke('doc_agent_process', {
+        request: {
+          modelid: selectedModelId,
+          task: currentTask,
+          doc_text: docText,
+          sessionid: sessionId,
+        },
+      })
+      const result = res?.result || {}
+      let md = ''
+      if (currentTask === 'tag') {
+        const tags = Array.isArray(result.tags) ? result.tags : []
+        md = `**标签**：${tags.length ? tags.map((t) => `\`${t}\``).join(' ') : '（无）'}`
+        if (result.reason) md += `\n\n**依据**：${result.reason}`
+      } else {
+        const conf = typeof result.confidence === 'number' ? `（置信度 ${result.confidence.toFixed(2)}）` : ''
+        md = `**分类**：${result.category || '（未识别）'} ${conf}`
+        if (result.reason) md += `\n\n**理由**：${result.reason}`
+      }
+      const html = await renderAssistantMarkdown(md)
+      rightSiderStore.addAssistantMessage({ role: 'assistant', content: md, html })
+      rightSiderStore.setAssistantSessionId(res?.sessionid || sessionId)
+      pendingAttachments.value = []
+      return
+    }
 
     const searchOutcome = await queryWebSearch(rawQuestion, selectedModelId, shouldUseWebSearch)
     const webItems = Array.isArray(searchOutcome?.items) ? searchOutcome.items : []
     const withAttachments = buildQuestionWithAttachments(rawQuestion)
-    const mergedQuestion = buildWebContextPrompt(withAttachments, webItems)
+    // 散文类 Agent 任务（编写 / 翻译 / 整理）：用预设提示词替换原问句，并跳过联网
+    const mergedQuestion = isProseAgentTask
+      ? buildProseAgentPrompt(currentTask, rawQuestion)
+      : buildWebContextPrompt(withAttachments, webItems)
     const webReferences = normalizeWebReferences(webItems)
     if (shouldUseWebSearch) {
       appendWebSearchMessage(
@@ -1665,6 +1786,16 @@ const sendQuestion = async () => {
 
 .composer-model-select {
   width: 172px;
+}
+
+.composer-task-select {
+  width: 104px;
+}
+
+.composer-task-select :deep(.n-base-selection) {
+  border-radius: 8px;
+  border: 1px solid var(--guaxi-border);
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 86%, transparent);
 }
 
 .composer-model-select :deep(.n-base-selection) {

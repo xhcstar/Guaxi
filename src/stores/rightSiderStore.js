@@ -29,6 +29,7 @@ export const useRightSiderStore = defineStore("rightSider", {
       messages: [],
       sessionId: "",
       modelId: 5,
+      task: "chat",
       webSearchEnabled: true,
       pending: false,
       draftInput: "",
@@ -129,6 +130,11 @@ export const useRightSiderStore = defineStore("rightSider", {
       const n = Number(modelId);
       if (!Number.isFinite(n)) return;
       this.assistant.modelId = n;
+    },
+    setAssistantTask(task) {
+      const allowed = ["chat", "write", "translate", "organize", "classify", "tag"];
+      const next = String(task || "chat");
+      this.assistant.task = allowed.includes(next) ? next : "chat";
     },
     setAssistantWebSearchEnabled(enabled) {
       this.assistant.webSearchEnabled = !!enabled;

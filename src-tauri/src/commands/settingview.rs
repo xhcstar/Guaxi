@@ -631,6 +631,7 @@ pub struct LocalDeepseekStatus {
 }
 
 const LOCAL_DEEPSEEK_MODEL_FILENAME: &str = "DeepSeek-R1-0528-Qwen3-8B-IQ4_XS.gguf";
+const LOCAL_QWEN_MODEL_FILENAME: &str = "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf";
 
 fn cleanup_modelscope_download_dir(local_dir: &Path) {
     let download_root = local_dir.join("_modelscope_download");
@@ -647,7 +648,7 @@ fn cleanup_modelscope_download_dir(local_dir: &Path) {
     }
 }
 
-fn run_modelscope_download(local_dir: &Path) -> Result<(), String> {
+fn run_modelscope_download(local_dir: &Path, model_id: &str, filename: &str) -> Result<(), String> {
     let _ = bundled_resources::ensure_relative_dir("utils/python_libs")?;
     let marker_src_dir = bundled_resources::ensure_relative_dir("utils/MarkdownConvertor/marker-1.10.1")?;
     if !marker_src_dir.exists() {
@@ -709,9 +710,9 @@ fn run_modelscope_download(local_dir: &Path) -> Result<(), String> {
     let output = command
         .arg(script_path)
         .arg("--model-id")
-        .arg("unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF")
+        .arg(model_id)
         .arg("--filename")
-        .arg(LOCAL_DEEPSEEK_MODEL_FILENAME)
+        .arg(filename)
         .arg("--local-dir")
         .arg(&local_dir_s)
         .output()
@@ -1870,6 +1871,13 @@ fn local_deepseek_model_path() -> Result<PathBuf, String> {
     ))
 }
 
+fn local_qwen_model_path() -> Result<PathBuf, String> {
+    bundled_resources::ensure_relative_dir(&format!(
+        "utils/Models/chat/{}",
+        LOCAL_QWEN_MODEL_FILENAME
+    ))
+}
+
 fn resolve_llama_server_path() -> Option<PathBuf> {
     let llama_dir = bundled_resources::ensure_relative_dir("utils/llama").ok()?;
     if !llama_dir.exists() {
@@ -1951,8 +1959,13 @@ pub async fn download_local_deepseek_model() -> Result<String, String> {
     fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
 
     let parent_for_modelscope = parent.clone();
-    let modelscope_result =
-        tauri::async_runtime::spawn_blocking(move || run_modelscope_download(&parent_for_modelscope))
+    let modelscope_result = tauri::async_runtime::spawn_blocking(move || {
+        run_modelscope_download(
+            &parent_for_modelscope,
+            "unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF",
+            LOCAL_DEEPSEEK_MODEL_FILENAME,
+        )
+    })
     .await
     .map_err(|e| e.to_string())?;
 
@@ -1988,6 +2001,103 @@ pub async fn install_local_deepseek_model_from_file(source_path: String) -> Resu
     }
 
     let model_path = local_deepseek_model_path()?;
+    let parent = model_path
+        .parent()
+        .ok_or("invalid model path".to_string())?
+        .to_path_buf();
+    fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
+
+    let tmp_path = model_path.with_extension("copying");
+    let _ = fs::remove_file(&tmp_path);
+    fs::copy(&src, &tmp_path).map_err(|e| e.to_string())?;
+    fs::rename(&tmp_path, &model_path).map_err(|e| {
+        let _ = fs::remove_file(&tmp_path);
+        e.to_string()
+    })?;
+
+    Ok(model_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn get_local_qwen_status() -> Result<LocalDeepseekStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let expected = local_qwen_model_path()?;
+        let llama_server_path = resolve_llama_server_path();
+
+        Ok(LocalDeepseekStatus {
+            installed: expected.is_file(),
+            expected_path: expected.to_string_lossy().to_string(),
+            llama_server_exists: llama_server_path
+                .as_ref()
+                .map(|p| p.is_file())
+                .unwrap_or(false),
+            llama_server_path: llama_server_path
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default(),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn download_local_qwen_model() -> Result<String, String> {
+    let model_path = local_qwen_model_path()?;
+
+    if model_path.is_file() {
+        if let Some(parent) = model_path.parent() {
+            cleanup_modelscope_download_dir(parent);
+        }
+        info!(path = model_path.to_string_lossy().as_ref(), "local qwen model exists, skip download");
+        return Ok(model_path.to_string_lossy().to_string());
+    }
+
+    let parent = model_path
+        .parent()
+        .ok_or("invalid model path".to_string())?
+        .to_path_buf();
+    fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
+
+    let parent_for_modelscope = parent.clone();
+    let modelscope_result = tauri::async_runtime::spawn_blocking(move || {
+        run_modelscope_download(
+            &parent_for_modelscope,
+            "unsloth/Qwen3.6-35B-A3B-GGUF",
+            LOCAL_QWEN_MODEL_FILENAME,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    if modelscope_result.is_ok() && model_path.is_file() {
+        cleanup_modelscope_download_dir(&parent);
+        return Ok(model_path.to_string_lossy().to_string());
+    }
+
+    Err(format!(
+        "download local qwen model failed. modelscope_result={:?}. You can manually import GGUF via install_local_qwen_model_from_file(source_path). target={}",
+        modelscope_result.err(),
+        model_path.to_string_lossy()
+    ))
+}
+
+#[tauri::command]
+pub async fn install_local_qwen_model_from_file(source_path: String) -> Result<String, String> {
+    let src = PathBuf::from(source_path.trim());
+    if !src.is_file() {
+        return Err(format!("source file not found: {}", src.to_string_lossy()));
+    }
+
+    let ext_ok = src
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.eq_ignore_ascii_case("gguf"))
+        .unwrap_or(false);
+    if !ext_ok {
+        return Err("source file must be a .gguf model file".to_string());
+    }
+
+    let model_path = local_qwen_model_path()?;
     let parent = model_path
         .parent()
         .ok_or("invalid model path".to_string())?

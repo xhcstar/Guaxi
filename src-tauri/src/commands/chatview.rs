@@ -32,6 +32,9 @@ use crate::guaxiservices::bundled_resources;
 const LOCAL_DEEPSEEK_MODEL_FILENAME: &str = "DeepSeek-R1-0528-Qwen3-8B-IQ4_XS.gguf";
 const LOCAL_DEEPSEEK_SERVER_URL: &str = "http://127.0.0.1:18080";
 const LOCAL_DEEPSEEK_CHAT_COMPLETIONS_URL: &str = "http://127.0.0.1:18080/v1/chat/completions";
+const LOCAL_QWEN_MODEL_FILENAME: &str = "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf";
+const LOCAL_QWEN_SERVER_URL: &str = "http://127.0.0.1:18082";
+const LOCAL_QWEN_CHAT_COMPLETIONS_URL: &str = "http://127.0.0.1:18082/v1/chat/completions";
 const SILICONFLOW_CHAT_COMPLETIONS_URL: &str = "https://api.siliconflow.cn/v1/chat/completions";
 const SILICONFLOW_DEEPSEEK_QWEN_MODEL: &str = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B";
 const SILICONFLOW_AUDIO_SPEECH_URL: &str = "https://api.siliconflow.cn/v1/audio/speech";
@@ -160,6 +163,8 @@ struct LocalDeepseekProcessState {
 
 static LOCAL_DEEPSEEK_PROCESS: Lazy<Mutex<LocalDeepseekProcessState>> =
     Lazy::new(|| Mutex::new(LocalDeepseekProcessState { child: None }));
+static LOCAL_QWEN_PROCESS: Lazy<Mutex<LocalDeepseekProcessState>> =
+    Lazy::new(|| Mutex::new(LocalDeepseekProcessState { child: None }));
 static STREAM_CANCEL_REQUESTED: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
 
 fn reset_stream_cancel_flag() {
@@ -255,6 +260,7 @@ enum ChatModel {
     DOUBAO,
     LOCALQWEN,
     LOCALDEEPSEEK,
+    LOCALQWEN3,
     YUANBAO_WEB,
     CHATGPT_WEB,
 }
@@ -273,6 +279,7 @@ impl TryFrom<i32> for ChatModel {
             6 => Ok(ChatModel::LOCALDEEPSEEK),
             7 => Ok(ChatModel::YUANBAO_WEB),
             8 => Ok(ChatModel::CHATGPT_WEB),
+            9 => Ok(ChatModel::LOCALQWEN3),
             _ => Err("Invalid ChatModel ID".to_string()),
         }
     }
@@ -875,10 +882,173 @@ async fn kb_agent_call_model(model: ChatModel, prompt: &str, sessionid: &str) ->
         ChatModel::DOUBAO => get_answer_from_doubao(prompt, sessionid).await,
         ChatModel::LOCALQWEN => get_answer_from_siliconflow(prompt, sessionid).await,
         ChatModel::LOCALDEEPSEEK => get_answer_from_local_deepseek(prompt, sessionid).await,
+        ChatModel::LOCALQWEN3 => get_answer_from_local_qwen(prompt, sessionid).await,
         ChatModel::YUANBAO_WEB | ChatModel::CHATGPT_WEB => {
             Err("当前网页模型不支持知识处理 Agent 命令，请切换到 API 模型".to_string())
         }
     }
+}
+
+/// 文档 Agent 请求：默认走本地 LocalQwen(id 9)，也可指定任意已接入模型。
+/// 仅承载“结构化任务”（classify/tag）；散文类任务(write/translate/organize)由前端复用流式聊天通道。
+#[derive(Deserialize, Debug, Clone)]
+pub struct DocAgentRequest {
+    #[serde(default)]
+    pub modelid: Option<i32>,
+    #[serde(default)]
+    pub sessionid: String,
+    pub task: String,
+    #[serde(default)]
+    pub doc_text: String,
+    #[serde(default)]
+    pub categories: Vec<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub target_lang: String,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct DocAgentResponse {
+    pub sessionid: String,
+    pub modelid: i32,
+    pub task: String,
+    pub result: Value,
+    pub raw_answer: String,
+}
+
+fn build_doc_agent_prompt(task: &str, doc_text: &str, categories: &[String]) -> String {
+    let doc = doc_text.trim();
+    match task {
+        "classify" => {
+            let cat_hint = if categories.is_empty() {
+                "可自行给出最贴切的单一分类名称（中文，2~6 字）。".to_string()
+            } else {
+                format!("只能从以下候选分类中选择最贴切的一个：{}", categories.join("、"))
+            };
+            format!(
+                "你是文档分类助手。请阅读下面的文档内容，判断它最合适的单一分类。\n\
+                 {cat_hint}\n\
+                 只返回 JSON，不要输出任何额外文字、解释或代码块标记。\n\
+                 JSON 格式：{{\"category\":\"string\",\"confidence\":number,\"reason\":\"string\"}}\n\
+                 其中 confidence 取 0~1 之间的小数，reason 用一句中文说明理由。\n\n\
+                 文档内容：\n{doc}"
+            )
+        }
+        _ => {
+            // 默认按打标签处理
+            format!(
+                "你是文档打标签助手。请阅读下面的文档内容，提炼最具代表性的标签。\n\
+                 只返回 JSON，不要输出任何额外文字、解释或代码块标记。\n\
+                 JSON 格式：{{\"tags\":[\"string\"],\"reason\":\"string\"}}\n\
+                 约束：标签为中文短词，去重，最多 8 个，按重要性排序；reason 用一句中文说明依据。\n\n\
+                 文档内容：\n{doc}"
+            )
+        }
+    }
+}
+
+fn normalize_doc_agent_result(task: &str, value: Value) -> Value {
+    let Some(obj) = value.as_object() else {
+        return value;
+    };
+
+    if task == "classify" {
+        let category = alias_object_value(obj, &["category", "type", "label", "分类"])
+            .and_then(|v| v.as_str().map(|s| s.trim().to_string()))
+            .unwrap_or_default();
+        let confidence = alias_object_value(obj, &["confidence", "score", "置信度"])
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0)
+            .clamp(0.0, 1.0);
+        let reason = alias_object_value(obj, &["reason", "reasoning", "理由"])
+            .and_then(|v| v.as_str().map(|s| s.trim().to_string()))
+            .unwrap_or_default();
+        return json!({
+            "category": category,
+            "confidence": confidence,
+            "reason": reason,
+        });
+    }
+
+    // tag
+    let raw_tags = alias_object_value(obj, &["tags", "labels", "keywords", "标签"]);
+    let mut tags: Vec<String> = Vec::new();
+    if let Some(Value::Array(arr)) = raw_tags {
+        for item in arr {
+            let t = match item {
+                Value::String(s) => s.trim().to_string(),
+                other => other.as_str().unwrap_or("").trim().to_string(),
+            };
+            if t.is_empty() || tags.iter().any(|x| x == &t) {
+                continue;
+            }
+            tags.push(t);
+            if tags.len() >= 8 {
+                break;
+            }
+        }
+    }
+    let reason = alias_object_value(obj, &["reason", "reasoning", "依据"])
+        .and_then(|v| v.as_str().map(|s| s.trim().to_string()))
+        .unwrap_or_default();
+    json!({ "tags": tags, "reason": reason })
+}
+
+/// 嵌入式文档 Agent：分类 / 打标签 等结构化任务。
+/// 通过 kg_llm_complete 路由模型（默认 LocalQwen id 9，远程失败自动回退本地）。
+#[tauri::command]
+pub async fn doc_agent_process(request: DocAgentRequest) -> Result<DocAgentResponse, String> {
+    let modelid = request.modelid.unwrap_or(9);
+    let task = match request.task.trim().to_lowercase().as_str() {
+        "classify" => "classify",
+        _ => "tag",
+    };
+    if request.doc_text.trim().is_empty() {
+        return Err("文档内容为空，无法执行 Agent 任务".to_string());
+    }
+    info!(
+        "doc_agent_process: modelid={} task={} doc_len={}",
+        modelid,
+        task,
+        request.doc_text.len()
+    );
+
+    let prompt = build_doc_agent_prompt(task, &request.doc_text, &request.categories);
+    let mut last_error: Option<String> = None;
+    let mut last_session = request.sessionid.clone();
+
+    for round in 0..3usize {
+        let (answer, session) = match timeout(
+            Duration::from_secs(90),
+            kg_llm_complete(modelid, &prompt, &last_session),
+        )
+        .await
+        {
+            Ok(Ok(v)) => v,
+            Ok(Err(e)) => return Err(e),
+            Err(_) => return Err("文档 Agent 响应超时（>90s）".to_string()),
+        };
+        last_session = session.clone();
+
+        match parse_kb_agent_json(&answer) {
+            Ok(parsed) => {
+                let result = normalize_doc_agent_result(task, parsed);
+                return Ok(DocAgentResponse {
+                    sessionid: session,
+                    modelid,
+                    task: task.to_string(),
+                    result,
+                    raw_answer: answer,
+                });
+            }
+            Err(e) => {
+                warn!("doc_agent_process parse failed round={} err={}", round, e);
+                last_error = Some(e);
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| "文档 Agent 未返回有效 JSON".to_string()))
 }
 
 #[tauri::command]
@@ -2013,33 +2183,6 @@ pub struct DeepSeekResponse {
     choices: Vec<DeepSeekChoice>,
 }
 
-#[derive(Deserialize)]
-struct LocalDeepSeekResponse {
-    message: DeepSeekMessage,
-}
-
-async fn collect_content_from_local_deepseek(data: &str) -> Result<String, String> {
-    let mut full_answer = String::new();
-
-    // 分割每一行
-    for line in data.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        // 解析每一行的 JSON
-        let response: LocalDeepSeekResponse =
-            serde_json::from_str(line).map_err(|e| e.to_string())?;
-
-        // 提取 content 字段并拼接
-        full_answer.push_str(&response.message.content);
-    }
-
-    // 返回完整的回答
-    Ok(full_answer)
-}
-
 fn stream_extract_content(line: &str) -> Option<String> {
     let mut s = line.trim();
     if s.is_empty() {
@@ -2391,6 +2534,176 @@ pub async fn ensure_local_deepseek_service() -> Result<LocalDeepseekServiceStatu
     Ok(LocalDeepseekServiceStatus {
         ready: true,
         endpoint: LOCAL_DEEPSEEK_CHAT_COMPLETIONS_URL.to_string(),
+        model_path: model_path.to_string_lossy().to_string(),
+    })
+}
+
+fn local_qwen_model_path() -> Result<PathBuf, String> {
+    bundled_resources::ensure_relative_dir(&format!(
+        "utils/Models/chat/{}",
+        LOCAL_QWEN_MODEL_FILENAME
+    ))
+}
+
+async fn is_local_qwen_server_ready() -> bool {
+    let client = match ClientBuilder::new().no_proxy().build() {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    if let Ok(resp) = client
+        .get(format!("{}/health", LOCAL_QWEN_SERVER_URL))
+        .send()
+        .await
+    {
+        if resp.status().is_success() {
+            return true;
+        }
+    }
+
+    if let Ok(resp) = client
+        .get(format!("{}/v1/models", LOCAL_QWEN_SERVER_URL))
+        .send()
+        .await
+    {
+        if resp.status().is_success() {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn refresh_local_qwen_process_state() {
+    if let Ok(mut guard) = LOCAL_QWEN_PROCESS.lock() {
+        if let Some(child) = guard.child.as_mut() {
+            match child.try_wait() {
+                Ok(Some(_)) => guard.child = None,
+                Ok(None) => {}
+                Err(_) => guard.child = None,
+            }
+        }
+    }
+}
+
+async fn ensure_local_qwen_server_started() -> Result<PathBuf, String> {
+    let exe = exe_dir()?;
+    let model_path = local_qwen_model_path()?;
+    let log_dir = exe.join("logs");
+    fs::create_dir_all(&log_dir).map_err(|e| e.to_string())?;
+    let log_path = log_dir.join("local_qwen_server.log");
+    if !model_path.is_file() {
+        return Err(format!(
+            "LocalQwen model not found: {}",
+            model_path.to_string_lossy()
+        ));
+    }
+
+    if is_local_qwen_server_ready().await {
+        return Ok(model_path);
+    }
+
+    refresh_local_qwen_process_state();
+
+    {
+        let mut guard = LOCAL_QWEN_PROCESS
+            .lock()
+            .map_err(|_| "local qwen process lock poisoned".to_string())?;
+        if guard.child.is_none() {
+            let server_path = resolve_llama_server_path()?;
+            let log_file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log_path)
+                .map_err(|e| format!("failed to open llama-server log file: {}", e))?;
+            let log_file_err = log_file
+                .try_clone()
+                .map_err(|e| format!("failed to clone log handle: {}", e))?;
+            let mut command = Command::new(&server_path);
+            command
+                .arg("--model")
+                .arg(&model_path)
+                .arg("--host")
+                .arg("127.0.0.1")
+                .arg("--port")
+                .arg("18082")
+                .arg("--n-gpu-layers")
+                .arg("25")
+                .arg("--ctx-size")
+                .arg("8192")
+                .arg("--batch-size")
+                .arg("512")
+                .arg("--ubatch-size")
+                .arg("512")
+                .arg("--mlock")
+                .arg("--flash-attn")
+                .arg("on")
+                .arg("--jinja")
+                .arg("--temp")
+                .arg("0.7")
+                .arg("--top-p")
+                .arg("0.9")
+                .arg("--repeat-penalty")
+                .arg("1.1")
+                .stdout(Stdio::from(log_file))
+                .stderr(Stdio::from(log_file_err))
+                .stdin(Stdio::null());
+
+            apply_no_window_in_release(&mut command);
+
+            if let Some(parent) = server_path.parent() {
+                command.current_dir(parent);
+            }
+
+            let child = command.spawn().map_err(|e| {
+                format!(
+                    "failed to start llama-server: {} ({}), log={}",
+                    e,
+                    server_path.to_string_lossy(),
+                    log_path.to_string_lossy()
+                )
+            })?;
+            guard.child = Some(child);
+        }
+    }
+
+    for _ in 0..120 {
+        if is_local_qwen_server_ready().await {
+            return Ok(model_path);
+        }
+        if let Ok(mut guard) = LOCAL_QWEN_PROCESS.lock() {
+            if let Some(child) = guard.child.as_mut() {
+                if let Ok(Some(status)) = child.try_wait() {
+                    guard.child = None;
+                    return Err(format!(
+                        "llama-server exited early with status {}. log={}",
+                        status,
+                        log_path.to_string_lossy()
+                    ));
+                }
+            }
+        }
+        sleep(Duration::from_millis(250)).await;
+    }
+
+    if let Ok(mut guard) = LOCAL_QWEN_PROCESS.lock() {
+        if let Some(mut child) = guard.child.take() {
+            let _ = child.kill();
+        }
+    }
+
+    Err(format!(
+        "LocalQwen service start timeout. log={}",
+        log_path.to_string_lossy()
+    ))
+}
+
+#[tauri::command]
+pub async fn ensure_local_qwen_service() -> Result<LocalDeepseekServiceStatus, String> {
+    let model_path = ensure_local_qwen_server_started().await?;
+    Ok(LocalDeepseekServiceStatus {
+        ready: true,
+        endpoint: LOCAL_QWEN_CHAT_COMPLETIONS_URL.to_string(),
         model_path: model_path.to_string_lossy().to_string(),
     })
 }
@@ -3820,13 +4133,13 @@ pub async fn get_answer_from_qwen_stream(
     Ok(())
 }
 
-#[allow(dead_code)]
 pub async fn get_answer_from_local_qwen_stream(
     app: AppHandle,
     question: &str,
     sessionid: &str,
 ) -> Result<(), String> {
-    let url = "http://localhost:11434/api/chat";
+    ensure_local_qwen_server_started().await?;
+    let url = LOCAL_QWEN_CHAT_COMPLETIONS_URL;
     let session_id = if sessionid.is_empty() {
         generate_session_id()
     } else {
@@ -3834,7 +4147,7 @@ pub async fn get_answer_from_local_qwen_stream(
     };
 
     let request_body = json!({
-        "model": "qwen3:8b",
+        "model": "local-qwen3",
         "messages": [
             {"role": "system", "content": stable_math_system_prompt()},
             {"role": "user", "content": question}
@@ -4138,12 +4451,12 @@ pub async fn get_answer_from_local_deepseek_stream(
     Ok(())
 }
 
-#[allow(dead_code)]
 pub async fn get_answer_from_local_qwen(
     question: &str,
     sessionid: &str,
 ) -> Result<ChatResponse, String> {
-    let url = "http://localhost:11434/api/chat";
+    ensure_local_qwen_server_started().await?;
+    let url = LOCAL_QWEN_CHAT_COMPLETIONS_URL;
     let session_id = if sessionid.is_empty() {
         generate_session_id()
     } else {
@@ -4156,13 +4469,12 @@ pub async fn get_answer_from_local_qwen(
     );
 
     let request_body = json!({
-        "model": "qwen3:8b",
+        "model": "local-qwen3",
         "messages": [
             {"role": "system", "content": stable_math_system_prompt()},
             {"role": "user", "content": question}
         ],
-        "stream": false,
-        "session_id": session_id
+        "stream": false
     });
 
     let client = ClientBuilder::new()
@@ -4178,21 +4490,32 @@ pub async fn get_answer_from_local_qwen(
         .map_err(|e| e.to_string())?;
 
     if !response.status().is_success() {
-        return Err(format!(
-            "Error calling Local Qwen API: {:?}",
-            response.status()
-        ));
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("Error calling Local Qwen API: {} {}", status, body));
     }
 
     let data = response.text().await.map_err(|e| e.to_string())?;
-    let answer_content = collect_content_from_local_deepseek(&data).await?;
+    let mut chat_response: DeepSeekResponse =
+        serde_json::from_str(&data).map_err(|e| e.to_string())?;
+
+    if let Some(message) = chat_response
+        .choices
+        .get_mut(0)
+        .map(|choice| &mut choice.message)
+    {
+        message.content = normalize_math_symbols(message.content.clone());
+    }
+
+    let answer_content = chat_response
+        .choices
+        .first()
+        .map(|choice| choice.message.content.clone())
+        .unwrap_or_else(|| "No answer received.".to_string());
 
     Ok(ChatResponse {
-        answer: normalize_math_symbols(answer_content),
-        sessionid: request_body["session_id"]
-            .as_str()
-            .unwrap_or("")
-            .to_string(),
+        answer: answer_content,
+        sessionid: session_id,
     })
 }
 
@@ -4742,6 +5065,17 @@ pub async fn get_chat_answer_stream(app: AppHandle, request: ChatRequest) -> Res
                 Err(err) => Err(format!("Error calling Local Model API: {}", err)),
             }
         }
+        ChatModel::LOCALQWEN3 => {
+            match get_answer_from_local_qwen_stream(app, &request.question, &request.sessionid)
+                .await
+            {
+                Ok(()) => {
+                    info!("get_chat_answer_stream LOCALQWEN3: respond stream successfully");
+                    Ok(())
+                }
+                Err(err) => Err(format!("Error calling Local Qwen API: {}", err)),
+            }
+        }
         ChatModel::YUANBAO_WEB => {
             let session_id = if request.sessionid.trim().is_empty() {
                 generate_session_id()
@@ -4882,6 +5216,18 @@ pub async fn get_chat_answer(request: ChatRequest) -> Result<ChatResponse, Strin
                     Ok(answer)
                 }
                 Err(err) => Err(format!("Error calling Local Model API: {}", err)),
+            }
+        }
+        ChatModel::LOCALQWEN3 => {
+            match get_answer_from_local_qwen(&request.question, &request.sessionid).await {
+                Ok(answer) => {
+                    info!(
+                        "get_chat_answer LOCALQWEN3: respond ChatResponse  {} {}",
+                        answer.answer, answer.sessionid
+                    );
+                    Ok(answer)
+                }
+                Err(err) => Err(format!("Error calling Local Qwen API: {}", err)),
             }
         }
         ChatModel::YUANBAO_WEB => Ok(ChatResponse {

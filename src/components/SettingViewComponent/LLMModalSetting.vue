@@ -161,6 +161,47 @@
               </div>
             </div>
           </div>
+
+          <div class="status-item" :class="`is-${localQwenState}`" role="listitem">
+            <div class="status-left">
+              <n-icon :component="CubeOutline" />
+              <span class="status-name">LocalQwen 模型</span>
+            </div>
+            <div class="status-right">
+              <n-button
+                size="tiny"
+                type="primary"
+                ghost
+                :loading="downloadingLocalQwen"
+                :disabled="loading || downloadingLocalQwen || localQwenStatus.installed"
+                @click="downloadLocalQwenModel"
+              >
+                下载
+              </n-button>
+              <n-button
+                size="tiny"
+                ghost
+                :disabled="loading || downloadingLocalQwen"
+                @click="importLocalQwenModel"
+              >
+                导入
+              </n-button>
+              <div class="status-pop-wrap" tabindex="0">
+                <span class="status-badge">
+                  <n-icon :component="localQwenBadgeIcon" />
+                  <span>{{ localQwenBadgeText }}</span>
+                </span>
+                <div class="status-popover" role="tooltip">
+                  <div class="status-tip-title">LocalQwen</div>
+                  <div class="status-tip-desc">模型路径: {{ localQwenStatus.expected_path || '-' }}</div>
+                  <div class="status-tip-desc">llama-server: {{ localQwenStatus.llama_server_path || '-' }}</div>
+                  <div class="status-tip-desc">
+                    {{ localQwenStatus.llama_server_exists ? 'llama.cpp 服务端可用' : '请将 llama.cpp 构建版本放到 utils/llama' }}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </n-space>
     </n-card>
@@ -197,6 +238,14 @@ const localDeepseekStatus = ref({
 })
 const downloadingLocalDeepseek = ref(false)
 
+const localQwenStatus = ref({
+  installed: false,
+  expected_path: '',
+  llama_server_exists: false,
+  llama_server_path: '',
+})
+const downloadingLocalQwen = ref(false)
+
 const localDeepseekState = computed(() => {
   if (downloadingLocalDeepseek.value) return 'info'
   return localDeepseekStatus.value.installed ? 'ok' : 'warn'
@@ -210,6 +259,21 @@ const localDeepseekBadgeText = computed(() => {
 const localDeepseekBadgeIcon = computed(() => {
   if (downloadingLocalDeepseek.value) return TimeOutline
   return localDeepseekStatus.value.installed ? CheckmarkCircleOutline : CloseCircleOutline
+})
+
+const localQwenState = computed(() => {
+  if (downloadingLocalQwen.value) return 'info'
+  return localQwenStatus.value.installed ? 'ok' : 'warn'
+})
+
+const localQwenBadgeText = computed(() => {
+  if (downloadingLocalQwen.value) return 'Downloading'
+  return localQwenStatus.value.installed ? 'Installed' : 'Not installed'
+})
+
+const localQwenBadgeIcon = computed(() => {
+  if (downloadingLocalQwen.value) return TimeOutline
+  return localQwenStatus.value.installed ? CheckmarkCircleOutline : CloseCircleOutline
 })
 
 const hasKey = (v) => typeof v === 'string' && v.trim().length > 0
@@ -303,6 +367,14 @@ const loadConfig = async () => {
       expected_path: typeof localStatus?.expected_path === 'string' ? localStatus.expected_path : '',
       llama_server_exists: Boolean(localStatus?.llama_server_exists),
       llama_server_path: typeof localStatus?.llama_server_path === 'string' ? localStatus.llama_server_path : '',
+    }
+
+    const localQwen = await invoke('get_local_qwen_status')
+    localQwenStatus.value = {
+      installed: Boolean(localQwen?.installed),
+      expected_path: typeof localQwen?.expected_path === 'string' ? localQwen.expected_path : '',
+      llama_server_exists: Boolean(localQwen?.llama_server_exists),
+      llama_server_path: typeof localQwen?.llama_server_path === 'string' ? localQwen.llama_server_path : '',
     }
   } catch (e) {
     logger.error('加载大模型配置失败:', e)
@@ -475,6 +547,63 @@ const importLocalDeepseekModel = async () => {
     message.error('导入 LocalDeepseek 模型失败')
   } finally {
     downloadingLocalDeepseek.value = false
+  }
+}
+
+const downloadLocalQwenModel = async () => {
+  if (localQwenStatus.value.installed) {
+    logger.info('LocalQwen 模型已存在，跳过下载')
+    message.info('模型已存在，无需重复下载')
+    return
+  }
+
+  downloadingLocalQwen.value = true
+  try {
+    message.info('开始下载 LocalQwen 模型，请稍候')
+    const installedTo = await invoke('download_local_qwen_model')
+    message.success(`模型已下载到: ${installedTo}`)
+
+    const localQwen = await invoke('get_local_qwen_status')
+    localQwenStatus.value = {
+      installed: Boolean(localQwen?.installed),
+      expected_path: typeof localQwen?.expected_path === 'string' ? localQwen.expected_path : '',
+      llama_server_exists: Boolean(localQwen?.llama_server_exists),
+      llama_server_path: typeof localQwen?.llama_server_path === 'string' ? localQwen.llama_server_path : '',
+    }
+  } catch (e) {
+    logger.error('下载 LocalQwen 模型失败:', e)
+    message.error('下载 LocalQwen 模型失败')
+  } finally {
+    downloadingLocalQwen.value = false
+  }
+}
+
+const importLocalQwenModel = async () => {
+  try {
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: 'GGUF Model', extensions: ['gguf'] }],
+    })
+    if (!selected) return
+
+    downloadingLocalQwen.value = true
+    const installedTo = await invoke('install_local_qwen_model_from_file', {
+      sourcePath: String(selected),
+    })
+    message.success(`模型已导入到: ${installedTo}`)
+
+    const localQwen = await invoke('get_local_qwen_status')
+    localQwenStatus.value = {
+      installed: Boolean(localQwen?.installed),
+      expected_path: typeof localQwen?.expected_path === 'string' ? localQwen.expected_path : '',
+      llama_server_exists: Boolean(localQwen?.llama_server_exists),
+      llama_server_path: typeof localQwen?.llama_server_path === 'string' ? localQwen.llama_server_path : '',
+    }
+  } catch (e) {
+    logger.error('导入 LocalQwen 模型失败:', e)
+    message.error('导入 LocalQwen 模型失败')
+  } finally {
+    downloadingLocalQwen.value = false
   }
 }
 

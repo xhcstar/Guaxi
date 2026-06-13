@@ -1208,9 +1208,9 @@
             <div class="figure-caption">图 10：大模型与转换配置</div>
           </div>
 
-          <h3 class="h3">本地模型（LocalDeepseek）</h3>
+          <h3 class="h3">本地模型（LocalDeepseek / LocalQwen）</h3>
           <p class="p">
-            本地模型用于离线或内网环境下的推理场景，在同一页面可完成下载、导入与状态检查。
+            本地模型用于离线或内网环境下的推理场景，在同一页面可完成下载、导入与状态检查。LocalDeepseek 与 LocalQwen 均为本地 llama-server 模型，可分别下载/导入。
           </p>
           <ul class="manual-ul">
             <li>下载：点击“下载”获取模型文件，完成后状态显示已安装。</li>

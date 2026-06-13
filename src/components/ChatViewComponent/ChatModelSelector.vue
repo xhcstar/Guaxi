@@ -61,5 +61,13 @@ const handleModelChange = async (key) => {
       logger.error('LocalDeepseek 预启动失败:', e)
     }
   }
+
+  if (selectModelId === 9) {
+    try {
+      await invoke('ensure_local_qwen_service')
+    } catch (e) {
+      logger.error('LocalQwen 预启动失败:', e)
+    }
+  }
 };
 </script>
