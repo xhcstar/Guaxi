@@ -14,9 +14,13 @@
       </n-tooltip>
     </div>
 
-    <n-list bordered class="kb-list">
-      <n-list-item v-for="kb in knowledgeBases" :key="kb.id" :class="{ active: kb.id === selectedId }"
-        class="kb-list-item">
+    <div class="kb-list">
+      <div
+        v-for="kb in orderedKnowledgeBases"
+        :key="kb.id"
+        class="kb-list-item"
+        :class="{ active: kb.id === selectedId, expanded: kb.id === selectedId && expanded }"
+      >
         <div class="kb-item" @click="toggleKnowledgeBase(kb)">
           <div class="kb-title">
             <n-icon size="18" class="kb-icon">
@@ -33,23 +37,21 @@
           </n-icon>
         </div>
 
-        <n-collapse-transition>
-          <div v-if="kb.id === selectedId && expanded" class="tree-container">
-            <n-tree
-              :key="`tree-${selectedId}`"
-              :data="treeData"
-              :block-line="true"
-              :expand-on-click="true"
-              :expanded-keys="expandedKeys"
-              :selected-keys="selectedKeys"
-              class="kb-tree"
-              @update:expanded-keys="handleTreeExpand"
-              @update:selected-keys="handleTreeSelect"
-            />
-          </div>
-        </n-collapse-transition>
-      </n-list-item>
-    </n-list>
+        <div v-if="kb.id === selectedId && expanded" class="tree-container" @wheel.stop>
+          <n-tree
+            :key="`tree-${selectedId}`"
+            :data="treeData"
+            :block-line="true"
+            :expand-on-click="true"
+            :expanded-keys="expandedKeys"
+            :selected-keys="selectedKeys"
+            class="kb-tree"
+            @update:expanded-keys="handleTreeExpand"
+            @update:selected-keys="handleTreeSelect"
+          />
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -61,7 +63,7 @@ import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore';
 import { invoke } from '@tauri-apps/api/core';
 import { useMessage } from 'naive-ui';
 import {
-  NList, NListItem, NTree, NTooltip, NButton, NIcon, NTag, NCollapseTransition
+  NTree, NTooltip, NButton, NIcon, NTag
 } from 'naive-ui';
 
 import {
@@ -83,6 +85,16 @@ const { knowledgeBases, selectedKnowledgeBase } = storeToRefs(store);
 
 // 使用 shallowRef 替代 ref 避免不必要的深度响应式
 const selectedId = computed(() => selectedKnowledgeBase.value?.id || null);
+
+// 激活的知识库置顶,其余保持原序
+const orderedKnowledgeBases = computed(() => {
+  const list = Array.isArray(knowledgeBases.value) ? knowledgeBases.value : [];
+  const sid = selectedId.value;
+  if (!sid) return list;
+  const active = list.filter((k) => k.id === sid);
+  const rest = list.filter((k) => k.id !== sid);
+  return [...active, ...rest];
+});
 const treeData = shallowRef([]);
 const expanded = ref(false);
 const expandedKeys = ref([]);
@@ -242,15 +254,17 @@ onUnmounted(() => {
 /* 添加 tree-container 确保树形结构有稳定的容器 */
 .tree-container {
   width: 100%;
-  overflow: hidden;
-  min-height: 20px;
-  /* 确保有最小高度 */
+  /* 展开的知识库:树占据剩余全部高度并内部滚动,行为对齐主界面文件树 */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
   padding-left: 8px;
 }
 
 .knowledge-base-list {
   padding: 0px;
-  height: calc(100% - var(--scrollbar-height, 36px));
+  height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
@@ -353,22 +367,35 @@ onUnmounted(() => {
 }
 
 .kb-list {
-  flex: 1;
-  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   border-radius: 8px;
   padding-left: 0;
   padding-right: 0;
 }
 
 .kb-list-item {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   padding: 8px 12px;
-  transition: all 0.2s ease;
+  transition: background 0.2s ease;
   border-radius: 6px;
   margin: 2px 0;
   position: relative;
   /* 为伪元素定位做准备 */
   overflow: hidden;
   /* 防止光圈溢出 */
+}
+
+/* 展开的知识库条目:吃掉剩余高度,让内部树铺满并可滚动 */
+.kb-list-item.expanded {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 /* 鼠标悬停效果 */
@@ -403,16 +430,15 @@ onUnmounted(() => {
   color: #1890ff;
 }
 
-/* 选中状态效果 */
+/* 选中状态:仅在左侧加细的强调线,不给整条(含展开的树)铺背景,避免影响阅读 */
 .kb-list-item.active {
-  background-color: #e6f7ff;
   border-left: 3px solid #1890ff;
-  box-shadow: 0 2px 8px rgba(24, 144, 255, 0.2);
 }
 
-.kb-list-item.active::before {
-  background: rgba(24, 144, 255, 0.15);
-  opacity: 1;
+/* 蓝色底只罩标题行 */
+.kb-list-item.active .kb-item {
+  background: rgba(24, 144, 255, 0.12);
+  border-radius: 6px;
 }
 
 /* 选中状态下的文字和图标 */
@@ -423,7 +449,29 @@ onUnmounted(() => {
   font-weight: 500;
 }
 
+/* 暗色模式:更亮的蓝字 + 标题行略深的底(兼容 .dark / .dark-mode 两种根类) */
+:is(.dark, .dark-mode) .kb-list-item.active {
+  border-left-color: #58a6ff;
+}
+:is(.dark, .dark-mode) .kb-list-item.active .kb-item {
+  background: rgba(56, 139, 253, 0.18);
+}
+:is(.dark, .dark-mode) .kb-list-item.active .kb-title,
+:is(.dark, .dark-mode) .kb-list-item.active .kb-icon,
+:is(.dark, .dark-mode) .kb-list-item.active .expand-icon {
+  color: #58a6ff;
+}
+:is(.dark, .dark-mode) .kb-list-item:hover .kb-title,
+:is(.dark, .dark-mode) .kb-list-item:hover .kb-icon,
+:is(.dark, .dark-mode) .kb-list-item:hover .expand-icon {
+  color: #58a6ff;
+}
+:is(.dark, .dark-mode) .kb-list-item:hover::before {
+  background: rgba(56, 139, 253, 0.12);
+}
+
 .kb-item {
+  flex: 0 0 auto;
   display: flex;
   justify-content: space-between;
   align-items: center;

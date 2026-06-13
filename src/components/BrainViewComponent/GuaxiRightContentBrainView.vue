@@ -1,7 +1,10 @@
 <template>
   <div ref="rightSiderContentRef" class="right-sider-content">
-    <!-- 工业图谱模式:渲染 kg3d 操作面板;经典模式:沿用原有节点/搜索/筛选面板 -->
-    <GuaxiKg3dOpsPanel v-if="store.graphViewMode === 'kg3d'" />
+    <!-- 工业图谱模式:操作面板 + 概览/社区/历史等洞察面板(从左栏迁移至此) -->
+    <div v-if="store.graphViewMode === 'kg3d'" class="kg3d-right">
+      <GuaxiKg3dOpsPanel />
+      <GuaxiKg3dLeftPanel />
+    </div>
 
     <div v-else class="panel">
       <n-card title="节点信息" size="small" class="node-info-card">
@@ -99,6 +102,7 @@ import {
 
 import { SearchOutline } from '@vicons/ionicons5'
 import GuaxiKg3dOpsPanel from './GuaxiKg3dOpsPanel.vue'
+import GuaxiKg3dLeftPanel from './GuaxiKg3dLeftPanel.vue'
 
 const logger = createLogger('GuaxiRightContentBrainView')
 const store = useKnowledgeBaseStore()
@@ -401,6 +405,18 @@ onBeforeUnmount(() => {
   overflow: hidden;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', system-ui;
   font-size: 14px;
+}
+
+/* 工业图谱右栏:操作面板 + 洞察面板纵向堆叠,整体可滚动 */
+.kg3d-right {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  gap: 8px;
+  padding: 6px;
+  box-sizing: border-box;
 }
 
 /* 设计说明：

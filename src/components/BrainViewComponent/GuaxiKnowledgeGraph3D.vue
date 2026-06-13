@@ -170,15 +170,35 @@ const TYPE_COLORS = {
   file: 0x2ecc71,
   section: 0x8e44ad,
   paragraph: 0xd35400,
-  concept: 0xe74c3c,
+  concept: 0xe84393,
   unknown: 0x95a5a6,
+};
+// 自发光强度按层级递减:根/顶层亮,越往叶子越微弱(球体本体的底光,星点光晕另算)
+const TYPE_GLOW = {
+  "knowledge-base": 0.45,
+  directory: 0.3,
+  file: 0.14,
+  section: 0.1,
+  paragraph: 0.09,
+  concept: 0.18,
+  unknown: 0.1,
+};
+// 节点基础半径:越靠顶层越大
+const TYPE_RADIUS = {
+  "knowledge-base": 11,
+  directory: 6.5,
+  file: 4,
+  section: 3,
+  paragraph: 2.4,
+  concept: 4.5,
+  unknown: 2.6,
 };
 const allTypes = [
   { key: "directory", label: "目录", color: "#3498db" },
   { key: "file", label: "文件", color: "#2ecc71" },
   { key: "section", label: "章节", color: "#8e44ad" },
   { key: "paragraph", label: "段落", color: "#d35400" },
-  { key: "concept", label: "概念", color: "#e74c3c" },
+  { key: "concept", label: "概念", color: "#e84393" },
 ];
 
 const canvasWrap = ref(null);
@@ -215,6 +235,7 @@ let edgeLines = null;
 let highlightEdges = null; // 高亮/路径边的发光叠加层
 let highlightedIds = new Set(); // 当前强调的节点集合(用于 sync 时放大)
 let glowGroup = null; // 高亮节点的发光光晕(Sprite,加色混合)
+let starPoints = null; // 全体节点的星点光晕(加色混合 Points,营造"星星点点")
 let glowSprites = []; // [{ sprite, nodeId, base, primary }]
 let glowTexture = null; // 共享的径向渐变贴图
 let glowPulse = 0; // 呼吸相位
@@ -239,6 +260,7 @@ const flyMode = ref(false);
 let flyKeys = { w: false, a: false, s: false, d: false, q: false, e: false, shift: false };
 let flyYaw = 0;
 let flyPitch = 0;
+let sceneScale = 200; // 当前图谱包围盒尺度,用于退出飞行时设定缩放支点距离
 let lastFrameTime = 0;
 // 知识演化:进入演化态时记录"新出现"节点用于波纹高亮
 let evolutionActive = false;
@@ -556,6 +578,12 @@ function disposeGraphObjects() {
     edgeLines.material.dispose();
     edgeLines = null;
   }
+  if (starPoints) {
+    scene.remove(starPoints);
+    starPoints.geometry.dispose();
+    starPoints.material.dispose();
+    starPoints = null;
+  }
   if (highlightEdges) {
     scene.remove(highlightEdges);
     highlightEdges.geometry.dispose();
@@ -595,9 +623,10 @@ function buildMeshes() {
   for (const [type, arr] of Object.entries(byType)) {
     const mat = new THREE.MeshStandardMaterial({
       metalness: 0.25,
-      roughness: 0.55,
+      roughness: 0.6,
       emissive: new THREE.Color(TYPE_COLORS[type] ?? TYPE_COLORS.unknown),
-      emissiveIntensity: 0.12,
+      // 发光强度按层级递减:根/顶层亮,叶子节点只微微发光
+      emissiveIntensity: TYPE_GLOW[type] ?? TYPE_GLOW.unknown,
     });
     const mesh = new THREE.InstancedMesh(sphere, mat, arr.length);
     mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(arr.length * 3), 3);
@@ -619,14 +648,85 @@ function buildMeshes() {
   }
 
   buildEdges();
+  buildStarField();
   applyTypeVisibility();
   rebuildLabels();
   requestRender();
 }
 
+// 星点光晕:全体节点叠加一层加色混合的柔光点,营造"星星点点";根/顶层更亮,叶子很微弱。
+// 体量小且在标签下方,不会盖住标签文字。
+function starBrightness(node) {
+  if (node._hidden) return 0; // 类型/标签过滤隐藏
+  if (node._scaleMul === 0) return 0; // 时间轴隐藏
+  return 0.32 + (TYPE_GLOW[node.type] ?? 0.1) * 1.5;
+}
+
+function buildStarField() {
+  if (starPoints) {
+    scene.remove(starPoints);
+    starPoints.geometry.dispose();
+    starPoints.material.dispose();
+    starPoints = null;
+  }
+  const n = nodeList.length;
+  if (!n || !glowTexture) return;
+  const pos = new Float32Array(n * 3);
+  const col = new Float32Array(n * 3);
+  const tmp = new THREE.Color();
+  nodeList.forEach((node, i) => {
+    node._starIdx = i;
+    const p = curPositions.get(node.id) || { x: 0, y: 0, z: 0 };
+    pos[i * 3] = p.x; pos[i * 3 + 1] = p.y; pos[i * 3 + 2] = p.z;
+    tmp.copy(colorForNode(node));
+    const b = starBrightness(node);
+    col[i * 3] = tmp.r * b; col[i * 3 + 1] = tmp.g * b; col[i * 3 + 2] = tmp.b * b;
+  });
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+  const mat = new THREE.PointsMaterial({
+    map: glowTexture,
+    size: 13,
+    sizeAttenuation: true,
+    vertexColors: true,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    opacity: 0.8,
+  });
+  starPoints = new THREE.Points(geo, mat);
+  starPoints.renderOrder = 1; // 在球体之上叠加柔光,但 depthWrite=false 不遮挡
+  scene.add(starPoints);
+}
+
+function updateStarPositions() {
+  if (!starPoints) return;
+  const attr = starPoints.geometry.getAttribute("position");
+  nodeList.forEach((node, i) => {
+    const p = curPositions.get(node.id) || { x: 0, y: 0, z: 0 };
+    attr.array[i * 3] = p.x; attr.array[i * 3 + 1] = p.y; attr.array[i * 3 + 2] = p.z;
+  });
+  attr.needsUpdate = true;
+}
+
+function updateStarColors() {
+  if (!starPoints) return;
+  const attr = starPoints.geometry.getAttribute("color");
+  const tmp = new THREE.Color();
+  nodeList.forEach((node, i) => {
+    tmp.copy(colorForNode(node));
+    const b = starBrightness(node);
+    attr.array[i * 3] = tmp.r * b; attr.array[i * 3 + 1] = tmp.g * b; attr.array[i * 3 + 2] = tmp.b * b;
+  });
+  attr.needsUpdate = true;
+  requestRender();
+}
+
 function baseRadius(n) {
-  const s = n.size ?? 0.2;
-  return 2 + s * 6;
+  const t = n.type || n._type;
+  if (t && TYPE_RADIUS[t] != null) return TYPE_RADIUS[t];
+  return 2 + (n.size ?? 0.2) * 6;
 }
 
 function buildEdges() {
@@ -666,7 +766,7 @@ function rebuildLabels() {
     div.textContent = n.name?.length > 18 ? n.name.slice(0, 18) + "…" : n.name;
     const obj = new CSS2DObject(div);
     const r = baseRadius(n) * (n._hlMul ?? 1);
-    obj.position.set(p.x, p.y + r + 2, p.z);
+    obj.position.set(p.x, p.y + r + 5, p.z);
     obj.userData.nodeId = n.id;
     obj.userData.hl = hl;
     scene.add(obj);
@@ -713,6 +813,7 @@ function applyTypeVisibility() {
     mesh.visible = true; // 始终渲染,靠缩放隐藏个别节点
   }
   rebuildEdgesForVisible(visIds);
+  updateStarColors();
   rebuildLabels();
   requestRender();
 }
@@ -789,6 +890,7 @@ function fitCamera() {
   }
   const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3()).length() || 200;
+  sceneScale = size; // 记录当前图谱尺度,供退出飞行时设定合理的缩放支点距离
   gsap.to(controls.target, { x: center.x, y: center.y, z: center.z, duration: 0.8 });
   gsap.to(camera.position, {
     x: center.x,
@@ -865,8 +967,9 @@ function syncInstancePositions() {
   for (const l of labelObjs) {
     const p = curPositions.get(l.userData.nodeId);
     const n = nodeById.get(l.userData.nodeId);
-    if (p && n) l.position.set(p.x, p.y + baseRadius(n) + 2, p.z);
+    if (p && n) l.position.set(p.x, p.y + baseRadius(n) + 5, p.z);
   }
+  updateStarPositions();
   requestRender();
 }
 
@@ -966,10 +1069,21 @@ function exitFlyMode() {
   document.removeEventListener("mousemove", onFlyMouseMove);
   flyKeys = { w: false, a: false, s: false, d: false, q: false, e: false, shift: false };
   renderer.domElement.style.cursor = "default";
-  // 让 orbit target 落到相机前方,避免回到轨道模式时镜头跳变
+  // 让 orbit target 落到视线前方的内容上,支点距离按场景尺度,
+  // 避免回到轨道模式后缩放支点过近(每格滚轮只移动几单位)导致"缩放特别慢"。
   const dir = new THREE.Vector3();
   camera.getWorldDirection(dir);
-  controls.target.copy(camera.position).addScaledVector(dir, 60);
+  let pivotDist = THREE.MathUtils.clamp(sceneScale * 0.35, 80, 6000);
+  try {
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(new THREE.Vector2(0, 0), camera);
+    const meshes = Object.values(typeMeshes).filter((m) => m.visible);
+    const hits = ray.intersectObjects(meshes, false);
+    if (hits.length && hits[0].distance > 5) pivotDist = hits[0].distance;
+  } catch (e) {
+    /* 拾取失败则用场景尺度回退 */
+  }
+  controls.target.copy(camera.position).addScaledVector(dir, pivotDist);
   statusText.value = "";
 }
 
@@ -1770,6 +1884,7 @@ function applyTimeline() {
   if (evolutionActive && !showAll) {
     statusText.value = `知识演化 · ${timelineLabel.value} · 已显现 ${visCount}/${nodeList.length}`;
   }
+  updateStarColors();
   requestRender();
 }
 
