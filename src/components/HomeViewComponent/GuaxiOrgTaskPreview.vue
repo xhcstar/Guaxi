@@ -326,10 +326,39 @@ export default { name: 'GuaxiOrgTaskPreview' }
 
 <style scoped>
 .org-task-preview {
+  /* 设计说明：
+   * 1. 任务预览与主编辑器展示的是同一份 .org 文档内容，阅读态和编辑态应使用完全一致的字体栈。
+   * 2. 原生 button/select/input/textarea 可能使用浏览器系统 UI 字体，不能只依赖根容器的普通继承。
+   * 3. 使用组件级变量统一管理，后续调整主编辑器字体时可以直接同步这一处。
+   */
+  --otp-editor-font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
   display: flex; flex-direction: column; height: 100%; min-width: 0;
-  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, 'Microsoft YaHei', monospace;
+  font-family: var(--otp-editor-font-family);
   font-size: 14px;
 }
+
+/* Bug/Task 的所有条目、操作控件和编辑区统一继承主编辑器字体。
+ * `button` 与表单元素需要显式指定，避免浏览器 user-agent 样式重新切回系统字体。
+ */
+.org-task-preview :where(
+  button,
+  input,
+  select,
+  option,
+  textarea,
+  label,
+  pre,
+  code
+) {
+  font-family: var(--otp-editor-font-family) !important;
+}
+
+/* renderMiniMarkdown 生成的节点位于 v-html 内容中，需要通过 :deep 明确覆盖其段落、代码及链接字体。 */
+.org-task-preview :deep(.gmd),
+.org-task-preview :deep(.gmd *) {
+  font-family: var(--otp-editor-font-family) !important;
+}
+
 .theme-light { --otp-bg:#f7f8fa; --otp-card:#ffffff; --otp-border:#e3e6eb; --otp-text:#1f2328; --otp-sub:#57606a; --otp-chip:#eef1f5; --otp-hit:#ffe08a; }
 .theme-dark { --otp-bg:#21252b; --otp-card:#282c34; --otp-border:#3e4451; --otp-text:#abb2bf; --otp-sub:#8b94a3; --otp-chip:#2f343d; --otp-hit:#7a6420; }
 .org-task-preview { background: var(--otp-bg); color: var(--otp-text); }
