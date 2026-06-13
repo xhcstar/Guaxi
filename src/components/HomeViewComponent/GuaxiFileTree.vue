@@ -663,6 +663,50 @@ watch(
 const fileTree = ref([])
 const isTreeLoading = ref(false)
 
+// 设计说明：
+// 1. 左侧边栏的三种模式分别维护独立根目录和树数据，GuaxiEditor 不能通过 activeRepoPath 推断 plain/task 模式。
+// 2. 这里把当前可见模式的“根路径 + 文件树”同步到共享 store，面包屑即可使用与左栏完全相同的浏览上下文。
+// 3. deep 监听同时覆盖懒加载目录 children 的变化，避免面包屑同级候选停留在加载前的旧树。
+// 4. 此处使用局部归一化函数，因为通用 normalizePath 在组件后半段声明；immediate 监听不能提前访问它。
+const normalizeSidebarNavigationPath = (path) => String(path || '').replace(/\\/g, '/').replace(/\/+$/, '')
+
+const syncSidebarNavigationContext = () => {
+  let rootPath = ''
+  let tree = []
+
+  if (viewMode.value === 'plain') {
+    rootPath = normalizeSidebarNavigationPath(externalDir.value)
+    tree = externalDirTree.value
+  } else if (viewMode.value === 'task') {
+    rootPath = catPathOf(activeTaskCat.value)
+    tree = taskCatTrees[activeTaskCat.value] || []
+  } else {
+    rootPath = normalizeSidebarNavigationPath(fileTreeStore.activeRepoPath)
+    tree = fileTree.value
+  }
+
+  fileTreeStore.setSidebarNavigationContext({
+    mode: viewMode.value,
+    rootPath,
+    tree,
+  })
+}
+
+watch(
+  [
+    viewMode,
+    externalDir,
+    externalDirTree,
+    activeTaskCat,
+    taskCategoryPaths,
+    taskCatTrees,
+    () => fileTreeStore.activeRepoPath,
+    fileTree,
+  ],
+  syncSidebarNavigationContext,
+  { deep: true, immediate: true }
+)
+
 // 右键菜单状态
 const isContextMenuVisible = ref(false)
 const contextMenuPosition = ref({ x: 0, y: 0 })

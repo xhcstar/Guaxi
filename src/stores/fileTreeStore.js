@@ -40,6 +40,7 @@ const classifyReadFileError = (error) => {
 };
 
 const normalizeTabPath = (p) => String(p || "").replace(/\\/g, "/").toLowerCase();
+const normalizeNavigationRootKey = (p) => normalizeTabPath(p).replace(/\/+$/, "");
 const normalizeEditorContent = (content) => String(content ?? "").replace(/\r\n?/g, "\n");
 const EVENT_CELLMETA_FILE_CLOSED = "guaxi_cellmeta_file_closed";
 
@@ -56,11 +57,52 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
     layoutMode: 'single',
     splitIndex: null,
     activeRegion: 'left',
+    // 左侧边栏当前浏览上下文：
+    // 1. 知识库、普通文件、任务三种模式使用不同的根目录与树数据，不能只依赖 activeRepoPath。
+    // 2. 编辑器面包屑读取这份共享状态，确保左栏模式/目录/任务分类切换后默认根路径立即同步。
+    sidebarNavigationMode: "kb",
+    sidebarNavigationRootPath: null,
+    sidebarNavigationTree: [],
+    sidebarNavigationVersion: 0,
+    // 按根目录保存各模式的树快照。切换模式后旧根仍保留，已打开标签切回时可按文件实际路径恢复正确候选。
+    sidebarNavigationContexts: {},
     // 新增：用于跟踪仓库展开状态的Map
     expandedRepos: new Map(), // key: repoPath, value: boolean
     currentRequestPath: null,
   }),
   actions: {
+    setSidebarNavigationContext({ mode = "kb", rootPath = null, tree = [] } = {}) {
+      const nextMode = ["kb", "plain", "task"].includes(mode) ? mode : "kb";
+      const nextRootPath = rootPath || null;
+      const nextTree = Array.isArray(tree) ? tree : [];
+
+      this.sidebarNavigationMode = nextMode;
+      this.sidebarNavigationRootPath = nextRootPath;
+      this.sidebarNavigationTree = nextTree;
+      // 树节点可能通过懒加载原地追加 children，版本号用于通知面包屑重建路径索引。
+      this.sidebarNavigationVersion += 1;
+
+      const rootKey = normalizeNavigationRootKey(nextRootPath);
+      if (rootKey) {
+        this.sidebarNavigationContexts = {
+          ...this.sidebarNavigationContexts,
+          [rootKey]: {
+            mode: nextMode,
+            rootPath: nextRootPath,
+            tree: nextTree,
+            version: this.sidebarNavigationVersion,
+          },
+        };
+      }
+
+      console.info("[SidebarNavigation] context updated", {
+        mode: nextMode,
+        rootPath: nextRootPath,
+        nodeCount: nextTree.length,
+        version: this.sidebarNavigationVersion,
+      });
+    },
+
     // 新增：切换仓库展开状态
     toggleRepoExpand(path) {
       this.expandedRepos.set(path, !this.expandedRepos.get(path));

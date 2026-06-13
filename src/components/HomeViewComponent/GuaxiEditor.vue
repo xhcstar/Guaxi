@@ -938,7 +938,8 @@
             </n-breadcrumb>
           </div>
 
-          <n-dropdown v-model:show="breadcrumbPickerVisible" trigger="manual" placement="bottom-start"
+          <n-dropdown v-model:show="breadcrumbPickerVisible" class="breadcrumb-picker-dropdown"
+            trigger="manual" placement="bottom-start"
             :x="breadcrumbPickerPosition.x" :y="breadcrumbPickerPosition.y" :options="breadcrumbPickerOptions"
             @select="handleBreadcrumbPickerSelect" @clickoutside="closeBreadcrumbPicker" />
         </div>
@@ -2971,29 +2972,55 @@ const buildHeadingBreadcrumbItems = (outlineFlat, lineNumber) => {
   }))
 }
 
-// 从 repopathlist 中找出“最匹配”的知识库根路径
-const findRepoRootForPath = (absPath) => {
+// 根据当前文件的真实绝对路径查找最匹配根目录。
+// 设计说明：
+// 1. 已打开标签可以跨越知识库、普通文件和任务目录，左栏当前模式不能代表活动文件所属模式。
+// 2. 因此把所有已知根目录放在一起做最长前缀匹配；路径更深的根优先，避免嵌套目录误归属。
+// 3. Windows 路径比较忽略大小写，但返回原始 rootPath，保证面包屑展示与文件系统路径保持一致。
+const resolveBreadcrumbRootContext = (absPath) => {
   const target = normalizeSlashes(absPath)
-  if (!target) return ''
+  if (!target) return null
+  const targetKey = target.toLowerCase()
+  const candidates = new Map()
+
+  const contexts = fileTreeStore.sidebarNavigationContexts || {}
+  for (const context of Object.values(contexts)) {
+    const rootPath = normalizeSlashes(context?.rootPath)
+    if (!rootPath) continue
+    candidates.set(rootPath.toLowerCase(), {
+      mode: String(context?.mode || 'kb'),
+      rootPath,
+      tree: Array.isArray(context?.tree) ? context.tree : [],
+      version: Number(context?.version || 0),
+    })
+  }
 
   const repos = Array.isArray(fileTreeStore.repopathlist) ? fileTreeStore.repopathlist : []
-  let best = ''
   for (const raw of repos) {
-    const repo = normalizeSlashes(raw)
-    if (!repo) continue
-    if (target === repo || target.startsWith(`${repo}/`)) {
-      if (repo.length > best.length) best = repo
+    const rootPath = normalizeSlashes(raw)
+    if (!rootPath) continue
+    const key = rootPath.toLowerCase()
+    if (!candidates.has(key)) {
+      candidates.set(key, { mode: 'kb', rootPath, tree: [], version: 0 })
     }
   }
 
-  // 兜底：如果当前 activeRepoPath 能匹配，也返回
   const active = normalizeSlashes(fileTreeStore.activeRepoPath)
-  if (!best && active && (target === active || target.startsWith(`${active}/`))) {
-    best = active
+  if (active && !candidates.has(active.toLowerCase())) {
+    candidates.set(active.toLowerCase(), { mode: 'kb', rootPath: active, tree: [], version: 0 })
+  }
+
+  let best = null
+  for (const context of candidates.values()) {
+    const rootKey = context.rootPath.toLowerCase()
+    if (targetKey !== rootKey && !targetKey.startsWith(`${rootKey}/`)) continue
+    if (!best || context.rootPath.length > best.rootPath.length) best = context
   }
 
   return best
 }
+
+const findRepoRootForPath = (absPath) => resolveBreadcrumbRootContext(absPath)?.rootPath || ''
 
 // 折叠过长的路径面包屑，避免把“标题/函数”等大纲面包屑挤出可视区（行为参考 VSCode：保留头部与尾部，中间用“…”折叠）
 const collapsePathBreadcrumbItems = (items, maxVisible = 4) => {
@@ -3025,12 +3052,21 @@ const buildBreadcrumbItems = (absPath) => {
     return [{ key: 'placeholder', label: '未打开文件', title: '未打开文件', icon: fileTextIcon, kind: 'placeholder', disabled: true }]
   }
 
-  const repoRoot = findRepoRootForPath(target)
+  const rootContext = resolveBreadcrumbRootContext(target)
+  const repoRoot = rootContext?.rootPath || ''
   const items = []
 
   if (repoRoot) {
     const repoName = repoRoot.split('/').pop() || repoRoot
-    items.push({ key: `repo:${repoRoot}`, label: repoName, title: repoRoot, icon: bookOpenIcon, kind: 'repo', path: repoRoot })
+    const isNonKbRoot = String(rootContext?.mode || 'kb') !== 'kb'
+    items.push({
+      key: `${isNonKbRoot ? 'workspace' : 'repo'}:${repoRoot}`,
+      label: repoName,
+      title: repoRoot,
+      icon: isNonKbRoot ? folderIcon : bookOpenIcon,
+      kind: isNonKbRoot ? 'workspace' : 'repo',
+      path: repoRoot,
+    })
 
     const rel = target === repoRoot ? '' : target.slice(repoRoot.length + 1)
     const parts = rel ? rel.split('/').filter(Boolean) : []
@@ -3058,7 +3094,8 @@ const buildBreadcrumbItems = (absPath) => {
 }
 
 const breadcrumbItems = computed(() => {
-  const absPath = activeTab.value?.path || selectedFile.value?.path || ''
+  // selectedFile 由 setActiveTab 同步，是当前实际活动文件；优先使用它，避免跨模式切换时读到旧 tab 引用。
+  const absPath = selectedFile.value?.path || activeTab.value?.path || ''
   const pathItems = buildBreadcrumbItems(absPath)
   const headingItems = buildHeadingBreadcrumbItems(safeOutlineFlat.value, cursorLineNumber.value)
   return [...pathItems, ...headingItems]
@@ -3125,12 +3162,22 @@ const normalizeBreadcrumbPath = (path) => {
 const isHiddenPathForBreadcrumb = (path) => {
   const p = normalizeBreadcrumbPath(path)
   if (!p) return false
-  return p.split('/').some((part) => String(part || '').startsWith('.'))
+
+  // 设计说明：
+  // 1. 面包屑选择器只用于浏览用户可见的知识库内容，任何以 `.` 开头的文件或目录都不应进入候选列表。
+  // 2. `.cellmeta` 是 Notebook/探索者模式生成的内部侧车文件，文件名通常是
+  //    `文档名.md.cellmeta`，并不以 `.` 开头，因此需要按后缀单独过滤。
+  // 3. 对每一级路径片段都执行检查，可以同时阻止隐藏目录本身及其内部内容被面包屑检索到。
+  return p.split('/').some((part) => {
+    const name = String(part || '').trim()
+    return name.startsWith('.') || name.toLowerCase().endsWith('.cellmeta')
+  })
 }
 
 const getFileTreeIndex = (() => {
   let cachedTreeRef = null
   let cachedRootId = ''
+  let cachedTreeVersion = -1
   let cached = null
 
   const walk = (nodes, parentId, parentById, childrenByParent, nodeById) => {
@@ -3153,9 +3200,28 @@ const getFileTreeIndex = (() => {
   }
 
   return (rootId) => {
-    const treeRef = fileTreeStore.fileTree
     const rid = normalizeBreadcrumbPath(rootId)
-    if (treeRef && treeRef === cachedTreeRef && rid && rid === cachedRootId && cached) return cached
+    const context = resolveBreadcrumbRootContext(rid)
+    const contextRoot = normalizeBreadcrumbPath(context?.rootPath)
+    const hasContextTree = rid && rid === contextRoot && Array.isArray(context?.tree)
+    const currentSidebarRoot = normalizeBreadcrumbPath(fileTreeStore.sidebarNavigationRootPath)
+    const canUseCurrentSidebarTree = rid && rid === currentSidebarRoot && Array.isArray(fileTreeStore.sidebarNavigationTree)
+    const treeVersion = hasContextTree
+      ? Number(context?.version || 0)
+      : (canUseCurrentSidebarTree ? Number(fileTreeStore.sidebarNavigationVersion || 0) : 0)
+    // 不允许使用其它模式最后一次 fetchFileTree 的全局结果兜底，否则任务树会污染知识库标签，反之亦然。
+    const treeRef = hasContextTree
+      ? context.tree
+      : (canUseCurrentSidebarTree ? fileTreeStore.sidebarNavigationTree : [])
+
+    if (
+      treeRef &&
+      treeRef === cachedTreeRef &&
+      rid &&
+      rid === cachedRootId &&
+      treeVersion === cachedTreeVersion &&
+      cached
+    ) return cached
 
     const parentById = new Map()
     const childrenByParent = new Map()
@@ -3165,6 +3231,7 @@ const getFileTreeIndex = (() => {
 
     cachedTreeRef = treeRef
     cachedRootId = rid
+    cachedTreeVersion = treeVersion
     cached = { parentById, childrenByParent, nodeById, rootId: rid }
     return cached
   }
@@ -3215,6 +3282,16 @@ const makeBreadcrumbPickerOption = (payload, isActive) => {
 const openBreadcrumbPicker = (it, ev) => {
   if (!it || it.disabled) return
 
+  // 普通文件/任务模式只有一个当前根目录，不展示知识库切换列表；点击时直接联动左侧树。
+  if (it.kind === 'workspace') {
+    logger.info('[BreadcrumbPicker] reveal current sidebar root', {
+      mode: fileTreeStore.sidebarNavigationMode,
+      path: it.path,
+    })
+    handleBreadcrumbClick(it)
+    return
+  }
+
   const x = Number(ev?.clientX || 0)
   const y = Number(ev?.clientY || 0)
   breadcrumbPickerPosition.value = { x, y }
@@ -3249,12 +3326,16 @@ const openBreadcrumbPicker = (it, ev) => {
 
       const parentId = index?.parentById?.get(target) || repoRoot
       const siblingsRaw = index?.childrenByParent?.get(parentId) || []
+      let hiddenSiblingCount = 0
 
       payloads = siblingsRaw
         .map((n) => {
           const path = normalizeBreadcrumbPath(n?.id)
           if (!path) return null
-          if (isHiddenPathForBreadcrumb(path)) return null
+          if (isHiddenPathForBreadcrumb(path)) {
+            hiddenSiblingCount += 1
+            return null
+          }
 
           const label = String(n?.label || path.split('/').pop() || path)
           const isDir = Array.isArray(n?.children) && n.children.length > 0
@@ -3270,6 +3351,13 @@ const openBreadcrumbPicker = (it, ev) => {
         })
         .filter(Boolean)
         .sort((a, b) => String(a.label || '').localeCompare(String(b.label || ''), 'zh-CN'))
+
+      if (hiddenSiblingCount > 0) {
+        logger.debug('[BreadcrumbPicker] hidden entries filtered', {
+          parentId,
+          filteredCount: hiddenSiblingCount,
+        })
+      }
     }
   }
 
@@ -23425,6 +23513,25 @@ onUnmounted(() => {
 .n-dropdown-menu::-webkit-scrollbar-thumb:hover {
   background: rgba(140, 140, 140, 0.55);
   background-clip: content-box;
+}
+
+/*
+ * 设计说明：
+ * 1. Naive UI 的下拉菜单会 teleport 到 body，无法继承 `.guaxi-editor` / `.breadcrumb-bar` 的字体。
+ * 2. 使用面包屑专用 class 限定作用域，避免影响标题、代码块、导出等其它下拉菜单。
+ * 3. 字体栈与 Monaco 主编辑器的 fontFamily 保持一致，中文和图标字体缺失时仍有稳定回退。
+ */
+.breadcrumb-picker-dropdown.n-dropdown,
+.breadcrumb-picker-dropdown .n-dropdown-menu,
+.breadcrumb-picker-dropdown .n-dropdown-option,
+.breadcrumb-picker-dropdown .n-dropdown-option-body,
+.breadcrumb-picker-dropdown .n-dropdown-option-body__label {
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New' !important;
+}
+
+.breadcrumb-picker-dropdown .breadcrumb-picker-item,
+.breadcrumb-picker-dropdown .breadcrumb-picker-label {
+  font-family: inherit !important;
 }
 
 /* Mermaid图表样式 */
