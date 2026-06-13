@@ -603,7 +603,10 @@ onUnmounted(() => {
 
 <style scoped>
 .task-manager-page {
-  display: flex; flex-direction: column; height: 100%;
+  /* 独立窗口根：用 100vh 而非 100% —— 与本项目其它独立窗口一致。
+     #app 与 naive 的 config/message provider 之间的包裹层会破坏 height:100% 的百分比链，
+     导致整页按内容撑高、看板列无法约束高度而不滚动。 */
+  display: flex; flex-direction: column; height: 100vh; max-height: 100vh;
   background: var(--guaxi-app-bg); color: var(--guaxi-text-primary);
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
   font-size: 14px;
