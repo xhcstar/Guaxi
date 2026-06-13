@@ -1019,14 +1019,14 @@ pub async fn doc_agent_process(request: DocAgentRequest) -> Result<DocAgentRespo
 
     for round in 0..3usize {
         let (answer, session) = match timeout(
-            Duration::from_secs(90),
+            Duration::from_secs(300),
             kg_llm_complete(modelid, &prompt, &last_session),
         )
         .await
         {
             Ok(Ok(v)) => v,
             Ok(Err(e)) => return Err(e),
-            Err(_) => return Err("文档 Agent 响应超时（>90s）".to_string()),
+            Err(_) => return Err("文档 Agent 响应超时（>300s）".to_string()),
         };
         last_session = session.clone();
 
@@ -2627,15 +2627,16 @@ async fn ensure_local_qwen_server_started() -> Result<PathBuf, String> {
                 .arg("127.0.0.1")
                 .arg("--port")
                 .arg("18082")
-                .arg("--n-gpu-layers")
-                .arg("25")
+                // 不显式指定 --n-gpu-layers：让 llama.cpp 按可用显存自动决定 GPU 层数，
+                // 其余层回退 CPU。低显存机器(如 6GB)上强行固定 -ngl 会触发 fit 失败并中止加载。
                 .arg("--ctx-size")
                 .arg("8192")
                 .arg("--batch-size")
                 .arg("512")
                 .arg("--ubatch-size")
                 .arg("512")
-                .arg("--mlock")
+                // 不使用 --mlock：低内存机器上锁定 20GB 模型进物理内存可能失败或抖动，
+                // 默认 mmap 按需分页更稳妥。
                 .arg("--flash-attn")
                 .arg("on")
                 .arg("--jinja")
@@ -2667,7 +2668,8 @@ async fn ensure_local_qwen_server_started() -> Result<PathBuf, String> {
         }
     }
 
-    for _ in 0..120 {
+    // 低配机器加载 35B 模型（多为 CPU 分页 + 部分 GPU 卸载）可能很慢，给足 10 分钟。
+    for _ in 0..1200 {
         if is_local_qwen_server_ready().await {
             return Ok(model_path);
         }
@@ -2683,7 +2685,7 @@ async fn ensure_local_qwen_server_started() -> Result<PathBuf, String> {
                 }
             }
         }
-        sleep(Duration::from_millis(250)).await;
+        sleep(Duration::from_millis(500)).await;
     }
 
     if let Ok(mut guard) = LOCAL_QWEN_PROCESS.lock() {
