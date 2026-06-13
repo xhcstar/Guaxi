@@ -49,6 +49,6 @@ pub mod language_learning;
 pub mod tts_book;
 pub mod syntax_highlight;
 pub mod typst_compile;
-pub mod task_org;
+pub mod task_block;
 pub mod taskmanager;
 pub mod task_manager_window;

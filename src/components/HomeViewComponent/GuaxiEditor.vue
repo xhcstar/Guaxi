@@ -377,6 +377,36 @@
             {{ latexPreviewVisible ? `关闭 ${pdfPreviewLabel} 预览` : `${pdfPreviewLabel} 预览` }}
           </n-tooltip>
 
+          <n-tooltip v-if="isOrgTaskFile" placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text :type="orgPreviewVisible ? 'primary' : 'default'" @click="toggleOrgPreview">
+                <Icon :icon="orgTaskIcon" width="18" height="18" />
+              </n-button>
+            </template>
+            {{ orgPreviewVisible ? '关闭任务预览' : '任务预览' }}
+          </n-tooltip>
+
+          <template v-if="isOrgTaskFile">
+            <n-tooltip placement="top" trigger="hover">
+              <template #trigger>
+                <n-button text @click="createOrgSubBlock('task')"><n-icon :component="AddOutline" size="18" /></n-button>
+              </template>
+              创建子任务
+            </n-tooltip>
+            <n-tooltip placement="top" trigger="hover">
+              <template #trigger>
+                <n-button text @click="createOrgSubBlock('bug')"><n-icon :component="BugOutline" size="18" /></n-button>
+              </template>
+              创建子 Bug
+            </n-tooltip>
+            <n-tooltip placement="top" trigger="hover">
+              <template #trigger>
+                <n-button text @click="addOrgNotesFile"><n-icon :component="DocumentAttachOutline" size="18" /></n-button>
+              </template>
+              添加 NOTES 文件
+            </n-tooltip>
+          </template>
+
           <n-dropdown trigger="click" :options="exportOptions" @select="handleExportSelect">
             <n-tooltip placement="top" trigger="hover">
               <template #trigger>
@@ -644,7 +674,7 @@
       </div>
     </div>
 
-    <div class="editor-content" :class="[previewMode, { 'has-latex-preview': isPdfPreviewDoc && latexPreviewVisible }]" ref="editorContentRef">
+    <div class="editor-content" :class="[previewMode, { 'has-latex-preview': isAnySplitPreview }]" ref="editorContentRef">
       <div v-if="showEditorEmptyState" class="editor-empty">请选择一个文件以开始编辑</div>
       <div v-show="selectedFile && previewMode === 'realtime' && canPreview" id="realtime-vditor"
         class="realtime-vditor">
@@ -953,7 +983,7 @@
       </div>
 
       <div
-        v-if="isPdfPreviewDoc && latexPreviewVisible"
+        v-if="isAnySplitPreview"
         class="latex-preview-resizer"
         :class="{ dragging: latexPreviewResizing }"
         @mousedown="startResizeLatexPreview"
@@ -970,6 +1000,28 @@
         :title-label="pdfPreviewLabel"
         @rebuild="buildLatexPreview"
         @export="handleLatexExport"
+      />
+
+      <GuaxiOrgTaskPreview
+        v-if="isOrgTaskFile && orgPreviewVisible"
+        class="latex-preview-pane"
+        :style="{ flex: `0 0 ${latexPreviewWidth}px` }"
+        :content="orgPreviewContent"
+        :category="orgPreviewCategory"
+        :theme="settingsStore.appearanceTheme"
+        title-label="任务预览"
+        :active-block-line="activeOrgBlockLine"
+        :can-back="orgNavStack.length > 0"
+        @rebuild="refreshOrgPreviewContent"
+        @open-notes="handleOpenNotesNav"
+        @goto-line="handleOrgGotoLine"
+        @apply-block="handleApplyOrgBlock"
+        @copy-block="handleCopyOrgBlock"
+        @export-block="handleExportOrgBlock"
+        @back="handleOrgPreviewBack"
+        @create-block="createOrgBlockFromPreview"
+        @delete-block="handleDeleteOrgBlock"
+        @insert-block="handleInsertOrgBlock"
       />
 
       <transition name="python-console-slide">
@@ -1067,11 +1119,13 @@ import GuaxiEditorStatusBar from './GuaxiEditorStatusBar.vue'
 import GuaxiSelectionTranslatePanel from './GuaxiSelectionTranslatePanel.vue'
 import GuaxiNotebookView from './GuaxiNotebookView.vue'
 import GuaxiLatexPreview from './GuaxiLatexPreview.vue'
+import GuaxiOrgTaskPreview from './GuaxiOrgTaskPreview.vue'
+import { validateTaskBlocks, parseTaskBlocks, serializeBlock, replaceBlockInContent, buildNewBlock } from '../../utils/guaxiTaskParser'
 import GuaxiTerminalPanel from './GuaxiTerminalPanel.vue'
 import { EXPORT_SHELL_CSS, EXPORT_PYCELL_CSS } from './guaxiExportStyles'
 import { NTooltip, NIcon, useMessage, NDropdown, NPopover, NInputNumber, NBreadcrumb, NBreadcrumbItem } from 'naive-ui'
 import { Icon } from '@iconify/vue'
-import { EyeOutline, LogoVimeo, CloseOutline, ExitOutline, SaveOutline, ArrowBackOutline, ArrowForwardOutline } from '@vicons/ionicons5'
+import { EyeOutline, LogoVimeo, CloseOutline, ExitOutline, SaveOutline, ArrowBackOutline, ArrowForwardOutline, AddOutline, BugOutline, DocumentAttachOutline } from '@vicons/ionicons5'
 import { DocumentEdit16Regular, Edit16Filled, Image28Regular } from '@vicons/fluent'
 // Iconify local icon imports (lucide + mdi) to preserve original visuals without runtime network fetch
 import headingIcon from '@iconify-icons/lucide/heading'
@@ -1113,6 +1167,7 @@ import folderIcon from '@iconify-icons/lucide/folder'
 import fileTextIcon from '@iconify-icons/lucide/file-text'
 import texFileIcon from '@iconify-icons/vscode-icons/file-type-tex'
 import typFileIcon from '@iconify-icons/lucide/file-type-2'
+import orgTaskIcon from '@iconify-icons/lucide/clipboard-list'
 import hashIcon from '@iconify-icons/lucide/hash'
 
 import tableRowPlusAfter from '@iconify-icons/mdi/table-row-plus-after'
@@ -1303,9 +1358,160 @@ const ensureTypstLanguage = () => {
   logger.info('[Editor] Typst language registered/configured', { languageId: 'typst', existed: exists })
 }
 
+// GUAXI 任务块 token 收集（供语义高亮 + 装饰高亮共用）。返回 [{line(0基), char, len, type}]
+const collectGuaxiTaskTokens = (text) => {
+  const lines = String(text || '').split(/\r?\n/)
+  const toks = []
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    let m
+    if ((m = /^(\s*)(##GUAXI_TASK_(?:START|END))/.exec(line))) {
+      toks.push({ line: i, char: m[1].length, len: m[2].length, type: 'keyword' })
+      continue
+    }
+    if (/^\s*#NOTES\s+/i.test(line)) {
+      const noteHead = /^(\s*)(#NOTES\s+(?:START|END))/i.exec(line)
+      if (noteHead) toks.push({ line: i, char: noteHead[1].length, len: noteHead[2].length, type: 'keyword' })
+      const q = /"([^"]*)"/.exec(line)
+      if (q) toks.push({ line: i, char: q.index, len: q[0].length, type: 'string' })
+      continue
+    }
+    const fld = /^(\s*)(#[A-Z][A-Z ]*:)/.exec(line)
+    if (fld) {
+      toks.push({ line: i, char: fld[1].length, len: fld[2].length, type: 'keyword' })
+    }
+    const reAll = /(##(?:Date|Time)\b)|(\[#[ABC]\])|\b(TODO|NEXT|DOING|WAITING|PAUSED|HOLD|CANCELLED|DONE)\b|(https?:\/\/\S+)/g
+    while ((m = reAll.exec(line))) {
+      if (m[1]) toks.push({ line: i, char: m.index, len: m[1].length, type: 'regexp' })
+      else if (m[2]) toks.push({ line: i, char: m.index, len: m[2].length, type: 'number' })
+      else if (m[3]) toks.push({ line: i, char: m.index, len: m[3].length, type: 'regexp' })
+      else if (m[4]) toks.push({ line: i, char: m.index, len: m[4].length, type: 'string' })
+    }
+  }
+  return toks
+}
+
+// GUAXI 任务块 DSL（.org 文件）：高亮 ##GUAXI_TASK_START/END、#FIELD: 关键字、状态、优先级、##Date/##Time、NOTES。
+const ensureGuaxiTaskLanguage = () => {
+  const exists = monaco.languages.getLanguages().some((lang) => lang.id === 'guaxitask')
+  if (!exists) {
+    monaco.languages.register({
+      id: 'guaxitask',
+      extensions: ['.org'],
+      aliases: ['GuaxiTask', 'guaxitask', 'org'],
+      mimetypes: ['text/x-guaxitask']
+    })
+  }
+  monaco.languages.setMonarchTokensProvider('guaxitask', {
+    tokenizer: {
+      root: [
+        // 块起止标记
+        [/^\s*##GUAXI_TASK_(START|END)\b.*$/, 'keyword'],
+        // NOTES 起止（含 ("path")）
+        [/^\s*#NOTES\s+START\s*\(\s*"[^"]*"\s*\).*$/, 'string.link'],
+        [/^\s*#NOTES\s+(START|END)\b.*$/, 'keyword'],
+        // ##Date / ##Time 占位
+        [/##(Date|Time)\b/, 'regexp'],
+        // 字段标签：#FIELD NAME: （冒号前为大写字段名）
+        [/^\s*#[A-Z][A-Z ]*(?::|：)/, 'type'],
+        // 优先级
+        [/\[#[ABC]\]/, 'attribute'],
+        // 状态关键字
+        [/\b(?:TODO|NEXT|DOING|WAITING|PAUSED|HOLD|CANCELLED|DONE)\b/, 'constant'],
+        // 内联代码/链接/引号路径
+        [/"[^"]*"/, 'string'],
+        [/https?:\/\/\S+/, 'string.link'],
+        [/`[^`]*`/, 'string'],
+      ]
+    }
+  })
+  logger.info('[Editor] GuaxiTask language registered/configured', { languageId: 'guaxitask', existed: exists })
+
+  // monaco-vscode-api 启用了 TextMate 服务覆盖，Monarch tokenizer 不生效，
+  // 这里用语义 token provider 渲染高亮（与 tree-sitter 高亮同一通道，受主题 semanticTokenColors 着色）。
+  const GTASK_LEGEND = { tokenTypes: ['keyword', 'regexp', 'number', 'string', 'comment', 'type'], tokenModifiers: [] }
+  const gtIdx = { keyword: 0, regexp: 1, number: 2, string: 3, comment: 4, type: 5 }
+  // 在指定行范围内构建语义 token（位置为文档绝对位置，编码为相对增量）。
+  const buildRangeSemanticTokens = (model, range) => {
+    const toks = collectGuaxiTaskTokens(model.getValue())
+    const startLine = range ? Math.max(1, range.startLineNumber) - 1 : 0
+    const endLine = range ? Math.max(0, range.endLineNumber - 1) : Number.MAX_SAFE_INTEGER
+    const data = []
+    let prevLine = 0, prevChar = 0
+    for (const t of toks) {
+      if (t.line < startLine || t.line > endLine) continue
+      const dLine = t.line - prevLine
+      const dChar = dLine === 0 ? t.char - prevChar : t.char
+      data.push(dLine, dChar, t.len, gtIdx[t.type] ?? 0, 0)
+      prevLine = t.line; prevChar = t.char
+    }
+    return { data: new Uint32Array(data) }
+  }
+  const isOrgUri = (model) => {
+    try { return /\.org$/i.test(String(model?.uri?.path || model?.uri?.fsPath || '')) } catch { return false }
+  }
+  // 用 Range 语义 token provider（monaco-vscode-api 下只有 range 变体被桥接，与 textmateLoader 一致）。
+  monaco.languages.registerDocumentRangeSemanticTokensProvider('guaxitask', {
+    getLegend: () => GTASK_LEGEND,
+    provideDocumentRangeSemanticTokens: (model, range) => buildRangeSemanticTokens(model, range),
+  })
+  // 兜底：.org 在 vscode-api 下回退为 plaintext 时，按 uri 守卫也能高亮。
+  monaco.languages.registerDocumentRangeSemanticTokensProvider('plaintext', {
+    getLegend: () => GTASK_LEGEND,
+    provideDocumentRangeSemanticTokens: (model, range) => (isOrgUri(model) ? buildRangeSemanticTokens(model, range) : { data: new Uint32Array() }),
+  })
+}
+
+// ##Date / ##Time 的中文格式化（应用代码，可用 Date）
+const formatGuaxiDate = () => {
+  const d = new Date()
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}年${p(d.getMonth() + 1)}月${p(d.getDate())}日`
+}
+const formatGuaxiTime = () => {
+  const d = new Date()
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}年${p(d.getMonth() + 1)}月${p(d.getDate())}日 ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
+// 任务块模板（单引号字符串保证 ${n} 作为 snippet 占位符字面量保留）
+const buildGuaxiTaskSnippet = () => {
+  const now = formatGuaxiTime()
+  return [
+    '##GUAXI_TASK_START',
+    '#MANAGE TASK TYPE: ${1|work 工作,life 生活,study 学习|}',
+    '#INTERNAL ID: ',
+    '#ID: ${2}',
+    '#PARENT TASK: ${3}',
+    '#TYPE: ${4|task,bug,other|}',
+    '#DEADLINE: ${5}',
+    '#CREATE TIME: ' + now,
+    '#ORIGIN: ${6|dev 研发,QA 测试,customer 客户,other 其他|}',
+    '#SEVERITY: ${7|normal 一般,critical 致命,major 严重,minor 轻微,trivial 微不足道|}',
+    '#PRIORITY: ${8|[#A],[#B],[#C],|}',
+    '#STATUS: ${9|待办 TODO,下一步 NEXT,进行中 DOING,等待 WAITING,暂停 PAUSED,搁置 HOLD,已取消 CANCELLED,已完成 DONE|}',
+    '#PROGRESS: ${10:0%}',
+    '#FIX STATUS: ${11|debug 调试,test 自测,review 代码审查,approval 提交审批,fixed 已修复,other 其他|}',
+    '#DESCRIPTION: ${12:简述}',
+    '#ROOT CAUSE: ${13}',
+    '#CONDITION OF OCCURRENCE: ',
+    '#FIXED DETAILS: ',
+    '#TESTING SUGGESTIONS: ',
+    '#AFFECTED RELEASE: ${14}',
+    '#REVIEW LINK: ${15}',
+    '#EXTRA IMPACT: ',
+    '#CONTENT: ${16}',
+    '#NOTES START:',
+    '${0}',
+    '#NOTES END:',
+    '##GUAXI_TASK_END',
+    ''
+  ].join('\n')
+}
+
 ensureLatexLanguage()
 ensureMermaidLanguage()
 ensureTypstLanguage()
+ensureGuaxiTaskLanguage()
 // 添加 GitPanel 组件引用
 const gitPanel = ref(null)
 
@@ -2065,6 +2271,8 @@ const syncRealtimeValueToRawContent = debounce((value) => {
   const path = fileTreeStore.activeTab;
   if (path) fileTreeStore.updateTabContent(path, value);
   scheduleLatexPreviewRebuild();
+  scheduleOrgPreviewRefresh();
+  scheduleOrgValidate();
 }, 120);
 
 let editor = null;
@@ -5568,6 +5776,46 @@ const registerMarkdownLanguageFeatures = () => {
     }
   }));
 
+  // GUAXI 任务块：##GUAXI_TASK_START 模板片段 + ##Date/##Time 展开
+  const provideGuaxiTaskCompletions = (model, position) => {
+    const lineContent = model.getLineContent(position.lineNumber)
+    const before = lineContent.slice(0, position.column - 1)
+    const suggestions = []
+    const blockMatch = /(#{1,2}[A-Za-z_]*)$/.exec(before)
+    if (blockMatch) {
+      const range = new monaco.Range(position.lineNumber, position.column - blockMatch[1].length, position.lineNumber, position.column)
+      suggestions.push({
+        label: '##GUAXI_TASK_START',
+        kind: monaco.languages.CompletionItemKind.Snippet,
+        detail: '插入任务/Bug 块模板',
+        insertText: buildGuaxiTaskSnippet(),
+        insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+        range,
+        sortText: '0_guaxitask_block',
+      })
+    }
+    const dtMatch = /##(Date|Time|D|T|Da|Ti)?$/i.exec(before)
+    if (dtMatch) {
+      const typed = dtMatch[0]
+      const range = new monaco.Range(position.lineNumber, position.column - typed.length, position.lineNumber, position.column)
+      suggestions.push({ label: '##Date', kind: monaco.languages.CompletionItemKind.Value, detail: '插入今天日期', insertText: formatGuaxiDate(), range, sortText: '0_guaxitask_date' })
+      suggestions.push({ label: '##Time', kind: monaco.languages.CompletionItemKind.Value, detail: '插入当前日期时间', insertText: formatGuaxiTime(), range, sortText: '0_guaxitask_time' })
+    }
+    return { suggestions }
+  }
+  const isOrgModelUri = (model) => {
+    try { return /\.org$/i.test(String(model?.uri?.path || model?.uri?.fsPath || '')) } catch { return false }
+  }
+  markdownLanguageFeatureDisposables.push(monaco.languages.registerCompletionItemProvider('guaxitask', {
+    triggerCharacters: ['#'],
+    provideCompletionItems: (model, position) => provideGuaxiTaskCompletions(model, position),
+  }));
+  // 兜底：.org 在 vscode-api 下回退为 plaintext 时也能触发模板/日期补全
+  markdownLanguageFeatureDisposables.push(monaco.languages.registerCompletionItemProvider('plaintext', {
+    triggerCharacters: ['#'],
+    provideCompletionItems: (model, position) => (isOrgModelUri(model) ? provideGuaxiTaskCompletions(model, position) : { suggestions: [] }),
+  }));
+
   markdownLanguageFeatureDisposables.push(monaco.languages.registerSignatureHelpProvider('markdown', {
     signatureHelpTriggerCharacters: ['(', ',', '{', '['],
     signatureHelpRetriggerCharacters: [','],
@@ -8894,6 +9142,8 @@ const MARKDOWN_FENCE_LANG_MAP = {
   java: 'java',
   tex: 'latex',
   latex: 'latex',
+  typ: 'typst',
+  org: 'guaxitask',
   mmd: 'mermaid',
   mermaid: 'mermaid',
 }
@@ -10332,6 +10582,22 @@ const setupEditorListeners = () => {
     refreshMarkdownSuggestMode(editor)
     scheduleSourceSyntaxHighlight(editor, 'cursor');
     editorEffectsLeft?.updateCursorTarget();
+    updateActiveOrgBlock(e.position.lineNumber);
+  });
+
+  // .org 任务文件：Ctrl/Cmd + 点击 #NOTES START("path") 打开外链笔记
+  editor.onMouseDown((e) => {
+    try {
+      if (!isOrgTaskFile.value) return
+      const me = e.event
+      if (!(me?.ctrlKey || me?.metaKey)) return
+      const pos = e.target?.position
+      const m = editor.getModel?.()
+      if (!pos || !m) return
+      const text = m.getLineContent(pos.lineNumber)
+      const match = /#NOTES\s+START\s*\(\s*"([^"]+)"\s*\)/i.exec(text)
+      if (match) { handleOpenNotesNav(match[1]) }
+    } catch { /* noop */ }
   });
 
   const model = editor.getModel();
@@ -10420,6 +10686,8 @@ const setupEditorListeners = () => {
       rawContent.value = content;
       if (path) fileTreeStore.updateTabContent(path, content);
       scheduleLatexPreviewRebuild();
+      scheduleOrgPreviewRefresh();
+      scheduleOrgValidate();
       if (isLargeDocument(model)) {
         syncPrimaryOverlayIdle();
       } else {
@@ -12886,6 +13154,20 @@ const insertMarkdownTextAtCursor = (text, source = 'markdown-toolbar') => {
 const insertImage = async () => {
   try {
     const targetEditor = getActiveEditor();
+    // .org 任务文件：直接用 Monaco 在光标处插入 markdown 图片语法（CONTENT/NOTES 支持图片）
+    if (isOrgTaskFile.value) {
+      if (!targetEditor) return
+      const selected = await open({ multiple: false, directory: false, filters: [{ name: 'Image', extensions: MARKDOWN_IMAGE_EXTENSIONS }] })
+      const sourcePath = Array.isArray(selected) ? selected[0] : selected
+      if (!sourcePath) return
+      const imported = await importMarkdownImageToResourceRepo(sourcePath)
+      const md = `![${imported.alt}](${imported.url})`
+      const pos = targetEditor.getPosition()
+      targetEditor.executeEdits('org-insert-image', [{ range: new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column), text: md, forceMoveMarkers: true }])
+      refreshOrgPreviewContent()
+      message.success('图片已导入并插入')
+      return
+    }
     if (!ensureMarkdownEditor(targetEditor)) {
       logger.warn('[MarkdownImage] insert aborted because markdown editor is not ready');
       return;
@@ -18027,6 +18309,344 @@ const handleLatexExport = async () => {
   await handleExportSelect('pdf')
 }
 
+// ───────── GUAXI 任务块 .org 预览（分屏，复用 latex 的分屏布局/宽度/resizer）─────────
+const isOrgTaskFile = computed(() => {
+  const path = selectedFile.value?.path || ''
+  return /\.org$/i.test(path)
+})
+const orgPreviewVisible = ref(false)
+const orgPreviewContent = ref('')
+// 从文件路径推导任务分类（work/life/study）
+const orgPreviewCategory = computed(() => {
+  const p = String(selectedFile.value?.path || '').replace(/\\/g, '/').toLowerCase()
+  if (/\/work\//.test(p)) return 'work'
+  if (/\/life\//.test(p)) return 'life'
+  if (/\/study\//.test(p)) return 'study'
+  return ''
+})
+// 是否处于任一分屏预览（用于布局类与 resizer 显隐）
+const isAnySplitPreview = computed(
+  () => (isPdfPreviewDoc.value && latexPreviewVisible.value) || (isOrgTaskFile.value && orgPreviewVisible.value)
+)
+let orgPreviewDebounceTimer = null
+const refreshOrgPreviewContent = () => {
+  orgPreviewContent.value = getCurrentTexContent()
+}
+const scheduleOrgPreviewRefresh = () => {
+  if (!orgPreviewVisible.value || !isOrgTaskFile.value) return
+  if (orgPreviewDebounceTimer) clearTimeout(orgPreviewDebounceTimer)
+  orgPreviewDebounceTimer = setTimeout(() => {
+    orgPreviewDebounceTimer = null
+    refreshOrgPreviewContent()
+  }, 400)
+}
+const toggleOrgPreview = () => {
+  orgPreviewVisible.value = !orgPreviewVisible.value
+  if (orgPreviewVisible.value) refreshOrgPreviewContent()
+}
+
+// 语法校验 → Monaco markers（红/黄波浪线 + 问题面板），与预览诊断一致
+let orgValidateTimer = null
+const validateOrgMarkers = () => {
+  if (!isOrgTaskFile.value) return
+  const ed = getActiveEditor()
+  const model = ed?.getModel?.()
+  if (!model) return
+  try {
+    const diags = validateTaskBlocks(model.getValue(), orgPreviewCategory.value)
+    const markers = diags.map((d) => ({
+      severity: d.severity === 'error' ? monaco.MarkerSeverity.Error : monaco.MarkerSeverity.Warning,
+      message: d.message,
+      startLineNumber: d.line,
+      startColumn: 1,
+      endLineNumber: d.line,
+      endColumn: model.getLineMaxColumn(Math.min(d.line, model.getLineCount())),
+    }))
+    monaco.editor.setModelMarkers(model, 'guaxitask', markers)
+  } catch (e) {
+    logger.warn('[OrgValidate] failed', e)
+  }
+  // 装饰高亮：不依赖 tokenizer/主题，确保 .org 关键字着色稳定生效
+  applyOrgDecorations(ed)
+}
+// .org 关键字装饰高亮（覆盖式渲染，绕过 monaco-vscode-api 的 tokenizer/主题不确定性）
+const orgDecoCollections = new WeakMap()
+const applyOrgDecorations = (targetEditor) => {
+  if (!targetEditor) return
+  const model = targetEditor.getModel?.()
+  if (!model) return
+  const isOrg = /\.org$/i.test(String(model.uri?.path || model.uri?.fsPath || ''))
+  let col = orgDecoCollections.get(targetEditor)
+  if (!isOrg) { if (col) col.clear(); return }
+  try {
+    const toks = collectGuaxiTaskTokens(model.getValue())
+    const maxLine = model.getLineCount()
+    const decos = toks
+      .filter((t) => t.line + 1 <= maxLine)
+      .map((t) => ({
+        range: new monaco.Range(t.line + 1, t.char + 1, t.line + 1, t.char + 1 + t.len),
+        options: { inlineClassName: 'gtask-tok gtask-' + t.type },
+      }))
+    if (!col) { col = targetEditor.createDecorationsCollection(decos); orgDecoCollections.set(targetEditor, col) }
+    else col.set(decos)
+  } catch (e) {
+    logger.warn('[OrgDeco] failed', e)
+  }
+}
+const scheduleOrgValidate = () => {
+  if (!isOrgTaskFile.value) return
+  if (orgValidateTimer) clearTimeout(orgValidateTimer)
+  orgValidateTimer = setTimeout(() => { orgValidateTimer = null; validateOrgMarkers() }, 500)
+}
+// 预览编辑/新建/删除后立即落盘（写源文件→文件监听重建索引→任务管理器实时同步）
+const persistActiveOrgFile = () => { try { saveContent() } catch (e) { logger.warn('[Org] persist failed', e) } }
+// 预览诊断点击 → 跳转编辑器对应行
+const handleOrgGotoLine = (line) => {
+  const ed = getActiveEditor()
+  if (!ed || !line) return
+  try {
+    ed.revealLineInCenter(line)
+    ed.setPosition({ lineNumber: line, column: 1 })
+    ed.focus()
+  } catch { /* noop */ }
+}
+
+// 打开 .org 文件时立即校验一次（标记问题）+ 刷新预览内容（NOTES 外链跳转后右侧渲染新文件）
+watch(() => selectedFile.value?.path, () => {
+  if (isOrgTaskFile.value) {
+    scheduleOrgValidate()
+    // 等待模型重新绑定后刷新预览内容
+    setTimeout(() => { if (isOrgTaskFile.value && orgPreviewVisible.value) refreshOrgPreviewContent() }, 80)
+  }
+})
+
+// 预览「新建 Bug/任务」：在文档末尾插入一个新块（无父任务），写回并打开预览
+const createOrgBlockFromPreview = (taskType) => {
+  const ed = getActiveEditor()
+  const model = ed?.getModel?.()
+  if (!model || !isOrgTaskFile.value) return
+  const nb = buildNewBlock({
+    category: orgPreviewCategory.value || 'work',
+    taskType,
+    id: taskType === 'other' ? `GX-OTHER-${Date.now().toString(36)}` : '',
+    createTime: formatGuaxiTime(),
+  })
+  const lastLine = model.getLineCount()
+  const col = model.getLineMaxColumn(lastLine)
+  const text = (model.getValue().trim() ? '\n\n' : '') + serializeBlock(nb) + '\n'
+  ed.executeEdits('org-new-block', [{ range: new monaco.Range(lastLine, col, lastLine, col), text, forceMoveMarkers: true }])
+  refreshOrgPreviewContent()
+  scheduleOrgValidate()
+  persistActiveOrgFile()
+  message.success(taskType === 'bug' ? '已新建 Bug' : '已新建任务')
+}
+
+// 在指定块的上方/下方插入新块
+const handleInsertOrgBlock = ({ taskType, where, block }) => {
+  const ed = getActiveEditor()
+  const model = ed?.getModel?.()
+  if (!model || !block || !isOrgTaskFile.value) return
+  const nb = buildNewBlock({
+    category: orgPreviewCategory.value || 'work',
+    taskType,
+    id: taskType === 'other' ? `GX-OTHER-${Date.now().toString(36)}` : '',
+    createTime: formatGuaxiTime(),
+  })
+  const body = serializeBlock(nb)
+  let range, text
+  if (where === 'above') {
+    const line = Math.max(1, block.blockStartLine)
+    range = new monaco.Range(line, 1, line, 1)
+    text = body + '\n\n'
+  } else {
+    const line = Math.min(model.getLineCount(), block.blockEndLine)
+    range = new monaco.Range(line, model.getLineMaxColumn(line), line, model.getLineMaxColumn(line))
+    text = '\n\n' + body
+  }
+  ed.executeEdits('org-insert-rel-block', [{ range, text, forceMoveMarkers: true }])
+  refreshOrgPreviewContent()
+  scheduleOrgValidate()
+  persistActiveOrgFile()
+  message.success(taskType === 'bug' ? '已新建 Bug' : '已新建任务')
+}
+const handleDeleteOrgBlock = async (b) => {
+  const ed = getActiveEditor()
+  const model = ed?.getModel?.()
+  if (!model || !b) return
+  const ok = await confirmDialog(`确定删除「${b.description || b.id || '该任务'}」吗？此操作不可撤销。`, { title: '删除任务', kind: 'warning', okLabel: '删除', cancelLabel: '取消' })
+  if (!ok) return
+  try {
+    const start = Math.max(1, b.blockStartLine)
+    let endLineToRemove = Math.min(model.getLineCount(), b.blockEndLine)
+    // 连同块后紧邻的一个空行一起删除，避免留下多余空行
+    if (endLineToRemove < model.getLineCount() && model.getLineContent(endLineToRemove + 1).trim() === '') {
+      endLineToRemove += 1
+    }
+    const range = endLineToRemove >= model.getLineCount()
+      ? new monaco.Range(start, 1, model.getLineCount(), model.getLineMaxColumn(model.getLineCount()))
+      : new monaco.Range(start, 1, endLineToRemove + 1, 1)
+    ed.executeEdits('org-delete-block', [{ range, text: '', forceMoveMarkers: true }])
+    refreshOrgPreviewContent()
+    scheduleOrgValidate()
+    persistActiveOrgFile()
+    message.success('已删除任务')
+  } catch (e) {
+    logger.error('[OrgDelete] failed', e)
+    message.error('删除失败：' + (e?.message || e))
+  }
+}
+
+// ── 光标同步：定位光标所在任务块 ──
+const activeOrgBlockLine = ref(0)
+const updateActiveOrgBlock = (lineNumber) => {
+  if (!isOrgTaskFile.value || !orgPreviewVisible.value) return
+  try {
+    const ed = getActiveEditor()
+    const model = ed?.getModel?.()
+    if (!model) return
+    const bs = parseTaskBlocks(model.getValue(), orgPreviewCategory.value)
+    const hit = bs.find((b) => lineNumber >= b.blockStartLine && lineNumber <= b.blockEndLine)
+    if (hit) activeOrgBlockLine.value = hit.blockStartLine
+  } catch { /* noop */ }
+}
+
+// 预览编辑保存 → 应用到 Monaco model（按块行区间替换），再刷新预览/校验
+const handleApplyOrgBlock = ({ startLine, endLine, text }) => {
+  const ed = getActiveEditor()
+  const model = ed?.getModel?.()
+  if (!model || !startLine || !endLine) return
+  try {
+    const end = Math.min(endLine, model.getLineCount())
+    const range = new monaco.Range(startLine, 1, end, model.getLineMaxColumn(end))
+    ed.executeEdits('org-apply-block', [{ range, text, forceMoveMarkers: true }])
+    refreshOrgPreviewContent()
+    scheduleOrgValidate()
+    persistActiveOrgFile()
+  } catch (e) {
+    logger.error('[OrgPreview] apply block failed', e)
+    message.error('回写失败：' + (e?.message || e))
+  }
+}
+
+// 在光标所在块下方插入一个新子任务/子bug（系统生成唯一 ID）
+const createOrgSubBlock = (taskType) => {
+  const ed = getActiveEditor()
+  const model = ed?.getModel?.()
+  if (!model || !isOrgTaskFile.value) return
+  const line = ed.getPosition()?.lineNumber || 1
+  const bs = parseTaskBlocks(model.getValue(), orgPreviewCategory.value)
+  const parent = bs.find((b) => line >= b.blockStartLine && line <= b.blockEndLine)
+  const nb = buildNewBlock({
+    category: orgPreviewCategory.value || 'work',
+    taskType,
+    id: taskType === 'other' ? `GX-OTHER-${Date.now().toString(36)}` : '',
+    parentId: parent?.id || '',
+    createTime: formatGuaxiTime(),
+  })
+  const text = '\n' + serializeBlock(nb) + '\n'
+  const insertLine = parent ? parent.blockEndLine : model.getLineCount()
+  const col = model.getLineMaxColumn(Math.min(insertLine, model.getLineCount()))
+  const range = new monaco.Range(insertLine, col, insertLine, col)
+  ed.executeEdits('org-sub-block', [{ range, text, forceMoveMarkers: true }])
+  refreshOrgPreviewContent()
+  scheduleOrgValidate()
+  persistActiveOrgFile()
+  message.success(taskType === 'bug' ? '已创建子 Bug' : '已创建子任务')
+}
+
+// 为当前块创建外部 NOTES 文件并把 NOTES 块改为外链
+const addOrgNotesFile = async () => {
+  const ed = getActiveEditor()
+  const model = ed?.getModel?.()
+  if (!model || !isOrgTaskFile.value) return
+  const line = ed.getPosition()?.lineNumber || 1
+  const bs = parseTaskBlocks(model.getValue(), orgPreviewCategory.value)
+  const blk = bs.find((b) => line >= b.blockStartLine && line <= b.blockEndLine)
+  if (!blk) { message.warning('请把光标放在某个任务块内'); return }
+  const idPart = (blk.id || blk.internalId || 'task').replace(/[\\/:*?"<>|]/g, '_')
+  const parentPart = blk.parentId ? `_${blk.parentId.replace(/[\\/:*?"<>|]/g, '_')}` : ''
+  const fileName = `notes_${idPart}${parentPart}.org`
+  const cur = String(selectedFile.value?.path || '').replace(/\\/g, '/')
+  const dir = cur.slice(0, cur.lastIndexOf('/'))
+  const abs = `${dir}/${fileName}`
+  try {
+    // 若已有内联 notes，迁移其内容到新文件
+    const seed = blk.notes?.kind === 'inline' && blk.notes.value ? blk.notes.value : `# ${blk.description || blk.id || 'notes'}\n`
+    await invoke('create_file_with_content', { path: abs, content: seed }).catch(() => invoke('task_write_file', { path: abs, content: seed }))
+    const updated = { ...blk, notes: { kind: 'file', value: fileName } }
+    handleApplyOrgBlock({ startLine: blk.blockStartLine, endLine: blk.blockEndLine, text: serializeBlock(updated) })
+    message.success(`已创建 ${fileName} 并改为外链`)
+  } catch (e) {
+    logger.error('[OrgNotes] add notes file failed', e)
+    message.error('创建 NOTES 文件失败：' + (e?.message || e))
+  }
+}
+
+// 复制 Bug 信息（完整可读）
+const handleCopyOrgBlock = async (b) => {
+  const lines = [
+    `[${(b.taskType || 'task').toUpperCase()}] ${b.description || b.id || ''}`,
+    b.id ? `ID: ${b.id}` : '',
+    b.parentId ? `Parent: ${b.parentId}` : '',
+    `Status: ${b.status}    Priority: ${b.priority || '-'}    Severity: ${b.severity || '-'}`,
+    b.deadline ? `Deadline: ${b.deadline}` : '',
+    b.rootCause ? `Root Cause: ${b.rootCause}` : '',
+    b.conditionOfOccurrence ? `Condition: ${b.conditionOfOccurrence}` : '',
+    b.fixedDetails ? `Fixed: ${b.fixedDetails}` : '',
+    b.affectedRelease ? `Affected Release: ${b.affectedRelease}` : '',
+    b.reviewLink ? `Review: ${b.reviewLink}` : '',
+  ].filter(Boolean)
+  try { await navigator.clipboard.writeText(lines.join('\n')); message.success('已复制 Bug 信息') }
+  catch { message.error('复制失败') }
+}
+// 导出提交信息（固定格式；多行字段左对齐去缩进，Extra Impact 原样输出不生成 bug 号）
+const handleExportOrgBlock = async (b) => {
+  const dedent = (v) => String(v || '').split('\n').map((l) => l.replace(/^\s+/, '')).join('\n').replace(/^\n+|\n+$/g, '')
+  const parts = []
+  parts.push(`Description: ${b.description || ''}`)
+  parts.push(`Root Cause: ${b.rootCause || ''}`)
+  parts.push(`Condition of Occurrence: \n${dedent(b.conditionOfOccurrence)}`)
+  parts.push(`Fixed Details: \n${dedent(b.fixedDetails)}`)
+  parts.push(`Testing Suggestions: \n${dedent(b.testingSuggestions)}`)
+  parts.push(`Affected Release: ${b.affectedRelease || ''}`)
+  for (const ei of (b.extraImpacts || [])) parts.push(`Extra Impact: \n${dedent(ei)}`)
+  parts.push(`Review: ${b.reviewLink || ''}`)
+  try { await navigator.clipboard.writeText(parts.join('\n')); message.success('已复制提交信息') }
+  catch { message.error('复制失败') }
+}
+
+// NOTES 外链导航（左右联动 + 返回栈）
+const orgNavStack = ref([])
+const handleOpenNotesNav = async (notesPath) => {
+  const curPath = selectedFile.value?.path || ''
+  orgNavStack.value.push(curPath)
+  await handleOpenNotesFromPreview(notesPath)
+}
+const handleOrgPreviewBack = async () => {
+  const prev = orgNavStack.value.pop()
+  if (!prev) return
+  try {
+    const res = await fileTreeStore.fetchFileContent(prev)
+    if (res?.ok) await fileTreeStore.openFileInTab(prev, res.content, { unsupported: !!res.unsupported })
+  } catch (e) { logger.error('[OrgPreview] back failed', e) }
+}
+// 预览中点击 NOTES 外链：解析相对路径并在编辑区打开（阶段3 完善左右同步/返回/搜索）
+const handleOpenNotesFromPreview = async (notesPath) => {
+  try {
+    const cur = String(selectedFile.value?.path || '').replace(/\\/g, '/')
+    const dir = cur.slice(0, cur.lastIndexOf('/'))
+    const abs = /^([a-zA-Z]:\/|\/)/.test(notesPath) ? notesPath : `${dir}/${notesPath}`
+    const res = await fileTreeStore.fetchFileContent(abs)
+    if (res?.ok) {
+      await fileTreeStore.openFileInTab(abs, res.content, { unsupported: !!res.unsupported })
+    } else {
+      message.warning('NOTES 文件不存在，可在编辑区用工具栏「添加 NOTES 文件」创建')
+    }
+  } catch (e) {
+    logger.error('[OrgPreview] open notes failed', e)
+  }
+}
+
 const lastSelectedFilePath = ref(null)
 let skipPreviousTabSyncOnce = false
 
@@ -22714,6 +23334,19 @@ onUnmounted(() => {
 </style>
 
 <style>
+/* GUAXI 任务块 .org 关键字装饰高亮（全局，Monaco 装饰渲染在编辑器 DOM 中） */
+.gtask-tok { font-weight: 600; }
+/* 亮色：参考 GitHub Light / One Light，柔和且对比清晰 */
+.gtask-keyword { color: #6f42c1 !important; }   /* 块标记 / #字段名 —— 紫 */
+.gtask-regexp { color: #0969da !important; }    /* 状态 / ##Date·##Time —— 蓝 */
+.gtask-number { color: #cf222e !important; }    /* [#A] 优先级 —— 红 */
+.gtask-string { color: #0a7d33 !important; font-weight: 500; } /* 路径 / 链接 —— 绿 */
+/* 暗色：One Dark */
+:root[data-guaxi-theme='dark'] .gtask-keyword { color: #c678dd !important; }
+:root[data-guaxi-theme='dark'] .gtask-regexp { color: #61afef !important; }
+:root[data-guaxi-theme='dark'] .gtask-number { color: #e06c75 !important; }
+:root[data-guaxi-theme='dark'] .gtask-string { color: #98c379 !important; }
+
 /* 数学公式样式 */
 .math-inline {
   display: inline;

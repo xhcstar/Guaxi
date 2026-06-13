@@ -260,6 +260,7 @@ async fn main() {
             commands::taskmanager::task_read_file,
             commands::taskmanager::task_write_file,
             commands::taskmanager::task_write_report_file,
+            commands::taskmanager::task_validate_content,
             commands::taskmanager::task_start_watching,
             commands::task_manager_window::create_task_manager_window,
             commands::markdown_reader_doc_process::markdown_reader_load_markdown_file,

@@ -1,4 +1,5 @@
 import { initialize } from '@codingame/monaco-vscode-api'
+import { registerExtension } from '@codingame/monaco-vscode-api/extensions'
 import getConfigurationServiceOverride, {
   initUserConfiguration,
 } from '@codingame/monaco-vscode-configuration-service-override'
@@ -51,6 +52,30 @@ export const initializeGuaxiVscodeServices = async () => {
     })
 
     logger.info('[VSCodeApi] monaco-vscode language services initialized')
+
+    // 注册 GUAXI 任务块语言（.org）到 vscode-api 语言服务，否则自定义语言会回退为 Plain Text，
+    // 导致 Monarch/语义高亮与补全 provider 都不生效。
+    try {
+      registerExtension({
+        name: 'guaxi-task',
+        publisher: 'guaxi',
+        version: '1.0.0',
+        engines: { vscode: '*' },
+        contributes: {
+          languages: [
+            {
+              id: 'guaxitask',
+              extensions: ['.org'],
+              aliases: ['GuaxiTask', 'guaxitask', 'org'],
+            },
+          ],
+        },
+      })
+      logger.info('[VSCodeApi] guaxitask language registered')
+    } catch (e) {
+      logger.warn('[VSCodeApi] register guaxitask language failed', e)
+    }
+
     return true
   })().catch((error) => {
     vscodeApiInitPromise = null

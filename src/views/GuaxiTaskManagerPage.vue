@@ -17,24 +17,21 @@
           <template #prefix><n-icon :component="Search20Regular" /></template>
         </n-input>
         <n-button-group size="small" class="tm-view-switch">
-          <n-button :type="view === 'kanban' ? 'primary' : 'default'" @click="view = 'kanban'">
-            <template #icon><n-icon :component="Board20Regular" /></template>看板
+          <n-button :type="view === 'kanban' ? 'primary' : 'default'" title="看板" @click="view = 'kanban'">
+            <template #icon><n-icon :component="Board20Regular" /></template>
           </n-button>
-          <n-button :type="view === 'calendar' ? 'primary' : 'default'" @click="view = 'calendar'">
-            <template #icon><n-icon :component="CalendarLtr20Regular" /></template>日历
+          <n-button :type="view === 'calendar' ? 'primary' : 'default'" title="日历" @click="view = 'calendar'">
+            <template #icon><n-icon :component="CalendarLtr20Regular" /></template>
           </n-button>
-          <n-button :type="view === 'stats' ? 'primary' : 'default'" @click="view = 'stats'">
-            <template #icon><n-icon :component="DataPie20Regular" /></template>统计
+          <n-button :type="view === 'stats' ? 'primary' : 'default'" title="统计" @click="view = 'stats'">
+            <template #icon><n-icon :component="DataPie20Regular" /></template>
           </n-button>
         </n-button-group>
-        <n-button size="small" @click="showImport = true">
-          <template #icon><n-icon :component="ArrowImport20Regular" /></template>导入
+        <n-button size="small" circle title="导入任务" @click="showImport = true">
+          <template #icon><n-icon :component="ArrowImport20Regular" /></template>
         </n-button>
-        <n-button size="small" @click="showExport = true">
-          <template #icon><n-icon :component="ArrowExportLtr20Regular" /></template>导出报表
-        </n-button>
-        <n-button size="small" tertiary @click="reload">
-          <template #icon><n-icon :component="ArrowSync20Regular" /></template>刷新
+        <n-button size="small" circle title="导出报表" @click="openExport">
+          <template #icon><n-icon :component="ArrowExportLtr20Regular" /></template>
         </n-button>
       </div>
     </header>
@@ -57,19 +54,16 @@
               @change="(e) => onDragChange(col.key, e)"
             >
               <template #item="{ element }">
-                <div class="tm-card" :class="{ overdue: isOverdue(element) }" @click="openEditor(element)">
+                <div class="tm-card" :class="{ overdue: isOverdue(element) }">
                   <div class="tm-card-top">
                     <span v-if="element.priority" class="tm-pri" :class="'pri-' + element.priority">{{ element.priority }}</span>
                     <span class="tm-card-title">{{ element.title || '(无标题)' }}</span>
                   </div>
                   <div class="tm-card-meta">
                     <n-tag size="tiny" :bordered="false" :color="catTagColor(element.category)">{{ catLabel(element.category) }}</n-tag>
+                    <span class="tm-type" :class="'tt-' + element.taskType">{{ typeLabel(element.taskType) }}</span>
                     <span v-if="element.deadline" class="tm-date deadline"><n-icon :component="Flag16Regular" />{{ element.deadline }}</span>
-                    <span v-else-if="element.scheduled" class="tm-date"><n-icon :component="CalendarClock16Regular" />{{ element.scheduled }}</span>
-                    <span v-if="element.clock_minutes > 0" class="tm-clock">{{ fmtClock(element.clock_minutes) }}</span>
-                  </div>
-                  <div v-if="element.tags && element.tags.length" class="tm-tags">
-                    <span v-for="t in element.tags" :key="t" class="tm-tag">#{{ t }}</span>
+                    <span v-if="element.displayId" class="tm-did">{{ element.displayId }}</span>
                   </div>
                 </div>
               </template>
@@ -79,12 +73,42 @@
         </section>
 
         <!-- 日历 -->
-        <section v-show="view === 'calendar'" class="tm-calendar">
+        <section v-if="view === 'calendar'" class="tm-calendar">
           <FullCalendar ref="calRef" :options="calendarOptions" />
         </section>
 
+        <!-- 日历悬浮详情卡片 -->
+        <Teleport to="body">
+          <div
+            v-if="hover.visible && hover.item"
+            class="tm-cal-tip"
+            :class="isDark ? 'dark' : 'light'"
+            :style="{ left: hover.x + 'px', top: hover.y + 'px' }"
+          >
+            <div class="tip-head">
+              <span class="tip-type" :class="'tt-' + hover.item.taskType">{{ typeLabel(hover.item.taskType) }}</span>
+              <span v-if="hover.item.priority" class="tip-pri" :class="'pri-' + hover.item.priority">#{{ hover.item.priority }}</span>
+              <span class="tip-title">{{ hover.item.title }}</span>
+            </div>
+            <div class="tip-row"><span class="tip-k">状态</span><span class="tip-v">{{ statusZh(hover.item.status) }}</span></div>
+            <div v-if="hover.item.displayId" class="tip-row"><span class="tip-k">ID</span><span class="tip-v">{{ hover.item.displayId }}</span></div>
+            <div class="tip-row"><span class="tip-k">分类</span><span class="tip-v">{{ catLabel(hover.item.category) }}</span></div>
+            <div v-if="hover.item.severity" class="tip-row"><span class="tip-k">严重度</span><span class="tip-v">{{ hover.item.severity }}</span></div>
+            <div v-if="hover.item.deadline" class="tip-row"><span class="tip-k">截止</span><span class="tip-v">{{ hover.item.deadline }}</span></div>
+            <div v-if="hover.item.createTime" class="tip-row"><span class="tip-k">创建</span><span class="tip-v">{{ hover.item.createTime }}</span></div>
+          </div>
+        </Teleport>
+
         <!-- 统计 -->
-        <section v-show="view === 'stats'" class="tm-stats">
+        <section v-if="view === 'stats'" class="tm-stats">
+          <div class="tm-stats-bar">
+            <span class="tm-stats-title">统计概览</span>
+            <span class="tm-spacer2" />
+            <n-button size="small" type="primary" ghost @click="openFieldExport">
+              <template #icon><n-icon :component="ArrowExportLtr20Regular" /></template>
+              按字段筛选导出
+            </n-button>
+          </div>
           <div class="tm-stat-cards">
             <div class="tm-stat-card">
               <div class="tm-stat-num">{{ items.length }}</div>
@@ -102,9 +126,9 @@
               <div class="tm-stat-num">{{ completionRate }}%</div>
               <div class="tm-stat-label">完成率</div>
             </div>
-            <div class="tm-stat-card">
-              <div class="tm-stat-num">{{ fmtClock(totalClock) }}</div>
-              <div class="tm-stat-label">累计工时</div>
+            <div v-if="showBugStat" class="tm-stat-card">
+              <div class="tm-stat-num" style="color:#d03050">{{ bugCount }}</div>
+              <div class="tm-stat-label">Bug 数</div>
             </div>
           </div>
           <div class="tm-charts">
@@ -116,40 +140,6 @@
 
         <div v-if="loading" class="tm-loading-overlay"><n-spin :size="28" /></div>
     </main>
-
-    <!-- 任务编辑抽屉 -->
-    <n-drawer v-model:show="showEditor" :width="420" placement="right">
-      <n-drawer-content title="编辑任务" closable>
-        <n-form v-if="editing" label-placement="top" size="small">
-          <n-form-item label="状态">
-            <n-select v-model:value="editForm.status" :options="statusOptions" />
-          </n-form-item>
-          <n-form-item label="标题">
-            <n-input v-model:value="editForm.title" type="textarea" :autosize="{ minRows: 1, maxRows: 3 }" />
-          </n-form-item>
-          <n-form-item label="计划日期 (SCHEDULED)">
-            <n-date-picker v-model:formatted-value="editForm.scheduled" value-format="yyyy-MM-dd" type="date" clearable style="width:100%" />
-          </n-form-item>
-          <n-form-item label="截止日期 (DEADLINE)">
-            <n-date-picker v-model:formatted-value="editForm.deadline" value-format="yyyy-MM-dd" type="date" clearable style="width:100%" />
-          </n-form-item>
-          <n-form-item label="备注 / 正文">
-            <n-input v-model:value="editForm.notes" type="textarea" :autosize="{ minRows: 3, maxRows: 10 }" placeholder="任务说明、备注…" />
-          </n-form-item>
-          <div class="tm-edit-info">
-            <n-text depth="3" style="font-size:12px;">
-              {{ editing.file_path }} · 第 {{ editing.line }} 行
-            </n-text>
-          </div>
-        </n-form>
-        <template #footer>
-          <n-space>
-            <n-button @click="showEditor = false">取消</n-button>
-            <n-button type="primary" :loading="saving" @click="saveEditor">保存到 .org</n-button>
-          </n-space>
-        </template>
-      </n-drawer-content>
-    </n-drawer>
 
     <!-- 导入抽屉 -->
     <n-drawer v-model:show="showImport" :width="460" placement="right">
@@ -182,37 +172,93 @@
     </n-drawer>
 
     <!-- 导出抽屉 -->
-    <n-drawer v-model:show="showExport" :width="420" placement="right">
+    <n-drawer v-model:show="showExport" :width="640" placement="right">
       <n-drawer-content title="导出报表" closable>
-        <n-form label-placement="top" size="small">
+        <n-form label-placement="left" label-width="auto" size="small" class="tm-export-form">
           <n-form-item label="报表类型">
-            <n-select v-model:value="exportForm.kind" :options="reportKindOptions" />
+            <n-select v-model:value="exportForm.kind" :options="reportKindOptions" style="width:160px" @update:value="genPreview" />
           </n-form-item>
-          <n-form-item label="锚点日期">
-            <n-date-picker v-model:formatted-value="exportForm.date" value-format="yyyy-MM-dd" type="date" style="width:100%" />
+          <n-form-item label="开始日期">
+            <n-date-picker v-model:formatted-value="exportForm.from" value-format="yyyy-MM-dd" type="date" clearable style="width:200px" placeholder="默认按类型回溯" @update:formatted-value="genPreview" />
           </n-form-item>
-          <template v-if="exportForm.kind === 'custom'">
-            <n-form-item label="开始日期">
-              <n-date-picker v-model:formatted-value="exportForm.from" value-format="yyyy-MM-dd" type="date" style="width:100%" />
-            </n-form-item>
-            <n-form-item label="结束日期">
-              <n-date-picker v-model:formatted-value="exportForm.to" value-format="yyyy-MM-dd" type="date" style="width:100%" />
-            </n-form-item>
-          </template>
-          <n-form-item label="格式">
-            <n-radio-group v-model:value="exportForm.format">
-              <n-radio value="md">Markdown</n-radio>
-              <n-radio value="json">JSON</n-radio>
-            </n-radio-group>
+          <n-form-item label="结束日期">
+            <n-date-picker v-model:formatted-value="exportForm.to" value-format="yyyy-MM-dd" type="date" clearable style="width:200px" placeholder="默认今天" @update:formatted-value="genPreview" />
           </n-form-item>
         </n-form>
-        <n-card v-if="exportPreview" size="small" title="预览" class="tm-export-preview">
-          <pre>{{ exportPreview.slice(0, 2000) }}</pre>
-        </n-card>
+        <div class="tm-export-preview-wrap">
+          <div class="tm-export-preview-label">报表内容（纯文本，可编辑）</div>
+          <textarea v-model="exportPreview" class="tm-export-textarea" placeholder="点击「生成」后在此编辑纯文本报表…" spellcheck="false" />
+        </div>
         <template #footer>
           <n-space>
-            <n-button @click="genPreview" :loading="exporting">生成预览</n-button>
+            <n-button @click="genPreview" :loading="exporting">生成</n-button>
             <n-button type="primary" :disabled="!exportPreview" @click="saveReport">保存到文件…</n-button>
+            <n-button :disabled="!exportPreview" @click="copyReport">复制</n-button>
+          </n-space>
+        </template>
+      </n-drawer-content>
+    </n-drawer>
+
+    <!-- 按字段筛选导出 -->
+    <n-drawer v-model:show="showFieldExport" :width="760" placement="right">
+      <n-drawer-content title="按字段筛选导出" closable>
+        <div class="tm-fx">
+          <div class="tm-fx-filters">
+            <div class="tm-fx-row">
+              <label>分类
+                <n-select v-model:value="fxFilter.category" size="small" :options="fxCategoryOptions" @update:value="recomputeFx" />
+              </label>
+              <label>类型
+                <n-select v-model:value="fxFilter.taskType" size="small" :options="fxTypeOptions" @update:value="recomputeFx" />
+              </label>
+              <label>状态
+                <n-select v-model:value="fxFilter.status" size="small" :options="fxStatusOptions" @update:value="recomputeFx" />
+              </label>
+              <label>严重度
+                <n-select v-model:value="fxFilter.severity" size="small" :options="fxSeverityOptions" @update:value="recomputeFx" />
+              </label>
+              <label>优先级
+                <n-select v-model:value="fxFilter.priority" size="small" :options="fxPriorityOptions" @update:value="recomputeFx" />
+              </label>
+            </div>
+            <div class="tm-fx-row">
+              <label>创建起<n-date-picker v-model:formatted-value="fxFilter.createFrom" value-format="yyyy-MM-dd" type="date" size="small" clearable @update:formatted-value="recomputeFx" /></label>
+              <label>创建止<n-date-picker v-model:formatted-value="fxFilter.createTo" value-format="yyyy-MM-dd" type="date" size="small" clearable @update:formatted-value="recomputeFx" /></label>
+              <label>完成起<n-date-picker v-model:formatted-value="fxFilter.completedFrom" value-format="yyyy-MM-dd" type="date" size="small" clearable @update:formatted-value="recomputeFx" /></label>
+              <label>完成止<n-date-picker v-model:formatted-value="fxFilter.completedTo" value-format="yyyy-MM-dd" type="date" size="small" clearable @update:formatted-value="recomputeFx" /></label>
+              <label class="grow">描述含<n-input v-model:value="fxFilter.keyword" size="small" clearable placeholder="关键字" @update:value="recomputeFx" /></label>
+            </div>
+          </div>
+
+          <div class="tm-fx-stat">
+            匹配 <b>{{ fxMatched.length }}</b> 条 · Bug {{ fxCount('bug') }} / 任务 {{ fxCount('task') }} / 其他 {{ fxCount('other') }} · 已完成 {{ fxDoneCount }} / 未完成 {{ fxMatched.length - fxDoneCount }}
+          </div>
+
+          <div class="tm-fx-fields">
+            <div class="tm-fx-fields-head">
+              <span>导出字段</span>
+              <span class="tm-spacer2" />
+              <a @click="fxSelectAll(true)">全选</a> · <a @click="fxSelectAll(false)">清空</a>
+            </div>
+            <label v-for="f in EXPORT_FIELDS" :key="f.key" class="tm-fx-chk">
+              <input type="checkbox" :value="f.key" v-model="fxFields" @change="buildFxText" /> {{ f.label }}
+            </label>
+          </div>
+
+          <div class="tm-fx-opts">
+            <label class="tm-fx-chk"><input type="checkbox" v-model="fxOneLine" @change="buildFxText" /> 单行紧凑(字段用 " | " 分隔)</label>
+          </div>
+
+          <div class="tm-fx-preview-wrap">
+            <div class="tm-export-preview-label">导出预览（可编辑）</div>
+            <textarea v-model="fxText" class="tm-export-textarea" spellcheck="false" />
+          </div>
+        </div>
+        <template #footer>
+          <n-space>
+            <n-button @click="buildFxText">重新生成</n-button>
+            <n-button type="primary" :disabled="!fxText" @click="fxSaveFile">保存到文件…</n-button>
+            <n-button :disabled="!fxText" @click="fxCopy">复制</n-button>
           </n-space>
         </template>
       </n-drawer-content>
@@ -231,7 +277,7 @@ import {
 import {
   ClipboardTaskListLtr20Filled, Search20Regular, Board20Regular, CalendarLtr20Regular,
   DataPie20Regular, ArrowImport20Regular, ArrowExportLtr20Regular, ArrowSync20Regular,
-  Flag16Regular, CalendarClock16Regular,
+  Flag16Regular,
 } from '@vicons/fluent'
 import { invoke } from '@tauri-apps/api/core'
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
@@ -273,6 +319,9 @@ const loading = ref(false)
 
 const CAT_MAP = { work: '工作', life: '生活', study: '学习' }
 const catLabel = (c) => CAT_MAP[c] || c || '未分类'
+const typeLabel = (t) => ({ bug: 'Bug', task: '任务', other: '其他' }[t] || '任务')
+const STATUS_ZH = { TODO: '待办', NEXT: '下一步', DOING: '进行中', WAITING: '等待', PAUSED: '暂停', HOLD: '搁置', CANCELLED: '已取消', DONE: '已完成' }
+const statusZh = (s) => STATUS_ZH[s] || s || '待办'
 const catTagColor = (c) => {
   const m = { work: { color: 'rgba(124,58,237,0.14)', textColor: '#7c3aed' }, life: { color: 'rgba(5,150,105,0.14)', textColor: '#059669' }, study: { color: 'rgba(37,99,235,0.14)', textColor: '#2563eb' } }
   return m[c] || undefined
@@ -311,17 +360,38 @@ const statusOptions = [
   { label: 'CANCELLED 已取消', value: 'CANCELLED' },
 ]
 
-const fmtClock = (min) => {
-  const m = Number(min) || 0
-  if (m < 60) return `${m}m`
-  const h = Math.floor(m / 60), r = m % 60
-  return r ? `${h}h${r}m` : `${h}h`
-}
 const todayStr = () => {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
-const isOverdue = (it) => it.deadline && !it.done && it.deadline < todayStr()
+// 任意日期 → ISO "YYYY-MM-DD"：支持 ISO(2026-06-20)、斜杠(2026/6/20)、中文(2026年06月20日)，无法解析返回 ''
+const cnDateToIso = (s) => {
+  const str = String(s || '')
+  const pad = (n) => String(n).padStart(2, '0')
+  let m = /(\d{4})\s*[-/年]\s*(\d{1,2})\s*[-/月]\s*(\d{1,2})/.exec(str)
+  if (m) return `${m[1]}-${pad(m[2])}-${pad(m[3])}`
+  return ''
+}
+const isOverdue = (it) => it.deadlineIso && !it.done && it.deadlineIso < todayStr()
+
+// TaskBlock(原始) → 看板使用的归一化项
+const normalizeBlock = (b) => ({
+  id: b.internalId || '',          // 主键（更新/拖拽用）
+  displayId: b.id || '',
+  title: b.description || b.id || '(未命名)',
+  status: (b.status || 'TODO').toUpperCase(),
+  done: !!b.done,
+  priority: b.priority || '',
+  category: b.manageType || '',
+  taskType: b.taskType || 'task',
+  severity: b.severity || '',
+  deadline: b.deadline || '',
+  deadlineIso: cnDateToIso(b.deadline),
+  createTime: b.createTime || '',
+  createTimeIso: cnDateToIso(b.createTime),
+  content: b.content || '',
+  line: b.blockStartLine || 0,
+})
 
 // ── 数据加载 ──
 let searchTimer = null
@@ -338,7 +408,7 @@ const reload = async () => {
       keyword: keyword.value || null,
     }
     const res = await invoke('task_query', { query })
-    items.value = Array.isArray(res) ? res : []
+    items.value = (Array.isArray(res) ? res : []).map(normalizeBlock)
     regroup()
   } catch (e) {
     logger.error('加载任务失败:', e)
@@ -359,10 +429,9 @@ const onDragChange = async (colKey, evt) => {
   if (String(el.status || '').toUpperCase() === newStatus) return
   try {
     const updated = await invoke('task_update_item', { input: { id: el.id, status: newStatus } })
-    // 后端返回该文件最新 items；用其同步本地该任务状态
-    const fresh = Array.isArray(updated) ? updated.find((x) => x.id === el.id) : null
-    el.status = fresh ? fresh.status : newStatus
-    el.done = fresh ? fresh.done : (newStatus === 'DONE')
+    const fresh = Array.isArray(updated) ? updated.find((x) => x.internalId === el.id) : null
+    el.status = fresh ? (fresh.status || newStatus) : newStatus
+    el.done = fresh ? !!fresh.done : (newStatus === 'DONE' || newStatus === 'CANCELLED')
     message.success('已更新任务状态')
   } catch (e) {
     logger.error('更新状态失败:', e)
@@ -375,14 +444,13 @@ const onDragChange = async (colKey, evt) => {
 const showEditor = ref(false)
 const editing = ref(null)
 const saving = ref(false)
-const editForm = reactive({ status: '', title: '', scheduled: null, deadline: null, notes: '' })
+const editForm = reactive({ status: '', title: '', deadline: '', notes: '' })
 const openEditor = (it) => {
   editing.value = it
   editForm.status = it.status || 'TODO'
   editForm.title = it.title || ''
-  editForm.scheduled = it.scheduled || null
-  editForm.deadline = it.deadline || null
-  editForm.notes = it.raw_body || ''
+  editForm.deadline = it.deadline || ''
+  editForm.notes = it.content || ''
   showEditor.value = true
 }
 const saveEditor = async () => {
@@ -393,7 +461,6 @@ const saveEditor = async () => {
       id: editing.value.id,
       status: editForm.status,
       title: editForm.title,
-      scheduled: editForm.scheduled || '',
       deadline: editForm.deadline || '',
       notes: editForm.notes ?? '',
     }
@@ -447,21 +514,31 @@ const doImport = async () => {
   }
 }
 
-// ── 导出报表 ──
+// ── 导出报表（日/周/月/半年/年，纯文本可编辑）──
 const showExport = ref(false)
 const exporting = ref(false)
 const exportPreview = ref('')
-const exportForm = reactive({ kind: 'weekly', date: todayStr(), from: todayStr(), to: todayStr(), format: 'md' })
+const exportForm = reactive({ kind: 'weekly', from: null, to: null })
 const reportKindOptions = [
-  { label: '日报', value: 'daily' }, { label: '周报', value: 'weekly' },
-  { label: '半年报', value: 'halfyear' }, { label: '年报', value: 'yearly' },
-  { label: '自定义区间', value: 'custom' },
+  { label: '日报', value: 'daily' },
+  { label: '周报', value: 'weekly' },
+  { label: '月报', value: 'monthly' },
+  { label: '半年报', value: 'halfyear' },
+  { label: '年报', value: 'yearly' },
 ]
+const reportKindLabel = () => (reportKindOptions.find((o) => o.value === exportForm.kind)?.label || '报表')
+// 打开导出抽屉并立即生成一次预览
+const openExport = () => {
+  showExport.value = true
+  genPreview()
+}
 const genPreview = async () => {
   exporting.value = true
   try {
+    // 导出前先重扫描，确保数据库与源文件一致（编辑器保存后立刻反映）
+    await invoke('task_scan_and_index').catch(() => {})
     exportPreview.value = await invoke('task_export_report', {
-      input: { kind: exportForm.kind, date: exportForm.date || todayStr(), from: exportForm.from, to: exportForm.to, format: exportForm.format },
+      input: { kind: exportForm.kind, date: '', from: exportForm.from || null, to: exportForm.to || null, format: 'text' },
     })
   } catch (e) {
     logger.error('生成报表失败:', e)
@@ -473,8 +550,7 @@ const genPreview = async () => {
 const saveReport = async () => {
   if (!exportPreview.value) return
   try {
-    const ext = exportForm.format === 'json' ? 'json' : 'md'
-    const path = await saveDialog({ defaultPath: `task-report-${exportForm.kind}-${exportForm.date}.${ext}`, filters: [{ name: ext.toUpperCase(), extensions: [ext] }] })
+    const path = await saveDialog({ defaultPath: `${reportKindLabel()}-${todayStr()}.txt`, filters: [{ name: 'Text', extensions: ['txt'] }] })
     if (!path) return
     await invoke('task_write_report_file', { path, content: exportPreview.value })
     message.success('报表已保存')
@@ -483,11 +559,125 @@ const saveReport = async () => {
     message.error('保存失败：' + (e?.message || e))
   }
 }
+const copyReport = async () => {
+  try { await navigator.clipboard.writeText(exportPreview.value); message.success('已复制周报') }
+  catch { message.error('复制失败') }
+}
+
+// ── 按字段筛选导出 ──
+const showFieldExport = ref(false)
+const fxData = ref([])
+const fxText = ref('')
+const fxOneLine = ref(false)
+const fxFilter = reactive({
+  category: 'all', taskType: 'all', status: 'all', severity: 'all', priority: 'all',
+  createFrom: null, createTo: null, completedFrom: null, completedTo: null, keyword: '',
+})
+const fxCategoryOptions = [
+  { label: '全部分类', value: 'all' }, { label: '工作', value: 'work' }, { label: '生活', value: 'life' }, { label: '学习', value: 'study' },
+]
+const fxTypeOptions = [
+  { label: '全部类型', value: 'all' }, { label: 'Bug', value: 'bug' }, { label: '任务', value: 'task' }, { label: '其他', value: 'other' },
+]
+const fxStatusOptions = [
+  { label: '全部状态', value: 'all' }, { label: '已完成', value: 'done' }, { label: '未完成', value: 'undone' },
+  { label: '待办 TODO', value: 'st:TODO' }, { label: '进行中 DOING', value: 'st:DOING' }, { label: '下一步 NEXT', value: 'st:NEXT' },
+  { label: '等待 WAITING', value: 'st:WAITING' }, { label: '暂停 PAUSED', value: 'st:PAUSED' }, { label: '搁置 HOLD', value: 'st:HOLD' },
+  { label: '已取消 CANCELLED', value: 'st:CANCELLED' }, { label: '已完成 DONE', value: 'st:DONE' },
+]
+const fxSeverityOptions = [
+  { label: '全部', value: 'all' }, { label: 'critical', value: 'critical' }, { label: 'major', value: 'major' },
+  { label: 'normal', value: 'normal' }, { label: 'minor', value: 'minor' }, { label: 'trivial', value: 'trivial' },
+]
+const fxPriorityOptions = [
+  { label: '全部', value: 'all' }, { label: 'A', value: 'A' }, { label: 'B', value: 'B' }, { label: 'C', value: 'C' }, { label: '无', value: 'none' },
+]
+const EXPORT_FIELDS = [
+  { key: 'id', label: 'ID' }, { key: 'taskType', label: '类型' }, { key: 'status', label: '状态' },
+  { key: 'severity', label: '严重度' }, { key: 'priority', label: '优先级' }, { key: 'origin', label: '来源' },
+  { key: 'fixStatus', label: '修复状态' }, { key: 'progress', label: '进度' }, { key: 'deadline', label: '截止' },
+  { key: 'createTime', label: '创建时间' }, { key: 'completedTime', label: '完成时间' }, { key: 'parentId', label: '父任务' },
+  { key: 'description', label: '描述' }, { key: 'rootCause', label: '根本原因' }, { key: 'conditionOfOccurrence', label: '复现步骤' },
+  { key: 'fixedDetails', label: '修复详情' }, { key: 'testingSuggestions', label: '测试建议' }, { key: 'affectedRelease', label: '影响版本' },
+  { key: 'reviewLink', label: 'Review' },
+]
+const fxFields = ref(['id', 'taskType', 'status', 'description', 'createTime', 'completedTime'])
+
+const fxMatched = computed(() => fxData.value.filter((b) => {
+  if (fxFilter.category !== 'all' && (b.manageType || '') !== fxFilter.category) return false
+  if (fxFilter.taskType !== 'all' && (b.taskType || '') !== fxFilter.taskType) return false
+  const st = String(b.status || '').toUpperCase()
+  if (fxFilter.status === 'done' && st !== 'DONE') return false
+  if (fxFilter.status === 'undone' && st === 'DONE') return false
+  if (fxFilter.status.startsWith('st:') && st !== fxFilter.status.slice(3)) return false
+  if (fxFilter.severity !== 'all' && !String(b.severity || '').toLowerCase().includes(fxFilter.severity)) return false
+  if (fxFilter.priority !== 'all') {
+    if (fxFilter.priority === 'none') { if (b.priority) return false }
+    else if ((b.priority || '') !== fxFilter.priority) return false
+  }
+  const cIso = cnDateToIso(b.createTime)
+  if (fxFilter.createFrom && (!cIso || cIso < fxFilter.createFrom)) return false
+  if (fxFilter.createTo && (!cIso || cIso > fxFilter.createTo)) return false
+  const dIso = cnDateToIso(b.completedTime)
+  if (fxFilter.completedFrom && (!dIso || dIso < fxFilter.completedFrom)) return false
+  if (fxFilter.completedTo && (!dIso || dIso > fxFilter.completedTo)) return false
+  if (fxFilter.keyword) {
+    const k = fxFilter.keyword.toLowerCase()
+    if (!String(b.description || '').toLowerCase().includes(k) && !String(b.id || '').toLowerCase().includes(k)) return false
+  }
+  return true
+}))
+const fxCount = (t) => fxMatched.value.filter((b) => (b.taskType || '') === t).length
+const fxDoneCount = computed(() => fxMatched.value.filter((b) => String(b.status || '').toUpperCase() === 'DONE').length)
+
+const fxFieldValue = (b, key) => {
+  if (key === 'taskType') return typeLabel(b.taskType)
+  if (key === 'status') return statusZh(String(b.status || '').toUpperCase())
+  return String(b[key] ?? '')
+}
+const buildFxText = () => {
+  const fields = EXPORT_FIELDS.filter((f) => fxFields.value.includes(f.key))
+  const entries = fxMatched.value.map((b) => {
+    if (fxOneLine.value) return fields.map((f) => `${f.label}: ${fxFieldValue(b, f.key).replace(/\n/g, ' ')}`).join(' | ')
+    return fields.map((f) => {
+      const v = fxFieldValue(b, f.key)
+      return v.includes('\n') ? `${f.label}:\n${v}` : `${f.label}: ${v}`
+    }).join('\n')
+  })
+  fxText.value = entries.join(fxOneLine.value ? '\n' : '\n----------------------------------------\n')
+}
+const recomputeFx = () => nextTick(buildFxText)
+const fxSelectAll = (all) => { fxFields.value = all ? EXPORT_FIELDS.map((f) => f.key) : []; buildFxText() }
+const openFieldExport = async () => {
+  showFieldExport.value = true
+  try {
+    await invoke('task_scan_and_index').catch(() => {})
+    fxData.value = (await invoke('task_query', { query: {} })) || []
+  } catch (e) {
+    logger.error('加载任务失败:', e); fxData.value = []
+  }
+  buildFxText()
+}
+const fxSaveFile = async () => {
+  if (!fxText.value) return
+  try {
+    const path = await saveDialog({ defaultPath: `任务导出-${todayStr()}.txt`, filters: [{ name: 'Text', extensions: ['txt'] }] })
+    if (!path) return
+    await invoke('task_write_report_file', { path, content: fxText.value })
+    message.success('已导出到文件')
+  } catch (e) { logger.error('导出失败:', e); message.error('导出失败：' + (e?.message || e)) }
+}
+const fxCopy = async () => {
+  try { await navigator.clipboard.writeText(fxText.value); message.success('已复制导出内容') }
+  catch { message.error('复制失败') }
+}
 
 // ── 统计 ──
 const doneCount = computed(() => items.value.filter((i) => i.done).length)
 const doingCount = computed(() => items.value.filter((i) => ['DOING', 'NEXT'].includes(String(i.status).toUpperCase())).length)
-const totalClock = computed(() => items.value.reduce((s, i) => s + (Number(i.clock_minutes) || 0), 0))
+const bugCount = computed(() => items.value.filter((i) => i.taskType === 'bug').length)
+// Bug 统计仅在工作/全部下显示（生活·学习无 bug 概念）
+const showBugStat = computed(() => category.value !== 'life' && category.value !== 'study')
 const completionRate = computed(() => items.value.length ? Math.round((doneCount.value / items.value.length) * 100) : 0)
 
 const axisColor = computed(() => (isDark.value ? '#9da5b4' : '#57606a'))
@@ -519,37 +709,37 @@ const categoryChart = computed(() => {
   }
 })
 const trendChart = computed(() => {
-  // 近 14 天按 closed/deadline 完成数
-  const days = []
-  const base = new Date()
-  for (let i = 13; i >= 0; i--) {
-    const d = new Date(base); d.setDate(base.getDate() - i)
-    days.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`)
-  }
-  const doneByDay = days.map((day) => items.value.filter((i) => i.closed === day).length)
-  const dueByDay = days.map((day) => items.value.filter((i) => i.deadline === day).length)
+  // 类型/严重度分布
+  const types = ['bug', 'task', 'other']
+  const typeLabels = { bug: 'Bug', task: '任务', other: '其他' }
   return {
     backgroundColor: 'transparent',
-    title: { text: '近 14 天趋势', left: 'center', textStyle: { color: axisColor.value, fontSize: 14 } },
-    tooltip: { trigger: 'axis' },
-    legend: { bottom: 0, data: ['完成', '截止'], textStyle: { color: axisColor.value } },
-    grid: { left: 40, right: 16, top: 40, bottom: 40 },
-    xAxis: { type: 'category', data: days.map((d) => d.slice(5)), axisLabel: { color: axisColor.value } },
-    yAxis: { type: 'value', axisLabel: { color: axisColor.value } },
-    series: [
-      { name: '完成', type: 'line', smooth: true, color: '#18a058', data: doneByDay },
-      { name: '截止', type: 'line', smooth: true, color: '#d03050', data: dueByDay },
-    ],
+    title: { text: '类型分布', left: 'center', textStyle: { color: axisColor.value, fontSize: 14 } },
+    tooltip: { trigger: 'item' },
+    legend: { bottom: 0, textStyle: { color: axisColor.value } },
+    series: [{
+      type: 'pie', radius: ['40%', '66%'], center: ['50%', '48%'],
+      label: { color: axisColor.value },
+      data: types.map((t, idx) => ({
+        name: typeLabels[t],
+        value: items.value.filter((i) => i.taskType === t).length,
+        itemStyle: { color: ['#d03050', '#2080f0', '#8a8f99'][idx] },
+      })),
+    }],
   }
 })
 
-// ── 日历 ──
+// ── 日历（按截止日期 ISO） ──
 const calRef = ref(null)
 const calendarEvents = computed(() => {
   const evs = []
   for (const it of items.value) {
-    if (it.scheduled) evs.push({ id: it.id + ':s', title: it.title, start: it.scheduled, color: '#2080f0', extendedProps: { item: it } })
-    if (it.deadline) evs.push({ id: it.id + ':d', title: '⏰ ' + it.title, start: it.deadline, color: it.done ? '#18a058' : '#d03050', extendedProps: { item: it } })
+    if (it.deadlineIso) {
+      evs.push({ id: it.id + ':d', title: '⏰ ' + it.title, start: it.deadlineIso, color: it.done ? '#18a058' : '#d03050', extendedProps: { item: it } })
+    } else if (it.createTimeIso) {
+      // 无截止日期时，用创建时间作为日历标记，保证任务仍可见
+      evs.push({ id: it.id + ':c', title: it.title, start: it.createTimeIso, color: '#2080f0', extendedProps: { item: it } })
+    }
   }
   return evs
 })
@@ -562,11 +752,17 @@ const calendarOptions = computed(() => ({
   firstDay: 1,
   height: '100%',
   events: calendarEvents.value,
-  eventClick: (info) => {
+  eventMouseEnter: (info) => {
     const it = info.event.extendedProps?.item
-    if (it) openEditor(it)
+    if (!it) return
+    const r = info.el.getBoundingClientRect()
+    hover.value = { visible: true, x: r.left + r.width / 2, y: r.top, item: it }
   },
+  eventMouseLeave: () => { hover.value.visible = false },
 }))
+
+// 日历悬浮详情卡片
+const hover = ref({ visible: false, x: 0, y: 0, item: null })
 
 // 看板/日历/统计都放在同一容器内用 v-show 切换：FullCalendar 与 ECharts 在隐藏(display:none)时
 // 无法测量尺寸，会塌缩成一条缝。切到对应视图后强制重新测量。
@@ -577,6 +773,15 @@ watch(view, async (v) => {
   }
   // 触发 ECharts(autoresize) 与 FullCalendar(windowResize) 重新计算尺寸
   try { window.dispatchEvent(new Event('resize')) } catch {}
+})
+
+// 任务数据变化时，把事件推给已挂载的日历（v-if 重挂载会自带初始事件，此处覆盖实时更新）
+watch(calendarEvents, async (evs) => {
+  await nextTick()
+  const api = calRef.value?.getApi?.()
+  if (api) {
+    try { api.removeAllEvents(); api.addEventSource(evs) } catch (e) { logger.warn('日历事件更新失败', e) }
+  }
 })
 
 let unlisten = null
@@ -678,14 +883,59 @@ onUnmounted(() => {
 .tm-card-meta { display: flex; align-items: center; gap: 8px; margin-top: 9px; flex-wrap: wrap; font-size: 13px; color: var(--guaxi-text-secondary); }
 .tm-date { display: inline-flex; align-items: center; gap: 2px; }
 .tm-date.deadline { color: #d03050; }
-.tm-clock { padding: 1px 6px; border-radius: 4px; background: var(--guaxi-header-bg); }
-.tm-tags { margin-top: 7px; display: flex; flex-wrap: wrap; gap: 5px; }
-.tm-tag { font-size: 12px; color: var(--n-color-primary, #2080f0); }
+.tm-type { font-size: 11px; padding: 0 6px; border-radius: 8px; color: #fff; }
+.tm-type.tt-bug { background: #d03050; } .tm-type.tt-task { background: #2080f0; } .tm-type.tt-other { background: #8a8f99; }
+.tm-did { font-size: 11px; color: var(--guaxi-text-secondary); opacity: 0.85; }
 
 /* 日历 */
 .tm-calendar { flex: 1 1 auto; min-height: 0; padding: 12px; box-sizing: border-box; }
-.tm-calendar :deep(.fc) { height: 100%; }
+.tm-calendar :deep(.fc) {
+  height: 100%;
+  /* 统一用应用主题变量驱动 FullCalendar，修复暗色下亮色边框/列表项 */
+  --fc-border-color: var(--guaxi-border);
+  --fc-page-bg-color: var(--guaxi-app-bg);
+  --fc-neutral-bg-color: var(--guaxi-panel-bg);
+  --fc-neutral-text-color: var(--guaxi-text-secondary);
+  --fc-today-bg-color: rgba(32, 128, 240, 0.10);
+  --fc-list-event-hover-bg-color: var(--guaxi-panel-bg);
+  --fc-highlight-color: rgba(32, 128, 240, 0.12);
+  color: var(--guaxi-text-primary);
+}
 .tm-calendar :deep(.fc .fc-toolbar-title) { font-size: 16px; }
+/* 周/日视图：弱化半小时虚线分隔，避免刺眼 */
+.tm-calendar :deep(.fc .fc-timegrid-slot-minor) { border-top-style: dotted; border-top-color: color-mix(in srgb, var(--guaxi-border) 45%, transparent); }
+.tm-calendar :deep(.fc .fc-timegrid-slot) { border-color: color-mix(in srgb, var(--guaxi-border) 60%, transparent); }
+.tm-calendar :deep(.fc .fc-timegrid-now-indicator-line) { border-color: #d03050; }
+/* 列表(年)视图：暗色下文字/表头颜色 */
+.tm-calendar :deep(.fc .fc-list-day-cushion) { background: var(--guaxi-panel-bg); }
+.tm-calendar :deep(.fc .fc-list-day-text),
+.tm-calendar :deep(.fc .fc-list-day-side-text),
+.tm-calendar :deep(.fc .fc-list-event-title),
+.tm-calendar :deep(.fc .fc-list-event-time) { color: var(--guaxi-text-primary); }
+.tm-calendar :deep(.fc .fc-list-empty) { background: var(--guaxi-app-bg); color: var(--guaxi-text-secondary); }
+.tm-calendar :deep(.fc .fc-col-header-cell-cushion),
+.tm-calendar :deep(.fc .fc-daygrid-day-number) { color: var(--guaxi-text-primary); }
+.tm-calendar :deep(.fc .fc-day-other .fc-daygrid-day-number) { color: var(--guaxi-text-secondary); opacity: 0.6; }
+
+/* 日历悬浮详情卡片 */
+.tm-cal-tip {
+  position: fixed; z-index: 9999; transform: translate(-50%, calc(-100% - 10px));
+  min-width: 220px; max-width: 320px; padding: 10px 12px; border-radius: 10px;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, 'Microsoft YaHei', monospace;
+  font-size: 13px; pointer-events: none; box-shadow: 0 8px 28px rgba(0,0,0,0.28);
+  border: 1px solid; line-height: 1.6;
+}
+.tm-cal-tip.light { background: #ffffff; color: #1f2328; border-color: #e3e6eb; }
+.tm-cal-tip.dark { background: #282c34; color: #abb2bf; border-color: #3e4451; }
+.tm-cal-tip .tip-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
+.tm-cal-tip .tip-title { font-weight: 700; font-size: 14px; flex: 1; min-width: 0; }
+.tm-cal-tip .tip-type { font-size: 11px; padding: 1px 7px; border-radius: 9px; color: #fff; }
+.tm-cal-tip .tt-bug { background: #d03050; } .tm-cal-tip .tt-task { background: #2080f0; } .tm-cal-tip .tt-other { background: #8a8f99; }
+.tm-cal-tip .tip-pri { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 4px; color: #fff; }
+.tm-cal-tip .pri-A { background: #d03050; } .tm-cal-tip .pri-B { background: #f0a020; } .tm-cal-tip .pri-C { background: #909399; }
+.tm-cal-tip .tip-row { display: flex; gap: 8px; }
+.tm-cal-tip .tip-k { color: var(--guaxi-text-secondary, #8b94a3); flex: 0 0 44px; }
+.tm-cal-tip .tip-v { word-break: break-word; }
 
 /* 统计 */
 .tm-stats { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 16px; box-sizing: border-box; }
@@ -699,7 +949,34 @@ onUnmounted(() => {
 .tm-charts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .tm-chart-box { background: var(--guaxi-panel-bg); border: 1px solid var(--guaxi-border); border-radius: 10px; height: 300px; padding: 8px; }
 .tm-chart-wide { grid-column: 1 / -1; }
-.tm-export-preview { margin-top: 12px; max-height: 280px; overflow: auto; }
-.tm-export-preview pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; margin: 0; }
+.tm-export-form { margin-bottom: 10px; }
+.tm-export-preview-wrap { display: flex; flex-direction: column; height: calc(100% - 60px); min-height: 360px; }
+.tm-export-preview-label { font-size: 12px; color: var(--guaxi-text-secondary); margin-bottom: 6px; }
+.tm-export-textarea {
+  flex: 1 1 auto; width: 100%; box-sizing: border-box; resize: vertical; min-height: 340px;
+  background: var(--guaxi-app-bg); color: var(--guaxi-text-primary);
+  border: 1px solid var(--guaxi-border); border-radius: 8px; padding: 12px 14px;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
+  font-size: 13.5px; line-height: 1.7; white-space: pre; overflow: auto;
+}
+.tm-export-textarea:focus { outline: none; border-color: #2080f0; box-shadow: 0 0 0 2px rgba(32,128,240,0.18); }
 .tm-edit-info { margin-top: 4px; }
+
+/* 统计顶栏 + 按字段筛选导出 */
+.tm-stats-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.tm-stats-title { font-weight: 700; font-size: 15px; }
+.tm-spacer2 { flex: 1; }
+.tm-fx { display: flex; flex-direction: column; gap: 12px; height: 100%; }
+.tm-fx-filters { display: flex; flex-direction: column; gap: 8px; }
+.tm-fx-row { display: flex; flex-wrap: wrap; gap: 10px; }
+.tm-fx-row label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--guaxi-text-secondary); min-width: 120px; }
+.tm-fx-row label.grow { flex: 1; min-width: 180px; }
+.tm-fx-stat { background: var(--guaxi-panel-bg); border: 1px solid var(--guaxi-border); border-radius: 8px; padding: 8px 12px; font-size: 13px; }
+.tm-fx-stat b { color: #2080f0; font-size: 15px; }
+.tm-fx-fields { border: 1px solid var(--guaxi-border); border-radius: 8px; padding: 10px 12px; }
+.tm-fx-fields-head { display: flex; align-items: center; font-size: 12px; color: var(--guaxi-text-secondary); margin-bottom: 8px; }
+.tm-fx-fields-head a { color: #2080f0; cursor: pointer; }
+.tm-fx-chk { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; margin: 3px 12px 3px 0; cursor: pointer; }
+.tm-fx-opts { font-size: 13px; }
+.tm-fx-preview-wrap { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 220px; }
 </style>

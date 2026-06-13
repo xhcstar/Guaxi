@@ -1406,6 +1406,7 @@ const activateExternalDir = async (dirPath) => {
   externalExpandedKeys.value = []
   externalSelectedKeys.value = []
   externalDirTree.value = []
+  repointFileWatcher(norm)
   try {
     await fileTreeStore.fetchFileTree(norm, { force: true })
     const filtered = filterHiddenTree(fileTreeStore.fileTree)
@@ -1427,6 +1428,7 @@ const toggleViewMode = () => {
   } else {
     viewMode.value = 'kb'
     externalDir.value = null
+    if (fileTreeStore.activeRepoPath) repointFileWatcher(fileTreeStore.activeRepoPath)
   }
 }
 
@@ -1465,6 +1467,8 @@ const activateTaskMode = async () => {
   }
   // 触发一次后端扫描索引（看板/统计数据源）
   invoke('task_scan_and_index').catch((e) => logger.warn('任务扫描失败', e))
+  // 监控任务根目录，文件变动时刷新任务树
+  repointFileWatcher(taskRootPath.value)
 
   // 重置三类树，默认激活「工作」并展开
   for (const c of TASK_CATEGORIES) {
@@ -2647,6 +2651,12 @@ const setupFileWatcher = async () => {
         return
       }
 
+      // 文件编辑模式 / 任务模式：刷新对应的树（不走 kb 逻辑）
+      if (viewMode.value === 'plain' || viewMode.value === 'task') {
+        scheduleNonKbTreeRefresh(changedPath)
+        return
+      }
+
       switch (payload.kind) {
         case 'Create':
           // logger.info('文件创建事件:', payload.path)
@@ -2670,6 +2680,39 @@ const setupFileWatcher = async () => {
   } catch (error) {
     logger.error('启动文件监控失败:', error)
   }
+}
+
+// 把全局文件监控重定向到指定目录（kb/plain/task 模式切换时调用）
+const repointFileWatcher = async (path) => {
+  const p = normalizePath(path)
+  if (!p) return
+  try { await invoke('start_file_watching', { path: p }) }
+  catch (e) { logger.warn('重定向文件监控失败', e) }
+}
+
+// 文件编辑/任务模式下的树刷新（去抖）
+let nonKbRefreshTimer = null
+const scheduleNonKbTreeRefresh = (changedPath) => {
+  if (nonKbRefreshTimer) clearTimeout(nonKbRefreshTimer)
+  nonKbRefreshTimer = setTimeout(async () => {
+    nonKbRefreshTimer = null
+    try {
+      if (viewMode.value === 'plain' && externalDir.value) {
+        await refreshModeDir('plain', externalDir.value)
+      } else if (viewMode.value === 'task') {
+        const cat = taskCatOfPath(changedPath)
+        if (cat) {
+          await refreshModeDir('task', catPathOf(cat))
+        } else {
+          for (const c of TASK_CATEGORIES) {
+            if (taskCatTrees[c.key] && taskCatTrees[c.key].length) await loadTaskCat(c.key)
+          }
+        }
+      }
+    } catch (e) {
+      logger.warn('非知识库树刷新失败', e)
+    }
+  }, 300)
 }
 
 // 辅助函数：从事件中提取旧路径（如果需要）

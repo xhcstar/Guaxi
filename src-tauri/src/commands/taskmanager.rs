@@ -15,11 +15,11 @@ use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 use tracing::{info, warn};
 
-use crate::commands::task_org::{self, OrgPatch, TaskItem};
+use crate::commands::task_block::{self, TaskBlock};
 
 const TASK_DIR_NAME: &str = "guaxi_task";
 const TASK_DB_NAME: &str = "task.sqlite3";
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 4;
 const CATEGORIES: &[&str] = &["work", "life", "study"];
 
 // ───────── 配置（task 根路径）─────────
@@ -125,33 +125,47 @@ fn setup_schema(conn: &Connection) -> Result<(), String> {
         .query_row("SELECT v FROM task_meta WHERE k='schema_version'", [], |r| r.get(0))
         .optional()
         .map_err(|e| e.to_string())?;
-    if ver.is_none() {
+    // schema 变更（org→block DSL）：旧版本直接重建索引表（索引可由 .org 重新扫描得到）。
+    let needs_reset = match ver.as_deref() {
+        Some(v) => v != SCHEMA_VERSION.to_string(),
+        None => false,
+    };
+    if needs_reset {
+        conn.execute("DROP TABLE IF EXISTS task_items", [])
+            .map_err(|e| e.to_string())?;
+    }
+    if ver.as_deref() != Some(&SCHEMA_VERSION.to_string()) {
         conn.execute(
-            "INSERT INTO task_meta(k,v) VALUES('schema_version', ?1)",
+            "INSERT INTO task_meta(k,v) VALUES('schema_version', ?1)
+             ON CONFLICT(k) DO UPDATE SET v=excluded.v",
             params![SCHEMA_VERSION.to_string()],
         )
         .map_err(|e| e.to_string())?;
     }
 
+    // task_items：索引列用于筛选/排序，block_json 存完整 TaskBlock 供读取。
     conn.execute(
         "CREATE TABLE IF NOT EXISTS task_items (
-            id TEXT PRIMARY KEY,
-            file_path TEXT NOT NULL,
-            line INTEGER NOT NULL,
-            level INTEGER NOT NULL,
-            title TEXT NOT NULL,
+            internal_id TEXT PRIMARY KEY,
+            id TEXT NOT NULL DEFAULT '',
+            parent_id TEXT NOT NULL DEFAULT '',
+            category TEXT NOT NULL DEFAULT '',
+            task_type TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL DEFAULT '',
             done INTEGER NOT NULL DEFAULT 0,
             priority TEXT NOT NULL DEFAULT '',
-            category TEXT NOT NULL DEFAULT '',
-            tags TEXT NOT NULL DEFAULT '',
-            scheduled TEXT NOT NULL DEFAULT '',
+            severity TEXT NOT NULL DEFAULT '',
+            origin TEXT NOT NULL DEFAULT '',
             deadline TEXT NOT NULL DEFAULT '',
-            closed TEXT NOT NULL DEFAULT '',
-            clock_minutes INTEGER NOT NULL DEFAULT 0,
-            properties TEXT NOT NULL DEFAULT '{}',
-            parent_id TEXT NOT NULL DEFAULT '',
-            raw_body TEXT NOT NULL DEFAULT ''
+            create_time TEXT NOT NULL DEFAULT '',
+            completed_time TEXT NOT NULL DEFAULT '',
+            progress TEXT NOT NULL DEFAULT '',
+            fix_status TEXT NOT NULL DEFAULT '',
+            description TEXT NOT NULL DEFAULT '',
+            file_path TEXT NOT NULL DEFAULT '',
+            block_start_line INTEGER NOT NULL DEFAULT 0,
+            block_end_line INTEGER NOT NULL DEFAULT 0,
+            block_json TEXT NOT NULL DEFAULT '{}'
         )",
         [],
     )
@@ -159,8 +173,8 @@ fn setup_schema(conn: &Connection) -> Result<(), String> {
     for (idx, col) in [
         ("idx_task_status", "status"),
         ("idx_task_category", "category"),
+        ("idx_task_type", "task_type"),
         ("idx_task_deadline", "deadline"),
-        ("idx_task_scheduled", "scheduled"),
         ("idx_task_file", "file_path"),
     ] {
         conn.execute(
@@ -179,57 +193,38 @@ fn init() -> Result<Connection, String> {
     Ok(conn)
 }
 
-fn row_to_item(row: &rusqlite::Row) -> rusqlite::Result<TaskItem> {
-    let tags_str: String = row.get("tags")?;
-    let props_str: String = row.get("properties")?;
-    Ok(TaskItem {
-        id: row.get("id")?,
-        file_path: row.get("file_path")?,
-        line: row.get::<_, i64>("line")? as usize,
-        level: row.get::<_, i64>("level")? as usize,
-        title: row.get("title")?,
-        status: row.get("status")?,
-        done: row.get::<_, i64>("done")? != 0,
-        priority: row.get("priority")?,
-        category: row.get("category")?,
-        tags: if tags_str.is_empty() {
-            vec![]
-        } else {
-            tags_str.split('\u{1f}').map(|s| s.to_string()).collect()
-        },
-        scheduled: row.get("scheduled")?,
-        deadline: row.get("deadline")?,
-        closed: row.get("closed")?,
-        clock_minutes: row.get("clock_minutes")?,
-        properties: serde_json::from_str(&props_str).unwrap_or_default(),
-        parent_id: row.get("parent_id")?,
-        raw_body: row.get("raw_body")?,
-    })
+fn row_to_block(row: &rusqlite::Row) -> rusqlite::Result<TaskBlock> {
+    let json: String = row.get("block_json")?;
+    Ok(serde_json::from_str(&json).unwrap_or_default())
 }
 
-fn upsert_item(conn: &Connection, it: &TaskItem) -> Result<(), String> {
-    let tags = it.tags.join("\u{1f}");
-    let props = serde_json::to_string(&it.properties).unwrap_or_else(|_| "{}".to_string());
+fn upsert_block(conn: &Connection, b: &TaskBlock) -> Result<(), String> {
+    let json = serde_json::to_string(b).map_err(|e| e.to_string())?;
     conn.execute(
         "INSERT INTO task_items
-            (id,file_path,line,level,title,status,done,priority,category,tags,scheduled,deadline,closed,clock_minutes,properties,parent_id,raw_body)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
-         ON CONFLICT(id) DO UPDATE SET
-            file_path=excluded.file_path, line=excluded.line, level=excluded.level, title=excluded.title,
-            status=excluded.status, done=excluded.done, priority=excluded.priority, category=excluded.category,
-            tags=excluded.tags, scheduled=excluded.scheduled, deadline=excluded.deadline, closed=excluded.closed,
-            clock_minutes=excluded.clock_minutes, properties=excluded.properties, parent_id=excluded.parent_id, raw_body=excluded.raw_body",
+            (internal_id,id,parent_id,category,task_type,status,done,priority,severity,origin,
+             deadline,create_time,completed_time,progress,fix_status,description,file_path,block_start_line,block_end_line,block_json)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)
+         ON CONFLICT(internal_id) DO UPDATE SET
+            id=excluded.id, parent_id=excluded.parent_id, category=excluded.category, task_type=excluded.task_type,
+            status=excluded.status, done=excluded.done, priority=excluded.priority, severity=excluded.severity,
+            origin=excluded.origin, deadline=excluded.deadline, create_time=excluded.create_time,
+            completed_time=excluded.completed_time,
+            progress=excluded.progress, fix_status=excluded.fix_status, description=excluded.description,
+            file_path=excluded.file_path, block_start_line=excluded.block_start_line,
+            block_end_line=excluded.block_end_line, block_json=excluded.block_json",
         params![
-            it.id, it.file_path, it.line as i64, it.level as i64, it.title, it.status, it.done as i64,
-            it.priority, it.category, tags, it.scheduled, it.deadline, it.closed, it.clock_minutes, props,
-            it.parent_id, it.raw_body
+            b.internal_id, b.id, b.parent_id, b.manage_type, b.task_type, b.status, b.done as i64,
+            b.priority, b.severity, b.origin, b.deadline, b.create_time, b.completed_time, b.progress, b.fix_status,
+            b.description, b.file_path, b.block_start_line as i64, b.block_end_line as i64, json
         ],
     )
     .map_err(|e| e.to_string())?;
     Ok(())
 }
 
-/// 扫描 task 根下三类目录的 .org，解析并重建索引（先清空对应文件的旧行）。
+/// 扫描 task 根下三类目录的 .org，解析任务块并重建索引（先清空对应文件旧行）。
+/// 解析前为缺失 internal_id / other-id 的块就地补全并回写源文件。
 fn scan_and_index(conn: &Connection) -> Result<usize, String> {
     let root = resolve_task_root()?;
     let mut total = 0usize;
@@ -251,17 +246,25 @@ fn scan_and_index(conn: &Connection) -> Result<usize, String> {
                 Ok(c) => c,
                 Err(_) => continue,
             };
+            // 补全缺失 id 并回写（最小行编辑，保留格式）
+            let (content, changed) = task_block::backfill_ids(&content, cat);
+            if changed {
+                let _ = fs::write(path, &content);
+            }
             // 清空该文件旧行
             conn.execute("DELETE FROM task_items WHERE file_path=?1", params![file_path])
                 .map_err(|e| e.to_string())?;
-            let items = task_org::parse_org(&content, &file_path, cat);
-            for it in &items {
-                upsert_item(conn, it)?;
+            let blocks = task_block::parse_blocks(&content, &file_path, cat);
+            for b in &blocks {
+                if b.internal_id.trim().is_empty() {
+                    continue; // 理论上已补全
+                }
+                upsert_block(conn, b)?;
             }
-            total += items.len();
+            total += blocks.len();
         }
     }
-    info!(total, "[TaskManager] scanned and indexed org tasks");
+    info!(total, "[TaskManager] scanned and indexed guaxi task blocks");
     Ok(total)
 }
 
@@ -418,7 +421,7 @@ pub struct TaskQuery {
 }
 
 #[tauri::command]
-pub fn task_query(query: TaskQuery) -> Result<Vec<TaskItem>, String> {
+pub fn task_query(query: TaskQuery) -> Result<Vec<TaskBlock>, String> {
     let conn = init()?;
     let mut sql = String::from("SELECT * FROM task_items WHERE 1=1");
     let mut args: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -435,7 +438,7 @@ pub fn task_query(query: TaskQuery) -> Result<Vec<TaskItem>, String> {
         args.push(Box::new(if d { 1i64 } else { 0i64 }));
     }
     if let Some(k) = query.keyword.as_ref().filter(|s| !s.is_empty()) {
-        sql.push_str(" AND (title LIKE ? OR raw_body LIKE ?)");
+        sql.push_str(" AND (description LIKE ? OR id LIKE ?)");
         let like = format!("%{}%", k);
         args.push(Box::new(like.clone()));
         args.push(Box::new(like));
@@ -444,22 +447,16 @@ pub fn task_query(query: TaskQuery) -> Result<Vec<TaskItem>, String> {
         query.date_from.as_ref().filter(|s| !s.is_empty()),
         query.date_to.as_ref().filter(|s| !s.is_empty()),
     ) {
-        sql.push_str(
-            " AND ((scheduled<>'' AND scheduled BETWEEN ? AND ?) \
-               OR (deadline<>'' AND deadline BETWEEN ? AND ?) \
-               OR (closed<>'' AND closed BETWEEN ? AND ?))",
-        );
-        for _ in 0..3 {
-            args.push(Box::new(f.clone()));
-            args.push(Box::new(t.clone()));
-        }
+        sql.push_str(" AND (deadline<>'' AND deadline BETWEEN ? AND ?)");
+        args.push(Box::new(f.clone()));
+        args.push(Box::new(t.clone()));
     }
-    sql.push_str(" ORDER BY (deadline<>'') DESC, deadline ASC, priority ASC, line ASC");
+    sql.push_str(" ORDER BY (deadline<>'') DESC, deadline ASC, priority ASC, block_start_line ASC");
 
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let refs: Vec<&dyn rusqlite::types::ToSql> = args.iter().map(|b| b.as_ref()).collect();
     let rows = stmt
-        .query_map(refs.as_slice(), row_to_item)
+        .query_map(refs.as_slice(), row_to_block)
         .map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     for r in rows {
@@ -468,48 +465,130 @@ pub fn task_query(query: TaskQuery) -> Result<Vec<TaskItem>, String> {
     Ok(out)
 }
 
+/// 看板/预览编辑：按 internal_id 定位块，按字段级更新后回写源文件，再重解析该文件更新 DB。
+/// `fields` 为要更新的字段（键用 TaskBlock 字段名，如 status/description/deadline/content...）。
 #[derive(Debug, Deserialize)]
 pub struct TaskUpdateInput {
-    pub id: String,
+    pub id: String, // = internal_id
+    #[serde(default)]
     pub status: Option<String>,
-    pub title: Option<String>,
-    pub scheduled: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>, // 兼容看板：映射到 description
+    #[serde(default)]
     pub deadline: Option<String>,
-    pub notes: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>, // 兼容看板编辑抽屉：映射到 content
+    /// 通用字段补丁（优先级高于上面的兼容字段）。键=TaskBlock 字段名。
+    #[serde(default)]
+    pub fields: Option<std::collections::BTreeMap<String, serde_json::Value>>,
 }
 
-/// 看板编辑：按 id 定位到 .org 文件+行，做字段级最小回写，再重解析该文件更新 DB。
 #[tauri::command]
-pub fn task_update_item(input: TaskUpdateInput) -> Result<Vec<TaskItem>, String> {
+pub fn task_update_item(input: TaskUpdateInput) -> Result<Vec<TaskBlock>, String> {
     let conn = init()?;
-    let (file_path, line, category): (String, i64, String) = conn
+    let (file_path, category): (String, String) = conn
         .query_row(
-            "SELECT file_path, line, category FROM task_items WHERE id=?1",
+            "SELECT file_path, category FROM task_items WHERE internal_id=?1",
             params![input.id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .map_err(|e| format!("找不到任务: {}", e))?;
 
     let content = fs::read_to_string(&file_path).map_err(|e| format!("读取 .org 失败: {}", e))?;
-    let patch = OrgPatch {
-        status: input.status,
-        title: input.title,
-        scheduled: input.scheduled,
-        deadline: input.deadline,
-        notes: input.notes,
-    };
-    let new_content = task_org::apply_patch(&content, line as usize, &patch)?;
+    let mut blocks = task_block::parse_blocks(&content, &file_path, &category);
+    let target_idx = blocks
+        .iter()
+        .position(|b| b.internal_id == input.id)
+        .ok_or_else(|| "块不存在".to_string())?;
+
+    // 应用补丁
+    apply_block_fields(&mut blocks[target_idx], &input);
+
+    let new_block_text = task_block::serialize_block(&blocks[target_idx]);
+    let new_content = task_block::replace_block_in_content(
+        &content,
+        blocks[target_idx].block_start_line,
+        blocks[target_idx].block_end_line,
+        &new_block_text,
+    );
     fs::write(&file_path, &new_content).map_err(|e| format!("写回 .org 失败: {}", e))?;
 
     // 重解析该文件更新 DB
     conn.execute("DELETE FROM task_items WHERE file_path=?1", params![file_path])
         .map_err(|e| e.to_string())?;
-    let items = task_org::parse_org(&new_content, &file_path, &category);
-    for it in &items {
-        upsert_item(&conn, it)?;
+    let fresh = task_block::parse_blocks(&new_content, &file_path, &category);
+    for b in &fresh {
+        if !b.internal_id.trim().is_empty() {
+            upsert_block(&conn, b)?;
+        }
     }
-    Ok(items)
+    Ok(fresh)
 }
+
+fn apply_block_fields(b: &mut TaskBlock, input: &TaskUpdateInput) {
+    if let Some(s) = &input.status {
+        b.status = s.trim().to_uppercase();
+        b.done = b.status == "DONE" || b.status == "CANCELLED";
+    }
+    if let Some(t) = &input.title {
+        b.description = t.clone();
+    }
+    if let Some(d) = &input.deadline {
+        b.deadline = d.clone();
+    }
+    if let Some(n) = &input.notes {
+        b.content = n.clone();
+    }
+    if let Some(map) = &input.fields {
+        for (k, v) in map {
+            let s = v.as_str().map(|x| x.to_string()).unwrap_or_else(|| v.to_string());
+            match k.as_str() {
+                "id" => b.id = s,
+                "parent_id" => b.parent_id = s,
+                "task_type" => b.task_type = s.to_lowercase(),
+                "deadline" => b.deadline = s,
+                "create_time" => b.create_time = s,
+                "origin" => b.origin = s,
+                "severity" => b.severity = s,
+                "priority" => b.priority = s.trim_start_matches("[#").trim_end_matches(']').to_uppercase(),
+                "status" => {
+                    b.status = s.trim().to_uppercase();
+                    b.done = b.status == "DONE" || b.status == "CANCELLED";
+                }
+                "progress" => b.progress = s,
+                "fix_status" => b.fix_status = s,
+                "description" => b.description = s,
+                "root_cause" => b.root_cause = s,
+                "condition_of_occurrence" => b.condition_of_occurrence = s,
+                "fixed_details" => b.fixed_details = s,
+                "testing_suggestions" => b.testing_suggestions = s,
+                "affected_release" => b.affected_release = s,
+                "review_link" => b.review_link = s,
+                "content" => b.content = s,
+                "extra_impacts" => {
+                    if let Some(arr) = v.as_array() {
+                        b.extra_impacts = arr
+                            .iter()
+                            .map(|x| x.as_str().map(|y| y.to_string()).unwrap_or_default())
+                            .filter(|x| !x.is_empty())
+                            .collect();
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    // 完成时间同步：变为完成态且原本无完成时间 → 写入当前时间；取消完成 → 清空。
+    if b.done {
+        if b.completed_time.trim().is_empty() {
+            b.completed_time = now_cn_datetime();
+        }
+    } else {
+        b.completed_time = String::new();
+    }
+}
+
+use task_block::now_cn_datetime;
 
 /// 导入：把外部 .org/.json 数据规整后追加到指定 category 的目标 .org 文件，然后重扫描。
 #[derive(Debug, Deserialize)]
@@ -537,11 +616,11 @@ pub fn task_import(input: TaskImportInput) -> Result<usize, String> {
     };
     let target = root.join(&cat).join(&file_name);
 
-    let org_text = match input.source_kind.as_str() {
+    let import_text = match input.source_kind.as_str() {
         "json" => {
-            let items: Vec<TaskItem> =
+            let blocks: Vec<TaskBlock> =
                 serde_json::from_str(&input.content).map_err(|e| format!("解析 JSON 失败: {}", e))?;
-            items_to_org(&items)
+            blocks_to_text(&blocks)
         }
         _ => input.content.clone(),
     };
@@ -550,7 +629,7 @@ pub fn task_import(input: TaskImportInput) -> Result<usize, String> {
     if !existing.is_empty() && !existing.ends_with('\n') {
         existing.push('\n');
     }
-    existing.push_str(&org_text);
+    existing.push_str(&import_text);
     if !existing.ends_with('\n') {
         existing.push('\n');
     }
@@ -560,35 +639,12 @@ pub fn task_import(input: TaskImportInput) -> Result<usize, String> {
     scan_and_index(&conn)
 }
 
-/// TaskItem[] → org 文本（用于 JSON 导入与导出）。
-fn items_to_org(items: &[TaskItem]) -> String {
+/// TaskBlock[] → DSL 文本（用于 JSON 导入）。
+fn blocks_to_text(blocks: &[TaskBlock]) -> String {
     let mut out = String::new();
-    for it in items {
-        let level = if it.level == 0 { 1 } else { it.level };
-        out.push_str(&"*".repeat(level));
-        out.push(' ');
-        if !it.status.is_empty() {
-            out.push_str(&it.status);
-            out.push(' ');
-        }
-        if !it.priority.is_empty() {
-            out.push_str(&format!("[#{}] ", it.priority));
-        }
-        out.push_str(it.title.trim());
-        if !it.tags.is_empty() {
-            out.push_str(&format!("  :{}:", it.tags.join(":")));
-        }
+    for b in blocks {
+        out.push_str(&task_block::serialize_block(b));
         out.push('\n');
-        if !it.scheduled.is_empty() {
-            out.push_str(&format!("   SCHEDULED: <{}>\n", it.scheduled));
-        }
-        if !it.deadline.is_empty() {
-            out.push_str(&format!("   DEADLINE: <{}>\n", it.deadline));
-        }
-        if !it.raw_body.trim().is_empty() {
-            out.push_str(it.raw_body.trim());
-            out.push('\n');
-        }
     }
     out
 }
@@ -639,6 +695,11 @@ fn period_range(kind: &str, anchor: &str, from: &Option<String>, to: &Option<Str
 
 #[tauri::command]
 pub fn task_export_report(input: ReportInput) -> Result<String, String> {
+    // 日报/周报/月报/半年报/年报 都用统一的报表模板（按 [start,end] 周期）
+    const PERIOD_KINDS: &[&str] = &["daily", "weekly", "monthly", "halfyear", "yearly"];
+    if PERIOD_KINDS.contains(&input.kind.as_str()) {
+        return build_period_report(&input.kind, &input.from, &input.to);
+    }
     let (from, to, label) = period_range(&input.kind, &input.date, &input.from, &input.to)?;
     let items = task_query(TaskQuery {
         date_from: Some(from.clone()),
@@ -650,39 +711,37 @@ pub fn task_export_report(input: ReportInput) -> Result<String, String> {
         return serde_json::to_string_pretty(&items).map_err(|e| e.to_string());
     }
 
-    // markdown
+    // markdown（通用汇总；周报专用模板见阶段4）
     let mut md = format!("# {}\n\n", label);
-    let done: Vec<&TaskItem> = items.iter().filter(|i| i.done).collect();
-    let doing: Vec<&TaskItem> = items.iter().filter(|i| i.status == "DOING" || i.status == "NEXT").collect();
-    let todo: Vec<&TaskItem> = items.iter().filter(|i| !i.done && i.status != "DOING" && i.status != "NEXT").collect();
+    let done: Vec<&TaskBlock> = items.iter().filter(|i| i.done).collect();
+    let doing: Vec<&TaskBlock> = items.iter().filter(|i| i.status == "DOING" || i.status == "NEXT").collect();
+    let todo: Vec<&TaskBlock> = items.iter().filter(|i| !i.done && i.status != "DOING" && i.status != "NEXT").collect();
     let total = items.len();
-    let total_minutes: i64 = items.iter().map(|i| i.clock_minutes).sum();
 
     md.push_str(&format!(
-        "- 任务总数：{}，已完成：{}，进行中：{}，待办：{}\n- 累计工时：{} 小时 {} 分钟\n\n",
-        total, done.len(), doing.len(), todo.len(), total_minutes / 60, total_minutes % 60
+        "- 任务总数：{}，已完成：{}，进行中：{}，待办：{}\n\n",
+        total, done.len(), doing.len(), todo.len()
     ));
 
-    let section = |title: &str, list: &[&TaskItem], out: &mut String| {
+    let section = |title: &str, list: &[&TaskBlock], out: &mut String| {
         if list.is_empty() {
             return;
         }
         out.push_str(&format!("## {}\n\n", title));
-        let mut by_cat: BTreeMap<String, Vec<&TaskItem>> = BTreeMap::new();
+        let mut by_cat: BTreeMap<String, Vec<&TaskBlock>> = BTreeMap::new();
         for it in list {
-            by_cat.entry(category_label(&it.category)).or_default().push(it);
+            by_cat.entry(category_label(&it.manage_type)).or_default().push(it);
         }
         for (cat, its) in by_cat {
             out.push_str(&format!("### {}\n\n", cat));
             for it in its {
                 let date = if !it.deadline.is_empty() {
                     format!(" (截止 {})", it.deadline)
-                } else if !it.scheduled.is_empty() {
-                    format!(" (计划 {})", it.scheduled)
                 } else {
                     String::new()
                 };
-                out.push_str(&format!("- {}{}\n", it.title, date));
+                let title = if it.description.is_empty() { it.id.clone() } else { it.description.clone() };
+                out.push_str(&format!("- {}{}\n", title, date));
             }
             out.push('\n');
         }
@@ -692,6 +751,129 @@ pub fn task_export_report(input: ReportInput) -> Result<String, String> {
     section("待办", &todo, &mut md);
 
     Ok(md)
+}
+
+fn format_cn_date(d: NaiveDate) -> String {
+    format!("{}年{:02}月{:02}日", d.year(), d.month(), d.day())
+}
+
+/// 解析日期：支持 中文(2026年06月13日[ 时:分:秒]) 与 ISO/斜杠(2026-06-13 / 2026/6/13)。
+fn parse_cn_date(s: &str) -> Option<NaiveDate> {
+    let t = s.trim();
+    if t.is_empty() {
+        return None;
+    }
+    // 提取前三组数字作为 年/月/日
+    let mut nums: Vec<i32> = Vec::new();
+    let mut cur = String::new();
+    for ch in t.chars() {
+        if ch.is_ascii_digit() {
+            cur.push(ch);
+        } else if !cur.is_empty() {
+            if let Ok(n) = cur.parse() {
+                nums.push(n);
+            }
+            cur.clear();
+            if nums.len() >= 3 {
+                break;
+            }
+        }
+    }
+    if !cur.is_empty() && nums.len() < 3 {
+        if let Ok(n) = cur.parse() {
+            nums.push(n);
+        }
+    }
+    if nums.len() >= 3 {
+        NaiveDate::from_ymd_opt(nums[0], nums[1] as u32, nums[2] as u32)
+    } else {
+        None
+    }
+}
+
+/// 统一报表模板（日报/周报/月报/半年报/年报）。
+/// 完成项 = completed_time 落在 [from, to] 的 bug/task；剩余 = to 之前仍未完成的 bug/task。
+/// from/to 为空时按 kind 取「今天起回溯 一天/一周/一月/半年/一年」。
+fn build_period_report(kind: &str, from: &Option<String>, to: &Option<String>) -> Result<String, String> {
+    let today = Local::now().date_naive();
+    let end = to
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+        .unwrap_or(today);
+    let span_days = match kind {
+        "daily" => 1,
+        "weekly" => 7,
+        "monthly" => 30,
+        "halfyear" => 182,
+        "yearly" => 365,
+        _ => 7,
+    };
+    let start = from
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+        .unwrap_or(end - chrono::Duration::days(span_days));
+
+    // 完成窗口 [start, end]；无法解析的完成时间视为落在窗口内，避免丢失。
+    let completed_in_window = |b: &TaskBlock| -> bool {
+        match parse_cn_date(&b.completed_time) {
+            Some(d) => d >= start && d <= end,
+            None => true,
+        }
+    };
+
+    let blocks = task_query(TaskQuery::default())?;
+    // bug/任务（非「其他」均按 bug/任务对待，含 #TYPE 为空或未识别的块）
+    let is_bug_or_task = |b: &TaskBlock| b.task_type != "other";
+    let done: Vec<&TaskBlock> = blocks
+        .iter()
+        .filter(|b| b.status == "DONE" && is_bug_or_task(b) && completed_in_window(b))
+        .collect();
+    let others: Vec<&TaskBlock> = blocks
+        .iter()
+        .filter(|b| b.task_type == "other" && (b.status != "DONE" || completed_in_window(b)))
+        .collect();
+    // 剩余工作：end 之前状态不是「已完成(DONE)」的 bug/任务（任何其它状态，含空值/取消/进行中等都算）
+    let remaining: Vec<&TaskBlock> = blocks
+        .iter()
+        .filter(|b| b.status != "DONE" && is_bug_or_task(b))
+        .collect();
+
+    let mut out = String::new();
+    out.push_str("---------------------------------------------------------------------------------------\n");
+    out.push_str(&format!("* Date: {}\n\n", format_cn_date(end)));
+
+    out.push_str("Bug修复和需求开发:\n");
+    for b in &done {
+        out.push_str(&format!("{}\n", b.description));
+        let fix = b.fix_status.trim();
+        let rc = b.root_cause.trim();
+        if !fix.is_empty() || !rc.is_empty() {
+            out.push_str(&format!("{} {}\n", fix, rc));
+        }
+    }
+    out.push('\n');
+
+    out.push_str("其他工作:\n");
+    for b in &others {
+        out.push_str(&format!("{}\n", b.description));
+    }
+    out.push('\n');
+
+    out.push_str("review:\n");
+    out.push_str("Q1 - ship次数：0, comment次数：0\n");
+    out.push_str("Q2 - ship次数：0, comment次数：0\n");
+    out.push_str("Q3 - ship次数：0, comment次数：0\n");
+    out.push_str("Q4 - ship次数：0, comment次数：0\n");
+    out.push_str("本周 - ship次数：0 ，comment次数：0\n\n");
+
+    out.push_str("剩余工作：\n");
+    for b in &remaining {
+        out.push_str(&format!("{}\n", b.description));
+    }
+
+    Ok(out)
 }
 
 fn category_label(cat: &str) -> String {
@@ -722,6 +904,12 @@ pub fn task_write_file(path: String, content: String) -> Result<usize, String> {
 pub fn task_write_report_file(path: String, content: String) -> Result<(), String> {
     fs::write(&path, &content).map_err(|e| format!("写入报表失败: {}", e))?;
     Ok(())
+}
+
+/// 校验任务块语法，返回诊断（错误/警告）。供编辑器/预览实时提示。
+#[tauri::command]
+pub fn task_validate_content(content: String, category: Option<String>) -> Result<Vec<task_block::Diagnostic>, String> {
+    Ok(task_block::validate_content(&content, &category.unwrap_or_default()))
 }
 
 // ───────── 文件监听（.org 变更 → 重索引 → 通知前端）─────────
