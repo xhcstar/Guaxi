@@ -1699,6 +1699,7 @@ pub async fn build_tex_pdf_preview(source_path: String, content: String) -> Resu
         .arg("compile")
         .arg("--outdir")
         .arg(&outdir)
+        .arg("--synctex") // 生成 <stem>.synctex.gz，供内嵌阅读器做双向定位
         .arg("--untrusted")
         .arg(&tmp_tex);
 

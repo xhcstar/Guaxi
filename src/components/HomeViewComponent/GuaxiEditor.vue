@@ -992,15 +992,18 @@
 
       <GuaxiLatexPreview
         v-if="isPdfPreviewDoc && latexPreviewVisible"
+        ref="latexPreviewRef"
         class="latex-preview-pane"
         :style="{ flex: `0 0 ${latexPreviewWidth}px` }"
         :pdf-path="latexPreviewRealPdfPath"
+        :source-path="latexPreviewSourcePath"
         :building="latexPreviewBuilding"
         :error-text="latexPreviewError"
         :theme="settingsStore.appearanceTheme"
         :title-label="pdfPreviewLabel"
         @rebuild="buildLatexPreview"
         @export="handleLatexExport"
+        @reverse-jump="handlePreviewReverseJump"
       />
 
       <GuaxiOrgTaskPreview
@@ -10671,6 +10674,7 @@ const setupEditorListeners = () => {
     scheduleSourceSyntaxHighlight(editor, 'cursor');
     editorEffectsLeft?.updateCursorTarget();
     updateActiveOrgBlock(e.position.lineNumber);
+    scheduleLatexForwardSync(e.position.lineNumber, e.position.column);
   });
 
   // .org 任务文件：Ctrl/Cmd + 点击 #NOTES START("path") 打开外链笔记
@@ -18389,6 +18393,41 @@ const scheduleLatexPreviewRebuild = () => {
 
 // pdfPath 去掉 query 后的真实路径（供 pane 读取）
 const latexPreviewRealPdfPath = computed(() => String(latexPreviewPdfPath.value).split('?')[0])
+
+// 源文件路径（供预览做双向定位：synctex / typst-ide 都按它匹配）
+const latexPreviewSourcePath = computed(() => selectedFile.value?.path || fileTreeStore.activeTab || '')
+
+// 预览组件实例引用（用于调用 forwardSync 做正向定位）
+const latexPreviewRef = ref(null)
+
+// 反向定位：预览里点了某处 -> 跳到编辑器对应行
+const handlePreviewReverseJump = ({ line, column = 1 } = {}) => {
+  if (!line) return
+  const targetEditor = getActiveEditor()
+  if (!targetEditor) return
+  try {
+    const model = targetEditor.getModel()
+    const maxLine = model ? model.getLineCount() : line
+    const targetLine = Math.min(Math.max(1, line), maxLine)
+    const targetCol = Math.max(1, column)
+    targetEditor.setPosition(new monaco.Position(targetLine, targetCol))
+    targetEditor.revealLineInCenter(targetLine)
+    targetEditor.focus()
+  } catch (err) {
+    logger.warn('[LatexPreview] reverse jump failed', { error: String(err?.message || err) })
+  }
+}
+
+// 正向定位：编辑器光标停留 -> 通知预览滚动到对应位置（防抖）
+let latexForwardSyncTimer = null
+const scheduleLatexForwardSync = (line, column) => {
+  if (!latexPreviewVisible.value || !isPdfPreviewDoc.value) return
+  if (latexForwardSyncTimer) clearTimeout(latexForwardSyncTimer)
+  latexForwardSyncTimer = setTimeout(() => {
+    latexForwardSyncTimer = null
+    latexPreviewRef.value?.forwardSync?.({ line, column })
+  }, 350)
+}
 
 // 导出预览 PDF：复用现有导出流程（从已保存源文件干净构建，.tex 走 tectonic，.typ 走 typst）
 const handleLatexExport = async () => {

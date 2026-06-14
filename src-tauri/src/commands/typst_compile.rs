@@ -7,19 +7,23 @@
 //! 2. 字体来自系统（`include_system_fonts(true)`）；不内嵌、不联网下载包。中文需用户系统装有中文字体。
 //! 3. 字体扫描较慢，全局缓存一次（`FONTS`），后续预览复用。
 
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use chrono::{Datelike, Local, Timelike};
 use once_cell::sync::Lazy;
+use serde::Serialize;
 use tracing::info;
 
 use typst::diag::{FileError, FileResult, SourceDiagnostic};
 use typst::foundations::{Bytes, Datetime};
-use typst::layout::PagedDocument;
+use typst::layout::{Abs, PagedDocument, Point};
 use typst::syntax::{FileId, Source, VirtualPath};
 use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
 use typst::{Library, LibraryExt, World};
+use typst_ide::{jump_from_click, jump_from_cursor, IdeWorld, Jump};
 use typst_kit::download::{Downloader, ProgressSink};
 use typst_kit::fonts::{FontSearcher, FontSlot};
 use typst_kit::package::PackageStorage;
@@ -128,6 +132,12 @@ impl World for GuaxiTypstWorld {
     }
 }
 
+impl IdeWorld for GuaxiTypstWorld {
+    fn upcast(&self) -> &dyn World {
+        self
+    }
+}
+
 fn local_now_datetime() -> Datetime {
     let now = Local::now();
     Datetime::from_ymd_hms(
@@ -179,6 +189,151 @@ fn compile_typ_to_pdf(root: PathBuf, content: String) -> Result<Vec<u8>, String>
     Ok(pdf)
 }
 
+/// 编译并同时缓存 World + 文档，供双向跳转（typst-ide）复用。返回 PDF 字节。
+///
+/// 为什么缓存：jump_from_cursor / jump_from_click 需要"刚编译出来的那份"World 与 PagedDocument，
+/// 而预览编译已经把它们算出来了，丢掉再重算既慢又可能因内容已改而对不上。
+/// 以 source_path 为 key 缓存最近一次预览编译的产物，跳转时直接取用。
+fn compile_typ_and_cache(
+    source_path: &str,
+    root: PathBuf,
+    content: String,
+) -> Result<Vec<u8>, String> {
+    let world = GuaxiTypstWorld::new(root, content);
+    let result = typst::compile::<PagedDocument>(&world);
+    let document = result
+        .output
+        .map_err(|diags| format_diagnostics(&world, &diags))?;
+    let pdf = typst_pdf::pdf(&document, &typst_pdf::PdfOptions::default())
+        .map_err(|diags| format_diagnostics(&world, &diags))?;
+
+    let entry = TypstJumpEntry {
+        world: Arc::new(world),
+        document: Arc::new(document),
+    };
+    JUMP_CACHE
+        .lock()
+        .unwrap()
+        .insert(source_path.to_string(), entry);
+
+    Ok(pdf)
+}
+
+/// 跳转缓存条目：最近一次成功预览编译的 World + 文档。
+#[derive(Clone)]
+struct TypstJumpEntry {
+    world: Arc<GuaxiTypstWorld>,
+    document: Arc<PagedDocument>,
+}
+
+/// source_path -> 最近一次编译产物。
+static JUMP_CACHE: Lazy<Mutex<HashMap<String, TypstJumpEntry>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+#[derive(Debug, Serialize)]
+pub struct TypstForwardResult {
+    pub page: u32,
+    pub x: f32,
+    pub y: f32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TypstInverseResult {
+    pub line: u32,
+    pub column: u32,
+}
+
+/// 正向：源码 (line, column) -> PDF 位置（page + 左上原点坐标 pt）。
+/// 行列均 1-based（与编辑器一致），内部转 0-based。
+#[tauri::command]
+pub async fn typst_forward_search(
+    source_path: String,
+    line: u32,
+    column: u32,
+) -> Result<Option<TypstForwardResult>, String> {
+    let entry = {
+        let cache = JUMP_CACHE.lock().unwrap();
+        cache.get(&source_path).cloned()
+    };
+    let entry = match entry {
+        Some(e) => e,
+        None => return Ok(None), // 还没编译过：前端会先触发一次预览构建
+    };
+
+    let source = entry.world.main_source.clone();
+    let line0 = line.saturating_sub(1) as usize;
+    let col0 = column.saturating_sub(1) as usize;
+    let cursor = match source.lines().line_column_to_byte(line0, col0) {
+        Some(b) => b,
+        None => source
+            .lines()
+            .line_to_byte(line0)
+            .unwrap_or(0),
+    };
+
+    let positions = jump_from_cursor(&entry.document, &source, cursor);
+    Ok(positions.first().map(|pos| TypstForwardResult {
+        page: pos.page.get() as u32,
+        x: pos.point.x.to_pt() as f32,
+        y: pos.point.y.to_pt() as f32,
+    }))
+}
+
+/// 反向：PDF 点击 (page, x, y)（pt，左上原点）-> 源码 (line, column)，均 1-based。
+#[tauri::command]
+pub async fn typst_inverse_search(
+    source_path: String,
+    page: u32,
+    x: f32,
+    y: f32,
+) -> Result<Option<TypstInverseResult>, String> {
+    let entry = {
+        let cache = JUMP_CACHE.lock().unwrap();
+        cache.get(&source_path).cloned()
+    };
+    let entry = match entry {
+        Some(e) => e,
+        None => return Ok(None),
+    };
+
+    let page_idx = page.saturating_sub(1) as usize;
+    let pdf_page = match entry.document.pages.get(page_idx) {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+
+    let click = Point::new(Abs::pt(x as f64), Abs::pt(y as f64));
+    let jump = jump_from_click(
+        entry.world.as_ref(),
+        &entry.document,
+        &pdf_page.frame,
+        click,
+    );
+
+    let Some(Jump::File(id, offset)) = jump else {
+        return Ok(None);
+    };
+
+    // 命中的应是主源文件（编辑器当前内容）。
+    let source = if id == entry.world.main_id {
+        entry.world.main_source.clone()
+    } else {
+        match entry.world.source(id) {
+            Ok(s) => s,
+            Err(_) => return Ok(None),
+        }
+    };
+
+    let lines = source.lines();
+    let line0 = lines.byte_to_line(offset).unwrap_or(0);
+    let col0 = lines.byte_to_column(offset).unwrap_or(0);
+
+    Ok(Some(TypstInverseResult {
+        line: (line0 + 1) as u32,
+        column: (col0 + 1) as u32,
+    }))
+}
+
 fn input_dir_of(source_path: &str) -> Result<(PathBuf, PathBuf), String> {
     let source = PathBuf::from(source_path.trim());
     let input_dir = source
@@ -199,7 +354,7 @@ pub async fn build_typ_pdf_preview(source_path: String, content: String) -> Resu
         .unwrap_or("preview")
         .to_string();
 
-    let pdf_bytes = compile_typ_to_pdf(input_dir, content)?;
+    let pdf_bytes = compile_typ_and_cache(&source_path, input_dir, content)?;
 
     let tmp_base = std::env::temp_dir().join("guaxi_typst_preview");
     let _ = std::fs::create_dir_all(&tmp_base);
