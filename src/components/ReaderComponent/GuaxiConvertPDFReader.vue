@@ -23,25 +23,28 @@
       </div>
 
       <div class="right-controls">
-        <button class="rotate-left" @click="rotate(-90)" title="向左旋转90度">
-          <n-icon :component="RefreshCircleOutline" :rotate="90" />
-          <span class="btn-text">左旋</span>
-        </button>
-        <button class="rotate-right" @click="rotate(90)" title="向右旋转90度">
-          <n-icon :component="RefreshCircleOutline" :rotate="-90" />
-          <span class="btn-text">右旋</span>
-        </button>
-        <button class="fit-width" @click="fitToWidth" title="将页面调整为适合宽度">
-          <n-icon :component="ExpandOutline" />
-          <span class="btn-text">适合宽度</span>
-        </button>
-        <button class="zoom-out" @click="zoomOut" :disabled="zoomLevel <= 0.5" title="缩小">
-          <n-icon :component="RemoveOutline" />
-        </button>
-        <span class="zoom-level">{{ Math.round(zoomLevel * 100) }}%</span>
-        <button class="zoom-in" @click="zoomIn" :disabled="zoomLevel >= 2" title="放大">
-          <n-icon :component="AddOutline" />
-        </button>
+        <!-- 旧版渲染核心(PDF.js)专用控件；新版 pdfium 阅读器用自带工具栏的缩放/适配 -->
+        <template v-if="!useNewPdfViewer">
+          <button class="rotate-left" @click="rotate(-90)" title="向左旋转90度">
+            <n-icon :component="RefreshCircleOutline" :rotate="90" />
+            <span class="btn-text">左旋</span>
+          </button>
+          <button class="rotate-right" @click="rotate(90)" title="向右旋转90度">
+            <n-icon :component="RefreshCircleOutline" :rotate="-90" />
+            <span class="btn-text">右旋</span>
+          </button>
+          <button class="fit-width" @click="fitToWidth" title="将页面调整为适合宽度">
+            <n-icon :component="ExpandOutline" />
+            <span class="btn-text">适合宽度</span>
+          </button>
+          <button class="zoom-out" @click="zoomOut" :disabled="zoomLevel <= 0.5" title="缩小">
+            <n-icon :component="RemoveOutline" />
+          </button>
+          <span class="zoom-level">{{ Math.round(zoomLevel * 100) }}%</span>
+          <button class="zoom-in" @click="zoomIn" :disabled="zoomLevel >= 2" title="放大">
+            <n-icon :component="AddOutline" />
+          </button>
+        </template>
 
         <n-dropdown trigger="click" :options="viewModeOptions" @select="handleViewModeSelect">
           <n-button class="layout-switch" text title="切换布局">
@@ -117,8 +120,29 @@
           <GuaxiOutline />
         </div>
 
-        <!-- 修改PDF渲染区域 -->
-        <div class="pdf-render-panel" v-show="viewMode !== 'full-right'" ref="pdfPanel" @wheel="handleWheelZoom" @mousedown="startDrag"
+        <!-- 新版统一 pdfium 阅读器（GuaxiPdfViewer，连续滚动 + 虚拟化 + 字级文本层 + 写回式高亮）-->
+        <div v-if="useNewPdfViewer" class="pdf-render-panel pdf-render-panel--new" v-show="viewMode !== 'full-right'">
+          <GuaxiPdfViewer
+            ref="pdfViewer"
+            :path="props.filePath"
+            :theme="viewerTheme"
+            :features="newViewerFeatures"
+            @ready="onViewerReady"
+            @page-change="onViewerPageChange"
+            @outline="onViewerOutline"
+            @highlight-click="onViewerHighlightClick"
+          />
+          <div class="pdf-annotation-toolbar-wrap pdf-annotation-toolbar-wrap--new" @mousedown.stop @click.stop @dblclick.stop>
+            <div class="pdf-annotation-toolbar">
+              <button class="pdf-annotation-tool-btn" type="button" title="高亮所选文本（写回 PDF）" @click="addHighlightViaViewer">
+                <n-icon :component="ColorWandOutline" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 旧版渲染核心（PDF.js）；灰度回退用，验证通过后移除 -->
+        <div v-else class="pdf-render-panel" v-show="viewMode !== 'full-right'" ref="pdfPanel" @wheel="handleWheelZoom" @mousedown="startDrag"
           @mousemove="handleDrag" @mouseup="handlePdfPanelMouseUp" @mouseleave="endDrag" @mouseenter="setScrollTargetFromEvent"
           :style="{ cursor: isDragging ? 'grabbing' : 'text' }">
 
@@ -387,6 +411,7 @@ import { useRightSiderStore } from '../../stores/rightSiderStore'
 import GuaxiOutline from '../HomeViewComponent/GuaxiOutline.vue'
 import GuaxiAgentAssistant from '../HomeViewComponent/GuaxiAgentAssistant.vue'
 import GuaxiSelectionTranslatePanel from '../HomeViewComponent/GuaxiSelectionTranslatePanel.vue'
+import GuaxiPdfViewer from '../PdfViewer/GuaxiPdfViewer.vue'
 import {
   ArrowBackOutline,
   ArrowForwardOutline,
@@ -790,6 +815,56 @@ const {
   removeAnnotationEditorById,
   highlightSelectionAsAnnotation
 } = usePdfRenderer(props);
+
+// === 新版统一 pdfium 阅读器（GuaxiPdfViewer）灰度开关与接线 ===
+// useNewPdfViewer = true 时，PDF 渲染核心走 GuaxiPdfViewer（连续滚动/虚拟化/字级文本层/写回式高亮）；
+// 旧的 PDF.js 路径保留为 v-else 回退，QA 通过后再删除。
+const pdfViewer = ref(null)
+const useNewPdfViewer = ref(true)
+const viewerTheme = computed(() =>
+  (typeof document !== 'undefined' && document.documentElement.classList.contains('dark')) ? 'dark' : 'light'
+)
+const newViewerFeatures = {
+  outline: true,
+  search: true,
+  annotations: true,
+  reverseJump: false,
+  export: false,
+  rebuild: false,
+}
+
+const onViewerReady = ({ totalPages: tp } = {}) => {
+  if (tp) totalPages.value = tp
+  if (pendingRestorePage.value != null && tp) {
+    const p = Math.max(1, Math.min(Number(pendingRestorePage.value) || 1, tp))
+    pendingRestorePage.value = null
+    if (p !== 1) nextTick(() => pdfViewer.value?.goToPage(p))
+  }
+}
+const onViewerPageChange = (n) => {
+  const p = Number(n) || 1
+  if (p === currentPage.value) return
+  currentPage.value = p
+  jumpPage.value = p
+  loadMarkdownPage(p)
+}
+const onViewerOutline = (list) => {
+  outlineStore.setOutline(Array.isArray(list) ? list : [])
+  outlineStore.setJumpToLine((p) => {
+    const n = Number(p)
+    if (Number.isFinite(n)) pdfViewer.value?.goToPage(n)
+  })
+}
+const onViewerHighlightClick = async ({ annotId, page } = {}) => {
+  if (!annotId) return
+  const ok = await pdfViewer.value?.deleteHighlight(page || currentPage.value, annotId)
+  if (ok) message.info('已删除高亮')
+}
+const addHighlightViaViewer = async () => {
+  const r = await pdfViewer.value?.addHighlightFromSelection({})
+  if (r) message.success('已高亮并写回 PDF')
+  else message.info('请先在页面中选择文本')
+}
 
 // 4. 视图状态
 const zoomLevel = ref(1);
@@ -2509,6 +2584,7 @@ const handlePdfSearchInput = () => {
 }
 
 const openPdfSearch = async () => {
+  if (useNewPdfViewer.value) { message.info('请使用预览工具栏中的搜索框'); return }
   closeMarkdownSearch()
   pdfSearchVisible.value = true
   await nextTick()
@@ -3387,6 +3463,11 @@ const savePdfAnnotationsToOriginal = async () => {
 }
 
 const loadPdfPage = async (pageNum) => {
+  if (useNewPdfViewer.value) {
+    // 新版渲染核心由 GuaxiPdfViewer 负责，这里只需驱动其跳页（首次加载由 :path 触发）。
+    pdfViewer.value?.goToPage(pageNum)
+    return
+  }
   try {
     await ensureAnnotationEditorUi({ containerEl: pdfPanel.value, viewerEl: pdfPageContainer.value })
     await setPdfAnnotationMode(annotationMode.value)
@@ -4093,11 +4174,13 @@ const toggleAssistantPanel = () => {
 
 // 25. 缩放功能
 const zoomIn = async () => {
+  if (useNewPdfViewer.value) { pdfViewer.value?.zoomIn?.(); return }
   zoomLevel.value = Math.min(zoomLevel.value + 0.1, 2)
   await loadPdfPage(currentPage.value)
 };
 
 const zoomOut = async () => {
+  if (useNewPdfViewer.value) { pdfViewer.value?.zoomOut?.(); return }
   zoomLevel.value = Math.max(zoomLevel.value - 0.1, 0.5)
   await loadPdfPage(currentPage.value)
 };
@@ -4150,6 +4233,7 @@ const stopResize = () => {
 
 // 27. 旋转功能
 const rotate = async (degrees) => {
+  if (useNewPdfViewer.value) { message.info('该阅读器暂不支持旋转'); return }
   rotation.value = (rotation.value + degrees) % 360
   await loadPdfPage(currentPage.value)
   await fitToWidth()
@@ -4157,6 +4241,10 @@ const rotate = async (degrees) => {
 
 // 28. 自适应宽度
 const fitToWidth = async () => {
+  if (useNewPdfViewer.value) {
+    pdfViewer.value?.fitWidth?.()
+    return
+  }
   const panel = pdfPanel.value
   if (!panel) return
 

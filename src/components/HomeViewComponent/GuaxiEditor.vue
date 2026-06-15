@@ -368,23 +368,7 @@
             </n-tooltip>
           </n-dropdown>
 
-          <n-tooltip v-if="isPdfPreviewDoc" placement="top" trigger="hover">
-            <template #trigger>
-              <n-button text :type="latexPreviewVisible ? 'primary' : 'default'" @click="toggleLatexPreview">
-                <Icon :icon="isTypFile ? typFileIcon : texFileIcon" width="18" height="18" />
-              </n-button>
-            </template>
-            {{ latexPreviewVisible ? `关闭 ${pdfPreviewLabel} 预览` : `${pdfPreviewLabel} 预览` }}
-          </n-tooltip>
-
-          <n-tooltip v-if="isOrgTaskFile" placement="top" trigger="hover">
-            <template #trigger>
-              <n-button text :type="orgPreviewVisible ? 'primary' : 'default'" @click="toggleOrgPreview">
-                <Icon :icon="orgTaskIcon" width="18" height="18" />
-              </n-button>
-            </template>
-            {{ orgPreviewVisible ? '关闭任务预览' : '任务预览' }}
-          </n-tooltip>
+          <!-- LaTeX/Typst/Org 不再有独立渲染图标：统一走上面的渲染下拉（编辑/预览/分屏，Ctrl+1/2/3）-->
 
           <template v-if="isOrgTaskFile">
             <n-tooltip placement="top" trigger="hover">
@@ -984,7 +968,7 @@
       </div>
 
       <div
-        v-if="isAnySplitPreview"
+        v-if="isAnySplitPreview && !previewPaneFull"
         class="latex-preview-resizer"
         :class="{ dragging: latexPreviewResizing }"
         @mousedown="startResizeLatexPreview"
@@ -994,7 +978,7 @@
         v-if="isPdfPreviewDoc && latexPreviewVisible"
         ref="latexPreviewRef"
         class="latex-preview-pane"
-        :style="{ flex: `0 0 ${latexPreviewWidth}px` }"
+        :style="previewPaneStyle"
         :pdf-path="latexPreviewRealPdfPath"
         :source-path="latexPreviewSourcePath"
         :building="latexPreviewBuilding"
@@ -1009,7 +993,7 @@
       <GuaxiOrgTaskPreview
         v-if="isOrgTaskFile && orgPreviewVisible"
         class="latex-preview-pane"
-        :style="{ flex: `0 0 ${latexPreviewWidth}px` }"
+        :style="previewPaneStyle"
         :content="orgPreviewContent"
         :category="orgPreviewCategory"
         :theme="settingsStore.appearanceTheme"
@@ -18455,6 +18439,13 @@ const orgPreviewCategory = computed(() => {
 const isAnySplitPreview = computed(
   () => (isPdfPreviewDoc.value && latexPreviewVisible.value) || (isOrgTaskFile.value && orgPreviewVisible.value)
 )
+// 全屏预览（编辑器隐藏）：previewMode=toggle 且 mode=preview。此时预览面板占满宽度、不显示 resizer。
+const previewPaneFull = computed(() => previewMode.value === 'toggle' && mode.value === 'preview')
+const previewPaneStyle = computed(() =>
+  previewPaneFull.value
+    ? { flex: '1 1 auto', minWidth: 0 }
+    : { flex: `0 0 ${latexPreviewWidth.value}px` }
+)
 let orgPreviewDebounceTimer = null
 const refreshOrgPreviewContent = () => {
   orgPreviewContent.value = getCurrentTexContent()
@@ -19254,41 +19245,89 @@ const handlePreviewModeSelect = async (key) => {
     setHomePreviewModeKeySafe('edit');
     editorSurfaceMode.value = 'source';
     previewMode.value = 'toggle';
+    // 退出渲染：关闭 LaTeX/Typst/Org 预览面板。
+    latexPreviewVisible.value = false;
+    orgPreviewVisible.value = false;
     await setMainMode('edit');
     return;
   }
 
   if (desiredKey === 'preview') {
-    if (!canPreview.value) {
-      message.warning('仅 Markdown 文件支持预览');
-      setHomePreviewModeKeySafe('edit');
+    // Markdown：内联 HTML 全屏预览。
+    if (canPreview.value) {
+      latexPreviewVisible.value = false;
+      orgPreviewVisible.value = false;
+      setHomePreviewModeKeySafe('preview');
+      editorSurfaceMode.value = 'source';
       previewMode.value = 'toggle';
-      await setMainMode('edit');
+      await setMainMode('preview');
       return;
     }
-    setHomePreviewModeKeySafe('preview');
-    editorSurfaceMode.value = 'source';
+    // LaTeX/Typst：编译预览 PDF，全屏显示（编辑器隐藏）。
+    if (isPdfPreviewDoc.value) {
+      setHomePreviewModeKeySafe('preview');
+      editorSurfaceMode.value = 'source';
+      previewMode.value = 'toggle';
+      latexPreviewVisible.value = true;
+      buildLatexPreview();
+      await setMainMode('preview');
+      return;
+    }
+    // Org 任务：渲染任务预览，全屏显示。
+    if (isOrgTaskFile.value) {
+      setHomePreviewModeKeySafe('preview');
+      editorSurfaceMode.value = 'source';
+      previewMode.value = 'toggle';
+      orgPreviewVisible.value = true;
+      refreshOrgPreviewContent();
+      await setMainMode('preview');
+      return;
+    }
+    message.warning('当前文档不支持预览');
+    setHomePreviewModeKeySafe('edit');
     previewMode.value = 'toggle';
-    await setMainMode('preview');
+    await setMainMode('edit');
     return;
   }
 
   if (desiredKey === 'split') {
-    if (!canPreview.value) {
-      message.warning('仅 Markdown 文件支持预览');
-      setHomePreviewModeKeySafe('edit');
-      previewMode.value = 'toggle';
+    // Markdown：左右分屏（编辑器 + 内联 HTML）。
+    if (canPreview.value) {
+      latexPreviewVisible.value = false;
+      orgPreviewVisible.value = false;
+      setHomePreviewModeKeySafe('split');
+      editorSurfaceMode.value = 'source';
+      previewMode.value = 'split';
       await setMainMode('edit');
-      renderedHtml.value = '';
+      await nextTick();
+      refreshPreview();
       return;
     }
-
-    setHomePreviewModeKeySafe('split');
-    editorSurfaceMode.value = 'source';
-    previewMode.value = 'split';
+    // LaTeX/Typst：编辑器 + PDF 预览面板分屏。
+    if (isPdfPreviewDoc.value) {
+      setHomePreviewModeKeySafe('split');
+      editorSurfaceMode.value = 'source';
+      previewMode.value = 'split';
+      latexPreviewVisible.value = true;
+      buildLatexPreview();
+      await setMainMode('edit');
+      return;
+    }
+    // Org 任务：编辑器 + 任务预览分屏。
+    if (isOrgTaskFile.value) {
+      setHomePreviewModeKeySafe('split');
+      editorSurfaceMode.value = 'source';
+      previewMode.value = 'split';
+      orgPreviewVisible.value = true;
+      refreshOrgPreviewContent();
+      await setMainMode('edit');
+      return;
+    }
+    message.warning('当前文档不支持预览');
+    setHomePreviewModeKeySafe('edit');
+    previewMode.value = 'toggle';
     await setMainMode('edit');
-    await nextTick();
-    refreshPreview();
+    renderedHtml.value = '';
     return;
   }
 

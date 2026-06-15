@@ -242,11 +242,15 @@
             :nodes="taskCatTrees[activeTaskCat]"
             v-model:expanded-keys="taskCatExpandedKeys[activeTaskCat]"
             v-model:selected-keys="taskCatSelectedKeys[activeTaskCat]"
+            :editing-id="editingId"
+            v-model:edit-name="editName"
             :root-id="catPathOf(activeTaskCat)"
             @open-file="handleTaskOpenFile"
             @load-children="handleTaskLoadChildren"
             @contextmenu="(p) => openGenContextMenu('task', p)"
             @blank-contextmenu="(p) => openGenBlankMenu('task', p, catPathOf(activeTaskCat))"
+            @rename-commit="handleInlineCommit"
+            @rename-cancel="cancelInlineCreate"
           />
         </div>
       </div>
@@ -335,11 +339,15 @@
             :nodes="externalDirTree"
             v-model:expanded-keys="externalExpandedKeys"
             v-model:selected-keys="externalSelectedKeys"
+            :editing-id="editingId"
+            v-model:edit-name="editName"
             :root-id="externalDir"
             @open-file="handleExternalOpenFile"
             @load-children="handleExternalLoadChildren"
             @contextmenu="(p) => openGenContextMenu('plain', p)"
             @blank-contextmenu="(p) => openGenBlankMenu('plain', p)"
+            @rename-commit="handleInlineCommit"
+            @rename-cancel="cancelInlineCreate"
           />
         </div>
       </div>
@@ -1687,27 +1695,124 @@ const taskCatOfPath = (p) => {
   return null
 }
 
-const genAddFile = async (mode, dir) => {
-  const name = await promptName('新建文件', mode === 'task' ? 'todo.org' : '', '输入文件名，例如 notes.md / todo.org')
-  if (!name) return
-  const path = normalizePath(`${dir}/${name}`)
-  await invoke('create_file_with_content', { path, content: '' })
-  await refreshModeDir(mode, dir)
-  // 新建后直接打开
+// === 行内新建（与知识库模式一致：在树中插入可编辑临时节点，而非弹窗）===
+// plain / task 模式共用 editingNode / editName / editingId（同一时刻只有一个行内编辑），
+// 通过 inlineCreateCtx 记录“在哪个模式/父目录下新建”，提交时据此落盘并刷新对应树。
+const inlineCreateCtx = ref(null)
+
+const pruneNodeById = (arr, id) =>
+  (Array.isArray(arr) ? arr : []).filter((n) => {
+    if (normalizePath(n.id) === id) return false
+    if (n.children) n.children = pruneNodeById(n.children, id)
+    return true
+  })
+
+const insertInlineTempNode = (mode, parentDir, isDirectory) => {
+  const tempName = isDirectory ? '新建文件夹' : '新建文件'
+  const baseDir = normalizePath(parentDir)
+  const node = {
+    id: `${baseDir}/${tempName}`,
+    name: tempName,
+    is_directory: isDirectory,
+    children: isDirectory ? [] : undefined,
+    isNew: true,
+  }
+  if (mode === 'plain') {
+    const root = normalizePath(externalDir.value)
+    if (baseDir === root) {
+      externalDirTree.value = [node, ...externalDirTree.value]
+    } else {
+      const parent = findNodeById(externalDirTree.value, baseDir)
+      if (parent) {
+        parent.children = [node, ...(parent.children || [])]
+        if (!externalExpandedKeys.value.includes(baseDir)) externalExpandedKeys.value = [...externalExpandedKeys.value, baseDir]
+      } else {
+        externalDirTree.value = [node, ...externalDirTree.value]
+      }
+    }
+  } else {
+    const cat = taskCatOfPath(baseDir) || activeTaskCat.value
+    const root = catPathOf(cat)
+    if (baseDir === root) {
+      taskCatTrees[cat] = [node, ...(taskCatTrees[cat] || [])]
+    } else {
+      const parent = findNodeById(taskCatTrees[cat], baseDir)
+      if (parent) {
+        parent.children = [node, ...(parent.children || [])]
+        if (!taskCatExpandedKeys[cat].includes(baseDir)) taskCatExpandedKeys[cat] = [...taskCatExpandedKeys[cat], baseDir]
+      } else {
+        taskCatTrees[cat] = [node, ...(taskCatTrees[cat] || [])]
+      }
+    }
+  }
+  return node
+}
+
+const removeInlineTempNode = (mode, node) => {
+  const id = normalizePath(node?.id || '')
+  if (!id) return
+  if (mode === 'plain') {
+    externalDirTree.value = pruneNodeById(externalDirTree.value, id)
+  } else {
+    const cat = taskCatOfPath(id) || activeTaskCat.value
+    taskCatTrees[cat] = pruneNodeById(taskCatTrees[cat] || [], id)
+  }
+}
+
+const beginInlineCreate = async ({ mode, parentDir, isDirectory }) => {
+  if (inlineCreateCtx.value) cancelInlineCreate()
+  const node = insertInlineTempNode(mode, parentDir, isDirectory)
+  inlineCreateCtx.value = { mode, parentDir: normalizePath(parentDir), isDirectory, node }
+  startEditing(node)
+  await nextTick()
+  await focusEditingInput(node.id)
+}
+
+const handleInlineCommit = async () => {
+  const ctx = inlineCreateCtx.value
+  if (!ctx) { editingNode.value = null; editName.value = ''; return }
+  const name = (editName.value || '').trim()
+  if (!name || name === '新建文件' || name === '新建文件夹') {
+    cancelInlineCreate()
+    return
+  }
+  const { mode, parentDir, isDirectory } = ctx
+  const path = normalizePath(`${parentDir}/${name}`)
   try {
-    const res = await fileTreeStore.fetchFileContent(path)
-    if (res?.ok) await fileTreeStore.openFileInTab(path, res.content, { unsupported: !!res.unsupported })
-  } catch {}
-  message.success('已新建文件')
+    if (isDirectory) await invoke('create_directory', { path })
+    else await invoke('create_file_with_content', { path, content: '' })
+    inlineCreateCtx.value = null
+    editingNode.value = null
+    editName.value = ''
+    await refreshModeDir(mode, parentDir)
+    if (!isDirectory) {
+      try {
+        const res = await fileTreeStore.fetchFileContent(path)
+        if (res?.ok) await fileTreeStore.openFileInTab(path, res.content, { unsupported: !!res.unsupported })
+      } catch {}
+    }
+    message.success(isDirectory ? '已新建文件夹' : '已新建文件')
+  } catch (e) {
+    logger.error('新建失败:', e)
+    message.error('新建失败: ' + (e?.message || e))
+    cancelInlineCreate()
+  }
+}
+
+const cancelInlineCreate = () => {
+  const ctx = inlineCreateCtx.value
+  if (ctx) removeInlineTempNode(ctx.mode, ctx.node)
+  inlineCreateCtx.value = null
+  editingNode.value = null
+  editName.value = ''
+}
+
+const genAddFile = async (mode, dir) => {
+  await beginInlineCreate({ mode, parentDir: dir, isDirectory: false })
 }
 
 const genAddFolder = async (mode, dir) => {
-  const name = await promptName('新建文件夹', '', '输入文件夹名')
-  if (!name) return
-  const path = normalizePath(`${dir}/${name}`)
-  await invoke('create_directory', { path })
-  await refreshModeDir(mode, dir)
-  message.success('已新建文件夹')
+  await beginInlineCreate({ mode, parentDir: dir, isDirectory: true })
 }
 
 const genImportFile = async (mode, dir) => {
