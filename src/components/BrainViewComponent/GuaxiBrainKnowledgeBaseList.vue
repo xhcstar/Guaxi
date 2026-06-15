@@ -391,7 +391,9 @@ onUnmounted(() => {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  /* 设计说明：收缩态需要列表自身可滚动；展开态其它条目已 v-show 隐藏，树仍由 .tree-container 内部滚动。 */
+  overflow-x: hidden;
+  overflow-y: auto;
   border-radius: 8px;
   padding-left: 0;
   padding-right: 0;
