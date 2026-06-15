@@ -2802,6 +2802,89 @@ pub fn kg_kb_summaries() -> Result<Vec<KgKbSummary>, String> {
     Ok(out)
 }
 
+#[derive(serde::Serialize)]
+pub struct KgTagCount {
+    pub tag: String,
+    pub count: i64,
+}
+
+/// 列出某知识库的全部标签及其出现次数(供搜索筛选器的标签选择器使用)。
+#[tauri::command]
+pub fn kg_all_tags(kb_name: String) -> Result<Vec<KgTagCount>, String> {
+    build_if_needed(&kb_name)?;
+    let conn = ensure_kg_db()?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT tag, COUNT(*) AS c FROM kg_node_tags \
+             WHERE kb_name=?1 GROUP BY tag ORDER BY c DESC, tag ASC",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([&kb_name], |r| {
+            Ok(KgTagCount { tag: r.get(0)?, count: r.get(1)? })
+        })
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
+/// 返回携带指定标签的文件绝对路径集合(文件节点本身、或其章节/段落子节点带标签均算)。
+/// match_all=true 时要求文件同时满足所有标签;否则任一标签即可。
+#[tauri::command]
+pub fn kg_files_by_tags(
+    kb_name: String,
+    tags: Vec<String>,
+    match_all: Option<bool>,
+) -> Result<Vec<String>, String> {
+    let tags: Vec<String> = tags.into_iter().map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect();
+    if tags.is_empty() {
+        return Ok(Vec::new());
+    }
+    build_if_needed(&kb_name)?;
+    let conn = ensure_kg_db()?;
+
+    // tag → 该标签覆盖到的文件路径集合
+    let mut per_tag: Vec<std::collections::HashSet<String>> = Vec::with_capacity(tags.len());
+    let mut stmt = conn
+        .prepare(
+            "SELECT COALESCE(NULLIF(n.file_path,''), n.abs_path) AS fpath \
+             FROM kg_node_tags t JOIN kg_nodes n \
+               ON n.kb_name=t.kb_name AND n.node_id=t.node_id \
+             WHERE t.kb_name=?1 AND t.tag=?2 \
+               AND n.node_type IN ('file','section','paragraph') \
+               AND fpath IS NOT NULL AND fpath<>''",
+        )
+        .map_err(|e| e.to_string())?;
+
+    for tag in &tags {
+        let rows = stmt
+            .query_map(rusqlite::params![kb_name, tag], |r| r.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        let mut set = std::collections::HashSet::new();
+        for row in rows {
+            set.insert(row.map_err(|e| e.to_string())?);
+        }
+        per_tag.push(set);
+    }
+
+    let all = match_all.unwrap_or(false);
+    let mut result: std::collections::HashSet<String> = per_tag.first().cloned().unwrap_or_default();
+    for set in per_tag.iter().skip(1) {
+        if all {
+            result = result.intersection(set).cloned().collect();
+        } else {
+            for p in set {
+                result.insert(p.clone());
+            }
+        }
+    }
+
+    Ok(result.into_iter().collect())
+}
+
 /// 机制B(可选,行级合并)开关:存于 kg_settings。
 pub fn manual_sync_enabled() -> bool {
     get_kg_setting("p2p_manual_sync").as_deref() == Some("1")

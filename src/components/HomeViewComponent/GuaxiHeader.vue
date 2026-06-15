@@ -19,6 +19,20 @@
           <template #prefix>
             <n-icon :component="Search32Filled" />
           </template>
+          <template #suffix>
+            <span
+              class="search-filter-btn"
+              :class="{ active: hasActiveFilters }"
+              title="筛选：时间 / 文件类型 / 标签"
+              @mousedown.prevent
+              @click="toggleFilters"
+            >
+              <svg viewBox="0 0 24 24" width="15" height="15">
+                <path fill="currentColor" d="M3 4.5h18l-7.2 8.4v5.1l-3.6 1.8v-6.9z" />
+              </svg>
+              <span v-if="activeFilterCount" class="search-filter-badge">{{ activeFilterCount }}</span>
+            </span>
+          </template>
         </n-input>
       </div>
     </div>
@@ -153,6 +167,77 @@
             <n-icon :component="item.icon" />
           </span>
           <span class="search-dd-row-text">{{ item.label }}</span>
+        </div>
+        <div class="search-dd-divider" />
+      </div>
+
+      <!-- 筛选：时间段 / 文件类型(多选) / 标签 -->
+      <div v-if="filtersOpen" class="search-dd-section search-filters">
+        <div class="filter-group">
+          <div class="filter-label">时间段</div>
+          <div class="filter-chips">
+            <span
+              v-for="t in TIME_PRESETS"
+              :key="t.key"
+              class="filter-chip"
+              :class="{ on: filterTimePreset === t.key }"
+              @click="setTimePreset(t.key)"
+            >{{ t.label }}</span>
+          </div>
+        </div>
+        <div v-if="filterTimePreset === 'custom'" class="filter-dates">
+          <input type="date" v-model="filterCustomStart" class="filter-date" @mousedown.stop />
+          <span class="filter-dash">~</span>
+          <input type="date" v-model="filterCustomEnd" class="filter-date" @mousedown.stop />
+        </div>
+
+        <div class="filter-group">
+          <div class="filter-label">文件类型</div>
+          <div class="filter-chips">
+            <span
+              v-for="e in COMMON_EXTS"
+              :key="e.ext"
+              class="filter-chip"
+              :class="{ on: filterExts.includes(e.ext) }"
+              @click="toggleExt(e.ext)"
+            >{{ e.label }}</span>
+            <span
+              v-for="e in customExts"
+              :key="'custom-' + e"
+              class="filter-chip on"
+              @click="toggleExt(e)"
+            >.{{ e }} ✕</span>
+            <input
+              v-model="customExtInput"
+              class="filter-ext-input"
+              placeholder="自定义后缀↵"
+              @keyup.enter="addCustomExt"
+              @mousedown.stop
+            />
+          </div>
+        </div>
+
+        <div class="filter-group">
+          <div class="filter-label">标签</div>
+          <div class="filter-chips">
+            <span v-if="!availableTags.length" class="filter-empty">该知识库暂无标签</span>
+            <span
+              v-for="t in availableTags.slice(0, 60)"
+              :key="t.tag"
+              class="filter-chip"
+              :class="{ on: filterTags.includes(t.tag) }"
+              @click="toggleTag(t.tag)"
+            >{{ t.tag }}<i class="filter-chip-count">{{ t.count }}</i></span>
+          </div>
+          <label v-if="filterTags.length > 1" class="filter-matchall">
+            <input type="checkbox" v-model="filterTagMatchAll" @mousedown.stop />
+            <span>同时满足所有标签</span>
+          </label>
+        </div>
+
+        <div class="filter-actions">
+          <span class="filter-hint">回车应用筛选</span>
+          <span v-if="hasActiveFilters" class="filter-clear" @click="clearFilters">清除筛选</span>
         </div>
         <div class="search-dd-divider" />
       </div>
@@ -691,8 +776,192 @@ const dropdownFloatingStyle = computed(() => {
 
 const trimmedQuery = computed(() => searchQuery.value.trim())
 
+// ───── 搜索筛选：时间段 / 文件类型(多选) / 标签 ─────
+const filtersOpen = ref(false)
+const filterTimePreset = ref('any')
+const filterCustomStart = ref('')
+const filterCustomEnd = ref('')
+const filterExts = ref([])
+const filterTags = ref([])
+const filterTagMatchAll = ref(false)
+const availableTags = ref([])
+const customExtInput = ref('')
+
+const TIME_PRESETS = [
+  { key: 'any', label: '全部' },
+  { key: 'today', label: '今天' },
+  { key: '7d', label: '近 7 天' },
+  { key: '30d', label: '近 30 天' },
+  { key: '365d', label: '近一年' },
+  { key: 'custom', label: '自定义' },
+]
+
+const COMMON_EXTS = [
+  { ext: 'md', label: 'Markdown' },
+  { ext: 'txt', label: '文本' },
+  { ext: 'pdf', label: 'PDF' },
+  { ext: 'docx', label: 'Word' },
+  { ext: 'xlsx', label: 'Excel' },
+  { ext: 'pptx', label: 'PPT' },
+  { ext: 'png', label: 'PNG' },
+  { ext: 'jpg', label: 'JPG' },
+  { ext: 'svg', label: 'SVG' },
+  { ext: 'json', label: 'JSON' },
+  { ext: 'html', label: 'HTML' },
+  { ext: 'css', label: 'CSS' },
+  { ext: 'tex', label: 'TeX' },
+  { ext: 'typ', label: 'Typst' },
+]
+const COMMON_EXT_SET = new Set(COMMON_EXTS.map((e) => e.ext))
+const customExts = computed(() => filterExts.value.filter((e) => !COMMON_EXT_SET.has(e)))
+
+// 搜索根目录：跟随左栏文件树当前模式(知识库/文件/任务)的激活根目录;
+// 未设置时回退到知识库激活路径。摘录笔记搜索除外(固定为文件库目录)。
+const searchRootPath = computed(
+  () => fileTreeStore.sidebarNavigationRootPath || fileTreeStore.activeRepoPath
+)
+const activeKbName = computed(() => basename(searchRootPath.value))
+
+const timeRange = computed(() => {
+  const now = Date.now()
+  const day = 86400000
+  switch (filterTimePreset.value) {
+    case 'today': {
+      const d = new Date()
+      d.setHours(0, 0, 0, 0)
+      return { after: d.getTime(), before: null }
+    }
+    case '7d': return { after: now - 7 * day, before: null }
+    case '30d': return { after: now - 30 * day, before: null }
+    case '365d': return { after: now - 365 * day, before: null }
+    case 'custom': {
+      const a = filterCustomStart.value ? new Date(filterCustomStart.value + 'T00:00:00').getTime() : null
+      const b = filterCustomEnd.value ? new Date(filterCustomEnd.value + 'T23:59:59').getTime() : null
+      return { after: Number.isFinite(a) ? a : null, before: Number.isFinite(b) ? b : null }
+    }
+    default: return { after: null, before: null }
+  }
+})
+
+const extensionsParam = computed(() => (filterExts.value.length ? [...filterExts.value] : null))
+
+const hasActiveFilters = computed(
+  () => filterExts.value.length > 0 || filterTags.value.length > 0 || filterTimePreset.value !== 'any'
+)
+const activeFilterCount = computed(
+  () =>
+    (filterTimePreset.value !== 'any' ? 1 : 0) +
+    (filterExts.value.length ? 1 : 0) +
+    (filterTags.value.length ? 1 : 0)
+)
+
+const searchFilterArgs = computed(() => ({
+  extensions: extensionsParam.value,
+  modifiedAfter: timeRange.value.after,
+  modifiedBefore: timeRange.value.before,
+}))
+
+const scheduleFilterSearch = () => {
+  if (!isSearchDropdownVisible.value) return
+  updateDropdownPosition()
+  debouncedRunPreviewSearch()
+}
+
+const toggleFilters = async () => {
+  await showSearchOptions()
+  filtersOpen.value = !filtersOpen.value
+  if (filtersOpen.value) loadAvailableTags()
+  nextTick(() => {
+    updateDropdownPosition()
+    searchInputRef.value?.focus?.()
+  })
+}
+
+const setTimePreset = (key) => {
+  filterTimePreset.value = key
+  scheduleFilterSearch()
+}
+const toggleExt = (ext) => {
+  const i = filterExts.value.indexOf(ext)
+  if (i >= 0) filterExts.value.splice(i, 1)
+  else filterExts.value.push(ext)
+  scheduleFilterSearch()
+}
+const addCustomExt = () => {
+  const raw = String(customExtInput.value || '').trim().replace(/^\./, '').toLowerCase()
+  customExtInput.value = ''
+  if (!raw) return
+  if (!filterExts.value.includes(raw)) filterExts.value.push(raw)
+  scheduleFilterSearch()
+}
+const toggleTag = (tag) => {
+  const i = filterTags.value.indexOf(tag)
+  if (i >= 0) filterTags.value.splice(i, 1)
+  else filterTags.value.push(tag)
+  scheduleFilterSearch()
+}
+const clearFilters = () => {
+  filterTimePreset.value = 'any'
+  filterCustomStart.value = ''
+  filterCustomEnd.value = ''
+  filterExts.value = []
+  filterTags.value = []
+  filterTagMatchAll.value = false
+  scheduleFilterSearch()
+}
+
+const loadAvailableTags = async () => {
+  const kb = activeKbName.value
+  if (!kb) {
+    availableTags.value = []
+    return
+  }
+  try {
+    const tags = await invoke('kg_all_tags', { kbName: kb })
+    availableTags.value = Array.isArray(tags) ? tags : []
+  } catch (e) {
+    availableTags.value = []
+    logger.warn('[GuaxiHeader] load tags failed', e)
+  }
+}
+
+const resolveTagPathSet = async () => {
+  if (!filterTags.value.length) return null
+  const kb = activeKbName.value
+  if (!kb) return new Set()
+  try {
+    const paths = await invoke('kg_files_by_tags', {
+      kbName: kb,
+      tags: [...filterTags.value],
+      matchAll: filterTagMatchAll.value,
+    })
+    return new Set((Array.isArray(paths) ? paths : []).map((p) => normalizeSlashes(p).toLowerCase()))
+  } catch (e) {
+    logger.warn('[GuaxiHeader] files by tags failed', e)
+    return new Set()
+  }
+}
+
+const filterByTagPaths = (items, tagSet) => {
+  if (!tagSet) return items
+  return items.filter((it) => tagSet.has(normalizeSlashes(it.path || '').toLowerCase()))
+}
+
+// 监听筛选项变化，自动刷新下拉预览
+watch(
+  [filterTimePreset, filterCustomStart, filterCustomEnd, filterExts, filterTags, filterTagMatchAll],
+  () => scheduleFilterSearch(),
+  { deep: true }
+)
+
 watch(trimmedQuery, (q) => {
   if (q) return
+
+  // 查询为空但仍有筛选条件时，保持(并刷新)结果，不清空。
+  if (hasActiveFilters.value) {
+    scheduleFilterSearch()
+    return
+  }
 
   if (editorStore.highlightInfo) {
     editorStore.highlightInfo = null
@@ -809,7 +1078,7 @@ function getHistorySuggestions(input) {
     .map(e => {
       const t = e.type
       const absPath = t === 'excerpt' ? String(e.file_path || '') : String(e.path || '')
-      const base = t === 'excerpt' ? settingsStore.librariesRoot : fileTreeStore.activeRepoPath
+      const base = t === 'excerpt' ? settingsStore.librariesRoot : searchRootPath.value
       const rel = toRelativePath(absPath, base)
       const hay = `${String(e.file_name || '')} ${rel}`.toLowerCase()
 
@@ -950,7 +1219,7 @@ const getItemAbsPath = (item) => {
 const getItemRel = (item) => {
   const t = item?._searchType || searchType.value
   const absPath = getItemAbsPath(item)
-  const base = t === 'excerpt' ? settingsStore.librariesRoot : fileTreeStore.activeRepoPath
+  const base = t === 'excerpt' ? settingsStore.librariesRoot : searchRootPath.value
   return toRelativePath(absPath, base)
 }
 
@@ -1156,7 +1425,7 @@ const resultKeyToItem = computed(() => {
 const renderResultOption = (item) => {
   const type = item?._searchType || searchType.value
   const absPath = type === 'excerpt' ? item.file_path : item.path
-  const base = type === 'excerpt' ? settingsStore.librariesRoot : fileTreeStore.activeRepoPath
+  const base = type === 'excerpt' ? settingsStore.librariesRoot : searchRootPath.value
   const rel = toRelativePath(absPath, base)
   const relDir = dirnameFromPath(rel)
 
@@ -1282,10 +1551,22 @@ const showSearchOptions = async () => {
   isSearchDropdownVisible.value = true
 }
 
-const handleSearchBlur = () => {
+const handleSearchBlur = (e) => {
+  // 焦点移动到下拉内部的筛选控件(日期/自定义后缀输入)时不关闭下拉。
+  const rt = e && e.relatedTarget
+  if (rt && searchDropdownRef.value && searchDropdownRef.value.contains(rt)) return
   setTimeout(() => {
     isSearchDropdownVisible.value = false
   }, 200)
+}
+
+// 点击下拉与搜索框之外的区域时关闭下拉(覆盖焦点落在筛选输入框后的外部点击)。
+const handleDocMousedown = (e) => {
+  if (!isSearchDropdownVisible.value) return
+  const t = e.target
+  if (searchContainerRef.value && searchContainerRef.value.contains(t)) return
+  if (searchDropdownRef.value && searchDropdownRef.value.contains(t)) return
+  isSearchDropdownVisible.value = false
 }
 
 const openResultInEditor = async (item) => {
@@ -1343,7 +1624,13 @@ const applyPreviewResultsToRightSider = (lastType) => {
 
 const handleSearchEnter = () => {
   const q = searchQuery.value.trim()
-  if (!q) return
+  if (!q && !hasActiveFilters.value) return
+
+  // 仅有筛选条件(无关键字)时，按文件列举筛选结果(内容/摘录搜索需要关键字)。
+  if (!q && hasActiveFilters.value) {
+    handleSearchFiles()
+    return
+  }
 
   if (searchType.value === 'file') {
     handleSearchFiles()
@@ -1446,7 +1733,8 @@ const handleSearchSelect = async (key) => {
 
 const runPreviewSearchAll = async () => {
   const q = trimmedQuery.value
-  if (!q || !isSearchDropdownVisible.value) {
+  // 有关键字、或仅有筛选条件时都执行搜索
+  if ((!q && !hasActiveFilters.value) || !isSearchDropdownVisible.value) {
     previewResultsByType.value = { file: [], note: [], excerpt: [] }
     previewResults.value = []
     previewError.value = ''
@@ -1459,21 +1747,30 @@ const runPreviewSearchAll = async () => {
   previewHasMore.value = false
 
   try {
+    const { extensions, modifiedAfter, modifiedBefore } = searchFilterArgs.value
+    const tagSetPromise = resolveTagPathSet()
+
+    // 关键字搜索(rg) / 摘录搜索需要关键字；仅筛选时只列举文件(fd)。
     const [fdResp, rgResp, exResp] = await Promise.allSettled([
-      invoke('fd_search', { pattern: q, path: fileTreeStore.activeRepoPath }),
-      invoke('rg_search', { pattern: q, path: fileTreeStore.activeRepoPath }),
-      invoke('search_excerpt_notes', { pattern: q, path: settingsStore.librariesRoot })
+      invoke('fd_search', { pattern: q, path: searchRootPath.value, extensions, modifiedAfter, modifiedBefore }),
+      q
+        ? invoke('rg_search', { pattern: q, path: searchRootPath.value, extensions, modifiedAfter, modifiedBefore })
+        : Promise.resolve(null),
+      q
+        ? invoke('search_excerpt_notes', { pattern: q, path: settingsStore.librariesRoot })
+        : Promise.resolve(null)
     ])
 
+    const tagSet = await tagSetPromise
     const next = { file: [], note: [], excerpt: [] }
 
-    if (fdResp.status === 'fulfilled') {
+    if (fdResp.status === 'fulfilled' && fdResp.value) {
       const [rawResults = [], hasMore = false] = Array.isArray(fdResp.value) ? fdResp.value : []
-      next.file = normalizeSearchResults(rawResults, 'file')
+      next.file = filterByTagPaths(normalizeSearchResults(rawResults, 'file'), tagSet)
       previewHasMore.value = previewHasMore.value || Boolean(hasMore)
     }
 
-    if (rgResp.status === 'fulfilled') {
+    if (rgResp.status === 'fulfilled' && rgResp.value) {
       const response = rgResp.value
       const rawResults = (() => {
         if (!response) return []
@@ -1481,10 +1778,10 @@ const runPreviewSearchAll = async () => {
         if (Array.isArray(response)) return response
         return [response]
       })()
-      next.note = normalizeSearchResults(rawResults, 'note')
+      next.note = filterByTagPaths(normalizeSearchResults(rawResults, 'note'), tagSet)
     }
 
-    if (exResp.status === 'fulfilled') {
+    if (exResp.status === 'fulfilled' && exResp.value) {
       next.excerpt = normalizeSearchResults(exResp.value, 'excerpt')
     }
 
@@ -1550,6 +1847,7 @@ onMounted(() => {
   window.addEventListener('scroll', handleWindowReflow, true)
   window.addEventListener('keydown', handleGlobalSearchHotkey, true)
   window.addEventListener('beforeunload', handleBeforeUnload)
+  window.addEventListener('mousedown', handleDocMousedown, true)
 
   Promise.resolve(initResourceRepoAutoSync()).catch((e) => {
     logger.warn('[GuaxiHeader] init resource repo auto sync failed', e)
@@ -1562,6 +1860,7 @@ onUnmounted(() => {
   window.removeEventListener('scroll', handleWindowReflow, true)
   window.removeEventListener('keydown', handleGlobalSearchHotkey, true)
   window.removeEventListener('beforeunload', handleBeforeUnload)
+  window.removeEventListener('mousedown', handleDocMousedown, true)
   debouncedRunPreviewSearch.cancel()
 
 })
@@ -1577,13 +1876,18 @@ async function handleSearchFiles() {
       error: ''
     })
 
+    const { extensions, modifiedAfter, modifiedBefore } = searchFilterArgs.value
+    const tagSet = await resolveTagPathSet()
     const rawResponse = await invoke('fd_search', {
       pattern: searchQuery.value,
-      path: fileTreeStore.activeRepoPath
+      path: searchRootPath.value,
+      extensions,
+      modifiedAfter,
+      modifiedBefore
     })
 
     const [rawResults = [], hasMore = false] = Array.isArray(rawResponse) ? rawResponse : []
-    const validResults = normalizeSearchResults(rawResults, 'file')
+    const validResults = filterByTagPaths(normalizeSearchResults(rawResults, 'file'), tagSet)
 
     rightSiderStore.setSearchResults({
       ...rightSiderStore.searchResults,
@@ -1620,9 +1924,14 @@ async function handleSearchNotes() {
       error: ''
     })
 
+    const { extensions, modifiedAfter, modifiedBefore } = searchFilterArgs.value
+    const tagSet = await resolveTagPathSet()
     const response = await invoke('rg_search', {
       pattern: searchQuery.value,
-      path: fileTreeStore.activeRepoPath
+      path: searchRootPath.value,
+      extensions,
+      modifiedAfter,
+      modifiedBefore
     })
 
     const rawResults = (() => {
@@ -1632,7 +1941,7 @@ async function handleSearchNotes() {
       return [response]
     })()
 
-    const validResults = normalizeSearchResults(rawResults, 'note')
+    const validResults = filterByTagPaths(normalizeSearchResults(rawResults, 'note'), tagSet)
 
     rightSiderStore.setSearchResults({
       ...rightSiderStore.searchResults,
@@ -1990,5 +2299,158 @@ onMounted(async () => {
   text-overflow: ellipsis;
   white-space: nowrap;
   padding-left: 28px;
+}
+
+/* 搜索框内的筛选按钮 */
+.search-filter-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--guaxi-text-secondary);
+  transition: color 0.15s, background-color 0.15s;
+}
+.search-filter-btn:hover {
+  color: var(--n-color-primary, #1890ff);
+  background-color: rgba(24, 144, 255, 0.12);
+}
+.search-filter-btn.active {
+  color: var(--n-color-primary, #1890ff);
+}
+.search-filter-badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--n-color-primary, #1890ff);
+  color: #fff;
+  font-size: 10px;
+  line-height: 14px;
+  text-align: center;
+  box-sizing: border-box;
+}
+
+/* 筛选面板 */
+.search-filters {
+  padding: 6px 10px 2px;
+}
+.filter-group {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 6px 0;
+}
+.filter-label {
+  flex: 0 0 52px;
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+  padding-top: 4px;
+}
+.filter-chips {
+  flex: 1 1 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px;
+  font-size: 12px;
+  border-radius: 999px;
+  border: 1px solid var(--guaxi-border);
+  color: var(--guaxi-text-primary);
+  background: transparent;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.15s ease;
+}
+.filter-chip:hover {
+  border-color: var(--n-color-primary, #1890ff);
+}
+.filter-chip.on {
+  background: rgba(24, 144, 255, 0.16);
+  border-color: var(--n-color-primary, #1890ff);
+  color: var(--n-color-primary, #1890ff);
+}
+.filter-chip-count {
+  font-size: 10px;
+  opacity: 0.6;
+  font-style: normal;
+}
+.filter-dates {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 6px 60px;
+}
+.filter-date {
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--guaxi-border);
+  background: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-primary);
+  outline: none;
+}
+.filter-dash {
+  color: var(--guaxi-text-secondary);
+}
+.filter-ext-input {
+  width: 96px;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px dashed var(--guaxi-border);
+  background: transparent;
+  color: var(--guaxi-text-primary);
+  outline: none;
+}
+.filter-ext-input:focus {
+  border-color: var(--n-color-primary, #1890ff);
+  border-style: solid;
+}
+.filter-empty {
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+  opacity: 0.7;
+}
+.filter-matchall {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 6px 0 0 60px;
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+  cursor: pointer;
+}
+.filter-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+.filter-hint {
+  font-size: 11px;
+  color: var(--guaxi-text-secondary);
+  opacity: 0.7;
+}
+.filter-clear {
+  font-size: 12px;
+  color: var(--n-color-primary, #1890ff);
+  cursor: pointer;
+}
+.filter-clear:hover {
+  text-decoration: underline;
 }
 </style>

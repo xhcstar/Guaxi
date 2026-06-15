@@ -84,6 +84,64 @@ pub struct SearchResult {
     pub line_number: Option<u64>,
     pub matches: Vec<Match>,
     pub score: u32,
+    /// 文件最后修改时间(unix 毫秒),用于时间段筛选与展示。
+    #[serde(default)]
+    pub modified_ms: Option<i64>,
+}
+
+/// 读取文件最后修改时间(unix 毫秒)。
+fn file_mtime_ms(path: &Path) -> Option<i64> {
+    let meta = std::fs::metadata(path).ok()?;
+    let mtime = meta.modified().ok()?;
+    let dur = mtime.duration_since(std::time::UNIX_EPOCH).ok()?;
+    Some(dur.as_millis() as i64)
+}
+
+/// 按扩展名集合 + 修改时间区间过滤(空集合/None 表示不限制)。
+fn passes_meta_filter(
+    path: &Path,
+    exts: &Option<Vec<String>>,
+    after: Option<i64>,
+    before: Option<i64>,
+) -> bool {
+    if let Some(list) = exts {
+        if !list.is_empty() {
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|s| s.to_lowercase());
+            match ext {
+                Some(e) if list.iter().any(|x| x.trim().to_lowercase() == e) => {}
+                _ => return false,
+            }
+        }
+    }
+    if after.is_some() || before.is_some() {
+        match file_mtime_ms(path) {
+            Some(ms) => {
+                if let Some(a) = after {
+                    if ms < a {
+                        return false;
+                    }
+                }
+                if let Some(b) = before {
+                    if ms > b {
+                        return false;
+                    }
+                }
+            }
+            None => return false,
+        }
+    }
+    true
+}
+
+fn filter_signature(
+    exts: &Option<Vec<String>>,
+    after: Option<i64>,
+    before: Option<i64>,
+) -> String {
+    format!("{:?}|{:?}|{:?}", exts, after, before)
 }
 
 fn is_binary_extension(ext: &OsStr) -> bool {
@@ -155,6 +213,9 @@ pub async fn fd_search(
     limit: Option<usize>,
     offset: Option<usize>,
     search_id: Option<String>,
+    extensions: Option<Vec<String>>,
+    modified_after: Option<i64>,
+    modified_before: Option<i64>,
 ) -> Result<(Vec<SearchResult>, bool), String> {
     info!("fd_search called with pattern: {}, path: {}", pattern, path);
     let _start_time = Instant::now();
@@ -172,8 +233,14 @@ pub async fn fd_search(
     }
     info!("fd_search start: {:?}", search_id);
 
-    // 修改1：在缓存键前添加"fd:"前缀，防止与rg_search的缓存冲突
-    let cache_key = format!("fd:{}:{}", pattern, path.display());
+    // 修改1：在缓存键前添加"fd:"前缀，防止与rg_search的缓存冲突;
+    // 同时把扩展名/时间过滤纳入缓存键,避免不同筛选条件命中同一缓存。
+    let cache_key = format!(
+        "fd:{}:{}:{}",
+        pattern,
+        path.display(),
+        filter_signature(&extensions, modified_after, modified_before)
+    );
 
     // 检查缓存（使用读锁和peek方法）
     {
@@ -203,7 +270,9 @@ pub async fn fd_search(
         .build()
         .filter_map(Result::ok)
         .filter(|entry| {
-            entry.file_type().map_or(false, |ft| ft.is_file()) && !should_skip_path(entry.path())
+            entry.file_type().map_or(false, |ft| ft.is_file())
+                && !should_skip_path(entry.path())
+                && passes_meta_filter(entry.path(), &extensions, modified_after, modified_before)
         })
         .collect();
 
@@ -228,6 +297,7 @@ pub async fn fd_search(
                 line_number: None,
                 matches: vec![],
                 score: score as u32,
+                modified_ms: file_mtime_ms(entry.path()),
             })
         })
         .filter_map(|x| x)
@@ -257,6 +327,9 @@ pub async fn rg_search(
     limit: Option<usize>,
     offset: Option<usize>,
     search_id: Option<String>,
+    extensions: Option<Vec<String>>,
+    modified_after: Option<i64>,
+    modified_before: Option<i64>,
 ) -> Result<(Vec<SearchResult>, bool), String> {
     let start_time = Instant::now();
     let path = Path::new(&path);
@@ -272,8 +345,13 @@ pub async fn rg_search(
         SEARCH_MANAGER.register_search(id);
     }
 
-    // 修改4：在缓存键前添加"rg:"前缀，防止与fd_search的缓存冲突
-    let cache_key = format!("rg:{}:{}", pattern, path.display());
+    // 修改4：在缓存键前添加"rg:"前缀，防止与fd_search的缓存冲突;并纳入扩展名/时间过滤签名。
+    let cache_key = format!(
+        "rg:{}:{}:{}",
+        pattern,
+        path.display(),
+        filter_signature(&extensions, modified_after, modified_before)
+    );
 
     // 检查缓存（使用读锁和peek方法）
     {
@@ -302,7 +380,9 @@ pub async fn rg_search(
         .build()
         .filter_map(Result::ok)
         .filter(|entry| {
-            entry.file_type().map_or(false, |ft| ft.is_file()) && !should_skip_path(entry.path())
+            entry.file_type().map_or(false, |ft| ft.is_file())
+                && !should_skip_path(entry.path())
+                && passes_meta_filter(entry.path(), &extensions, modified_after, modified_before)
         })
         .collect();
 
@@ -322,6 +402,7 @@ pub async fn rg_search(
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
+            let mtime_ms = file_mtime_ms(entry.path());
 
             let mut searcher = SearcherBuilder::new()
                 .line_number(true)
@@ -363,6 +444,7 @@ pub async fn rg_search(
                             line_number: Some(lineno),
                             matches,
                             score: line_score,
+                            modified_ms: mtime_ms,
                         });
                     }
 

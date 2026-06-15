@@ -493,6 +493,8 @@ async fn main() {
             commands::kgraph::kg_set_manual_sync,
             commands::kgraph::kg_get_manual_sync,
             commands::kgraph::kg_kb_summaries,
+            commands::kgraph::kg_all_tags,
+            commands::kgraph::kg_files_by_tags,
             commands::kg_llm::kg_extract_concepts,
             commands::kgraph::kg_detect_communities,
             commands::kgraph::kg_communities,
