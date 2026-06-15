@@ -9,11 +9,15 @@
 import GuaxiBrainKnowledgeBaseList from "./GuaxiBrainKnowledgeBaseList.vue";
 </script>
 
-<style scope>
+<style scoped>
 .tree-column {
   flex: 1;
-  padding: 5px;
-  overflow-y: auto;
-  height: 100vh;
+  padding: 0;
+  overflow: hidden;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--guaxi-content-bg);
 }
 </style>

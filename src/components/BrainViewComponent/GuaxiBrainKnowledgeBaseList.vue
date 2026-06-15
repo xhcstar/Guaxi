@@ -18,6 +18,7 @@
       <div
         v-for="kb in orderedKnowledgeBases"
         :key="kb.id"
+        v-show="!isSelectedKnowledgeBaseExpanded || kb.id === selectedId"
         class="kb-list-item"
         :class="{ active: kb.id === selectedId, expanded: kb.id === selectedId && expanded }"
       >
@@ -101,6 +102,10 @@ const expandedKeys = ref([]);
 const selectedKeys = ref([]);
 let abortController = new AbortController();
 
+// 设计说明：与主界面知识编辑模式保持一致。
+// 选中的知识库展开后，其它知识库条目暂时隐藏，让当前知识库文件树独占列表高度，避免被下方条目挤压。
+const isSelectedKnowledgeBaseExpanded = computed(() => Boolean(selectedId.value && expanded.value));
+
 // 确保在切换知识库时正确处理树形数据
 const toggleKnowledgeBase = async (kb) => {
   try {
@@ -111,6 +116,10 @@ const toggleKnowledgeBase = async (kb) => {
     if (selectedId.value === kb.id) {
       // 同一个知识库，切换展开状态
       expanded.value = !expanded.value;
+      logger.info('[BrainKnowledgeBaseList] 切换当前知识库展开状态', {
+        knowledgeBase: kb.knowledge_base_name,
+        expanded: expanded.value
+      });
       if (!expanded.value) {
         expandedKeys.value = [];
       }
@@ -133,6 +142,11 @@ const toggleKnowledgeBase = async (kb) => {
       expandedKeys.value = [newTreeData[0].key];
       selectedKeys.value = [newTreeData[0].key];
       store.setSelectedTreeNodeKey(newTreeData[0].key);
+      logger.info('[BrainKnowledgeBaseList] 展开知识库并加载文件树', {
+        knowledgeBase: kb.knowledge_base_name,
+        rootPath: kb.location,
+        rootKey: newTreeData[0].key
+      });
     }
   } catch (error) {
     if (error.name !== 'AbortError') {
@@ -220,6 +234,11 @@ onMounted(async () => {
     expandedKeys.value = [treeData.value[0].key];
     selectedKeys.value = [treeData.value[0].key];
     store.setSelectedTreeNodeKey(treeData.value[0].key);
+    logger.info('[BrainKnowledgeBaseList] 初始化知识库文件树', {
+      knowledgeBase: selectedKnowledgeBase.value.knowledge_base_name,
+      rootPath: selectedKnowledgeBase.value.location,
+      rootKey: treeData.value[0].key
+    });
   }
 });
 
@@ -254,11 +273,12 @@ onUnmounted(() => {
 /* 添加 tree-container 确保树形结构有稳定的容器 */
 .tree-container {
   width: 100%;
-  /* 展开的知识库:树占据剩余全部高度并内部滚动,行为对齐主界面文件树 */
+  /* 设计说明：展开知识库时，仅让树容器内部滚动；外层列表高度保持稳定，避免文件树被其它条目挤压。 */
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
   padding-left: 8px;
+  overscroll-behavior: contain;
 }
 
 .knowledge-base-list {
@@ -392,7 +412,7 @@ onUnmounted(() => {
   /* 防止光圈溢出 */
 }
 
-/* 展开的知识库条目:吃掉剩余高度,让内部树铺满并可滚动 */
+/* 展开的知识库条目:其它条目通过 v-show 隐藏后，当前条目独占列表高度，让内部树铺满并可滚动。 */
 .kb-list-item.expanded {
   flex: 1 1 auto;
   min-height: 0;
@@ -514,6 +534,7 @@ onUnmounted(() => {
 }
 
 .kb-tree {
+  height: 100%;
   margin: 8px 0 12px 16px;
   border-left: 1px dashed var(--n-border-color);
   padding-left: 8px;

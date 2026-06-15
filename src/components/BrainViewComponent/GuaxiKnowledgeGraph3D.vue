@@ -153,6 +153,7 @@ import {
 import { useKnowledgeBaseStore } from "../../stores/knowledgeBaseStore";
 import { useFileTreeStore } from "../../stores/fileTreeStore";
 import { useEditorStore } from "../../stores/editorStore";
+import { createLogger } from "../../utils/logger";
 import { resolveLayout, disposeLayoutWorker } from "./kgLayout";
 
 const props = defineProps({
@@ -163,6 +164,7 @@ const store = useKnowledgeBaseStore();
 const fileTreeStore = useFileTreeStore();
 const editorStore = useEditorStore();
 const { kg3dActionRequest } = storeToRefs(store);
+const logger = createLogger("GuaxiKnowledgeGraph3D");
 
 const TYPE_COLORS = {
   "knowledge-base": 0xf39c12,
@@ -227,6 +229,8 @@ let timeBounds = { min: 0, max: 1 };
 let fullNodeList = null;
 let fullEdgeList = null;
 let minimapTick = 0;
+// 每次加载递增。知识库快速切换时，旧请求即使后返回也不能覆盖当前图谱。
+let graphLoadSeq = 0;
 
 // three 运行时对象(非响应式)
 let scene, camera, renderer, labelRenderer, controls, raf;
@@ -566,6 +570,7 @@ function onResize() {
 }
 
 function disposeGraphObjects() {
+  if (!scene) return;
   for (const m of Object.values(typeMeshes)) {
     scene.remove(m);
     m.geometry.dispose();
@@ -841,31 +846,93 @@ function rebuildEdgesForVisible(visIds) {
 }
 
 // ───────── 数据加载 ─────────
+function resetGraphStateForKnowledgeBase(kbName) {
+  if (timelinePlayTimer) {
+    clearInterval(timelinePlayTimer);
+    timelinePlayTimer = null;
+  }
+  if (flyMode.value) exitFlyMode();
+
+  // 设计说明：切换知识库等价进入一张全新的图谱，不能继承旧库的选中节点、折叠态、标签筛选或时间轴状态。
+  selected.value = null;
+  suggestions.value = [];
+  tagSuggestions.value = [];
+  nodeRelations.value = [];
+  store.setKg3dSelected(null);
+  store.setKg3dRelations([]);
+  store.setKg3dSuggestions([]);
+
+  searchText.value = "";
+  selectedTagFilter.value = [];
+  tagFilterOptions.value = [];
+  tagDropdownOpen.value = false;
+  visibleTypes.value = new Set(["directory", "file", "section", "paragraph", "concept"]);
+  breadcrumb.value = [{ id: "kb_root", label: "全库" }];
+  timelineValue.value = 100;
+  timelineLabel.value = "全部";
+  timelinePlaying.value = false;
+  evolutionActive = false;
+  prevVisibleIds = new Set();
+  pathMode.value = false;
+  pathPick = [];
+  collapsed.value = false;
+  fullNodeList = null;
+  fullEdgeList = null;
+  highlightedIds = new Set();
+  glowPrimaryId = null;
+
+  nodeList = [];
+  nodeById = new Map();
+  edgeList = [];
+  communityColors = new Map();
+  curPositions = new Map();
+  disposeGraphObjects();
+  drawMinimap();
+  statusText.value = kbName ? `切换到知识库: ${kbName}` : "";
+  logger.info("[kg3d] reset graph state for knowledge base switch", { kbName });
+  requestRender();
+}
+
 async function loadGraph(rootId = "kb_root", maxDepth = 99) {
   const name = props.kbName || store.selectedKnowledgeBase?.knowledge_base_name;
-  if (!name) return;
+  const loadSeq = ++graphLoadSeq;
+  if (!name) {
+    resetGraphStateForKnowledgeBase("");
+    return;
+  }
   statusText.value = "加载图数据…";
+  logger.info("[kg3d] start loading graph", { kbName: name, rootId, maxDepth, loadSeq });
   try {
     await store.kgEnsureIndex(name).catch(() => {});
+    if (loadSeq !== graphLoadSeq) return;
     const opts = { root_id: rootId, max_depth: maxDepth, limit: 6000 };
     const data = await store.kgQueryGraph(name, opts);
+    if (loadSeq !== graphLoadSeq) return;
 
     // 社区色
-    communityColors = new Map();
+    const nextCommunityColors = new Map();
     try {
       const comms = await store.kgCommunities(name);
+      if (loadSeq !== graphLoadSeq) return;
       for (const c of comms || []) {
-        if (c.color) communityColors.set(c.community_id, c.color);
+        if (c.color) nextCommunityColors.set(c.community_id, c.color);
       }
     } catch (e) {
       /* 无社区数据 */
     }
 
-    nodeList = (data.nodes || []).map((n) => ({ ...n }));
-    nodeById = new Map(nodeList.map((n) => [n.id, n]));
-    edgeList = (data.edges || []).filter((e) => nodeById.has(e.from) && nodeById.has(e.to));
+    const nextNodeList = (data.nodes || []).map((n) => ({ ...n }));
+    const nextNodeById = new Map(nextNodeList.map((n) => [n.id, n]));
+    const nextEdgeList = (data.edges || []).filter((e) => nextNodeById.has(e.from) && nextNodeById.has(e.to));
 
-    curPositions = await resolveLayout(store, name, view.value, { nodes: nodeList, edges: edgeList });
+    const nextPositions = await resolveLayout(store, name, view.value, { nodes: nextNodeList, edges: nextEdgeList });
+    if (loadSeq !== graphLoadSeq) return;
+
+    communityColors = nextCommunityColors;
+    nodeList = nextNodeList;
+    nodeById = nextNodeById;
+    edgeList = nextEdgeList;
+    curPositions = nextPositions;
     // 折叠态在重新加载时复位
     collapsed.value = false;
     fullNodeList = null;
@@ -876,8 +943,17 @@ async function loadGraph(rootId = "kb_root", maxDepth = 99) {
     statusText.value = `节点 ${nodeList.length} · 边 ${edgeList.length}${data.truncated ? " (已截断)" : ""}`;
     fitCamera();
     drawMinimap();
+    logger.info("[kg3d] graph loaded", {
+      kbName: name,
+      nodes: nodeList.length,
+      edges: edgeList.length,
+      truncated: Boolean(data.truncated),
+      loadSeq
+    });
   } catch (e) {
+    if (loadSeq !== graphLoadSeq) return;
     statusText.value = "加载失败: " + (e?.message || e);
+    logger.error("[kg3d] load graph failed", { kbName: name, error: e });
   }
 }
 
@@ -1723,13 +1799,14 @@ function onMinimapClick(ev) {
 // ───────── 小地图(俯视投影)─────────
 function drawMinimap() {
   const cv = minimap.value;
-  if (!cv || !nodeList.length) return;
+  if (!cv) return;
   const ctx = cv.getContext("2d");
   const W = cv.width;
   const H = cv.height;
   ctx.clearRect(0, 0, W, H);
   ctx.fillStyle = "rgba(13,17,23,0.6)";
   ctx.fillRect(0, 0, W, H);
+  if (!nodeList.length) return;
 
   let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
   for (const n of nodeList) {
@@ -2116,6 +2193,27 @@ watch(kg3dActionRequest, (req) => {
       break;
   }
 });
+
+watch(
+  () => props.kbName,
+  async (nextName, prevName) => {
+    const next = String(nextName || "").trim();
+    const prev = String(prevName || "").trim();
+    if (next === prev) return;
+
+    // 切库先让所有未完成的旧加载失效，再清空画布，最后加载新知识库。
+    graphLoadSeq += 1;
+    resetGraphStateForKnowledgeBase(next);
+    logger.info("[kg3d] knowledge base prop changed, reload graph", {
+      from: prev,
+      to: next
+    });
+
+    if (!next) return;
+    await loadGraph();
+  },
+  { flush: "post" }
+);
 
 // 聚焦某社区:高亮其成员、连其内部边并取景
 function focusCommunity(cid) {
