@@ -92,8 +92,12 @@ impl PdfWorkerState {
             self.cache.remove(pos);
         }
 
+        // 关键：从内存字节加载，而非 load_pdf_from_file。后者会让 pdfium 持有源文件句柄并惰性读取；
+        // 之后 save_to_file 覆写同一文件会破坏 pdfium 正在读取的字节 -> 源 PDF 损坏。
+        // 先一次性读入内存，文档不再持有任何源文件句柄，写回因此安全。
+        let bytes = std::fs::read(path).map_err(|e| format!("读取 PDF 失败: {e}"))?;
         let doc = pdfium
-            .load_pdf_from_file(path, None)
+            .load_pdf_from_byte_vec(bytes, None)
             .map_err(|e| format!("PDF 加载失败: {e}"))?;
         self.cache.insert(
             0,
@@ -948,6 +952,20 @@ fn rect_to_quad(rc: &HighlightRect, page_h: f32) -> PdfQuadPoints {
     PdfQuadPoints::new_from_values(left, bottom, right, bottom, right, top, left, top)
 }
 
+/// 安全写回：先写临时文件再原子改名（避免半截写入），配合内存加载（文档不持源文件句柄）
+/// 彻底杜绝"保存覆写正在被读取的源文件"导致的损坏。
+fn save_document(document: &PdfDocument<'_>, dest: &str) -> Result<(), String> {
+    let tmp = format!("{dest}.guaxi.tmp");
+    document
+        .save_to_file(&tmp)
+        .map_err(|e| format!("保存 PDF 失败: {e}"))?;
+    std::fs::rename(&tmp, dest).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("提交 PDF 失败: {e}")
+    })?;
+    Ok(())
+}
+
 /// 在指定页创建高亮批注并写回 .pdf；返回稳定 annot_id（供后续删除/定位）。
 #[tauri::command]
 pub async fn pdf_add_highlight(
@@ -991,9 +1009,7 @@ pub async fn pdf_add_highlight(
                         .map_err(|e| format!("设置高亮区域失败: {e}"))?;
                 }
             }
-            document
-                .save_to_file(&path)
-                .map_err(|e| format!("保存 PDF 失败: {e}"))?;
+            save_document(document, &path)?;
             Ok(())
         })?;
         // 文件已被改写，缓存 mtime 失效。
@@ -1049,9 +1065,7 @@ pub async fn pdf_delete_highlight(
                     .annotations_mut()
                     .delete_annotation(a)
                     .map_err(|e| format!("删除高亮失败: {e}"))?;
-                document
-                    .save_to_file(&path)
-                    .map_err(|e| format!("保存 PDF 失败: {e}"))?;
+                save_document(document, &path)?;
             }
             Ok(())
         })?;
@@ -1106,11 +1120,7 @@ pub async fn pdf_page_highlights(path: String, page: usize) -> Result<Vec<Highli
 pub async fn pdf_save(path: String, dest_path: Option<String>) -> Result<(), String> {
     run_pdf(move |state| {
         let target = dest_path.clone().unwrap_or_else(|| path.clone());
-        state.with_doc(&path, |document| {
-            document
-                .save_to_file(&target)
-                .map_err(|e| format!("保存 PDF 失败: {e}"))
-        })?;
+        state.with_doc(&path, |document| save_document(document, &target))?;
         state.invalidate(&path);
         Ok(())
     })
