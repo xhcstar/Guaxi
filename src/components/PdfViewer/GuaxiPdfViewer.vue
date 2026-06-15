@@ -1,6 +1,6 @@
 <template>
   <div class="gpv" :class="`theme-${theme}`">
-    <div class="gpv__toolbar">
+    <div v-if="features.toolbar !== false" class="gpv__toolbar">
       <span v-if="titleLabel" class="gpv__title">{{ titleLabel }}</span>
       <span class="gpv__status" :class="statusTone">{{ status }}</span>
       <div class="gpv__spacer" />
@@ -23,7 +23,19 @@
       </div>
 
       <span class="gpv__divider" />
-      <span class="gpv__page-indicator">{{ currentPage }} / {{ totalPages }}</span>
+      <span class="gpv__page-indicator">
+        <input
+          class="gpv__page-input"
+          type="number"
+          min="1"
+          :max="totalPages || 1"
+          :value="currentPage"
+          title="跳转到页码"
+          @keydown.enter.prevent="onPageInput"
+          @change="onPageInput"
+        />
+        / {{ totalPages }}
+      </span>
       <span class="gpv__divider" />
 
       <button type="button" class="gpv__btn" :disabled="zoom <= MIN_ZOOM" title="缩小" @click="zoomOut">−</button>
@@ -183,8 +195,14 @@ const MIN_ZOOM = 0.4
 const MAX_ZOOM = 4
 const zoom = ref(props.initialZoom)
 const cssScale = computed(() => zoom.value)
-// 渲染 DPI：随 zoom 提升后端真重渲染，保证清晰（含 2x 余量）
-const renderDpi = computed(() => Math.min(480, Math.max(96, Math.round(zoom.value * 144))))
+// 渲染 DPI：目标是渲染像素 = 显示像素 × 设备像素比（1:1 物理像素，清晰且不过采样）。
+// 显示像素 = pt × zoom；物理像素 = 显示像素 × dpr；dpi = 72 × zoom × dpr。
+// 之前用 zoom×144 等于恒定 2× 过采样（面积 4×），是渲染慢的主因。dpr 上限取 2 避免超清屏过载。
+const devicePixelRatio = (typeof window !== 'undefined' && window.devicePixelRatio) || 1
+const renderScale = Math.min(2, Math.max(1, devicePixelRatio))
+const renderDpi = computed(() =>
+  Math.min(384, Math.max(72, Math.round(zoom.value * 72 * renderScale)))
+)
 
 // ───────────────────────── 旋转 ─────────────────────────
 // 角度 0/90/180/270。CSS 旋转内层包裹（pageInnerStyle），外层占位按旋转后尺寸交换宽高。
@@ -494,7 +512,14 @@ const hlStyle = (rc, color) => {
   }
 }
 const onHighlightClick = (hl, pageNum) => {
-  emit('highlight-click', { annotId: hl.annot_id, page: pageNum, note: hl.note || '', color: hl.color })
+  emit('highlight-click', {
+    annotId: hl.annot_id,
+    page: pageNum,
+    note: hl.note || '',
+    color: hl.color,
+    // 带上 rects，供宿主在删除后做撤销重建。
+    rects: Array.isArray(hl.rects) ? hl.rects.map((r) => ({ ...r })) : [],
+  })
 }
 
 // 缩放后重渲可见/已加载页（提高清晰度）；scaleX 与缩放无关，无需重新测量。
@@ -503,6 +528,17 @@ watch(renderDpi, () => {
   for (const page of pages) {
     if (page.image && page.dpi !== renderDpi.value) doc.renderPage(page, renderDpi.value)
   }
+})
+
+// 旋转 90/270 会交换每页外框宽高 -> 整体布局高度变化、各页 offsetTop 全变；
+// 必须在 DOM 应用新尺寸后重算可见区并触发渲染，否则可见页判断用的是旧几何，
+// 旋转后的页落在计算可见范围外而不渲染（表现为 90/270 空白，180/360 因不换宽高才正常）。
+watch(rotation, () => {
+  if (!hasPdf.value) return
+  nextTick(() => {
+    updateVisible()
+    renderVisible()
+  })
 })
 
 // ───────────────────────── 搜索 ─────────────────────────
@@ -664,6 +700,11 @@ const goToPage = (n, { align = 'top' } = {}) => {
   scheduleRenderVisible()
 }
 
+const onPageInput = (ev) => {
+  const v = Number(ev?.target?.value)
+  if (Number.isFinite(v) && v >= 1) goToPage(v)
+}
+
 const forwardSync = async ({ line, column = 1 } = {}) => {
   if (!hasPdf.value || !line) return
   try {
@@ -784,12 +825,40 @@ const deleteHighlight = async (pageNum, annotId) => {
   return ok
 }
 
+// 无需 DOM 选区地重建一个高亮（撤销"删除"时用）。乐观插入覆盖层 + 后台写回，返回新 annotId。
+const reAddHighlight = async ({ page: pageNum, rects, color, note } = {}) => {
+  if (!pageNum || !Array.isArray(rects) || !rects.length) return null
+  const rgba = normalizeHlColor(color)
+  const page = pages[pageNum - 1]
+  const tempId = `tmp-${++hlTempSeq}`
+  if (page) {
+    if (!Array.isArray(page.highlights)) page.highlights = []
+    page.highlights.push({ annot_id: tempId, rects, color: rgba, note: note || '', pending: true })
+  }
+  const annotId = await doc.addHighlight({ page: pageNum, rects, color: rgba, note })
+  if (!annotId) {
+    if (page && Array.isArray(page.highlights)) {
+      const i = page.highlights.findIndex((h) => h.annot_id === tempId)
+      if (i >= 0) page.highlights.splice(i, 1)
+    }
+    return null
+  }
+  if (page && Array.isArray(page.highlights)) {
+    const it = page.highlights.find((h) => h.annot_id === tempId)
+    if (it) { it.annot_id = annotId; it.pending = false }
+  }
+  return { annotId, page: pageNum, rects, color: rgba, note: note || '' }
+}
+
 const refresh = () => load(props.path, true)
+
+const rotateTo = (deg) => { rotation.value = ((Math.round(deg / 90) * 90) % 360 + 360) % 360 }
 
 defineExpose({
   forwardSync,
   goToPage,
   search: runSearch,
+  runSearch,
   setSearchQuery: (q) => { searchQuery.value = q },
   nextHit,
   prevHit,
@@ -798,6 +867,7 @@ defineExpose({
   getSelectionInfo,
   getSelectionRects,
   addHighlightFromSelection,
+  reAddHighlight,
   deleteHighlight,
   setZoom,
   zoomIn,
@@ -807,6 +877,13 @@ defineExpose({
   refresh,
   scrollRatio,
   restoreScroll,
+  // 工具栏外置（宿主驱动）所需的状态与操作
+  rotateLeft,
+  rotateRight,
+  rotateTo,
+  togglePan: () => { panMode.value = !panMode.value },
+  setPanMode: (v) => { panMode.value = !!v },
+  state: { zoom, rotation, panMode, currentPage, totalPages, searchHits, searchActiveIdx, searchQuery },
 })
 
 // ───────────────────────── watchers ─────────────────────────
@@ -903,7 +980,20 @@ onBeforeUnmount(() => {
 .gpv__search-input:focus { outline: none; border-color: var(--n-color-primary, #61afef); }
 .gpv__search-count { font-size: 11px; opacity: 0.7; min-width: 32px; text-align: center; }
 
-.gpv__page-indicator { font-size: 11px; opacity: 0.75; min-width: 48px; text-align: center; }
+.gpv__page-indicator { font-size: 11px; opacity: 0.85; min-width: 48px; text-align: center; display: inline-flex; align-items: center; gap: 4px; }
+.gpv__page-input {
+  width: 40px;
+  font-size: 11px;
+  padding: 1px 4px;
+  text-align: center;
+  border: 1px solid var(--gpv-border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--gpv-text);
+}
+.gpv__page-input::-webkit-inner-spin-button,
+.gpv__page-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.gpv__page-input:focus { outline: none; border-color: var(--n-color-primary, #61afef); }
 .gpv__zoom { font-size: 11px; opacity: 0.75; min-width: 38px; text-align: center; }
 
 .gpv__btn {

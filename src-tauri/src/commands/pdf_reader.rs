@@ -858,9 +858,13 @@ pub async fn pdf_search(path: String, query: String) -> Result<PdfSearchResponse
 
 // ──────────────────────── 高亮批注（写回 .pdf）────────────────────────
 //
-// 持久化策略（用户选定"写回 .pdf 文件"）：用 pdfium 原生 Highlight 批注 + quadpoints 写入页面，
-// 外部阅读器也能看到；同时把 {id, note, rects, color} 作为 JSON 元数据存进批注的 Contents 字段
-// （带哨兵前缀），读回时无损还原 —— 既拿到稳定 id 做幂等删除，又拿到精确矩形给前端画覆盖层。
+// 持久化策略（用户选定"写回 .pdf 文件"）：
+// 早期用原生 Highlight 批注 + quadpoints，但 pdfium 不允许给 Highlight 批注添加内容对象
+// （仅 Ink/Stamp 可），因此存盘的 Highlight 没有外观流(/AP)，Sumatra 等外部阅读器只能回退
+// 画成灰色乱线。改用 **Stamp 批注 + 每个矩形一个半透明填充 path 对象**：这些 path 对象就是
+// 批注真实的外观流，所有阅读器都能正确显示；用 Multiply 混合让文字透出。
+// 同时把 {id, note, rects, color} 作为 JSON 元数据存进批注 Contents（带哨兵前缀），读回时
+// 无损还原 —— 既拿到稳定 id 做幂等删除，又拿到精确矩形给前端画覆盖层。
 
 /// 批注 Contents 中高亮元数据的哨兵前缀。
 const HL_MARKER: &str = "\u{1}GXH1:";
@@ -943,13 +947,18 @@ fn parse_marker(contents: &str) -> Option<(String, String, Vec<HighlightRect>, [
     Some((id, note, rects, color))
 }
 
-/// 把"左上原点 pt"的矩形转成 pdfium 页坐标（左下原点）下的 quadpoints。
-fn rect_to_quad(rc: &HighlightRect, page_h: f32) -> PdfQuadPoints {
+/// 把"左上原点 pt"的矩形转成 pdfium 页坐标（左下原点）下的 PdfRect。
+fn hl_rect_to_pdf_rect(rc: &HighlightRect, page_h: f32) -> PdfRect {
     let left = rc.x;
     let right = rc.x + rc.w;
     let top = page_h - rc.y;
     let bottom = page_h - (rc.y + rc.h);
-    PdfQuadPoints::new_from_values(left, bottom, right, bottom, right, top, left, top)
+    PdfRect::new(
+        PdfPoints::new(bottom),
+        PdfPoints::new(left),
+        PdfPoints::new(top),
+        PdfPoints::new(right),
+    )
 }
 
 /// 安全写回：先写临时文件再原子改名（避免半截写入），配合内存加载（文档不持源文件句柄）
@@ -994,19 +1003,28 @@ pub async fn pdf_add_highlight(
                 .map_err(|_| format!("获取页面 {} 失败", page))?;
             let page_h = pdf_page.height().value;
             {
-                let mut hl = pdf_page
+                // 用 Stamp 批注承载真实内容对象（= 外观流），保证外部阅读器正确显示。
+                let mut stamp = pdf_page
                     .annotations_mut()
-                    .create_highlight_annotation()
+                    .create_stamp_annotation()
                     .map_err(|e| format!("创建高亮失败: {e}"))?;
-                let [r, g, b, a] = color;
-                hl.set_fill_color(PdfColor::new(r, g, b, a))
-                    .map_err(|e| format!("设置高亮颜色失败: {e}"))?;
-                hl.set_contents(&build_marker(&annot_id, &note, &rects, color))
+                stamp
+                    .set_contents(&build_marker(&annot_id, &note, &rects, color))
                     .map_err(|e| format!("写入高亮元数据失败: {e}"))?;
+                let [r, g, b, a] = color;
+                let fill = PdfColor::new(r, g, b, a);
                 for rc in &rects {
-                    hl.attachment_points_mut()
-                        .create_attachment_point_at_end(rect_to_quad(rc, page_h))
-                        .map_err(|e| format!("设置高亮区域失败: {e}"))?;
+                    let mut obj = stamp
+                        .objects_mut()
+                        .create_path_object_rect(
+                            hl_rect_to_pdf_rect(rc, page_h),
+                            None,
+                            None,
+                            Some(fill),
+                        )
+                        .map_err(|e| format!("绘制高亮区域失败: {e}"))?;
+                    // Multiply 混合：让下方文字透出，效果与荧光笔一致。
+                    let _ = obj.set_blend_mode(PdfPageObjectBlendMode::Multiply);
                 }
             }
             save_document(document, &path)?;
@@ -1093,7 +1111,8 @@ pub async fn pdf_page_highlights(path: String, page: usize) -> Result<Vec<Highli
             let anns = pdf_page.annotations();
             for i in 0..anns.len() {
                 if let Ok(a) = anns.get(i) {
-                    if a.as_highlight_annotation().is_none() {
+                    // 本应用高亮以 Stamp 批注承载；用哨兵 Contents 进一步区分，避免误收其它 Stamp。
+                    if a.as_stamp_annotation().is_none() {
                         continue;
                     }
                     if let Some(c) = a.contents() {

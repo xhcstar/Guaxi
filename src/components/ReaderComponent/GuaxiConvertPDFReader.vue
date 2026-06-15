@@ -23,7 +23,7 @@
       </div>
 
       <div class="right-controls">
-        <!-- 旧版渲染核心(PDF.js)专用控件；新版 pdfium 阅读器用自带工具栏的缩放/适配 -->
+        <!-- 旧版渲染核心(PDF.js)专用控件 -->
         <template v-if="!useNewPdfViewer">
           <button class="rotate-left" @click="rotate(-90)" title="向左旋转90度">
             <n-icon :component="RefreshCircleOutline" :rotate="90" />
@@ -43,6 +43,44 @@
           <span class="zoom-level">{{ Math.round(zoomLevel * 100) }}%</span>
           <button class="zoom-in" @click="zoomIn" :disabled="zoomLevel >= 2" title="放大">
             <n-icon :component="AddOutline" />
+          </button>
+        </template>
+
+        <!-- 新版 pdfium 阅读器：工具栏外置到此处，统一驱动 GuaxiPdfViewer -->
+        <template v-else>
+          <button title="撤销高亮 (Ctrl+Z)" :disabled="!canUndoHighlight" @click="undoHighlight">
+            <n-icon :component="ArrowUndoOutline" />
+          </button>
+          <button title="重做高亮 (Ctrl+Y)" :disabled="!canRedoHighlight" @click="redoHighlight">
+            <n-icon :component="ArrowRedoOutline" />
+          </button>
+          <button title="上一阅读位置 (Alt+←)" :disabled="!readingBackStack.length" @click="goReadingBack">
+            <n-icon :component="ChevronBackOutline" />
+          </button>
+          <button title="下一阅读位置 (Alt+→)" :disabled="!readingForwardStack.length" @click="goReadingForward">
+            <n-icon :component="ChevronForwardOutline" />
+          </button>
+          <button class="rotate-left" @click="viewerRotateLeft" title="向左旋转90度 (Ctrl+[)">
+            <n-icon :component="RefreshCircleOutline" :rotate="90" />
+          </button>
+          <button class="rotate-right" @click="viewerRotateRight" title="向右旋转90度 (Ctrl+])">
+            <n-icon :component="RefreshCircleOutline" :rotate="-90" />
+          </button>
+          <button class="pan-toggle" :class="{ active: viewerPanMode }" @click="viewerTogglePan" title="拖动平移 (空格切换)">
+            <n-icon :component="HandRightOutline" />
+          </button>
+          <button class="fit-width" @click="viewerFitWidth" title="适合宽度 (Ctrl+0)">
+            <n-icon :component="ExpandOutline" />
+          </button>
+          <button class="zoom-out" @click="viewerZoomOut" title="缩小 (Ctrl+-)">
+            <n-icon :component="RemoveOutline" />
+          </button>
+          <span class="zoom-level">{{ viewerZoomPercent }}%</span>
+          <button class="zoom-in" @click="viewerZoomIn" title="放大 (Ctrl++)">
+            <n-icon :component="AddOutline" />
+          </button>
+          <button class="pdf-search-toggle" @click="openPdfSearch" title="搜索 (Ctrl+F)">
+            <n-icon :component="SearchOutline" />
           </button>
         </template>
 
@@ -458,7 +496,12 @@ import {
   SearchOutline,
   ColorWandOutline,
   ChatboxEllipsesOutline,
-  ChatbubbleEllipsesOutline
+  ChatbubbleEllipsesOutline,
+  ArrowUndoOutline,
+  ArrowRedoOutline,
+  ChevronBackOutline,
+  ChevronForwardOutline,
+  HandRightOutline
 } from '@vicons/ionicons5'
 
 const logger = createLogger('GuaxiConvertPDFReader')
@@ -589,6 +632,25 @@ const handleReaderShortcuts = (e) => {
     e.preventDefault()
     zoomOut()
     return
+  }
+
+  // 新版 viewer 专属：撤销/重做高亮、旋转、平移、阅读位置前后。
+  if (useNewPdfViewer.value) {
+    // 撤销 Ctrl+Z；重做 Ctrl+Y 或 Ctrl+Shift+Z
+    if (ctrl && !e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
+      e.preventDefault(); undoHighlight(); return
+    }
+    if (ctrl && ((e.key === 'y' || e.key === 'Y') || (e.shiftKey && (e.key === 'z' || e.key === 'Z')))) {
+      e.preventDefault(); redoHighlight(); return
+    }
+    // 旋转 Ctrl+[ / Ctrl+]
+    if (ctrl && e.key === '[') { e.preventDefault(); viewerRotateLeft(); return }
+    if (ctrl && e.key === ']') { e.preventDefault(); viewerRotateRight(); return }
+    // 平移模式切换：空格
+    if (!ctrl && !e.altKey && e.key === ' ') { e.preventDefault(); viewerTogglePan(); return }
+    // 阅读位置 Alt+← / Alt+→
+    if (e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); goReadingBack(); return }
+    if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); goReadingForward(); return }
   }
 
   if (ctrl && (e.key === 'n' || e.key === 'N')) {
@@ -803,6 +865,13 @@ const mdSearchActiveIndex = ref(-1)
 const mdSearchInput = ref(null)
 
 const pdfSearchCountText = computed(() => {
+  if (useNewPdfViewer.value) {
+    void viewerStateTick.value
+    const st = pdfViewer.value?.state
+    const total = st?.searchHits?.value?.length || 0
+    if (!total) return '0/0'
+    return `${(st?.searchActiveIdx?.value || 0) + 1}/${total}`
+  }
   if (pdfFullSearchBusy.value) return '搜索中…'
 
   const totalResults = pdfFullSearchResults.value.length
@@ -856,10 +925,30 @@ const newViewerFeatures = {
   reverseJump: false,
   export: false,
   rebuild: false,
+  // 工具栏外置：隐藏 viewer 自带工具栏，改由本组件顶部公用工具栏驱动。
+  toolbar: false,
 }
+
+// viewer 缩放/旋转/平移状态：直接读取 viewer 暴露的内部 ref（响应式），供工具栏显示/高亮。
+// viewerStateTick 在每次操作后自增，强制这些 computed 重新求值（兼容键盘路径直接调 viewer）。
+const viewerStateTick = ref(0)
+const bindViewerState = () => { viewerStateTick.value++ }
+const viewerPanMode = computed(() => { void viewerStateTick.value; return !!pdfViewer.value?.state?.panMode?.value })
+const viewerZoomPercent = computed(() => {
+  void viewerStateTick.value
+  return Math.round((pdfViewer.value?.state?.zoom?.value || 1) * 100)
+})
+// 顶部工具栏操作：全部转发给 viewer 暴露的方法，并刷新镜像。
+const viewerZoomIn = () => { pdfViewer.value?.zoomIn(); bindViewerState() }
+const viewerZoomOut = () => { pdfViewer.value?.zoomOut(); bindViewerState() }
+const viewerFitWidth = () => { pdfViewer.value?.fitWidth(); bindViewerState() }
+const viewerRotateLeft = () => { pdfViewer.value?.rotateLeft(); bindViewerState() }
+const viewerRotateRight = () => { pdfViewer.value?.rotateRight(); bindViewerState() }
+const viewerTogglePan = () => { pdfViewer.value?.togglePan(); bindViewerState() }
 
 const onViewerReady = ({ totalPages: tp } = {}) => {
   if (tp) totalPages.value = tp
+  bindViewerState()
   if (pendingRestorePage.value != null && tp) {
     const p = Math.max(1, Math.min(Number(pendingRestorePage.value) || 1, tp))
     pendingRestorePage.value = null
@@ -869,9 +958,47 @@ const onViewerReady = ({ totalPages: tp } = {}) => {
 const onViewerPageChange = (n) => {
   const p = Number(n) || 1
   if (p === currentPage.value) return
+  // 注意：连续滚动也会触发本回调，这里不记录阅读位置历史（仅"跳转"才记录，见 recordJumpThen）。
   currentPage.value = p
   jumpPage.value = p
   loadMarkdownPage(p)
+}
+
+// ─────────── 阅读位置历史（上一/下一阅读位置）───────────
+// 仅记录"跳转式"的页面变化（翻页/大纲/搜索/书签），用于 Alt+← / Alt+→ 在历史间往返。
+const readingBackStack = ref([])
+const readingForwardStack = ref([])
+let suppressReadingPush = false
+const pushReadingPosition = (page) => {
+  if (suppressReadingPush) return
+  const p = Number(page) || 0
+  if (p < 1) return
+  const top = readingBackStack.value[readingBackStack.value.length - 1]
+  if (top === p) return
+  readingBackStack.value.push(p)
+  if (readingBackStack.value.length > 100) readingBackStack.value.shift()
+  readingForwardStack.value = []
+}
+const gotoReadingPage = (p) => {
+  suppressReadingPush = true
+  if (useNewPdfViewer.value) pdfViewer.value?.goToPage(p)
+  else goToPage(p)
+  currentPage.value = p
+  jumpPage.value = p
+  loadMarkdownPage(p)
+  nextTick(() => { suppressReadingPush = false })
+}
+const goReadingBack = () => {
+  if (!readingBackStack.value.length) { message.info('没有更早的阅读位置'); return }
+  const target = readingBackStack.value.pop()
+  readingForwardStack.value.push(currentPage.value)
+  gotoReadingPage(target)
+}
+const goReadingForward = () => {
+  if (!readingForwardStack.value.length) { message.info('没有更后的阅读位置'); return }
+  const target = readingForwardStack.value.pop()
+  readingBackStack.value.push(currentPage.value)
+  gotoReadingPage(target)
 }
 const onViewerOutline = (list) => {
   // 后端 pdf_outline 返回 {title, page, level}，而 GuaxiOutline 的 n-tree 用 text 作标签、
@@ -884,13 +1011,62 @@ const onViewerOutline = (list) => {
   outlineStore.setOutline(mapped)
   outlineStore.setJumpToLine((p) => {
     const n = Number(p)
-    if (Number.isFinite(n)) pdfViewer.value?.goToPage(n)
+    if (Number.isFinite(n)) goToPage(n)
   })
 }
-const onViewerHighlightClick = async ({ annotId, page } = {}) => {
+const onViewerHighlightClick = async ({ annotId, page, note, color, rects } = {}) => {
   if (!annotId) return
-  const ok = await pdfViewer.value?.deleteHighlight(page || currentPage.value, annotId)
-  if (ok) message.info('已删除高亮')
+  const pg = page || currentPage.value
+  // 删除前已由 viewer 带回 rects/color/note，用于撤销时重建。
+  const snapshot = { page: pg, annotId, note: note || '', color, rects: Array.isArray(rects) ? rects : [] }
+  const ok = await pdfViewer.value?.deleteHighlight(pg, annotId)
+  if (ok) {
+    pushHighlightHistory({ type: 'delete', ...snapshot })
+    message.info('已删除高亮')
+  }
+}
+
+// ─────────── 高亮撤销/重做历史 ───────────
+const highlightUndoStack = ref([])
+const highlightRedoStack = ref([])
+const canUndoHighlight = computed(() => highlightUndoStack.value.length > 0)
+const canRedoHighlight = computed(() => highlightRedoStack.value.length > 0)
+const pushHighlightHistory = (entry) => {
+  highlightUndoStack.value.push(entry)
+  if (highlightUndoStack.value.length > 200) highlightUndoStack.value.shift()
+  highlightRedoStack.value = []
+}
+const undoHighlight = async () => {
+  const entry = highlightUndoStack.value.pop()
+  if (!entry) { message.info('没有可撤销的高亮操作'); return }
+  if (entry.type === 'add') {
+    // 撤销新增 -> 删除
+    const ok = await pdfViewer.value?.deleteHighlight(entry.page, entry.annotId)
+    if (ok) { highlightRedoStack.value.push(entry); message.info('已撤销高亮') }
+    else highlightUndoStack.value.push(entry)
+  } else if (entry.type === 'delete') {
+    // 撤销删除 -> 重建
+    const r = await pdfViewer.value?.reAddHighlight({
+      page: entry.page, rects: entry.rects, color: entry.color, note: entry.note,
+    })
+    if (r) { highlightRedoStack.value.push({ ...entry, annotId: r.annotId }); message.info('已恢复高亮') }
+    else highlightUndoStack.value.push(entry)
+  }
+}
+const redoHighlight = async () => {
+  const entry = highlightRedoStack.value.pop()
+  if (!entry) { message.info('没有可重做的高亮操作'); return }
+  if (entry.type === 'add') {
+    const r = await pdfViewer.value?.reAddHighlight({
+      page: entry.page, rects: entry.rects, color: entry.color, note: entry.note,
+    })
+    if (r) { highlightUndoStack.value.push({ ...entry, annotId: r.annotId }); message.info('已重做高亮') }
+    else highlightRedoStack.value.push(entry)
+  } else if (entry.type === 'delete') {
+    const ok = await pdfViewer.value?.deleteHighlight(entry.page, entry.annotId)
+    if (ok) { highlightUndoStack.value.push(entry); message.info('已重做删除') }
+    else highlightRedoStack.value.push(entry)
+  }
 }
 // 高亮颜色（RGBA 0-255）+ 预设色板。乐观渲染下选词点高亮即时出现。
 const clamp255 = (n) => Math.max(0, Math.min(255, Math.round(Number(n) || 0)))
@@ -928,8 +1104,17 @@ const highlightColorCss = computed(() => rgbaArrToCss(highlightColor.value))
 
 const addHighlightViaViewer = async () => {
   const r = await pdfViewer.value?.addHighlightFromSelection({ color: highlightColor.value })
-  if (r) message.success('已高亮')
-  else message.info('请先在页面中选择文本')
+  if (r) {
+    pushHighlightHistory({
+      type: 'add',
+      page: r.page,
+      annotId: r.annotId,
+      rects: Array.isArray(r.rects) ? r.rects.map((x) => ({ ...x })) : [],
+      color: [...highlightColor.value],
+      note: '',
+    })
+    message.success('已高亮')
+  } else message.info('请先在页面中选择文本')
 }
 
 // 4. 视图状态
@@ -2433,6 +2618,7 @@ const jumpToActivePdfSearchResult = () => {
 }
 
 const gotoNextPdfSearch = () => {
+  if (useNewPdfViewer.value) { pdfViewer.value?.nextHit?.(); return }
   if (pdfFullSearchResults.value.length) {
     updateActivePdfFullSearchResult(pdfFullSearchActiveIndex.value + 1)
     jumpToActivePdfSearchResult()
@@ -2442,6 +2628,7 @@ const gotoNextPdfSearch = () => {
 }
 
 const gotoPrevPdfSearch = () => {
+  if (useNewPdfViewer.value) { pdfViewer.value?.prevHit?.(); return }
   if (pdfFullSearchResults.value.length) {
     updateActivePdfFullSearchResult(pdfFullSearchActiveIndex.value - 1)
     jumpToActivePdfSearchResult()
@@ -2644,13 +2831,23 @@ const searchFullPdfDocument = () => {
   }, 250)
 }
 
+let newViewerSearchTimer = 0
 const handlePdfSearchInput = () => {
+  if (useNewPdfViewer.value) {
+    // 新版 viewer：把宿主搜索框输入转发给 viewer 的全文搜索（防抖）。
+    pdfViewer.value?.setSearchQuery(pdfSearchQuery.value || '')
+    if (newViewerSearchTimer) clearTimeout(newViewerSearchTimer)
+    newViewerSearchTimer = setTimeout(() => {
+      newViewerSearchTimer = 0
+      pdfViewer.value?.runSearch?.()
+    }, 250)
+    return
+  }
   applyPdfSearch()
   searchFullPdfDocument()
 }
 
 const openPdfSearch = async () => {
-  if (useNewPdfViewer.value) { message.info('请使用预览工具栏中的搜索框'); return }
   closeMarkdownSearch()
   pdfSearchVisible.value = true
   await nextTick()
@@ -2665,6 +2862,11 @@ const openPdfSearch = async () => {
 const closePdfSearch = () => {
   pdfSearchVisible.value = false
   pdfSearchQuery.value = ''
+
+  if (useNewPdfViewer.value) {
+    if (newViewerSearchTimer) { clearTimeout(newViewerSearchTimer); newViewerSearchTimer = 0 }
+    pdfViewer.value?.clearSearch?.()
+  }
 
   if (pdfFullSearchTimer) {
     clearTimeout(pdfFullSearchTimer)
@@ -4215,6 +4417,7 @@ const nextPage = () => {
 const goToPage = (page) => {
   const pageNum = typeof page === 'number' ? page : jumpPage.value;
   const targetPage = Math.max(1, Math.min(pageNum, totalPages.value));
+  if (targetPage !== currentPage.value) pushReadingPosition(currentPage.value);
   currentPage.value = targetPage;
   jumpPage.value = targetPage;
   loadPdfPage(targetPage);
@@ -4240,13 +4443,13 @@ const toggleAssistantPanel = () => {
 
 // 25. 缩放功能
 const zoomIn = async () => {
-  if (useNewPdfViewer.value) { pdfViewer.value?.zoomIn?.(); return }
+  if (useNewPdfViewer.value) { pdfViewer.value?.zoomIn?.(); bindViewerState(); return }
   zoomLevel.value = Math.min(zoomLevel.value + 0.1, 2)
   await loadPdfPage(currentPage.value)
 };
 
 const zoomOut = async () => {
-  if (useNewPdfViewer.value) { pdfViewer.value?.zoomOut?.(); return }
+  if (useNewPdfViewer.value) { pdfViewer.value?.zoomOut?.(); bindViewerState(); return }
   zoomLevel.value = Math.max(zoomLevel.value - 0.1, 0.5)
   await loadPdfPage(currentPage.value)
 };
@@ -4309,6 +4512,7 @@ const rotate = async (degrees) => {
 const fitToWidth = async () => {
   if (useNewPdfViewer.value) {
     pdfViewer.value?.fitWidth?.()
+    bindViewerState()
     return
   }
   const panel = pdfPanel.value
@@ -5110,7 +5314,9 @@ button:disabled {
 /* 41. 旋转按钮样式 */
 .rotate-left,
 .rotate-right,
-.fit-width {
+.fit-width,
+.pan-toggle,
+.pdf-search-toggle {
   background-color: var(--guaxi-header-bg);
   color: var(--guaxi-text-primary);
   border: 1px solid var(--guaxi-border);
@@ -5119,8 +5325,21 @@ button:disabled {
 
 .rotate-left:hover,
 .rotate-right:hover,
-.fit-width:hover {
+.fit-width:hover,
+.pan-toggle:hover,
+.pdf-search-toggle:hover {
   background-color: var(--guaxi-header-bg);
+}
+
+.right-controls button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.pan-toggle.active {
+  background-color: #4dabf7;
+  color: #fff;
+  border-color: #339af0;
 }
 
 /* 42. 笔记按钮样式 */
