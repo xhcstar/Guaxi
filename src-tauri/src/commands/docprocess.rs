@@ -343,11 +343,6 @@ pub struct MarkdownResponse {
 }
 
 
-const PDFIUM_LIB_PATH: &str = if cfg!(debug_assertions) {
-    "../../libs"
-} else {
-    "./libs"
-};
 
 #[tauri::command]
 pub async fn copy_image_file(
@@ -595,38 +590,36 @@ pub async fn search_paginated_markdown(filepath: String, query: String) -> Pagin
 #[tauri::command]
 pub async fn get_converted_pdf_page(request: Value) -> Result<String, String> {
     info!("get_converted_pdf_page: {:?}", request);
-    
+
     // 解析请求参数
     let req: PdfRenderRequest = serde_json::from_value(request)
         .map_err(|e| format!("请求解析失败: {}", e))?;
 
-    // 初始化PDFium
-    let pdfium = Pdfium::new(
-        Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(
-            PDFIUM_LIB_PATH,
-        ))
-        .map_err(|e| format!("PDFium初始化失败: {}", e))?,
-    );
+    // pdfium 全进程唯一、非线程安全：不再自行 bind，统一投递到 pdf_reader 的工作线程执行，
+    // 复用同一份实例与文档缓存，避免与阅读器/TTS 并发踩踏导致的"获取页面 N 失败"。
+    let response = crate::commands::pdf_reader::run_pdf(move |state| {
+        state.with_doc(&req.filepath, |document| {
+            let total_pages = document.pages().len() as usize;
+            if req.curpage < 1 || req.curpage > total_pages {
+                return Err(format!("页码 {} 超出范围(总页数: {})", req.curpage, total_pages));
+            }
 
-    // 加载文档
-    let document = pdfium.load_pdf_from_file(&req.filepath, None)
-        .map_err(|e| format!("PDF加载失败: {}", e))?;
+            // 获取目标页
+            let page = document
+                .pages()
+                .get((req.curpage - 1) as u16)
+                .map_err(|_| format!("获取页面 {} 失败", req.curpage))?;
 
-    let total_pages = document.pages().len() as usize;
-    if req.curpage < 1 || req.curpage > total_pages {
-        return Err(format!("页码 {} 超出范围(总页数: {})", req.curpage, total_pages));
-    }
-
-    // 获取目标页
-    let page = document.pages().get((req.curpage - 1) as u16)
-        .map_err(|_| format!("获取页面 {} 失败", req.curpage))?;
-
-    // 根据模式处理
-    let response = match req.mode.as_str() {
-        "vector" => render_vector(&page, req.curpage, total_pages, req.scale),
-        "hybrid" => render_hybrid(&page, req.curpage, total_pages, req.scale),
-        _ => render_image(&page, req.curpage, total_pages, req.scale),
-    };
+            // 根据模式处理
+            let resp = match req.mode.as_str() {
+                "vector" => render_vector(&page, req.curpage, total_pages, req.scale),
+                "hybrid" => render_hybrid(&page, req.curpage, total_pages, req.scale),
+                _ => render_image(&page, req.curpage, total_pages, req.scale),
+            };
+            Ok(resp)
+        })
+    })
+    .await?;
 
     serde_json::to_string(&response).map_err(|e| e.to_string())
 }

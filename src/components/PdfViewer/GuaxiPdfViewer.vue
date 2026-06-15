@@ -30,6 +30,16 @@
       <span class="gpv__zoom">{{ Math.round(zoom * 100) }}%</span>
       <button type="button" class="gpv__btn" :disabled="zoom >= MAX_ZOOM" title="放大" @click="zoomIn">＋</button>
       <button type="button" class="gpv__btn" title="适合宽度" @click="fitWidth">⤢</button>
+      <span class="gpv__divider" />
+      <button type="button" class="gpv__btn" title="向左旋转 90°" @click="rotateLeft">↺</button>
+      <button type="button" class="gpv__btn" title="向右旋转 90°" @click="rotateRight">↻</button>
+      <button
+        type="button"
+        class="gpv__btn"
+        :class="{ 'gpv__btn--active': panMode }"
+        title="拖动平移模式（开启后按住拖动页面；中键拖动始终可平移）"
+        @click="panMode = !panMode"
+      >✋</button>
       <button v-if="features.rebuild" type="button" class="gpv__btn" title="重新构建" @click="$emit('rebuild')">⟳</button>
       <button
         v-if="features.export"
@@ -41,7 +51,13 @@
       >导出</button>
     </div>
 
-    <div class="gpv__body" ref="bodyRef" @scroll="onScroll">
+    <div
+      class="gpv__body"
+      ref="bodyRef"
+      :class="{ 'gpv__body--pan': panMode }"
+      @scroll="onScroll"
+      @mousedown="onBodyMouseDown"
+    >
       <div v-if="errorText" class="gpv__error">
         <div class="gpv__error-title">构建失败</div>
         <pre class="gpv__error-log">{{ errorText }}</pre>
@@ -58,60 +74,61 @@
           :ref="(el) => setPageRef(page.num, el)"
           class="gpv__page"
           :data-page="page.num"
-          :style="{
-            width: `${Math.round(page.wPt * cssScale)}px`,
-            height: `${Math.round(page.hPt * cssScale)}px`,
-          }"
+          :style="pageBoxStyle(page)"
           @mousedown="onPageMouseDown(page.num, $event)"
         >
-          <img
-            v-if="page.image"
-            class="gpv__page-img"
-            :src="page.image"
-            :width="Math.round(page.wPt * cssScale)"
-            :height="Math.round(page.hPt * cssScale)"
-            draggable="false"
-            alt="预览页"
-          />
-          <div v-else class="gpv__page-skeleton">{{ page.num }}</div>
-
-          <!-- 透明文本层：可选择/复制（按行，scaleX 对齐渲染图）-->
-          <div v-if="page.lines" class="gpv__textlayer">
-            <span
-              v-for="(line, i) in page.lines"
-              :key="i"
-              class="gpv__text-seg"
-              :style="lineStyle(line)"
-            >{{ line.text }}</span>
-          </div>
-
-          <!-- 搜索高亮 -->
-          <div
-            v-for="(rect, i) in (searchRectsByPage[page.num] || [])"
-            :key="`s${i}`"
-            class="gpv__search-rect"
-            :class="{ active: rect.active }"
-            :style="rectStyle(rect)"
-          />
-
-          <!-- 已保存的高亮批注覆盖层 -->
-          <template v-for="hl in (page.highlights || [])" :key="hl.annot_id">
-            <div
-              v-for="(rc, ri) in hl.rects"
-              :key="`${hl.annot_id}-${ri}`"
-              class="gpv__hl-rect"
-              :style="hlStyle(rc, hl.color)"
-              :title="hl.note || ''"
-              @click.stop="onHighlightClick(hl, page.num)"
+          <!-- 内层包裹：img + 文本层 + 各覆盖层都在同一未旋转坐标系内，旋转此层使三者
+               一起旋转、对齐天然保持；外层 .gpv__page 取旋转后的占位尺寸以撑出正确布局。 -->
+          <div class="gpv__page-inner" :style="pageInnerStyle(page)">
+            <img
+              v-if="page.image"
+              class="gpv__page-img"
+              :src="page.image"
+              :width="Math.round(page.wPt * cssScale)"
+              :height="Math.round(page.hPt * cssScale)"
+              draggable="false"
+              alt="预览页"
             />
-          </template>
+            <div v-else class="gpv__page-skeleton">{{ page.num }}</div>
 
-          <!-- 定位高亮框（完整包裹，替代旧的下划线）-->
-          <div
-            v-if="flashBox && flashBox.page === page.num"
-            class="gpv__flash-box"
-            :style="boxStyle(flashBox)"
-          />
+            <!-- 透明文本层：可选择/复制（按行，scaleX 对齐渲染图）-->
+            <div v-if="page.lines" class="gpv__textlayer">
+              <span
+                v-for="(line, i) in page.lines"
+                :key="i"
+                class="gpv__text-seg"
+                :style="lineStyle(line)"
+              >{{ line.text }}</span>
+            </div>
+
+            <!-- 搜索高亮 -->
+            <div
+              v-for="(rect, i) in (searchRectsByPage[page.num] || [])"
+              :key="`s${i}`"
+              class="gpv__search-rect"
+              :class="{ active: rect.active }"
+              :style="rectStyle(rect)"
+            />
+
+            <!-- 已保存的高亮批注覆盖层 -->
+            <template v-for="hl in (page.highlights || [])" :key="hl.annot_id">
+              <div
+                v-for="(rc, ri) in hl.rects"
+                :key="`${hl.annot_id}-${ri}`"
+                class="gpv__hl-rect"
+                :style="hlStyle(rc, hl.color)"
+                :title="hl.note || ''"
+                @click.stop="onHighlightClick(hl, page.num)"
+              />
+            </template>
+
+            <!-- 定位高亮框（完整包裹，替代旧的下划线）-->
+            <div
+              v-if="flashBox && flashBox.page === page.num"
+              class="gpv__flash-box"
+              :style="boxStyle(flashBox)"
+            />
+          </div>
         </div>
       </div>
 
@@ -169,6 +186,33 @@ const cssScale = computed(() => zoom.value)
 // 渲染 DPI：随 zoom 提升后端真重渲染，保证清晰（含 2x 余量）
 const renderDpi = computed(() => Math.min(480, Math.max(96, Math.round(zoom.value * 144))))
 
+// ───────────────────────── 旋转 ─────────────────────────
+// 角度 0/90/180/270。CSS 旋转内层包裹（pageInnerStyle），外层占位按旋转后尺寸交换宽高。
+const rotation = ref(0)
+const isRotated90 = computed(() => rotation.value === 90 || rotation.value === 270)
+const rotateLeft = () => { rotation.value = (rotation.value + 270) % 360 }
+const rotateRight = () => { rotation.value = (rotation.value + 90) % 360 }
+
+const pageBoxStyle = (page) => {
+  const w = Math.round(page.wPt * cssScale.value)
+  const h = Math.round(page.hPt * cssScale.value)
+  return { width: `${isRotated90.value ? h : w}px`, height: `${isRotated90.value ? w : h}px` }
+}
+const pageInnerStyle = (page) => {
+  const w = Math.round(page.wPt * cssScale.value)
+  const h = Math.round(page.hPt * cssScale.value)
+  const fw = isRotated90.value ? h : w
+  const fh = isRotated90.value ? w : h
+  return {
+    width: `${w}px`,
+    height: `${h}px`,
+    left: `${(fw - w) / 2}px`,
+    top: `${(fh - h) / 2}px`,
+    transform: rotation.value ? `rotate(${rotation.value}deg)` : 'none',
+    transformOrigin: 'center center',
+  }
+}
+
 const doc = usePdfiumDocument()
 const { pages, totalPages, hasPdf, status, statusTone } = doc
 
@@ -215,6 +259,7 @@ const load = async (fp, keep) => {
   await nextTick()
   if (keep) restoreScroll(prevRatio)
   updateVisible()
+  renderVisible()
   if (props.features.outline) emitOutline()
   if (searchQuery.value.trim()) runSearch()
 }
@@ -236,24 +281,66 @@ const restoreScroll = (ratio) => {
 }
 
 // ─────────────────── 虚拟化：渲染可见页 ───────────────────
+// 滚动分两条路：
+//  · 每帧（rAF）只做廉价的 DOM 测算，更新 currentPage / 派发 page-change，保证页码跟手；
+//  · 真正的栅格化/文本/高亮拉取走防抖，等滚动稳定 ~120ms 才执行——这样快速滑过的页不会
+//    给单线程 pdfium worker 排一堆很快作废的整页渲染任务。
 let scrollRaf = 0
+const RENDER_SETTLE_MS = 120
+let renderSettleTimer = null
+
 const onScroll = () => {
-  if (scrollRaf) return
-  scrollRaf = requestAnimationFrame(() => {
-    scrollRaf = 0
-    updateVisible()
-  })
+  if (!scrollRaf) {
+    scrollRaf = requestAnimationFrame(() => {
+      scrollRaf = 0
+      updateVisible()
+    })
+  }
+  scheduleRenderVisible()
 }
 
+const scheduleRenderVisible = () => {
+  if (renderSettleTimer) clearTimeout(renderSettleTimer)
+  renderSettleTimer = setTimeout(() => {
+    renderSettleTimer = null
+    renderVisible()
+  }, RENDER_SETTLE_MS)
+}
+
+// 廉价：只算可见范围、更新当前页，不触发任何后端调用。
 const updateVisible = () => {
   const el = bodyRef.value
   if (!el || !pages.length) return
   const top = el.scrollTop
   const bottom = top + el.clientHeight
-  const BUFFER = el.clientHeight
 
   let firstVisible = currentPage.value
   let bestOverlap = 0
+
+  for (const page of pages) {
+    const node = pageEls.get(page.num)
+    if (!node) continue
+    const nTop = node.offsetTop
+    const nBottom = nTop + node.offsetHeight
+    const overlap = Math.min(nBottom, bottom) - Math.max(nTop, top)
+    if (overlap > bestOverlap) {
+      bestOverlap = overlap
+      firstVisible = page.num
+    }
+  }
+  if (firstVisible !== currentPage.value) {
+    currentPage.value = firstVisible
+    emit('page-change', firstVisible)
+  }
+}
+
+// 重活：对当前可见（含上下一屏缓冲）的页做栅格化/文本/高亮；远离可见区的已渲染页释放图片。
+const renderVisible = () => {
+  const el = bodyRef.value
+  if (!el || !pages.length) return
+  const top = el.scrollTop
+  const bottom = top + el.clientHeight
+  const BUFFER = el.clientHeight
 
   for (const page of pages) {
     const node = pageEls.get(page.num)
@@ -268,16 +355,76 @@ const updateVisible = () => {
     } else if (page.image && Math.abs(page.num - currentPage.value) > 6) {
       doc.freePage(page)
     }
-    const overlap = Math.min(nBottom, bottom) - Math.max(nTop, top)
-    if (overlap > bestOverlap) {
-      bestOverlap = overlap
-      firstVisible = page.num
+  }
+}
+
+// ─────────────────── 拖动平移（抓手模式 / 中键，带轻惯性）───────────────────
+const panMode = ref(false)
+let panState = null
+let panRaf = 0
+const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : 0)
+
+const onBodyMouseDown = (ev) => {
+  // 仅在抓手模式或按下中键时平移，避免与划词选择冲突。
+  if (!panMode.value && ev.button !== 1) return
+  const el = bodyRef.value
+  if (!el) return
+  if (panRaf) { cancelAnimationFrame(panRaf); panRaf = 0 }
+  ev.preventDefault()
+  const t = nowMs()
+  panState = {
+    x: ev.clientX, y: ev.clientY,
+    left: el.scrollLeft, top: el.scrollTop,
+    lastX: ev.clientX, lastY: ev.clientY, vx: 0, vy: 0, t,
+  }
+  window.addEventListener('mousemove', onPanMove, true)
+  window.addEventListener('mouseup', onPanUp, true)
+}
+const onPanMove = (ev) => {
+  const el = bodyRef.value
+  if (!panState || !el) return
+  el.scrollLeft = panState.left - (ev.clientX - panState.x)
+  el.scrollTop = panState.top - (ev.clientY - panState.y)
+  const now = nowMs()
+  const dt = now - panState.t
+  if (dt > 0) {
+    panState.vx = (ev.clientX - panState.lastX) / dt
+    panState.vy = (ev.clientY - panState.lastY) / dt
+    panState.lastX = ev.clientX
+    panState.lastY = ev.clientY
+    panState.t = now
+  }
+}
+const onPanUp = () => {
+  window.removeEventListener('mousemove', onPanMove, true)
+  window.removeEventListener('mouseup', onPanUp, true)
+  const st = panState
+  panState = null
+  if (st && (Math.abs(st.vx) > 0.05 || Math.abs(st.vy) > 0.05)) startPanInertia(st.vx, st.vy)
+  else scheduleRenderVisible()
+}
+const startPanInertia = (vx, vy) => {
+  const el = bodyRef.value
+  if (!el) return
+  let curVx = vx
+  let curVy = vy
+  let last = nowMs()
+  const stepFn = () => {
+    const now = nowMs()
+    const dt = now - last
+    last = now
+    el.scrollLeft -= curVx * dt
+    el.scrollTop -= curVy * dt
+    curVx *= 0.94
+    curVy *= 0.94
+    if (Math.abs(curVx) > 0.02 || Math.abs(curVy) > 0.02) {
+      panRaf = requestAnimationFrame(stepFn)
+    } else {
+      panRaf = 0
+      scheduleRenderVisible()
     }
   }
-  if (firstVisible !== currentPage.value) {
-    currentPage.value = firstVisible
-    emit('page-change', firstVisible)
-  }
+  panRaf = requestAnimationFrame(stepFn)
 }
 
 // 加载字符层并测量 scaleX（让透明文本宽度对齐渲染图，原生选择高亮因此连续）。
@@ -415,13 +562,33 @@ const onPageMouseDown = (pageNum, ev) => {
   dragStartedAt = { x: ev.clientX, y: ev.clientY, page: pageNum }
 }
 
+// 屏幕坐标 -> 页面"未旋转 pt"坐标：考虑当前旋转角，使选区/点击在旋转后仍正确。
+// pageEl(.gpv__page) 是轴对齐的占位框，其中心即旋转内层的中心；先平移到中心、逆旋转，
+// 再平移回未旋转的 W×H 空间，最后除以缩放得到 pt。
+const screenToPagePt = (page, pageEl, clientX, clientY) => {
+  const rect = pageEl.getBoundingClientRect()
+  const cx = rect.left + rect.width / 2
+  const cy = rect.top + rect.height / 2
+  const rad = (-rotation.value * Math.PI) / 180
+  const dx = clientX - cx
+  const dy = clientY - cy
+  const ux = dx * Math.cos(rad) - dy * Math.sin(rad)
+  const uy = dx * Math.sin(rad) + dy * Math.cos(rad)
+  const s = cssScale.value
+  return {
+    x: (ux + (page.wPt * s) / 2) / s,
+    y: (uy + (page.hPt * s) / 2) / s,
+  }
+}
+
 const handlePageClick = async (pageNum, ev) => {
   if (!props.features.reverseJump) return
+  if (panMode.value) return
   const node = pageEls.get(pageNum)
   if (!node) return
-  const rect = node.getBoundingClientRect()
-  const xPt = (ev.clientX - rect.left) / cssScale.value
-  const yPt = (ev.clientY - rect.top) / cssScale.value
+  const page = pages[pageNum - 1]
+  if (!page) return
+  const { x: xPt, y: yPt } = screenToPagePt(page, node, ev.clientX, ev.clientY)
   try {
     let res
     if (engineKind.value === 'typst') {
@@ -478,6 +645,7 @@ const scrollToPagePoint = (pageNum, yPt) => {
   if (!el || !node) return
   const target = node.offsetTop + yPt * cssScale.value - el.clientHeight * 0.35
   el.scrollTo({ top: Math.max(0, target), behavior: 'smooth' })
+  scheduleRenderVisible()
 }
 
 const showFlashBox = (box) => {
@@ -493,6 +661,7 @@ const goToPage = (n, { align = 'top' } = {}) => {
   if (!el || !node) return
   const offset = align === 'center' ? el.clientHeight * 0.3 : 8
   el.scrollTo({ top: Math.max(0, node.offsetTop - offset), behavior: 'smooth' })
+  scheduleRenderVisible()
 }
 
 const forwardSync = async ({ line, column = 1 } = {}) => {
@@ -542,32 +711,78 @@ const getSelectionRects = () => {
   }
   if (!pageEl) return null
   const pageNum = Number(pageEl.getAttribute('data-page'))
-  const base = pageEl.getBoundingClientRect()
-  const s = cssScale.value
+  const page = pages[pageNum - 1]
+  if (!page) return null
   const rects = []
   for (const r of sel.getRangeAt(0).getClientRects()) {
     if (r.width < 1 || r.height < 1) continue
+    // 每个屏幕矩形映射两对角到页面 pt 空间，取 min/max（旋转后仍得到正确的轴对齐框）。
+    const p1 = screenToPagePt(page, pageEl, r.left, r.top)
+    const p2 = screenToPagePt(page, pageEl, r.right, r.bottom)
     rects.push({
-      x: (r.left - base.left) / s,
-      y: (r.top - base.top) / s,
-      w: r.width / s,
-      h: r.height / s,
+      x: Math.min(p1.x, p2.x),
+      y: Math.min(p1.y, p2.y),
+      w: Math.abs(p2.x - p1.x),
+      h: Math.abs(p2.y - p1.y),
     })
   }
   if (!rects.length) return null
   return { page: pageNum, rects, text }
 }
 
+const DEFAULT_HL_COLOR = [255, 235, 59, 90]
+let hlTempSeq = 0
+const normalizeHlColor = (c) => {
+  if (Array.isArray(c) && c.length >= 3) {
+    const v = (n, d) => Math.max(0, Math.min(255, Math.round(Number(n) ?? d)))
+    return [v(c[0], 255), v(c[1], 235), v(c[2], 59), v(c[3], 90)]
+  }
+  return DEFAULT_HL_COLOR.slice()
+}
+
+// 乐观高亮：先就地放临时覆盖层（瞬间可见），再后台写回 .pdf，成功后把临时 id 换成真 id，失败回滚。
 const addHighlightFromSelection = async ({ color, note } = {}) => {
   const info = getSelectionRects()
   if (!info) return null
-  const annotId = await doc.addHighlight({ page: info.page, rects: info.rects, color, note })
   window.getSelection?.()?.removeAllRanges()
-  if (!annotId) return null
+
+  const rgba = normalizeHlColor(color)
+  const page = pages[info.page - 1]
+  const tempId = `tmp-${++hlTempSeq}`
+  if (page) {
+    if (!Array.isArray(page.highlights)) page.highlights = []
+    page.highlights.push({ annot_id: tempId, rects: info.rects, color: rgba, note: note || '', pending: true })
+  }
+
+  const annotId = await doc.addHighlight({ page: info.page, rects: info.rects, color: rgba, note })
+  if (!annotId) {
+    if (page && Array.isArray(page.highlights)) {
+      const i = page.highlights.findIndex((h) => h.annot_id === tempId)
+      if (i >= 0) page.highlights.splice(i, 1)
+    }
+    return null
+  }
+  if (page && Array.isArray(page.highlights)) {
+    const it = page.highlights.find((h) => h.annot_id === tempId)
+    if (it) { it.annot_id = annotId; it.pending = false }
+  }
   return { annotId, page: info.page, text: info.text, rects: info.rects }
 }
 
-const deleteHighlight = (page, annotId) => doc.deleteHighlight(page, annotId)
+// 乐观删除：先就地移除覆盖层，再后台写回；失败回滚。
+const deleteHighlight = async (pageNum, annotId) => {
+  const page = pages[pageNum - 1]
+  let removed = null
+  if (page && Array.isArray(page.highlights)) {
+    const i = page.highlights.findIndex((h) => h.annot_id === annotId)
+    if (i >= 0) { removed = page.highlights[i]; page.highlights.splice(i, 1) }
+  }
+  const ok = await doc.deleteHighlight(pageNum, annotId)
+  if (!ok && removed && page && Array.isArray(page.highlights)) {
+    page.highlights.push(removed)
+  }
+  return ok
+}
 
 const refresh = () => load(props.path, true)
 
@@ -608,9 +823,13 @@ if (typeof window !== 'undefined') {
 
 onBeforeUnmount(() => {
   if (flashTimer) clearTimeout(flashTimer)
+  if (renderSettleTimer) clearTimeout(renderSettleTimer)
   if (scrollRaf) cancelAnimationFrame(scrollRaf)
+  if (panRaf) cancelAnimationFrame(panRaf)
   if (typeof window !== 'undefined') {
     window.removeEventListener('mouseup', onBodyMouseUp, true)
+    window.removeEventListener('mousemove', onPanMove, true)
+    window.removeEventListener('mouseup', onPanUp, true)
   }
   doc.closeDocument()
 })
@@ -700,6 +919,11 @@ onBeforeUnmount(() => {
 .gpv__btn:hover:not(:disabled) { background: var(--gpv-hover-bg); border-color: var(--n-color-primary, #61afef); }
 .gpv__btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .gpv__btn--primary { border-color: var(--n-color-primary, #61afef); color: var(--n-color-primary, #61afef); }
+.gpv__btn--active {
+  background: var(--n-color-primary, #61afef);
+  border-color: var(--n-color-primary, #61afef);
+  color: #fff;
+}
 
 .gpv__body {
   flex: 1 1 auto;
@@ -708,6 +932,10 @@ onBeforeUnmount(() => {
   overflow: auto;
   background: var(--gpv-canvas-area);
 }
+/* 抓手模式：手型光标 + 禁止文本选择，避免拖动时误选 */
+.gpv__body--pan { cursor: grab; user-select: none; }
+.gpv__body--pan:active { cursor: grabbing; }
+.gpv__body--pan .gpv__text-seg { user-select: none; cursor: grab; }
 
 .gpv__pages {
   display: flex;
@@ -722,7 +950,10 @@ onBeforeUnmount(() => {
   background: #fff;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
   flex: 0 0 auto;
+  overflow: hidden;
 }
+/* 旋转内层：尺寸/位移/旋转全部走内联样式（pageInnerStyle） */
+.gpv__page-inner { position: absolute; }
 .gpv__page-img { display: block; user-select: none; }
 .gpv__page-skeleton {
   position: absolute;

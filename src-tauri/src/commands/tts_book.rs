@@ -4,7 +4,6 @@ use base64::{engine::general_purpose, Engine as _};
 use encoding_rs::GBK;
 use lopdf::Document as LoDocument;
 use once_cell::sync::Lazy;
-use pdfium_render::prelude::*;
 use regex::Regex;
 use scraper::Html;
 use serde::{Deserialize, Serialize};
@@ -1766,56 +1765,36 @@ fn decode_pdf_hex_text(hex: &str) -> String {
 }
 
 fn extract_pdf_text_with_pdfium(path: &Path) -> Result<String, String> {
-    let exe = std::env::current_exe().map_err(|e| format!("获取程序路径失败: {}", e))?;
-    let exe_dir = exe
-        .parent()
-        .ok_or_else(|| "无法获取程序目录".to_string())?;
-    let pdfium = bind_pdfium_for_tts_book(&exe_dir)?;
-    let document = pdfium
-        .load_pdf_from_file(path, None)
-        .map_err(|e| format!("PDFium 加载 PDF 失败: {}", e))?;
-
-    let mut out = String::new();
-    let total_pages = document.pages().len();
-    for index in 0..total_pages {
-        let page = document
-            .pages()
-            .get(index)
-            .map_err(|_| format!("PDFium 获取第 {} 页失败", index + 1))?;
-        let page_text = match page.text() {
-            Ok(text_page) => text_page.all(),
-            Err(_) => String::new(),
-        };
-        if !page_text.trim().is_empty() {
-            if !out.is_empty() {
-                out.push_str("\n\n");
+    // pdfium 全进程唯一、非线程安全：不再自行 bind，统一投递到 pdf_reader 的工作线程。
+    // 本函数在 spawn_blocking 上下文调用，用阻塞版把任务交给 pdfium 工作线程。
+    let path_str = path.to_string_lossy().to_string();
+    crate::commands::pdf_reader::run_pdf_blocking(move |state| {
+        state.with_doc(&path_str, |document| {
+            let mut out = String::new();
+            let total_pages = document.pages().len();
+            for index in 0..total_pages {
+                let page = document
+                    .pages()
+                    .get(index)
+                    .map_err(|_| format!("PDFium 获取第 {} 页失败", index + 1))?;
+                let page_text = match page.text() {
+                    Ok(text_page) => text_page.all(),
+                    Err(_) => String::new(),
+                };
+                if !page_text.trim().is_empty() {
+                    if !out.is_empty() {
+                        out.push_str("\n\n");
+                    }
+                    out.push_str(&page_text);
+                }
             }
-            out.push_str(&page_text);
-        }
-    }
 
-    if out.trim().is_empty() {
-        return Err("PDFium 解析结果为空".to_string());
-    }
-    Ok(out)
-}
-
-fn bind_pdfium_for_tts_book(exe_dir: &Path) -> Result<Pdfium, String> {
-    let mut candidates = Vec::new();
-    candidates.push(Pdfium::pdfium_platform_library_name_at_path("./libs"));
-    candidates.push(Pdfium::pdfium_platform_library_name_at_path("../../libs"));
-    candidates.push(Pdfium::pdfium_platform_library_name_at_path(&exe_dir.join("libs")));
-    candidates.push(exe_dir.join("libs").join("pdfium.dll"));
-
-    let mut errors = Vec::new();
-    for candidate in candidates {
-        match Pdfium::bind_to_library(&candidate) {
-            Ok(bindings) => return Ok(Pdfium::new(bindings)),
-            Err(err) => errors.push(format!("{} -> {}", candidate.to_string_lossy(), err)),
-        }
-    }
-
-    Err(format!("PDFium 初始化失败: {}", errors.join(" | ")))
+            if out.trim().is_empty() {
+                return Err("PDFium 解析结果为空".to_string());
+            }
+            Ok(out)
+        })
+    })
 }
 
 fn normalize_pdf_text(raw: &str) -> String {

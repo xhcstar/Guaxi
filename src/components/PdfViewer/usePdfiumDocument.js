@@ -3,7 +3,7 @@
 // 注：高亮批注（写回 .pdf）在后续阶段加入，这里先提供阅读/预览所需的只读能力。
 
 import { ref, reactive } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
+import { invoke, convertFileSrc } from '@tauri-apps/api/core'
 import { buildLines } from './usePdfTextLayer'
 import { createLogger } from '../../utils/logger'
 
@@ -27,6 +27,7 @@ export default function usePdfiumDocument() {
     image: '',
     dpi: 0,
     rendering: false,
+    renderingDpi: 0,
     renderToken: 0,
     chars: null,
     lines: null,
@@ -145,16 +146,23 @@ export default function usePdfiumDocument() {
   // 渲染单页（按 dpi）。token 取消：快速滚动/缩放时丢弃过期结果。
   const renderPage = async (page, dpi) => {
     if (!activePath) return
-    if (page.rendering && page.dpi === dpi) return
+    // 已渲染好同 dpi：跳过。
     if (page.image && page.dpi === dpi) return
+    // 正在渲染同 dpi：跳过——注意要比对"正在渲染的 dpi"而非"已完成的 dpi"。
+    // 首渲染期间 page.dpi 仍是 0，若拿它判断会导致去重失效，每帧 updateVisible 都重排一次
+    // 整页栅格化，把单线程 pdfium worker 冲爆，可见页迟迟渲染不出来。
+    if (page.rendering && page.renderingDpi === dpi) return
     page.rendering = true
+    page.renderingDpi = dpi
     const myToken = ++page.renderToken
     try {
       const resp = await invoke('pdf_render_page', {
         request: { path: activePath, page: page.num, dpi },
       })
       if (myToken !== page.renderToken) return
-      page.image = `data:image/png;base64,${resp.image_data}`
+      // 后端把页图写入临时 PNG，经 asset 协议加载，不再传 base64。加 mtime/dpi 已体现在
+      // 文件名里，convertFileSrc 得到的 URL 随之变化，浏览器据此自然失效旧图。
+      page.image = convertFileSrc(resp.image_path)
       page.dpi = resp.dpi
     } catch (e) {
       logger.error('渲染页失败', { page: page.num, error: String(e?.message || e) })
@@ -230,14 +238,13 @@ export default function usePdfiumDocument() {
     }
   }
 
+  // 仅写回 .pdf 并返回 annot_id；覆盖层由调用方乐观维护，不再强制全量重拉（省一次往返）。
   const addHighlight = async ({ page, rects, color, note } = {}) => {
     if (!activePath || !page || !Array.isArray(rects) || !rects.length) return null
     try {
       const resp = await invoke('pdf_add_highlight', {
         request: { path: activePath, page, rects, color: color || null, note: note || null },
       })
-      const target = pages[page - 1]
-      if (target) await loadHighlights(target, { force: true })
       return resp?.annot_id || null
     } catch (e) {
       logger.error('创建高亮失败', { error: String(e?.message || e) })
@@ -249,8 +256,6 @@ export default function usePdfiumDocument() {
     if (!activePath || !page || !annotId) return false
     try {
       await invoke('pdf_delete_highlight', { path: activePath, page, annotId })
-      const target = pages[page - 1]
-      if (target) await loadHighlights(target, { force: true })
       return true
     } catch (e) {
       logger.error('删除高亮失败', { error: String(e?.message || e) })

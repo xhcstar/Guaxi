@@ -3,7 +3,8 @@
 //! 前端（GuaxiPdfViewer.vue / GuaxiLatexPreview.vue）负责连续滚动的虚拟化、文本层叠加、
 //! 搜索高亮的"展示"，真正重的活全部走这里的命令：
 //!   - `pdf_open` / `pdf_session_open`  打开 PDF，返回总页数 + 每页尺寸（pt），供前端撑出占位做虚拟滚动。
-//!   - `pdf_render_page`  按目标 DPI 栅格化单页 -> base64 PNG（缩放时真重渲染，而非 CSS 拉伸，保证清晰）。
+//!   - `pdf_render_page`  按目标 DPI 栅格化单页 -> 临时 PNG 文件路径（经 asset 协议加载，不再传 base64；
+//!                        栅格化在工作线程、PNG 编码+落盘 offload 到线程池；缩放时真重渲染保证清晰）。
 //!   - `pdf_page_text`    提取单页"段"级文本及其 bbox（pt，左上原点）。
 //!   - `pdf_page_chars`   提取单页"字符"级文本框（pt，左上原点）-> 前端按行分组 + scaleX 铺透明文本层。
 //!   - `pdf_outline`      提取书签大纲（标题/层级/目标页）。
@@ -20,13 +21,13 @@
 //! 各 Tauri 命令把 `Send` 闭包投递到该线程、用 tokio oneshot 取回结果。这样既消除了"每次命令重开
 //! 整份文件"的开销（5000 页时的主要瓶颈），又满足 pdfium 的线程亲和性，且不需要 `unsafe`。
 
-use base64::engine::general_purpose;
-use base64::Engine as _;
-use image::ImageFormat;
+use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+use image::{ExtendedColorType, ImageEncoder};
 use pdfium_render::prelude::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::Cursor;
+use std::path::PathBuf;
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::SystemTime;
 use tracing::{error, info};
@@ -55,14 +56,18 @@ struct CacheEntry {
 }
 
 /// 工作线程独占的状态：唯一的 pdfium 实例（leak 成 'static）+ 文档 LRU。
-struct PdfWorkerState {
+///
+/// 公开给同进程其它模块（docprocess / tts_book）使用：pdfium 全局状态唯一且非线程安全，
+/// 全进程必须只有这一个实例、且所有调用都从这条工作线程发起。其它模块通过 `run_pdf` /
+/// `run_pdf_blocking` 把闭包投递进来，在 `with_doc` 里复用同一份文档缓存，杜绝并发踩踏。
+pub struct PdfWorkerState {
     pdfium: Option<&'static Pdfium>,
     cache: Vec<CacheEntry>,
 }
 
 impl PdfWorkerState {
     /// 拿到（必要时按 mtime 重载并缓存）指定路径的文档，交给闭包使用。命中页移到 LRU 队首。
-    fn with_doc<R>(
+    pub fn with_doc<R>(
         &mut self,
         path: &str,
         f: impl FnOnce(&PdfDocument<'static>) -> Result<R, String>,
@@ -137,7 +142,10 @@ fn init_worker() -> Mutex<mpsc::Sender<PdfJob>> {
 }
 
 /// 在 pdfium 工作线程上执行闭包并异步取回结果。
-async fn run_pdf<R, F>(f: F) -> Result<R, String>
+///
+/// 同进程任何需要 pdfium 的地方都应走这里（而非自己 `bind_to_library`），
+/// 以保证全进程唯一实例 + 单线程访问。
+pub async fn run_pdf<R, F>(f: F) -> Result<R, String>
 where
     R: Send + 'static,
     F: FnOnce(&mut PdfWorkerState) -> Result<R, String> + Send + 'static,
@@ -156,6 +164,29 @@ where
             .map_err(|_| "PDF worker 线程不可用".to_string())?;
     }
     rx.await.map_err(|_| "PDF worker 无响应".to_string())?
+}
+
+/// `run_pdf` 的同步版：供 `spawn_blocking` 等非 async 上下文使用（如 tts_book 的文本抽取回退）。
+/// 阻塞当前线程直到工作线程返回；绝不能在 pdfium 工作线程自身内部调用（会死锁）。
+pub fn run_pdf_blocking<R, F>(f: F) -> Result<R, String>
+where
+    R: Send + 'static,
+    F: FnOnce(&mut PdfWorkerState) -> Result<R, String> + Send + 'static,
+{
+    let (tx, rx) = std::sync::mpsc::channel::<Result<R, String>>();
+    let job: PdfJob = Box::new(move |state| {
+        let _ = tx.send(f(state));
+    });
+    {
+        let sender = PDF_WORKER
+            .get_or_init(init_worker)
+            .lock()
+            .map_err(|_| "PDF worker 锁失败".to_string())?;
+        sender
+            .send(job)
+            .map_err(|_| "PDF worker 线程不可用".to_string())?;
+    }
+    rx.recv().map_err(|_| "PDF worker 无响应".to_string())?
 }
 
 // ───────────────────────── pdf_open / pdf_session_open ─────────────────────────
@@ -200,12 +231,15 @@ pub async fn pdf_open(path: String) -> Result<PdfOpenResponse, String> {
 /// 预热缓存版的 `pdf_open`：语义/返回形状与 `pdf_open` 一致，前端打开文档时调用以提前载入。
 #[tauri::command]
 pub async fn pdf_session_open(path: String) -> Result<PdfOpenResponse, String> {
+    // 清理上次会话中源文件已变化（mtime 过期）的页图缓存。
+    prune_stale_artifacts(&path);
     pdf_open(path).await
 }
 
-/// 关闭会话：从缓存中剔除该文档，释放内存。
+/// 关闭会话：从缓存中剔除该文档，释放内存，并删除其页图临时目录。
 #[tauri::command]
 pub async fn pdf_session_close(path: String) -> Result<(), String> {
+    let _ = std::fs::remove_dir_all(doc_cache_dir(&path));
     run_pdf(move |state| {
         state.invalidate(&path);
         Ok(())
@@ -228,15 +262,58 @@ pub struct PdfRenderPageRequest {
 #[derive(Debug, Serialize)]
 pub struct PdfRenderPageResponse {
     pub page: usize,
-    /// 渲染位图像素宽高（前端按此设 <img> 的 CSS 尺寸 = px / (dpi/72) 得到 pt 显示尺寸）。
-    pub width_px: u32,
-    pub height_px: u32,
     /// 实际使用的 dpi（回传，方便前端换算 pt<->px）。
     pub dpi: f32,
-    pub image_data: String,
+    /// 栅格化结果写入的临时 PNG 文件绝对路径；前端用 convertFileSrc 经 asset 协议加载，
+    /// 不再传输 base64（省去 IPC 大字符串拷贝 + JS 解码，且文件可被复用/缓存）。
+    pub image_path: String,
 }
 
-/// 把指定页按目标 DPI 栅格化为 PNG（base64）。pdfium 正确渲染 CJK 等内嵌字体。
+/// 渲染产物根目录：系统临时目录下的 .guaxi-display-artifacts（已在 tauri.conf.json 的
+/// assetProtocol scope 内，asset 协议可直接读取），按文档路径哈希分子目录。
+fn artifacts_root() -> PathBuf {
+    std::env::temp_dir()
+        .join(".guaxi-display-artifacts")
+        .join("guaxi-pdf")
+}
+
+fn doc_cache_dir(path: &str) -> PathBuf {
+    let mut hasher = Sha256::new();
+    hasher.update(path.as_bytes());
+    let h = format!("{:x}", hasher.finalize());
+    artifacts_root().join(&h[..16])
+}
+
+/// 源 PDF 的 mtime（毫秒）——作为缓存键的一部分：源文件变化（含写回高亮）后旧图自动失效。
+fn source_mtime_millis(path: &str) -> u64 {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// 删除某文档缓存目录中 mtime 后缀已过期（源文件已变）的页图，避免无限堆积。
+fn prune_stale_artifacts(path: &str) {
+    let dir = doc_cache_dir(path);
+    let suffix = format!("_{}.png", source_mtime_millis(path));
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.ends_with(".png") && !name.ends_with(suffix.as_str()) {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+}
+
+/// 把指定页按目标 DPI 栅格化为 PNG 临时文件并返回路径。pdfium 正确渲染 CJK 等内嵌字体。
+///
+/// 性能要点：栅格化必须在 pdfium 工作线程；但 PNG 编码（CPU 密集）+ 落盘 offload 到
+/// spawn_blocking，工作线程取到原始像素后即可去渲染下一页，编码并行进行、互不阻塞。
+/// 同 (页码,dpi,源 mtime) 命中磁盘缓存时直接返回，省去重复栅格化与编码。
 #[tauri::command]
 pub async fn pdf_render_page(
     request: PdfRenderPageRequest,
@@ -245,7 +322,21 @@ pub async fn pdf_render_page(
     let path = request.path.clone();
     let page_num = request.page;
 
-    run_pdf(move |state| {
+    let mtime = source_mtime_millis(&path);
+    let dir = doc_cache_dir(&path);
+    let file = dir.join(format!("p{}@{}_{}.png", page_num, dpi.round() as i32, mtime));
+
+    // 命中磁盘缓存：直接返回路径，免栅格化/编码。
+    if std::fs::metadata(&file).map(|m| m.len() > 0).unwrap_or(false) {
+        return Ok(PdfRenderPageResponse {
+            page: page_num,
+            dpi,
+            image_path: file.to_string_lossy().to_string(),
+        });
+    }
+
+    // 1) 工作线程：仅栅格化，取出原始 RGB 像素（Send），尽快释放工作线程。
+    let (raw, width_px, height_px) = run_pdf(move |state| {
         state.with_doc(&path, |document| {
             let total = document.pages().len() as usize;
             if page_num < 1 || page_num > total {
@@ -270,27 +361,42 @@ pub async fn pdf_render_page(
                 .render_with_config(&config)
                 .map_err(|e| format!("页面渲染失败: {e}"))?;
 
-            let dyn_image = bitmap.as_image();
-            let width_px = dyn_image.width();
-            let height_px = dyn_image.height();
-
-            let mut bytes = Vec::new();
-            dyn_image
-                .into_rgb8()
-                .write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png)
-                .map_err(|e| format!("图片编码失败: {e}"))?;
-            let image_data = general_purpose::STANDARD.encode(&bytes);
-
-            Ok(PdfRenderPageResponse {
-                page: page_num,
-                width_px,
-                height_px,
-                dpi,
-                image_data,
-            })
+            let rgb = bitmap.as_image().into_rgb8();
+            let (w, h) = (rgb.width(), rgb.height());
+            Ok((rgb.into_raw(), w, h))
         })
     })
+    .await?;
+
+    // 2) 线程池：PNG 编码（快压缩档，文字仍清晰）+ 落盘，不占用工作线程。
+    let file_for_blocking = file.clone();
+    let dir_for_blocking = dir.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        std::fs::create_dir_all(&dir_for_blocking)
+            .map_err(|e| format!("创建缓存目录失败: {e}"))?;
+        let mut bytes = Vec::new();
+        let encoder = PngEncoder::new_with_quality(
+            Cursor::new(&mut bytes),
+            CompressionType::Fast,
+            FilterType::NoFilter,
+        );
+        encoder
+            .write_image(&raw, width_px, height_px, ExtendedColorType::Rgb8)
+            .map_err(|e| format!("图片编码失败: {e}"))?;
+        // 先写临时文件再原子改名，避免前端读到半截文件。
+        let tmp = file_for_blocking.with_extension("png.part");
+        std::fs::write(&tmp, &bytes).map_err(|e| format!("写入页图失败: {e}"))?;
+        std::fs::rename(&tmp, &file_for_blocking).map_err(|e| format!("提交页图失败: {e}"))?;
+        Ok(())
+    })
     .await
+    .map_err(|e| format!("编码任务失败: {e}"))??;
+
+    Ok(PdfRenderPageResponse {
+        page: page_num,
+        dpi,
+        image_path: file.to_string_lossy().to_string(),
+    })
 }
 
 // ──────────────────────── pdf_page_text（段级）────────────────────────

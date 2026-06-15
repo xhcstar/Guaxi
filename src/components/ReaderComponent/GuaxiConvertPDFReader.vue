@@ -137,6 +137,31 @@
               <button class="pdf-annotation-tool-btn" type="button" title="高亮所选文本（写回 PDF）" @click="addHighlightViaViewer">
                 <n-icon :component="ColorWandOutline" />
               </button>
+              <n-popover trigger="click" placement="top" :show-arrow="true">
+                <template #trigger>
+                  <button class="pdf-annotation-tool-btn pdf-hl-color-btn" type="button" title="高亮颜色">
+                    <span class="pdf-hl-swatch" :style="{ background: highlightColorCss }"></span>
+                  </button>
+                </template>
+                <div class="pdf-hl-color-pop">
+                  <div class="pdf-hl-presets">
+                    <button
+                      v-for="(c, i) in highlightPresets"
+                      :key="i"
+                      class="pdf-hl-preset"
+                      :class="{ active: rgbaArrToCss(c) === highlightColorCss }"
+                      :style="{ background: rgbaArrToCss(c) }"
+                      @click="highlightColor = [...c]"
+                    ></button>
+                  </div>
+                  <n-color-picker
+                    :value="highlightColorCss"
+                    :modes="['rgb']"
+                    size="small"
+                    @update:value="(v) => (highlightColor = cssToRgbaArr(v))"
+                  />
+                </div>
+              </n-popover>
             </div>
           </div>
         </div>
@@ -403,7 +428,7 @@ import { storeToRefs } from 'pinia'
 import { repoStore } from '../../stores/repoStore'
 import { renderMarkdown, addCopyButtons, addMediaViewerButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
 import { maskPythonCellBlocksForMarkdown } from '../HomeViewComponent/utils/guaxiPythonCellSyntax'
-import { NCard, NButton, NIcon, NText, NModal, NSelect, useMessage, NDropdown } from 'naive-ui'
+import { NCard, NButton, NIcon, NText, NModal, NSelect, useMessage, NDropdown, NPopover, NColorPicker } from 'naive-ui'
 import usePdfRenderer from './usePdfRenderer'
 import MarkdownIt from 'markdown-it'
 import { useOutlineStore } from '../../stores/outlineStore'
@@ -849,7 +874,14 @@ const onViewerPageChange = (n) => {
   loadMarkdownPage(p)
 }
 const onViewerOutline = (list) => {
-  outlineStore.setOutline(Array.isArray(list) ? list : [])
+  // 后端 pdf_outline 返回 {title, page, level}，而 GuaxiOutline 的 n-tree 用 text 作标签、
+  // 用 line 做跳转键。这里做字段映射，否则大纲有树形和图标却没有文字。
+  const mapped = (Array.isArray(list) ? list : []).map((it) => ({
+    level: Number(it.level) || 1,
+    text: it.title ?? it.text ?? '',
+    line: Number(it.page ?? it.line) || 1,
+  }))
+  outlineStore.setOutline(mapped)
   outlineStore.setJumpToLine((p) => {
     const n = Number(p)
     if (Number.isFinite(n)) pdfViewer.value?.goToPage(n)
@@ -860,9 +892,43 @@ const onViewerHighlightClick = async ({ annotId, page } = {}) => {
   const ok = await pdfViewer.value?.deleteHighlight(page || currentPage.value, annotId)
   if (ok) message.info('已删除高亮')
 }
+// 高亮颜色（RGBA 0-255）+ 预设色板。乐观渲染下选词点高亮即时出现。
+const clamp255 = (n) => Math.max(0, Math.min(255, Math.round(Number(n) || 0)))
+const highlightColor = ref([255, 235, 59, 110])
+const highlightPresets = [
+  [255, 235, 59, 110],   // 黄
+  [76, 217, 100, 110],   // 绿
+  [64, 196, 255, 110],   // 蓝
+  [255, 145, 180, 110],  // 粉
+  [255, 159, 67, 110],   // 橙
+]
+const rgbaArrToCss = (c) => {
+  const [r, g, b, a] = Array.isArray(c) ? c : highlightColor.value
+  return `rgba(${clamp255(r)}, ${clamp255(g)}, ${clamp255(b)}, ${(clamp255(a) / 255).toFixed(3)})`
+}
+const cssToRgbaArr = (str) => {
+  const m = String(str || '').match(/rgba?\(([^)]+)\)/i)
+  if (m) {
+    const p = m[1].split(',').map((s) => s.trim())
+    const a = p[3] != null ? clamp255(parseFloat(p[3]) * 255) : 110
+    return [clamp255(p[0]), clamp255(p[1]), clamp255(p[2]), a]
+  }
+  const hex = String(str || '').replace('#', '')
+  if (hex.length >= 6) {
+    return [
+      parseInt(hex.slice(0, 2), 16),
+      parseInt(hex.slice(2, 4), 16),
+      parseInt(hex.slice(4, 6), 16),
+      hex.length >= 8 ? parseInt(hex.slice(6, 8), 16) : 110,
+    ]
+  }
+  return [255, 235, 59, 110]
+}
+const highlightColorCss = computed(() => rgbaArrToCss(highlightColor.value))
+
 const addHighlightViaViewer = async () => {
-  const r = await pdfViewer.value?.addHighlightFromSelection({})
-  if (r) message.success('已高亮并写回 PDF')
+  const r = await pdfViewer.value?.addHighlightFromSelection({ color: highlightColor.value })
+  if (r) message.success('已高亮')
   else message.info('请先在页面中选择文本')
 }
 
@@ -5671,6 +5737,48 @@ button:disabled {
 
 .pdf-annotation-tool-btn:active {
   transform: translateY(1px);
+}
+
+.pdf-hl-color-btn {
+  padding: 0;
+}
+
+.pdf-hl-swatch {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25) inset;
+}
+
+.pdf-hl-color-pop {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 208px;
+}
+
+.pdf-hl-presets {
+  display: flex;
+  gap: 8px;
+}
+
+.pdf-hl-preset {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.pdf-hl-preset:hover {
+  transform: translateY(-1px);
+}
+
+.pdf-hl-preset.active {
+  box-shadow: 0 0 0 2px var(--n-color-primary, #4dabf7);
 }
 
 .inpage-search-bar {
