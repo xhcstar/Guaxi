@@ -52,6 +52,8 @@ onMounted(async () => {
   background-color: var(--guaxi-panel-bg);
   border-right: 1px solid var(--guaxi-border);
   height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', monospace;
@@ -88,6 +90,8 @@ onMounted(async () => {
 
 .repo-menu {
   flex: 1;
+  min-height: 0;
+  /* 仅当条目超过可视高度时，在菜单内部滚动（而非父级整列滚动） */
   overflow-y: auto;
   background-color: var(--guaxi-panel-bg);
   border-radius: 8px;

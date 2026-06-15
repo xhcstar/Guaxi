@@ -21,7 +21,7 @@
 //! 各 Tauri 命令把 `Send` 闭包投递到该线程、用 tokio oneshot 取回结果。这样既消除了"每次命令重开
 //! 整份文件"的开销（5000 页时的主要瓶颈），又满足 pdfium 的线程亲和性，且不需要 `unsafe`。
 
-use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+use image::codecs::jpeg::JpegEncoder;
 use image::{ExtendedColorType, ImageEncoder};
 use pdfium_render::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -301,12 +301,13 @@ fn source_mtime_millis(path: &str) -> u64 {
 /// 删除某文档缓存目录中 mtime 后缀已过期（源文件已变）的页图，避免无限堆积。
 fn prune_stale_artifacts(path: &str) {
     let dir = doc_cache_dir(path);
-    let suffix = format!("_{}.png", source_mtime_millis(path));
+    let token = format!("_{}.", source_mtime_millis(path));
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if name.ends_with(".png") && !name.ends_with(suffix.as_str()) {
+            let is_img = name.ends_with(".jpg") || name.ends_with(".png");
+            if is_img && !name.contains(token.as_str()) {
                 let _ = std::fs::remove_file(entry.path());
             }
         }
@@ -328,7 +329,7 @@ pub async fn pdf_render_page(
 
     let mtime = source_mtime_millis(&path);
     let dir = doc_cache_dir(&path);
-    let file = dir.join(format!("p{}@{}_{}.png", page_num, dpi.round() as i32, mtime));
+    let file = dir.join(format!("p{}@{}_{}.jpg", page_num, dpi.round() as i32, mtime));
 
     // 命中磁盘缓存：直接返回路径，免栅格化/编码。
     if std::fs::metadata(&file).map(|m| m.len() > 0).unwrap_or(false) {
@@ -372,23 +373,20 @@ pub async fn pdf_render_page(
     })
     .await?;
 
-    // 2) 线程池：PNG 编码（快压缩档，文字仍清晰）+ 落盘，不占用工作线程。
+    // 2) 线程池：JPEG 编码 + 落盘，不占用工作线程。
+    //    选 JPEG 而非 PNG：缩放（尤其放大）时整页位图可达 8~14MP，PNG 的 zlib 编码与浏览器解码
+    //    都很慢（数秒级）；JPEG 编码/解码快数倍、文件小一个量级，阅读场景下质量足够清晰。
     let file_for_blocking = file.clone();
     let dir_for_blocking = dir.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         std::fs::create_dir_all(&dir_for_blocking)
             .map_err(|e| format!("创建缓存目录失败: {e}"))?;
         let mut bytes = Vec::new();
-        let encoder = PngEncoder::new_with_quality(
-            Cursor::new(&mut bytes),
-            CompressionType::Fast,
-            FilterType::NoFilter,
-        );
-        encoder
+        JpegEncoder::new_with_quality(Cursor::new(&mut bytes), 82)
             .write_image(&raw, width_px, height_px, ExtendedColorType::Rgb8)
             .map_err(|e| format!("图片编码失败: {e}"))?;
         // 先写临时文件再原子改名，避免前端读到半截文件。
-        let tmp = file_for_blocking.with_extension("png.part");
+        let tmp = file_for_blocking.with_extension("jpg.part");
         std::fs::write(&tmp, &bytes).map_err(|e| format!("写入页图失败: {e}"))?;
         std::fs::rename(&tmp, &file_for_blocking).map_err(|e| format!("提交页图失败: {e}"))?;
         Ok(())
@@ -1008,6 +1006,30 @@ pub async fn pdf_add_highlight(
                     .annotations_mut()
                     .create_stamp_annotation()
                     .map_err(|e| format!("创建高亮失败: {e}"))?;
+                // 关键：必须把批注 Rect/BBox 设为所有矩形的并集。新建批注 Rect 默认 (0,0,0,0)，
+                // pdfium 生成外观流(form XObject)的 BBox 用的就是这个 Rect —— 若为空，外部阅读器
+                // 会把外观裁剪成空白（这正是"只有本应用能看到高亮"的原因；本应用是用 DOM 覆盖层另画的）。
+                let mut min_l = f32::MAX;
+                let mut min_b = f32::MAX;
+                let mut max_t = f32::MIN;
+                let mut max_r = f32::MIN;
+                for rc in &rects {
+                    let pr = hl_rect_to_pdf_rect(rc, page_h);
+                    min_l = min_l.min(pr.left().value);
+                    min_b = min_b.min(pr.bottom().value);
+                    max_t = max_t.max(pr.top().value);
+                    max_r = max_r.max(pr.right().value);
+                }
+                if min_l.is_finite() && max_r > min_l && max_t > min_b {
+                    stamp
+                        .set_bounds(PdfRect::new(
+                            PdfPoints::new(min_b),
+                            PdfPoints::new(min_l),
+                            PdfPoints::new(max_t),
+                            PdfPoints::new(max_r),
+                        ))
+                        .map_err(|e| format!("设置高亮范围失败: {e}"))?;
+                }
                 stamp
                     .set_contents(&build_marker(&annot_id, &note, &rects, color))
                     .map_err(|e| format!("写入高亮元数据失败: {e}"))?;
@@ -1027,6 +1049,8 @@ pub async fn pdf_add_highlight(
                     let _ = obj.set_blend_mode(PdfPageObjectBlendMode::Multiply);
                 }
             }
+            // 显式再生页面内容，确保批注外观流被写入（不依赖默认策略）。
+            let _ = pdf_page.regenerate_content();
             save_document(document, &path)?;
             Ok(())
         })?;

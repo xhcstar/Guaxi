@@ -74,7 +74,9 @@ onBeforeUnmount(() => {
 .guaxi-content {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  /* 填满父级内容区（= 视口高 - 顶栏），不要用 100vh，否则比插槽高出顶栏高度导致内部误触滚动。 */
+  height: 100%;
+  min-height: 0;
   width: 100%;
   overflow: hidden; /* 防止外层滚动 */
 }

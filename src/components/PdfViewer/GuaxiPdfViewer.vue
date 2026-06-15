@@ -69,6 +69,7 @@
       :class="{ 'gpv__body--pan': panMode }"
       @scroll="onScroll"
       @mousedown="onBodyMouseDown"
+      @wheel="onWheel"
     >
       <div v-if="errorText" class="gpv__error">
         <div class="gpv__error-title">构建失败</div>
@@ -252,6 +253,15 @@ const engineKind = computed(() => {
 const zoomIn = () => { zoom.value = Math.min(MAX_ZOOM, +(zoom.value + 0.1).toFixed(2)) }
 const zoomOut = () => { zoom.value = Math.max(MIN_ZOOM, +(zoom.value - 0.1).toFixed(2)) }
 const setZoom = (z) => { zoom.value = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, +Number(z).toFixed(2))) }
+
+// Ctrl/⌘ + 滚轮缩放：阻止浏览器默认整页缩放，改为按步缩放 PDF。
+const onWheel = (ev) => {
+  if (!(ev.ctrlKey || ev.metaKey)) return
+  ev.preventDefault()
+  const step = Math.min(0.5, 0.0015 * Math.abs(ev.deltaY) + 0.05)
+  if (ev.deltaY < 0) zoom.value = Math.min(MAX_ZOOM, +(zoom.value + step).toFixed(2))
+  else if (ev.deltaY > 0) zoom.value = Math.max(MIN_ZOOM, +(zoom.value - step).toFixed(2))
+}
 const fitWidth = () => {
   const el = bodyRef.value
   const first = pages[0]
@@ -352,13 +362,14 @@ const updateVisible = () => {
   }
 }
 
-// 重活：对当前可见（含上下一屏缓冲）的页做栅格化/文本/高亮；远离可见区的已渲染页释放图片。
-const renderVisible = () => {
+// 重活：对当前可见（默认含上下一屏缓冲）的页做栅格化/文本/高亮；远离可见区的已渲染页释放图片。
+// bufferFactor=0 时只渲染严格可见页——缩放时用它，避免一次重渲多页大位图导致卡顿。
+const renderVisible = ({ bufferFactor = 1 } = {}) => {
   const el = bodyRef.value
   if (!el || !pages.length) return
   const top = el.scrollTop
   const bottom = top + el.clientHeight
-  const BUFFER = el.clientHeight
+  const BUFFER = el.clientHeight * bufferFactor
 
   for (const page of pages) {
     const node = pageEls.get(page.num)
@@ -522,12 +533,18 @@ const onHighlightClick = (hl, pageNum) => {
   })
 }
 
-// 缩放后重渲可见/已加载页（提高清晰度）；scaleX 与缩放无关，无需重新测量。
+// 缩放性能：缩放时 CSS 立即把现有图按新尺寸缩放（即时反馈，可能暂时模糊），
+// 真正的高 DPI 重渲做防抖、且只渲"可见页"——避免每点一下缩放就把所有已加载页全部重栅格化
+// （这正是缩放卡顿的根因）。scaleX 与缩放无关，无需重新测量。
+let zoomRenderTimer = null
 watch(renderDpi, () => {
   if (!hasPdf.value) return
-  for (const page of pages) {
-    if (page.image && page.dpi !== renderDpi.value) doc.renderPage(page, renderDpi.value)
-  }
+  if (zoomRenderTimer) clearTimeout(zoomRenderTimer)
+  zoomRenderTimer = setTimeout(() => {
+    zoomRenderTimer = null
+    // 只重渲严格可见页，缩放更跟手。
+    renderVisible({ bufferFactor: 0 })
+  }, 180)
 })
 
 // 旋转 90/270 会交换每页外框宽高 -> 整体布局高度变化、各页 offsetTop 全变；
@@ -901,6 +918,7 @@ if (typeof window !== 'undefined') {
 onBeforeUnmount(() => {
   if (flashTimer) clearTimeout(flashTimer)
   if (renderSettleTimer) clearTimeout(renderSettleTimer)
+  if (zoomRenderTimer) clearTimeout(zoomRenderTimer)
   if (scrollRaf) cancelAnimationFrame(scrollRaf)
   if (panRaf) cancelAnimationFrame(panRaf)
   if (typeof window !== 'undefined') {
@@ -957,9 +975,36 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid var(--gpv-border);
   background: var(--gpv-toolbar-bg);
   font-size: 12px;
+  /* 单行固定高度：窗口变窄时不换行（否则文字被挤成多行、工具栏突然变高），
+     放不下时横向滚动而非增高。 */
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
 }
-.gpv__title { font-weight: 600; color: var(--gpv-text); }
-.gpv__status { font-size: 11px; opacity: 0.7; }
+.gpv__toolbar::-webkit-scrollbar { height: 0; display: none; }
+/* 工具栏内所有项都不被压缩换行；标题/状态可省略号，留出可点击控件空间。 */
+.gpv__toolbar > * { flex-shrink: 0; }
+.gpv__title {
+  font-weight: 600;
+  color: var(--gpv-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 40%;
+}
+.gpv__status {
+  font-size: 11px;
+  opacity: 0.7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
+  min-width: 0;
+}
 .gpv__status.ok { color: #2da44e; opacity: 1; }
 .gpv.theme-dark .gpv__status.ok { color: #98c379; }
 .gpv__status.error { color: #cf222e; opacity: 1; }
@@ -1030,12 +1075,20 @@ onBeforeUnmount(() => {
 .gpv__pages {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  /* 不用 align-items:center —— 当某页比视口宽（放大后），居中会把左半部分推入不可滚动的
+     负区间，导致只能往右看、左侧内容看不全。改为 align-items:flex-start + 每页 margin:0 auto
+     居中：放得下时居中，放不下时贴左、可向右滚动看全整页（左右都能拖动）。 */
+  align-items: flex-start;
+  /* 让容器至少和最宽的页一样宽，保证横向滚动范围覆盖整页。 */
+  width: max-content;
+  min-width: 100%;
   gap: 12px;
   padding: 12px;
 }
 
 .gpv__page {
+  margin-left: auto;
+  margin-right: auto;
   position: relative;
   background: #fff;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);

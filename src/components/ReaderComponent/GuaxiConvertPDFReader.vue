@@ -129,10 +129,10 @@
         :class="pdfSearchVisible ? 'inpage-search-bar-pdf' : 'inpage-search-bar-md'" @mousedown.stop @click.stop
         @dblclick.stop>
         <input v-if="pdfSearchVisible" ref="pdfSearchInput" class="inpage-search-input" v-model="pdfSearchQuery"
-          placeholder="PDF搜索" @input="handlePdfSearchInput" @keydown.enter.prevent="gotoNextPdfSearch"
+          placeholder="PDF搜索" @input="handlePdfSearchInput" @keydown.enter.exact.prevent="gotoNextPdfSearch"
           @keydown.shift.enter.prevent="gotoPrevPdfSearch" @keydown.esc.prevent="closePdfSearch" />
         <input v-else ref="mdSearchInput" class="inpage-search-input" v-model="mdSearchQuery" placeholder="Markdown搜索"
-          @input="applyMarkdownSearch" @keydown.enter.prevent="gotoNextMarkdownSearch"
+          @input="applyMarkdownSearch" @keydown.enter.exact.prevent="gotoNextMarkdownSearch"
           @keydown.shift.enter.prevent="gotoPrevMarkdownSearch" @keydown.esc.prevent="closeMarkdownSearch" />
         <span class="inpage-search-count">{{ pdfSearchVisible ? pdfSearchCountText : mdSearchCountText }}</span>
         <button v-if="pdfSearchVisible" class="inpage-search-btn" type="button" title="跳转"
@@ -153,7 +153,7 @@
         </button>
       </div>
 
-      <div class="pdf-left-wrapper" v-show="viewMode !== 'full-right' || showOutline || pdfSearchVisible" :style="{ width: leftPanelWidth }">
+      <div class="pdf-left-wrapper" v-show="viewMode !== 'full-right' || showOutline || pdfSearchVisible" :style="{ width: leftPanelWidth }" @mouseenter="lastReaderRegion = 'pdf'">
         <div v-if="showOutline" class="outline-panel-wrapper outline-panel-wrapper-left" @click.stop>
           <GuaxiOutline />
         </div>
@@ -169,6 +169,7 @@
             @page-change="onViewerPageChange"
             @outline="onViewerOutline"
             @highlight-click="onViewerHighlightClick"
+            @selection="onViewerSelection"
           />
           <div class="pdf-annotation-toolbar-wrap pdf-annotation-toolbar-wrap--new" @mousedown.stop @click.stop @dblclick.stop>
             <div class="pdf-annotation-toolbar">
@@ -280,7 +281,7 @@
 
       <!-- 右侧Markdown内容 -->
       <div class="markdown-panel" v-show="viewMode !== 'full-left' || mdSearchVisible" @click="handleMarkdownClickAlt" @dblclick="handleMarkdownClick" @mousemove="handleMarkdownHover"
-        @mouseleave="handleMarkdownLeave" @mouseenter="setScrollTargetFromEvent"
+        @mouseleave="handleMarkdownLeave" @mouseenter="onMarkdownEnter"
         @mouseup="handleSelectionMouseUp">
 
         <div class="markdown-content" ref="markdownContainer">
@@ -307,45 +308,6 @@
               </div>
             </div>
           </template>
-        </div>
-
-        <div v-if="selectionToolbarVisible" class="selection-toolbar"
-          :style="{ top: `${selectionToolbarTop}px`, left: `${selectionToolbarLeft}px` }" @mousedown.stop @click.stop @dblclick.stop>
-          <div class="selection-toolbar-actions">
-            <button class="selection-tool-btn" type="button" title="翻译" :disabled="selectionBusy || !selectionText"
-              @click="translateSelection">
-              <n-icon :component="LanguageOutline" />
-            </button>
-            <button class="selection-tool-btn" type="button" title="查询" :disabled="selectionBusy || !selectionText"
-              @click="querySelection">
-              <n-icon :component="SearchOutline" />
-            </button>
-            <button class="selection-tool-btn" type="button" title="问AI" :disabled="selectionBusy || !selectionText"
-              @click="askSelectionWithAssistant">
-              <n-icon :component="ChatbubbleEllipsesOutline" />
-            </button>
-            <button class="selection-tool-btn" type="button" title="用AI翻译" :disabled="selectionBusy || !selectionText"
-              @click="openAssistantTranslateDialog">
-              <n-icon :component="ColorWandOutline" />
-            </button>
-            <button class="selection-tool-btn" type="button" title="插入笔记" :disabled="selectionBusy || !selectionInsertText"
-              @click="insertSelectionResult">
-              <n-icon :component="AddOutline" />
-            </button>
-          </div>
-        </div>
-
-        <div v-if="selectionTranslatePanelVisible" class="selection-translate-layer">
-          <div class="selection-translate-layer-inner">
-            <GuaxiSelectionTranslatePanel :pos="selectionTranslatePanelPos" :raw="selectionTranslateRaw"
-              :result="selectionTranslateResult" :error="selectionTranslateError" :busy="selectionTranslateBusy"
-              :pinned="selectionTranslatePinned" :items="selectionTranslateItems" :from-lang="selectionTranslateFrom"
-              :to-lang="selectionTranslateTo" :lang-options="selectionTranslateLangOptions" :word-meta="selectionTranslateWordMeta"
-              @update:from-lang="(v) => (selectionTranslateFrom = String(v || 'auto'))"
-              @update:to-lang="(v) => (selectionTranslateTo = String(v || 'zh'))" @swap-langs="swapSelectionTranslateLangs"
-              @translate="translateSelectionText" @copy="copySelectionTranslateResult" @toggle-pin="toggleSelectionTranslatePinned"
-              @update:pos="handleSelectionTranslatePanelUpdatePos" @close="closeSelectionTranslatePanel" />
-          </div>
         </div>
 
         <n-modal v-model:show="assistantTranslateDialogVisible" preset="card" title="用AI翻译" style="width: 420px">
@@ -443,6 +405,48 @@
       </div>
     </div>
 
+    <!-- 划词工具栏 / 翻译面板：提到顶层（position:fixed），避免随 markdown 面板在"仅左侧"布局
+         被 v-show 隐藏而失效——这样在任意布局下选词都能弹出。 -->
+    <div v-if="selectionToolbarVisible" class="selection-toolbar"
+      :style="{ top: `${selectionToolbarTop}px`, left: `${selectionToolbarLeft}px` }"
+      @mousedown.stop.prevent @mouseup.stop @click.stop @dblclick.stop>
+      <div class="selection-toolbar-actions">
+        <button class="selection-tool-btn" type="button" title="翻译" :disabled="selectionBusy || !selectionText"
+          @click="translateSelection">
+          <n-icon :component="LanguageOutline" />
+        </button>
+        <button class="selection-tool-btn" type="button" title="查询" :disabled="selectionBusy || !selectionText"
+          @click="querySelection">
+          <n-icon :component="SearchOutline" />
+        </button>
+        <button class="selection-tool-btn" type="button" title="问AI" :disabled="selectionBusy || !selectionText"
+          @click="askSelectionWithAssistant">
+          <n-icon :component="ChatbubbleEllipsesOutline" />
+        </button>
+        <button class="selection-tool-btn" type="button" title="用AI翻译" :disabled="selectionBusy || !selectionText"
+          @click="openAssistantTranslateDialog">
+          <n-icon :component="ColorWandOutline" />
+        </button>
+        <button class="selection-tool-btn" type="button" title="插入笔记" :disabled="selectionBusy || !selectionInsertText"
+          @click="insertSelectionResult">
+          <n-icon :component="AddOutline" />
+        </button>
+      </div>
+    </div>
+
+    <div v-if="selectionTranslatePanelVisible" class="selection-translate-layer">
+      <div class="selection-translate-layer-inner">
+        <GuaxiSelectionTranslatePanel :pos="selectionTranslatePanelPos" :raw="selectionTranslateRaw"
+          :result="selectionTranslateResult" :error="selectionTranslateError" :busy="selectionTranslateBusy"
+          :pinned="selectionTranslatePinned" :items="selectionTranslateItems" :from-lang="selectionTranslateFrom"
+          :to-lang="selectionTranslateTo" :lang-options="selectionTranslateLangOptions" :word-meta="selectionTranslateWordMeta"
+          @update:from-lang="(v) => (selectionTranslateFrom = String(v || 'auto'))"
+          @update:to-lang="(v) => (selectionTranslateTo = String(v || 'zh'))" @swap-langs="swapSelectionTranslateLangs"
+          @translate="translateSelectionText" @copy="copySelectionTranslateResult" @toggle-pin="toggleSelectionTranslatePinned"
+          @update:pos="handleSelectionTranslatePanelUpdatePos" @close="closeSelectionTranslatePanel" />
+      </div>
+    </div>
+
     <!-- 添加笔记的提示气泡 -->
     <transition name="fade">
       <div v-if="showNoteBubble" class="note-added-bubble">
@@ -462,6 +466,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { join, dirname } from '@tauri-apps/api/path'
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { platform } from '@tauri-apps/plugin-os';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import { storeToRefs } from 'pinia'
 import { repoStore } from '../../stores/repoStore'
 import { renderMarkdown, addCopyButtons, addMediaViewerButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
@@ -559,6 +564,14 @@ const isEditableElement = (el) => {
 
 const lastScrollTarget = ref(null)
 
+// 鼠标最近所在的阅读区域（'pdf' | 'md'），用于 Ctrl+F 决定打开哪个搜索条。
+// 默认 'pdf'（本就是 PDF 阅读器）。不复用 lastScrollTarget，因其只在滚动时更新、悬停 PDF 不会变。
+const lastReaderRegion = ref('pdf')
+const onMarkdownEnter = (e) => {
+  lastReaderRegion.value = 'md'
+  setScrollTargetFromEvent(e)
+}
+
 const setScrollTargetFromEvent = (e) => {
   const t = e?.currentTarget
   if (t && t instanceof HTMLElement) {
@@ -588,7 +601,10 @@ const handleAnyScroll = (e) => {
 const handleReaderShortcuts = (e) => {
   if (isEditableElement(e.target)) return
 
-  if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+  if (
+    !e.altKey &&
+    (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight')
+  ) {
     const target = lastScrollTarget.value
     if (target && isScrollableElement(target)) {
       const step = e.shiftKey ? 160 : 40
@@ -661,13 +677,11 @@ const handleReaderShortcuts = (e) => {
 
   if (ctrl && (e.key === 'f' || e.key === 'F')) {
     e.preventDefault()
-    const t = lastScrollTarget.value
-    const el = t && t instanceof HTMLElement ? t : null
-    const inPdf = el && (el.closest('.pdf-left-wrapper') || el.closest('.pdf-render-panel'))
-    if (inPdf) {
-      openPdfSearch()
-    } else {
+    // 光标在哪个阅读区域，就打开哪个区域的搜索条。
+    if (lastReaderRegion.value === 'md') {
       openMarkdownSearch()
+    } else {
+      openPdfSearch()
     }
     return
   }
@@ -958,7 +972,11 @@ const onViewerReady = ({ totalPages: tp } = {}) => {
 const onViewerPageChange = (n) => {
   const p = Number(n) || 1
   if (p === currentPage.value) return
-  // 注意：连续滚动也会触发本回调，这里不记录阅读位置历史（仅"跳转"才记录，见 recordJumpThen）。
+  // 逐页连续滚动(delta=1)不记历史；大跳转(拖动滚动条/搜索定位/viewer 自带页码框)记入阅读历史，
+  // 这样"上一/下一阅读位置"在实际使用中可用（此前仅宿主 goToPage 记录，几乎从不触发）。
+  if (!suppressReadingPush && Math.abs(p - currentPage.value) > 1) {
+    pushReadingPosition(currentPage.value)
+  }
   currentPage.value = p
   jumpPage.value = p
   loadMarkdownPage(p)
@@ -1014,6 +1032,27 @@ const onViewerOutline = (list) => {
     if (Number.isFinite(n)) goToPage(n)
   })
 }
+// 新版 viewer 内选中 PDF 文本 -> 复用划词工具栏（翻译/查询/问AI/AI翻译/插入笔记）。
+// 旧路径靠 handleSelectionMouseUp(限定容器为旧 PDF.js 文本层)；新 viewer 的文本层在子组件内，
+// 故改由 viewer 的 selection 事件驱动，直接用实时 DOM 选区计算位置。
+const onViewerSelection = ({ text } = {}) => {
+  nextTick(() => {
+    const selection = window.getSelection()
+    const t = (selection ? selection.toString().trim() : '') || String(text || '').trim()
+    if (!t || !selection || selection.rangeCount === 0) { closeSelectionToolbar(); return }
+    const rect = selection.getRangeAt(0).getBoundingClientRect()
+    if (!rect || (rect.width === 0 && rect.height === 0)) { closeSelectionToolbar(); return }
+    selectionText.value = t
+    const pad = 8, toolWidth = 140, toolHeight = 40
+    let top = rect.top - toolHeight - 8
+    if (top < pad) top = rect.bottom + 8
+    const left = Math.max(pad, Math.min(rect.left, window.innerWidth - toolWidth - pad))
+    selectionToolbarTop.value = Math.round(top)
+    selectionToolbarLeft.value = Math.round(left)
+    selectionToolbarVisible.value = true
+  })
+}
+
 const onViewerHighlightClick = async ({ annotId, page, note, color, rects } = {}) => {
   if (!annotId) return
   const pg = page || currentPage.value
@@ -2433,12 +2472,19 @@ const translateSelection = async () => {
   await openSelectionTranslatePanel()
 }
 
-const querySelection = () => {
+const querySelection = async () => {
   const text = selectionText.value.trim()
   if (!text) return
 
   const url = `https://www.bing.com/search?q=${encodeURIComponent(text)}`
+  // 同时写入可插入笔记的链接，并在系统默认浏览器中打开搜索
+  //（此前只生成链接、点了没反应，现用 plugin-opener 真正打开浏览器）。
   selectionInsertText.value = `[查询：${text}](${url})`
+  try {
+    await openUrl(url)
+  } catch (e) {
+    message.warning('打开浏览器失败')
+  }
 }
 
 const getTranslateLangLabel = (value) => {

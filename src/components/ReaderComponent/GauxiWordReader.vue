@@ -296,6 +296,7 @@ import { renderAsync } from 'docx-preview'
 import { join, dirname } from '@tauri-apps/api/path'
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { platform } from '@tauri-apps/plugin-os';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import { storeToRefs } from 'pinia'
 import { repoStore } from '../../stores/repoStore'
 import { renderMarkdown, addCopyButtons, addMediaViewerButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
@@ -1857,12 +1858,18 @@ const translateSelection = async () => {
   await openSelectionTranslatePanel()
 }
 
-const querySelection = () => {
+const querySelection = async () => {
   const text = selectionText.value.trim()
   if (!text) return
 
   const url = `https://www.bing.com/search?q=${encodeURIComponent(text)}`
+  // 写入可插入笔记的链接，并在系统默认浏览器中打开搜索（用 plugin-opener 真正打开）。
   selectionInsertText.value = `[查询：${text}](${url})`
+  try {
+    await openUrl(url)
+  } catch (e) {
+    /* 打开失败时静默：链接已写入可插入笔记 */
+  }
 }
 
 const getTranslateLangLabel = (value) => {
