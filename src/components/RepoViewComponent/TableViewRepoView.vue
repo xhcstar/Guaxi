@@ -11,16 +11,50 @@
 
     <!-- 搜索栏 -->
 
-    <!-- 表格工具栏 -->
+    <!-- 表格工具栏 + 视图切换 -->
     <div class="toolbar-container">
-      <TableToolbar @sort="handleSort" @clear-filters="handleClearFilters" @add-file="showAddFileModal" />
+      <div class="view-toggle" role="group" aria-label="视图切换">
+        <button
+          class="view-toggle-btn"
+          :class="{ on: viewMode === 'table' }"
+          title="表格视图"
+          @click="setViewMode('table')"
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+            <path fill="currentColor" d="M3 5h18v2H3V5zm0 6h18v2H3v-2zm0 6h18v2H3v-2z" />
+          </svg>
+          <span>表格</span>
+        </button>
+        <button
+          class="view-toggle-btn"
+          :class="{ on: viewMode === 'shelf' }"
+          title="书架视图"
+          @click="setViewMode('shelf')"
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+            <path fill="currentColor" d="M4 3h3v16H4V3zm4 0h3v16H8V3zm6.4.6l2.9.8l-3.6 13.4l-2.9-.8L14.4 3.6zM4 20h16v1H4v-1z" />
+          </svg>
+          <span>书架</span>
+        </button>
+      </div>
+      <TableToolbar class="toolbar-flex" @sort="handleSort" @clear-filters="handleClearFilters" @add-file="showAddFileModal" />
     </div>
 
     <!-- 数据表格容器 -->
-    <div class="table-container" ref="tableContainerRef">
+    <div v-show="viewMode === 'table'" class="table-container" ref="tableContainerRef">
       <DataTable ref="tableRef" :columns="columns" :data="sortedData" :table-height="dynamicTableHeight"
         :scroll-x="scrollX" :pagination="pagination" :row-key="rowKey" :row-props="rowProps"
         @update:checked-row-keys="handleCheckboxUpdate" @row-contextmenu="handleRowContextMenu" />
+    </div>
+
+    <!-- 书架视图容器 -->
+    <div v-if="viewMode === 'shelf'" class="shelf-container">
+      <BookshelfView
+        :books="sortedData"
+        :library="store.currentDatabase"
+        @open="handleOpen"
+        @contextmenu="handleBookContextMenu"
+      />
     </div>
 
     <!-- 右键菜单 -->
@@ -59,6 +93,7 @@ import DataTable from './components/TableViewComponents/DataTable.vue'
 import ContextMenu from './components/TableViewComponents/ContextMenu.vue'
 import AddFileModal from './components/TableViewComponents/AddFileModal.vue'
 import ShowOrEdit from './common/ShowOrEdit.vue'
+import BookshelfView from './BookshelfView.vue'
 
 // Composables
 import { useFormHandling } from './composables/useFormHandling.js'
@@ -132,8 +167,20 @@ const {
   handleContextMenuSelect,
   onClickoutside,
   rowProps,
-  handleRowContextMenu
+  handleRowContextMenu,
+  handleOpen
 } = useContextMenu({ store, message })
+
+// ── 视图模式：'table' 表格 / 'shelf' 书架（持久化用户偏好）──
+const VIEW_MODE_KEY = 'guaxi_repoview_mode'
+const viewMode = ref(localStorage.getItem(VIEW_MODE_KEY) === 'shelf' ? 'shelf' : 'table')
+const setViewMode = (mode) => {
+  viewMode.value = mode
+  try { localStorage.setItem(VIEW_MODE_KEY, mode) } catch { /* ignore */ }
+  if (mode === 'table') nextTick(handleWindowResize)
+}
+// 书架中右键一本书：复用表格那套右键菜单（打开/编辑/删除…）
+const handleBookContextMenu = ({ event, book }) => handleRowContextMenu(event, book)
 
 const {
   searchParams,
@@ -400,6 +447,52 @@ onUnmounted(() => {
   flex-shrink: 0;
   background-color: var(--guaxi-panel-bg);
   border-bottom: 1px solid var(--guaxi-border);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.toolbar-flex {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 表格 / 书架 分段切换 */
+.view-toggle {
+  flex: 0 0 auto;
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--guaxi-header-bg);
+  border: 1px solid var(--guaxi-border);
+}
+.view-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--guaxi-text-secondary);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease;
+}
+.view-toggle-btn:hover { color: var(--n-color-primary, #2dd4bf); }
+.view-toggle-btn.on {
+  color: #fff;
+  background: linear-gradient(135deg, #2dd4bf, #14b8a6);
+  box-shadow: 0 2px 8px rgba(20, 184, 166, 0.32);
+}
+
+.shelf-container {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .table-container {
