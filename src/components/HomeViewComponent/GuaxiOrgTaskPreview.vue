@@ -152,8 +152,33 @@
               <label>进度<input v-model="draft.progress" placeholder="50%" /></label>
               <label>ID<input v-model="draft.id" placeholder="bug/task id" /></label>
               <label>父任务<input v-model="draft.parentId" /></label>
-              <label>截止<input v-model="draft.deadline" placeholder="2026-06-20" /></label>
-              <label>创建时间<input v-model="draft.createTime" /></label>
+              <label>截止
+                <div class="otp-date-field">
+                  <input v-model="draft.deadline" placeholder="2026年06月20日" />
+                  <span class="otp-date-icon" aria-hidden="true">📅</span>
+                  <input
+                    type="date"
+                    class="otp-date-overlay"
+                    title="日历选择截止日期"
+                    :value="toDateInput(draft.deadline)"
+                    @change="onPickDeadline"
+                  />
+                </div>
+              </label>
+              <label>创建时间
+                <div class="otp-date-field">
+                  <input v-model="draft.createTime" placeholder="2026年06月20日 14:30:00" />
+                  <span class="otp-date-icon" aria-hidden="true">📅</span>
+                  <input
+                    type="datetime-local"
+                    step="1"
+                    class="otp-date-overlay"
+                    title="日历选择创建时间"
+                    :value="toDateTimeInput(draft.createTime)"
+                    @change="onPickCreateTime"
+                  />
+                </div>
+              </label>
               <label>影响版本<input v-model="draft.affectedRelease" /></label>
               <label class="full">描述<input v-model="draft.description" /></label>
               <label class="full">根本原因<textarea v-model="draft.rootCause" class="ta-md" /></label>
@@ -306,6 +331,40 @@ const saveEdit = () => {
   draft.done = draft.status === 'DONE' || draft.status === 'CANCELLED'
   emit('apply-block', { startLine: draft.blockStartLine, endLine: draft.blockEndLine, text: serializeBlock(draft) })
   editingLine.value = 0
+}
+
+// ── 日历选择截止/创建时间 ──
+// 设计：保留原文本输入（兼容手输与粘贴的多种格式），同时提供原生日历控件。
+// 选择后统一写回与全局一致的中文格式（截止：2026年06月20日；创建：2026年06月20日 14:30:00）。
+const pad2 = (n) => String(n).padStart(2, '0')
+// 从已有字段值解析出年月日时分秒，兼容 ISO(2026-06-20)、斜杠(2026/6/20)、中文(2026年06月20日)及可选时间
+const parseDateParts = (str) => {
+  const s = String(str || '')
+  const dm = s.match(/(\d{4})\s*[-/年]\s*(\d{1,2})\s*[-/月]\s*(\d{1,2})/)
+  if (!dm) return null
+  const tm = s.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/)
+  return {
+    y: +dm[1], mo: +dm[2], d: +dm[3],
+    hh: tm ? +tm[1] : 0, mi: tm ? +tm[2] : 0, ss: tm ? +(tm[3] || 0) : 0,
+  }
+}
+// 供原生 <input type="date"> 回显：yyyy-MM-dd
+const toDateInput = (str) => {
+  const p = parseDateParts(str)
+  return p ? `${p.y}-${pad2(p.mo)}-${pad2(p.d)}` : ''
+}
+// 供原生 <input type="datetime-local" step="1"> 回显：yyyy-MM-ddTHH:mm:ss
+const toDateTimeInput = (str) => {
+  const p = parseDateParts(str)
+  return p ? `${p.y}-${pad2(p.mo)}-${pad2(p.d)}T${pad2(p.hh)}:${pad2(p.mi)}:${pad2(p.ss)}` : ''
+}
+const onPickDeadline = (e) => {
+  const m = String(e?.target?.value || '').match(/(\d{4})-(\d{2})-(\d{2})/)
+  if (m) draft.deadline = `${m[1]}年${m[2]}月${m[3]}日`
+}
+const onPickCreateTime = (e) => {
+  const m = String(e?.target?.value || '').match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/)
+  if (m) draft.createTime = `${m[1]}年${m[2]}月${m[3]}日 ${m[4]}:${m[5]}:${m[6] || '00'}`
 }
 
 // ── 光标同步：滚动到激活块 ──
@@ -467,6 +526,30 @@ export default { name: 'GuaxiOrgTaskPreview' }
 .otp-ei-head { display: flex; align-items: center; justify-content: space-between; font-size: 13px; color: var(--otp-sub); font-weight: 600; }
 .otp-ei-row { display: flex; gap: 6px; }
 .otp-ei-row textarea { flex: 1; }
+
+/* 截止/创建时间：单输入框 + 右侧日历图标。
+ * 原生日期控件以透明层叠加在图标上方，真实点击落在“日历指示器”上即可弹出系统日历，
+ * 无需依赖 showPicker()（WebView2 下更稳）。 */
+.otp-date-field { position: relative; }
+.otp-date-field > input:not(.otp-date-overlay) { width: 100%; box-sizing: border-box; padding-right: 36px; }
+.otp-date-field .otp-date-icon {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center;
+  font-size: 15px; line-height: 1; pointer-events: none; opacity: 0.85;
+}
+/* 透明原生控件覆盖在图标处，承接点击 */
+.otp-date-field .otp-date-overlay {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  width: 28px; height: 28px; padding: 0; margin: 0; border: none; background: transparent;
+  opacity: 0; cursor: pointer;
+}
+.theme-light .otp-date-field .otp-date-overlay { color-scheme: light; }
+.theme-dark .otp-date-field .otp-date-overlay { color-scheme: dark; }
+/* 让整块透明控件都成为可点击的日历指示器热区 */
+.otp-date-field .otp-date-overlay::-webkit-calendar-picker-indicator {
+  position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0;
+  opacity: 0; cursor: pointer;
+}
 
 .gmd :deep(.gmd-p) { margin: 4px 0; font-size: 14px; line-height: 1.7; word-break: break-word; }
 .gmd :deep(.gmd-pre) { background: var(--otp-chip); border-radius: 8px; padding: 10px 12px; overflow-x: auto; font-size: 13.5px; line-height: 1.55; }
