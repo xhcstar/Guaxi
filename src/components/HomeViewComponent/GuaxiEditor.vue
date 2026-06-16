@@ -18813,15 +18813,29 @@ const handleCopyOrgBlock = async (b) => {
 // 导出提交信息（固定格式；多行字段左对齐去缩进，Extra Impact 原样输出不生成 bug 号）
 const handleExportOrgBlock = async (b) => {
   const dedent = (v) => String(v || '').split('\n').map((l) => l.replace(/^\s+/, '')).join('\n').replace(/^\n+|\n+$/g, '')
+  // 字段输出规则：
+  // 1. 内容紧跟在冒号之后（留一个空格），不换行；
+  // 2. 内容为空时输出 N/A；
+  // 3. 仅当内容以数字开头（编号列表，如「1. xxx」「2. xxx」）时换行，逐行输出，使每个编号各占一行。
+  const field = (label, value) => {
+    const v = dedent(value)
+    if (!v) return `${label}: N/A`
+    if (/^\d/.test(v)) return `${label}: \n${v}`
+    return `${label}: ${v}`
+  }
   const parts = []
-  parts.push(`Description: ${b.description || ''}`)
-  parts.push(`Root Cause: ${b.rootCause || ''}`)
-  parts.push(`Condition of Occurrence: \n${dedent(b.conditionOfOccurrence)}`)
-  parts.push(`Fixed Details: \n${dedent(b.fixedDetails)}`)
-  parts.push(`Testing Suggestions: \n${dedent(b.testingSuggestions)}`)
-  parts.push(`Affected Release: ${b.affectedRelease || ''}`)
-  for (const ei of (b.extraImpacts || [])) parts.push(`Extra Impact: \n${dedent(ei)}`)
-  parts.push(`Review: ${b.reviewLink || ''}`)
+  parts.push(field('Description', b.description))
+  parts.push(field('Root Cause', b.rootCause))
+  parts.push(field('Condition of Occurrence', b.conditionOfOccurrence))
+  parts.push(field('Fixed Details', b.fixedDetails))
+  parts.push(field('Testing Suggestions', b.testingSuggestions))
+  parts.push(field('Affected Release', b.affectedRelease))
+  // Extra Impact 原样输出（保留用户填写的多行结构），为空则不追加
+  for (const ei of (b.extraImpacts || [])) {
+    const v = dedent(ei)
+    if (v) parts.push(`Extra Impact: \n${v}`)
+  }
+  parts.push(field('Review', b.reviewLink))
   try { await navigator.clipboard.writeText(parts.join('\n')); message.success('已复制提交信息') }
   catch { message.error('复制失败') }
 }

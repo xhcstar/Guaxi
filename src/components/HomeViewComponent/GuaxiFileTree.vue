@@ -1699,6 +1699,8 @@ const taskCatOfPath = (p) => {
 // plain / task 模式共用 editingNode / editName / editingId（同一时刻只有一个行内编辑），
 // 通过 inlineCreateCtx 记录“在哪个模式/父目录下新建”，提交时据此落盘并刷新对应树。
 const inlineCreateCtx = ref(null)
+// 行内重命名上下文（与新建互斥）：记录“在哪个模式下重命名哪个已存在节点”。
+const inlineRenameCtx = ref(null)
 
 const pruneNodeById = (arr, id) =>
   (Array.isArray(arr) ? arr : []).filter((n) => {
@@ -1769,6 +1771,8 @@ const beginInlineCreate = async ({ mode, parentDir, isDirectory }) => {
 }
 
 const handleInlineCommit = async () => {
+  // 重命名优先：当前若处于行内重命名态，走改名提交路径。
+  if (inlineRenameCtx.value) { await commitInlineRename(); return }
   const ctx = inlineCreateCtx.value
   if (!ctx) { editingNode.value = null; editName.value = ''; return }
   const name = (editName.value || '').trim()
@@ -1800,6 +1804,13 @@ const handleInlineCommit = async () => {
 }
 
 const cancelInlineCreate = () => {
+  // 重命名取消：仅退出编辑态，不动节点本身。
+  if (inlineRenameCtx.value) {
+    inlineRenameCtx.value = null
+    editingNode.value = null
+    editName.value = ''
+    return
+  }
   const ctx = inlineCreateCtx.value
   if (ctx) removeInlineTempNode(ctx.mode, ctx.node)
   inlineCreateCtx.value = null
@@ -1835,30 +1846,59 @@ const genImportFile = async (mode, dir) => {
   message.success(`已导入 ${ok} 个文件`)
 }
 
+// 文件/任务模式重命名：与知识库模式一致，选中节点直接进入行内编辑态，
+// 回车提交（commitInlineRename）、Esc 取消（cancelInlineCreate），不再弹出对话框。
 const genRename = async (mode, node) => {
-  const name = await promptName('重命名', node.name || '', '输入新名称')
-  if (!name || name === node.name) return
-  const parent = parentDirOf(node.id)
+  if (inlineCreateCtx.value) cancelInlineCreate()
+  inlineRenameCtx.value = { mode, node, oldId: normalizePath(node.id) }
+  startEditing(node)
+  await nextTick()
+  await focusEditingInput(node.id)
+}
+
+const commitInlineRename = async () => {
+  const ctx = inlineRenameCtx.value
+  if (!ctx) { editingNode.value = null; editName.value = ''; return }
+  const { mode, node, oldId } = ctx
+  const name = (editName.value || '').trim()
+  // 名称为空或未变化：放弃改名，直接退出编辑态。
+  if (!name || name === node.name) {
+    inlineRenameCtx.value = null
+    editingNode.value = null
+    editName.value = ''
+    return
+  }
+  const parent = parentDirOf(oldId)
   const dest = normalizePath(`${parent}/${name}`)
-  await invoke('move_path', { sourcePath: normalizePath(node.id), destinationPath: dest })
-  // 同步已打开标签页的路径
-  const srcPath = normalizePath(node.id)
-  fileTreeStore.openTabs.forEach((tab) => {
-    const tp = normalizePath(tab.path)
-    if (tp === srcPath) {
-      const wasActive = normalizePath(fileTreeStore.activeTab) === tp
-      tab.path = dest
-      tab.fileName = name
-      if (wasActive) fileTreeStore.setActiveTab(dest)
-    } else if (tp.startsWith(`${srcPath}/`)) {
-      const np = dest + tp.slice(srcPath.length)
-      const wasActive = normalizePath(fileTreeStore.activeTab) === tp
-      tab.path = np
-      if (wasActive) fileTreeStore.setActiveTab(np)
-    }
-  })
-  await refreshModeDir(mode, parent)
-  message.success('已重命名')
+  inlineRenameCtx.value = null
+  try {
+    await invoke('move_path', { sourcePath: oldId, destinationPath: dest })
+    // 同步已打开标签页的路径
+    fileTreeStore.openTabs.forEach((tab) => {
+      const tp = normalizePath(tab.path)
+      if (tp === oldId) {
+        const wasActive = normalizePath(fileTreeStore.activeTab) === tp
+        tab.path = dest
+        tab.fileName = name
+        if (wasActive) fileTreeStore.setActiveTab(dest)
+      } else if (tp.startsWith(`${oldId}/`)) {
+        const np = dest + tp.slice(oldId.length)
+        const wasActive = normalizePath(fileTreeStore.activeTab) === tp
+        tab.path = np
+        if (wasActive) fileTreeStore.setActiveTab(np)
+      }
+    })
+    editingNode.value = null
+    editName.value = ''
+    await refreshModeDir(mode, parent)
+    message.success('已重命名')
+  } catch (e) {
+    editingNode.value = null
+    editName.value = ''
+    logger.error('重命名失败:', e)
+    message.error('重命名失败: ' + (e?.message || e))
+    await refreshModeDir(mode, parent)
+  }
 }
 
 const genDelete = async (mode, node) => {

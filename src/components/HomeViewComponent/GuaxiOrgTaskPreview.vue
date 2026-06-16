@@ -31,20 +31,24 @@
 
     <div class="otp-main">
       <!-- 大纲小地图 -->
-      <aside v-if="showOutline" class="otp-outline">
+      <aside v-if="showOutline" class="otp-outline" :style="{ flex: `0 0 ${outlineWidth}px`, width: outlineWidth + 'px' }">
         <div class="otp-outline-head">大纲 · {{ blocks.length }}</div>
-        <div
-          v-for="(b, i) in blocks"
-          :key="'o' + (b.internalId || i)"
-          class="otp-outline-item"
-          :class="{ active: b.blockStartLine === activeBlockLine, done: b.done }"
-          @click="$emit('goto-line', b.blockStartLine)"
-        >
-          <span class="oo-dot" :class="'tt-' + (b.taskType || 'task')" />
-          <span class="oo-title">{{ b.description || b.id || '(未命名)' }}</span>
-          <span class="oo-st" :class="'st-' + (b.status || 'TODO')">{{ statusLabel(b.status) }}</span>
+        <div class="otp-outline-list">
+          <div
+            v-for="(b, i) in blocks"
+            :key="'o' + (b.internalId || i)"
+            class="otp-outline-item"
+            :class="{ active: b.blockStartLine === activeBlockLine, done: b.done }"
+            @click="$emit('goto-line', b.blockStartLine)"
+          >
+            <span class="oo-dot" :class="'tt-' + (b.taskType || 'task')" />
+            <span class="oo-title">{{ b.description || b.id || '(未命名)' }}</span>
+            <span class="oo-st" :class="'st-' + (b.status || 'TODO')">{{ statusLabel(b.status) }}</span>
+          </div>
         </div>
       </aside>
+      <!-- 大纲/主区分隔条：拖动改变大纲宽度 -->
+      <div v-if="showOutline" class="otp-outline-resize" @mousedown="startOutlineResize" />
 
       <div class="otp-body" ref="bodyRef">
         <div v-if="diagnostics.length" class="otp-diags">
@@ -181,12 +185,28 @@
               </label>
               <label>影响版本<input v-model="draft.affectedRelease" /></label>
               <label class="full">描述<input v-model="draft.description" /></label>
-              <label class="full">根本原因<textarea v-model="draft.rootCause" class="ta-md" /></label>
-              <label class="full">复现步骤<textarea v-model="draft.conditionOfOccurrence" class="ta-lg" /></label>
-              <label class="full">修复详情<textarea v-model="draft.fixedDetails" class="ta-lg" /></label>
-              <label class="full">测试建议<textarea v-model="draft.testingSuggestions" class="ta-md" /></label>
-              <label class="full">详情 (CONTENT)<textarea v-model="draft.content" class="ta-xl" /></label>
-              <label class="full">笔记 (NOTES)
+              <label class="full">
+                <span class="otp-field-head">根本原因<button type="button" class="otp-mini xs otp-zoom" title="放大编辑" @click="openBigEdit('根本原因', draft.rootCause, (v) => (draft.rootCause = v))">⛶</button></span>
+                <textarea v-model="draft.rootCause" class="ta-md" />
+              </label>
+              <label class="full">
+                <span class="otp-field-head">复现步骤<button type="button" class="otp-mini xs otp-zoom" title="放大编辑" @click="openBigEdit('复现步骤', draft.conditionOfOccurrence, (v) => (draft.conditionOfOccurrence = v))">⛶</button></span>
+                <textarea v-model="draft.conditionOfOccurrence" class="ta-lg" />
+              </label>
+              <label class="full">
+                <span class="otp-field-head">修复详情<button type="button" class="otp-mini xs otp-zoom" title="放大编辑" @click="openBigEdit('修复详情', draft.fixedDetails, (v) => (draft.fixedDetails = v))">⛶</button></span>
+                <textarea v-model="draft.fixedDetails" class="ta-lg" />
+              </label>
+              <label class="full">
+                <span class="otp-field-head">测试建议<button type="button" class="otp-mini xs otp-zoom" title="放大编辑" @click="openBigEdit('测试建议', draft.testingSuggestions, (v) => (draft.testingSuggestions = v))">⛶</button></span>
+                <textarea v-model="draft.testingSuggestions" class="ta-md" />
+              </label>
+              <label class="full">
+                <span class="otp-field-head">详情 (CONTENT)<button type="button" class="otp-mini xs otp-zoom" title="放大编辑" @click="openBigEdit('详情 (CONTENT)', draft.content, (v) => (draft.content = v))">⛶</button></span>
+                <textarea v-model="draft.content" class="ta-xl" />
+              </label>
+              <label class="full">
+                <span class="otp-field-head">笔记 (NOTES)<button v-if="draft.notes.kind !== 'file'" type="button" class="otp-mini xs otp-zoom" title="放大编辑" @click="openBigEdit('笔记 (NOTES)', draft.notes.value, (v) => (draft.notes.value = v))">⛶</button></span>
                 <textarea v-if="draft.notes.kind !== 'file'" v-model="draft.notes.value" class="ta-xl" />
                 <input v-else v-model="draft.notes.value" />
               </label>
@@ -195,7 +215,10 @@
                 <div class="otp-ei-head"><span>Extra Impact</span><button class="otp-mini" @click="draft.extraImpacts.push('')">＋</button></div>
                 <div v-for="(ei, i) in draft.extraImpacts" :key="i" class="otp-ei-row">
                   <textarea v-model="draft.extraImpacts[i]" class="ta-md" />
-                  <button class="otp-mini" @click="draft.extraImpacts.splice(i, 1)">✕</button>
+                  <div class="otp-ei-row-actions">
+                    <button type="button" class="otp-mini" title="放大编辑" @click="openBigEdit('Extra Impact', draft.extraImpacts[i], (v) => (draft.extraImpacts[i] = v))">⛶</button>
+                    <button type="button" class="otp-mini" title="删除" @click="draft.extraImpacts.splice(i, 1)">✕</button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -203,11 +226,24 @@
         </div>
       </div>
     </div>
+
+    <!-- 放大编辑浮层：把可编辑文本区展开到接近整窗大小，便于大段文本编辑 -->
+    <div v-if="bigEdit.open" class="otp-bigedit-mask" @mousedown.self="cancelBigEdit">
+      <div class="otp-bigedit">
+        <div class="otp-bigedit-head">
+          <strong>放大编辑 · {{ bigEdit.title }}</strong>
+          <span class="otp-spacer" />
+          <button class="otp-btn primary" @click="saveBigEdit">保存 (Ctrl+S)</button>
+          <button class="otp-btn" @click="cancelBigEdit">取消 (Esc)</button>
+        </div>
+        <textarea ref="bigEditRef" v-model="bigEdit.text" class="otp-bigedit-area" />
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, nextTick, watch } from 'vue'
+import { ref, reactive, computed, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { parseTaskBlocks, validateTaskBlocks, serializeBlock, STATUS_LABELS } from '../../utils/guaxiTaskParser'
 import { renderMiniMarkdown } from '../../utils/guaxiMiniMarkdown'
@@ -230,7 +266,7 @@ const warnCount = computed(() => diagnostics.value.filter((d) => d.severity === 
 const statusKeys = ['TODO', 'NEXT', 'DOING', 'WAITING', 'PAUSED', 'HOLD', 'CANCELLED', 'DONE']
 const severityOptions = ['critical', 'major', 'normal', 'minor', 'trivial']
 const originOptions = ['dev', 'QA', 'customer', 'other']
-const fixOptions = ['debug', 'test', 'review', 'approval', 'fixed', 'other']
+const fixOptions = ['debug', 'test', 'review', 'approval', 'fixed', 'wontfix', 'doc', 'enhancement', 'other']
 const typeOptions = computed(() => (props.category === 'life' || props.category === 'study') ? ['task', 'other'] : ['bug', 'task', 'other'])
 
 const typeLabel = (t) => ({ bug: 'Bug', task: '任务', other: '其他' }[t] || (t || '任务'))
@@ -316,6 +352,74 @@ const hl = (text) => {
 }
 
 const showOutline = ref(false)
+
+// ── 大纲宽度拖拽 ──
+// 大纲与主渲染区之间通过分隔条调整宽度，宽度持久化，避免每次重开都回到默认值。
+const OUTLINE_WIDTH_KEY = 'guaxi_org_outline_width'
+const outlineWidth = ref((() => {
+  const v = parseInt(localStorage.getItem(OUTLINE_WIDTH_KEY) || '', 10)
+  return Number.isFinite(v) && v >= 140 ? v : 200
+})())
+let outlineResizeStartX = 0
+let outlineResizeStartW = 0
+const onOutlineResizeMove = (e) => {
+  const delta = e.clientX - outlineResizeStartX
+  outlineWidth.value = Math.min(560, Math.max(140, outlineResizeStartW + delta))
+}
+const onOutlineResizeUp = () => {
+  document.removeEventListener('mousemove', onOutlineResizeMove)
+  document.removeEventListener('mouseup', onOutlineResizeUp)
+  document.body.style.userSelect = ''
+  try { localStorage.setItem(OUTLINE_WIDTH_KEY, String(outlineWidth.value)) } catch {}
+}
+const startOutlineResize = (e) => {
+  outlineResizeStartX = e.clientX
+  outlineResizeStartW = outlineWidth.value
+  document.body.style.userSelect = 'none'
+  document.addEventListener('mousemove', onOutlineResizeMove)
+  document.addEventListener('mouseup', onOutlineResizeUp)
+}
+
+// ── 放大编辑浮层 ──
+// 任意可编辑文本区（根本原因/复现步骤/修复详情/测试建议/详情/笔记/Extra Impact）都能放大到接近整窗，
+// 通过 apply 回调把内容写回对应 draft 字段，做到与原位编辑等价。
+const bigEdit = reactive({ open: false, title: '', text: '', apply: null })
+const bigEditRef = ref(null)
+const openBigEdit = async (title, value, apply) => {
+  bigEdit.title = title
+  bigEdit.text = String(value ?? '')
+  bigEdit.apply = apply
+  bigEdit.open = true
+  await nextTick()
+  bigEditRef.value?.focus?.()
+}
+const saveBigEdit = () => {
+  if (typeof bigEdit.apply === 'function') bigEdit.apply(bigEdit.text)
+  bigEdit.open = false
+  bigEdit.apply = null
+}
+const cancelBigEdit = () => {
+  bigEdit.open = false
+  bigEdit.apply = null
+}
+
+// ── 快捷键：Ctrl/Cmd+S 保存，Esc 关闭放大浮层 ──
+// 处于编辑态（含放大浮层）时拦截浏览器默认保存行为，与点击「保存」图标等价。
+const onPreviewKeydown = (e) => {
+  const isSave = (e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')
+  if (isSave) {
+    if (bigEdit.open) { e.preventDefault(); saveBigEdit(); return }
+    if (editingLine.value) { e.preventDefault(); saveEdit() }
+    return
+  }
+  if (e.key === 'Escape' && bigEdit.open) { e.preventDefault(); cancelBigEdit() }
+}
+onMounted(() => { window.addEventListener('keydown', onPreviewKeydown, true) })
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onPreviewKeydown, true)
+  document.removeEventListener('mousemove', onOutlineResizeMove)
+  document.removeEventListener('mouseup', onOutlineResizeUp)
+})
 
 // ── 编辑模式 ──
 const editingLine = ref(0)
@@ -440,8 +544,13 @@ export default { name: 'GuaxiOrgTaskPreview' }
 .otp-search-count { font-size: 12px; color: var(--otp-sub); min-width: 42px; text-align: center; }
 
 .otp-main { flex: 1 1 auto; min-height: 0; display: flex; }
-.otp-outline { flex: 0 0 200px; border-right: 1px solid var(--otp-border); overflow-y: auto; background: var(--otp-card); }
-.otp-outline-head { padding: 8px 10px; font-size: 12px; color: var(--otp-sub); font-weight: 700; border-bottom: 1px solid var(--otp-border); position: sticky; top: 0; background: var(--otp-card); }
+/* 大纲为独立的 flex 列：标题固定、列表区在内容较多时垂直滚动，避免底部被截断。 */
+.otp-outline { flex: 0 0 200px; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--otp-border); background: var(--otp-card); }
+.otp-outline-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.otp-outline-head { flex: 0 0 auto; padding: 8px 10px; font-size: 12px; color: var(--otp-sub); font-weight: 700; border-bottom: 1px solid var(--otp-border); background: var(--otp-card); }
+/* 大纲与主区之间的拖拽分隔条 */
+.otp-outline-resize { flex: 0 0 5px; cursor: ew-resize; background: transparent; transition: background .15s; }
+.otp-outline-resize:hover { background: rgba(32,128,240,0.3); }
 .otp-outline-item { display: flex; align-items: center; gap: 6px; padding: 7px 10px; cursor: pointer; border-bottom: 1px solid var(--otp-border); }
 .otp-outline-item:hover { background: var(--otp-chip); }
 .otp-outline-item.active { background: rgba(32,128,240,0.14); }
@@ -526,6 +635,18 @@ export default { name: 'GuaxiOrgTaskPreview' }
 .otp-ei-head { display: flex; align-items: center; justify-content: space-between; font-size: 13px; color: var(--otp-sub); font-weight: 600; }
 .otp-ei-row { display: flex; gap: 6px; }
 .otp-ei-row textarea { flex: 1; }
+.otp-ei-row-actions { display: flex; flex-direction: column; gap: 6px; }
+
+/* 字段标题行：标题文字 + 右侧「放大编辑」图标 */
+.otp-field-head { display: inline-flex; align-items: center; gap: 6px; }
+.otp-zoom { line-height: 1; }
+
+/* 放大编辑浮层：接近整窗的大文本编辑区 */
+.otp-bigedit-mask { position: fixed; inset: 0; z-index: 3000; background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center; }
+.otp-bigedit { width: 92vw; height: 88vh; background: var(--otp-card); color: var(--otp-text); border: 1px solid var(--otp-border); border-radius: 12px; display: flex; flex-direction: column; padding: 14px 16px; box-shadow: 0 12px 40px rgba(0,0,0,0.3); }
+.otp-bigedit-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 15px; }
+.otp-bigedit-area { flex: 1 1 auto; width: 100%; box-sizing: border-box; resize: none; background: var(--otp-bg); border: 1px solid var(--otp-border); color: var(--otp-text); border-radius: 8px; padding: 12px 14px; font-size: 14px; line-height: 1.7; font-family: inherit; }
+.otp-bigedit-area:focus { outline: none; border-color: #2080f0; box-shadow: 0 0 0 2px rgba(32,128,240,0.18); }
 
 /* 截止/创建时间：单输入框 + 右侧日历图标。
  * 原生日期控件以透明层叠加在图标上方，真实点击落在“日历指示器”上即可弹出系统日历，
@@ -558,6 +679,6 @@ export default { name: 'GuaxiOrgTaskPreview' }
 .gmd :deep(.gmd-img), .gmd :deep(.gmd-img-wrap img) { max-width: 100%; border-radius: 6px; display: block; margin: 6px 0; }
 .gmd :deep(.gmd-link) { color: #2080f0; word-break: break-all; }
 
-.otp-body::-webkit-scrollbar, .otp-outline::-webkit-scrollbar { width: 9px; }
-.otp-body::-webkit-scrollbar-thumb, .otp-outline::-webkit-scrollbar-thumb { background: rgba(140,140,150,0.38); border-radius: 10px; border: 2.5px solid transparent; background-clip: padding-box; }
+.otp-body::-webkit-scrollbar, .otp-outline-list::-webkit-scrollbar, .otp-bigedit-area::-webkit-scrollbar { width: 9px; }
+.otp-body::-webkit-scrollbar-thumb, .otp-outline-list::-webkit-scrollbar-thumb, .otp-bigedit-area::-webkit-scrollbar-thumb { background: rgba(140,140,150,0.38); border-radius: 10px; border: 2.5px solid transparent; background-clip: padding-box; }
 </style>
