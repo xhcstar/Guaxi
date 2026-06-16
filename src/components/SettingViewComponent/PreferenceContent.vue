@@ -402,7 +402,7 @@ onMounted(async () => {
     ttsTokens.value = 'utils/Models/tts/kokoro_multi_lang/tokens.txt'
     ttsExe.value = 'utils/sherpa-onnx/sherpa-onnx-offline-tts.exe'
     asrProvider.value = 'sherpa-onnx'
-    asrModel.value = ''
+    asrModel.value = 'utils/Models/asr/sense-voice'
     asrExe.value = 'utils/sherpa-onnx/sherpa-onnx-offline.exe'
     terminalDefaultProfile.value = 'powershell'
     terminalGitBashPath.value = ''
@@ -583,7 +583,7 @@ const handleAsrConfigSave = async () => {
 
 const handleAsrConfigReset = async () => {
   asrProvider.value = 'sherpa-onnx'
-  asrModel.value = ''
+  asrModel.value = 'utils/Models/asr/sense-voice'
   asrExe.value = 'utils/sherpa-onnx/sherpa-onnx-offline.exe'
   await handleAsrConfigSave()
 }

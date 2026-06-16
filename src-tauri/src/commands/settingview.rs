@@ -406,7 +406,9 @@ fn default_asr_provider() -> String {
 }
 
 fn default_asr_model() -> String {
-    "".to_string()
+    // 默认指向随包的 SenseVoice 多语模型目录（zh/en/ja/ko/yue）。
+    // 通过 tools/download_asr_model 下载到该目录后即开箱可用。
+    "utils/Models/asr/sense-voice".to_string()
 }
 
 fn default_asr_exe() -> String {

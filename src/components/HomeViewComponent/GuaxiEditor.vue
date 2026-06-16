@@ -226,6 +226,34 @@
             Save (Ctrl+S)
           </n-tooltip>
 
+          <n-popover trigger="manual" placement="bottom" :show="dictationCardVisible" :raw="true" :show-arrow="false" @clickoutside="onDictationClickOutside">
+            <template #trigger>
+              <n-tooltip placement="top" trigger="hover">
+                <template #trigger>
+                  <n-button text @click="onDictationButtonClick">
+                    <n-icon :component="MicOutline" size="18" :class="['dictation-mic-icon', { recording: dictation.recording.value }]" />
+                  </n-button>
+                </template>
+                {{ dictation.recording.value ? '正在录音（实时语音转文本）' : '实时语音转文本' }}
+              </n-tooltip>
+            </template>
+            <GuaxiSpeechDictationCard
+              :recording="dictation.recording.value"
+              :status="dictation.status.value"
+              :error-text="dictation.errorText.value"
+              :devices="dictation.devices.value"
+              :selected-device-id="dictation.selectedDeviceId.value"
+              :silence-threshold="dictation.silenceThreshold.value"
+              :pending-count="dictation.pendingCount.value"
+              :provider="dictationProvider"
+              :model="dictationModel"
+              @toggle="toggleDictation"
+              @refresh-devices="dictation.refreshDevices"
+              @update:selected-device-id="(v) => (dictation.selectedDeviceId.value = v)"
+              @update:silence-threshold="(v) => (dictation.silenceThreshold.value = v)"
+            />
+          </n-popover>
+
           <n-popover v-if="false" class="toolbar-action-python" trigger="click" placement="bottom" :show="pythonRuntimePopoverVisible"
             @update:show="handlePythonRuntimePopoverUpdateShow">
             <template #trigger>
@@ -1107,13 +1135,15 @@ import GuaxiEditorStatusBar from './GuaxiEditorStatusBar.vue'
 import GuaxiSelectionTranslatePanel from './GuaxiSelectionTranslatePanel.vue'
 import GuaxiNotebookView from './GuaxiNotebookView.vue'
 import GuaxiLatexPreview from './GuaxiLatexPreview.vue'
+import GuaxiSpeechDictationCard from './GuaxiSpeechDictationCard.vue'
+import { useSpeechDictation } from '../../composables/useSpeechDictation'
 import GuaxiOrgTaskPreview from './GuaxiOrgTaskPreview.vue'
 import { validateTaskBlocks, parseTaskBlocks, serializeBlock, replaceBlockInContent, buildNewBlock } from '../../utils/guaxiTaskParser'
 import GuaxiTerminalPanel from './GuaxiTerminalPanel.vue'
 import { EXPORT_SHELL_CSS, EXPORT_PYCELL_CSS } from './guaxiExportStyles'
 import { NTooltip, NIcon, useMessage, NDropdown, NPopover, NInputNumber, NBreadcrumb, NBreadcrumbItem } from 'naive-ui'
 import { Icon } from '@iconify/vue'
-import { EyeOutline, LogoVimeo, CloseOutline, ExitOutline, SaveOutline, ArrowBackOutline, ArrowForwardOutline, AddOutline, BugOutline, DocumentAttachOutline } from '@vicons/ionicons5'
+import { EyeOutline, LogoVimeo, CloseOutline, ExitOutline, SaveOutline, ArrowBackOutline, ArrowForwardOutline, AddOutline, BugOutline, DocumentAttachOutline, MicOutline } from '@vicons/ionicons5'
 import { DocumentEdit16Regular, Edit16Filled, Image28Regular } from '@vicons/fluent'
 // Iconify local icon imports (lucide + mdi) to preserve original visuals without runtime network fetch
 import headingIcon from '@iconify-icons/lucide/heading'
@@ -18342,6 +18372,69 @@ const getCurrentTexContent = () => {
   return rawContent.value || activeTabContent.value || ''
 }
 
+// ───── 实时语音转文本（听写） ─────
+const dictationCardVisible = ref(false)
+const dictationProvider = ref('')
+const dictationModel = ref('')
+
+// 把转写文本插入当前编辑器光标处（保留 undo/redo）
+const insertTranscriptAtCursor = (text) => {
+  const piece = String(text || '').trim()
+  if (!piece) return
+  const targetEditor = getActiveEditor()
+  if (!targetEditor) {
+    message.warning('请先打开一个文件以写入语音记录')
+    return
+  }
+  const selection = targetEditor.getSelection()
+  const range = selection || targetEditor.getModel()?.getFullModelRange()
+  if (!range) return
+  // 句末补一个空格，方便连续会议记录
+  const insertText = piece.endsWith(' ') ? piece : `${piece} `
+  targetEditor.executeEdits('speech-dictation', [{ range, text: insertText, forceMoveMarkers: true }])
+  targetEditor.focus()
+}
+
+const dictation = useSpeechDictation(insertTranscriptAtCursor)
+
+const refreshDictationConfig = async () => {
+  try {
+    const cfg = await invoke('get_asr_config')
+    dictationProvider.value = String(cfg?.provider || '').trim()
+    dictationModel.value = String(cfg?.model || '').trim()
+  } catch (e) {
+    logger.warn('[Dictation] 读取 ASR 配置失败', { error: String(e?.message || e) })
+  }
+}
+
+const toggleDictation = async () => {
+  try {
+    if (!dictation.recording.value) {
+      await refreshDictationConfig()
+    }
+    await dictation.toggle()
+  } catch (e) {
+    message.error(`语音听写失败：${String(e?.message || e)}`)
+  }
+}
+
+const onDictationButtonClick = async () => {
+  // 点击按钮：切换设置卡片显隐（manual 触发，由此处单一来源控制，避免双重 toggle 闪退）
+  const willShow = !dictationCardVisible.value
+  dictationCardVisible.value = willShow
+  if (willShow) {
+    // 卡片打开时准备配置与设备列表（失败不影响卡片显示）
+    try { await refreshDictationConfig() } catch { /* noop */ }
+    try { await dictation.refreshDevices() } catch { /* noop */ }
+  }
+}
+
+const onDictationClickOutside = () => {
+  // 录音中点击外部不关闭，避免误关导致看不到录音状态
+  if (dictation.recording.value) return
+  dictationCardVisible.value = false
+}
+
 const buildLatexPreview = async () => {
   const sourcePath = selectedFile.value?.path || fileTreeStore.activeTab || ''
   const isTyp = /\.typ$/i.test(sourcePath)
@@ -20839,6 +20932,7 @@ onUnmounted(() => {
     clearTimeout(latexBuildDebounceTimer)
     latexBuildDebounceTimer = null
   }
+  try { dictation.stop() } catch { /* noop */ }
   disposePreviewMarkdownWorker('editor-unmount')
   if (notebookDiskPersistTimer) {
     const pendingNotebookContent = String(rawContent.value ?? '')
@@ -21403,6 +21497,16 @@ onUnmounted(() => {
 
 .toolbar-actions :deep(.n-button) {
   flex-shrink: 0;
+}
+
+/* 录音中：麦克风图标变红并脉冲，提示正在录音 */
+.dictation-mic-icon.recording {
+  color: #e06c75 !important;
+  animation: dictation-mic-pulse 1.1s ease-in-out infinite;
+}
+@keyframes dictation-mic-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
 }
 
 .toolbar-action-python {

@@ -2023,22 +2023,53 @@ async fn audio_speech_to_text_sherpa_onnx(request: SpeechToTextRequest) -> Resul
     if !model.trim().is_empty() {
         if model_path.is_dir() {
             let mut added = false;
-            for (key, name) in [
-                ("tokens", "tokens.txt"),
-                ("encoder", "encoder.onnx"),
-                ("decoder", "decoder.onnx"),
-                ("joiner", "joiner.onnx"),
-                ("paraformer", "model.onnx"),
-                ("nemo-ctc", "model.onnx"),
-                ("whisper-encoder", "encoder.int8.onnx"),
-                ("whisper-decoder", "decoder.int8.onnx"),
-            ] {
-                let p = model_path.join(name);
-                if p.exists() {
-                    cmd.arg(format!("--{}={}", key, p.to_string_lossy()));
-                    added = true;
-                }
+            // tokens 几乎所有模型都需要，先加上（存在才加）
+            let tokens_path = model_path.join("tokens.txt");
+            if tokens_path.exists() {
+                cmd.arg(format!("--tokens={}", tokens_path.to_string_lossy()));
             }
+
+            let dir_name = model_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            let has = |name: &str| model_path.join(name).exists();
+            let arg_path = |p: PathBuf| p.to_string_lossy().to_string();
+
+            // 用"目录名提示 + 文件存在性"区分模型类型，避免 model.onnx 同时被
+            // 识别为 paraformer 和 nemo-ctc 而传冲突参数。
+            if (dir_name.contains("sense") || dir_name.contains("sensevoice"))
+                && (has("model.int8.onnx") || has("model.onnx"))
+            {
+                // SenseVoice：优先用 int8 量化模型（更小更快，适合实时）
+                let m = if has("model.int8.onnx") { "model.int8.onnx" } else { "model.onnx" };
+                cmd.arg(format!("--sense-voice={}", arg_path(model_path.join(m))));
+                added = true;
+            } else if has("encoder.onnx") && has("decoder.onnx") && has("joiner.onnx") {
+                cmd.arg(format!("--encoder={}", arg_path(model_path.join("encoder.onnx"))));
+                cmd.arg(format!("--decoder={}", arg_path(model_path.join("decoder.onnx"))));
+                cmd.arg(format!("--joiner={}", arg_path(model_path.join("joiner.onnx"))));
+                added = true;
+            } else if dir_name.contains("whisper")
+                && has("encoder.int8.onnx")
+                && has("decoder.int8.onnx")
+            {
+                cmd.arg(format!("--whisper-encoder={}", arg_path(model_path.join("encoder.int8.onnx"))));
+                cmd.arg(format!("--whisper-decoder={}", arg_path(model_path.join("decoder.int8.onnx"))));
+                added = true;
+            } else if dir_name.contains("nemo") && has("model.onnx") {
+                cmd.arg(format!("--nemo-ctc={}", arg_path(model_path.join("model.onnx"))));
+                added = true;
+            } else if has("model.int8.onnx") {
+                // 多数为 paraformer 量化模型
+                cmd.arg(format!("--paraformer={}", arg_path(model_path.join("model.int8.onnx"))));
+                added = true;
+            } else if has("model.onnx") {
+                cmd.arg(format!("--paraformer={}", arg_path(model_path.join("model.onnx"))));
+                added = true;
+            }
+
             if !added {
                 return Err(format!(
                     "ASR 模型目录未识别到可用模型文件: {}",
@@ -2059,19 +2090,38 @@ async fn audio_speech_to_text_sherpa_onnx(request: SpeechToTextRequest) -> Resul
     }
     cmd.arg(input_path.to_string_lossy().to_string());
     apply_no_window_in_release(&mut cmd);
+    info!(
+        exe = %exe_path.display(),
+        model = model.as_str(),
+        input = %input_path.display(),
+        "audio_speech_to_text sherpa-onnx running"
+    );
     let output = cmd.output().map_err(|e| format!("执行 sherpa-onnx asr 失败: {}", e))?;
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     if should_cleanup_input {
-        let _ = fs::remove_file(&input_path);
+        if let Err(e) = fs::remove_file(&input_path) {
+            warn!(error = %e, path = %input_path.display(), "清理 ASR 临时音频失败");
+        }
     }
     if !output.status.success() {
+        error!(
+            code = output.status.code(),
+            stderr = stderr.trim(),
+            "audio_speech_to_text sherpa-onnx failed"
+        );
         return Err(format!("sherpa-onnx asr 失败: {}", stderr.trim()));
     }
     let text = parse_sherpa_asr_text(&stdout, &stderr);
     if text.trim().is_empty() {
+        warn!(
+            stdout = stdout.trim(),
+            stderr = stderr.trim(),
+            "audio_speech_to_text sherpa-onnx produced no parseable text"
+        );
         return Err("sherpa-onnx 未返回可解析文本，请检查 ASR 模型配置".to_string());
     }
+    info!(text_len = text.trim().len(), "audio_speech_to_text sherpa-onnx done");
     Ok(SpeechToTextResponse {
         text: text.trim().to_string(),
         trace_id: "local-sherpa-onnx".to_string(),
@@ -2086,6 +2136,16 @@ async fn audio_speech_to_text_sherpa_onnx(request: SpeechToTextRequest) -> Resul
 #[tauri::command]
 pub async fn audio_speech_to_text(request: SpeechToTextRequest) -> Result<SpeechToTextResponse, String> {
     let provider = resolve_audio_provider(&request.common.provider)?;
+    info!(
+        requested_provider = request.common.provider.trim(),
+        resolved_provider = provider.as_str(),
+        requested_model = request.common.model.trim(),
+        has_file_path = !request.file_path.trim().is_empty(),
+        has_file_base64 = !request.file_base64.trim().is_empty(),
+        file_base64_len = request.file_base64.trim().len(),
+        mime_type = request.mime_type.trim(),
+        "audio_speech_to_text provider resolved"
+    );
     if provider == "sherpa-onnx" {
         return audio_speech_to_text_sherpa_onnx(request).await;
     }
@@ -2149,6 +2209,11 @@ pub async fn audio_speech_to_text(request: SpeechToTextRequest) -> Result<Speech
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
+        error!(
+            status = %status,
+            body = body.as_str(),
+            "audio_speech_to_text remote request failed"
+        );
         return Err(format!("语音转文本失败: {} {}", status, body));
     }
 
@@ -2160,6 +2225,12 @@ pub async fn audio_speech_to_text(request: SpeechToTextRequest) -> Result<Speech
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
+
+    info!(
+        trace_id = trace_id.as_str(),
+        text_len = text.trim().len(),
+        "audio_speech_to_text remote transcription done"
+    );
 
     Ok(SpeechToTextResponse {
         text,

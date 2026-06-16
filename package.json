@@ -9,6 +9,7 @@
     "docs:python": "node ./tools/import_python_official_docs.mjs",
     "prepare:tauri-assets": "node ./tools/copy_excalidraw_assets.mjs",
     "prepare:tauri-utils": "cargo run --quiet --manifest-path src-tauri/Cargo.toml --bin prepare_utils_zip",
+    "download:asr-model": "powershell -ExecutionPolicy Bypass -File ./tools/download_asr_model.ps1",
     "preview": "vite preview",
     "tauri": "node ./tools/run_tauri_with_utils.mjs",
     "tauri:build": "node ./tools/run_tauri_with_utils.mjs build",
