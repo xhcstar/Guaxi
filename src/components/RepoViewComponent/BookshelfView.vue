@@ -112,10 +112,10 @@ export default { name: 'BookshelfView' }
 
 <style scoped>
 .bookshelf {
-  /* ── 主题色板（浅色：暖纸＋胡桃木） ── */
-  --shelf-bg1: #f1e9da;
-  --shelf-bg2: #e7dcc6;
-  --shelf-vignette: rgba(90, 64, 30, 0.16);
+  /* ── 主题色板（浅色：与应用浅色面 #ffffff 协调的中性画布＋胡桃木层板） ── */
+  --shelf-bg1: var(--guaxi-app-bg, #ffffff);
+  --shelf-bg2: #f3f5f8;
+  --shelf-vignette: rgba(60, 72, 96, 0.07);
   --shelf-top: #e8caa0;
   --shelf-face: #cda067;
   --shelf-edge: #b9874f;
@@ -450,7 +450,7 @@ export default { name: 'BookshelfView' }
 
 /* ── 深色主题：与应用深色面（One Dark #282c34）协调，只加一层很淡的暖木，
    不再叠 multiply 噪点 / 大面积暗角，避免书架区比其它页面明显更黑。 ── */
-:global(:root[data-guaxi-theme='dark']) .bookshelf {
+:root[data-guaxi-theme='dark'] .bookshelf {
   --shelf-bg1: #2f343d;
   --shelf-bg2: #282c34;
   --shelf-vignette: rgba(0, 0, 0, 0.18);
@@ -464,6 +464,4 @@ export default { name: 'BookshelfView' }
     radial-gradient(120% 80% at 50% -10%, rgba(255, 244, 222, 0.06), transparent 60%),
     linear-gradient(180deg, var(--shelf-bg1), var(--shelf-bg2));
 }
-/* 暗色下关闭纸纹叠层：multiply 会把整面继续压暗 */
-/* :global(:root[data-guaxi-theme='dark']) .bookshelf::before { display: none; } */
 </style>

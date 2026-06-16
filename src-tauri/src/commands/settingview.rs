@@ -1433,7 +1433,19 @@ pub fn set_tts_config(tts_config: TtsConfig) {
 #[tauri::command]
 pub fn get_asr_config() -> AsrConfig {
     let config = load_config();
-    config.asr_config
+    let mut asr = config.asr_config;
+    // 兼容旧版本/被清空的配置：任一字段为空时回退到内置默认，
+    // 避免以空 model 启动 sherpa-onnx 触发 "tokens: '' does not exist"。
+    if asr.provider.trim().is_empty() {
+        asr.provider = default_asr_provider();
+    }
+    if asr.model.trim().is_empty() {
+        asr.model = default_asr_model();
+    }
+    if asr.exe.trim().is_empty() {
+        asr.exe = default_asr_exe();
+    }
+    asr
 }
 
 #[tauri::command]

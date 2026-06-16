@@ -2016,7 +2016,18 @@ async fn audio_speech_to_text_sherpa_onnx(request: SpeechToTextRequest) -> Resul
             configured.model.trim().to_string()
         }
     };
+    if model.trim().is_empty() {
+        return Err(
+            "未配置 ASR 模型：请在设置中指定 SenseVoice 模型目录，或运行 tools/download_asr_model 下载到 utils/Models/asr/sense-voice".to_string(),
+        );
+    }
     let model_path = resolve_path_with_exe_dir(&model).unwrap_or_else(|| PathBuf::from(model.as_str()));
+    if !model_path.exists() {
+        return Err(format!(
+            "ASR 模型路径不存在：{}（请运行 tools/download_asr_model 下载 SenseVoice 模型，或在设置中修正路径）",
+            model_path.to_string_lossy()
+        ));
+    }
     let (input_path, should_cleanup_input) = resolve_speech_input_file(&request)?;
     let mut cmd = Command::new(&exe_path);
     cmd.arg("--debug=false");
@@ -2044,7 +2055,7 @@ async fn audio_speech_to_text_sherpa_onnx(request: SpeechToTextRequest) -> Resul
             {
                 // SenseVoice：优先用 int8 量化模型（更小更快，适合实时）
                 let m = if has("model.int8.onnx") { "model.int8.onnx" } else { "model.onnx" };
-                cmd.arg(format!("--sense-voice={}", arg_path(model_path.join(m))));
+                cmd.arg(format!("--sense-voice-model={}", arg_path(model_path.join(m))));
                 added = true;
             } else if has("encoder.onnx") && has("decoder.onnx") && has("joiner.onnx") {
                 cmd.arg(format!("--encoder={}", arg_path(model_path.join("encoder.onnx"))));
@@ -2059,7 +2070,7 @@ async fn audio_speech_to_text_sherpa_onnx(request: SpeechToTextRequest) -> Resul
                 cmd.arg(format!("--whisper-decoder={}", arg_path(model_path.join("decoder.int8.onnx"))));
                 added = true;
             } else if dir_name.contains("nemo") && has("model.onnx") {
-                cmd.arg(format!("--nemo-ctc={}", arg_path(model_path.join("model.onnx"))));
+                cmd.arg(format!("--nemo-ctc-model={}", arg_path(model_path.join("model.onnx"))));
                 added = true;
             } else if has("model.int8.onnx") {
                 // 多数为 paraformer 量化模型

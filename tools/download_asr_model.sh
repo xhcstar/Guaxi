@@ -151,7 +151,7 @@ if asr_model_ready; then
   exit 0
 fi
 
-if [ "${GUAXI_ASR_SOURCE:-}" = "github" ]; then
+if [ "${GUAXI_ASR_SOURCE:-github}" != "modelscope" ]; then
   echo "[ASR] Source selected: GitHub archive"
   install_from_github_archive
 else

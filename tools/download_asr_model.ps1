@@ -156,7 +156,16 @@ function Install-FromGithubArchive {
     try {
         Download-ArchiveFile -Url $GithubArchive -OutFile $archive
         Write-Host "[ASR] Extracting archive..." -ForegroundColor Cyan
-        & tar -xf $archive -C $tmp
+        # Prefer Windows' native bsdtar (System32\tar.exe): it understands Windows
+        # drive-letter paths and bz2. A bare "tar" often resolves to MSYS/Git tar,
+        # which treats "C:\..." as a remote host:path (-> "Cannot connect to C:").
+        # Fall back to that tar with --force-local to neutralize the colon.
+        $winTar = Join-Path $env:SystemRoot "System32\tar.exe"
+        if (Test-Path $winTar) {
+            & $winTar -xf $archive -C $tmp
+        } else {
+            & tar --force-local -xf $archive -C $tmp
+        }
         if ($LASTEXITCODE -ne 0) { throw "tar failed (exit=$LASTEXITCODE). Ensure system tar supports bz2." }
 
         $extracted = Join-Path $tmp $ModelName
@@ -187,7 +196,8 @@ function Remove-ModelScopeCache {
 
 if (Test-AsrModelReady) { exit 0 }
 
-if ($env:GUAXI_ASR_SOURCE -eq "github") {
+$AsrSource = if ($env:GUAXI_ASR_SOURCE) { $env:GUAXI_ASR_SOURCE } else { "github" }
+if ($AsrSource -ne "modelscope") {
     Write-Host "[ASR] Source selected: GitHub archive" -ForegroundColor Cyan
     Install-FromGithubArchive
 } else {
