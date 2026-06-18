@@ -40,7 +40,9 @@ const classifyReadFileError = (error) => {
   return "READ_FAILED";
 };
 
-const normalizeTabPath = (p) => String(p || "").replace(/\\/g, "/").toLowerCase();
+// 设计说明：文件树允许创建大小写不同的同名文件，tab key 也必须保留大小写，
+// 否则 README.md 与 readme.md 会在编辑器层被误判为同一个文件。
+const normalizeTabPath = (p) => String(p || "").replace(/\\/g, "/");
 const normalizeNavigationRootKey = (p) => normalizeTabPath(p).replace(/\/+$/, "");
 const normalizeEditorContent = (content) => String(content ?? "").replace(/\r\n?/g, "\n");
 const EVENT_CELLMETA_FILE_CLOSED = "guaxi_cellmeta_file_closed";
@@ -305,7 +307,8 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
     async openFileInTab(path, content, options = {}) {
       const fileName = path.split(/[\\/]/).pop();
 
-      // 检查是否已存在相同路径的标签页（兼容 Windows 下 \ 与 / 以及大小写差异）
+    // 检查是否已存在相同路径的标签页：只统一路径分隔符，保留大小写差异。
+    // 设计说明：文件树允许 README.md 与 readme.md 同时存在时，编辑器标签页也必须把它们视为两个文件。
       const desiredKey = normalizeTabPath(path);
       const existingTab = this.openTabs.find((tab) => normalizeTabPath(tab.path) === desiredKey);
       if (existingTab) {

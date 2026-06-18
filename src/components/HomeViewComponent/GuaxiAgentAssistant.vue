@@ -902,10 +902,26 @@ const getHostFromUrl = (url) => {
   }
 }
 
+const referenceFaviconPalette = ['#38bdf8', '#22c55e', '#f59e0b', '#a78bfa', '#fb7185', '#14b8a6']
+
+const hashReferenceHost = (host) => {
+  let hash = 0
+  for (let i = 0; i < host.length; i += 1) {
+    hash = (hash * 31 + host.charCodeAt(i)) >>> 0
+  }
+  return hash
+}
+
 const getFaviconUrl = (url) => {
   const host = getHostFromUrl(url)
   if (!host) return ''
-  return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`
+  const hash = hashReferenceHost(host)
+  const bg = referenceFaviconPalette[hash % referenceFaviconPalette.length]
+  const label = (host.match(/[A-Za-z0-9\u4e00-\u9fa5]/)?.[0] || 'G').toUpperCase()
+  // 设计说明：这里使用本地生成的 data URL 作为引用来源图标，避免请求 Google/Gstatic favicon 服务。
+  // 这样既减少第三方隐私拦截警告，也让离线或弱网场景下的引用卡片保持稳定显示。
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="${bg}"/><text x="32" y="39" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700" fill="#0f172a">${label}</text></svg>`
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`
 }
 
 const normalizeWebSearchQuery = (rawQuestion) => {
@@ -1634,7 +1650,8 @@ const sendQuestion = async () => {
   border-radius: 12px;
   padding: 10px 12px;
   line-height: 1.6;
-  font-size: 13px;
+  /* 设计说明：消息正文是智能助手的主要阅读区域，默认字号略大于辅助信息，提升长回答的可读性。 */
+  font-size: 14px;
   border: 1px solid var(--guaxi-border);
   overflow: hidden;
 }

@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::env;
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 use tracing::{info, warn};
@@ -72,6 +73,38 @@ fn normalize_path(path: &str) -> PathBuf {
     }
 
     out
+}
+
+fn exact_child_name_exists(path: &Path) -> Result<bool, String> {
+    let Some(parent) = path.parent() else {
+        return Ok(false);
+    };
+    let Some(file_name) = path.file_name() else {
+        return Ok(false);
+    };
+    if !parent.exists() {
+        return Ok(false);
+    }
+
+    for entry in fs::read_dir(parent).map_err(|e| format!("读取父目录失败: {}", e))? {
+        let entry = entry.map_err(|e| format!("读取目录项失败: {}", e))?;
+        if entry.file_name() == file_name {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+fn case_sensitive_create_conflict_message(path: &Path, err: &std::io::Error) -> String {
+    if err.kind() == ErrorKind::AlreadyExists {
+        format!(
+            "创建失败：{} 已存在，或当前目录所在文件系统未启用大小写敏感，无法创建仅大小写不同的同名项",
+            path.display()
+        )
+    } else {
+        err.to_string()
+    }
 }
 
 #[tauri::command]
@@ -210,7 +243,18 @@ pub fn get_executable_dir() -> Result<String, String> {
 #[tauri::command]
 pub fn create_directory(path: String) -> Result<(), String> {
     let path = normalize_path(&path);
-    fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+    if exact_child_name_exists(&path)? {
+        return Err(format!("创建目录失败：{} 已存在", path.display()));
+    }
+
+    if let Some(parent) = path.parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent).map_err(|e| format!("创建父目录失败: {}", e))?;
+        }
+    }
+
+    fs::create_dir(&path).map_err(|e| case_sensitive_create_conflict_message(&path, &e))?;
+    info!(path = %path.display(), "create_directory success");
 
     if let Err(e) = kgraph::after_create_path(&path, true, None) {
         warn!(error = %e, path = %path.display(), "kbmeta after_create_path failed");
@@ -229,9 +273,17 @@ pub fn create_file(path: String) -> Result<(), String> {
         }
     }
 
-    fs::File::create(&path)
-        .map_err(|e| e.to_string())
+    if exact_child_name_exists(&path)? {
+        return Err(format!("创建文件失败：{} 已存在", path.display()));
+    }
+
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|e| case_sensitive_create_conflict_message(&path, &e))
         .map(|_| ())?;
+    info!(path = %path.display(), "create_file success");
 
     if let Err(e) = kgraph::after_create_path(&path, false, None) {
         warn!(error = %e, path = %path.display(), "kbmeta after_create_path failed");
@@ -288,7 +340,18 @@ pub async fn create_file_with_content(
         }
     }
 
-    fs::write(&path, &content).map_err(|e| format!("写入文件失败: {}", e))?;
+    if exact_child_name_exists(&path)? {
+        return Err(format!("创建文件失败：{} 已存在", path.display()));
+    }
+
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|e| case_sensitive_create_conflict_message(&path, &e))?;
+    file.write_all(content.as_bytes())
+        .map_err(|e| format!("写入文件失败: {}", e))?;
+    info!(path = %path.display(), bytes = content.len(), "create_file_with_content success");
 
     if let Err(e) = kgraph::after_create_path(&path, false, Some(&content)) {
         warn!(error = %e, path = %path.display(), "kbmeta after_create_path failed");

@@ -4,6 +4,22 @@ import { createLogger } from '../utils/logger'
 
 const logger = createLogger('useSpeechDictation')
 
+const DICTATION_WORKLET_PROCESSOR_NAME = 'guaxi-dictation-processor'
+const DICTATION_WORKLET_SOURCE = `
+class GuaxiDictationProcessor extends AudioWorkletProcessor {
+  process(inputs) {
+    const input = inputs[0]
+    const channel = input && input[0]
+    if (channel && channel.length) {
+      this.port.postMessage(channel)
+    }
+    return true
+  }
+}
+
+registerProcessor('${DICTATION_WORKLET_PROCESSOR_NAME}', GuaxiDictationProcessor)
+`
+
 const TARGET_SAMPLE_RATE = 16000 // sherpa-onnx / 多数 ASR 期望 16k 单声道
 
 /**
@@ -27,6 +43,7 @@ export function useSpeechDictation(onTranscript) {
   let mediaStream = null
   let sourceNode = null
   let processorNode = null
+  let muteNode = null
 
   // 采集缓冲（源采样率下的 Float32 PCM 累积）
   let captureBuffers = []
@@ -289,9 +306,9 @@ export function useSpeechDictation(onTranscript) {
     }
   }
 
-  const onAudioFrame = (e) => {
+  const processAudioSamples = (input) => {
     if (!recording.value) return
-    const input = e.inputBuffer.getChannelData(0)
+    if (!input?.length) return
     // 计算 RMS 音量做 VAD
     let sum = 0
     for (let i = 0; i < input.length; i += 1) sum += input[i] * input[i]
@@ -333,6 +350,41 @@ export function useSpeechDictation(onTranscript) {
     // 非说话且没在 speaking：丢弃静音帧，不累积
   }
 
+  const createAudioWorkletProcessor = async () => {
+    if (!audioContext?.audioWorklet || !window.AudioWorkletNode || !window.Blob || !window.URL) {
+      return null
+    }
+
+    let moduleUrl = ''
+    try {
+      const blob = new Blob([DICTATION_WORKLET_SOURCE], { type: 'application/javascript' })
+      moduleUrl = URL.createObjectURL(blob)
+      await audioContext.audioWorklet.addModule(moduleUrl)
+      const node = new window.AudioWorkletNode(audioContext, DICTATION_WORKLET_PROCESSOR_NAME, {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        outputChannelCount: [1],
+      })
+      node.port.onmessage = (event) => processAudioSamples(event.data)
+      logger.info('语音听写已启用 AudioWorklet 音频采集', { sourceSampleRate })
+      return node
+    } catch (e) {
+      logger.warn('AudioWorklet 初始化失败，将回退到 ScriptProcessor', { error: String(e?.message || e) })
+      return null
+    } finally {
+      if (moduleUrl) URL.revokeObjectURL(moduleUrl)
+    }
+  }
+
+  const createLegacyScriptProcessor = () => {
+    // 兜底说明：只有在当前 WebView 不支持 AudioWorklet 时才使用旧接口。
+    // 现代环境会优先走 AudioWorklet，从而避免 ScriptProcessorNode 的弃用警告。
+    const node = audioContext.createScriptProcessor(2048, 1, 1)
+    node.onaudioprocess = (event) => processAudioSamples(event.inputBuffer.getChannelData(0))
+    logger.warn('AudioWorklet 不可用，语音听写回退到 ScriptProcessor 兼容采集')
+    return node
+  }
+
   const start = async () => {
     if (recording.value) return
     errorText.value = ''
@@ -357,15 +409,16 @@ export function useSpeechDictation(onTranscript) {
       }
       sourceSampleRate = audioContext.sampleRate || TARGET_SAMPLE_RATE
       sourceNode = audioContext.createMediaStreamSource(mediaStream)
-      // ScriptProcessor 兼容性最好；buffer 2048 帧
-      processorNode = audioContext.createScriptProcessor(2048, 1, 1)
-      processorNode.onaudioprocess = onAudioFrame
+      processorNode = await createAudioWorkletProcessor()
+      if (!processorNode) {
+        processorNode = createLegacyScriptProcessor()
+      }
       sourceNode.connect(processorNode)
-      // 必须接到 destination 才会持续触发 onaudioprocess（用 0 增益避免回放）
-      const mute = audioContext.createGain()
-      mute.gain.value = 0
-      processorNode.connect(mute)
-      mute.connect(audioContext.destination)
+      // 必须接到 destination 才会持续触发音频图处理；用 0 增益避免把麦克风声音回放出来。
+      muteNode = audioContext.createGain()
+      muteNode.gain.value = 0
+      processorNode.connect(muteNode)
+      muteNode.connect(audioContext.destination)
 
       captureBuffers = []
       captureLength = 0
@@ -392,8 +445,10 @@ export function useSpeechDictation(onTranscript) {
       try { await flushUtterance() } catch { /* noop */ }
     }
     try { processorNode && (processorNode.onaudioprocess = null) } catch { /* noop */ }
+    try { processorNode?.port && (processorNode.port.onmessage = null) } catch { /* noop */ }
     try { sourceNode?.disconnect() } catch { /* noop */ }
     try { processorNode?.disconnect() } catch { /* noop */ }
+    try { muteNode?.disconnect() } catch { /* noop */ }
     try {
       if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop())
     } catch { /* noop */ }
@@ -402,6 +457,7 @@ export function useSpeechDictation(onTranscript) {
     mediaStream = null
     sourceNode = null
     processorNode = null
+    muteNode = null
     captureBuffers = []
     captureLength = 0
     speaking = false

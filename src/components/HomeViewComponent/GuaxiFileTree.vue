@@ -119,7 +119,7 @@
             <n-tooltip trigger="hover">
               <template #trigger>
                 <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="openRootPathInNeovim(activeRepoPathItem, 'knowledge-root-active')">
-                  <n-icon :component="DocumentOutline" size="16" />
+                  <Icon :icon="neovimIcon" width="16" height="16" class="neovim-action-icon" />
                 </n-icon-wrapper>
               </template>
               用 Neovim 打开目录
@@ -195,7 +195,7 @@
                 <n-tooltip trigger="hover">
                   <template #trigger>
                     <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="openRootPathInNeovim(path, 'knowledge-root-inactive')">
-                      <n-icon :component="DocumentOutline" size="16" />
+                      <Icon :icon="neovimIcon" width="16" height="16" class="neovim-action-icon" />
                     </n-icon-wrapper>
                   </template>
                   用 Neovim 打开目录
@@ -252,7 +252,7 @@
             <n-tooltip trigger="hover">
               <template #trigger>
                 <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="openRootPathInNeovim(catPathOf(activeTaskCat), 'task-root-active')">
-                  <n-icon :component="DocumentOutline" size="16" />
+                  <Icon :icon="neovimIcon" width="16" height="16" class="neovim-action-icon" />
                 </n-icon-wrapper>
               </template>
               用 Neovim 打开目录
@@ -316,7 +316,7 @@
                   <n-tooltip trigger="hover">
                     <template #trigger>
                       <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="openRootPathInNeovim(catPathOf(cat.key), 'task-root-inactive')">
-                        <n-icon :component="DocumentOutline" size="16" />
+                        <Icon :icon="neovimIcon" width="16" height="16" class="neovim-action-icon" />
                       </n-icon-wrapper>
                     </template>
                     用 Neovim 打开目录
@@ -366,7 +366,7 @@
             <n-tooltip trigger="hover">
               <template #trigger>
                 <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="openRootPathInNeovim(externalDir, 'plain-root-active')">
-                  <n-icon :component="DocumentOutline" size="16" />
+                  <Icon :icon="neovimIcon" width="16" height="16" class="neovim-action-icon" />
                 </n-icon-wrapper>
               </template>
               用 Neovim 打开目录
@@ -482,6 +482,7 @@ import { open, confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { listen } from '@tauri-apps/api/event'
 import { NList, NListItem, NText, NTooltip, NIconWrapper } from 'naive-ui'
+import { Icon } from '@iconify/vue'
 import { RefreshOutline as RefreshIcon, ChevronDownOutline as ChevronDownIcon, ChevronForwardOutline as ChevronForwardIcon } from '@vicons/ionicons5'
 import { Folder20Regular as FolderIcon, ChannelAdd20Regular as FileAddIcon, FolderAdd20Regular as FolderAddIcon } from '@vicons/fluent'
 import { useEditorBridgeStore } from '../../stores/editorBridgeStore'
@@ -498,6 +499,17 @@ const treeRef = ref(null)
 
 const BROWSER_PREVIEW_URL = 'http://localhost:8888/browser/knowledge-bases'
 const browserPreviewEnabled = ref(false)
+const neovimIcon = {
+  width: 24,
+  height: 24,
+  body: '<path fill="#57a143" d="M3 4.7 8.9 2v20L3 19.3V4.7Z"/><path fill="#0f7d3a" d="M21 4.7 15.1 2v20l5.9-2.7V4.7Z"/><path fill="#4b8bbe" d="M8.9 2 15.1 22V2h-3.2v11.9L8.9 2Z"/>',
+}
+const renderNeovimIcon = () => h(Icon, {
+  icon: neovimIcon,
+  width: 16,
+  height: 16,
+  class: 'neovim-action-icon',
+})
 // 设计说明：
 // 1. `.cellmeta` 会跟随 Notebook/探索者模式频繁落盘，不能按文件变化实时提交，否则会污染 Git 日志并影响编辑体验。
 // 2. 文件关闭是更自然的保存边界：用户完成一轮编辑后再合并提交一次，能收集更多内部元数据变化。
@@ -939,7 +951,7 @@ const contextMenuOptions = ref([
   {
     label: '用 Neovim 打开',
     key: 'openInNeovim',
-    icon: () => h(NIcon, null, { default: () => h(DocumentOutline) })
+    icon: renderNeovimIcon
   },
   {
     label: '在浏览器中查看',
@@ -1089,11 +1101,13 @@ const normalizeNewMarkdownFileName = (rawName) => {
 };
 
 const makeUniqueFileName = (existingNames, desiredName) => {
-  const set = new Set((existingNames || []).map((x) => String(x || '').toLowerCase()));
+  // 设计说明：文件树创建/导入文件时必须区分大小写，允许 README.md 与 readme.md 这类名称共存。
+  // 这里保留原始大小写做精确匹配；真正能否落盘由底层文件系统的大小写敏感能力决定。
+  const set = new Set((existingNames || []).map((x) => String(x || '')));
   const original = String(desiredName || '').trim();
   if (!original) return '';
 
-  if (!set.has(original.toLowerCase())) return original;
+  if (!set.has(original)) return original;
 
   const dot = original.lastIndexOf('.');
   const hasExt = dot > 0 && dot < original.length - 1;
@@ -1102,7 +1116,7 @@ const makeUniqueFileName = (existingNames, desiredName) => {
 
   for (let i = 2; i < 2000; i += 1) {
     const next = `${base} (${i})${ext}`;
-    if (!set.has(next.toLowerCase())) return next;
+    if (!set.has(next)) return next;
   }
 
   return `${base} (${Date.now()})${ext}`;
@@ -2022,7 +2036,7 @@ const genMenuOptions = computed(() => {
       { label: '重命名', key: 'rename', icon: () => h(NIcon, null, { default: () => h(CreateOutline) }) },
       { label: '删除', key: 'delete', icon: () => h(NIcon, null, { default: () => h(TrashOutline) }) },
       { label: '在文件浏览器中打开', key: 'openInExplorer', icon: () => h(NIcon, null, { default: () => h(FolderOutline) }) },
-      { label: '用 Neovim 打开', key: 'openInNeovim', icon: () => h(NIcon, null, { default: () => h(DocumentOutline) }) },
+      { label: '用 Neovim 打开', key: 'openInNeovim', icon: renderNeovimIcon },
     )
   }
   return base
@@ -3786,6 +3800,11 @@ onUnmounted(() => {
 .kb-manager-icon.active {
   color: var(--n-color-primary, #1890ff);
   background-color: var(--n-color-primary-suppl, #e6f7ff);
+}
+
+.neovim-action-icon {
+  display: block;
+  flex: 0 0 auto;
 }
 
 /* ───── 普通文件编辑模式：外部目录树 / 历史列表 ───── */

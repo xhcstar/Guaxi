@@ -3,7 +3,7 @@ import { createLogger } from "../utils/logger";
 
 const logger = createLogger("editorBridgeStore");
 
-const normalizePathKey = (path) => String(path || "").replace(/\\/g, "/").toLowerCase();
+const normalizePathKey = (path) => String(path || "").replace(/\\/g, "/");
 
 const normalizeContent = (content) => String(content ?? "").replace(/\r\n?/g, "\n");
 
