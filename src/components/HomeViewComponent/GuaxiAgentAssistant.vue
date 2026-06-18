@@ -162,6 +162,32 @@
       </div>
     </div>
 
+    <div v-if="agentConfirm" class="agent-confirm-card">
+      <div class="agent-confirm-head">
+        <span class="agent-confirm-badge">需确认</span>
+        <span class="agent-confirm-title">AI 请求执行：{{ agentConfirm.toolLabel }}</span>
+      </div>
+      <div class="agent-confirm-field">
+        <label class="agent-confirm-label">路径</label>
+        <input v-model="agentConfirm.path" class="agent-confirm-input" type="text" placeholder="文件路径" />
+      </div>
+      <div v-if="agentConfirm.isWriteFile" class="agent-confirm-field">
+        <label class="agent-confirm-label">模式</label>
+        <select v-model="agentConfirm.mode" class="agent-confirm-input">
+          <option value="overwrite">覆盖</option>
+          <option value="append">追加</option>
+        </select>
+      </div>
+      <div v-if="agentConfirm.hasContent" class="agent-confirm-field">
+        <label class="agent-confirm-label">内容（可编辑）</label>
+        <textarea v-model="agentConfirm.content" class="agent-confirm-textarea" rows="6" />
+      </div>
+      <div class="agent-confirm-actions">
+        <button type="button" class="agent-confirm-btn agent-confirm-reject" @click="resolveAgentConfirm(false)">拒绝</button>
+        <button type="button" class="agent-confirm-btn agent-confirm-approve" @click="resolveAgentConfirm(true)">允许并执行</button>
+      </div>
+    </div>
+
     <div class="assistant-footer">
       <div class="composer-shell" @click="focusComposerInput">
         <div v-if="pendingAttachments.length" class="attachment-list">
@@ -283,6 +309,7 @@ const streamUnlisten = ref(null)
 const webPushUnlisten = ref(null)
 const agentStepUnlisten = ref(null)
 const agentConfirmUnlisten = ref(null)
+const agentConfirm = ref(null)
 const streamRenderTimer = ref(null)
 const isComposing = ref(false)
 const inputHistory = ref([])
@@ -1116,6 +1143,22 @@ const updateAssistantMessageMeta = (metaPatch) => {
   })
 }
 
+const resolveAgentConfirm = async (approved) => {
+  const c = agentConfirm.value
+  if (!c) return
+  let args = null
+  if (approved) {
+    args = { path: c.path, content: c.content }
+    if (c.isWriteFile) args.mode = c.mode
+  }
+  agentConfirm.value = null
+  try {
+    await invoke('agent_tool_decision', { request: { call_id: c.callId, approved, args } })
+  } catch (err) {
+    logger.warn('[assistant] agent_tool_decision failed', err)
+  }
+}
+
 const initAssistantEventListeners = async () => {
   if (typeof streamUnlisten.value !== 'function') {
     streamUnlisten.value = await listen(STREAM_EVENT, (event) => {
@@ -1187,23 +1230,22 @@ const initAssistantEventListeners = async () => {
     })
   }
 
-  // Agent 写操作确认：弹窗让用户确认/取消，结果回传后端。
+  // Agent 写操作确认：弹出内嵌确认卡片（可编辑 path/content/mode），结果回传后端。
   if (typeof agentConfirmUnlisten.value !== 'function') {
-    agentConfirmUnlisten.value = await listen('agent-tool-confirm', async (event) => {
+    agentConfirmUnlisten.value = await listen('agent-tool-confirm', (event) => {
       const p = event?.payload || {}
       const callId = String(p.call_id || '')
       if (!callId) return
-      const toolLabel = AGENT_TOOL_LABELS[p.tool] || p.tool || '写操作'
       const args = p.args || {}
-      const pathInfo = args.path ? `\n路径：${args.path}` : ''
-      const preview = typeof args.content === 'string'
-        ? `\n内容预览：\n${args.content.slice(0, 300)}${args.content.length > 300 ? '…' : ''}`
-        : ''
-      const approved = window.confirm(`AI 请求执行写操作：${toolLabel}${pathInfo}${preview}\n\n是否允许？`)
-      try {
-        await invoke('agent_tool_decision', { request: { call_id: callId, approved, args: null } })
-      } catch (err) {
-        logger.warn('[assistant] agent_tool_decision failed', err)
+      agentConfirm.value = {
+        callId,
+        tool: p.tool || '',
+        toolLabel: AGENT_TOOL_LABELS[p.tool] || p.tool || '写操作',
+        path: String(args.path || ''),
+        content: typeof args.content === 'string' ? args.content : '',
+        mode: String(args.mode || 'overwrite'),
+        hasContent: typeof args.content === 'string',
+        isWriteFile: p.tool === 'write_file',
       }
     })
   }
@@ -1216,6 +1258,8 @@ const stopQuestion = async () => {
   } catch (err) {
     logger.warn('[assistant] cancel stream invoke failed', err)
   }
+  // 停止时若有待确认的写操作卡片，一并清理（后端 cancel 已清理 pending）。
+  agentConfirm.value = null
   await finishAssistantStreaming({ fallbackText: '已停止本次回答。' })
   message.info('已停止本次回答')
 }
@@ -1810,6 +1854,97 @@ const sendQuestion = async () => {
 
 .assistant-thinking-dots span:nth-child(3) {
   animation-delay: 0.24s;
+}
+
+.agent-confirm-card {
+  margin: 8px 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  background:
+    radial-gradient(600px 120px at 10% -30%, rgba(245, 158, 11, 0.12), transparent 60%),
+    var(--guaxi-panel-bg);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agent-confirm-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-confirm-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.18);
+  color: rgb(217, 119, 6);
+  border: 1px solid rgba(245, 158, 11, 0.36);
+}
+
+.agent-confirm-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.agent-confirm-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.agent-confirm-label {
+  font-size: 12px;
+  opacity: 0.72;
+}
+
+.agent-confirm-input,
+.agent-confirm-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--guaxi-border);
+  background: var(--guaxi-content-bg);
+  color: inherit;
+  font-family: inherit;
+  font-size: 12px;
+  resize: vertical;
+}
+
+.agent-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.agent-confirm-btn {
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--guaxi-border);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.agent-confirm-reject:hover {
+  border-color: rgba(239, 68, 68, 0.5);
+  color: rgb(239, 68, 68);
+}
+
+.agent-confirm-approve {
+  background: rgba(16, 185, 129, 0.16);
+  border-color: rgba(16, 185, 129, 0.4);
+  color: rgb(16, 185, 129);
+}
+
+.agent-confirm-approve:hover {
+  background: rgba(16, 185, 129, 0.26);
 }
 
 .assistant-footer {

@@ -69,7 +69,7 @@ pub async fn enhance(title: &str, markdown: &str, interest: &str) -> Option<LlmR
     );
 
     LLM_CALLS.fetch_add(1, Ordering::Relaxed);
-    let resp = match chatview::get_answer_from_siliconflow(&prompt, "").await {
+    let resp = match chatview::get_answer_from_siliconflow(&prompt, &[], "").await {
         Ok(r) => r,
         Err(e) => {
             // Key 未配置等：静默降级。

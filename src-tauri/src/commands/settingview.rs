@@ -119,6 +119,13 @@ pub struct LlmConfig {
     pub doubao_api_key: String,
     #[serde(default)]
     pub siliconflow_api_key: String,
+    // 自定义 OpenAI 兼容供应商：base_url + api_key + model
+    #[serde(default)]
+    pub custom_base_url: String,
+    #[serde(default)]
+    pub custom_api_key: String,
+    #[serde(default)]
+    pub custom_model: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -922,6 +929,7 @@ pub fn load_config() -> AppConfig {
         "/llm_config/kimi_api_key",
         "/llm_config/doubao_api_key",
         "/llm_config/siliconflow_api_key",
+        "/llm_config/custom_api_key",
         "/knowledge_bases_remote_token",
         "/lsp_github_token",
     ] {
@@ -1006,6 +1014,7 @@ pub fn load_config() -> AppConfig {
     try_decrypt("/llm_config/kimi_api_key");
     try_decrypt("/llm_config/doubao_api_key");
     try_decrypt("/llm_config/siliconflow_api_key");
+    try_decrypt("/llm_config/custom_api_key");
     try_decrypt("/knowledge_bases_remote_token");
     try_decrypt("/lsp_github_token");
 
@@ -1142,6 +1151,7 @@ pub fn save_config(config: &AppConfig) {
     encrypt_field(&mut val, "/llm_config/kimi_api_key");
     encrypt_field(&mut val, "/llm_config/doubao_api_key");
     encrypt_field(&mut val, "/llm_config/siliconflow_api_key");
+    encrypt_field(&mut val, "/llm_config/custom_api_key");
     encrypt_field(&mut val, "/knowledge_bases_remote_token");
     encrypt_field(&mut val, "/lsp_github_token");
 

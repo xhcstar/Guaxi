@@ -173,6 +173,7 @@ fn reset_stream_cancel_flag() {
 
 pub async fn get_answer_from_siliconflow(
     question: &str,
+    history: &[ChatMsg],
     sessionid: &str,
 ) -> Result<ChatResponse, String> {
     info!(
@@ -196,6 +197,7 @@ pub async fn get_answer_from_siliconflow(
         &api_key,
         SILICONFLOW_DEEPSEEK_QWEN_MODEL,
         question,
+        history,
     )
     .await?;
 
@@ -228,6 +230,73 @@ pub async fn get_answer_from_siliconflow_stream(
     });
 
     openai_compat_sse_stream(&app, SILICONFLOW_CHAT_COMPLETIONS_URL, &api_key, request_body).await
+}
+
+/// 将用户填写的 base_url 规整为完整的 chat/completions 端点。
+/// 兼容三种写法：填到根(https://x.com)、填到 /v1、填完整 /v1/chat/completions。
+fn normalize_openai_base_url(base: &str) -> String {
+    let b = base.trim().trim_end_matches('/');
+    if b.is_empty() {
+        return String::new();
+    }
+    if b.ends_with("/chat/completions") {
+        b.to_string()
+    } else if b.ends_with("/v1") {
+        format!("{}/chat/completions", b)
+    } else {
+        format!("{}/v1/chat/completions", b)
+    }
+}
+
+/// 读取自定义供应商配置（base_url/api_key/model），校验非空并规整 URL。
+fn custom_provider_config() -> Result<(String, String, String), String> {
+    let cfg = settingview::get_llm_config();
+    let url = normalize_openai_base_url(&cfg.custom_base_url);
+    if url.is_empty() {
+        return Err("自定义供应商 Base URL 未配置".to_string());
+    }
+    let model = cfg.custom_model.trim().to_string();
+    if model.is_empty() {
+        return Err("自定义供应商模型名未配置".to_string());
+    }
+    Ok((url, cfg.custom_api_key, model))
+}
+
+pub async fn get_answer_from_custom_stream(
+    app: AppHandle,
+    question: &str,
+    history: &[ChatMsg],
+    sessionid: &str,
+) -> Result<(), String> {
+    let (url, api_key, model) = custom_provider_config()?;
+    info!(
+        "get_answer_from_custom_stream: url={} model={} sid={}",
+        url, model, sessionid
+    );
+    let request_body = json!({
+        "model": model,
+        "messages": build_chat_messages(history, question),
+        "stream": true,
+    });
+    openai_compat_sse_stream(&app, &url, &api_key, request_body).await
+}
+
+pub async fn get_answer_from_custom(
+    question: &str,
+    history: &[ChatMsg],
+    sessionid: &str,
+) -> Result<ChatResponse, String> {
+    let (url, api_key, model) = custom_provider_config()?;
+    let session_id = if sessionid.is_empty() {
+        generate_session_id()
+    } else {
+        sessionid.to_string()
+    };
+    let answer_content = openai_compat_chat(&url, &api_key, &model, question, history).await?;
+    Ok(ChatResponse {
+        answer: answer_content,
+        sessionid: session_id,
+    })
 }
 
 fn request_stream_cancel() {
@@ -264,6 +333,7 @@ enum ChatModel {
     LOCALQWEN3,
     YUANBAO_WEB,
     CHATGPT_WEB,
+    CUSTOM,
 }
 
 impl TryFrom<i32> for ChatModel {
@@ -281,6 +351,7 @@ impl TryFrom<i32> for ChatModel {
             7 => Ok(ChatModel::YUANBAO_WEB),
             8 => Ok(ChatModel::CHATGPT_WEB),
             9 => Ok(ChatModel::LOCALQWEN3),
+            10 => Ok(ChatModel::CUSTOM),
             _ => Err("Invalid ChatModel ID".to_string()),
         }
     }
@@ -886,14 +957,15 @@ pub async fn kg_llm_complete(
 
 async fn kb_agent_call_model(model: ChatModel, prompt: &str, sessionid: &str) -> Result<ChatResponse, String> {
     match model {
-        ChatModel::CHATGPT => get_answer_from_chatgpt(prompt, sessionid).await,
-        ChatModel::DEEPSEEK => get_answer_from_deepseek(prompt, sessionid).await,
-        ChatModel::QWEN => get_answer_from_qwen(prompt, sessionid).await,
-        ChatModel::KIMI => get_answer_from_kimi(prompt, sessionid).await,
-        ChatModel::DOUBAO => get_answer_from_doubao(prompt, sessionid).await,
-        ChatModel::LOCALQWEN => get_answer_from_siliconflow(prompt, sessionid).await,
-        ChatModel::LOCALDEEPSEEK => get_answer_from_local_deepseek(prompt, sessionid).await,
-        ChatModel::LOCALQWEN3 => get_answer_from_local_qwen(prompt, sessionid).await,
+        ChatModel::CHATGPT => get_answer_from_chatgpt(prompt, &[], sessionid).await,
+        ChatModel::DEEPSEEK => get_answer_from_deepseek(prompt, &[], sessionid).await,
+        ChatModel::QWEN => get_answer_from_qwen(prompt, &[], sessionid).await,
+        ChatModel::KIMI => get_answer_from_kimi(prompt, &[], sessionid).await,
+        ChatModel::DOUBAO => get_answer_from_doubao(prompt, &[], sessionid).await,
+        ChatModel::LOCALQWEN => get_answer_from_siliconflow(prompt, &[], sessionid).await,
+        ChatModel::LOCALDEEPSEEK => get_answer_from_local_deepseek(prompt, &[], sessionid).await,
+        ChatModel::LOCALQWEN3 => get_answer_from_local_qwen(prompt, &[], sessionid).await,
+        ChatModel::CUSTOM => get_answer_from_custom(prompt, &[], sessionid).await,
         ChatModel::YUANBAO_WEB | ChatModel::CHATGPT_WEB => {
             Err("当前网页模型不支持知识处理 Agent 命令，请切换到 API 模型".to_string())
         }
@@ -3281,6 +3353,7 @@ pub async fn cancel_chat_stream() -> Result<(), String> {
 // 调用 DeepSeek API 获取回答
 pub async fn get_answer_from_deepseek(
     question: &str,
+    history: &[ChatMsg],
     sessionid: &str,
 ) -> Result<ChatResponse, String> {
     let api_key = settingview::get_llm_config().deepseek_api_key;
@@ -3306,7 +3379,7 @@ pub async fn get_answer_from_deepseek(
 
     let request_body = json!({
         "model": "deepseek-chat",
-        "messages": math_prompt_messages(question),
+        "messages": build_chat_messages(history, question),
         // "session_id": session_id
     });
 
@@ -3436,13 +3509,6 @@ fn stable_math_system_prompt() -> &'static str {
 2. 禁止使用 \\[...\\]、\\(...\\) 及 \\begin{equation}/align/gather 等 LaTeX 环境。\n\
 3. 禁止用反引号或 Markdown 强调(**...**/*...*)包裹数学内容；参数说明里的数学符号也要写成 $...$。\n\
 4. 代码用 Markdown fenced code block，但数学内容绝不能放进代码块或反引号。"
-}
-
-fn math_prompt_messages(question: &str) -> Value {
-    json!([
-        {"role": "system", "content": stable_math_system_prompt()},
-        {"role": "user", "content": question}
-    ])
 }
 
 /// 构造带多轮上下文的 messages：[system] + 过滤后的 history + [user: question]。
@@ -3881,10 +3947,11 @@ async fn openai_compat_chat(
     api_key: &str,
     model: &str,
     question: &str,
+    history: &[ChatMsg],
 ) -> Result<String, String> {
     let request_body = json!({
         "model": model,
-        "messages": math_prompt_messages(question),
+        "messages": build_chat_messages(history, question),
     });
 
     let client = Client::new();
@@ -3917,6 +3984,7 @@ async fn openai_compat_chat(
 
 pub async fn get_answer_from_chatgpt(
     question: &str,
+    history: &[ChatMsg],
     sessionid: &str,
 ) -> Result<ChatResponse, String> {
     info!(
@@ -3940,6 +4008,7 @@ pub async fn get_answer_from_chatgpt(
         &api_key,
         "gpt-4o-mini",
         question,
+        history,
     )
     .await?;
 
@@ -3949,7 +4018,7 @@ pub async fn get_answer_from_chatgpt(
     })
 }
 
-pub async fn get_answer_from_kimi(question: &str, sessionid: &str) -> Result<ChatResponse, String> {
+pub async fn get_answer_from_kimi(question: &str, history: &[ChatMsg], sessionid: &str) -> Result<ChatResponse, String> {
     info!(
         "get_answer_from_kimi: Received request: {} {}",
         question, sessionid
@@ -3971,6 +4040,7 @@ pub async fn get_answer_from_kimi(question: &str, sessionid: &str) -> Result<Cha
         &api_key,
         "moonshot-v1-8k",
         question,
+        history,
     )
     .await?;
 
@@ -3980,7 +4050,7 @@ pub async fn get_answer_from_kimi(question: &str, sessionid: &str) -> Result<Cha
     })
 }
 
-pub async fn get_answer_from_qwen(question: &str, sessionid: &str) -> Result<ChatResponse, String> {
+pub async fn get_answer_from_qwen(question: &str, history: &[ChatMsg], sessionid: &str) -> Result<ChatResponse, String> {
     info!(
         "get_answer_from_qwen: Received request: {} {}",
         question, sessionid
@@ -4002,6 +4072,7 @@ pub async fn get_answer_from_qwen(question: &str, sessionid: &str) -> Result<Cha
         &api_key,
         "qwen-plus",
         question,
+        history,
     )
     .await?;
 
@@ -4013,6 +4084,7 @@ pub async fn get_answer_from_qwen(question: &str, sessionid: &str) -> Result<Cha
 
 pub async fn get_answer_from_doubao(
     question: &str,
+    history: &[ChatMsg],
     sessionid: &str,
 ) -> Result<ChatResponse, String> {
     info!(
@@ -4036,6 +4108,7 @@ pub async fn get_answer_from_doubao(
         &api_key,
         "doubao-pro-32k",
         question,
+        history,
     )
     .await?;
 
@@ -4047,6 +4120,7 @@ pub async fn get_answer_from_doubao(
 
 pub async fn get_answer_from_local_deepseek(
     question: &str,
+    history: &[ChatMsg],
     sessionid: &str,
 ) -> Result<ChatResponse, String> {
     ensure_local_deepseek_server_started().await?;
@@ -4063,10 +4137,7 @@ pub async fn get_answer_from_local_deepseek(
 
     let request_body = json!({
         "model": "local-deepseek-r1",
-        "messages": [
-            {"role": "system", "content": stable_math_system_prompt()},
-            {"role": "user", "content": question}
-        ],
+        "messages": build_chat_messages(history, question),
         "stream": false
     });
 
@@ -4222,9 +4293,7 @@ pub async fn get_answer_from_doubao_stream(
     history: &[ChatMsg],
     sessionid: &str,
 ) -> Result<(), String> {
-    // 豆包走非流式委托，暂不带多轮历史（云端模型，保持现状不回归）。
-    let _ = history;
-    let rsp = get_answer_from_doubao(question, sessionid).await?;
+    let rsp = get_answer_from_doubao(question, history, sessionid).await?;
     if is_stream_cancel_requested() {
         info!("get_answer_from_doubao_stream: canceled before emit");
         return Ok(());
@@ -4240,9 +4309,7 @@ pub async fn get_answer_from_qwen_stream(
     history: &[ChatMsg],
     sessionid: &str,
 ) -> Result<(), String> {
-    // 通义千问走非流式委托，暂不带多轮历史（云端模型，保持现状不回归）。
-    let _ = history;
-    let rsp = get_answer_from_qwen(question, sessionid).await?;
+    let rsp = get_answer_from_qwen(question, history, sessionid).await?;
     if is_stream_cancel_requested() {
         info!("get_answer_from_qwen_stream: canceled before emit");
         return Ok(());
@@ -4572,6 +4639,7 @@ pub async fn get_answer_from_local_deepseek_stream(
 
 pub async fn get_answer_from_local_qwen(
     question: &str,
+    history: &[ChatMsg],
     sessionid: &str,
 ) -> Result<ChatResponse, String> {
     ensure_local_qwen_server_started().await?;
@@ -4589,10 +4657,7 @@ pub async fn get_answer_from_local_qwen(
 
     let request_body = json!({
         "model": "local-qwen3",
-        "messages": [
-            {"role": "system", "content": stable_math_system_prompt()},
-            {"role": "user", "content": question}
-        ],
+        "messages": build_chat_messages(history, question),
         "stream": false
     });
 
@@ -5195,6 +5260,17 @@ pub async fn get_chat_answer_stream(app: AppHandle, request: ChatRequest) -> Res
                 Err(err) => Err(format!("Error calling Local Qwen API: {}", err)),
             }
         }
+        ChatModel::CUSTOM => {
+            match get_answer_from_custom_stream(app, &request.question, &request.history, &request.sessionid)
+                .await
+            {
+                Ok(()) => {
+                    info!("get_chat_answer_stream CUSTOM: respond stream successfully");
+                    Ok(())
+                }
+                Err(err) => Err(format!("Error calling Custom API: {}", err)),
+            }
+        }
         ChatModel::YUANBAO_WEB => {
             let session_id = if request.sessionid.trim().is_empty() {
                 generate_session_id()
@@ -5254,7 +5330,7 @@ pub async fn get_chat_answer(request: ChatRequest) -> Result<ChatResponse, Strin
 
     match model {
         ChatModel::CHATGPT => {
-            match get_answer_from_chatgpt(&request.question, &request.sessionid).await {
+            match get_answer_from_chatgpt(&request.question, &request.history, &request.sessionid).await {
                 Ok(answer) => {
                     info!(
                         "get_chat_answer CHATGPT: respond ChatResponse  {} {}",
@@ -5266,7 +5342,7 @@ pub async fn get_chat_answer(request: ChatRequest) -> Result<ChatResponse, Strin
             }
         }
         ChatModel::DEEPSEEK => {
-            match get_answer_from_deepseek(&request.question, &request.sessionid).await {
+            match get_answer_from_deepseek(&request.question, &request.history, &request.sessionid).await {
                 Ok(answer) => {
                     info!(
                         "get_chat_answer DEEPSEEK: respond ChatResponse  {} {}",
@@ -5278,7 +5354,7 @@ pub async fn get_chat_answer(request: ChatRequest) -> Result<ChatResponse, Strin
             }
         }
         ChatModel::KIMI => {
-            match get_answer_from_kimi(&request.question, &request.sessionid).await {
+            match get_answer_from_kimi(&request.question, &request.history, &request.sessionid).await {
                 Ok(answer) => {
                     info!(
                         "get_chat_answer KIMI: respond ChatResponse  {} {}",
@@ -5290,7 +5366,7 @@ pub async fn get_chat_answer(request: ChatRequest) -> Result<ChatResponse, Strin
             }
         }
         ChatModel::QWEN => {
-            match get_answer_from_qwen(&request.question, &request.sessionid).await {
+            match get_answer_from_qwen(&request.question, &request.history, &request.sessionid).await {
                 Ok(answer) => {
                     info!(
                         "get_chat_answer QWEN: respond ChatResponse  {} {}",
@@ -5302,7 +5378,7 @@ pub async fn get_chat_answer(request: ChatRequest) -> Result<ChatResponse, Strin
             }
         }
         ChatModel::DOUBAO => {
-            match get_answer_from_doubao(&request.question, &request.sessionid).await {
+            match get_answer_from_doubao(&request.question, &request.history, &request.sessionid).await {
                 Ok(answer) => {
                     info!(
                         "get_chat_answer DOUBAO: respond ChatResponse  {} {}",
@@ -5314,7 +5390,7 @@ pub async fn get_chat_answer(request: ChatRequest) -> Result<ChatResponse, Strin
             }
         }
         ChatModel::LOCALQWEN => {
-            match get_answer_from_siliconflow(&request.question, &request.sessionid).await {
+            match get_answer_from_siliconflow(&request.question, &request.history, &request.sessionid).await {
                 Ok(answer) => {
                     info!(
                         "get_chat_answer LOCALQWEN: respond ChatResponse  {} {}",
@@ -5326,7 +5402,7 @@ pub async fn get_chat_answer(request: ChatRequest) -> Result<ChatResponse, Strin
             }
         }
         ChatModel::LOCALDEEPSEEK => {
-            match get_answer_from_local_deepseek(&request.question, &request.sessionid).await {
+            match get_answer_from_local_deepseek(&request.question, &request.history, &request.sessionid).await {
                 Ok(answer) => {
                     info!(
                         "get_chat_answer LOCALDEEPSEEK: respond ChatResponse  {} {}",
@@ -5338,7 +5414,7 @@ pub async fn get_chat_answer(request: ChatRequest) -> Result<ChatResponse, Strin
             }
         }
         ChatModel::LOCALQWEN3 => {
-            match get_answer_from_local_qwen(&request.question, &request.sessionid).await {
+            match get_answer_from_local_qwen(&request.question, &request.history, &request.sessionid).await {
                 Ok(answer) => {
                     info!(
                         "get_chat_answer LOCALQWEN3: respond ChatResponse  {} {}",
@@ -5347,6 +5423,18 @@ pub async fn get_chat_answer(request: ChatRequest) -> Result<ChatResponse, Strin
                     Ok(answer)
                 }
                 Err(err) => Err(format!("Error calling Local Qwen API: {}", err)),
+            }
+        }
+        ChatModel::CUSTOM => {
+            match get_answer_from_custom(&request.question, &request.history, &request.sessionid).await {
+                Ok(answer) => {
+                    info!(
+                        "get_chat_answer CUSTOM: respond ChatResponse  {} {}",
+                        answer.answer, answer.sessionid
+                    );
+                    Ok(answer)
+                }
+                Err(err) => Err(format!("Error calling Custom API: {}", err)),
             }
         }
         ChatModel::YUANBAO_WEB => Ok(ChatResponse {

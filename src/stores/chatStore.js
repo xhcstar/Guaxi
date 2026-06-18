@@ -237,6 +237,7 @@ export const useChatStore = defineStore("chatStore", {
         { name: "Qwen", selectedModel: "2" },
         { name: "Kimi", selectedModel: "3" },
         { name: "豆包", selectedModel: "4" },
+        { name: "自定义(OpenAI兼容)", selectedModel: "10" },
         { name: "腾讯元宝(网页)", selectedModel: "7" },
         { name: "ChatGPT(网页)", selectedModel: "8" },
       ],

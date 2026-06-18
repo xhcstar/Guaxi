@@ -37,6 +37,23 @@
               placeholder="请输入 硅基流动 Key" />
           </n-form-item>
 
+          <n-divider style="margin: 8px 0" />
+
+          <n-form-item label="自定义 Base URL">
+            <n-input v-model:value="form.custom_base_url" :disabled="loading"
+              placeholder="如 https://openrouter.ai/api/v1 或 https://open.bigmodel.cn/api/paas/v4" />
+          </n-form-item>
+
+          <n-form-item label="自定义 API Key">
+            <n-input v-model:value="form.custom_api_key" :disabled="loading" type="password" show-password-on="click"
+              placeholder="OpenAI 兼容服务的 API Key" />
+          </n-form-item>
+
+          <n-form-item label="自定义模型名">
+            <n-input v-model:value="form.custom_model" :disabled="loading"
+              placeholder="如 deepseek/deepseek-chat、glm-4-plus 等" />
+          </n-form-item>
+
           <n-form-item label="操作">
             <n-space>
               <n-button :disabled="loading" @click="loadConfig">刷新</n-button>
@@ -333,6 +350,9 @@ const form = reactive({
   kimi_api_key: '',
   doubao_api_key: '',
   siliconflow_api_key: '',
+  custom_base_url: '',
+  custom_api_key: '',
+  custom_model: '',
 })
 
 const loadConfig = async () => {
@@ -345,6 +365,9 @@ const loadConfig = async () => {
     form.kimi_api_key = typeof cfg?.kimi_api_key === 'string' ? cfg.kimi_api_key : ''
     form.doubao_api_key = typeof cfg?.doubao_api_key === 'string' ? cfg.doubao_api_key : ''
     form.siliconflow_api_key = typeof cfg?.siliconflow_api_key === 'string' ? cfg.siliconflow_api_key : ''
+    form.custom_base_url = typeof cfg?.custom_base_url === 'string' ? cfg.custom_base_url : ''
+    form.custom_api_key = typeof cfg?.custom_api_key === 'string' ? cfg.custom_api_key : ''
+    form.custom_model = typeof cfg?.custom_model === 'string' ? cfg.custom_model : ''
 
     const root = await invoke('get_chat_record_root')
     chatRecordRoot.value = typeof root === 'string' ? root : ''
@@ -394,6 +417,9 @@ const saveConfig = async () => {
         kimi_api_key: form.kimi_api_key,
         doubao_api_key: form.doubao_api_key,
         siliconflow_api_key: form.siliconflow_api_key,
+        custom_base_url: form.custom_base_url,
+        custom_api_key: form.custom_api_key,
+        custom_model: form.custom_model,
       },
     })
     message.success('已保存大模型秘钥')
