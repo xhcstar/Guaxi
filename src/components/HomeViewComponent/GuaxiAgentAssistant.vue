@@ -52,7 +52,11 @@
             <span>{{ formatTime(message.createdAt) }}</span>
           </div>
           <div
-            v-if="message.role === 'assistant'"
+            v-if="message.role === 'assistant' && message.streaming && !message.html"
+            class="assistant-message-content assistant-message-plain"
+          >{{ message.content }}</div>
+          <div
+            v-else-if="message.role === 'assistant'"
             class="assistant-message-content markdown-body"
             v-html="message.html || message.content"
           />
@@ -69,7 +73,7 @@
             {{ message.content }}
           </div>
           <div
-            v-if="message.role === 'web'"
+            v-if="message.role === 'web' && !message.meta?.agentStep"
             class="assistant-web-toggle-wrap"
           >
             <button
@@ -264,12 +268,21 @@ const fileTreeStore = useFileTreeStore()
 const STREAM_EVENT = 'modle-streaming-respond-output'
 const WEB_PUSH_EVENT = 'web-model-chat-push'
 const WEB_MODEL_IDS = new Set([7, 8])
+const AGENT_TOOL_LABELS = {
+  kb_semantic_search: '检索知识库',
+  read_file: '读取文件',
+  list_knowledge_bases: '列出知识库',
+  create_note: '创建笔记',
+  write_file: '写入文件',
+}
 const messagesRef = ref(null)
 const composerInputRef = ref(null)
 const question = ref('')
 const pendingAttachments = ref([])
 const streamUnlisten = ref(null)
 const webPushUnlisten = ref(null)
+const agentStepUnlisten = ref(null)
+const agentConfirmUnlisten = ref(null)
 const streamRenderTimer = ref(null)
 const isComposing = ref(false)
 const inputHistory = ref([])
@@ -288,6 +301,7 @@ const webSearchEnabled = computed(() => rightSiderStore.assistant.webSearchEnabl
 const task = computed(() => rightSiderStore.assistant.task || 'chat')
 const taskOptions = [
   { value: 'chat', label: '对话' },
+  { value: 'agent', label: 'Agent' },
   { value: 'write', label: '文档编写' },
   { value: 'translate', label: '翻译' },
   { value: 'organize', label: '知识整理' },
@@ -387,6 +401,14 @@ onBeforeUnmount(() => {
   if (typeof webPushUnlisten.value === 'function') {
     webPushUnlisten.value()
     webPushUnlisten.value = null
+  }
+  if (typeof agentStepUnlisten.value === 'function') {
+    agentStepUnlisten.value()
+    agentStepUnlisten.value = null
+  }
+  if (typeof agentConfirmUnlisten.value === 'function') {
+    agentConfirmUnlisten.value()
+    agentConfirmUnlisten.value = null
   }
   if (streamRenderTimer.value) {
     clearTimeout(streamRenderTimer.value)
@@ -589,14 +611,43 @@ const buildQuestionWithAttachments = (text) => {
   return `${base}\n\n[附件]\n${list}\n[/附件]`
 }
 
+// 构造发给模型的多轮对话历史：从已有消息里取最近的 user/assistant 轮次，
+// 受最大条数与累计字符限制，避免 prompt 过长拖慢本地模型；与后端 cache_prompt 协同复用 KV 前缀。
+const MAX_HISTORY_MESSAGES = 12
+const MAX_HISTORY_CHARS = 6000
+const buildConversationHistory = () => {
+  const all = Array.isArray(messages.value) ? messages.value : []
+  const picked = []
+  let total = 0
+  for (let i = all.length - 1; i >= 0; i -= 1) {
+    const m = all[i]
+    const role = m?.role
+    if (role !== 'user' && role !== 'assistant') continue
+    const content = String(m?.content || '').trim()
+    if (!content) continue
+    if (picked.length >= MAX_HISTORY_MESSAGES) break
+    if (picked.length > 0 && total + content.length > MAX_HISTORY_CHARS) break
+    picked.push({ role, content })
+    total += content.length
+  }
+  return picked.reverse()
+}
+
 const buildWebContextPrompt = (rawQuestion, webItems) => {
   if (!Array.isArray(webItems) || webItems.length === 0) {
     return rawQuestion
   }
 
-  const lines = webItems.map((item, idx) => {
+  // 控制拼入 prompt 的联网上下文体量：最多取前 5 条，每条摘要截断到 200 字，
+  // 避免 prompt 过长拖慢本地模型 prefill。参考来源卡片展示不受影响（走 webReferences 链路）。
+  const MAX_WEB_CONTEXT_ITEMS = 5
+  const MAX_WEB_SNIPPET_CHARS = 200
+  const lines = webItems.slice(0, MAX_WEB_CONTEXT_ITEMS).map((item, idx) => {
     const title = String(item?.title || '').trim()
-    const snippet = String(item?.snippet || '').trim()
+    let snippet = String(item?.snippet || '').trim()
+    if (snippet.length > MAX_WEB_SNIPPET_CHARS) {
+      snippet = `${snippet.slice(0, MAX_WEB_SNIPPET_CHARS)}…`
+    }
     const link = String(item?.url || '').trim()
     return `[${idx + 1}] ${title}\n${snippet}\n来源: ${link}`
   })
@@ -961,19 +1012,20 @@ const scheduleStreamingRender = () => {
   if (streamRenderTimer.value) {
     clearTimeout(streamRenderTimer.value)
   }
-  streamRenderTimer.value = setTimeout(async () => {
+  streamRenderTimer.value = setTimeout(() => {
     streamRenderTimer.value = null
     const messageId = ensureStreamingAssistantMessage()
     if (!messageId) return
     const raw = String(currentStreamText.value || '')
-    logger.info('[assistant] streaming render tick', {
+    logger.info('[assistant] streaming text tick', {
       messageId,
       textLength: raw.length,
     })
-    const html = await renderAssistantMarkdown(raw)
+    // 流式期间仅做纯文本增量更新（不渲染 Markdown、不触网），
+    // 由 finishAssistantStreaming 在结束时做一次完整 Markdown 渲染。
     rightSiderStore.updateAssistantMessage(messageId, {
       content: raw,
-      html,
+      streaming: true,
     })
     scrollToBottom()
   }, 60)
@@ -1035,6 +1087,7 @@ const finishAssistantStreaming = async ({ fallbackText = '', keepPending = false
     rightSiderStore.updateAssistantMessage(messageId, {
       content: finalText,
       html,
+      streaming: false,
     })
   }
 
@@ -1113,6 +1166,44 @@ const initAssistantEventListeners = async () => {
 
       if (status === 'ready' && !hasAssistantContent) {
         await finishAssistantStreaming({ fallbackText: '网页模型已就绪，但未返回有效内容。' })
+      }
+    })
+  }
+
+  // Agent 工具调用进度：在消息流中以一条临时提示展示当前步骤。
+  if (typeof agentStepUnlisten.value !== 'function') {
+    agentStepUnlisten.value = await listen('agent-step', (event) => {
+      if (!pending.value) return
+      const p = event?.payload || {}
+      const toolLabel = AGENT_TOOL_LABELS[p.tool] || p.tool || '工具'
+      let text = ''
+      if (p.status === 'running') text = `🔧 正在调用：${toolLabel}`
+      else if (p.status === 'done') text = `✅ 完成：${toolLabel}`
+      else if (p.status === 'error') text = `⚠️ ${toolLabel} 失败：${p.message || ''}`
+      if (text) {
+        rightSiderStore.addAssistantMessage({ role: 'web', content: text, meta: { agentStep: true } })
+        scrollToBottom()
+      }
+    })
+  }
+
+  // Agent 写操作确认：弹窗让用户确认/取消，结果回传后端。
+  if (typeof agentConfirmUnlisten.value !== 'function') {
+    agentConfirmUnlisten.value = await listen('agent-tool-confirm', async (event) => {
+      const p = event?.payload || {}
+      const callId = String(p.call_id || '')
+      if (!callId) return
+      const toolLabel = AGENT_TOOL_LABELS[p.tool] || p.tool || '写操作'
+      const args = p.args || {}
+      const pathInfo = args.path ? `\n路径：${args.path}` : ''
+      const preview = typeof args.content === 'string'
+        ? `\n内容预览：\n${args.content.slice(0, 300)}${args.content.length > 300 ? '…' : ''}`
+        : ''
+      const approved = window.confirm(`AI 请求执行写操作：${toolLabel}${pathInfo}${preview}\n\n是否允许？`)
+      try {
+        await invoke('agent_tool_decision', { request: { call_id: callId, approved, args: null } })
+      } catch (err) {
+        logger.warn('[assistant] agent_tool_decision failed', err)
       }
     })
   }
@@ -1235,6 +1326,10 @@ const sendQuestion = async () => {
   const shouldUseWebSearch = webSearchEnabled.value && !disableWebSearchNextSend.value && currentTask === 'chat'
   disableWebSearchNextSend.value = false
 
+  // 对话与 Agent 任务带多轮上下文（散文/结构化任务是对当前文档的一次性操作，保持纯净）。
+  // 必须在 push 当前 user 消息之前读取，确保历史不含本次问题。
+  const conversationHistory = (currentTask === 'chat' || currentTask === 'agent') ? buildConversationHistory() : []
+
   currentRequestModelId.value = selectedModelId
   currentRequestSessionId.value = sessionId
   currentStreamText.value = ''
@@ -1285,6 +1380,25 @@ const sendQuestion = async () => {
       return
     }
 
+    // Agent 任务：模型可调用工具（检索知识库 / 读文件 / 写文件需确认），多轮自动执行。
+    if (currentTask === 'agent') {
+      await invoke('agent_chat_stream', {
+        request: {
+          modelid: selectedModelId,
+          question: buildQuestionWithAttachments(rawQuestion),
+          topicid: 0,
+          sessionid: sessionId,
+          history: conversationHistory,
+          kb_name: '',
+          repo_path: String(fileTreeStore.activeRepoPath || ''),
+        },
+      })
+      rightSiderStore.setAssistantSessionId(sessionId)
+      pendingAttachments.value = []
+      await finishAssistantStreaming()
+      return
+    }
+
     const searchOutcome = await queryWebSearch(rawQuestion, selectedModelId, shouldUseWebSearch)
     const webItems = Array.isArray(searchOutcome?.items) ? searchOutcome.items : []
     const withAttachments = buildQuestionWithAttachments(rawQuestion)
@@ -1314,6 +1428,7 @@ const sendQuestion = async () => {
         question: mergedQuestion,
         topicid: 0,
         sessionid: sessionId,
+        history: conversationHistory,
       }
     })
     rightSiderStore.setAssistantSessionId(sessionId)
