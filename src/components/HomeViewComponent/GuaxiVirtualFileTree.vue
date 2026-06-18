@@ -72,51 +72,7 @@
 <script setup>
 import { computed, onMounted, onBeforeUnmount, nextTick, reactive, ref } from 'vue'
 import { Icon } from '@iconify/vue'
-import defaultFileIcon from '@iconify-icons/vscode-icons/default-file'
-import defaultFolderIcon from '@iconify-icons/vscode-icons/default-folder'
-import markdownIcon from '@iconify-icons/vscode-icons/file-type-markdown'
-import jsonIcon from '@iconify-icons/vscode-icons/file-type-json-official'
-import jsIcon from '@iconify-icons/vscode-icons/file-type-js-official'
-import tsIcon from '@iconify-icons/vscode-icons/file-type-typescript-official'
-import vueIcon from '@iconify-icons/vscode-icons/file-type-vue'
-import htmlIcon from '@iconify-icons/vscode-icons/file-type-html'
-import cssIcon from '@iconify-icons/vscode-icons/file-type-css'
-import scssIcon from '@iconify-icons/vscode-icons/file-type-scss'
-import lessIcon from '@iconify-icons/vscode-icons/file-type-less'
-import pythonIcon from '@iconify-icons/vscode-icons/file-type-python'
-import javaIcon from '@iconify-icons/vscode-icons/file-type-java'
-import cIcon from '@iconify-icons/vscode-icons/file-type-c'
-import cHeaderIcon from '@iconify-icons/vscode-icons/file-type-cheader'
-import cppIcon from '@iconify-icons/vscode-icons/file-type-cpp'
-import cppHeaderIcon from '@iconify-icons/vscode-icons/file-type-cppheader'
-import csharpIcon from '@iconify-icons/vscode-icons/file-type-csharp'
-import goIcon from '@iconify-icons/vscode-icons/file-type-go'
-import rustIcon from '@iconify-icons/vscode-icons/file-type-rust'
-import luaIcon from '@iconify-icons/vscode-icons/file-type-lua'
-import shellIcon from '@iconify-icons/vscode-icons/file-type-shell'
-import powershellIcon from '@iconify-icons/vscode-icons/file-type-powershell'
-import yamlIcon from '@iconify-icons/vscode-icons/file-type-yaml'
-import xmlIcon from '@iconify-icons/vscode-icons/file-type-xml'
-import tomlIcon from '@iconify-icons/vscode-icons/file-type-toml'
-import iniIcon from '@iconify-icons/vscode-icons/file-type-ini'
-import configIcon from '@iconify-icons/vscode-icons/file-type-config'
-import dockerIcon from '@iconify-icons/vscode-icons/file-type-docker'
-import gitIcon from '@iconify-icons/vscode-icons/file-type-git'
-import pdfIcon from '@iconify-icons/vscode-icons/file-type-pdf2'
-import imageIcon from '@iconify-icons/vscode-icons/file-type-image'
-import svgIcon from '@iconify-icons/vscode-icons/file-type-svg'
-import wordIcon from '@iconify-icons/vscode-icons/file-type-word'
-import excelIcon from '@iconify-icons/vscode-icons/file-type-excel'
-import powerpointIcon from '@iconify-icons/vscode-icons/file-type-powerpoint'
-import texIcon from '@iconify-icons/vscode-icons/file-type-tex'
-import textIcon from '@iconify-icons/vscode-icons/file-type-text'
-import zipIcon from '@iconify-icons/vscode-icons/file-type-zip'
-import audioIcon from '@iconify-icons/vscode-icons/file-type-audio'
-import videoIcon from '@iconify-icons/vscode-icons/file-type-video'
-import fontIcon from '@iconify-icons/vscode-icons/file-type-font'
-import sqlIcon from '@iconify-icons/vscode-icons/file-type-sql'
-import sqliteIcon from '@iconify-icons/vscode-icons/file-type-sqlite'
-import mermaidIcon from '@iconify-icons/vscode-icons/file-type-mermaid'
+import { getFileTreeIcon } from './fileTreeIcons'
 
 const props = defineProps({
   nodes: { type: Array, default: () => [] },
@@ -137,66 +93,6 @@ const emit = defineEmits([
 const OVERSCAN = 8
 const DRAG_THRESHOLD = 5
 
-// 设计说明：
-// 1. 文件树使用 vscode-icons 的 SVG 图标，缩放到高 DPI 屏幕也不会发虚。
-// 2. 先按完整文件名识别常见配置文件，再按扩展名识别类型，避免 Dockerfile、Makefile 这类无扩展名文件退回默认图标。
-// 3. 未覆盖的类型统一回退到 default-file，保证新格式文件也有稳定显示。
-const FILE_NAME_ICON_MAP = new Map([
-  ['dockerfile', dockerIcon],
-  ['compose.yaml', dockerIcon],
-  ['compose.yml', dockerIcon],
-  ['docker-compose.yaml', dockerIcon],
-  ['docker-compose.yml', dockerIcon],
-  ['makefile', configIcon],
-  ['cmakelists.txt', configIcon],
-  ['package.json', jsonIcon],
-  ['package-lock.json', jsonIcon],
-  ['pnpm-lock.yaml', yamlIcon],
-  ['yarn.lock', yamlIcon],
-  ['vite.config.js', jsIcon],
-  ['vite.config.ts', tsIcon],
-  ['vue.config.js', vueIcon],
-  ['tsconfig.json', tsIcon],
-  ['jsconfig.json', jsIcon],
-  ['cargo.toml', rustIcon],
-  ['cargo.lock', rustIcon],
-  ['readme', markdownIcon],
-  ['license', textIcon],
-  ['.gitignore', gitIcon],
-  ['.gitattributes', gitIcon],
-  ['.gitmodules', gitIcon],
-  ['.env', configIcon],
-  ['.env.local', configIcon],
-])
-
-const EXTENSION_ICON_MAP = new Map([
-  ['md', markdownIcon], ['markdown', markdownIcon], ['mdx', markdownIcon],
-  ['json', jsonIcon], ['jsonc', jsonIcon], ['json5', jsonIcon], ['cellmeta', jsonIcon],
-  ['js', jsIcon], ['mjs', jsIcon], ['cjs', jsIcon], ['jsx', jsIcon],
-  ['ts', tsIcon], ['tsx', tsIcon], ['d.ts', tsIcon],
-  ['vue', vueIcon], ['html', htmlIcon], ['htm', htmlIcon],
-  ['css', cssIcon], ['scss', scssIcon], ['sass', scssIcon], ['less', lessIcon],
-  ['py', pythonIcon], ['pyw', pythonIcon], ['ipynb', pythonIcon],
-  ['java', javaIcon], ['c', cIcon], ['h', cHeaderIcon], ['cpp', cppIcon], ['cc', cppIcon], ['cxx', cppIcon], ['hpp', cppHeaderIcon], ['hh', cppHeaderIcon],
-  ['cs', csharpIcon], ['go', goIcon], ['rs', rustIcon], ['lua', luaIcon],
-  ['sh', shellIcon], ['bash', shellIcon], ['zsh', shellIcon], ['fish', shellIcon], ['bat', shellIcon], ['cmd', shellIcon],
-  ['ps1', powershellIcon], ['psm1', powershellIcon], ['psd1', powershellIcon],
-  ['yml', yamlIcon], ['yaml', yamlIcon], ['xml', xmlIcon], ['toml', tomlIcon], ['ini', iniIcon], ['conf', configIcon], ['config', configIcon],
-  ['dockerfile', dockerIcon], ['gitignore', gitIcon],
-  ['pdf', pdfIcon], ['tex', texIcon], ['txt', textIcon], ['log', textIcon],
-  ['png', imageIcon], ['jpg', imageIcon], ['jpeg', imageIcon], ['gif', imageIcon], ['webp', imageIcon], ['bmp', imageIcon], ['ico', imageIcon], ['avif', imageIcon],
-  ['svg', svgIcon],
-  ['doc', wordIcon], ['docx', wordIcon],
-  ['xls', excelIcon], ['xlsx', excelIcon], ['csv', excelIcon],
-  ['ppt', powerpointIcon], ['pptx', powerpointIcon],
-  ['zip', zipIcon], ['rar', zipIcon], ['7z', zipIcon], ['tar', zipIcon], ['gz', zipIcon], ['tgz', zipIcon],
-  ['mp3', audioIcon], ['wav', audioIcon], ['flac', audioIcon], ['ogg', audioIcon], ['m4a', audioIcon],
-  ['mp4', videoIcon], ['mkv', videoIcon], ['webm', videoIcon], ['avi', videoIcon], ['mov', videoIcon],
-  ['ttf', fontIcon], ['otf', fontIcon], ['woff', fontIcon], ['woff2', fontIcon],
-  ['sql', sqlIcon], ['sqlite', sqliteIcon], ['sqlite3', sqliteIcon], ['db', sqliteIcon],
-  ['mmd', mermaidIcon], ['mermaid', mermaidIcon],
-])
-
 const rootRef = ref(null)
 const scrollTop = ref(0)
 const viewportH = ref(0)
@@ -209,26 +105,13 @@ const normId = (p) => {
   return s
 }
 const parentOf = (id) => normId(id).split('/').slice(0, -1).join('/')
-const getNodeName = (node) => String(node?.name || normId(node?.id).split('/').pop() || '')
-const getNodeExtension = (name) => {
-  const lower = String(name || '').toLowerCase()
-  if (lower.endsWith('.d.ts')) return 'd.ts'
-  const dot = lower.lastIndexOf('.')
-  return dot > 0 ? lower.slice(dot + 1) : lower
-}
-const getNodeIcon = (node) => {
-  if (node?.is_directory) {
-    return defaultFolderIcon
-  }
-
-  const name = getNodeName(node).trim().toLowerCase()
-  if (!name) return defaultFileIcon
-
-  const byName = FILE_NAME_ICON_MAP.get(name)
-  if (byName) return byName
-
-  return EXTENSION_ICON_MAP.get(getNodeExtension(name)) || defaultFileIcon
-}
+// 节点图标解析委托给共享模块；目录传入展开态以切换开/合图标。
+const getNodeIcon = (node) =>
+  getFileTreeIcon(
+    node?.name || normId(node?.id).split('/').pop() || '',
+    !!node?.is_directory,
+    !!node?.is_directory && isExpanded(node),
+  )
 
 const expandedSet = computed(() => new Set((props.expandedKeys || []).map(normId)))
 const selectedSet = computed(() => new Set((props.selectedKeys || []).map(normId)))
@@ -518,7 +401,25 @@ onBeforeUnmount(() => {
   display: block;
   flex: 0 0 auto;
   pointer-events: none;
-  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.16));
+  /* 柔和投影 + 轻微提亮，让彩色图标在深浅底上都通透有质感 */
+  filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.18)) saturate(1.04);
+  transition: transform 0.14s ease, filter 0.14s ease;
+}
+.vtree-row:hover .vtree-type-icon {
+  transform: scale(1.06);
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.22)) saturate(1.12) brightness(1.04);
+}
+
+/* 文件夹:单色描线图标,统一染成淡蓝高级色(与彩色文件图标和谐共处) */
+.vtree-icon.icon-dir .vtree-type-icon {
+  color: #5b9bd5;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.10));
+}
+.vtree-row:hover .vtree-icon.icon-dir .vtree-type-icon {
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.14)) brightness(1.06);
+}
+:global(:root[data-guaxi-theme='dark']) .vtree-icon.icon-dir .vtree-type-icon {
+  color: #7fb2e8;
 }
 
 .vtree-label {

@@ -20,42 +20,78 @@ import { useSettingsStore } from '../../stores/settingsStore';
 const settingsStore = useSettingsStore();
 const selectedMenu = ref(settingsStore.selectedMenu);
 
-// 侧边栏菜单选项
+// 侧边栏菜单选项:按主题分组归类(分组只做视觉聚合,各功能项的 key 保持不变,
+// 故 handleMenuSelect 与 GuaxiSettingContent 的内容切换逻辑完全不受影响)。
 const menuOptions = [
   {
-    label: '笔记库',
-    key: 'noterepo',
-    icon: () => h(NIcon, { component: FolderAdd20Regular, size: 24 }),
+    type: 'group',
+    label: '内容与库',
+    key: 'grp-content',
+    children: [
+      {
+        label: '笔记库',
+        key: 'noterepo',
+        icon: () => h(NIcon, { component: FolderAdd20Regular, size: 24 }),
+      },
+      {
+        label: '任务管理',
+        key: 'taskmanager',
+        icon: () => h(NIcon, { component: TaskListSquareLtr20Regular, size: 24 }),
+      },
+    ],
   },
   {
-    label: '外观',
-    key: 'preference',
-    icon: () => h(NIcon, { component: Image28Regular, size: 24 }),
+    type: 'group',
+    label: '外观与体验',
+    key: 'grp-appearance',
+    children: [
+      {
+        label: '外观',
+        key: 'preference',
+        icon: () => h(NIcon, { component: Image28Regular, size: 24 }),
+      },
+    ],
   },
   {
-    label: '服务器',
-    key: 'server',
-    icon: () => h(NIcon, { component: Server24Regular, size: 24 }),
+    type: 'group',
+    label: 'AI 与模型',
+    key: 'grp-ai',
+    children: [
+      {
+        label: '大模型',
+        key: 'llm',
+        icon: () => h(NIcon, { component: Key24Regular, size: 24 }),
+      },
+    ],
   },
   {
-    label: '大模型',
-    key: 'llm',
-    icon: () => h(NIcon, { component: Key24Regular, size: 24 }),
+    type: 'group',
+    label: '系统与服务',
+    key: 'grp-system',
+    children: [
+      {
+        label: '服务器',
+        key: 'server',
+        icon: () => h(NIcon, { component: Server24Regular, size: 24 }),
+      },
+    ],
   },
   {
-    label: '任务管理',
-    key: 'taskmanager',
-    icon: () => h(NIcon, { component: TaskListSquareLtr20Regular, size: 24 }),
-  },
-  {
-    label: '关于',
-    key: 'about',
-    icon: () => h(NIcon, { component: InformationCircleOutline, size: 24 }),
-  },
-  {
-    label: '用户手册',
-    key: 'manual',
-    icon: () => h(NIcon, { component: BookOutline, size: 24 }),
+    type: 'group',
+    label: '帮助与关于',
+    key: 'grp-help',
+    children: [
+      {
+        label: '用户手册',
+        key: 'manual',
+        icon: () => h(NIcon, { component: BookOutline, size: 24 }),
+      },
+      {
+        label: '关于',
+        key: 'about',
+        icon: () => h(NIcon, { component: InformationCircleOutline, size: 24 }),
+      },
+    ],
   },
 ];
 
@@ -69,6 +105,20 @@ const handleMenuSelect = (key) => {
 /* 自定义菜单样式 */
 .custom-menu {
   padding: 8px 0; /* 增加菜单的内边距 */
+}
+
+/* 分组标题:作为顶层配置分类标题,字号更醒目、字重更足 */
+.custom-menu :deep(.n-menu-item-group-title) {
+  height: auto;
+  font-size: 14px;
+  line-height: 1.5;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: none;
+  color: var(--guaxi-text-primary);
+  opacity: 0.92;
+  padding-top: 14px;
+  padding-bottom: 4px;
 }
 
 .custom-menu .n-menu-item {

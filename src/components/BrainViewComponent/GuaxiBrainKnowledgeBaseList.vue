@@ -46,6 +46,7 @@
             :expand-on-click="true"
             :expanded-keys="expandedKeys"
             :selected-keys="selectedKeys"
+            :render-prefix="renderTreePrefix"
             class="kb-tree"
             @update:expanded-keys="handleTreeExpand"
             @update:selected-keys="handleTreeSelect"
@@ -68,16 +69,18 @@ import {
 } from 'naive-ui';
 
 import {
-  BookOutline as BookListIcon,
   RefreshOutline as RefreshIcon,
   ChevronDownOutline as ChevronDownIcon,
   ChevronForwardOutline as ChevronForwardIcon,
-  DocumentTextOutline as DocumentIcon,
 } from '@vicons/ionicons5';
 
 import {
   Book24Regular as BookIcon,
 } from '@vicons/fluent';
+
+// 与主编辑器知识编辑模式文件树共用同一套精致彩色图标
+import { Icon } from '@iconify/vue';
+import { getFileTreeIcon } from '../HomeViewComponent/fileTreeIcons';
 
 const logger = createLogger('GuaxiBrainKnowledgeBaseList')
 const store = useKnowledgeBaseStore();
@@ -213,13 +216,20 @@ function convertToTreeNode(node) {
     label: node.name,
     key,
     isLeaf: !node.is_dir,
-    prefix: () => h(
-      NIcon,
-      { size: 16 },
-      { default: () => h(node.is_dir ? BookListIcon : DocumentIcon) }
-    ),
+    isDir: !!node.is_dir,
     children: kids
   };
+}
+
+// 树前缀图标:与主界面文件树一致的彩色类型图标,目录随展开态切换开/合。
+function renderTreePrefix({ option }) {
+  const expanded = Array.isArray(expandedKeys.value) && expandedKeys.value.includes(option.key);
+  return h(Icon, {
+    icon: getFileTreeIcon(option.label, !!option.isDir, expanded),
+    width: 18,
+    height: 18,
+    class: option.isDir ? 'kb-tree-type-icon is-dir' : 'kb-tree-type-icon',
+  });
 }
 
 onMounted(async () => {
@@ -542,11 +552,72 @@ onUnmounted(() => {
   padding-left: 8px;
 }
 
-.n-tree-node {
-  padding: 4px 0;
+/* ───── 复刻主编辑器文件树行观感:圆角 hover、蓝色选中、彩色类型图标 ───── */
+.kb-tree :deep(.n-tree-node) {
+  padding: 1px 0;
 }
 
-.n-tree-node-content {
-  padding: 4px 0;
+.kb-tree :deep(.n-tree-node-content) {
+  min-height: 28px;
+  padding: 2px 6px 2px 2px;
+  border-radius: 8px;
+  margin: 1px 2px;
+  transition: background-color 0.14s ease, box-shadow 0.14s ease;
+}
+
+.kb-tree :deep(.n-tree-node-content:hover) {
+  background: rgba(120, 120, 128, 0.12);
+}
+
+.kb-tree :deep(.n-tree-node--selected .n-tree-node-content),
+.kb-tree :deep(.n-tree-node-content--selected) {
+  background: rgba(0, 122, 255, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(0, 122, 255, 0.28);
+}
+
+/* 类型图标:与主树一致的尺寸与柔光质感 */
+.kb-tree :deep(.kb-tree-type-icon) {
+  display: block;
+  filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.18)) saturate(1.04);
+  transition: transform 0.14s ease, filter 0.14s ease;
+}
+/* 文件夹:单色图标统一染成淡蓝高级色,与主树一致 */
+.kb-tree :deep(.kb-tree-type-icon.is-dir) {
+  color: #5b9bd5;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.10));
+}
+:is(.dark, .dark-mode) .kb-tree :deep(.kb-tree-type-icon.is-dir) {
+  color: #7fb2e8;
+}
+.kb-tree :deep(.n-tree-node-content:hover .kb-tree-type-icon) {
+  transform: scale(1.06);
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.22)) saturate(1.12) brightness(1.04);
+}
+
+/* 前缀与文本间距,贴近主树排版 */
+.kb-tree :deep(.n-tree-node-content__prefix) {
+  margin-right: 6px;
+  display: inline-flex;
+  align-items: center;
+}
+.kb-tree :deep(.n-tree-node-content__text) {
+  font-size: 14px;
+  letter-spacing: 0.1px;
+  border-bottom: none;
+}
+
+/* 展开箭头配色对齐次级文本色 */
+.kb-tree :deep(.n-tree-node-switcher) {
+  color: var(--n-text-color-secondary);
+}
+
+/* 暗色模式 hover/选中微调 */
+:is(.dark, .dark-mode) .kb-tree :deep(.n-tree-node-content:hover) {
+  background: rgba(120, 120, 128, 0.18);
+}
+:is(.dark, .dark-mode) .kb-tree :deep(.n-tree-node--selected .n-tree-node-content),
+:is(.dark, .dark-mode) .kb-tree :deep(.n-tree-node-content--selected) {
+  background: rgba(56, 139, 253, 0.20);
+  box-shadow: inset 0 0 0 1px rgba(56, 139, 253, 0.40);
 }
 </style>

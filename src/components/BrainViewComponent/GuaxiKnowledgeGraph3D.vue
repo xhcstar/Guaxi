@@ -240,6 +240,8 @@ let highlightEdges = null; // 高亮/路径边的发光叠加层
 let highlightedIds = new Set(); // 当前强调的节点集合(用于 sync 时放大)
 let glowGroup = null; // 高亮节点的发光光晕(Sprite,加色混合)
 let starPoints = null; // 全体节点的星点光晕(加色混合 Points,营造"星星点点")
+let starDust = null; // 远景静态星尘层,营造层次/景深的"繁星点点"氛围(不随节点移动)
+let ambientLight = null; // 环境光引用,亮色模式下提升亮度让节点更通透
 let glowSprites = []; // [{ sprite, nodeId, base, primary }]
 let glowTexture = null; // 共享的径向渐变贴图
 let glowPulse = 0; // 呼吸相位
@@ -352,6 +354,29 @@ function readThemeColors() {
   };
 }
 
+// 按主题调整节点外观:修复亮色模式下饱和色 + 金属度在白底发黑发闷的问题。
+// 亮色模式:metalness→0(无环境贴图时金属度会让球面发暗)、提高自发光、实例色略微提亮、增强环境光。
+const _white = new THREE.Color(0xffffff);
+function applyNodeThemeAppearance() {
+  const isDark = themeColors.isDark;
+  if (ambientLight) ambientLight.intensity = isDark ? 0.85 : 1.18;
+  if (starDust) starDust.material.opacity = isDark ? 0.5 : 0.16;
+  for (const [type, mesh] of Object.entries(typeMeshes)) {
+    const baseGlow = TYPE_GLOW[type] ?? TYPE_GLOW.unknown;
+    mesh.material.metalness = isDark ? 0.25 : 0.0;
+    mesh.material.roughness = isDark ? 0.6 : 0.5;
+    mesh.material.emissiveIntensity = isDark ? baseGlow : Math.min(0.6, baseGlow * 1.7 + 0.12);
+    mesh.material.needsUpdate = true;
+    const arr = mesh.userData.nodes || [];
+    for (const n of arr) {
+      const c = colorForNode(n);
+      if (!isDark) c.lerp(_white, 0.12); // 向白轻微提亮,白底更通透
+      mesh.setColorAt(n._inst, c);
+    }
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  }
+}
+
 function applyTheme() {
   themeColors = readThemeColors();
   if (scene) scene.background = new THREE.Color(themeColors.bg);
@@ -359,6 +384,7 @@ function applyTheme() {
   // 切换浅/深色根类,驱动 CSS 覆盖层配色
   const root = canvasWrap.value?.closest(".kg3d-root");
   if (root) root.classList.toggle("kg3d-light", !themeColors.isDark);
+  applyNodeThemeAppearance();
   requestRender();
 }
 
@@ -401,7 +427,8 @@ function initThree() {
   // gsap 动画期间(相机飞行、morph、pop)持续标脏:只要有活跃 tween 就保持渲染
   gsap.ticker.add(gsapDirtyTick);
 
-  scene.add(new THREE.AmbientLight(0xffffff, 0.85));
+  ambientLight = new THREE.AmbientLight(0xffffff, 0.85);
+  scene.add(ambientLight);
   const dir = new THREE.DirectionalLight(0xffffff, 0.6);
   dir.position.set(120, 200, 160);
   scene.add(dir);
@@ -411,6 +438,9 @@ function initThree() {
   glowGroup = new THREE.Group();
   glowGroup.renderOrder = 998;
   scene.add(glowGroup);
+
+  // 远景星尘层(在最底层,营造繁星点点的景深氛围;不随节点移动)
+  buildStarDust();
 
   renderer.domElement.addEventListener("click", onClick);
   renderer.domElement.addEventListener("dblclick", onDblClick);
@@ -494,7 +524,7 @@ function stopLoop() {
   }
 }
 
-// 径向渐变光晕贴图(中心亮、边缘透明)
+// 径向渐变光晕贴图(中心亮、边缘柔和透明,过渡更顺滑)
 function makeGlowTexture() {
   const size = 128;
   const cv = document.createElement("canvas");
@@ -502,14 +532,67 @@ function makeGlowTexture() {
   const ctx = cv.getContext("2d");
   const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
   g.addColorStop(0, "rgba(255,255,255,1)");
-  g.addColorStop(0.25, "rgba(255,255,255,0.7)");
-  g.addColorStop(0.55, "rgba(255,255,255,0.25)");
+  g.addColorStop(0.18, "rgba(255,255,255,0.82)");
+  g.addColorStop(0.40, "rgba(255,255,255,0.42)");
+  g.addColorStop(0.68, "rgba(255,255,255,0.14)");
   g.addColorStop(1, "rgba(255,255,255,0)");
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, size, size);
   const tex = new THREE.CanvasTexture(cv);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
+}
+
+// 远景星尘:在大半径球壳内散布的微弱柔光点,提供景深层次的"繁星点点"。
+// 静态、不随节点移动;renderOrder 最底、depthWrite=false,绝不遮挡节点与标签。
+function buildStarDust() {
+  if (starDust || !glowTexture) return;
+  const N = 1300;
+  const pos = new Float32Array(N * 3);
+  const col = new Float32Array(N * 3);
+  const siz = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    const r = 700 + Math.random() * 1600;
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    pos[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+    pos[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+    pos[i * 3 + 2] = r * Math.cos(phi);
+    // 冷白到淡蓝的细微色温变化,星点明暗错落
+    const tint = 0.45 + Math.random() * 0.55;
+    col[i * 3] = tint * 0.78;
+    col[i * 3 + 1] = tint * 0.86;
+    col[i * 3 + 2] = tint;
+    siz[i] = 0.5 + Math.random() * 1.6;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+  geo.setAttribute("aSize", new THREE.BufferAttribute(siz, 1));
+  const mat = new THREE.PointsMaterial({
+    map: glowTexture,
+    size: 5,
+    sizeAttenuation: true,
+    vertexColors: true,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    opacity: themeColors.isDark ? 0.5 : 0.16,
+  });
+  applyPerPointSize(mat);
+  starDust = new THREE.Points(geo, mat);
+  starDust.renderOrder = 0; // 最底层
+  starDust.frustumCulled = false;
+  scene.add(starDust);
+}
+
+// 让 PointsMaterial 支持逐点尺寸(读取 aSize 属性,乘到 gl_PointSize 上),实现近大远小的层次。
+function applyPerPointSize(mat) {
+  mat.onBeforeCompile = (shader) => {
+    shader.vertexShader =
+      "attribute float aSize;\n" +
+      shader.vertexShader.replace("gl_PointSize = size;", "gl_PointSize = size * aSize;");
+  };
 }
 
 // 为高亮集重建光晕 sprite(主节点用更亮的青色,其余用节点本色)
@@ -654,6 +737,7 @@ function buildMeshes() {
 
   buildEdges();
   buildStarField();
+  applyNodeThemeAppearance(); // 按当前主题校正节点材质/配色(修复亮色发黑)
   applyTypeVisibility();
   rebuildLabels();
   requestRender();
@@ -667,6 +751,11 @@ function starBrightness(node) {
   return 0.32 + (TYPE_GLOW[node.type] ?? 0.1) * 1.5;
 }
 
+// 星点尺寸按层级分档:根/顶层更大更亮,叶子更小,营造层次感。
+function starSize(node) {
+  return 0.75 + (TYPE_GLOW[node.type] ?? 0.1) * 3.2;
+}
+
 function buildStarField() {
   if (starPoints) {
     scene.remove(starPoints);
@@ -678,6 +767,7 @@ function buildStarField() {
   if (!n || !glowTexture) return;
   const pos = new Float32Array(n * 3);
   const col = new Float32Array(n * 3);
+  const siz = new Float32Array(n);
   const tmp = new THREE.Color();
   nodeList.forEach((node, i) => {
     node._starIdx = i;
@@ -686,20 +776,23 @@ function buildStarField() {
     tmp.copy(colorForNode(node));
     const b = starBrightness(node);
     col[i * 3] = tmp.r * b; col[i * 3 + 1] = tmp.g * b; col[i * 3 + 2] = tmp.b * b;
+    siz[i] = starSize(node);
   });
   const geo = new THREE.BufferGeometry();
   geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
   geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+  geo.setAttribute("aSize", new THREE.BufferAttribute(siz, 1));
   const mat = new THREE.PointsMaterial({
     map: glowTexture,
-    size: 13,
+    size: 11,
     sizeAttenuation: true,
     vertexColors: true,
     transparent: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
-    opacity: 0.8,
+    opacity: 0.82,
   });
+  applyPerPointSize(mat); // 逐点尺寸,实现层级近大远小
   starPoints = new THREE.Points(geo, mat);
   starPoints.renderOrder = 1; // 在球体之上叠加柔光,但 depthWrite=false 不遮挡
   scene.add(starPoints);
@@ -753,38 +846,57 @@ function buildEdges() {
 function rebuildLabels() {
   for (const l of labelObjs) scene.remove(l);
   labelObjs = [];
-  const important = [...nodeList]
-    .sort((a, b) => (b.pagerank || 0) - (a.pagerank || 0))
-    .slice(0, Math.min(60, nodeList.length));
-  const set = new Set(important.map((n) => n.id));
-  if (selected.value) set.add(selected.value.id);
-  // 强调集中的节点始终显示标签
-  for (const id of highlightedIds) set.add(id);
+  // 候选池放大到 300:按 pagerank 排序并记录名次,名次用于"缩放自适应"显隐(updateLabelLod)。
+  // 远观只露重要节点,拉近后越来越多节点的标签渐次浮现,兼顾"每个节点都能看到名字"与性能。
+  const ranked = [...nodeList].sort((a, b) => (b.pagerank || 0) - (a.pagerank || 0));
+  const cap = Math.min(300, ranked.length);
+  const rankById = new Map();
+  for (let i = 0; i < cap; i++) rankById.set(ranked[i].id, i);
+  if (selected.value && !rankById.has(selected.value.id)) rankById.set(selected.value.id, 0);
+  for (const id of highlightedIds) if (!rankById.has(id)) rankById.set(id, 0);
   for (const n of nodeList) {
-    if (!set.has(n.id)) continue;
+    if (!rankById.has(n.id)) continue;
     if (n._hidden) continue; // 被过滤掉的节点不显示标签
     const p = curPositions.get(n.id);
     if (!p) continue;
     const hl = highlightedIds.has(n.id);
     const div = document.createElement("div");
     div.className = hl ? "kg3d-label kg3d-label-hl" : "kg3d-label";
-    div.textContent = n.name?.length > 18 ? n.name.slice(0, 18) + "…" : n.name;
+    // 类型/社区色圆点 + 文本,胶囊样式由 CSS 承担
+    const dot = document.createElement("span");
+    dot.className = "kg3d-label-dot";
+    dot.style.background = colorForNode(n).getStyle();
+    const txt = document.createElement("span");
+    txt.className = "kg3d-label-txt";
+    txt.textContent = n.name?.length > 18 ? n.name.slice(0, 18) + "…" : n.name;
+    div.appendChild(dot);
+    div.appendChild(txt);
     const obj = new CSS2DObject(div);
     const r = baseRadius(n) * (n._hlMul ?? 1);
     obj.position.set(p.x, p.y + r + 5, p.z);
     obj.userData.nodeId = n.id;
     obj.userData.hl = hl;
+    obj.userData.rank = rankById.get(n.id);
     scene.add(obj);
     labelObjs.push(obj);
   }
 }
 
 function updateLabelLod() {
-  // 距离过远的标签隐藏(强调标签不受距离限制,始终可见)
+  // 缩放自适应:每个标签按"相机距离 + 重要度名次"决定可见度。
+  // 重要节点(名次小)可见距离更远;次要节点要相机拉近才浮现。强调标签恒显。
   for (const l of labelObjs) {
     if (l.userData.hl) { l.element.style.opacity = "1"; continue; }
     const d = camera.position.distanceTo(l.position);
-    l.element.style.opacity = d > 600 ? "0" : "0.92";
+    const rank = l.userData.rank ?? 0;
+    const threshold = 1500 / (1 + rank * 0.07);
+    let op = 0;
+    if (d < threshold) {
+      // 末段 20% 做渐隐过渡,避免标签硬切闪烁
+      const fadeStart = threshold * 0.8;
+      op = d <= fadeStart ? 0.95 : 0.95 * (1 - (d - fadeStart) / (threshold * 0.2));
+    }
+    l.element.style.opacity = op.toFixed(3);
   }
 }
 
@@ -2272,6 +2384,12 @@ onBeforeUnmount(() => {
     disposeGraphObjects();
     renderer.dispose();
   }
+  if (starDust) {
+    scene?.remove(starDust);
+    starDust.geometry.dispose();
+    starDust.material.dispose();
+    starDust = null;
+  }
   if (glowTexture) { glowTexture.dispose(); glowTexture = null; }
   disposeLayoutWorker();
 });
@@ -2455,21 +2573,52 @@ defineExpose({ reload: loadGraph });
 .tl-range { flex: 1; }
 .tl-label { font-size: 11px; opacity: 0.75; min-width: 64px; text-align: right; }
 :deep(.kg3d-label) {
-  color: #c9d1d9;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #e6edf3;
   font-size: 11px;
-  text-shadow: 0 1px 3px #000;
+  font-weight: 500;
+  line-height: 1.3;
+  letter-spacing: 0.2px;
+  padding: 2px 8px 2px 6px;
+  border-radius: 999px;
   pointer-events: none;
   white-space: nowrap;
+  /* 磨砂胶囊:半透明深底 + 细描边 + 轻投影,文字始终清晰可读 */
+  background: rgba(13, 17, 23, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+  transition: opacity 0.18s ease;
+}
+:deep(.kg3d-label-dot) {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #58a6ff;
+  box-shadow: 0 0 6px currentColor, 0 0 0 1px rgba(255, 255, 255, 0.25) inset;
+}
+:deep(.kg3d-label-txt) {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 :deep(.kg3d-label-hl) {
   color: #fff;
   font-size: 12px;
   font-weight: 700;
-  padding: 1px 6px;
-  border-radius: 6px;
-  background: rgba(31, 111, 235, 0.85);
-  box-shadow: 0 0 10px rgba(57, 208, 255, 0.7);
-  text-shadow: 0 1px 2px #000;
+  padding: 3px 10px 3px 8px;
+  background: linear-gradient(135deg, rgba(31, 111, 235, 0.92), rgba(57, 160, 255, 0.92));
+  border-color: rgba(120, 200, 255, 0.55);
+  box-shadow: 0 0 14px rgba(57, 208, 255, 0.6), 0 2px 10px rgba(0, 0, 0, 0.4);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+:deep(.kg3d-label-hl) .kg3d-label-dot {
+  background: #d6f0ff !important;
+  box-shadow: 0 0 8px #aee3ff;
 }
 
 /* ───────── 亮色模式覆盖 ───────── */
@@ -2519,7 +2668,16 @@ defineExpose({ reload: loadGraph });
   color: #1f2328;
 }
 .kg3d-light :deep(.kg3d-label) {
-  color: #24292f;
-  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.8);
+  color: #1f2328;
+  background: rgba(255, 255, 255, 0.78);
+  border-color: rgba(0, 0, 0, 0.08);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  text-shadow: 0 1px 1px rgba(255, 255, 255, 0.7);
+}
+.kg3d-light :deep(.kg3d-label-hl) {
+  color: #fff;
+  background: linear-gradient(135deg, rgba(31, 111, 235, 0.95), rgba(57, 160, 255, 0.95));
+  border-color: rgba(31, 111, 235, 0.5);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
 }
 </style>

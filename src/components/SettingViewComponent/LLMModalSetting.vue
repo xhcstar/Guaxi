@@ -730,7 +730,8 @@ onMounted(loadConfig)
 
 .status-popover {
   position: absolute;
-  top: calc(100% + 8px);
+  /* 状态面板位于设置页底部,提示卡片向上弹出,避免落到屏幕外被裁切看不到 */
+  bottom: calc(100% + 8px);
   right: 0;
   min-width: 280px;
   max-width: 420px;
@@ -739,9 +740,9 @@ onMounted(loadConfig)
   border: 1px solid rgba(128, 128, 128, 0.25);
   background: rgba(0, 0, 0, 0.86);
   color: #fff;
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.24);
   display: none;
-  z-index: 5;
+  z-index: 20;
 }
 
 .status-pop-wrap:hover .status-popover,

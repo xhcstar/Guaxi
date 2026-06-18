@@ -1,72 +1,40 @@
 <template>
   <div class="preference-wrapper">
-    <n-card title="外观与系统">
-      <n-space vertical size="large" style="width: 100%">
-        <div>
-          <h3>外观</h3>
-          <p class="description">在此切换应用主题, 暗色或者亮色。</p>
-          <n-form label-placement="left" label-width="auto" :show-require-mark="false">
-            <n-form-item label="主题">
-              <n-select
-                v-model:value="themeValue"
-                :options="themeOptions"
-                :disabled="loading || themeSaving"
-                style="width: 240px"
-                @update:value="handleThemeChange"
-              />
-            </n-form-item>
-          </n-form>
-        </div>
+    <!-- 页内主题导航:点击平滑滚动到对应分区(锚点为各区块 id) -->
+    <nav class="pref-subnav">
+      <button
+        v-for="s in sections"
+        :key="s.id"
+        type="button"
+        class="pref-subnav-btn"
+        :class="{ active: activeSection === s.id }"
+        @click="scrollToSection(s.id)"
+      >
+        {{ s.label }}
+      </button>
+    </nav>
 
-        <n-divider />
+    <div class="pref-sections">
+      <!-- 外观主题 -->
+      <n-card id="pref-appearance" class="pref-card" title="外观主题">
+        <p class="description">在此切换应用主题, 暗色或者亮色。</p>
+        <n-form label-placement="left" label-width="auto" :show-require-mark="false">
+          <n-form-item label="主题">
+            <n-select
+              v-model:value="themeValue"
+              :options="themeOptions"
+              :disabled="loading || themeSaving"
+              style="width: 240px"
+              @update:value="handleThemeChange"
+            />
+          </n-form-item>
+        </n-form>
+      </n-card>
 
-        <div>
-          <h3>垃圾回收配置</h3>
-          <p class="description">
-            后台会定期清理已删除的数据和临时冲突文件，以减少空间占用并保持库的整洁。
-          </p>
-          <n-form label-placement="left" label-width="auto" :show-require-mark="false">
-            <n-form-item label="GC 周期（小时）">
-              <n-input-number
-                v-model:value="gcCycleHours"
-                :min="1"
-                :max="72"
-                :step="1"
-                :precision="0"
-                :disabled="loading"
-                style="width: 200px"
-                @update:value="handleGcCycleChange"
-              />
-            </n-form-item>
-          </n-form>
-          <n-alert type="info" :show-icon="true" class="tip">
-            修改后将在下一次周期生效，最低间隔为 1 小时。若未配置则默认每 1 小时执行一次垃圾回收。
-          </n-alert>
-        </div>
-
-        <n-divider />
-
-        <div>
-          <h3>LSP 配置</h3>
-          <p class="description">
-            LSP 能力统一由下方语言扩展提供；安装对应扩展后，新建或重新打开编辑器即可获得语法高亮和语义补全。
-          </p>
-          <n-form label-placement="left" label-width="auto" :show-require-mark="false">
-            <n-form-item label="启用 LSP 扩展能力">
-              <n-switch
-                v-model:value="lspHighlightEnabled"
-                :disabled="loading"
-                @update:value="handleLspHighlightChange"
-              />
-            </n-form-item>
-          </n-form>
-          <LspExtensionPanel />
-        </div>
-
-        <n-divider />
-
-        <div>
-          <h3>TTS 配置</h3>
+      <!-- 语音能力:朗读(TTS) + 语音转写(ASR) 同主题合并 -->
+      <n-card id="pref-voice" class="pref-card" title="语音能力">
+        <div class="pref-block">
+          <h3>TTS 朗读配置</h3>
           <p class="description">
             配置朗读服务提供方与本地 sherpa-onnx 路径。设置保存到 guaxi_config.json，不再使用 localStorage。
           </p>
@@ -140,8 +108,8 @@
 
         <n-divider />
 
-        <div>
-          <h3>ASR 配置</h3>
+        <div class="pref-block">
+          <h3>ASR 语音转写配置</h3>
           <p class="description">
             配置语音转文字提供方与本地 sherpa-onnx 路径。设置保存到 guaxi_config.json。
           </p>
@@ -214,73 +182,112 @@
             </n-form-item>
           </n-form>
         </div>
+      </n-card>
 
-        <n-divider />
+      <!-- 编辑器 -->
+      <n-card id="pref-editor" class="pref-card" title="编辑器">
+        <h3>LSP 配置</h3>
+        <p class="description">
+          LSP 能力统一由下方语言扩展提供；安装对应扩展后，新建或重新打开编辑器即可获得语法高亮和语义补全。
+        </p>
+        <n-form label-placement="left" label-width="auto" :show-require-mark="false">
+          <n-form-item label="启用 LSP 扩展能力">
+            <n-switch
+              v-model:value="lspHighlightEnabled"
+              :disabled="loading"
+              @update:value="handleLspHighlightChange"
+            />
+          </n-form-item>
+        </n-form>
+        <LspExtensionPanel />
+      </n-card>
 
-        <div>
-          <h3>终端配置</h3>
-          <p class="description">
-            配置全局终端面板的默认终端类型，以及 Windows 下 Git Bash 的可执行文件路径。
-          </p>
-          <n-form label-placement="left" label-width="auto" :show-require-mark="false">
-            <n-form-item label="默认终端">
-              <n-select
-                v-model:value="terminalDefaultProfile"
-                :options="terminalProfileOptions"
-                :disabled="loading || terminalSaving"
-                style="width: 240px"
-              />
-            </n-form-item>
-            <n-form-item label="Git Bash 路径">
-              <n-input
-                v-model:value="terminalGitBashPath"
-                placeholder="例如：D:\\Git\\bin\\bash.exe -i -l"
-                :disabled="loading || terminalSaving"
-              />
-            </n-form-item>
-            <n-form-item>
-              <n-button
-                type="primary"
-                size="small"
-                :disabled="loading || terminalSaving"
-                @click="handleTerminalConfigSave"
-              >
-                保存终端配置
-              </n-button>
-            </n-form-item>
-          </n-form>
-        </div>
+      <!-- 终端 -->
+      <n-card id="pref-terminal" class="pref-card" title="终端">
+        <p class="description">
+          配置全局终端面板的默认终端类型，以及 Windows 下 Git Bash 的可执行文件路径。
+        </p>
+        <n-form label-placement="left" label-width="auto" :show-require-mark="false">
+          <n-form-item label="默认终端">
+            <n-select
+              v-model:value="terminalDefaultProfile"
+              :options="terminalProfileOptions"
+              :disabled="loading || terminalSaving"
+              style="width: 240px"
+            />
+          </n-form-item>
+          <n-form-item label="Git Bash 路径">
+            <n-input
+              v-model:value="terminalGitBashPath"
+              placeholder="例如：D:\\Git\\bin\\bash.exe -i -l"
+              :disabled="loading || terminalSaving"
+            />
+          </n-form-item>
+          <n-form-item>
+            <n-button
+              type="primary"
+              size="small"
+              :disabled="loading || terminalSaving"
+              @click="handleTerminalConfigSave"
+            >
+              保存终端配置
+            </n-button>
+          </n-form-item>
+        </n-form>
+      </n-card>
 
-        <n-divider />
+      <!-- 文件传输 -->
+      <n-card id="pref-transfer" class="pref-card" title="文件传输">
+        <h3>WebRTC 文件传输</h3>
+        <p class="description">
+          房间码模式需要一个“信令服务”（只中转 WebRTC 协商信息，不传文件内容）。此处配置后，文件传输助手将不再需要手动填写信令地址。
+        </p>
+        <n-form label-placement="left" label-width="auto" :show-require-mark="false">
+          <n-form-item label="信令服务地址">
+            <n-input
+              v-model:value="webrtcSignalUrl"
+              placeholder="例如：wss://your-signal.example.com/ft/signal"
+              :disabled="loading || webrtcSignalSaving"
+            />
+          </n-form-item>
+          <n-form-item>
+            <n-button
+              type="primary"
+              size="small"
+              :disabled="loading || webrtcSignalSaving"
+              @click="handleWebrtcSignalUrlSave"
+            >
+              保存
+            </n-button>
+          </n-form-item>
+        </n-form>
+      </n-card>
 
-        <div>
-          <h3>WebRTC 文件传输</h3>
-          <p class="description">
-            房间码模式需要一个“信令服务”（只中转 WebRTC 协商信息，不传文件内容）。此处配置后，文件传输助手将不再需要手动填写信令地址。
-          </p>
-          <n-form label-placement="left" label-width="auto" :show-require-mark="false">
-            <n-form-item label="信令服务地址">
-              <n-input
-                v-model:value="webrtcSignalUrl"
-                placeholder="例如：wss://your-signal.example.com/ft/signal"
-                :disabled="loading || webrtcSignalSaving"
-              />
-            </n-form-item>
-            <n-form-item>
-              <n-button
-                type="primary"
-                size="small"
-                :disabled="loading || webrtcSignalSaving"
-                @click="handleWebrtcSignalUrlSave"
-              >
-                保存
-              </n-button>
-            </n-form-item>
-          </n-form>
-        </div>
-
-      </n-space>
-    </n-card>
+      <!-- 系统维护 -->
+      <n-card id="pref-system" class="pref-card" title="系统维护">
+        <h3>垃圾回收配置</h3>
+        <p class="description">
+          后台会定期清理已删除的数据和临时冲突文件，以减少空间占用并保持库的整洁。
+        </p>
+        <n-form label-placement="left" label-width="auto" :show-require-mark="false">
+          <n-form-item label="GC 周期（小时）">
+            <n-input-number
+              v-model:value="gcCycleHours"
+              :min="1"
+              :max="72"
+              :step="1"
+              :precision="0"
+              :disabled="loading"
+              style="width: 200px"
+              @update:value="handleGcCycleChange"
+            />
+          </n-form-item>
+        </n-form>
+        <n-alert type="info" :show-icon="true" class="tip">
+          修改后将在下一次周期生效，最低间隔为 1 小时。若未配置则默认每 1 小时执行一次垃圾回收。
+        </n-alert>
+      </n-card>
+    </div>
   </div>
 </template>
 
@@ -295,6 +302,24 @@ import LspExtensionPanel from './LspExtensionPanel.vue'
 const logger = createLogger('PreferenceContent')
 
 const settingsStore = useSettingsStore()
+
+// 页内主题分区与锚点导航
+const sections = [
+  { id: 'pref-appearance', label: '外观主题' },
+  { id: 'pref-voice', label: '语音能力' },
+  { id: 'pref-editor', label: '编辑器' },
+  { id: 'pref-terminal', label: '终端' },
+  { id: 'pref-transfer', label: '文件传输' },
+  { id: 'pref-system', label: '系统维护' },
+]
+const activeSection = ref('pref-appearance')
+function scrollToSection(id) {
+  activeSection.value = id
+  const el = document.getElementById(id)
+  if (el && typeof el.scrollIntoView === 'function') {
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+}
 
 const themeOptions = [
   { label: '亮色', value: 'light' },
@@ -744,6 +769,82 @@ onBeforeUnmount(() => {
 .preference-wrapper {
   width: 100%;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', monospace;
+}
+
+/* 页内主题导航:吸顶,跟随滚动 */
+.pref-subnav {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 2px 10px;
+  margin-bottom: 4px;
+  background: var(--guaxi-panel-bg);
+  border-bottom: 1px solid var(--guaxi-border);
+  backdrop-filter: blur(4px);
+}
+
+.pref-subnav-btn {
+  appearance: none;
+  border: 1px solid var(--guaxi-border);
+  background: transparent;
+  color: var(--guaxi-text-secondary);
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.2;
+  padding: 5px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background-color 0.16s ease, color 0.16s ease, border-color 0.16s ease, transform 0.12s ease;
+}
+.pref-subnav-btn:hover {
+  color: var(--guaxi-text-primary);
+  border-color: var(--n-color-primary, #2dd4bf);
+  transform: translateY(-1px);
+}
+.pref-subnav-btn.active {
+  color: #fff;
+  background: var(--n-color-primary, #2dd4bf);
+  border-color: var(--n-color-primary, #2dd4bf);
+  box-shadow: 0 2px 8px rgba(45, 212, 191, 0.28);
+}
+
+.pref-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-top: 6px;
+}
+
+/* 主题卡片:统一描边、圆角、留白;锚点滚动留出吸顶导航高度 */
+.pref-card {
+  scroll-margin-top: 64px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 12px;
+  background: var(--guaxi-panel-bg);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  transition: box-shadow 0.18s ease, border-color 0.18s ease;
+}
+.pref-card:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.07);
+}
+.pref-card :deep(.n-card-header__main) {
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+/* 卡片内的次级小节(语音页 TTS / ASR) */
+.pref-block + .pref-block,
+.pref-block {
+  width: 100%;
+}
+.pref-card h3 {
+  margin: 0 0 2px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--guaxi-text-primary);
 }
 
 .description {
