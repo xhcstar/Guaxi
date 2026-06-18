@@ -96,14 +96,152 @@ fn exact_child_name_exists(path: &Path) -> Result<bool, String> {
     Ok(false)
 }
 
+fn case_insensitive_child_name_exists(path: &Path) -> Result<bool, String> {
+    let Some(parent) = path.parent() else {
+        return Ok(false);
+    };
+    let Some(file_name) = path.file_name() else {
+        return Ok(false);
+    };
+    if !parent.exists() {
+        return Ok(false);
+    }
+
+    let wanted = file_name.to_string_lossy().to_lowercase();
+    for entry in fs::read_dir(parent).map_err(|e| format!("读取父目录失败: {}", e))? {
+        let entry = entry.map_err(|e| format!("读取目录项失败: {}", e))?;
+        if entry.file_name().to_string_lossy().to_lowercase() == wanted {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+fn is_case_only_create_conflict(path: &Path, err: &std::io::Error) -> bool {
+    err.kind() == ErrorKind::AlreadyExists
+        && !exact_child_name_exists(path).unwrap_or(false)
+        && case_insensitive_child_name_exists(path).unwrap_or(false)
+}
+
+// 设计说明：前端已经允许 README.md/readme.md 这类大小写不同的名称同时进入创建流程，
+// 但 Windows 默认目录通常仍是大小写不敏感的。这里仅在确认是“仅大小写不同”的冲突时，
+// 尝试为父目录开启大小写敏感，再重试一次真正的文件系统创建，避免普通同名误触发目录属性修改。
+#[cfg(target_os = "windows")]
+fn enable_case_sensitive_parent_for_create(path: &Path) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("无法获取父目录：{}", path.display()))?;
+
+    info!(
+        parent = %parent.display(),
+        target = %path.display(),
+        "try enable Windows per-directory case sensitivity before create"
+    );
+
+    let output = std::process::Command::new("fsutil.exe")
+        .arg("file")
+        .arg("setCaseSensitiveInfo")
+        .arg(parent)
+        .arg("enable")
+        .output()
+        .map_err(|e| format!("调用 fsutil 开启目录大小写敏感失败: {}", e))?;
+
+    if output.status.success() {
+        info!(
+            parent = %parent.display(),
+            target = %path.display(),
+            "Windows per-directory case sensitivity enabled"
+        );
+        return Ok(());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    warn!(
+        parent = %parent.display(),
+        target = %path.display(),
+        status = ?output.status.code(),
+        stdout = %stdout,
+        stderr = %stderr,
+        "enable Windows per-directory case sensitivity failed"
+    );
+
+    let detail = if !stderr.is_empty() {
+        stderr
+    } else if !stdout.is_empty() {
+        stdout
+    } else {
+        format!("fsutil 退出码 {:?}", output.status.code())
+    };
+
+    Err(format!(
+        "当前目录所在文件系统未启用大小写敏感，Guaxi 已尝试为父目录开启但失败：{}",
+        detail
+    ))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn enable_case_sensitive_parent_for_create(path: &Path) -> Result<(), String> {
+    Err(format!(
+        "当前文件系统拒绝创建仅大小写不同的同名项：{}",
+        path.display()
+    ))
+}
+
 fn case_sensitive_create_conflict_message(path: &Path, err: &std::io::Error) -> String {
     if err.kind() == ErrorKind::AlreadyExists {
+        if exact_child_name_exists(path).unwrap_or(false) {
+            return format!("创建失败：{} 已存在", path.display());
+        }
+        if case_insensitive_child_name_exists(path).unwrap_or(false) {
+            return format!(
+                "创建失败：当前目录所在文件系统未启用大小写敏感，无法创建仅大小写不同的同名项：{}",
+                path.display()
+            );
+        }
         format!(
-            "创建失败：{} 已存在，或当前目录所在文件系统未启用大小写敏感，无法创建仅大小写不同的同名项",
+            "创建失败：{} 已存在，或当前文件系统拒绝创建该路径",
             path.display()
         )
     } else {
         err.to_string()
+    }
+}
+
+fn create_directory_case_aware(path: &Path) -> Result<(), String> {
+    match fs::create_dir(path) {
+        Ok(()) => Ok(()),
+        Err(first_err) if is_case_only_create_conflict(path, &first_err) => {
+            enable_case_sensitive_parent_for_create(path)?;
+            fs::create_dir(path).map_err(|retry_err| {
+                format!(
+                    "创建失败：已尝试开启父目录大小写敏感，但仍无法创建 {}：{}",
+                    path.display(),
+                    retry_err
+                )
+            })
+        }
+        Err(err) => Err(case_sensitive_create_conflict_message(path, &err)),
+    }
+}
+
+fn create_file_case_aware(path: &Path) -> Result<fs::File, String> {
+    let open_new = || OpenOptions::new().write(true).create_new(true).open(path);
+
+    match open_new() {
+        Ok(file) => Ok(file),
+        Err(first_err) if is_case_only_create_conflict(path, &first_err) => {
+            enable_case_sensitive_parent_for_create(path)?;
+            open_new().map_err(|retry_err| {
+                format!(
+                    "创建失败：已尝试开启父目录大小写敏感，但仍无法创建 {}：{}",
+                    path.display(),
+                    retry_err
+                )
+            })
+        }
+        Err(err) => Err(case_sensitive_create_conflict_message(path, &err)),
     }
 }
 
@@ -253,7 +391,7 @@ pub fn create_directory(path: String) -> Result<(), String> {
         }
     }
 
-    fs::create_dir(&path).map_err(|e| case_sensitive_create_conflict_message(&path, &e))?;
+    create_directory_case_aware(&path)?;
     info!(path = %path.display(), "create_directory success");
 
     if let Err(e) = kgraph::after_create_path(&path, true, None) {
@@ -277,12 +415,7 @@ pub fn create_file(path: String) -> Result<(), String> {
         return Err(format!("创建文件失败：{} 已存在", path.display()));
     }
 
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-        .map_err(|e| case_sensitive_create_conflict_message(&path, &e))
-        .map(|_| ())?;
+    create_file_case_aware(&path).map(|_| ())?;
     info!(path = %path.display(), "create_file success");
 
     if let Err(e) = kgraph::after_create_path(&path, false, None) {
@@ -344,11 +477,7 @@ pub async fn create_file_with_content(
         return Err(format!("创建文件失败：{} 已存在", path.display()));
     }
 
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-        .map_err(|e| case_sensitive_create_conflict_message(&path, &e))?;
+    let mut file = create_file_case_aware(&path)?;
     file.write_all(content.as_bytes())
         .map_err(|e| format!("写入文件失败: {}", e))?;
     info!(path = %path.display(), bytes = content.len(), "create_file_with_content success");

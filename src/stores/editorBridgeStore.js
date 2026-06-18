@@ -4,6 +4,13 @@ import { createLogger } from "../utils/logger";
 const logger = createLogger("editorBridgeStore");
 
 const normalizePathKey = (path) => String(path || "").replace(/\\/g, "/");
+const isSameOrChildPath = (path, root) => {
+  const normalizedPath = normalizePathKey(path);
+  const normalizedRoot = normalizePathKey(root);
+  return !!normalizedPath &&
+    !!normalizedRoot &&
+    (normalizedPath === normalizedRoot || normalizedPath.startsWith(`${normalizedRoot}/`));
+};
 
 const normalizeContent = (content) => String(content ?? "").replace(/\r\n?/g, "\n");
 
@@ -17,6 +24,8 @@ export const useEditorBridgeStore = defineStore("editorBridge", {
   state: () => ({
     // pathKey -> owner。没有记录时默认 Monaco 拥有写权限。
     owners: {},
+    // pathKey -> true。只有用户用 Neovim 打开过的目录才进入外部编辑桥接范围。
+    neovimRoots: {},
     // pathKey -> { mtimeMs, fileSize }，作为写入前冲突检测快照。
     fileMetaSnapshots: {},
     // pathKey -> 最近一次检测到的冲突说明。
@@ -26,6 +35,11 @@ export const useEditorBridgeStore = defineStore("editorBridge", {
   getters: {
     getOwner: (state) => (path) => state.owners[normalizePathKey(path)] || "monaco",
     isMonacoReadonly: (state) => (path) => state.owners[normalizePathKey(path)] === "neovim",
+    isNeovimManaged: (state) => (path) => {
+      const key = normalizePathKey(path);
+      return state.owners[key] === "neovim" ||
+        Object.keys(state.neovimRoots || {}).some((root) => isSameOrChildPath(key, root));
+    },
   },
 
   actions: {
@@ -48,6 +62,22 @@ export const useEditorBridgeStore = defineStore("editorBridge", {
       delete next[key];
       this.owners = next;
       logger.info("[EditorBridge] owner cleared", { path, reason });
+    },
+
+    setNeovimRoot(path, reason = "") {
+      const key = normalizePathKey(path);
+      if (!key) return;
+      this.neovimRoots = { ...this.neovimRoots, [key]: true };
+      logger.info("[EditorBridge] Neovim root registered", { path, reason });
+    },
+
+    clearNeovimRoot(path, reason = "") {
+      const key = normalizePathKey(path);
+      if (!key || !this.neovimRoots[key]) return;
+      const next = { ...this.neovimRoots };
+      delete next[key];
+      this.neovimRoots = next;
+      logger.info("[EditorBridge] Neovim root cleared", { path, reason });
     },
 
     setSnapshot(path, meta) {
@@ -114,6 +144,16 @@ export const useEditorBridgeStore = defineStore("editorBridge", {
 
       const snapshot = this.fileMetaSnapshots[key];
       if (snapshot && !sameMeta(snapshot, latest)) {
+        if (!this.isNeovimManaged(path)) {
+          logger.debug("[EditorBridge] skip write snapshot conflict because Neovim is not managing this path", {
+            path,
+            writer: normalizedWriter,
+            snapshot,
+            latest,
+          });
+          return true;
+        }
+
         const message = "文件在磁盘上已经变化，请先同步其他编辑器的修改后再写入";
         this.setConflict(path, message, { snapshot, latest, writer: normalizedWriter });
         throw new Error(message);
@@ -135,6 +175,16 @@ export const useEditorBridgeStore = defineStore("editorBridge", {
       if (!tab || tab.unsupported) return { status: "ignored" };
 
       const owner = this.getOwner(path);
+      const neovimManaged = this.isNeovimManaged(path);
+      if (!neovimManaged && tab.dirty) {
+        logger.debug("[EditorBridge] skip dirty-tab external conflict because Neovim is not managing this path", {
+          path,
+          owner,
+          dirty: true,
+        });
+        return { status: "ignored" };
+      }
+
       if (owner !== "neovim" && tab.dirty) {
         const message = "磁盘文件已变化，但 Guaxi 中仍有未保存修改，已阻止自动覆盖";
         this.setConflict(path, message, { owner, dirty: true });

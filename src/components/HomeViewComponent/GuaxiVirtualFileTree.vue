@@ -34,18 +34,7 @@
           </span>
 
           <span class="vtree-icon" :class="item.node.is_directory ? 'icon-dir' : 'icon-file'">
-            <svg v-if="item.node.is_directory" viewBox="0 0 24 24" width="16" height="16">
-              <path
-                d="M3.5 6.4c0-.95.77-1.72 1.72-1.72h3.4c.5 0 .98.22 1.3.6l.96 1.12h8c.95 0 1.72.77 1.72 1.72v8.86c0 .95-.77 1.72-1.72 1.72H5.22c-.95 0-1.72-.77-1.72-1.72V6.4z"
-                fill="currentColor" />
-            </svg>
-            <svg v-else viewBox="0 0 24 24" width="16" height="16">
-              <path
-                d="M6.2 3.6h6.7L18.5 9v10.2c0 .95-.77 1.72-1.72 1.72H6.2c-.95 0-1.72-.77-1.72-1.72V5.32c0-.95.77-1.72 1.72-1.72z"
-                fill="currentColor" opacity="0.92" />
-              <path d="M12.7 3.8V9.2h5.2" fill="none"
-                stroke="var(--vtree-file-fold, rgba(255,255,255,.5))" stroke-width="1.3" />
-            </svg>
+            <Icon :icon="getNodeIcon(item.node)" width="18" height="18" class="vtree-type-icon" />
           </span>
 
           <input
@@ -82,6 +71,52 @@
 
 <script setup>
 import { computed, onMounted, onBeforeUnmount, nextTick, reactive, ref } from 'vue'
+import { Icon } from '@iconify/vue'
+import defaultFileIcon from '@iconify-icons/vscode-icons/default-file'
+import defaultFolderIcon from '@iconify-icons/vscode-icons/default-folder'
+import markdownIcon from '@iconify-icons/vscode-icons/file-type-markdown'
+import jsonIcon from '@iconify-icons/vscode-icons/file-type-json-official'
+import jsIcon from '@iconify-icons/vscode-icons/file-type-js-official'
+import tsIcon from '@iconify-icons/vscode-icons/file-type-typescript-official'
+import vueIcon from '@iconify-icons/vscode-icons/file-type-vue'
+import htmlIcon from '@iconify-icons/vscode-icons/file-type-html'
+import cssIcon from '@iconify-icons/vscode-icons/file-type-css'
+import scssIcon from '@iconify-icons/vscode-icons/file-type-scss'
+import lessIcon from '@iconify-icons/vscode-icons/file-type-less'
+import pythonIcon from '@iconify-icons/vscode-icons/file-type-python'
+import javaIcon from '@iconify-icons/vscode-icons/file-type-java'
+import cIcon from '@iconify-icons/vscode-icons/file-type-c'
+import cHeaderIcon from '@iconify-icons/vscode-icons/file-type-cheader'
+import cppIcon from '@iconify-icons/vscode-icons/file-type-cpp'
+import cppHeaderIcon from '@iconify-icons/vscode-icons/file-type-cppheader'
+import csharpIcon from '@iconify-icons/vscode-icons/file-type-csharp'
+import goIcon from '@iconify-icons/vscode-icons/file-type-go'
+import rustIcon from '@iconify-icons/vscode-icons/file-type-rust'
+import luaIcon from '@iconify-icons/vscode-icons/file-type-lua'
+import shellIcon from '@iconify-icons/vscode-icons/file-type-shell'
+import powershellIcon from '@iconify-icons/vscode-icons/file-type-powershell'
+import yamlIcon from '@iconify-icons/vscode-icons/file-type-yaml'
+import xmlIcon from '@iconify-icons/vscode-icons/file-type-xml'
+import tomlIcon from '@iconify-icons/vscode-icons/file-type-toml'
+import iniIcon from '@iconify-icons/vscode-icons/file-type-ini'
+import configIcon from '@iconify-icons/vscode-icons/file-type-config'
+import dockerIcon from '@iconify-icons/vscode-icons/file-type-docker'
+import gitIcon from '@iconify-icons/vscode-icons/file-type-git'
+import pdfIcon from '@iconify-icons/vscode-icons/file-type-pdf2'
+import imageIcon from '@iconify-icons/vscode-icons/file-type-image'
+import svgIcon from '@iconify-icons/vscode-icons/file-type-svg'
+import wordIcon from '@iconify-icons/vscode-icons/file-type-word'
+import excelIcon from '@iconify-icons/vscode-icons/file-type-excel'
+import powerpointIcon from '@iconify-icons/vscode-icons/file-type-powerpoint'
+import texIcon from '@iconify-icons/vscode-icons/file-type-tex'
+import textIcon from '@iconify-icons/vscode-icons/file-type-text'
+import zipIcon from '@iconify-icons/vscode-icons/file-type-zip'
+import audioIcon from '@iconify-icons/vscode-icons/file-type-audio'
+import videoIcon from '@iconify-icons/vscode-icons/file-type-video'
+import fontIcon from '@iconify-icons/vscode-icons/file-type-font'
+import sqlIcon from '@iconify-icons/vscode-icons/file-type-sql'
+import sqliteIcon from '@iconify-icons/vscode-icons/file-type-sqlite'
+import mermaidIcon from '@iconify-icons/vscode-icons/file-type-mermaid'
 
 const props = defineProps({
   nodes: { type: Array, default: () => [] },
@@ -102,6 +137,66 @@ const emit = defineEmits([
 const OVERSCAN = 8
 const DRAG_THRESHOLD = 5
 
+// 设计说明：
+// 1. 文件树使用 vscode-icons 的 SVG 图标，缩放到高 DPI 屏幕也不会发虚。
+// 2. 先按完整文件名识别常见配置文件，再按扩展名识别类型，避免 Dockerfile、Makefile 这类无扩展名文件退回默认图标。
+// 3. 未覆盖的类型统一回退到 default-file，保证新格式文件也有稳定显示。
+const FILE_NAME_ICON_MAP = new Map([
+  ['dockerfile', dockerIcon],
+  ['compose.yaml', dockerIcon],
+  ['compose.yml', dockerIcon],
+  ['docker-compose.yaml', dockerIcon],
+  ['docker-compose.yml', dockerIcon],
+  ['makefile', configIcon],
+  ['cmakelists.txt', configIcon],
+  ['package.json', jsonIcon],
+  ['package-lock.json', jsonIcon],
+  ['pnpm-lock.yaml', yamlIcon],
+  ['yarn.lock', yamlIcon],
+  ['vite.config.js', jsIcon],
+  ['vite.config.ts', tsIcon],
+  ['vue.config.js', vueIcon],
+  ['tsconfig.json', tsIcon],
+  ['jsconfig.json', jsIcon],
+  ['cargo.toml', rustIcon],
+  ['cargo.lock', rustIcon],
+  ['readme', markdownIcon],
+  ['license', textIcon],
+  ['.gitignore', gitIcon],
+  ['.gitattributes', gitIcon],
+  ['.gitmodules', gitIcon],
+  ['.env', configIcon],
+  ['.env.local', configIcon],
+])
+
+const EXTENSION_ICON_MAP = new Map([
+  ['md', markdownIcon], ['markdown', markdownIcon], ['mdx', markdownIcon],
+  ['json', jsonIcon], ['jsonc', jsonIcon], ['json5', jsonIcon], ['cellmeta', jsonIcon],
+  ['js', jsIcon], ['mjs', jsIcon], ['cjs', jsIcon], ['jsx', jsIcon],
+  ['ts', tsIcon], ['tsx', tsIcon], ['d.ts', tsIcon],
+  ['vue', vueIcon], ['html', htmlIcon], ['htm', htmlIcon],
+  ['css', cssIcon], ['scss', scssIcon], ['sass', scssIcon], ['less', lessIcon],
+  ['py', pythonIcon], ['pyw', pythonIcon], ['ipynb', pythonIcon],
+  ['java', javaIcon], ['c', cIcon], ['h', cHeaderIcon], ['cpp', cppIcon], ['cc', cppIcon], ['cxx', cppIcon], ['hpp', cppHeaderIcon], ['hh', cppHeaderIcon],
+  ['cs', csharpIcon], ['go', goIcon], ['rs', rustIcon], ['lua', luaIcon],
+  ['sh', shellIcon], ['bash', shellIcon], ['zsh', shellIcon], ['fish', shellIcon], ['bat', shellIcon], ['cmd', shellIcon],
+  ['ps1', powershellIcon], ['psm1', powershellIcon], ['psd1', powershellIcon],
+  ['yml', yamlIcon], ['yaml', yamlIcon], ['xml', xmlIcon], ['toml', tomlIcon], ['ini', iniIcon], ['conf', configIcon], ['config', configIcon],
+  ['dockerfile', dockerIcon], ['gitignore', gitIcon],
+  ['pdf', pdfIcon], ['tex', texIcon], ['txt', textIcon], ['log', textIcon],
+  ['png', imageIcon], ['jpg', imageIcon], ['jpeg', imageIcon], ['gif', imageIcon], ['webp', imageIcon], ['bmp', imageIcon], ['ico', imageIcon], ['avif', imageIcon],
+  ['svg', svgIcon],
+  ['doc', wordIcon], ['docx', wordIcon],
+  ['xls', excelIcon], ['xlsx', excelIcon], ['csv', excelIcon],
+  ['ppt', powerpointIcon], ['pptx', powerpointIcon],
+  ['zip', zipIcon], ['rar', zipIcon], ['7z', zipIcon], ['tar', zipIcon], ['gz', zipIcon], ['tgz', zipIcon],
+  ['mp3', audioIcon], ['wav', audioIcon], ['flac', audioIcon], ['ogg', audioIcon], ['m4a', audioIcon],
+  ['mp4', videoIcon], ['mkv', videoIcon], ['webm', videoIcon], ['avi', videoIcon], ['mov', videoIcon],
+  ['ttf', fontIcon], ['otf', fontIcon], ['woff', fontIcon], ['woff2', fontIcon],
+  ['sql', sqlIcon], ['sqlite', sqliteIcon], ['sqlite3', sqliteIcon], ['db', sqliteIcon],
+  ['mmd', mermaidIcon], ['mermaid', mermaidIcon],
+])
+
 const rootRef = ref(null)
 const scrollTop = ref(0)
 const viewportH = ref(0)
@@ -114,6 +209,26 @@ const normId = (p) => {
   return s
 }
 const parentOf = (id) => normId(id).split('/').slice(0, -1).join('/')
+const getNodeName = (node) => String(node?.name || normId(node?.id).split('/').pop() || '')
+const getNodeExtension = (name) => {
+  const lower = String(name || '').toLowerCase()
+  if (lower.endsWith('.d.ts')) return 'd.ts'
+  const dot = lower.lastIndexOf('.')
+  return dot > 0 ? lower.slice(dot + 1) : lower
+}
+const getNodeIcon = (node) => {
+  if (node?.is_directory) {
+    return defaultFolderIcon
+  }
+
+  const name = getNodeName(node).trim().toLowerCase()
+  if (!name) return defaultFileIcon
+
+  const byName = FILE_NAME_ICON_MAP.get(name)
+  if (byName) return byName
+
+  return EXTENSION_ICON_MAP.get(getNodeExtension(name)) || defaultFileIcon
+}
 
 const expandedSet = computed(() => new Set((props.expandedKeys || []).map(normId)))
 const selectedSet = computed(() => new Set((props.selectedKeys || []).map(normId)))
@@ -391,9 +506,20 @@ onBeforeUnmount(() => {
 .twisty-ico { transition: transform 0.18s cubic-bezier(0.4, 0, 0.2, 1); }
 .twisty-ico.open { transform: rotate(90deg); }
 
-.vtree-icon { flex: 0 0 18px; display: inline-flex; align-items: center; justify-content: center; }
-.icon-dir { color: var(--n-color-primary, #3b82f6); }
-.icon-file { color: var(--guaxi-text-secondary, rgba(150, 158, 170, 0.95)); }
+.vtree-icon {
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.vtree-type-icon {
+  display: block;
+  flex: 0 0 auto;
+  pointer-events: none;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.16));
+}
 
 .vtree-label {
   flex: 1;

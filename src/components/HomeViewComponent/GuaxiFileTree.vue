@@ -1999,7 +1999,9 @@ const openNodeInNeovim = async (node, reason = 'file-tree-context-menu') => {
   }
 
   await invoke('neovim_open_path', { path: nodePath, isDirectory })
-  if (!isDirectory) {
+  if (isDirectory) {
+    editorBridgeStore.setNeovimRoot(nodePath, reason)
+  } else {
     await editorBridgeStore.trackFile(nodePath, fileTreeStore)
     editorBridgeStore.setOwner(nodePath, 'neovim', reason)
   }
@@ -2446,9 +2448,10 @@ const handleEditComplete = async (node, parentNode, isDirectory, isRoot, resolve
 
     resolve(node);
   } catch (error) {
-    logger.error('创建失败:', error);
+    const errorMessage = String(error?.message || error || '未知错误')
+    logger.error('创建失败:', { error: errorMessage, nodeId: node.id, isDirectory });
     removeTempNode()
-    message.error(`创建失败: ${error.message}`);
+    message.error(`创建失败: ${errorMessage}`);
     resolve(null);
   } finally {
     selectedKeys.value = [];
