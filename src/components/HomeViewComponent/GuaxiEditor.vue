@@ -32,7 +32,7 @@
 
 
       <div class="toolbar">
-        <div v-if="previewMode !== 'realtime' && editorSurfaceMode !== 'notebook'" class="toolbar-editing-actions" :class="{ 'is-preview-readonly': isPreviewOnlyReadonly }">
+        <div v-if="previewMode !== 'realtime' && editorSurfaceMode !== 'notebook'" class="toolbar-editing-actions" :class="{ 'is-preview-readonly': isPreviewOnlyReadonly || isCurrentFileObserverMode }">
           <n-dropdown trigger="click" :options="headingOptions" @select="handleHeadingSelect">
             <n-tooltip placement="top" trigger="hover">
               <template #trigger>
@@ -215,6 +215,15 @@
               </n-button>
             </template>
             {{ vimMode ? '禁用Vim模式' : '启用Vim模式' }}
+          </n-tooltip>
+
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text @click="openCurrentFileInNeovim">
+                <Icon :icon="squareTerminalIcon" width="16" height="16" />
+              </n-button>
+            </template>
+            {{ isCurrentFileObserverMode ? '同步并接管回 Guaxi' : '用 Neovim 编辑当前文件' }}
           </n-tooltip>
 
           <n-tooltip placement="top" trigger="hover">
@@ -1127,6 +1136,7 @@ import { createLogger } from '../../utils/logger'
 import { ref, computed, watch, onMounted, onUnmounted, onActivated, nextTick, provide, h } from 'vue'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useEditorStore } from '../../stores/editorStore'
+import { useEditorBridgeStore } from '../../stores/editorBridgeStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
@@ -1200,6 +1210,15 @@ import { buildPythonCellBlock, createPythonCellId, createPythonCellStableId, cre
 import { maskMathCellBlocksForMarkdown } from './utils/guaxiMathCellSyntax'
 import { getPythonCellSnapshot, patchPythonCellSnapshot } from './utils/guaxiPythonCellState'
 import { createMarkdownPreviewSegments } from './utils/guaxiNotebookCells'
+import {
+  CODE_BLOCK_SNIPPETS,
+  MARKDOWN_IMAGE_EXTENSIONS,
+  buildMarkdownImageResourceTarget,
+  buildMarkdownImageSyntax,
+  buildMarkdownTable,
+  joinResourceRepoPath,
+  normalizePickedLocalPath
+} from './utils/guaxiEditingCommands'
 import Vditor from 'vditor'
 import 'vditor/dist/index.css'
 import 'vditor/dist/method'
@@ -1537,6 +1556,7 @@ const gitPanel = ref(null)
 // 引入 Pinia store
 const fileTreeStore = useFileTreeStore()
 const editorStore = useEditorStore()
+const editorBridgeStore = useEditorBridgeStore()
 const settingsStore = useSettingsStore()
 const knowledgeBaseStore = useKnowledgeBaseStore()
 const rightSiderStore = useRightSiderStore()
@@ -2913,6 +2933,16 @@ const rawContent = ref(selectedFile.value?.content || '')
 // 1. 获取当前激活tab对象和内容
 const activeTab = computed(() => fileTreeStore.openTabs.find(tab => tab.path === fileTreeStore.activeTab));
 const activeTabContent = computed(() => activeTab.value?.content || '');
+const isCurrentFileObserverMode = computed(() => {
+  const path = String(activeTab.value?.path || selectedFile.value?.path || '').trim();
+  return !!path && editorBridgeStore.isMonacoReadonly(path);
+});
+const isActiveTabReadOnly = computed(() => !!activeTab.value?.unsupported || isCurrentFileObserverMode.value);
+const isPathReadonlyForMonaco = (path, tab = null) => {
+  if (tab?.unsupported) return true;
+  const normalizedPath = String(path || tab?.path || '').trim();
+  return !!normalizedPath && editorBridgeStore.isMonacoReadonly(normalizedPath);
+};
 const canUseNotebookSurface = computed(() => {
   const path = String(selectedFile.value?.path || '').trim().toLowerCase()
   if (!path.endsWith('.md') && !path.endsWith('.markdown')) return false
@@ -3632,26 +3662,8 @@ const headingOptions = [
 ]
 
 const codeBlockOptions = [
-  { label: '纯代码块', key: 'plain' },
   { label: 'Python Cell', key: 'pycell' },
-  { label: 'C', key: 'c' },
-  { label: 'C++', key: 'cpp' },
-  { label: 'Python', key: 'python' },
-  { label: 'Shell', key: 'bash' },
-  { label: 'Mermaid', key: 'mermaid' },
-  { label: 'Rust', key: 'rust' },
-  { label: 'JavaScript', key: 'javascript' },
-  { label: 'TypeScript', key: 'typescript' },
-  { label: 'Lua', key: 'lua' },
-  { label: 'HTML', key: 'html' },
-  { label: 'Perl', key: 'perl' },
-  { label: 'JSON', key: 'json' },
-  { label: 'XML', key: 'xml' },
-  { label: 'TeX', key: 'tex' },
-  { label: 'C#', key: 'csharp' },
-  { label: 'Lisp', key: 'lisp' },
-  { label: 'TOML', key: 'toml' },
-  { label: 'PowerShell', key: 'powershell' }
+  ...CODE_BLOCK_SNIPPETS.map(({ label, key }) => ({ label, key }))
 ]
 
 const tableInsertPopoverVisible = ref(false)
@@ -3687,26 +3699,6 @@ const clampInt = (value, min, max) => {
   return Math.max(min, Math.min(max, Math.floor(n)))
 }
 
-const buildMarkdownTable = (rows, cols) => {
-  const r = clampInt(rows, 2, tableInsertMaxRows)
-  const c = clampInt(cols, 1, tableInsertMaxCols)
-
-  const header = Array.from({ length: c }, (_, i) => `列${i + 1}`)
-  const sep = Array.from({ length: c }, () => '---')
-
-  const lines = []
-  lines.push(`| ${header.join(' | ')} |`)
-  lines.push(`| ${sep.join(' | ')} |`)
-
-  const bodyRows = Math.max(1, r - 1)
-  for (let i = 0; i < bodyRows; i += 1) {
-    const cells = Array.from({ length: c }, (_, idx) => (i === 0 ? `内容${idx + 1}` : ''))
-    lines.push(`| ${cells.join(' | ')} |`)
-  }
-
-  return `${lines.join('\n')}\n`
-}
-
 const insertTableWithSize = (rows, cols) => {
   if (!ensureMarkdownEditor()) return
 
@@ -3716,7 +3708,10 @@ const insertTableWithSize = (rows, cols) => {
 
   lastTableToolbarInsertAt = Date.now();
 
-  const snippet = buildMarkdownTable(rows, cols)
+  const snippet = buildMarkdownTable(rows, cols, {
+    maxRows: tableInsertMaxRows,
+    maxCols: tableInsertMaxCols
+  })
   insertBlockSnippet(snippet)
 
   nextTick(() => {
@@ -9825,7 +9820,7 @@ const initEditor = () => {
     value: rawContent.value,
     language: language,
     theme: themeName,
-    readOnly: !!activeTab.value?.unsupported,
+    readOnly: isActiveTabReadOnly.value,
     autoClosingBrackets: 'always',
     autoClosingQuotes: 'always',
     autoClosingDelete: 'auto',
@@ -10177,7 +10172,7 @@ const ensureSecondaryEditor = () => {
     ...baseOptions,
     value: rightTab?.content || '',
     language,
-    readOnly: !!rightTab?.unsupported,
+    readOnly: isPathReadonlyForMonaco(rightPath, rightTab),
     autoClosingBrackets: 'always',
     autoClosingQuotes: 'always',
     autoClosingDelete: 'auto',
@@ -13109,74 +13104,6 @@ const insertTable = () => {
   insertTableWithSize(2, 2)
 };
 
-const MARKDOWN_IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'];
-
-const sanitizeResourceFileSegment = (raw, fallback = 'image') => {
-  const normalized = String(raw || '')
-    .replace(/[<>:"/\\|?*\u0000-\u001f]+/g, '-')
-    .replace(/\s+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  return normalized || fallback;
-};
-
-const joinResourceRepoPath = (...parts) => parts
-  .map((part, index) => {
-    const normalized = String(part || '').replace(/\\/g, '/');
-    return index === 0 ? normalized.replace(/\/+$/g, '') : normalized.replace(/^\/+|\/+$/g, '');
-  })
-  .filter(Boolean)
-  .join('/');
-
-const normalizePickedLocalPath = (path) => {
-  const normalized = String(path || '').trim().replace(/\\/g, '/');
-  // 设计说明：Windows 下部分 WebView / file URL 场景会把 `C:/...` 传成 `/C:/...`。
-  // 后端复制文件前先在前端规整一次，避免资源入库阶段误判源文件不存在。
-  return normalized.replace(/^\/([a-zA-Z]:\/)/, '$1');
-};
-
-const getFileNameFromPath = (path) => {
-  const normalized = String(path || '').replace(/\\/g, '/');
-  return normalized.split('/').filter(Boolean).pop() || '';
-};
-
-const getMarkdownImageExtension = (path) => {
-  const fileName = getFileNameFromPath(path);
-  const ext = String(fileName.split('.').pop() || '').trim().toLowerCase();
-  return MARKDOWN_IMAGE_EXTENSIONS.includes(ext) ? ext : 'png';
-};
-
-const buildMarkdownImageResourceTarget = (sourcePath) => {
-  const now = new Date();
-  const year = String(now.getFullYear());
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  const stamp = [
-    year,
-    month,
-    day,
-    '_',
-    String(now.getHours()).padStart(2, '0'),
-    String(now.getMinutes()).padStart(2, '0'),
-    String(now.getSeconds()).padStart(2, '0'),
-    '_',
-    String(now.getMilliseconds()).padStart(3, '0')
-  ].join('');
-  const sourceName = getFileNameFromPath(sourcePath);
-  const ext = getMarkdownImageExtension(sourceName);
-  const stem = sanitizeResourceFileSegment(sourceName.replace(/\.[^.]+$/, ''), 'image');
-  const fileName = `${stem}-${stamp}.${ext}`;
-  const relativeDir = joinResourceRepoPath('images', year, month, day);
-  const relativePath = joinResourceRepoPath(relativeDir, fileName);
-
-  return {
-    fileName,
-    relativeDir,
-    relativePath,
-    alt: stem
-  };
-};
-
 const importMarkdownImageToResourceRepo = async (sourcePath) => {
   const normalizedSourcePath = normalizePickedLocalPath(sourcePath);
   if (!normalizedSourcePath) throw new Error('未选择图片文件');
@@ -13267,7 +13194,7 @@ const insertImage = async () => {
       const sourcePath = Array.isArray(selected) ? selected[0] : selected
       if (!sourcePath) return
       const imported = await importMarkdownImageToResourceRepo(sourcePath)
-      const md = `![${imported.alt}](${imported.url})`
+      const md = buildMarkdownImageSyntax(imported).trim()
       const pos = targetEditor.getPosition()
       targetEditor.executeEdits('org-insert-image', [{ range: new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column), text: md, forceMoveMarkers: true }])
       refreshOrgPreviewContent()
@@ -13297,7 +13224,7 @@ const insertImage = async () => {
     }
 
     const imported = await importMarkdownImageToResourceRepo(sourcePath);
-    const markdown = `![${imported.alt}](${imported.url})\n`;
+    const markdown = buildMarkdownImageSyntax(imported);
     const inserted = insertMarkdownTextAtCursor(markdown, 'markdown-image-insert');
     if (!inserted) throw new Error('插入失败：Markdown 编辑器未就绪');
     message.success('图片已导入资源库并插入');
@@ -13751,7 +13678,7 @@ const updateEditorContent = (content) => {
   if (!targetEditor) return;
 
   targetEditor.updateOptions({
-    readOnly: !!activeTab.value?.unsupported,
+    readOnly: isPathReadonlyForMonaco(getEditorBoundTabPath(targetEditor) || activeTab.value?.path, activeTab.value),
   });
 
   const boundPath = getEditorBoundTabPath(targetEditor)
@@ -13824,6 +13751,10 @@ const autoSaveDirtyTabs = async () => {
     for (const tab of dirtyTabs) {
       if (!tab?.path) continue
       if (tab.unsupported) continue
+      if (editorBridgeStore.isMonacoReadonly(tab.path)) {
+        logger.info('[EditorBridge] skip auto-save for Neovim-owned tab', { path: tab.path })
+        continue
+      }
       await fileTreeStore.updateFileContent(tab.path, tab.content)
     }
 
@@ -13837,12 +13768,79 @@ const autoSaveDirtyTabs = async () => {
 }
 
 // 保存内容
+const syncMonacoReadonlyState = (reason = 'manual') => {
+  const leftPath = String(fileTreeStore.activeTabLeft || fileTreeStore.activeTab || '').trim();
+  const rightPath = String(fileTreeStore.activeTabRight || '').trim();
+  const rightTab = rightPath ? fileTreeStore.openTabs.find((tab) => tab?.path === rightPath) : null;
+
+  if (editor) {
+    editor.updateOptions({ readOnly: isPathReadonlyForMonaco(leftPath || activeTab.value?.path, activeTab.value) });
+  }
+  if (secondaryEditor) {
+    secondaryEditor.updateOptions({ readOnly: isPathReadonlyForMonaco(rightPath, rightTab) });
+  }
+
+  logger.info('[EditorBridge] synchronized Monaco readonly state', {
+    reason,
+    leftPath,
+    rightPath,
+    leftOwner: leftPath ? editorBridgeStore.getOwner(leftPath) : '',
+    rightOwner: rightPath ? editorBridgeStore.getOwner(rightPath) : '',
+  });
+};
+
+const openCurrentFileInNeovim = async () => {
+  const targetPath = String(selectedFile.value?.path || activeTab.value?.path || '').trim();
+  if (!targetPath) {
+    message.warning('请先打开一个文件');
+    return;
+  }
+
+  try {
+    if (editorBridgeStore.isMonacoReadonly(targetPath)) {
+      const syncResult = await editorBridgeStore.absorbExternalChange(targetPath, fileTreeStore);
+      if (syncResult?.status === 'conflict') {
+        message.warning(syncResult.message || '检测到外部修改冲突，暂不能接管编辑');
+        return;
+      }
+      editorBridgeStore.setOwner(targetPath, 'monaco', 'toolbar-reclaim-current-file');
+      syncMonacoReadonlyState('reclaim-current-file-from-neovim');
+      message.info('已同步磁盘内容，Guaxi 接管当前文件编辑');
+      return;
+    }
+
+    if (activeTab.value?.dirty && !editorBridgeStore.isMonacoReadonly(targetPath)) {
+      logger.info('[EditorBridge] save dirty Guaxi tab before handing write ownership to Neovim', { targetPath });
+      await saveContent();
+    }
+
+    await invoke('neovim_open_path', { path: targetPath, isDirectory: false });
+    await editorBridgeStore.trackFile(targetPath, fileTreeStore);
+    editorBridgeStore.setOwner(targetPath, 'neovim', 'toolbar-open-current-file');
+    syncMonacoReadonlyState('open-current-file-in-neovim');
+    message.info('已交给 Neovim 编辑，Guaxi 将保持旁观同步');
+  } catch (error) {
+    logger.error('[EditorBridge] failed to open current file in Neovim', { targetPath, error });
+    editorBridgeStore.clearOwner(targetPath, 'neovim-open-failed');
+    syncMonacoReadonlyState('neovim-open-failed');
+    message.error(`打开 Neovim 失败: ${error?.message || error}`);
+  }
+};
+
 const saveContent = async () => {
   if (!selectedFile.value) return;
 
   if (activeTab.value?.unsupported) {
     message.warning('不支持编辑/保存该文件类型');
     return;
+  }
+
+  if (isCurrentFileObserverMode.value) {
+    const path = String(selectedFile.value?.path || activeTab.value?.path || '').trim();
+    const messageText = '当前文件正在由 Neovim 编辑，Guaxi 处于旁观状态，已阻止写入';
+    logger.warn('[EditorBridge] blocked Guaxi save while Neovim owns write access', { path });
+    message.warning(messageText);
+    throw new Error(messageText);
   }
 
   flushPythonCellDrafts()
@@ -13854,9 +13852,18 @@ const saveContent = async () => {
         ? targetEditor.getValue()
         : rawContent.value;
 
-  await fileTreeStore.updateFileContent(selectedFile.value.path, content);
-  await updateGitStatus();
-  message.info('修改已保存');
+  try {
+    await fileTreeStore.updateFileContent(selectedFile.value.path, content);
+    await updateGitStatus();
+    message.info('修改已保存');
+  } catch (error) {
+    logger.error('[EditorBridge] saveContent failed', {
+      path: selectedFile.value.path,
+      error,
+    });
+    message.error(`保存失败: ${error?.message || error}`);
+    throw error;
+  }
 
   if (rawContent.value !== content) {
     rawContent.value = content;
@@ -20862,6 +20869,19 @@ watch(lspEnabled, (enabled) => {
   scheduleSourceSyntaxHighlight(editor, 'setting')
   scheduleSourceSyntaxHighlight(secondaryEditor, 'setting')
 })
+
+watch(
+  [
+    () => ({ ...editorBridgeStore.owners }),
+    () => fileTreeStore.activeTabLeft,
+    () => fileTreeStore.activeTabRight,
+    () => fileTreeStore.activeTab,
+  ],
+  () => {
+    syncMonacoReadonlyState('owner-or-tab-watch')
+  },
+  { deep: true }
+)
 
 // 生命周期
 watch(

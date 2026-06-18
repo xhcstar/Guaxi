@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { invoke } from "@tauri-apps/api/core";
 import { createLogger } from "../utils/logger";
+import { useEditorBridgeStore } from "./editorBridgeStore";
 
 const logger = createLogger("fileTreeStore");
 const console = {
@@ -309,6 +310,15 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
       const existingTab = this.openTabs.find((tab) => normalizeTabPath(tab.path) === desiredKey);
       if (existingTab) {
         this.setActiveTab(existingTab.path, this.layoutMode === 'single' ? 'left' : this.activeRegion);
+        try {
+          const editorBridgeStore = useEditorBridgeStore();
+          await editorBridgeStore.trackFile(existingTab.path, this);
+        } catch (error) {
+          console.warn("[EditorBridge] track existing tab failed", {
+            path: existingTab.path,
+            error: String(error?.message || error || ""),
+          });
+        }
         return;
       }
 
@@ -349,6 +359,15 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
       }
 
       this.setActiveTab(path);
+      try {
+        const editorBridgeStore = useEditorBridgeStore();
+        await editorBridgeStore.trackFile(path, this);
+      } catch (error) {
+        console.warn("[EditorBridge] track file after open failed", {
+          path,
+          error: String(error?.message || error || ""),
+        });
+      }
     },
 
     // 获取文件内容
@@ -413,6 +432,9 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
 
     async updateFileContent(path, content) {
       try {
+        const editorBridgeStore = useEditorBridgeStore();
+        await editorBridgeStore.prepareWrite(path, "monaco", this);
+
         const normalizedContent = normalizeEditorContent(content);
         await invoke("write_file_content", { path, content: normalizedContent });
 
@@ -429,8 +451,11 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
         } else {
           console.warn("当前选中的文件与更新的文件不匹配，未更新 selectedFile");
         }
+
+        await editorBridgeStore.markAfterWrite(path, this);
       } catch (error) {
         console.error("更新文件内容失败:", error);
+        throw error;
       }
     },
 

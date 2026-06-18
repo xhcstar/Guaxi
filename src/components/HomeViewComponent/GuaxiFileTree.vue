@@ -118,6 +118,14 @@
             </n-tooltip>
             <n-tooltip trigger="hover">
               <template #trigger>
+                <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="openRootPathInNeovim(activeRepoPathItem, 'knowledge-root-active')">
+                  <n-icon :component="DocumentOutline" size="16" />
+                </n-icon-wrapper>
+              </template>
+              用 Neovim 打开目录
+            </n-tooltip>
+            <n-tooltip trigger="hover">
+              <template #trigger>
                 <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="handleDeleteKnowledgeBase(activeRepoPathItem)">
                   <n-icon :component="TrashOutline" size="16" />
                 </n-icon-wrapper>
@@ -186,6 +194,14 @@
                 </n-tooltip>
                 <n-tooltip trigger="hover">
                   <template #trigger>
+                    <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="openRootPathInNeovim(path, 'knowledge-root-inactive')">
+                      <n-icon :component="DocumentOutline" size="16" />
+                    </n-icon-wrapper>
+                  </template>
+                  用 Neovim 打开目录
+                </n-tooltip>
+                <n-tooltip trigger="hover">
+                  <template #trigger>
                     <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="handleDeleteKnowledgeBase(path)">
                       <n-icon :component="TrashOutline" size="16" />
                     </n-icon-wrapper>
@@ -232,6 +248,14 @@
                 </n-icon-wrapper>
               </template>
               新建文件夹
+            </n-tooltip>
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="openRootPathInNeovim(catPathOf(activeTaskCat), 'task-root-active')">
+                  <n-icon :component="DocumentOutline" size="16" />
+                </n-icon-wrapper>
+              </template>
+              用 Neovim 打开目录
             </n-tooltip>
           </div>
         </div>
@@ -289,6 +313,14 @@
                     </template>
                     新建文件夹
                   </n-tooltip>
+                  <n-tooltip trigger="hover">
+                    <template #trigger>
+                      <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="openRootPathInNeovim(catPathOf(cat.key), 'task-root-inactive')">
+                        <n-icon :component="DocumentOutline" size="16" />
+                      </n-icon-wrapper>
+                    </template>
+                    用 Neovim 打开目录
+                  </n-tooltip>
                 </div>
               </div>
             </n-list-item>
@@ -330,6 +362,14 @@
                 </n-icon-wrapper>
               </template>
               新建文件夹
+            </n-tooltip>
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="openRootPathInNeovim(externalDir, 'plain-root-active')">
+                  <n-icon :component="DocumentOutline" size="16" />
+                </n-icon-wrapper>
+              </template>
+              用 Neovim 打开目录
             </n-tooltip>
           </div>
         </div>
@@ -444,6 +484,7 @@ import { listen } from '@tauri-apps/api/event'
 import { NList, NListItem, NText, NTooltip, NIconWrapper } from 'naive-ui'
 import { RefreshOutline as RefreshIcon, ChevronDownOutline as ChevronDownIcon, ChevronForwardOutline as ChevronForwardIcon } from '@vicons/ionicons5'
 import { Folder20Regular as FolderIcon, ChannelAdd20Regular as FileAddIcon, FolderAdd20Regular as FolderAddIcon } from '@vicons/fluent'
+import { useEditorBridgeStore } from '../../stores/editorBridgeStore'
 
 const logger = createLogger('GuaxiFileTree')
 const message = useMessage();
@@ -544,6 +585,7 @@ const isMarkdownFilePath = (p) => {
 const fileTreeStore = useFileTreeStore()
 const knowledgeBaseStore = useKnowledgeBaseStore()
 const settingsStore = useSettingsStore()
+const editorBridgeStore = useEditorBridgeStore()
 const lastSelectedKey = ref(null);
 
 const fileTreeContainerRef = ref(null)
@@ -893,6 +935,11 @@ const contextMenuOptions = ref([
     label: '在文件浏览器中打开',
     key: 'openInExplorer',
     icon: () => h(NIcon, null, { default: () => h(FolderOutline) })
+  },
+  {
+    label: '用 Neovim 打开',
+    key: 'openInNeovim',
+    icon: () => h(NIcon, null, { default: () => h(DocumentOutline) })
   },
   {
     label: '在浏览器中查看',
@@ -1915,6 +1962,50 @@ const genOpenExplorer = async (node) => {
   if (target) await invoke('open_in_file_explorer', { path: target })
 }
 
+const openNodeInNeovim = async (node, reason = 'file-tree-context-menu') => {
+  if (!node?.id) return
+  const nodePath = normalizePath(node.id)
+  const isDirectory = !!node.is_directory
+
+  logger.info('[EditorBridge] open path in Neovim from file tree', {
+    path: nodePath,
+    isDirectory,
+    reason,
+  })
+
+  if (!isDirectory) {
+    const openTab = fileTreeStore.openTabs.find((tab) => normalizePath(tab?.path) === nodePath)
+    if (openTab?.dirty) {
+      logger.info('[EditorBridge] save dirty open tab before file-tree Neovim handoff', {
+        path: nodePath,
+        reason,
+      })
+      await fileTreeStore.updateFileContent(nodePath, openTab.content)
+    }
+  }
+
+  await invoke('neovim_open_path', { path: nodePath, isDirectory })
+  if (!isDirectory) {
+    await editorBridgeStore.trackFile(nodePath, fileTreeStore)
+    editorBridgeStore.setOwner(nodePath, 'neovim', reason)
+  }
+  message.info(isDirectory ? '已用 Neovim 打开目录' : '已交给 Neovim 编辑，Guaxi 将保持旁观同步')
+}
+
+const openRootPathInNeovim = async (path, reason = 'file-tree-root-action') => {
+  const rootPath = normalizePath(path)
+  if (!rootPath) {
+    message.warning('根目录路径为空，无法用 Neovim 打开')
+    return
+  }
+
+  logger.info('[EditorBridge] open root path in Neovim', {
+    path: rootPath,
+    reason,
+  })
+  await openNodeInNeovim({ id: rootPath, name: getDirDisplayName(rootPath), is_directory: true }, reason)
+}
+
 // 通用右键菜单
 const genMenuVisible = ref(false)
 const genMenuPos = ref({ x: 0, y: 0 })
@@ -1931,6 +2022,7 @@ const genMenuOptions = computed(() => {
       { label: '重命名', key: 'rename', icon: () => h(NIcon, null, { default: () => h(CreateOutline) }) },
       { label: '删除', key: 'delete', icon: () => h(NIcon, null, { default: () => h(TrashOutline) }) },
       { label: '在文件浏览器中打开', key: 'openInExplorer', icon: () => h(NIcon, null, { default: () => h(FolderOutline) }) },
+      { label: '用 Neovim 打开', key: 'openInNeovim', icon: () => h(NIcon, null, { default: () => h(DocumentOutline) }) },
     )
   }
   return base
@@ -1963,6 +2055,7 @@ const handleGenMenuSelect = async (key) => {
     else if (key === 'rename' && node) await genRename(mode, node)
     else if (key === 'delete' && node) await genDelete(mode, node)
     else if (key === 'openInExplorer' && node) await genOpenExplorer(node)
+    else if (key === 'openInNeovim' && node) await openNodeInNeovim(node, `file-tree-${mode}`)
   } catch (e) {
     logger.error('文件操作失败:', e)
     message.error('操作失败: ' + (e?.message || e))
@@ -2194,6 +2287,11 @@ const handleContextMenuSelect = async (key) => {
           if (targetPath) {
             await invoke('open_in_file_explorer', { path: targetPath });
           }
+        }
+        break;
+      case 'openInNeovim':
+        if (selectedNode.value) {
+          await openNodeInNeovim(selectedNode.value, 'knowledge-tree-context-menu');
         }
         break;
       case 'openInBrowser':
@@ -2805,6 +2903,28 @@ const handleFileRenamed = async (oldPath, newPath) => {
 };
 
 // 文件监控函数
+const handleExternalFileModified = async (changedPath) => {
+  const normalizedPath = normalizePath(changedPath)
+  if (!normalizedPath || isHiddenPath(normalizedPath)) return
+
+  try {
+    const result = await editorBridgeStore.absorbExternalChange(normalizedPath, fileTreeStore)
+    if (result?.status === 'synced') {
+      logger.info('[EditorBridge] synchronized external file modification into open tab', {
+        path: normalizedPath,
+        result,
+      })
+    } else if (result?.status === 'conflict') {
+      message.warning(result.message || '检测到外部修改冲突，已阻止自动覆盖')
+    }
+  } catch (error) {
+    logger.warn('[EditorBridge] failed to absorb external file modification', {
+      path: normalizedPath,
+      error,
+    })
+  }
+}
+
 const setupFileWatcher = async () => {
   try {
     logger.info('开始监控目录:', fileTreeStore.activeRepoPath)
@@ -2838,6 +2958,10 @@ const setupFileWatcher = async () => {
           pending: cellmetaAutoCommitPending
         })
         return
+      }
+
+      if (payload?.kind === 'Modify') {
+        void handleExternalFileModified(changedPath)
       }
 
       // 文件编辑模式 / 任务模式：刷新对应的树（不走 kb 逻辑）

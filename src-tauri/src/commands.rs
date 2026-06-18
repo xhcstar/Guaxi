@@ -54,3 +54,4 @@ pub mod synctex;
 pub mod task_block;
 pub mod taskmanager;
 pub mod task_manager_window;
+pub mod neovim;
