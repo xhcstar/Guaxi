@@ -3157,26 +3157,35 @@ onUnmounted(() => {
   background-color: rgba(65, 105, 225, 0.2);
 }
 
-/* 新增的标题栏样式 */
+/* 新增的标题栏样式
+ * 设计思路：顶部工具按钮数量固定，窄宽度下优先截断“知识编辑”标题，而不是让按钮换到第二行。
+ * 主布局已提高左侧栏最小宽度，这里作为样式兜底，避免其它入口调整宽度时再次挤压。
+ */
 .list-header {
   flex: 0 0 auto;
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
   padding: 12px 14px;
   margin-bottom: 0;
   background-color: var(--guaxi-header-bg);
   border-radius: 0;
   border-bottom: 1px solid var(--guaxi-border);
+  min-width: 0;
 }
 
 .header-actions {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
+  flex-wrap: nowrap;
   gap: 8px;
 }
 
 .title-container {
+  flex: 1 1 auto;
+  min-width: 0;
   display: flex;
   align-items: center;
   height: auto;
@@ -3195,6 +3204,11 @@ onUnmounted(() => {
   text-shadow: 0 1px 1px rgba(0, 0, 0, 0.05);
   display: flex;
   align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   margin: 0;
   padding: 0;
   line-height: 1.2;

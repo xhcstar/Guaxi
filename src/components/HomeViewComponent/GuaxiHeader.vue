@@ -600,6 +600,7 @@ function openAssistantPanel() {
 }
 
 const openCreateKnowledgeBase = () => {
+  logger.info('打开新建知识库表单')
   knowledgeBaseStore.toggleForm(true)
 }
 

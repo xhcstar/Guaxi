@@ -40,6 +40,9 @@ import GuaxiCenter from "./GuaxiCenter.vue"
 import GuaxiRightContent from "./GuaxiRightContent.vue"
 
 // 常量定义
+// 设计思路：左侧栏顶部“知识编辑”工具区包含 6 个紧凑图标，250px 会把标题和图标挤成多行。
+// 将拖拽下限提高到 330px，既保留可调空间，也保证工具栏在主界面中保持单行。
+const MIN_LEFT_SIDEBAR_WIDTH = 330
 const MIN_RIGHT_SIDEBAR_WIDTH = 350
 const MIN_CENTER_WIDTH = 320
 
@@ -102,16 +105,26 @@ const onMouseDownLeftSidebar = (event) => {
   document.body.classList.add('resizing')
   const startX = event.clientX
   const startWidth = leftSiderbarWidth.value
+  logger.info('开始拖动主界面左侧边栏', {
+    startWidth,
+    minWidth: MIN_LEFT_SIDEBAR_WIDTH,
+    windowWidth: windowWidth.value,
+  })
 
   const moveHandler = optimizedMove((e) => {
     const delta = e.clientX - startX
-    leftSiderbarWidth.value = Math.max(250, startWidth + delta)
+    leftSiderbarWidth.value = Math.max(MIN_LEFT_SIDEBAR_WIDTH, startWidth + delta)
   })
 
   const onMouseUp = () => {
     document.body.classList.remove('resizing')
     document.removeEventListener("mousemove", moveHandler)
     document.removeEventListener("mouseup", onMouseUp)
+    logger.info('结束拖动主界面左侧边栏', {
+      width: leftSiderbarWidth.value,
+      minWidth: MIN_LEFT_SIDEBAR_WIDTH,
+      windowWidth: windowWidth.value,
+    })
   }
 
   document.addEventListener("mousemove", moveHandler)
