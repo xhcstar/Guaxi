@@ -128,6 +128,114 @@ export function useSpeechDictation(onTranscript) {
     return { provider, model, endpoint }
   }
 
+  // 设计思路：
+  // 1. 部分 ASR 程序会把结构化识别结果直接写入 text 字段，形如一个 JSON 对象，甚至多个 JSON 对象连续输出。
+  // 2. 编辑器听写只需要最终可读文本，因此这里统一提取结构化结果中的 text 字段。
+  // 3. 如果返回本来就是普通文本，保持原样；这样兼容其他 provider，也避免把用户正常说出的花括号内容误删。
+  const joinTranscriptPieces = (pieces) => {
+    return pieces.reduce((acc, piece) => {
+      const current = String(piece || '').trim()
+      if (!current) return acc
+      if (!acc) return current
+      const prevLast = acc.slice(-1)
+      const nextFirst = current[0]
+      const shouldSeparate = /[A-Za-z0-9]$/.test(prevLast) && /^[A-Za-z0-9]/.test(nextFirst)
+      return `${acc}${shouldSeparate ? ' ' : ''}${current}`
+    }, '')
+  }
+
+  const extractJsonObjectTexts = (rawText) => {
+    const source = String(rawText || '').trim()
+    if (!source.includes('{') || !source.includes('}')) return []
+
+    const objects = []
+    let start = -1
+    let depth = 0
+    let inString = false
+    let escaped = false
+
+    for (let i = 0; i < source.length; i += 1) {
+      const ch = source[i]
+      if (inString) {
+        if (escaped) {
+          escaped = false
+        } else if (ch === '\\') {
+          escaped = true
+        } else if (ch === '"') {
+          inString = false
+        }
+        continue
+      }
+
+      if (ch === '"') {
+        inString = true
+        continue
+      }
+      if (ch === '{') {
+        if (depth === 0) start = i
+        depth += 1
+        continue
+      }
+      if (ch === '}' && depth > 0) {
+        depth -= 1
+        if (depth === 0 && start >= 0) {
+          objects.push(source.slice(start, i + 1))
+          start = -1
+        }
+      }
+    }
+
+    return objects
+      .map((item) => {
+        try {
+          const parsed = JSON.parse(item)
+          return typeof parsed?.text === 'string' ? parsed.text : ''
+        } catch (e) {
+          logger.warn('ASR 结构化片段解析失败', {
+            error: String(e?.message || e),
+            fragmentLength: item.length,
+          })
+          return ''
+        }
+      })
+      .filter((text) => String(text || '').trim())
+  }
+
+  const normalizeAsrTranscriptText = (payload) => {
+    if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+      return normalizeAsrTranscriptText(payload.text)
+    }
+
+    const rawText = String(payload || '').trim()
+    if (!rawText) return ''
+
+    try {
+      const parsed = JSON.parse(rawText)
+      if (Array.isArray(parsed)) {
+        const pieces = parsed.map((item) => (typeof item?.text === 'string' ? item.text : ''))
+        return joinTranscriptPieces(pieces)
+      }
+      if (parsed && typeof parsed === 'object' && typeof parsed.text === 'string') {
+        return String(parsed.text || '').trim()
+      }
+    } catch {
+      // 普通文本或多个 JSON 对象连续输出时会进入这里，下面继续做兼容解析。
+    }
+
+    const jsonTexts = extractJsonObjectTexts(rawText)
+    if (jsonTexts.length) {
+      const normalized = joinTranscriptPieces(jsonTexts)
+      logger.info('ASR 结构化返回已提取 text 字段', {
+        segmentCount: jsonTexts.length,
+        rawLength: rawText.length,
+        normalizedLength: normalized.length,
+      })
+      return normalized
+    }
+
+    return rawText
+  }
+
   // 把一段累积的源 PCM 切出来，转写并回调
   const flushUtterance = async () => {
     if (!captureLength) return
@@ -159,7 +267,14 @@ export function useSpeechDictation(onTranscript) {
           mime_type: 'audio/wav',
         },
       })
-      const text = String(resp?.text || '').trim()
+      const rawText = resp?.text ?? ''
+      const text = normalizeAsrTranscriptText(rawText)
+      if (String(rawText || '').trim() && text !== String(rawText || '').trim()) {
+        logger.info('ASR 转写结果已规整为纯文本', {
+          rawLength: String(rawText || '').trim().length,
+          textLength: text.length,
+        })
+      }
       if (text) {
         onTranscript?.(text)
       }
