@@ -1,5 +1,5 @@
 <template>
-  <div class="excerpt-navigator">
+  <div class="excerpt-navigator" ref="excerptNavigatorRef">
     <n-empty v-if="excerptResults.length === 0" description="暂无摘录笔记搜索结果" style="margin-top: 20px">
       <template #extra>
         <n-text depth="3">尝试不同的搜索词</n-text>
@@ -14,51 +14,51 @@
             <n-icon :component="item.expanded ? ChevronDown : ChevronRight" size="12" @click.stop="toggleFileExpand(item)"
               class="expand-icon" />
             <IconifyIcon v-bind="getFileIconPropsWithLog(item.file_path)" />
-            <span class="filename-text">{{ item.file_name }}</span>
-            <n-button size="tiny" type="primary" tertiary @click.stop="insertExcerpt(item)" class="insert-btn">
+            <span class="filename-text" :title="item.file_name || item.file_path">{{ item.file_name }}</span>
+            <n-button size="tiny" type="primary" tertiary @click.stop="insertExcerpt(item)" class="insert-btn" title="插入摘录内容">
               <template #icon>
                 <n-icon :component="TextGrammarArrowLeft20Regular" />
               </template>
               插入
             </n-button>
           </div>
-        </div>
 
-        <div v-if="item.expanded" class="file-content" @click.stop>
-          <n-spin :show="item.loading">
-            <div v-if="item.content" class="card-container">
-              <n-card v-for="card in item.content.cards" :key="card.id" class="excerpt-card">
-                <template #header>
-                  <div class="card-header">
-                    <n-tag :type="getCardTypeColor(card.type)" size="small">
-                      {{ formatCardType(card.type) }}
-                    </n-tag>
-                    <span class="card-title">{{ card.title }}</span>
-                    <span class="card-timestamp">{{ formatTimestamp(card.timestamp) }}</span>
-                  </div>
-                </template>
-
-                <div class="card-items">
-                  <div v-for="(cardItem, index) in card.items" :key="index" class="card-item">
-                    <div class="card-item-header">
-                      <div class="card-item-type">{{ formatCardItemType(cardItem.type) }}</div>
-                      <n-button size="tiny" type="primary" tertiary
-                        @click.stop="insertCardItem(cardItem, item.file_path)" class="card-item-insert">
-                        <template #icon>
-                          <n-icon :component="TextGrammarArrowLeft20Regular" size="14" />
-                        </template>
-                        插入
-                      </n-button>
+          <div v-if="item.expanded" class="file-content" @click.stop>
+            <n-spin :show="item.loading">
+              <div v-if="item.content" class="card-container">
+                <n-card v-for="card in item.content.cards" :key="card.id" class="excerpt-card">
+                  <template #header>
+                    <div class="card-header">
+                      <n-tag :type="getCardTypeColor(card.type)" size="small">
+                        {{ formatCardType(card.type) }}
+                      </n-tag>
+                      <span class="card-title">{{ card.title }}</span>
+                      <span class="card-timestamp">{{ formatTimestamp(card.timestamp) }}</span>
                     </div>
-                    <!-- 使用现有renderMarkdown接口渲染内容 -->
-                    <div class="card-item-rendered" v-html="renderedContents[cardItem.id] || cardItem.content"></div>
-                    <div class="card-item-timestamp">{{ formatTimestamp(cardItem.timestamp) }}</div>
+                  </template>
+
+                  <div class="card-items">
+                    <div v-for="(cardItem, index) in card.items" :key="index" class="card-item">
+                      <div class="card-item-header">
+                        <div class="card-item-type">{{ formatCardItemType(cardItem.type) }}</div>
+                        <n-button size="tiny" type="primary" tertiary
+                          @click.stop="insertCardItem(cardItem, item.file_path)" class="card-item-insert">
+                          <template #icon>
+                            <n-icon :component="TextGrammarArrowLeft20Regular" size="14" />
+                          </template>
+                          插入
+                        </n-button>
+                      </div>
+                      <!-- 使用现有renderMarkdown接口渲染内容 -->
+                      <div class="card-item-rendered" v-html="renderedContents[cardItem.id] || cardItem.content"></div>
+                      <div class="card-item-timestamp">{{ formatTimestamp(cardItem.timestamp) }}</div>
+                    </div>
                   </div>
-                </div>
-              </n-card>
-            </div>
-            <n-empty v-else-if="item.loading" description="无法加载文件内容" />
-          </n-spin>
+                </n-card>
+              </div>
+              <n-empty v-else-if="item.loading" description="无法加载文件内容" />
+            </n-spin>
+          </div>
         </div>
         </n-list-item>
       </n-list>
@@ -68,7 +68,7 @@
 
 <script setup>
 import { createLogger } from '../../utils/logger'
-import { h, defineComponent, ref, watch, nextTick } from 'vue';
+import { h, defineComponent, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import { Icon } from '@iconify/vue';
 import { invoke } from '@tauri-apps/api/core';
 import {
@@ -128,7 +128,9 @@ const siderStore = useSiderStore();
 const settingsStore = useSettingsStore()
 const renderedContents = ref({});
 const scrollbarRef = ref(null);
+const excerptNavigatorRef = ref(null);
 const activeExcerptIndex = ref(-1);
+let excerptResizeObserver = null;
 
 const props = defineProps({
   excerptResults: {
@@ -585,6 +587,32 @@ const handleKeydown = (e) => {
 
 defineExpose({ handleKeydown })
 
+// 设计思路：
+// 1. 摘录笔记面板跟随右侧栏宽度变化，列表项和“插入”按钮都应该重新占满可用宽度。
+// 2. 这里记录根节点实际尺寸，便于排查右侧栏拖拽后内部列表是否仍被旧宽度约束。
+const handleExcerptNavigatorResize = (entries = []) => {
+  const entry = entries[0]
+  const width = Math.round(entry?.contentRect?.width || excerptNavigatorRef.value?.clientWidth || 0)
+  const height = Math.round(entry?.contentRect?.height || excerptNavigatorRef.value?.clientHeight || 0)
+  logger.debug('[GuaxiNoteExcerpt] resize', {
+    width,
+    height,
+    resultCount: excerptResults.value.length,
+  })
+}
+
+onMounted(() => {
+  if (excerptNavigatorRef.value && typeof ResizeObserver !== 'undefined') {
+    excerptResizeObserver = new ResizeObserver(handleExcerptNavigatorResize)
+    excerptResizeObserver.observe(excerptNavigatorRef.value)
+  }
+})
+
+onBeforeUnmount(() => {
+  excerptResizeObserver?.disconnect?.()
+  excerptResizeObserver = null
+})
+
 // 监听搜索结果变化
 watch(() => props.excerptResults, (newVal) => {
   excerptResults.value = newVal.map(item => ({
@@ -609,17 +637,29 @@ watch(() => props.excerptResults, (newVal) => {
 
 <style scoped>
 .excerpt-navigator {
+  /* 设计思路：
+   * 1. 摘录面板原本由 list、结果项、展开内容、卡片和渲染内容多层边框叠加，宽度变化后容易出现杂乱的白线。
+   * 2. 这里统一使用更轻的 hairline 变量：外层结果项保留边界感，内部层级改用弱分隔线和留白表达结构。
+   * 3. 只调整视觉层级，不改变展开、插入和滚动等交互逻辑。
+   */
+  --excerpt-hairline: rgba(148, 163, 184, 0.18);
+  --excerpt-hairline-soft: rgba(148, 163, 184, 0.1);
+  --excerpt-surface-soft: rgba(148, 163, 184, 0.06);
   height: 100%;
   width: 100%;
+  min-width: 0;
   min-height: 0;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  container-type: inline-size;
 }
 
 .excerpt-scrollbar {
   flex: 1 1 0;
+  width: 100%;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
@@ -630,28 +670,40 @@ watch(() => props.excerptResults, (newVal) => {
 
 :deep(.n-list) {
   min-height: 0;
-  max-width: 475px;
   width: 100%;
+  max-width: none;
+  min-width: 0;
   padding: 0;
   margin: 0;
   overflow: hidden;
+  background: transparent;
+  border: none;
 }
 
 :deep(.n-list__content) {
   min-height: 0;
+  width: 100%;
+  min-width: 0;
 }
 
 :deep(.n-list-item) {
-  width: 100%;
-  max-width: 465px;
+  width: calc(100% - 4px);
+  max-width: none;
+  min-width: 0;
   margin: 2px !important;
   padding: 2px 0 !important;
+  border: none !important;
   transition: all 0.2s ease;
 }
 
 :deep(.n-list-item:hover) {
   transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  box-shadow: none;
+}
+
+:deep(.n-list-item__main) {
+  width: 100%;
+  min-width: 0;
 }
 
 :deep(.n-list::-webkit-scrollbar) {
@@ -682,28 +734,32 @@ watch(() => props.excerptResults, (newVal) => {
   min-width: 0;
   box-sizing: border-box;
   background: var(--guaxi-panel-bg);
-  border: 1px solid var(--guaxi-border);
+  border: 1px solid var(--excerpt-hairline);
   border-radius: 6px;
   box-shadow: none;
   padding: 8px;
   margin-bottom: 2px;
+  overflow: hidden;
 }
 
 .excerpt-result-item.is-active {
   background: var(--guaxi-header-bg);
-  box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.3),
-    0 2px 12px 0 rgba(7, 118, 161, 0.15);
+  border-color: rgba(33, 189, 236, 0.48);
+  box-shadow: inset 0 0 0 1px rgba(33, 189, 236, 0.22),
+    0 6px 16px rgba(7, 118, 161, 0.12);
 }
 
 /* 增强的悬停效果 */
 .n-list-item:hover .excerpt-result-item {
   background: var(--guaxi-header-bg);
-  box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.22),
-    0 2px 12px 0 rgba(0, 0, 0, 0.18);
+  border-color: rgba(33, 189, 236, 0.32);
+  box-shadow: inset 0 0 0 1px rgba(33, 189, 236, 0.14),
+    0 4px 12px rgba(0, 0, 0, 0.12);
 }
 
 .file-name {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   font-size: 14px;
@@ -712,8 +768,8 @@ watch(() => props.excerptResults, (newVal) => {
   width: 100%;
   cursor: pointer;
   min-width: 0;
-  max-width: 420px;
-  overflow: hidden;
+  max-width: none;
+  overflow: visible;
   padding-right: 8px;
   box-sizing: border-box;
   transition: color 0.2s;
@@ -725,7 +781,6 @@ watch(() => props.excerptResults, (newVal) => {
 }
 
 .filename-text {
-  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -733,10 +788,36 @@ watch(() => props.excerptResults, (newVal) => {
 }
 
 .insert-btn {
-  margin-left: auto;
-  flex-shrink: 0;
+  justify-self: end;
+  max-width: 72px;
+  min-width: 34px;
+  overflow: hidden;
   white-space: nowrap;
   transition: all 0.2s;
+}
+
+/* 设计思路：
+ * 1. 右侧栏拖窄时，文件名是最适合被压缩的内容，操作按钮必须保留在最右侧。
+ * 2. 在极窄宽度下只保留按钮图标，仍通过 title 保留“插入摘录内容”的提示。
+ */
+@container (max-width: 420px) {
+  .file-name {
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
+    gap: 6px;
+    padding-right: 4px;
+  }
+
+  .insert-btn {
+    max-width: 34px;
+    padding-left: 7px !important;
+    padding-right: 7px !important;
+    overflow: hidden;
+  }
+
+  .insert-btn :deep(.n-button__content) {
+    width: 0;
+    overflow: hidden;
+  }
 }
 
 /* 插入按钮悬停效果 */
@@ -760,12 +841,14 @@ watch(() => props.excerptResults, (newVal) => {
 
 .file-content {
   width: 100%;
-  background-color: var(--guaxi-header-bg);
-  border: 1px solid var(--guaxi-border);
-  border-radius: 6px;
-  margin-top: 8px;
+  background-color: var(--excerpt-surface-soft);
+  border: none;
+  border-top: 1px solid var(--excerpt-hairline-soft);
+  border-radius: 0;
+  margin: 8px -8px -8px;
+  padding: 10px 8px 8px;
   box-sizing: border-box;
-  overflow: visible;
+  overflow: hidden;
 }
 
 .card-container {
@@ -782,13 +865,29 @@ watch(() => props.excerptResults, (newVal) => {
   max-width: 100%;
   margin-bottom: 12px;
   box-sizing: border-box;
+  background: transparent;
+  border-color: var(--excerpt-hairline-soft);
   transition: all 0.2s;
 }
 
 /* 卡片悬停效果 */
 .excerpt-card:hover {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  border-color: var(--excerpt-hairline);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
   transform: translateY(-2px);
+}
+
+:deep(.excerpt-card.n-card) {
+  background: transparent;
+  border-color: var(--excerpt-hairline-soft);
+}
+
+:deep(.excerpt-card .n-card-header) {
+  border-bottom: 1px solid var(--excerpt-hairline-soft);
+}
+
+:deep(.excerpt-card .n-card__content) {
+  padding-top: 10px;
 }
 
 .card-header {
@@ -821,8 +920,8 @@ watch(() => props.excerptResults, (newVal) => {
 
 .card-item {
   padding: 12px;
-  margin-bottom: 8px;
-  border-bottom: 1px solid var(--guaxi-border);
+  margin-bottom: 0;
+  border-bottom: 1px solid var(--excerpt-hairline-soft);
   width: 100%;
   box-sizing: border-box;
   transition: all 0.2s;
@@ -830,8 +929,12 @@ watch(() => props.excerptResults, (newVal) => {
 
 /* 卡片项悬停效果 */
 .card-item:hover {
-  background-color: var(--guaxi-header-bg);
+  background-color: var(--excerpt-surface-soft);
   border-radius: 4px;
+}
+
+.card-item:last-child {
+  border-bottom: none;
 }
 
 .card-item-header {
@@ -871,10 +974,10 @@ watch(() => props.excerptResults, (newVal) => {
   max-width: 100%;
   margin: 8px 0;
   padding: 8px;
-  background: var(--guaxi-panel-bg);
+  background: transparent;
   color: var(--guaxi-text-primary);
   border-radius: 4px;
-  border: 1px solid var(--guaxi-border);
+  border: 1px solid var(--excerpt-hairline-soft);
   box-sizing: border-box;
   overflow: auto;
   word-wrap: break-word;
@@ -884,8 +987,8 @@ watch(() => props.excerptResults, (newVal) => {
 
 /* 渲染内容悬停效果 */
 .card-item:hover .card-item-rendered {
-  background-color: var(--guaxi-content-bg);
-  border-color: var(--guaxi-border);
+  background-color: rgba(148, 163, 184, 0.04);
+  border-color: var(--excerpt-hairline);
 }
 
 .card-item-rendered :deep(a),
@@ -943,14 +1046,14 @@ watch(() => props.excerptResults, (newVal) => {
 .card-item-rendered :deep(table td),
 .card-item-rendered :deep(table th) {
   padding: 6px 13px;
-  border: 1px solid var(--guaxi-border);
+  border: 1px solid var(--excerpt-hairline);
 }
 
 .card-item-rendered :deep(blockquote) {
   margin: 0;
   padding: 0 1em;
   color: var(--guaxi-text-secondary);
-  border-left: 0.25em solid var(--guaxi-border);
+  border-left: 0.25em solid var(--excerpt-hairline);
 }
 
 /* 加载状态动画增强 */

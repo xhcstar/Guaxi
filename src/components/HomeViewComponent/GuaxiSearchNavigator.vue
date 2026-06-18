@@ -144,6 +144,7 @@ const noteListRef = ref(null);
 const excerptRef = ref(null);
 const activeResultIndex = ref(-1);
 const activeResultKey = ref('');
+let navigatorResizeObserver = null;
 
 const focusNavigator = (reason = 'focus') => {
   const el = navigatorRef.value
@@ -671,6 +672,25 @@ const scrollActiveIntoView = () => {
   listRef.scrollTo({ index: idx })
 }
 
+// 设计思路：
+// 1. 搜索面板放在可拖动的右侧栏里，宽度变化时不能再依赖初始 490px 布局。
+// 2. 这里监听根节点尺寸变化，一方面记录实际适配宽度，另一方面在下一帧轻触虚拟列表滚动位置，
+//    让结果列表在侧栏拉宽后重新按新的容器宽度排布。
+const handleNavigatorResize = (entries = []) => {
+  const entry = entries[0]
+  const width = Math.round(entry?.contentRect?.width || navigatorRef.value?.clientWidth || 0)
+  const height = Math.round(entry?.contentRect?.height || navigatorRef.value?.clientHeight || 0)
+  logger.debug('[GuaxiSearchNavigator] resize', {
+    width,
+    height,
+    activeTab: activeTab.value,
+  })
+
+  window.requestAnimationFrame(() => {
+    scrollActiveIntoView()
+  })
+}
+
 const setActiveResultIndex = (index) => {
   const list = activeResultList.value
   if (!list.length) {
@@ -890,6 +910,10 @@ onMounted(() => {
 
   // 注册全局键盘监听，保证方向键可用
   window.addEventListener('keydown', handleGlobalKeydown, true)
+  if (navigatorRef.value && typeof ResizeObserver !== 'undefined') {
+    navigatorResizeObserver = new ResizeObserver(handleNavigatorResize)
+    navigatorResizeObserver.observe(navigatorRef.value)
+  }
   logger.debug('[GuaxiSearchNavigator] global keydown listener registered', { capture: true })
 });
 
@@ -897,6 +921,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   debouncedScroll.cancel();
   window.removeEventListener('keydown', handleGlobalKeydown, true)
+  navigatorResizeObserver?.disconnect?.()
+  navigatorResizeObserver = null
   logger.debug('[GuaxiSearchNavigator] global keydown listener removed')
 });
 </script>
@@ -906,7 +932,7 @@ onBeforeUnmount(() => {
   height: 100%;
   width: 100%;
   min-width: 0;
-  max-width: 490px;
+  max-width: none;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -915,10 +941,39 @@ onBeforeUnmount(() => {
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
 }
 
+.search-navigator:focus,
+.search-navigator:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+/* 设计思路：
+ * 1. 搜索面板打开后会自动聚焦根节点，浏览器默认 focus outline 在暗色主题下会显成一圈白边。
+ * 2. Naive UI Tabs 的导航区也带有默认边界色，这里统一接入 Guaxi 的面板/边框变量，让首次打开和拖拽后都贴合主题。
+ */
+:deep(.n-tabs-nav) {
+  background: var(--guaxi-panel-bg);
+  border-color: var(--guaxi-border) !important;
+}
+
+:deep(.n-tabs-nav-scroll-wrapper) {
+  border-color: var(--guaxi-border) !important;
+}
+
+:deep(.n-tabs-tab) {
+  outline: none;
+}
+
+:deep(.n-tabs-bar) {
+  background-color: var(--n-color-primary, #1890ff) !important;
+}
+
 .n-tabs {
   display: flex;
   flex-direction: column;
   height: 100%;
+  width: 100%;
+  min-width: 0;
   overflow: hidden;
 }
 
@@ -952,6 +1007,8 @@ onBeforeUnmount(() => {
 
 :deep(.n-tabs) {
   height: 100%;
+  width: 100%;
+  min-width: 0;
   display: flex;
   flex-direction: column;
 }
@@ -959,6 +1016,8 @@ onBeforeUnmount(() => {
 :deep(.n-tabs-content) {
   flex: 1 1 0;
   min-height: 0;
+  width: 100%;
+  min-width: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -969,6 +1028,8 @@ onBeforeUnmount(() => {
 :deep(.n-tab-pane) {
   flex: 1 1 0;
   min-height: 0;
+  width: 100%;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   padding: 0 !important;
@@ -1242,6 +1303,8 @@ onBeforeUnmount(() => {
 :deep(.n-tabs-pane-wrapper) {
   flex: 1 1 0;
   min-height: 0;
+  width: 100%;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;

@@ -33,14 +33,17 @@
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from "vue"
+import { createLogger } from '../../utils/logger'
 import { useSiderStore } from '../../stores/useSiderStore'
 import GuaxiSidebar from "./GuaxiSidebar.vue"
 import GuaxiCenter from "./GuaxiCenter.vue"
 import GuaxiRightContent from "./GuaxiRightContent.vue"
 
 // 常量定义
-const MAX_RIGHT_SIDEBAR_WIDTH = 490
 const MIN_RIGHT_SIDEBAR_WIDTH = 350
+const MIN_CENTER_WIDTH = 320
+
+const logger = createLogger('GuaxiContent')
 
 // 响应式状态
 const leftSiderbarWidth = ref(350)
@@ -62,8 +65,14 @@ const isRightSiderCollapsed = computed({
 // 窗口大小变化处理
 const updateWindowWidth = () => {
   windowWidth.value = window.innerWidth
-  if (rightSiderbarWidth.value > windowWidth.value) {
-    rightSiderbarWidth.value = windowWidth.value
+  const maxWidth = getMaxRightSidebarWidth()
+  if (rightSiderbarWidth.value > maxWidth) {
+    logger.info('主界面右侧边栏随窗口变化收缩', {
+      previousWidth: rightSiderbarWidth.value,
+      nextWidth: maxWidth,
+      windowWidth: windowWidth.value,
+    })
+    rightSiderbarWidth.value = maxWidth
   }
 }
 
@@ -119,13 +128,14 @@ const onMouseDownRightSidebar = (event) => {
 
   const startX = event.clientX
   const startWidth = rightSiderbarWidth.value
+  logger.info('开始拖动主界面右侧边栏', {
+    startWidth,
+    windowWidth: windowWidth.value,
+  })
 
   const onMouseMove = (e) => {
     const newWidth = startWidth + (startX - e.clientX)
-    rightSiderbarWidth.value = Math.max(
-      MIN_RIGHT_SIDEBAR_WIDTH,
-      Math.min(MAX_RIGHT_SIDEBAR_WIDTH, newWidth)
-    )
+    rightSiderbarWidth.value = clampRightSidebarWidth(newWidth)
   }
 
   const onMouseUp = () => {
@@ -134,10 +144,31 @@ const onMouseDownRightSidebar = (event) => {
     document.body.classList.remove('resizing')
     sider.style.transition = ''
     sider.style.userSelect = ''
+    logger.info('结束拖动主界面右侧边栏', {
+      width: rightSiderbarWidth.value,
+      windowWidth: windowWidth.value,
+    })
   }
 
   document.addEventListener('mousemove', onMouseMove)
   document.addEventListener('mouseup', onMouseUp, { once: true })
+}
+
+// 设计思路：
+// 1. 主界面右侧栏之前被固定最大 490px 限制，导致和其他页面相比无法自由拉宽。
+// 2. 这里改成按当前窗口、左侧栏和中间编辑区最小可用宽度动态计算最大值。
+// 3. 保留中间区域 320px 的最低宽度，避免右侧栏拖得过大后把编辑器完全挤没。
+const getMaxRightSidebarWidth = () => {
+  const leftWidth = isLeftSiderCollapsed.value ? 0 : leftSiderbarWidth.value
+  const maxWidth = windowWidth.value - leftWidth - MIN_CENTER_WIDTH
+  return Math.max(MIN_RIGHT_SIDEBAR_WIDTH, maxWidth)
+}
+
+const clampRightSidebarWidth = (width) => {
+  return Math.max(
+    MIN_RIGHT_SIDEBAR_WIDTH,
+    Math.min(getMaxRightSidebarWidth(), width)
+  )
 }
 </script>
 
