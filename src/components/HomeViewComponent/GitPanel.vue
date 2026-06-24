@@ -692,10 +692,11 @@ const ensureGuaxiMonacoThemes = () => {
       'editorGutter.background': '#fafafa',
       // 设计说明：Git diff 的整行背景保持低透明度，优先保证注释/灰色文本可读；
       // 字符级差异略强一点，便于在浅色主题中精确定位实际变更。
-      'diffEditor.insertedLineBackground': '#28a74510',
-      'diffEditor.removedLineBackground': '#cb243110',
-      'diffEditor.insertedTextBackground': '#28a74526',
-      'diffEditor.removedTextBackground': '#cb243126',
+      // 透明度（末两位 alpha）保持不变，仅把基色换成更鲜艳的绿/红，提升新增/删除的辨识度。
+      'diffEditor.insertedLineBackground': '#22c55e10',
+      'diffEditor.removedLineBackground': '#ef444410',
+      'diffEditor.insertedTextBackground': '#22c55e26',
+      'diffEditor.removedTextBackground': '#ef444426',
       'scrollbar.shadow': '#00000033'
     }
   })
@@ -743,10 +744,11 @@ const ensureGuaxiMonacoThemes = () => {
       'editorGutter.background': '#282c34',
       // 设计说明：暗色 diff 中红/绿背景容易和注释 token 叠加变浑浊；
       // 线级颜色只做轻提示，字符级颜色保留稍高对比，贴近 VS Code 的阅读体验。
-      'diffEditor.insertedLineBackground': '#28a74512',
-      'diffEditor.removedLineBackground': '#cb243112',
-      'diffEditor.insertedTextBackground': '#28a7452e',
-      'diffEditor.removedTextBackground': '#cb24312e',
+      // 透明度（末两位 alpha）保持不变，仅把基色换成更鲜艳的绿/红，提升新增/删除的辨识度。
+      'diffEditor.insertedLineBackground': '#22c55e12',
+      'diffEditor.removedLineBackground': '#ef444412',
+      'diffEditor.insertedTextBackground': '#22c55e2e',
+      'diffEditor.removedTextBackground': '#ef44442e',
       'scrollbar.shadow': '#00000066'
     }
   })
