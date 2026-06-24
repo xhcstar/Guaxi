@@ -538,14 +538,36 @@ const toggleBrowserPreview = async () => {
   }
 }
 
+// 设计说明：Git 操作应针对“当前可见模式”的根目录，而不是固定的知识库根目录。
+// 三种模式各自维护独立根目录（与 syncSidebarNavigationContext 一致）：
+//   kb    → fileTreeStore.activeRepoPath（当前激活的知识库）
+//   plain → externalDir（文件编辑模式打开的外部目录）
+//   task  → 当前激活任务分类子目录
+// 之前一律用 settingsStore.knowledgeBasesRoot，导致切换模式后 Git 面板仍指向知识库根仓库，
+// 既不会随模式切换，也会把“另一个仓库”的改动错当成当前文件的改动（看似没改却显示有改动、退不掉）。
+const resolveCurrentModeRepoPath = () => {
+  if (viewMode.value === 'plain') {
+    return externalDir.value || ''
+  }
+  if (viewMode.value === 'task') {
+    return catPathOf(activeTaskCat.value) || ''
+  }
+  return fileTreeStore.activeRepoPath || ''
+}
+
 const toggleGitPanel = async () => {
-  if (!settingsStore.knowledgeBasesRoot) {
-    await settingsStore.get_knowledgeBasesRoot()
+  let workspacePath = resolveCurrentModeRepoPath()
+
+  // 知识库模式下若尚无激活仓库，回退到知识库根目录。
+  if (!workspacePath && viewMode.value === 'kb') {
+    if (!settingsStore.knowledgeBasesRoot) {
+      await settingsStore.get_knowledgeBasesRoot()
+    }
+    workspacePath = settingsStore.knowledgeBasesRoot
   }
 
-  const workspacePath = settingsStore.knowledgeBasesRoot
   if (!workspacePath) {
-    message.error('未配置知识库根目录')
+    message.error('当前模式没有可用于 Git 操作的目录')
     return
   }
 

@@ -2,7 +2,7 @@
   <!-- 主容器 - 直接作为页面内容 -->
   <div class="gitkraken-container">
     <!-- 左侧面板 - 类似VSCode的Git面板 -->
-    <div class="git-sidebar" ref="sidebar" :style="{ width: isSidebarCollapsed ? '0px' : '350px' }">
+    <div class="git-sidebar" ref="sidebar" :style="{ width: isSidebarCollapsed ? '0px' : sidebarWidth + 'px' }">
       <!-- 侧边栏右侧拖动条 -->
       <div class="sidebar-resize-handle" @mousedown="startSidebarDrag"></div>
 
@@ -818,6 +818,10 @@ const sidebar = ref(null)
 const changesSection = ref(null)
 const commitsSection = ref(null)
 const isDraggingSidebar = ref(false)
+// 设计说明：侧边栏宽度改为响应式来源。此前模板绑定的是常量 350px，拖动只命令式地写 inline
+// style，任何响应式重渲染（如每 5s 的 Git 状态自动刷新）都会把宽度复位回 350px，导致拖宽后
+// 又自动缩回、最右侧暂存/丢弃图标被裁掉。用 ref 驱动后，拖动结果会被保留。
+const sidebarWidth = ref(350)
 const startY = ref(0)
 const startX = ref(0)
 const initialHeightChanges = ref(0)
@@ -2209,7 +2213,7 @@ const handleCreateBranch = async () => {
 const startSidebarDrag = (e) => {
   isDraggingSidebar.value = true
   startX.value = e.clientX
-  initialWidthSidebar.value = parseInt(getComputedStyle(sidebar.value).width)
+  initialWidthSidebar.value = sidebarWidth.value
   document.body.style.cursor = 'col-resize'
   document.addEventListener('mousemove', handleSidebarDrag)
   document.addEventListener('mouseup', stopSidebarDrag)
@@ -2221,7 +2225,8 @@ const handleSidebarDrag = (e) => {
     const dx = e.clientX - startX.value
     const newWidth = initialWidthSidebar.value + dx
     if (newWidth > 200 && newWidth < 600) {
-      sidebar.value.style.width = `${newWidth}px`
+      // 更新响应式宽度（而非直接写 inline style），避免重渲染时被模板复位。
+      sidebarWidth.value = newWidth
     }
   }
 }
@@ -4176,19 +4181,24 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 
+/* 设计说明：此前 .commit-history-spin 与内部 .n-spin-container 都设了 min-height:100%。
+   但 .commit-history-spin 自身高度是 auto（不定高），其子级的 100% 百分比无法解析，
+   于是在内容不足/展开提交导致布局变化时会留下一段无法消除的“死区”空白。改为让内容随
+   .n-spin-content 自然撑开、由外层 .commits-list（flex:1; overflow-y:auto）负责滚动，
+   既能占满又不会出现底部空白。 */
 .commit-history-spin {
-  min-height: 100%;
+  min-height: 0;
 }
 
 .commit-history-spin :deep(.n-spin-container) {
-  min-height: 100%;
+  min-height: 0;
   height: auto;
   display: flex;
   flex-direction: column;
 }
 
 .commit-history-spin :deep(.n-spin-content) {
-  flex: 1 0 auto;
+  flex: 1 1 auto;
   min-height: 0;
 }
 

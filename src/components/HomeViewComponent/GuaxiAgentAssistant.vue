@@ -477,10 +477,9 @@ const handleModelChange = (value) => {
 
 const handleTaskChange = (value) => {
   rightSiderStore.setAssistantTask(value)
-  // 非对话类任务默认切到本地 LocalQwen(id 9)，用户仍可手动改回其它模型
-  if (value && value !== 'chat') {
-    rightSiderStore.setAssistantModelId(9)
-  }
+  // 设计说明：此前非对话类任务（agent/文档编写/分类/整理/打标签）会被强制切到本地
+  // LocalQwen(id 9)，相当于限制只能用该模型。后端的 doc_agent_process / agent_chat_stream
+  // 实际都按用户所选 modelid 执行，因此不再强制切换，让当前所选模型对所有任务生效。
 }
 
 // 取当前编辑器文档：优先选区，其次全文
@@ -2049,14 +2048,20 @@ const sendQuestion = async () => {
   display: flex;
   align-items: center;
   gap: 8px;
+  /* 设计说明：面板被压窄时允许换行，避免下拉框/发送按钮溢出输入框外壳。 */
+  flex-wrap: wrap;
 }
 
+/* 设计说明：两个下拉框由定宽改为可收缩弹性项（min-width:0 允许低于内容宽度收缩），
+   n-select 内部默认占满容器，因此窄宽下会一起收缩/换行而不撑破父容器。 */
 .composer-model-select {
-  width: 172px;
+  flex: 2 1 120px;
+  min-width: 0;
 }
 
 .composer-task-select {
-  width: 104px;
+  flex: 1 1 88px;
+  min-width: 0;
 }
 
 .composer-task-select :deep(.n-base-selection) {
@@ -2072,6 +2077,7 @@ const sendQuestion = async () => {
 }
 
 .composer-icon-btn {
+  flex: 0 0 auto;
   border: 1px solid transparent;
   background: transparent;
   color: var(--guaxi-text-secondary);
@@ -2096,10 +2102,12 @@ const sendQuestion = async () => {
 }
 
 .composer-spacer {
-  flex: 1 1 auto;
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .send-btn {
+  flex: 0 0 auto;
   width: 34px;
   height: 34px;
   border-radius: 10px;
