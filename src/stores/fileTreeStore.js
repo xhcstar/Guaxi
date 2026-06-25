@@ -53,12 +53,16 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
     selectedFile: null,
     repopathlist: [],
     activeRepoPath: null, // 当前激活的笔记库路径
+    // 设计说明：openTabs 退化为「按路径唯一的文件登记表」(持有 content/savedContent/dirty/preview 等)，
+    // 同一文件在两侧分屏时共享同一条登记。每个 pane 的标签顺序由独立的路径列表维护，允许同一路径
+    // 同时出现在两侧 → 实现同文件分屏。取代旧的「openTabs 数组 + splitIndex 切分点」模型。
     openTabs: [],
     activeTab: null,
     activeTabLeft: null,
     activeTabRight: null,
     layoutMode: 'single',
-    splitIndex: null,
+    leftTabPaths: [],
+    rightTabPaths: [],
     activeRegion: 'left',
     // 左侧边栏当前浏览上下文：
     // 1. 知识库、普通文件、任务三种模式使用不同的根目录与树数据，不能只依赖 activeRepoPath。
@@ -166,34 +170,121 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
         text: result.searchText, // 这里改为 text
       };
     },
-    // 关闭标签页
+    // ───── 分屏 pane 标签列表辅助 ─────
+    otherRegion(region) {
+      return region === 'right' ? 'left' : 'right';
+    },
+    paneListFor(region) {
+      return region === 'right' ? this.rightTabPaths : this.leftTabPaths;
+    },
+    paneHasPath(region, path) {
+      const key = normalizeTabPath(path);
+      return this.paneListFor(region).some((p) => normalizeTabPath(p) === key);
+    },
+    addPathToPane(region, path) {
+      if (!path || this.paneHasPath(region, path)) return;
+      if (region === 'right') this.rightTabPaths.push(path);
+      else this.leftTabPaths.push(path);
+    },
+    removePathFromPane(region, path) {
+      const key = normalizeTabPath(path);
+      const next = this.paneListFor(region).filter((p) => normalizeTabPath(p) !== key);
+      if (region === 'right') this.rightTabPaths = next;
+      else this.leftTabPaths = next;
+    },
+    pathOpenAnywhere(path) {
+      const key = normalizeTabPath(path);
+      return this.leftTabPaths.some((p) => normalizeTabPath(p) === key)
+        || this.rightTabPaths.some((p) => normalizeTabPath(p) === key);
+    },
+    // 当某路径不再被任何 pane 引用时，从登记表移除其内容条目。
+    pruneOrphanTab(path) {
+      if (this.pathOpenAnywhere(path)) return;
+      const key = normalizeTabPath(path);
+      this.openTabs = this.openTabs.filter((t) => normalizeTabPath(t.path) !== key);
+    },
+    // 任意标签/朝向变化后，归一化分屏布局（右空回单屏、左空则右转左、全空则重置）。
+    normalizeSplitLayout() {
+      if (this.leftTabPaths.length === 0 && this.rightTabPaths.length === 0) {
+        this.activeTab = null;
+        this.activeTabLeft = null;
+        this.activeTabRight = null;
+        this.selectedFile = null;
+        this.layoutMode = 'single';
+        this.activeRegion = 'left';
+        return;
+      }
+      if (this.layoutMode === 'single') {
+        this.rightTabPaths = [];
+        this.activeTabRight = null;
+        return;
+      }
+      if (this.rightTabPaths.length === 0) {
+        this.layoutMode = 'single';
+        this.activeRegion = 'left';
+        this.activeTabRight = null;
+        return;
+      }
+      if (this.leftTabPaths.length === 0) {
+        // 左侧空：把右侧提升为左侧（保持 left 为主），回单屏。
+        this.leftTabPaths = this.rightTabPaths;
+        this.rightTabPaths = [];
+        this.activeTabLeft = this.activeTabRight;
+        this.activeTabRight = null;
+        this.layoutMode = 'single';
+        this.activeRegion = 'left';
+      }
+    },
+
+    // 关闭标签页（按 pane 维度：仅从指定/激活侧移除；该路径不在任何侧时才删除其内容条目）
     closeTab(path, region) {
-      const index = this.openTabs.findIndex((tab) => tab.path === path);
-      if (index === -1) return;
+      const key = normalizeTabPath(path);
+      const closingTab = this.openTabs.find((tab) => normalizeTabPath(tab.path) === key);
+      if (!closingTab && !this.pathOpenAnywhere(path)) return;
 
-      const closingTab = this.openTabs[index];
-      const beforeSplitIndex = this.splitIndex;
-      const beforeLayoutMode = this.layoutMode;
-      const inferredRegion =
-        beforeLayoutMode !== 'single' && beforeSplitIndex != null
-          ? index < beforeSplitIndex
-            ? 'left'
-            : 'right'
-          : 'left';
+      let closingRegion = region || this.activeRegion || 'left';
+      if (this.layoutMode === 'single') closingRegion = 'left';
+      else if (!this.paneHasPath(closingRegion, path)) {
+        closingRegion = this.paneHasPath('right', path) ? 'right' : 'left';
+      }
 
-      const closingRegion = region || inferredRegion;
-      const notifyFileClosed = () => {
+      // 记录该侧关闭前位置，用于回填相邻标签为激活。
+      const listBefore = this.paneListFor(closingRegion);
+      const closingIndex = listBefore.findIndex((p) => normalizeTabPath(p) === key);
+
+      // 仅从该侧移除。
+      this.removePathFromPane(closingRegion, path);
+
+      // 回填该侧激活标签（若关闭的正是该侧激活标签）。
+      const activeField = closingRegion === 'right' ? 'activeTabRight' : 'activeTabLeft';
+      if (normalizeTabPath(this[activeField]) === key) {
+        const listAfter = this.paneListFor(closingRegion);
+        const nextIndex = Math.min(Math.max(0, closingIndex), listAfter.length - 1);
+        this[activeField] = listAfter[nextIndex] || null;
+      }
+
+      // 该路径已不在任何 pane → 真正关闭文件：删除内容条目并发关闭事件。
+      const trulyClosed = !this.pathOpenAnywhere(path);
+      if (trulyClosed) this.pruneOrphanTab(path);
+
+      // 归一化布局，再同步当前激活文件。
+      this.normalizeSplitLayout();
+      const focusRegion = this.activeRegion || 'left';
+      const focusPath = (focusRegion === 'right' ? this.activeTabRight : this.activeTabLeft)
+        || this.activeTabLeft || this.activeTabRight || null;
+      this.setActiveTab(focusPath, focusPath ? focusRegion : 'left');
+
+      if (trulyClosed) {
         const payload = {
           path: closingTab?.path || path,
           fileName: closingTab?.fileName || "",
           dirty: !!closingTab?.dirty,
           region: closingRegion,
         };
-
         // 设计说明：
         // 1. `.cellmeta` 自动提交属于后台整理动作，不能拖慢标签关闭和编辑器状态切换。
-        // 2. 使用 setTimeout 把通知放到当前 UI 更新之后执行；提交失败由监听方记录日志，不打断用户关闭文件。
-        // 3. 事件只表达“文件关闭边界已到达”，真正的 Git 检查和提交仍集中在 GuaxiFileTree，避免 store 直接耦合 Git 命令。
+        // 2. setTimeout 把通知放到当前 UI 更新之后；提交失败由监听方记录日志，不打断关闭。
+        // 3. 只在文件“真正关闭”(不再被任一分屏引用)时触发，避免同文件分屏关一侧就误提交。
         setTimeout(() => {
           try {
             window.dispatchEvent(new CustomEvent(EVENT_CELLMETA_FILE_CLOSED, { detail: payload }));
@@ -205,76 +296,7 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
             });
           }
         }, 0);
-      };
-
-      this.openTabs.splice(index, 1);
-
-      if (this.openTabs.length === 0) {
-        this.activeTab = null;
-        this.activeTabLeft = null;
-        this.activeTabRight = null;
-        this.selectedFile = null;
-        this.layoutMode = 'single';
-        this.splitIndex = null;
-        this.activeRegion = 'left';
-        notifyFileClosed();
-        return;
       }
-
-      const leftCountAfter =
-        this.layoutMode !== 'single' && beforeSplitIndex != null
-          ? Math.max(0, Math.min(beforeSplitIndex, this.openTabs.length))
-          : this.openTabs.length;
-
-      const pickNextInRegion = (targetRegion) => {
-        if (this.openTabs.length === 0) return null;
-        if (this.layoutMode === 'single' || beforeSplitIndex == null) {
-          const nextIndex = Math.min(index, this.openTabs.length - 1);
-          return this.openTabs[nextIndex]?.path || null;
-        }
-
-        if (targetRegion === 'left') {
-          const lastLeftIndex = Math.max(0, leftCountAfter - 1);
-          const nextIndex = Math.min(index, lastLeftIndex);
-          return this.openTabs[nextIndex]?.path || null;
-        }
-
-        const start = Math.max(0, leftCountAfter);
-        if (start >= this.openTabs.length) return null;
-        const nextIndex = Math.min(Math.max(index, start), this.openTabs.length - 1);
-        return this.openTabs[nextIndex]?.path || this.openTabs[start]?.path || null;
-      };
-
-      if (closingRegion === 'left' && this.activeTabLeft === path) {
-        this.activeTabLeft = pickNextInRegion('left');
-      }
-      if (closingRegion === 'right' && this.activeTabRight === path) {
-        this.activeTabRight = pickNextInRegion('right');
-      }
-
-      if (this.activeTab === path) {
-        const nextFocused =
-          closingRegion === 'right'
-            ? this.activeTabRight || this.activeTabLeft
-            : this.activeTabLeft || this.activeTabRight;
-        this.setActiveTab(nextFocused, nextFocused ? closingRegion : 'left');
-      }
-
-      if (this.layoutMode !== 'single' && this.splitIndex != null) {
-        if (index < this.splitIndex) {
-          this.splitIndex = Math.max(0, this.splitIndex - 1);
-        }
-        const leftCount = this.splitIndex ?? 0;
-        const rightCount = this.openTabs.length - leftCount;
-        if (leftCount === 0 || rightCount === 0) {
-          this.layoutMode = 'single';
-          this.splitIndex = null;
-          this.activeRegion = 'left';
-          this.activeTabRight = null;
-          this.activeTabLeft = this.activeTab;
-        }
-      }
-      notifyFileClosed();
     },
 
     // 生成预览内容
@@ -311,8 +333,23 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
     // 设计说明：文件树允许 README.md 与 readme.md 同时存在时，编辑器标签页也必须把它们视为两个文件。
       const desiredKey = normalizeTabPath(path);
       const existingTab = this.openTabs.find((tab) => normalizeTabPath(tab.path) === desiredKey);
+      // 目标 pane：单屏恒为 left；分屏时进入当前激活侧（“新文件去激活侧”）。
+      const targetRegion = this.layoutMode === 'single' ? 'left' : (this.activeRegion || 'left');
       if (existingTab) {
-        this.setActiveTab(existingTab.path, this.layoutMode === 'single' ? 'left' : this.activeRegion);
+        // 已打开：聚焦其所在 pane（优先目标侧；否则它实际所在的另一侧），不重复创建标签。
+        let focusRegion = targetRegion;
+        if (this.layoutMode === 'single') {
+          this.addPathToPane('left', existingTab.path);
+          focusRegion = 'left';
+        } else if (this.paneHasPath(targetRegion, existingTab.path)) {
+          focusRegion = targetRegion;
+        } else if (this.paneHasPath(this.otherRegion(targetRegion), existingTab.path)) {
+          focusRegion = this.otherRegion(targetRegion);
+        } else {
+          this.addPathToPane(targetRegion, existingTab.path);
+          focusRegion = targetRegion;
+        }
+        this.setActiveTab(existingTab.path, focusRegion);
         try {
           const editorBridgeStore = useEditorBridgeStore();
           await editorBridgeStore.trackFile(existingTab.path, this);
@@ -351,17 +388,11 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
         unsupported,
       };
 
-      if (this.layoutMode === 'single' || this.splitIndex == null) {
-        this.openTabs.push(newTab);
-      } else if (this.activeRegion === 'left') {
-        const insertIndex = this.splitIndex;
-        this.openTabs.splice(insertIndex, 0, newTab);
-        this.splitIndex += 1;
-      } else {
-        this.openTabs.push(newTab);
-      }
+      // 登记内容条目（按路径唯一），并把路径加入目标 pane 的标签列表。
+      this.openTabs.push(newTab);
+      this.addPathToPane(targetRegion, path);
 
-      this.setActiveTab(path);
+      this.setActiveTab(path, targetRegion);
       try {
         const editorBridgeStore = useEditorBridgeStore();
         await editorBridgeStore.trackFile(path, this);
@@ -501,10 +532,8 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
 
       if (!path) {
         this.selectedFile = null;
-        if (this.layoutMode === 'single') {
-          this.activeTabLeft = null;
-          this.activeTabRight = null;
-        }
+        this.activeTabLeft = null;
+        this.activeTabRight = null;
         return;
       }
 
@@ -519,78 +548,78 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
         };
       }
 
-      let targetRegion = region || this.activeRegion || 'left';
-      if (this.layoutMode !== 'single' && this.splitIndex != null && index !== -1) {
-        targetRegion = index < this.splitIndex ? 'left' : 'right';
-      }
-
-      this.activeRegion = targetRegion;
-
       if (this.layoutMode === 'single') {
-        this.activeTabLeft = path;
+        this.activeRegion = 'left';
+        this.activeTabLeft = tab ? tab.path : path;
         this.activeTabRight = null;
         return;
       }
 
-      if (targetRegion === 'left') {
-        this.activeTabLeft = path;
-        if (!this.activeTabRight && this.splitIndex != null) {
-          this.activeTabRight = this.openTabs[this.splitIndex]?.path || null;
-        }
-      } else {
-        this.activeTabRight = path;
-        if (!this.activeTabLeft && this.splitIndex != null) {
-          this.activeTabLeft = this.openTabs[Math.max(0, this.splitIndex - 1)]?.path || this.openTabs[0]?.path || null;
-        }
+      // 分屏：默认进入指定/激活侧；若该侧并不包含此路径而另一侧包含，则纠正到它实际所在侧。
+      let targetRegion = region || this.activeRegion || 'left';
+      if (!this.paneHasPath(targetRegion, path) && this.paneHasPath(this.otherRegion(targetRegion), path)) {
+        targetRegion = this.otherRegion(targetRegion);
       }
+      this.activeRegion = targetRegion;
+      if (targetRegion === 'right') this.activeTabRight = tab ? tab.path : path;
+      else this.activeTabLeft = tab ? tab.path : path;
     },
     setLayoutMode(mode) {
       if (mode === this.layoutMode) return;
-      this.layoutMode = mode;
       if (mode === 'single') {
-        this.splitIndex = null;
-        this.activeRegion = 'left';
-        this.activeTabLeft = this.activeTab;
+        // 收起分屏：保留左侧；右侧标签若不在左侧则其内容条目随之关闭。
+        const rightPaths = [...this.rightTabPaths];
+        this.rightTabPaths = [];
         this.activeTabRight = null;
-      } else if (this.splitIndex == null) {
-        const idx = this.activeTab
-          ? this.openTabs.findIndex((t) => t.path === this.activeTab)
-          : -1;
-        this.splitIndex = idx > 0 ? idx : 0;
-
-        this.activeTabLeft = this.openTabs[Math.max(0, this.splitIndex - 1)]?.path || this.openTabs[0]?.path || null;
-        this.activeTabRight = this.openTabs[this.splitIndex]?.path || null;
-
-        if (this.activeTab) {
-          this.setActiveTab(this.activeTab);
-        }
+        this.layoutMode = 'single';
+        this.activeRegion = 'left';
+        rightPaths.forEach((p) => this.pruneOrphanTab(p));
+        this.normalizeSplitLayout();
+        const focusLeft = this.activeTabLeft || this.leftTabPaths[0] || null;
+        this.setActiveTab(focusLeft, 'left');
+        return;
       }
+      // 从单屏进入分屏：等价于把当前激活文件复制到另一侧（同文件分屏）。
+      if (this.layoutMode === 'single') {
+        this.splitCurrentTab(mode);
+        return;
+      }
+      // 分屏间切换朝向（左右 ↔ 上下）。
+      this.layoutMode = mode;
     },
 
     setActiveRegion(region) {
-      this.activeRegion = region;
+      const next = region === 'right' ? 'right' : 'left';
+      if (this.layoutMode === 'single') { this.activeRegion = 'left'; return; }
+      this.activeRegion = next;
+      // 切换激活侧时同步 activeTab/selectedFile 到该侧当前标签，驱动“新文件去激活侧”。
+      const path = next === 'right' ? this.activeTabRight : this.activeTabLeft;
+      if (path) this.setActiveTab(path, next);
     },
 
+    // 把当前激活文件复制到另一侧 pane（同一文件两侧同时打开），并进入分屏。
     splitCurrentTab(mode) {
-      if (!this.activeTab || this.openTabs.length === 0) return;
-      const idx = this.openTabs.findIndex((t) => t.path === this.activeTab);
-      if (idx === -1) return;
+      const active = this.activeTab;
+      if (!active || this.openTabs.length === 0) return;
+      const normalizedMode = mode === 'horizontal' ? 'horizontal' : 'vertical';
 
       if (this.layoutMode === 'single') {
-        const [tab] = this.openTabs.splice(idx, 1);
-        this.openTabs.push(tab);
-
-        this.layoutMode = mode;
-        this.splitIndex = Math.max(0, this.openTabs.length - 1);
-
-        this.activeTabRight = tab.path;
-        this.activeTabLeft = this.openTabs[Math.max(0, this.splitIndex - 1)]?.path || this.openTabs[0]?.path || null;
-
-        this.setActiveTab(tab.path, 'right');
+        // 左侧保持当前所有标签与激活；右侧放入同一文件并聚焦右侧。
+        this.layoutMode = normalizedMode;
+        this.addPathToPane('left', active);
+        if (!this.activeTabLeft) this.activeTabLeft = active;
+        this.rightTabPaths = [active];
+        this.activeTabRight = active;
+        this.setActiveTab(active, 'right');
         return;
       }
 
-      this.layoutMode = mode;
+      // 已分屏：把当前激活侧的文件复制到另一侧并聚焦另一侧；同时按需切换朝向。
+      this.layoutMode = normalizedMode;
+      const from = this.activeRegion || 'left';
+      const to = this.otherRegion(from);
+      this.addPathToPane(to, active);
+      this.setActiveTab(active, to);
     },
 
     // 更新 repopathlist 并保存到配置文件

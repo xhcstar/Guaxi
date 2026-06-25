@@ -15,7 +15,9 @@
             </span>
           </div>
         </div>
-        <div v-if="layoutMode !== 'single'" class="tab-region tab-region-right" ref="tabRegionRightRef">
+        <!-- 左右分屏：右侧标签栏与左侧并排显示在顶部（恰好分别位于左/右 pane 之上）。
+             上下分屏时该标签栏移动到下方 pane 头上（见 .editor-split-wrapper 内的 pane 标签栏）。 -->
+        <div v-if="layoutMode === 'vertical'" class="tab-region tab-region-right" ref="tabRegionRightRef">
           <div v-for="tab in rightTabs" :key="tab.path"
             :class="['tab-item', { 'active': fileTreeStore.activeTabRight === tab.path, 'dirty': !!tab.dirty }]"
             @click="switchTab(tab.path, 'right')" @mousedown.middle="closeTab(tab.path, 'right')">
@@ -988,6 +990,27 @@
         >
           <div ref="editorContainer" class="editor-container" @mousedown="activateRegion('left')">
             <!-- 编辑器内容将在这里渲染 -->
+          </div>
+          <!-- 上下分屏：下方 pane 自带独立标签栏（左右分屏时右侧标签栏在顶部 .tab-bar 内）。 -->
+          <div
+            v-if="layoutMode === 'horizontal'"
+            class="tab-bar pane-tab-bar"
+            @wheel="handleWheelScroll"
+            @mousedown="activateRegion('right')"
+          >
+            <div class="tab-region tab-region-right" ref="tabRegionRightRef">
+              <div v-for="tab in rightTabs" :key="tab.path"
+                :class="['tab-item', { 'active': fileTreeStore.activeTabRight === tab.path, 'dirty': !!tab.dirty }]"
+                @click="switchTab(tab.path, 'right')" @mousedown.middle="closeTab(tab.path, 'right')">
+                <span class="tab-title">{{ tab.fileName }}</span>
+                <span class="tab-affordance">
+                  <span class="tab-dirty-dot" v-show="tab.dirty" />
+                  <n-icon class="tab-close" size="14" @click.stop="closeTab(tab.path, 'right')">
+                    <CloseOutline />
+                  </n-icon>
+                </span>
+              </div>
+            </div>
           </div>
           <div v-if="layoutMode !== 'single'" ref="secondaryEditorContainer" class="editor-container"
             @mousedown="activateRegion('right')">
@@ -3455,21 +3478,23 @@ const handleBreadcrumbPickerSelect = async (key) => {
   }
 }
 
+// 每个 pane 的标签由 store 的路径列表映射为内容条目（openTabs 是按路径唯一的登记表）。
+// 同一路径可同时出现在 leftTabPaths / rightTabPaths → 同文件分屏。
+const tabEntryByPath = computed(() => {
+  const map = new Map();
+  for (const tab of fileTreeStore.openTabs) map.set(tab.path, tab);
+  return map;
+});
+
 const leftTabs = computed(() => {
-  if (layoutMode.value === 'single' || fileTreeStore.splitIndex == null) {
-    return fileTreeStore.openTabs;
-  }
-  return fileTreeStore.openTabs.slice(0, fileTreeStore.splitIndex);
+  const map = tabEntryByPath.value;
+  return fileTreeStore.leftTabPaths.map((p) => map.get(p)).filter(Boolean);
 });
 
 const rightTabs = computed(() => {
-  if (layoutMode.value === 'single' || fileTreeStore.splitIndex == null) {
-    return [];
-  }
-  if (fileTreeStore.openTabs.length === 1) {
-    return fileTreeStore.openTabs;
-  }
-  return fileTreeStore.openTabs.slice(fileTreeStore.splitIndex);
+  if (layoutMode.value === 'single') return [];
+  const map = tabEntryByPath.value;
+  return fileTreeStore.rightTabPaths.map((p) => map.get(p)).filter(Boolean);
 });
 
 
@@ -20496,26 +20521,18 @@ const closeTab = async (path, region) => {
   const regionActivePath = targetRegion === 'right' ? fileTreeStore.activeTabRight : fileTreeStore.activeTabLeft;
   const regionEditor = targetRegion === 'right' ? secondaryEditor : editor;
 
-  if (fileTreeStore.layoutMode !== 'single' && fileTreeStore.openTabs.length === 1) {
-    if (regionEditor && regionActivePath === path) {
-      const content = regionEditor.getValue();
-      fileTreeStore.updateTabContent(path, content);
-    }
-
-    fileTreeStore.setLayoutMode('single');
-    if (fileTreeStore.activeTab !== path) {
-      fileTreeStore.setActiveTab(path, 'left');
-    }
-    return;
-  }
-
+  // 关闭前先把该侧编辑器的最新内容回写到登记表，避免丢失未保存编辑。
+  // 折叠分屏/同文件多开后的布局归一化统一交给 store.closeTab + normalizeSplitLayout 处理。
   if (regionEditor && regionActivePath === path) {
     const content = regionEditor.getValue();
     fileTreeStore.updateTabContent(path, content);
   }
 
+  // 同文件分屏时，仅关闭一侧不会真正关闭文件（内容仍由另一侧持有），无需提示丢弃。
+  const willRemainOpenInOther = fileTreeStore.layoutMode !== 'single'
+    && fileTreeStore.paneHasPath(fileTreeStore.otherRegion(targetRegion), path);
   const closingTab = fileTreeStore.openTabs.find((t) => t.path === path)
-  if (closingTab?.dirty) {
+  if (closingTab?.dirty && !willRemainOpenInOther) {
     const ok = await confirmDialog(`文件「${closingTab.fileName || path}」尚未保存，确定要关闭并丢弃更改吗？`, {
       title: '未保存的更改',
       kind: 'warning'
@@ -23476,6 +23493,11 @@ onUnmounted(() => {
 .dark .tab-item.active:hover {
   background: rgba(24, 144, 255, 0.32);
   border-color: rgba(74, 163, 255, 0.55);
+}
+
+/* 上下分屏时下方 pane 头上的独立标签栏：在两个编辑器之间，顶部加分隔线。 */
+.pane-tab-bar {
+  border-top: 1px solid var(--guaxi-border);
 }
 
 .tab-bar {
