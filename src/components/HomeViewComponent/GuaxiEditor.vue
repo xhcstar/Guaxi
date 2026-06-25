@@ -985,11 +985,21 @@
 
         <div
           class="editor-split-wrapper"
-          :class="[layoutMode, { 'vim-enabled': vimMode, 'with-python-console': pythonConsoleVisible }]"
+          ref="splitWrapperRef"
+          :class="[layoutMode, { 'vim-enabled': vimMode, 'with-python-console': pythonConsoleVisible, 'split-resizing': splitResizing }]"
           :style="pythonConsoleVisible ? { paddingBottom: `${pythonConsoleHeight + pythonConsoleBottomOffset}px` } : undefined"
         >
-          <div ref="editorContainer" class="editor-container" @mousedown="activateRegion('left')">
+          <div ref="editorContainer" class="editor-container" :style="firstPaneFlexStyle" @mousedown="activateRegion('left')">
             <!-- 编辑器内容将在这里渲染 -->
+          </div>
+          <!-- 分屏中间可拖拽分隔条：纵向(左右)调宽度，横向(上下)调高度。 -->
+          <div
+            v-if="layoutMode !== 'single'"
+            class="editor-split-divider"
+            :class="layoutMode === 'horizontal' ? 'horizontal' : 'vertical'"
+            @mousedown="startSplitResize"
+          >
+            <div class="editor-split-divider-handle"></div>
           </div>
           <!-- 上下分屏：下方 pane 自带独立标签栏（左右分屏时右侧标签栏在顶部 .tab-bar 内）。 -->
           <div
@@ -1013,6 +1023,7 @@
             </div>
           </div>
           <div v-if="layoutMode !== 'single'" ref="secondaryEditorContainer" class="editor-container"
+            :style="secondPaneFlexStyle"
             @mousedown="activateRegion('right')">
           </div>
         </div>
@@ -1843,6 +1854,70 @@ const editorContainer = ref(null);
 const secondaryEditorContainer = ref(null);
 const editorWrapperRef = ref(null);
 const editorHeaderRef = ref(null);
+
+// ───── 分屏拖拽调整两侧 pane 比例（纵向调宽度、横向调高度）─────
+const splitWrapperRef = ref(null);
+const splitRatio = ref(0.5); // 第一个 pane（左/上）占比，范围约束在 [0.15, 0.85]
+const splitResizing = ref(false);
+let splitResizeAxis = 'x';
+let splitLayoutRafId = 0;
+// 第一个 pane（左/上）的弹性样式：用 flex-grow 表达占比，flex-basis:0 保证按比例分配。
+const firstPaneFlexStyle = computed(() => (
+  layoutMode.value === 'single'
+    ? null
+    : { flexGrow: splitRatio.value, flexBasis: '0%', flexShrink: 1 }
+));
+const secondPaneFlexStyle = computed(() => (
+  layoutMode.value === 'single'
+    ? null
+    : { flexGrow: Math.max(0, 1 - splitRatio.value), flexBasis: '0%', flexShrink: 1 }
+));
+const handleSplitResizeMove = (event) => {
+  if (!splitResizing.value) return;
+  const wrapper = splitWrapperRef.value;
+  if (!wrapper) return;
+  const rect = wrapper.getBoundingClientRect();
+  let ratio;
+  if (splitResizeAxis === 'y') {
+    const total = rect.height || 1;
+    ratio = (Number(event.clientY || 0) - rect.top) / total;
+  } else {
+    const total = rect.width || 1;
+    ratio = (Number(event.clientX || 0) - rect.left) / total;
+  }
+  splitRatio.value = Math.min(0.85, Math.max(0.15, ratio));
+  // 拖拽过程中按 rAF 节流地重排两个编辑器，避免 automaticLayout 的滞后感。
+  if (!splitLayoutRafId) {
+    splitLayoutRafId = requestAnimationFrame(() => {
+      splitLayoutRafId = 0;
+      editor?.layout?.();
+      secondaryEditor?.layout?.();
+    });
+  }
+};
+const stopSplitResize = () => {
+  if (!splitResizing.value) return;
+  splitResizing.value = false;
+  document.body.style.userSelect = '';
+  document.body.style.cursor = '';
+  window.removeEventListener('mousemove', handleSplitResizeMove, true);
+  window.removeEventListener('mouseup', stopSplitResize, true);
+  // 拖拽结束后让两个 Monaco 实例按新尺寸重排。
+  nextTick(() => {
+    editor?.layout?.();
+    secondaryEditor?.layout?.();
+  });
+};
+const startSplitResize = (event) => {
+  if (layoutMode.value === 'single') return;
+  splitResizeAxis = layoutMode.value === 'horizontal' ? 'y' : 'x';
+  splitResizing.value = true;
+  document.body.style.userSelect = 'none';
+  document.body.style.cursor = splitResizeAxis === 'y' ? 'row-resize' : 'col-resize';
+  window.addEventListener('mousemove', handleSplitResizeMove, true);
+  window.addEventListener('mouseup', stopSplitResize, true);
+  event.preventDefault();
+};
 const previewShellRef = ref(null);
 const editorContentRef = ref(null);
 const previewSearchInputRef = ref(null)
@@ -22890,6 +22965,49 @@ onUnmounted(() => {
 
 .editor-split-wrapper.horizontal {
   flex-direction: column;
+}
+
+/* 分屏拖拽分隔条：细线 + 较宽命中区域，hover/拖拽时高亮。 */
+.editor-split-divider {
+  position: relative;
+  flex: 0 0 auto;
+  z-index: 6;
+  background: var(--guaxi-border);
+  transition: background 0.15s ease;
+}
+
+.editor-split-divider.vertical {
+  width: 1px;
+  cursor: col-resize;
+}
+
+.editor-split-divider.horizontal {
+  height: 1px;
+  cursor: row-resize;
+}
+
+/* 透明命中区域，扩大可拖拽范围，避免 1px 难以点中。 */
+.editor-split-divider-handle {
+  position: absolute;
+}
+
+.editor-split-divider.vertical .editor-split-divider-handle {
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  right: -3px;
+}
+
+.editor-split-divider.horizontal .editor-split-divider-handle {
+  left: 0;
+  right: 0;
+  top: -3px;
+  bottom: -3px;
+}
+
+.editor-split-divider:hover,
+.editor-split-wrapper.split-resizing .editor-split-divider {
+  background: var(--primary-color, #4aa3ff);
 }
 
 .editor-container {
