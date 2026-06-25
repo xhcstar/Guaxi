@@ -307,6 +307,11 @@ pub async fn get_git_status(path: String) -> Result<Vec<GitChange>, String> {
                     let mut diff_options = DiffOptions::new();
                     diff_options.context_lines(0);
                     diff_options.pathspec(rel_path.clone());
+                    // 设计说明：Windows 下工作区文件常被编辑器保存为 CRLF，而 HEAD/索引里的 blob 是 LF
+                    // （或反之），libgit2 默认会把这种纯换行符差异当成“整行修改”，导致文件一打开就在
+                    // 行号右侧显示大量并不存在的 Git 修改标记。ignore_whitespace_eol 让 diff 忽略行尾
+                    // 换行符差异，只在真正的内容差异处报告变更行，使行级状态计算精确。
+                    diff_options.ignore_whitespace_eol(true);
 
                     let diff = if staged {
                         repo.diff_tree_to_tree(
@@ -329,8 +334,11 @@ pub async fn get_git_status(path: String) -> Result<Vec<GitChange>, String> {
                         all.extend(d);
                         lines_modified = all.into_iter().collect();
 
+                        // 设计说明：开启 ignore_whitespace_eol 后，纯 CRLF/LF 差异的文件会得到空的行级
+                        // 差异。此时不再像以前那样兜底标记第 1 行为“已修改”，而是直接跳过这条变更——
+                        // 既不会在编辑器行号右侧出现假修改标记，也不会让该文件出现在 Git 面板更改列表里。
                         if lines_modified.is_empty() {
-                            lines_modified.push(1);
+                            return Ok(());
                         }
                     } else if status == "A" {
                         lines_added = a;
