@@ -334,10 +334,11 @@
               </template>
               <template v-else-if="selectedShelf !== 'my_listening'">
                 <n-data-table
+                  class="manager-data-table"
                   size="small"
                   :columns="managerColumns"
                   :data="filteredRows"
-                  :max-height="610"
+                  flex-height
                   :row-key="(row) => row.id"
                   :row-props="managerRowProps"
                   :single-line="false"
@@ -388,10 +389,11 @@
                   </n-button>
                 </div>
                 <n-data-table
+                  class="manager-data-table"
                   size="small"
                   :columns="listeningColumns"
                   :data="pagedListeningRows"
-                  :max-height="620"
+                  flex-height
                   :scroll-x="1300"
                   :row-key="(row) => row.id"
                   :checked-row-keys="checkedRowKeys"
@@ -4440,8 +4442,16 @@ onBeforeUnmount(() => {
   gap: 8px;
 }
 
-.middle-table-card :deep(.n-data-table-wrapper) {
-  height: calc(100% - 46px);
+.middle-table-card :deep(.n-card__content) {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.manager-data-table {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .middle-table-card :deep(.n-data-table-tbody .n-data-table-tr) {
