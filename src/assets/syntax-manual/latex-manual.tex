@@ -18,11 +18,17 @@
 \setCJKmainfont{Microsoft YaHei}
 \setCJKsansfont{Microsoft YaHei}
 \setCJKmonofont{Microsoft YaHei}
-\setmathfont{Cambria Math}
+\IfFontExistsTF{STIX Two Math}
+  {\setmathfont{STIX Two Math}}
+  {\IfFontExistsTF{NewComputerModernMath}
+    {\setmathfont{NewComputerModernMath}}
+    {\setmathfont{Cambria Math}}}
 
 % 为了保证随软件分发时可以被内置 tectonic 离线渲染，本手册不强制加载
 % amssymb/amsfonts。AMS 扩展符号仍在下方符号表中列出，符号预览用 Unicode
-% 文字符号呈现，LaTeX 写法列给出用户在完整发行版中可使用的命令。
+% 文字符号呈现，LaTeX 写法列给出用户在完整发行版中可使用的命令。数学字体优先
+% 使用安装器随软件注册的 STIX Two Math / NewComputerModernMath，Cambria Math 仅作
+% 本机已有时的最后兜底，不随安装包分发。
 
 \hypersetup{
   colorlinks=true,

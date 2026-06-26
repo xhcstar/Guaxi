@@ -9,4 +9,16 @@
     MessageBox MB_ICONSTOP|MB_OK "安装阶段解压外部 utils 资源包失败，安装已中止。请确认安装器同级目录下存在 utils_bundles 文件夹并完整重试。"
     Abort
   done:
+
+  ; Install bundled Guaxi fonts after utils have been extracted.
+  ; The PowerShell script performs per-user installation and skips families that
+  ; already exist in HKCU/HKLM, so the current-user NSIS installer does not need
+  ; administrator privileges.
+  IfFileExists "$INSTDIR\utils\fonts\install_guaxi_fonts.ps1" 0 font_done
+    DetailPrint "Installing bundled Guaxi fonts from $INSTDIR\\utils\\fonts"
+    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\utils\fonts\install_guaxi_fonts.ps1" -FontDir "$INSTDIR\utils\fonts"'
+    Pop $1
+    StrCmp $1 "0" font_done 0
+      MessageBox MB_ICONEXCLAMATION|MB_OK "安装阶段注册 Guaxi 字体失败。软件仍可继续使用，但部分界面字体或数学字体可能回退为系统默认字体。详情请查看安装日志。"
+  font_done:
 !macroend
