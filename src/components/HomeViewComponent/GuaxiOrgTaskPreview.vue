@@ -5,6 +5,18 @@
       <span class="otp-title">{{ titleLabel || '任务预览' }}</span>
       <span class="otp-count">{{ blocks.length }} 项</span>
       <span class="otp-spacer" />
+      <button
+        class="otp-btn icon"
+        :title="activeBlock ? '上移选中卡片' : '请先点击选中一个卡片'"
+        :disabled="!canMoveUp"
+        @click="moveActive(-1)"
+      >↑</button>
+      <button
+        class="otp-btn icon"
+        :title="activeBlock ? '下移选中卡片' : '请先点击选中一个卡片'"
+        :disabled="!canMoveDown"
+        @click="moveActive(1)"
+      >↓</button>
       <button class="otp-btn icon" title="大纲" :class="{ on: showOutline }" @click="showOutline = !showOutline">☰</button>
       <button class="otp-btn icon" title="新建 Bug" @click="$emit('create-block', 'bug')">＋B</button>
       <button class="otp-btn icon" title="新建任务" @click="$emit('create-block', 'task')">＋T</button>
@@ -69,6 +81,7 @@
           :class="{ done: b.done, active: b.blockStartLine === activeBlockLine }"
           :data-block-line="b.blockStartLine"
           :ref="(el) => registerCardRef(b.blockStartLine, el)"
+          @click="onCardClick(b, $event)"
         >
           <!-- ============ 读视图 ============ -->
           <template v-if="editingLine !== b.blockStartLine">
@@ -256,12 +269,36 @@ const props = defineProps({
   activeBlockLine: { type: Number, default: 0 },
   canBack: { type: Boolean, default: false },
 })
-const emit = defineEmits(['rebuild', 'open-notes', 'goto-line', 'apply-block', 'copy-block', 'export-block', 'back', 'create-block', 'delete-block', 'insert-block'])
+const emit = defineEmits(['rebuild', 'open-notes', 'goto-line', 'apply-block', 'copy-block', 'export-block', 'back', 'create-block', 'delete-block', 'insert-block', 'move-block'])
 
 const blocks = computed(() => parseTaskBlocks(props.content, props.category))
 const diagnostics = computed(() => validateTaskBlocks(props.content, props.category))
 const errorCount = computed(() => diagnostics.value.filter((d) => d.severity === 'error').length)
 const warnCount = computed(() => diagnostics.value.filter((d) => d.severity === 'warning').length)
+
+// ── 卡片上下移动 ──
+// 选中态复用 activeBlockLine（点击卡片标题会 emit goto-line → 父组件移动光标 → 回传 activeBlockLine）。
+const activeIndex = computed(() => blocks.value.findIndex((b) => b.blockStartLine === props.activeBlockLine))
+const activeBlock = computed(() => (activeIndex.value >= 0 ? blocks.value[activeIndex.value] : null))
+const canMoveUp = computed(() => activeIndex.value > 0)
+const canMoveDown = computed(() => activeIndex.value >= 0 && activeIndex.value < blocks.value.length - 1)
+const moveActive = (direction) => {
+  if (!activeBlock.value) return
+  if (direction < 0 && !canMoveUp.value) return
+  if (direction > 0 && !canMoveDown.value) return
+  emit('move-block', { block: activeBlock.value, direction: direction > 0 ? 1 : -1 })
+}
+// 点击卡片正文空白区域即选中该卡片（移动光标到块首行 → 父组件回传 activeBlockLine 高亮）。
+// 跳过按钮/输入/链接等交互元素，避免拦截它们自身的点击；编辑态不触发。
+const onCardClick = (b, ev) => {
+  if (editingLine.value === b.blockStartLine) return
+  const t = ev?.target
+  if (t && typeof t.closest === 'function'
+    && t.closest('button, input, textarea, select, a, .otp-mini, .otp-ins-btn, .otp-sec-head, mark')) {
+    return
+  }
+  emit('goto-line', b.blockStartLine)
+}
 
 const statusKeys = ['TODO', 'NEXT', 'DOING', 'WAITING', 'PAUSED', 'HOLD', 'CANCELLED', 'DONE']
 const severityOptions = ['critical', 'major', 'normal', 'minor', 'trivial']

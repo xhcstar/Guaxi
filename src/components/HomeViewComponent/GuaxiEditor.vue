@@ -1081,6 +1081,7 @@
         @create-block="createOrgBlockFromPreview"
         @delete-block="handleDeleteOrgBlock"
         @insert-block="handleInsertOrgBlock"
+        @move-block="handleMoveOrgBlock"
       />
 
       <transition name="python-console-slide">
@@ -18843,6 +18844,69 @@ const handleApplyOrgBlock = ({ startLine, endLine, text }) => {
   } catch (e) {
     logger.error('[OrgPreview] apply block failed', e)
     message.error('回写失败：' + (e?.message || e))
+  }
+}
+
+// 预览卡片上下移动：把选中卡片对应的任务块与相邻任务块在源文件中整体交换位置，并落盘。
+// payload: { block, direction }，direction = -1 上移 / +1 下移。block 为预览侧选中的块（含 blockStartLine）。
+const handleMoveOrgBlock = ({ block, direction } = {}) => {
+  const ed = getActiveEditor()
+  const model = ed?.getModel?.()
+  if (!model || !block || !isOrgTaskFile.value) return
+  const dir = direction > 0 ? 1 : -1
+
+  try {
+    // 以当前 model 内容重新解析，确保行号与源文件一致（避免用过期的预览块行号）。
+    const list = parseTaskBlocks(model.getValue(), orgPreviewCategory.value)
+    if (!Array.isArray(list) || list.length < 2) return
+
+    // 优先按 blockStartLine 精确定位选中块；找不到则用包含关系兜底。
+    let idx = list.findIndex((b) => b.blockStartLine === block.blockStartLine)
+    if (idx === -1) {
+      idx = list.findIndex((b) => block.blockStartLine >= b.blockStartLine && block.blockStartLine <= b.blockEndLine)
+    }
+    if (idx === -1) return
+
+    const targetIdx = idx + dir
+    if (targetIdx < 0 || targetIdx >= list.length) {
+      message.info(dir < 0 ? '已是第一个任务' : '已是最后一个任务')
+      return
+    }
+
+    // 取相邻两块中较前者(first)与较后者(second)，整体交换它们的文本，保留中间空行分隔。
+    const first = list[Math.min(idx, targetIdx)]
+    const second = list[Math.max(idx, targetIdx)]
+    const regionStart = first.blockStartLine
+    const regionEnd = second.blockEndLine
+
+    const lineAt = (n) => model.getLineContent(n)
+    const firstLines = []
+    for (let n = first.blockStartLine; n <= first.blockEndLine; n += 1) firstLines.push(lineAt(n))
+    const gapLines = []
+    for (let n = first.blockEndLine + 1; n <= second.blockStartLine - 1; n += 1) gapLines.push(lineAt(n))
+    const secondLines = []
+    for (let n = second.blockStartLine; n <= second.blockEndLine; n += 1) secondLines.push(lineAt(n))
+
+    const newLines = [...secondLines, ...gapLines, ...firstLines]
+    const range = new monaco.Range(regionStart, 1, regionEnd, model.getLineMaxColumn(regionEnd))
+    ed.executeEdits('org-move-block', [{ range, text: newLines.join('\n'), forceMoveMarkers: true }])
+
+    // 计算被移动块（用户选中的那个）交换后的新起始行，使光标/激活卡片跟随它。
+    const movedNewStart = dir > 0
+      ? regionStart + secondLines.length + gapLines.length // 下移：选中块原是 first，现排在后面
+      : regionStart                                        // 上移：选中块原是 second，现排到最前
+    try {
+      ed.revealLineInCenter(movedNewStart)
+      ed.setPosition({ lineNumber: movedNewStart, column: 1 })
+    } catch { /* noop */ }
+    activeOrgBlockLine.value = movedNewStart
+
+    refreshOrgPreviewContent()
+    scheduleOrgValidate()
+    persistActiveOrgFile()
+  } catch (e) {
+    logger.error('[OrgMove] move block failed', e)
+    message.error('移动失败：' + (e?.message || e))
   }
 }
 
