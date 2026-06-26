@@ -1,0 +1,610 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{graphicx}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{listings}
+\usepackage{amsmath}
+\usepackage{unicode-math}
+
+\setmainfont{Times New Roman}
+\setsansfont{Arial}
+\setmonofont{Consolas}
+\setCJKmainfont{Microsoft YaHei}
+\setCJKsansfont{Microsoft YaHei}
+\setCJKmonofont{Microsoft YaHei}
+\setmathfont{Cambria Math}
+
+% 为了保证随软件分发时可以被内置 tectonic 离线渲染，本手册不强制加载
+% amssymb/amsfonts。AMS 扩展符号仍在下方符号表中列出，符号预览用 Unicode
+% 文字符号呈现，LaTeX 写法列给出用户在完整发行版中可使用的命令。
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  urlcolor=blue,
+  citecolor=blue
+}
+
+\definecolor{GuaxiBlue}{HTML}{2563EB}
+\definecolor{GuaxiSoft}{HTML}{EFF6FF}
+\definecolor{GuaxiBorder}{HTML}{BFDBFE}
+\definecolor{CodeBg}{HTML}{F8FAFC}
+
+\newtheorem{definition}{Definition}
+\newcommand{\vect}[1]{\mathbf{#1}}
+\newcommand{\term}[1]{\textbf{\textcolor{GuaxiBlue}{#1}}}
+\newcommand{\tagpill}[1]{\fbox{\textsf{\small #1}}}
+% 这里使用上下边框实现提示块，避免把 \fcolorbox 的参数跨越
+% \begin/\end 环境展开；这种写法对 tectonic 更稳定，也便于作为语法示例阅读。
+\newenvironment{guaxicallout}[1]
+  {\par\medskip\noindent\textcolor{GuaxiBorder}{\rule{\linewidth}{0.6pt}}\par
+   \noindent\textbf{\textcolor{GuaxiBlue}{#1}}\par\smallskip\noindent}
+  {\par\noindent\textcolor{GuaxiBorder}{\rule{\linewidth}{0.6pt}}\par\medskip}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{CodeBg},
+  frame=single,
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false
+}
+
+\title{\textbf{LaTeX Syntax Manual}\\LaTeX 语法查询手册}
+\author{Guaxi}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+这是一份可直接被 Guaxi 内置 tectonic 引擎渲染的 LaTeX 语法手册。
+It is a bilingual, renderable reference document covering mixed Chinese and
+English text, page layout, fonts, table of contents, headings, paragraphs,
+lists, tables, math, code, figures, links, quotes, footnotes, references,
+macros, theorem-like blocks, and bibliography syntax.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{文档结构 / Document Structure}
+\label{sec:structure}
+
+LaTeX documents usually contain a preamble and a document body. 中文写作时常常
+需要同时处理 CJK 字体、英文术语、数学公式和代码片段；这份示例用
+\texttt{fontspec} 和 \texttt{xeCJK} 设置字体，用 \texttt{geometry} 设置版面。
+
+\begin{guaxicallout}{设计目标 / Design Goal}
+本手册既是语法速查，也是渲染测试文档。The left pane shows source code, while
+the right pane renders the PDF with the same preview engine used by normal
+\texttt{.tex} files.
+\end{guaxicallout}
+
+\subsection{页面、字体与颜色 / Page, Font And Color}
+
+\begin{lstlisting}[language=TeX]
+\usepackage[margin=1in]{geometry}
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\setmainfont{Times New Roman}
+\setCJKmainfont{Microsoft YaHei}
+\definecolor{GuaxiBlue}{HTML}{2563EB}
+\end{lstlisting}
+
+\section{文本语法 / Text Markup}
+
+Text can be \textbf{bold}, \emph{emphasized}, \texttt{monospace}, underlined by
+custom packages if needed, and mixed with 中文内容。Use blank lines to start a
+new paragraph.
+
+这里是一段较长的中文段落，用于观察行距、断行、字体回退和中英文混排。
+Guaxi 的 LaTeX 手册窗口会将示例源码传给内置 tectonic 引擎，并在右侧显示
+PDF 预览。English technical terms like \term{compiler}, \term{package}, and
+\term{macro} can appear naturally inside Chinese paragraphs.
+
+Footnotes are written inline.\footnote{脚注支持中文和 English text. They are
+rendered at the bottom of the page.}
+
+\begin{quote}
+引用块适合记录摘录、重要说明或论文中的短句。A quote environment keeps the
+content visually separate from the main paragraph.
+\end{quote}
+
+\section{链接与交叉引用 / Links And Cross References}
+
+External link example: \href{https://www.latex-project.org/}{LaTeX Project}.
+Section reference example: see Section~\ref{sec:structure}. Figure reference:
+Figure~\ref{fig:placeholder}. Table reference: Table~\ref{tab:syntax}.
+
+\section{列表 / Lists}
+
+\subsection{无序列表 / Itemize}
+\begin{itemize}
+  \item 中文项目：可以包含 \textbf{强调}、\texttt{代码} 和行内公式 \(a^2+b^2=c^2\)。
+  \item English item: lists are useful for steps, notes, and feature summaries.
+  \item Nested list:
+    \begin{itemize}
+      \item 子项目 / nested item
+      \item \tagpill{draft} \tagpill{review} \tagpill{final}
+    \end{itemize}
+\end{itemize}
+
+\subsection{有序列表与术语列表 / Enumerate And Description}
+\begin{enumerate}
+  \item Open a \texttt{.tex} file.
+  \item Click the book icon on the toolbar.
+  \item Click a source line to locate the rendered PDF preview.
+\end{enumerate}
+
+\begin{description}
+  \item[Command] A control sequence such as \verb|\section|.
+  \item[Environment] A block such as \verb|itemize|, \verb|tabular|, or \verb|equation|.
+  \item[Package] A reusable extension loaded with \verb|\usepackage|.
+\end{description}
+
+\section{表格 / Tables}
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.22\linewidth}
+                  >{\raggedright\arraybackslash}p{0.28\linewidth}
+                  >{\raggedright\arraybackslash}p{0.38\linewidth}}
+\caption{Common LaTeX syntax items / 常见 LaTeX 语法项目}
+\label{tab:syntax}\\
+\hline
+\textbf{Feature} & \textbf{Syntax} & \textbf{Purpose} \\
+\hline
+\endfirsthead
+\hline
+\textbf{Feature} & \textbf{Syntax} & \textbf{Purpose} \\
+\hline
+\endhead
+Heading & \verb|\section{Title}| & 生成层级标题和目录条目。 \\
+Text & \verb|\textbf{}|, \verb|\emph{}| & Emphasis and inline styling. \\
+Math & \verb|\[ x^2 \]| & Inline and display equations. \\
+Figure & \verb|figure| & 图片、图形、标题和标签。 \\
+Table & \verb|tabular|, \verb|longtable| & Structured data and comparison. \\
+Code & \verb|lstlisting| & Render source code blocks. \\
+\hline
+\end{longtable}
+
+\section{数学 / Mathematics}
+
+Inline math uses \(x_i + y_i\), \(\alpha + \beta = \gamma\), and
+\(\int_0^1 x^2\,dx = 1/3\).
+
+Display math:
+\[
+  \sum_{i=1}^{n} i = \frac{n(n+1)}{2}.
+\]
+
+Numbered equation:
+\begin{equation}
+  E = mc^2
+\end{equation}
+
+Matrix and vector:
+\[
+  \begin{bmatrix}
+    1 & 2 \\
+    3 & 4
+  \end{bmatrix}
+  \begin{bmatrix}
+    1 \\
+    0
+  \end{bmatrix}
+  =
+  \begin{bmatrix}
+    1 \\
+    3
+  \end{bmatrix}.
+\]
+
+Piecewise function:
+\[
+f(x)=
+\begin{cases}
+0, & x < 0,\\
+x^2, & x \geq 0.
+\end{cases}
+\]
+
+\subsection{数学符号总览 / Mathematical Symbol Reference}
+
+数学符号体系非常庞大，且不同宏包还会继续扩展新的符号。本节按 LaTeX 核心和
+AMS 常用数学写作场景，尽量完整列出常见符号族：希腊字母、集合、逻辑、
+关系、运算、箭头、微积分、几何、定界符、字体和重音。Each row shows the
+rendered symbol, the LaTeX command, and its meaning.
+
+\subsubsection{希腊字母 / Greek Letters}
+
+\begin{longtable}{>{$}c<{$} p{0.24\linewidth} p{0.54\linewidth}}
+\hline
+\text{\textbf{Symbol}} & \textbf{LaTeX} & \textbf{解释 / Meaning} \\
+\hline
+\endfirsthead
+\hline
+\text{\textbf{Symbol}} & \textbf{LaTeX} & \textbf{解释 / Meaning} \\
+\hline
+\endhead
+\alpha & \verb|\alpha| & alpha，角度、系数、显著性水平。 \\
+\beta & \verb|\beta| & beta，回归系数、特殊函数参数。 \\
+\gamma, \Gamma & \verb|\gamma|, \verb|\Gamma| & gamma，小写常作常数，大写常作 Gamma 函数或群。 \\
+\delta, \Delta & \verb|\delta|, \verb|\Delta| & delta，微小变化；大写表示差分或判别式。 \\
+\epsilon, \varepsilon & \verb|\epsilon|, \verb|\varepsilon| & epsilon，小量、误差、邻域半径。 \\
+\zeta & \verb|\zeta| & zeta，Zeta 函数或阻尼比。 \\
+\eta & \verb|\eta| & eta，效率、学习率或参数。 \\
+\theta, \vartheta, \Theta & \verb|\theta|, \verb|\vartheta|, \verb|\Theta| & theta，角度；大写常用于渐近复杂度。 \\
+\iota & \verb|\iota| & iota，嵌入映射或索引符号。 \\
+\kappa & \verb|\kappa| & kappa，曲率、条件数。 \\
+\lambda, \Lambda & \verb|\lambda|, \verb|\Lambda| & lambda，特征值、波长、匿名函数；大写常表谱或逻辑。 \\
+\mu & \verb|\mu| & mu，均值、测度、微单位。 \\
+\nu & \verb|\nu| & nu，频率、自由度。 \\
+\xi, \Xi & \verb|\xi|, \verb|\Xi| & xi，随机变量、坐标或特殊函数。 \\
+\pi, \varpi, \Pi & \verb|\pi|, \verb|\varpi|, \verb|\Pi| & pi，圆周率；大写表示连乘或投影。 \\
+\rho, \varrho & \verb|\rho|, \verb|\varrho| & rho，密度、相关系数。 \\
+\sigma, \varsigma, \Sigma & \verb|\sigma|, \verb|\varsigma|, \verb|\Sigma| & sigma，标准差；大写表示求和。 \\
+\tau & \verb|\tau| & tau，时间常数、参数。 \\
+\upsilon, \Upsilon & \verb|\upsilon|, \verb|\Upsilon| & upsilon，希腊字母变量。 \\
+\phi, \varphi, \Phi & \verb|\phi|, \verb|\varphi|, \verb|\Phi| & phi，角度、映射、势函数。 \\
+\chi & \verb|\chi| & chi，特征函数、卡方分布。 \\
+\psi, \Psi & \verb|\psi|, \verb|\Psi| & psi，波函数、特殊函数。 \\
+\omega, \Omega & \verb|\omega|, \verb|\Omega| & omega，角频率；大写表示欧姆、样本空间或渐近下界。 \\
+\hline
+\end{longtable}
+
+\subsubsection{集合与数域 / Sets And Number Systems}
+
+\begin{longtable}{>{$}c<{$} p{0.26\linewidth} p{0.52\linewidth}}
+\hline
+\text{\textbf{Symbol}} & \textbf{LaTeX} & \textbf{解释 / Meaning} \\
+\hline
+\endfirsthead
+\hline
+\text{\textbf{Symbol}} & \textbf{LaTeX} & \textbf{解释 / Meaning} \\
+\hline
+\endhead
+ℕ & \verb|\mathbb{N}| & natural numbers，自然数集；常用 AMS 写法为 \verb|\mathbb{N}|。 \\
+ℤ & \verb|\mathbb{Z}| & integers，整数集；常用 AMS 写法为 \verb|\mathbb{Z}|。 \\
+ℚ & \verb|\mathbb{Q}| & rational numbers，有理数集；常用 AMS 写法为 \verb|\mathbb{Q}|。 \\
+ℝ & \verb|\mathbb{R}| & real numbers，实数集；常用 AMS 写法为 \verb|\mathbb{R}|。 \\
+ℂ & \verb|\mathbb{C}| & complex numbers，复数集；常用 AMS 写法为 \verb|\mathbb{C}|。 \\
+\emptyset & \verb|\varnothing|, \verb|\emptyset| & empty set，空集；\verb|\varnothing| 常见于 AMS 符号包。 \\
+\in, \notin & \verb|\in|, \verb|\notin| & belongs / not belongs to，属于 / 不属于。 \\
+\ni & \verb|\ni| & contains as member，包含某元素。 \\
+\subset, \subseteq & \verb|\subset|, \verb|\subseteq| & subset / subset or equal，真子集 / 子集。 \\
+\supset, \supseteq & \verb|\supset|, \verb|\supseteq| & superset / superset or equal，超集。 \\
+⊈, ⊉ & \verb|\nsubseteq|, \verb|\nsupseteq| & not subset / not superset，非子集 / 非超集，常见于 AMS 符号包。 \\
+\cup, \cap & \verb|\cup|, \verb|\cap| & union / intersection，并集 / 交集。 \\
+\setminus & \verb|\setminus| & set difference，集合差。 \\
+\times & \verb|\times| & Cartesian product，笛卡尔积；也表示乘号。 \\
+\mathcal{P}(A) & \verb|\mathcal{P}(A)| & power set，幂集。 \\
+\lvert A\rvert & \verb|\lvert A\rvert| & cardinality，集合基数或绝对值。 \\
+\hline
+\end{longtable}
+
+\subsubsection{逻辑与量词 / Logic And Quantifiers}
+
+\begin{longtable}{>{$}c<{$} p{0.26\linewidth} p{0.52\linewidth}}
+\hline
+\text{\textbf{Symbol}} & \textbf{LaTeX} & \textbf{解释 / Meaning} \\
+\hline
+\endfirsthead
+\hline
+\text{\textbf{Symbol}} & \textbf{LaTeX} & \textbf{解释 / Meaning} \\
+\hline
+\endhead
+\forall & \verb|\forall| & for all，对所有。 \\
+\exists & \verb|\exists| & exists，存在。 \\
+∄ & \verb|\nexists| & does not exist，不存在，常见于 AMS 符号包。 \\
+\neg, \lnot & \verb|\neg|, \verb|\lnot| & logical not，逻辑非。 \\
+\land, \wedge & \verb|\land|, \verb|\wedge| & logical and，合取。 \\
+\lor, \vee & \verb|\lor|, \verb|\vee| & logical or，析取。 \\
+\oplus & \verb|\oplus| & exclusive or / direct sum，异或或直和。 \\
+\Rightarrow, \implies & \verb|\Rightarrow|, \verb|\implies| & implies，推出。 \\
+\Leftarrow & \verb|\Leftarrow| & is implied by，被推出。 \\
+\Leftrightarrow, \iff & \verb|\Leftrightarrow|, \verb|\iff| & if and only if，当且仅当。 \\
+\top & \verb|\top| & true / top element，真或最大元。 \\
+\bot & \verb|\bot| & false / bottom element，假或最小元。 \\
+∴ & \verb|\therefore| & therefore，因此，常见于 AMS 符号包。 \\
+∵ & \verb|\because| & because，因为，常见于 AMS 符号包。 \\
+\hline
+\end{longtable}
+
+\subsubsection{关系符号 / Relation Symbols}
+
+\begin{longtable}{>{$}c<{$} p{0.26\linewidth} p{0.52\linewidth}}
+\hline
+\text{\textbf{Symbol}} & \textbf{LaTeX} & \textbf{解释 / Meaning} \\
+\hline
+\endfirsthead
+\hline
+\text{\textbf{Symbol}} & \textbf{LaTeX} & \textbf{解释 / Meaning} \\
+\hline
+\endhead
+= & \verb|=| & equality，等于。 \\
+\ne, \neq & \verb|\ne|, \verb|\neq| & not equal，不等于。 \\
+<, > & \verb|<|, \verb|>| & less than / greater than，小于 / 大于。 \\
+\le, \leq & \verb|\le|, \verb|\leq| & less than or equal，小于等于。 \\
+\ge, \geq & \verb|\ge|, \verb|\geq| & greater than or equal，大于等于。 \\
+\ll, \gg & \verb|\ll|, \verb|\gg| & much less / much greater，远小于 / 远大于。 \\
+\approx & \verb|\approx| & approximately equal，约等于。 \\
+\sim & \verb|\sim| & similar / asymptotic / distributed as，相似、渐近或服从分布。 \\
+\simeq & \verb|\simeq| & similar or equal，相似等价。 \\
+\cong & \verb|\cong| & congruent，同余或全等。 \\
+\equiv & \verb|\equiv| & equivalent / congruent，恒等或同余。 \\
+\propto & \verb|\propto| & proportional to，正比于。 \\
+\prec, \preceq & \verb|\prec|, \verb|\preceq| & precedes / precedes or equal，序关系。 \\
+\succ, \succeq & \verb|\succ|, \verb|\succeq| & succeeds / succeeds or equal，序关系。 \\
+\parallel & \verb|\parallel| & parallel，平行。 \\
+\perp & \verb|\perp| & perpendicular / independent，垂直或独立。 \\
+\mid, \not\mid & \verb|\mid|, \verb|\nmid| & divides / does not divide，整除 / 不整除；\verb|\nmid| 常见于 AMS 符号包。 \\
+\hline
+\end{longtable}
+
+\subsubsection{运算符 / Operators}
+
+\begin{longtable}{>{$}c<{$} p{0.26\linewidth} p{0.52\linewidth}}
+\hline
+\text{\textbf{Symbol}} & \textbf{LaTeX} & \textbf{解释 / Meaning} \\
+\hline
+\endfirsthead
+\hline
+\text{\textbf{Symbol}} & \textbf{LaTeX} & \textbf{解释 / Meaning} \\
+\hline
+\endhead
++, - & \verb|+|, \verb|-| & addition / subtraction，加 / 减。 \\
+\pm, \mp & \verb|\pm|, \verb|\mp| & plus-minus / minus-plus，正负 / 负正。 \\
+\cdot & \verb|\cdot| & centered multiplication dot，点乘或乘法点。 \\
+\times & \verb|\times| & multiplication / Cartesian product，乘号或笛卡尔积。 \\
+\div & \verb|\div| & division，除号。 \\
+\ast, \star & \verb|\ast|, \verb|\star| & asterisk/star operator，星号运算。 \\
+\circ & \verb|\circ| & composition / circle operator，复合运算。 \\
+\bullet & \verb|\bullet| & bullet operator，点状运算符。 \\
+\oplus & \verb|\oplus| & direct sum / xor，直和或异或。 \\
+\ominus & \verb|\ominus| & circled minus，圈减。 \\
+\otimes & \verb|\otimes| & tensor product，张量积。 \\
+⊘ & \verb|\oslash| & circled slash，圈斜杠，常见于 AMS 符号包。 \\
+\odot & \verb|\odot| & circled dot，圈点。 \\
+\bigcirc & \verb|\bigcirc| & large circle，大圆运算符。 \\
+\diamond & \verb|\diamond| & diamond operator，菱形运算符。 \\
+\cap, \cup & \verb|\cap|, \verb|\cup| & intersection / union，交 / 并。 \\
+\vee, \wedge & \verb|\vee|, \verb|\wedge| & logical or / and，或 / 与。 \\
+\hline
+\end{longtable}
+
+\subsubsection{大型运算与微积分 / Large Operators And Calculus}
+
+\begin{longtable}{>{$}c<{$} p{0.28\linewidth} p{0.50\linewidth}}
+\hline
+\text{\textbf{Symbol}} & \textbf{LaTeX} & \textbf{解释 / Meaning} \\
+\hline
+\endfirsthead
+\hline
+\text{\textbf{Symbol}} & \textbf{LaTeX} & \textbf{解释 / Meaning} \\
+\hline
+\endhead
+\sum_{i=1}^{n} & \verb|\sum_{i=1}^{n}| & summation，求和。 \\
+\prod_{i=1}^{n} & \verb|\prod_{i=1}^{n}| & product，连乘。 \\
+\coprod & \verb|\coprod| & coproduct，余积。 \\
+\int_a^b & \verb|\int_a^b| & definite integral，定积分。 \\
+\iint_D & \verb|\iint_D| & double integral，二重积分。 \\
+\iiint_V & \verb|\iiint_V| & triple integral，三重积分。 \\
+\oint_C & \verb|\oint_C| & contour integral，闭合曲线积分。 \\
+\lim_{x\to 0} & \verb|\lim_{x\to 0}| & limit，极限。 \\
+\limsup & \verb|\limsup| & limit superior，上极限。 \\
+\liminf & \verb|\liminf| & limit inferior，下极限。 \\
+\frac{dy}{dx} & \verb|\frac{dy}{dx}| & derivative，导数。 \\
+\partial & \verb|\partial| & partial derivative，偏导符号。 \\
+\nabla & \verb|\nabla| & gradient / nabla，梯度或 nabla 算子。 \\
+\Delta & \verb|\Delta| & Laplacian / difference，拉普拉斯或差分。 \\
+\infty & \verb|\infty| & infinity，无穷大。 \\
+\hline
+\end{longtable}
+
+\subsubsection{箭头 / Arrows}
+
+\begin{longtable}{>{$}c<{$} p{0.28\linewidth} p{0.50\linewidth}}
+\hline
+\text{\textbf{Symbol}} & \textbf{LaTeX} & \textbf{解释 / Meaning} \\
+\hline
+\endfirsthead
+\hline
+\text{\textbf{Symbol}} & \textbf{LaTeX} & \textbf{解释 / Meaning} \\
+\hline
+\endhead
+\leftarrow, \rightarrow & \verb|\leftarrow|, \verb|\rightarrow| & left / right arrow，左箭头 / 右箭头。 \\
+\leftrightarrow & \verb|\leftrightarrow| & bidirectional arrow，双向箭头。 \\
+\Leftarrow, \Rightarrow & \verb|\Leftarrow|, \verb|\Rightarrow| & double arrows，双线箭头。 \\
+\Leftrightarrow & \verb|\Leftrightarrow| & double bidirectional arrow，双线双向箭头。 \\
+\mapsto & \verb|\mapsto| & maps to，映射到。 \\
+\longmapsto & \verb|\longmapsto| & long maps to，长映射箭头。 \\
+\uparrow, \downarrow & \verb|\uparrow|, \verb|\downarrow| & up / down arrows，上 / 下箭头。 \\
+\updownarrow & \verb|\updownarrow| & up-down arrow，上下双向箭头。 \\
+\nearrow, \searrow & \verb|\nearrow|, \verb|\searrow| & diagonal arrows，东北 / 东南箭头。 \\
+\swarrow, \nwarrow & \verb|\swarrow|, \verb|\nwarrow| & diagonal arrows，西南 / 西北箭头。 \\
+\hookrightarrow & \verb|\hookrightarrow| & injection arrow，嵌入或单射。 \\
+↠ & \verb|\twoheadrightarrow| & surjection arrow，满射，常见于 AMS 符号包。 \\
+\hline
+\end{longtable}
+
+\subsubsection{定界符与括号 / Delimiters}
+
+\begin{longtable}{>{$}c<{$} p{0.28\linewidth} p{0.50\linewidth}}
+\hline
+\text{\textbf{Symbol}} & \textbf{LaTeX} & \textbf{解释 / Meaning} \\
+\hline
+\endfirsthead
+\hline
+\text{\textbf{Symbol}} & \textbf{LaTeX} & \textbf{解释 / Meaning} \\
+\hline
+\endhead
+(x) & \verb|(x)| & parentheses，圆括号。 \\
+\lbrack x\rbrack & \verb|\lbrack x\rbrack| & square brackets，方括号。 \\
+\{x\} & \verb|\{x\}| & braces，花括号。 \\
+\langle x\rangle & \verb|\langle x\rangle| & angle brackets，尖括号。 \\
+\lvert x\rvert & \verb|\lvert x\rvert| & absolute value，绝对值。 \\
+\lVert x\rVert & \verb|\lVert x\rVert| & norm，范数。 \\
+\lfloor x\rfloor & \verb|\lfloor x\rfloor| & floor，向下取整。 \\
+\lceil x\rceil & \verb|\lceil x\rceil| & ceiling，向上取整。 \\
+\left(\frac{a}{b}\right) & \verb|\left( ... \right)| & auto-sized delimiters，自动伸缩定界符。 \\
+\hline
+\end{longtable}
+
+\subsubsection{几何与常用特殊符号 / Geometry And Miscellaneous Symbols}
+
+\begin{longtable}{>{$}c<{$} p{0.28\linewidth} p{0.50\linewidth}}
+\hline
+\text{\textbf{Symbol}} & \textbf{LaTeX} & \textbf{解释 / Meaning} \\
+\hline
+\endfirsthead
+\hline
+\text{\textbf{Symbol}} & \textbf{LaTeX} & \textbf{解释 / Meaning} \\
+\hline
+\endhead
+\angle & \verb|\angle| & angle，角。 \\
+\triangle & \verb|\triangle| & triangle，三角形。 \\
+□ & \verb|\square| & square，正方形或证明结束符，常见于 AMS 符号包。 \\
+◇ & \verb|\Diamond| & modal diamond / diamond，模态菱形或菱形，常见于 AMS 符号包。 \\
+\forall x\in A & \verb|\forall x\in A| & quantified membership，带量词的集合命题。 \\
+\ell & \verb|\ell| & script-like l，常表示直线。 \\
+\Re, \Im & \verb|\Re|, \verb|\Im| & real / imaginary part，实部 / 虚部。 \\
+\aleph & \verb|\aleph| & aleph number，阿列夫数。 \\
+\hbar & \verb|\hbar| & reduced Planck constant，约化普朗克常数。 \\
+\prime & \verb|\prime| & prime mark，撇号。 \\
+\dagger, \ddagger & \verb|\dagger|, \verb|\ddagger| & dagger symbols，剑号脚注或伴随记号。 \\
+\diamondsuit, \heartsuit & \verb|\diamondsuit|, \verb|\heartsuit| & suit symbols，花色符号。 \\
+\clubsuit, \spadesuit & \verb|\clubsuit|, \verb|\spadesuit| & suit symbols，花色符号。 \\
+\hline
+\end{longtable}
+
+\subsubsection{数学重音、字体与函数 / Accents, Fonts And Functions}
+
+\begin{longtable}{>{$}c<{$} p{0.30\linewidth} p{0.48\linewidth}}
+\hline
+\text{\textbf{Symbol}} & \textbf{LaTeX} & \textbf{解释 / Meaning} \\
+\hline
+\endfirsthead
+\hline
+\text{\textbf{Symbol}} & \textbf{LaTeX} & \textbf{解释 / Meaning} \\
+\hline
+\endhead
+\hat{x} & \verb|\hat{x}| & estimator / hat，估计量或帽号。 \\
+\bar{x} & \verb|\bar{x}| & average / conjugate，均值或共轭。 \\
+\tilde{x} & \verb|\tilde{x}| & approximation / equivalence，近似或等价类。 \\
+\vec{x} & \verb|\vec{x}| & vector arrow，向量。 \\
+\dot{x}, \ddot{x} & \verb|\dot{x}|, \verb|\ddot{x}| & first / second time derivative，一阶 / 二阶时间导数。 \\
+\overline{AB} & \verb|\overline{AB}| & overline，上横线。 \\
+\underline{AB} & \verb|\underline{AB}| & underline，下横线。 \\
+\widehat{ABC} & \verb|\widehat{ABC}| & wide hat，宽帽号。 \\
+\widetilde{ABC} & \verb|\widetilde{ABC}| & wide tilde，宽波浪号。 \\
+\mathbf{x} & \verb|\mathbf{x}| & bold math，粗体数学字母。 \\
+\mathit{x} & \verb|\mathit{x}| & italic math，斜体数学字母。 \\
+\mathrm{d}x & \verb|\mathrm{d}x| & upright roman text，正体微分符号。 \\
+\mathcal{F} & \verb|\mathcal{F}| & calligraphic letters，花体字母。 \\
+ℝ & \verb|\mathbb{R}| & blackboard bold，黑板粗体；完整发行版常配合 AMS 字体使用。 \\
+\sin x, \cos x & \verb|\sin x|, \verb|\cos x| & trigonometric functions，三角函数。 \\
+\tan x, \cot x & \verb|\tan x|, \verb|\cot x| & tangent / cotangent，正切 / 余切。 \\
+\log x, \ln x & \verb|\log x|, \verb|\ln x| & logarithms，对数。 \\
+\exp x & \verb|\exp x| & exponential function，指数函数。 \\
+\max, \min & \verb|\max|, \verb|\min| & maximum / minimum，最大 / 最小。 \\
+\sup, \inf & \verb|\sup|, \verb|\inf| & supremum / infimum，上确界 / 下确界。 \\
+\arg, \det & \verb|\arg|, \verb|\det| & argument / determinant，辐角 / 行列式。 \\
+\dim, \ker & \verb|\dim|, \verb|\ker| & dimension / kernel，维数 / 核。 \\
+\hline
+\end{longtable}
+
+\section{代码块 / Code Blocks}
+
+\begin{lstlisting}[language=TeX,caption={LaTeX macro example}]
+\newcommand{\vect}[1]{\mathbf{#1}}
+\section{A Section}
+\end{lstlisting}
+
+\begin{lstlisting}[language=Python,caption={Python example}]
+def area(radius):
+    return 3.14159 * radius ** 2
+\end{lstlisting}
+
+\section{图片与图形 / Images And Figures}
+\label{sec:figures}
+
+为了保证手册离线可渲染，这里使用 \verb|\fbox| 和 \verb|\rule| 生成图片占位。
+真实图片可使用 \verb|\includegraphics[width=0.7\linewidth]{path/to/image.png}|；
+相对路径通常以当前 \texttt{.tex} 文件所在目录为基准。
+
+\begin{figure}[h]
+\centering
+\fcolorbox{GuaxiBlue}{GuaxiSoft}{%
+  \begin{minipage}{0.72\linewidth}
+    \centering
+    \vspace{1.1cm}
+    \textbf{Generated image placeholder}\\
+    这是无需外部文件的图片/图形示例
+    \vspace{1.1cm}
+  \end{minipage}
+}
+\caption{A generated image-like figure / 生成式图片占位}
+\label{fig:placeholder}
+\end{figure}
+
+\section{宏、环境与定理 / Macros, Environments And Theorems}
+
+\begin{definition}
+A macro is a reusable command. This document defines \verb|\vect| and uses it as
+\(\vect{x}\), \(\vect{y}\), and \(\vect{z}\).
+\end{definition}
+
+\begin{guaxicallout}{自定义环境 / Custom Environment}
+\texttt{guaxicallout} is a custom environment built with a minipage and colored
+frame. 自定义环境适合封装重复出现的版式块。
+\end{guaxicallout}
+
+\section{多栏、并排块与分页 / Side-by-side Blocks And Page Breaks}
+
+\noindent
+\begin{minipage}{0.47\linewidth}
+\textbf{左侧 / Left}\\
+Minipages are useful for side-by-side blocks, figures, forms, and summaries.
+中文说明也可以放在同一个并排块中。
+\end{minipage}
+\hfill
+\begin{minipage}{0.47\linewidth}
+\textbf{右侧 / Right}\\
+They keep content in a local box. Use \verb|\hfill| to separate two minipages.
+\end{minipage}
+
+\newpage
+
+\section{附录 / Appendix}
+
+This final section makes the document long enough for scrolling, searching, and
+source-to-preview navigation. 最后一节用于测试窗口缩放、PDF 搜索、源码行点击定位等功能。
+
+\begin{lstlisting}[language=TeX,caption={External image syntax}]
+\begin{figure}
+  \centering
+  \includegraphics[width=0.7\linewidth]{assets/example.png}
+  \caption{An external image.}
+\end{figure}
+\end{lstlisting}
+
+\section{参考文献 / Bibliography}
+
+Manual bibliography syntax can be written without an external \texttt{.bib} file.
+Example citation: \cite{knuth1984texbook}.
+
+\begin{thebibliography}{9}
+\bibitem{knuth1984texbook}
+Donald E. Knuth.
+\emph{The TeXbook}.
+Addison-Wesley, 1984.
+\end{thebibliography}
+
+\end{document}

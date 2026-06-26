@@ -13,6 +13,8 @@
     "app-*",
     "git-*",
     "markdown-manual",
+    "syntax-manual",
+    "syntax-manual-*",
     "life-habits",
     "tools-file-transfer",
     "slidev_manager",

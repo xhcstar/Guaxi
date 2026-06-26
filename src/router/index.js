@@ -16,6 +16,7 @@ import GuaxiResourceRepoManager from '../components/HomeViewComponent/GuaxiResou
 import GuaxiSlidevManager from '../components/HomeViewComponent/GuaxiSlidevManager.vue'
 import GuaxiKnowledgeBaseManager from '../components/HomeViewComponent/GuaxiKnowledgeBaseManager.vue'
 import GuaxiMarkdownManual from '../components/HomeViewComponent/GuaxiMarkdownManual.vue'
+import GuaxiSyntaxManualWindow from '../components/HomeViewComponent/GuaxiSyntaxManualWindow.vue'
 import GuaxiLanguageLearning from '../components/HomeViewComponent/GuaxiLanguageLearning.vue'
 import GuaxiTaskManagerPage from '../views/GuaxiTaskManagerPage.vue'
 import FlipboardFeedManager from '../components/SearchViewComponent/FlipboardFeedManager.vue'
@@ -155,6 +156,16 @@ export const routes = [
     name: 'markdown-manual',
     component: GuaxiMarkdownManual,
     props: (route) => ({
+      theme: route.query.theme,
+    })
+  },
+  {
+    path: '/syntax-manual',
+    name: 'syntax-manual',
+    component: GuaxiSyntaxManualWindow,
+    props: (route) => ({
+      language: route.query.language,
+      sourcePath: route.query.sourcePath,
       theme: route.query.theme,
     })
   },

@@ -539,6 +539,7 @@ async fn main() {
             commands::git::get_commit_diff,
             commands::git::create_git_window,
             commands::markdown_manual::create_markdown_manual_window,
+            commands::markdown_manual::create_syntax_manual_window,
             commands::language_learning::create_language_learning_window,
             commands::language_learning::language_learning_record_translation,
             commands::language_learning::language_learning_list_records,

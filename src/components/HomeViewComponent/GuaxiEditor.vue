@@ -222,7 +222,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text @click="openCurrentFileInNeovim">
-                <Icon :icon="squareTerminalIcon" width="16" height="16" />
+                <Icon :icon="neovimIcon" width="16" height="16" />
               </n-button>
             </template>
             {{ isCurrentFileObserverMode ? '同步并接管回 Guaxi' : '用 Neovim 编辑当前文件' }}
@@ -443,11 +443,11 @@
 
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
-              <n-button text @click="openMarkdownManual">
+              <n-button text @click="openSyntaxManual">
                 <Icon :icon="bookOpenIcon" width="16" height="16" />
               </n-button>
             </template>
-            Markdown语法查询手册
+            {{ syntaxManualTooltip }}
           </n-tooltip>
           <div ref="pythonRuntimeAnchorRef" class="python-runtime-anchor">
             <button
@@ -1317,6 +1317,12 @@ import { listen, emit } from '@tauri-apps/api/event'
 import { save, open, confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
 import { commands as vscodeCommands, Position as VscodePosition, Uri as VscodeUri } from 'vscode'
 
+const neovimIcon = {
+  width: 24,
+  height: 24,
+  body: '<path fill="#57a143" d="M3 4.7 8.9 2v20L3 19.3V4.7Z"/><path fill="#0f7d3a" d="M21 4.7 15.1 2v20l5.9-2.7V4.7Z"/><path fill="#4b8bbe" d="M8.9 2 15.1 22V2h-3.2v11.9L8.9 2Z"/>',
+}
+
 const logger = createLogger('GuaxiEditor')
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString()
 const outlineStore = useOutlineStore()
@@ -1830,6 +1836,22 @@ const previewLineAnchorCache = {
 }
 let previewLineAnchorRevision = 0
 
+const syntaxManualSourcePath = computed(() => String(selectedFile.value?.path || fileTreeStore.activeTab || '').trim())
+
+const getSyntaxManualLanguageForPath = (path) => {
+  const normalized = String(path || '').trim().toLowerCase()
+  if (/\.typ$/.test(normalized)) return 'typst'
+  if (/\.tex$/.test(normalized)) return 'latex'
+  return 'markdown'
+}
+
+const syntaxManualTooltip = computed(() => {
+  const language = getSyntaxManualLanguageForPath(syntaxManualSourcePath.value)
+  if (language === 'typst') return 'Typst 语法查询手册'
+  if (language === 'latex') return 'LaTeX 语法查询手册'
+  return 'Markdown语法查询手册'
+})
+
 const openMarkdownManual = async () => {
   const windowLabel = 'markdown-manual'
   const windowTitle = 'Markdown语法查询手册'
@@ -1848,6 +1870,39 @@ const openMarkdownManual = async () => {
     }
     logger.error('[MarkdownManual] open window failed:', err)
     message.error('打开 Markdown 语法手册失败')
+  }
+}
+
+const openSyntaxManual = async () => {
+  const sourcePath = syntaxManualSourcePath.value
+  const language = getSyntaxManualLanguageForPath(sourcePath)
+
+  if (language === 'markdown') {
+    logger.info('[SyntaxManual] route to markdown manual window', { sourcePath })
+    await openMarkdownManual()
+    return
+  }
+
+  const windowLabel = `syntax-manual-${language}-${Date.now()}`
+  const windowTitle = language === 'typst' ? 'Typst语法查询手册' : 'LaTeX语法查询手册'
+
+  try {
+    logger.info('[SyntaxManual] open syntax manual window', {
+      label: windowLabel,
+      title: windowTitle,
+      language,
+      sourcePath,
+    })
+    await invoke('create_syntax_manual_window', {
+      label: windowLabel,
+      title: windowTitle,
+      language,
+      sourcePath,
+      theme: settingsStore.appearanceTheme,
+    })
+  } catch (err) {
+    logger.error('[SyntaxManual] open window failed:', err)
+    message.error(`打开 ${language === 'typst' ? 'Typst' : 'LaTeX'} 语法手册失败`)
   }
 }
 
