@@ -3,7 +3,13 @@
     <div class="otp-toolbar">
       <button v-if="canBack" class="otp-btn icon" title="返回" @click="$emit('back')">‹</button>
       <span class="otp-title">{{ titleLabel || '任务预览' }}</span>
-      <span class="otp-count">{{ blocks.length }} 项</span>
+      <span class="otp-count">{{ displayBlocks.length }}{{ filterView !== 'all' ? '/' + blocks.length : '' }} 项</span>
+      <button
+        class="otp-btn icon view-filter"
+        :class="{ on: filterView !== 'all' }"
+        :title="filterViewTitle"
+        @click="cycleFilterView"
+      >◉ {{ filterViewLabel }}</button>
       <span class="otp-spacer" />
       <button
         class="otp-btn icon"
@@ -34,6 +40,13 @@
         <option value="testingSuggestions">测试建议</option>
         <option value="content">详情</option>
         <option value="notes">笔记</option>
+        <option value="status">状态</option>
+        <option value="fixStatus">修复状态</option>
+        <option value="severity">严重度</option>
+        <option value="origin">来源</option>
+        <option value="createTime">创建时间</option>
+        <option value="completedTime">完成时间</option>
+        <option value="affectedRelease">影响版本</option>
       </select>
       <input v-model="search" class="otp-search" placeholder="搜索…" @keydown.enter.prevent="gotoMatch(1)" />
       <span class="otp-search-count">{{ matches.length ? (matchIdx + 1) + '/' + matches.length : '0/0' }}</span>
@@ -44,10 +57,10 @@
     <div class="otp-main">
       <!-- 大纲小地图 -->
       <aside v-if="showOutline" class="otp-outline" :style="{ flex: `0 0 ${outlineWidth}px`, width: outlineWidth + 'px' }">
-        <div class="otp-outline-head">大纲 · {{ blocks.length }}</div>
+        <div class="otp-outline-head">大纲 · {{ displayBlocks.length }}{{ filterView !== 'all' ? '/' + blocks.length : '' }}</div>
         <div class="otp-outline-list">
           <div
-            v-for="(b, i) in blocks"
+            v-for="(b, i) in displayBlocks"
             :key="'o' + (b.internalId || i)"
             class="otp-outline-item"
             :class="{ active: b.blockStartLine === activeBlockLine, done: b.done }"
@@ -75,7 +88,7 @@
         </div>
 
         <div
-          v-for="(b, idx) in blocks"
+          v-for="(b, idx) in displayBlocks"
           :key="b.internalId || b.blockStartLine || idx"
           class="otp-card"
           :class="{ done: b.done, active: b.blockStartLine === activeBlockLine }"
@@ -272,6 +285,19 @@ const props = defineProps({
 const emit = defineEmits(['rebuild', 'open-notes', 'goto-line', 'apply-block', 'copy-block', 'export-block', 'back', 'create-block', 'delete-block', 'insert-block', 'move-block'])
 
 const blocks = computed(() => parseTaskBlocks(props.content, props.category))
+// ── 视图过滤器：仅影响显示，不修改源文件或移动逻辑 ──
+const filterView = ref('all') // 'all' | 'incomplete' | 'completed'
+const filterViewLabel = computed(() => ({ all: '全部', incomplete: '未完成', completed: '已完成' }[filterView.value]))
+const filterViewTitle = computed(() => `当前视图：${filterViewLabel.value}（点击切换）`)
+const cycleFilterView = () => {
+  filterView.value = filterView.value === 'all' ? 'incomplete' : filterView.value === 'incomplete' ? 'completed' : 'all'
+}
+// displayBlocks 用于卡片和大纲渲染；moveActive / 搜索 / 源文件操作仍使用 blocks。
+const displayBlocks = computed(() => {
+  if (filterView.value === 'all') return blocks.value
+  if (filterView.value === 'completed') return blocks.value.filter((b) => b.done)
+  return blocks.value.filter((b) => !b.done)
+})
 const diagnostics = computed(() => validateTaskBlocks(props.content, props.category))
 const errorCount = computed(() => diagnostics.value.filter((d) => d.severity === 'error').length)
 const warnCount = computed(() => diagnostics.value.filter((d) => d.severity === 'warning').length)
@@ -303,7 +329,7 @@ const onCardClick = (b, ev) => {
 const statusKeys = ['TODO', 'NEXT', 'DOING', 'WAITING', 'PAUSED', 'HOLD', 'CANCELLED', 'DONE']
 const severityOptions = ['critical', 'major', 'normal', 'minor', 'trivial']
 const originOptions = ['dev', 'QA', 'customer', 'other']
-const fixOptions = ['debug', 'test', 'review', 'approval', 'fixed', 'wontfix', 'doc', 'enhancement', 'other']
+const fixOptions = ['debug', 'test', 'review', 'approval', 'fixed', 'wontfix', 'doc', 'enhancement', 'invalid', 'remind', 'other']
 const typeOptions = computed(() => (props.category === 'life' || props.category === 'study') ? ['task', 'other'] : ['bug', 'task', 'other'])
 
 const typeLabel = (t) => ({ bug: 'Bug', task: '任务', other: '其他' }[t] || (t || '任务'))
@@ -357,13 +383,17 @@ const copyDesc = async (b) => {
 // ── 搜索（高亮 + 上一个/下一个，按字段）──
 const search = ref('')
 const searchField = ref('all')
-const matchFields = ['description', 'id', 'rootCause', 'conditionOfOccurrence', 'fixedDetails', 'testingSuggestions', 'content']
+const matchFields = ['description', 'id', 'rootCause', 'conditionOfOccurrence', 'fixedDetails', 'testingSuggestions', 'content', 'status', 'fixStatus', 'severity', 'origin', 'createTime', 'completedTime', 'affectedRelease']
 const blockMatches = (b) => {
   const q = search.value.trim().toLowerCase()
   if (!q) return false
   const fields = searchField.value === 'all' ? matchFields.concat('notes') : [searchField.value]
   return fields.some((f) => {
     if (f === 'notes') return String(b.notes?.value || '').toLowerCase().includes(q)
+    // 状态字段：同时搜索原始值和中文字段名
+    if (f === 'status') return (b.status || '').toLowerCase().includes(q) || (statusLabel(b.status) || '').toLowerCase().includes(q)
+    if (f === 'severity') return (b.severity || '').toLowerCase().includes(q)
+    if (f === 'fixStatus') return (b.fixStatus || '').toLowerCase().includes(q)
     return String(b[f] || '').toLowerCase().includes(q)
   })
 }

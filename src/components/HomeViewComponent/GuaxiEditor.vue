@@ -222,7 +222,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text @click="openCurrentFileInNeovim">
-                <Icon :icon="neovimIcon" width="16" height="16" />
+                <n-icon :component="NeovimIcon" size="16" />
               </n-button>
             </template>
             {{ isCurrentFileObserverMode ? '同步并接管回 Guaxi' : '用 Neovim 编辑当前文件' }}
@@ -1317,10 +1317,22 @@ import { listen, emit } from '@tauri-apps/api/event'
 import { save, open, confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
 import { commands as vscodeCommands, Position as VscodePosition, Uri as VscodeUri } from 'vscode'
 
-const neovimIcon = {
-  width: 24,
-  height: 24,
-  body: '<path fill="#57a143" d="M3 4.7 8.9 2v20L3 19.3V4.7Z"/><path fill="#0f7d3a" d="M21 4.7 15.1 2v20l5.9-2.7V4.7Z"/><path fill="#4b8bbe" d="M8.9 2 15.1 22V2h-3.2v11.9L8.9 2Z"/>',
+// 设计说明：自定义 neovim 图标使用 Vue 组件而非 @iconify/vue 的 body 对象，
+// 避免 release 构建下 tree-shaking / 压缩导致 Icon 组件无法解析自定义数据，退化为终端图标。
+const NeovimIcon = {
+  render() {
+    return h('svg', {
+      xmlns: 'http://www.w3.org/2000/svg',
+      width: 24,
+      height: 24,
+      viewBox: '0 0 24 24',
+      fill: 'none',
+    }, [
+      h('path', { fill: '#57a143', d: 'M3 4.7 8.9 2v20L3 19.3V4.7Z' }),
+      h('path', { fill: '#0f7d3a', d: 'M21 4.7 15.1 2v20l5.9-2.7V4.7Z' }),
+      h('path', { fill: '#4b8bbe', d: 'M8.9 2 15.1 22V2h-3.2v11.9L8.9 2Z' }),
+    ])
+  }
 }
 
 const logger = createLogger('GuaxiEditor')
