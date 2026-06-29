@@ -3727,6 +3727,7 @@ const pythonRuntimeOperationSummary = computed(() => {
 
 let unlistenTemplateInsert = null
 let templateInsertListenerUnmounted = false
+let neovimExitedUnlisten = null
 const PENDING_TEMPLATE_INSERT_KEY = 'guaxi.pending_template_insert'
 const TEMPLATE_INSERT_DEDUP_MS = 1500
 let lastTemplateInsertPayload = ''
@@ -21178,6 +21179,36 @@ onMounted(() => {
       languageId: normalizedLanguageId,
     })
   })
+
+  // 监听 Neovim 进程关闭事件，自动接管文件编辑权
+  void (async () => {
+    neovimExitedUnlisten = await listen('neovim-exited', async (event) => {
+      const exitedPath = String(event?.payload || '').trim()
+      if (!exitedPath) return
+      logger.info('[NeovimBridge] neovim-exited event received', { path: exitedPath })
+
+      // 仅当该文件仍在 Neovim 持有时才自动 reclaim
+      if (!editorBridgeStore.isMonacoReadonly(exitedPath)) {
+        logger.debug('[NeovimBridge] file not owned by neovim, skip reclaim', { path: exitedPath })
+        return
+      }
+
+      try {
+        const syncResult = await editorBridgeStore.absorbExternalChange(exitedPath, fileTreeStore)
+        if (syncResult?.status === 'conflict') {
+          logger.warn('[NeovimBridge] reclaim conflict, retaining readonly', { path: exitedPath })
+          return
+        }
+        editorBridgeStore.setOwner(exitedPath, 'monaco', 'neovim-exited-auto-reclaim')
+        syncMonacoReadonlyState('neovim-exited-auto-reclaim')
+        if (exitedPath === (selectedFile.value?.path || activeTab.value?.path || '')) {
+          message.success('Neovim 已关闭，Guaxi 自动接管编辑')
+        }
+      } catch (error) {
+        logger.error('[NeovimBridge] auto-reclaim failed', { path: exitedPath, error })
+      }
+    })
+  })()
 });
 
 onActivated(() => {
@@ -21305,6 +21336,10 @@ onUnmounted(() => {
   disposeAllVsCodeTextModelsForOwner(PRIMARY_EDITOR_VSCODE_MODEL_OWNER, 'guaxi-editor-unmount')
   disposeAllVsCodeTextModelsForOwner(SECONDARY_EDITOR_VSCODE_MODEL_OWNER, 'guaxi-editor-unmount')
   disposeAllLspClients()
+  if (neovimExitedUnlisten) {
+    try { Promise.resolve(neovimExitedUnlisten()).catch(() => {}) } catch {}
+    neovimExitedUnlisten = null
+  }
 });
 
 </script>

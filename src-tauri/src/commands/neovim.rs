@@ -1,6 +1,7 @@
 use std::env;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Child, Command};
+use tauri::Emitter;
 
 fn normalize_target_path(path: &str) -> Result<PathBuf, String> {
     let trimmed = path.trim();
@@ -16,9 +17,6 @@ fn normalize_target_path(path: &str) -> Result<PathBuf, String> {
     Ok(target)
 }
 
-// 计算 Neovim 的工作目录：目录目标用其自身，文件目标用其所在目录。
-// 这样无论从图标还是右键菜单打开，Neovim 的 cwd 都落在被打开的文件/目录所在路径，
-// 而不是软件进程继承下来的安装目录。
 fn resolve_working_dir(target: &PathBuf) -> Option<PathBuf> {
     if target.is_dir() {
         Some(target.clone())
@@ -27,8 +25,10 @@ fn resolve_working_dir(target: &PathBuf) -> Option<PathBuf> {
     }
 }
 
+/// Windows：通过 cmd /C start /WAIT 启动 nvim，这样 cmd 进程的生命周期与 nvim 绑定，
+/// Rust 侧 wait 到 cmd 退出即表示 nvim 已关闭。
 #[cfg(target_os = "windows")]
-fn spawn_neovim(executable: &str, target: &PathBuf) -> Result<(), String> {
+fn spawn_neovim(executable: &str, target: &PathBuf) -> Result<Child, String> {
     let target_arg = target.to_string_lossy().to_string();
     let work_dir = resolve_working_dir(target);
     println!(
@@ -36,25 +36,27 @@ fn spawn_neovim(executable: &str, target: &PathBuf) -> Result<(), String> {
         executable, target_arg, work_dir
     );
 
-    // 设计说明：保持与历史可用写法一致 `cmd /C start "" nvim <target>`，由 start 为 TUI 的
-    // nvim 新建一个控制台窗口。工作目录只通过给 cmd 进程设置 current_dir 来传递——start 会让
-    // 新进程继承调用方 cmd 的当前目录。之前尝试用 start 的 /D 选项反而因为路径是正斜杠而解析
-    // 失败，导致 start 不启动 nvim（窗口不出现），故这里不再使用 /D。
     let mut command = Command::new("cmd");
     if let Some(dir) = work_dir.as_ref() {
         command.current_dir(dir);
     }
-    command.arg("/C").arg("start").arg("").arg(executable).arg(&target_arg);
+    // /WAIT 让 start 等待 nvim 退出后才返回，从而使整个 cmd 进程与 nvim 同生命周期
+    command
+        .arg("/C")
+        .arg("start")
+        .arg("/WAIT")
+        .arg("")
+        .arg(executable)
+        .arg(&target_arg);
 
     command
         .spawn()
-        .map_err(|err| format!("启动 Neovim 失败: {}", err))?;
-
-    Ok(())
+        .map_err(|err| format!("启动 Neovim 失败: {}", err))
 }
 
+/// Linux / macOS：直接 spawn nvim，子进程句柄可直接 wait。
 #[cfg(not(target_os = "windows"))]
-fn spawn_neovim(executable: &str, target: &PathBuf) -> Result<(), String> {
+fn spawn_neovim(executable: &str, target: &PathBuf) -> Result<Child, String> {
     let work_dir = resolve_working_dir(target);
     println!(
         "[NeovimBridge] launching executable={} target={} work_dir={:?}",
@@ -70,21 +72,19 @@ fn spawn_neovim(executable: &str, target: &PathBuf) -> Result<(), String> {
     command
         .arg(target)
         .spawn()
-        .map_err(|err| format!("启动 Neovim 失败: {}", err))?;
-
-    Ok(())
+        .map_err(|err| format!("启动 Neovim 失败: {}", err))
 }
 
 #[tauri::command]
-pub fn neovim_open_path(path: String, is_directory: Option<bool>) -> Result<(), String> {
+pub fn neovim_open_path(
+    app_handle: tauri::AppHandle,
+    path: String,
+    is_directory: Option<bool>,
+) -> Result<(), String> {
     let target = normalize_target_path(&path)?;
     let target_is_dir = target.is_dir();
     let expected_dir = is_directory.unwrap_or(target_is_dir);
 
-    // 设计思路：
-    // 1. Guaxi 只负责唤醒外部 Neovim，并在前端 store 中切换文件写权；具体编辑体验交给用户已有 Neovim 配置。
-    // 2. 文件和目录都直接作为 nvim 参数传入，目录由用户的 netrw/oil/telescope 等配置处理。
-    // 3. 使用 GUAXI_NVIM 允许用户把启动器换成 neovide、wt 包装脚本或自己的 nvim wrapper。
     println!(
         "[NeovimBridge] open request path={} is_directory={} target_is_dir={}",
         target.display(),
@@ -98,5 +98,29 @@ pub fn neovim_open_path(path: String, is_directory: Option<bool>) -> Result<(), 
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "nvim".to_string());
 
-    spawn_neovim(&executable, &target)
+    let mut child = spawn_neovim(&executable, &target)?;
+
+    // 后台监控子进程退出，emit 事件通知前端
+    let target_clone = path.clone();
+    tauri::async_runtime::spawn(async move {
+        match child.wait() {
+            Ok(status) => {
+                println!(
+                    "[NeovimBridge] nvim exited with code {:?} for path={}",
+                    status.code(),
+                    target_clone
+                );
+            }
+            Err(err) => {
+                eprintln!(
+                    "[NeovimBridge] nvim wait error for path={}: {}",
+                    target_clone, err
+                );
+            }
+        }
+        // 无论正常退出还是异常，都通知前端
+        let _ = app_handle.emit("neovim-exited", target_clone);
+    });
+
+    Ok(())
 }
