@@ -8,9 +8,17 @@ use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use tauri::Manager;
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 use tracing::{debug, error, info, warn};
+
+/// Windows release 模式下隐藏后台 git 子进程的命令行窗口。
+fn apply_git_hidden_window(_cmd: &mut std::process::Command) {
+    #[cfg(windows)]
+    _cmd.creation_flags(0x0800_0000);
+}
 use urlencoding::encode;
 
 const HUNK_LINE_MATCH_TOLERANCE: u32 = 1;
@@ -303,7 +311,8 @@ pub async fn get_git_status(path: String) -> Result<Vec<GitChange>, String> {
                             lines_added = (1..=line_count).collect();
                         }
                     }
-                } else if status == "A" || status == "M" || status == "D" {
+                } else if status == "A" || status == "M" || status == "D" || status == "R" {
+                    // 设计说明：R（重命名）在 diff 视角下就是旧内容删除+新内容新增，统一按修改处理。
                     let mut diff_options = DiffOptions::new();
                     diff_options.context_lines(0);
                     diff_options.pathspec(rel_path.clone());
@@ -380,6 +389,8 @@ pub async fn get_git_status(path: String) -> Result<Vec<GitChange>, String> {
                 append_change("A", true)?;
             } else if entry.status().is_index_modified() {
                 append_change("M", true)?;
+            } else if entry.status().is_index_renamed() {
+                append_change("R", true)?;
             } else if entry.status().is_index_deleted() {
                 append_change("D", true)?;
             }
@@ -388,10 +399,10 @@ pub async fn get_git_status(path: String) -> Result<Vec<GitChange>, String> {
                 append_change("?", false)?;
             } else if entry.status().is_wt_modified() {
                 append_change("M", false)?;
-            } else if entry.status().is_wt_deleted() {
-                append_change("D", false)?;
             } else if entry.status().is_wt_renamed() {
                 append_change("R", false)?;
+            } else if entry.status().is_wt_deleted() {
+                append_change("D", false)?;
             } else if entry.status().is_wt_typechange() {
                 append_change("T", false)?;
             }
@@ -634,7 +645,9 @@ pub fn auto_commit_cellmeta_changes(path: String) -> Result<AutoCellmetaCommitRe
         "[CellmetaAutoCommit] staging .cellmeta paths before commit: count={}",
         paths.len()
     );
-    let add_output = std::process::Command::new("git")
+    let mut add_cmd = std::process::Command::new("git");
+    apply_git_hidden_window(&mut add_cmd);
+    let add_output = add_cmd
         .current_dir(repo_dir)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "never")
@@ -650,7 +663,9 @@ pub fn auto_commit_cellmeta_changes(path: String) -> Result<AutoCellmetaCommitRe
         return Err(format!("自动暂存 .cellmeta 失败：{}", msg));
     }
 
-    let diff_output = std::process::Command::new("git")
+    let mut diff_cmd = std::process::Command::new("git");
+    apply_git_hidden_window(&mut diff_cmd);
+    let diff_output = diff_cmd
         .current_dir(repo_dir)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "never")
@@ -686,7 +701,9 @@ pub fn auto_commit_cellmeta_changes(path: String) -> Result<AutoCellmetaCommitRe
         paths.len(),
         commit_message
     );
-    let commit_output = std::process::Command::new("git")
+    let mut commit_cmd = std::process::Command::new("git");
+    apply_git_hidden_window(&mut commit_cmd);
+    let commit_output = commit_cmd
         .current_dir(repo_dir)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "never")
@@ -705,7 +722,9 @@ pub fn auto_commit_cellmeta_changes(path: String) -> Result<AutoCellmetaCommitRe
         error!("[CellmetaAutoCommit] git commit failed: {}", msg);
         // 提交失败时把 `.cellmeta` 从索引里撤回，避免用户在 Git 面板里看不到的内部文件
         // 长时间停留在 staged 状态；工作区文件本身会保留，下一次定时检查仍可重试。
-        let reset_output = std::process::Command::new("git")
+        let mut reset_cmd = std::process::Command::new("git");
+        apply_git_hidden_window(&mut reset_cmd);
+        let reset_output = reset_cmd
             .current_dir(repo_dir)
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GCM_INTERACTIVE", "never")
@@ -752,7 +771,10 @@ pub fn git_push(path: String) -> Result<(), String> {
         .unwrap_or_else(|| "main".to_string());
 
     let repo_dir = repo.workdir().unwrap_or_else(|| Path::new(&path));
-    let output = std::process::Command::new("git")
+    let mut git_cmd = std::process::Command::new("git");
+    #[cfg(windows)]
+    git_cmd.creation_flags(0x0800_0000);
+    let output = git_cmd
         .current_dir(repo_dir)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "never")
@@ -919,7 +941,10 @@ pub fn git_pull(path: String) -> Result<(), String> {
         .unwrap_or_else(|| "main".to_string());
 
     let repo_dir = repo.workdir().unwrap_or_else(|| Path::new(&path));
-    let output = std::process::Command::new("git")
+    let mut git_cmd = std::process::Command::new("git");
+    #[cfg(windows)]
+    git_cmd.creation_flags(0x0800_0000);
+    let output = git_cmd
         .current_dir(repo_dir)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "never")
@@ -1350,14 +1375,30 @@ pub fn stage_file(path: String, file_path: String) -> Result<(), String> {
     let repo =
         Repository::discover(&path).map_err(|e| format!("Failed to open repository: {}", e))?;
 
+    let workdir = repo
+        .workdir()
+        .unwrap_or_else(|| Path::new(&path))
+        .to_path_buf();
+    let abs_path = workdir.join(&file_path);
+
     let mut index = repo
         .index()
         .map_err(|e| format!("Failed to get index: {}", e))?;
 
-    // 添加文件到索引
-    index
-        .add_path(Path::new(&file_path))
-        .map_err(|e| format!("Failed to add path to index: {}", e))?;
+    // 设计说明：当用户通过文件系统移动文件到另一个目录时，旧路径上的文件已不存在，
+    // 但 Git 状态仍会将其报告为"已删除"(D)。此时 index.add_path() 会因为磁盘上找不到
+    // 文件而失败，导致"删除的条目点击后无法暂存"。这里先判断文件是否存在：
+    // - 存在 → add_path（暂存新增/修改）
+    // - 不存在 → remove_path（暂存删除）
+    if abs_path.exists() {
+        index
+            .add_path(Path::new(&file_path))
+            .map_err(|e| format!("Failed to add path to index: {}", e))?;
+    } else {
+        index
+            .remove_path(Path::new(&file_path))
+            .map_err(|e| format!("Failed to remove path from index: {}", e))?;
+    }
 
     // 写入索引
     index

@@ -9989,6 +9989,10 @@ const initEditor = () => {
     scrollBeyondLastColumn: 40, // 允许水平滚动超出最后一列
     fixedOverflowWidgets: true, // 确保浮动部件可以超出编辑器边界
     wordWrap: 'on',
+    // 设计说明：默认 wrappingStrategy 为 'simple'，只按空格/连字符折行，
+    // 中英文混排文本中英文字符之间没有空格，会导致行尾超出后才折行。
+    // 'advanced' 策略在单词边界和 CJK 字符边界都会折行，体验与 VS Code 一致。
+    wrappingStrategy: 'advanced',
     renderValidationDecorations: 'on',
     // 设计说明：
     // 1. Python/Markdown 代码块中的临时变量很容易被 LSP 标记为 unused/unnecessary。
