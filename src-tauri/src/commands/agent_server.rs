@@ -6,16 +6,15 @@
 //! - 转发 SSE 流到 Tauri 前端
 
 use crate::commands::settingview;
-use crate::guaxiservices::bundled_resources;
 use reqwest::Client;
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use tokio::time::sleep;
-use tracing::info;
+use tracing::{info, warn};
 
 const AGENT_SERVER_PORT: u16 = 9876;
 const AGENT_SERVER_URL: &str = "http://127.0.0.1:9876";
@@ -26,6 +25,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[cfg(all(windows, not(debug_assertions)))]
 fn apply_no_window(cmd: &mut Command) {
+    use std::os::windows::process::CommandExt;
     cmd.creation_flags(CREATE_NO_WINDOW);
 }
 
@@ -36,39 +36,48 @@ fn apply_no_window(_cmd: &mut Command) {}
 static AGENT_SERVER_PROCESS: std::sync::LazyLock<Mutex<Option<Child>>> =
     std::sync::LazyLock::new(|| Mutex::new(None));
 
-/// 找到 Python 解释器路径
-fn resolve_python() -> Result<String, String> {
-    // 优先使用 Guaxi 托管运行时 (utils/python_runtime/.venv)
-    let runtime_dir = bundled_resources::ensure_relative_dir("utils/python_runtime")?;
-    let venv_dir = runtime_dir.join(".venv");
-    
-    let managed_python = if cfg!(windows) {
-        venv_dir.join("Scripts").join("python.exe")
-    } else {
-        venv_dir.join("bin").join("python")
-    };
-    
-    if managed_python.is_file() {
-        let path_str = managed_python.to_string_lossy().to_string();
-        // 验证可用性
-        if let Ok(output) = Command::new(&path_str).arg("--version").output() {
-            if output.status.success() {
-                info!(python = %path_str, "[agent_server] using managed python");
-                return Ok(path_str);
-            }
+/// agent server 日志文件路径（stdout/stderr 重定向目标）。
+///
+/// 设计说明：旧版把子进程 stdout/stderr 丢进 Stdio::null()，Python 启动失败（缺依赖、
+/// 导入报错、端口占用）时前端只会看到一句没有信息量的“30 秒未就绪”。这里把输出落到固定
+/// 日志文件，启动失败时读取尾部回传，便于排查。
+fn agent_server_log_path() -> PathBuf {
+    std::env::temp_dir().join("guaxi-agent-server.log")
+}
+
+/// 读取日志文件尾部若干行，用于把子进程的真实报错带回错误信息。
+fn read_log_tail(path: &Path, max_lines: usize) -> String {
+    match std::fs::read_to_string(path) {
+        Ok(content) => {
+            let lines: Vec<&str> = content.lines().collect();
+            let start = lines.len().saturating_sub(max_lines);
+            lines[start..].join("\n")
+        }
+        Err(_) => String::new(),
+    }
+}
+
+/// 解析 agent_server/requirements.txt 为待安装的依赖列表。
+///
+/// 过滤空行与 `#` 注释行；其余行（含 `uvicorn[standard]>=0.23.0` 这类带 extras/版本约束的
+/// 写法）原样返回，由 code_runtime 的 pip 安装逻辑按规范化包名做幂等去重。
+fn read_agent_requirements(source_dir: &Path) -> Vec<String> {
+    let req_path = source_dir.join("requirements.txt");
+    match std::fs::read_to_string(&req_path) {
+        Ok(content) => content
+            .lines()
+            .map(|line| line.trim().to_string())
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .collect(),
+        Err(err) => {
+            warn!(
+                path = %req_path.to_string_lossy(),
+                error = %err,
+                "[agent_server] read requirements.txt failed"
+            );
+            Vec::new()
         }
     }
-
-    // Fallback: 系统 Python
-    for exe in &["python", "python3"] {
-        if let Ok(output) = Command::new(exe).arg("--version").output() {
-            if output.status.success() {
-                return Ok(exe.to_string());
-            }
-        }
-    }
-
-    Err("未找到可用的 Python 解释器".to_string())
 }
 
 /// 找到 agent_server 源代码目录
@@ -140,8 +149,20 @@ pub async fn ensure_agent_server_started(app: &AppHandle) -> Result<(), String> 
         return Ok(());
     }
 
-    let python = resolve_python()?;
     let source_dir = agent_server_source_dir()?;
+
+    // 确保 Guaxi 托管 Python 就绪，并把 agent_server 依赖安装进托管 .venv。
+    // 首次会下载内置 Python 并 pip 安装（阻塞 I/O），故放到阻塞线程；该耗时发生在
+    // 启动子进程之前，不计入下方 30 秒健康检查窗口。
+    let requirements = read_agent_requirements(&source_dir);
+    let (python, base_args) = tokio::task::spawn_blocking(move || {
+        crate::commands::code_runtime::ensure_managed_python_with_packages(
+            &requirements,
+            "agent-server",
+        )
+    })
+    .await
+    .map_err(|e| format!("准备 Python 运行时任务失败: {}", e))??;
 
     info!(
         python = %python,
@@ -153,22 +174,37 @@ pub async fn ensure_agent_server_started(app: &AppHandle) -> Result<(), String> 
     let llm_config = build_llm_config_json().to_string();
     let work_dir = settingview::get_knowledge_bases_root();
 
+    // agent_server 目录是 agent_server/agent.py 所在目录的父目录
+    // （即项目根目录），PYTHONPATH 设为项目根以支持 import。
+    let pythonpath = source_dir
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| source_dir.to_string_lossy().to_string());
+
+    // 子进程 stdout/stderr 重定向到日志文件，启动失败时可读取尾部回传真实报错。
+    let log_path = agent_server_log_path();
+    let log_stdout = std::fs::File::create(&log_path)
+        .map_err(|e| format!("创建 agent server 日志文件失败: {}", e))?;
+    let log_stderr = log_stdout
+        .try_clone()
+        .map_err(|e| format!("克隆 agent server 日志句柄失败: {}", e))?;
+
+    // 经 `python -m agent_server.main` 启动：其 __main__ 会把 uvicorn 放进放大栈的子线程运行，
+    // 规避 Windows 内置 embeddable Python 主线程小栈导致的 0xC0000005 崩溃。
+    // host/port 通过环境变量传入，与 Rust 侧常量保持一致。
     let mut cmd = Command::new(&python);
-    cmd.args([
-        "-m", "uvicorn",
-        "agent_server.main:app",
-        "--host", "127.0.0.1",
-        "--port", &AGENT_SERVER_PORT.to_string(),
-        "--log-level", "info",
-    ])
-    .env("PYTHONPATH", source_dir.parent().unwrap_or(&source_dir).to_string_lossy().to_string())
-    .env("GUAXI_LLM_CONFIG", &llm_config)
-    .env("GUAXI_WORK_DIR", &work_dir)
-    .env("PYTHONUTF8", "1")
-    .current_dir(source_dir.parent().unwrap_or(&source_dir))
-    .stdin(Stdio::null())
-    .stdout(Stdio::null())
-    .stderr(Stdio::null());
+    cmd.args(&base_args)
+        .args(["-m", "agent_server.main"])
+        .env("PYTHONPATH", &pythonpath)
+        .env("GUAXI_LLM_CONFIG", &llm_config)
+        .env("GUAXI_WORK_DIR", &work_dir)
+        .env("GUAXI_AGENT_HOST", "127.0.0.1")
+        .env("GUAXI_AGENT_PORT", AGENT_SERVER_PORT.to_string())
+        .env("PYTHONUTF8", "1")
+        .current_dir(&pythonpath)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(log_stdout))
+        .stderr(Stdio::from(log_stderr));
     apply_no_window(&mut cmd);
 
     let child = cmd
@@ -189,6 +225,22 @@ pub async fn ensure_agent_server_started(app: &AppHandle) -> Result<(), String> 
     // 等待服务就绪
     let client = Client::new();
     for _ in 0..AGENT_SERVER_STARTUP_TIMEOUT_SECS {
+        // 子进程若已退出（如导入失败/端口占用），立即读取日志尾部报错，不必空等满超时。
+        // 注意：std Mutex 守卫在该 if 块结束即释放，不会跨下方 await 持锁。
+        if let Ok(mut guard) = AGENT_SERVER_PROCESS.lock() {
+            if let Some(child) = guard.as_mut() {
+                if let Ok(Some(status)) = child.try_wait() {
+                    let tail = read_log_tail(&log_path, 40);
+                    return Err(format!(
+                        "agent server 进程已退出（{}）。日志: {}\n{}",
+                        status,
+                        log_path.to_string_lossy(),
+                        tail
+                    ));
+                }
+            }
+        }
+
         if let Ok(resp) = client
             .get(format!("{}/health", AGENT_SERVER_URL))
             .timeout(Duration::from_secs(2))
@@ -204,9 +256,12 @@ pub async fn ensure_agent_server_started(app: &AppHandle) -> Result<(), String> 
         sleep(Duration::from_secs(1)).await;
     }
 
+    let tail = read_log_tail(&log_path, 40);
     Err(format!(
-        "agent server 在 {} 秒内未就绪",
-        AGENT_SERVER_STARTUP_TIMEOUT_SECS
+        "agent server 在 {} 秒内未就绪。日志: {}\n{}",
+        AGENT_SERVER_STARTUP_TIMEOUT_SECS,
+        log_path.to_string_lossy(),
+        tail
     ))
 }
 

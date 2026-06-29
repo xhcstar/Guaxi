@@ -118,5 +118,22 @@ async def tools_exec(req: ToolExecRequest):
 # ========== 入口 ==========
 
 if __name__ == "__main__":
+    import os
+    import threading
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=9876, log_level="info")
+
+    host = os.environ.get("GUAXI_AGENT_HOST", "127.0.0.1")
+    port = int(os.environ.get("GUAXI_AGENT_PORT", "9876"))
+
+    # Windows + 内置 embeddable Python：主线程默认栈很小（~1MB），FastAPI / pydantic-core /
+    # anyio 在 serve 阶段的 C 递归会把它压爆，触发 0xC0000005 访问冲突直接崩溃
+    # （Starlette 因递归更浅而幸免）。解决办法：把 uvicorn 放到一个栈放大到 64MB 的子线程里运行，
+    # 主线程只负责等待其结束。uvicorn 检测到非主线程会自动跳过信号处理器安装，进程仍由
+    # Rust 侧通过 child.kill() 终止，不依赖 Ctrl+C。
+    def _serve():
+        uvicorn.run(app, host=host, port=port, log_level="info")
+
+    threading.stack_size(64 * 1024 * 1024)
+    worker = threading.Thread(target=_serve, name="guaxi-uvicorn")
+    worker.start()
+    worker.join()

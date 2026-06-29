@@ -1921,6 +1921,46 @@ fn ensure_python_packages_installed(
     Ok(())
 }
 
+/// 合并推荐包列表与当前快照、安装缺失的包。
+/// - 幂等：只 pip install 尚未在 venv 中存在的包；
+/// - 无论走早期复用还是首次创建都调用，确保老运行时补上新版新依赖。
+fn ensure_recommended_runtime_packages_installed(
+    runtime_dir: &Path,
+    managed_spec: &Option<PythonLaunchSpec>,
+    managed_package_snapshot: &mut Vec<String>,
+    reason: &str,
+) -> Result<(), String> {
+    let spec = match managed_spec {
+        Some(spec) => spec,
+        None => {
+            info!(
+                runtime_dir = runtime_dir.to_string_lossy().as_ref(),
+                reason = reason,
+                "[PythonRuntime] ensure_recommended_packages skipped (no managed spec)"
+            );
+            return Ok(());
+        }
+    };
+
+    for recommended_package in python_runtime_recommended_packages() {
+        if !managed_package_snapshot.iter().any(|item| {
+            normalize_python_package_name(item)
+                == normalize_python_package_name(&recommended_package)
+        }) {
+            managed_package_snapshot.push(recommended_package);
+        }
+    }
+    info!(
+        package_count = managed_package_snapshot.len(),
+        packages = managed_package_snapshot.join(", ").as_str(),
+        "[PythonRuntime] prepared managed runtime package ensure list"
+    );
+
+    ensure_managed_pip_mirror(runtime_dir)?;
+    ensure_pip_available(spec)?;
+    ensure_python_packages_installed(spec, managed_package_snapshot, reason)
+}
+
 fn managed_python_runtime_health(spec: &PythonLaunchSpec) -> Result<(), String> {
     let mut version_cmd = Command::new(&spec.program);
     version_cmd.args(&spec.base_args).arg("--version");
@@ -2045,6 +2085,17 @@ fn ensure_managed_python_launch_spec_with_download_version(
                 runtime_dir = runtime_dir.to_string_lossy().as_ref(),
                 "[PythonRuntime] reuse existing managed virtual environment"
             );
+            // 即使运行时已存在且健康，仍需补齐可能新增的推荐依赖；
+            // 幂等操作——pip list 比对只需毫秒级，跳过已安装的包。
+            {
+                let mut initial = Vec::new();
+                ensure_recommended_runtime_packages_installed(
+                    &runtime_dir,
+                    &Some(spec.clone()),
+                    &mut initial,
+                    "managed-runtime-reuse-ensure",
+                )?;
+            }
             return Ok(spec.clone());
         }
     }
@@ -2073,29 +2124,12 @@ fn ensure_managed_python_launch_spec_with_download_version(
         );
     }
 
-    // 推荐依赖按名补齐：对新建和既有运行时都执行。ensure_python_packages_installed
-    // 只安装“缺失”的包（按规范化包名判断），因此这是幂等的——既能让老运行时补上
-    // 后来新增的 scipy 等依赖，又不会在每次启动时重复安装已有包。
-    for recommended_package in python_runtime_recommended_packages() {
-        if !managed_package_snapshot.iter().any(|item| {
-            normalize_python_package_name(item)
-                == normalize_python_package_name(&recommended_package)
-        }) {
-            managed_package_snapshot.push(recommended_package);
-        }
-    }
-    info!(
-        package_count = managed_package_snapshot.len(),
-        packages = managed_package_snapshot.join(", ").as_str(),
-        "[PythonRuntime] prepared managed runtime package ensure list"
-    );
-
-    ensure_managed_pip_mirror(&runtime_dir)?;
-    let managed_spec = managed_python_launch_spec(&runtime_dir, base_spec.source.clone())?;
-    let pip_version = ensure_pip_available(&managed_spec)?;
-    ensure_python_packages_installed(
-        &managed_spec,
-        &managed_package_snapshot,
+    let marker_spec = managed_python_launch_spec(&runtime_dir, base_spec.source.clone())?;
+    let pip_version = ensure_pip_available(&marker_spec)?;
+    ensure_recommended_runtime_packages_installed(
+        &runtime_dir,
+        &Some(marker_spec.clone()),
+        &mut managed_package_snapshot,
         if managed_runtime_broken {
             "managed-runtime-repair"
         } else if !has_managed_python {
@@ -2105,17 +2139,33 @@ fn ensure_managed_python_launch_spec_with_download_version(
         },
     )?;
     let _ = write_runtime_marker(
-        &managed_spec,
+        &marker_spec,
         &pip_version,
         download_version.unwrap_or_default(),
         did_use_download_bootstrap(&runtime_dir, &base_spec.source),
     )?;
     cleanup_bootstrap_runtime_artifacts(&runtime_dir, "managed-runtime-ready");
-    Ok(managed_spec)
+    Ok(marker_spec)
 }
 
 fn resolve_python_launch_spec() -> Result<PythonLaunchSpec, String> {
     ensure_managed_python_launch_spec()
+}
+
+/// 确保 Guaxi 托管 Python 运行时就绪，并把给定依赖安装进托管 `.venv`。
+///
+/// 供 agent server 等外部子进程复用同一套托管 Python，避免依赖不可控的系统环境。
+/// 首次调用可能触发内置 Python 下载与 pip 安装，属于阻塞 I/O，调用方应放到阻塞线程执行。
+/// 返回托管 venv 的 python 可执行路径与基础参数（base_args）。
+pub fn ensure_managed_python_with_packages(
+    packages: &[String],
+    reason: &str,
+) -> Result<(String, Vec<String>), String> {
+    let spec = ensure_managed_python_launch_spec()?;
+    // 幂等：ensure_python_packages_installed 内部会先 `pip list` 比对，已装的包会被跳过，
+    // 因此后续每次启动几乎零开销，只在缺包时才真正执行 pip install。
+    ensure_python_packages_installed(&spec, packages, reason)?;
+    Ok((spec.program, spec.base_args))
 }
 
 fn auto_repair_managed_runtime_if_needed(
