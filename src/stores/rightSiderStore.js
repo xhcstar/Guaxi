@@ -96,14 +96,14 @@ export const useRightSiderStore = defineStore("rightSider", {
     },
     addAssistantMessage(message) {
       if (!message || typeof message !== "object") return;
-      const next = {
+      const next = Object.assign({
         id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         role: message.role || "assistant",
         content: String(message.content || ""),
         html: String(message.html || ""),
         createdAt: Date.now(),
         meta: message.meta || null,
-      };
+      }, message);
       this.assistant.messages.push(next);
       return next.id;
     },
@@ -132,7 +132,7 @@ export const useRightSiderStore = defineStore("rightSider", {
       this.assistant.modelId = n;
     },
     setAssistantTask(task) {
-      const allowed = ["chat", "write", "translate", "organize", "classify", "tag"];
+      const allowed = ["chat", "write", "translate", "organize", "classify", "tag", "agent"];
       const next = String(task || "chat");
       this.assistant.task = allowed.includes(next) ? next : "chat";
     },

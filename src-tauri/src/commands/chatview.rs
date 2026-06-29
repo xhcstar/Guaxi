@@ -3344,8 +3344,7 @@ pub async fn search_web_duckduckgo(
 #[tauri::command]
 pub async fn cancel_chat_stream() -> Result<(), String> {
     request_stream_cancel();
-    // 清理所有待确认的 agent 写操作：drop sender 会让等待方收到取消。
-    AGENT_PENDING.lock().unwrap().clear();
+    // 取消：设置 Rust 侧停止标志（Python Agent Server 由 SSE 循环内通知）
     info!("cancel_chat_stream: cancellation requested");
     Ok(())
 }
@@ -5470,162 +5469,11 @@ pub struct AgentRequest {
     sessionid: String,
     #[serde(default)]
     history: Vec<ChatMsg>,
-    /// 当前知识库名称（kb_semantic_search 默认目标）。
-    #[serde(default)]
-    kb_name: String,
     /// 活动仓库根路径（read_file 越权防护）。
     #[serde(default)]
     repo_path: String,
 }
 
-const AGENT_MAX_ITERS: usize = 6;
-const AGENT_READ_FILE_MAX_CHARS: usize = 8000;
-
-fn agent_system_prompt() -> &'static str {
-    "你是嵌入在本地知识管理软件中的智能助手，可调用工具访问用户的知识库与文件来回答问题。\n\
-规则：\n\
-1. 当问题涉及用户的笔记/知识库/具体文件时，先用 kb_semantic_search 检索定位，再用 read_file 读取正文，最后基于真实内容作答。\n\
-2. 不要编造文件内容或检索结果；信息不足时如实说明。\n\
-3. 普通常识或寒暄无需调用工具，直接回答。\n\
-4. 工具调用应精简，避免重复检索同一内容。\n\
-5. 最终回答使用简洁的 Markdown，数学公式用 $...$ 或 $$...$$。"
-}
-
-fn agent_tool_specs() -> Value {
-    json!([
-        {"type":"function","function":{
-            "name":"kb_semantic_search",
-            "description":"在用户知识库中按语义检索相关节点（概念/文件/标题），返回名称、类型、路径与相关度分数。先检索定位，再用 read_file 读正文。",
-            "parameters":{"type":"object","properties":{
-                "query":{"type":"string","description":"检索关键词或问题"},
-                "top_k":{"type":"integer","description":"返回数量，默认 8"},
-                "kb_name":{"type":"string","description":"知识库名称，缺省用当前知识库"}
-            },"required":["query"]}
-        }},
-        {"type":"function","function":{
-            "name":"read_file",
-            "description":"读取指定文件的文本内容（限当前知识库/仓库目录内）。",
-            "parameters":{"type":"object","properties":{
-                "path":{"type":"string","description":"文件路径（绝对路径，或相对当前仓库根）"}
-            },"required":["path"]}
-        }},
-        {"type":"function","function":{
-            "name":"list_knowledge_bases",
-            "description":"列出所有可用知识库名称，便于选择检索目标。",
-            "parameters":{"type":"object","properties":{}}
-        }},
-        {"type":"function","function":{
-            "name":"create_note",
-            "description":"在当前仓库目录内新建一个笔记/文本文件并写入内容（仅当文件不存在时）。这是写操作，会请求用户确认后才执行。",
-            "parameters":{"type":"object","properties":{
-                "path":{"type":"string","description":"新文件路径（相对仓库根，建议 .md 后缀）"},
-                "content":{"type":"string","description":"文件内容"}
-            },"required":["path","content"]}
-        }},
-        {"type":"function","function":{
-            "name":"write_file",
-            "description":"向当前仓库目录内的文件写入内容（覆盖或追加）。这是写操作，会请求用户确认后才执行。",
-            "parameters":{"type":"object","properties":{
-                "path":{"type":"string","description":"文件路径（相对仓库根）"},
-                "content":{"type":"string","description":"要写入的内容"},
-                "mode":{"type":"string","enum":["overwrite","append"],"description":"覆盖或追加，默认 overwrite"}
-            },"required":["path","content"]}
-        }}
-    ])
-}
-
-/// 待用户确认的写操作表：call_id -> 决定发送端。
-static AGENT_PENDING: Lazy<Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<AgentDecision>>>> =
-    Lazy::new(|| Mutex::new(std::collections::HashMap::new()));
-
-#[derive(Debug)]
-pub struct AgentDecision {
-    approved: bool,
-    args: Option<Value>,
-}
-
-/// 判断某工具是否为需要用户确认的写操作。
-fn agent_is_write_tool(name: &str) -> bool {
-    matches!(name, "create_note" | "write_file")
-}
-
-/// 解析写操作目标路径，确保其父目录位于仓库根内（防越权）。
-fn agent_resolve_write_path(repo_path: &str, raw: &str) -> Result<std::path::PathBuf, String> {
-    use std::path::Path;
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return Err("path 为空".to_string());
-    }
-    if raw.contains("..") {
-        return Err("path 不允许包含 ..".to_string());
-    }
-    let candidate = {
-        let p = Path::new(raw);
-        if p.is_absolute() {
-            p.to_path_buf()
-        } else if !repo_path.trim().is_empty() {
-            Path::new(repo_path).join(raw)
-        } else {
-            return Err("相对路径需要提供仓库根（repo_path）".to_string());
-        }
-    };
-    if !repo_path.trim().is_empty() {
-        if let Ok(root) = std::fs::canonicalize(repo_path) {
-            let parent = candidate.parent().ok_or("无效路径")?;
-            if let Some(parent) = parent.to_str().filter(|s| !s.is_empty()).map(|_| parent) {
-                if parent.exists() {
-                    let parent_canon = std::fs::canonicalize(parent)
-                        .map_err(|e| format!("父目录无效: {}", e))?;
-                    if !parent_canon.starts_with(&root) {
-                        return Err("拒绝写入仓库目录之外".to_string());
-                    }
-                } else if !candidate.starts_with(&root) {
-                    return Err("拒绝写入仓库目录之外".to_string());
-                }
-            }
-        }
-    }
-    Ok(candidate)
-}
-
-/// 用户确认后执行实际写入（create_note / write_file）。
-fn agent_exec_write(name: &str, args: &Value, request: &AgentRequest) -> Result<String, String> {
-    let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
-    let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
-    let resolved = agent_resolve_write_path(&request.repo_path, path)?;
-    match name {
-        "create_note" => {
-            if resolved.exists() {
-                return Err(format!("文件已存在: {}", resolved.to_string_lossy()));
-            }
-            if let Some(parent) = resolved.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
-            }
-            std::fs::write(&resolved, content).map_err(|e| format!("写入失败: {}", e))?;
-            Ok(json!({"ok":true,"action":"created","path":resolved.to_string_lossy()}).to_string())
-        }
-        "write_file" => {
-            let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("overwrite");
-            if let Some(parent) = resolved.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
-            }
-            if mode == "append" {
-                use std::io::Write;
-                let mut f = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&resolved)
-                    .map_err(|e| format!("打开失败: {}", e))?;
-                f.write_all(content.as_bytes())
-                    .map_err(|e| format!("写入失败: {}", e))?;
-            } else {
-                std::fs::write(&resolved, content).map_err(|e| format!("写入失败: {}", e))?;
-            }
-            Ok(json!({"ok":true,"action":mode,"path":resolved.to_string_lossy()}).to_string())
-        }
-        other => Err(format!("未知写工具: {}", other)),
-    }
-}
 
 #[derive(Deserialize)]
 pub struct AgentDecisionRequest {
@@ -5635,145 +5483,17 @@ pub struct AgentDecisionRequest {
     args: Option<Value>,
 }
 
-/// 前端对某个写操作的确认/拒绝（可携带编辑后的参数）。
+/// Forward agent write confirm to Python Agent Server.
 #[tauri::command]
 pub async fn agent_tool_decision(request: AgentDecisionRequest) -> Result<(), String> {
-    let sender = AGENT_PENDING.lock().unwrap().remove(&request.call_id);
-    match sender {
-        Some(tx) => {
-            let _ = tx.send(AgentDecision {
-                approved: request.approved,
-                args: request.args,
-            });
-            Ok(())
-        }
-        None => Err("确认请求不存在或已超时".to_string()),
-    }
-}
-
-/// 解析 read_file 的目标路径，并确保不越出仓库根目录。
-fn agent_resolve_read_path(repo_path: &str, raw: &str) -> Result<std::path::PathBuf, String> {
-    use std::path::Path;
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return Err("path 为空".to_string());
-    }
-    let candidate = {
-        let p = Path::new(raw);
-        if p.is_absolute() {
-            p.to_path_buf()
-        } else if !repo_path.trim().is_empty() {
-            Path::new(repo_path).join(raw)
-        } else {
-            p.to_path_buf()
-        }
-    };
-    let canon = std::fs::canonicalize(&candidate).map_err(|e| format!("无法访问文件: {}", e))?;
-    if !repo_path.trim().is_empty() {
-        if let Ok(root) = std::fs::canonicalize(repo_path) {
-            if !canon.starts_with(&root) {
-                return Err("拒绝访问仓库目录之外的文件".to_string());
-            }
-        }
-    }
-    Ok(canon)
-}
-
-/// 执行单个工具调用，返回给模型的文本结果（JSON 字符串）。只读工具直接执行。
-async fn agent_dispatch_tool(
-    app: &AppHandle,
-    name: &str,
-    args: &Value,
-    request: &AgentRequest,
-) -> Result<String, String> {
-    // 写操作：先请求前端确认，确认后再执行（human-in-the-loop）。
-    if agent_is_write_tool(name) {
-        let call_id = generate_session_id();
-        let (tx, rx) = tokio::sync::oneshot::channel::<AgentDecision>();
-        AGENT_PENDING
-            .lock()
-            .unwrap()
-            .insert(call_id.clone(), tx);
-        let _ = app.emit(
-            "agent-tool-confirm",
-            json!({"call_id": call_id, "tool": name, "args": args}),
-        );
-        let decision = match tokio::time::timeout(std::time::Duration::from_secs(120), rx).await {
-            Ok(Ok(d)) => d,
-            _ => {
-                AGENT_PENDING.lock().unwrap().remove(&call_id);
-                return Ok("用户未确认（超时或已取消），该写操作未执行".to_string());
-            }
-        };
-        if !decision.approved {
-            return Ok("用户已拒绝该写操作".to_string());
-        }
-        let eff_args = decision.args.unwrap_or_else(|| args.clone());
-        return agent_exec_write(name, &eff_args, request);
-    }
-    match name {
-        "kb_semantic_search" => {
-            let query = args
-                .get("query")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            if query.is_empty() {
-                return Err("query 为空".to_string());
-            }
-            let top_k = args
-                .get("top_k")
-                .and_then(|v| v.as_u64())
-                .map(|n| n as usize)
-                .unwrap_or(8);
-            let kb = args
-                .get("kb_name")
-                .and_then(|v| v.as_str())
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| request.kb_name.clone());
-            if kb.trim().is_empty() {
-                return Err("未指定知识库（kb_name），可先调用 list_knowledge_bases".to_string());
-            }
-            let hits =
-                crate::commands::kgraph::kg_semantic_search(kb, query, Some(top_k), None).await?;
-            let simplified: Vec<Value> = hits
-                .iter()
-                .map(|h| {
-                    json!({
-                        "name": h.node.name,
-                        "type": h.node.node_type,
-                        "path": h.node.path.clone().or_else(|| h.node.rel_path.clone()),
-                        "tags": h.node.tags,
-                        "score": h.score,
-                    })
-                })
-                .collect();
-            Ok(serde_json::to_string(&json!({ "results": simplified })).unwrap_or_default())
-        }
-        "read_file" => {
-            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
-            let resolved = agent_resolve_read_path(&request.repo_path, path)?;
-            let mut content =
-                std::fs::read_to_string(&resolved).map_err(|e| format!("读取失败: {}", e))?;
-            let truncated = content.chars().count() > AGENT_READ_FILE_MAX_CHARS;
-            if truncated {
-                content = content.chars().take(AGENT_READ_FILE_MAX_CHARS).collect::<String>();
-            }
-            Ok(json!({
-                "path": resolved.to_string_lossy(),
-                "truncated": truncated,
-                "content": content,
-            })
-            .to_string())
-        }
-        "list_knowledge_bases" => {
-            let list = crate::commands::knowledgebase::get_knowledge_base_list()?;
-            Ok(serde_json::to_string(&json!({ "knowledge_bases": list })).unwrap_or_default())
-        }
-        other => Err(format!("未知工具: {}", other)),
-    }
+    let client = reqwest::Client::new();
+    let _resp = client
+        .post("http://127.0.0.1:9876/agent/confirm")
+        .json(&json!({"call_id": request.call_id, "approved": request.approved, "edited_args": request.args}))
+        .send()
+        .await
+        .map_err(|e| format!("Agent confirm failed: {}", e))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -5783,10 +5503,10 @@ pub async fn agent_chat_stream(app: AppHandle, request: AgentRequest) -> Result<
         request.modelid, request.question
     );
 
-    // 仅本地 Qwen3（id 9）保证 function calling 一致性；其它模型降级为普通对话（带历史）。
-    if request.modelid != 9 {
+    // 网页版模型不支持工具调用，降级为普通对话
+    if request.modelid == 7 || request.modelid == 8 {
         warn!(
-            "agent_chat_stream: modelid {} 不支持工具调用，降级为普通对话",
+            "agent_chat_stream: modelid {} 为网页版模型，降级为普通对话",
             request.modelid
         );
         let chat_req = ChatRequest {
@@ -5799,140 +5519,106 @@ pub async fn agent_chat_stream(app: AppHandle, request: AgentRequest) -> Result<
         return get_chat_answer_stream(app, chat_req).await;
     }
 
+    // 确保 Python Agent Server 已运行
+    crate::commands::agent_server::ensure_agent_server_started(&app).await?;
+
     reset_stream_cancel_flag();
-    ensure_local_qwen_server_started().await?;
 
-    let mut messages: Vec<Value> = Vec::new();
-    messages.push(json!({"role":"system","content":agent_system_prompt()}));
-    for m in &request.history {
-        let role = match m.role.as_str() {
-            "user" | "assistant" => m.role.as_str(),
-            _ => continue,
-        };
-        let content = m.content.trim();
-        if content.is_empty() {
-            continue;
-        }
-        messages.push(json!({"role":role,"content":content}));
+    // 构建请求体
+    let history_json: Vec<Value> = request.history.iter().map(|m| {
+        json!({"role": m.role, "content": m.content})
+    }).collect();
+
+    let body = json!({
+        "chat_id": request.sessionid,
+        "model_id": request.modelid,
+        "question": request.question,
+        "history": history_json,
+        "work_dir": request.repo_path,
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post("http://127.0.0.1:9876/agent/chat")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Agent 服务请求失败: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("Agent 服务返回错误: {} {}", status, text));
     }
-    messages.push(json!({"role":"user","content":request.question}));
 
-    let tools = agent_tool_specs();
-    let client = ClientBuilder::new()
-        .no_proxy()
-        .build()
-        .map_err(|e| e.to_string())?;
+    // 读取 SSE 流并转发到 Tauri 前端
+    use futures_util::StreamExt;
+    let mut stream = resp.bytes_stream();
+    let mut buffer = String::new();
 
-    for iter in 0..AGENT_MAX_ITERS {
+    while let Some(chunk) = stream.next().await {
         if is_stream_cancel_requested() {
+            // 通知 agent server 取消
+            let _ = client
+                .post("http://127.0.0.1:9876/agent/cancel")
+                .json(&json!({"chat_id": request.sessionid}))
+                .send()
+                .await;
             info!("agent_chat_stream: canceled by user");
             return Ok(());
         }
-        // 最后一轮不带 tools，强制模型基于已有信息总结作答，避免无限工具循环。
-        let with_tools = iter < AGENT_MAX_ITERS - 1;
-        let mut body = json!({
-            "model": "local-qwen3",
-            "messages": messages,
-            "stream": false,
-            "cache_prompt": true,
-        });
-        if with_tools {
-            body["tools"] = tools.clone();
-        }
 
-        let resp = client
-            .post(LOCAL_QWEN_CHAT_COMPLETIONS_URL)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(format!("Agent 决策轮失败: {} {}", status, text));
-        }
-        let v: Value = resp.json().await.map_err(|e| e.to_string())?;
-        let msg = v
-            .get("choices")
-            .and_then(|c| c.get(0))
-            .and_then(|c| c.get("message"))
-            .cloned()
-            .unwrap_or(Value::Null);
-        let tool_calls = msg
-            .get("tool_calls")
-            .and_then(|t| t.as_array())
-            .cloned()
-            .unwrap_or_default();
+        let chunk_str = match std::str::from_utf8(&chunk.map_err(|e| e.to_string())?) {
+            Ok(s) => s.to_string(),
+            Err(_) => continue,
+        };
+        buffer.push_str(&chunk_str);
 
-        if with_tools && !tool_calls.is_empty() {
-            // 把 assistant 的 tool_calls 决策消息加入上下文，再追加各工具结果。
-            messages.push(json!({
-                "role": "assistant",
-                "content": msg.get("content").cloned().unwrap_or(Value::Null),
-                "tool_calls": tool_calls.clone(),
-            }));
-            for call in &tool_calls {
-                if is_stream_cancel_requested() {
-                    return Ok(());
-                }
-                let call_id = call
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let fname = call
-                    .get("function")
-                    .and_then(|f| f.get("name"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let args_raw = call
-                    .get("function")
-                    .and_then(|f| f.get("arguments"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("{}");
-                let args: Value = serde_json::from_str(args_raw).unwrap_or(json!({}));
+        // 解析 SSE 事件行
+        while let Some(pos) = buffer.find("\n\n") {
+            let event_block = buffer[..pos].to_string();
+            buffer = buffer[pos + 2..].to_string();
 
-                let _ = app.emit(
-                    "agent-step",
-                    json!({"tool": fname, "status": "running", "args": args}),
-                );
-                let result = match agent_dispatch_tool(&app, &fname, &args, &request).await {
-                    Ok(r) => {
-                        let _ = app.emit("agent-step", json!({"tool": fname, "status": "done"}));
-                        r
-                    }
-                    Err(e) => {
-                        let _ = app
-                            .emit("agent-step", json!({"tool": fname, "status": "error", "message": e}));
-                        format!("工具执行失败: {}", e)
-                    }
+            for line in event_block.lines() {
+                let data = line.strip_prefix("data: ").unwrap_or("");
+                if data.is_empty() { continue; }
+
+                let ev: Value = match serde_json::from_str(data) {
+                    Ok(v) => v,
+                    Err(_) => continue,
                 };
-                messages.push(json!({
-                    "role": "tool",
-                    "tool_call_id": call_id,
-                    "content": result,
-                }));
-            }
-            continue;
-        }
 
-        // 最终答案：决策轮已拿到完整 content，直接 emit 复用前端流式渲染。
-        let content = msg
-            .get("content")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        if is_stream_cancel_requested() {
-            return Ok(());
+                let ev_type = ev.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+                match ev_type {
+                    "text" => {
+                        let content = ev.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                        if !content.is_empty() {
+                            let _ = app.emit("modle-streaming-respond-output", content);
+                        }
+                    }
+                    "tool_call" | "tool_result" => {
+                        let _ = app.emit("agent-step", &ev);
+                    }
+                    "tool_confirm" => {
+                        let _ = app.emit("agent-tool-confirm", &ev);
+                    }
+                    "error" => {
+                        let msg = ev.get("message").and_then(|v| v.as_str()).unwrap_or("未知错误");
+                        warn!("agent_chat_stream error: {}", msg);
+                    }
+                    _ => {}
+                }
+            }
         }
-        if !content.is_empty() {
-            app.emit("modle-streaming-respond-output", &content)
-                .map_err(|e| e.to_string())?;
-        }
-        log_model_reply("agent_chat_stream model=qwen3", &request.sessionid, &content);
-        return Ok(());
     }
+
+    // 记录日志
+    log_model_reply(
+        "agent_chat_stream via python service",
+        &request.sessionid,
+        "[Agent response via SSE - see event stream for content]",
+    );
 
     Ok(())
 }

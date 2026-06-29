@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 use std::time::{Duration as StdDuration, SystemTime};
 use tokio::time::{sleep, Duration};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::prelude::*;
 #[cfg(desktop)]
@@ -700,6 +700,16 @@ async fn main() {
                 commands::p2psync::p2p_autostart_if_enabled().await;
             });
 
+            // 启动 Agent Server（Python 进程）
+            {
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = commands::agent_server::ensure_agent_server_started(&app_handle).await {
+                        warn!("Agent server 启动失败（不影响主功能）: {}", e);
+                    }
+                });
+            }
+
             #[cfg(desktop)]
             {
                 use tauri_plugin_global_shortcut::ShortcutState;
@@ -763,4 +773,8 @@ async fn main() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+
+    // 停止 Agent Server
+    commands::agent_server::stop_agent_server();
+    info!("Agent server stopped");
 }

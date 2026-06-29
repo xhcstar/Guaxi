@@ -1,3 +1,4 @@
+pub mod agent_server;
 pub mod chatview;
 pub mod docprocess;
 pub mod file_watcher;

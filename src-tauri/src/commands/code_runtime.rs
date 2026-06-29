@@ -103,6 +103,18 @@ const PYTHON_RUNTIME_RECOMMENDED_PACKAGES: &[&str] = &[
     // Flipboard 正文抽取金标准引擎：默认安装，让"收集完整图文"开箱即用；
     // 未装时 flipboard_extract 也会后台自动 pip 安装并临时降级到 Rust scraper。
     "trafilatura",
+    // ====== Guaxi Agent Server 依赖 ======
+    // Agent 服务核心：FastAPI + SSE 流式通信
+    "fastapi",
+    "uvicorn[standard]",
+    // LLM 路由：通过 openai 库统一调用所有支持 OpenAI 兼容 API 的模型
+    "openai",
+    // 网络搜索与抓取
+    "httpx",
+    "duckduckgo_search",
+    "beautifulsoup4",
+    "lxml",
+    "markdownify",
 ];
 const PYTHON_RUNTIME_BOOTSTRAP_PACKAGE_NAMES: &[&str] =
     &["pip", "setuptools", "wheel", "virtualenv"];

@@ -38,10 +38,10 @@
       <div
         v-for="message in messages"
         :key="message.id"
-        class="assistant-message"
-        :class="message.role === 'user' ? 'assistant-message-user' : 'assistant-message-ai'"
+        class="assistant-message assistant-message-tool_step"
+        :class="message.role === 'user' ? 'assistant-message-user' : message.role === 'tool_step' ? 'assistant-message-tool' : 'assistant-message-ai'"
       >
-        <div class="assistant-message-avatar">
+        <div v-if="message.role !== 'tool_step'" class="assistant-message-avatar">
           <span v-if="message.role === 'user'">我</span>
           <span v-else-if="message.role === 'web'">网</span>
           <span v-else>AI</span>
@@ -71,6 +71,36 @@
             class="assistant-message-content assistant-message-plain"
           >
             {{ message.content }}
+          </div>
+          <!-- Agent 工具调用步骤卡片 -->
+          <div
+            v-if="message.role === 'tool_step'"
+            class="agent-tool-card"
+            :class="'agent-tool-card--' + (message.status || 'running')"
+          >
+            <div class="agent-tool-card-head" @click="message.collapsed = !message.collapsed">
+              <span class="agent-tool-card-icon">{{ message.icon }}</span>
+              <span class="agent-tool-card-label">{{ message.toolLabel }}</span>
+              <span class="agent-tool-card-status">
+                <span v-if="message.status === 'running'" class="agent-tool-spinner" />
+                <span v-else-if="message.status === 'done'">✅</span>
+                <span v-else-if="message.status === 'error'">❌</span>
+              </span>
+              <span class="agent-tool-card-toggle">{{ message.collapsed ? '▸' : '▾' }}</span>
+            </div>
+            <div v-if="!message.collapsed" class="agent-tool-card-body">
+              <div v-if="Object.keys(message.args || {}).length" class="agent-tool-card-section">
+                <div class="agent-tool-card-section-title">参数</div>
+                <pre class="agent-tool-card-pre">{{ JSON.stringify(message.args, null, 2) }}</pre>
+              </div>
+              <div v-if="message.result" class="agent-tool-card-section">
+                <div class="agent-tool-card-section-title">结果</div>
+                <pre class="agent-tool-card-pre agent-tool-card-result">{{ typeof message.result === 'string' ? message.result : JSON.stringify(message.result, null, 2) }}</pre>
+              </div>
+              <div v-if="message.status === 'error' && !message.result" class="agent-tool-card-section">
+                <div class="agent-tool-card-section-title agent-tool-card-error">执行失败</div>
+              </div>
+            </div>
           </div>
           <div
             v-if="message.role === 'web' && !message.meta?.agentStep"
@@ -298,8 +328,19 @@ const AGENT_TOOL_LABELS = {
   kb_semantic_search: '检索知识库',
   read_file: '读取文件',
   list_knowledge_bases: '列出知识库',
+  list_directory: '浏览目录',
   create_note: '创建笔记',
   write_file: '写入文件',
+  search_files: '搜索文件',
+  web_search: '网络搜索',
+  fetch_webpage: '抓取网页',
+  exec_python: '执行 Python',
+  exec_shell: '执行命令',
+}
+const AGENT_TOOL_ICONS = {
+  read_file: '📄', list_directory: '📁', search_files: '🔍', write_file: '✏️', create_note: '📝',
+  web_search: '🌐', fetch_webpage: '📰', exec_python: '🐍', exec_shell: '💻',
+  kb_semantic_search: '🧠', list_knowledge_bases: '📚', default: '🔧'
 }
 const messagesRef = ref(null)
 const composerInputRef = ref(null)
@@ -1228,18 +1269,65 @@ const initAssistantEventListeners = async () => {
     })
   }
 
-  // Agent 工具调用进度：在消息流中以一条临时提示展示当前步骤。
+  // Agent 工具调用进度：创建可折叠的步骤卡片，running 时更新为 done/error
   if (typeof agentStepUnlisten.value !== 'function') {
     agentStepUnlisten.value = await listen('agent-step', (event) => {
       if (!pending.value) return
       const p = event?.payload || {}
-      const toolLabel = AGENT_TOOL_LABELS[p.tool] || p.tool || '工具'
+
+      // 兼容新旧格式：新格式有 type/name，旧格式有 tool
+      const evType = p.type || ''
+      const toolName = p.name || p.tool || ''
+      const toolLabel = AGENT_TOOL_LABELS[toolName] || toolName || '工具'
+      const status = p.status || 'running'
+
+      if (evType === 'tool_result') {
+        // tool_result: 更新之前 running 的卡片为 done/error
+        const allMessages = rightSiderStore.assistant.messages
+        for (let i = allMessages.length - 1; i >= 0; i--) {
+          const m = allMessages[i]
+          if (m.role === 'tool_step' && m.toolName === toolName && m.status === 'running') {
+            rightSiderStore.updateAssistantMessage(m.id, {
+              status: status === 'done' ? 'done' : 'error',
+              result: p.result || m.result,
+            })
+            break
+          }
+        }
+        return
+      }
+
+      if (evType === 'tool_call' || !evType) {
+        // tool_call 或旧格式 agent-step：创建 running 卡片
+        let args = {}
+        try {
+          if (typeof p.args === 'string') args = JSON.parse(p.args)
+          else if (p.args && typeof p.args === 'object') args = p.args
+        } catch {}
+
+        rightSiderStore.addAssistantMessage({
+          role: 'tool_step',
+          content: '',
+          toolName,
+          toolLabel,
+          icon: AGENT_TOOL_ICONS[toolName] || AGENT_TOOL_ICONS.default,
+          status,
+          args,
+          result: p.result || '',
+          collapsed: true,
+          createdAt: Date.now(),
+        })
+        scrollToBottom()
+        return
+      }
+
+      // 兜底：简单状态文本
       let text = ''
-      if (p.status === 'running') text = `🔧 正在调用：${toolLabel}`
-      else if (p.status === 'done') text = `✅ 完成：${toolLabel}`
-      else if (p.status === 'error') text = `⚠️ ${toolLabel} 失败：${p.message || ''}`
+      if (status === 'running') text = `🔧 正在调用：${toolLabel}`
+      else if (status === 'done') text = `✅ 完成：${toolLabel}`
+      else if (status === 'error') text = `⚠️ ${toolLabel} 失败：${p.message || ''}`
       if (text) {
-        rightSiderStore.addAssistantMessage({ role: 'web', content: text, meta: { agentStep: true } })
+        rightSiderStore.addAssistantMessage({ role: 'tool_step', content: text, toolName, toolLabel, status, createdAt: Date.now() })
         scrollToBottom()
       }
     })
@@ -2168,5 +2256,81 @@ const sendQuestion = async () => {
     transform: scale(1.08);
     box-shadow: 0 0 24px rgba(97, 120, 255, 0.55);
   }
+}
+
+/* ====== Agent 工具调用步骤卡片 ====== */
+.assistant-message-tool { opacity: 0.92; }
+
+.agent-tool-card {
+  margin: 4px 0;
+  border-radius: 8px;
+  border: 1px solid var(--guaxi-border);
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 96%, transparent);
+  overflow: hidden;
+  transition: border-color 0.2s;
+}
+
+.agent-tool-card--running {
+  border-color: color-mix(in srgb, #3b82f6 60%, var(--guaxi-border));
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 90%, #3b82f6 10%);
+}
+
+.agent-tool-card--done { border-color: color-mix(in srgb, #22c55e 50%, var(--guaxi-border)); }
+.agent-tool-card--error { border-color: color-mix(in srgb, #ef4444 50%, var(--guaxi-border)); }
+
+.agent-tool-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 12px;
+}
+
+.agent-tool-card-head:hover {
+  background: color-mix(in srgb, var(--guaxi-header-bg) 95%, transparent);
+}
+
+.agent-tool-card-icon { font-size: 14px; flex: 0 0 auto; }
+.agent-tool-card-label { flex: 1 1 auto; color: var(--guaxi-text-primary); font-weight: 500; }
+.agent-tool-card-status { flex: 0 0 auto; font-size: 13px; }
+.agent-tool-card-toggle { flex: 0 0 auto; color: var(--guaxi-text-secondary); font-size: 11px; }
+
+.agent-tool-card-body { padding: 0 10px 10px 10px; }
+.agent-tool-card-section { margin-top: 8px; }
+
+.agent-tool-card-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--guaxi-text-secondary);
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.agent-tool-card-pre {
+  margin: 0;
+  font-size: 11px;
+  max-height: 200px;
+  overflow: auto;
+  background: color-mix(in srgb, var(--guaxi-content-bg) 80%, transparent);
+  border-radius: 4px;
+  padding: 6px 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Cascadia Code', Consolas, monospace;
+}
+
+.agent-tool-card-error { color: #ef4444; }
+
+.agent-tool-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid color-mix(in srgb, var(--guaxi-border) 60%, transparent);
+  border-top-color: #3b82f6;
+  border-radius: 50%;
+  animation: ring-spin 0.8s linear infinite;
 }
 </style>
