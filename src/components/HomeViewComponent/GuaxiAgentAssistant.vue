@@ -21,7 +21,7 @@
       </div>
     </div>
 
-    <div ref="messagesRef" class="assistant-messages">
+    <div ref="messagesRef" class="assistant-messages" @scroll="handleMessagesScroll">
       <div v-if="messages.length === 0" class="assistant-empty">
         <div class="assistant-empty-icon">
           <svg viewBox="0 0 24 24" width="24" height="24">
@@ -38,7 +38,7 @@
       <div
         v-for="message in messages"
         :key="message.id"
-        class="assistant-message assistant-message-tool_step"
+        class="assistant-message"
         :class="message.role === 'user' ? 'assistant-message-user' : message.role === 'tool_step' ? 'assistant-message-tool' : 'assistant-message-ai'"
       >
         <div v-if="message.role !== 'tool_step'" class="assistant-message-avatar">
@@ -72,21 +72,59 @@
           >
             {{ message.content }}
           </div>
+          <div
+            v-if="message.role === 'user' && getMessageContextItems(message).length"
+            class="assistant-message-context-list"
+          >
+            <div
+              v-for="item in getMessageContextItems(message)"
+              :key="`${message.id}-${item.kind}-${item.path}`"
+              class="assistant-message-context-chip"
+              :class="`assistant-message-context-chip--${item.kind}`"
+              :title="item.path"
+            >
+              <span class="assistant-message-context-kind">
+                <Icon
+                  v-if="item.kind === 'mention'"
+                  :icon="atSignIcon"
+                  width="11"
+                  height="11"
+                />
+                <Icon
+                  v-else
+                  :icon="fileIcon"
+                  width="11"
+                  height="11"
+                />
+              </span>
+              <Icon class="assistant-message-context-icon" :icon="getMessageContextIcon(item)" width="13" height="13" />
+              <span class="assistant-message-context-name">{{ item.name }}</span>
+            </div>
+          </div>
           <!-- Agent 工具调用步骤卡片 -->
           <div
             v-if="message.role === 'tool_step'"
             class="agent-tool-card"
             :class="'agent-tool-card--' + (message.status || 'running')"
           >
-            <div class="agent-tool-card-head" @click="message.collapsed = !message.collapsed">
-              <span class="agent-tool-card-icon">{{ message.icon }}</span>
+            <div class="agent-tool-card-head" @click="toggleToolStepCollapse(message)">
+              <span class="agent-tool-card-icon">
+                <Icon :icon="getAgentToolIcon(message)" width="15" height="15" />
+              </span>
               <span class="agent-tool-card-label">{{ message.toolLabel }}</span>
               <span class="agent-tool-card-status">
                 <span v-if="message.status === 'running'" class="agent-tool-spinner" />
-                <span v-else-if="message.status === 'done'">✅</span>
-                <span v-else-if="message.status === 'error'">❌</span>
+                <Icon v-else-if="message.status === 'done'" :icon="checkIcon" width="14" height="14" />
+                <Icon v-else-if="message.status === 'error'" :icon="alertTriangleIcon" width="14" height="14" />
               </span>
-              <span class="agent-tool-card-toggle">{{ message.collapsed ? '▸' : '▾' }}</span>
+              <span class="agent-tool-card-toggle">
+                <Icon
+                  :icon="chevronRightIcon"
+                  width="14"
+                  height="14"
+                  :class="{ 'agent-tool-card-toggle--open': !message.collapsed }"
+                />
+              </span>
             </div>
             <div v-if="!message.collapsed" class="agent-tool-card-body">
               <div v-if="Object.keys(message.args || {}).length" class="agent-tool-card-section">
@@ -192,6 +230,16 @@
       </div>
     </div>
 
+    <button
+      v-if="showJumpToLatest"
+      type="button"
+      class="assistant-jump-latest"
+      title="跳到最新内容"
+      @click="scrollToLatestFromButton"
+    >
+      <Icon :icon="arrowDownIcon" width="16" height="16" />
+    </button>
+
     <div v-if="agentConfirm" class="agent-confirm-card">
       <div class="agent-confirm-head">
         <span class="agent-confirm-badge">需确认</span>
@@ -233,7 +281,7 @@
           </div>
           <div v-if="mentionPanel.loading" class="mention-empty">搜索中…</div>
           <div v-else-if="!mentionPanel.items.length" class="mention-empty">未找到匹配文件</div>
-          <ul v-else class="mention-list">
+          <ul v-else ref="mentionListRef" class="mention-list">
             <li
               v-for="(item, idx) in mentionPanel.items"
               :key="item.path"
@@ -242,7 +290,9 @@
               @mouseenter="mentionPanel.activeIndex = idx"
               @click="selectMention(item)"
             >
-              <span class="mention-item-icon">📄</span>
+              <span class="mention-item-icon">
+                <Icon :icon="getMentionFileIcon(item)" width="15" height="15" />
+              </span>
               <span class="mention-item-name">{{ item.name }}</span>
               <span class="mention-item-path" :title="item.path">{{ formatMentionLocation(item) }}</span>
             </li>
@@ -251,20 +301,24 @@
 
         <div v-if="pendingAttachments.length" class="attachment-list">
           <div v-for="file in pendingAttachments" :key="file.id" class="attachment-chip">
+            <Icon class="attachment-icon" :icon="fileIcon" width="13" height="13" />
             <span class="attachment-name" :title="file.path">{{ file.name }}</span>
             <span class="attachment-size">{{ formatAttachmentSize(file.size) }}</span>
             <button class="attachment-remove" type="button" title="移除附件" @click="removeAttachment(file.id)">
-              ×
+              <Icon :icon="xIcon" width="12" height="12" />
             </button>
           </div>
         </div>
 
         <div v-if="mentionedFiles.length" class="attachment-list">
           <div v-for="file in mentionedFiles" :key="file.id" class="attachment-chip mention-chip">
-            <span class="mention-chip-at">@</span>
+            <span class="mention-chip-at">
+              <Icon :icon="atSignIcon" width="12" height="12" />
+            </span>
+            <Icon class="attachment-icon" :icon="getMentionFileIcon(file)" width="13" height="13" />
             <span class="attachment-name" :title="file.path">{{ file.name }}</span>
             <button class="attachment-remove" type="button" title="移除引用" @click="removeMention(file.id)">
-              ×
+              <Icon :icon="xIcon" width="12" height="12" />
             </button>
           </div>
         </div>
@@ -350,6 +404,21 @@ import { Icon } from '@iconify/vue'
 import copyIcon from '@iconify-icons/lucide/copy'
 import filePenLineIcon from '@iconify-icons/lucide/file-edit'
 import filePlusIcon from '@iconify-icons/lucide/file-plus'
+import fileTextIcon from '@iconify-icons/lucide/file-text'
+import fileIcon from '@iconify-icons/lucide/file'
+import imageIcon from '@iconify-icons/lucide/image'
+import folderIcon from '@iconify-icons/lucide/folder'
+import searchIcon from '@iconify-icons/lucide/search'
+import globeIcon from '@iconify-icons/lucide/globe'
+import terminalIcon from '@iconify-icons/lucide/terminal'
+import databaseIcon from '@iconify-icons/lucide/database'
+import wrenchIcon from '@iconify-icons/lucide/wrench'
+import atSignIcon from '@iconify-icons/lucide/at-sign'
+import arrowDownIcon from '@iconify-icons/lucide/arrow-down'
+import checkIcon from '@iconify-icons/lucide/check'
+import alertTriangleIcon from '@iconify-icons/lucide/alert-triangle'
+import chevronRightIcon from '@iconify-icons/lucide/chevron-right'
+import xIcon from '@iconify-icons/lucide/x'
 import { addCopyButtons, addMediaViewerButtons, renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
 import { useChatStore } from '../../stores/chatStore'
@@ -380,12 +449,27 @@ const AGENT_TOOL_LABELS = {
   exec_shell: '执行命令',
 }
 const AGENT_TOOL_ICONS = {
-  read_file: '📄', list_directory: '📁', search_files: '🔍', write_file: '✏️', create_note: '📝',
-  web_search: '🌐', fetch_webpage: '📰', exec_python: '🐍', exec_shell: '💻',
-  kb_semantic_search: '🧠', list_knowledge_bases: '📚', default: '🔧'
+  read_file: fileTextIcon,
+  list_directory: folderIcon,
+  search_files: searchIcon,
+  write_file: filePenLineIcon,
+  create_note: filePlusIcon,
+  web_search: globeIcon,
+  fetch_webpage: fileTextIcon,
+  exec_python: terminalIcon,
+  exec_shell: terminalIcon,
+  kb_semantic_search: databaseIcon,
+  list_knowledge_bases: databaseIcon,
+  default: wrenchIcon
+}
+
+const getAgentToolIcon = (chatMessage) => {
+  const toolName = String(chatMessage?.toolName || chatMessage?.name || chatMessage?.tool || '')
+  return AGENT_TOOL_ICONS[toolName] || AGENT_TOOL_ICONS.default
 }
 const messagesRef = ref(null)
 const composerInputRef = ref(null)
+const mentionListRef = ref(null)
 const question = ref('')
 const pendingAttachments = ref([])
 // @ 引用：被引用的知识库文件清单（按 path 去重）
@@ -411,6 +495,7 @@ const currentStreamText = ref('')
 const currentStreamingMessageId = ref('')
 const currentRequestModelId = ref(0)
 const currentRequestSessionId = ref('')
+const isMessagesNearBottom = ref(true)
 
 const messages = computed(() => rightSiderStore.assistant.messages)
 const pending = computed(() => rightSiderStore.assistant.pending)
@@ -426,8 +511,14 @@ const taskOptions = [
   { value: 'classify', label: '分类' },
   { value: 'tag', label: '打标签' },
 ]
-const canSend = computed(() => !pending.value && question.value.trim().length > 0)
-const canClickSend = computed(() => pending.value || question.value.trim().length > 0)
+const hasComposerPayload = computed(() => {
+  return question.value.trim().length > 0 ||
+    pendingAttachments.value.length > 0 ||
+    mentionedFiles.value.length > 0
+})
+const canSend = computed(() => !pending.value && hasComposerPayload.value)
+const canClickSend = computed(() => pending.value || hasComposerPayload.value)
+const showJumpToLatest = computed(() => messages.value.length > 0 && !isMessagesNearBottom.value)
 const modelOptions = computed(() => {
   const remote = Array.isArray(chatStore.LLMlist?.remoteModel) ? chatStore.LLMlist.remoteModel : []
   const local = Array.isArray(chatStore.LLMlist?.localModel) ? chatStore.LLMlist.localModel : []
@@ -452,21 +543,60 @@ const enhanceRenderedMessages = () => {
   })
 }
 
-const scrollToBottom = () => {
+const MESSAGE_BOTTOM_THRESHOLD = 48
+
+const updateMessagesNearBottom = () => {
+  const el = messagesRef.value
+  if (!el) return true
+  const distance = el.scrollHeight - el.scrollTop - el.clientHeight
+  const near = distance <= MESSAGE_BOTTOM_THRESHOLD
+  if (near !== isMessagesNearBottom.value) {
+    logger.info('[assistant] message scroll anchor changed', { nearBottom: near, distance })
+  }
+  isMessagesNearBottom.value = near
+  return near
+}
+
+const handleMessagesScroll = () => {
+  updateMessagesNearBottom()
+}
+
+const scrollToBottom = ({ smooth = false, reason = 'auto' } = {}) => {
   nextTick(() => {
     const el = messagesRef.value
     if (!el) return
-    el.scrollTop = el.scrollHeight
+    if (typeof el.scrollTo === 'function') {
+      el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
+    } else {
+      el.scrollTop = el.scrollHeight
+    }
+    isMessagesNearBottom.value = true
+    logger.debug('[assistant] scroll to latest', { reason, smooth })
   })
 }
 
+const maybeScrollToBottom = (reason) => {
+  if (isMessagesNearBottom.value) {
+    scrollToBottom({ reason })
+    return
+  }
+  logger.debug('[assistant] keep reader scroll position', { reason })
+}
+
+const scrollToLatestFromButton = () => {
+  logger.info('[assistant] jump latest clicked')
+  scrollToBottom({ smooth: true, reason: 'jump-button' })
+}
+
 watch(messages, () => {
-  scrollToBottom()
+  // 设计说明：消息内容、工具卡片展开状态、联网结果折叠状态都会触发 messages 深度变化。
+  // 只有用户本来贴近底部时才自动跟随，避免阅读旧内容时被展开/收起操作拉回底部。
+  maybeScrollToBottom('messages-change')
   enhanceRenderedMessages()
 }, { deep: true })
 
 watch(pending, () => {
-  scrollToBottom()
+  maybeScrollToBottom('pending-change')
 })
 
 const applyDraftFromStore = () => {
@@ -560,12 +690,24 @@ const toggleWebMessageCollapse = (messageId) => {
   const id = String(messageId || '')
   if (!id) return
   const next = new Set(collapsedWebMessageIds.value)
+  const collapsed = !next.has(id)
   if (next.has(id)) {
     next.delete(id)
   } else {
     next.add(id)
   }
   collapsedWebMessageIds.value = next
+  logger.info('[assistant] toggle web result collapse', { messageId: id, collapsed })
+}
+
+const toggleToolStepCollapse = (chatMessage) => {
+  if (!chatMessage) return
+  chatMessage.collapsed = !chatMessage.collapsed
+  logger.info('[assistant] toggle tool step collapse', {
+    messageId: chatMessage.id,
+    toolName: chatMessage.toolName,
+    collapsed: chatMessage.collapsed,
+  })
 }
 
 const handleModelChange = (value) => {
@@ -652,6 +794,16 @@ const handleInputKeydown = (event) => {
     if (event.key === 'ArrowUp') {
       event.preventDefault()
       moveMentionActive(-1)
+      return
+    }
+    if (event.key === 'PageDown') {
+      event.preventDefault()
+      moveMentionActive(getMentionPageStep())
+      return
+    }
+    if (event.key === 'PageUp') {
+      event.preventDefault()
+      moveMentionActive(-getMentionPageStep())
       return
     }
     if (event.key === 'Enter' || event.key === 'Tab') {
@@ -771,6 +923,41 @@ const formatMentionLocation = (item) => {
   return [repo, dir].filter(Boolean).join(' · ') || repo
 }
 
+const getMentionFileIcon = (item) => {
+  const name = String(item?.name || item?.path || '').toLowerCase()
+  const itemType = String(item?.itemType || item?.type || item?.kind || '').toLowerCase()
+  if (item?.isDirectory || itemType === 'directory' || itemType === 'dir') return folderIcon
+  if (/\.(png|jpe?g|gif|webp|svg|bmp|ico)$/.test(name)) return imageIcon
+  if (/\.(md|markdown|txt|json|ya?ml|toml|rs|js|ts|vue|css|html|py|go|java|c|cpp|h|hpp)$/.test(name)) return fileTextIcon
+  return fileIcon
+}
+
+const cloneComposerContextItems = (items, kind) => {
+  return (Array.isArray(items) ? items : [])
+    .map((item) => ({
+      id: String(item?.id || `${kind}-${item?.path || item?.name || ''}`),
+      kind,
+      name: String(item?.name || lastPathSegment(item?.path) || '未命名引用'),
+      path: String(item?.path || ''),
+      repo: String(item?.repo || ''),
+      relative: String(item?.relative || ''),
+      size: Number(item?.size || 0),
+      itemType: String(item?.itemType || item?.type || (item?.isDirectory ? 'directory' : 'file')),
+      isDirectory: Boolean(item?.isDirectory),
+    }))
+    .filter((item) => item.path)
+}
+
+const getMessageContextItems = (chatMessage) => {
+  const context = chatMessage?.meta?.composerContext || {}
+  return [
+    ...cloneComposerContextItems(context.mentions, 'mention'),
+    ...cloneComposerContextItems(context.attachments, 'attachment'),
+  ]
+}
+
+const getMessageContextIcon = (item) => getMentionFileIcon(item)
+
 const closeMentionPanel = () => {
   if (mentionSearchTimer.value) {
     clearTimeout(mentionSearchTimer.value)
@@ -810,6 +997,13 @@ const runMentionSearch = (query) => {
       mentionPanel.value.items = Array.isArray(items) ? items : []
       mentionPanel.value.activeIndex = 0
       mentionPanel.value.loading = false
+      nextTick(() => {
+        if (mentionListRef.value) mentionListRef.value.scrollTop = 0
+      })
+      logger.info('[assistant] mention search finished', {
+        query,
+        count: mentionPanel.value.items.length,
+      })
     })
     .catch((err) => {
       if (seq !== mentionSearchSeq.value || !mentionPanel.value.open) return
@@ -840,11 +1034,30 @@ const handleComposerInput = () => {
 const moveMentionActive = (delta) => {
   const n = mentionPanel.value.items.length
   if (!n) return
-  const next = (mentionPanel.value.activeIndex + delta + n) % n
+  const next = Math.min(n - 1, Math.max(0, mentionPanel.value.activeIndex + delta))
   mentionPanel.value.activeIndex = next
+  scrollMentionActiveIntoView()
+  logger.debug('[assistant] mention active moved', { activeIndex: next, delta })
 }
 
-// 选中候选：把文本里 @query 片段替换为 @<name> ，并登记引用文件
+const getMentionPageStep = () => {
+  const list = mentionListRef.value
+  if (!list) return 6
+  return Math.max(1, Math.floor(list.clientHeight / 34) - 1)
+}
+
+const scrollMentionActiveIntoView = () => {
+  nextTick(() => {
+    const list = mentionListRef.value
+    if (!list) return
+    const active = list.querySelector('.mention-item--active')
+    if (active && typeof active.scrollIntoView === 'function') {
+      active.scrollIntoView({ block: 'nearest' })
+    }
+  })
+}
+
+// 选中候选：文件已在输入框顶部渲染为 chip，因此只移除 textarea 里的 @query token，避免重复显示。
 const selectMention = (item) => {
   if (!item) return
   const el = composerInputRef.value
@@ -862,30 +1075,52 @@ const selectMention = (item) => {
   const anchor = mentionAnchor.value
   const caret = el && typeof el.selectionStart === 'number' ? el.selectionStart : value.length
   if (anchor >= 0 && anchor <= value.length) {
-    const insert = `@${item.name} `
-    question.value = value.slice(0, anchor) + insert + value.slice(caret)
+    let before = value.slice(0, anchor)
+    let after = value.slice(caret)
+    if (!before) {
+      after = after.replace(/^\s+/, '')
+    } else if (!after) {
+      before = before
+    } else if (/\s$/.test(before) && /^\s/.test(after)) {
+      after = after.replace(/^\s+/, '')
+    } else if (!/\s$/.test(before) && !/^\s/.test(after)) {
+      after = ` ${after}`
+    }
+    question.value = before + after
     nextTick(() => {
       const node = composerInputRef.value
       if (node && typeof node.setSelectionRange === 'function') {
-        const pos = anchor + insert.length
+        const pos = Math.min(anchor, question.value.length)
         node.focus()
         node.setSelectionRange(pos, pos)
       }
     })
   }
+  logger.info('[assistant] mention selected', {
+    name: item.name,
+    path,
+    mentionedCount: mentionedFiles.value.length,
+    inputLength: question.value.length,
+  })
   closeMentionPanel()
 }
 
 const removeMention = (id) => {
+  const target = mentionedFiles.value.find((x) => x.id === id)
   mentionedFiles.value = mentionedFiles.value.filter((x) => x.id !== id)
+  logger.info('[assistant] mention removed', {
+    name: target?.name || '',
+    path: target?.path || '',
+    mentionedCount: mentionedFiles.value.length,
+  })
 }
 
 // 把被引用文件按当前任务模式注入到要发送的文本中：
 // - Agent 模式：仅追加绝对路径，由 Agent 用 read_file 工具自行读取（含跨库）。
 // - 其它文本模式：直接读出文件内容拼进 prompt（每文件截断）。
 const MENTION_CONTENT_MAX_CHARS = 8000
-const appendReferencesByMode = async (text, taskName) => {
-  const files = Array.isArray(mentionedFiles.value) ? mentionedFiles.value : []
+const appendReferencesByMode = async (text, taskName, referencedFiles = mentionedFiles.value) => {
+  const files = Array.isArray(referencedFiles) ? referencedFiles : []
   if (!files.length) return text
   const base = String(text ?? '')
 
@@ -912,9 +1147,9 @@ const appendReferencesByMode = async (text, taskName) => {
   return `${base}\n\n${blocks.join('\n\n')}`
 }
 
-const buildQuestionWithAttachments = (text) => {
+const buildQuestionWithAttachments = (text, attachmentFiles = pendingAttachments.value) => {
   const base = (text ?? '').toString().trim()
-  const files = Array.isArray(pendingAttachments.value) ? pendingAttachments.value : []
+  const files = Array.isArray(attachmentFiles) ? attachmentFiles : []
   if (!files.length) return base
   const list = files.map((f, idx) => `${idx + 1}. ${f.name} (${f.path})`).join('\n')
   return `${base}\n\n[附件]\n${list}\n[/附件]`
@@ -1352,7 +1587,7 @@ const scheduleStreamingRender = () => {
       content: raw,
       streaming: true,
     })
-    scrollToBottom()
+    maybeScrollToBottom('streaming-render')
   }, 60)
 }
 
@@ -1516,6 +1751,12 @@ const initAssistantEventListeners = async () => {
     agentStepUnlisten.value = await listen('agent-step', (event) => {
       if (!pending.value) return
       const p = event?.payload || {}
+      logger.info('[assistant] agent step event received', {
+        type: p.type,
+        name: p.name,
+        tool: p.tool,
+        status: p.status,
+      })
 
       // 兼容新旧格式：新格式有 type/name，旧格式有 tool
       const evType = p.type || ''
@@ -1552,14 +1793,14 @@ const initAssistantEventListeners = async () => {
           content: '',
           toolName,
           toolLabel,
-          icon: AGENT_TOOL_ICONS[toolName] || AGENT_TOOL_ICONS.default,
+          icon: toolName,
           status,
           args,
           result: p.result || '',
           collapsed: true,
           createdAt: Date.now(),
         })
-        scrollToBottom()
+        maybeScrollToBottom('agent-tool-call')
         return
       }
 
@@ -1570,7 +1811,7 @@ const initAssistantEventListeners = async () => {
       else if (status === 'error') text = `⚠️ ${toolLabel} 失败：${p.message || ''}`
       if (text) {
         rightSiderStore.addAssistantMessage({ role: 'tool_step', content: text, toolName, toolLabel, status, createdAt: Date.now() })
-        scrollToBottom()
+        maybeScrollToBottom('agent-tool-status')
       }
     })
   }
@@ -1579,9 +1820,16 @@ const initAssistantEventListeners = async () => {
   if (typeof agentConfirmUnlisten.value !== 'function') {
     agentConfirmUnlisten.value = await listen('agent-tool-confirm', (event) => {
       const p = event?.payload || {}
+      logger.info('[assistant] agent confirm event received', {
+        type: p.type,
+        name: p.name,
+        tool: p.tool,
+        hasCallId: Boolean(p.call_id),
+      })
       const callId = String(p.call_id || '')
       if (!callId) return
       const args = p.args || {}
+      const toolName = p.tool || ''
       agentConfirm.value = {
         callId,
         tool: p.tool || '',
@@ -1592,6 +1840,7 @@ const initAssistantEventListeners = async () => {
         hasContent: typeof args.content === 'string',
         isWriteFile: p.tool === 'write_file',
       }
+      logger.info('[assistant] agent confirm card shown', { callId, toolName })
     })
   }
 }
@@ -1703,7 +1952,13 @@ const createAssistantAsNewFile = async (chatMessage) => {
 }
 
 const sendQuestion = async () => {
-  const rawQuestion = question.value.trim()
+  const typedQuestion = question.value.trim()
+  const sentMentions = cloneComposerContextItems(mentionedFiles.value, 'mention')
+  const sentAttachments = cloneComposerContextItems(pendingAttachments.value, 'attachment')
+  const hasMentions = sentMentions.length > 0
+  const hasAttachments = sentAttachments.length > 0
+  const rawQuestion = typedQuestion ||
+    (hasMentions ? '请基于已引用的文件回答。' : (hasAttachments ? '请基于附件回答。' : ''))
   if (!rawQuestion || pending.value) return
 
   const selectedModelId = Number(modelId.value)
@@ -1723,14 +1978,34 @@ const sendQuestion = async () => {
   currentRequestSessionId.value = sessionId
   currentStreamText.value = ''
   currentStreamingMessageId.value = ''
-  pushInputHistory(rawQuestion)
+  if (typedQuestion) {
+    pushInputHistory(typedQuestion)
+  }
 
   question.value = ''
+  pendingAttachments.value = []
+  mentionedFiles.value = []
+  closeMentionPanel()
   rightSiderStore.setAssistantPending(true)
+  logger.info('[assistant] send question prepared', {
+    task: currentTask,
+    modelId: selectedModelId,
+    questionLength: rawQuestion.length,
+    typedLength: typedQuestion.length,
+    attachmentCount: sentAttachments.length,
+    mentionCount: sentMentions.length,
+  })
   rightSiderStore.addAssistantMessage({
     role: 'user',
     content: rawQuestion,
+    meta: {
+      composerContext: {
+        mentions: sentMentions,
+        attachments: sentAttachments,
+      },
+    },
   })
+  scrollToBottom({ reason: 'send-question' })
 
   try {
     if (Number(modelId.value) === 6) {
@@ -1773,8 +2048,9 @@ const sendQuestion = async () => {
     // Agent 任务：模型可调用工具（检索知识库 / 读文件 / 写文件需确认），多轮自动执行。
     if (currentTask === 'agent') {
       const agentQuestion = await appendReferencesByMode(
-        buildQuestionWithAttachments(rawQuestion),
+        buildQuestionWithAttachments(rawQuestion, sentAttachments),
         'agent',
+        sentMentions,
       )
       await invoke('agent_chat_stream', {
         request: {
@@ -1797,13 +2073,13 @@ const sendQuestion = async () => {
 
     const searchOutcome = await queryWebSearch(rawQuestion, selectedModelId, shouldUseWebSearch)
     const webItems = Array.isArray(searchOutcome?.items) ? searchOutcome.items : []
-    const withAttachments = buildQuestionWithAttachments(rawQuestion)
+    const withAttachments = buildQuestionWithAttachments(rawQuestion, sentAttachments)
     // 散文类 Agent 任务（编写 / 翻译 / 整理）：用预设提示词替换原问句，并跳过联网
     const baseQuestion = isProseAgentTask
       ? buildProseAgentPrompt(currentTask, rawQuestion)
       : buildWebContextPrompt(withAttachments, webItems)
     // 非 Agent 文本模式：把被引用的知识库文件内容直接拼进 prompt
-    const mergedQuestion = await appendReferencesByMode(baseQuestion, currentTask)
+    const mergedQuestion = await appendReferencesByMode(baseQuestion, currentTask, sentMentions)
     const webReferences = normalizeWebReferences(webItems)
     if (shouldUseWebSearch) {
       appendWebSearchMessage(
@@ -1850,6 +2126,7 @@ const sendQuestion = async () => {
 
 <style scoped>
 .assistant-root {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -1917,6 +2194,22 @@ const sendQuestion = async () => {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--guaxi-text-secondary) 34%, transparent) transparent;
+}
+
+.assistant-messages::-webkit-scrollbar,
+.mention-list::-webkit-scrollbar,
+.agent-tool-card-pre::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.assistant-messages::-webkit-scrollbar-thumb,
+.mention-list::-webkit-scrollbar-thumb,
+.agent-tool-card-pre::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--guaxi-text-secondary) 28%, transparent);
 }
 
 .assistant-empty {
@@ -1986,13 +2279,37 @@ const sendQuestion = async () => {
 }
 
 .assistant-message-content {
-  border-radius: 12px;
+  border-radius: 8px;
   padding: 10px 12px;
   line-height: 1.6;
   /* 设计说明：消息正文是智能助手的主要阅读区域，默认字号略大于辅助信息，提升长回答的可读性。 */
   font-size: 14px;
   border: 1px solid var(--guaxi-border);
   overflow: hidden;
+}
+
+.assistant-jump-latest {
+  position: absolute;
+  right: 16px;
+  bottom: 112px;
+  z-index: 25;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, #4f7dff 44%, var(--guaxi-border));
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 88%, #4f7dff 12%);
+  color: var(--guaxi-text-primary);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18);
+  transition: transform 0.16s ease, background 0.16s ease, border-color 0.16s ease;
+}
+
+.assistant-jump-latest:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, #4f7dff 70%, var(--guaxi-border));
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 78%, #4f7dff 22%);
 }
 
 .assistant-message-user .assistant-message-content {
@@ -2006,6 +2323,53 @@ const sendQuestion = async () => {
 .assistant-message-plain {
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.assistant-message-context-list {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.assistant-message-context-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 8px;
+  padding: 4px 7px;
+  background: color-mix(in srgb, var(--guaxi-header-bg) 76%, transparent);
+  color: var(--guaxi-text-primary);
+}
+
+.assistant-message-context-chip--mention {
+  border-color: color-mix(in srgb, #4f7dff 38%, var(--guaxi-border));
+  background: color-mix(in srgb, #4f7dff 10%, var(--guaxi-header-bg));
+}
+
+.assistant-message-context-kind {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  color: #4f7dff;
+}
+
+.assistant-message-context-icon {
+  flex: 0 0 auto;
+  color: var(--guaxi-text-secondary);
+}
+
+.assistant-message-context-name {
+  min-width: 0;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 1.2;
 }
 
 .assistant-message-content.markdown-body :deep(a) {
@@ -2316,7 +2680,7 @@ const sendQuestion = async () => {
 .composer-shell {
   position: relative;
   border: 1px solid var(--guaxi-border);
-  border-radius: 14px;
+  border-radius: 10px;
   background: color-mix(in srgb, var(--guaxi-panel-bg) 90%, #ffffff 10%);
   box-shadow: 0 8px 18px rgba(0, 0, 0, 0.06);
   padding: 8px 10px;
@@ -2331,15 +2695,15 @@ const sendQuestion = async () => {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: calc(100% + 6px);
-  max-height: 280px;
+  bottom: calc(100% + 8px);
+  max-height: 300px;
   overflow: hidden;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--guaxi-border);
-  border-radius: 12px;
-  background: var(--guaxi-panel-bg);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.18);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 96%, var(--guaxi-header-bg) 4%);
+  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.20);
   z-index: 30;
 }
 
@@ -2347,7 +2711,7 @@ const sendQuestion = async () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 10px;
+  padding: 9px 10px;
   border-bottom: 1px solid var(--guaxi-border);
 }
 
@@ -2370,28 +2734,45 @@ const sendQuestion = async () => {
 }
 
 .mention-list {
+  flex: 1 1 auto;
   list-style: none;
   margin: 0;
-  padding: 4px;
+  padding: 6px;
   overflow: auto;
+  min-height: 0;
+  max-height: 246px;
 }
 
 .mention-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
+  min-height: 34px;
   padding: 6px 8px;
   border-radius: 8px;
   cursor: pointer;
+  border: 1px solid transparent;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.mention-item:hover {
+  background: color-mix(in srgb, var(--guaxi-header-bg) 82%, transparent);
 }
 
 .mention-item--active {
-  background: color-mix(in srgb, #4f7dff 16%, var(--guaxi-panel-bg));
+  background: color-mix(in srgb, #4f7dff 15%, var(--guaxi-panel-bg));
+  border-color: color-mix(in srgb, #4f7dff 34%, var(--guaxi-border));
 }
 
 .mention-item-icon {
   flex: 0 0 auto;
-  font-size: 13px;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  color: #4f7dff;
+  background: color-mix(in srgb, #4f7dff 12%, transparent);
 }
 
 .mention-item-name {
@@ -2416,14 +2797,14 @@ const sendQuestion = async () => {
 }
 
 .mention-chip {
-  background: color-mix(in srgb, #4f7dff 12%, var(--guaxi-header-bg));
+  background: color-mix(in srgb, #4f7dff 11%, var(--guaxi-header-bg));
   border-color: color-mix(in srgb, #4f7dff 40%, var(--guaxi-border));
 }
 
 .mention-chip-at {
-  font-size: 11px;
-  font-weight: 700;
   color: #4f7dff;
+  display: inline-flex;
+  align-items: center;
 }
 
 .attachment-list {
@@ -2436,11 +2817,16 @@ const sendQuestion = async () => {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  border-radius: 999px;
+  border-radius: 8px;
   border: 1px solid var(--guaxi-border);
-  padding: 2px 8px;
+  padding: 4px 7px;
   max-width: 100%;
   background: color-mix(in srgb, var(--guaxi-header-bg) 80%, transparent);
+}
+
+.attachment-icon {
+  flex: 0 0 auto;
+  color: var(--guaxi-text-secondary);
 }
 
 .attachment-name {
@@ -2458,17 +2844,24 @@ const sendQuestion = async () => {
 }
 
 .attachment-remove {
-  border: none;
+  border: 1px solid transparent;
   background: transparent;
   color: var(--guaxi-text-secondary);
   cursor: pointer;
-  font-size: 14px;
-  line-height: 1;
+  line-height: 0;
   padding: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .attachment-remove:hover {
   color: var(--guaxi-text-primary);
+  background: color-mix(in srgb, var(--guaxi-header-bg) 86%, transparent);
+  border-color: var(--guaxi-border);
 }
 
 .composer-input {
@@ -2620,24 +3013,24 @@ const sendQuestion = async () => {
   margin: 4px 0;
   border-radius: 8px;
   border: 1px solid var(--guaxi-border);
-  background: color-mix(in srgb, var(--guaxi-panel-bg) 96%, transparent);
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 94%, var(--guaxi-header-bg) 6%);
   overflow: hidden;
-  transition: border-color 0.2s;
+  transition: border-color 0.2s, background 0.2s;
 }
 
 .agent-tool-card--running {
   border-color: color-mix(in srgb, #3b82f6 60%, var(--guaxi-border));
-  background: color-mix(in srgb, var(--guaxi-panel-bg) 90%, #3b82f6 10%);
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 91%, #3b82f6 9%);
 }
 
-.agent-tool-card--done { border-color: color-mix(in srgb, #22c55e 50%, var(--guaxi-border)); }
-.agent-tool-card--error { border-color: color-mix(in srgb, #ef4444 50%, var(--guaxi-border)); }
+.agent-tool-card--done { border-color: color-mix(in srgb, #22c55e 42%, var(--guaxi-border)); }
+.agent-tool-card--error { border-color: color-mix(in srgb, #ef4444 48%, var(--guaxi-border)); }
 
 .agent-tool-card-head {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 10px;
+  padding: 8px 10px;
   cursor: pointer;
   user-select: none;
   font-size: 12px;
@@ -2647,12 +3040,43 @@ const sendQuestion = async () => {
   background: color-mix(in srgb, var(--guaxi-header-bg) 95%, transparent);
 }
 
-.agent-tool-card-icon { font-size: 14px; flex: 0 0 auto; }
+.agent-tool-card-icon {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  color: #4f7dff;
+  background: color-mix(in srgb, #4f7dff 12%, transparent);
+}
 .agent-tool-card-label { flex: 1 1 auto; color: var(--guaxi-text-primary); font-weight: 500; }
-.agent-tool-card-status { flex: 0 0 auto; font-size: 13px; }
-.agent-tool-card-toggle { flex: 0 0 auto; color: var(--guaxi-text-secondary); font-size: 11px; }
+.agent-tool-card-status {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: var(--guaxi-text-secondary);
+}
+.agent-tool-card--done .agent-tool-card-status { color: #22c55e; }
+.agent-tool-card--error .agent-tool-card-status { color: #ef4444; }
+.agent-tool-card-toggle {
+  flex: 0 0 auto;
+  color: var(--guaxi-text-secondary);
+  display: grid;
+  place-items: center;
+}
 
-.agent-tool-card-body { padding: 0 10px 10px 10px; }
+.agent-tool-card-toggle svg {
+  transition: transform 0.14s ease;
+}
+
+.agent-tool-card-toggle--open {
+  transform: rotate(90deg);
+}
+
+.agent-tool-card-body {
+  padding: 0 10px 10px 42px;
+}
 .agent-tool-card-section { margin-top: 8px; }
 
 .agent-tool-card-section-title {
@@ -2670,8 +3094,9 @@ const sendQuestion = async () => {
   max-height: 200px;
   overflow: auto;
   background: color-mix(in srgb, var(--guaxi-content-bg) 80%, transparent);
-  border-radius: 4px;
-  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--guaxi-border) 76%, transparent);
+  border-radius: 8px;
+  padding: 8px 9px;
   white-space: pre-wrap;
   word-break: break-all;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Cascadia Code', Consolas, monospace;
