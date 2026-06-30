@@ -110,7 +110,9 @@ const PYTHON_RUNTIME_RECOMMENDED_PACKAGES: &[&str] = &[
     // LLM 路由：通过 openai 库统一调用所有支持 OpenAI 兼容 API 的模型
     "openai",
     // 网络搜索与抓取
-    "httpx",
+    // Agent 服务会跟随系统/环境代理；当代理是 socks5:// 时，httpx 需要 socksio。
+    "httpx[socks]",
+    "socksio",
     "duckduckgo_search",
     "beautifulsoup4",
     "lxml",

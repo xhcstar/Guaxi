@@ -144,16 +144,13 @@ fn build_llm_config_json() -> Value {
 
 /// 启动 agent server 进程
 pub async fn ensure_agent_server_started(app: &AppHandle) -> Result<(), String> {
-    // 先检查是否已在运行
-    if check_agent_server_health().await.is_ok() {
-        return Ok(());
-    }
-
     let source_dir = agent_server_source_dir()?;
 
     // 确保 Guaxi 托管 Python 就绪，并把 agent_server 依赖安装进托管 .venv。
-    // 首次会下载内置 Python 并 pip 安装（阻塞 I/O），故放到阻塞线程；该耗时发生在
-    // 启动子进程之前，不计入下方 30 秒健康检查窗口。
+    //
+    // 设计说明：这一步要放在健康检查之前。agent server 进程可能已经存活，但 requirements
+    // 刚新增了运行时依赖（例如 httpx 的 SOCKS 支持 socksio）；如果先 health check 并直接返回，
+    // 已运行服务会继续在请求阶段因缺包失败。pip list 对比是幂等的，已满足时开销很小。
     let requirements = read_agent_requirements(&source_dir);
     let (python, base_args) = tokio::task::spawn_blocking(move || {
         crate::commands::code_runtime::ensure_managed_python_with_packages(
@@ -163,6 +160,12 @@ pub async fn ensure_agent_server_started(app: &AppHandle) -> Result<(), String> 
     })
     .await
     .map_err(|e| format!("准备 Python 运行时任务失败: {}", e))??;
+
+    // 依赖已确认后再检查服务是否运行；运行中的 Python 进程可在后续请求动态 import 新装包。
+    if check_agent_server_health().await.is_ok() {
+        info!("[agent_server] agent server already running with dependencies ensured");
+        return Ok(());
+    }
 
     info!(
         python = %python,
