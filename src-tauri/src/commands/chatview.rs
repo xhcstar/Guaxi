@@ -5572,7 +5572,35 @@ pub async fn agent_chat_stream(app: AppHandle, request: AgentRequest) -> Result<
             return Ok(());
         }
 
-        let chunk_str = match std::str::from_utf8(&chunk.map_err(|e| e.to_string())?) {
+        let chunk_bytes = match chunk {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                // 设计说明：Agent 已经进入 SSE 流式阶段后，底层连接偶发 EOF 时，
+                // 直接返回 Err 会让前端只看到 invoke 失败，当前回答也无法承载原因。
+                // 这里改为把传输错误转成可展示的 Agent 步骤和正文提示，让用户能在同一轮对话里定位问题。
+                let msg = format!("Agent SSE 流读取中断: {}", e);
+                warn!("agent_chat_stream stream read error: {}", msg);
+                let ev = json!({
+                    "type": "error",
+                    "name": "agent_stream",
+                    "status": "error",
+                    "message": msg.clone(),
+                });
+                let _ = app.emit("agent-step", &ev);
+                let _ = app.emit(
+                    "modle-streaming-respond-output",
+                    format!("\n\n> ⚠️ Agent 流中断：{}\n", msg),
+                );
+                log_model_reply(
+                    "agent_chat_stream interrupted via python service",
+                    &request.sessionid,
+                    &msg,
+                );
+                return Ok(());
+            }
+        };
+
+        let chunk_str = match std::str::from_utf8(&chunk_bytes) {
             Ok(s) => s.to_string(),
             Err(_) => continue,
         };
@@ -5610,6 +5638,17 @@ pub async fn agent_chat_stream(app: AppHandle, request: AgentRequest) -> Result<
                     "error" => {
                         let msg = ev.get("message").and_then(|v| v.as_str()).unwrap_or("未知错误");
                         warn!("agent_chat_stream error: {}", msg);
+                        let frontend_ev = json!({
+                            "type": "error",
+                            "name": "agent_stream",
+                            "status": "error",
+                            "message": msg,
+                        });
+                        let _ = app.emit("agent-step", &frontend_ev);
+                        let _ = app.emit(
+                            "modle-streaming-respond-output",
+                            format!("\n\n> ⚠️ Agent 执行失败：{}\n", msg),
+                        );
                     }
                     _ => {}
                 }

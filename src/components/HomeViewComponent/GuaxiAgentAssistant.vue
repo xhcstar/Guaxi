@@ -447,6 +447,7 @@ const AGENT_TOOL_LABELS = {
   fetch_webpage: '抓取网页',
   exec_python: '执行 Python',
   exec_shell: '执行命令',
+  agent_stream: 'Agent 流',
 }
 const AGENT_TOOL_ICONS = {
   read_file: fileTextIcon,
@@ -1763,6 +1764,26 @@ const initAssistantEventListeners = async () => {
       const toolName = p.name || p.tool || ''
       const toolLabel = AGENT_TOOL_LABELS[toolName] || toolName || '工具'
       const status = p.status || 'running'
+
+      if (evType === 'error') {
+        // 后端会把 SSE 断流、模型调用失败等内部错误统一转成 error 事件。
+        // 单独建卡片可以保留上下文，也避免落入 invoke catch 后只显示一条泛化失败提示。
+        const message = p.message || p.result || 'Agent 执行失败'
+        logger.warn('[assistant] agent step error received', { toolName, message })
+        rightSiderStore.addAssistantMessage({
+          role: 'tool_step',
+          content: `⚠️ ${toolLabel} 失败：${message}`,
+          toolName,
+          toolLabel,
+          icon: toolName,
+          status: 'error',
+          result: message,
+          collapsed: false,
+          createdAt: Date.now(),
+        })
+        maybeScrollToBottom('agent-tool-error')
+        return
+      }
 
       if (evType === 'tool_result') {
         // tool_result: 更新之前 running 的卡片为 done/error
