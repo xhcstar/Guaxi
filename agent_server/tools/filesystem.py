@@ -3,21 +3,48 @@ Guaxi Agent Server - 文件系统工具
 """
 import os
 import json
+from contextvars import ContextVar
 from pathlib import Path
 from . import register
 
 
+# 额外允许访问的根目录白名单（全部已配置知识库根）。
+# 由 run_agent 在每次请求开始时设置；ContextVar 在同一异步任务的 await 链上有效，
+# 因此无需改动各工具 handler 的签名即可让 _safe_path 读取到。
+allowed_roots_var: ContextVar[list] = ContextVar("allowed_roots", default=[])
+
+
+def _is_within(resolved: Path, root: Path) -> bool:
+    """resolved 是否落在 root 内（含 root 自身）。"""
+    if str(root) == os.sep or str(root) == "/":
+        return True
+    try:
+        resolved.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
 def _safe_path(raw: str, work_dir: str) -> Path:
-    """安全解析路径，限制在工作目录内"""
+    """安全解析路径，限制在工作目录或任一已配置知识库根之内。"""
     p = Path(raw)
     if not p.is_absolute():
         p = Path(work_dir) / raw
     resolved = p.resolve()
-    work = Path(work_dir).resolve()
-    # 确保不越出工作目录
-    if work != Path("/") and not str(resolved).startswith(str(work)):
-        raise PermissionError(f"拒绝访问工作目录之外的文件: {raw}")
-    return resolved
+
+    # 允许根列表：工作目录 + 所有已配置知识库根。
+    roots = [Path(work_dir).resolve()]
+    for r in (allowed_roots_var.get() or []):
+        if not r:
+            continue
+        try:
+            roots.append(Path(r).resolve())
+        except (OSError, ValueError):
+            continue
+
+    if any(_is_within(resolved, root) for root in roots):
+        return resolved
+    raise PermissionError(f"拒绝访问工作目录之外的文件: {raw}")
 
 
 @register(

@@ -9,6 +9,7 @@ from typing import AsyncGenerator, Any
 from .config import DEFAULT_WORK_DIR
 from .llm import chat_complete
 from .tools import get_tool_specs, needs_confirm, dispatch as tool_dispatch
+from .tools.filesystem import allowed_roots_var
 
 # 全局取消标志
 _cancel_flags: dict[str, bool] = {}
@@ -68,6 +69,7 @@ async def run_agent(
     question: str,
     history: list[dict[str, str]],
     work_dir: str = "",
+    allowed_roots: list[str] | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     """
     运行 ReAct Agent 循环，通过 SSE yield 事件。
@@ -83,7 +85,11 @@ async def run_agent(
     """
     wd = work_dir or DEFAULT_WORK_DIR
     clear_cancel(chat_id)
-    
+
+    # 设置跨库文件访问白名单：工作目录 + 所有已配置知识库根。
+    # ContextVar 在本协程及其 await 链（含 tool_dispatch → _safe_path）内有效。
+    allowed_roots_var.set(list(allowed_roots or []))
+
     tools = get_tool_specs()
     
     # 构建消息

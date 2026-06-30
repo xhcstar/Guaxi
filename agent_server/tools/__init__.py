@@ -82,3 +82,10 @@ async def dispatch(name: str, args: dict[str, Any], work_dir: str = "") -> str:
             "error": str(e),
             "traceback": traceback.format_exc(),
         }, ensure_ascii=False)
+
+
+# 导入各工具子模块以触发 @register 装饰器执行，填充 _registry / _handlers。
+# 必须放在 register/dispatch 定义之后，避免循环导入。
+from . import filesystem as _filesystem  # noqa: E402,F401
+from . import web as _web  # noqa: E402,F401
+from . import code_exec as _code_exec  # noqa: E402,F401

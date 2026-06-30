@@ -5472,6 +5472,9 @@ pub struct AgentRequest {
     /// 活动仓库根路径（read_file 越权防护）。
     #[serde(default)]
     repo_path: String,
+    /// 全部已配置知识库根路径，作为 Agent 文件工具的多根白名单（跨库 @ 引用读取）。
+    #[serde(default)]
+    repo_roots: Vec<String>,
 }
 
 
@@ -5535,6 +5538,7 @@ pub async fn agent_chat_stream(app: AppHandle, request: AgentRequest) -> Result<
         "question": request.question,
         "history": history_json,
         "work_dir": request.repo_path,
+        "allowed_roots": request.repo_roots,
     });
 
     let client = reqwest::Client::new();

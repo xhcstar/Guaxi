@@ -220,6 +220,35 @@
 
     <div class="assistant-footer">
       <div class="composer-shell" @click="focusComposerInput">
+        <!-- @ 引用：知识库文件模糊搜索弹层 -->
+        <div
+          v-if="mentionPanel.open"
+          class="mention-panel"
+          @mousedown.prevent
+          @click.stop
+        >
+          <div class="mention-panel-head">
+            <span class="mention-panel-title">引用知识库文件</span>
+            <span class="mention-panel-hint">↑↓ 选择 · Enter 确认 · Esc 关闭</span>
+          </div>
+          <div v-if="mentionPanel.loading" class="mention-empty">搜索中…</div>
+          <div v-else-if="!mentionPanel.items.length" class="mention-empty">未找到匹配文件</div>
+          <ul v-else class="mention-list">
+            <li
+              v-for="(item, idx) in mentionPanel.items"
+              :key="item.path"
+              class="mention-item"
+              :class="{ 'mention-item--active': idx === mentionPanel.activeIndex }"
+              @mouseenter="mentionPanel.activeIndex = idx"
+              @click="selectMention(item)"
+            >
+              <span class="mention-item-icon">📄</span>
+              <span class="mention-item-name">{{ item.name }}</span>
+              <span class="mention-item-path" :title="item.path">{{ formatMentionLocation(item) }}</span>
+            </li>
+          </ul>
+        </div>
+
         <div v-if="pendingAttachments.length" class="attachment-list">
           <div v-for="file in pendingAttachments" :key="file.id" class="attachment-chip">
             <span class="attachment-name" :title="file.path">{{ file.name }}</span>
@@ -230,14 +259,25 @@
           </div>
         </div>
 
+        <div v-if="mentionedFiles.length" class="attachment-list">
+          <div v-for="file in mentionedFiles" :key="file.id" class="attachment-chip mention-chip">
+            <span class="mention-chip-at">@</span>
+            <span class="attachment-name" :title="file.path">{{ file.name }}</span>
+            <button class="attachment-remove" type="button" title="移除引用" @click="removeMention(file.id)">
+              ×
+            </button>
+          </div>
+        </div>
+
         <textarea
           ref="composerInputRef"
           class="composer-input"
-          placeholder="输入问题，Enter 发送，Shift + Enter 换行"
+          placeholder="输入问题，@ 引用知识库文件，Enter 发送，Shift + Enter 换行"
           v-model="question"
           :disabled="pending"
           @compositionstart="handleCompositionStart"
           @compositionend="handleCompositionEnd"
+          @input="handleComposerInput"
           @keydown="handleInputKeydown"
         />
 
@@ -259,6 +299,7 @@
               size="small"
               :value="task"
               :options="taskOptions"
+              :consistent-menu-width="false"
               @update:value="handleTaskChange"
             />
           </div>
@@ -268,6 +309,7 @@
               size="small"
               :value="modelId"
               :options="modelOptions"
+              :consistent-menu-width="false"
               @update:value="handleModelChange"
             />
           </div>
@@ -346,6 +388,14 @@ const messagesRef = ref(null)
 const composerInputRef = ref(null)
 const question = ref('')
 const pendingAttachments = ref([])
+// @ 引用：被引用的知识库文件清单（按 path 去重）
+const mentionedFiles = ref([])
+// @ 引用：模糊搜索弹层状态
+const mentionPanel = ref({ open: false, query: '', items: [], activeIndex: 0, loading: false })
+// 触发 @ 的起始下标（光标前那个 @ 的位置），用于选中后替换文本片段
+const mentionAnchor = ref(-1)
+const mentionSearchTimer = ref(null)
+const mentionSearchSeq = ref(0)
 const streamUnlisten = ref(null)
 const webPushUnlisten = ref(null)
 const agentStepUnlisten = ref(null)
@@ -482,6 +532,10 @@ onBeforeUnmount(() => {
     clearTimeout(streamRenderTimer.value)
     streamRenderTimer.value = null
   }
+  if (mentionSearchTimer.value) {
+    clearTimeout(mentionSearchTimer.value)
+    mentionSearchTimer.value = null
+  }
 })
 
 const formatTime = (ts) => {
@@ -496,6 +550,8 @@ const formatTime = (ts) => {
 const clearHistory = () => {
   rightSiderStore.clearAssistantMessages()
   collapsedWebMessageIds.value = new Set()
+  mentionedFiles.value = []
+  closeMentionPanel()
 }
 
 const isWebMessageCollapsed = (messageId) => collapsedWebMessageIds.value.has(String(messageId || ''))
@@ -586,6 +642,32 @@ const handleWebSearchEnabledChange = (value) => {
 
 const handleInputKeydown = (event) => {
   if (isComposing.value || event.isComposing || event.keyCode === 229) return
+  // @ 引用弹层打开时，优先消费方向键 / Enter / Tab / Esc，避免触发历史与发送
+  if (mentionPanel.value.open) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      moveMentionActive(1)
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      moveMentionActive(-1)
+      return
+    }
+    if (event.key === 'Enter' || event.key === 'Tab') {
+      const item = mentionPanel.value.items[mentionPanel.value.activeIndex]
+      if (item) {
+        event.preventDefault()
+        selectMention(item)
+        return
+      }
+      closeMentionPanel()
+    } else if (event.key === 'Escape') {
+      event.preventDefault()
+      closeMentionPanel()
+      return
+    }
+  }
   if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && !event.shiftKey) {
     const inputEl = composerInputRef.value
     const hasSelectionApi = inputEl && typeof inputEl.selectionStart === 'number' && typeof inputEl.selectionEnd === 'number'
@@ -618,6 +700,8 @@ const handleCompositionStart = () => {
 
 const handleCompositionEnd = () => {
   isComposing.value = false
+  // 中文输入法提交后再检测一次 @ 触发
+  handleComposerInput()
 }
 
 const focusComposerInput = () => {
@@ -668,6 +752,164 @@ const pickAttachments = async () => {
 
 const removeAttachment = (id) => {
   pendingAttachments.value = pendingAttachments.value.filter((x) => x.id !== id)
+}
+
+// ───── @ 引用：模糊搜索 / 选择 / 注入 ─────
+
+// 取最后一段路径，用于在弹层里区分同名跨库文件
+const lastPathSegment = (p) => {
+  const s = String(p || '').replace(/[\\/]+$/, '')
+  const i = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'))
+  return i >= 0 ? s.slice(i + 1) : s
+}
+
+// 弹层里每个候选展示的“位置”：相对路径目录 + 所属库名，帮助区分同名文件
+const formatMentionLocation = (item) => {
+  const rel = String(item?.relative || '')
+  const dir = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : ''
+  const repo = lastPathSegment(item?.repo)
+  return [repo, dir].filter(Boolean).join(' · ') || repo
+}
+
+const closeMentionPanel = () => {
+  if (mentionSearchTimer.value) {
+    clearTimeout(mentionSearchTimer.value)
+    mentionSearchTimer.value = null
+  }
+  mentionPanel.value = { open: false, query: '', items: [], activeIndex: 0, loading: false }
+  mentionAnchor.value = -1
+}
+
+// 检测光标前是否处于一个 @ 触发 token（@ 前是行首或空白，@ 后无空白）
+const detectMentionTrigger = () => {
+  const el = composerInputRef.value
+  if (!el || typeof el.selectionStart !== 'number') return null
+  if (el.selectionStart !== el.selectionEnd) return null
+  const value = String(el.value ?? '')
+  const caret = el.selectionStart
+  const before = value.slice(0, caret)
+  const match = before.match(/(^|\s)@([^\s@]*)$/)
+  if (!match) return null
+  const query = match[2] || ''
+  const anchor = caret - query.length - 1 // 指向 @ 字符
+  return { query, anchor }
+}
+
+const runMentionSearch = (query) => {
+  const roots = Array.isArray(fileTreeStore.repopathlist) ? fileTreeStore.repopathlist.filter(Boolean) : []
+  if (!roots.length) {
+    mentionPanel.value.items = []
+    mentionPanel.value.loading = false
+    return
+  }
+  const seq = (mentionSearchSeq.value += 1)
+  mentionPanel.value.loading = true
+  invoke('fuzzy_search_files', { query, roots, limit: 40 })
+    .then((items) => {
+      if (seq !== mentionSearchSeq.value || !mentionPanel.value.open) return
+      mentionPanel.value.items = Array.isArray(items) ? items : []
+      mentionPanel.value.activeIndex = 0
+      mentionPanel.value.loading = false
+    })
+    .catch((err) => {
+      if (seq !== mentionSearchSeq.value || !mentionPanel.value.open) return
+      logger.warn('[assistant] fuzzy_search_files failed', err)
+      mentionPanel.value.items = []
+      mentionPanel.value.loading = false
+    })
+}
+
+// textarea 内容变化时检测 @ 触发并驱动弹层
+const handleComposerInput = () => {
+  if (isComposing.value) return
+  const trigger = detectMentionTrigger()
+  if (!trigger) {
+    if (mentionPanel.value.open) closeMentionPanel()
+    return
+  }
+  mentionAnchor.value = trigger.anchor
+  mentionPanel.value.open = true
+  mentionPanel.value.query = trigger.query
+  if (mentionSearchTimer.value) clearTimeout(mentionSearchTimer.value)
+  mentionSearchTimer.value = setTimeout(() => {
+    mentionSearchTimer.value = null
+    runMentionSearch(trigger.query)
+  }, 120)
+}
+
+const moveMentionActive = (delta) => {
+  const n = mentionPanel.value.items.length
+  if (!n) return
+  const next = (mentionPanel.value.activeIndex + delta + n) % n
+  mentionPanel.value.activeIndex = next
+}
+
+// 选中候选：把文本里 @query 片段替换为 @<name> ，并登记引用文件
+const selectMention = (item) => {
+  if (!item) return
+  const el = composerInputRef.value
+  const path = String(item.path || '')
+  if (!mentionedFiles.value.some((f) => f.path === path)) {
+    mentionedFiles.value.push({
+      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      name: String(item.name || lastPathSegment(path)),
+      path,
+      repo: String(item.repo || ''),
+    })
+  }
+
+  const value = String(question.value ?? '')
+  const anchor = mentionAnchor.value
+  const caret = el && typeof el.selectionStart === 'number' ? el.selectionStart : value.length
+  if (anchor >= 0 && anchor <= value.length) {
+    const insert = `@${item.name} `
+    question.value = value.slice(0, anchor) + insert + value.slice(caret)
+    nextTick(() => {
+      const node = composerInputRef.value
+      if (node && typeof node.setSelectionRange === 'function') {
+        const pos = anchor + insert.length
+        node.focus()
+        node.setSelectionRange(pos, pos)
+      }
+    })
+  }
+  closeMentionPanel()
+}
+
+const removeMention = (id) => {
+  mentionedFiles.value = mentionedFiles.value.filter((x) => x.id !== id)
+}
+
+// 把被引用文件按当前任务模式注入到要发送的文本中：
+// - Agent 模式：仅追加绝对路径，由 Agent 用 read_file 工具自行读取（含跨库）。
+// - 其它文本模式：直接读出文件内容拼进 prompt（每文件截断）。
+const MENTION_CONTENT_MAX_CHARS = 8000
+const appendReferencesByMode = async (text, taskName) => {
+  const files = Array.isArray(mentionedFiles.value) ? mentionedFiles.value : []
+  if (!files.length) return text
+  const base = String(text ?? '')
+
+  if (taskName === 'agent') {
+    const list = files.map((f, idx) => `${idx + 1}. ${f.name} (${f.path})`).join('\n')
+    return `${base}\n\n[引用文件]\n${list}\n[/引用文件]`
+  }
+
+  const blocks = []
+  for (const f of files) {
+    try {
+      const raw = await invoke('read_file_content', { path: f.path })
+      let content = String(raw ?? '')
+      if (content.length > MENTION_CONTENT_MAX_CHARS) {
+        content = `${content.slice(0, MENTION_CONTENT_MAX_CHARS)}\n…（内容已截断）`
+      }
+      blocks.push(`[引用文件: ${f.name}]（${f.path}）\n${content}`)
+    } catch (err) {
+      logger.warn('[assistant] read mentioned file failed', { path: f.path, err })
+      message.warning(`读取引用文件失败：${f.name}`)
+      blocks.push(`[引用文件: ${f.name}]（${f.path}）\n（读取失败）`)
+    }
+  }
+  return `${base}\n\n${blocks.join('\n\n')}`
 }
 
 const buildQuestionWithAttachments = (text) => {
@@ -1524,24 +1766,31 @@ const sendQuestion = async () => {
       rightSiderStore.addAssistantMessage({ role: 'assistant', content: md, html })
       rightSiderStore.setAssistantSessionId(res?.sessionid || sessionId)
       pendingAttachments.value = []
+      mentionedFiles.value = []
       return
     }
 
     // Agent 任务：模型可调用工具（检索知识库 / 读文件 / 写文件需确认），多轮自动执行。
     if (currentTask === 'agent') {
+      const agentQuestion = await appendReferencesByMode(
+        buildQuestionWithAttachments(rawQuestion),
+        'agent',
+      )
       await invoke('agent_chat_stream', {
         request: {
           modelid: selectedModelId,
-          question: buildQuestionWithAttachments(rawQuestion),
+          question: agentQuestion,
           topicid: 0,
           sessionid: sessionId,
           history: conversationHistory,
           kb_name: '',
           repo_path: String(fileTreeStore.activeRepoPath || ''),
+          repo_roots: Array.isArray(fileTreeStore.repopathlist) ? fileTreeStore.repopathlist.filter(Boolean) : [],
         },
       })
       rightSiderStore.setAssistantSessionId(sessionId)
       pendingAttachments.value = []
+      mentionedFiles.value = []
       await finishAssistantStreaming()
       return
     }
@@ -1550,9 +1799,11 @@ const sendQuestion = async () => {
     const webItems = Array.isArray(searchOutcome?.items) ? searchOutcome.items : []
     const withAttachments = buildQuestionWithAttachments(rawQuestion)
     // 散文类 Agent 任务（编写 / 翻译 / 整理）：用预设提示词替换原问句，并跳过联网
-    const mergedQuestion = isProseAgentTask
+    const baseQuestion = isProseAgentTask
       ? buildProseAgentPrompt(currentTask, rawQuestion)
       : buildWebContextPrompt(withAttachments, webItems)
+    // 非 Agent 文本模式：把被引用的知识库文件内容直接拼进 prompt
+    const mergedQuestion = await appendReferencesByMode(baseQuestion, currentTask)
     const webReferences = normalizeWebReferences(webItems)
     if (shouldUseWebSearch) {
       appendWebSearchMessage(
@@ -1580,6 +1831,7 @@ const sendQuestion = async () => {
     })
     rightSiderStore.setAssistantSessionId(sessionId)
     pendingAttachments.value = []
+    mentionedFiles.value = []
     if (!isWebModel) {
       await finishAssistantStreaming()
     }
@@ -2062,6 +2314,7 @@ const sendQuestion = async () => {
 }
 
 .composer-shell {
+  position: relative;
   border: 1px solid var(--guaxi-border);
   border-radius: 14px;
   background: color-mix(in srgb, var(--guaxi-panel-bg) 90%, #ffffff 10%);
@@ -2071,6 +2324,106 @@ const sendQuestion = async () => {
   flex-direction: column;
   gap: 8px;
   cursor: text;
+}
+
+/* @ 引用：模糊搜索弹层，悬浮在输入框外壳上方 */
+.mention-panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 6px);
+  max-height: 280px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 12px;
+  background: var(--guaxi-panel-bg);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.18);
+  z-index: 30;
+}
+
+.mention-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--guaxi-border);
+}
+
+.mention-panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--guaxi-text-primary);
+}
+
+.mention-panel-hint {
+  font-size: 10px;
+  color: var(--guaxi-text-secondary);
+}
+
+.mention-empty {
+  padding: 14px 12px;
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+  text-align: center;
+}
+
+.mention-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  overflow: auto;
+}
+
+.mention-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.mention-item--active {
+  background: color-mix(in srgb, #4f7dff 16%, var(--guaxi-panel-bg));
+}
+
+.mention-item-icon {
+  flex: 0 0 auto;
+  font-size: 13px;
+}
+
+.mention-item-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--guaxi-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mention-item-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 10px;
+  color: var(--guaxi-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+}
+
+.mention-chip {
+  background: color-mix(in srgb, #4f7dff 12%, var(--guaxi-header-bg));
+  border-color: color-mix(in srgb, #4f7dff 40%, var(--guaxi-border));
+}
+
+.mention-chip-at {
+  font-size: 11px;
+  font-weight: 700;
+  color: #4f7dff;
 }
 
 .attachment-list {
@@ -2148,7 +2501,9 @@ const sendQuestion = async () => {
 }
 
 .composer-task-select {
-  flex: 1 1 88px;
+  /* 设计说明：基准从 88px 加大到 104px，保证「文档编写」「知识整理」等 4 字标签
+     在触发器里完整可见；配合 :consistent-menu-width="false" 让弹出菜单按内容展开。 */
+  flex: 1 1 104px;
   min-width: 0;
 }
 

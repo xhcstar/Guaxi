@@ -294,6 +294,7 @@ async fn main() {
             commands::translator_free::selection_translate_free_multi,
             commands::docprocess::copy_image_file,
             commands::fileprocess::get_file_tree,
+            commands::fileprocess::fuzzy_search_files,
             commands::fileprocess::read_file_content,
             commands::fileprocess::get_file_meta,
             commands::fileprocess::read_file_bytes_base64,

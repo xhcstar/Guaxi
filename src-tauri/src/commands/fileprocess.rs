@@ -615,3 +615,133 @@ pub fn rename_path(old_path: String, new_path: String) -> Result<(), String> {
     );
     Ok(())
 }
+
+#[derive(Debug, Serialize)]
+pub struct FuzzyFileHit {
+    /// 文件名（不含目录）
+    pub name: String,
+    /// 文件绝对路径
+    pub path: String,
+    /// 相对所属知识库根的路径
+    pub relative: String,
+    /// 所属知识库根路径
+    pub repo: String,
+}
+
+/// 遍历时跳过的噪声目录名（除了所有以 `.` 开头的隐藏目录）。
+fn is_noise_dir(name: &str) -> bool {
+    matches!(
+        name,
+        "node_modules" | "target" | "dist" | "build" | "__pycache__" | "venv" | ".venv"
+    )
+}
+
+/// 在若干知识库根目录下递归模糊搜索文件名，用于智能助手输入框的 `@` 引用。
+///
+/// - `query` 为空：返回各根目录下的前若干文件（按名称排序）。
+/// - `query` 非空：用 SkimMatcherV2 对「文件名」打分，并对「相对路径」做弱匹配兜底，按分数降序返回。
+///
+/// 跳过隐藏目录（名字以 `.` 开头）与常见噪声目录，仅返回文件。
+#[tauri::command]
+pub fn fuzzy_search_files(
+    query: String,
+    roots: Vec<String>,
+    limit: Option<usize>,
+) -> Result<Vec<FuzzyFileHit>, String> {
+    use fuzzy_matcher::skim::SkimMatcherV2;
+    use fuzzy_matcher::FuzzyMatcher;
+    use walkdir::WalkDir;
+
+    let limit = limit.unwrap_or(40).clamp(1, 200);
+    let query = query.trim();
+    let matcher = SkimMatcherV2::default();
+
+    // 去重根目录（规范化后），避免同一库重复遍历。
+    let mut seen_roots: Vec<PathBuf> = Vec::new();
+    for raw in &roots {
+        if raw.trim().is_empty() {
+            continue;
+        }
+        let root = normalize_path(raw);
+        if !root.is_dir() {
+            continue;
+        }
+        if seen_roots.iter().any(|r| r == &root) {
+            continue;
+        }
+        seen_roots.push(root);
+    }
+
+    // (score, hit)。query 为空时 score 统一为 0，最终按名称排序。
+    let mut scored: Vec<(i64, FuzzyFileHit)> = Vec::new();
+    // 单次搜索遍历的文件上限，防止超大库卡顿。
+    const MAX_SCAN_FILES: usize = 20000;
+    let mut scanned = 0usize;
+
+    'roots: for root in &seen_roots {
+        let root_str = root.to_string_lossy().to_string();
+        let walker = WalkDir::new(root).into_iter().filter_entry(|e| {
+            let name = e.file_name().to_string_lossy();
+            // 始终允许根自身；对子项过滤隐藏/噪声目录。
+            if e.depth() == 0 {
+                return true;
+            }
+            if e.file_type().is_dir() {
+                return !name.starts_with('.') && !is_noise_dir(&name);
+            }
+            true
+        });
+
+        for entry in walker.filter_map(|e| e.ok()) {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            scanned += 1;
+            if scanned > MAX_SCAN_FILES {
+                break 'roots;
+            }
+
+            let path = entry.path();
+            let name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+            // 跳过隐藏文件。
+            if name.starts_with('.') {
+                continue;
+            }
+            let relative = path
+                .strip_prefix(root)
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_else(|_| name.clone());
+
+            let score = if query.is_empty() {
+                0
+            } else if let Some(s) = matcher.fuzzy_match(&name, query) {
+                s + 50 // 文件名命中加权
+            } else if let Some(s) = matcher.fuzzy_match(&relative, query) {
+                s
+            } else {
+                continue;
+            };
+
+            scored.push((
+                score,
+                FuzzyFileHit {
+                    name,
+                    path: path.to_string_lossy().to_string(),
+                    relative,
+                    repo: root_str.clone(),
+                },
+            ));
+        }
+    }
+
+    if query.is_empty() {
+        scored.sort_by(|a, b| a.1.name.to_lowercase().cmp(&b.1.name.to_lowercase()));
+    } else {
+        scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.name.cmp(&b.1.name)));
+    }
+
+    Ok(scored.into_iter().take(limit).map(|(_, h)| h).collect())
+}
