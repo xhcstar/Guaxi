@@ -23,19 +23,46 @@
       </div>
 
       <span class="gpv__divider" />
-      <span class="gpv__page-indicator">
+      <div v-if="features.pagination !== false" class="gpv__pager" aria-label="PDF 分页导航">
+        <button
+          type="button"
+          class="gpv__btn gpv__btn--icon"
+          :disabled="!canGoPreviousPage"
+          title="上一页"
+          aria-label="上一页"
+          @click="goPreviousPage"
+        >
+          <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+            <path d="M15.5 5.5 9 12l6.5 6.5-1.4 1.4L6.2 12l7.9-7.9 1.4 1.4Z" fill="currentColor" />
+          </svg>
+        </button>
+        <span class="gpv__page-indicator">
         <input
           class="gpv__page-input"
           type="number"
           min="1"
           :max="totalPages || 1"
-          :value="currentPage"
+          v-model="pageInputValue"
           title="跳转到页码"
-          @keydown.enter.prevent="onPageInput"
-          @change="onPageInput"
+          aria-label="跳转到页码"
+          @keydown.enter.prevent="commitPageInput"
+          @blur="syncPageInput"
         />
         / {{ totalPages }}
-      </span>
+        </span>
+        <button
+          type="button"
+          class="gpv__btn gpv__btn--icon"
+          :disabled="!canGoNextPage"
+          title="下一页"
+          aria-label="下一页"
+          @click="goNextPage"
+        >
+          <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+            <path d="m8.5 18.5 6.5-6.5-6.5-6.5 1.4-1.4 7.9 7.9-7.9 7.9-1.4-1.4Z" fill="currentColor" />
+          </svg>
+        </button>
+      </div>
       <span class="gpv__divider" />
 
       <button type="button" class="gpv__btn" :disabled="zoom <= MIN_ZOOM" title="缩小" @click="zoomOut">−</button>
@@ -238,6 +265,9 @@ const { pages, totalPages, hasPdf, status, statusTone } = doc
 const bodyRef = ref(null)
 const searchInputRef = ref(null)
 const currentPage = ref(1)
+const pageInputValue = ref('1')
+const canGoPreviousPage = computed(() => hasPdf.value && currentPage.value > 1)
+const canGoNextPage = computed(() => hasPdf.value && currentPage.value < (totalPages.value || 1))
 
 const pageEls = new Map()
 const setPageRef = (num, el) => {
@@ -711,15 +741,42 @@ const goToPage = (n, { align = 'top' } = {}) => {
   const num = Math.min(Math.max(1, Math.round(Number(n) || 1)), totalPages.value || 1)
   const el = bodyRef.value
   const node = pageEls.get(num)
-  if (!el || !node) return
+  if (!el || !node) {
+    logger.warn('PDF页码跳转失败：页面节点未就绪', { targetPage: num, totalPages: totalPages.value })
+    return
+  }
   const offset = align === 'center' ? el.clientHeight * 0.3 : 8
   el.scrollTo({ top: Math.max(0, node.offsetTop - offset), behavior: 'smooth' })
+  currentPage.value = num
+  syncPageInput()
+  emit('page-change', num)
   scheduleRenderVisible()
+  logger.info('PDF页码跳转完成', { targetPage: num, totalPages: totalPages.value })
 }
 
-const onPageInput = (ev) => {
-  const v = Number(ev?.target?.value)
-  if (Number.isFinite(v) && v >= 1) goToPage(v)
+const syncPageInput = () => {
+  pageInputValue.value = String(currentPage.value || 1)
+}
+
+const commitPageInput = () => {
+  const raw = String(pageInputValue.value ?? '').trim()
+  const target = Number(raw)
+  if (!Number.isFinite(target)) {
+    logger.warn('PDF页码输入无效', { raw })
+    syncPageInput()
+    return
+  }
+  goToPage(target)
+}
+
+const goPreviousPage = () => {
+  if (!canGoPreviousPage.value) return
+  goToPage(currentPage.value - 1)
+}
+
+const goNextPage = () => {
+  if (!canGoNextPage.value) return
+  goToPage(currentPage.value + 1)
 }
 
 const forwardSync = async ({ line, column = 1 } = {}) => {
@@ -894,16 +951,31 @@ defineExpose({
   refresh,
   scrollRatio,
   restoreScroll,
+  goPreviousPage,
+  goNextPage,
+  commitPageInput,
   // 工具栏外置（宿主驱动）所需的状态与操作
   rotateLeft,
   rotateRight,
   rotateTo,
   togglePan: () => { panMode.value = !panMode.value },
   setPanMode: (v) => { panMode.value = !!v },
-  state: { zoom, rotation, panMode, currentPage, totalPages, searchHits, searchActiveIdx, searchQuery },
+  state: { zoom, rotation, panMode, currentPage, pageInputValue, totalPages, searchHits, searchActiveIdx, searchQuery },
 })
 
 // ───────────────────────── watchers ─────────────────────────
+watch(currentPage, () => {
+  syncPageInput()
+})
+
+watch(totalPages, (nextTotal) => {
+  const total = Math.max(1, Number(nextTotal || 1))
+  if (currentPage.value > total) {
+    currentPage.value = total
+  }
+  syncPageInput()
+})
+
 watch(() => props.path, (p) => {
   const base = String(p || '').split('?')[0]
   const keep = base !== '' && base === lastBase
@@ -1025,9 +1097,15 @@ onBeforeUnmount(() => {
 .gpv__search-input:focus { outline: none; border-color: var(--n-color-primary, #61afef); }
 .gpv__search-count { font-size: 11px; opacity: 0.7; min-width: 32px; text-align: center; }
 
-.gpv__page-indicator { font-size: 11px; opacity: 0.85; min-width: 48px; text-align: center; display: inline-flex; align-items: center; gap: 4px; }
+.gpv__pager {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.gpv__page-indicator { font-size: 11px; opacity: 0.85; min-width: 58px; text-align: center; display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
 .gpv__page-input {
-  width: 40px;
+  width: 44px;
   font-size: 11px;
   padding: 1px 4px;
   text-align: center;
@@ -1054,6 +1132,19 @@ onBeforeUnmount(() => {
 .gpv__btn:hover:not(:disabled) { background: var(--gpv-hover-bg); border-color: var(--n-color-primary, #61afef); }
 .gpv__btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .gpv__btn--primary { border-color: var(--n-color-primary, #61afef); color: var(--n-color-primary, #61afef); }
+.gpv__btn--icon {
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+}
+.gpv__btn--icon svg {
+  display: block;
+  flex: 0 0 auto;
+}
 .gpv__btn--active {
   background: var(--n-color-primary, #61afef);
   border-color: var(--n-color-primary, #61afef);
