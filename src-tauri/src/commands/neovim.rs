@@ -3,6 +3,12 @@ use std::path::PathBuf;
 use std::process::{Child, Command};
 use tauri::Emitter;
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 fn normalize_target_path(path: &str) -> Result<PathBuf, String> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
@@ -25,23 +31,31 @@ fn resolve_working_dir(target: &PathBuf) -> Option<PathBuf> {
     }
 }
 
-/// Windows：通过 cmd /C start /WAIT 启动 nvim，这样 cmd 进程的生命周期与 nvim 绑定，
-/// Rust 侧 wait 到 cmd 退出即表示 nvim 已关闭。
+/// Windows：通过隐藏的 cmd 启动器执行 `start /WAIT`。
+/// 设计思路：
+/// 1. 前端仍然通过同一个 `neovim_open_path` 命令传入文件或目录，业务行为不变。
+/// 2. 终端版 nvim 需要可见的控制台窗口，所以不能把 nvim.exe 本身用 `CREATE_NO_WINDOW` 直接启动。
+/// 3. `CREATE_NO_WINDOW` 只隐藏中间的 cmd 启动器，`start /WAIT` 打开的 Neovim 编辑窗口仍然可见。
+/// 4. Rust 侧继续 wait 这个 cmd 启动器；因为 `/WAIT` 会等 Neovim 退出，所以 `neovim-exited`
+///    的关闭事件处理链保持不变。
 #[cfg(target_os = "windows")]
 fn spawn_neovim(executable: &str, target: &PathBuf) -> Result<Child, String> {
     let target_arg = target.to_string_lossy().to_string();
     let work_dir = resolve_working_dir(target);
     println!(
         "[NeovimBridge] launching on Windows executable={} target={} work_dir={:?}",
-        executable, target_arg, work_dir
+        executable,
+        target_arg,
+        work_dir
     );
 
     let mut command = Command::new("cmd");
     if let Some(dir) = work_dir.as_ref() {
         command.current_dir(dir);
     }
-    // /WAIT 让 start 等待 nvim 退出后才返回，从而使整个 cmd 进程与 nvim 同生命周期
+    // 这里隐藏的是中间 cmd 启动器，不是 Neovim 窗口；/WAIT 保证关闭事件仍然可被后续 wait 捕获。
     command
+        .creation_flags(CREATE_NO_WINDOW)
         .arg("/C")
         .arg("start")
         .arg("/WAIT")
@@ -49,9 +63,15 @@ fn spawn_neovim(executable: &str, target: &PathBuf) -> Result<Child, String> {
         .arg(executable)
         .arg(&target_arg);
 
-    command
+    let child = command
         .spawn()
-        .map_err(|err| format!("启动 Neovim 失败: {}", err))
+        .map_err(|err| format!("启动 Neovim 失败: {}", err))?;
+    println!(
+        "[NeovimBridge] Windows launcher pid={} is waiting for Neovim target={}",
+        child.id(),
+        target_arg
+    );
+    Ok(child)
 }
 
 /// Linux / macOS：直接 spawn nvim，子进程句柄可直接 wait。
