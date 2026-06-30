@@ -1,5 +1,6 @@
 <template>
   <div class="chat-container">
+    <GuaxiRehoboamBackdrop :active="isGenerating" />
     <div class="chat-header">
       <n-avatar :src="activeChat?.ModelAvatar" size="medium" round />
       <div class="chat-header-title">
@@ -182,6 +183,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { addCopyButtons, addMediaViewerButtons, renderMarkdown } from "../GuaxiMarkdownRender/GuaxiMarker";
 import mermaid from 'mermaid';
+import GuaxiRehoboamBackdrop from './GuaxiRehoboamBackdrop.vue';
 
 const logger = createLogger('GuaxiCenterChatView')
 const chatStore = useChatStore();
@@ -1134,15 +1136,19 @@ const setMessageRef = (el, index) => {
   min-height: 0;
   background: var(--guaxi-content-bg);
   position: relative;
+  overflow: hidden;
 }
 
 .chat-header {
+  position: relative;
+  z-index: 2;
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 10px 14px;
   border-bottom: 1px solid var(--guaxi-border);
-  background: var(--guaxi-panel-bg);
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 88%, transparent);
+  backdrop-filter: blur(14px);
 }
 
 .header-select-btn {
@@ -1208,14 +1214,13 @@ const setMessageRef = (el, index) => {
 }
 
 .message-list {
+  position: relative;
+  z-index: 1;
   flex: 1 1 auto;
   overflow-y: auto;
   padding: 16px 16px 8px;
-  background: radial-gradient(1200px 600px at 20% 0%, rgba(45, 212, 191, 0.10) 0%, rgba(45, 212, 191, 0) 60%),
-    radial-gradient(1000px 500px at 90% 10%, rgba(99, 102, 241, 0.08) 0%, rgba(99, 102, 241, 0) 55%),
-    var(--guaxi-content-bg);
+  background: transparent;
   min-height: 0;
-  position: relative;
 }
 
 .message-item {
@@ -1292,11 +1297,12 @@ const setMessageRef = (el, index) => {
   max-width: 70%;
   min-width: 0;
   padding: 10px 12px;
-  border-radius: 16px;
+  border-radius: 12px;
   margin: 0 6px;
   box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06);
   border: 1px solid var(--guaxi-border);
   box-sizing: border-box;
+  backdrop-filter: blur(16px);
 }
 
 .message-content {
@@ -1304,14 +1310,14 @@ const setMessageRef = (el, index) => {
 }
 
 .message-left .message-bubble {
-  background: var(--guaxi-panel-bg);
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 86%, transparent);
   font-size: 16px;
   font-family: 'Maple Mono NF CN', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
   border-top-left-radius: 6px;
 }
 
 .message-right .message-bubble {
-  background: linear-gradient(135deg, #2dd4bf 0%, #22c55e 100%);
+  background: linear-gradient(135deg, rgba(45, 212, 191, 0.92) 0%, rgba(34, 197, 94, 0.92) 100%);
   font-size: 16px;
   font-family: 'Maple Mono NF CN', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
   color: rgba(255, 255, 255, 0.98);
@@ -1321,7 +1327,8 @@ const setMessageRef = (el, index) => {
 .input-area {
   flex: 0 0 auto;
   position: relative;
-  background: var(--guaxi-content-bg);
+  z-index: 2;
+  background: linear-gradient(180deg, transparent 0%, color-mix(in srgb, var(--guaxi-content-bg) 92%, transparent) 22%, var(--guaxi-content-bg) 100%);
   padding: 0 12px 12px;
   min-height: 120px;
   font-size: 17px;
@@ -1331,13 +1338,14 @@ const setMessageRef = (el, index) => {
 .composer-shell {
   min-height: 96px;
   border: 1px solid var(--guaxi-border);
-  border-radius: 20px;
-  background: var(--guaxi-panel-bg);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 88%, transparent);
   box-shadow: 0 10px 26px rgba(15, 23, 42, 0.1);
   padding: 10px 12px 8px;
   display: flex;
   flex-direction: column;
   gap: 6px;
+  backdrop-filter: blur(18px);
 }
 
 .attachment-list {
