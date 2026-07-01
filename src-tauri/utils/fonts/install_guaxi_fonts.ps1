@@ -6,11 +6,13 @@ $ErrorActionPreference = "Stop"
 
 # 安装器在解压 utils_bundles 后调用本脚本。
 # 设计思路：
-# 1. 当前安装包是 currentUser 模式，所以字体也写入用户字体目录，避免管理员权限。
-# 2. 字体是可选体验资源，安装失败不能影响主程序安装，因此脚本尽量记录问题并继续。
-# 3. 先检查 HKCU/HKLM 已安装字体族；系统已有则跳过，避免重复注册。
-# 4. 复制到用户字体目录时绝不覆盖既有同名文件，避免破坏用户或旧版本已经安装的字体。
-# 5. 注册后广播 WM_FONTCHANGE，让 WebView / Monaco / Tectonic 能尽快看到新字体。
+# 1. 当前安装包是 currentUser 模式，所以字体只写入当前用户字体目录，避免管理员权限要求。
+# 2. 字体是可选体验资源，安装失败不能影响主程序安装，因此每个字体单独捕获错误并继续。
+# 3. 先检查 HKCU/HKLM 已安装字体族；系统或用户已经有同族字体时直接跳过，绝不覆盖。
+# 4. 不再使用 Guaxi 前缀重命名字体文件或注册表项，避免破坏 MobaXterm 等软件的字体枚举。
+# 5. 会清理旧版脚本误写入的 Guaxi 前缀记录，但只处理 HKCU 中指向 Guaxi-* 用户字体文件的 Guaxi 注册表项。
+# 6. 复制到用户字体目录时使用原始文件名；目标文件已存在则跳过，避免破坏用户已有字体。
+# 7. 安装或清理后广播 WM_FONTCHANGE，让 WebView / Monaco / 终端类软件尽快刷新字体缓存。
 Write-Host "[GuaxiFonts] font install started. fontDir=$FontDir"
 
 if (-not (Test-Path -LiteralPath $FontDir)) {
@@ -62,12 +64,16 @@ function Get-InstalledFontRegistryNames {
       continue
     }
 
-    $item = Get-ItemProperty -LiteralPath $path
-    foreach ($property in $item.PSObject.Properties) {
-      if ($property.Name -like "PS*") {
-        continue
+    try {
+      $item = Get-ItemProperty -LiteralPath $path
+      foreach ($property in $item.PSObject.Properties) {
+        if ($property.Name -like "PS*") {
+          continue
+        }
+        [void]$names.Add([string]$property.Name)
       }
-      [void]$names.Add([string]$property.Name)
+    } catch {
+      Write-Host "[GuaxiFonts] failed to read font registry names path=$path error=$($_.Exception.Message)"
     }
   }
   return $names
@@ -98,7 +104,7 @@ function Get-InstalledFontRegistryValues {
         }) | Out-Null
       }
     } catch {
-      Write-Host "[GuaxiFonts] failed to read font registry path=$path error=$($_.Exception.Message)"
+      Write-Host "[GuaxiFonts] failed to read font registry values path=$path error=$($_.Exception.Message)"
     }
   }
   return $values
@@ -154,38 +160,98 @@ function Test-RegistryAlreadyHasFile {
   return $false
 }
 
-function Get-SafeFontDestination {
+function Test-RegistryValueExists {
   param(
-    [System.IO.FileInfo]$Font,
+    [string]$RegPath,
+    [string]$Name
+  )
+
+  $existing = Get-ItemProperty -LiteralPath $RegPath -Name $Name -ErrorAction SilentlyContinue
+  return ($null -ne $existing)
+}
+
+function Remove-GuaxiPrefixedFontInstall {
+  param(
+    [string]$RegPath,
     [string]$UserFontDir
   )
 
-  # 使用 Guaxi 前缀避免与用户已经安装的同名字体文件冲突。
-  $destName = "Guaxi-$($Font.Name)"
-  $dest = Join-Path $UserFontDir $destName
-  if (-not (Test-Path -LiteralPath $dest)) {
-    return $dest
+  $removedEntries = 0
+  $removedFiles = 0
+  if (-not (Test-Path -LiteralPath $RegPath)) {
+    return [pscustomobject]@{
+      RemovedEntries = $removedEntries
+      RemovedFiles = $removedFiles
+    }
   }
+
+  $userFontRoot = [IO.Path]::GetFullPath($UserFontDir).TrimEnd('\') + '\'
 
   try {
-    $srcHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Font.FullName).Hash
-    $destHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $dest).Hash
-    if ($srcHash -eq $destHash) {
-      Write-Host "[GuaxiFonts] same Guaxi font file already exists, reuse path=$dest"
-      return $dest
-    }
+    $item = Get-ItemProperty -LiteralPath $RegPath
+    foreach ($property in $item.PSObject.Properties) {
+      if ($property.Name -like "PS*") {
+        continue
+      }
+      if ($property.Name -notlike "Guaxi *") {
+        continue
+      }
 
-    $shortHash = $srcHash.Substring(0, 12).ToLowerInvariant()
-    $stem = [IO.Path]::GetFileNameWithoutExtension($Font.Name)
-    $ext = $Font.Extension
-    return (Join-Path $UserFontDir "Guaxi-$stem-$shortHash$ext")
+      $value = [string]$property.Value
+      $fileName = ""
+      $isGuaxiUserFontRecord = $false
+      if ($value) {
+        try {
+          $fullValuePath = [IO.Path]::GetFullPath($value)
+          $fileName = [IO.Path]::GetFileName($fullValuePath)
+          $isUnderUserFonts = $fullValuePath.StartsWith($userFontRoot, [System.StringComparison]::OrdinalIgnoreCase)
+          $isGuaxiUserFontRecord = ($isUnderUserFonts -and $fileName -like "Guaxi-*")
+        } catch {
+          Write-Host "[GuaxiFonts] Guaxi registry value is not a normal path, registryName=$($property.Name) value=$value"
+        }
+      }
+
+      if (-not $isGuaxiUserFontRecord) {
+        Write-Host "[GuaxiFonts] keep Guaxi-like registry entry because it was not created by old installer logic name=$($property.Name) value=$value"
+        continue
+      }
+
+      Remove-ItemProperty -LiteralPath $RegPath -Name $property.Name -ErrorAction Stop
+      $removedEntries += 1
+      Write-Host "[GuaxiFonts] removed old Guaxi-prefixed registry entry name=$($property.Name) value=$value"
+
+      if (Test-Path -LiteralPath $value) {
+        Remove-Item -LiteralPath $value -Force -ErrorAction Stop
+        $removedFiles += 1
+        Write-Host "[GuaxiFonts] removed old Guaxi-prefixed font file file=$fileName"
+      } else {
+        Write-Host "[GuaxiFonts] old Guaxi-prefixed font file already missing file=$fileName"
+      }
+    }
   } catch {
-    $stamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-    $stem = [IO.Path]::GetFileNameWithoutExtension($Font.Name)
-    $ext = $Font.Extension
-    Write-Host "[GuaxiFonts] failed to hash existing font destination, fallback to timestamp. file=$($Font.Name) error=$($_.Exception.Message)"
-    return (Join-Path $UserFontDir "Guaxi-$stem-$stamp$ext")
+    Write-Host "[GuaxiFonts] failed while cleaning old Guaxi-prefixed font install error=$($_.Exception.Message)"
   }
+
+  return [pscustomobject]@{
+    RemovedEntries = $removedEntries
+    RemovedFiles = $removedFiles
+  }
+}
+
+function Send-FontChangeBroadcast {
+  $HWND_BROADCAST = [IntPtr]0xffff
+  $WM_FONTCHANGE = 0x001D
+  $SMTO_ABORTIFHUNG = 0x0002
+  $result = [UIntPtr]::Zero
+  [void][GuaxiFontNative]::SendMessageTimeout(
+    $HWND_BROADCAST,
+    $WM_FONTCHANGE,
+    [UIntPtr]::Zero,
+    [IntPtr]::Zero,
+    $SMTO_ABORTIFHUNG,
+    5000,
+    [ref]$result
+  )
 }
 
 $userFontDir = Join-Path $env:LOCALAPPDATA "Microsoft\Windows\Fonts"
@@ -193,6 +259,9 @@ New-Item -ItemType Directory -Force -Path $userFontDir | Out-Null
 
 $regPath = "HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Fonts"
 New-Item -Path $regPath -Force | Out-Null
+
+$cleanupResult = Remove-GuaxiPrefixedFontInstall -RegPath $regPath -UserFontDir $userFontDir
+$cleanupChanged = ($cleanupResult.RemovedEntries -gt 0 -or $cleanupResult.RemovedFiles -gt 0)
 
 $preinstalledRegistryNames = @(Get-InstalledFontRegistryNames)
 $preinstalledRegistryValues = @(Get-InstalledFontRegistryValues)
@@ -217,17 +286,26 @@ foreach ($font in $fontFiles) {
       continue
     }
 
-    $dest = Get-SafeFontDestination -Font $font -UserFontDir $userFontDir
-    if (-not (Test-Path -LiteralPath $dest)) {
-      Copy-Item -LiteralPath $font.FullName -Destination $dest
+    $dest = Join-Path $userFontDir $font.Name
+    if (Test-Path -LiteralPath $dest) {
+      Write-Host "[GuaxiFonts] destination file already exists, skip to avoid overwriting user font file=$($font.Name) dest=$dest"
+      $skippedCount += 1
+      continue
     }
 
     $fontKind = if ($font.Extension -ieq ".otf") { "OpenType" } else { "TrueType" }
-    $valueName = "Guaxi $([IO.Path]::GetFileNameWithoutExtension([IO.Path]::GetFileName($dest))) ($fontKind)"
-    New-ItemProperty -Path $regPath -Name $valueName -Value $dest -PropertyType String -Force | Out-Null
+    $valueName = "$([IO.Path]::GetFileNameWithoutExtension($font.Name)) ($fontKind)"
+    if (Test-RegistryValueExists -RegPath $regPath -Name $valueName) {
+      Write-Host "[GuaxiFonts] registry value already exists, skip to avoid replacing font registration name=$valueName file=$($font.Name)"
+      $skippedCount += 1
+      continue
+    }
+
+    Copy-Item -LiteralPath $font.FullName -Destination $dest
+    New-ItemProperty -Path $regPath -Name $valueName -Value $dest -PropertyType String | Out-Null
 
     $added = [GuaxiFontNative]::AddFontResourceW($dest)
-    Write-Host "[GuaxiFonts] installed file=$($font.Name) dest=$([IO.Path]::GetFileName($dest)) family=$family added=$added"
+    Write-Host "[GuaxiFonts] installed file=$($font.Name) dest=$([IO.Path]::GetFileName($dest)) registryName=$valueName family=$family added=$added"
     [void]$seenFamilies.Add($family)
     $installedCount += 1
   } catch {
@@ -236,22 +314,10 @@ foreach ($font in $fontFiles) {
   }
 }
 
-if ($installedCount -gt 0) {
-  $HWND_BROADCAST = [IntPtr]0xffff
-  $WM_FONTCHANGE = 0x001D
-  $SMTO_ABORTIFHUNG = 0x0002
-  $result = [UIntPtr]::Zero
-  [void][GuaxiFontNative]::SendMessageTimeout(
-    $HWND_BROADCAST,
-    $WM_FONTCHANGE,
-    [UIntPtr]::Zero,
-    [IntPtr]::Zero,
-    $SMTO_ABORTIFHUNG,
-    5000,
-    [ref]$result
-  )
-  Write-Host "[GuaxiFonts] broadcast WM_FONTCHANGE after installing fonts."
+if ($installedCount -gt 0 -or $cleanupChanged) {
+  Send-FontChangeBroadcast
+  Write-Host "[GuaxiFonts] broadcast WM_FONTCHANGE after font changes."
 }
 
-Write-Host "[GuaxiFonts] font install finished. installed=$installedCount skipped=$skippedCount failed=$failedCount families=$($seenFamilies.Count)"
+Write-Host "[GuaxiFonts] font install finished. installed=$installedCount skipped=$skippedCount failed=$failedCount cleanedEntries=$($cleanupResult.RemovedEntries) cleanedFiles=$($cleanupResult.RemovedFiles) families=$($seenFamilies.Count)"
 exit 0
