@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::time::sleep;
 use tracing::{info, warn};
 
@@ -81,37 +81,54 @@ fn read_agent_requirements(source_dir: &Path) -> Vec<String> {
 }
 
 /// 找到 agent_server 源代码目录
-fn agent_server_source_dir() -> Result<PathBuf, String> {
+fn agent_server_source_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let exe_dir = std::env::current_exe()
         .map_err(|e| e.to_string())?
         .parent()
         .ok_or("无法获取 exe 目录")?
         .to_path_buf();
 
-    // 开发模式：agent_server/ 在项目根
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    // 打包模式：agent_server 会作为 Tauri resource 落在 exe 同级目录或 resources 子目录。
+    // 先检查 release 候选，避免浅层安装路径（例如 D:\guaxi.exe）因开发路径 parent 不足提前失败。
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        candidates.push(resource_dir.join("agent_server"));
+    }
+    candidates.push(exe_dir.join("agent_server"));
+    candidates.push(exe_dir.join("resources").join("agent_server"));
+
+    // 开发模式：agent_server/ 在项目根。
     // exe: target/debug/guaxi.exe → 项目根: ../../../agent_server
-    let dev_path = exe_dir
+    // 设计说明：开发路径只是候选项，不能用 ok_or 提前返回；release 的 exe 目录层级并不固定。
+    if let Some(dev_path) = exe_dir
         .parent()   // target/debug → target
-        .ok_or("无效 exe 路径")?
-        .parent()   // target → src-tauri
-        .ok_or("无效 exe 路径")?
-        .parent()   // src-tauri → 项目根
-        .ok_or("无效 exe 路径")?
-        .join("agent_server");
-    if dev_path.join("main.py").exists() {
-        return Ok(dev_path);
+        .and_then(|p| p.parent())   // target → src-tauri
+        .and_then(|p| p.parent())   // src-tauri → 项目根
+        .map(|p| p.join("agent_server"))
+    {
+        candidates.push(dev_path);
     }
 
-    // 打包模式：查找 bundled 资源
-    // agent_server 会作为 extra resource 被打包
-    let bundled = exe_dir.join("agent_server");
-    if bundled.join("main.py").exists() {
-        return Ok(bundled);
+    for candidate in &candidates {
+        if candidate.join("main.py").exists() {
+            info!(
+                source_dir = %candidate.to_string_lossy(),
+                "[agent_server] resolved source directory"
+            );
+            return Ok(candidate.clone());
+        }
     }
 
+    let searched = candidates
+        .iter()
+        .map(|p| p.to_string_lossy().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    warn!("[agent_server] source directory not found, searched: {}", searched);
     Err(format!(
-        "找不到 agent_server 源代码目录，已查找: {:?}, {:?}",
-        dev_path, bundled
+        "找不到 agent_server 源代码目录，已查找: {}",
+        searched
     ))
 }
 
@@ -144,7 +161,7 @@ fn build_llm_config_json() -> Value {
 
 /// 启动 agent server 进程
 pub async fn ensure_agent_server_started(app: &AppHandle) -> Result<(), String> {
-    let source_dir = agent_server_source_dir()?;
+    let source_dir = agent_server_source_dir(app)?;
 
     // 确保 Guaxi 托管 Python 就绪，并把 agent_server 依赖安装进托管 .venv。
     //

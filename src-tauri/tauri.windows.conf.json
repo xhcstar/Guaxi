@@ -6,9 +6,10 @@
         "installerHooks": "installer-hooks.nsh"
       }
     },
-    "resources": [
-      "scripts/**/*",
-      "libs/**/*"
-    ]
+    "resources": {
+      "scripts/": "scripts",
+      "libs/": "libs",
+      "../agent_server/": "agent_server"
+    }
   }
 }

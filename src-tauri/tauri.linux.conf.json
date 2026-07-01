@@ -2,10 +2,11 @@
   "$schema": "https://schema.tauri.app/config/2",
   "bundle": {
     "targets": ["appimage", "deb", "rpm"],
-    "resources": [
-      "scripts/**/*",
-      "libs/**/*",
-      "utils/__bundles/**/*"
-    ]
+    "resources": {
+      "scripts/": "scripts",
+      "libs/": "libs",
+      "../agent_server/": "agent_server",
+      "utils/__bundles/": "utils/__bundles"
+    }
   }
 }
