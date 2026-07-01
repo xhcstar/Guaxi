@@ -44,6 +44,7 @@ import PythonPlaygroundApp from "./apps/PythonPlaygroundApp.vue"
 import PlaceholderApp from "./apps/PlaceholderApp.vue"
 import TODOApp from "./apps/TODO.vue"
 import TTSBookApp from "./apps/TTSBookApp.vue"
+import OcrApp from "./apps/OcrApp.vue"
 
 const logger = createLogger('GuaxiContentAppView')
 const settingsStore = useSettingsStore()
@@ -126,6 +127,16 @@ const apps = [
     icon: '🎙️',
     color: 'linear-gradient(135deg, #f6d365, #fda085)',
     component: TTSBookApp
+  },
+  {
+    id: 'tools-ocr',
+    name: '图片文字识别',
+    category: 'tools',
+    categoryLabel: '工具类',
+    description: '离线 OCR：截图/图片一键提取文字，中文与多语言',
+    icon: '🔤',
+    color: 'linear-gradient(135deg, #84fab0, #8fd3f4)',
+    component: OcrApp
   },
   {
     id: 'tools-table',

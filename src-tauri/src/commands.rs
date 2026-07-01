@@ -15,6 +15,7 @@ pub mod cloudsync;
 pub mod p2psync;
 pub mod statisticview;
 pub mod guaxiscreencap;
+pub mod ocr;
 pub mod translator;
 pub mod translator_free;
 pub mod searcher;

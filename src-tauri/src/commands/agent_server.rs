@@ -20,6 +20,11 @@ const AGENT_SERVER_PORT: u16 = 9876;
 const AGENT_SERVER_URL: &str = "http://127.0.0.1:9876";
 const AGENT_SERVER_STARTUP_TIMEOUT_SECS: u64 = 30;
 
+/// agent_server 必须提供的关键路由。运行中的旧进程若缺少其一，说明 main.py 已更新
+/// 但进程未重启（uvicorn 路由表在启动时固化：依赖可热装，代码不热更），需强制重启。
+/// 新增会长期存在的端点时，把它加进来即可让旧进程在下次启动检查时自动被替换。
+const EXPECTED_ROUTES: &[&str] = &["/ocr"];
+
 #[cfg(all(windows, not(debug_assertions)))]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -180,8 +185,18 @@ pub async fn ensure_agent_server_started(app: &AppHandle) -> Result<(), String> 
 
     // 依赖已确认后再检查服务是否运行；运行中的 Python 进程可在后续请求动态 import 新装包。
     if check_agent_server_health().await.is_ok() {
-        info!("[agent_server] agent server already running with dependencies ensured");
-        return Ok(());
+        // 但代码改动（如 main.py 新增路由）不会热更：uvicorn 路由表在启动时固化。
+        // 若运行中的进程缺少关键路由，说明是旧代码进程（常见于上个会话被硬杀残留的孤儿），
+        // 强制重启以加载新代码；否则直接复用（避免误杀已加载模型的进程）。
+        if agent_server_missing_routes().await {
+            warn!("[agent_server] running server missing expected routes (stale code); force restarting");
+            force_stop_agent_server();
+            // 等待端口释放，避免新进程 bind 冲突。
+            sleep(Duration::from_secs(1)).await;
+        } else {
+            info!("[agent_server] agent server already running with expected routes");
+            return Ok(());
+        }
     }
 
     info!(
@@ -291,6 +306,97 @@ pub fn stop_agent_server() {
         if let Some(mut child) = guard.take() {
             info!("[agent_server] stopping agent server");
             let _ = child.kill();
+        }
+    }
+}
+
+/// 检查运行中的 agent_server 是否缺少关键路由（代码陈旧）。
+///
+/// 仅在成功获取 `/openapi.json` 且**确认**某关键路由缺失时返回 true；
+/// 无法确认（请求失败/解析失败）时返回 false，避免因偶发错误误杀正在服务的进程。
+async fn agent_server_missing_routes() -> bool {
+    let client = Client::new();
+    let resp = match client
+        .get(format!("{}/openapi.json", AGENT_SERVER_URL))
+        .timeout(Duration::from_secs(3))
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => r,
+        _ => return false,
+    };
+
+    let schema: Value = match resp.json().await {
+        Ok(j) => j,
+        Err(_) => return false,
+    };
+
+    let paths = match schema.get("paths").and_then(|p| p.as_object()) {
+        Some(p) => p,
+        None => return false,
+    };
+
+    EXPECTED_ROUTES.iter().any(|route| !paths.contains_key(*route))
+}
+
+/// 强制停止 agent_server：先杀本进程持有的子进程句柄，再清理仍占用端口的孤儿进程
+/// （上个会话被硬杀时未被回收的 uvicorn，不在我们的进程句柄内）。
+fn force_stop_agent_server() {
+    stop_agent_server();
+    kill_listeners_on_port(AGENT_SERVER_PORT);
+}
+
+/// 清理监听指定端口的进程（Windows：netstat 找 PID → taskkill）。
+#[cfg(windows)]
+fn kill_listeners_on_port(port: u16) {
+    let suffix = format!(":{}", port);
+
+    let mut cmd = Command::new("netstat");
+    cmd.args(["-ano", "-p", "TCP"]);
+    apply_no_window(&mut cmd);
+    let output = match cmd.output() {
+        Ok(o) => o,
+        Err(e) => {
+            warn!(error = %e, "[agent_server] netstat 执行失败，跳过端口清理");
+            return;
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut pids: Vec<u32> = Vec::new();
+    for line in stdout.lines() {
+        // 期望列：Proto  Local  Foreign  State  PID
+        // 本地地址（第 2 列）以 :port 结尾即命中监听/服务端连接；PID 取末列。
+        // 只按列位置解析，不依赖 "LISTENING" 文案，规避不同语言环境差异。
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        if cols.len() >= 5 && cols[1].ends_with(&suffix) {
+            if let Ok(pid) = cols[cols.len() - 1].parse::<u32>() {
+                if pid != 0 && !pids.contains(&pid) {
+                    pids.push(pid);
+                }
+            }
+        }
+    }
+
+    for pid in pids {
+        info!(pid, port, "[agent_server] 清理占用端口的孤儿进程");
+        let mut kill = Command::new("taskkill");
+        kill.args(["/F", "/PID", &pid.to_string()]);
+        apply_no_window(&mut kill);
+        let _ = kill.output();
+    }
+}
+
+/// 清理监听指定端口的进程（类 Unix：lsof 找 PID → kill -9，best-effort）。
+#[cfg(not(windows))]
+fn kill_listeners_on_port(port: u16) {
+    let output = Command::new("lsof")
+        .args(["-ti", &format!("tcp:{}", port)])
+        .output();
+    if let Ok(output) = output {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for pid in stdout.split_whitespace() {
+            let _ = Command::new("kill").args(["-9", pid]).output();
         }
     }
 }

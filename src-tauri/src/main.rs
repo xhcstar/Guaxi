@@ -220,6 +220,8 @@ async fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::file_watcher::start_file_watching,
             commands::file_watcher::stop_file_watching,
+            commands::ocr::ocr_recognize,
+            commands::ocr::screenshot_ocr,
             commands::chatview::get_chat_answer,
             commands::chatview::get_chat_answer_stream,
             commands::chatview::agent_chat_stream,

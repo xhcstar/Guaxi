@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from .config import load_config_from_env, DEFAULT_WORK_DIR
 from .agent import run_agent, set_cancel, clear_cancel, submit_confirm_result, is_cancelled
 from .tools import get_tool_specs as list_tools, dispatch as tool_dispatch
+from .ocr import run_ocr
 
 
 # ========== 请求/响应模型 ==========
@@ -40,6 +41,11 @@ class ToolExecRequest(BaseModel):
     name: str = ""
     args: dict = {}
     work_dir: str = ""
+
+
+class OcrRequest(BaseModel):
+    image_base64: str = ""
+    image_path: str = ""
 
 
 # ========== 应用初始化 ==========
@@ -115,6 +121,15 @@ async def tools_exec(req: ToolExecRequest):
     wd = req.work_dir or DEFAULT_WORK_DIR
     result = await tool_dispatch(req.name, req.args, wd)
     return {"result": result}
+
+
+@app.post("/ocr")
+async def ocr(req: OcrRequest):
+    """离线 OCR 识别，返回 {lines:[{text,confidence,box}], text}。
+
+    OCR 属 CPU 密集，放到线程池执行，避免阻塞事件循环。
+    """
+    return await asyncio.to_thread(run_ocr, req.image_base64, req.image_path)
 
 
 # ========== 入口 ==========
