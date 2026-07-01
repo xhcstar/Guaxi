@@ -78,10 +78,32 @@ import { ref, computed } from 'vue'
 import { createDiscreteApi } from 'naive-ui'
 import { invoke, convertFileSrc } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { createLogger } from '../../../utils/logger'
 
 const logger = createLogger('OcrApp')
 const { message } = createDiscreteApi(['message'])
+const appWindow = getCurrentWindow()
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+// 等待窗口真正进入最小化并稳定，避免截图工具截到尚未消失的本窗口。
+const waitForWindowMinimized = async (timeoutMs = 1200, settleMs = 260) => {
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    try {
+      if (await appWindow.isMinimized()) {
+        await sleep(settleMs)
+        return true
+      }
+    } catch (e) {
+      logger.warn('[OcrApp] 检查最小化状态失败:', e)
+      break
+    }
+    await sleep(50)
+  }
+  return false
+}
 
 // 图片来源：本地路径优先（体积小、无需 base64），否则用 base64（拖拽/粘贴）。
 const imagePath = ref('')
@@ -191,7 +213,19 @@ const screenshotRecognize = async () => {
   if (capturing.value || recognizing.value) return
   capturing.value = true
   errorMsg.value = ''
+
+  // 关键：截图前先最小化本窗口，否则截图工具会把 OCR 窗口自身截进去，
+  // 只能截到当前窗口内容。与 GuaxiHeader 的截图流程一致。
+  let minimized = false
   try {
+    try {
+      await appWindow.minimize()
+      minimized = true
+      await waitForWindowMinimized()
+    } catch (minErr) {
+      logger.warn('[OcrApp] 最小化窗口失败，继续尝试截图:', minErr)
+    }
+
     const res = await invoke('screenshot_ocr')
     if (res?.cancelled) {
       message.info('已取消截图')
@@ -213,6 +247,16 @@ const screenshotRecognize = async () => {
     errorMsg.value = typeof e === 'string' ? e : (e?.message || '截图识别失败')
     message.error('截图识别失败')
   } finally {
+    // 恢复窗口（无论成功、取消还是异常）
+    if (minimized) {
+      try {
+        await appWindow.unminimize()
+        await appWindow.show()
+        await appWindow.setFocus()
+      } catch (restoreErr) {
+        logger.warn('[OcrApp] 恢复窗口失败:', restoreErr)
+      }
+    }
     capturing.value = false
   }
 }

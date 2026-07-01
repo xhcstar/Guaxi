@@ -6,8 +6,9 @@
 use base64::Engine;
 use serde_json::json;
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::AppHandle;
+use tokio::time::sleep;
 
 const AGENT_SERVER_URL: &str = "http://127.0.0.1:9876";
 
@@ -91,26 +92,40 @@ pub async fn screenshot_ocr(app: AppHandle) -> Result<serde_json::Value, String>
     let temp_path = std::env::temp_dir().join(format!("guaxi_ocr_{}.png", uuid::Uuid::new_v4()));
     let temp_str = temp_path.to_string_lossy().to_string();
 
-    // 3. 运行截图工具，阻塞直到用户完成框选或取消（放到阻塞线程池，避免占用异步执行器线程）。
-    let output = {
-        let tool = tool.clone();
-        let temp_str = temp_str.clone();
-        tokio::task::spawn_blocking(move || Command::new(&tool).arg(&temp_str).output())
-            .await
-            .map_err(|e| format!("截图任务失败: {}", e))?
-            .map_err(|e| format!("启动截图工具失败: {}", e))?
-    };
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("截图工具执行失败: {}", stderr));
-    }
+    // 3. 拉起截图工具让用户框选。采用与 take_screenshot_markdown 一致的可编程截图模式：
+    //    `--save <path> --once` + spawn。`--once` 表示"截一次即退出"，缺它工具会进入常驻
+    //    模式不返回（这正是之前 .output() 一直阻塞、界面卡 loading 的原因）。
+    let mut child = Command::new(&tool)
+        .args(["--save", &temp_str, "--once"])
+        .spawn()
+        .map_err(|e| format!("启动截图工具失败: {}", e))?;
 
-    // 4. 用户可能取消（未产生文件）→ 返回 cancelled，不当作错误。
-    let produced = std::fs::metadata(&temp_path)
-        .map(|m| m.is_file() && m.len() > 0)
-        .unwrap_or(false);
-    if !produced {
-        return Ok(json!({ "cancelled": true, "lines": [], "text": "", "image_base64": "" }));
+    // 4. 轮询等待截图文件生成；若工具在生成文件前退出（用户按 Esc 取消）→ 返回 cancelled。
+    let poll_start = Instant::now();
+    let max_wait = Duration::from_secs(60 * 5); // 给用户充足的框选时间
+    loop {
+        // 文件已生成且非空 → 截图完成。
+        if std::fs::metadata(&temp_path)
+            .map(|m| m.is_file() && m.len() > 0)
+            .unwrap_or(false)
+        {
+            break;
+        }
+        // 工具已退出：再确认一次文件；仍无内容 → 视为用户取消。
+        if let Ok(Some(_status)) = child.try_wait() {
+            if std::fs::metadata(&temp_path)
+                .map(|m| m.is_file() && m.len() > 0)
+                .unwrap_or(false)
+            {
+                break;
+            }
+            return Ok(json!({ "cancelled": true, "lines": [], "text": "", "image_base64": "" }));
+        }
+        if poll_start.elapsed() >= max_wait {
+            let _ = child.kill();
+            return Err("等待截图超时".to_string());
+        }
+        sleep(Duration::from_millis(200)).await;
     }
 
     // 5. 读取截图字节用于预览（data URL）。读取失败不阻断识别。
