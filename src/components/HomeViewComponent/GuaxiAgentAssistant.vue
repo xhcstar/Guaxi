@@ -48,7 +48,7 @@
         </div>
         <div class="assistant-message-body">
           <div class="assistant-message-meta">
-            <span>{{ message.role === 'user' ? '你' : (message.role === 'web' ? '联网检索' : '智能助手') }}</span>
+            <span>{{ message.role === 'user' ? '我' : (message.role === 'web' ? '联网检索' : '智能助手') }}</span>
             <span>{{ formatTime(message.createdAt) }}</span>
           </div>
           <div
@@ -2015,6 +2015,7 @@ const sendQuestion = async () => {
     typedLength: typedQuestion.length,
     attachmentCount: sentAttachments.length,
     mentionCount: sentMentions.length,
+    webSearchEnabled: Boolean(webSearchEnabled.value),
   })
   rightSiderStore.addAssistantMessage({
     role: 'user',
@@ -2083,6 +2084,7 @@ const sendQuestion = async () => {
           kb_name: '',
           repo_path: String(fileTreeStore.activeRepoPath || ''),
           repo_roots: Array.isArray(fileTreeStore.repopathlist) ? fileTreeStore.repopathlist.filter(Boolean) : [],
+          web_search_enabled: Boolean(webSearchEnabled.value),
         },
       })
       rightSiderStore.setAssistantSessionId(sessionId)
@@ -2311,8 +2313,8 @@ const sendQuestion = async () => {
 
 .assistant-jump-latest {
   position: absolute;
-  right: 16px;
-  bottom: 112px;
+  left: 50%;
+  bottom: 164px;
   z-index: 25;
   width: 32px;
   height: 32px;
@@ -2324,11 +2326,14 @@ const sendQuestion = async () => {
   place-items: center;
   cursor: pointer;
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18);
+  /* 设计说明：跳到最新按钮属于消息区操作。这里预留完整输入区高度，让按钮落在消息区底部，
+     避免压到输入框顶部或用户正在编辑的问题文本。 */
+  transform: translateX(-50%);
   transition: transform 0.16s ease, background 0.16s ease, border-color 0.16s ease;
 }
 
 .assistant-jump-latest:hover {
-  transform: translateY(-1px);
+  transform: translate(-50%, -1px);
   border-color: color-mix(in srgb, #4f7dff 70%, var(--guaxi-border));
   background: color-mix(in srgb, var(--guaxi-panel-bg) 78%, #4f7dff 22%);
 }
@@ -2440,11 +2445,13 @@ const sendQuestion = async () => {
 }
 
 .assistant-reference-card {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
   border-radius: 10px;
   border: 1px solid var(--guaxi-border);
   background: color-mix(in srgb, var(--guaxi-header-bg) 80%, transparent);
-  padding: 8px 10px;
+  padding: 6px 8px;
   color: inherit;
   text-decoration: none;
   transition: all 0.16s ease;
@@ -2456,16 +2463,17 @@ const sendQuestion = async () => {
 }
 
 .assistant-reference-head {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 6px;
+  gap: 5px;
+  max-width: 100%;
+  margin-bottom: 5px;
 }
 
 .assistant-reference-favicon {
-  width: 14px;
-  height: 14px;
-  border-radius: 4px;
+  width: 13px;
+  height: 13px;
+  border-radius: 3px;
   flex: 0 0 auto;
 }
 
@@ -2479,12 +2487,14 @@ const sendQuestion = async () => {
 }
 
 .assistant-reference-index {
-  margin-left: auto;
+  flex: 0 0 auto;
+  margin-left: 4px;
   font-size: 10px;
   color: var(--guaxi-text-secondary);
 }
 
 .assistant-reference-link-title {
+  width: 100%;
   font-size: 12px;
   color: var(--guaxi-text-primary);
   font-weight: 600;
@@ -2496,6 +2506,7 @@ const sendQuestion = async () => {
 }
 
 .assistant-reference-snippet {
+  width: 100%;
   margin-top: 5px;
   font-size: 11px;
   color: var(--guaxi-text-secondary);

@@ -3116,6 +3116,96 @@ fn rank_and_filter_web_results(items: Vec<WebSearchItem>, query: &str, limit: us
     out
 }
 
+async fn search_web_agent_server_fallback(
+    app: &AppHandle,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<WebSearchItem>, String> {
+    // 设计说明：普通聊天的联网搜索原先直接抓 Bing/Google/Instant Answer，容易被页面结构
+    // 或反爬策略影响。这里仅在原链路失败后启动本地 Python agent_server，复用更可维护的
+    // web_search 工具作为兜底，同时保留用户“联网”开关在前端控制是否会走到这里。
+    info!(
+        "search_web: trying agent_server fallback query_len={} limit={}",
+        query.len(),
+        limit
+    );
+    crate::commands::agent_server::ensure_agent_server_started(app).await?;
+
+    let client = ClientBuilder::new()
+        .no_proxy()
+        .timeout(StdDuration::from_secs(35))
+        .build()
+        .map_err(|e| format!("build agent search client failed: {}", e))?;
+    let payload = json!({
+        "name": "web_search",
+        "args": {
+            "query": query,
+            "max_results": limit,
+        },
+        "work_dir": "",
+    });
+
+    let resp = client
+        .post("http://127.0.0.1:9876/tools/exec")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("agent search request failed: {}", e))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("agent search status={} body={}", status, text));
+    }
+
+    let wrapper = resp
+        .json::<Value>()
+        .await
+        .map_err(|e| format!("agent search response parse failed: {}", e))?;
+    let result_raw = wrapper
+        .get("result")
+        .and_then(|v| v.as_str())
+        .unwrap_or("{}");
+    let result = serde_json::from_str::<Value>(result_raw)
+        .map_err(|e| format!("agent search result parse failed: {}", e))?;
+    if let Some(err) = result.get("error").and_then(|v| v.as_str()) {
+        warn!("search_web: agent_server fallback reported error: {}", err);
+    }
+
+    let mut items = Vec::new();
+    if let Some(results) = result.get("results").and_then(|v| v.as_array()) {
+        for item in results.iter().take(limit) {
+            let title = item
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let url = item
+                .get("url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let snippet = item
+                .get("snippet")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if title.is_empty() || url.is_empty() {
+                continue;
+            }
+            items.push(WebSearchItem { title, snippet, url });
+        }
+    }
+
+    info!(
+        "search_web: agent_server fallback returned count={}",
+        items.len()
+    );
+    Ok(items)
+}
+
 async fn search_web_bing(
     client: &Client,
     query: &str,
@@ -3244,6 +3334,7 @@ async fn search_web_google(
 
 #[tauri::command]
 pub async fn search_web_duckduckgo(
+    app: AppHandle,
     query: String,
     limit: Option<usize>,
 ) -> Result<Vec<WebSearchItem>, String> {
@@ -3335,6 +3426,19 @@ pub async fn search_web_duckduckgo(
             Err(e) => errors.push(format!("duckduckgo parse failed: {}", e)),
         },
         Err(e) => errors.push(format!("duckduckgo request failed: {}", e)),
+    }
+
+    match search_web_agent_server_fallback(&app, &q, cap).await {
+        Ok(items) if !items.is_empty() => {
+            let ranked = rank_and_filter_web_results(items, &q, cap);
+            if !ranked.is_empty() {
+                info!("search_web: agent_server fallback produced ranked results");
+                return Ok(ranked);
+            }
+            errors.push("agent_server fallback filtered empty result".to_string());
+        }
+        Ok(_) => errors.push("agent_server fallback empty result".to_string()),
+        Err(e) => errors.push(format!("agent_server fallback failed: {}", e)),
     }
 
     warn!("search_web all engines failed: {}", errors.join(" | "));
@@ -5475,6 +5579,9 @@ pub struct AgentRequest {
     /// 全部已配置知识库根路径，作为 Agent 文件工具的多根白名单（跨库 @ 引用读取）。
     #[serde(default)]
     repo_roots: Vec<String>,
+    /// 用户是否手动开启联网能力。关闭时 Python Agent Server 不会暴露网络工具。
+    #[serde(default)]
+    web_search_enabled: bool,
 }
 
 
@@ -5502,8 +5609,8 @@ pub async fn agent_tool_decision(request: AgentDecisionRequest) -> Result<(), St
 #[tauri::command]
 pub async fn agent_chat_stream(app: AppHandle, request: AgentRequest) -> Result<(), String> {
     info!(
-        "Enter agent_chat_stream model_id:{} q:{}",
-        request.modelid, request.question
+        "Enter agent_chat_stream model_id:{} web_search_enabled:{} q:{}",
+        request.modelid, request.web_search_enabled, request.question
     );
 
     // 网页版模型不支持工具调用，降级为普通对话
@@ -5539,6 +5646,7 @@ pub async fn agent_chat_stream(app: AppHandle, request: AgentRequest) -> Result<
         "history": history_json,
         "work_dir": request.repo_path,
         "allowed_roots": request.repo_roots,
+        "web_search_enabled": request.web_search_enabled,
     });
 
     let client = reqwest::Client::new();

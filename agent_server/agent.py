@@ -70,6 +70,7 @@ async def run_agent(
     history: list[dict[str, str]],
     work_dir: str = "",
     allowed_roots: list[str] | None = None,
+    web_search_enabled: bool = True,
 ) -> AsyncGenerator[dict[str, Any], None]:
     """
     运行 ReAct Agent 循环，通过 SSE yield 事件。
@@ -90,11 +91,20 @@ async def run_agent(
     # ContextVar 在本协程及其 await 链（含 tool_dispatch → _safe_path）内有效。
     allowed_roots_var.set(list(allowed_roots or []))
 
-    tools = get_tool_specs()
+    tools = get_tool_specs(include_web=web_search_enabled)
+    print(
+        "[agent_server] run_agent start "
+        f"chat_id={chat_id} model_id={model_id} "
+        f"web_search_enabled={web_search_enabled} tool_count={len(tools)}",
+        flush=True,
+    )
     
     # 构建消息
     messages: list[dict[str, Any]] = []
-    messages.append({"role": "system", "content": AGENT_SYSTEM_PROMPT})
+    system_prompt = AGENT_SYSTEM_PROMPT
+    if not web_search_enabled:
+        system_prompt += "\n\n当前用户已关闭联网搜索：不要声称已经联网，也不要建议正在使用网络结果。"
+    messages.append({"role": "system", "content": system_prompt})
     
     for msg in history:
         role = msg.get("role", "")

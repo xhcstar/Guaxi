@@ -30,10 +30,18 @@ def register(
     return decorator
 
 
-def get_tool_specs() -> list[dict[str, Any]]:
-    """获取所有工具的 OpenAI function calling 格式定义"""
+def get_tool_specs(include_web: bool = True) -> list[dict[str, Any]]:
+    """获取所有工具的 OpenAI function calling 格式定义。
+
+    设计说明：
+    - include_web 由前端“联网”开关传入，保证用户关闭联网后，Agent 不会看到
+      web_search / fetch_webpage 两个网络工具，也就不会隐式触网。
+    - 这里在工具注册层过滤，而不是只靠 prompt 约束，避免模型误调用工具。
+    """
     specs = []
     for name, meta in _registry.items():
+        if not include_web and name in ("web_search", "fetch_webpage"):
+            continue
         specs.append({
             "type": "function",
             "function": {

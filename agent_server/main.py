@@ -25,6 +25,7 @@ class ChatRequest(BaseModel):
     history: list[dict] = []
     work_dir: str = ""
     allowed_roots: list[str] = []
+    web_search_enabled: bool = True
 
 
 class ConfirmRequest(BaseModel):
@@ -78,6 +79,7 @@ async def agent_chat(req: ChatRequest):
                 history=req.history,
                 work_dir=req.work_dir or DEFAULT_WORK_DIR,
                 allowed_roots=req.allowed_roots,
+                web_search_enabled=req.web_search_enabled,
             ):
                 data = json.dumps(event, ensure_ascii=False)
                 yield f"data: {data}\n\n"
