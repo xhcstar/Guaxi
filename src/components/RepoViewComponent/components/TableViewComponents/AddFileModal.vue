@@ -228,11 +228,14 @@ const engineOptions = computed(() => {
   const s = props.engineStatus || {}
   const tag = (ready, provisioning) =>
     ready ? '（就绪）' : provisioning ? '（装配中…）' : '（首次使用将自动装配）'
+  const mineruTag = s.mineruReady
+    ? (s.mineruCuda ? '（就绪·GPU 加速）' : '（就绪·CPU）')
+    : '（首次使用将自动装配）'
   return [
     { label: '自动检测（推荐）', value: 'auto' },
     { label: `快速引擎（纯文本/简单排版）${tag(s.fastReady, s.fastProvisioning)}`, value: 'fast' },
     { label: `Marker（复杂版面/图片）${tag(s.markerReady, s.markerProvisioning)}`, value: 'marker' },
-    { label: `高质量强引擎（理工科/公式/表格）${tag(s.mineruReady, false)}`, value: 'mineru' },
+    { label: `高质量强引擎（理工科/公式/表格）${mineruTag}`, value: 'mineru' },
   ]
 })
 

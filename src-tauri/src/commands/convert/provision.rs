@@ -15,10 +15,197 @@
 //! 因此不依赖 `Convertor/` 源码是否随包分发，真正做到“装好就能用”。
 
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use serde::Serialize;
 use tracing::{info, warn};
+
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// MinerU 是否已确认可用 CUDA（用于运行时设置 MINERU_DEVICE_MODE 与 UI 展示）。
+static MINERU_CUDA: AtomicBool = AtomicBool::new(false);
+
+pub fn mineru_uses_cuda() -> bool {
+    MINERU_CUDA.load(Ordering::Relaxed)
+}
+
+fn no_window(cmd: &mut Command) {
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let _ = cmd;
+}
+
+/// 机器是否存在可用的 NVIDIA GPU（通过 nvidia-smi 探测，成功即视为有 GPU）。
+pub fn nvidia_gpu_present() -> bool {
+    let mut cmd = Command::new("nvidia-smi");
+    cmd.arg("-L").stdout(Stdio::piped()).stderr(Stdio::null());
+    no_window(&mut cmd);
+    match cmd.output() {
+        Ok(o) => o.status.success() && !o.stdout.is_empty(),
+        Err(_) => false,
+    }
+}
+
+/// 运行 `python -c code`，返回 stdout（trim）。失败返回 Err。
+fn python_eval(program: &str, base_args: &[String], code: &str) -> Result<String, String> {
+    let mut cmd = Command::new(program);
+    cmd.args(base_args)
+        .arg("-c")
+        .arg(code)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    no_window(&mut cmd);
+    let out = cmd.output().map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+fn torch_cuda_available(program: &str, base_args: &[String]) -> bool {
+    python_eval(
+        program,
+        base_args,
+        "import torch;print('1' if torch.cuda.is_available() else '0')",
+    )
+    .map(|s| s.trim() == "1")
+    .unwrap_or(false)
+}
+
+/// 已装 torch 的基础版本（去掉 +cpu/+cuXXX 本地标签），如 "2.12.1"。
+fn torch_base_version(program: &str, base_args: &[String]) -> Option<String> {
+    python_eval(
+        program,
+        base_args,
+        "import torch;print(torch.__version__.split('+')[0])",
+    )
+    .ok()
+    .filter(|s| !s.is_empty())
+}
+
+/// CUDA 版本标签（默认 cu124，可用 GUAXI_TORCH_CUDA 覆盖，如 cu121 / cu128）。
+fn cuda_variant() -> String {
+    std::env::var("GUAXI_TORCH_CUDA")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "cu124".to_string())
+}
+
+/// CUDA torch 轮子索引候选（PEP503，供 pip --index-url 使用）。
+/// 中国大陆优先走上海交大镜像（已验证含 Windows cp3x 轮子），官方源兜底。
+/// 可用 GUAXI_TORCH_CUDA_INDEX 完全覆盖（分号分隔多个，按序尝试）。
+fn cuda_torch_indexes() -> Vec<String> {
+    if let Ok(v) = std::env::var("GUAXI_TORCH_CUDA_INDEX") {
+        let list: Vec<String> = v
+            .split(';')
+            .map(|s| s.trim().trim_end_matches('/').to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !list.is_empty() {
+            return list;
+        }
+    }
+    let cuda = cuda_variant();
+    vec![
+        // 国内镜像优先（速度快、稳定）
+        format!("https://mirror.sjtu.edu.cn/pytorch-wheels/{}", cuda),
+        // 官方源兜底（版本最全，但国内较慢）
+        format!("https://download.pytorch.org/whl/{}", cuda),
+    ]
+}
+
+/// 依赖（numpy/pillow 等）走的 PyPI 镜像；托管 venv 默认已配清华，这里显式作为 extra-index。
+fn pypi_mirror_index() -> String {
+    std::env::var("GUAXI_PYPI_INDEX")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "https://pypi.tuna.tsinghua.edu.cn/simple".to_string())
+}
+
+/// 在存在 NVIDIA GPU 时，把托管 venv 里的 CPU 版 torch 换成 CUDA 版，使 MinerU 自动走 GPU。
+/// 幂等：若 torch.cuda 已可用则直接返回。best-effort：失败仅记录，保留 CPU 版继续可用。
+///
+/// 关键点：
+/// - 用 `torch==<base>+<cuda>` 精确本地版本锁定 CUDA 轮子，避免 pip 误选 +cpu 版；
+/// - `--index-url` 指向 CUDA 镜像，`--extra-index-url` 指向 PyPI 镜像以解析 numpy/pillow 等依赖；
+/// - 与 MinerU 已装的 torch 版本对齐，避免破坏其依赖约束。
+fn ensure_cuda_torch(program: &str, base_args: &[String]) {
+    if torch_cuda_available(program, base_args) {
+        MINERU_CUDA.store(true, Ordering::Relaxed);
+        info!("[convert] 已检测到可用 CUDA torch，MinerU 将使用 GPU");
+        return;
+    }
+    if !nvidia_gpu_present() {
+        info!("[convert] 未检测到 NVIDIA GPU，MinerU 使用 CPU");
+        return;
+    }
+
+    let cuda = cuda_variant();
+    let base = torch_base_version(program, base_args);
+    let extra = pypi_mirror_index();
+
+    // torch 版本精确锁定为 CUDA 本地版本；无法取得 base 时退化为不带版本（由镜像给最新）。
+    let torch_spec = match &base {
+        Some(v) => format!("torch=={}+{}", v, cuda),
+        None => "torch".to_string(),
+    };
+
+    info!(
+        cuda = cuda.as_str(),
+        spec = torch_spec.as_str(),
+        "[convert] 检测到 NVIDIA GPU，安装 CUDA 版 torch 以启用 GPU 加速（首次较大，走国内镜像）"
+    );
+
+    for index in cuda_torch_indexes() {
+        info!(index = index.as_str(), "[convert] 尝试从该 CUDA 源安装 torch");
+        let mut cmd = Command::new(program);
+        cmd.args(base_args)
+            .args([
+                "-m", "pip", "install", "--upgrade", "--no-cache-dir",
+                "--index-url",
+            ])
+            .arg(&index)
+            .arg("--extra-index-url")
+            .arg(&extra)
+            .arg(&torch_spec)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        no_window(&mut cmd);
+
+        match cmd.output() {
+            Ok(o) if o.status.success() => {
+                if torch_cuda_available(program, base_args) {
+                    MINERU_CUDA.store(true, Ordering::Relaxed);
+                    info!(index = index.as_str(), "[convert] CUDA torch 安装成功，MinerU 将使用 GPU");
+                    return;
+                }
+                warn!(index = index.as_str(), "[convert] 该源安装后 CUDA 仍不可用，尝试下一个源");
+            }
+            Ok(o) => {
+                let err = String::from_utf8_lossy(&o.stderr);
+                let tail: String = err
+                    .lines()
+                    .rev()
+                    .take(6)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                warn!(index = index.as_str(), error = tail.as_str(), "[convert] 该 CUDA 源安装失败，尝试下一个源");
+            }
+            Err(e) => warn!(index = index.as_str(), error = %e, "[convert] pip 进程启动失败，尝试下一个源"),
+        }
+    }
+
+    warn!("[convert] 所有 CUDA 源均未成功，保留 CPU 版 torch（MinerU 仍可用，仅速度较慢）");
+}
 
 /// 内嵌的引擎脚本（与 Convertor/marker-1.10.1/ 下同名文件保持同步）。
 const FAST_CONVERT_SOURCE: &str = include_str!("../../../scripts/guaxi_fast_convert.py");
@@ -66,6 +253,8 @@ pub struct ProvisionStatus {
     pub marker_error: Option<String>,
     /// MinerU 强引擎是否可用。
     pub mineru_ready: bool,
+    /// MinerU 是否使用 GPU（CUDA）加速。
+    pub mineru_cuda: bool,
 }
 
 /// 已解析的快速引擎运行时（托管 Python + 脚本目录）。
@@ -103,6 +292,7 @@ pub fn current_status() -> ProvisionStatus {
     // marker 就绪 = conda 分发版可用 或 托管 pip 版已装配。
     s.marker_ready = super::engine::marker_available() || marker_runtime().is_some();
     s.mineru_ready = super::engine::mineru_available() || mineru_runtime().is_some();
+    s.mineru_cuda = mineru_uses_cuda();
     s
 }
 
@@ -275,6 +465,8 @@ pub fn ensure_mineru_engine_blocking() -> Result<FastRuntime, String> {
                 &packages,
                 "doc-convert-mineru-engine",
             )?;
+        // 有 NVIDIA GPU 时装 CUDA 版 torch，让 MinerU 自动走 GPU 加速。
+        ensure_cuda_torch(&program, &base_args);
         let script_dir = crate::commands::code_runtime::managed_runtime_dir()?;
         materialize_scripts(&script_dir)?;
         Ok(FastRuntime {

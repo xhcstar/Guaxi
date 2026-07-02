@@ -439,6 +439,7 @@ fn build_mineru_plan(
                 .arg(&expected_output_dir)
                 .arg("--progress_json");
             apply_common(&mut cmd, &dir, combined_pythonpath(&dir), &model_dir);
+            apply_mineru_device_env(&mut cmd);
             return Ok(ConversionPlan {
                 command: cmd,
                 expected_output_dir,
@@ -449,7 +450,7 @@ fn build_mineru_plan(
         }
     }
 
-    // 回退：托管 pip 版 MinerU（自动装配 mineru[core]；模型首次运行按需下载）。
+    // 回退：托管 pip 版 MinerU（自动装配 mineru[core] + GPU 机器装 CUDA torch；模型首次运行按需下载）。
     let rt = super::provision::ensure_mineru_engine_blocking()?;
     let script = rt.script_dir.join(super::provision::MINERU_CONVERT_FILE);
     if !script.exists() {
@@ -464,6 +465,7 @@ fn build_mineru_plan(
         .arg(&expected_output_dir)
         .arg("--progress_json");
     apply_common(&mut cmd, &rt.script_dir, combined_pythonpath(&rt.script_dir), &model_dir);
+    apply_mineru_device_env(&mut cmd);
 
     Ok(ConversionPlan {
         command: cmd,
@@ -472,4 +474,18 @@ fn build_mineru_plan(
         engine: Engine::Mineru,
         cwd: rt.script_dir,
     })
+}
+
+/// 设置 MinerU 设备相关环境变量。
+/// - 已确认 CUDA torch 可用 -> 显式 MINERU_DEVICE_MODE=cuda；
+/// - 否则不强制（MinerU 会按 torch.cuda.is_available() 自动选择，避免误设 cuda 而崩溃）。
+/// 均可被用户通过同名环境变量覆盖。
+fn apply_mineru_device_env(cmd: &mut TokioCommand) {
+    if std::env::var("MINERU_DEVICE_MODE").is_err() && super::provision::mineru_uses_cuda() {
+        cmd.env("MINERU_DEVICE_MODE", "cuda");
+    }
+    // 模型源：允许通过 GUAXI_MINERU_MODEL_SOURCE 覆盖（如国内用 modelscope 加速）。
+    if let Ok(src) = std::env::var("GUAXI_MINERU_MODEL_SOURCE") {
+        cmd.env("MINERU_MODEL_SOURCE", src);
+    }
 }
