@@ -34,6 +34,38 @@
           size="small"
           :options="themeOptions"
         />
+        <div v-if="activeMode === 'source'" class="header-source-actions">
+          <n-button size="small" secondary @click="syncSourceFromForm">
+            <template #icon><Icon :icon="refreshCwIcon" /></template>
+            同步表单
+          </n-button>
+          <n-button size="small" secondary @click="importHtmlTemplate">
+            <template #icon><Icon :icon="uploadIcon" /></template>
+            导入
+          </n-button>
+          <n-button size="small" secondary @click="saveSourceAsTemplate">
+            <template #icon><Icon :icon="saveIcon" /></template>
+            模板库
+          </n-button>
+          <n-button size="small" secondary @click="saveSourceHistoryVersion">
+            <template #icon><Icon :icon="clock3Icon" /></template>
+            保存版本
+          </n-button>
+          <n-button size="small" type="primary" @click="saveSourceAsHtml">
+            <template #icon><Icon :icon="fileTextIcon" /></template>
+            保存
+          </n-button>
+          <n-select
+            v-model:value="externalEditor"
+            class="external-editor-select"
+            size="small"
+            :options="externalEditorOptions"
+          />
+          <n-button size="small" secondary @click="openCurrentSourceExternally">
+            <template #icon><Icon :icon="externalLinkIcon" /></template>
+            外部编辑
+          </n-button>
+        </div>
         <n-tooltip trigger="hover">
           <template #trigger>
             <n-button size="small" secondary @click="togglePreview">
@@ -69,7 +101,7 @@
     <div
       ref="workbenchRef"
       class="resume-workbench"
-      :class="{ 'preview-hidden': !showPreview }"
+      :class="{ 'preview-hidden': !showPreview, 'is-resizing': isResizing }"
       :style="workbenchStyle"
     >
       <aside class="resume-editor">
@@ -217,38 +249,6 @@
               <div>
                 <div class="section-heading source-heading">HTML 源码编辑</div>
                 <div class="source-subtitle">可直接编辑完整 HTML / CSS。使用变量占位时，修改样式不会写死用户资料。</div>
-              </div>
-              <div class="source-actions">
-                <n-button size="small" secondary @click="syncSourceFromForm">
-                  <template #icon><Icon :icon="refreshCwIcon" /></template>
-                  同步表单
-                </n-button>
-                <n-button size="small" secondary @click="importHtmlTemplate">
-                  <template #icon><Icon :icon="uploadIcon" /></template>
-                  导入
-                </n-button>
-                <n-button size="small" secondary @click="saveSourceAsTemplate">
-                  <template #icon><Icon :icon="saveIcon" /></template>
-                  模板库
-                </n-button>
-                <n-button size="small" secondary @click="saveSourceHistoryVersion">
-                  <template #icon><Icon :icon="clock3Icon" /></template>
-                  保存版本
-                </n-button>
-                <n-button size="small" type="primary" @click="saveSourceAsHtml(false)">
-                  <template #icon><Icon :icon="fileTextIcon" /></template>
-                  保存
-                </n-button>
-                <n-select
-                  v-model:value="externalEditor"
-                  class="external-editor-select"
-                  size="small"
-                  :options="externalEditorOptions"
-                />
-                <n-button size="small" secondary @click="saveSourceAsHtml(true)">
-                  <template #icon><Icon :icon="externalLinkIcon" /></template>
-                  外部编辑
-                </n-button>
               </div>
             </div>
 
@@ -427,8 +427,9 @@ import saveIcon from '@iconify-icons/lucide/save'
 import trash2Icon from '@iconify-icons/lucide/trash-2'
 import uploadIcon from '@iconify-icons/lucide/upload'
 import { open, save } from '@tauri-apps/plugin-dialog'
-import { openPath } from '@tauri-apps/plugin-opener'
-import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs'
+import { appDataDir, join } from '@tauri-apps/api/path'
+import { openPath, openUrl } from '@tauri-apps/plugin-opener'
+import { BaseDirectory, mkdir, readTextFile, writeTextFile } from '@tauri-apps/plugin-fs'
 import { createDiscreteApi } from 'naive-ui'
 import { useSettingsStore } from '../../../stores/settingsStore'
 import { GUAXI_MONACO_SEMANTIC_TOKEN_COLORS, GUAXI_MONACO_THEME_RULES } from '../../../monaco/guaxiMonacoThemes'
@@ -440,6 +441,7 @@ const settingsStore = useSettingsStore()
 
 const CUSTOM_TEMPLATE_STORAGE_KEY = 'guaxi.resumeBuilder.customTemplates.v1'
 const HISTORY_STORAGE_KEY = 'guaxi.resumeBuilder.sourceHistory.v1'
+const EXTERNAL_EDIT_DIR = 'resume-builder'
 const activeMode = ref('form')
 const activeTab = ref('basic')
 const resumeRef = ref(null)
@@ -449,11 +451,13 @@ const avatarInputRef = ref(null)
 const workbenchRef = ref(null)
 const selectedThemeKey = ref('blueprint')
 const showPreview = ref(true)
-const editorWidth = ref(580)
+const editorWidth = ref(720)
 const isResizing = ref(false)
 const resizeStartX = ref(0)
 const resizeStartWidth = ref(0)
 const sourceHtml = ref('')
+const sourceHtmlPath = ref('')
+const externalEditPath = ref('')
 const customTemplates = ref(loadCustomTemplates())
 const selectedTemplateId = ref(null)
 const sourceHistories = ref(loadSourceHistories())
@@ -464,6 +468,8 @@ const sourceModel = shallowRef(null)
 let sourceEditorContentDisposable = null
 let sourceEditorResizeObserver = null
 let monacoThemesReady = false
+let resizePreviousCursor = ''
+let resizePreviousUserSelect = ''
 
 const variableTokens = [
   '{{ profile.name }}',
@@ -518,7 +524,7 @@ const workbenchStyle = computed(() => {
   if (!showPreview.value) {
     return { gridTemplateColumns: 'minmax(0, 1fr)' }
   }
-  return { gridTemplateColumns: `${editorWidth.value}px 10px minmax(0, 1fr)` }
+  return { gridTemplateColumns: `${editorWidth.value}px 16px minmax(0, 1fr)` }
 })
 
 const customTemplateOptions = computed(() => customTemplates.value.map((template) => ({
@@ -767,27 +773,43 @@ function togglePreview() {
 }
 
 function startResize(event) {
+  event.preventDefault()
   isResizing.value = true
   resizeStartX.value = event.clientX
   resizeStartWidth.value = editorWidth.value
+  resizePreviousCursor = document.body.style.cursor
+  resizePreviousUserSelect = document.body.style.userSelect
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
   document.addEventListener('mousemove', onResizeMove)
   document.addEventListener('mouseup', stopResize)
+  logger.info('[Resume] editor resize started', { editorWidth: editorWidth.value })
 }
 
 function onResizeMove(event) {
   if (!isResizing.value) return
+  event.preventDefault()
   const workbenchWidth = workbenchRef.value?.clientWidth || window.innerWidth
-  const maxWidth = Math.max(520, workbenchWidth - 520)
+  const maxWidth = Math.max(560, workbenchWidth - 380)
   const nextWidth = resizeStartWidth.value + event.clientX - resizeStartX.value
-  editorWidth.value = Math.min(Math.max(420, nextWidth), maxWidth)
+  editorWidth.value = Math.min(Math.max(560, nextWidth), maxWidth)
 }
 
 function stopResize() {
   if (!isResizing.value) return
+  restoreResizeInteraction()
   isResizing.value = false
   document.removeEventListener('mousemove', onResizeMove)
   document.removeEventListener('mouseup', stopResize)
   logger.info('[Resume] editor resized', { editorWidth: editorWidth.value })
+}
+
+function restoreResizeInteraction() {
+  if (!isResizing.value && !resizePreviousCursor && !resizePreviousUserSelect) return
+  document.body.style.cursor = resizePreviousCursor
+  document.body.style.userSelect = resizePreviousUserSelect
+  resizePreviousCursor = ''
+  resizePreviousUserSelect = ''
 }
 
 function ensureResumeMonacoThemes() {
@@ -808,6 +830,7 @@ function ensureResumeMonacoThemes() {
       'editorCursor.foreground': '#2563eb',
       'editor.selectionBackground': '#bfdbfe',
       'editor.lineHighlightBackground': '#f8fafc',
+      'editor.lineHighlightBorder': '#00000000',
       'editorWidget.background': '#ffffff',
       'editorSuggestWidget.background': '#ffffff',
       'editorSuggestWidget.border': '#d1d5db',
@@ -829,6 +852,7 @@ function ensureResumeMonacoThemes() {
       'editorCursor.foreground': '#60a5fa',
       'editor.selectionBackground': '#334155',
       'editor.lineHighlightBackground': '#242a34',
+      'editor.lineHighlightBorder': '#00000000',
       'editorWidget.background': '#1f242c',
       'editorSuggestWidget.background': '#1f242c',
       'editorSuggestWidget.border': '#374151',
@@ -1044,6 +1068,7 @@ function normalizeStandaloneHtml(html) {
 
 function syncSourceFromForm() {
   sourceHtml.value = buildVariableTemplateHtml()
+  sourceHtmlPath.value = ''
   logger.info('[Resume] source synced from form', { bytes: sourceHtml.value.length })
   message.success('已同步当前表单生成的 HTML')
 }
@@ -1221,7 +1246,7 @@ function downloadHtml() {
   }
 }
 
-async function saveSourceAsHtml(openAfterSave) {
+async function saveSourceAsHtml() {
   try {
     if (!sourceHtml.value.trim()) syncSourceFromForm()
     const outputPath = await save({
@@ -1231,15 +1256,61 @@ async function saveSourceAsHtml(openAfterSave) {
     if (!outputPath) return
     const html = normalizeStandaloneHtml(sourceHtml.value)
     await writeTextFile(String(outputPath), html)
+    sourceHtmlPath.value = String(outputPath)
     addSourceHistoryVersion(`保存：${getFileBaseName()}`, sourceHtml.value)
-    logger.info('[Resume] source html saved', { path: String(outputPath), bytes: html.length, openAfterSave })
+    logger.info('[Resume] source html saved', { path: String(outputPath), bytes: html.length })
     message.success('HTML 模板已保存')
-    if (openAfterSave) {
-      await openHtmlInExternalEditor(String(outputPath))
-    }
   } catch (error) {
     logger.error('[Resume] save source html failed', error)
     message.error('保存 HTML 模板失败')
+  }
+}
+
+async function openCurrentSourceExternally() {
+  try {
+    if (!sourceHtml.value.trim()) syncSourceFromForm()
+    const html = normalizeStandaloneHtml(sourceHtml.value)
+    const target = await getCurrentSourceEditTarget()
+    if (target.baseDir) {
+      await mkdir(EXTERNAL_EDIT_DIR, { baseDir: target.baseDir, recursive: true })
+      await writeTextFile(target.writePath, html, { baseDir: target.baseDir })
+    } else {
+      await writeTextFile(target.writePath, html)
+    }
+    addSourceHistoryVersion(`外部编辑前：${getFileBaseName()}`, sourceHtml.value)
+    logger.info('[Resume] source html prepared for external editor', {
+      path: target.openPath,
+      writePath: target.writePath,
+      editor: externalEditor.value,
+      bytes: html.length,
+    })
+    await openHtmlInExternalEditor(target.openPath)
+    message.success('已打开外部编辑器')
+  } catch (error) {
+    logger.error('[Resume] open external editor failed', error)
+    message.error('打开外部编辑器失败')
+  }
+}
+
+async function getCurrentSourceEditTarget() {
+  if (sourceHtmlPath.value) {
+    return {
+      writePath: sourceHtmlPath.value,
+      openPath: sourceHtmlPath.value,
+      baseDir: null,
+    }
+  }
+
+  // 设计思路：未显式保存的源码先落到应用数据目录，既不弹“另存为”，也不扩大 Temp 写权限。
+  const fileName = `${getFileBaseName()}-guaxi-current-template.html`
+  const writePath = `${EXTERNAL_EDIT_DIR}/${fileName}`
+  const openPath = await join(await appDataDir(), writePath)
+  externalEditPath.value = openPath
+  logger.info('[Resume] external edit app data path prepared', { path: openPath, writePath })
+  return {
+    writePath,
+    openPath,
+    baseDir: BaseDirectory.AppData,
   }
 }
 
@@ -1251,12 +1322,20 @@ async function openHtmlInExternalEditor(path) {
       logger.info('[Resume] source html opened in vscode', { path })
       return
     } catch (error) {
-      logger.warn('[Resume] open vscode failed, fallback to default app', { path, error })
+      logger.warn('[Resume] open vscode command failed, trying vscode url', { path, error })
+    }
+
+    try {
+      await openUrl(toVscodeFileUrl(path))
+      logger.info('[Resume] source html opened with vscode url', { path })
+      return
+    } catch (error) {
+      logger.warn('[Resume] open vscode url failed, fallback to default app', { path, error })
     }
   }
 
   if (editor === 'neovim') {
-    const candidates = ['nvim-qt', 'goneovim', 'nvim', 'neovim']
+    const candidates = ['neovide', 'nvim-qt', 'goneovim', 'nvim', 'neovim']
     for (const candidate of candidates) {
       try {
         await openPath(path, candidate)
@@ -1270,6 +1349,12 @@ async function openHtmlInExternalEditor(path) {
 
   await openPath(path)
   logger.info('[Resume] source html opened with default app', { path, preferred: editor })
+}
+
+function toVscodeFileUrl(path) {
+  const normalizedPath = String(path).replace(/\\/g, '/')
+  const prefixedPath = normalizedPath.startsWith('/') ? normalizedPath : `/${normalizedPath}`
+  return `vscode://file${encodeURI(prefixedPath)}`
 }
 
 function saveSourceHistoryVersion() {
@@ -1298,6 +1383,7 @@ function applySelectedHistory() {
   const history = sourceHistories.value.find((item) => item.id === selectedHistoryId.value)
   if (!history) return
   sourceHtml.value = history.html
+  sourceHtmlPath.value = ''
   activeMode.value = 'source'
   logger.info('[Resume] source history applied', { id: history.id, name: history.name })
   message.success('已加载历史版本')
@@ -1323,6 +1409,7 @@ async function importHtmlTemplate() {
     const path = Array.isArray(picked) ? picked[0] : picked
     const html = await readTextFile(String(path))
     sourceHtml.value = normalizeStandaloneHtml(html)
+    sourceHtmlPath.value = String(path)
     activeMode.value = 'source'
     logger.info('[Resume] html template imported', { path: String(path), bytes: sourceHtml.value.length })
     message.success('已导入 HTML 模板')
@@ -1353,6 +1440,7 @@ function applySelectedTemplate() {
   const template = customTemplates.value.find((item) => item.id === selectedTemplateId.value)
   if (!template) return
   sourceHtml.value = template.html
+  sourceHtmlPath.value = ''
   activeMode.value = 'source'
   logger.info('[Resume] custom template applied', { id: template.id, name: template.name })
   message.success('已应用模板')
@@ -1449,6 +1537,7 @@ function escapeAttr(value) {
 onBeforeUnmount(() => {
   document.removeEventListener('mousemove', onResizeMove)
   document.removeEventListener('mouseup', stopResize)
+  restoreResizeInteraction()
   disposeSourceMonacoEditor()
 })
 
@@ -1667,6 +1756,13 @@ body {
   gap: 8px;
   flex-wrap: wrap;
   justify-content: flex-end;
+  min-width: 0;
+}
+
+.toolbar-actions :deep(.n-button__content),
+.header-source-actions :deep(.n-button__content),
+.template-row :deep(.n-button__content) {
+  white-space: nowrap;
 }
 
 .mode-switch {
@@ -1683,6 +1779,18 @@ body {
   width: 136px;
 }
 
+.header-source-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+  padding: 4px;
+  border: 1px solid var(--guaxi-border, #d1d5db);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--guaxi-panel-bg, #fff) 86%, #f8fafc);
+}
+
 .external-editor-select {
   width: 116px;
 }
@@ -1697,6 +1805,10 @@ body {
 
 .resume-workbench.preview-hidden {
   gap: 0;
+}
+
+.resume-workbench.is-resizing .resume-preview-shell {
+  pointer-events: none;
 }
 
 .resume-editor {
@@ -1809,23 +1921,26 @@ body {
   display: flex;
   align-items: stretch;
   justify-content: center;
-  width: 10px;
+  width: 16px;
   min-height: 0;
   cursor: col-resize;
+  touch-action: none;
+  user-select: none;
 }
 
 .resize-handle span {
-  width: 2px;
-  margin: 10px 0;
+  width: 3px;
+  margin: 8px 0;
   border-radius: 999px;
   background: var(--guaxi-border, #d1d5db);
-  transition: background 0.15s, width 0.15s;
+  transition: background 0.15s, width 0.15s, box-shadow 0.15s;
 }
 
 .resize-handle:hover span,
 .resize-handle.resizing span {
-  width: 4px;
+  width: 6px;
   background: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
 }
 
 .resume-preview-shell {
@@ -1853,9 +1968,9 @@ body {
 
 .source-topbar {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
 }
 
 .source-heading {
@@ -1867,21 +1982,18 @@ body {
   font-size: 12px;
 }
 
-.source-actions,
 .template-row {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 8px;
   flex-wrap: wrap;
 }
 
-.template-row {
-  justify-content: flex-start;
-}
-
 .template-select {
-  width: min(360px, 100%);
+  flex: 1 1 260px;
+  min-width: 220px;
+  max-width: 420px;
 }
 
 .variable-guide {
@@ -1909,7 +2021,7 @@ body {
 
 .source-editor {
   flex: 1;
-  min-height: 0;
+  min-height: 360px;
   border: 1px solid var(--guaxi-border, #d1d5db);
   border-radius: 8px;
   overflow: hidden;
@@ -1919,6 +2031,10 @@ body {
 .source-editor :deep(.monaco-editor),
 .source-editor :deep(.monaco-editor .overflow-guard) {
   border-radius: 8px;
+}
+
+.source-editor :deep(.monaco-editor .view-overlays .current-line) {
+  border-color: transparent !important;
 }
 
 .source-preview-frame {

@@ -25,7 +25,14 @@
   "permissions": [
     "core:default",
     "opener:default",
+    "opener:allow-open-path",
     "opener:allow-open-url",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "vscode://file/*" }
+      ]
+    },
     "dialog:default",
     "os:default",
     "core:window:allow-start-dragging",
