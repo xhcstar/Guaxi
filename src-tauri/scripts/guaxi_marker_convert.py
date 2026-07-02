@@ -1,4 +1,14 @@
 import os
+import sys
+
+# --- Windows 多进程兼容修复（必须在导入 multiprocessing / torch 之前执行）---
+# 托管 Python 为 embeddable 版：建 venv 后其 base python 目录被清理，
+# 导致 Windows 上 multiprocessing spawn 使用不存在的 base-executable，报 WinError 3。
+# 将 _base_executable 指向当前可用的 venv python 即可修复（有真实 base 时为无操作）。
+if sys.platform == "win32":
+    _be = getattr(sys, "_base_executable", None)
+    if not _be or not os.path.exists(_be):
+        sys._base_executable = sys.executable
 
 os.environ["GRPC_VERBOSITY"] = "ERROR"
 os.environ["GLOG_minloglevel"] = "2"
