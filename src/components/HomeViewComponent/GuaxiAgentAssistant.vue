@@ -1,26 +1,169 @@
 <template>
   <div class="assistant-root">
-    <div class="assistant-topbar">
+    <div v-if="sessionListOpen" class="assistant-topbar assistant-topbar--sessions">
       <div class="assistant-title-group">
         <div class="assistant-orb" />
         <div class="assistant-title-wrap">
           <div class="assistant-title">智能助手</div>
-          <div class="assistant-subtitle">知识库问答 · 联网增强</div>
         </div>
       </div>
       <div class="assistant-topbar-right">
-        <n-switch
-          :value="webSearchEnabled"
-          size="small"
-          @update:value="handleWebSearchEnabledChange"
-        >
-          <template #checked>联网</template>
-          <template #unchecked>离线</template>
-        </n-switch>
-        <n-button quaternary size="small" @click="clearHistory">清空</n-button>
+        <n-tooltip trigger="hover">
+          <template #trigger>
+            <button
+              type="button"
+              class="assistant-topbar-icon-btn"
+              :disabled="pending"
+              @click="createAssistantSession"
+            >
+              <Icon :icon="messageSquarePlusIcon" width="15" height="15" />
+            </button>
+          </template>
+          新建会话
+        </n-tooltip>
       </div>
     </div>
 
+    <div v-else class="assistant-topbar">
+      <n-tooltip trigger="hover">
+        <template #trigger>
+          <button
+            type="button"
+            class="assistant-topbar-icon-btn"
+            :disabled="pending"
+            @click="openAssistantSessionList"
+          >
+            <Icon :icon="arrowLeftIcon" width="15" height="15" />
+          </button>
+        </template>
+        返回会话列表
+      </n-tooltip>
+      <div class="assistant-title-group">
+        <div class="assistant-orb" />
+        <div class="assistant-title-wrap">
+          <div class="assistant-title">{{ currentAssistantSessionTitle }}</div>
+        </div>
+      </div>
+      <div class="assistant-topbar-right">
+        <span v-if="selectionMode" class="assistant-selection-count assistant-selection-count--inline">
+          已选 {{ selectedChatMessageCount }}
+        </span>
+        <n-tooltip trigger="hover">
+          <template #trigger>
+            <button
+              type="button"
+              class="assistant-topbar-icon-btn"
+              :class="{ 'assistant-topbar-icon-btn--active': selectionMode }"
+              @click="toggleSelectionMode"
+            >
+              <Icon :icon="checkSquareIcon" width="15" height="15" />
+            </button>
+          </template>
+          {{ selectionMode ? '退出选择模式' : '选择消息' }}
+        </n-tooltip>
+        <template v-if="selectionMode">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <button
+                type="button"
+                class="assistant-topbar-icon-btn"
+                :class="{ 'assistant-topbar-icon-btn--active': isAllChatMessagesSelected }"
+                :disabled="pending || exportableChatMessageCount === 0"
+                @click="toggleSelectAllChatMessages"
+              >
+                <Icon :icon="listChecksIcon" width="15" height="15" />
+              </button>
+            </template>
+            {{ isAllChatMessagesSelected ? '取消全选' : '全选消息' }}
+          </n-tooltip>
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <button type="button" class="assistant-topbar-icon-btn" @click="insertSelectedChatToCurrentFile">
+                <Icon :icon="filePenLineIcon" width="15" height="15" />
+              </button>
+            </template>
+            插入当前文件
+          </n-tooltip>
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <button type="button" class="assistant-topbar-icon-btn" @click="saveSelectedChatAsKnowledgeDoc">
+                <Icon :icon="saveIcon" width="15" height="15" />
+              </button>
+            </template>
+            保存选中消息为文档
+          </n-tooltip>
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <button
+                type="button"
+                class="assistant-topbar-icon-btn assistant-topbar-icon-btn--danger"
+                @click="deleteSelectedChatMessages"
+              >
+                <Icon :icon="eraserIcon" width="15" height="15" />
+              </button>
+            </template>
+            删除选中消息
+          </n-tooltip>
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <button type="button" class="assistant-topbar-icon-btn" @click="clearChatMessageSelection">
+                <Icon :icon="xIcon" width="15" height="15" />
+              </button>
+            </template>
+            取消选择
+          </n-tooltip>
+        </template>
+        <n-tooltip trigger="hover">
+          <template #trigger>
+            <button
+              type="button"
+              class="assistant-topbar-icon-btn"
+              :class="{ 'assistant-topbar-icon-btn--active': webSearchEnabled }"
+              @click="handleWebSearchEnabledChange(!webSearchEnabled)"
+            >
+              <Icon :icon="globeIcon" width="15" height="15" />
+            </button>
+          </template>
+          {{ webSearchEnabled ? '联网已开启' : '联网已关闭' }}
+        </n-tooltip>
+      </div>
+    </div>
+
+    <div v-if="sessionListOpen" class="assistant-session-list">
+      <div
+        v-for="session in assistantSessions"
+        :key="session.key"
+        class="assistant-session-list-item"
+        :class="{ 'assistant-session-list-item--active': isCurrentAssistantSession(session) }"
+        role="button"
+        tabindex="0"
+        @click="enterAssistantSession(session.key)"
+        @keydown.enter.prevent="enterAssistantSession(session.key)"
+      >
+        <div class="assistant-session-list-main">
+          <div class="assistant-session-list-title">{{ session.title || '新会话' }}</div>
+          <div class="assistant-session-list-meta">
+            {{ formatAssistantSessionTime(session.updatedAt || session.createdAt) }} · {{ getAssistantSessionMessageCount(session) }} 条消息
+          </div>
+          <div class="assistant-session-list-preview">{{ getAssistantSessionPreview(session) }}</div>
+        </div>
+        <n-tooltip trigger="hover">
+          <template #trigger>
+            <button
+              type="button"
+              class="assistant-session-delete-btn"
+              :disabled="pending"
+              @click.stop="deleteAssistantSessionFromList(session.key)"
+            >
+              <Icon :icon="trash2Icon" width="14" height="14" />
+            </button>
+          </template>
+          永久删除此会话
+        </n-tooltip>
+      </div>
+    </div>
+
+    <template v-else>
     <div ref="messagesRef" class="assistant-messages" @scroll="handleMessagesScroll">
       <div v-if="messages.length === 0" class="assistant-empty">
         <div class="assistant-empty-icon">
@@ -41,14 +184,21 @@
         class="assistant-message"
         :class="message.role === 'user' ? 'assistant-message-user' : message.role === 'tool_step' ? 'assistant-message-tool' : 'assistant-message-ai'"
       >
-        <div v-if="message.role !== 'tool_step'" class="assistant-message-avatar">
-          <span v-if="message.role === 'user'">我</span>
-          <span v-else-if="message.role === 'web'">网</span>
-          <span v-else>AI</span>
-        </div>
         <div class="assistant-message-body">
           <div class="assistant-message-meta">
-            <span>{{ message.role === 'user' ? '我' : (message.role === 'web' ? '联网检索' : '智能助手') }}</span>
+            <div class="assistant-message-meta-main">
+              <button
+                v-if="selectionMode && isExportableChatMessage(message)"
+                type="button"
+                class="assistant-message-select-btn"
+                :class="{ 'assistant-message-select-btn--active': isChatMessageSelected(message.id) }"
+                :title="isChatMessageSelected(message.id) ? '取消选择' : '选择这条消息'"
+                @click.stop="toggleChatMessageSelection(message)"
+              >
+                <Icon v-if="isChatMessageSelected(message.id)" :icon="checkIcon" width="11" height="11" />
+              </button>
+              <span>{{ message.role === 'user' ? '我' : (message.role === 'web' ? '联网检索' : '智能助手') }}</span>
+            </div>
             <span>{{ formatTime(message.createdAt) }}</span>
           </div>
           <div
@@ -202,6 +352,15 @@
             <button type="button" class="assistant-action-btn" title="复制" @click="copyAssistantMessage(message)">
               <Icon :icon="copyIcon" width="14" height="14" />
             </button>
+            <button
+              type="button"
+              class="assistant-action-btn"
+              :class="{ 'assistant-action-btn--active': isChatMessageSelected(message.id) }"
+              :title="isChatMessageSelected(message.id) ? '取消选择' : '选择消息'"
+              @click="toggleChatMessageSelection(message)"
+            >
+              <Icon :icon="checkSquareIcon" width="14" height="14" />
+            </button>
             <button type="button" class="assistant-action-btn" title="插入当前文件" @click="insertAssistantToCurrentFile(message)">
               <Icon :icon="filePenLineIcon" width="14" height="14" />
             </button>
@@ -212,6 +371,15 @@
           <div v-else-if="message.role === 'user'" class="assistant-message-actions">
             <button type="button" class="assistant-action-btn" title="复制提问" @click="copyAssistantMessage(message)">
               <Icon :icon="copyIcon" width="14" height="14" />
+            </button>
+            <button
+              type="button"
+              class="assistant-action-btn"
+              :class="{ 'assistant-action-btn--active': isChatMessageSelected(message.id) }"
+              :title="isChatMessageSelected(message.id) ? '取消选择' : '选择消息'"
+              @click="toggleChatMessageSelection(message)"
+            >
+              <Icon :icon="checkSquareIcon" width="14" height="14" />
             </button>
           </div>
         </div>
@@ -265,6 +433,7 @@
         <button type="button" class="agent-confirm-btn agent-confirm-approve" @click="resolveAgentConfirm(true)">允许并执行</button>
       </div>
     </div>
+    </template>
 
     <div class="assistant-footer">
       <div class="composer-shell" @click="focusComposerInput">
@@ -415,10 +584,17 @@ import databaseIcon from '@iconify-icons/lucide/database'
 import wrenchIcon from '@iconify-icons/lucide/wrench'
 import atSignIcon from '@iconify-icons/lucide/at-sign'
 import arrowDownIcon from '@iconify-icons/lucide/arrow-down'
+import arrowLeftIcon from '@iconify-icons/lucide/arrow-left'
+import saveIcon from '@iconify-icons/lucide/save'
+import checkSquareIcon from '@iconify-icons/lucide/check-square'
+import listChecksIcon from '@iconify-icons/lucide/list-checks'
+import messageSquarePlusIcon from '@iconify-icons/lucide/message-square-plus'
+import eraserIcon from '@iconify-icons/lucide/eraser'
 import checkIcon from '@iconify-icons/lucide/check'
 import alertTriangleIcon from '@iconify-icons/lucide/alert-triangle'
 import chevronRightIcon from '@iconify-icons/lucide/chevron-right'
 import xIcon from '@iconify-icons/lucide/x'
+import trash2Icon from '@iconify-icons/lucide/trash-2'
 import { addCopyButtons, addMediaViewerButtons, renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
 import { useChatStore } from '../../stores/chatStore'
@@ -491,6 +667,9 @@ const isComposing = ref(false)
 const inputHistory = ref([])
 const historyIndex = ref(-1)
 const collapsedWebMessageIds = ref(new Set())
+const selectedChatMessageIds = ref(new Set())
+const selectionMode = ref(false)
+const sessionListOpen = ref(true)
 const disableWebSearchNextSend = ref(false)
 const currentStreamText = ref('')
 const currentStreamingMessageId = ref('')
@@ -499,6 +678,12 @@ const currentRequestSessionId = ref('')
 const isMessagesNearBottom = ref(true)
 
 const messages = computed(() => rightSiderStore.assistant.messages)
+const assistantSessions = computed(() => Array.isArray(rightSiderStore.assistant.sessions) ? rightSiderStore.assistant.sessions : [])
+const currentAssistantSessionKey = computed(() => String(rightSiderStore.assistant.currentSessionKey || ''))
+const currentAssistantSession = computed(() => {
+  return assistantSessions.value.find((session) => String(session?.key || '') === currentAssistantSessionKey.value) || null
+})
+const currentAssistantSessionTitle = computed(() => String(currentAssistantSession.value?.title || '新会话'))
 const pending = computed(() => rightSiderStore.assistant.pending)
 const modelId = computed(() => rightSiderStore.assistant.modelId)
 const webSearchEnabled = computed(() => rightSiderStore.assistant.webSearchEnabled)
@@ -520,6 +705,17 @@ const hasComposerPayload = computed(() => {
 const canSend = computed(() => !pending.value && hasComposerPayload.value)
 const canClickSend = computed(() => pending.value || hasComposerPayload.value)
 const showJumpToLatest = computed(() => messages.value.length > 0 && !isMessagesNearBottom.value)
+const exportableChatMessages = computed(() => messages.value.filter((item) => isExportableChatMessage(item)))
+const exportableChatMessageCount = computed(() => exportableChatMessages.value.length)
+const selectedChatMessages = computed(() => {
+  const ids = selectedChatMessageIds.value
+  return exportableChatMessages.value.filter((item) => ids.has(String(item.id || '')))
+})
+const selectedChatMessageCount = computed(() => selectedChatMessages.value.length)
+const isAllChatMessagesSelected = computed(() => {
+  return exportableChatMessageCount.value > 0 &&
+    selectedChatMessageCount.value === exportableChatMessageCount.value
+})
 const modelOptions = computed(() => {
   const remote = Array.isArray(chatStore.LLMlist?.remoteModel) ? chatStore.LLMlist.remoteModel : []
   const local = Array.isArray(chatStore.LLMlist?.localModel) ? chatStore.LLMlist.localModel : []
@@ -634,6 +830,16 @@ watch(modelOptions, (list) => {
   }
 }, { immediate: true })
 
+watch(messages, (list) => {
+  const availableIds = new Set((Array.isArray(list) ? list : []).map((item) => String(item?.id || '')))
+  const current = selectedChatMessageIds.value
+  const next = new Set(Array.from(current).filter((id) => availableIds.has(id)))
+  if (next.size !== current.size) {
+    selectedChatMessageIds.value = next
+    logger.info('[assistant] pruned selected chat messages', { selectedCount: next.size })
+  }
+}, { deep: true })
+
 onMounted(() => {
   applyDraftFromStore()
   enhanceRenderedMessages()
@@ -681,6 +887,8 @@ const formatTime = (ts) => {
 const clearHistory = () => {
   rightSiderStore.clearAssistantMessages()
   collapsedWebMessageIds.value = new Set()
+  selectedChatMessageIds.value = new Set()
+  selectionMode.value = false
   mentionedFiles.value = []
   closeMentionPanel()
 }
@@ -699,6 +907,287 @@ const toggleWebMessageCollapse = (messageId) => {
   }
   collapsedWebMessageIds.value = next
   logger.info('[assistant] toggle web result collapse', { messageId: id, collapsed })
+}
+
+function isCurrentAssistantSession(session) {
+  return String(session?.key || '') === currentAssistantSessionKey.value
+}
+
+function getAssistantSessionMessageCount(session) {
+  return Array.isArray(session?.messages) ? session.messages.length : 0
+}
+
+function getAssistantSessionPreview(session) {
+  const item = (Array.isArray(session?.messages) ? session.messages : [])
+    .find((messageItem) => {
+      const role = String(messageItem?.role || '')
+      return (role === 'user' || role === 'assistant') && String(messageItem?.content || '').trim()
+    })
+  const text = String(item?.content || '').replace(/\s+/g, ' ').trim()
+  return text || '暂无消息'
+}
+
+function formatAssistantSessionTime(ts) {
+  if (!ts) return '未记录时间'
+  try {
+    return new Date(ts).toLocaleString()
+  } catch {
+    return '未记录时间'
+  }
+}
+
+function openAssistantSessionList() {
+  clearChatMessageSelection()
+  collapsedWebMessageIds.value = new Set()
+  sessionListOpen.value = true
+  logger.info('[assistant] open assistant session list')
+}
+
+function enterAssistantSession(key) {
+  const nextKey = String(key || '')
+  if (!nextKey) return
+  clearChatMessageSelection()
+  collapsedWebMessageIds.value = new Set()
+  const ok = rightSiderStore.switchAssistantSession(nextKey)
+  if (ok) {
+    sessionListOpen.value = false
+  }
+  logger.info('[assistant] enter assistant session from list', { key: nextKey, ok })
+}
+
+function createAssistantSession() {
+  clearChatMessageSelection()
+  collapsedWebMessageIds.value = new Set()
+  const key = rightSiderStore.createAssistantSession('新会话')
+  sessionListOpen.value = false
+  logger.info('[assistant] create assistant session from ui', { key })
+  return key
+}
+
+function deleteAssistantSessionFromList(key) {
+  const targetKey = String(key || '')
+  if (!targetKey) return
+  const target = assistantSessions.value.find((session) => String(session?.key || '') === targetKey)
+  const title = String(target?.title || '此会话')
+  const okToDelete = window.confirm(`永久删除“${title}”？此操作不可恢复。`)
+  if (!okToDelete) return
+  const deletingCurrent = targetKey === currentAssistantSessionKey.value
+  const ok = rightSiderStore.deleteAssistantSession(targetKey)
+  if (ok && deletingCurrent) {
+    clearChatMessageSelection()
+    collapsedWebMessageIds.value = new Set()
+  }
+  logger.info('[assistant] delete assistant session from list', { key: targetKey, ok })
+  if (ok) {
+    message.success('已永久删除会话')
+  }
+}
+
+function isExportableChatMessage(chatMessage) {
+  const role = String(chatMessage?.role || '')
+  const content = String(chatMessage?.content || '')
+  return (role === 'user' || role === 'assistant') && content.trim().length > 0
+}
+
+function isChatMessageSelected(messageId) {
+  return selectedChatMessageIds.value.has(String(messageId || ''))
+}
+
+function toggleChatMessageSelection(chatMessage) {
+  if (!isExportableChatMessage(chatMessage)) return
+  const id = String(chatMessage?.id || '')
+  if (!id) return
+  selectionMode.value = true
+  const next = new Set(selectedChatMessageIds.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  selectedChatMessageIds.value = next
+  logger.info('[assistant] toggle chat message selection', {
+    messageId: id,
+    selected: next.has(id),
+    selectedCount: next.size,
+  })
+}
+
+function toggleSelectionMode() {
+  const nextMode = !selectionMode.value
+  selectionMode.value = nextMode
+  if (!nextMode && selectedChatMessageIds.value.size > 0) {
+    selectedChatMessageIds.value = new Set()
+  }
+  logger.info('[assistant] toggle chat message selection mode', {
+    enabled: nextMode,
+    selectedCount: selectedChatMessageIds.value.size,
+  })
+}
+
+function toggleSelectAllChatMessages() {
+  const list = exportableChatMessages.value
+  if (!list.length) {
+    message.warning('当前会话没有可选择的消息')
+    return
+  }
+
+  // 设计说明：全选入口只处理当前会话内可导出的用户问题和模型回答；
+  // 联网步骤、工具步骤等中间消息不进入文档/插入流程，避免批量操作混入噪声。
+  selectionMode.value = true
+  if (isAllChatMessagesSelected.value) {
+    selectedChatMessageIds.value = new Set()
+    logger.info('[assistant] unselected all exportable chat messages', {
+      sessionKey: currentAssistantSessionKey.value,
+      totalCount: list.length,
+    })
+    return
+  }
+
+  selectedChatMessageIds.value = new Set(list.map((item) => String(item.id || '')).filter(Boolean))
+  logger.info('[assistant] selected all exportable chat messages', {
+    selectedCount: selectedChatMessageIds.value.size,
+    sessionKey: currentAssistantSessionKey.value,
+  })
+}
+
+function clearChatMessageSelection() {
+  if (selectedChatMessageIds.value.size === 0 && !selectionMode.value) return
+  selectedChatMessageIds.value = new Set()
+  selectionMode.value = false
+  logger.info('[assistant] cleared chat message selection')
+}
+
+function deleteSelectedChatMessages() {
+  const ids = new Set(selectedChatMessageIds.value)
+  if (!ids.size) {
+    message.warning('请先选择要删除的消息')
+    return
+  }
+
+  // 设计说明：垃圾桶只删除用户明确勾选的消息，避免像“清空”那样误删整段聊天记录；
+  // 删除动作交给 store 统一持久化，保证历史会话重启后仍保持一致。
+  const removed = rightSiderStore.removeAssistantMessages(Array.from(ids))
+  selectedChatMessageIds.value = new Set()
+  selectionMode.value = false
+  logger.info('[assistant] deleted selected chat messages', { removed })
+  message.success(`已删除 ${removed} 条选中消息`)
+}
+
+function formatTranscriptTime(ts) {
+  if (!ts) return ''
+  try {
+    return new Date(ts).toLocaleString()
+  } catch {
+    return ''
+  }
+}
+
+function getChatMessageRoleLabel(chatMessage) {
+  const role = String(chatMessage?.role || '')
+  if (role === 'user') return '用户问题'
+  if (role === 'assistant') return '模型回答'
+  return '消息'
+}
+
+function buildChatTranscriptMarkdown(items, title = '智能助手对话记录') {
+  const list = (Array.isArray(items) ? items : []).filter(isExportableChatMessage)
+  const exportedAt = formatTranscriptTime(Date.now())
+  const lines = [
+    `# ${title}`,
+    '',
+    `> 导出时间：${exportedAt}`,
+    `> 消息数量：${list.length}`,
+    '',
+  ]
+
+  // 设计说明：这里只增加标题、序号和时间等 Markdown 外壳，不改写用户问题或模型回答正文。
+  // 正文按 content 原样写入，避免保存到知识库后与聊天窗口里的原始表达不一致。
+  list.forEach((item, index) => {
+    const roleLabel = getChatMessageRoleLabel(item)
+    const timeText = formatTranscriptTime(item.createdAt)
+    lines.push(`## ${index + 1}. ${roleLabel}`)
+    if (timeText) {
+      lines.push('')
+      lines.push(`> 时间：${timeText}`)
+    }
+    lines.push('')
+    lines.push(String(item.content || ''))
+    lines.push('')
+  })
+
+  return lines.join('\n')
+}
+
+function makeAssistantTranscriptFileName() {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  return `智能助手对话-${stamp}.md`
+}
+
+async function openCreatedKnowledgeDoc(path, content, repoRoot) {
+  if (repoRoot) {
+    await fileTreeStore.fetchFileTree(repoRoot, { force: true })
+  }
+  await fileTreeStore.openFileInTab(String(path), content)
+  editorStore.setFile({
+    path: String(path),
+    content,
+    highlightInfo: { lineNumber: 1, matches: [] },
+  })
+}
+
+async function saveChatMessagesAsKnowledgeDoc(items, title) {
+  const list = (Array.isArray(items) ? items : []).filter(isExportableChatMessage)
+  if (!list.length) {
+    message.warning('没有可保存的用户问题或模型回答')
+    return
+  }
+
+  const repoRoot = String(fileTreeStore.activeRepoPath || '')
+  if (!repoRoot) {
+    message.warning('请先打开或选择一个知识库')
+    return
+  }
+
+  const content = buildChatTranscriptMarkdown(list, title)
+  const fileName = makeAssistantTranscriptFileName()
+  const path = `${repoRoot}/${fileName}`
+  logger.info('[assistant] save chat transcript as knowledge doc', {
+    path,
+    messageCount: list.length,
+    contentLength: content.length,
+  })
+
+  try {
+    await invoke('create_file_with_content', { path, content })
+    await openCreatedKnowledgeDoc(path, content, repoRoot)
+    message.success('已保存为知识库新文档')
+  } catch (err) {
+    logger.error('[assistant] save chat transcript failed', err)
+    message.error('保存聊天记录失败')
+  }
+}
+
+async function saveSelectedChatAsKnowledgeDoc() {
+  await saveChatMessagesAsKnowledgeDoc(selectedChatMessages.value, '选中的智能助手对话')
+}
+
+async function insertSelectedChatToCurrentFile() {
+  const list = selectedChatMessages.value
+  if (!list.length) {
+    message.warning('请先选择要插入的消息')
+    return
+  }
+
+  const editor = editorStore.editorInstance
+  if (!editor) {
+    message.warning('当前没有可编辑的文件')
+    return
+  }
+
+  const content = buildChatTranscriptMarkdown(list, '选中的智能助手对话')
+  logger.info('[assistant] insert selected chat transcript', {
+    messageCount: list.length,
+    contentLength: content.length,
+  })
+  await editorStore.insertContent(content)
+  message.success('已插入选中的聊天记录')
 }
 
 const toggleToolStepCollapse = (chatMessage) => {
@@ -1982,6 +2471,13 @@ const sendQuestion = async () => {
     (hasMentions ? '请基于已引用的文件回答。' : (hasAttachments ? '请基于附件回答。' : ''))
   if (!rawQuestion || pending.value) return
 
+  if (sessionListOpen.value) {
+    // 设计说明：会话列表只是历史入口，底部输入框始终代表“开始一次新对话”。
+    // 因此用户在列表页直接发送时，先创建并进入新会话，再写入本次 user 消息和后续模型回复。
+    const autoSessionKey = createAssistantSession()
+    logger.info('[assistant] auto create assistant session before sending from list', { key: autoSessionKey })
+  }
+
   const selectedModelId = Number(modelId.value)
   const isWebModel = WEB_MODEL_IDS.has(selectedModelId)
   const currentTask = task.value
@@ -2163,17 +2659,27 @@ const sendQuestion = async () => {
 
 .assistant-topbar {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  gap: 8px;
   padding: 10px 12px;
   border-bottom: 1px solid var(--guaxi-border);
   backdrop-filter: blur(12px);
 }
 
+.assistant-topbar--sessions {
+  justify-content: space-between;
+}
+
+.assistant-topbar:not(.assistant-topbar--sessions) .assistant-title-group {
+  flex: 1 1 auto;
+}
+
 .assistant-title-group {
+  flex: 0 1 auto;
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
 }
 
 .assistant-orb {
@@ -2190,23 +2696,154 @@ const sendQuestion = async () => {
   flex-direction: column;
   line-height: 1.1;
   gap: 3px;
+  min-width: 0;
 }
 
 .assistant-title {
   font-size: 14px;
   font-weight: 700;
   color: var(--guaxi-text-primary);
-}
-
-.assistant-subtitle {
-  font-size: 12px;
-  color: var(--guaxi-text-secondary);
+  white-space: nowrap;
 }
 
 .assistant-topbar-right {
+  flex: 0 0 auto;
+  margin-left: auto;
   display: flex;
   align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.assistant-topbar-icon-btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--guaxi-text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+
+.assistant-topbar-icon-btn:hover:not(:disabled) {
+  color: var(--guaxi-text-primary);
+  border-color: var(--guaxi-border);
+  background: color-mix(in srgb, var(--guaxi-header-bg) 82%, transparent);
+}
+
+.assistant-topbar-icon-btn--active {
+  color: #fff;
+  border-color: color-mix(in srgb, #4f7dff 58%, var(--guaxi-border));
+  background: color-mix(in srgb, #4f7dff 54%, var(--guaxi-header-bg));
+}
+
+.assistant-topbar-icon-btn--active:hover:not(:disabled) {
+  color: #fff;
+  background: color-mix(in srgb, #7d61ff 58%, var(--guaxi-header-bg));
+}
+
+.assistant-topbar-icon-btn--danger:hover:not(:disabled) {
+  color: rgb(239, 68, 68);
+  border-color: color-mix(in srgb, rgb(239, 68, 68) 50%, var(--guaxi-border));
+  background: color-mix(in srgb, rgb(239, 68, 68) 12%, var(--guaxi-header-bg));
+}
+
+.assistant-topbar-icon-btn:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.assistant-session-list {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
+}
+
+.assistant-session-list-item {
+  min-height: 74px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--guaxi-header-bg) 74%, transparent);
+  color: inherit;
+  padding: 9px 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  transition: border-color 0.16s ease, background 0.16s ease, transform 0.16s ease;
+}
+
+.assistant-session-list-item:hover,
+.assistant-session-list-item:focus {
+  outline: none;
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, #4f7dff 52%, var(--guaxi-border));
+  background: color-mix(in srgb, #4f7dff 12%, var(--guaxi-header-bg));
+}
+
+.assistant-session-list-item--active {
+  border-color: color-mix(in srgb, #4f7dff 68%, var(--guaxi-border));
+  background: color-mix(in srgb, #4f7dff 16%, var(--guaxi-header-bg));
+}
+
+.assistant-session-list-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.assistant-session-list-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--guaxi-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.assistant-session-list-meta,
+.assistant-session-list-preview {
+  font-size: 11px;
+  color: var(--guaxi-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.assistant-session-delete-btn {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--guaxi-text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+
+.assistant-session-delete-btn:hover:not(:disabled) {
+  color: rgb(239, 68, 68);
+  border-color: color-mix(in srgb, rgb(239, 68, 68) 44%, var(--guaxi-border));
+  background: color-mix(in srgb, rgb(239, 68, 68) 12%, transparent);
+}
+
+.assistant-session-delete-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .assistant-messages {
@@ -2264,27 +2901,7 @@ const sendQuestion = async () => {
 
 .assistant-message {
   display: flex;
-  gap: 10px;
-}
-
-.assistant-message-avatar {
-  flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
-  border-radius: 999px;
-  display: grid;
-  place-items: center;
-  font-size: 12px;
-  font-weight: 700;
-  color: #fff;
-}
-
-.assistant-message-user .assistant-message-avatar {
-  background: linear-gradient(135deg, #21bdec, #1492d8);
-}
-
-.assistant-message-ai .assistant-message-avatar {
-  background: linear-gradient(135deg, #8b5cf6, #5b7cfa);
+  gap: 0;
 }
 
 .assistant-message-body {
@@ -2299,6 +2916,39 @@ const sendQuestion = async () => {
   font-size: 11px;
   color: var(--guaxi-text-secondary);
   margin-bottom: 5px;
+}
+
+.assistant-message-meta-main {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.assistant-message-select-btn {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  border-radius: 5px;
+  border: 1px solid color-mix(in srgb, var(--guaxi-text-secondary) 44%, var(--guaxi-border));
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 82%, transparent);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+
+.assistant-message-select-btn:hover {
+  border-color: color-mix(in srgb, #4f7dff 68%, var(--guaxi-border));
+  background: color-mix(in srgb, #4f7dff 14%, var(--guaxi-panel-bg));
+}
+
+.assistant-message-select-btn--active {
+  border-color: color-mix(in srgb, #4f7dff 78%, var(--guaxi-border));
+  background: linear-gradient(135deg, #21bdec, #5b7cfa);
 }
 
 .assistant-message-content {
@@ -2517,6 +3167,18 @@ const sendQuestion = async () => {
   overflow: hidden;
 }
 
+.assistant-selection-count {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--guaxi-text-secondary);
+  white-space: nowrap;
+}
+
+.assistant-selection-count--inline {
+  padding: 0 2px;
+  color: color-mix(in srgb, var(--guaxi-text-primary) 78%, var(--guaxi-text-secondary));
+}
+
 .assistant-message-actions {
   margin-top: 6px;
   display: flex;
@@ -2552,6 +3214,17 @@ const sendQuestion = async () => {
 .assistant-action-btn:hover {
   color: var(--guaxi-text-primary);
   background: color-mix(in srgb, var(--guaxi-header-bg) 86%, transparent);
+}
+
+.assistant-action-btn--active {
+  color: #fff;
+  border-color: color-mix(in srgb, #4f7dff 70%, var(--guaxi-border));
+  background: color-mix(in srgb, #4f7dff 64%, var(--guaxi-header-bg));
+}
+
+.assistant-action-btn--active:hover {
+  color: #fff;
+  background: color-mix(in srgb, #4f7dff 74%, var(--guaxi-header-bg));
 }
 
 .assistant-thinking-wrap {

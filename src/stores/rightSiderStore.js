@@ -10,45 +10,118 @@ const console = {
   error: (...args) => logger.error(...args),
 };
 
+const ASSISTANT_SESSIONS_STORAGE_KEY = "guaxi:assistant:sessions:v1";
+
+function makeAssistantSession(title = "新会话", seed = {}) {
+  const now = Date.now();
+  return {
+    key: String(seed.key || `assistant-${now}-${Math.random().toString(36).slice(2, 8)}`),
+    title: String(seed.title || title || "新会话"),
+    messages: Array.isArray(seed.messages) ? seed.messages : [],
+    sessionId: String(seed.sessionId || ""),
+    createdAt: Number(seed.createdAt || now),
+    updatedAt: Number(seed.updatedAt || now),
+  };
+}
+
+function normalizeAssistantSession(raw) {
+  const item = raw && typeof raw === "object" ? raw : {};
+  return makeAssistantSession("新会话", item);
+}
+
+function readAssistantSessionsState() {
+  const fallback = makeAssistantSession("新会话");
+  if (typeof localStorage === "undefined") {
+    return { sessions: [fallback], currentSessionKey: fallback.key };
+  }
+
+  try {
+    const raw = localStorage.getItem(ASSISTANT_SESSIONS_STORAGE_KEY);
+    if (!raw) return { sessions: [fallback], currentSessionKey: fallback.key };
+    const parsed = JSON.parse(raw);
+    const sessions = (Array.isArray(parsed?.sessions) ? parsed.sessions : [])
+      .map(normalizeAssistantSession)
+      .filter((item) => item.key);
+    if (!sessions.length) return { sessions: [fallback], currentSessionKey: fallback.key };
+    const savedCurrent = String(parsed?.currentSessionKey || "");
+    const currentSessionKey = sessions.some((item) => item.key === savedCurrent)
+      ? savedCurrent
+      : sessions[0].key;
+    return { sessions, currentSessionKey };
+  } catch (error) {
+    console.warn("[RightSiderStore] read assistant sessions failed", error);
+    return { sessions: [fallback], currentSessionKey: fallback.key };
+  }
+}
+
+function writeAssistantSessionsState(sessions, currentSessionKey) {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(
+      ASSISTANT_SESSIONS_STORAGE_KEY,
+      JSON.stringify({
+        currentSessionKey,
+        sessions: Array.isArray(sessions) ? sessions : [],
+      })
+    );
+  } catch (error) {
+    console.warn("[RightSiderStore] persist assistant sessions failed", error);
+  }
+}
+
+function assistantSessionTitleFromMessages(messages) {
+  const firstUser = (Array.isArray(messages) ? messages : [])
+    .find((item) => item?.role === "user" && String(item?.content || "").trim());
+  const text = String(firstUser?.content || "").trim().replace(/\s+/g, " ");
+  return text ? text.slice(0, 24) : "新会话";
+}
+
 export const useRightSiderStore = defineStore("rightSider", {
-  state: () => ({
-    searchResults: {
-      fileResults: [],
-      noteResults: [],
-      excerptResults: [], // 新增：摘录搜索结果
-      searchQuery: "",
-      lastSearchType: "file",
-      error: "",
-      loading: false,
-    },
-    // 新增：当前右侧面板类型（如 'search', 'outline' 等）
-    panel: "",
-    // 新增：右侧边栏是否展开
-    isOpen: false,
-    assistant: {
-      messages: [],
-      sessionId: "",
-      modelId: 5,
-      task: "chat",
-      webSearchEnabled: true,
-      pending: false,
-      draftInput: "",
-      draftAutoSend: false,
-      draftDisableWebSearch: false,
-    },
-    pythonSessionInspector: {
-      filePath: "",
-      cellId: "",
-      cellKey: "",
-      stableId: "",
-      cellTitle: "",
-      sessionId: "",
-      hasActiveCell: false,
-      datasets: [],
-      variables: [],
-      updatedAt: 0,
-    },
-  }),
+  state: () => {
+    const assistantSessionsState = readAssistantSessionsState();
+    const currentSession = assistantSessionsState.sessions.find((item) => item.key === assistantSessionsState.currentSessionKey)
+      || assistantSessionsState.sessions[0];
+    return {
+      searchResults: {
+        fileResults: [],
+        noteResults: [],
+        excerptResults: [], // 新增：摘录搜索结果
+        searchQuery: "",
+        lastSearchType: "file",
+        error: "",
+        loading: false,
+      },
+      // 新增：当前右侧面板类型（如 'search', 'outline' 等）
+      panel: "",
+      // 新增：右侧边栏是否展开
+      isOpen: false,
+      assistant: {
+        messages: currentSession.messages,
+        sessionId: currentSession.sessionId,
+        sessions: assistantSessionsState.sessions,
+        currentSessionKey: currentSession.key,
+        modelId: 5,
+        task: "chat",
+        webSearchEnabled: true,
+        pending: false,
+        draftInput: "",
+        draftAutoSend: false,
+        draftDisableWebSearch: false,
+      },
+      pythonSessionInspector: {
+        filePath: "",
+        cellId: "",
+        cellKey: "",
+        stableId: "",
+        cellTitle: "",
+        sessionId: "",
+        hasActiveCell: false,
+        datasets: [],
+        variables: [],
+        updatedAt: 0,
+      },
+    };
+  },
   actions: {
     setSearchResults(results) {
       console.log("[DEBUG][Store] Setting search results:", {
@@ -94,6 +167,86 @@ export const useRightSiderStore = defineStore("rightSider", {
       this.isOpen = false;
       console.info("[RightSiderStore] close right sider", { panel: this.panel });
     },
+    persistAssistantSessions() {
+      writeAssistantSessionsState(this.assistant.sessions, this.assistant.currentSessionKey);
+    },
+    getCurrentAssistantSession() {
+      const key = String(this.assistant.currentSessionKey || "");
+      let session = this.assistant.sessions.find((item) => item.key === key);
+      if (!session) {
+        session = makeAssistantSession("新会话");
+        this.assistant.sessions.push(session);
+        this.assistant.currentSessionKey = session.key;
+      }
+      return session;
+    },
+    syncCurrentAssistantSession() {
+      const session = this.getCurrentAssistantSession();
+      session.messages = Array.isArray(this.assistant.messages) ? this.assistant.messages : [];
+      session.sessionId = String(this.assistant.sessionId || "");
+      session.updatedAt = Date.now();
+      if (!session.title || session.title === "新会话") {
+        session.title = assistantSessionTitleFromMessages(session.messages);
+      }
+      this.persistAssistantSessions();
+      console.debug("[RightSiderStore] synced assistant session", {
+        key: session.key,
+        title: session.title,
+        messageCount: session.messages.length,
+      });
+    },
+    createAssistantSession(title = "新会话") {
+      this.syncCurrentAssistantSession();
+      const session = makeAssistantSession(title);
+      this.assistant.sessions.unshift(session);
+      this.assistant.currentSessionKey = session.key;
+      this.assistant.messages = session.messages;
+      this.assistant.sessionId = "";
+      this.persistAssistantSessions();
+      console.info("[RightSiderStore] created assistant session", { key: session.key });
+      return session.key;
+    },
+    switchAssistantSession(key) {
+      const targetKey = String(key || "");
+      const session = this.assistant.sessions.find((item) => item.key === targetKey);
+      if (!session) return false;
+      this.syncCurrentAssistantSession();
+      this.assistant.currentSessionKey = session.key;
+      this.assistant.messages = session.messages;
+      this.assistant.sessionId = String(session.sessionId || "");
+      this.persistAssistantSessions();
+      console.info("[RightSiderStore] switched assistant session", {
+        key: session.key,
+        messageCount: session.messages.length,
+      });
+      return true;
+    },
+    deleteAssistantSession(key) {
+      const targetKey = String(key || this.assistant.currentSessionKey || "");
+      const index = this.assistant.sessions.findIndex((item) => item.key === targetKey);
+      if (index < 0) return false;
+      const removed = this.assistant.sessions.splice(index, 1)[0];
+      if (!this.assistant.sessions.length) {
+        this.assistant.sessions.push(makeAssistantSession("新会话"));
+      }
+      const next = this.assistant.sessions[Math.min(index, this.assistant.sessions.length - 1)];
+      this.assistant.currentSessionKey = next.key;
+      this.assistant.messages = next.messages;
+      this.assistant.sessionId = String(next.sessionId || "");
+      this.persistAssistantSessions();
+      console.info("[RightSiderStore] deleted assistant session", { key: removed.key, nextKey: next.key });
+      return true;
+    },
+    removeAssistantMessages(messageIds) {
+      const ids = new Set((Array.isArray(messageIds) ? messageIds : []).map((id) => String(id || "")));
+      if (!ids.size) return 0;
+      const before = this.assistant.messages.length;
+      this.assistant.messages = this.assistant.messages.filter((item) => !ids.has(String(item?.id || "")));
+      const removed = before - this.assistant.messages.length;
+      this.syncCurrentAssistantSession();
+      console.info("[RightSiderStore] removed assistant messages", { removed });
+      return removed;
+    },
     addAssistantMessage(message) {
       if (!message || typeof message !== "object") return;
       const next = Object.assign({
@@ -105,6 +258,7 @@ export const useRightSiderStore = defineStore("rightSider", {
         meta: message.meta || null,
       }, message);
       this.assistant.messages.push(next);
+      this.syncCurrentAssistantSession();
       return next.id;
     },
     updateAssistantMessage(messageId, payload) {
@@ -118,13 +272,16 @@ export const useRightSiderStore = defineStore("rightSider", {
         ...payload,
       };
       this.assistant.messages.splice(index, 1, next);
+      this.syncCurrentAssistantSession();
     },
     clearAssistantMessages() {
       this.assistant.messages = [];
       this.assistant.sessionId = "";
+      this.syncCurrentAssistantSession();
     },
     setAssistantSessionId(sessionId) {
       this.assistant.sessionId = String(sessionId || "");
+      this.syncCurrentAssistantSession();
     },
     setAssistantModelId(modelId) {
       const n = Number(modelId);
