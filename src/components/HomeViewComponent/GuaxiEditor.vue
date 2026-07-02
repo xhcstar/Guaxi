@@ -1339,6 +1339,16 @@ const logger = createLogger('GuaxiEditor')
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString()
 const outlineStore = useOutlineStore()
 
+// 设计说明：
+// 1. Monaco 的 unicodeHighlight 会把中文标点、全角括号等“非 ASCII / 易混淆字符”标成黄色方框。
+// 2. 对中文写作场景来说这些符号是正常内容，因此关闭 ambiguousCharacters 与 nonBasicASCII。
+// 3. invisibleCharacters 仍保留，用来继续提示零宽字符等真正难以肉眼发现的问题。
+const GUAXI_MONACO_UNICODE_HIGHLIGHT_OPTIONS = Object.freeze({
+  ambiguousCharacters: false,
+  nonBasicASCII: false,
+  invisibleCharacters: true,
+})
+
 const ensureLatexLanguage = () => {
   const exists = monaco.languages.getLanguages().some((lang) => lang.id === 'latex')
   if (!exists) {
@@ -10070,6 +10080,7 @@ const initEditor = () => {
     fontLigatures: true,
     // wrappingIndent: 'indent',  // 换行缩进
     renderWhitespace: 'selection',  // 选中时显示空白字符
+    unicodeHighlight: GUAXI_MONACO_UNICODE_HIGHLIGHT_OPTIONS,
     renderLineHighlight: 'line',  // 高亮当前行
     lineHeight: 24,  // 行高
     padding: {
@@ -10099,6 +10110,10 @@ const initEditor = () => {
     },
     mouseWheelZoom: true  // 启用鼠标滚轮缩放
   });
+  logger.info('[Editor] Monaco unicode highlight configured', {
+    target: 'primary',
+    ...GUAXI_MONACO_UNICODE_HIGHLIGHT_OPTIONS,
+  })
 
   ensureEditorModelBinding(editor, {
     filePath: String(selectedFile.value?.path || activeTab.value?.path || ''),
@@ -10356,8 +10371,13 @@ const ensureSecondaryEditor = () => {
       bracketPairs: true,
       bracketPairsHorizontal: 'active'
     },
+    unicodeHighlight: GUAXI_MONACO_UNICODE_HIGHLIGHT_OPTIONS,
     automaticLayout: true,
   });
+  logger.info('[Editor] Monaco unicode highlight configured', {
+    target: 'secondary',
+    ...GUAXI_MONACO_UNICODE_HIGHLIGHT_OPTIONS,
+  })
 
   ensureEditorModelBinding(secondaryEditor, {
     filePath: rightPath || '',
