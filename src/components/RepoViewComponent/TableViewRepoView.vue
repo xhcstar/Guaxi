@@ -67,7 +67,8 @@
       :knowledge-repo-options="knowledgeRepoOptionsComplete" :library-options="libraryOptionsComplete"
       :imported-file-tag-options="importedFileTagOptionsComplete" :is-library-loading="isLibraryLoadingComplete"
       :is-imported-file-tag-loading="isImportedFileTagLoadingComplete"
-      :is-knowledge-repo-loading="isKnowledgeRepoLoadingComplete" @open-file-browser="openFileBrowser"
+      :is-knowledge-repo-loading="isKnowledgeRepoLoadingComplete" :engine-status="engineStatus"
+      @open-file-browser="openFileBrowser"
       @library-search-complete="handleLibrarySearchComplete" @tag-search-complete="handleImportedFileTagSearchComplete"
       @knowledge-repo-search-complete="handleKnowledgeRepoSearchComplete" @submit="addFile"
       @cancel="handleModalCancel" />
@@ -134,8 +135,19 @@ const {
   startProgressListener,
   convertFile,
   clearFailedTasks,
-  cancelSyncTask
+  cancelSyncTask,
+  getConversionEngineStatus
 } = useProgress({ store, message })
+
+// 转换引擎装配状态（快速引擎启动自动装配；强引擎按需装配）
+const engineStatus = ref({ fastReady: false, fastProvisioning: false, markerReady: false, mineruReady: false })
+const refreshEngineStatus = async () => {
+  try {
+    engineStatus.value = await getConversionEngineStatus()
+  } catch (e) {
+    logger.warn('获取转换引擎状态失败', e)
+  }
+}
 
 const {
   isAddFileModalVisible,
@@ -386,6 +398,18 @@ onMounted(async () => {
   store.get_librariesRoot()
   await store.fetchFiles(store.currentDatabase) // 默认加载数据库 1 的数据
   document.addEventListener('click', handleGlobalClick, true)
+
+  // 获取转换引擎装配状态（快速引擎会在后端启动时自动装配）
+  refreshEngineStatus()
+  // 短轮询几次，装配完成后更新 UI（约 30s 内）
+  let engineStatusPolls = 0
+  const engineStatusTimer = setInterval(async () => {
+    await refreshEngineStatus()
+    engineStatusPolls += 1
+    if (engineStatus.value?.fastReady || engineStatusPolls >= 10) {
+      clearInterval(engineStatusTimer)
+    }
+  }, 3000)
 
   // 计算表格容器高度 - 使用更准确的方式
   const calculateHeight = () => {

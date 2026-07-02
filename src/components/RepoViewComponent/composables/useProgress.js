@@ -7,7 +7,9 @@ import { createLogger } from '../../../utils/logger'
 const logger = createLogger('useProgress')
 const sharedProgresses = ref([]);
 const sharedShowTaskList = ref(false);
+const sharedConversionTasks = ref([]);
 let baseListenersInitialized = false;
+let taskUpdateListenerInitialized = false;
 
 export function useProgress({ store, message }) {
   const progresses = sharedProgresses;
@@ -382,7 +384,21 @@ export function useProgress({ store, message }) {
 
     progresses.value.push({ ...newProgress, id: taskId });
 
-    const unlisten = await listen("conversion_progress", (event) => {
+    let unlisten = null;
+    let disposed = false;
+    const dispose = () => {
+      if (disposed) return;
+      disposed = true;
+      if (typeof unlisten === "function") {
+        try {
+          unlisten();
+        } catch (e) {
+          logger.warn("[conversion] unlisten error", e);
+        }
+      }
+    };
+
+    unlisten = await listen("conversion_progress", (event) => {
       if (event.payload?.fileName && event.payload.fileName !== fileName) {
         logger.debug("[conversion] progress ignored", {
           listeningFor: fileName,
@@ -424,6 +440,14 @@ export function useProgress({ store, message }) {
 
       if (shouldAutoRemove) {
         logger.info("[conversion] completed", { fileName });
+        // 转换成功完成后刷新文件表，让 markdown 立即可读。
+        (async () => {
+          try {
+            await store.fetchFiles(store.currentDatabase);
+          } catch (e) {
+            logger.warn("[conversion] refresh after complete failed", e);
+          }
+        })();
         setTimeout(() => {
           const i = progresses.value.findIndex(
             (p) => p?.type === "conversion" && p?.fileName === fileName && p?.id === taskId
@@ -431,47 +455,55 @@ export function useProgress({ store, message }) {
           if (i !== -1 && progresses.value[i]?.current >= 100 && !progresses.value[i]?.failed) {
             progresses.value.splice(i, 1);
           }
+          dispose();
         }, 3000);
+      }
+
+      // 终态失败：停止监听（保留失败条目供查看/重试）。
+      if (failed) {
+        dispose();
       }
     });
 
     return () => {
       logger.info("[conversion] stopProgressListener", { fileName });
-      return unlisten();
+      dispose();
     };
   };
 
-  // 转换文件
-  const convertFile = async (inputPath, outputDir) => {
+  // 转换文件：入队到持久化转换队列（支持多引擎自动路由 / 断点续跑 / 重试）。
+  // engine 取值：auto（默认，自动检测）| fast | marker | mineru。
+  // 入队立即返回，实际进度由 conversion_progress 事件驱动（startProgressListener 已在监听）。
+  const convertFile = async (inputPath, outputDir, engine = "auto") => {
     const fileName = inputPath.split(/[\\/]/).pop() || "未知文件";
     const startedAt = Date.now();
 
-    logger.info("[conversion] invoke convert_to_markdown", {
+    logger.info("[conversion] invoke enqueue_conversion", {
       fileName,
       inputPath,
       outputDir,
+      engine,
     });
 
     try {
-      await invoke(
-        "convert_to_markdown",
-        {
-          request: {
-            input_path: inputPath,
-            output_dir: outputDir,
-          },
+      const resp = await invoke("enqueue_conversion", {
+        request: {
+          inputPath,
+          outputDir,
+          engine,
         },
-        {
-          target: "main",
-        }
-      );
+      });
 
-      logger.info("[conversion] convert_to_markdown ok", {
+      logger.info("[conversion] enqueue_conversion ok", {
         fileName,
+        taskId: resp?.taskId,
+        reused: resp?.reused,
         durationMs: Date.now() - startedAt,
       });
+
+      return resp;
     } catch (error) {
-      logger.error("[conversion] convert_to_markdown failed", {
+      logger.error("[conversion] enqueue_conversion failed", {
         fileName,
         durationMs: Date.now() - startedAt,
         error,
@@ -705,6 +737,81 @@ export function useProgress({ store, message }) {
     }
   };
 
+  // ───────────────── 持久化转换任务面板（SQLite 队列） ─────────────────
+  // 从后端 conversion_tasks 表加载的完整任务列表，支持断点续跑/重试/取消。
+  const conversionTasks = sharedConversionTasks;
+
+  const refreshConversionTasks = async (status = null, limit = 200) => {
+    try {
+      const tasks = await invoke("list_conversion_tasks", { status, limit });
+      conversionTasks.value = Array.isArray(tasks) ? tasks : [];
+      return conversionTasks.value;
+    } catch (error) {
+      logger.error("[conversion] list_conversion_tasks failed", error);
+      return [];
+    }
+  };
+
+  const retryConversionTask = async (taskId) => {
+    try {
+      const changed = await invoke("retry_conversion_task", { taskId });
+      if (changed) {
+        message.info("已重新排入转换队列");
+        await refreshConversionTasks();
+      } else {
+        message.warning("该任务当前状态不可重试");
+      }
+      return changed;
+    } catch (error) {
+      logger.error("[conversion] retry_conversion_task failed", error);
+      message.error(`重试失败: ${error.message || error}`);
+      return false;
+    }
+  };
+
+  const cancelConversionTask = async (taskId) => {
+    try {
+      const changed = await invoke("cancel_conversion_task", { taskId });
+      if (changed) {
+        message.info("已请求取消转换任务");
+        await refreshConversionTasks();
+      } else {
+        message.warning("该任务已结束，无法取消");
+      }
+      return changed;
+    } catch (error) {
+      logger.error("[conversion] cancel_conversion_task failed", error);
+      message.error(`取消失败: ${error.message || error}`);
+      return false;
+    }
+  };
+
+  const getConversionEngineStatus = async () => {
+    try {
+      return await invoke("conversion_engine_status");
+    } catch (error) {
+      logger.error("[conversion] conversion_engine_status failed", error);
+      return { mineruAvailable: false };
+    }
+  };
+
+  if (!taskUpdateListenerInitialized) {
+    taskUpdateListenerInitialized = true;
+    // 监听后端任务状态变更，增量更新任务面板。
+    listen("conversion_task_update", (event) => {
+      const task = event.payload;
+      if (!task || task.id == null) return;
+      const idx = conversionTasks.value.findIndex((t) => t.id === task.id);
+      if (idx === -1) {
+        conversionTasks.value.unshift(task);
+      } else {
+        conversionTasks.value[idx] = task;
+      }
+    });
+    // 初次加载一次现存任务（含重启后恢复的任务）。
+    refreshConversionTasks();
+  }
+
   return {
     // 原有返回属性（保持兼容性）
     progresses, // 仍然返回原始数组
@@ -726,5 +833,12 @@ export function useProgress({ store, message }) {
     categorizedProgresses, // 分类后的任务
     getProgressCountByType, // 按类型获取任务数量
     getCategorizedStats, // 获取分类统计
+
+    // 新增：持久化转换任务面板（多引擎队列）
+    conversionTasks, // 后端持久化任务列表
+    refreshConversionTasks, // 刷新任务列表
+    retryConversionTask, // 重试指定任务
+    cancelConversionTask, // 取消指定任务
+    getConversionEngineStatus, // 查询强引擎(MinerU)是否可用
   };
 }

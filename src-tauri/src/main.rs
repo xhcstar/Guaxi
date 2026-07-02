@@ -243,6 +243,15 @@ async fn main() {
             commands::docprocess::reader_open_file,
             commands::docprocess::convert_to_markdown,
             commands::docprocess::check_file_converted,
+            commands::convert::commands::enqueue_conversion,
+            commands::convert::commands::list_conversion_tasks,
+            commands::convert::commands::get_conversion_task,
+            commands::convert::commands::retry_conversion_task,
+            commands::convert::commands::cancel_conversion_task,
+            commands::convert::commands::resume_pending_conversions,
+            commands::convert::commands::conversion_engine_status,
+            commands::convert::commands::ensure_fast_engine_ready,
+            commands::convert::commands::convert_to_markdown_queued,
             commands::docprocess::get_converted_pdf_page,
             commands::docprocess::load_markdown_content,
             commands::docprocess::search_paginated_markdown,
@@ -691,6 +700,11 @@ async fn main() {
         ])
         .setup(move |app| {
             shared_state.set_app_handle(app.handle().clone());
+
+            // 启动持久化文档转换队列（含断点续跑）
+            commands::convert::ConversionQueue::init(app.handle().clone());
+            // 后台自动装配快速转换引擎（下载托管 Python + 依赖），无需用户手动构建。
+            commands::convert::provision::spawn_startup_provision();
 
             let state_for_server = shared_state.clone();
             tauri::async_runtime::spawn(async move {

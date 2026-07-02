@@ -25,6 +25,15 @@
           <n-input :value="getDisplayValue(form[column.key])" :placeholder="`${column.title}`" readonly clearable />
         </template>
 
+        <!-- 转换引擎选择 -->
+        <template v-else-if="column.key === 'convertEngine'">
+          <div style="width:100%">
+            <n-select v-model:value="form.convertEngine" :options="engineOptions"
+              placeholder="选择转换引擎" />
+            <div class="engine-hint">{{ engineHint }}</div>
+          </div>
+        </template>
+
         <!-- 描述 - 多行文本 -->
         <template v-else-if="column.key === 'description'">
           <n-input v-model:value="form.description" type="textarea" :placeholder="`请输入${column.title}`" :rows="3"
@@ -76,7 +85,7 @@ import { createLogger } from '../../../../utils/logger'
 import { ref, watch, computed } from 'vue'
 import {
   NModal, NForm, NFormItem, NInput, NButton, NIcon, NInputGroup,
-  NAutoComplete, NSpace
+  NAutoComplete, NSpace, NSelect
 } from 'naive-ui'
 import { FolderAdd20Regular } from '@vicons/fluent'
 
@@ -121,6 +130,10 @@ const props = defineProps({
   isKnowledgeRepoLoading: {
     type: Boolean,
     default: false
+  },
+  engineStatus: {
+    type: Object,
+    default: () => ({ fastReady: false, fastProvisioning: false, markerReady: false, mineruReady: false })
   }
 })
 
@@ -210,6 +223,27 @@ watch(() => props.form, (newForm) => {
   logger.info('表单数据更新:', newForm)
 }, { deep: true, immediate: true })
 
+// 转换引擎选项（label 后缀反映装配状态）
+const engineOptions = computed(() => {
+  const s = props.engineStatus || {}
+  const tag = (ready, provisioning) =>
+    ready ? '（就绪）' : provisioning ? '（装配中…）' : '（首次使用将自动装配）'
+  return [
+    { label: '自动检测（推荐）', value: 'auto' },
+    { label: `快速引擎（纯文本/简单排版）${tag(s.fastReady, s.fastProvisioning)}`, value: 'fast' },
+    { label: `Marker（复杂版面/图片）${tag(s.markerReady, s.markerProvisioning)}`, value: 'marker' },
+    { label: `高质量强引擎（理工科/公式/表格）${tag(s.mineruReady, false)}`, value: 'mineru' },
+  ]
+})
+
+// 引擎状态提示
+const engineHint = computed(() => {
+  const s = props.engineStatus || {}
+  if (s.fastProvisioning) return '正在后台自动装配快速引擎（下载运行时/依赖），稍后即可使用…'
+  if (s.fastReady) return '快速引擎已就绪，简单文档开箱即用；复杂文档首次会自动装配强引擎。'
+  return '首次使用会自动检查并安装所需依赖，无需手动配置。'
+})
+
 // 计算表单列配置
 const formColumns = computed(() => {
   return [
@@ -219,6 +253,7 @@ const formColumns = computed(() => {
     { key: 'knowledgeRepo', title: '知识库' },
     { key: 'library', title: '文件库' },
     { key: 'importedFileTags', title: '文件标签' },
+    { key: 'convertEngine', title: '转换引擎' },
     { key: 'type', title: '文件类型' },
     { key: 'importFileCreateTime', title: '入库时间' },
     { key: 'importFileSize', title: '文件大小' },
@@ -251,6 +286,13 @@ const formColumns = computed(() => {
   font-size: 12px;
   color: var(--guaxi-text-secondary);
   margin-top: 4px;
+}
+
+.engine-hint {
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+  margin-top: 6px;
+  line-height: 1.4;
 }
 
 .submit-button {

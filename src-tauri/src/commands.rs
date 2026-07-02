@@ -1,6 +1,7 @@
 pub mod agent_server;
 pub mod chatview;
 pub mod docprocess;
+pub mod convert;
 pub mod file_watcher;
 pub mod fileprocess;
 pub mod life_album;

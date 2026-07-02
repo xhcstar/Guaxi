@@ -105,6 +105,11 @@ esac
 
 "$VENV_PY" -m pip install fastapi uvicorn python-multipart
 
+# 快速引擎依赖：pymupdf4llm(PDF->MD，含 PyMuPDF) + markitdown(Office/HTML/EPUB->MD)。
+# 这些库同时被 guaxi_probe.py（探针）与 guaxi_fast_convert.py（快速引擎）使用。
+"$VENV_PY" -m pip install "pymupdf4llm>=0.0.17" "markitdown[all]>=0.0.1a2" || \
+  "$VENV_PY" -m pip install pymupdf4llm markitdown
+
 "$VENV_PY" -m pip install --force-reinstall --no-deps "$SURYA_SRC_FOR_PIP"
 
 echo
@@ -112,3 +117,4 @@ echo "Marker env ready:"
 echo "  Marker dir:  $MARKER_DST"
 echo "  Python:      $VENV_PY"
 echo "  Surya models:$MODELS_DIR"
+echo "  Fast engine: pymupdf4llm + markitdown (installed in marker venv)"

@@ -28,6 +28,7 @@ export function useFormHandling({
     importFileSize: 0,
     convetToMarkdownFilename: "",
     knowledgeRepo: "",
+    convertEngine: "auto",
     newNoteForm: {
       id: 0,
       description: "",
@@ -410,28 +411,25 @@ export function useFormHandling({
         // 立即关闭表单对话框
         isAddFileModalVisible.value = false;
 
-        // 开始转换流程
-        logger.info("[import] convertFile start", {
+        // 入队转换任务（异步）。进度由持久化队列驱动，
+        // startProgressListener 会在任务终态时自动清理监听。
+        const selectedEngine = currentForm.value.convertEngine || "auto";
+        logger.info("[import] convertFile(enqueue) start", {
           flowId,
           filePath: currentForm.value.filePath,
           outputDir,
+          engine: selectedEngine,
         });
 
-        await convertFile(currentForm.value.filePath, outputDir);
+        await convertFile(currentForm.value.filePath, outputDir, selectedEngine);
 
-        logger.info("[import] convertFile ok", { flowId });
+        logger.info("[import] convertFile(enqueue) ok", { flowId });
 
-        // 转换完成后刷新数据
-        logger.info("add_file currentDatabase", store.currentDatabase);
-        await store.fetchFiles(store.currentDatabase);
+        // 入队成功即视为流程完成；实际 markdown 就绪后由进度监听刷新文件表。
         resetForm();
 
-        // 转换完成后取消监听
-        logger.info("[import] unlisten conversion_progress", { flowId });
-        if (unlisten) {
-          unlisten();
-          unlisten = null;
-        }
+        // 注意：不在此处 unlisten，交由 startProgressListener 在任务终态时自清理。
+        unlisten = null;
       } catch (error) {
         logger.error("[import] conversion flow failed", { flowId, error });
 
@@ -559,6 +557,7 @@ export function useFormHandling({
       importFileSize: 0,
       convetToMarkdownFilename: "",
       knowledgeRepo: "",
+      convertEngine: "auto",
     };
   };
 

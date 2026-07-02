@@ -389,6 +389,11 @@ fn python_runtime_dir() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+/// 托管 Python runtime 目录（供其它模块把辅助脚本物化到与托管 venv 同一位置）。
+pub fn managed_runtime_dir() -> Result<PathBuf, String> {
+    python_runtime_dir()
+}
+
 #[cfg(windows)]
 fn auto_download_python_available() -> bool {
     true

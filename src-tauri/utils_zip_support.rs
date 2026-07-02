@@ -39,6 +39,10 @@ const LEGACY_BUNDLES: &[&str] = &[
 const SKIPPED_DIRECTORIES: &[&str] = &[
     "MarkdownConvertor",
     "Models/surya_models",
+    // MinerU 强引擎（可选组件，含大体积 venv 与模型），与 MarkdownConvertor 一致处理：
+    // 不进入 tar.zst 自动打包，由独立机制随安装目录分发；缺失时运行时自动回退 marker。
+    "MinerU",
+    "Models/mineru_models",
     GENERATED_BUNDLES_DIR,
 ];
 

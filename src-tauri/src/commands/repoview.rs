@@ -364,6 +364,48 @@ pub fn setup_db() -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
 
+    // 创建文档转换任务表（持久化队列，支持断点续跑/重试/进度检查）
+    create_table_if_not_exists(
+        &conn,
+        "conversion_tasks",
+        "
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid TEXT NOT NULL UNIQUE,
+        imported_file_id INTEGER,
+        file_name TEXT NOT NULL,
+        input_path TEXT NOT NULL,
+        output_dir TEXT NOT NULL,
+        expected_md_path TEXT,
+        requested_engine TEXT NOT NULL DEFAULT 'auto',
+        resolved_engine TEXT,
+        probe_json TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        progress_current INTEGER NOT NULL DEFAULT 0,
+        progress_total INTEGER NOT NULL DEFAULT 100,
+        stage TEXT,
+        message TEXT,
+        error TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        max_attempts INTEGER NOT NULL DEFAULT 3,
+        priority INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        started_at TEXT,
+        finished_at TEXT
+    ",
+    )
+    .map_err(|e| e.to_string())?;
+
+    // 兼容旧库：逐列 ALTER（已存在会静默失败）
+    let _ = conn.execute("ALTER TABLE conversion_tasks ADD COLUMN resolved_engine TEXT", []);
+    let _ = conn.execute("ALTER TABLE conversion_tasks ADD COLUMN probe_json TEXT", []);
+    let _ = conn.execute("ALTER TABLE conversion_tasks ADD COLUMN expected_md_path TEXT", []);
+    let _ = conn.execute("ALTER TABLE conversion_tasks ADD COLUMN priority INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_conversion_tasks_status ON conversion_tasks(status)",
+        [],
+    );
+
     let device_uuid = get_device_id();
     let device_name = env::var("COMPUTERNAME").unwrap_or_else(|_| "local".to_string());
 
