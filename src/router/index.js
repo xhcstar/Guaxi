@@ -32,6 +32,7 @@ import PlaceholderApp from '../components/ApplicationViewComponent/apps/Placehol
 import TODOApp from '../components/ApplicationViewComponent/apps/TODO.vue'
 import TTSBookApp from '../components/ApplicationViewComponent/apps/TTSBookApp.vue'
 import OcrApp from '../components/ApplicationViewComponent/apps/OcrApp.vue'
+import ResumeBuilderApp from '../components/ApplicationViewComponent/apps/ResumeBuilderApp.vue'
 
 const APP_COMPONENT_MAP = {
   'life-album': LifeAlbumApp,
@@ -42,6 +43,7 @@ const APP_COMPONENT_MAP = {
   'tools-python-playground': PythonPlaygroundApp,
   'tools-tts-book': TTSBookApp,
   'tools-ocr': OcrApp,
+  'work-timer': ResumeBuilderApp,
 }
 
 const GuaxiAppWindow = {

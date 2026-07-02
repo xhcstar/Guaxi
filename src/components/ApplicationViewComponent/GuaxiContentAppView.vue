@@ -45,6 +45,7 @@ import PlaceholderApp from "./apps/PlaceholderApp.vue"
 import TODOApp from "./apps/TODO.vue"
 import TTSBookApp from "./apps/TTSBookApp.vue"
 import OcrApp from "./apps/OcrApp.vue"
+import ResumeBuilderApp from "./apps/ResumeBuilderApp.vue"
 
 const logger = createLogger('GuaxiContentAppView')
 const settingsStore = useSettingsStore()
@@ -166,7 +167,7 @@ const apps = [
     description: '根据模板快速生成与导出简历',
     icon: '📝',
     color: 'linear-gradient(135deg, #fddb92, #d1fdff)',
-    component: PlaceholderApp
+    component: ResumeBuilderApp
   }
 ]
 
