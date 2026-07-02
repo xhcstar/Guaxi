@@ -484,8 +484,11 @@ fn apply_mineru_device_env(cmd: &mut TokioCommand) {
     if std::env::var("MINERU_DEVICE_MODE").is_err() && super::provision::mineru_uses_cuda() {
         cmd.env("MINERU_DEVICE_MODE", "cuda");
     }
-    // 模型源：允许通过 GUAXI_MINERU_MODEL_SOURCE 覆盖（如国内用 modelscope 加速）。
-    if let Ok(src) = std::env::var("GUAXI_MINERU_MODEL_SOURCE") {
-        cmd.env("MINERU_MODEL_SOURCE", src);
-    }
+    // 模型源：默认走 ModelScope（国内下载快、稳定，规避 huggingface.co 超时/断连）。
+    // 可用 GUAXI_MINERU_MODEL_SOURCE 覆盖为 huggingface / local。
+    let model_source = std::env::var("GUAXI_MINERU_MODEL_SOURCE")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "modelscope".to_string());
+    cmd.env("MINERU_MODEL_SOURCE", model_source);
 }

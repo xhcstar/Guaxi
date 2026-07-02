@@ -101,31 +101,28 @@ fn cuda_variant() -> String {
 /// 中国大陆优先走上海交大镜像（已验证含 Windows cp3x 轮子），官方源兜底。
 /// 可用 GUAXI_TORCH_CUDA_INDEX 完全覆盖（分号分隔多个，按序尝试）。
 fn cuda_torch_indexes() -> Vec<String> {
+    let cuda = cuda_variant();
+    let official = format!("https://download.pytorch.org/whl/{}", cuda);
+
+    let mut list: Vec<String> = Vec::new();
+    // 用户自定义源优先（分号分隔）。
     if let Ok(v) = std::env::var("GUAXI_TORCH_CUDA_INDEX") {
-        let list: Vec<String> = v
-            .split(';')
-            .map(|s| s.trim().trim_end_matches('/').to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-        if !list.is_empty() {
-            return list;
+        for s in v.split(';') {
+            let s = s.trim().trim_end_matches('/').to_string();
+            if !s.is_empty() {
+                list.push(s);
+            }
         }
     }
-    let cuda = cuda_variant();
-    vec![
-        // 国内镜像优先（速度快、稳定）
-        format!("https://mirror.sjtu.edu.cn/pytorch-wheels/{}", cuda),
-        // 官方源兜底（版本最全，但国内较慢）
-        format!("https://download.pytorch.org/whl/{}", cuda),
-    ]
-}
-
-/// 依赖（numpy/pillow 等）走的 PyPI 镜像；托管 venv 默认已配清华，这里显式作为 extra-index。
-fn pypi_mirror_index() -> String {
-    std::env::var("GUAXI_PYPI_INDEX")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| "https://pypi.tuna.tsinghua.edu.cn/simple".to_string())
+    if list.is_empty() {
+        // 默认：国内镜像优先（速度快、稳定）。
+        list.push(format!("https://mirror.sjtu.edu.cn/pytorch-wheels/{}", cuda));
+    }
+    // 官方源始终作为最终兜底（所有镜像都失败时回退到官方下载地址）。
+    if !list.iter().any(|u| u == &official) {
+        list.push(official);
+    }
+    list
 }
 
 /// 在存在 NVIDIA GPU 时，把托管 venv 里的 CPU 版 torch 换成 CUDA 版，使 MinerU 自动走 GPU。
@@ -148,11 +145,16 @@ fn ensure_cuda_torch(program: &str, base_args: &[String]) {
 
     let cuda = cuda_variant();
     let base = torch_base_version(program, base_args);
-    let extra = pypi_mirror_index();
 
-    // torch 版本精确锁定为 CUDA 本地版本；无法取得 base 时退化为不带版本（由镜像给最新）。
+    // 关键点：
+    // - 只按公有版本锁定 `torch==<base>`，不加 +cuXXX 本地标签。现代 PyTorch 的 CUDA 轮子
+    //   在 cuXXX 索引上以纯版本号发布（如 2.12.1），加 +cu124 反而找不到；`==2.12.1` 同时
+    //   匹配 `2.12.1` 与老式 `2.12.1+cu124`，最稳。
+    // - 已装 CPU 版与 CUDA 版公有版本相同，pip 会判定“已满足”，故必须 --force-reinstall 强制换轮子。
+    // - --no-deps 避免误动其它依赖；--index-url 只指向 CUDA 源，确保拿到的是 GPU 轮子（不加
+    //   extra-index，防止 pip 从 PyPI 取回 CPU 版）。
     let torch_spec = match &base {
-        Some(v) => format!("torch=={}+{}", v, cuda),
+        Some(v) => format!("torch=={}", v),
         None => "torch".to_string(),
     };
 
@@ -167,12 +169,10 @@ fn ensure_cuda_torch(program: &str, base_args: &[String]) {
         let mut cmd = Command::new(program);
         cmd.args(base_args)
             .args([
-                "-m", "pip", "install", "--upgrade", "--no-cache-dir",
-                "--index-url",
+                "-m", "pip", "install", "--force-reinstall", "--no-deps",
+                "--no-cache-dir", "--index-url",
             ])
             .arg(&index)
-            .arg("--extra-index-url")
-            .arg(&extra)
             .arg(&torch_spec)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
