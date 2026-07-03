@@ -4,9 +4,23 @@ import { invoke } from "@tauri-apps/api/core";
 import { platform } from "@tauri-apps/plugin-os";
 import { useSettingsStore } from "../../../stores/settingsStore";
 import { createLogger } from '../../../utils/logger'
+import { useConfirm } from './useConfirm.js'
+import {
+  Open20Regular,
+  FolderOpen20Regular,
+  Notepad20Regular,
+  ArrowSync20Regular,
+  Edit20Regular,
+  Share20Regular,
+  Delete20Regular,
+  DeleteDismiss20Regular,
+  FolderArrowRight20Regular,
+  ArrowExportLtr20Regular,
+} from '@vicons/fluent'
 
 const logger = createLogger('useContextMenu')
-export function useContextMenu({ store, message }) {
+export function useContextMenu({ store, message, reconvert = null }) {
+  const { confirm } = useConfirm();
   const showDropdown = ref(false);
   const x = ref(0);
   const y = ref(0);
@@ -22,12 +36,17 @@ export function useContextMenu({ store, message }) {
     {
       label: "打开导入文件所在目录",
       key: "openDirImport",
-      icon: () => h(NIcon, { component: Open20Regular, size: 16 }),
+      icon: () => h(NIcon, { component: FolderOpen20Regular, size: 16 }),
     },
     {
       label: "打开笔记文件所在目录",
       key: "openDirNote",
-      icon: () => h(NIcon, { component: Open20Regular, size: 16 }),
+      icon: () => h(NIcon, { component: Notepad20Regular, size: 16 }),
+    },
+    {
+      label: "重新转换(生成Markdown)",
+      key: "reconvert",
+      icon: () => h(NIcon, { component: ArrowSync20Regular, size: 16 }),
     },
     {
       label: "编辑",
@@ -40,6 +59,20 @@ export function useContextMenu({ store, message }) {
       icon: () => h(NIcon, { component: Share20Regular, size: 16 }),
     },
     {
+      type: "divider",
+      key: "d1",
+    },
+    {
+      label: "移动",
+      key: "move",
+      icon: () => h(NIcon, { component: FolderArrowRight20Regular, size: 16 }),
+    },
+    {
+      label: "导出",
+      key: "export",
+      icon: () => h(NIcon, { component: ArrowExportLtr20Regular, size: 16 }),
+    },
+    {
       label: "删除",
       key: "delete",
       icon: () => h(NIcon, { component: Delete20Regular, size: 16 }),
@@ -47,17 +80,7 @@ export function useContextMenu({ store, message }) {
     {
       label: "删除该条目及相关文件",
       key: "deleteAll",
-      icon: () => h(NIcon, { component: Delete20Regular, size: 16 }),
-    },
-    {
-      label: "移动",
-      key: "move",
-      icon: () => h(NIcon, { component: ArrowMove24Regular, size: 16 }),
-    },
-    {
-      label: "导出",
-      key: "export",
-      icon: () => h(NIcon, { component: ArrowMove24Regular, size: 16 }),
+      icon: () => h(NIcon, { component: DeleteDismiss20Regular, size: 16 }),
     },
   ];
 
@@ -74,6 +97,9 @@ export function useContextMenu({ store, message }) {
         break;
       case "openDirNote":
         handleOpenDirNote(selectedRow.value);
+        break;
+      case "reconvert":
+        handleReconvert(selectedRow.value);
         break;
       case "edit":
         handleEdit(selectedRow.value);
@@ -210,6 +236,28 @@ export function useContextMenu({ store, message }) {
     }
   };
 
+  // 方法：重新转换（为缺少 Markdown / 转换失败或中断的条目重新入队）
+  const handleReconvert = async (row) => {
+    if (typeof reconvert !== "function") {
+      message.warning("当前视图不支持重新转换");
+      return;
+    }
+    if (!row?.importFileName || !row?.library) {
+      message.error("缺少必要信息：文件名或库名（笔记条目不支持重新转换）");
+      return;
+    }
+    try {
+      await reconvert({
+        library: row.library,
+        fileName: row.importFileName,
+        importedFileId: row.id ?? null,
+        engine: "auto",
+      });
+    } catch (error) {
+      logger.error("重新转换失败:", error);
+    }
+  };
+
   // 方法：编辑文件
   const handleEdit = async (row) => {
     try {
@@ -249,8 +297,16 @@ export function useContextMenu({ store, message }) {
     }
   };
 
-  // 方法：删除文件
+  // 方法：删除文件（软删除，删除前二次确认）
   const handleDelete = async (row) => {
+    const name = row?.importFileName || row?.noteFileName || "该条目";
+    const ok = await confirm({
+      title: `删除「${name}」？`,
+      description: "该条目将被标记为删除（不会立即移除磁盘上的原始文件与已转换内容）。",
+      confirmLabel: "删除",
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await invoke("delete_imported_file", { id: row.id });
       message.success("删除导入文件成功");
@@ -262,12 +318,21 @@ export function useContextMenu({ store, message }) {
     }
   };
 
-  // 方法：删除所有相关文件
+  // 方法：删除所有相关文件（条目 + 磁盘文件，二次确认，提示更明确）
   const handleDeleteAll = async (row) => {
     if (!row.importFileName || !row.library) {
       message.error("缺少必要信息：文件名或库名");
       return;
     }
+
+    const ok = await confirm({
+      title: `删除「${row.importFileName}」及相关文件？`,
+      description:
+        "将删除该条目，并一并移除磁盘上的原始文件、已转换的 Markdown、图片与笔记等相关文件。此操作不可恢复。",
+      confirmLabel: "彻底删除",
+      danger: true,
+    });
+    if (!ok) return;
 
     const baseFileName = row.importFileName.includes(".")
       ? row.importFileName.substring(0, row.importFileName.lastIndexOf("."))
@@ -407,94 +472,3 @@ export function useContextMenu({ store, message }) {
     handleOpenDirNote,
   };
 }
-
-// 图标组件（需要在实际使用中导入）
-const Open20Regular = {
-  render() {
-    return h(
-      "svg",
-      {
-        xmlns: "http://www.w3.org/2000/svg",
-        viewBox: "0 0 20 20",
-        fill: "currentColor",
-      },
-      [
-        h("path", {
-          d: "M4.5 2A2.5 2.5 0 0 0 2 4.5v11A2.5 2.5 0 0 0 4.5 18h11a2.5 2.5 0 0 0 2.5-2.5v-11A2.5 2.5 0 0 0 15.5 2h-11zm0 1h11A1.5 1.5 0 0 1 17 4.5v11a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 3 15.5v-11A1.5 1.5 0 0 1 4.5 3zm2.5 4a.5.5 0 0 0 0 1h6a.5.5 0 0 0 0-1H7zm0 3a.5.5 0 0 0 0 1h6a.5.5 0 0 0 0-1H7zm0 3a.5.5 0 0 0 0 1h6a.5.5 0 0 0 0-1H7z",
-        }),
-      ]
-    );
-  },
-};
-
-const Edit20Regular = {
-  render() {
-    return h(
-      "svg",
-      {
-        xmlns: "http://www.w3.org/2000/svg",
-        viewBox: "0 0 20 20",
-        fill: "currentColor",
-      },
-      [
-        h("path", {
-          d: "M13.89 3.39a2 2 0 0 1 2.83 0l.88.88a2 2 0 0 1 0 2.83l-9.03 9.03a1.5 1.5 0 0 1-.66.39l-3.83.97a.5.5 0 0 1-.62-.62l.97-3.83a1.5 1.5 0 0 1 .39-.66l9.03-9.03zm1.42 1.42l-.88-.88a1 1 0 0 0-1.42 0l-8.58 8.58a.5.5 0 0 0-.13.22l-.78 3.07 3.07-.78a.5.5 0 0 0 .22-.13l8.58-8.58a1 1 0 0 0 0-1.42z",
-        }),
-      ]
-    );
-  },
-};
-
-const Share20Regular = {
-  render() {
-    return h(
-      "svg",
-      {
-        xmlns: "http://www.w3.org/2000/svg",
-        viewBox: "0 0 20 20",
-        fill: "currentColor",
-      },
-      [
-        h("path", {
-          d: "M14.5 4a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zm-9 6a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zm9 1a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3zm-9-7a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3zm9.5 3.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0zm-9-6a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0z",
-        }),
-      ]
-    );
-  },
-};
-
-const Delete20Regular = {
-  render() {
-    return h(
-      "svg",
-      {
-        xmlns: "http://www.w3.org/2000/svg",
-        viewBox: "0 0 20 20",
-        fill: "currentColor",
-      },
-      [
-        h("path", {
-          d: "M8.5 4h3a1.5 1.5 0 0 0-3 0zm-1 0a2.5 2.5 0 0 1 5 0h5a.5.5 0 0 1 0 1h-1v9.5a2.5 2.5 0 0 1-2.5 2.5h-5A2.5 2.5 0 0 1 4.5 14.5V5h-1a.5.5 0 0 1 0-1h5zm2 4.5a.5.5 0 0 0-1 0v5a.5.5 0 0 0 1 0v-5zm3 0a.5.5 0 0 0-1 0v5a.5.5 0 0 0 1 0v-5z",
-        }),
-      ]
-    );
-  },
-};
-
-const ArrowMove24Regular = {
-  render() {
-    return h(
-      "svg",
-      {
-        xmlns: "http://www.w3.org/2000/svg",
-        viewBox: "0 0 24 24",
-        fill: "currentColor",
-      },
-      [
-        h("path", {
-          d: "M12 2a1 1 0 0 1 1 1v4.586l1.293-1.293a1 1 0 1 1 1.414 1.414l-3 3a1 1 0 0 1-1.414 0l-3-3a1 1 0 0 1 1.414-1.414L11 7.586V3a1 1 0 0 1 1-1zm0 20a1 1 0 0 1-1-1v-4.586l-1.293 1.293a1 1 0 0 1-1.414-1.414l3-3a1 1 0 0 1 1.414 0l3 3a1 1 0 0 1-1.414 1.414L13 16.414V21a1 1 0 0 1-1 1zm10-10a1 1 0 0 1-1 1h-4.586l1.293-1.293a1 1 0 0 1-1.414-1.414l-3 3a1 1 0 0 1-1.414 0l-3-3a1 1 0 0 1 1.414-1.414L10 12.586V8a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1zm-20 0a1 1 0 0 1 1-1h4.586l-1.293 1.293a1 1 0 1 1-1.414-1.414l3-3a1 1 0 0 1 1.414 0l3 3a1 1 0 0 1-1.414 1.414L14 12.586V17a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z",
-        }),
-      ]
-    );
-  },
-};

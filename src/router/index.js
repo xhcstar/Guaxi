@@ -52,7 +52,9 @@ const GuaxiAppWindow = {
     const route = useRoute()
     const appId = computed(() => String(route.params?.appId || ''))
     const Comp = computed(() => APP_COMPONENT_MAP[appId.value] || PlaceholderApp)
-    const hostPadding = computed(() => (appId.value === 'tools-tts-book' ? '0px' : '16px'))
+    // Workbench-style apps own their full window layout, so the route host should not add outer padding.
+    const fullBleedAppIds = new Set(['tools-tts-book', 'work-timer'])
+    const hostPadding = computed(() => (fullBleedAppIds.has(appId.value) ? '0px' : '16px'))
 
     return () =>
       h(

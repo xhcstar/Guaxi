@@ -108,6 +108,84 @@ pub async fn enqueue_conversion(request: EnqueueRequest) -> Result<EnqueueRespon
     })
 }
 
+/// 重新转换一个已导入文件（用于中断/失败后重启、或缺少 Markdown 的历史条目）。
+///
+/// 稳定性关键：源文件用的是导入时**拷贝进 Libraries 的副本**（不依赖用户原始外部路径，
+/// 原文件被移动/删除也不影响），路径与 add_repo_import_file 的落盘规则一致：
+///   输入: {librariesRoot}/Libraries/{library}/{stem}/{ext}/{file_name}
+///   输出: {librariesRoot}/Libraries/{library}/{stem}/markdown
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReconvertRequest {
+    pub library: String,
+    /// 原始文件名（含扩展名），对应 imported_files.original_filename。
+    pub file_name: String,
+    #[serde(default)]
+    pub imported_file_id: Option<i64>,
+    #[serde(default = "default_engine")]
+    pub engine: String,
+}
+
+#[tauri::command]
+pub async fn reconvert_imported_file(request: ReconvertRequest) -> Result<EnqueueResponse, String> {
+    use std::path::PathBuf;
+
+    let libraries_root = crate::commands::settingview::get_libraries_root();
+    let file_name = &request.file_name;
+
+    let stem = Path::new(file_name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| "无法解析文件名".to_string())?
+        .to_string();
+    // 扩展名映射与导入时一致：doc/docx -> word。
+    let ext = Path::new(file_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| match e {
+            "doc" | "docx" => "word",
+            other => other,
+        })
+        .unwrap_or("");
+
+    let file_dir = PathBuf::from(&libraries_root)
+        .join("Libraries")
+        .join(&request.library)
+        .join(&stem);
+    let source_path = if ext.is_empty() {
+        file_dir.join(file_name)
+    } else {
+        file_dir.join(ext).join(file_name)
+    };
+    let output_dir = file_dir.join("markdown");
+
+    if !source_path.exists() {
+        return Err(format!(
+            "找不到已导入的源文件，无法重新转换: {}",
+            source_path.to_string_lossy()
+        ));
+    }
+    let _ = std::fs::create_dir_all(&output_dir);
+
+    info!(
+        library = request.library.as_str(),
+        file_name = file_name.as_str(),
+        source = source_path.to_string_lossy().as_ref(),
+        engine = request.engine.as_str(),
+        "reconvert_imported_file"
+    );
+
+    enqueue_conversion(EnqueueRequest {
+        input_path: source_path.to_string_lossy().to_string(),
+        output_dir: output_dir.to_string_lossy().to_string(),
+        imported_file_id: request.imported_file_id,
+        engine: request.engine,
+        priority: Some(1),
+        max_attempts: None,
+    })
+    .await
+}
+
 /// 列出任务（可选状态过滤）。
 #[tauri::command]
 pub async fn list_conversion_tasks(
@@ -138,6 +216,18 @@ pub async fn retry_conversion_task(task_id: i64) -> Result<bool, String> {
 #[tauri::command]
 pub async fn cancel_conversion_task(task_id: i64) -> Result<bool, String> {
     task_store::mark_canceled(task_id)
+}
+
+/// 删除单个任务条目（用于清除单条失败/已结束记录）。
+#[tauri::command]
+pub async fn delete_conversion_task(task_id: i64) -> Result<bool, String> {
+    task_store::delete_task(task_id)
+}
+
+/// 清除所有已结束（成功/失败/取消）的任务条目，返回删除数量。
+#[tauri::command]
+pub async fn clear_finished_conversion_tasks() -> Result<usize, String> {
+    task_store::clear_finished()
 }
 
 /// 手动触发一次中断任务恢复（正常由启动流程自动完成）。

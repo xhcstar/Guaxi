@@ -198,9 +198,55 @@ export function useFormHandling({
         currentForm.value.type = fileInfo.file_type;
         currentForm.value.importFileCreateTime = fileInfo.create_time;
         currentForm.value.importFileSize = fileInfo.file_size;
+
+        // 基于 bge-m3 语义相似度，自动建议 标签/知识库/文件库（用户可修改）。
+        // 非阻塞：不影响文件选择流程；失败静默降级。
+        suggestImportMetadata(fileInfo.file_name, filePath);
       }
     } catch (error) {
       logger.error("Error opening file browser:", error);
+    }
+  };
+
+  // 自动建议导入元数据（标签/知识库/文件库）。仅填充用户尚未手动填写的字段。
+  const suggestImportMetadata = async (fileName, filePath) => {
+    try {
+      const result = await invoke("suggest_import_metadata", {
+        request: {
+          fileName,
+          description: currentForm.value.description || null,
+          filePath: filePath || null,
+        },
+      });
+      if (!result || result.degraded) {
+        logger.info("[import] suggest degraded", result?.note);
+        return;
+      }
+
+      // 文件库：仅当用户未填时预填最佳建议。
+      if (!currentForm.value.library && result.libraries?.length) {
+        currentForm.value.library = result.libraries[0].value;
+      }
+      // 知识库：同上。
+      if (!currentForm.value.knowledgeRepo && result.knowledgeRepos?.length) {
+        currentForm.value.knowledgeRepo = result.knowledgeRepos[0].value;
+      }
+      // 标签：仅当用户未填时，预填 top 建议（最多 3 个，逗号分隔）。
+      if (!currentForm.value.importedFileTags && result.tags?.length) {
+        currentForm.value.importedFileTags = result.tags
+          .slice(0, 3)
+          .map((t) => t.value)
+          .join(",");
+      }
+
+      logger.info("[import] auto-suggest applied", {
+        library: currentForm.value.library,
+        knowledgeRepo: currentForm.value.knowledgeRepo,
+        tags: currentForm.value.importedFileTags,
+      });
+    } catch (error) {
+      // 建议失败不影响导入。
+      logger.warn("[import] suggest_import_metadata failed", error);
     }
   };
 

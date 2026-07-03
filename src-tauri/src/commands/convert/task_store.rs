@@ -389,3 +389,24 @@ pub fn is_canceled(id: i64) -> Result<bool, String> {
         .map_err(|e| e.to_string())?;
     Ok(status.as_deref() == Some(STATUS_CANCELED))
 }
+
+/// 删除单个任务（任意状态）。返回是否删除了行。
+pub fn delete_task(id: i64) -> Result<bool, String> {
+    let conn = init_db().map_err(|e| e.to_string())?;
+    let changed = conn
+        .execute("DELETE FROM conversion_tasks WHERE id = ?1", params![id])
+        .map_err(|e| e.to_string())?;
+    Ok(changed > 0)
+}
+
+/// 清除所有已结束（succeeded/failed/canceled）的任务，返回删除数量。
+pub fn clear_finished() -> Result<usize, String> {
+    let conn = init_db().map_err(|e| e.to_string())?;
+    let changed = conn
+        .execute(
+            "DELETE FROM conversion_tasks WHERE status IN ('succeeded','failed','canceled')",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(changed as usize)
+}

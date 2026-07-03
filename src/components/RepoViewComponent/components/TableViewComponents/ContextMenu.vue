@@ -82,18 +82,45 @@ const handleClickOutside = () => {
 
 :deep(.n-dropdown-menu) {
   z-index: 10001 !important;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  padding: 6px;
+  border-radius: 10px;
   border: 1px solid var(--guaxi-border);
-  border-radius: 4px;
+  background: var(--guaxi-header-bg);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.22);
   pointer-events: auto;
 }
 
 :deep(.n-dropdown-option) {
-  min-width: 140px;
-  padding: 8px 12px;
+  min-width: 180px;
 }
 
-:deep(.n-dropdown-option:hover) {
-  background-color: var(--guaxi-header-bg);
+:deep(.n-dropdown-option .n-dropdown-option-body) {
+  border-radius: 7px;
+  padding: 7px 10px;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+:deep(.n-dropdown-option .n-dropdown-option-body__prefix) {
+  margin-right: 10px;
+  color: var(--guaxi-text-secondary);
+  transition: color 0.15s ease;
+}
+
+:deep(.n-dropdown-option .n-dropdown-option-body__label) {
+  font-size: 13px;
+}
+
+:deep(.n-dropdown-option .n-dropdown-option-body:not(.n-dropdown-option-body--disabled):hover) {
+  background-color: var(--n-color-primary, #409EFF);
+  color: #fff;
+}
+
+:deep(.n-dropdown-option .n-dropdown-option-body:not(.n-dropdown-option-body--disabled):hover .n-dropdown-option-body__prefix) {
+  color: #fff;
+}
+
+:deep(.n-dropdown-divider) {
+  margin: 5px 6px;
+  background-color: var(--guaxi-border);
 }
 </style>

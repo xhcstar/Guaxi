@@ -8,9 +8,7 @@
         title="删除当前文件库（高风险）"
         @click="openDeleteModal(store.currentDatabase)"
       >
-        <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
-          <path fill="currentColor" d="M8.5 4h3a1.5 1.5 0 0 0-3 0zm-1 0a2.5 2.5 0 0 1 5 0h5a.5.5 0 0 1 0 1h-1v9.5a2.5 2.5 0 0 1-2.5 2.5h-8A2.5 2.5 0 0 1 3.5 14.5V5h-1a.5.5 0 0 1 0-1h5zm2 4.5a.5.5 0 0 0-1 0v5a.5.5 0 0 0 1 0v-5zm3 0a.5.5 0 0 0-1 0v5a.5.5 0 0 0 1 0v-5z" />
-        </svg>
+        <n-icon :component="Delete20Regular" :size="18" />
       </button>
     </div>
 
@@ -27,9 +25,7 @@
         <n-icon class="repo-item-icon" :component="BookmarksOutline" />
         <span class="repo-item-label" :title="repo">{{ repo }}</span>
         <button class="repo-item-del" title="删除该文件库" @click.stop="openDeleteModal(repo)">
-          <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
-            <path fill="currentColor" d="M8.5 4h3a1.5 1.5 0 0 0-3 0zm-1 0a2.5 2.5 0 0 1 5 0h5a.5.5 0 0 1 0 1h-1v9.5a2.5 2.5 0 0 1-2.5 2.5h-8A2.5 2.5 0 0 1 3.5 14.5V5h-1a.5.5 0 0 1 0-1h5zm2 4.5a.5.5 0 0 0-1 0v5a.5.5 0 0 0 1 0v-5zm3 0a.5.5 0 0 0-1 0v5a.5.5 0 0 0 1 0v-5z" />
-          </svg>
+          <n-icon :component="Delete20Regular" :size="16" />
         </button>
       </div>
       <div v-if="!store.repos.length" class="repo-empty">暂无知识库</div>
@@ -92,6 +88,7 @@
 
 <script setup>
 import { BookmarksOutline } from '@vicons/ionicons5'
+import { Delete20Regular } from '@vicons/fluent'
 import { NIcon, NText, useMessage } from 'naive-ui'
 import { reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { repoStore } from '../../stores/repoStore'

@@ -2,12 +2,12 @@
 <template>
   <div class="main-content-wrapper">
     <!-- 顶部工具栏 -->
-    <TopToolbar :progresses="progresses" :categorized-progresses="categorizedProgresses"
+    <TopToolbar :progresses="progresses" :categorized-progresses="categorizedProgresses" :conversion-tasks="conversionTasks"
       @toggle-task-list="toggleTaskList" @backup-database="backupDatabase" @recover-database="recoverDatabase"
       @import-items="importItems" @export-items="exportItems" @sync-repo="handleSyncRepo" />
 
     <!-- 任务列表抽屉 -->
-    <TaskListDrawer :show="showTaskList" @update:show="showTaskList = $event" :progresses="progresses" :categorized-progresses="categorizedProgresses" :clear-failed-tasks="clearFailedTasks" :cancel-sync="cancelSyncTask" />
+    <TaskListDrawer :show="showTaskList" @update:show="showTaskList = $event" :progresses="progresses" :categorized-progresses="categorizedProgresses" :clear-failed-tasks="clearFailedTasks" :cancel-sync="cancelSyncTask" :conversion-tasks="conversionTasks" :retry-task="retryConversionTask" :cancel-task="cancelConversionTask" :delete-task="deleteConversionTask" :clear-finished="clearFinishedConversionTasks" />
 
     <!-- 搜索栏 -->
 
@@ -37,6 +37,13 @@
           <span>书架</span>
         </button>
       </div>
+      <n-button v-if="checkedRowKeys.length" size="small" type="error" secondary class="batch-delete-btn"
+        @click="handleBatchDelete">
+        <template #icon>
+          <n-icon :component="Delete20Regular" :size="16" />
+        </template>
+        删除选中 ({{ checkedRowKeys.length }})
+      </n-button>
       <TableToolbar class="toolbar-flex" @sort="handleSort" @clear-filters="handleClearFilters" @add-file="showAddFileModal" />
     </div>
 
@@ -72,14 +79,19 @@
       @library-search-complete="handleLibrarySearchComplete" @tag-search-complete="handleImportedFileTagSearchComplete"
       @knowledge-repo-search-complete="handleKnowledgeRepoSearchComplete" @submit="addFile"
       @cancel="handleModalCancel" />
+
+    <!-- 统一删除确认弹窗（条目删除/批量删除/右键删除共用） -->
+    <ConfirmModal />
   </div>
 </template>
 
 <script setup>
 import { createLogger } from '../../utils/logger'
 import { ref, onMounted, onUnmounted, computed, watch, nextTick, h } from 'vue'
-import { useMessage } from 'naive-ui'
+import { useMessage, NButton, NIcon } from 'naive-ui'
+import { Delete20Regular } from '@vicons/fluent'
 import { invoke } from '@tauri-apps/api/core'
+import { useConfirm } from './composables/useConfirm.js'
 
 
 // Stores
@@ -93,6 +105,7 @@ import TableToolbar from './components/TableViewComponents/TableToolbar.vue'
 import DataTable from './components/TableViewComponents/DataTable.vue'
 import ContextMenu from './components/TableViewComponents/ContextMenu.vue'
 import AddFileModal from './components/TableViewComponents/AddFileModal.vue'
+import ConfirmModal from './components/TableViewComponents/ConfirmModal.vue'
 import ShowOrEdit from './common/ShowOrEdit.vue'
 import BookshelfView from './BookshelfView.vue'
 
@@ -110,6 +123,49 @@ const logger = createLogger('TableViewRepoView')
 const store = repoStore()
 const eventStore = useEventStore()
 const message = useMessage()
+const { confirm } = useConfirm()
+
+// 批量删除选中的条目（软删除，逐个调用 delete_imported_file）。用统一的自定义确认弹窗。
+const handleBatchDelete = async () => {
+  const ids = [...(checkedRowKeys.value || [])]
+  if (!ids.length) {
+    message.info('请先勾选要删除的条目')
+    return
+  }
+  const confirmed = await confirm({
+    title: '批量删除所选条目？',
+    description: '选中的条目将被标记为删除（不会立即移除磁盘上的原始文件与已转换内容）。',
+    count: ids.length,
+    countUnit: '个条目',
+    confirmLabel: '删除',
+    danger: true,
+  })
+  if (!confirmed) return
+
+  let ok = 0
+  let fail = 0
+  for (const id of ids) {
+    try {
+      await invoke('delete_imported_file', { id })
+      ok += 1
+    } catch (e) {
+      fail += 1
+      logger.error('批量删除失败 id=' + id, e)
+    }
+  }
+  checkedRowKeys.value = []
+  try {
+    await store.fetchFiles(store.currentDatabase)
+    await store.fetchRepos()
+  } catch (e) {
+    logger.warn('批量删除后刷新失败', e)
+  }
+  if (fail === 0) {
+    message.success(`已删除 ${ok} 个条目`)
+  } else {
+    message.warning(`已删除 ${ok} 个，失败 ${fail} 个`)
+  }
+}
 const containerHeight = ref(0)
 const handleWindowResize = () => {
   nextTick(() => {
@@ -136,7 +192,13 @@ const {
   convertFile,
   clearFailedTasks,
   cancelSyncTask,
-  getConversionEngineStatus
+  getConversionEngineStatus,
+  conversionTasks,
+  retryConversionTask,
+  cancelConversionTask,
+  deleteConversionTask,
+  clearFinishedConversionTasks,
+  reconvertImportedFile
 } = useProgress({ store, message })
 
 // 转换引擎装配状态（快速引擎启动自动装配；强引擎按需装配）
@@ -181,7 +243,7 @@ const {
   rowProps,
   handleRowContextMenu,
   handleOpen
-} = useContextMenu({ store, message })
+} = useContextMenu({ store, message, reconvert: reconvertImportedFile })
 
 // ── 视图模式：'table' 表格 / 'shelf' 书架（持久化用户偏好）──
 const VIEW_MODE_KEY = 'guaxi_repoview_mode'
@@ -479,6 +541,13 @@ onUnmounted(() => {
 .toolbar-flex {
   flex: 1;
   min-width: 0;
+}
+
+.batch-delete-btn {
+  flex: 0 0 auto;
+  border-radius: 6px;
+  height: 32px;
+  font-weight: 500;
 }
 
 /* 表格 / 书架 分段切换 */

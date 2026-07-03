@@ -6,15 +6,15 @@
         <n-tooltip trigger="hover">
           <template #trigger>
             <n-button text @click="$emit('toggle-task-list')" size="small"
-              :type="categorizedProgresses.all.length > 0 ? 'primary' : 'default'" class="toolbar-button">
+              :type="totalActiveCount > 0 ? 'primary' : 'default'" class="toolbar-button">
               <template #icon>
                 <n-icon :component="TasksApp20Regular" :size="18" />
               </template>
-              <n-badge v-if="categorizedProgresses.all.length > 0"
-                :value="categorizedProgresses.all.length" class="badge" />
+              <n-badge v-if="totalActiveCount > 0" :value="totalActiveCount" :max="99" class="badge"
+                :type="hasFailedConversion ? 'error' : 'info'" />
             </n-button>
           </template>
-          任务列表 ({{ categorizedProgresses.all.length }})
+          任务列表（进行中 {{ runningConversionCount }}<span v-if="failedConversionCount"> · 失败 {{ failedConversionCount }}</span>）
         </n-tooltip>
 
         <!-- 备份任务按钮 -->
@@ -97,6 +97,7 @@
 </template>
 
 <script setup>
+import { computed } from 'vue'
 import { NIcon, NButton, NTooltip, NBadge, NSpace, NDropdown } from 'naive-ui'
 import {
   TasksApp20Regular,
@@ -107,7 +108,7 @@ import {
   ArrowSync20Regular
 } from '@vicons/fluent'
 
-defineProps({
+const props = defineProps({
   progresses: {
     type: Array,
     default: () => []
@@ -122,8 +123,36 @@ defineProps({
       import: [],
       export: []
     })
+  },
+  // 后端持久化转换任务（跨重启可见）——徽标计数的主要来源。
+  conversionTasks: {
+    type: Array,
+    default: () => []
   }
 })
+
+// 进行中的转换任务（重启后由后端恢复、但可能尚无内存事件）——徽标据此显示数字。
+const runningConversionCount = computed(() =>
+  (props.conversionTasks || []).filter((t) =>
+    ['pending', 'probing', 'running'].includes(t?.status)
+  ).length
+)
+const failedConversionCount = computed(() =>
+  (props.conversionTasks || []).filter((t) => t?.status === 'failed').length
+)
+const hasFailedConversion = computed(() => failedConversionCount.value > 0)
+
+// 其它类型（备份/恢复/导入/导出/同步）仍来自内存进度数组，取未完成的。
+const otherActiveCount = computed(() =>
+  (props.progresses || []).filter(
+    (p) => p?.type && p.type !== 'conversion' && Number(p.current) < 100
+  ).length
+)
+
+// 徽标总数 = 进行中转换 + 失败转换（需要关注）+ 其它进行中任务。
+const totalActiveCount = computed(
+  () => runningConversionCount.value + failedConversionCount.value + otherActiveCount.value
+)
 
 defineEmits([
   'toggle-task-list',

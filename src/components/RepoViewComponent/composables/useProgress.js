@@ -786,6 +786,55 @@ export function useProgress({ store, message }) {
     }
   };
 
+  // 重新转换一个已导入文件（中断/失败后重启、或历史遗留缺 Markdown 的条目）。
+  // 用 Libraries 内的副本作为源，不依赖原始外部路径。
+  const reconvertImportedFile = async ({ library, fileName, importedFileId, engine = "auto" }) => {
+    try {
+      const resp = await invoke("reconvert_imported_file", {
+        request: {
+          library,
+          fileName,
+          importedFileId: importedFileId ?? null,
+          engine,
+        },
+      });
+      message.success(resp?.reused ? "该文件已在转换队列中" : "已重新加入转换队列");
+      await refreshConversionTasks();
+      return resp;
+    } catch (error) {
+      logger.error("[conversion] reconvert_imported_file failed", error);
+      message.error(`重新转换失败: ${error.message || error}`);
+      throw error;
+    }
+  };
+
+  // 删除单条转换任务记录（本地立即移除 + 后端删除）。
+  const deleteConversionTask = async (taskId) => {
+    try {
+      await invoke("delete_conversion_task", { taskId });
+      conversionTasks.value = conversionTasks.value.filter((t) => t.id !== taskId);
+      return true;
+    } catch (error) {
+      logger.error("[conversion] delete_conversion_task failed", error);
+      message.error(`删除失败: ${error.message || error}`);
+      return false;
+    }
+  };
+
+  // 清除所有已结束（成功/失败/取消）的任务记录。
+  const clearFinishedConversionTasks = async () => {
+    try {
+      const removed = await invoke("clear_finished_conversion_tasks");
+      await refreshConversionTasks();
+      message.info(`已清除 ${removed} 条已结束任务`);
+      return removed;
+    } catch (error) {
+      logger.error("[conversion] clear_finished_conversion_tasks failed", error);
+      message.error(`清除失败: ${error.message || error}`);
+      return 0;
+    }
+  };
+
   const getConversionEngineStatus = async () => {
     try {
       return await invoke("conversion_engine_status");
@@ -839,6 +888,9 @@ export function useProgress({ store, message }) {
     refreshConversionTasks, // 刷新任务列表
     retryConversionTask, // 重试指定任务
     cancelConversionTask, // 取消指定任务
+    deleteConversionTask, // 删除单条任务记录
+    clearFinishedConversionTasks, // 清除所有已结束任务
+    reconvertImportedFile, // 重新转换已导入文件
     getConversionEngineStatus, // 查询强引擎(MinerU)是否可用
   };
 }
