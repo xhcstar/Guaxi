@@ -88,6 +88,20 @@ const handleClickOutside = () => {
   background: var(--guaxi-header-bg);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.22);
   pointer-events: auto;
+  /* 与主界面字体保持一致 */
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', monospace;
+  /* 取消内部垂直滚动条：完整显示所有条目（不截断） */
+  max-height: none !important;
+}
+
+/* 禁用 naive-ui 下拉内部的滚动容器与滚动条，改为自然高度铺开 */
+:deep(.n-dropdown-menu .n-scrollbar),
+:deep(.n-dropdown-menu .n-scrollbar-container) {
+  max-height: none !important;
+  overflow: visible !important;
+}
+:deep(.n-dropdown-menu .n-scrollbar-rail) {
+  display: none !important;
 }
 
 :deep(.n-dropdown-option) {
@@ -98,6 +112,7 @@ const handleClickOutside = () => {
   border-radius: 7px;
   padding: 7px 10px;
   transition: background-color 0.15s ease, color 0.15s ease;
+  font-family: inherit;
 }
 
 :deep(.n-dropdown-option .n-dropdown-option-body__prefix) {
@@ -108,6 +123,7 @@ const handleClickOutside = () => {
 
 :deep(.n-dropdown-option .n-dropdown-option-body__label) {
   font-size: 13px;
+  font-family: inherit;
 }
 
 :deep(.n-dropdown-option .n-dropdown-option-body:not(.n-dropdown-option-body--disabled):hover) {

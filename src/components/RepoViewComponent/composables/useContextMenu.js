@@ -14,7 +14,6 @@ import {
   Share20Regular,
   Delete20Regular,
   DeleteDismiss20Regular,
-  FolderArrowRight20Regular,
   ArrowExportLtr20Regular,
 } from '@vicons/fluent'
 
@@ -61,11 +60,6 @@ export function useContextMenu({ store, message, reconvert = null }) {
     {
       type: "divider",
       key: "d1",
-    },
-    {
-      label: "移动",
-      key: "move",
-      icon: () => h(NIcon, { component: FolderArrowRight20Regular, size: 16 }),
     },
     {
       label: "导出",

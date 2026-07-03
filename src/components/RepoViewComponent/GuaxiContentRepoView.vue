@@ -102,11 +102,15 @@ onBeforeUnmount(() => {
   position: absolute;
   top: 0;
   right: 0;
-  width: 3px;
+  width: 4px;
   height: 100%;
   cursor: ew-resize;
-  background-color: var(--guaxi-content-bg);
+  background-color: transparent;
+  transition: background-color 0.15s ease;
   z-index: 1;
+}
+.sider-resize-handle:hover {
+  background-color: var(--n-color-primary, #14b8a6);
 }
 
 </style>

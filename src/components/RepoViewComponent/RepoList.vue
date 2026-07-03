@@ -222,7 +222,6 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 .repo-sidebar {
   padding: 4px;
   background-color: var(--guaxi-panel-bg);
-  border-right: 1px solid var(--guaxi-border);
   height: 100%;
   min-height: 0;
   box-sizing: border-box;
@@ -291,6 +290,32 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   background-color: var(--guaxi-panel-bg);
   border-radius: 8px;
   padding: 8px 0;
+  /* 更细、更柔和的滚动条（Firefox） */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
+}
+/* 更细、更柔和的滚动条（WebKit / Chromium） */
+.repo-menu::-webkit-scrollbar {
+  width: 8px;
+}
+.repo-menu::-webkit-scrollbar-track {
+  background: transparent;
+}
+.repo-menu::-webkit-scrollbar-thumb {
+  background-color: rgba(148, 163, 184, 0.28);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+  transition: background-color 0.2s ease;
+}
+.repo-menu:hover::-webkit-scrollbar-thumb {
+  background-color: rgba(148, 163, 184, 0.5);
+}
+.repo-menu::-webkit-scrollbar-thumb:hover {
+  background-color: var(--n-color-primary, #14b8a6);
+}
+.repo-menu::-webkit-scrollbar-thumb:active {
+  background-color: var(--n-color-primary, #14b8a6);
 }
 
 /* 列表条目 */
