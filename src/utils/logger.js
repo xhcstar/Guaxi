@@ -30,8 +30,13 @@ const MERMAID_ARCHITECTURE_WARNING_HINT =
   'property `label` with data field `label`'
 const TAURI_IPC_FALLBACK_WARNING =
   'IPC custom protocol failed, Tauri will now use the postMessage interface instead'
+const VUE_SLOT_OUTSIDE_RENDER_WARNING =
+  'Slot "default" invoked outside of the render function'
+const VUE_SLOT_WARNING_REQUIRED_STACK_MARKERS = ['<Popover', '<Tooltip']
+const VUE_SLOT_WARNING_TARGET_STACK_MARKERS = ['<Binder', '<Target']
 let mermaidArchitectureWarningSuppressCount = 0
 let tauriIpcFallbackWarningSuppressCount = 0
+let vueSlotOutsideRenderWarningSuppressCount = 0
 
 function normalizeLevel(level) {
   const v = String(level || '').toLowerCase()
@@ -86,9 +91,24 @@ function formatMessage(args) {
   return args.map(stringifyArg).join(' ')
 }
 
-function shouldSuppressKnownWarn(args) {
+function isVueTooltipSlotWarning(message) {
+  if (!message.includes('[Vue warn]')) return false
+  if (!message.includes(VUE_SLOT_OUTSIDE_RENDER_WARNING)) return false
+
+  // 设计思路：
+  // 1. 只识别 Naive UI Tooltip/Popover 经由 vueuc Binder/Target 打出的开发态 slot 告警。
+  // 2. 业务组件如果真的在 setup、watch、异步回调里错误调用 slot，组件栈通常不会同时包含这些标记，
+  //    因此仍会按普通 warn 透传，避免把真实响应式依赖问题静默掉。
+  // 3. 该过滤只影响 console.warn 转发和前端日志入队，不改变 Tooltip/Popover 的渲染、事件和状态。
+  return (
+    VUE_SLOT_WARNING_REQUIRED_STACK_MARKERS.every((marker) => message.includes(marker)) &&
+    VUE_SLOT_WARNING_TARGET_STACK_MARKERS.some((marker) => message.includes(marker))
+  )
+}
+
+function getKnownWarnSuppressionKind(args) {
   const message = formatMessage(args)
-  if (!message) return false
+  if (!message) return ''
 
   // 设计思路：
   // 1. Tauri 在部分 WebView2 环境下会先尝试 ipc.localhost 自定义协议；
@@ -97,6 +117,25 @@ function shouldSuppressKnownWarn(args) {
   //    把一次正常降级误放大成“下载插件失败”的线索，因此这里将它作为已知运行时噪声过滤。
   // 3. 真正的 invoke 失败仍会进入各业务 catch，并由业务代码记录 error 日志。
   if (message.includes(TAURI_IPC_FALLBACK_WARNING)) {
+    return 'tauri-ipc-fallback'
+  }
+
+  if (isVueTooltipSlotWarning(message)) {
+    return 'vue-tooltip-slot'
+  }
+
+  if (
+    message.includes(MERMAID_ARCHITECTURE_WARNING_PREFIX) &&
+    message.includes(MERMAID_ARCHITECTURE_WARNING_HINT)
+  ) {
+    return 'mermaid-architecture'
+  }
+
+  return ''
+}
+
+function logKnownWarnSuppression(kind) {
+  if (kind === 'tauri-ipc-fallback') {
     tauriIpcFallbackWarningSuppressCount += 1
     if (
       tauriIpcFallbackWarningSuppressCount === 1 ||
@@ -111,13 +150,43 @@ function shouldSuppressKnownWarn(args) {
         }
       })
     }
-    return true
+    return
   }
 
-  return (
-    message.includes(MERMAID_ARCHITECTURE_WARNING_PREFIX) &&
-    message.includes(MERMAID_ARCHITECTURE_WARNING_HINT)
-  )
+  if (kind === 'vue-tooltip-slot') {
+    vueSlotOutsideRenderWarningSuppressCount += 1
+    if (
+      vueSlotOutsideRenderWarningSuppressCount === 1 ||
+      vueSlotOutsideRenderWarningSuppressCount % 20 === 0
+    ) {
+      enqueue({
+        level: 'debug',
+        scope: state.scope,
+        message: '[FrontendLogger] suppressed known Vue tooltip slot warning',
+        fields: {
+          suppressCount: vueSlotOutsideRenderWarningSuppressCount
+        }
+      })
+    }
+    return
+  }
+
+  if (kind === 'mermaid-architecture') {
+    mermaidArchitectureWarningSuppressCount += 1
+
+    // 只过滤 Mermaid architecture 图内部由 cytoscape 打出的这条已知上游告警，
+    // 其它 warn 仍然原样透传，避免误伤真正的业务问题。
+    if (mermaidArchitectureWarningSuppressCount === 1 || mermaidArchitectureWarningSuppressCount % 20 === 0) {
+      enqueue({
+        level: 'debug',
+        scope: state.scope,
+        message: '[FrontendLogger] suppressed known Mermaid architecture warning',
+        fields: {
+          suppressCount: mermaidArchitectureWarningSuppressCount
+        }
+      })
+    }
+  }
 }
 
 function enqueue(entry) {
@@ -199,21 +268,9 @@ function patchConsole() {
   }
 
   console.warn = (...args) => {
-    if (shouldSuppressKnownWarn(args)) {
-      mermaidArchitectureWarningSuppressCount += 1
-
-      // 只过滤 Mermaid architecture 图内部由 cytoscape 打出的这条已知上游告警，
-      // 其它 warn 仍然原样透传，避免误伤真正的业务问题。
-      if (mermaidArchitectureWarningSuppressCount === 1 || mermaidArchitectureWarningSuppressCount % 20 === 0) {
-        enqueue({
-          level: 'debug',
-          scope: state.scope,
-          message: '[FrontendLogger] suppressed known Mermaid architecture warning',
-          fields: {
-            suppressCount: mermaidArchitectureWarningSuppressCount
-          }
-        })
-      }
+    const knownWarnKind = getKnownWarnSuppressionKind(args)
+    if (knownWarnKind) {
+      logKnownWarnSuppression(knownWarnKind)
       return
     }
 
