@@ -59,134 +59,86 @@
         </div>
       </div>
 
-      <n-text v-if="categorizedProgresses.backup.length" strong>备份任务</n-text>
-      <n-list v-if="categorizedProgresses.backup.length" hoverable>
-        <n-list-item v-for="(progress, index) in categorizedProgresses.backup" :key="'bak-' + index" class="task-item"
-          :class="{ 'task-item-completed': progress.current >= 100 }">
-          <div class="task-content">
-            <div class="task-header">
-              <n-text strong class="task-filename">{{ progress.fileName }}</n-text>
-              <n-tag v-if="progress.current < 100" size="small" type="info" class="task-tag">备份中</n-tag>
-              <n-tag v-else size="small" type="success" class="task-tag">已完成</n-tag>
-            </div>
-            <n-progress type="line" :percentage="progress.current" :indicator-placement="'inside'"
-              :status="progress.current >= 100 ? 'success' : 'info'" :height="15" class="task-progress" />
-            <n-text depth="3" class="task-message">
-              <n-icon size="14" class="task-message-icon"><InfoCircleFilled /></n-icon>
-              {{ progress.message }}
-            </n-text>
+      <!-- 备份 / 恢复 / 导入 / 导出：统一卡片式布局（无控制按钮，仅展示进度） -->
+      <div v-for="grp in simpleGroups" :key="grp.key" v-show="categorizedProgresses[grp.key].length" class="section">
+        <div class="section-head">
+          <div class="section-title">
+            <n-icon :size="16" class="section-title-icon"><component :is="grp.icon" /></n-icon>
+            <span>{{ grp.title }}</span>
+            <span class="section-count">{{ categorizedProgresses[grp.key].length }}</span>
           </div>
-        </n-list-item>
-      </n-list>
+        </div>
 
-      <n-text v-if="categorizedProgresses.recovery.length" strong>恢复任务</n-text>
-      <n-list v-if="categorizedProgresses.recovery.length" hoverable>
-        <n-list-item v-for="(progress, index) in categorizedProgresses.recovery" :key="'rec-' + index" class="task-item"
-          :class="{ 'task-item-completed': progress.current >= 100 }">
-          <div class="task-content">
-            <div class="task-header">
-              <n-text strong class="task-filename">{{ progress.fileName }}</n-text>
-              <n-tag v-if="progress.current < 100" size="small" type="info" class="task-tag">恢复中</n-tag>
-              <n-tag v-else size="small" type="success" class="task-tag">已完成</n-tag>
-            </div>
-            <n-progress type="line" :percentage="progress.current" :indicator-placement="'inside'"
-              :status="progress.current >= 100 ? 'success' : 'info'" :height="15" class="task-progress" />
-            <n-text depth="3" class="task-message">
-              <n-icon size="14" class="task-message-icon"><InfoCircleFilled /></n-icon>
-              {{ progress.message }}
-            </n-text>
+        <div class="ctask" v-for="(progress, index) in categorizedProgresses[grp.key]" :key="grp.key + '-' + index"
+          :class="{ 'is-failed': isFailed(progress) }">
+          <div class="ctask-top">
+            <span class="ctask-engine-dot" :class="simpleDotClass(progress)"></span>
+            <span class="ctask-name" :title="progress.fileName">{{ progress.fileName }}</span>
+            <n-tag size="small" round :type="simpleTagType(progress)" class="ctask-status">
+              {{ simpleStatusLabel(progress, grp.activeLabel) }}
+            </n-tag>
           </div>
-        </n-list-item>
-      </n-list>
+          <n-progress type="line" :percentage="progress.current" :indicator-placement="'inside'"
+            :processing="progress.current < 100 && !isFailed(progress)"
+            :status="isFailed(progress) ? 'error' : (progress.current >= 100 ? 'success' : 'info')"
+            :height="14" class="ctask-progress" />
+          <div class="ctask-msg" :class="{ 'is-error': isFailed(progress) }">{{ progress.message }}</div>
+        </div>
+      </div>
 
-      <n-text v-if="categorizedProgresses.import.length" strong>导入任务</n-text>
-      <n-list v-if="categorizedProgresses.import.length" hoverable>
-        <n-list-item v-for="(progress, index) in categorizedProgresses.import" :key="'imp-' + index" class="task-item"
-          :class="{ 'task-item-completed': progress.current >= 100 }">
-          <div class="task-content">
-            <div class="task-header">
-              <n-text strong class="task-filename">{{ progress.fileName }}</n-text>
-              <n-tag v-if="progress.current < 100" size="small" type="info" class="task-tag">导入中</n-tag>
-              <n-tag v-else size="small" type="success" class="task-tag">已完成</n-tag>
-            </div>
-            <n-progress type="line" :percentage="progress.current" :indicator-placement="'inside'"
-              :status="progress.current >= 100 ? 'success' : 'info'" :height="15" class="task-progress" />
-            <n-text depth="3" class="task-message">
-              <n-icon size="14" class="task-message-icon"><InfoCircleFilled /></n-icon>
-              {{ progress.message }}
-            </n-text>
+      <!-- 同步任务：与转换任务同款卡片式布局 + 图标控制 -->
+      <div v-if="categorizedProgresses.sync.length" class="section">
+        <div class="section-head">
+          <div class="section-title">
+            <n-icon :size="16" class="section-title-icon"><ArrowSync20Regular /></n-icon>
+            <span>同步任务</span>
+            <span class="section-count">{{ categorizedProgresses.sync.length }}</span>
           </div>
-        </n-list-item>
-      </n-list>
+        </div>
 
-      <n-text v-if="categorizedProgresses.export.length" strong>导出任务</n-text>
-      <n-list v-if="categorizedProgresses.export.length" hoverable>
-        <n-list-item v-for="(progress, index) in categorizedProgresses.export" :key="'exp-' + index" class="task-item"
-          :class="{ 'task-item-completed': progress.current >= 100 }">
-          <div class="task-content">
-            <div class="task-header">
-              <n-text strong class="task-filename">{{ progress.fileName }}</n-text>
-              <n-tag v-if="progress.current < 100" size="small" type="info" class="task-tag">导出中</n-tag>
-              <n-tag v-else size="small" type="success" class="task-tag">已完成</n-tag>
-            </div>
-            <n-progress type="line" :percentage="progress.current" :indicator-placement="'inside'"
-              :status="progress.current >= 100 ? 'success' : 'info'" :height="15" class="task-progress" />
-            <n-text depth="3" class="task-message">
-              <n-icon size="14" class="task-message-icon"><InfoCircleFilled /></n-icon>
-              {{ progress.message }}
-            </n-text>
-          </div>
-        </n-list-item>
-      </n-list>
-
-      <n-text v-if="categorizedProgresses.sync.length" strong>同步任务</n-text>
-      <n-list v-if="categorizedProgresses.sync.length" hoverable>
-        <n-list-item v-for="(progress, index) in categorizedProgresses.sync" :key="'sync-' + index" class="task-item"
-          :class="{ 'task-item-completed': progress.current >= 100, 'task-item-failed': isFailed(progress) }">
-          <div class="task-content">
-            <div class="task-header">
-              <n-text strong class="task-filename">{{ progress.fileName }}</n-text>
-              <n-tag v-if="progress.cancelled" size="small" type="warning" class="task-tag">已终止</n-tag>
-              <n-tag v-else-if="isFailed(progress)" size="small" type="error" class="task-tag">失败</n-tag>
-              <n-tag v-else-if="progress.current < 100" size="small" type="info" class="task-tag">同步中</n-tag>
-              <n-tag v-else size="small" type="success" class="task-tag">已完成</n-tag>
-              <!-- 终止按钮：仅进行中可终止 -->
+        <div class="ctask" v-for="(progress, index) in categorizedProgresses.sync" :key="'sync-' + index"
+          :class="{ 'is-failed': isFailed(progress), 'is-canceled': progress.cancelled }">
+          <div class="ctask-top">
+            <span class="ctask-engine-dot" :class="syncDotClass(progress)"></span>
+            <span class="ctask-name" :title="progress.fileName">{{ progress.fileName }}</span>
+            <n-tag size="small" round :type="syncTagType(progress)" class="ctask-status">{{ syncStatusLabel(progress) }}</n-tag>
+            <div class="ctask-ops">
               <n-tooltip v-if="canCancel(progress)" trigger="hover">
                 <template #trigger>
-                  <n-button text size="tiny" type="error" class="task-cancel-btn"
-                    :disabled="progress.cancelling" @click="handleCancelSync(progress)">
-                    <template #icon>
-                      <n-icon :size="18"><DismissCircle20Regular /></n-icon>
-                    </template>
+                  <n-button text size="tiny" type="warning" class="ctask-op" :disabled="progress.cancelling"
+                    @click="handleCancelSync(progress)">
+                    <template #icon><n-icon :size="16"><Stop20Regular /></n-icon></template>
                   </n-button>
                 </template>
                 {{ progress.cancelling ? '终止中…' : '终止同步' }}
               </n-tooltip>
             </div>
-            <n-progress type="line" :percentage="progress.current" :indicator-placement="'inside'"
-              :status="progress.cancelled ? 'warning' : (isFailed(progress) ? 'error' : (progress.current >= 100 ? 'success' : 'info'))" :height="15" class="task-progress" />
-            <n-text depth="3" class="task-message">
-              <n-icon size="14" class="task-message-icon"><InfoCircleFilled /></n-icon>
-              {{ progress.message }}
-            </n-text>
           </div>
-        </n-list-item>
-      </n-list>
+          <n-progress type="line" :percentage="progress.current" :indicator-placement="'inside'"
+            :processing="progress.current < 100 && !isFailed(progress) && !progress.cancelled"
+            :status="progress.cancelled ? 'warning' : (isFailed(progress) ? 'error' : (progress.current >= 100 ? 'success' : 'info'))"
+            :height="14" class="ctask-progress" />
+          <div class="ctask-msg" :class="{ 'is-error': isFailed(progress) }">{{ progress.message }}</div>
+        </div>
+      </div>
     </n-drawer-content>
   </n-drawer>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, markRaw } from 'vue'
 import { NDrawer, NDrawerContent, NList, NListItem, NText, NTag, NProgress, NIcon, NButton, NSpace, NTooltip } from 'naive-ui'
-import { InfoCircleFilled } from '@vicons/antd'
 import {
-  DismissCircle20Regular,
   DocumentSync20Regular,
+  ArrowSync20Regular,
   ArrowClockwise20Regular,
   Stop20Regular,
   Dismiss20Regular,
-  Broom20Regular
+  Broom20Regular,
+  SaveSync20Regular,
+  BoxArrowLeft20Regular,
+  TextBulletListAdd20Filled,
+  SignOut20Regular
 } from '@vicons/fluent'
 
 const props = defineProps({
@@ -327,6 +279,49 @@ const handleCancelSync = (progress) => {
   }
 }
 
+// ── 同步任务：状态点/标签/文案（与转换任务同款卡片风格）──
+const syncStatusLabel = (progress) => {
+  if (progress?.cancelled) return '已终止'
+  if (isFailed(progress)) return '失败'
+  if (Number(progress?.current) >= 100) return '已完成'
+  return progress?.cancelling ? '终止中' : '同步中'
+}
+const syncTagType = (progress) => {
+  if (progress?.cancelled) return 'warning'
+  if (isFailed(progress)) return 'error'
+  if (Number(progress?.current) >= 100) return 'success'
+  return 'info'
+}
+const syncDotClass = (progress) => {
+  if (progress?.cancelled) return 'dot-canceled'
+  if (isFailed(progress)) return 'dot-failed'
+  if (Number(progress?.current) >= 100) return 'dot-done'
+  return 'dot-running'
+}
+
+// ── 备份/恢复/导入/导出：统一卡片（无控制按钮）──
+const simpleGroups = [
+  { key: 'backup', title: '备份任务', activeLabel: '备份中', icon: markRaw(SaveSync20Regular) },
+  { key: 'recovery', title: '恢复任务', activeLabel: '恢复中', icon: markRaw(BoxArrowLeft20Regular) },
+  { key: 'import', title: '导入任务', activeLabel: '导入中', icon: markRaw(TextBulletListAdd20Filled) },
+  { key: 'export', title: '导出任务', activeLabel: '导出中', icon: markRaw(SignOut20Regular) },
+]
+const simpleStatusLabel = (progress, activeLabel) => {
+  if (isFailed(progress)) return '失败'
+  if (Number(progress?.current) >= 100) return '已完成'
+  return activeLabel
+}
+const simpleTagType = (progress) => {
+  if (isFailed(progress)) return 'error'
+  if (Number(progress?.current) >= 100) return 'success'
+  return 'info'
+}
+const simpleDotClass = (progress) => {
+  if (isFailed(progress)) return 'dot-failed'
+  if (Number(progress?.current) >= 100) return 'dot-done'
+  return 'dot-running'
+}
+
 const failedTaskCount = computed(() => {
   return (props.progresses || []).filter((p) => p?.type === 'conversion' && isFailed(p)).length
 })
@@ -428,6 +423,11 @@ const handleClearFailed = () => {
 .ctask-engine-dot.eng-marker { background: #e6a23c; }
 .ctask-engine-dot.eng-mineru { background: #409EFF; }
 .ctask-engine-dot.eng-auto { background: #909399; }
+/* 同步任务状态点 */
+.ctask-engine-dot.dot-running { background: #409EFF; }
+.ctask-engine-dot.dot-done { background: #67c23a; }
+.ctask-engine-dot.dot-failed { background: #f56c6c; }
+.ctask-engine-dot.dot-canceled { background: #e6a23c; }
 
 .ctask-name {
   flex: 1;
