@@ -397,6 +397,41 @@ const handleSyncRepo = async (key) => {
   }
 }
 
+const refreshRepoFilesAfterImportChange = async (payload = {}) => {
+  const changedKnowledgeRepo = payload?.knowledge_repo || ''
+  const currentKnowledgeRepo = store.currentDatabase || ''
+  const shouldRefreshFiles = !currentKnowledgeRepo || !changedKnowledgeRepo || changedKnowledgeRepo === currentKnowledgeRepo
+
+  logger.info('[RepoImportEvent] repo_imported_files_changed received', {
+    payload,
+    currentKnowledgeRepo,
+    shouldRefreshFiles,
+  })
+
+  try {
+    await store.fetchRepos()
+
+    if (shouldRefreshFiles) {
+      // 设计思路：后端已经完成 imported_files 入库后才会发该事件，这里只重新拉取当前知识库列表，
+      // 避免旧的 Web Clipper 保存事件重复走导入流程，同时保证表格/书架视图使用同一份 store.files。
+      const refreshKnowledgeRepo = currentKnowledgeRepo || changedKnowledgeRepo || store.currentDatabase
+      logger.info('[RepoImportEvent] refreshing imported files', {
+        refreshKnowledgeRepo,
+        action: payload?.action,
+        id: payload?.id,
+      })
+      await store.fetchFiles(refreshKnowledgeRepo)
+    } else {
+      logger.info('[RepoImportEvent] skip file refresh because changed repo is not active', {
+        changedKnowledgeRepo,
+        currentKnowledgeRepo,
+      })
+    }
+  } catch (error) {
+    logger.error('[RepoImportEvent] refresh failed', error)
+  }
+}
+
 const initAppHandle = async () => {
   try {
     await invoke('init_backend_services')
@@ -495,6 +530,7 @@ onMounted(async () => {
   try {
     // 安全初始化
     await eventStore.initGlobalListeners()
+    await eventStore.registerEventType('repo_imported_files_changed')
 
     // 订阅事件（带自动注册）
     const unsubscribe = eventStore.subscribe(
@@ -505,7 +541,13 @@ onMounted(async () => {
       }
     )
 
+    const unsubscribeRepoImportedFilesChanged = eventStore.subscribe(
+      'repo_imported_files_changed',
+      refreshRepoFilesAfterImportChange
+    )
+
     onUnmounted(unsubscribe)
+    onUnmounted(unsubscribeRepoImportedFilesChanged)
   } catch (error) {
     logger.error('事件系统初始化失败:', error)
   }

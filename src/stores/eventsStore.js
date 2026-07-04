@@ -44,7 +44,10 @@ export const useEventStore = defineStore("event", {
      * 内部方法：注册核心事件类型
      */
     async _registerCoreEventTypes() {
-      const coreEvents = ["add_web_clipper_file_event"];
+      const coreEvents = [
+        "add_web_clipper_file_event",
+        "repo_imported_files_changed",
+      ];
 
       await Promise.all(
         coreEvents.map(async (eventType) => {
