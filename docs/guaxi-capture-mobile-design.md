@@ -760,6 +760,49 @@ node scripts/run-android-gradle-config.mjs --gradle-version 8.14.3
 
 解决方式二：手动下载 `gradle-8.14.3-bin.zip`，放到 Gradle wrapper cache。这个方式不推荐作为默认流程，因为 cache 路径包含 hash，不如直接替换 `distributionUrl` 稳定。
 
+### ADB 安装 APK 失败：`Failure [-99]`
+
+现象：
+
+```text
+Performing Streamed Install
+adb.exe: failed to install ... app-arm64-debug.apk: Failure [-99]
+failed to run Android app
+```
+
+含义：
+
+- 这时 Gradle 下载、Rust 编译、Android APK 构建都已经完成。
+- 失败点在 `adb install` 把 APK 安装到手机的阶段。
+- 常见原因是手机上已有同包名 `com.guaxi.capture` 的旧安装、签名不一致、用户空间里残留安装状态，或设备端安装会话被系统拒绝。
+
+先做设备诊断：
+
+```powershell
+cd apps\guaxi-capture
+npm run android:adb:devices
+npm run android:adb:diagnose
+```
+
+清理旧包后重新启动 dev：
+
+```powershell
+npm run android:dev:fresh
+```
+
+如果连接了多台设备，先指定序列号：
+
+```powershell
+$env:GUAXI_ANDROID_SERIAL="e009af14"
+npm run android:dev:fresh
+```
+
+设计说明：
+
+- `android:dev:fresh` 会先执行 `adb uninstall com.guaxi.capture` 和 `pm uninstall --user 0 com.guaxi.capture`，再运行 Tauri Android dev。
+- 这只清理 Guaxi Capture 手机端包名，不会影响 Guaxi PC 端代码。
+- 如果仍然失败，打开手机屏幕确认是否有安装确认弹窗、USB 调试授权弹窗，或系统安全软件拦截安装。
+
 ### iOS 本地没有命令
 
 Windows 上 Tauri CLI 不显示 `ios` 子命令是正常现象。iOS 构建需要 macOS runner 或本地 macOS + Xcode。
