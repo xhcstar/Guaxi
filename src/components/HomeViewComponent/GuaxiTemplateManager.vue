@@ -11,6 +11,28 @@
             <span>分类 {{ templateCategoryCount }} 个</span>
           </div>
         </div>
+        <div class="header-fields">
+          <label class="header-field">
+            <span>名称</span>
+            <n-input
+              v-model:value="editName"
+              class="header-field-input"
+              size="small"
+              :disabled="loading"
+              placeholder="模板名称"
+            />
+          </label>
+          <label class="header-field">
+            <span>类型</span>
+            <n-input
+              v-model:value="editType"
+              class="header-field-input"
+              size="small"
+              :disabled="loading"
+              placeholder="模板分类"
+            />
+          </label>
+        </div>
         <div class="header-actions">
           <n-tooltip trigger="hover" placement="bottom">
             <template #trigger>
@@ -41,6 +63,57 @@
               </n-button>
             </template>
             新建模板
+          </n-tooltip>
+          <n-tooltip trigger="hover" placement="bottom">
+            <template #trigger>
+              <n-button
+                size="small"
+                circle
+                :disabled="loading || !editContent"
+                aria-label="插入当前模板内容到主编辑器光标处"
+                @click="insertCurrentTemplateToEditor"
+              >
+                <template #icon>
+                  <Icon :icon="sendIcon" width="16" height="16" />
+                </template>
+              </n-button>
+            </template>
+            插入当前内容到主编辑器光标处
+          </n-tooltip>
+          <n-tooltip trigger="hover" placement="bottom">
+            <template #trigger>
+              <n-button
+                size="small"
+                circle
+                type="primary"
+                :disabled="loading || !editName"
+                aria-label="保存当前模板"
+                @click="save"
+              >
+                <template #icon>
+                  <Icon :icon="saveIcon" width="16" height="16" />
+                </template>
+              </n-button>
+            </template>
+            保存当前模板
+          </n-tooltip>
+          <n-tooltip trigger="hover" placement="bottom">
+            <template #trigger>
+              <n-button
+                size="small"
+                circle
+                tertiary
+                type="error"
+                :disabled="loading || !selectedName"
+                aria-label="删除当前自定义模板"
+                @click="remove"
+              >
+                <template #icon>
+                  <Icon :icon="trash2Icon" width="16" height="16" />
+                </template>
+              </n-button>
+            </template>
+            删除当前自定义模板
           </n-tooltip>
         </div>
       </div>
@@ -94,47 +167,7 @@
         </div>
 
         <div class="right">
-          <n-form class="right-form" label-placement="left" label-width="auto" :show-require-mark="false">
-            <n-form-item label="名称">
-              <n-input v-model:value="editName" :disabled="loading" placeholder="例如：会议纪要" />
-            </n-form-item>
-            <n-form-item label="类型">
-              <n-input v-model:value="editType" :disabled="loading" placeholder="例如：会议 / 日记 / TODO" />
-            </n-form-item>
-            <n-form-item class="content-item" label="内容">
-              <div ref="contentEditorContainer" class="template-monaco-editor"></div>
-            </n-form-item>
-          </n-form>
-
-          <n-space justify="end" class="footer-actions">
-            <n-tooltip trigger="hover" placement="top">
-              <template #trigger>
-                <n-button type="primary" :disabled="loading || !editName" @click="save">
-                  <template #icon>
-                    <Icon :icon="saveIcon" width="16" height="16" />
-                  </template>
-                  保存
-                </n-button>
-              </template>
-              保存当前模板
-            </n-tooltip>
-            <n-tooltip trigger="hover" placement="top">
-              <template #trigger>
-                <n-button
-                  tertiary
-                  type="error"
-                  :disabled="loading || !selectedName"
-                  @click="remove"
-                >
-                  <template #icon>
-                    <Icon :icon="trash2Icon" width="16" height="16" />
-                  </template>
-                  删除
-                </n-button>
-              </template>
-              删除当前自定义模板
-            </n-tooltip>
-          </n-space>
+          <div ref="contentEditorContainer" class="template-monaco-editor"></div>
         </div>
       </div>
     </div>
@@ -144,7 +177,7 @@
 <script setup>
 import { createLogger } from '../../utils/logger'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { NButton, NCollapse, NCollapseItem, NForm, NFormItem, NInput, NList, NListItem, NSpace, NTooltip, createDiscreteApi } from 'naive-ui'
+import { NButton, NCollapse, NCollapseItem, NInput, NList, NListItem, NTooltip, createDiscreteApi } from 'naive-ui'
 import { Icon } from '@iconify/vue'
 import * as monaco from 'monaco-editor'
 import 'monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution'
@@ -182,13 +215,13 @@ const PYTHON_CELL_TEMPLATE_GROUP = '探索者 / Python Cell'
 const py = String.raw
 
 // 设计说明：
-// 1. Python Cell 模板统一输出 Guaxi 已支持的 <!--py--> 注释哨兵语法，插入后可被普通编辑器和探索者模式共同识别。
-// 2. 模板按数据读取、清洗、整理、处理、可视化、导出、网络、文本、多媒体、二进制等常见工作流拆分，避免用户在一个超大模板里反复删改。
-// 3. title 元数据会显示在 Python Cell 卡片上，帮助探索者模式里快速辨认每个代码块的用途。
+// 1. 模板管理器只维护可读、可复制的 Python 代码正文，不再写入 Python Cell 的内部存储哨兵标记。
+// 2. 每个模板开头保留用途、依赖和改造点说明，插入到主编辑器或 Python Cell 后都可以直接阅读和二次修改。
+// 3. 模板按数据、网络、文本、多媒体、二进制、自动化、机器学习等常见工作流拆分，避免用户在一个超大模板里反复删改。
 const buildPythonCellTemplate = (name, category, code) => ({
   name: `Python Cell｜${name}`,
   templateType: `${PYTHON_CELL_TEMPLATE_GROUP} / ${category}`,
-  content: `<!--py {"title":"${name}"}-->\n${String(code || '').trim()}\n<!--/py-->\n`
+  content: `# 用途：${name}\n# 使用说明：按你的真实路径、字段名、接口地址和依赖库安装情况修改 TODO 位置。\n# 建议：先小样本运行，确认输出正确后再处理全量数据。\n\n${String(code || '').trim()}\n`
 })
 
 const PYTHON_CELL_TEMPLATES = [
@@ -540,6 +573,370 @@ for path in root.rglob("*"):
 df = pd.DataFrame(rows).sort_values("size", ascending=False)
 df.to_csv("output/file_inventory.csv", index=False, encoding="utf-8-sig")
 df.head(30)
+`),
+  buildPythonCellTemplate('数值计算：NumPy 向量化 / 统计量', '数值计算', py`
+import numpy as np
+
+# TODO: 替换为你的原始数组或 DataFrame 列。
+values = np.array([12.5, 18.0, 21.3, 19.8, 30.2], dtype=float)
+
+normalized = (values - values.mean()) / values.std(ddof=1)
+rolling_mean = np.convolve(values, np.ones(3) / 3, mode="valid")
+
+print("count:", values.size)
+print("mean:", values.mean())
+print("median:", np.median(values))
+print("p95:", np.percentile(values, 95))
+print("z-score:", normalized)
+print("rolling_mean:", rolling_mean)
+`),
+  buildPythonCellTemplate('统计分析：SciPy 假设检验', '统计分析', py`
+import numpy as np
+from scipy import stats
+
+# TODO: 替换为两组实验 / 对照样本。
+control = np.array([10.1, 9.8, 10.5, 10.0, 9.9])
+experiment = np.array([11.2, 10.9, 11.5, 11.1, 10.8])
+
+t_stat, p_value = stats.ttest_ind(experiment, control, equal_var=False)
+effect_size = (experiment.mean() - control.mean()) / np.sqrt((experiment.var(ddof=1) + control.var(ddof=1)) / 2)
+
+print(f"control_mean={control.mean():.4f}")
+print(f"experiment_mean={experiment.mean():.4f}")
+print(f"t={t_stat:.4f}, p={p_value:.6f}, cohen_d={effect_size:.4f}")
+`),
+  buildPythonCellTemplate('机器学习：scikit-learn 训练评估', '机器学习', py`
+import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.impute import SimpleImputer
+from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+df = pd.read_csv("data/train.csv", encoding="utf-8")
+target_col = "target"  # TODO: 替换目标列。
+
+X = df.drop(columns=[target_col])
+y = df[target_col]
+numeric_cols = X.select_dtypes(include="number").columns.tolist()
+category_cols = X.select_dtypes(exclude="number").columns.tolist()
+
+preprocess = ColumnTransformer([
+    ("num", Pipeline([("imputer", SimpleImputer(strategy="median")), ("scaler", StandardScaler())]), numeric_cols),
+    ("cat", Pipeline([("imputer", SimpleImputer(strategy="most_frequent")), ("onehot", OneHotEncoder(handle_unknown="ignore"))]), category_cols),
+])
+
+model = Pipeline([
+    ("preprocess", preprocess),
+    ("classifier", RandomForestClassifier(n_estimators=200, random_state=42)),
+])
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+model.fit(X_train, y_train)
+pred = model.predict(X_test)
+
+print(classification_report(y_test, pred))
+print(confusion_matrix(y_test, pred))
+`),
+  buildPythonCellTemplate('机器学习：模型保存 / 加载', '机器学习', py`
+from pathlib import Path
+import joblib
+
+model_path = Path("output/model.joblib")
+model_path.parent.mkdir(parents=True, exist_ok=True)
+
+# TODO: 将 model 替换为你训练好的 sklearn Pipeline / 模型对象。
+joblib.dump(model, model_path)
+print(f"模型已保存: {model_path.resolve()}")
+
+loaded_model = joblib.load(model_path)
+# pred = loaded_model.predict(new_data)
+`),
+  buildPythonCellTemplate('深度学习：PyTorch 最小训练循环', '机器学习', py`
+import torch
+from torch import nn
+from torch.utils.data import DataLoader, TensorDataset
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+# TODO: 替换为真实特征和标签。
+X = torch.randn(128, 10)
+y = (X.sum(dim=1) > 0).long()
+loader = DataLoader(TensorDataset(X, y), batch_size=32, shuffle=True)
+
+model = nn.Sequential(nn.Linear(10, 32), nn.ReLU(), nn.Linear(32, 2)).to(device)
+loss_fn = nn.CrossEntropyLoss()
+optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+
+for epoch in range(5):
+    model.train()
+    total_loss = 0.0
+    for xb, yb in loader:
+        xb, yb = xb.to(device), yb.to(device)
+        optimizer.zero_grad()
+        loss = loss_fn(model(xb), yb)
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item() * xb.size(0)
+    print(f"epoch={epoch + 1}, loss={total_loss / len(loader.dataset):.4f}")
+`),
+  buildPythonCellTemplate('可视化：Seaborn 统计图', '绘图', py`
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+df = pd.read_csv("data/clean.csv", encoding="utf-8")
+
+sns.set_theme(style="whitegrid", font="Microsoft YaHei")
+fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+sns.boxplot(data=df, x="category", y="amount", ax=axes[0])
+axes[0].tick_params(axis="x", rotation=30)
+sns.scatterplot(data=df, x="amount", y="score", hue="category", ax=axes[1])
+
+plt.tight_layout()
+plt.show()
+`),
+  buildPythonCellTemplate('可视化：Plotly 交互图导出 HTML', '绘图', py`
+from pathlib import Path
+import pandas as pd
+import plotly.express as px
+
+df = pd.read_csv("data/clean.csv", encoding="utf-8")
+fig = px.line(df, x="date", y="amount", color="category", title="趋势分析")
+
+output_path = Path("output/interactive_chart.html")
+output_path.parent.mkdir(parents=True, exist_ok=True)
+fig.write_html(output_path, include_plotlyjs="cdn")
+print(f"交互图已导出: {output_path.resolve()}")
+fig.show()
+`),
+  buildPythonCellTemplate('Excel 自动化：openpyxl 格式化报表', '办公自动化', py`
+from pathlib import Path
+from openpyxl import load_workbook
+from openpyxl.styles import Font, PatternFill
+from openpyxl.utils import get_column_letter
+
+path = Path("output/result.xlsx")
+wb = load_workbook(path)
+ws = wb.active
+
+header_fill = PatternFill("solid", fgColor="1F6FEB")
+for cell in ws[1]:
+    cell.font = Font(color="FFFFFF", bold=True)
+    cell.fill = header_fill
+
+for col in ws.columns:
+    max_len = max(len(str(cell.value or "")) for cell in col)
+    ws.column_dimensions[get_column_letter(col[0].column)].width = min(max(max_len + 2, 10), 40)
+
+target = path.with_name(f"{path.stem}_formatted.xlsx")
+wb.save(target)
+print(f"格式化报表已保存: {target.resolve()}")
+`),
+  buildPythonCellTemplate('配置读取：YAML / TOML / 环境变量', '配置与日志', py`
+import os
+from pathlib import Path
+import tomllib
+import yaml
+
+yaml_config = yaml.safe_load(Path("config/app.yaml").read_text(encoding="utf-8"))
+with Path("config/pyproject.toml").open("rb") as f:
+    toml_config = tomllib.load(f)
+
+api_key = os.getenv("API_KEY", "")
+debug = os.getenv("DEBUG", "false").lower() == "true"
+
+print("yaml keys:", yaml_config.keys())
+print("toml keys:", toml_config.keys())
+print("debug:", debug, "api_key configured:", bool(api_key))
+`),
+  buildPythonCellTemplate('日志与异常：logging 标准模板', '配置与日志', py`
+import logging
+from pathlib import Path
+
+log_dir = Path("logs")
+log_dir.mkdir(parents=True, exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    handlers=[
+        logging.FileHandler(log_dir / "task.log", encoding="utf-8"),
+        logging.StreamHandler(),
+    ],
+)
+logger = logging.getLogger("guaxi.task")
+
+try:
+    logger.info("任务开始")
+    # TODO: 在这里放置你的处理逻辑。
+    result = 1 / 1
+    logger.info("任务完成 result=%s", result)
+except Exception:
+    logger.exception("任务失败")
+    raise
+`),
+  buildPythonCellTemplate('批处理进度：tqdm 扫描处理', '文件处理', py`
+from pathlib import Path
+from tqdm import tqdm
+
+input_dir = Path("data")
+output_dir = Path("output/processed")
+output_dir.mkdir(parents=True, exist_ok=True)
+
+files = [p for p in input_dir.rglob("*.txt") if p.is_file()]
+for path in tqdm(files, desc="处理文本文件"):
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    cleaned = "\n".join(line.strip() for line in text.splitlines() if line.strip())
+    target = output_dir / path.relative_to(input_dir)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(cleaned, encoding="utf-8")
+
+print(f"处理完成: {len(files)} 个文件")
+`),
+  buildPythonCellTemplate('并发处理：ThreadPoolExecutor', '性能并发', py`
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+
+def process_file(path: Path) -> dict:
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    return {"path": str(path), "chars": len(text), "lines": text.count("\n") + 1}
+
+files = list(Path("data").rglob("*.txt"))
+results = []
+
+with ThreadPoolExecutor(max_workers=8) as executor:
+    future_map = {executor.submit(process_file, path): path for path in files}
+    for future in as_completed(future_map):
+        path = future_map[future]
+        try:
+            results.append(future.result())
+        except Exception as exc:
+            print(f"处理失败: {path} -> {exc}")
+
+print(results[:10])
+`),
+  buildPythonCellTemplate('命令行脚本：argparse 入口', '自动化脚本', py`
+import argparse
+from pathlib import Path
+
+def main():
+    parser = argparse.ArgumentParser(description="批量处理文件")
+    parser.add_argument("input", type=Path, help="输入目录或文件")
+    parser.add_argument("-o", "--output", type=Path, default=Path("output"), help="输出目录")
+    parser.add_argument("--dry-run", action="store_true", help="只打印计划，不实际写入")
+    args = parser.parse_args()
+
+    print("input:", args.input)
+    print("output:", args.output)
+    print("dry_run:", args.dry_run)
+    # TODO: 在这里调用你的处理函数。
+
+if __name__ == "__main__":
+    main()
+`),
+  buildPythonCellTemplate('数据校验：Pydantic Schema', '数据校验', py`
+from datetime import datetime
+from pydantic import BaseModel, Field, ValidationError
+
+class EventRecord(BaseModel):
+    user_id: str = Field(min_length=1)
+    event_name: str
+    amount: float = 0
+    event_time: datetime
+
+raw_records = [
+    {"user_id": "u001", "event_name": "purchase", "amount": 19.9, "event_time": "2026-01-01T12:00:00"},
+]
+
+valid_records = []
+for item in raw_records:
+    try:
+        valid_records.append(EventRecord.model_validate(item))
+    except ValidationError as exc:
+        print("校验失败:", item, exc)
+
+print(valid_records)
+`),
+  buildPythonCellTemplate('API 请求：requests 会话 / 重试', '网络抓取', py`
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+session = requests.Session()
+retry = Retry(total=3, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504])
+session.mount("https://", HTTPAdapter(max_retries=retry))
+session.headers.update({"User-Agent": "GuaxiTemplate/1.0"})
+
+url = "https://api.example.com/items"
+response = session.get(url, params={"page": 1}, timeout=20)
+response.raise_for_status()
+
+payload = response.json()
+print(payload if isinstance(payload, dict) else payload[:3])
+`),
+  buildPythonCellTemplate('HTML 解析：BeautifulSoup 表格提取', '网络抓取', py`
+import pandas as pd
+import requests
+from bs4 import BeautifulSoup
+
+url = "https://example.com"
+html = requests.get(url, timeout=20, headers={"User-Agent": "GuaxiTemplate/1.0"}).text
+soup = BeautifulSoup(html, "html.parser")
+
+rows = []
+for tr in soup.select("table tr"):
+    cells = [cell.get_text(" ", strip=True) for cell in tr.select("th,td")]
+    if cells:
+        rows.append(cells)
+
+df = pd.DataFrame(rows[1:], columns=rows[0] if rows else None)
+df.head()
+`),
+  buildPythonCellTemplate('PDF 文本提取：pypdf', '文档处理', py`
+from pathlib import Path
+from pypdf import PdfReader
+
+pdf_path = Path("data/sample.pdf")
+reader = PdfReader(str(pdf_path))
+
+pages = []
+for index, page in enumerate(reader.pages, start=1):
+    text = page.extract_text() or ""
+    pages.append({"page": index, "text": text})
+
+output_path = Path("output/pdf_text.txt")
+output_path.parent.mkdir(parents=True, exist_ok=True)
+output_path.write_text("\n\n".join(f"## Page {p['page']}\n{p['text']}" for p in pages), encoding="utf-8")
+print(f"提取页数: {len(pages)}, 输出: {output_path.resolve()}")
+`),
+  buildPythonCellTemplate('Word 文档生成：python-docx', '文档处理', py`
+from pathlib import Path
+from docx import Document
+
+doc = Document()
+doc.add_heading("自动生成报告", level=1)
+doc.add_paragraph("这里写报告摘要。")
+
+table = doc.add_table(rows=1, cols=3)
+header = table.rows[0].cells
+header[0].text = "指标"
+header[1].text = "数值"
+header[2].text = "说明"
+
+for metric, value, note in [("样本数", "100", "示例"), ("准确率", "95%", "示例")]:
+    cells = table.add_row().cells
+    cells[0].text = metric
+    cells[1].text = value
+    cells[2].text = note
+
+output_path = Path("output/report.docx")
+output_path.parent.mkdir(parents=True, exist_ok=True)
+doc.save(output_path)
+print(f"Word 报告已保存: {output_path.resolve()}")
 `)
 ]
 
@@ -603,6 +1000,9 @@ const TEMPLATE_TYPE_ORDER = [
   `${PYTHON_CELL_TEMPLATE_GROUP} / 数据清洗`,
   `${PYTHON_CELL_TEMPLATE_GROUP} / 数据整理`,
   `${PYTHON_CELL_TEMPLATE_GROUP} / 数据处理`,
+  `${PYTHON_CELL_TEMPLATE_GROUP} / 数值计算`,
+  `${PYTHON_CELL_TEMPLATE_GROUP} / 统计分析`,
+  `${PYTHON_CELL_TEMPLATE_GROUP} / 机器学习`,
   `${PYTHON_CELL_TEMPLATE_GROUP} / 绘图`,
   `${PYTHON_CELL_TEMPLATE_GROUP} / 数据导出`,
   `${PYTHON_CELL_TEMPLATE_GROUP} / 网络抓取`,
@@ -610,6 +1010,12 @@ const TEMPLATE_TYPE_ORDER = [
   `${PYTHON_CELL_TEMPLATE_GROUP} / 图片视频处理`,
   `${PYTHON_CELL_TEMPLATE_GROUP} / 二进制文件处理`,
   `${PYTHON_CELL_TEMPLATE_GROUP} / 文件处理`,
+  `${PYTHON_CELL_TEMPLATE_GROUP} / 文档处理`,
+  `${PYTHON_CELL_TEMPLATE_GROUP} / 办公自动化`,
+  `${PYTHON_CELL_TEMPLATE_GROUP} / 配置与日志`,
+  `${PYTHON_CELL_TEMPLATE_GROUP} / 性能并发`,
+  `${PYTHON_CELL_TEMPLATE_GROUP} / 自动化脚本`,
+  `${PYTHON_CELL_TEMPLATE_GROUP} / 数据校验`,
   '未分类'
 ]
 
@@ -965,6 +1371,37 @@ const insertToEditor = async (name) => {
   }
 }
 
+const insertCurrentTemplateToEditor = async () => {
+  const content = String(editContent.value || '')
+  if (!content.trim()) {
+    logger.info('[TemplateManager] insert current skipped: empty content', {
+      name: editName.value,
+    })
+    message.warning('当前模板内容为空')
+    return
+  }
+
+  try {
+    loading.value = true
+    logger.info('[TemplateManager] insert current editor content requested', {
+      name: editName.value,
+      templateType: editType.value,
+      length: content.length,
+    })
+    await invoke('emit_template_insert', { content })
+    message.success('已插入到主编辑器光标位置')
+    logger.info('[TemplateManager] inserted current editor content', {
+      name: editName.value,
+      length: content.length,
+    })
+  } catch (e) {
+    logger.error('插入当前模板内容失败:', e)
+    message.error('插入当前模板内容失败')
+  } finally {
+    loading.value = false
+  }
+}
+
 const importFromFile = async () => {
   try {
     logger.info('[TemplateManager] import markdown requested')
@@ -1063,7 +1500,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 14px;
-  flex: 1 1 auto;
+  flex: 0 1 520px;
 }
 
 .title {
@@ -1089,11 +1526,48 @@ onBeforeUnmount(() => {
   flex: 0 0 auto;
 }
 
+.header-summary span:not(.status-pill) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .header-actions {
   display: flex;
   align-items: center;
   gap: 8px;
   flex: 0 0 auto;
+}
+
+.header-fields {
+  min-width: 640px;
+  max-width: none;
+  display: grid;
+  grid-template-columns: minmax(380px, 1.5fr) minmax(260px, 1fr);
+  gap: 14px;
+  flex: 1 1 820px;
+}
+
+.header-field {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  color: var(--guaxi-text-secondary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.header-field-input {
+  min-width: 0;
+}
+
+.header-field-input :deep(.n-input) {
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
+}
+
+.header-field-input :deep(.n-input__input-el) {
+  text-overflow: clip;
 }
 
 .status-pill {
@@ -1139,44 +1613,12 @@ onBeforeUnmount(() => {
   overflow: hidden;
   border: 1px solid var(--guaxi-border);
   border-radius: 10px;
-  padding: 12px;
+  padding: 0;
   box-sizing: border-box;
   background: var(--guaxi-panel-bg);
   box-shadow: 0 10px 28px rgba(16, 24, 40, 0.08);
   display: flex;
   flex-direction: column;
-  gap: 10px;
-}
-
-.right-form {
-  flex: 1 1 0%;
-  min-height: 0;
-  height: 100%;
-  display: flex !important;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.content-item {
-  flex: 1 1 0% !important;
-  min-height: 0;
-  display: flex;
-  align-items: stretch;
-}
-
-.content-item :deep(.n-form-item-label) {
-  flex: 0 0 auto;
-  align-self: flex-start;
-}
-
-.content-item :deep(.n-form-item-blank) {
-  flex: 1 1 0%;
-  min-height: 0;
-  height: 100%;
-  align-self: stretch;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
 }
 
 .template-monaco-editor {
@@ -1186,8 +1628,8 @@ onBeforeUnmount(() => {
   width: 100%;
   box-sizing: border-box;
   overflow: hidden;
-  border: 1px solid var(--guaxi-border);
-  border-radius: 8px;
+  border: 0;
+  border-radius: 10px;
   background: var(--guaxi-editor-bg, var(--guaxi-panel-bg));
 }
 
@@ -1244,6 +1686,7 @@ onBeforeUnmount(() => {
 @media (max-width: 920px) {
   .header {
     align-items: flex-start;
+    flex-wrap: wrap;
   }
 
   .header-main {
@@ -1255,6 +1698,13 @@ onBeforeUnmount(() => {
   .header-summary {
     max-width: 100%;
     overflow-x: auto;
+  }
+
+  .header-fields {
+    order: 3;
+    flex-basis: 100%;
+    max-width: none;
+    grid-template-columns: 1fr;
   }
 }
 </style>
