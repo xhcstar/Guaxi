@@ -1,5 +1,6 @@
 param(
   [string]$BaseUrl = "https://mirrors.cloud.tencent.com/gradle",
+  [string]$GradleVersion = "8.14.3",
   [string]$ProjectRoot = ""
 )
 
@@ -18,11 +19,13 @@ if (!(Test-Path $wrapperProperties)) {
 }
 
 $content = Get-Content -Encoding UTF8 $wrapperProperties
+$content = $content | ForEach-Object { $_ -replace "^\uFEFF", "" }
 $distributionLine = $content | Where-Object { $_ -match '^distributionUrl=' } | Select-Object -First 1
 
 if ([string]::IsNullOrWhiteSpace($distributionLine)) {
-  Write-Host "[capture-android] distributionUrl not found in $wrapperProperties"
-  exit 1
+  Write-Host "[capture-android] distributionUrl not found, repairing with Gradle $GradleVersion"
+  $distributionLine = "distributionUrl=https://services.gradle.org/distributions/gradle-$GradleVersion-bin.zip"
+  $content += $distributionLine
 }
 
 $fileName = Split-Path ($distributionLine -replace '^distributionUrl=', '') -Leaf
@@ -47,7 +50,12 @@ foreach ($line in $content) {
   $updated += $line
 }
 
-Set-Content -Encoding UTF8 $wrapperProperties $updated
+# 关键：Gradle Wrapper 使用 Java Properties 读取该文件。
+# Windows PowerShell 5.1 的 Set-Content -Encoding UTF8 会写入 BOM，
+# Java 会把第一行解析成带隐藏字符的 key，导致报 “No value with key 'distributionUrl'”。
+# 因此这里必须使用 UTF-8 no BOM 写回。
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllLines($wrapperProperties, $updated, $utf8NoBom)
 
 Write-Host "[capture-android] Gradle wrapper distributionUrl updated:"
 Write-Host "[capture-android] $newUrl"

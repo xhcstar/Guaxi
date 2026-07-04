@@ -733,6 +733,24 @@ https://mirrors.cloud.tencent.com/gradle/gradle-*.zip
 npm run android:gradle:official
 ```
 
+如果出现：
+
+```text
+No value with key 'distributionUrl' specified in wrapper properties file
+```
+
+通常是 `gradle-wrapper.properties` 被写入了 UTF-8 BOM，或 `distributionUrl` 行被破坏。继续执行：
+
+```powershell
+npm run android:gradle:mirror
+```
+
+脚本会用 UTF-8 no BOM 重写该文件；如果 `distributionUrl` 缺失，会按默认 `GradleVersion=8.14.3` 自动补回。需要指定版本时：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/configure-android-gradle.ps1 -GradleVersion 8.14.3
+```
+
 解决方式二：手动下载 `gradle-8.14.3-bin.zip`，放到 Gradle wrapper cache。这个方式不推荐作为默认流程，因为 cache 路径包含 hash，不如直接替换 `distributionUrl` 稳定。
 
 ### iOS 本地没有命令
