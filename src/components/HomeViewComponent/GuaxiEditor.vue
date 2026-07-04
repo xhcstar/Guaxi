@@ -3760,6 +3760,24 @@ const applyTemplateInsert = async (content) => {
   if (!raw) return false
   if (isDuplicateTemplateInsert(raw)) return true
   const text = raw.endsWith('\n') ? raw : `${raw}\n`
+
+  if (editorSurfaceMode.value === 'notebook' && canUseNotebookSurface.value && notebookViewRef.value?.insertTemplateContent) {
+    try {
+      const insertedIntoNotebook = !!(await notebookViewRef.value.insertTemplateContent(text))
+      if (insertedIntoNotebook) {
+        markTemplateInsertApplied(raw)
+        logger.info('[TemplateInsert] inserted content into active notebook cell', {
+          length: text.length,
+        })
+        return true
+      }
+    } catch (error) {
+      logger.warn('[TemplateInsert] notebook cell insert failed, fallback to editor insert', {
+        error: String(error?.message || error),
+      })
+    }
+  }
+
   const inserted = !!(await editorStore.insertContent(text))
   if (inserted) {
     markTemplateInsertApplied(raw)

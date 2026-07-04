@@ -1116,9 +1116,51 @@ watch(() => props.modelValue, (nextValue) => {
   ensureHostHeight()
 })
 
+const insertContent = async (content) => {
+  const text = String(content || '')
+  if (!text) return false
+
+  if (!editor && !loadFailed.value) {
+    observer?.disconnect?.()
+    observer = null
+    await mountMonacoEditor()
+    await nextTick()
+  }
+
+  if (editor && model && monacoRef?.Range) {
+    const selection = editor.getSelection()
+    const position = editor.getPosition() || { lineNumber: 1, column: 1 }
+    const range = selection || new monacoRef.Range(position.lineNumber, position.column, position.lineNumber, position.column)
+    editor.executeEdits('template-insert', [{ range, text, forceMoveMarkers: true }])
+    const endPosition = editor.getPosition()
+    editor.focus()
+    if (endPosition) editor.revealPositionInCenterIfOutsideViewport(endPosition)
+    logger.info('[NotebookPythonEditor] inserted template content at cursor', {
+      cellKey: String(props.cellKey || ''),
+      length: text.length,
+    })
+    return true
+  }
+
+  const fallback = hostRef.value?.querySelector?.('textarea')
+  if (fallback instanceof HTMLTextAreaElement) {
+    const start = fallback.selectionStart ?? fallback.value.length
+    const end = fallback.selectionEnd ?? start
+    const nextValue = `${fallback.value.slice(0, start)}${text}${fallback.value.slice(end)}`
+    fallback.value = nextValue
+    fallback.setSelectionRange(start + text.length, start + text.length)
+    emit('update:modelValue', nextValue)
+    fallback.focus()
+    return true
+  }
+
+  return false
+}
+
 defineExpose({
   refreshEditorServices,
   highlightVariableOccurrences,
+  insertContent,
 })
 </script>
 

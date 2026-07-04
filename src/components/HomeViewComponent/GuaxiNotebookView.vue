@@ -279,6 +279,7 @@
               :model-value="cell.content"
               :theme="theme"
               @update:model-value="updateMarkdownCell(cell.key, $event)"
+              @focus="activateNotebookCell(cell, 'markdown-editor-focus')"
               @request-exit="exitMarkdownEditMode(cell.key, $event)"
             />
           </div>
@@ -421,12 +422,14 @@
           </div>
           <GuaxiNotebookMathEditor
             class="guaxi-notebook__math-input"
+            :ref="(instance) => setMathEditorRef(cell.key, instance)"
             :cell-key="cell.key"
             :document-path="filePath"
             :model-value="cell.expression"
             :theme="theme"
             placeholder="数学工作区：每行写赋值 / 表达式 / 命令&#10;f = sin(x)/x&#10;limit(f, x, 0)&#10;plot(f, (x,-10,10))"
             @update:model-value="updateMathCell(cell.key, $event)"
+            @focus="activateNotebookCell(cell, 'math-editor-focus')"
           />
           <div class="guaxi-notebook__math-preview markdown-body" v-html="getRenderedMathCellHtml(cell)"></div>
 
@@ -989,6 +992,7 @@ const notebookSelectionToolbarVisible = ref(false)
 const notebookSelectionToolbarStyle = ref({ left: '0px', top: '0px' })
 const notebookSelectionText = ref('')
 const notebookTopToolbarRevealed = ref(false)
+const activeNotebookCellKey = ref('')
 const activeNotebookPythonCellKey = ref('')
 const notebookFocusedVariable = ref({ cellKey: '', variableName: '' })
 // 数学块工具下拉菜单：记录当前展开菜单所属的数学块 key（空串表示全部收起）。
@@ -1016,6 +1020,7 @@ let suppressNotebookReadingLocationRecording = false
 const maxNotebookReadingLocationHistory = 200
 const markdownEditorRefMap = new Map()
 const pythonEditorRefMap = new Map()
+const mathEditorRefMap = new Map()
 const notebookMarkdownRenderCache = new Map()
 const notebookDisplayUrlCache = new Map()
 const notebookMarkdownWorkerPendingTasks = new Map()
@@ -1137,6 +1142,7 @@ const clearActiveNotebookPythonCell = (reason = 'unknown') => {
 }
 
 const activateNotebookCell = (cell, reason = 'unknown') => {
+  activeNotebookCellKey.value = String(cell?.key || '')
   if (cell?.type === 'python') {
     setActiveNotebookPythonCellKey(String(cell?.key || ''), reason)
     revealNotebookTopToolbar(`python-cell-selected:${reason}`)
@@ -3568,6 +3574,16 @@ const setPythonEditorRef = (key, instance) => {
   pythonEditorRefMap.delete(normalizedKey)
 }
 
+const setMathEditorRef = (key, instance) => {
+  const normalizedKey = String(key || '')
+  if (!normalizedKey) return
+  if (instance) {
+    mathEditorRefMap.set(normalizedKey, instance)
+    return
+  }
+  mathEditorRefMap.delete(normalizedKey)
+}
+
 const refreshNotebookPythonEditor = (cell, reason = 'unknown') => {
   const key = String(cell?.key || '')
   const editorRef = pythonEditorRefMap.get(key)
@@ -4172,6 +4188,136 @@ const insertCell = (index, position = 'below', type = 'markdown') => {
 
 const appendCell = (type = 'markdown') => {
   insertCell(notebookCells.value.length - 1, 'below', type)
+}
+
+const findNotebookCellByKey = (key) => {
+  const normalizedKey = String(key || '').trim()
+  if (!normalizedKey) return null
+  return notebookCells.value.find((cell) => String(cell?.key || '') === normalizedKey) || null
+}
+
+const resolveTemplateInsertTargetCell = () => {
+  const activeElement = document.activeElement
+  const activeCellEl = activeElement instanceof Element
+    ? activeElement.closest?.('.guaxi-notebook__cell[data-cell-key]')
+    : null
+  const activeDomKey = notebookRootRef.value instanceof HTMLElement
+    && activeCellEl instanceof HTMLElement
+    && notebookRootRef.value.contains(activeCellEl)
+    ? activeCellEl.getAttribute('data-cell-key')
+    : ''
+
+  const candidateKeys = [
+    activeDomKey,
+    activeNotebookCellKey.value,
+    editingMarkdownCellKey.value,
+    activeNotebookPythonCellKey.value,
+    activeMathWorkspaceCellKey.value,
+  ]
+
+  for (const key of candidateKeys) {
+    const cell = findNotebookCellByKey(key)
+    if (cell) return cell
+  }
+  return null
+}
+
+const appendTemplateContentToCellState = (cell, content) => {
+  const text = String(content || '')
+  const join = (current) => {
+    const existing = String(current || '')
+    if (!existing.trim()) return text
+    return `${existing.replace(/\s*$/g, '')}\n\n${text}`
+  }
+
+  if (cell?.type === 'python') {
+    emitCells(
+      notebookCells.value.map((item) => (
+        String(item?.key || '') === String(cell.key)
+          ? createNotebookPythonCell({ ...item, code: join(item.code) })
+          : item
+      )),
+      cell.key,
+      { deferMarkdownSync: true },
+    )
+    setActiveNotebookPythonCellKey(String(cell.key || ''), 'template-insert-fallback')
+    return true
+  }
+
+  if (cell?.type === 'markdown') {
+    emitCells(
+      notebookCells.value.map((item) => (
+        String(item?.key || '') === String(cell.key)
+          ? createNotebookMarkdownCell(join(item.content), { key: item.key })
+          : item
+      )),
+      cell.key,
+      { deferMarkdownSync: true },
+    )
+    editingMarkdownCellKey.value = String(cell.key || '')
+    return true
+  }
+
+  if (cell?.type === 'math') {
+    updateMathCell(cell.key, join(cell.expression))
+    return true
+  }
+
+  return false
+}
+
+const insertTemplateContentIntoNotebook = async (content) => {
+  const raw = String(content || '')
+  if (!raw.trim()) return false
+  const text = raw.endsWith('\n') ? raw : `${raw}\n`
+  const targetCell = resolveTemplateInsertTargetCell()
+
+  if (!targetCell) {
+    logger.info('[Notebook] template insert skipped: no active target cell', {
+      length: text.length,
+    })
+    return false
+  }
+
+  activeNotebookCellKey.value = String(targetCell.key || '')
+  logger.info('[Notebook] template insert routed to cell', {
+    cellKey: String(targetCell.key || ''),
+    cellType: String(targetCell.type || ''),
+    length: text.length,
+  })
+
+  if (targetCell.type === 'markdown') {
+    const wasEditing = isMarkdownCellEditing(targetCell)
+    if (!isMarkdownCellEditing(targetCell)) {
+      enterMarkdownEditMode(targetCell.key, 'template-insert')
+      await nextTick()
+    }
+    const editorRef = markdownEditorRefMap.get(String(targetCell.key || ''))
+    if (editorRef?.insertContent && await editorRef.insertContent(text, { cursor: wasEditing ? 'keep' : 'end' })) {
+      return true
+    }
+    return appendTemplateContentToCellState(targetCell, text)
+  }
+
+  if (targetCell.type === 'python') {
+    activateNotebookCell(targetCell, 'template-insert')
+    const editorRef = pythonEditorRefMap.get(String(targetCell.key || ''))
+    if (editorRef?.insertContent && await editorRef.insertContent(text)) {
+      return true
+    }
+    return appendTemplateContentToCellState(targetCell, text)
+  }
+
+  if (targetCell.type === 'math') {
+    activateNotebookCell(targetCell, 'template-insert')
+    const editorRef = mathEditorRefMap.get(String(targetCell.key || ''))
+    if (editorRef?.insertContent && await editorRef.insertContent(text)) {
+      return true
+    }
+    return appendTemplateContentToCellState(targetCell, text)
+  }
+
+  return false
 }
 
 const removeCell = (key) => {
@@ -9003,6 +9149,9 @@ onBeforeUnmount(() => {
 })
 
 defineExpose({
+  insertTemplateContent(content) {
+    return insertTemplateContentIntoNotebook(content)
+  },
   insertCell(type = 'python') {
     appendCell(type)
   },

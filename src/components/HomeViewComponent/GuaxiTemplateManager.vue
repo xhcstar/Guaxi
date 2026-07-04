@@ -118,7 +118,12 @@
         </div>
       </div>
 
-      <div class="main">
+      <div
+        ref="mainRef"
+        class="main"
+        :class="{ 'is-resizing-sidebar': sidebarResizing }"
+        :style="{ gridTemplateColumns: `${sidebarWidth}px 6px minmax(0, 1fr)` }"
+      >
         <div class="left">
           <n-input v-model:value="filter" size="small" placeholder="搜索模板..." clearable />
           <div class="left-body">
@@ -165,6 +170,15 @@
             </n-collapse>
           </div>
         </div>
+        <div
+          class="sidebar-resizer"
+          title="拖动调整模板列表宽度"
+          role="separator"
+          aria-orientation="vertical"
+          @pointerdown="startSidebarResize"
+        >
+          <span></span>
+        </div>
 
         <div class="right">
           <div ref="contentEditorContainer" class="template-monaco-editor"></div>
@@ -203,13 +217,21 @@ const editName = ref('')
 const editType = ref('未分类')
 const editContent = ref('')
 const contentEditorContainer = ref(null)
+const mainRef = ref(null)
+const sidebarWidth = ref(360)
+const sidebarResizing = ref(false)
 
 const TEMPLATE_EDITOR_FONT_FAMILY = "'Maple Mono NF CN','JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New'"
 const TEMPLATE_EDITOR_FONT_SIZE = 18
+const TEMPLATE_MANAGER_SIDEBAR_WIDTH_KEY = 'guaxi.template_manager.sidebar_width'
+const SIDEBAR_MIN_WIDTH = 240
+const SIDEBAR_MAX_WIDTH = 720
 let contentEditor = null
 let contentModel = null
 let suppressEditorChange = false
 let themeObserver = null
+let sidebarResizeStartX = 0
+let sidebarResizeStartWidth = 360
 
 const PYTHON_CELL_TEMPLATE_GROUP = '探索者 / Python Cell'
 const py = String.raw
@@ -1061,6 +1083,68 @@ const getTemplateEditorTheme = () => {
   return theme === 'dark' ? 'guaxi-template-dark' : 'guaxi-template-light'
 }
 
+const clampSidebarWidth = (value) => {
+  const mainWidth = mainRef.value instanceof HTMLElement ? mainRef.value.clientWidth : window.innerWidth
+  const dynamicMax = Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, mainWidth - 420))
+  return Math.round(Math.max(SIDEBAR_MIN_WIDTH, Math.min(dynamicMax, Number(value) || 360)))
+}
+
+const loadSidebarWidth = () => {
+  try {
+    const saved = Number(localStorage.getItem(TEMPLATE_MANAGER_SIDEBAR_WIDTH_KEY) || '')
+    if (Number.isFinite(saved) && saved > 0) {
+      sidebarWidth.value = clampSidebarWidth(saved)
+    }
+  } catch (error) {
+    logger.debug('[TemplateManager] load sidebar width failed', error)
+  }
+}
+
+const persistSidebarWidth = () => {
+  try {
+    localStorage.setItem(TEMPLATE_MANAGER_SIDEBAR_WIDTH_KEY, String(sidebarWidth.value))
+  } catch (error) {
+    logger.debug('[TemplateManager] persist sidebar width failed', error)
+  }
+}
+
+const handleSidebarResizeMove = (event) => {
+  if (!sidebarResizing.value) return
+  const delta = Number(event.clientX || 0) - sidebarResizeStartX
+  sidebarWidth.value = clampSidebarWidth(sidebarResizeStartWidth + delta)
+  contentEditor?.layout?.()
+}
+
+const stopSidebarResize = () => {
+  if (!sidebarResizing.value) return
+  sidebarResizing.value = false
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+  window.removeEventListener('pointermove', handleSidebarResizeMove)
+  window.removeEventListener('pointerup', stopSidebarResize)
+  window.removeEventListener('pointercancel', stopSidebarResize)
+  persistSidebarWidth()
+  contentEditor?.layout?.()
+  logger.info('[TemplateManager] sidebar resize finished', {
+    width: sidebarWidth.value,
+  })
+}
+
+const startSidebarResize = (event) => {
+  sidebarResizing.value = true
+  sidebarResizeStartX = Number(event.clientX || 0)
+  sidebarResizeStartWidth = sidebarWidth.value
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+  window.addEventListener('pointermove', handleSidebarResizeMove)
+  window.addEventListener('pointerup', stopSidebarResize)
+  window.addEventListener('pointercancel', stopSidebarResize)
+  event.preventDefault?.()
+  logger.info('[TemplateManager] sidebar resize started', {
+    width: sidebarWidth.value,
+  })
+}
+
 const applyTemplateEditorTheme = () => {
   if (!contentEditor) return
   monaco.editor.setTheme(getTemplateEditorTheme())
@@ -1454,11 +1538,13 @@ watch(loading, (value) => {
 
 onMounted(async () => {
   await nextTick()
+  loadSidebarWidth()
   initContentEditor()
   await refresh()
 })
 
 onBeforeUnmount(() => {
+  stopSidebarResize()
   themeObserver?.disconnect?.()
   themeObserver = null
   contentEditor?.dispose?.()
@@ -1474,9 +1560,9 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  padding: 12px;
+  padding: 0;
   box-sizing: border-box;
-  gap: 10px;
+  gap: 0;
   overflow: hidden;
   background: var(--guaxi-content-bg);
   color: var(--guaxi-text-primary);
@@ -1488,11 +1574,13 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 12px;
-  border-radius: 10px;
+  min-height: 48px;
+  padding: 8px 12px;
   background: var(--guaxi-panel-bg);
-  border: 1px solid var(--guaxi-border);
-  box-shadow: 0 8px 24px rgba(16, 24, 40, 0.06);
+  border: 0;
+  border-bottom: 1px solid var(--guaxi-border);
+  box-shadow: none;
+  box-sizing: border-box;
 }
 
 .header-main {
@@ -1582,10 +1670,10 @@ onBeforeUnmount(() => {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 360px 1fr;
   grid-template-rows: minmax(0, 1fr);
-  gap: 12px;
+  gap: 0;
   overflow: hidden;
+  background: var(--guaxi-panel-bg);
 }
 
 .left {
@@ -1594,11 +1682,11 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 8px;
   overflow: hidden;
-  border: 1px solid var(--guaxi-border);
-  border-radius: 10px;
-  padding: 10px;
+  border: 0;
+  border-radius: 0;
+  padding: 10px 10px 8px 12px;
   background: var(--guaxi-panel-bg);
-  box-shadow: 0 8px 24px rgba(16, 24, 40, 0.06);
+  box-shadow: none;
 }
 
 .left-body {
@@ -1611,14 +1699,41 @@ onBeforeUnmount(() => {
   height: 100%;
   min-height: 0;
   overflow: hidden;
-  border: 1px solid var(--guaxi-border);
-  border-radius: 10px;
+  border: 0;
+  border-radius: 0;
   padding: 0;
   box-sizing: border-box;
   background: var(--guaxi-panel-bg);
-  box-shadow: 0 10px 28px rgba(16, 24, 40, 0.08);
+  box-shadow: none;
   display: flex;
   flex-direction: column;
+}
+
+.sidebar-resizer {
+  position: relative;
+  min-width: 6px;
+  width: 6px;
+  cursor: col-resize;
+  background: var(--guaxi-content-bg);
+  border-left: 1px solid var(--guaxi-border);
+  border-right: 1px solid var(--guaxi-border);
+  box-sizing: border-box;
+  z-index: 2;
+}
+
+.sidebar-resizer span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+
+.sidebar-resizer:hover span,
+.main.is-resizing-sidebar .sidebar-resizer span {
+  background: rgba(45, 212, 191, 0.72);
 }
 
 .template-monaco-editor {
@@ -1629,7 +1744,7 @@ onBeforeUnmount(() => {
   box-sizing: border-box;
   overflow: hidden;
   border: 0;
-  border-radius: 10px;
+  border-radius: 0;
   background: var(--guaxi-editor-bg, var(--guaxi-panel-bg));
 }
 
@@ -1681,6 +1796,11 @@ onBeforeUnmount(() => {
 
 :global(:root[data-guaxi-theme='dark']) .status-pill {
   background: rgba(97, 175, 239, 0.16);
+}
+
+:global(:root[data-guaxi-theme='dark']) .sidebar-resizer:hover span,
+:global(:root[data-guaxi-theme='dark']) .main.is-resizing-sidebar .sidebar-resizer span {
+  background: rgba(97, 175, 239, 0.78);
 }
 
 @media (max-width: 920px) {
