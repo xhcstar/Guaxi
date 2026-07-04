@@ -803,6 +803,38 @@ npm run android:dev:fresh
 - 这只清理 Guaxi Capture 手机端包名，不会影响 Guaxi PC 端代码。
 - 如果仍然失败，打开手机屏幕确认是否有安装确认弹窗、USB 调试授权弹窗，或系统安全软件拦截安装。
 
+### Android 安装成功但打开后空白
+
+现象：
+
+```text
+Performing Streamed Install
+Success
+Starting: Intent { cmp=com.guaxi.capture/.MainActivity }
+Tauri/Console: File: http://tauri.localhost/src/services/shareIntake.js - Line ... - Msg: Uncaught TypeError
+```
+
+含义：
+
+- APK 已经安装并启动成功。
+- 空白页来自 Android WebView 内部的前端 JS 异常，或者 dev 模式下 WebSocket/HMR 地址仍指向 `localhost`。
+- 手机里的 `localhost` 是手机自己，不是电脑，所以 dev server 和 HMR 必须使用电脑的局域网 IP。
+
+当前处理：
+
+- `shareIntake` 已经对 `null`、非对象 payload 做防御，首屏没有分享参数时不会再抛异常。
+- `npm run dev` 会通过 `scripts/run-vite-dev.mjs` 自动探测局域网 IP，并设置 `VITE_HMR_HOST`。
+- Tauri CSP 已允许 dev 模式访问 `http/ws`，避免 WebView 拦截局域网接口和 HMR。
+
+重新运行：
+
+```powershell
+cd apps\guaxi-capture
+npm run android:dev:fresh
+```
+
+如果仍然白屏，重新贴 `Tauri/Console:` 后面的 JS 错误行，优先看 `Uncaught ...`，不要只看前面的 Android 系统警告。
+
 ### iOS 本地没有命令
 
 Windows 上 Tauri CLI 不显示 `ios` 子命令是正常现象。iOS 构建需要 macOS runner 或本地 macOS + Xcode。

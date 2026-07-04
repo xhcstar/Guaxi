@@ -37,6 +37,7 @@ const KNOWN_SOURCE_MAP = new Map([
 export function createDraftFromIncomingPayload(payload = {}) {
   const normalized = normalizeIncomingPayload(payload)
   if (!hasMeaningfulCaptureContent(normalized)) {
+    console.info('[capture-intake] incoming payload skipped: empty or invalid')
     return null
   }
 
@@ -120,8 +121,20 @@ export async function readStartupNativePayload() {
 }
 
 export function normalizeIncomingPayload(payload = {}) {
+  if (payload == null) {
+    console.info('[capture-intake] normalize skipped null payload')
+    return {}
+  }
+
   if (typeof payload === 'string') {
     return parseSharedText(payload)
+  }
+
+  if (typeof payload !== 'object') {
+    console.info('[capture-intake] normalize skipped non-object payload', {
+      payloadType: typeof payload,
+    })
+    return {}
   }
 
   const normalized = {}

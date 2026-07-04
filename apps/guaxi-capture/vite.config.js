@@ -8,6 +8,14 @@ export default defineConfig({
     host: process.env.TAURI_DEV_HOST || '0.0.0.0',
     port: 1430,
     strictPort: true,
+    hmr: process.env.VITE_HMR_HOST
+      ? {
+          protocol: 'ws',
+          host: process.env.VITE_HMR_HOST,
+          port: 1430,
+          clientPort: 1430,
+        }
+      : undefined,
   },
   envPrefix: ['VITE_', 'TAURI_'],
   build: {
