@@ -25,6 +25,116 @@ cd apps/guaxi-capture
 npm run tauri:dev
 ```
 
+## Android 构建
+
+Android 可以在 Windows 上构建，但需要先安装：
+
+- Android Studio
+- Android SDK
+- Android NDK
+- Android Build Tools
+- Java / JDK
+- Rust Android targets
+
+首次初始化 Android 工程：
+
+```bash
+cd apps/guaxi-capture
+npm run mobile:check
+npm run android:init
+```
+
+连接真机或启动模拟器后调试：
+
+```bash
+cd apps/guaxi-capture
+npm run android:dev
+```
+
+构建 Android 安装包：
+
+```bash
+cd apps/guaxi-capture
+npm run android:build
+```
+
+构建产物通常会在：
+
+```text
+apps/guaxi-capture/src-tauri/gen/android/app/build/outputs/
+```
+
+## iOS 构建
+
+iOS 不能在 Windows 上直接构建，必须在 macOS 上使用 Xcode。把仓库放到 macOS 后执行：
+
+```bash
+cd apps/guaxi-capture
+npm install
+npm run ios:init
+npm run ios:dev
+```
+
+构建 iOS：
+
+```bash
+cd apps/guaxi-capture
+npm run ios:build
+```
+
+然后在 Xcode 中签名、选择 Team，并归档发布到 TestFlight 或导出 IPA。
+
+## GitHub Actions 构建 iOS
+
+仓库已提供 GitHub Actions 配置：
+
+```text
+.github/workflows/guaxi-capture-ios.yml
+```
+
+使用方式：
+
+1. 把当前代码推送到 GitHub。
+2. 打开 GitHub 仓库的 `Actions` 页面。
+3. 选择 `Build Guaxi Capture iOS`。
+4. 点击 `Run workflow`。
+5. 构建完成后，在 workflow run 的 `Artifacts` 中下载 `guaxi-capture-ios-*`。
+
+### 无签名构建
+
+不配置 Apple secrets 时，workflow 会尝试在 GitHub 的 macOS runner 上初始化并构建 iOS 工程。这个模式适合验证代码和生成 Xcode 构建产物，但通常不能直接安装到真机。
+
+### 签名 IPA
+
+如果你要得到可安装到真机、Ad Hoc 或提交 TestFlight/App Store 的 IPA，需要 Apple Developer 账号，并在 GitHub 仓库 `Settings -> Secrets and variables -> Actions` 添加这些 secrets：
+
+- `APPLE_CERTIFICATE_BASE64`：`.p12` 证书的 base64 内容
+- `APPLE_CERTIFICATE_PASSWORD`：`.p12` 证书密码
+- `APPLE_PROVISIONING_PROFILE_BASE64`：`.mobileprovision` 描述文件的 base64 内容
+- `KEYCHAIN_PASSWORD`：CI 临时 keychain 密码，自己生成一个强密码即可
+- `APPLE_TEAM_ID`：Apple Developer Team ID
+- `APPLE_PROVISIONING_PROFILE_NAME`：描述文件名称
+
+在 macOS 上生成 base64 的示例：
+
+```bash
+base64 -i certificate.p12 | pbcopy
+base64 -i GuaxiCapture.mobileprovision | pbcopy
+```
+
+然后在 `Run workflow` 时把 `signed` 设为 `true`，并根据证书类型选择 `development`、`ad-hoc` 或 `app-store`。
+
+## 移动端连接 Guaxi 主程序
+
+手机上的 `127.0.0.1` 指手机本机，不是运行 Guaxi 主程序的电脑。因此 Android/iOS 真机测试时，需要把界面里的接口改成电脑局域网 IP：
+
+```text
+Guaxi 接口：http://你的电脑IP:14219/extension/capture/import
+OCR 接口：http://你的电脑IP:9876/ocr
+```
+
+电脑和手机需要在同一局域网，Windows 防火墙也要允许这些端口被局域网访问。
+
 ## 当前边界
 
 当前版本已完成采集表单、附件编码、离线队列、外部分享接收层、HTML 转 Markdown、图片 OCR、浏览器扩展、本地接收器和 Guaxi Capture API 对接。Android Share Intent、iOS Share Extension 会在后续原生移动层继续补。
