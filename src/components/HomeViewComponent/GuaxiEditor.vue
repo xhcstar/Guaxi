@@ -18594,10 +18594,24 @@ const getCurrentTexContent = () => {
 const dictationCardVisible = ref(false)
 const dictationProvider = ref('')
 const dictationModel = ref('')
+const DICTATION_END_PUNCTUATION_RE = /[。！？!?；;:.…]["'”’）)]?$/
+const DICTATION_WEAK_END_PUNCTUATION_RE = /[，,、]$/
 
-// 把转写文本插入当前编辑器光标处（保留 undo/redo）
-const insertTranscriptAtCursor = (text) => {
+const formatDictationSegment = (text) => {
   const piece = String(text || '').trim()
+  if (!piece) return ''
+  if (DICTATION_END_PUNCTUATION_RE.test(piece)) return piece
+  // 设计思路：多数本地 ASR 只返回纯文字，不负责恢复标点。
+  // 中文片段默认补中文句号，纯英文/数字片段默认补英文句点，让实时记录天然分句。
+  const hasCjk = /[\u3400-\u9fff]/.test(piece)
+  const body = DICTATION_WEAK_END_PUNCTUATION_RE.test(piece) ? piece.slice(0, -1) : piece
+  return `${body}${hasCjk ? '。' : '.'}`
+}
+
+// 把转写文本插入当前编辑器光标处（保留 undo/redo）。
+// 每个片段独立成行，避免连续转写内容挤在同一行里不可读。
+const insertTranscriptAtCursor = (text) => {
+  const piece = formatDictationSegment(text)
   if (!piece) return
   const targetEditor = getActiveEditor()
   if (!targetEditor) {
@@ -18605,11 +18619,32 @@ const insertTranscriptAtCursor = (text) => {
     return
   }
   const selection = targetEditor.getSelection()
-  const range = selection || targetEditor.getModel()?.getFullModelRange()
+  const model = targetEditor.getModel()
+  const position = targetEditor.getPosition()
+  const range = selection || (position
+    ? new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column)
+    : model?.getFullModelRange())
   if (!range) return
-  // 句末补一个空格，方便连续会议记录
-  const insertText = piece.endsWith(' ') ? piece : `${piece} `
-  targetEditor.executeEdits('speech-dictation', [{ range, text: insertText, forceMoveMarkers: true }])
+  const replacingSelection = typeof selection?.isEmpty === 'function' ? !selection.isEmpty() : false
+  const linePrefix = !replacingSelection && model
+    ? model.getLineContent(range.startLineNumber).slice(0, Math.max(0, range.startColumn - 1))
+    : ''
+  const leadingBreak = linePrefix && !/\s$/.test(linePrefix) ? '\n' : ''
+  const insertText = `${leadingBreak}${piece}\n`
+  const lines = insertText.split('\n')
+  const endLineNumber = range.startLineNumber + lines.length - 1
+  const endColumn = lines.length === 1 ? range.startColumn + lines[0].length : lines[lines.length - 1].length + 1
+  targetEditor.executeEdits(
+    'speech-dictation',
+    [{ range, text: insertText, forceMoveMarkers: true }],
+    () => [new monaco.Selection(endLineNumber, endColumn, endLineNumber, endColumn)]
+  )
+  logger.info('[Dictation] 转写片段已插入编辑器', {
+    textLength: piece.length,
+    line: range.startLineNumber,
+    column: range.startColumn,
+    leadingBreak: Boolean(leadingBreak),
+  })
   targetEditor.focus()
 }
 

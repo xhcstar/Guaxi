@@ -54,9 +54,16 @@ export function useSpeechDictation(onTranscript) {
   let speaking = false
   let silenceMs = 0
   let voicedMs = 0
-  const SILENCE_HANG_MS = 800 // 静音超过此值判定一句结束
+  const SILENCE_HANG_MS = 520 // 静音超过此值判定一句结束，短暂停顿即可尽快输出
   const MIN_UTTERANCE_MS = 300 // 太短的片段忽略（避免噪声触发）
-  const MAX_UTTERANCE_MS = 15000 // 单句上限，超过强制切分
+  const STREAMING_CHUNK_MS = 5200 // 连续讲话时也定时切片，避免一直等到停止录音
+
+  // 转写请求是异步的，短片段连续送 ASR 后可能后发先至。
+  // 这里用序号缓存结果，只按采集顺序回调到编辑器，保证会议记录不会前后颠倒。
+  let transcriptSeq = 0
+  let nextEmitSeq = 1
+  let activeRunId = 0
+  const transcriptQueue = new Map()
 
   const refreshDevices = async () => {
     try {
@@ -253,8 +260,34 @@ export function useSpeechDictation(onTranscript) {
     return rawText
   }
 
-  // 把一段累积的源 PCM 切出来，转写并回调
-  const flushUtterance = async () => {
+  const emitTranscriptInOrder = (runId, seq, text) => {
+    if (runId !== activeRunId) {
+      logger.warn('丢弃过期语音听写片段', {
+        runId,
+        activeRunId,
+        seq,
+      })
+      return
+    }
+    transcriptQueue.set(seq, String(text || '').trim())
+    while (transcriptQueue.has(nextEmitSeq)) {
+      const queuedText = transcriptQueue.get(nextEmitSeq)
+      transcriptQueue.delete(nextEmitSeq)
+      if (queuedText) {
+        logger.info('语音听写片段按序输出', {
+          seq: nextEmitSeq,
+          textLength: queuedText.length,
+        })
+        onTranscript?.(queuedText)
+      }
+      nextEmitSeq += 1
+    }
+  }
+
+  // 把一段累积的源 PCM 切出来，转写并回调。
+  // 设计思路：flush 只负责取走当前缓冲，随后立即允许新的音频帧继续累积；
+  // ASR 请求在后台完成，结果再通过 emitTranscriptInOrder 保序插入。
+  const flushUtterance = async (reason = 'unknown') => {
     if (!captureLength) return
     const merged = new Float32Array(captureLength)
     let offset = 0
@@ -268,12 +301,21 @@ export function useSpeechDictation(onTranscript) {
     const durationMs = (merged.length / sourceSampleRate) * 1000
     if (durationMs < MIN_UTTERANCE_MS) return // 噪声片段，丢弃
 
+    const seq = ++transcriptSeq
+    const runId = activeRunId
     const pcm16k = resampleTo16k(merged, sourceSampleRate)
     const wav = encodeWav16kMono(pcm16k)
     const base64 = arrayBufferToBase64(wav)
 
     pendingCount.value += 1
     status.value = 'transcribing'
+    logger.info('语音听写片段开始转写', {
+      seq,
+      reason,
+      durationMs: Math.round(durationMs),
+      sourceSampleRate,
+      pendingCount: pendingCount.value,
+    })
     try {
       const common = await resolveAsrRequestCommon()
       const resp = await invoke('audio_speech_to_text', {
@@ -293,11 +335,14 @@ export function useSpeechDictation(onTranscript) {
         })
       }
       if (text) {
-        onTranscript?.(text)
+        emitTranscriptInOrder(runId, seq, text)
+      } else {
+        emitTranscriptInOrder(runId, seq, '')
       }
     } catch (e) {
       errorText.value = String(e?.message || e || '转写失败')
-      logger.error('转写失败', { error: errorText.value })
+      logger.error('转写失败', { seq, reason, error: errorText.value })
+      emitTranscriptInOrder(runId, seq, '')
     } finally {
       pendingCount.value = Math.max(0, pendingCount.value - 1)
       if (recording.value) {
@@ -327,12 +372,16 @@ export function useSpeechDictation(onTranscript) {
       // 累积语音帧（拷贝，因为底层 buffer 会被复用）
       captureBuffers.push(new Float32Array(input))
       captureLength += input.length
-      // 超长强制切句
-      if (voicedMs >= MAX_UTTERANCE_MS) {
+      // 连续讲话时也按固定时长切片，让长段录音可以边说边出文字。
+      if (voicedMs >= STREAMING_CHUNK_MS) {
+        logger.info('语音听写触发连续讲话切片', {
+          voicedMs: Math.round(voicedMs),
+          captureLength,
+        })
         voicedMs = 0
         speaking = false
         silenceMs = 0
-        void flushUtterance()
+        void flushUtterance('streaming-chunk')
       }
     } else if (speaking) {
       // 语音中遇到静音：仍然把静音附上（保留句末气口），并累计静音时长
@@ -344,7 +393,7 @@ export function useSpeechDictation(onTranscript) {
         silenceMs = 0
         voicedMs = 0
         status.value = 'transcribing'
-        void flushUtterance()
+        void flushUtterance('silence')
       }
     }
     // 非说话且没在 speaking：丢弃静音帧，不累积
@@ -425,6 +474,10 @@ export function useSpeechDictation(onTranscript) {
       speaking = false
       silenceMs = 0
       voicedMs = 0
+      transcriptSeq = 0
+      nextEmitSeq = 1
+      activeRunId += 1
+      transcriptQueue.clear()
       recording.value = true
       status.value = 'listening'
       logger.info('开始语音听写', { sourceSampleRate, deviceId: selectedDeviceId.value })
@@ -442,7 +495,7 @@ export function useSpeechDictation(onTranscript) {
     recording.value = false
     // 把残留的语音片段刷出去
     if (wasRecording && captureLength > 0 && voicedMs >= 0) {
-      try { await flushUtterance() } catch { /* noop */ }
+      try { await flushUtterance('stop') } catch { /* noop */ }
     }
     try { processorNode && (processorNode.onaudioprocess = null) } catch { /* noop */ }
     try { processorNode?.port && (processorNode.port.onmessage = null) } catch { /* noop */ }

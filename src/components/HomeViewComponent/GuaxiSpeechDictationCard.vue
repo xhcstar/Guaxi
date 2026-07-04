@@ -55,7 +55,7 @@
     </div>
 
     <div class="dictation-card__tip">
-      转写文本会按句插入到光标处，可用于实时会议记录。
+      转写文本会按片段实时插入到光标处，并自动换行。
     </div>
   </div>
 </template>
