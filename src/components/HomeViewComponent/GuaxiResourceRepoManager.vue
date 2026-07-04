@@ -7,6 +7,18 @@
           <n-tag :type="syncUi.tagType" size="small">{{ syncUi.tagText }}</n-tag>
         </div>
 
+        <n-input
+          v-model:value="searchKeyword"
+          class="header-search"
+          size="medium"
+          clearable
+          placeholder="搜索已加载的资源"
+        >
+          <template #prefix>
+            <n-icon :component="Search20Regular" />
+          </template>
+        </n-input>
+
         <div class="header-actions">
           <div class="header-tool-group">
             <n-tooltip>
@@ -107,24 +119,8 @@
         </div>
       </header>
 
-      <main class="main">
+      <main class="main" :style="mainGridStyle">
         <section class="workspace">
-          <div class="workspace-toolbar">
-            <div class="toolbar-top">
-              <n-input
-                v-model:value="searchKeyword"
-                class="search"
-                size="medium"
-                clearable
-                placeholder="搜索已加载的资源"
-              >
-                <template #prefix>
-                  <n-icon :component="Search20Regular" />
-                </template>
-              </n-input>
-            </div>
-          </div>
-
           <div class="browser">
             <div v-if="viewMode !== 'tree'" class="browser-head">
               <n-button size="small" circle :disabled="!canGoUp" @click="goUpDirectory">
@@ -194,6 +190,12 @@
             </n-spin>
           </div>
         </section>
+
+        <div
+          class="side-resizer"
+          title="拖动调整右侧栏宽度"
+          @pointerdown="startResizeSidebar"
+        ></div>
 
         <aside class="side">
           <section class="side-section">
@@ -589,6 +591,8 @@ const selectedPath = ref('')
 const searchKeyword = ref('')
 const viewMode = ref('tree')
 const currentDir = ref('')
+const sidebarWidth = ref(370)
+const resizingSidebar = ref(false)
 
 const createModalVisible = ref(false)
 const createMode = ref('folder')
@@ -596,6 +600,7 @@ const createName = ref('')
 const renameModalVisible = ref(false)
 const renameName = ref('')
 const deleteModalVisible = ref(false)
+let sidebarResizeState = null
 
 const normalizePath = (path) => String(path || '').replace(/\\/g, '/').replace(/\/+/g, '/')
 
@@ -830,6 +835,63 @@ const displayedItemCount = computed(() => {
   if (viewMode.value === 'tree') return filteredTreeData.value.length
   return visibleItems.value.length
 })
+
+const mainGridStyle = computed(() => ({
+  '--resource-sidebar-width': `${sidebarWidth.value}px`,
+}))
+
+const clampSidebarWidth = (width, viewportWidth = window.innerWidth || 0) => {
+  const minSidebar = 260
+  const maxSidebar = 560
+  const minWorkspace = 320
+  const resizerWidth = 8
+  const availableMax = viewportWidth > 0 ? Math.max(minSidebar, viewportWidth - minWorkspace - resizerWidth) : maxSidebar
+  return Math.max(minSidebar, Math.min(maxSidebar, availableMax, Math.round(Number(width) || sidebarWidth.value)))
+}
+
+const stopResizeSidebar = () => {
+  if (!resizingSidebar.value) return
+  resizingSidebar.value = false
+  sidebarResizeState = null
+  window.removeEventListener('pointermove', handleSidebarResize)
+  window.removeEventListener('pointerup', stopResizeSidebar)
+  window.removeEventListener('pointercancel', stopResizeSidebar)
+  try {
+    document.body.classList.remove('resource-sidebar-resizing')
+  } catch {}
+  logger.info('[ResourceRepoManager] sidebar resize end', { width: sidebarWidth.value })
+}
+
+const handleSidebarResize = (event) => {
+  if (!sidebarResizeState) return
+  const delta = sidebarResizeState.startX - Number(event?.clientX || 0)
+  sidebarWidth.value = clampSidebarWidth(sidebarResizeState.startWidth + delta)
+}
+
+const startResizeSidebar = (event) => {
+  if (!event) return
+  event.preventDefault?.()
+  resizingSidebar.value = true
+  sidebarResizeState = {
+    startX: Number(event.clientX || 0),
+    startWidth: sidebarWidth.value,
+  }
+  try {
+    event.currentTarget?.setPointerCapture?.(event.pointerId)
+    document.body.classList.add('resource-sidebar-resizing')
+  } catch {}
+  window.addEventListener('pointermove', handleSidebarResize)
+  window.addEventListener('pointerup', stopResizeSidebar)
+  window.addEventListener('pointercancel', stopResizeSidebar)
+  logger.info('[ResourceRepoManager] sidebar resize start', { width: sidebarWidth.value })
+}
+
+const handleWindowResize = () => {
+  const next = clampSidebarWidth(sidebarWidth.value)
+  if (next === sidebarWidth.value) return
+  sidebarWidth.value = next
+  logger.info('[ResourceRepoManager] sidebar width clamped after window resize', { width: next })
+}
 
 const repoStats = computed(() => {
   const total = flatItems.value.length
@@ -1249,6 +1311,7 @@ const syncNow = async () => {
 onMounted(async () => {
   window.addEventListener('guaxi:resource-repo-sync-state', handleSyncStateEvent)
   window.addEventListener('storage', handleStorageEvent)
+  window.addEventListener('resize', handleWindowResize)
 
   refreshSyncStateFromStorage('mounted')
 
@@ -1273,8 +1336,11 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  stopResizeSidebar()
+
   window.removeEventListener('guaxi:resource-repo-sync-state', handleSyncStateEvent)
   window.removeEventListener('storage', handleStorageEvent)
+  window.removeEventListener('resize', handleWindowResize)
 
   try {
     if (syncProgressUnlisten) {
@@ -1331,9 +1397,15 @@ onUnmounted(() => {
 }
 
 .header-left {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   min-width: 0;
   gap: 10px;
+}
+
+.header-search {
+  flex: 1 1 420px;
+  max-width: 680px;
+  min-width: 220px;
 }
 
 .header-actions {
@@ -1364,8 +1436,9 @@ onUnmounted(() => {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 370px;
+  grid-template-columns: minmax(320px, 1fr) 8px var(--resource-sidebar-width, 370px);
   gap: 0;
+  overflow: hidden;
 }
 
 .workspace {
@@ -1373,32 +1446,6 @@ onUnmounted(() => {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid var(--guaxi-border, var(--n-divider-color, rgba(255,255,255,0.12)));
-}
-
-.workspace-toolbar {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--guaxi-border, var(--n-divider-color, rgba(255,255,255,0.12)));
-  background: rgba(255,255,255,0.018);
-}
-
-.toolbar-top {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-
-.toolbar-top {
-  gap: 0;
-}
-
-.search {
-  flex: 1 1 auto;
-  max-width: 720px;
-  min-width: 220px;
 }
 
 .view-switcher {
@@ -1569,6 +1616,32 @@ onUnmounted(() => {
   background: var(--guaxi-panel-bg, rgba(255,255,255,0.018));
 }
 
+.side-resizer {
+  width: 8px;
+  min-width: 8px;
+  cursor: col-resize;
+  background: linear-gradient(
+    to right,
+    transparent 0,
+    transparent 3px,
+    var(--guaxi-border, var(--n-divider-color, rgba(255,255,255,0.12))) 3px,
+    var(--guaxi-border, var(--n-divider-color, rgba(255,255,255,0.12))) 4px,
+    transparent 4px
+  );
+}
+
+.side-resizer:hover,
+.side-resizer:active {
+  background: linear-gradient(
+    to right,
+    transparent 0,
+    transparent 2px,
+    var(--n-primary-color, #63e2b7) 2px,
+    var(--n-primary-color, #63e2b7) 5px,
+    transparent 5px
+  );
+}
+
 .side-section {
   padding: 16px 18px;
   border-bottom: 1px solid var(--guaxi-border, var(--n-divider-color, rgba(255,255,255,0.12)));
@@ -1702,23 +1775,20 @@ onUnmounted(() => {
 
 @media (max-width: 860px) {
   .main {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(280px, 1fr) 8px var(--resource-sidebar-width, 300px);
+    overflow-x: auto;
   }
 
-  .side {
-    display: none;
+  .header {
+    height: auto;
+    min-height: 52px;
+    flex-wrap: wrap;
+    padding: 8px 12px;
   }
 
-  .workspace-toolbar {
-    gap: 10px;
-  }
-
-  .toolbar-top {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .search {
+  .header-search {
+    order: 3;
+    flex-basis: 100%;
     max-width: none;
   }
 
@@ -1748,7 +1818,6 @@ onUnmounted(() => {
 .resource-repo-manager .header-left,
 .resource-repo-manager .header-actions,
 .resource-repo-manager .header-tool-group,
-.resource-repo-manager .toolbar-top,
 .resource-repo-manager .sync-head,
 .resource-repo-manager .side-title {
   display: flex;
@@ -1756,9 +1825,15 @@ onUnmounted(() => {
 }
 
 .resource-repo-manager .header-left {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   min-width: 0;
   gap: 10px;
+}
+
+.resource-repo-manager .header-search {
+  flex: 1 1 420px;
+  max-width: 680px;
+  min-width: 220px;
 }
 
 .resource-repo-manager .header-actions {
@@ -1785,7 +1860,8 @@ onUnmounted(() => {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 370px;
+  grid-template-columns: minmax(320px, 1fr) 8px var(--resource-sidebar-width, 370px);
+  overflow: hidden;
 }
 
 .resource-repo-manager .workspace {
@@ -1793,24 +1869,6 @@ onUnmounted(() => {
   min-height: 0;
   display: flex;
   flex-direction: column;
-}
-
-.resource-repo-manager .workspace-toolbar {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  padding: 10px 14px;
-  box-sizing: border-box;
-}
-
-.resource-repo-manager .toolbar-top {
-  min-width: 0;
-}
-
-.resource-repo-manager .search {
-  flex: 1 1 auto;
-  max-width: 720px;
-  min-width: 220px;
 }
 
 .resource-repo-manager .view-switcher {
@@ -1911,6 +1969,17 @@ onUnmounted(() => {
   overflow: auto;
 }
 
+.resource-repo-manager .side-resizer {
+  width: 8px;
+  min-width: 8px;
+  cursor: col-resize;
+}
+
+body.resource-sidebar-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
 .resource-repo-manager .side-section {
   padding: 16px 18px;
 }
@@ -1977,19 +2046,20 @@ onUnmounted(() => {
 
 @media (max-width: 860px) {
   .resource-repo-manager .main {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: minmax(280px, 1fr) 8px var(--resource-sidebar-width, 300px);
+    overflow-x: auto;
   }
 
-  .resource-repo-manager .side {
-    display: none;
+  .resource-repo-manager .header {
+    height: auto;
+    min-height: 52px;
+    flex-wrap: wrap;
+    padding: 8px 12px;
   }
 
-  .resource-repo-manager .toolbar-top {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .resource-repo-manager .search {
+  .resource-repo-manager .header-search {
+    order: 3;
+    flex-basis: 100%;
     max-width: none;
   }
 }
