@@ -4,7 +4,19 @@ Guaxi 主程序提供统一采集入口，供浏览器插件、未来的手机�
 
 ## Endpoint
 
-`POST http://127.0.0.1:<guaxi-service-port>/extension/capture/import`
+PC 本机调用：
+
+`POST http://127.0.0.1:14219/extension/capture/import`
+
+手机或局域网设备调用：
+
+`POST http://<PC-LAN-IP>:14219/extension/capture/import`
+
+设计说明：
+
+- Guaxi 主后端仍保持 `127.0.0.1:8888`，不对局域网暴露完整内部 API。
+- Capture Import 单独监听 `0.0.0.0:14219`，只用于移动端/局域网采集写入。
+- 可通过环境变量 `GUAXI_CAPTURE_BIND` 覆盖监听地址，例如 `127.0.0.1:14219` 或 `0.0.0.0:14219`。
 
 该接口假设调用方已经把网页、截图 OCR、笔记或平台分享内容转换成 Markdown。服务端负责：
 
@@ -74,8 +86,17 @@ Guaxi 主程序提供统一采集入口，供浏览器插件、未来的手机�
 ## Example
 
 ```bash
-curl -X POST "http://127.0.0.1:14219/extension/capture/import" \
+curl --noproxy "*" -X POST "http://127.0.0.1:14219/extension/capture/import" \
   -H "Content-Type: application/json" \
   -d "{\"title\":\"Demo\",\"sourceApp\":\"camera\",\"knowledgeBase\":\"AI\",\"fileRepo\":\"Inbox\",\"markdown\":\"# Demo\\n\\nOCR text\"}"
 ```
 
+局域网测试：
+
+```bash
+curl --noproxy "*" -X POST "http://192.168.1.100:14219/extension/capture/import" \
+  -H "Content-Type: application/json" \
+  -d "{\"title\":\"Mobile Demo\",\"sourceApp\":\"camera\",\"knowledgeBase\":\"AI\",\"fileRepo\":\"Inbox\",\"markdown\":\"# Mobile Demo\\n\\nfrom phone\"}"
+```
+
+注意：如果命令行环境设置了 `http_proxy`，普通 `curl http://192.168.x.x:14219/...` 会先走代理，可能得到代理返回的 `502 Bad Gateway`，不能代表 Guaxi PC 服务不可用。测试局域网地址时使用 `--noproxy "*"`。

@@ -202,6 +202,15 @@ pub fn config(cfg: &mut web::ServiceConfig, state: web::Data<SharedState>) {
         );
 }
 
+// 设计说明：
+// 手机端 Guaxi Capture 只需要写入 Capture Import API，不应该为了移动端同步而把
+// PC 端完整的 8888 后端服务暴露到局域网。这里提供一个窄作用域配置，仅注册
+// `/extension/capture/import`，供独立的局域网监听端口使用。
+pub fn capture_import_config(cfg: &mut web::ServiceConfig, state: web::Data<SharedState>) {
+    cfg.app_data(state)
+        .service(web::scope("/extension").service(handle_capture_import));
+}
+
 #[post("/capture/import")]
 async fn handle_capture_import(
     req: web::Json<CaptureImportRequest>,

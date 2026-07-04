@@ -9,7 +9,7 @@ use crate::commands::notebook_lab::{
 use crate::state::SharedState;
 use actix_cors::Cors;
 use actix_web::web::{Data, JsonConfig, PayloadConfig};
-use actix_web::{web, App, HttpResponse, HttpServer};
+use actix_web::{rt, web, App, HttpResponse, HttpServer};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{Emitter, Manager};
@@ -133,6 +133,8 @@ async fn notebook_data_lab_rpc_http(
 }
 
 pub async fn start_backend_services(state: SharedState) -> std::io::Result<()> {
+    start_capture_import_lan_service(state.clone());
+
     let server = HttpServer::new(move || {
         let cors = Cors::default()
             .allow_any_origin()
@@ -156,4 +158,52 @@ pub async fn start_backend_services(state: SharedState) -> std::io::Result<()> {
     .bind("127.0.0.1:8888")?;
 
     server.run().await
+}
+
+fn capture_import_bind_addr() -> String {
+    std::env::var("GUAXI_CAPTURE_BIND")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "0.0.0.0:14219".to_string())
+}
+
+fn start_capture_import_lan_service(state: SharedState) {
+    let bind_addr = capture_import_bind_addr();
+
+    // 设计说明：
+    // 主后端仍只监听 127.0.0.1:8888，保证编辑器、Markdown 渲染、WebModel 等内部 API
+    // 不被局域网访问。移动端只通过这个窄端口访问 Capture Import，便于手机采集内容
+    // 写入文件库，也降低暴露面。端口被占用时只记录日志，不阻断 PC 主程序启动。
+    match HttpServer::new(move || {
+        let cors = Cors::default()
+            .allow_any_origin()
+            .allowed_methods(vec!["POST", "OPTIONS"])
+            .allow_any_header()
+            .max_age(3600);
+
+        App::new()
+            .wrap(cors)
+            .configure(|cfg| {
+                chrome_extension_service::capture_import_config(cfg, Data::new(state.clone()))
+            })
+            .app_data(JsonConfig::default().limit(20 * 1024 * 1024))
+            .app_data(PayloadConfig::default().limit(20 * 1024 * 1024))
+    })
+    .bind(&bind_addr)
+    {
+        Ok(server) => {
+            info!(
+                "[capture_import] LAN import service listening on http://{}",
+                bind_addr
+            );
+            rt::spawn(server.run());
+        }
+        Err(error) => {
+            warn!(
+                "[capture_import] LAN import service bind failed addr={} error={}",
+                bind_addr, error
+            );
+        }
+    }
 }

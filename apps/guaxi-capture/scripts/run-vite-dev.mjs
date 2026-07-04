@@ -33,12 +33,14 @@ const hmrHost = process.env.VITE_HMR_HOST || process.env.TAURI_DEV_HOST || detec
 const env = {
   ...process.env,
   VITE_HMR_HOST: hmrHost,
+  VITE_GUAXI_PC_HOST: process.env.VITE_GUAXI_PC_HOST || hmrHost,
 };
 
 console.info('[capture-dev] starting Vite dev server', {
   host: '0.0.0.0',
   port,
   hmrHost: hmrHost || '(auto)',
+  guaxiPcHost: env.VITE_GUAXI_PC_HOST || '(manual)',
 });
 
 const result = spawnSync(process.execPath, [viteCli, '--host', '0.0.0.0', '--port', port], {

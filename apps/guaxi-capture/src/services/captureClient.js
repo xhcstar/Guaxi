@@ -1,4 +1,27 @@
-const DEFAULT_ENDPOINT = 'http://127.0.0.1:14219/extension/capture/import'
+const CAPTURE_IMPORT_PORT = '14219'
+const CAPTURE_IMPORT_PATH = '/extension/capture/import'
+
+function inferDefaultEndpoint() {
+  const envHost = import.meta.env?.VITE_GUAXI_PC_HOST
+  const locationHost = typeof window !== 'undefined' ? window.location.hostname : ''
+  const host = normalizeEndpointHost(envHost || locationHost)
+
+  if (!host) {
+    return `http://127.0.0.1:${CAPTURE_IMPORT_PORT}${CAPTURE_IMPORT_PATH}`
+  }
+
+  return `http://${host}:${CAPTURE_IMPORT_PORT}${CAPTURE_IMPORT_PATH}`
+}
+
+function normalizeEndpointHost(host) {
+  const value = String(host || '').trim()
+  if (!value || value === 'tauri.localhost' || value === 'localhost') {
+    return '127.0.0.1'
+  }
+  return value
+}
+
+export const DEFAULT_ENDPOINT = inferDefaultEndpoint()
 
 export const STORAGE_KEYS = {
   endpoint: 'guaxi_capture_endpoint',
@@ -6,11 +29,40 @@ export const STORAGE_KEYS = {
 }
 
 export function loadEndpoint() {
-  return localStorage.getItem(STORAGE_KEYS.endpoint) || DEFAULT_ENDPOINT
+  const stored = localStorage.getItem(STORAGE_KEYS.endpoint)
+  if (stored && isUsableStoredEndpoint(stored)) {
+    return stored
+  }
+
+  console.info('[capture] using default endpoint', {
+    endpoint: DEFAULT_ENDPOINT,
+    stored,
+  })
+  return DEFAULT_ENDPOINT
 }
 
 export function saveEndpoint(endpoint) {
   localStorage.setItem(STORAGE_KEYS.endpoint, endpoint.trim() || DEFAULT_ENDPOINT)
+}
+
+function isUsableStoredEndpoint(endpoint) {
+  const value = String(endpoint || '').trim()
+  if (!value) return false
+
+  // 设计说明：
+  // 旧版本默认值是 127.0.0.1:14219。它在 PC 浏览器里可用，但在 Android/iOS 真机上
+  // 会指向手机自身，导致发送到 Guaxi PC 失败。Tauri 移动端下自动迁移到当前
+  // dev 脚本探测出的 PC 局域网 IP；用户手动填过的局域网地址则保留。
+  const isMobileTauri = Boolean(window.__TAURI_INTERNALS__) && window.location.hostname === 'tauri.localhost'
+  if (isMobileTauri && /^http:\/\/(127\.0\.0\.1|localhost):14219\//i.test(value)) {
+    console.info('[capture] ignore stale localhost endpoint on mobile', {
+      endpoint: value,
+      nextEndpoint: DEFAULT_ENDPOINT,
+    })
+    return false
+  }
+
+  return true
 }
 
 export function loadQueue() {

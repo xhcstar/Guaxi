@@ -262,6 +262,18 @@ http://127.0.0.1:14219/extension/capture/import
 http://你的电脑IP:14219/extension/capture/import
 ```
 
+PC 端设计：
+
+- Guaxi PC 主后端仍监听 `127.0.0.1:8888`，不暴露完整内部 API。
+- Capture Import 额外监听 `0.0.0.0:14219`，只接收 `POST /extension/capture/import`。
+- 可以用 `GUAXI_CAPTURE_BIND` 覆盖监听地址；例如仅本机调试时设为 `127.0.0.1:14219`。
+
+移动端默认值：
+
+- Android dev 下，`scripts/run-vite-dev.mjs` 会把 `VITE_GUAXI_PC_HOST` 设置为电脑局域网 IP。
+- App 首次打开时默认 `Guaxi 接口` 会变成 `http://电脑IP:14219/extension/capture/import`。
+- 旧版本保存过的 `127.0.0.1:14219` 会在移动端自动忽略，避免手机把请求发给自己。
+
 提交 payload：
 
 ```json
@@ -610,6 +622,7 @@ OCR 接口：http://192.168.1.100:9876/ocr
 
 - 手机和 PC 在同一局域网。
 - PC 防火墙允许 `14219` 和 `9876` 入站访问。
+- 命令行测试时绕过代理：`curl --noproxy "*"`。
 - Guaxi PC 主程序已经启动后端服务。
 - OCR 功能需要 Guaxi PC 的 agent_server 正常运行。
 
