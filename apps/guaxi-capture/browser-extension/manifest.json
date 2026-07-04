@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Guaxi Capture Sender",
+  "version": "0.1.0",
+  "description": "Send current web article or selection to Guaxi Capture.",
+  "permissions": ["activeTab", "contextMenus", "scripting"],
+  "host_permissions": ["http://127.0.0.1:14230/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Send to Guaxi Capture",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

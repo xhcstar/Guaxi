@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Guaxi Capture</title>
+    <style>
+      body {
+        width: 240px;
+        margin: 0;
+        padding: 12px;
+        font-family: "Microsoft YaHei", system-ui, sans-serif;
+        color: #142033;
+        background: #f6f9fc;
+      }
+
+      h1 {
+        margin: 0 0 10px;
+        font-size: 16px;
+      }
+
+      button {
+        width: 100%;
+        margin: 0 0 8px;
+        border: 1px solid #bac8d8;
+        border-radius: 6px;
+        background: #ffffff;
+        color: #17324d;
+        padding: 8px 10px;
+        cursor: pointer;
+      }
+
+      button.primary {
+        border-color: #0f8b8d;
+        background: #0f8b8d;
+        color: #ffffff;
+        font-weight: 700;
+      }
+
+      p {
+        margin: 4px 0 0;
+        color: #516174;
+        font-size: 12px;
+        overflow-wrap: anywhere;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Guaxi Capture</h1>
+    <button class="primary" data-mode="article">发送当前网页</button>
+    <button data-mode="selection">发送选中内容</button>
+    <p id="status">请先启动 Guaxi Capture App。</p>
+    <script src="popup.js"></script>
+  </body>
+</html>

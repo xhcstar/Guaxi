@@ -1,0 +1,21 @@
+{
+  "name": "guaxi-capture",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node ../../node_modules/vite/bin/vite.js --host 127.0.0.1",
+    "build": "node ../../node_modules/vite/bin/vite.js build",
+    "preview": "node ../../node_modules/vite/bin/vite.js preview",
+    "tauri": "node ../../node_modules/@tauri-apps/cli/tauri.js",
+    "tauri:dev": "node ../../node_modules/@tauri-apps/cli/tauri.js dev",
+    "tauri:build": "node ../../node_modules/@tauri-apps/cli/tauri.js build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.9.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.9.6",
+    "vite": "^6.0.3"
+  }
+}
