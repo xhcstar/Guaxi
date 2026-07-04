@@ -733,6 +733,13 @@ https://mirrors.cloud.tencent.com/gradle/gradle-*.zip
 npm run android:gradle:official
 ```
 
+说明：
+
+- `android:gradle:mirror` 会通过 `scripts/run-android-gradle-config.mjs` 查找可用 Bash，然后调用 `scripts/configure-android-gradle.sh`。
+- 默认会把 Gradle 下载地址改到腾讯云 Gradle 镜像。
+- Windows 下建议安装 Git for Windows；如果提示找不到 Bash，可以把 `GUAXI_BASH` 指向你的 `bash.exe`。
+- 这个脚本只重写 Android 生成工程里的 `gradle-wrapper.properties`，不会修改 Guaxi 主应用代码。
+
 如果出现：
 
 ```text
@@ -745,10 +752,10 @@ No value with key 'distributionUrl' specified in wrapper properties file
 npm run android:gradle:mirror
 ```
 
-脚本会用 UTF-8 no BOM 重写该文件；如果 `distributionUrl` 缺失，会按默认 `GradleVersion=8.14.3` 自动补回。需要指定版本时：
+脚本会用简单的 ASCII properties 内容重写该文件；如果 `distributionUrl` 缺失，会按默认 `gradle-8.14.3-bin.zip` 自动补回。需要指定版本时：
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/configure-android-gradle.ps1 -GradleVersion 8.14.3
+```bash
+node scripts/run-android-gradle-config.mjs --gradle-version 8.14.3
 ```
 
 解决方式二：手动下载 `gradle-8.14.3-bin.zip`，放到 Gradle wrapper cache。这个方式不推荐作为默认流程，因为 cache 路径包含 hash，不如直接替换 `distributionUrl` 稳定。
