@@ -1,6 +1,9 @@
+use crate::commands::repoview::repofileproc::add_web_clipper_import_file;
+use crate::commands::repoview::{add_imported_file, ImportedFileInput};
 use crate::commands::settingview::get_libraries_root;
 use crate::state::SharedState;
 use actix_web::{post, web, HttpRequest, HttpResponse, Responder};
+use base64::{engine::general_purpose, Engine as _};
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -13,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
 use tracing::{error, info, warn};
+use uuid::Uuid;
 
 
 #[derive(Debug, Deserialize)]
@@ -29,6 +33,55 @@ pub struct GuaxiWebClipperRequest {
     pub tags: Vec<String>,
     #[serde(rename = "fileRepo")]
     pub file_repo: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CaptureImportRequest {
+    #[serde(default)]
+    pub title: String,
+    #[serde(default, alias = "sourceUrl")]
+    pub source_url: String,
+    #[serde(default, alias = "sourceApp")]
+    pub source_app: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default, alias = "knowledgeBase")]
+    pub knowledge_repo: String,
+    #[serde(default, alias = "fileRepo")]
+    pub file_repo: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default, alias = "createdAt", alias = "timestamp")]
+    pub created_at: String,
+    #[serde(default)]
+    pub markdown: Option<String>,
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub assets: Vec<CaptureAsset>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CaptureAsset {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub mime: String,
+    #[serde(default, alias = "dataBase64")]
+    pub data_base64: String,
+}
+
+#[derive(Serialize)]
+pub struct CaptureImportResponse {
+    success: bool,
+    message: String,
+    file_id: Option<i32>,
+    source_path: Option<String>,
+    library: Option<String>,
+    knowledge_repo: Option<String>,
+    asset_count: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -144,8 +197,163 @@ pub fn config(cfg: &mut web::ServiceConfig, state: web::Data<SharedState>) {
                 .service(handle_webclipper_save)
                 .service(handle_webclipper_meta)
                 .service(handle_webclipper_chunk)
-                .service(handle_webclipper_complete),
+                .service(handle_webclipper_complete)
+                .service(handle_capture_import),
         );
+}
+
+#[post("/capture/import")]
+async fn handle_capture_import(
+    req: web::Json<CaptureImportRequest>,
+    state: web::Data<SharedState>,
+) -> HttpResponse {
+    let req = req.into_inner();
+    let title = normalize_capture_title(&req);
+    let knowledge_repo = default_if_empty(&req.knowledge_repo, "default");
+    let file_repo = default_if_empty(&req.file_repo, "default");
+    let created_at = default_if_empty(
+        &req.created_at,
+        &Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+    );
+    let tags = normalize_capture_tags(&req.tags, &req.source_app);
+
+    info!(
+        "[capture_import] received title='{}' source_app='{}' knowledge_repo='{}' file_repo='{}' asset_count={}",
+        title,
+        req.source_app,
+        knowledge_repo,
+        file_repo,
+        req.assets.len()
+    );
+
+    let body = match capture_body(&req) {
+        Some(body) => body,
+        None => {
+            warn!("[capture_import] rejected empty markdown body for title='{}'", title);
+            return HttpResponse::BadRequest().json(capture_error_response(
+                "markdown/content/text cannot be empty",
+            ));
+        }
+    };
+
+    let prepared_assets = match prepare_capture_assets(&req.assets) {
+        Ok(assets) => assets,
+        Err(e) => {
+            warn!("[capture_import] asset decode failed: {}", e);
+            return HttpResponse::BadRequest().json(capture_error_response(&e));
+        }
+    };
+
+    let capture_dir = PathBuf::from(get_libraries_root()).join("collect_capture");
+    if let Err(e) = fs::create_dir_all(&capture_dir) {
+        error!("[capture_import] failed to create collect_capture dir: {}", e);
+        return HttpResponse::InternalServerError().json(capture_error_response(&format!(
+            "Failed to create capture directory: {}",
+            e
+        )));
+    }
+
+    let file_stem = build_capture_file_stem(&title);
+    let filename = format!(
+        "{}_{}.md",
+        file_stem,
+        Local::now().format("%Y%m%d_%H%M%S")
+    );
+    let source_path = capture_dir.join(&filename);
+    let markdown = build_capture_markdown(&req, &title, &created_at, &tags, &body, &prepared_assets);
+
+    if let Err(e) = write_capture_markdown_atomically(&source_path, &markdown) {
+        error!("[capture_import] failed to write markdown: {}", e);
+        return HttpResponse::InternalServerError().json(capture_error_response(&format!(
+            "Failed to write markdown: {}",
+            e
+        )));
+    }
+
+    let file_size = fs::metadata(&source_path).map(|m| m.len()).unwrap_or(0);
+    let source_path_string = source_path.to_string_lossy().to_string();
+    info!(
+        "[capture_import] saved staging markdown path='{}' size={}",
+        source_path_string, file_size
+    );
+
+    let imported_stem = Path::new(&filename)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(&file_stem)
+        .to_string();
+
+    if let Err(e) = add_web_clipper_import_file(file_repo.clone(), source_path_string.clone()) {
+        error!("[capture_import] file library import failed: {}", e);
+        return HttpResponse::InternalServerError().json(capture_error_response(&format!(
+            "Failed to import file into library: {}",
+            e
+        )));
+    }
+
+    if let Err(e) = write_capture_assets_to_library(&file_repo, &imported_stem, &prepared_assets) {
+        error!("[capture_import] asset library import failed: {}", e);
+        return HttpResponse::InternalServerError().json(capture_error_response(&format!(
+            "Failed to import capture assets: {}",
+            e
+        )));
+    }
+
+    let app_handle = match state.get_app_handle() {
+        Some(handle) => handle,
+        None => {
+            error!("[capture_import] AppHandle is not initialized");
+            return HttpResponse::InternalServerError().json(capture_error_response(
+                "AppHandle is not initialized",
+            ));
+        }
+    };
+
+    let file_id = match add_imported_file(
+        app_handle,
+        ImportedFileInput::new(
+            filename.clone(),
+            default_if_empty(&req.description, &title),
+            file_repo.clone(),
+            tags,
+            "md".to_string(),
+            created_at,
+            file_size,
+            knowledge_repo.clone(),
+        ),
+    ) {
+        Ok(id) => id,
+        Err(e) => {
+            error!("[capture_import] imported_files insert failed: {}", e);
+            return HttpResponse::InternalServerError().json(capture_error_response(&format!(
+                "Failed to add imported file record: {}",
+                e
+            )));
+        }
+    };
+
+    let imported_path = PathBuf::from(get_libraries_root())
+        .join("Libraries")
+        .join(&file_repo)
+        .join(&imported_stem)
+        .join("md")
+        .join(&filename);
+
+    info!(
+        "[capture_import] completed file_id={} imported_path='{}'",
+        file_id,
+        imported_path.display()
+    );
+
+    HttpResponse::Ok().json(CaptureImportResponse {
+        success: true,
+        message: "Capture imported successfully".to_string(),
+        file_id: Some(file_id),
+        source_path: Some(imported_path.to_string_lossy().to_string()),
+        library: Some(file_repo),
+        knowledge_repo: Some(knowledge_repo),
+        asset_count: prepared_assets.len(),
+    })
 }
 
 #[post("/save")]
@@ -649,6 +857,237 @@ fn error_response(message: &str) -> ExtensionResponse {
 }
 
 // 计算SHA-256校验和
+struct PreparedCaptureAsset {
+    file_name: String,
+    mime: String,
+    bytes: Vec<u8>,
+}
+
+fn capture_error_response(message: &str) -> CaptureImportResponse {
+    CaptureImportResponse {
+        success: false,
+        message: message.to_string(),
+        file_id: None,
+        source_path: None,
+        library: None,
+        knowledge_repo: None,
+        asset_count: 0,
+    }
+}
+
+fn default_if_empty(value: &str, default_value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        default_value.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn normalize_capture_title(req: &CaptureImportRequest) -> String {
+    let title = req.title.trim();
+    if !title.is_empty() {
+        return title.to_string();
+    }
+
+    let source_url = req.source_url.trim();
+    if !source_url.is_empty() {
+        return source_url.to_string();
+    }
+
+    "未命名采集".to_string()
+}
+
+fn capture_body(req: &CaptureImportRequest) -> Option<String> {
+    [&req.markdown, &req.content, &req.text]
+        .iter()
+        .filter_map(|value| value.as_ref())
+        .map(|value| value.trim())
+        .find(|value| !value.is_empty())
+        .map(|value| value.to_string())
+}
+
+fn normalize_capture_tags(tags: &[String], source_app: &str) -> Vec<String> {
+    let mut normalized = Vec::new();
+    normalized.push("capture".to_string());
+
+    let app = source_app.trim();
+    if !app.is_empty() {
+        normalized.push(app.to_string());
+    }
+
+    for tag in tags {
+        let tag = tag.trim();
+        if !tag.is_empty() && !normalized.iter().any(|item| item == tag) {
+            normalized.push(tag.to_string());
+        }
+    }
+
+    normalized
+}
+
+fn build_capture_file_stem(title: &str) -> String {
+    let sanitized = sanitize_filename(title);
+    if sanitized.is_empty() {
+        format!("capture_{}", Uuid::new_v4().simple())
+    } else {
+        sanitized.chars().take(96).collect()
+    }
+}
+
+fn prepare_capture_assets(assets: &[CaptureAsset]) -> Result<Vec<PreparedCaptureAsset>, String> {
+    let mut prepared = Vec::new();
+
+    for (index, asset) in assets.iter().enumerate() {
+        if asset.data_base64.trim().is_empty() {
+            warn!(
+                "[capture_import] skip empty asset index={} name='{}'",
+                index, asset.name
+            );
+            continue;
+        }
+
+        let payload = strip_data_url_prefix(&asset.data_base64);
+        let bytes = general_purpose::STANDARD
+            .decode(payload.as_bytes())
+            .map_err(|e| format!("asset {} base64 decode failed: {}", index, e))?;
+
+        let file_name = build_capture_asset_file_name(asset, index);
+        prepared.push(PreparedCaptureAsset {
+            file_name,
+            mime: asset.mime.trim().to_string(),
+            bytes,
+        });
+    }
+
+    Ok(prepared)
+}
+
+fn strip_data_url_prefix(value: &str) -> &str {
+    let trimmed = value.trim();
+    match trimmed.find(',') {
+        Some(index) if trimmed[..index].contains(";base64") => &trimmed[index + 1..],
+        _ => trimmed,
+    }
+}
+
+fn build_capture_asset_file_name(asset: &CaptureAsset, index: usize) -> String {
+    let raw_name = asset.name.trim();
+    let extension = Path::new(raw_name)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_string())
+        .or_else(|| extension_from_mime(&asset.mime))
+        .unwrap_or_else(|| "bin".to_string());
+
+    let stem = Path::new(raw_name)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(sanitize_filename)
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or_else(|| format!("asset_{:03}", index + 1));
+
+    format!("{}.{}", stem, extension.trim_start_matches('.'))
+}
+
+fn extension_from_mime(mime: &str) -> Option<String> {
+    match mime.trim().to_ascii_lowercase().as_str() {
+        "image/jpeg" | "image/jpg" => Some("jpg".to_string()),
+        "image/png" => Some("png".to_string()),
+        "image/webp" => Some("webp".to_string()),
+        "image/gif" => Some("gif".to_string()),
+        "application/pdf" => Some("pdf".to_string()),
+        _ => None,
+    }
+}
+
+fn build_capture_markdown(
+    req: &CaptureImportRequest,
+    title: &str,
+    created_at: &str,
+    tags: &[String],
+    body: &str,
+    assets: &[PreparedCaptureAsset],
+) -> String {
+    // 设计思路：所有采集端先统一输出 Markdown，服务端只追加稳定元信息和附件引用。
+    // 这样知乎、公众号、小红书、B 站、手机 OCR 都能走同一条文件库导入链路。
+    let mut markdown = String::new();
+    markdown.push_str("---\n");
+    markdown.push_str(&format!("title: {}\n", yaml_quote(title)));
+    markdown.push_str(&format!(
+        "source_url: {}\n",
+        yaml_quote(req.source_url.trim())
+    ));
+    markdown.push_str(&format!(
+        "source_app: {}\n",
+        yaml_quote(req.source_app.trim())
+    ));
+    markdown.push_str(&format!("captured_at: {}\n", yaml_quote(created_at)));
+    markdown.push_str("tags:\n");
+    for tag in tags {
+        markdown.push_str(&format!("  - {}\n", yaml_quote(tag)));
+    }
+    markdown.push_str("---\n\n");
+    markdown.push_str(body.trim());
+    markdown.push('\n');
+
+    if !assets.is_empty() {
+        markdown.push_str("\n## 附件\n\n");
+        for asset in assets {
+            markdown.push_str(&format!(
+                "![{}](../images/{})\n\n",
+                asset.file_name, asset.file_name
+            ));
+        }
+    }
+
+    markdown
+}
+
+fn yaml_quote(value: &str) -> String {
+    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{}\"", escaped)
+}
+
+fn write_capture_markdown_atomically(path: &Path, markdown: &str) -> std::io::Result<()> {
+    let temp_path = path.with_extension("tmp");
+    fs::write(&temp_path, markdown.as_bytes())?;
+    fs::rename(&temp_path, path)?;
+    Ok(())
+}
+
+fn write_capture_assets_to_library(
+    file_repo: &str,
+    imported_stem: &str,
+    assets: &[PreparedCaptureAsset],
+) -> Result<(), String> {
+    if assets.is_empty() {
+        return Ok(());
+    }
+
+    let images_dir = PathBuf::from(get_libraries_root())
+        .join("Libraries")
+        .join(file_repo)
+        .join(imported_stem)
+        .join("images");
+
+    fs::create_dir_all(&images_dir).map_err(|e| e.to_string())?;
+
+    for asset in assets {
+        let target_path = images_dir.join(&asset.file_name);
+        fs::write(&target_path, &asset.bytes).map_err(|e| e.to_string())?;
+        info!(
+            "[capture_import] wrote asset name='{}' mime='{}' bytes={} path='{}'",
+            asset.file_name,
+            asset.mime,
+            asset.bytes.len(),
+            target_path.display()
+        );
+    }
+
+    Ok(())
+}
+
 fn calculate_sha256(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);

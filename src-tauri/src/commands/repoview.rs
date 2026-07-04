@@ -98,6 +98,31 @@ pub struct ImportedFileInput {
     note_file_input: Option<NoteInput>,
 }
 
+impl ImportedFileInput {
+    pub fn new(
+        import_file_name: String,
+        description: String,
+        library: String,
+        tags: Vec<String>,
+        file_type: String,
+        import_file_create_time: String,
+        import_file_size: u64,
+        knowledge_repo: String,
+    ) -> Self {
+        Self {
+            import_file_name,
+            description,
+            library,
+            tags,
+            file_type,
+            import_file_create_time,
+            import_file_size,
+            knowledge_repo,
+            note_file_input: None,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Resource {
     id: i32,
