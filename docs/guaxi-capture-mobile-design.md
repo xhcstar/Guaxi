@@ -685,6 +685,56 @@ npm run dev
 Network: http://192.168.1.100:1430/
 ```
 
+### Gradle Wrapper 下载 `gradle-*.zip` 超时
+
+现象：
+
+```text
+Downloading https://services.gradle.org/distributions/gradle-8.14.3-bin.zip
+java.io.IOException: Downloading ... failed: timeout
+Caused by: java.net.SocketTimeoutException: Read timed out
+```
+
+含义：
+
+- 这时 Rust Android 动态库通常已经编译成功。
+- 失败点在 Android Gradle Wrapper 下载 Gradle 发行包。
+- 这是网络下载问题，不是 Guaxi Capture 代码编译错误。
+
+解决方式一：切换 Gradle Wrapper 下载镜像。
+
+```powershell
+cd apps\guaxi-capture
+npm run android:gradle:mirror
+npm run android:dev
+```
+
+脚本会修改：
+
+```text
+apps/guaxi-capture/src-tauri/gen/android/gradle/wrapper/gradle-wrapper.properties
+```
+
+把：
+
+```text
+https://services.gradle.org/distributions/gradle-*.zip
+```
+
+替换为国内镜像：
+
+```text
+https://mirrors.cloud.tencent.com/gradle/gradle-*.zip
+```
+
+如果以后要切回官方地址：
+
+```powershell
+npm run android:gradle:official
+```
+
+解决方式二：手动下载 `gradle-8.14.3-bin.zip`，放到 Gradle wrapper cache。这个方式不推荐作为默认流程，因为 cache 路径包含 hash，不如直接替换 `distributionUrl` 稳定。
+
 ### iOS 本地没有命令
 
 Windows 上 Tauri CLI 不显示 `ios` 子命令是正常现象。iOS 构建需要 macOS runner 或本地 macOS + Xcode。
