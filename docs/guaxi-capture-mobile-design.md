@@ -651,6 +651,40 @@ $env:ANDROID_HOME="C:\Users\user\AppData\Local\Android\Sdk"
 $env:NDK_HOME="C:\Users\user\AppData\Local\Android\Sdk\ndk\<NDK版本>"
 ```
 
+### Android Dev 一直等待 `192.168.x.x:1430`
+
+现象：
+
+```text
+Info Using 192.168.1.100 to access the development server.
+Warn Waiting for your frontend dev server to start on http://192.168.1.100:1430/...
+```
+
+原因：
+
+- Tauri Android 会让手机或模拟器访问电脑的局域网 IP。
+- 如果 Vite 只监听 `127.0.0.1`，它只允许电脑本机访问。
+- 手机访问 `192.168.x.x:1430` 时就会连不上。
+
+解决：
+
+- `apps/guaxi-capture/package.json` 的 `dev` 脚本使用 `--host 0.0.0.0`。
+- `apps/guaxi-capture/vite.config.js` 使用 `process.env.TAURI_DEV_HOST || '0.0.0.0'`。
+- 确认 Windows 防火墙允许 Node/Vite 的 `1430` 端口入站。
+
+验证：
+
+```powershell
+cd apps\guaxi-capture
+npm run dev
+```
+
+输出里应该能看到类似：
+
+```text
+Network: http://192.168.1.100:1430/
+```
+
 ### iOS 本地没有命令
 
 Windows 上 Tauri CLI 不显示 `ios` 子命令是正常现象。iOS 构建需要 macOS runner 或本地 macOS + Xcode。
@@ -721,4 +755,3 @@ Windows 上 Tauri CLI 不显示 `ios` 子命令是正常现象。iOS 构建需�
 - 上传到云端中转。
 - 文件库分享链接。
 - 权限控制和撤销访问。
-

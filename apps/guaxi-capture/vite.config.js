@@ -1,9 +1,11 @@
 import { defineConfig } from 'vite'
 
+// Android/iOS 真机调试时，Tauri 会把 devUrl host 替换成电脑局域网 IP。
+// Vite 必须监听 0.0.0.0 或 TAURI_DEV_HOST，否则手机访问不到 192.168.x.x:1430。
 export default defineConfig({
   clearScreen: false,
   server: {
-    host: '127.0.0.1',
+    host: process.env.TAURI_DEV_HOST || '0.0.0.0',
     port: 1430,
     strictPort: true,
   },
