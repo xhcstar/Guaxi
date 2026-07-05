@@ -881,6 +881,29 @@ Windows 上 Tauri CLI 不显示 `ios` 子命令是正常现象。iOS 构建需�
 - Guaxi PC 主程序是否已启动，`POST /extension/capture/import` 是否可访问。
 - PC 端后续 OCR 任务是否正常运行。
 
+### Android 分享能看到 Guaxi，但收件箱没有记录
+
+先重新给生成工程打分享补丁并重装：
+
+```powershell
+cd apps\guaxi-capture
+npm run android:share:patch
+npm run android:dev:fresh
+```
+
+检查点：
+
+- `AndroidManifest.xml` 里是否存在 `ACTION_SEND text/*`、`ACTION_SEND image/*`、`ACTION_SEND_MULTIPLE image/*`。
+- `MainActivity.kt` 是否注册了 `ShareIntentPlugin`，并覆盖了 `onNewIntent(intent: Intent)`。
+- `ShareIntentPlugin.kt` 是否存在，日志里是否能看到 `GuaxiShareIntent`。
+- Android WebView 控制台是否有 `[capture-intake] android share payload loaded` 或 `[capture-intake] android share dom event received`。
+
+设计说明：
+
+- 从知乎、公众号等 App 分享链接时，移动端只生成带 `sourceUrl` 的待发送记录。
+- 该记录不会立刻把分享文本当 Markdown 入库；PC 端收到后再根据 URL 抓取和转换正文。
+- 收到分享后默认停留在收件箱，用户确认连接 PC 后再点“同步”。
+
 ## 后续演进建议
 
 ### Android Share Intent

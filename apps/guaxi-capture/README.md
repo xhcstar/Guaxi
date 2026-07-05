@@ -204,6 +204,18 @@ Capture App 不在手机端直接 OCR。选择图片或从 Android 系统分享�
 
 前端会打印 `[capture-inbox]` 和 `[capture-sync]` 日志，PC 端会打印 `[capture_import]` 日志。后续 PC 端可以基于已入库图片继续执行 OCR 并回写 Markdown。
 
+## Android 分享排障
+
+如果系统分享菜单能看到 Guaxi，但打开 App 后收件箱没有记录，重新给 Tauri 生成工程打补丁并重装：
+
+```powershell
+cd apps\guaxi-capture
+npm run android:share:patch
+npm run android:dev:fresh
+```
+
+分享知乎等文章链接时，App 会优先提取 `sourceUrl` 生成待发送记录，不会把分享文案直接当 Markdown 入库。连接 PC 后点“同步”，PC 端再按 URL 抓取和转换正文。
+
 ## Markdown 转换
 
 当前内置轻量 HTML 转 Markdown 转换器，支持标题、段落、链接、图片、引用、代码块、列表和表格。它的定位是先保证采集链路可用、内容可编辑；后续如果要对复杂网页做更高保真提取，可以把 `src/services/htmlToMarkdown.js` 替换为 Readability + Turndown 这类更完整的转换管线。

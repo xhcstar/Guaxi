@@ -2,7 +2,10 @@ import { createCaptureDraft } from './captureClient.js'
 import { htmlToMarkdown, looksLikeHtml } from './htmlToMarkdown.js'
 
 export const NATIVE_CAPTURE_EVENT = 'guaxi-capture-incoming'
-let androidSharePluginAvailable = true
+export const ANDROID_SHARE_DOM_EVENT = 'guaxi-android-share-intent'
+export const ANDROID_SHARE_WINDOW_PAYLOAD = '__GUAXI_CAPTURE_LAST_ANDROID_SHARE__'
+let androidSharePluginDisabled = false
+let lastAndroidSharePluginLogAt = 0
 
 const URL_FIELD_ALIASES = {
   title: ['title', 'name'],
@@ -42,12 +45,13 @@ export function createDraftFromIncomingPayload(payload = {}) {
     return null
   }
 
+  const sourceApp = normalizeIncomingSourceApp(normalized)
   return createCaptureDraft({
     ...normalized,
     title: normalized.title || buildFallbackTitle(normalized),
     markdown: buildDraftMarkdown(normalized),
-    sourceApp: normalizeSourceApp(normalized.sourceApp),
-    tagsText: normalizeTagsText(normalized.tagsText, normalized.sourceApp),
+    sourceApp,
+    tagsText: normalizeTagsText(normalized.tagsText, sourceApp),
   })
 }
 
@@ -122,20 +126,49 @@ export async function readStartupNativePayload() {
 }
 
 export async function readAndroidSharePayload() {
-  if (!window.__TAURI_INTERNALS__ || !androidSharePluginAvailable) return null
+  if (!window.__TAURI_INTERNALS__ || androidSharePluginDisabled) return null
 
   try {
     const { invoke } = await import('@tauri-apps/api/core')
     const payload = await invoke('plugin:guaxi-share-intent|readPendingShare')
     if (hasMeaningfulCaptureContent(payload || {})) {
-      console.info('[capture-intake] android share payload loaded')
+      console.info('[capture-intake] android share payload loaded', summarizePayloadForLog(payload))
       return payload
     }
   } catch (error) {
-    androidSharePluginAvailable = false
-    console.info('[capture-intake] android share plugin skipped', error)
+    // 设计说明：
+    // Android WebView 首屏初始化时，前端可能早于原生插件完成注册。不能因为第一次 invoke
+    // 失败就永久停掉轮询，否则系统分享已经唤起 App，但 payload 永远不会被读到。
+    if (!isProbablyAndroidRuntime()) {
+      androidSharePluginDisabled = true
+    }
+    logAndroidSharePluginIssue(error)
   }
 
+  return null
+}
+
+export function registerAndroidShareDomListener(onPayload) {
+  const listener = (event) => {
+    const payload = event.detail || {}
+    console.info('[capture-intake] android share dom event received', summarizePayloadForLog(payload))
+    delete window[ANDROID_SHARE_WINDOW_PAYLOAD]
+    onPayload(payload)
+  }
+  window.addEventListener(ANDROID_SHARE_DOM_EVENT, listener)
+  console.info('[capture-intake] android share dom listener registered', {
+    event: ANDROID_SHARE_DOM_EVENT,
+  })
+  return () => window.removeEventListener(ANDROID_SHARE_DOM_EVENT, listener)
+}
+
+export function readLastAndroidShareDomPayload() {
+  const payload = window[ANDROID_SHARE_WINDOW_PAYLOAD]
+  if (hasMeaningfulCaptureContent(payload || {})) {
+    delete window[ANDROID_SHARE_WINDOW_PAYLOAD]
+    console.info('[capture-intake] android share window payload loaded', summarizePayloadForLog(payload))
+    return payload
+  }
   return null
 }
 
@@ -176,6 +209,31 @@ export function normalizeIncomingPayload(payload = {}) {
     normalized.assets = payload.assets
   }
 
+  const textForUrl = [
+    normalized.sourceUrl,
+    normalized.markdown,
+    normalized.description,
+    payload.sharedText,
+    payload.text,
+    payload.url,
+    payload.link,
+  ].filter(Boolean).join('\n')
+  if (!normalized.sourceUrl) {
+    normalized.sourceUrl = extractFirstUrl(textForUrl)
+  }
+  if (!normalized.title) {
+    normalized.title = extractTitleFromSharedText(textForUrl, normalized.sourceUrl)
+  }
+
+  // 设计说明：
+  // Android 的系统分享经常把“标题 + URL”放在 EXTRA_TEXT。对于文章链接采集，
+  // 移动端应只保存 sourceUrl 和备注，正文转换交给 PC 端完成；否则 PC 会把这段
+  // 分享文本当作已经转换好的 Markdown，无法再抓取知乎/公众号等原文内容。
+  if (isAndroidSharePayload(payload) && normalized.sourceUrl && normalized.markdown) {
+    normalized.description = normalized.description || normalized.markdown
+    normalized.markdown = ''
+  }
+
   if (typeof payload.createdAt === 'string') {
     normalized.createdAt = payload.createdAt
   }
@@ -193,8 +251,9 @@ export function normalizeIncomingPayload(payload = {}) {
 export function hasMeaningfulCaptureContent(payload = {}) {
   return Boolean(
     String(payload.title || '').trim()
-      || String(payload.sourceUrl || '').trim()
-      || String(payload.markdown || payload.text || payload.content || payload.html || '').trim(),
+      || String(payload.sourceUrl || payload.source_url || payload.url || payload.link || '').trim()
+      || String(payload.markdown || payload.text || payload.sharedText || payload.content || payload.html || '').trim()
+      || (Array.isArray(payload.assets) && payload.assets.length > 0),
   )
 }
 
@@ -232,11 +291,8 @@ function parseSharedText(text = '') {
     }
   }
 
-  const firstUrl = trimmed.match(/https?:\/\/\S+/i)?.[0] || ''
-  const title = trimmed
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .find((line) => line && line !== firstUrl) || ''
+  const firstUrl = extractFirstUrl(trimmed)
+  const title = extractTitleFromSharedText(trimmed, firstUrl)
 
   return {
     title,
@@ -300,6 +356,26 @@ function normalizeSourceApp(sourceApp = '') {
   return KNOWN_SOURCE_MAP.get(key) || inferSourceApp(key) || key || 'manual'
 }
 
+function normalizeIncomingSourceApp(payload) {
+  const explicit = normalizeSourceApp(payload.sourceApp)
+  const inferred = inferSourceApp([
+    payload.sourceUrl,
+    payload.markdown,
+    payload.description,
+  ].filter(Boolean).join('\n'))
+
+  if ((!payload.sourceApp || explicit === 'manual' || explicit === 'android-share') && inferred) {
+    return inferred
+  }
+  return explicit
+}
+
+function isAndroidSharePayload(payload = {}) {
+  return String(payload.sourceApp || payload.source_app || payload.source || payload.app || payload.from || '')
+    .trim()
+    .toLowerCase() === 'android-share'
+}
+
 function inferSourceApp(value = '') {
   const lower = String(value).toLowerCase()
   if (lower.includes('weixin.qq.com') || lower.includes('mp.weixin.qq.com')) return 'wechat'
@@ -331,6 +407,41 @@ function buildFallbackTitle(payload) {
     }
   }
   return '外部分享'
+}
+
+function extractFirstUrl(text = '') {
+  return String(text || '').match(/https?:\/\/\S+/i)?.[0]?.replace(/[),，。；;]+$/, '') || ''
+}
+
+function extractTitleFromSharedText(text = '', sourceUrl = '') {
+  return String(text || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line && line !== sourceUrl && !/^https?:\/\//i.test(line)) || ''
+}
+
+function isProbablyAndroidRuntime() {
+  return /Android/i.test(navigator.userAgent || '')
+}
+
+function logAndroidSharePluginIssue(error) {
+  const now = Date.now()
+  if (now - lastAndroidSharePluginLogAt < 30000) return
+  lastAndroidSharePluginLogAt = now
+  console.info('[capture-intake] android share plugin pending/unavailable', {
+    android: isProbablyAndroidRuntime(),
+    message: error?.message || String(error),
+  })
+}
+
+function summarizePayloadForLog(payload = {}) {
+  return {
+    title: payload.title || payload.name || '',
+    sourceUrl: payload.sourceUrl || payload.source_url || payload.url || payload.link || '',
+    hasText: Boolean(payload.text || payload.sharedText || payload.markdown || payload.content),
+    hasHtml: Boolean(payload.html || payload.sharedHtml),
+    assetCount: Array.isArray(payload.assets) ? payload.assets.length : 0,
+  }
 }
 
 function buildMarkdownFromSharedText(payload) {

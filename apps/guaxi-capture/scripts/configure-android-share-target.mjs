@@ -78,13 +78,24 @@ function patchMainActivity(mainActivityPath) {
   if (!source.includes('android.os.Bundle')) {
     source = source.replace(packageLine[0], `${packageLine[0]}\n\nimport android.os.Bundle`);
   }
+  if (!source.includes('android.content.Intent')) {
+    source = source.replace(packageLine[0], `${packageLine[0]}\n\nimport android.content.Intent`);
+  }
 
   if (source.includes('pluginManager.load(null, "guaxi-share-intent"')) {
+    if (!source.includes('override fun onNewIntent(intent: Intent)')) {
+      source = source.replace(
+        /\n}\s*$/,
+        `\n\n  override fun onNewIntent(intent: Intent) {\n    super.onNewIntent(intent)\n    setIntent(intent)\n    pluginManager.onNewIntent(intent)\n  }\n}\n`,
+      );
+      write(mainActivityPath, source);
+      console.info('[capture-android-share] MainActivity onNewIntent patched');
+    }
     console.info('[capture-android-share] MainActivity already patched');
   } else if (/class\s+MainActivity\s*:\s*TauriActivity\(\)\s*$/.test(source.trim())) {
     source = source.replace(
       /class\s+MainActivity\s*:\s*TauriActivity\(\)\s*$/,
-      `class MainActivity : TauriActivity() {\n  override fun onCreate(savedInstanceState: Bundle?) {\n    pluginManager.load(null, "guaxi-share-intent", ShareIntentPlugin(this), "{}")\n    super.onCreate(savedInstanceState)\n    intent?.let { pluginManager.onNewIntent(it) }\n  }\n}\n`,
+      `class MainActivity : TauriActivity() {\n  override fun onCreate(savedInstanceState: Bundle?) {\n    pluginManager.load(null, "guaxi-share-intent", ShareIntentPlugin(this), "{}")\n    super.onCreate(savedInstanceState)\n    intent?.let { pluginManager.onNewIntent(it) }\n  }\n\n  override fun onNewIntent(intent: Intent) {\n    super.onNewIntent(intent)\n    setIntent(intent)\n    pluginManager.onNewIntent(intent)\n  }\n}\n`,
     );
     write(mainActivityPath, source);
     console.info('[capture-android-share] MainActivity patched');
@@ -104,6 +115,7 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Base64
+import android.util.Log
 import android.webkit.WebView
 import app.tauri.annotation.Command
 import app.tauri.annotation.TauriPlugin
@@ -115,9 +127,11 @@ import org.json.JSONArray
 @TauriPlugin
 class ShareIntentPlugin(private val hostActivity: Activity) : Plugin(hostActivity) {
   private var pendingPayload: JSObject? = null
+  private var appWebView: WebView? = null
 
   override fun load(webView: WebView) {
     super.load(webView)
+    appWebView = webView
     captureIntent(hostActivity.intent)
   }
 
@@ -130,6 +144,7 @@ class ShareIntentPlugin(private val hostActivity: Activity) : Plugin(hostActivit
   fun readPendingShare(invoke: Invoke) {
     val payload = pendingPayload
     pendingPayload = null
+    Log.i("GuaxiShareIntent", "readPendingShare hasPayload=" + (payload != null))
     invoke.resolve(payload)
   }
 
@@ -147,6 +162,7 @@ class ShareIntentPlugin(private val hostActivity: Activity) : Plugin(hostActivit
 
     payload.put("title", title)
     payload.put("sourceApp", "android-share")
+    payload.put("description", text)
     payload.put("text", text)
     payload.put("sharedText", text)
     payload.put("html", html)
@@ -171,6 +187,22 @@ class ShareIntentPlugin(private val hostActivity: Activity) : Plugin(hostActivit
     }
 
     pendingPayload = payload
+    Log.i(
+      "GuaxiShareIntent",
+      "captured share title=" + title + " url=" + payload.optString("sourceUrl") + " assets=" + assets.length()
+    )
+    emitPayload(payload)
+  }
+
+  private fun emitPayload(payload: JSObject) {
+    val webView = appWebView ?: return
+    val script = """
+      window.__GUAXI_CAPTURE_LAST_ANDROID_SHARE__ = \${payload};
+      window.dispatchEvent(new CustomEvent('guaxi-android-share-intent', { detail: \${payload} }));
+    """.trimIndent()
+    webView.post {
+      webView.evaluateJavascript(script, null)
+    }
   }
 
   private fun readAsset(uri: Uri): JSObject? {

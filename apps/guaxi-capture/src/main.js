@@ -12,7 +12,9 @@ import {
   readAndroidSharePayload,
   readClipboardPayload,
   readInitialSharePayload,
+  readLastAndroidShareDomPayload,
   readStartupNativePayload,
+  registerAndroidShareDomListener,
   registerNativeCaptureListener,
 } from './services/shareIntake.js'
 import './styles.css'
@@ -28,6 +30,8 @@ const state = {
   busy: false,
   status: '准备接收分享',
   settingsOpen: false,
+  lastIncomingSignature: '',
+  lastIncomingAt: 0,
   manual: createCaptureDraft({
     sourceApp: 'manual',
     tagsText: 'capture,manual',
@@ -44,6 +48,10 @@ registerNativeCaptureListener((payload) => {
   receiveIncomingPayload(payload, '系统分享')
 })
 
+registerAndroidShareDomListener((payload) => {
+  receiveIncomingPayload(payload, 'Android Share')
+})
+
 readStartupNativePayload().then((payload) => {
   if (payload) receiveIncomingPayload(payload, '启动分享')
 })
@@ -52,7 +60,18 @@ readAndroidSharePayload().then((payload) => {
   if (payload) receiveIncomingPayload(payload, 'Android Share')
 })
 
+const initialAndroidWindowPayload = readLastAndroidShareDomPayload()
+if (initialAndroidWindowPayload) {
+  receiveIncomingPayload(initialAndroidWindowPayload, 'Android Share')
+}
+
 setInterval(async () => {
+  const windowPayload = readLastAndroidShareDomPayload()
+  if (windowPayload) {
+    receiveIncomingPayload(windowPayload, 'Android Share')
+    return
+  }
+
   const payload = await readAndroidSharePayload()
   if (payload) receiveIncomingPayload(payload, 'Android Share')
 }, 1800)
@@ -291,10 +310,18 @@ function receiveIncomingPayload(payload, label) {
     return
   }
 
+  const signature = buildIncomingSignature(draft)
+  const now = Date.now()
+  if (signature && signature === state.lastIncomingSignature && now - state.lastIncomingAt < 5000) {
+    console.info('[capture-inbox] duplicate incoming payload ignored', { label, signature })
+    return
+  }
+  state.lastIncomingSignature = signature
+  state.lastIncomingAt = now
+
   queueDraft(draft, 'pending', label)
-  state.status = `${label}已进入收件箱`
+  state.status = `${label}已进入收件箱，连接 PC 后可同步`
   render()
-  syncQueue()
 }
 
 async function importClipboard() {
@@ -516,6 +543,16 @@ function previewText(item) {
 function buildImageTitle(files) {
   if (files.length === 1) return files[0].name.replace(/\.[^.]+$/, '') || '图片 OCR'
   return `图片 OCR ${new Date().toLocaleString()}`
+}
+
+function buildIncomingSignature(draft) {
+  return [
+    draft.sourceApp || '',
+    draft.sourceUrl || '',
+    draft.title || '',
+    draft.markdown || '',
+    (draft.assets || []).map((asset) => asset.name || asset.mime || '').join('|'),
+  ].join('::')
 }
 
 function escapeHtml(value) {
