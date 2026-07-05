@@ -485,13 +485,15 @@ npm run android:init
 npm run android:share:patch
 ```
 
+通常不需要手动执行这一步：`android:init` 完成后会自动运行，`android:dev`、`android:build` 和 `android:dev:fresh` 前也会尝试自动补丁。手动命令主要用于排障或确认生成工程已经写入分享入口。
+
 该脚本会修改 Tauri 生成目录 `src-tauri/gen/android`：
 
 - 给 `MainActivity` 增加 `ACTION_SEND text/*`、`ACTION_SEND image/*`、`ACTION_SEND_MULTIPLE image/*`。
 - 写入 `ShareIntentPlugin.kt`，把 Android 分享 intent 转成前端可读取的 payload。
 - 注册 Tauri plugin command `plugin:guaxi-share-intent|readPendingShare`，前端会轮询并进入采集队列。
 
-每次删除或重新生成 `src-tauri/gen/android` 后，都需要重新执行一次 `npm run android:share:patch`。
+每次删除或重新生成 `src-tauri/gen/android` 后，重新执行 `npm run android:init` 或 `npm run android:share:patch`。
 
 调试：
 
@@ -897,6 +899,7 @@ npm run android:dev:fresh
 - `MainActivity.kt` 是否注册了 `ShareIntentPlugin`，并覆盖了 `onNewIntent(intent: Intent)`。
 - `ShareIntentPlugin.kt` 是否存在，日志里是否能看到 `GuaxiShareIntent`。
 - Android WebView 控制台是否有 `[capture-intake] android share payload loaded` 或 `[capture-intake] android share dom event received`。
+- 如果看到 `event.listen not allowed`，确认 `src-tauri/capabilities/default.json` 中包含 `core:event:allow-listen`，然后重装 App。
 
 设计说明：
 

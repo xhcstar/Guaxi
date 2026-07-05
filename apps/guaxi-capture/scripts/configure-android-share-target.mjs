@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 const projectRoot = process.cwd();
 const androidRoot = join(projectRoot, 'src-tauri', 'gen', 'android');
 const manifestPath = join(androidRoot, 'app', 'src', 'main', 'AndroidManifest.xml');
+const optional = process.argv.includes('--optional');
 
 function fail(message) {
   console.error(`[capture-android-share] ${message}`);
@@ -239,7 +240,13 @@ class ShareIntentPlugin(private val hostActivity: Activity) : Plugin(hostActivit
   console.info(`[capture-android-share] plugin written: ${pluginPath}`);
 }
 
-if (!existsSync(androidRoot)) fail('Android generated project not found. Run npm run android:init first.');
+if (!existsSync(androidRoot)) {
+  if (optional) {
+    console.info('[capture-android-share] Android generated project not found, skip optional patch');
+    process.exit(0);
+  }
+  fail('Android generated project not found. Run npm run android:init first.');
+}
 
 patchManifest();
 patchMainActivity(findMainActivity());

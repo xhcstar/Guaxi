@@ -159,6 +159,16 @@ function diagnose() {
 function freshDev() {
   uninstall({ ignoreFail: true });
 
+  const sharePatch = resolve('scripts', 'configure-android-share-target.mjs');
+  console.log('[capture-android] patching Android share target before dev');
+  const patchResult = spawnSync(process.execPath, [sharePatch, '--optional'], {
+    stdio: 'inherit',
+    windowsHide: true,
+  });
+  if ((patchResult.status ?? 1) !== 0) {
+    process.exit(patchResult.status ?? 1);
+  }
+
   const tauriCli = resolve('..', '..', 'node_modules', '@tauri-apps', 'cli', 'tauri.js');
   console.log('[capture-android] starting Tauri Android dev after cleanup');
   const result = spawnSync(process.execPath, [tauriCli, 'android', 'dev'], {

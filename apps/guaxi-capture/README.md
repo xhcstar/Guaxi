@@ -214,6 +214,8 @@ npm run android:share:patch
 npm run android:dev:fresh
 ```
 
+`android:init` 成功后会自动执行分享补丁，`android:dev`、`android:build` 和 `android:dev:fresh` 前也会尝试自动补丁。日志里如果出现 `event.listen not allowed`，说明 Tauri 权限没有进包，需要确认 `src-tauri/capabilities/default.json` 已随 App 重新构建。
+
 分享知乎等文章链接时，App 会优先提取 `sourceUrl` 生成待发送记录，不会把分享文案直接当 Markdown 入库。连接 PC 后点“同步”，PC 端再按 URL 抓取和转换正文。
 
 ## Markdown 转换

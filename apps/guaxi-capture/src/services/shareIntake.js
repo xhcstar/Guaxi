@@ -430,7 +430,7 @@ function logAndroidSharePluginIssue(error) {
   lastAndroidSharePluginLogAt = now
   console.info('[capture-intake] android share plugin pending/unavailable', {
     android: isProbablyAndroidRuntime(),
-    message: error?.message || String(error),
+    error: stringifyError(error),
   })
 }
 
@@ -441,6 +441,17 @@ function summarizePayloadForLog(payload = {}) {
     hasText: Boolean(payload.text || payload.sharedText || payload.markdown || payload.content),
     hasHtml: Boolean(payload.html || payload.sharedHtml),
     assetCount: Array.isArray(payload.assets) ? payload.assets.length : 0,
+  }
+}
+
+function stringifyError(error) {
+  if (!error) return ''
+  if (typeof error === 'string') return error
+  if (error.message) return error.message
+  try {
+    return JSON.stringify(error)
+  } catch {
+    return String(error)
   }
 }
 
