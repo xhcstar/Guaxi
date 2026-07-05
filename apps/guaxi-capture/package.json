@@ -19,6 +19,7 @@
     "android:dev": "node ../../node_modules/@tauri-apps/cli/tauri.js android dev",
     "android:build": "node ../../node_modules/@tauri-apps/cli/tauri.js android build",
     "android:build:ci": "node ../../node_modules/@tauri-apps/cli/tauri.js android build --ci",
+    "android:keystore": "powershell -ExecutionPolicy Bypass -File scripts/create-android-keystore.ps1",
     "android:gradle:mirror": "node scripts/run-android-gradle-config.mjs",
     "android:gradle:official": "node scripts/run-android-gradle-config.mjs --base-url https://services.gradle.org/distributions",
     "android:share:patch": "node scripts/configure-android-share-target.mjs",
