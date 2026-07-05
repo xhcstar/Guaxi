@@ -9,7 +9,8 @@ use crate::commands::notebook_lab::{
 use crate::state::SharedState;
 use actix_cors::Cors;
 use actix_web::web::{Data, JsonConfig, PayloadConfig};
-use actix_web::{rt, web, App, HttpResponse, HttpServer};
+use actix_web::{dev::Server, web, App, HttpResponse, HttpServer};
+use futures_util::future;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{Emitter, Manager};
@@ -133,7 +134,7 @@ async fn notebook_data_lab_rpc_http(
 }
 
 pub async fn start_backend_services(state: SharedState) -> std::io::Result<()> {
-    start_capture_import_lan_service(state.clone());
+    let capture_import_server = start_capture_import_lan_service(state.clone());
 
     let server = HttpServer::new(move || {
         let cors = Cors::default()
@@ -157,7 +158,16 @@ pub async fn start_backend_services(state: SharedState) -> std::io::Result<()> {
     })
     .bind("127.0.0.1:8888")?;
 
-    server.run().await
+    info!("[backend] local service listening on http://127.0.0.1:8888");
+
+    let local_server = server.run();
+    if let Some(capture_import_server) = capture_import_server {
+        future::try_join(local_server, capture_import_server)
+            .await
+            .map(|_| ())
+    } else {
+        local_server.await
+    }
 }
 
 fn capture_import_bind_addr() -> String {
@@ -168,7 +178,7 @@ fn capture_import_bind_addr() -> String {
         .unwrap_or_else(|| "0.0.0.0:14219".to_string())
 }
 
-fn start_capture_import_lan_service(state: SharedState) {
+fn start_capture_import_lan_service(state: SharedState) -> Option<Server> {
     let bind_addr = capture_import_bind_addr();
 
     // 设计说明：
@@ -197,13 +207,14 @@ fn start_capture_import_lan_service(state: SharedState) {
                 "[capture_import] LAN import service listening on http://{}",
                 bind_addr
             );
-            rt::spawn(server.run());
+            Some(server.run())
         }
         Err(error) => {
             warn!(
                 "[capture_import] LAN import service bind failed addr={} error={}",
                 bind_addr, error
             );
+            None
         }
     }
 }
