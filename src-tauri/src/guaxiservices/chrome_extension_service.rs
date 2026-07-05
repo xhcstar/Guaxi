@@ -1055,19 +1055,25 @@ async fn build_url_capture_body(
 
     info!("[capture_import] extracting url body source_url='{}'", source_url);
     let client = build_capture_http_client()?;
+    // 用站点 host 作为渲染 profile，复用 Flipboard 侧同站的持久登录会话（如用户曾登录
+    // 知乎 / 公众号等），让“分享的公开内容”尽量在无需再次登录的情况下抓到正文。
+    let profile = crate::commands::flipboard::render_profile_for_url(source_url);
     let rendered = crate::commands::flipboard_render::fetch_page(
         &client,
         source_url,
         false,
-        "capture-import",
+        &profile,
     )
     .await?;
+    // 命中登录墙 / 验证码 / 风控限流页：不要把风控话术或错误 JSON 当作正文落库，
+    // 直接判为抽取失败，由上层保留原始链接并提示（登录后）稍后重试。
     if rendered.blocked {
         warn!(
             "[capture_import] rendered page looks blocked source_url='{}' mode={}",
             source_url,
             rendered.mode
         );
+        return Err("目标页面命中登录墙/风控（可登录后在 PC 端重试），已保留原始链接".to_string());
     }
 
     let final_url = rendered.final_url.clone();
@@ -1079,6 +1085,18 @@ async fn build_url_capture_body(
     .await
     .map_err(|e| format!("extract task join failed: {e}"))?
     .map_err(|e| format!("extract article failed: {e}"))?;
+
+    // 反爬兜底：即便未被上面判为 blocked，抽取到的“正文”仍可能是风控/错误响应
+    // （如知乎限流返回的 {"error":{...}} JSON）。命中则判为失败，保留原始链接。
+    if capture_body_looks_blocked(&extracted.markdown)
+        || capture_body_looks_blocked(&extracted.plain_text)
+    {
+        warn!(
+            "[capture_import] extracted body looks like anti-bot/error page source_url='{}'",
+            source_url
+        );
+        return Err("抓取到风控/错误响应而非正文，已保留原始链接待登录后重试".to_string());
+    }
 
     let title = extracted
         .title
@@ -1246,12 +1264,69 @@ fn normalize_capture_tags(tags: &[String], source_app: &str) -> Vec<String> {
 }
 
 fn build_capture_file_stem(title: &str) -> String {
-    let sanitized = sanitize_filename(title);
+    // 关键：采集标题多为中文（知乎/公众号等），必须用保留 Unicode 的清洗，否则
+    // sanitize_filename 会把中文整段吃成下划线并被 trim 成空串，最终落成无意义的
+    // capture_<uuid> 文件名（用户反馈的“无意义字符”正是这种情况）。
+    let sanitized = sanitize_capture_filename(title);
     if sanitized.is_empty() {
         format!("capture_{}", Uuid::new_v4().simple())
     } else {
-        sanitized.chars().take(96).collect()
+        sanitized
     }
+}
+
+/// 采集文件名清洗：保留中英文/数字等可见字符，仅把文件系统非法字符与空白折叠为下划线。
+/// 与只保留 ASCII 字母数字的 `sanitize_filename` 不同——那个会把中文标题吃空。
+fn sanitize_capture_filename(title: &str) -> String {
+    let mut out = String::new();
+    let mut last_underscore = false;
+    for c in title.trim().chars() {
+        let illegal = matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
+            || c.is_control()
+            || c.is_whitespace();
+        if illegal {
+            if !out.is_empty() && !last_underscore {
+                out.push('_');
+                last_underscore = true;
+            }
+        } else {
+            out.push(c);
+            last_underscore = false;
+        }
+    }
+    let capped: String = out.trim_matches('_').chars().take(80).collect();
+    capped.trim_matches('_').to_string()
+}
+
+/// 反爬兜底判定：抽取到的“正文”是否其实是风控/错误响应（知乎限流 JSON、登录墙话术等）。
+fn capture_body_looks_blocked(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    // 极短且形如 {"error":{...}} 的 JSON 错误体（典型：知乎限流 code 40362）。
+    let lower = trimmed.to_lowercase();
+    if trimmed.starts_with('{') && lower.contains("\"error\"") && trimmed.len() < 800 {
+        return true;
+    }
+
+    const SIGNS: &[&str] = &[
+        "您当前请求存在异常",
+        "暂时限制本次访问",
+        "知乎小管家",
+        "系统检测到您的网络",
+        "请登录后查看",
+        "登录后查看",
+        "访问过于频繁",
+        "操作过于频繁",
+        "请求过于频繁",
+    ];
+    // 风控话术通常出现在很短的错误页里；正文很长时即便偶然包含也不误伤。
+    if trimmed.chars().filter(|c| !c.is_whitespace()).count() > 600 {
+        return false;
+    }
+    SIGNS.iter().any(|s| trimmed.contains(s))
 }
 
 fn prepare_capture_assets(assets: &[CaptureAsset]) -> Result<Vec<PreparedCaptureAsset>, String> {

@@ -75,10 +75,6 @@ export function readInitialSharePayload(location = window.location) {
 }
 
 export async function readClipboardPayload() {
-  if (!navigator.clipboard?.read && !navigator.clipboard?.readText) {
-    throw new Error('当前环境不支持读取剪贴板')
-  }
-
   const clipboard = await readClipboardHtmlOrText()
   const payload = clipboard.html
     ? { html: clipboard.html, sourceApp: 'clipboard' }
@@ -226,11 +222,14 @@ export function normalizeIncomingPayload(payload = {}) {
   }
 
   // 设计说明：
-  // Android 的系统分享经常把“标题 + URL”放在 EXTRA_TEXT。对于文章链接采集，
-  // 移动端应只保存 sourceUrl 和备注，正文转换交给 PC 端完成；否则 PC 会把这段
-  // 分享文本当作已经转换好的 Markdown，无法再抓取知乎/公众号等原文内容。
-  if (isAndroidSharePayload(payload) && normalized.sourceUrl && normalized.markdown) {
-    normalized.description = normalized.description || normalized.markdown
+  // 各来源 App（知乎/公众号/小红书/B站/系统分享）通常只在 EXTRA_TEXT 里给“标题 + URL”。
+  // 对于这类链接采集，移动端只保存 sourceUrl 和备注，正文抓取 + Markdown 转换交给 PC 端
+  // （build_url_capture_body → flipboard 抓取 + 抽取）。否则 PC 会把这段分享文本当作已经
+  // 转换好的 Markdown，收到的文档里就只剩一个 URL，无法再抓取原文内容。
+  // 仅当带完整 html 正文时才保留（真正的富文本剪藏），链接类薄文本一律清空交给 PC。
+  if (normalized.sourceUrl && !normalized.html && isThinLinkShareBody(normalized.markdown, normalized.sourceUrl)) {
+    // 正文留空交给 PC 抓取；description 不塞“标题 + URL”样板文本，让 PC 端用主题标题
+    // 作为文件名与描述，避免文件库里出现夹带 URL 的杂乱描述。
     normalized.markdown = ''
   }
 
@@ -332,13 +331,38 @@ async function readClipboardHtmlOrText() {
 
   return {
     html: '',
-    text: await navigator.clipboard.readText(),
+    text: await readClipboardText(),
   }
+}
+
+// 读取剪贴板纯文本：优先 Tauri clipboard-manager 插件（移动端 WebView 的
+// navigator.clipboard 常因权限/安全上下文被拦），失败再退回 Web API。
+async function readClipboardText() {
+  if (window.__TAURI_INTERNALS__) {
+    try {
+      const { readText } = await import('@tauri-apps/plugin-clipboard-manager')
+      const text = await readText()
+      // 插件调用成功即以其结果为准（空剪贴板返回空串也算成功），不再回退到
+      // Android WebView 会拒绝的 navigator.clipboard，避免误报 “Read permission denied”。
+      return typeof text === 'string' ? text : ''
+    } catch (error) {
+      console.info('[capture-intake] tauri clipboard read failed, fallback to web api', error)
+    }
+  }
+
+  if (navigator.clipboard?.readText) {
+    return await navigator.clipboard.readText()
+  }
+
+  throw new Error('当前环境不支持读取剪贴板')
 }
 
 function buildDraftMarkdown(payload) {
   if (payload.markdown) return payload.markdown
   if (payload.html) return htmlToMarkdown(payload.html)
+  // 链接类分享：正文留空，让 PC 端按 sourceUrl 抓取原文并转 Markdown，
+  // 不要再塞“> 来源：URL”样板正文，否则 PC 会当作已转换好的正文而跳过抓取。
+  if (payload.sourceUrl) return ''
   return buildMarkdownFromSharedText(payload)
 }
 
@@ -370,10 +394,17 @@ function normalizeIncomingSourceApp(payload) {
   return explicit
 }
 
-function isAndroidSharePayload(payload = {}) {
-  return String(payload.sourceApp || payload.source_app || payload.source || payload.app || payload.from || '')
-    .trim()
-    .toLowerCase() === 'android-share'
+// 判断这段 markdown 是否只是“链接分享的薄文本”（标题 + URL / 短备注），
+// 而不是真正的文章正文。命中则清空 markdown，改由 PC 端按 sourceUrl 抓取原文。
+function isThinLinkShareBody(markdown = '', sourceUrl = '') {
+  const text = String(markdown || '').trim()
+  if (!text) return false
+  const url = String(sourceUrl || '').trim()
+  // 分享面板给的 EXTRA_TEXT 通常包含该 URL 本身。
+  if (url && text.includes(url)) return true
+  // 没有明显换行的短文本，基本就是标题；正文一般更长且分段。
+  const lineCount = text.split(/\r?\n/).filter((line) => line.trim()).length
+  return text.length <= 200 && lineCount <= 3
 }
 
 function inferSourceApp(value = '') {

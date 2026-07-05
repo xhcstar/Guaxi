@@ -1,8 +1,10 @@
 import {
   createCaptureDraft,
   fileToAsset,
+  hydrateDraftAssets,
   loadEndpoint,
   loadQueue,
+  purgeDraftAssets,
   saveEndpoint,
   saveQueue,
   submitCapture,
@@ -17,6 +19,7 @@ import {
   registerAndroidShareDomListener,
   registerNativeCaptureListener,
 } from './services/shareIntake.js'
+import brandIconUrl from '../src-tauri/icons/128x128.png'
 import './styles.css'
 
 const app = document.querySelector('#app')
@@ -43,6 +46,7 @@ if (initialDraft) {
 }
 
 render()
+hydrateQueueAssetsFromStore()
 
 registerNativeCaptureListener((payload) => {
   receiveIncomingPayload(payload, '系统分享')
@@ -80,7 +84,7 @@ function render() {
   const selected = selectedDraft()
 
   app.innerHTML = `
-    <main class="app-shell" data-view="${escapeHtml(state.view)}">
+    <main class="app-shell" data-active-view="${escapeHtml(state.view)}">
       ${renderTopBar()}
       <section class="app-content">
         ${state.view === 'inbox' ? renderInbox() : ''}
@@ -100,7 +104,7 @@ function renderTopBar() {
   return `
     <header class="app-topbar">
       <div class="brand-main">
-        <img class="brand-icon" src="/src-tauri/icons/32x32.png" alt="" />
+        <img class="brand-icon" src="${brandIconUrl}" alt="" />
         <div class="brand-copy">
           <h1>Guaxi</h1>
           <p>${escapeHtml(state.status || pendingLabel)}</p>
@@ -319,6 +323,8 @@ function bindEvents() {
     })
   })
 
+  bindCardSwipe()
+
   app.querySelectorAll('[data-action="sync-all"]').forEach((button) => {
     button.addEventListener('click', syncQueue)
   })
@@ -340,6 +346,82 @@ function bindEvents() {
     field.addEventListener('input', (event) => {
       updateSelectedDraft(field.dataset.edit, event.currentTarget.value)
     })
+  })
+}
+
+// 收件箱卡片支持“向左滑动删除”。触点位移横向占优才判为滑动，避免与纵向滚动、点击选中冲突。
+function bindCardSwipe() {
+  const DELETE_THRESHOLD = 80 // 左滑超过该像素即删除
+  const MAX_SHIFT = 120
+
+  app.querySelectorAll('.capture-card[data-id]').forEach((card) => {
+    const id = card.dataset.id
+    let startX = 0
+    let startY = 0
+    let dx = 0
+    let axisLocked = false
+    let horizontal = false
+
+    const reset = (animated) => {
+      card.style.transition = animated ? 'transform 0.2s ease, opacity 0.2s ease' : 'none'
+      card.style.transform = 'translateX(0)'
+      card.style.opacity = '1'
+      card.classList.remove('swiping')
+    }
+
+    card.addEventListener('touchstart', (event) => {
+      const touch = event.touches[0]
+      startX = touch.clientX
+      startY = touch.clientY
+      dx = 0
+      axisLocked = false
+      horizontal = false
+      card.style.transition = 'none'
+    }, { passive: true })
+
+    card.addEventListener('touchmove', (event) => {
+      const touch = event.touches[0]
+      const mx = touch.clientX - startX
+      const my = touch.clientY - startY
+
+      if (!axisLocked && (Math.abs(mx) > 6 || Math.abs(my) > 6)) {
+        axisLocked = true
+        horizontal = Math.abs(mx) > Math.abs(my)
+      }
+      if (!horizontal) return
+
+      dx = Math.max(-MAX_SHIFT, Math.min(0, mx)) // 只允许左滑
+      card.style.transform = `translateX(${dx}px)`
+      card.style.opacity = String(1 + dx / (MAX_SHIFT * 2))
+      card.classList.toggle('swiping', dx < -DELETE_THRESHOLD)
+      if (event.cancelable) event.preventDefault() // 横向滑动时阻止页面纵向滚动
+    }, { passive: false })
+
+    const finish = () => {
+      if (dx < -DELETE_THRESHOLD) {
+        card.style.transition = 'transform 0.18s ease, opacity 0.18s ease'
+        card.style.transform = `translateX(-${MAX_SHIFT}px)`
+        card.style.opacity = '0'
+        removeQueueItem(id)
+      } else if (horizontal) {
+        reset(true)
+      }
+    }
+    card.addEventListener('touchend', finish)
+    card.addEventListener('touchcancel', () => reset(true))
+
+    // 捕获阶段拦截：发生过左滑时，阻止随后的 click 误触发“选中并进入编辑”。
+    card.addEventListener(
+      'click',
+      (event) => {
+        if (dx < -6) {
+          event.stopPropagation()
+          event.preventDefault()
+          dx = 0
+        }
+      },
+      true,
+    )
   })
 }
 
@@ -466,7 +548,9 @@ async function sendSelected() {
 
 async function sendDraft(item) {
   try {
-    await submitCapture(state.endpoint, item)
+    // 附件 base64 可能只在 IndexedDB（重启后内存里仅有元数据），发送前先水合。
+    const payloadDraft = await hydrateDraftAssets(item)
+    await submitCapture(state.endpoint, payloadDraft)
     updateDraft(item.id, {
       status: 'sent',
       lastError: '',
@@ -498,10 +582,34 @@ function duplicateSelected() {
 
 function deleteSelected() {
   if (!state.selectedId) return
-  state.queue = state.queue.filter((item) => item.id !== state.selectedId)
-  state.selectedId = state.queue[0]?.id || ''
+  removeQueueItem(state.selectedId)
+}
+
+function removeQueueItem(id) {
+  if (!id) return
+  const removed = state.queue.find((item) => item.id === id)
+  state.queue = state.queue.filter((item) => item.id !== id)
+
+  // 删除的是当前正在编辑的条目时，退出编辑态回到收件箱，避免停留在“已删除条目”的空编辑页。
+  if (state.selectedId === id) {
+    state.selectedId = state.queue[0]?.id || ''
+    if (state.view === 'edit') state.view = 'inbox'
+  }
+
   state.status = '已删除'
   saveQueue(state.queue)
+  if (removed) void purgeDraftAssets(removed)
+  render()
+}
+
+// 启动时把队列里附件的 base64 从 IndexedDB 水合回内存，便于后续同步与预览。
+async function hydrateQueueAssetsFromStore() {
+  const needsHydration = state.queue.some((draft) =>
+    (draft.assets || []).some((asset) => asset.id && !asset.dataBase64),
+  )
+  if (!needsHydration) return
+
+  state.queue = await Promise.all(state.queue.map(hydrateDraftAssets))
   render()
 }
 

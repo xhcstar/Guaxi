@@ -53,6 +53,7 @@ fn capture_ocr_recognize(endpoint: String, image_base64: String) -> Result<Value
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             start_local_capture_receiver(app.handle().clone());
             Ok(())

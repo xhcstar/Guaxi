@@ -271,6 +271,15 @@ fn looks_like_block_page(html: &str) -> bool {
         "log in to continue",
         "please log in",
         "please sign in",
+        // 知乎 / 常见风控限流话术（HTTP 直连或未登录会话常触发）。
+        "您当前请求存在异常",
+        "暂时限制本次访问",
+        "知乎小管家",
+        "系统检测到您的网络",
+        "访问过于频繁",
+        "操作过于频繁",
+        "请求过于频繁",
+        "unusual traffic from your",
     ];
     markers.iter().any(|m| l.contains(m))
 }

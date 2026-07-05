@@ -1,3 +1,5 @@
+import { deleteAssetData, getAssetData, putAssetData } from './assetStore.js'
+
 const CAPTURE_IMPORT_PORT = '14219'
 const CAPTURE_IMPORT_PATH = '/extension/capture/import'
 
@@ -76,7 +78,59 @@ export function loadQueue() {
 }
 
 export function saveQueue(queue) {
-  localStorage.setItem(STORAGE_KEYS.queue, JSON.stringify(queue))
+  // 设计说明：
+  // localStorage 只存轻量元数据（剔除 assets 的 base64），避免图片撑爆配额导致
+  // "exceeded the quota" 报错。附件 base64 单独落到 IndexedDB，重启后可按 id 水合。
+  const lightweight = (queue || []).map(stripDraftForStorage)
+  try {
+    localStorage.setItem(STORAGE_KEYS.queue, JSON.stringify(lightweight))
+  } catch (error) {
+    console.warn('[capture] queue metadata persist failed', error)
+  }
+  persistQueueAssetBlobs(queue)
+}
+
+function stripDraftForStorage(draft) {
+  const assets = (draft.assets || []).map((asset) => ({
+    id: asset.id,
+    name: asset.name,
+    mime: asset.mime,
+    // dataBase64 故意不写入 localStorage，改由 IndexedDB 承载。
+  }))
+  return { ...draft, assets }
+}
+
+function persistQueueAssetBlobs(queue) {
+  for (const draft of queue || []) {
+    for (const asset of draft.assets || []) {
+      if (asset.id && asset.dataBase64) {
+        void putAssetData(asset.id, asset.dataBase64)
+      }
+    }
+  }
+}
+
+// 把队列草稿的附件 base64 从 IndexedDB 水合回内存（重启后 localStorage 里只有元数据）。
+export async function hydrateDraftAssets(draft) {
+  if (!draft || !Array.isArray(draft.assets) || draft.assets.length === 0) {
+    return draft
+  }
+
+  const assets = await Promise.all(
+    draft.assets.map(async (asset) => {
+      if (asset.dataBase64 || !asset.id) return asset
+      const dataBase64 = await getAssetData(asset.id)
+      return dataBase64 ? { ...asset, dataBase64 } : asset
+    }),
+  )
+  return { ...draft, assets }
+}
+
+// 草稿被删除时清理其 IndexedDB 附件，避免二进制无限堆积。
+export async function purgeDraftAssets(draft) {
+  for (const asset of draft?.assets || []) {
+    if (asset.id) await deleteAssetData(asset.id)
+  }
 }
 
 export function createCaptureDraft(overrides = {}) {
@@ -147,6 +201,7 @@ export async function submitCapture(endpoint, draft) {
 export async function fileToAsset(file) {
   const dataBase64 = await readFileAsBase64(file)
   return {
+    id: crypto.randomUUID(),
     name: file.name,
     mime: file.type || 'application/octet-stream',
     dataBase64,

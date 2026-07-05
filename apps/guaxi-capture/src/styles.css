@@ -90,7 +90,11 @@ textarea {
   top: 0;
   z-index: 20;
   min-width: 0;
-  padding: calc(env(safe-area-inset-top, 0px) + 8px) 14px 10px;
+  /* 设计说明：
+     Android WebView（edge-to-edge）下 env(safe-area-inset-top) 常返回 0，导致品牌行
+     顶到状态栏（时间/信号/电量）上。用 max() 兜底一个最小安全高度，既能在有刘海/
+     状态栏的机型让出空间，也不会在桌面端产生过大空隙。 */
+  padding: calc(max(env(safe-area-inset-top, 0px), 32px) + 8px) 14px 10px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -319,6 +323,17 @@ textarea {
   display: grid;
   gap: 8px;
   cursor: pointer;
+  /* 纵向滚动交给浏览器，横向手势留给“左滑删除”逻辑处理。 */
+  touch-action: pan-y;
+  will-change: transform;
+}
+
+/* 左滑超过删除阈值时的危险提示（红色描边 + 右侧删除标记）。 */
+.capture-card.swiping {
+  border-color: var(--danger);
+  box-shadow:
+    inset -3px 0 0 var(--danger),
+    0 10px 28px rgba(180, 35, 24, 0.16);
 }
 
 .capture-card.active {

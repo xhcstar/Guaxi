@@ -2865,7 +2865,7 @@ fn looks_like_media_link(url: &str) -> bool {
 }
 
 /// 用站点 host 作为渲染会话 profile，使同站文章复用同一份持久登录态。
-fn render_profile_for_url(url: &str) -> String {
+pub fn render_profile_for_url(url: &str) -> String {
     Url::parse(url.trim())
         .ok()
         .and_then(|u| u.host_str().map(|h| h.to_string()))
