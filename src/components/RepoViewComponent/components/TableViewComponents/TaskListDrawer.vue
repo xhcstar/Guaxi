@@ -200,14 +200,14 @@ const isFailed = (progress) => {
 }
 
 // ── 持久化转换任务：只展示未完成/失败/取消的（已成功的从活动列表隐去）──
-const ACTIVE_STATUSES = ['pending', 'probing', 'running', 'failed', 'canceled']
+const ACTIVE_STATUSES = ['pending', 'probing', 'running', 'succeeded', 'failed', 'canceled']
 const activeConversionTasks = computed(() =>
   (props.conversionTasks || [])
     .filter((t) => ACTIVE_STATUSES.includes(t?.status))
     .sort((a, b) => (b?.id || 0) - (a?.id || 0))
 )
 const hasFinishedTasks = computed(() =>
-  (props.conversionTasks || []).some((t) => ['failed', 'canceled'].includes(t?.status))
+  (props.conversionTasks || []).some((t) => ['succeeded', 'failed', 'canceled'].includes(t?.status))
 )
 
 const isTaskFailed = (task) => task?.status === 'failed'
@@ -246,7 +246,12 @@ const taskMessage = (task) => {
     return `失败: ${e.length > 160 ? e.slice(0, 160) + '…' : e}`
   }
   const engine = task?.resolvedEngine || task?.requestedEngine
-  const engineLabel = engine === 'mineru' ? '高质量强引擎' : (engine === 'marker' ? 'Marker' : (engine === 'fast' ? '快速引擎' : ''))
+  const engineLabel = {
+    capture: '采集入库',
+    mineru: '高质量强引擎',
+    marker: 'Marker',
+    fast: '快速引擎'
+  }[engine] || ''
   const base = task?.message || '等待处理'
   return engineLabel ? `[${engineLabel}] ${base}` : base
 }
@@ -423,6 +428,7 @@ const handleClearFailed = () => {
 .ctask-engine-dot.eng-marker { background: #e6a23c; }
 .ctask-engine-dot.eng-mineru { background: #409EFF; }
 .ctask-engine-dot.eng-auto { background: #909399; }
+.ctask-engine-dot.eng-capture { background: #14b8a6; }
 /* 同步任务状态点 */
 .ctask-engine-dot.dot-running { background: #409EFF; }
 .ctask-engine-dot.dot-done { background: #67c23a; }

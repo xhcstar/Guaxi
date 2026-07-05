@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Guaxi Capture",
+  "productName": "Guaxi",
   "version": "0.1.0",
   "identifier": "com.guaxi.capture",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Guaxi Capture",
+        "title": "Guaxi",
         "width": 420,
         "height": 760,
         "minWidth": 360,

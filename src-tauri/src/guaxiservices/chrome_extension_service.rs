@@ -1,10 +1,12 @@
 use crate::commands::repoview::repofileproc::add_web_clipper_import_file;
 use crate::commands::repoview::{add_imported_file, ImportedFileInput};
 use crate::commands::settingview::get_libraries_root;
+use crate::commands::convert::task_store::{self, NewConversionTask};
 use crate::state::SharedState;
 use actix_web::{post, web, HttpRequest, HttpResponse, Responder};
 use base64::{engine::general_purpose, Engine as _};
 use chrono::Local;
+use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, ACCEPT_LANGUAGE, CACHE_CONTROL, PRAGMA, UPGRADE_INSECURE_REQUESTS};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -243,19 +245,6 @@ async fn handle_capture_import(
         }
     };
 
-    let body = match capture_body(&req) {
-        Some(body) => body,
-        None if should_accept_pc_side_processing(&req, &prepared_assets) => {
-            build_pc_side_processing_body(&req, &prepared_assets)
-        }
-        None => {
-            warn!("[capture_import] rejected empty capture for title='{}'", title);
-            return HttpResponse::BadRequest().json(capture_error_response(
-                "markdown/content/text, sourceUrl, or assets cannot all be empty",
-            ));
-        }
-    };
-
     let capture_dir = PathBuf::from(get_libraries_root()).join("collect_capture");
     if let Err(e) = fs::create_dir_all(&capture_dir) {
         error!("[capture_import] failed to create collect_capture dir: {}", e);
@@ -272,10 +261,93 @@ async fn handle_capture_import(
         Local::now().format("%Y%m%d_%H%M%S")
     );
     let source_path = capture_dir.join(&filename);
+    let source_path_string = source_path.to_string_lossy().to_string();
+    let capture_output_dir = capture_dir.to_string_lossy().to_string();
+
+    let app_handle = match state.get_app_handle() {
+        Some(handle) => handle,
+        None => {
+            error!("[capture_import] AppHandle is not initialized");
+            return HttpResponse::InternalServerError().json(capture_error_response(
+                "AppHandle is not initialized",
+            ));
+        }
+    };
+
+    let capture_task_id = start_capture_import_task(
+        &app_handle,
+        &title,
+        &req,
+        &source_path_string,
+        &capture_output_dir,
+    );
+
+    let body = match capture_body(&req) {
+        Some(body) => {
+            update_capture_import_task(
+                &app_handle,
+                capture_task_id,
+                35,
+                "已收到正文，准备写入文件库",
+            );
+            body
+        }
+        None if !req.source_url.trim().is_empty() => {
+            update_capture_import_task(
+                &app_handle,
+                capture_task_id,
+                15,
+                "正在抓取分享 URL 正文",
+            );
+            match build_url_capture_body(&req, &title).await {
+                Ok(body) => {
+                    update_capture_import_task(
+                        &app_handle,
+                        capture_task_id,
+                        65,
+                        "URL 正文已转换为 Markdown",
+                    );
+                    body
+                }
+                Err(e) => {
+                    warn!("[capture_import] url extraction failed: {}", e);
+                    update_capture_import_task(
+                        &app_handle,
+                        capture_task_id,
+                        45,
+                        "URL 抽取失败，保留来源链接等待后续处理",
+                    );
+                    build_pc_side_processing_body(&req, &prepared_assets, Some(&e))
+                }
+            }
+        }
+        None if should_accept_pc_side_processing(&req, &prepared_assets) => {
+            update_capture_import_task(
+                &app_handle,
+                capture_task_id,
+                35,
+                "已进入 PC 端附件处理队列",
+            );
+            build_pc_side_processing_body(&req, &prepared_assets, None)
+        }
+        None => {
+            warn!("[capture_import] rejected empty capture for title='{}'", title);
+            fail_capture_import_task(
+                &app_handle,
+                capture_task_id,
+                "markdown/content/text, sourceUrl, or assets cannot all be empty",
+            );
+            return HttpResponse::BadRequest().json(capture_error_response(
+                "markdown/content/text, sourceUrl, or assets cannot all be empty",
+            ));
+        }
+    };
+
     let markdown = build_capture_markdown(&req, &title, &created_at, &tags, &body, &prepared_assets);
 
     if let Err(e) = write_capture_markdown_atomically(&source_path, &markdown) {
         error!("[capture_import] failed to write markdown: {}", e);
+        fail_capture_import_task(&app_handle, capture_task_id, &format!("Failed to write markdown: {}", e));
         return HttpResponse::InternalServerError().json(capture_error_response(&format!(
             "Failed to write markdown: {}",
             e
@@ -283,7 +355,12 @@ async fn handle_capture_import(
     }
 
     let file_size = fs::metadata(&source_path).map(|m| m.len()).unwrap_or(0);
-    let source_path_string = source_path.to_string_lossy().to_string();
+    update_capture_import_task(
+        &app_handle,
+        capture_task_id,
+        78,
+        "采集 Markdown 已写入暂存区",
+    );
     info!(
         "[capture_import] saved staging markdown path='{}' size={}",
         source_path_string, file_size
@@ -297,6 +374,7 @@ async fn handle_capture_import(
 
     if let Err(e) = add_web_clipper_import_file(file_repo.clone(), source_path_string.clone()) {
         error!("[capture_import] file library import failed: {}", e);
+        fail_capture_import_task(&app_handle, capture_task_id, &format!("Failed to import file into library: {}", e));
         return HttpResponse::InternalServerError().json(capture_error_response(&format!(
             "Failed to import file into library: {}",
             e
@@ -305,24 +383,15 @@ async fn handle_capture_import(
 
     if let Err(e) = write_capture_assets_to_library(&file_repo, &imported_stem, &prepared_assets) {
         error!("[capture_import] asset library import failed: {}", e);
+        fail_capture_import_task(&app_handle, capture_task_id, &format!("Failed to import capture assets: {}", e));
         return HttpResponse::InternalServerError().json(capture_error_response(&format!(
             "Failed to import capture assets: {}",
             e
         )));
     }
 
-    let app_handle = match state.get_app_handle() {
-        Some(handle) => handle,
-        None => {
-            error!("[capture_import] AppHandle is not initialized");
-            return HttpResponse::InternalServerError().json(capture_error_response(
-                "AppHandle is not initialized",
-            ));
-        }
-    };
-
     let file_id = match add_imported_file(
-        app_handle,
+        app_handle.clone(),
         ImportedFileInput::new(
             filename.clone(),
             default_if_empty(&req.description, &title),
@@ -337,6 +406,7 @@ async fn handle_capture_import(
         Ok(id) => id,
         Err(e) => {
             error!("[capture_import] imported_files insert failed: {}", e);
+            fail_capture_import_task(&app_handle, capture_task_id, &format!("Failed to add imported file record: {}", e));
             return HttpResponse::InternalServerError().json(capture_error_response(&format!(
                 "Failed to add imported file record: {}",
                 e
@@ -356,6 +426,7 @@ async fn handle_capture_import(
         file_id,
         imported_path.display()
     );
+    finish_capture_import_task(&app_handle, capture_task_id, &imported_path.to_string_lossy());
 
     HttpResponse::Ok().json(CaptureImportResponse {
         success: true,
@@ -887,6 +958,192 @@ fn capture_error_response(message: &str) -> CaptureImportResponse {
     }
 }
 
+fn start_capture_import_task(
+    app_handle: &AppHandle,
+    title: &str,
+    req: &CaptureImportRequest,
+    input_path: &str,
+    output_dir: &str,
+) -> Option<i64> {
+    let display_name = if title.trim().is_empty() {
+        "Guaxi Capture Import".to_string()
+    } else {
+        format!("Guaxi Capture - {}", title.trim())
+    };
+    let task = NewConversionTask {
+        uuid: Uuid::new_v4().to_string(),
+        imported_file_id: None,
+        file_name: display_name,
+        input_path: if req.source_url.trim().is_empty() {
+            input_path.to_string()
+        } else {
+            req.source_url.trim().to_string()
+        },
+        output_dir: output_dir.to_string(),
+        expected_md_path: Some(input_path.to_string()),
+        requested_engine: "capture".to_string(),
+        max_attempts: 0,
+        priority: 5,
+    };
+
+    match task_store::insert_task(&task) {
+        Ok(id) => {
+            let _ = task_store::set_resolved_engine(id, "capture", None);
+            let _ = task_store::update_progress(id, 5, 100, Some("capture-import"), Some("收到移动端采集任务"));
+            emit_capture_import_task(app_handle, id);
+            info!(
+                "[capture_import] task created task_id={} title='{}' source_url='{}'",
+                id,
+                title,
+                req.source_url
+            );
+            Some(id)
+        }
+        Err(e) => {
+            warn!("[capture_import] create task failed: {}", e);
+            None
+        }
+    }
+}
+
+fn update_capture_import_task(
+    app_handle: &AppHandle,
+    task_id: Option<i64>,
+    current: i64,
+    message: &str,
+) {
+    let Some(id) = task_id else {
+        return;
+    };
+    if let Err(e) = task_store::update_progress(id, current, 100, Some("capture-import"), Some(message)) {
+        warn!("[capture_import] update task progress failed task_id={} error={}", id, e);
+        return;
+    }
+    emit_capture_import_task(app_handle, id);
+}
+
+fn fail_capture_import_task(app_handle: &AppHandle, task_id: Option<i64>, error: &str) {
+    let Some(id) = task_id else {
+        return;
+    };
+    let _ = task_store::mark_failed(id, error);
+    emit_capture_import_task(app_handle, id);
+}
+
+fn finish_capture_import_task(app_handle: &AppHandle, task_id: Option<i64>, md_path: &str) {
+    let Some(id) = task_id else {
+        return;
+    };
+    let _ = task_store::mark_succeeded(id, Some(md_path));
+    emit_capture_import_task(app_handle, id);
+}
+
+fn emit_capture_import_task(app_handle: &AppHandle, task_id: i64) {
+    if let Ok(Some(task)) = task_store::get_task(task_id) {
+        let _ = app_handle.emit("conversion_task_update", &task);
+    }
+}
+
+async fn build_url_capture_body(
+    req: &CaptureImportRequest,
+    fallback_title: &str,
+) -> Result<String, String> {
+    let source_url = req.source_url.trim();
+    if source_url.is_empty() {
+        return Err("sourceUrl is empty".to_string());
+    }
+
+    info!("[capture_import] extracting url body source_url='{}'", source_url);
+    let client = build_capture_http_client()?;
+    let rendered = crate::commands::flipboard_render::fetch_page(
+        &client,
+        source_url,
+        false,
+        "capture-import",
+    )
+    .await?;
+    if rendered.blocked {
+        warn!(
+            "[capture_import] rendered page looks blocked source_url='{}' mode={}",
+            source_url,
+            rendered.mode
+        );
+    }
+
+    let final_url = rendered.final_url.clone();
+    let html = rendered.html;
+    let base_url = final_url.clone();
+    let extracted = tokio::task::spawn_blocking(move || {
+        crate::commands::flipboard_extract::extract(&html, &base_url)
+    })
+    .await
+    .map_err(|e| format!("extract task join failed: {e}"))?
+    .map_err(|e| format!("extract article failed: {e}"))?;
+
+    let title = extracted
+        .title
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or(fallback_title)
+        .trim();
+    let mut body = String::new();
+    body.push_str("# ");
+    body.push_str(title);
+    body.push_str("\n\n");
+    body.push_str("> 原文：");
+    body.push_str(source_url);
+    body.push_str("\n\n");
+    if final_url.trim() != source_url {
+        body.push_str("> 最终地址：");
+        body.push_str(final_url.trim());
+        body.push_str("\n\n");
+    }
+    body.push_str("> 抽取引擎：");
+    body.push_str(extracted.engine);
+    body.push_str("\n\n");
+
+    if let Some(lead) = extracted.lead_image.as_deref().filter(|s| !s.trim().is_empty()) {
+        body.push_str("![](");
+        body.push_str(lead);
+        body.push_str(")\n\n");
+    }
+
+    let markdown = extracted.markdown.trim();
+    if !markdown.is_empty() {
+        body.push_str(markdown);
+        body.push('\n');
+    } else if !extracted.plain_text.trim().is_empty() {
+        body.push_str(extracted.plain_text.trim());
+        body.push('\n');
+    } else {
+        return Err("article extraction produced empty markdown".to_string());
+    }
+
+    info!(
+        "[capture_import] url body extracted source_url='{}' markdown_len={} image_count={}",
+        source_url,
+        body.len(),
+        extracted.images.len()
+    );
+    Ok(body)
+}
+
+fn build_capture_http_client() -> Result<reqwest::Client, String> {
+    let mut default_headers = HeaderMap::new();
+    default_headers.insert(ACCEPT, HeaderValue::from_static("text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"));
+    default_headers.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("zh-CN,zh;q=0.9,en;q=0.8"));
+    default_headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    default_headers.insert(PRAGMA, HeaderValue::from_static("no-cache"));
+    default_headers.insert(UPGRADE_INSECURE_REQUESTS, HeaderValue::from_static("1"));
+
+    reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0 Safari/537.36 GuaxiCapture/1.0")
+        .default_headers(default_headers)
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .build()
+        .map_err(|e| format!("build capture http client failed: {e}"))
+}
+
 fn default_if_empty(value: &str, default_value: &str) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -929,6 +1186,7 @@ fn should_accept_pc_side_processing(
 fn build_pc_side_processing_body(
     req: &CaptureImportRequest,
     assets: &[PreparedCaptureAsset],
+    extraction_error: Option<&str>,
 ) -> String {
     // 设计说明：
     // 移动端只负责“采集事实”：URL、标题、平台、图片或文件。网页正文抽取、图片 OCR、
@@ -944,6 +1202,12 @@ fn build_pc_side_processing_body(
             "- App: {}\n\n",
             default_if_empty(&req.source_app, "mobile")
         ));
+    }
+
+    if let Some(error) = extraction_error.filter(|s| !s.trim().is_empty()) {
+        body.push_str("## URL 抽取状态\n\n");
+        body.push_str("PC 端尝试抓取正文失败，已保留原始 URL，可稍后在 PC 端重试。\n\n");
+        body.push_str(&format!("- 错误：{}\n\n", error.trim()));
     }
 
     if !assets.is_empty() {

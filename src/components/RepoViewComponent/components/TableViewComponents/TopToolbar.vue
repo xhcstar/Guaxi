@@ -14,7 +14,7 @@
                 :type="hasFailedConversion ? 'error' : 'info'" />
             </n-button>
           </template>
-          任务列表（进行中 {{ runningConversionCount }}<span v-if="failedConversionCount"> · 失败 {{ failedConversionCount }}</span>）
+          任务列表（进行中 {{ runningConversionCount }}<span v-if="finishedConversionCount"> · 已结束 {{ finishedConversionCount }}</span><span v-if="failedConversionCount"> · 失败 {{ failedConversionCount }}</span>）
         </n-tooltip>
 
         <!-- 备份任务按钮 -->
@@ -140,6 +140,9 @@ const runningConversionCount = computed(() =>
 const failedConversionCount = computed(() =>
   (props.conversionTasks || []).filter((t) => t?.status === 'failed').length
 )
+const finishedConversionCount = computed(() =>
+  (props.conversionTasks || []).filter((t) => ['succeeded', 'canceled'].includes(t?.status)).length
+)
 const hasFailedConversion = computed(() => failedConversionCount.value > 0)
 
 // 其它类型（备份/恢复/导入/导出/同步）仍来自内存进度数组，取未完成的。
@@ -151,7 +154,7 @@ const otherActiveCount = computed(() =>
 
 // 徽标总数 = 进行中转换 + 失败转换（需要关注）+ 其它进行中任务。
 const totalActiveCount = computed(
-  () => runningConversionCount.value + failedConversionCount.value + otherActiveCount.value
+  () => runningConversionCount.value + failedConversionCount.value + finishedConversionCount.value + otherActiveCount.value
 )
 
 defineEmits([

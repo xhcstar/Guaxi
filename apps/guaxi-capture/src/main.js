@@ -26,10 +26,10 @@ const state = {
   endpoint: loadEndpoint(),
   queue: loadQueue(),
   selectedId: '',
+  view: 'inbox',
   tab: 'inbox',
   busy: false,
   status: '准备接收分享',
-  settingsOpen: false,
   lastIncomingSignature: '',
   lastIncomingAt: 0,
   manual: createCaptureDraft({
@@ -77,74 +77,93 @@ setInterval(async () => {
 }, 1800)
 
 function render() {
-  const counts = getQueueCounts()
   const selected = selectedDraft()
-  const items = filteredQueue()
 
   app.innerHTML = `
-    <main class="app-shell">
-      <header class="hero">
-        <div class="hero-main">
-          <div class="brand-mark">G</div>
-          <div>
-            <h1>Guaxi Capture</h1>
-            <p>${escapeHtml(state.status)}</p>
-          </div>
-        </div>
-        <button class="icon-button" data-action="toggle-settings" title="连接设置">设置</button>
-      </header>
-
-      <section class="connection ${endpointLooksLan() ? 'is-online' : 'is-local'}">
-        <div>
-          <span class="eyebrow">PC 连接</span>
-          <strong>${escapeHtml(state.endpoint)}</strong>
-        </div>
-        <button data-action="sync-all" ${state.busy || !state.queue.length ? 'disabled' : ''}>同步</button>
+    <main class="app-shell" data-view="${escapeHtml(state.view)}">
+      ${renderTopBar()}
+      <section class="app-content">
+        ${state.view === 'inbox' ? renderInbox() : ''}
+        ${state.view === 'edit' ? (selected ? renderDetail(selected) : renderNoSelection()) : ''}
+        ${state.view === 'settings' ? renderSettings() : ''}
       </section>
-
-      ${state.settingsOpen ? renderSettings() : ''}
-
-      <nav class="tabs" aria-label="队列筛选">
-        ${renderTab('inbox', '收件箱', counts.total)}
-        ${renderTab('pending', '待发送', counts.pending)}
-        ${renderTab('failed', '失败', counts.failed)}
-        ${renderTab('sent', '已发送', counts.sent)}
-      </nav>
-
-      <section class="workspace">
-        <section class="list-panel">
-          <div class="quick-actions">
-            <button data-action="paste">剪贴板</button>
-            <label class="upload-button">
-              <input type="file" data-action="images" accept="image/*" multiple />
-              图片 OCR
-            </label>
-            <button data-action="new-note">手记</button>
-          </div>
-
-          <div class="capture-list">
-            ${items.map(renderCaptureItem).join('') || renderEmptyState()}
-          </div>
-        </section>
-
-        <section class="detail-panel">
-          ${selected ? renderDetail(selected) : renderGuide()}
-        </section>
-      </section>
+      ${renderBottomNav()}
     </main>
   `
 
   bindEvents()
 }
 
+function renderTopBar() {
+  const counts = getQueueCounts()
+  const pendingLabel = counts.pending ? `${counts.pending} 项待同步` : '收件箱已整理'
+  return `
+    <header class="app-topbar">
+      <div class="brand-main">
+        <img class="brand-icon" src="/src-tauri/icons/32x32.png" alt="" />
+        <div class="brand-copy">
+          <h1>Guaxi</h1>
+          <p>${escapeHtml(state.status || pendingLabel)}</p>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <button class="tool-button" data-action="paste" aria-label="读取剪贴板" title="读取剪贴板">
+          ${icon('clipboard')}
+        </button>
+        <label class="tool-button file-tool" aria-label="导入图片" title="导入图片">
+          ${icon('image')}
+          <input type="file" data-action="images" accept="image/*" multiple />
+        </label>
+        <button class="tool-button primary" data-action="sync-all" aria-label="同步到 PC" title="同步到 PC" ${state.busy || !state.queue.length ? 'disabled' : ''}>
+          ${icon('sync')}
+        </button>
+      </div>
+    </header>
+  `
+}
+
+function renderInbox() {
+  const counts = getQueueCounts()
+  const items = filteredQueue()
+  return `
+    <section class="connection-strip ${endpointLooksLan() ? 'is-online' : 'is-local'}">
+      <div class="connection-copy">
+        <span>PC</span>
+        <strong>${escapeHtml(shortEndpoint(state.endpoint))}</strong>
+      </div>
+      <button class="pill-button" data-action="sync-all" ${state.busy || !state.queue.length ? 'disabled' : ''}>同步</button>
+    </section>
+
+    <nav class="filter-tabs" aria-label="队列筛选">
+      ${renderTab('inbox', '收件箱', counts.total)}
+      ${renderTab('pending', '待发送', counts.pending)}
+      ${renderTab('failed', '失败', counts.failed)}
+      ${renderTab('sent', '已发送', counts.sent)}
+    </nav>
+
+    <section class="capture-list">
+      ${items.map(renderCaptureItem).join('') || renderEmptyState()}
+    </section>
+  `
+}
+
 function renderSettings() {
   return `
-    <section class="settings-panel">
-      <label>
+    <section class="settings-page">
+      <div class="page-heading">
+        <span>设置</span>
+        <h2>连接与入库</h2>
+      </div>
+
+      <label class="form-field">
         <span>Guaxi PC 接口</span>
         <input data-field="endpoint" value="${escapeHtml(state.endpoint)}" />
       </label>
-      <p>手机端只做采集和排队。网页转换、图片 OCR、附件入库由 PC 端 Capture Import 接口处理。</p>
+
+      <div class="settings-note">
+        <strong>PC 负责重活</strong>
+        <p>手机端只排队采集内容。网页正文抽取、Markdown 转换、图片 OCR 和附件入库都会交给 PC 端处理。</p>
+      </div>
     </section>
   `
 }
@@ -162,15 +181,15 @@ function renderCaptureItem(item) {
   const active = item.id === state.selectedId ? 'active' : ''
   return `
     <article class="capture-card ${active}" data-action="select" data-id="${escapeHtml(item.id)}">
-      <div class="card-top">
+      <div class="card-title-row">
         <strong>${escapeHtml(item.title || '未命名采集')}</strong>
         <span class="status ${escapeHtml(item.status)}">${statusLabel(item.status)}</span>
       </div>
-      <p>${escapeHtml(item.sourceUrl || item.description || previewText(item))}</p>
+      <p class="card-preview">${escapeHtml(item.sourceUrl || item.description || previewText(item))}</p>
       <div class="meta-row">
         <span>${sourceLabel(item.sourceApp)}</span>
         <span>${item.assets?.length || 0} 附件</span>
-        <span>${escapeHtml(item.updatedAt || item.createdAt)}</span>
+        <span>${formatQueueTime(item.updatedAt || item.createdAt)}</span>
       </div>
     </article>
   `
@@ -178,42 +197,42 @@ function renderCaptureItem(item) {
 
 function renderDetail(item) {
   return `
-    <form class="detail-card" data-form="detail">
-      <div class="detail-head">
-        <div>
-          <span class="eyebrow">采集预览</span>
+    <form class="detail-page" data-form="detail">
+      <div class="detail-toolbar">
+        <div class="page-heading">
+          <span>编辑</span>
           <h2>${escapeHtml(item.title || '未命名采集')}</h2>
         </div>
         <span class="status ${escapeHtml(item.status)}">${statusLabel(item.status)}</span>
       </div>
 
-      <label>
+      <label class="form-field">
         <span>标题</span>
         <input data-edit="title" value="${escapeHtml(item.title)}" />
       </label>
 
-      <label>
+      <label class="form-field">
         <span>来源链接</span>
         <input data-edit="sourceUrl" value="${escapeHtml(item.sourceUrl)}" placeholder="https://..." />
       </label>
 
       <div class="field-grid">
-        <label>
+        <label class="form-field">
           <span>文件库</span>
           <input data-edit="fileRepo" value="${escapeHtml(item.fileRepo)}" />
         </label>
-        <label>
+        <label class="form-field">
           <span>知识库</span>
           <input data-edit="knowledgeBase" value="${escapeHtml(item.knowledgeBase)}" />
         </label>
       </div>
 
-      <label>
+      <label class="form-field">
         <span>标签</span>
         <input data-edit="tagsText" value="${escapeHtml(item.tagsText)}" />
       </label>
 
-      <label>
+      <label class="form-field">
         <span>备注 / 已捕获文本</span>
         <textarea data-edit="markdown" placeholder="可选。为空时 PC 会根据来源 URL 或图片附件进行后续转换。">${escapeHtml(item.markdown)}</textarea>
       </label>
@@ -225,25 +244,19 @@ function renderDetail(item) {
       ${item.lastError ? `<p class="error-text">${escapeHtml(item.lastError)}</p>` : ''}
 
       <div class="detail-actions">
-        <button type="button" data-action="send-selected" ${state.busy ? 'disabled' : ''}>发送到 PC</button>
-        <button type="button" data-action="duplicate-selected">复制草稿</button>
-        <button type="button" data-action="delete-selected">删除</button>
+        <button class="action-button primary" type="button" data-action="send-selected" ${state.busy ? 'disabled' : ''}>发送到 PC</button>
+        <button class="tool-button" type="button" data-action="duplicate-selected" aria-label="复制草稿" title="复制草稿">${icon('copy')}</button>
+        <button class="tool-button danger" type="button" data-action="delete-selected" aria-label="删除" title="删除">${icon('trash')}</button>
       </div>
     </form>
   `
 }
 
-function renderGuide() {
+function renderNoSelection() {
   return `
-    <section class="guide-card">
-      <span class="eyebrow">工作流</span>
-      <h2>从任何 App 分享到 Guaxi</h2>
-      <p>文章链接、选中文本、截图和照片先进入手机收件箱；当 PC 在线时，一键同步到文件库。图片不在手机端 OCR，直接交给 PC 处理。</p>
-      <div class="guide-steps">
-        <div><strong>1</strong><span>分享或粘贴</span></div>
-        <div><strong>2</strong><span>自动入队</span></div>
-        <div><strong>3</strong><span>PC 转换入库</span></div>
-      </div>
+    <section class="empty-state">
+      <h2>还没有选中条目</h2>
+      <p>从收件箱选择一条内容后再编辑。</p>
     </section>
   `
 }
@@ -252,15 +265,38 @@ function renderEmptyState() {
   return `
     <section class="empty-state">
       <h2>收件箱为空</h2>
-      <p>从知乎、公众号、小红书、B站或相册分享内容到 Guaxi Capture，这里会自动生成待同步项目。</p>
+      <p>从知乎、公众号、小红书、B站或相册分享内容到 Guaxi，这里会自动生成待同步项目。</p>
     </section>
   `
 }
 
+function renderBottomNav() {
+  const counts = getQueueCounts()
+  return `
+    <nav class="bottom-nav" aria-label="主导航">
+      ${renderNavButton('inbox', '收件箱', icon('inbox'), counts.pending)}
+      ${renderNavButton('edit', '编辑', icon('edit'), 0)}
+      ${renderNavButton('settings', '设置', icon('settings'), 0)}
+    </nav>
+  `
+}
+
+function renderNavButton(view, label, svg, badge) {
+  return `
+    <button class="${state.view === view ? 'active' : ''}" data-view="${view}" aria-label="${label}" title="${label}">
+      ${svg}
+      <span>${label}</span>
+      ${badge ? `<strong>${badge}</strong>` : ''}
+    </button>
+  `
+}
+
 function bindEvents() {
-  app.querySelector('[data-action="toggle-settings"]')?.addEventListener('click', () => {
-    state.settingsOpen = !state.settingsOpen
-    render()
+  app.querySelectorAll('[data-view]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.view = button.dataset.view
+      render()
+    })
   })
 
   app.querySelector('[data-field="endpoint"]')?.addEventListener('input', (event) => {
@@ -278,20 +314,26 @@ function bindEvents() {
   app.querySelectorAll('[data-action="select"]').forEach((card) => {
     card.addEventListener('click', () => {
       state.selectedId = card.dataset.id
+      state.view = 'edit'
       render()
     })
   })
 
-  app.querySelector('[data-action="sync-all"]')?.addEventListener('click', syncQueue)
-  app.querySelector('[data-action="paste"]')?.addEventListener('click', importClipboard)
-  app.querySelector('[data-action="new-note"]')?.addEventListener('click', createManualNote)
+  app.querySelectorAll('[data-action="sync-all"]').forEach((button) => {
+    button.addEventListener('click', syncQueue)
+  })
+  app.querySelectorAll('[data-action="paste"]').forEach((button) => {
+    button.addEventListener('click', importClipboard)
+  })
   app.querySelector('[data-action="send-selected"]')?.addEventListener('click', sendSelected)
   app.querySelector('[data-action="duplicate-selected"]')?.addEventListener('click', duplicateSelected)
   app.querySelector('[data-action="delete-selected"]')?.addEventListener('click', deleteSelected)
 
-  app.querySelector('[data-action="images"]')?.addEventListener('change', async (event) => {
-    const files = Array.from(event.currentTarget.files || [])
-    if (files.length) await importImages(files)
+  app.querySelectorAll('[data-action="images"]').forEach((input) => {
+    input.addEventListener('change', async (event) => {
+      const files = Array.from(event.currentTarget.files || [])
+      if (files.length) await importImages(files)
+    })
   })
 
   app.querySelectorAll('[data-edit]').forEach((field) => {
@@ -320,7 +362,8 @@ function receiveIncomingPayload(payload, label) {
   state.lastIncomingAt = now
 
   queueDraft(draft, 'pending', label)
-  state.status = `${label}已进入收件箱，连接 PC 后可同步`
+  state.view = 'inbox'
+  state.status = `${label}已进入收件箱`
   render()
 }
 
@@ -366,18 +409,6 @@ async function importImages(files) {
     state.busy = false
     render()
   }
-}
-
-function createManualNote() {
-  const draft = createCaptureDraft({
-    title: '手记',
-    sourceApp: 'manual',
-    tagsText: 'capture,manual',
-    markdown: '',
-  })
-  queueDraft(draft, 'draft', '手记')
-  state.status = '已创建手记草稿'
-  render()
 }
 
 function queueDraft(draft, status, reason) {
@@ -553,6 +584,34 @@ function buildIncomingSignature(draft) {
     draft.markdown || '',
     (draft.assets || []).map((asset) => asset.name || asset.mime || '').join('|'),
   ].join('::')
+}
+
+function shortEndpoint(endpoint) {
+  try {
+    const url = new URL(endpoint)
+    return `${url.hostname}:${url.port}${url.pathname}`
+  } catch {
+    return endpoint
+  }
+}
+
+function formatQueueTime(value) {
+  const text = String(value || '')
+  return text.includes('T') ? text.slice(0, 16).replace('T', ' ') : text
+}
+
+function icon(name) {
+  const icons = {
+    clipboard: '<svg viewBox="0 0 24 24"><path d="M9 4h6l1 2h3v15H5V6h3l1-2Z"/><path d="M9 10h6M9 14h6M9 18h4"/></svg>',
+    image: '<svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 15l3-3 3 3 2-2 3 3"/><circle cx="9" cy="9" r="1.5"/></svg>',
+    sync: '<svg viewBox="0 0 24 24"><path d="M20 7h-5a6 6 0 0 0-10 3"/><path d="M17 4l3 3-3 3"/><path d="M4 17h5a6 6 0 0 0 10-3"/><path d="M7 20l-3-3 3-3"/></svg>',
+    inbox: '<svg viewBox="0 0 24 24"><path d="M4 13l2-7h12l2 7v5H4v-5Z"/><path d="M4 13h5l1.5 2h3L15 13h5"/></svg>',
+    edit: '<svg viewBox="0 0 24 24"><path d="M4 20h4l11-11-4-4L4 16v4Z"/><path d="M13 7l4 4"/></svg>',
+    settings: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M4.8 5.8l2.1 2.1M17.1 16.1l2.1 2.1M3 12h3M18 12h3M4.8 18.2l2.1-2.1M17.1 7.9l2.1-2.1"/></svg>',
+    copy: '<svg viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M5 15V5h10"/></svg>',
+    trash: '<svg viewBox="0 0 24 24"><path d="M5 7h14M10 11v6M14 11v6M8 7l1-3h6l1 3M7 7l1 13h8l1-13"/></svg>',
+  }
+  return icons[name] || ''
 }
 
 function escapeHtml(value) {
