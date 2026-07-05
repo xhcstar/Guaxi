@@ -76,12 +76,8 @@ function patchMainActivity(mainActivityPath) {
   if (!packageLine) fail('Cannot determine MainActivity package.');
   const packageName = packageLine[1];
 
-  if (!source.includes('android.os.Bundle')) {
-    source = source.replace(packageLine[0], `${packageLine[0]}\n\nimport android.os.Bundle`);
-  }
-  if (!source.includes('android.content.Intent')) {
-    source = source.replace(packageLine[0], `${packageLine[0]}\n\nimport android.content.Intent`);
-  }
+  source = ensureImport(source, packageLine[0], 'android.os.Bundle');
+  source = ensureImport(source, packageLine[0], 'android.content.Intent');
 
   if (source.includes('pluginManager.load(null, "guaxi-share-intent"')) {
     if (!source.includes('override fun onNewIntent(intent: Intent)')) {
@@ -100,11 +96,69 @@ function patchMainActivity(mainActivityPath) {
     );
     write(mainActivityPath, source);
     console.info('[capture-android-share] MainActivity patched');
+  } else if (/class\s+MainActivity\s*:\s*TauriActivity\(\)\s*\{/.test(source)) {
+    source = patchExistingMainActivityClass(source);
+    write(mainActivityPath, source);
+    console.info('[capture-android-share] existing MainActivity class patched');
   } else {
     fail('MainActivity.kt shape is not the default Tauri form; patch it manually with ShareIntentPlugin registration.');
   }
 
   writeSharePlugin(dirname(mainActivityPath), packageName);
+}
+
+function ensureImport(source, packageDeclaration, importName) {
+  if (source.includes(`import ${importName}`)) return source;
+
+  const importMatches = [...source.matchAll(/^import\s+.+$/gm)];
+  if (importMatches.length) {
+    const lastImport = importMatches[importMatches.length - 1];
+    return `${source.slice(0, lastImport.index + lastImport[0].length)}\nimport ${importName}${source.slice(lastImport.index + lastImport[0].length)}`;
+  }
+
+  return source.replace(packageDeclaration, `${packageDeclaration}\n\nimport ${importName}`);
+}
+
+function patchExistingMainActivityClass(source) {
+  let patched = source;
+
+  // 设计说明：
+  // Tauri Android 生成工程可能已经被其它脚本补过，MainActivity 不一定还是一行默认类。
+  // 这里按已有结构增量注入插件注册逻辑，避免每次重新生成/重复补丁时都要求手工修 Kotlin。
+  if (/override\s+fun\s+onCreate\s*\(\s*savedInstanceState:\s*Bundle\?\s*\)\s*\{/.test(patched)) {
+    patched = patched.replace(
+      /(override\s+fun\s+onCreate\s*\(\s*savedInstanceState:\s*Bundle\?\s*\)\s*\{\s*)/,
+      `$1\n    pluginManager.load(null, "guaxi-share-intent", ShareIntentPlugin(this), "{}")`,
+    );
+    if (!patched.includes('intent?.let { pluginManager.onNewIntent(it) }')) {
+      patched = patched.replace(
+        /(super\.onCreate\s*\(\s*savedInstanceState\s*\)\s*)/,
+        `$1\n    intent?.let { pluginManager.onNewIntent(it) }`,
+      );
+    }
+  } else {
+    patched = insertBeforeMainActivityEnd(
+      patched,
+      `\n  override fun onCreate(savedInstanceState: Bundle?) {\n    pluginManager.load(null, "guaxi-share-intent", ShareIntentPlugin(this), "{}")\n    super.onCreate(savedInstanceState)\n    intent?.let { pluginManager.onNewIntent(it) }\n  }\n`,
+    );
+  }
+
+  if (!patched.includes('override fun onNewIntent(intent: Intent)')) {
+    patched = insertBeforeMainActivityEnd(
+      patched,
+      `\n  override fun onNewIntent(intent: Intent) {\n    super.onNewIntent(intent)\n    setIntent(intent)\n    pluginManager.onNewIntent(intent)\n  }\n`,
+    );
+  }
+
+  return patched;
+}
+
+function insertBeforeMainActivityEnd(source, content) {
+  const lastBrace = source.lastIndexOf('}');
+  if (lastBrace < 0) {
+    fail('MainActivity.kt has no class closing brace.');
+  }
+  return `${source.slice(0, lastBrace)}${content}${source.slice(lastBrace)}`;
 }
 
 function writeSharePlugin(activityDir, packageName) {
