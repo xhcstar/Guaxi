@@ -72,27 +72,33 @@ function patchManifest() {
 
 function patchMainActivity(mainActivityPath) {
   let source = read(mainActivityPath);
+  const originalSource = source;
   const packageLine = source.match(/^package\s+([\w.]+)/m);
   if (!packageLine) fail('Cannot determine MainActivity package.');
   const packageName = packageLine[1];
 
   source = ensureImport(source, packageLine[0], 'android.os.Bundle');
   source = ensureImport(source, packageLine[0], 'android.content.Intent');
+  source = ensureImport(source, packageLine[0], 'android.util.Log');
+  source = normalizeLegacyMainActivityPatch(source);
 
-  if (source.includes('pluginManager.load(null, "guaxi-share-intent"')) {
+  if (source.includes('getPluginManager().load(null, "guaxi-share-intent"')) {
     if (!source.includes('override fun onNewIntent(intent: Intent)')) {
       source = source.replace(
         /\n}\s*$/,
-        `\n\n  override fun onNewIntent(intent: Intent) {\n    super.onNewIntent(intent)\n    setIntent(intent)\n    pluginManager.onNewIntent(intent)\n  }\n}\n`,
+        `\n\n  override fun onNewIntent(intent: Intent) {\n    Log.i("GuaxiShareIntent", "MainActivity received new share intent action=" + intent.action)\n    setIntent(intent)\n    super.onNewIntent(intent)\n  }\n}\n`,
       );
       write(mainActivityPath, source);
       console.info('[capture-android-share] MainActivity onNewIntent patched');
+    } else if (source !== originalSource) {
+      write(mainActivityPath, source);
+      console.info('[capture-android-share] MainActivity legacy patch normalized');
     }
     console.info('[capture-android-share] MainActivity already patched');
   } else if (/class\s+MainActivity\s*:\s*TauriActivity\(\)\s*$/.test(source.trim())) {
     source = source.replace(
       /class\s+MainActivity\s*:\s*TauriActivity\(\)\s*$/,
-      `class MainActivity : TauriActivity() {\n  override fun onCreate(savedInstanceState: Bundle?) {\n    pluginManager.load(null, "guaxi-share-intent", ShareIntentPlugin(this), "{}")\n    super.onCreate(savedInstanceState)\n    intent?.let { pluginManager.onNewIntent(it) }\n  }\n\n  override fun onNewIntent(intent: Intent) {\n    super.onNewIntent(intent)\n    setIntent(intent)\n    pluginManager.onNewIntent(intent)\n  }\n}\n`,
+      `class MainActivity : TauriActivity() {\n  override fun onCreate(savedInstanceState: Bundle?) {\n    Log.i("GuaxiShareIntent", "registering android share intent plugin")\n    getPluginManager().load(null, "guaxi-share-intent", ShareIntentPlugin(this), "{}")\n    super.onCreate(savedInstanceState)\n  }\n\n  override fun onNewIntent(intent: Intent) {\n    Log.i("GuaxiShareIntent", "MainActivity received new share intent action=" + intent.action)\n    setIntent(intent)\n    super.onNewIntent(intent)\n  }\n}\n`,
     );
     write(mainActivityPath, source);
     console.info('[capture-android-share] MainActivity patched');
@@ -124,33 +130,44 @@ function patchExistingMainActivityClass(source) {
 
   // 设计说明：
   // Tauri Android 生成工程可能已经被其它脚本补过，MainActivity 不一定还是一行默认类。
-  // 这里按已有结构增量注入插件注册逻辑，避免每次重新生成/重复补丁时都要求手工修 Kotlin。
+  // 这里先清理旧版 pluginManager 注入，再按已有结构增量注入插件注册逻辑，避免每次重新生成/重复补丁时都要求手工修 Kotlin。
+  // Tauri 2 当前生成的 TauriActivity 暴露 getPluginManager()，并在 super.onNewIntent() 内部转发事件。
+  // 因此 MainActivity 只负责注册插件、更新当前 intent，避免重复调用 PluginManager.onNewIntent。
   if (/override\s+fun\s+onCreate\s*\(\s*savedInstanceState:\s*Bundle\?\s*\)\s*\{/.test(patched)) {
     patched = patched.replace(
       /(override\s+fun\s+onCreate\s*\(\s*savedInstanceState:\s*Bundle\?\s*\)\s*\{\s*)/,
-      `$1\n    pluginManager.load(null, "guaxi-share-intent", ShareIntentPlugin(this), "{}")`,
+      `$1\n    Log.i("GuaxiShareIntent", "registering android share intent plugin")\n    getPluginManager().load(null, "guaxi-share-intent", ShareIntentPlugin(this), "{}")`,
     );
-    if (!patched.includes('intent?.let { pluginManager.onNewIntent(it) }')) {
-      patched = patched.replace(
-        /(super\.onCreate\s*\(\s*savedInstanceState\s*\)\s*)/,
-        `$1\n    intent?.let { pluginManager.onNewIntent(it) }`,
-      );
-    }
   } else {
     patched = insertBeforeMainActivityEnd(
       patched,
-      `\n  override fun onCreate(savedInstanceState: Bundle?) {\n    pluginManager.load(null, "guaxi-share-intent", ShareIntentPlugin(this), "{}")\n    super.onCreate(savedInstanceState)\n    intent?.let { pluginManager.onNewIntent(it) }\n  }\n`,
+      `\n  override fun onCreate(savedInstanceState: Bundle?) {\n    Log.i("GuaxiShareIntent", "registering android share intent plugin")\n    getPluginManager().load(null, "guaxi-share-intent", ShareIntentPlugin(this), "{}")\n    super.onCreate(savedInstanceState)\n  }\n`,
     );
   }
 
-  if (!patched.includes('override fun onNewIntent(intent: Intent)')) {
+  if (patched.includes('override fun onNewIntent(intent: Intent)')) {
+    patched = patched.replace(
+      /override\s+fun\s+onNewIntent\s*\(\s*intent:\s*Intent\s*\)\s*\{[\s\S]*?\n\s*\}/,
+      `override fun onNewIntent(intent: Intent) {\n    Log.i("GuaxiShareIntent", "MainActivity received new share intent action=" + intent.action)\n    setIntent(intent)\n    super.onNewIntent(intent)\n  }`,
+    );
+  } else {
     patched = insertBeforeMainActivityEnd(
       patched,
-      `\n  override fun onNewIntent(intent: Intent) {\n    super.onNewIntent(intent)\n    setIntent(intent)\n    pluginManager.onNewIntent(intent)\n  }\n`,
+      `\n  override fun onNewIntent(intent: Intent) {\n    Log.i("GuaxiShareIntent", "MainActivity received new share intent action=" + intent.action)\n    setIntent(intent)\n    super.onNewIntent(intent)\n  }\n`,
     );
   }
 
   return patched;
+}
+
+function normalizeLegacyMainActivityPatch(source) {
+  return source
+    .replace(/\s*pluginManager\.load\(null,\s*"guaxi-share-intent",\s*ShareIntentPlugin\(this\),\s*"\{\}"\)\s*/g, '\n')
+    .replace(/\s*intent\?\.let\s*\{\s*pluginManager\.onNewIntent\(it\)\s*\}\s*/g, '\n')
+    .replace(/\s*pluginManager\.onNewIntent\(intent\)\s*/g, '\n')
+    .replace(/(getPluginManager\(\)\.load\(null,\s*"guaxi-share-intent",\s*ShareIntentPlugin\(this\),\s*"\{\}"\))\s*(enableEdgeToEdge\(\))/g, '$1\n    $2')
+    .replace(/\n}\s*\n\n  override fun onNewIntent/g, '\n  }\n\n  override fun onNewIntent')
+    .replace(/\}\s*\}/g, '}\n}');
 }
 
 function insertBeforeMainActivityEnd(source, content) {
