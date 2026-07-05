@@ -13,10 +13,12 @@ import {
   createDraftFromIncomingPayload,
   readAndroidSharePayload,
   readClipboardPayload,
+  readInitialDeepLinkPayload,
   readInitialSharePayload,
   readLastAndroidShareDomPayload,
   readStartupNativePayload,
   registerAndroidShareDomListener,
+  registerDeepLinkListener,
   registerNativeCaptureListener,
 } from './services/shareIntake.js'
 import brandIconUrl from '../src-tauri/icons/128x128.png'
@@ -54,6 +56,14 @@ registerNativeCaptureListener((payload) => {
 
 registerAndroidShareDomListener((payload) => {
   receiveIncomingPayload(payload, 'Android Share')
+})
+
+registerDeepLinkListener((payload) => {
+  receiveIncomingPayload(payload, 'iOS 分享')
+})
+
+readInitialDeepLinkPayload().then((payload) => {
+  if (payload) receiveIncomingPayload(payload, 'iOS 分享')
 })
 
 readStartupNativePayload().then((payload) => {

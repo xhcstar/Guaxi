@@ -121,6 +121,71 @@ export async function readStartupNativePayload() {
   return null
 }
 
+// iOS「快捷指令 + URL Scheme」入口：Shortcuts 把分享的链接以
+// guaxi-capture://capture?url=<encoded> 的形式打开本 App，这里统一解析成草稿 payload。
+export async function registerDeepLinkListener(onPayload) {
+  try {
+    const { listen } = await import('@tauri-apps/api/event')
+    const unlisten = await listen('deep-link://new-url', (event) => {
+      const urls = Array.isArray(event.payload) ? event.payload : [event.payload]
+      for (const rawUrl of urls) {
+        const payload = parseDeepLinkUrl(rawUrl)
+        if (payload) {
+          console.info('[capture-intake] deep link received', summarizePayloadForLog(payload))
+          onPayload(payload)
+        }
+      }
+    })
+    console.info('[capture-intake] deep link listener registered')
+    return unlisten
+  } catch (error) {
+    console.info('[capture-intake] deep link listener skipped', error)
+    return () => {}
+  }
+}
+
+export async function readInitialDeepLinkPayload() {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const urls = await invoke('plugin:deep-link|get_current')
+    const rawUrl = Array.isArray(urls) ? urls[0] : urls
+    if (rawUrl) {
+      const payload = parseDeepLinkUrl(rawUrl)
+      if (payload) {
+        console.info('[capture-intake] initial deep link loaded', summarizePayloadForLog(payload))
+        return payload
+      }
+    }
+  } catch (error) {
+    console.info('[capture-intake] initial deep link skipped', error)
+  }
+  return null
+}
+
+function parseDeepLinkUrl(rawUrl) {
+  const value = String(rawUrl || '').trim()
+  if (!value) return null
+
+  let params
+  try {
+    params = new URL(value).searchParams
+  } catch {
+    // 不是标准 URL：整段当作分享文本解析（兼容只丢一段文字的快捷指令）。
+    return parseSharedText(value)
+  }
+
+  const payload = {}
+  for (const [targetKey, aliases] of Object.entries(URL_FIELD_ALIASES)) {
+    const alias = aliases.find((name) => params.has(name))
+    if (alias) payload[targetKey] = params.get(alias)
+  }
+  if (hasMeaningfulCaptureContent(payload)) return payload
+
+  // 没有结构化参数时，把 text/url/link 当作分享文本解析（快捷指令通常只传一个链接）。
+  const fallback = params.get('text') || params.get('url') || params.get('link') || ''
+  return fallback ? parseSharedText(fallback) : null
+}
+
 export async function readAndroidSharePayload() {
   if (!window.__TAURI_INTERNALS__ || androidSharePluginDisabled) return null
 
