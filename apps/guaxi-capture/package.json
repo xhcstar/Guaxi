@@ -17,6 +17,7 @@
     "android:build:ci": "node ../../node_modules/@tauri-apps/cli/tauri.js android build --ci",
     "android:gradle:mirror": "node scripts/run-android-gradle-config.mjs",
     "android:gradle:official": "node scripts/run-android-gradle-config.mjs --base-url https://services.gradle.org/distributions",
+    "android:share:patch": "node scripts/configure-android-share-target.mjs",
     "android:adb:devices": "node scripts/android-adb.mjs devices",
     "android:adb:diagnose": "node scripts/android-adb.mjs diagnose",
     "android:adb:uninstall": "node scripts/android-adb.mjs uninstall",

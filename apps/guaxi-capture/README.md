@@ -4,12 +4,11 @@
 
 ## 目标
 
-- 接收手动 Markdown、网页分享内容、OCR 文本和图片附件。
+- 接收手动笔记、网页分享内容、系统分享文本/链接和图片附件。
 - 通过 Guaxi 主程序的 `POST /extension/capture/import` 统一导入文件库。
 - 离线或连接失败时进入本地队列，稍后重试。
-- 调用 Guaxi 本机 OCR 服务识别图片，并把识别文本追加为 Markdown。
+- 图片、截图和拍照内容进入 PC OCR 队列，由 Guaxi PC 端处理。
 - 提供浏览器扩展，把知乎、微信公众号、小红书、B站等网页正文发送到 Capture App。
-- 支持复制和导出当前 Markdown，便于外部分享。
 
 ## 运行
 
@@ -42,6 +41,7 @@ Android 可以在 Windows 上构建，但需要先安装：
 cd apps/guaxi-capture
 npm run mobile:check
 npm run android:init
+npm run android:share:patch
 ```
 
 连接真机或启动模拟器后调试：
@@ -130,14 +130,13 @@ base64 -i GuaxiCapture.mobileprovision | pbcopy
 
 ```text
 Guaxi 接口：http://你的电脑IP:14219/extension/capture/import
-OCR 接口：http://你的电脑IP:9876/ocr
 ```
 
-电脑和手机需要在同一局域网，Windows 防火墙也要允许这些端口被局域网访问。
+电脑和手机需要在同一局域网，Windows 防火墙要允许 `14219` 被局域网访问。OCR 不需要从手机直连，后续由 PC 端内部任务处理。
 
 ## 当前边界
 
-当前版本已完成采集表单、附件编码、离线队列、外部分享接收层、HTML 转 Markdown、图片 OCR、浏览器扩展、本地接收器和 Guaxi Capture API 对接。Android Share Intent、iOS Share Extension 会在后续原生移动层继续补。
+当前版本已完成收件箱式采集队列、附件编码、离线队列、外部分享接收层、Android Share Intent 生成工程补丁、浏览器扩展、本地接收器和 Guaxi Capture API 对接。iOS Share Extension 会在后续原生移动层继续补。
 
 ## 外部分享接收
 
@@ -199,20 +198,11 @@ curl -X POST http://127.0.0.1:14230/capture ^
 
 接收器只绑定 `127.0.0.1`，并限制单次请求最大 2MB。Rust 侧会打印 `[capture-receiver]` 日志。
 
-## 图片 OCR
+## 图片 OCR 队列
 
-Capture App 默认调用 Guaxi 主程序同款 OCR 接口：
+Capture App 不在手机端直接 OCR。选择图片或从 Android 系统分享图片时，App 会把图片转成 base64 asset 放入本地队列；发送到 PC 后，Guaxi PC 端会先生成待处理 Markdown，并把图片落到文档的 `images` 目录。
 
-```text
-http://127.0.0.1:9876/ocr
-```
-
-主程序里的 `commands::ocr::ocr_recognize` 也是调用这个 agent_server 端点。验证 OCR 前请先启动 Guaxi 主程序，或确保本机 OCR 服务已经在 `127.0.0.1:9876` 运行。前端会打印 `[capture-ocr]` 日志。
-
-界面里有两个 OCR 入口：
-
-- `OCR图片`：选择图片后立刻 OCR，并把图片作为附件加入当前草稿。
-- `识别附件`：对当前草稿里的图片附件重新 OCR。
+前端会打印 `[capture-inbox]` 和 `[capture-sync]` 日志，PC 端会打印 `[capture_import]` 日志。后续 PC 端可以基于已入库图片继续执行 OCR 并回写 Markdown。
 
 ## Markdown 转换
 

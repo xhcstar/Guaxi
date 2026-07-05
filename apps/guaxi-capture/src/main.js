@@ -8,14 +8,8 @@ import {
   submitCapture,
 } from './services/captureClient.js'
 import {
-  buildOcrMarkdown,
-  isImageAsset,
-  loadOcrEndpoint,
-  recognizeImageAsset,
-  saveOcrEndpoint,
-} from './services/ocrClient.js'
-import {
   createDraftFromIncomingPayload,
+  readAndroidSharePayload,
   readClipboardPayload,
   readInitialSharePayload,
   readStartupNativePayload,
@@ -28,433 +22,500 @@ const initialDraft = createDraftFromIncomingPayload(readInitialSharePayload())
 
 const state = {
   endpoint: loadEndpoint(),
-  ocrEndpoint: loadOcrEndpoint(),
-  current: initialDraft || createCaptureDraft(),
   queue: loadQueue(),
+  selectedId: '',
+  tab: 'inbox',
   busy: false,
-  status: initialDraft ? '已接收外部分享草稿' : '',
+  status: '准备接收分享',
+  settingsOpen: false,
+  manual: createCaptureDraft({
+    sourceApp: 'manual',
+    tagsText: 'capture,manual',
+  }),
 }
 
+if (initialDraft) {
+  queueDraft(initialDraft, 'pending', '启动分享')
+}
+
+render()
+
+registerNativeCaptureListener((payload) => {
+  receiveIncomingPayload(payload, '系统分享')
+})
+
+readStartupNativePayload().then((payload) => {
+  if (payload) receiveIncomingPayload(payload, '启动分享')
+})
+
+readAndroidSharePayload().then((payload) => {
+  if (payload) receiveIncomingPayload(payload, 'Android Share')
+})
+
+setInterval(async () => {
+  const payload = await readAndroidSharePayload()
+  if (payload) receiveIncomingPayload(payload, 'Android Share')
+}, 1800)
+
 function render() {
+  const counts = getQueueCounts()
+  const selected = selectedDraft()
+  const items = filteredQueue()
+
   app.innerHTML = `
-    <section class="shell">
-      <header class="topbar">
-        <div>
-          <h1>Guaxi Capture</h1>
-          <p>${state.status || 'Ready'}</p>
+    <main class="app-shell">
+      <header class="hero">
+        <div class="hero-main">
+          <div class="brand-mark">G</div>
+          <div>
+            <h1>Guaxi Capture</h1>
+            <p>${escapeHtml(state.status)}</p>
+          </div>
         </div>
-        <button class="icon-button" data-action="retry" title="同步队列">
-          ↻
-        </button>
+        <button class="icon-button" data-action="toggle-settings" title="连接设置">设置</button>
       </header>
 
-      <section class="panel endpoint-panel">
-        <div class="row two">
-          <label>
-            <span>Guaxi 接口</span>
-            <input data-field="endpoint" value="${escapeHtml(state.endpoint)}" />
-          </label>
-          <label>
-            <span>OCR 接口</span>
-            <input data-field="ocrEndpoint" value="${escapeHtml(state.ocrEndpoint)}" />
-          </label>
+      <section class="connection ${endpointLooksLan() ? 'is-online' : 'is-local'}">
+        <div>
+          <span class="eyebrow">PC 连接</span>
+          <strong>${escapeHtml(state.endpoint)}</strong>
         </div>
+        <button data-action="sync-all" ${state.busy || !state.queue.length ? 'disabled' : ''}>同步</button>
       </section>
 
-      <section class="capture-grid">
-        <form class="panel capture-form" data-form="capture">
-          <div class="row two">
-            <label>
-              <span>标题</span>
-              <input data-field="title" value="${escapeHtml(state.current.title)}" placeholder="文章、截图或笔记标题" />
+      ${state.settingsOpen ? renderSettings() : ''}
+
+      <nav class="tabs" aria-label="队列筛选">
+        ${renderTab('inbox', '收件箱', counts.total)}
+        ${renderTab('pending', '待发送', counts.pending)}
+        ${renderTab('failed', '失败', counts.failed)}
+        ${renderTab('sent', '已发送', counts.sent)}
+      </nav>
+
+      <section class="workspace">
+        <section class="list-panel">
+          <div class="quick-actions">
+            <button data-action="paste">剪贴板</button>
+            <label class="upload-button">
+              <input type="file" data-action="images" accept="image/*" multiple />
+              图片 OCR
             </label>
-            <label>
-              <span>来源</span>
-              <select data-field="sourceApp">
-                ${sourceOptions(state.current.sourceApp)}
-              </select>
-            </label>
+            <button data-action="new-note">手记</button>
           </div>
 
-          <label>
-            <span>来源链接</span>
-            <input data-field="sourceUrl" value="${escapeHtml(state.current.sourceUrl)}" placeholder="https://..." />
-          </label>
-
-          <div class="row two">
-            <label>
-              <span>知识库</span>
-              <input data-field="knowledgeBase" value="${escapeHtml(state.current.knowledgeBase)}" />
-            </label>
-            <label>
-              <span>文件库</span>
-              <input data-field="fileRepo" value="${escapeHtml(state.current.fileRepo)}" />
-            </label>
+          <div class="capture-list">
+            ${items.map(renderCaptureItem).join('') || renderEmptyState()}
           </div>
+        </section>
 
-          <label>
-            <span>标签</span>
-            <input data-field="tagsText" value="${escapeHtml(state.current.tagsText)}" placeholder="capture,wechat,ocr" />
-          </label>
-
-          <label>
-            <span>摘要</span>
-            <input data-field="description" value="${escapeHtml(state.current.description)}" />
-          </label>
-
-          <label class="markdown-label">
-            <span>Markdown</span>
-            <textarea data-field="markdown" placeholder="# 标题&#10;&#10;正文内容">${escapeHtml(state.current.markdown)}</textarea>
-          </label>
-
-          <div class="asset-strip">
-            <label class="file-picker">
-              <input type="file" data-action="assets" multiple accept="image/*,.pdf" />
-              <span>添加附件</span>
-            </label>
-            <label class="file-picker">
-              <input type="file" data-action="ocr-assets" multiple accept="image/*" />
-              <span>OCR图片</span>
-            </label>
-            <div class="asset-count">${state.current.assets.length} 个附件</div>
-          </div>
-
-          <div class="actions">
-            <button type="button" data-action="clear">清空</button>
-            <button type="button" data-action="clipboard">读剪贴板</button>
-            <button type="button" data-action="ocr-existing" ${hasImageAssets() ? '' : 'disabled'}>识别附件</button>
-            <button type="button" data-action="copy-markdown" ${state.current.markdown.trim() ? '' : 'disabled'}>复制MD</button>
-            <button type="button" data-action="export-markdown" ${state.current.markdown.trim() ? '' : 'disabled'}>导出MD</button>
-            <button type="button" data-action="save-draft">存入队列</button>
-            <button type="submit" class="primary" ${state.busy ? 'disabled' : ''}>发送到 Guaxi</button>
-          </div>
-        </form>
-
-        <aside class="panel queue-panel">
-          <div class="queue-head">
-            <h2>同步队列</h2>
-            <span>${state.queue.length}</span>
-          </div>
-          <div class="queue-list">
-            ${state.queue.map(renderQueueItem).join('') || '<p class="empty">暂无离线草稿</p>'}
-          </div>
-        </aside>
+        <section class="detail-panel">
+          ${selected ? renderDetail(selected) : renderGuide()}
+        </section>
       </section>
-    </section>
+    </main>
   `
 
   bindEvents()
 }
 
+function renderSettings() {
+  return `
+    <section class="settings-panel">
+      <label>
+        <span>Guaxi PC 接口</span>
+        <input data-field="endpoint" value="${escapeHtml(state.endpoint)}" />
+      </label>
+      <p>手机端只做采集和排队。网页转换、图片 OCR、附件入库由 PC 端 Capture Import 接口处理。</p>
+    </section>
+  `
+}
+
+function renderTab(key, label, count) {
+  return `
+    <button class="${state.tab === key ? 'active' : ''}" data-tab="${key}">
+      <span>${label}</span>
+      <strong>${count}</strong>
+    </button>
+  `
+}
+
+function renderCaptureItem(item) {
+  const active = item.id === state.selectedId ? 'active' : ''
+  return `
+    <article class="capture-card ${active}" data-action="select" data-id="${escapeHtml(item.id)}">
+      <div class="card-top">
+        <strong>${escapeHtml(item.title || '未命名采集')}</strong>
+        <span class="status ${escapeHtml(item.status)}">${statusLabel(item.status)}</span>
+      </div>
+      <p>${escapeHtml(item.sourceUrl || item.description || previewText(item))}</p>
+      <div class="meta-row">
+        <span>${sourceLabel(item.sourceApp)}</span>
+        <span>${item.assets?.length || 0} 附件</span>
+        <span>${escapeHtml(item.updatedAt || item.createdAt)}</span>
+      </div>
+    </article>
+  `
+}
+
+function renderDetail(item) {
+  return `
+    <form class="detail-card" data-form="detail">
+      <div class="detail-head">
+        <div>
+          <span class="eyebrow">采集预览</span>
+          <h2>${escapeHtml(item.title || '未命名采集')}</h2>
+        </div>
+        <span class="status ${escapeHtml(item.status)}">${statusLabel(item.status)}</span>
+      </div>
+
+      <label>
+        <span>标题</span>
+        <input data-edit="title" value="${escapeHtml(item.title)}" />
+      </label>
+
+      <label>
+        <span>来源链接</span>
+        <input data-edit="sourceUrl" value="${escapeHtml(item.sourceUrl)}" placeholder="https://..." />
+      </label>
+
+      <div class="field-grid">
+        <label>
+          <span>文件库</span>
+          <input data-edit="fileRepo" value="${escapeHtml(item.fileRepo)}" />
+        </label>
+        <label>
+          <span>知识库</span>
+          <input data-edit="knowledgeBase" value="${escapeHtml(item.knowledgeBase)}" />
+        </label>
+      </div>
+
+      <label>
+        <span>标签</span>
+        <input data-edit="tagsText" value="${escapeHtml(item.tagsText)}" />
+      </label>
+
+      <label>
+        <span>备注 / 已捕获文本</span>
+        <textarea data-edit="markdown" placeholder="可选。为空时 PC 会根据来源 URL 或图片附件进行后续转换。">${escapeHtml(item.markdown)}</textarea>
+      </label>
+
+      <div class="asset-summary">
+        ${(item.assets || []).map((asset) => `<span>${escapeHtml(asset.name || asset.mime || '附件')}</span>`).join('') || '<span>无附件</span>'}
+      </div>
+
+      ${item.lastError ? `<p class="error-text">${escapeHtml(item.lastError)}</p>` : ''}
+
+      <div class="detail-actions">
+        <button type="button" data-action="send-selected" ${state.busy ? 'disabled' : ''}>发送到 PC</button>
+        <button type="button" data-action="duplicate-selected">复制草稿</button>
+        <button type="button" data-action="delete-selected">删除</button>
+      </div>
+    </form>
+  `
+}
+
+function renderGuide() {
+  return `
+    <section class="guide-card">
+      <span class="eyebrow">工作流</span>
+      <h2>从任何 App 分享到 Guaxi</h2>
+      <p>文章链接、选中文本、截图和照片先进入手机收件箱；当 PC 在线时，一键同步到文件库。图片不在手机端 OCR，直接交给 PC 处理。</p>
+      <div class="guide-steps">
+        <div><strong>1</strong><span>分享或粘贴</span></div>
+        <div><strong>2</strong><span>自动入队</span></div>
+        <div><strong>3</strong><span>PC 转换入库</span></div>
+      </div>
+    </section>
+  `
+}
+
+function renderEmptyState() {
+  return `
+    <section class="empty-state">
+      <h2>收件箱为空</h2>
+      <p>从知乎、公众号、小红书、B站或相册分享内容到 Guaxi Capture，这里会自动生成待同步项目。</p>
+    </section>
+  `
+}
+
 function bindEvents() {
-  app.querySelectorAll('[data-field]').forEach((field) => {
-    field.addEventListener('input', (event) => {
-      const key = event.currentTarget.dataset.field
-      if (key === 'endpoint') {
-        state.endpoint = event.currentTarget.value
-        saveEndpoint(state.endpoint)
-      } else if (key === 'ocrEndpoint') {
-        state.ocrEndpoint = event.currentTarget.value
-        saveOcrEndpoint(state.ocrEndpoint)
-      } else {
-        state.current[key] = event.currentTarget.value
-      }
+  app.querySelector('[data-action="toggle-settings"]')?.addEventListener('click', () => {
+    state.settingsOpen = !state.settingsOpen
+    render()
+  })
+
+  app.querySelector('[data-field="endpoint"]')?.addEventListener('input', (event) => {
+    state.endpoint = event.currentTarget.value
+    saveEndpoint(state.endpoint)
+  })
+
+  app.querySelectorAll('[data-tab]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.tab = button.dataset.tab
+      render()
     })
   })
 
-  app.querySelector('[data-form="capture"]').addEventListener('submit', async (event) => {
-    event.preventDefault()
-    await submitCurrent()
+  app.querySelectorAll('[data-action="select"]').forEach((card) => {
+    card.addEventListener('click', () => {
+      state.selectedId = card.dataset.id
+      render()
+    })
   })
 
-  app.querySelector('[data-action="clear"]').addEventListener('click', () => {
-    state.current = createCaptureDraft()
-    state.status = '已清空'
-    render()
-  })
+  app.querySelector('[data-action="sync-all"]')?.addEventListener('click', syncQueue)
+  app.querySelector('[data-action="paste"]')?.addEventListener('click', importClipboard)
+  app.querySelector('[data-action="new-note"]')?.addEventListener('click', createManualNote)
+  app.querySelector('[data-action="send-selected"]')?.addEventListener('click', sendSelected)
+  app.querySelector('[data-action="duplicate-selected"]')?.addEventListener('click', duplicateSelected)
+  app.querySelector('[data-action="delete-selected"]')?.addEventListener('click', deleteSelected)
 
-  app.querySelector('[data-action="save-draft"]').addEventListener('click', () => {
-    enqueueCurrent('pending')
-    state.current = createCaptureDraft()
-    state.status = '已存入队列'
-    persistAndRender()
-  })
-
-  app.querySelector('[data-action="retry"]').addEventListener('click', retryQueue)
-  app.querySelector('[data-action="clipboard"]').addEventListener('click', importFromClipboard)
-  app.querySelector('[data-action="ocr-existing"]').addEventListener('click', recognizeExistingAssets)
-  app.querySelector('[data-action="copy-markdown"]').addEventListener('click', copyMarkdown)
-  app.querySelector('[data-action="export-markdown"]').addEventListener('click', exportMarkdown)
-
-  app.querySelector('[data-action="assets"]').addEventListener('change', async (event) => {
+  app.querySelector('[data-action="images"]')?.addEventListener('change', async (event) => {
     const files = Array.from(event.currentTarget.files || [])
-    if (!files.length) return
-    state.status = '正在读取附件...'
+    if (files.length) await importImages(files)
+  })
+
+  app.querySelectorAll('[data-edit]').forEach((field) => {
+    field.addEventListener('input', (event) => {
+      updateSelectedDraft(field.dataset.edit, event.currentTarget.value)
+    })
+  })
+}
+
+function receiveIncomingPayload(payload, label) {
+  const draft = createDraftFromIncomingPayload(payload)
+  if (!draft) {
+    state.status = `${label}没有可采集内容`
+    console.info('[capture-inbox] incoming payload ignored', { label })
     render()
+    return
+  }
+
+  queueDraft(draft, 'pending', label)
+  state.status = `${label}已进入收件箱`
+  render()
+  syncQueue()
+}
+
+async function importClipboard() {
+  try {
+    state.status = '正在读取剪贴板'
+    render()
+    receiveIncomingPayload(await readClipboardPayload(), '剪贴板')
+  } catch (error) {
+    state.status = `剪贴板读取失败：${error.message}`
+    console.warn('[capture-inbox] clipboard failed', error)
+    render()
+  }
+}
+
+async function importImages(files) {
+  state.busy = true
+  state.status = '正在读取图片'
+  render()
+
+  try {
     const assets = []
     for (const file of files) {
       assets.push(await fileToAsset(file))
     }
-    state.current.assets = [...state.current.assets, ...assets]
-    state.status = `已添加 ${assets.length} 个附件`
-    render()
-  })
 
-  app.querySelector('[data-action="ocr-assets"]').addEventListener('change', async (event) => {
-    const files = Array.from(event.currentTarget.files || [])
-    if (!files.length) return
-    await importImagesWithOcr(files)
-  })
-
-  app.querySelectorAll('[data-action="load-queue"]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const item = state.queue.find((entry) => entry.id === button.dataset.id)
-      if (!item) return
-      state.current = { ...item, status: 'draft' }
-      state.status = '已载入草稿'
-      render()
+    const draft = createCaptureDraft({
+      title: buildImageTitle(files),
+      sourceApp: 'camera',
+      tagsText: 'capture,ocr,camera',
+      markdown: '',
+      assets,
     })
-  })
-}
-
-async function importImagesWithOcr(files) {
-  state.busy = true
-  state.status = '正在读取图片并 OCR...'
-  render()
-
-  try {
-    const assets = []
-    const markdownParts = []
-    for (const file of files) {
-      const asset = await fileToAsset(file)
-      assets.push(asset)
-      const result = await recognizeImageAsset(state.ocrEndpoint, asset)
-      markdownParts.push(buildOcrMarkdown(asset, result))
-    }
-
-    state.current.assets = [...state.current.assets, ...assets]
-    appendMarkdown(markdownParts.join('\n\n'))
-    state.current.sourceApp = 'camera'
-    state.current.tagsText = ensureTags(state.current.tagsText, ['capture', 'ocr', 'camera'])
-    state.current.title = state.current.title || buildOcrTitle(files)
-    state.status = `已 OCR ${assets.length} 张图片`
+    queueDraft(draft, 'pending', '图片')
+    state.status = `${assets.length} 张图片已进入 PC OCR 队列`
+    console.info('[capture-inbox] image assets queued for pc ocr', {
+      count: assets.length,
+    })
   } catch (error) {
-    state.status = `OCR 失败：${error.message}`
-    console.warn('[capture-ocr] import image ocr failed', error)
+    state.status = `图片读取失败：${error.message}`
+    console.warn('[capture-inbox] image import failed', error)
   } finally {
     state.busy = false
     render()
   }
 }
 
-async function recognizeExistingAssets() {
-  const imageAssets = state.current.assets.filter(isImageAsset)
-  if (!imageAssets.length || state.busy) return
-
-  state.busy = true
-  state.status = `正在 OCR ${imageAssets.length} 个附件...`
-  render()
-
-  try {
-    const markdownParts = []
-    for (const asset of imageAssets) {
-      const result = await recognizeImageAsset(state.ocrEndpoint, asset)
-      markdownParts.push(buildOcrMarkdown(asset, result))
-    }
-
-    appendMarkdown(markdownParts.join('\n\n'))
-    state.current.sourceApp = state.current.sourceApp === 'manual' ? 'camera' : state.current.sourceApp
-    state.current.tagsText = ensureTags(state.current.tagsText, ['capture', 'ocr'])
-    state.status = `已识别 ${imageAssets.length} 个图片附件`
-  } catch (error) {
-    state.status = `识别附件失败：${error.message}`
-    console.warn('[capture-ocr] existing asset ocr failed', error)
-  } finally {
-    state.busy = false
-    render()
-  }
-}
-
-async function importFromClipboard() {
-  state.status = '正在读取剪贴板...'
-  render()
-
-  try {
-    const payload = await readClipboardPayload()
-    applyIncomingPayload(payload, '已从剪贴板生成草稿')
-  } catch (error) {
-    state.status = `读取剪贴板失败：${error.message}`
-    console.warn('[capture-intake] clipboard import failed', error)
-    render()
-  }
-}
-
-function applyIncomingPayload(payload, status) {
-  const draft = createDraftFromIncomingPayload(payload)
-  if (!draft) {
-    state.status = '没有识别到可采集内容'
-    render()
-    return
-  }
-
-  // 设计说明：外部分享进入时直接替换当前草稿，避免混合旧草稿和新分享内容。
-  // 用户需要保留旧草稿时，可以先点“存入队列”。
-  state.current = draft
-  state.status = status
-  console.info('[capture-intake] draft applied', {
-    title: draft.title,
-    sourceApp: draft.sourceApp,
-    sourceUrl: draft.sourceUrl,
+function createManualNote() {
+  const draft = createCaptureDraft({
+    title: '手记',
+    sourceApp: 'manual',
+    tagsText: 'capture,manual',
+    markdown: '',
   })
+  queueDraft(draft, 'draft', '手记')
+  state.status = '已创建手记草稿'
   render()
 }
 
-async function copyMarkdown() {
-  if (!navigator.clipboard?.writeText) {
-    state.status = '当前环境不支持写入剪贴板'
-    render()
-    return
-  }
-
-  await navigator.clipboard.writeText(state.current.markdown)
-  state.status = '已复制 Markdown'
-  console.info('[capture-export] markdown copied', {
-    length: state.current.markdown.length,
-  })
-  render()
-}
-
-function exportMarkdown() {
-  const fileName = `${sanitizeFileName(state.current.title || 'guaxi-capture')}.md`
-  const blob = new Blob([state.current.markdown], { type: 'text/markdown;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = fileName
-  link.click()
-  URL.revokeObjectURL(url)
-  state.status = `已导出 ${fileName}`
-  console.info('[capture-export] markdown exported', {
-    fileName,
-    length: state.current.markdown.length,
-  })
-  render()
-}
-
-async function submitCurrent() {
-  if (!state.current.markdown.trim()) {
-    state.status = 'Markdown 内容不能为空'
-    render()
-    return
-  }
-
-  state.busy = true
-  state.status = '正在发送...'
-  render()
-
-  try {
-    await submitCapture(state.endpoint, state.current)
-    state.current = createCaptureDraft()
-    state.status = '已发送到 Guaxi'
-  } catch (error) {
-    enqueueCurrent('failed', error.message)
-    state.status = `发送失败，已进入队列：${error.message}`
-  } finally {
-    state.busy = false
-    persistAndRender()
-  }
-}
-
-function enqueueCurrent(status = 'pending', lastError = '') {
-  const draft = {
-    ...state.current,
+function queueDraft(draft, status, reason) {
+  const queued = {
+    ...draft,
     status,
-    lastError,
+    lastError: '',
     updatedAt: new Date().toISOString(),
   }
-  state.queue = [draft, ...state.queue.filter((item) => item.id !== draft.id)]
+  state.queue = [queued, ...state.queue.filter((item) => item.id !== queued.id)]
+  state.selectedId = queued.id
+  saveQueue(state.queue)
+  console.info('[capture-inbox] draft queued', {
+    reason,
+    title: queued.title,
+    sourceApp: queued.sourceApp,
+    assetCount: queued.assets?.length || 0,
+  })
 }
 
-async function retryQueue() {
-  if (!state.queue.length || state.busy) return
-  state.busy = true
-  state.status = '正在同步队列...'
-  render()
-
-  const nextQueue = []
-  for (const item of state.queue) {
-    try {
-      await submitCapture(state.endpoint, item)
-    } catch (error) {
-      nextQueue.push({ ...item, status: 'failed', lastError: error.message })
-    }
+async function syncQueue() {
+  if (state.busy) return
+  const candidates = state.queue.filter((item) => ['pending', 'failed'].includes(item.status))
+  if (!candidates.length) {
+    state.status = '没有需要同步的内容'
+    render()
+    return
   }
 
-  state.queue = nextQueue
-  state.busy = false
-  state.status = nextQueue.length ? `仍有 ${nextQueue.length} 条失败` : '队列同步完成'
-  persistAndRender()
-}
+  state.busy = true
+  state.status = `正在同步 ${candidates.length} 项`
+  render()
 
-function persistAndRender() {
+  for (const item of candidates) {
+    await sendDraft(item)
+  }
+
+  state.busy = false
+  state.status = getQueueCounts().failed ? '部分内容同步失败' : '同步完成'
   saveQueue(state.queue)
   render()
 }
 
-function appendMarkdown(markdown) {
-  const content = String(markdown || '').trim()
-  if (!content) return
-  state.current.markdown = [state.current.markdown.trim(), content]
-    .filter(Boolean)
-    .join('\n\n')
+async function sendSelected() {
+  const item = selectedDraft()
+  if (!item || state.busy) return
+  state.busy = true
+  state.status = '正在发送当前项目'
+  render()
+  await sendDraft(item)
+  state.busy = false
+  saveQueue(state.queue)
+  render()
 }
 
-function hasImageAssets() {
-  return state.current.assets.some(isImageAsset)
-}
-
-function ensureTags(tagsText, requiredTags) {
-  const tags = String(tagsText || '')
-    .split(',')
-    .map((tag) => tag.trim())
-    .filter(Boolean)
-  for (const tag of requiredTags) {
-    if (!tags.includes(tag)) tags.push(tag)
+async function sendDraft(item) {
+  try {
+    await submitCapture(state.endpoint, item)
+    updateDraft(item.id, {
+      status: 'sent',
+      lastError: '',
+      updatedAt: new Date().toISOString(),
+    })
+    console.info('[capture-sync] sent', { title: item.title, id: item.id })
+  } catch (error) {
+    updateDraft(item.id, {
+      status: 'failed',
+      lastError: error.message,
+      updatedAt: new Date().toISOString(),
+    })
+    console.warn('[capture-sync] failed', { title: item.title, error })
   }
-  return tags.join(',')
 }
 
-function buildOcrTitle(files) {
-  if (files.length === 1) return files[0].name.replace(/\.[^.]+$/, '') || 'OCR 采集'
-  return `OCR 采集 ${new Date().toLocaleString()}`
+function duplicateSelected() {
+  const item = selectedDraft()
+  if (!item) return
+  queueDraft({
+    ...item,
+    id: crypto.randomUUID(),
+    title: `${item.title || '采集'} 副本`,
+    status: 'draft',
+    createdAt: new Date().toISOString(),
+  }, 'draft', '复制')
+  render()
 }
 
-function sourceOptions(current) {
-  const options = [
-    ['manual', '手动'],
-    ['wechat', '微信公众号'],
-    ['zhihu', '知乎'],
-    ['xiaohongshu', '小红书'],
-    ['bilibili', 'B站'],
-    ['camera', '照片/OCR'],
-    ['browser', '浏览器'],
-    ['clipboard', '剪贴板'],
-  ]
-
-  return options
-    .map(([value, label]) => `<option value="${value}" ${value === current ? 'selected' : ''}>${label}</option>`)
-    .join('')
+function deleteSelected() {
+  if (!state.selectedId) return
+  state.queue = state.queue.filter((item) => item.id !== state.selectedId)
+  state.selectedId = state.queue[0]?.id || ''
+  state.status = '已删除'
+  saveQueue(state.queue)
+  render()
 }
 
-function renderQueueItem(item) {
-  return `
-    <article class="queue-item">
-      <strong>${escapeHtml(item.title || '未命名')}</strong>
-      <span>${escapeHtml(item.sourceApp)} · ${escapeHtml(item.fileRepo)}</span>
-      ${item.lastError ? `<small>${escapeHtml(item.lastError)}</small>` : ''}
-      <button type="button" data-action="load-queue" data-id="${escapeHtml(item.id)}">编辑</button>
-    </article>
-  `
+function updateSelectedDraft(key, value) {
+  if (!state.selectedId) return
+  const currentStatus = selectedDraft()?.status
+  updateDraft(state.selectedId, {
+    [key]: value,
+    status: ['sent', 'draft'].includes(currentStatus) ? 'pending' : currentStatus,
+    updatedAt: new Date().toISOString(),
+  })
+  saveQueue(state.queue)
+}
+
+function updateDraft(id, patch) {
+  state.queue = state.queue.map((item) => item.id === id ? { ...item, ...patch } : item)
+}
+
+function selectedDraft() {
+  return state.queue.find((item) => item.id === state.selectedId) || state.queue[0] || null
+}
+
+function filteredQueue() {
+  if (state.tab === 'inbox') return state.queue
+  if (state.tab === 'pending') {
+    return state.queue.filter((item) => item.status === 'pending' || item.status === 'draft')
+  }
+  return state.queue.filter((item) => item.status === state.tab)
+}
+
+function getQueueCounts() {
+  return {
+    total: state.queue.length,
+    pending: state.queue.filter((item) => item.status === 'pending' || item.status === 'draft').length,
+    failed: state.queue.filter((item) => item.status === 'failed').length,
+    sent: state.queue.filter((item) => item.status === 'sent').length,
+  }
+}
+
+function endpointLooksLan() {
+  return /^http:\/\/(?!127\.0\.0\.1|localhost)/i.test(state.endpoint)
+}
+
+function statusLabel(status) {
+  return {
+    pending: '待发送',
+    failed: '失败',
+    sent: '已发送',
+    draft: '草稿',
+  }[status] || '待发送'
+}
+
+function sourceLabel(sourceApp) {
+  return {
+    manual: '手记',
+    wechat: '公众号',
+    zhihu: '知乎',
+    xiaohongshu: '小红书',
+    bilibili: 'B站',
+    camera: '图片',
+    browser: '浏览器',
+    clipboard: '剪贴板',
+  }[sourceApp] || sourceApp || '采集'
+}
+
+function previewText(item) {
+  return String(item.markdown || item.sourceUrl || '等待 PC 端转换处理').slice(0, 120)
+}
+
+function buildImageTitle(files) {
+  if (files.length === 1) return files[0].name.replace(/\.[^.]+$/, '') || '图片 OCR'
+  return `图片 OCR ${new Date().toLocaleString()}`
 }
 
 function escapeHtml(value) {
@@ -464,23 +525,3 @@ function escapeHtml(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
 }
-
-function sanitizeFileName(value) {
-  return String(value || 'guaxi-capture')
-    .replace(/[\\/:*?"<>|]/g, '-')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 80) || 'guaxi-capture'
-}
-
-render()
-
-registerNativeCaptureListener((payload) => {
-  applyIncomingPayload(payload, '已接收系统分享草稿')
-})
-
-readStartupNativePayload().then((payload) => {
-  if (payload) {
-    applyIncomingPayload(payload, '已接收启动分享草稿')
-  }
-})

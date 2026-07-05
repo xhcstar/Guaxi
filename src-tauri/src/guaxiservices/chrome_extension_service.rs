@@ -235,21 +235,24 @@ async fn handle_capture_import(
         req.assets.len()
     );
 
-    let body = match capture_body(&req) {
-        Some(body) => body,
-        None => {
-            warn!("[capture_import] rejected empty markdown body for title='{}'", title);
-            return HttpResponse::BadRequest().json(capture_error_response(
-                "markdown/content/text cannot be empty",
-            ));
-        }
-    };
-
     let prepared_assets = match prepare_capture_assets(&req.assets) {
         Ok(assets) => assets,
         Err(e) => {
             warn!("[capture_import] asset decode failed: {}", e);
             return HttpResponse::BadRequest().json(capture_error_response(&e));
+        }
+    };
+
+    let body = match capture_body(&req) {
+        Some(body) => body,
+        None if should_accept_pc_side_processing(&req, &prepared_assets) => {
+            build_pc_side_processing_body(&req, &prepared_assets)
+        }
+        None => {
+            warn!("[capture_import] rejected empty capture for title='{}'", title);
+            return HttpResponse::BadRequest().json(capture_error_response(
+                "markdown/content/text, sourceUrl, or assets cannot all be empty",
+            ));
         }
     };
 
@@ -914,6 +917,49 @@ fn capture_body(req: &CaptureImportRequest) -> Option<String> {
         .map(|value| value.trim())
         .find(|value| !value.is_empty())
         .map(|value| value.to_string())
+}
+
+fn should_accept_pc_side_processing(
+    req: &CaptureImportRequest,
+    assets: &[PreparedCaptureAsset],
+) -> bool {
+    !req.source_url.trim().is_empty() || !assets.is_empty()
+}
+
+fn build_pc_side_processing_body(
+    req: &CaptureImportRequest,
+    assets: &[PreparedCaptureAsset],
+) -> String {
+    // 设计说明：
+    // 移动端只负责“采集事实”：URL、标题、平台、图片或文件。网页正文抽取、图片 OCR、
+    // 附件落库这些重活交给 PC 端处理。这里先生成一个稳定的待处理 Markdown，
+    // 后续可在同一导入链路里接入网页正文转换和 OCR 队列，而不要求手机端手动填正文。
+    let mut body = String::new();
+    body.push_str("> Capture received from mobile. PC-side conversion is pending.\n\n");
+
+    if !req.source_url.trim().is_empty() {
+        body.push_str("## Source\n\n");
+        body.push_str(&format!("- URL: {}\n", req.source_url.trim()));
+        body.push_str(&format!(
+            "- App: {}\n\n",
+            default_if_empty(&req.source_app, "mobile")
+        ));
+    }
+
+    if !assets.is_empty() {
+        body.push_str("## PC OCR Queue\n\n");
+        body.push_str("The attached images should be recognized by the PC OCR pipeline.\n\n");
+        for asset in assets {
+            body.push_str(&format!("- `{}` ({})\n", asset.file_name, asset.mime));
+        }
+        body.push('\n');
+    }
+
+    if body.trim().is_empty() {
+        "Capture received. PC-side conversion is pending.".to_string()
+    } else {
+        body
+    }
 }
 
 fn normalize_capture_tags(tags: &[String], source_app: &str) -> Vec<String> {

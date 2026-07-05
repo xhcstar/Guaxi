@@ -2,6 +2,7 @@ import { createCaptureDraft } from './captureClient.js'
 import { htmlToMarkdown, looksLikeHtml } from './htmlToMarkdown.js'
 
 export const NATIVE_CAPTURE_EVENT = 'guaxi-capture-incoming'
+let androidSharePluginAvailable = true
 
 const URL_FIELD_ALIASES = {
   title: ['title', 'name'],
@@ -117,6 +118,24 @@ export async function readStartupNativePayload() {
   } catch (error) {
     console.info('[capture-intake] startup native payload skipped', error)
   }
+  return null
+}
+
+export async function readAndroidSharePayload() {
+  if (!window.__TAURI_INTERNALS__ || !androidSharePluginAvailable) return null
+
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const payload = await invoke('plugin:guaxi-share-intent|readPendingShare')
+    if (hasMeaningfulCaptureContent(payload || {})) {
+      console.info('[capture-intake] android share payload loaded')
+      return payload
+    }
+  } catch (error) {
+    androidSharePluginAvailable = false
+    console.info('[capture-intake] android share plugin skipped', error)
+  }
+
   return null
 }
 

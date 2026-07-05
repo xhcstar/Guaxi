@@ -2,14 +2,14 @@
 
 ## 目标
 
-Guaxi Capture 是一个独立于 Guaxi PC 主程序的采集 App，代码位于 `apps/guaxi-capture`。它的目标是把手机端、浏览器端、剪贴板、图片 OCR 等来源统一整理成 Markdown 草稿，再通过 Guaxi PC 端开放的 Capture Import API 写入文件库。
+Guaxi Capture 是一个独立于 Guaxi PC 主程序的采集 App，代码位于 `apps/guaxi-capture`。它的目标是把手机端、浏览器端、系统分享、剪贴板、拍照图片等来源统一收进移动端采集队列；当 App 与 Guaxi PC 端互联后，再通过 Capture Import API 发送给 PC，由 PC 端执行网页转换、OCR 和文件库入库。
 
 设计重点：
 
 - App 代码独立，不和 Guaxi PC 主程序的 `src`、`src-tauri` 混放。
 - 移动端优先支持 Android 和 iOS 构建。
 - Guaxi PC 端作为文件库、OCR 服务和导入服务的承载端。
-- Capture App 只负责采集、预览、编辑、离线队列和提交。
+- Capture App 只负责采集、预览、编辑、离线队列和提交；复杂转换、OCR 和最终入库都放在 PC 端。
 - 所有入口统一归一化为同一份草稿结构，避免每个平台各写一套转换逻辑。
 
 ## 目录结构
@@ -18,13 +18,13 @@ Guaxi Capture 是一个独立于 Guaxi PC 主程序的采集 App，代码位于 
 apps/guaxi-capture/
   browser-extension/              # Chrome / Edge 扩展，用于网页采集
   scripts/check-mobile-env.ps1    # Windows Android 构建环境检查
+  scripts/configure-android-share-target.mjs # Android 系统分享入口补丁
   src/
     main.js                       # Capture App UI 和交互逻辑
     styles.css                    # Capture App 样式
     services/
       captureClient.js            # 发送到 Guaxi PC Capture Import API
-      htmlToMarkdown.js           # 轻量 HTML -> Markdown 转换
-      ocrClient.js                # OCR 调用封装
+      htmlToMarkdown.js           # 轻量 HTML -> Markdown 转换，主要用于桌面/调试入口
       shareIntake.js              # 外部分享 payload 归一化
   src-tauri/
     src/lib.rs                    # Tauri 壳、启动参数、本地接收器、OCR 代理
@@ -40,27 +40,24 @@ apps/guaxi-capture/
 
 当前实现的功能：
 
-- 手动编辑 Markdown。
+- 收件箱式采集队列：待发送、失败、已发送、草稿。
+- Android 系统分享入口：支持文本、链接、单图、多图分享到 Guaxi Capture。
+- 手动创建笔记草稿。
 - 从 URL 参数生成草稿。
 - 从剪贴板读取文本或 HTML。
 - 接收 Tauri 原生事件 `guaxi-capture-incoming`。
 - 桌面壳支持启动参数 `--capture-json`、`--capture-text`、`--capture-url`。
 - 桌面壳支持本地 HTTP 接收器 `127.0.0.1:14230/capture`。
 - 浏览器扩展提取当前网页或选中内容，并发送到 Capture App。
-- HTML 自动转换为 Markdown。
 - 图片附件读取为 base64。
-- 图片 OCR 并追加到 Markdown。
-- 离线队列，发送失败时保存草稿，稍后重试。
-- 复制 Markdown。
-- 导出 Markdown。
+- 图片、截图、拍照内容进入 PC OCR 队列，由 PC 端处理。
+- 离线队列，发送失败时保留内容，稍后重试。
 - 发送到 Guaxi PC 文件库。
 
 后续移动端可继续补充：
 
-- Android Share Intent。
 - iOS Share Extension。
 - 移动端原生相机入口。
-- 移动端本机 OCR。
 - 用户登录、远程同步、端到端分享权限。
 
 ## 交互架构
@@ -72,14 +69,14 @@ apps/guaxi-capture/
             v
 Guaxi Capture App
   shareIntake.js        # 归一化 payload
-  htmlToMarkdown.js     # HTML -> Markdown
-  ocrClient.js          # 图片 OCR
+  htmlToMarkdown.js     # 桌面/调试入口的 HTML -> Markdown
   captureClient.js      # 提交 Guaxi PC
             |
             | POST /extension/capture/import
             v
 Guaxi PC 后端
   chrome_extension_service.rs
+  PC-side conversion / OCR
   repoview::add_imported_file
             |
             | emit repo_imported_files_changed
@@ -116,6 +113,22 @@ Guaxi PC 前端文件库刷新
 - `assets` 保存 `{ name, mime, dataBase64 }`，既可作为 Guaxi 导入附件，也可作为 OCR 输入。
 - `status` 和 `lastError` 用于离线队列。
 - 草稿只在 Capture App 内存在，真正写入文件库由 Guaxi PC API 完成。
+
+## 移动端 UI 与使用流程
+
+当前界面采用“连接状态 + 采集队列 + 详情编辑”的结构：
+
+1. 顶部显示 PC 连接地址、待发送数量、失败数量和最近状态。
+2. 快捷入口提供“剪贴板”“图片 OCR 队列”“手记”三类高频动作。
+3. 左侧/上方列表按“全部、待发送、失败、已发送”筛选采集项。
+4. 右侧/下方详情面板编辑标题、来源、库、标签和 Markdown 备注。
+5. “同步队列”只发送 `pending` 和 `failed` 项；空草稿会留在本地，编辑后自动变成待发送。
+
+设计思路：
+
+- 手机端优先解决“快速收进来”和“不会丢”的问题，不把复杂整理工作压在小屏幕上。
+- 分享链接、截图、拍照图片可以先进入队列；PC 在线后统一发送。
+- 发送失败保留 `lastError`，便于区分网络、端口、防火墙或 PC 服务问题。
 
 ## 外部分享归一化
 
@@ -189,55 +202,38 @@ apps/guaxi-capture/src/services/htmlToMarkdown.js
 [capture-markdown]
 ```
 
-## 图片 OCR
+## 图片 OCR 队列
 
 实现位置：
 
 ```text
-apps/guaxi-capture/src/services/ocrClient.js
-apps/guaxi-capture/src-tauri/src/lib.rs
+apps/guaxi-capture/src/main.js
+apps/guaxi-capture/src/services/captureClient.js
+src-tauri/src/guaxiservices/chrome_extension_service.rs
 ```
 
-Guaxi PC 主程序已有 OCR command：
+当前设计中，移动端不直接执行 OCR。图片、截图或拍照内容会被读取成 base64 asset，进入本地采集队列；当队列发送到 Guaxi PC 端后，PC 端先生成一份待处理 Markdown，并把图片落到文档的 `images` 目录。
+
+PC 主程序已有 OCR command：
 
 ```text
 src-tauri/src/commands/ocr.rs
 commands::ocr::ocr_recognize
 ```
 
-该 command 实际调用本机 agent_server：
-
-```text
-http://127.0.0.1:9876/ocr
-```
-
-Capture App 没有直接依赖 Guaxi PC 主程序 Rust crate，而是复用同一个 HTTP OCR 服务。Tauri 壳内提供 `capture_ocr_recognize` command 做代理：
-
-```rust
-#[tauri::command]
-fn capture_ocr_recognize(endpoint: String, image_base64: String) -> Result<Value, String>
-```
+后续可以在 PC 端基于已入库的 `images` 资产增加后台 OCR 任务，把识别结果回写到对应 Markdown 文档。
 
 设计思路：
 
-- 桌面/Tauri 环境优先走 Rust 代理，避免浏览器 CORS 问题。
-- 普通浏览器预览时 fallback 到 `fetch(endpoint)`。
-- OCR 输入为图片 base64，兼容 Guaxi PC 的 OCR 端点参数。
-- OCR 结果会以 Markdown 追加到当前草稿。
-
-移动端注意：
-
-- 手机上的 `127.0.0.1` 指手机本机，不是电脑。
-- 如果 OCR 服务仍运行在 PC，需要把 OCR endpoint 改成电脑局域网 IP：
-
-```text
-http://你的电脑IP:9876/ocr
-```
+- 手机端只做事实采集，不消耗移动端算力和电量。
+- OCR 服务、文件库路径、数据库写入都集中在 PC 端，失败恢复和日志更容易统一。
+- 即使 PC 暂时没有 OCR 任务，原图也已经安全进入文件库，不会丢失。
 
 关键日志：
 
 ```text
-[capture-ocr]
+[capture-inbox]
+[capture_import]
 ```
 
 ## 发送到 Guaxi PC 文件库
@@ -387,7 +383,7 @@ http://127.0.0.1:14230/capture
 说明：
 
 - 浏览器扩展只适用于 PC 浏览器。
-- 移动端网页分享后续应走 Android Share Intent / iOS Share Extension。
+- Android 移动端网页分享走系统 Share Intent；iOS 仍需后续补 Share Extension。
 
 ## 本地 HTTP 接收器
 
@@ -482,6 +478,20 @@ $env:NDK_HOME="C:\Users\user\AppData\Local\Android\Sdk\ndk\<NDK版本>"
 cd apps\guaxi-capture
 npm run android:init
 ```
+
+启用 Android 系统分享入口：
+
+```powershell
+npm run android:share:patch
+```
+
+该脚本会修改 Tauri 生成目录 `src-tauri/gen/android`：
+
+- 给 `MainActivity` 增加 `ACTION_SEND text/*`、`ACTION_SEND image/*`、`ACTION_SEND_MULTIPLE image/*`。
+- 写入 `ShareIntentPlugin.kt`，把 Android 分享 intent 转成前端可读取的 payload。
+- 注册 Tauri plugin command `plugin:guaxi-share-intent|readPendingShare`，前端会轮询并进入采集队列。
+
+每次删除或重新生成 `src-tauri/gen/android` 后，都需要重新执行一次 `npm run android:share:patch`。
 
 调试：
 
@@ -615,30 +625,30 @@ base64 -i GuaxiCapture.mobileprovision | pbcopy
 
 ```text
 Guaxi 接口：http://192.168.1.100:14219/extension/capture/import
-OCR 接口：http://192.168.1.100:9876/ocr
 ```
 
 要求：
 
 - 手机和 PC 在同一局域网。
-- PC 防火墙允许 `14219` 和 `9876` 入站访问。
+- PC 防火墙允许 `14219` 入站访问。
 - 命令行测试时绕过代理：`curl --noproxy "*"`。
 - Guaxi PC 主程序已经启动后端服务。
-- OCR 功能需要 Guaxi PC 的 agent_server 正常运行。
+- OCR 由 PC 端后续任务处理；手机端不需要直接访问 OCR 端口。
 
 安全建议：
 
 - 目前 Capture Import API 主要面向本机/局域网开发验证。
 - 如果后续要公网使用，需要增加认证、设备配对、token、签名或端到端加密。
-- OCR 服务也不建议裸露到公网。
+- OCR 服务不建议裸露到公网，应尽量保持为 PC 本机内部服务。
 
 ## 日志与排错
 
 | 日志前缀 | 来源 | 说明 |
 | --- | --- | --- |
 | `[capture-intake]` | Capture App 前端 | 分享 payload 解析、Tauri event、启动参数 |
+| `[capture-inbox]` | Capture App 前端 | 队列创建、图片进入 OCR 队列、状态更新 |
+| `[capture-sync]` | Capture App 前端 | 队列发送成功或失败 |
 | `[capture-markdown]` | Capture App 前端 | HTML 转 Markdown |
-| `[capture-ocr]` | Capture App 前端 / Tauri 壳 | OCR 请求、代理、结果 |
 | `[capture-export]` | Capture App 前端 | 复制/导出 Markdown |
 | `[capture-receiver]` | Capture App Tauri 壳 | 本地 HTTP 接收器 |
 | `[capture-native]` | Capture App Tauri 壳 | 启动参数 |
@@ -862,29 +872,38 @@ Windows 上 Tauri CLI 不显示 `ios` 子命令是正常现象。iOS 构建需�
 - Guaxi PC 主程序是否已启动。
 - `POST /extension/capture/import` 是否可访问。
 
-### OCR 失败
+### 图片没有进入 OCR 队列
 
 检查：
 
-- `OCR 接口` 是否使用 PC 局域网 IP。
-- Guaxi PC 主程序的 agent_server 是否已启动。
-- `http://电脑IP:9876/ocr` 是否可访问。
+- App 中是否选择了图片，或者 Android 分享来源是否确实传入了图片流。
 - 图片是否已成功读入为 base64。
+- Guaxi PC 主程序是否已启动，`POST /extension/capture/import` 是否可访问。
+- PC 端后续 OCR 任务是否正常运行。
 
 ## 后续演进建议
 
 ### Android Share Intent
 
+当前已提供生成工程补丁脚本：
+
+```powershell
+cd apps\guaxi-capture
+npm run android:init
+npm run android:share:patch
+npm run android:dev:fresh
+```
+
 目标：
 
 - 在 Android 系统分享菜单中显示 Guaxi Capture。
 - 支持分享文本、链接、图片。
-- 将 intent payload 转换为 `guaxi-capture-incoming` 事件。
+- 将 intent payload 转换为前端采集队列。
 
-建议实现：
+实现说明：
 
-- 在 Tauri Android 工程中增加 Intent filter。
-- 原生层解析 `ACTION_SEND` / `ACTION_SEND_MULTIPLE`。
+- 在 Tauri Android 生成工程中增加 Intent filter。
+- 原生 `ShareIntentPlugin` 解析 `ACTION_SEND` / `ACTION_SEND_MULTIPLE`。
 - 图片 URI 转 base64 asset。
 - 统一投递到前端 `shareIntake.js`。
 
@@ -900,14 +919,6 @@ Windows 上 Tauri CLI 不显示 `ios` 子命令是正常现象。iOS 构建需�
 - 在 Xcode 工程中增加 Share Extension target。
 - Extension 将分享 payload 写入 App Group。
 - 主 App 启动后读取 App Group 数据并投递给 `shareIntake.js`。
-
-### 移动端本机 OCR
-
-当前 OCR 依赖 Guaxi PC agent_server。后续可选：
-
-- Android 使用 ML Kit Text Recognition。
-- iOS 使用 Vision Framework。
-- 识别结果仍按 `buildOcrMarkdown()` 追加到草稿。
 
 ### 远程同步和分享
 
