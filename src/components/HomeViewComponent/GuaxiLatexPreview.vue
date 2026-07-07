@@ -50,6 +50,8 @@ const features = {
 
 // 供 GuaxiEditor 调用的正向定位，转发给基础组件。
 const forwardSync = (payload) => viewerRef.value?.forwardSync(payload)
+// 预留给宿主的大纲/书签页码跳转能力；不改变当前正向定位链路，只把 PdfViewer 已有能力透出。
+const goToPage = (page, options) => viewerRef.value?.goToPage(page, options)
 
-defineExpose({ forwardSync })
+defineExpose({ forwardSync, goToPage })
 </script>

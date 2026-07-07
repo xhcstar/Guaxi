@@ -2,7 +2,7 @@
     <div class="outline-panel">
         <label class="outline-search">
             <span>搜索</span>
-            <input v-model="outlineSearch" type="text" placeholder="搜索标题、Python Cell 或 Math Cell" />
+            <input v-model="outlineSearch" type="text" placeholder="搜索标题、LaTeX/Typst 章节或 Cell" />
         </label>
         <div class="outline-scroll">
             <n-tree :data="filteredOutlineTree" key-field="id" label-field="text" :render-label="renderLabel"
@@ -141,7 +141,9 @@ const renderPrefix = ({ option }) => {
 // 点击跳转
 const handleSelect = (keys, options) => {
     if (options && options[0] && jumpToLine.value) {
-        jumpToLine.value(options[0].line)
+        // 设计说明：第一个参数继续保持旧的行号/页码数字，兼容 PDF/Reader 等已有调用；
+        // 第二个参数补充完整大纲项，供编辑器区分 Markdown、LaTeX、Typst 等不同跳转目标。
+        jumpToLine.value(options[0].line, options[0])
     }
 }
 

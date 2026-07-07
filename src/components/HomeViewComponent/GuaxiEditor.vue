@@ -18759,6 +18759,33 @@ const scheduleLatexForwardSync = (line, column) => {
   }, 350)
 }
 
+const jumpToPdfPreviewOutlineLine = (line, outlineItem = null) => {
+  const targetLine = Number(line)
+  if (!latexPreviewVisible.value || !isPdfPreviewDoc.value || !Number.isFinite(targetLine) || targetLine <= 0) {
+    return false
+  }
+
+  // 设计说明：
+  // 1. LaTeX/Typst 大纲的 line 仍表示源码行号，和 Markdown 大纲保持同一套数据形状。
+  // 2. 点击大纲时优先把源码编辑器同步到该行；PDF 面板再通过 synctex / typst forward search 滚到对应页面位置。
+  // 3. 全屏预览模式下编辑器不可见，只做 PDF 正向定位，避免把用户从预览模式强行拉回编辑器。
+  logger.info('[Outline] jump routed to PDF preview source heading', {
+    line: targetLine,
+    kind: String(outlineItem?.kind || ''),
+    title: String(outlineItem?.text || ''),
+    previewType: pdfPreviewLabel.value,
+    editorVisible: !!showEditor.value,
+  })
+
+  if (showEditor.value) {
+    syncEditorToLine(targetLine, { focus: true })
+  }
+  nextTick(() => {
+    latexPreviewRef.value?.forwardSync?.({ line: targetLine, column: 1 })
+  })
+  return true
+}
+
 // 导出预览 PDF：复用现有导出流程（从已保存源文件干净构建，.tex 走 tectonic，.typ 走 typst）
 const handleLatexExport = async () => {
   // 确保先保存，导出从磁盘读取源文件
@@ -21016,8 +21043,228 @@ const extractMarkdownOutlineEntries = (content, filePath, reason = 'unknown') =>
   return result
 }
 
+const LATEX_OUTLINE_COMMAND_LEVELS = Object.freeze({
+  part: 1,
+  chapter: 2,
+  section: 3,
+  subsection: 4,
+  subsubsection: 5,
+  paragraph: 6,
+  subparagraph: 7,
+})
+
+const stripLatexLineComment = (line = '') => {
+  const text = String(line || '')
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] !== '%') continue
+    let slashCount = 0
+    for (let j = i - 1; j >= 0 && text[j] === '\\'; j -= 1) slashCount += 1
+    if (slashCount % 2 === 0) return text.slice(0, i)
+  }
+  return text
+}
+
+const skipLatexWhitespace = (source, index) => {
+  let i = index
+  while (i < source.length && /\s/.test(source[i])) i += 1
+  return i
+}
+
+const readBalancedDelimited = (source, index, openChar, closeChar) => {
+  if (source[index] !== openChar) return null
+  let depth = 0
+  let escaped = false
+  for (let i = index; i < source.length; i += 1) {
+    const ch = source[i]
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (ch === '\\') {
+      escaped = true
+      continue
+    }
+    if (ch === openChar) depth += 1
+    if (ch === closeChar) depth -= 1
+    if (depth === 0) {
+      return {
+        content: source.slice(index + 1, i),
+        end: i + 1,
+      }
+    }
+  }
+  return null
+}
+
+const skipLatexOptionalArguments = (source, index) => {
+  let i = skipLatexWhitespace(source, index)
+  while (source[i] === '[') {
+    const arg = readBalancedDelimited(source, i, '[', ']')
+    if (!arg) break
+    i = skipLatexWhitespace(source, arg.end)
+  }
+  return i
+}
+
+const cleanupLatexOutlineTitle = (raw = '') => {
+  return String(raw || '')
+    .replace(/\\texorpdfstring\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, '$1')
+    .replace(/\\([A-Za-z@]+)\*?\s*\{([^{}]*)\}/g, '$2')
+    .replace(/\\([#$%&_{}])/g, '$1')
+    .replace(/\\[A-Za-z@]+\*?/g, '')
+    .replace(/[{}]/g, '')
+    .replace(/~+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+const extractLatexCommandTitle = (source, indexAfterCommand) => {
+  const argStart = skipLatexOptionalArguments(source, indexAfterCommand)
+  const titleArg = readBalancedDelimited(source, argStart, '{', '}')
+  if (!titleArg) return ''
+  return cleanupLatexOutlineTitle(titleArg.content)
+}
+
+const normalizeOutlineLevels = (items = []) => {
+  const levels = items
+    .map((item) => Number(item?.level || 0))
+    .filter((level) => Number.isFinite(level) && level > 0)
+  if (!levels.length) return items
+  const minLevel = Math.min(...levels)
+  if (minLevel <= 1) return items
+  return items.map((item) => ({
+    ...item,
+    level: Math.max(1, Number(item.level || 1) - minLevel + 1),
+  }))
+}
+
+const extractLatexOutlineEntries = (content, filePath, reason = 'unknown') => {
+  const normalizedPath = String(filePath || selectedFile.value?.path || activeTab.value?.path || '').trim()
+  const text = String(content || '').replace(/\r\n?/g, '\n')
+  const lines = text.split('\n')
+  const result = []
+  let offset = 0
+  const commandRe = /\\(part|chapter|section|subsection|subsubsection|paragraph|subparagraph)\*?/g
+
+  lines.forEach((line, idx) => {
+    const searchableLine = stripLatexLineComment(line)
+    commandRe.lastIndex = 0
+    let match
+    while ((match = commandRe.exec(searchableLine)) !== null) {
+      const command = String(match[1] || '')
+      const title = extractLatexCommandTitle(text, offset + match.index + match[0].length)
+      if (!title) continue
+      result.push({
+        level: LATEX_OUTLINE_COMMAND_LEVELS[command] || 1,
+        text: title,
+        line: idx + 1,
+        kind: 'latex-heading',
+      })
+    }
+    offset += line.length + 1
+  })
+
+  const normalized = normalizeOutlineLevels(result)
+  logger.info('[Outline] extracted LaTeX headings', {
+    reason,
+    filePath: normalizedPath,
+    count: normalized.length,
+    contentLength: text.length,
+  })
+  return normalized
+}
+
+const stripTypstLineComment = (line = '') => {
+  const text = String(line || '')
+  const idx = text.indexOf('//')
+  return idx >= 0 ? text.slice(0, idx) : text
+}
+
+const cleanupTypstOutlineTitle = (raw = '') => {
+  return String(raw || '')
+    .replace(/<[^>\n]+>\s*$/g, '')
+    .replace(/#\w+(?:\([^)]*\))?/g, '')
+    .replace(/[*_`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+const extractTypstOutlineEntries = (content, filePath, reason = 'unknown') => {
+  const normalizedPath = String(filePath || selectedFile.value?.path || activeTab.value?.path || '').trim()
+  const text = String(content || '').replace(/\r\n?/g, '\n')
+  const lines = text.split('\n')
+  const result = []
+  let inRawBlock = false
+  let inBlockComment = false
+
+  lines.forEach((line, idx) => {
+    const rawLine = String(line || '')
+    if (/^\s*```/.test(rawLine)) {
+      inRawBlock = !inRawBlock
+      return
+    }
+    if (inRawBlock) return
+
+    let searchableLine = rawLine
+    if (inBlockComment) {
+      const end = searchableLine.indexOf('*/')
+      if (end < 0) return
+      searchableLine = searchableLine.slice(end + 2)
+      inBlockComment = false
+    }
+    const blockStart = searchableLine.indexOf('/*')
+    if (blockStart >= 0) {
+      const blockEnd = searchableLine.indexOf('*/', blockStart + 2)
+      if (blockEnd >= 0) searchableLine = `${searchableLine.slice(0, blockStart)} ${searchableLine.slice(blockEnd + 2)}`
+      else {
+        searchableLine = searchableLine.slice(0, blockStart)
+        inBlockComment = true
+      }
+    }
+
+    const headingMatch = stripTypstLineComment(searchableLine).match(/^\s*(={1,6})\s+(.+?)\s*$/)
+    if (!headingMatch) return
+    const title = cleanupTypstOutlineTitle(headingMatch[2])
+    if (!title) return
+    result.push({
+      level: headingMatch[1].length,
+      text: title,
+      line: idx + 1,
+      kind: 'typst-heading',
+    })
+  })
+
+  logger.info('[Outline] extracted Typst headings', {
+    reason,
+    filePath: normalizedPath,
+    count: result.length,
+    contentLength: text.length,
+  })
+  return result
+}
+
+const extractSourceOutlineEntries = (content, filePath, reason = 'unknown') => {
+  const normalizedPath = String(filePath || selectedFile.value?.path || activeTab.value?.path || '').trim()
+  const lowerPath = normalizedPath.toLowerCase()
+  if (lowerPath.endsWith('.md') || lowerPath.endsWith('.markdown')) {
+    return extractMarkdownOutlineEntries(content, normalizedPath, reason)
+  }
+  if (lowerPath.endsWith('.tex')) {
+    return extractLatexOutlineEntries(content, normalizedPath, reason)
+  }
+  if (lowerPath.endsWith('.typ')) {
+    return extractTypstOutlineEntries(content, normalizedPath, reason)
+  }
+
+  logger.info('[Outline] skip extraction because file type has no source outline parser', {
+    reason,
+    filePath: normalizedPath,
+  })
+  return []
+}
+
 function generateOutline(content, filePath, reason = 'unknown') {
-  const result = extractMarkdownOutlineEntries(content, filePath, reason)
+  const result = extractSourceOutlineEntries(content, filePath, reason)
   outlineStore.setOutline(result)
 }
 
@@ -21065,7 +21312,7 @@ const handleNotebookOutlineChange = (outline) => {
   })
 }
 
-function jumpToLine(line) {
+function jumpToLine(line, outlineItem = null) {
   if (editorSurfaceMode.value === 'notebook' && canUseNotebookSurface.value) {
     const handledByNotebook = !!notebookViewRef.value?.jumpToOutlineLine?.(line)
     logger.info('[Outline] jump routed to notebook surface', {
@@ -21075,6 +21322,10 @@ function jumpToLine(line) {
     if (handledByNotebook) {
       return
     }
+  }
+
+  if (jumpToPdfPreviewOutlineLine(line, outlineItem)) {
+    return
   }
 
   if (mode.value === 'preview') {
