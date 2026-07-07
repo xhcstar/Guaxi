@@ -1933,6 +1933,98 @@ pub async fn export_markdown_pandoc(
     }
 }
 
+/// 导入非 Markdown 文件时，用 pandoc 将其转换为 Markdown 后再入库。
+/// 与导出链路共用同一份内置 pandoc.exe；输入格式由 pandoc 依据扩展名自动推断，
+/// 输出统一为通用 Markdown。文档内嵌图片通过 `--extract-media` 抽取到 Markdown
+/// 同级的 `<stem>_assets` 目录，并在正文里以相对路径引用，避免图片丢失。
+#[tauri::command]
+pub async fn convert_file_to_markdown_pandoc(
+    input_path: String,
+    output_path: String,
+) -> Result<(), String> {
+    info!(
+        "Importing file via pandoc: input={}, output={}",
+        input_path, output_path
+    );
+
+    let pandoc_path = bundled_resources::ensure_relative_dir("utils/pandoc.exe")?;
+    let pandoc_path_str = pandoc_path
+        .to_str()
+        .ok_or("Failed to convert pandoc path to string")?;
+
+    if !pandoc_path.exists() {
+        return Err(format!(
+            "pandoc executable not found at: {}",
+            pandoc_path_str
+        ));
+    }
+
+    if !Path::new(&input_path).exists() {
+        return Err(format!("input file not found: {}", input_path));
+    }
+
+    let output_path_buf = PathBuf::from(&output_path);
+    let output_dir = output_path_buf
+        .parent()
+        .ok_or("Failed to resolve output directory")?
+        .to_path_buf();
+
+    let stem = output_path_buf
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("imported")
+        .to_string();
+
+    // 抽取内嵌媒体到 Markdown 同级的独立目录（相对路径），避免多次导入互相覆盖，
+    // 也让图片能随 Markdown 一起被知识库/Git 管理。current_dir 设为输出目录，
+    // pandoc 写入的媒体链接才会是可随文件迁移的相对路径。
+    let media_rel = format!("{}_assets", stem);
+
+    let mut cmd = Command::new(pandoc_path_str);
+
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    cmd.current_dir(&output_dir)
+        .arg(&input_path)
+        .arg("-o")
+        .arg(&output_path)
+        .arg("--to")
+        // 输出通用 Markdown 并保留常用扩展（表格/任务列表/公式），
+        // --wrap=none 避免 pandoc 硬折行破坏中文段落与后续编辑。
+        .arg("markdown+pipe_tables+task_lists+tex_math_dollars")
+        .arg("--wrap=none")
+        .arg("--extract-media")
+        .arg(&media_rel);
+
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Failed to execute pandoc: {}", e))?;
+
+    let stdout_text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr_text = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+    if output.status.success() {
+        if !stderr_text.is_empty() {
+            warn!(stderr = stderr_text.as_str(), "[DocImport] pandoc stderr");
+        }
+        info!("Pandoc import succeeded: {}", output_path);
+        Ok(())
+    } else {
+        error!(
+            status = ?output.status.code(),
+            stdout = stdout_text.as_str(),
+            stderr = stderr_text.as_str(),
+            "[DocImport] pandoc import failed"
+        );
+        Err(format!(
+            "Pandoc import failed with status: {:?}. stderr={}",
+            output.status.code(),
+            if stderr_text.is_empty() { stdout_text } else { stderr_text }
+        ))
+    }
+}
+
 #[derive(Debug, Clone)]
 struct PandocPdfEngine {
     program: PathBuf,

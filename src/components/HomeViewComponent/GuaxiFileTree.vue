@@ -98,7 +98,7 @@
                   <n-icon :component="DownloadOutline" size="16" />
                 </n-icon-wrapper>
               </template>
-              导入 Markdown 文件
+              导入文件
             </n-tooltip>
             <n-tooltip trigger="hover">
               <template #trigger>
@@ -174,7 +174,7 @@
                       <n-icon :component="DownloadOutline" size="16" />
                     </n-icon-wrapper>
                   </template>
-                  导入 Markdown 文件
+                  导入文件
                 </n-tooltip>
                 <n-tooltip trigger="hover">
                   <template #trigger>
@@ -615,6 +615,18 @@ const isMarkdownFilePath = (p) => {
   return v.endsWith('.md') || v.endsWith('.markdown')
 }
 
+// pandoc 只能“导出”PDF、不能把 PDF/图片作为输入解析（会报 “Unknown input format pdf”）。
+// 侧边栏快速导入仅覆盖 pandoc 能读取的文本类文档；PDF、扫描件、图片等需走仓库导入的
+// marker/OCR 流程，这里提前拦截并给出明确提示，避免把 pandoc 的失败堆栈直接抛给用户。
+const PANDOC_UNSUPPORTED_IMPORT_EXTS = new Set([
+  'pdf',
+  'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'tif', 'tiff', 'svg',
+])
+const isPandocUnsupportedImport = (p) => {
+  const ext = String(p || '').toLowerCase().split('.').pop()
+  return PANDOC_UNSUPPORTED_IMPORT_EXTS.has(ext)
+}
+
 // 引入 Pinia store
 const fileTreeStore = useFileTreeStore()
 const knowledgeBaseStore = useKnowledgeBaseStore()
@@ -651,6 +663,9 @@ const taskCategoryPaths = ref({ work: '', life: '', study: '' })
 // 与知识库模式一致：同一时刻只有一个「激活」分类，激活后占满整列；收起时其它分类以列表形式显示在其后。
 const activeTaskCat = ref('work')
 const taskActiveExpanded = ref(true)
+// 任务模式是否已完成首次初始化：仅首次进入时加载三类目录，之后切换模式保留已展开/已加载状态，
+// 避免每次切换都把文件树与展开条目重置回默认态。
+const taskModeInitialized = ref(false)
 const taskCatTrees = reactive({ work: [], life: [], study: [] })
 const taskCatExpandedKeys = reactive({ work: [], life: [], study: [] })
 const taskCatSelectedKeys = reactive({ work: [], life: [], study: [] })
@@ -1166,10 +1181,8 @@ const handleImportMarkdownFile = async (repoPath) => {
   }
 
   try {
-    const picked = await open({
-      multiple: false,
-      filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }]
-    });
+    // 不再限制文件类型：Markdown 直接入库，其它格式先经 pandoc 转成 Markdown 再入库。
+    const picked = await open({ multiple: false });
 
     if (!picked) return;
 
@@ -1183,25 +1196,59 @@ const handleImportMarkdownFile = async (repoPath) => {
     const dirNodes = await invoke('get_file_tree', { path: targetDir });
     const existingNames = Array.isArray(dirNodes) ? dirNodes.map((n) => n?.name).filter(Boolean) : [];
 
-    const uniqueName = makeUniqueFileName(existingNames, fileName);
-    const dstPath = normalizePath(`${targetDir}/${uniqueName}`);
+    if (isMarkdownFilePath(srcPath)) {
+      // Markdown 文件：保持原有“读内容 → 写入目标目录”的直接入库行为。
+      const uniqueName = makeUniqueFileName(existingNames, fileName);
+      const dstPath = normalizePath(`${targetDir}/${uniqueName}`);
 
-    logger.info('[ImportMarkdown] start', {
-      repoPath: normalizePath(repoPath),
-      targetDir,
-      srcPath,
-      dstPath
-    });
+      logger.info('[ImportFile] markdown direct import', {
+        repoPath: normalizePath(repoPath),
+        targetDir,
+        srcPath,
+        dstPath
+      });
 
-    const content = await invoke('read_file_content', { path: srcPath });
-    await invoke('write_file_content', { path: dstPath, content: String(content ?? '') });
+      const content = await invoke('read_file_content', { path: srcPath });
+      await invoke('write_file_content', { path: dstPath, content: String(content ?? '') });
 
-    await refreshDirectory(targetDir);
+      await refreshDirectory(targetDir);
 
-    logger.info('[ImportMarkdown] success', { dstPath, len: String(content ?? '').length });
-    message.success('Markdown 文件已导入');
+      logger.info('[ImportFile] markdown import success', { dstPath, len: String(content ?? '').length });
+      message.success('Markdown 文件已导入');
+    } else {
+      // 非 Markdown 文件：与导出链路共用同一 pandoc，转换为 Markdown 后再入库。
+      // 先拦截 pandoc 无法读取的输入（PDF/图片等），给出明确提示而非抛出 pandoc 失败。
+      if (isPandocUnsupportedImport(srcPath)) {
+        logger.info('[ImportFile] skip pandoc-unsupported input', { srcPath });
+        message.warning('暂不支持在此导入 PDF / 图片，请使用仓库导入功能（OCR 转换）');
+        return;
+      }
+
+      const desiredMdName = `${stemname(fileName)}.md`;
+      const uniqueMdName = makeUniqueFileName(existingNames, desiredMdName);
+      const dstPath = normalizePath(`${targetDir}/${uniqueMdName}`);
+
+      logger.info('[ImportFile] convert via pandoc', {
+        repoPath: normalizePath(repoPath),
+        targetDir,
+        srcPath,
+        dstPath
+      });
+
+      const loading = message.loading('正在转换为 Markdown…', { duration: 0 });
+      try {
+        await invoke('convert_file_to_markdown_pandoc', { inputPath: srcPath, outputPath: dstPath });
+      } finally {
+        loading?.destroy?.();
+      }
+
+      await refreshDirectory(targetDir);
+
+      logger.info('[ImportFile] pandoc import success', { dstPath });
+      message.success('已转换为 Markdown 并导入');
+    }
   } catch (error) {
-    logger.error('[ImportMarkdown] failed:', error);
+    logger.error('[ImportFile] failed:', error);
     message.error(`导入失败: ${error.message || error}`);
     await refreshDirectory(targetDir);
   }
@@ -1553,16 +1600,26 @@ const activateExternalDir = async (dirPath) => {
 }
 
 // 切换视图模式：kb → plain → task → kb（三态轮转）
+// 设计说明：三种模式各自维护独立的树/展开状态（module 级 ref），组件不会随切换卸载，
+// 因此切换时不应清空对方状态。之前每次进入 task 都重跑 activateTaskMode 全量重置、
+// 且离开 plain 时把 externalDir 置空，导致已展开的目录/文件树被打回默认态。
+// 现在：task 仅首次进入时初始化，plain 的激活目录跨模式保留；切换只重定向文件监控。
 const toggleViewMode = () => {
   if (viewMode.value === 'kb') {
     viewMode.value = 'plain'
+    // 回到文件编辑模式时，把文件监控重新指向其激活的外部目录（若曾打开过）。
+    if (externalDir.value) repointFileWatcher(externalDir.value)
   } else if (viewMode.value === 'plain') {
     viewMode.value = 'task'
-    externalDir.value = null
-    activateTaskMode()
+    if (!taskModeInitialized.value) {
+      activateTaskMode()
+    } else {
+      // 已初始化过：保留已加载/展开的任务树，仅重定向监控并触发一次后台重索引。
+      if (taskRootPath.value) repointFileWatcher(taskRootPath.value)
+      invoke('task_scan_and_index').catch((e) => logger.warn('任务扫描失败', e))
+    }
   } else {
     viewMode.value = 'kb'
-    externalDir.value = null
     if (fileTreeStore.activeRepoPath) repointFileWatcher(fileTreeStore.activeRepoPath)
   }
 }
@@ -1614,6 +1671,7 @@ const activateTaskMode = async () => {
   activeTaskCat.value = 'work'
   taskActiveExpanded.value = true
   await loadTaskCat('work')
+  taskModeInitialized.value = true
 }
 
 // 加载某分类根目录下的 .org 文件树

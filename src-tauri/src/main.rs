@@ -262,6 +262,7 @@ async fn main() {
             commands::docprocess::export_rendered_html_pdf,
             commands::docprocess::export_markdown_pdf_pandoc,
             commands::docprocess::export_markdown_pandoc,
+            commands::docprocess::convert_file_to_markdown_pandoc,
             commands::docprocess::export_tex_pdf_tectonic,
             commands::docprocess::build_tex_pdf_preview,
             commands::typst_compile::build_typ_pdf_preview,
