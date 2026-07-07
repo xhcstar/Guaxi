@@ -82,9 +82,9 @@
         </div>
 
         <!-- 左侧epub文档预览区域 -->
-        <div class="epub-source-panel" v-show="viewMode !== 'full-right'">
+        <div class="epub-source-panel guaxi-reader-scrollbar" v-show="viewMode !== 'full-right'">
           <div class="epub-source-container">
-            <div ref="epubPreviewContainer" class="epub-preview-container"></div>
+            <div ref="epubPreviewContainer" class="epub-preview-container guaxi-reader-scrollbar"></div>
             <!-- 加载状态 -->
             <div v-if="isLoading" class="epub-loading-message">
               正在加载epub文件...
@@ -97,7 +97,7 @@
       <div class="resize-handle" v-show="viewMode === 'split'" @mousedown="startResize"></div>
 
       <!-- 右侧Markdown内容 -->
-      <div ref="markdownPanel" class="markdown-panel" v-show="viewMode !== 'full-left'" @click="handleMarkdownClickAlt" @dblclick="handleMarkdownClick"
+      <div ref="markdownPanel" class="markdown-panel guaxi-reader-scrollbar" v-show="viewMode !== 'full-left'" @click="handleMarkdownClickAlt" @dblclick="handleMarkdownClick"
         @mousemove="handleMarkdownHover" @mouseleave="handleMarkdownLeave" @mouseenter="setScrollTargetFromEvent"
         @mouseup="handleSelectionMouseUp">
         <div class="markdown-content" ref="markdownContainer">
@@ -216,7 +216,7 @@
           <n-icon :component="CloseOutline" size="18" />
         </button>
       </div>
-      <div class="notes-content" @mouseenter="setScrollTargetFromEvent">
+      <div class="notes-content guaxi-reader-scrollbar" @mouseenter="setScrollTargetFromEvent">
         <n-card v-for="(card, index) in noteCards" :key="card.id" class="note-card" size="small" :title="card.title"
           :bordered="true" :segmented="{
             content: true,
@@ -286,6 +286,7 @@
 <script setup>
 import { createLogger } from '../../utils/logger'
 import { ref, computed, watchEffect, onMounted, onBeforeUnmount, watch, nextTick, h } from 'vue'
+import { markReaderScrollbarActive } from './readerScrollbar'
 import { invoke } from '@tauri-apps/api/core'
 import { Book } from 'epubjs';
 import { join, dirname } from '@tauri-apps/api/path'
@@ -399,10 +400,21 @@ const handleAnyScroll = (e) => {
   const t = e.target
   if (t === document) {
     const se = document.scrollingElement
-    if (se) lastScrollTarget.value = se
+    if (se) {
+      markReaderScrollbarActive(se)
+      lastScrollTarget.value = se
+    }
     return
   }
   if (t && t instanceof HTMLElement && isScrollableElement(t)) {
+    if (lastScrollTarget.value !== t) {
+      logger.debug('[ReaderScrollbar] active scroll target changed', {
+        className: t.className,
+        scrollHeight: t.scrollHeight,
+        clientHeight: t.clientHeight
+      })
+    }
+    markReaderScrollbarActive(t)
     lastScrollTarget.value = t
   }
 }

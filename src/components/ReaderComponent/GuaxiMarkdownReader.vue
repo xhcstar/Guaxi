@@ -100,7 +100,7 @@
       <div class="resize-handle" v-show="viewMode === 'split'" @mousedown="startResize"></div>
 
       <!-- 右侧Markdown内容 -->
-      <div class="markdown-panel" ref="markdownPanel" v-show="viewMode !== 'full-left'" @click="handleMarkdownClickAlt" @dblclick="handleMarkdownClick"
+      <div class="markdown-panel guaxi-reader-scrollbar" ref="markdownPanel" v-show="viewMode !== 'full-left'" @click="handleMarkdownClickAlt" @dblclick="handleMarkdownClick"
         @mousemove="handleMarkdownHover" @mouseleave="handleMarkdownLeave" @mouseenter="setScrollTargetFromEvent"
         @mouseup="handleSelectionMouseUp">
         <div class="markdown-content" ref="markdownContainer">
@@ -219,7 +219,7 @@
           <n-icon :component="CloseOutline" size="18" />
         </button>
       </div>
-      <div class="notes-content" @mouseenter="setScrollTargetFromEvent">
+      <div class="notes-content guaxi-reader-scrollbar" @mouseenter="setScrollTargetFromEvent">
         <n-card v-for="(card, index) in noteCards" :key="card.id" class="note-card" size="small" :title="card.title"
           :bordered="true" :segmented="{
             content: true,
@@ -289,6 +289,7 @@
 <script setup>
 import { createLogger } from '../../utils/logger'
 import { ref, computed, watchEffect, onMounted, onBeforeUnmount, watch, nextTick, h } from 'vue'
+import { markReaderScrollbarActive } from './readerScrollbar'
 import { invoke } from '@tauri-apps/api/core'
 import { join, dirname } from '@tauri-apps/api/path'
 import { convertFileSrc } from '@tauri-apps/api/core';
@@ -401,10 +402,21 @@ const handleAnyScroll = (e) => {
   const t = e.target
   if (t === document) {
     const se = document.scrollingElement
-    if (se) lastScrollTarget.value = se
+    if (se) {
+      markReaderScrollbarActive(se)
+      lastScrollTarget.value = se
+    }
     return
   }
   if (t && t instanceof HTMLElement && isScrollableElement(t)) {
+    if (lastScrollTarget.value !== t) {
+      logger.debug('[ReaderScrollbar] active scroll target changed', {
+        className: t.className,
+        scrollHeight: t.scrollHeight,
+        clientHeight: t.clientHeight
+      })
+    }
+    markReaderScrollbarActive(t)
     lastScrollTarget.value = t
   }
 }

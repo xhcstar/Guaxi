@@ -10965,6 +10965,10 @@ const ensureSecondaryEditor = () => {
     },
     unicodeHighlight: GUAXI_MONACO_UNICODE_HIGHLIGHT_OPTIONS,
     automaticLayout: true,
+    // 设计说明：右侧编辑器通常用于 Markdown/文本对照阅读，明确继承主编辑器的自动折行策略。
+    wordWrap: 'on',
+    wrappingStrategy: 'advanced',
+    wrappingIndent: 'same',
   });
   logger.info('[Editor] Monaco unicode highlight configured', {
     target: 'secondary',
@@ -23858,10 +23862,25 @@ onUnmounted(() => {
 .realtime-vditor :deep(.vditor-reset) {
   background-color: var(--guaxi-content-bg) !important;
   color: var(--guaxi-text-primary) !important;
+  max-width: 100%;
+  overflow-x: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.realtime-vditor :deep(.vditor-reset img),
+.realtime-vditor :deep(.vditor-reset svg),
+.realtime-vditor :deep(.vditor-reset canvas),
+.realtime-vditor :deep(.vditor-reset video) {
+  max-width: 100%;
+  height: auto;
+  box-sizing: border-box;
 }
 
 .realtime-vditor :deep(.vditor-reset table) {
   width: 100%;
+  max-width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
   border: 1px solid var(--guaxi-border, #d0d7de);
   background: var(--guaxi-content-bg, #ffffff);
@@ -23875,6 +23894,8 @@ onUnmounted(() => {
   text-align: left;
   background: var(--guaxi-content-bg, #ffffff);
   color: var(--guaxi-text-primary, #1f2328);
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .realtime-vditor :deep(.vditor-reset th) {
@@ -23892,6 +23913,11 @@ onUnmounted(() => {
   background: var(--guaxi-code-bg, #f6f8fa) !important;
   border: 1px solid var(--guaxi-border, #d0d7de) !important;
   color: var(--guaxi-text-primary, #1f2328) !important;
+  max-width: 100%;
+  box-sizing: border-box;
+  white-space: pre-wrap;
+  overflow-x: hidden;
+  overflow-wrap: anywhere;
 }
 
 .realtime-vditor :deep(.vditor-ir code),
@@ -23899,6 +23925,9 @@ onUnmounted(() => {
 .realtime-vditor :deep(.vditor-reset code) {
   background: rgba(175, 184, 193, 0.2) !important;
   color: var(--guaxi-text-primary, #1f2328) !important;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .realtime-vditor :deep(.vditor-ir__marker),
@@ -23912,6 +23941,13 @@ onUnmounted(() => {
 .realtime-vditor :deep(.vditor-reset .language-mermaid) {
   background: #ffffff !important;
   color: #1f2328 !important;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+.realtime-vditor :deep(.vditor-reset .mermaid svg) {
+  max-width: 100%;
+  height: auto;
 }
 
 :global(:root[data-guaxi-theme='dark']) .realtime-vditor :deep(.vditor-reset table) {
@@ -24386,6 +24422,8 @@ onUnmounted(() => {
   overflow-y: auto;
   overflow-x: hidden;
   word-wrap: break-word;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   box-sizing: border-box;
   position: relative;
   /* 主预览内容区和分栏预览共用这一层，显式继承主题底色以保证切主题立即生效。 */
@@ -24397,6 +24435,10 @@ onUnmounted(() => {
    zoom 会重排，max-width:100% 的图片在缩放后仍能适配，不会横向溢出。 */
 .preview-zoom-layer {
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+  box-sizing: border-box;
 }
 
 .preview a,
@@ -24438,6 +24480,8 @@ onUnmounted(() => {
   max-width: 100%;
   text-align: left;
   white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   justify-content: flex-start !important;
   align-items: normal !important;
 }
@@ -24997,6 +25041,9 @@ onUnmounted(() => {
   display: inline;
   vertical-align: middle;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .math-block {
@@ -25004,6 +25051,9 @@ onUnmounted(() => {
   text-align: center;
   margin: 1rem 0;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 /* 设计说明：
@@ -25099,9 +25149,28 @@ onUnmounted(() => {
   padding: 16px;
   margin: 1em 0;
   text-align: center;
-  overflow: auto;
+  overflow: hidden;
   color: #1f2328;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.preview :deep(mjx-container),
+.preview :deep(.math-inline),
+.preview :deep(.math-block) {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.preview :deep(.mermaid),
+.preview :deep(svg.mermaid),
+.preview :deep(.mermaid svg) {
+  max-width: 100%;
+  height: auto;
+  box-sizing: border-box;
+  overflow-x: hidden;
 }
 
 
@@ -25969,6 +26038,11 @@ onUnmounted(() => {
   border: 1px solid #e1e4e8;
   margin: 1em 0;
   color: #24292f;
+  max-width: 100%;
+  box-sizing: border-box;
+  white-space: pre-wrap;
+  overflow-x: hidden;
+  overflow-wrap: anywhere;
 }
 
 .preview :deep(.hljs code),
@@ -25977,6 +26051,9 @@ onUnmounted(() => {
   background: transparent !important;
   border: 0 !important;
   padding: 0 !important;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .preview :deep(pre:not(.hljs)) {
@@ -25984,7 +26061,11 @@ onUnmounted(() => {
   border: 1px solid #e1e4e8;
   background: #ffffff !important;
   margin: 1em 0;
-  overflow-x: auto;
+  max-width: 100%;
+  box-sizing: border-box;
+  white-space: pre-wrap;
+  overflow-x: hidden;
+  overflow-wrap: anywhere;
 }
 
 .preview :deep(pre:not(.hljs) > code) {
@@ -25994,6 +26075,9 @@ onUnmounted(() => {
   background: transparent !important;
   color: #24292f;
   padding: 1.5em 1em;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .dark-mode .preview :deep(pre:not(.hljs)),
@@ -26137,6 +26221,8 @@ onUnmounted(() => {
 
 .preview :deep(table) {
   width: 100%;
+  max-width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
   border: 1px solid #ddd;
   background: #ffffff;
@@ -26150,6 +26236,8 @@ onUnmounted(() => {
   text-align: center;
   background: #ffffff;
   color: #24292f;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .preview :deep(th) {

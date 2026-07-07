@@ -174,9 +174,23 @@ pre,
   scrollbar-color: rgba(0, 0, 0, 0.22) transparent;
 }
 
+/* 设计说明：阅读器面板统一使用“滚动时显色、静止时隐藏”的滚动条。
+   这样鼠标滚轮、触控板和键盘触发滚动时都能看到滚动位置，同时不影响编辑器/代码块的既有滚动条。 */
+.guaxi-reader-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.guaxi-reader-scrollbar:hover,
+.guaxi-reader-scrollbar:focus-within,
+.guaxi-reader-scrollbar.is-reader-scrolling {
+  scrollbar-color: rgba(0, 0, 0, 0.32) transparent;
+}
+
 pre::-webkit-scrollbar,
 .hljs::-webkit-scrollbar,
-.code-segment::-webkit-scrollbar {
+.code-segment::-webkit-scrollbar,
+.guaxi-reader-scrollbar::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
@@ -188,15 +202,24 @@ pre::-webkit-scrollbar-thumb,
   border-radius: 999px;
 }
 
+.guaxi-reader-scrollbar::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 999px;
+}
+
 pre::-webkit-scrollbar-thumb:hover,
 .hljs::-webkit-scrollbar-thumb:hover,
-.code-segment::-webkit-scrollbar-thumb:hover {
+.code-segment::-webkit-scrollbar-thumb:hover,
+.guaxi-reader-scrollbar:hover::-webkit-scrollbar-thumb,
+.guaxi-reader-scrollbar:focus-within::-webkit-scrollbar-thumb,
+.guaxi-reader-scrollbar.is-reader-scrolling::-webkit-scrollbar-thumb {
   background-color: rgba(0, 0, 0, 0.34);
 }
 
 pre::-webkit-scrollbar-track,
 .hljs::-webkit-scrollbar-track,
-.code-segment::-webkit-scrollbar-track {
+.code-segment::-webkit-scrollbar-track,
+.guaxi-reader-scrollbar::-webkit-scrollbar-track {
   background-color: transparent;
 }
 
@@ -204,6 +227,12 @@ pre::-webkit-scrollbar-track,
 :root[data-guaxi-theme='dark'] .hljs,
 :root[data-guaxi-theme='dark'] .code-segment {
   scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+
+:root[data-guaxi-theme='dark'] .guaxi-reader-scrollbar:hover,
+:root[data-guaxi-theme='dark'] .guaxi-reader-scrollbar:focus-within,
+:root[data-guaxi-theme='dark'] .guaxi-reader-scrollbar.is-reader-scrolling {
+  scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
 }
 
 :root[data-guaxi-theme='dark'] pre::-webkit-scrollbar-thumb,
@@ -214,8 +243,96 @@ pre::-webkit-scrollbar-track,
 
 :root[data-guaxi-theme='dark'] pre::-webkit-scrollbar-thumb:hover,
 :root[data-guaxi-theme='dark'] .hljs::-webkit-scrollbar-thumb:hover,
-:root[data-guaxi-theme='dark'] .code-segment::-webkit-scrollbar-thumb:hover {
+:root[data-guaxi-theme='dark'] .code-segment::-webkit-scrollbar-thumb:hover,
+:root[data-guaxi-theme='dark'] .guaxi-reader-scrollbar:hover::-webkit-scrollbar-thumb,
+:root[data-guaxi-theme='dark'] .guaxi-reader-scrollbar:focus-within::-webkit-scrollbar-thumb,
+:root[data-guaxi-theme='dark'] .guaxi-reader-scrollbar.is-reader-scrolling::-webkit-scrollbar-thumb {
   background-color: rgba(255, 255, 255, 0.26);
+}
+
+/* 设计说明：普通文本/Markdown Reader 的右侧渲染内容由 HTML 注入，不能依赖单个组件的 scoped CSS 完整命中。
+   这里只约束通用文本流和 Markdown 产物，不作用于 PDF/Word/EPUB 左侧专用阅读器的页面渲染。 */
+.text-preview-container,
+.markdown-panel,
+.notes-content {
+  overflow-x: hidden;
+}
+
+.text-preview-content,
+.text-preview-content pre,
+.markdown-content,
+.markdown-content :where(p, li, blockquote, h1, h2, h3, h4, h5, h6, a, span, div) {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.text-preview-content,
+.text-preview-content pre {
+  white-space: pre-wrap;
+}
+
+.markdown-content {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.markdown-content img,
+.markdown-content svg,
+.markdown-content canvas,
+.markdown-content video {
+  max-width: 100%;
+  height: auto;
+  box-sizing: border-box;
+}
+
+.markdown-content table {
+  width: 100%;
+  max-width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+
+.markdown-content th,
+.markdown-content td {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.markdown-content pre,
+.markdown-content .hljs {
+  max-width: 100%;
+  box-sizing: border-box;
+  white-space: pre-wrap;
+  overflow-x: hidden;
+  overflow-wrap: anywhere;
+}
+
+.markdown-content pre code,
+.markdown-content .hljs code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.markdown-content mjx-container,
+.markdown-content .math-block,
+.markdown-content .math-inline {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.markdown-content .mermaid {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+.markdown-content .mermaid svg {
+  max-width: 100%;
+  height: auto;
 }
 
 :root[data-guaxi-theme='dark'] .fit-width,

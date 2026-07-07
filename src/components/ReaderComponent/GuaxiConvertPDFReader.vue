@@ -159,7 +159,7 @@
         </div>
 
         <!-- 新版统一 pdfium 阅读器（GuaxiPdfViewer，连续滚动 + 虚拟化 + 字级文本层 + 写回式高亮）-->
-        <div v-if="useNewPdfViewer" class="pdf-render-panel pdf-render-panel--new" v-show="viewMode !== 'full-right'">
+        <div v-if="useNewPdfViewer" class="pdf-render-panel pdf-render-panel--new guaxi-reader-scrollbar" v-show="viewMode !== 'full-right'">
           <GuaxiPdfViewer
             ref="pdfViewer"
             :path="props.filePath"
@@ -206,7 +206,7 @@
         </div>
 
         <!-- 旧版渲染核心（PDF.js）；灰度回退用，验证通过后移除 -->
-        <div v-else class="pdf-render-panel" v-show="viewMode !== 'full-right'" ref="pdfPanel" @wheel="handleWheelZoom" @mousedown="startDrag"
+        <div v-else class="pdf-render-panel guaxi-reader-scrollbar" v-show="viewMode !== 'full-right'" ref="pdfPanel" @wheel="handleWheelZoom" @mousedown="startDrag"
           @mousemove="handleDrag" @mouseup="handlePdfPanelMouseUp" @mouseleave="endDrag" @mouseenter="setScrollTargetFromEvent"
           :style="{ cursor: isDragging ? 'grabbing' : 'text' }">
 
@@ -251,7 +251,7 @@
             </button>
           </div>
 
-          <div class="pdf-annotations-list">
+          <div class="pdf-annotations-list guaxi-reader-scrollbar">
             <div v-if="!pdfAnnotations.length" class="pdf-annotations-empty">暂无标注</div>
             <div v-for="it in pdfAnnotations" :key="it.id" class="pdf-annotation-item"
               :class="{ 'pdf-annotation-item-active': it.id === pdfActiveAnnotationId }" @click="activatePdfAnnotation(it.id)">
@@ -280,7 +280,7 @@
       <div class="resize-handle" v-show="viewMode === 'split'" @mousedown="startResize"></div>
 
       <!-- 右侧Markdown内容 -->
-      <div class="markdown-panel" v-show="viewMode !== 'full-left' || mdSearchVisible" @click="handleMarkdownClickAlt" @dblclick="handleMarkdownClick" @mousemove="handleMarkdownHover"
+      <div class="markdown-panel guaxi-reader-scrollbar" v-show="viewMode !== 'full-left' || mdSearchVisible" @click="handleMarkdownClickAlt" @dblclick="handleMarkdownClick" @mousemove="handleMarkdownHover"
         @mouseleave="handleMarkdownLeave" @mouseenter="onMarkdownEnter"
         @mouseup="handleSelectionMouseUp">
 
@@ -344,7 +344,7 @@
           <n-icon :component="CloseOutline" size="18" />
         </button>
       </div>
-      <div class="notes-content" @mouseenter="setScrollTargetFromEvent">
+      <div class="notes-content guaxi-reader-scrollbar" @mouseenter="setScrollTargetFromEvent">
         <n-card v-for="(card, index) in noteCards" :key="card.id" class="note-card" size="small" :title="card.title"
           :bordered="true" :segmented="{
             content: true,
@@ -462,6 +462,7 @@
 <script setup>
 import { createLogger } from '../../utils/logger'
 import { ref, computed, watchEffect, onMounted, onBeforeUnmount, watch, nextTick, h } from 'vue'
+import { markReaderScrollbarActive } from './readerScrollbar'
 import { invoke } from '@tauri-apps/api/core'
 import { join, dirname } from '@tauri-apps/api/path'
 import { convertFileSrc } from '@tauri-apps/api/core';
@@ -590,10 +591,21 @@ const handleAnyScroll = (e) => {
   const t = e.target
   if (t === document) {
     const se = document.scrollingElement
-    if (se) lastScrollTarget.value = se
+    if (se) {
+      markReaderScrollbarActive(se)
+      lastScrollTarget.value = se
+    }
     return
   }
   if (t && t instanceof HTMLElement && isScrollableElement(t)) {
+    if (lastScrollTarget.value !== t) {
+      logger.debug('[ReaderScrollbar] active scroll target changed', {
+        className: t.className,
+        scrollHeight: t.scrollHeight,
+        clientHeight: t.clientHeight
+      })
+    }
+    markReaderScrollbarActive(t)
     lastScrollTarget.value = t
   }
 }
@@ -5455,6 +5467,21 @@ button:disabled {
   scroll-behavior: auto;
 }
 
+/* 设计说明：新版 PDF 的滚动由内部 GuaxiPdfViewer.gpv__body 承担。
+   外层只负责承载覆盖式批注工具条，避免工具条进入文档流后在底部撑出一段空白滚动区。 */
+.pdf-render-panel--new {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+}
+
+.pdf-render-panel--new :deep(.gpv) {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
 /* 46. PDF页面容器样式 */
 .pdf-image-container {
   width: 100%;
@@ -5805,6 +5832,13 @@ button:disabled {
   display: flex;
   justify-content: center;
   pointer-events: none;
+}
+
+.pdf-annotation-toolbar-wrap--new {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 14px;
 }
 
 .pdf-annotation-toolbar {

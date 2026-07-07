@@ -116,7 +116,7 @@
     </div>
 
     <div
-      class="gpv__body"
+      class="gpv__body guaxi-reader-scrollbar"
       ref="bodyRef"
       :class="{ 'gpv__body--pan': panMode }"
       @scroll="onScroll"
@@ -206,9 +206,10 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, watch, nextTick, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { createLogger } from '../../utils/logger'
+import { markReaderScrollbarActive } from '../ReaderComponent/readerScrollbar'
 import usePdfiumDocument from './usePdfiumDocument'
 
 const logger = createLogger('GuaxiPdfViewer')
@@ -305,6 +306,22 @@ const pageEls = new Map()
 const setPageRef = (num, el) => {
   if (el) pageEls.set(num, el)
   else pageEls.delete(num)
+}
+
+let resizeObserver = null
+let resizeRenderRaf = 0
+const scheduleLayoutRender = (reason = 'layout') => {
+  if (resizeRenderRaf) return
+  resizeRenderRaf = requestAnimationFrame(() => {
+    resizeRenderRaf = 0
+    updateVisible()
+    renderVisible()
+    logger.debug('PDF阅读器布局刷新', {
+      reason,
+      bodyHeight: bodyRef.value?.clientHeight || 0,
+      pages: pages.length,
+    })
+  })
 }
 
 const engineKind = computed(() => {
@@ -487,6 +504,7 @@ const load = async (fp, keep) => {
   if (keep) restoreScroll(prevRatio)
   updateVisible()
   renderVisible()
+  scheduleLayoutRender('load')
   if (props.features.outline) emitOutline()
   if (searchQuery.value.trim()) runSearch()
 }
@@ -517,6 +535,7 @@ const RENDER_SETTLE_MS = 120
 let renderSettleTimer = null
 
 const onScroll = () => {
+  markReaderScrollbarActive(bodyRef.value)
   if (!scrollRaf) {
     scrollRaf = requestAnimationFrame(() => {
       scrollRaf = 0
@@ -1011,11 +1030,29 @@ const showFlashBox = (box) => {
   flashTimer = setTimeout(() => { flashBox.value = null }, 1800)
 }
 
-const goToPage = (n, { align = 'top' } = {}) => {
+const goToPage = (n, { align = 'top', retry = 6 } = {}) => {
   const num = Math.min(Math.max(1, Math.round(Number(n) || 1)), totalPages.value || 1)
   const el = bodyRef.value
   const node = pageEls.get(num)
   if (!el || !node) {
+    // 设计说明：PDF 打开和布局切换时，页数组可能已经建立，但 v-for 的页面 DOM 仍在下一帧才挂载。
+    // 此时立即判定失败会让左侧阅读器停在空白态；短暂重试可保持跳页语义，同时不改变后续滚动/渲染逻辑。
+    if (retry > 0) {
+      logger.debug('PDF页码跳转等待页面节点', {
+        targetPage: num,
+        retry,
+        hasBody: Boolean(el),
+        hasPageNode: Boolean(node),
+        totalPages: totalPages.value,
+      })
+      nextTick(() => {
+        requestAnimationFrame(() => {
+          scheduleLayoutRender('go-to-page-retry')
+          goToPage(num, { align, retry: retry - 1 })
+        })
+      })
+      return
+    }
     logger.warn('PDF页码跳转失败：页面节点未就绪', { targetPage: num, totalPages: totalPages.value })
     return
   }
@@ -1257,6 +1294,18 @@ watch(() => props.path, (p) => {
   load(p, keep)
 }, { immediate: true })
 
+onMounted(() => {
+  nextTick(() => scheduleLayoutRender('mounted'))
+  if (typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(() => scheduleLayoutRender('resize'))
+    if (rootRef.value) resizeObserver.observe(rootRef.value)
+    if (bodyRef.value) resizeObserver.observe(bodyRef.value)
+    logger.debug('PDF阅读器尺寸监听已启用')
+  } else {
+    logger.debug('PDF阅读器尺寸监听不可用，使用挂载刷新兜底')
+  }
+})
+
 if (typeof window !== 'undefined') {
   window.addEventListener('mouseup', onBodyMouseUp, true)
 }
@@ -1267,7 +1316,12 @@ onBeforeUnmount(() => {
   if (zoomRenderTimer) clearTimeout(zoomRenderTimer)
   if (searchTimer) clearTimeout(searchTimer)
   if (scrollRaf) cancelAnimationFrame(scrollRaf)
+  if (resizeRenderRaf) cancelAnimationFrame(resizeRenderRaf)
   if (panRaf) cancelAnimationFrame(panRaf)
+  if (resizeObserver) {
+    resizeObserver.disconnect()
+    resizeObserver = null
+  }
   if (typeof window !== 'undefined') {
     window.removeEventListener('mouseup', onBodyMouseUp, true)
     window.removeEventListener('mousemove', onPanMove, true)
@@ -1281,6 +1335,7 @@ onBeforeUnmount(() => {
 .gpv {
   display: flex;
   flex-direction: column;
+  width: 100%;
   height: 100%;
   min-width: 0;
   min-height: 0;

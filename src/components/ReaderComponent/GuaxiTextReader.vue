@@ -83,9 +83,14 @@
         </div>
 
         <!-- 左侧text文档预览区域 -->
-        <div class="text-source-panel" v-show="viewMode !== 'full-right'">
+        <div class="text-source-panel guaxi-reader-scrollbar" v-show="viewMode !== 'full-right'">
           <div class="text-source-container">
-            <div ref="textPreviewContainer" class="text-preview-container" @mouseup="handleSelectionMouseUp"></div>
+            <div
+              ref="textPreviewContainer"
+              class="text-preview-container guaxi-reader-scrollbar"
+              @mouseenter="setScrollTargetFromEvent"
+              @mouseup="handleSelectionMouseUp"
+            ></div>
             <!-- 加载状态 -->
             <div v-if="isLoading" class="text-loading-message">
               正在加载文本文件...
@@ -98,7 +103,7 @@
       <div class="resize-handle" v-show="viewMode === 'split'" @mousedown="startResize"></div>
 
       <!-- 右侧Markdown内容 -->
-      <div class="markdown-panel" ref="markdownPanel" v-show="viewMode !== 'full-left'" @click="handleMarkdownClickAlt" @dblclick="handleMarkdownClick"
+      <div class="markdown-panel guaxi-reader-scrollbar" ref="markdownPanel" v-show="viewMode !== 'full-left'" @click="handleMarkdownClickAlt" @dblclick="handleMarkdownClick"
         @mousemove="handleMarkdownHover" @mouseleave="handleMarkdownLeave" @mouseenter="setScrollTargetFromEvent"
         @mouseup="handleSelectionMouseUp">
         <div class="markdown-content" ref="markdownContainer">
@@ -217,7 +222,7 @@
           <n-icon :component="CloseOutline" size="18" />
         </button>
       </div>
-      <div class="notes-content" @mouseenter="setScrollTargetFromEvent">
+      <div class="notes-content guaxi-reader-scrollbar" @mouseenter="setScrollTargetFromEvent">
         <n-card v-for="(card, index) in noteCards" :key="card.id" class="note-card" size="small" :title="card.title"
           :bordered="true" :segmented="{
             content: true,
@@ -293,6 +298,7 @@
 <script setup>
 import { createLogger } from '../../utils/logger'
 import { ref, computed, watchEffect, onMounted, onBeforeUnmount, watch, nextTick, h } from 'vue'
+import { markReaderScrollbarActive } from './readerScrollbar'
 import { invoke } from '@tauri-apps/api/core'
 import { join, dirname } from '@tauri-apps/api/path'
 import { convertFileSrc } from '@tauri-apps/api/core';
@@ -405,10 +411,21 @@ const handleAnyScroll = (e) => {
   const t = e.target
   if (t === document) {
     const se = document.scrollingElement
-    if (se) lastScrollTarget.value = se
+    if (se) {
+      markReaderScrollbarActive(se)
+      lastScrollTarget.value = se
+    }
     return
   }
   if (t && t instanceof HTMLElement && isScrollableElement(t)) {
+    if (lastScrollTarget.value !== t) {
+      logger.debug('[ReaderScrollbar] active scroll target changed', {
+        className: t.className,
+        scrollHeight: t.scrollHeight,
+        clientHeight: t.clientHeight
+      })
+    }
+    markReaderScrollbarActive(t)
     lastScrollTarget.value = t
   }
 }
@@ -512,6 +529,8 @@ onMounted(() => {
   nextTick(() => {
     if (lastScrollTarget.value) return
     const defaultTarget =
+      textPreviewContainer.value ||
+      document.querySelector('.text-preview-container') ||
       document.querySelector('.markdown-panel') ||
       document.querySelector('.notes-content') ||
       document.scrollingElement
@@ -904,46 +923,6 @@ const altKeyCollector = ref({
   timer: null
 })
 
-// 添加行号功能
-const addLineNumbers = () => {
-  if (!textPreviewContainer.value) return;
-
-  const preElement = textPreviewContainer.value.querySelector('pre');
-  if (!preElement) return;
-
-  const lineCount = preElement.innerHTML.split('<br>').length;
-  let lineNumbersHtml = '<div class="line-numbers">';
-
-  for (let i = 1; i <= lineCount; i++) {
-    lineNumbersHtml += `<span class="line-number">${i}</span><br>`;
-  }
-
-  lineNumbersHtml += '</div>';
-
-  // 创建行号容器
-  const lineNumbersContainer = document.createElement('div');
-  lineNumbersContainer.className = 'line-numbers-container';
-  lineNumbersContainer.innerHTML = lineNumbersHtml;
-  lineNumbersContainer.style.cssText = `
-    position: absolute;
-    left: 0;
-    top: 0;
-    padding: 20px 10px 20px 20px;
-    text-align: right;
-    color: #999;
-    background: #f0f0f0;
-    border-right: 1px solid #ddd;
-    user-select: none;
-  `;
-
-  // 更新pre元素的样式以留出行号空间
-  preElement.style.paddingLeft = '60px';
-  preElement.style.position = 'relative';
-
-  // 将行号容器添加到pre元素中
-  preElement.prepend(lineNumbersContainer);
-};
-
 // 高亮特殊行（如TODO、NOTE等）
 const highlightSpecialLines = () => {
   if (!textPreviewContainer.value) return;
@@ -952,9 +931,7 @@ const highlightSpecialLines = () => {
   if (!preElement) return;
 
   const lines = preElement.innerHTML.split('<br>');
-  let highlightedHtml = '';
-
-  lines.forEach(line => {
+  const highlightedLines = lines.map(line => {
     let processedLine = line;
 
     // 高亮TODO注释
@@ -970,10 +947,11 @@ const highlightSpecialLines = () => {
       processedLine = `<span style="color: #f39c12; font-weight: bold;">${line}</span>`;
     }
 
-    highlightedHtml += processedLine + '<br>';
+    return processedLine;
   });
 
-  preElement.innerHTML = highlightedHtml;
+  // 设计说明：保留原始换行结构，但不再额外追加结尾 <br>，避免 TXT 底部出现滚动/分页错位。
+  preElement.innerHTML = highlightedLines.join('<br>');
 };
 
 // 计算总页数（基于滚动高度）
@@ -990,6 +968,12 @@ const calculateTotalPages = async () => {
   const viewportHeight = container.clientHeight;
 
   totalPages.value = Math.max(1, Math.ceil(contentHeight / viewportHeight));
+  logger.debug('[TextReader] scroll metrics recalculated', {
+    scrollHeight: contentHeight,
+    clientHeight: viewportHeight,
+    canScrollY: contentHeight > viewportHeight,
+    totalPages: totalPages.value
+  });
 };
 
 const loadWithTextPreview = async () => {
@@ -1012,26 +996,19 @@ const loadWithTextPreview = async () => {
       // 将连续空格转换为&nbsp;
       .replace(/ {2}/g, ' &nbsp;');
 
-    // 创建完整的HTML结构
-    const htmlContent = `
-      <div class="text-preview-content">
-        <pre style="
-          font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
-          font-size: 16px;
-          line-height: 1.6;
-          white-space: pre-wrap;
-          word-wrap: break-word;
-          padding: 0px;
-        ">${processedContent}</pre>
-      </div>
-    `;
+    // 创建完整的HTML结构。这里保持紧凑字符串，避免模板缩进被误放进 <pre> 前后形成视觉空白。
+    const htmlContent = `<div class="text-preview-content"><pre style="font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; font-size: 16px; line-height: 1.6; white-space: pre-wrap; word-wrap: break-word; padding: 0px;">${processedContent}</pre></div>`;
 
     // 设置容器内容
     if (textPreviewContainer.value) {
       textPreviewContainer.value.innerHTML = htmlContent;
 
-      // 添加行号功能
-      addLineNumbers();
+      // 设计说明：TXT 原文区取消行号列，避免动态 prepend 的行号层与自动折行、缩放和滚动容器产生错位。
+      logger.debug('[TextReader] plain text preview mounted without line numbers', {
+        length: String(textContent || '').length,
+        scrollHeight: textPreviewContainer.value.scrollHeight,
+        clientHeight: textPreviewContainer.value.clientHeight
+      });
 
       // 添加语法高亮（简单实现）
       highlightSpecialLines();
@@ -3453,18 +3430,34 @@ watchEffect((onInvalidate) => {
 .text-source-panel {
   flex: 1 1 auto;
   min-width: 0;
+  min-height: 0;
   height: 100%;
-  overflow: auto;
+  overflow: hidden;
   position: relative;
-  background-color: white;
+  background-color: var(--guaxi-content-bg);
+  color: var(--guaxi-text-primary);
+}
+
+.text-source-container {
+  /* 设计说明：TXT 左侧滚动必须由 .text-preview-container 承担。
+     这里补齐父级高度链，避免子级 height: 100% 退化成随内容撑高，从而失去垂直滚动。 */
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
 }
 
 .text-preview-container {
   width: 100%;
   height: 100%;
+  min-height: 0;
   overflow: auto;
-  padding: 20px;
-  background: white;
+  padding: 12px;
+  box-sizing: border-box;
+  background: var(--guaxi-content-bg);
+  color: var(--guaxi-text-primary);
 }
 
 .text-preview-container :deep(.docx) {
@@ -3487,14 +3480,17 @@ watchEffect((onInvalidate) => {
 }
 
 .text-preview-content {
+  display: block;
+  box-sizing: border-box;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
   font-size: 14px;
   line-height: 1.6;
-  color: var(--n-text-color);
-  background-color: var(--n-color);
-  padding: 16px;
+  color: var(--guaxi-text-primary);
+  background-color: var(--guaxi-content-bg);
+  padding: 0 0 28px;
   white-space: pre-wrap;
   word-wrap: break-word;
+  overflow-wrap: anywhere;
   border-radius: 4px;
 }
 
@@ -3508,6 +3504,7 @@ watchEffect((onInvalidate) => {
   background-color: transparent;
   white-space: pre-wrap;
   word-wrap: break-word;
+  overflow-wrap: anywhere;
 }
 
 .error-message {

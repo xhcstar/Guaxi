@@ -82,9 +82,9 @@
         </div>
 
         <!-- 左侧Word文档预览区域 -->
-        <div class="word-source-panel" v-show="viewMode !== 'full-right'">
+        <div class="word-source-panel guaxi-reader-scrollbar" v-show="viewMode !== 'full-right'">
           <div class="word-source-container">
-            <div ref="wordPreviewContainer" class="word-preview-container" @mouseup="handleSelectionMouseUp"></div>
+            <div ref="wordPreviewContainer" class="word-preview-container guaxi-reader-scrollbar" @mouseup="handleSelectionMouseUp"></div>
             <!-- 加载状态 -->
             <div v-if="isLoading" class="word-loading-message">
               正在加载Word文件...
@@ -97,7 +97,7 @@
       <div class="resize-handle" v-show="viewMode === 'split'" @mousedown="startResize"></div>
 
       <!-- 右侧Markdown内容 -->
-      <div ref="markdownPanel" class="markdown-panel" v-show="viewMode !== 'full-left'" @click="handleMarkdownClickAlt" @dblclick="handleMarkdownClick"
+      <div ref="markdownPanel" class="markdown-panel guaxi-reader-scrollbar" v-show="viewMode !== 'full-left'" @click="handleMarkdownClickAlt" @dblclick="handleMarkdownClick"
         @mousemove="handleMarkdownHover" @mouseleave="handleMarkdownLeave" @mouseenter="setScrollTargetFromEvent"
         @mouseup="handleSelectionMouseUp">
         <div class="markdown-content" ref="markdownContainer">
@@ -215,7 +215,7 @@
           <n-icon :component="CloseOutline" size="18" />
         </button>
       </div>
-      <div class="notes-content" @mouseenter="setScrollTargetFromEvent">
+      <div class="notes-content guaxi-reader-scrollbar" @mouseenter="setScrollTargetFromEvent">
         <n-card v-for="(card, index) in noteCards" :key="card.id" class="note-card" size="small" :title="card.title"
           :bordered="true" :segmented="{
             content: true,
@@ -291,6 +291,7 @@
 <script setup>
 import { createLogger } from '../../utils/logger'
 import { ref, computed, watchEffect, onMounted, onBeforeUnmount, watch, nextTick, h } from 'vue'
+import { markReaderScrollbarActive } from './readerScrollbar'
 import { invoke } from '@tauri-apps/api/core'
 import { renderAsync } from 'docx-preview'
 import { join, dirname } from '@tauri-apps/api/path'
@@ -404,10 +405,21 @@ const handleAnyScroll = (e) => {
   const t = e.target
   if (t === document) {
     const se = document.scrollingElement
-    if (se) lastScrollTarget.value = se
+    if (se) {
+      markReaderScrollbarActive(se)
+      lastScrollTarget.value = se
+    }
     return
   }
   if (t && t instanceof HTMLElement && isScrollableElement(t)) {
+    if (lastScrollTarget.value !== t) {
+      logger.debug('[ReaderScrollbar] active scroll target changed', {
+        className: t.className,
+        scrollHeight: t.scrollHeight,
+        clientHeight: t.clientHeight
+      })
+    }
+    markReaderScrollbarActive(t)
     lastScrollTarget.value = t
   }
 }
@@ -3298,9 +3310,20 @@ watchEffect((onInvalidate) => {
   flex: 1 1 auto;
   min-width: 0;
   height: 100%;
-  overflow: auto;
+  overflow: hidden;
   position: relative;
-  background-color: white;
+  /* 设计说明：Word 原文预览模拟纸张阅读，按需求始终保持亮色，不跟随应用暗色主题。 */
+  background-color: #ffffff;
+  color: #1f2328;
+}
+
+.word-source-container {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+  background-color: #ffffff;
+  color: #1f2328;
 }
 
 .word-preview-container {
@@ -3308,7 +3331,9 @@ watchEffect((onInvalidate) => {
   height: 100%;
   overflow: auto;
   padding: 20px;
-  background: white;
+  box-sizing: border-box;
+  background: #ffffff;
+  color: #1f2328;
 }
 
 .word-preview-container :deep(.docx > *) {
@@ -3317,6 +3342,13 @@ watchEffect((onInvalidate) => {
   padding: 0;
   margin: 0;
   box-shadow: none;
+}
+
+.word-preview-container :deep(.docx),
+.word-preview-container :deep(.docx-wrapper),
+.word-preview-container :deep(page) {
+  background: #ffffff !important;
+  color: #1f2328;
 }
 
 .composite-note-editor {
