@@ -273,6 +273,9 @@ import { ref, reactive, computed, nextTick, watch, onMounted, onBeforeUnmount } 
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { parseTaskBlocks, validateTaskBlocks, serializeBlock, STATUS_LABELS } from '../../utils/guaxiTaskParser'
 import { renderMiniMarkdown } from '../../utils/guaxiMiniMarkdown'
+import { createLogger } from '../../utils/logger'
+
+const logger = createLogger('GuaxiOrgTaskPreview')
 
 const props = defineProps({
   content: { type: String, default: '' },
@@ -542,6 +545,41 @@ const onPickCreateTime = (e) => {
 const bodyRef = ref(null)
 const cardRefs = new Map()
 const registerCardRef = (line, el) => { if (el) cardRefs.set(line, el) }
+
+// 设计说明：
+// 1. .org 任务预览的真实滚动容器是 .otp-body，而不是组件根节点。
+// 2. 父组件在切换 tab 前后只需要一个稳定的“阅读比例”，因此这里暴露 scrollRatio/restoreScroll，
+//    避免父组件依赖内部 DOM 结构，也不会影响现有的 goto-line、搜索和卡片编辑交互。
+const clampScrollRatio = (value) => {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return 0
+  return Math.min(1, Math.max(0, n))
+}
+const scrollRatio = () => {
+  const el = bodyRef.value
+  if (!el) return 0
+  const scrollableHeight = Math.max(0, el.scrollHeight - el.clientHeight)
+  return scrollableHeight > 0 ? clampScrollRatio(el.scrollTop / scrollableHeight) : 0
+}
+const restoreScroll = (ratio) => {
+  const el = bodyRef.value
+  if (!el) {
+    logger.debug('[PreviewReadPosition] skip org restore because body is not ready')
+    return false
+  }
+  const safeRatio = clampScrollRatio(ratio)
+  const scrollableHeight = Math.max(0, el.scrollHeight - el.clientHeight)
+  el.scrollTop = safeRatio * scrollableHeight
+  logger.debug('[PreviewReadPosition] restored org body scroll', {
+    ratio: +safeRatio.toFixed(4),
+    scrollTop: Math.round(el.scrollTop || 0),
+    scrollHeight: el.scrollHeight,
+    clientHeight: el.clientHeight,
+  })
+  return true
+}
+defineExpose({ scrollRatio, restoreScroll })
+
 watch(() => props.activeBlockLine, async (line) => {
   if (!line) return
   await nextTick()

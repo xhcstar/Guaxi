@@ -720,6 +720,7 @@
         </div>
         <div class="preview" ref="previewContainer" @click="handlePreviewClick"
           @wheel="handlePreviewWheelZoom"
+          @scroll.passive="handleMarkdownPreviewScroll"
           @mouseup="handlePreviewSelectionMouseUp">
           <!-- 缩放层（Q5）：用 CSS zoom 缩放整段内容（文字+图片+表格等），zoom 会重排，
                不像 transform:scale 破坏换行/滚动；缩放层放在滚动容器内部，避免缩放滚动容器自身导致 flex 溢出。 -->
@@ -1058,11 +1059,13 @@
         :title-label="pdfPreviewLabel"
         @rebuild="buildLatexPreview"
         @export="handleLatexExport"
+        @ready="handleLatexPreviewReady"
         @reverse-jump="handlePreviewReverseJump"
       />
 
       <GuaxiOrgTaskPreview
         v-if="isOrgTaskFile && orgPreviewVisible"
+        ref="orgPreviewRef"
         class="latex-preview-pane"
         :style="previewPaneStyle"
         :content="orgPreviewContent"
@@ -1630,6 +1633,7 @@ const editorSurfaceMode = ref('source')
 const layoutMode = computed(() => fileTreeStore.layoutMode || 'single');
 const renderedHtml = ref('');
 const lastPreviewRenderedSource = ref('');
+const lastPreviewRenderedPath = ref('');
 const previewSegmentRenderCache = new Map()
 const previewFullRenderCache = new Map()
 const previewFileCardMetaCache = new Map()
@@ -2387,6 +2391,11 @@ let lastTableToolbarInsertAt = 0;
 const scrollRatio = ref(0);
 const pendingPreviewScrollRestore = ref(false);
 const pendingPreviewScrollLine = ref(null);
+const PREVIEW_READ_POSITION_CACHE_LIMIT = 160;
+const previewReadPositionCache = new Map();
+let markdownPreviewScrollSaveTimer = null;
+let pendingPreviewReadPositionRestoreKey = '';
+let suppressPreviewReadPositionSave = false;
 const pendingRealtimeScrollRestore = ref(false);
 const realtimeVditorId = 'realtime-vditor';
 const realtimeVditorReady = ref(false);
@@ -2398,6 +2407,369 @@ let realtimeVditorLinkInterceptorCleanup = null;
 const REALTIME_VDITOR_INIT_TIMEOUT_MS = 12000
 const PRIMARY_EDITOR_VSCODE_MODEL_OWNER = 'guaxi-editor-primary'
 const SECONDARY_EDITOR_VSCODE_MODEL_OWNER = 'guaxi-editor-secondary'
+
+const normalizePreviewReadPath = (path) => String(path || '').replace(/\\/g, '/').trim();
+const getPreviewReadKindForPath = (path) => {
+  const p = normalizePreviewReadPath(path).toLowerCase();
+  if (/\.(tex|typ)$/.test(p)) return 'pdf';
+  if (/\.(md|markdown)$/.test(p)) return 'markdown';
+  if (/\.org$/.test(p)) return 'org';
+  return '';
+};
+const cancelMarkdownPreviewScrollSaveTimer = (reason = 'unknown') => {
+  if (!markdownPreviewScrollSaveTimer) return;
+  window.clearTimeout(markdownPreviewScrollSaveTimer);
+  markdownPreviewScrollSaveTimer = null;
+  logger.debug('[PreviewReadPosition] cancelled pending markdown scroll save', { reason });
+};
+const getPreviewReadPositionKey = (path, kind = getPreviewReadKindForPath(path)) => {
+  const normalizedPath = normalizePreviewReadPath(path);
+  return normalizedPath && kind ? `${kind}:${normalizedPath}` : '';
+};
+const rememberPreviewReadPosition = (entry) => {
+  const key = getPreviewReadPositionKey(entry?.path, entry?.kind);
+  if (!key) return;
+
+  previewReadPositionCache.delete(key);
+  previewReadPositionCache.set(key, {
+    ...entry,
+    key,
+    savedAt: Date.now(),
+  });
+
+  while (previewReadPositionCache.size > PREVIEW_READ_POSITION_CACHE_LIMIT) {
+    const oldestKey = previewReadPositionCache.keys().next().value;
+    if (!oldestKey) break;
+    previewReadPositionCache.delete(oldestKey);
+  }
+};
+
+const captureMarkdownPreviewReadPosition = (path, reason = 'unknown') => {
+  const normalizedPath = normalizePreviewReadPath(path || selectedFile.value?.path || fileTreeStore.activeTab);
+  const container = previewContainer.value;
+  if (!normalizedPath || !(container instanceof HTMLElement)) return false;
+  const renderedPath = normalizePreviewReadPath(lastPreviewRenderedPath.value);
+  if (renderedPath && renderedPath !== normalizedPath) {
+    logger.debug('[PreviewReadPosition] skip markdown save because rendered file changed', {
+      reason,
+      path: normalizedPath,
+      renderedPath,
+    });
+    return false;
+  }
+  if (!renderedPath && !renderedHtml.value) {
+    logger.debug('[PreviewReadPosition] skip markdown save because preview html is empty', {
+      reason,
+      path: normalizedPath,
+    });
+    return false;
+  }
+
+  const scrollableHeight = Math.max(0, container.scrollHeight - container.clientHeight);
+  const scrollTop = Math.max(0, container.scrollTop || 0);
+  const loc = getCurrentPreviewLocation?.() || null;
+
+  // 设计说明：
+  // 1. scrollTop 用于同一渲染高度下精确恢复，scrollRatio 用于窗口大小/图片加载后高度变化时兜底。
+  // 2. lineNumber 只作为调试和后续兜底信息保存，不主动改写现有“点击大纲跳转”的行为。
+  rememberPreviewReadPosition({
+    kind: 'markdown',
+    path: normalizedPath,
+    scrollTop,
+    scrollRatio: scrollableHeight > 0 ? scrollTop / scrollableHeight : 0,
+    lineNumber: Number(loc?.lineNumber || 1),
+    scrollHeight: container.scrollHeight,
+    clientHeight: container.clientHeight,
+  });
+
+  logger.debug('[PreviewReadPosition] saved markdown position', {
+    reason,
+    path: normalizedPath,
+    scrollTop: Math.round(scrollTop),
+    ratio: scrollableHeight > 0 ? +(scrollTop / scrollableHeight).toFixed(4) : 0,
+  });
+  return true;
+};
+
+const captureOrgPreviewReadPosition = (path, reason = 'unknown') => {
+  const normalizedPath = normalizePreviewReadPath(path || selectedFile.value?.path || fileTreeStore.activeTab);
+  const viewer = orgPreviewRef.value;
+  if (!normalizedPath || !viewer?.scrollRatio) return false;
+
+  const ratio = Number(viewer.scrollRatio());
+  rememberPreviewReadPosition({
+    kind: 'org',
+    path: normalizedPath,
+    scrollRatio: Number.isFinite(ratio) ? ratio : 0,
+  });
+
+  logger.debug('[PreviewReadPosition] saved org position', {
+    reason,
+    path: normalizedPath,
+    ratio: Number.isFinite(ratio) ? +ratio.toFixed(4) : 0,
+  });
+  return true;
+};
+
+const capturePdfPreviewReadPosition = (path, reason = 'unknown') => {
+  const normalizedPath = normalizePreviewReadPath(path || selectedFile.value?.path || fileTreeStore.activeTab);
+  const viewer = latexPreviewRef.value;
+  if (!normalizedPath || !viewer?.scrollRatio) return false;
+
+  const ratio = Number(viewer.scrollRatio());
+  rememberPreviewReadPosition({
+    kind: 'pdf',
+    path: normalizedPath,
+    scrollRatio: Number.isFinite(ratio) ? ratio : 0,
+  });
+
+  logger.debug('[PreviewReadPosition] saved pdf position', {
+    reason,
+    path: normalizedPath,
+    ratio: Number.isFinite(ratio) ? +ratio.toFixed(4) : 0,
+  });
+  return true;
+};
+
+const saveActivePreviewReadPosition = (reason = 'unknown', pathOverride = '') => {
+  if (suppressPreviewReadPositionSave) return false;
+  const path = normalizePreviewReadPath(pathOverride || selectedFile.value?.path || fileTreeStore.activeTab || lastSelectedFilePath.value);
+  const kind = getPreviewReadKindForPath(path);
+  if (kind === 'markdown') return captureMarkdownPreviewReadPosition(path, reason);
+  if (kind === 'pdf') return capturePdfPreviewReadPosition(path, reason);
+  if (kind === 'org') return captureOrgPreviewReadPosition(path, reason);
+  return false;
+};
+
+const queuePreviewReadPositionRestore = (path, kind = getPreviewReadKindForPath(path), reason = 'unknown') => {
+  const key = getPreviewReadPositionKey(path, kind);
+  if (!key || !previewReadPositionCache.has(key)) return false;
+  pendingPreviewReadPositionRestoreKey = key;
+  logger.debug('[PreviewReadPosition] queued restore', { reason, key });
+  return true;
+};
+
+const queueCurrentPreviewReadPositionRestore = (kind = '', reason = 'unknown') => {
+  const path = selectedFile.value?.path || fileTreeStore.activeTab || '';
+  return queuePreviewReadPositionRestore(path, kind || getPreviewReadKindForPath(path), reason);
+};
+
+const restoreMarkdownPreviewReadPosition = async (path, reason = 'unknown') => {
+  const key = getPreviewReadPositionKey(path, 'markdown');
+  const entry = key ? previewReadPositionCache.get(key) : null;
+  const container = previewContainer.value;
+  if (!entry || !(container instanceof HTMLElement)) return false;
+
+  suppressPreviewReadPositionSave = true;
+  try {
+    await nextTick();
+    await new Promise((resolve) => window.requestAnimationFrame(resolve));
+
+    const maxTop = Math.max(0, container.scrollHeight - container.clientHeight);
+    const storedTop = Number(entry.scrollTop);
+    const storedRatio = Number(entry.scrollRatio);
+    let nextTop = Number.isFinite(storedTop) ? storedTop : 0;
+    if (nextTop > maxTop && Number.isFinite(storedRatio)) {
+      nextTop = storedRatio * maxTop;
+    }
+    container.scrollTop = Math.min(Math.max(0, nextTop), maxTop);
+
+    logger.info('[PreviewReadPosition] restored markdown position', {
+      reason,
+      path: normalizePreviewReadPath(path),
+      scrollTop: Math.round(container.scrollTop),
+      ratio: Number.isFinite(storedRatio) ? +storedRatio.toFixed(4) : 0,
+    });
+    return true;
+  } finally {
+    window.setTimeout(() => {
+      suppressPreviewReadPositionSave = false;
+    }, 0);
+  }
+};
+
+const restorePdfPreviewReadPosition = async (path, reason = 'unknown') => {
+  const key = getPreviewReadPositionKey(path, 'pdf');
+  const entry = key ? previewReadPositionCache.get(key) : null;
+  const viewer = latexPreviewRef.value;
+  if (!entry || !viewer?.restoreScroll) return false;
+
+  suppressPreviewReadPositionSave = true;
+  try {
+    await nextTick();
+    await new Promise((resolve) => window.requestAnimationFrame(resolve));
+    const ratio = Number(entry.scrollRatio);
+    viewer.restoreScroll(Number.isFinite(ratio) ? ratio : 0);
+    logger.info('[PreviewReadPosition] restored pdf position', {
+      reason,
+      path: normalizePreviewReadPath(path),
+      ratio: Number.isFinite(ratio) ? +ratio.toFixed(4) : 0,
+    });
+    return true;
+  } finally {
+    window.setTimeout(() => {
+      suppressPreviewReadPositionSave = false;
+    }, 0);
+  }
+};
+
+const restoreOrgPreviewReadPosition = async (path, reason = 'unknown') => {
+  const key = getPreviewReadPositionKey(path, 'org');
+  const entry = key ? previewReadPositionCache.get(key) : null;
+  const viewer = orgPreviewRef.value;
+  if (!entry || !viewer?.restoreScroll) return false;
+
+  suppressPreviewReadPositionSave = true;
+  try {
+    await nextTick();
+    await new Promise((resolve) => window.requestAnimationFrame(resolve));
+    const ratio = Number(entry.scrollRatio);
+    viewer.restoreScroll(Number.isFinite(ratio) ? ratio : 0);
+    logger.info('[PreviewReadPosition] restored org position', {
+      reason,
+      path: normalizePreviewReadPath(path),
+      ratio: Number.isFinite(ratio) ? +ratio.toFixed(4) : 0,
+    });
+    return true;
+  } finally {
+    window.setTimeout(() => {
+      suppressPreviewReadPositionSave = false;
+    }, 0);
+  }
+};
+
+const restoreQueuedPreviewReadPosition = async (kind, path, reason = 'unknown') => {
+  const key = getPreviewReadPositionKey(path, kind);
+  if (!key || pendingPreviewReadPositionRestoreKey !== key) return false;
+  pendingPreviewReadPositionRestoreKey = '';
+  if (kind === 'markdown') return restoreMarkdownPreviewReadPosition(path, reason);
+  if (kind === 'pdf') return restorePdfPreviewReadPosition(path, reason);
+  if (kind === 'org') return restoreOrgPreviewReadPosition(path, reason);
+  return false;
+};
+
+const handleMarkdownPreviewScroll = () => {
+  if (suppressPreviewReadPositionSave) return;
+  const pathSnapshot = normalizePreviewReadPath(selectedFile.value?.path || fileTreeStore.activeTab || lastPreviewRenderedPath.value);
+  cancelMarkdownPreviewScrollSaveTimer('markdown-scroll-rescheduled');
+  markdownPreviewScrollSaveTimer = window.setTimeout(() => {
+    markdownPreviewScrollSaveTimer = null;
+    const currentPath = normalizePreviewReadPath(selectedFile.value?.path || fileTreeStore.activeTab || '');
+    const renderedPath = normalizePreviewReadPath(lastPreviewRenderedPath.value);
+    if (!pathSnapshot || (currentPath && currentPath !== pathSnapshot) || (renderedPath && renderedPath !== pathSnapshot)) {
+      logger.debug('[PreviewReadPosition] skip delayed markdown save because active file changed', {
+        pathSnapshot,
+        currentPath,
+        renderedPath,
+      });
+      return;
+    }
+    saveActivePreviewReadPosition('markdown-scroll', pathSnapshot);
+  }, 180);
+};
+
+const EDITOR_READ_POSITION_CACHE_LIMIT = 160;
+const editorReadPositionCache = new Map();
+
+const rememberEditorReadPosition = (entry) => {
+  const path = normalizePreviewReadPath(entry?.path);
+  if (!path) return;
+
+  editorReadPositionCache.delete(path);
+  editorReadPositionCache.set(path, {
+    ...entry,
+    path,
+    savedAt: Date.now(),
+  });
+
+  while (editorReadPositionCache.size > EDITOR_READ_POSITION_CACHE_LIMIT) {
+    const oldestKey = editorReadPositionCache.keys().next().value;
+    if (!oldestKey) break;
+    editorReadPositionCache.delete(oldestKey);
+  }
+};
+
+const captureEditorReadPosition = (path, targetEditor = getActiveEditor?.(), reason = 'unknown') => {
+  const normalizedPath = normalizePreviewReadPath(path || getEditorBoundTabPath?.(targetEditor) || selectedFile.value?.path || fileTreeStore.activeTab);
+  if (!normalizedPath || !targetEditor?.getModel) return false;
+
+  const model = targetEditor.getModel();
+  if (!model) return false;
+
+  // 设计说明：
+  // 1. 编辑模式的“阅读位置”不只是 scrollTop，还包含光标、选区和水平滚动。
+  // 2. Monaco 原生 viewState 已覆盖这些信息，按文件路径缓存后，切 tab 时可以无侵入恢复原编辑视角。
+  const viewState = typeof targetEditor.saveViewState === 'function' ? targetEditor.saveViewState() : null;
+  const position = targetEditor.getPosition?.() || null;
+  rememberEditorReadPosition({
+    path: normalizedPath,
+    viewState,
+    scrollTop: Number(targetEditor.getScrollTop?.() || 0),
+    scrollLeft: Number(targetEditor.getScrollLeft?.() || 0),
+    position: position
+      ? { lineNumber: Number(position.lineNumber || 1), column: Number(position.column || 1) }
+      : null,
+  });
+
+  logger.debug('[EditorReadPosition] saved editor position', {
+    reason,
+    path: normalizedPath,
+    scrollTop: Math.round(Number(targetEditor.getScrollTop?.() || 0)),
+    lineNumber: Number(position?.lineNumber || 0),
+  });
+  return true;
+};
+
+const restoreEditorReadPosition = async (path, targetEditor = getActiveEditor?.(), reason = 'unknown') => {
+  const normalizedPath = normalizePreviewReadPath(path || selectedFile.value?.path || fileTreeStore.activeTab);
+  const entry = normalizedPath ? editorReadPositionCache.get(normalizedPath) : null;
+  if (!entry || !targetEditor?.getModel) return false;
+
+  await nextTick();
+  await new Promise((resolve) => window.requestAnimationFrame(resolve));
+
+  const boundPath = normalizePreviewReadPath(getEditorBoundTabPath?.(targetEditor) || normalizedPath);
+  if (boundPath && boundPath !== normalizedPath) {
+    logger.debug('[EditorReadPosition] skip restore because editor is bound to another file', {
+      reason,
+      path: normalizedPath,
+      boundPath,
+    });
+    return false;
+  }
+
+  const model = targetEditor.getModel();
+  if (!model) return false;
+
+  if (entry.viewState && typeof targetEditor.restoreViewState === 'function') {
+    targetEditor.restoreViewState(entry.viewState);
+  } else {
+    const scrollTop = Number(entry.scrollTop);
+    const scrollLeft = Number(entry.scrollLeft);
+    if (Number.isFinite(scrollTop) && typeof targetEditor.setScrollTop === 'function') {
+      targetEditor.setScrollTop(Math.max(0, scrollTop));
+    }
+    if (Number.isFinite(scrollLeft) && typeof targetEditor.setScrollLeft === 'function') {
+      targetEditor.setScrollLeft(Math.max(0, scrollLeft));
+    }
+    const pos = entry.position;
+    if (pos && typeof targetEditor.setPosition === 'function') {
+      targetEditor.setPosition({
+        lineNumber: Math.min(Math.max(1, Number(pos.lineNumber || 1)), model.getLineCount?.() || Number(pos.lineNumber || 1)),
+        column: Math.max(1, Number(pos.column || 1)),
+      });
+    }
+  }
+
+  targetEditor.render?.();
+  logger.info('[EditorReadPosition] restored editor position', {
+    reason,
+    path: normalizedPath,
+    scrollTop: Math.round(Number(targetEditor.getScrollTop?.() || 0)),
+    lineNumber: Number(targetEditor.getPosition?.()?.lineNumber || 0),
+  });
+  return true;
+};
 
 const getMarkdownFenceVscodeModelOwner = (languageId) => {
   const key = String(languageId || '').trim().toLowerCase() || 'unknown'
@@ -18361,6 +18733,7 @@ const performPreviewRender = async (content, requestId = 0, reason = 'scheduled'
   if (!selectedFile.value || !mode.value || !content || !canPreview.value) {
     renderedHtml.value = '';
     lastPreviewRenderedSource.value = '';
+    lastPreviewRenderedPath.value = '';
     return;
   }
 
@@ -18456,6 +18829,7 @@ const performPreviewRender = async (content, requestId = 0, reason = 'scheduled'
     renderedHtml.value = enhancedHtml
 
     lastPreviewRenderedSource.value = content;
+    lastPreviewRenderedPath.value = renderFilePath;
 
   } catch (error) {
     logger.error('渲染错误:', error);
@@ -18465,6 +18839,7 @@ const performPreviewRender = async (content, requestId = 0, reason = 'scheduled'
         <button @click="retryRender">重试</button>
       </div>
     `;
+    lastPreviewRenderedPath.value = renderFilePath;
   }
 }
 
@@ -18481,13 +18856,6 @@ const renderDebounced = (content, reason = 'scheduled', context = {}) => {
   const delayMs = getPreviewRenderDelayMs()
   const filePathSnapshot = String(context?.filePath || selectedFile.value?.path || '').trim()
   const themeSnapshot = String(context?.theme || getMarkdownPreviewThemeName())
-  logger.debug('[Preview] schedule render', {
-    requestId,
-    reason,
-    delayMs,
-    path: filePathSnapshot,
-    previewMode: previewMode.value,
-  })
 
   previewRenderTimer = window.setTimeout(() => {
     previewRenderTimer = null
@@ -18730,6 +19098,11 @@ const latexPreviewSourcePath = computed(() => selectedFile.value?.path || fileTr
 // 预览组件实例引用（用于调用 forwardSync 做正向定位）
 const latexPreviewRef = ref(null)
 
+const handleLatexPreviewReady = () => {
+  const sourcePath = latexPreviewSourcePath.value || selectedFile.value?.path || fileTreeStore.activeTab || ''
+  void restoreQueuedPreviewReadPosition('pdf', sourcePath, 'pdf-ready')
+}
+
 // 反向定位：预览里点了某处 -> 跳到编辑器对应行
 const handlePreviewReverseJump = ({ line, column = 1 } = {}) => {
   if (!line) return
@@ -18799,6 +19172,7 @@ const isOrgTaskFile = computed(() => {
   return /\.org$/i.test(path)
 })
 const orgPreviewVisible = ref(false)
+const orgPreviewRef = ref(null)
 const orgPreviewContent = ref('')
 // 从文件路径推导任务分类（work/life/study）
 const orgPreviewCategory = computed(() => {
@@ -19218,19 +19592,95 @@ const handleOpenNotesFromPreview = async (notesPath) => {
 const lastSelectedFilePath = ref(null)
 let skipPreviousTabSyncOnce = false
 
+const isPreviewSurfaceRequested = () => {
+  if (previewMode.value === 'realtime') return false
+  if (previewMode.value === 'split') return true
+  return previewMode.value === 'toggle' && mode.value === 'preview'
+}
+
+const syncPreviewSurfaceForActiveFile = (reason = 'unknown') => {
+  const path = String(selectedFile.value?.path || fileTreeStore.activeTab || '').trim()
+  if (!path) {
+    latexPreviewVisible.value = false
+    orgPreviewVisible.value = false
+    renderedHtml.value = ''
+    lastPreviewRenderedPath.value = ''
+    return
+  }
+
+  if (!isPreviewSurfaceRequested()) {
+    logger.debug('[Preview] skip surface sync because preview is not requested', {
+      reason,
+      path,
+      previewMode: previewMode.value,
+      mode: mode.value,
+    })
+    return
+  }
+
+  const isMarkdownPreview = /\.(md|markdown)$/i.test(path) || canPreview.value
+  const isPdfPreview = /\.(tex|typ)$/i.test(path)
+  const isOrgPreview = /\.org$/i.test(path)
+
+  // 设计说明：
+  // 1. 预览模式下切换文件时，必须根据“新文件类型”重新激活对应预览面板，否则上一个文件的面板状态会残留。
+  // 2. PDF/Org 预览依赖 rawContent，因此这段只在 selectedFile watcher 写入 rawContent 后调用，避免第一次构建用旧内容。
+  // 3. Markdown 仍走原有 renderDebounced 链路；PDF/Org 只打开各自面板，不触碰编辑器内容和 dirty 状态。
+  if (isPdfPreview) {
+    renderedHtml.value = ''
+    lastPreviewRenderedPath.value = ''
+    orgPreviewVisible.value = false
+    latexPreviewVisible.value = true
+    queuePreviewReadPositionRestore(path, 'pdf', `${reason}:pdf`)
+    nextTick(() => buildLatexPreview())
+    logger.info('[Preview] activated PDF preview for active file', { reason, path })
+    return
+  }
+
+  if (isOrgPreview) {
+    renderedHtml.value = ''
+    lastPreviewRenderedPath.value = ''
+    latexPreviewVisible.value = false
+    latexPreviewPdfPath.value = ''
+    latexPreviewError.value = ''
+    orgPreviewVisible.value = true
+    queuePreviewReadPositionRestore(path, 'org', `${reason}:org`)
+    nextTick(async () => {
+      refreshOrgPreviewContent()
+      await restoreQueuedPreviewReadPosition('org', path, 'org-rendered')
+    })
+    logger.info('[Preview] activated org preview for active file', { reason, path })
+    return
+  }
+
+  if (isMarkdownPreview) {
+    latexPreviewVisible.value = false
+    latexPreviewPdfPath.value = ''
+    latexPreviewError.value = ''
+    orgPreviewVisible.value = false
+    queuePreviewReadPositionRestore(path, 'markdown', `${reason}:markdown`)
+    renderDebounced(rawContent.value, reason, { filePath: path })
+    logger.info('[Preview] activated markdown preview for active file', { reason, path })
+    return
+  }
+
+  latexPreviewVisible.value = false
+  latexPreviewPdfPath.value = ''
+  latexPreviewError.value = ''
+  orgPreviewVisible.value = false
+  renderedHtml.value = ''
+  lastPreviewRenderedPath.value = ''
+  logger.info('[Preview] cleared preview because file type is not previewable', { reason, path })
+}
+
 // 监听文件选择
-watch(selectedFile, async (newFile) => {
+watch(selectedFile, async (newFile, oldFile) => {
   flushPythonCellDrafts()
-  // 切到非 .tex/.typ 文件时关闭预览，避免空分屏；切到可预览文档且预览开启则重建
-  {
-    const p = newFile?.path || ''
-    if (!/\.(tex|typ)$/i.test(p)) {
-      latexPreviewVisible.value = false
-      latexPreviewPdfPath.value = ''
-      latexPreviewError.value = ''
-    } else if (latexPreviewVisible.value) {
-      nextTick(() => buildLatexPreview())
-    }
+  const previousPreviewPath = oldFile?.path || lastSelectedFilePath.value || ''
+  if (previousPreviewPath) {
+    cancelMarkdownPreviewScrollSaveTimer('selected-file-before-change')
+    saveActivePreviewReadPosition('selected-file-before-change', previousPreviewPath)
+    captureEditorReadPosition(previousPreviewPath, getActiveEditor(), 'selected-file-before-change')
   }
   if (newFile) {
     const nextPath = newFile.path || '';
@@ -19263,10 +19713,16 @@ watch(selectedFile, async (newFile) => {
       previewRenderRequestId += 1
       renderedHtml.value = ''
       lastPreviewRenderedSource.value = ''
+      lastPreviewRenderedPath.value = ''
       logger.info('[Preview] cleared stale preview state after file switch', {
         from: prevPath,
         to: nextPath,
       })
+
+      const nextPreviewKind = getPreviewReadKindForPath(nextPath)
+      if (nextPreviewKind) {
+        queuePreviewReadPositionRestore(nextPath, nextPreviewKind, 'selected-file-changed')
+      }
     }
 
     const isSameFile = !!nextPath && !!prevPath && nextPath === prevPath;
@@ -19294,6 +19750,9 @@ watch(selectedFile, async (newFile) => {
     void ensurePythonSessionInfo(newFile.path || '', 'selected-file-changed')
 
     // 更新内容
+    if (previewMode.value === 'toggle' && mode.value === 'preview' && canPreview.value) {
+      suppressPreviewAutoRenderOnce('selected-file-preview-surface-render', 900)
+    }
     rawContent.value = newFile.content || '';
 
     if (previewMode.value === 'realtime' && realtimeVditor) {
@@ -19312,8 +19771,13 @@ watch(selectedFile, async (newFile) => {
 
     updateEditorContent(rawContent.value);
     nextTick(() => {
-      syncSourceEditorContent('selected-file-changed')
+      const activeSourceEditor = getActiveEditor()
+      const modelText = activeSourceEditor?.getModel?.()?.getValue?.()
+      if (typeof modelText === 'string' && modelText !== rawContent.value) {
+        syncSourceEditorContent('selected-file-changed')
+      }
     })
+    void restoreEditorReadPosition(nextPath, getActiveEditor(), 'selected-file-changed')
 
     const targetEditor = getActiveEditor();
     if (targetEditor) {
@@ -19329,7 +19793,9 @@ watch(selectedFile, async (newFile) => {
       return
     }
 
-    if (canPreview.value && (mode.value === 'preview' || previewMode.value !== 'toggle')) {
+    if (isPreviewSurfaceRequested()) {
+      syncPreviewSurfaceForActiveFile('selected-file-changed')
+    } else if (canPreview.value && (mode.value === 'preview' || previewMode.value !== 'toggle')) {
       renderDebounced(newFile.content, 'selected-file-changed', {
         filePath: nextPath,
       })
@@ -19648,6 +20114,7 @@ const setHomePreviewModeKeySafe = (key) => {
 
 const handlePreviewModeSelect = async (key) => {
   const desiredKey = normalizeHomePreviewModeKey(key);
+  saveActivePreviewReadPosition('preview-mode-select-before-change');
   logger.info('[Editor] handlePreviewModeSelect', {
     desiredKey,
     filePath: String(selectedFile.value?.path || ''),
@@ -19698,6 +20165,7 @@ const handlePreviewModeSelect = async (key) => {
     // 退出渲染：关闭 LaTeX/Typst/Org 预览面板。
     latexPreviewVisible.value = false;
     orgPreviewVisible.value = false;
+    lastPreviewRenderedPath.value = '';
     await setMainMode('edit');
     return;
   }
@@ -19705,6 +20173,7 @@ const handlePreviewModeSelect = async (key) => {
   if (desiredKey === 'preview') {
     // Markdown：内联 HTML 全屏预览。
     if (canPreview.value) {
+      queueCurrentPreviewReadPositionRestore('markdown', 'enter-preview-mode');
       latexPreviewVisible.value = false;
       orgPreviewVisible.value = false;
       setHomePreviewModeKeySafe('preview');
@@ -19715,6 +20184,7 @@ const handlePreviewModeSelect = async (key) => {
     }
     // LaTeX/Typst：编译预览 PDF，全屏显示（编辑器隐藏）。
     if (isPdfPreviewDoc.value) {
+      queueCurrentPreviewReadPositionRestore('pdf', 'enter-preview-mode');
       setHomePreviewModeKeySafe('preview');
       editorSurfaceMode.value = 'source';
       previewMode.value = 'toggle';
@@ -19725,12 +20195,14 @@ const handlePreviewModeSelect = async (key) => {
     }
     // Org 任务：渲染任务预览，全屏显示。
     if (isOrgTaskFile.value) {
+      queueCurrentPreviewReadPositionRestore('org', 'enter-preview-mode');
       setHomePreviewModeKeySafe('preview');
       editorSurfaceMode.value = 'source';
       previewMode.value = 'toggle';
       orgPreviewVisible.value = true;
       refreshOrgPreviewContent();
       await setMainMode('preview');
+      await restoreQueuedPreviewReadPosition('org', selectedFile.value?.path || fileTreeStore.activeTab || '', 'org-preview-mode-rendered');
       return;
     }
     message.warning('当前文档不支持预览');
@@ -19743,6 +20215,7 @@ const handlePreviewModeSelect = async (key) => {
   if (desiredKey === 'split') {
     // Markdown：左右分屏（编辑器 + 内联 HTML）。
     if (canPreview.value) {
+      queueCurrentPreviewReadPositionRestore('markdown', 'enter-split-preview');
       latexPreviewVisible.value = false;
       orgPreviewVisible.value = false;
       setHomePreviewModeKeySafe('split');
@@ -19755,6 +20228,7 @@ const handlePreviewModeSelect = async (key) => {
     }
     // LaTeX/Typst：编辑器 + PDF 预览面板分屏。
     if (isPdfPreviewDoc.value) {
+      queueCurrentPreviewReadPositionRestore('pdf', 'enter-split-preview');
       setHomePreviewModeKeySafe('split');
       editorSurfaceMode.value = 'source';
       previewMode.value = 'split';
@@ -19765,12 +20239,14 @@ const handlePreviewModeSelect = async (key) => {
     }
     // Org 任务：编辑器 + 任务预览分屏。
     if (isOrgTaskFile.value) {
+      queueCurrentPreviewReadPositionRestore('org', 'enter-split-preview');
       setHomePreviewModeKeySafe('split');
       editorSurfaceMode.value = 'source';
       previewMode.value = 'split';
       orgPreviewVisible.value = true;
       refreshOrgPreviewContent();
       await setMainMode('edit');
+      await restoreQueuedPreviewReadPosition('org', selectedFile.value?.path || fileTreeStore.activeTab || '', 'org-split-preview-rendered');
       return;
     }
     message.warning('当前文档不支持预览');
@@ -19941,6 +20417,13 @@ watch(renderedHtml, () => {
       if (pendingPreviewScrollLine.value) {
         scrollPreviewToLine(pendingPreviewScrollLine.value);
         pendingPreviewScrollLine.value = null;
+      } else {
+        const renderedPath = lastPreviewRenderedPath.value || selectedFile.value?.path || fileTreeStore.activeTab || ''
+        void restoreQueuedPreviewReadPosition(
+          'markdown',
+          renderedPath,
+          'markdown-rendered',
+        );
       }
       applyPreviewSearchHighlights()
     }
@@ -20808,6 +21291,16 @@ const handleExportSelect = async (format) => {
 const switchTab = (path, region) => {
   flushPythonCellDrafts()
   const targetRegion = region || 'left';
+  const currentPreviewPath = targetRegion === fileTreeStore.activeRegion
+    ? (fileTreeStore.activeTab || selectedFile.value?.path || '')
+    : (targetRegion === 'right' ? fileTreeStore.activeTabRight : fileTreeStore.activeTabLeft);
+  cancelMarkdownPreviewScrollSaveTimer('switch-tab-before-change');
+  saveActivePreviewReadPosition('switch-tab-before-change', currentPreviewPath);
+  captureEditorReadPosition(
+    currentPreviewPath,
+    targetRegion === 'right' ? secondaryEditor : editor,
+    'switch-tab-before-change',
+  );
 
   const currentPath = targetRegion === 'right' ? fileTreeStore.activeTabRight : fileTreeStore.activeTabLeft;
   if (currentPath) {
@@ -20829,6 +21322,9 @@ const switchTab = (path, region) => {
 const closeTab = async (path, region) => {
   flushPythonCellDrafts()
   const targetRegion = region || 'left';
+  cancelMarkdownPreviewScrollSaveTimer('close-tab-before-change');
+  saveActivePreviewReadPosition('close-tab-before-change', path);
+  captureEditorReadPosition(path, targetRegion === 'right' ? secondaryEditor : editor, 'close-tab-before-change');
   const regionActivePath = targetRegion === 'right' ? fileTreeStore.activeTabRight : fileTreeStore.activeTabLeft;
   const regionEditor = targetRegion === 'right' ? secondaryEditor : editor;
 
@@ -20860,6 +21356,7 @@ const closeTab = async (path, region) => {
     const tab = fileTreeStore.openTabs.find(t => t.path === fileTreeStore.activeTab);
     if (tab) {
       updateEditorContent(tab.content);
+      void restoreEditorReadPosition(tab.path, getActiveEditor(), 'close-tab-next-active');
     }
   } else {
     fileTreeStore.setActiveTab(null);
@@ -21540,10 +22037,13 @@ onActivated(() => {
 })
 
 onUnmounted(() => {
+  saveActivePreviewReadPosition('editor-unmount')
+  captureEditorReadPosition(selectedFile.value?.path || fileTreeStore.activeTab || '', getActiveEditor(), 'editor-unmount')
   if (previewRenderTimer) {
     window.clearTimeout(previewRenderTimer)
     previewRenderTimer = null
   }
+  cancelMarkdownPreviewScrollSaveTimer('editor-unmount')
   if (latexBuildDebounceTimer) {
     clearTimeout(latexBuildDebounceTimer)
     latexBuildDebounceTimer = null

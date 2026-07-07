@@ -12,6 +12,7 @@
     :features="features"
     @export="$emit('export')"
     @rebuild="$emit('rebuild')"
+    @ready="(p) => $emit('ready', p)"
     @reverse-jump="(p) => $emit('reverse-jump', p)"
   />
 </template>
@@ -34,7 +35,7 @@ const props = defineProps({
   titleLabel: { type: String, default: 'LaTeX' },
 })
 
-defineEmits(['export', 'rebuild', 'reverse-jump'])
+defineEmits(['export', 'rebuild', 'ready', 'reverse-jump'])
 
 const viewerRef = ref(null)
 
@@ -52,6 +53,10 @@ const features = {
 const forwardSync = (payload) => viewerRef.value?.forwardSync(payload)
 // 预留给宿主的大纲/书签页码跳转能力；不改变当前正向定位链路，只把 PdfViewer 已有能力透出。
 const goToPage = (page, options) => viewerRef.value?.goToPage(page, options)
+// 设计说明：GuaxiEditor 会按源文件记住 PDF 阅读位置；这里继续转发基础阅读器的比例滚动 API，
+// 避免编辑器层需要知道 PDF 阅读器内部 DOM 结构。
+const scrollRatio = () => viewerRef.value?.scrollRatio?.() ?? 0
+const restoreScroll = (ratio) => viewerRef.value?.restoreScroll?.(ratio)
 
-defineExpose({ forwardSync, goToPage })
+defineExpose({ forwardSync, goToPage, scrollRatio, restoreScroll })
 </script>
