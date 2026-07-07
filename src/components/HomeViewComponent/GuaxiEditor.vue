@@ -1264,7 +1264,7 @@ import 'vditor/dist/js/i18n/zh_CN.js'
 import * as pdfjsLib from 'pdfjs-dist/build/pdf.mjs'
 import { debounce } from 'lodash-es'
 import * as monaco from 'monaco-editor'
-import { initVimMode } from 'monaco-vim';
+import { initVimMode, VimMode } from 'monaco-vim';
 import { initTextmate } from '../../monaco/textmateLoader'
 import { GUAXI_MONACO_SEMANTIC_TOKEN_COLORS, GUAXI_MONACO_THEME_RULES } from '../../monaco/guaxiMonacoThemes'
 import { getGuaxiSyntaxClassForCapture } from '../../monaco/guaxiSyntaxTokens'
@@ -2212,7 +2212,20 @@ const writeClipboardText = async (text) => {
   try {
     await navigator.clipboard.writeText(text);
     return true;
-  } catch {
+  } catch (error) {
+    logger.debug('[Clipboard] navigator write failed, trying Tauri clipboard manager', {
+      error: String(error?.message || error || ''),
+    });
+  }
+
+  try {
+    const mod = await import('@tauri-apps/plugin-clipboard-manager');
+    await mod.writeText(String(text ?? ''));
+    return true;
+  } catch (error) {
+    logger.warn('[Clipboard] write failed', {
+      error: String(error?.message || error || ''),
+    });
     return false;
   }
 };
@@ -2220,7 +2233,19 @@ const writeClipboardText = async (text) => {
 const readClipboardText = async () => {
   try {
     return await navigator.clipboard.readText();
-  } catch {
+  } catch (error) {
+    logger.debug('[Clipboard] navigator read failed, trying Tauri clipboard manager', {
+      error: String(error?.message || error || ''),
+    });
+  }
+
+  try {
+    const mod = await import('@tauri-apps/plugin-clipboard-manager');
+    return String(await mod.readText() || '');
+  } catch (error) {
+    logger.warn('[Clipboard] read failed', {
+      error: String(error?.message || error || ''),
+    });
     return null;
   }
 };
@@ -4332,6 +4357,181 @@ const insertTableFromInputs = () => {
 const vimMode = ref(false);
 const vimStatusBar = ref(null);
 let vimModeInstance = null;
+let vimSystemClipboardBridgeRegistered = false;
+let vimClipboardRegisterSyncCleanup = null;
+
+const getVimRegisterControllerSafe = () => {
+  try {
+    return VimMode?.Vim?.getRegisterController?.() || null;
+  } catch (error) {
+    logger.debug('[VimClipboard] register controller unavailable', {
+      error: String(error?.message || error || ''),
+    });
+    return null;
+  }
+};
+
+const getVimInternalRegisterText = (registerName = '') => {
+  const controller = getVimRegisterControllerSafe();
+  const register = controller?.getRegister?.(registerName);
+  return {
+    text: String(register?.toString?.() || ''),
+    linewise: !!register?.linewise,
+    blockwise: !!register?.blockwise,
+  };
+};
+
+const syncSystemClipboardToVimRegisters = (text, { linewise = false } = {}) => {
+  const controller = getVimRegisterControllerSafe();
+  if (!controller || !text) return false;
+
+  // 设计说明：
+  // 1. monaco-vim 默认的 p/P 只读取内部 unnamed register，无法看到系统剪贴板。
+  // 2. 这里在系统剪贴板粘贴成功时同步 unnamed("+") register，后续 Vim 内部粘贴/寄存器查看也能看到同一份文本。
+  // 3. 不改 yank/delete 的寄存器写入逻辑，避免破坏 Vim 模式原有的软件内复制粘贴。
+  controller.getRegister?.('"')?.setText?.(text, linewise, false);
+  controller.getRegister?.('+')?.setText?.(text, linewise, false);
+  controller.getRegister?.('*')?.setText?.(text, linewise, false);
+  return true;
+};
+
+const getLineEndPositionAfterText = (startPosition, text) => {
+  const normalized = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const lines = normalized.split('\n');
+  if (lines.length <= 1) {
+    return {
+      lineNumber: startPosition.lineNumber,
+      column: startPosition.column + normalized.length,
+    };
+  }
+  return {
+    lineNumber: startPosition.lineNumber + lines.length - 1,
+    column: lines[lines.length - 1].length + 1,
+  };
+};
+
+const executeVimClipboardPaste = async (cm, actionArgs = {}) => {
+  const targetEditor = cm?.editor || getActiveEditor();
+  const model = targetEditor?.getModel?.();
+  if (!targetEditor || !model) return false;
+
+  const clipboardText = await readClipboardText();
+  const hasSystemClipboardText = typeof clipboardText === 'string' && clipboardText.length > 0;
+  const registerFallback = hasSystemClipboardText
+    ? { text: clipboardText, linewise: /\r?\n$/.test(clipboardText), blockwise: false }
+    : getVimInternalRegisterText(actionArgs.registerName);
+  let text = registerFallback.text;
+  if (!text) {
+    logger.debug('[VimClipboard] skip paste because both system clipboard and vim register are empty');
+    return false;
+  }
+
+  const linewise = !!registerFallback.linewise;
+  const after = !!actionArgs.after;
+  const selection = targetEditor.getSelection?.();
+  const position = targetEditor.getPosition?.();
+  if (!selection || !position) return false;
+
+  if (hasSystemClipboardText) {
+    syncSystemClipboardToVimRegisters(text, { linewise });
+  }
+
+  let range = selection;
+  let insertText = text;
+  if (selection.isEmpty()) {
+    if (linewise) {
+      if (!insertText.endsWith('\n')) insertText += '\n';
+      const lineNumber = position.lineNumber;
+      const lineCount = model.getLineCount();
+      if (after && lineNumber >= lineCount) {
+        range = new monaco.Range(lineNumber, model.getLineMaxColumn(lineNumber), lineNumber, model.getLineMaxColumn(lineNumber));
+        insertText = `\n${insertText.replace(/\n$/, '')}`;
+      } else {
+        const targetLine = after ? Math.min(lineCount + 1, lineNumber + 1) : lineNumber;
+        range = new monaco.Range(targetLine, 1, targetLine, 1);
+      }
+    } else {
+      const column = after
+        ? Math.min(model.getLineMaxColumn(position.lineNumber), position.column + 1)
+        : position.column;
+      range = new monaco.Range(position.lineNumber, column, position.lineNumber, column);
+    }
+  }
+
+  const startPosition = range.getStartPosition();
+  const endPosition = getLineEndPositionAfterText(startPosition, insertText);
+  targetEditor.executeEdits('vim-system-clipboard-paste', [{
+    range,
+    text: insertText,
+    forceMoveMarkers: true,
+  }], [
+    monaco.Selection.fromPositions(endPosition, endPosition),
+  ]);
+  targetEditor.focus?.();
+
+  if (cm && cm.state?.vim?.visualMode) {
+    try { VimMode?.Vim?.exitVisualMode?.(cm); } catch { /* noop */ }
+  }
+
+  logger.info('[VimClipboard] pasted text into Vim mode editor', {
+    source: hasSystemClipboardText ? 'system-clipboard' : 'vim-register',
+    length: text.length,
+    linewise,
+    after,
+  });
+  return true;
+};
+
+const registerVimSystemClipboardBridge = () => {
+  if (vimSystemClipboardBridgeRegistered) return;
+  const vimApi = VimMode?.Vim;
+  if (!vimApi?.defineAction || !vimApi?.mapCommand) {
+    logger.warn('[VimClipboard] monaco-vim API unavailable, system clipboard bridge not registered');
+    return;
+  }
+
+  vimApi.defineAction('guaxiPasteSystemClipboard', (cm, actionArgs) => {
+    void executeVimClipboardPaste(cm, actionArgs).catch((error) => {
+      logger.error('[VimClipboard] paste failed', {
+        error: String(error?.message || error || ''),
+      });
+      message.warning('Vim 粘贴失败：无法读取系统剪贴板');
+    });
+  });
+  vimApi.mapCommand('p', 'action', 'guaxiPasteSystemClipboard', { after: true, isEdit: true }, { isEdit: true });
+  vimApi.mapCommand('P', 'action', 'guaxiPasteSystemClipboard', { after: false, isEdit: true }, { isEdit: true });
+  vimSystemClipboardBridgeRegistered = true;
+  logger.info('[VimClipboard] registered system clipboard bridge for p/P');
+};
+
+const disposeVimClipboardRegisterSync = () => {
+  if (!vimClipboardRegisterSyncCleanup) return;
+  try { vimClipboardRegisterSyncCleanup(); } catch { /* noop */ }
+  vimClipboardRegisterSyncCleanup = null;
+};
+
+const installVimClipboardRegisterSync = (instance) => {
+  disposeVimClipboardRegisterSync();
+  if (!instance?.on || !instance?.off) return;
+
+  let lastSyncedText = getVimInternalRegisterText('"').text;
+  const syncUnnamedRegister = () => {
+    const { text } = getVimInternalRegisterText('"');
+    if (!text || text === lastSyncedText) return;
+    lastSyncedText = text;
+    void writeClipboardText(text).then((ok) => {
+      logger.debug('[VimClipboard] synced vim register to system clipboard', {
+        ok,
+        length: text.length,
+      });
+    });
+  };
+
+  instance.on('vim-command-done', syncUnnamedRegister);
+  vimClipboardRegisterSyncCleanup = () => {
+    instance.off('vim-command-done', syncUnnamedRegister);
+  };
+};
 
 const applyVimOverlayInsets = () => {
   const baseTop = 8;
@@ -10537,7 +10737,9 @@ const initEditor = () => {
   if (vimMode.value) {
     nextTick(() => {
       if (editor && vimStatusBar.value) {
+        registerVimSystemClipboardBridge();
         vimModeInstance = initVimMode(editor, vimStatusBar.value);
+        installVimClipboardRegisterSync(vimModeInstance);
         editor.updateOptions({
           vim: {
             enabled: true,
@@ -20462,7 +20664,9 @@ const toggleVimMode = () => {
 
     if (vimMode.value) {
       if (editor && vimStatusBar.value) {
+        registerVimSystemClipboardBridge();
         vimModeInstance = initVimMode(editor, vimStatusBar.value);
+        installVimClipboardRegisterSync(vimModeInstance);
         editor.updateOptions({
           vim: {
             enabled: true,
@@ -20477,6 +20681,7 @@ const toggleVimMode = () => {
         });
       }
     } else {
+      disposeVimClipboardRegisterSync();
       if (vimModeInstance) {
         vimModeInstance.dispose();
         vimModeInstance = null;
@@ -22135,7 +22340,9 @@ onUnmounted(() => {
   }
 
   if (vimModeInstance) {
+    disposeVimClipboardRegisterSync();
     vimModeInstance.dispose();
+    vimModeInstance = null;
   }
 
   markdownFenceCompletionModels.forEach((m) => {
