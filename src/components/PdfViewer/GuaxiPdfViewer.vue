@@ -1,5 +1,12 @@
 <template>
-  <div class="gpv" :class="`theme-${theme}`">
+  <div
+    ref="rootRef"
+    class="gpv"
+    :class="`theme-${theme}`"
+    tabindex="0"
+    @keydown="onViewerKeydown"
+    @mousedown.capture="focusViewerForKeyboard"
+  >
     <div v-if="features.toolbar !== false" class="gpv__toolbar">
       <span v-if="titleLabel" class="gpv__title">{{ titleLabel }}</span>
       <span class="gpv__status" :class="statusTone">{{ status }}</span>
@@ -13,13 +20,30 @@
           class="gpv__search-input"
           type="text"
           placeholder="在 PDF 中搜索"
-          @keydown.enter.prevent="runSearch"
+          aria-label="在 PDF 中搜索，Enter 下一个，Shift+Enter 上一个，Esc 清空"
+          title="在 PDF 中搜索（Enter 下一个，Shift+Enter 上一个，Esc 清空）"
+          @input="scheduleSearch('input')"
+          @keydown="onSearchInputKeydown"
         />
         <span v-if="searchHits.length" class="gpv__search-count">
           {{ searchActiveIdx + 1 }}/{{ searchHits.length }}
         </span>
-        <button type="button" class="gpv__btn" title="上一个匹配" :disabled="!searchHits.length" @click="prevHit">‹</button>
-        <button type="button" class="gpv__btn" title="下一个匹配" :disabled="!searchHits.length" @click="nextHit">›</button>
+        <button
+          type="button"
+          class="gpv__btn"
+          title="上一个匹配（Shift+Enter）"
+          aria-label="上一个匹配"
+          :disabled="!searchHits.length"
+          @click="prevHit"
+        >‹</button>
+        <button
+          type="button"
+          class="gpv__btn"
+          title="下一个匹配（Enter）"
+          aria-label="下一个匹配"
+          :disabled="!searchHits.length"
+          @click="nextHit"
+        >›</button>
       </div>
 
       <span class="gpv__divider" />
@@ -45,7 +69,7 @@
           v-model="pageInputValue"
           title="跳转到页码"
           aria-label="跳转到页码"
-          @keydown.enter.prevent="commitPageInput"
+          @keydown="onPageInputKeydown"
           @blur="syncPageInput"
         />
         / {{ totalPages }}
@@ -65,19 +89,20 @@
       </div>
       <span class="gpv__divider" />
 
-      <button type="button" class="gpv__btn" :disabled="zoom <= MIN_ZOOM" title="缩小" @click="zoomOut">−</button>
+      <button type="button" class="gpv__btn" :disabled="zoom <= MIN_ZOOM" title="缩小（-）" aria-label="缩小" @click="zoomOut('toolbar')">−</button>
       <span class="gpv__zoom">{{ Math.round(zoom * 100) }}%</span>
-      <button type="button" class="gpv__btn" :disabled="zoom >= MAX_ZOOM" title="放大" @click="zoomIn">＋</button>
-      <button type="button" class="gpv__btn" title="适合宽度" @click="fitWidth">⤢</button>
+      <button type="button" class="gpv__btn" :disabled="zoom >= MAX_ZOOM" title="放大（+）" aria-label="放大" @click="zoomIn('toolbar')">＋</button>
+      <button type="button" class="gpv__btn" title="适合宽度（W）" aria-label="适合宽度" @click="fitWidth">⤢</button>
       <span class="gpv__divider" />
-      <button type="button" class="gpv__btn" title="向左旋转 90°" @click="rotateLeft">↺</button>
-      <button type="button" class="gpv__btn" title="向右旋转 90°" @click="rotateRight">↻</button>
+      <button type="button" class="gpv__btn" title="向左旋转 90°（[）" aria-label="向左旋转 90°" @click="rotateLeft('toolbar')">↺</button>
+      <button type="button" class="gpv__btn" title="向右旋转 90°（]）" aria-label="向右旋转 90°" @click="rotateRight('toolbar')">↻</button>
       <button
         type="button"
         class="gpv__btn"
         :class="{ 'gpv__btn--active': panMode }"
-        title="拖动平移模式（开启后按住拖动页面；中键拖动始终可平移）"
-        @click="panMode = !panMode"
+        title="拖动平移模式（H；开启后按住拖动页面；中键拖动始终可平移）"
+        aria-label="切换拖动平移模式"
+        @click="togglePanMode('toolbar')"
       >✋</button>
       <button v-if="features.rebuild" type="button" class="gpv__btn" title="重新构建" @click="$emit('rebuild')">⟳</button>
       <button
@@ -236,8 +261,14 @@ const renderDpi = computed(() =>
 // 角度 0/90/180/270。CSS 旋转内层包裹（pageInnerStyle），外层占位按旋转后尺寸交换宽高。
 const rotation = ref(0)
 const isRotated90 = computed(() => rotation.value === 90 || rotation.value === 270)
-const rotateLeft = () => { rotation.value = (rotation.value + 270) % 360 }
-const rotateRight = () => { rotation.value = (rotation.value + 90) % 360 }
+const rotateLeft = (reason = 'manual') => {
+  rotation.value = (rotation.value + 270) % 360
+  logger.info('PDF向左旋转', { reason, rotation: rotation.value })
+}
+const rotateRight = (reason = 'manual') => {
+  rotation.value = (rotation.value + 90) % 360
+  logger.info('PDF向右旋转', { reason, rotation: rotation.value })
+}
 
 const pageBoxStyle = (page) => {
   const w = Math.round(page.wPt * cssScale.value)
@@ -263,6 +294,7 @@ const doc = usePdfiumDocument()
 const { pages, totalPages, hasPdf, status, statusTone } = doc
 
 const bodyRef = ref(null)
+const rootRef = ref(null)
 const searchInputRef = ref(null)
 const currentPage = ref(1)
 const pageInputValue = ref('1')
@@ -280,31 +312,168 @@ const engineKind = computed(() => {
   return /typst/i.test(props.titleLabel) ? 'typst' : 'latex'
 })
 
-const zoomIn = () => { zoom.value = Math.min(MAX_ZOOM, +(zoom.value + 0.1).toFixed(2)) }
-const zoomOut = () => { zoom.value = Math.max(MIN_ZOOM, +(zoom.value - 0.1).toFixed(2)) }
-const setZoom = (z) => { zoom.value = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, +Number(z).toFixed(2))) }
+const zoomIn = (reason = 'manual') => {
+  zoom.value = Math.min(MAX_ZOOM, +(zoom.value + 0.1).toFixed(2))
+  logger.debug('PDF放大', { reason, zoom: zoom.value })
+}
+const zoomOut = (reason = 'manual') => {
+  zoom.value = Math.max(MIN_ZOOM, +(zoom.value - 0.1).toFixed(2))
+  logger.debug('PDF缩小', { reason, zoom: zoom.value })
+}
+const setZoom = (z, reason = 'manual') => {
+  zoom.value = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, +Number(z).toFixed(2)))
+  logger.debug('PDF缩放设置', { reason, zoom: zoom.value })
+}
 
 // Ctrl/⌘ + 滚轮缩放：阻止浏览器默认整页缩放，改为按步缩放 PDF。
 const onWheel = (ev) => {
   if (!(ev.ctrlKey || ev.metaKey)) return
   ev.preventDefault()
   const step = Math.min(0.5, 0.0015 * Math.abs(ev.deltaY) + 0.05)
-  if (ev.deltaY < 0) zoom.value = Math.min(MAX_ZOOM, +(zoom.value + step).toFixed(2))
-  else if (ev.deltaY > 0) zoom.value = Math.max(MIN_ZOOM, +(zoom.value - step).toFixed(2))
+  if (ev.deltaY < 0) setZoom(zoom.value + step, 'ctrl-wheel')
+  else if (ev.deltaY > 0) setZoom(zoom.value - step, 'ctrl-wheel')
 }
 const fitWidth = () => {
   const el = bodyRef.value
   const first = pages[0]
   if (!el || !first || !first.wPt) return
   const avail = el.clientWidth - 36
-  setZoom(avail / first.wPt)
+  setZoom(avail / first.wPt, 'fit-width')
 }
 const fitPage = () => {
   const el = bodyRef.value
   const first = pages[0]
   if (!el || !first || !first.wPt || !first.hPt) return
   const z = Math.min((el.clientWidth - 36) / first.wPt, (el.clientHeight - 36) / first.hPt)
-  setZoom(z)
+  setZoom(z, 'fit-page')
+}
+
+const isEditableTarget = (target) => {
+  const el = target instanceof Element ? target : null
+  if (!el) return false
+  const tag = String(el.tagName || '').toLowerCase()
+  return tag === 'input' || tag === 'textarea' || tag === 'select' || el.isContentEditable
+}
+
+const isToolbarInteractiveTarget = (target) => {
+  const el = target instanceof Element ? target : null
+  return Boolean(el?.closest?.('button, input, textarea, select, a, [role="button"], [contenteditable="true"]'))
+}
+
+const focusViewerForKeyboard = (ev) => {
+  // 设计说明：阅读区需要获得焦点才能接收 PageUp/PageDown、缩放、旋转等快捷键；
+  // 但工具栏控件自身也要保留原生键盘行为，所以只在点击非交互区域时聚焦根容器。
+  if (isToolbarInteractiveTarget(ev.target)) return
+  rootRef.value?.focus?.({ preventScroll: true })
+}
+
+const focusSearchInput = async (reason = 'shortcut') => {
+  if (!props.features.search || !hasPdf.value || props.errorText) return
+  await nextTick()
+  searchInputRef.value?.focus?.()
+  searchInputRef.value?.select?.()
+  logger.info('PDF搜索框聚焦', { reason })
+}
+
+const scrollViewerBy = (deltaY, reason) => {
+  const el = bodyRef.value
+  if (!el) return
+  el.scrollBy({ top: deltaY, behavior: 'smooth' })
+  scheduleRenderVisible()
+  logger.debug('PDF键盘滚动', { reason, deltaY })
+}
+
+const onViewerKeydown = (ev) => {
+  if (isEditableTarget(ev.target)) return
+
+  const key = ev.key
+  const lowerKey = String(key || '').toLowerCase()
+  const ctrlOrMeta = ev.ctrlKey || ev.metaKey
+  const handled = (action) => {
+    ev.preventDefault()
+    ev.stopPropagation()
+    logger.debug('PDF阅读器快捷键触发', { key, action })
+  }
+
+  if (ctrlOrMeta && lowerKey === 'f' && props.features.search) {
+    handled('focus-search')
+    focusSearchInput('ctrl-f')
+    return
+  }
+  if (!ctrlOrMeta && key === '/') {
+    handled('focus-search')
+    focusSearchInput('slash')
+    return
+  }
+  if (!ctrlOrMeta && key === 'PageUp') {
+    handled('previous-page')
+    goPreviousPage()
+    return
+  }
+  if (!ctrlOrMeta && key === 'PageDown') {
+    handled('next-page')
+    goNextPage()
+    return
+  }
+  if (!ctrlOrMeta && key === 'Home') {
+    handled('first-page')
+    goToPage(1)
+    return
+  }
+  if (!ctrlOrMeta && key === 'End') {
+    handled('last-page')
+    goToPage(totalPages.value || 1)
+    return
+  }
+  if (!ctrlOrMeta && key === 'ArrowUp') {
+    handled('scroll-up')
+    scrollViewerBy(-80, 'arrow-up')
+    return
+  }
+  if (!ctrlOrMeta && key === 'ArrowDown') {
+    handled('scroll-down')
+    scrollViewerBy(80, 'arrow-down')
+    return
+  }
+  if (!ctrlOrMeta && key === ' ') {
+    handled(ev.shiftKey ? 'scroll-page-up' : 'scroll-page-down')
+    scrollViewerBy((ev.shiftKey ? -1 : 1) * Math.max(120, (bodyRef.value?.clientHeight || 640) * 0.82), 'space')
+    return
+  }
+  if (!ctrlOrMeta && (key === '+' || key === '=')) {
+    handled('zoom-in')
+    zoomIn('keyboard')
+    return
+  }
+  if (!ctrlOrMeta && key === '-') {
+    handled('zoom-out')
+    zoomOut('keyboard')
+    return
+  }
+  if (!ctrlOrMeta && lowerKey === 'w') {
+    handled('fit-width')
+    fitWidth()
+    return
+  }
+  if (!ctrlOrMeta && lowerKey === 'p') {
+    handled('fit-page')
+    fitPage()
+    return
+  }
+  if (!ctrlOrMeta && key === '[') {
+    handled('rotate-left')
+    rotateLeft('keyboard')
+    return
+  }
+  if (!ctrlOrMeta && key === ']') {
+    handled('rotate-right')
+    rotateRight('keyboard')
+    return
+  }
+  if (!ctrlOrMeta && lowerKey === 'h') {
+    handled('toggle-pan')
+    togglePanMode('keyboard')
+  }
 }
 
 // ───────────────────────── 打开 / 重建 ─────────────────────────
@@ -422,6 +591,11 @@ const panMode = ref(false)
 let panState = null
 let panRaf = 0
 const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : 0)
+
+const togglePanMode = (reason = 'manual') => {
+  panMode.value = !panMode.value
+  logger.info('PDF拖动平移模式切换', { reason, enabled: panMode.value })
+}
 
 const onBodyMouseDown = (ev) => {
   // 仅在抓手模式或按下中键时平移，避免与划词选择冲突。
@@ -593,21 +767,61 @@ const searchQuery = ref('')
 const searchHits = ref([])
 const searchActiveIdx = ref(0)
 const searchRectsByPage = ref({})
+let searchTimer = null
+let searchSeq = 0
+let lastSearchedQuery = ''
 
-const runSearch = async () => {
+const resetSearchState = () => {
+  searchSeq += 1
+  searchHits.value = []
+  searchActiveIdx.value = 0
+  searchRectsByPage.value = {}
+  lastSearchedQuery = ''
+}
+
+const runSearch = async (reason = 'manual') => {
+  if (searchTimer) {
+    clearTimeout(searchTimer)
+    searchTimer = null
+  }
   const q = searchQuery.value.trim()
   if (!q) {
-    searchHits.value = []
-    searchRectsByPage.value = {}
+    resetSearchState()
+    logger.debug('PDF搜索已清空', { reason })
     return
   }
-  const resp = await doc.search(q)
-  searchHits.value = resp.hits || []
-  searchActiveIdx.value = 0
-  rebuildSearchRects()
-  if (searchHits.value.length) gotoSearchHit(0)
-  status.value = `搜索：${resp.total} 个匹配`
-  statusTone.value = resp.total ? 'ok' : ''
+  const seq = ++searchSeq
+  logger.info('PDF搜索开始', { reason, keywordLength: q.length })
+  try {
+    const resp = await doc.search(q)
+    if (seq !== searchSeq) {
+      logger.debug('PDF搜索结果已过期，忽略', { reason, keywordLength: q.length })
+      return
+    }
+    const hits = resp.hits || []
+    searchHits.value = hits
+    searchActiveIdx.value = 0
+    lastSearchedQuery = q
+    rebuildSearchRects()
+    if (hits.length) gotoSearchHit(0, 'search-result')
+    status.value = `搜索：${resp.total} 个匹配`
+    statusTone.value = resp.total ? 'ok' : ''
+    logger.info('PDF搜索完成', { reason, total: resp.total || 0 })
+  } catch (e) {
+    logger.warn('PDF搜索失败', { reason, error: String(e?.message || e) })
+  }
+}
+
+const scheduleSearch = (reason = 'input') => {
+  if (searchTimer) clearTimeout(searchTimer)
+  if (!searchQuery.value.trim()) {
+    resetSearchState()
+    return
+  }
+  searchTimer = setTimeout(() => {
+    searchTimer = null
+    runSearch(reason)
+  }, 220)
 }
 
 const rebuildSearchRects = () => {
@@ -621,8 +835,11 @@ const rebuildSearchRects = () => {
   searchRectsByPage.value = byPage
 }
 
-const gotoSearchHit = (idx) => {
-  if (!searchHits.value.length) return
+const gotoSearchHit = (idx, reason = 'manual') => {
+  if (!searchHits.value.length) {
+    logger.debug('PDF搜索跳转跳过：无匹配', { reason })
+    return
+  }
   const n = searchHits.value.length
   const i = ((idx % n) + n) % n
   searchActiveIdx.value = i
@@ -630,13 +847,70 @@ const gotoSearchHit = (idx) => {
   const hit = searchHits.value[i]
   const rect = hit.rects[0]
   if (rect) scrollToPagePoint(hit.page, rect.y)
+  logger.info('PDF搜索命中跳转', { reason, active: i + 1, total: n, page: hit.page })
 }
-const nextHit = () => gotoSearchHit(searchActiveIdx.value + 1)
-const prevHit = () => gotoSearchHit(searchActiveIdx.value - 1)
-const clearSearch = () => {
+const nextHit = () => gotoSearchHit(searchActiveIdx.value + 1, 'next-hit')
+const prevHit = () => gotoSearchHit(searchActiveIdx.value - 1, 'previous-hit')
+const clearSearch = (reason = 'manual') => {
+  if (searchTimer) {
+    clearTimeout(searchTimer)
+    searchTimer = null
+  }
   searchQuery.value = ''
-  searchHits.value = []
-  searchRectsByPage.value = {}
+  resetSearchState()
+  logger.info('PDF搜索清空', { reason })
+}
+
+const onSearchInputKeydown = async (ev) => {
+  if (ev.isComposing) return
+  if (ev.key === 'Enter') {
+    ev.preventDefault()
+    ev.stopPropagation()
+    const q = searchQuery.value.trim()
+    if (!q) {
+      clearSearch('enter-empty')
+      return
+    }
+    // 设计说明：输入内容变更后的第一次 Enter 负责提交搜索并定位到首个结果；
+    // 搜索内容未变时，Enter/Shift+Enter 才作为"下一个/上一个"导航，符合常见 PDF 阅读器习惯。
+    if (q !== lastSearchedQuery) {
+      await runSearch(ev.shiftKey ? 'shift-enter-search' : 'enter-search')
+      return
+    }
+    if (ev.shiftKey) prevHit()
+    else nextHit()
+    return
+  }
+  if (ev.key === 'Escape') {
+    ev.preventDefault()
+    ev.stopPropagation()
+    if (searchQuery.value.trim()) {
+      clearSearch('escape')
+      return
+    }
+    searchInputRef.value?.blur?.()
+    rootRef.value?.focus?.({ preventScroll: true })
+    logger.info('PDF搜索框退出', { reason: 'escape' })
+  }
+}
+
+const onPageInputKeydown = (ev) => {
+  if (ev.key === 'Enter') {
+    ev.preventDefault()
+    ev.stopPropagation()
+    commitPageInput()
+    rootRef.value?.focus?.({ preventScroll: true })
+    logger.info('PDF页码输入提交', { raw: pageInputValue.value })
+    return
+  }
+  if (ev.key === 'Escape') {
+    ev.preventDefault()
+    ev.stopPropagation()
+    syncPageInput()
+    ev.currentTarget?.blur?.()
+    rootRef.value?.focus?.({ preventScroll: true })
+    logger.info('PDF页码输入取消', { page: currentPage.value })
+  }
 }
 
 // ─────────────────── 反向：点击 PDF -> 源码 ───────────────────
@@ -991,6 +1265,7 @@ onBeforeUnmount(() => {
   if (flashTimer) clearTimeout(flashTimer)
   if (renderSettleTimer) clearTimeout(renderSettleTimer)
   if (zoomRenderTimer) clearTimeout(zoomRenderTimer)
+  if (searchTimer) clearTimeout(searchTimer)
   if (scrollRaf) cancelAnimationFrame(scrollRaf)
   if (panRaf) cancelAnimationFrame(panRaf)
   if (typeof window !== 'undefined') {
@@ -1011,6 +1286,12 @@ onBeforeUnmount(() => {
   min-height: 0;
   background: var(--gpv-bg);
   color: var(--gpv-text);
+}
+.gpv:focus {
+  outline: none;
+}
+.gpv:focus-visible {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--n-color-primary, #61afef) 72%, transparent);
 }
 
 .gpv.theme-dark {
@@ -1130,6 +1411,11 @@ onBeforeUnmount(() => {
   transition: background-color 0.15s, border-color 0.15s;
 }
 .gpv__btn:hover:not(:disabled) { background: var(--gpv-hover-bg); border-color: var(--n-color-primary, #61afef); }
+.gpv__btn:focus-visible {
+  outline: none;
+  border-color: var(--n-color-primary, #61afef);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--n-color-primary, #61afef) 28%, transparent);
+}
 .gpv__btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .gpv__btn--primary { border-color: var(--n-color-primary, #61afef); color: var(--n-color-primary, #61afef); }
 .gpv__btn--icon {
