@@ -112,9 +112,13 @@
                         />
                         <n-tooltip trigger="hover">
                           <template #trigger>
-                            <n-text class="git-file-path">{{ file.path }}</n-text>
+                            <span class="git-file-label">
+                              <span class="git-file-name">{{ getFileBaseName(file.path) }}</span>
+                              <span v-if="getRenameHint(file)" class="git-file-rename">{{ getRenameHint(file) }}</span>
+                              <span v-else-if="getFileDirName(file.path)" class="git-file-dir">{{ getFileDirName(file.path) }}</span>
+                            </span>
                           </template>
-                          {{ file.path }}
+                          {{ getFileDisplayTitle(file) }}
                         </n-tooltip>
                       </div>
                       <div class="git-file-actions">
@@ -193,9 +197,13 @@
                         />
                         <n-tooltip trigger="hover">
                           <template #trigger>
-                            <n-text class="git-file-path">{{ file.path }}</n-text>
+                            <span class="git-file-label">
+                              <span class="git-file-name">{{ getFileBaseName(file.path) }}</span>
+                              <span v-if="getRenameHint(file)" class="git-file-rename">{{ getRenameHint(file) }}</span>
+                              <span v-else-if="getFileDirName(file.path)" class="git-file-dir">{{ getFileDirName(file.path) }}</span>
+                            </span>
                           </template>
-                          {{ file.path }}
+                          {{ getFileDisplayTitle(file) }}
                         </n-tooltip>
                       </div>
                       <div class="git-file-actions">
@@ -2523,7 +2531,10 @@ const refreshGitStatus = async ({ resetSelection = true, includeCommits = true }
         path: file.path,
         status: file.status,
         diff: file.diff || '',
-        staged: file.staged // 使用后端返回的 staged 状态
+        staged: file.staged, // 使用后端返回的 staged 状态
+        // 重命名/移动时后端会给出移动前的旧路径（orig_path）。保留下来，
+        // 差异视图据此读取“旧路径的原始内容”，避免把移动当成整文件删除。
+        origPath: file.orig_path || file.origPath || null
       }
 
       if (fileData.staged) {
@@ -2662,6 +2673,36 @@ const getStatusClass = (status) => {
     case '?': return 'git-status-u'
     default: return 'git-status-o'
   }
+}
+
+// 只取文件名部分，供列表主标题显示（与 VSCode 一致：文件名醒目、目录淡显）。
+const getFileBaseName = (filePath) => {
+  const normalized = String(filePath || '').replace(/\\/g, '/')
+  const segments = normalized.split('/')
+  return segments[segments.length - 1] || normalized
+}
+
+// 目录部分（不含文件名）。VSCode 在文件名右侧用淡色显示所属目录。
+const getFileDirName = (filePath) => {
+  const normalized = String(filePath || '').replace(/\\/g, '/')
+  const idx = normalized.lastIndexOf('/')
+  return idx > 0 ? normalized.slice(0, idx) : ''
+}
+
+// 重命名/移动条目的副标题：显示“旧路径 → 新目录”，让移动去向一目了然。
+const getRenameHint = (file) => {
+  if (normalizeGitStatus(file?.status) !== 'R' || !file?.origPath) return ''
+  const oldPath = String(file.origPath).replace(/\\/g, '/')
+  const newDir = getFileDirName(file.path)
+  return newDir ? `${oldPath} → ${newDir}` : `${oldPath} →`
+}
+
+// 列表项的完整 tooltip / 无障碍标题。
+const getFileDisplayTitle = (file) => {
+  if (normalizeGitStatus(file?.status) === 'R' && file?.origPath) {
+    return `${String(file.origPath).replace(/\\/g, '/')} → ${String(file.path).replace(/\\/g, '/')}`
+  }
+  return String(file?.path || '').replace(/\\/g, '/')
 }
 
 watch(() => settingsStore.appearanceTheme, () => {
@@ -2833,10 +2874,19 @@ const updateFileDiff = async (file) => {
     clearDiffHunkCaches('file-diff-request-start', context)
     diffHunkActionVisible.value = false
 
+    // 设计说明：重命名/移动时，原始（左）侧必须读“移动前旧路径”的内容，
+    // 修改（右）侧读“移动后新路径”的内容。否则旧路径在新版本里已不存在，
+    // 后端读到空字符串，Monaco 就把整文件渲染成“全部删除”。
+    const status = normalizeGitStatus(file.status)
+    const originalPath = (status === 'R' && file.origPath)
+      ? normalizeDiffFilePath(file.origPath)
+      : filePath
+
     const originalRevision = isStagedDiff ? 'HEAD' : 'INDEX'
     const modifiedRevision = isStagedDiff ? 'INDEX' : null
     frontendLogger.info('[Diff] Loading diff for:', {
       filePath,
+      originalPath,
       staged: isStagedDiff,
       originalRevision,
       modifiedRevision: modifiedRevision || 'WORKTREE',
@@ -2858,7 +2908,7 @@ const updateFileDiff = async (file) => {
     const [originalContent, modifiedContent] = await Promise.all([
       invoke('get_file_content', {
         path: props.workspacePath,
-        filePath: filePath,
+        filePath: originalPath,
         revision: originalRevision
       }).catch(e => {
         frontendLogger.warn('Failed to get original content:', e);
@@ -3041,7 +3091,9 @@ const handleStageFile = async (file) => {
     // 3. 执行后端操作
     await invoke('stage_file', {
       path: props.workspacePath,
-      filePath: file.path
+      filePath: file.path,
+      // 重命名/移动时把旧路径一并传给后端，暂存新路径的同时移除旧路径的幽灵删除记录。
+      origPath: (normalizeGitStatus(file.status) === 'R' && file.origPath) ? file.origPath : null
     })
 
     // 4. 更新文件状态为已完成
@@ -3094,7 +3146,9 @@ const handleUnstageFile = async (file) => {
     // 3. 执行后端操作
     await invoke('unstage_file', {
       path: props.workspacePath,
-      filePath: file.path
+      filePath: file.path,
+      // 取消暂存重命名时，旧路径也要恢复回 HEAD，否则旧文件会凭空消失。
+      origPath: (normalizeGitStatus(file.status) === 'R' && file.origPath) ? file.origPath : null
     })
 
     // 4. 更新状态
@@ -3160,7 +3214,9 @@ const handleDiscardFile = async (file) => {
   try {
     await invoke('discard_file', {
       path: props.workspacePath,
-      filePath: file.path
+      filePath: file.path,
+      // 撤销重命名时恢复旧路径并删除移动后的新文件。
+      origPath: (normalizeGitStatus(file.status) === 'R' && file.origPath) ? file.origPath : null
     })
     logger.info('File changes discarded', { file: file.path })
     await refreshGitStatus()
@@ -3841,6 +3897,37 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* VSCode 风格：文件名醒目，目录/重命名提示淡显在同一行右侧。 */
+.git-file-label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.git-file-name {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.git-file-dir,
+.git-file-rename {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.82em;
+  opacity: 0.6;
+  color: var(--text-color-secondary);
+}
+
+.git-file-rename {
+  font-style: italic;
 }
 
 .git-file-actions {

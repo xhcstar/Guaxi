@@ -1105,6 +1105,7 @@
             ref="terminalPanelRef"
             :visible="pythonConsoleVisible"
             :context-path="getTerminalContextPath(fileTreeStore.activeRegion || 'left')"
+            :workspace-root="fileTreeStore.sidebarNavigationRootPath || fileTreeStore.activeRepoPath || ''"
             :defer-resize-sync="pythonConsoleResizing"
             @close="togglePythonConsolePanel('panel-collapse')"
           />

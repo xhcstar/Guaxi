@@ -52,6 +52,17 @@ fn flush_pending_deletes(pending_deletes: &mut u32, deleted: &mut BTreeSet<u32>,
 }
 
 fn collect_line_changes_from_diff(diff: &git2::Diff) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
+    collect_line_changes_filtered(diff, None)
+}
+
+/// 与 collect_line_changes_from_diff 相同，但可用 only_new_path 把统计限制在单个文件的
+/// delta 上。开启重命名检测（find_similar）的 diff 会把“删除旧路径 + 新增新路径”合并成
+/// 一个 Rename delta，此时需要按新路径过滤，才能只取回该重命名文件的真实行级差异，
+/// 而不会把其它文件的改动混进来。
+fn collect_line_changes_filtered(
+    diff: &git2::Diff,
+    only_new_path: Option<&str>,
+) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
     let mut added = BTreeSet::<u32>::new();
     let mut modified = BTreeSet::<u32>::new();
     let mut deleted = BTreeSet::<u32>::new();
@@ -60,8 +71,22 @@ fn collect_line_changes_from_diff(diff: &git2::Diff) -> (Vec<u32>, Vec<u32>, Vec
     let mut current_new_line: u32 = 1;
     let mut current_hunk_new_start: u32 = 1;
 
+    let target = only_new_path.map(|p| p.replace('\\', "/"));
+
     let _ = diff.foreach(
-        &mut |_delta, _| true,
+        &mut |delta, _| {
+            // 返回 false 会让 libgit2 跳过该 delta 的 hunk/line 回调，实现按文件过滤。
+            match &target {
+                Some(want) => delta
+                    .new_file()
+                    .path()
+                    .and_then(|p| p.to_str())
+                    .map(|p| p.replace('\\', "/"))
+                    .as_deref()
+                    == Some(want.as_str()),
+                None => true,
+            }
+        },
         None,
         None,
         Some(&mut |_delta, hunk, line| {
@@ -110,6 +135,32 @@ fn collect_line_changes_from_diff(diff: &git2::Diff) -> (Vec<u32>, Vec<u32>, Vec
         modified.into_iter().collect(),
         deleted.into_iter().collect(),
     )
+}
+
+/// 从状态条目的 DiffDelta（head_to_index 或 index_to_workdir）里取出重命名的
+/// (新路径, 旧路径)。delta.old_file 是移动前路径，delta.new_file 是移动后路径。
+/// 拿不到时回退到 status 迭代给出的 fallback 路径，并把旧路径置空。
+fn rename_paths_from_diff_delta(
+    delta: Option<git2::DiffDelta>,
+    fallback: &str,
+) -> (String, Option<String>) {
+    if let Some(delta) = delta {
+        let old = delta
+            .old_file()
+            .path()
+            .and_then(|p| p.to_str())
+            .map(|s| s.replace('\\', "/"));
+        let new = delta
+            .new_file()
+            .path()
+            .and_then(|p| p.to_str())
+            .map(|s| s.replace('\\', "/"));
+        let new_path = new.unwrap_or_else(|| fallback.to_string());
+        // 旧路径与新路径相同则不是真正的移动，视为无旧路径。
+        let orig = old.filter(|o| o != &new_path);
+        return (new_path, orig);
+    }
+    (fallback.to_string(), None)
 }
 
 #[cfg(any())]
@@ -180,6 +231,11 @@ pub struct GitChange {
     lines_deleted: Vec<u32>,
     diff: String,
     staged: bool, // 新增字段，表示是否已暂存
+    // 设计说明：重命名/移动时，path 记录新路径，orig_path 记录旧路径。
+    // 前端据此对“旧路径原始内容 -> 新路径当前内容”做差异，而不是把整文件当成删除。
+    // 非重命名条目该字段为 None（序列化为 null）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    orig_path: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -281,6 +337,15 @@ pub async fn get_git_status(path: String) -> Result<Vec<GitChange>, String> {
         options.include_untracked(true);
         options.recurse_untracked_dirs(true);
         options.show(StatusShow::IndexAndWorkdir);
+        // 设计说明：开启重命名检测，Git 面板才能把“移动/改名”识别成一条 R 记录，
+        // 而不是“删除旧路径 + 新增新路径”两条互不相关的条目。
+        // - renames_head_to_index：已暂存区里的重命名（HEAD -> INDEX）。
+        // - renames_index_to_workdir：工作区里尚未暂存的重命名（INDEX -> 工作区）。
+        // - renames_from_rewrites：内容大改的文件也允许参与重命名/改写配对，避免
+        //   “移动同时改了不少内容”时退回成删除+新增。
+        options.renames_head_to_index(true);
+        options.renames_index_to_workdir(true);
+        options.renames_from_rewrites(true);
 
         let statuses = repo
             .statuses(Some(&mut options))
@@ -298,113 +363,143 @@ pub async fn get_git_status(path: String) -> Result<Vec<GitChange>, String> {
                 continue;
             }
 
-            let mut append_change = |status: &str, staged: bool| -> Result<(), String> {
-                let mut lines_added: Vec<u32> = Vec::new();
-                let mut lines_modified: Vec<u32> = Vec::new();
-                let mut lines_deleted: Vec<u32> = Vec::new();
+            // new_path：条目对外展示/操作用的路径；对重命名而言是“移动后的新路径”。
+            // orig_path：仅重命名时存在，指向“移动前的旧路径”，供前端读取原始内容做差异。
+            let mut append_change =
+                |status: &str, staged: bool, new_path: &str, orig_path: Option<String>| -> Result<(), String> {
+                    let mut lines_added: Vec<u32> = Vec::new();
+                    let mut lines_modified: Vec<u32> = Vec::new();
+                    let mut lines_deleted: Vec<u32> = Vec::new();
 
-                if status == "?" {
-                    let abs = repo_root.join(Path::new(&rel_path));
-                    if let Ok(content) = std::fs::read_to_string(&abs) {
-                        let line_count = content.lines().count() as u32;
-                        if line_count > 0 {
-                            lines_added = (1..=line_count).collect();
-                        }
-                    }
-                } else if status == "A" || status == "M" || status == "D" || status == "R" {
-                    // 设计说明：R（重命名）在 diff 视角下就是旧内容删除+新内容新增，统一按修改处理。
-                    let mut diff_options = DiffOptions::new();
-                    diff_options.context_lines(0);
-                    diff_options.pathspec(rel_path.clone());
-                    // 设计说明：Windows 下工作区文件常被编辑器保存为 CRLF，而 HEAD/索引里的 blob 是 LF
-                    // （或反之），libgit2 默认会把这种纯换行符差异当成“整行修改”，导致文件一打开就在
-                    // 行号右侧显示大量并不存在的 Git 修改标记。ignore_whitespace_eol 让 diff 忽略行尾
-                    // 换行符差异，只在真正的内容差异处报告变更行，使行级状态计算精确。
-                    diff_options.ignore_whitespace_eol(true);
-
-                    let diff = if staged {
-                        repo.diff_tree_to_tree(
-                            Some(&head_tree),
-                            Some(&index_tree),
-                            Some(&mut diff_options),
-                        )
-                        .map_err(|e| format!("Failed to create staged diff: {}", e))?
-                    } else {
-                        repo.diff_index_to_workdir(Some(&index), Some(&mut diff_options))
-                            .map_err(|e| format!("Failed to create workdir diff: {}", e))?
-                    };
-
-                    let (a, m, d) = collect_line_changes_from_diff(&diff);
-
-                    if status == "M" {
-                        let mut all = BTreeSet::<u32>::new();
-                        all.extend(a);
-                        all.extend(m);
-                        all.extend(d);
-                        lines_modified = all.into_iter().collect();
-
-                        // 设计说明：开启 ignore_whitespace_eol 后，纯 CRLF/LF 差异的文件会得到空的行级
-                        // 差异。此时不再像以前那样兜底标记第 1 行为“已修改”，而是直接跳过这条变更——
-                        // 既不会在编辑器行号右侧出现假修改标记，也不会让该文件出现在 Git 面板更改列表里。
-                        if lines_modified.is_empty() {
-                            return Ok(());
-                        }
-                    } else if status == "A" {
-                        lines_added = a;
-                        if lines_added.is_empty() {
-                            let abs = repo_root.join(Path::new(&rel_path));
-                            if let Ok(content) = std::fs::read_to_string(&abs) {
-                                let line_count = content.lines().count() as u32;
-                                if line_count > 0 {
-                                    lines_added = (1..=line_count).collect();
-                                }
+                    if status == "?" {
+                        let abs = repo_root.join(Path::new(new_path));
+                        if let Ok(content) = std::fs::read_to_string(&abs) {
+                            let line_count = content.lines().count() as u32;
+                            if line_count > 0 {
+                                lines_added = (1..=line_count).collect();
                             }
                         }
-                        if lines_added.is_empty() {
-                            lines_added.push(1);
+                    } else if status == "A"
+                        || status == "M"
+                        || status == "D"
+                        || status == "R"
+                    {
+                        // 设计说明：Windows 下工作区文件常被编辑器保存为 CRLF，而 HEAD/索引里的 blob 是 LF
+                        // （或反之），libgit2 默认会把这种纯换行符差异当成“整行修改”，导致文件一打开就在
+                        // 行号右侧显示大量并不存在的 Git 修改标记。ignore_whitespace_eol 让 diff 忽略行尾
+                        // 换行符差异，只在真正的内容差异处报告变更行，使行级状态计算精确。
+                        let mut diff_options = DiffOptions::new();
+                        diff_options.context_lines(0);
+                        diff_options.ignore_whitespace_eol(true);
+                        // 重命名条目不能用 pathspec 过滤：删除侧是旧路径、新增侧是新路径，
+                        // 单一 pathspec 无法同时命中。改为构建整仓 diff + find_similar 合并重命名，
+                        // 再在行级收集时按新路径过滤。
+                        let is_rename = status == "R";
+                        if !is_rename {
+                            diff_options.pathspec(new_path.to_string());
                         }
-                    } else if status == "D" {
-                        lines_deleted = d;
-                        if lines_deleted.is_empty() {
-                            lines_deleted.push(1);
+
+                        let mut diff = if staged {
+                            repo.diff_tree_to_tree(
+                                Some(&head_tree),
+                                Some(&index_tree),
+                                Some(&mut diff_options),
+                            )
+                            .map_err(|e| format!("Failed to create staged diff: {}", e))?
+                        } else {
+                            repo.diff_index_to_workdir(Some(&index), Some(&mut diff_options))
+                                .map_err(|e| format!("Failed to create workdir diff: {}", e))?
+                        };
+
+                        if is_rename {
+                            let mut find_opts = git2::DiffFindOptions::new();
+                            find_opts.renames(true);
+                            find_opts.renames_from_rewrites(true);
+                            let _ = diff.find_similar(Some(&mut find_opts));
+                        }
+
+                        let (a, m, d) = if is_rename {
+                            collect_line_changes_filtered(&diff, Some(new_path))
+                        } else {
+                            collect_line_changes_from_diff(&diff)
+                        };
+
+                        if status == "M" || status == "R" {
+                            // 重命名可能同时伴随内容修改，按“修改”合并行级差异展示。
+                            let mut all = BTreeSet::<u32>::new();
+                            all.extend(a);
+                            all.extend(m);
+                            all.extend(d);
+                            lines_modified = all.into_iter().collect();
+
+                            // 设计说明：开启 ignore_whitespace_eol 后，纯 CRLF/LF 差异的文件会得到空的行级
+                            // 差异。纯修改（M）此时直接跳过，避免出现假修改标记；但纯移动（R，内容未变）
+                            // 仍是有意义的一条变更，必须保留，不能因为行级为空就丢弃。
+                            if status == "M" && lines_modified.is_empty() {
+                                return Ok(());
+                            }
+                        } else if status == "A" {
+                            lines_added = a;
+                            if lines_added.is_empty() {
+                                let abs = repo_root.join(Path::new(new_path));
+                                if let Ok(content) = std::fs::read_to_string(&abs) {
+                                    let line_count = content.lines().count() as u32;
+                                    if line_count > 0 {
+                                        lines_added = (1..=line_count).collect();
+                                    }
+                                }
+                            }
+                            if lines_added.is_empty() {
+                                lines_added.push(1);
+                            }
+                        } else if status == "D" {
+                            lines_deleted = d;
+                            if lines_deleted.is_empty() {
+                                lines_deleted.push(1);
+                            }
                         }
                     }
-                }
 
-                changes.push(GitChange {
-                    path: rel_path.clone(),
-                    status: status.to_string(),
-                    lines_added,
-                    lines_modified,
-                    lines_deleted,
-                    diff: String::new(),
-                    staged,
-                });
-                Ok(())
-            };
+                    changes.push(GitChange {
+                        path: new_path.to_string(),
+                        status: status.to_string(),
+                        lines_added,
+                        lines_modified,
+                        lines_deleted,
+                        diff: String::new(),
+                        staged,
+                        orig_path,
+                    });
+                    Ok(())
+                };
 
             // 设计说明：同一路径可能同时存在“已暂存”和“未暂存”两份差异。
             // VS Code 会在两个分组各显示一个条目；这里不能用 else-if 折叠掉工作区状态。
-            if entry.status().is_index_new() {
-                append_change("A", true)?;
-            } else if entry.status().is_index_modified() {
-                append_change("M", true)?;
-            } else if entry.status().is_index_renamed() {
-                append_change("R", true)?;
-            } else if entry.status().is_index_deleted() {
-                append_change("D", true)?;
+            let st = entry.status();
+            if st.is_index_new() {
+                append_change("A", true, &rel_path, None)?;
+            } else if st.is_index_modified() {
+                append_change("M", true, &rel_path, None)?;
+            } else if st.is_index_renamed() {
+                // head_to_index 提供“HEAD 旧路径 -> 索引新路径”的配对。
+                let (new_p, old_p) = rename_paths_from_diff_delta(entry.head_to_index(), &rel_path);
+                append_change("R", true, &new_p, old_p)?;
+            } else if st.is_index_deleted() {
+                append_change("D", true, &rel_path, None)?;
             }
 
-            if entry.status().is_wt_new() {
-                append_change("?", false)?;
-            } else if entry.status().is_wt_modified() {
-                append_change("M", false)?;
-            } else if entry.status().is_wt_renamed() {
-                append_change("R", false)?;
-            } else if entry.status().is_wt_deleted() {
-                append_change("D", false)?;
-            } else if entry.status().is_wt_typechange() {
-                append_change("T", false)?;
+            if st.is_wt_new() {
+                append_change("?", false, &rel_path, None)?;
+            } else if st.is_wt_modified() {
+                append_change("M", false, &rel_path, None)?;
+            } else if st.is_wt_renamed() {
+                // index_to_workdir 提供“索引旧路径 -> 工作区新路径”的配对。
+                let (new_p, old_p) = rename_paths_from_diff_delta(entry.index_to_workdir(), &rel_path);
+                append_change("R", false, &new_p, old_p)?;
+            } else if st.is_wt_deleted() {
+                append_change("D", false, &rel_path, None)?;
+            } else if st.is_wt_typechange() {
+                append_change("T", false, &rel_path, None)?;
             }
         }
 
@@ -1235,12 +1330,56 @@ pub fn get_staged_files(path: String) -> Result<Vec<GitChange>, String> {
             lines_deleted: Vec::new(),
             diff: String::new(),
             staged: true, // 添加 staged 字段并设置为 true
+            orig_path: None,
         })
         .collect())
 }
 
+/// 把某个路径在索引里重置回 HEAD 版本：先从索引移除，再（若 HEAD 中存在）用 HEAD
+/// 里的 blob 重新写入。取消暂存本质就是让该路径在索引里恢复成 HEAD 的样子。
+fn reset_index_path_to_head(
+    repo: &Repository,
+    index: &mut git2::Index,
+    head_tree: &Tree,
+    rel_path: &str,
+) -> Result<(), String> {
+    // 先移除；即便 HEAD 中不存在（新增文件），移除后就等于“取消暂存该新增”。
+    let _ = index.remove_path(Path::new(rel_path));
+
+    if let Ok(entry) = head_tree.get_path(Path::new(rel_path)) {
+        let index_entry = IndexEntry {
+            ctime: git2::IndexTime::new(0, 0),
+            mtime: git2::IndexTime::new(0, 0),
+            dev: 0,
+            ino: 0,
+            mode: entry.filemode() as u32,
+            uid: 0,
+            gid: 0,
+            file_size: 0,
+            id: entry.id(),
+            flags: 0,
+            flags_extended: 0,
+            path: rel_path.as_bytes().to_vec(),
+        };
+
+        let blob = repo
+            .find_blob(entry.id())
+            .map_err(|e| format!("Failed to find blob: {}", e))?;
+
+        index
+            .add_frombuffer(&index_entry, blob.content())
+            .map_err(|e| format!("Failed to add from buffer: {}", e))?;
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
-pub fn unstage_file(path: String, file_path: String) -> Result<(), String> {
+pub fn unstage_file(
+    path: String,
+    file_path: String,
+    orig_path: Option<String>,
+) -> Result<(), String> {
     let repo =
         Repository::discover(&path).map_err(|e| format!("Failed to open repository: {}", e))?;
 
@@ -1259,37 +1398,16 @@ pub fn unstage_file(path: String, file_path: String) -> Result<(), String> {
         .index()
         .map_err(|e| format!("Failed to get index: {}", e))?;
 
-    // 从索引中移除文件
-    index
-        .remove_path(Path::new(&file_path))
-        .map_err(|e| format!("Failed to remove path from index: {}", e))?;
+    // 取消暂存新路径（恢复成 HEAD 里的状态；新增文件则等于从索引删除）。
+    reset_index_path_to_head(&repo, &mut index, &head_tree, &file_path)?;
 
-    // 如果文件在HEAD中存在，则恢复到HEAD版本
-    if let Ok(entry) = head_tree.get_path(Path::new(&file_path)) {
-        // 创建 IndexEntry
-        let index_entry = IndexEntry {
-            ctime: git2::IndexTime::new(0, 0),
-            mtime: git2::IndexTime::new(0, 0),
-            dev: 0,
-            ino: 0,
-            mode: entry.filemode() as u32,
-            uid: 0,
-            gid: 0,
-            file_size: 0,
-            id: entry.id(),
-            flags: 0,
-            flags_extended: 0,
-            path: file_path.as_bytes().to_vec(),
-        };
-
-        let blob = repo
-            .find_blob(entry.id())
-            .map_err(|e| format!("Failed to find blob: {}", e))?;
-
-        // 使用正确的 IndexEntry 参数
-        index
-            .add_frombuffer(&index_entry, blob.content())
-            .map_err(|e| format!("Failed to add from buffer: {}", e))?;
+    // 设计说明：取消暂存一个重命名时，还要把旧路径恢复回 HEAD——因为暂存重命名时
+    // 旧路径已从索引里移除。只恢复新路径会让旧文件凭空消失。
+    if let Some(orig) = orig_path.as_ref() {
+        let orig_trimmed = orig.trim();
+        if !orig_trimmed.is_empty() && orig_trimmed != file_path {
+            reset_index_path_to_head(&repo, &mut index, &head_tree, orig_trimmed)?;
+        }
     }
 
     // 写入索引
@@ -1371,7 +1489,11 @@ pub async fn get_git_log(
 }
 
 #[tauri::command]
-pub fn stage_file(path: String, file_path: String) -> Result<(), String> {
+pub fn stage_file(
+    path: String,
+    file_path: String,
+    orig_path: Option<String>,
+) -> Result<(), String> {
     let repo =
         Repository::discover(&path).map_err(|e| format!("Failed to open repository: {}", e))?;
 
@@ -1398,6 +1520,21 @@ pub fn stage_file(path: String, file_path: String) -> Result<(), String> {
         index
             .remove_path(Path::new(&file_path))
             .map_err(|e| format!("Failed to remove path from index: {}", e))?;
+    }
+
+    // 设计说明：暂存一个重命名/移动时，除了把新路径加入索引，还必须把旧路径从索引里
+    // 移除，否则 Git 会把旧文件仍当成“已跟踪且未删除”，暂存后旧路径会残留成一条
+    // 幽灵删除记录。orig_path 为空（非重命名）时跳过。
+    if let Some(orig) = orig_path.as_ref() {
+        let orig_trimmed = orig.trim();
+        if !orig_trimmed.is_empty() && orig_trimmed != file_path {
+            if let Err(e) = index.remove_path(Path::new(orig_trimmed)) {
+                warn!(
+                    "Failed to remove old rename path {} from index: {}",
+                    orig_trimmed, e
+                );
+            }
+        }
     }
 
     // 写入索引
@@ -1509,7 +1646,11 @@ pub fn unstage_all(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn discard_file(path: String, file_path: String) -> Result<(), String> {
+pub fn discard_file(
+    path: String,
+    file_path: String,
+    orig_path: Option<String>,
+) -> Result<(), String> {
     info!(
         "Discarding changes for file: {} in path: {}",
         file_path, path
@@ -1518,6 +1659,11 @@ pub fn discard_file(path: String, file_path: String) -> Result<(), String> {
         error!("Failed to discover repository: {}", e);
         e.to_string()
     })?;
+
+    let workdir = repo
+        .workdir()
+        .unwrap_or_else(|| Path::new(&path))
+        .to_path_buf();
 
     let head = repo.head().map_err(|e| {
         error!("Failed to get HEAD: {}", e);
@@ -1529,9 +1675,35 @@ pub fn discard_file(path: String, file_path: String) -> Result<(), String> {
         e.to_string()
     })?;
 
+    // 设计说明：撤销一个重命名/移动，等价于“恢复旧路径 + 删除移动到的新文件”。
+    // 先把移动后的新文件从磁盘删掉（它相对 HEAD 是新增，checkout HEAD 不会自动删它），
+    // 再 checkout 旧路径把移动前的文件恢复回来。
+    let is_rename = orig_path
+        .as_ref()
+        .map(|o| !o.trim().is_empty() && o.trim() != file_path)
+        .unwrap_or(false);
+
+    if is_rename {
+        let new_abs = workdir.join(&file_path);
+        if new_abs.exists() {
+            if let Err(e) = std::fs::remove_file(&new_abs) {
+                warn!("Failed to remove moved file {}: {}", new_abs.display(), e);
+            }
+        }
+    }
+
+    // checkout 的目标路径：重命名时恢复旧路径，否则恢复当前路径。
+    let checkout_rel = if is_rename {
+        orig_path.as_ref().map(|o| o.trim().to_string()).unwrap()
+    } else {
+        file_path.clone()
+    };
+
     let mut checkout_builder = CheckoutBuilder::new();
-    checkout_builder.path(Path::new(&file_path));
+    checkout_builder.path(Path::new(&checkout_rel));
     checkout_builder.force();
+    // 让 checkout 能重建被删除/移动走的文件。
+    checkout_builder.recreate_missing(true);
 
     repo.checkout_tree(head_tree.as_object(), Some(&mut checkout_builder))
         .map_err(|e| {
@@ -2833,54 +3005,64 @@ pub fn get_file_content(
 }
 
 #[tauri::command]
-pub fn get_file_diff(path: String, file_path: String) -> Result<String, String> {
+pub fn get_file_diff(
+    path: String,
+    file_path: String,
+    staged: Option<bool>,
+) -> Result<String, String> {
     let repo = Repository::discover(&path).map_err(|e| {
         error!("Failed to discover repository: {}", e);
         e.to_string()
     })?;
 
-    // 获取HEAD树
-    let head = repo.head().map_err(|e| {
-        error!("Failed to get HEAD: {}", e);
-        e.to_string()
-    })?;
-    let head_tree = head.peel_to_tree().map_err(|e| {
-        error!("Failed to peel to tree: {}", e);
-        e.to_string()
-    })?;
-
-    // 获取索引
-    let mut index = repo.index().map_err(|e| {
-        error!("Failed to get index: {}", e);
-        e.to_string()
-    })?;
-    let index_tree = repo
-        .find_tree(index.write_tree().map_err(|e| {
-            error!("Failed to write tree: {}", e);
-            e.to_string()
-        })?)
-        .map_err(|e| {
-            error!("Failed to find tree: {}", e);
-            e.to_string()
-        })?;
+    let staged = staged.unwrap_or(false);
 
     // 设置差异选项
     let mut diff_options = DiffOptions::new();
     diff_options.pathspec(file_path.clone());
     diff_options.context_lines(3);
 
-    // 生成差异
-    let diff = repo
-        .diff_tree_to_tree(Some(&head_tree), Some(&index_tree), Some(&mut diff_options))
-        .map_err(|e| {
-            error!("Failed to generate diff: {}", e);
-            e.to_string()
-        })?;
+    // 设计说明：必须区分已暂存 / 未暂存两种视角，否则未暂存改动会永远显示成
+    // “HEAD -> 索引”的旧结果，和面板里另一侧对不上。
+    // - staged=true ：HEAD -> 索引（已暂存差异）
+    // - staged=false：索引 -> 工作区（未暂存差异）
+    let diff = if staged {
+        let head = repo
+            .head()
+            .map_err(|e| format!("Failed to get HEAD: {}", e))?;
+        let head_tree = head
+            .peel_to_tree()
+            .map_err(|e| format!("Failed to peel to tree: {}", e))?;
+        let mut index = repo
+            .index()
+            .map_err(|e| format!("Failed to get index: {}", e))?;
+        let index_tree = repo
+            .find_tree(
+                index
+                    .write_tree()
+                    .map_err(|e| format!("Failed to write tree: {}", e))?,
+            )
+            .map_err(|e| format!("Failed to find tree: {}", e))?;
+        repo.diff_tree_to_tree(Some(&head_tree), Some(&index_tree), Some(&mut diff_options))
+            .map_err(|e| format!("Failed to generate staged diff: {}", e))?
+    } else {
+        let index = repo
+            .index()
+            .map_err(|e| format!("Failed to get index: {}", e))?;
+        repo.diff_index_to_workdir(Some(&index), Some(&mut diff_options))
+            .map_err(|e| format!("Failed to generate workdir diff: {}", e))?
+    };
 
     // 格式化差异输出
     let mut output = String::new();
     diff.print(DiffFormat::Patch, |_, _, line| {
         if let Ok(content) = std::str::from_utf8(line.content()) {
+            // print 回调的 '+'/'-'/' ' origin 不包含在 line.content() 里，需要补回，
+            // 否则输出的 patch 缺少行首标记。仅对内容行补，hunk 头/文件头不补。
+            match line.origin() {
+                '+' | '-' | ' ' => output.push(line.origin()),
+                _ => {}
+            }
             output.push_str(content);
         }
         true

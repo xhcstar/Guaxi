@@ -194,6 +194,13 @@ const props = defineProps({
     type: String,
     default: '',
   },
+  // 设计说明：contextPath 是“文件感知”的上下文（可能是当前打开文件的路径），用于新会话
+  // 初始 cwd。workspaceRoot 则是文件树顶部选中的工作目录（始终是目录），用于让已存在的
+  // 终端会话在用户切换工作目录时通过 cd 跟随。二者分离，避免打开某个文件时误改终端目录。
+  workspaceRoot: {
+    type: String,
+    default: '',
+  },
   deferResizeSync: {
     type: Boolean,
     default: false,
@@ -226,6 +233,127 @@ let unlistenExit = null
 let terminalResizeObserver = null
 let pendingFitFrame = 0
 let lastSyncedTerminalSizeKey = ''
+
+// 设计说明：终端回滚内容可能达到数百 KB～数 MB。绝不能把它放进 Vue 响应式系统
+// （原来存在每个 session 对象的 buffer 字段里），否则每收到一段输出都会：
+//   1) 用模板字符串拼接整段旧缓冲，产生 O(n²) 的字符串分配；
+//   2) 替换响应式数组元素，触发 Vue 对这段巨型字符串的深度依赖追踪与重渲染。
+// 二者叠加导致“输出越多越卡”。这里改用普通 Map 存缓冲，完全脱离响应式，
+// sessions 数组只保留会话元信息（id/profile/label/cwd/exited）。
+const sessionBuffers = new Map()
+// 每个会话保留的最大回滚字节数，超出则丢弃最旧部分（与终端“滚出屏幕即丢弃”一致）。
+const MAX_SESSION_BUFFER = 512 * 1024
+
+const getSessionBuffer = (sessionId) => sessionBuffers.get(String(sessionId || '')) || ''
+
+const setSessionBuffer = (sessionId, value) => {
+  const id = String(sessionId || '')
+  if (!id) return
+  sessionBuffers.set(id, String(value || ''))
+}
+
+const appendToSessionBuffer = (sessionId, data) => {
+  const id = String(sessionId || '')
+  if (!id) return ''
+  const prev = sessionBuffers.get(id) || ''
+  let next = prev + String(data || '')
+  if (next.length > MAX_SESSION_BUFFER) {
+    // 从超限位置往后截断，并对齐到下一处换行，避免顶部残留半行/半条转义序列。
+    const sliced = next.slice(next.length - MAX_SESSION_BUFFER)
+    const nl = sliced.indexOf('\n')
+    next = nl >= 0 ? sliced.slice(nl + 1) : sliced
+  }
+  sessionBuffers.set(id, next)
+  return next
+}
+
+const deleteSessionBuffer = (sessionId) => {
+  sessionBuffers.delete(String(sessionId || ''))
+}
+
+// 记录各会话“当前已应用的工作目录”，避免向同一目录重复发送 cd。
+const sessionCwd = new Map()
+let contextFollowTimer = 0
+
+// 规范化目录用于比较：统一分隔符、去掉结尾斜杠，Windows 下忽略大小写。
+const normalizeDirForCompare = (value) => {
+  const s = String(value || '').replace(/\\/g, '/').replace(/\/+$/, '')
+  return isWindows ? s.toLowerCase() : s
+}
+
+// 按 shell 类型生成“切换目录”命令（不含结尾换行）。返回 null 表示不便自动 cd。
+const buildCdCommand = (profileId, dirPath) => {
+  const id = String(profileId || '').toLowerCase()
+  const raw = String(dirPath || '').trim()
+  if (!raw) return null
+  if (id === 'cmd') {
+    // /d 允许跨盘符切换。
+    return `cd /d "${raw}"`
+  }
+  if (id === 'powershell' || id === 'pwsh') {
+    return `Set-Location -LiteralPath "${raw}"`
+  }
+  if (id === 'ipython') {
+    // IPython 的 %cd 魔法命令支持带引号的路径。
+    return `%cd "${raw}"`
+  }
+  // bash / zsh / git-bash：用正斜杠，避免反斜杠在双引号里被解释为转义。
+  return `cd "${raw.replace(/\\/g, '/')}"`
+}
+
+// 让当前活动会话跟随工作目录切换：向 shell 发送 cd。
+// 保守策略：仅当该会话未退出、目标目录确有变化、且用户没有正在输入命令时才发送，
+// 避免打断半行输入或产生噪声。命令与滚动历史都完整保留。
+const followWorkingDir = (nextDir) => {
+  const target = String(nextDir || '').trim()
+  if (!target) return
+  const session = activeSession.value
+  if (!session || session.exited) return
+
+  const applied = sessionCwd.get(session.session_id) ?? (session.cwd || '')
+  if (normalizeDirForCompare(applied) === normalizeDirForCompare(target)) return
+
+  const draft = String(terminalCommandDrafts.value[session.session_id] || '')
+  if (draft.trim()) {
+    // 用户正在输入，先不打断；记录目标，等其回车后（草稿清空）下次变更再跟随。
+    logger.debug('[TerminalPanel] defer cwd follow while user typing', {
+      sessionId: session.session_id,
+      target,
+    })
+    return
+  }
+
+  const command = buildCdCommand(session.profile_id, target)
+  if (!command) return
+
+  void invoke('terminal_write_session', {
+    request: {
+      session_id: session.session_id,
+      data: `${command}\r`,
+    },
+  })
+    .then(() => {
+      sessionCwd.set(session.session_id, target)
+      logger.info('[TerminalPanel] followed working dir', {
+        sessionId: session.session_id,
+        profileId: session.profile_id,
+        target,
+      })
+    })
+    .catch((error) => {
+      logger.warn('[TerminalPanel] follow working dir failed', { target, error })
+    })
+}
+
+const scheduleFollowWorkingDir = (nextDir) => {
+  if (contextFollowTimer) {
+    window.clearTimeout(contextFollowTimer)
+  }
+  contextFollowTimer = window.setTimeout(() => {
+    contextFollowTimer = 0
+    followWorkingDir(nextDir)
+  }, 250)
+}
 
 const isWindows = typeof navigator !== 'undefined'
   ? /Windows/i.test(navigator.userAgent)
@@ -304,8 +432,9 @@ const renderActiveSession = () => {
   if (!terminal) return
   terminal.reset()
   terminal.clear()
-  if (activeSession.value?.buffer) {
-    terminal.write(activeSession.value.buffer)
+  const buffer = getSessionBuffer(activeSessionId.value)
+  if (buffer) {
+    terminal.write(buffer)
   }
   updateSearchMatches('render-active-session')
 }
@@ -341,7 +470,7 @@ const scrollToSearchMatch = (index) => {
 
 const updateSearchMatches = (reason = 'manual-search-update') => {
   const keyword = String(searchKeyword.value || '').trim()
-  const buffer = String(activeSession.value?.buffer || '')
+  const buffer = getSessionBuffer(activeSessionId.value)
   if (!keyword || !buffer) {
     searchMatches.value = []
     searchActiveIndex.value = -1
@@ -614,14 +743,10 @@ const activateSession = (sessionId) => {
 }
 
 const appendSessionOutput = (sessionId, data) => {
-  const index = getSessionIndex(sessionId)
-  if (index < 0) return
-  const session = sessions.value[index]
-  const nextBuffer = `${session.buffer || ''}${String(data || '')}`
-  sessions.value[index] = {
-    ...session,
-    buffer: nextBuffer,
-  }
+  if (getSessionIndex(sessionId) < 0) return
+  // 缓冲写入非响应式 Map；只有当前活动会话才直接写入 xterm 渲染。
+  // xterm.write 自身带内部批处理与异步渲染循环，逐块写入即可，无需再走 Vue 响应式。
+  appendToSessionBuffer(sessionId, data)
   if (activeSessionId.value === sessionId && terminal) {
     terminal.write(String(data || ''))
   }
@@ -635,10 +760,10 @@ const markSessionExited = (sessionId, exitCode) => {
   if (index < 0) return
   const session = sessions.value[index]
   const footer = `\r\n[Guaxi] 终端已退出${Number.isFinite(exitCode) ? `，退出码 ${exitCode}` : ''}\r\n`
+  appendToSessionBuffer(sessionId, footer)
   sessions.value[index] = {
     ...session,
     exited: true,
-    buffer: `${session.buffer || ''}${footer}`,
   }
   if (activeSessionId.value === sessionId && terminal) {
     terminal.write(footer)
@@ -651,18 +776,19 @@ const handleSessionExit = (sessionId, exitCode) => {
   const session = sessions.value[index]
   const normalizedExitCode = Number.isFinite(exitCode) ? Number(exitCode) : null
   const footer = `\r\n[Guaxi] 终端已退出${normalizedExitCode !== null ? `，退出码 ${normalizedExitCode}` : ''}\r\n`
+  appendToSessionBuffer(sessionId, footer)
   const nextSessions = sessions.value
     .map((item, itemIndex) => (itemIndex === index
       ? {
           ...item,
           exited: true,
-          buffer: `${item.buffer || ''}${footer}`,
         }
       : item))
     .filter((item) => item.session_id !== sessionId)
 
   // 终端进程已经自行退出时，前端同步移除会话，避免留下一个无法继续交互的空标签。
   sessions.value = nextSessions
+  deleteSessionBuffer(sessionId)
 
   logger.info('[TerminalPanel] session exited and auto closed', {
     sessionId,
@@ -694,12 +820,15 @@ const syncExitedSession = (sessionId, exitCode) => {
   const session = sessions.value[index]
   const normalizedExitCode = Number.isFinite(exitCode) ? Number(exitCode) : null
   const footer = `\r\n[Guaxi] terminal exited${normalizedExitCode !== null ? `, code ${normalizedExitCode}` : ''}\r\n`
+  // 若退出的正是当前活动会话，先把退出提示写进屏幕，再移除会话缓冲。
+  if (activeSessionId.value === sessionId && terminal) {
+    terminal.write(footer)
+  }
   const nextSessions = sessions.value
     .map((item, itemIndex) => (itemIndex === index
       ? {
           ...item,
           exited: true,
-          buffer: `${item.buffer || ''}${footer}`,
         }
       : item))
     .filter((item) => item.session_id !== sessionId)
@@ -709,6 +838,8 @@ const syncExitedSession = (sessionId, exitCode) => {
   delete terminalCommandDrafts.value[sessionId]
   clearExitProbeTimer(sessionId)
   sessions.value = nextSessions
+  deleteSessionBuffer(sessionId)
+  sessionCwd.delete(String(sessionId || ''))
 
   logger.info('[TerminalPanel] session exited and auto closed', {
     sessionId,
@@ -806,9 +937,11 @@ const createSession = async (options = {}) => {
     })
     const session = {
       ...snapshot,
-      buffer: '',
       exited: false,
     }
+    setSessionBuffer(session.session_id, '')
+    // 记录后端最终解析出的工作目录，作为 cd 跟随的比较基准。
+    sessionCwd.set(session.session_id, String(snapshot?.cwd || '').trim())
     sessions.value = [...sessions.value, session]
     activeSessionId.value = session.session_id
     lastSyncedTerminalSizeKey = ''
@@ -891,6 +1024,8 @@ const closeSession = async (sessionId, options = {}) => {
 
   const nextSessions = sessions.value.filter((session) => session.session_id !== normalizedSessionId)
   sessions.value = nextSessions
+  deleteSessionBuffer(normalizedSessionId)
+  sessionCwd.delete(normalizedSessionId)
   logger.info('[TerminalPanel] session closed', {
     sessionId: normalizedSessionId,
     reason: String(options?.reason || 'manual-close'),
@@ -921,12 +1056,7 @@ const killActiveSession = async () => {
 
 const clearActiveSessionBuffer = () => {
   if (!activeSession.value) return
-  const index = getSessionIndex(activeSession.value.session_id)
-  if (index < 0) return
-  sessions.value[index] = {
-    ...sessions.value[index],
-    buffer: '',
-  }
+  setSessionBuffer(activeSession.value.session_id, '')
   renderActiveSession()
   updateSearchMatches('clear-active-buffer')
 }
@@ -953,7 +1083,11 @@ const activatePanel = async (reason = 'visible-change', options = {}) => {
     await reloadProfiles()
     const existingSessions = await invoke('terminal_list_sessions')
     sessions.value = Array.isArray(existingSessions)
-      ? existingSessions.map((session) => ({ ...session, buffer: '', exited: false }))
+      ? existingSessions.map((session) => {
+          setSessionBuffer(session.session_id, '')
+          sessionCwd.set(session.session_id, String(session?.cwd || '').trim())
+          return { ...session, exited: false }
+        })
       : []
     activeSessionId.value = sessions.value[0]?.session_id || ''
     panelActivated.value = true
@@ -1107,6 +1241,17 @@ watch(
   }
 )
 
+// 文件树顶部切换工作目录时，让当前活动终端会话 cd 跟随过去。
+// 只在面板已激活时才跟随；未激活时新会话会以最新 contextPath 作为初始 cwd。
+watch(
+  () => props.workspaceRoot,
+  (nextRoot, prevRoot) => {
+    if (!panelActivated.value) return
+    if (!nextRoot || nextRoot === prevRoot) return
+    scheduleFollowWorkingDir(nextRoot)
+  }
+)
+
 watch(
   () => settingsStore.appearanceTheme,
   () => {
@@ -1133,6 +1278,10 @@ onBeforeUnmount(async () => {
   if (pendingFitFrame && typeof window !== 'undefined') {
     window.cancelAnimationFrame(pendingFitFrame)
     pendingFitFrame = 0
+  }
+  if (contextFollowTimer) {
+    window.clearTimeout(contextFollowTimer)
+    contextFollowTimer = 0
   }
   terminalResizeObserver?.disconnect?.()
   terminalResizeObserver = null
