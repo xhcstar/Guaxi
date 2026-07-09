@@ -877,6 +877,8 @@ const isRefreshingStatus = ref(false)
 const fileChangeUnlisten = ref(null)
 let autoRefreshIntervalId = null
 let refreshDebounceTimerId = null
+let autoRefreshFocusHandler = null
+let autoRefreshVisibilityHandler = null
 
 const normalizeFsPath = (p) => String(p || '').replace(/\\/g, '/').replace(/\/+$/g, '')
 const isPathUnderRepo = (p) => {
@@ -914,6 +916,7 @@ const diffEditorContainer = ref(null)
 const isEditorInitialized = ref(false)
 let diffEditor = null
 let resizeObserver = null
+let panelsResizeObserver = null
 let diffHunkAnimationFrameId = null
 let diffLineChangesCache = []
 let diffLineChangesCacheContext = null
@@ -2261,6 +2264,97 @@ const commitsHeight = ref(0)
 const panelsContainer = ref(null)
 const panelsHeight = ref(0)
 
+const updatePanelHeaderHeights = () => {
+  const changesHeader = changesSection.value?.querySelector?.('.section-header')
+  const stagedHeader = stagedSection.value?.querySelector?.('.section-header')
+  const commitsHeader = commitsSection.value?.querySelector?.('.section-header')
+
+  changesHeaderHeight.value = changesHeader?.offsetHeight || 40
+  stagedHeaderHeight.value = stagedHeader?.offsetHeight || 40
+  commitsHeaderHeight.value = commitsHeader?.offsetHeight || 40
+}
+
+const getPanelsAvailableHeight = () => {
+  const containerHeight = panelsContainer.value?.offsetHeight || 0
+  const dividerHeight = (changesDivider.value?.offsetHeight || 0) + (commitsDivider.value?.offsetHeight || 0)
+  panelsHeight.value = containerHeight
+  return Math.max(0, containerHeight - dividerHeight)
+}
+
+const shrinkPanelHeightsToFit = (heights, minimums, targetTotal) => {
+  let total = heights.reduce((sum, value) => sum + value, 0)
+  let overflow = total - targetTotal
+  if (overflow <= 0) return heights
+
+  // 设计说明：窗口最大化/还原时按比例重算高度，但每段仍要至少露出标题栏。
+  // 若最小高度导致总和超出可用高度，就从仍有余量的区块里分摊收缩，避免底部留下未分配空白。
+  for (let guard = 0; guard < 4 && overflow > 0.5; guard += 1) {
+    const shrinkableIndexes = heights
+      .map((height, index) => ({ index, room: Math.max(0, height - minimums[index]) }))
+      .filter((item) => item.room > 0)
+    const shrinkableTotal = shrinkableIndexes.reduce((sum, item) => sum + item.room, 0)
+    if (!shrinkableTotal) break
+
+    shrinkableIndexes.forEach(({ index, room }) => {
+      const delta = Math.min(room, overflow * (room / shrinkableTotal))
+      heights[index] -= delta
+    })
+    total = heights.reduce((sum, value) => sum + value, 0)
+    overflow = total - targetTotal
+  }
+
+  return heights
+}
+
+const applyPanelHeightRatios = (ratios, reason = 'panel-layout') => {
+  if (!panelsContainer.value) return
+  updatePanelHeaderHeights()
+  const availableHeight = getPanelsAvailableHeight()
+  if (availableHeight <= 0) return
+
+  const minimums = [
+    Math.max(changesHeaderHeight.value, 40),
+    Math.max(stagedHeaderHeight.value, 40),
+    Math.max(commitsHeaderHeight.value, 140),
+  ]
+  const normalizedRatios = ratios && ratios.length === 3 ? ratios : [0.3, 0.3, 0.4]
+  let heights = normalizedRatios.map((ratio, index) => Math.max(minimums[index], availableHeight * ratio))
+  heights = shrinkPanelHeightsToFit(heights, minimums, availableHeight)
+
+  const roundedChanges = Math.max(minimums[0], Math.floor(heights[0]))
+  const roundedStaged = Math.max(minimums[1], Math.floor(heights[1]))
+  const roundedCommits = Math.max(
+    minimums[2],
+    Math.round(availableHeight - roundedChanges - roundedStaged)
+  )
+
+  changesHeight.value = roundedChanges
+  stagedHeight.value = roundedStaged
+  commitsHeight.value = roundedCommits
+
+  frontendLogger.info('[GitPanel] Panel heights normalized', {
+    reason,
+    containerHeight: panelsHeight.value,
+    availableHeight,
+    changesHeight: changesHeight.value,
+    stagedHeight: stagedHeight.value,
+    commitsHeight: commitsHeight.value,
+  })
+}
+
+const normalizePanelHeightsToContainer = (reason = 'panel-resize') => {
+  if (isDraggingChanges.value || isDraggingCommits.value) return
+  const currentTotal = changesHeight.value + stagedHeight.value + commitsHeight.value
+  const ratios = currentTotal > 0
+    ? [
+        changesHeight.value / currentTotal,
+        stagedHeight.value / currentTotal,
+        commitsHeight.value / currentTotal,
+      ]
+    : [0.3, 0.3, 0.4]
+  applyPanelHeightRatios(ratios, reason)
+}
+
 // 修改 startChangesDrag 函数
 const startChangesDrag = (e) => {
   if (e.target === changesDivider.value || e.target.closest('.divider-handle')) {
@@ -3433,18 +3527,19 @@ onMounted(() => {
       refreshGitStatus({ resetSelection: false, includeCommits: false })
     }, gitAutoRefresh.value.intervalMs)
 
-    const onFocus = () => scheduleAutoRefresh()
-    window.addEventListener('focus', onFocus)
+    if (autoRefreshFocusHandler) {
+      window.removeEventListener('focus', autoRefreshFocusHandler)
+    }
+    autoRefreshFocusHandler = () => scheduleAutoRefresh()
+    window.addEventListener('focus', autoRefreshFocusHandler)
 
-    const onVisibilityChange = () => {
+    if (autoRefreshVisibilityHandler) {
+      document.removeEventListener('visibilitychange', autoRefreshVisibilityHandler)
+    }
+    autoRefreshVisibilityHandler = () => {
       if (document.visibilityState === 'visible') scheduleAutoRefresh()
     }
-    document.addEventListener('visibilitychange', onVisibilityChange)
-
-    onUnmounted(() => {
-      window.removeEventListener('focus', onFocus)
-      document.removeEventListener('visibilitychange', onVisibilityChange)
-    })
+    document.addEventListener('visibilitychange', autoRefreshVisibilityHandler)
   }
 
   // 初始化操作
@@ -3462,19 +3557,13 @@ onMounted(() => {
       // 设置面板高度
       nextTick(() => {
         if (changesSection.value && stagedSection.value && commitsSection.value && panelsContainer.value) {
-          panelsHeight.value = panelsContainer.value.offsetHeight
-          changesHeight.value = panelsHeight.value * 0.3
-          stagedHeight.value = panelsHeight.value * 0.3
-          commitsHeight.value = panelsHeight.value * 0.4
-
-          const changesHeader = changesSection.value.querySelector('.section-header')
-          const stagedHeader = stagedSection.value.querySelector('.section-header')
-          const commitsHeader = commitsSection.value.querySelector('.section-header')
-
-          changesHeaderHeight.value = changesHeader?.offsetHeight || 40
-          stagedHeaderHeight.value = stagedHeader?.offsetHeight || 40
-          commitsHeaderHeight.value = commitsHeader?.offsetHeight || 40
-
+          applyPanelHeightRatios([0.3, 0.3, 0.4], 'initial-panel-layout')
+          if (!panelsResizeObserver && typeof ResizeObserver !== 'undefined') {
+            panelsResizeObserver = new ResizeObserver(() => {
+              normalizePanelHeightsToContainer('panels-container-resize')
+            })
+            panelsResizeObserver.observe(panelsContainer.value)
+          }
         }
       })
     } catch (error) {
@@ -3502,6 +3591,14 @@ onUnmounted(() => {
   if (fileChangeUnlisten.value) {
     fileChangeUnlisten.value().catch(() => {})
     fileChangeUnlisten.value = null
+  }
+  if (autoRefreshFocusHandler) {
+    window.removeEventListener('focus', autoRefreshFocusHandler)
+    autoRefreshFocusHandler = null
+  }
+  if (autoRefreshVisibilityHandler) {
+    document.removeEventListener('visibilitychange', autoRefreshVisibilityHandler)
+    autoRefreshVisibilityHandler = null
   }
 
   document.removeEventListener('mousemove', handleSidebarDrag)
@@ -3553,6 +3650,10 @@ onUnmounted(() => {
   }
 
   // 移除事件监听
+  if (panelsResizeObserver) {
+    panelsResizeObserver.disconnect()
+    panelsResizeObserver = null
+  }
   window.removeEventListener('resize', handleEditorResize)
 })
 </script>
@@ -4303,19 +4404,27 @@ onUnmounted(() => {
    .n-spin-content 自然撑开、由外层 .commits-list（flex:1; overflow-y:auto）负责滚动，
    既能占满又不会出现底部空白。 */
 .commit-history-spin {
-  min-height: 0;
+  flex: 1 0 auto;
+  min-height: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
-.commit-history-spin :deep(.n-spin-container) {
-  min-height: 0;
-  height: auto;
+/* 设计说明：n-spin 的根 DOM 同时拥有 .commit-history-spin 与 .n-spin-container。
+   必须直接命中这个根节点，不能只写后代选择器，否则展开提交文件列表时根节点高度仍按
+   auto 回流，commits-list 的滚动高度会短暂失真并在底部留下空白。 */
+.commit-history-spin.n-spin-container {
+  min-height: 100%;
   display: flex;
   flex-direction: column;
 }
 
 .commit-history-spin :deep(.n-spin-content) {
-  flex: 1 1 auto;
-  min-height: 0;
+  flex: 1 0 auto;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 .commit-history-spin :deep(.n-spin-body) {
@@ -4429,6 +4538,8 @@ onUnmounted(() => {
 .commits-list {
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
   overflow-x: hidden;
   overflow-y: auto;
   margin-bottom: 0;
