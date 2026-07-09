@@ -44,6 +44,20 @@ fn git_output_message(output: &std::process::Output) -> String {
     }
 }
 
+fn repo_workdir_path(repo: &Repository, fallback_path: &str) -> PathBuf {
+    repo.workdir()
+        .unwrap_or_else(|| Path::new(fallback_path))
+        .to_path_buf()
+}
+
+fn repo_workdir_file_path(repo: &Repository, fallback_path: &str, file_path: &Path) -> PathBuf {
+    // 设计说明：Git status/diff 返回的是“仓库根目录相对路径”，而前端传入的 path
+    // 可能是仓库里的某个知识库子目录。工作区读文件必须从 repo.workdir() 拼接，
+    // 否则会把 `Test/testt/111.md` 错拼成 `.../Test/Test/testt/111.md`，
+    // 进而读到空内容，Monaco diff 就会误显示为“整文件删除”。
+    repo_workdir_path(repo, fallback_path).join(file_path)
+}
+
 fn flush_pending_deletes(pending_deletes: &mut u32, deleted: &mut BTreeSet<u32>, anchor: u32) {
     if *pending_deletes > 0 {
         deleted.insert(anchor.max(1));
@@ -513,7 +527,12 @@ pub async fn get_git_status(path: String) -> Result<Vec<GitChange>, String> {
 
 #[tauri::command]
 pub fn git_read_file(path: String, file_path: String) -> Result<String, String> {
-    let full_path = Path::new(&path).join(file_path);
+    let repo = Repository::discover(&path).map_err(|e| {
+        error!("Failed to open repository at {}: {}", path, e);
+        format!("Failed to open repository: {}", e)
+    })?;
+    let file_path = Path::new(&file_path);
+    let full_path = repo_workdir_file_path(&repo, &path, file_path);
     std::fs::read_to_string(&full_path).map_err(|e| format!("Failed to read file: {}", e))
 }
 
@@ -2987,11 +3006,26 @@ pub fn get_file_content(
     } else {
         debug!("Getting content from working directory");
         // 获取工作目录的文件内容
-        let full_path = Path::new(&path).join(file_path);
+        let full_path = repo_workdir_file_path(&repo, &path, file_path);
         match std::fs::read_to_string(&full_path) {
-            Ok(v) => v,
+            Ok(v) => {
+                debug!(
+                    "Read worktree file content: request_path={}, repo_file={}, abs_path={}, bytes={}",
+                    path,
+                    file_path.display(),
+                    full_path.display(),
+                    v.len()
+                );
+                v
+            }
             Err(e) => {
                 if e.kind() == std::io::ErrorKind::NotFound {
+                    warn!(
+                        "Worktree file content not found: request_path={}, repo_file={}, abs_path={}",
+                        path,
+                        file_path.display(),
+                        full_path.display()
+                    );
                     return Ok(String::new());
                 }
                 error!("Failed to read file {}: {}", full_path.display(), e);

@@ -700,11 +700,12 @@ const ensureGuaxiMonacoThemes = () => {
       'editorGutter.background': '#fafafa',
       // 设计说明：Git diff 的整行背景保持低透明度，优先保证注释/灰色文本可读；
       // 字符级差异略强一点，便于在浅色主题中精确定位实际变更。
-      // 透明度（末两位 alpha）保持不变，仅把基色换成更鲜艳的绿/红，提升新增/删除的辨识度。
-      'diffEditor.insertedLineBackground': '#22c55e10',
-      'diffEditor.removedLineBackground': '#ef444410',
-      'diffEditor.insertedTextBackground': '#22c55e26',
-      'diffEditor.removedTextBackground': '#ef444426',
+      // 设计说明：保留鲜艳红/绿基色，同时降低 alpha，做出更通透的色膜质感；
+      // 字符级背景仍高于整行背景，确保真正变更的位置足够清晰。
+      'diffEditor.insertedLineBackground': '#16a34a18',
+      'diffEditor.removedLineBackground': '#dc262618',
+      'diffEditor.insertedTextBackground': '#22c55e40',
+      'diffEditor.removedTextBackground': '#ef444440',
       'scrollbar.shadow': '#00000033'
     }
   })
@@ -752,17 +753,18 @@ const ensureGuaxiMonacoThemes = () => {
       'editorGutter.background': '#282c34',
       // 设计说明：暗色 diff 中红/绿背景容易和注释 token 叠加变浑浊；
       // 线级颜色只做轻提示，字符级颜色保留稍高对比，贴近 VS Code 的阅读体验。
-      // 透明度（末两位 alpha）保持不变，仅把基色换成更鲜艳的绿/红，提升新增/删除的辨识度。
-      'diffEditor.insertedLineBackground': '#22c55e12',
-      'diffEditor.removedLineBackground': '#ef444412',
-      'diffEditor.insertedTextBackground': '#22c55e2e',
-      'diffEditor.removedTextBackground': '#ef44442e',
+      // 设计说明：暗色主题里红/绿更容易显得厚重，因此线级 alpha 更轻；
+      // 字符级背景略强一点，兼顾透明质感和变更定位。
+      'diffEditor.insertedLineBackground': '#22c55e1c',
+      'diffEditor.removedLineBackground': '#ef44441c',
+      'diffEditor.insertedTextBackground': '#22c55e46',
+      'diffEditor.removedTextBackground': '#ef444446',
       'scrollbar.shadow': '#00000066'
     }
   })
 
   guaxiMonacoThemesReady = true
-  frontendLogger.info('[DiffTheme] Monaco themes registered with readable low-alpha diff highlights')
+  frontendLogger.info('[DiffTheme] Monaco themes registered with translucent vivid diff highlights')
 }
 
 const getMonacoTheme = () => {
@@ -2919,6 +2921,31 @@ const updateFileDiff = async (file) => {
         throw e;
       })
     ]);
+
+    const countLines = (value) => String(value || '').split(/\r\n|\r|\n/).length
+    frontendLogger.info('[Diff] Loaded file contents for Monaco diff', {
+      filePath,
+      originalPath,
+      staged: isStagedDiff,
+      originalRevision,
+      modifiedRevision: modifiedRevision || 'WORKTREE',
+      originalBytes: String(originalContent || '').length,
+      modifiedBytes: String(modifiedContent || '').length,
+      originalLines: countLines(originalContent),
+      modifiedLines: countLines(modifiedContent),
+      status,
+      context: context.key,
+      requestId
+    })
+    if (status === 'M' && !String(modifiedContent || '').length) {
+      frontendLogger.warn('[Diff] Modified file content is empty for a modified entry; check backend workdir path resolution', {
+        filePath,
+        workspacePath: props.workspacePath,
+        context: context.key,
+        requestId
+      })
+    }
+
     if (!isCurrentDiffContext(context, requestId)) {
       frontendLogger.warn('[Diff] Ignored stale file diff content result', {
         context: context.key,
