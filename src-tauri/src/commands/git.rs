@@ -3,7 +3,6 @@ use git2::{
     RepositoryOpenFlags, StatusOptions, StatusShow, Tree,
 };
 use serde::{Deserialize, Serialize};
-use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -1783,217 +1782,36 @@ pub fn discard_hunk(
         error!("Failed to discover repository: {}", e);
         e.to_string()
     })?;
-
-    let index = repo.index().map_err(|e| {
-        error!("Failed to get index for hunk discard: {}", e);
-        e.to_string()
-    })?;
-
-    let mut diff_options = DiffOptions::new();
-    diff_options.pathspec(file_path.clone());
-    diff_options.include_untracked(true);
-    diff_options.recurse_untracked_dirs(true);
-    diff_options.context_lines(0);
-
-    // 设计说明：撤销未暂存 hunk 必须比较“索引 -> 工作区”，不能比较
-    // “HEAD -> 工作区”。否则文件已经部分暂存时，点击未暂存视图里的单块撤销
-    // 会把已暂存块也纳入候选 patch，看起来像整文件被撤销。
-    let diff = repo
-        .diff_index_to_workdir(Some(&index), Some(&mut diff_options))
-        .map_err(|e| {
-            error!("Failed to get diff for file: {}", e);
-            e.to_string()
-        })?;
-
+    let repo_dir = repo.workdir().unwrap_or_else(|| Path::new(&path));
     let normalized_path = file_path.replace('\\', "/");
 
-    struct HunkState {
-        target_header: Option<String>,
-        target_status: Option<Delta>,
-        best_match_distance: u32,
-        range_matched: bool,
-        hunk_count: u32,
+    let diff_output = std::process::Command::new("git")
+        .current_dir(repo_dir)
+        .arg("diff")
+        .arg("--unified=0")
+        .arg("--")
+        .arg(&normalized_path)
+        .output()
+        .map_err(|e| format!("无法执行 git diff：{}", e))?;
+
+    if !diff_output.status.success() {
+        let stderr = String::from_utf8_lossy(&diff_output.stderr);
+        return Err(format!("撤销差异块失败：{}", stderr.trim()));
     }
 
-    let state = RefCell::new(HunkState {
-        target_header: None,
-        target_status: None,
-        best_match_distance: u32::MAX,
-        range_matched: false,
-        hunk_count: 0,
-    });
-
-    diff.foreach(
-        &mut |_delta, _| true,
-        None,
-        Some(&mut |delta, hunk| {
-            let mut state = state.borrow_mut();
-            let current_index = state.hunk_count;
-            state.hunk_count = state.hunk_count.saturating_add(1);
-
-            let ranges = UnifiedHunkRanges {
-                old_start: hunk.old_start() as u32,
-                old_count: hunk.old_lines() as u32,
-                new_start: hunk.new_start() as u32,
-                new_count: hunk.new_lines() as u32,
-            };
-            let distance = line_distance_to_unified_hunk(line, ranges);
-            let range_matches = unified_hunk_matches_selection(
-                ranges,
-                original_start_line,
-                original_end_line,
-                modified_start_line,
-                modified_end_line,
-            );
-            if hunk_index == Some(current_index) {
-                // 设计说明：前端知道当前 Monaco diff change 的顺序，后端优先按顺序取
-                // git hunk，避免行号范围过宽时把同一文件的多个 hunk 一起撤销。
-                state.range_matched = true;
-                state.best_match_distance = distance;
-                state.target_header = Some(String::from_utf8_lossy(hunk.header()).to_string());
-                state.target_status = Some(delta.status());
-                return true;
-            }
-            if hunk_index.is_some() {
-                return true;
-            }
-            // 设计说明：Monaco 的当前差异块按钮可能锚在插入块前一行；
-            // 撤销差异块优先使用前端传入的可视 diff 范围；范围没有命中时，
-            // 再退回“精确优先，允许 1 行邻近”的单行策略，和暂存保持一致。
-            if range_matches
-                && (!state.range_matched || distance < state.best_match_distance)
-            {
-                // 设计说明：Monaco 的可视范围在少数场景可能覆盖多个 git hunk。
-                // 这里仍只选择离当前光标锚点最近的一块，保证胶囊按钮是块级操作。
-                state.range_matched = true;
-                state.best_match_distance = distance;
-                state.target_header = Some(String::from_utf8_lossy(hunk.header()).to_string());
-                state.target_status = Some(delta.status());
-            } else if !state.range_matched
-                && distance <= HUNK_LINE_MATCH_TOLERANCE
-                && distance < state.best_match_distance
-            {
-                state.best_match_distance = distance;
-                state.target_header = Some(String::from_utf8_lossy(hunk.header()).to_string());
-                state.target_status = Some(delta.status());
-            }
-            true
-        }),
-        None,
-    )
-    .map_err(|e| {
-        error!("Failed to inspect diff hunks: {}", e);
-        e.to_string()
-    })?;
-
-    let state = state.into_inner();
-    let Some(target_header) = state.target_header else {
-        error!(
-            "No matching hunk found for file: {}, line: {}, hunk_count: {}",
-            normalized_path, line, state.hunk_count
-        );
-        return Err("撤销差异块失败：未找到匹配的差异块".to_string());
-    };
-
-    if state.range_matched {
-        debug!(
-            "Matched hunk for discard by index/range: file={}, line={}, hunk_index={:?}, header={}",
-            normalized_path,
-            line,
-            hunk_index,
-            target_header.trim()
-        );
-    } else if state.best_match_distance == 0 {
-        debug!(
-            "Matched hunk for discard by exact line: file={}, line={}",
-            normalized_path, line
-        );
-    } else {
-        warn!(
-            "Matched hunk for discard by nearby anchor: file={}, line={}, distance={}",
-            normalized_path, line, state.best_match_distance
-        );
-    }
-
-    let mut patch = format!("diff --git a/{0} b/{0}\n", normalized_path);
-    match state.target_status.unwrap_or(Delta::Modified) {
-        Delta::Added | Delta::Untracked => {
-            patch.push_str("--- /dev/null\n");
-            patch.push_str(&format!("+++ b/{}\n", normalized_path));
-        }
-        Delta::Deleted => {
-            patch.push_str(&format!("--- a/{}\n", normalized_path));
-            patch.push_str("+++ /dev/null\n");
-        }
-        _ => {
-            patch.push_str(&format!("--- a/{}\n", normalized_path));
-            patch.push_str(&format!("+++ b/{}\n", normalized_path));
-        }
-    }
-    let selected_hunk_lines = RefCell::new(Vec::<String>::new());
-    let appended_header = RefCell::new(false);
-    diff.foreach(
-        &mut |_delta, _| true,
-        None,
-        None,
-        Some(&mut |_delta, hunk, line_info| {
-            if let Some(current_hunk) = hunk {
-                let header = String::from_utf8_lossy(current_hunk.header());
-                if header != target_header.as_str() {
-                    return true;
-                }
-                let header_text = header.to_string();
-                if !*appended_header.borrow() {
-                    selected_hunk_lines.borrow_mut().push(header_text);
-                    *appended_header.borrow_mut() = true;
-                }
-            }
-            let origin = line_info.origin();
-            // Keep '\ No newline at end of file' metadata lines; omitting them
-            // can make zero-context patches fail to apply in reverse.
-            if origin != ' ' && origin != '+' && origin != '-' && origin != '\\' {
-                return true;
-            }
-            if let Ok(content) = std::str::from_utf8(line_info.content()) {
-                let trimmed = content.trim_end_matches(|c| c == '\n' || c == '\r');
-                selected_hunk_lines
-                    .borrow_mut()
-                    .push(format!("{}{}", origin, trimmed));
-            }
-            true
-        }),
-    )
-    .map_err(|e| {
-        error!("Failed to iterate diff hunks: {}", e);
-        e.to_string()
-    })?;
-
-    let selected_hunk_lines = selected_hunk_lines.into_inner();
-    if selected_hunk_lines.is_empty() {
-        error!("Matched hunk produced an empty patch for line {}", line);
-        return Err("撤销差异块失败：未找到匹配的差异块".to_string());
-    }
-    let precise_hunk = crop_hunk_to_selection(
-        &selected_hunk_lines,
+    let diff_text = String::from_utf8_lossy(&diff_output.stdout);
+    let patch = build_precise_hunk_patch_from_unified_diff(
+        &diff_text,
+        &normalized_path,
+        line,
+        hunk_index,
         original_start_line,
         original_end_line,
         modified_start_line,
         modified_end_line,
         "撤销",
     )?;
-    for item in precise_hunk {
-        patch.push_str(&item);
-        patch.push('\n');
-    }
-    info!(
-        "Discard hunk patch prepared: file={}, hunk_index={:?}, patch_lines={}, patch_preview={}",
-        normalized_path,
-        hunk_index,
-        patch.lines().count(),
-        patch.lines().take(8).collect::<Vec<_>>().join(" | ")
-    );
 
-    let repo_dir = repo.workdir().unwrap_or_else(|| Path::new(&path));
     let mut cmd = std::process::Command::new("git");
     cmd.current_dir(repo_dir)
         .arg("apply")
@@ -2034,11 +1852,20 @@ pub fn discard_hunk(
         } else {
             format!("{}\n{}", stdout.trim_end(), stderr.trim_start())
         };
-        error!("git apply failed: {}", msg);
+        error!(
+            "git apply failed for discard hunk generated from git diff: file={}, reverse={}, error={}, patch_preview={}",
+            normalized_path,
+            reverse,
+            msg,
+            patch.lines().take(8).collect::<Vec<_>>().join(" | ")
+        );
         return Err(format!("撤销差异块失败：{}", msg));
     }
 
-    info!("Hunk discarded successfully");
+    info!(
+        "Hunk discarded successfully with git diff patch: file={}, hunk_index={:?}, reverse={}",
+        normalized_path, hunk_index, reverse
+    );
     Ok(())
 }
 
@@ -2276,6 +2103,151 @@ fn crop_hunk_to_selection(
         result.len().saturating_sub(1)
     );
     Ok(result)
+}
+
+fn build_precise_hunk_patch_from_unified_diff(
+    diff_text: &str,
+    normalized_path: &str,
+    line: u32,
+    hunk_index: Option<u32>,
+    original_start_line: Option<u32>,
+    original_end_line: Option<u32>,
+    modified_start_line: Option<u32>,
+    modified_end_line: Option<u32>,
+    action_name: &str,
+) -> Result<String, String> {
+    let mut header_lines = Vec::<String>::new();
+    let mut current_hunk = Vec::<String>::new();
+    let mut matched_hunk = Vec::<String>::new();
+    let mut fallback_hunk = Vec::<String>::new();
+    let mut in_hunk = false;
+    let mut hunk_count = 0u32;
+    let mut best_match_distance = u32::MAX;
+    let mut current_match_distance = u32::MAX;
+    let mut current_range_matches = false;
+    let mut range_matched = false;
+    let mut index_matched = false;
+
+    for raw_line in diff_text.lines() {
+        if raw_line.starts_with("@@ ") {
+            if in_hunk {
+                let current_index = hunk_count.saturating_sub(1);
+                if hunk_index == Some(current_index) {
+                    index_matched = true;
+                    matched_hunk = current_hunk.clone();
+                    best_match_distance = current_match_distance;
+                } else if hunk_index.is_none()
+                    && current_range_matches
+                    && (!range_matched || current_match_distance < best_match_distance)
+                {
+                    range_matched = true;
+                    matched_hunk = current_hunk.clone();
+                    best_match_distance = current_match_distance;
+                } else if !range_matched
+                    && hunk_index.is_none()
+                    && current_match_distance <= HUNK_LINE_MATCH_TOLERANCE
+                    && current_match_distance < best_match_distance
+                {
+                    fallback_hunk = current_hunk.clone();
+                    best_match_distance = current_match_distance;
+                }
+            }
+            in_hunk = true;
+            hunk_count = hunk_count.saturating_add(1);
+            current_hunk.clear();
+            current_hunk.push(raw_line.to_string());
+            if let Some(ranges) = parse_unified_hunk_ranges(raw_line) {
+                current_match_distance = line_distance_to_unified_hunk(line, ranges);
+                current_range_matches = unified_hunk_matches_selection(
+                    ranges,
+                    original_start_line,
+                    original_end_line,
+                    modified_start_line,
+                    modified_end_line,
+                );
+            } else {
+                current_match_distance = u32::MAX;
+                current_range_matches = false;
+            }
+        } else if in_hunk {
+            current_hunk.push(raw_line.to_string());
+        } else {
+            header_lines.push(raw_line.to_string());
+        }
+    }
+
+    if in_hunk {
+        let current_index = hunk_count.saturating_sub(1);
+        if hunk_index == Some(current_index) {
+            index_matched = true;
+            matched_hunk = current_hunk;
+        } else if hunk_index.is_none()
+            && current_range_matches
+            && (!range_matched || current_match_distance < best_match_distance)
+        {
+            matched_hunk = current_hunk;
+        } else if !range_matched
+            && hunk_index.is_none()
+            && current_match_distance <= HUNK_LINE_MATCH_TOLERANCE
+            && current_match_distance < best_match_distance
+        {
+            fallback_hunk = current_hunk;
+        }
+    }
+
+    if hunk_index.is_some() && !index_matched {
+        warn!(
+            "Requested hunk index not found while building patch: action={}, file={}, hunk_index={:?}, hunk_count={}",
+            action_name, normalized_path, hunk_index, hunk_count
+        );
+    }
+
+    if matched_hunk.is_empty() && !fallback_hunk.is_empty() {
+        matched_hunk = fallback_hunk;
+    }
+
+    if matched_hunk.is_empty() {
+        warn!(
+            "No matching hunk found while building patch: action={}, file={}, line={}, hunk_count={}",
+            action_name, normalized_path, line, hunk_count
+        );
+        return Err(format!(
+            "{}差异块失败：未找到第 {} 行附近的差异块",
+            action_name, line
+        ));
+    }
+
+    // 设计说明：这里保留 git CLI 输出的文件头与 hunk 原始内容，只裁剪 hunk 内容并重算范围。
+    // 不再用 libgit2 的 line.origin/content 手工重组 patch，避免纯新增块、无末尾换行元信息、
+    // CRLF/LF 转换等边界场景生成与 `git apply` 不兼容的补丁。
+    let mut patch = String::new();
+    for item in header_lines {
+        patch.push_str(&item);
+        patch.push('\n');
+    }
+    let precise_hunk = crop_hunk_to_selection(
+        &matched_hunk,
+        original_start_line,
+        original_end_line,
+        modified_start_line,
+        modified_end_line,
+        action_name,
+    )?;
+    for item in precise_hunk {
+        patch.push_str(&item);
+        patch.push('\n');
+    }
+
+    info!(
+        "Precise hunk patch prepared from git diff: action={}, file={}, hunk_index={:?}, patch_lines={}, patch_preview={}",
+        action_name,
+        normalized_path,
+        hunk_index,
+        patch.lines().count(),
+        patch.lines().take(8).collect::<Vec<_>>().join(" | ")
+    );
+
+    Ok(patch)
 }
 
 #[tauri::command]
