@@ -103,6 +103,7 @@ const treeData = shallowRef([]);
 const expanded = ref(false);
 const expandedKeys = ref([]);
 const selectedKeys = ref([]);
+const hiddenRootKey = ref('');
 let abortController = new AbortController();
 
 // 设计说明：与主界面知识编辑模式保持一致。
@@ -139,17 +140,7 @@ const toggleKnowledgeBase = async (kb) => {
         { signal: abortController.signal }
       );
 
-      const newTreeData = [convertToTreeNode(root)];
-
-      treeData.value = newTreeData;
-      expandedKeys.value = [newTreeData[0].key];
-      selectedKeys.value = [newTreeData[0].key];
-      store.setSelectedTreeNodeKey(newTreeData[0].key);
-      logger.info('[BrainKnowledgeBaseList] 展开知识库并加载文件树', {
-        knowledgeBase: kb.knowledge_base_name,
-        rootPath: kb.location,
-        rootKey: newTreeData[0].key
-      });
+      applyLoadedTree(root, 'toggle', kb);
     }
   } catch (error) {
     if (error.name !== 'AbortError') {
@@ -173,6 +164,10 @@ const handleTreeSelect = (keys) => {
     if (store.graphViewMode === 'kg3d') {
       store.requestKg3dAction('selectByPath', { path: key });
     }
+  } else {
+    logger.debug('[BrainKnowledgeBaseList] 文件树选择已清空', {
+      hiddenRootKey: hiddenRootKey.value
+    });
   }
 };
 
@@ -184,7 +179,7 @@ const refreshList = async () => {
       const kb = knowledgeBases.value.find(k => k.id === selectedId.value);
       if (kb) {
         const root = await invoke("get_knowledge_base_tree", { rootPath: kb.location });
-        treeData.value = [convertToTreeNode(root)];
+        applyLoadedTree(root, 'refresh', kb);
       }
     }
   } catch (error) {
@@ -221,6 +216,36 @@ function convertToTreeNode(node) {
   };
 }
 
+// 设计说明：后端返回的 root 是知识库目录本身，而标题行已经展示了该知识库。
+// 因此这里把 root 作为隐藏容器，只渲染它的 children，避免左侧树出现重复的顶级根节点。
+function buildVisibleTreeData(root) {
+  const rootKey = String(root?.path || '').replace(/\\/g, '/');
+  const nodes = Array.isArray(root?.children)
+    ? root.children.filter((child) => !isHiddenTreeNode(child)).map(convertToTreeNode)
+    : [];
+  return { rootKey, nodes };
+}
+
+function applyLoadedTree(root, reason, kb) {
+  const { rootKey, nodes } = buildVisibleTreeData(root);
+  hiddenRootKey.value = rootKey;
+  treeData.value = nodes;
+  expandedKeys.value = [];
+  selectedKeys.value = [];
+
+  if (rootKey) {
+    store.setSelectedTreeNodeKey(rootKey);
+  }
+
+  logger.info('[BrainKnowledgeBaseList] 已加载知识库文件树并隐藏根节点', {
+    reason,
+    knowledgeBase: kb?.knowledge_base_name,
+    rootPath: kb?.location,
+    hiddenRootKey: rootKey,
+    visibleTopLevelCount: nodes.length
+  });
+}
+
 // 树前缀图标:与主界面文件树一致的彩色类型图标,目录随展开态切换开/合。
 function renderTreePrefix({ option }) {
   const expanded = Array.isArray(expandedKeys.value) && expandedKeys.value.includes(option.key);
@@ -240,15 +265,7 @@ onMounted(async () => {
     const root = await invoke("get_knowledge_base_tree", {
       rootPath: selectedKnowledgeBase.value.location
     });
-    treeData.value = [convertToTreeNode(root)];
-    expandedKeys.value = [treeData.value[0].key];
-    selectedKeys.value = [treeData.value[0].key];
-    store.setSelectedTreeNodeKey(treeData.value[0].key);
-    logger.info('[BrainKnowledgeBaseList] 初始化知识库文件树', {
-      knowledgeBase: selectedKnowledgeBase.value.knowledge_base_name,
-      rootPath: selectedKnowledgeBase.value.location,
-      rootKey: treeData.value[0].key
-    });
+    applyLoadedTree(root, 'mounted', selectedKnowledgeBase.value);
   }
 });
 
@@ -257,6 +274,7 @@ onUnmounted(() => {
   treeData.value = [];
   expandedKeys.value = [];
   selectedKeys.value = [];
+  hiddenRootKey.value = '';
 });
 </script>
 
@@ -286,9 +304,33 @@ onUnmounted(() => {
   /* 设计说明：展开知识库时，仅让树容器内部滚动；外层列表高度保持稳定，避免文件树被其它条目挤压。 */
   flex: 1 1 auto;
   min-height: 0;
-  overflow: auto;
-  padding-left: 8px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-left: 0;
   overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(140, 140, 150, 0.4) transparent;
+}
+
+.tree-container::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+.tree-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.tree-container::-webkit-scrollbar-thumb {
+  background: rgba(140, 140, 150, 0.38);
+  border-radius: 10px;
+  border: 2.5px solid transparent;
+  background-clip: padding-box;
+}
+
+.tree-container::-webkit-scrollbar-thumb:hover {
+  background: rgba(120, 120, 130, 0.6);
+  background-clip: padding-box;
 }
 
 .knowledge-base-list {
@@ -371,29 +413,30 @@ onUnmounted(() => {
 
 /* 修改滚动条样式 - 变细且更现代 */
 .kb-list::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 9px;
+  height: 9px;
 }
 
 .kb-list::-webkit-scrollbar-thumb {
-  background-color: rgba(0, 0, 0, 0.2);
-  border-radius: 3px;
-  transition: background-color 0.3s;
+  background: rgba(140, 140, 150, 0.38);
+  border-radius: 10px;
+  border: 2.5px solid transparent;
+  background-clip: padding-box;
 }
 
 .kb-list::-webkit-scrollbar-thumb:hover {
-  background-color: rgba(0, 0, 0, 0.4);
+  background: rgba(120, 120, 130, 0.6);
+  background-clip: padding-box;
 }
 
 .kb-list::-webkit-scrollbar-track {
-  background-color: rgba(0, 0, 0, 0.05);
-  border-radius: 3px;
+  background: transparent;
 }
 
 /* Firefox滚动条样式 */
 .kb-list {
   scrollbar-width: thin;
-  scrollbar-color: rgba(0, 0, 0, 0.2) rgba(0, 0, 0, 0.05);
+  scrollbar-color: rgba(140, 140, 150, 0.4) transparent;
 }
 
 .kb-list {
@@ -462,14 +505,14 @@ onUnmounted(() => {
   color: #1890ff;
 }
 
-/* 选中状态:仅在左侧加细的强调线,不给整条(含展开的树)铺背景,避免影响阅读 */
+/* 选中状态只保留文字和图标强调，和主界面的知识库标题行保持一致。 */
 .kb-list-item.active {
-  border-left: 3px solid #1890ff;
+  border-left: none;
 }
 
-/* 蓝色底只罩标题行 */
+/* 标题行不再铺蓝色高亮底，避免和主界面文件树视觉不一致。 */
 .kb-list-item.active .kb-item {
-  background: rgba(24, 144, 255, 0.12);
+  background: transparent;
   border-radius: 6px;
 }
 
@@ -481,12 +524,12 @@ onUnmounted(() => {
   font-weight: 500;
 }
 
-/* 暗色模式:更亮的蓝字 + 标题行略深的底(兼容 .dark / .dark-mode 两种根类) */
+/* 暗色模式:保留更亮的蓝字提示当前知识库，不额外铺底色。 */
 :is(.dark, .dark-mode) .kb-list-item.active {
-  border-left-color: #58a6ff;
+  border-left-color: transparent;
 }
 :is(.dark, .dark-mode) .kb-list-item.active .kb-item {
-  background: rgba(56, 139, 253, 0.18);
+  background: transparent;
 }
 :is(.dark, .dark-mode) .kb-list-item.active .kb-title,
 :is(.dark, .dark-mode) .kb-list-item.active .kb-icon,
@@ -546,13 +589,15 @@ onUnmounted(() => {
 }
 
 .kb-tree {
-  height: 100%;
-  margin: 8px 0 12px 16px;
-  border-left: 1px dashed var(--n-border-color);
-  padding-left: 8px;
+  height: auto;
+  min-height: 0;
+  margin: 6px 0 0 0;
+  border-left: none;
+  padding: 0 0 12px 0;
+  box-sizing: border-box;
 }
 
-/* ───── 复刻主编辑器文件树行观感:圆角 hover、蓝色选中、彩色类型图标 ───── */
+/* ───── 复刻主编辑器文件树行观感:圆角 hover、无额外蓝色选中底、彩色类型图标 ───── */
 .kb-tree :deep(.n-tree-node) {
   padding: 1px 0;
 }
@@ -571,8 +616,8 @@ onUnmounted(() => {
 
 .kb-tree :deep(.n-tree-node--selected .n-tree-node-content),
 .kb-tree :deep(.n-tree-node-content--selected) {
-  background: rgba(0, 122, 255, 0.14);
-  box-shadow: inset 0 0 0 1px rgba(0, 122, 255, 0.28);
+  background: transparent;
+  box-shadow: none;
 }
 
 /* 类型图标:与主树一致的尺寸与柔光质感 */
@@ -617,7 +662,7 @@ onUnmounted(() => {
 }
 :is(.dark, .dark-mode) .kb-tree :deep(.n-tree-node--selected .n-tree-node-content),
 :is(.dark, .dark-mode) .kb-tree :deep(.n-tree-node-content--selected) {
-  background: rgba(56, 139, 253, 0.20);
-  box-shadow: inset 0 0 0 1px rgba(56, 139, 253, 0.40);
+  background: transparent;
+  box-shadow: none;
 }
 </style>
