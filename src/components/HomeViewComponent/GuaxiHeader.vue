@@ -43,14 +43,14 @@
         <template #trigger>
           <n-icon class="header-icon" size="20" :component="BookAdd20Regular" @click="openCreateKnowledgeBase" />
         </template>
-        新建知识库
+        {{ headerShortcutTooltip('新建知识库', 'createKnowledgeBase') }}
       </n-tooltip>
 
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
           <n-icon class="header-icon" size="20" :component="TextBulletListLtr20Filled" @click="openOutlinePanel"></n-icon>
         </template>
-        大纲
+        {{ headerShortcutTooltip('大纲', 'openOutline') }}
       </n-tooltip>
 
       <n-tooltip placement="bottom" trigger="hover">
@@ -59,14 +59,14 @@
             <Icon :icon="assistantIcon" width="18" height="18" />
           </n-icon>
         </template>
-        智能助手
+        {{ headerShortcutTooltip('智能助手', 'openAssistant') }}
       </n-tooltip>
 
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
           <n-icon class="header-icon" size="20" :component="Box20Regular" @click="openTemplateManager" />
         </template>
-        模板管理
+        {{ headerShortcutTooltip('模板管理', 'openTemplateManager') }}
       </n-tooltip>
 
       <n-tooltip placement="bottom" trigger="hover">
@@ -84,7 +84,7 @@
         <template #trigger>
           <n-icon class="header-icon" size="20" :component="Folder20Regular" @click="openResourceRepoManager" />
         </template>
-        知识库资源管理
+        {{ headerShortcutTooltip('知识库资源管理', 'openResourceRepoManager') }}
       </n-tooltip>
 
       <n-tooltip placement="bottom" trigger="hover">
@@ -109,7 +109,7 @@
         <template #trigger>
           <n-icon class="header-icon" size="20" :component="Screenshot24Regular" @click="CaptureScreenshot"></n-icon>
         </template>
-        截图并插入
+        {{ headerShortcutTooltip('截图并插入', 'captureScreenshot') }}
       </n-tooltip>
 
       <n-tooltip placement="bottom" trigger="hover">
@@ -121,7 +121,7 @@
             </svg>
           </n-icon>
         </template>
-        纵向分屏
+        {{ headerShortcutTooltip('纵向分屏', 'splitVertical') }}
       </n-tooltip>
 
       <n-tooltip placement="bottom" trigger="hover">
@@ -133,7 +133,7 @@
             </svg>
           </n-icon>
         </template>
-        横向分屏
+        {{ headerShortcutTooltip('横向分屏', 'splitHorizontal') }}
       </n-tooltip>
 
       <n-tooltip placement="bottom" trigger="hover">
@@ -359,6 +359,7 @@ import { computed, ref, h, onMounted, onUnmounted, nextTick, watch } from "vue";
 import { NIcon, NTooltip } from 'naive-ui'
 import { useSiderStore } from '../../stores/useSiderStore'
 import { useSiderHotkeys } from '../../composables/useSiderHotkeys'
+import { GUAXI_SHORTCUTS, shortcutTooltip, useGuaxiHotkeys } from '../../composables/useGuaxiHotkeys'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -405,6 +406,7 @@ const appWindow = getCurrentWindow();
 
 const RESOURCE_REPO_SYNC_STATUS_KEY = 'guaxi:resourceRepoSyncStatus:v1'
 const RESOURCE_REPO_SYNC_PENDING_KEY = 'guaxi:resourceRepoSyncPending:v1'
+const headerShortcutTooltip = (label, shortcutKey) => shortcutTooltip(label, GUAXI_SHORTCUTS[shortcutKey])
 
 const nowLabel = () => {
   try {
@@ -759,6 +761,62 @@ async function CaptureScreenshot() {
     }
   }
 }
+
+// 设计说明：Header 图标快捷键只映射到已有 click 处理函数，不复制业务逻辑。
+// 这样工具栏点击与键盘触发始终保持同一条执行路径，后续调整按钮行为时不需要同步两份实现。
+useGuaxiHotkeys([
+  {
+    id: 'createKnowledgeBase',
+    label: '新建知识库',
+    shortcut: GUAXI_SHORTCUTS.createKnowledgeBase,
+    handler: openCreateKnowledgeBase,
+  },
+  {
+    id: 'openAssistant',
+    label: '智能助手',
+    shortcut: GUAXI_SHORTCUTS.openAssistant,
+    handler: openAssistantPanel,
+  },
+  {
+    id: 'splitVertical',
+    label: '纵向分屏',
+    shortcut: GUAXI_SHORTCUTS.splitVertical,
+    handler: splitVertical,
+  },
+  {
+    id: 'splitHorizontal',
+    label: '横向分屏',
+    shortcut: GUAXI_SHORTCUTS.splitHorizontal,
+    handler: splitHorizontal,
+  },
+  {
+    id: 'openOutline',
+    label: '大纲',
+    shortcut: GUAXI_SHORTCUTS.openOutline,
+    handler: openOutlinePanel,
+  },
+  {
+    id: 'captureScreenshot',
+    label: '截图并插入',
+    shortcut: GUAXI_SHORTCUTS.captureScreenshot,
+    handler: CaptureScreenshot,
+  },
+  {
+    id: 'openTemplateManager',
+    label: '模板管理',
+    shortcut: GUAXI_SHORTCUTS.openTemplateManager,
+    handler: openTemplateManager,
+  },
+  {
+    id: 'openResourceRepoManager',
+    label: '知识库资源管理',
+    shortcut: GUAXI_SHORTCUTS.openResourceRepoManager,
+    handler: openResourceRepoManager,
+  },
+], {
+  logger,
+  scope: 'GuaxiHeaderShortcuts',
+})
 
 const isSearchDropdownVisible = ref(false)
 const dropdownPosition = ref({ x: 0, y: 0 })

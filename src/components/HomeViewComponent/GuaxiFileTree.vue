@@ -98,7 +98,7 @@
                   <n-icon :component="DownloadOutline" size="16" />
                 </n-icon-wrapper>
               </template>
-              导入文件
+              {{ fileTreeShortcutTooltip('导入文件', 'fileTreeImportFile') }}
             </n-tooltip>
             <n-tooltip trigger="hover">
               <template #trigger>
@@ -106,7 +106,7 @@
                   <n-icon :component="FileAddIcon" size="16" />
                 </n-icon-wrapper>
               </template>
-              新建文件
+              {{ fileTreeShortcutTooltip('新建文件', 'fileTreeNewFile') }}
             </n-tooltip>
             <n-tooltip trigger="hover">
               <template #trigger>
@@ -114,7 +114,7 @@
                   <n-icon :component="FolderAddIcon" size="16" />
                 </n-icon-wrapper>
               </template>
-              新建文件夹
+              {{ fileTreeShortcutTooltip('新建文件夹', 'fileTreeNewFolder') }}
             </n-tooltip>
             <n-tooltip trigger="hover">
               <template #trigger>
@@ -175,7 +175,7 @@
                       <n-icon :component="DownloadOutline" size="16" />
                     </n-icon-wrapper>
                   </template>
-                  导入文件
+                  {{ fileTreeShortcutTooltip('导入文件', 'fileTreeImportFile') }}
                 </n-tooltip>
                 <n-tooltip trigger="hover">
                   <template #trigger>
@@ -183,7 +183,7 @@
                       <n-icon :component="FileAddIcon" size="16" />
                     </n-icon-wrapper>
                   </template>
-                  新建文件
+                  {{ fileTreeShortcutTooltip('新建文件', 'fileTreeNewFile') }}
                 </n-tooltip>
                 <n-tooltip trigger="hover">
                   <template #trigger>
@@ -191,7 +191,7 @@
                       <n-icon :component="FolderAddIcon" size="16" />
                     </n-icon-wrapper>
                   </template>
-                  新建文件夹
+                  {{ fileTreeShortcutTooltip('新建文件夹', 'fileTreeNewFolder') }}
                 </n-tooltip>
                 <n-tooltip trigger="hover">
                   <template #trigger>
@@ -232,7 +232,7 @@
                   <n-icon :component="DownloadOutline" size="16" />
                 </n-icon-wrapper>
               </template>
-              导入文件
+              {{ fileTreeShortcutTooltip('导入文件', 'fileTreeImportFile') }}
             </n-tooltip>
             <n-tooltip trigger="hover">
               <template #trigger>
@@ -240,7 +240,7 @@
                   <n-icon :component="FileAddIcon" size="16" />
                 </n-icon-wrapper>
               </template>
-              新建文件
+              {{ fileTreeShortcutTooltip('新建文件', 'fileTreeNewFile') }}
             </n-tooltip>
             <n-tooltip trigger="hover">
               <template #trigger>
@@ -248,7 +248,7 @@
                   <n-icon :component="FolderAddIcon" size="16" />
                 </n-icon-wrapper>
               </template>
-              新建文件夹
+              {{ fileTreeShortcutTooltip('新建文件夹', 'fileTreeNewFolder') }}
             </n-tooltip>
             <n-tooltip trigger="hover">
               <template #trigger>
@@ -297,7 +297,7 @@
                         <n-icon :component="DownloadOutline" size="16" />
                       </n-icon-wrapper>
                     </template>
-                    导入文件
+                    {{ fileTreeShortcutTooltip('导入文件', 'fileTreeImportFile') }}
                   </n-tooltip>
                   <n-tooltip trigger="hover">
                     <template #trigger>
@@ -305,7 +305,7 @@
                         <n-icon :component="FileAddIcon" size="16" />
                       </n-icon-wrapper>
                     </template>
-                    新建文件
+                    {{ fileTreeShortcutTooltip('新建文件', 'fileTreeNewFile') }}
                   </n-tooltip>
                   <n-tooltip trigger="hover">
                     <template #trigger>
@@ -313,7 +313,7 @@
                         <n-icon :component="FolderAddIcon" size="16" />
                       </n-icon-wrapper>
                     </template>
-                    新建文件夹
+                    {{ fileTreeShortcutTooltip('新建文件夹', 'fileTreeNewFolder') }}
                   </n-tooltip>
                   <n-tooltip trigger="hover">
                     <template #trigger>
@@ -347,7 +347,7 @@
                   <n-icon :component="DownloadOutline" size="16" />
                 </n-icon-wrapper>
               </template>
-              导入文件
+              {{ fileTreeShortcutTooltip('导入文件', 'fileTreeImportFile') }}
             </n-tooltip>
             <n-tooltip trigger="hover">
               <template #trigger>
@@ -355,7 +355,7 @@
                   <n-icon :component="FileAddIcon" size="16" />
                 </n-icon-wrapper>
               </template>
-              新建文件
+              {{ fileTreeShortcutTooltip('新建文件', 'fileTreeNewFile') }}
             </n-tooltip>
             <n-tooltip trigger="hover">
               <template #trigger>
@@ -363,7 +363,7 @@
                   <n-icon :component="FolderAddIcon" size="16" />
                 </n-icon-wrapper>
               </template>
-              新建文件夹
+              {{ fileTreeShortcutTooltip('新建文件夹', 'fileTreeNewFolder') }}
             </n-tooltip>
             <n-tooltip trigger="hover">
               <template #trigger>
@@ -489,9 +489,11 @@ import { Icon } from '@iconify/vue'
 import { RefreshOutline as RefreshIcon, ChevronDownOutline as ChevronDownIcon, ChevronForwardOutline as ChevronForwardIcon } from '@vicons/ionicons5'
 import { Folder20Regular as FolderIcon, ChannelAdd20Regular as FileAddIcon, FolderAdd20Regular as FolderAddIcon } from '@vicons/fluent'
 import { useEditorBridgeStore } from '../../stores/editorBridgeStore'
+import { GUAXI_SHORTCUTS, shortcutTooltip, useGuaxiHotkeys } from '../../composables/useGuaxiHotkeys'
 
 const logger = createLogger('GuaxiFileTree')
 const message = useMessage();
+const fileTreeShortcutTooltip = (label, shortcutKey) => shortcutTooltip(label, GUAXI_SHORTCUTS[shortcutKey])
 
 // 编辑器面包屑联动：用于从编辑器定位到文件树节点
 const EVENT_REVEAL_IN_FILE_TREE = 'guaxi_editor_reveal_in_file_tree'
@@ -2195,6 +2197,72 @@ const plainHeaderImport = () => genImportFile('plain', normalizePath(externalDir
 const taskCatAddFile = (key) => genAddFile('task', catPathOf(key))
 const taskCatAddFolder = (key) => genAddFolder('task', catPathOf(key))
 const taskCatImport = (key) => genImportFile('task', catPathOf(key))
+
+const runFileTreeToolbarShortcut = async (action) => {
+  logger.info('[FileTreeShortcut] toolbar shortcut requested', {
+    action,
+    viewMode: viewMode.value,
+    activeRepoPath: activeRepoPathItem.value,
+    externalDir: externalDir.value,
+    activeTaskCat: activeTaskCat.value,
+  })
+
+  if (viewMode.value === 'kb') {
+    const repoPath = activeRepoPathItem.value
+    if (!repoPath) {
+      message.warning('请先选择一个知识库')
+      return
+    }
+    if (action === 'new-file') return handleAddFile(repoPath)
+    if (action === 'new-folder') return handleAddFolder(repoPath)
+    return handleImportMarkdownFile(repoPath)
+  }
+
+  if (viewMode.value === 'task') {
+    const cat = activeTaskCat.value
+    if (!catPathOf(cat)) {
+      message.warning('请先选择一个任务分类')
+      return
+    }
+    if (action === 'new-file') return taskCatAddFile(cat)
+    if (action === 'new-folder') return taskCatAddFolder(cat)
+    return taskCatImport(cat)
+  }
+
+  if (!externalDir.value) {
+    message.warning('请先打开一个外部目录')
+    return
+  }
+  if (action === 'new-file') return plainHeaderAddFile()
+  if (action === 'new-folder') return plainHeaderAddFolder()
+  return plainHeaderImport()
+}
+
+// 设计说明：文件树工具条图标在三种模式下共用同一组快捷键；
+// 快捷键只做路由，最终仍调用原按钮函数，避免新建/导入行为和鼠标点击出现分叉。
+useGuaxiHotkeys([
+  {
+    id: 'fileTreeNewFile',
+    label: '新建文件',
+    shortcut: GUAXI_SHORTCUTS.fileTreeNewFile,
+    handler: () => runFileTreeToolbarShortcut('new-file'),
+  },
+  {
+    id: 'fileTreeNewFolder',
+    label: '新建文件夹',
+    shortcut: GUAXI_SHORTCUTS.fileTreeNewFolder,
+    handler: () => runFileTreeToolbarShortcut('new-folder'),
+  },
+  {
+    id: 'fileTreeImportFile',
+    label: '导入文件',
+    shortcut: GUAXI_SHORTCUTS.fileTreeImportFile,
+    handler: () => runFileTreeToolbarShortcut('import-file'),
+  },
+], {
+  logger,
+  scope: 'GuaxiFileTreeShortcuts',
+})
 
 
 // 外部目录树：打开文件

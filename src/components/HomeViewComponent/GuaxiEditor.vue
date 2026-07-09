@@ -437,7 +437,7 @@
                   <n-icon :component="ExitOutline" size="18" />
                 </n-button>
               </template>
-              导出
+              {{ shortcutTooltip('导出 PDF', GUAXI_SHORTCUTS.editorExport) }}
             </n-tooltip>
           </n-dropdown>
 
@@ -1186,6 +1186,7 @@ import GuaxiNotebookView from './GuaxiNotebookView.vue'
 import GuaxiLatexPreview from './GuaxiLatexPreview.vue'
 import GuaxiSpeechDictationCard from './GuaxiSpeechDictationCard.vue'
 import { useSpeechDictation } from '../../composables/useSpeechDictation'
+import { GUAXI_SHORTCUTS, matchesShortcut, shortcutText, shortcutTooltip } from '../../composables/useGuaxiHotkeys'
 import GuaxiOrgTaskPreview from './GuaxiOrgTaskPreview.vue'
 import { validateTaskBlocks, parseTaskBlocks, serializeBlock, replaceBlockInContent, buildNewBlock } from '../../utils/guaxiTaskParser'
 import GuaxiTerminalPanel from './GuaxiTerminalPanel.vue'
@@ -14682,6 +14683,17 @@ const handleKeyDown = (e) => {
   if (isConsoleShortcut) {
     e.preventDefault()
     void togglePythonConsolePanel('keyboard-toggle-console')
+    return
+  }
+
+  if (matchesShortcut(e, GUAXI_SHORTCUTS.editorExport)) {
+    e.preventDefault()
+    e.stopPropagation()
+    logger.info('[EditorShortcut] export PDF shortcut requested', {
+      shortcut: shortcutText(GUAXI_SHORTCUTS.editorExport),
+      selectedPath: selectedFile.value?.path || '',
+    })
+    void handleLatexExport()
     return
   }
 
