@@ -877,6 +877,7 @@ const isRefreshingStatus = ref(false)
 const fileChangeUnlisten = ref(null)
 let autoRefreshIntervalId = null
 let refreshDebounceTimerId = null
+let commitHistoryRefreshPromise = null
 let autoRefreshFocusHandler = null
 let autoRefreshVisibilityHandler = null
 
@@ -892,8 +893,14 @@ const isPathUnderRepo = (p) => {
 const scheduleAutoRefresh = () => {
   if (!gitAutoRefresh.value.enabled) return
   if (refreshDebounceTimerId) clearTimeout(refreshDebounceTimerId)
-  refreshDebounceTimerId = setTimeout(() => {
-    refreshGitStatus({ resetSelection: false, includeCommits: false })
+  refreshDebounceTimerId = setTimeout(async () => {
+    refreshDebounceTimerId = null
+    await refreshGitAfterOperation({
+      reason: 'auto-refresh',
+      resetSelection: false,
+      includeCommits: false,
+      refreshBranches: false
+    })
   }, 250)
 }
 
@@ -1846,7 +1853,11 @@ const handleDiscardDiffHunk = async () => {
       line: invokeHunkArgs.line,
       staged: isStagedDiff
     })
-    await refreshGitStatus({ resetSelection: false, includeCommits: false })
+    await refreshGitAfterOperation({
+      reason: isStagedDiff ? 'unstage-hunk' : 'discard-hunk',
+      resetSelection: false,
+      includeCommits: false
+    })
     const samePanelFile = (isStagedDiff ? stagedFiles.value : unstagedFiles.value)
       .find((item) => item?.path === targetFilePath)
     const fallbackUnstagedFile = isStagedDiff
@@ -1941,7 +1952,11 @@ const handleStageDiffHunk = async () => {
       filePath: targetFilePath,
       ...invokeHunkArgs
     })
-    await refreshGitStatus({ resetSelection: false, includeCommits: false })
+    await refreshGitAfterOperation({
+      reason: 'stage-hunk',
+      resetSelection: false,
+      includeCommits: false
+    })
     const nextFile = unstagedFiles.value.find((item) => item?.path === targetFilePath)
     if (nextFile) {
       await selectFileAndUpdateDiff(nextFile, 'stage-hunk-refresh')
@@ -2165,11 +2180,12 @@ const handleBranchItemClick = async (branch) => {
       showBranchPanel.value = false;
 
       // 刷新所有相关状态
-      await Promise.all([
-        fetchBranches(),       // 刷新分支列表
-        await refreshGitStatus({ includeCommits: true }),    // 刷新文件状态
-        loadCommitHistory()    // 刷新提交历史
-      ]);
+      await refreshGitAfterOperation({
+        reason: 'checkout-branch',
+        resetSelection: true,
+        includeCommits: true,
+        refreshBranches: true
+      });
 
       // 显示成功通知
       notification.success({
@@ -2353,6 +2369,63 @@ const normalizePanelHeightsToContainer = (reason = 'panel-resize') => {
       ]
     : [0.3, 0.3, 0.4]
   applyPanelHeightRatios(ratios, reason)
+}
+
+const waitForGitStatusRefreshIdle = async (reason = 'git-refresh') => {
+  // 设计说明：文件监听和用户点击可能同时触发刷新。若显式 Git 操作刚完成时
+  // 直接碰到 isRefreshingStatus，就会被 refreshGitStatus 的并发保护短路，导致
+  // 提交历史 head marker、push/pull 图标位置仍停留在旧 DOM 状态。
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (!isRefreshingStatus.value) return
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  frontendLogger.warn('[GitPanel] Timed out waiting for previous Git refresh to finish', { reason })
+}
+
+const refreshGitAfterOperation = async ({
+  reason = 'git-operation',
+  resetSelection = false,
+  includeCommits = true,
+  refreshBranches = false
+} = {}) => {
+  if (refreshDebounceTimerId) {
+    clearTimeout(refreshDebounceTimerId)
+    refreshDebounceTimerId = null
+  }
+
+  frontendLogger.info('[GitPanel] Refreshing after Git operation', {
+    reason,
+    resetSelection,
+    includeCommits,
+    refreshBranches
+  })
+
+  await waitForGitStatusRefreshIdle(reason)
+  await refreshGitStatus({
+    resetSelection,
+    includeCommits,
+    forceCommits: includeCommits
+  })
+
+  if (refreshBranches) {
+    await fetchBranches()
+  }
+
+  await nextTick()
+  normalizePanelHeightsToContainer(`git-operation-${reason}`)
+
+  if (diffEditor) {
+    diffEditor.layout()
+  }
+
+  frontendLogger.info('[GitPanel] Git operation refresh completed', {
+    reason,
+    commits: commits.value.length,
+    staged: stagedFiles.value.length,
+    unstaged: unstagedFiles.value.length,
+    localHead: headMarkers.value.local_head,
+    remoteHead: headMarkers.value.remote_head
+  })
 }
 
 // 修改 startChangesDrag 函数
@@ -2592,7 +2665,7 @@ const isIgnoredGitPath = (p) => {
   return s === '.meta' || s.startsWith('.meta/') || s.includes('/.meta/') || lower.endsWith('.cellmeta')
 }
 
-const refreshGitStatus = async ({ resetSelection = true, includeCommits = true } = {}) => {
+const refreshGitStatus = async ({ resetSelection = true, includeCommits = true, forceCommits = false } = {}) => {
   if (isRefreshingStatus.value) return
   isRefreshingStatus.value = true
 
@@ -2644,7 +2717,7 @@ const refreshGitStatus = async ({ resetSelection = true, includeCommits = true }
     unstagedFiles.value = newUnstagedFiles
 
     if (includeCommits) {
-      await loadCommitHistory()
+      await loadCommitHistory({ force: forceCommits })
     }
 
     if (!resetSelection) {
@@ -2698,37 +2771,48 @@ const refreshGitStatus = async ({ resetSelection = true, includeCommits = true }
   }
 }
 
-const loadCommitHistory = async () => {
-  if (commitHistoryLoading.value) return
+const loadCommitHistory = async ({ force = false } = {}) => {
+  if (commitHistoryRefreshPromise) {
+    frontendLogger.info('[GitPanel] Waiting for in-flight commit history refresh', { force })
+    await commitHistoryRefreshPromise
+    if (!force) return
+    frontendLogger.info('[GitPanel] Reloading commit history after in-flight refresh for Git operation')
+  }
+
   commitHistoryLoading.value = true
 
-  try {
-    const [markers, branch] = await Promise.all([
-      invoke('get_git_head_markers', { path: props.workspacePath }),
-      currentBranch.value
-        ? Promise.resolve(currentBranch.value)
-        : invoke('get_current_branch', { path: props.workspacePath })
-    ])
+  commitHistoryRefreshPromise = (async () => {
+    try {
+      const [markers, branch] = await Promise.all([
+        invoke('get_git_head_markers', { path: props.workspacePath }),
+        currentBranch.value
+          ? Promise.resolve(currentBranch.value)
+          : invoke('get_current_branch', { path: props.workspacePath })
+      ])
 
-    if (!currentBranch.value && branch) {
-      currentBranch.value = branch
+      if (!currentBranch.value && branch) {
+        currentBranch.value = branch
+      }
+
+      // 提交历史区域优先保证面板响应速度：先加载较小窗口，列表内再逐步展开可见项。
+      commits.value = await invoke('get_git_log', {
+        path: props.workspacePath,
+        branchName: branch || currentBranch.value,
+        limit: 80
+      })
+      commitHistoryVisibleLimit.value = 60
+
+      headMarkers.value = markers
+      logger.debug('Commit history loaded', { count: commits.value.length, visible: commitHistoryVisibleLimit.value })
+    } catch (error) {
+      logger.error('Failed to load commit history', error)
+    } finally {
+      commitHistoryLoading.value = false
+      commitHistoryRefreshPromise = null
     }
+  })()
 
-    // 提交历史区域优先保证面板响应速度：先加载较小窗口，列表内再逐步展开可见项。
-    commits.value = await invoke('get_git_log', {
-      path: props.workspacePath,
-      branchName: branch || currentBranch.value,
-      limit: 80
-    })
-    commitHistoryVisibleLimit.value = 60
-
-    headMarkers.value = markers
-    logger.debug('Commit history loaded', { count: commits.value.length, visible: commitHistoryVisibleLimit.value })
-  } catch (error) {
-    logger.error('Failed to load commit history', error)
-  } finally {
-    commitHistoryLoading.value = false
-  }
+  return commitHistoryRefreshPromise
 }
 
 const formatDateFull = (timestamp) => {
@@ -3223,7 +3307,11 @@ const handleStageFile = async (file) => {
       stagedFiles.value[stagedIndex].__pending = false
     }
 
-    scheduleAutoRefresh()
+    await refreshGitAfterOperation({
+      reason: 'stage-file',
+      resetSelection: false,
+      includeCommits: true
+    })
 
   } catch (error) {
     // 回滚UI状态
@@ -3278,7 +3366,11 @@ const handleUnstageFile = async (file) => {
       unstagedFiles.value[unstagedIndex].__pending = false
     }
 
-    scheduleAutoRefresh()
+    await refreshGitAfterOperation({
+      reason: 'unstage-file',
+      resetSelection: false,
+      includeCommits: true
+    })
 
   } catch (error) {
     // 回滚UI状态
@@ -3306,7 +3398,11 @@ const handleStageAll = async () => {
       path: props.workspacePath
     })
     logger.info('All files staged', { count: unstagedFiles.value.length })
-    await refreshGitStatus()
+    await refreshGitAfterOperation({
+      reason: 'stage-all',
+      resetSelection: true,
+      includeCommits: true
+    })
   } catch (error) {
     logger.error('Failed to stage all files', error)
     notification.error({
@@ -3324,7 +3420,11 @@ const handleUnstageAll = async () => {
       path: props.workspacePath
     })
     logger.info('All files unstaged', { count: stagedFiles.value.length })
-    await refreshGitStatus()
+    await refreshGitAfterOperation({
+      reason: 'unstage-all',
+      resetSelection: true,
+      includeCommits: true
+    })
   } catch (error) {
     logger.error('Failed to unstage all files', error)
   }
@@ -3340,7 +3440,11 @@ const handleDiscardFile = async (file) => {
       origPath: (normalizeGitStatus(file.status) === 'R' && file.origPath) ? file.origPath : null
     })
     logger.info('File changes discarded', { file: file.path })
-    await refreshGitStatus()
+    await refreshGitAfterOperation({
+      reason: 'discard-file',
+      resetSelection: true,
+      includeCommits: true
+    })
   } catch (error) {
     logger.error('Failed to discard file changes', { file: file.path, error })
   }
@@ -3353,7 +3457,11 @@ const handleDiscardAll = async () => {
       path: props.workspacePath
     })
     logger.info('All changes discarded')
-    await refreshGitStatus()
+    await refreshGitAfterOperation({
+      reason: 'discard-all',
+      resetSelection: true,
+      includeCommits: true
+    })
   } catch (error) {
     logger.error('Failed to discard all changes', error)
   }
@@ -3370,7 +3478,12 @@ const handleCommit = async () => {
       message: commitForm.value.message
     })
     commitForm.value.message = ''
-    await refreshGitStatus()
+    await refreshGitAfterOperation({
+      reason: 'commit',
+      resetSelection: true,
+      includeCommits: true,
+      refreshBranches: true
+    })
   } catch (error) {
   }
 }
@@ -3395,7 +3508,12 @@ const handlePull = async () => {
       content: currentBranch.value ? `已更新 ${currentBranch.value}` : '已更新本地分支',
       duration: 2000
     })
-    refreshGitStatus()
+    await refreshGitAfterOperation({
+      reason: 'pull',
+      resetSelection: true,
+      includeCommits: true,
+      refreshBranches: true
+    })
   } catch (error) {
     const msg = String(error?.message || error)
     logger.error('Pull failed', {
@@ -3422,6 +3540,12 @@ const handlePush = async () => {
       title: '推送成功',
       content: currentBranch.value ? `已推送 ${currentBranch.value}` : '已推送到远端',
       duration: 2000
+    })
+    await refreshGitAfterOperation({
+      reason: 'push',
+      resetSelection: false,
+      includeCommits: true,
+      refreshBranches: true
     })
   } catch (error) {
     const msg = String(error?.message || error)
@@ -3524,7 +3648,12 @@ onMounted(() => {
     autoRefreshIntervalId = setInterval(() => {
       if (!gitAutoRefresh.value.enabled) return
       if (document.visibilityState !== 'visible') return
-      refreshGitStatus({ resetSelection: false, includeCommits: false })
+      refreshGitAfterOperation({
+        reason: 'interval-refresh',
+        resetSelection: false,
+        includeCommits: false,
+        refreshBranches: false
+      })
     }, gitAutoRefresh.value.intervalMs)
 
     if (autoRefreshFocusHandler) {
