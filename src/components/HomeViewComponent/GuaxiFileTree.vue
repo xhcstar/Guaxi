@@ -152,6 +152,7 @@
             @rename-commit="handleBlur"
             @rename-cancel="cancelEditing"
             @move="handleDropMove"
+            @delete-node="(node) => handleVirtualDeleteNode('kb', node)"
           />
         </div>
       </div>
@@ -275,6 +276,7 @@
             @blank-contextmenu="(p) => openGenBlankMenu('task', p, catPathOf(activeTaskCat))"
             @rename-commit="handleInlineCommit"
             @rename-cancel="cancelInlineCreate"
+            @delete-node="(node) => handleVirtualDeleteNode('task', node)"
           />
         </div>
       </div>
@@ -388,6 +390,7 @@
             @blank-contextmenu="(p) => openGenBlankMenu('plain', p)"
             @rename-commit="handleInlineCommit"
             @rename-cancel="cancelInlineCreate"
+            @delete-node="(node) => handleVirtualDeleteNode('plain', node)"
           />
         </div>
       </div>
@@ -2044,10 +2047,37 @@ const commitInlineRename = async () => {
 
 const genDelete = async (mode, node) => {
   const yes = await confirmDialog(`确定删除「${node.name}」吗？此操作不可撤销。`, { title: '删除确认', kind: 'warning', okLabel: '删除', cancelLabel: '取消' })
-  if (!yes) return
+  if (!yes) return false
   await invoke('delete_path', { path: normalizePath(node.id) })
   await refreshModeDir(mode, parentDirOf(node.id))
   message.success('已删除')
+  return true
+}
+
+// 设计说明：虚拟文件树只负责键盘命令识别，真正的删除仍复用各模式原有确认弹窗和后端命令。
+// 这样 Delete 快捷键与右键菜单行为保持一致，也避免绕过删除确认。
+const handleVirtualDeleteNode = async (mode, node) => {
+  if (!node?.id || editingNode.value) return
+  const path = normalizePath(node.id)
+  logger.info('[FileTreeKeyboard] delete shortcut requested', {
+    mode,
+    path,
+    isDirectory: !!node.is_directory
+  })
+
+  if (mode === 'kb') {
+    selectedNode.value = node
+    await deleteNode(path)
+    return
+  }
+
+  const deleted = await genDelete(mode, node)
+  if (!deleted) return
+  if (mode === 'task') {
+    taskCatSelectedKeys[activeTaskCat.value] = []
+  } else if (mode === 'plain') {
+    externalSelectedKeys.value = []
+  }
 }
 
 const genOpenExplorer = async (node) => {

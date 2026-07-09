@@ -1,5 +1,12 @@
 <template>
-  <div ref="rootRef" class="vtree" @scroll="onScroll" @contextmenu="onBlankContext">
+  <div
+    ref="rootRef"
+    class="vtree"
+    tabindex="0"
+    @scroll="onScroll"
+    @keydown="onTreeKeydown"
+    @contextmenu="onBlankContext"
+  >
     <div class="vtree-spacer" :style="{ height: totalHeight + 'px' }">
       <div class="vtree-window" :style="{ transform: `translateY(${offsetY}px)` }">
         <div
@@ -87,7 +94,7 @@ const props = defineProps({
 
 const emit = defineEmits([
   'update:expandedKeys', 'update:selectedKeys', 'update:editName',
-  'open-file', 'load-children', 'contextmenu', 'blank-contextmenu', 'rename-commit', 'rename-cancel', 'move',
+  'open-file', 'load-children', 'contextmenu', 'blank-contextmenu', 'rename-commit', 'rename-cancel', 'move', 'delete-node',
 ])
 
 const OVERSCAN = 8
@@ -163,6 +170,112 @@ function emitToggleExpand(node, willExpand) {
   emit('update:expandedKeys', Array.from(set))
 }
 
+function focusTree() {
+  if (!rootRef.value || String(props.editingId || '')) return
+  rootRef.value.focus({ preventScroll: true })
+}
+
+function scrollIndexIntoView(index, align = 'nearest') {
+  if (!rootRef.value || index < 0) return
+  const maxTop = Math.max(0, rootRef.value.scrollHeight - rootRef.value.clientHeight)
+  const rowTop = index * props.rowHeight
+  const rowBottom = rowTop + props.rowHeight
+  const viewTop = rootRef.value.scrollTop
+  const viewBottom = viewTop + viewportH.value
+
+  let nextTop = viewTop
+  if (align === 'center') {
+    nextTop = rowTop - (viewportH.value / 2 - props.rowHeight / 2)
+  } else if (rowTop < viewTop) {
+    nextTop = rowTop
+  } else if (rowBottom > viewBottom) {
+    nextTop = rowBottom - viewportH.value
+  }
+
+  const clamped = Math.max(0, Math.min(maxTop, Math.floor(nextTop)))
+  rootRef.value.scrollTop = clamped
+  scrollTop.value = clamped
+}
+
+async function selectFlatIndex(index, reason = 'keyboard') {
+  const item = flat.value[index]
+  if (!item?.node) return
+  emit('update:selectedKeys', [item.node.id])
+  scrollIndexIntoView(index, 'nearest')
+  await nextTick()
+  scrollIndexIntoView(index, 'nearest')
+}
+
+const selectedFlatIndex = () => {
+  const selected = normId((props.selectedKeys || [])[0])
+  if (!selected) return -1
+  return flat.value.findIndex((it) => normId(it.node.id) === selected)
+}
+
+function parentVisibleIndex(index) {
+  const current = flat.value[index]
+  if (!current || current.depth <= 0) return -1
+  for (let i = index - 1; i >= 0; i -= 1) {
+    if (flat.value[i]?.depth === current.depth - 1) return i
+  }
+  return -1
+}
+
+async function onTreeKeydown(e) {
+  if (String(props.editingId || '')) return
+  const target = e.target
+  if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
+  if (!flat.value.length) return
+
+  const currentIndex = selectedFlatIndex()
+  const currentNode = currentIndex >= 0 ? flat.value[currentIndex]?.node : null
+
+  if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    await selectFlatIndex(currentIndex < 0 ? 0 : Math.min(flat.value.length - 1, currentIndex + 1), 'arrow-down')
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault()
+    await selectFlatIndex(currentIndex < 0 ? flat.value.length - 1 : Math.max(0, currentIndex - 1), 'arrow-up')
+  } else if (e.key === 'Home') {
+    e.preventDefault()
+    await selectFlatIndex(0, 'home')
+  } else if (e.key === 'End') {
+    e.preventDefault()
+    await selectFlatIndex(flat.value.length - 1, 'end')
+  } else if (e.key === 'PageDown') {
+    e.preventDefault()
+    const step = Math.max(1, Math.floor(viewportH.value / props.rowHeight) - 1)
+    await selectFlatIndex(Math.min(flat.value.length - 1, (currentIndex < 0 ? 0 : currentIndex) + step), 'page-down')
+  } else if (e.key === 'PageUp') {
+    e.preventDefault()
+    const step = Math.max(1, Math.floor(viewportH.value / props.rowHeight) - 1)
+    await selectFlatIndex(Math.max(0, (currentIndex < 0 ? flat.value.length - 1 : currentIndex) - step), 'page-up')
+  } else if (e.key === 'ArrowRight' && currentNode?.is_directory) {
+    e.preventDefault()
+    if (!isExpanded(currentNode)) {
+      emitToggleExpand(currentNode, true)
+      emit('load-children', currentNode)
+    } else if (currentIndex + 1 < flat.value.length && flat.value[currentIndex + 1]?.depth > flat.value[currentIndex]?.depth) {
+      await selectFlatIndex(currentIndex + 1, 'arrow-right-child')
+    }
+  } else if (e.key === 'ArrowLeft' && currentNode) {
+    e.preventDefault()
+    if (currentNode.is_directory && isExpanded(currentNode)) {
+      emitToggleExpand(currentNode, false)
+    } else {
+      const parentIndex = parentVisibleIndex(currentIndex)
+      if (parentIndex >= 0) await selectFlatIndex(parentIndex, 'arrow-left-parent')
+    }
+  } else if (e.key === 'Enter' && currentNode) {
+    e.preventDefault()
+    if (currentNode.is_directory) toggleDir(currentNode)
+    else emit('open-file', currentNode)
+  } else if (e.key === 'Delete' && currentNode) {
+    e.preventDefault()
+    emit('delete-node', currentNode)
+  }
+}
+
 function toggleDir(node) {
   const willExpand = !isExpanded(node)
   emitToggleExpand(node, willExpand)
@@ -171,6 +284,7 @@ function toggleDir(node) {
 
 function onRowClick(node) {
   if (suppressClick) return
+  focusTree()
   emit('update:selectedKeys', [node.id])
   if (node.is_directory) toggleDir(node)
   else emit('open-file', node)
@@ -178,6 +292,7 @@ function onRowClick(node) {
 
 function onTwistyClick(node) {
   if (!node.is_directory || suppressClick) return
+  focusTree()
   emit('update:selectedKeys', [node.id])
   toggleDir(node)
 }
@@ -299,8 +414,7 @@ async function scrollTo(opts) {
   await nextTick()
   const idx = flat.value.findIndex((it) => normId(it.node.id) === key)
   if (idx < 0 || !rootRef.value) return
-  const target = idx * props.rowHeight - (viewportH.value / 2 - props.rowHeight / 2)
-  rootRef.value.scrollTop = Math.max(0, target)
+  scrollIndexIntoView(idx, 'center')
 }
 defineExpose({ scrollTo })
 
@@ -329,11 +443,14 @@ onBeforeUnmount(() => {
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
-  padding: 4px 6px 8px 4px;
+  padding: 0 6px 0 4px;
   box-sizing: border-box;
   /* Apple 风格细滚动条 */
   scrollbar-width: thin;
   scrollbar-color: rgba(140, 140, 150, 0.4) transparent;
+}
+.vtree:focus {
+  outline: none;
 }
 .vtree::-webkit-scrollbar { width: 9px; height: 9px; }
 .vtree::-webkit-scrollbar-track { background: transparent; }
@@ -356,7 +473,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 5px;
   padding-right: 8px;
-  margin: 1px 2px;
+  margin: 0 2px;
   border-radius: 8px;
   cursor: default;
   user-select: none;

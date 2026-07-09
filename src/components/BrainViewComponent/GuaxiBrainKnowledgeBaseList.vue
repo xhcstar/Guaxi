@@ -38,7 +38,13 @@
           </n-icon>
         </div>
 
-        <div v-if="kb.id === selectedId && expanded" class="tree-container" @wheel.stop>
+        <div
+          v-if="kb.id === selectedId && expanded"
+          ref="treeContainerRef"
+          class="tree-container"
+          @keydown.capture="handleTreeKeydown"
+          @wheel.stop
+        >
           <n-tree
             :key="`tree-${selectedId}`"
             :data="treeData"
@@ -59,7 +65,7 @@
 
 <script setup>
 import { createLogger } from '../../utils/logger'
-import { ref, onMounted, h, shallowRef, onUnmounted, computed } from 'vue';
+import { ref, onMounted, h, shallowRef, onUnmounted, computed, nextTick } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore';
 import { invoke } from '@tauri-apps/api/core';
@@ -83,6 +89,8 @@ import { Icon } from '@iconify/vue';
 import { getFileTreeIcon } from '../HomeViewComponent/fileTreeIcons';
 
 const logger = createLogger('GuaxiBrainKnowledgeBaseList')
+const TREE_KEYBOARD_ROW_HEIGHT = 28;
+const TREE_SCROLL_PADDING = 6;
 const store = useKnowledgeBaseStore();
 const message = useMessage();
 const { knowledgeBases, selectedKnowledgeBase } = storeToRefs(store);
@@ -104,7 +112,28 @@ const expanded = ref(false);
 const expandedKeys = ref([]);
 const selectedKeys = ref([]);
 const hiddenRootKey = ref('');
+const treeContainerRef = ref(null);
 let abortController = new AbortController();
+
+// 设计说明: 知识图谱侧边栏仍使用 Naive Tree 负责渲染，但键盘导航由本组件接管。
+// 这样 selectedKeys、图谱定位和滚动容器始终来自同一份可见节点序列，避免焦点到底部后只移动内部焦点、不推动外层滚动条。
+const visibleTreeNodes = computed(() => {
+  const result = [];
+  const expandedSet = new Set(expandedKeys.value);
+
+  const walk = (nodes, depth = 0) => {
+    if (!Array.isArray(nodes)) return;
+    for (const node of nodes) {
+      result.push({ node, depth });
+      if (node?.isDir && expandedSet.has(node.key)) {
+        walk(node.children, depth + 1);
+      }
+    }
+  };
+
+  walk(treeData.value);
+  return result;
+});
 
 // 设计说明：与主界面知识编辑模式保持一致。
 // 选中的知识库展开后，其它知识库条目暂时隐藏，让当前知识库文件树独占列表高度，避免被下方条目挤压。
@@ -153,17 +182,202 @@ const toggleKnowledgeBase = async (kb) => {
 // 处理树节点展开状态变化
 const handleTreeExpand = (keys) => {
   expandedKeys.value = keys;
+  scrollSelectedTreeNodeIntoView('expand');
+};
+
+function getTreeScrollContainer() {
+  const rawContainer = treeContainerRef.value;
+  return Array.isArray(rawContainer) ? rawContainer.find(Boolean) : rawContainer;
+}
+
+function getSelectedTreeKey() {
+  return Array.isArray(selectedKeys.value) ? selectedKeys.value[0] : null;
+}
+
+function scrollSelectedTreeNodeIntoView(reason = 'select') {
+  nextTick(() => {
+    const container = getTreeScrollContainer();
+    if (!container) return;
+    const selectedNode = container.querySelector(
+      '.n-tree-node--selected .n-tree-node-content, .n-tree-node-content--selected'
+    );
+    if (!selectedNode) return;
+    const containerRect = container.getBoundingClientRect();
+    const selectedRect = selectedNode.getBoundingClientRect();
+    const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+    let nextScrollTop = container.scrollTop;
+
+    if (selectedRect.top < containerRect.top + TREE_SCROLL_PADDING) {
+      nextScrollTop -= containerRect.top + TREE_SCROLL_PADDING - selectedRect.top;
+    } else if (selectedRect.bottom > containerRect.bottom - TREE_SCROLL_PADDING) {
+      nextScrollTop += selectedRect.bottom - (containerRect.bottom - TREE_SCROLL_PADDING);
+    }
+
+    const clampedScrollTop = Math.max(0, Math.min(maxScrollTop, nextScrollTop));
+    if (clampedScrollTop !== container.scrollTop) {
+      container.scrollTop = clampedScrollTop;
+    }
+
+    logger.debug('[BrainKnowledgeBaseList] 文件树键盘焦点滚动同步', {
+      reason,
+      selectedKey: getSelectedTreeKey(),
+      scrollTop: container.scrollTop,
+      maxScrollTop
+    });
+  });
+}
+
+function findTreeOptionByKey(nodes, key) {
+  if (!key || !Array.isArray(nodes)) return null;
+  for (const node of nodes) {
+    if (node?.key === key) return node;
+    const found = findTreeOptionByKey(node?.children, key);
+    if (found) return found;
+  }
+  return null;
+}
+
+function getSelectedVisibleTreeIndex() {
+  const key = getSelectedTreeKey();
+  if (!key) return -1;
+  return visibleTreeNodes.value.findIndex((item) => item.node?.key === key);
+}
+
+function applyTreeSelection(key, reason = 'select') {
+  if (!key) return false;
+  selectedKeys.value = [key];
+  store.setSelectedTreeNodeKey(key);
+
+  if (store.graphViewMode === 'kg3d') {
+    store.requestKg3dAction('selectByPath', { path: key });
+  }
+
+  logger.debug('[BrainKnowledgeBaseList] 文件树键盘/鼠标选择同步', {
+    reason,
+    key
+  });
+  scrollSelectedTreeNodeIntoView(reason);
+  return true;
+}
+
+function selectVisibleTreeNodeByIndex(index, reason = 'keyboard') {
+  const nodes = visibleTreeNodes.value;
+  if (!nodes.length) return false;
+  const boundedIndex = Math.max(0, Math.min(nodes.length - 1, index));
+  const target = nodes[boundedIndex]?.node;
+  if (!target?.key) return false;
+  return applyTreeSelection(target.key, reason);
+}
+
+function setDirectoryExpanded(key, expandedState, reason) {
+  const set = new Set(expandedKeys.value);
+  const wasExpanded = set.has(key);
+  if (expandedState) set.add(key);
+  else set.delete(key);
+  expandedKeys.value = Array.from(set);
+
+  logger.info('[BrainKnowledgeBaseList] 键盘切换目录展开状态', {
+    reason,
+    key,
+    wasExpanded,
+    expanded: expandedState
+  });
+}
+
+function findParentVisibleIndex(currentIndex) {
+  const nodes = visibleTreeNodes.value;
+  const current = nodes[currentIndex];
+  if (!current || current.depth <= 0) return -1;
+  for (let i = currentIndex - 1; i >= 0; i -= 1) {
+    if (nodes[i].depth === current.depth - 1) return i;
+  }
+  return -1;
+}
+
+function toggleSelectedDirectoryByEnter() {
+  const key = getSelectedTreeKey();
+  const node = findTreeOptionByKey(treeData.value, key);
+  if (!node || node.isLeaf || !node.isDir) return false;
+
+  const willExpand = !expandedKeys.value.includes(key);
+  setDirectoryExpanded(key, willExpand, 'enter');
+  scrollSelectedTreeNodeIntoView('enter-toggle');
+  return true;
+}
+
+const handleTreeKeydown = (event) => {
+  const navigationKeys = new Set([
+    'ArrowUp',
+    'ArrowDown',
+    'ArrowLeft',
+    'ArrowRight',
+    'Home',
+    'End',
+    'PageUp',
+    'PageDown',
+    'Enter'
+  ]);
+  if (!navigationKeys.has(event.key)) return;
+
+  event.preventDefault();
+  event.stopPropagation();
+
+  if (event.key === 'Enter') {
+    toggleSelectedDirectoryByEnter();
+    return;
+  }
+
+  const nodes = visibleTreeNodes.value;
+  if (!nodes.length) return;
+
+  const container = getTreeScrollContainer();
+  const pageStep = Math.max(1, Math.floor((container?.clientHeight || TREE_KEYBOARD_ROW_HEIGHT) / TREE_KEYBOARD_ROW_HEIGHT) - 1);
+  const currentIndex = getSelectedVisibleTreeIndex();
+  const normalizedIndex = currentIndex === -1 ? 0 : currentIndex;
+  const current = nodes[normalizedIndex];
+  let targetIndex = currentIndex === -1 ? 0 : currentIndex;
+
+  if (event.key === 'ArrowDown') {
+    targetIndex = currentIndex === -1 ? 0 : normalizedIndex + 1;
+  } else if (event.key === 'ArrowUp') {
+    targetIndex = currentIndex === -1 ? nodes.length - 1 : normalizedIndex - 1;
+  } else if (event.key === 'Home') {
+    targetIndex = 0;
+  } else if (event.key === 'End') {
+    targetIndex = nodes.length - 1;
+  } else if (event.key === 'PageDown') {
+    targetIndex = normalizedIndex + pageStep;
+  } else if (event.key === 'PageUp') {
+    targetIndex = normalizedIndex - pageStep;
+  } else if (event.key === 'ArrowRight') {
+    const key = current?.node?.key;
+    if (current?.node?.isDir && key && !expandedKeys.value.includes(key)) {
+      setDirectoryExpanded(key, true, 'arrow-right');
+      scrollSelectedTreeNodeIntoView('arrow-right-expand');
+      return;
+    }
+    if (nodes[normalizedIndex + 1]?.depth > current?.depth) {
+      targetIndex = normalizedIndex + 1;
+    }
+  } else if (event.key === 'ArrowLeft') {
+    const key = current?.node?.key;
+    if (current?.node?.isDir && key && expandedKeys.value.includes(key)) {
+      setDirectoryExpanded(key, false, 'arrow-left');
+      scrollSelectedTreeNodeIntoView('arrow-left-collapse');
+      return;
+    }
+    const parentIndex = findParentVisibleIndex(normalizedIndex);
+    if (parentIndex !== -1) targetIndex = parentIndex;
+  }
+
+  selectVisibleTreeNodeByIndex(targetIndex, `keyboard-${event.key}`);
 };
 
 const handleTreeSelect = (keys) => {
   selectedKeys.value = keys;
   const key = Array.isArray(keys) ? keys[0] : null;
   if (key) {
-    store.setSelectedTreeNodeKey(key);
-    // 工业图谱模式:请求在中间图中定位并高亮对应节点
-    if (store.graphViewMode === 'kg3d') {
-      store.requestKg3dAction('selectByPath', { path: key });
-    }
+    applyTreeSelection(key, 'select');
   } else {
     logger.debug('[BrainKnowledgeBaseList] 文件树选择已清空', {
       hiddenRootKey: hiddenRootKey.value
