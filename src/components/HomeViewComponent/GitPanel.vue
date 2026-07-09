@@ -450,7 +450,7 @@
           <n-space>
             <n-tooltip trigger="hover">
               <template #trigger>
-                <n-button text @click="navigateDiff('prev')" :disabled="!selectedFile || diffLoading.file">
+                <n-button text @click="navigateDiff('prev')" :disabled="!canNavigateDiff">
                   <template #icon>
                     <n-icon>
                       <ChevronUpOutline />
@@ -458,11 +458,11 @@
                   </template>
                 </n-button>
               </template>
-              上一个差异
+              上一个差异（Shift+F7 / Alt+↑）
             </n-tooltip>
             <n-tooltip trigger="hover">
               <template #trigger>
-                <n-button text @click="navigateDiff('next')" :disabled="!selectedFile || diffLoading.file">
+                <n-button text @click="navigateDiff('next')" :disabled="!canNavigateDiff">
                   <template #icon>
                     <n-icon>
                       <ChevronDownOutline />
@@ -470,7 +470,7 @@
                   </template>
                 </n-button>
               </template>
-              下一个差异
+              下一个差异（F7 / Alt+↓）
             </n-tooltip>
           </n-space>
         </n-space>
@@ -1091,6 +1091,12 @@ const selectFileAndUpdateDiff = async (file, reason = 'select-file') => {
   await updateFileDiff(file)
 }
 
+const canNavigateDiff = computed(() => {
+  if (!selectedFile.value && !selectedCommit.value) return false
+  if (diffLoading.value.file || diffLoading.value.commit || diffLoading.value.navigation) return false
+  return !!diffEditor
+})
+
 const canRevertCurrentHunk = computed(() => {
   if (!selectedFile.value) return false
   if (selectedCommit.value) return false
@@ -1284,6 +1290,44 @@ const handleCommitFileClick = async (file) => {
   } finally {
     diffLoading.value.file = false
   }
+}
+
+const isEditableKeyboardTarget = (target) => {
+  if (!target || !(target instanceof HTMLElement)) return false
+  const tagName = target.tagName?.toLowerCase()
+  return target.isContentEditable
+    || tagName === 'input'
+    || tagName === 'textarea'
+    || tagName === 'select'
+}
+
+const handleDiffNavigationShortcut = (event) => {
+  if (!event || event.defaultPrevented) return
+  if (!canNavigateDiff.value) return
+  const fromDiffEditor = event.target instanceof Node
+    && !!diffEditorContainer.value
+    && diffEditorContainer.value.contains(event.target)
+  if (!fromDiffEditor && isEditableKeyboardTarget(event.target)) return
+
+  let direction = null
+  if (event.key === 'F7' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    direction = event.shiftKey ? 'prev' : 'next'
+  } else if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+    if (event.key === 'ArrowUp') direction = 'prev'
+    if (event.key === 'ArrowDown') direction = 'next'
+  }
+
+  if (!direction) return
+
+  event.preventDefault()
+  event.stopPropagation()
+  frontendLogger.info('[Diff] Keyboard shortcut navigating diff', {
+    direction,
+    key: event.key,
+    altKey: event.altKey,
+    shiftKey: event.shiftKey
+  })
+  navigateDiff(direction)
 }
 
 const navigateDiff = async (direction) => {
@@ -3627,6 +3671,7 @@ watch(selectedCommit, (newVal) => {
 
 onMounted(() => {
   logger.debug('Component mounted')
+  window.addEventListener('keydown', handleDiffNavigationShortcut, true)
 
   const setupAutoRefresh = async () => {
     try {
@@ -3729,6 +3774,7 @@ onUnmounted(() => {
     document.removeEventListener('visibilitychange', autoRefreshVisibilityHandler)
     autoRefreshVisibilityHandler = null
   }
+  window.removeEventListener('keydown', handleDiffNavigationShortcut, true)
 
   document.removeEventListener('mousemove', handleSidebarDrag)
   document.removeEventListener('mouseup', stopSidebarDrag)
