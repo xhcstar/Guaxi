@@ -42,6 +42,7 @@
           v-if="kb.id === selectedId && expanded"
           ref="treeContainerRef"
           class="tree-container"
+          tabindex="0"
           @keydown.capture="handleTreeKeydown"
           @wheel.stop
         >
@@ -155,6 +156,8 @@ const toggleKnowledgeBase = async (kb) => {
       });
       if (!expanded.value) {
         expandedKeys.value = [];
+      } else {
+        ensureTreeKeyboardStart('toggle-current-expanded');
       }
     } else {
       // 不同的知识库，重置状态
@@ -241,6 +244,31 @@ function getSelectedVisibleTreeIndex() {
   const key = getSelectedTreeKey();
   if (!key) return -1;
   return visibleTreeNodes.value.findIndex((item) => item.node?.key === key);
+}
+
+function ensureTreeKeyboardStart(reason = 'tree-open') {
+  nextTick(() => {
+    const container = getTreeScrollContainer();
+    if (container && document.activeElement !== container) {
+      container.focus({ preventScroll: true });
+    }
+
+    const nodes = visibleTreeNodes.value;
+    if (!nodes.length) return;
+
+    const previousKey = getSelectedTreeKey();
+    const target = nodes[0]?.node;
+    if (!target?.key) return;
+
+    selectedKeys.value = [target.key];
+    logger.debug('[BrainKnowledgeBaseList] 初始化文件树键盘起始条目', {
+      reason,
+      key: target.key,
+      previousKey,
+      focusedTreeContainer: document.activeElement === container
+    });
+    scrollSelectedTreeNodeIntoView(reason);
+  });
 }
 
 function applyTreeSelection(key, reason = 'select') {
@@ -446,6 +474,7 @@ function applyLoadedTree(root, reason, kb) {
   treeData.value = nodes;
   expandedKeys.value = [];
   selectedKeys.value = [];
+  ensureTreeKeyboardStart(`load-${reason}`);
 
   if (rootKey) {
     store.setSelectedTreeNodeKey(rootKey);
@@ -524,6 +553,10 @@ onUnmounted(() => {
   overscroll-behavior: contain;
   scrollbar-width: thin;
   scrollbar-color: rgba(140, 140, 150, 0.4) transparent;
+}
+
+.tree-container:focus {
+  outline: none;
 }
 
 .tree-container::-webkit-scrollbar {
