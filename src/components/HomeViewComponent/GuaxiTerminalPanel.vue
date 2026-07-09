@@ -434,7 +434,8 @@ const renderActiveSession = () => {
   terminal.clear()
   const buffer = getSessionBuffer(activeSessionId.value)
   if (buffer) {
-    terminal.write(buffer)
+    terminal.write(buffer, () => updateSearchMatches('render-active-session'))
+    return
   }
   updateSearchMatches('render-active-session')
 }
@@ -458,42 +459,137 @@ const readClipboardText = async () => {
   return String(await mod.readText() || '')
 }
 
+const resetSearchMatches = (reason = 'reset-search-matches') => {
+  searchMatches.value = []
+  searchActiveIndex.value = -1
+  terminal?.clearSelection?.()
+  logger.debug('[TerminalPanel] search matches reset', { reason })
+}
+
+const getTerminalSearchRows = () => {
+  const activeBuffer = terminal?.buffer?.active
+  if (!terminal || !activeBuffer) return []
+
+  const rows = []
+  const maxColumn = Math.max(terminal.cols || 0, 0)
+  for (let row = 0; row < activeBuffer.length; row += 1) {
+    const line = activeBuffer.getLine(row)
+    if (!line) continue
+    // 设计思路：搜索只基于 xterm 已渲染缓冲区里的可见文本，而不是后端原始输出串。
+    // 原始串里包含 ANSI 控制码、回车覆盖、自动换行前的长行等内容，直接拿它的行号去选中
+    // xterm 会导致“命中了但高亮在空白处”的错位问题。
+    const text = line.translateToString(true, 0, maxColumn)
+    rows.push({ row, line, text })
+  }
+  return rows
+}
+
+const getCellSearchText = (cell) => {
+  if (!cell) return ''
+  if (cell.getWidth() === 0) return ''
+  return cell.getChars() || ' '
+}
+
+const getBufferColumnFromStringIndex = (line, text, stringIndex) => {
+  if (!terminal || !line) return Math.max(stringIndex, 0)
+  if (stringIndex <= 0) return 0
+
+  const target = Math.min(stringIndex, text.length)
+  const maxColumn = Math.max(Math.min(line.length, terminal.cols || line.length), 0)
+  let consumed = 0
+  let fallbackColumn = 0
+
+  for (let col = 0; col < maxColumn; col += 1) {
+    const cell = line.getCell(col)
+    const cellText = getCellSearchText(cell)
+    if (!cellText) continue
+
+    const nextConsumed = consumed + cellText.length
+    if (target <= nextConsumed) {
+      return target === nextConsumed
+        ? Math.min(col + Math.max(cell?.getWidth?.() || 1, 1), maxColumn)
+        : col
+    }
+
+    consumed = nextConsumed
+    fallbackColumn = Math.min(col + Math.max(cell?.getWidth?.() || 1, 1), maxColumn)
+  }
+
+  return fallbackColumn
+}
+
 const scrollToSearchMatch = (index) => {
   if (!terminal) return
   const match = searchMatches.value[index]
   if (!match) return
   searchActiveIndex.value = index
-  terminal.select(match.col, match.row, match.length)
   terminal.scrollToLine(Math.max(match.row - 3, 0))
+  terminal.select(match.col, match.row, match.length)
   terminal.focus()
+  logger.debug('[TerminalPanel] focus search match', {
+    index,
+    row: match.row,
+    col: match.col,
+    length: match.length,
+  })
 }
 
 const updateSearchMatches = (reason = 'manual-search-update') => {
   const keyword = String(searchKeyword.value || '').trim()
-  const buffer = getSessionBuffer(activeSessionId.value)
-  if (!keyword || !buffer) {
-    searchMatches.value = []
-    searchActiveIndex.value = -1
+  if (!keyword || !terminal?.buffer?.active) {
+    resetSearchMatches(reason)
     return
   }
 
-  const rows = buffer.split(/\r?\n/)
   const matches = []
-  rows.forEach((line, row) => {
+  const normalizedKeyword = keyword.toLowerCase()
+  const rows = getTerminalSearchRows()
+
+  rows.forEach(({ row, line, text }) => {
+    if (!text) return
+    const normalizedText = text.toLowerCase()
     let startIndex = 0
-    while (startIndex <= line.length) {
-      const col = line.toLowerCase().indexOf(keyword.toLowerCase(), startIndex)
-      if (col < 0) break
-      matches.push({ row, col, length: keyword.length })
-      startIndex = col + Math.max(keyword.length, 1)
+    while (startIndex <= normalizedText.length) {
+      const stringIndex = normalizedText.indexOf(normalizedKeyword, startIndex)
+      if (stringIndex < 0) break
+
+      const col = getBufferColumnFromStringIndex(line, text, stringIndex)
+      const endCol = getBufferColumnFromStringIndex(line, text, stringIndex + keyword.length)
+      matches.push({
+        row,
+        col,
+        length: Math.max(endCol - col, 1),
+      })
+      startIndex = stringIndex + Math.max(keyword.length, 1)
     }
   })
+
+  if (!matches.length) {
+    searchMatches.value = []
+    searchActiveIndex.value = -1
+    terminal.clearSelection?.()
+    logger.debug('[TerminalPanel] search matches updated', {
+      reason,
+      keyword,
+      matchCount: 0,
+      searchedRows: rows.length,
+      bufferLength: terminal.buffer.active.length,
+      baseY: terminal.buffer.active.baseY,
+      viewportY: terminal.buffer.active.viewportY,
+    })
+    return
+  }
+
   searchMatches.value = matches
   searchActiveIndex.value = matches.length ? 0 : -1
   logger.debug('[TerminalPanel] search matches updated', {
     reason,
     keyword,
     matchCount: matches.length,
+    searchedRows: rows.length,
+    bufferLength: terminal.buffer.active.length,
+    baseY: terminal.buffer.active.baseY,
+    viewportY: terminal.buffer.active.viewportY,
   })
 }
 
@@ -725,6 +821,10 @@ const fitTerminal = async (reason = 'manual-fit', options = {}) => {
       sessionId,
       skipBackendResize,
     })
+
+    if (searchVisible.value && searchKeyword.value.trim()) {
+      updateSearchMatches(`fit-terminal:${reason}`)
+    }
   } catch (error) {
     logger.warn('[TerminalPanel] fit terminal failed', { reason, error })
   }
@@ -748,10 +848,11 @@ const appendSessionOutput = (sessionId, data) => {
   // xterm.write 自身带内部批处理与异步渲染循环，逐块写入即可，无需再走 Vue 响应式。
   appendToSessionBuffer(sessionId, data)
   if (activeSessionId.value === sessionId && terminal) {
-    terminal.write(String(data || ''))
-  }
-  if (activeSessionId.value === sessionId && searchVisible.value && searchKeyword.value.trim()) {
-    updateSearchMatches('append-session-output')
+    terminal.write(String(data || ''), () => {
+      if (activeSessionId.value === sessionId && searchVisible.value && searchKeyword.value.trim()) {
+        updateSearchMatches('append-session-output')
+      }
+    })
   }
 }
 
@@ -766,7 +867,11 @@ const markSessionExited = (sessionId, exitCode) => {
     exited: true,
   }
   if (activeSessionId.value === sessionId && terminal) {
-    terminal.write(footer)
+    terminal.write(footer, () => {
+      if (searchVisible.value && searchKeyword.value.trim()) {
+        updateSearchMatches('session-exit-footer')
+      }
+    })
   }
 }
 
@@ -822,7 +927,11 @@ const syncExitedSession = (sessionId, exitCode) => {
   const footer = `\r\n[Guaxi] terminal exited${normalizedExitCode !== null ? `, code ${normalizedExitCode}` : ''}\r\n`
   // 若退出的正是当前活动会话，先把退出提示写进屏幕，再移除会话缓冲。
   if (activeSessionId.value === sessionId && terminal) {
-    terminal.write(footer)
+    terminal.write(footer, () => {
+      if (searchVisible.value && searchKeyword.value.trim()) {
+        updateSearchMatches('sync-exit-footer')
+      }
+    })
   }
   const nextSessions = sessions.value
     .map((item, itemIndex) => (itemIndex === index
