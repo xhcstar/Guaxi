@@ -233,6 +233,12 @@ let unlistenExit = null
 let terminalResizeObserver = null
 let pendingFitFrame = 0
 let lastSyncedTerminalSizeKey = ''
+let profilesDetectPromise = null
+let terminalActivationPromise = null
+let suppressProfileSwitchWatch = false
+
+const PROFILE_DETECT_TIMEOUT_MS = 500
+const TERMINAL_LAYOUT_WAIT_FRAMES = 10
 
 // 设计说明：终端回滚内容可能达到数百 KB～数 MB。绝不能把它放进 Vue 响应式系统
 // （原来存在每个 session 对象的 buffer 字段里），否则每收到一段输出都会：
@@ -429,7 +435,7 @@ const applyTerminalTheme = () => {
 }
 
 const renderActiveSession = () => {
-  if (!terminal) return
+  if (!canRenderTerminalNow()) return
   terminal.reset()
   terminal.clear()
   const buffer = getSessionBuffer(activeSessionId.value)
@@ -755,6 +761,50 @@ const pasteClipboardToTerminal = async () => {
   })
 }
 
+const getTerminalHostLayout = () => {
+  const host = terminalHostRef.value
+  if (!host || !host.isConnected) {
+    return { ready: false, width: 0, height: 0 }
+  }
+
+  const rect = host.getBoundingClientRect()
+  const width = Math.floor(rect.width || host.clientWidth || 0)
+  const height = Math.floor(rect.height || host.clientHeight || 0)
+  return {
+    ready: props.visible && width > 8 && height > 8,
+    width,
+    height,
+  }
+}
+
+const canRenderTerminalNow = () => {
+  if (!terminal) return false
+  return getTerminalHostLayout().ready
+}
+
+const waitForTerminalHostLayout = async (reason = 'terminal-layout') => {
+  // 设计说明：xterm 只能在真实可见且有尺寸的 DOM 容器里 open/fit。
+  // 如果面板还在 v-show/transition/首次布局阶段，RenderService 的 dimensions 可能尚未建立，
+  // 后续 Viewport 刷新就会触发 “Cannot read properties of undefined (reading 'dimensions')”。
+  for (let attempt = 0; attempt < TERMINAL_LAYOUT_WAIT_FRAMES; attempt += 1) {
+    await nextTick()
+    const layout = getTerminalHostLayout()
+    if (layout.ready) return layout
+    if (typeof window !== 'undefined') {
+      await new Promise((resolve) => window.requestAnimationFrame(resolve))
+    }
+  }
+
+  const layout = getTerminalHostLayout()
+  logger.warn('[TerminalPanel] terminal host layout is not ready', {
+    reason,
+    visible: props.visible,
+    width: layout.width,
+    height: layout.height,
+  })
+  return layout
+}
+
 const scheduleFitTerminal = (reason = 'scheduled-fit') => {
   if (typeof window === 'undefined') {
     void fitTerminal(reason)
@@ -771,7 +821,15 @@ const scheduleFitTerminal = (reason = 'scheduled-fit') => {
 
 const fitTerminal = async (reason = 'manual-fit', options = {}) => {
   if (!terminal || !fitAddon || !props.visible) return
-  await nextTick()
+  const layout = await waitForTerminalHostLayout(`fit:${reason}`)
+  if (!layout.ready) {
+    logger.debug('[TerminalPanel] skip fit because host layout is not ready', {
+      reason,
+      width: layout.width,
+      height: layout.height,
+    })
+    return
+  }
   try {
     fitAddon.fit()
 
@@ -788,7 +846,9 @@ const fitTerminal = async (reason = 'manual-fit', options = {}) => {
       xtermElement.style.height = '100%'
     }
 
-    terminal.refresh?.(0, Math.max(terminal.rows - 1, 0))
+    if (terminal.rows > 0) {
+      terminal.refresh?.(0, Math.max(terminal.rows - 1, 0))
+    }
 
     const sessionId = activeSessionId.value
     const skipBackendResize = !!(props.deferResizeSync || options?.skipBackendResize)
@@ -847,7 +907,7 @@ const appendSessionOutput = (sessionId, data) => {
   // 缓冲写入非响应式 Map；只有当前活动会话才直接写入 xterm 渲染。
   // xterm.write 自身带内部批处理与异步渲染循环，逐块写入即可，无需再走 Vue 响应式。
   appendToSessionBuffer(sessionId, data)
-  if (activeSessionId.value === sessionId && terminal) {
+  if (activeSessionId.value === sessionId && canRenderTerminalNow()) {
     terminal.write(String(data || ''), () => {
       if (activeSessionId.value === sessionId && searchVisible.value && searchKeyword.value.trim()) {
         updateSearchMatches('append-session-output')
@@ -866,7 +926,7 @@ const markSessionExited = (sessionId, exitCode) => {
     ...session,
     exited: true,
   }
-  if (activeSessionId.value === sessionId && terminal) {
+  if (activeSessionId.value === sessionId && canRenderTerminalNow()) {
     terminal.write(footer, () => {
       if (searchVisible.value && searchKeyword.value.trim()) {
         updateSearchMatches('session-exit-footer')
@@ -926,7 +986,7 @@ const syncExitedSession = (sessionId, exitCode) => {
   const normalizedExitCode = Number.isFinite(exitCode) ? Number(exitCode) : null
   const footer = `\r\n[Guaxi] terminal exited${normalizedExitCode !== null ? `, code ${normalizedExitCode}` : ''}\r\n`
   // 若退出的正是当前活动会话，先把退出提示写进屏幕，再移除会话缓冲。
-  if (activeSessionId.value === sessionId && terminal) {
+  if (activeSessionId.value === sessionId && canRenderTerminalNow()) {
     terminal.write(footer, () => {
       if (searchVisible.value && searchKeyword.value.trim()) {
         updateSearchMatches('sync-exit-footer')
@@ -977,9 +1037,55 @@ const syncExitedSession = (sessionId, exitCode) => {
   }
 }
 
+const applyProfilesResponse = (response, reason = 'profiles-response') => {
+  const nextProfiles = Array.isArray(response?.profiles) ? response.profiles : buildFallbackProfiles()
+  profiles.value = nextProfiles
+  defaultProfileId.value = String(response?.default_profile || '').trim() || (isWindows ? 'powershell' : 'bash')
+  suppressProfileSwitchWatch = true
+  ensureSelectedProfile()
+  window.setTimeout(() => {
+    suppressProfileSwitchWatch = false
+  }, 0)
+
+  logger.info('[TerminalPanel] profiles loaded', {
+    reason,
+    defaultProfileId: defaultProfileId.value,
+    profileCount: profiles.value.length,
+    availableCount: availableProfiles.value.length,
+    fallback: !!response?.__fallback,
+  })
+}
+
+const ensureFastFallbackProfiles = (reason = 'fast-fallback') => {
+  if (profiles.value.length) return
+  applyProfilesResponse({
+    default_profile: isWindows ? 'powershell' : 'bash',
+    profiles: buildFallbackProfiles(),
+    __fallback: true,
+  }, reason)
+}
+
+const detectProfilesInBackground = () => {
+  if (profilesDetectPromise) return profilesDetectPromise
+  profilesDetectPromise = invoke('terminal_detect_profiles')
+    .then((response) => {
+      applyProfilesResponse(response, 'background-detect')
+      loadingStateText.value = '终端配置已更新'
+      return response
+    })
+    .catch((error) => {
+      logger.warn('[TerminalPanel] background profile detection failed', error)
+      return null
+    })
+    .finally(() => {
+      profilesDetectPromise = null
+    })
+  return profilesDetectPromise
+}
+
 const loadProfilesWithTimeout = async () => {
   const fallbackProfiles = buildFallbackProfiles()
-  const timeoutMs = 1200
+  const timeoutMs = PROFILE_DETECT_TIMEOUT_MS
 
   return await Promise.race([
     invoke('terminal_detect_profiles'),
@@ -999,25 +1105,14 @@ const reloadProfiles = async () => {
   loadingStateText.value = '正在检测可用终端配置'
   try {
     const response = await loadProfilesWithTimeout()
-    const nextProfiles = Array.isArray(response?.profiles) ? response.profiles : buildFallbackProfiles()
-    profiles.value = nextProfiles
-    defaultProfileId.value = String(response?.default_profile || '').trim() || (isWindows ? 'powershell' : 'bash')
-    ensureSelectedProfile()
-
-    logger.info('[TerminalPanel] profiles loaded', {
-      defaultProfileId: defaultProfileId.value,
-      profileCount: profiles.value.length,
-      availableCount: availableProfiles.value.length,
-      fallback: !!response?.__fallback,
-    })
+    applyProfilesResponse(response, 'reload')
 
     if (response?.__fallback) {
       loadingStateText.value = '终端配置检测较慢，已先使用默认配置'
+      void detectProfilesInBackground()
     }
   } catch (error) {
-    profiles.value = buildFallbackProfiles()
-    defaultProfileId.value = isWindows ? 'powershell' : 'bash'
-    ensureSelectedProfile()
+    ensureFastFallbackProfiles('reload-error')
     loadingStateText.value = '终端配置加载失败，已回退默认配置'
     logger.error('[TerminalPanel] load terminal profiles failed', error)
   }
@@ -1031,7 +1126,7 @@ const createSession = async (options = {}) => {
   try {
     panelBusy.value = true
     loadingStateText.value = `正在启动 ${requestedProfileId} 终端`
-    if (terminal) {
+    if (canRenderTerminalNow()) {
       terminal.reset()
       terminal.clear()
       terminal.writeln(`[Guaxi] 正在启动 ${requestedProfileId} 终端...`)
@@ -1073,7 +1168,7 @@ const createSession = async (options = {}) => {
       error,
     })
 
-    if (terminal) {
+    if (canRenderTerminalNow()) {
       terminal.writeln('')
       terminal.writeln(`[Guaxi] 启动 ${requestedProfileId} 终端失败`)
       terminal.writeln(String(error?.message || error))
@@ -1099,7 +1194,7 @@ const switchProfileSession = async (profileId) => {
 
   isSwitchingProfile.value = true
   try {
-    if (terminal) {
+    if (canRenderTerminalNow()) {
       terminal.reset()
       terminal.clear()
       terminal.writeln(`[Guaxi] 正在切换到 ${normalizedProfileId}...`)
@@ -1189,7 +1284,8 @@ const activatePanel = async (reason = 'visible-change', options = {}) => {
   panelBusy.value = true
   loadingStateText.value = '正在准备终端面板'
   try {
-    await reloadProfiles()
+    ensureFastFallbackProfiles('activate-panel')
+    void detectProfilesInBackground()
     const existingSessions = await invoke('terminal_list_sessions')
     sessions.value = Array.isArray(existingSessions)
       ? existingSessions.map((session) => {
@@ -1219,6 +1315,15 @@ const activatePanel = async (reason = 'visible-change', options = {}) => {
 
 const initTerminal = async () => {
   if (terminal || !terminalHostRef.value) return
+  const layout = await waitForTerminalHostLayout('init-terminal')
+  if (!layout.ready) {
+    logger.debug('[TerminalPanel] defer terminal init until host layout is ready', {
+      visible: props.visible,
+      width: layout.width,
+      height: layout.height,
+    })
+    return
+  }
 
   fitAddon = new FitAddon()
   terminal = new Terminal({
@@ -1237,6 +1342,10 @@ const initTerminal = async () => {
   })
   terminal.loadAddon(fitAddon)
   terminal.open(terminalHostRef.value)
+  logger.info('[TerminalPanel] xterm opened', {
+    width: layout.width,
+    height: layout.height,
+  })
   terminal.attachCustomKeyEventHandler((event) => {
     const isMod = event.ctrlKey || event.metaKey
     if (!isMod) {
@@ -1306,12 +1415,41 @@ const initTerminal = async () => {
   await fitTerminal('init-terminal')
 }
 
+const activateVisibleTerminalPanel = async (reason = 'visible-change') => {
+  if (!props.visible) return null
+  if (terminalActivationPromise) return terminalActivationPromise
+
+  terminalActivationPromise = (async () => {
+    // 设计说明：底部终端面板首次打开可能伴随展开动画，DOM 已挂载但高度还没稳定。
+    // 这里短暂重试，避免 xterm 在 0 高容器里初始化，也避免用户需要再点一次终端。
+    for (let attempt = 0; attempt < 3 && !terminal && props.visible; attempt += 1) {
+      await initTerminal()
+      if (!terminal) {
+        await new Promise((resolve) => window.setTimeout(resolve, 80))
+      }
+    }
+    if (!terminal) {
+      logger.warn('[TerminalPanel] activation skipped because terminal is not initialized', { reason })
+      return null
+    }
+
+    const session = await activatePanel(reason)
+    renderActiveSession()
+    await fitTerminal(reason)
+    terminal?.focus?.()
+    return session
+  })().finally(() => {
+    terminalActivationPromise = null
+  })
+
+  return terminalActivationPromise
+}
+
 const handleResize = () => {
   void fitTerminal('window-resize')
 }
 
 onMounted(async () => {
-  await initTerminal()
   window.addEventListener('resize', handleResize)
 
   unlistenOutput = await listen('terminal-session-output', (event) => {
@@ -1325,17 +1463,20 @@ onMounted(async () => {
     if (!sessionId) return
     syncExitedSession(sessionId, Number(event?.payload?.exit_code))
   })
+
+  if (props.visible) {
+    window.setTimeout(() => {
+      void activateVisibleTerminalPanel('mounted-visible')
+    }, 0)
+  }
 })
 
 watch(
   () => props.visible,
   async (visible) => {
     if (!visible) return
-    await initTerminal()
     window.setTimeout(() => {
-      void activatePanel('panel-visible')
-        .then(() => fitTerminal('panel-visible'))
-        .then(() => terminal?.focus())
+      void activateVisibleTerminalPanel('panel-visible')
     }, 0)
   },
   { immediate: true }
@@ -1344,6 +1485,13 @@ watch(
 watch(
   selectedProfileId,
   async (nextProfileId, previousProfileId) => {
+    if (suppressProfileSwitchWatch) {
+      logger.debug('[TerminalPanel] skipped profile switch caused by profile list refresh', {
+        nextProfileId,
+        previousProfileId,
+      })
+      return
+    }
     if (!panelActivated.value || !props.visible) return
     if (!nextProfileId || nextProfileId === previousProfileId) return
     await switchProfileSession(nextProfileId)
