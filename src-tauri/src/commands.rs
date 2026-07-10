@@ -59,3 +59,8 @@ pub mod task_block;
 pub mod taskmanager;
 pub mod task_manager_window;
 pub mod neovim;
+/// AI 影像工坊与 Blender 5.2 LTS 的本地桥接命令。
+/// 独立成模块，避免把进程管理、工程目录和 Blender 版本探测继续堆入 chatview。
+pub mod story_studio;
+/// Story IR 共享校验器，供模型编译、项目保存和项目重开共同使用。
+pub mod story_ir;

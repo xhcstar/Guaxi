@@ -149,10 +149,11 @@ pub async fn open_application_window(
         WebviewUrl::App(format!("/app/{}", app_id).into())
     };
 
-    let (inner_w, inner_h, min_w, min_h) = if app_id == "tools-tts-book" {
-        (1480.0, 900.0, 1280.0, 760.0)
-    } else {
-        (1024.0, 720.0, 820.0, 560.0)
+    // 工作台类应用需要完整三栏空间；普通小工具继续使用紧凑窗口。
+    let (inner_w, inner_h, min_w, min_h) = match app_id.as_str() {
+        "creation-ai-film-studio" => (1680.0, 980.0, 1120.0, 720.0),
+        "tools-tts-book" => (1480.0, 900.0, 1280.0, 760.0),
+        _ => (1024.0, 720.0, 820.0, 560.0),
     };
 
     let window = WebviewWindowBuilder::new(&app, &label, url)

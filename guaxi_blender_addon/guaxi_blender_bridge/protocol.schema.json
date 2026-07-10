@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://guaxi.local/schemas/blender-bridge-command-v1.json",
+  "title": "Guaxi Blender Bridge Command",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocolVersion", "requestId", "operations"],
+  "properties": {
+    "protocolVersion": { "const": "1.0" },
+    "requestId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "operations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "required": ["type"],
+        "properties": {
+          "type": {
+            "enum": [
+              "ping",
+              "set_frame",
+              "select_object",
+              "set_object_transform",
+              "set_world_color",
+              "build_story_ir",
+              "save_project"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
+

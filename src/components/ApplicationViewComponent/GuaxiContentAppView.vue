@@ -29,7 +29,7 @@
 
 <script setup>
 import { createLogger } from '../../utils/logger'
-import { ref, computed, onBeforeUnmount } from "vue"
+import { ref, computed, onBeforeUnmount, onMounted } from "vue"
 import { invoke } from '@tauri-apps/api/core'
 import { useSiderStore } from '../../stores/useSiderStore'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -46,11 +46,13 @@ import TODOApp from "./apps/TODO.vue"
 import TTSBookApp from "./apps/TTSBookApp.vue"
 import OcrApp from "./apps/OcrApp.vue"
 import ResumeBuilderApp from "./apps/ResumeBuilderApp.vue"
+import AIFilmStudioApp from "./apps/AIFilmStudioApp.vue"
 
 const logger = createLogger('GuaxiContentAppView')
 const settingsStore = useSettingsStore()
 
 const categories = [
+  { key: 'creation', label: '创作类' },
   { key: 'tools', label: '工具类' },
   { key: 'language', label: '语言类' },
   { key: 'music', label: '音乐类' },
@@ -59,6 +61,16 @@ const categories = [
 ]
 
 const apps = [
+  {
+    id: 'creation-ai-film-studio',
+    name: 'AI 影像工坊',
+    category: 'creation',
+    categoryLabel: '创作类',
+    description: '将 Markdown、史料、地理数据和小说编译为 Blender 分镜、预演与电影制作项目',
+    icon: '🎬',
+    color: 'linear-gradient(135deg, #667eea, #302b63)',
+    component: AIFilmStudioApp
+  },
   {
     id: 'life-album',
     name: '相册',
@@ -171,7 +183,18 @@ const apps = [
   }
 ]
 
-const selectedCategory = ref('life');
+// 影像工坊是当前重点创作应用，首次进入 App 页面默认展示创作类。
+const selectedCategory = ref('creation');
+
+// 关键日志：发布包出现“新应用卡片不可见”时，可从前端日志确认实际加载的应用注册表，
+// 快速区分旧 dist/旧进程与分类过滤逻辑错误。
+onMounted(() => {
+  logger.info('[ApplicationView] application registry mounted', {
+    selectedCategory: selectedCategory.value,
+    categories: categories.map(item => item.key),
+    appIds: apps.map(item => item.id),
+  })
+})
 
 const handleOpenApp = async (app) => {
   try {

@@ -34,6 +34,7 @@ import TODOApp from '../components/ApplicationViewComponent/apps/TODO.vue'
 import TTSBookApp from '../components/ApplicationViewComponent/apps/TTSBookApp.vue'
 import OcrApp from '../components/ApplicationViewComponent/apps/OcrApp.vue'
 import ResumeBuilderApp from '../components/ApplicationViewComponent/apps/ResumeBuilderApp.vue'
+import AIFilmStudioApp from '../components/ApplicationViewComponent/apps/AIFilmStudioApp.vue'
 
 const APP_COMPONENT_MAP = {
   'life-album': LifeAlbumApp,
@@ -45,6 +46,7 @@ const APP_COMPONENT_MAP = {
   'tools-tts-book': TTSBookApp,
   'tools-ocr': OcrApp,
   'work-timer': ResumeBuilderApp,
+  'creation-ai-film-studio': AIFilmStudioApp,
 }
 
 const GuaxiAppWindow = {
@@ -54,7 +56,7 @@ const GuaxiAppWindow = {
     const appId = computed(() => String(route.params?.appId || ''))
     const Comp = computed(() => APP_COMPONENT_MAP[appId.value] || PlaceholderApp)
     // Workbench-style apps own their full window layout, so the route host should not add outer padding.
-    const fullBleedAppIds = new Set(['tools-tts-book', 'work-timer'])
+    const fullBleedAppIds = new Set(['tools-tts-book', 'work-timer', 'creation-ai-film-studio'])
     const hostPadding = computed(() => (fullBleedAppIds.has(appId.value) ? '0px' : '16px'))
 
     return () =>

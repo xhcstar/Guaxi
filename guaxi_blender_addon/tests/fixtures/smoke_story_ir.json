@@ -1,0 +1,86 @@
+{
+  "schemaVersion": "1.0",
+  "metadata": {
+    "title": "Guaxi Blender 5.2 烟雾测试",
+    "genre": "education",
+    "visualStyle": "stylized-low-poly",
+    "language": "zh-CN",
+    "fps": 12,
+    "targetDurationSeconds": 1,
+    "targetBlenderVersion": "5.2 LTS"
+  },
+  "research": {
+    "facts": [],
+    "researchGaps": [],
+    "sensitiveDepictions": []
+  },
+  "entities": {
+    "characters": [
+      {
+        "id": "char_smoke",
+        "name": "测试角色",
+        "description": "用于验证人物占位符",
+        "appearance": "蓝色几何体",
+        "wardrobe": "无",
+        "assetHints": []
+      }
+    ],
+    "locations": [],
+    "props": []
+  },
+  "production": {
+    "renderEngine": "BLENDER_EEVEE",
+    "resolution": {
+      "width": 320,
+      "height": 240,
+      "percentage": 25
+    },
+    "colorManagement": "AgX",
+    "audio": {
+      "dialogue": false,
+      "narration": false,
+      "music": false,
+      "soundEffects": false
+    },
+    "deliverables": ["preview_blend", "preview_mp4"]
+  },
+  "scenes": [
+    {
+      "id": "scene_smoke_001",
+      "title": "测试场景",
+      "summary": "验证 Blender 5.2 场景、关键帧、保存和视频编码。",
+      "locationId": "",
+      "time": "test",
+      "durationSeconds": 1,
+      "sourceAnchors": ["smoke fixture"],
+      "shots": [
+        {
+          "id": "shot_smoke_001",
+          "durationSeconds": 1,
+          "shotType": "wide",
+          "cameraMovement": "static",
+          "description": "一个角色占位符站在简单舞台上。",
+          "characters": ["char_smoke"],
+          "action": "从左向右轻微移动",
+          "dialogue": [],
+          "narration": "",
+          "onScreenText": "",
+          "assetRequirements": [],
+          "transition": "cut"
+        }
+      ]
+    }
+  ],
+  "assetPlan": [],
+  "audioPlan": {
+    "narrationStyle": "",
+    "musicStyle": "",
+    "soundEffects": []
+  },
+  "publishing": {
+    "aspectRatios": ["4:3"],
+    "platforms": ["test"],
+    "needsFactReview": false,
+    "needsRightsReview": false
+  }
+}

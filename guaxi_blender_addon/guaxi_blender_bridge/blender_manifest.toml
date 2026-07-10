@@ -1,0 +1,15 @@
+schema_version = "1.0.0"
+id = "guaxi_blender_bridge"
+version = "0.1.0"
+name = "Guaxi Blender Bridge"
+tagline = "Connect Guaxi Story IR to a controlled Blender production pipeline"
+maintainer = "Guaxi"
+type = "add-on"
+tags = ["Pipeline", "Animation", "Sequencer"]
+blender_version_min = "5.2.0"
+license = ["SPDX:GPL-3.0-or-later"]
+
+[permissions]
+network = "Listen on localhost for authenticated Guaxi commands"
+files = "Read and write only inside the user configured Guaxi project workspace"
+

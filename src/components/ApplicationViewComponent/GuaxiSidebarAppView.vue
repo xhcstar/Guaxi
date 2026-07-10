@@ -103,7 +103,7 @@
       </div>
     </div>
     <div class="app-category-list">
-      <div v-for="category in categories" :key="category.key"
+      <div v-for="category in props.categories" :key="category.key"
         :class="['app-category-item', { active: category.key === selectedCategory }]"
         @click="handleSelect(category.key)">
         <div class="app-category-dot"></div>
@@ -131,15 +131,13 @@ onBeforeUnmount(() => {
   window.removeEventListener('hashchange', syncActivePath)
 })
 
-const categories = [
-  { key: 'tools', label: '工具类' },
-  { key: 'language', label: '语言类' },
-  { key: 'music', label: '音乐类' },
-  { key: 'work', label: '工作类' },
-  { key: 'life', label: '生活类' }
-]
-
 const props = defineProps({
+  // 分类由 GuaxiContentAppView 统一维护。此前这里存在第二份硬编码列表，
+  // 会导致父组件新增应用分类后侧栏不可见，且分类与卡片过滤状态不一致。
+  categories: {
+    type: Array,
+    default: () => []
+  },
   selectedCategory: {
     type: String,
     default: ''

@@ -972,6 +972,189 @@ async fn kb_agent_call_model(model: ChatModel, prompt: &str, sessionid: &str) ->
     }
 }
 
+/// AI 影像工坊的文稿编译请求。
+/// modelid 完全复用聊天后端，因此云端供应商、自定义 OpenAI 兼容接口和本地模型都可使用。
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct StoryStudioCompileRequest {
+    pub modelid: i32,
+    #[serde(default)]
+    pub sessionid: String,
+    #[serde(default)]
+    pub source_name: String,
+    pub markdown: String,
+    #[serde(default)]
+    pub genre: String,
+    #[serde(default)]
+    pub visual_style: String,
+    pub target_duration_seconds: Option<u32>,
+    #[serde(default)]
+    pub production_mode: String,
+    #[serde(default)]
+    pub additional_direction: String,
+}
+
+/// Story IR 同时返回原始模型文本，方便开发期诊断模型是否遵循 JSON 约束。
+/// 前端默认只展示已解析的 story_ir，不会执行 raw_answer 中的任何代码或指令。
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct StoryStudioCompileResponse {
+    pub story_ir: Value,
+    pub raw_answer: String,
+    pub sessionid: String,
+    pub warnings: Vec<String>,
+}
+
+fn build_story_studio_prompt(request: &StoryStudioCompileRequest) -> Result<String, String> {
+    let markdown = request.markdown.trim();
+    if markdown.is_empty() {
+        return Err("Markdown 文稿为空".to_string());
+    }
+    // 约 150 万中文字符已远超一次故事编译的合理上下文，提前阻断可避免本地模型内存失控。
+    if markdown.chars().count() > 1_500_000 {
+        return Err("文稿过长，请先按卷、章或场景拆分后再生成 Story IR".to_string());
+    }
+
+    let source_json = serde_json::to_string(markdown).map_err(|e| e.to_string())?;
+    let source_name_json = serde_json::to_string(request.source_name.trim()).map_err(|e| e.to_string())?;
+    let genre_json = serde_json::to_string(request.genre.trim()).map_err(|e| e.to_string())?;
+    let style_json = serde_json::to_string(request.visual_style.trim()).map_err(|e| e.to_string())?;
+    let mode_json = serde_json::to_string(request.production_mode.trim()).map_err(|e| e.to_string())?;
+    let direction_json =
+        serde_json::to_string(request.additional_direction.trim()).map_err(|e| e.to_string())?;
+    let duration = request.target_duration_seconds.unwrap_or(60).clamp(5, 10_800);
+
+    Ok(format!(
+        r#"你是 Guaxi AI 影像工坊的故事编译器。你的任务是把 Markdown 文稿编译为可由 Blender 5.2 LTS 执行的 Story IR。
+
+只返回一个严格 JSON 对象，不要 Markdown 代码块，不要解释，不要生成 Python。必须保持原文事实与叙事意图；史书和地理文稿中不得虚构日期、人物、地名、引用或因果关系，不确定信息写入 researchGaps。
+
+输入配置：
+- sourceName: {source_name_json}
+- genre: {genre_json}
+- visualStyle: {style_json}
+- productionMode: {mode_json}
+- targetDurationSeconds: {duration}
+- additionalDirection: {direction_json}
+
+输出必须符合以下结构。允许添加字段，但这些字段不可缺少：
+{{
+  "schemaVersion": "1.0",
+  "metadata": {{
+    "title": "string",
+    "logline": "string",
+    "genre": "history|geography|novel|documentary|education|other",
+    "visualStyle": "string",
+    "language": "zh-CN",
+    "fps": 24,
+    "targetDurationSeconds": number,
+    "targetBlenderVersion": "5.2 LTS"
+  }},
+  "research": {{
+    "facts": [{{"id":"fact_001","claim":"string","sourceAnchor":"原文标题或段落","confidence":0.0}}],
+    "researchGaps": ["string"],
+    "sensitiveDepictions": ["string"]
+  }},
+  "entities": {{
+    "characters": [{{"id":"char_001","name":"string","description":"string","appearance":"string","wardrobe":"string","assetHints":["string"]}}],
+    "locations": [{{"id":"loc_001","name":"string","description":"string","geo":{{"latitude":null,"longitude":null}},"era":"string","assetHints":["string"]}}],
+    "props": [{{"id":"prop_001","name":"string","description":"string","assetHints":["string"]}}]
+  }},
+  "production": {{
+    "renderEngine": "BLENDER_EEVEE",
+    "resolution": {{"width":1280,"height":720,"percentage":50}},
+    "colorManagement": "AgX",
+    "audio": {{"dialogue":true,"narration":true,"music":true,"soundEffects":true}},
+    "deliverables": ["storyboard","preview_blend","preview_mp4","subtitle_srt"]
+  }},
+  "scenes": [
+    {{
+      "id": "scene_001",
+      "title": "string",
+      "summary": "string",
+      "locationId": "loc_001或空字符串",
+      "time": "string",
+      "durationSeconds": number,
+      "sourceAnchors": ["原文标题或段落"],
+      "shots": [
+        {{
+          "id":"shot_001",
+          "durationSeconds": number,
+          "shotType":"wide|medium|closeup|aerial|map|insert",
+          "cameraMovement":"static|pan|tilt|dolly|orbit|tracking",
+          "description":"画面中可观察到的内容",
+          "characters":["char_001"],
+          "action":"string",
+          "dialogue":[{{"speakerId":"char_001","text":"string"}}],
+          "narration":"string",
+          "onScreenText":"string",
+          "assetRequirements":["string"],
+          "transition":"cut|fade|dissolve|wipe"
+        }}
+      ]
+    }}
+  ],
+  "assetPlan": [{{"id":"asset_001","type":"character|environment|prop|map|archive|material","description":"string","searchTags":["string"],"licenseRequired":true}}],
+  "audioPlan": {{"narrationStyle":"string","musicStyle":"string","soundEffects":["string"]}},
+  "publishing": {{"aspectRatios":["16:9"],"platforms":["video-platform"],"needsFactReview":true,"needsRightsReview":true}}
+}}
+
+规则：
+1. 所有 id 在文档内稳定且唯一；关联必须引用已存在 id。
+2. scenes 至少一项，每个 scene 至少一个 shot；总时长尽量接近目标时长。
+3. 镜头描述必须可视化，不使用“表达了、体现了”代替画面动作。
+4. 史书保留年代、制度、人物关系和史料不确定性；地理内容优先规划地图、地形、路线与尺度参照。
+5. 小说区分叙述、对白、动作和内心活动；内心活动优先转为旁白或可见行为。
+6. 所有资产只给需求和标签，不假定文件已经存在。
+7. 不要在 JSON 字符串中放未转义换行，不要尾随逗号。
+
+Markdown 原文 JSON 字符串：
+{source_json}"#
+    ))
+}
+
+/// 将 Markdown 编译为 Story IR。该命令是“规划层”，不启动 Blender，也不会写入用户文件。
+#[tauri::command]
+pub async fn story_studio_compile_markdown(
+    request: StoryStudioCompileRequest,
+) -> Result<StoryStudioCompileResponse, String> {
+    let prompt = build_story_studio_prompt(&request)?;
+    let sessionid = if request.sessionid.trim().is_empty() {
+        generate_session_id()
+    } else {
+        request.sessionid.trim().to_string()
+    };
+    info!(
+        modelid = request.modelid,
+        source = %request.source_name,
+        markdown_chars = request.markdown.chars().count(),
+        "[StoryStudio] compiling markdown to Story IR"
+    );
+
+    let (raw_answer, response_sessionid) =
+        kg_llm_complete(request.modelid, &prompt, &sessionid).await?;
+    let parsed = parse_kb_agent_json(&raw_answer)
+        .map_err(|e| format!("模型未返回有效 Story IR：{e}"))?;
+    let (story_ir, warnings) = crate::commands::story_ir::validate_and_normalize_story_ir(parsed)?;
+    let scene_count = story_ir
+        .get("scenes")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    info!(
+        modelid = request.modelid,
+        scene_count,
+        warning_count = warnings.len(),
+        "[StoryStudio] Story IR compiled"
+    );
+    Ok(StoryStudioCompileResponse {
+        story_ir,
+        raw_answer,
+        sessionid: response_sessionid,
+        warnings,
+    })
+}
+
 /// 文档 Agent 请求：默认走本地 LocalQwen(id 9)，也可指定任意已接入模型。
 /// 仅承载“结构化任务”（classify/tag）；散文类任务(write/translate/organize)由前端复用流式聊天通道。
 #[derive(Deserialize, Debug, Clone)]
