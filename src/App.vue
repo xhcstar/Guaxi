@@ -7,15 +7,92 @@
 </template>
 
 <script setup>
-import { computed, onMounted } from 'vue'
+import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { RouterView } from 'vue-router'
 import { NConfigProvider, NMessageProvider, darkTheme } from 'naive-ui'
 import { useSettingsStore } from './stores/settingsStore'
+import { mainNavigationItems } from './router/index.js'
+import { GUAXI_SHORTCUTS, shortcutText, shortcutTooltip, useGuaxiHotkeys } from './composables/useGuaxiHotkeys'
+import { createLogger } from './utils/logger'
 
 const settingsStore = useSettingsStore()
+const logger = createLogger('GuaxiApp')
+
+const globalNavigationItems = mainNavigationItems.map((item) => ({
+  ...item,
+  shortcut: GUAXI_SHORTCUTS[item.shortcutId],
+}))
+
+let navIconObserver = null
+let navIconDecorationFrame = 0
+
+const currentHashPath = () => (window.location.hash || '#/').slice(1) || '/'
+
+const navigateByShortcut = (item) => {
+  const from = currentHashPath()
+  logger.info('[GlobalNavigationShortcut] navigate requested', {
+    from,
+    to: item.path,
+    label: item.label,
+    shortcut: shortcutText(item.shortcut),
+  })
+  window.location.hash = item.path
+}
+
+useGuaxiHotkeys(
+  globalNavigationItems.map((item) => ({
+    id: `nav:${item.path}`,
+    label: item.label,
+    shortcut: item.shortcut,
+    handler: () => navigateByShortcut(item),
+  })),
+  {
+    logger,
+    scope: 'GuaxiGlobalNavigationShortcuts',
+  },
+)
+
+const decorateNavIcon = (icon, item) => {
+  if (!icon || !item) return
+
+  const title = shortcutTooltip(item.label, item.shortcut)
+  icon.setAttribute('title', title)
+  icon.setAttribute('aria-label', title)
+  icon.setAttribute('data-guaxi-nav-shortcut', shortcutText(item.shortcut))
+}
+
+const decorateGlobalNavIcons = () => {
+  cancelAnimationFrame(navIconDecorationFrame)
+  navIconDecorationFrame = requestAnimationFrame(() => {
+    const topItems = globalNavigationItems.slice(0, -1)
+    const settingItem = globalNavigationItems[globalNavigationItems.length - 1]
+
+    document.querySelectorAll('.sider-icon-container').forEach((container) => {
+      container.querySelectorAll('.sider-icon-top .nav-icon').forEach((icon, index) => {
+        decorateNavIcon(icon, topItems[index])
+      })
+      decorateNavIcon(container.querySelector('.sider-icon-bottom .nav-icon'), settingItem)
+    })
+  })
+}
 
 onMounted(async () => {
   await settingsStore.loadAppearanceConfig()
+  decorateGlobalNavIcons()
+  navIconObserver = new MutationObserver(decorateGlobalNavIcons)
+  navIconObserver.observe(document.body, {
+    childList: true,
+    subtree: true,
+  })
+  logger.debug('[GlobalNavigationShortcut] icon tooltip decorator mounted', {
+    count: globalNavigationItems.length,
+  })
+})
+
+onBeforeUnmount(() => {
+  navIconObserver?.disconnect?.()
+  navIconObserver = null
+  cancelAnimationFrame(navIconDecorationFrame)
 })
 
 const ONE_DARK = {
@@ -76,6 +153,7 @@ const themeOverrides = computed(() => {
 
 <style>
 :root {
+  --guaxi-editor-font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
   --guaxi-app-bg: #ffffff;
   --guaxi-header-bg: #ffffff;
   --guaxi-content-bg: #ffffff;

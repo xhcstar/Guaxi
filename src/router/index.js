@@ -7,6 +7,7 @@ import GuaxiApplicationPage from '../views/GuaxiApplicationPage.vue'
 import GuaxiSearchPage from '../views/GuaxiSearchPage.vue'
 import GuaxiSettingPage from '../views/GuaxiSettingPage.vue'
 import GuaxiRepoPage from '../views/GuaxiRepoPage.vue'
+import GuaxiStatisticsPage from '../views/GuaxiStatisticsPage.vue'
 import ExcalidrawPage from '../views/ExcalidrawPage.vue'
 import GuaxiReader from '../components/ReaderComponent/GuaxiReader.vue'
 import GuaxiMainLayout from '../components/GuaxiMainLayout.vue'
@@ -72,52 +73,86 @@ const GuaxiAppWindow = {
   },
 }
 
+// 设计说明：最左侧全局导航栏在多个页面中有重复实现，导航项和快捷键 id 统一放在路由层声明。
+// App 根组件会读取这份配置注册全局快捷键，并给当前页面渲染出来的 icon 自动补充 title/aria-label。
+export const mainNavigationItems = Object.freeze([
+  { path: '/', routeName: 'main', label: '知识编辑', shortcutId: 'navHome' },
+  { path: '/chat', routeName: 'chat', label: '智能助手', shortcutId: 'navChat' },
+  { path: '/repository', routeName: 'repository', label: '仓库', shortcutId: 'navRepository' },
+  { path: '/brain', routeName: 'brain', label: '知识图谱', shortcutId: 'navBrain' },
+  { path: '/application', routeName: 'application', label: '应用', shortcutId: 'navApplication' },
+  { path: '/statistics', routeName: 'statistics', label: '统计', shortcutId: 'navStatistics' },
+  { path: '/search', routeName: 'search', label: '搜索', shortcutId: 'navSearch' },
+  { path: '/excalidraw', routeName: 'excalidraw', label: '白板', shortcutId: 'navExcalidraw' },
+  { path: '/setting', routeName: 'setting', label: '设置', shortcutId: 'navSetting' },
+])
+
+const navMeta = (routeName) => {
+  const item = mainNavigationItems.find((entry) => entry.routeName === routeName)
+  return item ? { navLabel: item.label, navShortcutId: item.shortcutId } : {}
+}
+
 
 export const routes = [
   {
     path: '/',
     name: 'main',
     component: GuaxiMainLayout,
+    meta: navMeta('main'),
   },
   {
     path: '/home',
     name: 'home',
     component: GuaxiHomePage,
+    meta: navMeta('main'),
   },
   {
     path: '/chat',
     name: 'chat',
     component: GuaxiChatPage,
+    meta: navMeta('chat'),
   },
   {
     path: '/repository',
     name: 'repository',
     component: GuaxiRepoPage,
+    meta: navMeta('repository'),
   },
   {
     path: '/brain',
     name: 'brain',
     component: GuaxiBrainPage,
+    meta: navMeta('brain'),
   },
   {
     path: '/application',
     name: 'application',
     component: GuaxiApplicationPage,
+    meta: navMeta('application'),
   },
   {
     path: '/search',
     name: 'search',
     component: GuaxiSearchPage,
+    meta: navMeta('search'),
   },
   {
     path: '/excalidraw',
     name: 'excalidraw',
     component: ExcalidrawPage,
+    meta: navMeta('excalidraw'),
   },
   {
     path: '/setting',
     name: 'setting',
     component: GuaxiSettingPage,
+    meta: navMeta('setting'),
+  },
+  {
+    path: '/statistics',
+    name: 'statistics',
+    component: GuaxiStatisticsPage,
+    meta: navMeta('statistics'),
   },
   {
     path: '/reader',

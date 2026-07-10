@@ -7,6 +7,16 @@ export const GUAXI_SHORTCUTS = Object.freeze({
   fileTreeNewFolder: { ctrl: true, alt: true, shift: true, code: 'KeyN', label: 'Ctrl+Alt+Shift+N' },
   fileTreeImportFile: { ctrl: true, alt: true, code: 'KeyI', label: 'Ctrl+Alt+I' },
 
+  navHome: { ctrl: true, alt: true, code: 'Digit1', label: 'Ctrl+Alt+1' },
+  navChat: { ctrl: true, alt: true, code: 'Digit2', label: 'Ctrl+Alt+2' },
+  navRepository: { ctrl: true, alt: true, code: 'Digit3', label: 'Ctrl+Alt+3' },
+  navBrain: { ctrl: true, alt: true, code: 'Digit4', label: 'Ctrl+Alt+4' },
+  navApplication: { ctrl: true, alt: true, code: 'Digit5', label: 'Ctrl+Alt+5' },
+  navStatistics: { ctrl: true, alt: true, code: 'Digit6', label: 'Ctrl+Alt+6' },
+  navSearch: { ctrl: true, alt: true, code: 'Digit7', label: 'Ctrl+Alt+7' },
+  navExcalidraw: { ctrl: true, alt: true, code: 'Digit8', label: 'Ctrl+Alt+8' },
+  navSetting: { ctrl: true, alt: true, code: 'Digit9', label: 'Ctrl+Alt+9' },
+
   createKnowledgeBase: { ctrl: true, alt: true, code: 'KeyK', label: 'Ctrl+Alt+K' },
   openAssistant: { ctrl: true, alt: true, code: 'KeyA', label: 'Ctrl+Alt+A' },
   splitVertical: { ctrl: true, alt: true, code: 'KeyV', label: 'Ctrl+Alt+V' },
@@ -16,7 +26,13 @@ export const GUAXI_SHORTCUTS = Object.freeze({
   openTemplateManager: { ctrl: true, alt: true, code: 'KeyT', label: 'Ctrl+Alt+T' },
   openResourceRepoManager: { ctrl: true, alt: true, code: 'KeyR', label: 'Ctrl+Alt+R' },
 
-  editorExport: { ctrl: true, alt: true, code: 'KeyE', label: 'Ctrl+Alt+E' },
+  editorExportPdf: { ctrl: true, alt: true, code: 'KeyE', label: 'Ctrl+Alt+E' },
+  editorExportDocx: { ctrl: true, alt: true, code: 'KeyW', label: 'Ctrl+Alt+W' },
+  editorExportHtml: { ctrl: true, alt: true, code: 'KeyM', label: 'Ctrl+Alt+M' },
+  editorExportTex: { ctrl: true, alt: true, code: 'KeyL', label: 'Ctrl+Alt+L' },
+  editorExportEpub: { ctrl: true, alt: true, code: 'KeyU', label: 'Ctrl+Alt+U' },
+  editorExportOdt: { ctrl: true, alt: true, code: 'KeyD', label: 'Ctrl+Alt+D' },
+  editorExportTxt: { ctrl: true, alt: true, code: 'KeyY', label: 'Ctrl+Alt+Y' },
 })
 
 export function shortcutText(shortcut) {

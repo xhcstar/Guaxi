@@ -437,7 +437,7 @@
                   <n-icon :component="ExitOutline" size="18" />
                 </n-button>
               </template>
-              {{ shortcutTooltip('导出 PDF', GUAXI_SHORTCUTS.editorExport) }}
+              {{ editorExportShortcutTooltip }}
             </n-tooltip>
           </n-dropdown>
 
@@ -1029,7 +1029,8 @@
           </div>
         </div>
 
-        <n-dropdown v-model:show="editorContextMenuVisible" :options="editorContextMenuOptions" placement="bottom-start"
+        <n-dropdown v-model:show="editorContextMenuVisible" :menu-props="getEditorContextMenuProps"
+          :options="editorContextMenuOptions" placement="bottom-start"
           :x="editorContextMenuPosition.x" :y="editorContextMenuPosition.y" @select="handleEditorContextMenuSelect"
           @clickoutside="handleEditorContextMenuClickoutside" />
 
@@ -1186,7 +1187,7 @@ import GuaxiNotebookView from './GuaxiNotebookView.vue'
 import GuaxiLatexPreview from './GuaxiLatexPreview.vue'
 import GuaxiSpeechDictationCard from './GuaxiSpeechDictationCard.vue'
 import { useSpeechDictation } from '../../composables/useSpeechDictation'
-import { GUAXI_SHORTCUTS, matchesShortcut, shortcutText, shortcutTooltip } from '../../composables/useGuaxiHotkeys'
+import { GUAXI_SHORTCUTS, matchesShortcut, shortcutText } from '../../composables/useGuaxiHotkeys'
 import GuaxiOrgTaskPreview from './GuaxiOrgTaskPreview.vue'
 import { validateTaskBlocks, parseTaskBlocks, serializeBlock, replaceBlockInContent, buildNewBlock } from '../../utils/guaxiTaskParser'
 import GuaxiTerminalPanel from './GuaxiTerminalPanel.vue'
@@ -2205,9 +2206,22 @@ watch([selectionTranslateFrom, selectionTranslateTo], ([from, to], [prevFrom, pr
 const editorContextMenuVisible = ref(false);
 const editorContextMenuPosition = ref({ x: 0, y: 0 });
 const editorContextMenuOptions = ref([]);
+const EDITOR_CONTEXT_MENU_FONT_FAMILY = "var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New')";
 
 const handleEditorContextMenuClickoutside = () => {
   editorContextMenuVisible.value = false;
+};
+
+const getEditorContextMenuProps = () => {
+  return {
+    class: 'editor-context-menu-dropdown',
+    style: {
+      fontFamily: EDITOR_CONTEXT_MENU_FONT_FAMILY,
+      maxHeight: 'none',
+      overflow: 'visible',
+      scrollbarWidth: 'none',
+    },
+  };
 };
 
 const writeClipboardText = async (text) => {
@@ -10659,11 +10673,9 @@ const initEditor = () => {
         '<C-a>': false
       }
     },
-    contextmenu: {
-      enabled: true,
-      addDefaultActions: true,
-      addNavigationActions: true
-    },
+    // 设计说明：主编辑器使用下方 editor.onContextMenu + Naive UI n-dropdown 渲染自定义右键菜单。
+    // 这里关闭 Monaco 默认右键菜单，避免和自定义菜单同时出现，并保留 Monaco 编辑器本身的右键事件派发。
+    contextmenu: false,
     lineNumbers: 'on',
     lineNumbersMinChars: 3,  // 最小行号宽度
     scrollBeyondLastLine: false,
@@ -10924,12 +10936,21 @@ const initEditor = () => {
 
     editor.onContextMenu((e) => {
       e.event.preventDefault();
+      e.event.stopPropagation?.();
+      e.event.browserEvent?.preventDefault?.();
+      e.event.browserEvent?.stopPropagation?.();
       const { posx, posy } = e.event;
 
       editor.focus();
       editorContextMenuPosition.value = { x: posx, y: posy };
       editorContextMenuOptions.value = buildEditorContextMenuOptions();
       editorContextMenuVisible.value = true;
+      logger.debug('[EditorContextMenu] open custom Naive UI menu', {
+        x: posx,
+        y: posy,
+        optionCount: editorContextMenuOptions.value.filter((item) => item?.type !== 'divider').length,
+        menuPropsClass: 'editor-context-menu-dropdown',
+      });
     });
 
     outlineStore.setJumpToLine(jumpToLine)
@@ -14686,14 +14707,16 @@ const handleKeyDown = (e) => {
     return
   }
 
-  if (matchesShortcut(e, GUAXI_SHORTCUTS.editorExport)) {
+  const matchedExportShortcut = getMatchedExportShortcut(e)
+  if (matchedExportShortcut) {
     e.preventDefault()
     e.stopPropagation()
-    logger.info('[EditorShortcut] export PDF shortcut requested', {
-      shortcut: shortcutText(GUAXI_SHORTCUTS.editorExport),
+    logger.info('[EditorShortcut] export shortcut requested', {
+      format: matchedExportShortcut.format,
+      shortcut: shortcutText(matchedExportShortcut.shortcut),
       selectedPath: selectedFile.value?.path || '',
     })
-    void handleLatexExport()
+    void handleExportSelect(matchedExportShortcut.format)
     return
   }
 
@@ -20807,7 +20830,18 @@ const createPrintIframeAndPrint = (html) => {
   };
 };
 
-const exportOptions = [
+// 设计说明：导出菜单、tooltip 和键盘处理共享同一份快捷键映射，避免后续新增格式时只改了其中一处。
+const EXPORT_SHORTCUTS = Object.freeze({
+  pdf: GUAXI_SHORTCUTS.editorExportPdf,
+  docx: GUAXI_SHORTCUTS.editorExportDocx,
+  html: GUAXI_SHORTCUTS.editorExportHtml,
+  tex: GUAXI_SHORTCUTS.editorExportTex,
+  epub: GUAXI_SHORTCUTS.editorExportEpub,
+  odt: GUAXI_SHORTCUTS.editorExportOdt,
+  txt: GUAXI_SHORTCUTS.editorExportTxt,
+})
+
+const BASE_EXPORT_OPTIONS = [
   { label: '导出为 PDF', key: 'pdf' },
   { label: '导出为 Word (.docx)', key: 'docx' },
   { label: '导出为 HTML (.html)', key: 'html' },
@@ -20815,7 +20849,36 @@ const exportOptions = [
   { label: '导出为 EPUB (.epub)', key: 'epub' },
   { label: '导出为 ODT (.odt)', key: 'odt' },
   { label: '导出为 纯文本 (.txt)', key: 'txt' }
-];
+]
+
+const exportOptions = computed(() => BASE_EXPORT_OPTIONS.map((option) => {
+  const shortcut = shortcutText(EXPORT_SHORTCUTS[option.key])
+  return {
+    ...option,
+    label: shortcut ? `${option.label} (${shortcut})` : option.label,
+  }
+}))
+
+const editorExportShortcutTooltip = computed(() => {
+  const shortcuts = BASE_EXPORT_OPTIONS
+    .map((option) => {
+      const shortcut = shortcutText(EXPORT_SHORTCUTS[option.key])
+      return shortcut ? `${option.key.toUpperCase()}: ${shortcut}` : ''
+    })
+    .filter(Boolean)
+    .join(' / ')
+
+  return shortcuts ? `导出：${shortcuts}` : '导出'
+})
+
+function getMatchedExportShortcut(event) {
+  const entry = Object.entries(EXPORT_SHORTCUTS)
+    .find(([, shortcut]) => matchesShortcut(event, shortcut))
+
+  if (!entry) return null
+  const [format, shortcut] = entry
+  return { format, shortcut }
+}
 
 const EXPORT_FORMAT_CONFIG = {
   pdf: { ext: 'pdf', filterName: 'PDF 文件' },
@@ -22395,7 +22458,7 @@ onUnmounted(() => {
 
 <style scoped>
 .guaxi-editor {
-  --editor-font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
+  --editor-font-family: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New');
   --pycell-card-border: rgba(15, 23, 42, 0.1);
   --pycell-card-bg:
     linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.98));
@@ -25107,32 +25170,33 @@ onUnmounted(() => {
   filter: none !important;
 }
 
-.n-dropdown-menu {
-  max-height: 320px;
-  max-height: min(320px, calc(100vh - 140px));
-  overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(140, 140, 140, 0.45) transparent;
+/*
+ * 设计说明：
+ * 1. 主编辑器右键菜单是 Naive UI 的 n-dropdown，并非 Monaco 原生 context menu。
+ * 2. 之前泛化的 `.n-dropdown-menu { max-height: 320px; overflow-y: auto; }` 是滚动条根因；
+ *    这里改为只命中右键菜单专用 class，让菜单按内容完整展开。
+ * 3. n-dropdown 会 teleport 到 body，因此使用 :global 和全局编辑器字体变量保持与主编辑器一致。
+ */
+:global(.editor-context-menu-dropdown.n-dropdown),
+:global(.editor-context-menu-dropdown.n-dropdown-menu),
+:global(.editor-context-menu-dropdown .n-dropdown-option),
+:global(.editor-context-menu-dropdown .n-dropdown-option-body),
+:global(.editor-context-menu-dropdown .n-dropdown-option-body__label) {
+  font-family: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New') !important;
 }
 
-.n-dropdown-menu::-webkit-scrollbar {
-  width: 8px;
+:global(.editor-context-menu-dropdown.n-dropdown),
+:global(.editor-context-menu-dropdown.n-dropdown-menu) {
+  max-height: none !important;
+  overflow: visible !important;
+  scrollbar-width: none !important;
 }
 
-.n-dropdown-menu::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.n-dropdown-menu::-webkit-scrollbar-thumb {
-  background: rgba(140, 140, 140, 0.35);
-  border-radius: 8px;
-  border: 2px solid transparent;
-  background-clip: content-box;
-}
-
-.n-dropdown-menu::-webkit-scrollbar-thumb:hover {
-  background: rgba(140, 140, 140, 0.55);
-  background-clip: content-box;
+:global(.editor-context-menu-dropdown.n-dropdown::-webkit-scrollbar),
+:global(.editor-context-menu-dropdown.n-dropdown-menu::-webkit-scrollbar) {
+  width: 0 !important;
+  height: 0 !important;
+  display: none !important;
 }
 
 /*
@@ -27114,4 +27178,5 @@ onUnmounted(() => {
 :global(:root[data-guaxi-theme='dark']) .guaxi-inline-dataframe__table th {
   background: rgba(51, 65, 85, 0.72);
 }
+
 </style>
