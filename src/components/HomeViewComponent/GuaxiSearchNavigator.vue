@@ -1,10 +1,20 @@
 <template>
   <div class="search-navigator" ref="navigatorRef" tabindex="0" @keydown="handleNavigatorKeydown"
     @mousedown="focusNavigator" @click="focusNavigator">
+    <div v-if="loading" class="search-panel-status search-panel-status--loading">
+      <n-spin size="small" />
+      <span>正在扫描并整理完整搜索结果…</span>
+    </div>
+    <div v-else-if="error" class="search-panel-status search-panel-status--error">
+      {{ error }}
+    </div>
     <n-tabs v-model:value="activeTab" type="line" animated>
       <!-- 文件搜索结果标签页 -->
       <n-tab-pane name="files" :tab="filesTab">
         <div class="tab-content">
+          <div v-if="fileResults.length > 0" class="result-summary">
+            共找到 {{ fileResults.length }} 个文件
+          </div>
           <n-empty v-if="fileResults.length === 0" description="暂无文件搜索结果" style="margin-top: 20px" />
           <n-list v-else hoverable clickable>
             <div class="scroller">
@@ -25,7 +35,7 @@
                 </n-list-item>
                 </template>
                 <template #footer>
-                  <div v-if="searchState.loading" class="loading-more">
+                  <div v-if="loading" class="loading-more">
                     <n-spin size="small" />
                   </div>
                 </template>
@@ -38,6 +48,9 @@
       <!-- 内容搜索结果标签页 -->
       <n-tab-pane name="notes" :tab="notesTab">
         <div class="tab-content">
+          <div v-if="noteResults.length > 0" class="result-summary">
+            共找到 {{ noteResults.length }} 处匹配，涉及 {{ uniqueNoteFileCount }} 个文件
+          </div>
           <div v-if="invalidNoteItems.length > 0" class="error-banner">
             警告：发现 {{ invalidNoteItems.length }} 个无效搜索结果项
             <n-button text @click="showInvalidItems = !showInvalidItems" size="tiny">
@@ -67,7 +80,7 @@
                 </n-list-item>
                 </template>
                 <template #footer>
-                  <div v-if="searchState.loading" class="loading-more">
+                  <div v-if="loading" class="loading-more">
                     <n-spin size="small" />
                   </div>
                 </template>
@@ -89,7 +102,7 @@
 
 <script setup>
 import { createLogger } from '../../utils/logger'
-import { h, defineComponent, reactive, ref, watch, onMounted, computed, onBeforeUnmount, nextTick } from 'vue';
+import { h, defineComponent, ref, watch, onMounted, computed, onBeforeUnmount, nextTick } from 'vue';
 import { Icon } from '@iconify/vue';
 import { debounce } from 'lodash-es';
 import {
@@ -181,18 +194,23 @@ const props = defineProps({
     type: String,
     required: true,
     default: 'file'
+  },
+  loading: {
+    type: Boolean,
+    default: false
+  },
+  error: {
+    type: String,
+    default: ''
   }
 });
 
-// 搜索状态管理
-const searchState = reactive({
-  loading: false,
-  activeSearch: null,
-  cancelToken: null,
-  batchSize: 20,
-  loadedResults: 0,
-  hasMore: false
-});
+// 内容搜索按“命中行”计数，同时额外统计去重文件数，让界面如实说明结果覆盖范围。
+const uniqueNoteFileCount = computed(() => new Set(
+  props.noteResults
+    .map(item => String(item?.path || '').replace(/\\/g, '/').toLowerCase())
+    .filter(Boolean)
+).size)
 
 // 监听搜索类型变化，自动切换标签页
 watch(() => props.lastSearchType, (newType) => {
@@ -583,7 +601,7 @@ onMounted(() => {
 const filesTab = () => h(NTooltip, { placement: 'bottom' }, {
   trigger: () => h('span', { class: 'tab-label' }, [
     h(Icon, { icon: 'mdi:file-search-outline', style: { fontSize: '18px', marginRight: '6px' } }),
-    '文件搜索结果'
+    `文件搜索结果（${props.fileResults.length}）`
   ]),
   default: () => '显示文件路径匹配的搜索结果'
 });
@@ -591,7 +609,7 @@ const filesTab = () => h(NTooltip, { placement: 'bottom' }, {
 const notesTab = () => h(NTooltip, { placement: 'bottom' }, {
   trigger: () => h('span', { class: 'tab-label' }, [
     h(Icon, { icon: 'mdi:text-box-search-outline', style: { fontSize: '18px', marginRight: '6px' } }),
-    '内容搜索结果'
+    `内容搜索结果（${props.noteResults.length}）`
   ]),
   default: () => '显示文件内容匹配的搜索结果'
 });
@@ -599,7 +617,7 @@ const notesTab = () => h(NTooltip, { placement: 'bottom' }, {
 const excerptsTab = () => h(NTooltip, { placement: 'bottom' }, {
   trigger: () => h('span', { class: 'tab-label' }, [
     h(Icon, { icon: 'mdi:note-search-outline', style: { fontSize: '18px', marginRight: '6px' } }),
-    '摘录笔记'
+    `摘录笔记（${props.excerptResults.length}）`
   ]),
   default: () => '显示摘录笔记的搜索结果'
 });
@@ -947,6 +965,30 @@ onBeforeUnmount(() => {
   box-shadow: none;
 }
 
+/*
+ * 搜索状态放在标签页上方，明确区分“仍在扫描”和“扫描完成但没有结果”。
+ * 这能避免完整搜索期间短暂的空数组被误解为真正的零结果。
+ */
+.search-panel-status {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--guaxi-border);
+  font-size: 12px;
+}
+
+.search-panel-status--loading {
+  color: var(--guaxi-text-secondary, #8c8c8c);
+  background: var(--guaxi-header-bg);
+}
+
+.search-panel-status--error {
+  color: #f5222d;
+  background: rgba(245, 34, 45, 0.1);
+}
+
 /* 设计思路：
  * 1. 搜索面板打开后会自动聚焦根节点，浏览器默认 focus outline 在暗色主题下会显成一圈白边。
  * 2. Naive UI Tabs 的导航区也带有默认边界色，这里统一接入 Guaxi 的面板/边框变量，让首次打开和拖拽后都贴合主题。
@@ -1047,6 +1089,17 @@ onBeforeUnmount(() => {
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
+}
+
+/* 完整结果统计固定在列表上方，列表本身继续使用虚拟滚动承载大量匹配行。 */
+.result-summary {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  color: var(--guaxi-text-secondary, #8c8c8c);
+  background: var(--guaxi-header-bg);
+  border-bottom: 1px solid var(--guaxi-border);
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .tab-content-excerpts {

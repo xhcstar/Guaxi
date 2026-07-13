@@ -1047,6 +1047,10 @@ watch(trimmedQuery, (q) => {
 })
 
 const SEARCH_TYPE_KEYS = ['file', 'note', 'excerpt']
+// 设计说明：下拉框只是即时预览，固定限制条数；用户确认搜索后使用 limit=0 请求完整结果。
+// 这样输入过程保持轻量，右侧正式结果面板则不会因默认 50 条分页而漏掉任何未忽略命中项。
+const SEARCH_PREVIEW_LIMIT = 50
+const SEARCH_ALL_RESULTS_LIMIT = 0
 const SEARCH_TYPE_LABELS = {
   file: '搜索文件',
   note: '搜索关键字',
@@ -1467,6 +1471,23 @@ const normalizeSearchResults = (rawResults, type) => {
   return []
 }
 
+/**
+ * 统一解析后端 `(results, has_more)` 搜索响应，同时兼容旧版直接返回数组的格式。
+ * @param {unknown} response Tauri 搜索命令返回值
+ * @returns {{ results: Array, hasMore: boolean }} 标准化分页结果
+ */
+const unpackPagedSearchResponse = (response) => {
+  if (Array.isArray(response) && Array.isArray(response[0])) {
+    return {
+      results: response[0],
+      hasMore: Boolean(response[1]),
+    }
+  }
+  if (Array.isArray(response)) return { results: response, hasMore: false }
+  if (response && typeof response === 'object') return { results: [response], hasMore: false }
+  return { results: [], hasMore: false }
+}
+
 const makeResultKey = (item) => {
   const t = item?._searchType || searchType.value
   if (t === 'excerpt') return `result:excerpt:${item.file_path}`
@@ -1662,25 +1683,6 @@ const openResultInEditor = async (item) => {
   })
 }
 
-const applyPreviewResultsToRightSider = (lastType) => {
-  const t = SEARCH_TYPE_KEYS.includes(lastType) ? lastType : searchType.value
-  const nextResults = {
-    ...rightSiderStore.searchResults,
-    fileResults: previewResultsByType.value.file,
-    noteResults: previewResultsByType.value.note,
-    excerptResults: previewResultsByType.value.excerpt,
-    searchQuery: searchQuery.value,
-    lastSearchType: t,
-    loading: false,
-    error: ''
-  }
-
-  rightSiderStore.setSearchResults(nextResults)
-  rightSiderStore.setPanel('search')
-  rightSiderStore.open()
-  siderStore.setRightSiderCollapsed(viewKey, false)
-}
-
 const handleSearchEnter = () => {
   const q = searchQuery.value.trim()
   if (!q && !hasActiveFilters.value) return
@@ -1700,23 +1702,19 @@ const handleSearchEnter = () => {
   }
 }
 
-const applySingleItemToRightSider = (item, query) => {
-  const t = item?._searchType || searchType.value
-  const nextResults = {
-    ...rightSiderStore.searchResults,
-    fileResults: t === 'file' ? [item] : [],
-    noteResults: t === 'note' ? [item] : [],
-    excerptResults: t === 'excerpt' ? [item] : [],
-    searchQuery: String(query || ''),
-    lastSearchType: SEARCH_TYPE_KEYS.includes(t) ? t : searchType.value,
-    loading: false,
-    error: ''
-  }
-
-  rightSiderStore.setSearchResults(nextResults)
-  rightSiderStore.setPanel('search')
-  rightSiderStore.open()
-  siderStore.setRightSiderCollapsed(viewKey, false)
+/**
+ * 根据结果类型执行正式完整搜索。
+ * 下拉项和历史项只能作为导航入口，不能把有限条数的预览误当成最终搜索结果。
+ * @param {'file'|'note'|'excerpt'} type 搜索结果类型
+ */
+async function runCompleteSearchForType(type) {
+  logger.info('[GuaxiHeader] run complete search from result selection', {
+    type,
+    query: searchQuery.value,
+  })
+  if (type === 'note') return handleSearchNotes()
+  if (type === 'excerpt') return handleSearchExcerpts()
+  return handleSearchFiles()
 }
 
 const handleSearchSelect = async (key) => {
@@ -1756,7 +1754,7 @@ const handleSearchSelect = async (key) => {
     }
 
     recordSearchHistoryResult(item, searchQuery.value)
-    applySingleItemToRightSider(item, searchQuery.value)
+    await runCompleteSearchForType(t)
 
     await flashSelectRow(key)
 
@@ -1778,7 +1776,7 @@ const handleSearchSelect = async (key) => {
     }
 
     recordSearchHistoryResult(item, searchQuery.value)
-    applyPreviewResultsToRightSider(t)
+    await runCompleteSearchForType(t)
 
     await flashSelectRow(key)
 
@@ -1811,9 +1809,25 @@ const runPreviewSearchAll = async () => {
 
     // 关键字搜索(rg) / 摘录搜索需要关键字；仅筛选时只列举文件(fd)。
     const [fdResp, rgResp, exResp] = await Promise.allSettled([
-      invoke('fd_search', { pattern: q, path: searchRootPath.value, extensions, modifiedAfter, modifiedBefore }),
+      invoke('fd_search', {
+        pattern: q,
+        path: searchRootPath.value,
+        limit: SEARCH_PREVIEW_LIMIT,
+        offset: 0,
+        extensions,
+        modifiedAfter,
+        modifiedBefore,
+      }),
       q
-        ? invoke('rg_search', { pattern: q, path: searchRootPath.value, extensions, modifiedAfter, modifiedBefore })
+        ? invoke('rg_search', {
+          pattern: q,
+          path: searchRootPath.value,
+          limit: SEARCH_PREVIEW_LIMIT,
+          offset: 0,
+          extensions,
+          modifiedAfter,
+          modifiedBefore,
+        })
         : Promise.resolve(null),
       q
         ? invoke('search_excerpt_notes', { pattern: q, path: settingsStore.librariesRoot })
@@ -1824,20 +1838,15 @@ const runPreviewSearchAll = async () => {
     const next = { file: [], note: [], excerpt: [] }
 
     if (fdResp.status === 'fulfilled' && fdResp.value) {
-      const [rawResults = [], hasMore = false] = Array.isArray(fdResp.value) ? fdResp.value : []
-      next.file = filterByTagPaths(normalizeSearchResults(rawResults, 'file'), tagSet)
+      const { results, hasMore } = unpackPagedSearchResponse(fdResp.value)
+      next.file = filterByTagPaths(normalizeSearchResults(results, 'file'), tagSet)
       previewHasMore.value = previewHasMore.value || Boolean(hasMore)
     }
 
     if (rgResp.status === 'fulfilled' && rgResp.value) {
-      const response = rgResp.value
-      const rawResults = (() => {
-        if (!response) return []
-        if (Array.isArray(response[0])) return response[0]
-        if (Array.isArray(response)) return response
-        return [response]
-      })()
-      next.note = filterByTagPaths(normalizeSearchResults(rawResults, 'note'), tagSet)
+      const { results, hasMore } = unpackPagedSearchResponse(rgResp.value)
+      next.note = filterByTagPaths(normalizeSearchResults(results, 'note'), tagSet)
+      previewHasMore.value = previewHasMore.value || Boolean(hasMore)
     }
 
     if (exResp.status === 'fulfilled' && exResp.value) {
@@ -1846,6 +1855,15 @@ const runPreviewSearchAll = async () => {
 
     previewResultsByType.value = next
     previewResults.value = [...next.file, ...next.note, ...next.excerpt]
+
+    logger.info('[GuaxiHeader] preview search completed', {
+      query: q,
+      root: searchRootPath.value,
+      fileCount: next.file.length,
+      noteCount: next.note.length,
+      excerptCount: next.excerpt.length,
+      hasMore: previewHasMore.value,
+    })
 
     if (!previewHasAnyResults.value && fdResp.status === 'rejected' && rgResp.status === 'rejected' && exResp.status === 'rejected') {
       previewError.value = '搜索失败'
@@ -1940,13 +1958,23 @@ async function handleSearchFiles() {
     const rawResponse = await invoke('fd_search', {
       pattern: searchQuery.value,
       path: searchRootPath.value,
+      // limit=0 是后端约定的完整结果模式，正式搜索不得沿用 50 条预览上限。
+      limit: SEARCH_ALL_RESULTS_LIMIT,
+      offset: 0,
       extensions,
       modifiedAfter,
       modifiedBefore
     })
 
-    const [rawResults = [], hasMore = false] = Array.isArray(rawResponse) ? rawResponse : []
-    const validResults = filterByTagPaths(normalizeSearchResults(rawResults, 'file'), tagSet)
+    const { results, hasMore } = unpackPagedSearchResponse(rawResponse)
+    const validResults = filterByTagPaths(normalizeSearchResults(results, 'file'), tagSet)
+
+    logger.info('[GuaxiHeader] complete file search received', {
+      query: searchQuery.value,
+      root: searchRootPath.value,
+      resultCount: validResults.length,
+      hasMore,
+    })
 
     rightSiderStore.setSearchResults({
       ...rightSiderStore.searchResults,
@@ -1988,19 +2016,25 @@ async function handleSearchNotes() {
     const response = await invoke('rg_search', {
       pattern: searchQuery.value,
       path: searchRootPath.value,
+      // limit=0 请求全部内容命中；结果面板使用虚拟列表，不会一次渲染全部 DOM。
+      limit: SEARCH_ALL_RESULTS_LIMIT,
+      offset: 0,
       extensions,
       modifiedAfter,
       modifiedBefore
     })
 
-    const rawResults = (() => {
-      if (!response) return []
-      if (Array.isArray(response[0])) return response[0]
-      if (Array.isArray(response)) return response
-      return [response]
-    })()
+    const { results, hasMore } = unpackPagedSearchResponse(response)
+    const validResults = filterByTagPaths(normalizeSearchResults(results, 'note'), tagSet)
+    const uniqueFileCount = new Set(validResults.map(item => normalizeSlashes(item.path).toLowerCase())).size
 
-    const validResults = filterByTagPaths(normalizeSearchResults(rawResults, 'note'), tagSet)
+    logger.info('[GuaxiHeader] complete content search received', {
+      query: searchQuery.value,
+      root: searchRootPath.value,
+      resultCount: validResults.length,
+      uniqueFileCount,
+      hasMore,
+    })
 
     rightSiderStore.setSearchResults({
       ...rightSiderStore.searchResults,

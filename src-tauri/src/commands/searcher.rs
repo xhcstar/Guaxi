@@ -3,18 +3,17 @@ use grep_regex::RegexMatcher;
 use grep_searcher::{sinks, SearcherBuilder};
 use ignore::WalkBuilder;
 use lazy_static::lazy_static;
-use lru::LruCache;
 use parking_lot::RwLock;
 use rayon::prelude::*;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 use serde::Serialize;
+use std::collections::VecDeque;
 use std::ffi::OsStr;
-use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
-use tracing::info;
+use tracing::{info, warn};
 
 // 辅助函数：字节索引转字符索引
 fn byte_to_char_indices(line: &str, start: usize, end: usize) -> (usize, usize) {
@@ -35,12 +34,6 @@ fn byte_to_char_indices(line: &str, start: usize, end: usize) -> (usize, usize) 
     )
 }
 
-// 使用NonZeroUsize创建LRU缓存
-lazy_static! {
-    static ref SEARCH_CACHE: RwLock<LruCache<String, Vec<SearchResult>>> =
-        RwLock::new(LruCache::new(NonZeroUsize::new(100).unwrap()));
-}
-
 struct SearchManager {
     active_searches: Arc<RwLock<Vec<String>>>,
 }
@@ -53,7 +46,9 @@ impl SearchManager {
     }
 
     fn register_search(&self, id: &str) {
-        self.active_searches.write().push(id.to_string());
+        let mut searches = self.active_searches.write();
+        searches.retain(|active_id| active_id != id);
+        searches.push(id.to_string());
     }
 
     fn cancel_search(&self, id: &str) {
@@ -87,6 +82,57 @@ pub struct SearchResult {
     /// 文件最后修改时间(unix 毫秒),用于时间段筛选与展示。
     #[serde(default)]
     pub modified_ms: Option<i64>,
+}
+
+/// 对搜索结果执行统一分页。
+///
+/// 设计说明：
+/// 1. `limit = None` 保持原有的 50 条默认值，供搜索框实时预览使用。
+/// 2. `limit = Some(0)` 明确表示“返回 offset 之后的全部结果”，供用户正式执行搜索时使用。
+/// 3. 完整结果模式返回 `has_more = false`，避免前端误以为还有未展示数据。
+fn paginate_results(
+    results: &[SearchResult],
+    limit: Option<usize>,
+    offset: Option<usize>,
+) -> (Vec<SearchResult>, bool) {
+    let start = offset.unwrap_or(0).min(results.len());
+    if matches!(limit, Some(0)) {
+        return (results[start..].to_vec(), false);
+    }
+
+    let page_size = limit.unwrap_or(50);
+    let end = start.saturating_add(page_size).min(results.len());
+    (results[start..end].to_vec(), end < results.len())
+}
+
+/// 将不同文件的内容命中结果交错排列，避免单个高频文件垄断结果前部。
+///
+/// 每个文件内部保留单行相关度排序；文件之间每轮最多取一条，
+/// 因而第一轮结束前不会展示任一文件的第二条结果。
+fn interleave_content_results(
+    mut file_groups: Vec<(u32, Vec<SearchResult>)>,
+) -> Vec<SearchResult> {
+    file_groups.sort_by(|a, b| {
+        let a_path = a.1.first().map(|result| result.path.as_str()).unwrap_or_default();
+        let b_path = b.1.first().map(|result| result.path.as_str()).unwrap_or_default();
+        b.0.cmp(&a.0).then_with(|| a_path.cmp(b_path))
+    });
+
+    let total_results = file_groups.iter().map(|(_, results)| results.len()).sum();
+    let mut queues: Vec<VecDeque<SearchResult>> = file_groups
+        .into_iter()
+        .map(|(_, results)| VecDeque::from(results))
+        .collect();
+    let mut ordered = Vec::with_capacity(total_results);
+
+    while ordered.len() < total_results {
+        for queue in &mut queues {
+            if let Some(result) = queue.pop_front() {
+                ordered.push(result);
+            }
+        }
+    }
+    ordered
 }
 
 /// 读取文件最后修改时间(unix 毫秒)。
@@ -134,14 +180,6 @@ fn passes_meta_filter(
         }
     }
     true
-}
-
-fn filter_signature(
-    exts: &Option<Vec<String>>,
-    after: Option<i64>,
-    before: Option<i64>,
-) -> String {
-    format!("{:?}|{:?}|{:?}", exts, after, before)
 }
 
 fn is_binary_extension(ext: &OsStr) -> bool {
@@ -227,48 +265,23 @@ pub async fn fd_search(
 
     info!("fd_search path exists");
     if let Some(id) = &search_id {
-        if SEARCH_MANAGER.is_cancelled(id) {
-            return Err("搜索已取消".into());
-        }
+        SEARCH_MANAGER.register_search(id);
     }
     info!("fd_search start: {:?}", search_id);
-
-    // 修改1：在缓存键前添加"fd:"前缀，防止与rg_search的缓存冲突;
-    // 同时把扩展名/时间过滤纳入缓存键,避免不同筛选条件命中同一缓存。
-    let cache_key = format!(
-        "fd:{}:{}:{}",
-        pattern,
-        path.display(),
-        filter_signature(&extensions, modified_after, modified_before)
-    );
-
-    // 检查缓存（使用读锁和peek方法）
-    {
-        let cache = SEARCH_CACHE.read();
-        if let Some(cached) = cache.peek(&cache_key) {
-            // 修改2：增加缓存结果验证，确保是文件名搜索结果
-            if cached.iter().all(|r| r.preview.is_none() && r.matches.is_empty()) {
-                let has_more = cached.len() > offset.unwrap_or(0) + limit.unwrap_or(50);
-                let results = cached
-                    .iter()
-                    .skip(offset.unwrap_or(0))
-                    .take(limit.unwrap_or(50))
-                    .cloned()
-                    .collect();
-                info!("Cache key: {}", cache_key);
-                info!("Cache size: {}", cache.len());
-                info!("Returning: {:?} ", results);
-                return Ok((results, has_more));
-            }
-        }
-    }
 
     let file_paths: Vec<_> = WalkBuilder::new(path)
         .hidden(false)
         .add_custom_ignore_filename(".ignore")
         .filter_entry(|e| !has_ignored_dir(e.path()))
         .build()
-        .filter_map(Result::ok)
+        .filter_map(|result| match result {
+            Ok(entry) => Some(entry),
+            Err(error) => {
+                // 未忽略但无法遍历的路径不能静默消失，记录错误供诊断。
+                warn!("fd_search 遍历路径失败: {}", error);
+                None
+            }
+        })
         .filter(|entry| {
             entry.file_type().map_or(false, |ft| ft.is_file())
                 && !should_skip_path(entry.path())
@@ -276,7 +289,10 @@ pub async fn fd_search(
         })
         .collect();
 
-    info!("Total files: {:?}", file_paths);
+    info!(
+        "fd_search 扫描完成: root={}, candidate_files={}, pattern={}",
+        path.display(), file_paths.len(), pattern
+    );
 
     let mut results: Vec<SearchResult> = file_paths
         .par_iter()
@@ -305,18 +321,18 @@ pub async fn fd_search(
 
     results.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.file_name.cmp(&b.file_name)));
 
-    // 更新缓存（使用写锁）
-    {
-        let mut cache = SEARCH_CACHE.write();
-        cache.put(cache_key, results.clone());
+    // 直接基于当前磁盘状态返回，不使用跨请求全局缓存，避免重复查询得到陈旧结果。
+    let total_results = results.len();
+    let (paginated_results, has_more) = paginate_results(&results, limit, offset);
+
+    if let Some(id) = search_id {
+        SEARCH_MANAGER.cancel_search(&id);
     }
 
-    let limit = limit.unwrap_or(50);
-    let offset = offset.unwrap_or(0);
-    let has_more = results.len() > offset + limit;
-    let paginated_results = results.into_iter().skip(offset).take(limit).collect();
-
-    info!("文件搜索完成: {:?}", paginated_results);
+    info!(
+        "fd_search 返回结果: total={}, returned={}, has_more={}, limit={:?}, offset={:?}",
+        total_results, paginated_results.len(), has_more, limit, offset
+    );
     Ok((paginated_results, has_more))
 }
 
@@ -339,36 +355,7 @@ pub async fn rg_search(
     }
 
     if let Some(id) = &search_id {
-        if SEARCH_MANAGER.is_cancelled(id) {
-            return Err("搜索已取消".into());
-        }
         SEARCH_MANAGER.register_search(id);
-    }
-
-    // 修改4：在缓存键前添加"rg:"前缀，防止与fd_search的缓存冲突;并纳入扩展名/时间过滤签名。
-    let cache_key = format!(
-        "rg:{}:{}:{}",
-        pattern,
-        path.display(),
-        filter_signature(&extensions, modified_after, modified_before)
-    );
-
-    // 检查缓存（使用读锁和peek方法）
-    {
-        let cache = SEARCH_CACHE.read();
-        if let Some(cached) = cache.peek(&cache_key) {
-            // 修改5：增加缓存结果验证，确保是内容搜索结果
-            if cached.iter().any(|r| r.preview.is_some() || !r.matches.is_empty()) {
-                let has_more = cached.len() > offset.unwrap_or(0) + limit.unwrap_or(50);
-                let results = cached
-                    .iter()
-                    .skip(offset.unwrap_or(0))
-                    .take(limit.unwrap_or(50))
-                    .cloned()
-                    .collect();
-                return Ok((results, has_more));
-            }
-        }
     }
 
     let matcher = RegexMatcher::new(&pattern).map_err(|e| format!("搜索模式无效: {}", e))?;
@@ -378,7 +365,14 @@ pub async fn rg_search(
         .add_custom_ignore_filename(".ignore")
         .filter_entry(|e| !has_ignored_dir(e.path()))
         .build()
-        .filter_map(Result::ok)
+        .filter_map(|result| match result {
+            Ok(entry) => Some(entry),
+            Err(error) => {
+                // 未忽略但无法遍历的路径不能静默消失，记录错误供诊断。
+                warn!("rg_search 遍历路径失败: {}", error);
+                None
+            }
+        })
         .filter(|entry| {
             entry.file_type().map_or(false, |ft| ft.is_file())
                 && !should_skip_path(entry.path())
@@ -386,8 +380,13 @@ pub async fn rg_search(
         })
         .collect();
 
+    info!(
+        "rg_search 扫描完成: root={}, candidate_files={}, pattern={}",
+        path.display(), file_paths.len(), pattern
+    );
+
     // 使用rayon的par_iter()进行并行处理
-    let all_results: Vec<SearchResult> = file_paths
+    let all_results: Vec<(u32, Vec<SearchResult>)> = file_paths
         .par_iter()
         .filter_map(|entry| {
             if let Some(id) = &search_id {
@@ -451,9 +450,11 @@ pub async fn rg_search(
                     Ok(true)
                 }),
             ) {
-                if e.kind() != std::io::ErrorKind::InvalidData {
-                    eprintln!("搜索文件错误: {} - {}", entry.path().display(), e);
-                }
+                // 文件读取或 UTF-8 解码失败必须保留路径和原因，避免静默漏搜。
+                warn!(
+                    "rg_search 读取文件失败: path={}, kind={:?}, error={}",
+                    entry.path().display(), e.kind(), e
+                );
                 return None;
             }
 
@@ -465,39 +466,26 @@ pub async fn rg_search(
                 None
             }
         })
-        .collect::<Vec<_>>()
-        .into_iter()
-        .flat_map(|(file_score, mut results)| {
-            for result in &mut results {
-                result.score += file_score;
-            }
-            results
-        })
         .collect();
 
-    let mut sorted_results = all_results;
-    sorted_results.sort_by(|a, b| b.score.cmp(&a.score));
-
-    // 更新缓存（使用写锁）
-    {
-        let mut cache = SEARCH_CACHE.write();
-        cache.put(cache_key, sorted_results.clone());
-    }
-
-    let limit = limit.unwrap_or(50);
-    let offset = offset.unwrap_or(0);
-    let has_more = sorted_results.len() > offset + limit;
-    let paginated_results = sorted_results
-        .into_iter()
-        .skip(offset)
-        .take(limit)
-        .collect();
+    // 跨文件公平交错，且不再把文件总分重复叠加到每个命中行。
+    let sorted_results = interleave_content_results(all_results);
+    let total_results = sorted_results.len();
+    let unique_files = sorted_results
+        .iter()
+        .map(|result| result.path.as_str())
+        .collect::<std::collections::HashSet<_>>()
+        .len();
+    let (paginated_results, has_more) = paginate_results(&sorted_results, limit, offset);
 
     if let Some(id) = search_id {
         SEARCH_MANAGER.cancel_search(&id);
     }
 
-    println!("内容搜索完成，耗时: {:?}", start_time.elapsed());
+    info!(
+        "rg_search 返回结果: total={}, unique_files={}, returned={}, has_more={}, limit={:?}, offset={:?}, elapsed={:?}",
+        total_results, unique_files, paginated_results.len(), has_more, limit, offset, start_time.elapsed()
+    );
     Ok((paginated_results, has_more))
 }
 

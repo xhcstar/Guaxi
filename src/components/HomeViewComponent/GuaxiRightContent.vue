@@ -6,7 +6,9 @@
       :note-results="rightSiderStore.searchResults.noteResults"
       :search-query="rightSiderStore.searchResults.searchQuery"
       :excerpt-results="rightSiderStore.searchResults.excerptResults"
-      :last-search-type="rightSiderStore.searchResults.lastSearchType" />
+      :last-search-type="rightSiderStore.searchResults.lastSearchType"
+      :loading="rightSiderStore.searchResults.loading"
+      :error="rightSiderStore.searchResults.error" />
     <GuaxiNotebookSessionPanel v-show="rightSiderStore.panel === 'python-session'" />
     <GuaxiNotebookMathWorkspacePanel v-show="rightSiderStore.panel === 'math-workspace'" />
     <KeepAlive>
