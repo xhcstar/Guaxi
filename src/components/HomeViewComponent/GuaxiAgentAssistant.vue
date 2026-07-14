@@ -611,6 +611,9 @@ const fileTreeStore = useFileTreeStore()
 const STREAM_EVENT = 'modle-streaming-respond-output'
 const WEB_PUSH_EVENT = 'web-model-chat-push'
 const WEB_MODEL_IDS = new Set([7, 8])
+// 历史消息会把渲染后的 HTML 一并持久化。版本号用于识别旧版错误配置生成的 HTML，
+// 进入会话时只迁移旧消息一次，避免每次切换都重复执行 MathJax / Mermaid 渲染。
+const ASSISTANT_MARKDOWN_RENDER_VERSION = 2
 const AGENT_TOOL_LABELS = {
   kb_semantic_search: '检索知识库',
   read_file: '读取文件',
@@ -843,6 +846,9 @@ watch(messages, (list) => {
 onMounted(() => {
   applyDraftFromStore()
   enhanceRenderedMessages()
+  migrateStoredAssistantMarkdown('component-mounted').catch((err) => {
+    logger.warn('[assistant] migrate stored markdown on mount failed', err)
+  })
   initAssistantEventListeners().catch((err) => {
     logger.error('[assistant] init event listeners failed', err)
   })
@@ -951,6 +957,9 @@ function enterAssistantSession(key) {
   const ok = rightSiderStore.switchAssistantSession(nextKey)
   if (ok) {
     sessionListOpen.value = false
+    migrateStoredAssistantMarkdown('session-enter').catch((err) => {
+      logger.warn('[assistant] migrate stored markdown after session switch failed', err)
+    })
   }
   logger.info('[assistant] enter assistant session from list', { key: nextKey, ok })
 }
@@ -2005,20 +2014,87 @@ const queryWebSearch = async (rawQuestion, selectedModelId, shouldSearch = true)
   }
 }
 
-const renderAssistantMarkdown = async (content) => {
+// 设计说明：智能助手的所有回复必须共用同一套 Markdown 配置。
+// 之前普通回复、结构化任务和流式结束各自调用 renderMarkdown，导致 Mermaid、数学预处理配置漂移。
+// 这里统一启用 Mermaid、MathJax、代码高亮和聊天专用预处理；调用方只控制是否处于流式未完成状态。
+const renderAssistantMarkdown = async (content, {
+  deferMathUntilComplete = false,
+  reason = 'assistant-message',
+} = {}) => {
+  const source = String(content || '')
   try {
-    return await renderMarkdown(content, {
-      mermaid: false,
+    const html = await renderMarkdown(source, {
+      basePath: '',
+      mermaid: true,
+      math: true,
+      codeHighlight: true,
+      chatPreprocess: true,
       includeNotes: false,
-      // 流式阶段启用数学公式稳定模式，避免复杂公式只渲染一半。
-      deferMathUntilComplete: true,
+      // 如果未来恢复流式 Markdown 预览，可在公式闭合前暂缓 MathJax；最终渲染固定传 false。
+      deferMathUntilComplete,
       // 把 `\Phi_E`、`I_{enc}` 这类“写在反引号里的数学符号”恢复成行内数学。
       smartInlineMathFromCode: true,
     })
+    logger.info('[assistant] markdown render completed', {
+      reason,
+      textLength: source.length,
+      htmlLength: String(html || '').length,
+      containsMermaid: /```\s*mermaid\b/i.test(source),
+      containsMath: /\$\$|\\\[|\\\(|\\(?:oint|int|sum|frac)\b/.test(source),
+    })
+    return html
   } catch (err) {
-    logger.warn('[assistant] render markdown failed', err)
-    return content
+    logger.warn('[assistant] render markdown failed', { reason, error: err })
+    return source
   }
+}
+
+// 旧会话保存的是已经渲染过的 HTML，仅修正新消息不会更新截图中这类历史内容。
+// 进入会话后根据版本号重新渲染旧 assistant 消息，并把版本写入 meta，后续加载直接复用。
+const migrateStoredAssistantMarkdown = async (reason = 'session-load') => {
+  const sessionKey = currentAssistantSessionKey.value
+  const candidates = messages.value.filter((item) => {
+    return item?.role === 'assistant' &&
+      !item?.streaming &&
+      String(item?.content || '').trim() &&
+      Number(item?.meta?.markdownRenderVersion || 0) < ASSISTANT_MARKDOWN_RENDER_VERSION
+  })
+  if (!candidates.length) return
+
+  logger.info('[assistant] migrate stored markdown started', {
+    reason,
+    sessionKey,
+    messageCount: candidates.length,
+  })
+
+  let migratedCount = 0
+  for (const item of candidates) {
+    // 用户可能在异步 Mermaid 渲染期间切换会话；此时停止写回，避免污染另一个会话。
+    if (currentAssistantSessionKey.value !== sessionKey) {
+      logger.info('[assistant] migrate stored markdown canceled after session switch', {
+        reason,
+        sessionKey,
+        migratedCount,
+      })
+      return
+    }
+
+    const html = await renderAssistantMarkdown(item.content, { reason: `${reason}:history` })
+    rightSiderStore.updateAssistantMessage(item.id, {
+      html,
+      meta: {
+        ...(item.meta || {}),
+        markdownRenderVersion: ASSISTANT_MARKDOWN_RENDER_VERSION,
+      },
+    })
+    migratedCount += 1
+  }
+
+  logger.info('[assistant] migrate stored markdown completed', {
+    reason,
+    sessionKey,
+    migratedCount,
+  })
 }
 
 const ensureStreamingAssistantMessage = () => {
@@ -2124,10 +2200,9 @@ const finishAssistantStreaming = async ({ fallbackText = '', keepPending = false
   const text = String(currentStreamText.value || '').trim() || String(fallbackText || '').trim()
   if (messageId) {
     const finalText = text || '模型未返回内容。'
-    const html = await renderMarkdown(finalText, {
-      mermaid: false,
-      includeNotes: false,
-      smartInlineMathFromCode: true,
+    const html = await renderAssistantMarkdown(finalText, {
+      deferMathUntilComplete: false,
+      reason: 'stream-complete',
     })
     logger.info('[assistant] finish streaming render', {
       messageId,
@@ -2138,6 +2213,10 @@ const finishAssistantStreaming = async ({ fallbackText = '', keepPending = false
       content: finalText,
       html,
       streaming: false,
+      meta: {
+        ...(rightSiderStore.assistant.messages.find((item) => String(item?.id || '') === messageId)?.meta || {}),
+        markdownRenderVersion: ASSISTANT_MARKDOWN_RENDER_VERSION,
+      },
     })
   }
 
@@ -2555,8 +2634,13 @@ const sendQuestion = async () => {
         md = `**分类**：${result.category || '（未识别）'} ${conf}`
         if (result.reason) md += `\n\n**理由**：${result.reason}`
       }
-      const html = await renderAssistantMarkdown(md)
-      rightSiderStore.addAssistantMessage({ role: 'assistant', content: md, html })
+      const html = await renderAssistantMarkdown(md, { reason: `structured-task:${currentTask}` })
+      rightSiderStore.addAssistantMessage({
+        role: 'assistant',
+        content: md,
+        html,
+        meta: { markdownRenderVersion: ASSISTANT_MARKDOWN_RENDER_VERSION },
+      })
       rightSiderStore.setAssistantSessionId(res?.sessionid || sessionId)
       pendingAttachments.value = []
       mentionedFiles.value = []
