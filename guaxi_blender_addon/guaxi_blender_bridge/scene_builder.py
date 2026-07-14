@@ -335,3 +335,101 @@ def load_story_ir(path: str | Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("Story IR 根节点必须是 JSON 对象")
     return value
+
+
+def load_json(path: str | Path) -> dict[str, Any]:
+    """通用 UTF-8(-sig) JSON 读取，供 Build Plan 等工件复用。"""
+    with Path(path).open("r", encoding="utf-8-sig") as stream:
+        value = json.load(stream)
+    if not isinstance(value, dict):
+        raise ValueError(f"JSON 根节点必须是对象：{path}")
+    return value
+
+
+def build_story_asset_preview(
+    story_ir: dict[str, Any],
+    project_dir: str | Path,
+    render_animation: bool = False,
+    progress: ProgressCallback | None = None,
+) -> dict[str, str]:
+    """确定性资产化预演（§7.2/§7.3）：Story IR → 冻结 Build Plan → 真实资产重放。
+
+    与 build_story_preview 的区别：本函数经 Asset Resolver 尝试用真实模型替换立方体，
+    并把冻结的 build_plan.json 写入项目 story/ 目录，供后续确定性重渲染与审计。
+    资产未命中时逐级降级，最差回落到灰盒，保证不会整片失败。
+    """
+    # 延迟导入：scene_director / build_executor 依赖 asset_resolver，且 build_executor 依赖 bpy。
+    build_executor, scene_director, load_resolver_from_env = _import_pipeline()
+
+    def report(value: int, stage: str, message: str) -> None:
+        if progress is not None:
+            progress(value, stage, message)
+
+    project_path = Path(project_dir).expanduser().resolve()
+    report(4, "resolve-assets", "正在解析场景资产并编译确定性 Build Plan")
+    resolver = load_resolver_from_env(project_path)
+    build_plan = scene_director.compile_build_plan(story_ir, resolver)
+
+    # 冻结 Build Plan：一经写入即为确定性重放依据（§7.3）。
+    plan_path = project_path / "story" / "build_plan.json"
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    with plan_path.open("w", encoding="utf-8") as stream:
+        json.dump(build_plan, stream, ensure_ascii=False, indent=2)
+
+    gap_count = len(build_plan.get("metadata", {}).get("assetGaps", []))
+    local_count = sum(1 for a in build_plan.get("assets", []) if a.get("source") == "local")
+    report(
+        8,
+        "plan-frozen",
+        f"Build Plan 已冻结：真实资产 {local_count} 个，灰盒兜底 {gap_count} 个",
+    )
+
+    # 写出合规工件（许可账本 / 模型使用 / AIGC 标识），供发布前检查（§22）。
+    try:
+        from . import compliance as _compliance
+    except ImportError:
+        import compliance as _compliance  # type: ignore[no-redef]
+    try:
+        compliance_paths = _compliance.write_compliance_artifacts(build_plan, project_path)
+        report(9, "compliance", f"已生成合规工件 {len(compliance_paths)} 项（含 AIGC 标识）")
+    except OSError as exc:
+        report(9, "compliance-warning", f"合规工件写入失败（不阻断预演）：{exc}")
+
+    outputs = build_executor.build_from_plan(
+        build_plan, project_path, render_animation=render_animation, progress=progress
+    )
+    outputs["buildPlanPath"] = str(plan_path)
+    outputs["assetGapCount"] = str(gap_count)
+    return outputs
+
+
+def render_build_plan(
+    build_plan: dict[str, Any],
+    project_dir: str | Path,
+    render_animation: bool = False,
+    progress: ProgressCallback | None = None,
+) -> dict[str, str]:
+    """直接重放一个已冻结的 Build Plan（确定性渲染，不再解析或调用 LLM）。"""
+    build_executor, _director, _loader = _import_pipeline()
+
+    return build_executor.build_from_plan(
+        build_plan, project_dir, render_animation=render_animation, progress=progress
+    )
+
+
+def _import_pipeline():
+    """在插件包模式与 headless 顶层脚本模式下都能导入资产管线模块。
+
+    - 交互式 Bridge：模块作为 `guaxi_blender_bridge` 包加载，用相对导入。
+    - 后台 runner：headless_runner 把目录加入 sys.path 后以顶层名导入，无包上下文，
+      relative import 会失败，因此回退到绝对导入。
+    """
+    try:
+        from . import build_executor as be
+        from . import scene_director as sd
+        from .asset_resolver import load_resolver_from_env as loader
+    except ImportError:
+        import build_executor as be  # type: ignore[no-redef]
+        import scene_director as sd  # type: ignore[no-redef]
+        from asset_resolver import load_resolver_from_env as loader  # type: ignore[no-redef]
+    return be, sd, loader

@@ -150,19 +150,28 @@ pub async fn open_application_window(
     };
 
     // 工作台类应用需要完整三栏空间；普通小工具继续使用紧凑窗口。
-    let (inner_w, inner_h, min_w, min_h) = match app_id.as_str() {
-        "creation-ai-film-studio" => (1680.0, 980.0, 1120.0, 720.0),
-        "tools-tts-book" => (1480.0, 900.0, 1280.0, 760.0),
-        _ => (1024.0, 720.0, 820.0, 560.0),
+    // 说明：inner_size 只作为“还原”尺寸，取一个能放进常见 1366×768 笔记本的保守值，
+    // 避免初始尺寸超过屏幕导致部分内容在屏幕外；工作台类应用随后直接最大化。
+    let (inner_w, inner_h, min_w, min_h, maximize) = match app_id.as_str() {
+        "creation-ai-film-studio" => (1280.0, 800.0, 1024.0, 640.0, true),
+        "tools-tts-book" => (1280.0, 800.0, 1024.0, 680.0, true),
+        _ => (1024.0, 720.0, 820.0, 560.0, false),
     };
 
     let window = WebviewWindowBuilder::new(&app, &label, url)
         .title(&title)
         .inner_size(inner_w, inner_h)
         .min_inner_size(min_w, min_h)
+        // 先居中，保证即使不最大化，还原尺寸也完整落在主显示器内。
+        .center()
         .visible(false)
         .build()
         .map_err(|e| format!("创建窗口失败: {}", e))?;
+
+    if maximize {
+        // 工作台类应用默认最大化以获得完整布局；用户仍可还原为居中的 inner_size。
+        window.maximize().ok();
+    }
 
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     window.show().map_err(|e| format!("显示窗口失败: {}", e))?;

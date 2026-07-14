@@ -105,12 +105,22 @@
             <n-button size="small" @click="pickBlenderExecutable">选择</n-button>
           </div>
           <div class="path-row">
-            <n-input v-model:value="studio.ffmpegPath" size="small" placeholder="ffmpeg.exe（用于 MP4 编码）" />
+            <n-input v-model:value="studio.ffmpegPath" size="small" placeholder="ffmpeg.exe 或其所在目录" />
             <n-button size="small" @click="pickFfmpegExecutable">选择</n-button>
           </div>
           <n-tag size="small" :type="studio.mediaToolsStatus.ffmpegAvailable ? 'success' : 'warning'">
             {{ studio.mediaToolsStatus.ffmpegAvailable ? 'FFmpeg 可用' : 'PNG 序列模式' }}
           </n-tag>
+          <div class="path-row">
+            <n-input
+              v-model:value="studio.assetLibraryRoot"
+              size="small"
+              placeholder="本地资产库目录（含 guaxi_asset_index.json）"
+              @blur="studio.persistFilmStudioConfig()"
+            />
+            <n-button size="small" @click="pickAssetLibraryRoot">选择</n-button>
+          </div>
+          <small class="field-hint">配置资产库后，命中标签的角色/场景会用真实模型替换立方体</small>
           <div class="bridge-box">
             <div class="bridge-title">
               <span>交互式 Bridge</span>
@@ -156,6 +166,9 @@
             创建标准制作项目
           </n-button>
           <div v-if="studio.project" class="project-actions">
+            <n-form-item label="构建方式" size="small" label-placement="left" :show-feedback="false">
+              <n-select v-model:value="builderMode" size="small" :options="builderOptions" />
+            </n-form-item>
             <n-button size="small" @click="openProjectDirectory">打开项目目录</n-button>
             <n-button
               size="small"
@@ -173,6 +186,7 @@
             >
               仅构建 .blend
             </n-button>
+            <small class="builder-hint">{{ builderHint }}</small>
           </div>
           <div v-if="studio.jobStatus !== 'idle'" class="job-card">
             <div class="job-line">
@@ -368,6 +382,18 @@ const chatStore = useChatStore()
 const studio = useAIFilmStudioStore()
 const activeTab = ref('source')
 const storyIrText = ref('')
+const builderMode = ref('assets')
+
+const builderOptions = [
+  { label: '真实资产 + Build Plan', value: 'assets' },
+  { label: '立方体预演（对照）', value: 'greybox' },
+  { label: '重放冻结计划', value: 'replay' },
+]
+const builderHint = computed(() => ({
+  assets: '解析真实资产并冻结确定性 Build Plan；缺资产的项降级为立方体',
+  greybox: '旧版纯立方体预演，仅验证结构与节奏',
+  replay: '重放 story/build_plan.json，确定性重渲染，不再解析或调用模型',
+}[builderMode.value] || ''))
 
 const modelOptions = computed(() => {
   const remote = Array.isArray(chatStore.LLMlist?.remoteModel) ? chatStore.LLMlist.remoteModel : []
@@ -495,6 +521,8 @@ async function pickBlenderExecutable() {
   })
   if (!path) return
   studio.blenderPath = String(path)
+  // 立即持久化用户显式选择，即使版本探测失败也不丢失路径。
+  await studio.persistFilmStudioConfig()
   await refreshBlender()
 }
 
@@ -505,6 +533,7 @@ async function pickFfmpegExecutable() {
   })
   if (!path) return
   studio.ffmpegPath = String(path)
+  await studio.persistFilmStudioConfig()
   try {
     await studio.refreshMediaToolsStatus()
     message[studio.mediaToolsStatus.ffmpegAvailable ? 'success' : 'warning'](
@@ -513,6 +542,14 @@ async function pickFfmpegExecutable() {
   } catch (error) {
     message.error(String(error))
   }
+}
+
+async function pickAssetLibraryRoot() {
+  const path = await open({ directory: true, multiple: false, defaultPath: studio.assetLibraryRoot || undefined })
+  if (!path) return
+  studio.assetLibraryRoot = String(path)
+  await studio.persistFilmStudioConfig()
+  message.success('已设置本地资产库目录')
 }
 
 async function compileStory() {
@@ -574,7 +611,7 @@ async function createProject() {
 
 async function startPreview(renderAnimation) {
   try {
-    await studio.startPreview(renderAnimation)
+    await studio.startPreview(renderAnimation, builderMode.value)
     activeTab.value = 'logs'
     message.success(renderAnimation ? 'MP4 预演任务已启动' : 'Blender 工程构建任务已启动')
   } catch (error) {
@@ -662,6 +699,8 @@ async function openProjectDirectory() {
 .bridge-fields { display: grid; grid-template-columns: 82px minmax(0, 1fr) auto; gap: 5px; margin-bottom: 6px; }
 .bridge-fields :deep(.n-input-number) { width: 100%; }
 .project-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.builder-hint { flex-basis: 100%; opacity: 0.7; font-size: 11px; line-height: 1.4; }
+.field-hint { display: block; opacity: 0.65; font-size: 11px; line-height: 1.4; margin: -2px 0 2px; }
 .job-card { margin-top: 10px; padding: 10px; border-radius: 10px; background: var(--guaxi-header-bg); border: 1px solid var(--guaxi-border); display: flex; flex-direction: column; gap: 7px; }
 .job-line { display: flex; justify-content: space-between; font-size: 11px; }
 .job-card small { color: var(--guaxi-text-secondary); }

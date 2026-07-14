@@ -1,0 +1,248 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://guaxi.local/schemas/build-plan-v1.json",
+  "title": "Guaxi Build Plan",
+  "description": "确定性搭建计划（§7.3）。由 Story IR 编译一次并冻结；渲染据此逐帧重放，不再调用 LLM。相同 Build Plan + 相同 Blender 补丁版 + 相同资产缓存 => 相同 .blend => 相同视频。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "metadata", "scenes"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["fps"],
+      "properties": {
+        "title": { "type": "string" },
+        "fps": { "type": "integer", "minimum": 12, "maximum": 60 },
+        "storyIrHash": {
+          "type": "string",
+          "description": "派生此 Build Plan 的 Story IR 内容哈希，用于追溯与失效检测"
+        },
+        "planHash": {
+          "type": "string",
+          "description": "本 Build Plan 归一化后的内容哈希，用于确定性校验"
+        },
+        "visualStyle": { "type": "string" },
+        "generator": {
+          "type": "string",
+          "description": "生成方式，如 deterministic-compiler 或 ai-scene-director"
+        },
+        "targetBlenderVersion": { "type": "string" }
+      }
+    },
+    "render": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "渲染设置。缺省时由执行器套用生产安全默认值（Eevee、720p、50%、AgX、PNG 序列）。",
+      "properties": {
+        "engine": { "enum": ["BLENDER_EEVEE", "BLENDER_EEVEE_NEXT", "BLENDER_WORKBENCH"] },
+        "resolutionX": { "type": "integer", "minimum": 320, "maximum": 3840 },
+        "resolutionY": { "type": "integer", "minimum": 240, "maximum": 2160 },
+        "resolutionPercentage": { "type": "integer", "minimum": 10, "maximum": 100 },
+        "colorLook": { "type": "string" },
+        "worldColor": { "$ref": "#/$defs/color3" }
+      }
+    },
+    "assets": {
+      "type": "array",
+      "description": "本计划引用的资产清单。每个条目由 Asset Resolver 解析（§7.1），带来源与许可 provenance。",
+      "items": { "$ref": "#/$defs/assetRef" }
+    },
+    "characters": {
+      "type": "array",
+      "description": "角色圣经的执行态投影（§16.1）：稳定 ID、显示色、绑定资产、连续性初值。",
+      "items": { "$ref": "#/$defs/character" }
+    },
+    "scenes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 500,
+      "items": { "$ref": "#/$defs/scene" }
+    }
+  },
+  "$defs": {
+    "color3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": { "type": "number", "minimum": 0, "maximum": 1 }
+    },
+    "color4": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": { "type": "number", "minimum": 0, "maximum": 1 }
+    },
+    "vec3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": { "type": "number" }
+    },
+    "assetRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "source"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "source": {
+          "enum": ["local", "polyhaven", "sketchfab", "generated", "procedural", "greybox"],
+          "description": "解析级别 L1..L5；greybox 表示兜底占位（§7.1）"
+        },
+        "kind": { "enum": ["character", "environment", "prop", "map", "material", "hdri"] },
+        "path": {
+          "type": "string",
+          "description": "工作区内的资产文件相对/绝对路径（glTF/USD/FBX/blend）。greybox/procedural 可为空。"
+        },
+        "importer": { "enum": ["gltf", "usd", "fbx", "blend", "obj", "none"] },
+        "unitScale": { "type": "number", "exclusiveMinimum": 0, "default": 1.0 },
+        "provenance": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "来源、作者、许可证、下载时间、生成模型与 seed（用于 §22 许可账本）",
+          "properties": {
+            "author": { "type": "string" },
+            "license": { "type": "string" },
+            "url": { "type": "string" },
+            "retrievedAt": { "type": "string" },
+            "model": { "type": "string" },
+            "seed": { "type": "integer" }
+          }
+        }
+      }
+    },
+    "character": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "name": { "type": "string" },
+        "assetId": {
+          "type": "string",
+          "description": "绑定的 assets[].id；缺省或解析为 greybox 时用彩色占位并写 assetGaps"
+        },
+        "displayColor": { "$ref": "#/$defs/color4" },
+        "continuity": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "连续性初值（§16.2）：服装、状态等，供跨镜头校验",
+          "properties": {
+            "wardrobe": { "type": "string" },
+            "state": { "type": "string" }
+          }
+        }
+      }
+    },
+    "scene": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "durationSeconds"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "title": { "type": "string" },
+        "durationSeconds": { "type": "number", "exclusiveMinimum": 0, "maximum": 3600 },
+        "environment": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "场景环境：绑定环境资产或 HDRI，缺省则用背景板兜底。",
+          "properties": {
+            "assetId": { "type": "string" },
+            "hdriId": { "type": "string" },
+            "worldColor": { "$ref": "#/$defs/color3" },
+            "groundAssetId": { "type": "string" }
+          }
+        },
+        "objects": {
+          "type": "array",
+          "description": "该场景要摆放的对象（角色/道具）实例，绑定资产并给定 transform。",
+          "items": { "$ref": "#/$defs/objectPlacement" }
+        },
+        "cameras": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/camera" }
+        },
+        "lights": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/light" }
+        },
+        "markers": {
+          "type": "array",
+          "description": "时间线标记（场景/镜头节点）",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "frameOffset"],
+            "properties": {
+              "name": { "type": "string" },
+              "frameOffset": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      }
+    },
+    "objectPlacement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "assetId": { "type": "string", "description": "引用 assets[].id 或 character.assetId" },
+        "characterId": { "type": "string" },
+        "location": { "$ref": "#/$defs/vec3" },
+        "rotationEuler": { "$ref": "#/$defs/vec3" },
+        "scale": { "$ref": "#/$defs/vec3" },
+        "keyframes": {
+          "type": "array",
+          "description": "确定性动画关键帧（相对场景起始帧）",
+          "items": { "$ref": "#/$defs/keyframe" }
+        }
+      }
+    },
+    "keyframe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frameOffset"],
+      "properties": {
+        "frameOffset": { "type": "integer", "minimum": 0 },
+        "location": { "$ref": "#/$defs/vec3" },
+        "rotationEuler": { "$ref": "#/$defs/vec3" },
+        "scale": { "$ref": "#/$defs/vec3" }
+      }
+    },
+    "camera": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "location": { "$ref": "#/$defs/vec3" },
+        "lookAt": { "$ref": "#/$defs/vec3" },
+        "rotationEuler": { "$ref": "#/$defs/vec3" },
+        "lens": { "type": "number", "minimum": 5, "maximum": 300 },
+        "shotType": { "enum": ["wide", "medium", "closeup", "aerial", "map", "insert"] },
+        "movement": { "enum": ["static", "pan", "tilt", "dolly", "orbit", "tracking"] },
+        "active": { "type": "boolean", "default": true },
+        "keyframes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/keyframe" }
+        }
+      }
+    },
+    "light": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "type": { "enum": ["POINT", "SUN", "SPOT", "AREA"] },
+        "location": { "$ref": "#/$defs/vec3" },
+        "lookAt": { "$ref": "#/$defs/vec3" },
+        "energy": { "type": "number", "minimum": 0, "maximum": 100000 },
+        "color": { "$ref": "#/$defs/color3" },
+        "size": { "type": "number", "minimum": 0, "maximum": 100 }
+      }
+    }
+  }
+}

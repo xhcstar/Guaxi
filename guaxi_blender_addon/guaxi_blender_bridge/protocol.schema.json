@@ -24,6 +24,8 @@
               "set_object_transform",
               "set_world_color",
               "build_story_ir",
+              "build_story_assets",
+              "render_build_plan",
               "save_project"
             ]
           }

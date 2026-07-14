@@ -97,6 +97,8 @@ pub struct AppConfig {
     asr_config: AsrConfig,
     #[serde(default)]
     terminal_config: TerminalConfig,
+    #[serde(default)]
+    film_studio_config: FilmStudioConfig,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -625,6 +627,19 @@ impl Default for AppearanceConfig {
     }
 }
 
+/// AI 影像工坊的持久化配置：Blender / FFmpeg 可执行文件路径与本地资产库根目录。
+/// 空字符串表示“未配置”，前端会回退到自动探测。这些不是机密，明文保存即可。
+#[derive(Serialize, Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FilmStudioConfig {
+    #[serde(default)]
+    pub blender_path: String,
+    #[serde(default)]
+    pub ffmpeg_path: String,
+    #[serde(default)]
+    pub asset_library_root: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct MarkdownInstallStatus {
     pub installed: bool,
@@ -793,6 +808,7 @@ impl Default for AppConfig {
             tts_config: TtsConfig::default(),
             asr_config: AsrConfig::default(),
             terminal_config: TerminalConfig::default(),
+            film_studio_config: FilmStudioConfig::default(),
         }
     }
 }
@@ -2352,6 +2368,27 @@ pub fn set_appearance_config(theme: String, font_size: u8) {
 
     let mut config = load_config();
     config.appearance = AppearanceConfig { theme, font_size };
+    save_config(&config);
+}
+
+#[tauri::command]
+pub fn get_film_studio_config() -> FilmStudioConfig {
+    let config = load_config();
+    config.film_studio_config
+}
+
+#[tauri::command]
+pub fn set_film_studio_config(
+    blender_path: String,
+    ffmpeg_path: String,
+    asset_library_root: String,
+) {
+    let mut config = load_config();
+    config.film_studio_config = FilmStudioConfig {
+        blender_path: blender_path.trim().to_string(),
+        ffmpeg_path: ffmpeg_path.trim().to_string(),
+        asset_library_root: asset_library_root.trim().to_string(),
+    };
     save_config(&config);
 }
 

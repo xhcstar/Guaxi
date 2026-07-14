@@ -2,7 +2,11 @@
 
 本文档说明如何安装 Blender 5.2、安装 Guaxi Blender Bridge 插件，并从一篇 Markdown 文稿开始生成 Story IR、Blender 预演工程和 MP4 视频。
 
-> 当前版本定位：已经可以完成“Markdown → Story IR → 低模场景预演 → `.blend`/MP4”。正式人物模型、写实 AI 镜头、ComfyUI/Pallaidium 媒体生成、完整配音和 VSE 主时间线仍属于后续里程碑，参见 [全流程架构与实施计划](./ai-film-studio-plan.md)。
+> 当前版本定位：已经可以完成“Markdown → Story IR → 低模场景预演 → `.blend`/MP4”。
+>
+> **重要说明（为什么现在渲染出的是立方体）：** 当前 M0 预演器 `scene_builder.py` 只生成彩色立方体占位符与背景板，不会导入任何真实模型，也没有接入媒体生成。因此现在的产物是**动态分镜（animatic）**，用来验证故事结构、节奏与机位，**不是电影级成片**。
+>
+> 要让画面变成文稿描述的真实场景与模型，需要新增的 **Asset Resolver（资产解析）+ AI Scene Director（AI 自主布景）+ ComfyUI/云端图像视频生成** 三层能力，属于 M1.5/M2 里程碑。详细升级方案见 [全流程架构与实施计划](./ai-film-studio-plan.md) 的 §0、§3.1、§7.1、§7.2、§12。
 
 ---
 
@@ -44,7 +48,45 @@
 - 人物在场关系和大致运动方向。
 - Blender、渲染编码和项目落盘流程是否正常。
 
-人物暂时使用彩色立方体占位，场景使用简单背景板、地面、灯光和摄影机。它不是最终电影画质，但可以在投入正式资产和渲染成本前验证故事结构。
+默认执行器现在会先经 **Asset Resolver** 尝试用真实模型替换立方体：命中本地资产库的角色/环境/道具以真实模型出现，未命中项才降级为彩色立方体占位，并记入 Build Plan 的 `assetGaps`。因此"是否还是立方体"取决于你是否配置了资产库（见 §1.4）。它仍可在投入完整渲染成本前验证故事结构。
+
+> 升级路线：Asset Resolver 逐级降级（本地资产库 → PolyHaven/Sketchfab → 文/图生 3D → 程序化 → 立方体兜底）；后续由 **AI Scene Director** 自动布景、打光、定机位；写实画面再由 **ComfyUI/云端图像视频 API** 以 3D 场景为约束生成。见设计文档 §3.1、§7.1、§7.2、§7.3。
+
+### 1.4 让画面出现真实模型（配置本地资产库）
+
+默认执行器走 `assets` 模式：解析真实资产 → 冻结确定性 Build Plan（`story/build_plan.json`）→ 渲染。要让立方体变成真实模型，配置一个本地资产库即可：
+
+1. 准备一个资产根目录，例如 `D:\GuaxiAssets`，放入 `.glb/.gltf/.usd/.fbx/.blend/.obj` 模型。
+2. 在根目录建 `guaxi_asset_index.json`，为每个模型登记标签、类型与许可：
+
+```json
+{
+  "assets": [
+    {
+      "id": "env_han_tent_01",
+      "kind": "environment",
+      "path": "environments/han_tent_01.glb",
+      "tags": ["汉代", "营帐", "tent"],
+      "unitScale": 1.0,
+      "license": "CC-BY-4.0",
+      "author": "作者",
+      "url": "来源链接"
+    },
+    {
+      "id": "char_liubang",
+      "kind": "character",
+      "path": "characters/liubang.glb",
+      "tags": ["刘邦", "汉", "男性", "帝王"],
+      "license": "自有"
+    }
+  ]
+}
+```
+
+3. 设置环境变量 `GUAXI_ASSET_LIBRARY=D:\GuaxiAssets`（不设置时默认用项目内 `assets/` 目录）。
+4. 重新点击"生成 MP4 预演"。标签命中 Story IR 的 `assetHints/name/description` 的资产会以真实模型出现；其余仍是立方体并列入 `assetGaps`。
+
+确定性说明：同一 `build_plan.json` 重复渲染逐帧一致。想跳过资产解析直接重渲染，用 `replay` 模式（重放已冻结的 Build Plan）；想回到纯立方体对照，用 `greybox` 模式。
 
 ---
 
@@ -96,6 +138,10 @@ guaxi_blender_addon/
     __init__.py
     blender_manifest.toml
     protocol.schema.json
+    build_plan.schema.json
+    asset_resolver.py
+    scene_director.py
+    build_executor.py
     scene_builder.py
     headless_runner.py
 ```
@@ -107,7 +153,11 @@ guaxi_blender_addon/
 | `blender_manifest.toml` | Blender 5.2 扩展名称、版本、最低 Blender 版本和权限声明 |
 | `__init__.py` | 插件面板、本地 HTTP Bridge、鉴权、命令队列和 Blender 主线程执行 |
 | `protocol.schema.json` | Guaxi 与 Blender 的请求协议和允许操作 |
-| `scene_builder.py` | 将 Story IR 构建为确定性的 Blender 低模预演 |
+| `build_plan.schema.json` | 确定性 Build Plan 数据契约（§7.3） |
+| `asset_resolver.py` | 资产解析层：把资产需求解析为真实模型，逐级降级到灰盒兜底 |
+| `scene_director.py` | 将 Story IR 编译为确定性 Build Plan 并冻结 |
+| `build_executor.py` | 重放 Build Plan，导入真实资产，仅在兜底时用彩色占位 |
+| `scene_builder.py` | 预演编排（资产化 / 旧立方体 / Build Plan 重放）与渲染、主时间线设置 |
 | `headless_runner.py` | 后台模式入口，由 Tauri 使用 `blender --background` 调用 |
 
 后台模式不要求插件已经在 Blender 设置中启用，因为 Guaxi 会直接调用仓库中的 `headless_runner.py`。只有“连接当前打开的 Blender”时，才需要安装并启用插件。
@@ -440,12 +490,14 @@ D:\FilmProjects
 
 ### 制作模式
 
-| 模式 | 用途 |
-|---|---|
-| 混合制作：3D + AI 媒体 | 推荐默认；3D 场景和 AI 图片/视频混合 |
-| Blender 原生 3D | 资产、动画、灯光主要在 Blender 中完成 |
-| AI 镜头 + VSE 剪辑 | 未来主要通过 Pallaidium/ComfyUI 生成镜头 |
-| 分镜预演 | 只关心故事、构图和时长，不追求最终画质 |
+| 模式 | 用途 | 确定性 |
+|---|---|---|
+| Blender 原生 3D | **推荐默认（确定性路线）**：文本 LLM（如 DeepSeek）驱动 MCP 在本地导入真实资产、布景、打光、定机位，冻结为 Build Plan 后渲染；每次渲染逐帧一致 | 确定 |
+| 混合制作：3D + AI 媒体 | 3D 保证空间/一致性，个别写实镜头再用 AI 生成质感；用 3D 的 depth/pose 约束以尽量可控 | 部分确定 |
+| AI 镜头 + VSE 剪辑 | 主要通过 ComfyUI/云端图像视频 API 生成镜头，画质高但每次生成有随机性 | 随机 |
+| 分镜预演 | 只关心故事、构图和时长，不追求最终画质（灰盒 animatic） | 确定 |
+
+> 想要"每次渲染结果都一样、不靠 AI 随机生成"，选 **Blender 原生 3D**：文本 LLM 只在"规划"时调用一次生成 Build Plan，之后渲染是确定性重放。原理见设计文档 §7.3。
 
 ### 导演补充要求
 
@@ -509,6 +561,13 @@ D:\Tools\blender-5.2.0\blender.exe
 ```text
 GUAXI_BLENDER_PATH=D:\Tools\blender-5.2.0\blender.exe
 ```
+
+> 本机配置示例（对应常见解压安装）：
+> - Blender：选择 `D:\blender-5.2.0\blender.exe`。
+> - FFmpeg：选择 `D:\ffmpeg\bin`（可直接选目录，程序会自动定位其中的 `ffmpeg.exe`）或 `D:\ffmpeg\bin\ffmpeg.exe`。
+> - 资产库：选择放置真实模型与 `guaxi_asset_index.json` 的目录（见 §1.4）。
+>
+> 这三项现在会持久化保存到应用配置（`config/guaxi_config.json`），**重启后自动恢复，不需要每次重新选择**。
 
 ### 检测环境
 
@@ -657,20 +716,22 @@ renders/preview/preview.mp4
 
 ### 9.4 全流程
 
-显示未来完整制作链：
+显示未来完整制作链（对应设计文档 §14 全流程功能栈 A–M）：
 
-1. 文稿与研究。
-2. Story IR。
-3. 分镜与预演。
-4. 资产与世界构建。
-5. 媒体生成后端。
-6. 角色、动画与特效。
-7. 配音与声音。
-8. VSE 剪辑与回改。
-9. 渲染与合成。
-10. 审核与发布。
+1. 采集与研究：多源导入（Markdown/PDF/EPUB/GeoJSON/DEM/CSV…）、实体链接、事实置信度、参考图板。
+2. 故事与结构：Story IR、剧本、分镜、节拍、时长预算。
+3. 角色与一致性：角色圣经、外观锁定、跨镜头/跨集连续性、声线绑定。
+4. 世界与资产：Asset Resolver、GIS、历史考据规则包、程序化建模。
+5. 摄影与导演：镜头语法、覆盖率、色彩脚本、Build Plan 冻结。
+6. 媒体生成：ComfyUI/云 API、3D 约束的图/视频、修复超分（可选写实路线）。
+7. 声音与配音：多角色 TTS、口型、音乐、音效、环境声、混音响度。
+8. 剪辑与后期：VSE 装配、调色、字幕、标题、动态图形、地图标注。
+9. 质量与审核：自动 QC、连续性、事实审核、导演批注往返。
+10. 多版本与发布：智能重构图、平台预设、封面/标题/标签、编码打包。
+11. 版权与合规：许可账本、肖像/声音授权、AIGC 标识、C2PA 内容凭证。
+12. 生产管理与发布后闭环：系列/分集、版本、渲染农场、成本、数据回收、逆向到剧本。
 
-这里是路线图说明，不代表所有阶段都已自动完成。
+这里是路线图说明，不代表所有阶段都已自动完成；当前已落地的是第 1–2 步与第 5 步的分镜预演（灰盒 animatic），其余随里程碑推进。
 
 ### 9.5 任务日志
 
@@ -1167,7 +1228,7 @@ Invoke-RestMethod `
 - 插件是否有本地网络权限。
 - Blender 控制台中的 `[GuaxiBridge][ERROR]` 日志。
 
-### 16.5 Guaxi 连接 Bridge 失败
+### 16.5 Guaxi 连接 Bridge 失败（含 502 / 连接超时）
 
 检查：
 
@@ -1176,10 +1237,29 @@ Invoke-RestMethod `
 3. Guaxi 和 Blender 端口是否一致。
 4. 防火墙/安全软件是否阻断本机回环连接。
 
-健康检查可以验证服务是否在线：
+**关于 502 / 连接超时（常见根因：系统代理拦截了 127.0.0.1）**
+
+如果插件已启动但 Guaxi 连接时报 502 Bad Gateway 或超时，通常不是插件问题，而是系统/环境配置了 HTTP 代理，把发往 `127.0.0.1` 的回环请求也转发给了代理，代理无法回连本机于是返回 502。
+
+当前版本已在 Guaxi 端为 Bridge 请求禁用代理（`no_proxy`），大多数情况下无需额外配置。若仍出现，请在系统或环境变量中把回环地址加入代理例外：
+
+```text
+NO_PROXY=127.0.0.1,localhost
+no_proxy=127.0.0.1,localhost
+```
+
+设置后重启 Guaxi 再连接。
+
+健康检查可以验证服务是否在线（PowerShell 也需绕过代理）：
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:19152/health
+Invoke-RestMethod -Uri http://127.0.0.1:19152/health -Proxy $null
+```
+
+Linux/macOS：
+
+```bash
+curl --noproxy '*' http://127.0.0.1:19152/health
 ```
 
 ### 16.6 提示 Unauthorized
@@ -1249,15 +1329,23 @@ Markdown 和 Story IR 都使用 UTF-8。Blender 自带字体可能不包含全�
 
 ### 16.12 视频只是方块和背景板
 
-这是当前 M0 预演器的设计目标，不是渲染错误。
+**首先确认是否配置了本地资产库（§1.4）。** 默认 `assets` 模式会用真实模型替换立方体，但前提是资产库里有标签匹配的模型；没有配置库、或标签没命中时，才会降级为立方体并写入 `assetGaps`。因此"全是方块"通常意味着资产库为空或标签不匹配，而不是渲染错误。
 
-后续阶段将接入：
+排查：
 
-- Blender Asset Browser。
-- Pallaidium/ComfyUI 媒体生成。
-- 正式人物和场景资产。
-- 动作、口型和配音。
-- VSE Master Timeline。
+1. 是否设置了 `GUAXI_ASSET_LIBRARY` 且目录含 `guaxi_asset_index.json`。
+2. 索引里的 `path` 文件是否真实存在、扩展名是否受支持。
+3. `tags` 是否与 Story IR 中该角色/地点的 `name/assetHints/description` 有重合词。
+4. 查看 `story/build_plan.json` 的 `metadata.assetGaps`，确认哪些资产未命中。
+
+要得到更完整的电影级画面，还需要以下正在规划的升级（详见设计文档 §0/§3.1/§7.1/§7.2/§7.3/§12）：
+
+- **Asset Resolver 资产解析层：** 本地资产库 → PolyHaven/Sketchfab → 文/图生 3D（Hyper3D/Hunyuan3D/Tripo）→ 程序化 → 立方体兜底，真正把 `assetHints/assetPlan` 变成场景里的真实模型。
+- **AI Scene Director：** AI agent 通过 MCP/Bridge 自主导入资产、布景、打光、定机位、加动画，并读 viewport 截图自检迭代（把体力活交给 AI，参考 blender-mcp）。
+- **ComfyUI + 云端图像/视频生成：** 用 3D 场景导出的 depth/pose 作 ControlNet 约束，生成电影级写实画面并落入 VSE strip。
+- 动作、口型、配音与 VSE Master Timeline。
+
+在这些能力落地前，请把当前输出当作"动态分镜预演"使用；升级完成后，立方体将被真实资产替换，缺失资产才继续用立方体占位并明确标记。
 
 ---
 
@@ -1321,5 +1409,6 @@ Markdown 和 Story IR 都使用 UTF-8。Blender 自带字体可能不包含全�
 - [全流程架构与实施计划](./ai-film-studio-plan.md)
 - [Blender 插件目录说明](../guaxi_blender_addon/README.md)
 - [Pallaidium 项目](https://github.com/tin2tin/Pallaidium)
+- [blender-mcp（AI 通过 MCP 双向驱动 Blender、集成 PolyHaven/Sketchfab/文生3D）](https://github.com/ahujasid/blender-mcp)
 - [Blender Python API](https://docs.blender.org/api/current/)
 - [Blender 命令行参数](https://docs.blender.org/manual/en/latest/advanced/command_line/arguments.html)

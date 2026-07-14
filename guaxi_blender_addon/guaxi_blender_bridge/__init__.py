@@ -20,7 +20,11 @@ from bpy.props import IntProperty, StringProperty
 # __annotations__ 读取 IntProperty/StringProperty 返回的延迟属性对象；把注解字符串化后
 # Preferences 属性将无法注册。Blender 5.2 自带的 Python 已支持下方使用的联合类型语法。
 
-from .scene_builder import build_story_preview
+from .scene_builder import (
+    build_story_asset_preview,
+    build_story_preview,
+    render_build_plan,
+)
 
 
 bl_info = {
@@ -44,6 +48,8 @@ ALLOWED_OPERATIONS = {
     "set_object_transform",
     "set_world_color",
     "build_story_ir",
+    "build_story_assets",
+    "render_build_plan",
     "save_project",
 }
 
@@ -154,6 +160,38 @@ def _execute_operation(operation: dict[str, Any], workspace: Path) -> dict[str, 
         project_dir = _path_inside_workspace(workspace, operation.get("projectDir"))
         outputs = build_story_preview(
             story_ir,
+            project_dir,
+            render_animation=bool(operation.get("renderAnimation", False)),
+            progress=lambda value, stage, message: _log(
+                "info", message, progress=value, stage=stage
+            ),
+        )
+        return {"type": operation_type, **outputs}
+
+    if operation_type == "build_story_assets":
+        # 默认确定性资产化路径：解析真实资产 + 冻结 Build Plan + 重放（§7.2/§7.3）。
+        story_ir = operation.get("storyIr")
+        if not isinstance(story_ir, dict):
+            raise ValueError("build_story_assets.storyIr 必须是 JSON 对象")
+        project_dir = _path_inside_workspace(workspace, operation.get("projectDir"))
+        outputs = build_story_asset_preview(
+            story_ir,
+            project_dir,
+            render_animation=bool(operation.get("renderAnimation", False)),
+            progress=lambda value, stage, message: _log(
+                "info", message, progress=value, stage=stage
+            ),
+        )
+        return {"type": operation_type, **outputs}
+
+    if operation_type == "render_build_plan":
+        # 重放一个已冻结的 Build Plan，确定性重渲染，不再解析或调用 LLM。
+        build_plan = operation.get("buildPlan")
+        if not isinstance(build_plan, dict):
+            raise ValueError("render_build_plan.buildPlan 必须是 JSON 对象")
+        project_dir = _path_inside_workspace(workspace, operation.get("projectDir"))
+        outputs = render_build_plan(
+            build_plan,
             project_dir,
             render_animation=bool(operation.get("renderAnimation", False)),
             progress=lambda value, stage, message: _log(

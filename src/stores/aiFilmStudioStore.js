@@ -53,6 +53,7 @@ export const useAIFilmStudioStore = defineStore('aiFilmStudio', {
     blenderPath: '',
     blenderStatus: emptyBlenderStatus(),
     ffmpegPath: '',
+    assetLibraryRoot: '',
     mediaToolsStatus: emptyMediaToolsStatus(),
     checkingMediaTools: false,
     bridgePort: 19152,
@@ -106,6 +107,8 @@ export const useAIFilmStudioStore = defineStore('aiFilmStudio', {
     async initialize() {
       if (this.initialized) return
       this.initialized = true
+      // 先恢复持久化的可执行文件路径与资产库，再据此探测环境。
+      await this.loadFilmStudioConfig()
       try {
         this.knowledgeRoot = String(await invoke('get_knowledge_bases_root') || '')
         this.outputRoot = this.knowledgeRoot
@@ -116,6 +119,38 @@ export const useAIFilmStudioStore = defineStore('aiFilmStudio', {
       }
       await this.setupJobListener()
       await Promise.all([this.refreshBlenderStatus(), this.refreshMediaToolsStatus()])
+    },
+
+    async loadFilmStudioConfig() {
+      try {
+        const config = await invoke('get_film_studio_config')
+        this.blenderPath = String(config?.blenderPath || '')
+        this.ffmpegPath = String(config?.ffmpegPath || '')
+        this.assetLibraryRoot = String(config?.assetLibraryRoot || '')
+        if (this.blenderPath || this.ffmpegPath || this.assetLibraryRoot) {
+          this.appendLog('info', '已恢复影像工坊持久化配置', {
+            blenderPath: this.blenderPath,
+            ffmpegPath: this.ffmpegPath,
+            assetLibraryRoot: this.assetLibraryRoot,
+          })
+        }
+      } catch (error) {
+        logger.warn('[FilmStudio] film studio config unavailable', error)
+      }
+    },
+
+    async persistFilmStudioConfig() {
+      // 每次修改 Blender/FFmpeg/资产库路径后调用，写入 guaxi_config.json，重启后保留。
+      try {
+        await invoke('set_film_studio_config', {
+          blenderPath: this.blenderPath || '',
+          ffmpegPath: this.ffmpegPath || '',
+          assetLibraryRoot: this.assetLibraryRoot || '',
+        })
+      } catch (error) {
+        logger.error('[FilmStudio] persist film studio config failed', error)
+        this.appendLog('warn', '保存影像工坊配置失败，重启后可能需要重新选择路径', String(error))
+      }
     },
 
     async setupJobListener() {
@@ -242,7 +277,11 @@ export const useAIFilmStudioStore = defineStore('aiFilmStudio', {
           blenderPath: this.blenderPath || null,
         })
         this.blenderStatus = { ...emptyBlenderStatus(), ...(status || {}) }
-        if (status?.executable) this.blenderPath = String(status.executable)
+        if (status?.executable) {
+          this.blenderPath = String(status.executable)
+          // 探测到的可执行文件也持久化，避免下次重启重新手动选择。
+          await this.persistFilmStudioConfig()
+        }
         this.appendLog(status?.compatible ? 'info' : 'warn', status?.compatible
           ? `Blender 环境可用：${status.detectedVersion}`
           : 'Blender 5.2 LTS 环境尚未就绪', status?.warnings || [])
@@ -265,7 +304,10 @@ export const useAIFilmStudioStore = defineStore('aiFilmStudio', {
           ffmpegPath: this.ffmpegPath || null,
         })
         this.mediaToolsStatus = { ...emptyMediaToolsStatus(), ...(status || {}) }
-        if (status?.ffmpegPath) this.ffmpegPath = String(status.ffmpegPath)
+        if (status?.ffmpegPath) {
+          this.ffmpegPath = String(status.ffmpegPath)
+          await this.persistFilmStudioConfig()
+        }
         this.appendLog(status?.ffmpegAvailable ? 'info' : 'warn', status?.ffmpegAvailable
           ? `FFmpeg 编码器可用：${status.ffmpegVersion}`
           : '未检测到独立 FFmpeg，将保留 PNG 序列等待编码', status?.warnings || [])
@@ -311,7 +353,8 @@ export const useAIFilmStudioStore = defineStore('aiFilmStudio', {
             protocolVersion: '1.0',
             requestId,
             operations: [{
-              type: 'build_story_ir',
+              // 资产化路径：解析真实资产 + 冻结 Build Plan（§7.2/§7.3）。
+              type: 'build_story_assets',
               storyIr: this.storyIr,
               projectDir: this.project.projectDir,
               renderAnimation: false,
@@ -350,24 +393,29 @@ export const useAIFilmStudioStore = defineStore('aiFilmStudio', {
       }
     },
 
-    async startPreview(renderAnimation = true) {
+    async startPreview(renderAnimation = true, builder = 'assets') {
       if (!this.canStartPreview) throw new Error('项目或 Blender 5.2 LTS 环境尚未就绪')
       this.startingPreview = true
       this.jobStatus = 'launching'
       this.jobProgress = 0
       try {
+        // builder：assets（真实资产 + 冻结 Build Plan）、greybox（旧立方体预演）、
+        // replay（重放已冻结的 build_plan.json，确定性重渲染）。
         const jobId = await invoke('story_studio_start_preview', {
           request: {
             projectDir: this.project.projectDir,
             blenderPath: this.blenderPath,
             ffmpegPath: this.ffmpegPath,
+            assetLibraryRoot: this.assetLibraryRoot,
             renderAnimation,
+            builder,
           },
         })
         this.currentJobId = String(jobId || '')
         this.jobStatus = 'running'
         this.appendLog('info', renderAnimation ? '已提交 Blender MP4 预演任务' : '已提交 Blender 工程构建任务', {
           jobId: this.currentJobId,
+          builder,
         })
         return jobId
       } catch (error) {

@@ -104,8 +104,15 @@ pub struct StartPreviewRequest {
     pub blender_path: String,
     #[serde(default)]
     pub ffmpeg_path: String,
+    /// 本地资产库根目录（含 guaxi_asset_index.json）。传入后作为 GUAXI_ASSET_LIBRARY。
+    #[serde(default)]
+    pub asset_library_root: String,
     #[serde(default = "default_render_animation")]
     pub render_animation: bool,
+    /// 构建器：assets（默认，真实资产 + 冻结 Build Plan）、greybox（旧立方体预演）、
+    /// replay（重放已冻结的 story/build_plan.json）。前端未指定时按 assets 处理。
+    #[serde(default = "default_builder")]
+    pub builder: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -137,6 +144,37 @@ struct StoryJobEvent {
 
 fn default_render_animation() -> bool {
     true
+}
+
+fn default_builder() -> String {
+    "assets".to_string()
+}
+
+/// 只接受受控 builder 关键字，避免前端传入任意值进入命令行。
+fn sanitize_builder(raw: &str) -> &'static str {
+    match raw.trim() {
+        "greybox" => "greybox",
+        "replay" => "replay",
+        _ => "assets",
+    }
+}
+
+/// 归一化 FFmpeg 路径：用户可能选择目录（如 D:\ffmpeg\bin）而非可执行文件本身。
+/// 若传入的是目录，则在其中拼接平台可执行名；否则原样返回。
+fn normalize_ffmpeg_path(raw: &str) -> String {
+    let path = PathBuf::from(raw);
+    if path.is_dir() {
+        let exe = if cfg!(target_os = "windows") {
+            "ffmpeg.exe"
+        } else {
+            "ffmpeg"
+        };
+        let candidate = path.join(exe);
+        if candidate.is_file() {
+            return candidate.to_string_lossy().to_string();
+        }
+    }
+    raw.to_string()
 }
 
 /// Windows 后台任务不弹出额外控制台窗口；其他平台保持默认行为。
@@ -576,11 +614,12 @@ pub fn story_studio_open_project(path: String) -> Result<OpenedStoryProject, Str
 fn ffmpeg_candidates(explicit_path: Option<&str>) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     if let Some(path) = explicit_path.filter(|value| !value.trim().is_empty()) {
-        candidates.push(PathBuf::from(path.trim()));
+        // 允许用户选择目录（如 D:\ffmpeg\bin），归一化为其中的可执行文件。
+        candidates.push(PathBuf::from(normalize_ffmpeg_path(path.trim())));
     }
     if let Ok(path) = env::var("GUAXI_FFMPEG_PATH") {
         if !path.trim().is_empty() {
-            candidates.push(PathBuf::from(path.trim()));
+            candidates.push(PathBuf::from(normalize_ffmpeg_path(path.trim())));
         }
     }
     #[cfg(target_os = "windows")]
@@ -712,8 +751,17 @@ pub fn story_studio_start_preview(
     request: StartPreviewRequest,
 ) -> Result<String, String> {
     let project_dir = PathBuf::from(request.project_dir.trim());
+    let builder = sanitize_builder(&request.builder);
     let story_ir_path = project_dir.join("story").join("story_ir.json");
-    if !story_ir_path.is_file() {
+    let build_plan_path = project_dir.join("story").join("build_plan.json");
+    if builder == "replay" {
+        if !build_plan_path.is_file() {
+            return Err(format!(
+                "项目缺少已冻结的 Build Plan：{}（请先用 assets 构建一次）",
+                build_plan_path.display()
+            ));
+        }
+    } else if !story_ir_path.is_file() {
         return Err(format!("项目缺少 Story IR：{}", story_ir_path.display()));
     }
 
@@ -735,6 +783,8 @@ pub fn story_studio_start_preview(
     }
 
     let mode = if request.render_animation { "preview" } else { "project" };
+    // 提前生成 job_id，既用于取消跟踪，也传给 runner 写 logs/<job-id>.jsonl（§11）。
+    let job_id = Uuid::new_v4().to_string();
     let mut command = Command::new(&blender);
     command
         .arg("--background")
@@ -746,22 +796,34 @@ pub fn story_studio_start_preview(
         .arg("--")
         .arg("--project-dir")
         .arg(&project_dir)
-        .arg("--story-ir")
-        .arg(&story_ir_path)
         .arg("--mode")
         .arg(mode)
+        .arg("--builder")
+        .arg(builder)
+        .arg("--job-id")
+        .arg(&job_id)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // replay 重放冻结计划；assets/greybox 从 Story IR 构建。
+    if builder == "replay" {
+        command.arg("--build-plan").arg(&build_plan_path);
+    } else {
+        command.arg("--story-ir").arg(&story_ir_path);
+    }
     if !request.ffmpeg_path.trim().is_empty() {
         // 只给受控 runner 传入单个编码器路径，不修改进程级全局环境。
-        command.env("GUAXI_FFMPEG_PATH", request.ffmpeg_path.trim());
+        // 用户可能选择 ffmpeg 所在目录（如 D:\ffmpeg\bin）而非可执行文件本身，这里归一化。
+        command.env("GUAXI_FFMPEG_PATH", normalize_ffmpeg_path(request.ffmpeg_path.trim()));
+    }
+    if !request.asset_library_root.trim().is_empty() {
+        // 资产库根目录：Asset Resolver 据此查 guaxi_asset_index.json 匹配真实模型。
+        command.env("GUAXI_ASSET_LIBRARY", request.asset_library_root.trim());
     }
     apply_hidden_window(&mut command);
 
     let mut child = command
         .spawn()
         .map_err(|e| format!("启动 Blender 失败：{e}"))?;
-    let job_id = Uuid::new_v4().to_string();
     let cancel_flag = Arc::new(AtomicBool::new(false));
     CANCEL_FLAGS
         .lock()
@@ -905,6 +967,8 @@ pub async fn story_studio_probe_blender_bridge(port: Option<u16>) -> Result<Valu
     }
     let url = format!("http://127.0.0.1:{port}/health");
     let client = reqwest::Client::builder()
+        // 回环请求必须绕过系统/环境代理，否则代理会对 127.0.0.1 返回 502/超时。
+        .no_proxy()
         .timeout(Duration::from_secs(3))
         .build()
         .map_err(|e| format!("创建 Bridge 客户端失败：{e}"))?;
@@ -947,6 +1011,8 @@ pub async fn story_studio_send_blender_commands(
 
     let url = format!("http://127.0.0.1:{}/v1/commands", request.port);
     let client = reqwest::Client::builder()
+        // 回环请求必须绕过系统/环境代理，否则代理会对 127.0.0.1 返回 502/超时。
+        .no_proxy()
         // 构建场景或保存工程可能较慢；真正的渲染仍建议使用后台任务队列。
         .timeout(Duration::from_secs(130))
         .build()
@@ -959,10 +1025,19 @@ pub async fn story_studio_send_blender_commands(
         .await
         .map_err(|e| format!("调用 Blender Bridge 失败：{e}"))?;
     let status = response.status();
-    let payload = response
-        .json::<Value>()
+    // 先读文本：代理或网关失败时响应体可能是 HTML（非 JSON），避免误报“解析失败”。
+    let body = response
+        .text()
         .await
-        .map_err(|e| format!("解析 Bridge 响应失败：{e}"))?;
+        .map_err(|e| format!("读取 Bridge 响应失败：{e}"))?;
+    let payload: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+    if payload.is_null() {
+        // 非 JSON 响应：几乎总是代理/网关介入回环地址。
+        let snippet: String = body.trim().chars().take(200).collect();
+        return Err(format!(
+            "Blender Bridge 返回非 JSON 响应（状态 {status}）。若出现 502，多为系统代理拦截了 127.0.0.1，请在代理设置的 no_proxy 中加入 127.0.0.1,localhost。响应片段：{snippet}"
+        ));
+    }
     if !status.is_success() || payload.get("ok").and_then(Value::as_bool) != Some(true) {
         let reason = payload
             .get("error")

@@ -352,6 +352,8 @@ async fn main() {
             commands::settingview::set_database_config,
             commands::settingview::get_appearance_config,
             commands::settingview::set_appearance_config,
+            commands::settingview::get_film_studio_config,
+            commands::settingview::set_film_studio_config,
             commands::settingview::set_repopathlist,
             commands::settingview::get_repopathlist,
             commands::settingview::get_libraries_repo_config,
