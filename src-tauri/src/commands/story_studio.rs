@@ -272,6 +272,85 @@ fn resolve_plugin_directory() -> PathBuf {
         .join("guaxi_blender_addon")
 }
 
+/// 校验前端传入的项目目录，只允许已经由影像工坊创建的标准项目。
+///
+/// 这里不直接接受任意待打开路径：动态项目目录无法写进 Tauri 的静态 opener
+/// 白名单，但也不能因此把整个磁盘开放给前端。项目清单充当边界标记，后续的
+/// `assets` 目标也只能由这个已校验根目录派生。
+fn validate_story_project_directory(raw_path: Option<&str>) -> Result<PathBuf, String> {
+    let raw_path = raw_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "当前没有可打开的影像项目".to_string())?;
+    let project_dir = fs::canonicalize(raw_path)
+        .map_err(|e| format!("无法解析影像项目目录 {raw_path}：{e}"))?;
+    if !project_dir.is_dir() {
+        return Err(format!("影像项目目录不存在：{}", project_dir.display()));
+    }
+    if !project_dir.join("guaxi-film-project.json").is_file() {
+        return Err("拒绝打开：所选目录不是 Guaxi 影像项目".to_string());
+    }
+    Ok(project_dir)
+}
+
+/// 使用操作系统文件管理器打开已经过校验的目录，不经过 shell 拼接参数。
+fn open_directory_with_system(path: &Path) -> Result<(), String> {
+    let mut command = if cfg!(target_os = "windows") {
+        let mut command = Command::new("explorer.exe");
+        command.arg(path);
+        command
+    } else if cfg!(target_os = "macos") {
+        let mut command = Command::new("open");
+        command.arg(path);
+        command
+    } else {
+        let mut command = Command::new("xdg-open");
+        command.arg(path);
+        command
+    };
+    apply_hidden_window(&mut command);
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("启动系统文件管理器失败：{e}"))
+}
+
+/// 打开影像工坊管理的三类目录。
+///
+/// `kind` 采用固定枚举值，避免前端将任意本地路径交给系统文件管理器：
+/// - `plugin`：仓库或安装目录中的 Blender 插件；
+/// - `project`：当前标准影像项目根目录；
+/// - `assets`：当前项目中可由用户继续编辑的模型资产目录。
+#[tauri::command]
+pub fn story_studio_open_managed_directory(
+    kind: String,
+    project_dir: Option<String>,
+) -> Result<String, String> {
+    let target = match kind.as_str() {
+        "plugin" => fs::canonicalize(resolve_plugin_directory())
+            .map_err(|e| format!("无法定位 Blender 插件目录：{e}"))?,
+        "project" => validate_story_project_directory(project_dir.as_deref())?,
+        "assets" => {
+            let project_dir = validate_story_project_directory(project_dir.as_deref())?;
+            let assets_dir = project_dir.join("assets");
+            fs::canonicalize(&assets_dir)
+                .map_err(|e| format!("无法定位可编辑模型目录 {}：{e}", assets_dir.display()))?
+        }
+        _ => return Err(format!("不支持的目录类型：{kind}")),
+    };
+    if !target.is_dir() {
+        return Err(format!("目标不是目录：{}", target.display()));
+    }
+
+    info!(
+        directory_kind = %kind,
+        path = %target.display(),
+        "[StoryStudio] opening managed directory"
+    );
+    open_directory_with_system(&target)?;
+    Ok(target.to_string_lossy().to_string())
+}
+
 fn parse_blender_version(output: &str) -> Option<(u32, u32, u32)> {
     let first_line = output.lines().find(|line| line.contains("Blender"))?;
     let raw_version = first_line

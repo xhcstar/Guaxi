@@ -33,6 +33,104 @@ def _look_at(obj: bpy.types.Object, target: Any) -> None:
     obj.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
 
 
+def _asset_tools():
+    """兼容插件包模式和 headless 顶层模块模式的延迟导入。"""
+    try:
+        from .asset_resolver import asset_file_hash
+        from .procedural_asset_builder import materialize_procedural_asset
+    except ImportError:  # pragma: no cover - headless top-level import
+        from asset_resolver import asset_file_hash  # type: ignore[no-redef]
+        from procedural_asset_builder import materialize_procedural_asset  # type: ignore[no-redef]
+    return asset_file_hash, materialize_procedural_asset
+
+
+def materialize_assets(
+    build_plan: dict[str, Any],
+    project_dir: str | Path,
+    progress: ProgressCallback | None = None,
+) -> None:
+    """把待生成配方固化为独立模型文件，并把内容哈希写回内存中的 Build Plan。
+
+    这一步必须发生在 planHash 计算和 build_plan.json 落盘之前，否则首次生成的模型不在
+    确定性边界内。已存在的生成模型不会覆盖，用户在 Blender/Python 中的修改会被保留。
+    """
+    asset_file_hash, materialize_procedural_asset = _asset_tools()
+    assets = [item for item in build_plan.get("assets", []) if isinstance(item, dict)]
+    procedural = [item for item in assets if item.get("source") == "procedural"]
+    missing_procedural = [item for item in procedural if not Path(str(item.get("path") or "")).expanduser().is_file()]
+    if missing_procedural:
+        # save_as_mainfile(copy=True) 会保存当前 Main 中的全部数据块，所以首次物化前先清空
+        # factory-startup 默认立方体/相机；每个资产保存后由生成器清理自己的数据。
+        sb._clear_scene()
+    total = max(1, len(procedural))
+    for index, asset in enumerate(procedural):
+        path = Path(str(asset.get("path") or "")).expanduser()
+        if not path.is_absolute():
+            path = Path(project_dir).expanduser().resolve() / path
+        if path.is_file():
+            print(
+                f"[GuaxiBuildExecutor][INFO] 保留现有可编辑模型：{asset.get('id')} -> {path}",
+                flush=True,
+            )
+        else:
+            asset["path"] = str(path.resolve())
+            try:
+                materialize_procedural_asset(asset)
+            except (OSError, RuntimeError, ValueError) as exc:
+                # 单个模型物化失败不能拖垮整部预演。保留 generation 配方供后续修复，
+                # 本轮明确降级为 greybox 并写 assetGaps，不伪装成已经生成成功。
+                message = f"程序化模型写入失败：{asset.get('id')} ({exc})"
+                print(f"[GuaxiBuildExecutor][ERROR] {message}", flush=True)
+                asset["source"] = "greybox"
+                asset["path"] = ""
+                asset["importer"] = "none"
+                asset["editable"] = False
+                build_plan.setdefault("metadata", {}).setdefault("assetGaps", []).append(
+                    {"assetId": str(asset.get("id") or ""), "kind": str(asset.get("kind") or ""), "reason": message}
+                )
+                continue
+        asset["contentHash"] = asset_file_hash(path)
+        asset["editable"] = True
+        if progress is not None:
+            progress(
+                min(7, 4 + round((index + 1) / total * 3)),
+                "materialize-assets",
+                f"已准备可编辑模型 {index + 1}/{len(procedural)}：{asset.get('id')}",
+            )
+
+    # 外部/本地模型也冻结内容哈希；不存在的文件交给执行阶段输出明确降级日志。
+    for asset in assets:
+        path_value = str(asset.get("path") or "")
+        if not path_value:
+            continue
+        path = Path(path_value).expanduser()
+        if path.is_file() and not asset.get("contentHash"):
+            asset["contentHash"] = asset_file_hash(path)
+
+
+def _verify_frozen_asset_hashes(build_plan: dict[str, Any]) -> None:
+    """拒绝使用内容已漂移的模型重放旧计划，提示用户显式启用修改版本。"""
+    asset_file_hash, _materialize = _asset_tools()
+    changed: list[str] = []
+    for asset in build_plan.get("assets", []):
+        if not isinstance(asset, dict):
+            continue
+        expected = str(asset.get("contentHash") or "")
+        path_value = str(asset.get("path") or "")
+        if not expected or not path_value:
+            continue
+        path = Path(path_value).expanduser()
+        if path.is_file() and asset_file_hash(path) != expected:
+            changed.append(f"{asset.get('id')} ({path})")
+    if changed:
+        preview = "；".join(changed[:8])
+        print(f"[GuaxiBuildExecutor][WARN] 检测到模型内容已修改：{preview}", flush=True)
+        raise ValueError(
+            "检测到模型已被 Blender/Python 修改，旧 Build Plan 已失效："
+            f"{preview}。请在 Guaxi 点击“启用已修改模型”重新冻结计划。"
+        )
+
+
 def _import_asset(asset: dict[str, Any]) -> bpy.types.Object | None:
     """按 importer 导入资产文件，返回一个代表对象（父空物或首个网格）。
 
@@ -120,8 +218,10 @@ def _place_object(spec: dict[str, Any], asset: dict[str, Any] | None, base_frame
         obj.location = spec["location"]
     if isinstance(spec.get("rotationEuler"), list):
         obj.rotation_euler = spec["rotationEuler"]
-    if isinstance(spec.get("scale"), list) and obj.type == "MESH":
-        obj.scale = spec["scale"]
+    if isinstance(spec.get("scale"), list):
+        # 导入资产使用 Empty 作为统一根节点；同样必须应用实例缩放。乘上导入器设置的
+        # unitScale，而不是覆盖它，避免厘米资产被错误放大为米。
+        obj.scale = tuple(float(spec["scale"][i]) * float(obj.scale[i]) for i in range(3))
 
     keyframes = spec.get("keyframes") if isinstance(spec.get("keyframes"), list) else []
     if keyframes:
@@ -182,6 +282,8 @@ def build_from_plan(
     for warning in plan_warnings[:20]:
         report(3, "plan-warning", f"Build Plan 提示：{warning}")
 
+    _verify_frozen_asset_hashes(build_plan)
+
     scenes_spec = build_plan.get("scenes") if isinstance(build_plan.get("scenes"), list) else []
     if not scenes_spec:
         raise ValueError("Build Plan 没有可构建的 scenes")
@@ -230,7 +332,7 @@ def build_from_plan(
         start_frame = current_frame
         end_frame = min(max_preview_frames, current_frame + duration_frames - 1)
 
-        # 时间线标记
+        # 时间线标记。镜头相机绑定在相机创建后补充，普通标记先在这里创建。
         for marker in scene_spec.get("markers", []):
             if isinstance(marker, dict):
                 frame = start_frame + int(marker.get("frameOffset", 0))
@@ -259,13 +361,24 @@ def build_from_plan(
             placed = _place_object(obj_spec, asset, start_frame)
             sb._keyframe_visibility(placed, start_frame, end_frame)
 
-        # 相机与灯光（每个场景独立，避免相互干扰）
+        # 相机与灯光（每个场景独立）。TimelineMarker.camera 让 Blender 在镜头起始帧
+        # 自动切换相机，避免整部视频只使用第一个场景的固定机位。
+        scene_cameras: list[tuple[dict[str, Any], bpy.types.Object]] = []
         for cam_spec in scene_spec.get("cameras", []):
             if isinstance(cam_spec, dict):
-                _add_camera(cam_spec, scene, start_frame)
+                camera = _add_camera(cam_spec, scene, start_frame)
+                scene_cameras.append((cam_spec, camera))
+        for cam_index, (cam_spec, camera) in enumerate(scene_cameras):
+            camera_frame = min(end_frame, start_frame + max(0, int(cam_spec.get("frameOffset", 0))))
+            marker = scene.timeline_markers.new(
+                f"CAM · {cam_spec.get('id') or cam_index + 1}",
+                frame=camera_frame,
+            )
+            marker.camera = camera
         for light_spec in scene_spec.get("lights", []):
             if isinstance(light_spec, dict):
-                _add_light(light_spec)
+                light = _add_light(light_spec)
+                sb._keyframe_visibility(light, start_frame, end_frame)
 
         current_frame = end_frame + 1
         report(

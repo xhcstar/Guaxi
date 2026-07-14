@@ -11,7 +11,19 @@
         <n-button size="small" :loading="studio.checkingBlender" @click="refreshBlender">
           检测环境
         </n-button>
-        <n-button size="small" @click="openPluginDirectory">插件目录</n-button>
+        <n-tooltip trigger="hover">
+          <template #trigger>
+            <n-button
+              size="small"
+              circle
+              aria-label="打开 Blender 插件目录"
+              @click="openPluginDirectory"
+            >
+              <template #icon><n-icon :component="ExtensionPuzzleOutline" /></template>
+            </n-button>
+          </template>
+          打开 Blender 插件目录
+        </n-tooltip>
       </div>
     </header>
 
@@ -167,14 +179,39 @@
             <n-form-item label="构建方式" size="small" label-placement="left" :show-feedback="false">
               <n-select v-model:value="builderMode" size="small" :options="builderOptions" />
             </n-form-item>
-            <n-button size="small" @click="openProjectDirectory">打开项目目录</n-button>
-            <n-button size="small" @click="openAssetDirectory">打开可编辑模型</n-button>
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <n-button
+                  size="small"
+                  circle
+                  aria-label="打开项目目录"
+                  @click="openProjectDirectory"
+                >
+                  <template #icon><n-icon :component="FolderOpenOutline" /></template>
+                </n-button>
+              </template>
+              打开项目目录
+            </n-tooltip>
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <n-button
+                  size="small"
+                  circle
+                  aria-label="打开可编辑模型目录"
+                  @click="openAssetDirectory"
+                >
+                  <template #icon><n-icon :component="CubeOutline" /></template>
+                </n-button>
+              </template>
+              打开可编辑模型目录
+            </n-tooltip>
             <n-button
               size="small"
               :disabled="!studio.canStartPreview"
               :loading="studio.startingPreview"
               @click="enableEditedAssets"
             >
+              <template #icon><n-icon :component="RefreshOutline" /></template>
               启用已修改模型
             </n-button>
             <n-button
@@ -376,8 +413,14 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import { openPath } from '@tauri-apps/plugin-opener'
+import {
+  CubeOutline,
+  ExtensionPuzzleOutline,
+  FolderOpenOutline,
+  RefreshOutline,
+} from '@vicons/ionicons5'
 import { useMessage } from 'naive-ui'
 import { useChatStore } from '../../../stores/chatStore'
 import { useAIFilmStudioStore } from '../../../stores/aiFilmStudioStore'
@@ -644,21 +687,43 @@ async function cancelJob() {
 }
 
 async function openPluginDirectory() {
-  const path = studio.blenderStatus.pluginDirectory
-  if (!path) return message.warning('尚未定位 Blender 插件目录')
-  try { await openPath(path) } catch (error) { message.error(String(error)) }
+  try {
+    const openedPath = await invoke('story_studio_open_managed_directory', { kind: 'plugin' })
+    logger.info('已请求打开 Blender 插件目录', { openedPath })
+  } catch (error) {
+    logger.error('打开 Blender 插件目录失败', { error: String(error) })
+    message.error(String(error))
+  }
 }
 
 async function openProjectDirectory() {
-  if (!studio.project?.projectDir) return
-  try { await openPath(studio.project.projectDir) } catch (error) { message.error(String(error)) }
+  const projectDir = studio.project?.projectDir
+  if (!projectDir) return message.warning('请先创建或打开影像项目')
+  try {
+    const openedPath = await invoke('story_studio_open_managed_directory', {
+      kind: 'project',
+      projectDir,
+    })
+    logger.info('已请求打开影像项目目录', { openedPath })
+  } catch (error) {
+    logger.error('打开影像项目目录失败', { projectDir, error: String(error) })
+    message.error(String(error))
+  }
 }
 
 async function openAssetDirectory() {
   const projectDir = studio.project?.projectDir
-  if (!projectDir) return
-  const separator = projectDir.includes('\\') ? '\\' : '/'
-  try { await openPath(`${projectDir}${separator}assets`) } catch (error) { message.error(String(error)) }
+  if (!projectDir) return message.warning('请先创建或打开影像项目')
+  try {
+    const openedPath = await invoke('story_studio_open_managed_directory', {
+      kind: 'assets',
+      projectDir,
+    })
+    logger.info('已请求打开可编辑模型目录', { openedPath })
+  } catch (error) {
+    logger.error('打开可编辑模型目录失败', { projectDir, error: String(error) })
+    message.error(String(error))
+  }
 }
 </script>
 

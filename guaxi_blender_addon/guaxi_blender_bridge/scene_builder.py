@@ -60,16 +60,24 @@ def _clear_scene() -> None:
 
 
 def _keyframe_visibility(obj: bpy.types.Object, start_frame: int, end_frame: int) -> None:
-    """用 hide_render 关键帧隔离场景，避免为每个分镜建立独立 .blend。"""
-    if start_frame > 1:
-        obj.hide_render = True
-        obj.keyframe_insert(data_path="hide_render", frame=start_frame - 1)
-    obj.hide_render = False
-    obj.keyframe_insert(data_path="hide_render", frame=start_frame)
-    obj.hide_render = False
-    obj.keyframe_insert(data_path="hide_render", frame=end_frame)
-    obj.hide_render = True
-    obj.keyframe_insert(data_path="hide_render", frame=end_frame + 1)
+    """用 hide_render 关键帧隔离场景，包括导入资产根节点下的全部子对象。
+
+    Blender 的 Empty ``hide_render`` 不会稳定地向所有导入格式的子网格继承，因此必须给
+    每个后代对象写关键帧；否则上一场景的 glTF/Blend 子网格会残留到后续镜头中。
+    """
+    stack = [obj]
+    while stack:
+        current = stack.pop()
+        stack.extend(list(current.children))
+        if start_frame > 1:
+            current.hide_render = True
+            current.keyframe_insert(data_path="hide_render", frame=start_frame - 1)
+        current.hide_render = False
+        current.keyframe_insert(data_path="hide_render", frame=start_frame)
+        current.hide_render = False
+        current.keyframe_insert(data_path="hide_render", frame=end_frame)
+        current.hide_render = True
+        current.keyframe_insert(data_path="hide_render", frame=end_frame + 1)
 
 
 def _create_actor_placeholder(
@@ -370,6 +378,11 @@ def build_story_asset_preview(
     resolver = load_resolver_from_env(project_path)
     build_plan = scene_director.compile_build_plan(story_ir, resolver)
 
+    # 先把程序化配方固化为独立 .blend，再计算最终哈希并落盘。这样资产文件从首次构建
+    # 起就进入确定性边界，用户也能立即在 Blender/Python 中继续修改。
+    build_executor.materialize_assets(build_plan, project_path, progress=progress)
+    scene_director.finalize_plan_hash(build_plan)
+
     # 冻结 Build Plan：一经写入即为确定性重放依据（§7.3）。
     plan_path = project_path / "story" / "build_plan.json"
     plan_path.parent.mkdir(parents=True, exist_ok=True)
@@ -378,11 +391,19 @@ def build_story_asset_preview(
 
     gap_count = len(build_plan.get("metadata", {}).get("assetGaps", []))
     local_count = sum(1 for a in build_plan.get("assets", []) if a.get("source") == "local")
+    editable_count = sum(1 for a in build_plan.get("assets", []) if a.get("editable"))
     report(
         8,
         "plan-frozen",
-        f"Build Plan 已冻结：真实资产 {local_count} 个，灰盒兜底 {gap_count} 个",
+        f"Build Plan 已冻结：本地资产 {local_count} 个，可编辑模型 {editable_count} 个，灰盒兜底 {gap_count} 个",
     )
+
+    # 面向用户的清单独立于执行计划，列出每个模型的编辑路径和启用方式。
+    try:
+        from .asset_resolver import write_project_asset_manifest
+    except ImportError:
+        from asset_resolver import write_project_asset_manifest  # type: ignore[no-redef]
+    manifest_path = write_project_asset_manifest(build_plan, project_path)
 
     # 写出合规工件（许可账本 / 模型使用 / AIGC 标识），供发布前检查（§22）。
     try:
@@ -399,6 +420,8 @@ def build_story_asset_preview(
         build_plan, project_path, render_animation=render_animation, progress=progress
     )
     outputs["buildPlanPath"] = str(plan_path)
+    outputs["assetManifestPath"] = str(manifest_path)
+    outputs["editableAssetCount"] = str(editable_count)
     outputs["assetGapCount"] = str(gap_count)
     return outputs
 

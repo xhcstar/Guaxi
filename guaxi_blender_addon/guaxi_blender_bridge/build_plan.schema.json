@@ -97,6 +97,20 @@
         },
         "importer": { "enum": ["gltf", "usd", "fbx", "blend", "obj", "none"] },
         "unitScale": { "type": "number", "exclusiveMinimum": 0, "default": 1.0 },
+        "contentHash": {
+          "type": "string",
+          "description": "模型文件 SHA-256；人工/Python 修改后必须重新冻结 Build Plan"
+        },
+        "editable": {
+          "type": "boolean",
+          "description": "是否属于项目内可直接修改并重新启用的模型文件"
+        },
+        "displayColor": { "$ref": "#/$defs/color4" },
+        "generation": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "无法完整生成时保留的可重建配方：provider、prompt、tags 与 recipeVersion"
+        },
         "provenance": {
           "type": "object",
           "additionalProperties": true,
@@ -224,6 +238,11 @@
         "shotType": { "enum": ["wide", "medium", "closeup", "aerial", "map", "insert"] },
         "movement": { "enum": ["static", "pan", "tilt", "dolly", "orbit", "tracking"] },
         "active": { "type": "boolean", "default": true },
+        "frameOffset": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "相机在所属场景内开始生效的相对帧，用于绑定 TimelineMarker.camera"
+        },
         "keyframes": {
           "type": "array",
           "items": { "$ref": "#/$defs/keyframe" }

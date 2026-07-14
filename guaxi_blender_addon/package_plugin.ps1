@@ -28,6 +28,7 @@ $RequiredFiles = @(
     "build_plan.schema.json",
     "platform_presets.json",
     "asset_resolver.py",
+    "procedural_asset_builder.py",
     "scene_director.py",
     "build_executor.py",
     "plan_validator.py",

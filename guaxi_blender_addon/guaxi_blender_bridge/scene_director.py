@@ -80,17 +80,73 @@ def _hints_for_location(entity: dict[str, Any] | None) -> list[str]:
     return [str(h) for h in hints if h]
 
 
+def _hints_for_prop(entity: dict[str, Any] | None) -> list[str]:
+    if not entity:
+        return []
+    hints: list[Any] = []
+    hints.extend(entity.get("assetHints", []) if isinstance(entity.get("assetHints"), list) else [])
+    for key in ("name", "description", "material", "era"):
+        if entity.get(key):
+            hints.append(entity[key])
+    return [str(h) for h in hints if h]
+
+
+def _normalized_requirement(value: Any) -> str:
+    return " ".join(str(value or "").strip().lower().replace("_", " ").replace("-", " ").split())
+
+
+def _requirement_matches(requirement: str, values: list[Any]) -> bool:
+    """宽松匹配镜头资产需求与 entity/assetPlan，兼容中英文自然语言。"""
+    normalized = _normalized_requirement(requirement)
+    if not normalized:
+        return False
+    for value in values:
+        candidate = _normalized_requirement(value)
+        if candidate and (candidate in normalized or normalized in candidate):
+            return True
+        tokens = {token for token in candidate.split() if len(token) >= 2}
+        if tokens and any(token in normalized for token in tokens):
+            return True
+    return False
+
+
 # 与 scene_builder 一致的默认舞台布局，保证降级观感稳定、机位可用。
-def _default_camera(scene_index: int) -> dict[str, Any]:
-    return {
-        "id": f"GUAXI_CAMERA_{scene_index + 1:03d}",
-        "location": [0.0, -13.5, 4.2],
+def _default_camera(scene_index: int, shot_index: int = 0, shot: dict[str, Any] | None = None) -> dict[str, Any]:
+    shot = shot or {}
+    shot_type = str(shot.get("shotType") or "wide").lower()
+    camera_presets = {
+        "wide": ([0.0, -13.5, 4.2], 42),
+        "medium": ([0.0, -8.0, 3.2], 52),
+        "closeup": ([0.0, -4.2, 2.45], 70),
+        "aerial": ([0.0, -3.5, 12.0], 38),
+        "map": ([0.0, 0.0, 15.0], 52),
+        "insert": ([0.0, -3.0, 1.6], 78),
+    }
+    location, lens = camera_presets.get(shot_type, camera_presets["wide"])
+    movement = str(shot.get("cameraMovement") or "static").lower()
+    if movement not in {"static", "pan", "tilt", "dolly", "orbit", "tracking"}:
+        movement = "static"
+    camera: dict[str, Any] = {
+        "id": f"GUAXI_CAMERA_{scene_index + 1:03d}_{shot_index + 1:03d}",
+        "location": list(location),
         "lookAt": [0.0, 0.3, 1.5],
-        "lens": 48,
-        "shotType": "wide",
-        "movement": "static",
+        "lens": lens,
+        "shotType": shot_type if shot_type in camera_presets else "wide",
+        "movement": movement,
         "active": True,
     }
+    duration_frames = max(1, int(shot.get("durationFrames") or 1))
+    if movement == "dolly":
+        camera["keyframes"] = [
+            {"frameOffset": 0, "location": list(location)},
+            {"frameOffset": duration_frames - 1, "location": [location[0], location[1] + 2.0, location[2]]},
+        ]
+    elif movement in {"tracking", "orbit"}:
+        camera["keyframes"] = [
+            {"frameOffset": 0, "location": [location[0] - 1.2, location[1], location[2]]},
+            {"frameOffset": duration_frames - 1, "location": [location[0] + 1.2, location[1], location[2]]},
+        ]
+    return camera
 
 
 def _default_key_light() -> dict[str, Any]:
@@ -117,6 +173,7 @@ def compile_build_plan(
     metadata_in = story_ir.get("metadata") if isinstance(story_ir.get("metadata"), dict) else {}
     fps = int(_safe_number(metadata_in.get("fps"), 24, 12, 60))
     entity_idx = _entity_index(story_ir)
+    asset_plan = [item for item in story_ir.get("assetPlan", []) if isinstance(item, dict)]
 
     assets: dict[str, dict[str, Any]] = {}  # assetRef.id -> assetRef，去重
     characters: dict[str, dict[str, Any]] = {}
@@ -136,7 +193,8 @@ def compile_build_plan(
         location_id = str(raw_scene.get("locationId") or "").strip()
         location_entity = entity_idx["locations"].get(location_id)
         env_ref = resolver.resolve(
-            asset_id=f"env_{scene_id}",
+            # 同一 locationId 跨场景复用同一模型文件；没有地点实体时才退回 scene ID。
+            asset_id=f"env_{_slug(location_id, scene_id)}",
             kind="environment",
             hints=_hints_for_location(location_entity),
             description=str((location_entity or {}).get("description") or raw_scene.get("summary") or ""),
@@ -201,6 +259,75 @@ def compile_build_plan(
                 }
             )
 
+        # -- 场景内的道具/物品 --
+        # Story IR 1.0 的 assetRequirements 是自然语言数组，不保证直接引用实体 ID；这里先
+        # 匹配 entities.props / assetPlan，仍未匹配的需求也会生成稳定 ID 并进入可编辑资产流程。
+        requirements: list[str] = []
+        explicit_prop_ids: list[str] = []
+        for shot in shots_in:
+            if not isinstance(shot, dict):
+                continue
+            raw_requirements = shot.get("assetRequirements") if isinstance(shot.get("assetRequirements"), list) else []
+            for value in raw_requirements:
+                text = str(value).strip()
+                if text and text not in requirements:
+                    requirements.append(text)
+            raw_props = shot.get("props") if isinstance(shot.get("props"), list) else []
+            for value in raw_props:
+                text = str(value).strip()
+                if text and text not in explicit_prop_ids:
+                    explicit_prop_ids.append(text)
+
+        prop_requests: list[tuple[str, list[str], str]] = []
+        used_request_ids: set[str] = set()
+        for prop_id, entity in entity_idx["props"].items():
+            values = [prop_id, entity.get("name"), entity.get("description"), *_hints_for_prop(entity)]
+            if prop_id in explicit_prop_ids or any(_requirement_matches(req, values) for req in requirements):
+                prop_requests.append((prop_id, _hints_for_prop(entity), str(entity.get("description") or entity.get("name") or prop_id)))
+                used_request_ids.add(prop_id)
+
+        for item in asset_plan:
+            item_type = str(item.get("type") or "").lower()
+            if item_type not in {"prop", "archive", "map"}:
+                continue
+            item_id = str(item.get("id") or "").strip()
+            tags = item.get("searchTags") if isinstance(item.get("searchTags"), list) else []
+            values = [item_id, item.get("description"), *tags]
+            if item_id and item_id not in used_request_ids and any(_requirement_matches(req, values) for req in requirements):
+                prop_requests.append((item_id, [str(v) for v in values if v], str(item.get("description") or item_id)))
+                used_request_ids.add(item_id)
+
+        for requirement in requirements:
+            if any(_requirement_matches(requirement, [item[0], *item[1], item[2]]) for item in prop_requests):
+                continue
+            requirement_id = f"prop_req_{_stable_hash(_normalized_requirement(requirement))[:12]}"
+            if requirement_id not in used_request_ids:
+                prop_requests.append((requirement_id, [requirement], requirement))
+                used_request_ids.add(requirement_id)
+
+        for prop_index, (prop_id, prop_hints, prop_description) in enumerate(prop_requests[:32]):
+            prop_slug = _slug(prop_id, str(prop_index))
+            kind = "map" if any(word in _normalized_requirement(prop_description) for word in ("map", "地图", "路线")) else "prop"
+            asset_ref = resolver.resolve(
+                asset_id=f"prop_{prop_slug}",
+                kind=kind,
+                hints=prop_hints,
+                description=prop_description,
+                color_index=prop_index + len(scene_actor_ids),
+            )
+            register_asset(asset_ref)
+            column = prop_index % 4
+            row = prop_index // 4
+            objects.append(
+                {
+                    "id": f"GUAXI_PROP_{prop_slug}_{scene_index + 1:03d}",
+                    "assetId": asset_ref["id"],
+                    "location": [(column - 1.5) * 1.7, 2.0 + row * 1.4, 0.0],
+                    "rotationEuler": [0.0, 0.0, 0.0],
+                    "scale": [1.0, 1.0, 1.0],
+                }
+            )
+
         # -- 镜头标记 --
         markers = [{"name": f"{scene_id} · {title}", "frameOffset": 0}]
         shot_frame_offset = 0
@@ -212,12 +339,27 @@ def compile_build_plan(
             shot_seconds = _safe_number(shot.get("durationSeconds"), 2.0, 0.25, 60.0)
             shot_frame_offset += max(1, round(shot_seconds * fps))
 
-        # -- 相机取自首个镜头语言（若有），否则默认机位 --
-        camera = _default_camera(scene_index)
-        first_shot = next((s for s in shots_in if isinstance(s, dict)), None)
-        if first_shot is not None:
-            camera["shotType"] = str(first_shot.get("shotType") or camera["shotType"])
-            camera["movement"] = str(first_shot.get("cameraMovement") or camera["movement"])
+        # -- 每个镜头独立相机 --
+        cameras: list[dict[str, Any]] = []
+        camera_frame_offset = 0
+        for shot_index, shot in enumerate(shots_in):
+            if not isinstance(shot, dict):
+                continue
+            shot_seconds = _safe_number(shot.get("durationSeconds"), 2.0, 0.25, 60.0)
+            shot_frames = max(1, round(shot_seconds * fps))
+            camera = _default_camera(
+                scene_index,
+                shot_index,
+                {**shot, "durationFrames": shot_frames},
+            )
+            camera["frameOffset"] = camera_frame_offset
+            # 相机关键帧原本相对镜头起点；执行器以场景起点解释，因此需要加镜头偏移。
+            for keyframe in camera.get("keyframes", []):
+                keyframe["frameOffset"] = int(keyframe.get("frameOffset", 0)) + camera_frame_offset
+            cameras.append(camera)
+            camera_frame_offset += shot_frames
+        if not cameras:
+            cameras = [_default_camera(scene_index)]
 
         scenes_out.append(
             {
@@ -226,7 +368,7 @@ def compile_build_plan(
                 "durationSeconds": duration,
                 "environment": environment,
                 "objects": objects,
-                "cameras": [camera],
+                "cameras": cameras,
                 "lights": [_default_key_light()],
                 "markers": markers,
             }
@@ -252,8 +394,15 @@ def compile_build_plan(
     if resolver.gaps:
         plan["metadata"]["assetGaps"] = resolver.gaps
 
-    # planHash 最后计算，且排除自身，保证同输入同哈希。
-    plan["metadata"]["planHash"] = _stable_hash(
+    finalize_plan_hash(plan)
+    return plan
+
+
+def finalize_plan_hash(plan: dict[str, Any]) -> str:
+    """在模型文件已物化并写入 contentHash 后重新冻结 planHash。"""
+    metadata = plan.setdefault("metadata", {})
+    fps = int(_safe_number(metadata.get("fps"), 24, 12, 60))
+    metadata["planHash"] = _stable_hash(
         {k: v for k, v in plan.items() if k != "metadata"} | {"_meta": {"fps": fps}}
     )
-    return plan
+    return str(metadata["planHash"])

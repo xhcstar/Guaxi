@@ -2,11 +2,11 @@
 
 本文档说明如何安装 Blender 5.2、安装 Guaxi Blender Bridge 插件，并从一篇 Markdown 文稿开始生成 Story IR、Blender 预演工程和 MP4 视频。
 
-> 当前版本定位：已经可以完成“Markdown → Story IR → 低模场景预演 → `.blend`/MP4”。
+> 当前版本定位：已经可以完成“Markdown → Story IR → 可编辑模型资产 → Blender 场景/分镜相机 → `.blend`/PNG 序列/MP4”。
 >
-> **重要说明（为什么现在渲染出的是立方体）：** 当前 M0 预演器 `scene_builder.py` 只生成彩色立方体占位符与背景板，不会导入任何真实模型，也没有接入媒体生成。因此现在的产物是**动态分镜（animatic）**，用来验证故事结构、节奏与机位，**不是电影级成片**。
+> **重要说明：** 默认 `assets` 模式不再因资产库为空而只生成立方体。未命中的人物、环境、道具和地图会被物化为项目内独立、分件的可编辑 `.blend`；这些基础模型可以继续在 Blender 或 Python 中精修。它们不是“任意物体电影级精模”，在线资产库和文/图生 3D 仍在后续里程碑。
 >
-> 要让画面变成文稿描述的真实场景与模型，需要新增的 **Asset Resolver（资产解析）+ AI Scene Director（AI 自主布景）+ ComfyUI/云端图像视频生成** 三层能力，属于 M1.5/M2 里程碑。详细升级方案见 [全流程架构与实施计划](./ai-film-studio-plan.md) 的 §0、§3.1、§7.1、§7.2、§12。
+> 最终路线是 **AI 辅助决策 + Blender 原生建模/布景/动画/渲染**。ComfyUI/云视频是可选增强，不是默认成片终点。详细路线见 [全流程架构与实施计划](./ai-film-studio-plan.md)。
 
 ---
 
@@ -23,7 +23,7 @@
 - 手工编辑 Story IR JSON。
 - 创建标准影像项目目录。
 - 检测并调用 Blender 5.2.x。
-- 后台构建 `.blend`，或生成简单 MP4 预演。
+- 后台生成并复用独立可编辑模型，构建 `.blend`，或生成 MP4 预演。
 - 取消正在执行的 Blender 后台任务。
 - 通过本地 Bridge 把 Story IR 发送到已经打开的 Blender。
 
@@ -48,13 +48,41 @@
 - 人物在场关系和大致运动方向。
 - Blender、渲染编码和项目落盘流程是否正常。
 
-默认执行器现在会先经 **Asset Resolver** 尝试用真实模型替换立方体：命中本地资产库的角色/环境/道具以真实模型出现，未命中项才降级为彩色立方体占位，并记入 Build Plan 的 `assetGaps`。因此"是否还是立方体"取决于你是否配置了资产库（见 §1.4）。它仍可在投入完整渲染成本前验证故事结构。
+默认执行器先经 **Asset Resolver** 复用项目修改模型或本地资产；仍未命中时生成 `assets/generated/*.blend`。常见人物、室内/森林环境、桌椅、树木、刀剑、车辆、器皿和地图使用专用配方，未知物体生成多部件可编辑代理，不再只生成单一立方体。
 
-> 升级路线：Asset Resolver 逐级降级（本地资产库 → PolyHaven/Sketchfab → 文/图生 3D → 程序化 → 立方体兜底）；后续由 **AI Scene Director** 自动布景、打光、定机位；写实画面再由 **ComfyUI/云端图像视频 API** 以 3D 场景为约束生成。见设计文档 §3.1、§7.1、§7.2、§7.3。
+> 升级路线：项目修改模型 → 本地/在线开源资产 → 可选文/图生 3D → 可编辑程序化 `.blend` → 文件物化失败时才灰盒。后续由 AI Scene Director 辅助布景，最终仍由 Blender 渲染。
 
-### 1.4 让画面出现真实模型（配置本地资产库）
+### 1.4 生成、编辑并重新启用模型
 
-默认执行器走 `assets` 模式：解析真实资产 → 冻结确定性 Build Plan（`story/build_plan.json`）→ 渲染。要让立方体变成真实模型，配置一个本地资产库即可：
+默认执行器走 `assets` 模式：解析已有资产 → 为缺失项生成可编辑模型 → 冻结确定性 Build Plan（`story/build_plan.json`）→ Blender 渲染。首次构建后查看：
+
+- `assets/generated/*.blend`：每个缺失资产的独立模型文件。
+- `assets/generated/*.asset.json`：原始需求、标签和生成配方。
+- `assets/asset_manifest.json`：模型路径、来源、状态、是否可编辑和内容哈希。
+
+修改流程：
+
+1. 点击“打开可编辑模型”，按 `asset_manifest.json` 找到目标 `.blend`。
+2. 用 Blender 打开该文件，或用 Blender Python 修改具名部件并保存原文件。
+3. 回到 Guaxi 点击“启用已修改模型”。系统重新扫描文件、计算 SHA-256、冻结新 Build Plan 并重建工程。
+4. 再使用 `replay` 渲染；如果模型在冻结后又被修改，旧 replay 会明确拒绝，避免同一计划静默产生不同结果。
+
+也可以指定任意替换模型。把模型放进项目 `assets/overrides/`，再创建 `assets/asset_overrides.json`：
+
+```json
+{
+  "assets": {
+    "char_char_hero": {
+      "enabled": true,
+      "path": "overrides/hero-final.glb"
+    }
+  }
+}
+```
+
+覆盖路径必须位于当前项目 `assets/` 内，支持 `.blend/.glb/.gltf/.usd/.fbx/.obj`。
+
+如需复用现成模型，还可以配置公共本地资产库：
 
 1. 准备一个资产根目录，例如 `D:\GuaxiAssets`，放入 `.glb/.gltf/.usd/.fbx/.blend/.obj` 模型。
 2. 在根目录建 `guaxi_asset_index.json`，为每个模型登记标签、类型与许可：
@@ -84,7 +112,7 @@
 ```
 
 3. 设置环境变量 `GUAXI_ASSET_LIBRARY=D:\GuaxiAssets`（不设置时默认用项目内 `assets/` 目录）。
-4. 重新点击"生成 MP4 预演"。标签命中 Story IR 的 `assetHints/name/description` 的资产会以真实模型出现；其余仍是立方体并列入 `assetGaps`。
+4. 重新点击“生成 MP4 预演”。标签命中的模型会优先使用；其余项目仍会获得独立可编辑 `.blend`。
 
 确定性说明：同一 `build_plan.json` 重复渲染逐帧一致。想跳过资产解析直接重渲染，用 `replay` 模式（重放已冻结的 Build Plan）；想回到纯立方体对照，用 `greybox` 模式。
 
@@ -1327,25 +1355,26 @@ Guaxi 输出目录：D:\FilmProjects
 
 Markdown 和 Story IR 都使用 UTF-8。Blender 自带字体可能不包含全部中文字形，因此当前预演主要把中文标题保存在对象名称和时间线标记中。正式字幕和画面文字应指定包含中文的授权字体。
 
-### 16.12 视频只是方块和背景板
+### 16.12 视频仍然只是方块和背景板
 
-**首先确认是否配置了本地资产库（§1.4）。** 默认 `assets` 模式会用真实模型替换立方体，但前提是资产库里有标签匹配的模型；没有配置库、或标签没命中时，才会降级为立方体并写入 `assetGaps`。因此"全是方块"通常意味着资产库为空或标签不匹配，而不是渲染错误。
+先确认构建方式不是“立方体预演（对照）”。默认 `assets` 模式即使没有公共资产库，也应生成项目内独立可编辑模型；全是方块通常表示仍在使用旧插件包/旧 Build Plan，或模型物化失败。
 
 排查：
 
-1. 是否设置了 `GUAXI_ASSET_LIBRARY` 且目录含 `guaxi_asset_index.json`。
-2. 索引里的 `path` 文件是否真实存在、扩展名是否受支持。
-3. `tags` 是否与 Story IR 中该角色/地点的 `name/assetHints/description` 有重合词。
-4. 查看 `story/build_plan.json` 的 `metadata.assetGaps`，确认哪些资产未命中。
+1. 构建方式是否为“真实资产 + Build Plan”，而不是 `greybox`。
+2. 项目 `assets/generated/` 是否出现独立 `.blend`。
+3. `assets/asset_manifest.json` 中对应项是 `ready` 还是 `pending-generation`。
+4. 查看任务日志中的 `[GuaxiProceduralAsset]` / `[GuaxiAssetResolver]` 错误。
+5. 修改过模型时，先点击“启用已修改模型”，不要直接重放旧 Build Plan。
 
 要得到更完整的电影级画面，还需要以下正在规划的升级（详见设计文档 §0/§3.1/§7.1/§7.2/§7.3/§12）：
 
-- **Asset Resolver 资产解析层：** 本地资产库 → PolyHaven/Sketchfab → 文/图生 3D（Hyper3D/Hunyuan3D/Tripo）→ 程序化 → 立方体兜底，真正把 `assetHints/assetPlan` 变成场景里的真实模型。
+- **Asset Resolver 后续来源：** 继续接 Poly Haven/BlenderKit 与文/图生 3D（如 Hunyuan3D）；输出统一缓存为可编辑模型文件。
 - **AI Scene Director：** AI agent 通过 MCP/Bridge 自主导入资产、布景、打光、定机位、加动画，并读 viewport 截图自检迭代（把体力活交给 AI，参考 blender-mcp）。
 - **ComfyUI + 云端图像/视频生成：** 用 3D 场景导出的 depth/pose 作 ControlNet 约束，生成电影级写实画面并落入 VSE strip。
 - 动作、口型、配音与 VSE Master Timeline。
 
-在这些能力落地前，请把当前输出当作"动态分镜预演"使用；升级完成后，立方体将被真实资产替换，缺失资产才继续用立方体占位并明确标记。
+当前程序化结果是可编辑基础模型；要达到电影级精模，仍需命中高质量资产、接入文/图生 3D，或由用户在生成的 `.blend` 上继续精修。
 
 ---
 

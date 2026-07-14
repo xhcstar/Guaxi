@@ -245,6 +245,7 @@ async fn main() {
             commands::story_studio::story_studio_get_blender_status,
             commands::story_studio::story_studio_create_project,
             commands::story_studio::story_studio_open_project,
+            commands::story_studio::story_studio_open_managed_directory,
             commands::story_studio::story_studio_get_media_tools_status,
             commands::story_studio::story_studio_start_preview,
             commands::story_studio::story_studio_cancel_job,

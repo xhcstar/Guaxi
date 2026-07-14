@@ -11,19 +11,20 @@
 | Markdown → Story IR 编译 | ✅ 已落地 | 复用现有 modelid |
 | Story IR/Build Plan 校验 | ✅ 已落地 | Rust + Python 双侧，坏计划执行前拦截 |
 | 确定性 Build Plan 冻结 + 重放 | ✅ 已落地 | `scene_director` + `build_executor`，含 planHash |
-| Asset Resolver L1 本地库 + L5 灰盒 | ✅ 已落地 | 标签匹配真实模型，未命中兜底 |
-| 真实资产导入（glTF/USD/FBX/OBJ/blend） | ✅ 已落地 | 需实机 Blender 5.2 验证导入算子命名 |
+| Asset Resolver L1 本地库 + L4 可编辑程序化模型 | ✅ 已落地 | 未命中时生成独立 `.blend`，不再只留场景内立方体 |
+| 模型编辑 → 哈希检测 → 重新启用 | ✅ 已落地 | `assets/asset_manifest.json` + “启用已修改模型” |
+| 真实资产导入（glTF/USD/FBX/OBJ/blend） | ✅ 已落地 | `.blend` 资产已通过 Blender 5.2 RC 实机构建与渲染 |
 | 合规工件（许可账本/模型使用/AIGC 标识） | ✅ 已落地 | 发布前必需 |
 | 每任务 JSONL 日志 | ✅ 已落地 | `logs/<job-id>.jsonl` |
 | 平台发布预设 | ✅ 数据已备 | 编码/导出层待接线 |
 | 路径持久化 / 窗口尺寸 / 代理 502 / 打包脚本 | ✅ 已修复 | 见使用手册 |
 | Asset Resolver L2 在线库（PolyHaven/Sketchfab） | 🚧 扩展点 | 接口已留，需接 API + 下载缓存 |
-| Asset Resolver L3 文/图生 3D | 🚧 扩展点 | 需 GPU 或云 API |
+| Asset Resolver L3 文/图生 3D | 🚧 扩展点 | 接 Hunyuan3D 等服务；输出仍缓存为可编辑模型文件 |
 | 媒体生成后端（ComfyUI/云图像视频） | 🚧 规划 | 需 GPU/API 与队列实现 |
 | AI Scene Director 截图自检循环 | 🚧 规划 | 需多模态回读 + 迭代 |
 | 声音/配音/口型、后期调色、多画幅重构图 | 🚧 规划 | 见 §17–§21 |
 
-> 说明：标 ✅ 的代码在本仓库中，但作者环境无法运行 Blender/cargo，**首次实机构建与渲染需按真实 API 微调**（尤其资产导入算子）。标 🚧 的部分依赖 GPU、外部 API 或大量新代码，属后续里程碑。
+> 说明：可编辑 `.blend` 生成、再次导入、48 帧 Eevee 渲染、分镜相机切换、资产修改哈希失效与重新启用，已在 Blender 5.2.0 LTS RC 实机验证。其他导入格式仍需用实际资产分别回归。标 🚧 的部分依赖 GPU、外部 API 或大量新代码，属后续里程碑。
 
 ## 0. 修订说明（2026-07 架构升级）
 
@@ -42,9 +43,10 @@
 
 按用户诉求（一人工作室、把建模布景等体力活交给 AI、云端图像/视频 API + 本地 ComfyUI），架构升级为：
 
-- **主路线改为"混合：3D 布局 + AI 出画面"。** 灰盒构建器从"最终产物"降级为"blockout 兜底占位"。
+- **主路线改为“AI 辅助 + Blender 原生 3D 成片”。** AI 负责理解文稿、提出资产需求和布景决策；模型文件、场景、动画、灯光、相机与最终像素均由 Blender 管理和渲染。ComfyUI/云视频只作为可选增强，不是默认终点。
 - **新增 AI 场景导演（AI Scene Director）层。** 在 Story IR 与 Blender 之间插入一个 agent 循环，逐镜头自主驱动 Blender：导入真实资产、布景、打光、定机位、加动画，并读取 viewport 截图自检迭代。参考 [ahujasid/blender-mcp](https://github.com/ahujasid/blender-mcp) 的双向 socket + 资产集成模式。
 - **新增 Asset Resolver（资产解析层）。** 真正消费 `assetHints/assetPlan`，逐级降级获取真实模型。
+- **新增可编辑资产底线。** 外部库/AI 未命中时也生成独立、分件的 `.blend`；用户可在 Blender 或 Python 中继续修改，再显式启用到新的 Build Plan。
 - **接入媒体生成后端。** 本地 ComfyUI + 云端图像/视频 API，用 3D 场景导出的 depth/pose 作 ControlNet 约束生成电影级画面。
 - **修订安全模型。** 原"禁止执行任何 AI 生成 Python"与"AI 自主建模"冲突，改为分层执行模型（见 §10）。
 
@@ -137,8 +139,8 @@ for each shot in Story IR:
      本地资产库命中 → 直接导入
      未命中 → PolyHaven / Sketchfab 搜索下载
      仍未命中 → 文/图生 3D（Hyper3D Rodin / Hunyuan3D / Tripo）
-     仍不可行 → 程序化（Geometry Nodes 模板）
-     全部失败 → 灰盒占位并写入 assetGaps
+     仍不可行 → 程序化生成独立可编辑 .blend（人物/环境/道具/地图）
+     文件物化失败 → 最后才灰盒占位并写入 assetGaps
   2. AI Scene Director（agent）布景：摆放资产、定相机、打光、加动画、
      设置世界/雾/景深，参照 shot.description / cameraMovement / visualStyle。
   3. Director 渲染 viewport 截图 → 多模态自检"画面是否符合镜头描述" →
@@ -151,7 +153,7 @@ for each shot in Story IR:
 
 关键点：
 
-- **AI 只做布景决策，不重新发明像素。** 真实模型来自资产库/文生3D，AI 负责"用哪个资产、放哪、怎么打光、机位怎么走"。
+- **AI 只做资产/布景决策，不接管最终像素。** 模型来自资产库、程序化配方或可选文生 3D；AI 负责“需要什么、用哪个、放哪、怎么打光、机位怎么走”，最后由 Blender 渲染。
 - **确定性兜底始终存在。** 任一环节失败都能退回灰盒，保证"至少能出 animatic"，不会整片失败。
 - **两条出画路线可切换。** 纯 3D 渲染（Eevee/Cycles）或 3D 约束 + AI 生成，由制作模式决定。
 
@@ -197,7 +199,7 @@ Guaxi 在其基础上强化：
 - 允许列表操作，不执行 Python/Shell/表达式。
 - Story IR 低模预演：场景时长、时间线标记、人物占位、简单动作、相机、灯光、Eevee 和 MP4。
 
-> 已知局限（本次修订要解决的核心）：预演构建器 `scene_builder.py` 仅生成彩色立方体占位符与背景板，不消费 `assetHints/assetPlan`，不导入任何真实模型，也没有媒体生成后端。因此当前产物只能是"动态分镜"，不是电影级画面。升级路线见 §0、§3.1、§7.1、§7.2。
+> 当前边界：默认 assets 路径已消费人物、地点、`assetRequirements`、`assetPlan` 道具，并为未命中项生成独立可编辑 `.blend`；镜头相机按 Timeline Marker 切换。程序化模型属于可继续精修的基础模型，不等同于任意物体的电影级精模。L2 在线资产和 L3 文/图生 3D 仍待接入，升级路线见 §7.1、§7.2。
 
 ## 5. Story IR 设计
 
@@ -333,7 +335,7 @@ Provider 接口至少声明：
 | L1 本地资产库 | Blender Asset Browser、项目 `assets/`、用户资产根 | 语义标签匹配 `assetHints/searchTags`；优先，可离线、可复用、许可清晰 |
 | L2 在线资产库 | PolyHaven（HDRI/贴图/模型）、Sketchfab（CC 模型） | 按标签搜索、下载、缓存到项目 `assets/`；记录作者与许可证 |
 | L3 文/图生 3D | Hyper3D Rodin、Tencent Hunyuan3D、Tripo 等 | 用 `description/appearance` 生成网格；适合库中没有的特定角色/道具 |
-| L4 程序化 | Geometry Nodes 模板库 | 地形、建筑体块、道路、河流、群体摆放等规则化几何 |
+| L4 程序化 | Blender 受控配方 / 后续 Geometry Nodes 模板库 | 已能生成并保存分件式人物、环境和常见道具；后续扩展地形、建筑、道路等模板 |
 | L5 灰盒兜底 | 现有 `scene_builder` 占位 | 前四级都失败时占位，并写入 `assetGaps`，绝不让整片失败 |
 
 Resolver 契约：
@@ -342,6 +344,8 @@ Resolver 契约：
 - 输出：可导入 Blender 的资产句柄（glTF/USD/FBX/blend 路径或库引用）+ 归一化单位/朝向 + provenance（来源、作者、许可证、下载时间、生成模型与 seed）。
 - 缓存：同一 `assetHints` 命中的资产写入 `assets/` 并在项目内建立"实体 ID → 资产"映射，跨镜头稳定复用，避免同一角色每个镜头长得不一样。
 - 许可闸门：L2/L3 结果必须带许可证记录才能进入发布交付；无许可只能用于内部预演。
+- 可编辑闭环：项目生成模型写入 `assets/generated/*.blend`，旁边保留 `.asset.json` 配方，汇总清单写入 `assets/asset_manifest.json`。
+- 修改启用：用户可直接编辑生成模型，或用 `assets/asset_overrides.json`/`assets/overrides/` 指定替换文件；点击“启用已修改模型”后重新计算 SHA-256 并冻结新计划。
 
 ### 7.2 AI Scene Director（AI 场景导演，新增核心）
 
