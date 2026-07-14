@@ -2,9 +2,7 @@
   <div class="film-studio">
     <header class="studio-header">
       <div>
-        <div class="eyebrow">GUAXI STORY PIPELINE · BLENDER 5.2 LTS</div>
         <h1>AI 影像工坊</h1>
-        <p>从 Markdown、史料、地理数据或小说出发，编译分镜并交给 Blender 制作预演。</p>
       </div>
       <div class="header-actions">
         <n-tag :type="studio.blenderStatus.compatible ? 'success' : 'warning'" round>
@@ -170,6 +168,15 @@
               <n-select v-model:value="builderMode" size="small" :options="builderOptions" />
             </n-form-item>
             <n-button size="small" @click="openProjectDirectory">打开项目目录</n-button>
+            <n-button size="small" @click="openAssetDirectory">打开可编辑模型</n-button>
+            <n-button
+              size="small"
+              :disabled="!studio.canStartPreview"
+              :loading="studio.startingPreview"
+              @click="enableEditedAssets"
+            >
+              启用已修改模型
+            </n-button>
             <n-button
               size="small"
               type="primary"
@@ -390,7 +397,7 @@ const builderOptions = [
   { label: '重放冻结计划', value: 'replay' },
 ]
 const builderHint = computed(() => ({
-  assets: '解析真实资产并冻结确定性 Build Plan；缺资产的项降级为立方体',
+  assets: '解析现有模型；未命中时生成独立可编辑 .blend，再冻结确定性 Build Plan',
   greybox: '旧版纯立方体预演，仅验证结构与节奏',
   replay: '重放 story/build_plan.json，确定性重渲染，不再解析或调用模型',
 }[builderMode.value] || ''))
@@ -619,6 +626,19 @@ async function startPreview(renderAnimation) {
   }
 }
 
+async function enableEditedAssets() {
+  try {
+    // 显式走 assets 而不沿用下拉框：重新扫描 generated/overrides，计算新内容哈希，
+    // 冻结新 Build Plan 后才允许后续 replay，避免模型修改被静默忽略。
+    builderMode.value = 'assets'
+    await studio.startPreview(false, 'assets')
+    activeTab.value = 'logs'
+    message.success('正在重新解析并启用修改后的模型')
+  } catch (error) {
+    message.error(String(error))
+  }
+}
+
 async function cancelJob() {
   try { await studio.cancelJob() } catch (error) { message.error(String(error)) }
 }
@@ -632,6 +652,13 @@ async function openPluginDirectory() {
 async function openProjectDirectory() {
   if (!studio.project?.projectDir) return
   try { await openPath(studio.project.projectDir) } catch (error) { message.error(String(error)) }
+}
+
+async function openAssetDirectory() {
+  const projectDir = studio.project?.projectDir
+  if (!projectDir) return
+  const separator = projectDir.includes('\\') ? '\\' : '/'
+  try { await openPath(`${projectDir}${separator}assets`) } catch (error) { message.error(String(error)) }
 }
 </script>
 
@@ -648,8 +675,8 @@ async function openProjectDirectory() {
 }
 
 .studio-header {
-  min-height: 88px;
-  padding: 16px 22px;
+  min-height: 20px;
+  padding: 4px 22px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -660,7 +687,6 @@ async function openProjectDirectory() {
 
 .studio-header h1 { margin: 2px 0; font-size: 24px; letter-spacing: -0.02em; }
 .studio-header p { margin: 0; color: var(--guaxi-text-secondary); font-size: 12px; }
-.eyebrow { color: #6f87ff; font-size: 10px; letter-spacing: 0.16em; font-weight: 700; }
 .header-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 
 .studio-layout {
@@ -682,20 +708,20 @@ async function openProjectDirectory() {
 .panel-section { padding: 14px; margin-bottom: 12px; border: 1px solid var(--guaxi-border); border-radius: 14px; background: var(--guaxi-content-bg); }
 .section-heading { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; }
 .section-heading h2 { font-size: 14px; margin: 0; }
-.section-heading small { font-size: 10px; color: var(--guaxi-text-secondary); }
-.step-number { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: rgba(102,126,234,.14); color: #7187fb; font-size: 11px; font-weight: 700; }
+.section-heading small { font-size: 12px; color: var(--guaxi-text-secondary); }
+.step-number { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: rgba(102,126,234,.14); color: #7187fb; font-size: 12px; font-weight: 700; }
 .button-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
 .path-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; margin: 8px 0; }
 .path-card { display: flex; flex-direction: column; gap: 3px; padding: 9px; margin-bottom: 9px; border-radius: 9px; background: var(--guaxi-header-bg); border: 1px solid var(--guaxi-border); }
 .path-card strong { font-size: 12px; }
-.path-card span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--guaxi-text-secondary); font-size: 10px; }
-.path-card small { font-size: 9px; opacity: .7; }
+.path-card span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--guaxi-text-secondary); font-size: 12px; }
+.path-card small { font-size: 12px; opacity: .7; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .form-grid :deep(.n-input-number) { width: 100%; }
 .panel-section :deep(.n-form-item) { margin-bottom: 8px; }
-.compact-alert { margin: 8px 0; font-size: 10px; }
+.compact-alert { margin: 8px 0; font-size: 12px; }
 .bridge-box { padding: 9px; margin: 8px 0; border-radius: 9px; border: 1px solid var(--guaxi-border); background: var(--guaxi-header-bg); }
-.bridge-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; font-size: 11px; font-weight: 600; }
+.bridge-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; font-size: 12px; font-weight: 600; }
 .bridge-fields { display: grid; grid-template-columns: 82px minmax(0, 1fr) auto; gap: 5px; margin-bottom: 6px; }
 .bridge-fields :deep(.n-input-number) { width: 100%; }
 .project-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
@@ -731,31 +757,31 @@ async function openProjectDirectory() {
 .shot-list { display: flex; flex-direction: column; gap: 6px; }
 .shot-row { display: grid; grid-template-columns: 24px 1fr auto; gap: 10px; padding: 9px; align-items: start; border-radius: 9px; background: var(--guaxi-content-bg); }
 .shot-number { width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center; background: rgba(102,126,234,.13); font-size: 10px; }
-.shot-row strong { font-size: 11px; text-transform: uppercase; }
-.shot-row p { margin: 2px 0; font-size: 11px; }
-.shot-row small { color: var(--guaxi-text-secondary); font-size: 10px; }
+.shot-row strong { font-size: 12px; text-transform: uppercase; }
+.shot-row p { margin: 2px 0; font-size: 12px; }
+.shot-row small { color: var(--guaxi-text-secondary); font-size: 12px; }
 
 .pipeline-board { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .pipeline-stage { display: grid; grid-template-columns: 40px 1fr; gap: 12px; padding: 14px; border-radius: 13px; background: var(--guaxi-panel-bg); border: 1px solid var(--guaxi-border); }
 .stage-index { color: #758aff; font: 700 18px/1 monospace; }
 .pipeline-stage h3 { margin: 0; font-size: 13px; }
-.pipeline-stage p { color: var(--guaxi-text-secondary); font-size: 11px; line-height: 1.55; }
+.pipeline-stage p { color: var(--guaxi-text-secondary); font-size: 12px; line-height: 1.55; }
 .stage-tags { display: flex; gap: 4px; flex-wrap: wrap; }
 
 .inspector-panel section { margin-bottom: 22px; }
-.inspector-title { margin-bottom: 9px; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--guaxi-text-secondary); }
+.inspector-title { margin-bottom: 9px; font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--guaxi-text-secondary); }
 .principle-card { padding: 12px; margin-bottom: 8px; border-radius: 11px; border: 1px solid var(--guaxi-border); background: var(--guaxi-content-bg); }
 .principle-card.accent { border-color: rgba(102,126,234,.4); background: rgba(102,126,234,.08); }
-.principle-card strong { font-size: 11px; }
-.principle-card p { margin: 5px 0 0; color: var(--guaxi-text-secondary); font-size: 10px; line-height: 1.55; }
-.check-list { margin: 0; padding-left: 18px; color: var(--guaxi-text-secondary); font-size: 10px; line-height: 1.75; }
+.principle-card strong { font-size: 12px; }
+.principle-card p { margin: 5px 0 0; color: var(--guaxi-text-secondary); font-size: 12px; line-height: 1.55; }
+.check-list { margin: 0; padding-left: 18px; color: var(--guaxi-text-secondary); font-size: 12px; line-height: 1.75; }
 .project-facts { margin: 0; }
-.project-facts div { display: grid; grid-template-columns: 68px 1fr; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--guaxi-border); font-size: 10px; }
+.project-facts div { display: grid; grid-template-columns: 68px 1fr; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--guaxi-border); font-size: 12px; }
 .project-facts dt { color: var(--guaxi-text-secondary); }
 .project-facts dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
 
 .log-list { display: flex; flex-direction: column; gap: 6px; }
-.log-row { display: grid; grid-template-columns: 72px 54px 1fr; gap: 8px; padding: 9px; border-radius: 8px; background: var(--guaxi-panel-bg); border-left: 3px solid #7891ff; font-size: 10px; }
+.log-row { display: grid; grid-template-columns: 72px 54px 1fr; gap: 8px; padding: 9px; border-radius: 8px; background: var(--guaxi-panel-bg); border-left: 3px solid #7891ff; font-size: 12px; }
 .log-row.is-error { border-left-color: #e25757; }
 .log-row.is-warn { border-left-color: #d5a139; }
 .log-row span, .log-row small { color: var(--guaxi-text-secondary); }
