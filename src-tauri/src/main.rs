@@ -750,7 +750,7 @@ async fn main() {
                 use tauri_plugin_global_shortcut::ShortcutState;
 
                 let plugin = tauri_plugin_global_shortcut::Builder::new()
-                    .with_shortcuts(["ctrl+alt+z", "ctrl+alt+a"])
+                    .with_shortcuts(["ctrl+alt+z", "ctrl+alt+x"])
                     .map(|builder| {
                         builder
                             .with_handler(|_app, shortcut, event| {
@@ -771,7 +771,7 @@ async fn main() {
                                     return;
                                 }
 
-                                if shortcut_text == "ctrl+alt+a" {
+                                if shortcut_text == "ctrl+alt+x" {
                                     if let Some(window) = _app.get_webview_window("main") {
                                         if let Err(e) = window.show() {
                                             error!("显示主窗口失败: {}", e);
