@@ -1789,40 +1789,74 @@ const fetchDirChildren = async (dirPath, orgOnly = false) => {
   return nodes
 }
 
-// 刷新指定模式下某目录的子树
+// 合并刷新某目录的直接子项：保留仍存在目录节点上已懒加载的 children，避免
+// 整树替换把展开态打回默认（与 kb 模式 refreshDirectory 的复用策略一致）。
+// - prevChildren: 旧的直接子项数组（可能含已加载 children 的目录节点）
+// - freshChildren: 重新拉取的直接子项（目录 children 为空，需懒加载）
+// 返回合并后的新数组：逐项复用旧目录节点（含其 children），仅更新顶层条目。
+const mergeDirChildren = (prevChildren, freshChildren) => {
+  const prevList = Array.isArray(prevChildren) ? prevChildren : []
+  const prevById = new Map()
+  for (const n of prevList) {
+    const k = normalizePath(n?.id)
+    if (k) prevById.set(k, n)
+  }
+  return freshChildren.map((fresh) => {
+    const prev = prevById.get(normalizePath(fresh.id))
+    if (!prev) return fresh
+    // 目录节点：保留旧 children（已懒加载的子树），仅刷新自身存在性；
+    // 文件节点没有 children，直接复用旧引用以避免编辑态/选中态丢失。
+    const next = { ...prev, ...fresh }
+    if (prev.is_directory && Array.isArray(prev.children)) {
+      next.children = prev.children
+    }
+    return next
+  })
+}
+
+// 刷新指定模式下某目录的子树（合并式，保留展开态与已加载子树）
 const refreshModeDir = async (mode, dirPath) => {
   const target = normalizePath(dirPath)
   if (mode === 'plain') {
     const root = normalizePath(externalDir.value)
+    if (!root) return
     if (!target || target === root) {
-      externalDirTree.value = await fetchDirChildren(root)
+      // 根目录：合并刷新顶层，保留已展开子目录的懒加载 children
+      const fresh = await fetchDirChildren(root)
+      externalDirTree.value = mergeDirChildren(externalDirTree.value, fresh)
       return
     }
     const node = findNodeById(externalDirTree.value, target)
     if (node) {
-      node.children = await fetchDirChildren(target)
+      const fresh = await fetchDirChildren(target)
+      node.children = mergeDirChildren(node.children, fresh)
       if (!externalExpandedKeys.value.includes(target)) {
         externalExpandedKeys.value = [...externalExpandedKeys.value, target]
       }
     } else {
-      externalDirTree.value = await fetchDirChildren(root)
+      const fresh = await fetchDirChildren(root)
+      externalDirTree.value = mergeDirChildren(externalDirTree.value, fresh)
     }
   } else {
     // 任务模式：定位到所属分类树
     const catKey = taskCatOfPath(target)
     if (catKey) {
       const catPath = catPathOf(catKey)
+      if (!catPath) return
       if (target === catPath) {
-        taskCatTrees[catKey] = await fetchDirChildren(catPath, true)
+        const fresh = await fetchDirChildren(catPath, true)
+        taskCatTrees[catKey] = mergeDirChildren(taskCatTrees[catKey], fresh)
       } else {
         const node = findNodeById(taskCatTrees[catKey], target)
         if (node) {
-          node.children = await fetchDirChildren(target, true)
+          const fresh = await fetchDirChildren(target, true)
+          node.children = mergeDirChildren(node.children, fresh)
           if (!taskCatExpandedKeys[catKey].includes(target)) {
             taskCatExpandedKeys[catKey] = [...taskCatExpandedKeys[catKey], target]
           }
         } else {
-          taskCatTrees[catKey] = await fetchDirChildren(catPath, true)
+          const fresh = await fetchDirChildren(catPath, true)
+          taskCatTrees[catKey] = mergeDirChildren(taskCatTrees[catKey], fresh)
         }
       }
     }
@@ -3160,8 +3194,10 @@ const setupFileWatcher = async () => {
       }
 
       // 文件编辑模式 / 任务模式：刷新对应的树（不走 kb 逻辑）
+      // Rename 事件需同时刷新旧父目录，传 old_path 让刷新逻辑覆盖原父目录残留节点。
       if (viewMode.value === 'plain' || viewMode.value === 'task') {
-        scheduleNonKbTreeRefresh(changedPath)
+        const oldForRefresh = payload?.kind === 'Rename' ? oldChangedPath : ''
+        scheduleNonKbTreeRefresh(changedPath, oldForRefresh)
         return
       }
 
@@ -3199,19 +3235,57 @@ const repointFileWatcher = async (path) => {
 }
 
 // 文件编辑/任务模式下的树刷新（去抖）
+// 设计说明：
+// 1. 之前这里一律刷新到「模式根目录」（plain 的 externalDir / task 的分类根），
+//    经 refreshModeDir 整树替换后会把已懒加载的 children 清空，导致打开文件触发的
+//    file_change 把所有已展开目录一并收起（与 kb 模式 refreshDirectory 的局部刷新不一致）。
+// 2. 现在改为刷新「变化文件的真实父目录」：单个文件变化只影响其所在父目录，
+//    其它已展开目录既不会被整树替换、children 也不会被清空，展开态得以保留。
+// 3. Rename 事件需要同时刷新新旧父目录，否则旧父目录里会残留已移走的节点。
+// 4. 仅刷新在当前模式树范围内的目录；落在根以外或未加载分类的事件降级为刷新根。
 let nonKbRefreshTimer = null
-const scheduleNonKbTreeRefresh = (changedPath) => {
+let nonKbRefreshPending = []
+const scheduleNonKbTreeRefresh = (changedPath, oldPath = '') => {
+  const next = normalizePath(changedPath)
+  const old = normalizePath(oldPath)
+  // 合并本轮待刷新目录：去重后只在去抖结束后刷一次，避免同一目录被多次拉取
+  const candidates = new Set()
+  if (next) candidates.add(parentDirOf(next))
+  if (old && old !== next) candidates.add(parentDirOf(old))
+  nonKbRefreshPending = Array.from(new Set([...nonKbRefreshPending, ...candidates]))
+
   if (nonKbRefreshTimer) clearTimeout(nonKbRefreshTimer)
   nonKbRefreshTimer = setTimeout(async () => {
     nonKbRefreshTimer = null
+    const targets = nonKbRefreshPending
+    nonKbRefreshPending = []
     try {
       if (viewMode.value === 'plain' && externalDir.value) {
-        await refreshModeDir('plain', externalDir.value)
+        const root = normalizePath(externalDir.value)
+        if (!targets.length) {
+          await refreshModeDir('plain', root)
+          return
+        }
+        for (const t of targets) {
+          // 仅刷新落在当前外部目录树范围内的目录，避免误触其它路径
+          if (t === root || t.startsWith(`${root}/`)) {
+            await refreshModeDir('plain', t)
+          }
+        }
       } else if (viewMode.value === 'task') {
-        const cat = taskCatOfPath(changedPath)
-        if (cat) {
-          await refreshModeDir('task', catPathOf(cat))
-        } else {
+        const handledCats = new Set()
+        for (const t of targets) {
+          const cat = taskCatOfPath(t)
+          if (!cat) continue
+          handledCats.add(cat)
+          // 落在已加载分类范围内的目录：刷新该父目录
+          const catPath = catPathOf(cat)
+          if (t === catPath || t.startsWith(`${catPath}/`)) {
+            await refreshModeDir('task', t)
+          }
+        }
+        // 事件落在未加载分类时降级刷新已加载分类根（维持原兜底行为）
+        if (!handledCats.size) {
           for (const c of TASK_CATEGORIES) {
             if (taskCatTrees[c.key] && taskCatTrees[c.key].length) await loadTaskCat(c.key)
           }
