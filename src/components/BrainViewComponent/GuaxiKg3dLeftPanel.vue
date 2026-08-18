@@ -80,10 +80,11 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { NButton, NCollapse, NCollapseItem, NTag } from 'naive-ui'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
+import { onKgIndexChanged } from '../../utils/kgIndexEvents'
 
 const store = useKnowledgeBaseStore()
 const { kg3dHistory, kg3dBookmarks } = storeToRefs(store)
@@ -146,6 +147,27 @@ const switchTagView = () => store.requestKg3dAction('switchView', { view: 'tag' 
 watch(kbName, () => {
   stats.value = null
   communities.value = []
+})
+
+// 索引变更(新建/删除文件等)后概览统计会过时:已展开的重新拉一次,未展开的清掉待下次按需加载。
+let unlistenIndex = null
+onMounted(async () => {
+  try {
+    unlistenIndex = await onKgIndexChanged(({ kbName: changed }) => {
+      if (!kbName.value || changed !== kbName.value) return
+      const hadStats = !!stats.value
+      const hadComm = communities.value.length > 0
+      stats.value = null
+      communities.value = []
+      if (hadStats) loadStats()
+      if (hadComm) loadCommunities()
+    }, { debounceMs: 1200 })
+  } catch (e) {
+    /* 事件不可用时退化为手动刷新 */
+  }
+})
+onUnmounted(() => {
+  if (unlistenIndex) { try { unlistenIndex() } catch (e) { /* noop */ } }
 })
 </script>
 

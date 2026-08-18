@@ -15,6 +15,8 @@ use sha2::{Digest, Sha256};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::OnceLock;
+use tauri::{AppHandle, Emitter};
 
 /// 图索引 schema 版本。结构变更时 +1,触发重建。
 pub const KG_SCHEMA_VERSION: i64 = 1;
@@ -1224,6 +1226,29 @@ pub fn invalidate_kb_caches(kb_name: &str) {
     VEC_CACHE.write().remove(kb_name);
 }
 
+/// 全局 AppHandle,供非命令上下文(CRUD 钩子)向所有窗口广播索引变更事件。
+/// 由 main.rs 的 setup 注入一次。
+static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
+
+/// 注入全局 AppHandle(幂等;重复调用忽略)。
+pub fn init_app_handle(handle: AppHandle) {
+    let _ = APP_HANDLE.set(handle);
+}
+
+/// 广播"某知识库图索引已变更"给所有窗口(主窗口 Brain 视图、独立的知识库管理器窗口等)。
+///
+/// 事件只做通知,不触发任何重建 —— 重建仍由查询侧 `build_if_needed` 惰性完成,
+/// 保存路径保持零阻塞。`reason`: `dirty`(增删改移) / `removed`(知识库整体删除)。
+fn emit_index_changed(kb_name: &str, reason: &str) {
+    let Some(app) = APP_HANDLE.get() else { return };
+    if let Err(e) = app.emit(
+        "kg_index_changed",
+        serde_json::json!({ "kb_name": kb_name, "reason": reason }),
+    ) {
+        tracing::warn!(error = %e, kb_name, reason, "emit kg_index_changed failed");
+    }
+}
+
 /// 把某知识库的图索引标记为脏(增量钩子调用,极轻量,绝不阻塞保存)。
 /// 真正的重建在查询时按需触发(materialized-view 惰性刷新)。
 pub fn mark_kb_dirty(kb_name: &str) {
@@ -1237,6 +1262,7 @@ pub fn mark_kb_dirty(kb_name: &str) {
         .map_err(|e| e.to_string())?;
         Ok(())
     })();
+    emit_index_changed(kb_name, "dirty");
 }
 
 /// 删除某知识库的全部图索引数据(知识库被删除时调用)。
@@ -1257,6 +1283,7 @@ pub fn drop_kb_index(kb_name: &str) {
         }
         Ok(())
     })();
+    emit_index_changed(kb_name, "removed");
 }
 
 // ─────────────────────── 文件 CRUD 钩子(取代旧 kbmeta 钩子) ───────────────────────
@@ -3368,8 +3395,218 @@ fn force_layout_3d(mem: &MemGraph, iterations: usize) -> Vec<(String, f64, f64, 
         .collect()
 }
 
+/// 补点时与既有节点保持的最小间距(节点最大半径 11,留出肉眼可辨的空隙)。
+const LAYOUT_MIN_SEP: f64 = 14.0;
+/// 判定"几乎完全重合"的阈值,用于修复历史缓存里叠在一起的节点。
+const LAYOUT_OVERLAP_EPS: f64 = 1.5;
+
+/// 稳定哈希(FNV-1a):由 node_id 决定落点相位。
+///
+/// 关键:相位**不能**用"本次缺失列表里的序号" —— 每轮增量补点都从 0 开始,
+/// 会让每轮新增的第一个同类节点落在完全相同的点上(新目录精确重叠在上一次新增的目录里)。
+/// 用 node_id 哈希则同一节点每次落点一致、不同节点天然错开。
+fn stable_hash_u64(s: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in s.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+/// 空间网格:O(1) 邻近查询,用于补点时避免与已有节点重合。
+struct PointGrid {
+    cell: f64,
+    map: HashMap<(i64, i64, i64), Vec<(f64, f64, f64)>>,
+}
+
+impl PointGrid {
+    fn new(cell: f64) -> Self {
+        Self { cell: cell.max(1.0), map: HashMap::new() }
+    }
+
+    fn key(&self, x: f64, y: f64, z: f64) -> (i64, i64, i64) {
+        (
+            (x / self.cell).floor() as i64,
+            (y / self.cell).floor() as i64,
+            (z / self.cell).floor() as i64,
+        )
+    }
+
+    fn insert(&mut self, x: f64, y: f64, z: f64) {
+        self.map.entry(self.key(x, y, z)).or_default().push((x, y, z));
+    }
+
+    /// 半径 r 内是否已有点(只扫 27 个邻格;要求 r <= cell)
+    fn has_within(&self, x: f64, y: f64, z: f64, r: f64) -> bool {
+        let (kx, ky, kz) = self.key(x, y, z);
+        let r2 = r * r;
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    if let Some(pts) = self.map.get(&(kx + dx, ky + dy, kz + dz)) {
+                        for (px, py, pz) in pts {
+                            let d2 = (x - px).powi(2) + (y - py).powi(2) + (z - pz).powi(2);
+                            if d2 < r2 {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+}
+
+/// 在 anchor 附近找一个与既有节点不重合的落点。相位来自 node_id 哈希(确定性),
+/// 撞上已有节点就换相位并略微外扩,最多 24 次后接受当前候选。
+fn free_spot_near(
+    node_id: &str,
+    anchor: (f64, f64, f64),
+    base_spread: f64,
+    grid: &PointGrid,
+) -> (f64, f64, f64) {
+    let golden = std::f64::consts::PI * (3.0 - 5.0_f64.sqrt());
+    let h = stable_hash_u64(node_id);
+    let t = (((h >> 17) % 64) as f64 + 0.5) / 64.0;
+    let phi = (1.0 - 2.0 * t).acos();
+    let mut theta = golden * ((h % 100_003) as f64);
+    let mut spread = base_spread.max(LAYOUT_MIN_SEP);
+    let mut cand = (0.0, 0.0, 0.0);
+    for _ in 0..24 {
+        cand = (
+            anchor.0 + spread * phi.sin() * theta.cos(),
+            anchor.1 + spread * (1.0 - 2.0 * t) * 0.6,
+            anchor.2 + spread * phi.sin() * theta.sin(),
+        );
+        if !grid.has_within(cand.0, cand.1, cand.2, LAYOUT_MIN_SEP) {
+            return cand;
+        }
+        theta += golden;
+        spread += LAYOUT_MIN_SEP * 0.35;
+    }
+    cand
+}
+
+/// 修复历史缓存里几乎完全重合的节点(早期补点算法留下的):按稳定顺序保留先出现者,
+/// 把后来者挪到附近的空位。返回被移动的点,供调用方写回缓存。
+fn dedupe_overlapping_layout(
+    mem: &MemGraph,
+    have: &mut HashMap<String, (f64, f64, f64)>,
+) -> Vec<LayoutPoint> {
+    let mut ordered: Vec<&MemNode> = mem.nodes.iter().filter(|n| have.contains_key(&n.id)).collect();
+    // 稳定顺序:浅层优先(父节点先占位),同层按 id
+    ordered.sort_by(|a, b| a.depth.cmp(&b.depth).then(a.id.cmp(&b.id)));
+
+    let mut grid = PointGrid::new(LAYOUT_MIN_SEP);
+    let mut moved = Vec::new();
+    for n in ordered {
+        let (x, y, z) = have[&n.id];
+        if grid.has_within(x, y, z, LAYOUT_OVERLAP_EPS) {
+            let p = free_spot_near(&n.id, (x, y, z), LAYOUT_MIN_SEP, &grid);
+            have.insert(n.id.clone(), p);
+            grid.insert(p.0, p.1, p.2);
+            moved.push(LayoutPoint { node_id: n.id.clone(), x: p.0, y: p.1, z: p.2 });
+        } else {
+            grid.insert(x, y, z);
+        }
+    }
+    moved
+}
+
+/// 缓存布局命中后的**增量补点**:只给缓存里没有坐标的新节点定位,已有节点坐标一动不动。
+///
+/// 为什么需要:文件新增后图里多了 file/section 节点,但 kg_layout 里没有它们的坐标。
+/// 若直接返回缓存,前端会把这些节点全部落到 (0,0,0) —— 相互重叠、被大球吞掉、连边被跳过,
+/// 表现为"新节点根本看不到"。这里让新节点贴着已定位的邻居(父目录/所属文件)落位,
+/// 确定性、无随机,既能立刻看见又不会把整张图重排。
+///
+/// 返回新补的坐标(供调用方写回缓存),同时就地写入 `have`。
+fn seed_missing_layout(
+    mem: &MemGraph,
+    have: &mut HashMap<String, (f64, f64, f64)>,
+) -> Vec<LayoutPoint> {
+    let mut missing: Vec<&MemNode> = mem.nodes.iter().filter(|n| !have.contains_key(&n.id)).collect();
+    if missing.is_empty() {
+        return Vec::new();
+    }
+
+    // 双向邻接(含 contains 层级),用于找"已定位的邻居"作为锚点
+    let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
+    for e in &mem.edges {
+        adj.entry(e.from.as_str()).or_default().push(e.to.as_str());
+        adj.entry(e.to.as_str()).or_default().push(e.from.as_str());
+    }
+
+    // 全局质心与外径:节点一个已定位邻居都没有时的兜底锚点(放到球壳上,不堆在中心)
+    let (mut cx, mut cy, mut cz) = (0.0_f64, 0.0_f64, 0.0_f64);
+    let mut r_max = 0.0_f64;
+    if !have.is_empty() {
+        for (x, y, z) in have.values() {
+            cx += *x;
+            cy += *y;
+            cz += *z;
+        }
+        let cnt = have.len() as f64;
+        cx /= cnt;
+        cy /= cnt;
+        cz /= cnt;
+        for (x, y, z) in have.values() {
+            let d = ((x - cx).powi(2) + (y - cy).powi(2) + (z - cz).powi(2)).sqrt();
+            if d > r_max {
+                r_max = d;
+            }
+        }
+    }
+
+    // 浅层先放:父目录先拿到坐标,子文件/章节才能贴着父节点落位
+    missing.sort_by(|a, b| a.depth.cmp(&b.depth).then(a.id.cmp(&b.id)));
+
+    // 已定位节点进网格,补点时据此避让,保证新节点不会叠在任何既有节点上
+    let mut grid = PointGrid::new(LAYOUT_MIN_SEP);
+    for (x, y, z) in have.values() {
+        grid.insert(*x, *y, *z);
+    }
+
+    let mut placed = Vec::with_capacity(missing.len());
+    for n in missing.iter() {
+        let (mut ax, mut ay, mut az, mut cnt) = (0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64);
+        if let Some(nb) = adj.get(n.id.as_str()) {
+            for id in nb {
+                if let Some(&(x, y, z)) = have.get(*id) {
+                    ax += x;
+                    ay += y;
+                    az += z;
+                    cnt += 1.0;
+                }
+            }
+        }
+        // 有邻居:贴着邻居质心,按类型给一个体面的间距;没邻居:落到全图外壳
+        let (anchor, spread) = if cnt > 0.0 {
+            (
+                (ax / cnt, ay / cnt, az / cnt),
+                match n.node_type.as_str() {
+                    "directory" => 46.0,
+                    "file" => 28.0,
+                    "concept" => 24.0,
+                    _ => 18.0,
+                },
+            )
+        } else {
+            ((cx, cy, cz), (r_max * 0.8).max(60.0))
+        };
+        let (x, y, z) = free_spot_near(&n.id, anchor, spread, &grid);
+        grid.insert(x, y, z);
+        have.insert(n.id.clone(), (x, y, z));
+        placed.push(LayoutPoint { node_id: n.id.clone(), x, y, z });
+    }
+    placed
+}
+
 /// 命令:后端计算 relation 视角力导向布局并写入缓存,返回坐标。
-/// force=false 且已有缓存时直接返回缓存,避免重复计算。
+/// force=false 时优先复用缓存:缓存覆盖全部节点则直接返回;只差少量新节点则增量补点;
+/// 缺口太大(批量导入等)才全量重算。
 #[tauri::command]
 pub async fn kg_compute_layout(
     kb_name: String,
@@ -3384,11 +3621,60 @@ pub async fn kg_compute_layout(
         return Ok(Vec::new());
     }
 
-    // 已有缓存且非强制 → 直接复用
+    // 已有缓存且非强制 → 尽量复用(必要时增量补点)
     if !force.unwrap_or(false) {
         let cached = kg_load_layout(kb_name.clone(), view.clone())?;
         if !cached.is_empty() {
-            return Ok(cached);
+            let mem = load_mem_graph(&kb_name)?;
+            let mut have: HashMap<String, (f64, f64, f64)> =
+                cached.into_iter().map(|p| (p.node_id, (p.x, p.y, p.z))).collect();
+            let missing = mem.nodes.iter().filter(|n| !have.contains_key(&n.id)).count();
+            // 少量新增(新建/移动几个文件,最常见)→ 增量补点,已有布局保持稳定;
+            // 缺口过大(批量导入、首次扩容)→ 落到下面全量重算,布局质量更好。
+            let incremental_cap = std::cmp::max(64, mem.nodes.len() / 5);
+            if missing == 0 || missing <= incremental_cap {
+                if missing > 0 {
+                    let added = seed_missing_layout(&mem, &mut have);
+                    let added_count = added.len();
+                    let _ = kg_save_layout(kb_name.clone(), view.clone(), added);
+                    tracing::info!(
+                        kb_name = %kb_name,
+                        added = added_count,
+                        total = mem.nodes.len(),
+                        "kg_compute_layout: 复用缓存并为新节点增量补点"
+                    );
+                }
+                // 修复历史缓存里几乎完全重合的节点(早期补点算法会让每轮新增的第一个节点叠在一起)
+                let moved = dedupe_overlapping_layout(&mem, &mut have);
+                if !moved.is_empty() {
+                    let moved_count = moved.len();
+                    let _ = kg_save_layout(kb_name.clone(), view.clone(), moved);
+                    tracing::info!(
+                        kb_name = %kb_name,
+                        moved = moved_count,
+                        "kg_compute_layout: 已拆开重合节点"
+                    );
+                }
+                // 只返回当前图里仍存在的节点(缓存可能残留已删除节点的坐标)
+                return Ok(mem
+                    .nodes
+                    .iter()
+                    .filter_map(|n| {
+                        have.get(&n.id).map(|&(x, y, z)| LayoutOut {
+                            node_id: n.id.clone(),
+                            x,
+                            y,
+                            z,
+                        })
+                    })
+                    .collect());
+            }
+            tracing::info!(
+                kb_name = %kb_name,
+                missing,
+                total = mem.nodes.len(),
+                "kg_compute_layout: 缓存缺口过大,全量重算布局"
+            );
         }
     }
 
@@ -3438,6 +3724,47 @@ pub fn kg_load_layout(kb_name: String, view: String) -> Result<Vec<LayoutOut>, S
         out.push(row.map_err(|e| e.to_string())?);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod layout_seed_tests {
+    use super::*;
+
+    /// 回归:两个不同节点即使锚点、间距完全相同(同一个父目录下的两个新目录),
+    /// 也必须落在互不重合的位置 —— 早期实现用"缺失列表序号"当相位,
+    /// 导致每轮新增的第一个节点精确叠在上一轮那个之上,新目录整个藏进旧目录里。
+    #[test]
+    fn seeded_siblings_never_collide() {
+        let anchor = (10.0, 20.0, 30.0);
+        let mut grid = PointGrid::new(LAYOUT_MIN_SEP);
+        grid.insert(anchor.0, anchor.1, anchor.2); // 父节点本身
+
+        let a = free_spot_near("dir_tte", anchor, 46.0, &grid);
+        grid.insert(a.0, a.1, a.2);
+        let b = free_spot_near("dir_yui", anchor, 46.0, &grid);
+
+        let d = ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2) + (a.2 - b.2).powi(2)).sqrt();
+        assert!(d >= LAYOUT_MIN_SEP, "两个新目录距离 {d} 小于最小间距 {LAYOUT_MIN_SEP}");
+    }
+
+    /// 同一节点每次落点必须一致(布局可复现,切换视角/重载不会乱跳)。
+    #[test]
+    fn seeding_is_deterministic() {
+        let anchor = (0.0, 0.0, 0.0);
+        let grid = PointGrid::new(LAYOUT_MIN_SEP);
+        let p1 = free_spot_near("file_abc", anchor, 28.0, &grid);
+        let p2 = free_spot_near("file_abc", anchor, 28.0, &grid);
+        assert_eq!(p1, p2);
+    }
+
+    /// 网格邻近查询要能跨格命中(点落在格子边界附近时不能漏判)。
+    #[test]
+    fn grid_detects_neighbor_across_cells() {
+        let mut grid = PointGrid::new(LAYOUT_MIN_SEP);
+        grid.insert(13.9, 0.0, 0.0); // 紧贴 cell 边界
+        assert!(grid.has_within(14.1, 0.0, 0.0, LAYOUT_MIN_SEP));
+        assert!(!grid.has_within(100.0, 0.0, 0.0, LAYOUT_MIN_SEP));
+    }
 }
 
 #[cfg(test)]

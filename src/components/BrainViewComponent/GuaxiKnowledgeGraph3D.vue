@@ -154,6 +154,7 @@ import { useKnowledgeBaseStore } from "../../stores/knowledgeBaseStore";
 import { useFileTreeStore } from "../../stores/fileTreeStore";
 import { useEditorStore } from "../../stores/editorStore";
 import { createLogger } from "../../utils/logger";
+import { onKgIndexChanged } from "../../utils/kgIndexEvents";
 import { resolveLayout, disposeLayoutWorker } from "./kgLayout";
 
 const props = defineProps({
@@ -231,6 +232,9 @@ let fullEdgeList = null;
 let minimapTick = 0;
 // 每次加载递增。知识库快速切换时，旧请求即使后返回也不能覆盖当前图谱。
 let graphLoadSeq = 0;
+// 索引变更时若当前不宜重载(不可见/漫游中/回放中…),先记脏,恢复后再补一次。
+let pendingReload = false;
+let viewActive = true;
 
 // three 运行时对象(非响应式)
 let scene, camera, renderer, labelRenderer, controls, raf;
@@ -988,6 +992,7 @@ function resetGraphStateForKnowledgeBase(kbName) {
   pathMode.value = false;
   pathPick = [];
   collapsed.value = false;
+  pendingReload = false;
   fullNodeList = null;
   fullEdgeList = null;
   highlightedIds = new Set();
@@ -1005,7 +1010,11 @@ function resetGraphStateForKnowledgeBase(kbName) {
   requestRender();
 }
 
-async function loadGraph(rootId = "kb_root", maxDepth = 99) {
+// opts.ensureIndex:是否在查询前强制全量重建索引(kg_build_index)。
+// 手动动作保持 true;索引变更引发的自动重载传 false —— 后端 kg_query_graph 自带
+// build_if_needed 惰性重建,只在真脏时重建一次,避免频繁保存触发重复全量重建。
+async function loadGraph(rootId = "kb_root", maxDepth = 99, options = {}) {
+  const { ensureIndex = true } = options;
   const name = props.kbName || store.selectedKnowledgeBase?.knowledge_base_name;
   const loadSeq = ++graphLoadSeq;
   if (!name) {
@@ -1013,9 +1022,9 @@ async function loadGraph(rootId = "kb_root", maxDepth = 99) {
     return;
   }
   statusText.value = "加载图数据…";
-  logger.info("[kg3d] start loading graph", { kbName: name, rootId, maxDepth, loadSeq });
+  logger.info("[kg3d] start loading graph", { kbName: name, rootId, maxDepth, ensureIndex, loadSeq });
   try {
-    await store.kgEnsureIndex(name).catch(() => {});
+    if (ensureIndex) await store.kgEnsureIndex(name).catch(() => {});
     if (loadSeq !== graphLoadSeq) return;
     const opts = { root_id: rootId, max_depth: maxDepth, limit: 6000 };
     const data = await store.kgQueryGraph(name, opts);
@@ -1067,6 +1076,58 @@ async function loadGraph(rootId = "kb_root", maxDepth = 99) {
     statusText.value = "加载失败: " + (e?.message || e);
     logger.error("[kg3d] load graph failed", { kbName: name, error: e });
   }
+}
+
+// ───────── 索引变更自动跟随 ─────────
+// 主界面在知识库里新建/删除/移动文件后,后端广播 kg_index_changed。
+// 可见且不在"会被打断"的交互态时防抖重载;否则记脏,等切回/退出该交互时补一次。
+//
+// 正在漫游、连线选点、演化回放或社区折叠态时重载会打断用户操作,推迟到之后再补。
+function autoReloadBlockedReason() {
+  if (!viewActive || document.hidden) return "hidden";
+  if (flyMode.value) return "fly-mode";
+  if (pathMode.value) return "path-mode";
+  if (timelinePlaying.value) return "timeline-playing";
+  if (collapsed.value) return "collapsed";
+  return null;
+}
+
+async function autoReloadGraph(reason) {
+  const blocked = autoReloadBlockedReason();
+  if (blocked) {
+    pendingReload = true;
+    logger.info("[kg3d] 索引变更,推迟重载", { reason, blocked });
+    return;
+  }
+  pendingReload = false;
+  const keepId = selected.value?.id || null;
+  const rootId = breadcrumb.value[breadcrumb.value.length - 1]?.id || "kb_root";
+  const maxDepth = rootId === "kb_root" ? 99 : 3;
+  // 静默重载不该搬动用户正在看的视角:先记下相机与支点,重载后覆盖掉 fitCamera 的取景动画。
+  const camPos = camera ? camera.position.clone() : null;
+  const camTarget = controls ? controls.target.clone() : null;
+  logger.info("[kg3d] 索引变更,自动重载图谱", { reason, rootId, keepId });
+  await loadGraph(rootId, maxDepth, { ensureIndex: false });
+  // 尽量恢复重载前的选中节点;节点已不存在(被删/改名)则清空面板。
+  if (keepId) {
+    const again = nodeById.get(keepId);
+    if (again) selectNode(again, { frame: false });
+    else clearSelection();
+  }
+  if (camPos && camTarget) {
+    gsap.killTweensOf(camera.position);
+    gsap.killTweensOf(controls.target);
+    camera.position.copy(camPos);
+    controls.target.copy(camTarget);
+    controls.update();
+    requestRender();
+  }
+}
+
+function flushPendingReload(reason) {
+  if (!pendingReload) return;
+  if (autoReloadBlockedReason()) return;
+  autoReloadGraph(reason);
 }
 
 function fitCamera() {
@@ -1273,6 +1334,7 @@ function exitFlyMode() {
   }
   controls.target.copy(camera.position).addScaledVector(dir, pivotDist);
   statusText.value = "";
+  flushPendingReload("exit-fly-mode");
 }
 
 function onPointerLockChange() {
@@ -1342,7 +1404,9 @@ async function onClick(ev) {
   selectNode(node);
 }
 
-function selectNode(node) {
+// opts.frame:是否把镜头拉近到选中集。索引变更后的静默重载传 false,避免无端搬动用户视角。
+function selectNode(node, opts = {}) {
+  const { frame = true } = opts;
   selected.value = node;
   suggestions.value = [];
   tagSuggestions.value = [];
@@ -1350,7 +1414,7 @@ function selectNode(node) {
   store.setKg3dRelations([]);
   store.setKg3dSuggestions([]);
   // 高亮选中节点及其邻居(主节点发光),并把镜头拉近取景,飞行模式下不抢镜头
-  highlightEgo(node.id, { frame: !flyMode.value });
+  highlightEgo(node.id, { frame: frame && !flyMode.value });
   rebuildLabels();
   store.setKg3dSelected(node); // 发布到通信总线,右侧边栏据此渲染操作面板
 }
@@ -1637,6 +1701,7 @@ function togglePathMode() {
   pathMode.value = !pathMode.value;
   pathPick = [];
   statusText.value = pathMode.value ? "路径模式:依次点击两个节点" : "";
+  if (!pathMode.value) flushPendingReload("exit-path-mode");
 }
 
 // ───────── 建议 / 确认 ─────────
@@ -2120,6 +2185,7 @@ function toggleTimelinePlay() {
     clearInterval(timelinePlayTimer);
     timelinePlayTimer = null;
     evolutionActive = false;
+    flushPendingReload("timeline-stopped");
   }
 }
 
@@ -2137,6 +2203,7 @@ async function toggleCollapse() {
     collapsed.value = false;
     buildMeshes();
     fitCamera();
+    flushPendingReload("expand-collapsed");
     return;
   }
   // 需要社区数据:没有就自动先做一次分组,不麻烦用户二次操作
@@ -2347,12 +2414,24 @@ function focusCommunity(cid) {
 // 页面可见性:标签页切到后台时停渲染,切回时恢复
 function onVisibilityChange() {
   if (document.hidden) stopLoop();
-  else { startLoop(); onResize(); }
+  else { startLoop(); onResize(); flushPendingReload("visibility-restored"); }
 }
+
+let unlistenIndex = null;
 
 onMounted(async () => {
   initThree();
   document.addEventListener("visibilitychange", onVisibilityChange);
+  try {
+    // 保存/新建文件会连发脏标记,防抖再长一点,避免大库连续重建
+    unlistenIndex = await onKgIndexChanged(({ kbName, reason }) => {
+      const cur = props.kbName || store.selectedKnowledgeBase?.knowledge_base_name;
+      if (!cur || kbName !== cur) return;
+      autoReloadGraph(reason);
+    }, { debounceMs: 1200 });
+  } catch (e) {
+    logger.warn("[kg3d] 监听索引变更失败", e);
+  }
   // 错峰:先让路由切换那一帧把页面框架画出来,再异步拉数据+布局,首屏不卡
   await new Promise((r) => requestAnimationFrame(() => r()));
   await loadGraph();
@@ -2360,15 +2439,19 @@ onMounted(async () => {
 
 // KeepAlive:被缓存(切到其它页面)时停掉渲染循环,切回时恢复
 onActivated(() => {
+  viewActive = true;
   startLoop();
   onResize();
+  flushPendingReload("activated");
 });
 onDeactivated(() => {
+  viewActive = false;
   stopLoop();
   if (flyMode.value) exitFlyMode();
 });
 
 onBeforeUnmount(() => {
+  if (unlistenIndex) { try { unlistenIndex(); } catch (e) { /* noop */ } }
   stopLoop();
   if (timelinePlayTimer) clearInterval(timelinePlayTimer);
   if (themeObserver) themeObserver.disconnect();

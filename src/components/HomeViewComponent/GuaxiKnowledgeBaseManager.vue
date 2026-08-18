@@ -312,6 +312,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
 import { createLogger } from '../../utils/logger'
+import { onKgIndexChanged } from '../../utils/kgIndexEvents'
 
 const logger = createLogger('GuaxiKnowledgeBaseManager')
 const { message } = createDiscreteApi(['message'])
@@ -445,12 +446,16 @@ async function handleKbChange(name) {
   else { nodes.value = []; edges.value = [] }
 }
 
+// 设计说明:必须显式给全深度/大上限。后端 kg_query_graph 的默认是 max_depth=2、limit=3000,
+// 传 null 会让二级目录以下新建的文件永远进不了节点列表(即使点刷新)。
+const FULL_GRAPH_OPTS = { max_depth: 99, limit: 100000 }
+
 async function loadGraph() {
   if (!selectedKbName.value) return
   loading.value = true
   busyText.value = '加载知识图谱…'
   try {
-    const data = await store.kgQueryGraph(selectedKbName.value, null)
+    const data = await store.kgQueryGraph(selectedKbName.value, FULL_GRAPH_OPTS)
     nodes.value = data?.nodes || []
     edges.value = data?.edges || []
     graphMeta.value = {
@@ -669,12 +674,42 @@ async function importAllManual() {
   }
 }
 
+// ───── 索引变更自动跟随 ─────
+// 主界面在知识库里新建/删除/移动文件后,后端把索引标脏并广播 kg_index_changed;
+// 本窗口据此自动重查,无需用户手动点刷新。
+let unlistenIndex = null
+async function handleIndexChanged({ kbName, reason }) {
+  const known = kbOptions.value.some((o) => o.value === kbName)
+  if (reason === 'removed' || !known) {
+    logger.info('知识库索引变更,刷新知识库列表', { kbName, reason })
+    // 被删的正是当前选中库:先清空,免得 refresh 里对已消失的库查图报错。
+    if (reason === 'removed' && kbName === selectedKbName.value) {
+      selectedKbName.value = null
+      selectedNode.value = null
+      nodes.value = []
+      edges.value = []
+      semanticResults.value = []
+      graphMeta.value = { total: 0, returned: 0, truncated: false }
+    }
+    await refresh()
+    return
+  }
+  if (kbName !== selectedKbName.value) return
+  logger.info('知识库索引变更,重新加载图谱', { kbName, reason })
+  await loadGraph()
+}
+
 onMounted(async () => {
   await refresh()
   try {
     manualSyncEnabled.value = await store.kgGetManualSync()
   } catch (e) {
     logger.warn('get manual sync flag failed', e)
+  }
+  try {
+    unlistenIndex = await onKgIndexChanged(handleIndexChanged)
+  } catch (e) {
+    logger.warn('listen kg index changed failed', e)
   }
   try {
     unlistenSync = await listen('resource_repo_sync_progress', (ev) => {
@@ -690,6 +725,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (unlistenSync) { try { unlistenSync() } catch (_) { /* noop */ } }
+  if (unlistenIndex) { try { unlistenIndex() } catch (_) { /* noop */ } }
 })
 </script>
 

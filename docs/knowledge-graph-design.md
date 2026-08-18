@@ -177,7 +177,7 @@ kgraph 子系统重建了一套分层架构来解决这些问题:
 - **工具条图标化**:操作按钮用图标 + 通俗中文 tooltip(自由漫游 / 找两点之间的路 / 按主题收拢 / 自动分组上色 / AI 提炼概念 / 重新扫描),避免抽象术语。
 - **分层 LOD**:`kg_query_graph` 用 `root_id + max_depth + limit` 控制返回规模;双击目录下钻(面包屑回退);"按主题收拢"按社区聚合为超级节点,双击超级节点展开该社区。**收拢/概念建议等操作若缺前置(未分组、未生成向量)会自动先跑前置步骤**,不需用户二次操作。
 - **多视角**:relation(力导向)/ tag(按标签或社区聚簇)/ time(按修改时间沿轴)/ importance(PageRank 向心)。切换走 `kgLayout.resolveLayout(force)` 重算坐标 + GSAP 平滑 morph + 相机重取景。
-- **缓存坐标**:布局结果存 `kg_layout`,下次秒载、稳定可复现。
+- **缓存坐标 + 增量补点**:布局结果存 `kg_layout`,下次秒载、稳定可复现。缓存只覆盖当时存在的节点,因此 `kg_compute_layout(force=false)` 不能直接把缓存原样返回 —— 新增文件的 `file`/`section` 节点会缺坐标,渲染层回退到 `(0,0,0)`,新节点全部重叠堆在原点、被大球吞掉、连边被整条跳过,表现为"新建的文件在 3D 图里根本看不到"。正确策略:缓存全覆盖→直接返回;只差少量节点→`seed_missing_layout` 让新节点贴着已定位的邻居(父目录/所属文件)确定性落位并写回缓存,已有布局一动不动;缺口超过 `max(64, n/5)`(批量导入)→ 才全量重算。前端 `kgLayout.js` 的 `seedMissingPositions` 是同策略的跨层兜底,任何路径都不允许节点无坐标。
 - **强高亮 + 发光**:选中/路径/社区/邻居/关联预览时,强调节点放大提亮、其余压暗缩小,叠加青色发光边(`highlightEdges`)与加色混合的呼吸光晕 sprite(`glowGroup`),并把相机取景拉近到强调集包围盒,远距也看得清。
 - **过滤**:顶部类型勾选 + 标签下拉多选过滤;隐藏节点缩到 0 且其连边同步收起(端点不可见的边不画)。
 - **导航工具**:搜索飞行定位(语义检索优先,回退名称)、点击 ego 聚光、两点最短路高亮、类型/标签过滤、小地图(可点击定位)、时间轴回放、文件树点击在图中定位高亮、收藏/历史快捷跳转。
@@ -204,6 +204,19 @@ UI 流畅是硬性约束,核心策略:**重计算下沉后台、隐藏即停、�
 - **挂载错峰**:`onMounted` 先 `initThree` 建轻量场景,等一帧让路由切换先出框架,再异步 `loadGraph` 拉数据 + 布局。
 - **GPU 友好**:`WebGLRenderer` 设 `powerPreference:"high-performance"`、`stencil:false`,抗锯齿按 DPR 自适应(高分屏关 AA 省带宽)。
 - **后端命令本就异步**:`kg_embed_kb`/`kg_extract_concepts`/`kg_compute_layout` 均 `async tauri::command`,聊天走 `get_chat_answer_stream` 流式,AI 处理期间前端可继续交互。
+
+### 10.1 索引变更广播(视图自动跟随)
+
+索引惰性重建解决了"保存不卡",但前端各视图此前只在挂载/切库/手动刷新时查询,主界面新建文件后管理器与图谱看不到新节点。为此加一条**只通知、不计算**的广播链路:
+
+- **发端**:`mark_kb_dirty` / `drop_kb_index`(kgraph.rs)是全部文件 CRUD 钩子的汇聚点,标脏后 `emit("kg_index_changed", { kb_name, reason })`(`reason` = `dirty` / `removed`)。全局 `AppHandle` 由 `main.rs` 的 `setup` 通过 `kgraph::init_app_handle` 注入,事件天然广播到所有窗口(含独立的知识库管理器窗口)。事件不触发任何重建,重建仍由查询侧 `build_if_needed` 惰性完成。
+- **收端**:`src/utils/kgIndexEvents.js` 的 `onKgIndexChanged(handler, { debounceMs })` 按知识库名防抖(自动保存会连发脏标记),四处订阅:
+  - `GuaxiKnowledgeBaseManager.vue` —— 命中当前库重查图谱(选中节点自动复位),库被删/新库出现则刷新知识库列表。
+  - `GuaxiBrainKnowledgeBaseList.vue` —— 静默重拉文件树,`applyLoadedTree(..., { preserveState: true })` 保留展开态与选中项。
+  - `GuaxiKnowledgeGraph3D.vue` —— 可见时按当前面包屑层级重载并恢复选中;漫游/选路径/演化回放/社区折叠/页面不可见时只记 `pendingReload`,退出该状态或 `onActivated` 时补一次。自动重载走 `loadGraph(..., { ensureIndex: false })`,跳过强制全量 `kg_build_index`,只靠 `build_if_needed` 在真脏时重建一次。
+  - `GuaxiKg3dLeftPanel.vue` —— 失效概览统计与社区缓存,已展开的重新拉取。
+
+> 另注:管理器查询必须显式传 `{ max_depth: 99, limit: 100000 }`。`kg_query_graph` 默认 `max_depth=2`,否则二级目录以下的文件节点根本不会返回。
 
 ---
 

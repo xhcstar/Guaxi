@@ -88,6 +88,7 @@ import {
 // 与主编辑器知识编辑模式文件树共用同一套精致彩色图标
 import { Icon } from '@iconify/vue';
 import { getFileTreeIcon } from '../HomeViewComponent/fileTreeIcons';
+import { onKgIndexChanged } from '../../utils/kgIndexEvents';
 
 const logger = createLogger('GuaxiBrainKnowledgeBaseList')
 const TREE_KEYBOARD_ROW_HEIGHT = 28;
@@ -115,6 +116,8 @@ const selectedKeys = ref([]);
 const hiddenRootKey = ref('');
 const treeContainerRef = ref(null);
 let abortController = new AbortController();
+// 收起态收到索引变更时记脏,重新展开时补刷一次文件树
+let treeStale = false;
 
 // 设计说明: 知识图谱侧边栏仍使用 Naive Tree 负责渲染，但键盘导航由本组件接管。
 // 这样 selectedKeys、图谱定位和滚动容器始终来自同一份可见节点序列，避免焦点到底部后只移动内部焦点、不推动外层滚动条。
@@ -157,6 +160,11 @@ const toggleKnowledgeBase = async (kb) => {
       if (!expanded.value) {
         expandedKeys.value = [];
       } else {
+        // 收起期间若磁盘有变更(索引变更事件已记脏),重新展开时补一次刷新
+        if (treeStale) {
+          treeStale = false;
+          await reloadTreeFromDisk('reexpand-stale');
+        }
         ensureTreeKeyboardStart('toggle-current-expanded');
       }
     } else {
@@ -468,25 +476,57 @@ function buildVisibleTreeData(root) {
   return { rootKey, nodes };
 }
 
-function applyLoadedTree(root, reason, kb) {
+// 收集树中全部 key,供刷新时剔除已消失的展开/选中项。
+function collectTreeKeys(nodes, out = new Set()) {
+  if (!Array.isArray(nodes)) return out;
+  for (const node of nodes) {
+    if (node?.key) out.add(node.key);
+    collectTreeKeys(node?.children, out);
+  }
+  return out;
+}
+
+// preserveState:索引变更引发的静默刷新用。保留用户已展开的目录与当前选中项(只剔除已删除的 key),
+// 否则每次外部新建文件都会把整棵树收起、焦点跳回顶部。
+function applyLoadedTree(root, reason, kb, { preserveState = false } = {}) {
   const { rootKey, nodes } = buildVisibleTreeData(root);
   hiddenRootKey.value = rootKey;
   treeData.value = nodes;
-  expandedKeys.value = [];
-  selectedKeys.value = [];
-  ensureTreeKeyboardStart(`load-${reason}`);
 
-  if (rootKey) {
+  if (preserveState) {
+    const alive = collectTreeKeys(nodes);
+    expandedKeys.value = expandedKeys.value.filter((k) => alive.has(k));
+    selectedKeys.value = selectedKeys.value.filter((k) => alive.has(k));
+  } else {
+    expandedKeys.value = [];
+    selectedKeys.value = [];
+    ensureTreeKeyboardStart(`load-${reason}`);
+  }
+
+  if (rootKey && !preserveState) {
     store.setSelectedTreeNodeKey(rootKey);
   }
 
   logger.info('[BrainKnowledgeBaseList] 已加载知识库文件树并隐藏根节点', {
     reason,
+    preserveState,
     knowledgeBase: kb?.knowledge_base_name,
     rootPath: kb?.location,
     hiddenRootKey: rootKey,
     visibleTopLevelCount: nodes.length
   });
+}
+
+// 从磁盘重新拉取当前知识库文件树(保留展开/选中态),供索引变更事件调用。
+async function reloadTreeFromDisk(reason) {
+  const kb = knowledgeBases.value.find((k) => k.id === selectedId.value);
+  if (!kb) return;
+  try {
+    const root = await invoke("get_knowledge_base_tree", { rootPath: kb.location });
+    applyLoadedTree(root, reason, kb, { preserveState: true });
+  } catch (error) {
+    logger.warn('[BrainKnowledgeBaseList] 静默刷新文件树失败', { reason, error });
+  }
 }
 
 // 树前缀图标:与主界面文件树一致的彩色类型图标,目录随展开态切换开/合。
@@ -500,6 +540,20 @@ function renderTreePrefix({ option }) {
   });
 }
 
+// 主界面在知识库里新建/删除/移动文件后，后端广播 kg_index_changed，这里静默跟随刷新文件树。
+let unlistenIndex = null;
+const handleIndexChanged = async ({ kbName, reason }) => {
+  if (reason === 'removed') {
+    await store.fetchKnowledgeBases();
+    return;
+  }
+  const kb = knowledgeBases.value.find((k) => k.id === selectedId.value);
+  if (!kb || kb.knowledge_base_name !== kbName) return;
+  if (!expanded.value) { treeStale = true; return; }
+  treeStale = false;
+  await reloadTreeFromDisk(`index-${reason}`);
+};
+
 onMounted(async () => {
   await store.fetchKnowledgeBases(); // 会自动选中第一个
 
@@ -510,9 +564,16 @@ onMounted(async () => {
     });
     applyLoadedTree(root, 'mounted', selectedKnowledgeBase.value);
   }
+
+  try {
+    unlistenIndex = await onKgIndexChanged(handleIndexChanged);
+  } catch (error) {
+    logger.warn('[BrainKnowledgeBaseList] 监听索引变更失败', error);
+  }
 });
 
 onUnmounted(() => {
+  if (unlistenIndex) { try { unlistenIndex(); } catch (_) { /* noop */ } }
   abortController.abort();
   treeData.value = [];
   expandedKeys.value = [];

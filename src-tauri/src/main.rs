@@ -718,6 +718,8 @@ async fn main() {
         ])
         .setup(move |app| {
             shared_state.set_app_handle(app.handle().clone());
+            // 知识图谱索引变更广播需要在非命令上下文(文件 CRUD 钩子)里 emit,这里注入全局句柄。
+            commands::kgraph::init_app_handle(app.handle().clone());
 
             // 启动持久化文档转换队列（含断点续跑）
             commands::convert::ConversionQueue::init(app.handle().clone());

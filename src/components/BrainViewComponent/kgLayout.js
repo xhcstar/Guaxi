@@ -126,8 +126,14 @@ export async function resolveLayout(store, kbName, view, graph, ctx = {}, opts =
     await computeForceLayout(store, kbName, nodes, edges, pos, opts);
   }
 
-  // 3. 回存(只存本视角全部节点)。后端 kg_compute_layout 已自行回存时跳过,避免重复写。
-  if (!pos._savedByBackend) {
+  // 2.5 兜底:仍然缺坐标的节点(例如后端返回了不含新节点的旧缓存)必须补上。
+  // 否则渲染层会把它们回退到 (0,0,0) —— 彼此重叠、被大球吞掉、连边被整条跳过,
+  // 表现为"新建的文件在 3D 图里根本看不到"。
+  const seededCount = seedMissingPositions(nodes, edges, pos);
+
+  // 3. 回存(只存本视角全部节点)。后端 kg_compute_layout 已自行回存时跳过,避免重复写;
+  // 但前端补过点就必须落盘,否则下次仍是残缺缓存。
+  if (!pos._savedByBackend || seededCount > 0) {
     try {
       const points = nodes.map((n) => {
         const p = pos.get(n.id) || { x: 0, y: 0, z: 0 };
@@ -140,6 +146,119 @@ export async function resolveLayout(store, kbName, view, graph, ctx = {}, opts =
   }
 
   return pos;
+}
+
+// 补点与既有节点的最小间距(最大节点半径 11,留出肉眼可辨的空隙)
+const LAYOUT_MIN_SEP = 14;
+
+// 稳定哈希(FNV-1a):落点相位由 node_id 决定,而不是"缺失列表里的序号"。
+// 用序号会让每轮补点的第一个节点落到同一点上 —— 新目录会精确重叠在上次新增的目录里。
+function stableHash(id) {
+  let h = 0x811c9dc5;
+  const s = String(id);
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h;
+}
+
+// 空间网格:O(1) 查询"该点附近是否已有节点",避免补点重合
+function makeGrid(cell) {
+  const map = new Map();
+  const key = (x, y, z) =>
+    `${Math.floor(x / cell)},${Math.floor(y / cell)},${Math.floor(z / cell)}`;
+  return {
+    insert(x, y, z) {
+      const k = key(x, y, z);
+      if (!map.has(k)) map.set(k, []);
+      map.get(k).push([x, y, z]);
+    },
+    hasWithin(x, y, z, r) {
+      const r2 = r * r;
+      const cx = Math.floor(x / cell), cy = Math.floor(y / cell), cz = Math.floor(z / cell);
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dz = -1; dz <= 1; dz++) {
+            const pts = map.get(`${cx + dx},${cy + dy},${cz + dz}`);
+            if (!pts) continue;
+            for (const [px, py, pz] of pts) {
+              const d2 = (x - px) ** 2 + (y - py) ** 2 + (z - pz) ** 2;
+              if (d2 < r2) return true;
+            }
+          }
+        }
+      }
+      return false;
+    },
+  };
+}
+
+/**
+ * 给还没有坐标的节点补位:贴着已定位的邻居(父目录/所属文件)落位,确定性无随机。
+ * 与后端 seed_missing_layout 同一套策略,作为跨层兜底。
+ * @returns {number} 补了多少个节点
+ */
+function seedMissingPositions(nodes, edges, pos) {
+  const missing = nodes.filter((n) => !pos.has(n.id));
+  if (!missing.length) return 0;
+
+  const adj = new Map();
+  const link = (a, b) => {
+    if (!adj.has(a)) adj.set(a, []);
+    adj.get(a).push(b);
+  };
+  for (const e of edges) {
+    link(e.from, e.to);
+    link(e.to, e.from);
+  }
+
+  // 全局质心与外径:一个已定位邻居都没有时的兜底锚点
+  let cx = 0, cy = 0, cz = 0, count = 0, rMax = 0;
+  for (const p of pos.values()) { cx += p.x; cy += p.y; cz += p.z; count++; }
+  if (count) {
+    cx /= count; cy /= count; cz /= count;
+    for (const p of pos.values()) {
+      rMax = Math.max(rMax, Math.hypot(p.x - cx, p.y - cy, p.z - cz));
+    }
+  }
+
+  // 浅层先放,父节点先有坐标,子节点才能贴着它
+  const ordered = [...missing].sort(
+    (a, b) => (a.depth ?? 99) - (b.depth ?? 99) || String(a.id).localeCompare(String(b.id))
+  );
+  const golden = Math.PI * (3 - Math.sqrt(5));
+  const spreadOf = (type) => (type === "directory" ? 46 : type === "file" ? 28 : type === "concept" ? 24 : 18);
+
+  // 既有节点入网格,新点据此避让
+  const grid = makeGrid(LAYOUT_MIN_SEP);
+  for (const p of pos.values()) grid.insert(p.x, p.y, p.z);
+
+  for (const n of ordered) {
+    let ax = 0, ay = 0, az = 0, c = 0;
+    for (const id of adj.get(n.id) || []) {
+      const p = pos.get(id);
+      if (p) { ax += p.x; ay += p.y; az += p.z; c++; }
+    }
+    const anchor = c ? { x: ax / c, y: ay / c, z: az / c } : { x: cx, y: cy, z: cz };
+    const h = stableHash(n.id);
+    const t = ((h >>> 9) % 64 + 0.5) / 64;
+    const phi = Math.acos(1 - 2 * t);
+    let theta = golden * (h % 100003);
+    let spread = Math.max(LAYOUT_MIN_SEP, c ? spreadOf(n.type) : Math.max(60, rMax * 0.8));
+    let x = 0, y = 0, z = 0;
+    for (let attempt = 0; attempt < 24; attempt++) {
+      x = anchor.x + spread * Math.sin(phi) * Math.cos(theta);
+      y = anchor.y + spread * (1 - 2 * t) * 0.6;
+      z = anchor.z + spread * Math.sin(phi) * Math.sin(theta);
+      if (!grid.hasWithin(x, y, z, LAYOUT_MIN_SEP)) break;
+      theta += golden;
+      spread += LAYOUT_MIN_SEP * 0.35;
+    }
+    grid.insert(x, y, z);
+    pos.set(n.id, { x, y, z });
+  }
+  return ordered.length;
 }
 
 // relation 视角:三级回退(后端 Rust → 前端 Worker → 主线程同步)
