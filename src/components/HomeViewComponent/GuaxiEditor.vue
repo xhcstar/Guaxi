@@ -4853,6 +4853,20 @@ const decodeFileUrlToPath = (href) => {
   }
 };
 
+// 部分笔记/导出工具会把链接目标里的非 ASCII 字符写成百分号编码（如 `%E5%90%AF%E5%8A%A8`）。
+// 若直接把这种编码后的路径交给后端 read_file_content，会因磁盘上不存在该字符串而报「找不到文件」。
+// 这里只在确实存在百分号编码时做一次解码，失败则回退原值，避免破坏文件名里合法的 `%`。
+const decodeLinkPath = (p) => {
+  const s = String(p || '');
+  if (!s) return '';
+  if (!/%[0-9A-Fa-f]{2}/.test(s)) return s;
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+};
+
 // 将 path 规范化（处理 `.`/`..`，并尽量保留 Windows 盘符/UNC 前缀）
 const normalizeResolvedFsPath = (rawPath) => {
   let s = normalizeFsPath(rawPath);
@@ -4911,7 +4925,7 @@ const resolveFsLinkToAbsolute = async (rawLink, { baseDocPath } = {}) => {
   if (!raw) return '';
 
   const fileUrlDecoded = decodeFileUrlToPath(raw);
-  const link = normalizeFsPath(fileUrlDecoded || raw);
+  const link = normalizeFsPath(decodeLinkPath(fileUrlDecoded || raw));
   if (!link) return '';
 
   const isAbs = /^[a-zA-Z]:\//.test(link) || link.startsWith('/') || link.startsWith('\\\\');
@@ -19814,12 +19828,14 @@ const handleOrgPreviewBack = async () => {
     if (res?.ok) await fileTreeStore.openFileInTab(prev, res.content, { unsupported: !!res.unsupported })
   } catch (e) { logger.error('[OrgPreview] back failed', e) }
 }
-// 预览中点击 NOTES 外链：解析相对路径并在编辑区打开（阶段3 完善左右同步/返回/搜索）
+// 预览中点击 NOTES 外链：解析相对/绝对路径并在编辑区打开（复用统一链接解析，支持百分号编码、`../`、盘符与 `~/`）
 const handleOpenNotesFromPreview = async (notesPath) => {
   try {
-    const cur = String(selectedFile.value?.path || '').replace(/\\/g, '/')
-    const dir = cur.slice(0, cur.lastIndexOf('/'))
-    const abs = /^([a-zA-Z]:\/|\/)/.test(notesPath) ? notesPath : `${dir}/${notesPath}`
+    const abs = await resolveFsLinkToAbsolute(notesPath, { baseDocPath: selectedFile.value?.path || '' })
+    if (!abs) {
+      message.warning('NOTES 文件不存在，可在编辑区用工具栏「添加 NOTES 文件」创建')
+      return
+    }
     const res = await fileTreeStore.fetchFileContent(abs)
     if (res?.ok) {
       await fileTreeStore.openFileInTab(abs, res.content, { unsupported: !!res.unsupported })

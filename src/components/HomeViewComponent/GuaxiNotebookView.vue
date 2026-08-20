@@ -4487,8 +4487,21 @@ const isNotebookPathLikeToken = (href = '') => {
   if (raw.startsWith('#') || isNotebookHttpUrl(raw) || /^mailto:/i.test(raw)) return false
   return isNotebookWikilinkHref(raw) || raw.startsWith('.') || raw.startsWith('/') || /^[A-Za-z]:[\\/]/.test(raw) || raw.includes('/') || raw.includes('\\')
 }
+// 与 GuaxiEditor 的链接解析保持一致：链接目标里的非 ASCII 字符可能被写成百分号编码
+// （如 `%E5%90%AF%E5%8A%A8`），直接交给后端 read_file_content 会因磁盘上无此字符串而报「找不到文件」。
+// 仅在确实存在百分号编码时解码一次，失败回退原值，避免破坏文件名里合法的 `%`。
+const decodeNotebookLinkPath = (rawPath = '') => {
+  const s = String(rawPath || '')
+  if (!s) return ''
+  if (!/%[0-9A-Fa-f]{2}/.test(s)) return s
+  try {
+    return decodeURIComponent(s)
+  } catch {
+    return s
+  }
+}
 const resolveNotebookRelativePath = (target, baseDir) => {
-  const normalizedTarget = String(target || '').trim()
+  const normalizedTarget = decodeNotebookLinkPath(String(target || '').trim())
   if (!normalizedTarget) return ''
   if (/^[A-Za-z]:[\\/]/.test(normalizedTarget)) return normalizeNotebookFsPath(normalizedTarget)
   if (normalizedTarget.startsWith('/')) return normalizeNotebookFsPath(normalizedTarget)
