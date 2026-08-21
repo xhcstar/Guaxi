@@ -828,6 +828,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { notebookReadingLocationBackStack, notebookReadingLocationForwardStack } from '../../stores/notebookReadingStore'
 import { Icon } from '@iconify/vue'
 import { emit as emitTauriEvent, listen } from '@tauri-apps/api/event'
 import { openUrl } from '@tauri-apps/plugin-opener'
@@ -1012,8 +1013,7 @@ const notebookSidecarLoadVersion = ref(0)
 const notebookHistoryEntries = ref([])
 const notebookHistoryIndex = ref(-1)
 const notebookHistoryApplying = ref(false)
-const notebookReadingLocationBackStack = ref([])
-const notebookReadingLocationForwardStack = ref([])
+// 阅读位置历史栈从模块级 store 引用，组件卸载/重挂载后历史不丢失
 let lastRecordedNotebookReadingLocationKey = ''
 let lastRecordedNotebookReadingLocationAt = 0
 let suppressNotebookReadingLocationRecording = false
@@ -9208,6 +9208,17 @@ defineExpose({
   jumpToOutlineLine(line) {
     return jumpToNotebookOutlineLine(line)
   },
+  captureReadingPosition(reason = 'external-capture') {
+    return recordNotebookReadingLocation(reason)
+  },
+  restoreReadingPosition(reason = 'external-restore') {
+    const back = notebookReadingLocationBackStack.value
+    const location = back[back.length - 1]
+    if (location) {
+      return goToNotebookReadingLocation(location, { source: reason })
+    }
+    return false
+  },
 })
 </script>
 
@@ -9268,7 +9279,7 @@ defineExpose({
   --guaxi-notebook-panel-soft: color-mix(in srgb, var(--guaxi-panel-bg, #21252b) 74%, #334155 26%);
   --guaxi-notebook-border: rgba(148, 163, 184, 0.28);
   --guaxi-notebook-strong-border: rgba(148, 163, 184, 0.38);
-  --guaxi-notebook-text: #edf3fb;
+  --guaxi-notebook-text: #d8e0eb;
   --guaxi-notebook-muted: rgba(221, 230, 241, 0.82);
   --guaxi-notebook-btn: color-mix(in srgb, var(--guaxi-panel-bg, #21252b) 68%, #475569 32%);
   --guaxi-notebook-btn-hover: color-mix(in srgb, var(--guaxi-panel-bg, #21252b) 56%, #64748b 44%);
@@ -10517,7 +10528,7 @@ defineExpose({
 .guaxi-notebook.theme-dark .guaxi-notebook__cell-btn,
 .guaxi-notebook.theme-dark .guaxi-notebook__toolbar-btn,
 .guaxi-notebook.theme-dark .guaxi-notebook__icon-btn {
-  color: #edf3fb;
+  color: #d8e0eb;
 }
 
 .guaxi-notebook.theme-dark .guaxi-notebook__cell-btn.primary,

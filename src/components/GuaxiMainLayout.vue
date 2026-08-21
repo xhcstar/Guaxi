@@ -1,6 +1,6 @@
 <template>
   <div class="app-layout">
-    <KeepAlive>
+    <KeepAlive :include="['GuaxiHomePage']">
       <component :is="currentView" />
     </KeepAlive>
   </div>

@@ -12,6 +12,11 @@
 </template>
 
 
+
+<script>
+export default { name: 'GuaxiHomePage' }
+</script>
+
 <script setup>
 import { nextTick, onBeforeUnmount, onMounted } from 'vue';
 import GuaxiHeader from "../components/HomeViewComponent/GuaxiHeader.vue";

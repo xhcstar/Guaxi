@@ -193,7 +193,7 @@ const themeOverrides = computed(() => {
   --guaxi-content-bg: #282c34;
   --guaxi-panel-bg: #21252b;
   --guaxi-border: #3e4451;
-  --guaxi-text-primary: #abb2bf;
+  --guaxi-text-primary: #d8e0eb;
   --guaxi-text-secondary: #9da5b4;
   --guaxi-header-shadow: 0px 2px 4px rgba(0, 0, 0, 0.35);
   --guaxi-syntax-base: #abb2bf;

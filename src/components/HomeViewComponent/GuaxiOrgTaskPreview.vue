@@ -352,7 +352,23 @@ const sectionsOf = (b) => {
   if (b.extraImpacts && b.extraImpacts.length) out.push({ key: 'extra', title: 'Extra Impact', type: 'extra', value: b.extraImpacts, defaultCollapsed: true })
   return out
 }
-const secState = reactive({})
+// ── 折叠状态持久化：localStorage + 监听 activeBlockLine 保存滚动位置 ──
+const SEC_STATE_KEY = 'guaxi_org_section_collapse_state'
+const SCROLL_POS_KEY = 'guaxi_org_scroll_position'
+const loadSecState = () => {
+  try {
+    const raw = localStorage.getItem(SEC_STATE_KEY)
+    return raw ? JSON.parse(raw) : {}
+  } catch {
+    return {}
+  }
+}
+const saveSecState = () => {
+  try {
+    localStorage.setItem(SEC_STATE_KEY, JSON.stringify(secState))
+  } catch {}
+}
+const secState = reactive(loadSecState())
 const secKey = (line, key) => `${line}:${key}`
 const isCollapsed = (line, key, dft) => {
   const k = secKey(line, key)
@@ -361,6 +377,7 @@ const isCollapsed = (line, key, dft) => {
 const toggleSec = (line, key, dft) => {
   const k = secKey(line, key)
   secState[k] = !(k in secState ? secState[k] : !!dft)
+  saveSecState()
 }
 const copySection = async (sec, line) => {
   let text = ''

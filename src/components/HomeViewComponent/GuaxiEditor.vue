@@ -22333,8 +22333,33 @@ onMounted(() => {
   })()
 });
 
-onActivated(() => {
-  restoreHomePreviewMode('activated')
+onActivated(async () => {
+  const path = selectedFile.value?.path || fileTreeStore.activeTab || '';
+
+  // 先保存当前位置到缓存，避免 restoreHomePreviewMode 内的渲染覆盖掉它
+  if (path) {
+    saveActivePreviewReadPosition('activated-before-mode-restore', path);
+    captureEditorReadPosition(path, getActiveEditor(), 'activated-before-mode-restore');
+  }
+
+  await restoreHomePreviewMode('activated');
+
+  // 模式恢复后（可能触发了重新渲染），再把阅读位置排队恢复
+  if (path) {
+    const kind = getPreviewReadKindForPath(path);
+    const key = getHomePreviewModeKeyFromState();
+    if (key === 'preview' || key === 'split') {
+      queuePreviewReadPositionRestore(path, kind, 'activated-after-mode-restore');
+      await nextTick();
+      void restoreQueuedPreviewReadPosition(kind, path, 'activated-restored');
+    } else if (key === 'edit') {
+      void restoreEditorReadPosition(path, getActiveEditor(), 'activated-restored').catch(() => {});
+    } else if (key === 'explorer') {
+      window.setTimeout(() => {
+        notebookViewRef.value?.restoreReadingPosition?.('activated-explorer-restored');
+      }, 150);
+    }
+  }
 })
 
 onUnmounted(() => {
