@@ -24593,6 +24593,7 @@ onUnmounted(() => {
 .preview :deep(li > p),
 .preview :deep(.md-paragraph) {
   display: block !important;
+  box-sizing: border-box;
   width: auto !important;
   max-width: 100%;
   text-align: left;
@@ -24629,15 +24630,24 @@ onUnmounted(() => {
 
 .preview :deep(li) {
   display: list-item !important;
+  box-sizing: border-box;
   width: auto !important;
   max-width: 100%;
   text-align: left;
 }
 
+/* 设计说明：
+ * 1. 项目没有全局 box-sizing 重置，列表默认是 content-box。
+ * 2. 之前写 width: 100% 会让 content box 等于 .preview 的内容宽，再叠加列表自身的
+ *    padding-inline-start（UA 40px / markdown-body 2em），border box 就比可视区宽一截，
+ *    正文按这个偏大的宽度折行，行尾被 .preview 的 overflow-x: hidden 裁掉。
+ * 3. 改成 border-box + width: auto：块级列表本来就会撑满可用宽度，且会正确扣掉缩进 padding，
+ *    嵌套列表也不会逐层累加溢出。 */
 .preview :deep(ul),
 .preview :deep(ol) {
   display: block;
-  width: 100%;
+  box-sizing: border-box;
+  width: auto;
   max-width: 100%;
 }
 
@@ -26338,6 +26348,7 @@ onUnmounted(() => {
 }
 
 .preview :deep(table) {
+  box-sizing: border-box;
   width: 100%;
   max-width: 100%;
   table-layout: fixed;
