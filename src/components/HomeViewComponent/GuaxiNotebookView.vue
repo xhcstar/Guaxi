@@ -2619,6 +2619,35 @@ const goToNotebookReadingLocation = async (location, { source = 'shortcut' } = {
   }
 }
 
+// 设计说明（跨模式保留探索者阅读位置）：
+// 1. 探索者视图由父组件用 v-if 挂载，每次切换模式都会销毁重建，内部的前进/后退栈会一起清空，
+//    所以“当前阅读位置”必须交给父组件按文件缓存，这里只负责读取与应用。
+// 2. 重建后 cell 是渐进渲染的（KaTeX/图片/代码高亮都会继续增高文档），一次性写 scrollTop 会被
+//    当时还偏小的 scrollHeight 夹断，表现为“只恢复了一点点”甚至回到开头，因此需要多帧重试。
+const applyNotebookReadingLocationWithRetry = async (location, reason = 'external-apply', attempts = 10) => {
+  const targetTop = Number(location?.scrollTop)
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const applied = await goToNotebookReadingLocation(location, { source: `${reason}#${attempt}` })
+    if (!applied) return false
+    if (!Number.isFinite(targetTop) || targetTop <= 0) return true
+
+    const host = getNotebookScrollHost()
+    if (!(host instanceof HTMLElement)) return false
+    if (Math.abs(host.scrollTop - targetTop) <= 2) return true
+
+    await new Promise((resolve) => {
+      window.requestAnimationFrame(() => window.setTimeout(resolve, 40))
+    })
+  }
+
+  logger.warn('[NotebookNav] reading location not fully restored after retries', {
+    reason,
+    targetTop: Number.isFinite(targetTop) ? Math.round(targetTop) : 'na',
+    actualTop: Math.round(Number(getNotebookScrollHost()?.scrollTop || 0)),
+  })
+  return false
+}
+
 const navigateToPreviousNotebookReadingLocation = async () => {
   const current = getCurrentNotebookReadingLocation()
   if (!current) return false
@@ -9210,6 +9239,12 @@ defineExpose({
   },
   captureReadingPosition(reason = 'external-capture') {
     return recordNotebookReadingLocation(reason)
+  },
+  getReadingPosition() {
+    return getCurrentNotebookReadingLocation()
+  },
+  applyReadingPosition(location, reason = 'external-apply') {
+    return applyNotebookReadingLocationWithRetry(location, reason)
   },
   restoreReadingPosition(reason = 'external-restore') {
     const back = notebookReadingLocationBackStack.value

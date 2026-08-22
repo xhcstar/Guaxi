@@ -1173,7 +1173,7 @@
 
 <script setup>
 import { createLogger } from '../../utils/logger'
-import { ref, computed, watch, onMounted, onUnmounted, onActivated, nextTick, provide, h } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, onActivated, onDeactivated, nextTick, provide, h } from 'vue'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useEditorStore } from '../../stores/editorStore'
 import { useEditorBridgeStore } from '../../stores/editorBridgeStore'
@@ -2437,6 +2437,9 @@ const previewReadPositionCache = new Map();
 let markdownPreviewScrollSaveTimer = null;
 let pendingPreviewReadPositionRestoreKey = '';
 let suppressPreviewReadPositionSave = false;
+// 从 KeepAlive 缓存中被重新激活的那一小段时间里，DOM 刚回到布局、滚动条已被重置为 0，
+// 此时任何保存都会把 onDeactivated 存好的正确位置覆盖成开头，所以整条保存链路需要临时静音。
+let suppressReadPositionSaveDepth = 0;
 const pendingRealtimeScrollRestore = ref(false);
 const realtimeVditorId = 'realtime-vditor';
 const realtimeVditorReady = ref(false);
@@ -2502,6 +2505,17 @@ const captureMarkdownPreviewReadPosition = (path, reason = 'unknown') => {
     logger.debug('[PreviewReadPosition] skip markdown save because preview html is empty', {
       reason,
       path: normalizedPath,
+    });
+    return false;
+  }
+  // 设计说明（关键）：预览面板用 v-show 隐藏，display:none 的元素 scrollTop/clientHeight 恒为 0。
+  // 在编辑/探索者模式下调用本函数会把已保存的正确位置覆盖成 0，表现为“切回预览总是回到开头”。
+  // 因此容器未参与布局时必须放弃保存，让缓存里的旧值继续生效。
+  if (!container.isConnected || container.clientHeight <= 0 || container.offsetParent === null) {
+    logger.debug('[PreviewReadPosition] skip markdown save because preview container is not laid out', {
+      reason,
+      path: normalizedPath,
+      clientHeight: container.clientHeight,
     });
     return false;
   }
@@ -2573,7 +2587,7 @@ const capturePdfPreviewReadPosition = (path, reason = 'unknown') => {
 };
 
 const saveActivePreviewReadPosition = (reason = 'unknown', pathOverride = '') => {
-  if (suppressPreviewReadPositionSave) return false;
+  if (suppressPreviewReadPositionSave || suppressReadPositionSaveDepth > 0) return false;
   const path = normalizePreviewReadPath(pathOverride || selectedFile.value?.path || fileTreeStore.activeTab || lastSelectedFilePath.value);
   const kind = getPreviewReadKindForPath(path);
   if (kind === 'markdown') return captureMarkdownPreviewReadPosition(path, reason);
@@ -2687,6 +2701,102 @@ const restoreQueuedPreviewReadPosition = async (kind, path, reason = 'unknown') 
   if (kind === 'pdf') return restorePdfPreviewReadPosition(path, reason);
   if (kind === 'org') return restoreOrgPreviewReadPosition(path, reason);
   return false;
+};
+
+// ───── 探索者（Notebook）阅读位置：按文件缓存在父组件 ─────
+// 设计说明：探索者视图是 v-if 挂载的，切一次模式就销毁重建，组件内部的阅读历史栈会被清空。
+// 位置必须存在这里（父组件长期存活），才能在“探索者 → 其它模式 → 探索者”的往返中保住。
+const EXPLORER_READ_POSITION_CACHE_LIMIT = 160;
+const explorerReadPositionCache = new Map();
+
+const captureExplorerReadPosition = (path, reason = 'unknown') => {
+  const normalizedPath = normalizePreviewReadPath(path || selectedFile.value?.path || fileTreeStore.activeTab);
+  const view = notebookViewRef.value;
+  if (!normalizedPath || typeof view?.getReadingPosition !== 'function') return false;
+
+  const location = view.getReadingPosition();
+  if (!location) return false;
+
+  // 顶部（scrollTop 0）也要如实记录，否则用户主动回到开头后会被旧位置拽回去。
+  explorerReadPositionCache.delete(normalizedPath);
+  explorerReadPositionCache.set(normalizedPath, { ...location, savedAt: Date.now() });
+  while (explorerReadPositionCache.size > EXPLORER_READ_POSITION_CACHE_LIMIT) {
+    const oldestKey = explorerReadPositionCache.keys().next().value;
+    if (!oldestKey) break;
+    explorerReadPositionCache.delete(oldestKey);
+  }
+
+  logger.debug('[ExplorerReadPosition] saved explorer position', {
+    reason,
+    path: normalizedPath,
+    scrollTop: Math.round(Number(location.scrollTop || 0)),
+    cellKey: String(location.cellKey || ''),
+  });
+  return true;
+};
+
+const restoreExplorerReadPosition = async (path, reason = 'unknown') => {
+  const normalizedPath = normalizePreviewReadPath(path || selectedFile.value?.path || fileTreeStore.activeTab);
+  const entry = normalizedPath ? explorerReadPositionCache.get(normalizedPath) : null;
+  const view = notebookViewRef.value;
+  if (!entry || typeof view?.applyReadingPosition !== 'function') return false;
+
+  const restored = !!(await view.applyReadingPosition({ ...entry, path: normalizedPath }, reason));
+  logger.info('[ExplorerReadPosition] restored explorer position', {
+    reason,
+    path: normalizedPath,
+    scrollTop: Math.round(Number(entry.scrollTop || 0)),
+    restored,
+  });
+  return restored;
+};
+
+// 设计说明（统一入口 · 对应“模式切换/页面切换保留阅读位置”）：
+// 1. 阅读位置的载体随模式而异：编辑=Monaco viewState，预览/分屏=预览容器 scrollTop，探索者=notebook scrollTop。
+// 2. 过去只在切模式前调 saveActivePreviewReadPosition（只认文件后缀、只存预览容器），
+//    离开编辑/探索者时等于什么都没存，切回自然回到开头。这里按“当前真正激活的界面”分派。
+// 3. 分屏模式下编辑器与预览同时可见，两侧都要存，避免从分屏切到单一模式时丢掉另一侧。
+const saveActiveReadPositionForMode = (reason = 'unknown', pathOverride = '') => {
+  if (suppressReadPositionSaveDepth > 0) {
+    logger.debug('[ReadPosition] skip save while suppressed', { reason });
+    return false;
+  }
+
+  const path = normalizePreviewReadPath(
+    pathOverride || selectedFile.value?.path || fileTreeStore.activeTab || lastSelectedFilePath.value
+  );
+  if (!path) return false;
+
+  const modeKey = getHomePreviewModeKeyFromState();
+  if (modeKey === 'explorer') return captureExplorerReadPosition(path, reason);
+  if (modeKey === 'edit') return captureEditorReadPosition(path, getActiveEditor(), reason);
+
+  let saved = saveActivePreviewReadPosition(reason, path);
+  if (modeKey === 'split') {
+    saved = captureEditorReadPosition(path, getActiveEditor(), reason) || saved;
+  }
+  return saved;
+};
+
+const restoreActiveReadPositionForMode = async (reason = 'unknown', pathOverride = '') => {
+  const path = normalizePreviewReadPath(pathOverride || selectedFile.value?.path || fileTreeStore.activeTab);
+  if (!path) return false;
+
+  const modeKey = getHomePreviewModeKeyFromState();
+  if (modeKey === 'explorer') return restoreExplorerReadPosition(path, reason);
+  if (modeKey === 'edit') return restoreEditorReadPosition(path, getActiveEditor(), reason);
+
+  const kind = getPreviewReadKindForPath(path);
+  let restored = false;
+  if (kind) {
+    queuePreviewReadPositionRestore(path, kind, reason);
+    await nextTick();
+    restored = !!(await restoreQueuedPreviewReadPosition(kind, path, reason));
+  }
+  if (modeKey === 'split') {
+    restored = !!(await restoreEditorReadPosition(path, getActiveEditor(), reason)) || restored;
+  }
+  return restored;
 };
 
 const handleMarkdownPreviewScroll = () => {
@@ -20372,7 +20482,8 @@ const setHomePreviewModeKeySafe = (key) => {
 
 const handlePreviewModeSelect = async (key) => {
   const desiredKey = normalizeHomePreviewModeKey(key);
-  saveActivePreviewReadPosition('preview-mode-select-before-change');
+  // 切模式前按“当前真正激活的界面”保存阅读位置（编辑/预览/分屏/探索者各自的载体不同）。
+  saveActiveReadPositionForMode('preview-mode-select-before-change');
   logger.info('[Editor] handlePreviewModeSelect', {
     desiredKey,
     filePath: String(selectedFile.value?.path || ''),
@@ -20413,6 +20524,12 @@ const handlePreviewModeSelect = async (key) => {
     editorSurfaceMode.value = 'notebook';
     disposePythonCellManagers();
     await setMainMode('edit');
+    // 探索者视图此刻刚由 v-if 重建，需等挂载完成再恢复；内部会多帧重试以对抗渐进渲染带来的高度变化。
+    await nextTick();
+    void restoreExplorerReadPosition(
+      selectedFile.value?.path || fileTreeStore.activeTab || '',
+      'enter-explorer-mode'
+    ).catch(() => {});
     return;
   }
 
@@ -20425,6 +20542,13 @@ const handlePreviewModeSelect = async (key) => {
     orgPreviewVisible.value = false;
     lastPreviewRenderedPath.value = '';
     await setMainMode('edit');
+    // 源码编辑器由 v-show 保留，但从预览/探索者切回来时视口可能已被重置，显式恢复上次的 viewState。
+    await nextTick();
+    void restoreEditorReadPosition(
+      selectedFile.value?.path || fileTreeStore.activeTab || '',
+      getActiveEditor(),
+      'enter-edit-mode'
+    ).catch(() => {});
     return;
   }
 
@@ -20482,6 +20606,12 @@ const handlePreviewModeSelect = async (key) => {
       await setMainMode('edit');
       await nextTick();
       refreshPreview();
+      // 分屏两侧都要恢复：预览侧由 refreshPreview 渲染完成后消费队列，编辑侧在此显式恢复。
+      void restoreEditorReadPosition(
+        selectedFile.value?.path || fileTreeStore.activeTab || '',
+        getActiveEditor(),
+        'enter-split-preview'
+      ).catch(() => {});
       return;
     }
     // LaTeX/Typst：编辑器 + PDF 预览面板分屏。
@@ -22336,30 +22466,37 @@ onMounted(() => {
 onActivated(async () => {
   const path = selectedFile.value?.path || fileTreeStore.activeTab || '';
 
-  // 先保存当前位置到缓存，避免 restoreHomePreviewMode 内的渲染覆盖掉它
-  if (path) {
-    saveActivePreviewReadPosition('activated-before-mode-restore', path);
-    captureEditorReadPosition(path, getActiveEditor(), 'activated-before-mode-restore');
+  // restoreHomePreviewMode 可能内部走 handlePreviewModeSelect，其“切换前保存”会读到刚重置的滚动条，
+  // 因此整段模式恢复期间静音保存，只允许恢复。
+  suppressReadPositionSaveDepth += 1;
+  try {
+    await restoreHomePreviewMode('activated');
+  } finally {
+    suppressReadPositionSaveDepth -= 1;
   }
 
-  await restoreHomePreviewMode('activated');
-
-  // 模式恢复后（可能触发了重新渲染），再把阅读位置排队恢复
+  // 模式恢复后（可能触发了重新渲染），再按当前模式恢复对应载体的阅读位置。
+  // 位置本身在 onDeactivated 时已经存好，这里不再重复保存——被 KeepAlive 缓存期间
+  // DOM 已脱离布局，此时读取只会得到 0 并覆盖掉正确值。
   if (path) {
-    const kind = getPreviewReadKindForPath(path);
-    const key = getHomePreviewModeKeyFromState();
-    if (key === 'preview' || key === 'split') {
-      queuePreviewReadPositionRestore(path, kind, 'activated-after-mode-restore');
-      await nextTick();
-      void restoreQueuedPreviewReadPosition(kind, path, 'activated-restored');
-    } else if (key === 'edit') {
-      void restoreEditorReadPosition(path, getActiveEditor(), 'activated-restored').catch(() => {});
-    } else if (key === 'explorer') {
-      window.setTimeout(() => {
-        notebookViewRef.value?.restoreReadingPosition?.('activated-explorer-restored');
-      }, 150);
-    }
+    await nextTick();
+    void restoreActiveReadPositionForMode('activated-restored', path).catch(() => {});
   }
+})
+
+// 设计说明（对应“切到其它页面再切回主页要保住阅读位置”）：
+// GuaxiHomePage 被 GuaxiMainLayout 的 KeepAlive 缓存，离开时组件不会 unmount，onUnmounted 不会触发。
+// 因此必须在 onDeactivated（此时 DOM 仍在布局中、读数有效）抓取位置，否则切回来只剩默认视口。
+onDeactivated(() => {
+  const path = selectedFile.value?.path || fileTreeStore.activeTab || '';
+  if (!path) return;
+  const saved = saveActiveReadPositionForMode('home-page-deactivated', path);
+  cancelMarkdownPreviewScrollSaveTimer('home-page-deactivated');
+  logger.info('[ReadPosition] captured on home page deactivate', {
+    path: normalizePreviewReadPath(path),
+    modeKey: getHomePreviewModeKeyFromState(),
+    saved,
+  });
 })
 
 onUnmounted(() => {
