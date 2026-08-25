@@ -774,7 +774,12 @@
         class="editor-wrapper"
         ref="editorWrapperRef"
       >
-        <div v-if="editorSurfaceMode === 'notebook' && canUseNotebookSurface" class="notebook-surface">
+        <div
+          v-if="editorSurfaceMode === 'notebook' && canUseNotebookSurface"
+          class="notebook-surface"
+          ref="notebookSurfaceRef"
+          @scroll.capture.passive="handleExplorerSurfaceScroll"
+        >
           <GuaxiNotebookView
             ref="notebookViewRef"
             :markdown="rawContent"
@@ -1693,6 +1698,7 @@ const pythonConsoleHistory = ref([])
 const pythonConsolePinnedOutput = ref('')
 const pythonConsoleOutputRef = ref(null)
 const notebookViewRef = ref(null)
+const notebookSurfaceRef = ref(null)
 const terminalPanelRef = ref(null)
 let notebookDiskPersistTimer = null
 let notebookDiskPersistInFlight = false
@@ -2609,6 +2615,60 @@ const queueCurrentPreviewReadPositionRestore = (kind = '', reason = 'unknown') =
   return queuePreviewReadPositionRestore(path, kind || getPreviewReadKindForPath(path), reason);
 };
 
+// 设计说明（关键 · 渐进渲染下的落位）：
+// 1. 预览/即时渲染都是渐进渲染：图片、KaTeX、Mermaid、代码高亮会在之后的若干帧里继续把文档撑高。
+// 2. 只写一次 scrollTop 会被当时还偏小的 scrollHeight 夹断，表现为“只恢复了一点点”甚至回到开头。
+// 3. 因此按帧重试：目标可达就落位收工；文档高度连续多帧不再变化说明已是最终高度，按比例兜底后收工。
+//    这样既不会在文档撑高期间提前放弃，也不会在高度稳定后继续跟用户抢滚动条。
+const RESTORE_SCROLL_MAX_ATTEMPTS = 14;
+const RESTORE_SCROLL_RETRY_DELAY_MS = 40;
+const RESTORE_SCROLL_STABLE_FRAMES = 2;
+
+const restoreScrollTopWithGrowthRetry = async (getElement, entry, { reason = 'unknown', label = 'scroll' } = {}) => {
+  const storedTop = Number(entry?.scrollTop);
+  const storedRatio = Number(entry?.scrollRatio);
+  const targetTop = Number.isFinite(storedTop) ? Math.max(0, storedTop) : 0;
+  let lastMaxTop = -1;
+  let stableCount = 0;
+  let applied = 0;
+  let reached = false;
+  let attempts = 0;
+
+  for (let attempt = 1; attempt <= RESTORE_SCROLL_MAX_ATTEMPTS; attempt += 1) {
+    attempts = attempt;
+    await new Promise((resolve) => window.requestAnimationFrame(resolve));
+    const el = getElement();
+    if (!(el instanceof HTMLElement) || !el.isConnected) break;
+
+    const maxTop = Math.max(0, el.scrollHeight - el.clientHeight);
+    const reachable = targetTop <= maxTop + 2;
+    stableCount = maxTop === lastMaxTop ? stableCount + 1 : 0;
+    lastMaxTop = maxTop;
+
+    const fallbackTop = Number.isFinite(storedRatio) && storedRatio > 0 ? storedRatio * maxTop : maxTop;
+    const nextTop = Math.min(Math.max(0, reachable ? targetTop : fallbackTop), maxTop);
+    el.scrollTop = nextTop;
+    applied = el.scrollTop;
+
+    if (reachable || targetTop <= 0) {
+      reached = true;
+      break;
+    }
+    if (stableCount >= RESTORE_SCROLL_STABLE_FRAMES) break;
+    await new Promise((resolve) => window.setTimeout(resolve, RESTORE_SCROLL_RETRY_DELAY_MS));
+  }
+
+  logger.debug('[ReadPosition] scroll restore settled', {
+    reason,
+    label,
+    attempts,
+    targetTop: Math.round(targetTop),
+    applied: Math.round(applied),
+    reached,
+  });
+  return { applied, reached };
+};
+
 const restoreMarkdownPreviewReadPosition = async (path, reason = 'unknown') => {
   const key = getPreviewReadPositionKey(path, 'markdown');
   const entry = key ? previewReadPositionCache.get(key) : null;
@@ -2618,22 +2678,18 @@ const restoreMarkdownPreviewReadPosition = async (path, reason = 'unknown') => {
   suppressPreviewReadPositionSave = true;
   try {
     await nextTick();
-    await new Promise((resolve) => window.requestAnimationFrame(resolve));
-
-    const maxTop = Math.max(0, container.scrollHeight - container.clientHeight);
-    const storedTop = Number(entry.scrollTop);
-    const storedRatio = Number(entry.scrollRatio);
-    let nextTop = Number.isFinite(storedTop) ? storedTop : 0;
-    if (nextTop > maxTop && Number.isFinite(storedRatio)) {
-      nextTop = storedRatio * maxTop;
-    }
-    container.scrollTop = Math.min(Math.max(0, nextTop), maxTop);
+    const { applied, reached } = await restoreScrollTopWithGrowthRetry(
+      () => previewContainer.value,
+      entry,
+      { reason, label: 'markdown-preview' },
+    );
 
     logger.info('[PreviewReadPosition] restored markdown position', {
       reason,
       path: normalizePreviewReadPath(path),
-      scrollTop: Math.round(container.scrollTop),
-      ratio: Number.isFinite(storedRatio) ? +storedRatio.toFixed(4) : 0,
+      scrollTop: Math.round(applied),
+      reached,
+      ratio: Number.isFinite(Number(entry.scrollRatio)) ? +Number(entry.scrollRatio).toFixed(4) : 0,
     });
     return true;
   } finally {
@@ -2707,15 +2763,59 @@ const restoreQueuedPreviewReadPosition = async (kind, path, reason = 'unknown') 
 // 设计说明：探索者视图是 v-if 挂载的，切一次模式就销毁重建，组件内部的阅读历史栈会被清空。
 // 位置必须存在这里（父组件长期存活），才能在“探索者 → 其它模式 → 探索者”的往返中保住。
 const EXPLORER_READ_POSITION_CACHE_LIMIT = 160;
+// 切文件时探索者要先经过一次异步 cell 解析（Tauri invoke + 渐进渲染）才有最终高度，
+// 比“切模式”慢得多，所以这里给更长的重试预算，避免在文档撑高之前就放弃落位。
+const EXPLORER_FILE_SWITCH_RESTORE_ATTEMPTS = 24;
 const explorerReadPositionCache = new Map();
+let explorerScrollSaveTimer = null;
+
+const isExplorerSurfaceLaidOut = () => {
+  const el = notebookSurfaceRef.value;
+  if (!(el instanceof HTMLElement)) return false;
+  return el.isConnected && el.clientHeight > 0 && el.offsetParent !== null;
+};
+
+const cancelExplorerScrollSaveTimer = (reason = 'unknown') => {
+  if (!explorerScrollSaveTimer) return;
+  window.clearTimeout(explorerScrollSaveTimer);
+  explorerScrollSaveTimer = null;
+  logger.debug('[ExplorerReadPosition] cancelled pending explorer scroll save', { reason });
+};
 
 const captureExplorerReadPosition = (path, reason = 'unknown') => {
+  if (suppressReadPositionSaveDepth > 0) {
+    logger.debug('[ExplorerReadPosition] skip save while suppressed', { reason });
+    return false;
+  }
   const normalizedPath = normalizePreviewReadPath(path || selectedFile.value?.path || fileTreeStore.activeTab);
   const view = notebookViewRef.value;
   if (!normalizedPath || typeof view?.getReadingPosition !== 'function') return false;
 
   const location = view.getReadingPosition();
   if (!location) return false;
+
+  // 设计说明（关键）：探索者被 KeepAlive 移出文档时，DOM 已没有布局盒，scrollTop 读数恒为 0。
+  // 此时保存会把切 tab / 切模式时存好的正确位置覆盖成开头，所以未参与布局时必须放弃保存。
+  const scrollTopValue = Number(location.scrollTop || 0);
+  if (scrollTopValue <= 0 && !isExplorerSurfaceLaidOut()) {
+    logger.debug('[ExplorerReadPosition] skip save because notebook surface is not laid out', {
+      reason,
+      path: normalizedPath,
+    });
+    return false;
+  }
+
+  // 关闭非当前 tab、或在切换过程中被延迟调用时，读到的其实是“正在显示的那份文档”的位置。
+  // 探索者上报的 location.path 就是它当前挂载的文件，对不上就必须放弃，否则会把位置写到别的文件名下。
+  const locationPath = normalizePreviewReadPath(location.path);
+  if (locationPath && locationPath !== normalizedPath) {
+    logger.debug('[ExplorerReadPosition] skip save because notebook shows another file', {
+      reason,
+      path: normalizedPath,
+      locationPath,
+    });
+    return false;
+  }
 
   // 顶部（scrollTop 0）也要如实记录，否则用户主动回到开头后会被旧位置拽回去。
   explorerReadPositionCache.delete(normalizedPath);
@@ -2735,13 +2835,46 @@ const captureExplorerReadPosition = (path, reason = 'unknown') => {
   return true;
 };
 
-const restoreExplorerReadPosition = async (path, reason = 'unknown') => {
+// 设计说明（对应“探索者模式下阅读位置丢失”）：
+// 预览区靠 @scroll 持续把位置写进缓存，探索者过去只在切模式那一刻存一次，
+// 于是切 tab、切页面等所有其它时机都无位置可用。滚动事件不冒泡，但会在捕获阶段
+// 经过外层容器，所以这里用 @scroll.capture 统一接住 notebook 内部滚动容器的滚动。
+const handleExplorerSurfaceScroll = () => {
+  if (suppressReadPositionSaveDepth > 0) return;
+  const pathSnapshot = normalizePreviewReadPath(selectedFile.value?.path || fileTreeStore.activeTab || '');
+  if (!pathSnapshot) return;
+
+  cancelExplorerScrollSaveTimer('explorer-scroll-rescheduled');
+  explorerScrollSaveTimer = window.setTimeout(() => {
+    explorerScrollSaveTimer = null;
+    const currentPath = normalizePreviewReadPath(selectedFile.value?.path || fileTreeStore.activeTab || '');
+    if (currentPath && currentPath !== pathSnapshot) {
+      logger.debug('[ExplorerReadPosition] skip delayed explorer save because active file changed', {
+        pathSnapshot,
+        currentPath,
+      });
+      return;
+    }
+    captureExplorerReadPosition(pathSnapshot, 'explorer-scroll');
+  }, 180);
+};
+
+const restoreExplorerReadPosition = async (path, reason = 'unknown', attempts = 10) => {
   const normalizedPath = normalizePreviewReadPath(path || selectedFile.value?.path || fileTreeStore.activeTab);
   const entry = normalizedPath ? explorerReadPositionCache.get(normalizedPath) : null;
   const view = notebookViewRef.value;
   if (!entry || typeof view?.applyReadingPosition !== 'function') return false;
 
-  const restored = !!(await view.applyReadingPosition({ ...entry, path: normalizedPath }, reason));
+  // 落位过程本身会产生滚动事件，必须静音保存链路，否则中间态会被写回缓存。
+  suppressReadPositionSaveDepth += 1;
+  let restored = false;
+  try {
+    restored = !!(await view.applyReadingPosition({ ...entry, path: normalizedPath }, reason, attempts));
+  } finally {
+    suppressReadPositionSaveDepth -= 1;
+    cancelExplorerScrollSaveTimer('explorer-restore-finished');
+  }
+
   logger.info('[ExplorerReadPosition] restored explorer position', {
     reason,
     path: normalizedPath,
@@ -2751,12 +2884,78 @@ const restoreExplorerReadPosition = async (path, reason = 'unknown') => {
   return restored;
 };
 
-// 设计说明（统一入口 · 对应“模式切换/页面切换保留阅读位置”）：
-// 1. 阅读位置的载体随模式而异：编辑=Monaco viewState，预览/分屏=预览容器 scrollTop，探索者=notebook scrollTop。
+// ───── 即时渲染（Vditor）阅读位置：按文件缓存 ─────
+// 设计说明：
+// 1. 即时渲染的滚动载体是 Vditor 的 `.vditor-content`，切文件只是 setValue，滚动条会被重置到顶部。
+// 2. 旧的 scrollRatio 是全局单值（不区分文件），切 tab 后必然串位置，因此这里按路径单独缓存。
+const REALTIME_READ_POSITION_CACHE_LIMIT = 160;
+const realtimeReadPositionCache = new Map();
+
+const captureRealtimeReadPosition = (path, reason = 'unknown') => {
+  const normalizedPath = normalizePreviewReadPath(path || selectedFile.value?.path || fileTreeStore.activeTab);
+  const el = getRealtimeScrollElement();
+  if (!normalizedPath || !(el instanceof HTMLElement)) return false;
+  // 与预览容器同理：元素未参与布局时 scrollTop 恒为 0，此时保存会把正确位置覆盖成开头。
+  if (!el.isConnected || el.clientHeight <= 0 || el.offsetParent === null) {
+    logger.debug('[RealtimeReadPosition] skip save because vditor content is not laid out', {
+      reason,
+      path: normalizedPath,
+    });
+    return false;
+  }
+
+  const scrollableHeight = Math.max(0, el.scrollHeight - el.clientHeight);
+  const scrollTop = Math.max(0, el.scrollTop || 0);
+  realtimeReadPositionCache.delete(normalizedPath);
+  realtimeReadPositionCache.set(normalizedPath, {
+    path: normalizedPath,
+    scrollTop,
+    scrollRatio: scrollableHeight > 0 ? scrollTop / scrollableHeight : 0,
+    savedAt: Date.now(),
+  });
+  while (realtimeReadPositionCache.size > REALTIME_READ_POSITION_CACHE_LIMIT) {
+    const oldestKey = realtimeReadPositionCache.keys().next().value;
+    if (!oldestKey) break;
+    realtimeReadPositionCache.delete(oldestKey);
+  }
+
+  logger.debug('[RealtimeReadPosition] saved realtime position', {
+    reason,
+    path: normalizedPath,
+    scrollTop: Math.round(scrollTop),
+  });
+  return true;
+};
+
+const restoreRealtimeReadPosition = async (path, reason = 'unknown') => {
+  const normalizedPath = normalizePreviewReadPath(path || selectedFile.value?.path || fileTreeStore.activeTab);
+  const entry = normalizedPath ? realtimeReadPositionCache.get(normalizedPath) : null;
+  if (!entry) return false;
+
+  await nextTick();
+  const { applied, reached } = await restoreScrollTopWithGrowthRetry(
+    () => getRealtimeScrollElement(),
+    entry,
+    { reason, label: 'realtime-vditor' },
+  );
+  logger.info('[RealtimeReadPosition] restored realtime position', {
+    reason,
+    path: normalizedPath,
+    scrollTop: Math.round(applied),
+    reached,
+  });
+  return true;
+};
+
+// 设计说明（统一入口 · 对应“模式切换/文件切换/页面切换都要保留阅读位置”）：
+// 1. 阅读位置的载体随模式而异：编辑=Monaco viewState，预览/分屏=预览容器 scrollTop，
+//    探索者=notebook scrollTop，即时渲染=Vditor content scrollTop。
 // 2. 过去只在切模式前调 saveActivePreviewReadPosition（只认文件后缀、只存预览容器），
-//    离开编辑/探索者时等于什么都没存，切回自然回到开头。这里按“当前真正激活的界面”分派。
+//    离开编辑/探索者/即时渲染时等于什么都没存，切回自然回到开头。这里按“当前真正激活的界面”分派。
 // 3. 分屏模式下编辑器与预览同时可见，两侧都要存，避免从分屏切到单一模式时丢掉另一侧。
-const saveActiveReadPositionForMode = (reason = 'unknown', pathOverride = '') => {
+// 4. editorOverride 供切 tab 时显式指定“左/右分栏的那台编辑器”，不能依赖 getActiveEditor()——
+//    切换右栏 tab 时活动区域可能还是左栏，取错编辑器会把位置写到错误的文件上。
+const saveActiveReadPositionForMode = (reason = 'unknown', pathOverride = '', editorOverride = null) => {
   if (suppressReadPositionSaveDepth > 0) {
     logger.debug('[ReadPosition] skip save while suppressed', { reason });
     return false;
@@ -2767,24 +2966,28 @@ const saveActiveReadPositionForMode = (reason = 'unknown', pathOverride = '') =>
   );
   if (!path) return false;
 
+  const targetEditor = editorOverride || getActiveEditor();
   const modeKey = getHomePreviewModeKeyFromState();
   if (modeKey === 'explorer') return captureExplorerReadPosition(path, reason);
-  if (modeKey === 'edit') return captureEditorReadPosition(path, getActiveEditor(), reason);
+  if (modeKey === 'edit') return captureEditorReadPosition(path, targetEditor, reason);
+  if (modeKey === 'realtime') return captureRealtimeReadPosition(path, reason);
 
   let saved = saveActivePreviewReadPosition(reason, path);
   if (modeKey === 'split') {
-    saved = captureEditorReadPosition(path, getActiveEditor(), reason) || saved;
+    saved = captureEditorReadPosition(path, targetEditor, reason) || saved;
   }
   return saved;
 };
 
-const restoreActiveReadPositionForMode = async (reason = 'unknown', pathOverride = '') => {
+const restoreActiveReadPositionForMode = async (reason = 'unknown', pathOverride = '', editorOverride = null) => {
   const path = normalizePreviewReadPath(pathOverride || selectedFile.value?.path || fileTreeStore.activeTab);
   if (!path) return false;
 
+  const targetEditor = editorOverride || getActiveEditor();
   const modeKey = getHomePreviewModeKeyFromState();
   if (modeKey === 'explorer') return restoreExplorerReadPosition(path, reason);
-  if (modeKey === 'edit') return restoreEditorReadPosition(path, getActiveEditor(), reason);
+  if (modeKey === 'edit') return restoreEditorReadPosition(path, targetEditor, reason);
+  if (modeKey === 'realtime') return restoreRealtimeReadPosition(path, reason);
 
   const kind = getPreviewReadKindForPath(path);
   let restored = false;
@@ -2794,8 +2997,48 @@ const restoreActiveReadPositionForMode = async (reason = 'unknown', pathOverride
     restored = !!(await restoreQueuedPreviewReadPosition(kind, path, reason));
   }
   if (modeKey === 'split') {
-    restored = !!(await restoreEditorReadPosition(path, getActiveEditor(), reason)) || restored;
+    restored = !!(await restoreEditorReadPosition(path, targetEditor, reason)) || restored;
   }
+  return restored;
+};
+
+// 设计说明（对应“切换文件 tab 后应回到上次阅读位置，而不是文档开头”）：
+// 1. 预览 / 分屏里的 markdown、org、pdf 由各自“渲染完成后消费恢复队列”的链路负责落位，这里只补排队；
+// 2. 编辑器（含分屏左右两栏）、探索者、即时渲染没有“渲染完成”事件，必须在新内容写入后主动落位；
+// 3. 不按当前模式做分支，是因为分屏/切模式的中间态可能同时存在多个载体；每个载体自身都会校验
+//    “缓存里有没有这个文件的位置”“自己是否已经绑定到这个文件”，多余的调用会安全地返回 false。
+const restoreReadPositionAfterFileSwitch = async (path, reason = 'file-switch') => {
+  const normalizedPath = normalizePreviewReadPath(path);
+  if (!normalizedPath) return false;
+
+  const kind = getPreviewReadKindForPath(normalizedPath);
+  if (kind) queuePreviewReadPositionRestore(normalizedPath, kind, reason);
+
+  // 设计说明（关键 · 必须先等一次 flush）：
+  // 本函数由 selectedFile 的 pre-flush watcher 调用，此刻子组件的 props 还是上一个文件
+  // （探索者的 GuaxiNotebookView 会用 props.filePath 校验“这个位置是不是我的”，不等就会被判为过期而丢弃）。
+  await nextTick();
+
+  const results = await Promise.all([
+    restoreEditorReadPosition(normalizedPath, getActiveEditor(), reason).catch(() => false),
+    isExplorerSurfaceActive.value
+      ? restoreExplorerReadPosition(normalizedPath, reason, EXPLORER_FILE_SWITCH_RESTORE_ATTEMPTS).catch(() => false)
+      : Promise.resolve(false),
+    previewMode.value === 'realtime'
+      ? restoreRealtimeReadPosition(normalizedPath, reason).catch(() => false)
+      : Promise.resolve(false),
+  ]);
+
+  const restored = results.some(Boolean);
+  logger.info('[ReadPosition] restore after file switch', {
+    reason,
+    path: normalizedPath,
+    modeKey: getHomePreviewModeKeyFromState(),
+    editorRestored: !!results[0],
+    explorerRestored: !!results[1],
+    realtimeRestored: !!results[2],
+    previewQueued: !!kind,
+  });
   return restored;
 };
 
@@ -2841,12 +3084,36 @@ const rememberEditorReadPosition = (entry) => {
 };
 
 const captureEditorReadPosition = (path, targetEditor = getActiveEditor?.(), reason = 'unknown') => {
+  // 与预览/探索者一致：KeepAlive 恢复等静音窗口内读到的都是被重置过的视口，不能回写缓存。
+  if (suppressReadPositionSaveDepth > 0) {
+    logger.debug('[EditorReadPosition] skip save while suppressed', { reason });
+    return false;
+  }
   const normalizedPath = normalizePreviewReadPath(path || getEditorBoundTabPath?.(targetEditor) || selectedFile.value?.path || fileTreeStore.activeTab);
   if (!normalizedPath || !targetEditor?.getModel) return false;
 
   const model = targetEditor.getModel();
   if (!model) return false;
 
+  // 关闭非当前 tab 等场景下，编辑器里其实是另一份文档，此时按传入路径保存会串位置。
+  // 这里用 model URI 反查“编辑器真正绑定的文件”，对不上就放弃保存。
+  // （不能用 getEditorBoundTabPath 判断：换绑 model 的那一刻 store 已经指向新文件，
+  //   而编辑器还持有旧 model，正是需要保存旧文件位置的时机。）
+  const boundModelPath = editorModelUriToPath.get(String(model.uri?.toString?.() || '')) || '';
+  if (boundModelPath && boundModelPath !== normalizedPath) {
+    logger.debug('[EditorReadPosition] skip save because editor holds another file', {
+      reason,
+      path: normalizedPath,
+      boundModelPath,
+    });
+    return false;
+  }
+
+  // 设计说明：这里不加“容器是否参与布局”的判断——预览容器那套判断不能照搬到 Monaco 上。
+  // Monaco 的滚动位置存在自己的 view model 里，编辑器被 display:none 隐藏或被 KeepAlive
+  // 移出文档时，getScrollTop/saveViewState 仍然返回离开时的真实值；反而是加了判断会让
+  // “预览模式下切 tab”“主页被 KeepAlive 停用”这些时机彻底存不进去。
+  // 真正需要防的是“编辑器里其实是另一份文档”，由上面的 model URI 校验负责。
   // 设计说明：
   // 1. 编辑模式的“阅读位置”不只是 scrollTop，还包含光标、选区和水平滚动。
   // 2. Monaco 原生 viewState 已覆盖这些信息，按文件路径缓存后，切 tab 时可以无侵入恢复原编辑视角。
@@ -2871,26 +3138,13 @@ const captureEditorReadPosition = (path, targetEditor = getActiveEditor?.(), rea
   return true;
 };
 
-const restoreEditorReadPosition = async (path, targetEditor = getActiveEditor?.(), reason = 'unknown') => {
-  const normalizedPath = normalizePreviewReadPath(path || selectedFile.value?.path || fileTreeStore.activeTab);
-  const entry = normalizedPath ? editorReadPositionCache.get(normalizedPath) : null;
-  if (!entry || !targetEditor?.getModel) return false;
-
-  await nextTick();
-  await new Promise((resolve) => window.requestAnimationFrame(resolve));
-
-  const boundPath = normalizePreviewReadPath(getEditorBoundTabPath?.(targetEditor) || normalizedPath);
-  if (boundPath && boundPath !== normalizedPath) {
-    logger.debug('[EditorReadPosition] skip restore because editor is bound to another file', {
-      reason,
-      path: normalizedPath,
-      boundPath,
-    });
-    return false;
-  }
-
-  const model = targetEditor.getModel();
-  if (!model) return false;
+// 设计说明：把“把缓存条目写回编辑器”抽成同步函数，供两个时机复用：
+// 1. 文件切换的异步链路（等一帧再落位，覆盖 Monaco 布局尚未完成的情况）；
+// 2. ensureEditorModelBinding 里 setModel 之后立即落位——setModel 会把视口重置到顶部，
+//    在同一帧补回 viewState 才不会出现“先闪到开头再跳回去”。
+const applyEditorReadPositionEntry = (targetEditor, entry) => {
+  const model = targetEditor?.getModel?.();
+  if (!entry || !model) return false;
 
   if (entry.viewState && typeof targetEditor.restoreViewState === 'function') {
     targetEditor.restoreViewState(entry.viewState);
@@ -2913,6 +3167,45 @@ const restoreEditorReadPosition = async (path, targetEditor = getActiveEditor?.(
   }
 
   targetEditor.render?.();
+  return true;
+};
+
+const applyCachedEditorReadPositionSync = (targetEditor, path, reason = 'unknown') => {
+  const normalizedPath = normalizePreviewReadPath(path);
+  const entry = normalizedPath ? editorReadPositionCache.get(normalizedPath) : null;
+  if (!entry) return false;
+
+  const applied = applyEditorReadPositionEntry(targetEditor, entry);
+  if (applied) {
+    logger.debug('[EditorReadPosition] applied cached position synchronously', {
+      reason,
+      path: normalizedPath,
+      scrollTop: Math.round(Number(targetEditor.getScrollTop?.() || 0)),
+    });
+  }
+  return applied;
+};
+
+const restoreEditorReadPosition = async (path, targetEditor = getActiveEditor?.(), reason = 'unknown') => {
+  const normalizedPath = normalizePreviewReadPath(path || selectedFile.value?.path || fileTreeStore.activeTab);
+  const entry = normalizedPath ? editorReadPositionCache.get(normalizedPath) : null;
+  if (!entry || !targetEditor?.getModel) return false;
+
+  await nextTick();
+  await new Promise((resolve) => window.requestAnimationFrame(resolve));
+
+  const boundPath = normalizePreviewReadPath(getEditorBoundTabPath?.(targetEditor) || normalizedPath);
+  if (boundPath && boundPath !== normalizedPath) {
+    logger.debug('[EditorReadPosition] skip restore because editor is bound to another file', {
+      reason,
+      path: normalizedPath,
+      boundPath,
+    });
+    return false;
+  }
+
+  if (!applyEditorReadPositionEntry(targetEditor, entry)) return false;
+
   logger.info('[EditorReadPosition] restored editor position', {
     reason,
     path: normalizedPath,
@@ -14520,6 +14813,11 @@ const resolveEditorModelUri = (filePath) => {
   }
 }
 
+// 记录 model URI → 文件路径。用于在 setModel 前后精确定位阅读位置缓存：
+// monaco.Uri.file() 会规范化盘符大小写，uri.fsPath 反推出来的路径不一定和 tab 路径逐字符相等，
+// 因此这里在绑定时正向登记，避免反推带来的不匹配。
+const editorModelUriToPath = new Map();
+
 const ensureEditorModelBinding = (targetEditor, options = {}) => {
   if (!targetEditor) return null
 
@@ -14545,6 +14843,7 @@ const ensureEditorModelBinding = (targetEditor, options = {}) => {
   }
 
   let nextModel = monaco.editor.getModel(targetUri)
+  editorModelUriToPath.set(targetUri.toString(), normalizePreviewReadPath(filePath))
   if (!nextModel) {
     nextModel = monaco.editor.createModel(desiredContent, languageId, targetUri)
     logger.info('[Editor] created bound Monaco model', {
@@ -14568,10 +14867,19 @@ const ensureEditorModelBinding = (targetEditor, options = {}) => {
   }
 
   if (currentModel !== nextModel) {
+    // 设计说明（关键 · 对应“切 tab 后编辑器回到文档开头”）：
+    // Monaco 的滚动/光标状态挂在编辑器上而非 model 上，setModel 会把视口重置到第一行。
+    // 因此在换绑前后各做一次：换绑前把旧文件的 viewState 落到缓存（此时编辑器还持有旧 model，读数有效），
+    // 换绑后立刻把新文件的 viewState 写回去，避免出现“先闪回开头”甚至完全丢失位置。
+    const outgoingPath = editorModelUriToPath.get(String(currentModel?.uri?.toString?.() || '')) || ''
+    if (outgoingPath) {
+      captureEditorReadPosition(outgoingPath, targetEditor, 'editor-model-rebind')
+    }
     if (modelOwner && currentModel?.uri) {
       releaseVsCodeTextModel(currentModel.uri, modelOwner, 'editor-model-rebound')
     }
     targetEditor.setModel(nextModel)
+    applyCachedEditorReadPositionSync(targetEditor, filePath, 'editor-model-rebound')
     logger.info('[Editor] rebound editor model to file URI', {
       reason: String(options.reason || 'manual'),
       filePath,
@@ -14579,6 +14887,7 @@ const ensureEditorModelBinding = (targetEditor, options = {}) => {
       uri: nextModel.uri?.toString?.() || '',
     })
     if (currentModel && shouldDisposeTransientEditorModel(currentModel)) {
+      editorModelUriToPath.delete(String(currentModel.uri?.toString?.() || ''))
       currentModel.dispose()
     }
   }
@@ -20047,6 +20356,10 @@ watch(selectedFile, async (newFile, oldFile) => {
   const previousPreviewPath = oldFile?.path || lastSelectedFilePath.value || ''
   if (previousPreviewPath) {
     cancelMarkdownPreviewScrollSaveTimer('selected-file-before-change')
+    cancelExplorerScrollSaveTimer('selected-file-before-change')
+    // 从文件树直接打开文件时不会经过 switchTab，这里必须按当前模式补存一次旧文件的阅读位置，
+    // 否则探索者/即时渲染模式下切走的那个文件等于没保存过。
+    saveActiveReadPositionForMode('selected-file-before-change', previousPreviewPath)
     saveActivePreviewReadPosition('selected-file-before-change', previousPreviewPath)
     captureEditorReadPosition(previousPreviewPath, getActiveEditor(), 'selected-file-before-change')
   }
@@ -20145,7 +20458,7 @@ watch(selectedFile, async (newFile, oldFile) => {
         syncSourceEditorContent('selected-file-changed')
       }
     })
-    void restoreEditorReadPosition(nextPath, getActiveEditor(), 'selected-file-changed')
+    void restoreReadPositionAfterFileSwitch(nextPath, 'selected-file-changed')
 
     const targetEditor = getActiveEditor();
     if (targetEditor) {
@@ -20528,7 +20841,8 @@ const handlePreviewModeSelect = async (key) => {
     await nextTick();
     void restoreExplorerReadPosition(
       selectedFile.value?.path || fileTreeStore.activeTab || '',
-      'enter-explorer-mode'
+      'enter-explorer-mode',
+      EXPLORER_FILE_SWITCH_RESTORE_ATTEMPTS
     ).catch(() => {});
     return;
   }
@@ -20805,11 +21119,14 @@ watch(renderedHtml, () => {
       if (pendingPreviewScrollLine.value) {
         scrollPreviewToLine(pendingPreviewScrollLine.value);
         pendingPreviewScrollLine.value = null;
-      } else {
-        const renderedPath = lastPreviewRenderedPath.value || selectedFile.value?.path || fileTreeStore.activeTab || ''
+      } else if (renderedHtml.value && lastPreviewRenderedPath.value) {
+        // 设计说明（关键 · 对应“切 tab 后预览总是回到开头”）：
+        // 切换文件时会先把 renderedHtml 清空以丢弃上一个文件的预览，这次“空渲染”同样会触发本 watcher。
+        // 恢复队列是一次性消费的，若在空容器上就把它消费掉（此时 scrollHeight 等于视口高、只能滚到 0），
+        // 真正的渲染完成后就再也没有位置可恢复了。因此仅在“确实渲染出了某个文件的内容”时才消费队列。
         void restoreQueuedPreviewReadPosition(
           'markdown',
-          renderedPath,
+          lastPreviewRenderedPath.value,
           'markdown-rendered',
         );
       }
@@ -21726,7 +22043,15 @@ const switchTab = (path, region) => {
     ? (fileTreeStore.activeTab || selectedFile.value?.path || '')
     : (targetRegion === 'right' ? fileTreeStore.activeTabRight : fileTreeStore.activeTabLeft);
   cancelMarkdownPreviewScrollSaveTimer('switch-tab-before-change');
-  saveActivePreviewReadPosition('switch-tab-before-change', currentPreviewPath);
+  cancelExplorerScrollSaveTimer('switch-tab-before-change');
+  // 设计说明：切 tab 前必须按“当前真正激活的界面”保存阅读位置。
+  // 过去这里只存预览容器 + 编辑器，探索者和即时渲染两种模式等于什么都没存，切回来自然回到开头。
+  saveActiveReadPositionForMode(
+    'switch-tab-before-change',
+    currentPreviewPath,
+    targetRegion === 'right' ? secondaryEditor : editor,
+  );
+  // 分屏布局下另一侧的编辑器仍持有各自文件，顺手保住它的视角，避免来回切换时丢位置。
   captureEditorReadPosition(
     currentPreviewPath,
     targetRegion === 'right' ? secondaryEditor : editor,
@@ -21754,6 +22079,8 @@ const closeTab = async (path, region) => {
   flushPythonCellDrafts()
   const targetRegion = region || 'left';
   cancelMarkdownPreviewScrollSaveTimer('close-tab-before-change');
+  cancelExplorerScrollSaveTimer('close-tab-before-change');
+  saveActiveReadPositionForMode('close-tab-before-change', path, targetRegion === 'right' ? secondaryEditor : editor);
   saveActivePreviewReadPosition('close-tab-before-change', path);
   captureEditorReadPosition(path, targetRegion === 'right' ? secondaryEditor : editor, 'close-tab-before-change');
   const regionActivePath = targetRegion === 'right' ? fileTreeStore.activeTabRight : fileTreeStore.activeTabLeft;
@@ -21787,7 +22114,7 @@ const closeTab = async (path, region) => {
     const tab = fileTreeStore.openTabs.find(t => t.path === fileTreeStore.activeTab);
     if (tab) {
       updateEditorContent(tab.content);
-      void restoreEditorReadPosition(tab.path, getActiveEditor(), 'close-tab-next-active');
+      void restoreReadPositionAfterFileSwitch(tab.path, 'close-tab-next-active');
     }
   } else {
     fileTreeStore.setActiveTab(null);
@@ -22492,6 +22819,7 @@ onDeactivated(() => {
   if (!path) return;
   const saved = saveActiveReadPositionForMode('home-page-deactivated', path);
   cancelMarkdownPreviewScrollSaveTimer('home-page-deactivated');
+  cancelExplorerScrollSaveTimer('home-page-deactivated');
   logger.info('[ReadPosition] captured on home page deactivate', {
     path: normalizePreviewReadPath(path),
     modeKey: getHomePreviewModeKeyFromState(),
@@ -22507,6 +22835,7 @@ onUnmounted(() => {
     previewRenderTimer = null
   }
   cancelMarkdownPreviewScrollSaveTimer('editor-unmount')
+  cancelExplorerScrollSaveTimer('editor-unmount')
   if (latexBuildDebounceTimer) {
     clearTimeout(latexBuildDebounceTimer)
     latexBuildDebounceTimer = null

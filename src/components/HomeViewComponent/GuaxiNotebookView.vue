@@ -2619,13 +2619,21 @@ const goToNotebookReadingLocation = async (location, { source = 'shortcut' } = {
   }
 }
 
-// 设计说明（跨模式保留探索者阅读位置）：
+// 设计说明（跨模式 / 跨文件保留探索者阅读位置）：
 // 1. 探索者视图由父组件用 v-if 挂载，每次切换模式都会销毁重建，内部的前进/后退栈会一起清空，
 //    所以“当前阅读位置”必须交给父组件按文件缓存，这里只负责读取与应用。
 // 2. 重建后 cell 是渐进渲染的（KaTeX/图片/代码高亮都会继续增高文档），一次性写 scrollTop 会被
 //    当时还偏小的 scrollHeight 夹断，表现为“只恢复了一点点”甚至回到开头，因此需要多帧重试。
+// 3. 切换文件时 cell 还要先经过一次异步解析（sidecar + 后端 notebook_sync_from_markdown），
+//    在此期间 DOM 上挂的仍是上一份文档，可能“恰好”也能滚到目标位置。所以只有
+//    “已落位 + 文档高度连续多帧不再变化”才算真正成功，否则继续等下一帧重试。
+const NOTEBOOK_READING_LOCATION_STABLE_FRAMES = 2
 const applyNotebookReadingLocationWithRetry = async (location, reason = 'external-apply', attempts = 10) => {
   const targetTop = Number(location?.scrollTop)
+  let lastScrollHeight = -1
+  let stableCount = 0
+  let everReached = false
+
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const applied = await goToNotebookReadingLocation(location, { source: `${reason}#${attempt}` })
     if (!applied) return false
@@ -2633,7 +2641,12 @@ const applyNotebookReadingLocationWithRetry = async (location, reason = 'externa
 
     const host = getNotebookScrollHost()
     if (!(host instanceof HTMLElement)) return false
-    if (Math.abs(host.scrollTop - targetTop) <= 2) return true
+
+    const reached = Math.abs(host.scrollTop - targetTop) <= 2
+    everReached = everReached || reached
+    stableCount = host.scrollHeight === lastScrollHeight ? stableCount + 1 : 0
+    lastScrollHeight = host.scrollHeight
+    if (reached && stableCount >= NOTEBOOK_READING_LOCATION_STABLE_FRAMES) return true
 
     await new Promise((resolve) => {
       window.requestAnimationFrame(() => window.setTimeout(resolve, 40))
@@ -2642,10 +2655,11 @@ const applyNotebookReadingLocationWithRetry = async (location, reason = 'externa
 
   logger.warn('[NotebookNav] reading location not fully restored after retries', {
     reason,
+    attempts,
     targetTop: Number.isFinite(targetTop) ? Math.round(targetTop) : 'na',
     actualTop: Math.round(Number(getNotebookScrollHost()?.scrollTop || 0)),
   })
-  return false
+  return everReached
 }
 
 const navigateToPreviousNotebookReadingLocation = async () => {
@@ -9243,8 +9257,9 @@ defineExpose({
   getReadingPosition() {
     return getCurrentNotebookReadingLocation()
   },
-  applyReadingPosition(location, reason = 'external-apply') {
-    return applyNotebookReadingLocationWithRetry(location, reason)
+  applyReadingPosition(location, reason = 'external-apply', attempts = 10) {
+    const normalizedAttempts = Math.max(1, Math.min(60, Number(attempts) || 10))
+    return applyNotebookReadingLocationWithRetry(location, reason, normalizedAttempts)
   },
   restoreReadingPosition(reason = 'external-restore') {
     const back = notebookReadingLocationBackStack.value
