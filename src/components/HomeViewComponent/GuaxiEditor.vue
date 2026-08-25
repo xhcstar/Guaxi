@@ -3142,9 +3142,28 @@ const captureEditorReadPosition = (path, targetEditor = getActiveEditor?.(), rea
 // 1. 文件切换的异步链路（等一帧再落位，覆盖 Monaco 布局尚未完成的情况）；
 // 2. ensureEditorModelBinding 里 setModel 之后立即落位——setModel 会把视口重置到顶部，
 //    在同一帧补回 viewState 才不会出现“先闪到开头再跳回去”。
-const applyEditorReadPositionEntry = (targetEditor, entry) => {
+//
+// 设计说明（关键 · 为什么必须先判断编辑器是否可见）：
+// restoreViewState 会同步改写光标位置，Monaco 随即为新光标启动一批可取消的异步请求
+// （document highlight / semantic tokens / LSP 等，见 vs/base/common/async 的 CancelablePromise）。
+// 紧接着本次切换还会 setModelLanguage、回写内容，这些请求会立刻被取消，
+// 而 Monaco 取消时抛出的 `Canceled` 是一个没人 catch 的 promise rejection，
+// 于是控制台出现 “Uncaught (in promise) Canceled”，栈顶正好指向 restoreViewState。
+// 预览 / 探索者 / 即时渲染模式下编辑器本来就不可见，这时落位既没有视觉意义，
+// 又白白制造上述噪音；位置仍留在缓存里，等切回编辑/分屏模式时再恢复即可。
+const isEditorSurfaceLaidOut = (targetEditor) => {
+  const domNode = targetEditor?.getDomNode?.();
+  if (!(domNode instanceof HTMLElement)) return false;
+  return domNode.isConnected && domNode.clientHeight > 0 && domNode.offsetParent !== null;
+};
+
+const applyEditorReadPositionEntry = (targetEditor, entry, reason = 'unknown') => {
   const model = targetEditor?.getModel?.();
   if (!entry || !model) return false;
+  if (!isEditorSurfaceLaidOut(targetEditor)) {
+    logger.debug('[EditorReadPosition] defer apply because editor is hidden', { reason });
+    return false;
+  }
 
   if (entry.viewState && typeof targetEditor.restoreViewState === 'function') {
     targetEditor.restoreViewState(entry.viewState);
@@ -3175,7 +3194,7 @@ const applyCachedEditorReadPositionSync = (targetEditor, path, reason = 'unknown
   const entry = normalizedPath ? editorReadPositionCache.get(normalizedPath) : null;
   if (!entry) return false;
 
-  const applied = applyEditorReadPositionEntry(targetEditor, entry);
+  const applied = applyEditorReadPositionEntry(targetEditor, entry, reason);
   if (applied) {
     logger.debug('[EditorReadPosition] applied cached position synchronously', {
       reason,
@@ -3204,7 +3223,7 @@ const restoreEditorReadPosition = async (path, targetEditor = getActiveEditor?.(
     return false;
   }
 
-  if (!applyEditorReadPositionEntry(targetEditor, entry)) return false;
+  if (!applyEditorReadPositionEntry(targetEditor, entry, reason)) return false;
 
   logger.info('[EditorReadPosition] restored editor position', {
     reason,
@@ -18715,6 +18734,8 @@ const setMainMode = async (nextMode) => {
       (pos && pos.lineNumber) || editorStore.cursorPosition.lineNumber || 1;
   }
 
+  // 切换主模式前先按“当前真正激活的界面”存一次阅读位置（此时 mode 还没变，取到的仍是旧模式）。
+  saveActiveReadPositionForMode('set-main-mode-before-change');
   captureScrollPosition();
   mode.value = nextMode;
 
@@ -18728,6 +18749,14 @@ const setMainMode = async (nextMode) => {
       editor.layout();
     }
     restoreScrollPosition();
+    // 编辑器隐藏期间会跳过一切落位（见 applyEditorReadPositionEntry 的说明），
+    // 因此重新变可见时要按文件把 viewState 补回来；这一步在 restoreScrollPosition
+    // 之后执行，覆盖它那份不区分文件的全局 scrollRatio 兜底。
+    void restoreEditorReadPosition(
+      selectedFile.value?.path || fileTreeStore.activeTab || '',
+      getActiveEditor(),
+      'set-main-mode-edit',
+    ).catch(() => {});
     return;
   }
 
