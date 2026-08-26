@@ -177,21 +177,26 @@
     </div>
 
     <div v-show="notebookSearchVisible" class="guaxi-notebook__search-panel-shell">
-      <div class="guaxi-notebook__search-panel" @mousedown.stop>
-        <input
-          ref="notebookSearchInputRef"
-          v-model="notebookSearchKeyword"
-          class="guaxi-notebook__search-input"
-          type="text"
-          placeholder="搜索探索模式内容..."
-          @keydown.enter.prevent="focusNextNotebookSearchMatch"
-          @keydown.shift.enter.prevent="focusPrevNotebookSearchMatch"
-        />
-        <span class="guaxi-notebook__search-count">{{ notebookSearchMatchCountText }}</span>
-        <button class="guaxi-notebook__search-btn" type="button" @click="focusPrevNotebookSearchMatch">上一个</button>
-        <button class="guaxi-notebook__search-btn" type="button" @click="focusNextNotebookSearchMatch">下一个</button>
-        <button class="guaxi-notebook__search-btn guaxi-notebook__search-btn--danger" type="button" @click="closeNotebookSearch">关闭</button>
-      </div>
+      <GuaxiFindWidget
+        ref="notebookFindWidgetRef"
+        class="guaxi-notebook__find-widget"
+        :visible="notebookSearchVisible"
+        :keyword="notebookSearchKeyword"
+        :match-index="notebookSearchActiveIndex"
+        :match-count="notebookSearchTotalMatchCount"
+        :case-sensitive="notebookSearchCaseSensitive"
+        :whole-word="notebookSearchWholeWord"
+        :use-regex="notebookSearchUseRegex"
+        :regex-invalid="notebookSearchRegexInvalid"
+        placeholder="在探索者中查找"
+        @update:keyword="notebookSearchKeyword = $event"
+        @update:case-sensitive="notebookSearchCaseSensitive = $event"
+        @update:whole-word="notebookSearchWholeWord = $event"
+        @update:use-regex="notebookSearchUseRegex = $event"
+        @next="focusNextNotebookSearchMatch"
+        @prev="focusPrevNotebookSearchMatch"
+        @close="closeNotebookSearch"
+      />
     </div>
 
     <div
@@ -879,6 +884,15 @@ import GuaxiNotebookHtmlOutput from './GuaxiNotebookHtmlOutput.vue'
 import GuaxiNotebookTableOutput from './GuaxiNotebookTableOutput.vue'
 import GuaxiSelectionTranslatePanel from './GuaxiSelectionTranslatePanel.vue'
 import GuaxiNotebookUsageAssistant from './GuaxiNotebookUsageAssistant.vue'
+import GuaxiFindWidget from './GuaxiFindWidget.vue'
+import {
+  SEARCH_HIT_ACTIVE_CLASS,
+  SEARCH_HIT_CLASS,
+  applySearchHighlights,
+  buildSearchRegex,
+  clearSearchHighlights,
+  setActiveSearchHit,
+} from '../../utils/domTextSearch'
 import { renderMarkdown, addCopyButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
 import {
   createPythonCellId,
@@ -976,7 +990,7 @@ const notebookCancelledPythonRunIds = new Set()
 const notebookPendingPythonImport = ref(null)
 const notebookQueuedPythonAction = ref(null)
 const notebookRootRef = ref(null)
-const notebookSearchInputRef = ref(null)
+const notebookFindWidgetRef = ref(null)
 const editingMarkdownCellKey = ref('')
 const renderedMarkdownHtmlMap = ref({})
 const renderedOutputMarkdownHtmlMap = ref({})
@@ -989,6 +1003,11 @@ const notebookSearchCellMatches = ref([])
 const notebookSearchDomMatches = ref([])
 const notebookSearchActiveIndex = ref(-1)
 const notebookSearchIndexReady = ref(false)
+// 与 Monaco find widget 对齐的三个搜索选项，以及“正则写错了”的提示状态。
+const notebookSearchCaseSensitive = ref(false)
+const notebookSearchWholeWord = ref(false)
+const notebookSearchUseRegex = ref(false)
+const notebookSearchRegexInvalid = ref(false)
 const notebookSelectionToolbarVisible = ref(false)
 const notebookSelectionToolbarStyle = ref({ left: '0px', top: '0px' })
 const notebookSelectionText = ref('')
@@ -1300,9 +1319,8 @@ const handleNotebookRootMouseLeave = (event) => {
 }
 
 const normalizeNotebookMarkdownText = (markdown = '') => String(markdown || '').replace(/\r\n?/g, '\n')
-const escapeRegExp = (raw) => String(raw || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const NOTEBOOK_SELECTION_SURFACE_SELECTOR = '.guaxi-notebook__markdown-preview, .guaxi-notebook__rich, .guaxi-notebook__rich--html'
-const NOTEBOOK_SELECTION_IGNORE_SELECTOR = '.guaxi-notebook__toolbar, .guaxi-notebook__search-panel, .guaxi-notebook__selection-toolbar, .pot-selection-translate-panel, textarea, input, select, button, [contenteditable="true"]'
+const NOTEBOOK_SELECTION_IGNORE_SELECTOR = '.guaxi-notebook__toolbar, .guaxi-notebook__search-panel-shell, .guaxi-notebook__selection-toolbar, .pot-selection-translate-panel, textarea, input, select, button, [contenteditable="true"]'
 const escapeHtmlAttribute = (raw) => String(raw || '')
   .replace(/&/g, '&amp;')
   .replace(/"/g, '&quot;')
@@ -3146,20 +3164,30 @@ const finalizeNotebookRenderedHtml = async (html, reason = 'unknown') => {
   return container.innerHTML
 }
 
-const notebookSearchMatchCountText = computed(() => {
-  const total = Array.isArray(notebookSearchDomMatches.value) && notebookSearchDomMatches.value.length
-    ? notebookSearchDomMatches.value.length
-    : Array.isArray(notebookSearchCellMatches.value)
-      ? notebookSearchCellMatches.value.length
-      : 0
-  if (!total) return '0 / 0'
-  const index = Math.max(0, Number(notebookSearchActiveIndex.value || 0))
-  return `${Math.min(index + 1, total)} / ${total}`
+// 设计说明：后端的 Cell 级索引是“不区分大小写的子串匹配”，理解不了 Aa / ab / .* 这三个选项。
+// 一旦用户开了其中任意一个，就不能再用 Cell 级结果兜底——否则会出现
+// “计数显示 1 of 1、但页面上一个高亮都没有”的自相矛盾。默认全关时行为与之前完全一致。
+const notebookSearchCellFallbackUsable = computed(() => (
+  !notebookSearchCaseSensitive.value
+  && !notebookSearchWholeWord.value
+  && !notebookSearchUseRegex.value
+))
+
+// 命中总数：DOM 命中优先（用户能直接看到的），没有 DOM 命中时回退到后端的 Cell 级命中，
+// 这样 Python 输出、变量面板这类非 DOM 内容仍然是“搜得到”的。
+const notebookSearchTotalMatchCount = computed(() => {
+  const domCount = Array.isArray(notebookSearchDomMatches.value) ? notebookSearchDomMatches.value.length : 0
+  if (domCount) return domCount
+  if (!notebookSearchCellFallbackUsable.value) return 0
+  return Array.isArray(notebookSearchCellMatches.value) ? notebookSearchCellMatches.value.length : 0
 })
 
 const notebookSearchMatchKeySet = computed(() => {
   const keySet = new Set()
-  ;(Array.isArray(notebookSearchCellMatches.value) ? notebookSearchCellMatches.value : [])
+  // 开了 Aa / ab / .* 时不采信 Cell 级结果（后端不理解这些选项），否则会给不该高亮的 cell 描边。
+  ;(notebookSearchCellFallbackUsable.value && Array.isArray(notebookSearchCellMatches.value)
+    ? notebookSearchCellMatches.value
+    : [])
     .map((item) => String(item?.cell_key || ''))
     .filter(Boolean)
     .forEach((key) => keySet.add(key))
@@ -3214,12 +3242,7 @@ const syncNotebookTextareaHeights = (reason = 'unknown') => {
 const clearNotebookSearchDomHighlights = ({ resetIndex = true } = {}) => {
   const root = notebookRootRef.value
   if (root instanceof HTMLElement) {
-    root.querySelectorAll('span.guaxi-notebook__search-hit').forEach((mark) => {
-      const parent = mark.parentNode
-      if (!parent) return
-      parent.replaceChild(document.createTextNode(mark.textContent || ''), mark)
-      parent.normalize()
-    })
+    clearSearchHighlights(root, SEARCH_HIT_CLASS)
   }
 
   notebookSearchDomMatches.value = []
@@ -3233,75 +3256,47 @@ const clearNotebookSearchHighlights = () => {
   notebookSearchCellMatches.value = []
 }
 
+// 探索者里的“非内容”元素：cell 工具条、选区工具条、右上角操作按钮。
+// 代码相关的 code / pre 一律参与搜索。
+const NOTEBOOK_SEARCH_EXTRA_EXCLUDE = [
+  '.guaxi-notebook__toolbar',
+  '.guaxi-notebook__cell-toolbar',
+  '.guaxi-notebook__selection-toolbar',
+  '.guaxi-notebook__search-panel-shell',
+].join(', ')
+
+const notebookSearchOptions = () => ({
+  caseSensitive: notebookSearchCaseSensitive.value,
+  wholeWord: notebookSearchWholeWord.value,
+  useRegex: notebookSearchUseRegex.value,
+})
+
 // 设计说明：
 // 1. Explorer 模式的后端索引继续负责 Cell 级命中定位，避免 Python 输出、变量等非纯 DOM 内容失去可搜索性。
 // 2. 前端额外补一层 DOM 文本高亮，让用户在可见内容里能直接看到关键词，而不是只看到 Cell 外轮廓。
 // 3. 两层结果共用一套 active index，优先在 DOM 命中间跳转，没有 DOM 命中时再回退到 Cell 级跳转。
+// 4. DOM 这层的遍历与切分交给共享的 domTextSearch，与预览/分屏模式保持完全一致的搜索能力。
 const applyNotebookSearchDomHighlights = (reason = 'unknown') => {
   clearNotebookSearchDomHighlights({ resetIndex: false })
 
   const root = notebookRootRef.value
-  const keyword = String(notebookSearchKeyword.value || '').trim()
-  if (!(root instanceof HTMLElement) || !keyword) {
+  const keyword = String(notebookSearchKeyword.value || '')
+  if (!(root instanceof HTMLElement) || !keyword.trim()) {
+    notebookSearchRegexInvalid.value = false
     if (!Array.isArray(notebookSearchCellMatches.value) || !notebookSearchCellMatches.value.length) {
       notebookSearchActiveIndex.value = -1
     }
     return
   }
 
-  const regex = new RegExp(escapeRegExp(keyword), 'gi')
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-    acceptNode(node) {
-      const text = String(node?.nodeValue || '')
-      if (!text) return NodeFilter.FILTER_REJECT
-      const parent = node.parentElement
-      if (!parent) return NodeFilter.FILTER_REJECT
-      if (parent.closest('.guaxi-notebook__search-panel, script, style, textarea, input, button, .monaco-editor')) {
-        return NodeFilter.FILTER_REJECT
-      }
-      if (parent.closest('.guaxi-notebook__search-hit')) return NodeFilter.FILTER_REJECT
-      regex.lastIndex = 0
-      return regex.test(text) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
-    },
-  })
+  const options = notebookSearchOptions()
+  notebookSearchRegexInvalid.value = !buildSearchRegex(keyword, options)
 
-  const textNodes = []
-  let currentNode = walker.nextNode()
-  while (currentNode) {
-    textNodes.push(currentNode)
-    currentNode = walker.nextNode()
-  }
-
-  const matches = []
-  textNodes.forEach((node) => {
-    const text = String(node.nodeValue || '')
-    const parent = node.parentNode
-    if (!parent) return
-
-    regex.lastIndex = 0
-    let lastIndex = 0
-    let matched = regex.exec(text)
-    if (!matched) return
-
-    const fragment = document.createDocumentFragment()
-    while (matched) {
-      const index = Number(matched.index || 0)
-      const matchedText = String(matched[0] || '')
-      if (index > lastIndex) {
-        fragment.appendChild(document.createTextNode(text.slice(lastIndex, index)))
-      }
-      const span = document.createElement('span')
-      span.className = 'guaxi-notebook__search-hit'
-      span.textContent = matchedText
-      fragment.appendChild(span)
-      matches.push(span)
-      lastIndex = index + matchedText.length
-      matched = regex.exec(text)
-    }
-    if (lastIndex < text.length) {
-      fragment.appendChild(document.createTextNode(text.slice(lastIndex)))
-    }
-    parent.replaceChild(fragment, node)
+  const matches = applySearchHighlights(root, {
+    keyword,
+    options,
+    hitClass: SEARCH_HIT_CLASS,
+    extraExcludeSelector: NOTEBOOK_SEARCH_EXTRA_EXCLUDE,
   })
 
   notebookSearchDomMatches.value = matches
@@ -3320,10 +3315,14 @@ const applyNotebookSearchDomHighlights = (reason = 'unknown') => {
     return
   }
 
-  if (Array.isArray(notebookSearchCellMatches.value) && notebookSearchCellMatches.value.length) {
+  const cellFallbackCount = notebookSearchCellFallbackUsable.value
+    && Array.isArray(notebookSearchCellMatches.value)
+    ? notebookSearchCellMatches.value.length
+    : 0
+  if (cellFallbackCount) {
     notebookSearchActiveIndex.value = Math.min(
       Math.max(0, Number(notebookSearchActiveIndex.value || 0)),
-      notebookSearchCellMatches.value.length - 1,
+      cellFallbackCount - 1,
     )
     return
   }
@@ -3509,7 +3508,9 @@ const getNotebookSearchNavigationTargets = () => {
 
   return {
     mode: 'cell',
-    matches: Array.isArray(notebookSearchCellMatches.value) ? notebookSearchCellMatches.value : [],
+    matches: notebookSearchCellFallbackUsable.value && Array.isArray(notebookSearchCellMatches.value)
+      ? notebookSearchCellMatches.value
+      : [],
   }
 }
 
@@ -3539,15 +3540,17 @@ const focusNotebookSearchMatchAt = (index, { scroll = true } = {}) => {
 
   notebookSearchActiveIndex.value = nextIndex
   if (navigation.mode === 'dom') {
-    matches.forEach((node) => node.classList.remove('guaxi-notebook__search-hit--active'))
-    const activeNode = matches[nextIndex]
-    activeNode.classList.add('guaxi-notebook__search-hit--active')
+    // 激活态的切换与滚动交给共享实现，保证与预览/分屏模式的行为一致。
+    setActiveSearchHit(matches, nextIndex, {
+      activeClass: SEARCH_HIT_ACTIVE_CLASS,
+      scroll,
+    })
     if (!scroll) return
-    activeNode.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' })
+    const activeNode = matches[nextIndex]
     logger.debug('[Notebook] focus DOM search match', {
       index: nextIndex,
       total,
-      cellKey: String(activeNode.closest('.guaxi-notebook__cell')?.getAttribute('data-cell-key') || ''),
+      cellKey: String(activeNode?.closest?.('.guaxi-notebook__cell')?.getAttribute?.('data-cell-key') || ''),
     })
     return
   }
@@ -3570,20 +3573,33 @@ const focusNotebookSearchMatchAt = (index, { scroll = true } = {}) => {
   })
 }
 
-const openNotebookSearch = async () => {
+// 设计说明（对应“选中文本后 Ctrl+F 直接带入搜索框”）：
+// 与预览模式同一套规则：优先取实时 window 选区，退回鼠标松开时记下的选区文本；
+// 跨行选区不带入，与 Monaco 保持一致。
+const getNotebookSearchSeedText = () => {
+  const live = String(getNotebookSelectionTextFromWindow()?.text || '')
+  const raw = live || String(notebookSelectionText.value || '')
+  const seed = raw.trim()
+  if (!seed || /[\r\n]/.test(seed)) return ''
+  return seed.length <= 200 ? seed : ''
+}
+
+const openNotebookSearch = async ({ seedFromSelection = true } = {}) => {
+  const seed = seedFromSelection ? getNotebookSearchSeedText() : ''
   revealNotebookTopToolbar('open-search')
   notebookSearchVisible.value = true
-  logger.info('[Notebook] open search panel')
+  if (seed) notebookSearchKeyword.value = seed
+  logger.info('[Notebook] open search panel', { seeded: !!seed })
   await nextTick()
-  const input = notebookSearchInputRef.value
-  if (input?.focus) input.focus()
-  if (input?.select) input.select()
+  notebookFindWidgetRef.value?.focusInput?.()
   scheduleNotebookSearchQuery('open-search', 0)
+  applyNotebookSearchDomHighlights('open-search')
 }
 
 const closeNotebookSearch = () => {
   notebookSearchVisible.value = false
   notebookSearchKeyword.value = ''
+  notebookSearchRegexInvalid.value = false
   logger.info('[Notebook] close search panel')
   clearNotebookSearchHighlights()
   scheduleHideNotebookTopToolbar('close-search')
@@ -9087,6 +9103,14 @@ watch(notebookSearchKeyword, () => {
   scheduleNotebookSearchQuery('keyword-change')
 })
 
+// 三个搜索选项的切换不需要重新问后端索引，只要按新规则重刷 DOM 高亮即可。
+watch([notebookSearchCaseSensitive, notebookSearchWholeWord, notebookSearchUseRegex], () => {
+  if (!notebookSearchVisible.value) return
+  nextTick(() => {
+    applyNotebookSearchDomHighlights('search-option-change')
+  })
+})
+
 // 设计说明（Q3）：探索者模式 cell 用 worker 渲染、buttons:false，所以渲染结果里没有复制按钮。
 // 这里在渲染结果落 DOM 后，对每个 Markdown cell 预览区与输出富文本区补挂复制按钮（addCopyButtons 幂等）。
 // 复制按钮的具体位置由作用域 CSS 控制（移到左上角，避开右上角的 cell 删除按钮）。
@@ -9232,8 +9256,8 @@ defineExpose({
   canRedo() {
     return canRedoNotebookHistory.value
   },
-  openSearch() {
-    return openNotebookSearch()
+  openSearch(options = {}) {
+    return openNotebookSearch(options)
   },
   closeSearch() {
     closeNotebookSearch()
@@ -9426,56 +9450,20 @@ defineExpose({
   position: sticky;
   top: calc(var(--guaxi-notebook-sticky-top) + var(--guaxi-notebook-toolbar-shell-height));
   z-index: 24;
-  min-height: 42px;
+  min-height: 36px;
   display: flex;
   align-items: flex-start;
   justify-content: flex-end;
+  padding-right: 4px;
   pointer-events: none;
 }
 
-.guaxi-notebook__search-panel {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  width: fit-content;
-  min-height: 40px;
+/* 查找控件本体的外观全部在 GuaxiFindWidget 内部，这里只负责定位与可点击。 */
+.guaxi-notebook__find-widget {
   margin-top: 2px;
-  padding: 8px 10px;
-  border: 1px solid color-mix(in srgb, var(--guaxi-notebook-strong-border) 86%, transparent);
-  border-radius: 12px;
-  /* 保持搜索面板是一个完整的实体卡片，避免透明混色让中间看起来像“空了一块”。 */
-  background: var(--guaxi-notebook-panel);
-  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.14);
   pointer-events: auto;
 }
 
-.guaxi-notebook__search-input {
-  width: 220px;
-  height: 26px;
-  padding: 0 8px;
-  border-radius: 6px;
-  border: 1px solid var(--guaxi-notebook-strong-border);
-  outline: none;
-  background: var(--guaxi-notebook-panel-soft);
-  color: var(--guaxi-notebook-text);
-  font-family: var(--guaxi-notebook-font);
-}
-
-.guaxi-notebook__search-input:focus {
-  border-color: var(--guaxi-notebook-primary);
-}
-
-.guaxi-notebook__search-count {
-  min-width: 52px;
-  text-align: center;
-  font-size: 12px;
-  color: var(--guaxi-notebook-muted);
-}
-
-.guaxi-notebook__search-btn,
 .guaxi-notebook__panel-btn {
   height: 26px;
   padding: 0 8px;
@@ -9487,7 +9475,6 @@ defineExpose({
   font-family: var(--guaxi-notebook-font);
 }
 
-.guaxi-notebook__search-btn:hover,
 .guaxi-notebook__panel-btn:hover {
   background: var(--guaxi-notebook-btn-hover);
 }
@@ -9506,10 +9493,6 @@ defineExpose({
 
 .guaxi-notebook__panel-icon-btn.danger:hover {
   background: color-mix(in srgb, #dc2626 10%, var(--guaxi-notebook-panel) 90%);
-}
-
-.guaxi-notebook__search-btn--danger {
-  color: #ef4444;
 }
 
 .guaxi-notebook__selection-toolbar {
@@ -11004,14 +10987,39 @@ defineExpose({
   box-shadow: 0 0 0 1px rgba(74, 202, 219, 0.16) inset;
 }
 
-:deep(.guaxi-notebook__search-hit) {
-  background: rgba(255, 208, 0, 0.38);
+/* 搜索命中配色与预览/分屏模式共用一套取值（见 GuaxiEditor 的同名规则）。 */
+:deep(.guaxi-search-hit) {
+  background: var(--guaxi-search-hit-bg, rgba(234, 92, 0, 0.33));
   border-radius: 2px;
   padding: 0 1px;
 }
 
-:deep(.guaxi-notebook__search-hit--active) {
-  background: rgba(255, 145, 0, 0.65);
+:deep(.guaxi-search-hit-active) {
+  background: var(--guaxi-search-hit-active-bg, rgba(234, 92, 0, 0.62));
+  outline: 1px solid var(--guaxi-search-hit-active-border, rgba(246, 154, 60, 0.9));
+  outline-offset: -1px;
+}
+
+/* 设计说明（对应“选中没有精美的选中效果”）：
+   与预览模式共用同一组取值，避免同一份文档在两个模式下选中色不一样。
+   只改背景、保留前景色，代码块的语法着色不会被抹平。 */
+.guaxi-notebook ::selection,
+.guaxi-notebook :deep(::selection) {
+  background: var(--guaxi-selection-bg, color-mix(in srgb, var(--guaxi-notebook-primary, #3b82f6) 34%, transparent));
+  color: inherit;
+}
+
+.guaxi-notebook ::-moz-selection,
+.guaxi-notebook :deep(::-moz-selection) {
+  background: var(--guaxi-selection-bg, color-mix(in srgb, var(--guaxi-notebook-primary, #3b82f6) 34%, transparent));
+  color: inherit;
+}
+
+.guaxi-notebook :deep(pre)::selection,
+.guaxi-notebook :deep(pre ::selection),
+.guaxi-notebook :deep(code)::selection,
+.guaxi-notebook :deep(code ::selection) {
+  background: var(--guaxi-selection-strong-bg, color-mix(in srgb, var(--guaxi-notebook-primary, #3b82f6) 48%, transparent));
 }
 
 .guaxi-notebook__markdown-preview :deep(code),
@@ -11084,15 +11092,13 @@ defineExpose({
     position: static;
     top: auto;
     height: auto;
-    display: block;
+    display: flex;
+    justify-content: flex-start;
     pointer-events: auto;
   }
 
-  .guaxi-notebook__search-panel {
-    position: static;
-    width: 100%;
+  .guaxi-notebook__find-widget {
     margin-top: -2px;
-    box-sizing: border-box;
   }
 
   .guaxi-notebook__insert-actions {

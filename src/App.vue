@@ -185,6 +185,17 @@ const themeOverrides = computed(() => {
   --guaxi-syntax-attribute: #9a6700;
   --guaxi-syntax-builtin: #0969da;
   --guaxi-syntax-decorator: #a626a4;
+
+  /* 设计说明（统一选中与搜索命中的观感）：
+     预览、分屏、探索者三个模式此前各写一套颜色，和编辑模式的 Monaco 也不一致。
+     这里集中定义，四处共用；改一处就能全局调。
+     - selection 只改背景、保留前景色，代码块的语法着色不会被抹平；
+     - 搜索命中沿用 Monaco 的橙色系（findMatchHighlight / findMatch）。 */
+  --guaxi-selection-bg: rgba(0, 122, 204, 0.26);
+  --guaxi-selection-strong-bg: rgba(0, 122, 204, 0.4);
+  --guaxi-search-hit-bg: rgba(234, 92, 0, 0.28);
+  --guaxi-search-hit-active-bg: rgba(234, 92, 0, 0.5);
+  --guaxi-search-hit-active-border: rgba(246, 154, 60, 0.9);
 }
 
 :root[data-guaxi-theme='dark'] {
@@ -219,6 +230,13 @@ const themeOverrides = computed(() => {
   --guaxi-syntax-attribute: #d19a66;
   --guaxi-syntax-builtin: #56b6c2;
   --guaxi-syntax-decorator: #c678dd;
+
+  /* 暗色主题下选区与命中都要更亮一档，否则压在深色底上几乎看不出来。 */
+  --guaxi-selection-bg: rgba(58, 150, 221, 0.38);
+  --guaxi-selection-strong-bg: rgba(58, 150, 221, 0.52);
+  --guaxi-search-hit-bg: rgba(234, 92, 0, 0.36);
+  --guaxi-search-hit-active-bg: rgba(234, 92, 0, 0.62);
+  --guaxi-search-hit-active-border: rgba(246, 154, 60, 0.95);
 }
 
 html,

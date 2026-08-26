@@ -703,21 +703,26 @@
         class="realtime-vditor">
       </div>
       <div v-show="previewMode !== 'realtime' && showPreview" class="preview-shell" ref="previewShellRef">
-        <div v-show="previewSearchVisible" class="preview-search-panel" @mousedown.stop>
-          <input
-            ref="previewSearchInputRef"
-            v-model="previewSearchKeyword"
-            class="preview-search-input"
-            type="text"
-            placeholder="搜索预览内容..."
-            @keydown.enter.prevent="focusNextPreviewSearchMatch"
-            @keydown.shift.enter.prevent="focusPrevPreviewSearchMatch"
-          />
-          <span class="preview-search-count">{{ previewSearchMatchCountText }}</span>
-          <button class="preview-search-btn" type="button" @click="focusPrevPreviewSearchMatch">上一个</button>
-          <button class="preview-search-btn" type="button" @click="focusNextPreviewSearchMatch">下一个</button>
-          <button class="preview-search-btn preview-search-close" type="button" @click="closePreviewSearch">关闭</button>
-        </div>
+        <GuaxiFindWidget
+          ref="previewFindWidgetRef"
+          class="preview-find-widget"
+          :visible="previewSearchVisible"
+          :keyword="previewSearchKeyword"
+          :match-index="previewSearchActiveIndex"
+          :match-count="previewSearchMatches.length"
+          :case-sensitive="previewSearchCaseSensitive"
+          :whole-word="previewSearchWholeWord"
+          :use-regex="previewSearchUseRegex"
+          :regex-invalid="previewSearchRegexInvalid"
+          placeholder="在预览中查找"
+          @update:keyword="previewSearchKeyword = $event"
+          @update:case-sensitive="previewSearchCaseSensitive = $event"
+          @update:whole-word="previewSearchWholeWord = $event"
+          @update:use-regex="previewSearchUseRegex = $event"
+          @next="focusNextPreviewSearchMatch"
+          @prev="focusPrevPreviewSearchMatch"
+          @close="closePreviewSearch"
+        />
         <div class="preview" ref="previewContainer" @click="handlePreviewClick"
           @wheel="handlePreviewWheelZoom"
           @scroll.passive="handleMarkdownPreviewScroll"
@@ -1189,6 +1194,15 @@ import { useSiderStore } from '../../stores/useSiderStore'
 import GuaxiEditorStatusBar from './GuaxiEditorStatusBar.vue'
 import GuaxiSelectionTranslatePanel from './GuaxiSelectionTranslatePanel.vue'
 import GuaxiNotebookView from './GuaxiNotebookView.vue'
+import GuaxiFindWidget from './GuaxiFindWidget.vue'
+import {
+  SEARCH_HIT_ACTIVE_CLASS,
+  SEARCH_HIT_CLASS,
+  applySearchHighlights,
+  buildSearchRegex,
+  clearSearchHighlights,
+  setActiveSearchHit,
+} from '../../utils/domTextSearch'
 import GuaxiLatexPreview from './GuaxiLatexPreview.vue'
 import GuaxiSpeechDictationCard from './GuaxiSpeechDictationCard.vue'
 import { useSpeechDictation } from '../../composables/useSpeechDictation'
@@ -2011,7 +2025,7 @@ const startSplitResize = (event) => {
 };
 const previewShellRef = ref(null);
 const editorContentRef = ref(null);
-const previewSearchInputRef = ref(null)
+const previewFindWidgetRef = ref(null)
 const floatingToolbarVisible = ref(false);
 const floatingToolbarStyle = ref({ left: '0px', top: '0px' });
 const previewFloatingToolbarVisible = ref(false)
@@ -2022,6 +2036,11 @@ const previewSearchVisible = ref(false)
 const previewSearchKeyword = ref('')
 const previewSearchMatches = ref([])
 const previewSearchActiveIndex = ref(-1)
+// 与 Monaco find widget 对齐的三个搜索选项，以及“正则写错了”的提示状态。
+const previewSearchCaseSensitive = ref(false)
+const previewSearchWholeWord = ref(false)
+const previewSearchUseRegex = ref(false)
+const previewSearchRegexInvalid = ref(false)
 
 const selectionTranslatePanelVisible = ref(false);
 const selectionTranslatePinned = ref(false);
@@ -12819,115 +12838,60 @@ const clearPreviewSelectionState = () => {
   hidePreviewFloatingToolbar()
 }
 
-const previewSearchMatchCountText = computed(() => {
-  const total = Array.isArray(previewSearchMatches.value) ? previewSearchMatches.value.length : 0
-  if (!total) return '0 / 0'
-  const idx = Math.max(0, Number(previewSearchActiveIndex.value || 0))
-  return `${Math.min(idx + 1, total)} / ${total}`
-})
+// 预览搜索里需要排除的“非内容”元素：复制按钮、媒体按钮、Python cell 工具条这些是 UI，
+// 搜到它们上面的文字只会干扰用户。代码相关的 code / pre 一律参与搜索（这正是行内代码
+// `CMakeLists.txt` 之前搜不到的原因）。
+const PREVIEW_SEARCH_EXTRA_EXCLUDE = [
+  '.copy-button',
+  '.copy-code-btn',
+  '.md-copy-btn',
+  '.media-viewer-btn',
+  '.media-group-toolbar',
+  '.guaxi-pycell-toolbar',
+  '.guaxi-pycell-output-toggle',
+  '.floating-md-toolbar',
+].join(', ')
 
-const escapeRegExp = (raw) => String(raw || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const previewSearchOptions = () => ({
+  caseSensitive: previewSearchCaseSensitive.value,
+  wholeWord: previewSearchWholeWord.value,
+  useRegex: previewSearchUseRegex.value,
+})
 
 const clearPreviewSearchHighlights = () => {
   const container = previewContainer.value
-  if (!container) {
-    previewSearchMatches.value = []
-    previewSearchActiveIndex.value = -1
-    return
-  }
-  const marks = container.querySelectorAll('span.preview-search-hit')
-  marks.forEach((mark) => {
-    const parent = mark.parentNode
-    if (!parent) return
-    parent.replaceChild(document.createTextNode(mark.textContent || ''), mark)
-    parent.normalize?.()
-  })
+  if (container) clearSearchHighlights(container, SEARCH_HIT_CLASS)
   previewSearchMatches.value = []
   previewSearchActiveIndex.value = -1
 }
 
 const focusPreviewSearchMatchAt = (index, options = {}) => {
-  const matches = Array.isArray(previewSearchMatches.value) ? previewSearchMatches.value : []
-  const total = matches.length
-  if (!total) {
-    previewSearchActiveIndex.value = -1
-    return
-  }
-  let idx = Number(index)
-  if (!Number.isFinite(idx)) idx = 0
-  if (idx < 0) idx = total - 1
-  if (idx >= total) idx = 0
-
-  matches.forEach((el) => el?.classList?.remove('preview-search-hit-active'))
-  const active = matches[idx]
-  if (active) {
-    active.classList.add('preview-search-hit-active')
-    if (options.scroll !== false) {
-      active.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' })
-    }
-  }
-  previewSearchActiveIndex.value = idx
+  const next = setActiveSearchHit(previewSearchMatches.value, index, {
+    activeClass: SEARCH_HIT_ACTIVE_CLASS,
+    scroll: options.scroll !== false,
+  })
+  previewSearchActiveIndex.value = next
 }
 
 const applyPreviewSearchHighlights = () => {
   clearPreviewSearchHighlights()
 
   const container = previewContainer.value
-  const keyword = String(previewSearchKeyword.value || '').trim()
-  if (!container || !keyword) return
-
-  const regex = new RegExp(escapeRegExp(keyword), 'gi')
-  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
-    acceptNode(node) {
-      const text = String(node?.nodeValue || '')
-      if (!text) return NodeFilter.FILTER_REJECT
-      const parent = node.parentElement
-      if (!parent) return NodeFilter.FILTER_REJECT
-      if (parent.closest('.preview-search-panel')) return NodeFilter.FILTER_REJECT
-      if (parent.closest('.preview-search-hit')) return NodeFilter.FILTER_REJECT
-      if (parent.closest('script, style, code')) return NodeFilter.FILTER_REJECT
-      regex.lastIndex = 0
-      return regex.test(text) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
-    },
-  })
-
-  const textNodes = []
-  let cur = walker.nextNode()
-  while (cur) {
-    textNodes.push(cur)
-    cur = walker.nextNode()
+  const keyword = String(previewSearchKeyword.value || '')
+  if (!container || !keyword.trim()) {
+    previewSearchRegexInvalid.value = false
+    return
   }
 
-  const matches = []
-  textNodes.forEach((node) => {
-    const text = String(node.nodeValue || '')
-    const parent = node.parentNode
-    if (!parent) return
+  const options = previewSearchOptions()
+  // 正则模式下用户可能正打到一半（例如只输入了 `[`），此时提示无效而不是抛错。
+  previewSearchRegexInvalid.value = !buildSearchRegex(keyword, options)
 
-    regex.lastIndex = 0
-    let lastIdx = 0
-    let m = regex.exec(text)
-    if (!m) return
-
-    const frag = document.createDocumentFragment()
-    while (m) {
-      const i = Number(m.index || 0)
-      const matchedText = String(m[0] || '')
-      if (i > lastIdx) {
-        frag.appendChild(document.createTextNode(text.slice(lastIdx, i)))
-      }
-      const span = document.createElement('span')
-      span.className = 'preview-search-hit'
-      span.textContent = matchedText
-      frag.appendChild(span)
-      matches.push(span)
-      lastIdx = i + matchedText.length
-      m = regex.exec(text)
-    }
-    if (lastIdx < text.length) {
-      frag.appendChild(document.createTextNode(text.slice(lastIdx)))
-    }
-    parent.replaceChild(frag, node)
+  const matches = applySearchHighlights(container, {
+    keyword,
+    options,
+    hitClass: SEARCH_HIT_CLASS,
+    extraExcludeSelector: PREVIEW_SEARCH_EXTRA_EXCLUDE,
   })
 
   previewSearchMatches.value = matches
@@ -12936,18 +12900,31 @@ const applyPreviewSearchHighlights = () => {
   }
 }
 
-const openPreviewSearch = async () => {
+// 设计说明（对应“选中文本后 Ctrl+F 直接带入搜索框”）：
+// Monaco 的行为是用当前选区作为初始关键词。这里优先读实时的 window 选区
+// （Ctrl+F 那一刻最准），拿不到再退回鼠标松开时记下的选区文本。
+// 跨行选区不带入——Monaco 同样只在单行选区时填充查找框。
+const getPreviewSearchSeedText = () => {
+  const live = String(updatePreviewSelectionFromWindow() || '')
+  const raw = live || String(previewSelectionText.value || '')
+  const seed = raw.trim()
+  if (!seed || /[\r\n]/.test(seed)) return ''
+  return seed.length <= 200 ? seed : ''
+}
+
+const openPreviewSearch = async ({ seedFromSelection = true } = {}) => {
+  const seed = seedFromSelection ? getPreviewSearchSeedText() : ''
   previewSearchVisible.value = true
+  if (seed) previewSearchKeyword.value = seed
   await nextTick()
-  const input = previewSearchInputRef.value
-  if (input?.focus) input.focus()
-  if (input?.select) input.select()
+  previewFindWidgetRef.value?.focusInput?.()
   applyPreviewSearchHighlights()
 }
 
 const closePreviewSearch = () => {
   previewSearchVisible.value = false
   previewSearchKeyword.value = ''
+  previewSearchRegexInvalid.value = false
   clearPreviewSearchHighlights()
 }
 
@@ -15188,8 +15165,17 @@ const handleKeyDown = (e) => {
       terminalPanelRef.value?.openSearch?.()
       return
     }
-    const previewOnly = mode.value === 'preview' && showPreview.value && !showEditor.value && previewMode.value !== 'realtime'
-    if (previewOnly) {
+    // 设计说明（分屏下 Ctrl+F 归谁）：
+    // 1. 纯预览模式没有别的候选，直接开预览查找。
+    // 2. 分屏模式里编辑器与预览同时在场，按“焦点/选区落在哪一侧”决定：
+    //    落在预览侧开预览查找，落在 Monaco 侧不拦截，交给 Monaco 自己的 find widget。
+    const previewUsable = showPreview.value && previewMode.value !== 'realtime'
+    const previewOnly = previewUsable && mode.value === 'preview' && !showEditor.value
+    const pointInPreview = !!(
+      eventTarget?.closest?.('.preview-shell')
+      || (selectionSurface.value === 'preview' && !eventTarget?.closest?.('.monaco-editor'))
+    )
+    if (previewUsable && (previewOnly || pointInPreview)) {
       e.preventDefault()
       e.stopPropagation()
       openPreviewSearch()
@@ -21164,15 +21150,21 @@ watch(renderedHtml, () => {
   });
 });
 
-watch(previewSearchKeyword, () => {
-  nextTick(() => {
-    applyPreviewSearchHighlights()
-  })
-})
+watch(
+  [previewSearchKeyword, previewSearchCaseSensitive, previewSearchWholeWord, previewSearchUseRegex],
+  () => {
+    nextTick(() => {
+      applyPreviewSearchHighlights()
+    })
+  },
+)
 
-watch([showPreview, previewMode, mode], ([previewShown, currentPreviewMode, currentMode]) => {
-  const previewOnly = previewShown && currentPreviewMode !== 'realtime' && currentMode === 'preview' && !showEditor.value
-  if (!previewOnly && previewSearchVisible.value) {
+// 设计说明：分屏模式下预览仍然可见，搜索面板应当保留（此前这里要求 !showEditor，
+// 于是一进分屏就把面板关掉，用户在分屏里根本用不上预览查找）。只有预览真的不可见
+// （切到纯编辑 / 即时渲染 / 探索者）才关闭。
+watch([showPreview, previewMode, mode], ([previewShown, currentPreviewMode]) => {
+  const previewUsable = previewShown && currentPreviewMode !== 'realtime'
+  if (!previewUsable && previewSearchVisible.value) {
     closePreviewSearch()
   }
 })
@@ -24959,69 +24951,49 @@ onUnmounted(() => {
   color: var(--guaxi-text-primary, #1f2328);
 }
 
-.preview-search-panel {
+/* 查找控件的定位由宿主负责，控件自身的外观全部在 GuaxiFindWidget 内部。
+   位置与 Monaco 保持一致：贴在内容区右上角，悬浮在内容之上。 */
+.preview-find-widget {
   position: absolute;
-  top: 10px;
-  right: 10px;
+  top: 8px;
+  right: 14px;
   z-index: 12;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
-  border-radius: 10px;
-  border: 1px solid var(--guaxi-border);
-  background: color-mix(in srgb, var(--guaxi-panel-bg) 94%, transparent);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
 }
 
-.preview-search-input {
-  width: 220px;
-  height: 26px;
-  padding: 0 8px;
-  border-radius: 6px;
-  border: 1px solid var(--guaxi-border);
-  outline: none;
-  background: var(--guaxi-content-bg);
-  color: var(--guaxi-text-primary);
-}
-
-.preview-search-input:focus {
-  border-color: var(--primary-color, #4acadb);
-}
-
-.preview-search-count {
-  font-size: 12px;
-  opacity: 0.8;
-  min-width: 52px;
-  text-align: center;
-}
-
-.preview-search-btn {
-  height: 24px;
-  padding: 0 8px;
-  border-radius: 6px;
-  border: 1px solid var(--guaxi-border);
-  background: var(--guaxi-content-bg);
-  color: var(--guaxi-text-primary);
-  cursor: pointer;
-}
-
-.preview-search-btn:hover {
-  background: var(--guaxi-header-bg);
-}
-
-.preview-search-close {
-  color: var(--error-color, #ff6b6b);
-}
-
-.preview :deep(.preview-search-hit) {
-  background: rgba(255, 208, 0, 0.38);
+/* 搜索命中配色与探索者模式共用一套取值（见 GuaxiNotebookView 的同名规则）。 */
+.preview :deep(.guaxi-search-hit) {
+  background: var(--guaxi-search-hit-bg, rgba(234, 92, 0, 0.33));
   border-radius: 2px;
   padding: 0 1px;
 }
 
-.preview :deep(.preview-search-hit-active) {
-  background: rgba(255, 145, 0, 0.65);
+.preview :deep(.guaxi-search-hit-active) {
+  background: var(--guaxi-search-hit-active-bg, rgba(234, 92, 0, 0.62));
+  outline: 1px solid var(--guaxi-search-hit-active-border, rgba(246, 154, 60, 0.9));
+  outline-offset: -1px;
+}
+
+/* 设计说明（对应“选中没有精美的选中效果”）：
+   浏览器默认选区是刺眼的纯蓝底，与编辑器里 Monaco 的半透明选区观感割裂。
+   这里用主题色的半透明底 + 保持原前景色，代码块的语法着色不会被抹平。 */
+.preview ::selection,
+.preview :deep(::selection) {
+  background: var(--guaxi-selection-bg, color-mix(in srgb, var(--primary-color, #4acadb) 34%, transparent));
+  color: inherit;
+}
+
+.preview ::-moz-selection,
+.preview :deep(::-moz-selection) {
+  background: var(--guaxi-selection-bg, color-mix(in srgb, var(--primary-color, #4acadb) 34%, transparent));
+  color: inherit;
+}
+
+/* 代码块底色本来就深，选区再半透明就看不出来了，这里单独加深一档。 */
+.preview :deep(pre)::selection,
+.preview :deep(pre ::selection),
+.preview :deep(code)::selection,
+.preview :deep(code ::selection) {
+  background: var(--guaxi-selection-strong-bg, color-mix(in srgb, var(--primary-color, #4acadb) 48%, transparent));
 }
 
 .preview {
