@@ -54,6 +54,65 @@
               placeholder="如 deepseek/deepseek-chat、glm-4-plus 等" />
           </n-form-item>
 
+          <n-divider style="margin: 8px 0" />
+
+          <n-alert type="info" :show-icon="false" style="margin-bottom: 12px">
+            启用 cc-switch 后，Guaxi 只记住代理地址，具体用哪家供应商由 cc-switch 决定；
+            在 cc-switch 里切换供应商，普通对话与 Codex Agent 会同时跟随，无需回到这里改配置。
+          </n-alert>
+
+          <n-form-item label="启用 cc-switch 代理">
+            <n-space align="center">
+              <n-switch v-model:value="form.cc_switch_enabled" :disabled="loading" />
+              <n-button size="small" :disabled="loading" @click="detectCcSwitch">自动探测</n-button>
+              <n-text depth="3">{{ ccSwitchHint }}</n-text>
+            </n-space>
+          </n-form-item>
+
+          <n-form-item label="cc-switch 代理地址">
+            <n-input v-model:value="form.cc_switch_base_url" :disabled="loading"
+              placeholder="http://127.0.0.1:15721/v1" />
+          </n-form-item>
+
+          <n-form-item label="cc-switch 模型名">
+            <n-input v-model:value="form.cc_switch_model" :disabled="loading"
+              placeholder="代理转发时使用的模型名，如 gpt-5.1-codex" />
+          </n-form-item>
+
+          <n-form-item label="cc-switch API Key">
+            <n-input v-model:value="form.cc_switch_api_key" :disabled="loading" type="password"
+              show-password-on="click" placeholder="留空即可，代理会用上游供应商的密钥" />
+          </n-form-item>
+
+          <n-form-item label="cc-switch 协议">
+            <n-select v-model:value="form.cc_switch_wire_api" :disabled="loading" :options="wireApiOptions"
+              style="max-width: 260px" />
+          </n-form-item>
+          <n-text depth="3" style="display: block; margin: -8px 0 12px 0; font-size: 12px">
+            该选项只影响“对话”模式；Codex Agent 固定使用 Responses 协议（codex 0.149 起不再支持 chat）。
+          </n-text>
+
+          <n-divider style="margin: 8px 0" />
+
+          <n-form-item label="Agent 引擎">
+            <n-select v-model:value="form.agent_engine" :disabled="loading" :options="agentEngineOptions"
+              style="max-width: 260px" />
+          </n-form-item>
+
+          <n-form-item label="Codex 模型名">
+            <n-input v-model:value="form.codex_model" :disabled="loading"
+              placeholder="留空则沿用上面的供应商模型名" />
+          </n-form-item>
+
+          <n-form-item label="Codex 沙箱">
+            <n-select v-model:value="form.codex_sandbox" :disabled="loading" :options="codexSandboxOptions"
+              style="max-width: 300px" />
+          </n-form-item>
+
+          <n-form-item label="Codex 配置目录">
+            <n-input :value="codexStatus.codex_home" readonly placeholder="首次运行 Agent 后生成" />
+          </n-form-item>
+
           <n-form-item label="操作">
             <n-space>
               <n-button :disabled="loading" @click="loadConfig">刷新</n-button>
@@ -228,7 +287,7 @@
 <script setup>
 import { createLogger } from '../../utils/logger'
 import { reactive, ref, onMounted, computed } from 'vue'
-import { NCard, NSpace, NAlert, NForm, NFormItem, NInput, NButton, NDivider, NIcon, NText, useMessage } from 'naive-ui'
+import { NCard, NSpace, NAlert, NForm, NFormItem, NInput, NButton, NDivider, NIcon, NText, NSwitch, NSelect, useMessage } from 'naive-ui'
 import { CheckmarkCircleOutline, CloseCircleOutline, ConstructOutline, CubeOutline, InformationCircleOutline, KeyOutline, TimeOutline } from '@vicons/ionicons5'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -247,6 +306,26 @@ const copyingEnv = ref(false)
 
 const markdownModelsStatus = ref({ installed: false, expected_path: '' })
 const markdownEnvStatus = ref({ installed: false, expected_path: '' })
+const codexStatus = ref({
+  binary_path: '',
+  binary_exists: false,
+  version: '',
+  codex_home: '',
+  provider_base_url: '',
+  provider_model: '',
+  provider_ready: false,
+  sandbox: 'workspace-write',
+  hint: '',
+})
+const ccSwitchDetection = ref({ found: false, proxy_enabled: false, current_provider_name: '', hint: '' })
+const ccSwitchHint = computed(() => {
+  const detection = ccSwitchDetection.value
+  if (!detection.hint) return '点击"自动探测"读取本机 cc-switch 配置'
+  if (detection.current_provider_name) {
+    return `${detection.hint}（当前供应商：${detection.current_provider_name}）`
+  }
+  return detection.hint
+})
 const localDeepseekStatus = ref({
   installed: false,
   expected_path: '',
@@ -295,6 +374,21 @@ const localQwenBadgeIcon = computed(() => {
 
 const hasKey = (v) => typeof v === 'string' && v.trim().length > 0
 
+const codexEngineState = computed(() => {
+  if (!codexStatus.value.binary_exists) return 'warn'
+  return codexStatus.value.provider_ready ? 'ok' : 'warn'
+})
+
+const codexEngineBadgeText = computed(() => {
+  if (!codexStatus.value.binary_exists) return '未内置'
+  return codexStatus.value.version || '已内置'
+})
+
+const ccSwitchState = computed(() => {
+  if (!form.cc_switch_enabled) return 'warn'
+  return codexStatus.value.provider_ready ? 'ok' : 'warn'
+})
+
 const statusItems = computed(() => {
   const keyItem = (id, name, value) => {
     const ok = hasKey(value)
@@ -340,6 +434,35 @@ const statusItems = computed(() => {
       tipTitle: '模型运行环境',
       tipLines: [`期望路径：${markdownEnvStatus.value.expected_path || '-'}`, '未加载时请选择 MarkdownConvertor.zip 并点击“拷贝”'],
     },
+    {
+      id: 'codex_engine',
+      name: 'Codex 引擎',
+      icon: ConstructOutline,
+      state: codexEngineState.value,
+      badgeText: codexEngineBadgeText.value,
+      badgeIcon: codexStatus.value.binary_exists ? CheckmarkCircleOutline : CloseCircleOutline,
+      tipTitle: 'Codex Agent 引擎',
+      tipLines: [
+        `可执行文件：${codexStatus.value.binary_path || '未找到'}`,
+        `配置目录：${codexStatus.value.codex_home || '-'}（与用户的 ~/.codex 无关）`,
+        `沙箱：${codexStatus.value.sandbox || '-'}`,
+        codexStatus.value.hint || '缺失时 Agent 会自动回退到内置 Python 引擎；可执行 npm run codex:fetch 获取',
+      ],
+    },
+    {
+      id: 'cc_switch',
+      name: 'cc-switch 代理',
+      icon: KeyOutline,
+      state: ccSwitchState.value,
+      badgeText: form.cc_switch_enabled ? (codexStatus.value.provider_ready ? '已启用' : '配置不全') : '未启用',
+      badgeIcon: form.cc_switch_enabled && codexStatus.value.provider_ready ? CheckmarkCircleOutline : CloseCircleOutline,
+      tipTitle: 'cc-switch 本地代理',
+      tipLines: [
+        `代理地址：${form.cc_switch_base_url || '-'}`,
+        `供应商模型：${codexStatus.value.provider_model || form.cc_switch_model || '-'}`,
+        ccSwitchHint.value,
+      ],
+    },
   ]
 })
 
@@ -353,7 +476,78 @@ const form = reactive({
   custom_base_url: '',
   custom_api_key: '',
   custom_model: '',
+  // cc-switch 本地代理
+  cc_switch_enabled: false,
+  cc_switch_base_url: 'http://127.0.0.1:15721/v1',
+  cc_switch_api_key: '',
+  cc_switch_model: '',
+  cc_switch_wire_api: 'chat',
+  // Codex Agent
+  codex_model: '',
+  codex_sandbox: 'workspace-write',
+  agent_engine: 'codex',
 })
+
+const wireApiOptions = [
+  { value: 'chat', label: 'chat（/chat/completions，“对话”模式用这个）' },
+  { value: 'responses', label: 'responses（/responses，“对话”模式不可用）' },
+]
+
+const agentEngineOptions = [
+  { value: 'codex', label: 'Codex（内置 codex，速度快、工具全）' },
+  { value: 'builtin', label: '内置 Python Agent（回退方案）' },
+]
+
+const codexSandboxOptions = [
+  { value: 'read-only', label: 'read-only（只读，模型不能改文件）' },
+  { value: 'workspace-write', label: 'workspace-write（可改知识库内文件，推荐）' },
+  { value: 'danger-full-access', label: 'danger-full-access（不设限，慎用）' },
+]
+
+const refreshCodexStatus = async () => {
+  try {
+    const status = await invoke('codex_agent_status')
+    codexStatus.value = {
+      binary_path: typeof status?.binary_path === 'string' ? status.binary_path : '',
+      binary_exists: Boolean(status?.binary_exists),
+      version: typeof status?.version === 'string' ? status.version : '',
+      codex_home: typeof status?.codex_home === 'string' ? status.codex_home : '',
+      provider_base_url: typeof status?.provider_base_url === 'string' ? status.provider_base_url : '',
+      provider_model: typeof status?.provider_model === 'string' ? status.provider_model : '',
+      provider_ready: Boolean(status?.provider_ready),
+      sandbox: typeof status?.sandbox === 'string' ? status.sandbox : 'workspace-write',
+      hint: typeof status?.hint === 'string' ? status.hint : '',
+    }
+  } catch (e) {
+    logger.error('读取 Codex 引擎状态失败:', e)
+  }
+}
+
+// 只读探测本机 cc-switch：回填代理地址，并提示当前激活的供应商。
+// 探测失败不阻塞任何流程，用户仍可手填地址。
+const detectCcSwitch = async () => {
+  try {
+    const detection = await invoke('detect_cc_switch_config')
+    ccSwitchDetection.value = {
+      found: Boolean(detection?.found),
+      proxy_enabled: Boolean(detection?.proxy_enabled),
+      current_provider_name: typeof detection?.current_provider_name === 'string' ? detection.current_provider_name : '',
+      hint: typeof detection?.hint === 'string' ? detection.hint : '',
+    }
+    const baseUrl = typeof detection?.base_url === 'string' ? detection.base_url : ''
+    if (baseUrl) {
+      form.cc_switch_base_url = baseUrl
+    }
+    if (detection?.proxy_enabled) {
+      message.success('已回填 cc-switch 代理地址，别忘了保存')
+    } else {
+      message.warning(ccSwitchDetection.value.hint || '未检测到可用的 cc-switch 本地代理')
+    }
+  } catch (e) {
+    logger.error('探测 cc-switch 配置失败:', e)
+    message.error('探测 cc-switch 配置失败')
+  }
+}
 
 const loadConfig = async () => {
   loading.value = true
@@ -368,6 +562,18 @@ const loadConfig = async () => {
     form.custom_base_url = typeof cfg?.custom_base_url === 'string' ? cfg.custom_base_url : ''
     form.custom_api_key = typeof cfg?.custom_api_key === 'string' ? cfg.custom_api_key : ''
     form.custom_model = typeof cfg?.custom_model === 'string' ? cfg.custom_model : ''
+    form.cc_switch_enabled = Boolean(cfg?.cc_switch_enabled)
+    form.cc_switch_base_url = typeof cfg?.cc_switch_base_url === 'string' && cfg.cc_switch_base_url
+      ? cfg.cc_switch_base_url
+      : 'http://127.0.0.1:15721/v1'
+    form.cc_switch_api_key = typeof cfg?.cc_switch_api_key === 'string' ? cfg.cc_switch_api_key : ''
+    form.cc_switch_model = typeof cfg?.cc_switch_model === 'string' ? cfg.cc_switch_model : ''
+    form.cc_switch_wire_api = cfg?.cc_switch_wire_api === 'responses' ? 'responses' : 'chat'
+    form.codex_model = typeof cfg?.codex_model === 'string' ? cfg.codex_model : ''
+    form.codex_sandbox = typeof cfg?.codex_sandbox === 'string' && cfg.codex_sandbox
+      ? cfg.codex_sandbox
+      : 'workspace-write'
+    form.agent_engine = cfg?.agent_engine === 'builtin' ? 'builtin' : 'codex'
 
     const root = await invoke('get_chat_record_root')
     chatRecordRoot.value = typeof root === 'string' ? root : ''
@@ -404,6 +610,9 @@ const loadConfig = async () => {
   } finally {
     loading.value = false
   }
+
+  // Codex 状态要在 loading 复位后再取：读版本号会拉起一次子进程，不该把整个表单锁住。
+  await refreshCodexStatus()
 }
 
 const saveConfig = async () => {
@@ -420,9 +629,19 @@ const saveConfig = async () => {
         custom_base_url: form.custom_base_url,
         custom_api_key: form.custom_api_key,
         custom_model: form.custom_model,
+        // set_llm_config 是整体替换，所有字段都必须回传，漏一个就会被重置成默认值。
+        cc_switch_enabled: form.cc_switch_enabled,
+        cc_switch_base_url: form.cc_switch_base_url,
+        cc_switch_api_key: form.cc_switch_api_key,
+        cc_switch_model: form.cc_switch_model,
+        cc_switch_wire_api: form.cc_switch_wire_api,
+        codex_model: form.codex_model,
+        codex_sandbox: form.codex_sandbox,
+        agent_engine: form.agent_engine,
       },
     })
     message.success('已保存大模型秘钥')
+    await refreshCodexStatus()
   } catch (e) {
     logger.error('保存大模型配置失败:', e)
     message.error('保存大模型秘钥失败')

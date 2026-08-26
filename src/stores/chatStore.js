@@ -238,6 +238,8 @@ export const useChatStore = defineStore("chatStore", {
         { name: "Kimi", selectedModel: "3" },
         { name: "豆包", selectedModel: "4" },
         { name: "自定义(OpenAI兼容)", selectedModel: "10" },
+        // cc-switch 本地代理：具体供应商由 cc-switch 决定，这里只是一个统一入口。
+        { name: "cc-switch(本地代理)", selectedModel: "11" },
         { name: "腾讯元宝(网页)", selectedModel: "7" },
         { name: "ChatGPT(网页)", selectedModel: "8" },
       ],

@@ -107,7 +107,23 @@ pub struct ServerConfig {
     port: u16,
 }
 
-#[derive(Serialize, Deserialize, Debug, Default)]
+fn default_cc_switch_base_url() -> String {
+    "http://127.0.0.1:15721/v1".to_string()
+}
+
+fn default_cc_switch_wire_api() -> String {
+    "chat".to_string()
+}
+
+fn default_codex_sandbox() -> String {
+    "workspace-write".to_string()
+}
+
+fn default_agent_engine() -> String {
+    "codex".to_string()
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct LlmConfig {
     #[serde(default)]
     pub chatgpt_api_key: String,
@@ -128,6 +144,51 @@ pub struct LlmConfig {
     pub custom_api_key: String,
     #[serde(default)]
     pub custom_model: String,
+    // cc-switch 本地代理：供应商切换交给 cc-switch，Guaxi 只认这一个入口地址。
+    // 这样在 cc-switch 里换供应商后，Guaxi 的普通对话与 codex Agent 会同时跟随，无需改配置。
+    #[serde(default)]
+    pub cc_switch_enabled: bool,
+    #[serde(default = "default_cc_switch_base_url")]
+    pub cc_switch_base_url: String,
+    #[serde(default)]
+    pub cc_switch_api_key: String,
+    #[serde(default)]
+    pub cc_switch_model: String,
+    /// cc-switch 代理暴露的协议：`chat`（/chat/completions）或 `responses`（/responses）。
+    #[serde(default = "default_cc_switch_wire_api")]
+    pub cc_switch_wire_api: String,
+    // Codex Agent 引擎
+    #[serde(default)]
+    pub codex_model: String,
+    #[serde(default = "default_codex_sandbox")]
+    pub codex_sandbox: String,
+    /// Agent 引擎：`codex`（沙箱 codex exec）或 `builtin`（Python agent_server 回退）。
+    #[serde(default = "default_agent_engine")]
+    pub agent_engine: String,
+}
+
+impl Default for LlmConfig {
+    fn default() -> Self {
+        Self {
+            chatgpt_api_key: String::new(),
+            deepseek_api_key: String::new(),
+            qwen_api_key: String::new(),
+            kimi_api_key: String::new(),
+            doubao_api_key: String::new(),
+            siliconflow_api_key: String::new(),
+            custom_base_url: String::new(),
+            custom_api_key: String::new(),
+            custom_model: String::new(),
+            cc_switch_enabled: false,
+            cc_switch_base_url: default_cc_switch_base_url(),
+            cc_switch_api_key: String::new(),
+            cc_switch_model: String::new(),
+            cc_switch_wire_api: default_cc_switch_wire_api(),
+            codex_model: String::new(),
+            codex_sandbox: default_codex_sandbox(),
+            agent_engine: default_agent_engine(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -946,6 +1007,7 @@ pub fn load_config() -> AppConfig {
         "/llm_config/doubao_api_key",
         "/llm_config/siliconflow_api_key",
         "/llm_config/custom_api_key",
+        "/llm_config/cc_switch_api_key",
         "/knowledge_bases_remote_token",
         "/lsp_github_token",
     ] {
@@ -1031,6 +1093,7 @@ pub fn load_config() -> AppConfig {
     try_decrypt("/llm_config/doubao_api_key");
     try_decrypt("/llm_config/siliconflow_api_key");
     try_decrypt("/llm_config/custom_api_key");
+    try_decrypt("/llm_config/cc_switch_api_key");
     try_decrypt("/knowledge_bases_remote_token");
     try_decrypt("/lsp_github_token");
 
@@ -1168,6 +1231,7 @@ pub fn save_config(config: &AppConfig) {
     encrypt_field(&mut val, "/llm_config/doubao_api_key");
     encrypt_field(&mut val, "/llm_config/siliconflow_api_key");
     encrypt_field(&mut val, "/llm_config/custom_api_key");
+    encrypt_field(&mut val, "/llm_config/cc_switch_api_key");
     encrypt_field(&mut val, "/knowledge_bases_remote_token");
     encrypt_field(&mut val, "/lsp_github_token");
 

@@ -1,5 +1,9 @@
 pub mod agent_server;
+/// cc-switch（第三方供应商切换工具）的只读探测，用于把 base_url 指向它的本地代理。
+pub mod cc_switch;
 pub mod chatview;
+/// Codex Agent 引擎：以打包进安装包的 codex sidecar 驱动智能助手的 Agent 模式。
+pub mod codex_agent;
 pub mod docprocess;
 pub mod convert;
 pub mod import_suggest;

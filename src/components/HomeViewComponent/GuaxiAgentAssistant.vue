@@ -582,6 +582,7 @@ import globeIcon from '@iconify-icons/lucide/globe'
 import terminalIcon from '@iconify-icons/lucide/terminal'
 import databaseIcon from '@iconify-icons/lucide/database'
 import wrenchIcon from '@iconify-icons/lucide/wrench'
+import brainIcon from '@iconify-icons/lucide/brain'
 import atSignIcon from '@iconify-icons/lucide/at-sign'
 import arrowDownIcon from '@iconify-icons/lucide/arrow-down'
 import arrowLeftIcon from '@iconify-icons/lucide/arrow-left'
@@ -627,6 +628,12 @@ const AGENT_TOOL_LABELS = {
   exec_python: '执行 Python',
   exec_shell: '执行命令',
   agent_stream: 'Agent 流',
+  // Codex 引擎的 item 类型（codex exec --json 的 item_type）
+  command_execution: '执行命令',
+  file_change: '修改文件',
+  mcp_tool_call: 'MCP 工具',
+  todo_list: '任务清单',
+  reasoning: '思考',
 }
 const AGENT_TOOL_ICONS = {
   read_file: fileTextIcon,
@@ -640,6 +647,11 @@ const AGENT_TOOL_ICONS = {
   exec_shell: terminalIcon,
   kb_semantic_search: databaseIcon,
   list_knowledge_bases: databaseIcon,
+  command_execution: terminalIcon,
+  file_change: filePenLineIcon,
+  mcp_tool_call: wrenchIcon,
+  todo_list: listChecksIcon,
+  reasoning: brainIcon,
   default: wrenchIcon
 }
 
@@ -664,6 +676,7 @@ const streamUnlisten = ref(null)
 const webPushUnlisten = ref(null)
 const agentStepUnlisten = ref(null)
 const agentConfirmUnlisten = ref(null)
+const codexThreadUnlisten = ref(null)
 const agentConfirm = ref(null)
 const streamRenderTimer = ref(null)
 const isComposing = ref(false)
@@ -870,6 +883,10 @@ onBeforeUnmount(() => {
   if (typeof agentConfirmUnlisten.value === 'function') {
     agentConfirmUnlisten.value()
     agentConfirmUnlisten.value = null
+  }
+  if (typeof codexThreadUnlisten.value === 'function') {
+    codexThreadUnlisten.value()
+    codexThreadUnlisten.value = null
   }
   if (streamRenderTimer.value) {
     clearTimeout(streamRenderTimer.value)
@@ -2432,6 +2449,17 @@ const initAssistantEventListeners = async () => {
       logger.info('[assistant] agent confirm card shown', { callId, toolName })
     })
   }
+
+  // Codex 引擎会在每轮开始时上报 thread id。存到当前会话上，下一次提问就能 resume
+  // 同一个 codex 线程，让模型继续看得到上文（codex 自己维护会话，不再依赖前端拼 history）。
+  if (typeof codexThreadUnlisten.value !== 'function') {
+    codexThreadUnlisten.value = await listen('codex-thread', (event) => {
+      const threadId = String(event?.payload?.thread_id || '')
+      if (!threadId) return
+      rightSiderStore.setAssistantCodexThreadId(threadId)
+      logger.info('[assistant] codex thread received', { threadId })
+    })
+  }
 }
 
 const stopQuestion = async () => {
@@ -2665,6 +2693,8 @@ const sendQuestion = async () => {
           repo_path: String(fileTreeStore.activeRepoPath || ''),
           repo_roots: Array.isArray(fileTreeStore.repopathlist) ? fileTreeStore.repopathlist.filter(Boolean) : [],
           web_search_enabled: Boolean(webSearchEnabled.value),
+          // Codex 引擎用它 resume 上一轮线程；内置 Python 引擎忽略该字段。
+          thread_id: String(rightSiderStore.assistant.codexThreadId || ''),
         },
       })
       rightSiderStore.setAssistantSessionId(sessionId)

@@ -193,7 +193,7 @@ pub fn shutdown_local_llm_servers() {
     }
 }
 
-fn reset_stream_cancel_flag() {
+pub(crate) fn reset_stream_cancel_flag() {
     STREAM_CANCEL_REQUESTED.store(false, Ordering::SeqCst);
 }
 
@@ -325,12 +325,81 @@ pub async fn get_answer_from_custom(
     })
 }
 
+/// 读取 cc-switch 本地代理配置。
+///
+/// 设计说明：cc-switch 已经在本地代理里做完了供应商选择、故障转移与用量统计，
+/// 所以 Guaxi 侧只保存一个入口地址 + 模型名，用户在 cc-switch 里换供应商时这里无需改动。
+/// 代理只暴露 Responses 协议（`cc_switch_wire_api = "responses"`）时，普通对话链路走不了
+/// Chat Completions，这里直接给出可读提示，让用户改用自定义供应商或改代理设置。
+fn cc_switch_provider_config() -> Result<(String, String, String), String> {
+    let cfg = settingview::get_llm_config();
+    if !cfg.cc_switch_enabled {
+        return Err("cc-switch supplier 未启用：请在设置 → 大模型里勾选启用".to_string());
+    }
+    if cfg.cc_switch_wire_api.trim() == "responses" {
+        return Err(
+            "cc-switch 代理当前配置为 responses 协议，普通对话需要 Chat Completions；请把协议改为 chat".to_string(),
+        );
+    }
+    let url = normalize_openai_base_url(&cfg.cc_switch_base_url);
+    if url.is_empty() {
+        return Err("cc-switch 代理地址未配置".to_string());
+    }
+    let model = cfg.cc_switch_model.trim().to_string();
+    if model.is_empty() {
+        return Err("cc-switch 模型名未配置".to_string());
+    }
+    Ok((url, cfg.cc_switch_api_key, model))
+}
+
+pub async fn get_answer_from_cc_switch_stream(
+    app: AppHandle,
+    question: &str,
+    history: &[ChatMsg],
+    sessionid: &str,
+) -> Result<(), String> {
+    let (url, api_key, model) = cc_switch_provider_config()?;
+    info!(
+        "get_answer_from_cc_switch_stream: url={} model={} sid={}",
+        url, model, sessionid
+    );
+    let request_body = json!({
+        "model": model,
+        "messages": build_chat_messages(history, question),
+        "stream": true,
+    });
+    openai_compat_sse_stream(&app, &url, &api_key, request_body).await
+}
+
+pub async fn get_answer_from_cc_switch(
+    question: &str,
+    history: &[ChatMsg],
+    sessionid: &str,
+) -> Result<ChatResponse, String> {
+    let (url, api_key, model) = cc_switch_provider_config()?;
+    let session_id = if sessionid.is_empty() {
+        generate_session_id()
+    } else {
+        sessionid.to_string()
+    };
+    let answer_content = openai_compat_chat(&url, &api_key, &model, question, history).await?;
+    Ok(ChatResponse {
+        answer: answer_content,
+        sessionid: session_id,
+    })
+}
+
 fn request_stream_cancel() {
     STREAM_CANCEL_REQUESTED.store(true, Ordering::SeqCst);
 }
-
 fn is_stream_cancel_requested() -> bool {
     STREAM_CANCEL_REQUESTED.load(Ordering::SeqCst)
+}
+
+/// 供 codex_agent 复用同一个取消开关：前端的停止按钮只调 `cancel_chat_stream`，
+/// 两个 Agent 引擎必须看同一个标志位，否则 codex 引擎下点停止不会真的停。
+pub(crate) fn stream_cancel_requested() -> bool {
+    is_stream_cancel_requested()
 }
 
 #[derive(Serialize)]
@@ -360,6 +429,8 @@ enum ChatModel {
     YUANBAO_WEB,
     CHATGPT_WEB,
     CUSTOM,
+    /// 走 cc-switch 本地代理，具体供应商由 cc-switch 决定。
+    CCSWITCH,
 }
 
 impl TryFrom<i32> for ChatModel {
@@ -378,6 +449,7 @@ impl TryFrom<i32> for ChatModel {
             8 => Ok(ChatModel::CHATGPT_WEB),
             9 => Ok(ChatModel::LOCALQWEN3),
             10 => Ok(ChatModel::CUSTOM),
+            11 => Ok(ChatModel::CCSWITCH),
             _ => Err("Invalid ChatModel ID".to_string()),
         }
     }
@@ -992,6 +1064,7 @@ async fn kb_agent_call_model(model: ChatModel, prompt: &str, sessionid: &str) ->
         ChatModel::LOCALDEEPSEEK => get_answer_from_local_deepseek(prompt, &[], sessionid).await,
         ChatModel::LOCALQWEN3 => get_answer_from_local_qwen(prompt, &[], sessionid).await,
         ChatModel::CUSTOM => get_answer_from_custom(prompt, &[], sessionid).await,
+        ChatModel::CCSWITCH => get_answer_from_cc_switch(prompt, &[], sessionid).await,
         ChatModel::YUANBAO_WEB | ChatModel::CHATGPT_WEB => {
             Err("当前网页模型不支持知识处理 Agent 命令，请切换到 API 模型".to_string())
         }
@@ -5583,6 +5656,22 @@ pub async fn get_chat_answer_stream(app: AppHandle, request: ChatRequest) -> Res
                 Err(err) => Err(format!("Error calling Custom API: {}", err)),
             }
         }
+        ChatModel::CCSWITCH => {
+            match get_answer_from_cc_switch_stream(
+                app,
+                &request.question,
+                &request.history,
+                &request.sessionid,
+            )
+            .await
+            {
+                Ok(()) => {
+                    info!("get_chat_answer_stream CCSWITCH: respond stream successfully");
+                    Ok(())
+                }
+                Err(err) => Err(format!("Error calling cc-switch proxy: {}", err)),
+            }
+        }
         ChatModel::YUANBAO_WEB => {
             let session_id = if request.sessionid.trim().is_empty() {
                 generate_session_id()
@@ -5749,6 +5838,20 @@ pub async fn get_chat_answer(request: ChatRequest) -> Result<ChatResponse, Strin
                 Err(err) => Err(format!("Error calling Custom API: {}", err)),
             }
         }
+        ChatModel::CCSWITCH => {
+            match get_answer_from_cc_switch(&request.question, &request.history, &request.sessionid)
+                .await
+            {
+                Ok(answer) => {
+                    info!(
+                        "get_chat_answer CCSWITCH: respond ChatResponse  {} {}",
+                        answer.answer, answer.sessionid
+                    );
+                    Ok(answer)
+                }
+                Err(err) => Err(format!("Error calling cc-switch proxy: {}", err)),
+            }
+        }
         ChatModel::YUANBAO_WEB => Ok(ChatResponse {
             answer: "该模型为网页模式，请调用 open_web_model_window(provider='yuanbao') 进行对话。"
                 .to_string(),
@@ -5791,6 +5894,10 @@ pub struct AgentRequest {
     /// 用户是否手动开启联网能力。关闭时 Python Agent Server 不会暴露网络工具。
     #[serde(default)]
     web_search_enabled: bool,
+    /// 上一轮 codex 返回的 thread id。codex 引擎下用它 resume 同一个会话线程，
+    /// 内置 Python 引擎忽略该字段（它靠 history 维持上下文）。
+    #[serde(default)]
+    thread_id: String,
 }
 
 
@@ -5838,10 +5945,43 @@ pub async fn agent_chat_stream(app: AppHandle, request: AgentRequest) -> Result<
         return get_chat_answer_stream(app, chat_req).await;
     }
 
+    reset_stream_cancel_flag();
+
+    // Agent 引擎分流：默认走打包进 Guaxi 的 codex sidecar（更快、工具更全），
+    // codex 不可用（二进制缺失 / 供应商没配 / 进程起不来）时静默回退到内置 Python Agent，
+    // 保证这个功能不会因为 codex 的问题整体不可用。
+    let engine = settingview::get_llm_config().agent_engine;
+    if engine.trim() != "builtin" {
+        let codex_request = crate::commands::codex_agent::CodexAgentRequest {
+            question: request.question.clone(),
+            sessionid: request.sessionid.clone(),
+            repo_path: request.repo_path.clone(),
+            repo_roots: request.repo_roots.clone(),
+            thread_id: request.thread_id.clone(),
+            web_search_enabled: request.web_search_enabled,
+        };
+        match crate::commands::codex_agent::run_codex_agent(&app, &codex_request).await {
+            Ok(()) => {
+                log_model_reply(
+                    "agent_chat_stream via codex",
+                    &request.sessionid,
+                    "[Codex response via JSONL - see event stream for content]",
+                );
+                return Ok(());
+            }
+            Err(err) => {
+                warn!(
+                    "agent_chat_stream: codex 引擎不可用，回退到内置 Python Agent。原因: {}",
+                    err
+                );
+                // 回退前重置取消标志：codex 那一轮可能已经把它置位（例如用户中途点了停止）。
+                reset_stream_cancel_flag();
+            }
+        }
+    }
+
     // 确保 Python Agent Server 已运行
     crate::commands::agent_server::ensure_agent_server_started(&app).await?;
-
-    reset_stream_cancel_flag();
 
     // 构建请求体
     let history_json: Vec<Value> = request.history.iter().map(|m| {

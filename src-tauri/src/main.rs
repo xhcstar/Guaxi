@@ -168,6 +168,7 @@ fn shutdown_background_processes(reason: &str) {
     info!(reason, "Shutting down background child processes");
 
     commands::agent_server::stop_agent_server();
+    commands::codex_agent::stop_codex_agent();
     commands::chatview::shutdown_local_llm_servers();
     commands::embedding::shutdown_embedding_server();
     commands::code_runtime::shutdown_all_python_workers();
@@ -261,6 +262,8 @@ async fn main() {
             commands::chatview::get_chat_answer_stream,
             commands::chatview::agent_chat_stream,
             commands::chatview::agent_tool_decision,
+            commands::codex_agent::codex_agent_status,
+            commands::cc_switch::detect_cc_switch_config,
             commands::chatview::audio_text_to_speech,
             commands::chatview::audio_speech_to_text,
             commands::tts_book::tts_book_convert,

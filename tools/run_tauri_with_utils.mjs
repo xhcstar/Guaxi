@@ -154,6 +154,11 @@ async function publishExternalWindowsBundles() {
 }
 
 async function main() {
+  // Codex Agent 引擎依赖 `src-tauri/utils/codex/codex.exe`。这一步是幂等的（已存在即跳过），
+  // 并且刻意不校验退出码：拿不到 codex 时智能助手会回退到内置 Python Agent，
+  // 不应该因为下载失败就阻断 dev / build。
+  await run('node', ['./tools/fetch_codex_sidecar.mjs']);
+
   if (shouldPrepareForTauriCommand) {
     // Release packaging depends on pre-copied frontend assets because the final
     // bundle cannot fetch editor/viewer assets from the network at runtime.

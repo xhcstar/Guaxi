@@ -19,6 +19,8 @@ function makeAssistantSession(title = "新会话", seed = {}) {
     title: String(seed.title || title || "新会话"),
     messages: Array.isArray(seed.messages) ? seed.messages : [],
     sessionId: String(seed.sessionId || ""),
+    // codex Agent 的会话线程 id。codex 自己维护上下文，续问时靠它 resume 同一线程。
+    codexThreadId: String(seed.codexThreadId || ""),
     createdAt: Number(seed.createdAt || now),
     updatedAt: Number(seed.updatedAt || now),
   };
@@ -98,6 +100,7 @@ export const useRightSiderStore = defineStore("rightSider", {
       assistant: {
         messages: currentSession.messages,
         sessionId: currentSession.sessionId,
+        codexThreadId: currentSession.codexThreadId,
         sessions: assistantSessionsState.sessions,
         currentSessionKey: currentSession.key,
         modelId: 5,
@@ -184,6 +187,7 @@ export const useRightSiderStore = defineStore("rightSider", {
       const session = this.getCurrentAssistantSession();
       session.messages = Array.isArray(this.assistant.messages) ? this.assistant.messages : [];
       session.sessionId = String(this.assistant.sessionId || "");
+      session.codexThreadId = String(this.assistant.codexThreadId || "");
       session.updatedAt = Date.now();
       if (!session.title || session.title === "新会话") {
         session.title = assistantSessionTitleFromMessages(session.messages);
@@ -202,6 +206,7 @@ export const useRightSiderStore = defineStore("rightSider", {
       this.assistant.currentSessionKey = session.key;
       this.assistant.messages = session.messages;
       this.assistant.sessionId = "";
+      this.assistant.codexThreadId = "";
       this.persistAssistantSessions();
       console.info("[RightSiderStore] created assistant session", { key: session.key });
       return session.key;
@@ -214,6 +219,7 @@ export const useRightSiderStore = defineStore("rightSider", {
       this.assistant.currentSessionKey = session.key;
       this.assistant.messages = session.messages;
       this.assistant.sessionId = String(session.sessionId || "");
+      this.assistant.codexThreadId = String(session.codexThreadId || "");
       this.persistAssistantSessions();
       console.info("[RightSiderStore] switched assistant session", {
         key: session.key,
@@ -233,6 +239,7 @@ export const useRightSiderStore = defineStore("rightSider", {
       this.assistant.currentSessionKey = next.key;
       this.assistant.messages = next.messages;
       this.assistant.sessionId = String(next.sessionId || "");
+      this.assistant.codexThreadId = String(next.codexThreadId || "");
       this.persistAssistantSessions();
       console.info("[RightSiderStore] deleted assistant session", { key: removed.key, nextKey: next.key });
       return true;
@@ -277,11 +284,20 @@ export const useRightSiderStore = defineStore("rightSider", {
     clearAssistantMessages() {
       this.assistant.messages = [];
       this.assistant.sessionId = "";
+      // 清空消息等于开一段新对话，codex 线程也必须丢弃，否则续问会带上已经看不见的上文。
+      this.assistant.codexThreadId = "";
       this.syncCurrentAssistantSession();
     },
     setAssistantSessionId(sessionId) {
       this.assistant.sessionId = String(sessionId || "");
       this.syncCurrentAssistantSession();
+    },
+    setAssistantCodexThreadId(threadId) {
+      const next = String(threadId || "");
+      if (next === String(this.assistant.codexThreadId || "")) return;
+      this.assistant.codexThreadId = next;
+      this.syncCurrentAssistantSession();
+      console.info("[RightSiderStore] assistant codex thread updated", { threadId: next });
     },
     setAssistantModelId(modelId) {
       const n = Number(modelId);
