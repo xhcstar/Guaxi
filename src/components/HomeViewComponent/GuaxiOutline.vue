@@ -86,22 +86,36 @@ function getLevelOneExpandedKeys(tree) {
 watch(
     filteredOutlineTree,
     (tree) => {
+        // 搜索态：整棵展开，才能看清命中落在哪一层。
+        if (outlineSearch.value.trim()) {
+            expandedKeys.value = collectAllKeys(tree)
+            return
+        }
+
+        // 设计说明（关键 · 对应“一级标题默认是收起的，每次都要手动展开”）：
+        // 大纲面板挂载往往早于大纲生成，watcher 会先以空数组跑一次 immediate。
+        // 此前那一次就把 expandedKeysInitialized 置位了，于是真正的大纲到达时走的是
+        // “保留用户展开状态”分支——而那时状态是空数组，且旧的重置兜底要求
+        // expandedKeys.length > 0，条件不成立，结果一级标题全部收起。
+        // 空树阶段必须什么都不认定，把“首次初始化”留给第一份真实大纲。
+        if (!tree.length) {
+            expandedKeys.value = []
+            return
+        }
+
         const allKeys = new Set(collectAllKeys(tree))
-        if (!expandedKeysInitialized.value || outlineSearch.value.trim()) {
-            expandedKeys.value = outlineSearch.value.trim() ? collectAllKeys(tree) : getLevelOneExpandedKeys(tree)
+        const survived = expandedKeys.value.filter((key) => allKeys.has(key))
+
+        // 节点 id 含行号，切文件 / 切模式（源码大纲 ↔ 探索者大纲）会让整棵树的 id 全变，
+        // 一个都不剩说明这是“另一份大纲”，和首次一样按默认展开一级标题处理。
+        // 同一份文档内的普通更新（有 key 存活）则保留用户自己的展开状态。
+        if (!expandedKeysInitialized.value || survived.length === 0) {
+            expandedKeys.value = getLevelOneExpandedKeys(tree)
             expandedKeysInitialized.value = true
             return
         }
 
-        const survived = expandedKeys.value.filter((key) => allKeys.has(key))
-        // 设计说明：节点 id 含行号，模式切换（源码大纲 ↔ 探索者大纲）会让整棵树的 id 全变，
-        // 之前展开的 key 一个都不剩。这种“整棵被替换”的场景恢复成默认展开一级标题，
-        // 避免切换后大纲整棵收起；普通的同源内容更新（id 不变）则保留用户的展开状态。
-        if (expandedKeys.value.length > 0 && survived.length === 0 && tree.length > 0) {
-            expandedKeys.value = getLevelOneExpandedKeys(tree)
-        } else {
-            expandedKeys.value = survived
-        }
+        expandedKeys.value = survived
     },
     { immediate: true }
 )

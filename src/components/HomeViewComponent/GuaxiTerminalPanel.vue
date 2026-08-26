@@ -238,6 +238,9 @@ let terminalActivationPromise = null
 let suppressProfileSwitchWatch = false
 
 const PROFILE_DETECT_TIMEOUT_MS = 500
+// 首个会话必须等真实的终端配置返回，否则会用兜底的 powershell 抢先建会话；
+// 但也不能无限等，后端异常时超过这个上限就退回兜底配置，保证面板一定能打开。
+const FIRST_SESSION_PROFILE_WAIT_MS = 2500
 const TERMINAL_LAYOUT_WAIT_FRAMES = 10
 
 // 设计说明：终端回滚内容可能达到数百 KB～数 MB。绝不能把它放进 Vue 响应式系统
@@ -369,6 +372,8 @@ const availableProfiles = computed(() => profiles.value.filter((profile) => prof
 const activeSession = computed(() => sessions.value.find((session) => session.session_id === activeSessionId.value) || null)
 const showSidebar = computed(() => sessions.value.length > 1)
 const isSwitchingProfile = ref(false)
+// 用户是否手动选过终端类型。没选过时下拉框跟随配置的默认终端，选过之后尊重用户的选择。
+const profileSelectionPinnedByUser = ref(false)
 const sessionCreateToken = ref(0)
 const searchMatchCountText = computed(() => {
   if (!searchKeyword.value.trim()) return '0 / 0'
@@ -396,11 +401,19 @@ const buildFallbackProfiles = () => {
 }
 
 const ensureSelectedProfile = () => {
-  selectedProfileId.value =
-    availableProfiles.value.find((profile) => profile.id === selectedProfileId.value)?.id
-    || availableProfiles.value.find((profile) => profile.id === defaultProfileId.value)?.id
-    || availableProfiles.value[0]?.id
-    || ''
+  const byDefault = availableProfiles.value.find((profile) => profile.id === defaultProfileId.value)?.id
+  const byCurrent = availableProfiles.value.find((profile) => profile.id === selectedProfileId.value)?.id
+
+  // 设计说明（对应“设置里配了 Git Bash，打开却还是 PowerShell”）：
+  // 面板首次激活会先用兜底配置渲染下拉框，那份兜底的 default 在 Windows 上写死是 powershell。
+  // 此前这里无条件优先“当前已选值”，于是兜底写进去的 powershell 会一直赢，
+  // 真正检测回来的配置默认值（git-bash）永远轮不到。
+  // 现在只有用户自己动过下拉框（pinned）才优先保留其选择，否则一律跟随配置的默认终端。
+  const preferred = profileSelectionPinnedByUser.value
+    ? (byCurrent || byDefault)
+    : (byDefault || byCurrent)
+
+  selectedProfileId.value = preferred || availableProfiles.value[0]?.id || ''
 }
 
 const getThemeCssVar = (name, fallback) => {
@@ -1118,6 +1131,36 @@ const reloadProfiles = async () => {
   }
 }
 
+// 设计说明（对应“配置了 Git Bash，打开终端还是 PowerShell”）：
+// 兜底配置只是为了让下拉框先有内容、界面不空；它的 default 在 Windows 上写死是 powershell。
+// 因此在创建“第一个会话”之前必须拿到真正的 terminal_detect_profiles 结果，
+// 让用户在设置里配的默认终端参与决策。带上限等待，后端卡住时仍能用兜底配置把面板打开。
+const ensureProfilesReadyForFirstSession = async () => {
+  loadingStateText.value = '正在读取默认终端配置'
+  const detected = await Promise.race([
+    detectProfilesInBackground(),
+    new Promise((resolve) => {
+      window.setTimeout(() => resolve(null), FIRST_SESSION_PROFILE_WAIT_MS)
+    }),
+  ])
+
+  if (detected) {
+    logger.info('[TerminalPanel] terminal profiles ready before first session', {
+      defaultProfileId: defaultProfileId.value,
+      selectedProfileId: selectedProfileId.value,
+    })
+    return true
+  }
+
+  ensureFastFallbackProfiles('first-session-profile-timeout')
+  loadingStateText.value = '终端配置检测较慢，已先使用默认配置'
+  logger.warn('[TerminalPanel] terminal profile detection timed out before first session', {
+    waitMs: FIRST_SESSION_PROFILE_WAIT_MS,
+    selectedProfileId: selectedProfileId.value,
+  })
+  return false
+}
+
 const createSession = async (options = {}) => {
   const requestedProfileId = String(options?.profileId || selectedProfileId.value || defaultProfileId.value || '').trim()
   if (!requestedProfileId) return null
@@ -1284,8 +1327,8 @@ const activatePanel = async (reason = 'visible-change', options = {}) => {
   panelBusy.value = true
   loadingStateText.value = '正在准备终端面板'
   try {
+    // 兜底配置先把下拉框填上，避免面板空着；真正的默认终端在建首个会话前再确认。
     ensureFastFallbackProfiles('activate-panel')
-    void detectProfilesInBackground()
     const existingSessions = await invoke('terminal_list_sessions')
     sessions.value = Array.isArray(existingSessions)
       ? existingSessions.map((session) => {
@@ -1302,6 +1345,12 @@ const activatePanel = async (reason = 'visible-change', options = {}) => {
       reason,
       existingSessionCount: sessions.value.length,
     })
+
+    // 已有会话可以直接接管，不会新建，也就不需要等配置；
+    // 只有确实要建第一个会话时才必须先拿到用户配置的默认终端。
+    if (!sessions.value.length && !options?.profileId) {
+      await ensureProfilesReadyForFirstSession()
+    }
 
     return await ensureSession(options)
   } catch (error) {
@@ -1494,6 +1543,8 @@ watch(
     }
     if (!panelActivated.value || !props.visible) return
     if (!nextProfileId || nextProfileId === previousProfileId) return
+    // 用户主动换过终端类型之后就不再被配置默认值覆盖。
+    profileSelectionPinnedByUser.value = true
     await switchProfileSession(nextProfileId)
   }
 )

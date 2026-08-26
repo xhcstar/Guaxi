@@ -784,10 +784,21 @@ async fn main() {
 
             #[cfg(desktop)]
             {
-                use tauri_plugin_global_shortcut::ShortcutState;
+                use tauri_plugin_global_shortcut::{Code, Modifiers, ShortcutState};
+
+                // 设计说明（两个坑，缺一个都会表现为“快捷键按了没反应”）：
+                // 1. 这里以前用 `shortcut.to_string().to_lowercase()` 去和 "ctrl+alt+z" 比较。
+                //    global-hotkey 的 Display 实际输出是 "control+alt+KeyZ"（修饰键写作 control，
+                //    主键是 Code 的名字），字符串永远对不上，两个全局快捷键的处理分支都是死代码。
+                //    改用 Shortcut::matches 按 Modifiers + Code 比较，不再依赖文本格式。
+                // 2. 全局快捷键是 OS 级注册，按下后事件不会再送进 webview。此前把“唤醒助手”注册在
+                //    ctrl+alt+x 上，正好和 Header 里“截图并插入”的 Ctrl+Alt+X 撞车，于是前端那个
+                //    handler 永远收不到按键。助手在应用内本来就有 Ctrl+Alt+A，这里把全局唤醒也
+                //    统一到 ctrl+alt+a（同一动作、同一按键），把 ctrl+alt+x 让回给前端截图。
+                const GLOBAL_MODS: Modifiers = Modifiers::CONTROL.union(Modifiers::ALT);
 
                 let plugin = tauri_plugin_global_shortcut::Builder::new()
-                    .with_shortcuts(["ctrl+alt+z", "ctrl+alt+x"])
+                    .with_shortcuts(["ctrl+alt+z", "ctrl+alt+a"])
                     .map(|builder| {
                         builder
                             .with_handler(|_app, shortcut, event| {
@@ -795,10 +806,9 @@ async fn main() {
                                     return;
                                 }
 
-                                let shortcut_text = shortcut.to_string().to_lowercase();
-                                info!("Shortcut pressed: {}", shortcut_text);
+                                info!("Shortcut pressed: {}", shortcut.into_string());
 
-                                if shortcut_text == "ctrl+alt+z" {
+                                if shortcut.matches(GLOBAL_MODS, Code::KeyZ) {
                                     tauri::async_runtime::spawn(async move {
                                         match commands::guaxiscreencap::trigger_screenshot_tool_once().await {
                                             Ok(_) => info!("截图成功"),
@@ -808,7 +818,7 @@ async fn main() {
                                     return;
                                 }
 
-                                if shortcut_text == "ctrl+alt+x" {
+                                if shortcut.matches(GLOBAL_MODS, Code::KeyA) {
                                     if let Some(window) = _app.get_webview_window("main") {
                                         if let Err(e) = window.show() {
                                             error!("显示主窗口失败: {}", e);
