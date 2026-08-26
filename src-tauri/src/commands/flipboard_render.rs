@@ -539,9 +539,18 @@ async fn launch_browser(profile: &str, headless: bool) -> Result<Browser, String
     clean_singleton_locks(&user_data);
 
     let config = build_browser_config(&exec, &user_data, headless)?;
-    let (browser, mut handler) = Browser::launch(config)
+    let (mut browser, mut handler) = Browser::launch(config)
         .await
         .map_err(|e| format!("launch chrome failed: {e}"))?;
+
+    // 无头 Chrome 会被复用并长期驻留（抓取调度器随时会用），主程序退出时必须一起结束，
+    // 否则 chrome.exe 会连同一堆渲染子进程残留在后台。
+    if let Some(pid) = browser
+        .get_mut_child()
+        .and_then(|child| child.as_mut_inner().id())
+    {
+        crate::guaxiservices::process_shutdown::register_managed_pid("chrome(render)", pid);
+    }
 
     // 驱动 CDP 事件循环。
     tokio::spawn(async move {
@@ -748,6 +757,9 @@ async fn reset_shared_browser() {
         let mut guard = cell.lock().await;
         if let Some(old) = guard.take() {
             let mut b = old.browser;
+            if let Some(pid) = b.get_mut_child().and_then(|child| child.as_mut_inner().id()) {
+                crate::guaxiservices::process_shutdown::unregister_managed_pid(pid);
+            }
             let _ = b.close().await;
         }
     }

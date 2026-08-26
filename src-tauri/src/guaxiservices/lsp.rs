@@ -1688,6 +1688,12 @@ impl Actor for LspWsSession {
 
                     let stdin_arc = stdin.map(|s| Arc::new(Mutex::new(s)));
                     let process_id = child.id().unwrap_or(0);
+                    // LSP server 会一直驻留到编辑器断开；登记到全局托管表，
+                    // 主程序退出时统一结束进程树，避免残留 rust-analyzer / pyright 之类的进程。
+                    crate::guaxiservices::process_shutdown::register_managed_pid(
+                        &format!("lsp({language})"),
+                        process_id,
+                    );
                     info!(
                         language = language.as_str(),
                         extension_id = extension_id_for_process.as_deref().unwrap_or(""),
@@ -1882,6 +1888,9 @@ impl Actor for LspWsSession {
             self.process_id,
             "actor-stopped",
         );
+        if let Some(pid) = self.process_id {
+            crate::guaxiservices::process_shutdown::unregister_managed_pid(pid);
+        }
         if let Some(mut child) = self.child.take() {
             actix::spawn(async move {
                 let _ = child.kill().await;
@@ -1959,6 +1968,9 @@ impl Handler<StopLspSession> for LspWsSession {
             self.process_id,
             "extension-mutation-stop",
         );
+        if let Some(pid) = self.process_id {
+            crate::guaxiservices::process_shutdown::unregister_managed_pid(pid);
+        }
         self.child_stdin = None;
         self.process_id = None;
 

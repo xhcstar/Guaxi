@@ -621,12 +621,32 @@ fn kill_child(child: &mut Child) {
         }
     }
 
-    if let Err(e) = child.kill() {
-        warn!("[Slidev] kill failed: {}", e);
-        return;
-    }
+    // slidev dev 是 node 进程，底下还挂着 vite / esbuild 等孙进程；
+    // 只 kill 直接子进程会留下一串监听端口的残留进程，所以结束整棵进程树。
+    crate::guaxiservices::process_shutdown::terminate_child("slidev-dev(node)", child);
+}
 
-    let _ = child.wait();
+/// 主程序退出时收掉 slidev dev 服务。
+///
+/// 复用 `slidev_stop_dev` 的清理语义（包括临时 node_modules 目录），
+/// 但不返回错误：退出阶段任何失败都只记日志，不阻塞关闭流程。
+pub fn shutdown_dev_server() {
+    let taken = match dev_lock().lock() {
+        Ok(mut guard) => guard.take(),
+        Err(_) => {
+            warn!("[Slidev] dev 锁异常，退出时无法回收 dev 服务");
+            None
+        }
+    };
+
+    if let Some(mut rt) = taken {
+        info!(
+            "[Slidev] stop dev on app exit entry={} port={}",
+            rt.info.entry_path, rt.info.port
+        );
+        kill_child(&mut rt.child);
+        cleanup_workdir_node_modules_if_created(&rt.info.entry_path, rt.workdir_node_modules_created);
+    }
 }
 
 #[tauri::command]

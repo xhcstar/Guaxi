@@ -3,5 +3,6 @@ pub mod chrome_extension_service;
 pub mod bundled_resources;
 pub mod lsp;
 pub mod lsp_extensions;
+pub mod process_shutdown;
 pub mod server;
 pub mod markdown_browser;

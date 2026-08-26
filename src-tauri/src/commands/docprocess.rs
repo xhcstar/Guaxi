@@ -84,6 +84,27 @@ fn marker_server_state() -> &'static Mutex<MarkerServerState> {
     MARKER_SERVER.get_or_init(|| Mutex::new(MarkerServerState::default()))
 }
 
+/// 关闭常驻的 Marker 文档转换服务（python）。
+///
+/// 设计说明：Marker 服务启动一次后会一直挂着复用模型，主程序退出时必须收掉，
+/// 否则会残留一个占用大量内存/显存的 python 进程。
+pub fn shutdown_marker_server() {
+    match marker_server_state().lock() {
+        Ok(mut state) => {
+            if let Some(mut child) = state.child.take() {
+                crate::guaxiservices::process_shutdown::terminate_child(
+                    "marker-server(python)",
+                    &mut child,
+                );
+            }
+            state.port = None;
+        }
+        Err(_) => {
+            warn!("[docprocess] Marker 服务状态锁损坏，退出时无法回收");
+        }
+    }
+}
+
 #[allow(dead_code)]
 fn pick_free_port() -> Result<u16, String> {
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;

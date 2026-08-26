@@ -2283,6 +2283,10 @@ fn spawn_python_worker(spec: &PythonLaunchSpec) -> Result<PythonWorkerState, Str
         .spawn()
         .map_err(|e| format!("spawn python worker failed: {e}"))?;
 
+    // 常驻 worker 登记到全局托管表：退出时即使某个 worker 正忙、拿不到它的锁，
+    // 也仍然能按 PID 结束进程树，避免残留 python 进程。
+    crate::guaxiservices::process_shutdown::register_managed_pid("python-worker", child.id());
+
     let stdin = child
         .stdin
         .take()
@@ -2441,12 +2445,66 @@ fn worker_is_alive(state: &mut PythonWorkerState) -> bool {
 fn terminate_python_worker_state(worker_key: &str, worker: Arc<Mutex<PythonWorkerState>>) {
     match worker.lock() {
         Ok(mut state) => {
+            crate::guaxiservices::process_shutdown::unregister_managed_pid(state.child.id());
             let _ = state.child.kill();
             info!(worker_key, "[PythonRuntime] worker terminated");
         }
         Err(_) => {
             warn!(worker_key, "[PythonRuntime] lock python worker state failed during terminate");
         }
+    }
+}
+
+/// 关闭所有常驻 python worker（探索者模式的 python 引擎）。
+///
+/// 设计说明：
+/// 1. 每个 notebook 会话都会常驻一个 python worker 进程等待下一次执行，主程序退出时
+///    必须显式收掉，否则会残留一堆 python 进程（用户看不到，只能去任务管理器杀）。
+/// 2. worker 里跑用户代码，可能已经派生出 pip / matplotlib / 子进程池等孙进程，
+///    因此走进程树终止而不是只 kill 直接子进程。
+/// 3. 这里可能在“某个 cell 正在执行”时被调用，`worker.lock()` 会被执行线程占用，
+///    所以先只从注册表取出 PID 直接终止进程树，再尽力拿锁回收句柄，避免退出时卡死。
+pub fn shutdown_all_python_workers() {
+    let workers = match python_worker_states_cell().lock() {
+        Ok(mut guard) => guard.drain().collect::<Vec<_>>(),
+        Err(_) => {
+            warn!("[PythonRuntime] lock python worker states failed during shutdown");
+            Vec::new()
+        }
+    };
+
+    let total = workers.len();
+    for (worker_key, worker) in workers {
+        match worker.try_lock() {
+            Ok(mut state) => {
+                crate::guaxiservices::process_shutdown::terminate_child(
+                    &format!("python-worker({worker_key})"),
+                    &mut state.child,
+                );
+            }
+            Err(_) => {
+                // 正在执行 cell，拿不到锁；此时只能靠活跃请求登记表里的 PID 终止进程树。
+                warn!(
+                    worker_key = worker_key.as_str(),
+                    "[PythonRuntime] worker busy during shutdown, fallback to pid-based terminate"
+                );
+            }
+        }
+    }
+
+    let active = match python_worker_active_requests_cell().lock() {
+        Ok(mut guard) => guard.drain().map(|(_, item)| item).collect::<Vec<_>>(),
+        Err(_) => Vec::new(),
+    };
+    for item in active {
+        crate::guaxiservices::process_shutdown::terminate_process_tree(
+            item.pid,
+            &format!("python-worker({})", item.worker_key),
+        );
+    }
+
+    if total > 0 {
+        info!(total, "[PythonRuntime] python workers terminated on shutdown");
     }
 }
 

@@ -34,6 +34,38 @@ fn session_store() -> &'static Mutex<SessionMap> {
     TERMINAL_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// 主程序退出时关闭所有内置终端会话。
+///
+/// 设计说明：pty 里跑的是 shell，shell 下面往往还挂着用户自己起的进程（npm run dev、
+/// python 等）。`Child::kill()` 只结束 shell 本体，因此按 pty 的进程 ID 结束整棵进程树，
+/// 避免关闭软件后残留一串看不见的后台进程。
+pub fn shutdown_all_sessions() {
+    let sessions = match session_store().lock() {
+        Ok(mut guard) => guard.drain().collect::<Vec<_>>(),
+        Err(_) => {
+            warn!("[Terminal] lock terminal sessions failed during shutdown");
+            return;
+        }
+    };
+
+    let total = sessions.len();
+    for (session_id, session) in sessions {
+        if let Ok(mut child) = session.child.lock() {
+            if let Some(pid) = child.process_id() {
+                crate::guaxiservices::process_shutdown::terminate_process_tree(
+                    pid,
+                    &format!("terminal({session_id})"),
+                );
+            }
+            let _ = child.kill();
+        }
+    }
+
+    if total > 0 {
+        info!(total, "[Terminal] sessions closed on app exit");
+    }
+}
+
 #[cfg(all(windows, not(debug_assertions)))]
 fn apply_terminal_process_no_window(command: &mut Command) {
     command.creation_flags(CREATE_NO_WINDOW);

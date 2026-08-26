@@ -170,6 +170,27 @@ struct EmbedProcessState {
 static EMBED_PROCESS: Lazy<Mutex<EmbedProcessState>> =
     Lazy::new(|| Mutex::new(EmbedProcessState::default()));
 
+/// 关闭 embedding llama-server。
+///
+/// 设计说明：知识图谱/语义检索一旦用过就会常驻这个 llama-server，主程序退出时必须收掉，
+/// 否则会残留一个占用显存与 8080 端口的后台进程，下次启动还会因端口被占而报错。
+pub fn shutdown_embedding_server() {
+    match EMBED_PROCESS.lock() {
+        Ok(mut guard) => {
+            if let Some(mut child) = guard.child.take() {
+                crate::guaxiservices::process_shutdown::terminate_child(
+                    "llama-server(embedding)",
+                    &mut child,
+                );
+            }
+            guard.model_key = None;
+        }
+        Err(_) => {
+            warn!("[embedding] 进程锁损坏，退出时无法回收 embedding 服务");
+        }
+    }
+}
+
 fn exe_dir() -> Result<PathBuf, String> {
     std::env::current_exe()
         .map_err(|e| e.to_string())?

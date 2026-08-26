@@ -199,6 +199,11 @@ impl ConversionQueue {
             }
         };
 
+        // 转换进程（托管 python）可能跑几分钟到几十分钟，主程序退出时必须一起结束，
+        // 否则会残留一个在后台继续吃 CPU/显存的 python 进程。
+        let converter_pid = child.id().unwrap_or(0);
+        crate::guaxiservices::process_shutdown::register_managed_pid("doc-convert(python)", converter_pid);
+
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
         let stderr_tail: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
@@ -298,6 +303,7 @@ impl ConversionQueue {
                 Ok(Some(status)) => break Ok(status),
                 Ok(None) => {
                     if task_store::is_canceled(task_id).unwrap_or(false) {
+                        crate::guaxiservices::process_shutdown::unregister_managed_pid(converter_pid);
                         let _ = child.kill().await;
                         info!(task_id, "任务被取消，已终止子进程");
                         // 取消状态已在 DB，直接返回
@@ -322,6 +328,7 @@ impl ConversionQueue {
         if let Some(h) = stderr_handle {
             let _ = h.await;
         }
+        crate::guaxiservices::process_shutdown::unregister_managed_pid(converter_pid);
 
         let status = match status {
             Ok(s) => s,

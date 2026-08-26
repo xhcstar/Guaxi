@@ -28,6 +28,7 @@ use url::Url;
 use once_cell::sync::Lazy;
 
 use crate::guaxiservices::bundled_resources;
+use crate::guaxiservices::process_shutdown;
 
 const LOCAL_DEEPSEEK_MODEL_FILENAME: &str = "DeepSeek-R1-0528-Qwen3-8B-IQ4_XS.gguf";
 const LOCAL_DEEPSEEK_SERVER_URL: &str = "http://127.0.0.1:18080";
@@ -166,6 +167,31 @@ static LOCAL_DEEPSEEK_PROCESS: Lazy<Mutex<LocalDeepseekProcessState>> =
 static LOCAL_QWEN_PROCESS: Lazy<Mutex<LocalDeepseekProcessState>> =
     Lazy::new(|| Mutex::new(LocalDeepseekProcessState { child: None }));
 static STREAM_CANCEL_REQUESTED: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
+
+/// 关闭本地 llama.cpp 推理服务（deepseek / qwen 各占一个 llama-server 进程）。
+///
+/// 设计说明：这两个进程是“按需常驻”的——用户用过一次本地大模型后就一直挂着等下次提问，
+/// 主程序退出时必须显式收掉，否则会残留占用显存/内存。llama-server 自身还会拉起
+/// 若干工作线程与子进程，所以走 `terminate_child`（先结束进程树再用句柄兜底）。
+pub fn shutdown_local_llm_servers() {
+    let targets: [(&str, &Lazy<Mutex<LocalDeepseekProcessState>>); 2] = [
+        ("llama-server(deepseek)", &LOCAL_DEEPSEEK_PROCESS),
+        ("llama-server(qwen)", &LOCAL_QWEN_PROCESS),
+    ];
+
+    for (label, holder) in targets {
+        match holder.lock() {
+            Ok(mut guard) => {
+                if let Some(mut child) = guard.child.take() {
+                    process_shutdown::terminate_child(label, &mut child);
+                }
+            }
+            Err(_) => {
+                warn!(label, "[chatview] 本地模型进程锁损坏，退出时无法回收");
+            }
+        }
+    }
+}
 
 fn reset_stream_cancel_flag() {
     STREAM_CANCEL_REQUESTED.store(false, Ordering::SeqCst);

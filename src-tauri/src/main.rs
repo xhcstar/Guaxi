@@ -4,6 +4,7 @@
 use once_cell::sync::OnceCell;
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration as StdDuration, SystemTime};
 use tokio::time::{sleep, Duration};
 use tracing::{error, info, warn};
@@ -145,6 +146,40 @@ fn start_log_cleanup() {
             sleep(Duration::from_secs(60 * 60 * 24 * 7)).await;
         }
     });
+}
+
+static BACKGROUND_SHUTDOWN_DONE: AtomicBool = AtomicBool::new(false);
+
+/// 关闭软件时统一回收所有由本程序拉起的后台子进程。
+///
+/// 设计说明：
+/// 1. 这些进程都是“按需常驻”的：智能助手（agent server / python）、本地大模型
+///    （llama.cpp 的 deepseek / qwen / embedding 三个 server）、探索者模式的 python
+///    引擎、Marker 文档转换服务、LSP server、内置终端、slidev dev、无头 Chrome。
+///    它们不会随主窗口关闭而退出，必须在这里显式收掉，否则会残留在任务管理器里。
+/// 2. 顺序上先收“有句柄的”，最后用托管 PID 表兜底那些拿不到句柄的（LSP、转换任务、Chrome）。
+/// 3. 每一步都不返回错误、不 panic：退出阶段任何单点失败都不应该卡住关闭流程。
+/// 4. 用一次性标记保护，避免 Exit 事件重复触发时重复执行。
+fn shutdown_background_processes(reason: &str) {
+    if BACKGROUND_SHUTDOWN_DONE.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    info!(reason, "Shutting down background child processes");
+
+    commands::agent_server::stop_agent_server();
+    commands::chatview::shutdown_local_llm_servers();
+    commands::embedding::shutdown_embedding_server();
+    commands::code_runtime::shutdown_all_python_workers();
+    commands::docprocess::shutdown_marker_server();
+    commands::slidev::shutdown_dev_server();
+    commands::terminal::shutdown_all_sessions();
+
+    let leftovers = guaxiservices::process_shutdown::shutdown_registered(reason);
+    info!(
+        reason,
+        leftovers, "Background child processes shutdown finished"
+    );
 }
 
 #[tokio::main]
@@ -808,10 +843,15 @@ async fn main() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
-
-    // 停止 Agent Server
-    commands::agent_server::stop_agent_server();
-    info!("Agent server stopped");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        // 设计说明（关键 · 对应“关闭软件后 llama.cpp / python 等后台进程残留”）：
+        // 以前收尾代码写在 `.run(...)` 之后，但 tao 的事件循环永不返回（内部直接
+        // `process::exit`），那段代码从未执行过，所有后台子进程都被留在了系统里。
+        // `RunEvent::Exit` 是进程真正退出前最后一个能跑用户代码的时机，收尾必须放这里。
+        .run(|_app_handle, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                shutdown_background_processes("run-event-exit");
+            }
+        });
 }

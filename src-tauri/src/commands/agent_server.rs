@@ -301,11 +301,15 @@ pub async fn ensure_agent_server_started(app: &AppHandle) -> Result<(), String> 
 }
 
 /// 停止 agent server 进程
+///
+/// 设计说明：agent server 是 `python -m agent_server.main`，内部还会拉起 uvicorn 线程与
+/// 可能的工具子进程，`Child::kill()` 在 Windows 上只结束 python 本体，所以统一走
+/// 进程树终止，避免关闭软件后残留 python 进程。
 pub fn stop_agent_server() {
     if let Ok(mut guard) = AGENT_SERVER_PROCESS.lock() {
         if let Some(mut child) = guard.take() {
             info!("[agent_server] stopping agent server");
-            let _ = child.kill();
+            crate::guaxiservices::process_shutdown::terminate_child("agent_server(python)", &mut child);
         }
     }
 }
