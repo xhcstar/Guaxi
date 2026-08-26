@@ -37,6 +37,23 @@ const VUE_SLOT_WARNING_TARGET_STACK_MARKERS = ['<Binder', '<Target']
 let mermaidArchitectureWarningSuppressCount = 0
 let tauriIpcFallbackWarningSuppressCount = 0
 let vueSlotOutsideRenderWarningSuppressCount = 0
+let monacoCancellationSuppressCount = 0
+
+// 设计说明（Monaco/VSCode 的 `Canceled` 噪音）：
+// Monaco 内部大量使用 CancelablePromise（document highlight、semantic tokens、folding、
+// LSP 请求等）。只要模型被换绑、语言被切换、光标又动了一次，在飞的请求就会被取消，
+// 取消时抛出的 `Canceled` 是它自己创建、外部拿不到引用的 promise，没人能 catch，
+// 于是浏览器报 “Uncaught (in promise) Canceled”，我们的 unhandledrejection 钩子还会把它
+// 当 error 写进后端日志。VS Code 自己的做法就是在全局错误处理里识别取消错误并忽略，
+// 这里照做：既不打控制台，也不上报，只累计一个计数便于排查。
+function isMonacoCancellationReason(reason) {
+  if (!reason) return false
+  const name = String(reason?.name || '')
+  const message = String(reason?.message || (typeof reason === 'string' ? reason : ''))
+  if (name === 'Canceled' || name === 'CanceledError' || name === 'AbortError') return true
+  // vs/base/common/errors 里 canceled() 造出来的对象 name 与 message 都是 'Canceled'
+  return message === 'Canceled' || message === 'Cancelled' || message === 'Canceled: Canceled'
+}
 
 function normalizeLevel(level) {
   const v = String(level || '').toLowerCase()
@@ -301,6 +318,23 @@ function attachGlobalErrorHandlers() {
 
   window.addEventListener('unhandledrejection', (event) => {
     const reason = event?.reason
+
+    if (isMonacoCancellationReason(reason)) {
+      // preventDefault 让浏览器不再打印 “Uncaught (in promise) Canceled”，
+      // 同时不上报后端日志——这是编辑器换文件/换语言时的正常取消，不是错误。
+      event.preventDefault?.()
+      monacoCancellationSuppressCount += 1
+      if (monacoCancellationSuppressCount === 1 || monacoCancellationSuppressCount % 50 === 0) {
+        enqueue({
+          level: 'debug',
+          scope: state.scope,
+          message: 'suppressed monaco cancellation rejection',
+          fields: { count: monacoCancellationSuppressCount }
+        })
+      }
+      return
+    }
+
     enqueue({
       level: 'error',
       scope: state.scope,

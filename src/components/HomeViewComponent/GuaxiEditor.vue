@@ -3158,19 +3158,14 @@ const captureEditorReadPosition = (path, targetEditor = getActiveEditor?.(), rea
   return true;
 };
 
-// 设计说明：把“把缓存条目写回编辑器”抽成同步函数，供两个时机复用：
-// 1. 文件切换的异步链路（等一帧再落位，覆盖 Monaco 布局尚未完成的情况）；
-// 2. ensureEditorModelBinding 里 setModel 之后立即落位——setModel 会把视口重置到顶部，
-//    在同一帧补回 viewState 才不会出现“先闪到开头再跳回去”。
-//
-// 设计说明（关键 · 为什么必须先判断编辑器是否可见）：
+// 设计说明（关键 · 为什么要判断编辑器是否可见）：
 // restoreViewState 会同步改写光标位置，Monaco 随即为新光标启动一批可取消的异步请求
 // （document highlight / semantic tokens / LSP 等，见 vs/base/common/async 的 CancelablePromise）。
-// 紧接着本次切换还会 setModelLanguage、回写内容，这些请求会立刻被取消，
-// 而 Monaco 取消时抛出的 `Canceled` 是一个没人 catch 的 promise rejection，
-// 于是控制台出现 “Uncaught (in promise) Canceled”，栈顶正好指向 restoreViewState。
-// 预览 / 探索者 / 即时渲染模式下编辑器本来就不可见，这时落位既没有视觉意义，
-// 又白白制造上述噪音；位置仍留在缓存里，等切回编辑/分屏模式时再恢复即可。
+// 预览 / 探索者 / 即时渲染模式下编辑器本来就不可见，这时落位既没有视觉意义，又白白制造
+// “请求发出去马上被取消”的噪音；位置仍留在缓存里，等切回编辑/分屏模式时再恢复即可。
+//
+// 完整的 viewState（光标 + 选区 + 滚动）只在异步链路里落地一次；
+// 换绑 model 的同步阶段只恢复滚动，见 applyCachedEditorReadPositionSync 的说明。
 const isEditorSurfaceLaidOut = (targetEditor) => {
   const domNode = targetEditor?.getDomNode?.();
   if (!(domNode instanceof HTMLElement)) return false;
@@ -3213,16 +3208,31 @@ const applyCachedEditorReadPositionSync = (targetEditor, path, reason = 'unknown
   const normalizedPath = normalizePreviewReadPath(path);
   const entry = normalizedPath ? editorReadPositionCache.get(normalizedPath) : null;
   if (!entry) return false;
+  if (!isEditorSurfaceLaidOut(targetEditor)) return false;
+  if (!targetEditor?.getModel?.()) return false;
 
-  const applied = applyEditorReadPositionEntry(targetEditor, entry, reason);
-  if (applied) {
-    logger.debug('[EditorReadPosition] applied cached position synchronously', {
-      reason,
-      path: normalizedPath,
-      scrollTop: Math.round(Number(targetEditor.getScrollTop?.() || 0)),
-    });
+  // 设计说明（关键 · 换绑 model 的同步阶段只恢复滚动，不动光标）：
+  // restoreViewState 会同步改写光标，Monaco 随即为新光标启动一批可取消的异步请求
+  // （document highlight / semantic tokens / LSP 等）。而本次换绑之后紧接着还有
+  // setModelLanguage、内容回写、以及一帧后的完整 viewState 恢复，这些都会把刚发出的请求取消掉，
+  // 于是控制台冒出 “Uncaught (in promise) Canceled”（栈顶正好指向 restoreViewState）。
+  // 这里只用 setScrollTop/setScrollLeft 把视口顶回去——足够消掉“先闪到开头”的观感，
+  // 又不会触发任何光标相关的 provider 请求。光标与选区交给一帧后的异步恢复统一落地。
+  const scrollTop = Number(entry.scrollTop);
+  const scrollLeft = Number(entry.scrollLeft);
+  if (Number.isFinite(scrollTop) && typeof targetEditor.setScrollTop === 'function') {
+    targetEditor.setScrollTop(Math.max(0, scrollTop));
   }
-  return applied;
+  if (Number.isFinite(scrollLeft) && typeof targetEditor.setScrollLeft === 'function') {
+    targetEditor.setScrollLeft(Math.max(0, scrollLeft));
+  }
+
+  logger.debug('[EditorReadPosition] applied cached scroll synchronously', {
+    reason,
+    path: normalizedPath,
+    scrollTop: Math.round(Number(targetEditor.getScrollTop?.() || 0)),
+  });
+  return true;
 };
 
 const restoreEditorReadPosition = async (path, targetEditor = getActiveEditor?.(), reason = 'unknown') => {
