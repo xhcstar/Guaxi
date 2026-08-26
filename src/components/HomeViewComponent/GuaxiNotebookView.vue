@@ -968,7 +968,7 @@ const props = defineProps({
   },
 })
 
-const emit = defineEmits(['update:markdown', 'state-change', 'open-console', 'request-save', 'outline-change'])
+const emit = defineEmits(['update:markdown', 'state-change', 'open-console', 'request-save', 'outline-change', 'open-local-link'])
 
 const message = useMessage()
 const logger = createLogger('GuaxiNotebookView')
@@ -6352,44 +6352,15 @@ const handleNotebookRenderedClick = async (event) => {
     filePath: props.filePath,
   })
 
-  const targetPath = await resolveNotebookLinkTargetPath(href, {
-    baseDocPath: props.filePath,
+  // 设计说明（对应“四个模式对文件链接的处理要完全一致”）：
+  // 本地文件链接的打开策略（目录 → 系统文件管理器 / Markdown → 新建 tab 并跳到锚点 /
+  // 其它 → 系统文件管理器）统一由宿主 GuaxiEditor 的 openFsLinkSmart 负责。
+  // 这里只把原始 href 和当前文档路径抛出去，不再自己解析和打开——否则探索者又会变成
+  // 第四套实现（此前它就丢掉了链接里的锚点，打开后不会定位到具体标题）。
+  emit('open-local-link', {
+    href,
+    baseDocPath: String(props.filePath || ''),
   })
-  if (!targetPath) return
-
-  try {
-    const meta = await invoke('get_file_meta', { path: targetPath })
-
-    if (meta?.is_directory) {
-      await invoke('open_in_file_explorer', { path: targetPath })
-      logger.info('[NotebookLinkCard] open directory from rendered notebook link', {
-        href,
-        path: targetPath,
-      })
-      return
-    }
-
-    if (isNotebookMarkdownFilePath(targetPath)) {
-      await fileTreeStore.openFileInTab(targetPath)
-      logger.info('[NotebookLinkCard] open markdown file from rendered notebook link', {
-        href,
-        path: targetPath,
-      })
-      return
-    }
-
-    await invoke('open_in_file_explorer', { path: targetPath })
-    logger.info('[NotebookLinkCard] reveal file from rendered notebook link', {
-      href,
-      path: targetPath,
-    })
-  } catch (error) {
-    logger.warn('[NotebookLinkCard] handle rendered link click failed', {
-      href,
-      path: targetPath,
-      error: String(error?.message || error),
-    })
-  }
 }
 
 const patchCellMeta = (cell, patch) => {

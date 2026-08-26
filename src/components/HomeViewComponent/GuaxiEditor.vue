@@ -792,6 +792,7 @@
             :theme="settingsStore.appearanceTheme"
             @update:markdown="applyNotebookMarkdown"
             @outline-change="handleNotebookOutlineChange"
+            @open-local-link="handleNotebookLocalLink"
             @state-change="syncAllPreviewPythonCells"
             @open-console="togglePythonConsolePanel('notebook-open-console')"
             @request-save="saveContent"
@@ -5271,17 +5272,6 @@ const ensureKnowledgeBasesLoaded = async () => {
   }
 };
 
-const isPathInKnowledgeBase = async (absPath) => {
-  const p = normalizeFsPath(absPath);
-  if (!p) return false;
-  const list = await ensureKnowledgeBasesLoaded();
-  for (const kb of Array.isArray(list) ? list : []) {
-    const root = normalizeFsPath(kb?.location);
-    if (root && (p === root || p.startsWith(`${root}/`))) return true;
-  }
-  return false;
-};
-
 const decodeFileUrlToPath = (href) => {
   const s = String(href || '').trim();
   if (!s.toLowerCase().startsWith('file://')) return '';
@@ -5591,6 +5581,15 @@ const openMarkdownInEditor = async (absPath, anchor, { silent = false, focus = t
     const content = String(res.content || fileTreeStore.selectedFile?.content || '');
     const line = findMarkdownAnchorLine(content, anchor);
     syncEditorToLine(line, { focus });
+
+    // 设计说明（对应“打开链接后要定位到链接位置”）：
+    // syncEditorToLine 只管 Monaco 那一侧。预览 / 分屏模式下真正在看的是渲染结果，
+    // 所以带锚点时还要把预览滚到同一行。pendingPreviewScrollLine 会在渲染完成后被消费，
+    // 且优先于“恢复上次阅读位置”——用户点的是明确的锚点，不该被旧的阅读位置抢走。
+    // 不带锚点时不设置，让阅读位置恢复继续生效。
+    if (String(anchor || '').trim() && line > 0 && showPreview.value && previewMode.value !== 'realtime') {
+      pendingPreviewScrollLine.value = line;
+    }
     return true;
   } catch (e) {
     logger.error('[LinkOpen] openMarkdownInEditor failed', { path: p, anchor }, e);
@@ -5717,21 +5716,68 @@ const openWikilinkFromHref = async (href, { baseDocPath, source } = {}) => {
   }
 };
 
-const openFsLinkSmart = async (rawLink, { anchor, viaCtrl = false, baseDocPath } = {}) => {
+// 本地文件链接的统一打开策略。编辑模式（Ctrl+Click）、预览模式、分屏模式、探索者模式
+// 四处全部走这一个函数，避免同一个链接在不同模式下有不同下场。
+//
+// 设计说明（对应“编辑模式 Ctrl+Click 用外部编辑器打开、预览里点了没反应”）：
+// 1. 旧实现要求「是 Markdown」且「位于某个已登记的知识库内」才在 Guaxi 里开 tab。
+//    像普通 git 仓库里的 `[docs/x.md](./docs/x.md)` 不在知识库内，编辑模式就落到
+//    openPathInExplorer 走系统默认编辑器；预览模式因为 viaCtrl=false，连这一步都没有，
+//    表现为「点击毫无反应」。知识库归属和「能不能在编辑器里打开」没有关系，这个门槛去掉。
+// 2. 行为对齐探索者模式：目录 → 交给系统文件管理器；Markdown → 新建/激活 tab 并按锚点跳转；
+//    其它类型 → 交给系统文件管理器（Guaxi 没有对应的编辑面板）。
+// 3. 锚点（`#标题` / `#^块引用`）一路带到 openMarkdownInEditor，落地后定位到具体行。
+const openFsLinkSmart = async (rawLink, { anchor, baseDocPath, source = 'unknown' } = {}) => {
   const abs = await resolveFsLinkToAbsolute(rawLink, { baseDocPath });
-  if (!abs) return;
+  if (!abs) return false;
 
   const isMd = isMarkdownFilePath(abs) || isMarkdownFilePath(ensureMarkdownExt(abs));
   const mdPath = isMd ? ensureMarkdownExt(abs) : abs;
 
-  if (isMd && (await isPathInKnowledgeBase(mdPath))) {
-    await openMarkdownInEditor(mdPath, anchor);
+  // 目录判定失败（后端报错/文件不存在）时不阻断，继续按文件路径处理，让后续步骤给出明确反馈。
+  try {
+    const meta = await invoke('get_file_meta', { path: abs });
+    if (meta?.is_directory) {
+      logger.info('[LinkOpen] open directory in file explorer', { source, path: abs });
+      await openPathInExplorer(abs);
+      return true;
+    }
+  } catch (error) {
+    logger.debug('[LinkOpen] get_file_meta failed, continue as file', {
+      source,
+      path: abs,
+      error: String(error?.message || error),
+    });
+  }
+
+  if (isMd) {
+    logger.info('[LinkOpen] open markdown link in tab', { source, path: mdPath, anchor: anchor || '' });
+    return await openMarkdownInEditor(mdPath, anchor);
+  }
+
+  logger.info('[LinkOpen] reveal non-markdown link in file explorer', { source, path: abs });
+  await openPathInExplorer(abs);
+  return true;
+};
+
+// 探索者模式里点到本地文件链接时由子组件抛上来，走的是和编辑 / 预览 / 分屏完全同一条链路。
+const handleNotebookLocalLink = async (payload = {}) => {
+  const raw = String(payload?.href || '').trim();
+  if (!raw) return;
+
+  const baseDocPath = String(payload?.baseDocPath || '')
+    || selectedFile.value?.path
+    || fileTreeStore.activeTab
+    || '';
+
+  if (raw.toLowerCase().startsWith('guaxi://wikilink')) {
+    await openWikilinkFromHref(raw, { baseDocPath, source: 'notebook' });
     return;
   }
 
-  if (viaCtrl) {
-    await openPathInExplorer(abs);
-  }
+  const { link, anchor } = splitFsLinkAndAnchor(raw);
+  if (!link) return;
+  await openFsLinkSmart(link, { anchor, baseDocPath, source: 'notebook' });
 };
 
 // Monaco：编辑模式 Ctrl+Click 打开 URL/路径
@@ -5793,7 +5839,7 @@ const installMonacoCtrlClickOpen = (targetEditor, { tag = 'left' } = {}) => {
 
       const { link, anchor } = splitFsLinkAndAnchor(token);
       if (!link) return;
-      await openFsLinkSmart(link, { anchor, viaCtrl: true, baseDocPath });
+      await openFsLinkSmart(link, { anchor, baseDocPath, source: `monaco:${tag}` });
     })();
   });
 
@@ -6195,7 +6241,7 @@ const installRealtimeVditorLinkInterceptor = () => {
     const baseDocPath = fileTreeStore.activeTab || selectedFile.value?.path || '';
     logger.info('[LinkOpen] realtime openFsLink', { link, anchor, baseDocPath });
     void (async () => {
-      await openFsLinkSmart(link, { anchor, viaCtrl: true, baseDocPath });
+      await openFsLinkSmart(link, { anchor, baseDocPath, source: 'realtime' });
     })();
   };
 
@@ -18694,8 +18740,9 @@ const handlePreviewClick = async (e) => {
       if (!link) return;
       const baseDocPath = selectedFile.value?.path || fileTreeStore.activeTab || '';
 
+      // 预览 / 分屏：左键单击就打开，不再要求按住 Ctrl（与探索者模式一致）。
       logger.debug('[LinkOpen] preview openFsLink', { link, anchor, ctrl, baseDocPath });
-      await openFsLinkSmart(link, { anchor, viaCtrl: ctrl, baseDocPath });
+      await openFsLinkSmart(link, { anchor, baseDocPath, source: 'preview' });
       return;
     }
   }
@@ -21131,14 +21178,15 @@ watch(renderedHtml, () => {
         el.scrollTop = height * scrollRatio.value;
         pendingPreviewScrollRestore.value = false;
       }
-      if (pendingPreviewScrollLine.value) {
+      if (!renderedHtml.value) {
+        // 设计说明（关键）：切换文件时会先把 renderedHtml 清空以丢弃上一个文件的预览，
+        // 这次“空渲染”同样会触发本 watcher。此时容器里什么都没有，scrollHeight 等于视口高，
+        // 任何定位都只能滚到 0；而待处理的定位请求（锚点行 / 阅读位置队列）都是一次性消费的，
+        // 在这里被吃掉就等于真正渲染完成后再也无法定位。所以空渲染阶段一律不消费。
+      } else if (pendingPreviewScrollLine.value) {
         scrollPreviewToLine(pendingPreviewScrollLine.value);
         pendingPreviewScrollLine.value = null;
-      } else if (renderedHtml.value && lastPreviewRenderedPath.value) {
-        // 设计说明（关键 · 对应“切 tab 后预览总是回到开头”）：
-        // 切换文件时会先把 renderedHtml 清空以丢弃上一个文件的预览，这次“空渲染”同样会触发本 watcher。
-        // 恢复队列是一次性消费的，若在空容器上就把它消费掉（此时 scrollHeight 等于视口高、只能滚到 0），
-        // 真正的渲染完成后就再也没有位置可恢复了。因此仅在“确实渲染出了某个文件的内容”时才消费队列。
+      } else if (lastPreviewRenderedPath.value) {
         void restoreQueuedPreviewReadPosition(
           'markdown',
           lastPreviewRenderedPath.value,
