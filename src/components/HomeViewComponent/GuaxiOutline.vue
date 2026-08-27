@@ -5,9 +5,19 @@
             <input v-model="outlineSearch" type="text" placeholder="搜索标题、LaTeX/Typst 章节或 Cell" />
         </label>
         <div class="outline-scroll">
+            <!-- 设计说明（对应 "Cannot read properties of null (reading 'listElRef')"）：
+                 naive-ui 2.42 的 Tree 在 `virtual-scroll` + `animated`（默认开）下，
+                 展开键的 watcher 里有一行没做空值判断：
+                   (virtualScroll ? virtualListInstRef.value.listElRef : selfElRef.value).offsetHeight
+                 而 Tree 在 fNodes 为空时渲染的是 NEmpty，根本不会创建内部 VirtualList，
+                 此时 virtualListInstRef 还是 null。于是"大纲从空变成只有一个根节点"
+                 这类只增删一个展开键的场景就会踩空，抛出 listElRef 错误，
+                 并把后续的组件更新一起带崩（就是那两条 Vue warn）。
+                 关掉展开动画即可让它在那个 watcher 开头就 return，不再碰 virtualListInstRef；
+                 大纲的展开/收起本来也不需要动画，去掉后响应还更干脆。 -->
             <n-tree :data="filteredOutlineTree" key-field="id" label-field="text" :render-label="renderLabel"
                 :render-prefix="renderPrefix" :expand-on-click="true" :show-line="true" :virtual-scroll="true"
-                :virtual-scroll-item-height="28" :expanded-keys="expandedKeys"
+                :animated="false" :virtual-scroll-item-height="28" :expanded-keys="expandedKeys"
                 @update:expanded-keys="handleExpandedKeysUpdate" @update:selected-keys="handleSelect"
                 class="outline-tree" />
         </div>

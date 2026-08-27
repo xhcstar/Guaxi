@@ -718,7 +718,8 @@ pub struct LocalDeepseekStatus {
 const LOCAL_DEEPSEEK_MODEL_FILENAME: &str = "DeepSeek-R1-0528-Qwen3-8B-IQ4_XS.gguf";
 const LOCAL_QWEN_MODEL_FILENAME: &str = "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf";
 
-fn cleanup_modelscope_download_dir(local_dir: &Path) {
+/// 清理魔搭下载缓存目录。对外开放给其它模块（本地翻译小模型）复用。
+pub(crate) fn cleanup_modelscope_download_dir(local_dir: &Path) {
     let download_root = local_dir.join("_modelscope_download");
     if !download_root.exists() {
         return;
@@ -733,7 +734,9 @@ fn cleanup_modelscope_download_dir(local_dir: &Path) {
     }
 }
 
-fn run_modelscope_download(local_dir: &Path, model_id: &str, filename: &str) -> Result<(), String> {
+/// 用已集成的魔搭（ModelScope）下载工具拉取单个模型文件。
+/// 对外开放给其它模块（本地翻译小模型）复用：国内直连魔搭比 HuggingFace 快得多。
+pub(crate) fn run_modelscope_download(local_dir: &Path, model_id: &str, filename: &str) -> Result<(), String> {
     let _ = bundled_resources::ensure_relative_dir("utils/python_libs")?;
     let marker_src_dir = bundled_resources::ensure_relative_dir("utils/MarkdownConvertor/marker-1.10.1")?;
     if !marker_src_dir.exists() {

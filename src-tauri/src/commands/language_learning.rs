@@ -1,3 +1,4 @@
+use crate::commands::translate_cache;
 use crate::commands::translator_free;
 use crate::guaxiservices::bundled_resources;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -4143,8 +4144,77 @@ async fn youdao_dict_lookup(word: &str) -> Option<YoudaoDictResult> {
     }
 }
 
+// ───── 词条整包缓存（跨重启复用）─────
+// 说明：进程内那份 YOUDAO_DICT_CACHE 只挡住同一次运行里的重复查询，重启就没了。
+// 词条一次要打有道/datamuse 再加一轮翻译，重开软件查同一个词还要再走一遍很浪费，
+// 所以把最终组装好的 WordEnrichment 整包序列化后放进和译文同一个 SQLite 缓存库。
+// basic / details 分开存：前端是并发分别取的，命中粒度也应该分开。
+async fn load_cached_word_entry(
+    word: &str,
+    from: &str,
+    to: &str,
+    kind: &str,
+) -> Option<WordEnrichment> {
+    let raw = translate_cache::get_word_entry(word, from, to, kind).await?;
+    match serde_json::from_str::<WordEnrichment>(&raw) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            warn!("[LanguageLearning] 词条缓存反序列化失败（忽略该缓存）: {}", e);
+            None
+        }
+    }
+}
+
+fn store_cached_word_entry(word: &str, from: &str, to: &str, kind: &str, value: &WordEnrichment) {
+    match serde_json::to_string(value) {
+        Ok(json) => translate_cache::queue_put_word_entry(word, from, to, kind, &json),
+        Err(e) => warn!("[LanguageLearning] 词条缓存序列化失败: {}", e),
+    }
+}
+
 #[tauri::command]
 pub async fn language_learning_enrich_word_basic(
+    word: String,
+    source_lang: Option<String>,
+    target_lang: Option<String>,
+) -> Result<WordEnrichment, String> {
+    let clean = clean_word(&word);
+    if clean.is_empty() {
+        return Err("单词为空".into());
+    }
+    let from = source_lang.clone().unwrap_or_else(|| "auto".into());
+    let to = target_lang.clone().unwrap_or_else(|| "zh".into());
+
+    if let Some(hit) = load_cached_word_entry(&clean, &from, &to, "basic").await {
+        return Ok(hit);
+    }
+    let result = enrich_word_basic_uncached(clean.clone(), source_lang, target_lang).await?;
+    store_cached_word_entry(&clean, &from, &to, "basic", &result);
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn language_learning_enrich_word_details(
+    word: String,
+    source_lang: Option<String>,
+    target_lang: Option<String>,
+) -> Result<WordEnrichment, String> {
+    let clean = clean_word(&word);
+    if clean.is_empty() {
+        return Err("单词为空".into());
+    }
+    let from = source_lang.clone().unwrap_or_else(|| "auto".into());
+    let to = target_lang.clone().unwrap_or_else(|| "zh".into());
+
+    if let Some(hit) = load_cached_word_entry(&clean, &from, &to, "details").await {
+        return Ok(hit);
+    }
+    let result = enrich_word_details_uncached(clean.clone(), source_lang, target_lang).await?;
+    store_cached_word_entry(&clean, &from, &to, "details", &result);
+    Ok(result)
+}
+
+async fn enrich_word_basic_uncached(
     word: String,
     source_lang: Option<String>,
     target_lang: Option<String>,
@@ -4276,8 +4346,7 @@ pub async fn language_learning_enrich_word_basic(
     Ok(enrichment)
 }
 
-#[tauri::command]
-pub async fn language_learning_enrich_word_details(
+async fn enrich_word_details_uncached(
     word: String,
     _source_lang: Option<String>,
     target_lang: Option<String>,

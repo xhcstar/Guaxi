@@ -171,6 +171,7 @@ fn shutdown_background_processes(reason: &str) {
     commands::codex_agent::stop_codex_agent();
     commands::chatview::shutdown_local_llm_servers();
     commands::embedding::shutdown_embedding_server();
+    commands::translate_local::shutdown_local_translate_server();
     commands::code_runtime::shutdown_all_python_workers();
     commands::docprocess::shutdown_marker_server();
     commands::slidev::shutdown_dev_server();
@@ -358,6 +359,16 @@ async fn main() {
             commands::translator_free::translate_text_free,
             commands::translator_free::selection_translate_free_multi,
             commands::translator_free::translate_pool_status,
+            commands::translate_local::translate_local_status,
+            commands::translate_local::translate_local_prepare,
+            commands::translate_local::translate_local_set_model,
+            commands::translate_local::translate_local_set_enabled,
+            commands::translate_local::translate_local_stop,
+            commands::translate_local::translate_local_texts,
+            commands::translate_local::translate_local_download_model,
+            commands::translate_local::translate_local_import_model,
+            commands::translate_cache::translate_cache_stats,
+            commands::translate_cache::translate_cache_clear,
             commands::docprocess::copy_image_file,
             commands::fileprocess::get_file_tree,
             commands::fileprocess::fuzzy_search_files,
@@ -764,6 +775,8 @@ async fn main() {
             commands::convert::ConversionQueue::init(app.handle().clone());
             // 后台自动装配快速转换引擎（下载托管 Python + 依赖），无需用户手动构建。
             commands::convert::provision::spawn_startup_provision();
+            // 后台预下载本地翻译小模型（免费接口全挂时的兜底），只下模型不起进程。
+            commands::translate_local::spawn_startup_model_provision();
 
             let state_for_server = shared_state.clone();
             tauri::async_runtime::spawn(async move {

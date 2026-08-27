@@ -278,6 +278,91 @@
               </div>
             </div>
           </div>
+          <div class="status-item" :class="`is-${translateModelState}`" role="listitem">
+            <div class="status-left">
+              <n-icon :component="CubeOutline" />
+              <span class="status-name">翻译模型（划词/全文）</span>
+            </div>
+            <div class="status-right">
+              <n-select
+                size="tiny"
+                style="width: 190px"
+                :value="translateLocalStatus.active_model"
+                :options="translateModelOptions"
+                :disabled="loading || downloadingTranslateModel"
+                @update:value="changeTranslateModel"
+              />
+              <n-button
+                size="tiny"
+                type="primary"
+                ghost
+                :loading="downloadingTranslateModel || translateLocalStatus.downloading"
+                :disabled="loading || downloadingTranslateModel || translateLocalStatus.installed"
+                @click="downloadTranslateModel"
+              >
+                下载
+              </n-button>
+              <n-button
+                size="tiny"
+                ghost
+                :disabled="loading || downloadingTranslateModel"
+                @click="importTranslateModel"
+              >
+                导入
+              </n-button>
+              <div class="status-pop-wrap" tabindex="0">
+                <span class="status-badge">
+                  <n-icon :component="translateModelBadgeIcon" />
+                  <span>{{ translateModelBadgeText }}</span>
+                </span>
+                <div class="status-popover" role="tooltip">
+                  <div class="status-tip-title">翻译专用小模型</div>
+                  <div class="status-tip-desc">只服务单词/句子/段落/全文翻译，与大模型对话无关</div>
+                  <div class="status-tip-desc">免费翻译接口全部失效或被限流时自动接管</div>
+                  <div class="status-tip-desc">模型路径: {{ translateLocalStatus.expected_path || '-' }}</div>
+                  <div class="status-tip-desc">
+                    推理服务: {{ translateLocalStatus.ready ? '运行中' : '按需启动（未运行不占内存）' }}
+                  </div>
+                  <div class="status-tip-desc">
+                    {{ translateLocalStatus.llama_server_exists ? 'llama.cpp 服务端可用' : '请将 llama.cpp 构建版本放到 utils/llama' }}
+                  </div>
+                  <div class="status-tip-desc">首次启动会在后台自动下载（优先魔搭），也可在此手动触发</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="status-item" :class="`is-${translateCacheState}`" role="listitem">
+            <div class="status-left">
+              <n-icon :component="CubeOutline" />
+              <span class="status-name">翻译缓存</span>
+            </div>
+            <div class="status-right">
+              <n-button
+                size="tiny"
+                ghost
+                :loading="clearingTranslateCache"
+                :disabled="loading || clearingTranslateCache || (!translateCacheStats.rows && !translateCacheStats.word_rows)"
+                @click="clearTranslateCache"
+              >
+                清空
+              </n-button>
+              <div class="status-pop-wrap" tabindex="0">
+                <span class="status-badge">
+                  <n-icon :component="clearingTranslateCache ? TimeOutline : CheckmarkCircleOutline" />
+                  <span>{{ translateCacheBadgeText }}</span>
+                </span>
+                <div class="status-popover" role="tooltip">
+                  <div class="status-tip-title">翻译结果持久缓存</div>
+                  <div class="status-tip-desc">译文 {{ translateCacheStats.rows }} 段，累计命中 {{ translateCacheStats.total_hits }} 次</div>
+                  <div class="status-tip-desc">词条 {{ translateCacheStats.word_rows }} 条，累计命中 {{ translateCacheStats.word_hits }} 次</div>
+                  <div class="status-tip-desc">占用 {{ formatBytes(translateCacheStats.db_size_bytes) }}，译文上限 {{ translateCacheStats.max_rows }} 段（超出按最久未用淘汰）</div>
+                  <div class="status-tip-desc">路径: {{ translateCacheStats.db_path || '-' }}</div>
+                  <div class="status-tip-desc">重开同一篇文档做全文翻译、或重查同一个单词，都直接读缓存</div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </n-space>
     </n-card>
@@ -341,6 +426,77 @@ const localQwenStatus = ref({
   llama_server_path: '',
 })
 const downloadingLocalQwen = ref(false)
+
+// 翻译专用小模型（llama.cpp）：只服务划词/句子/段落/全文翻译，和上面的大模型对话无关。
+// 免费翻译接口全挂 / 被风控 / 额度用完时由它兜底，因此首次启动会在后台自动下载。
+const translateLocalStatus = ref({
+  enabled: true,
+  ready: false,
+  downloading: false,
+  active_model: '',
+  installed: false,
+  expected_path: '',
+  llama_server_exists: false,
+  llama_server_path: '',
+  models: [],
+})
+const downloadingTranslateModel = ref(false)
+
+const translateModelOptions = computed(() =>
+  (translateLocalStatus.value.models || []).map((m) => ({
+    label: `${m.key}（${m.note}）`,
+    value: m.key,
+  }))
+)
+
+const translateModelState = computed(() => {
+  if (downloadingTranslateModel.value || translateLocalStatus.value.downloading) return 'info'
+  if (!translateLocalStatus.value.enabled) return 'warn'
+  return translateLocalStatus.value.installed ? 'ok' : 'warn'
+})
+
+const translateModelBadgeText = computed(() => {
+  if (downloadingTranslateModel.value || translateLocalStatus.value.downloading) return 'Downloading'
+  if (!translateLocalStatus.value.enabled) return 'Disabled'
+  return translateLocalStatus.value.installed ? 'Installed' : 'Not installed'
+})
+
+const translateModelBadgeIcon = computed(() => {
+  if (downloadingTranslateModel.value || translateLocalStatus.value.downloading) return TimeOutline
+  return translateLocalStatus.value.installed ? CheckmarkCircleOutline : CloseCircleOutline
+})
+
+// 翻译结果持久缓存：全文翻译一次上百段，缓存住之后重开同一篇基本不再打接口。
+const translateCacheStats = ref({
+  available: false,
+  db_path: '',
+  rows: 0,
+  total_hits: 0,
+  word_rows: 0,
+  word_hits: 0,
+  db_size_bytes: 0,
+  max_rows: 0,
+})
+const clearingTranslateCache = ref(false)
+
+const formatBytes = (n) => {
+  const bytes = Number(n) || 0
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
+const translateCacheState = computed(() => {
+  if (clearingTranslateCache.value) return 'info'
+  return translateCacheStats.value.available ? 'ok' : 'warn'
+})
+
+const translateCacheBadgeText = computed(() => {
+  if (clearingTranslateCache.value) return 'Clearing'
+  if (!translateCacheStats.value.available) return 'Unavailable'
+  return `${translateCacheStats.value.rows} 段 / ${translateCacheStats.value.word_rows} 词`
+})
 
 const localDeepseekState = computed(() => {
   if (downloadingLocalDeepseek.value) return 'info'
@@ -605,6 +761,9 @@ const loadConfig = async () => {
       llama_server_exists: Boolean(localQwen?.llama_server_exists),
       llama_server_path: typeof localQwen?.llama_server_path === 'string' ? localQwen.llama_server_path : '',
     }
+
+    await refreshTranslateLocalStatus()
+    await refreshTranslateCacheStats()
   } catch (e) {
     logger.error('加载大模型配置失败:', e)
   } finally {
@@ -849,6 +1008,110 @@ const importLocalQwenModel = async () => {
     message.error('导入 LocalQwen 模型失败')
   } finally {
     downloadingLocalQwen.value = false
+  }
+}
+
+const refreshTranslateLocalStatus = async () => {
+  try {
+    const status = await invoke('translate_local_status')
+    translateLocalStatus.value = {
+      enabled: Boolean(status?.enabled),
+      ready: Boolean(status?.ready),
+      downloading: Boolean(status?.downloading),
+      active_model: typeof status?.active_model === 'string' ? status.active_model : '',
+      installed: Boolean(status?.installed),
+      expected_path: typeof status?.expected_path === 'string' ? status.expected_path : '',
+      llama_server_exists: Boolean(status?.llama_server_exists),
+      llama_server_path: typeof status?.llama_server_path === 'string' ? status.llama_server_path : '',
+      models: Array.isArray(status?.models) ? status.models : [],
+    }
+  } catch (e) {
+    logger.error('读取翻译模型状态失败:', e)
+  }
+}
+
+const refreshTranslateCacheStats = async () => {
+  try {
+    const stats = await invoke('translate_cache_stats')
+    translateCacheStats.value = {
+      available: Boolean(stats?.available),
+      db_path: typeof stats?.db_path === 'string' ? stats.db_path : '',
+      rows: Number(stats?.rows) || 0,
+      total_hits: Number(stats?.total_hits) || 0,
+      word_rows: Number(stats?.word_rows) || 0,
+      word_hits: Number(stats?.word_hits) || 0,
+      db_size_bytes: Number(stats?.db_size_bytes) || 0,
+      max_rows: Number(stats?.max_rows) || 0,
+    }
+  } catch (e) {
+    logger.error('读取翻译缓存统计失败:', e)
+  }
+}
+
+const downloadTranslateModel = async () => {
+  if (translateLocalStatus.value.installed) {
+    message.info('翻译模型已存在，无需重复下载')
+    return
+  }
+  downloadingTranslateModel.value = true
+  try {
+    message.info('开始下载翻译模型（优先走魔搭），请稍候')
+    const installedTo = await invoke('translate_local_download_model', { modelKey: null })
+    message.success(`翻译模型已下载到: ${installedTo}`)
+    await refreshTranslateLocalStatus()
+  } catch (e) {
+    logger.error('下载翻译模型失败:', e)
+    message.error(`下载翻译模型失败: ${String(e?.message || e || '')}`)
+  } finally {
+    downloadingTranslateModel.value = false
+  }
+}
+
+const importTranslateModel = async () => {
+  try {
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: 'GGUF Model', extensions: ['gguf'] }],
+    })
+    if (!selected) return
+
+    downloadingTranslateModel.value = true
+    const installedTo = await invoke('translate_local_import_model', {
+      sourcePath: String(selected),
+      modelKey: null,
+    })
+    message.success(`翻译模型已导入到: ${installedTo}`)
+    await refreshTranslateLocalStatus()
+  } catch (e) {
+    logger.error('导入翻译模型失败:', e)
+    message.error(`导入翻译模型失败: ${String(e?.message || e || '')}`)
+  } finally {
+    downloadingTranslateModel.value = false
+  }
+}
+
+const changeTranslateModel = async (key) => {
+  try {
+    await invoke('translate_local_set_model', { modelKey: String(key || '') })
+    message.success('已切换翻译模型，下次翻译时自动加载')
+    await refreshTranslateLocalStatus()
+  } catch (e) {
+    logger.error('切换翻译模型失败:', e)
+    message.error('切换翻译模型失败')
+  }
+}
+
+const clearTranslateCache = async () => {
+  clearingTranslateCache.value = true
+  try {
+    const removed = await invoke('translate_cache_clear')
+    message.success(`已清空 ${removed} 段翻译缓存`)
+    await refreshTranslateCacheStats()
+  } catch (e) {
+    logger.error('清空翻译缓存失败:', e)
+    message.error('清空翻译缓存失败')
+  } finally {
+    clearingTranslateCache.value = false
   }
 }
 

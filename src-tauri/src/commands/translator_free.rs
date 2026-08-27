@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::env;
 use tracing::{info, warn};
 
+use crate::commands::translate_local;
 use crate::commands::translate_pool::{self, ProviderSpec};
 use crate::commands::translator;
 
@@ -79,7 +80,7 @@ pub async fn translate_text_free(
         match translator::translate_text(clean.clone(), secret_id, secret_key).await {
             Ok(resp) if resp.success && resp.translated_texts.len() == clean.len() => {
                 for (src, dst) in clean.iter().zip(resp.translated_texts.iter()) {
-                    translate_pool::cache_put(&from, &to, src, dst);
+                    translate_pool::cache_put_engine(&from, &to, src, dst, "Tencent");
                 }
                 return Ok(TranslationResult {
                     success: true,
@@ -131,8 +132,8 @@ pub async fn selection_translate_free_multi(
     let from_norm = normalize_lang_lower(&from);
     let to_norm = normalize_lang_lower(&to);
 
-    // 同一段文字重复划词（很常见）直接命中缓存，零网络耗时。
-    if let Some(hit) = translate_pool::cache_get(&from_norm, &to_norm, &clean) {
+    // 同一段文字重复划词（很常见）直接命中缓存：先查进程内，再查落盘库，零网络耗时。
+    if let Some(hit) = translate_pool::cache_get_persistent(&from_norm, &to_norm, &clean).await {
         return Ok(SelectionTranslateMultiResult {
             success: true,
             items: vec![SelectionTranslateEngineItem {
@@ -238,18 +239,44 @@ pub async fn selection_translate_free_multi(
     items.sort_by_key(|it| !it.success);
 
     if let Some(primary) = items.iter().find(|it| it.success && !it.text.trim().is_empty()) {
-        translate_pool::cache_put(&from_norm, &to_norm, &clean, &primary.text);
+        translate_pool::cache_put_engine(&from_norm, &to_norm, &clean, &primary.text, &primary.engine);
     }
-    let success = items.iter().any(|it| it.success);
+    let mut success = items.iter().any(|it| it.success);
     if !success {
         warn!(
-            "[SelectionTranslate] 全部失败: {}",
+            "[SelectionTranslate] 全部在线接口失败: {}",
             items
                 .iter()
                 .map(|it| format!("{}={}", it.engine, it.error.clone().unwrap_or_default()))
                 .collect::<Vec<_>>()
                 .join("；")
         );
+        // 在线接口全挂（失效/被封/额度用完）时，用本地小模型兜底，保证划词一定有译文。
+        match translate_local::translate_texts_local(
+            &[clean.clone()],
+            &from_norm,
+            &to_norm,
+        )
+        .await
+        {
+            Ok(results) => {
+                let text = results.into_iter().next().unwrap_or_default();
+                if !text.trim().is_empty() {
+                    translate_pool::cache_put_engine(&from_norm, &to_norm, &clean, &text, "LocalModel");
+                    items.insert(
+                        0,
+                        SelectionTranslateEngineItem {
+                            engine: "本地小模型".into(),
+                            success: true,
+                            text,
+                            error: None,
+                        },
+                    );
+                    success = true;
+                }
+            }
+            Err(e) => warn!("[SelectionTranslate] 本地小模型兜底失败: {}", e),
+        }
     }
 
     Ok(SelectionTranslateMultiResult {

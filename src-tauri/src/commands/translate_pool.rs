@@ -463,7 +463,8 @@ pub fn cache_get(from: &str, to: &str, text: &str) -> Option<String> {
     }
 }
 
-pub fn cache_put(from: &str, to: &str, text: &str, translated: &str) {
+/// 写缓存：进程内 TTL 缓存 + 落盘的持久缓存（后台批量写，不阻塞翻译链路）。
+pub fn cache_put_engine(from: &str, to: &str, text: &str, translated: &str, engine: &str) {
     let source = text.trim();
     let target = translated.trim();
     if source.is_empty() || target.is_empty() || target.contains("[Translation Failed]") {
@@ -485,6 +486,36 @@ pub fn cache_put(from: &str, to: &str, text: &str, translated: &str) {
             },
         );
     }
+    crate::commands::translate_cache::queue_put(from, to, source, target, engine);
+}
+
+/// 只写进程内缓存（用于把持久缓存的命中结果回填内存，避免再往磁盘写一遍）。
+fn cache_put_memory_only(from: &str, to: &str, text: &str, translated: &str) {
+    if let Ok(mut guard) = CACHE.lock() {
+        guard.insert(
+            cache_key(from, to, text.trim()),
+            CacheEntry {
+                translated: translated.trim().to_string(),
+                expires_at: Instant::now() + cache_ttl(),
+            },
+        );
+    }
+}
+
+/// 查缓存：先内存，再落盘库。命中磁盘时回填内存。
+pub async fn cache_get_persistent(from: &str, to: &str, text: &str) -> Option<String> {
+    if let Some(hit) = cache_get(from, to, text) {
+        return Some(hit);
+    }
+    let trimmed = text.trim().to_string();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let probe = vec![trimmed.clone()];
+    let found = crate::commands::translate_cache::get_many(from, to, &probe).await;
+    let hit = found.get(&trimmed)?.clone();
+    cache_put_memory_only(from, to, &trimmed, &hit);
+    Some(hit)
 }
 
 // ---------------------------------------------------------------- 单次调用
@@ -611,6 +642,79 @@ pub async fn translate_batch(
     Err(PoolError::bad(format!("全部翻译接口失败（{}）", errors.join("；"))))
 }
 
+/// 是否所有启用的接口都在冷却中（被风控、额度用完、集体失效）。
+/// 这种情况下再发网络请求纯属浪费，也会加深封禁，直接转本地小模型。
+pub fn all_enabled_blocked() -> bool {
+    let now = Instant::now();
+    let mut any_enabled = false;
+    for spec in PROVIDERS.iter() {
+        if !provider_enabled(spec.name) {
+            continue;
+        }
+        any_enabled = true;
+        let health = health_snapshot(spec.name, spec.base_rtt_ms);
+        let blocked = health.blocked_until.map(|t| t > now).unwrap_or(false);
+        if !blocked {
+            return false;
+        }
+    }
+    any_enabled
+}
+
+fn needs_retry(text: &str) -> bool {
+    let t = text.trim();
+    t.is_empty() || t.contains("[Translation Failed]")
+}
+
+/// 用本地小模型补齐仍未拿到译文的条目。返回实际用上的引擎名。
+async fn fill_with_local_model(
+    out: &mut [String],
+    texts: &[String],
+    from: &str,
+    to: &str,
+) -> Option<String> {
+    if !crate::commands::translate_local::local_translate_enabled() {
+        return None;
+    }
+    let pending: Vec<usize> = out
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| needs_retry(t))
+        .map(|(i, _)| i)
+        .collect();
+    if pending.is_empty() {
+        return None;
+    }
+    let inputs: Vec<String> = pending.iter().map(|i| texts[*i].clone()).collect();
+    warn!(
+        "[TranslatePool] 免费接口不可用，改用本地小模型翻译 {} 条",
+        inputs.len()
+    );
+    match crate::commands::translate_local::translate_texts_local(&inputs, from, to).await {
+        Ok(results) => {
+            let mut used = false;
+            for (offset, idx) in pending.into_iter().enumerate() {
+                let translated = results.get(offset).cloned().unwrap_or_default();
+                if translated.trim().is_empty() {
+                    continue;
+                }
+                cache_put_engine(from, to, &texts[idx], &translated, "LocalModel");
+                out[idx] = translated;
+                used = true;
+            }
+            if used {
+                Some("LocalModel".to_string())
+            } else {
+                None
+            }
+        }
+        Err(e) => {
+            warn!("[TranslatePool] 本地小模型兜底失败: {}", e);
+            None
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PoolBatchOutcome {
     pub texts: Vec<String>,
@@ -620,6 +724,9 @@ pub struct PoolBatchOutcome {
 
 /// 缓存感知的批量翻译：命中缓存的直接返回，未命中的整批走竞速，
 /// 整批失败再按条并发补救（而不是串行逐条重试）。
+///
+/// 缓存分两层：进程内 TTL 缓存挡住连续重复请求，SQLite 持久缓存跨重启复用，
+/// 全文翻译第二次打开同一篇文档基本零网络请求。
 pub async fn translate_texts(texts: &[String], from: &str, to: &str) -> PoolBatchOutcome {
     let mut out = vec![String::new(); texts.len()];
     let mut pending_idx: Vec<usize> = Vec::new();
@@ -629,6 +736,32 @@ pub async fn translate_texts(texts: &[String], from: &str, to: &str) -> PoolBatc
             None => pending_idx.push(idx),
         }
     }
+
+    // 第二层：落盘缓存。一次批量查询把整批未命中的都问掉，不是逐条查。
+    if !pending_idx.is_empty() {
+        let probe: Vec<String> = pending_idx
+            .iter()
+            .map(|i| texts[*i].trim().to_string())
+            .filter(|t| !t.is_empty())
+            .collect();
+        if !probe.is_empty() {
+            let found = crate::commands::translate_cache::get_many(from, to, &probe).await;
+            if !found.is_empty() {
+                pending_idx.retain(|idx| {
+                    let key = texts[*idx].trim();
+                    match found.get(key) {
+                        Some(hit) => {
+                            cache_put_memory_only(from, to, key, hit);
+                            out[*idx] = hit.clone();
+                            false
+                        }
+                        None => true,
+                    }
+                });
+            }
+        }
+    }
+
     if pending_idx.is_empty() {
         return PoolBatchOutcome { texts: out, engine: "Cache".into(), error: None };
     }
@@ -637,12 +770,20 @@ pub async fn translate_texts(texts: &[String], from: &str, to: &str) -> PoolBatc
     let mut engine = String::new();
     let mut error: Option<String> = None;
 
+    // 所有免费接口都在冷却 → 不再打网络，直接本地兜底。
+    if all_enabled_blocked() {
+        if let Some(local_engine) = fill_with_local_model(&mut out, texts, from, to).await {
+            return PoolBatchOutcome { texts: out, engine: local_engine, error: None };
+        }
+        error = Some("所有免费翻译接口均在冷却中，且本地小模型不可用".into());
+    }
+
     match translate_batch(&pending, from, to).await {
         Ok((results, used)) => {
             engine = used;
             for (offset, translated) in results.into_iter().enumerate() {
                 if let Some(idx) = pending_idx.get(offset) {
-                    cache_put(from, to, &texts[*idx], &translated);
+                    cache_put_engine(from, to, &texts[*idx], &translated, &engine);
                     out[*idx] = translated;
                 }
             }
@@ -668,14 +809,25 @@ pub async fn translate_texts(texts: &[String], from: &str, to: &str) -> PoolBatc
                             out[idx] = "[Translation Failed]".into();
                         } else {
                             if engine.is_empty() {
-                                engine = used;
+                                engine = used.clone();
                             }
-                            cache_put(from, to, &texts[idx], &translated);
+                            cache_put_engine(from, to, &texts[idx], &translated, &used);
                             out[idx] = translated;
                         }
                     }
                     Err(_) => out[idx] = "[Translation Failed]".into(),
                 }
+            }
+        }
+    }
+
+    // 网络路径仍有漏网的条目 → 本地小模型补齐。
+    if out.iter().any(|t| needs_retry(t)) {
+        if let Some(local_engine) = fill_with_local_model(&mut out, texts, from, to).await {
+            if engine.is_empty() {
+                engine = local_engine;
+            } else {
+                engine = format!("{}+{}", engine, local_engine);
             }
         }
     }
@@ -688,6 +840,7 @@ pub async fn translate_texts(texts: &[String], from: &str, to: &str) -> PoolBatc
 
 /// 供划词面板使用：按健康度取前 want 家，用于并排展示多引擎结果。
 pub fn ranked_for_selection(to: &str, want: usize) -> Vec<&'static ProviderSpec> {
+    warmup();
     pick_providers(1, to, want)
 }
 

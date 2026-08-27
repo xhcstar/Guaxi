@@ -409,6 +409,31 @@
 
           <!-- LaTeX/Typst/Org 不再有独立渲染图标：统一走上面的渲染下拉（编辑/预览/分屏，Ctrl+1/2/3）-->
 
+          <!-- 双语全文翻译：只在预览可见且正文可翻译（Markdown / 纯文本）时出现 -->
+          <n-popover v-if="bilingualAvailable" trigger="hover" placement="bottom">
+            <template #trigger>
+              <n-button text :type="bilingualEnabled ? 'primary' : 'default'"
+                :loading="bilingualBusy" @click="toggleBilingualPreview">
+                <Icon :icon="languagesIcon" width="16" height="16" />
+              </n-button>
+            </template>
+            <div class="bilingual-popover">
+              <div class="bilingual-popover__title">
+                {{ bilingualEnabled ? '关闭双语全文翻译' : '开启双语全文翻译' }}
+              </div>
+              <div class="bilingual-popover__row">
+                <span>目标语言</span>
+                <n-select v-model:value="bilingualTargetLang" size="tiny" style="width: 132px"
+                  :options="bilingualLangOptions" :disabled="bilingualBusy" />
+              </div>
+              <div v-if="bilingualEnabled" class="bilingual-popover__hint">
+                已翻译 {{ bilingualDone }} / {{ bilingualTotal }} 段
+              </div>
+              <div v-if="bilingualError" class="bilingual-popover__error">{{ bilingualError }}</div>
+              <div class="bilingual-popover__hint">图片、代码块、公式、图表不参与翻译</div>
+            </div>
+          </n-popover>
+
           <template v-if="isOrgTaskFile">
             <n-tooltip placement="top" trigger="hover">
               <template #trigger>
@@ -1207,12 +1232,13 @@ import {
 import GuaxiLatexPreview from './GuaxiLatexPreview.vue'
 import GuaxiSpeechDictationCard from './GuaxiSpeechDictationCard.vue'
 import { useSpeechDictation } from '../../composables/useSpeechDictation'
+import { useBilingualPreview } from '../../composables/useBilingualPreview'
 import { GUAXI_SHORTCUTS, matchesShortcut, shortcutText } from '../../composables/useGuaxiHotkeys'
 import GuaxiOrgTaskPreview from './GuaxiOrgTaskPreview.vue'
 import { validateTaskBlocks, parseTaskBlocks, serializeBlock, replaceBlockInContent, buildNewBlock } from '../../utils/guaxiTaskParser'
 import GuaxiTerminalPanel from './GuaxiTerminalPanel.vue'
 import { EXPORT_SHELL_CSS, EXPORT_PYCELL_CSS } from './guaxiExportStyles'
-import { NTooltip, NIcon, useMessage, NDropdown, NPopover, NInputNumber, NBreadcrumb, NBreadcrumbItem } from 'naive-ui'
+import { NTooltip, NIcon, useMessage, NDropdown, NPopover, NInputNumber, NBreadcrumb, NBreadcrumbItem, NSelect } from 'naive-ui'
 import { Icon } from '@iconify/vue'
 import { EyeOutline, LogoVimeo, CloseOutline, ExitOutline, SaveOutline, ArrowBackOutline, ArrowForwardOutline, AddOutline, BugOutline, DocumentAttachOutline, MicOutline } from '@vicons/ionicons5'
 import { DocumentEdit16Regular, Edit16Filled, Image28Regular } from '@vicons/fluent'
@@ -18856,6 +18882,70 @@ const escapePreviewHtml = (value) => String(value ?? '')
   .replace(/"/g, '&quot;')
   .replace(/'/g, '&#39;')
 
+// ───── 非 Markdown 文本文件的预览支持 ─────
+// 设计说明：
+// 1. 预览模式原来只认 .md/.markdown。为了让「双语全文翻译」覆盖所有文本文件，这里把预览放开：
+//    代码类文件整体包成围栏代码块（走原有 Markdown 管线，拿到高亮，且天然不参与翻译）；
+//    散文类纯文本（.txt/.log/.srt 等）直接按空行切段生成 <p>，不进 Markdown 解析，
+//    避免正文里的 * # | > 等字符被误当语法。
+// 2. 二进制/非文本扩展名不放开预览，避免把图片、压缩包塞进渲染器。
+const PREVIEW_CODE_LANG_BY_EXT = {
+  js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'jsx',
+  ts: 'typescript', tsx: 'tsx', vue: 'vue', svelte: 'svelte',
+  py: 'python', pyw: 'python', rb: 'ruby', php: 'php', go: 'go', rs: 'rust',
+  java: 'java', kt: 'kotlin', scala: 'scala', swift: 'swift', dart: 'dart',
+  c: 'c', h: 'c', cpp: 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp', hxx: 'cpp',
+  cs: 'csharp', lua: 'lua', pl: 'perl', r: 'r', jl: 'julia',
+  sh: 'bash', bash: 'bash', zsh: 'bash', fish: 'bash', ps1: 'powershell',
+  bat: 'dos', cmd: 'dos', sql: 'sql', graphql: 'graphql', gql: 'graphql',
+  json: 'json', jsonc: 'json', json5: 'json', yaml: 'yaml', yml: 'yaml',
+  toml: 'toml', ini: 'ini', cfg: 'ini', conf: 'ini', properties: 'ini', env: 'ini',
+  html: 'html', htm: 'html', xml: 'xml', svg: 'xml', css: 'css', scss: 'scss',
+  less: 'less', styl: 'stylus', dockerfile: 'dockerfile', makefile: 'makefile',
+  mk: 'makefile', gradle: 'gradle', cmake: 'cmake', diff: 'diff', patch: 'diff',
+}
+
+// 会走「散文模式」的纯文本扩展名（按段落渲染，可整篇翻译）。
+// 注意：.org / .tex / .typ 已经各有专用预览面板，这里不接管，避免破坏既有链路。
+const PREVIEW_PROSE_EXTS = new Set([
+  'txt', 'text', 'log', 'srt', 'vtt', 'ass', 'sub', 'csv', 'tsv',
+  'rst', 'adoc', 'asciidoc', 'bib', 'nfo', 'me', 'readme',
+])
+
+const getPreviewFileExt = (path) => {
+  const name = String(path || '').split(/[\\/]/).pop() || ''
+  if (!name.includes('.')) return name.toLowerCase()
+  return (name.split('.').pop() || '').toLowerCase()
+}
+
+// 返回 'markdown' | 'code' | 'prose' | ''（不支持预览）。
+const classifyPreviewFile = (path, language) => {
+  const ext = getPreviewFileExt(path)
+  if (ext === 'md' || ext === 'markdown' || ext === 'mdx') return 'markdown'
+  if (String(language || '') === 'markdown') return 'markdown'
+  if (PREVIEW_PROSE_EXTS.has(ext)) return 'prose'
+  if (PREVIEW_CODE_LANG_BY_EXT[ext]) return 'code'
+  return ''
+}
+
+// 散文类纯文本 → 逐段 <p>。保留段内换行与首行缩进，不打乱原有排版。
+const renderPlainTextPreviewHtml = (content) => {
+  const text = String(content ?? '').replace(/\r\n?/g, '\n')
+  const blocks = text
+    .split(/\n{2,}/)
+    .map((para) => {
+      if (!para.trim()) return ''
+      const html = escapePreviewHtml(para.replace(/\s+$/, ''))
+        .replace(/^ +/gm, (spaces) => '&nbsp;'.repeat(spaces.length))
+        .replace(/\t/g, '&nbsp;&nbsp;&nbsp;&nbsp;')
+        .replace(/\n/g, '<br>')
+      return `<p class="guaxi-plain-text-para">${html}</p>`
+    })
+    .filter(Boolean)
+  if (!blocks.length) return ''
+  return `<div class="guaxi-plain-text-preview">${blocks.join('\n')}</div>`
+}
+
 const buildPreviewSegmentCacheKey = (segment, options = {}) => {
   const theme = String(options.theme || '')
   const basePath = String(options.basePath || '')
@@ -19511,6 +19601,21 @@ const performPreviewRender = async (content, requestId = 0, reason = 'scheduled'
     return
   }
 
+  // 散文类纯文本（.txt/.log/.srt…）不进 Markdown 管线：按段落直接生成 <p>，
+  // 既保住原排版，也给「双语全文翻译」提供干净的块级切分单元。
+  if (previewFileKind.value === 'prose') {
+    const html = renderPlainTextPreviewHtml(content)
+    const latestSelectedPath = String(selectedFile.value?.path || '').trim()
+    if ((requestId && requestId !== previewRenderRequestId)
+      || (renderFilePath && latestSelectedPath && renderFilePath !== latestSelectedPath)) {
+      return
+    }
+    renderedHtml.value = html
+    lastPreviewRenderedSource.value = content
+    lastPreviewRenderedPath.value = renderFilePath
+    return
+  }
+
   try {
     const basePath = renderFilePath ? await dirname(renderFilePath) : '';
     const previewTheme = String(context?.theme || getMarkdownPreviewThemeName())
@@ -19527,7 +19632,18 @@ const performPreviewRender = async (content, requestId = 0, reason = 'scheduled'
     // 2. 这里用 maskPythonCellBlocksForMarkdown 把 Cell 区域整体替换成空行：既隐藏了源码，又逐行保留行号，
     //    保证预览点击联动、目录锚点、搜索定位仍然准确。
     // 3. 普通 ```python / ```bash 等围栏代码块不在此哨兵语法内，照常高亮渲染，不受影响。
-    const previewSource = maskMathCellBlocksForMarkdown(maskPythonCellBlocksForMarkdown(content))
+    // 代码类文件：整体包成围栏代码块交给 Markdown 管线，直接复用现成的语法高亮，
+    // 同时天然满足「代码块不翻译」——双语翻译的块级遍历会跳过 pre/code。
+    // 围栏长度取正文里最长反引号串 +1，避免源码本身含 ``` 时提前闭合。
+    let previewInputText = content
+    if (previewFileKind.value === 'code') {
+      const longestTicks = (String(content).match(/`{3,}/g) || [])
+        .reduce((max, run) => Math.max(max, run.length), 0)
+      const fence = '`'.repeat(Math.max(3, longestTicks + 1))
+      const lang = PREVIEW_CODE_LANG_BY_EXT[getPreviewFileExt(renderFilePath)] || ''
+      previewInputText = `${fence}${lang}\n${content}\n${fence}`
+    }
+    const previewSource = maskMathCellBlocksForMarkdown(maskPythonCellBlocksForMarkdown(previewInputText))
     const processed = preprocessObsidianWikilinks(previewSource);
     const containsTocMarker = hasPreviewTocMarker(processed)
     let previewHtml = ''
@@ -19630,11 +19746,89 @@ const renderDebounced = (content, reason = 'scheduled', context = {}) => {
   }, delayMs)
 }
 
-const canPreview = computed(() => {
-  const path = selectedFile.value?.path || '';
-  const ext = path.split('.').pop()?.toLowerCase();
-  if (ext === 'md' || ext === 'markdown') return true;
-  return editorStore.language === 'markdown';
+// 预览支持的文件类别：'markdown' | 'code' | 'prose' | ''。
+// 放开到所有文本文件，让预览模式下的「双语全文翻译」不再局限于 Markdown。
+const previewFileKind = computed(() =>
+  classifyPreviewFile(selectedFile.value?.path || '', editorStore.language)
+);
+
+const isMarkdownPreviewFile = computed(() => previewFileKind.value === 'markdown');
+
+const canPreview = computed(() => previewFileKind.value !== '');
+
+// 只有 Markdown 与散文类文本才有可翻译的正文；代码文件按用户要求整体不翻译。
+const canBilingualTranslate = computed(
+  () => previewFileKind.value === 'markdown' || previewFileKind.value === 'prose'
+);
+
+// ───── 预览区双语全文翻译 ─────
+// 在已渲染好的预览 DOM 上就地注入译文块：保留原文、保持结构与格式，
+// 图片 / 代码块 / 公式 / 图表整棵子树跳过。译文来自免费接口池，
+// 池子全挂时后端会自动切到本地小模型，所以这里不需要额外兜底逻辑。
+const bilingualTargetLang = ref('zh');
+const bilingualLangOptions = [
+  { label: '中文（简体）', value: 'zh' },
+  { label: '中文（繁体）', value: 'zh-TW' },
+  { label: 'English', value: 'en' },
+  { label: '日本語', value: 'ja' },
+  { label: '한국어', value: 'ko' },
+  { label: 'Français', value: 'fr' },
+  { label: 'Deutsch', value: 'de' },
+  { label: 'Español', value: 'es' },
+  { label: 'Русский', value: 'ru' },
+];
+
+const bilingual = useBilingualPreview({
+  getContainer: () => previewContainer.value?.querySelector?.('.preview-zoom-layer') || previewContainer.value,
+  getSourceLang: () => 'auto',
+  getTargetLang: () => bilingualTargetLang.value,
+});
+const {
+  enabled: bilingualEnabled,
+  busy: bilingualBusy,
+  total: bilingualTotal,
+  done: bilingualDone,
+  errorText: bilingualError,
+} = bilingual;
+
+const bilingualAvailable = computed(
+  () => canBilingualTranslate.value
+    && showPreview.value
+    && previewMode.value !== 'realtime'
+);
+
+const toggleBilingualPreview = async () => {
+  if (!bilingualAvailable.value) return;
+  await bilingual.toggle();
+  logger.info('[Bilingual] toggled', {
+    enabled: bilingualEnabled.value,
+    lang: bilingualTargetLang.value,
+    path: selectedFile.value?.path || '',
+  });
+};
+
+// 预览重渲染后 DOM 被整体替换，需要把译文重新注入一遍。
+watch(renderedHtml, () => {
+  if (!bilingualEnabled.value) return;
+  nextTick(() => {
+    bilingual.refresh();
+  });
+});
+
+// 换目标语言时重译；关掉预览或换成不可翻译的文件时清理状态。
+watch(bilingualTargetLang, () => {
+  if (!bilingualEnabled.value) return;
+  bilingual.clear();
+  nextTick(() => {
+    bilingual.run();
+  });
+});
+
+watch(bilingualAvailable, (available) => {
+  if (!available && bilingualEnabled.value) {
+    bilingualEnabled.value = false;
+    bilingual.clear();
+  }
 });
 
 // ───── LaTeX 预览 ─────
@@ -23060,6 +23254,38 @@ onUnmounted(() => {
 
 
 <style scoped>
+/* 双语全文翻译的悬浮设置面板 */
+.bilingual-popover {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 220px;
+}
+
+.bilingual-popover__title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.bilingual-popover__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.bilingual-popover__hint {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.bilingual-popover__error {
+  font-size: 11px;
+  color: #ff6b6b;
+  word-break: break-word;
+}
+
 .guaxi-editor {
   --editor-font-family: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New');
   --pycell-card-border: rgba(15, 23, 42, 0.1);
@@ -25692,6 +25918,57 @@ onUnmounted(() => {
 </style>
 
 <style>
+/* ───── 预览区双语全文翻译（译文块由 JS 注入到 v-html 内容里，必须写在非 scoped 块） ───── */
+.guaxi-bilingual-line {
+  margin: 4px 0 10px;
+  padding: 6px 10px;
+  border-left: 3px solid color-mix(in srgb, var(--primary-color, #4acadb) 65%, transparent);
+  border-radius: 0 8px 8px 0;
+  background: color-mix(in srgb, var(--primary-color, #4acadb) 8%, transparent);
+  color: color-mix(in srgb, var(--primary-color, #4acadb) 32%, var(--guaxi-text-primary, #333));
+  font-size: 0.95em;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* 表格单元格与列表项里的译文：紧贴原文、不额外撑开结构 */
+li > .guaxi-bilingual-line,
+td > .guaxi-bilingual-line,
+th > .guaxi-bilingual-line,
+dd > .guaxi-bilingual-line,
+dt > .guaxi-bilingual-line,
+summary > .guaxi-bilingual-line {
+  margin: 3px 0 2px;
+  padding: 3px 8px;
+  font-size: 0.92em;
+}
+
+h1 + .guaxi-bilingual-line,
+h2 + .guaxi-bilingual-line,
+h3 + .guaxi-bilingual-line,
+h4 + .guaxi-bilingual-line,
+h5 + .guaxi-bilingual-line,
+h6 + .guaxi-bilingual-line {
+  margin-top: -2px;
+  font-weight: 600;
+}
+
+/* ───── 非 Markdown 纯文本文件的预览排版 ───── */
+.guaxi-plain-text-preview {
+  font-family: var(--editor-font-family, 'Maple Mono NF CN', Consolas, monospace);
+  font-size: 15px;
+  line-height: 1.8;
+}
+
+.guaxi-plain-text-preview .guaxi-plain-text-para {
+  margin: 0 0 14px;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
 /* GUAXI 任务块 .org 关键字装饰高亮（全局，Monaco 装饰渲染在编辑器 DOM 中） */
 .gtask-tok { font-weight: 600; }
 /* 亮色：参考 GitHub Light / One Light，柔和且对比清晰 */

@@ -25,6 +25,10 @@ pub mod ocr;
 pub mod translator;
 /// 免费翻译接口池：多家免费接口竞速 + 健康度熔断 + 限速防封。
 pub mod translate_pool;
+/// 本地翻译小模型（llama.cpp）：免费接口全挂/被封/额度用完时的兜底翻译。
+pub mod translate_local;
+/// 翻译结果的持久化缓存（SQLite），全文翻译重复触发时零网络请求。
+pub mod translate_cache;
 pub mod translator_free;
 pub mod searcher;
 pub mod knowledgebase;
