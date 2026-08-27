@@ -902,6 +902,43 @@ onUnmounted(() => {
   color: var(--guaxi-text-primary);
 }
 .tm-calendar :deep(.fc .fc-toolbar-title) { font-size: 16px; }
+/* 上一月/下一月箭头：不依赖 FullCalendar 自带的 fcicons 字体。
+   那个字体是以 data: URI 内嵌在运行时注入的 CSS 里的，而 release 版本的 Tauri CSP
+   只有 default-src 'self'（没有 font-src），data: 字体会被拦掉，按钮就变成两个方块豆腐。
+   CSP 已经补上 font-src data:，这里再用 SVG mask 把箭头画出来做双保险：
+   用 currentColor 上色，亮/暗主题都跟着走，也不再受字体加载影响。 */
+.tm-calendar :deep(.fc .fc-icon-chevron-left::before),
+.tm-calendar :deep(.fc .fc-icon-chevron-right::before),
+.tm-calendar :deep(.fc .fc-icon-chevrons-left::before),
+.tm-calendar :deep(.fc .fc-icon-chevrons-right::before) {
+  content: '';
+  display: block;
+  width: 1em;
+  height: 1em;
+  background-color: currentColor;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: 68% 68%;
+  mask-size: 68% 68%;
+}
+.tm-calendar :deep(.fc .fc-icon-chevron-left::before) {
+  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round' d='M15 5 8 12l7 7'/></svg>");
+  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round' d='M15 5 8 12l7 7'/></svg>");
+}
+.tm-calendar :deep(.fc .fc-icon-chevron-right::before) {
+  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round' d='M9 5l7 7-7 7'/></svg>");
+  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round' d='M9 5l7 7-7 7'/></svg>");
+}
+.tm-calendar :deep(.fc .fc-icon-chevrons-left::before) {
+  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round' d='M18 5l-7 7 7 7M11 5l-7 7 7 7'/></svg>");
+  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round' d='M18 5l-7 7 7 7M11 5l-7 7 7 7'/></svg>");
+}
+.tm-calendar :deep(.fc .fc-icon-chevrons-right::before) {
+  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round' d='M6 5l7 7-7 7M13 5l7 7-7 7'/></svg>");
+  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round' d='M6 5l7 7-7 7M13 5l7 7-7 7'/></svg>");
+}
 /* 周/日视图：弱化半小时虚线分隔，避免刺眼 */
 .tm-calendar :deep(.fc .fc-timegrid-slot-minor) { border-top-style: dotted; border-top-color: color-mix(in srgb, var(--guaxi-border) 45%, transparent); }
 .tm-calendar :deep(.fc .fc-timegrid-slot) { border-color: color-mix(in srgb, var(--guaxi-border) 60%, transparent); }

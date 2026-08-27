@@ -333,12 +333,30 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
     // 设计说明：文件树允许 README.md 与 readme.md 同时存在时，编辑器标签页也必须把它们视为两个文件。
       const desiredKey = normalizeTabPath(path);
       const existingTab = this.openTabs.find((tab) => normalizeTabPath(tab.path) === desiredKey);
-      // 目标 pane：单屏恒为 left；分屏时进入当前激活侧（“新文件去激活侧”）。
-      const targetRegion = this.layoutMode === 'single' ? 'left' : (this.activeRegion || 'left');
+
+      // options.region：显式指定落到哪一侧 pane（"在一侧打开"）。
+      // 指定 right 且当前是单屏时先进入左右分屏——只把目标文件放到右侧，
+      // 不像 splitCurrentTab 那样把当前文件复制过去，这才符合 VSCode 的 "Open to the Side"。
+      const forcedRegion = options.region === 'right' || options.region === 'left'
+        ? options.region
+        : null;
+      if (forcedRegion === 'right' && this.layoutMode === 'single') {
+        this.layoutMode = 'vertical';
+        if (!this.activeTabLeft) this.activeTabLeft = this.leftTabPaths[0] || null;
+      }
+
+      // 目标 pane：显式指定优先；否则单屏恒为 left、分屏时进入当前激活侧（"新文件去激活侧"）。
+      const targetRegion = forcedRegion
+        || (this.layoutMode === 'single' ? 'left' : (this.activeRegion || 'left'));
       if (existingTab) {
         // 已打开：聚焦其所在 pane（优先目标侧；否则它实际所在的另一侧），不重复创建标签。
         let focusRegion = targetRegion;
-        if (this.layoutMode === 'single') {
+        if (forcedRegion) {
+          // 显式"在一侧打开"：即使它已经在另一侧开着，也要在指定侧再挂一个标签
+          // （同文件分屏是这个 store 明确支持的模型）。
+          this.addPathToPane(forcedRegion, existingTab.path);
+          focusRegion = forcedRegion;
+        } else if (this.layoutMode === 'single') {
           this.addPathToPane('left', existingTab.path);
           focusRegion = 'left';
         } else if (this.paneHasPath(targetRegion, existingTab.path)) {
@@ -516,6 +534,31 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
     // 更新笔记库路径列表
     setRepopathlist(paths) {
       this.repopathlist = paths;
+    },
+
+    // 拖拽调整某一侧标签的顺序。toPath 为空表示拖到该侧末尾。
+    reorderPaneTabs(region, fromPath, toPath, placeAfter = false) {
+      const targetRegion = region === 'right' ? 'right' : 'left';
+      const fromKey = normalizeTabPath(fromPath);
+      const list = [...this.paneListFor(targetRegion)];
+      const fromIndex = list.findIndex((p) => normalizeTabPath(p) === fromKey);
+      if (fromIndex === -1) return;
+
+      const [moved] = list.splice(fromIndex, 1);
+      if (!toPath) {
+        list.push(moved);
+      } else {
+        const toKey = normalizeTabPath(toPath);
+        const toIndex = list.findIndex((p) => normalizeTabPath(p) === toKey);
+        if (toIndex === -1) {
+          list.push(moved);
+        } else {
+          list.splice(placeAfter ? toIndex + 1 : toIndex, 0, moved);
+        }
+      }
+
+      if (targetRegion === 'right') this.rightTabPaths = list;
+      else this.leftTabPaths = list;
     },
 
     // 新增：统一设置激活标签并同步 selectedFile

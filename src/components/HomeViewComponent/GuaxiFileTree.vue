@@ -474,7 +474,7 @@
 <script setup>
 import { createLogger } from '../../utils/logger'
 import { NIcon, useMessage, NModal, NForm, NFormItem, NInput, NButton, NSpace } from 'naive-ui'
-import { DocumentTextOutline, FolderOutline, AddOutline, TrashOutline, CreateOutline, MoveOutline, FolderOpenOutline, GlobeOutline, SettingsOutline, GitBranchOutline, DownloadOutline, FolderOpenOutline as OpenIcon, DocumentOutline, SwapHorizontalOutline, LibraryOutline, TimeOutline, ListOutline, CheckboxOutline } from '@vicons/ionicons5'
+import { DocumentTextOutline, FolderOutline, AddOutline, TrashOutline, CreateOutline, MoveOutline, FolderOpenOutline, GlobeOutline, SettingsOutline, GitBranchOutline, DownloadOutline, FolderOpenOutline as OpenIcon, DocumentOutline, SwapHorizontalOutline, LibraryOutline, TimeOutline, ListOutline, CheckboxOutline, CopyOutline, DuplicateOutline, BrowsersOutline } from '@vicons/ionicons5'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore';
 import GuaxiVirtualFileTree from './GuaxiVirtualFileTree.vue';
@@ -969,6 +969,21 @@ const contextMenuOptions = ref([
     key: 'importAsTemplate',
     disabled: true,
     icon: () => h(NIcon, null, { default: () => h(DocumentTextOutline) })
+  },
+  {
+    label: '在一侧打开',
+    key: 'openToSide',
+    icon: () => h(NIcon, null, { default: () => h(BrowsersOutline) })
+  },
+  {
+    label: '复制路径',
+    key: 'copyPath',
+    icon: () => h(NIcon, null, { default: () => h(CopyOutline) })
+  },
+  {
+    label: '复制相对路径',
+    key: 'copyRelativePath',
+    icon: () => h(NIcon, null, { default: () => h(DuplicateOutline) })
   },
   {
     label: '重命名',
@@ -2348,6 +2363,10 @@ const handleNodeContextMenu = ({ node, x, y }) => {
   const importOpt = contextMenuOptions.value.find(o => o.key === 'importAsTemplate')
   if (importOpt) importOpt.disabled = !canImportAsTemplate
 
+  // "在一侧打开"只对文件有意义，目录置灰。
+  const openToSideOpt = contextMenuOptions.value.find(o => o.key === 'openToSide')
+  if (openToSideOpt) openToSideOpt.disabled = !!node.is_directory
+
   isContextMenuVisible.value = true
   contextMenuPosition.value = { x, y }
   menuMode.value = 'node'
@@ -2478,10 +2497,95 @@ const findNodeById = (tree, targetId) => {
 
 
 // 处理右键菜单选择
+// ───── 复制路径 / 在一侧打开 ─────
+// 说明：优先用浏览器剪贴板；WebView 里被策略拦掉时回退到 Tauri 剪贴板插件（和编辑器一致）。
+const writeClipboardText = async (text) => {
+  const value = String(text ?? '')
+  try {
+    await navigator.clipboard.writeText(value)
+    return true
+  } catch (error) {
+    logger.debug('[Clipboard] navigator write failed, trying Tauri clipboard manager', {
+      error: String(error?.message || error || ''),
+    })
+  }
+  try {
+    const mod = await import('@tauri-apps/plugin-clipboard-manager')
+    await mod.writeText(value)
+    return true
+  } catch (error) {
+    logger.warn('[Clipboard] write failed', { error: String(error?.message || error || '') })
+    return false
+  }
+}
+
+// 绝对路径：按当前系统的分隔符输出，方便直接粘到终端/资源管理器里用。
+const toNativePath = (p) => {
+  const normalized = normalizePath(p)
+  if (!normalized) return ''
+  const isWindowsPath = /^[a-zA-Z]:\//.test(normalized) || normalized.startsWith('//')
+  return isWindowsPath ? normalized.replace(/\//g, '\\') : normalized
+}
+
+// 相对路径：相对文件树根节点（当前笔记库）。不在根下时退化成绝对路径。
+const toRepoRelativePath = (p) => {
+  const target = normalizePath(p)
+  const root = normalizePath(fileTreeStore.activeRepoPath).replace(/\/+$/, '')
+  if (!target) return ''
+  if (!root) return target
+  if (target === root) return ''
+  const prefix = `${root}/`
+  if (target.toLowerCase().startsWith(prefix.toLowerCase())) {
+    return target.slice(prefix.length)
+  }
+  return target
+}
+
+const copyNodePath = async (node, { relative = false } = {}) => {
+  if (!node?.id) return
+  const text = relative ? toRepoRelativePath(node.id) : toNativePath(node.id)
+  if (!text) {
+    message.warning(relative ? '该节点就是文件树根目录，没有相对路径' : '无法获取路径')
+    return
+  }
+  const ok = await writeClipboardText(text)
+  if (ok) message.success(`已复制${relative ? '相对' : ''}路径: ${text}`)
+  else message.error('复制失败')
+}
+
+// 在右侧分屏打开：交给 store 强制落到 right pane（单屏时会自动进入左右分屏）。
+const openNodeToSide = async (node) => {
+  if (!node?.id || node.is_directory) return
+  try {
+    const res = await fileTreeStore.fetchFileContent(node.id)
+    if (!res?.ok) {
+      message.warning('文件不存在或已被删除')
+      return
+    }
+    await fileTreeStore.openFileInTab(node.id, res.content, {
+      unsupported: !!res.unsupported,
+      region: 'right',
+    })
+    if (res.unsupported) message.warning('不支持打开该文件类型（仅支持文本/Markdown）')
+  } catch (error) {
+    logger.error('在一侧打开文件失败:', error)
+    message.error('在一侧打开失败')
+  }
+}
+
 const handleContextMenuSelect = async (key) => {
   isContextMenuVisible.value = false;
   try {
     switch (key) {
+      case 'openToSide':
+        await openNodeToSide(selectedNode.value);
+        break;
+      case 'copyPath':
+        await copyNodePath(selectedNode.value);
+        break;
+      case 'copyRelativePath':
+        await copyNodePath(selectedNode.value, { relative: true });
+        break;
       case 'addFile':
         await addNode(selectedNode.value?.id, false);
         break;

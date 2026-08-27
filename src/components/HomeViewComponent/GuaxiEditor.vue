@@ -2,10 +2,19 @@
   <div class="editor-container guaxi-editor">
     <div class="editor-header" ref="editorHeaderRef">
       <div class="tab-bar" ref="tabBarRef" @wheel="handleWheelScroll">
-        <div class="tab-region tab-region-left" ref="tabRegionLeftRef">
+        <div class="tab-region tab-region-left" ref="tabRegionLeftRef" data-tab-region="left">
           <div v-for="tab in leftTabs" :key="tab.path"
-            :class="['tab-item', { 'active': fileTreeStore.activeTabLeft === tab.path, 'dirty': !!tab.dirty }]"
-            @click="switchTab(tab.path, 'left')" @mousedown.middle="closeTab(tab.path, 'left')">
+            :class="['tab-item', {
+              'active': fileTreeStore.activeTabLeft === tab.path,
+              'dirty': !!tab.dirty,
+              'tab-drag-source': tabDragPath === tab.path,
+              'tab-drop-before': tabDropTarget.path === tab.path && tabDropTarget.region === 'left' && !tabDropTarget.after,
+              'tab-drop-after': tabDropTarget.path === tab.path && tabDropTarget.region === 'left' && tabDropTarget.after,
+            }]"
+            :title="tab.path" :data-tab-path="tab.path" data-tab-region="left"
+            @click="onTabClick(tab, 'left')"
+            @mousedown="onTabMouseDown($event, tab, 'left')"
+            @contextmenu.prevent.stop="openTabContextMenu($event, tab, 'left')">
             <span class="tab-title">{{ tab.fileName }}</span>
             <span class="tab-affordance">
               <span class="tab-dirty-dot" v-show="tab.dirty" />
@@ -17,10 +26,19 @@
         </div>
         <!-- 左右分屏：右侧标签栏与左侧并排显示在顶部（恰好分别位于左/右 pane 之上）。
              上下分屏时该标签栏移动到下方 pane 头上（见 .editor-split-wrapper 内的 pane 标签栏）。 -->
-        <div v-if="layoutMode === 'vertical'" class="tab-region tab-region-right" ref="tabRegionRightRef">
+        <div v-if="layoutMode === 'vertical'" class="tab-region tab-region-right" ref="tabRegionRightRef" data-tab-region="right">
           <div v-for="tab in rightTabs" :key="tab.path"
-            :class="['tab-item', { 'active': fileTreeStore.activeTabRight === tab.path, 'dirty': !!tab.dirty }]"
-            @click="switchTab(tab.path, 'right')" @mousedown.middle="closeTab(tab.path, 'right')">
+            :class="['tab-item', {
+              'active': fileTreeStore.activeTabRight === tab.path,
+              'dirty': !!tab.dirty,
+              'tab-drag-source': tabDragPath === tab.path,
+              'tab-drop-before': tabDropTarget.path === tab.path && tabDropTarget.region === 'right' && !tabDropTarget.after,
+              'tab-drop-after': tabDropTarget.path === tab.path && tabDropTarget.region === 'right' && tabDropTarget.after,
+            }]"
+            :title="tab.path" :data-tab-path="tab.path" data-tab-region="right"
+            @click="onTabClick(tab, 'right')"
+            @mousedown="onTabMouseDown($event, tab, 'right')"
+            @contextmenu.prevent.stop="openTabContextMenu($event, tab, 'right')">
             <span class="tab-title">{{ tab.fileName }}</span>
             <span class="tab-affordance">
               <span class="tab-dirty-dot" v-show="tab.dirty" />
@@ -31,6 +49,14 @@
           </div>
         </div>
       </div>
+
+      <!-- 标签右键菜单：关闭 / 在一侧打开 / 复制路径 / 复制相对路径。
+           menu-props 里带上编辑器的字体，否则 naive-ui 把菜单 teleport 到 body 后
+           拿不到 .guaxi-editor 的 scoped 字体，看起来和主界面不是一套字。 -->
+      <n-dropdown v-model:show="tabMenuVisible" placement="bottom-start"
+        :menu-props="getTabContextMenuProps"
+        :options="tabMenuOptions" :x="tabMenuPosition.x" :y="tabMenuPosition.y"
+        @select="handleTabMenuSelect" @clickoutside="tabMenuVisible = false" />
 
 
       <div class="toolbar">
@@ -1045,10 +1071,19 @@
             @wheel="handleWheelScroll"
             @mousedown="activateRegion('right')"
           >
-            <div class="tab-region tab-region-right" ref="tabRegionRightRef">
+            <div class="tab-region tab-region-right" ref="tabRegionRightRef" data-tab-region="right">
               <div v-for="tab in rightTabs" :key="tab.path"
-                :class="['tab-item', { 'active': fileTreeStore.activeTabRight === tab.path, 'dirty': !!tab.dirty }]"
-                @click="switchTab(tab.path, 'right')" @mousedown.middle="closeTab(tab.path, 'right')">
+                :class="['tab-item', {
+                  'active': fileTreeStore.activeTabRight === tab.path,
+                  'dirty': !!tab.dirty,
+                  'tab-drag-source': tabDragPath === tab.path,
+                  'tab-drop-before': tabDropTarget.path === tab.path && tabDropTarget.region === 'right' && !tabDropTarget.after,
+                  'tab-drop-after': tabDropTarget.path === tab.path && tabDropTarget.region === 'right' && tabDropTarget.after,
+                }]"
+                :title="tab.path" :data-tab-path="tab.path" data-tab-region="right"
+                @click="onTabClick(tab, 'right')"
+                @mousedown="onTabMouseDown($event, tab, 'right')"
+                @contextmenu.prevent.stop="openTabContextMenu($event, tab, 'right')">
                 <span class="tab-title">{{ tab.fileName }}</span>
                 <span class="tab-affordance">
                   <span class="tab-dirty-dot" v-show="tab.dirty" />
@@ -1277,6 +1312,9 @@ import volume2Icon from '@iconify-icons/lucide/volume-2'
 import arrowUpCircleIcon from '@iconify-icons/lucide/arrow-up-circle'
 import refreshCwIcon from '@iconify-icons/lucide/refresh-cw'
 import trash2Icon from '@iconify-icons/lucide/trash-2'
+import copyIcon from '@iconify-icons/lucide/copy'
+import clipboardListIcon from '@iconify-icons/lucide/clipboard-list'
+import tabCloseIcon from '@iconify-icons/lucide/x'
 import mermaid from 'mermaid'
 import folderIcon from '@iconify-icons/lucide/folder'
 import fileTextIcon from '@iconify-icons/lucide/file-text'
@@ -22326,6 +22364,242 @@ const handleExportSelect = async (format) => {
   }
 };
 
+// ───── 标签拖拽排序 ─────
+// 设计说明（为什么不用 HTML5 drag & drop）：
+// Tauri/WebView2 会接管 OS 级拖放来实现"拖文件进窗口"，页面内 draggable 元素的
+// dragover/drop 常常拿不到，光标一直是"禁止"图标，拖了也不会落下。
+// 这里改成纯鼠标事件实现：mousedown 记录按下点 → 超过阈值才算拖拽 →
+// mousemove 用 elementFromPoint 找当前悬停的标签 → mouseup 落位。
+// 好处是完全不依赖 dataTransfer，光标也能自己控制。
+const TAB_DRAG_THRESHOLD_PX = 4;
+
+const tabDragPath = ref('');
+const tabDropTarget = ref({ path: '', region: '', after: false });
+
+let tabPress = null;          // { path, region, startX, startY }
+let tabDragMoved = false;     // 是否已越过阈值，真正进入拖拽
+let suppressTabClick = false; // 拖拽结束后压掉紧随其后的那次 click
+
+const clearTabDropTarget = () => {
+  if (tabDropTarget.value.path || tabDropTarget.value.region) {
+    tabDropTarget.value = { path: '', region: '', after: false };
+  }
+};
+
+const detachTabPointerListeners = () => {
+  window.removeEventListener('mousemove', onTabPointerMove, true);
+  window.removeEventListener('mouseup', onTabPointerUp, true);
+  window.removeEventListener('blur', onTabDragAbort);
+};
+
+const resetTabDragState = () => {
+  tabPress = null;
+  tabDragMoved = false;
+  tabDragPath.value = '';
+  clearTabDropTarget();
+  document.body.classList.remove('guaxi-tab-dragging');
+};
+
+// 命中测试：找鼠标下面的标签，并按是否越过中线决定插在它前面还是后面。
+const findTabUnderPointer = (x, y) => {
+  const el = document.elementFromPoint(x, y);
+  const item = el?.closest?.('.tab-item');
+  if (!item) return null;
+  const path = item.getAttribute('data-tab-path') || '';
+  const region = item.getAttribute('data-tab-region') || '';
+  if (!path || !region) return null;
+  const rect = item.getBoundingClientRect();
+  return { path, region, after: x > rect.left + rect.width / 2 };
+};
+
+// 落在标签栏空白处时，至少要知道是哪一侧，这样可以移到该侧末尾。
+const findTabRegionUnderPointer = (x, y) => {
+  const el = document.elementFromPoint(x, y);
+  const holder = el?.closest?.('.tab-region');
+  return holder?.getAttribute('data-tab-region') || '';
+};
+
+function onTabPointerMove(event) {
+  if (!tabPress) return;
+  if (!tabDragMoved) {
+    const movedEnough = Math.abs(event.clientX - tabPress.startX) >= TAB_DRAG_THRESHOLD_PX
+      || Math.abs(event.clientY - tabPress.startY) >= TAB_DRAG_THRESHOLD_PX;
+    if (!movedEnough) return;
+    tabDragMoved = true;
+    tabDragPath.value = tabPress.path;
+    document.body.classList.add('guaxi-tab-dragging');
+  }
+
+  const hit = findTabUnderPointer(event.clientX, event.clientY);
+  if (!hit || (hit.path === tabPress.path && hit.region === tabPress.region)) {
+    clearTabDropTarget();
+    return;
+  }
+  const cur = tabDropTarget.value;
+  if (cur.path !== hit.path || cur.region !== hit.region || cur.after !== hit.after) {
+    tabDropTarget.value = hit;
+  }
+}
+
+// 把某个已打开的文件挂到指定侧（跨侧拖放 = 在那一侧也打开）。
+const attachTabToRegion = async (path, region) => {
+  const entry = fileTreeStore.openTabs.find((t) => t?.path === path);
+  await fileTreeStore.openFileInTab(path, entry?.content, { region });
+};
+
+async function onTabPointerUp(event) {
+  const press = tabPress;
+  const moved = tabDragMoved;
+  const recorded = tabDropTarget.value;
+  detachTabPointerListeners();
+  const drop = recorded.path
+    ? { ...recorded }
+    : findTabUnderPointer(event.clientX, event.clientY);
+  const regionUnderPointer = drop?.region || findTabRegionUnderPointer(event.clientX, event.clientY);
+  resetTabDragState();
+
+  if (!press || !moved) return;
+  // 拖拽过就别再让 click 去切标签了，落位后我们自己切。
+  suppressTabClick = true;
+  if (!regionUnderPointer) return;
+
+  try {
+    if (regionUnderPointer !== press.region) {
+      await attachTabToRegion(press.path, regionUnderPointer);
+    }
+    if (drop && drop.path !== press.path) {
+      fileTreeStore.reorderPaneTabs(regionUnderPointer, press.path, drop.path, !!drop.after);
+    } else if (!drop) {
+      // 落在空白区：移到该侧末尾。
+      fileTreeStore.reorderPaneTabs(regionUnderPointer, press.path, '', false);
+    }
+    switchTab(press.path, regionUnderPointer);
+    logger.info('[Tab] drag finished', {
+      fromRegion: press.region,
+      toRegion: regionUnderPointer,
+      path: press.path,
+      toPath: drop?.path || '(end)',
+    });
+  } catch (error) {
+    logger.warn('[Tab] drag drop failed', { error: String(error?.message || error || '') });
+  }
+}
+
+function onTabDragAbort() {
+  detachTabPointerListeners();
+  resetTabDragState();
+}
+
+const onTabMouseDown = (event, tab, region) => {
+  // 中键关闭沿用原行为。
+  if (event.button === 1) {
+    event.preventDefault();
+    closeTab(tab.path, region);
+    return;
+  }
+  if (event.button !== 0) return;
+  // 点在关闭按钮上不进入拖拽判定。
+  if (event.target?.closest?.('.tab-close')) return;
+
+  tabPress = {
+    path: tab.path,
+    region,
+    startX: event.clientX,
+    startY: event.clientY,
+  };
+  tabDragMoved = false;
+  window.addEventListener('mousemove', onTabPointerMove, true);
+  window.addEventListener('mouseup', onTabPointerUp, true);
+  window.addEventListener('blur', onTabDragAbort);
+};
+
+const onTabClick = (tab, region) => {
+  if (suppressTabClick) {
+    suppressTabClick = false;
+    return;
+  }
+  switchTab(tab.path, region);
+};
+
+onUnmounted(() => {
+  detachTabPointerListeners();
+  document.body.classList.remove('guaxi-tab-dragging');
+});
+
+// ───── 标签右键菜单 ─────
+const tabMenuVisible = ref(false);
+const tabMenuPosition = ref({ x: 0, y: 0 });
+const tabMenuTarget = ref({ path: '', region: 'left' });
+
+const tabMenuOptions = [
+  { label: '关闭', key: 'close', icon: () => h(Icon, { icon: tabCloseIcon, width: 16, height: 16 }) },
+  { label: '在一侧打开', key: 'openToSide', icon: () => h(Icon, { icon: columns2Icon, width: 16, height: 16 }) },
+  { label: '复制路径', key: 'copyPath', icon: () => h(Icon, { icon: copyIcon, width: 16, height: 16 }) },
+  { label: '复制相对路径', key: 'copyRelativePath', icon: () => h(Icon, { icon: clipboardListIcon, width: 16, height: 16 }) },
+];
+
+// 菜单被 teleport 到 body，拿不到 .guaxi-editor 的 scoped 字体，这里显式带上，
+// 和编辑器正文右键菜单用同一套字体变量，避免出现"菜单字体和主界面不一致"。
+const getTabContextMenuProps = () => ({
+  class: 'tab-context-menu-dropdown',
+  style: { fontFamily: EDITOR_CONTEXT_MENU_FONT_FAMILY },
+});
+
+const openTabContextMenu = (event, tab, region) => {
+  tabMenuTarget.value = { path: tab?.path || '', region: region === 'right' ? 'right' : 'left' };
+  tabMenuPosition.value = { x: event.clientX, y: event.clientY };
+  tabMenuVisible.value = true;
+};
+
+// 绝对路径按当前系统分隔符输出，方便直接粘到终端里用。
+const toNativeTabPath = (p) => {
+  const normalized = String(p || '').replace(/\\/g, '/');
+  if (!normalized) return '';
+  const isWindowsPath = /^[a-zA-Z]:\//.test(normalized) || normalized.startsWith('//');
+  return isWindowsPath ? normalized.replace(/\//g, '\\') : normalized;
+};
+
+// 相对路径以文件树根节点（当前笔记库）为基准；不在根下时退回绝对路径。
+const toRepoRelativeTabPath = (p) => {
+  const target = String(p || '').replace(/\\/g, '/');
+  const root = String(fileTreeStore.activeRepoPath || '').replace(/\\/g, '/').replace(/\/+$/, '');
+  if (!target) return '';
+  if (!root || target === root) return target;
+  const prefix = `${root}/`;
+  if (target.toLowerCase().startsWith(prefix.toLowerCase())) return target.slice(prefix.length);
+  return target;
+};
+
+const handleTabMenuSelect = async (key) => {
+  tabMenuVisible.value = false;
+  const { path, region } = tabMenuTarget.value;
+  if (!path) return;
+  try {
+    if (key === 'close') {
+      closeTab(path, region);
+      return;
+    }
+    if (key === 'openToSide') {
+      const entry = fileTreeStore.openTabs.find((t) => t?.path === path);
+      await fileTreeStore.openFileInTab(path, entry?.content, { region: 'right' });
+      return;
+    }
+    if (key === 'copyPath' || key === 'copyRelativePath') {
+      const relative = key === 'copyRelativePath';
+      const text = relative ? toRepoRelativeTabPath(path) : toNativeTabPath(path);
+      if (!text) {
+        message.warning('无法获取路径');
+        return;
+      }
+      const ok = await writeClipboardText(text);
+      if (ok) message.success(`已复制${relative ? '相对' : ''}路径: ${text}`);
+      else message.error('复制失败');
+    }
+  } catch (error) {
+    logger.warn('[Tab] context menu action failed', { key, error: String(error?.message || error || '') });
+  }
+};
+
 const switchTab = (path, region) => {
   flushPythonCellDrafts()
   const targetRegion = region || 'left';
@@ -25817,6 +26091,19 @@ onUnmounted(() => {
   transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 }
 
+/* 拖拽排序反馈：被拖的标签压暗，落点侧画一条竖线提示插入位置。
+   用 inset 阴影而不是真的 border，免得改变标签宽度让整行抖动。 */
+.tab-item.tab-drag-source {
+  opacity: 0.45;
+}
+
+.tab-item.tab-drop-before {
+  box-shadow: inset 2px 0 0 0 var(--primary-color, #4acadb);
+}
+
+.tab-item.tab-drop-after {
+  box-shadow: inset -2px 0 0 0 var(--primary-color, #4acadb);
+}
 .tab-title {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -25967,6 +26254,21 @@ h6 + .guaxi-bilingual-line {
   white-space: normal;
   word-break: break-word;
   overflow-wrap: anywhere;
+}
+
+/* 标签拖拽期间强制抓取光标。放在非 scoped 块里，因为类挂在 body 上。 */
+body.guaxi-tab-dragging,
+body.guaxi-tab-dragging * {
+  cursor: grabbing !important;
+}
+
+/* 标签右键菜单：naive-ui 把菜单 teleport 到 body，scoped 样式管不到，
+   这里用全局选择器补上和主界面一致的字体（与文件树右键菜单同一套）。 */
+.tab-context-menu-dropdown.n-dropdown,
+.tab-context-menu-dropdown .n-dropdown-option,
+.tab-context-menu-dropdown .n-dropdown-option-body,
+.tab-context-menu-dropdown .n-dropdown-option-body__label {
+  font-family: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New');
 }
 
 /* GUAXI 任务块 .org 关键字装饰高亮（全局，Monaco 装饰渲染在编辑器 DOM 中） */
