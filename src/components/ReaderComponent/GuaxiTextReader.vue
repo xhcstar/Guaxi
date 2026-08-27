@@ -1820,6 +1820,30 @@ const translateSelectionText = async (overrideText) => {
   logger.info('[SelectionTranslate][TextReader] start', { len: text.length, from: selectionTranslateFrom.value, to: selectionTranslateTo.value })
 
   try {
+    // 词条模块（音标/短语/例句）和译文互不依赖，这里先并发发出去。
+    // 原来是「译文 → 基础词条 → 详细词条」串行三跳，慢的时候要等七八秒。
+    const needWordMeta = isWordSelection(text)
+    const wordBasicPromise = needWordMeta
+      ? invoke('language_learning_enrich_word_basic', {
+        word: text,
+        sourceLang: selectionTranslateFrom.value,
+        targetLang: selectionTranslateTo.value
+      }).catch((err) => {
+        logger.warn('[SelectionTranslate][TextReader] enrich basic failed:', err)
+        return null
+      })
+      : Promise.resolve(null)
+    const wordDetailsPromise = needWordMeta
+      ? invoke('language_learning_enrich_word_details', {
+        word: text,
+        sourceLang: selectionTranslateFrom.value,
+        targetLang: selectionTranslateTo.value
+      }).catch((err) => {
+        logger.warn('[SelectionTranslate][TextReader] enrich details failed:', err)
+        return null
+      })
+      : Promise.resolve(null)
+
     let hasUsableMultiResult = false
     if (selectionTranslateMultiAvailable.value) {
       try {
@@ -1884,14 +1908,10 @@ const translateSelectionText = async (overrideText) => {
     }
 
     const finalTranslated = String(selectionTranslateResult.value || '').trim()
-    if (isWordSelection(text)) {
+    if (needWordMeta) {
       try {
-        const basic = await invoke('language_learning_enrich_word_basic', {
-          word: text,
-          sourceLang: selectionTranslateFrom.value,
-          targetLang: selectionTranslateTo.value
-        })
-        selectionTranslateWordMeta.value = {
+        const [basic, details] = await Promise.all([wordBasicPromise, wordDetailsPromise])
+        const base = {
           word: String(basic?.word || text).trim(),
           phonetic: String(basic?.phonetic || '').trim(),
           phonetic_uk: String(basic?.phonetic_uk || '').trim(),
@@ -1906,27 +1926,24 @@ const translateSelectionText = async (overrideText) => {
           associates_translations: [],
           phrases: [],
           phrase_translations: [],
-          examples: [],
+          examples: Array.isArray(basic?.examples) ? basic.examples : [],
           example_translations: [],
         }
-        const details = await invoke('language_learning_enrich_word_details', {
-          word: text,
-          sourceLang: selectionTranslateFrom.value,
-          targetLang: selectionTranslateTo.value
-        })
-        selectionTranslateWordMeta.value = {
-          ...selectionTranslateWordMeta.value,
-          synonyms: Array.isArray(details?.synonyms) ? details.synonyms : [],
-          antonyms: Array.isArray(details?.antonyms) ? details.antonyms : [],
-          associates: Array.isArray(details?.associates) ? details.associates : [],
-          synonyms_translations: Array.isArray(details?.synonyms_translations) ? details.synonyms_translations : [],
-          antonyms_translations: Array.isArray(details?.antonyms_translations) ? details.antonyms_translations : [],
-          associates_translations: Array.isArray(details?.associates_translations) ? details.associates_translations : [],
-          phrases: Array.isArray(details?.phrases) ? details.phrases : [],
-          phrase_translations: Array.isArray(details?.phrase_translations) ? details.phrase_translations : [],
-          examples: Array.isArray(details?.examples) ? details.examples : [],
-          example_translations: Array.isArray(details?.example_translations) ? details.example_translations : [],
-        }
+        selectionTranslateWordMeta.value = details
+          ? {
+            ...base,
+            synonyms: Array.isArray(details?.synonyms) ? details.synonyms : [],
+            antonyms: Array.isArray(details?.antonyms) ? details.antonyms : [],
+            associates: Array.isArray(details?.associates) ? details.associates : [],
+            synonyms_translations: Array.isArray(details?.synonyms_translations) ? details.synonyms_translations : [],
+            antonyms_translations: Array.isArray(details?.antonyms_translations) ? details.antonyms_translations : [],
+            associates_translations: Array.isArray(details?.associates_translations) ? details.associates_translations : [],
+            phrases: Array.isArray(details?.phrases) ? details.phrases : [],
+            phrase_translations: Array.isArray(details?.phrase_translations) ? details.phrase_translations : [],
+            examples: Array.isArray(details?.examples) && details.examples.length ? details.examples : base.examples,
+            example_translations: Array.isArray(details?.example_translations) ? details.example_translations : [],
+          }
+          : base
       } catch (err) {
         logger.warn('[SelectionTranslate][TextReader] enrich word failed:', err)
       }

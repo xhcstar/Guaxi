@@ -23,6 +23,8 @@ pub mod statisticview;
 pub mod guaxiscreencap;
 pub mod ocr;
 pub mod translator;
+/// 免费翻译接口池：多家免费接口竞速 + 健康度熔断 + 限速防封。
+pub mod translate_pool;
 pub mod translator_free;
 pub mod searcher;
 pub mod knowledgebase;

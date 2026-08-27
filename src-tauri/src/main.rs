@@ -357,6 +357,7 @@ async fn main() {
             commands::translator::translate_text,
             commands::translator_free::translate_text_free,
             commands::translator_free::selection_translate_free_multi,
+            commands::translator_free::translate_pool_status,
             commands::docprocess::copy_image_file,
             commands::fileprocess::get_file_tree,
             commands::fileprocess::fuzzy_search_files,

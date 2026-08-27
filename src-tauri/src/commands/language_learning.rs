@@ -3925,6 +3925,224 @@ async fn translate_segments_with_sentence_groups(texts: &[String], target_lang: 
     out
 }
 
+/// 词条查询共享连接池。原来每次 enrich 都新建 Client，
+/// 每次都要重做 TLS 握手，单次就要几百毫秒，还拿不到连接复用。
+static ENRICH_CLIENT: Lazy<Client> = Lazy::new(|| {
+    Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+        .connect_timeout(std::time::Duration::from_millis(2500))
+        .timeout(std::time::Duration::from_secs(8))
+        .pool_idle_timeout(std::time::Duration::from_secs(90))
+        .pool_max_idle_per_host(4)
+        .build()
+        .unwrap_or_else(|_| Client::new())
+});
+
+/// 有道词典公开 jsonapi 的解析结果。
+///
+/// 这一个接口（大陆直连、约 300ms）就同时给出音标、中文释义、短语+译文、
+/// 双语例句、近义词和同根词，因此不再需要「英文词典 + datamuse + 逐条翻译」
+/// 那一串串行请求——那正是词条面板要等七八秒的根源。
+#[derive(Debug, Clone, Default)]
+struct YoudaoDictResult {
+    phonetic_uk: String,
+    phonetic_us: String,
+    part_of_speech: String,
+    meanings: Vec<String>,
+    synonyms: Vec<String>,
+    associates: Vec<String>,
+    associates_translations: Vec<String>,
+    phrases: Vec<String>,
+    phrase_translations: Vec<String>,
+    examples: Vec<String>,
+    example_translations: Vec<String>,
+}
+
+impl YoudaoDictResult {
+    fn is_usable(&self) -> bool {
+        !self.meanings.is_empty() || !self.phonetic_us.is_empty() || !self.examples.is_empty()
+    }
+}
+
+static YOUDAO_DICT_CACHE: Lazy<std::sync::Mutex<HashMap<String, (YoudaoDictResult, std::time::Instant)>>> =
+    Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
+
+/// 取 `{"l": {"i": "..."}}` 或 `{"l": {"i": ["...", "..."]}}` 里的文本。
+fn youdao_l_items(l: &serde_json::Value) -> Vec<String> {
+    match l.get("i") {
+        Some(serde_json::Value::String(s)) => vec![s.trim().to_string()],
+        Some(serde_json::Value::Array(arr)) => arr
+            .iter()
+            .filter_map(|x| x.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn wrap_phonetic(raw: &str) -> String {
+    let t = raw.trim();
+    if t.is_empty() || t.starts_with('/') || t.starts_with('[') {
+        return t.to_string();
+    }
+    format!("/{}/", t)
+}
+
+/// 从「n. 意外发现美好事物的运气」这类释义里切出词性。
+fn split_pos_prefix(meaning: &str) -> (String, String) {
+    let t = meaning.trim();
+    if let Some(idx) = t.find(". ") {
+        let head = &t[..idx + 1];
+        if head.len() <= 6 && head.chars().all(|c| c.is_ascii_alphabetic() || c == '.' || c == '&') {
+            return (head.to_string(), t[idx + 1..].trim().to_string());
+        }
+    }
+    (String::new(), t.to_string())
+}
+
+/// 源文本去重截断，同时保持译文数组下标对齐。
+fn trim_pairs(sources: &mut Vec<String>, targets: &mut Vec<String>, limit: usize) {
+    let mut kept_src: Vec<String> = Vec::new();
+    let mut kept_dst: Vec<String> = Vec::new();
+    for (idx, src) in sources.iter().enumerate() {
+        let s = src.trim();
+        if s.is_empty() || kept_src.iter().any(|x| x.eq_ignore_ascii_case(s)) {
+            continue;
+        }
+        kept_src.push(s.to_string());
+        kept_dst.push(targets.get(idx).cloned().unwrap_or_default().trim().to_string());
+        if kept_src.len() >= limit {
+            break;
+        }
+    }
+    *sources = kept_src;
+    *targets = kept_dst;
+}
+
+async fn youdao_dict_lookup(word: &str) -> Option<YoudaoDictResult> {
+    let key = word.trim().to_ascii_lowercase();
+    if key.is_empty() {
+        return None;
+    }
+    if let Ok(guard) = YOUDAO_DICT_CACHE.lock() {
+        if let Some((cached, at)) = guard.get(&key) {
+            if at.elapsed() < std::time::Duration::from_secs(6 * 3600) {
+                return Some(cached.clone());
+            }
+        }
+    }
+
+    let base = env_or_default("GUAXI_YOUDAO_DICT_BASE", "https://dict.youdao.com/jsonapi");
+    let dicts = r#"{"count":99,"dicts":[["ec","phrs","syno","rel_word","blng_sents_part","simple"]]}"#;
+    let url = format!("{}?q={}&dicts={}", base, encode(&key), encode(dicts));
+    let value = fetch_json(&ENRICH_CLIENT, &url).await?;
+
+    let mut out = YoudaoDictResult::default();
+
+    if let Some(first) = value["ec"]["word"].as_array().and_then(|a| a.first()) {
+        out.phonetic_uk = wrap_phonetic(first["ukphone"].as_str().unwrap_or_default());
+        out.phonetic_us = wrap_phonetic(first["usphone"].as_str().unwrap_or_default());
+        if let Some(trs) = first["trs"].as_array() {
+            for group in trs {
+                for tr in group["tr"].as_array().into_iter().flatten() {
+                    for item in youdao_l_items(&tr["l"]) {
+                        let (pos, _) = split_pos_prefix(&item);
+                        if out.part_of_speech.is_empty() && !pos.is_empty() {
+                            out.part_of_speech = pos;
+                        }
+                        out.meanings.push(item);
+                    }
+                }
+            }
+        }
+    }
+    if out.phonetic_us.is_empty() {
+        if let Some(first) = value["simple"]["word"].as_array().and_then(|a| a.first()) {
+            out.phonetic_uk = wrap_phonetic(first["ukphone"].as_str().unwrap_or_default());
+            out.phonetic_us = wrap_phonetic(first["usphone"].as_str().unwrap_or_default());
+        }
+    }
+    out.meanings = dedup_limit(out.meanings, 8);
+
+    // 常用短语：headword 是英文短语，trs[0].tr.l.i 是对应中文。
+    for entry in value["phrs"]["phrs"].as_array().into_iter().flatten() {
+        let phr = &entry["phr"];
+        let head = youdao_l_items(&phr["headword"]["l"]).join(" ");
+        if head.trim().is_empty() {
+            continue;
+        }
+        let tran = phr["trs"]
+            .as_array()
+            .and_then(|a| a.first())
+            .map(|tr| youdao_l_items(&tr["tr"]["l"]).join("；"))
+            .unwrap_or_default();
+        out.phrases.push(head.trim().to_string());
+        out.phrase_translations.push(tran.trim().to_string());
+    }
+
+    // 双语例句：sentence 是无标签原句，sentence-translation 是现成中文译文。
+    for pair in value["blng_sents_part"]["sentence-pair"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        let src = pair["sentence"].as_str().unwrap_or_default().trim().to_string();
+        if src.is_empty() {
+            continue;
+        }
+        let dst = pair["sentence-translation"]
+            .as_str()
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        out.examples.push(src);
+        out.example_translations.push(dst);
+    }
+
+    // 近义词：syno 只给整组中文释义，不给逐词译文，所以只收词形。
+    for entry in value["syno"]["synos"].as_array().into_iter().flatten() {
+        for w in entry["syno"]["ws"].as_array().into_iter().flatten() {
+            if let Some(text) = w["w"].as_str() {
+                let t = text.trim();
+                if !t.is_empty() {
+                    out.synonyms.push(t.to_string());
+                }
+            }
+        }
+    }
+    out.synonyms = dedup_limit(out.synonyms, 12);
+
+    // 同根词当作联想词，这里逐词都带中文，可以直接展示。
+    for entry in value["rel_word"]["rels"].as_array().into_iter().flatten() {
+        for w in entry["rel"]["words"].as_array().into_iter().flatten() {
+            let word_text = w["word"].as_str().unwrap_or_default().trim().to_string();
+            if word_text.is_empty() {
+                continue;
+            }
+            out.associates.push(word_text);
+            out.associates_translations
+                .push(w["tran"].as_str().unwrap_or_default().trim().to_string());
+        }
+    }
+
+    trim_pairs(&mut out.phrases, &mut out.phrase_translations, 12);
+    trim_pairs(&mut out.examples, &mut out.example_translations, 12);
+    trim_pairs(&mut out.associates, &mut out.associates_translations, 12);
+
+    if let Ok(mut guard) = YOUDAO_DICT_CACHE.lock() {
+        if guard.len() > 512 {
+            guard.clear();
+        }
+        guard.insert(key, (out.clone(), std::time::Instant::now()));
+    }
+    if out.is_usable() {
+        Some(out)
+    } else {
+        None
+    }
+}
+
 #[tauri::command]
 pub async fn language_learning_enrich_word_basic(
     word: String,
@@ -3936,15 +4154,40 @@ pub async fn language_learning_enrich_word_basic(
         return Err("单词为空".into());
     }
     let to = target_lang.clone().unwrap_or_else(|| "zh".into());
-    let cn_accel = cn_accel_enabled(&to);
-    let (connect_timeout_s, request_timeout_s) = if cn_accel { (4, 8) } else { (8, 12) };
 
-    let client = Client::builder()
-        .user_agent("Mozilla/5.0")
-        .connect_timeout(std::time::Duration::from_secs(connect_timeout_s))
-        .timeout(std::time::Duration::from_secs(request_timeout_s))
-        .build()
-        .map_err(|e| format!("初始化网络客户端失败: {}", e))?;
+    // 中文目标语言下先走有道：一个请求就拿到英/美音标 + 现成中文释义 + 词性，
+    // 不用再叠加「英文词典 + 翻译接口」两跳。
+    if cn_accel_enabled(&to) {
+        if let Some(dict) = youdao_dict_lookup(&clean).await {
+            let translation = dict.meanings.join("；");
+            let phonetic = if dict.phonetic_us.is_empty() {
+                dict.phonetic_uk.clone()
+            } else {
+                dict.phonetic_us.clone()
+            };
+            return Ok(WordEnrichment {
+                word: clean,
+                phonetic,
+                phonetic_uk: dict.phonetic_uk,
+                phonetic_us: dict.phonetic_us,
+                part_of_speech: dict.part_of_speech,
+                meanings: dict.meanings,
+                translation,
+                synonyms: dict.synonyms,
+                antonyms: Vec::new(),
+                associates: Vec::new(),
+                synonyms_translations: Vec::new(),
+                antonyms_translations: Vec::new(),
+                associates_translations: Vec::new(),
+                phrases: Vec::new(),
+                phrase_translations: Vec::new(),
+                examples: dict.examples,
+                example_translations: Vec::new(),
+            });
+        }
+    }
+
+    let client = &*ENRICH_CLIENT;
 
     let dict_base = env_or_default("GUAXI_DICT_API_BASE", "https://api.dictionaryapi.dev/api/v2/entries/en");
     let dict_url = format!("{}/{}", dict_base, encode(&clean));
@@ -4044,15 +4287,64 @@ pub async fn language_learning_enrich_word_details(
         return Err("单词为空".into());
     }
     let to = target_lang.clone().unwrap_or_else(|| "zh".into());
-    let cn_accel = cn_accel_enabled(&to);
-    let (connect_timeout_s, request_timeout_s) = if cn_accel { (4, 8) } else { (8, 12) };
 
-    let client = Client::builder()
-        .user_agent("Mozilla/5.0")
-        .connect_timeout(std::time::Duration::from_secs(connect_timeout_s))
-        .timeout(std::time::Duration::from_secs(request_timeout_s))
-        .build()
-        .map_err(|e| format!("初始化网络客户端失败: {}", e))?;
+    // 中文目标语言下走有道 + datamuse 反义词，两者并发。
+    // 有道的短语/例句/同根词本身就自带中文，唯一需要翻译的只有反义词，
+    // 而反义词用池子的批量接口一次请求就能翻完——原来这里是 5 组逐条串行翻译。
+    if cn_accel_enabled(&to) {
+        let datamuse_base = env_or_default("GUAXI_DATAMUSE_API_BASE", "https://api.datamuse.com/words");
+        let ant_url = format!("{}?rel_ant={}&max=12", datamuse_base, encode(&clean));
+        let (dict_opt, ant_json) = tokio::join!(
+            youdao_dict_lookup(&clean),
+            fetch_json(&ENRICH_CLIENT, &ant_url)
+        );
+        if let Some(dict) = dict_opt {
+            let mut antonyms: Vec<String> = Vec::new();
+            if let Some(arr) = ant_json.as_ref().and_then(|v| v.as_array()) {
+                for item in arr.iter().take(12) {
+                    if let Some(w) = item.get("word").and_then(|x| x.as_str()) {
+                        let t = w.trim();
+                        if !t.is_empty() {
+                            antonyms.push(t.to_string());
+                        }
+                    }
+                }
+            }
+            let antonyms = dedup_limit(antonyms, 12);
+            let antonyms_translations = if antonyms.is_empty() {
+                Vec::new()
+            } else {
+                translate_aligned(&antonyms, &to).await
+            };
+            let mut examples = dict.examples;
+            let mut example_translations = dict.example_translations;
+            if examples.is_empty() {
+                examples = fallback_examples(&clean, &dict.phrases);
+                example_translations = vec![String::new(); examples.len()];
+            }
+            return Ok(WordEnrichment {
+                word: clean,
+                phonetic: String::new(),
+                phonetic_uk: String::new(),
+                phonetic_us: String::new(),
+                part_of_speech: String::new(),
+                meanings: Vec::new(),
+                translation: String::new(),
+                synonyms: dict.synonyms,
+                antonyms,
+                associates: dict.associates,
+                synonyms_translations: Vec::new(),
+                antonyms_translations,
+                associates_translations: dict.associates_translations,
+                phrases: dict.phrases,
+                phrase_translations: dict.phrase_translations,
+                examples,
+                example_translations,
+            });
+        }
+    }
+
+    let client = &*ENRICH_CLIENT;
 
     let dict_base = env_or_default("GUAXI_DICT_API_BASE", "https://api.dictionaryapi.dev/api/v2/entries/en");
     let datamuse_base = env_or_default("GUAXI_DATAMUSE_API_BASE", "https://api.datamuse.com/words");
