@@ -518,22 +518,66 @@ export const addMediaViewerButtons = (container, options = {}) => {
         const btnClose = mkTool(ICONS.close, '关闭 (Esc)');
         const btnPlus = mkTool(ICONS.plus, '放大（滚轮/按钮）');
         const btnMinus = mkTool(ICONS.minus, '缩小（滚轮/按钮）');
+        const btnReset = mkTool('', '还原（双击画布也可以）');
+        btnReset.textContent = '1:1';
+        btnReset.style.fontSize = '12px';
+        btnReset.style.lineHeight = '1';
         toolbar.appendChild(btnMinus);
         toolbar.appendChild(btnPlus);
+        toolbar.appendChild(btnReset);
         toolbar.appendChild(btnClose);
 
+        // 设计说明（对应"放大后无法拖动查看细节"）：
+        // 原来只给 contentWrap 加 transform: scale()。transform 不参与布局，
+        // stage 的 overflow:auto 根本不会因为放大而产生可滚动区域，于是放大后
+        // 超出可视区的部分既滚不到、也拖不动。这里改成自己维护 translate + scale：
+        // 平移量放在 scale 前面（screen 像素语义），滚轮按光标位置定点缩放，
+        // 鼠标按住拖拽即平移，双击还原。
         const stage = document.createElement('div');
-        stage.style.cssText = 'width:95vw;height:92vh;max-width:95vw;max-height:92vh;display:flex;align-items:center;justify-content:center;overflow:auto;padding:40px 24px 24px;box-sizing:border-box;background:rgba(255,255,255,0.98);';
+        stage.style.cssText = 'width:95vw;height:92vh;max-width:95vw;max-height:92vh;display:flex;align-items:center;justify-content:center;overflow:hidden;padding:40px 24px 24px;box-sizing:border-box;background:rgba(255,255,255,0.98);cursor:grab;touch-action:none;';
 
         const contentWrap = document.createElement('div');
-        contentWrap.style.cssText = 'transform-origin:center center;';
+        contentWrap.style.cssText = 'transform-origin:center center;will-change:transform;';
         stage.appendChild(contentWrap);
 
+        const ZOOM_MIN = 0.1;
+        const ZOOM_MAX = 8;
         let zoom = 1;
-        const applyZoom = () => {
-          const z = Math.max(0.1, Math.min(8, zoom));
-          zoom = z;
-          contentWrap.style.transform = `scale(${z})`;
+        let panX = 0;
+        let panY = 0;
+
+        const applyTransform = () => {
+          contentWrap.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+        };
+
+        // 定点缩放：保持 (anchorX, anchorY) 处的内容像素在屏幕上不动。
+        // 推导：屏幕位置 = 未变换中心 C + pan + zoom * 局部偏移，
+        // 其中 C = 当前变换后包围盒中心 - pan（缩放不移动中心）。
+        const zoomAt = (nextZoom, anchorX, anchorY) => {
+          const target = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, nextZoom));
+          if (target === zoom) return;
+          const rect = contentWrap.getBoundingClientRect();
+          const centerX = rect.left + rect.width / 2 - panX;
+          const centerY = rect.top + rect.height / 2 - panY;
+          const dx = anchorX - centerX;
+          const dy = anchorY - centerY;
+          const ratio = target / zoom;
+          panX = dx - ratio * (dx - panX);
+          panY = dy - ratio * (dy - panY);
+          zoom = target;
+          applyTransform();
+        };
+
+        const zoomAtStageCenter = (nextZoom) => {
+          const rect = stage.getBoundingClientRect();
+          zoomAt(nextZoom, rect.left + rect.width / 2, rect.top + rect.height / 2);
+        };
+
+        const resetView = () => {
+          zoom = 1;
+          panX = 0;
+          panY = 0;
+          applyTransform();
         };
 
         if (payload?.kind === 'img') {
@@ -554,8 +598,35 @@ export const addMediaViewerButtons = (container, options = {}) => {
           }
         }
 
+        // 拖拽平移。监听挂在 window 上，指针拖出画布甚至拖出窗口也不会中断。
+        let dragging = false;
+        let dragStartX = 0;
+        let dragStartY = 0;
+        let dragOriginX = 0;
+        let dragOriginY = 0;
+        let dragMoved = false;
+
+        const onDragMove = (e) => {
+          if (!dragging) return;
+          const dx = e.clientX - dragStartX;
+          const dy = e.clientY - dragStartY;
+          if (!dragMoved && Math.abs(dx) + Math.abs(dy) > 2) dragMoved = true;
+          panX = dragOriginX + dx;
+          panY = dragOriginY + dy;
+          applyTransform();
+        };
+
+        const endDrag = () => {
+          if (!dragging) return;
+          dragging = false;
+          stage.style.cursor = 'grab';
+          window.removeEventListener('mousemove', onDragMove, true);
+          window.removeEventListener('mouseup', endDrag, true);
+        };
+
         const close = () => {
           try {
+            endDrag();
             document.removeEventListener('keydown', onKeyDown, true);
             overlay.remove();
           } catch (e) {
@@ -570,17 +641,33 @@ export const addMediaViewerButtons = (container, options = {}) => {
         };
 
         btnClose.addEventListener('click', close);
-        btnPlus.addEventListener('click', () => {
-          zoom *= 1.1;
-          applyZoom();
-        });
-        btnMinus.addEventListener('click', () => {
-          zoom /= 1.1;
-          applyZoom();
-        });
+        btnPlus.addEventListener('click', () => zoomAtStageCenter(zoom * 1.1));
+        btnMinus.addEventListener('click', () => zoomAtStageCenter(zoom / 1.1));
+        btnReset.addEventListener('click', resetView);
 
         overlay.addEventListener('click', (e) => {
-          if (e.target === overlay) close();
+          // 拖拽结束时鼠标可能正好落在遮罩上，这一下不该被当成"点空白关闭"。
+          if (e.target === overlay && !dragMoved) close();
+          dragMoved = false;
+        });
+
+        stage.addEventListener('mousedown', (e) => {
+          if (e.button !== 0) return;
+          e.preventDefault();
+          dragging = true;
+          dragMoved = false;
+          dragStartX = e.clientX;
+          dragStartY = e.clientY;
+          dragOriginX = panX;
+          dragOriginY = panY;
+          stage.style.cursor = 'grabbing';
+          window.addEventListener('mousemove', onDragMove, true);
+          window.addEventListener('mouseup', endDrag, true);
+        });
+
+        stage.addEventListener('dblclick', (e) => {
+          e.preventDefault();
+          resetView();
         });
 
         stage.addEventListener(
@@ -588,35 +675,69 @@ export const addMediaViewerButtons = (container, options = {}) => {
           (e) => {
             e.preventDefault();
             const delta = e.deltaY > 0 ? 0.9 : 1.1;
-            zoom *= delta;
-            applyZoom();
+            zoomAt(zoom * delta, e.clientX, e.clientY);
           },
           { passive: false }
         );
 
         document.addEventListener('keydown', onKeyDown, true);
 
+        // 左上角操作提示：之前 mkLegendItem 定义了却没被用过，图例框一直是空的。
+        legend.appendChild(mkLegendItem(ICONS.plus, '滚轮缩放（按光标定点）'));
+        legend.appendChild(mkLegendItem(ICONS.view, '按住拖动查看细节'));
+        legend.appendChild(mkLegendItem(ICONS.close, '双击还原 · Esc 关闭'));
+
         panel.appendChild(toolbar);
         panel.appendChild(legend);
         panel.appendChild(stage);
         overlay.appendChild(panel);
         document.body.appendChild(overlay);
-        applyZoom();
+        applyTransform();
       } catch (e) {
         logger.error('[MediaViewer] 打开预览失败:', e);
       }
     };
 
+    // 设计说明（对应"另存为弹了对话框但文件没保存"）：
+    // fs 插件的写权限受 capabilities 里的 scope 限制 —— 当前只放开了 $TEMP 与 $APPDATA，
+    // 而"另存为"选的是用户任意目录（桌面、D 盘…），writeFile 会被 ACL 直接拒掉。
+    // 这里改走后端命令 write_file_bytes_base64：Rust 侧不受前端 scope 约束，
+    // 还会自动补齐父目录。fs 插件只作为非 Tauri 环境（纯浏览器调试）的兜底。
+    const writeBytesToPath = async (path, bytes) => {
+      const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        // 大图分段转 base64，避免 String.fromCharCode 一次性展开几十万参数爆栈。
+        let binary = '';
+        const CHUNK = 0x8000;
+        for (let i = 0; i < u8.length; i += CHUNK) {
+          binary += String.fromCharCode.apply(null, u8.subarray(i, i + CHUNK));
+        }
+        await invoke('write_file_bytes_base64', { path, base64: btoa(binary) });
+        logger.info('[MediaViewer] 已通过后端写入文件:', { path, bytes: u8.length });
+        return true;
+      } catch (e) {
+        logger.warn('[MediaViewer] 后端写入失败，尝试 fs 插件兜底:', {
+          path,
+          error: String(e?.message || e || ''),
+        });
+      }
+      const { writeFile } = await import('@tauri-apps/plugin-fs');
+      await writeFile(path, u8);
+      logger.info('[MediaViewer] 已通过 fs 插件写入文件:', { path, bytes: u8.length });
+      return true;
+    };
+
     const saveBlob = async (blob, defaultName, filters) => {
       try {
         const { save } = await import('@tauri-apps/plugin-dialog');
-        const { writeFile } = await import('@tauri-apps/plugin-fs');
         const path = await save({ defaultPath: defaultName, filters });
         if (!path) return;
         const buf = new Uint8Array(await blob.arrayBuffer());
-        await writeFile(path, buf);
+        await writeBytesToPath(path, buf);
       } catch (e) {
         logger.error('[MediaViewer] 保存失败:', e);
+        throw e;
       }
     };
 
@@ -681,6 +802,69 @@ export const addMediaViewerButtons = (container, options = {}) => {
       }
     };
 
+    // 把预览里各种形态的图片 URL 还原成磁盘绝对路径。
+    // release 下 CSP 的 connect-src 不含 asset 协议，fetch 这类地址会被拦，
+    // 只能落回"解析出真实路径 → 后端读字节"。
+    const resolveLocalPathFromSrc = (src) => {
+      const raw = String(src || '');
+      if (!raw) return '';
+      const patterns = [
+        /^https?:\/\/localhost:8888\/markdown\/api\/images\/(.+)$/i,
+        /^https?:\/\/asset\.localhost\/(.+)$/i,
+        /^asset:\/\/localhost\/(.+)$/i,
+        /^https?:\/\/tauri\.localhost\/asset\/(.+)$/i,
+      ];
+      let encoded = '';
+      for (const re of patterns) {
+        const m = raw.match(re);
+        if (m && m[1]) {
+          encoded = m[1];
+          break;
+        }
+      }
+      if (!encoded && /^file:\/\//i.test(raw)) {
+        encoded = raw.replace(/^file:\/\/\/?/i, '');
+      }
+      if (!encoded) return '';
+
+      let filePath = encoded.split('#')[0].split('?')[0];
+      try {
+        filePath = decodeURIComponent(filePath);
+      } catch {
+        /* 已经是明文路径就直接用 */
+      }
+      // Windows 盘符路径统一回反斜杠，交给后端 normalize。
+      if (/^[a-zA-Z]:\//.test(filePath)) filePath = filePath.replace(/\//g, '\\');
+      return filePath;
+    };
+
+    // 读文件同样优先走后端：fs 插件的 read scope 也只放开了 $TEMP / $APPDATA。
+    const readBytesFromPath = async (filePath) => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const base64 = await invoke('read_file_bytes_base64', { path: filePath });
+        const bin = atob(String(base64 || ''));
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        return bytes;
+      } catch (e) {
+        logger.warn('[MediaViewer] 后端读取失败，尝试 fs 插件兜底:', {
+          filePath,
+          error: String(e?.message || e || ''),
+        });
+      }
+      try {
+        const { readFile } = await import('@tauri-apps/plugin-fs');
+        return await readFile(filePath);
+      } catch (e) {
+        logger.warn('[MediaViewer] fs 插件读取也失败:', {
+          filePath,
+          error: String(e?.message || e || ''),
+        });
+        return null;
+      }
+    };
+
     const saveImage = async (img) => {
       try {
         const src = String(img?.currentSrc || img?.src || '');
@@ -725,24 +909,12 @@ export const addMediaViewerButtons = (container, options = {}) => {
         }
 
         if (!blob) {
-          const m = src.match(/^http:\/\/localhost:8888\/markdown\/api\/images\/(.+)$/i);
-          if (m && m[1]) {
-            try {
-              const { readFile } = await import('@tauri-apps/plugin-fs');
-              let filePath = '';
-              try {
-                filePath = decodeURIComponent(m[1]);
-              } catch {
-                filePath = m[1];
-              }
-              if (/^[a-zA-Z]:\//.test(filePath)) {
-                filePath = filePath.replace(/\//g, '\\');
-              }
-              const bytes = await readFile(filePath);
+          const filePath = resolveLocalPathFromSrc(src);
+          if (filePath) {
+            const bytes = await readBytesFromPath(filePath);
+            if (bytes) {
               blob = new Blob([bytes], { type: `image/${ext === 'jpg' ? 'jpeg' : ext}` });
-              logger.info('[MediaViewer] 保存图片: 使用 readFile 读取本地路径:', { filePath });
-            } catch (e) {
-              logger.warn('[MediaViewer] readFile 兜底失败:', e);
+              logger.info('[MediaViewer] 保存图片: 从本地路径读取:', { filePath, bytes: bytes.length });
             }
           }
         }
@@ -781,23 +953,24 @@ export const addMediaViewerButtons = (container, options = {}) => {
         const lower = String(path).toLowerCase();
         const wantSvg = lower.endsWith('.svg');
 
-        const { writeFile } = await import('@tauri-apps/plugin-fs');
-
         if (wantSvg) {
           const buf = new Uint8Array(await svgBlob.arrayBuffer());
-          await writeFile(path, buf);
+          await writeBytesToPath(path, buf);
           return;
         }
 
         try {
           const pngBlob = await svgToPngBlob(svg);
           const buf = new Uint8Array(await pngBlob.arrayBuffer());
-          await writeFile(path, buf);
+          await writeBytesToPath(path, buf);
         } catch (e) {
+          // 说明：Mermaid 的 foreignObject 标签会让 canvas 被污染，toBlob 可能直接抛 SecurityError。
+          // 这时退回存 SVG，但要把实际落盘路径写清楚，否则用户按 .png 去找会以为"没保存"。
           logger.warn('[MediaViewer] Mermaid 转 PNG 失败，回退保存 SVG:', e);
           const fallbackPath = String(path).replace(/\.png$/i, '.svg');
           const buf = new Uint8Array(await svgBlob.arrayBuffer());
-          await writeFile(fallbackPath, buf);
+          await writeBytesToPath(fallbackPath, buf);
+          logger.info('[MediaViewer] Mermaid 已回退保存为 SVG:', { fallbackPath });
         }
       } catch (e) {
         logger.error('[MediaViewer] 保存 Mermaid 失败:', e);
