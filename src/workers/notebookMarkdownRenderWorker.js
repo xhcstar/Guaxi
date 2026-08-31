@@ -1,6 +1,7 @@
 import MarkdownIt from 'markdown-it'
 import markdownItMathjax from 'markdown-it-mathjax3'
 import hljs from 'highlight.js'
+import { allowFileProtocolLinks } from '../utils/markdownFileLink'
 
 const WORKER_LOG_PREFIX = '[NotebookMarkdownWorker]'
 
@@ -274,6 +275,9 @@ const buildWorkerMarkdownRenderer = (sourceContent, options = {}) => {
       }
       : undefined,
   })
+
+  // 放行 [label](file:///...) 这类本地文件链接（markdown-it 默认把 file: 拦掉）。
+  allowFileProtocolLinks(md)
 
   const defaultParagraphClose = md.renderer.rules.paragraph_close || (() => '</p>')
   const defaultHeadingClose = md.renderer.rules.heading_close || ((tokens, idx) => `</${tokens[idx].tag}>`)

@@ -6,6 +6,7 @@ import "highlight.js/styles/atom-one-light.css";
 // 暗色 One Dark 代码配色 + 纯图片段落布局（作用域限定，详见文件内说明）。
 import "./guaxiMarkdownExtras.css";
 import { initMathJax, renderMath } from "./mathjaxConfig";
+import { allowFileProtocolLinks } from "../../utils/markdownFileLink";
 import { createLogger } from '../../utils/logger'
 
 const logger = createLogger('GuaxiMarker')
@@ -741,6 +742,60 @@ export const addMediaViewerButtons = (container, options = {}) => {
       }
     };
 
+    const SVG_NS = 'http://www.w3.org/2000/svg';
+
+    // ───── 导出文件名 ─────
+    // 原来 Mermaid 一律叫 mermaid.png、图片一律叫 image.png，同一篇文档里导出几张就互相覆盖。
+    // 这里按"最近的上文标题 + 序号"起名，实在取不到标题才退回时间戳。
+    const slugifyName = (raw) => {
+      const s = String(raw || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/[\\/:*?"<>|]/g, '')     // 文件名非法字符
+        .replace(/[\x00-\x1f\x7f]/g, '')
+        .replace(/^\.+/, '')
+        .replace(/\s/g, '-');
+      return s.slice(0, 48);
+    };
+
+    const stampNow = () => {
+      const d = new Date();
+      const p = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+    };
+
+    // 往前找最近的标题，作为这张图的语义名字。
+    const findNearestHeadingText = (el) => {
+      try {
+        let node = el;
+        while (node && node !== container) {
+          let sib = node.previousElementSibling;
+          while (sib) {
+            if (/^H[1-6]$/.test(sib.tagName || '')) {
+              const t = String(sib.textContent || '').trim();
+              if (t) return t;
+            }
+            const nested = sib.querySelectorAll?.('h1,h2,h3,h4,h5,h6');
+            if (nested && nested.length) {
+              const t = String(nested[nested.length - 1].textContent || '').trim();
+              if (t) return t;
+            }
+            sib = sib.previousElementSibling;
+          }
+          node = node.parentElement;
+        }
+      } catch {
+      }
+      return '';
+    };
+
+    const buildExportBaseName = (el, { kind = 'diagram', index = 0 } = {}) => {
+      const heading = slugifyName(findNearestHeadingText(el));
+      const seq = index > 0 ? `-${index}` : '';
+      if (heading) return `${heading}-${kind}${seq}`;
+      return `${kind}${seq}-${stampNow()}`;
+    };
+
     const guessExt = (src) => {
       try {
         const u = String(src || '');
@@ -755,33 +810,122 @@ export const addMediaViewerButtons = (container, options = {}) => {
       }
     };
 
-    const svgToPngBlob = async (svg) => {
+    // Mermaid 的节点标签默认是 <foreignObject> 里的 HTML。把 SVG 当图片喂给 canvas 时，
+    // 浏览器按严格 XML 解析、且不渲染 foreignObject —— 轻则标签全丢，重则直接 onerror，
+    // 于是 PNG 导出一路失败、被静默降级成 SVG（就是"只能导出 svg"的原因）。
+    // 这里在光栅化前把 foreignObject 拍平成等价的 <text>/<tspan>，让文字能画进 PNG。
+    const flattenForeignObjects = (root) => {
+      let converted = 0;
+      try {
+        const list = Array.from(root.querySelectorAll('foreignObject'));
+        list.forEach((fo) => {
+          const num = (name) => Number.parseFloat(fo.getAttribute(name) || '0') || 0;
+          const x = num('x');
+          const y = num('y');
+          const w = num('width');
+          const h = num('height');
+
+          // 逐块取文本，尽量保留原来的换行结构。
+          let lines = [];
+          for (const sel of ['p', '.nodeLabel', 'span', 'div']) {
+            const nodes = Array.from(fo.querySelectorAll(sel));
+            if (!nodes.length) continue;
+            lines = nodes
+              .map((n) => String(n.textContent || '').replace(/\s+/g, ' ').trim())
+              .filter(Boolean);
+            if (lines.length) break;
+          }
+          if (!lines.length) {
+            const t = String(fo.textContent || '').replace(/\s+/g, ' ').trim();
+            if (t) lines = [t];
+          }
+          // 嵌套结构会让同一段文字重复取到，去掉相邻重复项。
+          lines = lines.filter((v, i) => i === 0 || v !== lines[i - 1]);
+
+          const text = document.createElementNS(SVG_NS, 'text');
+          const cx = w > 0 ? x + w / 2 : x;
+          const cy = h > 0 ? y + h / 2 : y;
+          text.setAttribute('x', String(cx));
+          text.setAttribute('y', String(cy));
+          text.setAttribute('text-anchor', 'middle');
+          text.setAttribute('dominant-baseline', 'central');
+          text.setAttribute('font-size', '14');
+          text.setAttribute('font-family', 'system-ui, "Microsoft YaHei", sans-serif');
+          text.setAttribute('fill', '#1f2328');
+
+          const lineHeight = 16;
+          const startDy = -((Math.max(1, lines.length) - 1) * lineHeight) / 2;
+          (lines.length ? lines : ['']).forEach((line, i) => {
+            const tspan = document.createElementNS(SVG_NS, 'tspan');
+            tspan.setAttribute('x', String(cx));
+            tspan.setAttribute('dy', i === 0 ? String(startDy) : String(lineHeight));
+            tspan.textContent = line;
+            text.appendChild(tspan);
+          });
+
+          fo.parentNode?.replaceChild(text, fo);
+          converted += 1;
+        });
+      } catch (e) {
+        logger.warn('[MediaViewer] foreignObject 拍平失败（继续尝试光栅化）:', e);
+      }
+      return converted;
+    };
+
+    // 序列化成能被 <img> 当作严格 XML 解析的 SVG 文本。
+    const serializeSvgForRaster = (svgEl) => {
+      const xml = new XMLSerializer().serializeToString(svgEl);
+      let text = /xmlns=/.test(xml)
+        ? xml
+        : xml.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+      // 裸 & 会让 XML 解析直接失败（foreignObject 里的 &nbsp; 之类最常见）。
+      text = text.replace(/&(?!#\d+;|#x[0-9a-fA-F]+;|amp;|lt;|gt;|quot;|apos;)/g, '&amp;');
+      return text;
+    };
+
+    const loadImage = (src) => new Promise((resolve, reject) => {
+      const img = new Image();
+      img.decoding = 'async';
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('svg image load failed'));
+      img.src = src;
+    });
+
+    const svgToPngBlob = async (svg, { scale = 2 } = {}) => {
       const normalized = buildExportSvg(svg, { background: true });
-      const exportSvg = normalized?.svg || svg;
+      const exportSvg = normalized?.svg || svg.cloneNode(true);
       const exportW = normalized?.width || 800;
       const exportH = normalized?.height || 600;
 
-      const xml = new XMLSerializer().serializeToString(exportSvg);
-      const hasXmlns = /xmlns=/.test(xml);
-      const svgText = hasXmlns ? xml : xml.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
-      const svgBlob = new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' });
-      const url = URL.createObjectURL(svgBlob);
+      const flattened = flattenForeignObjects(exportSvg);
+      const svgText = serializeSvgForRaster(exportSvg);
+
+      // data: URL 比 blob: 在"SVG 当图片"这条路上更稳（不受 blob 生命周期与部分 CSP 影响）。
+      const dataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgText)}`;
+      let img = null;
+      let revoke = null;
+      try {
+        img = await loadImage(dataUrl);
+      } catch (e) {
+        logger.warn('[MediaViewer] data: URL 光栅化失败，回退 blob: URL:', e);
+        const blobUrl = URL.createObjectURL(new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' }));
+        revoke = () => {
+          try {
+            URL.revokeObjectURL(blobUrl);
+          } catch {
+          }
+        };
+        img = await loadImage(blobUrl);
+      }
 
       try {
-        const img = new Image();
-        img.decoding = 'async';
-        await new Promise((resolve, reject) => {
-          img.onload = resolve;
-          img.onerror = reject;
-          img.src = url;
-        });
-
+        const ratio = Math.max(1, Math.min(4, Number(scale) || 1));
         const w = Math.max(1, Math.floor(exportW));
         const h = Math.max(1, Math.floor(exportH));
 
         const canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
+        canvas.width = Math.max(1, Math.round(w * ratio));
+        canvas.height = Math.max(1, Math.round(h * ratio));
         const ctx = canvas.getContext('2d');
         if (!ctx) throw new Error('canvas ctx is null');
         ctx.fillStyle = '#ffffff';
@@ -790,15 +934,20 @@ export const addMediaViewerButtons = (container, options = {}) => {
 
         const blob = await new Promise((resolve, reject) => {
           try {
-            canvas.toBlob((b) => resolve(b), 'image/png');
+            canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob returns null'))), 'image/png');
           } catch (e) {
             reject(e);
           }
         });
-        if (!blob) throw new Error('toBlob returns null');
+        logger.info('[MediaViewer] SVG 已光栅化为 PNG:', {
+          width: canvas.width,
+          height: canvas.height,
+          flattenedForeignObjects: flattened,
+          bytes: blob.size,
+        });
         return blob;
       } finally {
-        URL.revokeObjectURL(url);
+        revoke?.();
       }
     };
 
@@ -865,7 +1014,7 @@ export const addMediaViewerButtons = (container, options = {}) => {
       }
     };
 
-    const saveImage = async (img) => {
+    const saveImage = async (img, { index = 0 } = {}) => {
       try {
         const src = String(img?.currentSrc || img?.src || '');
         if (!src) return;
@@ -921,13 +1070,21 @@ export const addMediaViewerButtons = (container, options = {}) => {
 
         if (!blob) throw new Error('image blob is null');
 
-        await saveBlob(blob, `image.${ext}`, [{ name: 'Image', extensions: [ext] }]);
+        // 命名优先用原文件名（最贴近用户预期），拿不到再按"标题 + 序号"生成。
+        const localPath = resolveLocalPathFromSrc(src);
+        const originalName = String(localPath || src.split('#')[0].split('?')[0] || '')
+          .split(/[\\/]/)
+          .pop() || '';
+        const originalBase = slugifyName(originalName.replace(/\.[a-zA-Z0-9]+$/, ''));
+        const baseName = originalBase || buildExportBaseName(img, { kind: 'image', index });
+
+        await saveBlob(blob, `${baseName}.${ext}`, [{ name: 'Image', extensions: [ext] }]);
       } catch (e) {
         logger.error('[MediaViewer] 保存图片失败:', e);
       }
     };
 
-    const saveMermaid = async (mermaidEl) => {
+    const saveMermaid = async (mermaidEl, { index = 0 } = {}) => {
       try {
         const svg = resolveMermaidSvg(mermaidEl);
         if (!svg) {
@@ -936,16 +1093,19 @@ export const addMediaViewerButtons = (container, options = {}) => {
         }
 
         const normalized = buildExportSvg(svg, { background: true });
-        const exportSvg = normalized?.svg || svg;
-        const svgText = new XMLSerializer().serializeToString(exportSvg);
+        const exportSvg = normalized?.svg || svg.cloneNode(true);
+        const svgText = serializeSvgForRaster(exportSvg);
         const svgBlob = new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' });
 
+        const baseName = buildExportBaseName(mermaidEl, { kind: 'diagram', index });
+
         const { save } = await import('@tauri-apps/plugin-dialog');
+        // 两种格式都放在 filters 里：用户在对话框切换类型即可，扩展名跟着变。
         const path = await save({
-          defaultPath: 'mermaid.png',
+          defaultPath: `${baseName}.png`,
           filters: [
-            { name: 'PNG', extensions: ['png'] },
-            { name: 'SVG', extensions: ['svg'] }
+            { name: 'PNG 图片', extensions: ['png'] },
+            { name: 'SVG 矢量图', extensions: ['svg'] }
           ]
         });
         if (!path) return;
@@ -956,16 +1116,18 @@ export const addMediaViewerButtons = (container, options = {}) => {
         if (wantSvg) {
           const buf = new Uint8Array(await svgBlob.arrayBuffer());
           await writeBytesToPath(path, buf);
+          logger.info('[MediaViewer] Mermaid 已导出 SVG:', { path, bytes: buf.length });
           return;
         }
 
         try {
-          const pngBlob = await svgToPngBlob(svg);
+          const pngBlob = await svgToPngBlob(svg, { scale: 2 });
           const buf = new Uint8Array(await pngBlob.arrayBuffer());
           await writeBytesToPath(path, buf);
+          logger.info('[MediaViewer] Mermaid 已导出 PNG:', { path, bytes: buf.length });
         } catch (e) {
-          // 说明：Mermaid 的 foreignObject 标签会让 canvas 被污染，toBlob 可能直接抛 SecurityError。
-          // 这时退回存 SVG，但要把实际落盘路径写清楚，否则用户按 .png 去找会以为"没保存"。
+          // 光栅化仍然失败时退回 SVG，但必须把真实落盘路径写清楚，
+          // 否则用户按 .png 去找会以为"根本没保存"。
           logger.warn('[MediaViewer] Mermaid 转 PNG 失败，回退保存 SVG:', e);
           const fallbackPath = String(path).replace(/\.png$/i, '.svg');
           const buf = new Uint8Array(await svgBlob.arrayBuffer());
@@ -1010,7 +1172,7 @@ export const addMediaViewerButtons = (container, options = {}) => {
       }
     };
 
-    container.querySelectorAll('img').forEach((img) => {
+    container.querySelectorAll('img').forEach((img, imgIndex) => {
       if (shouldSkipForNotes(img)) return;
       const wrap = ensureImgWrap(img);
       if (!wrap) return;
@@ -1018,7 +1180,7 @@ export const addMediaViewerButtons = (container, options = {}) => {
         wrap,
         {
           onView: () => openOverlay({ kind: 'img', src: img.currentSrc || img.src, alt: img.alt }),
-          onSave: () => saveImage(img),
+          onSave: () => saveImage(img, { index: imgIndex + 1 }),
         },
         {
           viewTitle: '预览图片（打开查看器）',
@@ -1027,7 +1189,7 @@ export const addMediaViewerButtons = (container, options = {}) => {
       );
     });
 
-    container.querySelectorAll('.mermaid').forEach((mermaidEl) => {
+    container.querySelectorAll('.mermaid').forEach((mermaidEl, mermaidIndex) => {
       if (!(mermaidEl instanceof HTMLElement)) return;
       if (shouldSkipForNotes(mermaidEl)) return;
 
@@ -1045,7 +1207,7 @@ export const addMediaViewerButtons = (container, options = {}) => {
             }
             openOverlay({ kind: 'svg', svg });
           },
-          onSave: () => saveMermaid(mermaidEl),
+          onSave: () => saveMermaid(mermaidEl, { index: mermaidIndex + 1 }),
         },
         {
           viewTitle: '预览图表（打开查看器）',
@@ -1403,6 +1565,9 @@ export const renderMarkdown = async (content, options) => {
         }
         : undefined,
     });
+
+    // 放行 [label](file:///...) 这类本地文件链接（markdown-it 默认把 file: 拦掉）。
+    allowFileProtocolLinks(md);
 
     // 段落渲染规则
     const defaultParagraphOpen =
