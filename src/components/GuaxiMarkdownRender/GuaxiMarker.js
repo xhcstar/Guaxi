@@ -413,8 +413,31 @@ export const addMediaViewerButtons = (container, options = {}) => {
 
     const resolveSvgSize = (svg) => {
       try {
-        const wAttr = Number.parseFloat(String(svg?.getAttribute?.('width') || ''));
-        const hAttr = Number.parseFloat(String(svg?.getAttribute?.('height') || ''));
+        // 设计说明（对应"导出的 PNG 边缘被裁掉"）：
+        // 必须以 viewBox 为准。Mermaid 给根 svg 写的是 width="100%" + style="max-width:...px"，
+        // parseFloat("100%") 会得到 100 这种毫无意义的值；而 getBoundingClientRect 拿到的是
+        // 被预览容器宽度约束后的"显示尺寸"，比真实内容小，按它开画布就会把右侧/左侧内容切掉。
+        // viewBox 才是图形的真实内容包围盒。
+        const vbBase = svg?.viewBox?.baseVal;
+        if (vbBase && vbBase.width > 0 && vbBase.height > 0) {
+          return { width: vbBase.width, height: vbBase.height };
+        }
+
+        const vbAttr = String(svg?.getAttribute?.('viewBox') || '').trim();
+        if (vbAttr) {
+          const nums = vbAttr.split(/[\s,]+/).map((v) => Number.parseFloat(v)).filter((n) => Number.isFinite(n));
+          if (nums.length === 4 && nums[2] > 0 && nums[3] > 0) return { width: nums[2], height: nums[3] };
+        }
+
+        // 没有 viewBox 时才看 width/height，且只认纯数字/px（排掉 100%、auto、em 等）。
+        const parsePx = (raw) => {
+          const s = String(raw || '').trim();
+          if (!s || /%$/.test(s)) return NaN;
+          if (!/^[0-9.]+(px)?$/i.test(s)) return NaN;
+          return Number.parseFloat(s);
+        };
+        const wAttr = parsePx(svg?.getAttribute?.('width'));
+        const hAttr = parsePx(svg?.getAttribute?.('height'));
         if (Number.isFinite(wAttr) && wAttr > 0 && Number.isFinite(hAttr) && hAttr > 0) {
           return { width: wAttr, height: hAttr };
         }
@@ -425,42 +448,57 @@ export const addMediaViewerButtons = (container, options = {}) => {
         } catch {
         }
 
-        const vbBase = svg?.viewBox?.baseVal;
-        if (vbBase && vbBase.width > 0 && vbBase.height > 0) return { width: vbBase.width, height: vbBase.height };
-
-        const vbAttr = String(svg?.getAttribute?.('viewBox') || '').trim();
-        if (vbAttr) {
-          const nums = vbAttr.split(/[\s,]+/).map((v) => Number.parseFloat(v)).filter((n) => Number.isFinite(n));
-          if (nums.length === 4 && nums[2] > 0 && nums[3] > 0) return { width: nums[2], height: nums[3] };
-        }
-
         return { width: 800, height: 600 };
       } catch {
         return { width: 800, height: 600 };
       }
     };
 
+    // 读出 viewBox 的四个值（含可能为负的 min-x / min-y）。
+    const resolveViewBox = (svg, fallbackW, fallbackH) => {
+      const vbBase = svg?.viewBox?.baseVal;
+      if (vbBase && vbBase.width > 0 && vbBase.height > 0) {
+        return { x: vbBase.x || 0, y: vbBase.y || 0, width: vbBase.width, height: vbBase.height };
+      }
+      const vbAttr = String(svg?.getAttribute?.('viewBox') || '').trim();
+      if (vbAttr) {
+        const nums = vbAttr.split(/[\s,]+/).map((v) => Number.parseFloat(v)).filter((n) => Number.isFinite(n));
+        if (nums.length === 4 && nums[2] > 0 && nums[3] > 0) {
+          return { x: nums[0], y: nums[1], width: nums[2], height: nums[3] };
+        }
+      }
+      return { x: 0, y: 0, width: fallbackW, height: fallbackH };
+    };
+
     const buildExportSvg = (svg, { background = true } = {}) => {
       try {
         if (!(svg instanceof SVGElement)) return null;
         const { width, height } = resolveSvgSize(svg);
-        const w = Math.max(1, Math.floor(width));
-        const h = Math.max(1, Math.floor(height));
+        const w = Math.max(1, Math.ceil(width));
+        const h = Math.max(1, Math.ceil(height));
+        const vb = resolveViewBox(svg, w, h);
 
         const cloned = svg.cloneNode(true);
         if (!(cloned instanceof SVGElement)) return null;
 
         if (!cloned.getAttribute('xmlns')) cloned.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
         if (!cloned.getAttribute('viewBox')) cloned.setAttribute('viewBox', `0 0 ${w} ${h}`);
+        // 导出成固定像素尺寸：把 mermaid 写的 width="100%" / max-width 一并覆盖掉，
+        // 否则当图片渲染时会按 100% 去适配画布，出现缩放错位或裁剪。
         cloned.setAttribute('width', String(w));
         cloned.setAttribute('height', String(h));
+        cloned.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+        cloned.style.removeProperty('max-width');
+        cloned.style.removeProperty('width');
+        cloned.style.removeProperty('height');
 
         if (background) {
+          // 背景铺满 viewBox（含负偏移区域），不能用 x=0/100% —— viewBox 起点为负时会漏白。
           const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-          rect.setAttribute('x', '0');
-          rect.setAttribute('y', '0');
-          rect.setAttribute('width', '100%');
-          rect.setAttribute('height', '100%');
+          rect.setAttribute('x', String(vb.x));
+          rect.setAttribute('y', String(vb.y));
+          rect.setAttribute('width', String(vb.width));
+          rect.setAttribute('height', String(vb.height));
           rect.setAttribute('fill', '#ffffff');
           cloned.insertBefore(rect, cloned.firstChild);
         }
@@ -810,6 +848,43 @@ export const addMediaViewerButtons = (container, options = {}) => {
       }
     };
 
+    // 把 foreignObject 里的 HTML 抽成"按行"的纯文本。
+    // 关键点（对应"导出图里文字重叠成一行"）：Mermaid 的多行标签是
+    // <p>第一行<br>第二行</p> 这种结构，直接取 textContent 会把几行首尾相连粘成一长串，
+    // 于是既溢出方框、又和相邻文字重叠。这里遍历节点，遇到 <br> 和块级元素边界就断行。
+    const extractForeignObjectLines = (fo) => {
+      const lines = [];
+      let current = '';
+      const flush = () => {
+        const t = current.replace(/\s+/g, ' ').trim();
+        if (t) lines.push(t);
+        current = '';
+      };
+      const walk = (node) => {
+        if (!node) return;
+        if (node.nodeType === 3) {
+          current += node.textContent || '';
+          return;
+        }
+        if (node.nodeType !== 1) return;
+        const tag = String(node.tagName || '').toLowerCase();
+        if (tag === 'br') {
+          flush();
+          return;
+        }
+        const isBlock = tag === 'p' || tag === 'div' || tag === 'li' || tag === 'tr' || tag === 'section';
+        if (isBlock) flush();
+        for (const child of Array.from(node.childNodes)) walk(child);
+        if (isBlock) flush();
+      };
+      walk(fo);
+      flush();
+      return lines;
+    };
+
+    const FLATTEN_FONT_SIZE = 16;
+    const FLATTEN_LINE_HEIGHT = 21;
+
     // Mermaid 的节点标签默认是 <foreignObject> 里的 HTML。把 SVG 当图片喂给 canvas 时，
     // 浏览器按严格 XML 解析、且不渲染 foreignObject —— 轻则标签全丢，重则直接 onerror，
     // 于是 PNG 导出一路失败、被静默降级成 SVG（就是"只能导出 svg"的原因）。
@@ -826,21 +901,7 @@ export const addMediaViewerButtons = (container, options = {}) => {
           const h = num('height');
 
           // 逐块取文本，尽量保留原来的换行结构。
-          let lines = [];
-          for (const sel of ['p', '.nodeLabel', 'span', 'div']) {
-            const nodes = Array.from(fo.querySelectorAll(sel));
-            if (!nodes.length) continue;
-            lines = nodes
-              .map((n) => String(n.textContent || '').replace(/\s+/g, ' ').trim())
-              .filter(Boolean);
-            if (lines.length) break;
-          }
-          if (!lines.length) {
-            const t = String(fo.textContent || '').replace(/\s+/g, ' ').trim();
-            if (t) lines = [t];
-          }
-          // 嵌套结构会让同一段文字重复取到，去掉相邻重复项。
-          lines = lines.filter((v, i) => i === 0 || v !== lines[i - 1]);
+          const lines = extractForeignObjectLines(fo);
 
           const text = document.createElementNS(SVG_NS, 'text');
           const cx = w > 0 ? x + w / 2 : x;
@@ -849,11 +910,11 @@ export const addMediaViewerButtons = (container, options = {}) => {
           text.setAttribute('y', String(cy));
           text.setAttribute('text-anchor', 'middle');
           text.setAttribute('dominant-baseline', 'central');
-          text.setAttribute('font-size', '14');
-          text.setAttribute('font-family', 'system-ui, "Microsoft YaHei", sans-serif');
+          text.setAttribute('font-size', String(FLATTEN_FONT_SIZE));
+          text.setAttribute('font-family', '"Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif');
           text.setAttribute('fill', '#1f2328');
 
-          const lineHeight = 16;
+          const lineHeight = FLATTEN_LINE_HEIGHT;
           const startDy = -((Math.max(1, lines.length) - 1) * lineHeight) / 2;
           (lines.length ? lines : ['']).forEach((line, i) => {
             const tspan = document.createElementNS(SVG_NS, 'tspan');
