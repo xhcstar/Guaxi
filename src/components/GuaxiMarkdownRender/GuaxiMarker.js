@@ -470,7 +470,17 @@ export const addMediaViewerButtons = (container, options = {}) => {
       return { x: 0, y: 0, width: fallbackW, height: fallbackH };
     };
 
-    const buildExportSvg = (svg, { background = true } = {}) => {
+    const unionBox = (a, b) => {
+      const x1 = Math.min(a.x, b.x);
+      const y1 = Math.min(a.y, b.y);
+      const x2 = Math.max(a.x + a.width, b.x + b.width);
+      const y2 = Math.max(a.y + a.height, b.y + b.height);
+      return { x: x1, y: y1, width: Math.max(1, x2 - x1), height: Math.max(1, y2 - y1) };
+    };
+
+    // flatten=true 时把 foreignObject 拍平成原生 <text>（导出/光栅化路径专用）；
+    // 预览遮罩不需要拍平——它插进真实 DOM，浏览器会正常渲染 foreignObject。
+    const buildExportSvg = (svg, { background = true, flatten = false } = {}) => {
       try {
         if (!(svg instanceof SVGElement)) return null;
         const { width, height } = resolveSvgSize(svg);
@@ -481,12 +491,34 @@ export const addMediaViewerButtons = (container, options = {}) => {
         const cloned = svg.cloneNode(true);
         if (!(cloned instanceof SVGElement)) return null;
 
+        let box = { x: vb.x, y: vb.y, width: vb.width, height: vb.height };
+        if (flatten) {
+          const measured = applyMeasuredTextFlatten(cloned, svg);
+          if (measured.applied) {
+            // 实测出来的文字外框要并进 viewBox，否则贴边或轻微出框的文字会被裁掉。
+            if (measured.bbox) box = unionBox(box, measured.bbox);
+          } else {
+            flattenForeignObjects(cloned);
+          }
+        }
+
+        // 留一点边距：描边和文字正好压在 viewBox 边界上时，光栅化会切掉半个像素到几个像素。
+        const pad = flatten ? 8 : 0;
+        const outVb = {
+          x: box.x - pad,
+          y: box.y - pad,
+          width: box.width + pad * 2,
+          height: box.height + pad * 2,
+        };
+        const outW = Math.max(1, Math.ceil(outVb.width));
+        const outH = Math.max(1, Math.ceil(outVb.height));
+
         if (!cloned.getAttribute('xmlns')) cloned.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-        if (!cloned.getAttribute('viewBox')) cloned.setAttribute('viewBox', `0 0 ${w} ${h}`);
+        cloned.setAttribute('viewBox', `${outVb.x} ${outVb.y} ${outVb.width} ${outVb.height}`);
         // 导出成固定像素尺寸：把 mermaid 写的 width="100%" / max-width 一并覆盖掉，
         // 否则当图片渲染时会按 100% 去适配画布，出现缩放错位或裁剪。
-        cloned.setAttribute('width', String(w));
-        cloned.setAttribute('height', String(h));
+        cloned.setAttribute('width', String(outW));
+        cloned.setAttribute('height', String(outH));
         cloned.setAttribute('preserveAspectRatio', 'xMidYMid meet');
         cloned.style.removeProperty('max-width');
         cloned.style.removeProperty('width');
@@ -495,15 +527,15 @@ export const addMediaViewerButtons = (container, options = {}) => {
         if (background) {
           // 背景铺满 viewBox（含负偏移区域），不能用 x=0/100% —— viewBox 起点为负时会漏白。
           const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-          rect.setAttribute('x', String(vb.x));
-          rect.setAttribute('y', String(vb.y));
-          rect.setAttribute('width', String(vb.width));
-          rect.setAttribute('height', String(vb.height));
+          rect.setAttribute('x', String(outVb.x));
+          rect.setAttribute('y', String(outVb.y));
+          rect.setAttribute('width', String(outVb.width));
+          rect.setAttribute('height', String(outVb.height));
           rect.setAttribute('fill', '#ffffff');
           cloned.insertBefore(rect, cloned.firstChild);
         }
 
-        return { svg: cloned, width: w, height: h };
+        return { svg: cloned, width: outW, height: outH };
       } catch {
         return null;
       }
@@ -933,6 +965,195 @@ export const addMediaViewerButtons = (container, options = {}) => {
       return converted;
     };
 
+    // ───── 按预览实测坐标拍平 foreignObject ─────
+    // 设计说明（对应"导出 PNG 文字重叠、边界被裁剪"）：
+    // 1. 上面 flattenForeignObjects 是按 DOM 结构猜断行（<br>、块级元素边界）。
+    //    但 Mermaid 11 的长标签是靠 CSS 自动折行的：DOM 里就是一个文本节点，
+    //    结构上看不出任何换行点，于是三行标签被拼成一行 —— 既溢出方框、和相邻
+    //    边标签重叠，又把内容顶到 viewBox 之外被裁掉。这正是当前导出图的症状。
+    // 2. 预览里的 foreignObject 已经由浏览器排好版，真实行盒是可以"量"出来的：
+    //    用 Range.getClientRects() 逐字符测量 → 按行盒 top 分组，得到和预览
+    //    完全一致的分行结果（含 CSS 自动折行）。
+    // 3. 再用根 svg 的 getScreenCTM() 逆矩阵把屏幕坐标换算回根 svg 用户坐标，
+    //    逐行生成 <text>，直接挂到根 svg 上（坐标已是根用户空间，无需再套 transform）。
+    const measureTextNodeLines = (textNode) => {
+      const raw = String(textNode?.nodeValue || '');
+      if (!raw.trim()) return [];
+
+      const range = document.createRange();
+      const lines = [];
+      let i = 0;
+
+      while (i < raw.length) {
+        const code = raw.charCodeAt(i);
+        // 代理对要整对取，否则 emoji / 生僻字会被切碎。
+        const step = code >= 0xd800 && code <= 0xdbff && i + 1 < raw.length ? 2 : 1;
+        const ch = raw.slice(i, i + step);
+
+        let rect = null;
+        try {
+          range.setStart(textNode, i);
+          range.setEnd(textNode, i + step);
+          const rects = Array.from(range.getClientRects() || []);
+          for (const r of rects) {
+            if (!rect || r.width * r.height > rect.width * rect.height) rect = r;
+          }
+        } catch {
+          rect = null;
+        }
+
+        const last = lines[lines.length - 1];
+        if (rect && rect.height > 0) {
+          // 同一行内行盒 top 恒定；top 跳变即认为换行。
+          if (last && Math.abs(last.top - rect.top) <= Math.max(1, rect.height * 0.5)) {
+            last.text += ch;
+            last.left = Math.min(last.left, rect.left);
+            last.right = Math.max(last.right, rect.right);
+            last.top = Math.min(last.top, rect.top);
+            last.bottom = Math.max(last.bottom, rect.bottom);
+          } else {
+            lines.push({
+              text: ch,
+              left: rect.left,
+              right: rect.right,
+              top: rect.top,
+              bottom: rect.bottom,
+            });
+          }
+        } else if (last) {
+          // 折行处被折叠掉的空白字符量不到矩形，并入当前行后统一 trim。
+          last.text += ch;
+        }
+
+        i += step;
+      }
+
+      return lines
+        .map((line) => ({ ...line, text: line.text.replace(/\s+/g, ' ').trim() }))
+        .filter((line) => line.text);
+    };
+
+    const applyMeasuredTextFlatten = (clonedSvg, liveSvg) => {
+      const empty = { applied: false, bbox: null, lines: 0 };
+      try {
+        if (!(clonedSvg instanceof SVGElement) || !(liveSvg instanceof SVGElement)) return empty;
+
+        const liveForeignObjects = Array.from(liveSvg.querySelectorAll('foreignObject'));
+        const clonedForeignObjects = Array.from(clonedSvg.querySelectorAll('foreignObject'));
+        // 没有 foreignObject（例如已经是 htmlLabels:false 渲染的图）就不需要拍平。
+        if (!liveForeignObjects.length) return { applied: clonedForeignObjects.length === 0, bbox: null, lines: 0 };
+
+        const ctm = typeof liveSvg.getScreenCTM === 'function' ? liveSvg.getScreenCTM() : null;
+        // 元素没挂到可见 DOM（或 display:none）时量不出坐标，交给结构猜测兜底。
+        if (!ctm) return empty;
+        const inverse = ctm.inverse();
+        const makePoint = (x, y) => {
+          if (typeof DOMPoint === 'function') return new DOMPoint(x, y);
+          const p = liveSvg.createSVGPoint();
+          p.x = x;
+          p.y = y;
+          return p;
+        };
+        const toUser = (x, y) => makePoint(x, y).matrixTransform(inverse);
+        // 预览里 mermaid 常被 max-width 缩放过，字号要按同样比例换到用户单位。
+        const unitPerPx = Math.hypot(inverse.a, inverse.b) || 1;
+
+        // 预览里看不见的文本不能被拍平出来（mermaid 会留隐藏的测量/占位标签），
+        // 否则导出图上会凭空多出一堆字。
+        const isVisibleHost = (el) => {
+          try {
+            const cs = window.getComputedStyle(el);
+            if (cs.display === 'none' || cs.visibility !== 'visible') return false;
+            if (Number.parseFloat(cs.opacity || '1') <= 0.01) return false;
+            return true;
+          } catch {
+            return true;
+          }
+        };
+
+        const specs = [];
+        for (const foreignObject of liveForeignObjects) {
+          if (!(foreignObject.getClientRects?.().length > 0)) continue;
+
+          const walker = document.createTreeWalker(foreignObject, NodeFilter.SHOW_TEXT, null);
+          let node = walker.nextNode();
+          while (node) {
+            const host = node.parentElement;
+            const lines = host && isVisibleHost(host) ? measureTextNodeLines(node) : [];
+            if (lines.length) {
+              const cs = window.getComputedStyle(host);
+              const fontPx = Number.parseFloat(cs.fontSize) || FLATTEN_FONT_SIZE;
+              const style = {
+                fontSize: Math.max(1, fontPx * unitPerPx),
+                fontFamily: cs.fontFamily || '"Microsoft YaHei", "PingFang SC", system-ui, sans-serif',
+                fontWeight: String(cs.fontWeight || 'normal'),
+                fontStyle: cs.fontStyle || 'normal',
+                fill: cs.color || '#1f2328',
+              };
+
+              for (const line of lines) {
+                const center = toUser((line.left + line.right) / 2, (line.top + line.bottom) / 2);
+                const p1 = toUser(line.left, line.top);
+                const p2 = toUser(line.right, line.bottom);
+                specs.push({
+                  ...style,
+                  text: line.text,
+                  cx: center.x,
+                  cy: center.y,
+                  x1: Math.min(p1.x, p2.x),
+                  y1: Math.min(p1.y, p2.y),
+                  x2: Math.max(p1.x, p2.x),
+                  y2: Math.max(p1.y, p2.y),
+                });
+              }
+            }
+            node = walker.nextNode();
+          }
+        }
+
+        if (!specs.length) return empty;
+
+        clonedForeignObjects.forEach((foreignObject) => foreignObject.parentNode?.removeChild(foreignObject));
+
+        let bbox = null;
+        for (const spec of specs) {
+          const text = document.createElementNS(SVG_NS, 'text');
+          text.setAttribute('x', String(spec.cx));
+          text.setAttribute('y', String(spec.cy));
+          text.textContent = spec.text;
+          // Mermaid 会往 svg 里注入 <style>，样式表优先级高于呈现属性，
+          // 所以字体/颜色/对齐必须写成内联 important，否则导出时又被主题样式改掉。
+          text.style.setProperty('font-size', `${spec.fontSize}px`, 'important');
+          text.style.setProperty('font-family', spec.fontFamily, 'important');
+          text.style.setProperty('font-weight', spec.fontWeight, 'important');
+          text.style.setProperty('font-style', spec.fontStyle, 'important');
+          text.style.setProperty('fill', spec.fill, 'important');
+          text.style.setProperty('stroke', 'none', 'important');
+          text.style.setProperty('text-anchor', 'middle', 'important');
+          text.style.setProperty('dominant-baseline', 'central', 'important');
+          text.style.setProperty('white-space', 'pre', 'important');
+          clonedSvg.appendChild(text);
+
+          const lineBox = {
+            x: spec.x1,
+            y: spec.y1,
+            width: Math.max(0, spec.x2 - spec.x1),
+            height: Math.max(0, spec.y2 - spec.y1),
+          };
+          bbox = bbox ? unionBox(bbox, lineBox) : lineBox;
+        }
+
+        logger.info('[MediaViewer] foreignObject 已按预览实测坐标拍平:', {
+          foreignObjects: liveForeignObjects.length,
+          lines: specs.length,
+        });
+        return { applied: true, bbox, lines: specs.length };
+      } catch (e) {
+        logger.warn('[MediaViewer] 实测拍平失败，回退按结构猜测拍平:', e);
+        return empty;
+      }
+    };
+
     // 序列化成能被 <img> 当作严格 XML 解析的 SVG 文本。
     const serializeSvgForRaster = (svgEl) => {
       const xml = new XMLSerializer().serializeToString(svgEl);
@@ -953,12 +1174,11 @@ export const addMediaViewerButtons = (container, options = {}) => {
     });
 
     const svgToPngBlob = async (svg, { scale = 2 } = {}) => {
-      const normalized = buildExportSvg(svg, { background: true });
+      const normalized = buildExportSvg(svg, { background: true, flatten: true });
       const exportSvg = normalized?.svg || svg.cloneNode(true);
       const exportW = normalized?.width || 800;
       const exportH = normalized?.height || 600;
 
-      const flattened = flattenForeignObjects(exportSvg);
       const svgText = serializeSvgForRaster(exportSvg);
 
       // data: URL 比 blob: 在"SVG 当图片"这条路上更稳（不受 blob 生命周期与部分 CSP 影响）。
@@ -1003,7 +1223,6 @@ export const addMediaViewerButtons = (container, options = {}) => {
         logger.info('[MediaViewer] SVG 已光栅化为 PNG:', {
           width: canvas.width,
           height: canvas.height,
-          flattenedForeignObjects: flattened,
           bytes: blob.size,
         });
         return blob;
@@ -1153,7 +1372,10 @@ export const addMediaViewerButtons = (container, options = {}) => {
           return;
         }
 
-        const normalized = buildExportSvg(svg, { background: true });
+        // 注意：SVG 也走 flatten。拍平后的 <text> 是按预览实测坐标生成的，
+        // 内容与预览一致，同时不再依赖"渲染器是否支持 foreignObject"，
+        // 保证导出的 PNG 和 SVG 两种格式看到的是同一张图。
+        const normalized = buildExportSvg(svg, { background: true, flatten: true });
         const exportSvg = normalized?.svg || svg.cloneNode(true);
         const svgText = serializeSvgForRaster(exportSvg);
         const svgBlob = new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' });
