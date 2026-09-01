@@ -266,7 +266,7 @@ export const addMediaViewerButtons = (container, options = {}) => {
     if (!(container instanceof HTMLElement)) return;
 
     container
-      .querySelectorAll('.media-viewer-button, .media-save-button')
+      .querySelectorAll('.media-viewer-button, .media-save-button, .media-ocr-button')
       .forEach((btn) => btn.remove());
 
     const theme = String(options?.theme || '').trim().toLowerCase();
@@ -300,6 +300,7 @@ export const addMediaViewerButtons = (container, options = {}) => {
               if (
                 cls?.contains('media-viewer-button') ||
                 cls?.contains('media-save-button') ||
+                cls?.contains('media-ocr-button') ||
                 cls?.contains('media-viewer-wrap')
               ) {
                 continue;
@@ -341,6 +342,9 @@ export const addMediaViewerButtons = (container, options = {}) => {
       close: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L12 13.41l-6.29 6.3-1.42-1.41L10.59 12 4.29 5.71 5.7 4.29 12 10.59l6.29-6.3z"/></svg>',
       plus: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19 11H13V5h-2v6H5v2h6v6h2v-6h6z"/></svg>',
       minus: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19 13H5v-2h14v2z"/></svg>',
+      // OCR：取字。用"扫描框 + T"表达"从图里取文字"。
+      ocr: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 3h6v2H5v4H3V3zm12 0h6v6h-2V5h-4V3zM3 15h2v4h4v2H3v-6zm16 0h2v6h-6v-2h4v-4zM7.5 7.5h9v2h-3.5v7h-2v-7H7.5v-2z"/></svg>',
+      copy: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>',
     };
 
     const makeBtn = (className, rightPx, title, iconSvg) => {
@@ -365,7 +369,7 @@ export const addMediaViewerButtons = (container, options = {}) => {
       wrap.dataset.mvBound = '1';
       const set = (v) => {
         wrap
-          .querySelectorAll('.media-viewer-button, .media-save-button')
+          .querySelectorAll('.media-viewer-button, .media-save-button, .media-ocr-button')
           .forEach((btn) => btn.style.setProperty('opacity', v ? '1' : '0', 'important'));
       };
       wrap.addEventListener('mouseenter', () => set(true));
@@ -1055,8 +1059,10 @@ export const addMediaViewerButtons = (container, options = {}) => {
           return p;
         };
         const toUser = (x, y) => makePoint(x, y).matrixTransform(inverse);
-        // 预览里 mermaid 常被 max-width 缩放过，字号要按同样比例换到用户单位。
-        const unitPerPx = Math.hypot(inverse.a, inverse.b) || 1;
+        // getClientRects() 给的是屏幕 px，要按逆矩阵换回用户单位。
+        // 注意 font-size 不要再乘这个系数：foreignObject 里的 CSS px 本身就是
+        // SVG 用户单位，getComputedStyle 拿到的已经是用户单位，再乘一次会整体放大，
+        // 表现就是"位置对、字太大、撑出方框"。
 
         // 预览里看不见的文本不能被拍平出来（mermaid 会留隐藏的测量/占位标签），
         // 否则导出图上会凭空多出一堆字。
@@ -1084,7 +1090,7 @@ export const addMediaViewerButtons = (container, options = {}) => {
               const cs = window.getComputedStyle(host);
               const fontPx = Number.parseFloat(cs.fontSize) || FLATTEN_FONT_SIZE;
               const style = {
-                fontSize: Math.max(1, fontPx * unitPerPx),
+                fontSize: Math.max(1, fontPx),
                 fontFamily: cs.fontFamily || '"Microsoft YaHei", "PingFang SC", system-ui, sans-serif',
                 fontWeight: String(cs.fontWeight || 'normal'),
                 fontStyle: cs.fontStyle || 'normal',
@@ -1364,6 +1370,81 @@ export const addMediaViewerButtons = (container, options = {}) => {
       }
     };
 
+    // ───── 导出专用：用原生 SVG 文本重渲一遍 Mermaid ─────
+    // 设计说明（对应"导出 PNG 文字仍然重叠/撑出方框"）：
+    // 预览用的是 htmlLabels（foreignObject + HTML），文字排版归浏览器管，方框大小归
+    // Mermaid 管，两套度量本来就不完全一致；再加上光栅化时 foreignObject 不渲染，
+    // 必须拍平，误差就直接暴露成"文字压边框、和邻近标签叠在一起"。
+    // 与其继续修拍平，不如让 Mermaid 自己用 <text>/<tspan> 排版：此时"文字度量"和
+    // "方框尺寸"出自同一套计算，文字必然落在方框内，也不需要任何拍平。
+    // 这条路径与 GuaxiEditor 里 pandoc 导出用的 prerenderMermaidForPandoc 一致。
+    const MERMAID_EXPORT_FONT_FAMILY =
+      '"Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Segoe UI", Arial, sans-serif';
+
+    // 从渲染结果上取回原始 mermaid 源码。data-mermaid-source 是新渲染写的；
+    // 历史节点只有 data-md-original（URI 编码的 ``` 围栏块），这里一并兼容。
+    const resolveMermaidSource = (mermaidEl) => {
+      const direct = String(mermaidEl?.getAttribute?.('data-mermaid-source') || '').trim();
+      if (direct) return direct;
+      try {
+        const original = String(mermaidEl?.getAttribute?.('data-md-original') || '');
+        if (!original) return '';
+        const decoded = decodeURIComponent(original);
+        const fenced = decoded.match(/^\s*(`{3,}|~{3,})[ \t]*mermaid[^\n]*\n([\s\S]*?)\n?\1\s*$/);
+        return String(fenced?.[2] || decoded).trim();
+      } catch {
+        return '';
+      }
+    };
+
+    const buildExportMermaidSource = (source) => {
+      const directive = `%%{init: ${JSON.stringify({
+        htmlLabels: false,
+        fontFamily: MERMAID_EXPORT_FONT_FAMILY,
+        flowchart: { htmlLabels: false, useMaxWidth: false },
+        class: { htmlLabels: false },
+        state: { htmlLabels: false },
+        themeVariables: { fontFamily: MERMAID_EXPORT_FONT_FAMILY },
+      })}}%%`;
+
+      const text = String(source || '');
+      // frontmatter 必须留在最前面，指令只能插在它后面，否则 mermaid 解析不到 frontmatter。
+      const frontmatter = text.match(/^\s*---\r?\n[\s\S]*?\r?\n---[ \t]*\r?\n/);
+      if (frontmatter) {
+        return `${frontmatter[0]}${directive}\n${text.slice(frontmatter[0].length)}`;
+      }
+      return `${directive}\n${text}`;
+    };
+
+    const renderMermaidSvgForExport = async (source) => {
+      const src = String(source || '').trim();
+      if (!src) return null;
+      try {
+        const renderId = `guaxi-mermaid-export-${Date.now()}-${mermaidRenderCounter++}`;
+        const rendered = await Promise.resolve(mermaid.render(renderId, buildExportMermaidSource(src)));
+        const svgText = typeof rendered === 'string' ? rendered : String(rendered?.svg || '');
+        if (!svgText.trim()) return null;
+
+        const parsed = new DOMParser().parseFromString(svgText, 'image/svg+xml');
+        const root = parsed?.documentElement;
+        if (!root || String(root.nodeName || '').toLowerCase() === 'parsererror') return null;
+
+        const imported = document.importNode(root, true);
+        if (!(imported instanceof SVGElement)) return null;
+        // 指令没生效（还是 foreignObject）就别用这条路径，交回原来的拍平逻辑。
+        if (imported.querySelector('foreignObject')) {
+          logger.warn('[MediaViewer] 导出重渲仍带 foreignObject，回退实测拍平');
+          return null;
+        }
+
+        logger.info('[MediaViewer] 已用原生 SVG 文本重渲 Mermaid 用于导出');
+        return imported;
+      } catch (e) {
+        logger.warn('[MediaViewer] 导出重渲 Mermaid 失败，回退实测拍平:', e);
+        return null;
+      }
+    };
+
     const saveMermaid = async (mermaidEl, { index = 0 } = {}) => {
       try {
         const svg = resolveMermaidSvg(mermaidEl);
@@ -1372,11 +1453,15 @@ export const addMediaViewerButtons = (container, options = {}) => {
           return;
         }
 
-        // 注意：SVG 也走 flatten。拍平后的 <text> 是按预览实测坐标生成的，
-        // 内容与预览一致，同时不再依赖"渲染器是否支持 foreignObject"，
-        // 保证导出的 PNG 和 SVG 两种格式看到的是同一张图。
-        const normalized = buildExportSvg(svg, { background: true, flatten: true });
-        const exportSvg = normalized?.svg || svg.cloneNode(true);
+        // 首选：拿原始源码用原生 <text> 重渲一遍（文字度量与方框尺寸同源，必然不溢出）。
+        // 拿不到源码或重渲失败时，退回"预览实测拍平"这条老路。
+        const nativeSvg = await renderMermaidSvgForExport(resolveMermaidSource(mermaidEl));
+        const baseSvg = nativeSvg || svg;
+
+        // SVG 也走同一条 flatten 管道：原生重渲的图里本来就没有 foreignObject，
+        // 拍平是空操作；退化路径下则按实测坐标拍平。两种格式导出的是同一张图。
+        const normalized = buildExportSvg(baseSvg, { background: true, flatten: true });
+        const exportSvg = normalized?.svg || baseSvg.cloneNode(true);
         const svgText = serializeSvgForRaster(exportSvg);
         const svgBlob = new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' });
 
@@ -1404,7 +1489,7 @@ export const addMediaViewerButtons = (container, options = {}) => {
         }
 
         try {
-          const pngBlob = await svgToPngBlob(svg, { scale: 2 });
+          const pngBlob = await svgToPngBlob(baseSvg, { scale: 2 });
           const buf = new Uint8Array(await pngBlob.arrayBuffer());
           await writeBytesToPath(path, buf);
           logger.info('[MediaViewer] Mermaid 已导出 PNG:', { path, bytes: buf.length });
@@ -1420,6 +1505,275 @@ export const addMediaViewerButtons = (container, options = {}) => {
       } catch (e) {
         logger.error('[MediaViewer] 保存 Mermaid 失败:', e);
       }
+    };
+
+    // ───── 图片取字（OCR） ─────
+    // 复用已有的离线 OCR 后端命令 ocr_recognize（rapidocr）。它返回
+    // { lines: [{ text, confidence, box }], text }，box 是原图像素坐标下的四点多边形，
+    // 正好够我们在图片上叠一层"可直接框选复制"的文字层（企业微信那种取字体验）。
+    const copyToClipboard = async (text) => {
+      const value = String(text || '');
+      if (!value) return false;
+      try {
+        const { writeText } = await import('@tauri-apps/plugin-clipboard-manager');
+        await writeText(value);
+        return true;
+      } catch (e) {
+        logger.warn('[MediaViewer] 剪贴板插件写入失败，尝试 navigator.clipboard:', e);
+      }
+      try {
+        await navigator.clipboard.writeText(value);
+        return true;
+      } catch (e) {
+        logger.error('[MediaViewer] 复制失败:', e);
+        return false;
+      }
+    };
+
+    const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(new Error('read blob failed'));
+      reader.readAsDataURL(blob);
+    });
+
+    // 后端 image_path / image_base64 二选一：本地图片直接给路径（免一次编码），
+    // data URL 原样转发，其余情况取字节再转 data URL。
+    const resolveImageOcrPayload = async (img) => {
+      const src = String(img?.currentSrc || img?.src || '');
+      if (!src) return null;
+      if (src.startsWith('data:')) return { imageBase64: src };
+
+      const filePath = resolveLocalPathFromSrc(src);
+      if (filePath) return { imagePath: filePath };
+
+      try {
+        const resp = await fetch(src);
+        if (!resp.ok) throw new Error(`fetch failed: ${resp.status}`);
+        const dataUrl = await blobToDataUrl(await resp.blob());
+        if (dataUrl) return { imageBase64: dataUrl };
+      } catch (e) {
+        logger.warn('[MediaViewer] OCR 取图失败:', e);
+      }
+      return null;
+    };
+
+    const runImageOcr = async (img) => {
+      const payload = await resolveImageOcrPayload(img);
+      if (!payload) throw new Error('无法读取图片数据');
+
+      const { invoke } = await import('@tauri-apps/api/core');
+      const res = await invoke('ocr_recognize', {
+        imagePath: payload.imagePath || null,
+        imageBase64: payload.imageBase64 || null,
+      });
+
+      const rawLines = Array.isArray(res?.lines) ? res.lines : [];
+      const lines = rawLines
+        .map((line) => {
+          const points = Array.isArray(line?.box) ? line.box : [];
+          const xs = points.map((p) => Number(p?.[0])).filter((n) => Number.isFinite(n));
+          const ys = points.map((p) => Number(p?.[1])).filter((n) => Number.isFinite(n));
+          const hasBox = xs.length >= 2 && ys.length >= 2;
+          return {
+            text: String(line?.text || ''),
+            confidence: Number(line?.confidence) || 0,
+            box: hasBox
+              ? {
+                x: Math.min(...xs),
+                y: Math.min(...ys),
+                width: Math.max(1, Math.max(...xs) - Math.min(...xs)),
+                height: Math.max(1, Math.max(...ys) - Math.min(...ys)),
+              }
+              : null,
+          };
+        })
+        .filter((line) => line.text.trim());
+
+      const text = String(res?.text || '') || lines.map((l) => l.text).join('\n');
+      logger.info('[MediaViewer] OCR 完成:', { lines: lines.length, chars: text.length });
+      return { lines, text };
+    };
+
+    // 取字面板：左边是原图 + 一层"和图上文字严格对齐、可直接框选"的文本层，
+    // 右边是整段文字（可编辑 / 一键复制）。两种取字姿势都给到，和企业微信一致。
+    const openOcrOverlay = (img) => {
+      const overlay = document.createElement('div');
+      overlay.className = 'media-ocr-overlay';
+      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;';
+
+      const panel = document.createElement('div');
+      panel.style.cssText = 'position:relative;width:92vw;height:88vh;display:flex;background:#ffffff;border:1px solid rgba(0,0,0,0.12);border-radius:10px;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,0.25);';
+
+      const stage = document.createElement('div');
+      stage.style.cssText = 'flex:1;min-width:0;display:flex;align-items:center;justify-content:center;padding:16px;overflow:auto;background:#f6f7f9;box-sizing:border-box;';
+
+      const imgWrap = document.createElement('div');
+      imgWrap.style.cssText = 'position:relative;display:inline-block;line-height:0;';
+
+      const view = document.createElement('img');
+      view.src = img.currentSrc || img.src;
+      view.alt = img.alt || '';
+      view.style.cssText = 'display:block;max-width:100%;max-height:calc(88vh - 32px);';
+
+      const textLayer = document.createElement('div');
+      textLayer.style.cssText = 'position:absolute;left:0;top:0;right:0;bottom:0;user-select:text;-webkit-user-select:text;cursor:text;';
+
+      imgWrap.appendChild(view);
+      imgWrap.appendChild(textLayer);
+      stage.appendChild(imgWrap);
+
+      const side = document.createElement('div');
+      side.style.cssText = 'width:360px;flex:0 0 360px;display:flex;flex-direction:column;gap:8px;padding:12px;border-left:1px solid rgba(0,0,0,0.08);box-sizing:border-box;';
+
+      const title = document.createElement('div');
+      title.textContent = '图片取字 (OCR)';
+      title.style.cssText = 'font-size:14px;font-weight:600;color:rgba(0,0,0,0.85);';
+
+      const status = document.createElement('div');
+      status.style.cssText = 'font-size:12px;color:rgba(0,0,0,0.5);min-height:18px;white-space:pre-wrap;';
+
+      const area = document.createElement('textarea');
+      area.spellcheck = false;
+      area.placeholder = '识别出的文字会显示在这里，可直接编辑与复制。';
+      area.style.cssText = 'flex:1;min-height:0;resize:none;padding:8px;font-size:13px;line-height:1.6;border:1px solid rgba(0,0,0,0.12);border-radius:6px;box-sizing:border-box;font-family:inherit;color:rgba(0,0,0,0.88);background:#fff;';
+
+      const tools = document.createElement('div');
+      tools.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;align-items:center;';
+
+      const mkSideBtn = (label) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = label;
+        b.style.cssText = 'height:28px;padding:0 10px;border-radius:6px;border:1px solid rgba(0,0,0,0.12);background:#fff;color:rgba(0,0,0,0.78);cursor:pointer;font-size:12px;';
+        return b;
+      };
+
+      const btnCopyAll = mkSideBtn('复制全部');
+      const btnRetry = mkSideBtn('重新识别');
+      const btnCloseSide = mkSideBtn('关闭');
+
+      const layerToggleLabel = document.createElement('label');
+      layerToggleLabel.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:12px;color:rgba(0,0,0,0.6);cursor:pointer;';
+      const layerToggle = document.createElement('input');
+      layerToggle.type = 'checkbox';
+      layerToggle.checked = true;
+      layerToggleLabel.appendChild(layerToggle);
+      layerToggleLabel.appendChild(document.createTextNode('图上取字'));
+
+      tools.appendChild(btnCopyAll);
+      tools.appendChild(btnRetry);
+      tools.appendChild(layerToggleLabel);
+      tools.appendChild(btnCloseSide);
+
+      side.appendChild(title);
+      side.appendChild(status);
+      side.appendChild(area);
+      side.appendChild(tools);
+
+      panel.appendChild(stage);
+      panel.appendChild(side);
+      overlay.appendChild(panel);
+      document.body.appendChild(overlay);
+
+      let currentLines = [];
+
+      // 把 OCR 的原图像素坐标换算到当前显示尺寸，逐行铺一个可选中的 <span>。
+      // 每行再按"目标宽度 / 实际文本宽度"做一次 scaleX，选区才能和图上文字严格对齐。
+      const layoutTextLayer = () => {
+        textLayer.innerHTML = '';
+        const naturalW = view.naturalWidth || 0;
+        const naturalH = view.naturalHeight || 0;
+        const dispW = view.clientWidth || 0;
+        const dispH = view.clientHeight || 0;
+        if (!naturalW || !naturalH || !dispW || !dispH) return;
+
+        const sx = dispW / naturalW;
+        const sy = dispH / naturalH;
+        const pending = [];
+
+        for (const line of currentLines) {
+          if (!line.box) continue;
+          const h = Math.max(1, line.box.height * sy);
+          const span = document.createElement('span');
+          span.textContent = line.text;
+          span.title = '点击复制这一行';
+          span.style.cssText = `position:absolute;left:${line.box.x * sx}px;top:${line.box.y * sy}px;height:${h}px;line-height:${h}px;white-space:pre;transform-origin:left top;font-size:${Math.max(6, h * 0.8)}px;color:rgba(0,0,0,0.92);background:rgba(255,255,255,0.86);border-radius:2px;user-select:text;-webkit-user-select:text;cursor:text;`;
+          span.addEventListener('click', async () => {
+            // 有选区时说明用户正在框选，别抢他的操作。
+            const sel = window.getSelection?.();
+            if (sel && !sel.isCollapsed) return;
+            status.textContent = (await copyToClipboard(line.text)) ? '已复制该行' : '复制失败';
+          });
+          textLayer.appendChild(span);
+          pending.push({ span, targetW: Math.max(1, line.box.width * sx) });
+        }
+
+        for (const { span, targetW } of pending) {
+          const w = span.getBoundingClientRect().width;
+          if (w > 0) span.style.transform = `scaleX(${targetW / w})`;
+        }
+      };
+
+      const close = () => {
+        try {
+          document.removeEventListener('keydown', onKeyDown, true);
+          window.removeEventListener('resize', onResize);
+          overlay.remove();
+        } catch (e) {
+          logger.debug('[MediaViewer] 关闭取字面板异常', e);
+        }
+      };
+
+      const onKeyDown = (e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          close();
+        }
+      };
+
+      const onResize = () => layoutTextLayer();
+
+      const recognize = async () => {
+        currentLines = [];
+        textLayer.innerHTML = '';
+        area.value = '';
+        status.textContent = '识别中…首次识别需要加载模型，可能稍慢。';
+        btnRetry.disabled = true;
+        try {
+          const res = await runImageOcr(img);
+          currentLines = res.lines;
+          area.value = res.text;
+          status.textContent = res.lines.length
+            ? `共 ${res.lines.length} 行 · 可在左图上直接框选复制，或点单行复制`
+            : '未识别到文字';
+          layoutTextLayer();
+        } catch (e) {
+          logger.error('[MediaViewer] OCR 失败:', e);
+          status.textContent = `识别失败：${typeof e === 'string' ? e : e?.message || '未知错误'}`;
+        } finally {
+          btnRetry.disabled = false;
+        }
+      };
+
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) close();
+      });
+      btnCloseSide.addEventListener('click', close);
+      btnRetry.addEventListener('click', () => recognize());
+      btnCopyAll.addEventListener('click', async () => {
+        if (!area.value.trim()) return;
+        status.textContent = (await copyToClipboard(area.value)) ? '已复制全部文字' : '复制失败';
+      });
+      layerToggle.addEventListener('change', () => {
+        textLayer.style.display = layerToggle.checked ? 'block' : 'none';
+      });
+
+      view.addEventListener('load', () => layoutTextLayer());
+      document.addEventListener('keydown', onKeyDown, true);
+      window.addEventListener('resize', onResize);
+
+      recognize();
     };
 
     const addBtnsToWrap = (wrap, handlers, titles = {}) => {
@@ -1443,6 +1797,18 @@ export const addMediaViewerButtons = (container, options = {}) => {
 
       wrap.appendChild(saveBtn);
       wrap.appendChild(viewBtn);
+
+      // 取字按钮只在调用方给了 onOcr 时才挂（目前只有 <img> 需要）。
+      if (typeof handlers?.onOcr === 'function') {
+        const ocrBtn = makeBtn('media-ocr-button', 108, titles?.ocrTitle || '提取图片文字 (OCR)', ICONS.ocr);
+        ocrBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          handlers.onOcr();
+        });
+        wrap.appendChild(ocrBtn);
+      }
+
       bindHover(wrap);
     };
 
@@ -1464,10 +1830,12 @@ export const addMediaViewerButtons = (container, options = {}) => {
         {
           onView: () => openOverlay({ kind: 'img', src: img.currentSrc || img.src, alt: img.alt }),
           onSave: () => saveImage(img, { index: imgIndex + 1 }),
+          onOcr: () => openOcrOverlay(img),
         },
         {
           viewTitle: '预览图片（打开查看器）',
           saveTitle: '保存图片到文件',
+          ocrTitle: '提取图片文字（OCR，可直接框选复制）',
         }
       );
     });
