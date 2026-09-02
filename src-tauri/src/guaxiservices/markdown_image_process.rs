@@ -4,10 +4,74 @@ use actix_web::{get, post, web, HttpResponse};
 use mime_guess;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use tracing::{info, warn};
 use urlencoding::{decode, encode};
+
+/// 预处理阶段已经解析成功的图片文件，以及这些图片所在的目录。
+///
+/// 背景：`serve_image` 原先只放行图床 / 库 / 知识库这三个根目录下的文件，于是从这三个目录
+/// 之外打开的笔记（例如 `E:\Work\training\note.md` 里的 `![](./images/a.png)`）虽然能正确
+/// 解析出磁盘路径、也能拼出 served_path，但浏览器真去取图时会被 403 挡掉 —— 表现就是
+/// "路径明明存在，图片却渲染不出来"。
+///
+/// 这里不放开整个磁盘，只登记"Markdown 预处理确实解析出来、并且已经写进返回内容里的"图片：
+/// - `files`：精确到单个文件，覆盖指向任意位置的绝对路径图片；
+/// - `dirs`：这些图片所在的目录。同一篇笔记的插图基本都堆在同一个 images 目录里，登记目录后
+///   即使某张图是后来加的、或本轮预处理漏了（前端分片渲染 + 渲染缓存命中时并不会重新请求
+///   预处理接口），也不会再出现"同目录下有的图能显示、有的 403"这种随机现象。
+struct ResolvedImageRegistry {
+    files: HashSet<PathBuf>,
+    dirs: HashSet<PathBuf>,
+}
+
+fn resolved_image_registry() -> &'static Mutex<ResolvedImageRegistry> {
+    static REGISTRY: OnceLock<Mutex<ResolvedImageRegistry>> = OnceLock::new();
+    REGISTRY.get_or_init(|| {
+        Mutex::new(ResolvedImageRegistry {
+            files: HashSet::new(),
+            dirs: HashSet::new(),
+        })
+    })
+}
+
+/// 单次会话里登记的条目上限。超过就整体清空重来：已渲染页面最多触发一次重新预处理，
+/// 不会让集合无上限地涨下去。
+const RESOLVED_IMAGE_REGISTRY_LIMIT: usize = 20_000;
+
+fn remember_resolved_image(path: &Path) {
+    let Ok(mut registry) = resolved_image_registry().lock() else {
+        return;
+    };
+    if registry.files.len() >= RESOLVED_IMAGE_REGISTRY_LIMIT {
+        warn!(
+            limit = RESOLVED_IMAGE_REGISTRY_LIMIT,
+            "resolved image registry is full, clearing"
+        );
+        registry.files.clear();
+        registry.dirs.clear();
+    }
+    if let Some(dir) = path.parent() {
+        registry.dirs.insert(dir.to_path_buf());
+    }
+    registry.files.insert(path.to_path_buf());
+}
+
+/// 返回 (是否命中, 已登记文件数, 已登记目录数)，后两个只用于排查日志。
+fn lookup_resolved_image(path: &Path) -> (bool, usize, usize) {
+    let Ok(registry) = resolved_image_registry().lock() else {
+        return (false, 0, 0);
+    };
+    let hit = registry.files.contains(path)
+        || path
+            .parent()
+            .map(|dir| registry.dirs.contains(dir))
+            .unwrap_or(false);
+    (hit, registry.files.len(), registry.dirs.len())
+}
 
 fn normalize_list_display_math(markdown: &str) -> String {
     let lines: Vec<&str> = markdown.lines().collect();
@@ -177,6 +241,10 @@ fn process_image_paths(content: &str, base_path: &Path) -> (String, Vec<ImageMap
         info!("Full path: {:?}", full_path);
 
         if let Some(full_path) = full_path {
+            // 登记这个文件及其所在目录，让 serve_image 放行（详见 ResolvedImageRegistry 的说明）。
+            remember_resolved_image(&full_path);
+            info!("Registered image for serving: {:?}", full_path);
+
             let abs = full_path
                 .to_string_lossy()
                 .trim_start_matches(r"\\?\")
@@ -250,6 +318,11 @@ async fn serve_image(path: web::Path<String>) -> HttpResponse {
         return HttpResponse::NotFound().finish();
     }
 
+    // 放行条件二选一：
+    // 1. 文件在配置的三个根目录（图床 / 库 / 知识库）之下；
+    // 2. 文件是 Markdown 预处理阶段解析出来的图片，或位于这类图片所在的目录（笔记可以放在任意目录）。
+    let (allowed_by_registry, known_files, known_dirs) = lookup_resolved_image(&file_canon);
+
     let mut allowed_roots: Vec<PathBuf> = Vec::new();
     for raw in [get_image_bed_root(), get_libraries_root(), get_knowledge_bases_root()] {
         let p = PathBuf::from(raw);
@@ -258,25 +331,23 @@ async fn serve_image(path: web::Path<String>) -> HttpResponse {
         }
     }
 
-    if allowed_roots.is_empty() {
-        warn!(
-            file = file_canon.to_string_lossy().as_ref(),
-            "serve_image forbidden: no allowed roots"
-        );
-        return HttpResponse::Forbidden().finish();
-    }
+    let allowed_by_root = allowed_roots.iter().any(|r| file_canon.starts_with(r));
 
-    let allowed = allowed_roots.iter().any(|r| file_canon.starts_with(r));
-    if !allowed {
+    if !allowed_by_registry && !allowed_by_root {
         warn!(
             file = file_canon.to_string_lossy().as_ref(),
-            "serve_image forbidden: file is outside allowed roots"
+            roots = allowed_roots.len(),
+            known_files,
+            known_dirs,
+            "serve_image forbidden: file is neither under an allowed root nor a resolved markdown image"
         );
         return HttpResponse::Forbidden().finish();
     }
 
     info!(
         file = file_canon.to_string_lossy().as_ref(),
+        by_registry = allowed_by_registry,
+        by_root = allowed_by_root,
         "serve_image allowed"
     );
 
