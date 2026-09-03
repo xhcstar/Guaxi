@@ -2,53 +2,70 @@
   <div class="editor-container guaxi-editor">
     <div class="editor-header" ref="editorHeaderRef">
       <div class="tab-bar" ref="tabBarRef" @wheel="handleWheelScroll">
-        <div class="tab-region tab-region-left" ref="tabRegionLeftRef" data-tab-region="left">
-          <div v-for="tab in leftTabs" :key="tab.path"
-            :class="['tab-item', {
-              'active': fileTreeStore.activeTabLeft === tab.path,
-              'dirty': !!tab.dirty,
-              'tab-drag-source': tabDragPath === tab.path,
-              'tab-drop-before': tabDropTarget.path === tab.path && tabDropTarget.region === 'left' && !tabDropTarget.after,
-              'tab-drop-after': tabDropTarget.path === tab.path && tabDropTarget.region === 'left' && tabDropTarget.after,
-            }]"
-            :title="tab.path" :data-tab-path="tab.path" data-tab-region="left"
-            @click="onTabClick(tab, 'left')"
-            @mousedown="onTabMouseDown($event, tab, 'left')"
-            @contextmenu.prevent.stop="openTabContextMenu($event, tab, 'left')">
-            <span class="tab-title">{{ tab.fileName }}</span>
-            <span class="tab-affordance">
-              <span class="tab-dirty-dot" v-show="tab.dirty" />
-              <n-icon class="tab-close" size="14" @click.stop="closeTab(tab.path, 'left')">
-                <CloseOutline />
-              </n-icon>
-            </span>
-          </div>
+        <div class="tab-region tab-region-left" ref="tabRegionLeftRef" data-tab-region="left"
+          :class="{ 'is-tab-dragging': !!tabDragPath, 'is-drop-region': tabDragBlankRegion === 'left' }">
+          <!-- TransitionGroup 负责顺序变化后的 FLIP 滑动，落位不再瞬间跳变。 -->
+          <TransitionGroup name="tab-flip">
+            <div v-for="tab in leftTabs" :key="tab.path"
+              :class="['tab-item', {
+                'active': fileTreeStore.activeTabLeft === tab.path,
+                'dirty': !!tab.dirty,
+                'tab-drag-source': tabDragPath === tab.path,
+                'tab-drop-before': tabDropTarget.path === tab.path && tabDropTarget.region === 'left' && !tabDropTarget.after,
+                'tab-drop-after': tabDropTarget.path === tab.path && tabDropTarget.region === 'left' && tabDropTarget.after,
+              }]"
+              :title="tab.path" :data-tab-path="tab.path" data-tab-region="left"
+              @click="onTabClick(tab, 'left')"
+              @mousedown="onTabMouseDown($event, tab, 'left')"
+              @contextmenu.prevent.stop="openTabContextMenu($event, tab, 'left')">
+              <span class="tab-title">{{ tab.fileName }}</span>
+              <span class="tab-affordance">
+                <span class="tab-dirty-dot" v-show="tab.dirty" />
+                <n-icon class="tab-close" size="14" @click.stop="closeTab(tab.path, 'left')">
+                  <CloseOutline />
+                </n-icon>
+              </span>
+            </div>
+          </TransitionGroup>
         </div>
         <!-- 左右分屏：右侧标签栏与左侧并排显示在顶部（恰好分别位于左/右 pane 之上）。
              上下分屏时该标签栏移动到下方 pane 头上（见 .editor-split-wrapper 内的 pane 标签栏）。 -->
-        <div v-if="layoutMode === 'vertical'" class="tab-region tab-region-right" ref="tabRegionRightRef" data-tab-region="right">
-          <div v-for="tab in rightTabs" :key="tab.path"
-            :class="['tab-item', {
-              'active': fileTreeStore.activeTabRight === tab.path,
-              'dirty': !!tab.dirty,
-              'tab-drag-source': tabDragPath === tab.path,
-              'tab-drop-before': tabDropTarget.path === tab.path && tabDropTarget.region === 'right' && !tabDropTarget.after,
-              'tab-drop-after': tabDropTarget.path === tab.path && tabDropTarget.region === 'right' && tabDropTarget.after,
-            }]"
-            :title="tab.path" :data-tab-path="tab.path" data-tab-region="right"
-            @click="onTabClick(tab, 'right')"
-            @mousedown="onTabMouseDown($event, tab, 'right')"
-            @contextmenu.prevent.stop="openTabContextMenu($event, tab, 'right')">
-            <span class="tab-title">{{ tab.fileName }}</span>
-            <span class="tab-affordance">
-              <span class="tab-dirty-dot" v-show="tab.dirty" />
-              <n-icon class="tab-close" size="14" @click.stop="closeTab(tab.path, 'right')">
-                <CloseOutline />
-              </n-icon>
-            </span>
-          </div>
+        <div v-if="layoutMode === 'vertical'" class="tab-region tab-region-right" ref="tabRegionRightRef" data-tab-region="right"
+          :class="{ 'is-tab-dragging': !!tabDragPath, 'is-drop-region': tabDragBlankRegion === 'right' }">
+          <TransitionGroup name="tab-flip">
+            <div v-for="tab in rightTabs" :key="tab.path"
+              :class="['tab-item', {
+                'active': fileTreeStore.activeTabRight === tab.path,
+                'dirty': !!tab.dirty,
+                'tab-drag-source': tabDragPath === tab.path,
+                'tab-drop-before': tabDropTarget.path === tab.path && tabDropTarget.region === 'right' && !tabDropTarget.after,
+                'tab-drop-after': tabDropTarget.path === tab.path && tabDropTarget.region === 'right' && tabDropTarget.after,
+              }]"
+              :title="tab.path" :data-tab-path="tab.path" data-tab-region="right"
+              @click="onTabClick(tab, 'right')"
+              @mousedown="onTabMouseDown($event, tab, 'right')"
+              @contextmenu.prevent.stop="openTabContextMenu($event, tab, 'right')">
+              <span class="tab-title">{{ tab.fileName }}</span>
+              <span class="tab-affordance">
+                <span class="tab-dirty-dot" v-show="tab.dirty" />
+                <n-icon class="tab-close" size="14" @click.stop="closeTab(tab.path, 'right')">
+                  <CloseOutline />
+                </n-icon>
+              </span>
+            </div>
+          </TransitionGroup>
         </div>
       </div>
+
+      <!-- 跟随光标的拖拽浮层：标签栏是 overflow 容器，浮层留在里面会被裁掉，所以 teleport 到 body。
+           位置由 JS 直接写 transform（见 paintTabDragGhost），避免每次 mousemove 触发整个编辑器重渲染。 -->
+      <teleport to="body">
+        <div v-if="tabDragGhost.visible" ref="tabDragGhostRef" class="guaxi-tab-drag-ghost"
+          :class="{ 'is-landing': tabDragGhost.landing }" :style="tabDragGhostStyle">
+          <span class="guaxi-tab-drag-ghost-title">{{ tabDragGhost.label }}</span>
+          <span v-if="tabDragGhost.dirty" class="guaxi-tab-drag-ghost-dot" />
+        </div>
+      </teleport>
 
       <!-- 标签右键菜单：关闭 / 在一侧打开 / 复制路径 / 复制相对路径。
            menu-props 里带上编辑器的字体，否则 naive-ui 把菜单 teleport 到 body 后
@@ -1071,27 +1088,30 @@
             @wheel="handleWheelScroll"
             @mousedown="activateRegion('right')"
           >
-            <div class="tab-region tab-region-right" ref="tabRegionRightRef" data-tab-region="right">
-              <div v-for="tab in rightTabs" :key="tab.path"
-                :class="['tab-item', {
-                  'active': fileTreeStore.activeTabRight === tab.path,
-                  'dirty': !!tab.dirty,
-                  'tab-drag-source': tabDragPath === tab.path,
-                  'tab-drop-before': tabDropTarget.path === tab.path && tabDropTarget.region === 'right' && !tabDropTarget.after,
-                  'tab-drop-after': tabDropTarget.path === tab.path && tabDropTarget.region === 'right' && tabDropTarget.after,
-                }]"
-                :title="tab.path" :data-tab-path="tab.path" data-tab-region="right"
-                @click="onTabClick(tab, 'right')"
-                @mousedown="onTabMouseDown($event, tab, 'right')"
-                @contextmenu.prevent.stop="openTabContextMenu($event, tab, 'right')">
-                <span class="tab-title">{{ tab.fileName }}</span>
-                <span class="tab-affordance">
-                  <span class="tab-dirty-dot" v-show="tab.dirty" />
-                  <n-icon class="tab-close" size="14" @click.stop="closeTab(tab.path, 'right')">
-                    <CloseOutline />
-                  </n-icon>
-                </span>
-              </div>
+            <div class="tab-region tab-region-right" ref="tabRegionRightRef" data-tab-region="right"
+              :class="{ 'is-tab-dragging': !!tabDragPath, 'is-drop-region': tabDragBlankRegion === 'right' }">
+              <TransitionGroup name="tab-flip">
+                <div v-for="tab in rightTabs" :key="tab.path"
+                  :class="['tab-item', {
+                    'active': fileTreeStore.activeTabRight === tab.path,
+                    'dirty': !!tab.dirty,
+                    'tab-drag-source': tabDragPath === tab.path,
+                    'tab-drop-before': tabDropTarget.path === tab.path && tabDropTarget.region === 'right' && !tabDropTarget.after,
+                    'tab-drop-after': tabDropTarget.path === tab.path && tabDropTarget.region === 'right' && tabDropTarget.after,
+                  }]"
+                  :title="tab.path" :data-tab-path="tab.path" data-tab-region="right"
+                  @click="onTabClick(tab, 'right')"
+                  @mousedown="onTabMouseDown($event, tab, 'right')"
+                  @contextmenu.prevent.stop="openTabContextMenu($event, tab, 'right')">
+                  <span class="tab-title">{{ tab.fileName }}</span>
+                  <span class="tab-affordance">
+                    <span class="tab-dirty-dot" v-show="tab.dirty" />
+                    <n-icon class="tab-close" size="14" @click.stop="closeTab(tab.path, 'right')">
+                      <CloseOutline />
+                    </n-icon>
+                  </span>
+                </div>
+              </TransitionGroup>
             </div>
           </div>
           <div v-if="layoutMode !== 'single'" ref="secondaryEditorContainer" class="editor-container"
@@ -22372,13 +22392,104 @@ const handleExportSelect = async (format) => {
 // mousemove 用 elementFromPoint 找当前悬停的标签 → mouseup 落位。
 // 好处是完全不依赖 dataTransfer，光标也能自己控制。
 const TAB_DRAG_THRESHOLD_PX = 4;
+// 浮层落地淡出时长，必须和 .guaxi-tab-drag-ghost.is-landing 的 transition 对齐。
+const TAB_GHOST_LANDING_MS = 150;
 
 const tabDragPath = ref('');
 const tabDropTarget = ref({ path: '', region: '', after: false });
+// 光标停在标签栏空白处时高亮整侧，提示"松手会移到这一侧末尾"。
+const tabDragBlankRegion = ref('');
 
-let tabPress = null;          // { path, region, startX, startY }
+// 跟随光标的拖拽浮层：只有 visible/landing 这类开关是响应式的，
+// 坐标走 rAF 直接写 DOM，避免每帧 mousemove 都重渲染这个巨型组件。
+const tabDragGhostRef = ref(null);
+const tabDragGhost = ref({
+  visible: false,
+  landing: false,
+  label: '',
+  dirty: false,
+  width: 0,
+  height: 28,
+  fontSize: '',
+  originX: 0,
+  originY: 0,
+});
+
+const tabDragGhostStyle = computed(() => {
+  const ghost = tabDragGhost.value;
+  return {
+    left: `${ghost.originX}px`,
+    top: `${ghost.originY}px`,
+    width: ghost.width ? `${ghost.width}px` : 'auto',
+    height: ghost.height ? `${ghost.height}px` : '28px',
+    fontSize: ghost.fontSize || '',
+  };
+});
+
+let tabPress = null;          // { path, region, startX, startY, label, dirty, 尺寸/位置快照 }
 let tabDragMoved = false;     // 是否已越过阈值，真正进入拖拽
 let suppressTabClick = false; // 拖拽结束后压掉紧随其后的那次 click
+let tabGhostPointer = { x: 0, y: 0 }; // 最新指针位置（非响应式，供 rAF 读取）
+let tabGhostOrigin = { x: 0, y: 0 };  // 按下时的指针位置，浮层位移以此为基准
+let tabGhostRaf = 0;
+let tabGhostLandingTimer = 0;
+let tabDragGeometry = null;   // 按下瞬间的标签横向范围快照，见 snapshotTabGeometry
+
+const paintTabDragGhost = () => {
+  const el = tabDragGhostRef.value;
+  if (el) {
+    const dx = Math.round(tabGhostPointer.x - tabGhostOrigin.x);
+    const dy = Math.round(tabGhostPointer.y - tabGhostOrigin.y);
+    // 只写 transform：left/top 由 :style 给出且拖拽期间不变，两边不会互相打断。
+    el.style.transform = `translate3d(${dx}px, ${dy}px, 0) scale(1.04)`;
+  }
+  tabGhostRaf = requestAnimationFrame(paintTabDragGhost);
+};
+
+const stopTabGhostFollow = () => {
+  if (tabGhostRaf) {
+    cancelAnimationFrame(tabGhostRaf);
+    tabGhostRaf = 0;
+  }
+};
+
+// 浮层初始位置就贴在被按下的标签上，看起来像把标签"揭"了起来。
+const showTabDragGhost = (press) => {
+  if (tabGhostLandingTimer) {
+    clearTimeout(tabGhostLandingTimer);
+    tabGhostLandingTimer = 0;
+  }
+  tabGhostOrigin = { x: press.startX, y: press.startY };
+  tabDragGhost.value = {
+    visible: true,
+    landing: false,
+    label: press.label,
+    dirty: press.dirty,
+    width: press.width,
+    height: press.height,
+    fontSize: press.fontSize,
+    originX: press.rectLeft,
+    originY: press.rectTop,
+  };
+  if (!tabGhostRaf) tabGhostRaf = requestAnimationFrame(paintTabDragGhost);
+};
+
+const hideTabDragGhost = (animate = false) => {
+  stopTabGhostFollow();
+  if (!tabDragGhost.value.visible) return;
+
+  if (!animate) {
+    tabDragGhost.value = { ...tabDragGhost.value, visible: false, landing: false };
+    return;
+  }
+
+  // 松手后停在落点淡出，和标签滑向新位置的动画同时发生。
+  tabDragGhost.value = { ...tabDragGhost.value, landing: true };
+  tabGhostLandingTimer = setTimeout(() => {
+    tabGhostLandingTimer = 0;
+    tabDragGhost.value = { ...tabDragGhost.value, visible: false, landing: false };
+  }, TAB_GHOST_LANDING_MS);
+};
 
 const clearTabDropTarget = () => {
   if (tabDropTarget.value.path || tabDropTarget.value.region) {
@@ -22392,24 +22503,64 @@ const detachTabPointerListeners = () => {
   window.removeEventListener('blur', onTabDragAbort);
 };
 
-const resetTabDragState = () => {
+const resetTabDragState = ({ animateGhost = false } = {}) => {
   tabPress = null;
   tabDragMoved = false;
   tabDragPath.value = '';
+  tabDragBlankRegion.value = '';
+  tabDragGeometry = null;
   clearTabDropTarget();
+  hideTabDragGhost(animateGhost);
   document.body.classList.remove('guaxi-tab-dragging');
 };
 
-// 命中测试：找鼠标下面的标签，并按是否越过中线决定插在它前面还是后面。
+// 按下时把各侧标签的横向范围快照下来，命中测试只认这份快照。
+// 原因：落点处会撑开 18px 空槽，标签一挪，光标脚下就不是刚才那个标签了，
+// 于是"开槽 → 命中丢失 → 收槽 → 又命中"来回抖。快照让插入位只由指针位置决定。
+const snapshotTabGeometry = () => {
+  tabDragGeometry = null;
+  try {
+    const root = editorHeaderRef.value?.closest?.('.guaxi-editor') || document;
+    const regions = [];
+    const items = [];
+
+    root.querySelectorAll('.tab-region[data-tab-region]').forEach((holder) => {
+      const region = holder.getAttribute('data-tab-region') || '';
+      if (!region) return;
+
+      regions.push({ region, el: holder, scrollLeft: holder.scrollLeft || 0 });
+      holder.querySelectorAll('.tab-item[data-tab-path]').forEach((item) => {
+        const path = item.getAttribute('data-tab-path') || '';
+        if (!path) return;
+        const rect = item.getBoundingClientRect();
+        items.push({ path, region, left: rect.left, right: rect.right });
+      });
+    });
+
+    tabDragGeometry = { regions, items };
+  } catch (error) {
+    logger.warn('[Tab] snapshot tab geometry failed', { error: String(error?.message || error || '') });
+  }
+};
+
+// 命中测试：先用实时 DOM 判断在哪一侧标签栏（标签栏本身不会因为开槽而移动），
+// 再在该侧的快照里按 x 找标签，并按是否越过中线决定插在它前面还是后面。
 const findTabUnderPointer = (x, y) => {
-  const el = document.elementFromPoint(x, y);
-  const item = el?.closest?.('.tab-item');
-  if (!item) return null;
-  const path = item.getAttribute('data-tab-path') || '';
-  const region = item.getAttribute('data-tab-region') || '';
-  if (!path || !region) return null;
-  const rect = item.getBoundingClientRect();
-  return { path, region, after: x > rect.left + rect.width / 2 };
+  const region = findTabRegionUnderPointer(x, y);
+  if (!region) return null;
+
+  const geo = tabDragGeometry;
+  if (!geo) return null;
+
+  // 拖拽途中滚动了标签栏时，用 scrollLeft 差值把指针换算回快照坐标系。
+  const snap = geo.regions.find((r) => r.region === region);
+  const scrollDelta = snap ? (snap.el?.scrollLeft || 0) - snap.scrollLeft : 0;
+  const px = x + scrollDelta;
+
+  const hit = geo.items.find((it) => it.region === region && px >= it.left && px <= it.right);
+  if (!hit) return null;
+
+  return { path: hit.path, region, after: px > (hit.left + hit.right) / 2 };
 };
 
 // 落在标签栏空白处时，至少要知道是哪一侧，这样可以移到该侧末尾。
@@ -22421,6 +22572,8 @@ const findTabRegionUnderPointer = (x, y) => {
 
 function onTabPointerMove(event) {
   if (!tabPress) return;
+  tabGhostPointer = { x: event.clientX, y: event.clientY };
+
   if (!tabDragMoved) {
     const movedEnough = Math.abs(event.clientX - tabPress.startX) >= TAB_DRAG_THRESHOLD_PX
       || Math.abs(event.clientY - tabPress.startY) >= TAB_DRAG_THRESHOLD_PX;
@@ -22428,13 +22581,24 @@ function onTabPointerMove(event) {
     tabDragMoved = true;
     tabDragPath.value = tabPress.path;
     document.body.classList.add('guaxi-tab-dragging');
+    showTabDragGhost(tabPress);
   }
 
   const hit = findTabUnderPointer(event.clientX, event.clientY);
-  if (!hit || (hit.path === tabPress.path && hit.region === tabPress.region)) {
+  if (!hit) {
+    clearTabDropTarget();
+    // 没压在任何标签上：如果还在某侧标签栏里，就提示"移到该侧末尾"。
+    const blank = findTabRegionUnderPointer(event.clientX, event.clientY);
+    if (tabDragBlankRegion.value !== blank) tabDragBlankRegion.value = blank;
+    return;
+  }
+
+  if (tabDragBlankRegion.value) tabDragBlankRegion.value = '';
+  if (hit.path === tabPress.path && hit.region === tabPress.region) {
     clearTabDropTarget();
     return;
   }
+
   const cur = tabDropTarget.value;
   if (cur.path !== hit.path || cur.region !== hit.region || cur.after !== hit.after) {
     tabDropTarget.value = hit;
@@ -22456,7 +22620,7 @@ async function onTabPointerUp(event) {
     ? { ...recorded }
     : findTabUnderPointer(event.clientX, event.clientY);
   const regionUnderPointer = drop?.region || findTabRegionUnderPointer(event.clientX, event.clientY);
-  resetTabDragState();
+  resetTabDragState({ animateGhost: moved && !!regionUnderPointer });
 
   if (!press || !moved) return;
   // 拖拽过就别再让 click 去切标签了，落位后我们自己切。
@@ -22501,13 +22665,32 @@ const onTabMouseDown = (event, tab, region) => {
   // 点在关闭按钮上不进入拖拽判定。
   if (event.target?.closest?.('.tab-close')) return;
 
+  // 在按下这一刻量好标签的尺寸/位置：真进入拖拽后浮层要和原标签严丝合缝，
+  // 那时元素已经被压暗甚至换了位置，再量就不准了。
+  const el = event.currentTarget?.closest?.('.tab-item') || event.currentTarget;
+  const rect = el?.getBoundingClientRect?.();
+  let fontSize = '';
+  try {
+    fontSize = el ? window.getComputedStyle(el).fontSize : '';
+  } catch {
+    fontSize = '';
+  }
+
   tabPress = {
     path: tab.path,
     region,
     startX: event.clientX,
     startY: event.clientY,
+    label: tab.fileName || String(tab.path || '').split(/[\\/]/).pop() || '',
+    dirty: !!tab.dirty,
+    width: rect ? Math.round(rect.width) : 0,
+    height: rect ? Math.round(rect.height) : 28,
+    rectLeft: rect ? Math.round(rect.left) : event.clientX,
+    rectTop: rect ? Math.round(rect.top) : event.clientY,
+    fontSize,
   };
   tabDragMoved = false;
+  snapshotTabGeometry();
   window.addEventListener('mousemove', onTabPointerMove, true);
   window.addEventListener('mouseup', onTabPointerUp, true);
   window.addEventListener('blur', onTabDragAbort);
@@ -22523,6 +22706,11 @@ const onTabClick = (tab, region) => {
 
 onUnmounted(() => {
   detachTabPointerListeners();
+  stopTabGhostFollow();
+  if (tabGhostLandingTimer) {
+    clearTimeout(tabGhostLandingTimer);
+    tabGhostLandingTimer = 0;
+  }
   document.body.classList.remove('guaxi-tab-dragging');
 });
 
@@ -26075,6 +26263,7 @@ onUnmounted(() => {
 }
 
 .tab-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -26088,22 +26277,106 @@ onUnmounted(() => {
   flex-shrink: 0;
   color: var(--guaxi-text-primary);
   background: rgba(128, 128, 128, 0.08);
-  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease,
+    transform 0.15s ease, opacity 0.15s ease;
 }
 
-/* 拖拽排序反馈：被拖的标签压暗，落点侧画一条竖线提示插入位置。
-   用 inset 阴影而不是真的 border，免得改变标签宽度让整行抖动。 */
+/* ───── 拖拽排序的视觉反馈 ─────
+   1) 被拖的标签留在原位压暗+虚线框，作为"从这里出发"的锚点，真正跟着光标走的是
+      teleport 到 body 的浮层（.guaxi-tab-drag-ghost，在非 scoped 块里）；
+   2) 落点处用 margin 撑开一个空槽并画竖线，后面的标签被平滑推开，明确"会插到这里"；
+   3) 竖线用 ::after 而不是 box-shadow —— box-shadow 会被后面的 .tab-item:hover
+      覆盖掉（同优先级、靠后生效），而拖拽时光标恰好悬停在落点标签上，指示线就没了；
+   4) 顺序真正变更后由 TransitionGroup 的 FLIP（.tab-flip-move）负责滑动。 */
 .tab-item.tab-drag-source {
-  opacity: 0.45;
+  opacity: 0.38;
+  border-style: dashed;
 }
 
 .tab-item.tab-drop-before {
-  box-shadow: inset 2px 0 0 0 var(--primary-color, #4acadb);
+  margin-left: 18px;
 }
 
 .tab-item.tab-drop-after {
-  box-shadow: inset -2px 0 0 0 var(--primary-color, #4acadb);
+  margin-right: 18px;
 }
+
+.tab-item.tab-drop-before::after,
+.tab-item.tab-drop-after::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--primary-color, #1890ff);
+  box-shadow: 0 0 6px rgba(24, 144, 255, 0.5);
+  animation: tab-drop-hint 1s ease-in-out infinite;
+}
+
+.tab-item.tab-drop-before::after {
+  left: -12px;
+}
+
+.tab-item.tab-drop-after::after {
+  right: -12px;
+}
+
+@keyframes tab-drop-hint {
+  0%, 100% {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scaleY(0.8);
+  }
+}
+
+/* 拖拽期间压掉 hover 抬起：否则光标掠过时整排标签会跟着上下跳。
+   空槽的 margin 过渡只在拖拽期间挂着：松手时 is-tab-dragging 和落点类一起消失，
+   margin 立刻归零，正好落在 FLIP 量到的目标位置上，不会和滑动动画打架。 */
+.tab-region.is-tab-dragging .tab-item {
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease,
+    transform 0.15s ease, opacity 0.15s ease, margin 0.16s ease;
+}
+
+.tab-region.is-tab-dragging .tab-item:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+/* 落点在标签栏空白处：整侧轻微着色，提示"松手会移到这一侧末尾"。 */
+.tab-region.is-drop-region {
+  background: rgba(24, 144, 255, 0.06);
+  box-shadow: inset 0 -2px 0 0 rgba(24, 144, 255, 0.35);
+}
+
+:root[data-guaxi-theme='dark'] .tab-item.tab-drop-before::after,
+:root[data-guaxi-theme='dark'] .tab-item.tab-drop-after::after {
+  background: #4aa3ff;
+  box-shadow: 0 0 8px rgba(74, 163, 255, 0.55);
+}
+
+:root[data-guaxi-theme='dark'] .tab-region.is-drop-region {
+  background: rgba(74, 163, 255, 0.1);
+  box-shadow: inset 0 -2px 0 0 rgba(74, 163, 255, 0.4);
+}
+
+/* 顺序变化的滑动（FLIP）。新标签只做淡入，离场不加过渡，
+   避免离场元素占位导致标签栏横向滚动宽度抖动。 */
+.tab-flip-move {
+  transition: transform 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.tab-flip-enter-from {
+  opacity: 0;
+}
+
+.tab-flip-enter-active {
+  transition: opacity 180ms ease-out;
+}
+
 .tab-title {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -26260,6 +26533,72 @@ h6 + .guaxi-bilingual-line {
 body.guaxi-tab-dragging,
 body.guaxi-tab-dragging * {
   cursor: grabbing !important;
+}
+
+/* 跟随光标的标签拖拽浮层。teleport 到 body（标签栏是 overflow 容器，留在里面会被裁掉），
+   所以样式必须写在非 scoped 块。位移由 JS 写 transform，这里只管外观。
+   pointer-events: none 很关键：命中测试用的 elementFromPoint 会忽略它，
+   否则光标下永远只有浮层自己，拖到哪都找不到落点标签。 */
+.guaxi-tab-drag-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 4000;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(24, 144, 255, 0.5);
+  background: rgba(24, 144, 255, 0.22);
+  color: var(--guaxi-text-primary, #1f2328);
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
+  white-space: nowrap;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0.95;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.24), 0 2px 6px rgba(0, 0, 0, 0.14);
+  will-change: transform;
+  animation: guaxi-tab-ghost-in 120ms ease-out;
+}
+
+/* 松手后停在落点淡出，和标签滑向新位置同时进行；时长与 TAB_GHOST_LANDING_MS 对齐。 */
+.guaxi-tab-drag-ghost.is-landing {
+  opacity: 0;
+  transition: opacity 150ms ease-out;
+  animation: none;
+}
+
+.guaxi-tab-drag-ghost-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.guaxi-tab-drag-ghost-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border-radius: 50%;
+  background: rgba(74, 163, 255, 0.9);
+}
+
+@keyframes guaxi-tab-ghost-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 0.95;
+  }
+}
+
+:root[data-guaxi-theme='dark'] .guaxi-tab-drag-ghost {
+  border-color: rgba(74, 163, 255, 0.55);
+  background: rgba(24, 144, 255, 0.34);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.35);
 }
 
 /* 标签右键菜单：naive-ui 把菜单 teleport 到 body，scoped 样式管不到，
