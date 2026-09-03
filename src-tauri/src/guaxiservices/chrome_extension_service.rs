@@ -361,6 +361,16 @@ async fn handle_capture_import(
         78,
         "采集 Markdown 已写入暂存区",
     );
+    // 认知层：采集内容同时进感知收件箱，从此参与召回、矛盾检测与简报，
+    // 而不是只静静躺在 Inbox 里等人来整理。
+    crate::cognition::hook_percept(
+        "capture",
+        &title,
+        &body,
+        req.source_url.trim(),
+        req.source_app.trim(),
+        req.knowledge_repo.trim(),
+    );
     info!(
         "[capture_import] saved staging markdown path='{}' size={}",
         source_path_string, file_size

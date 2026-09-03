@@ -14,29 +14,59 @@
       </div>
     </div>
 
-    <!-- 右侧：功能图标 -->
+    <!-- 右侧：功能图标。
+         大脑 / 图谱的切换放在这里（原来占位的截图图标位置）：它是页面级的视图切换，
+         和左右边栏折叠属于同一类操作，放在顶栏比放在内容区里更符合直觉，
+         也把内容区的垂直空间全部还给正文。 -->
     <div class="header-right">
-      <n-icon class="header-icon" size="20" :component="Screenshot24Regular"></n-icon>
+      <div class="brain-mode-switch">
+        <button
+          class="mode-btn"
+          :class="{ on: viewMode === 'cognition' }"
+          title="大脑：外部输入、待裁决的矛盾、结构缺口与今日简报"
+          @click="cog.setViewMode('cognition')"
+        >
+          <n-icon size="17" :component="BrainCircuit20Regular" />
+          <span class="mode-label">大脑</span>
+          <i v-if="cog.openNudgeCount" class="mode-badge">{{ badgeText }}</i>
+        </button>
+        <button
+          class="mode-btn"
+          :class="{ on: viewMode === 'graph' }"
+          title="图谱：知识结构的空间视图（关系 / 标签 / 时间 / 重要度）"
+          @click="cog.setViewMode('graph')"
+        >
+          <n-icon size="17" :component="Flowchart20Regular" />
+          <span class="mode-label">图谱</span>
+        </button>
+      </div>
       <n-icon class="header-icon" size="20" :component="PanelRightContract24Regular" @click="toggleRightSider"></n-icon>
     </div>
   </div>
 </template>
 
 <script setup>
+import { computed, onMounted } from 'vue'
 import { useSiderStore } from '../../stores/useSiderStore'
 import { useSiderHotkeys } from '../../composables/useSiderHotkeys'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
-
+import { useCognitionStore } from '../../stores/cognitionStore'
 
 import {
   PanelLeftContract24Regular,
   PanelRightContract24Regular,
-  Screenshot24Regular
+  BrainCircuit20Regular,
+  Flowchart20Regular
 } from '@vicons/fluent'
 
 const viewKey = 'brain'
 const siderStore = useSiderStore();
 const kbStore = useKnowledgeBaseStore();
+const cog = useCognitionStore();
+
+const viewMode = computed(() => cog.viewMode)
+// 超过 99 就不再显示具体数字：徽标是"有多少待处理"的信号，不是精确计数。
+const badgeText = computed(() => (cog.openNudgeCount > 99 ? '99+' : String(cog.openNudgeCount)))
 
 const toggleLeftSider = () => {
   siderStore.toggleLeftSider(viewKey)
@@ -49,6 +79,13 @@ const toggleRightSider = () => {
 useSiderHotkeys({
   toggleLeft: toggleLeftSider,
   toggleRight: toggleRightSider,
+})
+
+onMounted(() => {
+  // 顶栏徽标要在进入页面时就准确，不能等内容区加载完。
+  cog.refreshStatus().then(() => {
+    if (cog.enabled) cog.refreshNudges()
+  })
 })
 </script>
 
@@ -81,9 +118,62 @@ useSiderHotkeys({
 .header-right {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   min-width: 200px;
   justify-content: flex-end;
+}
+
+.brain-mode-switch {
+  display: inline-flex;
+  gap: 2px;
+  background: rgba(127, 127, 127, 0.14);
+  border-radius: 7px;
+  padding: 2px;
+}
+
+.mode-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--guaxi-text-secondary);
+  font-size: 13px;
+  line-height: 18px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.mode-btn:hover {
+  color: var(--guaxi-text-primary);
+}
+
+.mode-btn.on {
+  background: var(--guaxi-panel-bg);
+  color: var(--n-color-primary, #2dd4bf);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.16);
+}
+
+.mode-label {
+  white-space: nowrap;
+}
+
+.mode-badge {
+  position: absolute;
+  top: -5px;
+  right: -4px;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: #e04f5f;
+  color: #fff;
+  font-size: 10px;
+  font-style: normal;
+  line-height: 16px;
+  text-align: center;
 }
 
 .header-center {

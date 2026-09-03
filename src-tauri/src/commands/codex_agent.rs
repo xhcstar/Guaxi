@@ -267,6 +267,17 @@ fn write_codex_config(
         env_key = CODEX_API_KEY_ENV,
     );
 
+    // Guaxi 自己的 MCP 服务端：把知识库召回、图谱、感知收件箱、信念、任务
+    // 这些应用能力交给 codex。没有它，codex 只能看见文件系统，
+    // 于是"大脑"永远是文件形状的，问不了"我知识库里关于 X 的结论是什么"。
+    //
+    // 走 stdio 桥接进程而不是直连 HTTP：codex 的 mcp_servers 只支持派生子进程。
+    // 桥接缺失时**不写**这一段——写了 codex 每轮都会尝试拉起一个不存在的进程并报错。
+    let content = match mcp_server_toml() {
+        Some(extra) => format!("{content}{extra}"),
+        None => content,
+    };
+
     let path = home.join("config.toml");
     std::fs::write(&path, content).map_err(|e| format!("写入 codex config.toml 失败: {}", e))?;
     info!(
@@ -276,6 +287,29 @@ fn write_codex_config(
         "[codex_agent] codex config.toml 已生成"
     );
     Ok(())
+}
+
+/// 生成 `[mcp_servers.guaxi]` 配置片段。桥接可执行文件不存在时返回 None。
+fn mcp_server_toml() -> Option<String> {
+    let bridge = crate::cognition::commands::bridge_binary_path();
+    if !bridge.is_file() {
+        warn!(
+            path = %bridge.to_string_lossy(),
+            "[codex_agent] 未找到 guaxi_mcp 桥接，本轮 codex 不挂载 Guaxi 工具面"
+        );
+        return None;
+    }
+    Some(format!(
+        concat!(
+            "\n",
+            "# Guaxi 认知层工具面（召回 / 图谱 / 感知 / 信念 / 任务）。\n",
+            "# 由 stdio 桥接转发到主进程 127.0.0.1:8888/mcp；工具的读写授权在 Guaxi 设置里控制。\n",
+            "[mcp_servers.guaxi]\n",
+            "command = \"{cmd}\"\n",
+            "args = []\n",
+        ),
+        cmd = toml_escape(&bridge.to_string_lossy())
+    ))
 }
 
 /// codex item 的 `item_type` → 前端工具卡片用的工具名。

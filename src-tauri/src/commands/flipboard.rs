@@ -418,7 +418,28 @@ fn save_articles_to_cache(feed_id: &str, items: &[Article]) -> Result<(), String
         )
         .map_err(|e| e.to_string())?;
     }
-    tx.commit().map_err(|e| e.to_string())
+    tx.commit().map_err(|e| e.to_string())?;
+
+    // 认知层：抓回来的文章同时进感知收件箱。
+    //
+    // 这一步是"外部输入 → 大脑"的接线：flipboard 原本只把文章存进自己的缓存等人来翻，
+    // 现在每一篇也会被算新颖度与显著性、找到知识库里的锚点，从而能参与召回、
+    // 参与矛盾检测、参与简报。正文优先用清洗后的 markdown（图文完整），退回纯文本镜像。
+    for a in items {
+        let body = if !a.clean_content_markdown.trim().is_empty() {
+            a.clean_content_markdown.as_str()
+        } else if !a.content.trim().is_empty() {
+            a.content.as_str()
+        } else {
+            a.description.as_str()
+        };
+        // 只有标题+摘要的卡片没有信息量，等 hydrate 出完整正文再入库。
+        if body.chars().count() < 200 {
+            continue;
+        }
+        crate::cognition::hook_percept("crawl", &a.title, body, &a.url, feed_id, "");
+    }
+    Ok(())
 }
 
 /// 把深解析(hydrate)后的完整内容回写到所有匹配该 URL 的缓存行（按 url 更新，
@@ -470,6 +491,18 @@ fn persist_hydrated_article(a: &Article) -> Result<(), String> {
         ],
     )
     .map_err(|e| e.to_string())?;
+
+    // 认知层：深解析拿到完整正文后再入一次感知。
+    // percept 侧按内容近似哈希去重，所以这里与 save_articles_to_cache 的入库不会重复，
+    // 而"薄卡片先跳过、hydrate 后补入"正是我们想要的顺序。
+    let body = if !a.clean_content_markdown.trim().is_empty() {
+        a.clean_content_markdown.as_str()
+    } else {
+        a.content.as_str()
+    };
+    if body.chars().count() >= 200 {
+        crate::cognition::hook_percept("crawl", &a.title, body, url, "", "");
+    }
     Ok(())
 }
 

@@ -15,6 +15,7 @@ use tauri::{Emitter, Manager};
 
 static LOG_GUARD: OnceCell<tracing_appender::non_blocking::WorkerGuard> = OnceCell::new();
 
+mod cognition;
 mod commands;
 mod guaxiservices;
 mod state;
@@ -176,6 +177,9 @@ fn shutdown_background_processes(reason: &str) {
     commands::docprocess::shutdown_marker_server();
     commands::slidev::shutdown_dev_server();
     commands::terminal::shutdown_all_sessions();
+    // 认知层：WAL 下每次写入即提交，不需要刷盘；这里只把用户没看的自动采集内容删掉，
+    // 别让它们跨越一次重启继续占着收件箱。同步执行但不做 VACUUM，所以不会拖住退出。
+    cognition::shutdown();
 
     let leftovers = guaxiservices::process_shutdown::shutdown_registered(reason);
     info!(
@@ -241,6 +245,8 @@ async fn main() {
     start_background_gc();
     start_log_cleanup();
     commands::flipboard::start_feed_scheduler_loop();
+    // 认知层：感知打分、审议、简报、日常维护四条循环。受 cognition_enabled 总开关控制。
+    cognition::start_background_loops();
     let file_watcher = FileWatcher::new();
 
     let shared_state = SharedState::new();
@@ -765,11 +771,65 @@ async fn main() {
              commands::terminal::terminal_list_sessions,
             commands::frontend_logging::frontend_log,
             commands::frontend_logging::frontend_log_batch,
+            // ── 认知层（感知 / 记忆 / 召回 / 信念 / 主动 / 简报 / 工具面 / 进化闩）
+            cognition::commands::cognition_status,
+            cognition::commands::cognition_set_enabled,
+            cognition::commands::cognition_set_setting,
+            cognition::commands::cognition_percept_list,
+            cognition::commands::cognition_percept_ingest,
+            cognition::commands::cognition_percept_set_state,
+            cognition::commands::cognition_percept_get,
+            cognition::commands::cognition_score_percepts,
+            cognition::commands::cognition_recall,
+            cognition::commands::cognition_nudge_list,
+            cognition::commands::cognition_nudge_decide,
+            cognition::commands::cognition_deliberate_now,
+            cognition::commands::cognition_review_feedback,
+            cognition::commands::cognition_policy_train,
+            cognition::commands::cognition_policy_reset,
+            cognition::commands::cognition_brief_get,
+            cognition::commands::cognition_brief_generate,
+            cognition::commands::cognition_brief_list,
+            cognition::commands::cognition_brief_mark_opened,
+            cognition::commands::cognition_profile_get,
+            cognition::commands::cognition_profile_save,
+            cognition::commands::cognition_interest_upsert,
+            cognition::commands::cognition_interest_remove,
+            cognition::commands::cognition_belief_list,
+            cognition::commands::cognition_belief_extract,
+            cognition::commands::cognition_belief_set_status,
+            cognition::commands::cognition_belief_remove,
+            cognition::commands::cognition_belief_evidence,
+            cognition::commands::cognition_detect_contradictions,
+            cognition::commands::cognition_episode_recent,
+            cognition::commands::cognition_episode_steps,
+            cognition::commands::cognition_episode_citations,
+            cognition::commands::cognition_citation_clicked,
+            cognition::commands::cognition_tools_list,
+            cognition::commands::cognition_tool_set_tier,
+            cognition::commands::cognition_tool_call,
+            cognition::commands::cognition_tool_audit,
+            cognition::commands::cognition_mcp_info,
+            cognition::commands::cognition_eval_mine,
+            cognition::commands::cognition_eval_run,
+            cognition::commands::cognition_eval_tune,
+            cognition::commands::cognition_eval_runs,
+            cognition::commands::cognition_recall_weights_rollback,
+            cognition::commands::cognition_maintenance,
+            cognition::commands::cognition_chat_finish,
+            cognition::commands::cognition_sources,
+            cognition::commands::cognition_set_source_enabled,
+            cognition::commands::cognition_capture,
+            cognition::commands::cognition_nudge_get,
+            cognition::commands::cognition_channel_stats,
+            cognition::commands::cognition_purge_percepts,
         ])
         .setup(move |app| {
             shared_state.set_app_handle(app.handle().clone());
             // 知识图谱索引变更广播需要在非命令上下文(文件 CRUD 钩子)里 emit,这里注入全局句柄。
             commands::kgraph::init_app_handle(app.handle().clone());
+            // 认知层的后台循环同样要在非命令上下文里广播提醒与简报。
+            cognition::init_app_handle(app.handle().clone());
 
             // 启动持久化文档转换队列（含断点续跑）
             commands::convert::ConversionQueue::init(app.handle().clone());

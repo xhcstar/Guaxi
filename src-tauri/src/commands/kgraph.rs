@@ -2246,6 +2246,72 @@ pub async fn kg_semantic_search(
         .collect())
 }
 
+/// 认知子系统入口：用**已有的**归一化查询向量在指定库取 top-k 节点。
+///
+/// 与 `kg_semantic_search` 的区别是不再重复求向量——percept 入库时已经算过一次，
+/// 复用它可以让 novelty 打分与召回共享同一次 embedding 调用。
+pub fn kg_vec_topk(
+    kb_name: &str,
+    query: &[f32],
+    top_k: usize,
+    node_types: Option<Vec<String>>,
+) -> Result<Vec<(MemNode, f32)>, String> {
+    let store = load_vectors(kb_name)?;
+    if store.dim == 0 {
+        return Ok(Vec::new());
+    }
+    let mem = load_mem_graph(kb_name)?;
+    let hits = vec_search(&store, query, top_k, &node_types, &HashSet::new());
+    Ok(hits
+        .into_iter()
+        .filter_map(|(id, score)| mem.pos.get(&id).map(|&p| (mem.nodes[p].clone(), score)))
+        .collect())
+}
+
+/// 按 id 取单个节点（构造引证、信念溯源时用）。
+pub fn kg_node_of(kb_name: &str, node_id: &str) -> Option<MemNode> {
+    let mem = load_mem_graph(kb_name).ok()?;
+    mem.pos.get(node_id).map(|&p| mem.nodes[p].clone())
+}
+
+/// 取节点正文片段：section/paragraph 读源文件的对应行区间，其余回退节点名。
+///
+/// 这是引证片段与信念抽取的统一取文入口——它保证"给模型看的内容"与
+/// "用户点开引证后看到的内容"是同一段，避免答非所引。
+pub fn kg_node_text(node: &MemNode, max_chars: usize) -> String {
+    let path = node.file_path.as_deref().or(node.path.as_deref());
+    if let (Some(fp), Some(s)) = (path, node.start_line) {
+        if matches!(node.node_type.as_str(), "section" | "paragraph") {
+            if let Ok(content) = fs::read_to_string(fp) {
+                let lines: Vec<&str> = content.lines().collect();
+                let start = (s.max(1) as usize).saturating_sub(1);
+                let end = node
+                    .end_line
+                    .map(|e| (e.max(0) as usize).min(lines.len()))
+                    .unwrap_or_else(|| lines.len().min(start + 40));
+                if start < end {
+                    let text = lines[start..end].join("\n").trim().to_string();
+                    if !text.is_empty() {
+                        return text.chars().take(max_chars).collect();
+                    }
+                }
+            }
+        }
+    }
+    // 文件节点：读开头若干字符作为摘要来源。
+    if node.node_type == "file" {
+        if let Some(fp) = path {
+            if let Ok(content) = fs::read_to_string(fp) {
+                let t = content.trim();
+                if !t.is_empty() {
+                    return t.chars().take(max_chars).collect();
+                }
+            }
+        }
+    }
+    node.name.chars().take(max_chars).collect()
+}
+
 #[derive(serde::Serialize)]
 pub struct KgRelationSuggestion {
     pub from: String,

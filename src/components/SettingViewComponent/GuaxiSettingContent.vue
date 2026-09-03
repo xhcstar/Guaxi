@@ -18,6 +18,7 @@ import AboutContent from './AboutContent.vue';
 import LLMModalSetting from './LLMModalSetting.vue';
 import GuaxiManual from './GuaxiManual.vue';
 import TaskManagerContent from './TaskManagerContent.vue';
+import CognitionSetting from './CognitionSetting.vue';
 import { useSettingsStore } from '../../stores/settingsStore';
 
 const settingsStore = useSettingsStore();
@@ -37,6 +38,8 @@ const currentComponent = computed(() => {
       return LLMModalSetting;
     case 'taskmanager':
       return TaskManagerContent;
+    case 'cognition':
+      return CognitionSetting;
     case 'manual':
       return GuaxiManual;
     default:

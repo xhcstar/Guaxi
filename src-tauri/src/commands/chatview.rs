@@ -5558,6 +5558,10 @@ pub async fn prepare_web_model_window(
 pub async fn get_chat_answer_stream(app: AppHandle, request: ChatRequest) -> Result<(), String> {
     info!("Enter get_chat_answer_stream");
     reset_stream_cancel_flag();
+    // ── 认知层接地：把用户自己的知识库/收件箱/历史问答召回成带引证的上下文，
+    // 前置到问题上。失败或无证据时**原样**走原链路，不改变任何既有行为。
+    let mut request = request;
+    let episode_id = crate::cognition::hook_chat_start(&app, &mut request.question, &request.sessionid, request.modelid).await;
     let model =
         ChatModel::try_from(request.modelid).map_err(|e| format!("Invalid model ID: {}", e))?;
     info!(
@@ -5565,7 +5569,7 @@ pub async fn get_chat_answer_stream(app: AppHandle, request: ChatRequest) -> Res
         request.modelid, request.question, request.sessionid
     );
 
-    match model {
+    let dispatch_result = match model {
         ChatModel::CHATGPT => {
             match get_answer_from_chatgpt_stream(app, &request.question, &request.history, &request.sessionid).await {
                 Ok(()) => {
@@ -5716,7 +5720,13 @@ pub async fn get_chat_answer_stream(app: AppHandle, request: ChatRequest) -> Res
 
             Ok(())
         }
+    };
+    // 失败即刻收尾；成功时留给前端在流结束后带着完整答案调 cognition_chat_finish，
+    // 这样才能拿到答案文本回填"哪条引证真的被用上了"——那是检索权重学习唯一的免费标签。
+    if let Err(e) = &dispatch_result {
+        crate::cognition::hook_chat_failed(&episode_id, e);
     }
+    dispatch_result
 }
 
 #[tauri::command]
@@ -5946,6 +5956,13 @@ pub async fn agent_chat_stream(app: AppHandle, request: AgentRequest) -> Result<
     }
 
     reset_stream_cancel_flag();
+
+    // 认知层：记一段 Agent 轨迹，并把召回结果作为提示交给前端（不改写问题——
+    // Agent 可以自己调 guaxi_recall 拿更精确的东西，前置一大段反而挤占它的工具预算）。
+    let cog_episode =
+        crate::cognition::hook_agent_start(&app, &request.question, &request.sessionid, request.modelid)
+            .await;
+    let _ = &cog_episode;
 
     // Agent 引擎分流：默认走打包进 Guaxi 的 codex sidecar（更快、工具更全），
     // codex 不可用（二进制缺失 / 供应商没配 / 进程起不来）时静默回退到内置 Python Agent，

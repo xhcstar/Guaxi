@@ -149,6 +149,9 @@ pub async fn start_backend_services(state: SharedState) -> std::io::Result<()> {
             .configure(markdown_image_process::config)
             .configure(browser_preview_config)
             .configure(|cfg| chrome_extension_service::config(cfg, Data::new(state.clone())))
+            // MCP 服务端：挂在既有 loopback 端口上，不新开端口、不扩大暴露面。
+            // 只会说 stdio 的客户端（如内置 codex）由 guaxi_mcp 桥接进程转发到这里。
+            .configure(crate::cognition::mcp::config)
             .route("/api/web-model-chat", web::post().to(web_model_chat_push))
             .route("/api/notebook/data-lab/health", web::get().to(notebook_data_lab_health))
             .route("/api/notebook/data-lab/action", web::post().to(notebook_data_lab_rpc_http))
