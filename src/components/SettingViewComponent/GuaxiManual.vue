@@ -16,6 +16,7 @@
             <li><button type="button" class="toc-link" @click="scrollToSection('reader')">资料库与阅读器</button></li>
             <li><button type="button" class="toc-link" @click="scrollToSection('chat')">聊天与模型</button></li>
             <li><button type="button" class="toc-link" @click="scrollToSection('brain')">知识图谱</button></li>
+            <li><button type="button" class="toc-link" @click="scrollToSection('cognition')">大脑（认知层）</button></li>
             <li><button type="button" class="toc-link" @click="scrollToSection('search')">知识源与收集</button></li>
             <li><button type="button" class="toc-link" @click="scrollToSection('task')">任务管理</button></li>
             <li><button type="button" class="toc-link" @click="scrollToSection('apps')">应用中心</button></li>
@@ -64,6 +65,10 @@
             <button type="button" class="feature-card" @click="scrollToSection('brain')">
               <div class="feature-title">知识图谱</div>
               <div class="feature-desc">知识库树、3D 图谱、节点类型/标签筛选、语义搜索、最短路径、社区折叠、AI 概念/关系/标签建议。</div>
+            </button>
+            <button type="button" class="feature-card" @click="scrollToSection('cognition')">
+              <div class="feature-title">大脑（认知层）</div>
+              <div class="feature-desc">后台读你已经拥有的材料，攒出主张、发现矛盾与缺口，只在够重要时才提醒你；不够重要的降级进每日简报。</div>
             </button>
             <button type="button" class="feature-card" @click="scrollToSection('search')">
               <div class="feature-title">知识源聚合</div>
@@ -217,6 +222,10 @@
             <li>工具栏支持构建索引、生成向量、AI 提炼概念与关系、语义搜索、路径模式、社区检测/折叠和演化时间轴。</li>
             <li>选中节点后可查看标签、关系、关联建议和标签建议，确认建议后写入图谱；也可以删除手动标签或非结构性关系。</li>
             <li>右侧面板提供节点信息、搜索节点、类型筛选、标签筛选和结果列表。</li>
+            <li>
+              顶栏的「大脑 / 图谱」开关用来切换同一个页面的两种用法：图谱是你主动去翻的地图，大脑是它替你读完之后主动递给你的结论，详见
+              <button type="button" class="toc-link" @click="scrollToSection('cognition')">大脑（认知层）</button>。
+            </li>
           </ul>
 
           <div class="figure">
@@ -224,6 +233,109 @@
               <img class="figure-img" :src="manualImage('page-brain')" alt="知识图谱页面" />
             </div>
             <div class="figure-caption">图 6：知识图谱</div>
+          </div>
+        </section>
+
+        <n-divider />
+
+        <section id="cognition">
+          <h2 class="h2">大脑（认知层）</h2>
+          <p class="p">
+            大脑是知识图谱页顶栏「大脑 / 图谱」开关切过去的另一半，也是这一版新增的最大一块功能。
+            它要解决的问题很具体：材料越攒越多，你其实读不完，也记不住自己三个月前得出过什么结论。
+            图谱只能等你想起来去翻，大脑则反过来——它在后台把你已经拥有的材料读一遍，攒成可以被推翻的结论，
+            发现其中的矛盾和缺口，然后只在够重要的时候才来打断你一次。
+          </p>
+          <p class="p">
+            有两件事需要先说清楚，否则它看起来会像个不知道在干什么的东西：第一，它不去互联网上替你找新知识，
+            只处理你自己的知识库、资料库和知识源抓回来的内容；第二，它默认很安静，
+            大多数时候你会看到“没有待处理的提醒”，那是正常状态，不是它没在工作。
+          </p>
+
+          <h3 class="h3">四步循环：感知 → 记忆 → 审议 → 投递</h3>
+          <ol class="ol">
+            <li>
+              <b>感知</b>：新抓取的网页、RSS、摘录、文件、聊天记录会进入“收件箱”，每条用本地向量模型算出
+              新颖度（和你已有的材料有多不一样）与显著性（值不值得占用你的注意力）。这一步全程本地，不花 token。
+            </li>
+            <li>
+              <b>记忆</b>：从材料里抽出“主张”——一句可以被后来的材料反驳的结论，并记住它出自哪里。
+              同时每次问答、抓取、整理都会留下一段行为轨迹，用来统计召回给出的引证里有多少真正被答案用上了。
+            </li>
+            <li>
+              <b>审议</b>：定期扫一遍新感知与图谱变化，产出六类提醒——矛盾、缺口、到期、复习、新兴主题、陈旧。
+              每类提醒在界面上都有自己的图标和颜色，悬停能看到这一类到底在说什么。
+            </li>
+            <li>
+              <b>投递</b>：每条提醒按分数和当天剩余额度决定怎么找你——直接打断、系统通知、留在看板，
+              或者降级进简报。够不上门槛的提醒不会被丢掉，只是不打断你。
+            </li>
+          </ol>
+          <h3 class="h3">收件箱怎么用</h3>
+          <p class="p">
+            收件箱是“待读”而不是“已存”。它的目标是让你的阅读清单变短，所以有两条规则最好先知道：
+            每天自动采集有条数上限，超出额度的抓取内容根本不会入库；没读过的抓取与 RSS 内容会在设定的天数后自动清除。
+            被引证过、被主张或提醒引用过的条目不会被清掉。
+          </p>
+          <ul class="manual-ul">
+            <li>每张卡片有四个图标动作：打开原文、查看全文、归档、不感兴趣。悬停会说明各自的后果。</li>
+            <li><b>归档</b>是“留着但不再算未处理”，归档过的条目不会被每日清理带走。</li>
+            <li><b>不感兴趣</b>把它从收件箱移出，同时告诉打分器这类内容对你没用，后续同类会被压低。</li>
+            <li>左栏可以按来源筛选（网页抓取、RSS、摘录、文件、剪贴板、屏幕、手动、聊天），并看到今日采集额度用掉了多少。</li>
+          </ul>
+
+          <h3 class="h3">提醒与打断额度</h3>
+          <p class="p">
+            打断是有代价的，所以每天能打断你的次数有上限，用完就只剩通知和看板。
+            打断门槛还会自适应：你连着采纳提醒，门槛会降下来；你连着忽略，门槛会自己升上去。
+            左栏底部一直显示“今日已打断 N 次，还剩 M 次额度”，你随时能看出它现在有多吵。
+          </p>
+          <ul class="manual-ul">
+            <li><b>采纳</b>表示这条提醒有用，同类提醒之后更容易再次找到你。</li>
+            <li><b>忽略</b>表示这次打扰错了，同类会被压制。请如实点，门槛就是靠这两个动作学出来的。</li>
+            <li>复习类提醒还多一个<b>“忘了，明天再来”</b>，用于推迟而不是否决它。</li>
+            <li>简报把当天所有够不上打断门槛的内容汇总成一份，在画像里设定的时刻自动生成；左栏用红色角标提示有没读过的简报。</li>
+          </ul>
+          <h3 class="h3">画像文件是唯一的真相</h3>
+          <p class="p">
+            大脑关心什么、什么时候生成简报、每天允许打断几次，全部写在一个可以直接编辑的画像文件里。
+            设置页里的表单只是这个文件的编辑器，不是另一份配置——你手工改完画像文件，大脑立刻按新的来。
+            这样设计的理由是：你应该能一眼看完并改掉它对你的所有假设，而不是去猜某个开关背后到底是什么。
+          </p>
+
+          <h3 class="h3">隐私与安全边界</h3>
+          <ul class="manual-ul">
+            <li>剪贴板采集和屏幕采集<b>默认关闭</b>，需要你到设置里逐个打开。</li>
+            <li>所有外部内容只当资料看，不当指令看。抓回来的正文会先做一次注入中和，卡片上会标出“已中和”。</li>
+            <li>向量、新颖度、显著性、矛盾检测全部走本地模型；只有生成简报和少数审议步骤会调用大模型。</li>
+            <li>工具授权按读取、写入、联网、执行四档分别授权，并且可以随时查看调用审计。</li>
+          </ul>
+
+          <h3 class="h3">先做这三件事</h3>
+          <ol class="ol">
+            <li>
+              在图谱视图里给知识库<b>生成一次向量</b>。召回、新颖度和矛盾检测都依赖它，
+              没有向量大脑几乎什么都做不了，左栏会给出橙色提示。
+            </li>
+            <li>打开设置页的“认知层”，只开你需要的感知来源，先把剪贴板和屏幕留在关闭状态。</li>
+            <li>回到大脑视图点一次<b>立即审议</b>，看它产出什么。之后它会自己在后台跑，不需要你再手动点。</li>
+          </ol>
+
+          <div class="figure">
+            <div class="figure-box">
+              <img
+                v-if="!isFigurePending('page-cognition')"
+                class="figure-img"
+                :src="manualImage('page-cognition')"
+                alt="大脑（认知层）视图"
+                @error="markFigurePending('page-cognition')"
+              />
+              <div v-else class="figure-pending">
+                <div class="figure-pending-title">截图待补充</div>
+                <div class="figure-pending-path">{{ figurePath('page-cognition') }}</div>
+              </div>
+            </div>
+            <div class="figure-caption">图 7：大脑（认知层）——左栏、待处理提醒与收件箱</div>
           </div>
         </section>
 
@@ -246,7 +358,7 @@
             <div class="figure-box">
               <img class="figure-img" :src="manualImage('page-flipboard')" alt="知识源页面" />
             </div>
-            <div class="figure-caption">图 7：知识源聚合与阅读</div>
+            <div class="figure-caption">图 8：知识源聚合与阅读</div>
           </div>
         </section>
 
@@ -291,7 +403,7 @@
             <div class="figure-box">
               <img class="figure-img" :src="manualImage('page-application')" alt="应用中心" />
             </div>
-            <div class="figure-caption">图 8：应用中心</div>
+            <div class="figure-caption">图 9：应用中心</div>
           </div>
         </section>
 
@@ -316,7 +428,7 @@
             <div class="figure-box">
               <img class="figure-img" :src="manualImage('page-statistics')" alt="统计页面" />
             </div>
-            <div class="figure-caption">图 9：统计页面</div>
+            <div class="figure-caption">图 10：统计页面</div>
           </div>
         </section>
 
@@ -356,11 +468,44 @@
             <li>配置任务库 Git 远程地址、用户名和 Email，并可直接提交推送或拉取。</li>
           </ul>
 
+          <h3 class="h3">认知层</h3>
+          <p class="p">
+            这一页是<button type="button" class="toc-link" @click="scrollToSection('cognition')">大脑（认知层）</button>的开关面板，
+            分成感知来源、打扰与预算、工具授权、MCP 接入、我的画像、自调与评测闩、存储与维护七组。
+            每个按钮都带悬浮说明，动手之前先看一眼它会改什么。
+          </p>
+          <ul class="manual-ul">
+            <li><b>感知来源</b>：逐个开关网页抓取、RSS、摘录、文件、剪贴板、屏幕、手动、聊天，并设定每天自动采集的条数上限。剪贴板与屏幕默认关闭。</li>
+            <li><b>打扰与预算</b>：每天允许打断几次、打断门槛、未读抓取内容保留几天。想让它更安静就把额度调小，提醒不会消失，只会降级进简报。</li>
+            <li><b>工具授权</b>：读取、写入、联网、执行四档分别授权，可查看调用审计，确认它到底做过什么。</li>
+            <li><b>MCP 接入</b>：把大脑作为 MCP 服务暴露给外部客户端，可以复制配置或读取接入信息。</li>
+            <li><b>我的画像</b>：直接读取和编辑画像文件。它是唯一的真相，表单只是它的编辑器。</li>
+            <li><b>自调与评测闩</b>：挖掘评测样本、跑一次评测、自动调参、回滚权重。调参必须先过评测这一关，效果变差不会被写进去。</li>
+            <li><b>存储与维护</b>：立即清理未读抓取内容、立即打分待处理条目、立即维护、按文件重建画像派生层。</li>
+          </ul>
+
+          <div class="figure">
+            <div class="figure-box">
+              <img
+                v-if="!isFigurePending('setting-cognition')"
+                class="figure-img"
+                :src="manualImage('setting-cognition')"
+                alt="设置-认知层"
+                @error="markFigurePending('setting-cognition')"
+              />
+              <div v-else class="figure-pending">
+                <div class="figure-pending-title">截图待补充</div>
+                <div class="figure-pending-path">{{ figurePath('setting-cognition') }}</div>
+              </div>
+            </div>
+            <div class="figure-caption">图 11：设置页的认知层配置</div>
+          </div>
+
           <div class="figure">
             <div class="figure-box">
               <img class="figure-img" :src="manualImage('page-setting')" alt="设置页面" />
             </div>
-            <div class="figure-caption">图 10：设置页面</div>
+            <div class="figure-caption">图 12：设置页面</div>
           </div>
         </section>
 
@@ -401,6 +546,22 @@
             <div class="q">Q：本地模型为什么切换后要等一会儿？</div>
             <div class="a">A：LocalDeepseek / LocalQwen 会在选择时检查并启动本地服务，首次加载模型需要等待模型文件和 llama-server 初始化。</div>
           </div>
+          <div class="qa">
+            <div class="q">Q：大脑一直显示“没有待处理的提醒”，是不是坏了？</div>
+            <div class="a">A：大多数时候这就是正常状态，它只在够重要时才打断你。如果连简报也是空的，先确认知识库已经<b>生成过向量</b>——左栏会用橙色提示语义服务未就绪，那种情况下召回、新颖度和矛盾检测都跑不起来。</div>
+          </div>
+          <div class="qa">
+            <div class="q">Q：收件箱里的抓取内容为什么自己消失了？</div>
+            <div class="a">A：这是有意的。没读过的抓取与 RSS 内容会在设定的天数后自动清除，每天自动采集也有条数上限，超出的根本不入库。想留下某一条，把它<b>归档</b>，或者在任何地方引用它一次；被引证、被主张或提醒引用过的条目不会被清。</div>
+          </div>
+          <div class="qa">
+            <div class="q">Q：提醒太吵或者太少，怎么调？</div>
+            <div class="a">A：如实点“采纳”和“忽略”，打断门槛会自己跟着走：连着采纳就降下来，连着忽略就升上去。想立刻见效，就去设置页“认知层 → 打扰与预算”改每天打断次数和门槛，或者直接编辑画像文件。</div>
+          </div>
+          <div class="qa">
+            <div class="q">Q：大脑会读我的剪贴板和屏幕吗？</div>
+            <div class="a">A：默认不会，这两个来源出厂就是关闭的，要你自己去设置页打开。其他来源抓回来的正文会先做注入中和再入库，外部内容只当资料看、不当指令执行。</div>
+          </div>
         </section>
       </n-space>
     </n-card>
@@ -408,7 +569,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, reactive } from 'vue'
 import { NAlert, NCard, NDivider, NSpace, NTag } from 'naive-ui'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { createLogger } from '../../utils/logger'
@@ -451,6 +612,16 @@ const manualImages = {
     light: new URL('../../assets/manual/page-brain.png', import.meta.url).href,
     dark: new URL('../../assets/manual/page-brain-dark.png', import.meta.url).href
   },
+  // 认知层这两张截图还没补。文件放进 assets/manual 就会自动显示出来，
+  // 在那之前正文里显示的是一个写着目标路径的占位框，不是坏图标。
+  'page-cognition': {
+    light: new URL('../../assets/manual/page-cognition.png', import.meta.url).href,
+    dark: new URL('../../assets/manual/page-cognition-dark.png', import.meta.url).href
+  },
+  'setting-cognition': {
+    light: new URL('../../assets/manual/setting-cognition.png', import.meta.url).href,
+    dark: new URL('../../assets/manual/setting-cognition-dark.png', import.meta.url).href
+  },
   'page-flipboard': {
     light: new URL('../../assets/manual/page-flipboard.png', import.meta.url).href,
     dark: new URL('../../assets/manual/page-flipboard-dark.png', import.meta.url).href
@@ -474,6 +645,19 @@ const manualImage = (key) => {
   if (!entry) return ''
   return isDarkTheme.value ? entry.dark : entry.light
 }
+
+// 截图还没放进 assets/manual 时，浏览器会给出一个坏图标，读手册的人只会以为软件出错了。
+// 这里记下加载失败的图，改成显示目标路径的占位框；亮色和暗色分别记，
+// 因为经常是先补一张、另一张还欠着。图片补齐后占位框自动消失，正文不用再改。
+const brokenFigures = reactive(new Set())
+const figureSlot = (key) => `${key}:${isDarkTheme.value ? 'dark' : 'light'}`
+const isFigurePending = (key) => brokenFigures.has(figureSlot(key))
+const markFigurePending = (key) => {
+  brokenFigures.add(figureSlot(key))
+  logger.warn('[Manual] figure missing', { key, dark: isDarkTheme.value })
+}
+const figurePath = (key) =>
+  `src/assets/manual/${key}${isDarkTheme.value ? '-dark' : ''}.png`
 
 // 关键交互日志：手册是设置页内的长文档，记录跳转行为能帮助排查目录锚点失效或主题切换后的布局问题。
 const scrollToSection = (id) => {
@@ -637,6 +821,30 @@ onMounted(() => {
   overflow: hidden;
 }
 
+/* 截图还没放进来时显示的占位框。虚线边框和最小高度沿用 .figure-box，
+   所以补图前后正文的排版不会跳动，读者也知道这里本来该有一张图。 */
+.figure-pending {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px 16px;
+  color: var(--guaxi-text-secondary);
+}
+
+.figure-pending-title {
+  font-size: 13px;
+}
+
+.figure-pending-path {
+  font-family: var(--guaxi-editor-font-family, monospace);
+  font-size: 12px;
+  word-break: break-all;
+}
+
 .figure-caption {
   margin-top: 6px;
   color: var(--guaxi-text-secondary);
@@ -678,6 +886,7 @@ onMounted(() => {
 :root[data-guaxi-theme='dark'] .manual .manual-ul,
 :root[data-guaxi-theme='dark'] .manual .ol,
 :root[data-guaxi-theme='dark'] .manual .a,
+:root[data-guaxi-theme='dark'] .manual .figure-pending,
 :root[data-guaxi-theme='dark'] .manual .figure-caption {
   color: #c9d1d9;
 }
@@ -695,6 +904,7 @@ onMounted(() => {
 .dark-mode .manual .manual-ul,
 .dark-mode .manual .ol,
 .dark-mode .manual .a,
+.dark-mode .manual .figure-pending,
 .dark-mode .manual .figure-caption {
   color: #c9d1d9;
 }

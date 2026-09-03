@@ -5,36 +5,66 @@
     <div class="cog-bar">
       <div class="cog-bar-left">
         <n-tag :bordered="false" :type="store.enabled ? 'success' : 'default'" size="small">
+          <template #icon><n-icon :component="BrainCircuit20Regular" /></template>
           {{ store.enabled ? '认知层运行中' : '认知层已关闭' }}
         </n-tag>
         <n-tag v-if="!store.embeddingReady" :bordered="false" type="warning" size="small">
+          <template #icon><n-icon :component="Warning20Regular" /></template>
           语义服务未就绪，召回与打分暂停
         </n-tag>
-        <span class="cog-metric">
-          待处理提醒 <b>{{ store.openNudgeCount }}</b>
+        <span class="cog-metric" title="等你处理的提醒条数">
+          <n-icon :component="Alert20Regular" />待处理 <b>{{ store.openNudgeCount }}</b>
         </span>
-        <span class="cog-metric">
-          收件箱 <b>{{ st?.percept?.newCount ?? 0 }}</b>
+        <span class="cog-metric" title="收件箱里未处理的感知条数">
+          <n-icon :component="Mail20Regular" />收件箱 <b>{{ st?.percept?.newCount ?? 0 }}</b>
           <i v-if="store.pendingScoreCount">（{{ store.pendingScoreCount }} 待打分）</i>
         </span>
-        <span class="cog-metric">
-          今日打断 <b>{{ st?.nudge?.deliveredToday ?? 0 }}</b>
+        <span class="cog-metric" title="今日已用掉的打断次数 / 剩余额度">
+          <n-icon :component="Flash20Regular" />打断 <b>{{ st?.nudge?.deliveredToday ?? 0 }}</b>
           / 剩 {{ st?.nudge?.interruptsLeftToday ?? 0 }}
         </span>
         <span class="cog-metric" :title="thresholdHint">
-          阈值 <b>{{ (st?.nudge?.threshold ?? 0).toFixed(2) }}</b>
+          <n-icon :component="Gauge20Regular" />阈值
+          <b>{{ (st?.nudge?.threshold ?? 0).toFixed(2) }}</b>
           ｜采纳率 {{ acceptPct }}
         </span>
       </div>
       <div class="cog-bar-right">
-        <n-button size="tiny" :loading="busy.deliberate" @click="deliberate">立即审议</n-button>
-        <n-button size="tiny" :loading="store.briefLoading" @click="makeBrief">生成简报</n-button>
-        <n-button size="tiny" quaternary :loading="store.statusLoading" @click="reload">刷新</n-button>
+        <GuaxiIconButton
+          icon-only
+          :icon="Lightbulb20Regular"
+          label="立即审议"
+          hint="现在就扫一遍新感知与图谱变化，产出提醒并按额度投递。不必等下一轮自动审议。"
+          :loading="busy.deliberate"
+          @click="deliberate"
+        />
+        <GuaxiIconButton
+          icon-only
+          :icon="News20Regular"
+          label="生成简报"
+          hint="把够不上打断门槛的内容汇总成今天的简报。会消耗少量 token。"
+          :loading="store.briefLoading"
+          @click="makeBrief"
+        />
+        <GuaxiIconButton
+          icon-only
+          quaternary
+          :icon="ArrowSync20Regular"
+          label="刷新"
+          hint="重新读取状态、提醒、收件箱与简报列表。"
+          :loading="store.statusLoading"
+          @click="reload"
+        />
       </div>
     </div>
 
     <n-tabs v-model:value="tab" type="line" size="small" class="cog-tabs">
-      <n-tab-pane name="nudges" :tab="`提醒 (${store.openNudgeCount})`">
+      <n-tab-pane name="nudges">
+        <template #tab>
+          <span class="cog-tab">
+            <n-icon :component="Alert20Regular" />提醒 ({{ store.openNudgeCount }})
+          </span>
+        </template>
         <div class="cog-filters">
           <n-tag
             :bordered="false"
@@ -53,7 +83,10 @@
             :title="meta.hint"
             @update:checked="store.nudgeFilterKind = store.nudgeFilterKind === kind ? '' : kind"
           >
-            <span class="cog-dot" :style="{ background: meta.color }"></span>{{ meta.label }}
+            <template #icon>
+              <n-icon :component="nudgeIcon(kind)" :style="{ color: meta.color }" />
+            </template>
+            {{ meta.label }}
             <i v-if="countOf(kind)">{{ countOf(kind) }}</i>
           </n-tag>
         </div>
@@ -64,10 +97,18 @@
           </div>
           <div v-for="n in store.filteredNudges" :key="n.id" class="cog-card">
             <div class="cog-card-head">
-              <span class="cog-dot" :style="{ background: kindColor(n.kind) }"></span>
+              <n-icon
+                class="cog-kind-icon"
+                :component="nudgeIcon(n.kind)"
+                :style="{ color: kindColor(n.kind) }"
+                :title="kindHint(n.kind)"
+              />
               <span class="cog-card-title">{{ n.title }}</span>
-              <n-tag size="tiny" :bordered="false">{{ kindLabel(n.kind) }}</n-tag>
+              <n-tag size="tiny" :bordered="false" :title="kindHint(n.kind)">
+                {{ kindLabel(n.kind) }}
+              </n-tag>
               <n-tag size="tiny" :bordered="false" :title="channelHint(n.channel)">
+                <template #icon><n-icon :component="channelIcon(n.channel)" /></template>
                 {{ channelLabel(n.channel) }}
               </n-tag>
               <span class="cog-card-score" :title="`策略分 ${n.policyScore.toFixed(3)}｜效用 ${n.utility.toFixed(2)}｜成本 ${n.cost.toFixed(2)}`">
@@ -93,20 +134,42 @@
             </div>
 
             <div class="cog-card-actions">
-              <n-button size="tiny" type="primary" @click="decide(n, true)">采纳</n-button>
-              <n-button size="tiny" quaternary @click="decide(n, false)">忽略</n-button>
-              <n-button
-                v-if="n.kind === 'review'"
-                size="tiny"
+              <GuaxiIconButton
+                icon-only
+                type="primary"
+                :icon="CheckmarkCircle20Regular"
+                label="采纳"
+                hint="这条有用。系统会据此调高同类提醒的权重，下次更早告诉你。"
+                @click="decide(n, true)"
+              />
+              <GuaxiIconButton
+                icon-only
                 quaternary
+                :icon="DismissCircle20Regular"
+                label="忽略"
+                hint="这条没用。系统会调低同类提醒并抬高打断门槛，少来烦你。"
+                @click="decide(n, false)"
+              />
+              <GuaxiIconButton
+                v-if="n.kind === 'review'"
+                icon-only
+                quaternary
+                :icon="CalendarClock20Regular"
+                label="忘了，明天再来"
+                hint="把这条提醒引用的章节全部重排到明天再问，同时缩短它们的复习间隔。"
                 @click="reviewAll(n, false)"
-              >忘了，明天再来</n-button>
+              />
             </div>
           </div>
         </n-spin>
       </n-tab-pane>
 
-      <n-tab-pane name="percepts" :tab="`收件箱 (${st?.percept?.newCount ?? 0})`">
+      <n-tab-pane name="percepts">
+        <template #tab>
+          <span class="cog-tab">
+            <n-icon :component="Mail20Regular" />收件箱 ({{ st?.percept?.newCount ?? 0 }})
+          </span>
+        </template>
         <div class="cog-filters">
           <n-select
             v-model:value="store.perceptFilter.state"
@@ -122,12 +185,15 @@
             :options="sourceOptions"
             @update:value="() => store.refreshPercepts()"
           />
-          <n-button
+          <GuaxiIconButton
             v-if="store.pendingScoreCount"
-            size="tiny"
+            icon-only
+            :icon="Gauge20Regular"
+            label="立即打分"
+            :hint="`给 ${store.pendingScoreCount} 条待处理内容求向量、算新颖度与显著性。全程本地模型，不花 token。`"
             :loading="busy.score"
             @click="scoreNow"
-          >立即打分 {{ store.pendingScoreCount }} 条</n-button>
+          />
         </div>
 
         <n-spin :show="store.perceptsLoading">
@@ -137,14 +203,20 @@
           <div v-for="p in store.percepts" :key="p.id" class="cog-card">
             <div class="cog-card-head">
               <span class="cog-card-title">{{ p.title || '（无标题）' }}</span>
-              <n-tag size="tiny" :bordered="false">{{ sourceLabel(p.sourceKind) }}</n-tag>
+              <n-tag size="tiny" :bordered="false">
+                <template #icon><n-icon :component="sourceIcon(p.sourceKind)" /></template>
+                {{ sourceLabel(p.sourceKind) }}
+              </n-tag>
               <n-tag
                 v-if="p.neutralized > 0"
                 size="tiny"
                 type="warning"
                 :bordered="false"
                 title="这条材料里出现了试图指挥 AI 的内容，已被中和。它仍然只能当资料读。"
-              >已中和 {{ p.neutralized }} 处</n-tag>
+              >
+                <template #icon><n-icon :component="ShieldKeyhole20Regular" /></template>
+                已中和 {{ p.neutralized }} 处
+              </n-tag>
             </div>
 
             <!-- 两条量尺：显著性决定它会不会进简报，新颖度说明它与你已知的距离。 -->
@@ -158,23 +230,54 @@
                 <i class="cog-meter-bar"><b class="alt" :style="{ width: pct(p.novelty) }"></b></i>
               </span>
               <span v-if="p.anchorNodeId" class="cog-meter" :title="p.anchorNodeId">
-                已锚定到知识库
+                <n-icon :component="Link20Regular" />已锚定到知识库
               </span>
             </div>
 
             <div class="cog-card-body cog-untrusted">{{ p.excerpt }}</div>
 
             <div class="cog-card-actions">
-              <n-button v-if="p.uri" size="tiny" quaternary @click="openUri(p.uri)">打开原文</n-button>
-              <n-button size="tiny" quaternary @click="viewFull(p)">查看全文</n-button>
-              <n-button size="tiny" @click="setState(p, 'archived')">归档</n-button>
-              <n-button size="tiny" quaternary @click="setState(p, 'rejected')">不感兴趣</n-button>
+              <GuaxiIconButton
+                v-if="p.uri"
+                icon-only
+                quaternary
+                :icon="Open20Regular"
+                label="打开原文"
+                hint="在内置浏览窗口里打开来源链接。窗口里双击段落可以直接把它采集回收件箱。"
+                @click="openUri(p.uri)"
+              />
+              <GuaxiIconButton
+                icon-only
+                quaternary
+                :icon="DocumentOnePage20Regular"
+                label="查看全文"
+                hint="在弹窗里读清洗后的全文。外部内容只作资料，不会自己进知识库。"
+                @click="viewFull(p)"
+              />
+              <GuaxiIconButton
+                icon-only
+                :icon="Archive20Regular"
+                label="归档"
+                hint="留着但不再算「未处理」。归档过的条目不会被每日清理带走。"
+                @click="setState(p, 'archived')"
+              />
+              <GuaxiIconButton
+                icon-only
+                quaternary
+                :icon="ThumbDislike20Regular"
+                label="不感兴趣"
+                hint="从收件箱移出。它仍留在库里，可按「不感兴趣」筛出来，只是不再计入未处理。"
+                @click="setState(p, 'rejected')"
+              />
             </div>
           </div>
         </n-spin>
       </n-tab-pane>
 
-      <n-tab-pane name="brief" tab="简报">
+      <n-tab-pane name="brief">
+        <template #tab>
+          <span class="cog-tab"><n-icon :component="News20Regular" />简报</span>
+        </template>
         <div class="cog-filters">
           <n-select
             v-model:value="briefDay"
@@ -184,7 +287,14 @@
             placeholder="选择日期"
             @update:value="(d) => store.loadBrief(d)"
           />
-          <n-button size="tiny" :loading="store.briefLoading" @click="makeBrief">重新生成今天</n-button>
+          <GuaxiIconButton
+            icon-only
+            :icon="ArrowClockwise20Regular"
+            label="重新生成今天"
+            hint="覆盖今天的简报再出一份。适合上午出完之后又读了不少东西的时候。"
+            :loading="store.briefLoading"
+            @click="makeBrief"
+          />
         </div>
         <n-spin :show="store.briefLoading">
           <div v-if="briefHtml" class="cog-brief markdown-body" v-html="briefHtml"></div>
@@ -199,6 +309,7 @@
          这是刻意的——不把它直接塞进编辑器，用户先看清楚再决定要不要入库。 -->
     <n-modal v-model:show="showFull" preset="card" class="cog-modal" :title="fullTitle">
       <div class="cog-untrusted-banner">
+        <n-icon :component="ShieldKeyhole20Regular" />
         以下内容来自外部来源，只作为资料。其中若有试图指挥 AI 的句子，已在入库时被中和。
       </div>
       <pre class="cog-full">{{ fullText }}</pre>
@@ -212,10 +323,33 @@ import { useMessage } from 'naive-ui'
 import MarkdownIt from 'markdown-it'
 import { invoke } from '@tauri-apps/api/core'
 import {
+  Alert20Regular,
+  Archive20Regular,
+  ArrowClockwise20Regular,
+  ArrowSync20Regular,
+  BrainCircuit20Regular,
+  CalendarClock20Regular,
+  CheckmarkCircle20Regular,
+  DismissCircle20Regular,
+  DocumentOnePage20Regular,
+  Flash20Regular,
+  Gauge20Regular,
+  Lightbulb20Regular,
+  Link20Regular,
+  Mail20Regular,
+  News20Regular,
+  Open20Regular,
+  ShieldKeyhole20Regular,
+  ThumbDislike20Regular,
+  Warning20Regular,
+} from '@vicons/fluent'
+import GuaxiIconButton from '../GuaxiIconButton.vue'
+import {
   useCognitionStore,
   NUDGE_KINDS,
   PERCEPT_SOURCE_LABELS,
 } from '../../stores/cognitionStore'
+import { channelIcon, nudgeIcon, sourceIcon } from '../../utils/cognitionIcons'
 import { onCognitionNudge, onCognitionBrief } from '../../utils/cognitionEvents'
 import { createLogger } from '../../utils/logger'
 
@@ -258,6 +392,7 @@ const briefOptions = computed(() =>
 
 const kindLabel = (k) => KINDS[k]?.label || k
 const kindColor = (k) => KINDS[k]?.color || '#888'
+const kindHint = (k) => KINDS[k]?.hint || ''
 const sourceLabel = (k) => PERCEPT_SOURCE_LABELS[k] || k
 const countOf = (kind) => store.nudges.filter((n) => n.kind === kind).length
 const pct = (v) => `${Math.round(Math.max(0, Math.min(1, Number(v) || 0)) * 100)}%`
@@ -455,18 +590,38 @@ onUnmounted(() => {
   display: flex;
   gap: 6px;
 }
+.cog-metric {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
 .cog-metric b {
   font-weight: 600;
   color: var(--guaxi-text-primary);
+  font-variant-numeric: tabular-nums;
 }
 .cog-metric i {
   font-style: normal;
+}
+/* 指标前的图标压小一档：它是标签而不是主角，与数字同高会抢注意力。 */
+.cog-metric :deep(.n-icon) {
+  font-size: 14.5px;
+  color: var(--guaxi-text-secondary);
 }
 
 .cog-tabs {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+}
+/* 页签标题里的图标：naive 的页签是纯文本容器，要自己做对齐。 */
+.cog-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.cog-tab :deep(.n-icon) {
+  font-size: 16px;
 }
 
 .cog-filters {
@@ -483,13 +638,11 @@ onUnmounted(() => {
   width: 210px;
 }
 
-.cog-dot {
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  margin-right: 5px;
-  vertical-align: middle;
+/* 提醒卡片左侧的类型图标：颜色由 NUDGE_KINDS 给，形状由 NUDGE_ICONS 给。
+   两者一起做视觉锚点——只有颜色时色盲用户读不出类型。 */
+.cog-kind-icon {
+  font-size: 17px;
+  flex: 0 0 auto;
 }
 
 .cog-empty {
@@ -589,6 +742,9 @@ onUnmounted(() => {
   gap: 5px;
   font-variant-numeric: tabular-nums;
 }
+.cog-meter :deep(.n-icon) {
+  font-size: 15px;
+}
 .cog-meter-bar {
   display: inline-block;
   width: 54px;
@@ -646,6 +802,9 @@ onUnmounted(() => {
   font-size: 14px;
 }
 .cog-untrusted-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
   font-size: 13px;
   line-height: 1.8;
   padding: 7px 11px;
@@ -653,6 +812,11 @@ onUnmounted(() => {
   border-radius: 4px;
   border-left: 3px solid rgba(217, 138, 43, 0.8);
   background: rgba(217, 138, 43, 0.1);
+}
+.cog-untrusted-banner :deep(.n-icon) {
+  font-size: 17px;
+  flex: 0 0 auto;
+  margin-top: 2px;
 }
 .cog-full {
   max-height: 58vh;

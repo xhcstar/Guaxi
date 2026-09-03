@@ -2,7 +2,9 @@
   <div class="cog-set">
     <div class="cog-set-head">
       <div>
-        <div class="cog-set-title">认知层</div>
+        <div class="cog-set-title">
+          <n-icon :component="BrainCircuit20Regular" />认知层
+        </div>
         <div class="cog-set-sub">
           感知外部输入 → 记忆与召回 → 主动提醒。关闭后采集仍会入库，只是不打分、不审议、不提醒。
         </div>
@@ -11,12 +13,18 @@
     </div>
 
     <div v-if="!store.embeddingReady" class="cog-set-warn">
-      本地语义服务（embedding）尚未就绪。召回、新颖度打分、矛盾检测都依赖它——
-      首次使用会自动下载模型，请在「知识图谱」里先生成一次向量。
+      <n-icon :component="Warning20Regular" />
+      <span>
+        本地语义服务（embedding）尚未就绪。召回、新颖度打分、矛盾检测都依赖它——
+        首次使用会自动下载模型，请在「知识图谱」里先生成一次向量。
+      </span>
     </div>
 
     <n-collapse :default-expanded-names="['sources', 'budget']">
-      <n-collapse-item title="感知来源" name="sources">
+      <n-collapse-item name="sources">
+        <template #header>
+          <span class="cog-sec"><n-icon :component="Mail20Regular" />感知来源</span>
+        </template>
         <div class="cog-note">
           每一路输入都可以单独关。<b>剪贴板与屏幕默认关闭</b>——它们涉及你在别处的活动，
           必须你明确同意才会采集。已采集的内容可以在「大脑 → 收件箱」里逐条查看和删除。
@@ -24,7 +32,9 @@
         <div class="cog-rows">
           <div v-for="s in store.sources" :key="s[0]" class="cog-row">
             <div class="cog-row-main">
-              <div class="cog-row-label">{{ sourceLabel(s[0]) }}</div>
+              <div class="cog-row-label">
+                <n-icon :component="sourceIcon(s[0])" />{{ sourceLabel(s[0]) }}
+              </div>
               <div class="cog-row-hint">{{ sourceHint(s[0]) }}</div>
             </div>
             <n-switch
@@ -84,15 +94,27 @@
           </div>
         </div>
         <div class="cog-actions">
-          <n-button size="tiny" :loading="busy.purge" @click="purgeUnread">
-            立即清理未读抓取内容
-          </n-button>
-          <n-button size="tiny" quaternary :loading="busy.score" @click="scoreNow">
-            立即打分待处理条目
-          </n-button>
+          <GuaxiIconButton
+            :icon="Broom20Regular"
+            label="立即清理未读抓取内容"
+            hint="不按天数规则，现在就把没读过的抓取与 RSS 内容删掉。被引证、被信念或提醒引用过的不会删。"
+            :loading="busy.purge"
+            @click="purgeUnread"
+          />
+          <GuaxiIconButton
+            quaternary
+            :icon="Gauge20Regular"
+            label="立即打分待处理条目"
+            hint="给待处理的感知求向量、算新颖度与显著性。全程本地模型，不花 token。"
+            :loading="busy.score"
+            @click="scoreNow"
+          />
         </div>
       </n-collapse-item>
-      <n-collapse-item title="打扰与预算" name="budget">
+      <n-collapse-item name="budget">
+        <template #header>
+          <span class="cog-sec"><n-icon :component="Alert20Regular" />打扰与预算</span>
+        </template>
         <div class="cog-note">
           这一节决定系统能在多大程度上打扰你。<b>没有任何提醒会被丢掉</b>——
           够不上打断门槛的一律降级到看板与简报，你随时能看到全部。
@@ -187,12 +209,27 @@
             只有在留出集上不比上一版差才会落库。觉得提醒变差了就回滚，反馈数据会保留。
           </div>
           <div class="cog-actions">
-            <n-button size="tiny" :loading="busy.train" @click="trainPolicy">重训策略</n-button>
-            <n-button size="tiny" quaternary @click="resetPolicy">回滚到基线</n-button>
+            <GuaxiIconButton
+              :icon="BrainCircuit20Regular"
+              label="重训策略"
+              hint="用你最近的采纳／忽略记录重训投递策略。只有在留出集上不比现在差才会落库。"
+              :loading="busy.train"
+              @click="trainPolicy"
+            />
+            <GuaxiIconButton
+              quaternary
+              :icon="ArrowUndo20Regular"
+              label="回滚到基线"
+              hint="丢掉学出来的策略，回到内置的保守权重。你的反馈数据会保留，可以再训。"
+              @click="resetPolicy"
+            />
           </div>
         </div>
       </n-collapse-item>
-      <n-collapse-item title="工具授权" name="tools">
+      <n-collapse-item name="tools">
+        <template #header>
+          <span class="cog-sec"><n-icon :component="ShieldKeyhole20Regular" />工具授权</span>
+        </template>
         <div class="cog-note">
           Agent 与外部 MCP 客户端通过这套工具操作应用。等级授权在**服务端强制执行**，
           不是提示词约束。另有一条独立的闸：由外部不可信内容驱动的调用，无论授权如何都只能用只读工具。
@@ -200,7 +237,9 @@
         <div class="cog-rows">
           <div v-for="t in tierRows" :key="t.key" class="cog-row">
             <div class="cog-row-main">
-              <div class="cog-row-label">{{ t.label }}</div>
+              <div class="cog-row-label">
+                <n-icon :component="t.icon" />{{ t.label }}
+              </div>
               <div class="cog-row-hint">{{ t.hint }}</div>
             </div>
             <n-switch
@@ -222,7 +261,14 @@
         </div>
 
         <div class="cog-actions">
-          <n-button size="tiny" quaternary :loading="busy.audit" @click="loadAudit">查看调用审计</n-button>
+          <GuaxiIconButton
+            quaternary
+            :icon="History20Regular"
+            label="查看调用审计"
+            hint="最近 80 次工具调用：谁调的、调了什么、花了多久、有没有失败。授权是服务端强制的，这里是它的账本。"
+            :loading="busy.audit"
+            @click="loadAudit"
+          />
         </div>
         <div v-if="audit.length" class="cog-audit">
           <div v-for="(row, i) in audit" :key="i" class="cog-audit-row" :class="{ bad: !row.ok }">
@@ -234,7 +280,10 @@
           </div>
         </div>
       </n-collapse-item>
-      <n-collapse-item title="MCP 接入" name="mcp">
+      <n-collapse-item name="mcp">
+        <template #header>
+          <span class="cog-sec"><n-icon :component="PlugConnected20Regular" />MCP 接入</span>
+        </template>
         <div class="cog-note">
           内置 codex 引擎会自动挂载这套工具（无需配置）。要让外部客户端
           （Claude Code、Cursor 等）驱动 Guaxi，把下面的配置加进它们的 MCP 设置即可——
@@ -256,15 +305,36 @@
           </div>
           <pre class="cog-code">{{ mcp.clientConfig }}</pre>
           <div class="cog-actions">
-            <n-button size="tiny" @click="copyMcp">复制配置</n-button>
-            <n-button size="tiny" quaternary :loading="busy.mcp" @click="loadMcp">刷新</n-button>
+            <GuaxiIconButton
+              :icon="Copy20Regular"
+              label="复制配置"
+              hint="复制上面这段 JSON，粘进外部客户端的 MCP 配置里即可接上。"
+              @click="copyMcp"
+            />
+            <GuaxiIconButton
+              quaternary
+              :icon="ArrowSync20Regular"
+              label="刷新"
+              hint="重新读取端点、桥接程序状态与可用工具数。"
+              :loading="busy.mcp"
+              @click="loadMcp"
+            />
           </div>
         </div>
         <div v-else class="cog-actions">
-          <n-button size="tiny" :loading="busy.mcp" @click="loadMcp">读取接入信息</n-button>
+          <GuaxiIconButton
+            :icon="PlugConnected20Regular"
+            label="读取接入信息"
+            hint="生成本机端点与可直接粘贴的客户端配置。端点只监听回环地址，不对局域网开放。"
+            :loading="busy.mcp"
+            @click="loadMcp"
+          />
         </div>
       </n-collapse-item>
-      <n-collapse-item title="我的画像" name="profile">
+      <n-collapse-item name="profile">
+        <template #header>
+          <span class="cog-sec"><n-icon :component="Person20Regular" />我的画像</span>
+        </template>
         <div class="cog-note">
           <b>这个文件是真相。</b>系统只会往「关注」区追加它的观察，其余各节完全由你掌握。
           删掉一行，系统就不再据此判断。它决定了什么值得提醒你、以及回答时不必从头解释什么。
@@ -281,10 +351,21 @@
             placeholder="画像内容"
           />
           <div class="cog-actions">
-            <n-button size="tiny" type="primary" :loading="busy.profile" @click="saveProfile">
-              保存
-            </n-button>
-            <n-button size="tiny" quaternary @click="resetProfileDraft">放弃修改</n-button>
+            <GuaxiIconButton
+              type="primary"
+              :icon="Save20Regular"
+              label="保存"
+              hint="写回磁盘上的 profile.md 并立即生效。这个文件是真相，系统只会往「关注」区追加。"
+              :loading="busy.profile"
+              @click="saveProfile"
+            />
+            <GuaxiIconButton
+              quaternary
+              :icon="ArrowUndo20Regular"
+              label="放弃修改"
+              hint="把编辑框恢复成磁盘上的内容，丢掉这次还没保存的改动。"
+              @click="resetProfileDraft"
+            />
           </div>
 
           <div class="cog-sub">系统学到的兴趣（可直接删）</div>
@@ -303,10 +384,19 @@
           </div>
         </div>
         <div v-else class="cog-actions">
-          <n-button size="tiny" :loading="store.profileLoading" @click="loadProfile">读取画像</n-button>
+          <GuaxiIconButton
+            :icon="Person20Regular"
+            label="读取画像"
+            hint="从磁盘读出 profile.md 并可直接编辑。它决定了什么值得提醒你、回答时不必从头解释什么。"
+            :loading="store.profileLoading"
+            @click="loadProfile"
+          />
         </div>
       </n-collapse-item>
-      <n-collapse-item title="自调与评测闩" name="evolve">
+      <n-collapse-item name="evolve">
+        <template #header>
+          <span class="cog-sec"><n-icon :component="Beaker20Regular" />自调与评测闩</span>
+        </template>
         <div class="cog-note">
           召回权重会自己调，但<b>只有在冻结评测集上不退化才允许落库</b>，且每一版都可回滚。
           没有这道闩，"自我进化"和"静默退化"从外面看完全一样。
@@ -328,17 +418,39 @@
             placeholder="选择知识库"
           />
           <n-input-number v-model:value="mineN" size="tiny" class="cog-num" :min="5" :max="200" />
-          <n-button size="tiny" :disabled="!mineKb" :loading="store.evalBusy" @click="mine">
-            挖掘评测样本
-          </n-button>
+          <GuaxiIconButton
+            :icon="DatabaseSearch20Regular"
+            label="挖掘评测样本"
+            hint="让模型给选中知识库的章节各出一个只能靠它回答的问题，章节本身就是标准答案。少于 20 条时调参结果不可信。"
+            :disabled="!mineKb"
+            :loading="store.evalBusy"
+            @click="mine"
+          />
         </div>
 
         <div class="cog-actions">
-          <n-button size="tiny" :loading="store.evalBusy" @click="runEval">跑一次评测</n-button>
-          <n-button size="tiny" type="primary" :loading="store.evalBusy" @click="tune">
-            自动调参
-          </n-button>
-          <n-button size="tiny" quaternary @click="rollbackWeights">回滚权重</n-button>
+          <GuaxiIconButton
+            :icon="Beaker20Regular"
+            label="跑一次评测"
+            hint="用当前召回权重在评测集上算 hit@1 / hit@5 / MRR。只测量，不改任何设置。"
+            :loading="store.evalBusy"
+            @click="runEval"
+          />
+          <GuaxiIconButton
+            type="primary"
+            :icon="ArrowTrendingLines20Regular"
+            label="自动调参"
+            hint="搜索更好的召回权重组合。只有在评测集上不退化才允许落库，否则原样保留。"
+            :loading="store.evalBusy"
+            @click="tune"
+          />
+          <GuaxiIconButton
+            quaternary
+            :icon="ArrowUndo20Regular"
+            label="回滚权重"
+            hint="把召回权重恢复成内置缺省。评测历史会保留。"
+            @click="rollbackWeights"
+          />
         </div>
 
         <div v-if="store.evalRuns.length" class="cog-evals">
@@ -352,10 +464,19 @@
           </div>
         </div>
         <div v-else class="cog-actions">
-          <n-button size="tiny" quaternary @click="store.refreshEvalRuns()">读取评测历史</n-button>
+          <GuaxiIconButton
+            quaternary
+            :icon="History20Regular"
+            label="读取评测历史"
+            hint="每次评测与调参的结果都会留档：采纳与否、三个指标、原因。退化了能看出来是哪一版。"
+            @click="store.refreshEvalRuns()"
+          />
         </div>
       </n-collapse-item>
-      <n-collapse-item title="存储与维护" name="maint">
+      <n-collapse-item name="maint">
+        <template #header>
+          <span class="cog-sec"><n-icon :component="Database20Regular" />存储与维护</span>
+        </template>
         <div class="cog-row-hint">
           数据库 <code>{{ st?.dbPath }}</code>（schema v{{ st?.schemaVersion }}）
         </div>
@@ -386,8 +507,20 @@
           </div>
         </div>
         <div class="cog-actions">
-          <n-button size="tiny" :loading="busy.maint" @click="runMaint">立即维护</n-button>
-          <n-button size="tiny" quaternary @click="rederive">按文件重建画像派生层</n-button>
+          <GuaxiIconButton
+            :icon="Wrench20Regular"
+            label="立即维护"
+            hint="现在就做每天那一轮：兴趣衰减、裁剪过期轨迹、过期提醒。不动你的笔记。"
+            :loading="busy.maint"
+            @click="runMaint"
+          />
+          <GuaxiIconButton
+            quaternary
+            :icon="ArrowClockwise20Regular"
+            label="按文件重建画像派生层"
+            hint="以 profile.md 为唯一真相重算派生数据。手工删掉的兴趣不会被重新加回来。"
+            @click="rederive"
+          />
         </div>
       </n-collapse-item>
     </n-collapse>
@@ -399,7 +532,35 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
+import {
+  Alert20Regular,
+  ArrowClockwise20Regular,
+  ArrowSync20Regular,
+  ArrowTrendingLines20Regular,
+  ArrowUndo20Regular,
+  Beaker20Regular,
+  BrainCircuit20Regular,
+  Broom20Regular,
+  Copy20Regular,
+  Database20Regular,
+  DatabaseSearch20Regular,
+  Edit20Regular,
+  Eye20Regular,
+  Flash20Regular,
+  Gauge20Regular,
+  Globe20Regular,
+  History20Regular,
+  Mail20Regular,
+  Person20Regular,
+  PlugConnected20Regular,
+  Save20Regular,
+  ShieldKeyhole20Regular,
+  Warning20Regular,
+  Wrench20Regular,
+} from '@vicons/fluent'
+import GuaxiIconButton from '../GuaxiIconButton.vue'
 import { useCognitionStore, PERCEPT_SOURCE_LABELS } from '../../stores/cognitionStore'
+import { sourceIcon } from '../../utils/cognitionIcons'
 import { createLogger } from '../../utils/logger'
 
 const logger = createLogger('CognitionSetting')
@@ -443,10 +604,17 @@ const TIER_HINTS = {
   network: '出网：搜索、加入抓取队列。抓回的内容进收件箱，不会直接进知识库。',
   exec: '重活：重建索引、生成向量、抽取信念、生成简报。会拉起外部进程、耗时较长。',
 }
+const TIER_ICONS = {
+  read: Eye20Regular,
+  write: Edit20Regular,
+  network: Globe20Regular,
+  exec: Flash20Regular,
+}
 const tierRows = computed(() =>
   (st.value?.tiers || []).map(([key, granted]) => ({
     key,
     granted,
+    icon: TIER_ICONS[key] || ShieldKeyhole20Regular,
     label: { read: '只读', write: '写入', network: '出网', exec: '重活' }[key] || key,
     hint: TIER_HINTS[key] || '',
   })),
@@ -756,8 +924,15 @@ onMounted(async () => {
   padding-bottom: 12px;
 }
 .cog-set-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   font-size: 17px;
   font-weight: 600;
+}
+.cog-set-title :deep(.n-icon) {
+  font-size: 20px;
+  color: var(--n-color-primary, #2dd4bf);
 }
 .cog-set-sub {
   font-size: 13px;
@@ -767,6 +942,9 @@ onMounted(async () => {
   max-width: 680px;
 }
 .cog-set-warn {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   font-size: 13px;
   line-height: 1.8;
   padding: 9px 12px;
@@ -774,6 +952,23 @@ onMounted(async () => {
   border-radius: 4px;
   border-left: 3px solid rgba(217, 138, 43, 0.85);
   background: rgba(217, 138, 43, 0.1);
+}
+.cog-set-warn :deep(.n-icon) {
+  font-size: 18px;
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: rgba(217, 138, 43, 1);
+}
+
+/* 折叠区标题：图标 + 文字。图标压在次要色，标题文字仍是主色。 */
+.cog-sec {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.cog-sec :deep(.n-icon) {
+  font-size: 18px;
+  color: var(--guaxi-text-secondary);
 }
 .cog-note {
   font-size: 13px;
@@ -809,8 +1004,16 @@ onMounted(async () => {
   min-width: 0;
 }
 .cog-row-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   font-size: 14px;
   line-height: 1.6;
+}
+.cog-row-label :deep(.n-icon) {
+  font-size: 16px;
+  flex: 0 0 auto;
+  color: var(--guaxi-text-secondary);
 }
 .cog-row-hint {
   font-size: 12.5px;
@@ -837,9 +1040,11 @@ onMounted(async () => {
 .cog-select {
   width: 190px;
 }
+/* 动作按钮现在是"图标 + 文字"，间距要比纯文字按钮松一点才不显得挤。 */
 .cog-actions {
   display: flex;
-  gap: 6px;
+  align-items: center;
+  gap: 8px;
   flex-wrap: wrap;
   margin-top: 10px;
 }
