@@ -33,6 +33,8 @@ pub mod translator_free;
 pub mod searcher;
 /// 通用差异对比引擎：任意两个文件 / 目录，和 git 无关。
 pub mod diffcompare;
+/// 承载差异对比界面的独立窗口，以及主窗口交接过来的对比请求。
+pub mod diff_compare_window;
 pub mod knowledgebase;
 pub mod kbmeta;
 pub mod kgraph;

@@ -1717,6 +1717,333 @@ pub async fn diff_dirs_page(
     .map_err(|e| e.to_string())?
 }
 
+/// 目录树里的一层节点。目录节点不是扫描结果里的记录，而是按 rel 前缀现聚合出来的：
+/// 两侧都在的目录本身不带差异信息，只有"里面有多少条差异"值得显示。
+#[derive(Debug, Clone, Serialize)]
+pub struct DirTreeNode {
+    pub rel: String,
+    pub name: String,
+    pub is_dir: bool,
+    /// 能不能展开：底下还有差异的聚合目录能；整棵子树只在一侧的折叠目录也能（展开时读盘）。
+    pub expandable: bool,
+    /// 叶子是条目自身的状态；聚合目录只有一种状态时跟着它，混着就是 mixed。
+    pub status: &'static str,
+    pub left_size: u64,
+    pub right_size: u64,
+    pub left_mtime_ms: Option<i64>,
+    pub right_mtime_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub renamed_from: Option<String>,
+    /// 聚合目录：子孙差异条数；折叠目录：被折叠掉的条数；文件恒为 0。
+    pub child_count: u32,
+    pub added: u32,
+    pub removed: u32,
+    pub modified: u32,
+    pub renamed: u32,
+    pub type_changed: u32,
+    pub same: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DirTreeLevel {
+    pub parent: String,
+    pub nodes: Vec<DirTreeNode>,
+    pub total: u32,
+    pub truncated: bool,
+    /// true 表示这一层是直接读磁盘列出来的（整棵子树只在一侧，结果集里没有这些条目）。
+    pub from_disk: bool,
+}
+
+/// 一层最多回多少个节点。再多前端也读不完，不如截断了给个提示。
+const TREE_LEVEL_LIMIT: u32 = 2000;
+
+fn tree_leaf(e: &DirEntryDiff, name: &str) -> DirTreeNode {
+    DirTreeNode {
+        rel: e.rel.clone(),
+        name: name.to_string(),
+        is_dir: e.is_dir,
+        // 单侧折叠目录的内容没进结果集，child_count 是它唯一的"里面还有东西"的证据。
+        expandable: e.is_dir && e.child_count > 0,
+        status: e.status,
+        left_size: e.left_size,
+        right_size: e.right_size,
+        left_mtime_ms: e.left_mtime_ms,
+        right_mtime_ms: e.right_mtime_ms,
+        renamed_from: e.renamed_from.clone(),
+        child_count: e.child_count,
+        added: 0,
+        removed: 0,
+        modified: 0,
+        renamed: 0,
+        type_changed: 0,
+        same: 0,
+    }
+}
+
+fn tree_dir(rel: String, name: String) -> DirTreeNode {
+    DirTreeNode {
+        rel,
+        name,
+        is_dir: true,
+        expandable: true,
+        status: "mixed",
+        left_size: 0,
+        right_size: 0,
+        left_mtime_ms: None,
+        right_mtime_ms: None,
+        renamed_from: None,
+        child_count: 0,
+        added: 0,
+        removed: 0,
+        modified: 0,
+        renamed: 0,
+        type_changed: 0,
+        same: 0,
+    }
+}
+
+fn bump_rollup(node: &mut DirTreeNode, status: &str) {
+    match status {
+        "added" => node.added += 1,
+        "removed" => node.removed += 1,
+        "modified" => node.modified += 1,
+        "renamed" => node.renamed += 1,
+        "type_changed" => node.type_changed += 1,
+        _ => node.same += 1,
+    }
+}
+
+/// 子孙状态单一就让目录跟着它（一眼看出"这下面全是新增"），混了才叫 mixed。
+fn rollup_status(n: &DirTreeNode) -> &'static str {
+    let mut hit: Option<&'static str> = None;
+    for (count, status) in [
+        (n.added, "added"),
+        (n.removed, "removed"),
+        (n.modified, "modified"),
+        (n.renamed, "renamed"),
+        (n.type_changed, "type_changed"),
+        (n.same, "same"),
+    ] {
+        if count == 0 {
+            continue;
+        }
+        if hit.is_some() {
+            return "mixed";
+        }
+        hit = Some(status);
+    }
+    hit.unwrap_or("mixed")
+}
+
+/// 目录在前、同类按名字，跟文件树的习惯一致。
+fn sort_tree_nodes(nodes: &mut [DirTreeNode]) {
+    nodes.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+}
+
+/// 排序过的条目里精确找一条。entries 按 rel_cmp 排过，可以二分。
+fn entry_at<'a>(entries: &'a [DirEntryDiff], rel: &str) -> Option<&'a DirEntryDiff> {
+    let i = entries.partition_point(|e| rel_cmp(&e.rel, rel) == std::cmp::Ordering::Less);
+    entries.get(i).filter(|e| e.rel == rel)
+}
+
+/// parent 子树对应的那一段条目（不含 parent 自己）。
+/// rel_cmp 按路径段排序，所以一棵子树必然连续，取一段就够，不用全表扫。
+fn descendants<'a>(entries: &'a [DirEntryDiff], parent: &str) -> &'a [DirEntryDiff] {
+    if parent.is_empty() {
+        return entries;
+    }
+    let start = entries.partition_point(|e| rel_cmp(&e.rel, parent) == std::cmp::Ordering::Less);
+    let rest = &entries[start..];
+    // parent 自己可能就在段首（比如它是 type_changed），跳过。
+    let from = usize::from(rest.first().map_or(false, |e| e.rel == parent));
+    let prefix = format!("{}/", parent);
+    let mut to = from;
+    while to < rest.len() && rest[to].rel.starts_with(&prefix) {
+        to += 1;
+    }
+    &rest[from..to]
+}
+
+/// parent 自己或它的某个祖先是"整棵子树只在一侧"的折叠目录吗？
+/// 是的话回 parent 在那一侧的绝对路径和状态——展开这种目录只能去读盘。
+fn folded_side(session: &DirDiffSession, parent: &str) -> Option<(PathBuf, &'static str)> {
+    let mut cur = if parent.is_empty() { None } else { Some(parent) };
+    while let Some(rel) = cur {
+        if let Some(e) = entry_at(&session.entries, rel) {
+            if e.is_dir && (e.status == "added" || e.status == "removed") {
+                let root = if e.status == "added" {
+                    &session.right_root
+                } else {
+                    &session.left_root
+                };
+                return Some((Path::new(root).join(parent), e.status));
+            }
+            return None;
+        }
+        cur = rel.rsplit_once('/').map(|(head, _)| head);
+    }
+    None
+}
+
+/// 折叠目录展开时直接读盘：里面整棵都只在一侧，状态跟父目录一样。
+/// 这里不套关键字过滤——能看见这个折叠目录说明它已经过了过滤，里面的内容应当能翻。
+fn list_disk_children(
+    dir: &Path,
+    parent_rel: &str,
+    status: &'static str,
+    want: &[String],
+) -> Vec<DirTreeNode> {
+    if !(want.is_empty() || want.iter().any(|s| s == status)) {
+        return Vec::new();
+    }
+    let rd = match std::fs::read_dir(dir) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    for ent in rd.flatten() {
+        let md = match ent.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let name = ent.file_name().to_string_lossy().to_string();
+        let is_dir = md.is_dir();
+        let size = if is_dir { 0 } else { md.len() };
+        let when = mtime_ms(&md);
+        let rel = if parent_rel.is_empty() {
+            name.clone()
+        } else {
+            format!("{}/{}", parent_rel, name)
+        };
+        let added = status == "added";
+        out.push(DirTreeNode {
+            rel,
+            name,
+            is_dir,
+            expandable: is_dir,
+            status,
+            left_size: if added { 0 } else { size },
+            right_size: if added { size } else { 0 },
+            left_mtime_ms: if added { None } else { when },
+            right_mtime_ms: if added { when } else { None },
+            renamed_from: None,
+            child_count: 0,
+            added: 0,
+            removed: 0,
+            modified: 0,
+            renamed: 0,
+            type_changed: 0,
+            same: 0,
+        });
+    }
+    out
+}
+
+/// 把结果集切成"parent 的直接子项"：带斜杠的归到聚合目录，不带的就是叶子。
+fn build_tree_level(
+    session: &DirDiffSession,
+    parent: &str,
+    want: &[String],
+    query: &str,
+    limit: usize,
+) -> DirTreeLevel {
+    let prefix_len = if parent.is_empty() { 0 } else { parent.len() + 1 };
+    let mut leaves: Vec<DirTreeNode> = Vec::new();
+    let mut dirs: Vec<DirTreeNode> = Vec::new();
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    for e in descendants(&session.entries, parent) {
+        let pass = (want.is_empty() || want.iter().any(|s| s == e.status))
+            && (query.is_empty() || e.rel.to_lowercase().contains(query));
+        if !pass {
+            continue;
+        }
+        let rest = &e.rel[prefix_len..];
+        match rest.find('/') {
+            None => leaves.push(tree_leaf(e, rest)),
+            Some(cut) => {
+                let name = &rest[..cut];
+                let rel = if parent.is_empty() {
+                    name.to_string()
+                } else {
+                    format!("{}/{}", parent, name)
+                };
+                let idx = match seen.get(&rel) {
+                    Some(i) => *i,
+                    None => {
+                        dirs.push(tree_dir(rel.clone(), name.to_string()));
+                        seen.insert(rel, dirs.len() - 1);
+                        dirs.len() - 1
+                    }
+                };
+                let node = &mut dirs[idx];
+                node.child_count += 1;
+                node.left_size += e.left_size;
+                node.right_size += e.right_size;
+                bump_rollup(node, e.status);
+            }
+        }
+    }
+    for d in dirs.iter_mut() {
+        d.status = rollup_status(d);
+    }
+
+    let mut from_disk = false;
+    if leaves.is_empty() && dirs.is_empty() {
+        if let Some((dir, status)) = folded_side(session, parent) {
+            from_disk = true;
+            leaves = list_disk_children(&dir, parent, status, want);
+        }
+    }
+
+    let mut nodes = dirs;
+    nodes.append(&mut leaves);
+    sort_tree_nodes(&mut nodes);
+    let total = nodes.len() as u32;
+    let truncated = nodes.len() > limit;
+    if truncated {
+        nodes.truncate(limit);
+    }
+    DirTreeLevel {
+        parent: parent.to_string(),
+        nodes,
+        total,
+        truncated,
+        from_disk,
+    }
+}
+
+/// 取目录树的一层（parent 为空是根）。逐级展开一次只问一层：
+/// 几十万条差异的结果集也不必在前端建整棵树，展开哪层算哪层。
+#[tauri::command]
+pub async fn diff_dirs_children(
+    session_id: String,
+    parent: Option<String>,
+    statuses: Option<Vec<String>>,
+    query: Option<String>,
+    limit: Option<u32>,
+) -> Result<DirTreeLevel, String> {
+    let session = DIR_SESSIONS
+        .lock()
+        .get(&session_id)
+        .cloned()
+        .ok_or_else(|| "对比会话已过期，请重新对比".to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let limit = limit.unwrap_or(TREE_LEVEL_LIMIT).clamp(1, 20_000) as usize;
+        let q = query.unwrap_or_default().trim().to_lowercase();
+        let want = statuses.unwrap_or_default();
+        let parent = parent.unwrap_or_default().replace('\\', "/");
+        let parent = parent.trim_matches('/');
+        Ok(build_tree_level(&session, parent, &want, &q, limit))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// 取消正在跑的目录扫描。返回 false 表示这个会话已经跑完了。
 #[tauri::command]
 pub async fn diff_dirs_cancel(session_id: String) -> Result<bool, String> {
@@ -1959,5 +2286,91 @@ mod tests {
         assert_eq!(fold_root("src/main.rs", false, &dirs), None);
         // 同名前缀但不是父目录
         assert_eq!(fold_root("node_modules_old/a.js", false, &dirs), None);
+    }
+
+    fn mk_entry(rel: &str, status: &'static str, is_dir: bool, child_count: u32) -> DirEntryDiff {
+        DirEntryDiff {
+            rel: rel.to_string(),
+            status,
+            is_dir,
+            left_size: 0,
+            right_size: 0,
+            left_mtime_ms: None,
+            right_mtime_ms: None,
+            renamed_from: None,
+            child_count,
+        }
+    }
+
+    /// 逐级展开：带斜杠的条目聚合成目录节点，不带的就是这一层的叶子。
+    #[test]
+    fn tree_level_groups_children_by_first_segment() {
+        let session = DirDiffSession {
+            left_root: "L".into(),
+            right_root: "R".into(),
+            entries: vec![
+                mk_entry("a/b/c.txt", "modified", false, 0),
+                mk_entry("a/d.txt", "added", false, 0),
+                mk_entry("e.txt", "removed", false, 0),
+            ],
+            summary: DirDiffSummary::default(),
+        };
+
+        let root = build_tree_level(&session, "", &[], "", 100);
+        assert_eq!(root.nodes.len(), 2);
+        assert!(root.nodes[0].is_dir && root.nodes[0].name == "a");
+        assert_eq!(root.nodes[0].child_count, 2); // 子孙里两条差异
+        assert_eq!(root.nodes[0].status, "mixed"); // 一条改一条增
+        assert_eq!(root.nodes[1].name, "e.txt");
+        assert!(!root.nodes[1].expandable);
+
+        let level_a = build_tree_level(&session, "a", &[], "", 100);
+        assert_eq!(level_a.nodes.len(), 2);
+        assert_eq!(level_a.nodes[0].name, "b");
+        assert_eq!(level_a.nodes[0].status, "modified"); // 子孙只有一种状态就跟着它
+        assert_eq!(level_a.nodes[1].name, "d.txt");
+
+        // 状态过滤穿透到目录：a/b 底下没有新增，整个目录就不该出现
+        let only_added = build_tree_level(&session, "a", &["added".to_string()], "", 100);
+        assert_eq!(only_added.nodes.len(), 1);
+        assert_eq!(only_added.nodes[0].name, "d.txt");
+    }
+
+    /// 折叠掉的单侧子树在结果集里只有一条记录，展开它只能去磁盘上现列。
+    #[test]
+    fn folded_one_sided_dir_expands_from_disk() {
+        let root = std::env::temp_dir().join("guaxi-diff-tree-test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("right/pkg/inner")).unwrap();
+        std::fs::write(root.join("right/pkg/a.txt"), b"hello").unwrap();
+        std::fs::write(root.join("right/pkg/inner/b.txt"), b"hi").unwrap();
+
+        let session = DirDiffSession {
+            left_root: root.join("left").to_string_lossy().to_string(),
+            right_root: root.join("right").to_string_lossy().to_string(),
+            entries: vec![mk_entry("pkg", "added", true, 2)],
+            summary: DirDiffSummary::default(),
+        };
+
+        // 根一层还是结果集里的那条记录，只是标成可展开
+        let top = build_tree_level(&session, "", &[], "", 100);
+        assert!(!top.from_disk);
+        assert_eq!(top.nodes.len(), 1);
+        assert!(top.nodes[0].expandable);
+
+        let lvl = build_tree_level(&session, "pkg", &[], "", 100);
+        assert!(lvl.from_disk);
+        assert_eq!(lvl.nodes.len(), 2);
+        assert!(lvl.nodes[0].is_dir && lvl.nodes[0].name == "inner" && lvl.nodes[0].expandable);
+        assert_eq!(lvl.nodes[1].name, "a.txt");
+        assert_eq!((lvl.nodes[1].status, lvl.nodes[1].right_size), ("added", 5));
+
+        // 再深一层：祖先是折叠目录，照样读盘
+        let deeper = build_tree_level(&session, "pkg/inner", &[], "", 100);
+        assert!(deeper.from_disk);
+        assert_eq!(deeper.nodes.len(), 1);
+        assert_eq!(deeper.nodes[0].rel, "pkg/inner/b.txt");
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

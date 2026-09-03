@@ -20,6 +20,7 @@ import GuaxiMarkdownManual from '../components/HomeViewComponent/GuaxiMarkdownMa
 import GuaxiSyntaxManualWindow from '../components/HomeViewComponent/GuaxiSyntaxManualWindow.vue'
 import GuaxiLanguageLearning from '../components/HomeViewComponent/GuaxiLanguageLearning.vue'
 import GuaxiTaskManagerPage from '../views/GuaxiTaskManagerPage.vue'
+import GuaxiDiffComparePage from '../views/GuaxiDiffComparePage.vue'
 import FlipboardFeedManager from '../components/SearchViewComponent/FlipboardFeedManager.vue'
 import GuaxiDataLabWorkbench from '../components/HomeViewComponent/GuaxiDataLabWorkbench.vue'
 import GuaxiMathWorkbench from '../components/HomeViewComponent/GuaxiMathWorkbench.vue'
@@ -221,6 +222,11 @@ export const routes = [
     path: '/task-manager',
     name: 'task-manager',
     component: GuaxiTaskManagerPage,
+  },
+  {
+    path: '/diff-compare',
+    name: 'diff-compare',
+    component: GuaxiDiffComparePage,
   },
   {
     path: '/kb-manager',

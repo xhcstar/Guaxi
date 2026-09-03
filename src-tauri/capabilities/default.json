@@ -20,7 +20,8 @@
     "slidev_manager",
     "language_learning",
     "flipboard_feeds",
-    "task_manager"
+    "task_manager",
+    "diff-compare"
   ],
   "permissions": [
     "core:default",

@@ -96,6 +96,19 @@
 
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
+          <n-icon class="header-icon" size="20" @click="openDiffCompare">
+            <svg viewBox="0 0 24 24" width="18" height="18">
+              <path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M4 4h6v16H4zm10 0h6v16h-6zM6 8h2m-2 3.5h2M16 8h2m-2 3.5h2m-2 3.5h2" />
+            </svg>
+          </n-icon>
+        </template>
+        差异对比（任意文件 / 目录）
+      </n-tooltip>
+
+      <n-tooltip placement="bottom" trigger="hover">
+        <template #trigger>
           <n-icon class="header-icon" size="20" @click="openLanguageLearningWindow">
             <svg viewBox="0 0 24 24" width="18" height="18">
               <path fill="none" stroke="currentColor" stroke-width="1.8" d="M4 5.5A2.5 2.5 0 0 1 6.5 3H11v16H6.5A2.5 2.5 0 0 0 4 21V5.5zm16 0A2.5 2.5 0 0 0 17.5 3H13v16h4.5A2.5 2.5 0 0 1 20 21V5.5zM8 8h2m-2 3h2m6-3h-2m2 3h-2" />
@@ -365,6 +378,7 @@ import { useRightSiderStore } from '../../stores/rightSiderStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useEditorStore } from '../../stores/editorStore'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
+import { useDiffCompareStore } from '../../stores/diffCompareStore'
 import CreateKnowledgeBaseForm from '../BrainViewComponent/CreateKnowledgeBaseForm.vue'
 
 import { useMessage } from 'naive-ui';
@@ -395,6 +409,7 @@ const siderStore = useSiderStore();
 const fileTreeStore = useFileTreeStore()
 const editorStore = useEditorStore()
 const knowledgeBaseStore = useKnowledgeBaseStore()
+const diffCompareStore = useDiffCompareStore()
 const searchInputRef = ref(null)
 const searchContainerRef = ref(null)
 const searchDropdownRef = ref(null)
@@ -675,6 +690,20 @@ async function openTaskManager() {
     }
     logger.error('打开任务管理面板失败:', err)
     message.error('打开任务管理面板失败')
+  }
+}
+
+/**
+ * 唤醒独立的差异对比窗口，两侧预填上次比过的路径（存在且类型没变才填）。
+ * 路径都由后端自己的命令用 std::fs 读，不走 fs 插件，所以 release 下的权限和 dev 一致；
+ * 窗口里"选文件"用的 dialog 插件权限已经在 capabilities 里覆盖了 diff-compare 窗口。
+ */
+async function openDiffCompare() {
+  try {
+    await diffCompareStore.openLastUsed()
+  } catch (err) {
+    logger.error('打开差异对比窗口失败:', err)
+    message.error('打开差异对比窗口失败')
   }
 }
 

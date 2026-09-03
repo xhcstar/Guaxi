@@ -543,9 +543,8 @@
             <button
               type="button"
               class="python-runtime-entry python-runtime-entry--console"
-              :class="{ active: diffStore.visible }"
-              @click="toggleDiffPanel"
-              title="差异对比（对比文件或目录）"
+              @click="openDiffWindow"
+              title="差异对比（在独立窗口里对比任意文件或目录）"
             >
               <Icon :icon="gitCompareIcon" width="14" height="14" />
               <span class="python-runtime-entry__label">Diff</span>
@@ -1192,24 +1191,6 @@
 
       <transition name="python-console-slide">
         <div
-          v-if="diffStore.visible"
-          class="diff-panel-dock"
-          :class="{ dragging: diffPanelResizing }"
-          :style="{ height: `${diffStore.panelHeight}px`, bottom: `${diffPanelBottomOffset}px` }"
-        >
-          <div
-            class="diff-panel-dock__resize-handle"
-            title="拖拽调整对比面板高度"
-            @mousedown.prevent="startResizeDiffPanel"
-          >
-            <span class="diff-panel-dock__resize-grip"></span>
-          </div>
-          <GuaxiDiffPanel :visible="diffStore.visible" @close="diffStore.close()" />
-        </div>
-      </transition>
-
-      <transition name="python-console-slide">
-        <div
           v-if="pythonConsoleVisible"
           class="python-console-dock"
           :class="{ busy: pythonConsoleBusy, dragging: pythonConsoleResizing, 'terminal-only': !selectedFile }"
@@ -1322,7 +1303,6 @@ import { GUAXI_SHORTCUTS, matchesShortcut, shortcutText } from '../../composable
 import GuaxiOrgTaskPreview from './GuaxiOrgTaskPreview.vue'
 import { validateTaskBlocks, parseTaskBlocks, serializeBlock, replaceBlockInContent, buildNewBlock } from '../../utils/guaxiTaskParser'
 import GuaxiTerminalPanel from './GuaxiTerminalPanel.vue'
-import GuaxiDiffPanel from './GuaxiDiffPanel.vue'
 import { EXPORT_SHELL_CSS, EXPORT_PYCELL_CSS } from './guaxiExportStyles'
 import { NTooltip, NIcon, useMessage, NDropdown, NPopover, NInputNumber, NBreadcrumb, NBreadcrumbItem, NSelect } from 'naive-ui'
 import { Icon } from '@iconify/vue'
@@ -1848,14 +1828,6 @@ const pythonConsoleMaximized = ref(false)
 let pythonConsoleResizeStartY = 0
 let pythonConsoleResizeStartHeight = 240
 let pythonConsoleRestoreHeight = 240
-// 差异对比面板 dock：高度自己持久化，但共享值放在 diffCompareStore 里，
-// 这样面板内部（虚拟滚动要知道视口高度）和编辑器（负责拖拽）看到的是同一个数。
-const DIFF_PANEL_HEIGHT_STORAGE_KEY = 'guaxi_diff_panel_height'
-const diffPanelMinHeight = 180
-const diffPanelMaxHeight = 900
-const diffPanelResizing = ref(false)
-let diffPanelResizeStartY = 0
-let diffPanelResizeStartHeight = 420
 let leftPythonCellManager = null
 let rightPythonCellManager = null
 let handlePythonCellSharedStateChange = () => {}
@@ -16086,88 +16058,14 @@ const stopResizePythonConsole = () => {
 }
 
 /*
- * 差异对比面板 dock。
- * 它和终端 dock 是兄弟节点，叠在终端之上：终端可见时整体上移一个终端高度，
- * 两块面板同时打开也不会互相遮挡。没有活动文件时底部不预留状态栏空间。
+ * 工具栏 Diff 按钮：把差异对比开在独立窗口里（编辑器里不再留 dock）。
+ * 顺手把当前文件填到左侧当起点，但只在窗口是新建出来的时候生效——
+ * 窗口已经开着就单纯拉到前台，不去覆盖用户正在看的对比结果。
  */
-const diffPanelBottomOffset = computed(() => {
-  const base = selectedFile.value ? pythonConsoleBottomOffset.value : 0
-  return base + (pythonConsoleVisible.value ? Number(pythonConsoleHeight.value || 0) : 0)
-})
-
-const getDiffPanelAvailableHeight = () => {
-  const wrapperHeight = Number(editorWrapperRef.value?.clientHeight || 0)
-  if (!wrapperHeight) return diffPanelMaxHeight
-  return Math.max(
-    diffPanelMinHeight,
-    Math.min(diffPanelMaxHeight, wrapperHeight - diffPanelBottomOffset.value - 56),
-  )
-}
-
-const clampDiffPanelHeight = (height) => {
-  const maxHeight = getDiffPanelAvailableHeight()
-  return Math.max(diffPanelMinHeight, Math.min(maxHeight, Number(height || diffPanelMinHeight)))
-}
-
-const persistDiffPanelHeight = () => {
-  writePythonConsoleStoredValue(DIFF_PANEL_HEIGHT_STORAGE_KEY, diffStore.panelHeight)
-}
-
-const restoreDiffPanelHeight = () => {
-  diffStore.setPanelHeight(
-    clampDiffPanelHeight(
-      readPythonConsoleStoredNumber(DIFF_PANEL_HEIGHT_STORAGE_KEY, diffStore.panelHeight),
-    ),
-  )
-}
-
-const handleResizeDiffPanelMove = (event) => {
-  if (!diffPanelResizing.value) return
-  const delta = diffPanelResizeStartY - Number(event?.clientY || 0)
-  const nextHeight = clampDiffPanelHeight(diffPanelResizeStartHeight + delta)
-  if (nextHeight === diffStore.panelHeight) return
-  diffStore.setPanelHeight(nextHeight)
-  persistDiffPanelHeight()
-  layoutVisibleEditors()
-}
-
-const stopResizeDiffPanel = () => {
-  if (!diffPanelResizing.value) return
-  diffPanelResizing.value = false
-  document.body.style.userSelect = ''
-  document.body.style.cursor = ''
-  window.removeEventListener('mousemove', handleResizeDiffPanelMove, true)
-  window.removeEventListener('mouseup', stopResizeDiffPanel, true)
-  persistDiffPanelHeight()
-  layoutVisibleEditors()
-}
-
-const startResizeDiffPanel = (event) => {
-  diffPanelResizing.value = true
-  diffPanelResizeStartY = Number(event?.clientY || 0)
-  diffPanelResizeStartHeight = Number(diffStore.panelHeight || 420)
-  document.body.style.userSelect = 'none'
-  document.body.style.cursor = 'ns-resize'
-  window.addEventListener('mousemove', handleResizeDiffPanelMove, true)
-  window.addEventListener('mouseup', stopResizeDiffPanel, true)
-}
-
-/*
- * 工具栏 Diff 按钮：第一次打开时顺手把当前文件填到左侧，用户只用再挑另一侧。
- * 已经有对比结果时只切显示，不动状态。
- */
-const toggleDiffPanel = () => {
-  if (diffStore.visible) {
-    diffStore.close()
-    layoutVisibleEditors()
-    return
-  }
+const openDiffWindow = () => {
   const current = selectedFile.value?.path || ''
-  const emptyBothSides = !diffStore.left.path && !diffStore.right.path && diffStore.mode !== 'text'
-  if (current && emptyBothSides) diffStore.openWith(current, false, 'left')
-  else diffStore.open()
-  restoreDiffPanelHeight()
-  layoutVisibleEditors()
+  if (current) diffStore.openWith(current, false, 'left')
+  else diffStore.openEmpty('file')
 }
 
 const startResizePythonConsole = (event) => {
@@ -23647,7 +23545,6 @@ watch(
 
 onMounted(() => {
   restorePythonConsoleState()
-  restoreDiffPanelHeight()
   window.addEventListener('keydown', handleKeyDown);
   window.addEventListener('guaxi:lsp-setting-changed', handleLspSettingChanged);
   document.addEventListener('selectionchange', handleGlobalSelectionChange, true)
@@ -23773,8 +23670,6 @@ onUnmounted(() => {
   }
   stopResizePythonConsole()
   persistPythonConsoleState()
-  stopResizeDiffPanel()
-  persistDiffPanelHeight()
   flushPythonCellDrafts()
   disposePythonCellManagers()
   stopSelectionAudioPlayback()
@@ -28298,47 +28193,6 @@ body.guaxi-tab-dragging * {
   height: 4px;
   border-radius: 999px;
   background: rgba(100, 116, 139, 0.36);
-}
-
-.diff-panel-dock {
-  position: absolute;
-  left: 0;
-  right: 0;
-  z-index: 9;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-  overflow: hidden;
-  background: var(--toolbar-bg, #252526);
-  border-top: 1px solid rgba(100, 116, 139, 0.28);
-  box-shadow: 0 -6px 18px rgba(15, 23, 42, 0.18);
-}
-
-.diff-panel-dock.dragging {
-  transition: none;
-}
-
-.diff-panel-dock__resize-handle {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  height: 12px;
-  cursor: ns-resize;
-  user-select: none;
-  background: var(--toolbar-bg, var(--guaxi-panel-bg, #252526));
-}
-
-.diff-panel-dock__resize-grip {
-  width: 68px;
-  height: 4px;
-  border-radius: 999px;
-  background: rgba(100, 116, 139, 0.36);
-}
-
-.diff-panel-dock :deep(.guaxi-diff-panel) {
-  flex: 1 1 auto;
-  min-height: 0;
 }
 
 .python-console-panel {
