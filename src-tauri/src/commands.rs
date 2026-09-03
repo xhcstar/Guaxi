@@ -31,6 +31,8 @@ pub mod translate_local;
 pub mod translate_cache;
 pub mod translator_free;
 pub mod searcher;
+/// 通用差异对比引擎：任意两个文件 / 目录，和 git 无关。
+pub mod diffcompare;
 pub mod knowledgebase;
 pub mod kbmeta;
 pub mod kgraph;

@@ -474,7 +474,7 @@
 <script setup>
 import { createLogger } from '../../utils/logger'
 import { NIcon, useMessage, NModal, NForm, NFormItem, NInput, NButton, NSpace } from 'naive-ui'
-import { DocumentTextOutline, FolderOutline, AddOutline, TrashOutline, CreateOutline, MoveOutline, FolderOpenOutline, GlobeOutline, SettingsOutline, GitBranchOutline, DownloadOutline, FolderOpenOutline as OpenIcon, DocumentOutline, SwapHorizontalOutline, LibraryOutline, TimeOutline, ListOutline, CheckboxOutline, CopyOutline, DuplicateOutline, BrowsersOutline } from '@vicons/ionicons5'
+import { DocumentTextOutline, FolderOutline, AddOutline, TrashOutline, CreateOutline, MoveOutline, FolderOpenOutline, GlobeOutline, SettingsOutline, GitBranchOutline, DownloadOutline, FolderOpenOutline as OpenIcon, DocumentOutline, SwapHorizontalOutline, LibraryOutline, TimeOutline, ListOutline, CheckboxOutline, CopyOutline, DuplicateOutline, BrowsersOutline, GitCompareOutline } from '@vicons/ionicons5'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore';
 import GuaxiVirtualFileTree from './GuaxiVirtualFileTree.vue';
@@ -489,6 +489,7 @@ import { Icon } from '@iconify/vue'
 import { RefreshOutline as RefreshIcon, ChevronDownOutline as ChevronDownIcon, ChevronForwardOutline as ChevronForwardIcon } from '@vicons/ionicons5'
 import { Folder20Regular as FolderIcon, ChannelAdd20Regular as FileAddIcon, FolderAdd20Regular as FolderAddIcon } from '@vicons/fluent'
 import { useEditorBridgeStore } from '../../stores/editorBridgeStore'
+import { useDiffCompareStore, diffPathBaseName } from '../../stores/diffCompareStore'
 import { GUAXI_SHORTCUTS, shortcutTooltip, useGuaxiHotkeys } from '../../composables/useGuaxiHotkeys'
 
 const logger = createLogger('GuaxiFileTree')
@@ -637,6 +638,7 @@ const fileTreeStore = useFileTreeStore()
 const knowledgeBaseStore = useKnowledgeBaseStore()
 const settingsStore = useSettingsStore()
 const editorBridgeStore = useEditorBridgeStore()
+const diffStore = useDiffCompareStore()
 const lastSelectedKey = ref(null);
 
 const fileTreeContainerRef = ref(null)
@@ -974,6 +976,18 @@ const contextMenuOptions = ref([
     label: '在一侧打开',
     key: 'openToSide',
     icon: () => h(NIcon, null, { default: () => h(BrowsersOutline) })
+  },
+  {
+    label: '选择以进行比较',
+    key: 'markForCompare',
+    icon: () => h(NIcon, null, { default: () => h(GitCompareOutline) })
+  },
+  {
+    // 标签文案在 handleNodeContextMenu 里按已选的那一方动态改写；没选过就整项隐藏
+    label: '与已选比较',
+    key: 'compareWithPending',
+    show: false,
+    icon: () => h(NIcon, null, { default: () => h(SwapHorizontalOutline) })
   },
   {
     label: '复制路径',
@@ -2367,6 +2381,14 @@ const handleNodeContextMenu = ({ node, x, y }) => {
   const openToSideOpt = contextMenuOptions.value.find(o => o.key === 'openToSide')
   if (openToSideOpt) openToSideOpt.disabled = !!node.is_directory
 
+  // 差异对比第二步只在已标记过一方、且不是自己跟自己比时出现，文案带上已选的名字。
+  const compareOpt = contextMenuOptions.value.find(o => o.key === 'compareWithPending')
+  if (compareOpt) {
+    const pending = diffStore.pending
+    compareOpt.show = !!pending?.path && normalizePath(pending.path) !== nodePath
+    compareOpt.label = diffStore.compareWithLabel
+  }
+
   isContextMenuVisible.value = true
   contextMenuPosition.value = { x, y }
   menuMode.value = 'node'
@@ -2579,6 +2601,22 @@ const handleContextMenuSelect = async (key) => {
     switch (key) {
       case 'openToSide':
         await openNodeToSide(selectedNode.value);
+        break;
+      case 'markForCompare':
+        if (selectedNode.value) {
+          const target = normalizePath(selectedNode.value.id);
+          diffStore.markForCompare(target, !!selectedNode.value.is_directory);
+          message.info(`已选择"${diffPathBaseName(target)}"，再右键另一项即可比较`);
+        }
+        break;
+      case 'compareWithPending':
+        if (selectedNode.value) {
+          const res = diffStore.compareWithPending(
+            normalizePath(selectedNode.value.id),
+            !!selectedNode.value.is_directory,
+          );
+          if (!res.ok) message.warning(res.error);
+        }
         break;
       case 'copyPath':
         await copyNodePath(selectedNode.value);

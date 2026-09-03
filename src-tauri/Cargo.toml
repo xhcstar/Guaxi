@@ -80,6 +80,8 @@ grep-matcher = "0.1.7"
 rayon = "1.10.0"
 parking_lot = "0.12.4"
 lru = "0.16.0"
+# 差异对比引擎的 diff 算法（Myers / Patience / LCS）
+similar = "2.7.0"
 uuid = { version = "1.17.0", features = ["v4"] }
 git2 = "0.20.2"
 encoding_rs = "0.8.35"
