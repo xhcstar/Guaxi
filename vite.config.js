@@ -113,11 +113,29 @@ export default defineConfig(async () => ({
   },
   optimizeDeps: {
     include: [
-      "monaco-editor", 
+      "monaco-editor",
       "monaco-vim",
       "react",
       "react-dom",
-      "excalidraw-dev"
+      "excalidraw-dev",
+      // 这两个包只被 @codingame/monaco-vscode-api 内部的**动态** import 引用
+      //（textfile/common/encoding.js 里的 encodingExists / DecoderStream / guessEncodingByBuffer），
+      // 而那个包在下面的 exclude 里：依赖扫描器既进不去被 exclude 的包，也看不到动态 import，
+      // 所以它们永远不会被自动发现（force: true 也救不了，扫描器压根没见过它们）。
+      //
+      // 不预打包的后果不是"没优化"，是直接坏掉：
+      // iconv-lite-umd 是个 UMD 产物、一条 export 语句都没有，被原样当原生 ESM 下发时，
+      // UMD 头部的 exports/module/define 三个探测全部落空，于是走最后那条"挂全局"分支，
+      // 把 encodingExists/getDecoder 等 16 个函数拷到 window 上；import() 拿回来的
+      // 命名空间则是空的，`module.default ?? module` 得到空对象，于是
+      // `iconv.encodingExists is not a function`——表现为打开任意需要校验非 utf8 编码的文件时，
+      // createModelReference 抛错、vscodeModelBridge 报 "retain model reference failed"，
+      // 该文件拿不到 VSCode 侧的 model reference（LSP 文档同步/hover/补全都挂不上）。
+      // 写进 include 后 esbuild 会做 CJS→ESM interop，default 和具名导出都有，取值就正常了。
+      //
+      // jschardet 同理（encoding.js 里 files.autoGuessEncoding 走的那条动态 import，纯 CJS）。
+      "@vscode/iconv-lite-umd",
+      "jschardet"
     ],
     exclude: [
       "@codingame/monaco-vscode-api",
