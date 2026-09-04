@@ -1231,6 +1231,23 @@ watch(shouldAutoFocus, (next) => {
   if (next) focusNavigator('panel-open')
 })
 
+/*
+ * 摘录页也要能用键盘。
+ *
+ * 摘录的列表在子组件里，activeResultList 对这个标签页恒为空，所以上面那个 watch 在第一行就 return 了，
+ * 从来没走到 focusNavigator。焦点于是留在顶部搜索框里，全局监听那边 isEditableTarget 一看是 input 就跳过，
+ * 表现出来就是"摘录页不支持方向键和回车"，而文件/内容页因为列表非空、顺手被收了焦点，所以是好的。
+ *
+ * 这里只补焦点，不碰键盘分发（分发早就接到子组件了）。两个前提缺一不可：
+ * - 必须真有摘录结果：没有结果时收焦点等于白抢用户正在输入的搜索框；
+ * - 必须是搜索面板正开着（shouldAutoFocus），和另外两个标签页同一个门槛。
+ */
+watch([activeTab, () => props.excerptResults.length], ([tab, count]) => {
+  if (tab !== 'excerpts' || !count) return
+  if (!shouldAutoFocus.value) return
+  focusNavigator('excerpt-tab')
+})
+
 // 确保搜索结果数据有效
 watch(() => props.fileResults, (newVal) => {
   if (newVal.some(item => !item.path)) {
@@ -1480,14 +1497,15 @@ onBeforeUnmount(() => {
   flex-direction: column;
 }
 
-/* 完整结果统计固定在列表上方，列表本身继续使用虚拟滚动承载大量匹配行。 */
+/* 完整结果统计固定在列表上方，列表本身继续使用虚拟滚动承载大量匹配行。
+   左右内边距和行共用 --sr-pad-x：统计文字要和下面第一行的图标起点对齐，不然像两栏。 */
 .result-summary {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 6px 10px;
+  padding: 6px var(--sr-pad-x, 8px);
   color: var(--guaxi-text-secondary, #8c8c8c);
   background: var(--guaxi-header-bg);
   border-bottom: 1px solid var(--guaxi-border);
@@ -1518,11 +1536,12 @@ onBeforeUnmount(() => {
   flex-direction: column;
 }
 
+/* 摘录页的内容是子组件渲染的，宽度约束在这里兜一层：窄侧栏里任何一层溢出都会顶出横向滚动条。
+   （n-card / n-list 那几层已经拆掉了，所以这里不再有对应的选择器。） */
 .tab-content-excerpts :deep(.excerpt-group),
 .tab-content-excerpts :deep(.excerpt-body),
 .tab-content-excerpts :deep(.card-container),
-.tab-content-excerpts :deep(.excerpt-card),
-.tab-content-excerpts :deep(.n-card) {
+.tab-content-excerpts :deep(.excerpt-card) {
   width: 100%;
   max-width: 100%;
   min-width: 0;
@@ -1535,9 +1554,7 @@ onBeforeUnmount(() => {
 }
 
 .tab-content-excerpts :deep(.card-item-rendered),
-.tab-content-excerpts :deep(.card-item-rendered *),
-.tab-content-excerpts :deep(.n-card__content),
-.tab-content-excerpts :deep(.n-card__content *) {
+.tab-content-excerpts :deep(.card-item-rendered *) {
   max-width: 100%;
   box-sizing: border-box;
 }
@@ -1551,6 +1568,7 @@ onBeforeUnmount(() => {
   max-width: 100%;
   height: auto;
 }
+
 .scroller {
   flex: 1 1 0;
   min-height: 0;
@@ -1562,6 +1580,32 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
   overflow-x: hidden;
+}
+
+/* 三个标签页共用的一根滚动条（摘录页在 GuaxiNoteExcerpt.vue 里有同样一份）。
+   宽度取 --sr-scrollbar：它占的是真实布局宽度，所以右边的时间戳、按钮不可能被压在下面；
+   系统默认那根有 15px 宽，在 240px 的侧栏里等于白扔掉 6% 的可读宽度。 */
+.virtual-list {
+  scrollbar-width: thin;
+  scrollbar-color: var(--sr-scrollbar-thumb) transparent;
+}
+
+.virtual-list::-webkit-scrollbar {
+  width: var(--sr-scrollbar, 8px);
+  height: var(--sr-scrollbar, 8px);
+}
+
+.virtual-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.virtual-list::-webkit-scrollbar-thumb {
+  background-color: var(--sr-scrollbar-thumb);
+  border-radius: 999px;
+}
+
+.virtual-list::-webkit-scrollbar-thumb:hover {
+  background-color: var(--sr-scrollbar-thumb-hover);
 }
 
 :deep(.n-virtual-list) {
@@ -1626,7 +1670,7 @@ onBeforeUnmount(() => {
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  padding: 0 8px;
+  padding: 0 var(--sr-pad-x, 8px);
   cursor: pointer;
   overflow: hidden;
   white-space: nowrap;
@@ -1697,7 +1741,7 @@ onBeforeUnmount(() => {
 /* 命中行缩进到组头文件名的位置，层级一眼看得出来 */
 .sr-row--match {
   gap: 10px;
-  padding-left: 14px;
+  padding-left: calc(var(--sr-pad-x, 8px) + 6px);
 }
 
 /* 行号当成编辑器的行号沟：右对齐 + 等宽数位，正文的起始位置才是齐的 */

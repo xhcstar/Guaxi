@@ -222,6 +222,17 @@ const themeOverrides = computed(() => {
   --sr-fs-group: 15px;
   --sr-fs-body: 14px;
   --sr-fs-meta: 12px;
+
+  /* 设计说明（三个标签页共用的边距和滚动条）：
+     行是通栏的，左右这一档内边距就是面板唯一的横向边距——容器不再另外留边，
+     否则窄侧栏里那点宽度全花在留白上。
+     滚动条也必须是同一根：以前 文件/内容 用的是原生滚动条（占 15px 布局宽度），
+     摘录 用 naive 的 n-scrollbar（悬浮在内容上、不占宽度），于是右边距一边宽一边窄，
+     而且悬浮那根直接压在时间戳上。现在三处都是原生细滚动条，槽位是真实宽度，压不到内容。 */
+  --sr-pad-x: 8px;
+  --sr-scrollbar: 8px;
+  --sr-scrollbar-thumb: rgba(15, 23, 42, 0.26);
+  --sr-scrollbar-thumb-hover: rgba(15, 23, 42, 0.42);
 }
 
 :root[data-guaxi-theme='dark'] {
@@ -270,6 +281,8 @@ const themeOverrides = computed(() => {
   --sr-row-accent: #4c9df8;
   --sr-rail: rgba(148, 163, 184, 0.24);
   --sr-hairline: rgba(148, 163, 184, 0.16);
+  --sr-scrollbar-thumb: rgba(255, 255, 255, 0.2);
+  --sr-scrollbar-thumb-hover: rgba(255, 255, 255, 0.34);
 }
 
 html,

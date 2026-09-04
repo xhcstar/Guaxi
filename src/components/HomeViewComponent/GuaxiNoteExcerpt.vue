@@ -16,7 +16,10 @@
       <div class="result-summary">
         <span>共找到 {{ excerptResults.length }} 个摘录文件</span>
       </div>
-      <n-scrollbar ref="scrollbarRef" class="excerpt-scrollbar">
+      <!-- 滚动容器用原生滚动，不再套 n-scrollbar：那根是悬浮在内容上的（不占布局宽度），
+           右边的时间戳直接被压在下面；而文件/内容两个标签页用的是原生滚动条，
+           两种机制永远对不齐。现在三处都是原生细滚动条，槽位是真实宽度。 -->
+      <div ref="scrollerRef" class="excerpt-scroller">
         <div v-for="(item, index) in excerptResults" :key="item.file_path" class="excerpt-group"
           :data-key="item.file_path" :data-index="index">
           <div class="sr-row sr-row--group" :class="{ 'is-active': activeExcerptIndex === index }"
@@ -67,7 +70,7 @@
             </n-spin>
           </div>
         </div>
-      </n-scrollbar>
+      </div>
     </template>
   </div>
 </template>
@@ -83,8 +86,7 @@ import {
   NButton,
   NIcon,
   NTag,
-  NSpin,
-  NScrollbar
+  NSpin
 } from 'naive-ui';
 import { TextGrammarArrowLeft20Regular } from '@vicons/fluent';
 import { ChevronDown, ChevronRight } from '@vicons/fa';
@@ -130,7 +132,7 @@ const rightSiderStore = useRightSiderStore();
 const siderStore = useSiderStore();
 const settingsStore = useSettingsStore()
 const renderedContents = ref({});
-const scrollbarRef = ref(null);
+const scrollerRef = ref(null);
 const excerptNavigatorRef = ref(null);
 const activeExcerptIndex = ref(-1);
 let excerptResizeObserver = null;
@@ -529,15 +531,14 @@ const scrollActiveIntoView = async () => {
 
   await nextTick()
 
-  const scrollbar = scrollbarRef.value
-  const root = scrollbar?.containerRef?.value
-    || scrollbar?.contentRef?.value
-    || scrollbar?.$el
-
+  const root = scrollerRef.value
   if (!root || typeof root.querySelector !== 'function') return
 
-  const target = root.querySelector(`[data-index="${idx}"]`)
-  if (!target) return
+  const group = root.querySelector(`[data-index="${idx}"]`)
+  if (!group) return
+
+  // 展开后的分组能有整屏高，滚它等于把正文顶上去；要看的是那一行，所以对齐行本身。
+  const target = group.querySelector('.sr-row') || group
 
   logger.debug('[GuaxiNoteExcerpt] scroll active excerpt', { index: idx })
   target.scrollIntoView({ block: 'nearest', inline: 'nearest' })
@@ -682,14 +683,14 @@ watch(() => props.excerptResults, (newVal) => {
   font-size: var(--sr-fs-body, 14px);
 }
 
-/* 和文件、内容两个标签页的统计条对齐：同一位置、同一底色、同一字号、同一条下边界 */
+/* 和文件、内容两个标签页的统计条对齐：同一位置、同一底色、同一字号、同一档左右内边距 */
 .result-summary {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 6px 10px;
+  padding: 6px var(--sr-pad-x, 8px);
   color: var(--guaxi-text-secondary, #8c8c8c);
   background: var(--guaxi-header-bg);
   border-bottom: 1px solid var(--guaxi-border);
@@ -697,16 +698,39 @@ watch(() => props.excerptResults, (newVal) => {
   line-height: 18px;
 }
 
-.excerpt-scrollbar {
+.excerpt-scroller {
   flex: 1 1 0;
   width: 100%;
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
 }
 
-:deep(.n-scrollbar-container) {
-  min-height: 0;
+/* 和文件 / 内容两个标签页共用的一根滚动条（那边在 GuaxiSearchNavigator.vue 里有同样一份）。
+   宽度取 --sr-scrollbar，占的是真实布局宽度：右边的时间戳和"插入"按钮不会再被压在滚动条下面。 */
+.excerpt-scroller {
+  scrollbar-width: thin;
+  scrollbar-color: var(--sr-scrollbar-thumb) transparent;
+}
+
+.excerpt-scroller::-webkit-scrollbar {
+  width: var(--sr-scrollbar, 8px);
+  height: var(--sr-scrollbar, 8px);
+}
+
+.excerpt-scroller::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.excerpt-scroller::-webkit-scrollbar-thumb {
+  background-color: var(--sr-scrollbar-thumb);
+  border-radius: 999px;
+}
+
+.excerpt-scroller::-webkit-scrollbar-thumb:hover {
+  background-color: var(--sr-scrollbar-thumb-hover);
 }
 
 .excerpt-group {
@@ -729,7 +753,7 @@ watch(() => props.excerptResults, (newVal) => {
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  padding: 2px 8px;
+  padding: 2px var(--sr-pad-x, 8px);
   cursor: pointer;
   overflow: hidden;
   white-space: nowrap;
@@ -794,13 +818,12 @@ watch(() => props.excerptResults, (newVal) => {
 }
 
 /* 展开区：只用缩进 + 一道引导线表达"这些是这个文件里的"，不再套盒子。
-   左边 10px 的缩进对齐组头的文件名，读起来是一棵树而不是一堆卡片。 */
+   右边和组头对齐同一档内边距（--sr-pad-x），左边多 10px 给引导线留出呼吸位。 */
 .excerpt-body {
   width: 100%;
   box-sizing: border-box;
-  margin: 0;
-  padding: 2px 8px 8px 10px;
-  margin-left: 8px;
+  margin: 0 0 0 var(--sr-pad-x, 8px);
+  padding: 2px var(--sr-pad-x, 8px) 8px 10px;
   border-left: 1px solid var(--sr-rail, rgba(148, 163, 184, 0.28));
   overflow: hidden;
 }
