@@ -13,38 +13,33 @@
       <n-tab-pane name="files" :tab="filesTab">
         <div class="tab-content">
           <div v-if="fileResults.length > 0" class="result-summary">
-            共找到 {{ fileResults.length }} 个文件
+            <span>共找到 {{ fileResults.length }} 个文件</span>
           </div>
           <n-empty v-if="fileResults.length === 0" description="暂无文件搜索结果" style="margin-top: 20px" />
-          <n-list v-else hoverable clickable>
-            <div class="scroller">
-              <n-virtual-list ref="fileListRef" :items="keyedFileResults" :item-size="48" :key-field="'_uniqueKey'"
-                class="virtual-list" @scroll="debouncedScroll">
-                <template #default="{ item, index }">
-                <n-list-item @click="handleResultClick(item, index)">
-                  <div class="search-result-item" :class="{ 'is-active': item._uniqueKey === activeResultKey }">
-                    <div class="file-name" :title="getFullPath(item)">
-                      <IconifyIcon v-bind="getFileIconPropsWithLog(item.path)" />
-                      <span class="filename-text" :class="{ 'filename-text--with-dir': getRelDir(item) }"
-                        v-html="formatFileName(item)"></span>
-                      <!-- 查询可能是靠目录名中的，光给文件名会让人看不懂这条为什么会出现 -->
-                      <span v-if="getRelDir(item)" class="file-dir">{{ getRelDir(item) }}</span>
-                      <span class="line-badge" v-if="item.line_number">L{{ item.line_number }}</span>
-                    </div>
-                    <div v-if="item.preview" class="preview-content">
-                      <span v-html="formatPreview(item)"></span>
-                    </div>
-                  </div>
-                </n-list-item>
-                </template>
-                <template #footer>
-                  <div v-if="loading" class="loading-more">
-                    <n-spin size="small" />
-                  </div>
-                </template>
-              </n-virtual-list>
-            </div>
-          </n-list>
+          <!--
+            文件结果和内容结果的组头是同一种东西（一个文件一行），所以用同一套 .sr-row 类：
+            以前这里是每条一张 48px 的卡片，带边框、圆角、悬停位移和外发光，
+            和内容页的密排行、摘录页的卡片各是一套观感。行高统一后同屏能多看近一倍的结果。
+          -->
+          <div v-else class="scroller">
+            <n-virtual-list ref="fileListRef" :items="keyedFileResults" :item-size="SR_ROW_HEIGHT"
+              :key-field="'_uniqueKey'" class="virtual-list" @scroll="debouncedScroll">
+              <template #default="{ item, index }">
+                <div class="sr-row sr-row--group" :class="{ 'is-active': item._uniqueKey === activeResultKey }"
+                  :title="getFullPath(item)" @click="handleResultClick(item, index)">
+                  <IconifyIcon v-bind="getFileIconPropsWithLog(item.path)" :size="16" />
+                  <span class="sr-name" v-html="formatFileName(item)"></span>
+                  <!-- 查询可能是靠目录名中的，光给文件名会让人看不懂这条为什么会出现 -->
+                  <span v-if="getRelDir(item)" class="sr-dir">{{ getRelDir(item) }}</span>
+                </div>
+              </template>
+              <template #footer>
+                <div v-if="loading" class="loading-more">
+                  <n-spin size="small" />
+                </div>
+              </template>
+            </n-virtual-list>
+          </div>
         </div>
       </n-tab-pane>
 
@@ -76,28 +71,28 @@
             结果是"搜到了但看不见搜到了什么"。现在每条命中只占一行，并且预览窗口会跟着第一处高亮平移。
           -->
           <div v-else class="scroller">
-            <n-virtual-list ref="noteListRef" :items="noteRows" :item-size="NOTE_ROW_HEIGHT"
+            <n-virtual-list ref="noteListRef" :items="noteRows" :item-size="SR_ROW_HEIGHT"
               :key-field="'_uniqueKey'" class="virtual-list" @scroll="debouncedScroll">
               <template #default="{ item: row, index }">
-                <div v-if="row.kind === 'file'" class="note-row note-file-row"
+                <div v-if="row.kind === 'file'" class="sr-row sr-row--group"
                   :class="{ 'is-active': row._uniqueKey === activeResultKey }" :title="getFullPath(row.item)"
                   @click="handleNoteRowClick(row, index)">
-                  <Icon class="note-caret" :class="{ 'is-collapsed': isNoteGroupCollapsed(row.groupKey) }"
+                  <Icon class="sr-caret" :class="{ 'is-collapsed': isNoteGroupCollapsed(row.groupKey) }"
                     :icon="lucideChevronDown" :width="14" :height="14" />
-                  <IconifyIcon v-bind="getFileIconPropsWithLog(row.item.path)" :size="15" />
-                  <span class="note-file-name">{{ getFileName(row.item) }}</span>
-                  <span v-if="getRelDir(row.item)" class="note-file-dir">{{ getRelDir(row.item) }}</span>
-                  <span class="note-file-count">{{ row.count }}</span>
+                  <IconifyIcon v-bind="getFileIconPropsWithLog(row.item.path)" :size="16" />
+                  <span class="sr-name">{{ getFileName(row.item) }}</span>
+                  <span v-if="getRelDir(row.item)" class="sr-dir">{{ getRelDir(row.item) }}</span>
+                  <span class="sr-count">{{ row.count }}</span>
                 </div>
-                <div v-else class="note-row note-match-row"
+                <div v-else class="sr-row sr-row--match"
                   :class="{ 'is-active': row._uniqueKey === activeResultKey }" :title="matchRowTitle(row.item)"
                   @click="handleNoteRowClick(row, index)">
-                  <span class="note-line-no">{{ row.item.line_number }}</span>
-                  <span class="note-line-text">
-                    <span v-if="previewOf(row.item).leadCut" class="note-cut">…</span><span
+                  <span class="sr-line-no">{{ row.item.line_number }}</span>
+                  <span class="sr-line-text">
+                    <span v-if="previewOf(row.item).leadCut" class="sr-cut">…</span><span
                       v-for="(seg, i) in previewOf(row.item).segments" :key="i"
                       :class="seg.hit ? 'search-highlight' : null">{{ seg.text }}</span><span
-                      v-if="previewOf(row.item).tailCut" class="note-cut">…</span>
+                      v-if="previewOf(row.item).tailCut" class="sr-cut">…</span>
                   </span>
                 </div>
               </template>
@@ -463,40 +458,6 @@ const getFileIconProps = (path) => {
 };
 
 /**
- * 格式化预览内容（添加高亮，支持转义后索引映射）
- * @param {Object} item 文件项
- * @returns {string} HTML格式的预览内容
- */
-const formatPreview = (item) => {
-  if (!item.preview) return '';
-
-  const q = String(props.searchQuery || '').trim()
-  const matches = item.matches || [];
-  const { escaped, indexMap } = escapeHtmlWithIndexMap(item.preview);
-
-  if (!q) return escaped
-
-  // 1. 先在转义后的字符串插入高亮标签（用映射后的索引）
-  let result = escaped;
-  // 记录偏移量，插入标签后字符串变长
-  let offset = 0;
-  [...matches].forEach(match => {
-    const start = indexMap[match.start];
-    const end = indexMap[match.end];
-    if (start === undefined || end === undefined) return;
-    result =
-      result.slice(0, start + offset) +
-      '<span class="search-highlight">' +
-      result.slice(start + offset, end + offset) +
-      '</span>' +
-      result.slice(end + offset);
-    offset += '<span class="search-highlight">'.length + '</span>'.length;
-  });
-
-  return result;
-};
-
-/**
  * 对字符串做HTML转义，并返回原始索引到转义后索引的映射
  * @param {string} str
  * @returns {{escaped: string, indexMap: number[]}}
@@ -853,8 +814,13 @@ const activeResultList = computed(() => {
  * 组内按行号升序（读代码/笔记的人期望的是文档顺序，不是相关度顺序）。
  */
 
-/** 组头和命中行一律 24px。改这里必须同步改 CSS 里的 .note-row 高度，否则虚拟列表定位会飘。 */
-const NOTE_ROW_HEIGHT = 24
+/**
+ * 三个结果列表共用的行高。虚拟列表按固定行高算偏移，JS 里的数和 CSS 里的高度差一个像素，
+ * 越往下滚越偏（上一版 :item-size="64" 配更高的卡片，看着就是"内容被截断了"）。
+ * 所以不再手抄两遍：CSS 那边用 v-bind(SR_ROW_CSS_HEIGHT) 直接引这里的值。
+ */
+const SR_ROW_HEIGHT = 28
+const SR_ROW_CSS_HEIGHT = `${SR_ROW_HEIGHT}px`
 
 const collapsedNoteGroups = ref(new Set())
 
@@ -1506,7 +1472,9 @@ onBeforeUnmount(() => {
   min-width: 0;
   overflow: hidden;
   overflow-x: hidden;
-  padding: 0 8px 5px 0;
+  /* 行是通栏的（左右各自带 8px 内边距），容器再留边就等于给每一行加了一圈白边，
+     窄侧栏里那点宽度全花在留白上。右边不留：滚动条自己会占掉布局宽度。 */
+  padding: 0 0 4px 0;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -1523,14 +1491,14 @@ onBeforeUnmount(() => {
   color: var(--guaxi-text-secondary, #8c8c8c);
   background: var(--guaxi-header-bg);
   border-bottom: 1px solid var(--guaxi-border);
-  font-size: 12px;
+  font-size: var(--sr-fs-meta, 12px);
   line-height: 18px;
 }
 
 /* 上百个文件时"全部折叠"是刚需，但它不该抢统计文字的注意力 */
 .summary-action {
   flex: 0 0 auto;
-  font-size: 12px;
+  font-size: var(--sr-fs-meta, 12px);
   color: var(--guaxi-text-secondary);
 }
 
@@ -1544,16 +1512,14 @@ onBeforeUnmount(() => {
   width: 100%;
   min-width: 0;
   overflow: hidden;
-  padding: 0 8px 5px 0;
+  padding: 0 0 4px 0;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
 }
 
-.tab-content-excerpts :deep(.n-list),
-.tab-content-excerpts :deep(.n-list-item),
-.tab-content-excerpts :deep(.excerpt-result-item),
-.tab-content-excerpts :deep(.file-content),
+.tab-content-excerpts :deep(.excerpt-group),
+.tab-content-excerpts :deep(.excerpt-body),
 .tab-content-excerpts :deep(.card-container),
 .tab-content-excerpts :deep(.excerpt-card),
 .tab-content-excerpts :deep(.n-card) {
@@ -1563,9 +1529,8 @@ onBeforeUnmount(() => {
   box-sizing: border-box;
 }
 
-.tab-content-excerpts :deep(.n-list-item),
-.tab-content-excerpts :deep(.excerpt-result-item),
-.tab-content-excerpts :deep(.file-content) {
+.tab-content-excerpts :deep(.excerpt-group),
+.tab-content-excerpts :deep(.excerpt-body) {
   overflow: hidden;
 }
 
@@ -1643,274 +1608,148 @@ onBeforeUnmount(() => {
   padding: 8px;
 }
 
-.tab-content :deep(.n-list) {
-  flex: 1 1 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  padding: 0;
-  margin: 0;
-  width: 100%;
-  min-width: 0;
-  overflow: hidden;
-  overflow-x: hidden;
-}
-
-.tab-content :deep(.n-list__content) {
-  flex: 1 1 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.tab-content :deep(.n-list-item) {
-  width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-  overflow: hidden;
-  margin: 0 !important;
-  padding: 2px 4px !important;
-  transition: all 0.2s ease;
-}
-
-.n-list-item:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-}
-
-.search-result-item {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
-  width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-  background: var(--guaxi-panel-bg);
-  border-radius: 6px;
-  box-shadow: none;
-  padding: 8px;
-  margin-bottom: 2px;
-  margin-top: 5px;
-  transition: all 0.2s ease;
-  position: relative;
-}
-
-.search-result-item.is-active {
-  background: var(--guaxi-header-bg);
-  box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.3),
-    0 2px 12px 0 rgba(7, 118, 161, 0.15);
-}
-
-.n-list-item:hover .search-result-item {
-  background: var(--guaxi-header-bg);
-  box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.3),
-    0 2px 12px 0 rgba(7, 118, 161, 0.15);
-}
-
-.file-name {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--guaxi-text-primary);
-  width: 100%;
-  cursor: pointer;
-  min-width: 0;
-  overflow: hidden;
-  box-sizing: border-box;
-  transition: color 0.2s;
-}
-
-.n-list-item:hover .file-name {
-  color: var(--n-color-primary, #1890ff);
-}
-
-.filename-text {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* 后面跟着目录时让文件名只占自己那点宽度，剩下的留给目录 */
-.filename-text--with-dir {
-  flex: 0 1 auto;
-}
-
-.file-dir {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-  font-weight: 400;
-  color: var(--guaxi-text-secondary);
-}
-
-.line-badge {
-  background-color: var(--n-color-primary-suppl, rgba(24, 144, 255, 0.12));
-  color: var(--n-color-primary, #1890ff);
-  padding: 1px 6px;
-  border-radius: 4px;
-  font-size: 11px;
-  margin-left: auto;
-  flex-shrink: 0;
-  display: inline-block;
-}
-
-.preview-content {
-  min-width: 0;
-  max-width: 100%;
-  width: 100%;
-  white-space: pre-wrap;
-  word-break: break-word;
-  overflow-wrap: break-word;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  box-sizing: border-box;
-  margin-left: 0px;
-  font-size: 13px;
-  color: var(--guaxi-text-secondary);
-  line-height: 1.5;
-  background: var(--guaxi-header-bg);
-  border: 1px solid var(--guaxi-border);
-  border-radius: 4px;
-  padding: 8px;
-  max-height: calc(3 * 1.5em + 16px);
-  position: relative;
-  text-overflow: ellipsis;
-}
-
 /*
- * ===== 内容结果：文件组头 + 逐行命中 =====
+ * ===== 三个标签页共用的一行 =====
  *
- * 行高必须和脚本里的 NOTE_ROW_HEIGHT（24px）严格一致：虚拟列表按固定行高算偏移，
- * 差一个像素就会越滚越偏。所以这几条一律 border-box、不设 margin、不设边框。
- * 上一版每条命中是一张带边框的卡片，虚拟列表按 64px 算而卡片实际更高，
- * 于是越往下滚越对不上，看着就是"内容被截断了"。
+ * 文件页一条结果、内容页的文件组头、内容页的每条命中，本质都是"一行"，所以只有一套类：
+ * .sr-row 管几何和状态，.sr-row--group / --match 只管这一层多出来的那点差异。
+ * 摘录页在 GuaxiNoteExcerpt.vue 里用同名的一套（那是另一个 SFC，scoped 样式进不去），
+ * 颜色和字号都从 App.vue 的 --sr-* 变量取，改一处三处一起变。
+ *
+ * 行高必须和脚本里的 SR_ROW_HEIGHT 严格一致：虚拟列表按固定行高算偏移，差一个像素就越滚越偏。
+ * 所以这里不再手抄数字，直接 v-bind 脚本里的常量；一律 border-box、不设 margin、不设边框。
  */
-.note-row {
+.sr-row {
   display: flex;
   align-items: center;
-  height: 24px;
+  height: v-bind(SR_ROW_CSS_HEIGHT);
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  padding: 0 8px 0 6px;
+  padding: 0 8px;
   cursor: pointer;
   overflow: hidden;
   white-space: nowrap;
-  font-size: 12.5px;
-  line-height: 24px;
+  line-height: v-bind(SR_ROW_CSS_HEIGHT);
+  /* 位移和外发光在这种密排行上是灾难：一抖就串行。状态只走底色 + 左侧竖条。 */
+  transition: background-color 0.12s ease;
 }
 
-.note-row:hover {
-  background: var(--guaxi-header-bg);
+.sr-row:hover {
+  background: var(--sr-row-hover);
 }
 
-/* 选中的行只给底色 + 左侧一道竖条。不做外发光和位移——24px 的密排行一抖就串行。 */
-.note-row.is-active {
-  background: var(--guaxi-header-bg);
-  box-shadow: inset 2px 0 0 var(--n-color-primary, #1890ff);
+/* 选中改色相（主题蓝），悬停改明度（灰）：两种状态不会被看成同一件事。 */
+.sr-row.is-active {
+  background: var(--sr-row-active);
+  box-shadow: inset 2px 0 0 var(--sr-row-accent, #1890ff);
 }
 
-.note-file-row {
+/* 文件行：文件名是这一屏的主标题，字号取共用梯级的最大一档，和摘录页的文件名同级 */
+.sr-row--group {
   gap: 6px;
+  font-size: var(--sr-fs-group, 15px);
+  font-weight: 600;
   color: var(--guaxi-text-primary);
-  font-weight: 500;
 }
 
-.note-caret {
+.sr-caret {
   flex: 0 0 auto;
   color: var(--guaxi-text-secondary);
   transition: transform 0.15s ease;
 }
 
-.note-caret.is-collapsed {
+.sr-caret.is-collapsed {
   transform: rotate(-90deg);
 }
 
-.note-file-name {
+.sr-name {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* 目录跟在文件名右边、颜色更淡：同名文件一多，光看文件名认不出是哪个 */
-.note-file-dir {
+/* 目录跟在文件名右边、更小更淡：同名文件一多，光看文件名认不出是哪个 */
+.sr-dir {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-size: 11.5px;
+  font-size: var(--sr-fs-meta, 12px);
   font-weight: 400;
   color: var(--guaxi-text-secondary);
 }
 
-.note-file-count {
+.sr-count {
   flex: 0 0 auto;
   margin-left: auto;
   padding: 0 6px;
   border-radius: 999px;
   background: rgba(128, 128, 128, 0.22);
   color: var(--guaxi-text-secondary);
-  font-size: 11px;
-  line-height: 16px;
+  font-size: var(--sr-fs-meta, 12px);
+  line-height: 18px;
   font-weight: 400;
   font-variant-numeric: tabular-nums;
 }
 
 /* 命中行缩进到组头文件名的位置，层级一眼看得出来 */
-.note-match-row {
+.sr-row--match {
   gap: 10px;
-  padding-left: 12px;
+  padding-left: 14px;
 }
 
 /* 行号当成编辑器的行号沟：右对齐 + 等宽数位，正文的起始位置才是齐的 */
-.note-line-no {
+.sr-line-no {
   flex: 0 0 auto;
   min-width: 36px;
   text-align: right;
-  font-size: 11.5px;
+  font-size: var(--sr-fs-meta, 12px);
   font-variant-numeric: tabular-nums;
   color: var(--guaxi-text-secondary);
-  opacity: 0.7;
+  opacity: 0.75;
 }
 
-/* white-space: pre 保留原文里的连续空格，一行装不下就交给 CSS 省略号。
+/* 命中的正文是这个面板真正要读的东西，字号跟着正文级走，比行号、目录都大一档。
+   white-space: pre 保留原文里的连续空格，一行装不下就交给 CSS 省略号。
    不能用 pre-wrap：换行会把行高撑破，虚拟列表立刻错位。 */
-.note-line-text {
+.sr-line-text {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: pre;
   tab-size: 4;
+  font-size: var(--sr-fs-body, 14px);
   color: var(--guaxi-text-primary);
 }
 
 /* 窗口平移或截断留下的省略记号，颜色压下去，免得被当成原文里的省略号 */
-.note-cut {
+.sr-cut {
   color: var(--guaxi-text-secondary);
   opacity: 0.6;
 }
 
 /* 密排行里的高亮不留内边距和阴影：一加就把后面的字往右推，
    同一个词在不同行的位置看着都不一样。底色够亮，已经足够显眼。 */
-.note-line-text .search-highlight {
+.sr-line-text .search-highlight {
   padding: 0;
   box-shadow: none;
   font-weight: 600;
 }
 
+@media (prefers-reduced-motion: reduce) {
+
+  .sr-row,
+  .sr-caret {
+    transition: none;
+  }
+}
+
+/* 注意：GuaxiEditor.vue 里有一条全局的 .search-highlight，背景和前景都带 !important
+   （Monaco 的命中装饰要用），所以下面这两行颜色实际会被它盖掉，全应用的命中色是统一的。
+   这里保留是当兜底：万一哪天那个组件没挂载，命中也不能变成没有底色的裸文字。 */
 .search-highlight {
   background: #ffe58f;
   color: #d48806;

@@ -196,6 +196,32 @@ const themeOverrides = computed(() => {
   --guaxi-search-hit-bg: rgba(234, 92, 0, 0.28);
   --guaxi-search-hit-active-bg: rgba(234, 92, 0, 0.5);
   --guaxi-search-hit-active-border: rgba(246, 154, 60, 0.9);
+
+  /* 设计说明（搜索面板三个标签页共用的一套行样式）：
+     文件 / 内容 / 摘录 以前各写一套悬停和选中效果——三种圆角、三种阴影、三种位移，
+     同一个手势在三个标签页里长得不一样。这里把"行"的状态收成一组变量，三处引用。
+
+     不能再用 --guaxi-header-bg 当悬停底色：亮色主题下它和 --guaxi-panel-bg 都是 #ffffff，
+     等于悬停和选中都没有底色，只能靠那道左侧竖条认。所以这里给的是半透明叠加色，
+     压在任何主题的底色上都留得下痕迹。
+     - hover 只改明度（灰），selected 改色相（主题蓝）：两种状态不会被看成同一件事；
+     - rail 是层级引导线，替代"再套一层带边框的盒子"。 */
+  --sr-row-hover: rgba(15, 23, 42, 0.05);
+  --sr-row-active: rgba(24, 144, 255, 0.12);
+  --sr-row-accent: #1890ff;
+  --sr-rail: rgba(148, 163, 184, 0.28);
+  --sr-hairline: rgba(148, 163, 184, 0.18);
+
+  /* 设计说明（三个标签页共用的一条字号梯级）：
+     以前 内容 标签页的文件名是 13px、文件 标签页 14px、摘录 里那层 n-card 标题被 naive 定到 ~18px，
+     同一个层级三个字号，最需要读的正文反而最小。这里只留三档，每档差 1px：
+     - group：文件名这类组头，三个标签页统一，也是全panel最大的字；
+     - body：真正要读的东西（命中行、摘录正文），只比组头小一档；
+     - meta：行号、相对路径、时间戳这类附属信息，不参与阅读。
+     行高单独给一档，26px 装 15px 的字会顶到边。 */
+  --sr-fs-group: 15px;
+  --sr-fs-body: 14px;
+  --sr-fs-meta: 12px;
 }
 
 :root[data-guaxi-theme='dark'] {
@@ -237,6 +263,13 @@ const themeOverrides = computed(() => {
   --guaxi-search-hit-bg: rgba(234, 92, 0, 0.36);
   --guaxi-search-hit-active-bg: rgba(234, 92, 0, 0.62);
   --guaxi-search-hit-active-border: rgba(246, 154, 60, 0.95);
+
+  /* 深色底上叠加同样的透明度会看不出来，悬停改用白色微光，选中把蓝调再抬一档。 */
+  --sr-row-hover: rgba(255, 255, 255, 0.06);
+  --sr-row-active: rgba(24, 144, 255, 0.2);
+  --sr-row-accent: #4c9df8;
+  --sr-rail: rgba(148, 163, 184, 0.24);
+  --sr-hairline: rgba(148, 163, 184, 0.16);
 }
 
 html,

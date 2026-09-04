@@ -5,17 +5,27 @@
         <n-text depth="3">尝试不同的搜索词</n-text>
       </template>
     </n-empty>
-    <n-scrollbar v-else ref="scrollbarRef" class="excerpt-scrollbar">
-      <n-list hoverable clickable>
-        <n-list-item v-for="(item, index) in excerptResults" :key="item.file_path" :data-key="item.file_path"
-          :data-index="index" @click="toggleFileExpand(item)">
-        <div class="excerpt-result-item" :class="{ 'is-active': activeExcerptIndex === index }">
-          <div class="file-name" :title="item.file_path">
-            <n-icon :component="item.expanded ? ChevronDown : ChevronRight" size="12" @click.stop="toggleFileExpand(item)"
-              class="expand-icon" />
-            <IconifyIcon v-bind="getFileIconPropsWithLog(item.file_path)" />
-            <span class="filename-text" :title="item.file_name || item.file_path">{{ item.file_name }}</span>
-            <n-button size="tiny" type="primary" tertiary @click.stop="insertExcerpt(item)" class="insert-btn" title="插入摘录内容">
+    <!--
+      结构说明（为什么不再用 n-list / n-card 套着）：
+      这里以前是"结果项 → 展开区 → n-card → 卡片项 → 渲染内容"五层盒子，每层都带边框、圆角和内边距，
+      窄侧栏里左右各被吃掉 60px 上下，正文只剩中间一条。现在只剩两层：
+      文件行（和文件/内容两个标签页共用 .sr-row）+ 展开区，展开区里用缩进和一道引导线表达层级。
+      交互一个没动：展开仍是懒加载 + 预渲染，两个"插入"按钮、键盘导航、data-index 定位都在原位。
+    -->
+    <template v-else>
+      <div class="result-summary">
+        <span>共找到 {{ excerptResults.length }} 个摘录文件</span>
+      </div>
+      <n-scrollbar ref="scrollbarRef" class="excerpt-scrollbar">
+        <div v-for="(item, index) in excerptResults" :key="item.file_path" class="excerpt-group"
+          :data-key="item.file_path" :data-index="index">
+          <div class="sr-row sr-row--group" :class="{ 'is-active': activeExcerptIndex === index }"
+            :title="item.file_path" @click="handleGroupClick(item, index)">
+            <n-icon class="sr-caret" :component="item.expanded ? ChevronDown : ChevronRight" size="11" />
+            <IconifyIcon v-bind="getFileIconPropsWithLog(item.file_path)" :size="16" />
+            <span class="sr-name">{{ item.file_name }}</span>
+            <n-button size="tiny" type="primary" tertiary @click.stop="insertExcerpt(item)" class="sr-action"
+              title="插入摘录内容">
               <template #icon>
                 <n-icon :component="TextGrammarArrowLeft20Regular" />
               </template>
@@ -23,46 +33,42 @@
             </n-button>
           </div>
 
-          <div v-if="item.expanded" class="file-content" @click.stop>
+          <div v-if="item.expanded" class="excerpt-body" @click.stop>
             <n-spin :show="item.loading">
               <div v-if="item.content" class="card-container">
-                <n-card v-for="card in item.content.cards" :key="card.id" class="excerpt-card">
-                  <template #header>
-                    <div class="card-header">
-                      <n-tag :type="getCardTypeColor(card.type)" size="small">
-                        {{ formatCardType(card.type) }}
-                      </n-tag>
-                      <span class="card-title">{{ card.title }}</span>
-                      <span class="card-timestamp">{{ formatTimestamp(card.timestamp) }}</span>
-                    </div>
-                  </template>
-
-                  <div class="card-items">
-                    <div v-for="(cardItem, index) in card.items" :key="index" class="card-item">
-                      <div class="card-item-header">
-                        <div class="card-item-type">{{ formatCardItemType(cardItem.type) }}</div>
-                        <n-button size="tiny" type="primary" tertiary
-                          @click.stop="insertCardItem(cardItem, item.file_path)" class="card-item-insert">
-                          <template #icon>
-                            <n-icon :component="TextGrammarArrowLeft20Regular" size="14" />
-                          </template>
-                          插入
-                        </n-button>
-                      </div>
-                      <!-- 使用现有renderMarkdown接口渲染内容 -->
-                      <div class="card-item-rendered" v-html="renderedContents[cardItem.id] || cardItem.content"></div>
-                      <div class="card-item-timestamp">{{ formatTimestamp(cardItem.timestamp) }}</div>
-                    </div>
+                <div v-for="card in item.content.cards" :key="card.id" class="excerpt-card">
+                  <div class="card-header">
+                    <n-tag :type="getCardTypeColor(card.type)" size="small" :bordered="false">
+                      {{ formatCardType(card.type) }}
+                    </n-tag>
+                    <span class="card-title">{{ card.title }}</span>
+                    <span class="card-time">{{ formatTimestamp(card.timestamp) }}</span>
                   </div>
-                </n-card>
+
+                  <div v-for="(cardItem, ci) in card.items" :key="ci" class="card-item">
+                    <!-- 类型、时间、插入挤在同一条 meta 行上：以前它们各占一行，一条摘录光页眉就三行 -->
+                    <div class="card-item-bar">
+                      <span class="card-item-type">{{ formatCardItemType(cardItem.type) }}</span>
+                      <span class="card-item-time">{{ formatTimestamp(cardItem.timestamp) }}</span>
+                      <n-button size="tiny" type="primary" tertiary
+                        @click.stop="insertCardItem(cardItem, item.file_path)" class="sr-action" title="插入这一条">
+                        <template #icon>
+                          <n-icon :component="TextGrammarArrowLeft20Regular" size="14" />
+                        </template>
+                        插入
+                      </n-button>
+                    </div>
+                    <!-- 使用现有renderMarkdown接口渲染内容 -->
+                    <div class="card-item-rendered" v-html="renderedOf(card, cardItem)"></div>
+                  </div>
+                </div>
               </div>
               <n-empty v-else-if="item.loading" description="无法加载文件内容" />
             </n-spin>
           </div>
         </div>
-        </n-list-item>
-      </n-list>
-    </n-scrollbar>
+      </n-scrollbar>
+    </template>
   </div>
 </template>
 
@@ -74,11 +80,8 @@ import { invoke } from '@tauri-apps/api/core';
 import {
   NEmpty,
   NText,
-  NList,
-  NListItem,
   NButton,
   NIcon,
-  NCard,
   NTag,
   NSpin,
   NScrollbar
@@ -320,6 +323,17 @@ const renderedCardContent = async (cardItem, excerptFilePath) => {
 // 缓存渲染结果
 const renderedContentCache = ref({});
 
+/**
+ * 渲染结果的缓存键。写入和读取必须用同一个：
+ * 以前写进去用的是 `cardItem.id || card.id_type_timestamp` 的兜底键，模板却只读 `cardItem.id`，
+ * 于是没有 id 的摘录项永远读不到渲染结果，界面上显示的是没渲染的原始 Markdown。
+ */
+const cardItemKey = (card, cardItem) =>
+  cardItem?.id || `${card?.id}_${cardItem?.type}_${cardItem?.timestamp}`
+
+const renderedOf = (card, cardItem) =>
+  renderedContents.value[cardItemKey(card, cardItem)] || cardItem?.content || ''
+
 // 修改后的toggleFileExpand方法，预渲染内容
 const toggleFileExpand = async (item) => {
   item.expanded = !item.expanded;
@@ -336,7 +350,7 @@ const toggleFileExpand = async (item) => {
           if (card.items) {
             for (const cardItem of card.items) {
               const rendered = await renderedCardContent(cardItem, item.file_path);
-              renderedContents.value[cardItem.id || `${card.id}_${cardItem.type}_${cardItem.timestamp}`] = rendered;
+              renderedContents.value[cardItemKey(card, cardItem)] = rendered;
             }
           }
         }
@@ -348,6 +362,16 @@ const toggleFileExpand = async (item) => {
       item.loading = false;
     }
   }
+};
+
+/**
+ * 点文件行：先把选中挪过来，再展开/折叠。
+ * 以前点击只展开、不改选中，于是鼠标点的是一条、键盘上下移动的却是另一条，
+ * 和文件/内容两个标签页的手感也不一样。
+ */
+const handleGroupClick = (item, index) => {
+  setActiveExcerptIndex(index)
+  toggleFileExpand(item)
 };
 
 // 格式化卡片类型
@@ -638,13 +662,14 @@ watch(() => props.excerptResults, (newVal) => {
 <style scoped>
 .excerpt-navigator {
   /* 设计思路：
-   * 1. 摘录面板原本由 list、结果项、展开内容、卡片和渲染内容多层边框叠加，宽度变化后容易出现杂乱的白线。
-   * 2. 这里统一使用更轻的 hairline 变量：外层结果项保留边界感，内部层级改用弱分隔线和留白表达结构。
-   * 3. 只调整视觉层级，不改变展开、插入和滚动等交互逻辑。
+   * 1. 这个面板以前是"list → 结果项 → 展开区 → n-card → 卡片项 → 渲染内容"六层同心盒子，
+   *    每层都有边框、圆角和内边距，正文左右各被吃掉近 60px，窄侧栏里只剩中间一条能读。
+   *    现在层级只靠缩进和一道引导线表达，边框留给真正需要"框"的东西（代码块、表格）。
+   * 2. 悬停/选中的颜色一律取 App.vue 里的 --sr-* 变量，和文件、内容两个标签页共用一套；
+   *    这里是另一个 SFC，scoped 样式进不来，所以类名刻意和那边同名同义（.sr-row / .sr-name…）。
+   * 3. 只调整视觉层级，展开、插入、键盘导航、data-index 定位都没动。
    */
-  --excerpt-hairline: rgba(148, 163, 184, 0.18);
-  --excerpt-hairline-soft: rgba(148, 163, 184, 0.1);
-  --excerpt-surface-soft: rgba(148, 163, 184, 0.06);
+  --excerpt-hairline: var(--sr-hairline, rgba(148, 163, 184, 0.18));
   height: 100%;
   width: 100%;
   min-width: 0;
@@ -654,6 +679,22 @@ watch(() => props.excerptResults, (newVal) => {
   flex-direction: column;
   overflow: hidden;
   container-type: inline-size;
+  font-size: var(--sr-fs-body, 14px);
+}
+
+/* 和文件、内容两个标签页的统计条对齐：同一位置、同一底色、同一字号、同一条下边界 */
+.result-summary {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  color: var(--guaxi-text-secondary, #8c8c8c);
+  background: var(--guaxi-header-bg);
+  border-bottom: 1px solid var(--guaxi-border);
+  font-size: var(--sr-fs-meta, 12px);
+  line-height: 18px;
 }
 
 .excerpt-scrollbar {
@@ -668,132 +709,67 @@ watch(() => props.excerptResults, (newVal) => {
   min-height: 0;
 }
 
-:deep(.n-list) {
-  min-height: 0;
+.excerpt-group {
   width: 100%;
-  max-width: none;
   min-width: 0;
-  padding: 0;
-  margin: 0;
+  box-sizing: border-box;
   overflow: hidden;
-  background: transparent;
-  border: none;
 }
 
-:deep(.n-list__content) {
-  min-height: 0;
-  width: 100%;
-  min-width: 0;
-}
-
-:deep(.n-list-item) {
-  width: calc(100% - 4px);
-  max-width: none;
-  min-width: 0;
-  margin: 2px !important;
-  padding: 2px 0 !important;
-  border: none !important;
-  transition: all 0.2s ease;
-}
-
-:deep(.n-list-item:hover) {
-  transform: translateY(-1px);
-  box-shadow: none;
-}
-
-:deep(.n-list-item__main) {
-  width: 100%;
-  min-width: 0;
-}
-
-:deep(.n-list::-webkit-scrollbar) {
-  width: 6px;
-}
-
-:deep(.n-list::-webkit-scrollbar-track) {
-  background: var(--guaxi-header-bg);
-  border-radius: 3px;
-}
-
-:deep(.n-list::-webkit-scrollbar-thumb) {
-  background: var(--guaxi-border);
-  border-radius: 3px;
-}
-
-:deep(.n-list::-webkit-scrollbar-thumb:hover) {
-  background: var(--guaxi-text-secondary);
-}
-
-.excerpt-result-item {
+/* ===== 和文件 / 内容两个标签页共用的一行 =====
+   同名类在 GuaxiSearchNavigator.vue 里还有一份（scoped 样式跨不过组件边界），
+   两边的颜色都从 App.vue 的 --sr-* 取，改一处三个标签页一起变。
+   这里用 min-height 而不是定高：行里挂着一个 22px 的"插入"按钮，定高会把它压出边界；
+   28px 是对齐那边的 SR_ROW_HEIGHT，这个列表没走虚拟滚动，差一两个像素也不会错位。 */
+.sr-row {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  top: 4px;
-  gap: 4px;
-  width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-  background: var(--guaxi-panel-bg);
-  border: 1px solid var(--excerpt-hairline);
-  border-radius: 6px;
-  box-shadow: none;
-  padding: 8px;
-  margin-bottom: 2px;
-  overflow: hidden;
-}
-
-.excerpt-result-item.is-active {
-  background: var(--guaxi-header-bg);
-  border-color: rgba(33, 189, 236, 0.48);
-  box-shadow: inset 0 0 0 1px rgba(33, 189, 236, 0.22),
-    0 6px 16px rgba(7, 118, 161, 0.12);
-}
-
-/* 增强的悬停效果 */
-.n-list-item:hover .excerpt-result-item {
-  background: var(--guaxi-header-bg);
-  border-color: rgba(33, 189, 236, 0.32);
-  box-shadow: inset 0 0 0 1px rgba(33, 189, 236, 0.14),
-    0 4px 12px rgba(0, 0, 0, 0.12);
-}
-
-.file-name {
-  display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--guaxi-text-primary);
-  width: 100%;
-  cursor: pointer;
-  min-width: 0;
-  max-width: none;
-  overflow: visible;
-  padding-right: 8px;
+  gap: 6px;
+  min-height: 28px;
   box-sizing: border-box;
-  transition: color 0.2s;
+  width: 100%;
+  min-width: 0;
+  padding: 2px 8px;
+  cursor: pointer;
+  overflow: hidden;
+  white-space: nowrap;
+  transition: background-color 0.12s ease;
 }
 
-/* 文件名悬停效果 */
-.n-list-item:hover .file-name {
-  color: var(--n-color-primary, #1890ff);
+.sr-row:hover {
+  background: var(--sr-row-hover);
 }
 
-.filename-text {
+.sr-row.is-active {
+  background: var(--sr-row-active);
+  box-shadow: inset 2px 0 0 var(--sr-row-accent, #1890ff);
+}
+
+.sr-row--group {
+  font-size: var(--sr-fs-group, 15px);
+  font-weight: 600;
+  color: var(--guaxi-text-primary);
+}
+
+.sr-caret {
+  flex: 0 0 auto;
+  color: var(--guaxi-text-secondary);
+}
+
+.sr-name {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.insert-btn {
-  justify-self: end;
+/* 操作按钮永远贴右：侧栏拖窄时该被压缩的是文件名，不是能点的东西 */
+.sr-action {
+  flex: 0 0 auto;
   max-width: 72px;
   min-width: 34px;
   overflow: hidden;
   white-space: nowrap;
-  transition: all 0.2s;
 }
 
 /* 设计思路：
@@ -801,53 +777,31 @@ watch(() => props.excerptResults, (newVal) => {
  * 2. 在极窄宽度下只保留按钮图标，仍通过 title 保留“插入摘录内容”的提示。
  */
 @container (max-width: 420px) {
-  .file-name {
-    grid-template-columns: auto auto minmax(0, 1fr) auto;
-    gap: 6px;
-    padding-right: 4px;
+  .sr-row {
+    gap: 5px;
   }
 
-  .insert-btn {
+  .sr-action {
     max-width: 34px;
     padding-left: 7px !important;
     padding-right: 7px !important;
-    overflow: hidden;
   }
 
-  .insert-btn :deep(.n-button__content) {
+  .sr-action :deep(.n-button__content) {
     width: 0;
     overflow: hidden;
   }
 }
 
-/* 插入按钮悬停效果 */
-.n-list-item:hover .insert-btn {
-  background-color: rgba(24, 144, 255, 0.1);
-  transform: translateX(-2px);
-}
-
-.expand-icon {
-  flex-shrink: 0;
-  cursor: pointer;
-  margin-right: 4px;
-  transition: transform 0.2s;
-}
-
-/* 展开图标悬停效果 */
-.n-list-item:hover .expand-icon {
-  color: #1890ff;
-  transform: scale(1.2);
-}
-
-.file-content {
+/* 展开区：只用缩进 + 一道引导线表达"这些是这个文件里的"，不再套盒子。
+   左边 10px 的缩进对齐组头的文件名，读起来是一棵树而不是一堆卡片。 */
+.excerpt-body {
   width: 100%;
-  background-color: var(--excerpt-surface-soft);
-  border: none;
-  border-top: 1px solid var(--excerpt-hairline-soft);
-  border-radius: 0;
-  margin: 8px -8px -8px;
-  padding: 10px 8px 8px;
   box-sizing: border-box;
+  margin: 0;
+  padding: 2px 8px 8px 10px;
+  margin-left: 8px;
+  border-left: 1px solid var(--sr-rail, rgba(148, 163, 184, 0.28));
   overflow: hidden;
 }
 
@@ -860,135 +814,132 @@ watch(() => props.excerptResults, (newVal) => {
   min-height: 0;
 }
 
+/* 一张摘录卡片。分隔靠上边那条 hairline 和自己的标题行，不再靠边框 + 圆角 + 阴影围一圈。 */
 .excerpt-card {
   width: 100%;
   max-width: 100%;
-  margin-bottom: 12px;
   box-sizing: border-box;
   background: transparent;
-  border-color: var(--excerpt-hairline-soft);
-  transition: all 0.2s;
 }
 
-/* 卡片悬停效果 */
-.excerpt-card:hover {
-  border-color: var(--excerpt-hairline);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
-  transform: translateY(-2px);
+.excerpt-card + .excerpt-card {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--excerpt-hairline);
 }
 
-:deep(.excerpt-card.n-card) {
-  background: transparent;
-  border-color: var(--excerpt-hairline-soft);
-}
-
-:deep(.excerpt-card .n-card-header) {
-  border-bottom: 1px solid var(--excerpt-hairline-soft);
-}
-
-:deep(.excerpt-card .n-card__content) {
-  padding-top: 10px;
-}
-
+/* 卡片标题行：标签 + 标题 + 时间，一行 22px。
+   以前它是 n-card 的 header，字号被 naive 定成 ~18px——比两级之上的文件名（14px）还大，
+   于是"标题挤掉正文"。现在标题和正文同为正文级字号，靠字重区分，比它更小的只有时间。 */
 .card-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
   min-width: 0;
+  min-height: 22px;
 }
 
 .card-title {
-  font-weight: 500;
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--sr-fs-body, 14px);
+  font-weight: 600;
+  color: var(--guaxi-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.card-timestamp {
-  font-size: 12px;
+.card-time {
+  flex: 0 0 auto;
+  font-size: var(--sr-fs-meta, 12px);
   color: var(--guaxi-text-secondary);
-  flex-shrink: 0;
-}
-
-.card-items {
-  margin-top: 12px;
-  width: 100%;
-  box-sizing: border-box;
+  font-variant-numeric: tabular-nums;
 }
 
 .card-item {
-  padding: 12px;
-  margin-bottom: 0;
-  border-bottom: 1px solid var(--excerpt-hairline-soft);
   width: 100%;
   box-sizing: border-box;
-  transition: all 0.2s;
+  padding: 4px 0 6px;
 }
 
-/* 卡片项悬停效果 */
-.card-item:hover {
-  background-color: var(--excerpt-surface-soft);
-  border-radius: 4px;
+.card-item + .card-item {
+  border-top: 1px dashed var(--excerpt-hairline);
 }
 
-.card-item:last-child {
-  border-bottom: none;
-}
-
-.card-item-header {
+/* 类型、时间、插入按钮合成一条 meta 行：以前类型一行、正文一行、时间又一行，
+   一条几十个字的摘录光页眉页脚就占掉三行。 */
+.card-item-bar {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 4px;
+  gap: 8px;
   width: 100%;
   min-width: 0;
+  min-height: 20px;
 }
 
 .card-item-type {
-  font-size: 12px;
+  flex: 0 0 auto;
+  font-size: var(--sr-fs-meta, 12px);
   color: var(--guaxi-text-secondary);
-  flex-shrink: 0;
 }
 
-.card-item-insert {
-  margin-left: 8px;
-  flex-shrink: 0;
-  transition: all 0.2s;
-}
-
-/* 卡片项插入按钮悬停效果 */
-.card-item:hover .card-item-insert {
-  background-color: rgba(24, 144, 255, 0.1);
-}
-
-.card-item-timestamp {
-  font-size: 11px;
+.card-item-time {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--sr-fs-meta, 12px);
   color: var(--guaxi-text-secondary);
-  text-align: right;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
 }
 
+/* 正文是这个面板真正要读的东西：给足字号和行距，左右不再套框，直接排到面板边缘。 */
 .card-item-rendered {
   width: 100%;
   max-width: 100%;
-  margin: 8px 0;
-  padding: 8px;
+  margin: 2px 0 0;
+  padding: 0;
   background: transparent;
   color: var(--guaxi-text-primary);
-  border-radius: 4px;
-  border: 1px solid var(--excerpt-hairline-soft);
+  font-size: var(--sr-fs-body, 14px);
+  line-height: 1.65;
   box-sizing: border-box;
   overflow: auto;
   word-wrap: break-word;
   overflow-wrap: break-word;
-  transition: all 0.2s;
 }
 
-/* 渲染内容悬停效果 */
-.card-item:hover .card-item-rendered {
-  background-color: rgba(148, 163, 184, 0.04);
-  border-color: var(--excerpt-hairline);
+/* markdown 渲染出来的 <p> 自带 1em 上下外边距，密排列表里一条摘录能被撑高一倍。 */
+.card-item-rendered :deep(p) {
+  margin: 0 0 0.4em;
+}
+
+.card-item-rendered :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.card-item-rendered :deep(ul),
+.card-item-rendered :deep(ol) {
+  margin: 0 0 0.4em;
+  padding-left: 1.4em;
+}
+
+/* 摘录正文里的 markdown 标题按浏览器默认能到 2em（28px），比两级之上的文件名（15px）还大，
+   在窄侧栏里就是"标题挤掉正文"的另一个来源。这里统一压到正文字号，只留字重做区分。 */
+.card-item-rendered :deep(h1),
+.card-item-rendered :deep(h2),
+.card-item-rendered :deep(h3),
+.card-item-rendered :deep(h4),
+.card-item-rendered :deep(h5),
+.card-item-rendered :deep(h6) {
+  margin: 0.2em 0 0.3em;
+  font-size: var(--sr-fs-body, 14px);
+  font-weight: 600;
+  line-height: 1.5;
 }
 
 .card-item-rendered :deep(a),
