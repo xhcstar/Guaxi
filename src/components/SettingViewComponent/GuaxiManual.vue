@@ -13,6 +13,7 @@
             <li><button type="button" class="toc-link" @click="scrollToSection('features')">当前功能版图</button></li>
             <li><button type="button" class="toc-link" @click="scrollToSection('quickstart')">快速开始</button></li>
             <li><button type="button" class="toc-link" @click="scrollToSection('home')">首页与编辑器</button></li>
+            <li><button type="button" class="toc-link" @click="scrollToSection('search-local')">搜索与查询语法</button></li>
             <li><button type="button" class="toc-link" @click="scrollToSection('reader')">资料库与阅读器</button></li>
             <li><button type="button" class="toc-link" @click="scrollToSection('chat')">聊天与模型</button></li>
             <li><button type="button" class="toc-link" @click="scrollToSection('brain')">知识图谱</button></li>
@@ -53,6 +54,10 @@
             <button type="button" class="feature-card" @click="scrollToSection('home')">
               <div class="feature-title">知识编辑工作台</div>
               <div class="feature-desc">知识库文件树、任务目录、普通目录、打开历史、Monaco 编辑器、预览/分屏、右侧大纲/助手/搜索面板。</div>
+            </button>
+            <button type="button" class="feature-card" @click="scrollToSection('search-local')">
+              <div class="feature-title">搜索与查询语法</div>
+              <div class="feature-desc">一个输入框写完"找什么 + 在哪找"：记号筛选、命令面板、正则/全词/大小写开关，中文全词匹配按分词判断词边界。</div>
             </button>
             <button type="button" class="feature-card" @click="scrollToSection('reader')">
               <div class="feature-title">资料库与阅读器</div>
@@ -133,7 +138,7 @@
 
           <h3 class="h3">顶部工具栏</h3>
           <ul class="manual-ul">
-            <li>全局搜索：搜索文件、正文关键字和摘录笔记，支持时间段、文件类型、自定义后缀和标签筛选；可用 Ctrl+P 聚焦搜索框。</li>
+            <li>全局搜索：搜索文件、正文关键字和摘录笔记，支持记号筛选、正则/全词/大小写开关和命令面板；可用 Ctrl+P 聚焦搜索框，用法见<button type="button" class="toc-link" @click="scrollToSection('search-local')">搜索与查询语法</button>。</li>
             <li>知识库与工具窗口：可新建知识库、打开大纲、智能助手、模板管理、PPT 制作与管理、知识库资源管理、任务管理、语言学习窗口。</li>
             <li>编辑增强：支持截图并插入、纵向/横向分屏、切换左右侧栏。</li>
             <li>资源库同步：启动/关闭时会尝试执行资源库自动同步，并记录同步状态。</li>
@@ -162,6 +167,109 @@
             </div>
             <div class="figure-caption">图 3：首页编辑工作台</div>
           </div>
+        </section>
+
+        <n-divider />
+
+        <section id="search-local">
+          <h2 class="h2">搜索与查询语法</h2>
+          <p class="p">
+            首页顶部的搜索框是本地检索的总入口，一个输入框同时写"找什么"和"在哪找"，结果落在右侧面板的三个标签里。
+            <n-tag size="small">Ctrl+P</n-tag> 聚焦搜索框。搜索根目录跟随左栏文件树当前激活的根（知识库、普通目录或任务目录），
+            只有摘录笔记例外，它固定在资源库目录下找。
+          </p>
+
+          <h3 class="h3">三种搜索目标</h3>
+          <ul class="manual-ul">
+            <li><b>搜索文件</b>：按文件名和相对路径匹配，所以 <n-tag size="small">components/header</n-tag> 这种"目录 + 文件名"的写法也能中。</li>
+            <li><b>搜索关键字</b>：搜文件正文，命中按文件分组、一行一条列出，点某一行直接跳到那一行。</li>
+            <li><b>搜索摘录笔记</b>：搜阅读器里存下来的摘录和笔记。</li>
+          </ul>
+
+          <h3 class="h3">在搜索词里直接写筛选条件</h3>
+          <p class="p">
+            筛选记号和搜索词可以混在一起敲，顺序随意：
+          </p>
+          <div class="code-line">配置 加载 ext:md,txt after:7d path:src tag:待办</div>
+          <ul class="manual-ul">
+            <li><n-tag size="small">ext:</n-tag>（也可写 <n-tag size="small">type:</n-tag>）扩展名，逗号带多项；<n-tag size="small">.MD</n-tag> 和 <n-tag size="small">md</n-tag> 是一个意思。</li>
+            <li><n-tag size="small">tag:</n-tag> / <n-tag size="small">tags:</n-tag> 标签。</li>
+            <li><n-tag size="small">path:</n-tag>（也可写 <n-tag size="small">in:</n-tag> / <n-tag size="small">dir:</n-tag>）路径包含某一段，是子串匹配而不是前缀匹配。</li>
+            <li><n-tag size="small">after:</n-tag> / <n-tag size="small">since:</n-tag> 和 <n-tag size="small">before:</n-tag> / <n-tag size="small">until:</n-tag> 修改时间，取值可以是 <b>2026-01-31</b>、<b>2026/01</b>（只写到月份时自动取整月）、<b>today</b>、<b>yesterday</b>，也可以是 <b>7d</b> / <b>2w</b> / <b>3m</b> / <b>1y</b> 这种相对写法。</li>
+            <li>值里有空格就加引号：<n-tag size="small">path:"我的 笔记"</n-tag>。</li>
+            <li>记号会从搜索词里剥掉，不会被当成字面量去搜。不认识的键（<b>title:</b>、<b>C:</b>、<b>http://</b>）原样留下当搜索词。</li>
+            <li>时间写错了不会被静默丢掉，那一段会退回当普通搜索词处理。</li>
+          </ul>
+
+          <h3 class="h3">命令面板：输入 &gt; 开头</h3>
+          <p class="p">
+            在搜索框第一个字符打 <n-tag size="small">&gt;</n-tag> 就进命令模式，这时下拉里只列命令，可以直接接着敲字过滤（中英文和拼音首字母都能搜）。
+            开关类命令右侧会显示当前是"已开启"还是"已关闭"，不用点进去猜。
+          </p>
+          <ul class="manual-ul">
+            <li><b>重建文件名索引</b>：文件名搜索漏文件或明显变慢时用。</li>
+            <li><b>重建正文全文索引</b>：正文搜索结果和磁盘内容对不上时用。</li>
+            <li><b>清除全部筛选</b>：时间段、文件类型、标签一起清掉。</li>
+            <li><b>切换正则匹配 / 全词匹配 / 区分大小写</b>：等于点搜索框右边那三个开关。</li>
+          </ul>
+
+          <h3 class="h3">三个匹配开关</h3>
+          <p class="p">
+            搜索框右侧的 <n-tag size="small">Aa</n-tag>、<n-tag size="small">ab|</n-tag>、<n-tag size="small">.*</n-tag> 分别是区分大小写、全词匹配和正则。
+            默认三个都关，此时按字面量搜索、走智能大小写。开关状态记在本机，下次开窗还在。
+          </p>
+          <ul class="manual-ul">
+            <li><b>区分大小写</b>：关闭时是智能大小写——查询里出现大写字母才区分，全小写就不区分。</li>
+            <li><b>全词匹配</b>：只认整词，中文同样有效，见下一节。</li>
+            <li><b>正则</b>：关闭时标点是普通字符，不会被当通配符，所以搜 <n-tag size="small">a.b</n-tag> 不会命中 <n-tag size="small">axb</n-tag>。</li>
+          </ul>
+
+          <h3 class="h3">中文的全词匹配</h3>
+          <p class="p">
+            正则的 <n-tag size="small">\b</n-tag> 在 Unicode 语义下把汉字也算成单词字符，于是"参数"和"高效"之间根本不存在词边界，
+            <n-tag size="small">\b参数\b</n-tag> 在"参数高效微调"里永远匹配不上——这就是全词匹配一遇到中文就搜不到东西的根因。
+            这里的做法是把词边界交给分词器：汉字与日文假名之间的边界由 jieba 给出，字母数字和下划线仍沿用正则那套语义，空白与标点天然是边界。
+            所以"参数"能在"参数高效微调"里以整词命中，"数高"不会；"使用LoRA的"里的 LoRA 也能被找到，而正则的 <n-tag size="small">\b</n-tag> 在这种中英交界处同样会漏。
+            分词用的是全文索引那一套，所以"全词匹配认的词"和"索引认的词"始终一致。
+          </p>
+
+          <h3 class="h3">筛选面板</h3>
+          <p class="p">
+            不想记记号就用面板：时间段有全部、今天、近 7 天、近 30 天、近一年和自定义起止日期；
+            文件类型给了 Markdown、文本、PDF、Word、Excel、PPT、图片、JSON、HTML、CSS、TeX、Typst 等常见后缀，也能自己加后缀；
+            标签可多选，并可指定"全部满足"而不是"任一命中"。面板里点的和记号写的是同一套条件，可以混用。
+          </p>
+
+          <h3 class="h3">索引与结果的新鲜度</h3>
+          <p class="p">
+            边打字边出的那一批结果走内存索引，按下回车的正式搜索则现读磁盘，所以最终结果一定是当下的真实状态。
+          </p>
+          <ul class="manual-ul">
+            <li><b>文件名索引</b>：常驻内存 + 模糊匹配打分，把"每敲一个字就走一遍目录树"从热路径上挪走；库里几万个文件时差别是数秒和数毫秒。</li>
+            <li><b>正文全文索引</b>：倒排索引 + jieba 分词，能找到"两个词分散在同一篇文章里"这种 grep 永远搜不到的情况；查询的最后一个词按前缀放宽，所以打字到一半也有结果。</li>
+            <li>两个索引都靠文件监听增量维护。网络盘、权限受限的目录可能漏事件，觉得结果不对就用 <n-tag size="small">&gt;重建文件名索引</n-tag> 或 <n-tag size="small">&gt;重建正文全文索引</n-tag>。</li>
+          </ul>
+
+          <h3 class="h3">内容结果怎么读</h3>
+          <p class="p">
+            <b>内容</b>标签把命中按文件收成组：组头是文件名、所在目录和该文件的命中条数，下面一行一条命中，
+            左边是行号，右边是那一行的原文，命中的词高亮。点组头折叠或展开这个文件，点某一条命中才跳过去。
+            右上角的<b>全部折叠</b>能一次收起所有文件，先扫一遍"命中都落在哪些文件里"再往下看。
+          </p>
+          <ul class="manual-ul">
+            <li>一行放不下时会平移到命中附近，两端用 <b>…</b> 标出截掉的部分——所以高亮的词永远看得见，不会被挤到看不到的地方。行首的缩进会被掐掉，那不算截断。</li>
+            <li>组内按行号从小到大排，和在文件里读到的顺序一致；组与组之间按相关度排，越靠前的文件越像你要找的。</li>
+            <li>悬停某一条能看到完整的整行原文和行号，悬停组头能看到完整路径。</li>
+          </ul>
+
+          <h3 class="h3">键盘操作</h3>
+          <ul class="manual-ul">
+            <li>搜索框：<n-tag size="small">Ctrl+P</n-tag> 聚焦，<n-tag size="small">↑</n-tag><n-tag size="small">↓</n-tag> 选行，<n-tag size="small">Enter</n-tag> 打开或执行，<n-tag size="small">Esc</n-tag> 收起下拉。</li>
+            <li>右侧结果面板：<n-tag size="small">Alt+1</n-tag> / <n-tag size="small">Alt+2</n-tag> / <n-tag size="small">Alt+3</n-tag> 直接切到文件、内容、摘录三个标签，<n-tag size="small">←</n-tag><n-tag size="small">→</n-tag> 顺次换标签（两头循环），<n-tag size="small">↑</n-tag><n-tag size="small">↓</n-tag> 选结果，<n-tag size="small">Enter</n-tag> 打开。标签上的数字是该类结果的条数，悬停能看到完整标题和快捷键。</li>
+            <li>内容标签里 <n-tag size="small">↑</n-tag><n-tag size="small">↓</n-tag> 会穿过组头和命中行；停在组头上按 <n-tag size="small">Enter</n-tag> 是折叠/展开，停在命中行上按 <n-tag size="small">Enter</n-tag> 才打开。</li>
+            <li>编辑器标签栏溢出时底边会出现一条细滚动条，可以直接用鼠标拖。</li>
+            <li>打开过的结果会按"最近 + 常用"排进下拉，继续输入时也参与匹配，相当于一份用得越多越准的历史；窗口关闭时清空。</li>
+          </ul>
         </section>
 
         <n-divider />
@@ -535,6 +643,26 @@
             <div class="a">A：首页搜索面向本地知识库/目录/摘录；知识源搜索面向外部内容抓取、订阅和阅读。</div>
           </div>
           <div class="qa">
+            <div class="q">Q：开了全词匹配，搜中文词一条结果都没有？</div>
+            <div class="a">A：这是老问题，现在已经修好了。原因是正则的 <b>\b</b> 把汉字也当单词字符，"参数高效微调"里"参数"两边根本没有词边界。现在中文的词边界改由分词器判断，详见<button type="button" class="toc-link" @click="scrollToSection('search-local')">搜索与查询语法</button>里的"中文的全词匹配"。如果仍然搜不到，先确认关掉了正则开关——开着正则时表达式本身要自己负责边界。</div>
+          </div>
+          <div class="qa">
+            <div class="q">Q：搜出来的正文结果和文件里的内容对不上？</div>
+            <div class="a">A：打字过程中的结果来自索引，可能比磁盘旧一点；按回车的正式搜索是现读磁盘的。如果按了回车还是不对，在搜索框敲 <b>&gt;重建正文全文索引</b>（文件名对不上则用 <b>&gt;重建文件名索引</b>）。网络盘和权限受限目录容易漏掉文件变更通知，这两条命令就是为这种情况准备的。</div>
+          </div>
+          <div class="qa">
+            <div class="q">Q：搜索词里带冒号（比如 <b>C:\Users</b> 或 <b>http://</b>）会被当成筛选记号吗？</div>
+            <div class="a">A：不会。只有 <b>ext/type、tag/tags、path/in/dir、after/since、before/until</b> 这些键会被识别，其他带冒号的写法原样当搜索词。反过来，如果筛选值里有空格，要用引号括住：<b>path:"我的 笔记"</b>。</div>
+          </div>
+          <div class="qa">
+            <div class="q">Q：内容搜索结果里为什么有些行开头是 <b>…</b>？</div>
+            <div class="a">A：那一行太长，一行放不下，面板把窗口平移到了命中附近，<b>…</b> 标的是被截掉的部分。这样做是为了让高亮的词一定在可见范围里；想看整行就把鼠标停在这一行上，或者点它直接跳到文件里。行首缩进被掐掉时不会出现 <b>…</b>，那不算截断。</div>
+          </div>
+          <div class="qa">
+            <div class="q">Q：内容标签里按 Enter 没打开文件，只是把结果收起来了？</div>
+            <div class="a">A：光标停在<b>文件组头</b>上时 Enter 是折叠/展开这个文件，和点组头一样；要打开就用 <b>↓</b> 移到下面某一条带行号的命中行再按 Enter。想一次收起所有文件，用结果区右上角的<b>全部折叠</b>。</div>
+          </div>
+          <div class="qa">
             <div class="q">Q：Markdown 转换模型安装后仍不可用？</div>
             <div class="a">A：检查 <b>utils/Models/surya_models</b> 和 <b>utils/MarkdownConvertor</b> 是否存在；安装或导入后建议重启应用再尝试转换。</div>
           </div>
@@ -764,6 +892,20 @@ onMounted(() => {
   margin: 2px 0;
 }
 
+/* 查询语法示例行。.manual 整体已经是等宽字体，这里只补一个可读的框，
+   顺便留出 pre-wrap，长查询在窄面板里换行而不是横向出滚动条。 */
+.code-line {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.04);
+  color: var(--guaxi-text-primary);
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .feature-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -891,6 +1033,11 @@ onMounted(() => {
   color: #c9d1d9;
 }
 
+:root[data-guaxi-theme='dark'] .manual .code-line {
+  background: rgba(255, 255, 255, 0.06);
+  color: #c9d1d9;
+}
+
 .dark-mode .manual .h2,
 .dark-mode .manual .h3,
 .dark-mode .manual .feature-title,
@@ -906,6 +1053,11 @@ onMounted(() => {
 .dark-mode .manual .a,
 .dark-mode .manual .figure-pending,
 .dark-mode .manual .figure-caption {
+  color: #c9d1d9;
+}
+
+.dark-mode .manual .code-line {
+  background: rgba(255, 255, 255, 0.06);
   color: #c9d1d9;
 }
 

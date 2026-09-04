@@ -92,6 +92,13 @@ zstd = { version = "0.13.2", features = ["zstdmt"] }
 comrak = "0.49.0"
 petgraph = "0.6"
 fuzzy-matcher = "0.3.7"
+# 文件名索引的模糊匹配器（Helix 编辑器同款）。比 fuzzy-matcher 快一个量级，
+# 且自带路径感知打分与查询原子语法（^前缀 $后缀 '精确 !排除）。
+nucleo = "0.5.0"
+# 正文全文索引。tantivy 负责倒排索引与 BM25 排序，jieba 负责中文分词——
+# grep 只能按字面子串命中，分词后「增强 搜索」才能命中同一篇里分散的两个词。
+tantivy = "0.26.1"
+tantivy-jieba = "0.20.0"
 once_cell = "1.21.3"
 rss = "2.0.12"
 url = "2.5.7"

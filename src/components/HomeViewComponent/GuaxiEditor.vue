@@ -3,6 +3,7 @@
     <div class="editor-header" ref="editorHeaderRef">
       <div class="tab-bar" ref="tabBarRef" @wheel="handleWheelScroll">
         <div class="tab-region tab-region-left" ref="tabRegionLeftRef" data-tab-region="left"
+          @scroll.passive="scheduleTabRailSync"
           :class="{ 'is-tab-dragging': !!tabDragPath, 'is-drop-region': tabDragBlankRegion === 'left' }">
           <!-- TransitionGroup 负责顺序变化后的 FLIP 滑动，落位不再瞬间跳变。 -->
           <TransitionGroup name="tab-flip">
@@ -31,6 +32,7 @@
         <!-- 左右分屏：右侧标签栏与左侧并排显示在顶部（恰好分别位于左/右 pane 之上）。
              上下分屏时该标签栏移动到下方 pane 头上（见 .editor-split-wrapper 内的 pane 标签栏）。 -->
         <div v-if="layoutMode === 'vertical'" class="tab-region tab-region-right" ref="tabRegionRightRef" data-tab-region="right"
+          @scroll.passive="scheduleTabRailSync"
           :class="{ 'is-tab-dragging': !!tabDragPath, 'is-drop-region': tabDragBlankRegion === 'right' }">
           <TransitionGroup name="tab-flip">
             <div v-for="tab in rightTabs" :key="tab.path"
@@ -54,6 +56,18 @@
               </span>
             </div>
           </TransitionGroup>
+        </div>
+        <!-- 标签溢出时的细滚动条。浮层，不占标签栏高度（原生滚动条会把标签压矮，见样式注释）。
+             外面那层 track 是拖拽热区：拇指只有 3px，鼠标根本按不住，所以热区取满底部 6px 空档。
+             标签拖拽期间 is-passthrough 让它交出指针事件，否则挡住空白落点的命中测试。 -->
+        <div v-if="tabRailLeft" class="tab-scroll-track" :class="{ 'is-passthrough': !!tabDragPath }"
+          :style="tabRailLeft.track" @pointerdown="onTabRailPointerDown($event, 'left')">
+          <div class="tab-scroll-thumb" :class="{ 'is-dragging': tabRailDragRegion === 'left' }" :style="tabRailLeft.thumb" />
+        </div>
+        <div v-if="layoutMode === 'vertical' && tabRailRight" class="tab-scroll-track"
+          :class="{ 'is-passthrough': !!tabDragPath }"
+          :style="tabRailRight.track" @pointerdown="onTabRailPointerDown($event, 'right')">
+          <div class="tab-scroll-thumb" :class="{ 'is-dragging': tabRailDragRegion === 'right' }" :style="tabRailRight.thumb" />
         </div>
       </div>
 
@@ -1099,6 +1113,7 @@
             @mousedown="activateRegion('right')"
           >
             <div class="tab-region tab-region-right" ref="tabRegionRightRef" data-tab-region="right"
+              @scroll.passive="scheduleTabRailSync"
               :class="{ 'is-tab-dragging': !!tabDragPath, 'is-drop-region': tabDragBlankRegion === 'right' }">
               <TransitionGroup name="tab-flip">
                 <div v-for="tab in rightTabs" :key="tab.path"
@@ -1122,6 +1137,10 @@
                   </span>
                 </div>
               </TransitionGroup>
+            </div>
+            <div v-if="tabRailRight" class="tab-scroll-track" :class="{ 'is-passthrough': !!tabDragPath }"
+              :style="tabRailRight.track" @pointerdown="onTabRailPointerDown($event, 'right')">
+              <div class="tab-scroll-thumb" :class="{ 'is-dragging': tabRailDragRegion === 'right' }" :style="tabRailRight.thumb" />
             </div>
           </div>
           <div v-if="layoutMode !== 'single'" ref="secondaryEditorContainer" class="editor-container"
@@ -7337,6 +7356,17 @@ const tabBarRef = ref(null)
 const tabRegionLeftRef = ref(null)
 const tabRegionRightRef = ref(null)
 
+// 标签栏底边那条细滚动条的几何：{ track: {left,width}, thumb: {left,width} }，null 表示没溢出、不画。
+// 不用原生滚动条：它的粗细控不住（详见 .tab-region 的样式注释），而且会占走标签栏
+// 的高度把标签压矮。自己画的这条是绝对定位浮层，粗细固定 3px，不参与布局。
+const tabRailLeft = ref(null)
+const tabRailRight = ref(null)
+// 正在拖的是哪一侧（''=没在拖）。只用来给拇指加高亮，拖动本身的状态在 tabRailDragState 里。
+const tabRailDragRegion = ref('')
+let tabRailDragState = null
+let tabRailFrame = 0
+let tabRailObserver = null
+
 const languagePairingConfigured = new Set()
 const lspEnabled = ref(false)
 let lspRuntimeSnapshotRefreshPromise = null
@@ -12072,6 +12102,122 @@ const handleWheelScroll = (e) => {
 
   // 水平滚动（乘以一个系数可以调整滚动速度）
   container.scrollLeft += e.deltaY * 0.5
+}
+
+/* ───── 标签栏的细滚动条 ─────
+   原生横向滚动条被隐掉了（见 .tab-region 样式注释：粗细控不住，还要从标签栏高度里
+   切走一块把标签压矮），这里按 scrollLeft / scrollWidth 自己算出一条 3px 指示条的
+   位置和长度，绝对定位浮在标签栏底边上，并且可以用鼠标拖。 */
+const TAB_RAIL_INSET = 8   // 与 .tab-region 的左右 padding 对齐
+const TAB_RAIL_MIN_WIDTH = 28
+
+// 量一次滚动几何。track 是轨道长度，width 是拇指长度，travel 是拇指能走的距离，
+// offset 是拇指当前离轨道左端多远。返回 null = 没溢出，整条不画。
+const readTabRailGeom = (el) => {
+  if (!el) return null
+  const view = el.clientWidth
+  const scrollable = el.scrollWidth - view
+  if (!view || scrollable <= 1) return null
+  const track = view - TAB_RAIL_INSET * 2
+  if (track <= TAB_RAIL_MIN_WIDTH) return null
+  const width = Math.max(TAB_RAIL_MIN_WIDTH, Math.round(track * (view / el.scrollWidth)))
+  const travel = track - width
+  const progress = Math.min(1, Math.max(0, el.scrollLeft / scrollable))
+  return { scrollable, track, width, travel, offset: Math.round(travel * progress) }
+}
+
+const measureTabRail = (el) => {
+  const geom = readTabRailGeom(el)
+  if (!geom) return null
+  return {
+    // offsetLeft 相对 .tab-bar（它是 position: relative），左右分屏时右侧标签区不在 0 位
+    track: { left: `${el.offsetLeft + TAB_RAIL_INSET}px`, width: `${geom.track}px` },
+    thumb: { left: `${geom.offset}px`, width: `${geom.width}px` }
+  }
+}
+
+const syncTabRails = () => {
+  tabRailLeft.value = measureTabRail(tabRegionLeftRef.value)
+  tabRailRight.value = measureTabRail(tabRegionRightRef.value)
+}
+
+// 滚动事件一帧内可能来很多次，合并到下一帧再量一次就够
+const scheduleTabRailSync = () => {
+  if (tabRailFrame) return
+  tabRailFrame = requestAnimationFrame(() => {
+    tabRailFrame = 0
+    syncTabRails()
+  })
+}
+
+// 标签区自身尺寸变化（拖分隔条、缩窗口）只有 ResizeObserver 能看见；
+// 标签增减改的是 scrollWidth 而不是自身尺寸，靠下面的 watch 补。
+const observeTabRails = () => {
+  if (typeof ResizeObserver === 'undefined') return
+  if (!tabRailObserver) tabRailObserver = new ResizeObserver(scheduleTabRailSync)
+  tabRailObserver.disconnect()
+  for (const el of [tabRegionLeftRef.value, tabRegionRightRef.value]) {
+    if (el) tabRailObserver.observe(el)
+  }
+}
+
+watch(
+  () => [leftTabs.value.length, rightTabs.value.length, layoutMode.value],
+  () => {
+    void nextTick(() => {
+      // 上下/左右分屏切换时右侧标签区会被 v-if 重建，观察目标得跟着换
+      observeTabRails()
+      syncTabRails()
+    })
+  }
+)
+
+/* 拖动这条滚动条。两处和原生滚动条对齐：
+   按在拇指以外的轨道上先跳过去（拇指中心对准落点）再接着拖；拖动期间用指针捕获，
+   鼠标划出标签栏、划出窗口都还跟手，松手才结束。 */
+const onTabRailPointerMove = (e) => {
+  const st = tabRailDragState
+  if (!st) return
+  const geom = readTabRailGeom(st.el)
+  if (!geom || geom.travel <= 0) return
+  const localX = e.clientX - st.trackLeft
+  const progress = Math.min(1, Math.max(0, (localX - st.grabOffset) / geom.travel))
+  // 只改 scrollLeft，拇指位置由随之而来的 scroll 事件重新量（scheduleTabRailSync）
+  st.el.scrollLeft = progress * geom.scrollable
+}
+
+const endTabRailDrag = () => {
+  if (!tabRailDragState) return
+  tabRailDragState = null
+  tabRailDragRegion.value = ''
+  window.removeEventListener('pointermove', onTabRailPointerMove)
+  window.removeEventListener('pointerup', endTabRailDrag)
+  window.removeEventListener('pointercancel', endTabRailDrag)
+}
+
+const onTabRailPointerDown = (e, region) => {
+  if (e.button !== 0) return
+  const el = region === 'right' ? tabRegionRightRef.value : tabRegionLeftRef.value
+  const geom = readTabRailGeom(el)
+  if (!geom || geom.travel <= 0) return
+
+  const trackLeft = e.currentTarget.getBoundingClientRect().left
+  const localX = e.clientX - trackLeft
+  const onThumb = localX >= geom.offset && localX <= geom.offset + geom.width
+  const grabOffset = onThumb ? localX - geom.offset : geom.width / 2
+  if (!onThumb) {
+    const jump = Math.min(1, Math.max(0, (localX - geom.width / 2) / geom.travel))
+    el.scrollLeft = jump * geom.scrollable
+  }
+
+  e.preventDefault()   // 拖的时候不要顺手把标签标题选中
+  tabRailDragState = { el, trackLeft, grabOffset }
+  tabRailDragRegion.value = region
+  // 捕获后事件重定向到 track，但仍照常冒泡到 window，所以下面的监听收得到
+  try { e.currentTarget.setPointerCapture?.(e.pointerId) } catch { /* 引擎不支持就退回普通冒泡 */ }
+  window.addEventListener('pointermove', onTabRailPointerMove)
+  window.addEventListener('pointerup', endTabRailDrag)
+  window.addEventListener('pointercancel', endTabRailDrag)
 }
 
 const setupEditorListeners = () => {
@@ -23561,6 +23707,12 @@ onMounted(() => {
     await ensurePythonRuntimeInitialized('mounted', { silent: true, notify: false })
   })()
 
+  // 标签栏的细滚动条：挂载后量一次，之后由 ResizeObserver + @scroll + watch 维护
+  void nextTick(() => {
+    observeTabRails()
+    syncTabRails()
+  })
+
   const intervalMs = Number(editorStore.autoSaveIntervalMs) || AUTO_SAVE_FALLBACK_INTERVAL_MS
   if (editorStore.autoSaveEnabled !== false && intervalMs > 0) {
     autoSaveTimerId = window.setInterval(autoSaveDirtyTabs, intervalMs)
@@ -23675,6 +23827,13 @@ onUnmounted(() => {
   stopSelectionAudioPlayback()
   closePreviewSearch()
   cleanupPreviewPdfBlobUrls()
+  tabRailObserver?.disconnect()
+  tabRailObserver = null
+  if (tabRailFrame) {
+    cancelAnimationFrame(tabRailFrame)
+    tabRailFrame = 0
+  }
+  endTabRailDrag()   // 卸载时正拖着的话，window 上那三个监听得摘掉
   window.removeEventListener('keydown', handleKeyDown);
   window.removeEventListener('guaxi:lsp-setting-changed', handleLspSettingChanged);
   document.removeEventListener('selectionchange', handleGlobalSelectionChange, true)
@@ -26290,11 +26449,14 @@ onUnmounted(() => {
 
 .tab-bar {
   display: flex;
-  height: 38px;
-  min-height: 38px;
-  flex: 0 0 38px;
+  position: relative;
+  height: 40px;
+  min-height: 40px;
+  flex: 0 0 40px;
   flex-shrink: 0;
-  align-items: center;
+  /* stretch 而不是 center：让标签区拿满整条 40px，垂直位置交给标签区自己排。
+     居中会让标签区按内容撑高，一旦比 40px 高就被 overflow: hidden 从上下两头裁掉。 */
+  align-items: stretch;
   background: var(--guaxi-header-bg);
   border-bottom: 1px solid var(--guaxi-border);
   overflow: hidden;
@@ -26307,8 +26469,16 @@ onUnmounted(() => {
   min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
-  scrollbar-width: thin;
-  padding: 4px 8px;
+  /* 原生横向滚动条一律不显示，改由 .tab-scroll-track/.tab-scroll-thumb 自己画（见 syncTabRails）。
+     原因是原生那条粗细根本控不住：设了 scrollbar-width 就走标准那套，Windows 上
+     thin 仍有 8~11px；不设又要指望 ::-webkit-scrollbar 生效，而它会被引擎版本和
+     继承来的 scrollbar-color 影响。不管走哪条，它都要从 40px 里切走一块，
+     标签就被压掉一截——这是"出现滚动条标签顶部/底部被盖住"的根因。 */
+  scrollbar-width: none;
+  /* 顶部间距用 padding 固定、标签靠上对齐（不是 align-items: center）：
+     40px = 6px 上间距 + 28px 标签 + 6px 富余（细滚动条浮在这 6px 里）。 */
+  align-items: flex-start;
+  padding: 6px 8px 0;
   gap: 6px;
 }
 
@@ -26317,17 +26487,58 @@ onUnmounted(() => {
 }
 
 .tab-region::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
+  display: none;
 }
 
-.tab-region::-webkit-scrollbar-thumb {
-  background-color: rgba(0, 0, 0, 0.2);
-  border-radius: 3px;
+/* 标签栏底边上的细滚动条：拇指 3px 圆头，只在标签溢出时出现。
+   绝对定位浮在标签栏上，不占布局高度，所以永远不会把标签挤矮或盖住。
+   位置和长度由 JS 按 scrollLeft / scrollWidth 算（measureTabRail）。
+
+   track 是拖拽热区，取满标签栏底部那 6px 空档：拇指只有 3px，鼠标按不住，
+   但热区再往上就会盖到标签（标签占 6~34px），所以刚好卡在 34~40px 这一段。
+   hover / 拖动时拇指加粗到 5px 并加深，一是让人看出来这条能拖，二是抓的时候看得见。 */
+.tab-scroll-track {
+  position: absolute;
+  bottom: 0;
+  height: 6px;
+  cursor: default;
+  touch-action: none;   /* 触屏上拖它就是拖滚动条，不要再被解释成滑动页面 */
 }
 
-.tab-region::-webkit-scrollbar-thumb:hover {
-  background-color: rgba(0, 0, 0, 0.4);
+/* 标签拖拽时让位：空白落点靠 elementFromPoint 找 .tab-region，被这层挡住就判不出来 */
+.tab-scroll-track.is-passthrough {
+  pointer-events: none;
+}
+
+.tab-scroll-thumb {
+  position: absolute;
+  bottom: 2px;
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.22);
+  transition: height 0.12s ease, bottom 0.12s ease, background 0.12s ease;
+}
+
+.tab-scroll-track:hover .tab-scroll-thumb,
+.tab-scroll-thumb.is-dragging {
+  height: 5px;
+  bottom: 1px;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+:root[data-guaxi-theme='dark'] .tab-scroll-thumb {
+  background: rgba(255, 255, 255, 0.26);
+}
+
+:root[data-guaxi-theme='dark'] .tab-scroll-track:hover .tab-scroll-thumb,
+:root[data-guaxi-theme='dark'] .tab-scroll-thumb.is-dragging {
+  background: rgba(255, 255, 255, 0.5);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-scroll-thumb {
+    transition: none;
+  }
 }
 
 .tab-item {

@@ -14,12 +14,23 @@
     <!-- 中间：搜索框 -->
     <div class="header-center">
       <div ref="searchContainerRef" class="search-container" :class="{ open: isSearchDropdownVisible }">
-        <n-input ref="searchInputRef" v-model:value="searchQuery" placeholder="搜索文件或内容..." round clearable
+        <n-input ref="searchInputRef" v-model:value="searchQuery" placeholder="搜索文件或内容，输入 > 打开命令" round clearable
           @keydown="handleSearchKeydown" @focus="showSearchOptions" @blur="handleSearchBlur">
           <template #prefix>
             <n-icon :component="Search32Filled" />
           </template>
           <template #suffix>
+            <span class="search-mode-group">
+              <span
+                v-for="m in MATCH_TOGGLES"
+                :key="m.key"
+                class="search-mode-btn"
+                :class="{ on: matchFlags[m.key] }"
+                :title="m.title"
+                @mousedown.prevent
+                @click="toggleMatchFlag(m.key)"
+              >{{ m.glyph }}</span>
+            </span>
             <span
               class="search-filter-btn"
               :class="{ active: hasActiveFilters }"
@@ -167,7 +178,40 @@
       :style="dropdownFloatingStyle"
       @mousedown.prevent
     >
-      <div class="search-dd-section">
+      <!-- 命令面板：输入框以 `>` 开头时接管整个下拉 -->
+      <div v-if="isCommandMode" class="search-dd-section">
+        <div class="search-dd-section-title">命令</div>
+        <div v-if="!matchedCommands.length" class="search-dd-empty">没有匹配的命令</div>
+        <div
+          v-for="c in matchedCommands"
+          :key="`command:${c.id}`"
+          class="search-dd-row search-dd-row-command"
+          :class="{ 'is-selected': selectedRowKey === `command:${c.id}` }"
+          :data-row-key="`command:${c.id}`"
+          @click="handleSearchSelect(`command:${c.id}`)"
+        >
+          <span class="search-dd-icon-wrap">
+            <Icon :icon="c.icon" width="16" height="16" class="search-dd-icon" />
+          </span>
+          <div class="search-dd-cmd-text">
+            <span class="search-dd-cmd-label">{{ c.label }}</span>
+            <span class="search-dd-cmd-hint">{{ c.hint }}</span>
+          </div>
+          <span v-if="c.state" class="search-dd-cmd-state">{{ c.state }}</span>
+        </div>
+        <div class="search-dd-divider" />
+        <!-- 记号不写在这儿没人会知道它们存在 -->
+        <div class="search-dd-syntax">
+          <span class="search-dd-syntax-title">查询语法</span>
+          <code>ext:md,txt</code>
+          <code>path:src</code>
+          <code>tag:待办</code>
+          <code>after:7d</code>
+          <code>before:2026-01</code>
+        </div>
+      </div>
+
+      <div v-if="!isCommandMode" class="search-dd-section">
         <div
           v-for="item in typeMenuItems"
           :key="item.key"
@@ -185,7 +229,7 @@
       </div>
 
       <!-- 筛选：时间段 / 文件类型(多选) / 标签 -->
-      <div v-if="filtersOpen" class="search-dd-section search-filters">
+      <div v-if="filtersOpen && !isCommandMode" class="search-dd-section search-filters">
         <div class="filter-group">
           <div class="filter-label">时间段</div>
           <div class="filter-chips">
@@ -255,7 +299,7 @@
         <div class="search-dd-divider" />
       </div>
 
-      <div v-if="historyItems.length" class="search-dd-section">
+      <div v-if="historyItems.length && !isCommandMode" class="search-dd-section">
         <div class="search-dd-section-title">最近搜索</div>
         <div
           v-for="item in historyItems"
@@ -281,15 +325,16 @@
         <div v-if="trimmedQuery" class="search-dd-divider" />
       </div>
 
-      <div v-if="!trimmedQuery" class="search-dd-section">
+      <div v-if="!isCommandMode && !trimmedQuery" class="search-dd-section">
         <div v-if="!historyItems.length" class="search-dd-empty">暂无最近搜索</div>
       </div>
 
-      <div v-else class="search-dd-section">
+      <div v-else-if="!isCommandMode" class="search-dd-section">
+        <!-- 报错和结果要并存：一路失败不该把另两路的结果一起吞掉 -->
+        <div v-if="previewError" class="search-dd-error">{{ previewError }}</div>
         <div v-if="previewLoading" class="search-dd-empty">搜索中…</div>
-        <div v-else-if="previewError" class="search-dd-empty">{{ previewError }}</div>
-        <div v-else-if="!previewHasAnyResults" class="search-dd-empty">无匹配结果</div>
-        <template v-else>
+        <div v-else-if="!previewHasAnyResults && !previewError" class="search-dd-empty">无匹配结果</div>
+        <template v-else-if="previewHasAnyResults">
           <template v-if="previewResultsByType.file.length">
             <div class="search-dd-section-title">搜索文件</div>
             <div
@@ -368,6 +413,7 @@
 
 <script setup>
 import { createLogger } from '../../utils/logger'
+import { parseSearchQuery, matchesPathFilters } from '../../utils/searchQuerySyntax'
 import { computed, ref, h, onMounted, onUnmounted, nextTick, watch } from "vue";
 import { NIcon, NTooltip } from 'naive-ui'
 import { useSiderStore } from '../../stores/useSiderStore'
@@ -385,6 +431,18 @@ import { useMessage } from 'naive-ui';
 import { debounce } from 'lodash-es'
 import { Icon } from '@iconify/vue'
 import assistantIcon from '@iconify-icons/mdi/robot-excited-outline'
+// 命令面板 / 历史记录的图标。和上面的 assistantIcon 一样 import 图标数据对象，
+// 而不是给 <Icon> 传 'mdi:xxx' 名字：名字得先在 src/main.js 里 addIcon 注册，
+// 漏注册的名字会让 <Icon> 去 api.iconify.design 现取——release 包在断网、内网、
+// CSP 收紧的机器上就是一排空白图标。传对象则被 Vite 打进 bundle，不碰网络，
+// 名字写错也在构建期就报"模块找不到"，不会留到运行时。
+import mdiFileSearchOutline from '@iconify-icons/mdi/file-search-outline'
+import mdiTextSearch from '@iconify-icons/mdi/text-search'
+import mdiFilterOffOutline from '@iconify-icons/mdi/filter-off-outline'
+import mdiRegex from '@iconify-icons/mdi/regex'
+import mdiFormatLetterMatches from '@iconify-icons/mdi/format-letter-matches'
+import mdiFormatLetterCase from '@iconify-icons/mdi/format-letter-case'
+import mdiHistory from '@iconify-icons/mdi/history'
 import {
   Screenshot24Regular,
   Search32Filled,
@@ -862,7 +920,21 @@ const dropdownFloatingStyle = computed(() => {
   }
 })
 
-const trimmedQuery = computed(() => searchQuery.value.trim())
+/**
+ * 输入框里的查询语法（`ext:md`、`after:7d`、`path:src`、`tag:待办`、`>命令`）。
+ *
+ * 解析放在这一层而不是后端：筛选条件本来就要作为独立参数传下去，
+ * 后端收到的 pattern 必须是剥干净的搜索词——否则 `ext:md 配置`
+ * 会被当成字面量拿去 grep，一条都搜不到。
+ */
+const parsedQuery = computed(() => parseSearchQuery(searchQuery.value))
+
+/** 命令模式（输入以 `>` 开头）下的命令查询词；非命令模式为 null。 */
+const commandQuery = computed(() => parsedQuery.value.command)
+const isCommandMode = computed(() => commandQuery.value !== null)
+
+// 真正要搜的词：记号已经剥掉。命令模式下不搜任何东西
+const trimmedQuery = computed(() => (isCommandMode.value ? '' : parsedQuery.value.text.trim()))
 
 // ───── 搜索筛选：时间段 / 文件类型(多选) / 标签 ─────
 const filtersOpen = ref(false)
@@ -874,6 +946,44 @@ const filterTags = ref([])
 const filterTagMatchAll = ref(false)
 const availableTags = ref([])
 const customExtInput = ref('')
+
+// ───── 匹配方式：区分大小写 / 全词 / 正则 ─────
+// 后端默认按字面量 + 智能大小写，这三个开关是给需要精确控制的人用的。
+// 记进 localStorage：习惯用正则的人不该每次开窗都重新点一遍。
+const MATCH_FLAGS_KEY = 'guaxi.home.searchMatchFlags.v1'
+const MATCH_TOGGLES = [
+  { key: 'caseSensitive', glyph: 'Aa', title: '区分大小写（关闭时：查询里出现大写才区分）' },
+  { key: 'wholeWord', glyph: 'ab|', title: '全词匹配（中文按分词判断词边界）' },
+  { key: 'regex', glyph: '.*', title: '按正则表达式搜索（关闭时按字面量，标点不会被当通配符）' },
+]
+const matchFlags = ref((() => {
+  const base = { caseSensitive: false, wholeWord: false, regex: false }
+  try {
+    const saved = JSON.parse(localStorage.getItem(MATCH_FLAGS_KEY) || '{}')
+    for (const k of Object.keys(base)) base[k] = !!saved[k]
+  } catch {}
+  return base
+})())
+
+const toggleMatchFlag = (key) => {
+  matchFlags.value = { ...matchFlags.value, [key]: !matchFlags.value[key] }
+  try {
+    localStorage.setItem(MATCH_FLAGS_KEY, JSON.stringify(matchFlags.value))
+  } catch {}
+  scheduleFilterSearch()
+  nextTick(() => searchInputRef.value?.focus?.())
+}
+
+/**
+ * 传给 fd_search / rg_search 的 `options`。
+ * caseSensitive 关掉时传 null 而不是 false —— null 让后端走智能大小写，
+ * false 会强制忽略大小写，反而比默认更钝。
+ */
+const searchMatchOptions = computed(() => ({
+  regex: matchFlags.value.regex,
+  wholeWord: matchFlags.value.wholeWord,
+  caseSensitive: matchFlags.value.caseSensitive ? true : null,
+}))
 
 const TIME_PRESETS = [
   { key: 'any', label: '全部' },
@@ -931,22 +1041,46 @@ const timeRange = computed(() => {
   }
 })
 
-const extensionsParam = computed(() => (filterExts.value.length ? [...filterExts.value] : null))
+/**
+ * 面板上的筛选 + 输入框里的记号，合成最终生效的筛选条件。
+ *
+ * 同一个维度上记号优先：用户刚敲下 `ext:rs`，却还拿到面板上勾着的 .md，
+ * 会觉得"我明明写了 rs"。面板没勾的维度自然由记号补上。
+ */
+const effectiveExts = computed(() =>
+  parsedQuery.value.exts.length ? parsedQuery.value.exts : filterExts.value
+)
+const effectiveTags = computed(() =>
+  parsedQuery.value.tags.length ? parsedQuery.value.tags : filterTags.value
+)
+const effectiveTimeRange = computed(() => {
+  const { after, before } = parsedQuery.value
+  if (after !== null || before !== null) return { after, before }
+  return timeRange.value
+})
+
+const extensionsParam = computed(() => (effectiveExts.value.length ? [...effectiveExts.value] : null))
 
 const hasActiveFilters = computed(
-  () => filterExts.value.length > 0 || filterTags.value.length > 0 || filterTimePreset.value !== 'any'
+  () =>
+    effectiveExts.value.length > 0 ||
+    effectiveTags.value.length > 0 ||
+    effectiveTimeRange.value.after !== null ||
+    effectiveTimeRange.value.before !== null ||
+    parsedQuery.value.paths.length > 0
 )
 const activeFilterCount = computed(
   () =>
-    (filterTimePreset.value !== 'any' ? 1 : 0) +
-    (filterExts.value.length ? 1 : 0) +
-    (filterTags.value.length ? 1 : 0)
+    (effectiveTimeRange.value.after !== null || effectiveTimeRange.value.before !== null ? 1 : 0) +
+    (effectiveExts.value.length ? 1 : 0) +
+    (effectiveTags.value.length ? 1 : 0) +
+    (parsedQuery.value.paths.length ? 1 : 0)
 )
 
 const searchFilterArgs = computed(() => ({
   extensions: extensionsParam.value,
-  modifiedAfter: timeRange.value.after,
-  modifiedBefore: timeRange.value.before,
+  modifiedAfter: effectiveTimeRange.value.after,
+  modifiedBefore: effectiveTimeRange.value.before,
 }))
 
 const scheduleFilterSearch = () => {
@@ -1014,13 +1148,13 @@ const loadAvailableTags = async () => {
 }
 
 const resolveTagPathSet = async () => {
-  if (!filterTags.value.length) return null
+  if (!effectiveTags.value.length) return null
   const kb = activeKbName.value
   if (!kb) return new Set()
   try {
     const paths = await invoke('kg_files_by_tags', {
       kbName: kb,
-      tags: [...filterTags.value],
+      tags: [...effectiveTags.value],
       matchAll: filterTagMatchAll.value,
     })
     return new Set((Array.isArray(paths) ? paths : []).map((p) => normalizeSlashes(p).toLowerCase()))
@@ -1035,6 +1169,18 @@ const filterByTagPaths = (items, tagSet) => {
   return items.filter((it) => tagSet.has(normalizeSlashes(it.path || '').toLowerCase()))
 }
 
+/**
+ * 按输入框里的 `path:` 记号筛结果。
+ *
+ * 后端没有"路径前缀"这个参数，只能拿回结果之后在这里筛。代价是被筛掉的那些
+ * 白占了后端的名额，所以带 path: 时会把 limit 放大几倍垫着（见 previewLimit）。
+ */
+const filterByPathTokens = (items) => {
+  const paths = parsedQuery.value.paths
+  if (!paths.length) return items
+  return items.filter((it) => matchesPathFilters(it.rel_path || it.path, paths))
+}
+
 // 监听筛选项变化，自动刷新下拉预览
 watch(
   [filterTimePreset, filterCustomStart, filterCustomEnd, filterExts, filterTags, filterTagMatchAll],
@@ -1044,6 +1190,10 @@ watch(
 
 watch(trimmedQuery, (q) => {
   if (q) return
+
+  // 命令模式下 trimmedQuery 必然是空的，但那只是"暂时不在搜东西"，
+  // 不代表用户清空了搜索框——这时候把右侧面板清掉，敲个 `>` 就等于丢结果
+  if (isCommandMode.value) return
 
   // 查询为空但仍有筛选条件时，保持(并刷新)结果，不清空。
   if (hasActiveFilters.value) {
@@ -1080,6 +1230,15 @@ const SEARCH_TYPE_KEYS = ['file', 'note', 'excerpt']
 // 这样输入过程保持轻量，右侧正式结果面板则不会因默认 50 条分页而漏掉任何未忽略命中项。
 const SEARCH_PREVIEW_LIMIT = 50
 const SEARCH_ALL_RESULTS_LIMIT = 0
+/**
+ * 预览这一路实际要向后端要多少条。
+ *
+ * `path:` 是拿回结果之后在前端筛的，被筛掉的会白占名额——只要一条 path: 记号，
+ * 就多要几倍垫着，否则用户会看到"明明有文件在那个目录下却一条都不出"。
+ */
+const previewLimit = computed(() =>
+  parsedQuery.value.paths.length ? SEARCH_PREVIEW_LIMIT * 6 : SEARCH_PREVIEW_LIMIT
+)
 const SEARCH_TYPE_LABELS = {
   file: '搜索文件',
   note: '搜索关键字',
@@ -1195,6 +1354,78 @@ function getHistorySuggestions(input) {
 
 const historyItems = computed(() => getHistorySuggestions(trimmedQuery.value))
 
+/**
+ * 命令面板。输入框里打 `>` 就切过来。
+ *
+ * 为什么塞进搜索框而不是另开一个入口：这些操作都是"搜不到想要的东西时"才想起来要做的
+ * ——索引旧了、筛选忘了清、正则开关还开着。手已经在搜索框里了，不该再去菜单里翻。
+ */
+const COMMAND_ITEMS = [
+  {
+    id: 'rebuild-file-index',
+    label: '重建文件名索引',
+    hint: '文件名搜索漏文件或明显变慢时用',
+    keywords: 'rebuild file index 索引 文件名 chongjian',
+    icon: mdiFileSearchOutline,
+  },
+  {
+    id: 'rebuild-fulltext-index',
+    label: '重建正文全文索引',
+    hint: '正文搜索结果对不上磁盘内容时用',
+    keywords: 'rebuild fulltext index 全文 正文 索引 chongjian',
+    icon: mdiTextSearch,
+  },
+  {
+    id: 'clear-filters',
+    label: '清除全部筛选',
+    hint: '时间段、文件类型、标签一起清掉',
+    keywords: 'clear filter 清除 筛选 qingchu',
+    icon: mdiFilterOffOutline,
+  },
+  {
+    id: 'toggle-regex',
+    label: '切换正则匹配',
+    hint: '关闭时按字面量搜索，标点不当通配符',
+    keywords: 'regex 正则 zhengze',
+    icon: mdiRegex,
+  },
+  {
+    id: 'toggle-whole-word',
+    label: '切换全词匹配',
+    hint: '开启后只认整词，中文的词边界按分词判断',
+    keywords: 'whole word 全词 quanci',
+    icon: mdiFormatLetterMatches,
+  },
+  {
+    id: 'toggle-case',
+    label: '切换区分大小写',
+    hint: '关闭时按智能大小写：查询里有大写才区分',
+    keywords: 'case sensitive 大小写 daxiaoxie',
+    icon: mdiFormatLetterCase,
+  },
+]
+
+/**
+ * 命令的当前状态，显示在右侧。
+ * 三个开关是 on/off 的，光看"切换正则匹配"不知道现在是开还是关。
+ */
+const commandStateText = (id) => {
+  if (id === 'toggle-regex') return matchFlags.value.regex ? '已开启' : '已关闭'
+  if (id === 'toggle-whole-word') return matchFlags.value.wholeWord ? '已开启' : '已关闭'
+  if (id === 'toggle-case') return matchFlags.value.caseSensitive ? '已开启' : '已关闭'
+  if (id === 'clear-filters') return activeFilterCount.value ? `${activeFilterCount.value} 项` : '无'
+  return ''
+}
+
+/** 子串匹配，label / hint / keywords 一起找。`>` 后面还没敲字就列出全部。 */
+const matchedCommands = computed(() => {
+  const q = (commandQuery.value || '').trim().toLowerCase()
+  const items = q
+    ? COMMAND_ITEMS.filter((c) => `${c.label} ${c.hint} ${c.keywords}`.toLowerCase().includes(q))
+    : COMMAND_ITEMS
+  return items.map((c) => ({ ...c, state: commandStateText(c.id) }))
+})
+
 const selectedRowKey = ref('')
 const flashSelectRow = async (key) => {
   selectedRowKey.value = key
@@ -1204,6 +1435,13 @@ const flashSelectRow = async (key) => {
 
 const dropdownSelectableKeys = computed(() => {
   const keys = []
+
+  // 命令模式下只有命令能选：类型菜单、历史、结果这时都不显示
+  if (isCommandMode.value) {
+    for (const c of matchedCommands.value) keys.push(`command:${c.id}`)
+    return keys
+  }
+
   for (const t of typeMenuItems.value) keys.push(t.key)
 
   for (const item of historyItems.value) {
@@ -1333,6 +1571,148 @@ const previewLoading = ref(false)
 const previewError = ref('')
 const previewHasMore = ref(false)
 
+/**
+ * 一"路"搜索的代际与取消管理。
+ *
+ * 原来每次输入都直接 invoke：既不传 search_id（后端那套 SEARCH_MANAGER 取消机制
+ * 因此形同虚设），也不校验返回顺序——慢的旧请求后返回时，下拉里显示的是上一个词的结果。
+ * 这里给每一轮搜索发一个代号：只认最新一代的响应，并把上一代的 id 送去后端取消，
+ * 让 rayon 的 par_iter 立刻短路，不再白烧 CPU 扫完整个目录。
+ *
+ * 预览和正式搜索分成两路：取消会让结果静默截断，所以预览那一路的自动重跑
+ * 绝不能去掐用户按回车发起的正式搜索。
+ */
+const createSearchLane = (name) => {
+  let generation = 0
+  let activeIds = []
+  const cancelActive = () => {
+    const ids = activeIds
+    activeIds = []
+    for (const id of ids) {
+      invoke('cancel_search', { searchId: id }).catch(() => {})
+    }
+  }
+  return {
+    /**
+     * 开一轮新搜索。每路必须用不同的 id：后端命令跑完会自己摘掉登记，
+     * 共用一个 id 会让还在跑的那路被误判成"已取消"，结果凭空少一半。
+     */
+    begin(kinds) {
+      cancelActive()
+      const gen = ++generation
+      activeIds = kinds.map((k) => `${name}-${k}-${gen}`)
+      return { gen, ids: activeIds }
+    },
+    isStale: (gen) => gen !== generation,
+    finish(gen) {
+      // 正常跑完的请求后端已自行摘登记，不必再发一次取消
+      if (gen === generation) activeIds = []
+    },
+    cancelActive,
+  }
+}
+
+const previewLane = createSearchLane('preview')
+const fullLane = createSearchLane('full')
+
+/**
+ * 让后端把文件名索引对到当前搜索根上。
+ *
+ * 搜索本身不需要等它——`file_index_search` 在索引没建好时会自己退回目录遍历，
+ * 所以这里只是"提前打个招呼"，让用户敲第一个字符时就已经是快的那条路。
+ */
+const ensureFileIndex = async () => {
+  const root = searchRootPath.value
+  if (!root) return
+  try {
+    const status = await invoke('file_index_ensure', { path: root })
+    logger.info('[GuaxiHeader] file index', status)
+  } catch (err) {
+    // 索引只是加速手段，建不起来不该影响搜索
+    logger.warn('[GuaxiHeader] ensure file index failed', err)
+  }
+}
+
+/**
+ * 让后端把正文全文索引对到当前搜索根上。
+ *
+ * 和文件名索引分开发起：正文索引要读文件内容，第一次建会明显慢一些，
+ * 不该把文件名那一路也拖住。同样不用等——`fulltext_search` 在索引没建好时
+ * 会自己退回 `rg_search`。
+ */
+const ensureFulltextIndex = async () => {
+  const root = searchRootPath.value
+  if (!root) return
+  try {
+    const status = await invoke('fulltext_ensure', { path: root })
+    logger.info('[GuaxiHeader] fulltext index', status)
+  } catch (err) {
+    logger.warn('[GuaxiHeader] ensure fulltext index failed', err)
+  }
+}
+
+// 换库/换知识库就得换索引根
+watch(searchRootPath, () => {
+  ensureFileIndex()
+  ensureFulltextIndex()
+})
+
+const rebuildingCommand = ref('')
+
+/**
+ * 执行命令面板里选中的命令。
+ *
+ * 重建索引传 `force: true`：走这条路的人已经认定索引不对了，
+ * `ifNeeded` 那套"看起来不用重建就跳过"的判断正是他要绕开的东西。
+ */
+const runSearchCommand = async (id) => {
+  const item = COMMAND_ITEMS.find((c) => c.id === id)
+  if (!item) return
+
+  if (id === 'clear-filters') {
+    clearFilters()
+    searchQuery.value = ''
+    message.success('已清除全部筛选')
+    nextTick(() => searchInputRef.value?.focus?.())
+    return
+  }
+
+  if (id === 'toggle-regex' || id === 'toggle-whole-word' || id === 'toggle-case') {
+    const flag = id === 'toggle-regex' ? 'regex' : id === 'toggle-whole-word' ? 'wholeWord' : 'caseSensitive'
+    toggleMatchFlag(flag)
+    searchQuery.value = ''
+    message.success(`${item.label.replace('切换', '')}${matchFlags.value[flag] ? '已开启' : '已关闭'}`)
+    return
+  }
+
+  const root = searchRootPath.value
+  if (!root) {
+    message.warning('还没有打开的目录，无法重建索引')
+    return
+  }
+  if (rebuildingCommand.value) {
+    message.info('索引正在重建，稍等一下')
+    return
+  }
+
+  const command = id === 'rebuild-file-index' ? 'file_index_ensure' : 'fulltext_ensure'
+  rebuildingCommand.value = id
+  searchQuery.value = ''
+  try {
+    const status = await invoke(command, { path: root, force: true })
+    logger.info('[GuaxiHeader] rebuild index', { command, status })
+    // 后端只是把重建排进后台就返回了，这里不能报"完成"——
+    // 拿到的 file_count 还是旧索引的数字
+    message.success(`${item.label}已开始，建好后自动生效`)
+  } catch (err) {
+    logger.warn('[GuaxiHeader] rebuild index failed', { command, err })
+    message.error(`${item.label}失败：${err}`)
+  } finally {
+    rebuildingCommand.value = ''
+    nextTick(() => searchInputRef.value?.focus?.())
+  }
+}
+
 const previewHasAnyResults = computed(() => {
   const v = previewResultsByType.value
   return (v.file?.length || 0) + (v.note?.length || 0) + (v.excerpt?.length || 0) > 0
@@ -1443,6 +1823,10 @@ const normalizeSearchResults = (rawResults, type) => {
       .map(item => ({
         path: String(item.path || ''),
         file_name: String(item.file_name || basename(item.path)),
+        // 后端现在会按整条相对路径匹配，命中可能来自目录名，
+        // 所以相对路径和文件名高亮区间都得带到结果面板去，不然用户不知道为什么这个文件会中。
+        rel_path: item.rel_path ? String(item.rel_path) : '',
+        name_matches: Array.isArray(item.name_matches) ? item.name_matches : [],
         _searchType: 'file'
       }))
       .filter(item => item.path)
@@ -1465,6 +1849,10 @@ const normalizeSearchResults = (rawResults, type) => {
       .map(item => ({
         path: String(item.path || ''),
         file_name: String(item.file_name || basename(item.path)),
+        // 结果面板把命中按文件分组，组头要显示相对目录（同名文件太多，光文件名认不出是哪个）。
+        // 顺带修好 path: 记号：filterByPathTokens 用 rel_path || path，以前这里没带 rel_path，
+        // 内容搜索只能拿绝对路径去比，`path:` 写搜索根里的任意一段都能全中。
+        rel_path: item.rel_path ? String(item.rel_path) : '',
         preview: String(item.preview || item.text || ''),
         line_number: Number(item.line_number) || 0,
         matches: Array.isArray(item.matches) ? item.matches : [],
@@ -1562,7 +1950,7 @@ const renderHistoryOption = (entry) => {
   return h('div', { class: 'search-dd-item' }, [
     h('div', { class: 'search-dd-main' }, [
       h('span', { class: 'search-dd-icon-wrap' }, [
-        h(Icon, { icon: 'mdi:history', width: 16, height: 16, class: 'search-dd-icon search-dd-icon-muted' })
+        h(Icon, { icon: mdiHistory, width: 16, height: 16, class: 'search-dd-icon search-dd-icon-muted' })
       ]),
       h('div', { class: 'search-dd-filename' }, entry.query),
       h('div', { class: 'search-dd-path-inline' }, '')
@@ -1747,6 +2135,11 @@ async function runCompleteSearchForType(type) {
 }
 
 const handleSearchSelect = async (key) => {
+  if (typeof key === 'string' && key.startsWith('command:')) {
+    await runSearchCommand(key.slice('command:'.length))
+    return
+  }
+
   if (SEARCH_TYPE_KEYS.includes(key)) {
     searchType.value = key
     rightSiderStore.setSearchResults({
@@ -1818,9 +2211,14 @@ const handleSearchSelect = async (key) => {
 }
 
 const runPreviewSearchAll = async () => {
+  // 命令模式：下拉里显示的是命令列表，这时候搜索既没结果可显示也没必要发起。
+  // 直接返回而不是清空——退出命令模式后原来的结果还在，不用重搜一遍
+  if (isCommandMode.value) return
+
   const q = trimmedQuery.value
   // 有关键字、或仅有筛选条件时都执行搜索
   if ((!q && !hasActiveFilters.value) || !isSearchDropdownVisible.value) {
+    previewLane.cancelActive()
     previewResultsByType.value = { file: [], note: [], excerpt: [] }
     previewResults.value = []
     previewError.value = ''
@@ -1828,34 +2226,44 @@ const runPreviewSearchAll = async () => {
     return
   }
 
+  const { gen, ids: [fdId, rgId] } = previewLane.begin(['fd', 'rg'])
   previewLoading.value = true
   previewError.value = ''
   previewHasMore.value = false
 
   try {
     const { extensions, modifiedAfter, modifiedBefore } = searchFilterArgs.value
+    const options = searchMatchOptions.value
     const tagSetPromise = resolveTagPathSet()
 
-    // 关键字搜索(rg) / 摘录搜索需要关键字；仅筛选时只列举文件(fd)。
+    // 关键字搜索(全文索引) / 摘录搜索需要关键字；仅筛选时只列举文件(fd)。
     const [fdResp, rgResp, exResp] = await Promise.allSettled([
-      invoke('fd_search', {
+      // 逐字符触发的这一路走索引：参数和 fd_search 完全一致，
+      // 索引没建好时后端会自己退回 fd_search，这里不用判断。
+      invoke('file_index_search', {
         pattern: q,
         path: searchRootPath.value,
-        limit: SEARCH_PREVIEW_LIMIT,
+        limit: previewLimit.value,
         offset: 0,
+        searchId: fdId,
         extensions,
         modifiedAfter,
         modifiedBefore,
+        options,
       }),
       q
-        ? invoke('rg_search', {
+        ? invoke('fulltext_search', {
+          // 正文这一路走全文索引：BM25 排序 + 中文分词，能命中分散在同一篇里的两个词。
+          // 参数与 rg_search 完全一致，索引不可用（还没建好、开了正则/全词）时后端自己退回 rg_search。
           pattern: q,
           path: searchRootPath.value,
-          limit: SEARCH_PREVIEW_LIMIT,
+          limit: previewLimit.value,
           offset: 0,
+          searchId: rgId,
           extensions,
           modifiedAfter,
           modifiedBefore,
+          options,
         })
         : Promise.resolve(null),
       q
@@ -1863,18 +2271,26 @@ const runPreviewSearchAll = async () => {
         : Promise.resolve(null)
     ])
 
+    // 用户还在打字，这一轮已经不是最新的：结果直接丢掉，不能盖住新一轮
+    if (previewLane.isStale(gen)) return
+
     const tagSet = await tagSetPromise
+    if (previewLane.isStale(gen)) return
     const next = { file: [], note: [], excerpt: [] }
 
     if (fdResp.status === 'fulfilled' && fdResp.value) {
       const { results, hasMore } = unpackPagedSearchResponse(fdResp.value)
-      next.file = filterByTagPaths(normalizeSearchResults(results, 'file'), tagSet)
+      next.file = filterByPathTokens(
+        filterByTagPaths(normalizeSearchResults(results, 'file'), tagSet)
+      ).slice(0, SEARCH_PREVIEW_LIMIT)
       previewHasMore.value = previewHasMore.value || Boolean(hasMore)
     }
 
     if (rgResp.status === 'fulfilled' && rgResp.value) {
       const { results, hasMore } = unpackPagedSearchResponse(rgResp.value)
-      next.note = filterByTagPaths(normalizeSearchResults(results, 'note'), tagSet)
+      next.note = filterByPathTokens(
+        filterByTagPaths(normalizeSearchResults(results, 'note'), tagSet)
+      ).slice(0, SEARCH_PREVIEW_LIMIT)
       previewHasMore.value = previewHasMore.value || Boolean(hasMore)
     }
 
@@ -1894,15 +2310,30 @@ const runPreviewSearchAll = async () => {
       hasMore: previewHasMore.value,
     })
 
-    if (!previewHasAnyResults.value && fdResp.status === 'rejected' && rgResp.status === 'rejected' && exResp.status === 'rejected') {
-      previewError.value = '搜索失败'
+    /*
+     * 逐路上报失败。原来只有三路全挂才提示"搜索失败"，于是最常见的一种失败
+     * ——正则写错了，只有 rg 那一路报错——会被文件名结果盖住，用户看到的是
+     * "有结果啊，只是没找到我要的那行"，完全不知道内容搜索根本没跑成。
+     */
+    const failures = []
+    if (fdResp.status === 'rejected') failures.push(`文件名（${formatInvokeError(fdResp.reason)}）`)
+    if (rgResp.status === 'rejected') failures.push(`内容（${formatInvokeError(rgResp.reason)}）`)
+    if (exResp.status === 'rejected') failures.push(`摘录（${formatInvokeError(exResp.reason)}）`)
+    previewError.value = failures.length ? `搜索未全部完成：${failures.join('；')}` : ''
+    if (failures.length) {
+      logger.warn('[GuaxiHeader] preview search partial failure', { query: q, failures })
     }
   } catch (err) {
+    if (previewLane.isStale(gen)) return
     previewResultsByType.value = { file: [], note: [], excerpt: [] }
     previewResults.value = []
-    previewError.value = err?.message ? `搜索失败：${err.message}` : '搜索失败'
+    previewError.value = `搜索失败：${formatInvokeError(err)}`
   } finally {
-    previewLoading.value = false
+    // 已被新一轮接管时不要动 loading，否则会把新一轮的"搜索中"提前熄掉
+    if (!previewLane.isStale(gen)) {
+      previewLoading.value = false
+      previewLane.finish(gen)
+    }
   }
 }
 
@@ -1955,6 +2386,8 @@ onMounted(() => {
   window.addEventListener('beforeunload', handleBeforeUnload)
   window.addEventListener('mousedown', handleDocMousedown, true)
 
+  ensureFileIndex()
+  ensureFulltextIndex()
   Promise.resolve(initResourceRepoAutoSync()).catch((e) => {
     logger.warn('[GuaxiHeader] init resource repo auto sync failed', e)
   })
@@ -1968,10 +2401,14 @@ onUnmounted(() => {
   window.removeEventListener('beforeunload', handleBeforeUnload)
   window.removeEventListener('mousedown', handleDocMousedown, true)
   debouncedRunPreviewSearch.cancel()
+  // 组件都没了还让后端接着扫目录是纯浪费
+  previewLane.cancelActive()
+  fullLane.cancelActive()
 
 })
 
 async function handleSearchFiles() {
+  const { gen, ids: [fdId] } = fullLane.begin(['fd'])
   try {
     rightSiderStore.setSearchResults({
       ...rightSiderStore.searchResults,
@@ -1985,18 +2422,25 @@ async function handleSearchFiles() {
     const { extensions, modifiedAfter, modifiedBefore } = searchFilterArgs.value
     const tagSet = await resolveTagPathSet()
     const rawResponse = await invoke('fd_search', {
-      pattern: searchQuery.value,
+      pattern: trimmedQuery.value,
       path: searchRootPath.value,
       // limit=0 是后端约定的完整结果模式，正式搜索不得沿用 50 条预览上限。
       limit: SEARCH_ALL_RESULTS_LIMIT,
       offset: 0,
+      searchId: fdId,
       extensions,
       modifiedAfter,
-      modifiedBefore
+      modifiedBefore,
+      options: searchMatchOptions.value
     })
 
+    // 已有更新的一次正式搜索发出，这次的结果作废
+    if (fullLane.isStale(gen)) return
+
     const { results, hasMore } = unpackPagedSearchResponse(rawResponse)
-    const validResults = filterByTagPaths(normalizeSearchResults(results, 'file'), tagSet)
+    const validResults = filterByPathTokens(
+      filterByTagPaths(normalizeSearchResults(results, 'file'), tagSet)
+    )
 
     logger.info('[GuaxiHeader] complete file search received', {
       query: searchQuery.value,
@@ -2017,19 +2461,23 @@ async function handleSearchFiles() {
     rightSiderStore.setPanel('search')
     siderStore.setRightSiderCollapsed(viewKey, false)
   } catch (error) {
+    if (fullLane.isStale(gen)) return
     rightSiderStore.setSearchResults({
       ...rightSiderStore.searchResults,
       fileResults: [],
       searchQuery: searchQuery.value,
       lastSearchType: 'file',
       loading: false,
-      error: error?.message || '文件搜索失败'
+      error: formatInvokeError(error) || '文件搜索失败'
     })
-    message.error(`文件搜索失败: ${error?.message || String(error)}`)
+    message.error(`文件搜索失败: ${formatInvokeError(error)}`)
+  } finally {
+    fullLane.finish(gen)
   }
 }
 
 async function handleSearchNotes() {
+  const { gen, ids: [rgId] } = fullLane.begin(['rg'])
   try {
     rightSiderStore.setSearchResults({
       ...rightSiderStore.searchResults,
@@ -2043,18 +2491,24 @@ async function handleSearchNotes() {
     const { extensions, modifiedAfter, modifiedBefore } = searchFilterArgs.value
     const tagSet = await resolveTagPathSet()
     const response = await invoke('rg_search', {
-      pattern: searchQuery.value,
+      pattern: trimmedQuery.value,
       path: searchRootPath.value,
       // limit=0 请求全部内容命中；结果面板使用虚拟列表，不会一次渲染全部 DOM。
       limit: SEARCH_ALL_RESULTS_LIMIT,
       offset: 0,
+      searchId: rgId,
       extensions,
       modifiedAfter,
-      modifiedBefore
+      modifiedBefore,
+      options: searchMatchOptions.value
     })
 
+    if (fullLane.isStale(gen)) return
+
     const { results, hasMore } = unpackPagedSearchResponse(response)
-    const validResults = filterByTagPaths(normalizeSearchResults(results, 'note'), tagSet)
+    const validResults = filterByPathTokens(
+      filterByTagPaths(normalizeSearchResults(results, 'note'), tagSet)
+    )
     const uniqueFileCount = new Set(validResults.map(item => normalizeSlashes(item.path).toLowerCase())).size
 
     logger.info('[GuaxiHeader] complete content search received', {
@@ -2077,15 +2531,18 @@ async function handleSearchNotes() {
     rightSiderStore.setPanel('search')
     siderStore.setRightSiderCollapsed(viewKey, false)
   } catch (err) {
+    if (fullLane.isStale(gen)) return
     rightSiderStore.setSearchResults({
       ...rightSiderStore.searchResults,
       noteResults: [],
       searchQuery: searchQuery.value,
       lastSearchType: 'note',
-      error: err?.message || '内容搜索失败',
+      error: formatInvokeError(err) || '内容搜索失败',
       loading: false
     })
-    message.error(`内容搜索失败: ${err?.message || String(err)}`)
+    message.error(`内容搜索失败: ${formatInvokeError(err)}`)
+  } finally {
+    fullLane.finish(gen)
   }
 }
 
@@ -2101,7 +2558,7 @@ async function handleSearchExcerpts() {
     })
 
     const results = await invoke('search_excerpt_notes', {
-      pattern: searchQuery.value,
+      pattern: trimmedQuery.value,
       path: settingsStore.librariesRoot
     })
 
@@ -2353,10 +2810,80 @@ onMounted(async () => {
   color: var(--guaxi-text-primary);
 }
 
+/* ───── 命令面板 ───── */
+.search-dd-row-command {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.search-dd-cmd-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.search-dd-cmd-label {
+  font-size: 13px;
+  color: var(--guaxi-text-primary);
+}
+
+.search-dd-cmd-hint {
+  font-size: 11px;
+  color: var(--guaxi-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-dd-cmd-state {
+  flex: none;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: var(--guaxi-text-secondary);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.search-dd-syntax {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 10px 8px;
+}
+
+.search-dd-syntax-title {
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+}
+
+.search-dd-syntax code {
+  font-size: 11px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: var(--guaxi-text-secondary);
+  background: rgba(255, 255, 255, 0.06);
+}
+
 .search-dd-empty {
   padding: 8px 10px;
   font-size: 12px;
   color: var(--guaxi-text-secondary);
+}
+
+/* 部分搜索失败的提示：和结果并存，所以要能一眼看出是警告 */
+.search-dd-error {
+  margin: 6px 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border-left: 3px solid var(--n-color-warning, #f0a020);
+  background: rgba(240, 160, 32, 0.1);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--guaxi-text-primary);
+  word-break: break-all;
 }
 
 .search-dd-item {
@@ -2421,6 +2948,38 @@ onMounted(async () => {
   text-overflow: ellipsis;
   white-space: nowrap;
   padding-left: 28px;
+}
+
+/* 搜索框内的匹配方式开关：区分大小写 / 全词 / 正则 */
+.search-mode-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: 4px;
+}
+.search-mode-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 3px;
+  border-radius: 5px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+  line-height: 1;
+  font-family: var(--guaxi-font-mono, ui-monospace, Consolas, monospace);
+  color: var(--guaxi-text-secondary);
+  transition: color 0.15s, background-color 0.15s;
+}
+.search-mode-btn:hover {
+  color: var(--n-color-primary, #1890ff);
+  background-color: rgba(24, 144, 255, 0.12);
+}
+.search-mode-btn.on {
+  color: #fff;
+  background-color: var(--n-color-primary, #1890ff);
 }
 
 /* 搜索框内的筛选按钮 */

@@ -57,6 +57,11 @@ import { refreshLspRuntimeExtensionSnapshot } from './monaco/lspCapabilities'
 import { configureMonacoWorkers } from './monaco/workerBootstrap'
 import { initializeGuaxiVscodeServices } from './monaco/vscodeApiBootstrap'
 
+// 按名字用的图标（<Icon icon="mdi:xxx" />）必须在这里离线注册：没注册的名字会让
+// @iconify/vue 去 api.iconify.design 现取，release 包在断网、内网、CSP 收紧的机器上
+// 就是一个空白。只在一两处用到的图标更省事的做法是直接 import 图标对象传给 :icon
+// （见 GuaxiHeader.vue / GuaxiSearchNavigator.vue），名字写错在构建期就报错。
+// `npm run check:icons` 会扫 src/ 里的图标名字，漏注册的直接失败。
 const iconRegistry = {
   'mdi:folder-outline': mdiFolderOutline,
   'mdi:file-outline': mdiFileOutline,

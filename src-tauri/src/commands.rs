@@ -8,6 +8,8 @@ pub mod docprocess;
 pub mod convert;
 pub mod import_suggest;
 pub mod file_watcher;
+pub mod file_index;
+pub mod fulltext;
 pub mod fileprocess;
 pub mod life_album;
 pub mod guaxireader;

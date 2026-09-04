@@ -784,6 +784,11 @@ async fn execute(name: &str, a: &Value) -> Result<Value, String> {
                 opt_strs(a, "extensions"),
                 None,
                 None,
+                // 工具调用给的 pattern 是模型写的正则，按正则解析
+                Some(crate::commands::searcher::MatchOptions {
+                    regex: Some(true),
+                    ..Default::default()
+                }),
             )
             .await?;
             Ok(json!({ "matches": hits, "truncated": truncated }))
