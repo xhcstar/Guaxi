@@ -3,6 +3,8 @@
 //! 设计目标：软件启动后自动检查并装配转换所需依赖，用户开箱即用。
 //!
 //! 分层策略（按“开箱即用”的重要性与安装成本）：
+//! - **极速引擎（anydoc，纯 Rust）**：编译进二进制，无装配、无 Python、无模型，恒就绪。
+//!   进程内直调（见 `engine::convert_with_anydoc`），仅适合纯文本型文档，不做 OCR。
 //! - **快速引擎 + 探针（必备，轻量）**：复用应用已有的“托管 Python”机制
 //!   （[`code_runtime::ensure_managed_python_with_packages`]，会自动下载 Python、
 //!   建 venv、配好清华镜像并幂等 pip 安装）。装 `pymupdf4llm` / `markitdown` / `pymupdf` 即可，
@@ -244,6 +246,8 @@ pub struct ProvisionStatus {
     /// 最近一次装配错误（若有）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fast_error: Option<String>,
+    /// 极速引擎（anydoc，纯 Rust 进程内）是否就绪。编译进二进制、无装配过程，恒为 true。
+    pub anydoc_ready: bool,
     /// Marker 强引擎是否可用（conda 分发版 或 托管 pip 版任一就绪）。
     pub marker_ready: bool,
     /// Marker 强引擎装配是否正在进行。
@@ -289,6 +293,8 @@ fn status_cell() -> &'static Mutex<ProvisionStatus> {
 /// 读取当前装配状态快照（合并强引擎实时探测结果）。
 pub fn current_status() -> ProvisionStatus {
     let mut s = status_cell().lock().map(|g| g.clone()).unwrap_or_default();
+    // 极速引擎编译进二进制，不存在装配步骤，恒就绪。
+    s.anydoc_ready = true;
     // marker 就绪 = conda 分发版可用 或 托管 pip 版已装配。
     s.marker_ready = super::engine::marker_available() || marker_runtime().is_some();
     s.mineru_ready = super::engine::mineru_available() || mineru_runtime().is_some();

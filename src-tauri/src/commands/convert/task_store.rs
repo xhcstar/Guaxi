@@ -284,18 +284,22 @@ pub fn update_progress(
     Ok(())
 }
 
-pub fn mark_succeeded(id: i64, md_path: Option<&str>) -> Result<(), String> {
+/// 标记成功。仅当任务仍处于活动态时才会生效。
+/// 返回 false 表示任务已被取消（或已是终态），调用方据此不要再广播成功事件——
+/// 这堵住了「取消恰好落在转换期间、结果又被回写成 succeeded」的竞态。
+pub fn mark_succeeded(id: i64, md_path: Option<&str>) -> Result<bool, String> {
     let conn = init_db().map_err(|e| e.to_string())?;
     let now = now_iso();
-    conn.execute(
-        "UPDATE conversion_tasks SET status = 'succeeded', progress_current = 100, \
-         progress_total = 100, message = '转换完成', error = NULL, \
-         expected_md_path = COALESCE(?2, expected_md_path), finished_at = ?3, updated_at = ?3 \
-         WHERE id = ?1",
-        params![id, md_path, now],
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(())
+    let changed = conn
+        .execute(
+            "UPDATE conversion_tasks SET status = 'succeeded', progress_current = 100, \
+             progress_total = 100, message = '转换完成', error = NULL, \
+             expected_md_path = COALESCE(?2, expected_md_path), finished_at = ?3, updated_at = ?3 \
+             WHERE id = ?1 AND status IN ('pending','probing','running')",
+            params![id, md_path, now],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(changed > 0)
 }
 
 /// 标记失败。若还有重试额度（attempts < max_attempts）则回落到 pending 以便自动重试，
@@ -328,6 +332,20 @@ pub fn mark_failed(id: i64, error: &str) -> Result<bool, String> {
         .map_err(|e| e.to_string())?;
         Ok(false)
     }
+}
+
+/// 标记为终态失败，不再消耗重试额度。用于「重试也不会变好」的确定性错误
+/// （文档加密、扫描件需 OCR、格式不支持、结构损坏、超出安全限制、解析库 panic）。
+pub fn mark_failed_terminal(id: i64, error: &str) -> Result<(), String> {
+    let conn = init_db().map_err(|e| e.to_string())?;
+    let now = now_iso();
+    conn.execute(
+        "UPDATE conversion_tasks SET status = 'failed', error = ?2, \
+         finished_at = ?3, updated_at = ?3 WHERE id = ?1",
+        params![id, error, now],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// 取消任务（仅非终态可取消）。返回是否发生变更。

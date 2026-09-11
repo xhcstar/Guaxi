@@ -12,6 +12,7 @@
 //! - `conversion_task_update`（完整任务对象，驱动新的任务面板）
 
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -145,6 +146,7 @@ impl ConversionQueue {
             Engine::Fast => "快速引擎",
             Engine::Marker => "Marker 引擎",
             Engine::Mineru => "MinerU 强引擎",
+            Engine::Anydoc => "极速引擎",
         };
         self.emit_progress(
             &file_name,
@@ -153,6 +155,13 @@ impl ConversionQueue {
             &format!("使用{}转换...", engine_label),
             None,
         );
+
+        // 极速引擎：纯 Rust 进程内直调，无子进程、无装配、无进度协议，走独立分支。
+        if eng == Engine::Anydoc {
+            return self
+                .run_anydoc_task(task_id, &file_name, &task.input_path, &task.output_dir)
+                .await;
+        }
 
         // 重引擎串行化
         let _heavy_permit = if matches!(eng, Engine::Marker | Engine::Mineru) {
@@ -364,16 +373,86 @@ impl ConversionQueue {
             .unwrap_or_else(|| expected_md.clone());
 
         if md_path.exists() {
-            let _ = task_store::mark_succeeded(task_id, md_path.to_str());
-            self.emit_progress(&file_name, 100, 100, "转换完成", None);
-            self.emit_task_update(task_id);
-            info!(task_id, engine = eng.as_str(), md = %md_path.display(), "转换成功");
+            match task_store::mark_succeeded(task_id, md_path.to_str()) {
+                Ok(true) => {
+                    self.emit_progress(&file_name, 100, 100, "转换完成", None);
+                    self.emit_task_update(task_id);
+                    info!(task_id, engine = eng.as_str(), md = %md_path.display(), "转换成功");
+                }
+                // 转换期间被取消：保持 canceled，不广播成功事件。
+                Ok(false) => self.emit_task_update(task_id),
+                Err(e) => error!(task_id, "写入成功状态出错：{}", e),
+            }
         } else {
             self.finish_failed(
                 task_id,
                 &file_name,
                 &format!("转换结束但未找到输出文件: {}", expected_md.display()),
             );
+        }
+
+        Ok(())
+    }
+
+    /// 极速引擎（anydoc）执行路径：进程内转换，无子进程、无装配、无进度协议。
+    ///
+    /// 转换本身是阻塞的（整份读入 + 解析），放到阻塞线程池执行；耗时通常在毫秒级，
+    /// 因此不做进度轮询，也无法中途 kill——只在转换前后各查一次取消标志。
+    /// panic 隔离由 `engine::convert_with_anydoc` 内部负责，这里的 JoinError 是第二道保险。
+    async fn run_anydoc_task(
+        self: &Arc<Self>,
+        task_id: i64,
+        file_name: &str,
+        input_path: &str,
+        output_dir: &str,
+    ) -> Result<(), String> {
+        if task_store::is_canceled(task_id).unwrap_or(false) {
+            return Ok(());
+        }
+
+        let (_, expected_md) = engine::expected_md_path_for(input_path, output_dir);
+        self.emit_progress(file_name, 20, 100, "极速引擎转换中...", None);
+
+        let in_path = PathBuf::from(input_path);
+        let out_path = expected_md.clone();
+        let result =
+            tokio::task::spawn_blocking(move || engine::convert_with_anydoc(&in_path, &out_path))
+                .await;
+
+        // 转换期间被取消：DB 已是 canceled，不再回写成功。
+        if task_store::is_canceled(task_id).unwrap_or(false) {
+            self.emit_task_update(task_id);
+            return Ok(());
+        }
+
+        match result {
+            Ok(Ok(())) => {
+                if !expected_md.exists() {
+                    self.finish_failed_terminal(
+                        task_id,
+                        file_name,
+                        &format!("转换结束但未找到输出文件: {}", expected_md.display()),
+                    );
+                    return Ok(());
+                }
+                match task_store::mark_succeeded(task_id, expected_md.to_str()) {
+                    Ok(true) => {
+                        self.emit_progress(file_name, 100, 100, "转换完成", None);
+                        info!(task_id, engine = "anydoc", md = %expected_md.display(), "转换成功");
+                    }
+                    // 已被取消或已是终态：保持原状，不广播成功。
+                    Ok(false) => {}
+                    Err(e) => error!(task_id, "写入成功状态出错：{}", e),
+                }
+                self.emit_task_update(task_id);
+            }
+            // 转换返回的确定性错误（加密/扫描件/格式不支持/结构损坏/超限/内部 panic）重试无用。
+            Ok(Err(e)) => self.finish_failed_terminal(task_id, file_name, &e),
+            Err(e) => self.finish_failed_terminal(
+                task_id,
+                file_name,
+                &format!("极速引擎任务异常: {}", e),
+            ),
         }
 
         Ok(())
@@ -393,6 +472,18 @@ impl ConversionQueue {
             }
             Err(e) => error!(task_id, "写入失败状态出错：{}", e),
         }
+        self.emit_task_update(task_id);
+    }
+
+    /// 终态失败：确定性错误（文档加密、扫描件需 OCR、格式不支持、结构损坏、超出安全限制、
+    /// 解析库 panic）重试也不会变好，直接置 failed——不消耗重试额度，也不会在 UI 上
+    /// 反复出现「等待重试」。
+    fn finish_failed_terminal(&self, task_id: i64, file_name: &str, error: &str) {
+        if let Err(e) = task_store::mark_failed_terminal(task_id, error) {
+            error!(task_id, "写入失败状态出错：{}", e);
+        }
+        error!(task_id, "极速引擎最终失败：{}", error);
+        self.emit_progress(file_name, 0, 100, "转换失败", Some(true));
         self.emit_task_update(task_id);
     }
 

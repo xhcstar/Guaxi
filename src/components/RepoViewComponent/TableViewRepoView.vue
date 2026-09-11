@@ -201,8 +201,8 @@ const {
   reconvertImportedFile
 } = useProgress({ store, message })
 
-// 转换引擎装配状态（快速引擎启动自动装配；强引擎按需装配）
-const engineStatus = ref({ fastReady: false, fastProvisioning: false, markerReady: false, mineruReady: false })
+// 转换引擎装配状态（极速引擎恒就绪；快速引擎启动自动装配；强引擎按需装配）
+const engineStatus = ref({ fastReady: false, fastProvisioning: false, anydocReady: true, markerReady: false, mineruReady: false })
 const refreshEngineStatus = async () => {
   try {
     engineStatus.value = await getConversionEngineStatus()

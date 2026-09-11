@@ -250,7 +250,8 @@ const taskMessage = (task) => {
     capture: '采集入库',
     mineru: '高质量强引擎',
     marker: 'Marker',
-    fast: '快速引擎'
+    fast: '快速引擎',
+    anydoc: '极速引擎'
   }[engine] || ''
   const base = task?.message || '等待处理'
   return engineLabel ? `[${engineLabel}] ${base}` : base
@@ -425,6 +426,7 @@ const handleClearFailed = () => {
   background: #909399;
 }
 .ctask-engine-dot.eng-fast { background: #67c23a; }
+.ctask-engine-dot.eng-anydoc { background: #a855f7; }
 .ctask-engine-dot.eng-marker { background: #e6a23c; }
 .ctask-engine-dot.eng-mineru { background: #409EFF; }
 .ctask-engine-dot.eng-auto { background: #909399; }

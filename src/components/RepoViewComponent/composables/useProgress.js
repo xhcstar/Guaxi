@@ -472,7 +472,7 @@ export function useProgress({ store, message }) {
   };
 
   // 转换文件：入队到持久化转换队列（支持多引擎自动路由 / 断点续跑 / 重试）。
-  // engine 取值：auto（默认，自动检测）| fast | marker | mineru。
+  // engine 取值：auto（默认，自动检测）| fast | marker | mineru | anydoc。
   // 入队立即返回，实际进度由 conversion_progress 事件驱动（startProgressListener 已在监听）。
   const convertFile = async (inputPath, outputDir, engine = "auto") => {
     const fileName = inputPath.split(/[\\/]/).pop() || "未知文件";

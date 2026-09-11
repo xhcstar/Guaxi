@@ -10,7 +10,7 @@ use super::engine;
 use super::queue::ConversionQueue;
 use super::task_store::{self, ConversionTask, NewConversionTask};
 
-/// 入队请求。engine 取值：auto | fast | marker | mineru（默认 auto）。
+/// 入队请求。engine 取值：auto | fast | marker | mineru | anydoc（默认 auto）。
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnqueueRequest {

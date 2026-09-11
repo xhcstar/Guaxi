@@ -1,14 +1,19 @@
-//! 引擎解析、探针与子进程构建。
+//! 引擎解析、探针与转换执行。
 //!
-//! 三个引擎共用同一套“路径解析 + 环境变量 + JSON 进度协议”约定：
+//! 三个 Python 引擎共用同一套“路径解析 + 环境变量 + JSON 进度协议”约定：
 //! - fast  : marker venv 中的 `guaxi_fast_convert.py`（pymupdf4llm / markitdown）
 //! - marker: marker venv 中的 `convert_single.py`（保持与旧实现完全一致）
 //! - mineru: 独立 venv `utils/MinerU/.venv` 中的 `guaxi_mineru_convert.py`
 //!
+//! 第四个引擎 anydoc 是纯 Rust 库，不上子进程、无需装配，由 [`convert_with_anydoc`]
+//! 在本进程内完成转换（queue.rs 里单独分支处理，不走 [`build_plan`]）。
+//!
 //! marker 相关解析逻辑与 `docprocess.rs` 中的私有实现保持一致（此处独立一份，避免改动旧文件签名）。
 
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use tokio::process::Command as TokioCommand;
@@ -24,6 +29,8 @@ pub enum Engine {
     Fast,
     Marker,
     Mineru,
+    /// 纯 Rust 的 anydoc 库，进程内执行、无需装配（仅显式选择时使用，auto 不会路由到它）。
+    Anydoc,
 }
 
 impl Engine {
@@ -32,6 +39,7 @@ impl Engine {
             Engine::Fast => "fast",
             Engine::Marker => "marker",
             Engine::Mineru => "mineru",
+            Engine::Anydoc => "anydoc",
         }
     }
 
@@ -40,6 +48,7 @@ impl Engine {
             "fast" => Some(Engine::Fast),
             "marker" => Some(Engine::Marker),
             "mineru" => Some(Engine::Mineru),
+            "anydoc" => Some(Engine::Anydoc),
             _ => None,
         }
     }
@@ -242,6 +251,8 @@ pub async fn resolve_engine(requested: &str, input_path: &str) -> (Engine, Optio
         "fast" => Engine::Fast,
         "marker" => Engine::Marker,
         "mineru" => Engine::Mineru,
+        // 极速引擎只能被显式选择：探针脚本不认识 anydoc，auto 永远不会路由到它。
+        "anydoc" => Engine::Anydoc,
         _ => {
             // auto：探针决定
             let pr = probe(input_path).await;
@@ -286,9 +297,9 @@ pub struct ConversionPlan {
     pub cwd: PathBuf,
 }
 
-/// 为指定引擎构建可直接 spawn 的命令。output_dir 为 markdown 基目录，
-/// 产物落在 output_dir/{stem}/{stem}.md（与旧 marker 契约一致）。
-pub fn build_plan(engine: Engine, input_path: &str, output_dir: &str) -> Result<ConversionPlan, String> {
+/// 由输入文件与输出基目录推导产物路径：`{output_dir}/{stem}/{stem}.md`。
+/// 返回 `(expected_output_dir, expected_md_path)`。
+pub fn expected_md_path_for(input_path: &str, output_dir: &str) -> (PathBuf, PathBuf) {
     let stem = Path::new(input_path)
         .file_stem()
         .and_then(|s| s.to_str())
@@ -296,12 +307,23 @@ pub fn build_plan(engine: Engine, input_path: &str, output_dir: &str) -> Result<
         .to_string();
     let expected_output_dir = PathBuf::from(output_dir).join(&stem);
     let expected_md_path = expected_output_dir.join(format!("{}.md", stem));
+    (expected_output_dir, expected_md_path)
+}
+
+/// 为指定引擎构建可直接 spawn 的命令。output_dir 为 markdown 基目录，
+/// 产物落在 output_dir/{stem}/{stem}.md（与旧 marker 契约一致）。
+///
+/// 注意：anydoc 是进程内引擎，不在此处构建命令，由 queue.rs 单独分支处理。
+pub fn build_plan(engine: Engine, input_path: &str, output_dir: &str) -> Result<ConversionPlan, String> {
+    let (expected_output_dir, expected_md_path) = expected_md_path_for(input_path, output_dir);
     let _ = std::fs::create_dir_all(&expected_output_dir);
 
     match engine {
         Engine::Fast => build_fast_plan(input_path, expected_output_dir, expected_md_path),
         Engine::Marker => build_marker_plan(input_path, expected_output_dir, expected_md_path),
         Engine::Mineru => build_mineru_plan(input_path, expected_output_dir, expected_md_path),
+        // 走到这里说明 queue.rs 的路由被改坏了——anydoc 不该有子进程命令。
+        Engine::Anydoc => Err("anydoc 为进程内引擎，不应构建子进程命令".to_string()),
     }
 }
 
@@ -491,4 +513,163 @@ fn apply_mineru_device_env(cmd: &mut TokioCommand) {
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "modelscope".to_string());
     cmd.env("MINERU_MODEL_SOURCE", model_source);
+}
+
+// ───────────────────────── 极速引擎（anydoc，进程内） ─────────────────────────
+
+/// 极速引擎的单文件体积上限。anydoc 会把整份文件读进内存，超过这个量级既有 OOM 风险，
+/// 也不是「纯文本型文档高速转换」的目标场景。
+const ANYDOC_MAX_INPUT_BYTES: u64 = 512 * 1024 * 1024;
+
+/// 串行化 panic hook 的替换。hook 是进程级全局状态，并发调用会互相覆盖，
+/// 必须和 `tts_book.rs` 里 pdf-extract 那处一样加锁。
+static ANYDOC_PANIC_HOOK_GUARD: Mutex<()> = Mutex::new(());
+
+/// 用 anydoc 在**本进程内**把文档转成 Markdown 并写入 `output_md`。
+///
+/// 阻塞调用，务必放在 `spawn_blocking` 里执行。
+///
+/// 关键点：anydoc 是第三方解析库，畸形输入理论上可能触发 panic。这里沿用
+/// `tts_book.rs::extract_pdf_text` 的既有写法，用 `catch_unwind` 把 panic 限制在本次调用内，
+/// 绝不向调用方展开——**前提是 release 必须 `panic = "unwind"`**（见 Cargo.toml 的 profile.release，
+/// 那里写明了不能改回 abort 的原因）。
+pub fn convert_with_anydoc(input_path: &Path, output_md: &Path) -> Result<(), String> {
+    let size = std::fs::metadata(input_path)
+        .map_err(|e| format!("读取文件信息失败: {}", e))?
+        .len();
+    if size > ANYDOC_MAX_INPUT_BYTES {
+        return Err(format!(
+            "文件过大（{:.0} MB），极速引擎不予处理，请改用其他引擎",
+            size as f64 / 1024.0 / 1024.0
+        ));
+    }
+
+    let markdown = {
+        let _guard = ANYDOC_PANIC_HOOK_GUARD
+            .lock()
+            .map_err(|_| "极速引擎 panic hook 锁获取失败".to_string())?;
+        let previous_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let result = catch_unwind(AssertUnwindSafe(|| anydoc::to_markdown(input_path)));
+        std::panic::set_hook(previous_hook);
+
+        match result {
+            Ok(Ok(md)) => md,
+            Ok(Err(e)) => {
+                let msg = anydoc_error_message(&e);
+                warn!(input = %input_path.display(), error = %e, "极速引擎转换失败");
+                return Err(msg);
+            }
+            Err(_) => {
+                warn!(input = %input_path.display(), "极速引擎解析器 panic（已隔离，不影响主程序）");
+                return Err("极速引擎内部错误（已隔离，不影响程序运行）".to_string());
+            }
+        }
+    };
+
+    if let Some(parent) = output_md.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建输出目录失败: {}", e))?;
+    }
+    std::fs::write(output_md, markdown).map_err(|e| format!("写入 Markdown 失败: {}", e))?;
+    Ok(())
+}
+
+/// 把 anydoc 的类型化错误翻译成给用户看的中文文案。
+/// `ConvertError` 标了 `#[non_exhaustive]`，兜底分支必须保留。
+fn anydoc_error_message(e: &anydoc::ConvertError) -> String {
+    use anydoc::ConvertError as E;
+    match e {
+        E::Encrypted => "文档已加密或受密码保护，无法转换".to_string(),
+        E::NeedsOcr { pages, page_count } => format!(
+            "该 PDF 为扫描件（{} / {} 页需要 OCR），极速引擎不做 OCR，请改用 Marker 或高质量强引擎",
+            pages.len(),
+            page_count
+        ),
+        E::Unsupported(what) => format!("不支持的文件格式：{}", what),
+        E::Malformed { part, detail } => match part {
+            Some(p) => format!("文档结构损坏（{}）：{}", p, detail),
+            None => format!("文档结构损坏：{}", detail),
+        },
+        E::ResourceLimit { limit, detail } => format!("超出安全限制（{}）：{}", limit, detail),
+        E::MissingPart { part } => format!("文档缺少必需部件：{}", part),
+        E::Io(err) => format!("读取文件失败：{}", err),
+        _ => format!("转换失败：{}", e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn engine_string_roundtrip_includes_anydoc() {
+        assert_eq!(Engine::Anydoc.as_str(), "anydoc");
+        assert_eq!(Engine::from_str("anydoc"), Some(Engine::Anydoc));
+        // 与其他引擎一致：大小写不敏感。
+        assert_eq!(Engine::from_str("AnyDoc"), Some(Engine::Anydoc));
+    }
+
+    /// 产物路径必须与 commands.rs / 前端各自复算的 `{output_dir}/{stem}/{stem}.md` 一致。
+    #[test]
+    fn expected_md_path_matches_output_contract() {
+        let (dir, md) = expected_md_path_for("/tmp/in/report.docx", "/tmp/out");
+        assert_eq!(dir, PathBuf::from("/tmp/out").join("report"));
+        assert_eq!(md, dir.join("report.md"));
+    }
+
+    /// 极速引擎必须真的能转换：用 CSV（无签名格式，走扩展名识别）跑通进程内链路。
+    #[test]
+    fn convert_with_anydoc_produces_markdown() {
+        let tmp = tempfile::TempDir::new().expect("temp dir");
+        let src = tmp.path().join("sample.csv");
+        std::fs::write(&src, "name,age\nAlice,30\nBob,25\n").expect("write csv");
+
+        let out = tmp.path().join("sample").join("sample.md");
+        convert_with_anydoc(&src, &out).expect("CSV 应能被极速引擎转换");
+
+        let md = std::fs::read_to_string(&out).expect("read markdown");
+        assert!(
+            md.contains("Alice") && md.contains("Bob"),
+            "markdown 应包含表格内容，实际: {md}"
+        );
+    }
+
+    #[test]
+    fn convert_with_anydoc_rejects_unreadable_input() {
+        let tmp = tempfile::TempDir::new().expect("temp dir");
+        let out = tmp.path().join("x.md");
+        assert!(convert_with_anydoc(&tmp.path().join("nope.docx"), &out).is_err());
+        assert!(!out.exists(), "失败时不应产生输出文件");
+    }
+
+    /// 无法识别的输入要给出可操作的中文文案，而不是裸露的库错误。
+    /// `ConvertError` 标了 `#[non_exhaustive]`，测试里无法直接构造它的变体，只能走真实文件。
+    /// （纯文本 .txt 不在 anydoc 支持范围内，会走 Unsupported 分支。）
+    #[test]
+    fn convert_with_anydoc_reports_unsupported_format() {
+        let tmp = tempfile::TempDir::new().expect("temp dir");
+        let src = tmp.path().join("note.txt");
+        std::fs::write(&src, "just plain text, no recognisable container").expect("write");
+        let out = tmp.path().join("note").join("note.md");
+
+        let err = convert_with_anydoc(&src, &out).expect_err("纯文本无法识别，应失败");
+        assert!(err.contains("不支持"), "实际: {err}");
+        assert!(!out.exists());
+    }
+
+    /// 崩溃隔离的前提：release 必须保持 unwind。
+    /// abort 会让 catch_unwind 失效，极速引擎（及 pdf-extract）的第三方解析 panic 将直接
+    /// 终止整个应用。这条测试把该不变量钉住，防止被无声改回。
+    #[test]
+    fn release_profile_must_keep_unwind() {
+        let cargo_toml = include_str!("../../../Cargo.toml");
+        assert!(
+            cargo_toml.contains("panic = \"unwind\""),
+            "release profile 必须保持 panic = \"unwind\""
+        );
+        assert!(
+            !cargo_toml.contains("panic = \"abort\""),
+            "不能改回 panic = \"abort\"：catch_unwind 会失效，畸形文档可直接崩掉应用"
+        );
+    }
 }

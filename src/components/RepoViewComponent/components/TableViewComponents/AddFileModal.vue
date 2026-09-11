@@ -133,7 +133,7 @@ const props = defineProps({
   },
   engineStatus: {
     type: Object,
-    default: () => ({ fastReady: false, fastProvisioning: false, markerReady: false, mineruReady: false })
+    default: () => ({ fastReady: false, fastProvisioning: false, anydocReady: true, markerReady: false, mineruReady: false })
   }
 })
 
@@ -233,15 +233,20 @@ const engineOptions = computed(() => {
     : '（首次使用将自动装配）'
   return [
     { label: '自动检测（推荐）', value: 'auto' },
+    // 极速引擎是编译进二进制的纯 Rust 实现，无装配过程，恒就绪。
+    { label: `极速引擎（Office/EPUB/CSV/文本型 PDF）${s.anydocReady ? '（就绪）' : ''}`, value: 'anydoc' },
     { label: `快速引擎（纯文本/简单排版）${tag(s.fastReady, s.fastProvisioning)}`, value: 'fast' },
     { label: `Marker（复杂版面/图片）${tag(s.markerReady, s.markerProvisioning)}`, value: 'marker' },
     { label: `高质量强引擎（理工科/公式/表格）${mineruTag}`, value: 'mineru' },
   ]
 })
 
-// 引擎状态提示
+// 引擎状态提示（跟随当前选择，避免给出与所选引擎无关的装配说明）
 const engineHint = computed(() => {
   const s = props.engineStatus || {}
+  if (props.form?.convertEngine === 'anydoc') {
+    return '极速引擎为内置纯 Rust 实现，无需装配：Word/PPT/Excel、OpenDocument、RTF、EPUB、CSV 与文本型 PDF 毫秒级完成。纯文本 .txt/.md 请用快速引擎；扫描件与图片型 PDF 不做 OCR，请用 Marker 或高质量强引擎。'
+  }
   if (s.fastProvisioning) return '正在后台自动装配快速引擎（下载运行时/依赖），稍后即可使用…'
   if (s.fastReady) return '快速引擎已就绪，简单文档开箱即用；复杂文档首次会自动装配强引擎。'
   return '首次使用会自动检查并安装所需依赖，无需手动配置。'
