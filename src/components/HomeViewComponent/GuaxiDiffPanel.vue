@@ -1577,21 +1577,9 @@ const defineDiffEditTheme = (monaco) => {
       'editor.background': panelBg,
       'editor.foreground': textPrimary,
       'editorGutter.background': panelBg,
-      'editorLineNumber.foreground': lineNumber,
-      'editorLineNumber.activeForeground': lineNumber,
       'editor.lineHighlightBorder': '#00000000',
       'editorWidget.background': panelBg,
       'editorWidget.border': border,
-      // 和 .dp-cell.is-del / .is-add 完全同一组颜色与透明度
-      'diffEditor.removedLineBackground': 'rgba(248, 113, 113, 0.16)',
-      'diffEditor.insertedLineBackground': 'rgba(74, 222, 128, 0.16)',
-      'diffEditor.removedTextBackground': 'rgba(248, 113, 113, 0.40)',
-      'diffEditor.insertedTextBackground': 'rgba(74, 222, 128, 0.40)',
-      'diffEditor.diagonalFill': mixWithAlpha(textSecondary, 0.08, 'transparent'),
-      // 滚动条跟面板其余部分一样低调
-      'scrollbarSlider.background': mixWithAlpha(textSecondary, 0.22, 'transparent'),
-      'scrollbarSlider.hoverBackground': mixWithAlpha(textSecondary, 0.34, 'transparent'),
-      'scrollbarSlider.activeBackground': mixWithAlpha(textSecondary, 0.44, 'transparent'),
     },
   })
   return name
