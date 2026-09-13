@@ -504,8 +504,8 @@ import { createLogger } from '../../utils/logger'
 import { useDiffCompareStore } from '../../stores/diffCompareStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import {
-  defineGuaxiMonacoThemes,
-  getGuaxiMonacoTheme,
+  GUAXI_MONACO_SEMANTIC_TOKEN_COLORS,
+  GUAXI_MONACO_THEME_RULES,
   getLanguageForFile,
 } from '../../monaco/guaxiMonacoThemes'
 
@@ -1476,6 +1476,7 @@ let editChangeDisposables = []
 /** 编辑期间存过盘：退出编辑模式时要重算一次只读差异，否则屏幕上还是旧结果。 */
 let savedDuringEdit = false
 let bypassCloseGuard = false
+let closeGuardBusy = false
 let unlistenClose = null
 
 const anyDirty = computed(() => dirty.left || dirty.right)
@@ -1520,11 +1521,80 @@ const loadMonaco = async () => {
   return monacoMod
 }
 
-/** Monaco 吃不下 CSS 变量里的 var() 链，先让浏览器把字体栈算成实际值。 */
-const resolvedEditorFont = () => {
-  const el = bodyRef.value || document.querySelector('.guaxi-diff-panel')
-  if (!el) return 'Consolas, monospace'
-  return window.getComputedStyle(el).fontFamily || 'Consolas, monospace'
+/** Monaco 吃不下 CSS 变量里的 var() 链，先让浏览器把字体栈算成实际值。
+ *  必须量 .dp-edit-body —— 只读的 .dp-body 在编辑模式下已经被 v-if 摘掉了，
+ *  退到面板根元素只会拿到主界面字体，代码就换了副样子。 */
+const editorHostStyle = () => {
+  const el = editHostRef.value?.parentElement || document.querySelector('.guaxi-diff-panel')
+  return el ? window.getComputedStyle(el) : null
+}
+
+const readHostVar = (name, fallback) => {
+  const v = editorHostStyle()?.getPropertyValue(name)?.trim()
+  return v || fallback
+}
+
+const hexToRgb = (hex) => {
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(String(hex).trim())
+  if (!m) return null
+  const h = m[1].length === 3 ? m[1].split('').map((c) => c + c).join('') : m[1]
+  const n = Number.parseInt(h, 16)
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+}
+
+/** 把面板 CSS 里 color-mix 的效果算成 rgba，好写进 Monaco 主题。 */
+const mixWithAlpha = (color, alpha, fallback) => {
+  const rgb = hexToRgb(color)
+  return rgb ? `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${alpha})` : fallback
+}
+
+/**
+ * 编辑模式专用主题。
+ *
+ * 不能直接用 guaxi-light/guaxi-dark：那是给 GitPanel 配的，底色是 #282c34，
+ * 而只读视图的底色是 --guaxi-panel-bg（暗色 #21252b）—— 两个模式一对比就看得出接缝。
+ * 行号、差异底色、行内高亮同样按只读视图的 CSS 取值，让两边看起来是同一块东西。
+ */
+const defineDiffEditTheme = (monaco) => {
+  const dark = settingsStore.appearanceTheme === 'dark'
+  const name = dark ? 'guaxi-diffedit-dark' : 'guaxi-diffedit-light'
+  const panelBg = readHostVar('--guaxi-panel-bg', dark ? '#21252b' : '#ffffff')
+  const textPrimary = readHostVar('--guaxi-text-primary', dark ? '#d8e0eb' : '#1f2328')
+  const textSecondary = readHostVar('--guaxi-text-secondary', dark ? '#9da5b4' : '#57606a')
+  const border = readHostVar('--guaxi-border', dark ? '#3e4451' : '#d0d7de')
+  // .dp-no 是 76% 的文字次要色
+  const lineNumber = mixWithAlpha(textSecondary, 0.76, textSecondary)
+
+  monaco.editor.defineTheme(name, {
+    base: dark ? 'vs-dark' : 'vs',
+    inherit: true,
+    rules: dark ? GUAXI_MONACO_THEME_RULES.dark : GUAXI_MONACO_THEME_RULES.light,
+    semanticHighlighting: true,
+    semanticTokenColors: dark
+      ? GUAXI_MONACO_SEMANTIC_TOKEN_COLORS.dark
+      : GUAXI_MONACO_SEMANTIC_TOKEN_COLORS.light,
+    colors: {
+      'editor.background': panelBg,
+      'editor.foreground': textPrimary,
+      'editorGutter.background': panelBg,
+      'editorLineNumber.foreground': lineNumber,
+      'editorLineNumber.activeForeground': lineNumber,
+      'editor.lineHighlightBorder': '#00000000',
+      'editorWidget.background': panelBg,
+      'editorWidget.border': border,
+      // 和 .dp-cell.is-del / .is-add 完全同一组颜色与透明度
+      'diffEditor.removedLineBackground': 'rgba(248, 113, 113, 0.16)',
+      'diffEditor.insertedLineBackground': 'rgba(74, 222, 128, 0.16)',
+      'diffEditor.removedTextBackground': 'rgba(248, 113, 113, 0.40)',
+      'diffEditor.insertedTextBackground': 'rgba(74, 222, 128, 0.40)',
+      'diffEditor.diagonalFill': mixWithAlpha(textSecondary, 0.08, 'transparent'),
+      // 滚动条跟面板其余部分一样低调
+      'scrollbarSlider.background': mixWithAlpha(textSecondary, 0.22, 'transparent'),
+      'scrollbarSlider.hoverBackground': mixWithAlpha(textSecondary, 0.34, 'transparent'),
+      'scrollbarSlider.activeBackground': mixWithAlpha(textSecondary, 0.44, 'transparent'),
+    },
+  })
+  return name
 }
 
 const disposeEditor = () => {
@@ -1550,8 +1620,6 @@ const mountEditor = async () => {
   const host = editHostRef.value
   if (!host) return
   const monaco = await loadMonaco()
-  defineGuaxiMonacoThemes(monaco)
-  monaco.editor.setTheme(getGuaxiMonacoTheme(settingsStore.appearanceTheme))
 
   disposeEditor()
   const paths = editPaths.value
@@ -1563,23 +1631,49 @@ const mountEditor = async () => {
   editModels.left = makeModel('left')
   editModels.right = makeModel('right')
 
+  const fontSize = Number.parseFloat(readHostVar('--dp-code-size', '16px')) || 16
+  const fontFamily = editorHostStyle()?.fontFamily || 'Consolas, monospace'
+  // 主题要在建编辑器之前定好，否则第一帧会先按默认主题画一遍再被换掉，看着闪一下。
+  const themeName = defineDiffEditTheme(monaco)
+  monaco.editor.setTheme(themeName)
+
   diffEditor = monaco.editor.createDiffEditor(host, {
     // 两侧都要能改：左侧是"原版"但用户同样要修它。
     originalEditable: true,
     readOnly: false,
+    // 只为看差异的东西一律关掉，否则行号栏、折叠加号、行高亮都比只读视图多出一层装饰。
     renderSideBySide: viewMode.value === 'split',
     // Monaco 0.52 只有 legacy/advanced，Patience/Myers/LCS 是 Rust 侧只读对比的算法。
     diffAlgorithm: 'advanced',
     automaticLayout: true,
+    // 行高/字号/字体都跟只读视图同一份来源，两边的行才对得齐。
     lineHeight: ROW_H,
-    fontSize: 16,
-    fontFamily: resolvedEditorFont(),
+    fontSize,
+    fontFamily,
     fontLigatures: true,
+    lineNumbersMinChars: 3,
+    lineDecorationsWidth: 8,
+    glyphMargin: false,
+    folding: false,
+    renderLineHighlight: 'none',
+    renderIndicators: false,
+    renderMarginRevertIcon: false,
+    overviewRulerLanes: 0,
+    minimap: { enabled: false },
+    // 下面这些都只读视图没有：缩进参考线、括号着色、不可见字符高亮、超长行折行。
+    // 不关掉的话同一个文件在两种模式里长得像两份东西。
+    guides: { indentation: false, bracketPairs: false, highlightActiveBracketPair: false },
+    bracketPairColorization: { enabled: false },
+    unicodeHighlight: { ambiguousCharacters: false, invisibleCharacters: false },
+    renderWhitespace: 'none',
+    wordWrap: 'off',
     scrollBeyondLastLine: false,
     enableSplitViewResizing: true,
     renderOverviewRuler: false,
-    diffWordWrap: 'on',
-    padding: { top: 8, bottom: 8 },
+    diffWordWrap: 'off',
+    scrollbar: { useShadows: false, verticalScrollbarSize: 10, horizontalScrollbarSize: 10 },
+    // 只读视图的行是紧贴着的，这里也把留白收掉
+    padding: { top: 0, bottom: 0 },
   })
   diffEditor.setModel({ original: editModels.left, modified: editModels.right })
 
@@ -1753,20 +1847,34 @@ const onEditKeydown = (ev) => {
   }
 }
 
-/** 关窗也是离开编辑的一条路，同样要拦一下。 */
+/** 关窗也是离开编辑的一条路，同样要拦一下。
+ *
+ * 注意 Tauri 的 onCloseRequested 在 handler 没 preventDefault 时会自己调 window.destroy()：
+ * 注册了这个监听之后，所有关闭路径（工具栏的 X 和系统标题栏的 X）最后都落到 destroy 上，
+ * 所以 capabilities 里必须放行 core:window:allow-destroy，否则窗口会关不掉。 */
 const setupCloseGuard = async () => {
   if (!store.host) return
   try {
     unlistenClose = await getCurrentWindow().onCloseRequested(async (ev) => {
       if (bypassCloseGuard || !editMode.value || !anyDirty.value) return
+      // 确认框弹着的时候用户又点了 X：别叠第二个框。
+      if (closeGuardBusy) {
+        ev.preventDefault()
+        return
+      }
       ev.preventDefault()
-      const ok = await confirmDialog('有未保存的改动，关闭窗口会丢掉这些改动。仍要关闭吗？', {
-        title: '未保存的改动',
-        kind: 'warning',
-      })
-      if (!ok) return
-      bypassCloseGuard = true
-      await getCurrentWindow().close()
+      closeGuardBusy = true
+      try {
+        const ok = await confirmDialog('有未保存的改动，关闭窗口会丢掉这些改动。仍要关闭吗？', {
+          title: '未保存的改动',
+          kind: 'warning',
+        })
+        if (!ok) return
+        bypassCloseGuard = true
+        await getCurrentWindow().close()
+      } finally {
+        closeGuardBusy = false
+      }
     })
   } catch (e) {
     logger.warn('[Diff] close guard failed', { error: String(e?.message || e || '') })
@@ -1876,6 +1984,13 @@ watch(splitPanes, () => {
     syncViewport()
     measureCharWidth()
   })
+})
+
+// 外观主题变了：只读视图靠 CSS 变量自动跟随，编辑模式的 Monaco 得手动重设主题，
+// 否则切换主题后两个模式一个亮一个暗。
+watch(() => settingsStore.appearanceTheme, () => {
+  if (!editMode.value || !monacoMod) return
+  monacoMod.editor.setTheme(defineDiffEditTheme(monacoMod))
 })
 
 // 树形 / 列表切换：两种视图的数据各自现取，缺哪份补哪份。
@@ -2442,11 +2557,23 @@ watch(() => props.visible, (v) => {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* 必须和 .dp-body 声明同一套代码字体：Monaco 的 fontFamily / fontSize
+     就是从这层量的（见 mountEditor），不声明就会退到主界面字体，两个模式一眼就能看出差别。 */
+  font-family: var(--dp-code-font);
+  font-size: var(--dp-code-size);
 }
 
 .dp-edit-host {
   flex: 1 1 auto;
   min-height: 0;
+}
+
+/* 行号跟只读视图的 .dp-no 对齐：同一字号、右对齐、同样留 8px。
+   Monaco 没有"行号单独设字号"的选项，只能覆盖它的行号样式。 */
+.dp-edit-host :deep(.monaco-editor .line-numbers) {
+  font-size: 13px;
+  padding-right: 8px;
+  text-align: right;
 }
 
 .dp-placeholder.is-overlay {
