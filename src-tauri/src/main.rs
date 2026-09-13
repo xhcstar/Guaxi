@@ -571,6 +571,8 @@ async fn main() {
             commands::diffcompare::diff_dirs_close,
             commands::diffcompare::diff_dirs_summary,
             commands::diffcompare::diff_dirs_entry_paths,
+            commands::diffcompare::diff_read_text,
+            commands::diffcompare::diff_write_text,
             commands::diff_compare_window::open_diff_compare_window,
             commands::diff_compare_window::diff_compare_take_request,
             commands::diff_compare_window::diff_probe_paths,

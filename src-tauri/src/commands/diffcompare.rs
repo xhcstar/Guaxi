@@ -2094,6 +2094,236 @@ pub async fn diff_dirs_entry_paths(
     ))
 }
 
+// ─────────────── 编辑模式：读全文 / 按原编码写回 ───────────────
+//
+// 只读对比不需要全文（hunk 就够了），所以这两条命令只在用户切进编辑模式时才走。
+// 写回必须带上编码和行尾：GB18030 的中文文件用 UTF-8 覆写会当场变乱码。
+
+/// 编辑模式允许的最大单文件字节数。超过就只给只读对比（自绘视图照样能看）。
+const MAX_EDIT_BYTES: u64 = 8 * 1024 * 1024;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffReadTextResult {
+    pub path: String,
+    pub exists: bool,
+    /// utf-8 | utf-8-bom | gb18030 | ...
+    pub encoding: String,
+    /// lf | crlf | none —— mixed 已降级为 lf（一个 Monaco model 只能有一种行尾）
+    pub line_ending: String,
+    pub mtime_ms: Option<i64>,
+    pub size: u64,
+    pub line_count: u32,
+    pub binary: bool,
+    pub can_edit: bool,
+    /// 全文，行尾一律归一化成 LF
+    pub text: String,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffWriteTextResult {
+    pub path: String,
+    pub mtime_ms: Option<i64>,
+    pub size: u64,
+    pub encoding: String,
+    pub line_ending: String,
+    /// 编码不出来的字符数（写成替代符的个数）
+    pub replacement_chars: u32,
+    pub message: Option<String>,
+}
+
+fn read_text_for_edit(path: &str) -> Result<DiffReadTextResult, String> {
+    let p = Path::new(path);
+    let st = stat_of(p)?;
+    if !st.exists {
+        return Err(format!("{} 不存在", path));
+    }
+    // 超上限的文件根本不读进来：前面只读对比允许到几百 MB，为了判断二进制把整份读进内存太蠢。
+    let too_big = st.size > MAX_EDIT_BYTES;
+    let (mut text, encoding, binary) = if too_big {
+        (String::new(), String::new(), false)
+    } else {
+        let bytes = std::fs::read(p).map_err(|e| format!("读取 {} 失败：{}", path, e))?;
+        if looks_binary(&bytes) {
+            (String::new(), "binary".to_string(), true)
+        } else {
+            let (t, e) = decode_bytes(&bytes);
+            (t, e, false)
+        }
+    };
+    // 行尾要在归一化之前统计，归一化之后就只剩 lf 了。
+    let (raw_eol, line_count) = if binary || too_big {
+        ("none", 0u32)
+    } else {
+        let (lines, eol) = split_lines(&text);
+        (eol, lines.len() as u32)
+    };
+    let message = if binary {
+        Some("二进制文件，不支持编辑".to_string())
+    } else if too_big {
+        Some(format!(
+            "文件超过 {} MB，仅支持只读对比",
+            MAX_EDIT_BYTES / (1024 * 1024)
+        ))
+    } else if raw_eol == "mixed" {
+        Some("原文件行尾不统一，保存后统一为 LF".to_string())
+    } else {
+        None
+    };
+    if !text.is_empty() {
+        text = text.replace("\r\n", "\n");
+    }
+    Ok(DiffReadTextResult {
+        path: path.to_string(),
+        exists: true,
+        encoding,
+        line_ending: if raw_eol == "mixed" { "lf" } else { raw_eol }.to_string(),
+        mtime_ms: st.mtime_ms,
+        size: st.size,
+        line_count,
+        binary,
+        can_edit: !binary && !too_big,
+        text,
+        message,
+    })
+}
+
+/// 落盘前先确认磁盘上还是我们读进来的那一版，免得把别人的改动盖掉。
+fn check_fresh(expected: Option<i64>, current: Option<i64>, force: bool) -> Result<(), String> {
+    if force {
+        return Ok(());
+    }
+    if let Some(exp) = expected {
+        if current != Some(exp) {
+            return Err(format!(
+                "stale:文件已被外部修改（磁盘修改时间 {}，我们读到的是 {}）",
+                current.map(|v| v.to_string()).unwrap_or_else(|| "未知".into()),
+                exp
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// 按读进来时的编码编回去。认不出的编码一律当 UTF-8，不去猜。
+///
+/// 返回值第二个是"真的丢了几个字"：不信任编码器的 had_errors 标志（GB18030 覆盖面随
+/// 版本变化，规范里还有 U+E5E5 这种空洞），直接把字节解回来跟原文对一遍才算数。
+fn encode_with(text: &str, encoding: &str) -> (Vec<u8>, u32) {
+    let enc = encoding.to_ascii_lowercase();
+    if enc.starts_with("utf-8") {
+        let mut out = Vec::with_capacity(text.len() + 3);
+        if enc.contains("bom") {
+            out.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
+        }
+        out.extend_from_slice(text.as_bytes());
+        return (out, 0);
+    }
+    if enc.starts_with("gb18030") || enc.starts_with("gbk") || enc.starts_with("gb2312") {
+        let (cow, _, _) = GB18030.encode(text);
+        let bytes = cow.into_owned();
+        let (back, _, _) = GB18030.decode(&bytes);
+        let lost = if back == text {
+            0
+        } else {
+            // 编码器把表达不了的字符写成替代符，数它就知道丢了几处。
+            back.matches('\u{FFFD}').count().max(1) as u32
+        };
+        return (bytes, lost);
+    }
+    (text.as_bytes().to_vec(), 0)
+}
+
+fn write_text_from_edit(
+    path: &str,
+    text: &str,
+    encoding: &str,
+    line_ending: &str,
+    expected_mtime_ms: Option<i64>,
+    force: bool,
+) -> Result<DiffWriteTextResult, String> {
+    let p = Path::new(path);
+    let st = stat_of(p)?;
+    if !st.exists {
+        return Err(format!("{} 不存在，无法保存", path));
+    }
+    check_fresh(expected_mtime_ms, st.mtime_ms, force)?;
+
+    // Monaco 的 model 写出来是 LF，按原文件风格还原。
+    let normalized = text.replace("\r\n", "\n");
+    let body = if line_ending.eq_ignore_ascii_case("crlf") {
+        normalized.replace('\n', "\r\n")
+    } else {
+        normalized
+    };
+    let (bytes, replacement_chars) = encode_with(&body, encoding);
+    if replacement_chars > 0 && !force {
+        return Err(format!(
+            "encode:有 {} 处字符无法用 {} 表示，保存后会被替换掉",
+            replacement_chars, encoding
+        ));
+    }
+    std::fs::write(p, &bytes).map_err(|e| format!("写入 {} 失败：{}", path, e))?;
+    if let Err(e) = crate::commands::kgraph::after_write_file(p, &body) {
+        warn!(error = %e, path = %p.display(), "diffcompare after_write_file failed");
+    }
+    let after = stat_of(p)?;
+    Ok(DiffWriteTextResult {
+        path: path.to_string(),
+        mtime_ms: after.mtime_ms,
+        size: after.size,
+        encoding: encoding.to_string(),
+        line_ending: line_ending.to_ascii_lowercase(),
+        replacement_chars,
+        message: if replacement_chars > 0 {
+            Some(format!(
+                "{} 处字符无法用 {} 表示，已写入替代符",
+                replacement_chars, encoding
+            ))
+        } else {
+            None
+        },
+    })
+}
+
+/// 编辑模式：读回全文和编码/行尾信息。
+#[tauri::command]
+pub async fn diff_read_text(path: String) -> Result<DiffReadTextResult, String> {
+    tauri::async_runtime::spawn_blocking(move || read_text_for_edit(&path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// 编辑模式：按读进来时的编码和行尾写回磁盘。
+///
+/// `expected_mtime_ms` 对不上且 `force` 为假时报 `stale:` 前缀的错误；
+/// 编码不可逆且 `force` 为假时报 `encode:` 前缀的错误。前端按前缀决定要不要再确认一次。
+#[tauri::command]
+pub async fn diff_write_text(
+    path: String,
+    text: String,
+    encoding: String,
+    line_ending: String,
+    expected_mtime_ms: Option<i64>,
+    force: Option<bool>,
+) -> Result<DiffWriteTextResult, String> {
+    let force = force.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || {
+        write_text_from_edit(
+            &path,
+            &text,
+            &encoding,
+            &line_ending,
+            expected_mtime_ms,
+            force,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2372,5 +2602,160 @@ mod tests {
         assert_eq!(deeper.nodes[0].rel, "pkg/inner/b.txt");
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ─────────────── 编辑模式读写 ───────────────
+
+    fn edit_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(tag);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// BOM + CRLF 的文件读进来要去掉 BOM、行尾归一化成 LF；原样写回去必须逐字节还原。
+    #[test]
+    fn edit_read_normalizes_and_write_restores_bom_crlf() {
+        let dir = edit_dir("guaxi-diff-edit-bom");
+        let file = dir.join("a.txt");
+        let mut original = vec![0xEF, 0xBB, 0xBF];
+        original.extend_from_slice("第一行\r\n第二行\r\n".as_bytes());
+        std::fs::write(&file, &original).unwrap();
+        let path = file.to_string_lossy().to_string();
+
+        let read = read_text_for_edit(&path).unwrap();
+        assert!(read.can_edit && !read.binary);
+        assert_eq!(read.encoding, "utf-8-bom");
+        assert_eq!(read.line_ending, "crlf");
+        assert_eq!(read.line_count, 2);
+        assert_eq!(read.text, "第一行\n第二行\n");
+
+        let written = write_text_from_edit(
+            &path,
+            &read.text,
+            &read.encoding,
+            &read.line_ending,
+            read.mtime_ms,
+            false,
+        )
+        .unwrap();
+        assert_eq!(written.replacement_chars, 0);
+        assert_eq!(std::fs::read(&file).unwrap(), original);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// GB18030 的中文文件存回去必须还是 GB18030 —— 写成 UTF-8 就是乱码。
+    #[test]
+    fn edit_write_keeps_gb18030_encoding() {
+        let dir = edit_dir("guaxi-diff-edit-gbk");
+        let file = dir.join("b.txt");
+        let (gbk_bytes, _, _) = GB18030.encode("中文内容\n第二行\n");
+        std::fs::write(&file, gbk_bytes.as_ref()).unwrap();
+        let path = file.to_string_lossy().to_string();
+
+        let read = read_text_for_edit(&path).unwrap();
+        assert!(read.encoding.starts_with("gb18030"), "{}", read.encoding);
+        assert_eq!(read.text, "中文内容\n第二行\n");
+        assert!(!read.text.contains('\u{FFFD}'));
+
+        write_text_from_edit(
+            &path,
+            "中文内容\n改过的第二行\n",
+            &read.encoding,
+            &read.line_ending,
+            read.mtime_ms,
+            false,
+        )
+        .unwrap();
+
+        let after = std::fs::read(&file).unwrap();
+        assert!(
+            std::str::from_utf8(&after).is_err(),
+            "存回去的应该是 GB18030 字节，不该是合法 UTF-8"
+        );
+        let (back, _, _) = GB18030.decode(&after);
+        assert_eq!(back, "中文内容\n改过的第二行\n");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 编码回写的关键性质：中文必须无损；真丢字符时要能被数出来。
+    #[test]
+    fn encode_detects_loss_by_round_trip() {
+        let (bytes, lost) = encode_with("纯中文内容\n", "gb18030");
+        assert_eq!(lost, 0);
+        let (back, _, _) = GB18030.decode(&bytes);
+        assert_eq!(back, "纯中文内容\n");
+
+        // U+E5E5 是 GB18030 规范里明确的空洞，用它验证"丢了就说丢了"。
+        let (_, lost_private) = encode_with("\u{E5E5}", "gb18030");
+        assert!(lost_private >= 1, "U+E5E5 应该被判成无法编码");
+    }
+
+    /// 有损保存不 force 时先报 `encode:` 拦一下，force 了才落盘并回传损失。
+    #[test]
+    fn edit_write_blocks_lossy_encoding_without_force() {
+        let dir = edit_dir("guaxi-diff-edit-lossy");
+        let file = dir.join("c.txt");
+        let (gbk_bytes, _, _) = GB18030.encode("中文\n");
+        std::fs::write(&file, gbk_bytes.as_ref()).unwrap();
+        let path = file.to_string_lossy().to_string();
+        let read = read_text_for_edit(&path).unwrap();
+
+        let rejected = write_text_from_edit(
+            &path, "\u{E5E5}\n", &read.encoding, &read.line_ending, read.mtime_ms, false,
+        );
+        assert!(rejected.unwrap_err().starts_with("encode:"));
+
+        let forced = write_text_from_edit(
+            &path, "\u{E5E5}\n", &read.encoding, &read.line_ending, read.mtime_ms, true,
+        )
+        .unwrap();
+        assert!(forced.replacement_chars >= 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 新鲜度校验：mtime 对得上才放行，对不上要么报 stale 要么 force。
+    #[test]
+    fn check_fresh_matrix() {
+        assert!(check_fresh(None, Some(1), false).is_ok());
+        assert!(check_fresh(Some(1), Some(1), false).is_ok());
+        let stale = check_fresh(Some(1), Some(2), false).unwrap_err();
+        assert!(stale.starts_with("stale:"), "{stale}");
+        assert!(check_fresh(Some(1), Some(2), true).is_ok());
+        assert!(check_fresh(Some(1), None, false).is_err());
+    }
+
+    /// 超上限的文件仍能拿到元信息，但 `can_edit` 为假并给出原因。
+    #[test]
+    fn edit_refuses_file_over_size_cap() {
+        let dir = edit_dir("guaxi-diff-edit-large");
+        let file = dir.join("big.txt");
+        std::fs::write(&file, vec![b'a'; MAX_EDIT_BYTES as usize + 1024]).unwrap();
+        let path = file.to_string_lossy().to_string();
+
+        let read = read_text_for_edit(&path).unwrap();
+        assert!(!read.can_edit);
+        assert!(read.message.unwrap().contains("MB"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 行尾不统一降级成 LF，并把这件事说出来。
+    #[test]
+    fn edit_downgrades_mixed_line_endings() {
+        let dir = edit_dir("guaxi-diff-edit-mixed");
+        let file = dir.join("m.txt");
+        std::fs::write(&file, b"a\r\nb\nc\r\n").unwrap();
+        let path = file.to_string_lossy().to_string();
+
+        let read = read_text_for_edit(&path).unwrap();
+        assert_eq!(read.line_ending, "lf");
+        assert!(read.message.unwrap().contains("行尾"));
+        assert_eq!(read.text, "a\nb\nc\n");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

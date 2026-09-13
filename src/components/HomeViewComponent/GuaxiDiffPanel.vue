@@ -4,79 +4,239 @@
       <div class="dp-row dp-row-main">
         <n-tag size="small" round :bordered="false" class="dp-mode">{{ modeLabel }}</n-tag>
 
-        <n-radio-group :value="kindValue" size="small" class="dp-kind"
-          :disabled="busy" @update:value="onKindChange">
-          <n-radio-button value="file" title="对比任意两个文件">文件</n-radio-button>
-          <n-radio-button value="dir" title="对比任意两个目录">目录</n-radio-button>
-        </n-radio-group>
+        <n-tooltip trigger="hover" placement="bottom">
+          <template #trigger>
+            <n-radio-group :value="kindValue" size="small" class="dp-kind"
+              :disabled="busy" @update:value="onKindChange">
+              <n-radio-button value="file">文件</n-radio-button>
+              <n-radio-button value="dir">目录</n-radio-button>
+            </n-radio-group>
+          </template>
+          {{ busy ? '对比进行中，等这一轮结束再切换' : '对比任意两个文件，或者任意两个目录' }}
+        </n-tooltip>
 
-        <button type="button" class="dp-slot" :title="store.left.path || '点击选择'"
-          :class="{ 'is-empty': !leftText }" @click="pickSide('left')">
-          <Icon :icon="isDirMode ? folderIcon : fileIcon" width="13" height="13" />
-          <span class="dp-slot-text">{{ leftText || '选择左侧…' }}</span>
-        </button>
+        <div class="dp-slot-wrap">
+          <n-tooltip trigger="hover" placement="bottom">
+            <template #trigger>
+              <button type="button" class="dp-slot" :class="{ 'is-empty': !leftText }"
+                @click="pickSide('left')">
+                <Icon :icon="isDirMode ? folderIcon : fileIcon" width="13" height="13" />
+                <span class="dp-slot-text">{{ leftText || '选择左侧…' }}</span>
+              </button>
+            </template>
+            {{ store.left.path || `点击选择左侧${isDirMode ? '目录' : '文件'}` }}
+          </n-tooltip>
+        </div>
 
-        <n-button text size="tiny" title="交换两侧" @click="onSwap">
-          <Icon :icon="swapIcon" width="15" height="15" />
-        </n-button>
+        <n-tooltip trigger="hover" placement="bottom">
+          <template #trigger>
+            <n-button text size="tiny" @click="onSwap">
+              <Icon :icon="swapIcon" width="15" height="15" />
+            </n-button>
+          </template>
+          交换左右两侧
+        </n-tooltip>
 
-        <button type="button" class="dp-slot" :title="store.right.path || '点击选择'"
-          :class="{ 'is-empty': !rightText }" @click="pickSide('right')">
-          <Icon :icon="isDirMode ? folderIcon : fileIcon" width="13" height="13" />
-          <span class="dp-slot-text">{{ rightText || '选择右侧…' }}</span>
-        </button>
+        <div class="dp-slot-wrap">
+          <n-tooltip trigger="hover" placement="bottom">
+            <template #trigger>
+              <button type="button" class="dp-slot" :class="{ 'is-empty': !rightText }"
+                @click="pickSide('right')">
+                <Icon :icon="isDirMode ? folderIcon : fileIcon" width="13" height="13" />
+                <span class="dp-slot-text">{{ rightText || '选择右侧…' }}</span>
+              </button>
+            </template>
+            {{ store.right.path || `点击选择右侧${isDirMode ? '目录' : '文件'}` }}
+          </n-tooltip>
+        </div>
+
+        <n-tooltip trigger="hover" placement="bottom">
+          <template #trigger>
+            <span class="dp-edit-wrap">
+              <n-radio-group :value="editMode ? 'edit' : 'read'" size="small" class="dp-edit-toggle"
+                :disabled="busy || editLoading || (!canEditDiff && !editMode)"
+                @update:value="onEditModeChange">
+                <n-radio-button value="read">只读</n-radio-button>
+                <n-radio-button value="edit">编辑</n-radio-button>
+              </n-radio-group>
+            </span>
+          </template>
+          <template v-if="canEditDiff || editMode">
+            编辑模式可直接修改内容并保存回原文件，编码与换行符按原样保留<br />Ctrl+S 保存
+          </template>
+          <template v-else>{{ editDisabledReason }}</template>
+        </n-tooltip>
 
         <div class="dp-actions">
-          <n-button size="tiny" secondary :disabled="!canRun" :loading="busy" @click="run">对比</n-button>
-          <n-button v-if="busy && isDirMode" size="tiny" tertiary type="warning" @click="cancelDir">中止</n-button>
-          <n-button text size="tiny" :title="showOptions ? '收起选项' : '对比选项'"
-            :class="{ 'is-on': showOptions }" @click="showOptions = !showOptions">
-            <Icon :icon="settingsIcon" width="15" height="15" />
+          <template v-if="editMode">
+            <n-tooltip trigger="hover" placement="bottom">
+              <template #trigger>
+                <n-button size="tiny" :type="dirty.left ? 'primary' : 'default'" secondary
+                  :disabled="!dirty.left" :loading="editSaving.left" @click="saveSide('left')">
+                  <template #icon><Icon :icon="saveIcon" width="13" height="13" /></template>
+                  存左
+                </n-button>
+              </template>
+              把左侧内容写回 {{ editPaths.left }}
+            </n-tooltip>
+            <n-tooltip trigger="hover" placement="bottom">
+              <template #trigger>
+                <n-button size="tiny" :type="dirty.right ? 'primary' : 'default'" secondary
+                  :disabled="!dirty.right" :loading="editSaving.right" @click="saveSide('right')">
+                  <template #icon><Icon :icon="saveIcon" width="13" height="13" /></template>
+                  存右
+                </n-button>
+              </template>
+              把右侧内容写回 {{ editPaths.right }}
+            </n-tooltip>
+          </template>
+          <n-tooltip trigger="hover" placement="bottom">
+            <template #trigger>
+              <n-button size="tiny" secondary :disabled="!canRun || editMode" :loading="busy" @click="run">
+                对比
+              </n-button>
+            </template>
+            按当前选项重新计算差异
+          </n-tooltip>
+          <n-button v-if="busy && isDirMode" size="tiny" tertiary type="warning" @click="cancelDir">
+            中止
           </n-button>
-          <n-button text size="tiny" title="关闭" @click="emit('close')">
-            <Icon :icon="closeIcon" width="15" height="15" />
-          </n-button>
+          <n-tooltip trigger="hover" placement="bottom">
+            <template #trigger>
+              <n-button text size="tiny" :class="{ 'is-on': showOptions }" @click="showOptions = !showOptions">
+                <Icon :icon="settingsIcon" width="15" height="15" />
+              </n-button>
+            </template>
+            {{ showOptions ? '收起对比选项' : '展开对比选项' }}
+          </n-tooltip>
+          <n-tooltip trigger="hover" placement="bottom">
+            <template #trigger>
+              <n-button text size="tiny" @click="emit('close')">
+                <Icon :icon="closeIcon" width="15" height="15" />
+              </n-button>
+            </template>
+            关闭对比窗口
+          </n-tooltip>
         </div>
       </div>
       <div v-if="showOptions" class="dp-row dp-row-options">
         <template v-if="!isDirMode">
-          <label class="dp-field">
-            算法
-            <n-select v-model:value="opts.algorithm" size="tiny" :options="algorithmOptions" style="width: 104px" />
-          </label>
-          <label class="dp-field">
-            上下文
-            <n-input-number v-model:value="opts.contextLines" size="tiny" :min="0" :max="200"
-              :show-button="false" style="width: 54px" />
-          </label>
-          <n-checkbox v-model:checked="opts.ignoreWhitespace" size="small">忽略空白</n-checkbox>
-          <n-checkbox v-model:checked="opts.ignoreTrailingWhitespace" size="small">忽略行尾空白</n-checkbox>
-          <n-checkbox v-model:checked="opts.ignoreCase" size="small">忽略大小写</n-checkbox>
-          <n-checkbox v-model:checked="opts.ignoreBlankLines" size="small">忽略空行</n-checkbox>
+          <span class="dp-group">
+            <Icon :icon="algorithmIcon" width="13" height="13" class="dp-group-icon" />
+            <span class="dp-group-label">算法</span>
+            <n-radio-group v-model:value="opts.algorithm" size="small"
+              :disabled="editMode">
+              <n-radio-button v-for="a in ALGORITHMS" :key="a.value" :value="a.value">
+                {{ a.name }}
+              </n-radio-button>
+            </n-radio-group>
+            <n-tooltip trigger="hover" placement="bottom">
+              <template #trigger>
+                <n-button text size="tiny" class="dp-help-btn" @click="showAlgorithmHelp = true">
+                  <Icon :icon="helpIcon" width="14" height="14" />
+                </n-button>
+              </template>
+              三种算法怎么选
+            </n-tooltip>
+          </span>
+
+          <span class="dp-group">
+            <Icon :icon="contextIcon" width="13" height="13" class="dp-group-icon" />
+            <span class="dp-group-label">上下文</span>
+            <n-tooltip trigger="hover" placement="bottom">
+              <template #trigger>
+                <n-input-number v-model:value="opts.contextLines" size="tiny" :min="0" :max="200"
+                  :show-button="false" style="width: 54px" />
+              </template>
+              每个改动块前后多留几行，方便看清改动的来龙去脉
+            </n-tooltip>
+          </span>
+
+          <span class="dp-group">
+            <Icon :icon="ignoreIcon" width="13" height="13" class="dp-group-icon" />
+            <span class="dp-group-label">忽略</span>
+            <n-tooltip v-for="f in IGNORE_FLAGS" :key="f.key" trigger="hover" placement="bottom">
+              <template #trigger>
+                <n-checkbox v-model:checked="opts[f.key]" size="small">{{ f.label }}</n-checkbox>
+              </template>
+              {{ f.hint }}
+            </n-tooltip>
+          </span>
+
           <span class="dp-sep" />
-          <n-radio-group v-model:value="viewMode" size="small">
-            <n-radio-button value="split">并排</n-radio-button>
-            <n-radio-button value="unified">统一</n-radio-button>
-          </n-radio-group>
+
+          <span class="dp-group">
+            <Icon :icon="viewIcon" width="13" height="13" class="dp-group-icon" />
+            <span class="dp-group-label">视图</span>
+            <n-radio-group v-model:value="viewMode" size="small">
+              <n-radio-button value="split" title="左右并排对照">并排</n-radio-button>
+              <n-radio-button value="unified" title="上下统一成一条流">统一</n-radio-button>
+            </n-radio-group>
+          </span>
         </template>
         <template v-else>
-          <n-checkbox v-model:checked="dirOpts.quick" size="small" title="只比大小和修改时间，不读内容">
-            快速模式
-          </n-checkbox>
-          <n-checkbox v-model:checked="dirOpts.detectRenames" size="small">检测改名</n-checkbox>
-          <n-checkbox v-model:checked="dirOpts.includeHidden" size="small">含隐藏文件</n-checkbox>
-          <n-checkbox v-model:checked="dirOpts.respectGitignore" size="small">遵循 .gitignore</n-checkbox>
-          <n-checkbox v-model:checked="dirOpts.includeSame" size="small">显示相同项</n-checkbox>
-          <label class="dp-field">
-            排除
-            <n-input v-model:value="excludeText" size="tiny" placeholder="node_modules,*.log"
-              style="width: 168px" />
-          </label>
+          <span class="dp-group">
+            <Icon :icon="speedIcon" width="13" height="13" class="dp-group-icon" />
+            <span class="dp-group-label">比较方式</span>
+            <n-tooltip trigger="hover" placement="bottom">
+              <template #trigger>
+                <n-checkbox v-model:checked="dirOpts.quick" size="small">快速模式</n-checkbox>
+              </template>
+              只比大小和修改时间，不读内容，几十万文件也很快（可能漏掉大小相同但内容不同的文件）
+            </n-tooltip>
+            <n-tooltip trigger="hover" placement="bottom">
+              <template #trigger>
+                <n-checkbox v-model:checked="dirOpts.detectRenames" size="small">检测改名</n-checkbox>
+              </template>
+              把内容相同、只是换了名字的文件认成"改名"而不是一删一增
+            </n-tooltip>
+          </span>
+
+          <span class="dp-group">
+            <Icon :icon="scopeIcon" width="13" height="13" class="dp-group-icon" />
+            <span class="dp-group-label">范围</span>
+            <n-tooltip trigger="hover" placement="bottom">
+              <template #trigger>
+                <n-checkbox v-model:checked="dirOpts.includeHidden" size="small">含隐藏文件</n-checkbox>
+              </template>
+              把 .git、.env 这类点开头的文件也算进来
+            </n-tooltip>
+            <n-tooltip trigger="hover" placement="bottom">
+              <template #trigger>
+                <n-checkbox v-model:checked="dirOpts.respectGitignore" size="small">遵循 .gitignore</n-checkbox>
+              </template>
+              按仓库里的 .gitignore 规则跳过文件（构建产物、依赖目录）
+            </n-tooltip>
+            <n-tooltip trigger="hover" placement="bottom">
+              <template #trigger>
+                <n-checkbox v-model:checked="dirOpts.includeSame" size="small">显示相同项</n-checkbox>
+              </template>
+              内容完全相同的条目也列出来，方便确认两边到底一不一样
+            </n-tooltip>
+          </span>
+
+          <span class="dp-group">
+            <Icon :icon="filterIcon" width="13" height="13" class="dp-group-icon" />
+            <span class="dp-group-label">排除</span>
+            <n-tooltip trigger="hover" placement="bottom">
+              <template #trigger>
+                <n-input v-model:value="excludeText" size="tiny" placeholder="node_modules,*.log"
+                  style="width: 168px" />
+              </template>
+              逗号分隔的 glob，命中的路径直接跳过，例如 node_modules,*.log,dist/**
+            </n-tooltip>
+          </span>
+
           <span class="dp-sep" />
-          <n-radio-group v-model:value="dirView" size="small">
-            <n-radio-button value="tree" title="按目录逐级展开">树形</n-radio-button>
-            <n-radio-button value="list" title="平铺所有差异条目">列表</n-radio-button>
-          </n-radio-group>
+
+          <span class="dp-group">
+            <Icon :icon="viewIcon" width="13" height="13" class="dp-group-icon" />
+            <span class="dp-group-label">视图</span>
+            <n-radio-group v-model:value="dirView" size="small">
+              <n-radio-button value="tree" title="按目录逐级展开">树形</n-radio-button>
+              <n-radio-button value="list" title="平铺所有差异条目">列表</n-radio-button>
+            </n-radio-group>
+          </span>
         </template>
       </div>
       <div class="dp-row dp-row-status">
@@ -89,7 +249,16 @@
           <span class="dp-sep" />
         </template>
 
-        <template v-if="busy">
+        <template v-if="editMode">
+          <span class="dp-status-text">
+            编辑中 · 左 <b>{{ editMeta.left?.encoding }}</b> {{ eolLabel(editMeta.left?.lineEnding) }}
+            · 右 <b>{{ editMeta.right?.encoding }}</b> {{ eolLabel(editMeta.right?.lineEnding) }}
+          </span>
+          <span v-if="anyDirty" class="dp-status-text is-warn">● 有未保存的改动 · Ctrl+S 保存</span>
+          <span v-else class="dp-status-text">两侧都已保存</span>
+          <span v-if="editNote" class="dp-status-text is-warn" :title="editNote">{{ editNote }}</span>
+        </template>
+        <template v-else-if="busy">
           <span class="dp-status-text">{{ progressText }}</span>
         </template>
         <template v-else-if="error">
@@ -140,7 +309,8 @@
       </span>
     </div>
 
-    <div ref="bodyRef" class="dp-body" :class="{ 'is-panes': splitPanes }" @scroll.passive="onScroll">
+    <div v-if="!editMode" ref="bodyRef" class="dp-body" :class="{ 'is-panes': splitPanes }"
+      @scroll.passive="onScroll">
       <div v-if="busy && !rows.length" class="dp-placeholder">
         <n-spin size="small" />
         <span>{{ progressText }}</span>
@@ -245,6 +415,15 @@
       </div>
     </div>
 
+    <!-- 编辑模式：自绘只读视图整个换掉，交给 Monaco 差异编辑器（两侧都可改可存） -->
+    <div v-if="editMode" class="dp-edit-body">
+      <div ref="editHostRef" class="dp-edit-host"></div>
+      <div v-if="editLoading" class="dp-placeholder is-overlay">
+        <n-spin size="small" />
+        <span>正在装载编辑器…</span>
+      </div>
+    </div>
+
     <div v-if="dropActive" class="dp-drop-mask">
       <div class="dp-drop-half" :class="{ 'is-on': dropSide === 'left' }">
         <Icon :icon="dropIcon" width="20" height="20" />
@@ -256,6 +435,31 @@
       </div>
       <div class="dp-drop-tip">松手即对比 · 一次拖两个可直接填满两侧 · 文件和目录不能混</div>
     </div>
+
+    <n-modal v-model:show="showAlgorithmHelp" preset="card" class="dp-help-card"
+      title="三种差异算法怎么选" :bordered="false" style="width: 620px">
+      <p class="dp-help-lead">
+        三者都在算"左边哪些行要变成右边"，区别在怎么给行配对。文件不同，配出来的结果可读性差很多。
+      </p>
+      <div v-for="a in ALGORITHMS" :key="a.value" class="dp-help-item"
+        :class="{ 'is-current': opts.algorithm === a.value }">
+        <div class="dp-help-head">
+          <span class="dp-help-name">{{ a.name }}</span>
+          <span class="dp-help-brief">{{ a.brief }}</span>
+          <n-tag v-if="opts.algorithm === a.value" size="tiny" round :bordered="false">当前使用</n-tag>
+          <n-button v-else text size="tiny" @click="opts.algorithm = a.value">用这个</n-button>
+        </div>
+        <dl class="dp-help-body">
+          <dt>原理</dt>
+          <dd>{{ a.principle }}</dd>
+          <dt>适合</dt>
+          <dd>{{ a.fit }}</dd>
+          <dt>代价</dt>
+          <dd>{{ a.cost }}</dd>
+        </dl>
+      </div>
+      <p class="dp-help-lead">拿不准就用 Patience（默认）。</p>
+    </n-modal>
   </div>
 </template>
 <script setup>
@@ -273,10 +477,10 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { open as openDialog } from '@tauri-apps/plugin-dialog'
+import { open as openDialog, confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
 import {
-  NButton, NCheckbox, NCheckboxGroup, NInput, NInputNumber,
-  NRadioButton, NRadioGroup, NSelect, NSpin, NTag, useMessage,
+  NButton, NCheckbox, NCheckboxGroup, NInput, NInputNumber, NModal,
+  NRadioButton, NRadioGroup, NSpin, NTag, NTooltip, useMessage,
 } from 'naive-ui'
 import { Icon } from '@iconify/vue'
 import fileIcon from '@iconify-icons/lucide/file-text'
@@ -287,12 +491,28 @@ import closeIcon from '@iconify-icons/lucide/x'
 import backIcon from '@iconify-icons/lucide/corner-up-left'
 import chevronIcon from '@iconify-icons/lucide/chevron-right'
 import dropIcon from '@iconify-icons/lucide/download'
+import saveIcon from '@iconify-icons/lucide/save'
+import helpIcon from '@iconify-icons/lucide/help-circle'
+import algorithmIcon from '@iconify-icons/lucide/git-compare'
+import contextIcon from '@iconify-icons/lucide/align-left'
+import ignoreIcon from '@iconify-icons/lucide/eraser'
+import viewIcon from '@iconify-icons/lucide/split-square-horizontal'
+import speedIcon from '@iconify-icons/lucide/zap'
+import scopeIcon from '@iconify-icons/lucide/folder-tree'
+import filterIcon from '@iconify-icons/lucide/filter'
 import { createLogger } from '../../utils/logger'
 import { useDiffCompareStore } from '../../stores/diffCompareStore'
+import { useSettingsStore } from '../../stores/settingsStore'
+import {
+  defineGuaxiMonacoThemes,
+  getGuaxiMonacoTheme,
+  getLanguageForFile,
+} from '../../monaco/guaxiMonacoThemes'
 
 const logger = createLogger('GuaxiDiffPanel')
 const message = useMessage()
 const store = useDiffCompareStore()
+const settingsStore = useSettingsStore()
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
@@ -372,10 +592,43 @@ const dirOpts = reactive({
 })
 const excludeText = ref('')
 
-const algorithmOptions = [
-  { label: 'Patience', value: 'patience' },
-  { label: 'Myers', value: 'myers' },
-  { label: 'LCS', value: 'lcs' },
+/** 三种算法：给用户看的是"什么情况用哪个"，不是教科书定义。 */
+const ALGORITHMS = [
+  {
+    name: 'Patience',
+    value: 'patience',
+    brief: '锚点对齐，代码文件最像人眼 —— 默认',
+    principle:
+      '先找出在两侧都只出现一次的"唯一行"当锚点，再在锚点之间递归求解。整块函数被插删时，锚点会稳稳落在函数边界上。',
+    fit: '代码、配置这类有清晰结构的文本；改动是成块的增删；大文件也比 LCS 快得多。',
+    cost: '重复行很多时（生成代码、日志、压缩后的 JS）几乎找不到唯一行，锚点稀疏，可能退化成慢且不理想的配对。',
+  },
+  {
+    name: 'Myers',
+    value: 'myers',
+    brief: '增删最少，通用的最短编辑脚本',
+    principle:
+      '经典的"最短编辑脚本"算法：在所有把左边变成右边的走法里，找增删行数最少的那条路。git 默认用它。',
+    fit: '改动零散、想看到"数学上最小"的差异；文件不大、两侧相似度中等时结果干净。',
+    cost: '高度相似或很大的文件，时间与内存开销明显上升；有时为了少一行，配对看起来反而不如 Patience 直观。',
+  },
+  {
+    name: 'LCS',
+    value: 'lcs',
+    brief: '最长公共子序列，稳定可预期但最慢',
+    principle:
+      '直接求两侧的最长公共子序列，最大化按原有顺序保留下来的公共行骨架，结果是确定性的。',
+    fit: '看重"公共结构完整保留"的场景，例如大段代码被搬来搬去、想确认到底哪些行真的变了。',
+    cost: '复杂度最高（大致 O(n·m)），大文件会明显更慢、更吃内存，本面板对大输入会自行退回统计模式。',
+  },
+]
+
+/** 四个忽略开关：文案说清"忽略的是什么"。 */
+const IGNORE_FLAGS = [
+  { key: 'ignoreWhitespace', label: '忽略空白', hint: '行内任意位置的空白差异都不算改动（相当于 git diff -w）' },
+  { key: 'ignoreTrailingWhitespace', label: '忽略行尾空白', hint: '只忽略行末多出来的空格和制表符，行中间的空白照常比较' },
+  { key: 'ignoreCase', label: '忽略大小写', hint: '大小写不同不算改动，适合大小写风格不统一的代码库' },
+  { key: 'ignoreBlankLines', label: '忽略空行', hint: '单纯多一行或少一行空白行不算改动' },
 ]
 
 const statusChoices = [
@@ -953,6 +1206,8 @@ const drillPaths = ref({ left: '', right: '' })
 
 const run = async () => {
   if (busy.value || !canRun.value) return
+  // 重新对比会把只读视图整个换掉，编辑内容先处理好（有未保存改动会在这里问一句）。
+  if (!(await ensureEditSafe())) return
   error.value = ''
   busy.value = true
   // 手动跑过一次之后，后面的交换、重跑就该自动生效了。
@@ -1092,8 +1347,12 @@ const pickSide = async (side) => {
 }
 
 // ───── 任意文件 / 目录：类型切换与系统拖放 ─────
-/** 换一侧、换模式之前先把上一轮的结果和目录会话清干净。 */
+/**
+ * 换一侧、换模式之前先把上一轮的结果和目录会话清干净。
+ * 返回 false 表示用户在"未保存改动"那道确认上选了留下，调用方应当整个中止。
+ */
 const resetResults = async () => {
+  if (!(await ensureEditSafe())) return false
   await closeSession()
   drillRel.value = ''
   drillPaths.value = { left: '', right: '' }
@@ -1105,6 +1364,7 @@ const resetResults = async () => {
   rows.value = []
   error.value = ''
   resetTree()
+  return true
 }
 
 /** 路径到底是文件还是目录得问一下磁盘，光看字符串猜不出来（也顺便查出不存在的）。 */
@@ -1131,7 +1391,7 @@ const onKindChange = async (kind) => {
     const kinds = await probeKinds(paths)
     keep = paths.every((p) => kinds.get(p) === next)
   }
-  await resetResults()
+  if (!(await resetResults())) return
   store.setMode(next, { keepSides: keep })
   if (canRun.value) void run()
 }
@@ -1147,10 +1407,10 @@ const fillSide = async (side, path, kind) => {
       keepOther = kinds.get(otherPath) === kind
       if (!keepOther) message.info('两侧类型必须一致，已清掉另一侧')
     }
-    await resetResults()
+    if (!(await resetResults())) return
     store.setMode(kind, { keepSides: keepOther })
-  } else {
-    await resetResults()
+  } else if (!(await resetResults())) {
+    return
   }
   store.setSide(side, path)
   if (canRun.value) void run()
@@ -1192,6 +1452,327 @@ const acceptDrop = async (paths, side) => {
   await fillSide(side, picked[0], kinds.get(picked[0]))
 }
 
+// ───── 编辑模式 ─────
+// 只读视图是自绘的虚拟滚动，故意不碰 Monaco（100 MB 文件进 Monaco 必崩）。
+// 编辑模式另起一个 Monaco 差异编辑器，只在文件不大时可用：两侧都能改，各自存回原文件。
+// Monaco 体积不小，所以走动态 import —— 全程只看差异的用户不该为它买单。
+
+/** 和 Rust 侧 MAX_EDIT_BYTES 一致。Rust 才是权威，这里只用来提前禁用按钮。 */
+const EDIT_MAX_BYTES = 8 * 1024 * 1024
+
+const editMode = ref(false)
+const editLoading = ref(false)
+const editHostRef = ref(null)
+const showAlgorithmHelp = ref(false)
+const editSaving = reactive({ left: false, right: false })
+const dirty = reactive({ left: false, right: false })
+const editMeta = reactive({ left: null, right: null })
+
+let monacoMod = null
+let diffEditor = null
+const editModels = { left: null, right: null }
+const editBaselines = { left: 0, right: 0 }
+let editChangeDisposables = []
+/** 编辑期间存过盘：退出编辑模式时要重算一次只读差异，否则屏幕上还是旧结果。 */
+let savedDuringEdit = false
+let bypassCloseGuard = false
+let unlistenClose = null
+
+const anyDirty = computed(() => dirty.left || dirty.right)
+
+/** 编辑针对的两个磁盘文件：钻取态用 drillPaths，普通文件对比用 store 的两侧。 */
+const editPaths = computed(() => {
+  if (drillRel.value) return { left: drillPaths.value.left, right: drillPaths.value.right }
+  if (store.mode === 'file') return { left: store.left.path, right: store.right.path }
+  return { left: '', right: '' }
+})
+
+/** 现在能不能进编辑模式；不能的话缺的是什么。 */
+const editDisabledReason = computed(() => {
+  if (store.mode === 'text') return '文本对比是两段未落盘的内容，没有文件可写回'
+  if (store.mode === 'buffer') return '缓冲区对比有一侧是未保存内容，没有文件可写回'
+  if (store.mode === 'dir' && !drillRel.value) return '目录对比请先点开具体文件，再进入编辑'
+  const res = fileResult.value
+  if (!res) return '先点"对比"算出差异，才能进入编辑'
+  if (res.mode === 'binary') return '二进制文件只能只读对比'
+  if (res.mode === 'too_large') return '文件超过大小上限，只能只读对比'
+  if (res.mode === 'too_divergent') return '两侧差异过大，只能只读对比'
+  const paths = editPaths.value
+  if (!paths.left || !paths.right) return '两侧都要是磁盘上的文件才能编辑'
+  if (!res.left.exists || !res.right.exists) return '有一侧的文件不存在'
+  if (Math.max(res.left.size || 0, res.right.size || 0) > EDIT_MAX_BYTES) {
+    return `文件超过 ${EDIT_MAX_BYTES / 1024 / 1024} MB，只支持只读对比`
+  }
+  return ''
+})
+const canEditDiff = computed(() => !editDisabledReason.value)
+
+/** 两侧读盘时的提示（行尾不统一之类）并成一句话。 */
+const editNote = computed(() =>
+  [editMeta.left?.message, editMeta.right?.message].filter(Boolean).join('；'))
+
+const eolLabel = (v) => ({ crlf: 'CRLF', lf: 'LF', none: '无换行' }[v] || v || '')
+
+/** 动态装载 Monaco：全程只读的会话不会拉起这个 chunk。
+ *  Worker 环境由 main.js 启动时统一装好（configureMonacoWorkers），这里不用再管。 */
+const loadMonaco = async () => {
+  if (!monacoMod) monacoMod = await import('monaco-editor')
+  return monacoMod
+}
+
+/** Monaco 吃不下 CSS 变量里的 var() 链，先让浏览器把字体栈算成实际值。 */
+const resolvedEditorFont = () => {
+  const el = bodyRef.value || document.querySelector('.guaxi-diff-panel')
+  if (!el) return 'Consolas, monospace'
+  return window.getComputedStyle(el).fontFamily || 'Consolas, monospace'
+}
+
+const disposeEditor = () => {
+  for (const d of editChangeDisposables) {
+    try { d.dispose() } catch { /* 已随编辑器一起销毁 */ }
+  }
+  editChangeDisposables = []
+  if (diffEditor) {
+    try { diffEditor.setModel(null) } catch { /* ignore */ }
+    try { diffEditor.dispose() } catch { /* ignore */ }
+    diffEditor = null
+  }
+  for (const side of ['left', 'right']) {
+    if (editModels[side]) {
+      try { editModels[side].dispose() } catch { /* ignore */ }
+      editModels[side] = null
+    }
+  }
+  if (editHostRef.value) editHostRef.value.innerHTML = ''
+}
+
+const mountEditor = async () => {
+  const host = editHostRef.value
+  if (!host) return
+  const monaco = await loadMonaco()
+  defineGuaxiMonacoThemes(monaco)
+  monaco.editor.setTheme(getGuaxiMonacoTheme(settingsStore.appearanceTheme))
+
+  disposeEditor()
+  const paths = editPaths.value
+  const makeModel = (side) => monaco.editor.createModel(
+    editMeta[side].text,
+    getLanguageForFile(paths[side]),
+    monaco.Uri.file(paths[side]),
+  )
+  editModels.left = makeModel('left')
+  editModels.right = makeModel('right')
+
+  diffEditor = monaco.editor.createDiffEditor(host, {
+    // 两侧都要能改：左侧是"原版"但用户同样要修它。
+    originalEditable: true,
+    readOnly: false,
+    renderSideBySide: viewMode.value === 'split',
+    // Monaco 0.52 只有 legacy/advanced，Patience/Myers/LCS 是 Rust 侧只读对比的算法。
+    diffAlgorithm: 'advanced',
+    automaticLayout: true,
+    lineHeight: ROW_H,
+    fontSize: 16,
+    fontFamily: resolvedEditorFont(),
+    fontLigatures: true,
+    scrollBeyondLastLine: false,
+    enableSplitViewResizing: true,
+    renderOverviewRuler: false,
+    diffWordWrap: 'on',
+    padding: { top: 8, bottom: 8 },
+  })
+  diffEditor.setModel({ original: editModels.left, modified: editModels.right })
+
+  editBaselines.left = editModels.left.getAlternativeVersionId()
+  editBaselines.right = editModels.right.getAlternativeVersionId()
+  dirty.left = false
+  dirty.right = false
+  for (const side of ['left', 'right']) {
+    const model = editModels[side]
+    editChangeDisposables.push(model.onDidChangeContent(() => {
+      dirty[side] = model.getAlternativeVersionId() !== editBaselines[side]
+    }))
+  }
+}
+
+const enterEditMode = async () => {
+  if (editMode.value || editLoading.value || !canEditDiff.value) return
+  error.value = ''
+  editLoading.value = true
+  try {
+    const paths = editPaths.value
+    const [leftInfo, rightInfo] = await Promise.all([
+      invoke('diff_read_text', { path: paths.left }),
+      invoke('diff_read_text', { path: paths.right }),
+    ])
+    if (!leftInfo.canEdit || !rightInfo.canEdit) {
+      message.warning(leftInfo.message || rightInfo.message || '这一侧的文件不支持编辑')
+      return
+    }
+    editMeta.left = leftInfo
+    editMeta.right = rightInfo
+    editMode.value = true
+    await nextTick()
+    await mountEditor()
+  } catch (e) {
+    error.value = String(e?.message || e || '进入编辑模式失败')
+    logger.warn('[Diff] enter edit mode failed', { error: error.value })
+  } finally {
+    editLoading.value = false
+  }
+}
+
+/**
+ * 退出编辑模式。有未保存改动先问一句。
+ * `refresh` 为真时把只读差异重算一遍 —— 用户点"只读"就是为了看刚存下去的结果。
+ */
+const exitEditMode = async ({ refresh = false } = {}) => {
+  if (!editMode.value) return true
+  if (anyDirty.value) {
+    const ok = await confirmDialog('有未保存的改动，退出编辑模式会丢掉这些改动。确定退出吗？', {
+      title: '未保存的改动',
+      kind: 'warning',
+    })
+    if (!ok) return false
+  }
+  const wasSaved = savedDuringEdit
+  disposeEditor()
+  editMode.value = false
+  editMeta.left = null
+  editMeta.right = null
+  dirty.left = false
+  dirty.right = false
+  savedDuringEdit = false
+  // 只读视图的 DOM 被 v-if 换掉过，ref / ResizeObserver 得重新挂上。
+  await nextTick()
+  observeBody()
+  syncViewport()
+  measureCharWidth()
+  if (refresh && wasSaved) {
+    const paths = editPaths.value
+    if (paths.left && paths.right) {
+      try {
+        await runFileDiff(paths.left, paths.right)
+      } catch (e) {
+        logger.warn('[Diff] refresh after edit failed', { error: String(e?.message || e || '') })
+      }
+    }
+  }
+  return true
+}
+
+/** 任何会丢掉编辑内容的流程（切模式、重新对比、换文件）都先过这道闸。 */
+const ensureEditSafe = async () => {
+  if (!editMode.value) return true
+  return exitEditMode()
+}
+
+const onEditModeChange = (v) => {
+  if (v === 'edit') void enterEditMode()
+  else void exitEditMode({ refresh: true })
+}
+
+const fileBaseName = (p) => String(p || '').split(/[\\/]/).filter(Boolean).pop() || String(p || '')
+
+const saveSide = async (side, { force = false } = {}) => {
+  if (!editMode.value || editSaving[side] || !dirty[side]) return
+  const model = editModels[side]
+  const meta = editMeta[side]
+  const path = editPaths.value[side]
+  if (!model || !meta || !path) return
+  // 保存是异步的，期间用户可能继续打字：记住这次发出去的版本号，
+  // 回来只把 baseline 推到这一版，之后的改动仍然算"未保存"。
+  const sentVersion = model.getAlternativeVersionId()
+  const sentText = model.getValue()
+  editSaving[side] = true
+  try {
+    const res = await invoke('diff_write_text', {
+      path,
+      text: sentText,
+      encoding: meta.encoding,
+      lineEnding: meta.lineEnding,
+      expectedMtimeMs: meta.mtimeMs,
+      force,
+    })
+    meta.mtimeMs = res.mtimeMs
+    meta.size = res.size
+    editBaselines[side] = sentVersion
+    dirty[side] = model.getAlternativeVersionId() !== sentVersion
+    savedDuringEdit = true
+    if (res.message) message.warning(res.message)
+    else message.success(`已保存 ${fileBaseName(path)}`)
+  } catch (e) {
+    const text = String(e?.message || e || '保存失败')
+    // Rust 用前缀区分"需要用户再确认一次"和真错误。
+    if (!force && (text.startsWith('stale:') || text.startsWith('encode:'))) {
+      const reason = text.slice(text.indexOf(':') + 1)
+      const ok = await confirmDialog(`${reason}。\n\n仍要覆盖保存吗？`, {
+        title: '保存确认',
+        kind: 'warning',
+      })
+      if (ok) {
+        editSaving[side] = false
+        await saveSide(side, { force: true })
+        return
+      }
+      return
+    }
+    message.error(text)
+    logger.warn('[Diff] save failed', { side, error: text })
+  } finally {
+    editSaving[side] = false
+  }
+}
+
+/** Ctrl+S 存哪一侧：光标在哪侧就存哪侧，都没焦点就存唯一脏的那侧。 */
+const focusedSide = () => {
+  if (diffEditor) {
+    try {
+      if (diffEditor.getModifiedEditor().hasTextFocus()) return 'right'
+      if (diffEditor.getOriginalEditor().hasTextFocus()) return 'left'
+    } catch { /* 编辑器可能正在销毁 */ }
+  }
+  if (dirty.left !== dirty.right) return dirty.left ? 'left' : 'right'
+  return null
+}
+
+const onEditKeydown = (ev) => {
+  if (!editMode.value) return
+  if (!(ev.ctrlKey || ev.metaKey) || String(ev.key).toLowerCase() !== 's') return
+  ev.preventDefault()
+  ev.stopPropagation()
+  const side = focusedSide()
+  if (side) {
+    void saveSide(side)
+    return
+  }
+  // 焦点不在编辑器上（刚点过工具栏之类）而两侧都脏：那就是想全存。
+  if (dirty.left && dirty.right) {
+    void saveSide('left')
+    void saveSide('right')
+  }
+}
+
+/** 关窗也是离开编辑的一条路，同样要拦一下。 */
+const setupCloseGuard = async () => {
+  if (!store.host) return
+  try {
+    unlistenClose = await getCurrentWindow().onCloseRequested(async (ev) => {
+      if (bypassCloseGuard || !editMode.value || !anyDirty.value) return
+      ev.preventDefault()
+      const ok = await confirmDialog('有未保存的改动，关闭窗口会丢掉这些改动。仍要关闭吗？', {
+        title: '未保存的改动',
+        kind: 'warning',
+      })
+      if (!ok) return
+      bypassCloseGuard = true
+      await getCurrentWindow().close()
+    })
+  } catch (e) {
+    logger.warn('[Diff] close guard failed', { error: String(e?.message || e || '') })
+  }
+}
+
 // ───── 生命周期 ─────
 let unlisten = null
 let unlistenDrop = null
@@ -1199,6 +1780,9 @@ let ro = null
 let optTimer = 0
 
 const observeBody = () => {
+  // 进出编辑模式会把 .dp-body 整个换掉，得先把旧观察者摘掉再挂新的。
+  ro?.disconnect()
+  ro = null
   if (!bodyRef.value || typeof ResizeObserver === 'undefined') return
   ro = new ResizeObserver(() => syncViewport())
   ro.observe(bodyRef.value)
@@ -1243,19 +1827,27 @@ onMounted(async () => {
     logger.warn('[Diff] listen progress failed', { error: String(e?.message || e || '') })
   }
   await setupDragDrop()
+  await setupCloseGuard()
+  // 编辑模式期间的 Ctrl+S。挂在 window 上捕获阶段：Monaco 自己也吃 keydown，
+  // 不抢在它前面的话会被它吞掉。
+  window.addEventListener('keydown', onEditKeydown, true)
   // 预填路径的请求（Header 那个"带上次路径开窗"的入口）不自动跑，等用户点"对比"。
   if (store.autoRun && canRun.value && !rows.value.length) void run()
 })
 onBeforeUnmount(() => {
   window.clearTimeout(filterTimer)
   window.clearTimeout(optTimer)
+  window.removeEventListener('keydown', onEditKeydown, true)
   endSplitDrag()
+  disposeEditor()
   ro?.disconnect()
   ro = null
   if (typeof unlisten === 'function') unlisten()
   unlisten = null
   if (typeof unlistenDrop === 'function') unlistenDrop()
   unlistenDrop = null
+  if (typeof unlistenClose === 'function') unlistenClose()
+  unlistenClose = null
   void closeSession()
 })
 
@@ -1263,11 +1855,16 @@ onBeforeUnmount(() => {
 // 不清的话会把上一轮的结果留在屏幕上，看着像是新对比的结果。
 watch(() => store.requestSeq, async (seq) => {
   if (!seq) return
-  await resetResults()
+  if (!(await resetResults())) return
   if (store.autoRun) await run()
 })
 
 watch(viewMode, () => {
+  // 编辑模式下这个开关直接落到 Monaco 的并排/统一上，不用重建结果。
+  if (editMode.value) {
+    diffEditor?.updateOptions({ renderSideBySide: viewMode.value === 'split' })
+    return
+  }
   if (!fileResult.value) return
   rows.value = buildFileRows(fileResult.value)
   resetScroll()
@@ -1417,13 +2014,27 @@ watch(() => props.visible, (v) => {
   color: var(--guaxi-text-secondary, #9da5b4);
 }
 
+/* 路径框的外层负责占位：n-tooltip 可能会在中间插一层触发器包裹元素，
+   把 flex 尺寸放在自己这层，才不会被那层包裹打断。 */
+.dp-slot-wrap {
+  display: flex;
+  flex: 1 1 160px;
+  min-width: 0;
+  max-width: 340px;
+}
+
+.dp-slot-wrap > * {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .dp-slot {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   min-width: 0;
-  flex: 1 1 160px;
-  max-width: 340px;
+  width: 100%;
   padding: 3px 8px;
   border-radius: 5px;
   border: 1px solid color-mix(in srgb, var(--guaxi-border, #3a3d41) 84%, transparent);
@@ -1461,11 +2072,39 @@ watch(() => props.visible, (v) => {
   color: var(--guaxi-accent, #4c8bf5);
 }
 
-.dp-field {
+/* 选项按"组"排：一个图标 + 一个小标题 + 若干控件，和主界面工具栏的密度一致。 */
+.dp-group {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+  padding: 1px 0;
+}
+
+.dp-group-icon {
+  flex: 0 0 auto;
   color: var(--guaxi-text-secondary, #9da5b4);
+  opacity: 0.85;
+}
+
+.dp-group-label {
+  flex: 0 0 auto;
+  color: var(--guaxi-text-secondary, #9da5b4);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.dp-group :deep(.n-checkbox__label),
+.dp-group :deep(.n-radio-button__label) {
+  font-size: 12px;
+}
+
+.dp-help-btn {
+  flex: 0 0 auto;
+  color: var(--guaxi-text-secondary, #9da5b4);
+}
+
+.dp-help-btn:hover {
+  color: var(--guaxi-accent, #4c8bf5);
 }
 
 .dp-sep {
@@ -1777,6 +2416,112 @@ watch(() => props.visible, (v) => {
 
 .dp-back {
   flex: 0 0 auto;
+}
+
+/* ───── 编辑模式 ───── */
+
+/* 只读/编辑开关：和 .dp-kind 同一套观感，放在主行最右边那组动作前面 */
+.dp-edit-wrap {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.dp-edit-toggle :deep(.n-radio-button) {
+  font-size: 11px;
+  padding: 0 8px;
+}
+
+.dp-edit-toggle :deep(.n-radio-button--checked) {
+  font-weight: 600;
+}
+
+/* Monaco 容器：撑满 .dp-body 原来的位置，横向纵向都由它自己滚 */
+.dp-edit-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.dp-edit-host {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.dp-placeholder.is-overlay {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--guaxi-panel-bg, #1e1e1e) 88%, transparent);
+}
+
+/* Monaco 自带的 diff 边线太扎眼，这里跟面板的边框色对齐 */
+.dp-edit-body :deep(.monaco-diff-editor .diagonal-fill) {
+  opacity: 0.4;
+}
+
+/* ───── 算法说明 ───── */
+.dp-help-card :deep(.n-card-header__main) {
+  font-size: 15px;
+}
+
+.dp-help-lead {
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  line-height: 1.75;
+  color: var(--guaxi-text-secondary, #9da5b4);
+}
+
+.dp-help-item {
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--guaxi-border, #3a3d41) 70%, transparent);
+  background: color-mix(in srgb, var(--guaxi-panel-bg, #2d2d30) 60%, transparent);
+}
+
+.dp-help-item.is-current {
+  border-color: color-mix(in srgb, var(--guaxi-accent, #4c8bf5) 60%, transparent);
+}
+
+.dp-help-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.dp-help-name {
+  font-family: var(--dp-code-font);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--guaxi-text-primary, #d4d4d4);
+}
+
+.dp-help-brief {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--guaxi-text-secondary, #9da5b4);
+}
+
+.dp-help-body {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 4px 10px;
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.dp-help-body dt {
+  color: var(--guaxi-text-secondary, #9da5b4);
+  font-size: 11.5px;
+}
+
+.dp-help-body dd {
+  margin: 0;
+  color: var(--guaxi-text-primary, #d4d4d4);
 }
 </style>
 

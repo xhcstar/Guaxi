@@ -613,7 +613,11 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import * as monaco from 'monaco-editor'
 import { useSettingsStore } from '../../stores/settingsStore'
-import { GUAXI_MONACO_SEMANTIC_TOKEN_COLORS, GUAXI_MONACO_THEME_RULES } from '../../monaco/guaxiMonacoThemes'
+import {
+  defineGuaxiMonacoThemes,
+  getGuaxiMonacoTheme,
+  getLanguageForFile as getLanguageForFileShared,
+} from '../../monaco/guaxiMonacoThemes'
 import { registerDiffLanguages } from './utils/monaco-diff' // 自定义语言注册
 import { createLogger } from '../../utils/logger'
 
@@ -663,113 +667,19 @@ const Codicon = (props) => h('span', {
 })
 
 let guaxiMonacoThemesReady = false
+// 主题定义本身在 monaco/guaxiMonacoThemes.js 里，和差异对比窗口共用一份，
+// 免得两个入口各注册一次同名主题、色值还不一样。
 const ensureGuaxiMonacoThemes = () => {
   if (guaxiMonacoThemesReady) return
 
-  monaco.editor.defineTheme('guaxi-light', {
-    base: 'vs',
-    inherit: true,
-    // 设计说明：语法与语义 token 色板统一从共享模块读取，避免 GitPanel 后注册同名主题时覆盖 Notebook/编辑器的 Python 高亮。
-    rules: GUAXI_MONACO_THEME_RULES.light,
-    semanticHighlighting: true,
-    semanticTokenColors: GUAXI_MONACO_SEMANTIC_TOKEN_COLORS.light,
-    colors: {
-      'editor.background': '#fafafa',
-      'editor.foreground': '#383a42',
-      'editorLineNumber.foreground': '#a0a1a7',
-      'editorLineNumber.activeForeground': '#383a42',
-      'editorCursor.foreground': '#4078f2',
-      'editor.selectionBackground': '#d7dae0',
-      'editor.inactiveSelectionBackground': '#e3f2fd',
-      'editor.lineHighlightBackground': '#f0f0f0',
-      'editorBracketMatch.background': '#e1f5fe',
-      'editorBracketMatch.border': '#90caf9',
-      'editor.selectionHighlightBackground': '#ffe0b2',
-      'editor.foldBackground': '#f7f9fc',
-      'editorWhitespace.foreground': '#d0d0d0',
-      'editorIndentGuide.background': '#d0d0d0',
-      'editorIndentGuide.activeBackground': '#b0bec5',
-      'editorHoverWidget.background': '#ffffff',
-      'editorHoverWidget.border': '#e0e0e0',
-      'editorSuggestWidget.background': '#ffffff',
-      'editorSuggestWidget.border': '#e0e0e0',
-      'editorSuggestWidget.foreground': '#383a42',
-      'editorSuggestWidget.selectedBackground': '#e3f2fd',
-      'editorWidget.background': '#ffffff',
-      'editorWidget.border': '#e0e0e0',
-      'editorGutter.background': '#fafafa',
-      // 设计说明：Git diff 的整行背景保持低透明度，优先保证注释/灰色文本可读；
-      // 字符级差异略强一点，便于在浅色主题中精确定位实际变更。
-      // 设计说明：保留鲜艳红/绿基色，同时降低 alpha，做出更通透的色膜质感；
-      // 字符级背景仍高于整行背景，确保真正变更的位置足够清晰。
-      'diffEditor.insertedLineBackground': '#16a34a18',
-      'diffEditor.removedLineBackground': '#dc262618',
-      'diffEditor.insertedTextBackground': '#22c55e40',
-      'diffEditor.removedTextBackground': '#ef444440',
-      'scrollbar.shadow': '#00000033'
-    }
-  })
-
-  monaco.editor.defineTheme('guaxi-dark', {
-    base: 'vs-dark',
-    inherit: true,
-    // 设计说明：暗色 Python 高亮的根因是多个入口重复注册 `guaxi-dark` 且 token 色值不同；这里改为共享色板。
-    rules: GUAXI_MONACO_THEME_RULES.dark,
-    semanticHighlighting: true,
-    semanticTokenColors: GUAXI_MONACO_SEMANTIC_TOKEN_COLORS.dark,
-    colors: {
-      'editor.background': '#282c34',
-      'editor.foreground': '#abb2bf',
-      'editorLineNumber.foreground': '#5c6370',
-      'editorLineNumber.activeForeground': '#abb2bf',
-      'editorCursor.foreground': '#61afef',
-      'editor.selectionBackground': '#3e4451',
-      'editor.inactiveSelectionBackground': '#323842',
-      'editor.lineHighlightBackground': '#2c313a',
-      'editor.lineHighlightBorder': '#00000000',
-      'editorBracketMatch.background': '#3b4048',
-      'editorBracketMatch.border': '#528bff',
-      'editor.selectionHighlightBackground': '#3e445155',
-      'editor.findMatchBackground': '#3b5f8a66',
-      'editor.findMatchHighlightBackground': '#3e4451aa',
-      'editor.findRangeHighlightBackground': '#3e445155',
-      'editor.foldBackground': '#2c313a',
-      'editorWhitespace.foreground': '#3b4048',
-      'editorIndentGuide.background': '#3b4048',
-      'editorIndentGuide.activeBackground': '#4b5263',
-      'editorHoverWidget.background': '#282c34',
-      'editorHoverWidget.border': '#3b4048',
-      'editorSuggestWidget.background': '#282c34',
-      'editorSuggestWidget.border': '#3b4048',
-      'editorSuggestWidget.foreground': '#abb2bf',
-      'editorSuggestWidget.selectedBackground': '#2c313a',
-      'editorWidget.background': '#282c34',
-      'editorWidget.border': '#3b4048',
-      'input.background': '#21252b',
-      'input.foreground': '#abb2bf',
-      'input.border': '#3b4048',
-      'input.placeholderForeground': '#7f8898',
-      'focusBorder': '#528bff80',
-      'editorGutter.background': '#282c34',
-      // 设计说明：暗色 diff 中红/绿背景容易和注释 token 叠加变浑浊；
-      // 线级颜色只做轻提示，字符级颜色保留稍高对比，贴近 VS Code 的阅读体验。
-      // 设计说明：暗色主题里红/绿更容易显得厚重，因此线级 alpha 更轻；
-      // 字符级背景略强一点，兼顾透明质感和变更定位。
-      'diffEditor.insertedLineBackground': '#22c55e1c',
-      'diffEditor.removedLineBackground': '#ef44441c',
-      'diffEditor.insertedTextBackground': '#22c55e46',
-      'diffEditor.removedTextBackground': '#ef444446',
-      'scrollbar.shadow': '#00000066'
-    }
-  })
-
+  defineGuaxiMonacoThemes(monaco)
   guaxiMonacoThemesReady = true
   frontendLogger.info('[DiffTheme] Monaco themes registered with translucent vivid diff highlights')
 }
 
 const getMonacoTheme = () => {
   ensureGuaxiMonacoThemes()
-  return settingsStore.appearanceTheme === 'dark' ? 'guaxi-dark' : 'guaxi-light'
+  return getGuaxiMonacoTheme(settingsStore.appearanceTheme)
 }
 
 const commitTooltipContentStyle = computed(() => {
@@ -2083,36 +1993,7 @@ const updateCommitDiff = async (commit) => {
 }
 
 // 根据文件扩展名获取语言
-const getLanguageForFile = (path) => {
-  const extension = path.split('.').pop().toLowerCase()
-  switch (extension) {
-    case 'js': return 'javascript'
-    case 'ts': return 'typescript'
-    case 'py': return 'python'
-    case 'rb': return 'ruby'
-    case 'go': return 'go'
-    case 'rs': return 'rust'
-    case 'java': return 'java'
-    case 'c': return 'c'
-    case 'cpp': return 'cpp'
-    case 'h': return 'cpp'
-    case 'hpp': return 'cpp'
-    case 'cs': return 'csharp'
-    case 'php': return 'php'
-    case 'html': return 'html'
-    case 'css': return 'css'
-    case 'scss': return 'scss'
-    case 'less': return 'less'
-    case 'json': return 'json'
-    case 'xml': return 'xml'
-    case 'yml': return 'yaml'
-    case 'yaml': return 'yaml'
-    case 'md': return 'markdown'
-    case 'sh': return 'shell'
-    case 'vue': return 'vue'
-    default: return 'plaintext'
-  }
-}
+const getLanguageForFile = getLanguageForFileShared
 
 // 解析 unified diff 格式
 const parseUnifiedDiff = (diff) => {
