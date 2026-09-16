@@ -50,69 +50,74 @@
           </n-tooltip>
         </div>
 
-        <n-tooltip trigger="hover" placement="bottom">
-          <template #trigger>
-            <span class="dp-edit-wrap">
-              <n-radio-group :value="editMode ? 'edit' : 'read'" size="small" class="dp-edit-toggle"
-                :disabled="busy || editLoading || (!canEditDiff && !editMode)"
-                @update:value="onEditModeChange">
-                <n-radio-button value="read">只读</n-radio-button>
-                <n-radio-button value="edit">编辑</n-radio-button>
-              </n-radio-group>
-            </span>
-          </template>
-          <template v-if="canEditDiff || editMode">
-            编辑模式可直接修改内容并保存回原文件，编码与换行符按原样保留<br />Ctrl+S 保存
-          </template>
-          <template v-else>{{ editDisabledReason }}</template>
-        </n-tooltip>
-
         <div class="dp-actions">
+          <n-tooltip trigger="hover" placement="bottom">
+            <template #trigger>
+              <span class="dp-edit-wrap">
+                <n-radio-group :value="editMode ? 'edit' : 'read'" size="small" class="dp-edit-toggle"
+                  :disabled="busy || editLoading || (!canEditDiff && !editMode)"
+                  @update:value="onEditModeChange">
+                  <n-radio-button value="read" aria-label="只读对比">
+                    <Icon :icon="readIcon" width="14" height="14" />
+                  </n-radio-button>
+                  <n-radio-button value="edit" aria-label="编辑内容">
+                    <Icon :icon="editIcon" width="14" height="14" />
+                  </n-radio-button>
+                </n-radio-group>
+              </span>
+            </template>
+            <template v-if="canEditDiff || editMode">
+              只读：只看差异，不动文件<br />编辑：可直接改内容并写回原文件（编码与换行符按原样保留，Ctrl+S 保存）
+            </template>
+            <template v-else>{{ editDisabledReason }}</template>
+          </n-tooltip>
+          <span class="dp-sep" />
           <template v-if="editMode">
             <n-tooltip trigger="hover" placement="bottom">
               <template #trigger>
-                <n-button size="tiny" :type="dirty.left ? 'primary' : 'default'" secondary
-                  :disabled="!dirty.left" :loading="editSaving.left" @click="saveSide('left')">
-                  <template #icon><Icon :icon="saveIcon" width="13" height="13" /></template>
-                  存左
+                <n-button size="tiny" quaternary class="dp-icon-btn"
+                  :type="anyDirty ? 'primary' : 'default'" :loading="savingAny" @click="saveDirty">
+                  <template #icon><Icon :icon="saveIcon" width="15" height="15" /></template>
                 </n-button>
               </template>
-              把左侧内容写回 {{ editPaths.left }}
-            </n-tooltip>
-            <n-tooltip trigger="hover" placement="bottom">
-              <template #trigger>
-                <n-button size="tiny" :type="dirty.right ? 'primary' : 'default'" secondary
-                  :disabled="!dirty.right" :loading="editSaving.right" @click="saveSide('right')">
-                  <template #icon><Icon :icon="saveIcon" width="13" height="13" /></template>
-                  存右
-                </n-button>
-              </template>
-              把右侧内容写回 {{ editPaths.right }}
+              {{ saveHint }}
             </n-tooltip>
           </template>
           <n-tooltip trigger="hover" placement="bottom">
             <template #trigger>
-              <n-button size="tiny" secondary :disabled="!canRun || editMode" :loading="busy" @click="run">
-                对比
+              <n-button size="tiny" quaternary class="dp-icon-btn is-run"
+                :disabled="!canRun || editMode" :loading="busy" @click="run">
+                <template #icon>
+                  <Icon :icon="hasResult ? rerunIcon : playIcon" width="15" height="15" />
+                </template>
               </n-button>
             </template>
-            按当前选项重新计算差异
+            {{ hasResult ? '按当前选项重新计算差异' : '按当前选项计算差异' }}
           </n-tooltip>
-          <n-button v-if="busy && isDirMode" size="tiny" tertiary type="warning" @click="cancelDir">
-            中止
-          </n-button>
+          <n-tooltip v-if="busy && isDirMode" trigger="hover" placement="bottom">
+            <template #trigger>
+              <n-button size="tiny" quaternary class="dp-icon-btn is-stop" @click="cancelDir">
+                <template #icon><Icon :icon="stopIcon" width="14" height="14" /></template>
+              </n-button>
+            </template>
+            停掉这一轮目录扫描
+          </n-tooltip>
+
+          <span class="dp-sep" />
+
           <n-tooltip trigger="hover" placement="bottom">
             <template #trigger>
-              <n-button text size="tiny" :class="{ 'is-on': showOptions }" @click="showOptions = !showOptions">
-                <Icon :icon="settingsIcon" width="15" height="15" />
+              <n-button quaternary size="tiny" class="dp-icon-btn"
+                :class="{ 'is-on': showOptions }" @click="showOptions = !showOptions">
+                <template #icon><Icon :icon="settingsIcon" width="15" height="15" /></template>
               </n-button>
             </template>
             {{ showOptions ? '收起对比选项' : '展开对比选项' }}
           </n-tooltip>
           <n-tooltip trigger="hover" placement="bottom">
             <template #trigger>
-              <n-button text size="tiny" @click="emit('close')">
-                <Icon :icon="closeIcon" width="15" height="15" />
+              <n-button quaternary size="tiny" class="dp-icon-btn" @click="emit('close')">
+                <template #icon><Icon :icon="closeIcon" width="15" height="15" /></template>
               </n-button>
             </template>
             关闭对比窗口
@@ -124,16 +129,23 @@
           <span class="dp-group">
             <Icon :icon="algorithmIcon" width="13" height="13" class="dp-group-icon" />
             <span class="dp-group-label">算法</span>
-            <n-radio-group v-model:value="opts.algorithm" size="small"
-              :disabled="editMode">
-              <n-radio-button v-for="a in ALGORITHMS" :key="a.value" :value="a.value">
-                {{ a.name }}
-              </n-radio-button>
-            </n-radio-group>
             <n-tooltip trigger="hover" placement="bottom">
               <template #trigger>
-                <n-button text size="tiny" class="dp-help-btn" @click="showAlgorithmHelp = true">
-                  <Icon :icon="helpIcon" width="14" height="14" />
+                <span class="dp-select-wrap">
+                  <n-select v-model:value="opts.algorithm" size="small" class="dp-algo-select"
+                    :options="algorithmOptions" :render-label="renderAlgorithmLabel"
+                    :render-option="renderAlgorithmOption"
+                    :consistent-menu-width="false" />
+                </span>
+              </template>
+              <div>给行配对用哪种算法，点右边的 ? 看三者差别</div>
+              <div v-if="editMode" class="dp-tip-note">{{ EDIT_ONLY_HINT }}</div>
+            </n-tooltip>
+            <n-tooltip trigger="hover" placement="bottom">
+              <template #trigger>
+                <n-button quaternary size="tiny" class="dp-icon-btn dp-help-btn"
+                  @click="showAlgorithmHelp = true">
+                  <template #icon><Icon :icon="helpIcon" width="14" height="14" /></template>
                 </n-button>
               </template>
               三种算法怎么选
@@ -148,7 +160,8 @@
                 <n-input-number v-model:value="opts.contextLines" size="tiny" :min="0" :max="200"
                   :show-button="false" style="width: 54px" />
               </template>
-              每个改动块前后多留几行，方便看清改动的来龙去脉
+              <div>每个改动块前后多留几行，方便看清改动的来龙去脉</div>
+              <div v-if="editMode" class="dp-tip-note">{{ EDIT_ONLY_HINT }}</div>
             </n-tooltip>
           </span>
 
@@ -157,9 +170,12 @@
             <span class="dp-group-label">忽略</span>
             <n-tooltip v-for="f in IGNORE_FLAGS" :key="f.key" trigger="hover" placement="bottom">
               <template #trigger>
-                <n-checkbox v-model:checked="opts[f.key]" size="small">{{ f.label }}</n-checkbox>
+                <n-checkbox v-model:checked="opts[f.key]" size="small">
+                  {{ f.label }}
+                </n-checkbox>
               </template>
-              {{ f.hint }}
+              <div>{{ f.hint }}</div>
+              <div v-if="editMode && !f.live" class="dp-tip-note">{{ EDIT_ONLY_HINT }}</div>
             </n-tooltip>
           </span>
 
@@ -238,6 +254,7 @@
             </n-radio-group>
           </span>
         </template>
+
       </div>
       <div class="dp-row dp-row-status">
         <template v-if="drillRel">
@@ -310,7 +327,7 @@
     </div>
 
     <div v-if="!editMode" ref="bodyRef" class="dp-body" :class="{ 'is-panes': splitPanes }"
-      @scroll.passive="onScroll">
+      tabindex="0" @scroll.passive="onScroll" @keydown="onBodyKeydown">
       <div v-if="busy && !rows.length" class="dp-placeholder">
         <n-spin size="small" />
         <span>{{ progressText }}</span>
@@ -326,7 +343,8 @@
           @scroll.passive="onPaneScroll('left', $event)">
           <div class="dp-spacer" :style="{ height: `${totalHeight}px`, width: paneWidth('left') }">
             <div class="dp-window" :style="{ transform: `translateY(${offsetY}px)` }">
-              <div v-for="row in paintedRows" :key="row.key" class="dp-line" :class="row.cls">
+              <div v-for="row in paintedRows" :key="row.key" class="dp-line" :class="rowClass(row)"
+                @mousedown="onRowDown(row)">
                 <span v-if="row.kind === 'hunk'" class="dp-hunk">{{ row.header }}</span>
                 <template v-else>
                   <span class="dp-no">{{ row.left.no || '' }}</span>
@@ -345,7 +363,8 @@
           @scroll.passive="onPaneScroll('right', $event)">
           <div class="dp-spacer" :style="{ height: `${totalHeight}px`, width: paneWidth('right') }">
             <div class="dp-window" :style="{ transform: `translateY(${offsetY}px)` }">
-              <div v-for="row in paintedRows" :key="row.key" class="dp-line" :class="row.cls">
+              <div v-for="row in paintedRows" :key="row.key" class="dp-line" :class="rowClass(row)"
+                @mousedown="onRowDown(row)">
                 <span v-if="row.kind === 'hunk'" class="dp-hunk"></span>
                 <template v-else>
                   <span class="dp-no">{{ row.right.no || '' }}</span>
@@ -399,7 +418,8 @@
             </div>
           </template>
           <template v-else>
-            <div v-for="row in paintedRows" :key="row.key" class="dp-line" :class="row.cls">
+            <div v-for="row in paintedRows" :key="row.key" class="dp-line" :class="rowClass(row)"
+              @mousedown="onRowDown(row)">
               <span v-if="row.kind === 'hunk'" class="dp-hunk">{{ row.header }}</span>
               <template v-else>
                 <span class="dp-no">{{ row.left.no || '' }}</span>
@@ -420,7 +440,7 @@
       <div ref="editHostRef" class="dp-edit-host"></div>
       <div v-if="editLoading" class="dp-placeholder is-overlay">
         <n-spin size="small" />
-        <span>正在装载编辑器…</span>
+        <span>{{ editPhase === 'diff' ? '正在计算差异…' : '正在装载编辑器…' }}</span>
       </div>
     </div>
 
@@ -473,14 +493,14 @@
  * 3. 目录结果留在 Rust 侧的 LRU 会话里，前端按页取，过滤和搜索也在 Rust 侧做。
  * 4. 行内高亮区间由 Rust 按 UTF-16 code unit 给出，JS 可以直接 slice。
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open as openDialog, confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
 import {
   NButton, NCheckbox, NCheckboxGroup, NInput, NInputNumber, NModal,
-  NRadioButton, NRadioGroup, NSpin, NTag, NTooltip, useMessage,
+  NRadioButton, NRadioGroup, NSelect, NSpin, NTag, NTooltip, useMessage,
 } from 'naive-ui'
 import { Icon } from '@iconify/vue'
 import fileIcon from '@iconify-icons/lucide/file-text'
@@ -492,7 +512,12 @@ import backIcon from '@iconify-icons/lucide/corner-up-left'
 import chevronIcon from '@iconify-icons/lucide/chevron-right'
 import dropIcon from '@iconify-icons/lucide/download'
 import saveIcon from '@iconify-icons/lucide/save'
+import readIcon from '@iconify-icons/lucide/eye'
+import editIcon from '@iconify-icons/lucide/pencil'
 import helpIcon from '@iconify-icons/lucide/help-circle'
+import playIcon from '@iconify-icons/lucide/play'
+import rerunIcon from '@iconify-icons/lucide/refresh-cw'
+import stopIcon from '@iconify-icons/lucide/square'
 import algorithmIcon from '@iconify-icons/lucide/git-compare'
 import contextIcon from '@iconify-icons/lucide/align-left'
 import ignoreIcon from '@iconify-icons/lucide/eraser'
@@ -598,6 +623,7 @@ const ALGORITHMS = [
     name: 'Patience',
     value: 'patience',
     brief: '锚点对齐，代码文件最像人眼 —— 默认',
+    menu: '锚点对齐，默认',
     principle:
       '先找出在两侧都只出现一次的"唯一行"当锚点，再在锚点之间递归求解。整块函数被插删时，锚点会稳稳落在函数边界上。',
     fit: '代码、配置这类有清晰结构的文本；改动是成块的增删；大文件也比 LCS 快得多。',
@@ -607,6 +633,7 @@ const ALGORITHMS = [
     name: 'Myers',
     value: 'myers',
     brief: '增删最少，通用的最短编辑脚本',
+    menu: '增删最少，最通用',
     principle:
       '经典的"最短编辑脚本"算法：在所有把左边变成右边的走法里，找增删行数最少的那条路。git 默认用它。',
     fit: '改动零散、想看到"数学上最小"的差异；文件不大、两侧相似度中等时结果干净。',
@@ -616,6 +643,7 @@ const ALGORITHMS = [
     name: 'LCS',
     value: 'lcs',
     brief: '最长公共子序列，稳定可预期但最慢',
+    menu: '最长公共子序列，最慢',
     principle:
       '直接求两侧的最长公共子序列，最大化按原有顺序保留下来的公共行骨架，结果是确定性的。',
     fit: '看重"公共结构完整保留"的场景，例如大段代码被搬来搬去、想确认到底哪些行真的变了。',
@@ -623,9 +651,39 @@ const ALGORITHMS = [
   },
 ]
 
+/**
+ * 下拉菜单里的文案：算法名 + 一句白话，用户不用打开说明弹窗就能选。
+ * 收起时只留算法名（长文案会把工具栏撑开，见 renderAlgorithmLabel）。
+ */
+const algorithmOptions = ALGORITHMS.map((a) => ({
+  value: a.value,
+  label: `${a.name} · ${a.menu}`,
+  name: a.name,
+}))
+
+/** 收起状态只显示算法名。naive 会把 render-label 同时用在菜单项上，所以菜单项另走 render-option。 */
+const renderAlgorithmLabel = (option) => h('span', { class: 'dp-algo-name' }, option?.name || '')
+
+/**
+ * 展开后的菜单项：算法名 + 一句白话，选之前就能比一比。
+ * 换了 render-option 就没有 naive 自带的勾选图标，选中项仍有底色，够用。
+ */
+const renderAlgorithmOption = ({ option }) => h('div', { class: 'dp-algo-opt' }, [
+  h('span', { class: 'dp-algo-opt__name' }, option.name),
+  h('span', { class: 'dp-algo-opt__hint' }, option.menu),
+])
+
+/**
+ * 编辑模式下的红绿由 Monaco 自己算，这些选项里只有"忽略空白"能同步过去（对应它的
+ * ignoreTrimWhitespace），其余的只落在只读对比的结果上。选项不再锁死，而是在提示里补一句，
+ * 免得改完看不到变化以为控件坏了。
+ */
+const EDIT_ONLY_HINT = '编辑模式下红绿由编辑器实时算，这一项只影响只读结果'
+
 /** 四个忽略开关：文案说清"忽略的是什么"。 */
 const IGNORE_FLAGS = [
-  { key: 'ignoreWhitespace', label: '忽略空白', hint: '行内任意位置的空白差异都不算改动（相当于 git diff -w）' },
+  // live：这一项能同步给编辑器（Monaco 的 ignoreTrimWhitespace），提示里就不用补上面那句
+  { key: 'ignoreWhitespace', label: '忽略空白', live: true, hint: '行内任意位置的空白差异都不算改动（相当于 git diff -w）' },
   { key: 'ignoreTrailingWhitespace', label: '忽略行尾空白', hint: '只忽略行末多出来的空格和制表符，行中间的空白照常比较' },
   { key: 'ignoreCase', label: '忽略大小写', hint: '大小写不同不算改动，适合大小写风格不统一的代码库' },
   { key: 'ignoreBlankLines', label: '忽略空行', hint: '单纯多一行或少一行空白行不算改动' },
@@ -658,6 +716,8 @@ const kindValue = computed(() => {
   if (store.mode === 'dir') return 'dir'
   return store.mode === 'file' ? 'file' : null
 })
+/** 屏幕上已经有结果了：动作按钮这时候该说"重算"而不是"开始"。 */
+const hasResult = computed(() => !!fileResult.value || !!sessionId.value)
 const canRun = computed(() => {
   if (busy.value) return false
   if (store.mode === 'text') return store.left.text != null && store.right.text != null
@@ -698,6 +758,96 @@ const endIndex = computed(() => Math.min(
 ))
 const visibleRows = computed(() => rows.value.slice(startIndex.value, endIndex.value))
 const offsetY = computed(() => startIndex.value * ROW_H)
+
+// ───── 当前行 ─────
+/**
+ * 只读视图是自绘的虚拟列表，没有 Monaco 那种光标，"当前行"只能自己记。
+ * 记的是行 key 而不是下标：换视图、改选项、重算差异都是整份换掉行数组，按下标会挪到别的行上去。
+ */
+const currentKey = ref('')
+
+/** hunk 头只是一条分隔线，不该停下来：从 from 出发朝 dir 找下一个能当当前行的行。 */
+const findRowIndex = (list, from, dir) => {
+  for (let i = from; i >= 0 && i < list.length; i += dir) {
+    if (list[i].kind !== 'hunk') return i
+  }
+  return -1
+}
+
+/** 朝 dir 找；顶到头了就往回找最近的一条，翻页键才不会卡在最后一行上不动。 */
+const settleRowIndex = (list, from, dir) => {
+  const at = Math.min(list.length - 1, Math.max(0, from))
+  const hit = findRowIndex(list, at, dir)
+  return hit >= 0 ? hit : findRowIndex(list, at, -dir)
+}
+
+/** 当前行的下标。只在按键时找一次，所以不额外维护索引表，省得每次重建行都要跟着重建。 */
+const currentRowIndex = () => {
+  const list = rows.value
+  const key = currentKey.value
+  if (!key) return -1
+  for (let i = 0; i < list.length; i += 1) {
+    if (list[i].key === key) return i
+  }
+  return -1
+}
+
+/** 行走到视口外就把它带进来，上下各留两行余量，跟编辑器一样。 */
+const revealRow = (index) => {
+  const el = splitPanes.value ? leftPaneRef.value : bodyRef.value
+  if (!el) return
+  const viewH = el.clientHeight || viewportH.value
+  const top = index * ROW_H
+  const margin = ROW_H * 2
+  if (top < el.scrollTop + margin) el.scrollTop = Math.max(0, top - margin)
+  else if (top + ROW_H + margin > el.scrollTop + viewH) el.scrollTop = top + ROW_H + margin - viewH
+}
+
+const gotoRow = (index) => {
+  if (index < 0 || index >= rows.value.length) return
+  currentKey.value = rows.value[index].key
+  revealRow(index)
+}
+
+/**
+ * 行数组重建后把当前行接住：key 还在就留在原处，key 没了（换了视图形态、重算了差异）
+ * 就回到第一行 —— 编辑器里光标总是在的，不该因为重算就整块消失。
+ */
+watch(rows, (list) => {
+  if (!list.length) {
+    currentKey.value = ''
+    return
+  }
+  if (currentKey.value && list.some((r) => r.key === currentKey.value)) return
+  const first = findRowIndex(list, 0, 1)
+  currentKey.value = first < 0 ? '' : list[first].key
+})
+
+/** 键盘导航：上下键走一行，翻页键走一屏，Home/End 到首尾。 */
+const onBodyKeydown = (ev) => {
+  const list = rows.value
+  if (showDirAny.value || !list.length) return
+  const at = currentRowIndex()
+  const page = Math.max(1, Math.floor((viewportH.value || ROW_H) / ROW_H) - 1)
+  const start = at < 0 ? startIndex.value : at
+  const end = at < 0 ? endIndex.value : at
+  let next = -1
+  if (ev.key === 'ArrowDown') next = settleRowIndex(list, start + 1, 1)
+  else if (ev.key === 'ArrowUp') next = settleRowIndex(list, end - 1, -1)
+  else if (ev.key === 'PageDown') next = settleRowIndex(list, start + page, 1)
+  else if (ev.key === 'PageUp') next = settleRowIndex(list, end - page, -1)
+  else if (ev.key === 'Home') next = settleRowIndex(list, 0, 1)
+  else if (ev.key === 'End') next = settleRowIndex(list, list.length - 1, -1)
+  else return
+  ev.preventDefault()
+  if (next >= 0) gotoRow(next)
+}
+
+/** 鼠标按在哪一行哪一行就是当前行：跟编辑器里点一下会移光标是一回事。 */
+const onRowDown = (row) => {
+  if (row.kind === 'hunk') return
+  currentKey.value = row.key
+}
 
 const colWidth = computed(() => Math.max(260, Math.ceil(maxCols.value * charW.value) + 16))
 const cellStyle = computed(() => ({ width: `${colWidth.value}px` }))
@@ -944,6 +1094,10 @@ const paintedRows = computed(() => {
     return { ...r, left: paint(r.left), right: paint(r.right) }
   })
 })
+
+/** 行的 class 在模板里现拼：当前行是逐行比对出来的，不混进 paintedRows，
+ *  否则点一下就要把视口里那几十行的行内高亮整段重算。 */
+const rowClass = (row) => [row.cls, { 'is-current': !!row.key && row.key === currentKey.value }]
 
 const rebuildDirRows = () => {
   rows.value = dirEntries.value.map((e, i) => ({
@@ -1210,6 +1364,8 @@ const run = async () => {
   if (!(await ensureEditSafe())) return
   error.value = ''
   busy.value = true
+  // 这一趟一定会重算，之前记下的"选项变了"到此为止
+  optsStale = false
   // 手动跑过一次之后，后面的交换、重跑就该自动生效了。
   store.autoRun = true
   try {
@@ -1460,8 +1616,17 @@ const acceptDrop = async (paths, side) => {
 /** 和 Rust 侧 MAX_EDIT_BYTES 一致。Rust 才是权威，这里只用来提前禁用按钮。 */
 const EDIT_MAX_BYTES = 8 * 1024 * 1024
 
+/**
+ * Monaco 算差异的时间上限（毫秒）。它跑在主线程上，且首屏一次、每次停下来打字后还有一次，
+ * 所以这个值直接等于"界面最多冻多久"。默认 5000 对动辄几 MB 的文件就是整整五秒，
+ * 收到 1000：超时只是让配对粗一点，但换来的是能用的手感。
+ */
+const EDIT_DIFF_MAX_COMPUTATION_MS = 1000
+
 const editMode = ref(false)
 const editLoading = ref(false)
+/** 'load' 装 Monaco 与两个 model，'diff' 已经在算差异了——遮罩上的文案跟着换。 */
+const editPhase = ref('load')
 const editHostRef = ref(null)
 const showAlgorithmHelp = ref(false)
 const editSaving = reactive({ left: false, right: false })
@@ -1470,11 +1635,14 @@ const editMeta = reactive({ left: null, right: null })
 
 let monacoMod = null
 let diffEditor = null
+let liveDiffSync = null
 const editModels = { left: null, right: null }
 const editBaselines = { left: 0, right: 0 }
 let editChangeDisposables = []
 /** 编辑期间存过盘：退出编辑模式时要重算一次只读差异，否则屏幕上还是旧结果。 */
 let savedDuringEdit = false
+/** 编辑期间改过对比选项：退出编辑模式时同样要重算，否则只读结果还是按旧选项算的。 */
+let optsStale = false
 let bypassCloseGuard = false
 let closeGuardBusy = false
 let unlistenClose = null
@@ -1534,6 +1702,16 @@ const readHostVar = (name, fallback) => {
   return v || fallback
 }
 
+/**
+ * 同 readHostVar，但只放行十六进制。
+ * Monaco 的主题色只认 #RRGGBB(AA)：读到 rgb(...) 之类的写法它不报错，
+ * 而是把底色、差异色一起画成纯红，所以宁可用这里的默认值。
+ */
+const readHostHex = (name, fallback) => {
+  const v = readHostVar(name, fallback)
+  return /^#[0-9a-f]{3,8}$/i.test(v) ? v : fallback
+}
+
 const hexToRgb = (hex) => {
   const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(String(hex).trim())
   if (!m) return null
@@ -1542,28 +1720,48 @@ const hexToRgb = (hex) => {
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
 }
 
-/** 把面板 CSS 里 color-mix 的效果算成 rgba，好写进 Monaco 主题。 */
-const mixWithAlpha = (color, alpha, fallback) => {
+/**
+ * 把面板 CSS 里 color-mix(色 透明度, transparent) 的效果算成 #RRGGBBAA。
+ *
+ * 必须是十六进制：Monaco 的 Color.fromHex 只认 #RGB/#RGBA/#RRGGBB/#RRGGBBAA，
+ * 喂 rgba() 进去不报错，而是静默兜成纯红——配色错了都看不出来是哪里错。
+ */
+const withAlpha = (color, alpha) => {
   const rgb = hexToRgb(color)
-  return rgb ? `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${alpha})` : fallback
+  if (!rgb) return color
+  const a = Math.round(Math.min(1, Math.max(0, alpha)) * 255).toString(16).padStart(2, '0')
+  return `#${rgb.map((v) => v.toString(16).padStart(2, '0')).join('')}${a}`
 }
+
+/**
+ * 差异配色。只读视图（.dp-cell.is-del/.is-add/.dp-ink）和编辑模式的主题必须是同一组色，
+ * 不然同一个文件在两种模式里一个发青绿、一个发橄榄绿（Monaco 默认就是后者）。
+ * 改色时两边一起改。
+ */
+const DIFF_HUES = { removed: '#f87171', inserted: '#4ade80' }
+
+/** 当前行底色：只读视图的 .dp-line.is-current 和编辑模式的 editor.lineHighlightBackground 共用一份。 */
+const CURRENT_LINE_ALPHA = 0.1
 
 /**
  * 编辑模式专用主题。
  *
  * 不能直接用 guaxi-light/guaxi-dark：那是给 GitPanel 配的，底色是 #282c34，
  * 而只读视图的底色是 --guaxi-panel-bg（暗色 #21252b）—— 两个模式一对比就看得出接缝。
- * 行号、差异底色、行内高亮同样按只读视图的 CSS 取值，让两边看起来是同一块东西。
+ * 行号、差异底色、行内高亮、滚动条、中缝同样按只读视图的 CSS 取值，让两边看起来是同一块东西。
  */
 const defineDiffEditTheme = (monaco) => {
   const dark = settingsStore.appearanceTheme === 'dark'
   const name = dark ? 'guaxi-diffedit-dark' : 'guaxi-diffedit-light'
-  const panelBg = readHostVar('--guaxi-panel-bg', dark ? '#21252b' : '#ffffff')
-  const textPrimary = readHostVar('--guaxi-text-primary', dark ? '#d8e0eb' : '#1f2328')
-  const textSecondary = readHostVar('--guaxi-text-secondary', dark ? '#9da5b4' : '#57606a')
-  const border = readHostVar('--guaxi-border', dark ? '#3e4451' : '#d0d7de')
+  const panelBg = readHostHex('--guaxi-panel-bg', dark ? '#21252b' : '#ffffff')
+  const textPrimary = readHostHex('--guaxi-text-primary', dark ? '#d8e0eb' : '#1f2328')
+  const textSecondary = readHostHex('--guaxi-text-secondary', dark ? '#9da5b4' : '#57606a')
+  const border = readHostHex('--guaxi-border', dark ? '#3e4451' : '#d0d7de')
+  const accent = readHostHex('--guaxi-accent', dark ? '#4c8bf5' : '#2f6feb')
   // .dp-no 是 76% 的文字次要色
-  const lineNumber = mixWithAlpha(textSecondary, 0.76, textSecondary)
+  const lineNumber = withAlpha(textSecondary, 0.76)
+  // 滚动条滑块和 GuaxiEditor 里那套 rgba(120,120,120,.45)/rgba(255,255,255,.28) 对齐
+  const scrollThumb = dark ? ['#ffffff47', '#ffffff73', '#ffffff8c'] : ['#78787873', '#787878a6', '#787878cc']
 
   monaco.editor.defineTheme(name, {
     base: dark ? 'vs-dark' : 'vs',
@@ -1577,12 +1775,313 @@ const defineDiffEditTheme = (monaco) => {
       'editor.background': panelBg,
       'editor.foreground': textPrimary,
       'editorGutter.background': panelBg,
+      // 当前行：底色取只读视图 .dp-line.is-current 的同一份（次要色 10%），
+      // 左边那条强调色短线由样式里的 .current-line-margin 补。
+      'editor.lineHighlightBackground': withAlpha(textSecondary, CURRENT_LINE_ALPHA),
+      // 这个边框是四边一圈的框，不是我们要的左边一条，保持透明。
       'editor.lineHighlightBorder': '#00000000',
       'editorWidget.background': panelBg,
       'editorWidget.border': border,
+      // 行号跟 .dp-no 一样：次要色的 76%，亮色主题下不再是 Monaco 默认的蓝
+      'editorLineNumber.foreground': lineNumber,
+      'editorLineNumber.activeForeground': withAlpha(textPrimary, 0.9),
+      // 整行 16% / 行内 40%，对应 .dp-cell.is-del/.is-add 与 .dp-ink
+      'diffEditor.removedLineBackground': withAlpha(DIFF_HUES.removed, 0.16),
+      'diffEditor.insertedLineBackground': withAlpha(DIFF_HUES.inserted, 0.16),
+      'diffEditor.removedTextBackground': withAlpha(DIFF_HUES.removed, 0.4),
+      'diffEditor.insertedTextBackground': withAlpha(DIFF_HUES.inserted, 0.4),
+      // 只读视图只给代码那一列上色，行号栏留白，这里也把 gutter 的底色抹平
+      'diffEditorGutter.removedLineBackground': '#00000000',
+      'diffEditorGutter.insertedLineBackground': '#00000000',
+      // 另一侧空出来的位置，对应 .dp-cell.is-blank 的 8% 次要色
+      'diffEditor.diagonalFill': withAlpha(textSecondary, 0.08),
+      // 两侧之间的那道缝，对应 .dp-divider
+      'diffEditor.border': border,
+      'sash.hoverBorder': accent,
+      'scrollbar.shadow': '#00000000',
+      'scrollbarSlider.background': scrollThumb[0],
+      'scrollbarSlider.hoverBackground': scrollThumb[1],
+      'scrollbarSlider.activeBackground': scrollThumb[2],
     },
   })
   return name
+}
+
+/**
+ * 编辑模式的实时差异。Monaco 0.52 那套重算有两处靠不住，都在这里补上：
+ *
+ * 1. 慢：重算挂在自己 ViewModel 里一个 200ms 的 RunOnceScheduler 上，停下来打字之后还要再等
+ *    200ms 才动一步（实测 4000 行文件每次按键 227ms 才更新）。VS Code 靠 applyModifiedEdits
+ *    把编辑增量套到旧结果上做到"边打边更新"，而这个函数在 monaco 0.52 里是空实现
+ *    （diffEditorViewModel.js 里直接 return undefined），只能自己把重算提前。
+ * 2. 抖：每重算一次，两侧对不齐时补的 view zone 和整屏差异装饰都会整批拆掉重建
+ *    （实测 4000 行文件敲一个字符动 160 个 view zone 节点、300 多处 DOM 写入），
+ *    看起来就是"整个编辑区在重绘"。
+ *
+ * 所以行内字符级高亮改成面板自己画（.dp-edit-ink-*，取值同只读视图的 .dp-ink），行级结构
+ * （哪几行跟哪几行对应）没变就不去惊动 Monaco，真的多/少了一行才让它重算一次。
+ * 实测：打字时 view zone 变更为 0、按键到行内高亮约 14ms；换行这类真正改结构的操作约 20ms。
+ */
+const EDIT_INK_CLASS = { add: 'dp-edit-ink-add', del: 'dp-edit-ink-del' }
+/** 行内高亮只给"成对且行数相等"的改动块，每块上限 400 行——跟只读视图 diffcompare.rs 的规则一致。 */
+const EDIT_INK_PAIR_LIMIT = 400
+const EDIT_DIFF_RETRY_DELAY_MS = 60
+const EDIT_DIFF_RETRY_LIMIT = 3
+
+/**
+ * worker 被回收、或者模型还没同步进 worker 时会拿不到结果（editorWorkerService 把 null
+ * 抛成 'no diff result available'）。这种失败等一拍再问就有结果；不重试的话这一轮更新整段丢掉，
+ * 红绿就停在上一次的位置不动，看起来就是"改了没反应"。
+ */
+const isRetryableDiffError = (e) => {
+  const msg = String(e?.message || e || '')
+  return msg.includes('no diff result available') || /cancel/i.test(msg)
+}
+
+const computeDiffWithRetry = async (provider, original, modified, options, token) => {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await provider.computeDiff(original, modified, options, token)
+    } catch (e) {
+      if (attempt >= EDIT_DIFF_RETRY_LIMIT || token?.isCancellationRequested || !isRetryableDiffError(e)) throw e
+      // 编辑器已经拆掉（模型跟着销毁）就没必要再问一遍
+      if (original?.isDisposed?.() || modified?.isDisposed?.()) throw e
+      await new Promise((r) => window.setTimeout(r, EDIT_DIFF_RETRY_DELAY_MS * (attempt + 1)))
+    }
+  }
+}
+
+/**
+ * 只比较行级区间，不看行内字符级差异：后者由面板自己画，不必惊动 Monaco 的差异视图。
+ * 两份结果的区间一一对应就是"结构没变"——整行底色、两侧对齐都不会有变化。
+ */
+const sameLineStructure = (a, b) => {
+  const before = a?.mappings
+  const after = b?.mappings
+  if (!before || !after || before.length !== after.length) return false
+  for (let i = 0; i < before.length; i += 1) {
+    const was = before[i]?.lineRangeMapping
+    const now = after[i]?.lineRangeMapping
+    if (!was || !now) return false
+    if (was.original.startLineNumber !== now.original.startLineNumber) return false
+    if (was.original.endLineNumberExclusive !== now.original.endLineNumberExclusive) return false
+    if (was.modified.startLineNumber !== now.modified.startLineNumber) return false
+    if (was.modified.endLineNumberExclusive !== now.modified.endLineNumberExclusive) return false
+  }
+  return true
+}
+
+/** 结构指纹：和 sameLineStructure 是同一套口径，一份给算出来的结果用，一份给 ViewModel 的状态用。 */
+const lineStructureKey = (result) => (result?.changes || [])
+  .map((c) => `${c.original.startLineNumber}-${c.original.endLineNumberExclusive}/${c.modified.startLineNumber}-${c.modified.endLineNumberExclusive}`)
+  .join('|')
+
+const createLiveDiffSync = (models, vm, base, setup) => {
+  const listeners = new Set()
+  let firstRun = true
+  let lastKey = null
+  let inflight = 0
+  let pending = false
+  let timer = 0
+  let disposed = false
+  let inkEnabled = setup?.ink !== false
+  let restoreDiffSet = null
+  const inkIds = { left: [], right: [] }
+
+  /** 装成 Monaco 的 diffAlgorithm：计算转回它原来那个 provider，同一个 worker、同一份结果缓存。 */
+  const provider = {
+    onDidChange: (listener) => {
+      listeners.add(listener)
+      return { dispose: () => listeners.delete(listener) }
+    },
+    computeDiff: (original, modified, options, token) => computeDiffWithRetry(base, original, modified, options, token),
+  }
+
+  /**
+   * 交给 worker 的选项必须和 ViewModel 自己拼的那份一样：provider 的结果缓存拿它做键，
+   * 键一致时 Monaco 收到通知后那次重算就是命中缓存，几乎不花时间。
+   */
+  const readOptions = () => ({
+    ignoreTrimWhitespace: vm._options.ignoreTrimWhitespace.get(),
+    maxComputationTimeMs: vm._options.maxComputationTimeMs.get(),
+    computeMoves: vm._options.showMoves.get(),
+  })
+
+  /**
+   * 行内高亮装饰。规则照只读视图来：纯增/纯删的整行没有行内高亮（那边只有 16% 的整行底色），
+   * 行数不等的改动块算不成配对、也不给高亮。空区间不画，不然会多出一条零宽的色块。
+   */
+  const inkDecorations = (result) => {
+    const out = { left: [], right: [] }
+    for (const change of result?.changes || []) {
+      const before = change.original
+      const after = change.modified
+      if (before.isEmpty || after.isEmpty) continue
+      if (before.lineCount !== after.lineCount || before.lineCount > EDIT_INK_PAIR_LIMIT) continue
+      for (const inner of change.innerChanges || []) {
+        if (!inner.originalRange.isEmpty?.()) {
+          out.left.push({ range: inner.originalRange, options: { description: EDIT_INK_CLASS.del, inlineClassName: EDIT_INK_CLASS.del } })
+        }
+        if (!inner.modifiedRange.isEmpty?.()) {
+          out.right.push({ range: inner.modifiedRange, options: { description: EDIT_INK_CLASS.add, inlineClassName: EDIT_INK_CLASS.add } })
+        }
+      }
+    }
+    return out
+  }
+
+  const clearInk = () => {
+    for (const side of ['left', 'right']) {
+      if (!models[side] || !inkIds[side].length) continue
+      try {
+        inkIds[side] = models[side].deltaDecorations(inkIds[side], [])
+      } catch {
+        // 模型已经跟着编辑器销毁了
+      }
+    }
+  }
+
+  const paintInk = (result) => {
+    if (!inkEnabled) return
+    const decos = inkDecorations(result)
+    inkIds.left = models.left.deltaDecorations(inkIds.left, decos.left)
+    inkIds.right = models.right.deltaDecorations(inkIds.right, decos.right)
+  }
+
+  const notify = () => {
+    for (const listener of Array.from(listeners)) {
+      try {
+        listener()
+      } catch {
+        // Monaco 自己的订阅，出错也轮不到我们接管
+      }
+    }
+  }
+
+  /** 挪出当前事件循环再算：内容变更处理途中去动 Model 状态容易撞上 Monaco 自己的更新 */
+  const schedule = () => {
+    if (timer || disposed) return
+    timer = window.setTimeout(() => {
+      timer = 0
+      run()
+    }, 0)
+  }
+
+  const run = async () => {
+    if (disposed) return
+    inflight += 1
+    try {
+      // provider 只读 token.isCancellationRequested，这里不需要真的取消
+      const token = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => {} }) }
+      const result = await computeDiffWithRetry(base, models.left, models.right, readOptions(), token)
+      // 这一趟算的时候又敲过键：丢掉这个过期结果，等下一趟
+      if (disposed || pending) return
+      paintInk(result)
+      const key = lineStructureKey(result)
+      const changed = key !== lastKey
+      lastKey = key
+      // 首轮不通知：Monaco 建编辑器时已经按同一份内容算过一遍，结构是一样的
+      if (changed && !firstRun) notify()
+      firstRun = false
+    } catch (e) {
+      logger.warn('[Diff] live diff compute failed', { error: String(e?.message || e || '') })
+    } finally {
+      inflight -= 1
+      if (pending && inflight === 0) {
+        pending = false
+        schedule()
+      }
+    }
+  }
+
+  return {
+    provider,
+    /** 内容变了：没有计算在飞就立刻算，有的话记下来等它回来 */
+    contentChanged() {
+      if (disposed) return
+      if (inflight > 0) {
+        pending = true
+        return
+      }
+      schedule()
+    },
+    seed() {
+      schedule()
+    },
+    /**
+     * 并排视图才由面板自己画行内高亮。统一视图里"删掉的那几行"是画在 view zone 里、拿原文本
+     * 重新渲染的，模型上的装饰落不到那段 DOM 上，所以那种视图把行内高亮还给 Monaco。
+     */
+    setInkEnabled(enabled) {
+      if (disposed || inkEnabled === enabled) return
+      inkEnabled = enabled
+      if (!enabled) {
+        clearInk()
+        // 统一视图的行内标记读的是 Monaco 自己那份 diff 结果，而并排期间只改行内、不改行级结构
+        // 的那些结果都被吞掉了：这里让它重算一次，切过去才不会是旧标记。
+        notify()
+        return
+      }
+      if (!inflight) schedule()
+    },
+    /**
+     * 接管 ViewModel 的 diff 观察值：行级结构没变就把这次通知吞掉。
+     *
+     * Monaco 每 200ms 自己还会重算一次（原本的节奏），结果的行区间明明没变，却照样会让
+     * view zone 和整屏装饰整批重建——就是编辑时看到的"整片区域在闪"。并排视图下行内高亮
+     * 已经由 .dp-edit-ink-* 自己画了，所以这里吞掉不会有任何视觉损失。
+     *
+     * 只在自家画行内高亮（并排视图）时吞：统一视图的行内标记还是 Monaco 拿这份结果画的
+     * （删掉的行在 view zone 里重新渲染，模型装饰落不进去），吞了就会停在旧标记上。
+     */
+    takeOverDiffValue() {
+      const diffValue = vm._diff
+      const originalSet = diffValue.set
+      diffValue.set = function patchedSet(value, tx, change) {
+        if (inkEnabled && change === undefined && sameLineStructure(diffValue.get(), value)) return
+        return originalSet.call(diffValue, value, tx, change)
+      }
+      restoreDiffSet = () => {
+        diffValue.set = originalSet
+      }
+    },
+    dispose() {
+      disposed = true
+      if (timer) window.clearTimeout(timer)
+      timer = 0
+      restoreDiffSet?.()
+      restoreDiffSet = null
+      listeners.clear()
+      clearInk()
+    },
+  }
+}
+
+/**
+ * 把实时同步装进 diff 编辑器；返回 null 表示这次没装上，行为退回 Monaco 原本的 200ms 节奏。
+ *
+ * 只能从内部装配：Monaco 0.52 把 diffAlgorithm 按字符串枚举校验（editorOptions.js 的 stringSet
+ * 对非字符串直接退回原值），自定义 provider 传不进去，所以这里改的是 DiffEditorOptions 内部
+ * 那个 observable。写进去之后 Monaco 自己的响应式链路会把 diffAlgorithm 重新求值、重建 diff
+ * provider，新 provider 的 computeDiff 再转回原来那个（同一个 worker、同一份缓存）。
+ * Monaco 哪天改了内部结构，这里就是拿不到字段然后安静退回。
+ */
+const installLiveDiffSync = (editor, models, setup) => {
+  try {
+    const vm = editor?._diffModel?.get?.()
+    const options = vm?._options?._options
+    const base = vm?._diffProvider?.get?.()?.diffProvider
+    if (typeof options?.get !== 'function' || typeof options?.set !== 'function') return null
+    if (typeof base?.computeDiff !== 'function') return null
+    const sync = createLiveDiffSync(models, vm, base, setup)
+    options.set({ ...options.get(), diffAlgorithm: sync.provider }, undefined, { changedOptions: { diffAlgorithm: sync.provider } })
+    sync.takeOverDiffValue()
+    sync.seed()
+    return sync
+  } catch (e) {
+    logger.warn('[Diff] live diff sync unavailable', { error: String(e?.message || e || '') })
+    return null
+  }
 }
 
 const disposeEditor = () => {
@@ -1590,6 +2089,11 @@ const disposeEditor = () => {
     try { d.dispose() } catch { /* 已随编辑器一起销毁 */ }
   }
   editChangeDisposables = []
+  if (liveDiffSync) {
+    try { liveDiffSync.dispose() } catch { /* ignore */ }
+    liveDiffSync = null
+  }
+  editHostRef.value?.classList.remove('is-live-ink')
   if (diffEditor) {
     try { diffEditor.setModel(null) } catch { /* ignore */ }
     try { diffEditor.dispose() } catch { /* ignore */ }
@@ -1603,6 +2107,14 @@ const disposeEditor = () => {
   }
   if (editHostRef.value) editHostRef.value.innerHTML = ''
 }
+
+/**
+ * 等到浏览器真的画完一帧。连等两次 rAF 是有意的：第一帧交给布局/样式，第二帧交给合成，
+ * 之后再去跑那段同步的差异计算，遮罩上的新文案才来得及上屏。
+ */
+const paintFrame = () => new Promise((resolve) => {
+  requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+})
 
 const mountEditor = async () => {
   const host = editHostRef.value
@@ -1629,10 +2141,18 @@ const mountEditor = async () => {
     // 两侧都要能改：左侧是"原版"但用户同样要修它。
     originalEditable: true,
     readOnly: false,
-    // 只为看差异的东西一律关掉，否则行号栏、折叠加号、行高亮都比只读视图多出一层装饰。
+    // 折叠加号、概览标尺这些只读视图没有的东西一律关掉，否则同一个文件在两种模式里像两份东西。
     renderSideBySide: viewMode.value === 'split',
     // Monaco 0.52 只有 legacy/advanced，Patience/Myers/LCS 是 Rust 侧只读对比的算法。
     diffAlgorithm: 'advanced',
+    // 算差异是同步跑在主线程上的（首次装载一次，之后每敲完一段还有一次）。默认 5 秒意味着
+    // 大文件能把界面冻满 5 秒，红绿就是在冻完之后才蹦出来的。收到 1 秒：超时只让配对变粗，
+    // 不会算错，卡顿上限却降下来了。
+    maxComputationTime: EDIT_DIFF_MAX_COMPUTATION_MS,
+    // 面板窄于 900px 时 Monaco 会自作主张切成 unified，把工具栏里选的"并排"顶掉。
+    useInlineViewWhenSpaceIsLimited: false,
+    // 只读视图默认"空白差异也算差异"，这里必须跟着走，否则同一对文件两种模式结论不同。
+    ignoreTrimWhitespace: opts.ignoreWhitespace,
     automaticLayout: true,
     // 行高/字号/字体都跟只读视图同一份来源，两边的行才对得齐。
     lineHeight: ROW_H,
@@ -1643,7 +2163,9 @@ const mountEditor = async () => {
     lineDecorationsWidth: 8,
     glyphMargin: false,
     folding: false,
-    renderLineHighlight: 'none',
+    // 当前行高亮要留着：跟只读视图一样，光标落在哪一行就亮哪一行（配色见 defineDiffEditTheme）。
+    // 取 all 而不是 line：行号栏那一截也要跟着亮，才和只读视图那边整行高亮的样子对得上。
+    renderLineHighlight: 'all',
     renderIndicators: false,
     renderMarginRevertIcon: false,
     overviewRulerLanes: 0,
@@ -1663,7 +2185,18 @@ const mountEditor = async () => {
     // 只读视图的行是紧贴着的，这里也把留白收掉
     padding: { top: 0, bottom: 0 },
   })
+
+  // setModel 这一步才会真正算差异，而且是同步阻塞的。先让"正在计算差异…"这一帧上屏，
+  // 用户看到的是有说明的等待，而不是界面莫名僵住。
+  editPhase.value = 'diff'
+  await paintFrame()
   diffEditor.setModel({ original: editModels.left, modified: editModels.right })
+
+  // 首屏那次差异算完就接管：行内高亮和行级结构都改由面板自己盯着，不再等 Monaco 那 200ms。
+  // 装上了才挂 is-live-ink：那条 CSS 会遮掉 Monaco 的 char-* 行内高亮，万一没装上得让它留着。
+  const inkSideBySide = viewMode.value === 'split'
+  liveDiffSync = installLiveDiffSync(diffEditor, editModels, { ink: inkSideBySide })
+  if (liveDiffSync) editHostRef.value?.classList.toggle('is-live-ink', inkSideBySide)
 
   editBaselines.left = editModels.left.getAlternativeVersionId()
   editBaselines.right = editModels.right.getAlternativeVersionId()
@@ -1673,6 +2206,7 @@ const mountEditor = async () => {
     const model = editModels[side]
     editChangeDisposables.push(model.onDidChangeContent(() => {
       dirty[side] = model.getAlternativeVersionId() !== editBaselines[side]
+      liveDiffSync?.contentChanged()
     }))
   }
 }
@@ -1680,6 +2214,7 @@ const mountEditor = async () => {
 const enterEditMode = async () => {
   if (editMode.value || editLoading.value || !canEditDiff.value) return
   error.value = ''
+  editPhase.value = 'load'
   editLoading.value = true
   try {
     const paths = editPaths.value
@@ -1730,7 +2265,9 @@ const exitEditMode = async ({ refresh = false } = {}) => {
   observeBody()
   syncViewport()
   measureCharWidth()
-  if (refresh && wasSaved) {
+  // 存过盘、或者改过对比选项，只读视图都得重算；什么都没发生就别白跑一趟。
+  if (refresh && (wasSaved || optsStale)) {
+    optsStale = false
     const paths = editPaths.value
     if (paths.left && paths.right) {
       try {
@@ -1806,6 +2343,27 @@ const saveSide = async (side, { force = false } = {}) => {
   }
 }
 
+const savingAny = computed(() => editSaving.left || editSaving.right)
+
+/** 保存按钮的说明：写清这次会存哪几侧；没得存时也说明白，免得看成按钮坏了。 */
+const saveHint = computed(() => {
+  if (savingAny.value) return '正在保存…'
+  const sides = [dirty.left ? '左' : '', dirty.right ? '右' : ''].filter(Boolean)
+  return sides.length ? `把${sides.join('、')}侧的改动写回原文件 · Ctrl+S` : '两侧都没有未保存的改动'
+})
+
+/** 工具栏只留一颗保存按钮：把当前脏的那几侧写回去。 */
+const saveDirty = async () => {
+  if (!editMode.value || savingAny.value) return
+  const sides = ['left', 'right'].filter((side) => dirty[side])
+  if (!sides.length) {
+    message.info('两侧都没有未保存的改动')
+    return
+  }
+  // 串行：两侧都可能弹"要不要覆盖"确认，一起发会同时叠出两个弹窗
+  for (const side of sides) await saveSide(side)
+}
+
 /** Ctrl+S 存哪一侧：光标在哪侧就存哪侧，都没焦点就存唯一脏的那侧。 */
 const focusedSide = () => {
   if (diffEditor) {
@@ -1828,11 +2386,8 @@ const onEditKeydown = (ev) => {
     void saveSide(side)
     return
   }
-  // 焦点不在编辑器上（刚点过工具栏之类）而两侧都脏：那就是想全存。
-  if (dirty.left && dirty.right) {
-    void saveSide('left')
-    void saveSide('right')
-  }
+  // 焦点不在编辑器上（刚点过工具栏之类）：那就是想全存，和工具栏那颗按钮走同一条路。
+  if (anyDirty.value) void saveDirty()
 }
 
 /** 关窗也是离开编辑的一条路，同样要拦一下。
@@ -1958,7 +2513,11 @@ watch(() => store.requestSeq, async (seq) => {
 watch(viewMode, () => {
   // 编辑模式下这个开关直接落到 Monaco 的并排/统一上，不用重建结果。
   if (editMode.value) {
-    diffEditor?.updateOptions({ renderSideBySide: viewMode.value === 'split' })
+    const split = viewMode.value === 'split'
+    diffEditor?.updateOptions({ renderSideBySide: split })
+    // 行内高亮由面板自己画，只在并排视图成立；换视图时两边一起切。
+    liveDiffSync?.setInkEnabled(split)
+    editHostRef.value?.classList.toggle('is-live-ink', split && !!liveDiffSync)
     return
   }
   if (!fileResult.value) return
@@ -1994,6 +2553,18 @@ watch(dirView, async (v) => {
   resetScroll()
 })
 
+/**
+ * 把编辑模式用得上的选项同步给编辑器。只有"忽略空白"有对应项（Monaco 的 ignoreTrimWhitespace），
+ * 其余几项是 Rust 侧只读对比的参数，编辑器里没有等价开关。改完让实时同步重算一次，红绿立刻跟上。
+ */
+const applyEditorOptions = () => {
+  if (!editMode.value || !diffEditor) return
+  try {
+    diffEditor.updateOptions({ ignoreTrimWhitespace: opts.ignoreWhitespace })
+  } catch { /* 编辑器可能正在销毁 */ }
+  liveDiffSync?.contentChanged()
+}
+
 // 文件选项改了就重算（目录选项太贵，必须手动点"对比"）。
 watch(
   () => [
@@ -2002,6 +2573,13 @@ watch(
   ].join('|'),
   () => {
     if (!fileResult.value || busy.value) return
+    // 编辑模式下不能走 run()：它会经过 ensureEditSafe 把人踢出编辑。这里只把能同步的同步过去，
+    // 记一笔"选项变了"，退出编辑时再按新选项重算只读结果。
+    if (editMode.value) {
+      optsStale = true
+      applyEditorOptions()
+      return
+    }
     window.clearTimeout(optTimer)
     optTimer = window.setTimeout(() => { void run() }, 260)
   },
@@ -2057,6 +2635,11 @@ watch(() => props.visible, (v) => {
 .dp-row-status,
 .dp-row-filter {
   border-top: 1px solid color-mix(in srgb, var(--guaxi-border, #3a3d41) 60%, transparent);
+  font-size: 12.5px;
+}
+
+/* 主行原来不定字号，文本会按继承下来的主界面字号画，比选项行、状态行都大一号。 */
+.dp-row-main {
   font-size: 12.5px;
 }
 
@@ -2162,6 +2745,8 @@ watch(() => props.visible, (v) => {
   white-space: nowrap;
   direction: rtl;
   text-align: left;
+  /* 路径用代码字体：和状态行里的 .dp-status-rel 一套，等宽下更容易比对两侧 */
+  font-family: var(--dp-code-font);
 }
 
 .dp-actions {
@@ -2175,12 +2760,33 @@ watch(() => props.visible, (v) => {
   color: var(--guaxi-accent, #4c8bf5);
 }
 
+/* 动作一律图标化：方形、等宽高、悬停才出底色，说明交给 tooltip。
+   按钮内边距是 naive 用 --n-padding 下的，改这个变量比覆盖 .n-button 的规则稳。 */
+.dp-icon-btn {
+  --n-padding: 0 5px;
+  height: 26px;
+  min-width: 26px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.dp-icon-btn.is-run {
+  color: var(--guaxi-accent, #4c8bf5);
+}
+
+.dp-icon-btn.is-stop {
+  color: color-mix(in srgb, #f59e0b 84%, var(--guaxi-text-primary, #d4d4d4));
+}
+
 /* 选项按"组"排：一个图标 + 一个小标题 + 若干控件，和主界面工具栏的密度一致。 */
 .dp-group {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 1px 0;
+  /* 极淡的底色把每组圈成一块，行里控件多起来才看得出边界 */
+  padding: 3px 8px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--guaxi-text-secondary, #9da5b4) 9%, transparent);
 }
 
 .dp-group-icon {
@@ -2193,12 +2799,65 @@ watch(() => props.visible, (v) => {
   flex: 0 0 auto;
   color: var(--guaxi-text-secondary, #9da5b4);
   font-size: 11px;
+  font-weight: 600;
   letter-spacing: 0.02em;
 }
 
-.dp-group :deep(.n-checkbox__label),
-.dp-group :deep(.n-radio-button__label) {
+/*
+ * 选项行里的控件统一到 12px。naive 各控件默认字号不一样（单选框 14、输入框 12），
+ * 而组标签只有 11px，混着排就会出现"选项比标题还大"。
+ * 单选框的文字层类名是 .n-radio__label —— 写成 .n-radio-button__label 是不存在的，之前那条规则一直没生效。
+ */
+.dp-row-options :deep(.n-radio__label),
+.dp-row-options :deep(.n-checkbox__label),
+.dp-row-options :deep(.n-base-selection),
+.dp-row-options :deep(.n-input__input-el) {
   font-size: 12px;
+}
+
+/* 提示里的第二行：说明这一项在另一套模式下不生效，比正文淡一档 */
+.dp-tip-note {
+  margin-top: 4px;
+  color: var(--guaxi-text-secondary, #9da5b4);
+  font-size: 11.5px;
+}
+
+/* 算法下拉：收起时只显示算法名，宽度让工具栏不再被三个单选按钮撑开 */
+.dp-select-wrap {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.dp-algo-select {
+  width: 116px;
+}
+
+/*
+ * 下拉的收起文案与菜单项都是 naive 渲染的（菜单还可能被 teleport 到 body，
+ * 那样就落不到本组件的 scoped 作用域里），所以这两条用全局选择器，靠 dp-algo-* 圈定范围。
+ * 字体变量给两层兜底：--dp-code-font 定义在面板上，teleport 出去就取不到了。
+ */
+:global(.dp-algo-name),
+:global(.dp-algo-opt__name) {
+  font-family: var(--dp-code-font, var(--guaxi-editor-font-family, monospace));
+  font-size: 12px;
+}
+
+:global(.dp-algo-opt) {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+:global(.dp-algo-opt__hint) {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--guaxi-text-secondary, #9da5b4);
+  font-size: 11px;
 }
 
 .dp-help-btn {
@@ -2262,6 +2921,8 @@ watch(() => props.visible, (v) => {
   position: relative;
   font-family: var(--dp-code-font);
   font-size: var(--dp-code-size);
+  /* 上下键导航要能聚焦，但焦点框不能有：编辑器里也没有，当前行那条高亮就是焦点提示 */
+  outline: none;
 }
 
 /* 并排视图：滚动交给两个面板自己，外层不再滚 */
@@ -2356,6 +3017,18 @@ watch(() => props.visible, (v) => {
 .dp-line.is-hunk {
   background: color-mix(in srgb, var(--guaxi-accent, #4c8bf5) 12%, transparent);
   color: var(--guaxi-text-secondary, #9da5b4);
+}
+
+/* 当前行：底色跟编辑模式 Monaco 的 editor.lineHighlightBackground 是同一份（次要色 10%），
+   左边再压一条强调色短线。点一下或者用上下键都会挪到这里，两个模式里的位置也是同一条。 */
+.dp-line.is-current {
+  background: color-mix(in srgb, var(--guaxi-text-secondary, #9da5b4) 10%, transparent);
+  box-shadow: inset 2px 0 0 var(--guaxi-accent, #4c8bf5);
+}
+
+/* 悬停只做提示：这一行点了就会变成当前行。hunk 头和已经是当前行的行不用再提示。 */
+.dp-line:not(.is-hunk):not(.is-current):hover {
+  background: color-mix(in srgb, var(--guaxi-text-secondary, #9da5b4) 5%, transparent);
 }
 
 .dp-hunk {
@@ -2523,19 +3196,24 @@ watch(() => props.visible, (v) => {
 
 /* ───── 编辑模式 ───── */
 
-/* 只读/编辑开关：和 .dp-kind 同一套观感，放在主行最右边那组动作前面 */
+/* 只读/编辑开关：和 .dp-kind 同一套观感，图标化之后并进主行最右边那组动作里 */
 .dp-edit-wrap {
   display: inline-flex;
   flex: 0 0 auto;
 }
 
+/* 按钮里只剩一个 14px 图标，用 inline-flex 把它在 28px 高的分段按钮里摆正 */
 .dp-edit-toggle :deep(.n-radio-button) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-size: 11px;
-  padding: 0 8px;
+  padding: 0 7px;
 }
 
-.dp-edit-toggle :deep(.n-radio-button--checked) {
-  font-weight: 600;
+/* svg 默认坐在基线上，按钮组那一行 line-height 是整段高度，会把它顶偏；转成块级再交给 flex 居中 */
+.dp-edit-toggle :deep(.n-radio-button svg) {
+  display: block;
 }
 
 /* Monaco 容器：撑满 .dp-body 原来的位置，横向纵向都由它自己滚 */
@@ -2564,25 +3242,84 @@ watch(() => props.visible, (v) => {
   text-align: right;
 }
 
+/* 当前行左边那条强调色短线：位置和粗细对齐只读视图的 .dp-line.is-current。
+   底色由主题的 editor.lineHighlightBackground 给，这里只补左边那一条。
+   必须挂在 .current-line-margin（行号栏那层，起点就是编辑器最左边）上；
+   代码区那层 .current-line 从行号栏之后开始，加在上面会变成代码前面多一条。 */
+.dp-edit-host :deep(.monaco-editor .margin-view-overlays .current-line-margin) {
+  border-left: 2px solid var(--guaxi-accent, #4c8bf5);
+}
+
+/* 行内高亮由面板自己画：取值就是只读视图的 .dp-ink —— 40% 叠在 16% 的整行底色上，圆角 2px。
+   下面那条只遮 background-color，因为 Monaco 给"纯增/纯删"的整行还会额外叠一层整行的 40%
+   （diffWholeLine*Decoration），只读视图里那种行只有 16% 的底色，两边一对比深了三倍；
+   diff-range-empty 那根 3px 竖条走的是 border-left，留着当插入点标记。
+   .is-live-ink 只在实时同步装上、且当前是并排视图时才挂：没装上就让 Monaco 原样显示，
+   统一视图里"删掉的那几行"在 view zone 里渲染，模型装饰落不进去，也交回 Monaco。 */
+.dp-edit-host.is-live-ink :deep(.monaco-editor .char-insert),
+.dp-edit-host.is-live-ink :deep(.monaco-editor .char-delete) {
+  background-color: transparent;
+}
+
+.dp-edit-host :deep(.dp-edit-ink-add) {
+  background: color-mix(in srgb, #4ade80 40%, transparent);
+  border-radius: 2px;
+}
+
+.dp-edit-host :deep(.dp-edit-ink-del) {
+  background: color-mix(in srgb, #f87171 40%, transparent);
+  border-radius: 2px;
+}
+
 .dp-placeholder.is-overlay {
   position: absolute;
   inset: 0;
   background: color-mix(in srgb, var(--guaxi-panel-bg, #1e1e1e) 88%, transparent);
 }
 
-/* Monaco 自带的 diff 边线太扎眼，这里跟面板的边框色对齐 */
-.dp-edit-body :deep(.monaco-diff-editor .diagonal-fill) {
-  opacity: 0.4;
+/* 两侧之间那道缝对齐只读视图的 .dp-divider：默认的 4px 且只在悬停时显形，改成 6px 常显，
+   鼠标按上去再变成强调色。宽高走 Monaco 自己的变量，比直接改 width 稳。 */
+.dp-edit-host :deep(.monaco-sash.vertical) {
+  --vscode-sash-size: 6px;
+  --vscode-sash-hover-size: 6px;
+}
+
+.dp-edit-host :deep(.monaco-sash.vertical:before) {
+  background: color-mix(in srgb, var(--guaxi-border, #3a3d41) 70%, transparent);
+}
+
+.dp-edit-host :deep(.monaco-sash.vertical.hover:before),
+.dp-edit-host :deep(.monaco-sash.vertical.active:before) {
+  background: var(--guaxi-accent, #4c8bf5);
 }
 
 /* ───── 算法说明 ───── */
+/* 说明弹窗跟编辑区同一套字：同一族等宽字体、同一字号（--dp-code-font / --dp-code-size）。
+   弹窗是盖在代码上的，字体不跟着走就像贴上去的另一套界面。层级只留标题比正文大一档。 */
+.dp-help-card {
+  /* 弹窗是 teleport 到 body 的，.guaxi-diff-panel 上那两条 --dp-code-* 传不进来，这里照抄一份。
+     下面这两行必须和 .guaxi-diff-panel 里的声明保持一致，改一处就得改两处。 */
+  --dp-code-font: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New');
+  --dp-code-size: 16px;
+}
+
 .dp-help-card :deep(.n-card-header__main) {
-  font-size: 15px;
+  font-family: var(--dp-code-font);
+  font-size: calc(var(--dp-code-size) + 1px);
+  font-weight: 600;
+}
+
+.dp-help-card :deep(.n-card__content) {
+  font-family: var(--dp-code-font);
+  font-size: var(--dp-code-size);
+  /* 字号跟上来以后弹窗高了一截：窗口被拉矮时让正文自己滚，别把标题顶出可视区 */
+  max-height: calc(100vh - 200px);
+  overflow: auto;
 }
 
 .dp-help-lead {
   margin: 0 0 12px;
-  font-size: 12.5px;
+  font-size: var(--dp-code-size);
   line-height: 1.75;
   color: var(--guaxi-text-secondary, #9da5b4);
 }
@@ -2606,9 +3343,16 @@ watch(() => props.visible, (v) => {
   margin-bottom: 6px;
 }
 
+/* 头里那两种控件也是同一族字：字号比正文小一档，别再混进别的字体族 */
+.dp-help-head :deep(.n-tag),
+.dp-help-head :deep(.n-button) {
+  font-family: var(--dp-code-font);
+  font-size: calc(var(--dp-code-size) - 3px);
+}
+
 .dp-help-name {
   font-family: var(--dp-code-font);
-  font-size: 14px;
+  font-size: var(--dp-code-size);
   font-weight: 600;
   color: var(--guaxi-text-primary, #d4d4d4);
 }
@@ -2616,7 +3360,7 @@ watch(() => props.visible, (v) => {
 .dp-help-brief {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: 12px;
+  font-size: calc(var(--dp-code-size) - 0.5px);
   color: var(--guaxi-text-secondary, #9da5b4);
 }
 
@@ -2625,13 +3369,13 @@ watch(() => props.visible, (v) => {
   grid-template-columns: 40px 1fr;
   gap: 4px 10px;
   margin: 0;
-  font-size: 12.5px;
+  font-size: var(--dp-code-size);
   line-height: 1.7;
 }
 
 .dp-help-body dt {
   color: var(--guaxi-text-secondary, #9da5b4);
-  font-size: 11.5px;
+  font-size: calc(var(--dp-code-size) - 1px);
 }
 
 .dp-help-body dd {
