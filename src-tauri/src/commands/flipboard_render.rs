@@ -17,8 +17,17 @@ use once_cell::sync::Lazy;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+use std::collections::HashMap;
+use std::time::Instant;
 use tokio::sync::{Mutex, OnceCell, Semaphore};
 use tracing::{info, warn};
+
+/// 每 host 的 Cookie 头缓存（登录态复用）。key=profile(host)，value=(cookie 头, 取回时刻)。
+/// 从 Chrome 持久化 profile 里用 CDP 读出，避免每次抓取都起浏览器。
+static COOKIE_CACHE: Lazy<std::sync::Mutex<HashMap<String, (String, Instant)>>> =
+    Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
+/// Cookie 缓存有效期：登录态变化不频繁，10 分钟内复用。
+const COOKIE_TTL: Duration = Duration::from_secs(600);
 
 /// 渲染结果。`mode`: "http" | "chrome"。
 #[derive(Debug, Clone)]
@@ -773,6 +782,8 @@ async fn reset_shared_browser() {
 /// 可见实例并清空共享句柄——下次抓取会以登录后的最新 cookie 重新启动。这正是 MediaCrawler
 /// “持久化登录上下文 + 复用真实页面”的做法。
 pub async fn open_login_window(profile: &str, login_url: &str) -> Result<(), String> {
+    // 清掉该 profile 可能存在的"未登录空 cookie"缓存，登录后下次抓取会重新探测。
+    invalidate_cookie_cache(profile);
     // 释放共享无头实例对该 profile 的占用（Chrome 不允许两实例共用同一 user_data_dir）。
     reset_shared_browser().await;
 
@@ -804,6 +815,81 @@ pub async fn open_login_window(profile: &str, login_url: &str) -> Result<(), Str
     );
     // 立即返回：登录由用户在该窗口内自行完成，cookie 落盘后下次抓取自动复用。
     Ok(())
+}
+
+/// 取某 URL 对应 profile 的 Cookie 请求头（登录态复用）。
+///
+/// 用途：`fetch_zhihu_fallback` 这类**直连 HTTP API** 的列表抓取原本不带任何 cookie，
+/// 登录墙站即使用户已登录也拿不到内容。这里从该站持久化 profile 的 Chrome 里用 CDP
+/// (`page.get_cookies`) 读出 cookie，拼成 `name=value; ...` 头，注入 reqwest 请求。
+///
+/// - 结果按 profile 缓存 [`COOKIE_TTL`]，避免每次抓取都起浏览器。
+/// - profile 未登录 / 无 cookie / 浏览器不可用 → 返回 `None`（调用方照常无 cookie 请求）。
+/// - 与无头抓取共用同一 `user_data_dir`，因此读到的正是登录后落盘的 cookie。
+pub async fn cookie_header_for_url(url: &str, profile: &str) -> Option<String> {
+    let host = url::Url::parse(url).ok()?.host_str()?.to_string();
+
+    // 命中未过期缓存直接返回。
+    {
+        let guard = COOKIE_CACHE.lock().unwrap();
+        if let Some((header, at)) = guard.get(profile) {
+            if at.elapsed() < COOKIE_TTL {
+                return if header.is_empty() { None } else { Some(header.clone()) };
+            }
+        }
+    }
+
+    if headless_disabled() {
+        return None;
+    }
+    let _permit = RENDER_SEMAPHORE.acquire().await.ok()?;
+
+    // 复用共享浏览器（该 profile），开一页导航到目标域后读 cookie。
+    // get_cookies() 返回与当前标签页 URL 匹配的 cookie，故必须先 goto。
+    let header = (async {
+        let cell = shared_browser(profile).await.ok()?;
+        let guard = cell.lock().await;
+        let handle = guard.as_ref()?;
+        let page = handle.browser.new_page("about:blank").await.ok()?;
+        let _ = tokio::time::timeout(Duration::from_secs(15), async {
+            let _ = page.goto(url).await;
+            let _ = page.wait_for_navigation().await;
+        })
+        .await;
+        let cookies = page.get_cookies().await.ok()?;
+        let _ = page.close().await;
+
+        // 只保留该 host（含父域）的 cookie，拼成请求头。
+        let parts: Vec<String> = cookies
+            .into_iter()
+            .filter(|c| {
+                let d = c.domain.trim_start_matches('.').to_lowercase();
+                host.to_lowercase().ends_with(&d) || d.ends_with(&host.to_lowercase())
+            })
+            .map(|c| format!("{}={}", c.name, c.value))
+            .collect();
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join("; "))
+        }
+    })
+    .await;
+
+    // 写缓存（空串也缓存，避免反复起浏览器探测未登录的站）。
+    {
+        let mut guard = COOKIE_CACHE.lock().unwrap();
+        guard.insert(
+            profile.to_string(),
+            (header.clone().unwrap_or_default(), Instant::now()),
+        );
+    }
+    header
+}
+
+/// 手动清除某 profile 的 cookie 缓存（登录完成后调用，让下次抓取立即用上新 cookie）。
+pub fn invalidate_cookie_cache(profile: &str) {
+    COOKIE_CACHE.lock().unwrap().remove(profile);
 }
 
 /// 主动确保 Chromium 已就绪（可被前端"准备渲染引擎"按钮触发下载）。

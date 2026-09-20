@@ -536,6 +536,52 @@ async fn preheat_thin_articles(list: &mut [Article], feed: &FeedSource, max: usi
     }
 }
 
+/// 首屏预热：对「即将展示」的一批文章里内容薄的前 max 篇做深解析(hydrate)并就地替换、
+/// 回写缓存。与 [`preheat_thin_articles`] 的差异：跨源合并后的展示列表已按相关性/时间排好序，
+/// 这里直接按展示顺序取前 max 篇薄卡片，用受限并发一起抓，让用户一进列表首屏就带图带摘要。
+async fn preheat_display_articles(list: &mut [Article], max: usize, concurrency: usize) {
+    if max == 0 || list.is_empty() {
+        return;
+    }
+    let candidates: Vec<usize> = list
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| {
+            a.clean_content_html.trim().is_empty() && a.content.trim().chars().count() < 200
+        })
+        .map(|(i, _)| i)
+        .take(max)
+        .collect();
+    if candidates.is_empty() {
+        return;
+    }
+
+    let sem = std::sync::Arc::new(Semaphore::new(concurrency.max(1)));
+    let mut handles = Vec::with_capacity(candidates.len());
+    for &i in &candidates {
+        let article = list[i].clone();
+        let sem = sem.clone();
+        handles.push(tokio::spawn(async move {
+            let _permit = sem.acquire_owned().await.ok()?;
+            match hydrate_article_readable_content(&article).await {
+                Ok(enriched) => {
+                    let _ = persist_hydrated_article(&enriched);
+                    Some((i, enriched))
+                }
+                Err(e) => {
+                    warn!("flipboard: display preheat hydrate failed for {}: {}", article.url, e);
+                    None
+                }
+            }
+        }));
+    }
+    for handle in handles {
+        if let Ok(Some((i, enriched))) = handle.await {
+            list[i] = enriched;
+        }
+    }
+}
+
 fn cleanup_old_cached_articles_if_due(now: i64) -> Result<(), String> {
     {
         let guard = LAST_CACHE_CLEANUP_AT
@@ -2654,6 +2700,22 @@ fn apply_relevance(mut articles: Vec<Article>, feed: &FeedSource) -> Vec<Article
     articles
 }
 
+/// 全局黑名单：命中即丢弃。复用 cognition 画像的"不要提醒我"静音词
+/// (`profile::is_muted`)，再叠加一组通用的标题党/广告噪声特征。
+/// 目的：不管来自哪个源，垃圾资讯统一在展示前被拦掉。
+fn is_globally_muted(article: &Article) -> bool {
+    let text = format!("{} {}", article.title, article.description);
+    if crate::cognition::profile::is_muted(&text) {
+        return true;
+    }
+    let l = text.to_lowercase();
+    const NOISE: [&str; 10] = [
+        "广告", "推广", "赞助", "sponsored", "advertisement",
+        "点击查看", "震惊", "不看后悔", "限时抢购", "立即下载",
+    ];
+    NOISE.iter().any(|n| l.contains(n))
+}
+
 fn normalize_category_filter(category: &Option<String>) -> Option<String> {
     category
         .as_ref()
@@ -3145,7 +3207,14 @@ pub async fn fetch_knowledge_from_feed_ids(
         out.sort_by(|a, b| b.published_at.cmp(&a.published_at));
     }
 
+    // 全局黑名单：命中标题党/广告/静音词的一律丢弃（不分来源）。
+    out.retain(|a| !is_globally_muted(a));
+
     out.truncate(max_limit);
+
+    // 首屏预热：对展示列表里内容薄的前若干篇提前深解析，让卡片一进列表就有配图和摘要，
+    // 而不是等用户逐篇点开才 hydrate。已带正文的（缓存命中）会被过滤跳过，不重复抓。
+    preheat_display_articles(&mut out, 10, 4).await;
 
     {
         let mut lock = ARTICLES.lock().unwrap();
@@ -3324,12 +3393,18 @@ async fn fetch_html_and_extract_articles(feed: &FeedSource) -> Result<Vec<Articl
 
     let cache_key = format!("{}|html|{}", feed.id, parsed);
     let cache_state = read_http_cache(&cache_key);
+    let parsed_str = parsed.to_string();
     let mut req = HTTP_CLIENT.get(parsed.clone());
     if let Some(etag) = cache_state.etag.as_deref() {
         req = req.header(IF_NONE_MATCH, etag);
     }
     if let Some(last_modified) = cache_state.last_modified.as_deref() {
         req = req.header(IF_MODIFIED_SINCE, last_modified);
+    }
+    // 登录墙站点（知乎/小红书/微博等）注入登录态 cookie，未登录则照常无 cookie 请求。
+    let profile = render_profile_for_url(&parsed_str);
+    if let Some(cookie) = crate::commands::flipboard_render::cookie_header_for_url(&parsed_str, &profile).await {
+        req = req.header(reqwest::header::COOKIE, cookie);
     }
 
     let resp = req.send().await.map_err(|e| {
@@ -3524,7 +3599,14 @@ async fn fetch_zhihu_fallback(feed: &FeedSource) -> Result<Vec<Article>, String>
         feed.url
     );
 
-    let resp = HTTP_CLIENT.get(api_url).send().await.map_err(|e| {
+    // 注入登录态 cookie（用户手动登录知乎后，从其持久化 profile 读出）。
+    // 未登录 / 无 cookie 时照常无 cookie 请求（可能拿到受限内容或触发风控）。
+    let mut req = HTTP_CLIENT.get(api_url);
+    let profile = render_profile_for_url(api_url);
+    if let Some(cookie) = crate::commands::flipboard_render::cookie_header_for_url(api_url, &profile).await {
+        req = req.header(reqwest::header::COOKIE, cookie);
+    }
+    let resp = req.send().await.map_err(|e| {
         error!("flipboard: zhihu api request failed: {}", e);
         e.to_string()
     })?;

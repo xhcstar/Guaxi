@@ -167,6 +167,11 @@ async function main() {
       process.exit(prepareAssetsExitCode);
     }
 
+    // RSSHub 进程内集成：把 rsshub 装进 SlidevEnv/node_modules（复用其 node.exe），
+    // 必须在 prepare_utils_zip 打包 utils 树之前，装好的 rsshub 才会被一起打进离线包。
+    // 幂等（已装则跳过）、不校验退出码（缺失只降级，不阻断 build）。
+    await run('node', ['./tools/prepare_rsshub_env.mjs']);
+
     // Bundle the heavy `src-tauri/utils` runtime tree into external tar.zst
     // parts before Tauri starts the actual release build.
     const prepareArgs = [

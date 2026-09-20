@@ -1,4 +1,6 @@
 pub mod agent_server;
+/// RSSHub sidecar 进程管理（进程内集成，复用 SlidevEnv 的 node）。
+pub mod rsshub_server;
 /// cc-switch（第三方供应商切换工具）的只读探测，用于把 base_url 指向它的本地代理。
 pub mod cc_switch;
 pub mod chatview;

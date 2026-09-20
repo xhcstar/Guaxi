@@ -169,6 +169,7 @@ fn shutdown_background_processes(reason: &str) {
     info!(reason, "Shutting down background child processes");
 
     commands::agent_server::stop_agent_server();
+    commands::rsshub_server::stop();
     commands::codex_agent::stop_codex_agent();
     commands::chatview::shutdown_local_llm_servers();
     commands::embedding::shutdown_embedding_server();
@@ -881,6 +882,18 @@ async fn main() {
                     }
                 });
             }
+
+            // 启动 RSSHub sidecar（Node，复用 SlidevEnv 的 node.exe）。仅在已构建进包时启动；
+            // 未打包则 is_available() 为 false，直接跳过——聚合功能自动降级，不影响其余抓取。
+            tauri::async_runtime::spawn(async {
+                if commands::rsshub_server::is_available() {
+                    if let Err(e) = commands::rsshub_server::ensure_started().await {
+                        warn!("RSSHub 启动失败（聚合功能降级，不影响主功能）: {}", e);
+                    }
+                } else {
+                    info!("RSSHub 未打包，跳过启动（聚合功能不启用 RSSHub 源）");
+                }
+            });
 
             #[cfg(desktop)]
             {

@@ -1,7 +1,7 @@
 <template>
   <div :class="['article-card', viewMode]">
-    <div class="card-image" v-if="article.image_url && viewMode !== 'list'">
-
+    <div class="card-image" v-if="cardImage && viewMode !== 'list'">
+      <img :src="cardImage" :alt="article.title" loading="lazy" />
       <div class="image-overlay">
         <div class="category-badge">{{ article.category }}</div>
         <button class="bookmark-btn" :class="{ bookmarked: isBookmarked }" @click.stop="toggleBookmark"
@@ -20,6 +20,7 @@
           {{ article.category }}
         </div>
         <div class="meta-info">
+          <span class="relevance-dot" v-if="relevanceLabel" :class="relevanceClass" :title="`相关度 ${article.relevance_score}`">{{ relevanceLabel }}</span>
           <span class="source">{{ article.source }}</span>
           <span class="time">{{ formatTime(article.published_at) }}</span>
         </div>
@@ -27,8 +28,8 @@
 
       <h3 class="card-title">{{ article.title }}</h3>
 
-      <p class="card-summary" v-if="viewMode !== 'grid'">
-        {{ article.description || article.summary }}
+      <p class="card-summary" v-if="cardSummary">
+        {{ cardSummary }}
       </p>
 
       <div class="card-footer">
@@ -76,6 +77,39 @@ const store = useFlipboardStore()
 
 const isBookmarked = computed(() => {
   return store.isBookmarked(props.article.id)
+})
+
+// 配图：优先 RSS 自带 image_url，缺失时回退到抽取出的首图 lead_image。
+const cardImage = computed(() => {
+  const a = props.article
+  return String(a?.image_url || a?.lead_image || '').trim()
+})
+
+// 摘要：优先 description / summary；都空时退回抽取正文前若干字（去掉多余空白）。
+const cardSummary = computed(() => {
+  const a = props.article
+  const primary = String(a?.description || a?.summary || '').trim()
+  if (primary) return primary
+  const content = String(a?.content || '').replace(/\s+/g, ' ').trim()
+  if (!content) return ''
+  return content.length > 140 ? `${content.slice(0, 140)}…` : content
+})
+
+// 相关度指示：>=0 才显示（-1 为未评分）。高/中/低三档，与阅读页配色一致。
+const relevanceLabel = computed(() => {
+  const s = Number(props.article?.relevance_score)
+  if (!Number.isFinite(s) || s < 0) return ''
+  if (s >= 70) return '高相关'
+  if (s >= 40) return '相关'
+  return '低相关'
+})
+
+const relevanceClass = computed(() => {
+  const s = Number(props.article?.relevance_score)
+  if (!Number.isFinite(s) || s < 0) return ''
+  if (s >= 70) return 'rel-high'
+  if (s >= 40) return 'rel-mid'
+  return 'rel-low'
 })
 
 const toggleBookmark = () => {
@@ -232,9 +266,23 @@ const formatTime = (timeString) => {
 .meta-info {
   display: flex;
   gap: 12px;
+  align-items: center;
   font-size: 12px;
   color: var(--guaxi-text-secondary);
 }
+
+.relevance-dot {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+}
+
+.relevance-dot.rel-high { background: #18a058; }
+.relevance-dot.rel-mid { background: #f0a020; }
+.relevance-dot.rel-low { background: #909399; }
 
 .card-title {
   font-size: 18px;

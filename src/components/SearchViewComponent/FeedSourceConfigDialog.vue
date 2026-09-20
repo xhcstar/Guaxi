@@ -1,6 +1,31 @@
 <template>
   <n-modal v-model:show="innerVisible" preset="dialog" title="配置知识源" :mask-closable="false" :close-on-esc="false"
     :style="{ width: '640px' }">
+    <n-collapse class="rsshub-quick" style="margin-bottom: 16px;">
+      <n-collapse-item title="RSSHub 快捷添加（全网平台）" name="rsshub">
+        <n-grid :cols="2" :x-gap="12">
+          <n-form-item-gi label="平台 / 路由">
+            <n-select v-model:value="rsshub.route" :options="rsshubRouteOptions" placeholder="选择平台"
+              @update:value="onRsshubRouteChange" />
+          </n-form-item-gi>
+          <n-form-item-gi :label="rsshubParamLabel" v-if="rsshubSelected && rsshubSelected.param">
+            <n-input v-model:value="rsshub.param" :placeholder="rsshubSelected.paramHint || '填写参数'" />
+          </n-form-item-gi>
+        </n-grid>
+        <div class="rsshub-tip" v-if="rsshubSelected">
+          <span>将生成：{{ rsshubPreviewUrl }}</span>
+        </div>
+        <n-space justify="end">
+          <n-button size="small" type="primary" :disabled="!rsshubCanApply" @click="applyRsshubRoute">
+            填入下方表单
+          </n-button>
+        </n-space>
+        <div class="rsshub-note">
+          需要 RSSHub 已随应用打包并在后台启动（{{ RSSHUB_BASE }}）。登录墙平台（知乎/小红书等）需先在阅读页完成一次登录。
+        </div>
+      </n-collapse-item>
+    </n-collapse>
+
     <n-form ref="formRef" :model="form" :rules="rules" label-placement="top" label-width="auto">
       <n-grid :cols="2" :x-gap="16">
         <n-form-item-gi label="名称" path="name">
@@ -127,6 +152,69 @@ const form = ref({
   remark: ''
 })
 
+// RSSHub 本地 sidecar 基址（与 rsshub_server.rs 的 RSSHUB_PORT=1200 对齐）。
+const RSSHUB_BASE = 'http://127.0.0.1:1200'
+
+// 精选常用 RSSHub 路由。{param} 为占位；param 为空的路由无需额外输入。
+// label 展示名，name 生成的订阅源默认名，param 参数占位键，paramHint 输入提示。
+// 路由已对照实际构建的 RSSHub（commit f99e982）route 定义逐条核实。
+const RSSHUB_ROUTES = [
+  { label: '知乎 · 热榜', name: '知乎热榜', route: '/zhihu/hot', param: '' },
+  { label: '知乎 · 用户动态', name: '知乎用户', route: '/zhihu/people/activities/{param}', param: 'param', paramHint: '用户 ID（url_token），如 zhang-san' },
+  { label: '微博 · 用户', name: '微博用户', route: '/weibo/user/{param}', param: 'param', paramHint: '用户 UID（纯数字）' },
+  { label: 'B站 · UP主投稿', name: 'B站UP主', route: '/bilibili/user/video/{param}', param: 'param', paramHint: 'UP主 UID（纯数字）' },
+  { label: 'B站 · 综合热门', name: 'B站热门', route: '/bilibili/popular/all', param: '' },
+  { label: '小红书 · 用户笔记', name: '小红书用户', route: '/xiaohongshu/user/{param}/notes', param: 'param', paramHint: '用户 ID' },
+  { label: '少数派 · 首页', name: '少数派', route: '/sspai/index', param: '' },
+  { label: 'V2EX · 最热', name: 'V2EX最热', route: '/v2ex/topics/hot', param: '' },
+  { label: 'GitHub · Trending', name: 'GitHub Trending', route: '/github/trending/daily/any', param: '' },
+  { label: 'Twitter/X · 用户', name: 'X用户', route: '/twitter/user/{param}', param: 'param', paramHint: '用户名（不带 @）' },
+  { label: 'YouTube · 频道', name: 'YouTube频道', route: '/youtube/channel/{param}', param: 'param', paramHint: '频道 ID（UC 开头）' },
+]
+
+const rsshub = ref({ route: null, param: '' })
+
+const rsshubRouteOptions = RSSHUB_ROUTES.map((r) => ({ label: r.label, value: r.route }))
+
+const rsshubSelected = computed(() =>
+  RSSHUB_ROUTES.find((r) => r.route === rsshub.value.route) || null
+)
+
+const rsshubParamLabel = computed(() => rsshubSelected.value?.paramHint ? '参数' : '参数')
+
+const rsshubPreviewUrl = computed(() => {
+  const sel = rsshubSelected.value
+  if (!sel) return ''
+  const path = sel.param
+    ? sel.route.replace('{param}', encodeURIComponent(String(rsshub.value.param || '').trim()))
+    : sel.route
+  return `${RSSHUB_BASE}${path}`
+})
+
+const rsshubCanApply = computed(() => {
+  const sel = rsshubSelected.value
+  if (!sel) return false
+  if (sel.param) return String(rsshub.value.param || '').trim().length > 0
+  return true
+})
+
+const onRsshubRouteChange = () => {
+  rsshub.value.param = ''
+}
+
+const applyRsshubRoute = () => {
+  const sel = rsshubSelected.value
+  if (!sel || !rsshubCanApply.value) return
+  form.value.sourceType = 'rss'
+  form.value.url = rsshubPreviewUrl.value
+  if (!form.value.name.trim()) {
+    form.value.name = sel.param
+      ? `${sel.name} · ${String(rsshub.value.param).trim()}`
+      : sel.name
+  }
+  message.success('已填入表单，可继续补充分类等信息后保存')
+}
+
 const sourceTypeOptions = [
   { label: 'RSS / Atom', value: 'rss' },
   { label: '整站深度抓取', value: 'site_crawl' },
@@ -240,6 +328,8 @@ const resetForm = () => {
     llmEnhance: !!initial.llm_enhance,
     remark
   }
+  // 每次打开重置 RSSHub 快捷选择器。
+  rsshub.value = { route: null, param: '' }
 }
 
 const handleCancel = () => {
@@ -279,3 +369,19 @@ const handleSubmit = async () => {
   }
 }
 </script>
+
+<style scoped>
+.rsshub-tip {
+  font-size: 12px;
+  color: var(--guaxi-text-secondary, #64748b);
+  word-break: break-all;
+  margin: 4px 0 8px;
+}
+
+.rsshub-note {
+  font-size: 12px;
+  color: var(--guaxi-text-secondary, #94a3b8);
+  margin-top: 8px;
+  line-height: 1.5;
+}
+</style>
