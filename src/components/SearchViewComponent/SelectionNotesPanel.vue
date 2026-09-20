@@ -143,7 +143,13 @@ const ensureNotesFilePath = async () => {
       fileBaseName
     })
 
-    await invoke('create_directory', { path: dir })
+    // create_directory 对已存在目录会报错（KB 重名保护），但这里是"确保存在"语义，
+    // 目录已在即视为成功，不应把它当失败中断。
+    try {
+      await invoke('create_directory', { path: dir })
+    } catch (e) {
+      if (!String(e?.message || e).includes('已存在')) throw e
+    }
 
     notesFilePath.value = await join(dir, `${fileBaseName}.json`)
     logger.debug('[SelectionNotesPanel] notesFilePath ready:', notesFilePath.value)
@@ -220,7 +226,13 @@ const loadNotesFromFile = async () => {
       noteCards.value = []
       const migrated = await tryMigrateFromLegacyLocalStorage()
       if (!migrated) {
-        await invoke('create_file_with_content', { path: fp, content: '' })
+        // watch 会并发触发多次加载：两个 load 同时判定"文件不存在"再各自创建，
+        // 后一个会撞上"已存在"。这属于并发竞态，已存在即视为成功（空笔记）。
+        try {
+          await invoke('create_file_with_content', { path: fp, content: '' })
+        } catch (e) {
+          if (!String(e?.message || e).includes('已存在')) throw e
+        }
       }
       return
     }

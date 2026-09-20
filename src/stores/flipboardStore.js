@@ -385,6 +385,18 @@ export const useFlipboardStore = () => {
     }
   }
 
+  // 重启 RSSHub 以读取最新登录态 cookie（用户登录知乎/小红书等之后调用）。
+  // RSSHub 未构建时后端返回错误，这里吞掉不打断（聚合的其余源不受影响）。
+  const refreshRsshubCookies = async () => {
+    try {
+      await invoke('rsshub_refresh_cookies')
+      return true
+    } catch (error) {
+      console.warn('FlipboardStore: refreshRsshubCookies skipped:', error)
+      return false
+    }
+  }
+
   // 搜索文章
   const searchArticles = async (query) => {
     if (!query.trim()) {
@@ -964,6 +976,7 @@ export const useFlipboardStore = () => {
     fetchArticleDetail,
     reparseArticle,
     openArticleInBrowser,
+    refreshRsshubCookies,
     searchArticles,
     searchArticlesLocal,
     fetchCategories,

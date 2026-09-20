@@ -26,7 +26,13 @@ export const useFlipboardCollectionsStore = () => {
     if (indexPath) return indexPath
     const exeDir = await invoke('get_executable_dir')
     const dir = await join(exeDir, 'Fliprepo', 'flipboard-notes')
-    await invoke('create_directory', { path: dir })
+    // create_directory 对已存在目录会报错（KB 场景的重名保护），但这里是"确保存在"语义，
+    // 目录已在即视为成功。
+    try {
+      await invoke('create_directory', { path: dir })
+    } catch (e) {
+      if (!String(e?.message || e).includes('已存在')) throw e
+    }
     indexPath = await join(dir, 'index.json')
     return indexPath
   }

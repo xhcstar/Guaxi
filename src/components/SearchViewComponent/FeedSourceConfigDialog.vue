@@ -16,12 +16,15 @@
           <span>将生成：{{ rsshubPreviewUrl }}</span>
         </div>
         <n-space justify="end">
+          <n-button size="small" :loading="rsshubRefreshing" @click="handleRefreshRsshubCookies">
+            刷新登录态
+          </n-button>
           <n-button size="small" type="primary" :disabled="!rsshubCanApply" @click="applyRsshubRoute">
             填入下方表单
           </n-button>
         </n-space>
         <div class="rsshub-note">
-          需要 RSSHub 已随应用打包并在后台启动（{{ RSSHUB_BASE }}）。登录墙平台（知乎/小红书等）需先在阅读页完成一次登录。
+          需要 RSSHub 已随应用打包并在后台启动（{{ RSSHUB_BASE }}）。登录墙平台（知乎/小红书/微博）需先在阅读页完成一次登录，再点「刷新登录态」让 RSSHub 读取 cookie。
         </div>
       </n-collapse-item>
     </n-collapse>
@@ -95,8 +98,10 @@
 import { createLogger } from '../../utils/logger'
 import { computed, ref, watch } from 'vue'
 import { useMessage } from 'naive-ui'
+import { useFlipboardStore } from '../../stores/flipboardStore.js'
 
 const logger = createLogger('FeedSourceConfigDialog')
+const flipboardStore = useFlipboardStore()
 const props = defineProps({
   show: {
     type: Boolean,
@@ -213,6 +218,21 @@ const applyRsshubRoute = () => {
       : sel.name
   }
   message.success('已填入表单，可继续补充分类等信息后保存')
+}
+
+const rsshubRefreshing = ref(false)
+const handleRefreshRsshubCookies = async () => {
+  rsshubRefreshing.value = true
+  try {
+    const ok = await flipboardStore.refreshRsshubCookies()
+    if (ok) {
+      message.success('已重启 RSSHub 并读取最新登录态')
+    } else {
+      message.warning('RSSHub 未就绪（可能未构建）；其余源不受影响')
+    }
+  } finally {
+    rsshubRefreshing.value = false
+  }
 }
 
 const sourceTypeOptions = [

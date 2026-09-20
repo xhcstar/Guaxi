@@ -82,6 +82,16 @@ pub fn is_available() -> bool {
     rsshub_entry().is_ok() && node_binary().is_ok()
 }
 
+/// 前端命令：重启 RSSHub 以读取最新登录态 cookie（用户登录知乎/小红书后调用）。
+/// RSSHub 未构建时返回明确错误，供前端提示。
+#[tauri::command]
+pub async fn rsshub_refresh_cookies() -> Result<(), String> {
+    if !is_available() {
+        return Err("RSSHub 未构建，无法刷新登录态（其余抓取不受影响）".to_string());
+    }
+    restart().await
+}
+
 /// 启动（或复用）RSSHub sidecar。已在运行则直接返回。
 pub async fn ensure_started() -> Result<(), String> {
     let node = node_binary()?;
@@ -110,6 +120,10 @@ pub async fn ensure_started() -> Result<(), String> {
     // cwd 也设为 rsshub 目录（其构建产物按此定位内部资源）。
     let node_modules = work_dir.join("node_modules");
 
+    // 登录墙站点 cookie：从用户已登录的持久化 Chrome profile 导出，作为环境变量传给 RSSHub。
+    // RSSHub 在启动时读取这些 env（config.ts），故登录态变化需重启 sidecar 才生效（见 restart）。
+    let login_cookies = collect_login_cookies().await;
+
     let mut cmd = Command::new(&node);
     cmd.arg(&entry)
         .env("NODE_ENV", "production")
@@ -121,6 +135,9 @@ pub async fn ensure_started() -> Result<(), String> {
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_stdout))
         .stderr(Stdio::from(log_stderr));
+    for (key, val) in &login_cookies {
+        cmd.env(key, val);
+    }
     apply_no_window(&mut cmd);
 
     let child = cmd.spawn().map_err(|e| format!("启动 RSSHub 失败: {}", e))?;
@@ -172,6 +189,41 @@ pub async fn ensure_started() -> Result<(), String> {
         log_path.to_string_lossy(),
         tail
     ))
+}
+
+/// 收集登录墙站点的 cookie，映射到 RSSHub 识别的环境变量名。
+///
+/// 复用阶段 B 的 `flipboard_render::cookie_header_for_url`：从用户手动登录后落盘的
+/// 持久化 Chrome profile（按 host 区分）读出 cookie。用户没登录过的站返回空，跳过。
+/// env 名对应 RSSHub config.ts：ZHIHU_COOKIES / XIAOHONGSHU_COOKIE / WEIBO_COOKIES。
+async fn collect_login_cookies() -> Vec<(String, String)> {
+    // (代表性 URL, profile=host, RSSHub 环境变量名)
+    const SITES: [(&str, &str, &str); 3] = [
+        ("https://www.zhihu.com", "www.zhihu.com", "ZHIHU_COOKIES"),
+        ("https://www.xiaohongshu.com", "www.xiaohongshu.com", "XIAOHONGSHU_COOKIE"),
+        ("https://weibo.com", "weibo.com", "WEIBO_COOKIES"),
+    ];
+    let mut out = Vec::new();
+    for (url, profile, env_key) in SITES {
+        if let Some(cookie) =
+            crate::commands::flipboard_render::cookie_header_for_url(url, profile).await
+        {
+            if !cookie.trim().is_empty() {
+                info!("[rsshub] injecting login cookie for {}", env_key);
+                out.push((env_key.to_string(), cookie));
+            }
+        }
+    }
+    out
+}
+
+/// 重启 RSSHub sidecar：停掉现有实例后重新启动，以读取最新登录态 cookie。
+/// 用户在阅读页对知乎/小红书完成登录后调用，让带 cookie 的路由立即生效。
+pub async fn restart() -> Result<(), String> {
+    stop();
+    // 等端口释放，避免新实例 bind 冲突。
+    sleep(Duration::from_secs(1)).await;
+    ensure_started().await
 }
 
 /// 停止 RSSHub sidecar（进程树终止，避免残留 node 子进程）。

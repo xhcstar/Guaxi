@@ -724,6 +724,7 @@ async fn main() {
             commands::flipboard::reset_crawl_queue,
             commands::flipboard::ensure_chromium_ready,
             commands::flipboard::open_login_session,
+            commands::rsshub_server::rsshub_refresh_cookies,
             commands::flipboard::open_article_in_browser,
             commands::flipboard::purge_unbookmarked_articles,
             commands::flipboard::delete_feeds,
