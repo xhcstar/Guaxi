@@ -397,6 +397,22 @@ export const useFlipboardStore = () => {
     }
   }
 
+  // RSSHub 本地服务基址（拼接路由 URL 用）。
+  const getRsshubBaseUrl = async () => {
+    try {
+      return await invoke('rsshub_base_url')
+    } catch (error) {
+      console.warn('FlipboardStore: getRsshubBaseUrl failed:', error)
+      return 'http://127.0.0.1:1200'
+    }
+  }
+
+  // Radar 探测：给定网页 URL，返回该域名下 RSSHub 可生成的路由规则（浏览器插件式能力）。
+  // 返回 RSSHub 原始 JSON（按子域名分组），失败抛错供前端提示。
+  const rsshubRadarDetect = async (pageUrl) => {
+    return await invoke('rsshub_radar_detect', { pageUrl })
+  }
+
   // 搜索文章
   const searchArticles = async (query) => {
     if (!query.trim()) {
@@ -977,6 +993,8 @@ export const useFlipboardStore = () => {
     reparseArticle,
     openArticleInBrowser,
     refreshRsshubCookies,
+    getRsshubBaseUrl,
+    rsshubRadarDetect,
     searchArticles,
     searchArticlesLocal,
     fetchCategories,

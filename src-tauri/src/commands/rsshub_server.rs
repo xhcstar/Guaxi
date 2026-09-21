@@ -92,6 +92,73 @@ pub async fn rsshub_refresh_cookies() -> Result<(), String> {
     restart().await
 }
 
+/// 前端命令：RSSHub 本地服务基址（供前端拼接路由 URL、展示提示）。
+#[tauri::command]
+pub fn rsshub_base_url() -> String {
+    RSSHUB_BASE_URL.to_string()
+}
+
+/// 前端命令：Radar 探测——给定网页 URL，返回该域名下 RSSHub 能生成的路由规则。
+/// 这正是 RSSHub 浏览器插件"把任意网页做成订阅"的能力：代理到本地 sidecar 的
+/// `/api/radar/rules/{domain}`，避免前端直连 loopback 端口受 CSP 限制。
+///
+/// 返回 RSSHub 原始 JSON（按子域名分组的规则数组），前端负责匹配路径与展示。
+/// RSSHub 未启动/未构建时返回明确错误。
+#[tauri::command]
+pub async fn rsshub_radar_detect(page_url: String) -> Result<serde_json::Value, String> {
+    if !is_available() {
+        return Err("RSSHub 未构建（其余抓取不受影响）".to_string());
+    }
+    // 确保 sidecar 在跑。
+    ensure_started().await?;
+
+    // 从网页 URL 解析主域名（radar 规则按 registrable domain 分组）。
+    let host = url::Url::parse(page_url.trim())
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h.to_string()))
+        .ok_or_else(|| "无法从该网址解析出域名".to_string())?;
+    // 取主域名（去掉 www. 等常见子域前缀；radar key 是 registrable domain）。
+    let domain = registrable_domain(&host);
+
+    let client = Client::new();
+    let url = format!("{}/api/radar/rules/{}", RSSHUB_BASE_URL, domain);
+    let resp = client
+        .get(&url)
+        .timeout(Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| format!("radar 请求失败: {}", e))?;
+    if !resp.status().is_success() {
+        return Err(format!("radar 返回错误: {}", resp.status()));
+    }
+    let value: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("radar 响应解析失败: {}", e))?;
+    Ok(value)
+}
+
+/// 取可注册主域名（简化：保留最后两段，如 www.bilibili.com → bilibili.com）。
+/// 对多数站点够用；少数二级后缀(.com.cn 等)可能不精确，但 radar 侧对完整域名也能命中，
+/// 这里主要为了对齐 radar 规则的分组 key。
+fn registrable_domain(host: &str) -> String {
+    let parts: Vec<&str> = host.trim_end_matches('.').split('.').collect();
+    let n = parts.len();
+    if n <= 2 {
+        return host.to_string();
+    }
+    // 常见二级后缀：com.cn / net.cn / org.cn / gov.cn / co.uk / com.hk ...
+    let last2 = format!("{}.{}", parts[n - 2], parts[n - 1]);
+    const SECOND_LEVEL: [&str; 8] = [
+        "com.cn", "net.cn", "org.cn", "gov.cn", "edu.cn", "co.uk", "com.hk", "com.tw",
+    ];
+    if SECOND_LEVEL.contains(&last2.as_str()) && n >= 3 {
+        format!("{}.{}.{}", parts[n - 3], parts[n - 2], parts[n - 1])
+    } else {
+        last2
+    }
+}
+
 /// 启动（或复用）RSSHub sidecar。已在运行则直接返回。
 pub async fn ensure_started() -> Result<(), String> {
     let node = node_binary()?;

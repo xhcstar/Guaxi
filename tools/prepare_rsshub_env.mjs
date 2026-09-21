@@ -138,8 +138,17 @@ async function main() {
   const { out: commit } = await runCapture('git', ['rev-parse', 'HEAD'], { cwd: rsshubDir });
 
   // 2. pnpm install（--frozen-lockfile 锁依赖树）+ build。用 npx 跑固定大版本 pnpm。
-  info(`pnpm install (frozen lockfile) via npx ${PNPM_SPEC} ... 依赖多，耗时较长`);
-  const installCode = await run('npx', ['--yes', PNPM_SPEC, 'install', '--frozen-lockfile'], { cwd: rsshubDir });
+  //
+  // 关键：--config.node-linker=hoisted 让 pnpm 装成**扁平** node_modules（和 npm 一样，
+  // 全是实体文件、无符号链接）。默认的 pnpm 布局用 .pnpm store + 大量 symlink，
+  // 而 utils 的 tar.zst 打包器只处理目录与普通文件、遇到 symlink 条目会直接报错，
+  // 离线包就会缺文件。hoisted 布局才能被正确打包进离线安装包。
+  info(`pnpm install (frozen lockfile, hoisted) via npx ${PNPM_SPEC} ... 依赖多，耗时较长`);
+  const installCode = await run(
+    'npx',
+    ['--yes', PNPM_SPEC, 'install', '--frozen-lockfile', '--config.node-linker=hoisted'],
+    { cwd: rsshubDir }
+  );
   if (installCode !== 0) {
     warn(`pnpm install 失败（code ${installCode}），跳过（RSSHub 不可用，其余抓取不受影响）`);
     return;

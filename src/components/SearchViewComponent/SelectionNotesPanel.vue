@@ -759,6 +759,8 @@ defineExpose({
 
 .note-content {
   padding: 12px 16px;
+  /* 与中间正文（.article-body / 编辑器预览）保持一致的字体族。 */
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
   font-size: 13px;
   line-height: 1.6;
   color: var(--guaxi-text-primary, #0f172a);
@@ -770,6 +772,7 @@ defineExpose({
   padding: 10px;
   border-radius: 6px;
   border: 1px solid var(--guaxi-border, #e5e7eb);
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
   font-size: 13px;
   resize: vertical;
   background: var(--guaxi-panel-bg, #fff);
@@ -788,6 +791,7 @@ defineExpose({
 
 .composite-note-content {
   white-space: pre-wrap;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
   font-size: 13px;
 }
 
