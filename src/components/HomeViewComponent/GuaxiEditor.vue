@@ -352,8 +352,8 @@
                   <span class="python-runtime-meta__value">{{ pythonRuntimeRuntimeLabel }}</span>
                 </div>
                 <div class="python-runtime-meta__item">
-                  <span class="python-runtime-meta__label">包管理</span>
-                  <span class="python-runtime-meta__value">{{ pythonRuntimeStatus?.pip_version || '未检测' }}</span>
+                  <span class="python-runtime-meta__label">包管理器</span>
+                  <span class="python-runtime-meta__value">{{ pythonRuntimeStatus?.uv_version || pythonRuntimeStatus?.pip_version || '未检测' }}</span>
                 </div>
                 <div class="python-runtime-meta__item">
                   <span class="python-runtime-meta__label">Worker</span>
@@ -386,7 +386,7 @@
                 <div class="python-runtime-guide__steps">
                   <span class="python-runtime-guide__step" :class="{ done: pythonRuntimeStatus?.bundled_runtime_present }">1. 导入压缩包</span>
                   <span class="python-runtime-guide__step" :class="{ done: pythonRuntimeStatus?.initialized }">2. 初始化环境</span>
-                  <span class="python-runtime-guide__step" :class="{ done: pythonRuntimeStatus?.pip_version }">3. Pip 就绪</span>
+                  <span class="python-runtime-guide__step" :class="{ done: pythonRuntimeStatus?.uv_version || pythonRuntimeStatus?.pip_version }">3. 包管理器就绪</span>
                   <span class="python-runtime-guide__step" :class="{ done: pythonRuntimeStatus?.worker_alive }">4. Worker 在线</span>
                 </div>
               </div>
@@ -618,8 +618,25 @@
                   导入运行时包
                 </button>
                 <button type="button" class="python-runtime-chip-btn" :disabled="pythonRuntimeBusy" @click="upgradeManagedPip">
-                  升级 Pip
+                  升级包管理器
                 </button>
+              </div>
+
+              <div class="python-runtime-install-card">
+                <div class="python-runtime-section__title">切换 Python 版本</div>
+                <div class="python-runtime-install">
+                  <select v-model="pythonRuntimeSelectedVersion" class="python-runtime-install__input"
+                    :disabled="pythonRuntimeBusy || !pythonRuntimeDownloadableVersions.length">
+                    <option v-if="!pythonRuntimeDownloadableVersions.length" value="">加载版本列表中…</option>
+                    <option v-for="ver in pythonRuntimeDownloadableVersions" :key="ver.version" :value="ver.version">
+                      {{ ver.label || ver.version }}
+                    </option>
+                  </select>
+                  <button type="button" class="python-runtime-install__btn"
+                    :disabled="pythonRuntimeBusy || !pythonRuntimeSelectedVersion" @click="switchPythonRuntimeVersion">
+                    切换
+                  </button>
+                </div>
               </div>
 
               <div v-if="pythonRuntimeArchiveInspection" class="python-runtime-archive-card">
@@ -1822,6 +1839,9 @@ const pythonRuntimeOperation = ref({
 })
 const pythonRuntimeArchivePath = ref('')
 const pythonRuntimeArchiveInspection = ref(null)
+// Python 版本切换：可下载版本列表（来自 uv）与当前选中的目标版本。
+const pythonRuntimeDownloadableVersions = ref([])
+const pythonRuntimeSelectedVersion = ref('')
 const pythonSessionInfo = ref(null)
 const pythonConsoleVisible = ref(false)
 const pythonConsoleBusy = ref(false)
@@ -4648,6 +4668,7 @@ const createEmptyPythonRuntimeStatus = () => ({
   initialized: false,
   worker_script_ready: false,
   runtime_marker_path: '',
+  uv_version: '',
 })
 const pythonRuntimeStatusClass = computed(() => {
   const source = String(pythonRuntimeStatus.value?.source || '').trim()
@@ -15884,6 +15905,64 @@ const openPythonRuntimeWorkbench = async () => {
   pythonRuntimePopoverVisible.value = true
   await refreshPythonRuntimeStatus('popover-open')
   await ensurePythonRuntimeInitialized('popover-open', { silent: true, notify: false })
+  void loadPythonRuntimeDownloadableVersions('popover-open')
+}
+
+// 拉取 uv 可提供的 Python 版本列表，用于版本切换下拉框。
+const loadPythonRuntimeDownloadableVersions = async (reason = 'manual') => {
+  try {
+    const catalog = await invoke('python_runtime_list_downloadable_versions')
+    const versions = Array.isArray(catalog?.versions) ? catalog.versions : []
+    pythonRuntimeDownloadableVersions.value = versions
+    // 默认选中：优先当前运行时版本所在系列，否则用目录默认版本。
+    if (!pythonRuntimeSelectedVersion.value) {
+      pythonRuntimeSelectedVersion.value = String(catalog?.default_version || versions[0]?.version || '')
+    }
+    logger.info('[PythonRuntime] downloadable versions loaded', { reason, count: versions.length })
+  } catch (error) {
+    logger.warn('[PythonRuntime] load downloadable versions failed', { reason, error })
+  }
+}
+
+// 切换 Python 版本：用选中的版本重新初始化托管运行时（uv 会重建 .venv 并重装推荐包）。
+const switchPythonRuntimeVersion = async () => {
+  const targetVersion = String(pythonRuntimeSelectedVersion.value || '').trim()
+  if (!targetVersion) {
+    message.warning('请先选择要切换到的 Python 版本')
+    return
+  }
+
+  const shouldSwitch = await confirmDialog(
+    `切换到 Python ${targetVersion} 会重建托管虚拟环境并重新安装推荐依赖，可能耗时较久，是否继续？`,
+    {
+      title: '切换 Python 版本',
+      kind: 'warning',
+      okLabel: '开始切换',
+      cancelLabel: '取消',
+    }
+  )
+  if (!shouldSwitch) return
+
+  pythonRuntimeBusy.value = true
+  try {
+    beginPythonRuntimeOperation('switch', [targetVersion], `正在切换到 Python ${targetVersion}`)
+    logger.info('[PythonRuntime] switch version start', { targetVersion })
+    const res = await invoke('python_runtime_initialize', {
+      request: { downloadVersion: targetVersion },
+    })
+    logger.info('[PythonRuntime] switch version completed', {
+      targetVersion,
+      pythonPath: res?.python_path || '',
+    })
+    message.success(`已切换到 Python ${targetVersion}`)
+    await refreshPythonRuntimeStatus(`version-switched:${targetVersion}`)
+  } catch (error) {
+    logger.error('[PythonRuntime] switch version failed', { targetVersion, error })
+    message.error(`切换版本失败：${String(error?.message || error)}`)
+  } finally {
+    endPythonRuntimeOperation('版本切换流程已结束')
+    pythonRuntimeBusy.value = false
+  }
 }
 
 const closePythonRuntimeWorkbench = () => {

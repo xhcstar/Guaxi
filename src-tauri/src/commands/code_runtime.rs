@@ -70,6 +70,21 @@ const AUTO_DOWNLOAD_PYTHON_WINDOWS_PAGE_URL: &str = "https://www.python.org/down
 const GET_PIP_BOOTSTRAP_URL: &str = "https://bootstrap.pypa.io/get-pip.py";
 const PYTHON_PIP_INDEX_URL: &str = "https://pypi.tuna.tsinghua.edu.cn/simple";
 const PYTHON_PIP_TRUSTED_HOST: &str = "pypi.tuna.tsinghua.edu.cn";
+
+// uv 供给：uv 二进制不进安装包，首次初始化时联网下载（与 python.org 下载对称）。
+// 用 GitHub release 的 `latest/download/<asset>` 直链：asset 名跨版本稳定，且始终存在，
+// 避免锁死一个将来可能失效的具体版本号导致整条供给链断掉。
+#[cfg(windows)]
+const UV_DOWNLOAD_LATEST_BASE_URL: &str = "https://github.com/astral-sh/uv/releases/latest/download";
+// uv 创建托管 `.venv` 时默认使用的 Python 版本；只给到 minor，uv 会自动取该系列最新补丁版。
+const UV_DEFAULT_PYTHON_VERSION: &str = "3.13";
+// 用户主要在中国大陆：uv 二进制与 uv 托管的 python-build-standalone 都在 GitHub，直连很慢。
+// 默认套一层 GitHub 加速代理前缀；可用环境变量 GUAXI_GITHUB_MIRROR 覆盖，置空表示直连。
+// 下载均为“先镜像后直连”兜底，代理临时挂掉也不至于完全装不上。
+const DEFAULT_GITHUB_MIRROR_PREFIX: &str = "https://ghfast.top/";
+// python-build-standalone 的默认下载前缀；uv 用 UV_PYTHON_INSTALL_MIRROR 覆盖它做镜像。
+const PYTHON_BUILD_STANDALONE_RELEASE_PREFIX: &str =
+    "https://github.com/astral-sh/python-build-standalone/releases/download";
 const PYTHON_RUNTIME_RECOMMENDED_PACKAGES: &[&str] = &[
     "pandas",
     "matplotlib",
@@ -171,6 +186,8 @@ pub struct PythonRuntimeStatus {
     pub runtime_marker_path: String,
     pub bootstrap_download_available: bool,
     pub bootstrap_download_version: String,
+    // 当前已就绪的 uv 版本（供工作台显示"包管理器: uv x.y.z"）；uv 未下载时为空。
+    pub uv_version: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -618,6 +635,65 @@ fn python_download_versions_fallback() -> PythonRuntimeDownloadCatalog {
     }
 }
 
+// 用 uv 自带的 python-build-standalone 版本清单构建可下载版本目录（跨平台，离线可用）。
+// 只在 uv 已就绪时尝试，缺失则由调用方回退到旧的 python.org 目录。
+fn fetch_python_download_versions_catalog_via_uv() -> Result<PythonRuntimeDownloadCatalog, String> {
+    let runtime_dir = python_runtime_dir()?;
+    let uv_path = existing_uv_binary(&runtime_dir).ok_or_else(|| "uv 尚未就绪".to_string())?;
+    let mut command = uv_command(&uv_path, &runtime_dir);
+    command.args(["python", "list", "--all-versions"]);
+    let output = command_output_trimmed(command)?;
+
+    let release_regex = Regex::new(r"cpython-(3\.(?:13|12)\.\d+)-").map_err(|e| e.to_string())?;
+    let mut seen = HashSet::new();
+    let mut parsed_versions: Vec<String> = Vec::new();
+    for capture in release_regex.captures_iter(&output) {
+        if let Some(version) = capture.get(1).map(|value| value.as_str().to_string()) {
+            if seen.insert(version.clone()) {
+                parsed_versions.push(version);
+                if parsed_versions.len() >= 20 {
+                    break;
+                }
+            }
+        }
+    }
+    if parsed_versions.is_empty() {
+        return Err("uv python list 未解析到可用版本".to_string());
+    }
+
+    let default_version = parsed_versions
+        .iter()
+        .find(|version| version.starts_with("3.13."))
+        .cloned()
+        .unwrap_or_else(|| parsed_versions[0].clone());
+
+    let versions = parsed_versions
+        .into_iter()
+        .map(|version| {
+            let mut parts = version.split('.');
+            let major = parts.next().unwrap_or("3");
+            let minor = parts.next().unwrap_or("13");
+            let series = format!("{major}.{minor}");
+            PythonRuntimeDownloadVersion {
+                is_default: version == default_version,
+                label: format!("Python {version}"),
+                // uv 自行下载解释器，无需具体 archive URL。
+                archive_url: String::new(),
+                release_date: String::new(),
+                series,
+                version,
+            }
+        })
+        .collect();
+
+    Ok(PythonRuntimeDownloadCatalog {
+        versions,
+        default_version,
+        download_source: "uv".to_string(),
+        bootstrap_download_available: true,
+    })
+}
+
 #[cfg(windows)]
 fn fetch_python_download_versions_catalog() -> Result<PythonRuntimeDownloadCatalog, String> {
     let client = python_download_http_client()?;
@@ -827,6 +903,331 @@ fn ensure_downloaded_bundled_python(runtime_dir: &Path, version: Option<&str>) -
         "[PythonRuntime] official python archive downloaded and extracted successfully"
     );
     Ok(resolved_version)
+}
+
+// 当前生效的 GitHub 加速前缀：环境变量优先（置空即直连），否则用默认代理。
+fn github_mirror_prefix() -> String {
+    match std::env::var("GUAXI_GITHUB_MIRROR") {
+        Ok(value) => value.trim().to_string(),
+        Err(_) => DEFAULT_GITHUB_MIRROR_PREFIX.to_string(),
+    }
+}
+
+// 给一个 GitHub 直链套上加速前缀；前缀为空则原样返回（直连）。
+fn github_url_with_mirror(github_url: &str) -> String {
+    let prefix = github_mirror_prefix();
+    if prefix.is_empty() {
+        github_url.to_string()
+    } else if prefix.ends_with('/') {
+        format!("{prefix}{github_url}")
+    } else {
+        format!("{prefix}/{github_url}")
+    }
+}
+
+fn uv_install_dir(runtime_dir: &Path) -> PathBuf {
+    runtime_dir.join("uv")
+}
+
+fn uv_binary_path(runtime_dir: &Path) -> PathBuf {
+    if cfg!(windows) {
+        uv_install_dir(runtime_dir).join("uv.exe")
+    } else {
+        uv_install_dir(runtime_dir).join("uv")
+    }
+}
+
+// uv 托管的 Python 解释器与缓存都落在 python_runtime 目录内，
+// 让整套运行时自成一体，不污染用户机器上的全局 uv 目录。
+fn uv_python_install_dir(runtime_dir: &Path) -> PathBuf {
+    runtime_dir.join("uv-python")
+}
+
+fn uv_cache_dir(runtime_dir: &Path) -> PathBuf {
+    runtime_dir.join(".uv-cache")
+}
+
+fn probe_uv_binary(uv_path: &Path) -> Result<String, String> {
+    let mut command = Command::new(uv_path);
+    command.arg("--version");
+    command_output_trimmed(command)
+}
+
+/// 构造一个已配置好托管目录与无窗口标志的 uv 命令。
+/// 调用方只需再 `.args([...])` 追加子命令即可。
+fn uv_command(uv_path: &Path, runtime_dir: &Path) -> Command {
+    let mut command = Command::new(uv_path);
+    command
+        .env("UV_PYTHON_INSTALL_DIR", uv_python_install_dir(runtime_dir))
+        .env("UV_CACHE_DIR", uv_cache_dir(runtime_dir))
+        // 允许 uv 在缺失时自动下载 python-build-standalone（联网供给，与用户选择一致）。
+        .env("UV_PYTHON_DOWNLOADS", "automatic");
+    // 中国大陆：让 uv 下载 Python 时也走 GitHub 加速代理（前缀为空则不设，走直连）。
+    let mirror_prefix = github_mirror_prefix();
+    if !mirror_prefix.is_empty() {
+        command.env(
+            "UV_PYTHON_INSTALL_MIRROR",
+            github_url_with_mirror(PYTHON_BUILD_STANDALONE_RELEASE_PREFIX),
+        );
+    }
+    apply_python_process_no_window(&mut command);
+    command
+}
+
+// 与 uv_command 相同，但强制清掉 Python 下载镜像，用于镜像失败后直连 GitHub 兜底。
+fn uv_command_without_python_mirror(uv_path: &Path, runtime_dir: &Path) -> Command {
+    let mut command = uv_command(uv_path, runtime_dir);
+    command.env_remove("UV_PYTHON_INSTALL_MIRROR");
+    command
+}
+
+#[cfg(windows)]
+fn uv_archive_file_name() -> &'static str {
+    // GitHub release 里 Windows 资产名跨版本稳定。
+    match std::env::consts::ARCH {
+        "x86_64" => "uv-x86_64-pc-windows-msvc.zip",
+        "aarch64" => "uv-aarch64-pc-windows-msvc.zip",
+        _ => "uv-i686-pc-windows-msvc.zip",
+    }
+}
+
+#[cfg(windows)]
+fn download_uv_binary(runtime_dir: &Path) -> Result<PathBuf, String> {
+    let install_dir = uv_install_dir(runtime_dir);
+    let cache_dir = python_download_cache_dir(runtime_dir);
+    fs::create_dir_all(&cache_dir).map_err(|e| format!("create uv download cache dir failed: {e}"))?;
+
+    let archive_name = uv_archive_file_name();
+    let direct_url = format!("{UV_DOWNLOAD_LATEST_BASE_URL}/{archive_name}");
+    let mirror_url = github_url_with_mirror(&direct_url);
+    let partial_archive = cache_dir.join(format!("{archive_name}.partial"));
+    let stage_dir = runtime_dir.join(format!("uv.__downloading_{}", Uuid::new_v4()));
+    let _ = remove_path_if_exists(&partial_archive);
+    let _ = remove_path_if_exists(&stage_dir);
+
+    // 中国大陆：先走 GitHub 加速代理，失败或校验不过再直连 GitHub 兜底。
+    let mirror_ok = mirror_url != direct_url && {
+        info!(
+            url = mirror_url.as_str(),
+            archive_path = partial_archive.to_string_lossy().as_ref(),
+            "[PythonRuntime] downloading uv binary archive via github mirror"
+        );
+        download_file_to_path(&mirror_url, &partial_archive).is_ok()
+            && cached_python_archive_is_valid(&partial_archive)
+    };
+    if !mirror_ok {
+        let _ = remove_path_if_exists(&partial_archive);
+        info!(
+            url = direct_url.as_str(),
+            archive_path = partial_archive.to_string_lossy().as_ref(),
+            "[PythonRuntime] downloading uv binary archive directly from github"
+        );
+        download_file_to_path(&direct_url, &partial_archive)?;
+        if !cached_python_archive_is_valid(&partial_archive) {
+            let _ = remove_path_if_exists(&partial_archive);
+            return Err("下载得到的 uv 压缩包校验失败，文件不是有效压缩包".to_string());
+        }
+    }
+
+    fs::create_dir_all(&stage_dir).map_err(|e| format!("create uv stage dir failed: {e}"))?;
+    extract_zip_to_dir(&partial_archive, &stage_dir)
+        .map_err(|e| format!("extract uv archive failed: {e}"))?;
+
+    // Windows msvc 压缩包把 uv.exe / uvx.exe 平铺在根目录。
+    let staged_uv = stage_dir.join("uv.exe");
+    if !staged_uv.is_file() {
+        let _ = remove_path_if_exists(&stage_dir);
+        let _ = remove_path_if_exists(&partial_archive);
+        return Err(format!(
+            "解压后的 uv 目录校验失败，未找到 uv.exe：{}",
+            stage_dir.to_string_lossy()
+        ));
+    }
+
+    let publish_result: Result<(), String> = (|| {
+        remove_path_if_exists(&install_dir)?;
+        fs::create_dir_all(&install_dir)
+            .map_err(|e| format!("create uv install dir failed: {e}"))?;
+        for entry in fs::read_dir(&stage_dir).map_err(|e| format!("read uv stage dir failed: {e}"))? {
+            let entry = entry.map_err(|e| format!("read uv stage entry failed: {e}"))?;
+            if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                continue;
+            }
+            let target = install_dir.join(entry.file_name());
+            fs::copy(entry.path(), &target)
+                .map_err(|e| format!("publish uv binary failed: {e}"))?;
+        }
+        Ok(())
+    })();
+
+    let _ = remove_path_if_exists(&stage_dir);
+    let _ = remove_path_if_exists(&partial_archive);
+    publish_result?;
+
+    let uv_path = uv_binary_path(runtime_dir);
+    let version = probe_uv_binary(&uv_path)?;
+    info!(
+        uv_path = uv_path.to_string_lossy().as_ref(),
+        version = version.as_str(),
+        "[PythonRuntime] uv binary downloaded and verified"
+    );
+    Ok(uv_path)
+}
+
+/// 解析可用的 uv 二进制：本地已下载且可探测则复用，否则联网下载（仅 Windows）。
+/// 非 Windows 尝试系统 PATH 上的 uv，缺失则明确报错。
+fn resolve_uv_binary() -> Result<PathBuf, String> {
+    let runtime_dir = python_runtime_dir()?;
+    let uv_path = uv_binary_path(&runtime_dir);
+    if uv_path.is_file() {
+        match probe_uv_binary(&uv_path) {
+            Ok(version) => {
+                info!(
+                    uv_path = uv_path.to_string_lossy().as_ref(),
+                    version = version.as_str(),
+                    "[PythonRuntime] reuse downloaded uv binary"
+                );
+                return Ok(uv_path);
+            }
+            Err(error) => warn!(
+                uv_path = uv_path.to_string_lossy().as_ref(),
+                error = error.as_str(),
+                "[PythonRuntime] downloaded uv binary exists but probe failed, will re-download"
+            ),
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        download_uv_binary(&runtime_dir)
+    }
+    #[cfg(not(windows))]
+    {
+        if can_probe_python_program("uv", &[]) {
+            return Ok(PathBuf::from("uv"));
+        }
+        Err("未找到可用的 uv 二进制；当前平台不支持自动下载，请先手动安装 uv。".to_string())
+    }
+}
+
+/// 只在 uv 已就绪时返回它，绝不触发下载。
+/// 供包安装/列表等运行期读路径使用：这些操作发生在初始化之后，uv 通常已存在；
+/// 缺失时应静默回退到 venv 自带 pip，而不是在读路径上突然联网下载。
+fn existing_uv_binary(runtime_dir: &Path) -> Option<PathBuf> {
+    let uv_path = uv_binary_path(runtime_dir);
+    if uv_path.is_file() && probe_uv_binary(&uv_path).is_ok() {
+        Some(uv_path)
+    } else {
+        None
+    }
+}
+
+/// 针对托管 venv 执行一次包管理操作，优先用 uv pip（真正的解析器 + 更快），
+/// uv 不在则回退到 venv 自带的 `python -m pip`。action 取
+/// "install" | "upgrade" | "reinstall" | "uninstall"。返回 (成功, stdout, stderr)。
+fn run_managed_package_op(
+    spec: &PythonLaunchSpec,
+    action: &str,
+    packages: &[String],
+) -> Result<(bool, String, String), String> {
+    let mut command = match existing_uv_binary(&spec.runtime_dir) {
+        Some(uv_path) => {
+            let mut command = uv_command(&uv_path, &spec.runtime_dir);
+            command.arg("pip");
+            match action {
+                "install" => {
+                    command.arg("install");
+                }
+                "upgrade" => {
+                    command.args(["install", "--upgrade"]);
+                }
+                // uv 用 `--reinstall`，没有 pip 的 `--force-reinstall`。
+                "reinstall" => {
+                    command.args(["install", "--reinstall"]);
+                }
+                "uninstall" => {
+                    command.arg("uninstall");
+                }
+                _ => return Err(format!("不支持的 Python 包管理动作：{action}")),
+            }
+            command.args(packages);
+            command.args(["--python", spec.program.as_str()]);
+            if action != "uninstall" {
+                command.args(["--index-url", PYTHON_PIP_INDEX_URL]);
+            }
+            command
+        }
+        None => {
+            let mut command = Command::new(&spec.program);
+            command.args(&spec.base_args).args(["-m", "pip"]);
+            match action {
+                "install" => {
+                    command.arg("install");
+                }
+                "upgrade" => {
+                    command.args(["install", "--upgrade"]);
+                }
+                "reinstall" => {
+                    command.args(["install", "--upgrade", "--force-reinstall"]);
+                }
+                "uninstall" => {
+                    command.args(["uninstall", "-y"]);
+                }
+                _ => return Err(format!("不支持的 Python 包管理动作：{action}")),
+            }
+            command.args(packages);
+            apply_python_process_no_window(&mut command);
+            command
+        }
+    };
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let output = command
+        .output()
+        .map_err(|e| format!("run managed package op failed: {e}"))?;
+    Ok((
+        output.status.success(),
+        String::from_utf8_lossy(&output.stdout).to_string(),
+        String::from_utf8_lossy(&output.stderr).to_string(),
+    ))
+}
+
+/// 列出托管 venv 里已安装的包（pip list --format=json 的原始数组），
+/// 优先 uv pip list，回退 `python -m pip list`。
+fn managed_pip_list_json(spec: &PythonLaunchSpec) -> Vec<Value> {
+    let command = match existing_uv_binary(&spec.runtime_dir) {
+        Some(uv_path) => {
+            let mut command = uv_command(&uv_path, &spec.runtime_dir);
+            command.args([
+                "pip",
+                "list",
+                "--format=json",
+                "--python",
+                spec.program.as_str(),
+            ]);
+            command
+        }
+        None => {
+            let mut command = Command::new(&spec.program);
+            command
+                .args(&spec.base_args)
+                .args(["-m", "pip", "list", "--format=json"]);
+            apply_python_process_no_window(&mut command);
+            command
+        }
+    };
+    match command_output_trimmed(command) {
+        Ok(output) => serde_json::from_str::<Vec<Value>>(&output)
+            .ok()
+            .unwrap_or_default(),
+        Err(error) => {
+            warn!(
+                source = spec.source.as_str(),
+                error = error.as_str(),
+                "[PythonRuntime] list managed packages failed"
+            );
+            Vec::new()
+        }
+    }
 }
 
 fn exe_dir() -> Result<PathBuf, String> {
@@ -1602,6 +2003,59 @@ fn create_managed_virtualenv(base_spec: &PythonLaunchSpec, venv_dir: &Path) -> R
     }
 }
 
+/// 用 uv 创建托管 `.venv`：先装目标 Python（缺失时 uv 联网下载 python-build-standalone），
+/// 再 `uv venv --seed`。`--seed` 让 venv 自带 pip，任何仍走 `python -m pip` 的旧路径都不会断。
+/// 产出的 `.venv/Scripts/python.exe` 结构与旧 `python -m venv` 完全一致，执行层无感。
+fn create_managed_virtualenv_with_uv(
+    uv_path: &Path,
+    runtime_dir: &Path,
+    venv_dir: &Path,
+    version: &str,
+) -> Result<(), String> {
+    let mut install_cmd = uv_command(uv_path, runtime_dir);
+    install_cmd.args(["python", "install", version]);
+    if let Err(mirror_error) = command_output_trimmed(install_cmd) {
+        // 镜像装不上（代理临时挂了等）时直连 GitHub 再试一次。
+        warn!(
+            version,
+            error = mirror_error.as_str(),
+            "[PythonRuntime] uv install python via mirror failed, retry direct github"
+        );
+        let mut direct_cmd = uv_command_without_python_mirror(uv_path, runtime_dir);
+        direct_cmd.args(["python", "install", version]);
+        command_output_trimmed(direct_cmd)
+            .map_err(|e| format!("uv install python {version} failed: {e}"))?;
+    }
+
+    let mut venv_cmd = uv_command(uv_path, runtime_dir);
+    venv_cmd
+        .args(["venv", "--seed", "--python", version])
+        .arg(venv_dir)
+        .current_dir(runtime_dir);
+    let _ = command_output_trimmed(venv_cmd)
+        .map_err(|e| format!("uv venv (python {version}) failed: {e}"))?;
+    Ok(())
+}
+
+/// 现有托管 venv 的 Python 版本是否匹配请求版本。
+/// 请求 "3.13" 能匹配当前 "3.13.13"（同系列）；请求 "3.12" 对 "3.13.13" 则不匹配，触发版本切换重建。
+fn managed_python_version_matches(spec: &PythonLaunchSpec, requested: &str) -> bool {
+    let mut command = Command::new(&spec.program);
+    command.args(&spec.base_args).arg("--version");
+    match command_output_trimmed(command) {
+        Ok(output) => {
+            let current = output
+                .trim()
+                .strip_prefix("Python")
+                .map(str::trim)
+                .unwrap_or_else(|| output.trim());
+            let req = requested.trim();
+            current == req || current.starts_with(&format!("{req}."))
+        }
+        Err(_) => false,
+    }
+}
+
 #[cfg(windows)]
 fn should_copy_windows_runtime_support_file(file_name: &str) -> bool {
     let normalized = file_name.trim().to_ascii_lowercase();
@@ -1733,28 +2187,12 @@ fn python_runtime_recommended_packages() -> Vec<String> {
 }
 
 fn list_python_package_names(spec: &PythonLaunchSpec) -> HashSet<String> {
-    let mut command = Command::new(&spec.program);
-    command
-        .args(&spec.base_args)
-        .args(["-m", "pip", "list", "--format=json"]);
-    match command_output_trimmed(command) {
-        Ok(output) => serde_json::from_str::<Vec<Value>>(&output)
-            .ok()
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|item| item.get("name").and_then(Value::as_str).map(str::to_string))
-            .map(|name| normalize_python_package_name(&name))
-            .filter(|name| !name.is_empty())
-            .collect(),
-        Err(error) => {
-            warn!(
-                source = spec.source.as_str(),
-                error = error.as_str(),
-                "[PythonRuntime] list installed python package names failed"
-            );
-            HashSet::new()
-        }
-    }
+    managed_pip_list_json(spec)
+        .into_iter()
+        .filter_map(|item| item.get("name").and_then(Value::as_str).map(str::to_string))
+        .map(|name| normalize_python_package_name(&name))
+        .filter(|name| !name.is_empty())
+        .collect()
 }
 
 #[cfg(windows)]
@@ -1898,23 +2336,12 @@ fn ensure_python_packages_installed(
         return Ok(());
     }
 
-    let mut command = Command::new(&spec.program);
-    command
-        .args(&spec.base_args)
-        .args(["-m", "pip", "install"])
-        .args(&missing_packages)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    apply_python_process_no_window(&mut command);
-    let output = command
-        .output()
-        .map_err(|e| format!("install managed runtime packages failed: {e}"))?;
-    if !output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let (ok, stdout, stderr) = run_managed_package_op(spec, "install", &missing_packages)?;
+    if !ok {
         return Err(format!(
-            "install managed runtime packages failed during {reason}: status={}, stdout={}, stderr={}",
-            output.status, stdout, stderr
+            "install managed runtime packages failed during {reason}: stdout={}, stderr={}",
+            stdout.trim(),
+            stderr.trim()
         ));
     }
 
@@ -2060,13 +2487,22 @@ fn ensure_managed_python_launch_spec_with_download_version(
         managed_runtime_health_error.as_deref() == Some("managed runtime marker missing");
     let managed_runtime_broken = managed_runtime_health_error.is_some() && !marker_missing_only;
 
+    // 版本切换：显式请求了某个 Python 版本、且与当前 venv 不符时，跳过复用、走重建。
+    let requested_version = download_version
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let version_mismatch = match (requested_version, managed_spec.as_ref()) {
+        (Some(requested), Some(spec)) => !managed_python_version_matches(spec, requested),
+        _ => false,
+    };
+
     // 设计说明：
     // 1. pip 安装、worker 启动、状态读取这些运行期操作，只要托管 `.venv` 当前可用，就应该直接复用它。
-    // 2. 只有在“首次创建”或“已损坏需要重建”时，才必须依赖内置的 bundled base Python。
+    // 2. 只有在“首次创建”“已损坏需要重建”或“显式切换 Python 版本”时，才走重建流程。
     // 3. 上一版把 bundled base 解析提前到了函数入口，导致即使 `.venv` 已经健康可用，安装包也会被
     //    “未找到内置基础运行时”误拦截。
     if let Some(spec) = managed_spec.as_ref() {
-        if !managed_runtime_broken {
+        if !managed_runtime_broken && !version_mismatch {
             if marker_missing_only {
                 // Recovery note:
                 // 1. Older bootstrap flows could leave a healthy `.venv` behind without persisting runtime.json.
@@ -2107,37 +2543,61 @@ fn ensure_managed_python_launch_spec_with_download_version(
         }
     }
 
-    let base_spec = resolve_bootstrap_python_base_launch_spec(download_version)?;
-
-    if managed_runtime_broken {
+    // 到这里意味着托管 venv 需要创建或重建：缺失、损坏、或切换 Python 版本。
+    if managed_runtime_broken || version_mismatch {
         warn!(
             venv_dir = venv_dir.to_string_lossy().as_ref(),
-            error = managed_runtime_health_error.as_deref().unwrap_or("unknown"),
-            "[PythonRuntime] detected broken managed virtual environment, recreate it from base python"
+            broken = managed_runtime_broken,
+            version_mismatch,
+            error = managed_runtime_health_error.as_deref().unwrap_or("none"),
+            "[PythonRuntime] recreate managed virtual environment"
         );
         remove_path_if_exists(&venv_dir)?;
-        let marker_path = runtime_marker_path(&runtime_dir);
-        let _ = remove_path_if_exists(&marker_path);
+        let _ = remove_path_if_exists(&runtime_marker_path(&runtime_dir));
     }
 
-    if !has_managed_python || managed_runtime_broken {
-        fs::create_dir_all(&runtime_dir).map_err(|e| format!("create python runtime dir failed: {e}"))?;
-        create_managed_virtualenv(&base_spec, &venv_dir)?;
-        sync_managed_runtime_support_files(&base_spec, &venv_dir)?;
-        info!(
-            source = base_spec.source.as_str(),
-            venv_dir = venv_dir.to_string_lossy().as_ref(),
-            "[PythonRuntime] managed virtual environment created from managed bootstrap pipeline"
-        );
-    }
+    fs::create_dir_all(&runtime_dir)
+        .map_err(|e| format!("create python runtime dir failed: {e}"))?;
 
-    let marker_spec = managed_python_launch_spec(&runtime_dir, base_spec.source.clone())?;
+    // uv 优先：能解析到 uv 就用它创建 venv，完全绕开 python.org 基础解释器下载与 Windows DLL 同步；
+    // uv 不可用（下载失败等）时，回退到旧的 bundled base + `python -m venv` 供给链。
+    let target_version = requested_version.unwrap_or(UV_DEFAULT_PYTHON_VERSION);
+    let base_source = match resolve_uv_binary() {
+        Ok(uv_path) => {
+            create_managed_virtualenv_with_uv(&uv_path, &runtime_dir, &venv_dir, target_version)?;
+            info!(
+                target_version,
+                venv_dir = venv_dir.to_string_lossy().as_ref(),
+                "[PythonRuntime] managed virtual environment created via uv"
+            );
+            "uv-managed".to_string()
+        }
+        Err(uv_error) => {
+            warn!(
+                error = uv_error.as_str(),
+                "[PythonRuntime] uv unavailable, fallback to bundled base python + venv"
+            );
+            let base_spec = resolve_bootstrap_python_base_launch_spec(download_version)?;
+            create_managed_virtualenv(&base_spec, &venv_dir)?;
+            sync_managed_runtime_support_files(&base_spec, &venv_dir)?;
+            info!(
+                source = base_spec.source.as_str(),
+                venv_dir = venv_dir.to_string_lossy().as_ref(),
+                "[PythonRuntime] managed virtual environment created from bundled base python"
+            );
+            base_spec.source
+        }
+    };
+
+    let marker_spec = managed_python_launch_spec(&runtime_dir, base_source.clone())?;
     let pip_version = ensure_pip_available(&marker_spec)?;
     ensure_recommended_runtime_packages_installed(
         &runtime_dir,
         &Some(marker_spec.clone()),
         &mut managed_package_snapshot,
-        if managed_runtime_broken {
+        if version_mismatch {
+            "managed-runtime-version-switch"
+        } else if managed_runtime_broken {
             "managed-runtime-repair"
         } else if !has_managed_python {
             "managed-runtime-initialize"
@@ -2149,7 +2609,7 @@ fn ensure_managed_python_launch_spec_with_download_version(
         &marker_spec,
         &pip_version,
         download_version.unwrap_or_default(),
-        did_use_download_bootstrap(&runtime_dir, &base_spec.source),
+        did_use_download_bootstrap(&runtime_dir, &base_source),
     )?;
     cleanup_bootstrap_runtime_artifacts(&runtime_dir, "managed-runtime-ready");
     Ok(marker_spec)
@@ -2969,31 +3429,19 @@ fn send_one_shot_worker_request(payload: &Value) -> Result<Value, String> {
 }
 
 fn list_python_packages(spec: &PythonLaunchSpec) -> Vec<String> {
-    let mut command = Command::new(&spec.program);
-    command
-        .args(&spec.base_args)
-        .args(["-m", "pip", "list", "--format=json"]);
-    match command_output_trimmed(command) {
-        Ok(output) => serde_json::from_str::<Vec<Value>>(&output)
-            .ok()
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|item| {
-                let name = item.get("name").and_then(Value::as_str)?.trim();
-                let version = item.get("version").and_then(Value::as_str).unwrap_or("").trim();
-                if version.is_empty() {
-                    Some(name.to_string())
-                } else {
-                    Some(format!("{name} {version}"))
-                }
-            })
-            .take(18)
-            .collect(),
-        Err(error) => {
-            warn!(error = error.as_str(), "[PythonRuntime] list pip packages failed");
-            Vec::new()
-        }
-    }
+    managed_pip_list_json(spec)
+        .into_iter()
+        .filter_map(|item| {
+            let name = item.get("name").and_then(Value::as_str)?.trim();
+            let version = item.get("version").and_then(Value::as_str).unwrap_or("").trim();
+            if version.is_empty() {
+                Some(name.to_string())
+            } else {
+                Some(format!("{name} {version}"))
+            }
+        })
+        .take(18)
+        .collect()
 }
 
 fn clear_python_worker() -> Result<(), String> {
@@ -3386,6 +3834,11 @@ pub async fn python_runtime_get_status() -> Result<PythonRuntimeStatus, String> 
             }
         };
 
+        let uv_version = existing_uv_binary(&runtime_dir)
+            .and_then(|uv_path| probe_uv_binary(&uv_path).ok())
+            .map(|value| value.trim().to_string())
+            .unwrap_or_default();
+
         Ok(PythonRuntimeStatus {
             ready,
             source,
@@ -3401,6 +3854,7 @@ pub async fn python_runtime_get_status() -> Result<PythonRuntimeStatus, String> 
             runtime_marker_path: runtime_marker.to_string_lossy().to_string(),
             bootstrap_download_available: auto_download_python_available(),
             bootstrap_download_version: auto_download_python_version_label().to_string(),
+            uv_version,
         })
     })
     .await
@@ -3410,6 +3864,22 @@ pub async fn python_runtime_get_status() -> Result<PythonRuntimeStatus, String> 
 #[command]
 pub async fn python_runtime_list_downloadable_versions() -> Result<PythonRuntimeDownloadCatalog, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        // uv 优先：uv 自带的版本清单跨平台可用；uv 尚未就绪时再回退到旧目录。
+        match fetch_python_download_versions_catalog_via_uv() {
+            Ok(catalog) => {
+                info!(
+                    count = catalog.versions.len(),
+                    default_version = catalog.default_version.as_str(),
+                    "[PythonRuntime] fetched downloadable python versions via uv"
+                );
+                return Ok(catalog);
+            }
+            Err(error) => warn!(
+                error = error.as_str(),
+                "[PythonRuntime] uv python list unavailable, fallback to legacy catalog"
+            ),
+        }
+
         if !auto_download_python_available() {
             return Ok(python_download_versions_fallback());
         }
@@ -3601,24 +4071,10 @@ pub async fn python_runtime_install_packages(
 
         info!(packages = packages.join(", ").as_str(), source = spec.source.as_str(), "[PythonRuntime] installing packages");
 
-        let mut command = Command::new(&spec.program);
-        command
-            .args(&spec.base_args)
-            .args(["-m", "pip", "install"])
-            .args(&packages)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        apply_python_process_no_window(&mut command);
-        let output = command
-            .output()
-            .map_err(|e| format!("install python packages failed: {e}"))?;
+        let (ok, stdout, stderr) = run_managed_package_op(&spec, "install", &packages)?;
         clear_python_worker()?;
 
-        Ok(PythonInstallPackagesResponse {
-            ok: output.status.success(),
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        })
+        Ok(PythonInstallPackagesResponse { ok, stdout, stderr })
     })
     .await
     .map_err(|e| format!("python_runtime_install_packages join failed: {e}"))?
@@ -3641,35 +4097,9 @@ pub async fn python_runtime_manage_packages(
             return Err("未提供需要处理的 Python 包。".to_string());
         }
 
-        let pip_args: Vec<String> = match action.as_str() {
-            "install" => {
-                let mut args = vec!["install".to_string()];
-                args.extend(packages.iter().cloned());
-                args
-            }
-            "upgrade" => {
-                let mut args = vec!["install".to_string(), "--upgrade".to_string()];
-                args.extend(packages.iter().cloned());
-                args
-            }
-            "reinstall" => {
-                let mut args = vec![
-                    "install".to_string(),
-                    "--upgrade".to_string(),
-                    "--force-reinstall".to_string(),
-                ];
-                args.extend(packages.iter().cloned());
-                args
-            }
-            "uninstall" => {
-                let mut args = vec!["uninstall".to_string(), "-y".to_string()];
-                args.extend(packages.iter().cloned());
-                args
-            }
-            _ => {
-                return Err(format!("不支持的 Python 包管理动作：{action}"));
-            }
-        };
+        if !matches!(action.as_str(), "install" | "upgrade" | "reinstall" | "uninstall") {
+            return Err(format!("不支持的 Python 包管理动作：{action}"));
+        }
 
         let spec = resolve_python_launch_spec()?;
         let _ = ensure_pip_available(&spec)?;
@@ -3681,25 +4111,11 @@ pub async fn python_runtime_manage_packages(
             "[PythonRuntime] manage packages"
         );
 
-        // 统一走 pip 子命令，前端再根据 action 给出更贴近用户语义的反馈。
-        let mut command = Command::new(&spec.program);
-        command
-            .args(&spec.base_args)
-            .args(["-m", "pip"])
-            .args(&pip_args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        apply_python_process_no_window(&mut command);
-        let output = command
-            .output()
-            .map_err(|e| format!("manage python packages failed: {e}"))?;
+        // 统一走 uv pip（缺失时回退 python -m pip），前端再根据 action 给出更贴近用户语义的反馈。
+        let (ok, stdout, stderr) = run_managed_package_op(&spec, action.as_str(), &packages)?;
         clear_python_worker()?;
 
-        Ok(PythonInstallPackagesResponse {
-            ok: output.status.success(),
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        })
+        Ok(PythonInstallPackagesResponse { ok, stdout, stderr })
     })
     .await
     .map_err(|e| format!("python_runtime_manage_packages join failed: {e}"))?
