@@ -422,18 +422,13 @@ fn save_articles_to_cache(feed_id: &str, items: &[Article]) -> Result<(), String
 
     // 认知层：抓回来的文章同时进感知收件箱。
     //
-    // 这一步是"外部输入 → 大脑"的接线：flipboard 原本只把文章存进自己的缓存等人来翻，
-    // 现在每一篇也会被算新颖度与显著性、找到知识库里的锚点，从而能参与召回、
-    // 参与矛盾检测、参与简报。正文优先用清洗后的 markdown（图文完整），退回纯文本镜像。
+    // 这一步是"外部输入 → 大脑"的接线。关键：**只在拿到深解析(hydrate)出的完整正文后才入库**，
+    // 保证大脑收件箱里的内容与知识领域阅读页展示的正文一致——而不是先把 RSS 摘要塞进去
+    // （那会让大脑看到的只是标题+一两句摘要，和文章正文对不上）。
+    // 未 hydrate 的薄卡片这里跳过，等 persist_hydrated_article 在深解析后补入完整正文。
     for a in items {
-        let body = if !a.clean_content_markdown.trim().is_empty() {
-            a.clean_content_markdown.as_str()
-        } else if !a.content.trim().is_empty() {
-            a.content.as_str()
-        } else {
-            a.description.as_str()
-        };
-        // 只有标题+摘要的卡片没有信息量，等 hydrate 出完整正文再入库。
+        // 仅当有抽取出的正文（clean_content_markdown，深解析产物）才入库。
+        let body = a.clean_content_markdown.trim();
         if body.chars().count() < 200 {
             continue;
         }

@@ -318,7 +318,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import MarkdownIt from 'markdown-it'
 import { invoke } from '@tauri-apps/api/core'
@@ -388,6 +388,30 @@ const sourceOptions = computed(() => [
 ])
 const briefOptions = computed(() =>
   store.briefHistory.map((b) => ({ label: `${b.day}（${b.kind}）`, value: b.day })),
+)
+
+// 左侧边栏点击"简报日期 / 感知来源 / 待处理分类"时，只更新了 store，
+// 中间收件箱不会自动跳到对应板块。这里监听 store 变化，把内部 tab 同步过去，
+// 让点击左栏条目 = 中间区域直接切到该内容。
+watch(
+  () => store.brief?.day,
+  (day) => {
+    if (day) {
+      briefDay.value = day
+      tab.value = 'brief'
+    }
+  }
+)
+watch(
+  () => store.perceptFilter.sourceKind,
+  (kind, prev) => {
+    // 来源筛选变化（含点"全部"清空）都意味着用户在看感知收件箱。
+    if (kind !== prev) tab.value = 'percepts'
+  }
+)
+watch(
+  () => store.nudgeFilterKind,
+  () => { tab.value = 'nudges' }
 )
 
 const kindLabel = (k) => KINDS[k]?.label || k
