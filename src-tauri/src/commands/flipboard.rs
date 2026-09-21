@@ -2858,6 +2858,23 @@ fn infer_feed_name_from_url(url: &str) -> String {
         .unwrap_or_else(|| "知识源".to_string())
 }
 
+/// 粗略统计 HTML 去标签后的有效文本字符数（去空白）。用于比较 RSS 正文与抽取正文的充实度，
+/// 不追求精确，够用来判断"哪个更全"即可。
+fn strip_html_len(html: &str) -> usize {
+    let mut in_tag = false;
+    let mut count = 0usize;
+    for c in html.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if in_tag => {}
+            _ if c.is_whitespace() => {}
+            _ => count += 1,
+        }
+    }
+    count
+}
+
 fn trim_to_chars(text: &str, max_chars: usize) -> String {
     let mut s = String::new();
     for (i, ch) in text.chars().enumerate() {
@@ -3031,8 +3048,32 @@ async fn hydrate_article_readable_content(article: &Article) -> Result<Article, 
                     enriched.title = t.clone();
                 }
             }
-            enriched.clean_content_html = ex.clean_html.clone();
-            enriched.clean_content_markdown = ex.markdown.clone();
+            // 抽取正文的有效文本量（去空白）。JS 重度站/登录墙常只抽到一张图或几句噪声，
+            // 若用这种"薄抽取"覆盖 RSS 自带的全文（少数派/Smashing 等全文源），正文就没了。
+            let extracted_len = ex.plain_text.chars().filter(|c| !c.is_whitespace()).count();
+            // RSS 已有正文的有效文本量（content 优先，退回 description）。
+            let rss_body = if !article.content.trim().is_empty() {
+                article.content.as_str()
+            } else {
+                article.description.as_str()
+            };
+            let rss_len = strip_html_len(rss_body);
+
+            // 仅当抽取正文"足够充实"或"明显比 RSS 已有的更全"时才用抽取结果覆盖，
+            // 否则保留 RSS 全文（避免把好正文换成一张图）。
+            let use_extracted = extracted_len >= 200 || extracted_len >= rss_len.saturating_mul(2).max(120);
+
+            if use_extracted {
+                enriched.clean_content_html = ex.clean_html.clone();
+                enriched.clean_content_markdown = ex.markdown.clone();
+                if !ex.plain_text.is_empty() {
+                    enriched.content = ex.plain_text.clone();
+                }
+            } else if enriched.clean_content_html.trim().is_empty() && rss_len > 0 {
+                // 抽取太薄：用 RSS 正文作为展示 HTML（前端优先渲染 clean_content_html）。
+                enriched.clean_content_html = rss_body.to_string();
+            }
+            // 图片信息总是采纳（抽取对配图通常有效，即便正文薄）。
             enriched.content_images = ex.images.clone();
             enriched.lead_image = ex.lead_image.clone();
             enriched.render_mode = ex.engine.to_string();
@@ -3040,10 +3081,6 @@ async fn hydrate_article_readable_content(article: &Article) -> Result<Article, 
                 if enriched.author.is_none() && !by.is_empty() {
                     enriched.author = Some(by);
                 }
-            }
-            // content 作为纯文本镜像（搜索/旧字段兼容）。
-            if !ex.plain_text.is_empty() {
-                enriched.content = ex.plain_text.clone();
             }
             // description：优先 excerpt，其次正文截断。
             let desc = ex

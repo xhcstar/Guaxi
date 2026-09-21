@@ -154,7 +154,7 @@
             <div v-for="article in relatedArticles" :key="article.id" class="related-card"
               @click="selectRelatedArticle(article)">
               <h4>{{ article.title }}</h4>
-              <p>{{ article.description }}</p>
+              <p>{{ plainPreview(article.description) }}</p>
             </div>
           </div>
         </div>
@@ -178,11 +178,15 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { NSpin, useMessage } from 'naive-ui'
 import { openUrl } from '@tauri-apps/plugin-opener'
+import { createLogger } from '../../utils/logger'
 import { useFlipboardStore } from '../../stores/flipboardStore.js'
+import { renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker.js'
 import SelectionNotesPanel from './SelectionNotesPanel.vue'
+
+const logger = createLogger('FlipboardDetailView')
 import {
   BookmarkOutline,
   Bookmark,
@@ -287,32 +291,72 @@ const toEmbedUrl = (url) => {
   return url
 }
 
-const formattedContent = computed(() => {
-  // 工业级抽取产出的干净 HTML（内联图片）优先；回退到旧的 content 纯文本。
+// 估算一段 HTML 去标签后的正文文字量（用于判断 clean_content_html 是不是"只有图/没正文"）。
+const htmlTextLen = (html) => String(html || '')
+  .replace(/<[^>]*>/g, ' ')
+  .replace(/\s+/g, '')
+  .trim()
+  .length
+
+// 相关文章卡片的摘要：全文 RSS 的 description 常带 HTML 标签，去标签压成纯文本预览。
+const plainPreview = (html) => String(html || '')
+  .replace(/<[^>]*>/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim()
+  .slice(0, 120)
+
+// 是否看起来像 Markdown 源码（需要走 Markdown 渲染引擎）。
+const looksLikeMarkdown = (text) => {
+  const s = String(text || '')
+  return /(^|\n)#{1,6}\s/.test(s)          // 标题
+    || /!\[[^\]]*\]\([^)]+\)/.test(s)       // 图片
+    || /(^|\n)[-*+]\s+\S/.test(s)           // 无序列表
+    || /(^|\n)\d+\.\s+\S/.test(s)           // 有序列表
+    || /(^|\n)>\s/.test(s)                  // 引用
+    || /```/.test(s)                        // 代码块
+    || /\[[^\]]+\]\([^)]+\)/.test(s)        // 链接
+}
+
+// 选出用于渲染的原始内容：干净 HTML 优先；若它"只有图没正文"而 content 更全则用 content。
+const contentSource = computed(() => {
   const cleanHtml = String(props.currentArticle?.clean_content_html || '').trim()
-  if (cleanHtml) return cleanHtml
   const raw = String(props.currentArticle?.content || '').trim()
-  if (!raw) return ''
-  if (/<(p|img|h1|h2|h3|ul|ol|li|blockquote|a)(\s|>)/i.test(raw)) {
-    return raw
+  if (cleanHtml && !(htmlTextLen(cleanHtml) < 40 && htmlTextLen(raw) > htmlTextLen(cleanHtml))) {
+    return cleanHtml
   }
-  return raw
+  return raw || cleanHtml || ''
+})
+
+// 最终渲染到正文区的 HTML。Markdown 源码交给项目统一的渲染引擎（GuaxiMarker）处理，
+// 已是 HTML 的直接用。异步渲染，用 ref 承载。
+const formattedContent = ref('')
+
+const renderContent = async (src) => {
+  const text = String(src || '').trim()
+  if (!text) { formattedContent.value = ''; return }
+  // 已经是 HTML（带常见块级标签）则不走 Markdown，直接渲染。
+  const isHtml = /<(p|div|img|h[1-6]|ul|ol|li|blockquote|figure|section|article|table)(\s|>)/i.test(text)
+  if (isHtml) { formattedContent.value = text; return }
+  if (looksLikeMarkdown(text)) {
+    try {
+      formattedContent.value = await renderMarkdown(text, {
+        mermaid: true,
+        math: true,
+        codeHighlight: true,
+        buttons: false,
+        theme: 'default',
+      })
+      return
+    } catch (e) {
+      logger.warn('[FlipboardDetailView] markdown render failed, fallback to plain', e)
+    }
+  }
+  // 纯文本：按行包段，链接/图片/媒体行做基本处理（保留原有轻量逻辑）。
+  formattedContent.value = text
     .split('\n')
     .map(line => line.trim())
     .filter(Boolean)
     .map(line => {
-      if (/^-\s+https?:\/\//i.test(line)) {
-        const url = line.replace(/^-+\s*/, '')
-        const escapedUrl = escapeHtml(url)
-        if (isMediaUrl(url)) {
-          const embed = escapeHtml(toEmbedUrl(url))
-          return `<p>• <a href="${escapedUrl}" target="_blank" rel="noopener noreferrer">${escapedUrl}</a></p><div class="media-placeholder"><iframe src="${embed}" loading="lazy" referrerpolicy="no-referrer" allowfullscreen></iframe></div>`
-        }
-        if (isImageUrl(url)) {
-          return `<p>• <a href="${escapedUrl}" target="_blank" rel="noopener noreferrer">${escapedUrl}</a></p><p><img src="${escapedUrl}" loading="lazy" alt="image" /></p>`
-        }
-        return `<p>• <a href="${escapedUrl}" target="_blank" rel="noopener noreferrer">${escapedUrl}</a></p>`
-      }
       if (/^https?:\/\//i.test(line)) {
         const escapedUrl = escapeHtml(line)
         if (isMediaUrl(line)) {
@@ -320,14 +364,16 @@ const formattedContent = computed(() => {
           return `<p><a href="${escapedUrl}" target="_blank" rel="noopener noreferrer">${escapedUrl}</a></p><div class="media-placeholder"><iframe src="${embed}" loading="lazy" referrerpolicy="no-referrer" allowfullscreen></iframe></div>`
         }
         if (isImageUrl(line)) {
-          return `<p><a href="${escapedUrl}" target="_blank" rel="noopener noreferrer">${escapedUrl}</a></p><p><img src="${escapedUrl}" loading="lazy" alt="image" /></p>`
+          return `<p><img src="${escapedUrl}" loading="lazy" alt="image" /></p>`
         }
         return `<p><a href="${escapedUrl}" target="_blank" rel="noopener noreferrer">${escapedUrl}</a></p>`
       }
       return `<p>${linkifyText(line)}</p>`
     })
     .join('')
-})
+}
+
+watch(contentSource, (src) => { renderContent(src) }, { immediate: true })
 
 const toggleBookmark = () => {
   if (props.currentArticle) {
@@ -602,8 +648,10 @@ const formatTime = (timeString) => {
 }
 
 .article-body {
-  line-height: 1.8;
-  font-size: 1.125rem;
+  /* 与编辑器 Markdown 预览（.preview）保持一致的字体/字号/行高。 */
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
+  font-size: 17px;
+  line-height: 1.5;
   color: var(--guaxi-text-primary);
 }
 
