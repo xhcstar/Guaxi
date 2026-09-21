@@ -359,7 +359,15 @@ onBeforeUnmount(() => {
 
 .collections-header h3 {
   margin: 0;
-  font-size: 14px;
+  font-size: 19px;
+  font-weight: 700;
+}
+
+/* 卡片标题（naive n-card 头部）：作为小标题，明显大于正文。 */
+.collection-card :deep(.n-card-header__main) {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.4;
 }
 
 .collections-search {
@@ -415,16 +423,18 @@ onBeforeUnmount(() => {
 }
 
 .collection-cat {
-  font-size: 11px;
-  padding: 1px 8px;
+  font-size: 12px;
+  padding: 2px 9px;
   border-radius: 8px;
   background: var(--guaxi-header-bg, #eef2ff);
   color: var(--guaxi-text-secondary, #64748b);
 }
 
 .collection-content {
-  font-size: 13px;
-  line-height: 1.6;
+  /* 正文：放大到 15px，与字体族对齐中间正文，层次上小于卡片标题。 */
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
+  font-size: 15px;
+  line-height: 1.7;
   color: var(--guaxi-text-primary, #0f172a);
   white-space: pre-wrap;
   cursor: pointer;
@@ -455,7 +465,7 @@ onBeforeUnmount(() => {
 
 .collection-source {
   margin-top: 8px;
-  font-size: 12px;
+  font-size: 13px;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -480,7 +490,16 @@ onBeforeUnmount(() => {
 }
 
 .collection-time {
-  font-size: 11px;
+  font-size: 12px;
+}
+
+.empty-tip {
+  font-size: 13px;
+}
+
+/* 视频占位与媒体说明也同步放大一点。 */
+.collection-media-video {
+  font-size: 14px;
 }
 
 .collection-btns {

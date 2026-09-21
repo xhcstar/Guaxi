@@ -7,15 +7,20 @@
       <slot />
     </div>
 
-    <!-- 选择工具条：基于 PDF 阅读器的简化版本（只保留“插入笔记”逻辑） -->
+    <!-- 选择工具条：支持摘录文字，以及选区内包含的图片。 -->
     <div v-if="selectionToolbarVisible" class="selection-toolbar"
       :style="{ top: `${selectionToolbarTop}px`, left: `${selectionToolbarLeft}px` }" @mousedown.stop @click.stop
       @dblclick.stop>
       <div class="selection-toolbar-actions">
-        <!-- 插入笔记按钮：将当前 selectionInsertText 插入到笔记中 -->
-        <button class="selection-tool-btn" type="button" title="插入笔记" :disabled="selectionBusy || !selectionInsertText"
-          @click="insertSelectionResult">
-          + 笔记
+        <!-- 摘录文字（含选区里的图片时，会以 Markdown 图文一并摘录） -->
+        <button class="selection-tool-btn" type="button" title="摘录选中内容"
+          :disabled="selectionBusy || !selectionInsertText" @click="insertSelectionResult">
+          + 摘录{{ selectionImageCount ? `（含${selectionImageCount}图）` : '' }}
+        </button>
+        <!-- 仅摘录图片：选区里有图片时出现 -->
+        <button v-if="selectionImageCount" class="selection-tool-btn selection-tool-btn-ghost" type="button"
+          title="只摘录图片" :disabled="selectionBusy" @click="insertSelectionImages">
+          仅图片
         </button>
       </div>
     </div>
@@ -47,7 +52,7 @@ import { createLogger } from '../../utils/logger'
  *  3. 在文章内容的 .article-content 上挂：@mouseup="selectionNotesRef.handleSelectionMouseUp()"
  */
 
-import { ref, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { join } from '@tauri-apps/api/path'
 import { NCard, NButton, NIcon, NText, useMessage } from 'naive-ui'
@@ -97,6 +102,12 @@ const selectionToolbarLeft = ref(0)
 const selectionText = ref('')
 const selectionInsertText = ref('')
 const selectionBusy = ref(false)
+// 选区里包含的图片 URL（用于"图文一并摘录"或"仅图片"）。
+const selectionImages = ref([])
+const selectionImageCount = computed(() => selectionImages.value.length)
+// 去重护栏：记录上次收录的内容与时刻，拦截双击/热更叠加导致的重复插入。
+const lastAddedContent = ref('')
+const lastAddedAt = ref(0)
 
 /**
  * 笔记文件路径：每篇文章单独一个 JSON 文件
@@ -341,22 +352,52 @@ const getCardTitle = (type) => {
  *  - 计算工具条位置
  *  - 填充 selectionText / selectionInsertText
  */
+/**
+ * 从选区 range 里抽取图片 URL：克隆选区内容为 DOM 片段后找 <img>，
+ * 兼容 data-src / data-original 等懒加载属性。返回去重后的 URL 列表。
+ * 定义在 handleSelectionMouseUp 之前，避免被它引用时未初始化。
+ */
+const extractSelectionImages = (range) => {
+  try {
+    if (!range) return []
+    const frag = range.cloneContents()
+    const imgs = Array.from(frag.querySelectorAll?.('img') || [])
+    const urls = []
+    const seen = new Set()
+    for (const img of imgs) {
+      const raw = img.getAttribute?.('src')
+        || img.getAttribute?.('data-src')
+        || img.getAttribute?.('data-original')
+        || img.currentSrc
+        || ''
+      const src = String(raw || '').trim()
+      if (!src || src.startsWith('data:') || seen.has(src)) continue
+      seen.add(src)
+      urls.push(src)
+    }
+    return urls
+  } catch {
+    return []
+  }
+}
+
 const handleSelectionMouseUp = () => {
   try {
     const selection = window.getSelection()
     const text = selection ? selection.toString().trim() : ''
-    if (!text) {
-      closeSelectionToolbar()
-      return
-    }
-
-    // 计算工具条位置：基于选区的 boundingRect
     if (!selection || selection.rangeCount === 0) {
       closeSelectionToolbar()
       return
     }
 
     const range = selection.getRangeAt(0)
+    const imagesInRange = extractSelectionImages(range)
+    // 选区既无文字也无图片才关闭；纯图片选区仍要弹工具条。
+    if (!text && !imagesInRange.length) {
+      closeSelectionToolbar()
+      return
+    }
+
     const rect = range.getBoundingClientRect()
     if (!rect || (rect.width === 0 && rect.height === 0)) {
       closeSelectionToolbar()
@@ -364,8 +405,17 @@ const handleSelectionMouseUp = () => {
     }
 
     selectionText.value = text
-    // 这里将选中的原文作为插入内容，后续点击“插入笔记”时使用
-    selectionInsertText.value = text
+
+    // 检测选区内包含的图片：用 range 克隆出的 DOM 片段里找 <img>。
+    selectionImages.value = extractSelectionImages(range)
+
+    // 插入内容：若选区含图片，则把文字与图片拼成 Markdown 图文；否则纯文本。
+    if (selectionImages.value.length) {
+      const imgMd = selectionImages.value.map((src) => `![](${src})`).join('\n\n')
+      selectionInsertText.value = text ? `${text}\n\n${imgMd}` : imgMd
+    } else {
+      selectionInsertText.value = text
+    }
 
     const pad = 8
     const toolWidth = 140
@@ -398,6 +448,29 @@ const closeSelectionToolbar = () => {
   selectionToolbarVisible.value = false
   selectionText.value = ''
   selectionInsertText.value = ''
+  selectionImages.value = []
+}
+
+/**
+ * 仅摘录选区里的图片（每张一条 Markdown 图片），不带文字。
+ */
+const insertSelectionImages = async () => {
+  const imgs = selectionImages.value
+  if (!imgs.length) return
+  selectionBusy.value = true
+  try {
+    for (const src of imgs) {
+      await addToNotes({ type: 'image', content: src, originalMarkdown: `![](${src})` })
+    }
+    message.success(`已摘录 ${imgs.length} 张图片`, { duration: 1200 })
+    showNoteAddedBubble()
+  } catch (error) {
+    logger.error('[SelectionNotesPanel] insertSelectionImages failed:', error)
+    message.error('摘录图片失败', { duration: 2000 })
+  } finally {
+    selectionBusy.value = false
+    closeSelectionToolbar()
+  }
 }
 
 /**
@@ -448,6 +521,16 @@ const addToNotes = async (element) => {
     message.warning('未选中有效内容', { duration: 1500 })
     return
   }
+
+  // 去重护栏：双击会同时触发 mouseup 与 dblclick、热更新也可能叠加监听，
+  // 导致同一内容被连续插入多次。相同内容在 800ms 内只收一次。
+  const nowTs = Date.now()
+  if (safeContent === lastAddedContent.value && nowTs - lastAddedAt.value < 800) {
+    logger.debug('[SelectionNotesPanel] skip duplicate note add within debounce window')
+    return
+  }
+  lastAddedContent.value = safeContent
+  lastAddedAt.value = nowTs
 
   const normalizedElement = {
     ...element,
@@ -688,10 +771,23 @@ defineExpose({
   border: none;
   background: var(--guaxi-primary, #2563eb);
   color: #fff;
-  border-radius: 4px;
-  padding: 4px 8px;
-  font-size: 12px;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.selection-tool-btn:hover:not([disabled]) {
+  opacity: 0.88;
+}
+
+/* 次要按钮（仅图片）：描边风格，和主按钮区分。 */
+.selection-tool-btn-ghost {
+  background: transparent;
+  color: var(--guaxi-primary, #2563eb);
+  border: 1px solid var(--guaxi-primary, #2563eb);
 }
 
 .selection-tool-btn[disabled] {

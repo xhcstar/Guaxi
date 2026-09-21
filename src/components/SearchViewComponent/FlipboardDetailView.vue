@@ -550,9 +550,11 @@ const formatTime = (timeString) => {
 }
 
 .article-reader {
-  max-width: 800px;
+  /* 充分利用阅读区宽度：上限放宽到 1080px，并按容器宽度自适应（宽屏更宽、窄屏不溢出），
+     同时保留左右留白保证长文行宽舒适。 */
+  max-width: min(1080px, 100%);
   margin: 0 auto;
-  padding: 40px 24px;
+  padding: 40px clamp(24px, 6%, 72px);
 }
 
 .article-header {
