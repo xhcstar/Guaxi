@@ -582,6 +582,38 @@
                 </button>
               </div>
 
+              <div class="python-runtime-tabs" role="tablist">
+                <button type="button" class="python-runtime-tab"
+                  :class="{ 'is-active': pythonRuntimeActiveTab === 'overview' }"
+                  @click="pythonRuntimeActiveTab = 'overview'">概览</button>
+                <button type="button" class="python-runtime-tab"
+                  :class="{ 'is-active': pythonRuntimeActiveTab === 'environment' }"
+                  @click="pythonRuntimeActiveTab = 'environment'">环境与版本</button>
+                <button type="button" class="python-runtime-tab"
+                  :class="{ 'is-active': pythonRuntimeActiveTab === 'packages' }"
+                  @click="pythonRuntimeActiveTab = 'packages'">包管理</button>
+              </div>
+
+              <!-- 后台任务进度：不随标签切换隐藏，任何标签下都能看到当前操作进展 -->
+              <div v-if="pythonRuntimeOperation.active" class="python-runtime-operation-card">
+                <div class="python-runtime-operation-card__title">包管理任务进行中</div>
+                <div class="python-runtime-operation-card__subtitle">
+                  {{ pythonRuntimeOperation.stage || '正在执行后台任务' }}
+                </div>
+                <div class="python-runtime-operation-card__packages">
+                  {{ pythonRuntimeOperationSummary }}
+                </div>
+                <div class="python-runtime-operation-card__progress" aria-hidden="true">
+                  <span class="python-runtime-operation-card__progress-bar"></span>
+                </div>
+                <div class="python-runtime-operation-card__hint">
+                  任务在后台运行，可切换标签页或继续使用编辑器 / Notebook，完成后会自动刷新。
+                </div>
+                <pre v-if="pythonRuntimeOpLog.length" class="python-runtime-operation-card__log">{{ pythonRuntimeOpLogText }}</pre>
+              </div>
+
+              <!-- 概览：只读运行时信息 -->
+              <div v-show="pythonRuntimeActiveTab === 'overview'" class="python-runtime-tabpanel">
               <div class="python-runtime-status-card" :class="pythonRuntimeStatusTone">
                 <div class="python-runtime-status-card__row">
                   <span class="python-runtime-status-card__label">状态</span>
@@ -595,21 +627,15 @@
                   <span class="python-runtime-status-card__label">会话</span>
                   <span class="python-runtime-status-card__value">{{ pythonRuntimeStatus?.worker_alive ? '已连接' : '未启动' }}</span>
                 </div>
-              </div>
-
-              <div v-if="pythonRuntimeOperation.active" class="python-runtime-operation-card">
-                <div class="python-runtime-operation-card__title">包管理任务进行中</div>
-                <div class="python-runtime-operation-card__subtitle">
-                  {{ pythonRuntimeOperation.stage || '正在执行后台任务' }}
-                </div>
-                <div class="python-runtime-operation-card__packages">
-                  {{ pythonRuntimeOperationSummary }}
-                </div>
-                <div class="python-runtime-operation-card__progress" aria-hidden="true">
-                  <span class="python-runtime-operation-card__progress-bar"></span>
+                <div class="python-runtime-status-card__row">
+                  <span class="python-runtime-status-card__label">包管理器</span>
+                  <span class="python-runtime-status-card__value">{{ pythonRuntimeStatus?.uv_version || pythonRuntimeStatus?.pip_version || '未检测' }}</span>
                 </div>
               </div>
+              </div>
 
+              <!-- 环境与版本：解释器版本切换与运行时维护操作 -->
+              <div v-show="pythonRuntimeActiveTab === 'environment'" class="python-runtime-tabpanel">
               <div class="python-runtime-panel__actions">
                 <button type="button" class="python-runtime-chip-btn" :disabled="pythonRuntimeBusy" @click="resetPythonKernelSession">
                   重启会话
@@ -649,7 +675,10 @@
                   <span v-for="warning in pythonRuntimeArchiveInspection.warnings" :key="warning">{{ warning }}</span>
                 </div>
               </div>
+              </div>
 
+              <!-- 包管理：安装、常用包、已装列表与操作日志 -->
+              <div v-show="pythonRuntimeActiveTab === 'packages'" class="python-runtime-tabpanel">
               <div class="python-runtime-install-card">
                 <div class="python-runtime-section__title">安装 Python 包</div>
                 <div class="python-runtime-install">
@@ -677,9 +706,14 @@
 
               <div class="python-runtime-package-browser">
                 <div class="python-runtime-package-browser__header">
-                  <div class="python-runtime-section__title">已安装的包</div>
+                  <div class="python-runtime-section__title">
+                    已安装的包
+                    <span v-if="pythonRuntimePackageTotal" class="python-runtime-package-browser__count">
+                      {{ pythonRuntimePackagesFiltered.length }} / {{ pythonRuntimePackageTotal }}
+                    </span>
+                  </div>
                   <input v-model="pythonRuntimePackageSearch" class="python-runtime-package-browser__search"
-                    placeholder="搜索已安装包" />
+                    placeholder="搜索已安装包（名称或版本）" />
                 </div>
                 <div v-if="pythonRuntimeSelectedPackageCount" class="python-runtime-package-browser__bulkbar">
                   <span class="python-runtime-package-browser__bulktext">
@@ -714,16 +748,17 @@
                 </div>
                 <div class="python-runtime-package-browser__list">
                   <div v-if="pythonRuntimePackagesFiltered.length" class="python-runtime-package-browser__items">
-                    <div v-for="pkg in pythonRuntimePackagesFiltered" :key="pkg" class="python-runtime-package-row">
+                    <div v-for="pkg in pythonRuntimePackagesFiltered" :key="pkg.name" class="python-runtime-package-row">
                       <label class="python-runtime-package-row__selector">
                         <input
                           type="checkbox"
-                          :checked="pythonRuntimeSelectedPackages.includes(pkg)"
+                          :checked="pythonRuntimeSelectedPackages.includes(pkg.name)"
                           :disabled="pythonRuntimeBusy"
-                          @change="togglePythonRuntimePackageSelection(pkg)"
+                          @change="togglePythonRuntimePackageSelection(pkg.name)"
                         />
                       </label>
-                      <span class="python-runtime-package-row__name">{{ pkg }}</span>
+                      <span class="python-runtime-package-row__name">{{ pkg.name }}</span>
+                      <span v-if="pkg.version" class="python-runtime-package-row__version">{{ pkg.version }}</span>
                       <div class="python-runtime-package-row__actions">
                         <n-tooltip placement="top" trigger="hover">
                           <template #trigger>
@@ -731,7 +766,7 @@
                               type="button"
                               class="python-runtime-package-row__action python-runtime-package-row__action--icon"
                               :disabled="pythonRuntimeBusy"
-                              @click="managePythonPackage(pkg, 'upgrade')"
+                              @click="managePythonPackage(pkg.name, 'upgrade')"
                             >
                               <Icon :icon="arrowUpCircleIcon" width="14" height="14" />
                             </button>
@@ -744,7 +779,7 @@
                               type="button"
                               class="python-runtime-package-row__action python-runtime-package-row__action--icon"
                               :disabled="pythonRuntimeBusy"
-                              @click="managePythonPackage(pkg, 'reinstall')"
+                              @click="managePythonPackage(pkg.name, 'reinstall')"
                             >
                               <Icon :icon="refreshCwIcon" width="14" height="14" />
                             </button>
@@ -757,7 +792,7 @@
                               type="button"
                               class="python-runtime-package-row__action python-runtime-package-row__action--icon is-danger"
                               :disabled="pythonRuntimeBusy"
-                              @click="managePythonPackage(pkg, 'uninstall')"
+                              @click="managePythonPackage(pkg.name, 'uninstall')"
                             >
                               <Icon :icon="trash2Icon" width="14" height="14" />
                             </button>
@@ -768,7 +803,7 @@
                     </div>
                   </div>
                   <div v-else class="python-runtime-package-browser__empty">
-                    {{ pythonRuntimeStatus?.packages?.length ? '没有匹配的包' : '暂无已安装包信息' }}
+                    {{ pythonRuntimePackageTotal ? '没有匹配的包' : '暂无已安装包信息' }}
                   </div>
                 </div>
                 <details
@@ -798,6 +833,7 @@
                     </div>
                   </div>
                 </details>
+              </div>
               </div>
               </div>
             </transition>
@@ -1842,6 +1878,12 @@ const pythonRuntimeArchiveInspection = ref(null)
 // Python 版本切换：可下载版本列表（来自 uv）与当前选中的目标版本。
 const pythonRuntimeDownloadableVersions = ref([])
 const pythonRuntimeSelectedVersion = ref('')
+// 工作台面板当前标签：overview 概览 / environment 环境与版本 / packages 包管理。
+const pythonRuntimeActiveTab = ref('overview')
+// 流式进度：当前操作 id + 实时日志行（后端逐行推来）。关面板不影响接收，组件常驻。
+const pythonRuntimeActiveOpId = ref('')
+const pythonRuntimeOpLog = ref([])
+let pythonRuntimeOpLogUnlisten = null
 const pythonSessionInfo = ref(null)
 const pythonConsoleVisible = ref(false)
 const pythonConsoleBusy = ref(false)
@@ -4724,12 +4766,31 @@ const pythonRuntimeStatusTone = computed(() => {
   if (pythonRuntimeStatus.value?.worker_alive) return 'is-success'
   return 'is-neutral'
 })
+// 后端把每个包拼成 "name version"（例如 "pandas 2.1.0"）。这里切出裸包名，
+// 用于安装/升级/卸载时传给 uv——绝不能把带版本的整串当包名传，否则命令会失败。
+const parsePythonPackageEntry = (raw) => {
+  const text = String(raw || '').trim()
+  const spaceIndex = text.indexOf(' ')
+  if (spaceIndex === -1) {
+    return { raw: text, name: text, version: '' }
+  }
+  return {
+    raw: text,
+    name: text.slice(0, spaceIndex).trim(),
+    version: text.slice(spaceIndex + 1).trim(),
+  }
+}
+const pythonPackageName = (raw) => parsePythonPackageEntry(raw).name
 const pythonRuntimePackagesFiltered = computed(() => {
   const keyword = String(pythonRuntimePackageSearch.value || '').trim().toLowerCase()
   const packages = Array.isArray(pythonRuntimeStatus.value?.packages) ? pythonRuntimeStatus.value.packages : []
-  if (!keyword) return packages
-  return packages.filter((pkg) => String(pkg || '').toLowerCase().includes(keyword))
+  const parsed = packages.map(parsePythonPackageEntry)
+  if (!keyword) return parsed
+  return parsed.filter((pkg) => pkg.name.toLowerCase().includes(keyword) || pkg.version.toLowerCase().includes(keyword))
 })
+const pythonRuntimePackageTotal = computed(() =>
+  Array.isArray(pythonRuntimeStatus.value?.packages) ? pythonRuntimeStatus.value.packages.length : 0
+)
 const pythonRuntimeSelectedPackageCount = computed(() => pythonRuntimeSelectedPackages.value.length)
 const pythonRuntimeOperationSummary = computed(() => {
   if (!pythonRuntimeOperation.value?.active) return ''
@@ -15852,10 +15913,12 @@ const refreshPythonRuntimeStatus = async (reason = 'manual') => {
     logger.info('[PythonRuntime] refresh status', { reason })
     const status = await invoke('python_runtime_get_status')
     pythonRuntimeStatus.value = status || createEmptyPythonRuntimeStatus()
-    const installedPackages = Array.isArray(pythonRuntimeStatus.value?.packages)
-      ? pythonRuntimeStatus.value.packages
-      : []
-    pythonRuntimeSelectedPackages.value = pythonRuntimeSelectedPackages.value.filter((pkg) => installedPackages.includes(pkg))
+    // 选中项存的是裸包名，已装列表是 "name version"，按裸名比对做去留。
+    const installedNames = new Set(
+      (Array.isArray(pythonRuntimeStatus.value?.packages) ? pythonRuntimeStatus.value.packages : [])
+        .map((entry) => pythonPackageName(entry))
+    )
+    pythonRuntimeSelectedPackages.value = pythonRuntimeSelectedPackages.value.filter((pkg) => installedNames.has(pkg))
     logger.info('[PythonRuntime] status loaded', {
       reason,
       source: status?.source || '',
@@ -15878,8 +15941,10 @@ const ensurePythonRuntimeInitialized = async (reason = 'auto', options = {}) => 
 
   pythonRuntimeBusy.value = true
   try {
+    beginPythonRuntimeOperation('initialize', [], '正在准备 Python 运行时')
+    const opId = await startPythonRuntimeOp()
     logger.info('[PythonRuntime] auto initialize requested', { reason })
-    const res = await invoke('python_runtime_initialize')
+    const res = await invoke('python_runtime_initialize', { opId })
     logger.info('[PythonRuntime] auto initialize completed', {
       reason,
       runtimeDir: res?.runtime_dir || '',
@@ -15897,6 +15962,7 @@ const ensurePythonRuntimeInitialized = async (reason = 'auto', options = {}) => 
     }
     return false
   } finally {
+    endPythonRuntimeOperation('初始化流程已结束')
     pythonRuntimeBusy.value = false
   }
 }
@@ -15924,6 +15990,31 @@ const loadPythonRuntimeDownloadableVersions = async (reason = 'manual') => {
   }
 }
 
+// 懒注册流式日志监听：后端按 opId 逐行推 uv/pip 输出，只收当前操作的。
+const ensurePythonRuntimeOpLogListener = async () => {
+  if (pythonRuntimeOpLogUnlisten) return
+  pythonRuntimeOpLogUnlisten = await listen('python-runtime-op-log', (event) => {
+    const payload = event?.payload || {}
+    if (!payload.opId || payload.opId !== pythonRuntimeActiveOpId.value) return
+    const line = String(payload.line ?? '')
+    const next = pythonRuntimeOpLog.value.concat(line)
+    // 只保留最近 500 行，避免长安装把内存/DOM 撑爆。
+    pythonRuntimeOpLog.value = next.length > 500 ? next.slice(next.length - 500) : next
+  })
+}
+
+// 开始一次带实时日志的操作：注册监听、生成 opId、清空上次日志，返回 opId 供 invoke 透传。
+const startPythonRuntimeOp = async () => {
+  await ensurePythonRuntimeOpLogListener()
+  const opId = globalThis.crypto?.randomUUID?.()
+    || `pyop-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  pythonRuntimeActiveOpId.value = opId
+  pythonRuntimeOpLog.value = []
+  return opId
+}
+
+const pythonRuntimeOpLogText = computed(() => pythonRuntimeOpLog.value.join('\n'))
+
 // 切换 Python 版本：用选中的版本重新初始化托管运行时（uv 会重建 .venv 并重装推荐包）。
 const switchPythonRuntimeVersion = async () => {
   const targetVersion = String(pythonRuntimeSelectedVersion.value || '').trim()
@@ -15946,8 +16037,10 @@ const switchPythonRuntimeVersion = async () => {
   pythonRuntimeBusy.value = true
   try {
     beginPythonRuntimeOperation('switch', [targetVersion], `正在切换到 Python ${targetVersion}`)
+    const opId = await startPythonRuntimeOp()
     logger.info('[PythonRuntime] switch version start', { targetVersion })
     const res = await invoke('python_runtime_initialize', {
+      opId,
       request: { downloadVersion: targetVersion },
     })
     logger.info('[PythonRuntime] switch version completed', {
@@ -16431,8 +16524,9 @@ const installPythonPackages = async (packages, reason = 'manual') => {
   pythonRuntimeBusy.value = true
   try {
     beginPythonRuntimeOperation('install', normalizedPackages, '正在解析依赖并安装包')
+    const opId = await startPythonRuntimeOp()
     logger.info('[PythonRuntime] install packages start', { packages: normalizedPackages, reason })
-    const res = await invoke('python_runtime_install_packages', { request: { packages: normalizedPackages } })
+    const res = await invoke('python_runtime_install_packages', { opId, request: { packages: normalizedPackages } })
     openPythonRuntimePackageActionLog(`安装输出 · ${normalizedPackages.join(', ')}`, res)
     updatePythonRuntimeOperationStage('正在刷新已安装包列表')
     if (res?.ok) {
@@ -16623,12 +16717,14 @@ const executePythonPackageAction = async (packages, action = 'upgrade') => {
   pythonRuntimeBusy.value = true
   try {
     beginPythonRuntimeOperation(normalizedAction, normalizedPackages, `${actionLabel}任务已提交`)
+    const opId = await startPythonRuntimeOp()
     logger.info('[PythonRuntime] manage package start', {
       action: normalizedAction,
       packages: normalizedPackages,
     })
 
     const res = await invoke('python_runtime_manage_packages', {
+      opId,
       request: {
         action: normalizedAction,
         packages: normalizedPackages,
@@ -24016,6 +24112,10 @@ onUnmounted(() => {
     try { Promise.resolve(neovimExitedUnlisten()).catch(() => {}) } catch {}
     neovimExitedUnlisten = null
   }
+  if (pythonRuntimeOpLogUnlisten) {
+    try { Promise.resolve(pythonRuntimeOpLogUnlisten()).catch(() => {}) } catch {}
+    pythonRuntimeOpLogUnlisten = null
+  }
 });
 
 </script>
@@ -25006,6 +25106,69 @@ onUnmounted(() => {
   color: var(--guaxi-text-secondary);
 }
 
+/* 标签栏：分段控件，把面板拆成 概览 / 环境与版本 / 包管理 三个区域 */
+.python-runtime-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--guaxi-panel-bg, #f2f7fb) 60%, transparent);
+  border: 1px solid color-mix(in srgb, var(--guaxi-border, #d7dee6) 70%, transparent);
+}
+
+.python-runtime-tab {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 7px 8px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--guaxi-text-secondary, #8c8c8c);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.python-runtime-tab:hover {
+  color: var(--guaxi-text-primary, #1f2329);
+}
+
+.python-runtime-tab.is-active {
+  background: #ffffff;
+  color: var(--guaxi-text-primary, #1f2329);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+}
+
+/* 每个标签面板内部保持与外层卡片一致的纵向间距 */
+.python-runtime-tabpanel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.python-runtime-status-card__value--path {
+  font-size: 11px;
+  font-weight: 500;
+  word-break: break-all;
+  text-align: right;
+}
+
+.python-runtime-panel.is-dark .python-runtime-tabs {
+  background: color-mix(in srgb, var(--guaxi-content-bg, #282c34) 70%, transparent);
+  border-color: var(--guaxi-border, #3e4451);
+}
+
+.python-runtime-panel.is-dark .python-runtime-tab {
+  color: var(--guaxi-text-secondary, #9da5b4);
+}
+
+.python-runtime-panel.is-dark .python-runtime-tab.is-active {
+  background: var(--guaxi-content-bg, #282c34);
+  color: var(--guaxi-text-primary, #abb2bf);
+  box-shadow: none;
+}
+
 .python-runtime-panel__actions {
   display: flex;
   gap: 10px;
@@ -25079,6 +25242,29 @@ onUnmounted(() => {
   margin-top: 6px;
   font-size: 12px;
   color: var(--guaxi-text-secondary);
+}
+
+.python-runtime-operation-card__hint {
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--guaxi-text-secondary);
+  opacity: 0.85;
+}
+
+.python-runtime-operation-card__log {
+  margin: 10px 0 0;
+  max-height: 200px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--guaxi-content-bg, #1f2329) 82%, #000 18%);
+  color: var(--guaxi-text-secondary, #c8ccd4);
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .python-runtime-operation-card__progress {
@@ -25214,11 +25400,29 @@ onUnmounted(() => {
 
 .python-runtime-package-row__name {
   min-width: 0;
-  flex: 1 1 180px;
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
+}
+
+.python-runtime-package-row__version {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--guaxi-text-secondary, #8c8c8c);
+  font-variant-numeric: tabular-nums;
+}
+
+.python-runtime-package-browser__count {
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--guaxi-text-secondary, #8c8c8c);
 }
 
 .python-runtime-package-row__actions {

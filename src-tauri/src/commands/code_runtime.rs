@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, TryLockError};
 use std::thread;
 use std::time::Duration;
-use tauri::command;
+use tauri::{command, AppHandle, Emitter};
 use tracing::{info, warn};
 use uuid::Uuid;
 use zip::ZipArchive;
@@ -27,6 +27,9 @@ static PY_WORKER_STATES: OnceLock<Mutex<HashMap<String, Arc<Mutex<PythonWorkerSt
     OnceLock::new();
 static PY_WORKER_ACTIVE_REQUESTS: OnceLock<Mutex<HashMap<String, PythonActiveRequest>>> =
     OnceLock::new();
+// 当前前端发起的操作的进度回传通道。uv 对同一 venv 有文件锁、操作实际串行，
+// 因此用单个全局 sink 就够；命令开始时设置、结束时（含出错）由守卫清理。
+static ACTIVE_PROGRESS_SINK: OnceLock<Mutex<Option<ProgressSink>>> = OnceLock::new();
 
 const PY_WORKER_FILE_NAME: &str = "guaxi_python_worker.py";
 const PY_WORKER_SOURCE: &str = include_str!("../../scripts/guaxi_python_worker.py");
@@ -644,39 +647,79 @@ fn fetch_python_download_versions_catalog_via_uv() -> Result<PythonRuntimeDownlo
     command.args(["python", "list", "--all-versions"]);
     let output = command_output_trimmed(command)?;
 
-    let release_regex = Regex::new(r"cpython-(3\.(?:13|12)\.\d+)-").map_err(|e| e.to_string())?;
-    let mut seen = HashSet::new();
-    let mut parsed_versions: Vec<String> = Vec::new();
+    // 解析所有 cpython-X.Y.Z-，按 minor 系列（3.9 / 3.10 / …）各取最新补丁版，
+    // 供用户以“大版本”维度选择切换，而不是把同一系列几十个补丁版全铺出来。
+    let release_regex = Regex::new(r"cpython-(\d+)\.(\d+)\.(\d+)-").map_err(|e| e.to_string())?;
+    // series("3.13") -> 该系列见过的最高 (patch, "3.13.15")
+    let mut latest_per_series: HashMap<String, (u64, String)> = HashMap::new();
     for capture in release_regex.captures_iter(&output) {
-        if let Some(version) = capture.get(1).map(|value| value.as_str().to_string()) {
-            if seen.insert(version.clone()) {
-                parsed_versions.push(version);
-                if parsed_versions.len() >= 20 {
-                    break;
-                }
-            }
+        let major: u64 = capture[1].parse().unwrap_or(0);
+        let minor: u64 = capture[2].parse().unwrap_or(0);
+        let patch: u64 = capture[3].parse().unwrap_or(0);
+        // 只保留 3.9+ 系列：更老的版本 python-build-standalone 支持零散，且实际无人再用。
+        if major != 3 || minor < 9 {
+            continue;
         }
+        let series = format!("{major}.{minor}");
+        let full = format!("{major}.{minor}.{patch}");
+        latest_per_series
+            .entry(series)
+            .and_modify(|slot| {
+                if patch > slot.0 {
+                    *slot = (patch, full.clone());
+                }
+            })
+            .or_insert((patch, full));
     }
-    if parsed_versions.is_empty() {
+    if latest_per_series.is_empty() {
         return Err("uv python list 未解析到可用版本".to_string());
     }
 
-    let default_version = parsed_versions
-        .iter()
-        .find(|version| version.starts_with("3.13."))
-        .cloned()
-        .unwrap_or_else(|| parsed_versions[0].clone());
-
-    let versions = parsed_versions
+    // 按 minor 降序排列：3.13、3.12、3.11…，最新的排在最前。
+    let mut series_entries: Vec<(u64, String)> = latest_per_series
         .into_iter()
-        .map(|version| {
-            let mut parts = version.split('.');
-            let major = parts.next().unwrap_or("3");
-            let minor = parts.next().unwrap_or("13");
-            let series = format!("{major}.{minor}");
+        .filter_map(|(series, (_, full))| {
+            series
+                .split('.')
+                .nth(1)
+                .and_then(|minor| minor.parse::<u64>().ok())
+                .map(|minor| (minor, full))
+        })
+        .collect();
+    series_entries.sort_by(|a, b| b.0.cmp(&a.0));
+
+    // 只保留“默认系列 + 相邻各一个”，最多三个：默认 3.13 → 列出 3.14(若有且受支持) / 3.13 / 3.12。
+    // 不把 uv 支持的所有系列全铺出来，避免选择项过多。
+    let default_minor: u64 = UV_DEFAULT_PYTHON_VERSION
+        .split('.')
+        .nth(1)
+        .and_then(|minor| minor.parse().ok())
+        .unwrap_or(13);
+    // 默认系列不在可用列表里（极端情况）时，以最新可用系列为中心。
+    let center_minor = if series_entries.iter().any(|(minor, _)| *minor == default_minor) {
+        default_minor
+    } else {
+        series_entries
+            .first()
+            .map(|(minor, _)| *minor)
+            .unwrap_or(default_minor)
+    };
+    series_entries.retain(|(minor, _)| *minor + 1 >= center_minor && *minor <= center_minor + 1);
+
+    let default_version = series_entries
+        .iter()
+        .find(|(minor, _)| *minor == center_minor)
+        .or_else(|| series_entries.first())
+        .map(|(_, full)| full.clone())
+        .unwrap_or_default();
+
+    let versions = series_entries
+        .into_iter()
+        .map(|(minor, version)| {
+            let series = format!("3.{minor}");
             PythonRuntimeDownloadVersion {
                 is_default: version == default_version,
-                label: format!("Python {version}"),
+                label: format!("Python {series} 系列（{version}）"),
                 // uv 自行下载解释器，无需具体 archive URL。
                 archive_url: String::new(),
                 release_date: String::new(),
@@ -1122,6 +1165,113 @@ fn existing_uv_binary(runtime_dir: &Path) -> Option<PathBuf> {
     }
 }
 
+const PY_OP_LOG_EVENT: &str = "python-runtime-op-log";
+
+// 一次前端操作的进度回传：把 uv/pip 子进程的输出按 opId 打回给前端。
+struct ProgressSink {
+    app: AppHandle,
+    op_id: String,
+}
+
+fn active_progress_sink_cell() -> &'static Mutex<Option<ProgressSink>> {
+    ACTIVE_PROGRESS_SINK.get_or_init(|| Mutex::new(None))
+}
+
+fn set_active_progress_sink(sink: Option<ProgressSink>) {
+    if let Ok(mut guard) = active_progress_sink_cell().lock() {
+        *guard = sink;
+    }
+}
+
+// 作用域守卫：命令结束（正常或出错）时自动清空全局 sink，避免残留污染后续操作。
+struct ProgressSinkGuard;
+impl Drop for ProgressSinkGuard {
+    fn drop(&mut self) {
+        set_active_progress_sink(None);
+    }
+}
+
+// 在闭包内设置 sink 并返回守卫；op_id 为空则不启用（后台静默操作不回传）。
+fn begin_progress_scope(app: &AppHandle, op_id: Option<String>) -> Option<ProgressSinkGuard> {
+    let op_id = op_id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())?;
+    set_active_progress_sink(Some(ProgressSink {
+        app: app.clone(),
+        op_id,
+    }));
+    Some(ProgressSinkGuard)
+}
+
+fn emit_progress_line(stream: &str, line: &str) {
+    if let Ok(guard) = active_progress_sink_cell().lock() {
+        if let Some(sink) = guard.as_ref() {
+            let _ = sink.app.emit(
+                PY_OP_LOG_EVENT,
+                json!({ "opId": sink.op_id, "stream": stream, "line": line }),
+            );
+        }
+    }
+}
+
+/// 运行命令并把 stdout/stderr 逐行回传给前端（若当前有活跃 sink），同时累积完整输出返回。
+/// 无活跃 sink 时只累积、不回传，因此后台静默调用也能安全复用。
+/// 返回 (成功, stdout, stderr)。调用方无需再设置 piped——本函数统一处理。
+fn run_command_streamed(mut command: Command) -> Result<(bool, String, String), String> {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("spawn streamed command failed: {e}"))?;
+
+    let stdout_acc = Arc::new(Mutex::new(String::new()));
+    let stderr_acc = Arc::new(Mutex::new(String::new()));
+
+    let stdout_handle = child.stdout.take().map(|out| {
+        let acc = Arc::clone(&stdout_acc);
+        thread::spawn(move || {
+            for line in BufReader::new(out).lines().map_while(Result::ok) {
+                emit_progress_line("stdout", &line);
+                if let Ok(mut guard) = acc.lock() {
+                    guard.push_str(&line);
+                    guard.push('\n');
+                }
+            }
+        })
+    });
+    let stderr_handle = child.stderr.take().map(|err| {
+        let acc = Arc::clone(&stderr_acc);
+        thread::spawn(move || {
+            for line in BufReader::new(err).lines().map_while(Result::ok) {
+                emit_progress_line("stderr", &line);
+                if let Ok(mut guard) = acc.lock() {
+                    guard.push_str(&line);
+                    guard.push('\n');
+                }
+            }
+        })
+    });
+
+    let status = child
+        .wait()
+        .map_err(|e| format!("wait streamed command failed: {e}"))?;
+    if let Some(handle) = stdout_handle {
+        let _ = handle.join();
+    }
+    if let Some(handle) = stderr_handle {
+        let _ = handle.join();
+    }
+
+    let stdout_text = stdout_acc
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_default();
+    let stderr_text = stderr_acc
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_default();
+    Ok((status.success(), stdout_text, stderr_text))
+}
+
 /// 针对托管 venv 执行一次包管理操作，优先用 uv pip（真正的解析器 + 更快），
 /// uv 不在则回退到 venv 自带的 `python -m pip`。action 取
 /// "install" | "upgrade" | "reinstall" | "uninstall"。返回 (成功, stdout, stderr)。
@@ -1130,7 +1280,7 @@ fn run_managed_package_op(
     action: &str,
     packages: &[String],
 ) -> Result<(bool, String, String), String> {
-    let mut command = match existing_uv_binary(&spec.runtime_dir) {
+    let command = match existing_uv_binary(&spec.runtime_dir) {
         Some(uv_path) => {
             let mut command = uv_command(&uv_path, &spec.runtime_dir);
             command.arg("pip");
@@ -1180,15 +1330,8 @@ fn run_managed_package_op(
             command
         }
     };
-    command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let output = command
-        .output()
-        .map_err(|e| format!("run managed package op failed: {e}"))?;
-    Ok((
-        output.status.success(),
-        String::from_utf8_lossy(&output.stdout).to_string(),
-        String::from_utf8_lossy(&output.stderr).to_string(),
-    ))
+    // 逐行流式回传输出（有活跃 sink 时），前端可实时看到安装/卸载日志。
+    run_command_streamed(command)
 }
 
 /// 列出托管 venv 里已安装的包（pip list --format=json 的原始数组），
@@ -2012,28 +2155,37 @@ fn create_managed_virtualenv_with_uv(
     venv_dir: &Path,
     version: &str,
 ) -> Result<(), String> {
+    // 流式执行：切换版本/首次建环境时，前端能实时看到下载解释器与建环境的进度。
     let mut install_cmd = uv_command(uv_path, runtime_dir);
     install_cmd.args(["python", "install", version]);
-    if let Err(mirror_error) = command_output_trimmed(install_cmd) {
+    let (install_ok, _, install_err) = run_command_streamed(install_cmd)?;
+    if !install_ok {
         // 镜像装不上（代理临时挂了等）时直连 GitHub 再试一次。
         warn!(
             version,
-            error = mirror_error.as_str(),
+            error = install_err.trim(),
             "[PythonRuntime] uv install python via mirror failed, retry direct github"
         );
         let mut direct_cmd = uv_command_without_python_mirror(uv_path, runtime_dir);
         direct_cmd.args(["python", "install", version]);
-        command_output_trimmed(direct_cmd)
-            .map_err(|e| format!("uv install python {version} failed: {e}"))?;
+        let (direct_ok, _, direct_err) = run_command_streamed(direct_cmd)?;
+        if !direct_ok {
+            return Err(format!("uv install python {version} failed: {}", direct_err.trim()));
+        }
     }
 
+    // `--clear`：目标 .venv 已存在时直接重建，而不是报错退出。
+    // 到这一步意味着调用方已判定需要创建/重建环境（缺失、损坏、换版本），
+    // 残留的半成品或旧 venv 都应被覆盖，让本步骤对残留状态天然幂等。
     let mut venv_cmd = uv_command(uv_path, runtime_dir);
     venv_cmd
-        .args(["venv", "--seed", "--python", version])
+        .args(["venv", "--seed", "--clear", "--python", version])
         .arg(venv_dir)
         .current_dir(runtime_dir);
-    let _ = command_output_trimmed(venv_cmd)
-        .map_err(|e| format!("uv venv (python {version}) failed: {e}"))?;
+    let (venv_ok, _, venv_err) = run_command_streamed(venv_cmd)?;
+    if !venv_ok {
+        return Err(format!("uv venv (python {version}) failed: {}", venv_err.trim()));
+    }
     Ok(())
 }
 
@@ -3429,19 +3581,22 @@ fn send_one_shot_worker_request(payload: &Value) -> Result<Value, String> {
 }
 
 fn list_python_packages(spec: &PythonLaunchSpec) -> Vec<String> {
-    managed_pip_list_json(spec)
+    // 返回完整列表（不再截断到 18 个）：工作台“已安装的包”要能列出全部依赖并逐个管理。
+    // 名称与版本以单个空格拼接，前端按空格切分成 name / version 两列。
+    let mut packages = managed_pip_list_json(spec)
         .into_iter()
         .filter_map(|item| {
-            let name = item.get("name").and_then(Value::as_str)?.trim();
+            let name = item.get("name").and_then(Value::as_str)?.trim().to_string();
             let version = item.get("version").and_then(Value::as_str).unwrap_or("").trim();
             if version.is_empty() {
-                Some(name.to_string())
+                Some(name)
             } else {
                 Some(format!("{name} {version}"))
             }
         })
-        .take(18)
-        .collect()
+        .collect::<Vec<_>>();
+    packages.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    packages
 }
 
 fn clear_python_worker() -> Result<(), String> {
@@ -3916,9 +4071,13 @@ pub async fn python_runtime_list_downloadable_versions() -> Result<PythonRuntime
 
 #[command]
 pub async fn python_runtime_initialize(
+    app: AppHandle,
+    op_id: Option<String>,
     request: Option<PythonRuntimeInitializeRequest>,
 ) -> Result<PythonRuntimeInitResponse, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        // 切换版本/初始化的下载与建环境进度按 op_id 流式回传前端；作用域结束自动清理。
+        let _sink_guard = begin_progress_scope(&app, op_id);
         let requested_download_version = request
             .as_ref()
             .and_then(|value| value.download_version.as_deref())
@@ -4053,9 +4212,12 @@ pub async fn python_runtime_install_archive(archive_path: String) -> Result<Stri
 
 #[command]
 pub async fn python_runtime_install_packages(
+    app: AppHandle,
+    op_id: Option<String>,
     request: PythonInstallPackagesRequest,
 ) -> Result<PythonInstallPackagesResponse, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let _sink_guard = begin_progress_scope(&app, op_id);
         let packages: Vec<String> = request
             .packages
             .into_iter()
@@ -4082,9 +4244,12 @@ pub async fn python_runtime_install_packages(
 
 #[command]
 pub async fn python_runtime_manage_packages(
+    app: AppHandle,
+    op_id: Option<String>,
     request: PythonManagePackagesRequest,
 ) -> Result<PythonInstallPackagesResponse, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let _sink_guard = begin_progress_scope(&app, op_id);
         let action = request.action.trim().to_lowercase();
         let packages: Vec<String> = request
             .packages
