@@ -257,7 +257,8 @@
               </span>
             </div>
 
-            <div class="cog-card-body cog-untrusted">{{ p.excerpt }}</div>
+            <div class="cog-card-body cog-untrusted markdown-body"
+              v-html="perceptHtml[p.id] || escapeText(p.excerpt)"></div>
 
             <div class="cog-card-actions">
               <GuaxiIconButton
@@ -482,6 +483,7 @@ import { onCognitionNudge, onCognitionBrief } from '../../utils/cognitionEvents'
 import { createLogger } from '../../utils/logger'
 import { useSelectionTranslate } from '../../composables/useSelectionTranslate.js'
 import GuaxiSelectionTranslatePanel from '../HomeViewComponent/GuaxiSelectionTranslatePanel.vue'
+import { renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker.js'
 
 const logger = createLogger('GuaxiCognitionInbox')
 const emit = defineEmits(['open-ref'])
@@ -605,10 +607,39 @@ async function readyEmbedding() {
 const st = computed(() => store.status)
 
 const md = new MarkdownIt({ html: false, linkify: true, breaks: true })
-const briefHtml = computed(() => (store.brief ? md.render(store.brief.markdown || '') : ''))
-// 外部原文渲染：含 markdown 特征（标题/图片/列表/链接）才走渲染，纯文本退回 pre。
-const looksMd = (t) => /(^|\n)#{1,6}\s|!\[[^\]]*\]\([^)]+\)|(^|\n)[-*+]\s+\S|(^|\n)>\s|```|\[[^\]]+\]\([^)]+\)/.test(String(t || ''))
-const fullHtml = computed(() => (looksMd(fullText.value) ? md.render(String(fullText.value || '')) : ''))
+// 简报：用项目统一的 GuaxiMarker 渲染（与阅读页/编辑器一致）。异步，用 ref 承载。
+const briefHtml = ref('')
+watch(() => store.brief?.markdown, async (mdText) => {
+  const t = String(mdText || '').trim()
+  briefHtml.value = t ? await renderMarkdown(t, { buttons: false, mermaid: true, math: true }) : ''
+}, { immediate: true })
+
+// 外部原文：同样走 GuaxiMarker 渲染（含图片/标题/列表）。
+const fullHtml = ref('')
+watch(() => fullText.value, async (t) => {
+  const s = String(t || '').trim()
+  fullHtml.value = s ? await renderMarkdown(s, { buttons: false, mermaid: true, math: true }) : ''
+})
+
+// 收件箱卡片正文：逐条用 GuaxiMarker 渲染 excerpt（含图片/链接/标题），id→html 缓存，
+// 未渲染完成前先显示转义后的纯文本，避免闪原始 markdown 或注入。
+const perceptHtml = ref({})
+const escapeText = (s) => String(s || '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+watch(() => store.percepts, async (list) => {
+  const arr = Array.isArray(list) ? list : []
+  for (const p of arr) {
+    if (!p || perceptHtml.value[p.id] != null) continue
+    const raw = String(p.excerpt || '').trim()
+    if (!raw) { perceptHtml.value[p.id] = ''; continue }
+    try {
+      const html = await renderMarkdown(raw, { buttons: false, mermaid: false, math: false })
+      perceptHtml.value = { ...perceptHtml.value, [p.id]: html }
+    } catch {
+      perceptHtml.value = { ...perceptHtml.value, [p.id]: escapeText(raw) }
+    }
+  }
+}, { immediate: true, deep: false })
 
 const acceptPct = computed(() => {
   const r = st.value?.nudge?.acceptRate14d
@@ -933,9 +964,9 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
-/* naive n-tabs 内部：让"页签条固定、内容区自己滚动"。
-   之前把 overflow 挂在 n-tabs 根上不生效——真正需要拿到剩余高度并滚动的是 pane 包裹层。
-   内容多时收件箱现在能纵向滚动。 */
+/* naive n-tabs（type=line，非 animated）不生成 pane-wrapper：tab-pane 直接是 .n-tabs 的子节点。
+   所以要让 .n-tabs 成为撑满高度的 flex 列，nav 固定，当前 tab-pane 吃掉剩余高度并自己滚动。
+   之前挂在不存在的 pane-wrapper 上，所以内容多时无法滚动。 */
 .cog-tabs :deep(.n-tabs) {
   height: 100%;
   display: flex;
@@ -945,6 +976,8 @@ onUnmounted(() => {
 .cog-tabs :deep(.n-tabs-nav) {
   flex: 0 0 auto;
 }
+/* naive 会把 nav 之后的内容包一层 .n-tabs .n-tab-pane（或直接是 pane）；两种都撑满并滚动。 */
+.cog-tabs :deep(.n-tabs > .n-tab-pane),
 .cog-tabs :deep(.n-tabs-pane-wrapper) {
   flex: 1 1 auto;
   min-height: 0;
