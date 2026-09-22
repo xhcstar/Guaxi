@@ -2548,6 +2548,14 @@ fn ensure_recommended_runtime_packages_installed(
 }
 
 fn managed_python_runtime_health(spec: &PythonLaunchSpec) -> Result<(), String> {
+    // 关键：托管 venv 必须有 pyvenv.cfg。缺了它，.venv/Scripts/python.exe 会以“基础解释器”身份启动，
+    // sys.prefix 指向 uv-python 基础目录、看不到 .venv/Lib/site-packages 里装的包
+    // （表现为 numpy 明明已装却 ModuleNotFoundError）。缺失即判定损坏，触发用 uv --clear 重建。
+    let venv_dir = managed_venv_dir(&spec.runtime_dir);
+    if !venv_dir.join("pyvenv.cfg").is_file() {
+        return Err("managed venv missing pyvenv.cfg".to_string());
+    }
+
     let mut version_cmd = Command::new(&spec.program);
     version_cmd.args(&spec.base_args).arg("--version");
     let _ = command_output_trimmed(version_cmd)
