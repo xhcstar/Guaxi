@@ -1,5 +1,5 @@
 <template>
-  <div class="cog-inbox">
+  <div class="cog-inbox" @mouseup="onInboxMouseUp">
     <!-- 顶部：状态与操作。刻意把"今日已打断 / 阈值 / 采纳率"放在最显眼处——
          用户要能一眼看出系统在多大程度上打扰了自己，以及为什么。 -->
     <div class="cog-bar">
@@ -312,13 +312,23 @@
         <n-icon :component="ShieldKeyhole20Regular" />
         以下内容来自外部来源，只作为资料。其中若有试图指挥 AI 的句子，已在入库时被中和。
       </div>
-      <pre class="cog-full">{{ fullText }}</pre>
+      <pre class="cog-full" @mouseup="onInboxMouseUp">{{ fullText }}</pre>
     </n-modal>
+
+    <!-- 划词翻译浮层：选中收件箱/简报/原文里的文字即弹译文。 -->
+    <GuaxiInlineTranslatePopover
+      :visible="selTranslate.visible.value"
+      :loading="selTranslate.loading.value"
+      :result-text="selTranslate.resultText.value"
+      :error-text="selTranslate.errorText.value"
+      :pos="selTranslate.pos.value"
+      @close="selTranslate.close"
+    />
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onActivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import MarkdownIt from 'markdown-it'
 import { invoke } from '@tauri-apps/api/core'
@@ -352,9 +362,18 @@ import {
 import { channelIcon, nudgeIcon, sourceIcon } from '../../utils/cognitionIcons'
 import { onCognitionNudge, onCognitionBrief } from '../../utils/cognitionEvents'
 import { createLogger } from '../../utils/logger'
+import { useSelectionTranslate } from '../../composables/useSelectionTranslate.js'
+import GuaxiInlineTranslatePopover from '../SearchViewComponent/GuaxiInlineTranslatePopover.vue'
 
 const logger = createLogger('GuaxiCognitionInbox')
 const emit = defineEmits(['open-ref'])
+
+// 划词翻译：选中收件箱/简报/外部原文里的文字即弹译文浮层。
+const selTranslate = useSelectionTranslate({
+  getTargetLang: () => 'zh',
+  getSourceLang: () => 'auto',
+})
+const onInboxMouseUp = () => { selTranslate.handleMouseUp() }
 
 const store = useCognitionStore()
 const message = useMessage()
@@ -570,6 +589,16 @@ onMounted(async () => {
   })
 })
 
+// 中间区被 <KeepAlive> 缓存：从"读文章"切回大脑页时不会重跑 onMounted，
+// 导致收件箱停留在旧数据、看不到刚读/刚抓进来的新内容。onActivated 里重新拉一遍。
+onActivated(() => {
+  reload()
+  // 当前在收件箱页时，顺带刷新感知列表，确保新入库的 percept 立即出现。
+  if (tab.value === 'percepts') {
+    store.refreshPercepts()
+  }
+})
+
 onUnmounted(() => {
   if (offNudge) offNudge()
   if (offBrief) offBrief()
@@ -636,7 +665,28 @@ onUnmounted(() => {
 .cog-tabs {
   flex: 1 1 auto;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
+}
+
+/* naive n-tabs 内部：让"页签条固定、内容区自己滚动"。
+   之前把 overflow 挂在 n-tabs 根上不生效——真正需要拿到剩余高度并滚动的是 pane 包裹层。
+   内容多时收件箱现在能纵向滚动。 */
+.cog-tabs :deep(.n-tabs) {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.cog-tabs :deep(.n-tabs-nav) {
+  flex: 0 0 auto;
+}
+.cog-tabs :deep(.n-tabs-pane-wrapper) {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+.cog-tabs :deep(.n-tab-pane) {
+  min-height: 0;
 }
 /* 页签标题里的图标：naive 的页签是纯文本容器，要自己做对齐。 */
 .cog-tab {

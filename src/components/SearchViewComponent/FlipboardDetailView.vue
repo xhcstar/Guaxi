@@ -61,6 +61,18 @@
 
         <n-tooltip placement="bottom" trigger="hover">
           <template #trigger>
+            <n-button circle size="small" :type="bilingual.enabled.value ? 'primary' : 'default'"
+              :loading="bilingual.busy.value" @click="toggleBilingual">
+              <n-icon>
+                <TranslateIcon />
+              </n-icon>
+            </n-button>
+          </template>
+          {{ bilingual.enabled.value ? '关闭全文翻译' : '全文翻译（双语对照）' }}
+        </n-tooltip>
+
+        <n-tooltip placement="bottom" trigger="hover">
+          <template #trigger>
             <n-button circle size="small">
               <n-icon>
                 <ShareIcon />
@@ -141,7 +153,7 @@
             <div
               class="article-content"
               v-html="formattedContent"
-              @mouseup="selectionNotesRef?.handleSelectionMouseUp?.()"
+              @mouseup="onContentMouseUp"
               @dblclick="handleContentDblClick"
             ></div>
           </SelectionNotesPanel>
@@ -174,11 +186,21 @@
         </n-empty>
       </div>
     </n-scrollbar>
+
+    <!-- 划词翻译浮层：选中正文文字即弹出译文。 -->
+    <GuaxiInlineTranslatePopover
+      :visible="selTranslate.visible.value"
+      :loading="selTranslate.loading.value"
+      :result-text="selTranslate.resultText.value"
+      :error-text="selTranslate.errorText.value"
+      :pos="selTranslate.pos.value"
+      @close="selTranslate.close"
+    />
   </div>
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, nextTick } from 'vue'
 import { NSpin, useMessage } from 'naive-ui'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { createLogger } from '../../utils/logger'
@@ -194,8 +216,12 @@ import {
   CloseOutline,
   DocumentTextOutline,
   OpenOutline,
-  RefreshOutline
+  RefreshOutline,
+  LanguageOutline
 } from '@vicons/ionicons5'
+import { useBilingualPreview } from '../../composables/useBilingualPreview.js'
+import { useSelectionTranslate } from '../../composables/useSelectionTranslate.js'
+import GuaxiInlineTranslatePopover from './GuaxiInlineTranslatePopover.vue'
 
 const BookmarkIcon = BookmarkOutline
 const BookmarkFilledIcon = Bookmark
@@ -204,6 +230,7 @@ const CloseIcon = CloseOutline
 const DocumentTextIcon = DocumentTextOutline
 const OpenIcon = OpenOutline
 const RefreshIcon = RefreshOutline
+const TranslateIcon = LanguageOutline
 
 const props = defineProps({
   currentArticle: {
@@ -374,6 +401,41 @@ const renderContent = async (src) => {
 }
 
 watch(contentSource, (src) => { renderContent(src) }, { immediate: true })
+
+// 全文翻译（双语对照）：复用编辑器预览的同一套引擎，就地在正文 DOM 注入译文块。
+const bilingual = useBilingualPreview({
+  getContainer: () => document.querySelector('.article-reader .article-content'),
+  getSourceLang: () => 'auto',
+  getTargetLang: () => 'zh',
+})
+
+const toggleBilingual = () => { bilingual.toggle() }
+
+// 划词翻译：选中正文文字即弹译文浮层。
+const selTranslate = useSelectionTranslate({
+  getTargetLang: () => 'zh',
+  getSourceLang: () => 'auto',
+})
+
+// 正文 mouseup：先走选择工具条（+摘录），再触发划词翻译浮层。两者不冲突：
+// 摘录工具条在选区上方，翻译浮层在选区下方。
+const onContentMouseUp = () => {
+  selectionNotesRef.value?.handleSelectionMouseUp?.()
+  selTranslate.handleMouseUp()
+}
+
+// 正文重渲染后（切换文章 / hydrate 完成），若双语开着则重新注入译文。
+watch(formattedContent, async () => {
+  if (bilingual.enabled.value) {
+    await nextTick()
+    bilingual.refresh()
+  }
+})
+
+// 切换文章时关掉双语，避免把上一篇的译文状态带过来。
+watch(() => props.currentArticle?.id, () => {
+  if (bilingual.enabled.value) bilingual.clear()
+})
 
 const toggleBookmark = () => {
   if (props.currentArticle) {
@@ -748,6 +810,28 @@ const formatTime = (timeString) => {
   display: block;
   margin: 12px auto 20px;
   border-radius: 8px;
+}
+
+/* 全文翻译注入的译文块（useBilingualPreview 产物），与编辑器预览保持一致的视觉。 */
+.article-content :deep(.guaxi-bilingual-line) {
+  margin: 4px 0 10px;
+  padding: 6px 10px;
+  border-left: 3px solid color-mix(in srgb, var(--guaxi-primary, #4acadb) 65%, transparent);
+  border-radius: 0 8px 8px 0;
+  background: color-mix(in srgb, var(--guaxi-primary, #4acadb) 8%, transparent);
+  color: color-mix(in srgb, var(--guaxi-primary, #4acadb) 32%, var(--guaxi-text-primary, #333));
+  font-size: 0.95em;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.article-content :deep(li) > :deep(.guaxi-bilingual-line),
+.article-content :deep(td) > :deep(.guaxi-bilingual-line),
+.article-content :deep(th) > :deep(.guaxi-bilingual-line) {
+  margin: 2px 0 0;
+  border-radius: 6px;
 }
 
 .article-content :deep(blockquote) {
