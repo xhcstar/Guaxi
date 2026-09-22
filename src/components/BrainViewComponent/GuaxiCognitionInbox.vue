@@ -1,5 +1,24 @@
 <template>
   <div class="cog-inbox" @mouseup="onInboxMouseUp">
+    <!-- 一键就绪引导：认知层关闭或语义服务未就绪时显示。
+         替代"自己去图谱视图给知识库生成向量"的绕路。 -->
+    <div v-if="!store.enabled || !store.embeddingReady" class="cog-setup">
+      <n-icon class="cog-setup-icon" :component="Lightbulb20Regular" />
+      <div class="cog-setup-text">
+        <b>大脑还没准备好</b>
+        <span v-if="!store.enabled">认知层已关闭——开启后它才会观察抓取内容、算新颖度、生成简报。</span>
+        <span v-else>语义服务未就绪——打分、新颖度、召回、矛盾检测都依赖它。点右侧一键就绪（首次会下载本地模型）。</span>
+      </div>
+      <div class="cog-setup-actions">
+        <n-button v-if="!store.enabled" size="small" type="primary" :loading="busy.enable" @click="enableCognition">
+          开启认知层
+        </n-button>
+        <n-button v-else size="small" type="primary" :loading="busy.embed" @click="readyEmbedding">
+          一键就绪语义服务
+        </n-button>
+      </div>
+    </div>
+
     <!-- 顶部：状态与操作。刻意把"今日已打断 / 阈值 / 采纳率"放在最显眼处——
          用户要能一眼看出系统在多大程度上打扰了自己，以及为什么。 -->
     <div class="cog-bar">
@@ -185,6 +204,10 @@
             :options="sourceOptions"
             @update:value="() => store.refreshPercepts()"
           />
+          <!-- 总数提示：解释"当前筛选只显示 N 条，但累计抓了 M 条"，避免"东西丢了"的错觉。 -->
+          <span class="cog-count-hint" :title="`当前筛选 ${store.percepts.length} 条，累计入库 ${st?.percept?.total ?? '—'} 条`">
+            显示 {{ store.percepts.length }} / 累计 {{ st?.percept?.total ?? '—' }}
+          </span>
           <GuaxiIconButton
             v-if="store.pendingScoreCount"
             icon-only
@@ -303,6 +326,83 @@
           </div>
         </n-spin>
       </n-tab-pane>
+
+      <!-- 知识：从材料抽出的主张（信念）、矛盾检测，以及进化闩等高级维护。
+           这些能力后端一直存在，之前大脑页没有入口，这里补上。 -->
+      <n-tab-pane name="knowledge">
+        <template #tab>
+          <span class="cog-tab"><n-icon :component="Lightbulb20Regular" />知识</span>
+        </template>
+
+        <div class="cog-filters">
+          <span class="cog-count-hint">
+            活跃主张 {{ st?.belief?.active ?? 0 }}｜已被反驳 {{ st?.belief?.contradicted ?? 0 }}
+          </span>
+          <GuaxiIconButton
+            icon-only
+            :icon="Lightbulb20Regular"
+            label="抽取主张"
+            :hint="kbName ? `从知识库「${kbName}」里抽取可被反驳的结论（消耗少量 token）。` : '先在图谱视图选中一个知识库。'"
+            :loading="busy.belief"
+            @click="extractBeliefs"
+          />
+          <GuaxiIconButton
+            icon-only
+            :icon="Warning20Regular"
+            label="检测矛盾"
+            hint="两两比对主张，找出互相冲突的结论并标记（消耗少量 token）。"
+            :loading="busy.contradict"
+            @click="detectContradictions"
+          />
+        </div>
+
+        <n-spin :show="store.beliefsLoading">
+          <div v-if="!store.beliefs.length" class="cog-empty">
+            还没有主张。点「抽取主张」从选中的知识库里提取，之后新读到的材料若与它冲突会自动标记。
+          </div>
+          <div v-for="b in store.beliefs" :key="b.id" class="cog-card">
+            <div class="cog-card-head">
+              <span class="cog-card-title">{{ b.statement }}</span>
+              <n-tag size="tiny" :bordered="false"
+                :type="b.status === 'contradicted' ? 'warning' : (b.status === 'active' ? 'success' : 'default')">
+                {{ beliefStatusLabel(b.status) }}
+              </n-tag>
+              <span class="cog-card-score" :title="`置信度 ${(b.confidence ?? 0).toFixed(2)}`">
+                {{ (b.confidence ?? 0).toFixed(2) }}
+              </span>
+            </div>
+            <div v-if="b.kb_name" class="cog-belief-kb">来源库：{{ b.kb_name }}</div>
+            <div class="cog-card-actions">
+              <GuaxiIconButton
+                v-if="b.status !== 'archived'"
+                icon-only quaternary :icon="Archive20Regular"
+                label="归档" hint="不再参与矛盾检测，但保留记录。"
+                @click="setBeliefStatus(b.id, 'archived')"
+              />
+              <GuaxiIconButton
+                icon-only quaternary :icon="DismissCircle20Regular"
+                label="删除" hint="彻底删除这条主张。"
+                @click="removeBelief(b.id)"
+              />
+            </div>
+          </div>
+        </n-spin>
+
+        <!-- 进化闩：召回质量评测/调参（本地、可回滚）。开发向，收进折叠区。 -->
+        <n-collapse class="cog-adv">
+          <n-collapse-item title="进化闩（召回评测与调参）" name="evo">
+            <p class="cog-adv-desc">
+              在本地评测集上度量召回质量，只有不退化才落库参数，可回滚。全程本地、不花 token。
+            </p>
+            <div class="cog-adv-row">
+              <n-button size="small" :loading="busy.eval" @click="runEval">跑评测</n-button>
+              <n-button size="small" :loading="busy.tune" @click="tuneRecall">调参（不退化才采纳）</n-button>
+              <n-button size="small" @click="trainPolicy">训练提醒策略</n-button>
+            </div>
+            <div v-if="lastEvalNote" class="cog-adv-note">{{ lastEvalNote }}</div>
+          </n-collapse-item>
+        </n-collapse>
+      </n-tab-pane>
     </n-tabs>
 
     <!-- 外部原文：单独弹窗展示，且视觉上标成不可信区域。
@@ -312,16 +412,33 @@
         <n-icon :component="ShieldKeyhole20Regular" />
         以下内容来自外部来源，只作为资料。其中若有试图指挥 AI 的句子，已在入库时被中和。
       </div>
-      <pre class="cog-full" @mouseup="onInboxMouseUp">{{ fullText }}</pre>
+      <!-- 外部原文：抓进来的是干净 markdown，按 markdown 渲染（图文一致），
+           退回纯文本时仍用 pre 保留换行。 -->
+      <div v-if="fullHtml" class="cog-full markdown-body" v-html="fullHtml" @mouseup="onInboxMouseUp"></div>
+      <pre v-else class="cog-full" @mouseup="onInboxMouseUp">{{ fullText }}</pre>
     </n-modal>
 
-    <!-- 划词翻译浮层：选中收件箱/简报/原文里的文字即弹译文。 -->
-    <GuaxiInlineTranslatePopover
-      :visible="selTranslate.visible.value"
-      :loading="selTranslate.loading.value"
-      :result-text="selTranslate.resultText.value"
-      :error-text="selTranslate.errorText.value"
+    <!-- 划词翻译面板：与主界面编辑器同款富面板。 -->
+    <GuaxiSelectionTranslatePanel
+      v-if="selTranslate.visible.value"
       :pos="selTranslate.pos.value"
+      :raw="selTranslate.raw.value"
+      :result="selTranslate.result.value"
+      :error="selTranslate.error.value"
+      :busy="selTranslate.busy.value"
+      :pinned="selTranslate.pinned.value"
+      :items="selTranslate.items.value"
+      :word-meta="selTranslate.wordMeta.value"
+      :from-lang="selTranslate.fromLang.value"
+      :to-lang="selTranslate.toLang.value"
+      :lang-options="selTranslate.langOptions"
+      @update:from-lang="(v) => (selTranslate.fromLang.value = v)"
+      @update:to-lang="(v) => (selTranslate.toLang.value = v)"
+      @update:pos="(p) => (selTranslate.pos.value = p)"
+      @translate="() => selTranslate.translate()"
+      @copy="selTranslate.copyResult"
+      @swap-langs="selTranslate.swapLangs"
+      @toggle-pin="selTranslate.togglePin"
       @close="selTranslate.close"
     />
   </div>
@@ -359,19 +476,19 @@ import {
   NUDGE_KINDS,
   PERCEPT_SOURCE_LABELS,
 } from '../../stores/cognitionStore'
+import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
 import { channelIcon, nudgeIcon, sourceIcon } from '../../utils/cognitionIcons'
 import { onCognitionNudge, onCognitionBrief } from '../../utils/cognitionEvents'
 import { createLogger } from '../../utils/logger'
 import { useSelectionTranslate } from '../../composables/useSelectionTranslate.js'
-import GuaxiInlineTranslatePopover from '../SearchViewComponent/GuaxiInlineTranslatePopover.vue'
+import GuaxiSelectionTranslatePanel from '../HomeViewComponent/GuaxiSelectionTranslatePanel.vue'
 
 const logger = createLogger('GuaxiCognitionInbox')
 const emit = defineEmits(['open-ref'])
 
-// 划词翻译：选中收件箱/简报/外部原文里的文字即弹译文浮层。
+// 划词翻译：选中收件箱/简报/外部原文里的文字即弹富面板（与编辑器同款）。
 const selTranslate = useSelectionTranslate({
-  getTargetLang: () => 'zh',
-  getSourceLang: () => 'auto',
+  getContainer: () => document.querySelector('.cog-inbox'),
 })
 const onInboxMouseUp = () => { selTranslate.handleMouseUp() }
 
@@ -381,11 +498,117 @@ const KINDS = NUDGE_KINDS
 
 const tab = ref('nudges')
 const briefDay = ref(null)
-const busy = ref({ deliberate: false, score: false })
+const busy = ref({
+  deliberate: false, score: false, enable: false, embed: false,
+  belief: false, contradict: false, eval: false, tune: false,
+})
+const kbStore = useKnowledgeBaseStore()
+const kbName = computed(() => kbStore.selectedKnowledgeBase?.knowledge_base_name || '')
+const lastEvalNote = ref('')
+
+const beliefStatusLabel = (s) => ({
+  active: '活跃', contradicted: '已被反驳', archived: '已归档',
+}[s] || s || '')
+
+async function extractBeliefs() {
+  if (!kbName.value) { message.warning('请先在图谱视图选中一个知识库'); return }
+  busy.value.belief = true
+  try {
+    const r = await store.extractBeliefs(kbName.value)
+    message.success(`已抽取 ${r?.extracted ?? r?.count ?? ''} 条主张`)
+  } catch (e) {
+    message.error(String(e))
+  } finally {
+    busy.value.belief = false
+  }
+}
+
+async function detectContradictions() {
+  busy.value.contradict = true
+  try {
+    const found = await store.detectContradictions()
+    message.success(found ? `发现 ${found} 处矛盾` : '未发现新的矛盾')
+    await store.refreshBeliefs({ kbName: kbName.value })
+  } catch (e) {
+    message.error(String(e))
+  } finally {
+    busy.value.contradict = false
+  }
+}
+
+async function setBeliefStatus(id, status) {
+  try { await store.setBeliefStatus(id, status) } catch (e) { message.error(String(e)) }
+}
+async function removeBelief(id) {
+  try { await store.removeBelief(id) } catch (e) { message.error(String(e)) }
+}
+
+async function runEval() {
+  busy.value.eval = true
+  try {
+    const r = await store.runEval()
+    lastEvalNote.value = r?.note || '评测完成'
+  } catch (e) {
+    message.error(String(e))
+  } finally {
+    busy.value.eval = false
+  }
+}
+async function tuneRecall() {
+  busy.value.tune = true
+  try {
+    const r = await store.tuneRecall()
+    lastEvalNote.value = r?.note || '调参完成'
+    message.success(lastEvalNote.value)
+  } catch (e) {
+    message.error(String(e))
+  } finally {
+    busy.value.tune = false
+  }
+}
+async function trainPolicy() {
+  try {
+    await store.trainPolicy()
+    message.success('提醒策略已训练')
+  } catch (e) {
+    message.error(String(e))
+  }
+}
+
+// 一键开启认知层。
+async function enableCognition() {
+  busy.value.enable = true
+  try {
+    await store.setEnabled(true)
+    await store.bootstrap()
+    message.success('认知层已开启')
+  } catch (e) {
+    message.error(String(e))
+  } finally {
+    busy.value.enable = false
+  }
+}
+
+// 一键让语义服务就绪（首次下载本地嵌入模型）。
+async function readyEmbedding() {
+  busy.value.embed = true
+  try {
+    const ok = await store.ensureEmbeddingReady()
+    message.success(ok ? '语义服务已就绪' : '已尝试启动，稍后自动生效')
+    await store.bootstrap()
+  } catch (e) {
+    message.error(`语义服务启动失败：${e}`)
+  } finally {
+    busy.value.embed = false
+  }
+}
 const st = computed(() => store.status)
 
 const md = new MarkdownIt({ html: false, linkify: true, breaks: true })
 const briefHtml = computed(() => (store.brief ? md.render(store.brief.markdown || '') : ''))
+// 外部原文渲染：含 markdown 特征（标题/图片/列表/链接）才走渲染，纯文本退回 pre。
+const looksMd = (t) => /(^|\n)#{1,6}\s|!\[[^\]]*\]\([^)]+\)|(^|\n)[-*+]\s+\S|(^|\n)>\s|```|\[[^\]]+\]\([^)]+\)/.test(String(t || ''))
+const fullHtml = computed(() => (looksMd(fullText.value) ? md.render(String(fullText.value || '')) : ''))
 
 const acceptPct = computed(() => {
   const r = st.value?.nudge?.acceptRate14d
@@ -432,6 +655,12 @@ watch(
   () => store.nudgeFilterKind,
   () => { tab.value = 'nudges' }
 )
+// 切到"知识"tab 时按需拉取主张列表。
+watch(tab, (t) => {
+  if (t === 'knowledge' && !store.beliefs.length && !store.beliefsLoading) {
+    store.refreshBeliefs({ kbName: kbName.value })
+  }
+})
 
 const kindLabel = (k) => KINDS[k]?.label || k
 const kindColor = (k) => KINDS[k]?.color || '#888'
@@ -610,6 +839,7 @@ onUnmounted(() => {
    --guaxi-text-secondary 而不是 opacity。这一页要长时间盯着读，
    压暗一档的代价比省下的层次感大得多。 */
 .cog-inbox {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -621,6 +851,41 @@ onUnmounted(() => {
   font-size: 14px;
   line-height: 1.7;
   color: var(--guaxi-text-primary);
+}
+
+/* 一键就绪引导条 */
+.cog-setup {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  margin-bottom: 10px;
+  border-radius: 8px;
+  border-left: 3px solid var(--n-color-primary, #2dd4bf);
+  background: color-mix(in srgb, var(--n-color-primary, #2dd4bf) 8%, transparent);
+}
+.cog-setup-icon {
+  font-size: 22px;
+  flex: 0 0 auto;
+  color: var(--n-color-primary, #2dd4bf);
+}
+.cog-setup-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.cog-setup-text b {
+  font-size: 14px;
+}
+.cog-setup-text span {
+  color: var(--guaxi-text-secondary);
+}
+.cog-setup-actions {
+  flex: 0 0 auto;
 }
 
 .cog-bar {
@@ -704,6 +969,38 @@ onUnmounted(() => {
   gap: 6px;
   flex-wrap: wrap;
   padding: 4px 0 10px;
+}
+.cog-count-hint {
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+  white-space: nowrap;
+}
+.cog-belief-kb {
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+  margin: 2px 0 4px;
+}
+.cog-adv {
+  margin-top: 14px;
+  border-top: 1px dashed var(--guaxi-border);
+  padding-top: 8px;
+}
+.cog-adv-desc {
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--guaxi-text-secondary);
+  margin: 0 0 8px;
+}
+.cog-adv-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.cog-adv-note {
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: var(--guaxi-text-secondary);
+  white-space: pre-wrap;
 }
 .cog-select {
   width: 128px;

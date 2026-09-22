@@ -152,41 +152,13 @@
           </span>
         </div>
       </n-collapse-item>
+      <!-- 快捷操作精简：立即审议 / 生成简报 / 打分 都在中间收件箱顶栏，不再在左栏重复。
+           这里只保留"清理未读抓取内容"（中间没有的、破坏性的维护动作）。 -->
       <n-collapse-item name="actions">
         <template #header>
-          <span class="cl-sec"><n-icon :component="Toolbox20Regular" />快捷操作</span>
+          <span class="cl-sec"><n-icon :component="Toolbox20Regular" />维护</span>
         </template>
-        <!-- 排成一行图标而不是四个通栏按钮：侧栏纵向空间比横向金贵，
-             每个动作的解释都在悬浮提示里，点之前一定看得到。 -->
         <div class="cl-actions">
-          <GuaxiIconButton
-            icon-only
-            secondary
-            :icon="Lightbulb20Regular"
-            label="立即审议"
-            hint="现在就扫一遍新感知与图谱变化，产出提醒并按额度投递。"
-            :loading="busy.deliberate"
-            @click="deliberate"
-          />
-          <GuaxiIconButton
-            icon-only
-            secondary
-            :icon="News20Regular"
-            label="生成今日简报"
-            hint="把够不上打断门槛的内容汇总成一份简报。会消耗少量 token。"
-            :loading="cog.briefLoading"
-            @click="makeBrief"
-          />
-          <GuaxiIconButton
-            v-if="cog.pendingScoreCount"
-            icon-only
-            secondary
-            :icon="Gauge20Regular"
-            label="打分待处理条目"
-            :hint="`给 ${cog.pendingScoreCount} 条待处理内容求向量、算新颖度与显著性。全程本地模型。`"
-            :loading="busy.score"
-            @click="scoreNow"
-          />
           <GuaxiIconButton
             icon-only
             secondary
@@ -198,9 +170,6 @@
           />
         </div>
       </n-collapse-item>
-
-
-
     </n-collapse>
   </div>
 </template>
@@ -236,7 +205,7 @@ import { nudgeIcon, sourceIcon } from '../../utils/cognitionIcons'
 const cog = useCognitionStore()
 const message = useMessage()
 const st = computed(() => cog.status)
-const busy = ref({ deliberate: false, score: false, purge: false })
+const busy = ref({ purge: false })
 
 const kindRows = computed(() =>
   Object.entries(NUDGE_KINDS)
@@ -294,40 +263,6 @@ async function openBrief(day) {
 async function reload() {
   await cog.bootstrap()
   await cog.refreshBriefHistory()
-}
-
-async function deliberate() {
-  busy.value.deliberate = true
-  try {
-    const r = await cog.deliberateNow()
-    message.success(`审议完成：新增 ${r.produced} 条，投递 ${r.delivered} 条`)
-  } catch (e) {
-    message.error(String(e))
-  } finally {
-    busy.value.deliberate = false
-  }
-}
-
-async function makeBrief() {
-  try {
-    await cog.generateBrief('morning')
-    await cog.refreshBriefHistory()
-    message.success('简报已生成')
-  } catch (e) {
-    message.error(String(e))
-  }
-}
-
-async function scoreNow() {
-  busy.value.score = true
-  try {
-    const n = await cog.scorePercepts(24)
-    message.success(n ? `已打分 ${n} 条` : '没有待打分的条目')
-  } catch (e) {
-    message.warning(`打分暂不可用：${e}`)
-  } finally {
-    busy.value.score = false
-  }
 }
 
 async function purge() {

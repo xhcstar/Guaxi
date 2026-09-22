@@ -936,22 +936,36 @@ export const useFlipboardStore = () => {
         console.warn('FlipboardStore: warm render engine failed:', e)
       )
     }
-    // 先清理未收藏缓存，再拉取（拉取会重新填充当前分类的新鲜内容）。
-    await purgeUnbookmarkedOnce()
-    await fetchCategories()
-    try {
-      await importFeedsFromWebsiteMarkdown(null)
-    } catch (error) {
-      console.warn('FlipboardStore: importFeedsFromWebsiteMarkdown skipped:', error)
-    }
-    await fetchFeeds()
-    await fetchArticles()
-
-    // 加载保存的视图模式
+    // 加载保存的视图模式（放最前，避免首屏闪一下默认视图）。
     const savedViewMode = localStorage.getItem('flipboard_view_mode')
     if (savedViewMode) {
       currentView.value = savedViewMode
     }
+
+    // 1) 先拉分类：左侧边栏要在进入页面时立即出现，不等文章一起加载。
+    await fetchCategories()
+
+    // 2) 默认选中第一个分类并立即加载它的文章卡片，用户不用手动点。
+    //    第一个通常是"全部"；若无分类则退回全部聚合。
+    const first = Array.isArray(categories.value) && categories.value.length
+      ? String(categories.value[0]?.id || '')
+      : ''
+    const firstCategory = first || null
+
+    // 清理未收藏缓存要在拉取之前（拉取会重新填充当前分类的新鲜内容）。
+    await purgeUnbookmarkedOnce()
+    // 先用第一个分类拉一轮文章，让中间区域立刻有卡片。
+    await fetchArticles(firstCategory)
+
+    // 3) 订阅源导入与刷新放到首屏之后的后台，不阻塞"分类 + 首屏卡片"的呈现。
+    ;(async () => {
+      try {
+        await importFeedsFromWebsiteMarkdown(null)
+      } catch (error) {
+        console.warn('FlipboardStore: importFeedsFromWebsiteMarkdown skipped:', error)
+      }
+      await fetchFeeds()
+    })()
   }
 
   store = {

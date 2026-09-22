@@ -7,8 +7,8 @@
         @article-select="handleArticleSelect" />
     </div>
 
-    <!-- 右侧阅读面板：在阅读模式下占满左侧栏右边的所有空间；普通模式下为固定宽度侧栏 -->
-    <div class="reader-panel" :class="{ collapsed: isRightSiderCollapsed }" :style="readerPanelStyle">
+    <!-- 右侧阅读面板：仅在选中文章后出现。没有文章时整块不渲染，不再冒出空白面板。 -->
+    <div v-if="currentArticle" class="reader-panel" :class="{ collapsed: isRightSiderCollapsed }" :style="readerPanelStyle">
       <FlipboardDetailView :current-article="currentArticle" :is-loading="isLoading" @close="handleReaderClose"
         @article-select="handleRelatedArticleSelect" />
       <div class="sider-resize-handle-right" @mousedown="onMouseDownRightSidebar"></div>
@@ -58,6 +58,11 @@ const isRightSiderCollapsed = computed({
 
 /** 右侧面板在不同模式下的宽度/占位策略 */
 const readerPanelStyle = computed(() => {
+  // 没有选中文章时一律不占位：避免出现一块"选择一篇文章"的空白阅读面板。
+  // 之前折叠状态持久化在 store 里，若上次留成展开、而当前无文章，就会冒出这块空白且没有明显控制入口。
+  if (!currentArticle.value) {
+    return { width: '0' }
+  }
   if (isRightSiderCollapsed.value) {
     return { width: '0' }
   }

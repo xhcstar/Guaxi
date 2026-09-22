@@ -187,13 +187,27 @@
       </div>
     </n-scrollbar>
 
-    <!-- 划词翻译浮层：选中正文文字即弹出译文。 -->
-    <GuaxiInlineTranslatePopover
-      :visible="selTranslate.visible.value"
-      :loading="selTranslate.loading.value"
-      :result-text="selTranslate.resultText.value"
-      :error-text="selTranslate.errorText.value"
+    <!-- 划词翻译面板：与主界面编辑器同款富面板（多引擎/词典/语言切换/固定/拖拽）。 -->
+    <GuaxiSelectionTranslatePanel
+      v-if="selTranslate.visible.value"
       :pos="selTranslate.pos.value"
+      :raw="selTranslate.raw.value"
+      :result="selTranslate.result.value"
+      :error="selTranslate.error.value"
+      :busy="selTranslate.busy.value"
+      :pinned="selTranslate.pinned.value"
+      :items="selTranslate.items.value"
+      :word-meta="selTranslate.wordMeta.value"
+      :from-lang="selTranslate.fromLang.value"
+      :to-lang="selTranslate.toLang.value"
+      :lang-options="selTranslate.langOptions"
+      @update:from-lang="(v) => (selTranslate.fromLang.value = v)"
+      @update:to-lang="(v) => (selTranslate.toLang.value = v)"
+      @update:pos="(p) => (selTranslate.pos.value = p)"
+      @translate="() => selTranslate.translate()"
+      @copy="selTranslate.copyResult"
+      @swap-langs="selTranslate.swapLangs"
+      @toggle-pin="selTranslate.togglePin"
       @close="selTranslate.close"
     />
   </div>
@@ -221,7 +235,7 @@ import {
 } from '@vicons/ionicons5'
 import { useBilingualPreview } from '../../composables/useBilingualPreview.js'
 import { useSelectionTranslate } from '../../composables/useSelectionTranslate.js'
-import GuaxiInlineTranslatePopover from './GuaxiInlineTranslatePopover.vue'
+import GuaxiSelectionTranslatePanel from '../HomeViewComponent/GuaxiSelectionTranslatePanel.vue'
 
 const BookmarkIcon = BookmarkOutline
 const BookmarkFilledIcon = Bookmark
@@ -411,10 +425,9 @@ const bilingual = useBilingualPreview({
 
 const toggleBilingual = () => { bilingual.toggle() }
 
-// 划词翻译：选中正文文字即弹译文浮层。
+// 划词翻译：选中正文文字即弹富面板（与编辑器同款）。面板相对 .reader-panel 定位。
 const selTranslate = useSelectionTranslate({
-  getTargetLang: () => 'zh',
-  getSourceLang: () => 'auto',
+  getContainer: () => document.querySelector('.reader-panel'),
 })
 
 // 正文 mouseup：先走选择工具条（+摘录），再触发划词翻译浮层。两者不冲突：
@@ -712,10 +725,10 @@ const formatTime = (timeString) => {
 }
 
 .article-body {
-  /* 与编辑器 Markdown 预览（.preview）保持一致的字体/字号/行高。 */
+  /* 字体族与编辑器 Markdown 预览一致；正文字号调大到 19px、行高放宽，长文更易读。 */
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
-  font-size: 17px;
-  line-height: 1.5;
+  font-size: 19px;
+  line-height: 1.75;
   color: var(--guaxi-text-primary);
 }
 

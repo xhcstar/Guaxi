@@ -1,14 +1,8 @@
 <template>
   <div ref="rightSiderContentRef" class="right-sider-content">
-    <!-- 大脑（认知）模式：右栏不该显示图谱的节点/搜索/筛选面板。
-         给一段说明占位，避免误显示图谱内容（issue：大脑标签下右栏出现图谱内容）。 -->
-    <div v-if="cog.viewMode === 'cognition'" class="cog-right-placeholder">
-      <n-empty size="small" description="大脑模式">
-        <template #extra>
-          <span class="cog-right-tip">这里在图谱模式下显示节点信息与筛选。大脑模式的操作在左侧边栏与中间收件箱。</span>
-        </template>
-      </n-empty>
-    </div>
+    <!-- 大脑（认知）模式：右栏放兴趣画像编辑（影响抓取相关性与显著性打分），
+         不再显示图谱的节点/搜索/筛选面板。 -->
+    <GuaxiCognitionRightPanel v-if="cog.viewMode === 'cognition'" />
 
     <!-- 工业图谱模式:操作面板 + 概览/社区/历史等洞察面板(从左栏迁移至此) -->
     <div v-else-if="store.graphViewMode === 'kg3d'" class="kg3d-right">
@@ -108,13 +102,13 @@ import {
   NSpace,
   NTag,
   NText,
-  NThing,
-  NEmpty
+  NThing
 } from 'naive-ui'
 
 import { SearchOutline } from '@vicons/ionicons5'
 import GuaxiKg3dOpsPanel from './GuaxiKg3dOpsPanel.vue'
 import GuaxiKg3dLeftPanel from './GuaxiKg3dLeftPanel.vue'
+import GuaxiCognitionRightPanel from './GuaxiCognitionRightPanel.vue'
 
 const logger = createLogger('GuaxiRightContentBrainView')
 const store = useKnowledgeBaseStore()
@@ -484,23 +478,5 @@ onBeforeUnmount(() => {
 
 .results-empty {
   display: block;
-}
-
-/* 大脑模式右栏占位：居中说明，不显示图谱面板。 */
-.cog-right-placeholder {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px 16px;
-}
-
-.cog-right-tip {
-  display: block;
-  max-width: 260px;
-  font-size: 13px;
-  line-height: 1.7;
-  color: var(--guaxi-text-secondary, #64748b);
 }
 </style>

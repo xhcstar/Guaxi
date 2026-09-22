@@ -116,6 +116,21 @@ export const useCognitionStore = defineStore('cognitionStore', {
       await this.refreshStatus()
     },
 
+    /**
+     * 一键让语义服务就绪：启动本地嵌入服务（首次会下载模型，走既有下载链路）。
+     * 就绪后打分、新颖度、召回、矛盾检测才可用。返回是否成功。
+     */
+    async ensureEmbeddingReady() {
+      try {
+        await invoke('kg_ensure_embedding_service')
+        await this.refreshStatus()
+        return this.embeddingReady
+      } catch (e) {
+        logger.warn('kg_ensure_embedding_service failed', e)
+        throw e
+      }
+    },
+
     async setSetting(key, value) {
       await invoke('cognition_set_setting', { key, value: String(value) })
       await this.refreshStatus()
