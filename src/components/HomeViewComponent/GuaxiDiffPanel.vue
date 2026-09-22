@@ -335,8 +335,8 @@
       <div v-else-if="error" class="dp-placeholder is-error">{{ error }}</div>
       <div v-else-if="!rows.length" class="dp-placeholder">{{ emptyText }}</div>
 
-      <!-- 并排视图：左右各自横向滚动，纵向同步，中间那条竖线可以拖。
-           不做成"一整块超宽内容"是因为一侧有长行就会把另一侧顶到屏幕外。 -->
+      <!-- 并排视图：左右两侧纵横滚动都同步（见 onPaneScroll），中间那条竖线可以拖。
+           不做成"一整块超宽内容"是因为两侧最宽列数不同，各留各的滚动区才好按绝对偏移对齐。 -->
       <div v-else-if="splitPanes" ref="panesRef" class="dp-panes"
         :class="{ 'is-dragging': splitDragging }">
         <div ref="leftPaneRef" class="dp-pane is-left" :style="{ width: `calc(${splitPercent}% - 3px)` }"
@@ -938,7 +938,8 @@ const resetSplit = () => {
 }
 
 /**
- * 两侧纵向滚动同步，横向各滚各的（长行只在自己这侧滚，另一侧不跟着跑偏）。
+ * 两侧滚动同步，纵横都联动（像 VSCode 并排差异那样一起走）。横向按绝对偏移同步，
+ * 浏览器会把 scrollLeft 夹到各自的最大值，一侧内容更窄也不会越界。
  * 互相赋值会再触发一次 scroll，用开关挡掉，下一帧放开。
  */
 let syncingPanes = false
@@ -948,9 +949,13 @@ const onPaneScroll = (which, ev) => {
   scrollTop.value = el.scrollTop
   if (syncingPanes) return
   const other = which === 'left' ? rightPaneRef.value : leftPaneRef.value
-  if (!other || Math.abs(other.scrollTop - el.scrollTop) < 1) return
+  if (!other) return
+  const dv = Math.abs(other.scrollTop - el.scrollTop) >= 1
+  const dh = Math.abs(other.scrollLeft - el.scrollLeft) >= 1
+  if (!dv && !dh) return
   syncingPanes = true
-  other.scrollTop = el.scrollTop
+  if (dv) other.scrollTop = el.scrollTop
+  if (dh) other.scrollLeft = el.scrollLeft
   requestAnimationFrame(() => {
     syncingPanes = false
   })
@@ -1639,6 +1644,9 @@ let liveDiffSync = null
 const editModels = { left: null, right: null }
 const editBaselines = { left: 0, right: 0 }
 let editChangeDisposables = []
+/** 两侧光标联动的监听器；互相 setPosition 会再触发一次光标事件，用 guard 挡掉回环。 */
+let cursorSyncDisposables = []
+let cursorSyncGuard = false
 /** 编辑期间存过盘：退出编辑模式时要重算一次只读差异，否则屏幕上还是旧结果。 */
 let savedDuringEdit = false
 /** 编辑期间改过对比选项：退出编辑模式时同样要重算，否则只读结果还是按旧选项算的。 */
@@ -1827,6 +1835,12 @@ const EDIT_INK_CLASS = { add: 'dp-edit-ink-add', del: 'dp-edit-ink-del' }
 const EDIT_INK_PAIR_LIMIT = 400
 const EDIT_DIFF_RETRY_DELAY_MS = 60
 const EDIT_DIFF_RETRY_LIMIT = 3
+/**
+ * 两次实时重算之间的最小间隔。正常打字每键间隔远大于它（不受影响，仍是"一敲就算"）；
+ * 只有按住键自动重复、整段粘贴这类爆发输入才会命中，把中间那些必然被覆盖的重算合并掉，
+ * 省下大文件上一次次 worker 计算和整批行内装饰重建。设成 0 就退回原来的"每 tick 都算"。
+ */
+const EDIT_DIFF_MIN_INTERVAL_MS = 48
 
 /**
  * worker 被回收、或者模型还没同步进 worker 时会拿不到结果（editorWorkerService 把 null
@@ -1871,15 +1885,31 @@ const sameLineStructure = (a, b) => {
   return true
 }
 
-/** 结构指纹：和 sameLineStructure 是同一套口径，一份给算出来的结果用，一份给 ViewModel 的状态用。 */
-const lineStructureKey = (result) => (result?.changes || [])
-  .map((c) => `${c.original.startLineNumber}-${c.original.endLineNumberExclusive}/${c.modified.startLineNumber}-${c.modified.endLineNumberExclusive}`)
-  .join('|')
+/**
+ * 行级结构是否没变（口径同 sameLineStructure，但吃的是 provider.computeDiff 的 .changes 形状）。
+ * 原来这里是每次重算都把所有 change 拼成一条大字符串再比——几千个 change 的差异每敲一下键
+ * 都要建一大串、再 join，纯浪费。直接逐段比行区间，命中不同就早退，不再产生这串垃圾。
+ */
+const sameChanges = (a, b) => {
+  const before = a?.changes
+  const after = b?.changes
+  if (!before || !after || before.length !== after.length) return false
+  for (let i = 0; i < before.length; i += 1) {
+    const was = before[i]
+    const now = after[i]
+    if (was.original.startLineNumber !== now.original.startLineNumber) return false
+    if (was.original.endLineNumberExclusive !== now.original.endLineNumberExclusive) return false
+    if (was.modified.startLineNumber !== now.modified.startLineNumber) return false
+    if (was.modified.endLineNumberExclusive !== now.modified.endLineNumberExclusive) return false
+  }
+  return true
+}
 
 const createLiveDiffSync = (models, vm, base, setup) => {
   const listeners = new Set()
   let firstRun = true
-  let lastKey = null
+  let lastResult = null
+  let lastRunStart = 0
   let inflight = 0
   let pending = false
   let timer = 0
@@ -1961,10 +1991,13 @@ const createLiveDiffSync = (models, vm, base, setup) => {
   /** 挪出当前事件循环再算：内容变更处理途中去动 Model 状态容易撞上 Monaco 自己的更新 */
   const schedule = () => {
     if (timer || disposed) return
+    // 距上一次重算不足最小间隔就补齐差额；空闲后的第一次几乎立刻算，爆发输入才被合并。
+    const wait = Math.max(0, EDIT_DIFF_MIN_INTERVAL_MS - (performance.now() - lastRunStart))
     timer = window.setTimeout(() => {
       timer = 0
+      lastRunStart = performance.now()
       run()
-    }, 0)
+    }, wait)
   }
 
   const run = async () => {
@@ -1977,9 +2010,8 @@ const createLiveDiffSync = (models, vm, base, setup) => {
       // 这一趟算的时候又敲过键：丢掉这个过期结果，等下一趟
       if (disposed || pending) return
       paintInk(result)
-      const key = lineStructureKey(result)
-      const changed = key !== lastKey
-      lastKey = key
+      const changed = !sameChanges(lastResult, result)
+      lastResult = result
       // 首轮不通知：Monaco 建编辑器时已经按同一份内容算过一遍，结构是一样的
       if (changed && !firstRun) notify()
       firstRun = false
@@ -2052,6 +2084,7 @@ const createLiveDiffSync = (models, vm, base, setup) => {
       restoreDiffSet?.()
       restoreDiffSet = null
       listeners.clear()
+      lastResult = null
       clearInk()
     },
   }
@@ -2084,7 +2117,70 @@ const installLiveDiffSync = (editor, models, setup) => {
   }
 }
 
+/**
+ * 把一侧的行号映射到另一侧的对应行。用 Monaco 稳定公开的 getLineChanges()（ILineChange，
+ * end 为 0 表示空区间：原侧空=纯插入、改侧空=纯删除），不去碰内部结构。
+ * 改动块内部按偏移落到对应行，块外按累计增删量平移，未变的行两侧行号对齐。
+ */
+const mapAcrossDiff = (line, changes, toModified) => {
+  let delta = 0
+  for (const c of changes) {
+    const oS = c.originalStartLineNumber
+    const oE = c.originalEndLineNumber
+    const mS = c.modifiedStartLineNumber
+    const mE = c.modifiedEndLineNumber
+    const oEmpty = oE === 0
+    const mEmpty = mE === 0
+    const oCount = oEmpty ? 0 : oE - oS + 1
+    const mCount = mEmpty ? 0 : mE - mS + 1
+    if (toModified) {
+      if (!oEmpty && line >= oS && line <= oE) {
+        return mEmpty ? mS : mS + Math.min(line - oS, mCount - 1)
+      }
+      if (oEmpty ? oS < line : oE < line) delta += mCount - oCount
+      else break
+    } else {
+      if (!mEmpty && line >= mS && line <= mE) {
+        return oEmpty ? oS : oS + Math.min(line - mS, oCount - 1)
+      }
+      if (mEmpty ? mS < line : mE < line) delta += oCount - mCount
+      else break
+    }
+  }
+  return Math.max(1, line + delta)
+}
+
+/**
+ * 两侧光标联动：在一侧移动光标，另一侧把光标挪到对应行并在必要时带进视口，
+ * 做出 VSCode 里"两边光标行一起走"的手感。scroll 本身 Monaco 差异编辑器已自带同步。
+ * 只 setPosition、不 focus：不会把输入焦点抢到对侧。source 打上 'diff-sync' 防回环。
+ */
+const setupCursorSync = () => {
+  if (!diffEditor) return
+  const orig = diffEditor.getOriginalEditor()
+  const mod = diffEditor.getModifiedEditor()
+  const readChanges = () => {
+    try { return diffEditor?.getLineChanges?.() || [] } catch { return [] }
+  }
+  const link = (src, dst, toModified) => src.onDidChangeCursorPosition((e) => {
+    if (cursorSyncGuard || e.source === 'diff-sync') return
+    const target = mapAcrossDiff(e.position.lineNumber, readChanges(), toModified)
+    cursorSyncGuard = true
+    try {
+      dst.setPosition({ lineNumber: target, column: 1 }, 'diff-sync')
+      dst.revealLineInCenterIfOutsideViewport(target)
+    } finally {
+      requestAnimationFrame(() => { cursorSyncGuard = false })
+    }
+  })
+  cursorSyncDisposables.push(link(orig, mod, true), link(mod, orig, false))
+}
+
 const disposeEditor = () => {
+  for (const d of cursorSyncDisposables) {
+    try { d.dispose() } catch { /* 已随编辑器一起销毁 */ }
+  }
+  cursorSyncDisposables = []
   for (const d of editChangeDisposables) {
     try { d.dispose() } catch { /* 已随编辑器一起销毁 */ }
   }
@@ -2197,6 +2293,9 @@ const mountEditor = async () => {
   const inkSideBySide = viewMode.value === 'split'
   liveDiffSync = installLiveDiffSync(diffEditor, editModels, { ink: inkSideBySide })
   if (liveDiffSync) editHostRef.value?.classList.toggle('is-live-ink', inkSideBySide)
+
+  // 两侧光标行联动（VSCode 那种"一起走"的手感）；scroll 同步 Monaco 自带。
+  setupCursorSync()
 
   editBaselines.left = editModels.left.getAlternativeVersionId()
   editBaselines.right = editModels.right.getAlternativeVersionId()
