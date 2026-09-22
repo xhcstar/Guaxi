@@ -643,7 +643,7 @@
                 <button type="button" class="python-runtime-chip-btn" :disabled="pythonRuntimeBusy" @click="installPythonRuntimeArchive">
                   导入运行时包
                 </button>
-                <button type="button" class="python-runtime-chip-btn" :disabled="pythonRuntimeBusy" @click="upgradeManagedPip">
+                <button type="button" class="python-runtime-chip-btn" :disabled="pythonRuntimeBusy" @click="upgradeUvManager">
                   升级包管理器
                 </button>
               </div>
@@ -4713,10 +4713,10 @@ const createEmptyPythonRuntimeStatus = () => ({
   uv_version: '',
 })
 const pythonRuntimeStatusClass = computed(() => {
-  const source = String(pythonRuntimeStatus.value?.source || '').trim()
-  if (!pythonRuntimeStatus.value?.ready) return 'is-missing'
-  if (source === 'bundled') return 'is-bundled'
-  return 'is-system'
+  // 工具栏圆点状态机：任务进行中 → 绿；环境完全就绪 → 蓝；否则(未就绪/初始化失败) → 红。
+  if (pythonRuntimeBusy.value || pythonRuntimeOperation.value?.active) return 'is-running'
+  if (pythonRuntimeStatus.value?.ready && pythonRuntimeStatus.value?.initialized) return 'is-ready'
+  return 'is-error'
 })
 const pythonRuntimeSourceLabel = computed(() => {
   const source = String(pythonRuntimeStatus.value?.source || '').trim()
@@ -16777,10 +16777,24 @@ const manageSelectedPythonPackages = async (action = 'upgrade') => {
   await executePythonPackageAction(pythonRuntimeSelectedPackages.value, action)
 }
 
-const upgradeManagedPip = async () => {
-  // 这里单独暴露一个 pip 升级入口，避免用户必须手输命令，也让输出继续复用现有日志面板。
-  logger.info('[PythonRuntime] upgrade pip requested from workbench')
-  await executePythonPackageAction(['pip'], 'upgrade')
+// 升级 uv 本身：uv 是包管理器,升级它才是"升级包管理器"的本意。
+// 后端重新拉取 GitHub 最新版覆盖安装(uv self update 不支持 zip 安装的 uv)。
+const upgradeUvManager = async () => {
+  pythonRuntimeBusy.value = true
+  try {
+    beginPythonRuntimeOperation('upgrade-uv', ['uv'], '正在升级 uv 包管理器')
+    const opId = await startPythonRuntimeOp()
+    logger.info('[PythonRuntime] upgrade uv requested from workbench')
+    const version = await invoke('python_runtime_upgrade_uv', { opId })
+    message.success(`uv 已升级${version ? '：' + version : ''}`)
+    await refreshPythonRuntimeStatus('uv-upgraded')
+  } catch (error) {
+    logger.error('[PythonRuntime] upgrade uv failed', error)
+    message.error(`升级 uv 失败：${String(error?.message || error)}`)
+  } finally {
+    endPythonRuntimeOperation('uv 升级流程已结束')
+    pythonRuntimeBusy.value = false
+  }
 }
 
 const resetPythonKernelSession = async () => {
@@ -24692,19 +24706,28 @@ onUnmounted(() => {
   box-shadow: 0 0 0 3px rgba(245, 159, 0, 0.16);
 }
 
-.python-runtime-entry__dot.is-bundled {
+/* 任务进行中：绿色 + 呼吸动画，提示后台正在跑 */
+.python-runtime-entry__dot.is-running {
   background: #18a058;
-  box-shadow: 0 0 0 3px rgba(24, 160, 88, 0.16);
+  box-shadow: 0 0 0 3px rgba(24, 160, 88, 0.18);
+  animation: python-runtime-dot-pulse 1.2s ease-in-out infinite;
 }
 
-.python-runtime-entry__dot.is-system {
+/* 环境完全就绪：蓝色 */
+.python-runtime-entry__dot.is-ready {
   background: #2080f0;
   box-shadow: 0 0 0 3px rgba(32, 128, 240, 0.16);
 }
 
-.python-runtime-entry__dot.is-missing {
+/* 未就绪 / 初始化失败：红色 */
+.python-runtime-entry__dot.is-error {
   background: #d03050;
   box-shadow: 0 0 0 3px rgba(208, 48, 80, 0.16);
+}
+
+@keyframes python-runtime-dot-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(24, 160, 88, 0.28); }
+  50% { box-shadow: 0 0 0 5px rgba(24, 160, 88, 0.10); }
 }
 
 .python-runtime-popover {

@@ -1393,6 +1393,34 @@ fn remove_path_if_exists(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// 删除托管 venv 目录，带重试：刚 kill 掉 worker 后，Windows 可能还没释放
+/// `.venv/Scripts/python.exe` 等文件句柄，`remove_dir_all` 会短暂失败（os error 32）。
+/// 重试几次给系统释放句柄的时间，避免留下删一半的半成品目录。
+fn remove_venv_dir_with_retry(venv_dir: &Path) -> Result<(), String> {
+    if !venv_dir.exists() {
+        return Ok(());
+    }
+    let mut last_err = String::new();
+    for attempt in 0..20 {
+        match fs::remove_dir_all(venv_dir) {
+            Ok(_) => return Ok(()),
+            Err(error) => {
+                last_err = error.to_string();
+                if !venv_dir.exists() {
+                    return Ok(());
+                }
+                if attempt < 19 {
+                    thread::sleep(Duration::from_millis(200));
+                }
+            }
+        }
+    }
+    Err(format!(
+        "清理旧虚拟环境失败（可能有进程仍占用文件）：{} ({last_err})",
+        venv_dir.to_string_lossy()
+    ))
+}
+
 fn extract_zip_to_dir(zip_path: &Path, target_dir: &Path) -> Result<(), String> {
     let file = fs::File::open(zip_path).map_err(|e| e.to_string())?;
     let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
@@ -2174,12 +2202,17 @@ fn create_managed_virtualenv_with_uv(
         }
     }
 
-    // `--clear`：目标 .venv 已存在时直接重建，而不是报错退出。
-    // 到这一步意味着调用方已判定需要创建/重建环境（缺失、损坏、换版本），
-    // 残留的半成品或旧 venv 都应被覆盖，让本步骤对残留状态天然幂等。
+    // 先杀掉常驻 worker 再删目录：Windows 上正在运行的 python worker 会占用
+    // `.venv/Scripts/python.exe`，导致删除只删掉一部分、留下缺 pyvenv.cfg 的半成品，
+    // 随后 uv 就会报 “will not clear a directory that is not a virtual environment”。
+    let _ = clear_python_worker();
+    // 自己删掉目标目录再建，而不是依赖 uv 的 `--clear`：`--clear` 只肯清“它认得的 venv”，
+    // 遇到缺 pyvenv.cfg 的半成品目录会直接拒绝。到这一步意味着调用方已判定要创建/重建
+    // （缺失、损坏、换版本），残留目录一律该覆盖，因此主动 remove，让本步骤对任何残留状态幂等。
+    remove_venv_dir_with_retry(venv_dir)?;
     let mut venv_cmd = uv_command(uv_path, runtime_dir);
     venv_cmd
-        .args(["venv", "--seed", "--clear", "--python", version])
+        .args(["venv", "--seed", "--python", version])
         .arg(venv_dir)
         .current_dir(runtime_dir);
     let (venv_ok, _, venv_err) = run_command_streamed(venv_cmd)?;
@@ -2712,7 +2745,9 @@ fn ensure_managed_python_launch_spec_with_download_version(
             error = managed_runtime_health_error.as_deref().unwrap_or("none"),
             "[PythonRuntime] recreate managed virtual environment"
         );
-        remove_path_if_exists(&venv_dir)?;
+        // 先收掉常驻 worker 释放对 .venv 的文件占用，再带重试删除（Windows 句柄释放有延迟）。
+        let _ = clear_python_worker();
+        remove_venv_dir_with_retry(&venv_dir)?;
         let _ = remove_path_if_exists(&runtime_marker_path(&runtime_dir));
     }
 
@@ -4292,6 +4327,35 @@ pub async fn python_runtime_manage_packages(
     })
     .await
     .map_err(|e| format!("python_runtime_manage_packages join failed: {e}"))?
+}
+
+/// 升级 uv 本身。我们的 uv 是从 GitHub release 直接下载的 zip，`uv self update` 不支持
+/// （它只认标准安装脚本装的 uv），所以这里改为“重新拉取最新版覆盖安装”，等价于升级。
+#[command]
+pub async fn python_runtime_upgrade_uv(
+    app: AppHandle,
+    op_id: Option<String>,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _sink_guard = begin_progress_scope(&app, op_id);
+        let runtime_dir = python_runtime_dir()?;
+        #[cfg(windows)]
+        {
+            emit_progress_line("stdout", "正在从 GitHub 拉取最新版 uv…");
+            let uv_path = download_uv_binary(&runtime_dir)?;
+            let version = probe_uv_binary(&uv_path)?;
+            emit_progress_line("stdout", &format!("uv 已更新为：{version}"));
+            info!(version = version.as_str(), "[PythonRuntime] uv upgraded via re-download");
+            Ok(version)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = runtime_dir;
+            Err("当前平台的 uv 由系统包管理器维护，请用系统方式升级（如 brew upgrade uv）。".to_string())
+        }
+    })
+    .await
+    .map_err(|e| format!("python_runtime_upgrade_uv join failed: {e}"))?
 }
 
 #[command]

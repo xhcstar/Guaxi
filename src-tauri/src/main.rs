@@ -784,6 +784,7 @@ async fn main() {
              commands::code_runtime::python_runtime_install_archive,
              commands::code_runtime::python_runtime_install_packages,
               commands::code_runtime::python_runtime_manage_packages,
+             commands::code_runtime::python_runtime_upgrade_uv,
              commands::code_runtime::python_runtime_import_table_file,
              commands::code_runtime::python_runtime_get_table_rows,
              commands::code_runtime::python_runtime_export_table_result,
