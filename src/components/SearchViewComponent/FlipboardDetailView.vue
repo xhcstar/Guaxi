@@ -430,11 +430,13 @@ const selTranslate = useSelectionTranslate({
   getContainer: () => document.querySelector('.reader-panel'),
 })
 
-// 正文 mouseup：先走选择工具条（+摘录），再触发划词翻译浮层。两者不冲突：
-// 摘录工具条在选区上方，翻译浮层在选区下方。
-const onContentMouseUp = () => {
-  selectionNotesRef.value?.handleSelectionMouseUp?.()
-  selTranslate.handleMouseUp()
+// 正文 mouseup：Ctrl+划词 → 翻译；普通划词 → 摘录。两者用 Ctrl 区分，不再同时触发。
+const onContentMouseUp = (event) => {
+  if (event?.ctrlKey) {
+    selTranslate.handleMouseUp(event)
+  } else {
+    selectionNotesRef.value?.handleSelectionMouseUp?.()
+  }
 }
 
 // 正文重渲染后（切换文章 / hydrate 完成），若双语开着则重新注入译文。

@@ -206,11 +206,15 @@ export function useSelectionTranslate({ maxChars = 4000, getContainer = null } =
   const togglePin = () => { pinned.value = !pinned.value }
 
   /**
-   * 在内容容器 mouseup 上调用：有选区则定位面板并翻译；固定时忽略新的空点击。
-   * 返回 true 表示已接管本次选择。
+   * 在内容容器 mouseup 上调用：**仅当按住 Ctrl 划词**才翻译，避免与"摘录"同时触发。
+   * 固定(pinned)时忽略新的空点击。返回 true 表示已接管本次选择。
    */
   const handleMouseUp = (event) => {
     try {
+      // 只有 Ctrl+划词 才触发翻译。普通划词留给摘录逻辑。
+      if (!event?.ctrlKey) {
+        return false
+      }
       const sel = window.getSelection?.()
       const text = sel ? String(sel.toString() || '').trim() : ''
       if (!text) {

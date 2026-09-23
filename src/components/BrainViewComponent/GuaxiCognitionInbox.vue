@@ -492,7 +492,7 @@ const emit = defineEmits(['open-ref'])
 const selTranslate = useSelectionTranslate({
   getContainer: () => document.querySelector('.cog-inbox'),
 })
-const onInboxMouseUp = () => { selTranslate.handleMouseUp() }
+const onInboxMouseUp = (event) => { selTranslate.handleMouseUp(event) }
 
 const store = useCognitionStore()
 const message = useMessage()
