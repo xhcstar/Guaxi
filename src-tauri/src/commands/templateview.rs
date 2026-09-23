@@ -156,6 +156,7 @@ pub async fn open_application_window(
         "creation-ai-film-studio" => (1280.0, 800.0, 1024.0, 640.0, true),
         "tools-tts-book" => (1280.0, 800.0, 1024.0, 680.0, true),
         "tools-remote-terminal" => (1280.0, 800.0, 1024.0, 640.0, true),
+        "tools-resource-hunter" => (1280.0, 800.0, 1024.0, 640.0, true),
         _ => (1024.0, 720.0, 820.0, 560.0, false),
     };
 

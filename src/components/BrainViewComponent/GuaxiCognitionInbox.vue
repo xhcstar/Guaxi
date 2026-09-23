@@ -958,33 +958,27 @@ onUnmounted(() => {
   color: var(--guaxi-text-secondary);
 }
 
+/* class="cog-tabs" 直接落在 n-tabs 根节点上，所以 .cog-tabs 本身就是 .n-tabs，
+   flex 列布局要写在它自己身上，而不是它的后代（之前挂在不存在的后代 .n-tabs 上，
+   规则从未生效，pane 拿不到高度也就无法滚动）。 */
 .cog-tabs {
   flex: 1 1 auto;
   min-height: 0;
-  overflow: hidden;
-}
-
-/* naive n-tabs（type=line，非 animated）不生成 pane-wrapper：tab-pane 直接是 .n-tabs 的子节点。
-   所以要让 .n-tabs 成为撑满高度的 flex 列，nav 固定，当前 tab-pane 吃掉剩余高度并自己滚动。
-   之前挂在不存在的 pane-wrapper 上，所以内容多时无法滚动。 */
-.cog-tabs :deep(.n-tabs) {
   height: 100%;
   display: flex;
   flex-direction: column;
-  min-height: 0;
+  overflow: hidden;
 }
 .cog-tabs :deep(.n-tabs-nav) {
   flex: 0 0 auto;
 }
-/* naive 会把 nav 之后的内容包一层 .n-tabs .n-tab-pane（或直接是 pane）；两种都撑满并滚动。 */
-.cog-tabs :deep(.n-tabs > .n-tab-pane),
+/* type=line 非 animated 时 tab-pane 直接是根节点的子节点；animated 时会包一层
+   pane-wrapper。两种都让它吃掉剩余高度并自己滚动。 */
+.cog-tabs :deep(.n-tab-pane),
 .cog-tabs :deep(.n-tabs-pane-wrapper) {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-}
-.cog-tabs :deep(.n-tab-pane) {
-  min-height: 0;
 }
 /* 页签标题里的图标：naive 的页签是纯文本容器，要自己做对齐。 */
 .cog-tab {

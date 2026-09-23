@@ -152,6 +152,11 @@ pub async fn start_backend_services(state: SharedState) -> std::io::Result<()> {
             // MCP 服务端：挂在既有 loopback 端口上，不新开端口、不扩大暴露面。
             // 只会说 stdio 的客户端（如内置 codex）由 guaxi_mcp 桥接进程转发到这里。
             .configure(crate::cognition::mcp::config)
+            // 库网站:挂到 loopback,供 Guaxi 内嵌 webview 访问(无 token)。
+            // 对外 LAN 访问由带 token 的独立端口提供(见 library_site::config_lan)。
+            .configure(crate::commands::library_site::config_local)
+            // 音乐播放器音频流代理：给带防盗链的直链补 Referer/UA，透传 Range 供 <audio> 播放与拖动。
+            .configure(crate::commands::music::stream::config)
             .route("/api/web-model-chat", web::post().to(web_model_chat_push))
             .route("/api/notebook/data-lab/health", web::get().to(notebook_data_lab_health))
             .route("/api/notebook/data-lab/action", web::post().to(notebook_data_lab_rpc_http))

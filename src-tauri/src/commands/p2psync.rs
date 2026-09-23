@@ -140,6 +140,13 @@ struct P2PStateFile {
     secret_key_hex: String,
     trusted_peers: Vec<P2PTrustedPeer>,
     pending_tickets: Vec<P2PPendingTicket>,
+    /// 是否开放联邦浏览(允许可信设备浏览本机库清单/按需取文件)。缺省视为开放。
+    #[serde(default = "default_federation_enabled")]
+    federation_enabled: Option<bool>,
+}
+
+fn default_federation_enabled() -> Option<bool> {
+    Some(true)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -254,6 +261,18 @@ enum P2PWireRequest {
         kb_name: String,
         bundle_json: String,
     },
+    /// 联邦浏览:请求对端返回可浏览的库清单(仅名称/数量,不落地文件)。
+    /// 对端未开放联邦浏览时返回 ok:false。用于"发现其他设备的库"。
+    ListLibraries {},
+    /// 联邦检索:在对端某个库上跑正文检索(对端本地 tantivy),返回命中(不落地文件)。
+    SearchLibrary {
+        target: String,
+        query: String,
+        #[serde(default)]
+        offset: usize,
+        #[serde(default)]
+        limit: usize,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -274,6 +293,72 @@ struct P2PManifestResponse {
     message: String,
     manifest: Option<P2PManifest>,
 }
+
+/// 联邦库清单里的单个库(对端某个同步目标)。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct P2PLibInfo {
+    target: String,
+    name: String,
+    count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct P2PLibrariesResponse {
+    ok: bool,
+    message: String,
+    #[serde(default)]
+    libraries: Vec<P2PLibInfo>,
+}
+
+/// 联邦检索单条命中。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct P2PSearchHit {
+    rel: String,
+    name: String,
+    #[serde(default)]
+    preview: Option<String>,
+    #[serde(default)]
+    mtime_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct P2PSearchResponse {
+    ok: bool,
+    message: String,
+    #[serde(default)]
+    hits: Vec<P2PSearchHit>,
+    #[serde(default)]
+    has_more: bool,
+}
+
+/// 供 library_site 联邦检索使用的命中(带来源与色带)。
+#[derive(Debug, Clone, Serialize)]
+pub struct PeerSearchHit {
+    pub rel: String,
+    pub name: String,
+    pub snippet: Option<String>,
+    pub mtime_ms: i64,
+}
+
+/// 供 library_site 联邦视图使用的对端库(带来源与色带)。
+#[derive(Debug, Clone, Serialize)]
+pub struct PeerLibrary {
+    pub id: String,       // 形如 peer:<peer_id>:<target>
+    pub name: String,
+    pub peer: String,     // 对端设备名
+    pub peer_id: String,
+    pub count: u64,
+    pub band: String,
+}
+
+/// 供 library_site 联邦视图使用的对端文件条目。
+#[derive(Debug, Clone, Serialize)]
+pub struct PeerFileEntry {
+    pub rel: String,
+    pub size: u64,
+    pub mtime_ms: i64,
+}
+
 
 /// 数据库记录 bundle 响应：bundle 以 JSON 字符串内嵌，避免跨模块暴露结构体。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -871,6 +956,31 @@ async fn handle_incoming_stream(
             };
             write_control(&mut send, &response, "P2P 清单响应").await?;
         }
+        P2PWireRequest::ListLibraries {} => {
+            let response = if federation_enabled() {
+                P2PLibrariesResponse {
+                    ok: true,
+                    message: "ok".to_string(),
+                    libraries: enumerate_browsable_libraries(),
+                }
+            } else {
+                P2PLibrariesResponse {
+                    ok: false,
+                    message: "对方未开放联邦浏览".to_string(),
+                    libraries: Vec::new(),
+                }
+            };
+            write_control(&mut send, &response, "P2P 联邦库清单响应").await?;
+        }
+        P2PWireRequest::SearchLibrary {
+            target,
+            query,
+            offset,
+            limit,
+        } => {
+            let response = serve_library_search(&target, &query, offset, limit).await;
+            write_control(&mut send, &response, "P2P 联邦检索响应").await?;
+        }
         P2PWireRequest::PullFile {
             target,
             rel,
@@ -1133,6 +1243,214 @@ async fn send_wire_request(
 fn collect_repo_bundle_json(knowledge_repo: &str) -> Result<String, String> {
     let bundle = crate::commands::backup::collect_repo_bundle(knowledge_repo)?;
     crate::commands::backup::repo_bundle_to_json(&bundle)
+}
+
+// —— 联邦浏览（供 library_site 联邦视图调用）——
+
+/// 本机是否开放联邦浏览。缺省视为开放。
+fn federation_enabled() -> bool {
+    read_state_file().ok().and_then(|s| s.federation_enabled).unwrap_or(true)
+}
+
+/// 本机开放联邦浏览的库（知识库/文件库），带文件数。
+fn enumerate_browsable_libraries() -> Vec<P2PLibInfo> {
+    let mut out = Vec::new();
+    for key in ["knowledge_base", "libraries_root"] {
+        if let Ok(target) = target_from_key(key) {
+            if !target.root.is_dir() {
+                continue;
+            }
+            let count = scan_manifest(&target).map(|m| m.files.len() as u64).unwrap_or(0);
+            out.push(P2PLibInfo { target: key.to_string(), name: target.label.clone(), count });
+        }
+    }
+    out
+}
+
+/// 稳定色带：按 peer_id 哈希取一个调色板颜色，让不同设备来源在前端一眼区分。
+fn peer_band(peer_id: &str) -> String {
+    const PALETTE: [&str; 6] = ["#22863a", "#a626a4", "#e45649", "#0969da", "#986801", "#007c89"];
+    let h = blake3::hash(peer_id.as_bytes());
+    let idx = (h.as_bytes()[0] as usize) % PALETTE.len();
+    PALETTE[idx].to_string()
+}
+
+fn parse_peer_lib_id(id: &str) -> Option<(String, String)> {
+    let rest = id.strip_prefix("peer:")?;
+    let (peer_id, target) = rest.split_once(':')?;
+    if peer_id.is_empty() || target.is_empty() {
+        return None;
+    }
+    Some((peer_id.to_string(), target.to_string()))
+}
+
+async fn connect_trusted(endpoint: &Endpoint, peer_id: &str) -> Result<Connection, String> {
+    let peer = read_state_file()?
+        .trusted_peers
+        .into_iter()
+        .find(|p| p.peer_id == peer_id)
+        .ok_or_else(|| "未找到该可信设备".to_string())?;
+    connect_peer(endpoint, &peer).await
+}
+
+/// 遍历可信设备，取其开放的库清单，合并返回（带来源与色带）。单个设备失败不影响其余。
+pub async fn federation_list_peer_libraries() -> Result<Vec<PeerLibrary>, String> {
+    let endpoint = ensure_p2p_endpoint().await?;
+    let peers = read_state_file()?.trusted_peers;
+    let mut out = Vec::new();
+    for peer in peers {
+        let band = peer_band(&peer.peer_id);
+        let conn = match connect_peer(&endpoint, &peer).await {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let resp: P2PLibrariesResponse = match request_response(
+            &conn,
+            &P2PWireRequest::ListLibraries {},
+            P2P_FRAME_LIMIT,
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        if !resp.ok {
+            continue;
+        }
+        for lib in resp.libraries {
+            out.push(PeerLibrary {
+                id: format!("peer:{}:{}", peer.peer_id, lib.target),
+                name: lib.name,
+                peer: peer.device_name.clone(),
+                peer_id: peer.peer_id.clone(),
+                count: lib.count,
+                band: band.clone(),
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// 取某个联邦库（peer:<peer_id>:<target>）的文件清单。
+pub async fn federation_list_files(peer_lib_id: &str) -> Result<Vec<PeerFileEntry>, String> {
+    let (peer_id, target) = parse_peer_lib_id(peer_lib_id).ok_or_else(|| "非法联邦库 id".to_string())?;
+    let endpoint = ensure_p2p_endpoint().await?;
+    let conn = connect_trusted(&endpoint, &peer_id).await?;
+    let resp: P2PManifestResponse =
+        request_response(&conn, &P2PWireRequest::Manifest { target }, P2P_FRAME_LIMIT).await?;
+    let manifest = resp.manifest.ok_or(resp.message)?;
+    let mut out: Vec<PeerFileEntry> = manifest
+        .files
+        .into_iter()
+        .map(|(rel, e)| PeerFileEntry { rel, size: e.size, mtime_ms: e.modified_unix_ms })
+        .collect();
+    out.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
+    Ok(out)
+}
+
+/// 按需从联邦库拉取单个文件到内存（预览/下载），不落地、不触发全量同步。
+pub async fn federation_pull_file(peer_lib_id: &str, rel: &str) -> Result<Vec<u8>, String> {
+    let (peer_id, target) = parse_peer_lib_id(peer_lib_id).ok_or_else(|| "非法联邦库 id".to_string())?;
+    let endpoint = ensure_p2p_endpoint().await?;
+    let conn = connect_trusted(&endpoint, &peer_id).await?;
+    let (mut send, mut recv) = timeout(
+        StdDuration::from_secs(P2P_ONLINE_TIMEOUT_SECS),
+        conn.open_bi(),
+    )
+    .await
+    .map_err(|_| "打开传输通道超时".to_string())?
+    .map_err(|e| format!("打开传输通道失败: {e}"))?;
+    write_control(
+        &mut send,
+        &P2PWireRequest::PullFile { target, rel: rel.to_string(), offset: 0 },
+        "P2P 拉取请求",
+    )
+    .await?;
+    send.finish().map_err(|e| format!("请求发送失败: {e}"))?;
+    let header: P2PFileHeader = read_control(&mut recv, P2P_FRAME_LIMIT, "P2P 文件头").await?;
+    if !header.ok {
+        return Err(header.message);
+    }
+    let mut buf = vec![0u8; header.size as usize];
+    recv.read_exact(&mut buf)
+        .await
+        .map_err(|e| format!("接收文件体失败: {e}"))?;
+    Ok(buf)
+}
+
+/// 对端处理联邦检索：用全局 AppHandle 在本机某库上跑 fulltext（tantivy + jieba）。
+async fn serve_library_search(target: &str, query: &str, offset: usize, limit: usize) -> P2PSearchResponse {
+    if !federation_enabled() {
+        return P2PSearchResponse { ok: false, message: "对方未开放联邦浏览".to_string(), hits: Vec::new(), has_more: false };
+    }
+    let app = match crate::cognition::runtime::app_handle() {
+        Some(a) => a,
+        None => {
+            return P2PSearchResponse { ok: false, message: "对端 AppHandle 未就绪".to_string(), hits: Vec::new(), has_more: false };
+        }
+    };
+    let root = match target_from_key(target) {
+        Ok(t) => t.root,
+        Err(e) => return P2PSearchResponse { ok: false, message: e, hits: Vec::new(), has_more: false },
+    };
+    let root_str = root.to_string_lossy().to_string();
+    let lim = if limit == 0 { 50 } else { limit.min(200) };
+    match crate::commands::fulltext::fulltext_search(
+        app, query.to_string(), root_str, Some(lim), Some(offset), None, None, None, None, None,
+    )
+    .await
+    {
+        Ok((hits, has_more)) => {
+            let mapped = hits
+                .into_iter()
+                .map(|h| {
+                    let abs = PathBuf::from(&h.path);
+                    let rel = abs.strip_prefix(&root).unwrap_or(&abs).to_string_lossy().replace('\\', "/");
+                    P2PSearchHit { rel, name: h.file_name, preview: h.preview, mtime_ms: h.modified_ms.unwrap_or(0) }
+                })
+                .collect();
+            P2PSearchResponse { ok: true, message: "ok".to_string(), hits: mapped, has_more }
+        }
+        Err(e) => P2PSearchResponse { ok: false, message: e, hits: Vec::new(), has_more: false },
+    }
+}
+
+/// 客户端：在某联邦库上跑跨设备正文检索。
+pub async fn federation_search(
+    peer_lib_id: &str,
+    query: &str,
+    offset: usize,
+    limit: usize,
+) -> Result<(Vec<PeerSearchHit>, bool), String> {
+    let (peer_id, target) = parse_peer_lib_id(peer_lib_id).ok_or_else(|| "非法联邦库 id".to_string())?;
+    let endpoint = ensure_p2p_endpoint().await?;
+    let conn = connect_trusted(&endpoint, &peer_id).await?;
+    let req = P2PWireRequest::SearchLibrary { target, query: query.to_string(), offset, limit };
+    let resp: P2PSearchResponse = request_response(&conn, &req, P2P_FRAME_LIMIT).await?;
+    if !resp.ok {
+        return Err(resp.message);
+    }
+    let hits = resp
+        .hits
+        .into_iter()
+        .map(|h| PeerSearchHit { rel: h.rel, name: h.name, snippet: h.preview, mtime_ms: h.mtime_ms })
+        .collect();
+    Ok((hits, resp.has_more))
+}
+
+/// 前端：开关本机的联邦浏览开放。
+#[tauri::command]
+pub fn p2p_federation_set_enabled(enabled: bool) -> Result<bool, String> {
+    let mut state = read_state_file()?;
+    state.federation_enabled = Some(enabled);
+    write_state_file(&state)?;
+    Ok(enabled)
+}
+
+/// 前端：查询本机是否开放联邦浏览。
+#[tauri::command]
+pub fn p2p_federation_status() -> bool {
+    federation_enabled()
 }
 
 /// 把对端传来的 bundle JSON 合并进本地数据库，返回合并的 imported_files 条数。

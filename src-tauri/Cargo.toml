@@ -39,7 +39,7 @@ tauri = { version = "2.9.5", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0"
-reqwest = { version = "0.11", features = ["blocking", "json", "stream", "multipart"] }
+reqwest = { version = "0.11", features = ["blocking", "json", "stream", "multipart", "socks"] }
 futures-util = "0.3"
 tokio = { version = "1", features = ["full"] }
 regex = "1.11.1"
@@ -157,6 +157,23 @@ polars = { version = "0.55.2", default-features = false, features = ["lazy", "cs
 # 串口连接（A3）与二进制/ELF/PE 结构分析（H）。
 serialport = "4.6"
 goblin = "0.9"
+# 分享链接二维码(微信/QQ/手机扫码)。纯 Rust,只开 svg 特性——不引 image,规避额外原生依赖。
+qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
+# 资源嗅探下载引擎：读取系统代理（Windows 注册表 / 各平台），喂给 reqwest::Proxy。
+sysproxy = "0.3"
+# 本地音乐库：读取 MP3/FLAC/M4A 等的 ID3/Vorbis/MP4 标签、时长与内嵌封面。纯 Rust，无原生依赖。
+lofty = "0.25"
+# 音乐播放器「解灰」引擎：UnblockNeteaseMusic 的 Rust 版。给一首歌跨源(B站/酷我/酷狗)找可播副本。
+# 经 cargo tree 验证：不引 openssl-sys，与本项目 reqwest 0.11 共存（自带 0.12/0.13 副本）。禁用 ytdl 源(依赖外部 yt-dlp 二进制)。
+unm_engine = "0.4"
+unm_engine_bilibili = "0.4"
+unm_engine_kuwo = "0.4"
+unm_engine_kugou = "0.4"
+unm_types = "0.4"
+# 网易云 weapi 加密：AES-128-CBC + 文本型(无填充)RSA。纯 Rust，避开 ncmapi 的 openssl 依赖。
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+num-bigint = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", default-features = false, features = ["windows-native"] }

@@ -48,6 +48,7 @@ import OcrApp from "./apps/OcrApp.vue"
 import ResumeBuilderApp from "./apps/ResumeBuilderApp.vue"
 import AIFilmStudioApp from "./apps/AIFilmStudioApp.vue"
 import RemoteTerminalApp from "./apps/RemoteTerminalApp.vue"
+import ResourceHunterApp from "./apps/ResourceHunterApp.vue"
 
 const logger = createLogger('GuaxiContentAppView')
 const settingsStore = useSettingsStore()
@@ -62,6 +63,16 @@ const categories = [
 ]
 
 const apps = [
+  {
+    id: 'tools-resource-hunter',
+    name: '资源嗅探下载',
+    category: 'tools',
+    categoryLabel: '工具类',
+    description: '全网搜索书籍/论文/视频/音频/图片，嗅探直链，多线程断点续传下载并统一管理',
+    icon: '🧲',
+    color: 'linear-gradient(135deg, #30cfd0, #330867)',
+    component: ResourceHunterApp
+  },
   {
     id: 'creation-ai-film-studio',
     name: 'AI 影像工坊',

@@ -56,7 +56,9 @@ pub mod flipboard;
 pub mod markdown_manual;
 pub mod notebook;
 pub mod todo;
+pub mod music;
 pub mod filetransfer;
+pub mod library_site;
 pub mod code_runtime;
 pub mod code_cell_runtime;
 pub mod terminal;
@@ -87,3 +89,5 @@ pub mod neovim;
 pub mod story_studio;
 /// Story IR 共享校验器，供模型编译、项目保存和项目重开共同使用。
 pub mod story_ir;
+/// 资源嗅探下载引擎：全网搜索 → 嗅探文件直链 → 多线程/续传/yt-dlp 下载 → 资源库管理。
+pub mod resource_hunter;

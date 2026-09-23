@@ -20,10 +20,14 @@
 
     <!-- 右侧：功能图标 -->
     <div class="header-right">
-      <n-icon class="header-icon" size="20" :component="TextBulletListLtr20Filled"></n-icon>
+      <n-icon class="header-icon" size="20" :component="Share24Regular" title="资料库分享与发布"
+        @click="showLibraryShare = true"></n-icon>
       <n-icon class="header-icon" size="20" :component="PanelRightContract24Regular" @click="toggleRightSider"></n-icon>
     </div>
   </div>
+
+  <!-- 资料库分享与发布窗口 -->
+  <GuaxiLibraryShareModal v-model:show="showLibraryShare" />
 
   <!-- 搜索下拉框 -->
   <n-dropdown v-model:show="isSearchDropdownVisible" :options="searchOptions" placement="bottom-start"
@@ -48,12 +52,15 @@ import {
   DocumentSearch24Regular,
   PanelLeftContract24Regular,
   PanelRightContract24Regular,
+  Share24Regular,
 } from '@vicons/fluent'
 import { invoke } from '@tauri-apps/api/core'
 import { sep } from '@tauri-apps/api/path'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
+import GuaxiLibraryShareModal from './GuaxiLibraryShareModal.vue'
 
 const logger = createLogger('GuaxiHeaderRepoView')
+const showLibraryShare = ref(false)
 const rightSiderStore = useRightSiderStore()
 const viewKey = 'repo'
 const siderStore = useSiderStore();
