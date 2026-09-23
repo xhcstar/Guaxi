@@ -448,7 +448,6 @@
 <script setup>
 import { computed, onActivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useMessage } from 'naive-ui'
-import MarkdownIt from 'markdown-it'
 import { invoke } from '@tauri-apps/api/core'
 import {
   Alert20Regular,
@@ -606,40 +605,6 @@ async function readyEmbedding() {
 }
 const st = computed(() => store.status)
 
-const md = new MarkdownIt({ html: false, linkify: true, breaks: true })
-// 简报：用项目统一的 GuaxiMarker 渲染（与阅读页/编辑器一致）。异步，用 ref 承载。
-const briefHtml = ref('')
-watch(() => store.brief?.markdown, async (mdText) => {
-  const t = String(mdText || '').trim()
-  briefHtml.value = t ? await renderMarkdown(t, { buttons: false, mermaid: true, math: true }) : ''
-}, { immediate: true })
-
-// 外部原文：同样走 GuaxiMarker 渲染（含图片/标题/列表）。
-const fullHtml = ref('')
-watch(() => fullText.value, async (t) => {
-  const s = String(t || '').trim()
-  fullHtml.value = s ? await renderMarkdown(s, { buttons: false, mermaid: true, math: true }) : ''
-})
-
-// 收件箱卡片正文：逐条用 GuaxiMarker 渲染 excerpt（含图片/链接/标题），id→html 缓存，
-// 未渲染完成前先显示转义后的纯文本，避免闪原始 markdown 或注入。
-const perceptHtml = ref({})
-const escapeText = (s) => String(s || '')
-  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-watch(() => store.percepts, async (list) => {
-  const arr = Array.isArray(list) ? list : []
-  for (const p of arr) {
-    if (!p || perceptHtml.value[p.id] != null) continue
-    const raw = String(p.excerpt || '').trim()
-    if (!raw) { perceptHtml.value[p.id] = ''; continue }
-    try {
-      const html = await renderMarkdown(raw, { buttons: false, mermaid: false, math: false })
-      perceptHtml.value = { ...perceptHtml.value, [p.id]: html }
-    } catch {
-      perceptHtml.value = { ...perceptHtml.value, [p.id]: escapeText(raw) }
-    }
-  }
-}, { immediate: true, deep: false })
 
 const acceptPct = computed(() => {
   const r = st.value?.nudge?.acceptRate14d
@@ -785,6 +750,41 @@ async function viewFull(p) {
 const showFull = ref(false)
 const fullText = ref('')
 const fullTitle = ref('')
+
+// GuaxiMarker 渲染（与阅读页/编辑器一致）。定义在 fullText 之后，避免 TDZ 引用报错。
+// 简报正文。
+const briefHtml = ref('')
+watch(() => store.brief?.markdown, async (mdText) => {
+  const t = String(mdText || '').trim()
+  briefHtml.value = t ? await renderMarkdown(t, { buttons: false, mermaid: true, math: true }) : ''
+}, { immediate: true })
+
+// 外部原文（含图片/标题/列表）。
+const fullHtml = ref('')
+watch(fullText, async (t) => {
+  const s = String(t || '').trim()
+  fullHtml.value = s ? await renderMarkdown(s, { buttons: false, mermaid: true, math: true }) : ''
+})
+
+// 收件箱卡片正文：逐条用 GuaxiMarker 渲染 excerpt，id→html 缓存；
+// 未渲染完成前显示转义纯文本，避免闪原始 markdown 或注入。
+const perceptHtml = ref({})
+const escapeText = (s) => String(s || '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+watch(() => store.percepts, async (list) => {
+  const arr = Array.isArray(list) ? list : []
+  for (const p of arr) {
+    if (!p || perceptHtml.value[p.id] != null) continue
+    const raw = String(p.excerpt || '').trim()
+    if (!raw) { perceptHtml.value = { ...perceptHtml.value, [p.id]: '' }; continue }
+    try {
+      const html = await renderMarkdown(raw, { buttons: false, mermaid: false, math: false })
+      perceptHtml.value = { ...perceptHtml.value, [p.id]: html }
+    } catch {
+      perceptHtml.value = { ...perceptHtml.value, [p.id]: escapeText(raw) }
+    }
+  }
+}, { immediate: true, deep: false })
 
 async function deliberate() {
   busy.value.deliberate = true
