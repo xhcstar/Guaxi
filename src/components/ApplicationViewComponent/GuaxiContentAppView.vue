@@ -47,6 +47,7 @@ import TTSBookApp from "./apps/TTSBookApp.vue"
 import OcrApp from "./apps/OcrApp.vue"
 import ResumeBuilderApp from "./apps/ResumeBuilderApp.vue"
 import AIFilmStudioApp from "./apps/AIFilmStudioApp.vue"
+import RemoteTerminalApp from "./apps/RemoteTerminalApp.vue"
 
 const logger = createLogger('GuaxiContentAppView')
 const settingsStore = useSettingsStore()
@@ -152,14 +153,14 @@ const apps = [
     component: OcrApp
   },
   {
-    id: 'tools-table',
-    name: '数据表格',
+    id: 'tools-remote-terminal',
+    name: '终端调试工坊',
     category: 'tools',
     categoryLabel: '工具类',
-    description: '查看和过滤结构化数据表格',
-    icon: '📊',
-    color: 'linear-gradient(135deg, #a18cd1, #fbc2eb)',
-    component: PlaceholderApp
+    description: 'SSH/串口/Telnet 连接远端，捕获海量输出并做检索、聚类、时序图表与 GDB 调试分析',
+    icon: '🖥️',
+    color: 'linear-gradient(135deg, #30cfd0, #330867)',
+    component: RemoteTerminalApp
   },
   {
     id: 'work-kanban',

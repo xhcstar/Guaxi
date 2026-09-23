@@ -155,6 +155,7 @@ pub async fn open_application_window(
     let (inner_w, inner_h, min_w, min_h, maximize) = match app_id.as_str() {
         "creation-ai-film-studio" => (1280.0, 800.0, 1024.0, 640.0, true),
         "tools-tts-book" => (1280.0, 800.0, 1024.0, 680.0, true),
+        "tools-remote-terminal" => (1280.0, 800.0, 1024.0, 640.0, true),
         _ => (1024.0, 720.0, 820.0, 560.0, false),
     };
 

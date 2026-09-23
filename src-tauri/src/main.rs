@@ -178,6 +178,11 @@ fn shutdown_background_processes(reason: &str) {
     commands::docprocess::shutdown_marker_server();
     commands::slidev::shutdown_dev_server();
     commands::terminal::shutdown_all_sessions();
+    commands::ssh_terminal::shutdown_all_sessions();
+    commands::gdb_mi::shutdown_all_sessions();
+    commands::remote_terminal_tools::shutdown_all_collectors();
+    commands::serial_telnet::shutdown_all_serial();
+    commands::serial_telnet::shutdown_all_telnet();
     // 认知层：WAL 下每次写入即提交，不需要刷盘；这里只把用户没看的自动采集内容删掉，
     // 别让它们跨越一次重启继续占着收件箱。同步执行但不做 VACUUM，所以不会拖住退出。
     cognition::shutdown();
@@ -264,6 +269,54 @@ async fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::file_watcher::start_file_watching,
             commands::file_watcher::stop_file_watching,
+            commands::remote_terminal::log_import_file,
+            commands::remote_terminal::log_list_frames,
+            commands::remote_terminal::log_read_lines,
+            commands::remote_terminal::log_close_session,
+            commands::remote_terminal::log_frame_metrics,
+            commands::remote_terminal::log_metric_series,
+            commands::remote_terminal::log_leak_ranking,
+            commands::remote_terminal::log_snapshot_diff,
+            commands::remote_terminal::log_save_profile,
+            commands::remote_terminal::log_load_profile,
+            commands::remote_terminal::log_builtin_profiles,
+            commands::remote_terminal::log_reparse,
+            commands::remote_terminal::log_save_parse_profile,
+            commands::remote_terminal::log_load_parse_profile,
+            commands::remote_terminal::log_search,
+            commands::remote_terminal::log_cluster_templates,
+            commands::remote_terminal::log_detect_format,
+            commands::remote_terminal::log_extract_regex,
+            commands::remote_terminal::log_aggregate,
+            commands::ssh_terminal::ssh_list_profiles,
+            commands::ssh_terminal::ssh_save_profile,
+            commands::ssh_terminal::ssh_delete_profile,
+            commands::ssh_terminal::ssh_set_secret,
+            commands::ssh_terminal::ssh_delete_secret,
+            commands::ssh_terminal::ssh_has_secret,
+            commands::ssh_terminal::ssh_create_session,
+            commands::ssh_terminal::ssh_write_session,
+            commands::ssh_terminal::ssh_resize_session,
+            commands::ssh_terminal::ssh_close_session,
+            commands::ssh_terminal::ssh_list_recordings,
+            commands::gdb_mi::gdb_mi_start,
+            commands::gdb_mi::gdb_mi_command,
+            commands::gdb_mi::gdb_mi_raw,
+            commands::gdb_mi::gdb_mi_close,
+            commands::gdb_mi::gdb_save_macros,
+            commands::gdb_mi::gdb_load_macros,
+            commands::remote_terminal_tools::ssh_exec_capture,
+            commands::remote_terminal_tools::gdb_coredump_analyze,
+            commands::remote_terminal_tools::ssh_start_periodic,
+            commands::remote_terminal_tools::ssh_stop_periodic,
+            commands::remote_terminal_tools::binary_analyze,
+            commands::serial_telnet::serial_list_ports,
+            commands::serial_telnet::serial_open,
+            commands::serial_telnet::serial_write,
+            commands::serial_telnet::serial_close,
+            commands::serial_telnet::telnet_open,
+            commands::serial_telnet::telnet_write,
+            commands::serial_telnet::telnet_close,
             commands::ocr::ocr_recognize,
             commands::ocr::screenshot_ocr,
             commands::chatview::get_chat_answer,
