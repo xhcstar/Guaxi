@@ -2273,6 +2273,9 @@ const mountEditor = async () => {
     unicodeHighlight: { ambiguousCharacters: false, invisibleCharacters: false },
     renderWhitespace: 'none',
     wordWrap: 'off',
+    // 粘性滚动会把外层标题钉在顶部，那个 widget 的底色在暗色主题里压不下去、露出亮块，
+    // 而只读视图根本没有它——关掉，两种模式才是同一副样子。
+    stickyScroll: { enabled: false },
     scrollBeyondLastLine: false,
     enableSplitViewResizing: true,
     renderOverviewRuler: false,
