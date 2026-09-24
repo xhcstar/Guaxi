@@ -15,18 +15,13 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::state::SharedState;
 
 const INDEX_HTML: &str = include_str!("../../library_site/index.html");
 const STYLES_CSS: &str = include_str!("../../library_site/styles.css");
 const APP_JS: &str = include_str!("../../library_site/app.js");
-
-/// 缓存 TTL:超过则下次请求重新遍历库目录(捕捉新增/删除的文件)。
-const LISTING_TTL_SECS: u64 = 30;
-/// 单库遍历上限,兜底防止异常大目录拖垮内存。
-const MAX_ENTRIES: usize = 500_000;
 
 #[derive(Clone, Serialize)]
 struct Doc {
@@ -43,14 +38,6 @@ struct Doc {
     #[serde(skip_serializing_if = "Option::is_none")]
     band: Option<String>,
 }
-
-struct Cached {
-    docs: Vec<Doc>,
-    sort: String,
-    built: Instant,
-}
-
-static LISTINGS: Lazy<Mutex<HashMap<String, Cached>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 // —— 库枚举与路径解析 ——
 
 /// 两个根:知识库 与 文件库。库 id 形如 `kb` / `repo`(根本身),
@@ -141,56 +128,9 @@ fn dir_file_count(dir: &Path) -> usize {
         .map(|rd| rd.flatten().filter(|e| e.path().is_file()).count())
         .unwrap_or(0)
 }
-// —— 浏览列表:遍历库目录 + 每库缓存 ——
+// —— 浏览列表:委托给持久化 SQLite 索引(library_index),分页/排序/计数走 SQL ——
 
-fn build_listing(lib: &str, base: &Path, band: &'static str) -> Vec<Doc> {
-    let mut docs = Vec::new();
-    let walker = ignore::WalkBuilder::new(base)
-        .hidden(true)
-        .git_ignore(false)
-        .build();
-    for entry in walker.flatten() {
-        if docs.len() >= MAX_ENTRIES {
-            break;
-        }
-        let path = entry.path();
-        let meta = match entry.metadata() {
-            Ok(m) if m.is_file() => m,
-            _ => continue,
-        };
-        let rel = path.strip_prefix(base).unwrap_or(path).to_string_lossy().replace('\\', "/");
-        let name = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-        let ext = path.extension().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-        let mtime = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-        docs.push(Doc {
-            path: rel,
-            name,
-            ext,
-            size: meta.len(),
-            mtime,
-            lib: lib.to_string(),
-            snippet: None,
-            source: None,
-            band: Some(band.to_string()),
-        });
-    }
-    docs
-}
-
-fn sort_docs(docs: &mut [Doc], sort: &str) {
-    match sort {
-        "name" => docs.sort_by(|a, b| a.name.cmp(&b.name)),
-        "size" => docs.sort_by(|a, b| b.size.cmp(&a.size)),
-        _ => docs.sort_by(|a, b| b.mtime.cmp(&a.mtime)), // mtime 默认最近在前
-    }
-}
-
-/// 取某库的分页切片。命中缓存(未过期且排序一致)直接切片;否则重建/重排。
+/// 取某库的分页。索引由 library_index 维护(首访遍历一次 + notify 增量),这里只做映射。
 fn list_page(lib: &str, sort: &str, offset: usize, limit: usize) -> (usize, Vec<Doc>) {
     let Some((base, band)) = resolve_lib(lib) else {
         return (0, Vec::new());
@@ -198,26 +138,22 @@ fn list_page(lib: &str, sort: &str, offset: usize, limit: usize) -> (usize, Vec<
     if !base.is_dir() {
         return (0, Vec::new());
     }
-    let mut guard = LISTINGS.lock().unwrap();
-    let stale = guard
-        .get(lib)
-        .map(|c| c.built.elapsed().as_secs() > LISTING_TTL_SECS)
-        .unwrap_or(true);
-    if stale {
-        let mut docs = build_listing(lib, &base, band);
-        sort_docs(&mut docs, sort);
-        guard.insert(lib.to_string(), Cached { docs, sort: sort.to_string(), built: Instant::now() });
-    } else if guard.get(lib).map(|c| c.sort != sort).unwrap_or(false) {
-        if let Some(c) = guard.get_mut(lib) {
-            sort_docs(&mut c.docs, sort);
-            c.sort = sort.to_string();
-        }
-    }
-    let cached = guard.get(lib).unwrap();
-    let total = cached.docs.len();
-    let end = offset.saturating_add(limit).min(total);
-    let slice = if offset < total { cached.docs[offset..end].to_vec() } else { Vec::new() };
-    (total, slice)
+    let (total, rows) = crate::commands::library_index::list_page(lib, &base, sort, offset, limit);
+    let docs = rows
+        .into_iter()
+        .map(|r| Doc {
+            path: r.rel,
+            name: r.name,
+            ext: r.ext,
+            size: r.size,
+            mtime: r.mtime,
+            lib: lib.to_string(),
+            snippet: None,
+            source: None,
+            band: Some(band.to_string()),
+        })
+        .collect();
+    (total, docs)
 }
 // —— Token 鉴权(对外 LAN 挂载启用;loopback 不启用) ——
 

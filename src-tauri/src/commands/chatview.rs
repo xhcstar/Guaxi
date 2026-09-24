@@ -1254,6 +1254,98 @@ pub async fn story_studio_compile_markdown(
     })
 }
 
+#[derive(Deserialize, Debug, Clone)]
+pub struct PythonCodegenRequest {
+    #[serde(default)]
+    pub modelid: i32,
+    #[serde(default)]
+    pub sessionid: String,
+    pub instruction: String,
+    #[serde(default)]
+    pub context: String,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct PythonCodegenResponse {
+    pub code: String,
+    pub raw_answer: String,
+    pub sessionid: String,
+}
+
+fn build_python_codegen_prompt(request: &PythonCodegenRequest) -> Result<String, String> {
+    let instruction = request.instruction.trim();
+    if instruction.is_empty() {
+        return Err("代码生成指令为空".to_string());
+    }
+    let mut prompt = String::new();
+    prompt.push_str(
+        "你是 Guaxi 探索者笔记本里的 Python 编程助手。根据用户的自然语言需求生成可直接运行的 Python 代码。\n\
+         要求:\n\
+         1. 只输出一个 ```python 代码块,块外不要任何解释文字。\n\
+         2. 代码要完整、可直接运行;需要第三方库时正常 import。\n\
+         3. 在关键处用简短行内注释说明选用了哪个库/API 以及为什么(这是用户最需要的)。\n\
+         4. 不臆造不存在的 API;不确定的外部输入用合理的占位或示例值。\n\
+         5. 运行环境已预装常用数据科学库:pandas、numpy、matplotlib、plotly、scipy、\n\
+            scikit-learn、statsmodels、seaborn、sympy、pyarrow、duckdb、polars、openpyxl、Pillow 等。\n\
+            优先使用这些已装库;若确实需要其他第三方库,请在代码第一行用注释标注需要 pip 安装的包名,例如 `# 需要: requests`。\n",
+    );
+    if !request.context.trim().is_empty() {
+        prompt.push_str("\n当前 cell 已有内容(供参考,可基于它续写或改写):\n```python\n");
+        prompt.push_str(request.context.trim());
+        prompt.push_str("\n```\n");
+    }
+    prompt.push_str("\n用户需求:\n");
+    prompt.push_str(instruction);
+    Ok(prompt)
+}
+
+fn strip_python_code_fence(answer: &str) -> String {
+    // 推理模型(DeepSeek-R1 等)可能带 <think>...</think>,取最后一个 </think> 之后的正式回答。
+    let mut text = answer.trim();
+    if let Some(pos) = text.rfind("</think>") {
+        text = text[pos + "</think>".len()..].trim();
+    }
+    // 从 ```python / ``` 代码围栏里抽取纯代码;没有围栏则原样返回。
+    if let Some(start) = text.find("```") {
+        let after = &text[start + 3..];
+        let body_start = after.find('\n').map(|nl| nl + 1).unwrap_or(0);
+        let body = &after[body_start..];
+        if let Some(end) = body.find("```") {
+            return body[..end].trim_matches('\n').to_string();
+        }
+        return body.trim_matches('\n').to_string();
+    }
+    text.to_string()
+}
+
+// PLACEHOLDER_PYTHON_CODEGEN_COMMAND
+
+#[tauri::command]
+pub async fn python_codegen_from_prompt(
+    request: PythonCodegenRequest,
+) -> Result<PythonCodegenResponse, String> {
+    let prompt = build_python_codegen_prompt(&request)?;
+    let sessionid = if request.sessionid.trim().is_empty() {
+        generate_session_id()
+    } else {
+        request.sessionid.trim().to_string()
+    };
+    info!(
+        modelid = request.modelid,
+        instruction_chars = request.instruction.chars().count(),
+        has_context = !request.context.trim().is_empty(),
+        "[PythonCodegen] generating python from natural language"
+    );
+    let (raw_answer, response_sessionid) =
+        kg_llm_complete(request.modelid, &prompt, &sessionid).await?;
+    let code = strip_python_code_fence(&raw_answer);
+    Ok(PythonCodegenResponse {
+        code,
+        raw_answer,
+        sessionid: response_sessionid,
+    })
+}
+
 /// 文档 Agent 请求：默认走本地 LocalQwen(id 9)，也可指定任意已接入模型。
 /// 仅承载“结构化任务”（classify/tag）；散文类任务(write/translate/organize)由前端复用流式聊天通道。
 #[derive(Deserialize, Debug, Clone)]

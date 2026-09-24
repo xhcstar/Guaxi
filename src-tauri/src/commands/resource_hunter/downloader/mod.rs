@@ -10,6 +10,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::{Mutex, Semaphore};
 
 pub mod http;
+pub mod torrent;
 pub mod ytdlp;
 
 pub const EVENT_TASK_UPDATE: &str = "resource_hunter://download_update";
@@ -23,6 +24,8 @@ pub struct Control {
     pub downloaded: AtomicU64,
     pub total: AtomicU64,
     pub speed: AtomicU64,
+    /// 下载起始时刻(ms since epoch)，0 表示尚未开始；限速节流用。
+    pub started_ms: AtomicU64,
     /// 每分块已下字节，支持多连接续传。
     pub chunk_done: Vec<AtomicU64>,
 }
@@ -34,6 +37,7 @@ impl Control {
             downloaded: AtomicU64::new(0),
             total: AtomicU64::new(total),
             speed: AtomicU64::new(0),
+            started_ms: AtomicU64::new(0),
             chunk_done: (0..chunks.max(1)).map(|_| AtomicU64::new(0)).collect(),
         })
     }
@@ -117,6 +121,8 @@ fn spawn_worker(app: AppHandle, id: String, control: Arc<Control>) {
 
         let result = if task.via_ytdlp {
             ytdlp::download(&app, &task, &control).await
+        } else if task.magnet.is_some() {
+            torrent::download(&app, &task, &control).await
         } else {
             http::download(&app, &task, &control).await
         };

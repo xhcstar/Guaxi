@@ -570,6 +570,16 @@
                 <Icon :icon="circleHelpIcon" width="16" height="16" />
               </button>
               <button
+                v-if="pythonCodegenAssistEnabled"
+                type="button"
+                class="guaxi-notebook__icon-btn"
+                title="AI 生成 Python 代码"
+                aria-label="AI 生成 Python 代码"
+                @click="openCodegenPanel(cell, $event)"
+              >
+                <Icon :icon="sparklesIcon" width="16" height="16" />
+              </button>
+              <button
                 type="button"
                 class="guaxi-notebook__icon-btn danger"
                 title="删除当前 Python Cell"
@@ -828,6 +838,13 @@
       @insert-example="handleNotebookUsageAssistantInsertExample"
       @ask-assistant="handleNotebookUsageAssistantAsk"
     />
+    <GuaxiNotebookCodegenPanel
+      v-model:visible="codegenPanelVisible"
+      :anchor="codegenPanelAnchor"
+      :context="codegenPanelContext"
+      :session-id="codegenPanelSessionId"
+      @insert="handleCodegenInsert"
+    />
   </div>
 </template>
 
@@ -868,6 +885,7 @@ import messageCircleIcon from '@iconify-icons/lucide/message-circle'
 import botIcon from '@iconify-icons/lucide/bot'
 import volume2Icon from '@iconify-icons/lucide/volume-2'
 import circleHelpIcon from '@iconify-icons/lucide/help-circle'
+import sparklesIcon from '@iconify-icons/lucide/sparkles'
 import panelRightIcon from '@iconify-icons/lucide/panel-right'
 import fileInputIcon from '@iconify-icons/lucide/file-input'
 import fileOutputIcon from '@iconify-icons/lucide/file-output'
@@ -884,6 +902,7 @@ import GuaxiNotebookHtmlOutput from './GuaxiNotebookHtmlOutput.vue'
 import GuaxiNotebookTableOutput from './GuaxiNotebookTableOutput.vue'
 import GuaxiSelectionTranslatePanel from './GuaxiSelectionTranslatePanel.vue'
 import GuaxiNotebookUsageAssistant from './GuaxiNotebookUsageAssistant.vue'
+import GuaxiNotebookCodegenPanel from './GuaxiNotebookCodegenPanel.vue'
 import GuaxiFindWidget from './GuaxiFindWidget.vue'
 import {
   SEARCH_HIT_ACTIVE_CLASS,
@@ -997,6 +1016,13 @@ const renderedOutputMarkdownHtmlMap = ref({})
 const resolvedDisplayUrlMap = ref({})
 const markdownRenderVersion = ref(0)
 const notebookCells = ref([])
+const prewarmedPythonSessionKey = ref('')
+const pythonCodegenAssistEnabled = ref(false)
+const codegenPanelVisible = ref(false)
+const codegenPanelAnchor = ref({ x: 0, y: 0 })
+const codegenPanelContext = ref('')
+const codegenPanelSessionId = ref('')
+const codegenTargetCellKey = ref('')
 const notebookSearchVisible = ref(false)
 const notebookSearchKeyword = ref('')
 const notebookSearchCellMatches = ref([])
@@ -4388,13 +4414,90 @@ const removeCell = (key) => {
   emitCells(filtered)
 }
 
+// 笔记本含 Python/数学 cell 时,后台预热该会话的 worker 进程(仅 spawn,不跑用户代码),
+// 把冷启动成本移到打开时;首次运行 cell 直接命中已就绪 worker。每个会话只预热一次,失败可重试。
+const maybePrewarmPythonSession = (cells) => {
+  const hasExecutable = Array.isArray(cells)
+    && cells.some((cell) => cell?.type === 'python' || cell?.type === 'math')
+  if (!hasExecutable) return
+  const sessionId = String(createPythonSessionId(props.filePath) || '').trim()
+  if (!sessionId || prewarmedPythonSessionKey.value === sessionId) return
+  prewarmedPythonSessionKey.value = sessionId
+  invoke('python_runtime_prewarm_session', { sessionId }).catch((error) => {
+    // 预热失败不影响功能:首次运行 cell 仍会自行 spawn。仅重置标记以便后续重试。
+    prewarmedPythonSessionKey.value = ''
+    logger.info('[Notebook] python session prewarm skipped', {
+      sessionId,
+      error: String(error?.message || error),
+    })
+  })
+}
+
+// —— AI 代码生成助手(受设置页开关控制,默认关闭) ——
+const refreshCodegenAssistEnabled = async () => {
+  try {
+    pythonCodegenAssistEnabled.value = !!(await invoke('get_python_codegen_assist_enabled'))
+  } catch (error) {
+    pythonCodegenAssistEnabled.value = false
+    logger.info('[Notebook] read codegen-assist setting failed', { error: String(error?.message || error) })
+  }
+}
+
+const handleCodegenSettingChanged = (event) => {
+  pythonCodegenAssistEnabled.value = !!event?.detail?.enabled
+}
+
+const openCodegenPanel = (cell, event) => {
+  if (!pythonCodegenAssistEnabled.value) return
+  const key = String(cell?.key || '')
+  if (!key) return
+  flushPendingCellContentEdits()
+  codegenTargetCellKey.value = key
+  const latest = notebookCells.value.find((c) => String(c?.key || '') === key) || cell
+  codegenPanelContext.value = String(latest?.code || '')
+  codegenPanelSessionId.value = String(createPythonSessionId(props.filePath) || '')
+  codegenPanelAnchor.value = {
+    x: Number(event?.clientX ?? 200) + 8,
+    y: Number(event?.clientY ?? 200) + 8,
+  }
+  codegenPanelVisible.value = true
+}
+
+const handleCodegenInsert = ({ code, mode } = {}) => {
+  const text = String(code || '')
+  const key = String(codegenTargetCellKey.value || '')
+  if (!text || !key) return
+  if (mode === 'replace') {
+    updatePythonCell(key, text)
+    return
+  }
+  // 光标处插入:优先用编辑器 ref 的 insertContent(保 undo/聚焦),失败降级为状态层追加。
+  const cell = notebookCells.value.find((c) => String(c?.key || '') === key)
+  const editorRef = pythonEditorRefMap.get(String(key))
+  if (editorRef && typeof editorRef.insertContent === 'function') {
+    try {
+      if (cell) activateNotebookCell(cell, 'codegen-insert')
+      editorRef.insertContent(text)
+      return
+    } catch (error) {
+      logger.info('[Notebook] codegen insertContent failed, fallback to append', { error: String(error?.message || error) })
+    }
+  }
+  flushPendingCellContentEdits()
+  const current = String(cell?.code || '')
+  updatePythonCell(key, current ? `${current}\n\n${text}` : text)
+}
+
+
 watch(notebookCells, (cells) => {
   const activeKey = String(activeNotebookPythonCellKey.value || '')
-  if (!activeKey) return
-  const stillExists = cells.some((cell) => cell?.type === 'python' && String(cell?.key || '') === activeKey)
-  if (!stillExists) {
-    clearActiveNotebookPythonCell('active-cell-removed')
+  if (activeKey) {
+    const stillExists = cells.some((cell) => cell?.type === 'python' && String(cell?.key || '') === activeKey)
+    if (!stillExists) {
+      clearActiveNotebookPythonCell('active-cell-removed')
+    }
   }
+  maybePrewarmPythonSession(cells)
 }, { deep: false })
 
 const confirmRemoveCell = async (cell) => {
@@ -9178,10 +9281,13 @@ onMounted(() => {
     filePath: String(props.filePath || ''),
   })
   logger.info('[NotebookSelection] mounted selection listeners')
+  void refreshCodegenAssistEnabled()
+  window.addEventListener('guaxi:python-codegen-setting-changed', handleCodegenSettingChanged)
 })
 
 onBeforeUnmount(() => {
   clearNotebookTopToolbarHideTimer()
+  window.removeEventListener('guaxi:python-codegen-setting-changed', handleCodegenSettingChanged)
   // 落地防抖中的 cell 内容编辑，避免关闭/切换时丢失最后一段输入
   if (pendingCellContentEdits.size) {
     applyPendingCellContentEdits()

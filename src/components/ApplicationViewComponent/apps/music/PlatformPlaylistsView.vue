@@ -1,21 +1,32 @@
 <template>
   <div class="pp-view">
+    <!-- 平台切换 -->
+    <div class="pp-tabs">
+      <button
+        v-for="p in PLATFORMS"
+        :key="p.key"
+        class="pp-tab"
+        :class="{ active: platform === p.key }"
+        @click="switchPlatform(p.key)"
+      >{{ p.label }}</button>
+    </div>
+
     <!-- 未登录 -->
     <div v-if="!account.logged_in" class="pp-login">
       <div class="pp-login-icon">☁️</div>
-      <div class="pp-login-title">登录网易云，导入你的歌单</div>
+      <div class="pp-login-title">登录{{ platformLabel }}，导入你的歌单</div>
       <div class="pp-login-actions">
         <n-button type="primary" :loading="loggingIn" @click="login">打开登录窗口</n-button>
         <n-button quaternary :loading="loading" @click="refreshAccount">我已登录，刷新</n-button>
       </div>
-      <div class="pp-login-hint">在弹出的网易云窗口里登录后，回来点“刷新”。</div>
+      <div class="pp-login-hint">在弹出的{{ platformLabel }}窗口里登录后，回来点“刷新”。</div>
     </div>
 
     <!-- 已登录 -->
     <template v-else>
       <div class="pp-head">
         <img v-if="account.avatar" class="pp-avatar" :src="account.avatar" alt="" />
-        <div class="pp-user">{{ account.nickname || "网易云用户" }}</div>
+        <div class="pp-user">{{ account.nickname || platformLabel + "用户" }}</div>
         <n-button size="tiny" quaternary :loading="loading" @click="loadPlaylists">刷新歌单</n-button>
       </div>
 
@@ -67,7 +78,7 @@
 <!-- PP_SCRIPT -->
 
 <script setup>
-import { ref, onMounted } from "vue";
+import { ref, computed, onMounted } from "vue";
 import { NButton, NIcon, NSpin, useMessage } from "naive-ui";
 import { PlayOutline } from "@vicons/ionicons5";
 import { invoke } from "@tauri-apps/api/core";
@@ -78,6 +89,17 @@ import { resolveOnlineUrl, toPlayableTrack } from "./onlinePlay";
 const logger = createLogger("MusicPlatformPlaylists");
 const store = useMusicStore();
 const message = useMessage();
+
+// 各平台对应的后端命令名。切换平台即切换整套命令。
+const PLATFORMS = [
+  { key: "netease", label: "网易云", login: "music_login_netease", account: "music_netease_account", playlists: "music_netease_my_playlists", tracks: "music_netease_playlist_tracks" },
+  { key: "qq", label: "QQ音乐", login: "music_login_qq", account: "music_qq_account", playlists: "music_qq_my_playlists", tracks: "music_qq_playlist_tracks" },
+  { key: "kugou", label: "酷狗", login: "music_login_kugou", account: "music_kugou_account", playlists: "music_kugou_my_playlists", tracks: "music_kugou_playlist_tracks" },
+];
+
+const platform = ref("netease");
+const cmds = computed(() => PLATFORMS.find((p) => p.key === platform.value));
+const platformLabel = computed(() => cmds.value?.label || "");
 
 const account = ref({ logged_in: false, nickname: "", avatar: "", uid: "" });
 const playlists = ref([]);
@@ -99,10 +121,20 @@ function fmt(ms) {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
+function switchPlatform(key) {
+  if (platform.value === key) return;
+  platform.value = key;
+  account.value = { logged_in: false, nickname: "", avatar: "", uid: "" };
+  playlists.value = [];
+  selected.value = null;
+  tracks.value = [];
+  refreshAccount();
+}
+
 async function refreshAccount() {
   loading.value = true;
   try {
-    account.value = await invoke("music_netease_account");
+    account.value = await invoke(cmds.value.account);
     if (account.value.logged_in) await loadPlaylists();
   } catch (e) {
     logger.warn("读取账号失败", e);
@@ -114,7 +146,7 @@ async function refreshAccount() {
 async function login() {
   loggingIn.value = true;
   try {
-    await invoke("music_login_netease");
+    await invoke(cmds.value.login);
     message.info("请在弹出的窗口完成登录，然后点“我已登录，刷新”");
   } catch (e) {
     logger.error("打开登录窗口失败", e);
@@ -127,7 +159,7 @@ async function login() {
 async function loadPlaylists() {
   loading.value = true;
   try {
-    playlists.value = (await invoke("music_netease_my_playlists")) || [];
+    playlists.value = (await invoke(cmds.value.playlists)) || [];
   } catch (e) {
     logger.warn("加载歌单失败", e);
     message.warning("加载歌单失败，可能未登录");
@@ -141,7 +173,7 @@ async function openPlaylist(p) {
   tracks.value = [];
   tracksLoading.value = true;
   try {
-    tracks.value = (await invoke("music_netease_playlist_tracks", { id: p.id })) || [];
+    tracks.value = (await invoke(cmds.value.tracks, { id: p.id })) || [];
   } catch (e) {
     logger.warn("加载歌单曲目失败", e);
     message.warning("加载歌单曲目失败");
@@ -171,6 +203,14 @@ onMounted(refreshAccount);
 
 <style scoped>
 .pp-view { height: 100%; display: flex; flex-direction: column; padding: 20px 24px; box-sizing: border-box; overflow: hidden; }
+.pp-tabs { display: flex; gap: 6px; margin-bottom: 16px; flex-shrink: 0; }
+.pp-tab {
+  border: 1px solid var(--guaxi-border); background: transparent; cursor: pointer;
+  padding: 5px 14px; border-radius: 999px; font-size: 13px; font-family: inherit;
+  color: var(--guaxi-text-secondary);
+}
+.pp-tab:hover { background: rgba(128,128,128,0.14); }
+.pp-tab.active { background: linear-gradient(135deg, rgba(102,126,234,0.18), rgba(118,75,162,0.18)); color: #7c5cd6; border-color: transparent; font-weight: 600; }
 .pp-login { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; color: var(--guaxi-text-secondary); }
 .pp-login-icon { font-size: 52px; }
 .pp-login-title { font-size: 16px; font-weight: 600; color: var(--guaxi-text-primary); }

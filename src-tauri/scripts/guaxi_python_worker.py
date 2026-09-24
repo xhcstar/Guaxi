@@ -9,6 +9,33 @@ import sys
 import traceback
 import uuid
 
+try:
+    # orjson 的序列化/反序列化明显快于标准库,响应体较大(表格摘要多、result_json 富)时收益最明显。
+    # 缺失,或遇到 orjson 不支持的类型时,回退标准库 json,保证输出与之前一致。
+    import orjson as _orjson
+except Exception:
+    _orjson = None
+
+
+def _worker_json_loads(text):
+    if _orjson is not None:
+        try:
+            return _orjson.loads(text)
+        except Exception:
+            pass
+    return json.loads(text)
+
+
+def _worker_json_dumps(obj):
+    if _orjson is not None:
+        try:
+            # OPT_NON_STR_KEYS: 与标准库一致地把非字符串 dict 键转成字符串;orjson 恒 UTF-8,等价 ensure_ascii=False。
+            return _orjson.dumps(obj, option=_orjson.OPT_NON_STR_KEYS).decode("utf-8")
+        except Exception:
+            pass
+    return json.dumps(obj, ensure_ascii=False)
+
+
 SESSIONS = {}
 RESULT_HISTORY = {}
 SESSION_DIRS = {}
@@ -278,20 +305,23 @@ def _summary_signature(summary):
     }, ensure_ascii=False, sort_keys=True, default=str)
 
 
-def _analyze_code_symbol_flow(code):
+def _analyze_code_symbol_flow(code, tree=None):
     # 设计说明：
     # 1. 前端需要知道“这个 Cell 可能读/写了哪些变量”，从而给下游 Cell 标记过期和展示依赖图。
     # 2. 这里使用 Python AST 做保守静态分析：能识别 Name 的 Load/Store/Del，但不尝试解析动态 globals()/exec()。
     # 3. 真实的新增/修改/删除仍由执行前后的变量快照确认，静态分析只作为依赖提示。
+    # 4. 调用方若已解析过 AST 可直接传入 tree,避免二次 ast.parse;执行链路里 tree 即使被包装过
+    #    末表达式(见 _handle_exec),额外的 Store 目标是 `__` 前缀会被下面过滤,used/assigned/deleted 不变。
     flow = {
         "used": [],
         "assigned": [],
         "deleted": [],
     }
-    try:
-        tree = ast.parse(code or "", mode="exec")
-    except Exception:
-        return flow
+    if tree is None:
+        try:
+            tree = ast.parse(code or "", mode="exec")
+        except Exception:
+            return flow
 
     used = set()
     assigned = set()
@@ -317,10 +347,10 @@ def _analyze_code_symbol_flow(code):
     return flow
 
 
-def _build_dataflow_payload(code, before_vars, after_vars):
+def _build_dataflow_payload(code, before_vars, after_vars, tree=None):
     before = before_vars if isinstance(before_vars, dict) else {}
     after = after_vars if isinstance(after_vars, dict) else {}
-    static_flow = _analyze_code_symbol_flow(code)
+    static_flow = _analyze_code_symbol_flow(code, tree)
 
     before_names = set(before.keys())
     after_names = set(after.keys())
@@ -332,6 +362,8 @@ def _build_dataflow_payload(code, before_vars, after_vars):
         if _summary_signature(before.get(name)) != _summary_signature(after.get(name))
     )
 
+    # 说明:不再在 payload 里回传整份 after 快照。前端只消费 used/touched 等增量字段
+    # (getGuaxiDataflowFromResult 后仅读 used/touched),after 属于重复序列化,去掉减小体积。
     return {
         "version": 1,
         "used": static_flow.get("used") or [],
@@ -341,7 +373,6 @@ def _build_dataflow_payload(code, before_vars, after_vars):
         "updated": updated,
         "removed": removed,
         "touched": sorted(set(created + updated + removed + (static_flow.get("assigned") or []))),
-        "after": after,
     }
 
 
@@ -385,6 +416,23 @@ def _snapshot_session_vars(globals_dict, selected_names=None):
                 "type": "unknown",
                 "preview": "<unavailable>",
             })
+    return items
+
+
+def _session_vars_from_snapshot_map(snapshot_map, selected_names=None):
+    # 复用执行后已算好的变量摘要 map,避免再遍历一次 globals + 再算一遍 _summarize_value。
+    # 输出需与 _snapshot_session_vars 逐字节一致:同样的顺序、128 上限、{name, **summary} 形状。
+    items = []
+    if not isinstance(snapshot_map, dict):
+        return items
+    candidate_names = selected_names if selected_names is not None else list(snapshot_map.keys())
+    for name in candidate_names:
+        summary = snapshot_map.get(name)
+        if summary is None:
+            continue
+        items.append({"name": str(name), **summary})
+        if len(items) >= 128:
+            break
     return items
 
 
@@ -1059,11 +1107,13 @@ def _capture_cell_animation_display(globals_dict, previous_animation_ids=None, e
 
 
 def _maybe_prepare_inline_matplotlib():
+    # 惰性化:不再 eager `import matplotlib`(每个会话首个 cell 都要吃约 1s,即便不画图)。
+    # 改为设置 MPLBACKEND=Agg 环境变量——用户代码首次 import matplotlib 时会据此选中 Agg 后端,
+    # 无头 worker 里与原先的 matplotlib.use("Agg") 等价,且不用画图的 cell 完全不加载 matplotlib。
+    # 仅在 matplotlib 尚未加载时设置(与原逻辑一致);若已加载,后端此前已按需选定,无需再动。
     try:
         if "matplotlib" not in sys.modules:
-            import matplotlib
-
-            matplotlib.use("Agg")
+            os.environ["MPLBACKEND"] = "Agg"
     except Exception:
         pass
 
@@ -1639,6 +1689,43 @@ def _install_plotly_notebook_hook(globals_dict):
     globals_dict["__guaxi_plotly_hook_installed__"] = True
 
 
+# 一次性 __import__ 观察器:任意代码首次 import plotly 时立刻给"当前正在执行的会话"装 show 钩子。
+# 这样既保留惰性(不用 plotly 的 cell 完全不 import plotly),又消除了"本 cell 通过辅助模块间接
+# import plotly 且源码不含 plotly 字样"的漏网——钩子在 import 完成后、用户 .show() 之前就位。
+_PLOTLY_IMPORT_WATCHER_ARMED = False
+_ACTIVE_EXEC_GLOBALS = None
+_INSTALLING_PLOTLY_HOOK = False
+
+
+def _arm_plotly_import_watcher():
+    global _PLOTLY_IMPORT_WATCHER_ARMED
+    if _PLOTLY_IMPORT_WATCHER_ARMED:
+        return
+    import builtins
+
+    original_import = builtins.__import__
+
+    def _guaxi_watch_import(name, *args, **kwargs):
+        # 忠实转发:先按原样完成真实 import,拿到结果后仅做"观察",绝不改变 import 行为或返回值。
+        module = original_import(name, *args, **kwargs)
+        try:
+            global _INSTALLING_PLOTLY_HOOK
+            if (name == "plotly" or name.startswith("plotly.")) and not _INSTALLING_PLOTLY_HOOK:
+                target = _ACTIVE_EXEC_GLOBALS
+                if target is not None and not target.get("__guaxi_plotly_hook_installed__"):
+                    _INSTALLING_PLOTLY_HOOK = True
+                    try:
+                        _install_plotly_notebook_hook(target)
+                    finally:
+                        _INSTALLING_PLOTLY_HOOK = False
+        except Exception:
+            pass
+        return module
+
+    builtins.__import__ = _guaxi_watch_import
+    _PLOTLY_IMPORT_WATCHER_ARMED = True
+
+
 def _fresh_globals():
     return {"__builtins__": __builtins__}
 
@@ -1786,7 +1873,12 @@ def _handle_exec(payload):
 
     if vars_map.get("_guaxi_inline_matplotlib", None) is True or "_py_cell_id" in vars_map or "_guaxi_session" in vars_map:
         _maybe_prepare_inline_matplotlib()
-        _install_plotly_notebook_hook(globals_dict)
+        # plotly 惰性:已导入过直接装 show 钩子;否则装一次性 import 观察器,
+        # 等本会话任意代码首次真正 import plotly 时再装,既省不用 plotly 的 cell 的导入成本,又不漏捕获。
+        if "plotly" in sys.modules:
+            _install_plotly_notebook_hook(globals_dict)
+        else:
+            _arm_plotly_import_watcher()
 
     stdout_buffer = io.StringIO()
     stderr_buffer = io.StringIO()
@@ -1799,6 +1891,7 @@ def _handle_exec(payload):
     result_json = None
     old_cwd = None
     dataflow_before = _snapshot_session_var_map(globals_dict)
+    dataflow_after = None
     matplotlib_animation_ids_before = _snapshot_matplotlib_animation_ids(globals_dict)
 
     try:
@@ -1829,6 +1922,9 @@ def _handle_exec(payload):
             )
             ast.fix_missing_locations(tree)
 
+        # 让 __import__ 观察器知道"当前正在执行哪个会话",以便 plotly 首次 import 时把 show 钩子装到正确会话。
+        global _ACTIVE_EXEC_GLOBALS
+        _ACTIVE_EXEC_GLOBALS = globals_dict
         exec(compile(tree, "<guaxi-worker>", "exec"), globals_dict, globals_dict)
         _configure_verbose_object_rendering(globals_dict)
 
@@ -1936,7 +2032,7 @@ def _handle_exec(payload):
                 }
 
         dataflow_after = _snapshot_session_var_map(globals_dict)
-        dataflow_payload = _build_dataflow_payload(code, dataflow_before, dataflow_after)
+        dataflow_payload = _build_dataflow_payload(code, dataflow_before, dataflow_after, tree=tree)
         if isinstance(result_json, dict):
             result_json["__guaxi_dataflow__"] = dataflow_payload
         elif result_json is None:
@@ -1954,6 +2050,7 @@ def _handle_exec(payload):
         ok = False
         err_trace = _format_traceback(exc)
     finally:
+        _ACTIVE_EXEC_GLOBALS = None
         if old_cwd is not None:
             try:
                 os.chdir(old_cwd)
@@ -1968,7 +2065,14 @@ def _handle_exec(payload):
             stderr += "\n"
         stderr += err_trace
 
-    session_vars = _snapshot_session_vars(globals_dict, session_var_names) if include_session_vars else []
+    if not include_session_vars:
+        session_vars = []
+    elif dataflow_after is not None:
+        # 成功路径:执行后的可见变量已在 dataflow_after 里摘要过一遍,直接派生,不再重复遍历。
+        session_vars = _session_vars_from_snapshot_map(dataflow_after, session_var_names)
+    else:
+        # 异常路径:dataflow_after 未生成,保持原行为——按当前 globals 现场快照。
+        session_vars = _snapshot_session_vars(globals_dict, session_var_names)
 
     return {
         "ok": ok,
@@ -2442,7 +2546,7 @@ def main():
         if not line:
             continue
         try:
-            payload = json.loads(line)
+            payload = _worker_json_loads(line)
             response = _dispatch(payload)
         except BaseException as exc:
             response = {
@@ -2456,7 +2560,7 @@ def main():
                 "session_vars": [],
             }
 
-        sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
+        sys.stdout.write(_worker_json_dumps(response) + "\n")
         sys.stdout.flush()
 
 

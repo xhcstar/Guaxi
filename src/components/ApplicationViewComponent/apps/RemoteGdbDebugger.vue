@@ -409,4 +409,12 @@ async function loadMacros() {
 .gdb-fbtn { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: none; background: transparent; color: var(--guaxi-text-secondary); cursor: pointer; border-radius: 50%; }
 .gdb-fbtn:hover { background: var(--tw-accent-soft); color: var(--tw-accent); }
 .gdb-fsz { min-width: 20px; text-align: center; font-size: 12px; font-family: var(--tw-mono-font); color: var(--tw-accent); }
+
+/* 面板填满高度 + 亮色适配 */
+.gdb-tabs :deep(.gdb-pane) { height: 100%; display: flex; flex-direction: column; min-height: 0; background: var(--guaxi-content-bg); }
+.gdb-console { flex: 1 1 auto; height: auto !important; min-height: 0; }
+.gdb-mem { flex: 1 1 auto; min-height: 0; }
+.gdb-tree, .gdb-threads { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.gdb-tabs :deep(.gdb-pane) > .gdb-table { flex: 1 1 auto; }
+.gdb-tabs :deep(.n-tabs-pane-wrapper) { flex: 1 1 auto; min-height: 0; }
 </style>

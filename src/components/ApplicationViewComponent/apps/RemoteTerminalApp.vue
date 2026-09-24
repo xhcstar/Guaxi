@@ -1,6 +1,6 @@
 <template>
   <div class="rt-root">
-    <n-tabs v-model:value="activeTab" type="line" class="rt-tabs" pane-class="rt-pane">
+    <n-tabs v-model:value="activeTab" type="line" class="rt-tabs" pane-class="rt-pane" display-directive="show:lazy" animated>
       <n-tab-pane name="log">
         <template #tab><span class="tw-tab"><Icon :icon="fileSearchIcon" width="16" height="16" />日志分析</span></template>
         <div class="rt-log">
@@ -36,7 +36,14 @@
               <n-tab-pane name="raw" tab="原文">
                 <div class="rt-body">
                   <div class="rt-timeline" :style="{ width: timelineWidth + 'px' }">
-                    <div class="rt-timeline-title">快照时间线</div>
+                    <div class="rt-timeline-title">
+                      <span>快照时间线</span>
+                      <span class="rt-fontctl">
+                        <button class="rt-fbtn" @click="setLogFontSize(logFontSize - 1)"><Icon :icon="minusIcon" width="12" height="12" /></button>
+                        <span class="rt-fsz">{{ logFontSize }}</span>
+                        <button class="rt-fbtn" @click="setLogFontSize(logFontSize + 1)"><Icon :icon="plusIcon" width="12" height="12" /></button>
+                      </span>
+                    </div>
                     <div class="rt-timeline-list">
                       <div
                         v-for="f in frames"
@@ -51,13 +58,13 @@
                     </div>
                   </div>
                   <div class="rt-tl-resize" @mousedown="onTimelineResizeDown"></div>
-                  <div ref="viewportRef" class="rt-viewport" @scroll="onScroll">
+                  <div ref="viewportRef" class="rt-viewport" :style="{ fontSize: logFontSize + 'px', lineHeight: LINE_HEIGHT + 'px' }" @scroll="onScroll">
                     <div class="rt-spacer" :style="{ height: totalHeight + 'px' }">
                       <div
                         v-for="row in visibleRows"
                         :key="row.index"
                         class="rt-line"
-                        :style="{ top: row.index * LINE_HEIGHT + 'px' }"
+                        :style="{ top: row.index * LINE_HEIGHT + 'px', height: LINE_HEIGHT + 'px' }"
                       >
                         <span class="rt-lineno">{{ row.index + 1 }}</span>
                         <span class="rt-linetext">{{ row.text }}</span>
@@ -78,7 +85,7 @@
                     <span class="rt-hint">按“持续上涨”给指标打分，最可疑的排最前。点行看曲线。</span>
                   </div>
                   <div class="rt-split">
-                    <div class="rt-table-wrap">
+                    <div class="rt-table-wrap" :style="{ flex: '0 0 ' + splitPct }">
                       <table class="rt-table">
                         <thead>
                           <tr><th>指标</th><th>首值</th><th>末值</th><th>增量</th><th>斜率</th><th>单调%</th><th>样本</th></tr>
@@ -102,11 +109,13 @@
                         </tbody>
                       </table>
                     </div>
+                    <div class="rt-split-resize" @mousedown="onSplitResizeDown"></div>
                     <div class="rt-chart-wrap">
                       <div class="rt-chart-head" v-if="selectedKey">
                         <span :title="selectedKey">{{ selectedKey }}</span>
                         <n-button size="tiny" @click="pinMetric(selectedKey)">加入关注</n-button>
                         <n-button size="tiny" @click="sendSeriesCsv">→ 编辑器</n-button>
+                        <n-button size="tiny" quaternary @click="chartFullscreen = true" title="全屏"><Icon :icon="expandIcon" width="14" height="14" /></n-button>
                       </div>
                       <VChart v-if="chartOption" class="rt-chart" :option="chartOption" autoresize />
                       <div v-else class="rt-chart-empty">选择一个指标查看时间序列</div>
@@ -126,7 +135,7 @@
                     <span class="rt-hint">{{ filteredMetrics.length }} / {{ browseMetrics.length }}</span>
                   </div>
                   <div class="rt-split">
-                    <div class="rt-table-wrap">
+                    <div class="rt-table-wrap" :style="{ flex: '0 0 ' + splitPct }">
                       <table class="rt-table">
                         <thead><tr><th>指标</th><th>当前值</th></tr></thead>
                         <tbody>
@@ -143,11 +152,13 @@
                         </tbody>
                       </table>
                     </div>
+                    <div class="rt-split-resize" @mousedown="onSplitResizeDown"></div>
                     <div class="rt-chart-wrap">
                       <div class="rt-chart-head" v-if="selectedKey">
                         <span :title="selectedKey">{{ selectedKey }}</span>
                         <n-button size="tiny" @click="pinMetric(selectedKey)">加入关注</n-button>
                         <n-button size="tiny" @click="sendSeriesCsv">→ 编辑器</n-button>
+                        <n-button size="tiny" quaternary @click="chartFullscreen = true" title="全屏"><Icon :icon="expandIcon" width="14" height="14" /></n-button>
                       </div>
                       <VChart v-if="chartOption" class="rt-chart" :option="chartOption" autoresize />
                       <div v-else class="rt-chart-empty">点左侧指标查看时间序列</div>
@@ -305,6 +316,10 @@
         <template #tab><span class="tw-tab"><Icon :icon="wrenchIcon" width="16" height="16" />工具箱</span></template>
         <RemoteToolbox @import-file="onReplay" />
       </n-tab-pane>
+      <n-tab-pane name="network">
+        <template #tab><span class="tw-tab"><Icon :icon="networkIcon" width="16" height="16" />网络</span></template>
+        <RemoteNetworkToolbox />
+      </n-tab-pane>
     </n-tabs>
 
     <n-modal v-model:show="showRuleEditor" :mask-closable="false">
@@ -356,6 +371,17 @@
         </div>
       </div>
     </n-modal>
+
+    <n-modal v-model:show="chartFullscreen">
+      <div class="rt-chart-full">
+        <div class="rt-chart-full-head">
+          <span :title="selectedKey">{{ selectedKey || '时间序列' }}</span>
+          <Icon :icon="xIcon" width="20" height="20" class="rt-editor-close" @click="chartFullscreen = false" />
+        </div>
+        <VChart v-if="chartOption" class="rt-chart-full-body" :option="chartOption" autoresize />
+        <div v-else class="rt-chart-empty">无数据</div>
+      </div>
+    </n-modal>
   </div>
 </template>
 
@@ -371,15 +397,19 @@ import VChart from 'vue-echarts'
 import RemoteSshTerminal from './RemoteSshTerminal.vue'
 import RemoteGdbDebugger from './RemoteGdbDebugger.vue'
 import RemoteToolbox from './RemoteToolbox.vue'
+import RemoteNetworkToolbox from './RemoteNetworkToolbox.vue'
 import { Icon } from '@iconify/vue'
 import fileSearchIcon from '@iconify-icons/lucide/file-search'
 import terminalIcon from '@iconify-icons/lucide/terminal'
 import bugIcon from '@iconify-icons/lucide/bug'
 import wrenchIcon from '@iconify-icons/lucide/wrench'
+import networkIcon from '@iconify-icons/lucide/network'
 import importIcon from '@iconify-icons/lucide/import'
 import fileIcon from '@iconify-icons/lucide/file'
 import settingsIcon from '@iconify-icons/lucide/settings-2'
 import plusIcon from '@iconify-icons/lucide/plus'
+import minusIcon from '@iconify-icons/lucide/minus'
+import expandIcon from '@iconify-icons/lucide/maximize-2'
 import trashIcon from '@iconify-icons/lucide/trash-2'
 import xIcon from '@iconify-icons/lucide/x'
 import { createLogger } from '../../../utils/logger'
@@ -388,7 +418,9 @@ use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, DataZoomCompone
 
 const logger = createLogger('RemoteTerminalApp')
 
-const LINE_HEIGHT = 18
+const logFontSize = ref(14)
+const LINE_HEIGHT = computed(() => logFontSize.value + 7)
+function setLogFontSize(v) { logFontSize.value = Math.min(28, Math.max(9, v)) }
 const PAGE = 500
 const OVERSCAN = 20
 
@@ -406,6 +438,23 @@ const scrollTop = ref(0)
 const viewportHeight = ref(600)
 const activeFrame = ref(-1)
 const timelineWidth = ref(300)
+const splitRatio = ref(0.55)
+const splitPct = computed(() => (splitRatio.value * 100).toFixed(1) + '%')
+const chartFullscreen = ref(false)
+function onSplitResizeDown(e) {
+  const container = e.currentTarget.parentElement
+  if (!container) return
+  const rect = container.getBoundingClientRect()
+  let resizing = true
+  const move = ev => {
+    if (!resizing) return
+    const r = (ev.clientX - rect.left) / rect.width
+    splitRatio.value = Math.min(0.85, Math.max(0.2, r))
+  }
+  const up = () => { resizing = false; document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up) }
+  document.addEventListener('mousemove', move)
+  document.addEventListener('mouseup', up)
+}
 function onTimelineResizeDown(e) {
   const startX = e.clientX
   const startW = timelineWidth.value
@@ -517,13 +566,13 @@ const aggFuncOptions = [
   { label: '最大', value: 'max' },
 ]
 
-const totalHeight = computed(() => (meta.value ? meta.value.line_count * LINE_HEIGHT : 0))
+const totalHeight = computed(() => (meta.value ? meta.value.line_count * LINE_HEIGHT.value : 0))
 
 const visibleRange = computed(() => {
   if (!meta.value) return { start: 0, end: 0 }
   const total = meta.value.line_count
-  const first = Math.max(0, Math.floor(scrollTop.value / LINE_HEIGHT) - OVERSCAN)
-  const visible = Math.ceil(viewportHeight.value / LINE_HEIGHT) + OVERSCAN * 2
+  const first = Math.max(0, Math.floor(scrollTop.value / LINE_HEIGHT.value) - OVERSCAN)
+  const visible = Math.ceil(viewportHeight.value / LINE_HEIGHT.value) + OVERSCAN * 2
   return { start: first, end: Math.min(total, first + visible) }
 })
 
@@ -608,7 +657,7 @@ async function doImport(path) {
     await nextTick()
     const el = viewportRef.value
     if (el) viewportHeight.value = el.clientHeight
-    await ensurePages(0, Math.ceil(viewportHeight.value / LINE_HEIGHT) + OVERSCAN * 2)
+    await ensurePages(0, Math.ceil(viewportHeight.value / LINE_HEIGHT.value) + OVERSCAN * 2)
   } catch (e) {
     error.value = '导入失败: ' + (e?.message || e)
     logger.error('导入失败', e)
@@ -645,7 +694,7 @@ function resetAll() {
 function jumpToFrame(f) {
   activeFrame.value = f.index
   const el = viewportRef.value
-  if (el) el.scrollTop = f.line_start * LINE_HEIGHT
+  if (el) el.scrollTop = f.line_start * LINE_HEIGHT.value
 }
 
 async function runLeak() {
@@ -814,7 +863,7 @@ async function runSearch() {
 function gotoLine(line) {
   innerTab.value = 'raw'
   activeFrame.value = -1
-  nextTick(() => { const el = viewportRef.value; if (el) el.scrollTop = line * LINE_HEIGHT })
+  nextTick(() => { const el = viewportRef.value; if (el) el.scrollTop = line * LINE_HEIGHT.value })
 }
 
 async function runCluster() {
@@ -909,7 +958,7 @@ onBeforeUnmount(() => {
 .rt-frame-idx { color: var(--guaxi-text-secondary, #9ca3af); flex: 0 0 auto; }
 .rt-frame-ts { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-.rt-viewport { flex: 1 1 auto; overflow: auto; position: relative; font-family: var(--tw-mono-font); font-size: 13px; line-height: 18px; background: var(--tw-code-bg); color: var(--tw-code-fg); border-radius: 0 0 var(--tw-radius) 0; }
+.rt-viewport { flex: 1 1 auto; overflow: auto; position: relative; font-family: var(--tw-mono-font); background: var(--guaxi-content-bg); color: var(--guaxi-text-primary); border-radius: 0 0 var(--tw-radius) 0; }
 .rt-spacer { position: relative; width: 100%; }
 .rt-line { position: absolute; left: 0; right: 0; height: 18px; display: flex; white-space: pre; }
 .rt-lineno { flex: 0 0 auto; width: 64px; text-align: right; padding-right: 12px; color: var(--guaxi-code-lineno, #6b7280); user-select: none; }
@@ -950,7 +999,18 @@ onBeforeUnmount(() => {
 .rt-meta { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .rt-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; padding: 3px 9px; border-radius: 999px; background: var(--tw-accent-soft); color: var(--tw-accent); font-family: var(--tw-mono-font); }
 .rt-timeline { width: 300px; }
-.rt-timeline-title { text-transform: uppercase; letter-spacing: 0.06em; font-size: 11px; color: var(--guaxi-text-secondary); background: color-mix(in srgb, var(--guaxi-panel-bg) 55%, transparent); }
+.rt-timeline-title { text-transform: uppercase; letter-spacing: 0.06em; font-size: 11px; color: var(--guaxi-text-secondary); background: color-mix(in srgb, var(--guaxi-panel-bg) 55%, transparent); display: flex; align-items: center; justify-content: space-between; }
+.rt-fontctl { display: inline-flex; align-items: center; gap: 3px; }
+.rt-fbtn { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border: none; background: transparent; color: var(--guaxi-text-secondary); cursor: pointer; border-radius: 50%; }
+.rt-fbtn:hover { background: var(--tw-accent-soft); color: var(--tw-accent); }
+.rt-fsz { min-width: 16px; text-align: center; font-size: 11px; color: var(--tw-accent); }
+.rt-line { color: var(--guaxi-text-primary); }
+.rt-lineno { color: var(--guaxi-text-secondary); opacity: .7; }
+.rt-split-resize { flex: 0 0 auto; width: 6px; cursor: col-resize; background: var(--guaxi-border); opacity: .4; border-radius: 3px; transition: opacity .15s, background .15s; }
+.rt-split-resize:hover { opacity: 1; background: var(--tw-accent); }
+.rt-chart-full { width: 90vw; height: 84vh; display: flex; flex-direction: column; background: var(--guaxi-panel-bg); border: 1px solid var(--guaxi-border); border-radius: var(--tw-radius); box-shadow: var(--tw-elev); overflow: hidden; font-family: var(--tw-ui-font); }
+.rt-chart-full-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 18px; border-bottom: 1px solid var(--guaxi-border); font-weight: 600; font-family: var(--tw-mono-font); }
+.rt-chart-full-body { flex: 1 1 auto; min-height: 0; width: 100%; }
 .rt-frame { border-bottom-color: color-mix(in srgb, var(--guaxi-border) 45%, transparent); transition: background .12s ease; }
 .rt-frame.active { background: var(--tw-accent-soft); box-shadow: inset 3px 0 0 var(--tw-accent); }
 .rt-frame.active .rt-frame-idx { color: var(--tw-accent); }

@@ -37,6 +37,43 @@
             <span class="tb-res">{{ dateOut }}</span>
           </div>
         </div>
+        <div class="tb-sec">
+          <div class="tb-h">IP 地址转换</div>
+          <div class="tb-row">
+            <n-input v-model:value="ipInput" size="small" placeholder="192.168.1.10 / 3232235786 / 0xC0A8010A / CIDR 10.0.0.0/24" style="width:400px" @input="convertIp" />
+          </div>
+          <table class="tb-kv" v-if="ipOut">
+            <tbody>
+              <tr v-for="(v, k) in ipOut" :key="k"><td>{{ k }}</td><td>{{ v }}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </n-tab-pane>
+
+      <n-tab-pane name="crypto" tab="证书/ASN.1">
+        <template #tab><span class="tw-tab"><Icon :icon="keyIcon" width="15" height="15" />证书/ASN.1</span></template>
+        <div class="tb-sec">
+          <div class="tb-h">证书 / 私钥 / 公钥 / CSR / ASN.1 解析</div>
+          <n-input
+            v-model:value="cryptoInput"
+            type="textarea"
+            size="small"
+            :rows="6"
+            placeholder="粘贴 PEM (-----BEGIN...)、base64 或 hex 编码的 DER"
+          />
+          <div class="tb-row" style="margin-top:8px">
+            <n-button size="small" type="primary" :loading="cryptoLoading" @click="runCrypto">解析</n-button>
+            <n-button size="small" :disabled="!cryptoReport" @click="sendToEditor(cryptoAsText)">→ 编辑器</n-button>
+            <span class="tb-res" v-if="cryptoReport">{{ cryptoReport.kind }}</span>
+            <span v-if="error" class="tb-err">{{ error }}</span>
+          </div>
+          <table class="tb-kv" v-if="cryptoReport && cryptoReport.summary.length">
+            <tbody>
+              <tr v-for="(kv, i) in cryptoReport.summary" :key="i"><td>{{ kv[0] }}</td><td>{{ kv[1] }}</td></tr>
+            </tbody>
+          </table>
+          <pre class="tb-out" v-if="cryptoReport">{{ cryptoReport.asn1 }}</pre>
+        </div>
       </n-tab-pane>
 
       <n-tab-pane name="bin" tab="二进制分析">
@@ -129,6 +166,7 @@ import binaryIcon from '@iconify-icons/lucide/binary'
 import skullIcon from '@iconify-icons/lucide/skull'
 import zapIcon from '@iconify-icons/lucide/zap'
 import gitCompareIcon from '@iconify-icons/lucide/git-compare'
+import keyIcon from '@iconify-icons/lucide/key-round'
 
 use([CanvasRenderer, ScatterChart, GridComponent, TooltipComponent, LegendComponent, DataZoomComponent])
 
@@ -198,6 +236,66 @@ function dateToEpoch() {
   const s = dateInput.value.trim(); if (!s) { dateOut.value = ''; return }
   const d = new Date(s.replace(' ', 'T')); if (isNaN(d.getTime())) { dateOut.value = '无效'; return }
   dateOut.value = `epoch ${Math.floor(d.getTime() / 1000)} s  /  ${d.getTime()} ms`
+}
+
+// IP 转换（前端纯 JS）：点分/整数/十六进制互转 + CIDR 网段计算
+const ipInput = ref(''); const ipOut = ref(null)
+function intToIpv4(n) { return [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.') }
+function ipv4ToInt(s) {
+  const p = s.split('.'); if (p.length !== 4) return null
+  let n = 0
+  for (const x of p) { const b = Number(x); if (!Number.isInteger(b) || b < 0 || b > 255) return null; n = (n * 256) + b }
+  return n >>> 0
+}
+function convertIp() {
+  const s = ipInput.value.trim()
+  if (!s) { ipOut.value = null; return }
+  // CIDR
+  if (s.includes('/')) {
+    const [ip, bitsStr] = s.split('/')
+    const base = ipv4ToInt(ip.trim()); const bits = Number(bitsStr)
+    if (base == null || !Number.isInteger(bits) || bits < 0 || bits > 32) { ipOut.value = { 错误: '无效 CIDR' }; return }
+    const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0
+    const network = (base & mask) >>> 0
+    const broadcast = (network | (~mask >>> 0)) >>> 0
+    const hosts = bits >= 31 ? (bits === 32 ? 1 : 2) : ((broadcast - network - 1) >>> 0)
+    ipOut.value = {
+      网段: `${intToIpv4(network)}/${bits}`,
+      子网掩码: intToIpv4(mask),
+      网络地址: intToIpv4(network),
+      广播地址: intToIpv4(broadcast),
+      可用范围: `${intToIpv4((network + (bits >= 31 ? 0 : 1)) >>> 0)} - ${intToIpv4((broadcast - (bits >= 31 ? 0 : 1)) >>> 0)}`,
+      主机数: hosts.toLocaleString(),
+    }
+    return
+  }
+  let n = null
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(s)) n = ipv4ToInt(s)
+  else if (/^0x[0-9a-f]+$/i.test(s)) n = parseInt(s, 16) >>> 0
+  else if (/^\d+$/.test(s)) n = Number(s) >>> 0
+  if (n == null || isNaN(n)) { ipOut.value = { 错误: '无法识别（支持点分/十进制/0x十六进制/CIDR）' }; return }
+  ipOut.value = {
+    点分十进制: intToIpv4(n),
+    十进制: (n >>> 0).toString(),
+    十六进制: '0x' + (n >>> 0).toString(16).toUpperCase().padStart(8, '0'),
+    二进制: (n >>> 0).toString(2).padStart(32, '0').replace(/(.{8})(?=.)/g, '$1.'),
+  }
+}
+
+// 证书 / ASN.1 解析（后端 x509-parser）
+const cryptoInput = ref(''); const cryptoReport = ref(null); const cryptoLoading = ref(false)
+const cryptoAsText = computed(() => {
+  if (!cryptoReport.value) return ''
+  const s = cryptoReport.value.summary.map(kv => `${kv[0]}: ${kv[1]}`).join('\n')
+  return '```\n' + s + '\n\n' + cryptoReport.value.asn1 + '\n```\n'
+})
+async function runCrypto() {
+  error.value = ''
+  if (!cryptoInput.value.trim()) return
+  cryptoLoading.value = true
+  try { cryptoReport.value = await invoke('crypto_inspect', { input: cryptoInput.value }) }
+  catch (e) { error.value = '解析失败: ' + (e?.message || e); cryptoReport.value = null }
+  finally { cryptoLoading.value = false }
 }
 // __TB_BODY2__
 const binReport = ref(null); const binLoading = ref(false)

@@ -18,6 +18,10 @@
   const PAGE = 200;          // 每页条数
   const BUFFER = 8;          // 视口上下各多渲染的行数
   const TOKEN = new URLSearchParams(location.search).get("t") || "";
+  // 宿主(Guaxi)内嵌时通过 ?theme= 传入主题;有则进入"跟随宿主"模式。
+  const THEME_PARAM = new URLSearchParams(location.search).get("theme");
+  const EMBEDDED = THEME_PARAM === "dark" || THEME_PARAM === "light";
+  if (EMBEDDED) document.documentElement.dataset.theme = THEME_PARAM;
 
   const $ = (id) => document.getElementById(id);
   const el = {
@@ -236,15 +240,27 @@
   });
 
   // —— 主题 ——
-  el.themeToggle.addEventListener("click", () => {
-    const cur = document.documentElement.dataset.theme;
-    document.documentElement.dataset.theme = cur === "dark" ? "light" : "dark";
-    try { localStorage.setItem("guaxi-lib-theme", document.documentElement.dataset.theme); } catch {}
-  });
-  try {
-    const saved = localStorage.getItem("guaxi-lib-theme");
-    if (saved) document.documentElement.dataset.theme = saved;
-  } catch {}
+  // 内嵌模式(Guaxi 内 iframe，URL 带 ?theme=)跟随宿主主题，不用自己的开关/localStorage，
+  // 避免站点主题与 Guaxi 界面各走各的、出现半亮半暗。独立浏览器打开时才用站点自己的开关。
+  if (EMBEDDED) {
+    document.documentElement.dataset.theme = THEME_PARAM;
+    el.themeToggle.style.display = "none";
+    // 宿主切换主题时通过 postMessage 通知,实时跟随。
+    window.addEventListener("message", (e) => {
+      const t = e.data && e.data.type === "guaxi-theme" ? e.data.theme : null;
+      if (t === "dark" || t === "light") document.documentElement.dataset.theme = t;
+    });
+  } else {
+    el.themeToggle.addEventListener("click", () => {
+      const cur = document.documentElement.dataset.theme;
+      document.documentElement.dataset.theme = cur === "dark" ? "light" : "dark";
+      try { localStorage.setItem("guaxi-lib-theme", document.documentElement.dataset.theme); } catch {}
+    });
+    try {
+      const saved = localStorage.getItem("guaxi-lib-theme");
+      if (saved) document.documentElement.dataset.theme = saved;
+    } catch {}
+  }
 
   // —— 工具函数 ——
   function updateCount() {

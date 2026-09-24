@@ -1,10 +1,14 @@
-//! 搜索聚合层：全网发现（多引擎 + 嗅探）+ 富集站精确源，归一去重后按相关度排序。
+//! 搜索聚合层：领域 API + 全网多引擎嗅探 + 富集站，归一去重后按相关度排序。
 use super::model::{ProxyConfig, ResourceItem, ResourceKind, SearchQuery};
 use super::store;
+use fuzzy_matcher::skim::SkimMatcherV2;
+use fuzzy_matcher::FuzzyMatcher;
 use futures_util::future::join_all;
 use sha2::{Digest, Sha256};
 
+pub mod apis;
 pub mod engines;
+pub mod llm;
 pub mod seed_sites;
 pub mod sniffer;
 
@@ -32,10 +36,24 @@ fn all_kinds() -> Vec<ResourceKind> {
         ResourceKind::Video,
         ResourceKind::Audio,
         ResourceKind::Image,
+        ResourceKind::Code,
     ]
 }
 
-/// 依资源类型构造搜索算子（dork）查询串。
+/// 各类型的资源富集站清单：喂给通用引擎做 `site:` 偏置，即便无专用 API 也能提高命中。
+fn seed_domains(kind: ResourceKind) -> &'static [&'static str] {
+    match kind {
+        ResourceKind::Book => &["annas-archive.org", "libgen.is", "z-lib.io", "standardebooks.org"],
+        ResourceKind::Paper => &["arxiv.org", "openalex.org", "sci-hub.se", "researchgate.net", "core.ac.uk"],
+        ResourceKind::Video => &["youtube.com", "bilibili.com", "vimeo.com", "archive.org"],
+        ResourceKind::Audio => &["bandcamp.com", "soundcloud.com", "freemusicarchive.org", "archive.org"],
+        ResourceKind::Image => &["commons.wikimedia.org", "unsplash.com", "flickr.com", "pexels.com"],
+        ResourceKind::Code => &["github.com", "gitlab.com", "gitee.com", "sourceforge.net"],
+        ResourceKind::Other => &[],
+    }
+}
+
+/// 依资源类型构造搜索算子（dork）查询串：filetype + site 偏置。
 fn build_queries(keyword: &str, kinds: &[ResourceKind]) -> Vec<String> {
     let mut qs: Vec<String> = Vec::new();
     let mut plain_needed = kinds.is_empty();
@@ -48,7 +66,11 @@ fn build_queries(keyword: &str, kinds: &[ResourceKind]) -> Vec<String> {
             }
             ResourceKind::Audio => qs.push(format!("{keyword} filetype:mp3")),
             ResourceKind::Image => qs.push(format!("{keyword} filetype:jpg")),
-            ResourceKind::Video | ResourceKind::Other => plain_needed = true,
+            ResourceKind::Video | ResourceKind::Code | ResourceKind::Other => plain_needed = true,
+        }
+        // site: 偏置（取每类前 2 个高产站，控制扇出）。
+        for d in seed_domains(*k).iter().take(2) {
+            qs.push(format!("{keyword} site:{d}"));
         }
     }
     if plain_needed {
@@ -59,20 +81,57 @@ fn build_queries(keyword: &str, kinds: &[ResourceKind]) -> Vec<String> {
     qs
 }
 
-/// 简单相关度：关键词分词在标题中的命中比例，与来源基准分融合。
-fn score(item: &ResourceItem, keyword: &str) -> f32 {
-    let title = item.title.to_lowercase();
-    let toks: Vec<&str> = keyword
-        .split_whitespace()
-        .flat_map(|s| s.split(['，', ',', '、']))
-        .filter(|s| !s.is_empty())
-        .collect();
-    if toks.is_empty() {
+/// 相关度：fuzzy 匹配得分 + 来源基准分融合，比子串命中更稳。
+fn score(matcher: &SkimMatcherV2, item: &ResourceItem, keyword: &str) -> f32 {
+    if keyword.is_empty() {
         return item.relevance;
     }
-    let hit = toks.iter().filter(|t| title.contains(&t.to_lowercase())).count();
-    let overlap = hit as f32 / toks.len() as f32;
-    (item.relevance * 0.4 + overlap * 0.6).min(1.0)
+    let fuzzy = matcher
+        .fuzzy_match(&item.title, keyword)
+        .map(|s| (s as f32 / (keyword.len() as f32 * 12.0)).min(1.0))
+        .unwrap_or(0.0);
+    (item.relevance * 0.45 + fuzzy * 0.55).min(1.0)
+}
+// PLACEHOLDER_RUN
+
+/// 领域 API 精确源：按需要的类型并发查结构化接口。
+async fn api_sources(kw: &str, kinds: &[ResourceKind], limit: usize) -> Vec<ResourceItem> {
+    type BoxFut = std::pin::Pin<Box<dyn std::future::Future<Output = Vec<ResourceItem>> + Send>>;
+    let mut futs: Vec<BoxFut> = Vec::new();
+    let has = |k: ResourceKind| kinds.contains(&k);
+    if has(ResourceKind::Paper) {
+        let k = kw.to_string();
+        futs.push(Box::pin(async move { seed_sites::arxiv(&k, limit).await }));
+        let k = kw.to_string();
+        futs.push(Box::pin(async move { seed_sites::openalex(&k, limit).await }));
+        let k = kw.to_string();
+        futs.push(Box::pin(async move { apis::semantic_scholar(&k, limit).await }));
+    }
+    if has(ResourceKind::Code) {
+        let k = kw.to_string();
+        futs.push(Box::pin(async move { apis::github(&k, limit).await }));
+    }
+    if has(ResourceKind::Book) {
+        let k = kw.to_string();
+        futs.push(Box::pin(async move { apis::gutendex(&k, limit).await }));
+        let k = kw.to_string();
+        futs.push(Box::pin(async move { apis::libgen(&k, limit).await }));
+    }
+    if has(ResourceKind::Image) {
+        let k = kw.to_string();
+        futs.push(Box::pin(async move { apis::openverse(&k, "images", limit).await }));
+    }
+    if has(ResourceKind::Audio) {
+        let k = kw.to_string();
+        futs.push(Box::pin(async move { apis::openverse(&k, "audio", limit).await }));
+        let k = kw.to_string();
+        futs.push(Box::pin(async move { apis::ytsearch(&k, "audio", limit).await }));
+    }
+    if has(ResourceKind::Video) {
+        let k = kw.to_string();
+        futs.push(Box::pin(async move { apis::ytsearch(&k, "video", limit).await }));
+    }
+    join_all(futs).await.into_iter().flatten().collect()
 }
 
 /// 执行一次检索。
@@ -82,66 +141,69 @@ pub async fn run(query: SearchQuery) -> Vec<ResourceItem> {
         return vec![];
     }
     let _ = store::record_query(&keyword);
-    let kinds = if query.kinds.is_empty() {
-        all_kinds()
-    } else {
-        query.kinds.clone()
-    };
-    let want_paper = kinds.contains(&ResourceKind::Paper) || query.kinds.is_empty();
+    let cfg = load_proxy();
+    let kinds = if query.kinds.is_empty() { all_kinds() } else { query.kinds.clone() };
 
     let mut items: Vec<ResourceItem> = Vec::new();
 
-    // 富集站精确源（论文）。
-    if query.seed_sites && want_paper {
-        let (a, o) = tokio::join!(
-            seed_sites::arxiv(&keyword, query.limit),
-            seed_sites::openalex(&keyword, query.limit)
-        );
-        items.extend(a);
-        items.extend(o);
+    // 1) 领域 API 精确源（结构化直链，精度最高）。
+    if query.seed_sites {
+        items.extend(api_sources(&keyword, &kinds, query.limit).await);
     }
 
-    // 通用全网发现：多引擎 × dork → 候选页 → 嗅探。
+    // 2) 通用全网发现：多引擎 ×（dork + LLM 扩展）→ 候选页 → 嗅探。
     if query.web_discovery {
-        let engines = if query.engines.is_empty() {
+        let engines: Vec<String> = if query.engines.is_empty() {
             engines::known_engines().iter().map(|s| s.to_string()).collect()
         } else {
             query.engines.clone()
         };
-        let queries = build_queries(&keyword, &kinds);
+        // LLM 查询扩展（可选）：把同义/中英/相关术语也拿去搜，提升召回。
+        let mut keywords = vec![keyword.clone()];
+        if query.use_llm {
+            for ex in llm::expand_query(&keyword).await.into_iter().take(3) {
+                keywords.push(ex);
+            }
+        }
+        let mut queries = Vec::new();
+        for kw in &keywords {
+            queries.extend(build_queries(kw, &kinds));
+        }
+        queries.sort();
+        queries.dedup();
+        queries.truncate(24);
+
         let mut hit_futs = Vec::new();
         for eng in &engines {
             for q in &queries {
-                hit_futs.push(engines::search(eng, q, 6));
+                hit_futs.push(engines::search(&cfg, eng, q, 8));
             }
         }
-        let hit_groups = join_all(hit_futs).await;
-        // 汇总候选页 URL，去重后取前 N 个嗅探。
         let mut seen_url = std::collections::HashSet::new();
         let mut hits = Vec::new();
-        for group in hit_groups {
+        for group in join_all(hit_futs).await {
             for h in group {
                 if seen_url.insert(h.url.clone()) {
                     hits.push(h);
                 }
             }
         }
-        hits.truncate(16);
-        let sniff_futs = hits
-            .iter()
-            .map(|h| sniffer::sniff(&h.url, &h.title, &kinds));
+        hits.truncate(48);
+        let sniff_futs = hits.iter().map(|h| sniffer::sniff(&h.url, &h.title, &kinds));
         for group in join_all(sniff_futs).await {
             items.extend(group);
         }
     }
 
-    // 去重 + 打分排序。
+    // 3) 去重 → HEAD 死链校验 → fuzzy 打分排序。
+    let matcher = SkimMatcherV2::default();
     let mut seen = std::collections::HashSet::new();
     items.retain(|it| seen.insert(it.id.clone()));
+    let mut items = sniffer::verify(items).await;
     for it in items.iter_mut() {
-        it.relevance = score(it, &keyword);
+        it.relevance = score(&matcher, it, &keyword);
     }
     items.sort_by(|a, b| b.relevance.partial_cmp(&a.relevance).unwrap_or(std::cmp::Ordering::Equal));
-    items.truncate(query.limit.max(10) * kinds.len().max(1));
+    items.truncate(query.limit.max(20) * kinds.len().max(1));
     items
 }

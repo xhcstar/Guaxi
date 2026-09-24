@@ -161,6 +161,8 @@ goblin = "0.9"
 qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
 # 资源嗅探下载引擎：读取系统代理（Windows 注册表 / 各平台），喂给 reqwest::Proxy。
 sysproxy = "0.3"
+# 磁力/BT 下载：纯 Rust、可嵌入的 BitTorrent 客户端（rustls+ring 后端，无 NASM/openssl）。
+librqbit = "8"
 # 本地音乐库：读取 MP3/FLAC/M4A 等的 ID3/Vorbis/MP4 标签、时长与内嵌封面。纯 Rust，无原生依赖。
 lofty = "0.25"
 # 音乐播放器「解灰」引擎：UnblockNeteaseMusic 的 Rust 版。给一首歌跨源(B站/酷我/酷狗)找可播副本。
@@ -174,6 +176,21 @@ unm_types = "0.4"
 aes = "0.8"
 cbc = { version = "0.1", features = ["alloc"] }
 num-bigint = "0.4"
+# 酷狗 web API 签名用 MD5。
+md-5 = "0.10"
+# 网络工具箱：报文构造/解析(纯 Rust)。
+etherparse = "0.16"
+hickory-proto = { version = "0.24", default-features = false }
+# 计算器工具箱：X.509 证书 / CSR / 公钥 / ASN.1 解析（纯 Rust nom，无 openssl）。
+x509-parser = "0.16"
+pem = "3.0"
+# 网络工具箱 TLS 握手探测：rustls 用 ring 后端(避开 NASM)。
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pki-types = "1"
+webpki-roots = "0.26"
+# 网络抓包：运行时动态加载 Npcap 的 wpcap.dll(不依赖 SDK 链接库，机器没装则优雅提示)。
+libloading = "0.8"
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", default-features = false, features = ["windows-native"] }

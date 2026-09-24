@@ -2,6 +2,7 @@
 use super::super::model::{ResourceItem, ResourceKind};
 use super::super::proxy;
 use super::make_id;
+use futures_util::future::join_all;
 use scraper::{Html, Selector};
 use url::Url;
 
@@ -153,4 +154,58 @@ fn file_item(id_src: &str, title: &str, url: &str, ext: &str, kind: ResourceKind
         relevance: 0.5,
         tags: vec![],
     }
+}
+
+/// HEAD 校验：对抓取到的直链做并发探测，剔除明确失效(404/403/410)的，
+/// 并补全 size_hint 与 format。仅校验 web 抓取的直链，API 源与磁力/yt-dlp 跳过。
+pub async fn verify(items: Vec<ResourceItem>) -> Vec<ResourceItem> {
+    let cfg = super::load_proxy();
+    let mut checks = Vec::new();
+    let mut passthrough = Vec::new();
+    for it in items {
+        let is_web_link = it.source == "web" && it.download_url.is_some() && !it.needs_ytdlp && it.magnet.is_none();
+        if is_web_link {
+            checks.push(it);
+        } else {
+            passthrough.push(it);
+        }
+    }
+    checks.truncate(48);
+    let futs = checks.into_iter().map(|it| {
+        let cfg = cfg.clone();
+        async move {
+            let url = it.download_url.clone().unwrap();
+            let client = match proxy::build_client_for(&cfg, &url) {
+                Ok(c) => c,
+                Err(_) => return Some(it),
+            };
+            match client.head(&url).send().await {
+                Ok(resp) => {
+                    let code = resp.status().as_u16();
+                    if code == 404 || code == 403 || code == 410 {
+                        return None; // 明确失效，丢弃
+                    }
+                    let mut it = it;
+                    if let Some(len) = resp
+                        .headers()
+                        .get(reqwest::header::CONTENT_LENGTH)
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|s| s.parse::<u64>().ok())
+                    {
+                        it.size_hint = Some(len);
+                    }
+                    Some(it)
+                }
+                // 网络错误/服务器不支持 HEAD：保留（不误杀）。
+                Err(_) => Some(it),
+            }
+        }
+    });
+    let mut out = passthrough;
+    for r in join_all(futs).await {
+        if let Some(it) = r {
+            out.push(it);
+        }
+    }
+    out
 }

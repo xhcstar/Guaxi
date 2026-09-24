@@ -14,7 +14,7 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, TryLockError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{command, AppHandle, Emitter};
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -118,6 +118,8 @@ const PYTHON_RUNTIME_RECOMMENDED_PACKAGES: &[&str] = &[
     "pyarrow",
     "duckdb",
     "polars",
+    // worker 与前端的 JSON 协议序列化加速:装了走 orjson,没装 worker 自动回退标准库 json(行为不变)。
+    "orjson",
     // Flipboard 正文抽取金标准引擎：默认安装，让"收集完整图文"开箱即用；
     // 未装时 flipboard_extract 也会后台自动 pip 安装并临时降级到 Rust scraper。
     "trafilatura",
@@ -1280,6 +1282,8 @@ fn run_managed_package_op(
     action: &str,
     packages: &[String],
 ) -> Result<(bool, String, String), String> {
+    // 装/卸/升级包会改变运行时状态,使"就绪缓存"失效,下次 spawn 重新探测并刷新。
+    invalidate_runtime_ready_cache();
     let command = match existing_uv_binary(&spec.runtime_dir) {
         Some(uv_path) => {
             let mut command = uv_command(&uv_path, &spec.runtime_dir);
@@ -2658,6 +2662,82 @@ fn managed_python_launch_spec(runtime_dir: &Path, source: String) -> Result<Pyth
     ))
 }
 
+// 会话内托管运行时"就绪"缓存。
+// 原因:每次 worker spawn 都会跑 3 个 health 探针子进程 + pip list,Windows 上合计 2–5s。
+// 只要 .venv 指纹(python 可执行文件 / pyvenv.cfg / runtime marker 的 mtime+size)未变且 TTL 未过期,
+// 就复用上次已确认健康的 spec,跳过这些探测。装/卸包(run_managed_package_op)与重建会失效或刷新缓存。
+struct RuntimeReadyCacheEntry {
+    runtime_dir: PathBuf,
+    fingerprint: u64,
+    spec: PythonLaunchSpec,
+    verified_at: Instant,
+}
+
+static RUNTIME_READY_CACHE: OnceLock<Mutex<Option<RuntimeReadyCacheEntry>>> = OnceLock::new();
+const RUNTIME_READY_CACHE_TTL: Duration = Duration::from_secs(60);
+
+fn runtime_ready_cache_cell() -> &'static Mutex<Option<RuntimeReadyCacheEntry>> {
+    RUNTIME_READY_CACHE.get_or_init(|| Mutex::new(None))
+}
+
+fn runtime_ready_fingerprint(spec: &PythonLaunchSpec, runtime_dir: &Path) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    spec.program.hash(&mut hasher);
+    let probe_paths = [
+        PathBuf::from(&spec.program),
+        managed_venv_dir(runtime_dir).join("pyvenv.cfg"),
+        runtime_marker_path(runtime_dir),
+    ];
+    for path in probe_paths {
+        match fs::metadata(&path) {
+            Ok(meta) => {
+                meta.len().hash(&mut hasher);
+                if let Ok(modified) = meta.modified() {
+                    if let Ok(dur) = modified.duration_since(std::time::UNIX_EPOCH) {
+                        dur.as_nanos().hash(&mut hasher);
+                    }
+                }
+            }
+            Err(_) => 0u8.hash(&mut hasher),
+        }
+    }
+    hasher.finish()
+}
+
+fn runtime_ready_cache_lookup(spec: &PythonLaunchSpec, runtime_dir: &Path) -> Option<PythonLaunchSpec> {
+    let fingerprint = runtime_ready_fingerprint(spec, runtime_dir);
+    let guard = runtime_ready_cache_cell().lock().ok()?;
+    let entry = guard.as_ref()?;
+    if entry.runtime_dir == runtime_dir
+        && entry.fingerprint == fingerprint
+        && entry.verified_at.elapsed() < RUNTIME_READY_CACHE_TTL
+    {
+        Some(entry.spec.clone())
+    } else {
+        None
+    }
+}
+
+fn runtime_ready_cache_store(spec: &PythonLaunchSpec, runtime_dir: &Path) {
+    let fingerprint = runtime_ready_fingerprint(spec, runtime_dir);
+    if let Ok(mut guard) = runtime_ready_cache_cell().lock() {
+        *guard = Some(RuntimeReadyCacheEntry {
+            runtime_dir: runtime_dir.to_path_buf(),
+            fingerprint,
+            spec: spec.clone(),
+            verified_at: Instant::now(),
+        });
+    }
+}
+
+fn invalidate_runtime_ready_cache() {
+    if let Some(cell) = RUNTIME_READY_CACHE.get() {
+        if let Ok(mut guard) = cell.lock() {
+            *guard = None;
+        }
+    }
+}
+
 fn ensure_managed_python_launch_spec() -> Result<PythonLaunchSpec, String> {
     ensure_managed_python_launch_spec_with_download_version(None)
 }
@@ -2669,6 +2749,21 @@ fn ensure_managed_python_launch_spec_with_download_version(
     let venv_dir = managed_venv_dir(&runtime_dir);
     let managed_spec = managed_python_launch_spec(&runtime_dir, "managed-runtime".to_string()).ok();
     let has_managed_python = managed_spec.is_some();
+
+    // 会话内快速路径:未显式切换 Python 版本、且托管运行时指纹与上次确认一致时,直接复用,
+    // 跳过下面的 health 探针与 pip list。首次调用(缓存空)仍走完整探测,行为不变。
+    let version_override_requested = download_version
+        .map(str::trim)
+        .map(|value| !value.is_empty())
+        .unwrap_or(false);
+    if !version_override_requested {
+        if let Some(spec) = managed_spec.as_ref() {
+            if let Some(cached) = runtime_ready_cache_lookup(spec, &runtime_dir) {
+                return Ok(cached);
+            }
+        }
+    }
+
     let mut managed_package_snapshot = managed_spec
         .as_ref()
         .map(snapshot_managed_runtime_packages)
@@ -2732,6 +2827,7 @@ fn ensure_managed_python_launch_spec_with_download_version(
                     "managed-runtime-reuse-ensure",
                 )?;
             }
+            runtime_ready_cache_store(spec, &runtime_dir);
             return Ok(spec.clone());
         }
     }
@@ -2807,6 +2903,7 @@ fn ensure_managed_python_launch_spec_with_download_version(
         did_use_download_bootstrap(&runtime_dir, &base_source),
     )?;
     cleanup_bootstrap_runtime_artifacts(&runtime_dir, "managed-runtime-ready");
+    runtime_ready_cache_store(&marker_spec, &runtime_dir);
     Ok(marker_spec)
 }
 
@@ -3679,6 +3776,23 @@ pub async fn python_reset_repl() -> Result<(), String> {
     })
     .await
     .map_err(|e| format!("python_reset_repl join failed: {e}"))?
+}
+
+#[command]
+pub async fn python_runtime_prewarm_session(session_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let worker_key = python_worker_key_for_session(&session_id);
+        // 只确保 worker 进程就绪(spawn),不执行任何用户代码,语义无副作用;
+        // 把会话冷启动成本移到"打开笔记本"时的后台,首条 cell 就能直接命中已就绪的 worker。
+        ensure_python_worker_for_key(&worker_key)?;
+        info!(
+            worker_key = worker_key.as_str(),
+            "[PythonRuntime] prewarmed session worker on open"
+        );
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("python_runtime_prewarm_session join failed: {e}"))?
 }
 
 #[command]

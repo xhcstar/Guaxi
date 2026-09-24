@@ -8,6 +8,8 @@
 
 pub mod local;
 pub mod netease;
+pub mod qq;
+pub mod kugou;
 pub mod resolve;
 pub mod stream;
 

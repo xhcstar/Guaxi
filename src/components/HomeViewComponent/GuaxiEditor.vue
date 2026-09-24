@@ -1207,6 +1207,10 @@
           :x="editorContextMenuPosition.x" :y="editorContextMenuPosition.y" @select="handleEditorContextMenuSelect"
           @clickoutside="handleEditorContextMenuClickoutside" />
 
+        <n-dropdown trigger="manual" :show="pluginMenuVisible" placement="bottom-start"
+          :options="pluginMenuOptions" :x="pluginMenuPosition.x" :y="pluginMenuPosition.y"
+          @select="handleEditorPluginMenuSelect" @clickoutside="pluginMenuVisible = false" />
+
         </template>
 
         <div v-if="vimMode" class="vim-status-bar" ref="vimStatusBar"></div>
@@ -2411,6 +2415,11 @@ watch([selectionTranslateFrom, selectionTranslateTo], ([from, to], [prevFrom, pr
 const editorContextMenuVisible = ref(false);
 const editorContextMenuPosition = ref({ x: 0, y: 0 });
 const editorContextMenuOptions = ref([]);
+// 用户可编写的编辑器插件(transform)运行菜单。
+const pluginMenuVisible = ref(false);
+const pluginMenuOptions = ref([]);
+const pluginMenuPosition = ref({ x: 0, y: 0 });
+let editorTransformPluginsCache = [];
 const EDITOR_CONTEXT_MENU_FONT_FAMILY = "var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New')";
 
 const handleEditorContextMenuClickoutside = () => {
@@ -2600,6 +2609,9 @@ const buildEditorContextMenuOptions = () => {
     { label: '插入Markdown模板', key: 'insert.md.template' },
     { type: 'divider' },
 
+    { label: '运行插件…', key: 'guaxi.plugin.run' },
+    { type: 'divider' },
+
     { label: '命令面板', key: 'editor.action.quickCommand' }
   ];
 };
@@ -2624,6 +2636,14 @@ const handleEditorContextMenuSelect = async (key) => {
 
   if (key === 'guaxi.edit.navigateForward') {
     await navigateToNextEditLocation();
+    return;
+  }
+
+  if (key === 'guaxi.plugin.run') {
+    await openEditorPluginMenu({
+      x: editorContextMenuPosition.value.x,
+      y: editorContextMenuPosition.value.y,
+    });
     return;
   }
 
@@ -11538,6 +11558,12 @@ const initEditor = () => {
     });
 
     editor.addAction({
+      id: 'guaxi.plugin.runTransform',
+      label: '运行插件…（对选中文本）',
+      run: () => openEditorPluginMenu(null)
+    });
+
+    editor.addAction({
       id: 'guaxi.edit.navigateBack',
       label: '跳转到上次编辑位置',
       keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.LeftArrow],
@@ -13041,6 +13067,110 @@ const formatMarkdownSelection = async () => {
   } catch (e) {
     logger.error('Markdown 格式化失败:', e);
     message.error(e instanceof Error ? e.message : 'Markdown 格式化失败');
+  } finally {
+    suppressEditLocationRecording = false;
+  }
+};
+
+const openEditorPluginMenu = async (position) => {
+  try {
+    const plugins = await invoke('list_editor_plugins');
+    const transforms = (Array.isArray(plugins) ? plugins : []).filter(
+      (p) => Array.isArray(p?.capabilities) && p.capabilities.includes('transform')
+    );
+    if (!transforms.length) {
+      const dir = await invoke('get_editor_plugins_dir').catch(() => '');
+      message.info(dir ? `没有可用的编辑器插件。把插件放到:${dir}` : '没有可用的编辑器插件');
+      return;
+    }
+    editorTransformPluginsCache = transforms;
+    if (transforms.length === 1) {
+      await runEditorTransformPlugin(transforms[0]);
+      return;
+    }
+    pluginMenuOptions.value = transforms.map((p) => ({ label: p.name, key: p.id }));
+    pluginMenuPosition.value = resolvePluginMenuPosition(position);
+    pluginMenuVisible.value = true;
+  } catch (e) {
+    message.error('读取插件失败:' + String(e?.message || e));
+  }
+};
+
+const resolvePluginMenuPosition = (position) => {
+  if (position && Number.isFinite(position.x) && Number.isFinite(position.y)) {
+    return { x: position.x, y: position.y };
+  }
+  // 命令面板触发时没有鼠标位置:退到活动编辑器光标的屏幕坐标,拿不到则给安全默认。
+  try {
+    const targetEditor = getActiveEditor();
+    const dom = targetEditor?.getDomNode?.();
+    const pos = targetEditor?.getScrolledVisiblePosition?.(targetEditor.getPosition());
+    if (dom && pos) {
+      const rect = dom.getBoundingClientRect();
+      return { x: rect.left + pos.left, y: rect.top + pos.top + 20 };
+    }
+  } catch (e) { /* ignore */ }
+  return { x: 240, y: 240 };
+};
+
+const handleEditorPluginMenuSelect = (id) => {
+  pluginMenuVisible.value = false;
+  const plugin = (editorTransformPluginsCache || []).find((p) => p.id === id);
+  if (plugin) runEditorTransformPlugin(plugin);
+};
+
+// PLACEHOLDER_RUN_TRANSFORM_PLUGIN
+
+const runEditorTransformPlugin = async (plugin) => {
+  const targetEditor = getActiveEditor();
+  const model = targetEditor?.getModel?.();
+  const selection = targetEditor?.getSelection?.();
+  if (!model || !selection || selection.isEmpty()) {
+    message.info('请先选中要处理的文本');
+    return;
+  }
+  const selectedText = model.getValueInRange(selection);
+  const documentText = model.getValue();
+  // 脚手架:加载用户插件入口模块并调用 run(ctx),结果放进 _result → result_json 回传。
+  const scaffold = [
+    'import importlib.util as _ilu',
+    '_spec = _ilu.spec_from_file_location("guaxi_user_plugin", _plugin_entry_path)',
+    '_mod = _ilu.module_from_spec(_spec)',
+    '_spec.loader.exec_module(_mod)',
+    '_result = _mod.run({"selection": selection_text, "document": document_text, "args": {}})',
+  ].join('\n');
+  try {
+    suppressEditLocationRecording = true;
+    const res = await invoke('python_exec', {
+      request: {
+        code: scaffold,
+        persist: false,
+        expect_json: true,
+        include_session_vars: false,
+        vars: {
+          _plugin_entry_path: String(plugin?.entry_path || ''),
+          selection_text: selectedText,
+          document_text: documentText,
+        },
+      },
+    });
+    if (!res?.ok) {
+      message.error('插件运行失败:' + String(res?.stderr || '未知错误').slice(0, 400));
+      return;
+    }
+    const rj = res?.result_json || {};
+    const newText = typeof rj.text === 'string' ? rj.text : null;
+    if (newText === null) {
+      message.error('插件需返回 {"text": "..."} 才能写回,请检查 run() 的返回值');
+      return;
+    }
+    targetEditor.executeEdits('guaxi-plugin-transform', [
+      { range: selection, text: newText, forceMoveMarkers: true },
+    ]);
+    targetEditor.focus();
+    message.success(`已应用插件:${plugin?.name || ''}`);
+  } catch (e) {
+    message.error('插件运行失败:' + String(e?.message || e));
   } finally {
     suppressEditLocationRecording = false;
   }

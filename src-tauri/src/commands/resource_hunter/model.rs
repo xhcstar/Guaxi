@@ -10,6 +10,7 @@ pub enum ResourceKind {
     Video,
     Audio,
     Image,
+    Code,
     Other,
 }
 
@@ -73,6 +74,9 @@ pub struct SearchQuery {
     /// 单类型最多返回条数，控制扇出规模。
     #[serde(default = "default_limit")]
     pub limit: usize,
+    /// 是否启用 LLM 查询扩展（同义词/中英/相关术语），提升召回与精度。
+    #[serde(default)]
+    pub use_llm: bool,
 }
 
 fn default_true() -> bool {

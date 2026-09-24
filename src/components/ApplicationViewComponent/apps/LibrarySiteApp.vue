@@ -86,7 +86,7 @@
 <!-- PLACEHOLDER_SCRIPT -->
 
 <script setup>
-import { ref, onMounted } from "vue";
+import { ref, onMounted, onBeforeUnmount } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 
 const frame = ref(null);
@@ -97,13 +97,38 @@ const qrSvg = ref("");
 const busy = ref(false);
 const fedEnabled = ref(true);
 const fedBusy = ref(false);
+let themeObserver = null;
+
+// 读取 Guaxi 当前主题(与全局 CSS 同一个数据源:documentElement 的 data-guaxi-theme),
+// 保证内嵌库网站与 Guaxi 界面永远同亮同暗,不会半亮半暗。
+function guaxiTheme() {
+  return document.documentElement.dataset.guaxiTheme === "dark" ? "dark" : "light";
+}
+
+function pushThemeToFrame() {
+  const win = frame.value && frame.value.contentWindow;
+  if (win) win.postMessage({ type: "guaxi-theme", theme: guaxiTheme() }, "*");
+}
 
 onMounted(async () => {
+  let base = "http://127.0.0.1:8888/lib/";
   try {
-    localUrl.value = await invoke("library_site_local_url");
+    base = await invoke("library_site_local_url");
   } catch (e) {
     // 命令未就绪时保留默认地址
   }
+  // 初始就带上主题,iframe 首帧即与宿主一致。
+  const u = new URL(base);
+  u.searchParams.set("theme", guaxiTheme());
+  localUrl.value = u.toString();
+
+  // Guaxi 切换主题时,实时通知 iframe 跟随。
+  themeObserver = new MutationObserver(() => pushThemeToFrame());
+  themeObserver.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["data-guaxi-theme"],
+  });
+
   try {
     status.value = await invoke("library_site_share_status");
     if (status.value.enabled && status.value.url) await refreshQr();
@@ -111,6 +136,10 @@ onMounted(async () => {
   try {
     fedEnabled.value = await invoke("p2p_federation_status");
   } catch (e) {}
+});
+
+onBeforeUnmount(() => {
+  if (themeObserver) themeObserver.disconnect();
 });
 
 async function toggleFederation() {
@@ -206,7 +235,7 @@ async function copyLink() {
 .switch.on .knob { transform: translateX(20px); }
 
 .share-card { margin-top: 18px; }
-.qr-wrap { display: grid; place-items: center; padding: 16px; border: 1px solid var(--guaxi-border); border-radius: 12px; background: var(--guaxi-app-bg); }
+.qr-wrap { display: grid; place-items: center; padding: 16px; border: 1px solid var(--guaxi-border); border-radius: 12px; background: #ffffff; }
 .qr-wrap :deep(svg) { width: 200px; height: 200px; }
 .link-row { display: flex; gap: 8px; margin-top: 12px; }
 .link-input { flex: 1; min-width: 0; font-family: 'Maple Mono NF CN', Consolas, monospace; font-size: 12px; padding: 7px 10px; border: 1px solid var(--guaxi-border); border-radius: 7px; background: var(--guaxi-app-bg); color: var(--guaxi-text-primary); }

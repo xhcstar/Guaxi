@@ -1,9 +1,16 @@
 <template>
   <div class="ssh-root">
-    <div class="ssh-side" :style="{ width: sideWidth + 'px' }">
+    <div class="ssh-collapsed-rail" v-if="sideCollapsed" @click="sideCollapsed = false" title="展开连接面板">
+      <Icon :icon="chevronRightIcon" width="16" height="16" />
+      <span class="ssh-rail-text">连接面板</span>
+    </div>
+    <div class="ssh-side" v-show="!sideCollapsed" :style="{ width: sideWidth + 'px' }">
       <div class="ssh-side-head">
         <span>连接档案</span>
-        <n-button size="tiny" @click="newProfile">新建</n-button>
+        <span class="ssh-head-actions">
+          <n-button size="tiny" @click="newProfile">新建</n-button>
+          <n-button size="tiny" quaternary @click="sideCollapsed = true" title="折叠面板"><Icon :icon="chevronLeftIcon" width="15" height="15" /></n-button>
+        </span>
       </div>
       <div class="ssh-profiles">
         <div
@@ -36,7 +43,7 @@
         <n-input v-if="editing.auth === 'key'" v-model:value="editing.key_path" size="small" placeholder="私钥路径，如 ~/.ssh/id_ed25519" />
         <template v-if="editing.auth === 'password'">
           <n-input v-model:value="password" type="password" size="small" placeholder="密码（存入系统 keychain）" show-password-on="click" />
-          <div class="ssh-hint">密码存入系统 keychain。交互连接时 ssh 会在终端提示输入；自动注入将在后续补充。</div>
+          <div class="ssh-hint">密码存入系统 keychain，连接时自动用于认证，不会明文落盘。</div>
         </template>
         <div class="ssh-form-actions">
           <n-button size="small" type="primary" @click="saveProfile"><template #icon><Icon :icon="saveIcon" width="14" height="14" /></template>保存</n-button>
@@ -78,7 +85,7 @@
       </div>
     </div>
 
-    <div class="ssh-resize" @mousedown="onSideResizeDown"></div>
+    <div class="ssh-resize" v-show="!sideCollapsed" @mousedown="onSideResizeDown"></div>
 
     <div class="ssh-main">
       <div class="ssh-tabbar">
@@ -133,6 +140,8 @@ import minusIcon from '@iconify-icons/lucide/minus'
 import plugIcon from '@iconify-icons/lucide/plug'
 import trashIcon from '@iconify-icons/lucide/trash-2'
 import saveIcon from '@iconify-icons/lucide/save'
+import chevronLeftIcon from '@iconify-icons/lucide/chevron-left'
+import chevronRightIcon from '@iconify-icons/lucide/chevron-right'
 
 const emit = defineEmits(['open-in-analysis'])
 const logger = createLogger('RemoteSshTerminal')
@@ -152,6 +161,7 @@ const error = ref('')
 const sessions = ref([]) // { session_id, host, kind }
 const termFontSize = ref(14)
 const sideWidth = ref(340)
+const sideCollapsed = ref(false)
 function setTermFontSize(v) {
   termFontSize.value = Math.min(28, Math.max(9, v))
   for (const [sid, rec] of termMap) {
@@ -394,4 +404,11 @@ onBeforeUnmount(() => {
 .ssh-term-hosts { flex: 1 1 auto; min-height: 0; position: relative; background: #1e1e1e; }
 .ssh-term-host { position: absolute; inset: 0; padding: 4px; }
 .ssh-term-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #9ca3af; font-size: 13px; }
+
+/* 折叠 + 亮色适配 */
+.ssh-term-hosts { background: var(--tw-code-bg); }
+.ssh-head-actions { display: inline-flex; gap: 6px; align-items: center; }
+.ssh-collapsed-rail { flex: 0 0 auto; width: 26px; display: flex; flex-direction: column; align-items: center; gap: 8px; padding-top: 12px; border-right: 1px solid var(--guaxi-border); background: color-mix(in srgb, var(--guaxi-panel-bg) 55%, transparent); cursor: pointer; color: var(--guaxi-text-secondary); }
+.ssh-collapsed-rail:hover { color: var(--tw-accent); background: var(--tw-accent-soft); }
+.ssh-rail-text { writing-mode: vertical-rl; font-size: 12px; letter-spacing: 2px; }
 </style>

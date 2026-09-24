@@ -23,6 +23,38 @@ fn load_proxy() -> ProxyConfig {
         .unwrap_or_default()
 }
 
+/// 全局限速(B/s)，0 表示不限。
+fn speed_limit_bps() -> u64 {
+    store::get_setting("speed_limit_kbps")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(|k| k.saturating_mul(1024))
+        .unwrap_or(0)
+}
+
+/// 按聚合速率节流：让 downloaded/limit 的应有耗时不小于实际耗时。
+async fn throttle(control: &Arc<Control>, limit_bps: u64) {
+    if limit_bps == 0 {
+        return;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let start = control.started_ms.load(Ordering::Relaxed);
+    if start == 0 {
+        control.started_ms.store(now, Ordering::Relaxed);
+        return;
+    }
+    let total = control.downloaded.load(Ordering::Relaxed);
+    let expected = total.saturating_mul(1000) / limit_bps.max(1);
+    let elapsed = now.saturating_sub(start);
+    if elapsed < expected {
+        tokio::time::sleep(Duration::from_millis(expected - elapsed)).await;
+    }
+}
+
 async fn probe(client: &reqwest::Client, url: &str) -> (Option<u64>, bool) {
     if let Ok(resp) = client.head(url).send().await {
         let len = resp
@@ -66,11 +98,12 @@ pub async fn download(
     }
     let part = format!("{}.part", task.dest);
     let reporter = spawn_reporter(app.clone(), task.id.clone(), control.clone());
+    let limit = speed_limit_bps();
 
     let result = if ranges && total >= MIN_SPLIT {
-        multi(&client, &url, &part, total, task, control).await
+        multi(&client, &url, &part, total, task, control, limit).await
     } else {
-        single(&client, &url, &part, ranges, task, control).await
+        single(&client, &url, &part, ranges, task, control, limit).await
     };
     reporter.abort();
     result?;
@@ -119,6 +152,7 @@ async fn multi(
     total: u64,
     task: &DownloadTask,
     control: &Arc<Control>,
+    limit_bps: u64,
 ) -> Result<(), String> {
     {
         let f = tokio::fs::OpenOptions::new()
@@ -162,7 +196,7 @@ async fn multi(
         let part = part.to_string();
         let control = control.clone();
         handles.push(tokio::spawn(async move {
-            download_chunk(&client, &url, &part, i, c, &control).await
+            download_chunk(&client, &url, &part, i, c, &control, limit_bps).await
         }));
     }
     let mut err = None;
@@ -202,6 +236,7 @@ async fn download_chunk(
     idx: usize,
     chunk: ChunkState,
     control: &Arc<Control>,
+    limit_bps: u64,
 ) -> Result<(), String> {
     let offset = chunk.start + chunk.downloaded;
     if offset > chunk.end {
@@ -236,6 +271,7 @@ async fn download_chunk(
             a.fetch_add(len, Ordering::Relaxed);
         }
         control.downloaded.fetch_add(len, Ordering::Relaxed);
+        throttle(control, limit_bps).await;
     }
     Ok(())
 }
@@ -248,6 +284,7 @@ async fn single(
     ranges: bool,
     task: &DownloadTask,
     control: &Arc<Control>,
+    limit_bps: u64,
 ) -> Result<(), String> {
     let existing = tokio::fs::metadata(part).await.map(|m| m.len()).unwrap_or(0);
     let want_resume = ranges && existing > 0;
@@ -286,6 +323,7 @@ async fn single(
         control
             .downloaded
             .fetch_add(bytes.len() as u64, Ordering::Relaxed);
+        throttle(control, limit_bps).await;
     }
     Ok(())
 }

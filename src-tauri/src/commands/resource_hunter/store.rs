@@ -8,7 +8,21 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 
 static DB_PATH: OnceCell<PathBuf> = OnceCell::new();
-static DL_DIR: OnceCell<PathBuf> = OnceCell::new();
+static TOOLS: OnceCell<PathBuf> = OnceCell::new();
+static LIB_VERSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// 资源库版本号：任何写操作后自增，供全文索引判断是否需要重建。
+pub fn library_version() -> u64 {
+    LIB_VERSION.load(std::sync::atomic::Ordering::Relaxed)
+}
+fn bump_library() {
+    LIB_VERSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 缓存的工具目录（供搜索层在无 AppHandle 时探测 yt-dlp 是否已就位）。
+pub fn tools_dir_cached() -> Option<PathBuf> {
+    TOOLS.get().cloned()
+}
 
 /// 模块数据根目录：<app_data>/resource_hunter。
 fn data_root(app: &AppHandle) -> Result<PathBuf, String> {
@@ -21,14 +35,18 @@ fn data_root(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-/// 默认下载落地目录：<app_data>/resource_hunter/downloads。
+/// 默认下载落地目录：优先用户设置的 download_dir，否则 <app_data>/resource_hunter/downloads。
 pub fn downloads_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    if let Some(d) = DL_DIR.get() {
-        return Ok(d.clone());
+    if let Ok(Some(custom)) = get_setting("download_dir") {
+        let custom = custom.trim().to_string();
+        if !custom.is_empty() {
+            let p = PathBuf::from(&custom);
+            std::fs::create_dir_all(&p).map_err(|e| format!("创建下载目录失败: {e}"))?;
+            return Ok(p);
+        }
     }
     let dir = data_root(app)?.join("downloads");
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建下载目录失败: {e}"))?;
-    let _ = DL_DIR.set(dir.clone());
     Ok(dir)
 }
 
@@ -36,6 +54,7 @@ pub fn downloads_dir(app: &AppHandle) -> Result<PathBuf, String> {
 pub fn tools_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = data_root(app)?.join("tools");
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建工具目录失败: {e}"))?;
+    let _ = TOOLS.set(dir.clone());
     Ok(dir)
 }
 
@@ -97,6 +116,7 @@ fn kind_str(k: ResourceKind) -> &'static str {
         ResourceKind::Video => "video",
         ResourceKind::Audio => "audio",
         ResourceKind::Image => "image",
+        ResourceKind::Code => "code",
         ResourceKind::Other => "other",
     }
 }
@@ -127,6 +147,7 @@ pub fn upsert_resource(item: &ResourceItem, local_path: Option<&str>) -> Result<
         ],
     )
     .map_err(|e| format!("写入资源失败: {e}"))?;
+    bump_library();
     Ok(())
 }
 
@@ -238,6 +259,123 @@ pub fn set_setting(key: &str, value: &str) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// 删除一条资源库记录（可选连带删除本地文件）。
+pub fn delete_resource(id: &str, remove_file: bool) -> Result<(), String> {
+    let conn = open()?;
+    if remove_file {
+        if let Ok(Some(path)) = conn
+            .query_row("SELECT local_path FROM resources WHERE id=?1", [id], |r| {
+                r.get::<_, Option<String>>(0)
+            })
+            .map_err(|e| e.to_string())
+        {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+    conn.execute("DELETE FROM resources WHERE id=?1", [id])
+        .map_err(|e| e.to_string())?;
+    bump_library();
+    Ok(())
+}
+
+/// 更新一条资源的标签（逗号分隔存储）。
+pub fn update_resource_tags(id: &str, tags: &[String]) -> Result<(), String> {
+    let conn = open()?;
+    conn.execute(
+        "UPDATE resources SET tags=?1 WHERE id=?2",
+        rusqlite::params![tags.join(","), id],
+    )
+    .map_err(|e| e.to_string())?;
+    bump_library();
+    Ok(())
+}
+
+/// 资源库里出现过的所有标签（去重）。
+pub fn all_tags() -> Result<Vec<String>, String> {
+    let conn = open()?;
+    let mut stmt = conn
+        .prepare("SELECT tags FROM resources WHERE tags IS NOT NULL AND tags<>''")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?;
+    let mut set = std::collections::BTreeSet::new();
+    for row in rows.flatten() {
+        for t in row.split(',') {
+            let t = t.trim();
+            if !t.is_empty() {
+                set.insert(t.to_string());
+            }
+        }
+    }
+    Ok(set.into_iter().collect())
+}
+
+/// 导出全部资源（不限条数），供备份/同步。
+pub fn export_all() -> Result<Vec<serde_json::Value>, String> {
+    let conn = open()?;
+    let mut stmt = conn
+        .prepare("SELECT id,title,kind,source,source_url,download_url,format,local_path,size_hint,tags,status,created_at FROM resources ORDER BY created_at DESC")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(serde_json::json!({
+                "id": r.get::<_, String>(0)?,
+                "title": r.get::<_, String>(1)?,
+                "kind": r.get::<_, String>(2)?,
+                "source": r.get::<_, Option<String>>(3)?,
+                "source_url": r.get::<_, Option<String>>(4)?,
+                "download_url": r.get::<_, Option<String>>(5)?,
+                "format": r.get::<_, Option<String>>(6)?,
+                "local_path": r.get::<_, Option<String>>(7)?,
+                "size_hint": r.get::<_, Option<i64>>(8)?,
+                "tags": r.get::<_, Option<String>>(9)?,
+                "status": r.get::<_, String>(10)?,
+                "created_at": r.get::<_, i64>(11)?,
+            }))
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(rows.filter_map(|x| x.ok()).collect())
+}
+
+/// 导入资源清单（按 id upsert），返回导入条数。
+pub fn import_rows(rows: &[serde_json::Value]) -> Result<usize, String> {
+    let conn = open()?;
+    let mut n = 0usize;
+    let s = |v: &serde_json::Value, k: &str| v.get(k).and_then(|x| x.as_str()).map(|s| s.to_string());
+    for row in rows {
+        let id = match s(row, "id") {
+            Some(x) if !x.is_empty() => x,
+            _ => continue,
+        };
+        conn.execute(
+            r#"INSERT INTO resources
+               (id,title,kind,source,source_url,download_url,format,local_path,size_hint,tags,status,created_at)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
+               ON CONFLICT(id) DO UPDATE SET
+                 title=excluded.title, tags=excluded.tags, local_path=excluded.local_path, status=excluded.status"#,
+            rusqlite::params![
+                id,
+                s(row, "title").unwrap_or_default(),
+                s(row, "kind").unwrap_or_else(|| "other".into()),
+                s(row, "source"),
+                s(row, "source_url"),
+                s(row, "download_url"),
+                s(row, "format"),
+                s(row, "local_path"),
+                row.get("size_hint").and_then(|v| v.as_i64()),
+                s(row, "tags"),
+                s(row, "status").unwrap_or_else(|| "downloaded".into()),
+                row.get("created_at").and_then(|v| v.as_i64()).unwrap_or_else(|| chrono::Utc::now().timestamp()),
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        n += 1;
+    }
+    bump_library();
+    Ok(n)
 }
 
 #[allow(dead_code)]

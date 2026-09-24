@@ -5,15 +5,16 @@ use super::super::proxy;
 use super::make_id;
 use regex::Regex;
 
-fn client_for(url: &str) -> Option<reqwest::Client> {
+fn client_for(_url: &str) -> Option<reqwest::Client> {
+    // arXiv / OpenAlex 属境外源，走代理(系统或自定义)，无代理则退直连。
     let cfg = super::load_proxy();
-    proxy::build_client_for(&cfg, url).ok()
+    proxy::client_for_source(&cfg, true).ok()
 }
 
 /// arXiv：Atom XML，正则抽 entry 的标题/摘要/pdf 链接。
 pub async fn arxiv(keyword: &str, limit: usize) -> Vec<ResourceItem> {
     let url = format!(
-        "http://export.arxiv.org/api/query?search_query=all:{}&max_results={}",
+        "https://export.arxiv.org/api/query?search_query=all:{}&max_results={}",
         urlencoding::encode(keyword),
         limit.min(50)
     );

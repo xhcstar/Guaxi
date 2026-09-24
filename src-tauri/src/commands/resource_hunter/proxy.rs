@@ -98,3 +98,15 @@ pub fn build_client_raw(proxy_url: Option<&str>) -> Result<Client, String> {
 pub fn proxy_arg(cfg: &ProxyConfig) -> Option<String> {
     effective_proxy_url(cfg)
 }
+
+/// 为搜索引擎/富集站构造客户端：境外源优先走代理（系统或自定义），
+/// 没有可用代理时退回直连（best-effort，部分学术站在境内仍可直达）；
+/// 境内源始终直连。这样大陆环境下境外引擎默认吃代理，符合用户预期。
+pub fn client_for_source(cfg: &ProxyConfig, is_foreign: bool) -> Result<reqwest::Client, String> {
+    let proxy = if is_foreign {
+        effective_proxy_url(cfg)
+    } else {
+        None
+    };
+    build_client_raw(proxy.as_deref())
+}

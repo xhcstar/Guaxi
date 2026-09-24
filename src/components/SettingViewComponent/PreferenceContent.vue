@@ -200,6 +200,21 @@
           </n-form-item>
         </n-form>
         <LspExtensionPanel />
+
+        <h3>AI 代码辅助</h3>
+        <p class="description">
+          在探索者笔记本的 Python cell 里，用自然语言/注释一键生成代码（复用你已配置的大模型）。
+          未配置云端模型时会回退到本地大模型，低配机器上生成较慢，故默认关闭，按需开启。
+        </p>
+        <n-form label-placement="left" label-width="auto" :show-require-mark="false">
+          <n-form-item label="启用 Python 代码生成助手">
+            <n-switch
+              v-model:value="pythonCodegenAssistEnabled"
+              :disabled="loading"
+              @update:value="handlePythonCodegenAssistChange"
+            />
+          </n-form-item>
+        </n-form>
       </n-card>
 
       <!-- 终端 -->
@@ -329,6 +344,7 @@ const themeOptions = [
 const themeValue = ref('light')
 const gcCycleHours = ref(1)
 const lspHighlightEnabled = ref(false)
+const pythonCodegenAssistEnabled = ref(false)
 const webrtcSignalUrl = ref('')
 const terminalDefaultProfile = ref('powershell')
 const terminalGitBashPath = ref('')
@@ -387,13 +403,14 @@ onMounted(async () => {
     await Promise.all([
       settingsStore.loadAppearanceConfig(),
       (async () => {
-        const [seconds, enabled, signalUrl, ttsConfig, asrConfig, terminalConfig] = await Promise.all([
+        const [seconds, enabled, signalUrl, ttsConfig, asrConfig, terminalConfig, codegenAssist] = await Promise.all([
           invoke('get_gc_cycle_seconds'),
           invoke('get_lsp_syntax_highlight_enabled'),
           invoke('get_webrtc_signal_url'),
           invoke('get_tts_config'),
           invoke('get_asr_config'),
           invoke('get_terminal_config'),
+          invoke('get_python_codegen_assist_enabled'),
         ])
 
         if (typeof seconds === 'number' && seconds > 0) {
@@ -403,6 +420,7 @@ onMounted(async () => {
         }
 
         lspHighlightEnabled.value = !!enabled
+        pythonCodegenAssistEnabled.value = !!codegenAssist
         webrtcSignalUrl.value = typeof signalUrl === 'string' ? signalUrl : ''
         ttsProvider.value = String(ttsConfig?.provider || 'sherpa-onnx').trim() || 'sherpa-onnx'
         ttsModel.value = String(ttsConfig?.model || '').trim()
@@ -421,6 +439,7 @@ onMounted(async () => {
     logger.error('加载偏好设置失败:', error)
     gcCycleHours.value = 1
     lspHighlightEnabled.value = false
+    pythonCodegenAssistEnabled.value = false
     themeValue.value = 'light'
     ttsProvider.value = 'sherpa-onnx'
     ttsModel.value = 'utils/Models/tts/kokoro_multi_lang/model.onnx'
@@ -493,6 +512,22 @@ const handleLspHighlightChange = async (value) => {
     )
   } catch (error) {
     logger.error('更新 LSP 语法高亮配置失败:', error)
+  } finally {
+    loading.value = false
+  }
+}
+
+const handlePythonCodegenAssistChange = async (value) => {
+  try {
+    loading.value = true
+    await invoke('set_python_codegen_assist_enabled', { enabled: value })
+    window.dispatchEvent(
+      new CustomEvent('guaxi:python-codegen-setting-changed', {
+        detail: { enabled: !!value }
+      })
+    )
+  } catch (error) {
+    logger.error('更新 Python 代码生成助手配置失败:', error)
   } finally {
     loading.value = false
   }

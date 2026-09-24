@@ -85,6 +85,10 @@ pub struct AppConfig {
     pub gc_cycle_seconds: u64,
     #[serde(default)]
     lsp_syntax_highlight_enabled: bool,
+    // 探索者笔记本的「注释/自然语言→生成 Python 代码」AI 辅助开关。
+    // 默认关闭:未配置云端模型时会回退本地大模型,低配机器上提示很慢,由用户显式开启。
+    #[serde(default)]
+    python_codegen_assist_enabled: bool,
     #[serde(default)]
     lsp_github_token: String,
     #[serde(default)]
@@ -866,6 +870,7 @@ impl Default for AppConfig {
             device_id: Uuid::new_v4().to_string(),
             gc_cycle_seconds: default_gc_cycle_seconds(),
             lsp_syntax_highlight_enabled: false,
+            python_codegen_assist_enabled: false,
             lsp_github_token: "".to_string(),
             webrtc_signal_url: "".to_string(),
             llm_config: LlmConfig::default(),
@@ -1271,6 +1276,19 @@ pub fn get_lsp_syntax_highlight_enabled() -> bool {
 pub fn set_lsp_syntax_highlight_enabled(enabled: bool) {
     let mut config = load_config();
     config.lsp_syntax_highlight_enabled = enabled;
+    save_config(&config);
+}
+
+#[tauri::command]
+pub fn get_python_codegen_assist_enabled() -> bool {
+    let config = load_config();
+    config.python_codegen_assist_enabled
+}
+
+#[tauri::command]
+pub fn set_python_codegen_assist_enabled(enabled: bool) {
+    let mut config = load_config();
+    config.python_codegen_assist_enabled = enabled;
     save_config(&config);
 }
 
