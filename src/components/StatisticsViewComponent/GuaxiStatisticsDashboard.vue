@@ -262,6 +262,10 @@
               </n-card>
             </n-grid-item>
           </n-grid>
+
+          <div class="kbi-section">
+            <GuaxiKbInsightPanel />
+          </div>
         </div>
       </n-scrollbar>
     </div>
@@ -275,6 +279,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { createDiscreteApi } from "naive-ui";
 import GuaxiStatisticsHeatmap from "./GuaxiStatisticsHeatmap.vue";
+import GuaxiKbInsightPanel from "./GuaxiKbInsightPanel.vue";
 
 const logger = createLogger('GuaxiStatisticsDashboard')
 
