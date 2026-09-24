@@ -402,7 +402,30 @@ fn upsert_meta(conn: &Connection, path: &str, mtime: i64, m: &LifeAlbumPhotoMeta
 }
 
 #[tauri::command]
-pub fn life_album_scan_dir(
+pub async fn life_album_scan_dir(
+    app: tauri::AppHandle,
+    dir_path: String,
+    max_count: Option<u32>,
+) -> Result<Vec<LifeAlbumPhoto>, String> {
+    // 用户所选相册目录是运行时才知道的任意路径，静态 assetProtocol.scope 覆盖不到，
+    // 必须动态放行，否则 webview 里的 <img> 会被拦截 → 图片始终加载不出来。
+    // 同时放行缩略图缓存目录（扫描外部目录时缩略图存在这里）。
+    {
+        use tauri::Manager;
+        let scope = app.asset_protocol_scope();
+        let _ = scope.allow_directory(&normalize_path(&dir_path), true);
+        if let Ok(thumbs) = thumbs_dir() {
+            let _ = scope.allow_directory(&thumbs, true);
+        }
+    }
+    // 同步命令默认跑在主事件循环线程，大目录扫描（rayon 遍历 + 缓存读取）会卡住窗口 → "未响应"。
+    // 丢到阻塞线程池执行，主线程保持响应。
+    tauri::async_runtime::spawn_blocking(move || scan_dir_blocking(dir_path, max_count))
+        .await
+        .map_err(|e| format!("扫描任务失败: {}", e))?
+}
+
+fn scan_dir_blocking(
     dir_path: String,
     max_count: Option<u32>,
 ) -> Result<Vec<LifeAlbumPhoto>, String> {
@@ -467,7 +490,15 @@ pub fn life_album_scan_dir(
 }
 
 #[tauri::command]
-pub fn life_album_enrich_files(paths: Vec<String>) -> Result<Vec<LifeAlbumPhotoMeta>, String> {
+pub async fn life_album_enrich_files(paths: Vec<String>) -> Result<Vec<LifeAlbumPhotoMeta>, String> {
+    // 冷缓存时每批要对成百张原图解码/缩放/编码（compute_meta），是本次"卡死"的主因。
+    // 放到阻塞线程池，避免占用主线程事件循环。
+    tauri::async_runtime::spawn_blocking(move || enrich_files_blocking(paths))
+        .await
+        .map_err(|e| format!("增强任务失败: {}", e))?
+}
+
+fn enrich_files_blocking(paths: Vec<String>) -> Result<Vec<LifeAlbumPhotoMeta>, String> {
     let conn = open_cache_db()?;
     let cache = load_meta_map(&conn);
 
@@ -550,7 +581,14 @@ fn import_one_photo(src: &Path) -> Result<LifeAlbumPhoto, String> {
 }
 
 #[tauri::command]
-pub fn life_album_import_files(paths: Vec<String>) -> Result<Vec<LifeAlbumPhoto>, String> {
+pub async fn life_album_import_files(paths: Vec<String>) -> Result<Vec<LifeAlbumPhoto>, String> {
+    // 导入会复制文件 + 逐张生成缩略图（compute_meta），同步执行会卡主线程；放到阻塞线程池。
+    tauri::async_runtime::spawn_blocking(move || import_files_blocking(paths))
+        .await
+        .map_err(|e| format!("导入任务失败: {}", e))?
+}
+
+fn import_files_blocking(paths: Vec<String>) -> Result<Vec<LifeAlbumPhoto>, String> {
     let conn = open_cache_db().ok();
     let mut out: Vec<LifeAlbumPhoto> = Vec::new();
     for p in paths {
@@ -582,7 +620,14 @@ pub fn life_album_import_files(paths: Vec<String>) -> Result<Vec<LifeAlbumPhoto>
 }
 
 #[tauri::command]
-pub fn life_album_import_dir(dir_path: String) -> Result<Vec<LifeAlbumPhoto>, String> {
+pub async fn life_album_import_dir(dir_path: String) -> Result<Vec<LifeAlbumPhoto>, String> {
+    // 目录导入可能涉及大量文件解码/缩略图生成，放到阻塞线程池，避免卡主线程。
+    tauri::async_runtime::spawn_blocking(move || import_dir_blocking(dir_path))
+        .await
+        .map_err(|e| format!("导入任务失败: {}", e))?
+}
+
+fn import_dir_blocking(dir_path: String) -> Result<Vec<LifeAlbumPhoto>, String> {
     let dir_path = normalize_path(&dir_path);
     if !dir_path.is_dir() {
         return Err("路径不是目录".to_string());

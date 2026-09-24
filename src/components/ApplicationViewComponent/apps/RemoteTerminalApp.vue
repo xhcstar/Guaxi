@@ -939,6 +939,9 @@ onBeforeUnmount(() => {
 .rt-root { height: 100%; display: flex; flex-direction: column; background: var(--guaxi-content-bg); --tw-ui-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif; --tw-mono-font: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace); --tw-accent: #0ca6c0; --tw-accent-2: #1fbfd6; --tw-accent-soft: rgba(12,166,192,0.12); --tw-radius: 10px; --tw-radius-sm: 7px; --tw-code-bg: #0f1720; --tw-code-fg: #d6dee8; --tw-elev: 0 1px 2px rgba(2,12,20,0.12), 0 6px 20px rgba(2,12,20,0.10); font-family: var(--tw-ui-font); font-size: 13px; color: var(--guaxi-text-primary); }
 :root[data-guaxi-theme='dark'] .rt-root { --tw-accent: #3dd6e8; --tw-accent-2: #22b8cf; --tw-accent-soft: rgba(61,214,232,0.14); --tw-code-bg: #0b1118; --tw-code-fg: #d8e0eb; }
 .rt-tabs { height: 100%; display: flex; flex-direction: column; }
+.rt-tabs :deep(.n-tabs-nav) { flex: 0 0 auto; }
+/* 让 pane 包裹层填满剩余高度，否则 GDB 等 pane 会塌到内容高度、正文无法占满窗口 */
+.rt-tabs :deep(.n-tabs-pane-wrapper) { flex: 1 1 auto; min-height: 0; }
 .rt-tabs :deep(.rt-pane) { height: 100%; padding: 0; }
 .rt-log { height: 100%; display: flex; flex-direction: column; min-height: 0; }
 .rt-toolbar { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--guaxi-border); flex: 0 0 auto; }

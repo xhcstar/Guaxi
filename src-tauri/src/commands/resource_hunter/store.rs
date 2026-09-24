@@ -8,7 +8,6 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 
 static DB_PATH: OnceCell<PathBuf> = OnceCell::new();
-static TOOLS: OnceCell<PathBuf> = OnceCell::new();
 static LIB_VERSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// 资源库版本号：任何写操作后自增，供全文索引判断是否需要重建。
@@ -17,11 +16,6 @@ pub fn library_version() -> u64 {
 }
 fn bump_library() {
     LIB_VERSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-}
-
-/// 缓存的工具目录（供搜索层在无 AppHandle 时探测 yt-dlp 是否已就位）。
-pub fn tools_dir_cached() -> Option<PathBuf> {
-    TOOLS.get().cloned()
 }
 
 /// 模块数据根目录：<app_data>/resource_hunter。
@@ -54,7 +48,6 @@ pub fn downloads_dir(app: &AppHandle) -> Result<PathBuf, String> {
 pub fn tools_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = data_root(app)?.join("tools");
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建工具目录失败: {e}"))?;
-    let _ = TOOLS.set(dir.clone());
     Ok(dir)
 }
 

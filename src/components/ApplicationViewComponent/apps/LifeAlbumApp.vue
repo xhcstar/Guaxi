@@ -664,19 +664,19 @@ const enrichVisible = async () => {
 const mergeMetas = (metas) => {
   const map = new Map((Array.isArray(metas) ? metas : []).map((m) => [m.path, m]))
   if (!map.size) return
-  photos.value = photos.value.map((p) => {
+  // 原地 patch 命中的照片对象，而不是整数组重建。整数组重建会让 timelineGroups / geoPhotosAll
+  // 全量重算、并触发 watch(photos) → setupSpy 的渲染风暴（每批 enrich 都要重排 400 个瓦片）。
+  // Vue 的深响应会精确地只更新真正用到这些字段的绑定。
+  for (const p of photos.value) {
     const m = map.get(p.path)
-    if (!m) return p
-    return {
-      ...p,
-      taken_at: m.taken_at ?? p.taken_at,
-      latitude: m.latitude ?? p.latitude,
-      longitude: m.longitude ?? p.longitude,
-      thumb: m.thumb ?? p.thumb,
-      width: m.width ?? p.width,
-      height: m.height ?? p.height
-    }
-  })
+    if (!m) continue
+    if (m.taken_at != null) p.taken_at = m.taken_at
+    if (m.latitude != null) p.latitude = m.latitude
+    if (m.longitude != null) p.longitude = m.longitude
+    if (m.thumb != null) p.thumb = m.thumb
+    if (m.width != null) p.width = m.width
+    if (m.height != null) p.height = m.height
+  }
 }
 
 const enrichAll = async () => {
@@ -770,9 +770,14 @@ watch(viewMode, async (v) => {
     setupSpy()
   }
 })
-watch(photos, () => {
+// photos 现在按元素原地更新（见 mergeMetas），watch(photos) 不再随 enrich 逐批触发。
+// 改为监听派生结果：章节结构变化 → 重建滚动监听；地理点变化 → 刷新地图标记。
+// 首次加载 / 导入目录（整数组重建）也会让这两个计算属性变化，从而完成初始化。
+watch(timelineGroups, () => {
+  if (viewMode.value === 'timeline') setupSpy()
+})
+watch(geoPhotosAll, () => {
   if (viewMode.value === 'location') refreshMapMarkers()
-  else setupSpy()
 })
 watch(cityByGeoKey, () => {
   if (viewMode.value === 'location') refreshMapMarkers()

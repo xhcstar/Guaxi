@@ -6,9 +6,11 @@
     </div>
     <div class="ssh-side" v-show="!sideCollapsed" :style="{ width: sideWidth + 'px' }">
       <div class="ssh-side-head">
-        <span>连接档案</span>
+        <span>连接会话</span>
         <span class="ssh-head-actions">
-          <n-button size="tiny" @click="newProfile">新建</n-button>
+          <n-button size="tiny" type="primary" @click="openNewConn" title="新建连接">
+            <template #icon><Icon :icon="plusIcon" width="15" height="15" /></template>新建
+          </n-button>
           <n-button size="tiny" quaternary @click="sideCollapsed = true" title="折叠面板"><Icon :icon="chevronLeftIcon" width="15" height="15" /></n-button>
         </span>
       </div>
@@ -17,60 +19,22 @@
           v-for="p in profiles"
           :key="p.id"
           class="ssh-profile"
-          :class="{ active: p.id === editing.id }"
-          @click="edit(p)"
+          @click="connect(p)"
+          :title="'连接 ' + (p.name || p.host)"
         >
-          <div class="ssh-profile-name">{{ p.name || p.host }}</div>
-          <div class="ssh-profile-sub">{{ p.user }}@{{ p.host }}:{{ p.port }} · {{ p.auth }}</div>
+          <div class="ssh-profile-ico"><Icon :icon="serverIcon" width="16" height="16" /></div>
+          <div class="ssh-profile-main">
+            <div class="ssh-profile-name">{{ p.name || p.host }}</div>
+            <div class="ssh-profile-sub">{{ p.user }}@{{ p.host }}:{{ p.port }}</div>
+          </div>
+          <div class="ssh-profile-badge">{{ authLabel(p.auth) }}</div>
           <div class="ssh-profile-actions">
-            <n-button size="tiny" type="primary" @click.stop="connect(p)"><template #icon><Icon :icon="plugIcon" width="13" height="13" /></template>连接</n-button>
-            <n-button size="tiny" text @click.stop="remove(p)"><template #icon><Icon :icon="trashIcon" width="13" height="13" /></template>删除</n-button>
+            <button class="ssh-ico-btn primary" @click.stop="connect(p)" title="连接"><Icon :icon="plugIcon" width="14" height="14" /></button>
+            <button class="ssh-ico-btn" @click.stop="openEditConn(p)" title="编辑"><Icon :icon="editIcon" width="14" height="14" /></button>
+            <button class="ssh-ico-btn danger" @click.stop="remove(p)" title="删除"><Icon :icon="trashIcon" width="14" height="14" /></button>
           </div>
         </div>
-        <div v-if="!profiles.length" class="ssh-empty-side">还没有连接档案，点“新建”。</div>
-      </div>
-
-      <div class="ssh-form">
-        <div class="ssh-form-title">{{ editing.id ? '编辑档案' : '新建档案' }}</div>
-        <n-input v-model:value="editing.name" size="small" placeholder="名称" />
-        <div class="ssh-row">
-          <n-input v-model:value="editing.host" size="small" placeholder="主机 / IP" />
-          <n-input-number v-model:value="editing.port" size="small" :min="1" :max="65535" :show-button="false" style="width:88px" />
-          <span class="ssh-port-tag">端口</span>
-        </div>
-        <n-input v-model:value="editing.user" size="small" placeholder="用户名" />
-        <n-select v-model:value="editing.auth" size="small" :options="authOptions" />
-        <n-input v-if="editing.auth === 'key'" v-model:value="editing.key_path" size="small" placeholder="私钥路径，如 ~/.ssh/id_ed25519" />
-        <template v-if="editing.auth === 'password'">
-          <n-input v-model:value="password" type="password" size="small" placeholder="密码（存入系统 keychain）" show-password-on="click" />
-          <div class="ssh-hint">密码存入系统 keychain，连接时自动用于认证，不会明文落盘。</div>
-        </template>
-        <div class="ssh-form-actions">
-          <n-button size="small" type="primary" @click="saveProfile"><template #icon><Icon :icon="saveIcon" width="14" height="14" /></template>保存</n-button>
-          <n-button size="small" @click="newProfile">清空</n-button>
-        </div>
-        <span v-if="error" class="ssh-error">{{ error }}</span>
-      </div>
-
-      <div class="ssh-form">
-        <div class="ssh-form-title">串口 / Telnet 快速连接</div>
-        <div class="ssh-row">
-          <n-select v-model:value="serialPort" size="small" :options="serialPorts.map(p => ({ label: `${p.name} (${p.kind})`, value: p.name }))" placeholder="串口" style="flex:1" />
-          <n-input-number v-model:value="serialBaud" size="small" :min="300" :show-button="false" style="width:104px" />
-          <span class="ssh-port-tag">波特率</span>
-        </div>
-        <div class="ssh-form-actions">
-          <n-button size="small" @click="loadSerialPorts">刷新串口</n-button>
-          <n-button size="small" type="primary" @click="connectSerial">连接串口</n-button>
-        </div>
-        <div class="ssh-row">
-          <n-input v-model:value="telnetHost" size="small" placeholder="Telnet 主机" style="flex:1" />
-          <n-input-number v-model:value="telnetPort" size="small" :min="1" :max="65535" :show-button="false" style="width:88px" />
-          <span class="ssh-port-tag">端口</span>
-        </div>
-        <div class="ssh-form-actions">
-          <n-button size="small" type="primary" @click="connectTelnet">连接 Telnet</n-button>
-        </div>
+        <div v-if="!profiles.length" class="ssh-empty-side">还没有连接，点右上角“新建”添加 SSH / 串口 / Telnet。</div>
       </div>
 
       <div class="ssh-recordings">
@@ -86,6 +50,84 @@
 
       <SftpBrowser class="ssh-sftp" :profiles="profiles" />
     </div>
+
+    <n-modal v-model:show="showConnModal" :mask-closable="false">
+      <div class="ssh-modal">
+        <div class="ssh-modal-head">
+          <span>{{ editing.id ? '编辑连接' : '新建连接' }}</span>
+          <Icon :icon="xIcon" width="18" height="18" class="ssh-modal-close" @click="showConnModal = false" />
+        </div>
+        <div class="ssh-modal-tabs">
+          <button
+            v-for="t in connTabs"
+            :key="t.key"
+            class="ssh-mtab"
+            :class="{ active: connTab === t.key }"
+            @click="connTab = t.key"
+          >
+            <Icon :icon="t.icon" width="15" height="15" />{{ t.label }}
+          </button>
+        </div>
+        <div class="ssh-modal-body">
+          <template v-if="connTab === 'ssh'">
+            <div class="ssh-field"><label>名称</label><n-input v-model:value="editing.name" size="small" placeholder="给这个连接起个名字" /></div>
+            <div class="ssh-field">
+              <label>主机 / IP</label>
+              <div class="ssh-row">
+                <n-input v-model:value="editing.host" size="small" placeholder="192.168.1.10 或 域名" style="flex:1" />
+                <n-input-number v-model:value="editing.port" size="small" :min="1" :max="65535" :show-button="false" style="width:96px" />
+                <span class="ssh-port-tag">端口</span>
+              </div>
+            </div>
+            <div class="ssh-field"><label>用户名</label><n-input v-model:value="editing.user" size="small" placeholder="root" /></div>
+            <div class="ssh-field"><label>认证方式</label><n-select v-model:value="editing.auth" size="small" :options="authOptions" /></div>
+            <div class="ssh-field" v-if="editing.auth === 'key'"><label>私钥路径</label><n-input v-model:value="editing.key_path" size="small" placeholder="~/.ssh/id_ed25519" /></div>
+            <template v-if="editing.auth === 'password'">
+              <div class="ssh-field"><label>密码</label><n-input v-model:value="password" type="password" size="small" placeholder="存入系统 keychain" show-password-on="click" /></div>
+              <div class="ssh-hint">密码存入系统 keychain，连接时自动用于认证，不会明文落盘。</div>
+            </template>
+            <span v-if="error" class="ssh-error">{{ error }}</span>
+            <div class="ssh-modal-foot">
+              <n-button size="small" @click="showConnModal = false">取消</n-button>
+              <n-button size="small" @click="saveProfile()"><template #icon><Icon :icon="saveIcon" width="14" height="14" /></template>保存</n-button>
+              <n-button size="small" type="primary" @click="saveAndConnect"><template #icon><Icon :icon="plugIcon" width="14" height="14" /></template>保存并连接</n-button>
+            </div>
+          </template>
+
+          <template v-else-if="connTab === 'serial'">
+            <div class="ssh-field">
+              <label>串口</label>
+              <div class="ssh-row">
+                <n-select v-model:value="serialPort" size="small" :options="serialPorts.map(p => ({ label: `${p.name} (${p.kind})`, value: p.name }))" placeholder="选择串口" style="flex:1" />
+                <n-button size="small" @click="loadSerialPorts">刷新</n-button>
+              </div>
+            </div>
+            <div class="ssh-field"><label>波特率</label><n-input-number v-model:value="serialBaud" size="small" :min="300" :show-button="false" style="width:140px" /></div>
+            <span v-if="error" class="ssh-error">{{ error }}</span>
+            <div class="ssh-modal-foot">
+              <n-button size="small" @click="showConnModal = false">取消</n-button>
+              <n-button size="small" type="primary" @click="connectSerial"><template #icon><Icon :icon="usbIcon" width="14" height="14" /></template>连接串口</n-button>
+            </div>
+          </template>
+
+          <template v-else>
+            <div class="ssh-field">
+              <label>Telnet 主机</label>
+              <div class="ssh-row">
+                <n-input v-model:value="telnetHost" size="small" placeholder="主机 / IP" style="flex:1" />
+                <n-input-number v-model:value="telnetPort" size="small" :min="1" :max="65535" :show-button="false" style="width:96px" />
+                <span class="ssh-port-tag">端口</span>
+              </div>
+            </div>
+            <span v-if="error" class="ssh-error">{{ error }}</span>
+            <div class="ssh-modal-foot">
+              <n-button size="small" @click="showConnModal = false">取消</n-button>
+              <n-button size="small" type="primary" @click="connectTelnet"><template #icon><Icon :icon="networkIcon" width="14" height="14" /></template>连接 Telnet</n-button>
+            </div>
+          </template>
+        </div>
+      </div>
+    </n-modal>
 
     <div class="ssh-resize" v-show="!sideCollapsed" @mousedown="onSideResizeDown"></div>
 
@@ -170,6 +212,7 @@ import plusIcon from '@iconify-icons/lucide/plus'
 import minusIcon from '@iconify-icons/lucide/minus'
 import plugIcon from '@iconify-icons/lucide/plug'
 import trashIcon from '@iconify-icons/lucide/trash-2'
+import editIcon from '@iconify-icons/lucide/pencil'
 import saveIcon from '@iconify-icons/lucide/save'
 import chevronLeftIcon from '@iconify-icons/lucide/chevron-left'
 import chevronRightIcon from '@iconify-icons/lucide/chevron-right'
@@ -200,6 +243,34 @@ const sessions = ref([]) // { session_id, host, kind }
 const termFontSize = ref(14)
 const sideWidth = ref(340)
 const sideCollapsed = ref(false)
+
+// 连接向导弹窗：把 SSH 档案 / 串口 / Telnet 的表单从常驻左栏挪进弹窗，左栏只留会话列表。
+const showConnModal = ref(false)
+const connTab = ref('ssh')
+const connTabs = [
+  { key: 'ssh', label: 'SSH', icon: serverIcon },
+  { key: 'serial', label: '串口', icon: usbIcon },
+  { key: 'telnet', label: 'Telnet', icon: networkIcon },
+]
+function authLabel(a) {
+  return a === 'password' ? '密码' : a === 'key' ? '密钥' : '默认密钥'
+}
+function openNewConn() {
+  newProfile()
+  connTab.value = 'ssh'
+  showConnModal.value = true
+}
+function openEditConn(p) {
+  edit(p)
+  connTab.value = 'ssh'
+  showConnModal.value = true
+}
+async function saveAndConnect() {
+  const saved = await saveProfile()
+  if (!saved) return
+  showConnModal.value = false
+  await connect(saved)
+}
 
 // M2 终端复制/粘贴/查找/保存
 const searchQuery = ref(''); const searchInfo = ref(''); const copyOnSelect = ref(true)
@@ -295,7 +366,7 @@ async function loadProfiles() {
 
 async function saveProfile() {
   error.value = ''
-  if (!editing.host.trim()) { error.value = '主机不能为空'; return }
+  if (!editing.host.trim()) { error.value = '主机不能为空'; return null }
   try {
     const saved = await invoke('ssh_save_profile', { profile: { ...editing } })
     if (editing.auth === 'password' && password.value) {
@@ -304,8 +375,10 @@ async function saveProfile() {
     await loadProfiles()
     Object.assign(editing, saved)
     password.value = ''
+    return saved
   } catch (e) {
     error.value = '保存失败: ' + (e?.message || e)
+    return null
   }
 }
 
@@ -351,6 +424,7 @@ async function connectSerial() {
     sessions.value.push({ session_id: sid, host: `${serialPort.value}@${serialBaud.value}`, kind: 'serial' })
     activeSession.value = sid
     await nextTick(); await mountTerminal(sid, 'serial')
+    showConnModal.value = false
   } catch (e) { error.value = '串口打开失败: ' + (e?.message || e) }
 }
 
@@ -362,6 +436,7 @@ async function connectTelnet() {
     sessions.value.push({ session_id: sid, host: `${telnetHost.value}:${telnetPort.value}`, kind: 'telnet' })
     activeSession.value = sid
     await nextTick(); await mountTerminal(sid, 'telnet')
+    showConnModal.value = false
   } catch (e) { error.value = 'Telnet 连接失败: ' + (e?.message || e) }
 }
 
@@ -452,14 +527,36 @@ onBeforeUnmount(() => {
 .ssh-root { height: 100%; display: flex; min-height: 0; }
 .ssh-side { width: 320px; flex: 0 0 auto; border-right: 1px solid var(--guaxi-border); display: flex; flex-direction: column; min-height: 0; overflow-y: auto; }
 .ssh-side-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; font-size: 12px; font-weight: 600; border-bottom: 1px solid var(--guaxi-border); }
-.ssh-profiles { flex: 0 0 auto; max-height: 40%; overflow-y: auto; }
-.ssh-profile { padding: 8px 12px; border-bottom: 1px solid var(--guaxi-border-weak, rgba(0,0,0,0.05)); cursor: pointer; }
-.ssh-profile:hover { background: var(--guaxi-hover-bg, rgba(0,0,0,0.04)); }
-.ssh-profile.active { background: var(--guaxi-active-bg, rgba(59,130,246,0.12)); }
-.ssh-profile-name { font-size: 13px; font-weight: 500; }
-.ssh-profile-sub { font-size: 11px; color: var(--guaxi-text-secondary, #6b7280); margin: 2px 0 6px; }
-.ssh-profile-actions { display: flex; gap: 8px; }
+.ssh-profiles { flex: 0 0 auto; max-height: 46%; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.ssh-profile { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: var(--tw-radius-sm, 7px); border: 1px solid transparent; background: color-mix(in srgb, var(--guaxi-panel-bg) 45%, transparent); cursor: pointer; position: relative; transition: background .14s, border-color .14s, box-shadow .14s; }
+.ssh-profile:hover { background: var(--tw-accent-soft, rgba(12,166,192,0.12)); border-color: color-mix(in srgb, var(--tw-accent, #0ca6c0) 40%, transparent); box-shadow: 0 1px 6px rgba(2,12,20,0.08); }
+.ssh-profile-ico { flex: 0 0 auto; width: 32px; height: 32px; border-radius: 9px; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, var(--tw-accent, #0ca6c0), var(--tw-accent-2, #1fbfd6)); color: #fff; }
+.ssh-profile-main { flex: 1 1 auto; min-width: 0; }
+.ssh-profile-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ssh-profile-sub { font-size: 11px; color: var(--guaxi-text-secondary, #6b7280); font-family: var(--tw-mono-font); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ssh-profile-badge { flex: 0 0 auto; font-size: 10px; padding: 2px 8px; border-radius: 999px; background: var(--tw-accent-soft, rgba(12,166,192,0.12)); color: var(--tw-accent, #0ca6c0); }
+.ssh-profile-actions { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); display: none; gap: 3px; padding: 3px 4px; border-radius: 8px; background: color-mix(in srgb, var(--guaxi-panel-bg) 88%, transparent); box-shadow: 0 1px 6px rgba(2,12,20,0.16); }
+.ssh-profile:hover .ssh-profile-actions { display: inline-flex; }
+.ssh-profile:hover .ssh-profile-badge { visibility: hidden; }
+.ssh-ico-btn { width: 24px; height: 24px; border: none; border-radius: 6px; background: transparent; color: var(--guaxi-text-secondary); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: background .12s, color .12s; }
+.ssh-ico-btn:hover { background: var(--tw-accent-soft, rgba(12,166,192,0.12)); color: var(--tw-accent, #0ca6c0); }
+.ssh-ico-btn.primary { color: var(--tw-accent, #0ca6c0); }
+.ssh-ico-btn.danger:hover { background: rgba(229,72,77,0.14); color: #e5484d; }
 .ssh-empty-side { padding: 12px; font-size: 12px; color: var(--guaxi-text-secondary, #9ca3af); }
+
+/* 连接向导弹窗 */
+.ssh-modal { width: 460px; max-width: 92vw; background: var(--guaxi-panel-bg); border: 1px solid var(--guaxi-border); border-radius: var(--tw-radius, 10px); box-shadow: var(--tw-elev, 0 8px 30px rgba(2,12,20,0.18)); overflow: hidden; font-family: var(--tw-ui-font, system-ui, sans-serif); }
+.ssh-modal-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--guaxi-border); font-weight: 600; }
+.ssh-modal-close { cursor: pointer; color: var(--guaxi-text-secondary); }
+.ssh-modal-close:hover { color: var(--tw-accent, #0ca6c0); }
+.ssh-modal-tabs { display: flex; gap: 2px; padding: 10px 14px 0; }
+.ssh-mtab { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border: none; background: transparent; color: var(--guaxi-text-secondary); cursor: pointer; border-radius: var(--tw-radius-sm, 7px) var(--tw-radius-sm, 7px) 0 0; font-size: 12.5px; font-family: var(--tw-ui-font, system-ui, sans-serif); border-bottom: 2px solid transparent; transition: color .14s, border-color .14s; }
+.ssh-mtab:hover { color: var(--tw-accent, #0ca6c0); }
+.ssh-mtab.active { color: var(--tw-accent, #0ca6c0); border-bottom-color: var(--tw-accent, #0ca6c0); font-weight: 600; }
+.ssh-modal-body { padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; border-top: 1px solid var(--guaxi-border); }
+.ssh-field { display: flex; flex-direction: column; gap: 5px; }
+.ssh-field > label { font-size: 12px; color: var(--guaxi-text-secondary); }
+.ssh-modal-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 .ssh-form { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--guaxi-border); border-bottom: 1px solid var(--guaxi-border); }
 .ssh-form-title { font-size: 12px; font-weight: 600; }
 .ssh-row { display: flex; gap: 6px; }

@@ -28,6 +28,7 @@
           "**/Note/**",
           "**/doc/**",
           "**/images/**",
+          "**/life_album_cache/**",
           "**/.guaxi-display-artifacts/**"
         ]
       }
