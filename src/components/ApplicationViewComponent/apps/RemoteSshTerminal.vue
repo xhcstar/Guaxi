@@ -83,6 +83,8 @@
           <div v-if="!recordings.length" class="ssh-empty-side">连接后自动录制，回放在这里打开。</div>
         </div>
       </div>
+
+      <SftpBrowser class="ssh-sftp" :profiles="profiles" />
     </div>
 
     <div class="ssh-resize" v-show="!sideCollapsed" @mousedown="onSideResizeDown"></div>
@@ -108,6 +110,17 @@
           <button class="ssh-fbtn" @click="setTermFontSize(termFontSize + 1)"><Icon :icon="plusIcon" width="13" height="13" /></button>
         </div>
       </div>
+      <div class="ssh-toolbar" v-if="sessions.length">
+        <n-input v-model:value="searchQuery" size="tiny" placeholder="查找终端内容" style="width:180px" @keyup.enter="doSearch(1)" />
+        <n-button size="tiny" quaternary @click="doSearch(-1)" title="上一个"><Icon :icon="chevronUpIcon" width="14" height="14" /></n-button>
+        <n-button size="tiny" quaternary @click="doSearch(1)" title="下一个"><Icon :icon="chevronDownIcon" width="14" height="14" /></n-button>
+        <span class="ssh-tb-sep"></span>
+        <n-button size="tiny" @click="doCopy"><Icon :icon="copyIcon" width="13" height="13" />复制</n-button>
+        <n-button size="tiny" @click="doPaste"><Icon :icon="pasteIcon" width="13" height="13" />粘贴</n-button>
+        <n-button size="tiny" @click="doSave"><Icon :icon="saveIcon" width="13" height="13" />保存</n-button>
+        <n-checkbox v-model:checked="copyOnSelect" size="small">选中即复制</n-checkbox>
+        <span v-if="searchInfo" class="ssh-tb-info">{{ searchInfo }}</span>
+      </div>
       <div class="ssh-term-hosts">
         <div
           v-for="s in sessions"
@@ -118,6 +131,21 @@
         ></div>
         <div v-if="!sessions.length" class="ssh-term-empty">选择左侧档案点“连接”，开一个 SSH 终端。</div>
       </div>
+
+      <div class="ssh-macrobar" v-if="sessions.length">
+        <n-button v-if="!recording" size="tiny" type="error" ghost @click="startRecord"><Icon :icon="recordIcon" width="13" height="13" />录制宏</n-button>
+        <template v-else>
+          <n-button size="tiny" type="error" @click="stopRecord"><Icon :icon="stopIcon" width="13" height="13" />停止 ({{ recordBuf.length }} 字符)</n-button>
+        </template>
+        <n-input v-model:value="macroName" size="tiny" placeholder="宏名" style="width:110px" />
+        <span class="ssh-macro-list">
+          <span v-for="m in macros" :key="m.name" class="ssh-macro-chip">
+            <span @click="replayMacro(m)" :title="'重放: ' + m.name">▶ {{ m.name }}</span>
+            <span class="ssh-macro-del" @click="macros = macros.filter(x => x !== m)">×</span>
+          </span>
+        </span>
+        <span v-if="!macros.length" class="ssh-tb-info">录制你敲的命令序列，停止时命名保存，点▶重放到当前会话。</span>
+      </div>
     </div>
   </div>
 </template>
@@ -126,6 +154,9 @@
 import { ref, reactive, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { save } from '@tauri-apps/plugin-dialog'
+import { writeText, readText } from '@tauri-apps/plugin-clipboard-manager'
+import { writeTextFile } from '@tauri-apps/plugin-fs'
 import { Terminal } from 'xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import 'xterm/css/xterm.css'
@@ -142,6 +173,13 @@ import trashIcon from '@iconify-icons/lucide/trash-2'
 import saveIcon from '@iconify-icons/lucide/save'
 import chevronLeftIcon from '@iconify-icons/lucide/chevron-left'
 import chevronRightIcon from '@iconify-icons/lucide/chevron-right'
+import chevronUpIcon from '@iconify-icons/lucide/chevron-up'
+import chevronDownIcon from '@iconify-icons/lucide/chevron-down'
+import copyIcon from '@iconify-icons/lucide/copy'
+import pasteIcon from '@iconify-icons/lucide/clipboard-paste'
+import recordIcon from '@iconify-icons/lucide/circle'
+import stopIcon from '@iconify-icons/lucide/square'
+import SftpBrowser from './SftpBrowser.vue'
 
 const emit = defineEmits(['open-in-analysis'])
 const logger = createLogger('RemoteSshTerminal')
@@ -162,6 +200,54 @@ const sessions = ref([]) // { session_id, host, kind }
 const termFontSize = ref(14)
 const sideWidth = ref(340)
 const sideCollapsed = ref(false)
+
+// M2 终端复制/粘贴/查找/保存
+const searchQuery = ref(''); const searchInfo = ref(''); const copyOnSelect = ref(true)
+// M3 宏录制
+const recording = ref(false); const recordBuf = ref(''); const macros = ref([]); const macroName = ref('')
+function activeTerm() { const r = termMap.get(activeSession.value); return r ? r.term : null }
+async function doCopy() {
+  const t = activeTerm(); if (!t) return
+  const sel = t.getSelection()
+  if (sel) { await writeText(sel).catch(() => {}); searchInfo.value = '已复制' }
+}
+async function doPaste() {
+  const t = activeTerm(); if (!t) return
+  try { const txt = await readText(); if (txt) t.paste(txt) } catch (_) {}
+}
+function doSearch(dir) {
+  const t = activeTerm(); const q = searchQuery.value.trim()
+  if (!t || !q) return
+  const buf = t.buffer.active; const total = buf.length
+  const start = buf.viewportY || 0
+  for (let step = 1; step <= total; step++) {
+    const i = (((start + dir * step) % total) + total) % total
+    const line = buf.getLine(i)
+    if (line && line.translateToString(true).toLowerCase().includes(q.toLowerCase())) {
+      t.scrollToLine(i); searchInfo.value = `行 ${i + 1}`; return
+    }
+  }
+  searchInfo.value = '未找到'
+}
+async function doSave() {
+  const t = activeTerm(); if (!t) return
+  const buf = t.buffer.active; const lines = []
+  for (let i = 0; i < buf.length; i++) { const l = buf.getLine(i); lines.push(l ? l.translateToString(true) : '') }
+  const path = await save({ title: '保存终端内容', defaultPath: 'terminal.log' }).catch(() => null)
+  if (!path) return
+  try { await writeTextFile(path, lines.join('\n')); searchInfo.value = '已保存' } catch (_) { searchInfo.value = '保存失败' }
+}
+function startRecord() { recordBuf.value = ''; recording.value = true }
+function stopRecord() {
+  recording.value = false
+  const name = macroName.value.trim() || ('宏' + (macros.value.length + 1))
+  if (recordBuf.value) { macros.value.push({ name, data: recordBuf.value }); macroName.value = '' }
+}
+function replayMacro(m) {
+  const rec = termMap.get(activeSession.value)
+  const w = WIRE[rec?.kind || 'ssh'] || WIRE.ssh
+  if (activeSession.value) invoke(w.write, { sessionId: activeSession.value, data: m.data }).catch(() => {})
+}
 function setTermFontSize(v) {
   termFontSize.value = Math.min(28, Math.max(9, v))
   for (const [sid, rec] of termMap) {
@@ -299,7 +385,19 @@ async function mountTerminal(sid, kind) {
   term.open(el)
   try { fit.fit() } catch (_) {}
 
-  term.onData(d => { invoke(w.write, { sessionId: sid, data: d }).catch(() => {}) })
+  term.onData(d => {
+    invoke(w.write, { sessionId: sid, data: d }).catch(() => {})
+    if (recording.value) recordBuf.value += d
+  })
+
+  // 选中即复制(MobaXterm 习惯)
+  term.onSelectionChange(() => {
+    if (!copyOnSelect.value) return
+    const sel = term.getSelection()
+    if (sel) writeText(sel).catch(() => {})
+  })
+  // 右键粘贴(走 xterm.paste，自动处理 bracketed-paste，粘进对端 vim 不乱缩进)
+  el.addEventListener('contextmenu', ev => { ev.preventDefault(); doPaste() })
 
   const unlistenOut = await listen(w.out, ev => {
     if (ev.payload?.session_id === sid) term.write(ev.payload.data)
@@ -397,6 +495,16 @@ onBeforeUnmount(() => {
 .ssh-fbtn:hover { background: var(--tw-accent-soft); color: var(--tw-accent); }
 .ssh-fsz { min-width: 20px; text-align: center; font-size: 12px; font-family: var(--tw-mono-font); color: var(--tw-accent); }
 .ssh-rec-name { font-family: var(--tw-mono-font); }
+.ssh-recordings { flex: 0 0 auto !important; max-height: 26%; }
+.ssh-sftp { flex: 1 1 auto; min-height: 120px; border-top: 1px solid var(--guaxi-border); }
+.ssh-toolbar { display: flex; align-items: center; gap: 6px; padding: 5px 10px; border-bottom: 1px solid var(--guaxi-border); background: color-mix(in srgb, var(--guaxi-panel-bg) 45%, transparent); flex: 0 0 auto; }
+.ssh-tb-sep { width: 1px; height: 16px; background: var(--guaxi-border); margin: 0 2px; }
+.ssh-tb-info { font-size: 12px; color: var(--tw-accent); font-family: var(--tw-mono-font); }
+.ssh-macrobar { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-top: 1px solid var(--guaxi-border); background: color-mix(in srgb, var(--guaxi-panel-bg) 45%, transparent); flex: 0 0 auto; overflow-x: auto; }
+.ssh-macro-list { display: inline-flex; gap: 6px; }
+.ssh-macro-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; background: var(--tw-accent-soft); color: var(--tw-accent); font-size: 12px; cursor: pointer; white-space: nowrap; }
+.ssh-macro-del { opacity: .6; }
+.ssh-macro-del:hover { opacity: 1; color: #e5484d; }
 .ssh-tab { padding: 5px 12px; font-size: 12px; border: 1px solid var(--guaxi-border); border-bottom: none; border-radius: 6px 6px 0 0; cursor: pointer; background: var(--guaxi-panel-bg, #f5f5f5); white-space: nowrap; }
 .ssh-tab.active { background: #1e1e1e; color: #d4d4d4; }
 .ssh-tab-close { margin-left: 8px; opacity: 0.6; }

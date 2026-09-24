@@ -71,6 +71,8 @@ const warning = ref('')
 const inputRef = ref(null)
 // 复用对话会话，保持多轮上下文;每次打开面板重置，避免跨 cell 串味。
 let codegenSessionId = ''
+// 会话里已有 DataFrame 的结构摘要,喂给模型让它知道有哪些表、列名/类型(每次生成前刷新)。
+let sessionSchemaText = ''
 
 const panelStyle = computed(() => {
   const x = Math.max(8, Math.min(Number(props.anchor?.x ?? 0), (typeof window !== 'undefined' ? window.innerWidth : 1200) - 400))
@@ -93,6 +95,46 @@ watch(
 )
 
 const close = () => emit('update:visible', false)
+
+// 只读式列出会话里的 DataFrame(名字/行数/列:类型),让 codegen 感知表结构。绝不改数据。
+const SCHEMA_SNIPPET = `
+import sys as _sys
+_pd = _sys.modules.get("pandas")
+_schemas = []
+if _pd is not None:
+    for _k, _v in list(globals().items()):
+        if _k.startswith("_"):
+            continue
+        try:
+            if isinstance(_v, _pd.DataFrame):
+                _cols = ["{}:{}".format(c, t) for c, t in list(_v.dtypes.astype(str).to_dict().items())][:30]
+                _schemas.append({"name": _k, "rows": int(len(_v.index)), "columns": _cols})
+        except Exception:
+            pass
+_result = {"dataframes": _schemas}
+`
+
+const gatherSessionSchema = async () => {
+  const sid = String(codegenSessionId || '').trim()
+  if (!sid) return ''
+  try {
+    const res = await invoke('python_exec', {
+      request: {
+        code: SCHEMA_SNIPPET,
+        persist: true,
+        expect_json: true,
+        include_session_vars: false,
+        vars: { _guaxi_session: sid },
+      },
+    })
+    const dfs = res?.result_json?.dataframes
+    if (!Array.isArray(dfs) || !dfs.length) return ''
+    const lines = dfs.map((d) => `- ${d.name}(rows=${d.rows}): ${(Array.isArray(d.columns) ? d.columns : []).join(', ')}`)
+    return '当前会话已有的 DataFrame(可直接使用,勿重复读取):\n' + lines.join('\n')
+  } catch (e) {
+    return ''
+  }
+}
 
 // 仅编译 + 检查 import 可用性,绝不执行用户代码(安全):把生成代码经 vars 注入为 _codegen_src。
 const VERIFY_SNIPPET = `
@@ -124,12 +166,15 @@ _result = _issues
 `
 
 const requestCodegen = async (instructionText) => {
+  const context = [sessionSchemaText, String(props.context || '')]
+    .filter((s) => s && s.trim())
+    .join('\n\n')
   const res = await invoke('python_codegen_from_prompt', {
     request: {
       modelid: Number(chatStore.selectedModel ?? 5),
       sessionid: codegenSessionId,
       instruction: instructionText,
-      context: String(props.context || ''),
+      context,
     },
   })
   codegenSessionId = String(res?.sessionid || codegenSessionId)
@@ -172,6 +217,7 @@ const generate = async () => {
   error.value = ''
   warning.value = ''
   try {
+    sessionSchemaText = await gatherSessionSchema()
     let code = await requestCodegen(text)
     let check = await verifyCode(code)
     if (!check.ok && code) {

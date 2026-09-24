@@ -9,6 +9,32 @@
     <!-- 任务列表抽屉 -->
     <TaskListDrawer :show="showTaskList" @update:show="showTaskList = $event" :progresses="progresses" :categorized-progresses="categorizedProgresses" :clear-failed-tasks="clearFailedTasks" :cancel-sync="cancelSyncTask" :conversion-tasks="conversionTasks" :retry-task="retryConversionTask" :cancel-task="cancelConversionTask" :delete-task="deleteConversionTask" :clear-finished="clearFinishedConversionTasks" />
 
+    <!-- 查重结果抽屉 -->
+    <n-drawer v-model:show="dupDrawerVisible" :width="440" placement="right">
+      <n-drawer-content title="重复资源（按文件内容）" closable>
+        <div v-if="dupLoading" class="dup-hint">正在扫描内容并比对…</div>
+        <div v-else-if="!dupGroups.length" class="dup-hint">没有发现内容完全相同的资源。</div>
+        <div v-else>
+          <p class="dup-hint">共 {{ dupGroups.length }} 组内容重复(每组内为同一文件内容,可自行保留其一、删除其余):</p>
+          <div v-for="(g, gi) in dupGroups" :key="g.content_hash || gi" class="dup-group">
+            <div class="dup-group__head">{{ g.files.length }} 个相同内容</div>
+            <ul class="dup-group__list">
+              <li v-for="f in g.files" :key="f.id">
+                {{ f.file_name }} <span class="dup-lib">[{{ f.library }}]</span>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </n-drawer-content>
+    </n-drawer>
+
+    <!-- 插件结果抽屉 -->
+    <n-drawer v-model:show="pluginReportDrawerVisible" :width="480" placement="right">
+      <n-drawer-content :title="pluginReportTitle || '插件结果'" closable>
+        <pre class="plugin-report">{{ pluginReportText }}</pre>
+      </n-drawer-content>
+    </n-drawer>
+
     <!-- 搜索栏 -->
 
     <!-- 表格工具栏 + 视图切换 -->
@@ -44,6 +70,17 @@
         </template>
         删除选中 ({{ checkedRowKeys.length }})
       </n-button>
+      <n-button v-if="checkedRowKeys.length" size="small" secondary class="batch-convert-btn"
+        @click="handleBatchConvert">
+        批量转换 ({{ checkedRowKeys.length }})
+      </n-button>
+      <n-button size="small" tertiary class="dedup-btn" @click="handleFindDuplicates">
+        查重
+      </n-button>
+      <n-dropdown trigger="click" :options="repoPluginOptions" @select="handleRepoPluginSelect"
+        @update:show="onRepoPluginDropdownShow">
+        <n-button size="small" tertiary class="repo-plugin-btn" :loading="pluginRunning">运行插件</n-button>
+      </n-dropdown>
       <TableToolbar class="toolbar-flex" @sort="handleSort" @clear-filters="handleClearFilters" @add-file="showAddFileModal" />
     </div>
 
@@ -92,6 +129,7 @@ import { useMessage, NButton, NIcon } from 'naive-ui'
 import { Delete20Regular } from '@vicons/fluent'
 import { invoke } from '@tauri-apps/api/core'
 import { useConfirm } from './composables/useConfirm.js'
+import { runGuaxiPlugin, listPluginsForSurface } from '../../utils/guaxiPluginRunner'
 
 
 // Stores
@@ -164,6 +202,137 @@ const handleBatchDelete = async () => {
     message.success(`已删除 ${ok} 个条目`)
   } else {
     message.warning(`已删除 ${ok} 个，失败 ${fail} 个`)
+  }
+}
+
+// 批量转换:对选中资源逐个调 reconvertImportedFile(入转换队列,后端 worker 池自动并发/串行)。
+const handleBatchConvert = async () => {
+  const ids = new Set([...(checkedRowKeys.value || [])])
+  if (!ids.size) {
+    message.info('请先勾选要转换的条目')
+    return
+  }
+  const rows = (sortedData.value || []).filter((r) => ids.has(r.id))
+  if (!rows.length) {
+    message.info('未找到选中的条目')
+    return
+  }
+  const confirmed = await confirm({
+    title: '批量转换所选条目？',
+    description: '将对选中资源重新转换为 Markdown（进入转换队列，后台处理，可在任务列表查看进度）。',
+    count: rows.length,
+    countUnit: '个条目',
+    confirmLabel: '转换',
+  })
+  if (!confirmed) return
+  let ok = 0
+  let fail = 0
+  for (const row of rows) {
+    try {
+      await reconvertImportedFile({
+        library: row.library,
+        fileName: row.importFileName,
+        importedFileId: row.id,
+        engine: 'auto',
+      })
+      ok += 1
+    } catch (e) {
+      fail += 1
+      logger.error('批量转换入队失败 id=' + row.id, e)
+    }
+  }
+  checkedRowKeys.value = []
+  if (fail === 0) {
+    message.success(`已提交 ${ok} 个转换任务（可在任务列表查看进度）`)
+  } else {
+    message.warning(`已提交 ${ok} 个，失败 ${fail} 个`)
+  }
+}
+
+// 精确查重:按文件内容 SHA256 分组,只读出报告,不改动数据。
+const dupDrawerVisible = ref(false)
+const dupGroups = ref([])
+const dupLoading = ref(false)
+const handleFindDuplicates = async () => {
+  dupDrawerVisible.value = true
+  dupLoading.value = true
+  dupGroups.value = []
+  try {
+    const groups = await invoke('find_duplicate_imported_files', {
+      knowledgeRepo: store.currentDatabase || null,
+    })
+    dupGroups.value = Array.isArray(groups) ? groups : []
+  } catch (e) {
+    logger.error('查重失败', e)
+    message.error('查重失败:' + String(e?.message || e))
+  } finally {
+    dupLoading.value = false
+  }
+}
+
+// —— 文件库插件(repo 作用面)——
+const repoPluginOptions = ref([])
+let repoPluginCache = []
+const pluginReportDrawerVisible = ref(false)
+const pluginReportTitle = ref('')
+const pluginReportText = ref('')
+const pluginRunning = ref(false)
+
+const onRepoPluginDropdownShow = async (show) => {
+  if (!show) return
+  try {
+    repoPluginCache = await listPluginsForSurface('repo')
+    if (!repoPluginCache.length) {
+      repoPluginOptions.value = [{ label: '(没有已启用的文件库插件)', key: '__none__', disabled: true }]
+    } else {
+      repoPluginOptions.value = repoPluginCache.map((p) => ({ label: p.name, key: p.id }))
+    }
+  } catch (e) {
+    repoPluginOptions.value = [{ label: '读取插件失败', key: '__none__', disabled: true }]
+  }
+}
+
+const handleRepoPluginSelect = (id) => {
+  const plugin = repoPluginCache.find((p) => p.id === id)
+  if (plugin) runRepoPlugin(plugin)
+}
+
+const runRepoPlugin = async (plugin) => {
+  if (pluginRunning.value) return
+  const ids = new Set([...(checkedRowKeys.value || [])])
+  const rows = ids.size
+    ? (sortedData.value || []).filter((r) => ids.has(r.id))
+    : (sortedData.value || [])
+  const resources = rows.map((r) => ({
+    id: r.id,
+    name: r.importFileName,
+    type: r.type,
+    library: r.library,
+    tags: r.importedFileTags || '',
+    size: r.importFileSize,
+    created: r.importFileCreateTime,
+  }))
+  const ctx = {
+    knowledge_repo: store.currentDatabase || '',
+    resources,
+    count: resources.length,
+  }
+  pluginRunning.value = true
+  try {
+    const result = await runGuaxiPlugin(plugin.entry_path, ctx)
+    const report =
+      typeof result?.report === 'string'
+        ? result.report
+        : typeof result?.text === 'string'
+          ? result.text
+          : JSON.stringify(result, null, 2)
+    pluginReportTitle.value = plugin.name
+    pluginReportText.value = report
+    pluginReportDrawerVisible.value = true
+  } catch (e) {
+    message.error('插件运行失败:' + String(e?.message || e))
+  } finally {
+    pluginRunning.value = false
   }
 }
 const containerHeight = ref(0)

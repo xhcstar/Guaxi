@@ -23,7 +23,7 @@ use crate::guaxiservices::bundled_resources;
 /// RSSHub 默认端口（其自身默认 1200）。仅监听 loopback、无鉴权——与 agent_server(9876) 同等风险面。
 pub const RSSHUB_PORT: u16 = 1200;
 pub const RSSHUB_BASE_URL: &str = "http://127.0.0.1:1200";
-const STARTUP_TIMEOUT_SECS: u64 = 40;
+const STARTUP_TIMEOUT_SECS: u64 = 90;
 
 #[cfg(all(windows, not(debug_assertions)))]
 fn apply_no_window(cmd: &mut Command) {

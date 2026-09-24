@@ -61,6 +61,9 @@ pub struct AppConfig {
     resource_repo_sync: ResourceRepoSyncConfig,
     #[serde(default)]
     life_album_album_dir: String,
+    // 相册地名反查用的高德 Web 服务 key。留空则回退 Nominatim(OSM)。
+    #[serde(default)]
+    life_album_amap_key: String,
     #[serde(default)]
     template_repo_path: String,
     #[serde(default)]
@@ -858,6 +861,7 @@ impl Default for AppConfig {
             image_bed_root: default_image_bed_root(),
             resource_repo_sync: ResourceRepoSyncConfig::default(),
             life_album_album_dir: "".to_string(),
+            life_album_amap_key: "".to_string(),
             template_repo_path: "".to_string(),
             slidev_repo_root: "".to_string(),
             chat_record_root: default_chat_record_root(),
@@ -2570,6 +2574,22 @@ pub fn set_life_album_album_dir(path: String) -> Result<(), String> {
     config.life_album_album_dir = p.to_string_lossy().to_string();
     save_config(&config);
     Ok(())
+}
+
+pub fn get_life_album_amap_key() -> String {
+    load_config().life_album_amap_key
+}
+
+#[tauri::command]
+pub fn get_life_album_amap_key_cmd() -> String {
+    load_config().life_album_amap_key
+}
+
+#[tauri::command]
+pub fn set_life_album_amap_key(key: String) {
+    let mut config = load_config();
+    config.life_album_amap_key = key.trim().to_string();
+    save_config(&config);
 }
 
 #[tauri::command]

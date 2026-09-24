@@ -217,6 +217,15 @@
         </n-form>
       </n-card>
 
+      <!-- 插件管理 -->
+      <n-card id="pref-plugins" class="pref-card" title="插件管理">
+        <p class="description">
+          用户可编写的软件级插件(基于内置 Python 引擎)。可启用/禁用、导入/导出、新建、编辑源码。
+          编辑器里选中文本后右键“运行插件…”即可调用已启用的 transform 插件。
+        </p>
+        <GuaxiPluginManager />
+      </n-card>
+
       <!-- 终端 -->
       <n-card id="pref-terminal" class="pref-card" title="终端">
         <p class="description">
@@ -313,6 +322,7 @@ import { NCard, NSpace, NDivider, NForm, NFormItem, NInputNumber, NInput, NButto
 import { invoke } from '@tauri-apps/api/core'
 import { useSettingsStore } from '../../stores/settingsStore'
 import LspExtensionPanel from './LspExtensionPanel.vue'
+import GuaxiPluginManager from './GuaxiPluginManager.vue'
 
 const logger = createLogger('PreferenceContent')
 

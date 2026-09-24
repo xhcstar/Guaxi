@@ -450,6 +450,105 @@ pub fn setup_db() -> Result<(), String> {
 }
 
 // 获取导入文件列表
+#[derive(Serialize)]
+pub struct DuplicateFileEntry {
+    pub id: i32,
+    pub file_name: String,
+    pub library: String,
+    pub file_type: String,
+    pub size: i64,
+}
+
+#[derive(Serialize)]
+pub struct DuplicateGroup {
+    pub content_hash: String,
+    pub files: Vec<DuplicateFileEntry>,
+}
+
+/// 按“文件内容 SHA256”对当前知识库的已导入资源查重,返回重复分组(每组 >1 个)。
+/// 只读:读取 Libraries 里的副本计算内容 hash,不修改任何数据。路径规则与 reconvert_imported_file 保持一致。
+#[tauri::command]
+pub fn find_duplicate_imported_files(
+    knowledge_repo: Option<String>,
+) -> Result<Vec<DuplicateGroup>, String> {
+    use sha2::{Digest, Sha256};
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+
+    let conn = init_db().map_err(|e| e.to_string())?;
+    let libraries_root = crate::commands::settingview::get_libraries_root();
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, original_filename, library, original_filetype, original_filesize
+             FROM imported_files WHERE knowledge_repo = ? AND deleted = 0",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![knowledge_repo], |row| {
+            Ok((
+                row.get::<_, i32>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut by_hash: HashMap<String, Vec<DuplicateFileEntry>> = HashMap::new();
+    for r in rows {
+        let (id, file_name, library, file_type, size) = r.map_err(|e| e.to_string())?;
+        let stem = Path::new(&file_name)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
+        let ext = Path::new(&file_name)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| match e {
+                "doc" | "docx" => "word",
+                other => other,
+            })
+            .unwrap_or("");
+        let file_dir = PathBuf::from(&libraries_root)
+            .join("Libraries")
+            .join(&library)
+            .join(&stem);
+        let source_path = if ext.is_empty() {
+            file_dir.join(&file_name)
+        } else {
+            file_dir.join(ext).join(&file_name)
+        };
+        let bytes = match std::fs::read(&source_path) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        let content_hash = hex::encode(hasher.finalize());
+        by_hash
+            .entry(content_hash)
+            .or_default()
+            .push(DuplicateFileEntry {
+                id,
+                file_name,
+                library,
+                file_type,
+                size,
+            });
+    }
+
+    let mut groups: Vec<DuplicateGroup> = by_hash
+        .into_iter()
+        .filter(|(_, v)| v.len() > 1)
+        .map(|(content_hash, files)| DuplicateGroup { content_hash, files })
+        .collect();
+    groups.sort_by(|a, b| b.files.len().cmp(&a.files.len()));
+    Ok(groups)
+}
+
 #[tauri::command]
 pub fn get_imported_files(knowledge_repo: Option<String>) -> Result<Vec<ImportedFile>, String> {
     let conn = init_db().map_err(|e| e.to_string())?;

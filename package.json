@@ -63,6 +63,7 @@
     "graphology-metrics": "^2.4.0",
     "isomorphic-git": "^1.32.1",
     "leaflet": "^1.9.4",
+    "leaflet.markercluster": "^1.5.3",
     "monaco-editor-textmate": "^4.0.0",
     "monaco-languageclient": "^10.4.0",
     "monaco-textmate": "^3.0.1",

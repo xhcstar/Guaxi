@@ -152,6 +152,8 @@ comemo = "0.5"
 # keys 通过 russh::keys 重导出使用，无需单列 russh-keys。
 # 纯 Rust SSH 客户端栈（自带,不依赖系统 ssh）。
 # 用 ring 后端而非默认 aws-lc-rs：后者需 NASM 汇编器（Windows 构建机未装）。
+# SFTP 文件传输（在 SSH 连接上开 sftp 子系统，纯 Rust）。
+russh-sftp = "2"
 russh = { version = "0.63", default-features = false, features = ["ring", "flate2", "rsa"] }
 polars = { version = "0.55.2", default-features = false, features = ["lazy", "csv", "strings", "dtype-full"] }
 # 串口连接（A3）与二进制/ELF/PE 结构分析（H）。

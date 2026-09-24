@@ -69,6 +69,15 @@
 
           <n-tooltip trigger="hover">
             <template #trigger>
+              <n-icon-wrapper :size="28" :border-radius="8" class="header-icon" @click="openKbPluginMenu($event)">
+                <n-icon :component="ExtensionPuzzleOutline" size="18" />
+              </n-icon-wrapper>
+            </template>
+            运行知识库插件
+          </n-tooltip>
+
+          <n-tooltip trigger="hover">
+            <template #trigger>
               <n-icon-wrapper
                 :size="28"
                 :border-radius="8"
@@ -295,6 +304,15 @@
         </div>
       </div>
     </div>
+
+    <n-dropdown trigger="manual" :show="kbPluginMenuVisible" placement="bottom-start"
+      :options="kbPluginMenuOptions" :x="kbPluginMenuPosition.x" :y="kbPluginMenuPosition.y"
+      @select="handleKbPluginMenuSelect" @clickoutside="kbPluginMenuVisible = false" />
+
+    <n-modal v-model:show="kbReportModalVisible" preset="card" :title="kbReportTitle || '插件结果'"
+      style="width: 640px; max-width: 92vw;">
+      <div class="kb-plugin-report" v-html="kbReportHtml" />
+    </n-modal>
   </n-message-provider>
 </template>
 
@@ -303,16 +321,19 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   NButton, NIcon, NIconWrapper, NInput, NScrollbar, NSelect, NSpace, NSpin,
   NSwitch, NTag, NText, NTooltip, NMessageProvider, createDiscreteApi,
+  NModal, NDropdown,
 } from 'naive-ui'
 import {
   RefreshOutline, SyncOutline, SearchOutline, HammerOutline, SparklesOutline,
-  GitNetworkOutline, BulbOutline, AddOutline, TrashOutline,
+  GitNetworkOutline, BulbOutline, AddOutline, TrashOutline, ExtensionPuzzleOutline,
 } from '@vicons/ionicons5'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
 import { createLogger } from '../../utils/logger'
 import { onKgIndexChanged } from '../../utils/kgIndexEvents'
+import { listPluginsForSurface, runGuaxiPlugin } from '../../utils/guaxiPluginRunner'
+import { renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker'
 
 const logger = createLogger('GuaxiKnowledgeBaseManager')
 const { message } = createDiscreteApi(['message'])
@@ -358,6 +379,74 @@ const manualSyncEnabled = ref(false)
 
 const selectedKbName = ref(null)
 const kbOptions = ref([])
+
+// —— 知识库插件(knowledge-base 作用面)——
+const kbPluginRunning = ref(false)
+const kbPluginMenuVisible = ref(false)
+const kbPluginMenuOptions = ref([])
+const kbPluginMenuPosition = ref({ x: 0, y: 0 })
+let kbPluginCache = []
+const kbReportModalVisible = ref(false)
+const kbReportTitle = ref('')
+const kbReportHtml = ref('')
+
+const openKbPluginMenu = async (event) => {
+  if (!selectedKbName.value) {
+    message.warning('请先选择一个知识库')
+    return
+  }
+  let plugins = []
+  try {
+    plugins = await listPluginsForSurface('knowledge-base')
+  } catch (e) {
+    message.error('读取插件失败:' + String(e?.message || e))
+    return
+  }
+  if (!plugins.length) {
+    message.info('没有已启用的知识库插件(可在设置→插件管理里新建)')
+    return
+  }
+  kbPluginCache = plugins
+  if (plugins.length === 1) {
+    runKbPlugin(plugins[0])
+    return
+  }
+  kbPluginMenuOptions.value = plugins.map((p) => ({ label: p.name, key: p.id }))
+  kbPluginMenuPosition.value = { x: Number(event?.clientX || 200), y: Number(event?.clientY || 200) }
+  kbPluginMenuVisible.value = true
+}
+
+const handleKbPluginMenuSelect = (id) => {
+  kbPluginMenuVisible.value = false
+  const p = kbPluginCache.find((x) => x.id === id)
+  if (p) runKbPlugin(p)
+}
+
+const runKbPlugin = async (plugin) => {
+  if (kbPluginRunning.value) return
+  const kb = store.knowledgeBases.find((k) => k.knowledge_base_name === selectedKbName.value)
+  const ctx = {
+    kb_name: kb?.knowledge_base_name || selectedKbName.value || '',
+    kb_location: kb?.location || '',
+  }
+  kbPluginRunning.value = true
+  try {
+    const rj = await runGuaxiPlugin(plugin.entry_path, ctx)
+    const md =
+      typeof rj?.report === 'string'
+        ? rj.report
+        : typeof rj?.text === 'string'
+          ? rj.text
+          : JSON.stringify(rj, null, 2)
+    kbReportTitle.value = plugin.name
+    kbReportHtml.value = await renderMarkdown(md, { buttons: false, mermaid: true, math: true })
+    kbReportModalVisible.value = true
+  } catch (e) {
+    message.error('插件运行失败:' + String(e?.message || e))
+  } finally {
+    kbPluginRunning.value = false
+  }
+}
 
 const nodes = ref([])
 const edges = ref([])

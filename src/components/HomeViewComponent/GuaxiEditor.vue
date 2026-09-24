@@ -1340,6 +1340,9 @@
         @toggle-pin="toggleSelectionTranslatePinned" @update:pos="handleSelectionTranslatePanelUpdatePos"
         @close="closeSelectionTranslatePanel" />
 
+      <GuaxiKbContextPanel v-model:visible="kbContextVisible" :anchor="kbContextAnchor"
+        :query="kbContextQuery" @jump="handleKbContextJump" />
+
     </div>
     <!-- 添加 GitPanel 组件 -->
     <!--
@@ -1361,6 +1364,7 @@ import { useSiderStore } from '../../stores/useSiderStore'
 import { useDiffCompareStore, diffPathBaseName } from '../../stores/diffCompareStore'
 import GuaxiEditorStatusBar from './GuaxiEditorStatusBar.vue'
 import GuaxiSelectionTranslatePanel from './GuaxiSelectionTranslatePanel.vue'
+import GuaxiKbContextPanel from './GuaxiKbContextPanel.vue'
 import GuaxiNotebookView from './GuaxiNotebookView.vue'
 import GuaxiFindWidget from './GuaxiFindWidget.vue'
 import {
@@ -2420,6 +2424,10 @@ const pluginMenuVisible = ref(false);
 const pluginMenuOptions = ref([]);
 const pluginMenuPosition = ref({ x: 0, y: 0 });
 let editorTransformPluginsCache = [];
+// 划词→语义 KB 上下文侧栏浮层
+const kbContextVisible = ref(false);
+const kbContextAnchor = ref({ x: 0, y: 0 });
+const kbContextQuery = ref('');
 const EDITOR_CONTEXT_MENU_FONT_FAMILY = "var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New')";
 
 const handleEditorContextMenuClickoutside = () => {
@@ -2610,6 +2618,8 @@ const buildEditorContextMenuOptions = () => {
     { type: 'divider' },
 
     { label: '运行插件…', key: 'guaxi.plugin.run' },
+    { label: '划词查知识库', key: 'guaxi.kb.context', disabled: !hasSelection },
+    { label: '加入认知收件箱', key: 'guaxi.cognition.capture', disabled: !hasSelection },
     { type: 'divider' },
 
     { label: '命令面板', key: 'editor.action.quickCommand' }
@@ -2641,6 +2651,19 @@ const handleEditorContextMenuSelect = async (key) => {
 
   if (key === 'guaxi.plugin.run') {
     await openEditorPluginMenu({
+      x: editorContextMenuPosition.value.x,
+      y: editorContextMenuPosition.value.y,
+    });
+    return;
+  }
+
+  if (key === 'guaxi.cognition.capture') {
+    await captureSelectionToInbox();
+    return;
+  }
+
+  if (key === 'guaxi.kb.context') {
+    openKbContextPanel({
       x: editorContextMenuPosition.value.x,
       y: editorContextMenuPosition.value.y,
     });
@@ -11564,6 +11587,12 @@ const initEditor = () => {
     });
 
     editor.addAction({
+      id: 'guaxi.kb.context',
+      label: '划词查知识库（语义上下文）',
+      run: () => openKbContextPanel(null)
+    });
+
+    editor.addAction({
       id: 'guaxi.edit.navigateBack',
       label: '跳转到上次编辑位置',
       keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.LeftArrow],
@@ -13173,6 +13202,57 @@ const runEditorTransformPlugin = async (plugin) => {
     message.error('插件运行失败:' + String(e?.message || e));
   } finally {
     suppressEditLocationRecording = false;
+  }
+};
+
+const openKbContextPanel = (position) => {
+  const text = String(getSelectedTextForTranslate() || '').trim();
+  if (!text) {
+    message.info('请先选中一个词或短语');
+    return;
+  }
+  kbContextQuery.value = text;
+  kbContextAnchor.value = resolvePluginMenuPosition(position);
+  kbContextVisible.value = true;
+};
+
+const handleKbContextJump = async ({ path, line } = {}) => {
+  const target = String(path || '');
+  if (!target) return;
+  try {
+    // 复用 main.js 已有的 open_file_in_home 处理器(自带打开+跳行的整行-match 技巧)。
+    await emitTauriEvent('open_file_in_home', { path: target, lineNumber: Number(line) || 1 });
+    kbContextVisible.value = false;
+  } catch (e) {
+    message.error('打开文件失败:' + String(e?.message || e));
+  }
+};
+
+const captureSelectionToInbox = async () => {
+  const targetEditor = getActiveEditor();
+  const model = targetEditor?.getModel?.();
+  const selection = targetEditor?.getSelection?.();
+  if (!model || !selection || selection.isEmpty()) {
+    message.info('请先选中要收集的文本');
+    return;
+  }
+  const text = model.getValueInRange(selection);
+  if (!text.trim()) {
+    message.info('请先选中要收集的文本');
+    return;
+  }
+  // 复用现成的手动采集通道:cognition_capture(source=manual),后端已做去重/中和/打分。
+  const title = text.trim().split('\n')[0].slice(0, 40);
+  try {
+    await invoke('cognition_capture', {
+      sourceKind: 'manual',
+      text,
+      title: title || null,
+      uri: null,
+    });
+    message.success('已加入认知收件箱');
+  } catch (e) {
+    message.error('加入收件箱失败:' + String(e?.message || e));
   }
 };
 

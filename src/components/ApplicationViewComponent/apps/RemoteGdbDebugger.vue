@@ -22,111 +22,115 @@
     </div>
 
     <div class="gdb-body" v-if="sessionId">
-      <n-tabs v-model:value="tab" type="segment" size="small" class="gdb-tabs" pane-class="gdb-pane">
-        <n-tab-pane name="console" tab="控制台">
-          <div class="gdb-console" ref="consoleRef" :style="{ fontSize: gdbFontSize + 'px' }">
-            <pre v-for="(l, i) in consoleLines" :key="i" :class="'gdb-l-' + l.kind">{{ l.text }}</pre>
-          </div>
-          <div class="gdb-input">
-            <n-input v-model:value="cmdInput" size="small" placeholder="输入 MI(-exec-next) 或 CLI(bt) 命令回车执行" @keyup.enter="submitCmd" />
-            <n-button size="small" @click="submitCmd">执行</n-button>
-          </div>
-        </n-tab-pane>
-
-        <n-tab-pane name="vars" tab="变量树">
-          <div class="gdb-actions">
-            <n-input v-model:value="exprInput" size="small" placeholder="表达式，如 *ptr / mystruct / arr" style="width:260px" @keyup.enter="addVar" />
-            <n-button size="small" type="primary" @click="addVar">求值并展开</n-button>
-            <n-button size="small" :disabled="!varRoots.length" @click="sendVarTree">→ 编辑器</n-button>
-          </div>
-          <div class="gdb-tree">
-            <GdbVarNode v-for="n in varRoots" :key="n.name" :node="n" :depth="0" @expand="expandVar" />
-            <div v-if="!varRoots.length" class="gdb-hint">输入表达式，把复杂结构体展开成可折叠树。</div>
-          </div>
-        </n-tab-pane>
-
-        <n-tab-pane name="watch" tab="Watch">
-          <div class="gdb-actions">
-            <n-input v-model:value="watchInput" size="small" placeholder="钉住表达式，每次停下自动重算" style="width:260px" @keyup.enter="addWatch" />
-            <n-button size="small" type="primary" @click="addWatch">添加</n-button>
-            <n-button size="small" @click="refreshWatch">刷新</n-button>
-            <n-button size="small" :disabled="!watches.length" @click="sendWatch">→ 编辑器</n-button>
-          </div>
-          <table class="gdb-table">
-            <thead><tr><th>表达式</th><th>值</th><th></th></tr></thead>
-            <tbody>
-              <tr v-for="w in watches" :key="w.expr" :class="{ changed: w.changed }">
-                <td>{{ w.expr }}</td>
-                <td class="gdb-val">{{ w.value }}</td>
-                <td><n-button size="tiny" text @click="removeWatch(w.expr)">移除</n-button></td>
-              </tr>
-              <tr v-if="!watches.length"><td colspan="3" class="gdb-hint">停在断点时，这里自动刷新并高亮变化。</td></tr>
-            </tbody>
-          </table>
-        </n-tab-pane>
-
-        <n-tab-pane name="threads" tab="线程">
-          <div class="gdb-actions"><n-button size="small" @click="refreshThreads">刷新线程</n-button></div>
-          <div class="gdb-threads">
-            <div v-for="t in threads" :key="t.id" class="gdb-thread" :class="{ active: t.id === currentThread }" @click="selectThread(t.id)">
-              <div class="gdb-thread-h">线程 {{ t.id }} <span v-if="t.name">({{ t.name }})</span> — {{ t.state }}</div>
-              <div class="gdb-frame" v-if="t.frame">#{{ t.frame.level }} {{ t.frame.func }} @ {{ t.frame.file }}:{{ t.frame.line }}</div>
+      <div class="gdb-side" :style="{ width: gdbSideWidth + 'px' }">
+        <n-collapse :default-expanded-names="['breaks','threads','vars','watch']" arrow-placement="right">
+          <n-collapse-item title="断点" name="breaks">
+            <div class="gdb-actions">
+              <n-input v-model:value="bpInput" size="small" placeholder="main / file.c:42 / func" style="flex:1" @keyup.enter="addBreak" />
+              <n-button size="tiny" type="primary" @click="addBreak">加</n-button>
+              <n-button size="tiny" @click="refreshBreaks">刷新</n-button>
             </div>
-            <div v-if="!threads.length" class="gdb-hint">点“刷新线程”，或在停下时自动加载。</div>
-          </div>
-        </n-tab-pane>
+            <table class="gdb-table">
+              <thead><tr><th>#</th><th>位置</th><th>命中</th><th></th></tr></thead>
+              <tbody>
+                <tr v-for="b in breaks" :key="b.number">
+                  <td>{{ b.number }}</td>
+                  <td>{{ b.where }}</td>
+                  <td>{{ b.times }}</td>
+                  <td><n-button size="tiny" text @click="delBreak(b.number)">删</n-button></td>
+                </tr>
+                <tr v-if="!breaks.length"><td colspan="4" class="gdb-hint">加断点或点刷新。</td></tr>
+              </tbody>
+            </table>
+          </n-collapse-item>
 
-        <n-tab-pane name="breaks" tab="断点">
-          <div class="gdb-actions">
-            <n-input v-model:value="bpInput" size="small" placeholder="位置，如 main / file.c:42 / func" style="width:220px" @keyup.enter="addBreak" />
-            <n-button size="small" type="primary" @click="addBreak">加断点</n-button>
-            <n-button size="small" @click="refreshBreaks">刷新</n-button>
-          </div>
-          <table class="gdb-table">
-            <thead><tr><th>#</th><th>位置</th><th>命中</th><th></th></tr></thead>
-            <tbody>
-              <tr v-for="b in breaks" :key="b.number">
-                <td>{{ b.number }}</td>
-                <td>{{ b.where }}</td>
-                <td>{{ b.times }}</td>
-                <td><n-button size="tiny" text @click="delBreak(b.number)">删除</n-button></td>
-              </tr>
-              <tr v-if="!breaks.length"><td colspan="4" class="gdb-hint">加断点或点刷新。</td></tr>
-            </tbody>
-          </table>
-        </n-tab-pane>
+          <n-collapse-item title="线程" name="threads">
+            <div class="gdb-actions"><n-button size="tiny" @click="refreshThreads">刷新线程</n-button></div>
+            <div class="gdb-threads">
+              <div v-for="t in threads" :key="t.id" class="gdb-thread" :class="{ active: t.id === currentThread }" @click="selectThread(t.id)">
+                <div class="gdb-thread-h">线程 {{ t.id }} <span v-if="t.name">({{ t.name }})</span> — {{ t.state }}</div>
+                <div class="gdb-frame" v-if="t.frame">#{{ t.frame.level }} {{ t.frame.func }} @ {{ t.frame.file }}:{{ t.frame.line }}</div>
+              </div>
+              <div v-if="!threads.length" class="gdb-hint">点“刷新线程”，或在停下时自动加载。</div>
+            </div>
+          </n-collapse-item>
 
-        <n-tab-pane name="mem" tab="内存/源码">
-          <div class="gdb-actions">
-            <n-input v-model:value="memAddr" size="small" placeholder="地址/表达式，如 &buf 或 0x..." style="width:180px" />
-            <n-input-number v-model:value="memCount" size="small" :min="1" :max="4096" style="width:110px" />
-            <n-button size="small" type="primary" @click="readMem">读内存</n-button>
-            <n-button size="small" @click="listSource">显示当前源码</n-button>
-          </div>
-          <pre class="gdb-mem">{{ memText }}</pre>
-        </n-tab-pane>
+          <n-collapse-item title="变量树" name="vars">
+            <div class="gdb-actions">
+              <n-input v-model:value="exprInput" size="small" placeholder="*ptr / mystruct / arr" style="flex:1" @keyup.enter="addVar" />
+              <n-button size="tiny" type="primary" @click="addVar">展开</n-button>
+              <n-button size="tiny" :disabled="!varRoots.length" @click="sendVarTree">→编辑器</n-button>
+            </div>
+            <div class="gdb-tree">
+              <GdbVarNode v-for="n in varRoots" :key="n.name" :node="n" :depth="0" @expand="expandVar" />
+              <div v-if="!varRoots.length" class="gdb-hint">输入表达式，把复杂结构体展开成可折叠树。</div>
+            </div>
+          </n-collapse-item>
 
-        <n-tab-pane name="macros" tab="宏">
-          <div class="gdb-actions">
-            <n-input v-model:value="macroName" size="small" placeholder="宏名" style="width:130px" />
-            <n-input v-model:value="macroCmds" size="small" placeholder="命令序列(分号分隔)" style="width:280px" />
-            <n-button size="small" type="primary" @click="addMacro">保存宏</n-button>
-            <n-button size="small" @click="saveMacros">导出</n-button>
-            <n-button size="small" @click="loadMacros">导入</n-button>
-          </div>
-          <table class="gdb-table">
-            <thead><tr><th>宏</th><th>命令</th><th></th></tr></thead>
-            <tbody>
-              <tr v-for="m in macros" :key="m.name">
-                <td>{{ m.name }}</td>
-                <td class="gdb-val">{{ m.commands.join(' ; ') }}</td>
-                <td><n-button size="tiny" type="primary" @click="runMacro(m)">运行</n-button> <n-button size="tiny" text @click="removeMacro(m.name)">删除</n-button></td>
-              </tr>
-              <tr v-if="!macros.length"><td colspan="3" class="gdb-hint">把常用命令序列存成一键宏。</td></tr>
-            </tbody>
-          </table>
-        </n-tab-pane>
-      </n-tabs>
+          <n-collapse-item title="Watch" name="watch">
+            <div class="gdb-actions">
+              <n-input v-model:value="watchInput" size="small" placeholder="钉住表达式" style="flex:1" @keyup.enter="addWatch" />
+              <n-button size="tiny" type="primary" @click="addWatch">加</n-button>
+              <n-button size="tiny" @click="refreshWatch">刷新</n-button>
+            </div>
+            <table class="gdb-table">
+              <tbody>
+                <tr v-for="w in watches" :key="w.expr" :class="{ changed: w.changed }">
+                  <td>{{ w.expr }}</td>
+                  <td class="gdb-val">{{ w.value }}</td>
+                  <td><n-button size="tiny" text @click="removeWatch(w.expr)">移除</n-button></td>
+                </tr>
+                <tr v-if="!watches.length"><td colspan="3" class="gdb-hint">停在断点时自动刷新并高亮变化。</td></tr>
+              </tbody>
+            </table>
+          </n-collapse-item>
+
+          <n-collapse-item title="内存 / 源码" name="mem">
+            <div class="gdb-actions">
+              <n-input v-model:value="memAddr" size="small" placeholder="&buf 或 0x..." style="flex:1" />
+              <n-input-number v-model:value="memCount" size="small" :min="1" :max="4096" :show-button="false" style="width:80px" />
+            </div>
+            <div class="gdb-actions">
+              <n-button size="tiny" type="primary" @click="readMem">读内存</n-button>
+              <n-button size="tiny" @click="listSource">显示当前源码</n-button>
+            </div>
+            <pre class="gdb-mem">{{ memText }}</pre>
+          </n-collapse-item>
+
+          <n-collapse-item title="宏" name="macros">
+            <div class="gdb-actions">
+              <n-input v-model:value="macroName" size="small" placeholder="宏名" style="width:90px" />
+              <n-input v-model:value="macroCmds" size="small" placeholder="命令;命令" style="flex:1" />
+              <n-button size="tiny" type="primary" @click="addMacro">存</n-button>
+            </div>
+            <div class="gdb-actions">
+              <n-button size="tiny" @click="saveMacros">导出</n-button>
+              <n-button size="tiny" @click="loadMacros">导入</n-button>
+            </div>
+            <table class="gdb-table">
+              <tbody>
+                <tr v-for="m in macros" :key="m.name">
+                  <td>{{ m.name }}</td>
+                  <td><n-button size="tiny" type="primary" @click="runMacro(m)">运行</n-button> <n-button size="tiny" text @click="removeMacro(m.name)">删</n-button></td>
+                </tr>
+                <tr v-if="!macros.length"><td colspan="2" class="gdb-hint">把常用命令序列存成一键宏。</td></tr>
+              </tbody>
+            </table>
+          </n-collapse-item>
+        </n-collapse>
+      </div>
+
+      <div class="gdb-sideresize" @mousedown="onGdbResizeDown"></div>
+
+      <div class="gdb-center">
+        <div class="gdb-console" ref="consoleRef" :style="{ fontSize: gdbFontSize + 'px' }">
+          <pre v-for="(l, i) in consoleLines" :key="i" :class="'gdb-l-' + l.kind">{{ l.text }}</pre>
+        </div>
+        <div class="gdb-input">
+          <n-input v-model:value="cmdInput" size="small" placeholder="输入 MI(-exec-next) 或 CLI(bt) 命令回车执行" @keyup.enter="submitCmd" />
+          <n-button size="small" @click="submitCmd">执行</n-button>
+        </div>
+      </div>
     </div>
     <div v-else class="gdb-empty">选择 SSH 档案与可执行文件，启动远端 gdb -i=mi 开始调试。</div>
   </div>
@@ -198,6 +202,14 @@ const palette = [
 ]
 const gdbFontSize = ref(14)
 function setGdbFontSize(v) { gdbFontSize.value = Math.min(28, Math.max(9, v)) }
+const gdbSideWidth = ref(320)
+function onGdbResizeDown(e) {
+  const startX = e.clientX; const startW = gdbSideWidth.value
+  let resizing = true
+  const move = ev => { if (resizing) gdbSideWidth.value = Math.min(600, Math.max(220, startW + ev.clientX - startX)) }
+  const up = () => { resizing = false; document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up) }
+  document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
+}
 
 function miQuote(s) {
   return '"' + String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"'
@@ -413,8 +425,19 @@ async function loadMacros() {
 /* 面板填满高度 + 亮色适配 */
 .gdb-tabs :deep(.gdb-pane) { height: 100%; display: flex; flex-direction: column; min-height: 0; background: var(--guaxi-content-bg); }
 .gdb-console { flex: 1 1 auto; height: auto !important; min-height: 0; }
-.gdb-mem { flex: 1 1 auto; min-height: 0; }
-.gdb-tree, .gdb-threads { flex: 1 1 auto; min-height: 0; overflow: auto; }
-.gdb-tabs :deep(.gdb-pane) > .gdb-table { flex: 1 1 auto; }
-.gdb-tabs :deep(.n-tabs-pane-wrapper) { flex: 1 1 auto; min-height: 0; }
+
+/* 两列布局：左侧调试面板(accordion) + 中间控制台 */
+.gdb-body { flex: 1 1 auto; min-height: 0; display: flex; }
+.gdb-side { flex: 0 0 auto; overflow-y: auto; overflow-x: hidden; border-right: 1px solid var(--guaxi-border); background: color-mix(in srgb, var(--guaxi-panel-bg) 35%, transparent); }
+.gdb-side :deep(.n-collapse-item__header) { padding: 8px 12px !important; font-weight: 600; font-size: 12px; }
+.gdb-side :deep(.n-collapse-item) { border-top: 1px solid var(--guaxi-border-weak, rgba(0,0,0,0.06)); margin-top: 0 !important; }
+.gdb-side :deep(.n-collapse-item__content-inner) { padding: 6px 10px 10px !important; }
+.gdb-sideresize { flex: 0 0 auto; width: 5px; cursor: col-resize; background: var(--guaxi-border); opacity: .5; transition: opacity .15s, background .15s; }
+.gdb-sideresize:hover { opacity: 1; background: var(--tw-accent); }
+.gdb-center { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 8px; }
+.gdb-center .gdb-console { flex: 1 1 auto; min-height: 0; }
+.gdb-actions { flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.gdb-tree { max-height: 260px; overflow: auto; }
+.gdb-threads { max-height: 200px; overflow: auto; }
+.gdb-mem { max-height: 220px; overflow: auto; }
 </style>
