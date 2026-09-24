@@ -102,7 +102,7 @@ fn build_task(app: &AppHandle, item: &ResourceItem) -> Result<DownloadTask, Stri
 #[command]
 pub async fn rh_search(app: AppHandle, query: SearchQuery) -> Result<Vec<ResourceItem>, String> {
     ensure_init(&app).await?;
-    Ok(search::run(query).await)
+    Ok(search::run(&app, query).await)
 }
 
 #[command]

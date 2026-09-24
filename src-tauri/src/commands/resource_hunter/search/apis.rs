@@ -1,12 +1,18 @@
 //! 领域富集站 API 适配器：直接查结构化接口，拿到干净的文件直链，
 //! 精度远高于 SERP 抓取。全部走境外代理路由(client_for_source foreign=true)，无需 key。
 use super::super::model::{ResourceItem, ResourceKind};
-use super::super::{proxy, store};
+use super::super::{proxy, ytdlp_fetch};
 use super::make_id;
 use scraper::{Html, Selector};
+use tauri::AppHandle;
 
 fn client() -> Option<reqwest::Client> {
     proxy::client_for_source(&super::load_proxy(), true).ok()
+}
+
+/// 境内直连客户端（百度等国内源不走代理）。
+fn client_cn() -> Option<reqwest::Client> {
+    proxy::client_for_source(&super::load_proxy(), false).ok()
 }
 
 fn item(id_src: &str, title: String, kind: ResourceKind, source: &str, page: String,
@@ -83,6 +89,41 @@ pub async fn gutendex(kw: &str, limit: usize) -> Vec<ResourceItem> {
     out
 }
 
+/// 百度图片搜索 → 直连、返回可用图片 URL（境内首选图片源，无需代理）。
+pub async fn baidu_image(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let url = format!(
+        "https://image.baidu.com/search/acjson?tn=resultjson_com&ipn=rj&word={}&pn=0&rn={}",
+        urlencoding::encode(kw),
+        limit.min(30)
+    );
+    let client = match client_cn() { Some(c) => c, None => return vec![] };
+    let body = match client.get(&url).header("Referer", "https://image.baidu.com/").send().await {
+        Ok(r) => r.text().await.unwrap_or_default(),
+        Err(_) => return vec![],
+    };
+    let json: serde_json::Value = match serde_json::from_str(&body) { Ok(j) => j, Err(_) => return vec![] };
+    let mut out = Vec::new();
+    if let Some(arr) = json.get("data").and_then(|v| v.as_array()) {
+        for r in arr {
+            let dl = r.get("middleURL").and_then(|v| v.as_str())
+                .or_else(|| r.get("thumbURL").and_then(|v| v.as_str()))
+                .or_else(|| r.get("hoverURL").and_then(|v| v.as_str()))
+                .map(|s| s.to_string());
+            let dl = match dl { Some(d) if !d.is_empty() => d, _ => continue };
+            let title = r.get("fromPageTitleEnc").and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("{kw} 图片"));
+            let mut it = item(&dl, title, ResourceKind::Image, "百度图片",
+                r.get("fromURL").and_then(|v| v.as_str()).unwrap_or(&dl).to_string(),
+                Some(dl.clone()), Some("jpg"), 0.72);
+            it.thumbnail = r.get("thumbURL").and_then(|v| v.as_str()).map(|s| s.to_string());
+            out.push(it);
+        }
+    }
+    out
+}
+
 /// Openverse → CC 图片 / 音频 直链。
 pub async fn openverse(kw: &str, media: &str, limit: usize) -> Vec<ResourceItem> {
     let url = format!("https://api.openverse.org/v1/{}/?q={}&page_size={}", media, urlencoding::encode(kw), limit.min(30));
@@ -141,15 +182,21 @@ fn no_window(cmd: &mut tokio::process::Command) {
 #[cfg(not(windows))]
 fn no_window(_cmd: &mut tokio::process::Command) {}
 
-/// yt-dlp 直接搜索视频/音频（仅当 yt-dlp 已就位；不在搜索期触发下载）。
-/// 用 `ytsearchN:kw --flat-playlist --dump-json` 拿候选，交给下载队列 yt-dlp 解析。
-pub async fn ytsearch(kw: &str, media: &str, limit: usize) -> Vec<ResourceItem> {
-    let bin = match store::tools_dir_cached() {
-        Some(dir) => {
-            let p = dir.join(if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" });
-            if p.exists() { p } else { return vec![] }
+/// yt-dlp 直接搜索视频/音频。yt-dlp 缺失时按需联网下载（首次较慢）；
+/// 若本会话已尝试下载失败(无代理等)，则不再重试，避免每次搜索都卡在下载超时。
+static YTDLP_UNAVAILABLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub async fn ytsearch(app: &AppHandle, kw: &str, media: &str, limit: usize) -> Vec<ResourceItem> {
+    use std::sync::atomic::Ordering;
+    if YTDLP_UNAVAILABLE.load(Ordering::Relaxed) {
+        return vec![];
+    }
+    let bin = match ytdlp_fetch::ensure_ytdlp(app).await {
+        Ok(p) => p,
+        Err(_) => {
+            YTDLP_UNAVAILABLE.store(true, Ordering::Relaxed);
+            return vec![];
         }
-        None => return vec![],
     };
     let kind = if media == "audio" { ResourceKind::Audio } else { ResourceKind::Video };
     let query = format!("ytsearch{}:{}", limit.min(20), kw);

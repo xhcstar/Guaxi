@@ -164,7 +164,8 @@ pub async fn verify(items: Vec<ResourceItem>) -> Vec<ResourceItem> {
     let mut passthrough = Vec::new();
     for it in items {
         let is_web_link = it.source == "web" && it.download_url.is_some() && !it.needs_ytdlp && it.magnet.is_none();
-        if is_web_link {
+        // 图片直链常有防盗链(HEAD 返回 403)，一律不校验，避免误杀。
+        if is_web_link && it.kind != ResourceKind::Image {
             checks.push(it);
         } else {
             passthrough.push(it);
@@ -182,8 +183,9 @@ pub async fn verify(items: Vec<ResourceItem>) -> Vec<ResourceItem> {
             match client.head(&url).send().await {
                 Ok(resp) => {
                     let code = resp.status().as_u16();
-                    if code == 404 || code == 403 || code == 410 {
-                        return None; // 明确失效，丢弃
+                    // 只丢明确不存在的(404/410)；403 多为反爬/防盗链，保留。
+                    if code == 404 || code == 410 {
+                        return None;
                     }
                     let mut it = it;
                     if let Some(len) = resp

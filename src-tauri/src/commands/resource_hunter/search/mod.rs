@@ -95,7 +95,7 @@ fn score(matcher: &SkimMatcherV2, item: &ResourceItem, keyword: &str) -> f32 {
 // PLACEHOLDER_RUN
 
 /// 领域 API 精确源：按需要的类型并发查结构化接口。
-async fn api_sources(kw: &str, kinds: &[ResourceKind], limit: usize) -> Vec<ResourceItem> {
+async fn api_sources(app: &tauri::AppHandle, kw: &str, kinds: &[ResourceKind], limit: usize) -> Vec<ResourceItem> {
     type BoxFut = std::pin::Pin<Box<dyn std::future::Future<Output = Vec<ResourceItem>> + Send>>;
     let mut futs: Vec<BoxFut> = Vec::new();
     let has = |k: ResourceKind| kinds.contains(&k);
@@ -119,23 +119,27 @@ async fn api_sources(kw: &str, kinds: &[ResourceKind], limit: usize) -> Vec<Reso
     }
     if has(ResourceKind::Image) {
         let k = kw.to_string();
+        futs.push(Box::pin(async move { apis::baidu_image(&k, limit).await }));
+        let k = kw.to_string();
         futs.push(Box::pin(async move { apis::openverse(&k, "images", limit).await }));
     }
     if has(ResourceKind::Audio) {
         let k = kw.to_string();
         futs.push(Box::pin(async move { apis::openverse(&k, "audio", limit).await }));
         let k = kw.to_string();
-        futs.push(Box::pin(async move { apis::ytsearch(&k, "audio", limit).await }));
+        let app = app.clone();
+        futs.push(Box::pin(async move { apis::ytsearch(&app, &k, "audio", limit).await }));
     }
     if has(ResourceKind::Video) {
         let k = kw.to_string();
-        futs.push(Box::pin(async move { apis::ytsearch(&k, "video", limit).await }));
+        let app = app.clone();
+        futs.push(Box::pin(async move { apis::ytsearch(&app, &k, "video", limit).await }));
     }
     join_all(futs).await.into_iter().flatten().collect()
 }
 
 /// 执行一次检索。
-pub async fn run(query: SearchQuery) -> Vec<ResourceItem> {
+pub async fn run(app: &tauri::AppHandle, query: SearchQuery) -> Vec<ResourceItem> {
     let keyword = query.keyword.trim().to_string();
     if keyword.is_empty() {
         return vec![];
@@ -148,7 +152,7 @@ pub async fn run(query: SearchQuery) -> Vec<ResourceItem> {
 
     // 1) 领域 API 精确源（结构化直链，精度最高）。
     if query.seed_sites {
-        items.extend(api_sources(&keyword, &kinds, query.limit).await);
+        items.extend(api_sources(app, &keyword, &kinds, query.limit).await);
     }
 
     // 2) 通用全网发现：多引擎 ×（dork + LLM 扩展）→ 候选页 → 嗅探。
