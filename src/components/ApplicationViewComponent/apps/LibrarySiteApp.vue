@@ -88,6 +88,7 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 const frame = ref(null);
 const localUrl = ref("http://127.0.0.1:8888/lib/");
@@ -98,6 +99,15 @@ const busy = ref(false);
 const fedEnabled = ref(true);
 const fedBusy = ref(false);
 let themeObserver = null;
+
+// 库网站(iframe)里点条目打开时,webview 会拦截 window.open;
+// 站点改为 postMessage 给宿主,这里用系统默认程序打开该文件的 HTTP 地址。
+function onFrameMessage(e) {
+  const d = e.data;
+  if (d && d.type === "guaxi-open-file" && d.url) {
+    openUrl(d.url).catch((err) => console.error("打开文件失败", err));
+  }
+}
 
 // 读取 Guaxi 当前主题(与全局 CSS 同一个数据源:documentElement 的 data-guaxi-theme),
 // 保证内嵌库网站与 Guaxi 界面永远同亮同暗,不会半亮半暗。
@@ -128,6 +138,7 @@ onMounted(async () => {
     attributes: true,
     attributeFilter: ["data-guaxi-theme"],
   });
+  window.addEventListener("message", onFrameMessage);
 
   try {
     status.value = await invoke("library_site_share_status");
@@ -140,6 +151,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   if (themeObserver) themeObserver.disconnect();
+  window.removeEventListener("message", onFrameMessage);
 });
 
 async function toggleFederation() {

@@ -29,7 +29,6 @@
           role="tab"
           @click="viewMode = 'location'"
         >地图</button>
-        <span class="seg-ink" :class="viewMode"></span>
       </div>
       <div class="counts">
         <span class="count-num">{{ photos.length }}</span> 帧影像
@@ -920,22 +919,25 @@ onUnmounted(() => {
   font-size: 16px;
   letter-spacing: 0.08em;
   color: var(--ink-3);
-  padding: 4px 14px 8px;
+  padding: 4px 14px 10px;
   transition: color 0.2s;
 }
 .seg.active { color: var(--ink); }
 .seg:hover { color: var(--accent); }
-.seg-ink {
+.seg::after {
+  content: '';
   position: absolute;
-  bottom: 0;
+  left: 14px;
+  right: 14px;
+  bottom: 2px;
   height: 2px;
-  width: 44px;
-  background: var(--accent);
   border-radius: 2px;
-  transition: transform 0.32s cubic-bezier(0.6, 0, 0.2, 1);
+  background: var(--accent);
+  transform: scaleX(0);
+  transform-origin: center;
+  transition: transform 0.28s cubic-bezier(0.6, 0, 0.2, 1);
 }
-.seg-ink.timeline { transform: translateX(14px); }
-.seg-ink.location { transform: translateX(96px); }
+.seg.active::after { transform: scaleX(1); }
 .counts { font-size: 12px; color: var(--ink-2); letter-spacing: 0.03em; }
 .count-num { font-family: var(--serif); font-size: 15px; color: var(--accent); }
 

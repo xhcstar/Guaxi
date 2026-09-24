@@ -36,7 +36,7 @@
   const state = {
     lib: null, libName: "资料库", mode: "browse", sort: "mtime",
     query: "", total: 0, pages: new Map(), inflight: new Set(),
-    firstRender: true, lastRange: [-1, -1],
+    firstRender: true, lastRange: [-1, -1], selected: -1,
   };
 
   // —— API 层（带 token；失败时回退演示数据，便于离线预览设计稿） ——
@@ -122,6 +122,7 @@
   function buildRow(doc, i) {
     const li = document.createElement("li");
     li.className = "row"; li.dataset.i = i;
+    if (state.selected === i) li.classList.add("selected");
     li.style.top = i * ROW_H + "px";
     if (doc.band) li.style.setProperty("--band", doc.band);
     const snippet = doc.snippet
@@ -139,7 +140,8 @@
         <span class="rm-size">${fmtSize(doc.size)}</span>
         <span class="rm-time">${fmtTime(doc.mtime)} ${src}</span>
       </div>`;
-    li.addEventListener("click", () => openDoc(doc));
+    li.addEventListener("click", () => { selectRow(i); openDoc(doc); });
+    li.addEventListener("dblclick", () => openDoc(doc));
     return li;
   }
 
@@ -157,13 +159,26 @@
     u.searchParams.set("lib", doc.lib || state.lib || "");
     u.searchParams.set("path", doc.path);
     if (TOKEN) u.searchParams.set("t", TOKEN);
-    window.open(u, "_blank");
+    const url = u.toString();
+    if (EMBEDDED) {
+      // Guaxi 内嵌:webview 会拦截 window.open,交给宿主用系统默认程序打开。
+      try { parent.postMessage({ type: "guaxi-open-file", url, name: doc.name }, "*"); } catch {}
+    } else {
+      window.open(url, "_blank");
+    }
+  }
+
+  function selectRow(i) {
+    state.selected = i;
+    el.rows.querySelectorAll(".row.selected").forEach((n) => n.classList.remove("selected"));
+    const node = el.rows.querySelector(`[data-i="${i}"]`);
+    if (node) node.classList.add("selected");
   }
 
   // —— 库切换 / 检索 ——
   function resetAndLoad() {
     state.pages.clear(); state.inflight.clear();
-    state.total = 0; state.firstRender = true; state.lastRange = [-1, -1];
+    state.total = 0; state.firstRender = true; state.lastRange = [-1, -1]; state.selected = -1;
     el.rows.innerHTML = ""; el.viewport.scrollTop = 0;
     el.spacer.style.height = "0px";
     toggleLoading(true);
