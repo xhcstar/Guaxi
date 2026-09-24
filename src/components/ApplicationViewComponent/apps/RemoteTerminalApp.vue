@@ -1,6 +1,6 @@
 <template>
   <div class="rt-root">
-    <n-tabs v-model:value="activeTab" type="line" class="rt-tabs" pane-class="rt-pane" display-directive="show:lazy" animated>
+    <n-tabs v-model:value="activeTab" type="line" class="rt-tabs" pane-class="rt-pane" display-directive="show:lazy">
       <n-tab-pane name="log">
         <template #tab><span class="tw-tab"><Icon :icon="fileSearchIcon" width="16" height="16" />日志分析</span></template>
         <div class="rt-log">
@@ -940,9 +940,9 @@ onBeforeUnmount(() => {
 :root[data-guaxi-theme='dark'] .rt-root { --tw-accent: #3dd6e8; --tw-accent-2: #22b8cf; --tw-accent-soft: rgba(61,214,232,0.14); --tw-code-bg: #0b1118; --tw-code-fg: #d8e0eb; }
 .rt-tabs { height: 100%; display: flex; flex-direction: column; }
 .rt-tabs :deep(.n-tabs-nav) { flex: 0 0 auto; }
-/* 让 pane 包裹层填满剩余高度，否则 GDB 等 pane 会塌到内容高度、正文无法占满窗口 */
-.rt-tabs :deep(.n-tabs-pane-wrapper) { flex: 1 1 auto; min-height: 0; }
-.rt-tabs :deep(.rt-pane) { height: 100%; padding: 0; }
+/* 非 animated 标签页：pane 直接作为 nav 的兄弟 flex 子项，用 flex 填满剩余高度。
+   （animated 模式下 naive-ui 会把包裹层 height/max-height 按内容量内联锁死，导致 GDB 等纯 CSS 高度链的 pane 塌到内容高度、无法占满窗口。） */
+.rt-tabs :deep(.rt-pane) { flex: 1 1 auto; min-height: 0; height: auto; padding: 0; }
 .rt-log { height: 100%; display: flex; flex-direction: column; min-height: 0; }
 .rt-toolbar { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--guaxi-border); flex: 0 0 auto; }
 .rt-meta { font-size: 12px; color: var(--guaxi-text-secondary, #6b7280); }
