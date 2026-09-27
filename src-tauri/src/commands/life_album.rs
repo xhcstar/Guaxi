@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use exif::{In, Tag, Value};
 use image::codecs::jpeg::JpegEncoder;
 use image::{DynamicImage, ExtendedColorType};
@@ -33,6 +34,10 @@ pub struct LifeAlbumPhoto {
     pub thumb: Option<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    /// "image" | "video"。视频与照片混排在同一条时间线里。
+    pub media_type: String,
+    /// 视频时长(秒);照片为 None。
+    pub duration: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Clone, Default)]
@@ -44,6 +49,8 @@ pub struct LifeAlbumPhotoMeta {
     pub thumb: Option<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    pub media_type: String,
+    pub duration: Option<f64>,
 }
 
 #[derive(Clone, Default)]
@@ -55,6 +62,8 @@ struct CachedMeta {
     thumb: Option<String>,
     width: Option<u32>,
     height: Option<u32>,
+    media_type: Option<String>,
+    duration: Option<f64>,
 }
 
 static GEO_HTTP: Lazy<reqwest::Client> = Lazy::new(|| {
@@ -122,6 +131,24 @@ fn is_supported_photo(path: &Path) -> bool {
     matches!(ext.to_lowercase().as_str(), "jpg" | "jpeg" | "png" | "webp")
 }
 
+/// WebView2 可解码播放的视频容器/编码(H.264 mp4/mov、webm/vp9)。
+/// HEVC/mkv/avi 不保证可播,先不纳入。
+fn is_video(path: &Path) -> bool {
+    let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    matches!(ext.to_lowercase().as_str(), "mp4" | "mov" | "m4v" | "webm")
+}
+
+fn is_supported_media(path: &Path) -> bool {
+    is_supported_photo(path) || is_video(path)
+}
+
+/// 媒体类型标签,与前端字段一致:"image" | "video"。
+fn media_type_of(path: &Path) -> String {
+    if is_video(path) { "video".to_string() } else { "image".to_string() }
+}
+
 fn life_album_dir() -> Result<PathBuf, String> {
     let root = crate::commands::settingview::get_image_bed_root();
     if root.trim().is_empty() {
@@ -180,13 +207,16 @@ fn open_cache_db() -> Result<Connection, String> {
         "#,
     )
     .map_err(|e| e.to_string())?;
+    // 老库缺少视频相关列时补上;列已存在会报错,忽略即可。
+    let _ = conn.execute("ALTER TABLE photo_meta ADD COLUMN media_type TEXT", []);
+    let _ = conn.execute("ALTER TABLE photo_meta ADD COLUMN duration REAL", []);
     Ok(conn)
 }
 
 fn load_meta_map(conn: &Connection) -> HashMap<String, CachedMeta> {
     let mut out = HashMap::new();
     let Ok(mut stmt) = conn.prepare(
-        "SELECT path, mtime, taken_at, latitude, longitude, thumb, width, height FROM photo_meta",
+        "SELECT path, mtime, taken_at, latitude, longitude, thumb, width, height, media_type, duration FROM photo_meta",
     ) else {
         return out;
     };
@@ -201,6 +231,8 @@ fn load_meta_map(conn: &Connection) -> HashMap<String, CachedMeta> {
                 thumb: r.get(5)?,
                 width: r.get::<_, Option<i64>>(6)?.map(|v| v as u32),
                 height: r.get::<_, Option<i64>>(7)?.map(|v| v as u32),
+                media_type: r.get::<_, Option<String>>(8)?,
+                duration: r.get::<_, Option<f64>>(9)?,
             },
         ))
     });
@@ -361,6 +393,17 @@ fn ensure_thumb(path: &Path, mtime: i64, orientation: u32) -> Option<(String, u3
 
 /// 从磁盘读取一个照片的完整元数据（EXIF + 缩略图）。用于缓存未命中路径，可在 rayon 并行调用。
 fn compute_meta(path: &Path) -> LifeAlbumPhotoMeta {
+    // 视频:Rust 侧无 ffmpeg,无法解码抽帧。海报/尺寸/时长由前端 canvas 抽帧后回传落库。
+    // 这里只给出类型与拍摄时间(取文件时间兜底),让它先进时间线。
+    if is_video(path) {
+        return LifeAlbumPhotoMeta {
+            path: path.to_string_lossy().to_string(),
+            taken_at: fallback_file_time(path),
+            media_type: "video".to_string(),
+            ..Default::default()
+        };
+    }
+
     let (mut taken_at, latitude, longitude, orientation) = read_exif_meta(path);
     if taken_at.is_none() {
         taken_at = fallback_file_time(path);
@@ -377,17 +420,20 @@ fn compute_meta(path: &Path) -> LifeAlbumPhotoMeta {
         thumb,
         width,
         height,
+        media_type: "image".to_string(),
+        duration: None,
     }
 }
 
 fn upsert_meta(conn: &Connection, path: &str, mtime: i64, m: &LifeAlbumPhotoMeta) {
     let _ = conn.execute(
-        "INSERT INTO photo_meta (path, mtime, taken_at, latitude, longitude, thumb, width, height)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        "INSERT INTO photo_meta (path, mtime, taken_at, latitude, longitude, thumb, width, height, media_type, duration)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT(path) DO UPDATE SET
             mtime=excluded.mtime, taken_at=excluded.taken_at,
             latitude=excluded.latitude, longitude=excluded.longitude,
-            thumb=excluded.thumb, width=excluded.width, height=excluded.height",
+            thumb=excluded.thumb, width=excluded.width, height=excluded.height,
+            media_type=excluded.media_type, duration=excluded.duration",
         rusqlite::params![
             path,
             mtime,
@@ -397,6 +443,8 @@ fn upsert_meta(conn: &Connection, path: &str, mtime: i64, m: &LifeAlbumPhotoMeta
             m.thumb,
             m.width.map(|v| v as i64),
             m.height.map(|v| v as i64),
+            if m.media_type.is_empty() { None } else { Some(m.media_type.clone()) },
+            m.duration,
         ],
     );
 }
@@ -439,7 +487,7 @@ fn scan_dir_blocking(
         .into_iter()
         .filter_map(|e| e.ok())
         .map(|e| e.into_path())
-        .filter(|p| p.is_file() && is_supported_photo(p))
+        .filter(|p| p.is_file() && is_supported_media(p))
         .collect();
 
     // 一次性载入缓存，命中且 mtime 未变的照片直接带出缩略图/EXIF —— 冷启动秒开。
@@ -455,6 +503,7 @@ fn scan_dir_blocking(
                 .and_then(|s| s.to_str())
                 .unwrap_or("")
                 .to_string();
+            let media_type = media_type_of(p);
 
             if let Some(c) = cache.get(&abs) {
                 if c.mtime == mtime {
@@ -468,6 +517,8 @@ fn scan_dir_blocking(
                         thumb: c.thumb.clone(),
                         width: c.width,
                         height: c.height,
+                        media_type: c.media_type.clone().unwrap_or(media_type),
+                        duration: c.duration,
                     };
                 }
             }
@@ -477,6 +528,7 @@ fn scan_dir_blocking(
                 original_path: abs,
                 file_name,
                 taken_at: fallback_file_time(p),
+                media_type,
                 ..Default::default()
             }
         })
@@ -524,6 +576,8 @@ fn enrich_files_blocking(paths: Vec<String>) -> Result<Vec<LifeAlbumPhotoMeta>, 
                     thumb: c.thumb.clone(),
                     width: c.width,
                     height: c.height,
+                    media_type: c.media_type.clone().unwrap_or_else(|| media_type_of(&path)),
+                    duration: c.duration,
                 });
                 continue;
             }
@@ -577,6 +631,8 @@ fn import_one_photo(src: &Path) -> Result<LifeAlbumPhoto, String> {
         thumb: meta.thumb,
         width: meta.width,
         height: meta.height,
+        media_type: meta.media_type,
+        duration: meta.duration,
     })
 }
 
@@ -593,7 +649,7 @@ fn import_files_blocking(paths: Vec<String>) -> Result<Vec<LifeAlbumPhoto>, Stri
     let mut out: Vec<LifeAlbumPhoto> = Vec::new();
     for p in paths {
         let path = normalize_path(&p);
-        if !path.is_file() || !is_supported_photo(&path) {
+        if !path.is_file() || !is_supported_media(&path) {
             continue;
         }
         let photo = import_one_photo(&path)?;
@@ -610,6 +666,8 @@ fn import_files_blocking(paths: Vec<String>) -> Result<Vec<LifeAlbumPhoto>, Stri
                     thumb: photo.thumb.clone(),
                     width: photo.width,
                     height: photo.height,
+                    media_type: photo.media_type.clone(),
+                    duration: photo.duration,
                 },
             );
         }
@@ -640,7 +698,7 @@ fn import_dir_blocking(dir_path: String) -> Result<Vec<LifeAlbumPhoto>, String> 
         .filter_map(|e| e.ok())
     {
         let p = entry.path();
-        if !p.is_file() || !is_supported_photo(p) {
+        if !p.is_file() || !is_supported_media(p) {
             continue;
         }
         let photo = import_one_photo(p)?;
@@ -657,6 +715,8 @@ fn import_dir_blocking(dir_path: String) -> Result<Vec<LifeAlbumPhoto>, String> 
                     thumb: photo.thumb.clone(),
                     width: photo.width,
                     height: photo.height,
+                    media_type: photo.media_type.clone(),
+                    duration: photo.duration,
                 },
             );
         }
@@ -664,6 +724,83 @@ fn import_dir_blocking(dir_path: String) -> Result<Vec<LifeAlbumPhoto>, String> 
     }
     out.sort_by(|a, b| b.taken_at.cmp(&a.taken_at));
     Ok(out)
+}
+
+/// 前端用离屏 `<video>` + `<canvas>` 抽取视频首帧,把 JPEG(base64)回传落盘缓存。
+/// Rust 侧无 ffmpeg 无法解码视频,海报只能这样来。缓存键与图片缩略图一致(path+mtime),
+/// 落库后重开应用命中 `photo_meta` 秒显,不必再抽帧。返回海报绝对路径。
+#[tauri::command]
+pub fn life_album_save_video_poster(
+    path: String,
+    jpeg_base64: String,
+    width: Option<u32>,
+    height: Option<u32>,
+    duration: Option<f64>,
+) -> Result<String, String> {
+    let path = normalize_path(&path);
+    if !path.is_file() {
+        return Err("视频文件不存在".to_string());
+    }
+    // 兼容前端可能带上的 data:image/...;base64, 前缀。
+    let payload = jpeg_base64
+        .split_once(',')
+        .map(|(_, b)| b)
+        .unwrap_or(&jpeg_base64);
+    let bytes = STANDARD
+        .decode(payload.trim())
+        .map_err(|e| format!("海报解码失败: {}", e))?;
+    if bytes.is_empty() {
+        return Err("海报数据为空".to_string());
+    }
+
+    let abs = path.to_string_lossy().to_string();
+    let mtime = file_mtime(&path);
+    let key = thumb_key(&abs, mtime);
+    let dir = thumbs_dir()?;
+    let sub = dir.join(&key[0..2]);
+    fs::create_dir_all(&sub).map_err(|e| e.to_string())?;
+    let out = sub.join(format!("{}.jpg", key));
+
+    let tmp = sub.join(format!("{}.tmp.jpg", key));
+    fs::write(&tmp, &bytes).map_err(|e| format!("写入海报失败: {}", e))?;
+    fs::rename(&tmp, &out).map_err(|e| format!("落盘海报失败: {}", e))?;
+    let thumb_path = out.to_string_lossy().to_string();
+
+    // 只更新海报/尺寸/时长/类型,保留既有 taken_at/经纬度(否则会被 upsert 清空)。
+    if let Ok(conn) = open_cache_db() {
+        let updated = conn
+            .execute(
+                "UPDATE photo_meta SET thumb=?1, width=?2, height=?3, duration=?4,
+                    media_type='video', mtime=?5 WHERE path=?6",
+                rusqlite::params![
+                    thumb_path,
+                    width.map(|v| v as i64),
+                    height.map(|v| v as i64),
+                    duration,
+                    mtime,
+                    abs,
+                ],
+            )
+            .unwrap_or(0);
+        if updated == 0 {
+            let _ = conn.execute(
+                "INSERT OR IGNORE INTO photo_meta
+                    (path, mtime, taken_at, thumb, width, height, media_type, duration)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'video', ?7)",
+                rusqlite::params![
+                    abs,
+                    mtime,
+                    fallback_file_time(&path),
+                    thumb_path,
+                    width.map(|v| v as i64),
+                    height.map(|v| v as i64),
+                    duration,
+                ],
+            );
+        }
+    }
+
+    Ok(thumb_path)
 }
 
 // ---------- 地名反查（多源 + 持久化）----------

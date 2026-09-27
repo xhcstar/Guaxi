@@ -14,6 +14,7 @@ pub mod file_index;
 pub mod fulltext;
 pub mod fileprocess;
 pub mod life_album;
+pub mod life_album_viewer_window;
 pub mod guaxireader;
 pub mod repoview;
 pub mod serverview;

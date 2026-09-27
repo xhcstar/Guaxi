@@ -2,15 +2,26 @@
   <div class="journal">
     <!-- 顶部报头 -->
     <header class="masthead">
-      <div class="masthead-left">
+      <div class="masthead-lead">
         <div class="kicker">TRAVEL · JOURNAL</div>
-        <h1 class="wordmark">旅行志</h1>
-        <div v-if="albumDir" class="dateline" :title="albumDir">{{ albumDir }}</div>
+        <div class="title-row">
+          <h1 class="wordmark">旅行志</h1>
+        </div>
       </div>
-      <div class="masthead-right">
-        <button class="link-btn" :disabled="loading" @click="pickDir">选择相册目录</button>
-        <span class="dot-sep">·</span>
-        <button class="link-btn" :disabled="loading" @click="importFiles">导入照片</button>
+      <div class="actions">
+        <button class="icon-btn" :disabled="loading" title="选择相册目录" @click="pickDir">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
+          </svg>
+        </button>
+        <button class="icon-btn" :disabled="loading" title="导入照片" @click="importFiles">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h7" />
+            <circle cx="8" cy="9" r="1.6" />
+            <path d="M3 16l4-3 3.6 2.7" />
+            <path d="M19 15v6M16 18h6" />
+          </svg>
+        </button>
       </div>
     </header>
 
@@ -99,7 +110,12 @@
               :style="tileStyle(p)"
               @click="openDetail(p)"
             >
-              <img class="frame-img" :src="thumbSrc(p)" loading="lazy" decoding="async" />
+              <img v-if="!isVideo(p) || p.thumb" class="frame-img" :src="thumbSrc(p)" loading="lazy" decoding="async" />
+              <div v-else class="frame-img video-placeholder"></div>
+              <template v-if="isVideo(p)">
+                <span class="play-badge">▶</span>
+                <span v-if="formatDuration(p.duration)" class="dur-chip">{{ formatDuration(p.duration) }}</span>
+              </template>
               <figcaption class="frame-cap">
                 <span class="cap-time">{{ formatClock(p.taken_at) }}</span>
                 <span v-if="cityFor(p)" class="cap-place">{{ cityFor(p) }}</span>
@@ -161,50 +177,14 @@
               class="strip-thumb"
               @click="openDetail(p)"
             >
-              <img :src="thumbSrc(p)" loading="lazy" decoding="async" />
+              <img v-if="!isVideo(p) || p.thumb" :src="thumbSrc(p)" loading="lazy" decoding="async" />
+              <div v-else class="strip-video-ph"></div>
+              <span v-if="isVideo(p)" class="strip-play">▶</span>
             </div>
           </div>
         </article>
       </div>
     </div>
-
-    <!-- 全屏查看器 -->
-    <n-modal
-      v-model:show="detailVisible"
-      preset="card"
-      class="viewer-modal"
-      style="width: 100vw; height: 100vh; max-width: 100vw; max-height: 100vh; margin: 0;"
-    >
-      <div
-        v-if="detail"
-        ref="viewerStageEl"
-        class="viewer"
-        @click="detailVisible = false"
-        @wheel.prevent="onViewerWheel"
-      >
-        <div class="viewer-bar" @click.stop>
-          <div class="viewer-info">
-            <span class="viewer-time">{{ formatTs(detail.taken_at) }}</span>
-            <span v-if="cityFor(detail)" class="viewer-place">{{ cityFor(detail) }}</span>
-          </div>
-          <div class="viewer-tools">
-            <button class="vtool" @click="viewerZoomOut">−</button>
-            <button class="vtool" @click="viewerZoomIn">＋</button>
-            <button class="vtool" @click="viewerRotateLeft">↺</button>
-            <button class="vtool" @click="viewerRotateRight">↻</button>
-            <button class="vtool" @click="viewerReset">重置</button>
-            <button class="vtool close" @click="detailVisible = false">退出</button>
-          </div>
-        </div>
-        <img
-          class="viewer-img"
-          :src="toSrc(detail.path)"
-          :style="viewerImgStyle"
-          @load="onViewerImgLoad"
-          @click.stop
-        />
-      </div>
-    </n-modal>
   </div>
 </template>
 
@@ -241,9 +221,6 @@ const photos = ref([])
 const albumDir = ref('')
 const visibleLimit = ref(400)
 
-const detailVisible = ref(false)
-const detail = ref(null)
-
 // ---------- 图片源 ----------
 const toSrc = (p) => {
   const raw = String(p || '').trim()
@@ -257,7 +234,27 @@ const toSrc = (p) => {
     return raw
   }
 }
-const thumbSrc = (p) => toSrc(p?.thumb || p?.path)
+const VIDEO_EXTS = ['mp4', 'mov', 'm4v', 'webm']
+const extOf = (p) => {
+  const s = String(p || '')
+  const i = s.lastIndexOf('.')
+  return i >= 0 ? s.slice(i + 1).toLowerCase() : ''
+}
+// 视频判定:优先看后端给的 media_type,老数据/裸对象按扩展名兜底。
+const isVideo = (p) => (p?.media_type ? p.media_type === 'video' : VIDEO_EXTS.includes(extOf(p?.path)))
+// 缩略图源:视频只认已生成的海报(没海报就返回空串走占位),绝不把视频路径塞进 <img> 变裂图;
+// 图片保持 thumb || 原图。
+const thumbSrc = (p) => {
+  if (isVideo(p)) return p?.thumb ? toSrc(p.thumb) : ''
+  return toSrc(p?.thumb || p?.path)
+}
+const formatDuration = (sec) => {
+  const s = Math.max(0, Math.round(Number(sec) || 0))
+  if (!s) return ''
+  const m = Math.floor(s / 60)
+  const r = s % 60
+  return `${m}:${String(r).padStart(2, '0')}`
+}
 
 // ---------- 时间 ----------
 const parseTakenAt = (s) => {
@@ -275,11 +272,6 @@ const formatClock = (s) => {
   const d = parseTakenAt(s)
   if (!d) return ''
   return `${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-}
-const formatTs = (s) => {
-  const d = parseTakenAt(s)
-  if (!d) return '未知时间'
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
 const sortByTimeDesc = (a, b) =>
@@ -594,51 +586,35 @@ const flyTo = (c) => {
   if (typeof c?.lat === 'number' && typeof c?.lon === 'number') map.setView([c.lat, c.lon], 13)
 }
 
-// ---------- 全屏查看器 ----------
-const viewerStageEl = ref(null)
-let viewerResizeObserver = null
-const viewerZoom = ref(1)
-const viewerRotation = ref(0)
-const viewerStageSize = ref({ w: 0, h: 0 })
-const viewerImgNatural = ref({ w: 0, h: 0 })
-
-const onViewerImgLoad = (e) => {
-  const el = e?.target
-  viewerImgNatural.value = { w: Number(el?.naturalWidth) || 0, h: Number(el?.naturalHeight) || 0 }
-}
-const fitScale = computed(() => {
-  const s = viewerStageSize.value, img = viewerImgNatural.value
-  if (!s.w || !s.h || !img.w || !img.h) return 1
-  const rad = (Math.abs(viewerRotation.value) % 360) * (Math.PI / 180)
-  const c = Math.abs(Math.cos(rad)), sn = Math.abs(Math.sin(rad))
-  const bbW = img.w * c + img.h * sn, bbH = img.w * sn + img.h * c
-  if (!bbW || !bbH) return 1
-  const fit = Math.min(s.w / bbW, s.h / bbH)
-  return Number.isFinite(fit) && fit > 0 ? fit : 1
-})
-const viewerReady = computed(() => {
-  const s = viewerStageSize.value, img = viewerImgNatural.value
-  return Boolean(s.w && s.h && img.w && img.h)
-})
-const viewerImgStyle = computed(() => {
-  const z = Math.min(8, Math.max(0.1, viewerZoom.value))
-  return {
-    transformOrigin: 'center center',
-    transform: `scale(${z * fitScale.value}) rotate(${viewerRotation.value}deg)`,
-    opacity: viewerReady.value ? 1 : 0
-  }
-})
-const viewerReset = () => { viewerZoom.value = 1; viewerRotation.value = 0 }
-const viewerZoomIn = () => { viewerZoom.value = Math.min(8, viewerZoom.value * 1.12) }
-const viewerZoomOut = () => { viewerZoom.value = Math.max(0.1, viewerZoom.value / 1.12) }
-const viewerRotateLeft = () => { viewerRotation.value -= 90 }
-const viewerRotateRight = () => { viewerRotation.value += 90 }
-const onViewerWheel = (e) => { e?.deltaY < 0 ? viewerZoomIn() : viewerZoomOut() }
+// ---------- 全屏查看器（独立窗口） ----------
+// 整册按时间线倒序串成一条，供查看器窗口左右翻页（与时间线阅读顺序一致）。
+const orderedPhotos = computed(() => photos.value.slice().sort(sortByTimeDesc))
 
 const openDetail = (p) => {
-  detail.value = p
-  viewerReset()
-  detailVisible.value = true
+  if (!p?.path) return
+  const ordered = orderedPhotos.value
+  let index = ordered.findIndex((x) => x.path === p.path)
+  if (index < 0) index = 0
+  const payload = ordered.map((x) => ({
+    path: x.path,
+    thumb: x.thumb ?? null,
+    taken_at: x.taken_at ?? null,
+    latitude: typeof x.latitude === 'number' ? x.latitude : null,
+    longitude: typeof x.longitude === 'number' ? x.longitude : null,
+    width: typeof x.width === 'number' ? x.width : null,
+    height: typeof x.height === 'number' ? x.height : null,
+    file_name: x.file_name || '',
+    city: cityFor(x) || '',
+    media_type: x.media_type || (isVideo(x) ? 'video' : 'image'),
+    duration: typeof x.duration === 'number' ? x.duration : null
+  }))
+  invoke('open_life_album_viewer_window', {
+    request: { photos: payload, index },
+    theme: 'dark'
+  }).catch((e) => {
+    logger.error('打开查看器窗口失败:', e)
+    message.error('打开查看器失败')
+  })
 }
 
 // ---------- 加载 / 增强 ----------
@@ -659,6 +635,7 @@ const enrichVisible = async () => {
     logger.error('EXIF 增强失败:', e)
   }
   ensureCities()
+  posterVisible()
 }
 
 const mergeMetas = (metas) => {
@@ -676,7 +653,112 @@ const mergeMetas = (metas) => {
     if (m.thumb != null) p.thumb = m.thumb
     if (m.width != null) p.width = m.width
     if (m.height != null) p.height = m.height
+    if (m.media_type != null) p.media_type = m.media_type
+    if (m.duration != null) p.duration = m.duration
   }
+}
+
+// ---------- 视频海报(前端抽首帧) ----------
+// Rust 无 ffmpeg,视频海报只能靠 WebView 解码:离屏 <video> seek 到 ~0.1s → <canvas>
+// 截图 → JPEG 回传 Rust 落盘缓存。能出海报的视频恰好就是能播放的视频,行为一致。
+const POSTER_EDGE = 480 // 海报短边像素
+const posterTried = new Set() // 本会话已尝试(成功/失败)过的视频路径,不重复抽帧
+const posterQueue = []
+let posterActive = 0
+const POSTER_CONCURRENCY = 2
+
+const generateVideoPoster = (p) =>
+  new Promise((resolve) => {
+    const src = toSrc(p?.path)
+    if (!src) return resolve(false)
+    const video = document.createElement('video')
+    video.muted = true
+    video.preload = 'metadata'
+    video.crossOrigin = 'anonymous'
+    video.playsInline = true
+    let done = false
+    const cleanup = () => {
+      video.removeAttribute('src')
+      try { video.load() } catch {}
+    }
+    const fail = () => {
+      if (done) return
+      done = true
+      cleanup()
+      resolve(false)
+    }
+    const timer = setTimeout(fail, 15000)
+    video.addEventListener('loadeddata', () => {
+      // seek 一点点,避开某些视频第 0 帧是纯黑的情况。
+      try { video.currentTime = Math.min(0.1, (video.duration || 1) / 2) } catch { fail() }
+    })
+    video.addEventListener('seeked', async () => {
+      if (done) return
+      try {
+        const vw = video.videoWidth || 0
+        const vh = video.videoHeight || 0
+        if (!vw || !vh) return fail()
+        const scale = POSTER_EDGE / Math.min(vw, vh)
+        const cw = Math.round(vw * Math.min(1, scale))
+        const ch = Math.round(vh * Math.min(1, scale))
+        const canvas = document.createElement('canvas')
+        canvas.width = cw
+        canvas.height = ch
+        const ctx = canvas.getContext('2d')
+        ctx.drawImage(video, 0, 0, cw, ch)
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.82)
+        const duration = Number.isFinite(video.duration) ? video.duration : null
+        clearTimeout(timer)
+        done = true
+        cleanup()
+        const thumb = await invoke('life_album_save_video_poster', {
+          path: p.path,
+          jpegBase64: dataUrl,
+          width: cw,
+          height: ch,
+          duration
+        })
+        // 原地 patch:海报出现 + 尺寸/时长补齐(触发瓦片重排为正确宽高比)。
+        for (const x of photos.value) {
+          if (x.path === p.path) {
+            if (typeof thumb === 'string' && thumb) x.thumb = thumb
+            x.width = vw
+            x.height = vh
+            if (duration != null) x.duration = duration
+            x.media_type = 'video'
+            break
+          }
+        }
+        resolve(true)
+      } catch (e) {
+        logger.warn('生成视频海报失败:', p?.path, e)
+        clearTimeout(timer)
+        fail()
+      }
+    })
+    video.addEventListener('error', () => { clearTimeout(timer); fail() })
+    video.src = src
+  })
+
+const pumpPosterQueue = () => {
+  while (posterActive < POSTER_CONCURRENCY && posterQueue.length) {
+    const p = posterQueue.shift()
+    posterActive += 1
+    generateVideoPoster(p).finally(() => {
+      posterActive -= 1
+      pumpPosterQueue()
+    })
+  }
+}
+
+// 只给可见范围内、还没海报、且本会话没尝试过的视频排队抽帧。
+const posterVisible = () => {
+  for (const p of visiblePhotos.value) {
+    if (!isVideo(p) || p.thumb || posterTried.has(p.path)) continue
+    posterTried.add(p.path)
+    posterQueue.push(p)
+  }
+  pumpPosterQueue()
 }
 
 const enrichAll = async () => {
@@ -740,7 +822,11 @@ const importFiles = async () => {
   try {
     const selected = await open({
       multiple: true,
-      filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'webp'] }]
+      filters: [
+        { name: 'Media', extensions: ['jpg', 'jpeg', 'png', 'webp', 'mp4', 'mov', 'm4v', 'webm'] },
+        { name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'webp'] },
+        { name: 'Videos', extensions: ['mp4', 'mov', 'm4v', 'webm'] }
+      ]
     })
     if (!selected) return
     const paths = Array.isArray(selected) ? selected : [selected]
@@ -775,31 +861,13 @@ watch(viewMode, async (v) => {
 // 首次加载 / 导入目录（整数组重建）也会让这两个计算属性变化，从而完成初始化。
 watch(timelineGroups, () => {
   if (viewMode.value === 'timeline') setupSpy()
+  posterVisible()
 })
 watch(geoPhotosAll, () => {
   if (viewMode.value === 'location') refreshMapMarkers()
 })
 watch(cityByGeoKey, () => {
   if (viewMode.value === 'location') refreshMapMarkers()
-})
-
-watch(detailVisible, async (v) => {
-  if (!v) {
-    if (viewerResizeObserver) { viewerResizeObserver.disconnect(); viewerResizeObserver = null }
-    viewerStageSize.value = { w: 0, h: 0 }
-    viewerImgNatural.value = { w: 0, h: 0 }
-    return
-  }
-  await nextTick()
-  const el = viewerStageEl.value
-  if (!el) return
-  const upd = () => {
-    const r = el.getBoundingClientRect()
-    viewerStageSize.value = { w: r.width, h: r.height }
-  }
-  upd()
-  viewerResizeObserver = new ResizeObserver(upd)
-  viewerResizeObserver.observe(el)
 })
 
 onMounted(async () => {
@@ -839,7 +907,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
-  padding: 22px 26px 0;
+  padding: 14px 26px 0;
   overflow: hidden;
   color: var(--ink);
   font-family: var(--sans);
@@ -863,55 +931,55 @@ onUnmounted(() => {
 /* 报头 */
 .masthead {
   display: flex;
-  align-items: flex-end;
+  align-items: flex-start;
   justify-content: space-between;
-  padding-bottom: 14px;
+  padding-bottom: 8px;
 }
 .kicker {
   font-size: 11px;
   letter-spacing: 0.42em;
   color: var(--accent);
   font-weight: 600;
-  margin-bottom: 2px;
+  margin-bottom: 3px;
+}
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
 }
 .wordmark {
   margin: 0;
   font-family: var(--serif);
-  font-size: 34px;
+  font-size: 30px;
   font-weight: 600;
   letter-spacing: 0.14em;
   line-height: 1;
 }
-.dateline {
-  margin-top: 6px;
-  font-size: 12px;
-  color: var(--ink-3);
-  max-width: 44vw;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.masthead-right { display: flex; align-items: center; gap: 10px; }
-.link-btn {
-  border: 0;
-  background: none;
-  font-family: var(--sans);
-  font-size: 13px;
+.actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--card);
   color: var(--ink-2);
   cursor: pointer;
-  padding: 2px 0;
-  border-bottom: 1px solid transparent;
-  transition: color 0.18s, border-color 0.18s;
+  transition: color 0.18s, border-color 0.18s, background 0.18s, transform 0.18s;
 }
-.link-btn:hover { color: var(--accent); border-color: var(--accent); }
-.link-btn:disabled { opacity: 0.4; cursor: default; }
+.icon-btn:hover { color: var(--accent); border-color: var(--accent); transform: translateY(-1px); }
+.icon-btn:disabled { opacity: 0.4; cursor: default; transform: none; }
+.icon-btn svg { width: 18px; height: 18px; }
 .dot-sep { color: var(--ink-3); }
 /* 控制栏 */
 .controlbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 0 14px;
+  padding: 2px 0 10px;
   border-bottom: 1px solid var(--line);
 }
 .segmented { position: relative; display: inline-flex; gap: 2px; }
@@ -967,7 +1035,7 @@ onUnmounted(() => {
 .empty-hint { font-size: 13px; color: var(--ink-3); }
 
 /* 时间线 */
-.timeline { flex: 1; min-height: 0; display: flex; gap: 22px; padding-top: 16px; }
+.timeline { flex: 1; min-height: 0; display: flex; gap: 22px; padding-top: 10px; }
 .spine {
   position: relative;
   width: 74px;
@@ -1001,8 +1069,22 @@ onUnmounted(() => {
   flex: 1;
   min-width: 0;
   overflow-y: auto;
-  padding: 0 8px 40px 0;
+  padding: 0 10px 40px 0;
   scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+  scrollbar-gutter: stable;
+}
+.stream::-webkit-scrollbar { width: 10px; }
+.stream::-webkit-scrollbar-track { background: transparent; }
+.stream::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 6px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+.stream::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-3);
+  background-clip: padding-box;
 }
 .chapter { margin-bottom: 34px; content-visibility: auto; contain-intrinsic-size: 1px 640px; }
 .chapter-head {
@@ -1053,6 +1135,40 @@ onUnmounted(() => {
   border-radius: 3px; pointer-events: none;
 }
 .frame-img { display: block; width: 100%; height: auto; }
+.frame-img.video-placeholder {
+  aspect-ratio: 4 / 3;
+  background: linear-gradient(135deg, #2a231c, #171310);
+}
+/* 视频角标:播放三角 + 时长胶囊 */
+.play-badge {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 42px; height: 42px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%;
+  background: rgba(20, 15, 10, 0.5);
+  border: 1.5px solid rgba(255, 255, 255, 0.85);
+  color: #fff;
+  font-size: 15px;
+  padding-left: 3px;
+  backdrop-filter: blur(2px);
+  pointer-events: none;
+  transition: background 0.2s, transform 0.2s;
+}
+.frame:hover .play-badge { background: rgba(177, 83, 58, 0.72); transform: translate(-50%, -50%) scale(1.08); }
+.dur-chip {
+  position: absolute;
+  right: 6px; top: 6px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(20, 15, 10, 0.72);
+  color: #f6efe2;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
 .frame.wide { outline: 3px solid var(--card); }
 .frame:hover { transform: translateY(-4px); box-shadow: 0 14px 30px rgba(60, 40, 25, 0.2); }
 .frame-cap {
@@ -1080,7 +1196,7 @@ onUnmounted(() => {
 .ghost-btn:hover { border-color: var(--accent); color: var(--accent); }
 .load-more-hint { font-size: 11px; color: var(--ink-3); }
 /* 地图视图 */
-.atlas { flex: 1; min-height: 0; display: flex; gap: 20px; padding: 16px 0 20px; }
+.atlas { flex: 1; min-height: 0; display: flex; gap: 20px; padding: 10px 0 20px; }
 .map-frame {
   position: relative;
   flex: 1 1 64%;
@@ -1121,44 +1237,26 @@ onUnmounted(() => {
 }
 .city-strip { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
 .strip-thumb {
+  position: relative;
   flex: 0 0 auto; width: 72px; height: 72px; border-radius: 3px; overflow: hidden;
   cursor: pointer; box-shadow: 0 1px 2px rgba(60, 45, 30, 0.12);
 }
 .strip-thumb img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.3s; }
 .strip-thumb:hover img { transform: scale(1.08); }
-
-/* 查看器 */
-.viewer-modal :deep(.n-card) { height: 100vh; display: flex; flex-direction: column; }
-.viewer-modal :deep(.n-card__content) { flex: 1; min-height: 0; padding: 0; position: relative; }
-.viewer {
-  position: absolute; inset: 0;
+.strip-video-ph { width: 100%; height: 100%; background: linear-gradient(135deg, #2a231c, #171310); }
+.strip-play {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 24px; height: 24px;
   display: flex; align-items: center; justify-content: center;
-  background: #14100c; overflow: hidden;
+  border-radius: 50%;
+  background: rgba(20, 15, 10, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  color: #fff; font-size: 9px; padding-left: 2px;
+  pointer-events: none;
 }
-.viewer-bar {
-  position: absolute; top: 14px; left: 14px; right: 14px; z-index: 2;
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 14px; border-radius: 4px;
-  background: rgba(20, 15, 10, 0.55);
-  border: 1px solid rgba(216, 180, 140, 0.16);
-  backdrop-filter: blur(8px);
-}
-.viewer-info { display: flex; flex-direction: column; gap: 2px; color: #f0e7d6; }
-.viewer-time { font-family: var(--serif); font-size: 15px; letter-spacing: 0.04em; }
-.viewer-place { font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--accent-2); }
-.viewer-tools { display: flex; gap: 6px; }
-.vtool {
-  border: 1px solid rgba(216, 180, 140, 0.22); background: rgba(255, 255, 255, 0.04);
-  color: #ecdfca; font-family: var(--sans); font-size: 13px; min-width: 34px; height: 30px;
-  padding: 0 10px; border-radius: 3px; cursor: pointer; transition: all 0.18s;
-}
-.vtool:hover { background: rgba(216, 140, 90, 0.28); border-color: var(--accent-2); color: #fff; }
-.vtool.close { border-color: rgba(200, 90, 60, 0.5); color: #f0b8a6; }
-.vtool.close:hover { background: var(--accent); color: #fff; }
-.viewer-img {
-  width: auto; height: auto; max-width: none; max-height: none;
-  display: block; will-change: transform; user-select: none;
-}
+
 /* 地图上的地名服务 HUD */
 .geo-hud {
   position: absolute;

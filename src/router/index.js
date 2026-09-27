@@ -21,6 +21,7 @@ import GuaxiSyntaxManualWindow from '../components/HomeViewComponent/GuaxiSyntax
 import GuaxiLanguageLearning from '../components/HomeViewComponent/GuaxiLanguageLearning.vue'
 import GuaxiTaskManagerPage from '../views/GuaxiTaskManagerPage.vue'
 import GuaxiDiffComparePage from '../views/GuaxiDiffComparePage.vue'
+import GuaxiLifeAlbumViewerPage from '../views/GuaxiLifeAlbumViewerPage.vue'
 import FlipboardFeedManager from '../components/SearchViewComponent/FlipboardFeedManager.vue'
 import GuaxiDataLabWorkbench from '../components/HomeViewComponent/GuaxiDataLabWorkbench.vue'
 import GuaxiMathWorkbench from '../components/HomeViewComponent/GuaxiMathWorkbench.vue'
@@ -231,6 +232,14 @@ export const routes = [
     path: '/diff-compare',
     name: 'diff-compare',
     component: GuaxiDiffComparePage,
+  },
+  {
+    path: '/life-album-viewer',
+    name: 'life-album-viewer',
+    component: GuaxiLifeAlbumViewerPage,
+    props: (route) => ({
+      theme: route.query.theme,
+    }),
   },
   {
     path: '/kb-manager',
