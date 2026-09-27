@@ -21,7 +21,8 @@
     "language_learning",
     "flipboard_feeds",
     "task_manager",
-    "diff-compare"
+    "diff-compare",
+    "life-album-viewer"
   ],
   "permissions": [
     "core:default",
