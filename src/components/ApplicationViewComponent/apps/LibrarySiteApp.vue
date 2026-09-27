@@ -100,12 +100,25 @@ const fedEnabled = ref(true);
 const fedBusy = ref(false);
 let themeObserver = null;
 
-// 库网站(iframe)里点条目打开时,webview 会拦截 window.open;
-// 站点改为 postMessage 给宿主,这里用系统默认程序打开该文件的 HTTP 地址。
+// 库网站(iframe)里点条目时,webview 会拦截 window.open,站点改为 postMessage 给宿主。
+//  - guaxi-open-reader:文件库条目 → 用 Guaxi 本地阅读器打开(重建磁盘绝对路径)。
+//  - guaxi-open-file  :联邦来源等无法用阅读器的条目 → 系统默认程序打开其 HTTP 地址。
+//  - guaxi-download   :下载(?dl=1,Content-Disposition: attachment)→ 系统处理下载。
 function onFrameMessage(e) {
   const d = e.data;
-  if (d && d.type === "guaxi-open-file" && d.url) {
+  if (!d || !d.type) return;
+  if (d.type === "guaxi-open-reader") {
+    invoke("open_repo_reader", {
+      library: d.library || "",
+      fileName: d.fileName || "",
+      fileType: d.fileType || "",
+      importFileId: d.importFileId != null ? Number(d.importFileId) : null,
+      theme: guaxiTheme(),
+    }).catch((err) => console.error("打开本地阅读器失败", err));
+  } else if (d.type === "guaxi-open-file" && d.url) {
     openUrl(d.url).catch((err) => console.error("打开文件失败", err));
+  } else if (d.type === "guaxi-download" && d.url) {
+    openUrl(d.url).catch((err) => console.error("下载文件失败", err));
   }
 }
 

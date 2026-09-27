@@ -51,8 +51,8 @@ async fn get_json(url: &str, cookie: &str) -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub async fn music_login_qq() -> Result<(), String> {
-    crate::commands::flipboard_render::open_login_window(PROFILE, "https://y.qq.com/")
+pub async fn music_login_qq(app: tauri::AppHandle) -> Result<(), String> {
+    crate::commands::flipboard_render::open_login_window(app, PROFILE, "https://y.qq.com/")
         .await
         .map_err(|e| format!("打开 QQ 音乐登录窗口失败: {e}"))
 }

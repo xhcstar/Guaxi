@@ -781,7 +781,11 @@ async fn reset_shared_browser() {
 /// 两个实例同时占用同一 profile。因此登录前先关掉共享无头实例（释放占用），登录后再关掉
 /// 可见实例并清空共享句柄——下次抓取会以登录后的最新 cookie 重新启动。这正是 MediaCrawler
 /// “持久化登录上下文 + 复用真实页面”的做法。
-pub async fn open_login_window(profile: &str, login_url: &str) -> Result<(), String> {
+pub async fn open_login_window(
+    app: tauri::AppHandle,
+    profile: &str,
+    login_url: &str,
+) -> Result<(), String> {
     // 清掉该 profile 可能存在的"未登录空 cookie"缓存，登录后下次抓取会重新探测。
     invalidate_cookie_cache(profile);
     // 释放共享无头实例对该 profile 的占用（Chrome 不允许两实例共用同一 user_data_dir）。
@@ -806,15 +810,195 @@ pub async fn open_login_window(profile: &str, login_url: &str) -> Result<(), Str
         .arg("--start-maximized")
         .arg("--new-window")
         .arg(login_url);
-    cmd.spawn()
+    let mut child = cmd
+        .spawn()
         .map_err(|e| format!("启动登录浏览器失败：{e}"))?;
 
     info!(
         "flipboard_render: launched standalone login browser for profile {} ({})",
         profile, login_url
     );
+
+    // 关键：cookie 只在登录浏览器**关闭**时才完整落盘，且开着时共享无头实例无法读该 profile。
+    // 因此起一个线程等窗口关闭，然后清缓存并通知前端刷新账号态（前端 listen("music-login-closed")）。
+    let profile_owned = profile.to_string();
+    std::thread::spawn(move || {
+        let _ = child.wait();
+        invalidate_cookie_cache(&profile_owned);
+        use tauri::Emitter;
+        let _ = app.emit("music-login-closed", &profile_owned);
+        info!(
+            "flipboard_render: login browser for profile {} closed; cookie cache invalidated",
+            profile_owned
+        );
+    });
+
     // 立即返回：登录由用户在该窗口内自行完成，cookie 落盘后下次抓取自动复用。
     Ok(())
+}
+
+/// 判断某 cookie 的域是否属于目标 host（含父域匹配）。
+fn cookie_domain_matches(cookie_domain: &str, host: &str) -> bool {
+    let d = cookie_domain.trim_start_matches('.').to_lowercase();
+    let h = host.to_lowercase();
+    h.ends_with(&d) || d.ends_with(&h)
+}
+
+/// 用 DPAPI 解开一段数据（Windows OSCrypt 的 AES 主密钥就是这样封装的）。
+#[cfg(windows)]
+fn dpapi_decrypt(data: &[u8]) -> Option<Vec<u8>> {
+    use windows_sys::Win32::Security::Cryptography::{CryptUnprotectData, CRYPT_INTEGER_BLOB};
+    unsafe {
+        let in_blob = CRYPT_INTEGER_BLOB {
+            cbData: data.len() as u32,
+            pbData: data.as_ptr() as *mut u8,
+        };
+        let mut out_blob = CRYPT_INTEGER_BLOB {
+            cbData: 0,
+            pbData: std::ptr::null_mut(),
+        };
+        let ok = CryptUnprotectData(
+            &in_blob,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            &mut out_blob,
+        );
+        if ok == 0 || out_blob.pbData.is_null() {
+            return None;
+        }
+        let out = std::slice::from_raw_parts(out_blob.pbData, out_blob.cbData as usize).to_vec();
+        // 主密钥只在每次磁盘读取时解一次，pbData 由系统 LocalAlloc 分配，此处不显式释放
+        // （量极小、频率极低），避免为 LocalFree 再引入平台内存 API 依赖。
+        Some(out)
+    }
+}
+
+/// 读取 Chrome profile `Local State` 里的 OSCrypt AES-256 主密钥（DPAPI 封装）。
+#[cfg(windows)]
+fn oscrypt_master_key(user_data: &Path) -> Option<Vec<u8>> {
+    use base64::Engine;
+    let txt = std::fs::read_to_string(user_data.join("Local State")).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&txt).ok()?;
+    let b64 = json.get("os_crypt")?.get("encrypted_key")?.as_str()?;
+    let raw = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
+    // 前缀 "DPAPI"(5 字节) 后才是 DPAPI 密文。
+    if raw.len() <= 5 || &raw[..5] != b"DPAPI" {
+        return None;
+    }
+    let key = dpapi_decrypt(&raw[5..])?;
+    if key.len() == 32 {
+        Some(key)
+    } else {
+        None
+    }
+}
+
+/// 解密单个 v10/v11 cookie 值（AES-256-GCM：3 字节前缀 + 12 字节 nonce + 密文 + 16 字节 tag）。
+#[cfg(windows)]
+fn decrypt_cookie_value(key: &[u8], enc: &[u8]) -> Option<String> {
+    use aes_gcm::aead::generic_array::GenericArray;
+    use aes_gcm::aead::Aead;
+    use aes_gcm::{Aes256Gcm, KeyInit};
+    if enc.len() < 3 + 12 + 16 || (&enc[..3] != b"v10" && &enc[..3] != b"v11") {
+        return None;
+    }
+    let cipher = Aes256Gcm::new(GenericArray::from_slice(key));
+    let nonce = GenericArray::from_slice(&enc[3..15]);
+    let pt = cipher.decrypt(nonce, &enc[15..]).ok()?;
+    String::from_utf8(pt).ok()
+}
+
+/// 直接从磁盘上的 Chrome Cookies 库读取某 host 的 cookie，拼成请求头。
+///
+/// 关键动机：登录用的可见浏览器与无头读取实例**不能同时占用同一 profile**，用户不关登录
+/// 窗口时 CDP 读取必然失败。改为把 Cookies 库（含 -wal/-shm）复制到临时目录后离线解析，
+/// DPAPI 解 OSCrypt 主密钥、AES-GCM 解每条 cookie，登录窗口开着也能读到已落盘的登录态。
+#[cfg(windows)]
+fn cookies_from_disk(profile: &str, host: &str) -> Option<String> {
+    let user_data = chrome_profile_dir(profile).ok()?;
+    let key = oscrypt_master_key(&user_data)?;
+
+    // Cookies 库位置随 Chrome 版本变化，挨个尝试。
+    let candidates = [
+        user_data.join("Default").join("Network").join("Cookies"),
+        user_data.join("Default").join("Cookies"),
+        user_data.join("Network").join("Cookies"),
+    ];
+    let src = candidates.iter().find(|p| p.exists())?;
+
+    // 复制到临时目录再打开，避开 Chrome 运行时的文件锁；带上 -wal/-shm 以读到最新提交。
+    let tmp = std::env::temp_dir().join(format!(
+        "guaxi_ck_{}_{}",
+        profile,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&tmp).ok()?;
+    let dst = tmp.join("Cookies");
+    if std::fs::copy(src, &dst).is_err() {
+        let _ = std::fs::remove_dir_all(&tmp);
+        return None;
+    }
+    for suffix in ["-wal", "-shm"] {
+        let s = src.with_file_name(format!("Cookies{suffix}"));
+        if s.exists() {
+            let _ = std::fs::copy(&s, tmp.join(format!("Cookies{suffix}")));
+        }
+    }
+
+    let header = (|| {
+        let conn = rusqlite::Connection::open_with_flags(
+            &dst,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .ok()?;
+        let mut stmt = conn
+            .prepare("SELECT host_key, name, value, encrypted_value FROM cookies")
+            .ok()?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Vec<u8>>(3)?,
+                ))
+            })
+            .ok()?;
+        let mut parts: Vec<String> = Vec::new();
+        for row in rows.flatten() {
+            let (domain, name, plain, enc) = row;
+            if !cookie_domain_matches(&domain, host) {
+                continue;
+            }
+            let value = if !enc.is_empty() {
+                decrypt_cookie_value(&key, &enc).unwrap_or_default()
+            } else {
+                plain
+            };
+            if !value.is_empty() {
+                parts.push(format!("{name}={value}"));
+            }
+        }
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join("; "))
+        }
+    })();
+
+    let _ = std::fs::remove_dir_all(&tmp);
+    header
+}
+
+#[cfg(not(windows))]
+fn cookies_from_disk(_profile: &str, _host: &str) -> Option<String> {
+    None
 }
 
 /// 取某 URL 对应 profile 的 Cookie 请求头（登录态复用）。
@@ -837,6 +1021,20 @@ pub async fn cookie_header_for_url(url: &str, profile: &str) -> Option<String> {
                 return if header.is_empty() { None } else { Some(header.clone()) };
             }
         }
+    }
+
+    // 优先离线读取：不抢占登录浏览器的 profile，登录窗口开着也能拿到已落盘 cookie。
+    if let Some(header) = cookies_from_disk(profile, &host) {
+        info!(
+            "flipboard_render: cookie for profile {} read from disk ({} chars)",
+            profile,
+            header.len()
+        );
+        COOKIE_CACHE
+            .lock()
+            .unwrap()
+            .insert(profile.to_string(), (header.clone(), Instant::now()));
+        return Some(header);
     }
 
     if headless_disabled() {
@@ -862,10 +1060,7 @@ pub async fn cookie_header_for_url(url: &str, profile: &str) -> Option<String> {
         // 只保留该 host（含父域）的 cookie，拼成请求头。
         let parts: Vec<String> = cookies
             .into_iter()
-            .filter(|c| {
-                let d = c.domain.trim_start_matches('.').to_lowercase();
-                host.to_lowercase().ends_with(&d) || d.ends_with(&host.to_lowercase())
-            })
+            .filter(|c| cookie_domain_matches(&c.domain, &host))
             .map(|c| format!("{}={}", c.name, c.value))
             .collect();
         if parts.is_empty() {

@@ -131,6 +131,43 @@ pub async fn create_reader_window(
     Ok(())
 }
 
+/// 从库网站(iframe)条目在本地阅读器打开文件库里的文件。
+/// 由磁盘布局 <libraries_root>/Libraries/<library>/<stem>/<type_dir>/<filename> 重建绝对路径,
+/// 再复用 create_reader_window。file_type 为已映射的类型目录名(pdf/markdown/word/epub/html/txt)。
+#[tauri::command]
+pub async fn open_repo_reader(
+    app: tauri::AppHandle,
+    library: String,
+    file_name: String,
+    file_type: String,
+    import_file_id: Option<u64>,
+    theme: Option<String>,
+) -> Result<(), String> {
+    let root = crate::commands::settingview::get_libraries_root();
+    let stem = std::path::Path::new(&file_name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string();
+    let sep = std::path::MAIN_SEPARATOR;
+    let file_path = if file_type.is_empty() {
+        format!("{root}{sep}Libraries{sep}{library}{sep}{stem}{sep}{file_name}")
+    } else {
+        format!("{root}{sep}Libraries{sep}{library}{sep}{stem}{sep}{file_type}{sep}{file_name}")
+    };
+    let label = format!("reader-{}-{}", import_file_id.unwrap_or(0), Local::now().timestamp_millis());
+    let file_data = FileData {
+        file_type,
+        file_name: file_name.clone(),
+        file_path,
+        library,
+        base_name: Some(stem),
+        source: None,
+        import_file_id,
+    };
+    create_reader_window(app, label, file_name, file_data, theme).await
+}
+
 #[tauri::command]
 pub fn save_notes_to_file(
     content: String,

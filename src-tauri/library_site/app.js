@@ -14,7 +14,7 @@
 (() => {
   "use strict";
 
-  const ROW_H = 56;
+  const ROW_H = 84;          // 行高:容纳 名称+描述/片段+标签行 三行,须与 CSS --row-h 一致
   const PAGE = 200;          // 每页条数
   const BUFFER = 8;          // 视口上下各多渲染的行数
   const TOKEN = new URLSearchParams(location.search).get("t") || "";
@@ -30,6 +30,7 @@
     localLibs: $("localLibs"), peerLibs: $("peerLibs"),
     q: $("q"), mastTitle: $("mastTitle"), mastKicker: $("mastKicker"),
     mastMeta: $("mastMeta"), tbMode: $("tbMode"), tbSort: $("tbSort"),
+    tbScope: $("tbScope"),
     themeToggle: $("themeToggle"), discoverBtn: $("discoverBtn"),
   };
 
@@ -37,6 +38,7 @@
     lib: null, libName: "资料库", mode: "browse", sort: "mtime",
     query: "", total: 0, pages: new Map(), inflight: new Set(),
     firstRender: true, lastRange: [-1, -1], selected: -1,
+    searchMode: "meta", // 检索匹配:meta(元数据) | fulltext(正文)
   };
 
   // —— API 层（带 token；失败时回退演示数据，便于离线预览设计稿） ——
@@ -58,7 +60,7 @@
       const params = { offset: p * PAGE, limit: PAGE };
       let data;
       if (state.mode === "search") {
-        data = await api("search", { ...params, q: state.query, lib: state.lib });
+        data = await api("search", { ...params, q: state.query, lib: state.lib, mode: state.searchMode });
       } else {
         data = await api("list", { ...params, lib: state.lib, sort: state.sort });
       }
@@ -125,22 +127,44 @@
     if (state.selected === i) li.classList.add("selected");
     li.style.top = i * ROW_H + "px";
     if (doc.band) li.style.setProperty("--band", doc.band);
-    const snippet = doc.snippet
-      ? `<div class="row-snippet">${doc.snippet}</div>` : "";
+    // 副行:检索命中片段优先,否则显示文件描述
+    const sub = doc.snippet
+      ? `<div class="row-snippet">${doc.snippet}</div>`
+      : (doc.desc ? `<div class="row-desc">${escapeHtml(doc.desc)}</div>` : "");
+    // 标签
+    const tags = (doc.tags && doc.tags.length)
+      ? `<span class="row-tags">${doc.tags.slice(0, 4).map((t) => `<span class="row-tag">${escapeHtml(t)}</span>`).join("")}</span>`
+      : "";
+    // 所属文件库 / 联邦来源
+    const libTag = doc.library ? `<span class="row-lib">${escapeHtml(doc.library)}</span>` : "";
     const src = doc.source && doc.source !== "local"
-      ? `<span class="row-src">@${doc.source}</span>` : "";
+      ? `<span class="row-src">@${escapeHtml(doc.source)}</span>` : "";
     li.innerHTML = `
       <span class="row-band"></span>
-      <span class="row-ext">${(doc.ext || "·").slice(0, 4)}</span>
+      <span class="row-ext">${escapeHtml((doc.ext || "·").slice(0, 4))}</span>
       <div class="row-main">
         <div class="row-name">${escapeHtml(doc.name)}</div>
-        ${snippet}
+        ${sub}
+        <div class="row-tagline">${libTag}${tags}</div>
       </div>
       <div class="row-meta">
         <span class="rm-size">${fmtSize(doc.size)}</span>
-        <span class="rm-time">${fmtTime(doc.mtime)} ${src}</span>
+        <span class="rm-time">${doc.time_text ? escapeHtml(doc.time_text) : fmtTime(doc.mtime)} ${src}</span>
+      </div>
+      <div class="row-actions">
+        <button class="row-act" data-act="view" title="查看">查看</button>
+        ${doc.note ? `<button class="row-act" data-act="note" title="摘录笔记">笔记</button>` : ""}
+        <button class="row-act" data-act="dl" title="下载">下载</button>
       </div>`;
-    li.addEventListener("click", () => { selectRow(i); openDoc(doc); });
+    li.querySelector('[data-act="view"]').addEventListener("click", (e) => {
+      e.stopPropagation(); selectRow(i); openDoc(doc);
+    });
+    const noteBtn = li.querySelector('[data-act="note"]');
+    if (noteBtn) noteBtn.addEventListener("click", (e) => { e.stopPropagation(); selectRow(i); openNote(doc); });
+    li.querySelector('[data-act="dl"]').addEventListener("click", (e) => {
+      e.stopPropagation(); downloadDoc(doc);
+    });
+    li.addEventListener("click", () => selectRow(i));
     li.addEventListener("dblclick", () => openDoc(doc));
     return li;
   }
@@ -154,17 +178,65 @@
     return li;
   }
 
-  function openDoc(doc) {
+  // 构造 /api/file 的 URL(可选 dl=1 触发下载)
+  function fileUrl(doc, download) {
     const u = new URL("./api/file", location.href);
     u.searchParams.set("lib", doc.lib || state.lib || "");
     u.searchParams.set("path", doc.path);
+    if (download) u.searchParams.set("dl", "1");
     if (TOKEN) u.searchParams.set("t", TOKEN);
-    const url = u.toString();
+    return u.toString();
+  }
+
+  // 查看:本机联邦来源无 import_file_id → 走浏览器/系统打开;本机文件库条目 → 请求宿主用本地阅读器打开。
+  function openDoc(doc) {
+    const isPeer = doc.source && doc.source !== "local";
+    if (EMBEDDED && !isPeer && doc.import_file_id != null) {
+      // Guaxi 内嵌:交给宿主用本地阅读器打开文件库条目。
+      try {
+        parent.postMessage({
+          type: "guaxi-open-reader",
+          library: doc.library || "",
+          fileName: doc.name,
+          fileType: doc.ftype || "",
+          importFileId: doc.import_file_id,
+        }, "*");
+        return;
+      } catch {}
+    }
+    const url = fileUrl(doc, false);
     if (EMBEDDED) {
-      // Guaxi 内嵌:webview 会拦截 window.open,交给宿主用系统默认程序打开。
+      // 内嵌但无法用阅读器(联邦来源等):交给宿主用系统默认程序打开。
       try { parent.postMessage({ type: "guaxi-open-file", url, name: doc.name }, "*"); } catch {}
     } else {
       window.open(url, "_blank");
+    }
+  }
+
+  // 打开摘录笔记(本机文件库条目才有)
+  function openNote(doc) {
+    if (!doc.note) return;
+    const u = new URL("./api/file", location.href);
+    u.searchParams.set("lib", doc.lib || state.lib || "");
+    u.searchParams.set("path", doc.note);
+    if (TOKEN) u.searchParams.set("t", TOKEN);
+    const url = u.toString();
+    if (EMBEDDED) {
+      try { parent.postMessage({ type: "guaxi-open-file", url, name: doc.note_name || doc.name }, "*"); } catch {}
+    } else {
+      window.open(url, "_blank");
+    }
+  }
+
+  // 下载:内嵌交给宿主(webview 会拦截 attachment 下载),浏览器直接触发。
+  function downloadDoc(doc) {
+    const url = fileUrl(doc, true);
+    if (EMBEDDED) {
+      try { parent.postMessage({ type: "guaxi-download", url, name: doc.name }, "*"); } catch {}
+    } else {
+      const a = document.createElement("a");
+      a.href = url; a.download = doc.name || "";
+      document.body.appendChild(a); a.click(); a.remove();
     }
   }
 
@@ -209,11 +281,20 @@
   function setModeUI(mode) {
     el.tbMode.querySelectorAll(".tb-seg").forEach((b) =>
       b.classList.toggle("is-on", b.dataset.mode === mode));
+    // 检索模式才显示"元数据/正文"匹配范围切换
+    if (el.tbScope) el.tbScope.hidden = mode !== "search";
   }
   el.tbMode.addEventListener("click", (e) => {
     const seg = e.target.closest(".tb-seg"); if (!seg) return;
     if (seg.dataset.mode === "search") el.q.focus();
     else { el.q.value = ""; state.query = ""; state.mode = "browse"; setModeUI("browse"); el.mastTitle.textContent = state.libName; resetAndLoad(); }
+  });
+  // 检索匹配范围:元数据(文件名/描述/标签) | 正文(全文索引)
+  if (el.tbScope) el.tbScope.addEventListener("click", (e) => {
+    const seg = e.target.closest(".tb-seg"); if (!seg) return;
+    el.tbScope.querySelectorAll(".tb-seg").forEach((b) => b.classList.toggle("is-on", b === seg));
+    state.searchMode = seg.dataset.search === "fulltext" ? "fulltext" : "meta";
+    if (state.mode === "search" && state.query) resetAndLoad();
   });
   el.tbSort.addEventListener("click", (e) => {
     const seg = e.target.closest(".tb-seg"); if (!seg) return;

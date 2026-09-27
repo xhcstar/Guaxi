@@ -185,8 +185,8 @@ async fn netease_cookie() -> Option<String> {
 
 /// 打开可见登录窗口，用户扫码/输密码登录一次；cookie 落盘该 profile。
 #[tauri::command]
-pub async fn music_login_netease() -> Result<(), String> {
-    crate::commands::flipboard_render::open_login_window(NETEASE_PROFILE, "https://music.163.com/")
+pub async fn music_login_netease(app: tauri::AppHandle) -> Result<(), String> {
+    crate::commands::flipboard_render::open_login_window(app, NETEASE_PROFILE, "https://music.163.com/")
         .await
         .map_err(|e| format!("打开网易云登录窗口失败: {e}"))
 }

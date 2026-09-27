@@ -78,10 +78,11 @@
 <!-- PP_SCRIPT -->
 
 <script setup>
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import { NButton, NIcon, NSpin, useMessage } from "naive-ui";
 import { PlayOutline } from "@vicons/ionicons5";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { createLogger } from "../../../../utils/logger";
 import { useMusicStore } from "../../../../stores/useMusicStore";
 import { resolveOnlineUrl, toPlayableTrack } from "./onlinePlay";
@@ -198,6 +199,18 @@ async function playTrack(t) {
 }
 
 onMounted(refreshAccount);
+
+// 登录浏览器关闭后（cookie 才落盘），后端 emit "music-login-closed"，自动刷新账号态。
+let unlisten = null;
+onMounted(async () => {
+  unlisten = await listen("music-login-closed", () => {
+    logger.info("检测到登录窗口关闭，刷新账号");
+    refreshAccount();
+  });
+});
+onUnmounted(() => {
+  if (unlisten) unlisten();
+});
 </script>
 <!-- PP_STYLE -->
 

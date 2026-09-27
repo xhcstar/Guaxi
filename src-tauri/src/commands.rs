@@ -60,7 +60,6 @@ pub mod todo;
 pub mod music;
 pub mod filetransfer;
 pub mod library_site;
-pub mod library_index;
 pub mod code_runtime;
 pub mod editor_plugin;
 pub mod code_cell_runtime;

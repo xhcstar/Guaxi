@@ -4946,8 +4946,8 @@ pub async fn ensure_chromium_ready() -> Result<String, String> {
 /// 打开可见登录窗口供用户手动登录一次；会话(cookie)持久化到该 profile。
 /// profile 一般传 feed.id 或站点名。
 #[command]
-pub async fn open_login_session(profile: String, login_url: String) -> Result<(), String> {
-    crate::commands::flipboard_render::open_login_window(profile.trim(), login_url.trim())
+pub async fn open_login_session(app: tauri::AppHandle, profile: String, login_url: String) -> Result<(), String> {
+    crate::commands::flipboard_render::open_login_window(app, profile.trim(), login_url.trim())
         .await
         .map_err(|e| {
             warn!("flipboard: open_login_session failed: {}", e);

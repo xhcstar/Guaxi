@@ -21,13 +21,10 @@
     <!-- 右侧：功能图标 -->
     <div class="header-right">
       <n-icon class="header-icon" size="20" :component="Share24Regular" title="资料库分享与发布"
-        @click="showLibraryShare = true"></n-icon>
+        @click="openLibrarySite"></n-icon>
       <n-icon class="header-icon" size="20" :component="PanelRightContract24Regular" @click="toggleRightSider"></n-icon>
     </div>
   </div>
-
-  <!-- 资料库分享与发布窗口 -->
-  <GuaxiLibraryShareModal v-model:show="showLibraryShare" />
 
   <!-- 搜索下拉框 -->
   <n-dropdown v-model:show="isSearchDropdownVisible" :options="searchOptions" placement="bottom-start"
@@ -57,10 +54,8 @@ import {
 import { invoke } from '@tauri-apps/api/core'
 import { sep } from '@tauri-apps/api/path'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
-import GuaxiLibraryShareModal from './GuaxiLibraryShareModal.vue'
 
 const logger = createLogger('GuaxiHeaderRepoView')
-const showLibraryShare = ref(false)
 const rightSiderStore = useRightSiderStore()
 const viewKey = 'repo'
 const siderStore = useSiderStore();
@@ -77,6 +72,17 @@ const toggleLeftSider = () => {
 const toggleRightSider = () => {
   siderStore.toggleRightSider(viewKey)
 };
+
+// 资料库 · 分享与发布:在独立窗口打开库网站(展示文件库内容,支持本地阅读器查看/下载/联邦分享)。
+async function openLibrarySite() {
+  const theme = document.documentElement.dataset.guaxiTheme === 'dark' ? 'dark' : 'light'
+  try {
+    await invoke('open_library_site_window', { theme })
+  } catch (e) {
+    logger.error('打开资料库窗口失败', e)
+    message.error('打开资料库窗口失败')
+  }
+}
 
 useSiderHotkeys({
   toggleLeft: toggleLeftSider,

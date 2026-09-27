@@ -22,7 +22,8 @@
     "flipboard_feeds",
     "task_manager",
     "diff-compare",
-    "life-album-viewer"
+    "life-album-viewer",
+    "library-site"
   ],
   "permissions": [
     "core:default",

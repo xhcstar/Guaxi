@@ -6,6 +6,7 @@
       @timeupdate="onTimeUpdate"
       @loadedmetadata="onLoadedMeta"
       @ended="onEnded"
+      @canplay="onCanPlay"
       @play="store.setPlaying(true)"
       @pause="store.setPlaying(false)"
       @error="onError"
@@ -135,6 +136,12 @@ function onLoadedMeta() {
 function onEnded() {
   store.next(true);
 }
+// 新资源就绪。若处于播放态但元素仍暂停（切歌时 play() 抢在加载前被浏览器中断），补一次播放。
+function onCanPlay() {
+  if (store.isPlaying && audioEl.value && audioEl.value.paused) {
+    audioEl.value.play().catch(() => {});
+  }
+}
 function onError() {
   // 播放失败(如解灰未命中/URL 失效)自动跳下一首
   if (track.value) store.next(true);
@@ -151,7 +158,9 @@ function onVolume(val) {
   store.setVolume(val / 100);
 }
 
-// 曲目切换：加载并按播放态自动播放
+// 曲目切换：:src 绑定已自动加载新资源，这里不再调 load()（load()+play() 会互相抢占抛
+// AbortError，导致双击切歌后停在暂停态）。flush:"post" 保证回调在 src 更新到 DOM 之后
+// 运行；真正的播放兜底在 @canplay 里。
 watch(
   () => track.value?.url,
   async (url) => {
@@ -160,11 +169,11 @@ watch(
       audioEl.value.pause();
       return;
     }
-    audioEl.value.load();
     if (store.isPlaying) {
-      try { await audioEl.value.play(); } catch (_) { /* 用户手势限制 */ }
+      try { await audioEl.value.play(); } catch (_) { /* 等 canplay 兜底 */ }
     }
-  }
+  },
+  { flush: "post" }
 );
 
 watch(

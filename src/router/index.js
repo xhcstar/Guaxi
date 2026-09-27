@@ -22,6 +22,7 @@ import GuaxiLanguageLearning from '../components/HomeViewComponent/GuaxiLanguage
 import GuaxiTaskManagerPage from '../views/GuaxiTaskManagerPage.vue'
 import GuaxiDiffComparePage from '../views/GuaxiDiffComparePage.vue'
 import GuaxiLifeAlbumViewerPage from '../views/GuaxiLifeAlbumViewerPage.vue'
+import GuaxiLibrarySitePage from '../views/GuaxiLibrarySitePage.vue'
 import FlipboardFeedManager from '../components/SearchViewComponent/FlipboardFeedManager.vue'
 import GuaxiDataLabWorkbench from '../components/HomeViewComponent/GuaxiDataLabWorkbench.vue'
 import GuaxiMathWorkbench from '../components/HomeViewComponent/GuaxiMathWorkbench.vue'
@@ -240,6 +241,11 @@ export const routes = [
     props: (route) => ({
       theme: route.query.theme,
     }),
+  },
+  {
+    path: '/library-site',
+    name: 'library-site',
+    component: GuaxiLibrarySitePage,
   },
   {
     path: '/kb-manager',

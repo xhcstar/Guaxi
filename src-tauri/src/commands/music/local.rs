@@ -35,6 +35,48 @@ fn track_id(path: &str) -> String {
     format!("local_{}", hex::encode(&digest[..8]))
 }
 
+/// lofty 读取 ID3v1 或未声明编码的旧标签时按 Latin-1 解码，中文（GBK）会变成形如
+/// `²¼À¼ÄÝ` 的乱码。这里对「连续高位字节段」尝试按 GBK 回转：整串都落在 U+00..=U+FF、
+/// 且该段能无错解成含 CJK 汉字的文本时才替换。这样能修复中文标签，又不误伤法语/德语等
+/// 西文重音字母（é ü à 等多为孤立单字节，长度<2 的段会原样保留）。对已是正常中文
+/// （含 >U+FF 字符）的串直接原样返回，故可幂等地用于导入与读取两处。
+fn fix_cjk_mojibake(s: &str) -> String {
+    if s.is_empty() || s.chars().any(|c| (c as u32) > 0xFF) {
+        return s.to_string();
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if (chars[i] as u32) < 0x80 {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < chars.len() && (chars[i] as u32) >= 0x80 {
+            i += 1;
+        }
+        let run = &chars[start..i];
+        let mut fixed = false;
+        if run.len() >= 2 {
+            let bytes: Vec<u8> = run.iter().map(|&c| c as u8).collect();
+            let (decoded, _, had_err) = encoding_rs::GBK.decode(&bytes);
+            let has_cjk = decoded
+                .chars()
+                .any(|c| ('\u{3400}'..='\u{9FFF}').contains(&c));
+            if !had_err && has_cjk {
+                out.push_str(&decoded);
+                fixed = true;
+            }
+        }
+        if !fixed {
+            out.extend(run.iter());
+        }
+    }
+    out
+}
+
 fn is_audio(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
@@ -111,9 +153,9 @@ fn build_track(path: &Path) -> Result<MusicLocalTrack, String> {
         Ok(tagged) => {
             duration = tagged.properties().duration().as_secs_f64();
             if let Some(tag) = tagged.primary_tag().or_else(|| tagged.first_tag()) {
-                title = tag.title().map(|s| s.to_string()).unwrap_or_default();
-                artist = tag.artist().map(|s| s.to_string()).unwrap_or_default();
-                album = tag.album().map(|s| s.to_string()).unwrap_or_default();
+                title = tag.title().map(|s| fix_cjk_mojibake(&s)).unwrap_or_default();
+                artist = tag.artist().map(|s| fix_cjk_mojibake(&s)).unwrap_or_default();
+                album = tag.album().map(|s| fix_cjk_mojibake(&s)).unwrap_or_default();
                 if let Some(pic) = tag.pictures().first() {
                     let ext = match pic.mime_type() {
                         Some(MimeType::Png) => "png",
@@ -171,9 +213,9 @@ fn query_all(conn: &Connection) -> Result<Vec<MusicLocalTrack>, String> {
         .query_map([], |r| {
             Ok(MusicLocalTrack {
                 id: r.get(0)?,
-                title: r.get(1)?,
-                artist: r.get(2)?,
-                album: r.get(3)?,
+                title: fix_cjk_mojibake(&r.get::<_, String>(1)?),
+                artist: fix_cjk_mojibake(&r.get::<_, String>(2)?),
+                album: fix_cjk_mojibake(&r.get::<_, String>(3)?),
                 duration: r.get(4)?,
                 path: r.get(5)?,
                 cover_path: r.get(6)?,

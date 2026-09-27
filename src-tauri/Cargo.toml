@@ -196,6 +196,9 @@ libloading = "0.8"
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
+# 直接从 Chrome profile 的 Cookies 库读登录态（免二开浏览器抢占 profile）：
+# Local State 里的 AES 主密钥用 DPAPI(CryptUnprotectData) 解开。
+windows-sys = { version = "0.59", features = ["Win32_Security_Cryptography", "Win32_Foundation"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", default-features = false, features = ["apple-native"] }

@@ -33,7 +33,7 @@
   --ui: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
 
   --rail-w: 244px;
-  --row-h: 56px;
+  --row-h: 84px;
   --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
@@ -208,7 +208,8 @@ body {
 }
 .toolbar { display: flex; align-items: center; margin-top: 12px; gap: 10px; }
 .tb-spacer { flex: 1; }
-.tb-mode, .tb-sort { display: inline-flex; gap: 2px; padding: 3px; background: var(--row-hover); border-radius: 9px; }
+.tb-mode, .tb-sort, .tb-scope { display: inline-flex; gap: 2px; padding: 3px; background: var(--row-hover); border-radius: 9px; }
+.tb-scope[hidden] { display: none; }
 .tb-seg {
   font-family: var(--ui); font-size: var(--fs-meta); cursor: pointer;
   padding: 5px 12px; border: none; background: none; border-radius: 6px;
@@ -247,9 +248,29 @@ body {
 }
 .row-snippet { font-size: var(--fs-meta); color: var(--guaxi-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
 .row-snippet mark { background: var(--hit); color: inherit; border-radius: 2px; padding: 0 1px; }
+.row-desc { font-size: var(--fs-meta); color: var(--guaxi-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
+.row-tagline { display: flex; align-items: center; gap: 6px; margin-top: 3px; overflow: hidden; }
+.row-lib { font-size: 10px; padding: 1px 6px; border-radius: 999px; white-space: nowrap; flex: 0 0 auto;
+  background: color-mix(in srgb, var(--band, var(--accent)) 16%, transparent);
+  color: color-mix(in srgb, var(--band, var(--accent)) 80%, var(--guaxi-text-primary)); }
+.row-tags { display: flex; gap: 4px; overflow: hidden; }
+.row-tag { font-size: 10px; padding: 1px 6px; border-radius: 4px; white-space: nowrap;
+  background: var(--row-hover); color: var(--guaxi-text-secondary); }
 .row-meta { font-family: var(--mono); font-size: var(--fs-meta); color: var(--guaxi-text-secondary); text-align: right; flex: 0 0 auto; }
 .row-meta .rm-size { display: block; }
 .row-src { font-size: 10px; opacity: 0.7; }
+/* 行内操作:查看 / 笔记 / 下载。默认淡出,悬停或选中该行时浮现,不打扰滚动阅读。 */
+.row-actions { display: flex; gap: 6px; flex: 0 0 auto; opacity: 0; transition: opacity 0.14s var(--ease); }
+.row:hover .row-actions, .row.selected .row-actions { opacity: 1; }
+.row-act {
+  font-size: var(--fs-meta); font-family: inherit; line-height: 1;
+  padding: 5px 10px; border-radius: 6px; cursor: pointer; white-space: nowrap;
+  border: 1px solid var(--hairline); background: var(--guaxi-bg-elevated, transparent);
+  color: var(--guaxi-text-secondary);
+  transition: background 0.12s var(--ease), color 0.12s var(--ease), border-color 0.12s var(--ease);
+}
+.row-act:hover { color: var(--accent); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.row-act[data-act="dl"]:hover { color: var(--amber); border-color: var(--amber); background: color-mix(in srgb, var(--amber) 10%, transparent); }
 
 /* 入场：只对刚进入视口窗口的行做交错，绝不给十万行挂动画 */
 .row.enter { animation: rowin 0.42s var(--ease) both; }

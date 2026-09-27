@@ -37,42 +37,97 @@ struct Doc {
     source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     band: Option<String>,
+    // —— 文件库(imported_files)条目附带的元信息,供前端展示与本地阅读器重建路径 ——
+    #[serde(skip_serializing_if = "Option::is_none")]
+    desc: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tags: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    library: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repo: Option<String>,
+    /// 已映射到磁盘的类型目录名(pdf/markdown/word/epub/html/txt),阅读器按它定位文件。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ftype: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    import_file_id: Option<i64>,
+    /// 入库时间的原始展示串(create_time,文本;优先于 mtime 展示)。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    time_text: Option<String>,
+    /// 摘录笔记相对路径(存在时才有),可查看/下载。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    note: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    note_name: Option<String>,
 }
-// —— 库枚举与路径解析 ——
 
-/// 两个根:知识库 与 文件库。库 id 形如 `kb` / `repo`(根本身),
-/// 或 `kb::子目录名` / `repo::子目录名`(根下的直接子目录)。
-fn roots() -> Vec<(&'static str, String, &'static str)> {
-    // (kind, 绝对根路径, 展示色带)
-    vec![
-        ("kb", crate::commands::settingview::get_knowledge_bases_root(), "#1890ff"),
-        ("repo", crate::commands::settingview::get_libraries_root(), "#c07a2b"),
-    ]
-}
-
-fn root_for_kind(kind: &str) -> Option<(String, &'static str)> {
-    roots()
-        .into_iter()
-        .find(|(k, _, _)| *k == kind)
-        .map(|(_, p, band)| (p, band))
-}
-
-/// 库 id → (绝对根路径, 色带)。非法 id 返回 None。
-fn resolve_lib(id: &str) -> Option<(PathBuf, &'static str)> {
-    let (kind, sub) = match id.split_once("::") {
-        Some((k, s)) => (k, Some(s)),
-        None => (id, None),
-    };
-    let (root, band) = root_for_kind(kind)?;
-    let mut base = PathBuf::from(root);
-    if let Some(sub) = sub {
-        // 只允许单层子目录名,拒绝分隔符与 .. ,防路径穿越。
-        if sub.is_empty() || sub.contains(['/', '\\']) || sub.contains("..") {
-            return None;
+impl Doc {
+    /// 联邦/兜底场景用的极简构造:只有基本字段,元信息留空。
+    fn basic(path: String, name: String, ext: String, size: u64, mtime: i64, lib: String) -> Self {
+        Doc {
+            path, name, ext, size, mtime, lib,
+            snippet: None, source: None, band: None,
+            desc: None, tags: Vec::new(), library: None, repo: None,
+            ftype: None, import_file_id: None, time_text: None, note: None, note_name: None,
         }
-        base = base.join(sub);
     }
-    Some((base, band))
+}
+// —— 文件库数据源(repos.db 的 imported_files;不再展示知识库) ——
+
+const REPO_BAND: &str = "#c07a2b";
+
+/// 文件库在磁盘上的根:<libraries_root>/Libraries。所有本机库文件都在其下,
+/// 相对路径形如 <library>/<stem>/<type_dir>/<filename>,api_file 一律以此为 base。
+fn repo_disk_root() -> PathBuf {
+    PathBuf::from(crate::commands::settingview::get_libraries_root()).join("Libraries")
+}
+
+/// 把 DB 里的文件类型映射到磁盘上的类型目录名(与前端 useContextMenu.mapFileType 一致)。
+/// 返回 None 表示未知类型,此时文件直接落在 <stem>/ 下,无类型子目录。
+fn map_type_dir(raw: &str) -> Option<&'static str> {
+    match raw.to_ascii_lowercase().as_str() {
+        "pdf" => Some("pdf"),
+        "md" | "markdown" => Some("markdown"),
+        "html" | "htm" => Some("html"),
+        "epub" => Some("epub"),
+        "doc" | "docx" | "word" => Some("word"),
+        "txt" => Some("txt"),
+        _ => None,
+    }
+}
+
+fn file_stem_of(name: &str) -> String {
+    match name.rfind('.') {
+        Some(i) if i > 0 => name[..i].to_string(),
+        _ => name.to_string(),
+    }
+}
+
+/// 本机库 id 方案:
+///   `repo`                    → 全部文件
+///   `repo:<hexKR>:<hexLIB>`   → 指定知识库(kr)下的文件库(library);hexLIB 为空则整个 kr
+/// kr/library 名可能含任意字符,用 hex 编码规避分隔符冲突与路径穿越。
+fn decode_repo_scope(lib: &str) -> Option<(Option<String>, Option<String>)> {
+    if lib == "repo" {
+        return Some((None, None));
+    }
+    let rest = lib.strip_prefix("repo:")?;
+    let (hk, hl) = rest.split_once(':').unwrap_or((rest, ""));
+    let kr = hex::decode(hk).ok().and_then(|b| String::from_utf8(b).ok());
+    let library = if hl.is_empty() {
+        None
+    } else {
+        hex::decode(hl).ok().and_then(|b| String::from_utf8(b).ok())
+    };
+    Some((kr, library))
+}
+
+fn encode_repo_scope(kr: &str, library: &str) -> String {
+    if library.is_empty() {
+        format!("repo:{}:", hex::encode(kr.as_bytes()))
+    } else {
+        format!("repo:{}:{}", hex::encode(kr.as_bytes()), hex::encode(library.as_bytes()))
+    }
 }
 
 /// 把请求里的相对 path 安全拼到库根下:规范化后必须仍在根内,否则拒绝(防穿越)。
@@ -95,65 +150,237 @@ fn now_secs() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
-/// 枚举本机库:每个根 + 其下直接子目录各算一个库。
+/// 枚举本机文件库:顶部"全部文件" + 每个 (知识库, 文件库) 一个条目,计数走 SQL。
 fn enumerate_local() -> Vec<serde_json::Value> {
     let mut out = Vec::new();
-    for (kind, root, band) in roots() {
-        let root_path = PathBuf::from(&root);
-        if !root_path.is_dir() {
-            continue;
-        }
-        let root_name = if kind == "kb" { "知识库" } else { "文件库" };
-        out.push(json!({ "id": kind, "name": root_name, "band": band, "count": dir_file_count(&root_path) }));
-        if let Ok(rd) = std::fs::read_dir(&root_path) {
-            for e in rd.flatten() {
-                if e.path().is_dir() {
-                    let sub = e.file_name().to_string_lossy().to_string();
-                    out.push(json!({
-                        "id": format!("{}::{}", kind, sub),
-                        "name": sub,
-                        "band": band,
-                        "count": dir_file_count(&e.path()),
-                    }));
-                }
+    let conn = match crate::commands::repoview::init_db() {
+        Ok(c) => c,
+        Err(_) => return out,
+    };
+    let total: i64 = conn
+        .query_row("SELECT COUNT(*) FROM imported_files WHERE deleted=0", [], |r| r.get(0))
+        .unwrap_or(0);
+    out.push(json!({ "id": "repo", "name": "全部文件", "band": REPO_BAND, "count": total }));
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT knowledge_repo, library, COUNT(*) FROM imported_files WHERE deleted=0 \
+         GROUP BY knowledge_repo, library ORDER BY knowledge_repo, library",
+    ) {
+        if let Ok(rows) = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
+        }) {
+            for (kr, library, count) in rows.flatten() {
+                let name = if kr.is_empty() { library.clone() } else { format!("{} / {}", kr, library) };
+                out.push(json!({
+                    "id": encode_repo_scope(&kr, &library),
+                    "name": name,
+                    "band": REPO_BAND,
+                    "count": count,
+                }));
             }
         }
     }
     out
 }
+// —— 浏览列表 / 元数据检索:直接查 imported_files(一条导入文件一行) ——
 
-/// 粗略统计目录下文件数(浅层,给侧栏一个量级即可,不深遍历)。
-fn dir_file_count(dir: &Path) -> usize {
-    std::fs::read_dir(dir)
-        .map(|rd| rd.flatten().filter(|e| e.path().is_file()).count())
-        .unwrap_or(0)
+fn repo_order_clause(sort: &str) -> &'static str {
+    match sort {
+        "name" => "original_filename COLLATE NOCASE ASC",
+        "size" => "original_filesize DESC",
+        _ => "create_time DESC",
+    }
 }
-// —— 浏览列表:委托给持久化 SQLite 索引(library_index),分页/排序/计数走 SQL ——
 
-/// 取某库的分页。索引由 library_index 维护(首访遍历一次 + notify 增量),这里只做映射。
-fn list_page(lib: &str, sort: &str, offset: usize, limit: usize) -> (usize, Vec<Doc>) {
-    let Some((base, band)) = resolve_lib(lib) else {
+/// 由一行 imported_files 记录构造 Doc:算磁盘相对路径、查标签、找摘录笔记。
+#[allow(clippy::too_many_arguments)]
+fn build_repo_doc(
+    conn: &rusqlite::Connection,
+    lib: &str,
+    id: i64,
+    fname: String,
+    desc: Option<String>,
+    library: String,
+    ftype_raw: String,
+    ctime: String,
+    size: i64,
+    repo: String,
+    snippet: Option<String>,
+) -> Doc {
+    let stem = file_stem_of(&fname);
+    let type_dir = map_type_dir(&ftype_raw).map(|s| s.to_string());
+    let ext = fname.rsplit_once('.').map(|(_, x)| x.to_string()).unwrap_or_default();
+    let rel = match &type_dir {
+        Some(td) => format!("{}/{}/{}/{}", library, stem, td, fname),
+        None => format!("{}/{}/{}", library, stem, fname),
+    };
+    // 标签
+    let mut tags = Vec::new();
+    if let Ok(mut st) = conn.prepare(
+        "SELECT ift.name FROM imported_files_tags ift \
+         JOIN imported_files_tags_relations iftr ON ift.id = iftr.tag_id WHERE iftr.file_id = ?",
+    ) {
+        if let Ok(rows) = st.query_map(rusqlite::params![id], |r| r.get::<_, String>(0)) {
+            tags = rows.flatten().collect();
+        }
+    }
+    // 摘录笔记(可选):notes.from_imported_file = 原始文件名,落在 <library>/<stem>/notes/ 下
+    let mut note = None;
+    let mut note_name = None;
+    if let Ok(nname) = conn.query_row(
+        "SELECT note_file_name FROM notes WHERE from_imported_file = ? LIMIT 1",
+        rusqlite::params![fname],
+        |r| r.get::<_, String>(0),
+    ) {
+        note = Some(format!("{}/{}/notes/{}", library, stem, nname));
+        note_name = Some(nname);
+    }
+    Doc {
+        path: rel,
+        name: fname,
+        ext,
+        size: size.max(0) as u64,
+        mtime: 0,
+        lib: lib.to_string(),
+        snippet,
+        source: None,
+        band: Some(REPO_BAND.to_string()),
+        desc: desc.filter(|s| !s.is_empty()),
+        tags,
+        library: Some(library),
+        repo: Some(repo),
+        ftype: type_dir,
+        import_file_id: Some(id),
+        time_text: Some(ctime).filter(|s| !s.is_empty()),
+        note,
+        note_name,
+    }
+}
+
+const REPO_COLS: &str = "id, original_filename, description, library, original_filetype, create_time, original_filesize, knowledge_repo";
+
+/// 把一行查询结果读成 build_repo_doc 需要的元组。
+fn read_repo_row(
+    r: &rusqlite::Row,
+) -> rusqlite::Result<(i64, String, Option<String>, String, String, String, i64, String)> {
+    Ok((
+        r.get::<_, i64>(0)?,
+        r.get::<_, String>(1)?,
+        r.get::<_, Option<String>>(2)?,
+        r.get::<_, String>(3)?,
+        r.get::<_, String>(4)?,
+        r.get::<_, String>(5)?,
+        r.get::<_, i64>(6)?,
+        r.get::<_, String>(7)?,
+    ))
+}
+
+/// 浏览分页:按 scope(全部 / kr / kr+library)过滤 imported_files。
+fn repo_list_page(lib: &str, sort: &str, offset: usize, limit: usize) -> (usize, Vec<Doc>) {
+    let Some((kr, library)) = decode_repo_scope(lib) else {
         return (0, Vec::new());
     };
-    if !base.is_dir() {
-        return (0, Vec::new());
+    let conn = match crate::commands::repoview::init_db() {
+        Ok(c) => c,
+        Err(_) => return (0, Vec::new()),
+    };
+    let mut cond = String::from("deleted=0");
+    let mut vals: Vec<String> = Vec::new();
+    if let Some(kr) = &kr {
+        cond.push_str(" AND knowledge_repo=?");
+        vals.push(kr.clone());
     }
-    let (total, rows) = crate::commands::library_index::list_page(lib, &base, sort, offset, limit);
-    let docs = rows
-        .into_iter()
-        .map(|r| Doc {
-            path: r.rel,
-            name: r.name,
-            ext: r.ext,
-            size: r.size,
-            mtime: r.mtime,
-            lib: lib.to_string(),
-            snippet: None,
-            source: None,
-            band: Some(band.to_string()),
-        })
-        .collect();
-    (total, docs)
+    if let Some(library) = &library {
+        cond.push_str(" AND library=?");
+        vals.push(library.clone());
+    }
+    let total: i64 = conn
+        .query_row(
+            &format!("SELECT COUNT(*) FROM imported_files WHERE {cond}"),
+            rusqlite::params_from_iter(vals.iter()),
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    let sql = format!(
+        "SELECT {REPO_COLS} FROM imported_files WHERE {cond} ORDER BY {} LIMIT ? OFFSET ?",
+        repo_order_clause(sort)
+    );
+    let mut page_vals = vals.clone();
+    page_vals.push(limit.to_string());
+    page_vals.push(offset.to_string());
+    let mut docs = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(&sql) {
+        if let Ok(rows) = stmt.query_map(rusqlite::params_from_iter(page_vals.iter()), read_repo_row) {
+            for row in rows.flatten() {
+                let (id, fname, desc, lib_name, ftype, ctime, size, repo) = row;
+                docs.push(build_repo_doc(&conn, lib, id, fname, desc, lib_name, ftype, ctime, size, repo, None));
+            }
+        }
+    }
+    (total as usize, docs)
+}
+
+/// 元数据检索:文件名 / 描述 / 标签 LIKE 匹配,受 scope 约束。
+fn repo_meta_search(lib: &str, query: &str, offset: usize, limit: usize) -> (usize, Vec<Doc>) {
+    let (kr, library) = decode_repo_scope(lib).unwrap_or((None, None));
+    let conn = match crate::commands::repoview::init_db() {
+        Ok(c) => c,
+        Err(_) => return (0, Vec::new()),
+    };
+    let like = format!("%{}%", query);
+    let mut cond = String::from(
+        "deleted=0 AND (original_filename LIKE ? OR description LIKE ? OR EXISTS (\
+         SELECT 1 FROM imported_files_tags_relations r JOIN imported_files_tags t ON t.id=r.tag_id \
+         WHERE r.file_id=imported_files.id AND t.name LIKE ?))",
+    );
+    let mut vals: Vec<String> = vec![like.clone(), like.clone(), like];
+    if let Some(kr) = &kr {
+        cond.push_str(" AND knowledge_repo=?");
+        vals.push(kr.clone());
+    }
+    if let Some(library) = &library {
+        cond.push_str(" AND library=?");
+        vals.push(library.clone());
+    }
+    let total: i64 = conn
+        .query_row(
+            &format!("SELECT COUNT(*) FROM imported_files WHERE {cond}"),
+            rusqlite::params_from_iter(vals.iter()),
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    let sql = format!(
+        "SELECT {REPO_COLS} FROM imported_files WHERE {cond} ORDER BY create_time DESC LIMIT ? OFFSET ?"
+    );
+    let mut page_vals = vals.clone();
+    page_vals.push(limit.to_string());
+    page_vals.push(offset.to_string());
+    let mut docs = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(&sql) {
+        if let Ok(rows) = stmt.query_map(rusqlite::params_from_iter(page_vals.iter()), read_repo_row) {
+            for row in rows.flatten() {
+                let (id, fname, desc, lib_name, ftype, ctime, size, repo) = row;
+                docs.push(build_repo_doc(&conn, lib, id, fname, desc, lib_name, ftype, ctime, size, repo, None));
+            }
+        }
+    }
+    (total as usize, docs)
+}
+
+/// 全文检索命中(磁盘绝对路径)回填 imported_files 元信息,拿到 id/类型目录/知识库,
+/// 便于本地阅读器打开;查不到就返回 None(由调用方兜底成裸命中)。
+fn enrich_fulltext_hit(conn: &rusqlite::Connection, lib: &str, rel: &str, snippet: Option<String>) -> Option<Doc> {
+    let mut parts = rel.split('/');
+    let library = parts.next()?.to_string();
+    let fname = rel.rsplit('/').next()?.to_string();
+    let (id, desc, ftype, ctime, size, repo): (i64, Option<String>, String, String, i64, String) = conn
+        .query_row(
+            "SELECT id, description, original_filetype, create_time, original_filesize, knowledge_repo \
+             FROM imported_files WHERE deleted=0 AND library=? AND original_filename=? LIMIT 1",
+            rusqlite::params![library, fname],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+        )
+        .ok()?;
+    Some(build_repo_doc(conn, lib, id, fname, desc, library, ftype, ctime, size, repo, snippet))
 }
 // —— Token 鉴权(对外 LAN 挂载启用;loopback 不启用) ——
 
@@ -213,7 +440,7 @@ async fn api_list(req: HttpRequest, auth: web::Data<SiteAuth>, q: web::Query<Has
     if !guard(&req, auth.get_ref()) {
         return HttpResponse::Unauthorized().finish();
     }
-    let lib = q.get("lib").cloned().unwrap_or_else(|| "kb".into());
+    let lib = q.get("lib").cloned().unwrap_or_else(|| "repo".into());
     let sort = q.get("sort").cloned().unwrap_or_else(|| "mtime".into());
     let offset = q.get("offset").and_then(|s| s.parse().ok()).unwrap_or(0);
     let limit = q.get("limit").and_then(|s| s.parse().ok()).unwrap_or(200usize).min(1000);
@@ -222,7 +449,7 @@ async fn api_list(req: HttpRequest, auth: web::Data<SiteAuth>, q: web::Query<Has
         let (total, items) = peer_list_page(&lib, &sort, offset, limit).await;
         return HttpResponse::Ok().json(json!({ "total": total, "items": items }));
     }
-    let (total, items) = web::block(move || list_page(&lib, &sort, offset, limit))
+    let (total, items) = web::block(move || repo_list_page(&lib, &sort, offset, limit))
         .await
         .unwrap_or((0, Vec::new()));
     HttpResponse::Ok().json(json!({ "total": total, "items": items }))
@@ -240,9 +467,11 @@ async fn api_search(
     if pattern.trim().is_empty() {
         return HttpResponse::Ok().json(json!({ "total": 0, "items": [] }));
     }
-    let lib = q.get("lib").cloned().unwrap_or_else(|| "kb".into());
+    let lib = q.get("lib").cloned().unwrap_or_else(|| "repo".into());
     let offset = q.get("offset").and_then(|s| s.parse().ok()).unwrap_or(0usize);
     let limit = q.get("limit").and_then(|s| s.parse().ok()).unwrap_or(200usize).min(1000);
+    // 检索模式:meta(元数据:文件名/描述/标签) 或 fulltext(正文 tantivy)。默认 meta。
+    let mode = q.get("mode").cloned().unwrap_or_else(|| "meta".into());
     // 联邦库:跨设备正文检索(对端 tantivy)。
     if lib.starts_with("peer:") {
         let band = peer_band_hex(lib.strip_prefix("peer:").and_then(|s| s.split_once(':').map(|(p, _)| p)).unwrap_or(""));
@@ -252,17 +481,10 @@ async fn api_search(
                     .into_iter()
                     .map(|h| {
                         let ext = h.name.rsplit_once('.').map(|(_, x)| x.to_string()).unwrap_or_default();
-                        Doc {
-                            path: h.rel,
-                            name: h.name,
-                            ext,
-                            size: 0,
-                            mtime: h.mtime_ms / 1000,
-                            lib: lib.clone(),
-                            snippet: h.snippet,
-                            source: None,
-                            band: Some(band.clone()),
-                        }
+                        let mut d = Doc::basic(h.rel, h.name, ext, 0, h.mtime_ms / 1000, lib.clone());
+                        d.snippet = h.snippet;
+                        d.band = Some(band.clone());
+                        d
                     })
                     .collect();
                 let total = offset + items.len() + if has_more { limit } else { 0 };
@@ -271,9 +493,18 @@ async fn api_search(
             Err(e) => HttpResponse::Ok().json(json!({ "total": 0, "items": [], "error": e })),
         };
     }
-    let Some((base, band)) = resolve_lib(&lib) else {
+    // 本机文件库 —— 元数据检索:走 SQL(文件名/描述/标签)。
+    if mode != "fulltext" {
+        let (total, items) = web::block(move || repo_meta_search(&lib, &pattern, offset, limit))
+            .await
+            .unwrap_or((0, Vec::new()));
+        return HttpResponse::Ok().json(json!({ "total": total, "items": items }));
+    }
+    // 本机文件库 —— 全文检索:tantivy 检索磁盘正文,再按 scope 过滤、回填元信息。
+    let Some((_, library)) = decode_repo_scope(&lib) else {
         return HttpResponse::Ok().json(json!({ "total": 0, "items": [] }));
     };
+    let base = repo_disk_root();
     let Some(app) = state.get_app_handle() else {
         return HttpResponse::InternalServerError().body("app handle 未就绪");
     };
@@ -284,26 +515,32 @@ async fn api_search(
     .await;
     match result {
         Ok((hits, has_more)) => {
+            let conn = crate::commands::repoview::init_db().ok();
             let items: Vec<Doc> = hits
                 .into_iter()
-                .map(|h| {
+                .filter_map(|h| {
                     let abs = PathBuf::from(&h.path);
                     let rel = abs.strip_prefix(&base).unwrap_or(&abs).to_string_lossy().replace('\\', "/");
-                    let ext = abs.extension().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-                    Doc {
-                        path: rel,
-                        name: h.file_name,
-                        ext,
-                        size: 0,
-                        mtime: h.modified_ms.map(|ms| ms / 1000).unwrap_or(0),
-                        lib: lib.clone(),
-                        snippet: h.preview,
-                        source: None,
-                        band: Some(band.to_string()),
+                    // scope 到具体 library 时,只保留该库命中。
+                    if let Some(want) = &library {
+                        if rel.split('/').next() != Some(want.as_str()) {
+                            return None;
+                        }
                     }
+                    let snippet = h.preview.clone();
+                    if let Some(conn) = &conn {
+                        if let Some(doc) = enrich_fulltext_hit(conn, &lib, &rel, snippet.clone()) {
+                            return Some(doc);
+                        }
+                    }
+                    // 回填失败(如 notes 里的正文命中):退回裸命中,仍可查看/下载。
+                    let ext = abs.extension().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                    let mut d = Doc::basic(rel, h.file_name, ext, 0, h.modified_ms.map(|ms| ms / 1000).unwrap_or(0), lib.clone());
+                    d.snippet = snippet;
+                    d.band = Some(REPO_BAND.to_string());
+                    Some(d)
                 })
                 .collect();
-            // fulltext 不回总数;用 offset+本页+是否还有更多推一个够前端滚动的总数。
             let total = offset + items.len() + if has_more { limit } else { 0 };
             HttpResponse::Ok().json(json!({ "total": total, "items": items }))
         }
@@ -317,29 +554,47 @@ async fn api_file(req: HttpRequest, auth: web::Data<SiteAuth>, q: web::Query<Has
     }
     let lib = q.get("lib").cloned().unwrap_or_default();
     let rel = q.get("path").cloned().unwrap_or_default();
+    // dl=1 → 作为附件下载(Content-Disposition: attachment);否则内联(浏览/预览)。
+    let download = q.get("dl").map(|v| v == "1" || v == "true").unwrap_or(false);
+    let fname = rel.rsplit('/').next().unwrap_or("file").to_string();
     // 联邦文件:按需从对端拉取到内存后返回,不落地。
     if lib.starts_with("peer:") {
         return match crate::commands::p2psync::federation_pull_file(&lib, &rel).await {
             Ok(bytes) => {
                 let mime = mime_guess::from_path(&rel).first_or_octet_stream();
-                HttpResponse::Ok().content_type(mime.as_ref()).body(bytes)
+                file_response(bytes, mime.as_ref(), &fname, download)
             }
             Err(e) => HttpResponse::NotFound().body(format!("联邦拉取失败: {}", e)),
         };
     }
-    let Some((base, _)) = resolve_lib(&lib) else {
+    // 本机文件库:一律以 <libraries_root>/Libraries 为 base,rel 已含 <library>/... 前缀。
+    if !lib.starts_with("repo") {
         return HttpResponse::BadRequest().body("非法库");
-    };
+    }
+    let base = repo_disk_root();
     let Some(full) = safe_join(&base, &rel) else {
         return HttpResponse::Forbidden().body("路径越界");
     };
     match std::fs::read(&full) {
         Ok(bytes) => {
             let mime = mime_guess::from_path(&full).first_or_octet_stream();
-            HttpResponse::Ok().content_type(mime.as_ref()).body(bytes)
+            file_response(bytes, mime.as_ref(), &fname, download)
         }
         Err(e) => HttpResponse::NotFound().body(format!("读取失败: {}", e)),
     }
+}
+
+/// 统一构造文件响应:下载时带 Content-Disposition: attachment(文件名 RFC5987 编码)。
+fn file_response(bytes: Vec<u8>, mime: &str, fname: &str, download: bool) -> HttpResponse {
+    let mut builder = HttpResponse::Ok();
+    builder.content_type(mime);
+    if download {
+        // filename*=UTF-8''… 兼容中文名;同时给 ASCII 回退。
+        let encoded = urlencoding::encode(fname);
+        let disp = format!("attachment; filename=\"{}\"; filename*=UTF-8''{}", fname.replace('"', ""), encoded);
+        builder.insert_header(("Content-Disposition", disp));
+    }
+    builder.body(bytes)
 }
 
 /// 联邦来源(其他设备的库):向可信设备查询开放的库清单,带来源设备名与色带。
@@ -384,17 +639,10 @@ async fn peer_list_page(lib: &str, sort: &str, offset: usize, limit: usize) -> (
         .map(|e| {
             let name = e.rel.rsplit('/').next().unwrap_or(&e.rel).to_string();
             let ext = name.rsplit_once('.').map(|(_, x)| x.to_string()).unwrap_or_default();
-            Doc {
-                path: e.rel.clone(),
-                name,
-                ext,
-                size: e.size,
-                mtime: e.mtime_ms / 1000,
-                lib: lib.to_string(),
-                snippet: None,
-                source: Some(peer_id.clone()),
-                band: Some(band.clone()),
-            }
+            let mut d = Doc::basic(e.rel.clone(), name, ext, e.size, e.mtime_ms / 1000, lib.to_string());
+            d.source = Some(peer_id.clone());
+            d.band = Some(band.clone());
+            d
         })
         .collect();
     match sort {
@@ -450,6 +698,34 @@ pub fn config_lan(cfg: &mut web::ServiceConfig) {
 #[tauri::command]
 pub fn library_site_local_url() -> String {
     "http://127.0.0.1:8888/lib/".to_string()
+}
+
+/// 库网站独立窗口的 label。
+const LIBRARY_SITE_WINDOW: &str = "library-site";
+
+/// 打开"资料库 · 分享与发布"独立窗口(承载库网站 iframe + 分享抽屉)。
+/// 已存在则聚焦。窗口权限在 capabilities/default.json 的 windows 数组里授予。
+#[tauri::command]
+pub async fn open_library_site_window(app: tauri::AppHandle, theme: Option<String>) -> Result<(), String> {
+    use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+    if let Some(w) = app.get_webview_window(LIBRARY_SITE_WINDOW) {
+        let _ = w.set_focus();
+        return Ok(());
+    }
+    let theme = theme.unwrap_or_default().trim().to_lowercase();
+    let qs = if theme == "dark" || theme == "light" {
+        format!("?theme={}", theme)
+    } else {
+        String::new()
+    };
+    let url = WebviewUrl::App(format!("/library-site{}", qs).into());
+    WebviewWindowBuilder::new(&app, LIBRARY_SITE_WINDOW, url)
+        .title("资料库 · 分享与发布")
+        .inner_size(1200.0, 820.0)
+        .min_inner_size(960.0, 640.0)
+        .build()
+        .map_err(|e| format!("创建库网站窗口失败: {}", e))?;
+    Ok(())
 }
 
 // —— 对外 LAN 分享:带 token 的独立端口(微信/QQ/浏览器/二维码) ——
