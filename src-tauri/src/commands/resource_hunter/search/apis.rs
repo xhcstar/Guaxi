@@ -3,6 +3,7 @@
 use super::super::model::{ResourceItem, ResourceKind};
 use super::super::{proxy, ytdlp_fetch};
 use super::make_id;
+use futures_util::future::join_all;
 use scraper::{Html, Selector};
 use tauri::AppHandle;
 
@@ -13,6 +14,22 @@ fn client() -> Option<reqwest::Client> {
 /// 境内直连客户端（百度等国内源不走代理）。
 fn client_cn() -> Option<reqwest::Client> {
     proxy::client_for_source(&super::load_proxy(), false).ok()
+}
+
+/// 读取用户在设置里配置的第三方 API Key（未配置返回 None，对应源自动跳过）。
+/// 存储为 `api_keys` 设置项下的 JSON 对象，键名见各源实现。
+pub(crate) fn api_key(name: &str) -> Option<String> {
+    let raw = super::store::get_setting("api_keys").ok().flatten()?;
+    let json: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    json.get(name)
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Unpaywall 需要一个联系邮箱（非密钥）；用户可配，否则用占位。
+fn unpaywall_email() -> String {
+    api_key("unpaywall_email").unwrap_or_else(|| "resource-hunter@example.com".into())
 }
 
 fn item(id_src: &str, title: String, kind: ResourceKind, source: &str, page: String,
@@ -248,6 +265,557 @@ pub async fn semantic_scholar(kw: &str, limit: usize) -> Vec<ResourceItem> {
             if title.is_empty() || pdf.is_none() { continue; }
             let src = pdf.clone().unwrap();
             out.push(item(&src, title, ResourceKind::Paper, "SemanticScholar", src.clone(), pdf, Some("pdf"), 0.72));
+        }
+    }
+    out
+}
+
+/// Crossref → 学术论文元数据 + 可能的 PDF 直链。覆盖面极广，补充论文广度。
+pub async fn crossref(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let url = format!(
+        "https://api.crossref.org/works?query={}&rows={}&select=title,author,issued,link,DOI,URL",
+        urlencoding::encode(kw), limit.min(30)
+    );
+    let json = match get_json(&url).await { Some(j) => j, None => return vec![] };
+    let mut out = Vec::new();
+    if let Some(arr) = json.get("message").and_then(|m| m.get("items")).and_then(|v| v.as_array()) {
+        for w in arr {
+            let title = w.get("title").and_then(|v| v.as_array()).and_then(|a| a.first())
+                .and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if title.is_empty() { continue; }
+            let pdf = w.get("link").and_then(|v| v.as_array()).and_then(|arr| {
+                arr.iter().find(|l| l.get("content-type").and_then(|c| c.as_str()) == Some("application/pdf"))
+                    .and_then(|l| l.get("URL")).and_then(|v| v.as_str()).map(|s| s.to_string())
+            });
+            let page = w.get("URL").and_then(|v| v.as_str())
+                .or_else(|| w.get("DOI").and_then(|v| v.as_str())).unwrap_or("").to_string();
+            let author = w.get("author").and_then(|v| v.as_array()).and_then(|a| a.first()).map(|a| {
+                let given = a.get("given").and_then(|v| v.as_str()).unwrap_or("");
+                let family = a.get("family").and_then(|v| v.as_str()).unwrap_or("");
+                format!("{given} {family}").trim().to_string()
+            }).filter(|s| !s.is_empty());
+            let year = w.get("issued").and_then(|i| i.get("date-parts"))
+                .and_then(|v| v.as_array()).and_then(|a| a.first())
+                .and_then(|v| v.as_array()).and_then(|a| a.first())
+                .and_then(|v| v.as_u64()).map(|y| y.to_string());
+            let src = pdf.clone().unwrap_or_else(|| page.clone());
+            if src.is_empty() { continue; }
+            let mut it = item(&src, title, ResourceKind::Paper, "Crossref", page,
+                pdf.clone(), pdf.as_ref().map(|_| "pdf"), if pdf.is_some() { 0.72 } else { 0.58 });
+            it.author = author;
+            it.published_at = year;
+            out.push(it);
+        }
+    }
+    out
+}
+
+/// DOAJ → 开放获取期刊论文（多数带全文/PDF）。
+pub async fn doaj(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let url = format!(
+        "https://doaj.org/api/search/articles/{}?pageSize={}",
+        urlencoding::encode(kw), limit.min(30)
+    );
+    let json = match get_json(&url).await { Some(j) => j, None => return vec![] };
+    let mut out = Vec::new();
+    if let Some(arr) = json.get("results").and_then(|v| v.as_array()) {
+        for r in arr {
+            let bj = match r.get("bibjson") { Some(b) => b, None => continue };
+            let title = bj.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if title.is_empty() { continue; }
+            let full = bj.get("link").and_then(|v| v.as_array()).and_then(|arr| {
+                arr.iter().find(|l| l.get("type").and_then(|c| c.as_str()) == Some("fulltext"))
+                    .and_then(|l| l.get("url")).and_then(|v| v.as_str()).map(|s| s.to_string())
+            });
+            let is_pdf = full.as_ref().map(|u| u.to_ascii_lowercase().ends_with(".pdf")).unwrap_or(false);
+            let page = full.clone().unwrap_or_default();
+            let author = bj.get("author").and_then(|v| v.as_array()).and_then(|a| a.first())
+                .and_then(|a| a.get("name")).and_then(|v| v.as_str()).map(|s| s.to_string());
+            let year = bj.get("year").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let src = full.clone().unwrap_or_else(|| title.clone());
+            let mut it = item(&src, title, ResourceKind::Paper, "DOAJ", page,
+                if is_pdf { full.clone() } else { None }, if is_pdf { Some("pdf") } else { None },
+                if is_pdf { 0.7 } else { 0.55 });
+            it.author = author;
+            it.published_at = year;
+            out.push(it);
+        }
+    }
+    out
+}
+// PLACEHOLDER_APIS_MORE
+
+/// 解析 archive.org 条目的首个可用文件直链（按期望扩展名优先级挑选）。
+/// 返回 (下载直链, 扩展名, 字节大小)。
+async fn ia_first_file(id: &str, want_exts: &[&str]) -> Option<(String, String, Option<u64>)> {
+    let meta = get_json(&format!("https://archive.org/metadata/{id}")).await?;
+    // 借阅馆藏/受限/暗馆条目直链会返回 401 页面，跳过避免下到垃圾 HTML。
+    let restricted = meta.get("metadata")
+        .and_then(|m| m.get("access-restricted-item"))
+        .and_then(|v| v.as_str()) == Some("true");
+    let dark = meta.get("is_dark").and_then(|v| v.as_bool()) == Some(true);
+    if restricted || dark {
+        return None;
+    }
+    let files = meta.get("files")?.as_array()?;
+    for ext in want_exts {
+        for f in files {
+            let name = f.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let lc = name.to_ascii_lowercase();
+            if lc.ends_with(&format!(".{ext}")) && !lc.contains("_thumb") && !lc.starts_with("__ia") {
+                let size = f.get("size").and_then(|v| v.as_str()).and_then(|s| s.parse::<u64>().ok());
+                let url = format!("https://archive.org/download/{id}/{}", urlencoding::encode(name));
+                return Some((url, ext.to_string(), size));
+            }
+        }
+    }
+    None
+}
+
+/// Internet Archive → 音频/视频/文本的直链。海量公开资源，无需 key。
+pub async fn internet_archive(kw: &str, mediatype: &str, kind: ResourceKind, limit: usize) -> Vec<ResourceItem> {
+    let q = format!("{kw} AND mediatype:{mediatype}");
+    let url = format!(
+        "https://archive.org/advancedsearch.php?q={}&fl[]=identifier&fl[]=title&rows={}&page=1&output=json",
+        urlencoding::encode(&q), limit.min(20)
+    );
+    let json = match get_json(&url).await { Some(j) => j, None => return vec![] };
+    let docs = match json.get("response").and_then(|r| r.get("docs")).and_then(|v| v.as_array()) {
+        Some(d) => d.clone(), None => return vec![],
+    };
+    let exts: &[&str] = match kind {
+        ResourceKind::Audio => &["mp3", "flac", "m4a", "ogg"],
+        ResourceKind::Video => &["mp4", "mkv", "webm", "ogv"],
+        _ => &["pdf", "epub", "txt"],
+    };
+    let futs = docs.into_iter().map(|d| async move {
+        let id = d.get("identifier").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let title = d.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if id.is_empty() || title.is_empty() { return None; }
+        let (dl, ext, size) = ia_first_file(&id, exts).await?;
+        let page = format!("https://archive.org/details/{id}");
+        let mut it = item(&dl, title, kind, "InternetArchive", page, Some(dl.clone()), Some(ext.as_str()), 0.66);
+        it.size_hint = size;
+        Some(it)
+    });
+    join_all(futs).await.into_iter().flatten().collect()
+}
+
+/// Open Library → 书籍元数据；有 archive.org 全文的解析出真实直链，否则给详情页。
+pub async fn open_library(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let url = format!(
+        "https://openlibrary.org/search.json?q={}&limit={}&fields=title,author_name,first_publish_year,ia,cover_i,key",
+        urlencoding::encode(kw), limit.min(20)
+    );
+    let json = match get_json(&url).await { Some(j) => j, None => return vec![] };
+    let docs = match json.get("docs").and_then(|v| v.as_array()) {
+        Some(d) => d.clone(), None => return vec![],
+    };
+    let futs = docs.into_iter().map(|d| async move {
+        let title = d.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if title.is_empty() { return None; }
+        let key = d.get("key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let page = format!("https://openlibrary.org{key}");
+        let author = d.get("author_name").and_then(|v| v.as_array()).and_then(|a| a.first())
+            .and_then(|v| v.as_str()).map(|s| s.to_string());
+        let year = d.get("first_publish_year").and_then(|v| v.as_u64()).map(|y| y.to_string());
+        let ia = d.get("ia").and_then(|v| v.as_array()).and_then(|a| a.first()).and_then(|v| v.as_str());
+        let (dl, ext, size, rel) = if let Some(id) = ia {
+            match ia_first_file(id, &["pdf", "epub", "txt"]).await {
+                Some((u, e, s)) => (Some(u), Some(e), s, 0.72),
+                None => (None, None, None, 0.55),
+            }
+        } else {
+            (None, None, None, 0.55)
+        };
+        let src = dl.clone().unwrap_or_else(|| page.clone());
+        let mut it = item(&src, title, ResourceKind::Book, "OpenLibrary", page,
+            dl, ext.as_deref(), rel);
+        it.author = author;
+        it.published_at = year;
+        it.size_hint = size;
+        if let Some(cid) = d.get("cover_i").and_then(|v| v.as_u64()) {
+            it.thumbnail = Some(format!("https://covers.openlibrary.org/b/id/{cid}-M.jpg"));
+        }
+        Some(it)
+    });
+    join_all(futs).await.into_iter().flatten().collect()
+}
+
+/// Wikimedia Commons → 自由许可图片直链（含缩略图）。境外图片主力源。
+pub async fn wikimedia_commons(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let url = format!(
+        "https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch={}\
+         &gsrnamespace=6&gsrlimit={}&prop=imageinfo&iiprop=url|size|mime&iiurlwidth=320&format=json&origin=*",
+        urlencoding::encode(kw), limit.min(30)
+    );
+    let json = match get_json(&url).await { Some(j) => j, None => return vec![] };
+    let mut out = Vec::new();
+    if let Some(pages) = json.get("query").and_then(|q| q.get("pages")).and_then(|v| v.as_object()) {
+        for (_, p) in pages {
+            let title = p.get("title").and_then(|v| v.as_str()).unwrap_or("")
+                .trim_start_matches("File:").to_string();
+            let info = match p.get("imageinfo").and_then(|v| v.as_array()).and_then(|a| a.first()) {
+                Some(i) => i, None => continue,
+            };
+            let mime = info.get("mime").and_then(|v| v.as_str()).unwrap_or("");
+            if !mime.starts_with("image/") || mime.contains("svg") { continue; }
+            let dl = match info.get("url").and_then(|v| v.as_str()) {
+                Some(u) if !u.is_empty() => u.to_string(), _ => continue,
+            };
+            let page = info.get("descriptionurl").and_then(|v| v.as_str()).unwrap_or(&dl).to_string();
+            let ext = mime.rsplit('/').next().map(|s| if s == "jpeg" { "jpg" } else { s });
+            let mut it = item(&dl, title, ResourceKind::Image, "Wikimedia", page, Some(dl.clone()), ext, 0.7);
+            it.thumbnail = info.get("thumburl").and_then(|v| v.as_str()).map(|s| s.to_string());
+            it.size_hint = info.get("size").and_then(|v| v.as_u64());
+            out.push(it);
+        }
+    }
+    out
+}
+
+// ============ T1 扩展：更多结构化直链源（论文/书籍/图片/音频/代码）============
+
+/// Unpaywall → 开放获取论文的合法 PDF 直链。DOI 级权威，召回大量免费全文。
+pub async fn unpaywall(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let url = format!(
+        "https://api.unpaywall.org/v2/search?query={}&email={}",
+        urlencoding::encode(kw), urlencoding::encode(&unpaywall_email())
+    );
+    let json = match get_json(&url).await { Some(j) => j, None => return vec![] };
+    let mut out = Vec::new();
+    if let Some(arr) = json.get("results").and_then(|v| v.as_array()) {
+        for r in arr.iter().take(limit) {
+            let resp = match r.get("response") { Some(x) => x, None => continue };
+            let title = resp.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if title.is_empty() { continue; }
+            let oa = resp.get("best_oa_location");
+            let pdf = oa.and_then(|o| o.get("url_for_pdf")).and_then(|v| v.as_str()).map(|s| s.to_string());
+            let landing = oa.and_then(|o| o.get("url")).and_then(|v| v.as_str())
+                .or_else(|| resp.get("doi_url").and_then(|v| v.as_str())).unwrap_or("").to_string();
+            let src = pdf.clone().unwrap_or_else(|| landing.clone());
+            if src.is_empty() { continue; }
+            let mut it = item(&src, title, ResourceKind::Paper, "Unpaywall", landing,
+                pdf.clone(), pdf.as_ref().map(|_| "pdf"), if pdf.is_some() { 0.9 } else { 0.6 });
+            it.published_at = resp.get("year").and_then(|v| v.as_u64()).map(|y| y.to_string());
+            out.push(it);
+        }
+    }
+    out
+}
+
+/// Europe PMC → 生物医学+全学科论文，带全文 PDF 链接（PMC OA）。
+pub async fn europepmc(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let url = format!(
+        "https://www.ebi.ac.uk/europepmc/webservices/rest/search?query={}&format=json&pageSize={}&resultType=core",
+        urlencoding::encode(kw), limit.min(25)
+    );
+    let json = match get_json(&url).await { Some(j) => j, None => return vec![] };
+    let mut out = Vec::new();
+    if let Some(arr) = json.get("resultList").and_then(|r| r.get("result")).and_then(|v| v.as_array()) {
+        for r in arr {
+            let title = r.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if title.is_empty() { continue; }
+            let pdf = r.get("fullTextUrlList").and_then(|f| f.get("fullTextUrl")).and_then(|v| v.as_array())
+                .and_then(|arr| arr.iter().find(|u| u.get("documentStyle").and_then(|d| d.as_str()) == Some("pdf"))
+                    .or_else(|| arr.first()))
+                .and_then(|u| u.get("url")).and_then(|v| v.as_str()).map(|s| s.to_string());
+            let doi = r.get("doi").and_then(|v| v.as_str()).map(|d| format!("https://doi.org/{d}"));
+            let landing = pdf.clone().or(doi).unwrap_or_default();
+            let src = pdf.clone().unwrap_or_else(|| landing.clone());
+            if src.is_empty() { continue; }
+            let is_pdf = pdf.as_ref().map(|u| u.to_ascii_lowercase().contains("pdf")).unwrap_or(false);
+            let mut it = item(&src, title, ResourceKind::Paper, "EuropePMC", landing,
+                if is_pdf { pdf.clone() } else { None }, if is_pdf { Some("pdf") } else { None },
+                if is_pdf { 0.82 } else { 0.58 });
+            it.author = r.get("authorString").and_then(|v| v.as_str()).map(|s| s.to_string());
+            it.published_at = r.get("pubYear").and_then(|v| v.as_str()).map(|s| s.to_string());
+            out.push(it);
+        }
+    }
+    out
+}
+// PLACEHOLDER_T1_PAPERS
+
+/// 带自定义请求头的 JSON GET（用于需要 Authorization/API-Key 头的源）。
+async fn get_json_hdr(url: &str, header: &str, value: &str) -> Option<serde_json::Value> {
+    let c = client()?;
+    c.get(url).header(header, value).send().await.ok()?.json().await.ok()
+}
+
+/// CORE → 全球最大开放获取论文聚合，直给 PDF。需 API Key（免费申请，设置里填 "core"）。
+pub async fn core_api(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let key = match api_key("core") { Some(k) => k, None => return vec![] };
+    let url = format!(
+        "https://api.core.ac.uk/v3/search/works?q={}&limit={}",
+        urlencoding::encode(kw), limit.min(25)
+    );
+    let json = match get_json_hdr(&url, "Authorization", &format!("Bearer {key}")).await {
+        Some(j) => j, None => return vec![],
+    };
+    let mut out = Vec::new();
+    if let Some(arr) = json.get("results").and_then(|v| v.as_array()) {
+        for r in arr {
+            let title = r.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if title.is_empty() { continue; }
+            let pdf = r.get("downloadUrl").and_then(|v| v.as_str()).map(|s| s.to_string())
+                .filter(|s| !s.is_empty());
+            let landing = r.get("doi").and_then(|v| v.as_str()).map(|d| format!("https://doi.org/{d}"))
+                .or_else(|| pdf.clone()).unwrap_or_default();
+            let src = pdf.clone().unwrap_or_else(|| landing.clone());
+            if src.is_empty() { continue; }
+            let mut it = item(&src, title, ResourceKind::Paper, "CORE", landing,
+                pdf.clone(), pdf.as_ref().map(|_| "pdf"), if pdf.is_some() { 0.84 } else { 0.6 });
+            it.published_at = r.get("yearPublished").and_then(|v| v.as_u64()).map(|y| y.to_string());
+            out.push(it);
+        }
+    }
+    out
+}
+
+/// DOAB（开放获取图书目录）→ 合法整本 PDF 直链。
+pub async fn doab(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let url = format!(
+        "https://directory.doabooks.org/rest/search?query={}&expand=metadata,bitstreams",
+        urlencoding::encode(kw)
+    );
+    let json = match get_json(&url).await { Some(j) => j, None => return vec![] };
+    let arr = match json.as_array() { Some(a) => a.clone(), None => return vec![] };
+    let mut out = Vec::new();
+    for b in arr.iter().take(limit) {
+        let meta = b.get("metadata").and_then(|v| v.as_array());
+        let field = |name: &str| meta.and_then(|m| m.iter()
+            .find(|x| x.get("key").and_then(|k| k.as_str()) == Some(name))
+            .and_then(|x| x.get("value")).and_then(|v| v.as_str()).map(|s| s.to_string()));
+        let title = field("dc.title").unwrap_or_default();
+        if title.is_empty() { continue; }
+        let handle = b.get("handle").and_then(|v| v.as_str()).unwrap_or("");
+        let page = format!("https://directory.doabooks.org/handle/{handle}");
+        let pdf = b.get("bitstreams").and_then(|v| v.as_array())
+            .and_then(|arr| arr.iter().find(|s| s.get("mimeType").and_then(|m| m.as_str()) == Some("application/pdf")))
+            .and_then(|s| s.get("retrieveLink").and_then(|v| v.as_str()))
+            .map(|l| format!("https://directory.doabooks.org{l}"));
+        let src = pdf.clone().unwrap_or_else(|| page.clone());
+        let mut it = item(&src, title, ResourceKind::Book, "DOAB", page,
+            pdf.clone(), pdf.as_ref().map(|_| "pdf"), if pdf.is_some() { 0.8 } else { 0.6 });
+        it.author = field("dc.contributor.author");
+        out.push(it);
+    }
+    out
+}
+// PLACEHOLDER_T1_BOOKS
+
+/// LibriVox → 公版有声书整本 zip（mp3）直链。音频领域强召回。
+pub async fn librivox(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let url = format!(
+        "https://librivox.org/api/feed/audiobooks/?title=^{}&format=json&limit={}",
+        urlencoding::encode(kw), limit.min(20)
+    );
+    let json = match get_json(&url).await { Some(j) => j, None => return vec![] };
+    let mut out = Vec::new();
+    if let Some(arr) = json.get("books").and_then(|v| v.as_array()) {
+        for b in arr {
+            let title = b.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if title.is_empty() { continue; }
+            let zip = b.get("url_zip_file").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let page = b.get("url_librivox").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let src = zip.clone().unwrap_or_else(|| page.clone());
+            if src.is_empty() { continue; }
+            let author = b.get("authors").and_then(|v| v.as_array()).and_then(|a| a.first()).map(|a| {
+                let f = a.get("first_name").and_then(|v| v.as_str()).unwrap_or("");
+                let l = a.get("last_name").and_then(|v| v.as_str()).unwrap_or("");
+                format!("{f} {l}").trim().to_string()
+            }).filter(|s| !s.is_empty());
+            let mut it = item(&src, title, ResourceKind::Audio, "LibriVox", page,
+                zip.clone(), zip.as_ref().map(|_| "zip"), if zip.is_some() { 0.78 } else { 0.55 });
+            it.author = author;
+            out.push(it);
+        }
+    }
+    out
+}
+
+/// Jamendo → 自由授权音乐 mp3 直链。需 client_id（设置里填 "jamendo"）。
+pub async fn jamendo(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let key = match api_key("jamendo") { Some(k) => k, None => return vec![] };
+    let url = format!(
+        "https://api.jamendo.com/v3.0/tracks/?client_id={}&format=json&limit={}&search={}&audioformat=mp32",
+        key, limit.min(30), urlencoding::encode(kw)
+    );
+    let json = match get_json(&url).await { Some(j) => j, None => return vec![] };
+    let mut out = Vec::new();
+    if let Some(arr) = json.get("results").and_then(|v| v.as_array()) {
+        for r in arr {
+            let title = r.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let dl = r.get("audiodownload").and_then(|v| v.as_str()).map(|s| s.to_string())
+                .filter(|s| !s.is_empty());
+            let dl = match dl { Some(d) => d, None => continue };
+            if title.is_empty() { continue; }
+            let page = r.get("shareurl").and_then(|v| v.as_str()).unwrap_or(&dl).to_string();
+            let mut it = item(&dl, title, ResourceKind::Audio, "Jamendo", page, Some(dl.clone()), Some("mp3"), 0.76);
+            it.author = r.get("artist_name").and_then(|v| v.as_str()).map(|s| s.to_string());
+            it.thumbnail = r.get("image").and_then(|v| v.as_str()).map(|s| s.to_string());
+            out.push(it);
+        }
+    }
+    out
+}
+// PLACEHOLDER_T1_AUDIO
+
+/// 大都会艺术博物馆开放馆藏 → 高清艺术图片直链（公有领域）。keyless。
+pub async fn met_museum(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let url = format!(
+        "https://collectionapi.metmuseum.org/public/collection/v1/search?q={}&hasImages=true",
+        urlencoding::encode(kw)
+    );
+    let json = match get_json(&url).await { Some(j) => j, None => return vec![] };
+    let ids: Vec<u64> = json.get("objectIDs").and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_u64()).take(limit.min(15)).collect())
+        .unwrap_or_default();
+    let futs = ids.into_iter().map(|id| async move {
+        let o = get_json(&format!("https://collectionapi.metmuseum.org/public/collection/v1/objects/{id}")).await?;
+        let dl = o.get("primaryImage").and_then(|v| v.as_str()).filter(|s| !s.is_empty())?.to_string();
+        let title = o.get("title").and_then(|v| v.as_str()).filter(|s| !s.is_empty())?.to_string();
+        let page = o.get("objectURL").and_then(|v| v.as_str()).unwrap_or(&dl).to_string();
+        let mut it = item(&dl, title, ResourceKind::Image, "MetMuseum", page, Some(dl.clone()), Some("jpg"), 0.75);
+        it.thumbnail = o.get("primaryImageSmall").and_then(|v| v.as_str()).map(|s| s.to_string());
+        it.author = o.get("artistDisplayName").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(|s| s.to_string());
+        Some(it)
+    });
+    join_all(futs).await.into_iter().flatten().collect()
+}
+
+/// NASA 影像库 → 图片直链。keyless。
+pub async fn nasa_images(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let url = format!("https://images-api.nasa.gov/search?q={}&media_type=image", urlencoding::encode(kw));
+    let json = match get_json(&url).await { Some(j) => j, None => return vec![] };
+    let mut out = Vec::new();
+    if let Some(arr) = json.get("collection").and_then(|c| c.get("items")).and_then(|v| v.as_array()) {
+        for r in arr.iter().take(limit) {
+            let data = r.get("data").and_then(|v| v.as_array()).and_then(|a| a.first());
+            let title = data.and_then(|d| d.get("title")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let dl = r.get("links").and_then(|v| v.as_array()).and_then(|a| a.first())
+                .and_then(|l| l.get("href")).and_then(|v| v.as_str()).map(|s| s.to_string());
+            let dl = match dl { Some(d) => d, None => continue };
+            if title.is_empty() { continue; }
+            let mut it = item(&dl, title, ResourceKind::Image, "NASA", dl.clone(), Some(dl.clone()), Some("jpg"), 0.72);
+            it.thumbnail = Some(dl);
+            it.summary = data.and_then(|d| d.get("description")).and_then(|v| v.as_str())
+                .map(|s| s.chars().take(200).collect());
+            out.push(it);
+        }
+    }
+    out
+}
+
+/// Pexels → 高质量图片/视频直链。需 API Key（设置里填 "pexels"）。
+pub async fn pexels(kw: &str, media: &str, limit: usize) -> Vec<ResourceItem> {
+    let key = match api_key("pexels") { Some(k) => k, None => return vec![] };
+    let (url, is_video) = if media == "video" {
+        (format!("https://api.pexels.com/videos/search?query={}&per_page={}", urlencoding::encode(kw), limit.min(20)), true)
+    } else {
+        (format!("https://api.pexels.com/v1/search?query={}&per_page={}", urlencoding::encode(kw), limit.min(20)), false)
+    };
+    let json = match get_json_hdr(&url, "Authorization", &key).await { Some(j) => j, None => return vec![] };
+    let mut out = Vec::new();
+    if is_video {
+        if let Some(arr) = json.get("videos").and_then(|v| v.as_array()) {
+            for r in arr {
+                let files = r.get("video_files").and_then(|v| v.as_array());
+                let dl = files.and_then(|f| f.iter().max_by_key(|x| x.get("width").and_then(|w| w.as_u64()).unwrap_or(0)))
+                    .and_then(|f| f.get("link")).and_then(|v| v.as_str()).map(|s| s.to_string());
+                let dl = match dl { Some(d) => d, None => continue };
+                let page = r.get("url").and_then(|v| v.as_str()).unwrap_or(&dl).to_string();
+                let title = format!("Pexels 视频 · {}", r.get("id").and_then(|v| v.as_u64()).unwrap_or(0));
+                let mut it = item(&dl, title, ResourceKind::Video, "Pexels", page, Some(dl.clone()), Some("mp4"), 0.75);
+                it.thumbnail = r.get("image").and_then(|v| v.as_str()).map(|s| s.to_string());
+                out.push(it);
+            }
+        }
+    } else if let Some(arr) = json.get("photos").and_then(|v| v.as_array()) {
+        for r in arr {
+            let dl = r.get("src").and_then(|s| s.get("original")).and_then(|v| v.as_str()).map(|s| s.to_string());
+            let dl = match dl { Some(d) => d, None => continue };
+            let page = r.get("url").and_then(|v| v.as_str()).unwrap_or(&dl).to_string();
+            let title = r.get("alt").and_then(|v| v.as_str()).filter(|s| !s.is_empty())
+                .map(|s| s.to_string()).unwrap_or_else(|| format!("{kw} 图片"));
+            let mut it = item(&dl, title, ResourceKind::Image, "Pexels", page, Some(dl.clone()), Some("jpg"), 0.75);
+            it.thumbnail = r.get("src").and_then(|s| s.get("medium")).and_then(|v| v.as_str()).map(|s| s.to_string());
+            it.author = r.get("photographer").and_then(|v| v.as_str()).map(|s| s.to_string());
+            out.push(it);
+        }
+    }
+    out
+}
+// PLACEHOLDER_T1_IMAGES
+
+/// crates.io → Rust 库 .crate 源码包直链。代码领域。keyless。
+pub async fn crates_io(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let url = format!("https://crates.io/api/v1/crates?q={}&per_page={}", urlencoding::encode(kw), limit.min(20));
+    let json = match get_json(&url).await { Some(j) => j, None => return vec![] };
+    let mut out = Vec::new();
+    if let Some(arr) = json.get("crates").and_then(|v| v.as_array()) {
+        for c in arr {
+            let name = c.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let ver = c.get("newest_version").and_then(|v| v.as_str()).unwrap_or("");
+            if name.is_empty() || ver.is_empty() { continue; }
+            let dl = format!("https://crates.io/api/v1/crates/{name}/{ver}/download");
+            let page = format!("https://crates.io/crates/{name}");
+            let desc = c.get("description").and_then(|v| v.as_str()).unwrap_or("");
+            let title = if desc.is_empty() { format!("{name} {ver}") } else { format!("{name} — {desc}") };
+            out.push(item(&dl, title, ResourceKind::Code, "crates.io", page, Some(dl.clone()), Some("crate"), 0.8));
+        }
+    }
+    out
+}
+
+/// npm registry → 包 tarball 直链。代码领域。keyless。
+pub async fn npm_pkg(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let url = format!("https://registry.npmjs.org/-/v1/search?text={}&size={}", urlencoding::encode(kw), limit.min(20));
+    let json = match get_json(&url).await { Some(j) => j, None => return vec![] };
+    let mut out = Vec::new();
+    if let Some(arr) = json.get("objects").and_then(|v| v.as_array()) {
+        for o in arr {
+            let p = match o.get("package") { Some(x) => x, None => continue };
+            let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let ver = p.get("version").and_then(|v| v.as_str()).unwrap_or("");
+            if name.is_empty() || ver.is_empty() { continue; }
+            // 非 scoped 包可拼出 tarball 直链；scoped(@a/b) 结构不同，退回 npm 详情页。
+            let (dl, ext) = if name.starts_with('@') {
+                (None, None)
+            } else {
+                (Some(format!("https://registry.npmjs.org/{name}/-/{name}-{ver}.tgz")), Some("tgz"))
+            };
+            let page = p.get("links").and_then(|l| l.get("npm")).and_then(|v| v.as_str())
+                .map(|s| s.to_string()).unwrap_or_else(|| format!("https://www.npmjs.com/package/{name}"));
+            let desc = p.get("description").and_then(|v| v.as_str()).unwrap_or("");
+            let title = if desc.is_empty() { format!("{name} {ver}") } else { format!("{name} — {desc}") };
+            let src = dl.clone().unwrap_or_else(|| page.clone());
+            out.push(item(&src, title, ResourceKind::Code, "npm", page, dl, ext, if ext.is_some() { 0.78 } else { 0.6 }));
+        }
+    }
+    out
+}
+
+/// GitLab 公共项目搜索 → 默认分支归档 zip 直链。代码领域。keyless。
+pub async fn gitlab(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let url = format!(
+        "https://gitlab.com/api/v4/projects?search={}&order_by=star_count&sort=desc&per_page={}",
+        urlencoding::encode(kw), limit.min(20)
+    );
+    let json = match get_json(&url).await { Some(j) => j, None => return vec![] };
+    let mut out = Vec::new();
+    if let Some(arr) = json.as_array() {
+        for r in arr {
+            let web = r.get("web_url").and_then(|v| v.as_str()).unwrap_or("");
+            let path = r.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            let branch = r.get("default_branch").and_then(|v| v.as_str()).unwrap_or("master");
+            if web.is_empty() || path.is_empty() { continue; }
+            let full = r.get("path_with_namespace").and_then(|v| v.as_str()).unwrap_or(path);
+            let dl = format!("{web}/-/archive/{branch}/{path}-{branch}.zip");
+            let desc = r.get("description").and_then(|v| v.as_str()).unwrap_or("");
+            let title = if desc.is_empty() { full.to_string() } else { format!("{full} — {desc}") };
+            out.push(item(&dl, title, ResourceKind::Code, "GitLab", web.to_string(), Some(dl.clone()), Some("zip"), 0.78));
         }
     }
     out

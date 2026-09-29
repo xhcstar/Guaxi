@@ -266,6 +266,40 @@ pub async fn rh_set_speed_limit(app: AppHandle, kbps: u64) -> Result<(), String>
     store::set_setting("speed_limit_kbps", &kbps.to_string())
 }
 
+/// 读取第三方 API Key 配置（JSON 对象；未设置返回空对象）。
+#[command]
+pub async fn rh_get_api_keys(app: AppHandle) -> Result<serde_json::Value, String> {
+    ensure_init(&app).await?;
+    let v = store::get_setting("api_keys")
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    Ok(v)
+}
+
+/// 保存第三方 API Key 配置（core/pexels/jamendo/unpaywall_email 等键）。
+#[command]
+pub async fn rh_set_api_keys(app: AppHandle, keys: serde_json::Value) -> Result<(), String> {
+    ensure_init(&app).await?;
+    let json = serde_json::to_string(&keys).map_err(|e| e.to_string())?;
+    store::set_setting("api_keys", &json)
+}
+
+/// 读取 SearXNG 实例地址（用于元搜索引擎，空表示未配置）。
+#[command]
+pub async fn rh_get_searxng(app: AppHandle) -> Result<String, String> {
+    ensure_init(&app).await?;
+    Ok(store::get_setting("searxng_url").ok().flatten().unwrap_or_default())
+}
+
+/// 保存 SearXNG 实例地址。
+#[command]
+pub async fn rh_set_searxng(app: AppHandle, url: String) -> Result<(), String> {
+    ensure_init(&app).await?;
+    store::set_setting("searxng_url", url.trim())
+}
+
 /// 经代理拉取(境外)缩略图，返回 data URI，规避 webview 直连境外图床失败。
 #[command]
 pub async fn rh_fetch_thumb(app: AppHandle, url: String) -> Result<String, String> {
@@ -318,10 +352,25 @@ pub async fn rh_import_library(app: AppHandle, path: String) -> Result<usize, St
 fn reveal_in_os(path: &str) -> Result<(), String> {
     #[cfg(windows)]
     {
-        std::process::Command::new("explorer")
-            .arg(format!("/select,{}", path))
-            .spawn()
-            .map_err(|e| format!("定位失败: {e}"))?;
+        use std::os::windows::process::CommandExt;
+        // explorer 对含空格的路径挑剔：/select, 必须在引号外、路径整体加引号，
+        // 且用反斜杠。用 raw_arg 精确控制命令行，避免 std 的自动引号把 "/select," 一起括进去。
+        let norm = path.replace('/', "\\");
+        let p = std::path::Path::new(&norm);
+        if p.exists() {
+            std::process::Command::new("explorer")
+                .raw_arg(format!("/select,\"{norm}\""))
+                .spawn()
+                .map_err(|e| format!("定位失败: {e}"))?;
+        } else if let Some(dir) = p.parent().filter(|d| d.exists()) {
+            // 文件已不在原处（被移动/清理）→ 退而打开其所在目录。
+            std::process::Command::new("explorer")
+                .raw_arg(format!("\"{}\"", dir.to_string_lossy().replace('/', "\\")))
+                .spawn()
+                .map_err(|e| format!("定位失败: {e}"))?;
+        } else {
+            return Err("文件与所在目录都不存在，可能已被删除".into());
+        }
     }
     #[cfg(target_os = "macos")]
     {

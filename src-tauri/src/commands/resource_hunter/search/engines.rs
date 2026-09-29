@@ -33,6 +33,8 @@ pub fn engine_metas() -> Vec<EngineMeta> {
         EngineMeta { id: "duckduckgo", label: "DuckDuckGo", foreign: true, default_on: true },
         EngineMeta { id: "google", label: "Google", foreign: true, default_on: false },
         EngineMeta { id: "brave", label: "Brave", foreign: true, default_on: false },
+        EngineMeta { id: "mojeek", label: "Mojeek", foreign: true, default_on: false },
+        EngineMeta { id: "searxng", label: "SearXNG(自建/公共)", foreign: true, default_on: false },
     ]
 }
 
@@ -42,8 +44,58 @@ fn is_foreign(id: &str) -> bool {
 
 async fn fetch(cfg: &ProxyConfig, engine: &str, url: &str) -> Option<String> {
     let client = proxy::client_for_source(cfg, is_foreign(engine)).ok()?;
-    let resp = client.get(url).send().await.ok()?;
-    resp.text().await.ok()
+    // 拟真浏览器请求头：降低被反爬识别/返回验证页的概率。
+    let referer = url.split('/').take(3).collect::<Vec<_>>().join("/");
+    // 瞬时失败(限流/网络抖动)时退避重试一次。
+    for attempt in 0..2 {
+        let req = client
+            .get(url)
+            .header(reqwest::header::ACCEPT,
+                "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+            .header(reqwest::header::ACCEPT_LANGUAGE, "zh-CN,zh;q=0.9,en;q=0.8")
+            .header(reqwest::header::REFERER, referer.clone())
+            .header("Upgrade-Insecure-Requests", "1");
+        match req.send().await {
+            Ok(resp) if resp.status().is_success() => {
+                if let Ok(t) = resp.text().await {
+                    if !t.is_empty() { return Some(t); }
+                }
+            }
+            _ => {}
+        }
+        if attempt == 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        }
+    }
+    None
+}
+
+/// SearXNG 元搜索：聚合 Google/Bing/DDG 等多引擎，返回干净 JSON，远比单引擎抓 HTML 稳。
+/// 实例地址由用户在设置里配置（`searxng_url`，可指自建或公共实例）。
+async fn search_searxng(cfg: &ProxyConfig, query: &str, limit: usize) -> Vec<SearchHit> {
+    let base = match super::super::store::get_setting("searxng_url").ok().flatten() {
+        Some(u) if !u.trim().is_empty() => u.trim().trim_end_matches('/').to_string(),
+        _ => return vec![],
+    };
+    let url = format!("{base}/search?q={}&format=json&safesearch=0", urlencoding::encode(query));
+    let client = match proxy::client_for_source(cfg, true) { Ok(c) => c, Err(_) => return vec![] };
+    let json: serde_json::Value = match client.get(&url)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .send().await
+    {
+        Ok(r) => match r.json().await { Ok(j) => j, Err(_) => return vec![] },
+        Err(_) => return vec![],
+    };
+    let mut out = Vec::new();
+    if let Some(arr) = json.get("results").and_then(|v| v.as_array()) {
+        for r in arr.iter().take(limit) {
+            let url = r.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if !url.starts_with("http") { continue; }
+            let title = r.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            out.push(SearchHit { title, url });
+        }
+    }
+    out
 }
 
 fn sel(s: &str) -> Option<Selector> {
@@ -68,6 +120,10 @@ pub fn known_engines() -> Vec<&'static str> {
 }
 
 pub async fn search(cfg: &ProxyConfig, engine: &str, query: &str, limit: usize) -> Vec<SearchHit> {
+    // SearXNG 走 JSON 接口，单独处理。
+    if engine == "searxng" {
+        return search_searxng(cfg, query, limit).await;
+    }
     let q = urlencoding::encode(query);
     let (url, selectors, decode): (String, Vec<&str>, DecodeKind) = match engine {
         "bing" => (format!("https://www.bing.com/search?q={q}"), vec!["li.b_algo h2 a", "h2 a"], DecodeKind::Direct),
@@ -75,6 +131,7 @@ pub async fn search(cfg: &ProxyConfig, engine: &str, query: &str, limit: usize) 
         "duckduckgo" => (format!("https://html.duckduckgo.com/html/?q={q}"), vec!["a.result__a"], DecodeKind::Ddg),
         "google" => (format!("https://www.google.com/search?q={q}&num=20"), vec!["div.yuRUbf > a", "a[href^=\"/url?q=\"]"], DecodeKind::GoogleUrl),
         "brave" => (format!("https://search.brave.com/search?q={q}"), vec!["a.result-header", ".snippet a[href]"], DecodeKind::Direct),
+        "mojeek" => (format!("https://www.mojeek.com/search?q={q}"), vec!["a.ob", ".results-standard li h2 a", "h2 a"], DecodeKind::Direct),
         "baidu" => (format!("https://www.baidu.com/s?wd={q}"), vec!["h3.t a", ".result h3 a", ".c-container h3 a"], DecodeKind::Direct),
         "sogou" => (format!("https://www.sogou.com/web?query={q}"), vec![".vrwrap h3 a", ".rb h3 a", "h3 a"], DecodeKind::SogouRel),
         "so360" => (format!("https://www.so.com/s?q={q}"), vec![".res-title a", ".res-list h3 a", "h3 a"], DecodeKind::Direct),

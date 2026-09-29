@@ -159,6 +159,9 @@ const themeOverrides = computed(() => {
   --guaxi-content-bg: #ffffff;
   --guaxi-panel-bg: #ffffff;
   --guaxi-border: #d0d7de;
+  /* 别名：部分组件误用了 --guaxi-border-color（带 -color 后缀），此前从未定义，
+     导致回退到亮色 #e0e0e6，在暗色模式下形成亮边。这里补齐别名。 */
+  --guaxi-border-color: var(--guaxi-border);
   --guaxi-text-primary: #1f2328;
   --guaxi-text-secondary: #57606a;
   --guaxi-header-shadow: 0px 1px 2px rgba(0, 0, 0, 0.06);
@@ -241,6 +244,7 @@ const themeOverrides = computed(() => {
   --guaxi-content-bg: #282c34;
   --guaxi-panel-bg: #21252b;
   --guaxi-border: #3e4451;
+  --guaxi-border-color: var(--guaxi-border);
   --guaxi-text-primary: #d8e0eb;
   --guaxi-text-secondary: #9da5b4;
   --guaxi-header-shadow: 0px 2px 4px rgba(0, 0, 0, 0.35);

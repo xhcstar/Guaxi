@@ -256,6 +256,9 @@ async fn download_chunk(
         .send()
         .await
         .map_err(|e| format!("分块请求失败: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("分块 HTTP {} — 链接失效或需要登录", resp.status().as_u16()));
+    }
     let mut stream = resp.bytes_stream();
     while let Some(item) = stream.next().await {
         if control.is_cancelled() {
@@ -293,6 +296,20 @@ async fn single(
         req = req.header(reqwest::header::RANGE, format!("bytes={}-", existing));
     }
     let resp = req.send().await.map_err(|e| format!("请求失败: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(format!("HTTP {} — 链接失效或需要登录", status.as_u16()));
+    }
+    // 下载到的若是网页(多为登录墙/401/错误页)而非文件，拒绝，避免把垃圾 HTML 存成 .pdf 等。
+    let is_html = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|c| c.to_ascii_lowercase().contains("text/html"))
+        .unwrap_or(false);
+    if is_html {
+        return Err("下载内容是网页而非文件（可能需要登录或链接已失效）".into());
+    }
     let is_partial = resp.status() == reqwest::StatusCode::PARTIAL_CONTENT;
     let resume = want_resume && is_partial;
 

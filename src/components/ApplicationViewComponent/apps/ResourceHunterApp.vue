@@ -100,19 +100,31 @@
             </div>
 
             <div v-if="searching" class="rh-searching"><Icon :icon="ic.loader" width="18" height="18" class="spin" /> 正在多引擎嗅探…</div>
-            <n-virtual-list v-else-if="resultView==='list' && filteredResults.length" class="rh-scroll" :items="filteredResults" :item-size="60" key-field="id">
-              <template #default="{ item }">
-                <RhItem :item="item" view="list" :kind-meta="KIND" selectable :selected="selected.includes(item.id)"
-                  :actions="resultActions" @toggle="toggleSel" @act="onResultAct" />
-              </template>
-            </n-virtual-list>
-            <n-scrollbar v-else class="rh-scroll">
-              <div v-if="filteredResults.length" class="rh-grid">
-                <RhItem v-for="item in filteredResults" :key="item.id" :item="item" view="grid" :kind-meta="KIND"
-                  :thumb="thumbFor(item)" selectable :selected="selected.includes(item.id)" :actions="resultActions" @toggle="toggleSel" @act="onResultAct" />
+            <template v-else>
+              <!-- 类型分栏：按资源类型分组展示，避免混在一起 -->
+              <div v-if="resultKinds.length > 1" class="rh-kind-tabs">
+                <button class="rh-kind-tab" :class="{ on: resultKindTab==='all' }" @click="resultKindTab='all'">
+                  全部 <span class="rh-kt-count">{{ results.length }}</span>
+                </button>
+                <button v-for="k in resultKinds" :key="k.id" class="rh-kind-tab" :class="['k-'+k.id, { on: resultKindTab===k.id }]" @click="resultKindTab=k.id">
+                  <Icon v-if="KIND[k.id]?.icon" :icon="KIND[k.id].icon" width="13" height="13" />
+                  {{ KIND[k.id]?.label || k.id }} <span class="rh-kt-count">{{ k.count }}</span>
+                </button>
               </div>
-              <div v-else-if="!searching" class="rh-empty-mini">没有符合当前筛选的结果</div>
-            </n-scrollbar>
+              <n-virtual-list v-if="resultView==='list' && filteredResults.length" class="rh-scroll" :items="filteredResults" :item-size="60" key-field="id">
+                <template #default="{ item }">
+                  <RhItem :item="item" view="list" :kind-meta="KIND" selectable :selected="selected.includes(item.id)"
+                    :actions="resultActions" @toggle="toggleSel" @act="onResultAct" />
+                </template>
+              </n-virtual-list>
+              <n-scrollbar v-else class="rh-scroll">
+                <div v-if="filteredResults.length" class="rh-grid">
+                  <RhItem v-for="item in filteredResults" :key="item.id" :item="item" view="grid" :kind-meta="KIND"
+                    :thumb="thumbFor(item)" selectable :selected="selected.includes(item.id)" :actions="resultActions" @toggle="toggleSel" @act="onResultAct" />
+                </div>
+                <div v-else class="rh-empty-mini">没有符合当前筛选的结果</div>
+              </n-scrollbar>
+            </template>
           </template>
         </div>
       </section>
@@ -274,9 +286,9 @@
 
             <div class="rh-set-card">
               <div class="rh-set-title"><Icon :icon="ic.folder" width="16" height="16" />下载目录</div>
-              <p class="rh-set-hint">所有下载的文件将保存到这里。磁力任务的目录在下次启动后生效。</p>
+              <p class="rh-set-hint">所有下载的文件将保存到这里。可直接粘贴/输入路径，或点「选择」浏览。磁力任务的目录在下次启动后生效。</p>
               <div class="rh-dir-row">
-                <n-input :value="downloadDir" readonly placeholder="默认目录" />
+                <n-input v-model:value="downloadDir" placeholder="默认目录（留空恢复默认）" @change="saveDownloadDir" @blur="saveDownloadDir" />
                 <n-button size="small" @click="pickDownloadDir"><template #icon><Icon :icon="ic.folder" /></template>选择</n-button>
                 <n-button size="small" quaternary @click="resetDownloadDir">恢复默认</n-button>
               </div>
@@ -305,6 +317,37 @@
                 <n-checkbox v-model:checked="seedSites">富集站(arXiv/OpenAlex)</n-checkbox>
               </n-space>
             </div>
+
+            <div class="rh-set-card">
+              <div class="rh-set-title"><Icon :icon="ic.shield" width="16" height="16" />高质量源 API Key</div>
+              <p class="rh-set-hint">可选。填写后自动启用对应源，留空则跳过。Key 仅存本地。</p>
+              <div class="rh-key-grid">
+                <label class="rh-key-row">
+                  <span class="rh-key-label">CORE（论文全文）</span>
+                  <n-input v-model:value="apiKeys.core" type="password" show-password-on="click"
+                    placeholder="core.ac.uk API Key" @blur="saveApiKeys" size="small" />
+                </label>
+                <label class="rh-key-row">
+                  <span class="rh-key-label">Pexels（图片/视频）</span>
+                  <n-input v-model:value="apiKeys.pexels" type="password" show-password-on="click"
+                    placeholder="pexels.com API Key" @blur="saveApiKeys" size="small" />
+                </label>
+                <label class="rh-key-row">
+                  <span class="rh-key-label">Jamendo（音乐）</span>
+                  <n-input v-model:value="apiKeys.jamendo" type="password" show-password-on="click"
+                    placeholder="jamendo client_id" @blur="saveApiKeys" size="small" />
+                </label>
+                <label class="rh-key-row">
+                  <span class="rh-key-label">Unpaywall 邮箱</span>
+                  <n-input v-model:value="apiKeys.unpaywall_email"
+                    placeholder="你的邮箱（Unpaywall 要求，用于开放获取论文）" @blur="saveApiKeys" size="small" />
+                </label>
+              </div>
+              <div class="rh-block-label">SearXNG 元搜索实例</div>
+              <p class="rh-set-hint">填写自建或公共 SearXNG 地址（需支持 JSON API），大幅增强全网发现稳定性。</p>
+              <n-input v-model:value="searxngUrl" placeholder="例如 https://searx.example.com"
+                @blur="saveSearxng" size="small" />
+            </div>
           </div>
         </n-scrollbar>
       </section>
@@ -324,11 +367,12 @@
 
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { createDiscreteApi } from 'naive-ui'
+import { createDiscreteApi, darkTheme } from 'naive-ui'
 import { invoke, convertFileSrc } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { createLogger } from '../../../utils/logger'
+import { useSettingsStore } from '../../../stores/settingsStore'
 import { Icon } from '@iconify/vue'
 import RhItem from './RhItem.vue'
 import searchIcon from '@iconify-icons/lucide/search'
@@ -365,7 +409,14 @@ import uploadIcon from '@iconify-icons/lucide/upload'
 import saveIcon from '@iconify-icons/lucide/hard-drive-download'
 
 const logger = createLogger('ResourceHunterApp')
-const { message, dialog } = createDiscreteApi(['message', 'dialog'])
+const settingsStore = useSettingsStore()
+// 弹窗/消息脱离了 n-config-provider，需显式带上主题，否则暗色模式下文字看不清
+const discreteConfig = computed(() => ({
+  theme: settingsStore.appearanceTheme === 'dark' ? darkTheme : null,
+}))
+const { message, dialog } = createDiscreteApi(['message', 'dialog'], {
+  configProviderProps: discreteConfig,
+})
 
 const ic = {
   search: searchIcon, arrowRight: arrowRightIcon, loader: loaderIcon, clock: clockIcon,
@@ -430,6 +481,7 @@ const resultView = ref('list')
 const resultQuery = ref('')
 const facetSource = ref('all')
 const sortBy = ref('relevance')
+const resultKindTab = ref('all')
 const showSuggest = ref(false)
 const searchInput = ref(null)
 const useLlm = ref(false)
@@ -445,6 +497,9 @@ const proxy = ref({ mode: 'system', url: '', bypass: [], proxy_foreign_only: fal
 const bypassText = ref('')
 const downloadDir = ref('')
 const speedLimit = ref(0)
+// 第三方 API Key（可选，填了对应源才启用）与 SearXNG 元搜索实例
+const apiKeys = ref({ core: '', pexels: '', jamendo: '', unpaywall_email: '' })
+const searxngUrl = ref('')
 // 下载
 const tasks = ref({})
 // 资源库
@@ -480,8 +535,15 @@ const sortOptions = [
   { label: '相关度', value: 'relevance' },
   { label: '标题', value: 'title' },
 ]
+const KIND_ORDER = ['paper', 'book', 'video', 'audio', 'image', 'code', 'other']
+const resultKinds = computed(() => {
+  const counts = {}
+  for (const r of results.value) counts[r.kind] = (counts[r.kind] || 0) + 1
+  return KIND_ORDER.filter((k) => counts[k]).map((k) => ({ id: k, count: counts[k] }))
+})
 const filteredResults = computed(() => {
   let list = results.value
+  if (resultKindTab.value !== 'all') list = list.filter((r) => r.kind === resultKindTab.value)
   const q = resultQuery.value.trim().toLowerCase()
   if (q) list = list.filter((r) => r.title.toLowerCase().includes(q))
   if (facetSource.value !== 'all') list = list.filter((r) => r.source === facetSource.value)
@@ -489,6 +551,11 @@ const filteredResults = computed(() => {
   if (sortBy.value === 'title') arr.sort((a, b) => a.title.localeCompare(b.title))
   else arr.sort((a, b) => b.relevance - a.relevance)
   return arr
+})
+// 图片/视频类目默认用网格视图，其余用列表
+watch(resultKindTab, (k) => {
+  if (k === 'image' || k === 'video') resultView.value = 'grid'
+  else if (k !== 'all') resultView.value = 'list'
 })
 
 const libKindOptions = [
@@ -579,6 +646,7 @@ async function doSearch() {
   searching.value = true
   results.value = []
   selected.value = []
+  resultKindTab.value = 'all'
   pushRecent(kw)
   try {
     const items = await invoke('rh_search', {
@@ -776,6 +844,20 @@ async function loadDownloadDir() {
 async function saveSpeedLimit() {
   try { await invoke('rh_set_speed_limit', { kbps: Number(speedLimit.value) || 0 }) } catch (e) { message.error('' + e) }
 }
+// 加载/保存第三方 API Key 与 SearXNG 实例地址
+async function loadApiKeys() {
+  try {
+    const k = await invoke('rh_get_api_keys')
+    if (k && typeof k === 'object') apiKeys.value = { ...apiKeys.value, ...k }
+  } catch (e) { logger.error(e) }
+  try { searxngUrl.value = (await invoke('rh_get_searxng')) || '' } catch (e) {}
+}
+async function saveApiKeys() {
+  try { await invoke('rh_set_api_keys', { keys: { ...apiKeys.value } }) } catch (e) { message.error('保存失败: ' + e) }
+}
+async function saveSearxng() {
+  try { await invoke('rh_set_searxng', { url: (searxngUrl.value || '').trim() }) } catch (e) { message.error('保存失败: ' + e) }
+}
 async function exportLibrary() {
   try {
     const path = await invoke('rh_export_library')
@@ -794,13 +876,24 @@ async function importLibrary() {
 }
 async function pickDownloadDir() {
   try {
-    const dir = await openDialog({ directory: true, multiple: false, title: '选择下载目录' })
+    const dir = await openDialog({ directory: true, multiple: false, title: '选择下载目录', defaultPath: downloadDir.value || undefined })
     if (typeof dir === 'string' && dir) {
       await invoke('rh_set_download_dir', { path: dir })
       downloadDir.value = dir
       message.success('下载目录已更新')
     }
   } catch (e) { message.error('设置目录失败: ' + e) }
+}
+// 手动输入/粘贴路径后保存（失焦或回车触发）
+async function saveDownloadDir() {
+  const p = (downloadDir.value || '').trim()
+  try {
+    await invoke('rh_set_download_dir', { path: p })
+    if (p) message.success('下载目录已更新')
+  } catch (e) {
+    message.error('设置目录失败: ' + e)
+    await loadDownloadDir()
+  }
 }
 async function resetDownloadDir() {
   try {
@@ -813,7 +906,7 @@ async function resetDownloadDir() {
 
 onMounted(async () => {
   try { recent.value = JSON.parse(localStorage.getItem('rh_recent') || '[]') } catch (e) {}
-  await Promise.all([loadEngines(), loadProxy(), loadDownloadDir(), refreshTasks(), loadLibrary()])
+  await Promise.all([loadEngines(), loadProxy(), loadDownloadDir(), loadApiKeys(), refreshTasks(), loadLibrary()])
   unlisten = await listen('resource_hunter://download_update', (evt) => {
     const p = evt.payload
     if (!p) return
@@ -952,6 +1045,20 @@ onUnmounted(() => {
 .rh-lib-search { min-width: 240px; }
 .rh-mini-input { border: none; outline: none; background: transparent; font-size: 13px; color: var(--guaxi-text-primary); font-family: inherit; flex: 1; }
 .rh-facet { width: 130px; }
+/* 结果类型分栏 */
+.rh-kind-tabs { display: flex; align-items: center; gap: 6px; padding: 8px 20px; border-bottom: 1px solid var(--guaxi-border, #eee); flex-wrap: wrap; }
+.rh-kind-tab {
+  display: inline-flex; align-items: center; gap: 5px; padding: 4px 11px; border-radius: 999px; cursor: pointer;
+  font-size: 12.5px; border: 1px solid var(--guaxi-border, #d0d7de); background: transparent;
+  color: var(--guaxi-text-secondary); transition: background .12s, color .12s, border-color .12s;
+}
+.rh-kind-tab:hover { border-color: var(--k-color, var(--rh-accent)); color: var(--guaxi-text-primary); }
+.rh-kind-tab.on { background: var(--k-color, var(--rh-accent)); border-color: var(--k-color, var(--rh-accent)); color: #fff; }
+.rh-kind-tab.k-paper { --k-color: var(--k-paper); } .rh-kind-tab.k-book { --k-color: var(--k-book); }
+.rh-kind-tab.k-video { --k-color: var(--k-video); } .rh-kind-tab.k-audio { --k-color: var(--k-audio); }
+.rh-kind-tab.k-image { --k-color: var(--k-image); } .rh-kind-tab.k-code { --k-color: var(--k-code); }
+.rh-kind-tab.k-other { --k-color: var(--k-other); }
+.rh-kt-count { font-size: 11px; opacity: .8; font-variant-numeric: tabular-nums; }
 /* PLACEHOLDER_STYLE3 */
 .rh-icon-btn {
   position: relative; width: 32px; height: 30px; border-radius: 8px; border: 1px solid transparent;
@@ -1038,6 +1145,9 @@ onUnmounted(() => {
 .rh-eng.on { border-color: var(--rh-accent); background: color-mix(in srgb, var(--rh-accent) 8%, transparent); }
 .rh-eng-label { font-size: 13px; }
 .rh-eng-foreign { color: var(--guaxi-text-secondary); }
+.rh-key-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+.rh-key-row { display: flex; flex-direction: column; gap: 4px; }
+.rh-key-label { font-size: 12px; color: var(--guaxi-text-secondary); }
 .rh-dir-row { display: flex; gap: 8px; align-items: center; }
 .rh-dir-row .n-input { flex: 1; }
 /* 杂项 */
