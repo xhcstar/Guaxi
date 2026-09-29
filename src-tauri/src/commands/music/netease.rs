@@ -235,6 +235,31 @@ pub async fn music_netease_my_playlists() -> Result<Vec<OnlinePlaylist>, String>
         .collect())
 }
 
+/// 首页「推荐歌单」（无需登录；登录后会带上个性化）。
+/// 走 /weapi/personalized/playlist，返回 result 数组。
+#[tauri::command]
+pub async fn music_netease_recommend_playlists() -> Result<Vec<OnlinePlaylist>, String> {
+    let cookie = netease_cookie().await;
+    let payload = serde_json::json!({ "limit": 30, "total": true, "n": 1000, "csrf_token": "" });
+    let v = weapi_post("/weapi/personalized/playlist", payload, cookie.as_deref()).await?;
+    let list = v.get("result").and_then(|p| p.as_array()).cloned().unwrap_or_default();
+    Ok(list
+        .iter()
+        .map(|p| OnlinePlaylist {
+            id: p.get("id").map(|i| i.to_string().trim_matches('"').to_string()).unwrap_or_default(),
+            platform: "netease".into(),
+            name: p.get("name").and_then(|n| n.as_str()).unwrap_or("").into(),
+            cover: p.get("picUrl").and_then(|n| n.as_str()).unwrap_or("").into(),
+            // 推荐歌单接口用 playCount（播放量）而非曲目数；没有曲目数时先置 0，进入详情再取真实曲目。
+            track_count: p
+                .get("trackCount")
+                .or_else(|| p.get("playCount"))
+                .and_then(|n| n.as_i64())
+                .unwrap_or(0),
+        })
+        .collect())
+}
+
 /// 读取某歌单的曲目列表。
 #[tauri::command]
 pub async fn music_netease_playlist_tracks(id: String) -> Result<Vec<OnlineTrack>, String> {

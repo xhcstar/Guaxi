@@ -8,6 +8,7 @@
 use md5::{Digest, Md5};
 use once_cell::sync::Lazy;
 use serde_json::Value;
+use tracing::info;
 
 use super::{OnlineAccount, OnlinePlaylist, OnlineTrack};
 
@@ -31,6 +32,24 @@ fn cookie_val(cookie: &str, key: &str) -> Option<String> {
     for part in cookie.split(';') {
         let part = part.trim();
         if let Some(v) = part.strip_prefix(&format!("{key}=")) {
+            if !v.is_empty() {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
+}
+
+// 酷狗登录后不一定把 KugooID/token 当作独立 cookie，而是打包进单个 `KuGoo` cookie：
+// 其 value 形如 `KugooID=123456&KugooNickname=xxx&t=<token>&...`（内层用 `&` 分隔的 k=v）。
+// 先找顶层同名 cookie，找不到再钻进 `KuGoo` 拆内层字段。这样两种落盘形态都能识别登录态。
+fn kugoo_field(cookie: &str, key: &str) -> Option<String> {
+    if let Some(v) = cookie_val(cookie, key) {
+        return Some(v);
+    }
+    let packed = cookie_val(cookie, "KuGoo").or_else(|| cookie_val(cookie, "Kugoo"))?;
+    for part in packed.split('&') {
+        if let Some(v) = part.trim().strip_prefix(&format!("{key}=")) {
             if !v.is_empty() {
                 return Some(v.to_string());
             }
@@ -81,11 +100,22 @@ pub async fn music_kugou_account() -> Result<OnlineAccount, String> {
         ..Default::default()
     };
     if let Some(cookie) = kugou_cookie().await {
-        if let Some(uid) = cookie_val(&cookie, "KugooID").or_else(|| cookie_val(&cookie, "kg_user_id")) {
+        let uid = kugoo_field(&cookie, "KugooID").or_else(|| kugoo_field(&cookie, "kg_user_id"));
+        // 只打印 cookie 名与是否命中，不落敏感值——排查「浏览器登录成功但应用不识别」用。
+        let names: Vec<&str> = cookie.split(';').filter_map(|p| p.trim().split('=').next()).collect();
+        info!(
+            "kugou account: cookie {} 字符, KugooID={}, 顶层cookie=[{}]",
+            cookie.len(),
+            uid.is_some(),
+            names.join(",")
+        );
+        if let Some(uid) = uid {
             acc.uid = uid;
             acc.logged_in = true;
-            acc.nickname = cookie_val(&cookie, "KugooNickname").unwrap_or_default();
+            acc.nickname = kugoo_field(&cookie, "KugooNickname").unwrap_or_default();
         }
+    } else {
+        info!("kugou account: 未读到任何 cookie（浏览器 profile 里没有 kugou.com 登录态）");
     }
     Ok(acc)
 }
@@ -97,8 +127,8 @@ fn now_ms() -> String {
 #[tauri::command]
 pub async fn music_kugou_my_playlists() -> Result<Vec<OnlinePlaylist>, String> {
     let cookie = kugou_cookie().await.ok_or("未登录酷狗")?;
-    let userid = cookie_val(&cookie, "KugooID").ok_or("未登录酷狗")?;
-    let token = cookie_val(&cookie, "token").or_else(|| cookie_val(&cookie, "t")).unwrap_or_default();
+    let userid = kugoo_field(&cookie, "KugooID").ok_or("未登录酷狗")?;
+    let token = kugoo_field(&cookie, "token").or_else(|| kugoo_field(&cookie, "t")).unwrap_or_default();
     let params = vec![
         ("appid", "1005".to_string()),
         ("clientver", "8000".to_string()),

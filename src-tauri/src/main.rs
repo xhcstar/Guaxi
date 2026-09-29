@@ -875,6 +875,7 @@ async fn main() {
             commands::music::netease::music_login_netease,
             commands::music::netease::music_netease_account,
             commands::music::netease::music_netease_my_playlists,
+            commands::music::netease::music_netease_recommend_playlists,
             commands::music::netease::music_netease_playlist_tracks,
             commands::music::qq::music_login_qq,
             commands::music::qq::music_qq_account,

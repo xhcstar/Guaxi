@@ -27,20 +27,24 @@
       <div class="pp-head">
         <img v-if="account.avatar" class="pp-avatar" :src="account.avatar" alt="" />
         <div class="pp-user">{{ account.nickname || platformLabel + "用户" }}</div>
-        <n-button size="tiny" quaternary :loading="loading" @click="loadPlaylists">刷新歌单</n-button>
+        <div v-if="hasRecommend && !selected" class="pp-modes">
+          <button class="pp-mode" :class="{ active: mode === 'mine' }" @click="switchMode('mine')">我的歌单</button>
+          <button class="pp-mode" :class="{ active: mode === 'recommend' }" @click="switchMode('recommend')">推荐歌单</button>
+        </div>
+        <n-button size="tiny" quaternary :loading="loading" @click="mode === 'recommend' ? loadRecommend() : loadPlaylists()">刷新</n-button>
       </div>
 
       <!-- 歌单网格 -->
       <div v-if="!selected" class="pp-grid">
-        <div v-for="p in playlists" :key="p.id" class="pp-card" @click="openPlaylist(p)">
+        <div v-for="p in shownPlaylists" :key="p.id" class="pp-card" @click="openPlaylist(p)">
           <div class="pp-cover">
             <img v-if="p.cover" :src="p.cover + '?param=200y200'" alt="" />
             <span v-else>🎵</span>
           </div>
           <div class="pp-name" :title="p.name">{{ p.name }}</div>
-          <div class="pp-count">{{ p.track_count }} 首</div>
+          <div v-if="mode !== 'recommend'" class="pp-count">{{ p.track_count }} 首</div>
         </div>
-        <div v-if="!loading && !playlists.length" class="pp-empty">没有歌单</div>
+        <div v-if="!loading && !shownPlaylists.length" class="pp-empty">{{ mode === 'recommend' ? '没有推荐歌单' : '没有歌单' }}</div>
       </div>
 
       <!-- 歌单详情 -->
@@ -93,7 +97,7 @@ const message = useMessage();
 
 // 各平台对应的后端命令名。切换平台即切换整套命令。
 const PLATFORMS = [
-  { key: "netease", label: "网易云", login: "music_login_netease", account: "music_netease_account", playlists: "music_netease_my_playlists", tracks: "music_netease_playlist_tracks" },
+  { key: "netease", label: "网易云", login: "music_login_netease", account: "music_netease_account", playlists: "music_netease_my_playlists", recommend: "music_netease_recommend_playlists", tracks: "music_netease_playlist_tracks" },
   { key: "qq", label: "QQ音乐", login: "music_login_qq", account: "music_qq_account", playlists: "music_qq_my_playlists", tracks: "music_qq_playlist_tracks" },
   { key: "kugou", label: "酷狗", login: "music_login_kugou", account: "music_kugou_account", playlists: "music_kugou_my_playlists", tracks: "music_kugou_playlist_tracks" },
 ];
@@ -104,6 +108,11 @@ const platformLabel = computed(() => cmds.value?.label || "");
 
 const account = ref({ logged_in: false, nickname: "", avatar: "", uid: "" });
 const playlists = ref([]);
+const recommendPlaylists = ref([]);
+// "mine" = 我的歌单，"recommend" = 首页推荐歌单（目前仅网易云提供）。
+const mode = ref("mine");
+const hasRecommend = computed(() => !!cmds.value?.recommend);
+const shownPlaylists = computed(() => (mode.value === "recommend" ? recommendPlaylists.value : playlists.value));
 const selected = ref(null);
 const tracks = ref([]);
 const loading = ref(false);
@@ -127,9 +136,31 @@ function switchPlatform(key) {
   platform.value = key;
   account.value = { logged_in: false, nickname: "", avatar: "", uid: "" };
   playlists.value = [];
+  recommendPlaylists.value = [];
+  mode.value = "mine";
   selected.value = null;
   tracks.value = [];
   refreshAccount();
+}
+
+function switchMode(m) {
+  if (mode.value === m) return;
+  mode.value = m;
+  selected.value = null;
+  if (m === "recommend" && !recommendPlaylists.value.length) loadRecommend();
+}
+
+async function loadRecommend() {
+  if (!cmds.value.recommend) return;
+  loading.value = true;
+  try {
+    recommendPlaylists.value = (await invoke(cmds.value.recommend)) || [];
+  } catch (e) {
+    logger.warn("加载推荐歌单失败", e);
+    message.warning("加载推荐歌单失败");
+  } finally {
+    loading.value = false;
+  }
 }
 
 async function refreshAccount() {
@@ -233,6 +264,13 @@ onUnmounted(() => {
 .pp-head { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
 .pp-avatar { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; }
 .pp-user { font-size: 15px; font-weight: 700; color: var(--guaxi-text-primary); }
+.pp-modes { display: flex; gap: 4px; margin-left: 8px; }
+.pp-mode {
+  border: none; background: transparent; cursor: pointer; font-family: inherit;
+  padding: 4px 12px; border-radius: 999px; font-size: 13px; color: var(--guaxi-text-secondary);
+}
+.pp-mode:hover { background: rgba(128,128,128,0.14); }
+.pp-mode.active { background: linear-gradient(135deg, rgba(102,126,234,0.18), rgba(118,75,162,0.18)); color: #7c5cd6; font-weight: 600; }
 
 .pp-grid { flex: 1; overflow: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 16px; align-content: start; }
 .pp-card { cursor: pointer; }
