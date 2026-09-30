@@ -43,7 +43,7 @@ fn all_kinds() -> Vec<ResourceKind> {
 /// 各类型的资源富集站清单：喂给通用引擎做 `site:` 偏置，即便无专用 API 也能提高命中。
 fn seed_domains(kind: ResourceKind) -> &'static [&'static str] {
     match kind {
-        ResourceKind::Book => &["annas-archive.org", "libgen.is", "z-lib.io", "standardebooks.org"],
+        ResourceKind::Book => &["annas-archive.org", "libgen.is", "libgen.rs", "standardebooks.org"],
         ResourceKind::Paper => &["arxiv.org", "openalex.org", "sci-hub.se", "researchgate.net", "core.ac.uk"],
         ResourceKind::Video => &["youtube.com", "bilibili.com", "vimeo.com", "archive.org"],
         ResourceKind::Audio => &["bandcamp.com", "soundcloud.com", "freemusicarchive.org", "archive.org"],
@@ -90,7 +90,7 @@ fn source_authority(source: &str) -> f32 {
         "Gutenberg" | "OpenLibrary" | "DOAB" => 0.86,
         "Wikimedia" | "Openverse" | "InternetArchive" | "MetMuseum" | "NASA"
         | "LibriVox" | "Pexels" | "Jamendo" => 0.82,
-        "LibGen" => 0.78,
+        "LibGen" | "AnnasArchive" => 0.78,
         "百度图片" | "YouTube" | "Bilibili" => 0.74,
         "web" => 0.48,
         _ => 0.6,
@@ -269,7 +269,8 @@ async fn api_sources(app: &tauri::AppHandle, kw: &str, kinds: &[ResourceKind], l
     }
     if has(ResourceKind::Book) {
         let k = kw.to_string(); src!(12, apis::gutendex(&k, limit));
-        let k = kw.to_string(); src!(12, apis::libgen(&k, limit));
+        let k = kw.to_string(); src!(16, apis::libgen(&k, limit));
+        let k = kw.to_string(); src!(16, apis::annas_archive(&k, limit));
         let k = kw.to_string(); src!(14, apis::open_library(&k, limit));
         let k = kw.to_string(); src!(14, apis::doab(&k, limit));
     }
@@ -291,6 +292,8 @@ async fn api_sources(app: &tauri::AppHandle, kw: &str, kinds: &[ResourceKind], l
     if has(ResourceKind::Video) {
         let k = kw.to_string(); src!(18, apis::internet_archive(&k, "movies", ResourceKind::Video, limit));
         let k = kw.to_string(); src!(14, apis::pexels(&k, "video", limit));
+        let k = kw.to_string(); src!(14, apis::invidious(&k, limit));
+        let k = kw.to_string(); src!(12, apis::bilibili_search(&k, limit));
         let k = kw.to_string(); let a = app.clone(); src!(28, apis::ytsearch(&a, &k, "video", limit));
     }
     join_all(futs).await.into_iter().flatten().collect()

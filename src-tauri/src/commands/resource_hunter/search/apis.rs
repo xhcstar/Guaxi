@@ -162,15 +162,30 @@ pub async fn openverse(kw: &str, media: &str, limit: usize) -> Vec<ResourceItem>
     out
 }
 
-/// Library Genesis 搜索 → 书籍详情/下载页 + md5 直链（best-effort，镜像不稳时返回空）。
+/// Library Genesis 搜索 → 书籍详情/下载页 + md5 直链。
+/// 单个镜像常年不稳，这里按序尝试多个镜像域，首个返回结果者胜出（best-effort）。
 pub async fn libgen(kw: &str, limit: usize) -> Vec<ResourceItem> {
-    let url = format!("https://libgen.is/search.php?req={}&res=50&column=def", urlencoding::encode(kw));
+    // 常见活跃镜像；顺序尝试，命中即止。不同镜像 HTML 结构一致（Gen 经典表格 + md5= 链接）。
+    const MIRRORS: [&str; 6] = [
+        "libgen.is", "libgen.rs", "libgen.st", "libgen.gs", "libgen.la", "libgen.vg",
+    ];
     let client = match client() { Some(c) => c, None => return vec![] };
-    let body = match client.get(&url).send().await {
-        Ok(r) => r.text().await.unwrap_or_default(),
-        Err(_) => return vec![],
-    };
-    let doc = Html::parse_document(&body);
+    for host in MIRRORS {
+        let url = format!("https://{host}/search.php?req={}&res=50&column=def", urlencoding::encode(kw));
+        let body = match client.get(&url).send().await {
+            Ok(r) if r.status().is_success() => r.text().await.unwrap_or_default(),
+            _ => continue,
+        };
+        if body.len() < 500 { continue; }
+        let out = parse_libgen(&body, host, limit);
+        if !out.is_empty() { return out; }
+    }
+    vec![]
+}
+
+/// 解析 LibGen 经典搜索结果页：抽 md5= 链接与书名。
+fn parse_libgen(body: &str, host: &str, limit: usize) -> Vec<ResourceItem> {
+    let doc = Html::parse_document(body);
     let sel = match Selector::parse("a[href*='md5=']") { Ok(s) => s, Err(_) => return vec![] };
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
@@ -184,12 +199,169 @@ pub async fn libgen(kw: &str, limit: usize) -> Vec<ResourceItem> {
             None => continue,
         };
         if md5.len() < 32 || !seen.insert(md5.clone()) { continue; }
-        let page = format!("https://libgen.is/book/index.php?md5={md5}");
-        let dl = format!("https://libgen.is/get.php?md5={md5}");
+        let page = format!("https://{host}/book/index.php?md5={md5}");
+        let dl = format!("https://{host}/get.php?md5={md5}");
         out.push(item(&md5, title, ResourceKind::Book, "LibGen", page, Some(dl), None, 0.68));
         if out.len() >= limit { break; }
     }
     out
+}
+
+/// Anna's Archive（全网最大影子图书馆聚合：libgen+z-lib+sci-hub+IA）→ 书籍发现。
+/// 直链需会员/慢速通道，这里只给详情页（供发现与跳转），已能极大提升书籍召回。
+/// 多域名兜底：主域被墙/CF 拦截时切换镜像。
+pub async fn annas_archive(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    const HOSTS: [&str; 3] = ["annas-archive.org", "annas-archive.se", "annas-archive.li"];
+    let client = match client() { Some(c) => c, None => return vec![] };
+    for host in HOSTS {
+        let url = format!("https://{host}/search?q={}", urlencoding::encode(kw));
+        let body = match client.get(&url).send().await {
+            Ok(r) if r.status().is_success() => r.text().await.unwrap_or_default(),
+            _ => continue,
+        };
+        if body.len() < 500 { continue; }
+        let out = parse_annas(&body, host, limit);
+        if !out.is_empty() { return out; }
+    }
+    vec![]
+}
+
+/// 解析 Anna's Archive 搜索结果：抽 /md5/<hash> 卡片与标题。
+/// 结果卡有时被包在 HTML 注释里（懒加载），一并扫描注释文本。
+fn parse_annas(body: &str, host: &str, limit: usize) -> Vec<ResourceItem> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    // 卡片链接形如 href="/md5/<32hex>"，标题在其后的元素文本里。
+    // 直接扫原文，稳过 DOM 变动 + 注释懒加载两种情况。
+    let mut rest = body;
+    while let Some(pos) = rest.find("/md5/") {
+        let after = &rest[pos + 5..];
+        let hash: String = after.chars().take_while(|c| c.is_ascii_hexdigit()).collect();
+        rest = &after[hash.len().min(after.len())..];
+        if hash.len() < 16 || !seen.insert(hash.clone()) { continue; }
+        // 标题：取该 md5 链接附近向后一段里的可读文本（h3/div 文本），best-effort。
+        let title = extract_annas_title(rest).unwrap_or_else(|| format!("Anna's Archive · {}", &hash[..hash.len().min(8)]));
+        let page = format!("https://{host}/md5/{hash}");
+        out.push(item(&hash, title, ResourceKind::Book, "AnnasArchive", page, None, None, 0.7));
+        if out.len() >= limit { break; }
+    }
+    out
+}
+
+/// 从 /md5/ 链接后的 HTML 片段里提取首个较长的可读文本作为书名。
+fn extract_annas_title(frag: &str) -> Option<String> {
+    // 取接下来 ~1200 字符里，标签之间最长的一段纯文本（书名通常最长）。
+    let window = &frag[..frag.len().min(1200)];
+    let mut best = String::new();
+    let mut cur = String::new();
+    let mut in_tag = false;
+    for ch in window.chars() {
+        match ch {
+            '<' => { in_tag = true; if cur.trim().len() > best.trim().len() { best = cur.clone(); } cur.clear(); }
+            '>' => in_tag = false,
+            _ if !in_tag => cur.push(ch),
+            _ => {}
+        }
+    }
+    let t = best.trim();
+    if t.len() >= 4 { Some(t.chars().take(160).collect()) } else { None }
+}
+
+/// Invidious（YouTube 隐私前端）→ 视频发现，keyless JSON，无需本地 yt-dlp 二进制即可召回。
+/// 下载仍走 yt-dlp（needs_ytdlp），但发现阶段不再受二进制缺失/搜索超时拖累。
+/// 多实例兜底：公共实例常轮换，逐个尝试直到拿到结果。
+pub async fn invidious(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    const INSTANCES: [&str; 5] = [
+        "https://inv.nadeko.net",
+        "https://invidious.nerdvpn.de",
+        "https://yewtu.be",
+        "https://invidious.jing.rocks",
+        "https://inv.tux.pizza",
+    ];
+    let client = match client() { Some(c) => c, None => return vec![] };
+    for base in INSTANCES {
+        let url = format!("{base}/api/v1/search?q={}&type=video&sort_by=relevance", urlencoding::encode(kw));
+        let resp = match client.get(&url).send().await {
+            Ok(r) if r.status().is_success() => r, _ => continue,
+        };
+        let json: serde_json::Value = match resp.json().await { Ok(j) => j, Err(_) => continue };
+        let arr = match json.as_array() { Some(a) => a, None => continue };
+        let mut out = Vec::new();
+        for r in arr.iter().take(limit) {
+            if r.get("type").and_then(|v| v.as_str()) != Some("video") { continue; }
+            let vid = r.get("videoId").and_then(|v| v.as_str()).unwrap_or("");
+            let title = r.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if vid.is_empty() || title.is_empty() { continue; }
+            let page = format!("https://www.youtube.com/watch?v={vid}");
+            let mut it = item(&page, title, ResourceKind::Video, "YouTube", page.clone(), None, None, 0.78);
+            it.needs_ytdlp = true;
+            it.author = r.get("author").and_then(|v| v.as_str()).map(|s| s.to_string());
+            it.thumbnail = r.get("videoThumbnails").and_then(|v| v.as_array())
+                .and_then(|a| a.iter().find(|t| t.get("quality").and_then(|q| q.as_str()) == Some("medium")).or_else(|| a.first()))
+                .and_then(|t| t.get("url")).and_then(|v| v.as_str()).map(|s| s.to_string());
+            out.push(it);
+        }
+        if !out.is_empty() { return out; }
+    }
+    vec![]
+}
+
+/// 哔哩哔哩视频搜索（境内直连，keyless）→ 视频页，下载走 yt-dlp。中文视频主力召回源。
+/// B 站有风控：需浏览器 UA + Referer + buvid3 cookie；伪造一个 buvid3 即可 best-effort 放行。
+pub async fn bilibili_search(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let client = match client_cn() { Some(c) => c, None => return vec![] };
+    let url = format!(
+        "https://api.bilibili.com/x/web-interface/search/type?search_type=video&keyword={}&page=1",
+        urlencoding::encode(kw)
+    );
+    // 伪造 buvid3（B 站接受任意 <uuid>infoc 形态），规避 -412 风控。
+    let buvid = format!("{}infoc", make_id(&format!("{kw}-buvid")).to_uppercase());
+    let resp = match client
+        .get(&url)
+        .header("Referer", "https://www.bilibili.com/")
+        .header("Cookie", format!("buvid3={buvid}"))
+        .send()
+        .await
+    {
+        Ok(r) => r, Err(_) => return vec![],
+    };
+    let json: serde_json::Value = match resp.json().await { Ok(j) => j, Err(_) => return vec![] };
+    let arr = match json.get("data").and_then(|d| d.get("result")).and_then(|v| v.as_array()) {
+        Some(a) => a.clone(), None => return vec![],
+    };
+    let mut out = Vec::new();
+    for r in arr.iter().take(limit) {
+        let bvid = r.get("bvid").and_then(|v| v.as_str()).unwrap_or("");
+        if bvid.is_empty() { continue; }
+        // 标题含 <em class="keyword"> 高亮标签，去标签。
+        let raw = r.get("title").and_then(|v| v.as_str()).unwrap_or("");
+        let title = strip_html_tags(raw);
+        if title.is_empty() { continue; }
+        let page = format!("https://www.bilibili.com/video/{bvid}");
+        let mut it = item(&page, title, ResourceKind::Video, "Bilibili", page.clone(), None, None, 0.76);
+        it.needs_ytdlp = true;
+        it.author = r.get("author").and_then(|v| v.as_str()).map(|s| s.to_string());
+        it.thumbnail = r.get("pic").and_then(|v| v.as_str()).map(|s| {
+            if s.starts_with("//") { format!("https:{s}") } else { s.to_string() }
+        });
+        out.push(it);
+    }
+    out
+}
+
+/// 去除简单 HTML 标签（B 站标题的 <em> 高亮等），返回纯文本。
+fn strip_html_tags(s: &str) -> String {
+    let mut out = String::new();
+    let mut in_tag = false;
+    for ch in s.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    out.trim().chars().take(160).collect()
 }
 
 #[cfg(windows)]
