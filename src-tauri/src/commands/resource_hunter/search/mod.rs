@@ -11,6 +11,7 @@ pub mod engines;
 pub mod llm;
 pub mod seed_sites;
 pub mod sniffer;
+pub mod translate;
 
 /// 供子模块复用的代理配置读取。
 pub(crate) fn load_proxy() -> ProxyConfig {
@@ -63,6 +64,8 @@ fn build_queries(keyword: &str, kinds: &[ResourceKind]) -> Vec<String> {
             ResourceKind::Book => {
                 qs.push(format!("{keyword} filetype:pdf"));
                 qs.push(format!("{keyword} filetype:epub"));
+                qs.push(format!("{keyword} 电子书 filetype:pdf"));
+                qs.push(format!("{keyword} 教材 pdf 下载"));
             }
             ResourceKind::Audio => qs.push(format!("{keyword} filetype:mp3")),
             ResourceKind::Image => qs.push(format!("{keyword} filetype:jpg")),
@@ -273,6 +276,9 @@ async fn api_sources(app: &tauri::AppHandle, kw: &str, kinds: &[ResourceKind], l
         let k = kw.to_string(); src!(16, apis::annas_archive(&k, limit));
         let k = kw.to_string(); src!(14, apis::open_library(&k, limit));
         let k = kw.to_string(); src!(14, apis::doab(&k, limit));
+        // Internet Archive 文本馆藏：keyless、CJK 友好、非 CF 门禁，且给真实 pdf/epub 直链。
+        // 是中文书籍召回的可靠主力（英文向的 Gutendex/DOAB/OpenLibrary 对中文几乎无命中）。
+        let k = kw.to_string(); src!(18, apis::internet_archive(&k, "texts", ResourceKind::Book, limit));
     }
     if has(ResourceKind::Image) {
         let k = kw.to_string(); src!(12, apis::baidu_image(&k, limit));
@@ -315,11 +321,25 @@ pub async fn run(app: &tauri::AppHandle, query: SearchQuery) -> Vec<ResourceItem
         if intent.is_empty() { all_kinds() } else { intent }
     };
 
+    // 多语翻译扩展：把关键词译成多种主流语种，跨语种放大召回
+    // （一本书/一篇论文的外文版根本不匹配中文原词，译后并行检索能显著提升命中）。
+    let translations = translate::translate_multi(&keyword, &translate::DEFAULT_TARGETS).await;
+
     let mut items: Vec<ResourceItem> = Vec::new();
 
     // 1) 领域 API 精确源（结构化直链，精度最高）。
+    //    对原词 + 至多 2 个译文并发查（控制扇出），跨语种命中外文版资源。
     if query.seed_sites {
-        items.extend(api_sources(app, &keyword, &kinds, query.limit).await);
+        let mut api_terms = vec![keyword.clone()];
+        for t in translations.iter().take(2) {
+            api_terms.push(t.clone());
+        }
+        let api_futs = api_terms
+            .iter()
+            .map(|t| api_sources(app, t, &kinds, query.limit));
+        for group in join_all(api_futs).await {
+            items.extend(group);
+        }
     }
 
     // 2) 通用全网发现：多引擎 ×（dork + LLM 扩展）→ 候选页 → 嗅探。
@@ -329,8 +349,11 @@ pub async fn run(app: &tauri::AppHandle, query: SearchQuery) -> Vec<ResourceItem
         } else {
             query.engines.clone()
         };
-        // 查询扩展：内建双语种子表(离线可用) + 可选 LLM 扩展(同义/中英/相关术语)。
+        // 查询扩展：多语翻译 + 内建双语种子表(离线可用) + 可选 LLM 扩展(同义/中英/相关术语)。
         let mut keywords = vec![keyword.clone()];
+        for t in &translations {
+            keywords.push(t.clone());
+        }
         for ex in offline_expand(&keyword) {
             keywords.push(ex);
         }
@@ -347,12 +370,12 @@ pub async fn run(app: &tauri::AppHandle, query: SearchQuery) -> Vec<ResourceItem
         }
         queries.sort();
         queries.dedup();
-        queries.truncate(24);
+        queries.truncate(36);
 
         let mut hit_futs = Vec::new();
         for eng in &engines {
             for q in &queries {
-                hit_futs.push(timed(10, engines::search(&cfg, eng, q, 8)));
+                hit_futs.push(timed(10, engines::search(&cfg, eng, q, 12)));
             }
         }
         let mut seen_url = std::collections::HashSet::new();
@@ -364,7 +387,7 @@ pub async fn run(app: &tauri::AppHandle, query: SearchQuery) -> Vec<ResourceItem
                 }
             }
         }
-        hits.truncate(48);
+        hits.truncate(90);
         let sniff_futs = hits.iter().map(|h| timed(9, sniffer::sniff(&h.url, &h.title, &kinds)));
         for group in join_all(sniff_futs).await {
             items.extend(group);

@@ -304,7 +304,7 @@ pub async fn verify(items: Vec<ResourceItem>, kinds: &[ResourceKind]) -> Vec<Res
             passthrough.push(it);
         }
     }
-    checks.truncate(48);
+    checks.truncate(96);
     let kinds_owned = kinds.to_vec();
     let futs = checks.into_iter().map(|it| {
         let cfg = cfg.clone();
