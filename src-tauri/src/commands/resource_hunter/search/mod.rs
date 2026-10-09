@@ -1,14 +1,13 @@
 //! 搜索聚合层：领域 API + 全网多引擎嗅探 + 富集站，归一去重后按相关度排序。
 use super::model::{ProxyConfig, ResourceItem, ResourceKind, SearchQuery};
 use super::store;
-use fuzzy_matcher::skim::SkimMatcherV2;
-use fuzzy_matcher::FuzzyMatcher;
 use futures_util::future::join_all;
 use sha2::{Digest, Sha256};
 
 pub mod apis;
 pub mod engines;
 pub mod llm;
+pub mod resolve;
 pub mod seed_sites;
 pub mod sniffer;
 pub mod translate;
@@ -38,6 +37,7 @@ fn all_kinds() -> Vec<ResourceKind> {
         ResourceKind::Audio,
         ResourceKind::Image,
         ResourceKind::Code,
+        ResourceKind::Dataset,
     ]
 }
 
@@ -46,10 +46,14 @@ fn seed_domains(kind: ResourceKind) -> &'static [&'static str] {
     match kind {
         ResourceKind::Book => &["annas-archive.org", "libgen.is", "libgen.rs", "standardebooks.org"],
         ResourceKind::Paper => &["arxiv.org", "openalex.org", "sci-hub.se", "researchgate.net", "core.ac.uk"],
-        ResourceKind::Video => &["youtube.com", "bilibili.com", "vimeo.com", "archive.org"],
+        ResourceKind::Video => &[
+            "youtube.com", "bilibili.com", "vimeo.com", "archive.org",
+            "youku.com", "v.qq.com", "iqiyi.com", "douyin.com", "ixigua.com",
+        ],
         ResourceKind::Audio => &["bandcamp.com", "soundcloud.com", "freemusicarchive.org", "archive.org"],
         ResourceKind::Image => &["commons.wikimedia.org", "unsplash.com", "flickr.com", "pexels.com"],
         ResourceKind::Code => &["github.com", "gitlab.com", "gitee.com", "sourceforge.net"],
+        ResourceKind::Dataset => &["zenodo.org", "huggingface.co", "kaggle.com", "data.gov"],
         ResourceKind::Other => &[],
     }
 }
@@ -69,6 +73,10 @@ fn build_queries(keyword: &str, kinds: &[ResourceKind]) -> Vec<String> {
             }
             ResourceKind::Audio => qs.push(format!("{keyword} filetype:mp3")),
             ResourceKind::Image => qs.push(format!("{keyword} filetype:jpg")),
+            ResourceKind::Dataset => {
+                qs.push(format!("{keyword} dataset filetype:csv"));
+                plain_needed = true;
+            }
             ResourceKind::Video | ResourceKind::Code | ResourceKind::Other => plain_needed = true,
         }
         // site: 偏置（取每类前 2 个高产站，控制扇出）。
@@ -88,11 +96,14 @@ fn build_queries(keyword: &str, kinds: &[ResourceKind]) -> Vec<String> {
 fn source_authority(source: &str) -> f32 {
     match source {
         "arXiv" | "OpenAlex" | "Crossref" | "DOAJ" | "SemanticScholar"
-        | "Unpaywall" | "EuropePMC" | "CORE" => 0.95,
-        "GitHub" | "GitLab" | "crates.io" | "npm" => 0.92,
+        | "Unpaywall" | "EuropePMC" | "CORE" | "PubMed" | "DBLP" | "HAL" => 0.95,
+        "GitHub" | "GitLab" | "crates.io" | "npm" | "HuggingFace" | "Codeberg" => 0.92,
+        "Zenodo" | "Dataverse" | "Figshare" => 0.9,
         "Gutenberg" | "OpenLibrary" | "DOAB" => 0.86,
         "Wikimedia" | "Openverse" | "InternetArchive" | "MetMuseum" | "NASA"
-        | "LibriVox" | "Pexels" | "Jamendo" => 0.82,
+        | "LibriVox" | "Pexels" | "Jamendo" | "ArtInstitute" | "ClevelandArt"
+        | "Unsplash" | "Pixabay" | "ccMixter" => 0.82,
+        "PeerTube" | "Dailymotion" => 0.78,
         "LibGen" | "AnnasArchive" => 0.78,
         "百度图片" | "YouTube" | "Bilibili" => 0.74,
         "web" => 0.48,
@@ -111,21 +122,82 @@ fn metadata_richness(item: &ResourceItem) -> f32 {
     (n / 5.0).min(1.0)
 }
 
-/// 工业级多特征相关度：标题匹配 × 来源权威 × 可下载性 × 元数据 × 来源先验。
-/// 各特征独立归一后加权融合，比单一子串/模糊匹配稳得多。
-fn score(matcher: &SkimMatcherV2, item: &ResourceItem, keyword: &str) -> f32 {
-    // 标题匹配：优先精确子串命中，其次模糊匹配。
-    let title_lc = item.title.to_lowercase();
-    let kw_lc = keyword.to_lowercase();
-    let title = if keyword.is_empty() {
+/// 匹配用分词：拉丁按单词（≥2 字符，整词边界）、CJK 按相邻 bigram（单字时保留单字）。
+/// 全小写。相比子序列模糊匹配，词元匹配不会把 "rust" 命中到 "RUBSON...vaporisaTeur"。
+fn tokenize(s: &str) -> Vec<String> {
+    fn is_cjk(c: char) -> bool {
+        ('\u{4e00}'..='\u{9fff}').contains(&c)
+            || ('\u{3040}'..='\u{30ff}').contains(&c)
+            || ('\u{ac00}'..='\u{d7af}').contains(&c)
+    }
+    fn flush_latin(buf: &mut String, out: &mut Vec<String>) {
+        if buf.chars().count() >= 2 {
+            out.push(buf.to_lowercase());
+        }
+        buf.clear();
+    }
+    fn flush_cjk(buf: &mut Vec<char>, out: &mut Vec<String>) {
+        if buf.len() == 1 {
+            out.push(buf[0].to_string());
+        } else if buf.len() >= 2 {
+            for w in buf.windows(2) {
+                out.push(w.iter().collect());
+            }
+        }
+        buf.clear();
+    }
+    let mut out = Vec::new();
+    let mut latin = String::new();
+    let mut cjk: Vec<char> = Vec::new();
+    for ch in s.chars() {
+        if is_cjk(ch) {
+            flush_latin(&mut latin, &mut out);
+            cjk.push(ch);
+        } else if ch.is_alphanumeric() {
+            flush_cjk(&mut cjk, &mut out);
+            latin.push(ch);
+        } else {
+            flush_latin(&mut latin, &mut out);
+            flush_cjk(&mut cjk, &mut out);
+        }
+    }
+    flush_latin(&mut latin, &mut out);
+    flush_cjk(&mut cjk, &mut out);
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// 单个查询词的词元覆盖率 ∈ [0,1]：命中词元数 / 查询词元数。
+fn term_coverage(title_toks: &[String], query_toks: &[String]) -> f32 {
+    if query_toks.is_empty() {
+        return 0.0;
+    }
+    let hit = query_toks.iter().filter(|q| title_toks.contains(q)).count();
+    hit as f32 / query_toks.len() as f32
+}
+
+/// 标题对“任一检索词”的最佳词元覆盖率（任意语种的检索词命中都算数）。
+fn best_lexical(title: &str, terms: &[Vec<String>]) -> f32 {
+    let tt = tokenize(title);
+    terms.iter().map(|qt| term_coverage(&tt, qt)).fold(0.0, f32::max)
+}
+
+/// 工业级多特征相关度：标题词元命中 × 来源权威 × 可下载性 × 元数据 × 来源先验。
+/// 标题以“整串精确命中”为最强信号，退而求其次用词元覆盖率；不再做子序列模糊匹配
+/// （子序列匹配对短查询几乎全命中，是旧版噪声结果的主因）。
+fn score(item: &ResourceItem, terms: &[Vec<String>], terms_lc: &[String]) -> f32 {
+    let has_query = terms.iter().any(|t| !t.is_empty());
+    let title = if !has_query {
         0.6
-    } else if title_lc.contains(&kw_lc) {
-        1.0
     } else {
-        matcher
-            .fuzzy_match(&item.title, keyword)
-            .map(|s| (s as f32 / (keyword.len() as f32 * 12.0)).min(1.0))
-            .unwrap_or(0.0)
+        let title_lc = item.title.to_lowercase();
+        let exact = terms_lc.iter().any(|t| !t.is_empty() && title_lc.contains(t));
+        if exact {
+            1.0
+        } else {
+            best_lexical(&item.title, terms)
+        }
     };
     // 可下载性：有直链/磁力/可解析视频页 > 仅有详情页。
     let concrete = if item.download_url.is_some() || item.magnet.is_some() || item.needs_ytdlp {
@@ -136,7 +208,7 @@ fn score(matcher: &SkimMatcherV2, item: &ResourceItem, keyword: &str) -> f32 {
     let auth = source_authority(&item.source);
     let meta = metadata_richness(item);
     let prior = item.relevance; // 各源给出的先验分
-    (title * 0.42 + auth * 0.20 + concrete * 0.18 + meta * 0.08 + prior * 0.12).min(1.0)
+    (title * 0.46 + auth * 0.18 + concrete * 0.14 + meta * 0.10 + prior * 0.12).min(1.0)
 }
 
 /// 内建双语/同义词种子表：LLM 不可用时也能扩召回（非穷举，覆盖常见检索词）。
@@ -218,6 +290,9 @@ fn detect_intent(keyword: &str) -> Vec<ResourceKind> {
     if hit(&["代码", "源码", "库", "框架", "github", "code", "library", "sdk", "开源", "repo"]) {
         kinds.push(ResourceKind::Code);
     }
+    if hit(&["数据集", "数据", "dataset", "corpus", "语料", "benchmark", "基准", "csv", "kaggle"]) {
+        kinds.push(ResourceKind::Dataset);
+    }
     kinds
 }
 
@@ -263,12 +338,22 @@ async fn api_sources(app: &tauri::AppHandle, kw: &str, kinds: &[ResourceKind], l
         let k = kw.to_string(); src!(14, apis::unpaywall(&k, limit));
         let k = kw.to_string(); src!(14, apis::europepmc(&k, limit));
         let k = kw.to_string(); src!(14, apis::core_api(&k, limit));
+        let k = kw.to_string(); src!(14, apis::pubmed(&k, limit));
+        let k = kw.to_string(); src!(12, apis::dblp(&k, limit));
+        let k = kw.to_string(); src!(14, apis::hal(&k, limit));
     }
     if has(ResourceKind::Code) {
         let k = kw.to_string(); src!(12, apis::github(&k, limit));
         let k = kw.to_string(); src!(12, apis::gitlab(&k, limit));
         let k = kw.to_string(); src!(12, apis::crates_io(&k, limit));
         let k = kw.to_string(); src!(12, apis::npm_pkg(&k, limit));
+        let k = kw.to_string(); src!(12, apis::codeberg(&k, limit));
+        let k = kw.to_string(); src!(12, apis::huggingface(&k, "models", ResourceKind::Code, limit));
+    }
+    if has(ResourceKind::Dataset) {
+        let k = kw.to_string(); src!(12, apis::zenodo(&k, limit));
+        let k = kw.to_string(); src!(12, apis::huggingface(&k, "datasets", ResourceKind::Dataset, limit));
+        let k = kw.to_string(); src!(14, apis::dataverse(&k, limit));
     }
     if has(ResourceKind::Book) {
         let k = kw.to_string(); src!(12, apis::gutendex(&k, limit));
@@ -287,12 +372,17 @@ async fn api_sources(app: &tauri::AppHandle, kw: &str, kinds: &[ResourceKind], l
         let k = kw.to_string(); src!(16, apis::met_museum(&k, limit));
         let k = kw.to_string(); src!(14, apis::nasa_images(&k, limit));
         let k = kw.to_string(); src!(14, apis::pexels(&k, "image", limit));
+        let k = kw.to_string(); src!(12, apis::art_institute(&k, limit));
+        let k = kw.to_string(); src!(12, apis::cleveland_art(&k, limit));
+        let k = kw.to_string(); src!(12, apis::unsplash(&k, limit));
+        let k = kw.to_string(); src!(12, apis::pixabay(&k, "image", limit));
     }
     if has(ResourceKind::Audio) {
         let k = kw.to_string(); src!(12, apis::openverse(&k, "audio", limit));
         let k = kw.to_string(); src!(18, apis::internet_archive(&k, "audio", ResourceKind::Audio, limit));
         let k = kw.to_string(); src!(14, apis::librivox(&k, limit));
         let k = kw.to_string(); src!(14, apis::jamendo(&k, limit));
+        let k = kw.to_string(); src!(14, apis::ccmixter(&k, limit));
         let k = kw.to_string(); let a = app.clone(); src!(28, apis::ytsearch(&a, &k, "audio", limit));
     }
     if has(ResourceKind::Video) {
@@ -300,6 +390,8 @@ async fn api_sources(app: &tauri::AppHandle, kw: &str, kinds: &[ResourceKind], l
         let k = kw.to_string(); src!(14, apis::pexels(&k, "video", limit));
         let k = kw.to_string(); src!(14, apis::invidious(&k, limit));
         let k = kw.to_string(); src!(12, apis::bilibili_search(&k, limit));
+        let k = kw.to_string(); src!(14, apis::peertube(&k, limit));
+        let k = kw.to_string(); src!(14, apis::dailymotion(&k, limit));
         let k = kw.to_string(); let a = app.clone(); src!(28, apis::ytsearch(&a, &k, "video", limit));
     }
     join_all(futs).await.into_iter().flatten().collect()
@@ -321,17 +413,41 @@ pub async fn run(app: &tauri::AppHandle, query: SearchQuery) -> Vec<ResourceItem
         if intent.is_empty() { all_kinds() } else { intent }
     };
 
-    // 多语翻译扩展：把关键词译成多种主流语种，跨语种放大召回
-    // （一本书/一篇论文的外文版根本不匹配中文原词，译后并行检索能显著提升命中）。
-    let translations = translate::translate_multi(&keyword, &translate::DEFAULT_TARGETS).await;
+    // 多语翻译扩展：中英互译始终执行（保证“中英双语召回必含”）；其余语种仅在用户
+    // 开启“多语检索”时追加（跨语种放大召回，但可能引入他国语言结果，故设为可选）。
+    let mut translations = translate::cross_cn_en(&keyword).await;
+    if query.multilingual {
+        for t in translate::translate_multi(&keyword, &translate::EXTRA_TARGETS).await {
+            if !translations.contains(&t) {
+                translations.push(t);
+            }
+        }
+    }
+    // 可选 LLM 查询扩展（同义/中英/相关术语），仅在用户开启时执行。
+    let llm_terms: Vec<String> = if query.use_llm {
+        llm::expand_query(&keyword).await.into_iter().take(3).collect()
+    } else {
+        Vec::new()
+    };
+    // 用于相关度打分与 web 词法闸门的全部检索词：原词 + 译文 + 离线扩展 + LLM 扩展。
+    let mut search_terms: Vec<String> = vec![keyword.clone()];
+    search_terms.extend(translations.iter().cloned());
+    search_terms.extend(offline_expand(&keyword));
+    search_terms.extend(llm_terms.iter().cloned());
+    search_terms.sort();
+    search_terms.dedup();
+    search_terms.retain(|s| !s.trim().is_empty());
 
     let mut items: Vec<ResourceItem> = Vec::new();
 
     // 1) 领域 API 精确源（结构化直链，精度最高）。
-    //    对原词 + 至多 2 个译文并发查（控制扇出），跨语种命中外文版资源。
+    //    对原词 + 若干译文并发查（控制扇出），跨语种命中外文版资源；中英译文优先纳入。
     if query.seed_sites {
         let mut api_terms = vec![keyword.clone()];
-        for t in translations.iter().take(2) {
+        for t in translations.iter() {
+            if api_terms.len() >= 4 {
+                break;
+            }
             api_terms.push(t.clone());
         }
         let api_futs = api_terms
@@ -342,30 +458,15 @@ pub async fn run(app: &tauri::AppHandle, query: SearchQuery) -> Vec<ResourceItem
         }
     }
 
-    // 2) 通用全网发现：多引擎 ×（dork + LLM 扩展）→ 候选页 → 嗅探。
+    // 2) 通用全网发现：多引擎 ×（dork + 扩展词）→ 候选页 → 嗅探。
     if query.web_discovery {
         let engines: Vec<String> = if query.engines.is_empty() {
             engines::known_engines().iter().map(|s| s.to_string()).collect()
         } else {
             query.engines.clone()
         };
-        // 查询扩展：多语翻译 + 内建双语种子表(离线可用) + 可选 LLM 扩展(同义/中英/相关术语)。
-        let mut keywords = vec![keyword.clone()];
-        for t in &translations {
-            keywords.push(t.clone());
-        }
-        for ex in offline_expand(&keyword) {
-            keywords.push(ex);
-        }
-        if query.use_llm {
-            for ex in llm::expand_query(&keyword).await.into_iter().take(3) {
-                keywords.push(ex);
-            }
-        }
-        keywords.sort();
-        keywords.dedup();
         let mut queries = Vec::new();
-        for kw in &keywords {
+        for kw in &search_terms {
             queries.extend(build_queries(kw, &kinds));
         }
         queries.sort();
@@ -394,14 +495,32 @@ pub async fn run(app: &tauri::AppHandle, query: SearchQuery) -> Vec<ResourceItem
         }
     }
 
-    // 3) 去重 → HEAD 死链校验 + Content-Type 定类 → 多特征打分 → 按类分组截断排序。
-    let matcher = SkimMatcherV2::default();
+    // 3) 去重 → HEAD 死链校验 + Content-Type 定类 → 多特征打分 → 词法闸门 → 按类分组截断排序。
     let mut seen = std::collections::HashSet::new();
     items.retain(|it| seen.insert(it.id.clone()));
+    // 解析层：对“只有详情页、没有直链”的条目（Anna's/OpenLibrary/DOI 落地页等）尽力解析出
+    // 可下载直链（md5→LibGen/IPFS、OpenLibrary→IA、DOI→OA PDF），让更多源真正可下。
+    resolve::resolve_items(&mut items).await;
     let mut items = sniffer::verify(items, &kinds).await;
+    let terms: Vec<Vec<String>> = search_terms.iter().map(|t| tokenize(t)).collect();
+    let terms_lc: Vec<String> = search_terms.iter().map(|s| s.to_lowercase()).collect();
     for it in items.iter_mut() {
-        it.relevance = score(&matcher, it, &keyword);
+        it.relevance = score(it, &terms, &terms_lc);
     }
+    // web 词法闸门 + 全局相关度下限：全网抓取的结果标题必须命中至少一个检索词，
+    // 否则判为“一个无关候选页灌入的噪声文件”直接丢弃（结构化 API 源已按词检索，豁免）。
+    const MIN_SCORE: f32 = 0.30;
+    items.retain(|it| {
+        if it.relevance < MIN_SCORE {
+            return false;
+        }
+        if it.source == "web" {
+            best_lexical(&it.title, &terms) > 0.0
+                || terms_lc.iter().any(|t| !t.is_empty() && it.title.to_lowercase().contains(t))
+        } else {
+            true
+        }
+    });
     // 跨源近似去重：同类型 + 归一标题相同的条目只保留相关度最高的一条
     // （合并「不同源命中同一资源」，权威直链自然胜出）。
     items.sort_by(|a, b| b.relevance.partial_cmp(&a.relevance).unwrap_or(std::cmp::Ordering::Equal));

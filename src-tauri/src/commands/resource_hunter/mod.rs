@@ -175,6 +175,7 @@ pub async fn rh_library_search(
             ResourceKind::Audio => "audio",
             ResourceKind::Image => "image",
             ResourceKind::Code => "code",
+            ResourceKind::Dataset => "dataset",
             ResourceKind::Other => "other",
         };
         rows.retain(|r| r.get("kind").and_then(|v| v.as_str()) == Some(ks));

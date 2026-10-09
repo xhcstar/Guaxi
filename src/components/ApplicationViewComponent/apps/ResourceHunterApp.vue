@@ -63,6 +63,11 @@
                 <Icon :icon="ic.sparkles" width="14" height="14" />智能扩展
               </button>
             </template>用 LLM 扩展同义词/中英/相关术语，提升召回（需已配置模型）</n-tooltip>
+            <n-tooltip :delay="200"><template #trigger>
+              <button class="rh-chip ghost" :class="{ on: multilingual }" @click="multilingual = !multilingual">
+                <Icon :icon="ic.globe" width="14" height="14" />多语检索
+              </button>
+            </template>默认已含中英双语召回；开启后再译日/德/法/俄/西并行检索，召回更广（可能引入他国语言结果）</n-tooltip>
           </div>
         </header>
         <!-- PLACEHOLDER_DISCOVER_BODY -->
@@ -342,6 +347,16 @@
                   <n-input v-model:value="apiKeys.unpaywall_email"
                     placeholder="你的邮箱（Unpaywall 要求，用于开放获取论文）" @blur="saveApiKeys" size="small" />
                 </label>
+                <label class="rh-key-row">
+                  <span class="rh-key-label">Unsplash（图片）</span>
+                  <n-input v-model:value="apiKeys.unsplash" type="password" show-password-on="click"
+                    placeholder="unsplash.com Access Key" @blur="saveApiKeys" size="small" />
+                </label>
+                <label class="rh-key-row">
+                  <span class="rh-key-label">Pixabay（图片/视频）</span>
+                  <n-input v-model:value="apiKeys.pixabay" type="password" show-password-on="click"
+                    placeholder="pixabay.com API Key" @blur="saveApiKeys" size="small" />
+                </label>
               </div>
               <div class="rh-block-label">SearXNG 元搜索实例</div>
               <p class="rh-set-hint">填写自建或公共 SearXNG 地址（需支持 JSON API），大幅增强全网发现稳定性。</p>
@@ -405,6 +420,7 @@ import imageIcon from '@iconify-icons/lucide/image'
 import openIcon from '@iconify-icons/lucide/book-open'
 import radarIcon from '@iconify-icons/lucide/radar'
 import codeIcon from '@iconify-icons/lucide/code'
+import databaseIcon from '@iconify-icons/lucide/database'
 import uploadIcon from '@iconify-icons/lucide/upload'
 import saveIcon from '@iconify-icons/lucide/hard-drive-download'
 
@@ -433,6 +449,7 @@ const KIND = {
   audio: { label: '音频', icon: musicIcon },
   image: { label: '图片', icon: imageIcon },
   code: { label: '代码', icon: codeIcon },
+  dataset: { label: '数据集', icon: databaseIcon },
   other: { label: '其他', icon: fileIcon },
 }
 const resultActions = [
@@ -460,6 +477,7 @@ const kindChips = [
   { id: 'audio', label: '音频', icon: musicIcon },
   { id: 'image', label: '图片', icon: imageIcon },
   { id: 'code', label: '代码', icon: codeIcon },
+  { id: 'dataset', label: '数据集', icon: databaseIcon },
 ]
 const examples = ['深度学习 filetype:pdf', 'Rust 编程 epub', '宋代海上贸易', 'lofi hip hop', '星空 4k 壁纸']
 const templates = [
@@ -485,6 +503,7 @@ const resultKindTab = ref('all')
 const showSuggest = ref(false)
 const searchInput = ref(null)
 const useLlm = ref(false)
+const multilingual = ref(false)
 const recent = ref([])
 const hintIdx = ref(0)
 let hintTimer = null
@@ -498,7 +517,7 @@ const bypassText = ref('')
 const downloadDir = ref('')
 const speedLimit = ref(0)
 // 第三方 API Key（可选，填了对应源才启用）与 SearXNG 元搜索实例
-const apiKeys = ref({ core: '', pexels: '', jamendo: '', unpaywall_email: '' })
+const apiKeys = ref({ core: '', pexels: '', jamendo: '', unpaywall_email: '', unsplash: '', pixabay: '' })
 const searxngUrl = ref('')
 // 下载
 const tasks = ref({})
@@ -560,7 +579,7 @@ watch(resultKindTab, (k) => {
 
 const libKindOptions = [
   { label: '全部类型', value: 'all' },
-  ...['paper', 'book', 'video', 'audio', 'image', 'code', 'other'].map((k) => ({ label: KIND[k].label, value: k })),
+  ...['paper', 'book', 'video', 'audio', 'image', 'code', 'dataset', 'other'].map((k) => ({ label: KIND[k].label, value: k })),
 ]
 const libTagOptions = computed(() => allTags.value.map((t) => ({ label: t, value: t })))
 function tagsOf(r) {
@@ -658,6 +677,7 @@ async function doSearch() {
         seed_sites: seedSites.value,
         limit: 60,
         use_llm: useLlm.value,
+        multilingual: multilingual.value,
       },
     })
     results.value = items || []
@@ -939,6 +959,7 @@ onUnmounted(() => {
   --rh-accent: #2563eb;
   --k-paper: #4f6bed; --k-book: #8b5cf6; --k-video: #ef4444;
   --k-audio: #f59e0b; --k-image: #10b981; --k-other: #6b7280; --k-code: #0ea5e9;
+  --k-dataset: #14b8a6;
 }
 /* 左侧图标导航 */
 .rh-rail {
@@ -1058,6 +1079,7 @@ onUnmounted(() => {
 .rh-kind-tab.k-video { --k-color: var(--k-video); } .rh-kind-tab.k-audio { --k-color: var(--k-audio); }
 .rh-kind-tab.k-image { --k-color: var(--k-image); } .rh-kind-tab.k-code { --k-color: var(--k-code); }
 .rh-kind-tab.k-other { --k-color: var(--k-other); }
+.rh-kind-tab.k-dataset { --k-color: var(--k-dataset); }
 .rh-kt-count { font-size: 11px; opacity: .8; font-variant-numeric: tabular-nums; }
 /* PLACEHOLDER_STYLE3 */
 .rh-icon-btn {
@@ -1089,6 +1111,7 @@ onUnmounted(() => {
 .rh-item.k-video { --k-color: var(--k-video); } .rh-item.k-audio { --k-color: var(--k-audio); }
 .rh-item.k-image { --k-color: var(--k-image); } .rh-item.k-other { --k-color: var(--k-other); }
 .rh-item.k-code { --k-color: var(--k-code); }
+.rh-item.k-dataset { --k-color: var(--k-dataset); }
 .rh-item.active { background: color-mix(in srgb, var(--rh-accent) 8%, transparent); }
 .rh-item-check { flex-shrink: 0; }
 .rh-item-body { flex: 1; min-width: 0; cursor: default; }
@@ -1108,6 +1131,7 @@ onUnmounted(() => {
 .rh-kbadge.k-video { background: var(--k-video); } .rh-kbadge.k-audio { background: var(--k-audio); }
 .rh-kbadge.k-image { background: var(--k-image); } .rh-kbadge.k-other { background: var(--k-other); }
 .rh-kbadge.k-code { background: var(--k-code); }
+.rh-kbadge.k-dataset { background: var(--k-dataset); }
 /* PLACEHOLDER_STYLE4 */
 /* 下载任务行 */
 .rh-task { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-bottom: 1px solid var(--guaxi-border, #eee); border-left: 3px solid var(--k-color, transparent); }
@@ -1115,6 +1139,7 @@ onUnmounted(() => {
 .rh-task.k-video { --k-color: var(--k-video); } .rh-task.k-audio { --k-color: var(--k-audio); }
 .rh-task.k-image { --k-color: var(--k-image); } .rh-task.k-other { --k-color: var(--k-other); }
 .rh-task.k-code { --k-color: var(--k-code); }
+.rh-task.k-dataset { --k-color: var(--k-dataset); }
 .rh-task-main { flex: 1; min-width: 0; }
 .rh-task-title { font-size: 13px; color: var(--guaxi-text-primary); margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rh-task-meta { font-size: 12px; color: var(--guaxi-text-secondary); margin-top: 5px; }

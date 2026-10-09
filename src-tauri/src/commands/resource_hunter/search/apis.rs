@@ -59,6 +59,21 @@ async fn get_json(url: &str) -> Option<serde_json::Value> {
     c.get(url).send().await.ok()?.json().await.ok()
 }
 
+/// 识别 Cloudflare/反爬挑战页或空壳页：返回的是 JS 质询而非真实结果时应跳过换镜像，
+/// 而不是把挑战页当成“无结果”静默吞掉（旧版书源召回塌陷的主因之一）。
+fn looks_blocked(body: &str) -> bool {
+    if body.len() < 500 {
+        return true;
+    }
+    let lc = body.to_ascii_lowercase();
+    lc.contains("just a moment")
+        || lc.contains("cf-chl")
+        || lc.contains("challenge-platform")
+        || lc.contains("enable javascript and cookies")
+        || lc.contains("attention required")
+        || lc.contains("/cdn-cgi/challenge")
+}
+
 // PLACEHOLDER_APIS
 
 /// GitHub 仓库搜索 → 默认分支 zip 直链。代码领域。
@@ -166,8 +181,9 @@ pub async fn openverse(kw: &str, media: &str, limit: usize) -> Vec<ResourceItem>
 /// 单个镜像常年不稳，这里按序尝试多个镜像域，首个返回结果者胜出（best-effort）。
 pub async fn libgen(kw: &str, limit: usize) -> Vec<ResourceItem> {
     // 常见活跃镜像；顺序尝试，命中即止。不同镜像 HTML 结构一致（Gen 经典表格 + md5= 链接）。
-    const MIRRORS: [&str; 6] = [
+    const MIRRORS: [&str; 8] = [
         "libgen.is", "libgen.rs", "libgen.st", "libgen.gs", "libgen.la", "libgen.vg",
+        "libgen.gl", "libgen.pm",
     ];
     let client = match client() { Some(c) => c, None => return vec![] };
     for host in MIRRORS {
@@ -176,7 +192,7 @@ pub async fn libgen(kw: &str, limit: usize) -> Vec<ResourceItem> {
             Ok(r) if r.status().is_success() => r.text().await.unwrap_or_default(),
             _ => continue,
         };
-        if body.len() < 500 { continue; }
+        if looks_blocked(&body) { continue; }
         let out = parse_libgen(&body, host, limit);
         if !out.is_empty() { return out; }
     }
@@ -211,7 +227,8 @@ fn parse_libgen(body: &str, host: &str, limit: usize) -> Vec<ResourceItem> {
 /// 直链需会员/慢速通道，这里只给详情页（供发现与跳转），已能极大提升书籍召回。
 /// 多域名兜底：主域被墙/CF 拦截时切换镜像。
 pub async fn annas_archive(kw: &str, limit: usize) -> Vec<ResourceItem> {
-    const HOSTS: [&str; 3] = ["annas-archive.org", "annas-archive.se", "annas-archive.li"];
+    // .se/.li 镜像通常比主域 .org 更少被 CF 质询，优先尝试。
+    const HOSTS: [&str; 4] = ["annas-archive.se", "annas-archive.li", "annas-archive.org", "annas-archive.gs"];
     let client = match client() { Some(c) => c, None => return vec![] };
     for host in HOSTS {
         let url = format!("https://{host}/search?q={}", urlencoding::encode(kw));
@@ -219,7 +236,7 @@ pub async fn annas_archive(kw: &str, limit: usize) -> Vec<ResourceItem> {
             Ok(r) if r.status().is_success() => r.text().await.unwrap_or_default(),
             _ => continue,
         };
-        if body.len() < 500 { continue; }
+        if looks_blocked(&body) { continue; }
         let out = parse_annas(&body, host, limit);
         if !out.is_empty() { return out; }
     }
@@ -989,6 +1006,320 @@ pub async fn gitlab(kw: &str, limit: usize) -> Vec<ResourceItem> {
             let title = if desc.is_empty() { full.to_string() } else { format!("{full} — {desc}") };
             out.push(item(&dl, title, ResourceKind::Code, "GitLab", web.to_string(), Some(dl.clone()), Some("zip"), 0.78));
         }
+    }
+    out
+}
+
+// ============ T1 扩展（第二批）：论文/数据集/图片/影音/代码 更多结构化源 ============
+
+/// PubMed Central（E-utilities，keyless）→ 开放获取生物医学全文，直给 PMC PDF。
+pub async fn pubmed(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let es = format!(
+        "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pmc&retmode=json&retmax={}&term={}",
+        limit.min(25), urlencoding::encode(kw)
+    );
+    let json = match get_json(&es).await { Some(j) => j, None => return vec![] };
+    let ids: Vec<String> = json.get("esearchresult").and_then(|r| r.get("idlist"))
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+        .unwrap_or_default();
+    if ids.is_empty() { return vec![]; }
+    let sum = format!(
+        "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pmc&retmode=json&id={}",
+        ids.join(",")
+    );
+    let sj = match get_json(&sum).await { Some(j) => j, None => return vec![] };
+    let result = match sj.get("result") { Some(r) => r, None => return vec![] };
+    let mut out = Vec::new();
+    for id in &ids {
+        let rec = match result.get(id) { Some(r) => r, None => continue };
+        let title = rec.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if title.is_empty() { continue; }
+        let page = format!("https://www.ncbi.nlm.nih.gov/pmc/articles/PMC{id}/");
+        let dl = format!("https://www.ncbi.nlm.nih.gov/pmc/articles/PMC{id}/pdf/");
+        let mut it = item(&page, title, ResourceKind::Paper, "PubMed", page.clone(), Some(dl), Some("pdf"), 0.9);
+        it.published_at = rec.get("pubdate").and_then(|v| v.as_str()).map(|s| s.to_string());
+        out.push(it);
+    }
+    out
+}
+
+/// DBLP（keyless）→ 计算机文献元数据最全，ee 常为 PDF/出版商直链。
+pub async fn dblp(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let url = format!("https://dblp.org/search/publ/api?q={}&format=json&h={}", urlencoding::encode(kw), limit.min(30));
+    let json = match get_json(&url).await { Some(j) => j, None => return vec![] };
+    let hits = json.get("result").and_then(|r| r.get("hits")).and_then(|h| h.get("hit")).and_then(|v| v.as_array());
+    let mut out = Vec::new();
+    for h in hits.into_iter().flatten() {
+        let info = match h.get("info") { Some(i) => i, None => continue };
+        let title = info.get("title").and_then(|v| v.as_str()).unwrap_or("").trim_end_matches('.').to_string();
+        if title.is_empty() { continue; }
+        let ee = info.get("ee").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let page = ee.clone().or_else(|| info.get("url").and_then(|v| v.as_str()).map(|s| s.to_string())).unwrap_or_default();
+        if page.is_empty() { continue; }
+        let dl = ee.filter(|u| u.ends_with(".pdf"));
+        let mut it = item(&page, title, ResourceKind::Paper, "DBLP", page.clone(), dl.clone(), dl.as_ref().map(|_| "pdf"), 0.8);
+        it.published_at = info.get("year").and_then(|v| v.as_str()).map(|s| s.to_string());
+        out.push(it);
+    }
+    out
+}
+
+/// HAL（法国开放科学，keyless）→ fileMain_s 为 PDF 直链。
+pub async fn hal(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let url = format!(
+        "https://api.archives-ouvertes.fr/search/?q={}&fl=label_s,uri_s,fileMain_s&rows={}&wt=json",
+        urlencoding::encode(kw), limit.min(25)
+    );
+    let json = match get_json(&url).await { Some(j) => j, None => return vec![] };
+    let docs = json.get("response").and_then(|r| r.get("docs")).and_then(|v| v.as_array());
+    let mut out = Vec::new();
+    for d in docs.into_iter().flatten() {
+        let title = d.get("label_s").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if title.is_empty() { continue; }
+        let page = d.get("uri_s").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let dl = d.get("fileMain_s").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let src = dl.clone().unwrap_or_else(|| page.clone());
+        if src.is_empty() { continue; }
+        out.push(item(&src, title, ResourceKind::Paper, "HAL", page, dl.clone(), dl.as_ref().map(|_| "pdf"), if dl.is_some() { 0.88 } else { 0.6 }));
+    }
+    out
+}
+// APPEND_NEW_SOURCES
+
+/// Zenodo（CERN，keyless）→ 科研数据集/软件/论文，files[].links.self 为文件直链。
+pub async fn zenodo(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let url = format!("https://zenodo.org/api/records?q={}&size={}", urlencoding::encode(kw), limit.min(25));
+    let json = match get_json(&url).await { Some(j) => j, None => return vec![] };
+    let hits = json.get("hits").and_then(|h| h.get("hits")).and_then(|v| v.as_array());
+    let mut out = Vec::new();
+    for r in hits.into_iter().flatten() {
+        let meta = r.get("metadata");
+        let title = meta.and_then(|m| m.get("title")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if title.is_empty() { continue; }
+        let page = r.get("links").and_then(|l| l.get("self_html")).and_then(|v| v.as_str())
+            .or_else(|| r.get("links").and_then(|l| l.get("html")).and_then(|v| v.as_str()))
+            .unwrap_or("").to_string();
+        let file = r.get("files").and_then(|v| v.as_array()).and_then(|a| a.first());
+        let dl = file.and_then(|f| f.get("links")).and_then(|l| l.get("self")).and_then(|v| v.as_str()).map(|s| s.to_string());
+        let ext = file.and_then(|f| f.get("key")).and_then(|v| v.as_str())
+            .and_then(|k| k.rsplit('.').next()).map(|s| s.to_string());
+        let src = dl.clone().unwrap_or_else(|| page.clone());
+        if src.is_empty() { continue; }
+        let mut it = item(&src, title, ResourceKind::Dataset, "Zenodo", page, dl, ext.as_deref(), 0.85);
+        it.size_hint = file.and_then(|f| f.get("size")).and_then(|v| v.as_u64());
+        out.push(it);
+    }
+    out
+}
+
+/// Hugging Face（keyless）→ 模型(Code)/数据集(Dataset) 仓库发现。
+pub async fn huggingface(kw: &str, which: &str, kind: ResourceKind, limit: usize) -> Vec<ResourceItem> {
+    let (api, prefix) = if which == "datasets" {
+        ("datasets", "datasets/")
+    } else {
+        ("models", "")
+    };
+    let url = format!("https://huggingface.co/api/{api}?search={}&limit={}", urlencoding::encode(kw), limit.min(25));
+    let json = match get_json(&url).await { Some(j) => j, None => return vec![] };
+    let mut out = Vec::new();
+    for r in json.as_array().into_iter().flatten() {
+        let id = r.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        if id.is_empty() { continue; }
+        let page = format!("https://huggingface.co/{prefix}{id}");
+        // 仓库非单文件，给详情页（可 git clone）；下载由前端跳转/后续解析处理。
+        out.push(item(&page, id.to_string(), kind, "HuggingFace", page.clone(), None, None, 0.74));
+    }
+    out
+}
+
+/// Harvard Dataverse（keyless）→ 数据集，access API 可整包下载。
+pub async fn dataverse(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let url = format!(
+        "https://dataverse.harvard.edu/api/search?q={}&type=dataset&per_page={}",
+        urlencoding::encode(kw), limit.min(25)
+    );
+    let json = match get_json(&url).await { Some(j) => j, None => return vec![] };
+    let items = json.get("data").and_then(|d| d.get("items")).and_then(|v| v.as_array());
+    let mut out = Vec::new();
+    for d in items.into_iter().flatten() {
+        let title = d.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let gid = d.get("global_id").and_then(|v| v.as_str()).unwrap_or("");
+        if title.is_empty() || gid.is_empty() { continue; }
+        let page = d.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let dl = format!("https://dataverse.harvard.edu/api/access/dataset/:persistentId/?persistentId={}", urlencoding::encode(gid));
+        out.push(item(gid, title, ResourceKind::Dataset, "Dataverse", page, Some(dl), Some("zip"), 0.82));
+    }
+    out
+}
+
+/// Codeberg（Gitea，keyless）→ 仓库默认分支归档 zip 直链。代码领域。
+pub async fn codeberg(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let url = format!("https://codeberg.org/api/v1/repos/search?q={}&limit={}", urlencoding::encode(kw), limit.min(20));
+    let json = match get_json(&url).await { Some(j) => j, None => return vec![] };
+    let mut out = Vec::new();
+    for r in json.get("data").and_then(|v| v.as_array()).into_iter().flatten() {
+        let full = r.get("full_name").and_then(|v| v.as_str()).unwrap_or("");
+        let html = r.get("html_url").and_then(|v| v.as_str()).unwrap_or("");
+        if full.is_empty() || html.is_empty() { continue; }
+        let branch = r.get("default_branch").and_then(|v| v.as_str()).unwrap_or("main");
+        let dl = format!("{html}/archive/{branch}.zip");
+        let desc = r.get("description").and_then(|v| v.as_str()).unwrap_or("");
+        let title = if desc.is_empty() { full.to_string() } else { format!("{full} — {desc}") };
+        out.push(item(&dl, title, ResourceKind::Code, "Codeberg", html.to_string(), Some(dl.clone()), Some("zip"), 0.8));
+    }
+    out
+}
+// APPEND_NEW_SOURCES2
+
+/// 芝加哥艺术博物馆（keyless，CC0）→ IIIF 高清图直链。
+pub async fn art_institute(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let url = format!(
+        "https://api.artic.edu/api/v1/artworks/search?q={}&limit={}&fields=id,title,image_id",
+        urlencoding::encode(kw), limit.min(25)
+    );
+    let json = match get_json(&url).await { Some(j) => j, None => return vec![] };
+    let mut out = Vec::new();
+    for d in json.get("data").and_then(|v| v.as_array()).into_iter().flatten() {
+        let title = d.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let img = d.get("image_id").and_then(|v| v.as_str()).unwrap_or("");
+        if title.is_empty() || img.is_empty() { continue; }
+        let id = d.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
+        let dl = format!("https://www.artic.edu/iiif/2/{img}/full/843,/0/default.jpg");
+        let page = format!("https://www.artic.edu/artworks/{id}");
+        let mut it = item(&dl, title, ResourceKind::Image, "ArtInstitute", page, Some(dl.clone()), Some("jpg"), 0.82);
+        it.thumbnail = Some(format!("https://www.artic.edu/iiif/2/{img}/full/200,/0/default.jpg"));
+        out.push(it);
+    }
+    out
+}
+
+/// 克利夫兰艺术博物馆（keyless，CC0）→ 图片直链。
+pub async fn cleveland_art(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let url = format!(
+        "https://openaccess-api.clevelandart.org/api/artworks/?q={}&limit={}&has_image=1",
+        urlencoding::encode(kw), limit.min(25)
+    );
+    let json = match get_json(&url).await { Some(j) => j, None => return vec![] };
+    let mut out = Vec::new();
+    for d in json.get("data").and_then(|v| v.as_array()).into_iter().flatten() {
+        let title = d.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if title.is_empty() { continue; }
+        let imgs = d.get("images");
+        let dl = imgs.and_then(|i| i.get("web")).and_then(|w| w.get("url")).and_then(|v| v.as_str())
+            .or_else(|| imgs.and_then(|i| i.get("print")).and_then(|w| w.get("url")).and_then(|v| v.as_str()))
+            .map(|s| s.to_string());
+        let dl = match dl { Some(d) => d, None => continue };
+        let page = d.get("url").and_then(|v| v.as_str()).unwrap_or(&dl).to_string();
+        out.push(item(&dl, title, ResourceKind::Image, "ClevelandArt", page, Some(dl.clone()), Some("jpg"), 0.82));
+    }
+    out
+}
+
+/// Unsplash（需 key "unsplash"，默认不启用）→ 高清免费图片。
+pub async fn unsplash(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let key = match api_key("unsplash") { Some(k) => k, None => return vec![] };
+    let url = format!("https://api.unsplash.com/search/photos?query={}&per_page={}", urlencoding::encode(kw), limit.min(20));
+    let json = match get_json_hdr(&url, "Authorization", &format!("Client-ID {key}")).await { Some(j) => j, None => return vec![] };
+    let mut out = Vec::new();
+    for r in json.get("results").and_then(|v| v.as_array()).into_iter().flatten() {
+        let dl = r.get("urls").and_then(|u| u.get("full")).and_then(|v| v.as_str()).map(|s| s.to_string());
+        let dl = match dl { Some(d) => d, None => continue };
+        let page = r.get("links").and_then(|l| l.get("html")).and_then(|v| v.as_str()).unwrap_or(&dl).to_string();
+        let title = r.get("alt_description").and_then(|v| v.as_str()).filter(|s| !s.is_empty())
+            .map(|s| s.to_string()).unwrap_or_else(|| format!("{kw} 图片"));
+        let mut it = item(&dl, title, ResourceKind::Image, "Unsplash", page, Some(dl.clone()), Some("jpg"), 0.8);
+        it.thumbnail = r.get("urls").and_then(|u| u.get("small")).and_then(|v| v.as_str()).map(|s| s.to_string());
+        it.author = r.get("user").and_then(|u| u.get("name")).and_then(|v| v.as_str()).map(|s| s.to_string());
+        out.push(it);
+    }
+    out
+}
+
+/// Pixabay（需 key "pixabay"，默认不启用）→ 免费图片/视频直链。
+pub async fn pixabay(kw: &str, media: &str, limit: usize) -> Vec<ResourceItem> {
+    let key = match api_key("pixabay") { Some(k) => k, None => return vec![] };
+    let is_video = media == "video";
+    let url = if is_video {
+        format!("https://pixabay.com/api/videos/?key={key}&q={}&per_page={}", urlencoding::encode(kw), limit.min(20).max(3))
+    } else {
+        format!("https://pixabay.com/api/?key={key}&q={}&per_page={}", urlencoding::encode(kw), limit.min(20).max(3))
+    };
+    let json = match get_json(&url).await { Some(j) => j, None => return vec![] };
+    let mut out = Vec::new();
+    for r in json.get("hits").and_then(|v| v.as_array()).into_iter().flatten() {
+        let page = r.get("pageURL").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if is_video {
+            let dl = r.get("videos").and_then(|v| v.get("large")).and_then(|l| l.get("url")).and_then(|v| v.as_str()).map(|s| s.to_string());
+            let dl = match dl { Some(d) => d, None => continue };
+            let title = r.get("tags").and_then(|v| v.as_str()).unwrap_or(kw).to_string();
+            out.push(item(&dl, title, ResourceKind::Video, "Pixabay", page.clone(), Some(dl.clone()), Some("mp4"), 0.78));
+        } else {
+            let dl = r.get("largeImageURL").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let dl = match dl { Some(d) => d, None => continue };
+            let title = r.get("tags").and_then(|v| v.as_str()).unwrap_or(kw).to_string();
+            let mut it = item(&dl, title, ResourceKind::Image, "Pixabay", page.clone(), Some(dl.clone()), Some("jpg"), 0.78);
+            it.thumbnail = r.get("previewURL").and_then(|v| v.as_str()).map(|s| s.to_string());
+            out.push(it);
+        }
+    }
+    out
+}
+
+/// ccMixter（keyless）→ 知识共享授权音乐直链。
+pub async fn ccmixter(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let url = format!("https://ccmixter.org/api/query?f=json&search={}&limit={}", urlencoding::encode(kw), limit.min(25));
+    let json = match get_json(&url).await { Some(j) => j, None => return vec![] };
+    let mut out = Vec::new();
+    for r in json.as_array().into_iter().flatten() {
+        let title = r.get("upload_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if title.is_empty() { continue; }
+        let page = r.get("file_page_url").and_then(|v| v.as_str())
+            .or_else(|| r.get("artist_page_url").and_then(|v| v.as_str())).unwrap_or("").to_string();
+        let file = r.get("files").and_then(|v| v.as_array()).and_then(|a| a.first());
+        let dl = file.and_then(|f| f.get("download_url")).and_then(|v| v.as_str()).map(|s| s.to_string());
+        let dl = match dl { Some(d) => d, None => continue };
+        let ext = dl.rsplit('.').next().filter(|e| e.len() <= 4).map(|s| s.to_string());
+        let mut it = item(&dl, title, ResourceKind::Audio, "ccMixter", page, Some(dl.clone()), ext.as_deref(), 0.78);
+        it.author = r.get("user_name").and_then(|v| v.as_str()).map(|s| s.to_string());
+        out.push(it);
+    }
+    out
+}
+
+/// PeerTube Sepia Search（keyless，联邦）→ 去中心化视频，交 yt-dlp 下载。
+pub async fn peertube(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let url = format!("https://sepiasearch.org/api/v1/search/videos?search={}&count={}", urlencoding::encode(kw), limit.min(20));
+    let json = match get_json(&url).await { Some(j) => j, None => return vec![] };
+    let mut out = Vec::new();
+    for r in json.get("data").and_then(|v| v.as_array()).into_iter().flatten() {
+        let title = r.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let watch = r.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if title.is_empty() || watch.is_empty() { continue; }
+        let mut it = item(&watch, title, ResourceKind::Video, "PeerTube", watch.clone(), None, None, 0.72);
+        it.needs_ytdlp = true;
+        it.thumbnail = r.get("thumbnailUrl").and_then(|v| v.as_str()).map(|s| s.to_string());
+        out.push(it);
+    }
+    out
+}
+
+/// Dailymotion（keyless 搜索）→ 视频，交 yt-dlp 下载。国际主流平台补充。
+pub async fn dailymotion(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let url = format!(
+        "https://api.dailymotion.com/videos?search={}&fields=id,title,url,thumbnail_360_url&limit={}",
+        urlencoding::encode(kw), limit.min(20)
+    );
+    let json = match get_json(&url).await { Some(j) => j, None => return vec![] };
+    let mut out = Vec::new();
+    for r in json.get("list").and_then(|v| v.as_array()).into_iter().flatten() {
+        let title = r.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let watch = r.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if title.is_empty() || watch.is_empty() { continue; }
+        let mut it = item(&watch, title, ResourceKind::Video, "Dailymotion", watch.clone(), None, None, 0.72);
+        it.needs_ytdlp = true;
+        it.thumbnail = r.get("thumbnail_360_url").and_then(|v| v.as_str()).map(|s| s.to_string());
+        out.push(it);
     }
     out
 }

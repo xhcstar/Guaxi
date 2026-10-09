@@ -6,9 +6,13 @@ use futures_util::future::join_all;
 use scraper::{Html, Selector};
 use url::Url;
 
-const VIDEO_HOSTS: [&str; 10] = [
+const VIDEO_HOSTS: [&str; 18] = [
     "youtube.com", "youtu.be", "bilibili.com", "vimeo.com", "twitter.com", "x.com", "tiktok.com",
     "douyin.com", "dailymotion.com", "ixigua.com",
+    // 国内主流长/短视频平台（yt-dlp 可解析），覆盖中英文视频获取。
+    "youku.com", "v.qq.com", "iqiyi.com", "mgtv.com", "kuaishou.com", "weibo.com",
+    // 去中心化联邦视频。
+    "sepiasearch.org", "tube.",
 ];
 
 fn client_for(url: &str) -> Option<reqwest::Client> {
@@ -238,7 +242,9 @@ fn extract_links(base: &str, html: &str, kinds: &[ResourceKind]) -> Vec<Resource
             let label = a.text().collect::<String>();
             push_url(href, &label, &mut out, &mut seen);
         }
-        if out.len() >= 60 {
+        // 单页最多贡献少量文档直链：避免一个无关候选页把几十条链接灌入结果（降噪，
+        // 真正相关的会由后续词法闸门把关）。
+        if out.len() >= 12 {
             break;
         }
     }

@@ -110,6 +110,7 @@ fn kind_str(k: ResourceKind) -> &'static str {
         ResourceKind::Audio => "audio",
         ResourceKind::Image => "image",
         ResourceKind::Code => "code",
+        ResourceKind::Dataset => "dataset",
         ResourceKind::Other => "other",
     }
 }

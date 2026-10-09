@@ -11,6 +11,7 @@ pub enum ResourceKind {
     Audio,
     Image,
     Code,
+    Dataset,
     Other,
 }
 
@@ -22,6 +23,7 @@ impl ResourceKind {
             "mp4" | "mkv" | "webm" | "avi" | "mov" | "flv" | "ts" => ResourceKind::Video,
             "mp3" | "flac" | "m4a" | "wav" | "aac" | "ogg" | "opus" => ResourceKind::Audio,
             "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp" | "svg" | "tiff" => ResourceKind::Image,
+            "csv" | "tsv" | "parquet" | "jsonl" | "h5" | "hdf5" | "npz" | "arrow" => ResourceKind::Dataset,
             _ => ResourceKind::Other,
         }
     }
@@ -77,6 +79,9 @@ pub struct SearchQuery {
     /// 是否启用 LLM 查询扩展（同义词/中英/相关术语），提升召回与精度。
     #[serde(default)]
     pub use_llm: bool,
+    /// 是否启用多语检索。关闭时仍强制中英双语召回；开启后再译日/德/法/俄/西并行检索。
+    #[serde(default)]
+    pub multilingual: bool,
 }
 
 fn default_true() -> bool {
