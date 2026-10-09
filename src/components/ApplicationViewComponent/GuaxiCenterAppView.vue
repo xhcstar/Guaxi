@@ -61,6 +61,11 @@ const handleClick = (app) => {
   padding: 16px 20px;
   width: 100%;
   box-sizing: border-box;
+  /* 中间卡片区自己滚动，不能让溢出冒泡到 n-layout 的横向 flex 行，
+     否则纵向滚动会把左侧栏一起带着动。 */
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .app-grid {

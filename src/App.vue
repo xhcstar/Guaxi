@@ -164,6 +164,11 @@ const themeOverrides = computed(() => {
   --guaxi-border-color: var(--guaxi-border);
   --guaxi-text-primary: #1f2328;
   --guaxi-text-secondary: #57606a;
+  /* 别名：部分组件（统计看板图表、影像工坊、首页面板等）误用了 --guaxi-text-color
+     与 --guaxi-hover-bg，这两个此前从未定义，于是回退到硬编码亮色，暗色模式下
+     文字几乎看不清、悬停/进度槽发白。这里补齐别名，统一跟随主题。 */
+  --guaxi-text-color: var(--guaxi-text-primary);
+  --guaxi-hover-bg: rgba(15, 23, 42, 0.05);
   --guaxi-header-shadow: 0px 1px 2px rgba(0, 0, 0, 0.06);
   --guaxi-syntax-base: #383a42;
   --guaxi-syntax-comment: #6a737d;
@@ -247,6 +252,8 @@ const themeOverrides = computed(() => {
   --guaxi-border-color: var(--guaxi-border);
   --guaxi-text-primary: #d8e0eb;
   --guaxi-text-secondary: #9da5b4;
+  --guaxi-text-color: var(--guaxi-text-primary);
+  --guaxi-hover-bg: rgba(255, 255, 255, 0.07);
   --guaxi-header-shadow: 0px 2px 4px rgba(0, 0, 0, 0.35);
   --guaxi-syntax-base: #abb2bf;
   --guaxi-syntax-comment: #5c6370;
