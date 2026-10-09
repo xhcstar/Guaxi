@@ -9473,10 +9473,15 @@ defineExpose({
   box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
 }
 
-.guaxi-notebook.is-top-toolbar-visible {
-  --guaxi-notebook-toolbar-shell-height: 50px;
-}
-
+/* 设计说明（为什么不再在显隐时改 shell 高度）：
+ * 1. 顶部工具条是 position:absolute 的浮层，锚在 shell 顶边，视觉位置和 shell 预留高度无关。
+ *    之前显隐时把 shell 高度从 8px 顶到 50px，纯粹是在列布局里撑大一个 flex 项，
+ *    结果把下方所有 cell 整体往下顶 42px——点 Python Cell 唤出工具条时「整页向下闪一下」就是这个。
+ * 2. 工具条本就是「悬浮在顶部」的交互（blur + 阴影 + 滑入动画），应覆盖在正文之上而不是挤占版面。
+ *    所以宽屏下 shell 预留高度恒定（保持阅读态的 8px），唤出工具条不再触发回流，阅读区不晃。
+ * 3. 窄屏（@media max-width:1100px）里工具条改为 position:relative 的常驻在流条，那边仍需要 50px，
+ *    由该媒体查询单独给足，和这里的浮层态互不影响。
+ */
 .guaxi-notebook.has-active-python-cell {
   --guaxi-notebook-toolbar-max-width: min(100%, 760px);
 }
@@ -9541,7 +9546,10 @@ defineExpose({
 
 .guaxi-notebook__search-panel-shell {
   position: sticky;
-  top: calc(var(--guaxi-notebook-sticky-top) + var(--guaxi-notebook-toolbar-shell-height));
+  /* 浮层工具条的视觉高度约 50px（min-height 42px + sticky top 6px + 呼吸位）；
+     这里用这个常量而不是 shell 预留高度来下压查找框，让 Ctrl+F 查找条稳定落在工具条下方——
+     shell 预留高度现在恒为阅读态的 8px，若仍跟它走查找框会顶到工具条身上。 */
+  top: calc(var(--guaxi-notebook-sticky-top) + 50px);
   z-index: 24;
   min-height: 36px;
   display: flex;
