@@ -77,7 +77,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onBeforeUnmount, nextTick, reactive, ref } from 'vue'
+import { computed, onMounted, onActivated, onBeforeUnmount, nextTick, reactive, ref } from 'vue'
 import { Icon } from '@iconify/vue'
 import { getFileTreeIcon } from './fileTreeIcons'
 
@@ -153,7 +153,14 @@ const visibleItems = computed(() => flat.value.slice(startIndex.value, endIndex.
 const offsetY = computed(() => startIndex.value * props.rowHeight)
 
 function onScroll(e) { scrollTop.value = e.target.scrollTop }
-function measure() { if (rootRef.value) viewportH.value = rootRef.value.clientHeight }
+function measure() {
+  if (!rootRef.value) return
+  viewportH.value = rootRef.value.clientHeight
+  // keep-alive 重新激活或容器尺寸变化后，DOM 的 scrollTop 会被重置为 0，而 scrollTop ref
+  // 仍保留切走前的旧值，导致虚拟窗口按旧 offsetY 下移、顶部出现一块空白（滚一下才复原）。
+  // 这里把 ref 对齐到真实 DOM，使可视区间立即按当前滚动位置重新计算。
+  scrollTop.value = rootRef.value.scrollTop
+}
 
 const findNodeById = (id) => {
   const k = normId(id)
@@ -424,6 +431,12 @@ onMounted(() => {
     resizeObs = new ResizeObserver(() => measure())
     resizeObs.observe(rootRef.value)
   }
+})
+
+// 本组件常被包在 keep-alive 里（首页在应用页之间来回切换时被缓存）。重新激活时 DOM
+// 会重新插入、原生 scrollTop 归零，需要再测一次视口并把滚动位置对齐，否则顶部会留白。
+onActivated(() => {
+  nextTick(() => measure())
 })
 
 onBeforeUnmount(() => {
