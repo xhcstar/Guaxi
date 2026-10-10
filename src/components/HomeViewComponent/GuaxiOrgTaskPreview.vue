@@ -23,9 +23,25 @@
         :disabled="!canMoveDown"
         @click="moveActive(1)"
       >↓</button>
-      <button class="otp-btn icon" title="大纲" :class="{ on: showOutline }" @click="showOutline = !showOutline">☰</button>
+      <button class="otp-btn icon" title="批量选择" :class="{ on: batchMode }" @click="toggleBatchMode">☑</button>
       <button class="otp-btn icon" title="新建 Bug" @click="$emit('create-block', 'bug')">＋B</button>
       <button class="otp-btn icon" title="新建任务" @click="$emit('create-block', 'task')">＋T</button>
+    </div>
+
+    <!-- 批量操作栏 -->
+    <div v-if="batchMode" class="otp-batchbar">
+      <label class="otp-batch-all"><input type="checkbox" :checked="allSelected" @change="toggleSelectAll" /> 全选</label>
+      <span class="otp-batch-count">已选 {{ selectedBlocks.length }}/{{ displayBlocks.length }}</span>
+      <span class="otp-spacer" />
+      <button class="otp-btn sm" :disabled="!selectedBlocks.length" title="批量上移" @click="batchMove(-1)">↑ 上移</button>
+      <button class="otp-btn sm" :disabled="!selectedBlocks.length" title="批量下移" @click="batchMove(1)">↓ 下移</button>
+      <button class="otp-btn sm danger" :disabled="!selectedBlocks.length" title="批量删除" @click="batchDelete">🗑 删除</button>
+      <span class="otp-batch-sep" />
+      <select v-model="batchCreateType" class="otp-sel" title="新建类型">
+        <option v-for="t in typeOptions" :key="t" :value="t">{{ typeLabel(t) }}</option>
+      </select>
+      <input v-model="batchCreateCount" type="number" min="1" max="20" class="otp-batch-num" title="数量" />
+      <button class="otp-btn sm" title="批量新建（追加到文档末尾）" @click="batchCreate">＋ 批量新建</button>
     </div>
 
     <!-- 搜索栏 -->
@@ -55,26 +71,6 @@
     </div>
 
     <div class="otp-main">
-      <!-- 大纲小地图 -->
-      <aside v-if="showOutline" class="otp-outline" :style="{ flex: `0 0 ${outlineWidth}px`, width: outlineWidth + 'px' }">
-        <div class="otp-outline-head">大纲 · {{ displayBlocks.length }}{{ filterView !== 'all' ? '/' + blocks.length : '' }}</div>
-        <div class="otp-outline-list">
-          <div
-            v-for="(b, i) in displayBlocks"
-            :key="'o' + (b.internalId || i)"
-            class="otp-outline-item"
-            :class="{ active: b.blockStartLine === activeBlockLine, done: b.done }"
-            @click="$emit('goto-line', b.blockStartLine)"
-          >
-            <span class="oo-dot" :class="'tt-' + (b.taskType || 'task')" />
-            <span class="oo-title">{{ b.description || b.id || '(未命名)' }}</span>
-            <span class="oo-st" :class="'st-' + (b.status || 'TODO')">{{ statusLabel(b.status) }}</span>
-          </div>
-        </div>
-      </aside>
-      <!-- 大纲/主区分隔条：拖动改变大纲宽度 -->
-      <div v-if="showOutline" class="otp-outline-resize" @mousedown="startOutlineResize" />
-
       <div class="otp-body" ref="bodyRef">
         <div v-if="diagnostics.length" class="otp-diags">
           <div class="otp-diags-head">⚠ 语法检查（{{ errorCount }} 错误 / {{ warnCount }} 警告）</div>
@@ -91,11 +87,14 @@
           v-for="(b, idx) in displayBlocks"
           :key="b.internalId || b.blockStartLine || idx"
           class="otp-card"
-          :class="{ done: b.done, active: b.blockStartLine === activeBlockLine }"
+          :class="{ done: b.done, active: b.blockStartLine === activeBlockLine, batch: batchMode, selected: isSelected(b) }"
           :data-block-line="b.blockStartLine"
           :ref="(el) => registerCardRef(b.blockStartLine, el)"
           @click="onCardClick(b, $event)"
         >
+          <label v-if="batchMode" class="otp-card-check" @click.stop>
+            <input type="checkbox" :checked="isSelected(b)" @change="toggleSelect(b)" />
+          </label>
           <!-- ============ 读视图 ============ -->
           <template v-if="editingLine !== b.blockStartLine">
             <!-- 上方插入 -->
@@ -107,10 +106,36 @@
 
             <div class="otp-card-head">
               <span class="otp-type" :class="'type-' + (b.taskType || 'task')">{{ typeLabel(b.taskType) }}</span>
-              <span v-if="b.priority" class="otp-pri" :class="'pri-' + b.priority">#{{ b.priority }}</span>
-              <span class="otp-card-title" @click="$emit('goto-line', b.blockStartLine)" v-html="hl(b.description || b.id || '(未命名)')" />
+              <!-- 优先级：点击弹原生下拉快速设置（无/A/B/C），透明 select 覆盖芯片承接点击 -->
+              <span class="otp-pri-wrap">
+                <span class="otp-pri" :class="b.priority ? 'pri-' + b.priority : 'pri-none'">{{ b.priority ? '#' + b.priority : '优先级' }}</span>
+                <select class="otp-quick-overlay" :value="b.priority || ''" title="快速改优先级" @click.stop @change="(e) => quickApply(b, { priority: e.target.value })">
+                  <option value="">无优先级</option>
+                  <option value="A">A</option>
+                  <option value="B">B</option>
+                  <option value="C">C</option>
+                </select>
+              </span>
+              <!-- 标题：单击定位到源码行，双击就地改描述 -->
+              <input
+                v-if="titleEditLine === b.blockStartLine"
+                class="otp-title-input"
+                :ref="(el) => registerTitleInput(b.blockStartLine, el)"
+                v-model="titleDraft"
+                @keydown.enter.prevent="commitTitleEdit(b)"
+                @keydown.esc.prevent="cancelTitleEdit"
+                @blur="commitTitleEdit(b)"
+                @click.stop
+              />
+              <span v-else class="otp-card-title" title="单击定位 · 双击改标题" @click="$emit('goto-line', b.blockStartLine)" @dblclick.stop="startTitleEdit(b)" v-html="hl(b.description || b.id || '(未命名)')" />
               <button class="otp-mini xs" :class="{ ok: flashed === 'desc:' + b.blockStartLine }" title="复制描述" @click.stop="copyDesc(b)">{{ flashed === 'desc:' + b.blockStartLine ? '✓' : '⧉' }}</button>
-              <span class="otp-status" :class="'st-' + (b.status || 'TODO')">{{ statusLabel(b.status) }}</span>
+              <!-- 状态：点击弹原生下拉快速切换 -->
+              <span class="otp-status-wrap">
+                <span class="otp-status" :class="'st-' + (b.status || 'TODO')">{{ statusLabel(b.status) }}</span>
+                <select class="otp-quick-overlay" :value="b.status || 'TODO'" title="快速改状态" @click.stop @change="(e) => quickApply(b, { status: e.target.value })">
+                  <option v-for="s in statusKeys" :key="s" :value="s">{{ statusLabel(s) }}</option>
+                </select>
+              </span>
               <span class="otp-actions">
                 <button class="otp-mini" title="编辑" @click="startEdit(b)">✎</button>
                 <button class="otp-mini" :class="{ ok: flashed === 'copy:' + b.blockStartLine }" title="复制 Bug 信息" @click="copyCard(b)">{{ flashed === 'copy:' + b.blockStartLine ? '✓' : '⧉' }}</button>
@@ -210,7 +235,7 @@
                 </div>
               </label>
               <label>影响版本<input v-model="draft.affectedRelease" /></label>
-              <label class="full">描述<input v-model="draft.description" /></label>
+              <label class="full">描述<input :ref="setDescInput" v-model="draft.description" /></label>
               <label class="full">
                 <span class="otp-field-head">根本原因<button type="button" class="otp-mini xs otp-zoom" title="放大编辑" @click="openBigEdit('根本原因', draft.rootCause, (v) => (draft.rootCause = v))">⛶</button></span>
                 <textarea v-model="draft.rootCause" class="ta-md" />
@@ -242,8 +267,23 @@
                 <div v-for="(ei, i) in draft.extraImpacts" :key="i" class="otp-ei-row">
                   <textarea v-model="draft.extraImpacts[i]" class="ta-md" />
                   <div class="otp-ei-row-actions">
+                    <button type="button" class="otp-mini" title="上移" :disabled="i === 0" @click="moveExtra(i, -1)">↑</button>
+                    <button type="button" class="otp-mini" title="下移" :disabled="i === draft.extraImpacts.length - 1" @click="moveExtra(i, 1)">↓</button>
                     <button type="button" class="otp-mini" title="放大编辑" @click="openBigEdit('Extra Impact', draft.extraImpacts[i], (v) => (draft.extraImpacts[i] = v))">⛶</button>
                     <button type="button" class="otp-mini" title="删除" @click="draft.extraImpacts.splice(i, 1)">✕</button>
+                  </div>
+                </div>
+              </div>
+              <!-- 自定义字段：名(大写字母+空格) + 值；原样往返写回 .org -->
+              <div class="full otp-cf-edit">
+                <div class="otp-ei-head"><span>自定义字段</span><button class="otp-mini" title="新增自定义字段" @click="addCustomField">＋</button></div>
+                <div v-if="!draft.customFields.length" class="otp-cf-hint">暂无自定义字段。字段名仅限大写字母与空格（如 <code>WEBUI BUG ID</code>），保存后原样写入 .org。</div>
+                <div v-for="(cf, i) in draft.customFields" :key="i" class="otp-cf-row">
+                  <input v-model="cf.name" class="otp-cf-name" placeholder="字段名(大写)" @blur="normalizeCfName(i)" />
+                  <textarea v-model="cf.value" class="ta-md otp-cf-val" placeholder="字段值" />
+                  <div class="otp-ei-row-actions">
+                    <button type="button" class="otp-mini" title="放大编辑" @click="openBigEdit(cf.name || '自定义字段', cf.value, (v) => (cf.value = v))">⛶</button>
+                    <button type="button" class="otp-mini" title="删除" @click="removeCustomField(i)">✕</button>
                   </div>
                 </div>
               </div>
@@ -258,11 +298,19 @@
       <div class="otp-bigedit">
         <div class="otp-bigedit-head">
           <strong>放大编辑 · {{ bigEdit.title }}</strong>
+          <span class="otp-bigedit-views">
+            <button class="otp-btn sm" :class="{ on: bigEdit.view === 'edit' }" @click="bigEdit.view = 'edit'">编辑</button>
+            <button class="otp-btn sm" :class="{ on: bigEdit.view === 'split' }" @click="bigEdit.view = 'split'">并排</button>
+            <button class="otp-btn sm" :class="{ on: bigEdit.view === 'preview' }" @click="bigEdit.view = 'preview'">预览</button>
+          </span>
           <span class="otp-spacer" />
           <button class="otp-btn primary" @click="saveBigEdit">保存 (Ctrl+S)</button>
           <button class="otp-btn" @click="cancelBigEdit">取消 (Esc)</button>
         </div>
-        <textarea ref="bigEditRef" v-model="bigEdit.text" class="otp-bigedit-area" />
+        <div class="otp-bigedit-body" :class="'view-' + bigEdit.view">
+          <textarea v-show="bigEdit.view !== 'preview'" ref="bigEditRef" v-model="bigEdit.text" class="otp-bigedit-area" />
+          <div v-show="bigEdit.view !== 'edit'" class="otp-bigedit-preview gmd" v-html="renderMd(bigEdit.text)" />
+        </div>
       </div>
     </div>
   </div>
@@ -285,7 +333,7 @@ const props = defineProps({
   activeBlockLine: { type: Number, default: 0 },
   canBack: { type: Boolean, default: false },
 })
-const emit = defineEmits(['rebuild', 'open-notes', 'goto-line', 'apply-block', 'copy-block', 'export-block', 'back', 'create-block', 'delete-block', 'insert-block', 'move-block'])
+const emit = defineEmits(['rebuild', 'open-notes', 'goto-line', 'apply-block', 'copy-block', 'export-block', 'back', 'create-block', 'delete-block', 'insert-block', 'move-block', 'batch-delete', 'batch-move', 'batch-create'])
 
 const blocks = computed(() => parseTaskBlocks(props.content, props.category))
 // ── 视图过滤器：仅影响显示，不修改源文件或移动逻辑 ──
@@ -304,6 +352,42 @@ const displayBlocks = computed(() => {
 const diagnostics = computed(() => validateTaskBlocks(props.content, props.category))
 const errorCount = computed(() => diagnostics.value.filter((d) => d.severity === 'error').length)
 const warnCount = computed(() => diagnostics.value.filter((d) => d.severity === 'warning').length)
+
+// ── 批量操作（多选 → 批量删除/上移下移/新建）──
+// 选中集合按 blockStartLine 跟踪；任一批量操作后清空（源文件行号已变，避免悬挂选择）。
+const batchMode = ref(false)
+const selected = ref([])
+const batchCreateType = ref('bug')
+const batchCreateCount = ref(1)
+const isSelected = (b) => selected.value.includes(b.blockStartLine)
+const toggleSelect = (b) => {
+  const i = selected.value.indexOf(b.blockStartLine)
+  if (i >= 0) selected.value.splice(i, 1)
+  else selected.value.push(b.blockStartLine)
+}
+const selectedBlocks = computed(() => displayBlocks.value.filter((b) => selected.value.includes(b.blockStartLine)))
+const allSelected = computed(() => displayBlocks.value.length > 0 && selectedBlocks.value.length === displayBlocks.value.length)
+const toggleSelectAll = () => {
+  selected.value = allSelected.value ? [] : displayBlocks.value.map((b) => b.blockStartLine)
+}
+const toggleBatchMode = () => {
+  batchMode.value = !batchMode.value
+  if (!batchMode.value) selected.value = []
+}
+const batchDelete = () => {
+  if (!selectedBlocks.value.length) return
+  emit('batch-delete', selectedBlocks.value.slice())
+  selected.value = []
+}
+const batchMove = (direction) => {
+  if (!selectedBlocks.value.length) return
+  emit('batch-move', { blocks: selectedBlocks.value.slice(), direction })
+  selected.value = []
+}
+const batchCreate = () => {
+  const count = Math.max(1, Math.min(20, parseInt(batchCreateCount.value, 10) || 1))
+  emit('batch-create', { taskType: batchCreateType.value, count })
+}
 
 // ── 卡片上下移动 ──
 // 选中态复用 activeBlockLine（点击卡片标题会 emit goto-line → 父组件移动光标 → 回传 activeBlockLine）。
@@ -326,6 +410,8 @@ const onCardClick = (b, ev) => {
     && t.closest('button, input, textarea, select, a, .otp-mini, .otp-ins-btn, .otp-sec-head, mark')) {
     return
   }
+  // 批量模式：点击卡片即切换选中，不移动光标。
+  if (batchMode.value) { toggleSelect(b); return }
   emit('goto-line', b.blockStartLine)
 }
 
@@ -349,6 +435,10 @@ const sectionsOf = (b) => {
   if (b.content) out.push({ key: 'content', title: '详情 (CONTENT)', type: 'md', value: b.content })
   if (b.notes && b.notes.kind !== 'none') out.push({ key: 'notes', title: '笔记 (NOTES)', type: 'notes', value: b.notes })
   if (b.reviewLink) out.push({ key: 'review', title: 'Review', type: 'link', value: b.reviewLink })
+  // 自定义字段：按出现顺序渲染为文本分区（key 带前缀避免与内置分区冲突）。
+  for (const cf of (b.customFields || [])) {
+    if (cf && cf.name) out.push({ key: 'cf:' + cf.name, title: cf.name, type: 'text', value: cf.value })
+  }
   if (b.extraImpacts && b.extraImpacts.length) out.push({ key: 'extra', title: 'Extra Impact', type: 'extra', value: b.extraImpacts, defaultCollapsed: true })
   return out
 }
@@ -400,6 +490,33 @@ const copyDesc = async (b) => {
   try { await navigator.clipboard.writeText(b.description || ''); doFlash(`desc:${b.blockStartLine}`) } catch {}
 }
 
+// ── 读视图内联快捷编辑：状态/优先级/标题就地改，直接回写源文件（复用 apply-block）──
+// 以块当前完整字段为基，仅覆盖补丁字段，序列化后回写；done 跟随状态重算。
+const quickApply = (b, patch) => {
+  if (!b) return
+  const next = JSON.parse(JSON.stringify(b))
+  Object.assign(next, patch)
+  if ('status' in patch) next.done = next.status === 'DONE' || next.status === 'CANCELLED'
+  emit('apply-block', { startLine: b.blockStartLine, endLine: b.blockEndLine, text: serializeBlock(next) })
+}
+// 标题双击就地改描述
+const titleEditLine = ref(0)
+const titleDraft = ref('')
+const titleInputRefs = new Map()
+const registerTitleInput = (line, el) => { if (el) titleInputRefs.set(line, el) }
+const startTitleEdit = (b) => {
+  titleEditLine.value = b.blockStartLine
+  titleDraft.value = b.description || ''
+  nextTick(() => titleInputRefs.get(b.blockStartLine)?.focus?.())
+}
+const cancelTitleEdit = () => { titleEditLine.value = 0 }
+const commitTitleEdit = (b) => {
+  if (titleEditLine.value !== b.blockStartLine) return
+  const v = titleDraft.value.trim()
+  titleEditLine.value = 0
+  if (v !== (b.description || '')) quickApply(b, { description: v })
+}
+
 // ── 搜索（高亮 + 上一个/下一个，按字段）──
 const search = ref('')
 const searchField = ref('all')
@@ -438,44 +555,16 @@ const hl = (text) => {
   return esc.replace(new RegExp(qe, 'gi'), (m) => `<mark class="otp-hit">${m}</mark>`)
 }
 
-const showOutline = ref(false)
-
-// ── 大纲宽度拖拽 ──
-// 大纲与主渲染区之间通过分隔条调整宽度，宽度持久化，避免每次重开都回到默认值。
-const OUTLINE_WIDTH_KEY = 'guaxi_org_outline_width'
-const outlineWidth = ref((() => {
-  const v = parseInt(localStorage.getItem(OUTLINE_WIDTH_KEY) || '', 10)
-  return Number.isFinite(v) && v >= 140 ? v : 200
-})())
-let outlineResizeStartX = 0
-let outlineResizeStartW = 0
-const onOutlineResizeMove = (e) => {
-  const delta = e.clientX - outlineResizeStartX
-  outlineWidth.value = Math.min(560, Math.max(140, outlineResizeStartW + delta))
-}
-const onOutlineResizeUp = () => {
-  document.removeEventListener('mousemove', onOutlineResizeMove)
-  document.removeEventListener('mouseup', onOutlineResizeUp)
-  document.body.style.userSelect = ''
-  try { localStorage.setItem(OUTLINE_WIDTH_KEY, String(outlineWidth.value)) } catch {}
-}
-const startOutlineResize = (e) => {
-  outlineResizeStartX = e.clientX
-  outlineResizeStartW = outlineWidth.value
-  document.body.style.userSelect = 'none'
-  document.addEventListener('mousemove', onOutlineResizeMove)
-  document.addEventListener('mouseup', onOutlineResizeUp)
-}
-
 // ── 放大编辑浮层 ──
 // 任意可编辑文本区（根本原因/复现步骤/修复详情/测试建议/详情/笔记/Extra Impact）都能放大到接近整窗，
 // 通过 apply 回调把内容写回对应 draft 字段，做到与原位编辑等价。
-const bigEdit = reactive({ open: false, title: '', text: '', apply: null })
+const bigEdit = reactive({ open: false, title: '', text: '', apply: null, view: 'edit' })
 const bigEditRef = ref(null)
 const openBigEdit = async (title, value, apply) => {
   bigEdit.title = title
   bigEdit.text = String(value ?? '')
   bigEdit.apply = apply
+  bigEdit.view = 'edit'
   bigEdit.open = true
   await nextTick()
   bigEditRef.value?.focus?.()
@@ -499,29 +588,58 @@ const onPreviewKeydown = (e) => {
     if (editingLine.value) { e.preventDefault(); saveEdit() }
     return
   }
-  if (e.key === 'Escape' && bigEdit.open) { e.preventDefault(); cancelBigEdit() }
+  if (e.key === 'Escape' && bigEdit.open) { e.preventDefault(); cancelBigEdit(); return }
+  if (e.key === 'Escape' && editingLine.value && !bigEdit.open) { e.preventDefault(); cancelEdit() }
 }
 onMounted(() => { window.addEventListener('keydown', onPreviewKeydown, true) })
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onPreviewKeydown, true)
-  document.removeEventListener('mousemove', onOutlineResizeMove)
-  document.removeEventListener('mouseup', onOutlineResizeUp)
 })
 
 // ── 编辑模式 ──
 const editingLine = ref(0)
 const draft = reactive({})
+const descInputRef = ref(null)
+// 函数式 ref：编辑表单位于卡片 v-for 内，用函数 ref 规避 v-for 下静态 ref 变数组的歧义。
+const setDescInput = (el) => { if (el) descInputRef.value = el }
+let editSnapshot = ''
 const startEdit = (b) => {
   Object.assign(draft, JSON.parse(JSON.stringify(b)))
   if (!Array.isArray(draft.extraImpacts)) draft.extraImpacts = []
+  if (!Array.isArray(draft.customFields)) draft.customFields = []
   if (!draft.notes || !draft.notes.kind) draft.notes = { kind: 'inline', value: '' }
   editingLine.value = b.blockStartLine
+  // 脏检查基线：进入编辑态时的序列化快照；并自动聚焦描述输入框。
+  editSnapshot = serializeBlock(JSON.parse(JSON.stringify(draft)))
+  nextTick(() => descInputRef.value?.focus?.())
 }
-const cancelEdit = () => { editingLine.value = 0 }
+const isDraftDirty = () => {
+  try { return serializeBlock(JSON.parse(JSON.stringify(draft))) !== editSnapshot } catch { return true }
+}
+const cancelEdit = () => {
+  if (isDraftDirty() && !window.confirm('有未保存的修改，确定放弃吗？')) return
+  editingLine.value = 0
+}
 const saveEdit = () => {
   draft.done = draft.status === 'DONE' || draft.status === 'CANCELLED'
   emit('apply-block', { startLine: draft.blockStartLine, endLine: draft.blockEndLine, text: serializeBlock(draft) })
   editingLine.value = 0
+}
+// Extra Impact 行上移/下移（人性化重排）
+const moveExtra = (i, dir) => {
+  const arr = draft.extraImpacts
+  const j = i + dir
+  if (!Array.isArray(arr) || j < 0 || j >= arr.length) return
+  const tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp
+}
+// ── 自定义字段编辑 ──
+// 字段名必须是大写字母与空格（解析器识别规则），失焦时规范化；不与已知字段/NOTES 冲突。
+const addCustomField = () => { draft.customFields.push({ name: '', value: '' }) }
+const removeCustomField = (i) => { draft.customFields.splice(i, 1) }
+const normalizeCfName = (i) => {
+  const cf = draft.customFields[i]
+  if (!cf) return
+  cf.name = String(cf.name || '').toUpperCase().replace(/[^A-Z ]+/g, '').replace(/\s+/g, ' ').trim()
 }
 
 // ── 日历选择截止/创建时间 ──
@@ -665,22 +783,16 @@ export default { name: 'GuaxiOrgTaskPreview' }
 .otp-search { flex: 1; }
 .otp-search-count { font-size: 12px; color: var(--otp-sub); min-width: 42px; text-align: center; }
 
+/* 批量操作栏 */
+.otp-batchbar { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--otp-border); flex: 0 0 auto; background: var(--otp-chip); }
+.otp-batch-all { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; cursor: pointer; }
+.otp-batch-count { font-size: 12px; color: var(--otp-sub); }
+.otp-batch-sep { width: 1px; align-self: stretch; background: var(--otp-border); margin: 2px 4px; }
+.otp-batch-num { width: 52px; background: var(--otp-card); border: 1px solid var(--otp-border); color: var(--otp-text); border-radius: 6px; padding: 3px 6px; font-size: 12px; font-family: inherit; }
+.otp-btn.danger { border-color: #d03050; color: #d03050; }
+.otp-btn.danger:hover:not(:disabled) { background: rgba(208,48,80,0.12); }
+
 .otp-main { flex: 1 1 auto; min-height: 0; display: flex; }
-/* 大纲为独立的 flex 列：标题固定、列表区在内容较多时垂直滚动，避免底部被截断。 */
-.otp-outline { flex: 0 0 200px; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--otp-border); background: var(--otp-card); }
-.otp-outline-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
-.otp-outline-head { flex: 0 0 auto; padding: 8px 10px; font-size: 12px; color: var(--otp-sub); font-weight: 700; border-bottom: 1px solid var(--otp-border); background: var(--otp-card); }
-/* 大纲与主区之间的拖拽分隔条 */
-.otp-outline-resize { flex: 0 0 5px; cursor: ew-resize; background: transparent; transition: background .15s; }
-.otp-outline-resize:hover { background: rgba(32,128,240,0.3); }
-.otp-outline-item { display: flex; align-items: center; gap: 6px; padding: 7px 10px; cursor: pointer; border-bottom: 1px solid var(--otp-border); }
-.otp-outline-item:hover { background: var(--otp-chip); }
-.otp-outline-item.active { background: rgba(32,128,240,0.14); }
-.otp-outline-item.done { opacity: 0.6; }
-.oo-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 8px; }
-.oo-dot.tt-bug { background: #d03050; } .oo-dot.tt-task { background: #2080f0; } .oo-dot.tt-other { background: #8a8f99; }
-.oo-title { flex: 1; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.oo-st { font-size: 10px; color: var(--otp-sub); }
 
 .otp-body { flex: 1 1 auto; min-width: 0; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
 .otp-empty { color: var(--otp-sub); padding: 24px; text-align: center; }
@@ -693,9 +805,13 @@ export default { name: 'GuaxiOrgTaskPreview' }
 .otp-diag.error { color: #e45649; } .otp-diag.warning { color: #c18401; }
 .otp-diag-line { flex: 0 0 auto; opacity: 0.8; }
 
-.otp-card { background: var(--otp-card); border: 1px solid var(--otp-border); border-radius: 12px; padding: 14px 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.07); }
+.otp-card { position: relative; background: var(--otp-card); border: 1px solid var(--otp-border); border-radius: 12px; padding: 14px 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.07); }
 .otp-card.done { opacity: 0.75; }
 .otp-card.active { border-color: #2080f0; box-shadow: 0 0 0 2px rgba(32,128,240,0.25); }
+.otp-card.batch { padding-left: 42px; cursor: pointer; }
+.otp-card.selected { border-color: #2080f0; box-shadow: 0 0 0 2px rgba(32,128,240,0.3); }
+.otp-card-check { position: absolute; left: 13px; top: 15px; z-index: 2; display: inline-flex; }
+.otp-card-check input { width: 16px; height: 16px; cursor: pointer; }
 .otp-ins { display: flex; align-items: center; gap: 6px; opacity: 0; transition: opacity .15s; margin: 2px 0; }
 .otp-ins.bottom { margin-top: 10px; justify-content: flex-start; }
 .otp-card:hover .otp-ins { opacity: 1; }
@@ -716,6 +832,24 @@ export default { name: 'GuaxiOrgTaskPreview' }
 .st-PAUSED, .st-WAITING, .st-HOLD { background: rgba(240,160,32,0.18); color: #f0a020; }
 .st-CANCELLED { background: rgba(144,147,153,0.18); color: #909399; }
 .otp-actions { display: inline-flex; gap: 4px; }
+
+/* 读视图内联快捷编辑：状态/优先级芯片上覆盖透明原生 select 承接点击弹下拉 */
+.otp-pri-wrap, .otp-status-wrap { position: relative; display: inline-flex; }
+.otp-quick-overlay {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  margin: 0; padding: 0; border: none; background: transparent;
+  opacity: 0; cursor: pointer; appearance: none; -webkit-appearance: none;
+}
+.theme-light .otp-quick-overlay { color-scheme: light; }
+.theme-dark .otp-quick-overlay { color-scheme: dark; }
+.otp-pri.pri-none { background: transparent; color: var(--otp-sub); border: 1px dashed var(--otp-border); }
+.otp-pri-wrap:hover .otp-pri.pri-none { color: #2080f0; border-color: #2080f0; }
+.otp-title-input {
+  flex: 1; min-width: 120px; font-size: 16px; font-weight: 700; line-height: 1.5;
+  background: var(--otp-bg); border: 1px solid #2080f0; border-radius: 6px; padding: 2px 8px;
+  color: var(--otp-text); font-family: inherit;
+}
+.otp-title-input:focus { outline: none; box-shadow: 0 0 0 2px rgba(32,128,240,0.18); }
 .otp-mini { background: var(--otp-chip); border: 1px solid var(--otp-border); color: var(--otp-text); border-radius: 6px; cursor: pointer; width: 28px; height: 28px; line-height: 1; font-size: 14px; }
 .otp-mini.xs { width: 22px; height: 22px; font-size: 12px; }
 .otp-mini:hover { background: var(--otp-border); }
@@ -758,6 +892,13 @@ export default { name: 'GuaxiOrgTaskPreview' }
 .otp-ei-row { display: flex; gap: 6px; }
 .otp-ei-row textarea { flex: 1; }
 .otp-ei-row-actions { display: flex; flex-direction: column; gap: 6px; }
+/* 自定义字段编辑 */
+.otp-cf-edit { display: flex; flex-direction: column; gap: 6px; }
+.otp-cf-hint { font-size: 12px; color: var(--otp-sub); }
+.otp-cf-hint code { background: var(--otp-chip); padding: 1px 5px; border-radius: 4px; }
+.otp-cf-row { display: flex; gap: 6px; align-items: flex-start; }
+.otp-cf-name { flex: 0 0 160px; text-transform: uppercase; }
+.otp-cf-val { flex: 1; }
 
 /* 字段标题行：标题文字 + 右侧「放大编辑」图标 */
 .otp-field-head { display: inline-flex; align-items: center; gap: 6px; }
@@ -767,8 +908,13 @@ export default { name: 'GuaxiOrgTaskPreview' }
 .otp-bigedit-mask { position: fixed; inset: 0; z-index: 3000; background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center; }
 .otp-bigedit { width: 92vw; height: 88vh; background: var(--otp-card); color: var(--otp-text); border: 1px solid var(--otp-border); border-radius: 12px; display: flex; flex-direction: column; padding: 14px 16px; box-shadow: 0 12px 40px rgba(0,0,0,0.3); }
 .otp-bigedit-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 15px; }
+.otp-bigedit-views { display: inline-flex; gap: 4px; }
+.otp-bigedit-body { flex: 1 1 auto; min-height: 0; display: flex; gap: 10px; }
+.otp-bigedit-body.view-split .otp-bigedit-area,
+.otp-bigedit-body.view-split .otp-bigedit-preview { flex: 1 1 50%; width: 50%; }
 .otp-bigedit-area { flex: 1 1 auto; width: 100%; box-sizing: border-box; resize: none; background: var(--otp-bg); border: 1px solid var(--otp-border); color: var(--otp-text); border-radius: 8px; padding: 12px 14px; font-size: 14px; line-height: 1.7; font-family: inherit; }
 .otp-bigedit-area:focus { outline: none; border-color: #2080f0; box-shadow: 0 0 0 2px rgba(32,128,240,0.18); }
+.otp-bigedit-preview { flex: 1 1 auto; min-width: 0; overflow: auto; background: var(--otp-bg); border: 1px solid var(--otp-border); border-radius: 8px; padding: 12px 14px; font-size: 14px; line-height: 1.7; }
 
 /* 截止/创建时间：单输入框 + 右侧日历图标。
  * 原生日期控件以透明层叠加在图标上方，真实点击落在“日历指示器”上即可弹出系统日历，
@@ -801,6 +947,6 @@ export default { name: 'GuaxiOrgTaskPreview' }
 .gmd :deep(.gmd-img), .gmd :deep(.gmd-img-wrap img) { max-width: 100%; border-radius: 6px; display: block; margin: 6px 0; }
 .gmd :deep(.gmd-link) { color: #2080f0; word-break: break-all; }
 
-.otp-body::-webkit-scrollbar, .otp-outline-list::-webkit-scrollbar, .otp-bigedit-area::-webkit-scrollbar { width: 9px; }
-.otp-body::-webkit-scrollbar-thumb, .otp-outline-list::-webkit-scrollbar-thumb, .otp-bigedit-area::-webkit-scrollbar-thumb { background: rgba(140,140,150,0.38); border-radius: 10px; border: 2.5px solid transparent; background-clip: padding-box; }
+.otp-body::-webkit-scrollbar, .otp-bigedit-area::-webkit-scrollbar { width: 9px; }
+.otp-body::-webkit-scrollbar-thumb, .otp-bigedit-area::-webkit-scrollbar-thumb { background: rgba(140,140,150,0.38); border-radius: 10px; border: 2.5px solid transparent; background-clip: padding-box; }
 </style>

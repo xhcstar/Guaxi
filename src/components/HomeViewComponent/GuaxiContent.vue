@@ -10,7 +10,7 @@
         <div class="app-sider-content">
           <GuaxiSidebar />
         </div>
-        <div class="sider-resize-handle" @mousedown="onMouseDownLeftSidebar" />
+        <div class="sider-resize-handle" :class="{ dragging: draggingSide === 'left' }" @mousedown="onMouseDownLeftSidebar" />
       </div>
 
       <!-- 中间内容 -->
@@ -25,7 +25,7 @@
         <div class="app-sider-content">
           <GuaxiRightContent />
         </div>
-        <div class="sidebar-dragger right" @mousedown="onMouseDownRightSidebar" />
+        <div class="sidebar-dragger right" :class="{ dragging: draggingSide === 'right' }" @mousedown="onMouseDownRightSidebar" />
       </div>
     </div>
   </div>
@@ -52,6 +52,10 @@ const logger = createLogger('GuaxiContent')
 const leftSiderbarWidth = ref(350)
 const rightSiderbarWidth = ref(490)
 const windowWidth = ref(window.innerWidth)
+// 当前正在拖动的分隔条（'left' | 'right' | null）：用于给拖动线上蓝色高亮，
+// 和 latex 预览分隔条等其他页面的拖动反馈保持一致。拖动期间鼠标常跑出 6px 热区，
+// 单靠 :hover 高亮会闪断，所以用这个状态在整段拖动中锁住高亮。
+const draggingSide = ref(null)
 
 // Pinia 状态
 const viewKey = 'home'
@@ -103,6 +107,7 @@ const optimizedMove = (handler) => {
 const onMouseDownLeftSidebar = (event) => {
   event.preventDefault()
   document.body.classList.add('resizing')
+  draggingSide.value = 'left'
   const startX = event.clientX
   const startWidth = leftSiderbarWidth.value
   logger.info('开始拖动主界面左侧边栏', {
@@ -118,6 +123,7 @@ const onMouseDownLeftSidebar = (event) => {
 
   const onMouseUp = () => {
     document.body.classList.remove('resizing')
+    draggingSide.value = null
     document.removeEventListener("mousemove", moveHandler)
     document.removeEventListener("mouseup", onMouseUp)
     logger.info('结束拖动主界面左侧边栏', {
@@ -135,6 +141,7 @@ const onMouseDownLeftSidebar = (event) => {
 const onMouseDownRightSidebar = (event) => {
   event.preventDefault()
   document.body.classList.add('resizing')
+  draggingSide.value = 'right'
   const sider = event.currentTarget.parentElement
   sider.style.transition = 'none'
   sider.style.userSelect = 'none'
@@ -155,6 +162,7 @@ const onMouseDownRightSidebar = (event) => {
     document.removeEventListener('mousemove', onMouseMove)
     document.removeEventListener('mouseup', onMouseUp)
     document.body.classList.remove('resizing')
+    draggingSide.value = null
     sider.style.transition = ''
     sider.style.userSelect = ''
     logger.info('结束拖动主界面右侧边栏', {
@@ -260,6 +268,7 @@ body.resizing .app-sider {
   cursor: ew-resize;
   z-index: 10;
   background-color: transparent;
+  transition: background-color 0.15s ease;
   will-change: transform;
 }
 
@@ -272,11 +281,19 @@ body.resizing .app-sider {
   cursor: ew-resize;
   z-index: 10;
   background-color: transparent;
+  transition: background-color 0.15s ease;
 }
 
+/* 悬停时轻微提示；真正拖动时整条线染成主题蓝，和 latex 预览分隔条等其他页面的拖动反馈一致。
+   .dragging 由 JS 在整段拖动中锁定，避免鼠标跑出 6px 热区后 :hover 高亮闪断。 */
 .sider-resize-handle:hover,
 .sidebar-dragger.right:hover {
-  background-color: rgba(0, 0, 0, 0.1);
+  background-color: color-mix(in srgb, var(--n-color-primary, #61afef) 45%, transparent);
+}
+
+.sider-resize-handle.dragging,
+.sidebar-dragger.right.dragging {
+  background-color: var(--n-color-primary, #61afef);
 }
 
 /* 折叠时隐藏拖动条 */

@@ -58,6 +58,20 @@ async fn exec_collect(app: &AppHandle, profile_id: &str, command: &str) -> Resul
     Ok(String::from_utf8_lossy(&out).into_owned())
 }
 
+/// 跨机源码对照（远端来源）：读取 gdb 所在主机上的源码文件（截断到 max_bytes），
+/// 供 GDB 调试器的源码面板按当前帧 file:line 对照高亮。
+#[command]
+pub async fn ssh_read_text_file(
+    app: AppHandle,
+    profile_id: String,
+    path: String,
+    max_bytes: Option<u64>,
+) -> Result<String, String> {
+    let cap = max_bytes.unwrap_or(1_048_576).max(1);
+    let cmd = format!("head -c {cap} -- {}", shell_quote(&path));
+    exec_collect(&app, &profile_id, &cmd).await
+}
+
 #[derive(Serialize)]
 pub struct ExecResult {
     pub output: String,

@@ -138,6 +138,318 @@ def run(ctx):
     return {"report": "\n".join(lines)}
 "###;
 
+// ===== 内置实用插件(随应用提供,首次运行各写入一次,用户可自由编辑/删除)=====
+
+const BUILTIN_MD_TABLE_TOTAL: &str = r###"# Markdown 表格:规范对齐,并为纯数值列追加「合计」行。
+# editor transform 契约:返回 {"text": 新文本} 替换选区。
+import re
+
+
+def _split_row(line):
+    s = line.strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|"):
+        s = s[:-1]
+    return [c.strip() for c in s.split("|")]
+
+
+def _is_sep(cells):
+    return len(cells) > 0 and all(re.fullmatch(r":?-{1,}:?", c or "") for c in cells)
+
+
+def _to_num(x):
+    t = (x or "").replace(",", "").replace("%", "").strip()
+    try:
+        return float(t)
+    except Exception:
+        return None
+
+
+def run(ctx):
+    text = ctx.get("selection", "") if isinstance(ctx, dict) else ""
+    lines = [l for l in text.splitlines() if l.strip()]
+    if len(lines) < 2:
+        return {"text": text}
+    rows = [_split_row(l) for l in lines]
+    if not _is_sep(rows[1]):
+        return {"text": text}
+    header = rows[0]
+    ncol = len(header)
+    body = [(r + [""] * ncol)[:ncol] for r in rows[2:]]
+    totals = [""] * ncol
+    has_total = False
+    if body:
+        for c in range(ncol):
+            parsed = [_to_num(r[c]) for r in body]
+            if parsed and all(v is not None for v in parsed):
+                totals[c] = "%g" % sum(parsed)
+                has_total = True
+    if has_total:
+        if not totals[0]:
+            totals[0] = "合计"
+        body = body + [totals]
+    widths = [len(header[c]) for c in range(ncol)]
+    for r in body:
+        for c in range(ncol):
+            widths[c] = max(widths[c], len(r[c]))
+
+    def fmt(cells):
+        return "| " + " | ".join(cells[c].ljust(widths[c]) for c in range(ncol)) + " |"
+
+    out = [fmt(header), "| " + " | ".join("-" * max(3, widths[c]) for c in range(ncol)) + " |"]
+    for r in body:
+        out.append(fmt(r))
+    return {"text": "\n".join(out)}
+"###;
+
+const BUILTIN_CODE_TIDY: &str = r###"# 代码块整理:对选区内每个 ``` 围栏块,去行尾空白、Tab 转 4 空格;json 块美化缩进。
+# editor transform 契约:返回 {"text": 新文本} 替换选区。
+import re
+import json
+
+_FENCE = re.compile(r"(^|\n)(```|~~~)([^\n`~]*)\n(.*?)\n(\2)(?=\n|$)", re.DOTALL)
+
+
+def _tidy_block(lang, code):
+    code = code.replace("\t", "    ")
+    code = "\n".join(line.rstrip() for line in code.split("\n"))
+    l = (lang or "").strip().lower()
+    if l in ("json", "jsonc"):
+        try:
+            code = json.dumps(json.loads(code), ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+    return code
+
+
+def run(ctx):
+    text = ctx.get("selection", "") if isinstance(ctx, dict) else ""
+
+    def repl(m):
+        return m.group(1) + m.group(2) + m.group(3) + "\n" + _tidy_block(m.group(3), m.group(4)) + "\n" + m.group(5)
+
+    return {"text": _FENCE.sub(repl, text)}
+"###;
+
+const BUILTIN_CITE_TIDY: &str = r###"# 参考文献整理:逐行去掉原有项目符号/编号、折叠多余空白,统一重新编号为 [1][2]...
+# editor transform 契约:返回 {"text": 新文本} 替换选区。
+import re
+
+
+def run(ctx):
+    text = ctx.get("selection", "") if isinstance(ctx, dict) else ""
+    items = []
+    for raw in text.splitlines():
+        s = raw.strip()
+        if not s:
+            continue
+        s = re.sub(r"^\s*(?:[-*+]|\[\d+\]|\(?\d+[.)\]]|\d+、)\s*", "", s)
+        s = re.sub(r"\s+", " ", s).strip()
+        if s:
+            items.append(s)
+    if not items:
+        return {"text": text}
+    return {"text": "\n".join("[%d] %s" % (i + 1, it) for i, it in enumerate(items))}
+"###;
+
+const BUILTIN_DATA_SUMMARY: &str = r###"# 数据摘要:从选区中抽取所有数字,算计数/求和/均值/中位数/极值/标准差,
+# 在选区下方追加一张 Markdown 摘要表(保留原选区内容)。
+# editor transform 契约:返回 {"text": 新文本} 替换选区。
+import re
+import math
+
+
+def _nums(text):
+    out = []
+    for tok in re.split(r"[\s,;]+", text.strip()):
+        try:
+            out.append(float(tok.replace("%", "")))
+        except Exception:
+            pass
+    return out
+
+
+def run(ctx):
+    text = ctx.get("selection", "") if isinstance(ctx, dict) else ""
+    xs = _nums(text)
+    if not xs:
+        return {"text": text}
+    n = len(xs)
+    srt = sorted(xs)
+    mid = n // 2
+    median = srt[mid] if n % 2 else (srt[mid - 1] + srt[mid]) / 2
+    mean = sum(xs) / n
+    std = math.sqrt(sum((x - mean) ** 2 for x in xs) / n)
+
+    def g(v):
+        return "%g" % v
+
+    rows = [
+        ("计数", str(n)), ("求和", g(sum(xs))), ("均值", g(mean)), ("中位数", g(median)),
+        ("最小", g(min(xs))), ("最大", g(max(xs))), ("标准差(总体)", g(std)),
+    ]
+    table = ["| 指标 | 值 |", "| --- | --- |"] + ["| %s | %s |" % (k, v) for k, v in rows]
+    return {"text": text.rstrip() + "\n\n" + "\n".join(table) + "\n"}
+"###;
+
+const BUILTIN_FRONTMATTER_DOCTOR: &str = r###"# 知识库 frontmatter 体检:遍历 .md,检查缺失 title/date/tags、日期格式是否规范。
+# knowledge-base 契约:ctx["kb_location"] 是知识库目录,返回 {"report": markdown}。
+import os
+import re
+
+_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}")
+
+
+def _front(text):
+    if not text.startswith("---"):
+        return None
+    end = text.find("\n---", 3)
+    return None if end == -1 else text[3:end]
+
+
+def run(ctx):
+    loc = ctx.get("kb_location", "") if isinstance(ctx, dict) else ""
+    if not loc or not os.path.isdir(loc):
+        return {"report": "# frontmatter 体检\n\n未找到知识库目录。"}
+    total = 0
+    buckets = {"缺少 frontmatter": [], "缺少 title": [], "缺少 date": [], "缺少 tags": [], "date 非 YYYY-MM-DD": []}
+    for root, _d, files in os.walk(loc):
+        for f in files:
+            if not f.lower().endswith(".md"):
+                continue
+            total += 1
+            rel = os.path.relpath(os.path.join(root, f), loc).replace("\\", "/")
+            try:
+                txt = open(os.path.join(root, f), "r", encoding="utf-8", errors="ignore").read()
+            except Exception:
+                continue
+            fm = _front(txt)
+            if fm is None:
+                buckets["缺少 frontmatter"].append(rel)
+                continue
+            keys = {}
+            for line in fm.split("\n"):
+                m = re.match(r"^([A-Za-z0-9_\-]+)\s*:\s*(.*)$", line)
+                if m:
+                    keys[m.group(1).lower()] = m.group(2).strip()
+            for k in ("title", "date", "tags"):
+                if not keys.get(k):
+                    buckets["缺少 %s" % k].append(rel)
+            d = keys.get("date", "").strip("\"'")
+            if d and not _DATE.match(d):
+                buckets["date 非 YYYY-MM-DD"].append(rel)
+    lines = ["# frontmatter 体检", "", "Markdown 笔记总数: %d" % total, ""]
+    for title, items in buckets.items():
+        lines.append("## %s (%d)" % (title, len(items)))
+        lines.extend(["- %s" % it for it in items[:50]] or ["- (无)"])
+        if len(items) > 50:
+            lines.append("- …其余 %d 条" % (len(items) - 50))
+        lines.append("")
+    return {"report": "\n".join(lines)}
+"###;
+
+struct BuiltinPlugin {
+    id: &'static str,
+    name: &'static str,
+    description: &'static str,
+    surface: &'static str,
+    capability: &'static str,
+    scope: &'static str,
+    main: &'static str,
+}
+
+const BUILTIN_PLUGINS: &[BuiltinPlugin] = &[
+    BuiltinPlugin {
+        id: "md-table-total",
+        name: "表格合计与对齐",
+        description: "选中 Markdown 表格:规范对齐,并为纯数值列自动追加「合计」行",
+        surface: "editor",
+        capability: "transform",
+        scope: "selection",
+        main: BUILTIN_MD_TABLE_TOTAL,
+    },
+    BuiltinPlugin {
+        id: "code-tidy",
+        name: "代码块整理",
+        description: "选中含 ``` 围栏的文本:去行尾空白、Tab 转空格,JSON 块自动美化缩进",
+        surface: "editor",
+        capability: "transform",
+        scope: "selection",
+        main: BUILTIN_CODE_TIDY,
+    },
+    BuiltinPlugin {
+        id: "cite-tidy",
+        name: "参考文献整理",
+        description: "选中参考条目:去掉原有符号/编号、折叠多余空白,统一重新编号",
+        surface: "editor",
+        capability: "transform",
+        scope: "selection",
+        main: BUILTIN_CITE_TIDY,
+    },
+    BuiltinPlugin {
+        id: "data-summary",
+        name: "数据摘要",
+        description: "选中一组数字:在下方追加计数/求和/均值/中位数/极值/标准差摘要表",
+        surface: "editor",
+        capability: "transform",
+        scope: "selection",
+        main: BUILTIN_DATA_SUMMARY,
+    },
+    BuiltinPlugin {
+        id: "frontmatter-doctor",
+        name: "frontmatter 体检",
+        description: "遍历知识库 .md:报告缺失 title/date/tags 与非法日期格式的笔记",
+        surface: "knowledge-base",
+        capability: "generator",
+        scope: "kb",
+        main: BUILTIN_FRONTMATTER_DOCTOR,
+    },
+];
+
+/// 把内置插件写入插件目录。用 `_builtins.json` 记录"已供给过"的 id,保证每个内置插件
+/// 一生只写入一次:用户此后可自由编辑或删除,不会被重新生成;将来新增的内置插件会补写。
+fn provision_builtin_plugins(dir: &Path) {
+    let marker = dir.join("_builtins.json");
+    let mut done: Vec<String> = fs::read_to_string(&marker)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .map(|v| str_array(&v, "provisioned"))
+        .unwrap_or_default();
+    let mut changed = false;
+    for b in BUILTIN_PLUGINS {
+        if done.iter().any(|d| d == b.id) {
+            continue;
+        }
+        let pdir = dir.join(b.id);
+        if !pdir.exists() && fs::create_dir_all(&pdir).is_ok() {
+            let manifest = serde_json::json!({
+                "id": b.id,
+                "name": b.name,
+                "description": b.description,
+                "entry": "main.py",
+                "capabilities": [b.capability],
+                "surfaces": [b.surface],
+                "scope": b.scope,
+            });
+            let _ = fs::write(
+                pdir.join("manifest.json"),
+                serde_json::to_string_pretty(&manifest).unwrap_or_default(),
+            );
+            let _ = fs::write(pdir.join("main.py"), b.main);
+        }
+        done.push(b.id.to_string());
+        changed = true;
+    }
+    if changed {
+        let _ = fs::write(
+            &marker,
+            serde_json::to_string_pretty(&serde_json::json!({ "provisioned": done }))
+                .unwrap_or_else(|_| "{}".to_string()),
+        );
+    }
+}
+
 fn str_array(v: &serde_json::Value, key: &str) -> Vec<String> {
     v.get(key)
         .and_then(|x| x.as_array())
@@ -303,6 +615,7 @@ pub fn get_editor_plugins_dir() -> Result<String, String> {
 pub fn list_editor_plugins() -> Result<Vec<EditorPluginInfo>, String> {
     let dir = editor_plugins_dir()?;
     seed_example_plugin_if_empty(&dir);
+    provision_builtin_plugins(&dir);
     Ok(collect_all_plugins(&dir)
         .into_iter()
         .filter(|p| p.enabled && p.surfaces.iter().any(|s| s == "editor"))
@@ -314,6 +627,7 @@ pub fn list_editor_plugins() -> Result<Vec<EditorPluginInfo>, String> {
 pub fn list_all_plugins() -> Result<Vec<EditorPluginInfo>, String> {
     let dir = editor_plugins_dir()?;
     seed_example_plugin_if_empty(&dir);
+    provision_builtin_plugins(&dir);
     Ok(collect_all_plugins(&dir))
 }
 

@@ -31,7 +31,7 @@ function onClick() {
 .vn-row { display: flex; gap: 6px; align-items: baseline; padding: 2px 0; cursor: default; white-space: nowrap; }
 .vn-row:hover { background: var(--guaxi-hover-bg, rgba(0,0,0,0.04)); }
 .vn-tw { width: 12px; color: var(--guaxi-text-secondary, #9ca3af); cursor: pointer; }
-.vn-exp { color: #79c0ff; }
+.vn-exp { color: var(--tw-accent, #0969da); }
 .vn-type { color: var(--guaxi-text-secondary, #9ca3af); }
-.vn-val { color: var(--guaxi-code-fg, #d4d4d4); word-break: break-all; white-space: pre-wrap; }
+.vn-val { color: var(--guaxi-text-primary, #1f2328); word-break: break-all; white-space: pre-wrap; }
 </style>

@@ -27,15 +27,28 @@ const KEYRING_SERVICE: &str = "guaxi-ssh";
 pub struct SshProfile {
     pub id: String,
     pub name: String,
+    #[serde(default)]
     pub host: String,
     #[serde(default = "default_port")]
     pub port: u16,
+    #[serde(default)]
     pub user: String,
     /// "key" | "password" | "agent"（agent 现为“尝试默认 ~/.ssh 密钥”）
     #[serde(default = "default_auth")]
     pub auth: String,
     #[serde(default)]
     pub key_path: Option<String>,
+    /// 连接类型："ssh" | "serial" | "telnet"（旧档案无此字段，默认 ssh）。
+    #[serde(default = "default_kind")]
+    pub kind: String,
+    /// 文件夹分组（Xshell/MobaXterm 式分类）。
+    #[serde(default)]
+    pub group: Option<String>,
+    /// 串口专用。
+    #[serde(default)]
+    pub serial_path: Option<String>,
+    #[serde(default)]
+    pub serial_baud: Option<u32>,
 }
 
 fn default_port() -> u16 {
@@ -43,6 +56,9 @@ fn default_port() -> u16 {
 }
 fn default_auth() -> String {
     "agent".to_string()
+}
+fn default_kind() -> String {
+    "ssh".to_string()
 }
 
 #[derive(Debug, Clone, Serialize)]

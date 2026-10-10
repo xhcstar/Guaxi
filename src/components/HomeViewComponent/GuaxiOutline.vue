@@ -35,6 +35,12 @@ import { h, computed, ref, watch } from 'vue'
 const outlineStore = useOutlineStore()
 const { outline, jumpToLine } = storeToRefs(outlineStore)
 
+// GUAXI 任务块 .org 大纲：状态英文→中文小标签（展示用）。
+const ORG_STATUS_LABELS = {
+  TODO: '待办', NEXT: '下一步', DOING: '进行中', WAITING: '等待',
+  PAUSED: '暂停', HOLD: '搁置', CANCELLED: '已取消', DONE: '已完成',
+}
+
 // 将 outline 扁平数组转为树结构
 function buildTree(flatOutline) {
     const stack = []
@@ -132,6 +138,16 @@ watch(
 
 // 渲染标签
 const renderLabel = ({ option }) => {
+    // GUAXI 任务块 .org：文本 + 右侧状态小标签；完成项淡化。
+    if (option.kind === 'org-task') {
+        return h('span', {
+            class: ['outline-label', 'outline-org-task', option.done ? 'is-done' : ''],
+        }, [
+            h('span', { class: 'oo-text' }, option.text),
+            h('span', { class: ['oo-status', 'st-' + (option.status || 'TODO')] },
+                ORG_STATUS_LABELS[option.status] || option.status || '待办'),
+        ])
+    }
     return h('span', {
         class: [
             'outline-label',
@@ -150,6 +166,9 @@ const renderLabel = ({ option }) => {
 
 // 渲染前缀图标
 const renderPrefix = ({ option }) => {
+    if (option.kind === 'org-task') {
+        return h('span', { class: ['outline-tt-dot', 'tt-' + (option.taskType || 'task')] })
+    }
     if (option.kind === 'python-cell') {
         return h(NIcon, null, { default: () => h(Code24Regular) })
     }
@@ -267,4 +286,49 @@ const handleExpandedKeysUpdate = (keys) => {
     font-size: 14px;
     color: #0891b2;
 }
+
+/* GUAXI 任务块 .org 大纲条目：类型色点前缀 + 文本 + 状态小标签 */
+.outline-tt-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex: 0 0 8px;
+    margin-top: 6px;
+    background: #2080f0;
+}
+.outline-tt-dot.tt-bug { background: #d03050; }
+.outline-tt-dot.tt-task { background: #2080f0; }
+.outline-tt-dot.tt-other { background: #8a8f99; }
+
+:deep(.outline-org-task) {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    width: 100%;
+    min-width: 0;
+}
+:deep(.outline-org-task .oo-text) {
+    flex: 1 1 auto;
+    min-width: 0;
+    word-break: break-word;
+}
+:deep(.outline-org-task.is-done) { opacity: 0.6; }
+:deep(.outline-org-task .oo-status) {
+    flex: 0 0 auto;
+    font-size: 10px;
+    padding: 0 5px;
+    border-radius: 8px;
+    background: var(--guaxi-header-bg, rgba(128, 128, 128, 0.16));
+    color: var(--guaxi-text-secondary, #8b94a3);
+    white-space: nowrap;
+}
+:deep(.outline-org-task .oo-status.st-DONE) { background: rgba(24,160,88,0.18); color: #18a058; }
+:deep(.outline-org-task .oo-status.st-DOING),
+:deep(.outline-org-task .oo-status.st-NEXT) { background: rgba(32,128,240,0.18); color: #2080f0; }
+:deep(.outline-org-task .oo-status.st-PAUSED),
+:deep(.outline-org-task .oo-status.st-WAITING),
+:deep(.outline-org-task .oo-status.st-HOLD) { background: rgba(240,160,32,0.18); color: #f0a020; }
+:deep(.outline-org-task .oo-status.st-CANCELLED) { background: rgba(144,147,153,0.18); color: #909399; }
+
 </style>

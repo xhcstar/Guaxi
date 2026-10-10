@@ -51,29 +51,172 @@
       </n-tab-pane>
 
       <n-tab-pane name="crypto" tab="证书/ASN.1">
-        <template #tab><span class="tw-tab"><Icon :icon="keyIcon" width="15" height="15" />证书/ASN.1</span></template>
-        <div class="tb-sec">
-          <div class="tb-h">证书 / 私钥 / 公钥 / CSR / ASN.1 解析</div>
-          <n-input
-            v-model:value="cryptoInput"
-            type="textarea"
-            size="small"
-            :rows="6"
-            placeholder="粘贴 PEM (-----BEGIN...)、base64 或 hex 编码的 DER"
-          />
-          <div class="tb-row" style="margin-top:8px">
-            <n-button size="small" type="primary" :loading="cryptoLoading" @click="runCrypto">解析</n-button>
-            <n-button size="small" :disabled="!cryptoReport" @click="sendToEditor(cryptoAsText)">→ 编辑器</n-button>
-            <span class="tb-res" v-if="cryptoReport">{{ cryptoReport.kind }}</span>
-            <span v-if="error" class="tb-err">{{ error }}</span>
-          </div>
-          <table class="tb-kv" v-if="cryptoReport && cryptoReport.summary.length">
-            <tbody>
-              <tr v-for="(kv, i) in cryptoReport.summary" :key="i"><td>{{ kv[0] }}</td><td>{{ kv[1] }}</td></tr>
-            </tbody>
-          </table>
-          <pre class="tb-out" v-if="cryptoReport">{{ cryptoReport.asn1 }}</pre>
-        </div>
+        <template #tab><span class="tw-tab"><Icon :icon="keyIcon" width="15" height="15" />证书/密钥</span></template>
+        <n-tabs type="segment" size="small" class="cx-tabs" v-model:value="cxTab">
+          <n-tab-pane name="parse" tab="解析/导入">
+            <div class="tb-sec">
+              <div class="tb-h">证书 / 私钥 / 公钥 / CSR / PFX / ASN.1 解析</div>
+              <div class="tb-row">
+                <n-button size="small" @click="pickCryptoFile"><Icon :icon="keyIcon" width="13" height="13" />选择文件 (cert/key/pfx…)</n-button>
+                <n-input v-model:value="pfxPassword" size="small" placeholder="PFX/P12 密码(如需)" style="width:180px" />
+                <span class="tb-res" v-if="loadedKind">识别: {{ loadedKind }}</span>
+              </div>
+              <n-input v-model:value="cryptoInput" type="textarea" size="small" :rows="6" placeholder="或粘贴 PEM (-----BEGIN...)、base64 / hex 编码的 DER" />
+              <div class="tb-row" style="margin-top:8px">
+                <n-button size="small" type="primary" :loading="cryptoLoading" @click="runCrypto">解析</n-button>
+                <n-button size="small" :disabled="!cryptoReport" @click="sendToEditor(cryptoAsText)">→ 编辑器</n-button>
+                <span class="tb-res" v-if="cryptoReport">{{ cryptoReport.kind }}</span>
+                <span v-if="error" class="tb-err">{{ error }}</span>
+              </div>
+              <table class="tb-kv" v-if="cryptoReport && cryptoReport.summary.length">
+                <tbody><tr v-for="(kv, i) in cryptoReport.summary" :key="i"><td>{{ kv[0] }}</td><td>{{ kv[1] }}</td></tr></tbody>
+              </table>
+              <pre class="tb-out" v-if="cryptoReport">{{ cryptoReport.asn1 }}</pre>
+              <template v-if="pfxOut">
+                <div class="tb-h" style="margin-top:10px">PFX 内容</div>
+                <pre class="tb-out">{{ pfxOut }}</pre>
+              </template>
+            </div>
+          </n-tab-pane>
+
+          <n-tab-pane name="key" tab="密钥生成">
+            <div class="tb-sec">
+              <div class="tb-row">
+                <n-select v-model:value="keyAlgo" size="small" :options="keyAlgoOptions" style="width:140px" />
+                <n-select v-if="keyAlgo==='rsa'" v-model:value="rsaBits" size="small" :options="rsaBitsOptions" style="width:120px" />
+                <n-select v-if="keyAlgo==='ec'" v-model:value="ecCurve" size="small" :options="ecCurveOptions" style="width:120px" />
+                <n-button size="small" type="primary" :loading="keyLoading" @click="genKey">生成密钥</n-button>
+                <n-button size="small" :disabled="!genPrivPem" @click="sendToEditor('```\n'+genPrivPem+'\n'+genPubPem+'\n```')">→ 编辑器</n-button>
+              </div>
+              <pre class="tb-out" v-if="genPrivPem">{{ genPrivPem }}{{ genPubPem }}</pre>
+            </div>
+          </n-tab-pane>
+          <n-tab-pane name="csr" tab="CSR">
+            <div class="tb-sec">
+              <div class="tb-row">
+                <n-input v-model:value="csrCn" size="small" placeholder="CN 通用名，如 example.com" style="width:220px" />
+                <n-input v-model:value="csrOrg" size="small" placeholder="组织 O(可空)" style="width:160px" />
+                <n-input v-model:value="csrSans" size="small" placeholder="SAN 逗号分隔: a.com,10.0.0.1" style="flex:1;min-width:200px" />
+              </div>
+              <n-input v-model:value="csrKey" type="textarea" size="small" :rows="4" placeholder="私钥 PEM（留空用上面生成的密钥）" />
+              <div class="tb-row" style="margin-top:8px">
+                <n-button size="small" type="primary" :loading="csrLoading" @click="genCsr">生成 CSR</n-button>
+                <n-button size="small" :disabled="!csrOut" @click="sendToEditor('```\n'+csrOut+'\n```')">→ 编辑器</n-button>
+              </div>
+              <pre class="tb-out" v-if="csrOut">{{ csrOut }}</pre>
+            </div>
+          </n-tab-pane>
+
+          <n-tab-pane name="chain" tab="证书链/签发">
+            <div class="tb-sec">
+              <div class="tb-row">
+                <n-select v-model:value="certProfile" size="small" :options="certProfileOptions" style="width:150px" />
+                <n-input v-model:value="certCn" size="small" placeholder="CN，如 Root CA / server.com" style="width:220px" />
+                <n-input v-model:value="certOrg" size="small" placeholder="组织 O(可空)" style="width:150px" />
+                <n-input-number v-model:value="certDays" size="small" :min="1" :show-button="false" style="width:110px" />
+                <span class="tb-res">天</span>
+              </div>
+              <div class="tb-row">
+                <n-input v-model:value="certSans" size="small" placeholder="SAN 逗号分隔(server/client 用)" style="flex:1;min-width:200px" />
+                <n-select v-model:value="certKeyAlgo" size="small" :options="keyAlgoOptions" style="width:130px" />
+              </div>
+              <div class="tb-h" style="margin-top:4px">颁发者（留空=自签根 CA；填入则由该 CA 签发）</div>
+              <n-input v-model:value="issuerCert" type="textarea" size="small" :rows="3" placeholder="颁发者证书 PEM" />
+              <n-input v-model:value="issuerKey" type="textarea" size="small" :rows="3" placeholder="颁发者私钥 PEM" />
+              <div class="tb-row" style="margin-top:8px">
+                <n-button size="small" type="primary" :loading="certLoading" @click="issueCert">签发证书</n-button>
+                <n-button size="small" :disabled="!certOut" @click="sendToEditor('```\n'+(certKeyOut||'')+certOut+'\n```')">→ 编辑器</n-button>
+                <span class="tb-res">也可在"CSR 签发"里用 CA 直签已有 CSR</span>
+              </div>
+              <div class="tb-row">
+                <n-input v-model:value="signCsrPem" type="textarea" size="small" :rows="2" placeholder="已有 CSR PEM（用上面的颁发者签发）" style="flex:1" />
+                <n-button size="small" :loading="signCsrLoading" @click="signCsr">CA 签发此 CSR</n-button>
+              </div>
+              <pre class="tb-out" v-if="certKeyOut">{{ certKeyOut }}</pre>
+              <pre class="tb-out" v-if="certOut">{{ certOut }}</pre>
+              <div class="tb-row" style="margin-top:8px">
+                <n-input v-model:value="verifyIssuer" type="textarea" size="small" :rows="2" placeholder="验签：颁发者证书 PEM" style="flex:1" />
+                <n-button size="small" @click="verifyCert">验证 cert 由 issuer 签名</n-button>
+                <span class="tb-res" v-if="verifyResult!==null">{{ verifyResult ? '✓ 验证通过' : '✗ 验证失败' }}</span>
+              </div>
+              <n-input v-model:value="verifyCertPem" type="textarea" size="small" :rows="2" placeholder="验签：待验证证书 PEM（空=用上面签发结果）" />
+            </div>
+          </n-tab-pane>
+          <n-tab-pane name="pfx" tab="PFX">
+            <div class="tb-sec">
+              <div class="tb-h">打包 PFX（私钥 + 证书链 → .pfx）</div>
+              <n-input v-model:value="pfxKey" type="textarea" size="small" :rows="3" placeholder="私钥 PEM" />
+              <n-input v-model:value="pfxCerts" type="textarea" size="small" :rows="4" placeholder="证书链 PEM（叶证书在前，可含多张 CA）" />
+              <div class="tb-row" style="margin-top:8px">
+                <n-input v-model:value="pfxBuildPwd" size="small" placeholder="设置密码" style="width:180px" />
+                <n-button size="small" type="primary" :loading="pfxBuildLoading" @click="buildPfx">打包并保存 .pfx</n-button>
+              </div>
+            </div>
+          </n-tab-pane>
+
+          <n-tab-pane name="sym" tab="对称加解密">
+            <div class="tb-sec">
+              <div class="tb-row">
+                <n-select v-model:value="symAlgo" size="small" :options="symAlgoOptions" style="width:150px" />
+                <n-select v-if="symAlgo==='aes'" v-model:value="symMode" size="small" :options="symModeOptions" style="width:110px" />
+                <n-input v-model:value="symKey" size="small" placeholder="key(hex)" style="width:200px" />
+                <n-input v-model:value="symIv" size="small" placeholder="iv/nonce(hex)" style="width:160px" />
+              </div>
+              <n-input v-model:value="symData" type="textarea" size="small" :rows="3" placeholder="数据（加密=base64 或文本；解密=base64 密文）" />
+              <div class="tb-row" style="margin-top:8px">
+                <n-input v-if="symMode==='gcm'||symAlgo==='chacha20poly1305'" v-model:value="symAad" size="small" placeholder="AAD(hex, 可空)" style="width:200px" />
+                <n-checkbox v-model:checked="symTextInput" size="small">输入是明文(非base64)</n-checkbox>
+                <n-button size="small" type="primary" @click="runSym(true)">加密</n-button>
+                <n-button size="small" @click="runSym(false)">解密</n-button>
+              </div>
+              <pre class="tb-out" v-if="symOut">{{ symOut }}</pre>
+            </div>
+          </n-tab-pane>
+
+          <n-tab-pane name="asym" tab="RSA 加解密">
+            <div class="tb-sec">
+              <div class="tb-row">
+                <n-select v-model:value="rsaScheme" size="small" :options="rsaSchemeOptions" style="width:150px" />
+                <n-checkbox v-model:checked="rsaTextInput" size="small">输入是明文(非base64)</n-checkbox>
+                <n-button size="small" type="primary" @click="runRsa('encrypt')">公钥加密</n-button>
+                <n-button size="small" @click="runRsa('decrypt')">私钥解密</n-button>
+              </div>
+              <n-input v-model:value="rsaKey" type="textarea" size="small" :rows="3" placeholder="公钥 PEM(加密) / 私钥 PEM(解密)" />
+              <n-input v-model:value="rsaData" type="textarea" size="small" :rows="2" placeholder="数据" />
+              <pre class="tb-out" v-if="rsaOut">{{ rsaOut }}</pre>
+            </div>
+          </n-tab-pane>
+
+          <n-tab-pane name="sign" tab="签名/验签">
+            <div class="tb-sec">
+              <div class="tb-row">
+                <n-select v-model:value="signScheme" size="small" :options="signSchemeOptions" style="width:190px" />
+                <n-checkbox v-model:checked="signTextInput" size="small">输入是明文(非base64)</n-checkbox>
+              </div>
+              <n-input v-model:value="signKey" type="textarea" size="small" :rows="3" placeholder="签名=私钥 PEM / 验签=公钥 PEM" />
+              <n-input v-model:value="signData" type="textarea" size="small" :rows="2" placeholder="原始数据" />
+              <div class="tb-row" style="margin-top:8px">
+                <n-button size="small" type="primary" @click="runSign">签名</n-button>
+                <n-input v-model:value="signSig" size="small" placeholder="签名(base64)" style="flex:1" />
+                <n-button size="small" @click="runVerify">验签</n-button>
+                <span class="tb-res" v-if="signVerifyResult!==null">{{ signVerifyResult ? '✓ 通过' : '✗ 失败' }}</span>
+              </div>
+              <pre class="tb-out" v-if="signOut">{{ signOut }}</pre>
+            </div>
+          </n-tab-pane>
+
+          <n-tab-pane name="hash" tab="散列">
+            <div class="tb-sec">
+              <div class="tb-row">
+                <n-select v-model:value="hashAlgo" size="small" :options="hashAlgoOptions" style="width:120px" />
+                <n-checkbox v-model:checked="hashTextInput" size="small">输入是明文(非base64)</n-checkbox>
+                <n-button size="small" type="primary" @click="runHash">计算</n-button>
+              </div>
+              <n-input v-model:value="hashData" type="textarea" size="small" :rows="2" placeholder="数据" />
+              <pre class="tb-out" v-if="hashOut">{{ hashOut }}</pre>
+            </div>
+          </n-tab-pane>
+        </n-tabs>
       </n-tab-pane>
 
       <n-tab-pane name="bin" tab="二进制分析">
@@ -103,15 +246,20 @@
 
       <n-tab-pane name="core" tab="Coredump">
         <template #tab><span class="tw-tab"><Icon :icon="skullIcon" width="15" height="15" />Coredump</span></template>
-        <div class="tb-sec">
+        <div class="tb-sec tb-sec-fill">
           <div class="tb-row">
             <n-select v-model:value="profileId" size="small" :options="profileOptions" placeholder="SSH 档案" style="width:180px" />
             <n-input v-model:value="coreProgram" size="small" placeholder="可执行文件路径" style="width:200px" />
             <n-input v-model:value="coreFile" size="small" placeholder="core 文件路径" style="width:200px" />
             <n-button size="small" type="primary" :loading="coreLoading" @click="analyzeCore">分析</n-button>
             <n-button size="small" :disabled="!coreOut" @click="sendToEditor(coreOut)">→ 编辑器</n-button>
+            <div class="tb-fontctl" title="输出字号">
+              <button class="tb-fbtn" @click="setCoreFontSize(coreFontSize - 1)"><Icon :icon="minusIcon" width="13" height="13" /></button>
+              <span class="tb-fsz">{{ coreFontSize }}</span>
+              <button class="tb-fbtn" @click="setCoreFontSize(coreFontSize + 1)"><Icon :icon="plusIcon" width="13" height="13" /></button>
+            </div>
           </div>
-          <pre class="tb-out">{{ coreOut }}</pre>
+          <pre class="tb-out tb-out-fill" :style="{ fontSize: coreFontSize + 'px' }">{{ coreOut }}</pre>
         </div>
       </n-tab-pane>
 
@@ -153,7 +301,8 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { open } from '@tauri-apps/plugin-dialog'
+import { open, save } from '@tauri-apps/plugin-dialog'
+import { readFile, writeFile } from '@tauri-apps/plugin-fs'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { ScatterChart } from 'echarts/charts'
@@ -167,6 +316,8 @@ import skullIcon from '@iconify-icons/lucide/skull'
 import zapIcon from '@iconify-icons/lucide/zap'
 import gitCompareIcon from '@iconify-icons/lucide/git-compare'
 import keyIcon from '@iconify-icons/lucide/key-round'
+import minusIcon from '@iconify-icons/lucide/minus'
+import plusIcon from '@iconify-icons/lucide/plus'
 
 use([CanvasRenderer, ScatterChart, GridComponent, TooltipComponent, LegendComponent, DataZoomComponent])
 
@@ -298,7 +449,172 @@ async function runCrypto() {
   finally { cryptoLoading.value = false }
 }
 // __TB_BODY2__
+// ============ 证书/密钥/加解密工作台（后端 crypto_lab）============
+const cxTab = ref('parse')
+const loadedKind = ref(''); const pfxPassword = ref(''); const pfxOut = ref('')
+function u8ToB64(u8) { let s = ''; const chunk = 0x8000; for (let i = 0; i < u8.length; i += chunk) s += String.fromCharCode.apply(null, u8.subarray(i, i + chunk)); return btoa(s) }
+function b64ToU8(b) { const bin = atob(b); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u }
+function strToB64(s) { return u8ToB64(new TextEncoder().encode(s)) }
+function b64ToText(b) { try { return new TextDecoder().decode(b64ToU8(b)) } catch (_) { return '(非文本)' } }
+function splitPem(t) { return (t.match(/-----BEGIN[\s\S]*?-----END[^-]*-----/g) || []).map(s => s.trim()) }
+
+async function pickCryptoFile() {
+  error.value = ''; pfxOut.value = ''; loadedKind.value = ''
+  const sel = await open({ multiple: false, directory: false, title: '选择证书/密钥/PFX 文件' })
+  if (!sel) return
+  const path = typeof sel === 'string' ? sel : sel?.path
+  try {
+    const bytes = await readFile(path)
+    const name = path.replace(/\\/g, '/').split('/').pop()
+    const loaded = await invoke('crypto_load_bytes', { dataB64: u8ToB64(bytes), fileName: name })
+    loadedKind.value = loaded.kind
+    if (loaded.kind === 'pkcs12') {
+      const r = await invoke('crypto_pfx_parse', { dataB64: loaded.content, password: pfxPassword.value || '' })
+      pfxOut.value = ['# 私钥', ...r.keys_pem, '# 证书链', ...r.certs_pem].join('\n')
+      cryptoInput.value = r.certs_pem[0] || ''
+    } else {
+      cryptoInput.value = loaded.content
+      await runCrypto()
+    }
+  } catch (e) { error.value = '读取失败: ' + (e?.message || e) }
+}
+
+const keyAlgo = ref('ec'); const rsaBits = ref(2048); const ecCurve = ref('p256')
+const keyAlgoOptions = [{ label: 'RSA', value: 'rsa' }, { label: 'ECDSA', value: 'ec' }, { label: 'Ed25519', value: 'ed25519' }]
+const rsaBitsOptions = [{ label: '2048', value: 2048 }, { label: '3072', value: 3072 }, { label: '4096', value: 4096 }]
+const ecCurveOptions = [{ label: 'P-256', value: 'p256' }, { label: 'P-384', value: 'p384' }]
+const genPrivPem = ref(''); const genPubPem = ref(''); const keyLoading = ref(false)
+async function genKey() {
+  error.value = ''; keyLoading.value = true
+  try {
+    const r = await invoke('crypto_gen_key', { algo: keyAlgo.value, rsaBits: keyAlgo.value === 'rsa' ? rsaBits.value : null, curve: keyAlgo.value === 'ec' ? ecCurve.value : null })
+    genPrivPem.value = r.private_pem; genPubPem.value = r.public_pem
+  } catch (e) { error.value = '生成失败: ' + (e?.message || e) } finally { keyLoading.value = false }
+}
+
+const csrCn = ref(''); const csrOrg = ref(''); const csrSans = ref(''); const csrKey = ref(''); const csrOut = ref(''); const csrLoading = ref(false)
+async function genCsr() {
+  error.value = ''
+  const key = csrKey.value.trim() || genPrivPem.value
+  if (!key) { error.value = '需要私钥（填入或先生成）'; return }
+  csrLoading.value = true
+  try {
+    csrOut.value = await invoke('crypto_gen_csr', { keyPem: key, commonName: csrCn.value, org: csrOrg.value || null, sans: csrSans.value.split(',').map(s => s.trim()).filter(Boolean) })
+  } catch (e) { error.value = 'CSR 生成失败: ' + (e?.message || e) } finally { csrLoading.value = false }
+}
+
+const certProfile = ref('ca'); const certCn = ref(''); const certOrg = ref(''); const certDays = ref(3650)
+const certSans = ref(''); const certKeyAlgo = ref('ec'); const issuerCert = ref(''); const issuerKey = ref('')
+const certOut = ref(''); const certKeyOut = ref(''); const certLoading = ref(false)
+const signCsrPem = ref(''); const signCsrLoading = ref(false)
+const verifyIssuer = ref(''); const verifyCertPem = ref(''); const verifyResult = ref(null)
+const certProfileOptions = [{ label: 'CA（根/中间）', value: 'ca' }, { label: '服务端', value: 'server' }, { label: '客户端', value: 'client' }]
+async function issueCert() {
+  error.value = ''; certLoading.value = true
+  try {
+    const r = await invoke('crypto_issue_cert', {
+      subjectCn: certCn.value, org: certOrg.value || null,
+      sans: certSans.value.split(',').map(s => s.trim()).filter(Boolean),
+      profile: certProfile.value, days: certDays.value,
+      subjectKeyPem: null, algo: certKeyAlgo.value, rsaBits: 2048, curve: 'p256',
+      issuerCertPem: issuerCert.value.trim() || null, issuerKeyPem: issuerKey.value.trim() || null,
+    })
+    certOut.value = r.cert_pem; certKeyOut.value = r.key_pem || ''
+  } catch (e) { error.value = '签发失败: ' + (e?.message || e) } finally { certLoading.value = false }
+}
+async function signCsr() {
+  error.value = ''
+  if (!signCsrPem.value.trim() || !issuerCert.value.trim() || !issuerKey.value.trim()) { error.value = '需要 CSR + 颁发者证书 + 颁发者私钥'; return }
+  signCsrLoading.value = true
+  try {
+    certOut.value = await invoke('crypto_sign_csr', { csrPem: signCsrPem.value, issuerCertPem: issuerCert.value, issuerKeyPem: issuerKey.value, profile: certProfile.value === 'ca' ? 'server' : certProfile.value, days: certDays.value })
+    certKeyOut.value = ''
+  } catch (e) { error.value = '签发失败: ' + (e?.message || e) } finally { signCsrLoading.value = false }
+}
+async function verifyCert() {
+  error.value = ''; verifyResult.value = null
+  const cert = verifyCertPem.value.trim() || certOut.value
+  if (!cert || !verifyIssuer.value.trim()) { error.value = '需要待验证证书 + 颁发者证书'; return }
+  try { verifyResult.value = await invoke('crypto_verify_cert', { certPem: cert, issuerPem: verifyIssuer.value }) }
+  catch (e) { error.value = '验证失败: ' + (e?.message || e) }
+}
+
+const pfxKey = ref(''); const pfxCerts = ref(''); const pfxBuildPwd = ref(''); const pfxBuildLoading = ref(false)
+async function buildPfx() {
+  error.value = ''
+  const certs = splitPem(pfxCerts.value)
+  if (!pfxKey.value.trim() || !certs.length) { error.value = '需要私钥 + 至少一张证书'; return }
+  pfxBuildLoading.value = true
+  try {
+    const b64 = await invoke('crypto_pfx_build', { keyPem: pfxKey.value, certsPem: certs, password: pfxBuildPwd.value, name: 'guaxi' })
+    const path = await save({ defaultPath: 'bundle.pfx', filters: [{ name: 'PFX', extensions: ['pfx', 'p12'] }] })
+    if (path) { await writeFile(path, b64ToU8(b64)); error.value = '已保存 PFX: ' + path }
+  } catch (e) { error.value = '打包失败: ' + (e?.message || e) } finally { pfxBuildLoading.value = false }
+}
+
 const binReport = ref(null); const binLoading = ref(false)
+
+// 对称加解密
+const symAlgo = ref('aes'); const symMode = ref('cbc'); const symKey = ref(''); const symIv = ref(''); const symAad = ref('')
+const symData = ref(''); const symTextInput = ref(true); const symOut = ref('')
+const symAlgoOptions = [{ label: 'AES', value: 'aes' }, { label: 'ChaCha20Poly1305', value: 'chacha20poly1305' }]
+const symModeOptions = [{ label: 'CBC', value: 'cbc' }, { label: 'CTR', value: 'ctr' }, { label: 'GCM', value: 'gcm' }]
+async function runSym(encrypt) {
+  error.value = ''; symOut.value = ''
+  const dataB64 = encrypt && symTextInput.value ? strToB64(symData.value) : symData.value.trim()
+  try {
+    const r = await invoke('crypto_sym', { algo: symAlgo.value, mode: symAlgo.value === 'aes' ? symMode.value : 'aead', keyHex: symKey.value, ivHex: symIv.value, dataB64, encrypt, aadHex: symAad.value || null })
+    symOut.value = encrypt ? ('密文(base64):\n' + r) : ('明文:\n' + b64ToText(r) + '\n\n(base64): ' + r)
+  } catch (e) { error.value = (encrypt ? '加密' : '解密') + '失败: ' + (e?.message || e) }
+}
+
+// RSA 加解密
+const rsaScheme = ref('oaep'); const rsaKey = ref(''); const rsaData = ref(''); const rsaTextInput = ref(true); const rsaOut = ref('')
+const rsaSchemeOptions = [{ label: 'OAEP(SHA-256)', value: 'oaep' }, { label: 'PKCS1 v1.5', value: 'pkcs1' }]
+async function runRsa(op) {
+  error.value = ''; rsaOut.value = ''
+  const dataB64 = op === 'encrypt' && rsaTextInput.value ? strToB64(rsaData.value) : rsaData.value.trim()
+  try {
+    const r = await invoke('crypto_rsa_crypt', { op, keyPem: rsaKey.value, dataB64, scheme: rsaScheme.value })
+    rsaOut.value = op === 'encrypt' ? ('密文(base64):\n' + r) : ('明文:\n' + b64ToText(r) + '\n\n(base64): ' + r)
+  } catch (e) { error.value = 'RSA ' + (op === 'encrypt' ? '加密' : '解密') + '失败: ' + (e?.message || e) }
+}
+
+// 签名/验签
+const signScheme = ref('ecdsa-p256'); const signKey = ref(''); const signData = ref(''); const signTextInput = ref(true)
+const signSig = ref(''); const signOut = ref(''); const signVerifyResult = ref(null)
+const signSchemeOptions = [
+  { label: 'RSA PKCS1 SHA-256', value: 'rsa-pkcs1-sha256' },
+  { label: 'RSA PSS SHA-256', value: 'rsa-pss-sha256' },
+  { label: 'ECDSA P-256', value: 'ecdsa-p256' },
+  { label: 'ECDSA P-384', value: 'ecdsa-p384' },
+  { label: 'Ed25519', value: 'ed25519' },
+]
+async function runSign() {
+  error.value = ''; signOut.value = ''
+  const dataB64 = signTextInput.value ? strToB64(signData.value) : signData.value.trim()
+  try {
+    const sig = await invoke('crypto_sign', { keyPem: signKey.value, dataB64, scheme: signScheme.value })
+    signOut.value = '签名(base64):\n' + sig; signSig.value = sig
+  } catch (e) { error.value = '签名失败: ' + (e?.message || e) }
+}
+async function runVerify() {
+  error.value = ''; signVerifyResult.value = null
+  const dataB64 = signTextInput.value ? strToB64(signData.value) : signData.value.trim()
+  try { signVerifyResult.value = await invoke('crypto_verify', { pubPem: signKey.value, dataB64, sigB64: signSig.value, scheme: signScheme.value }) }
+  catch (e) { error.value = '验签失败: ' + (e?.message || e) }
+}
+
+// 散列
+const hashAlgo = ref('sha256'); const hashData = ref(''); const hashTextInput = ref(true); const hashOut = ref('')
+const hashAlgoOptions = [{ label: 'MD5', value: 'md5' }, { label: 'SHA-1', value: 'sha1' }, { label: 'SHA-256', value: 'sha256' }, { label: 'SHA-384', value: 'sha384' }, { label: 'SHA-512', value: 'sha512' }]
+async function runHash() {
+  error.value = ''; hashOut.value = ''
+  const dataB64 = hashTextInput.value ? strToB64(hashData.value) : hashData.value.trim()
+  try { hashOut.value = hashAlgo.value + ': ' + await invoke('crypto_hash', { algo: hashAlgo.value, dataB64 }) }
+  catch (e) { error.value = '散列失败: ' + (e?.message || e) }
+}
+
 async function pickBinary() {
   error.value = ''
   const sel = await open({ multiple: false, directory: false }); if (!sel) return
@@ -309,6 +625,8 @@ async function pickBinary() {
 }
 
 const coreProgram = ref(''); const coreFile = ref(''); const coreOut = ref(''); const coreLoading = ref(false)
+const coreFontSize = ref(13)
+function setCoreFontSize(v) { coreFontSize.value = Math.min(28, Math.max(9, v)) }
 async function analyzeCore() {
   if (!profileId.value || !coreProgram.value || !coreFile.value) { error.value = '需要档案 + 程序 + core'; return }
   coreLoading.value = true; error.value = ''
@@ -422,4 +740,13 @@ const multiChartOption = computed(() => {
 .tb-res { font-family: var(--tw-mono-font); }
 .tb-out { background: var(--tw-code-bg); color: var(--tw-code-fg); font-family: var(--tw-mono-font); border-radius: var(--tw-radius-sm); line-height: 1.55; }
 .tb-table th { text-transform: uppercase; letter-spacing: .04em; font-size: 11px; color: var(--guaxi-text-secondary); }
+
+/* Coredump：主分析区占满整个 pane 高度，输出字号可调。 */
+.tb-sec-fill { height: 100%; display: flex; flex-direction: column; min-height: 0; margin-bottom: 0; }
+.tb-sec-fill .tb-row { flex: 0 0 auto; }
+.tb-out-fill { flex: 1 1 auto; min-height: 0; max-height: none; height: auto; margin: 0; }
+.tb-fontctl { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; padding: 2px 4px; border: 1px solid var(--guaxi-border); border-radius: 999px; }
+.tb-fbtn { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: none; background: transparent; color: var(--guaxi-text-secondary); cursor: pointer; border-radius: 50%; }
+.tb-fbtn:hover { background: var(--tw-accent-soft); color: var(--tw-accent); }
+.tb-fsz { min-width: 20px; text-align: center; font-size: 12px; font-family: var(--tw-mono-font); color: var(--tw-accent); }
 </style>

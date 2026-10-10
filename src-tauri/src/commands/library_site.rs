@@ -835,8 +835,40 @@ pub fn library_site_qr_svg(text: String) -> Result<String, String> {
     Ok(image)
 }
 
+#[derive(Serialize)]
+pub struct FileShareLinks {
+    pub enabled: bool,
+    /// 浏览 / 内联打开(图片、PDF 等可直接在浏览器查看)。
+    pub view_url: String,
+    /// 强制下载(Content-Disposition: attachment)。
+    pub download_url: String,
+    /// 整库分享站点首页(带 token),作为"顺带浏览整库"的入口。
+    pub site_url: String,
+}
 
-
-
+/// 为单个文件库条目生成「局域网直达链接」(浏览 + 下载),供右键分享 / 微信·QQ 扫码。
+/// 需要时自动开启对外分享(幂等);返回链接内嵌当前 token,一旦关闭分享即失效。
+/// 磁盘相对路径方案与 `build_repo_doc` 严格一致:<library>/<stem>/<type_dir>/<file>。
+#[tauri::command]
+pub async fn library_site_file_share_link(
+    app: tauri::AppHandle,
+    library: String,
+    file_name: String,
+    file_type: String,
+) -> Result<FileShareLinks, String> {
+    let status = library_site_start_share(app).await?;
+    let token = status.token.unwrap_or_default();
+    let site_url = status.url.unwrap_or_default();
+    let stem = file_stem_of(&file_name);
+    let rel = match map_type_dir(&file_type) {
+        Some(td) => format!("{}/{}/{}/{}", library, stem, td, file_name),
+        None => format!("{}/{}/{}", library, stem, file_name),
+    };
+    let enc = urlencoding::encode(&rel);
+    let origin = format!("http://{}:{}", local_ip(), SHARE_PORT);
+    let view_url = format!("{}/lib/api/file?lib=repo&path={}&t={}", origin, enc, token);
+    let download_url = format!("{}&dl=1", view_url);
+    Ok(FileShareLinks { enabled: true, view_url, download_url, site_url })
+}
 
 

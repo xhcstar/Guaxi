@@ -1263,6 +1263,9 @@
         @delete-block="handleDeleteOrgBlock"
         @insert-block="handleInsertOrgBlock"
         @move-block="handleMoveOrgBlock"
+        @batch-delete="handleBatchDeleteOrgBlock"
+        @batch-move="handleBatchMoveOrgBlock"
+        @batch-create="handleBatchCreateOrgBlock"
       />
 
       <transition name="python-console-slide">
@@ -21042,6 +21045,141 @@ const handleMoveOrgBlock = ({ block, direction } = {}) => {
   }
 }
 
+// ── 批量操作（Org 预览卡片区多选）──
+// 把预览侧选中的块对象映射到当前 model 重新解析出的块（internalId 优先，blockStartLine 兜底）。
+const resolveSelectedBlocks = (list, picks) => {
+  const out = []
+  for (const p of picks || []) {
+    let hit = p.internalId ? list.find((b) => b.internalId && b.internalId === p.internalId) : null
+    if (!hit) hit = list.find((b) => b.blockStartLine === p.blockStartLine)
+    if (hit && !out.includes(hit)) out.push(hit)
+  }
+  return out
+}
+
+// 批量删除：按行集合整体剔除（含每块后紧邻的一个空行），一次性全文替换，避免多段编辑行号错位。
+const handleBatchDeleteOrgBlock = async (picks) => {
+  const ed = getActiveEditor()
+  const model = ed?.getModel?.()
+  if (!model || !Array.isArray(picks) || !picks.length) return
+  const list = parseTaskBlocks(model.getValue(), orgPreviewCategory.value)
+  const sel = resolveSelectedBlocks(list, picks)
+  if (!sel.length) return
+  const ok = await confirmDialog(`确定删除选中的 ${sel.length} 个任务吗？此操作不可撤销。`, { title: '批量删除任务', kind: 'warning', okLabel: '删除', cancelLabel: '取消' })
+  if (!ok) return
+  try {
+    const total = model.getLineCount()
+    const del = new Set()
+    for (const b of sel) {
+      for (let n = b.blockStartLine; n <= b.blockEndLine; n += 1) del.add(n)
+      const after = b.blockEndLine + 1
+      if (after <= total && model.getLineContent(after).trim() === '') del.add(after)
+    }
+    const kept = []
+    for (let n = 1; n <= total; n += 1) if (!del.has(n)) kept.push(model.getLineContent(n))
+    const fullRange = new monaco.Range(1, 1, total, model.getLineMaxColumn(total))
+    ed.executeEdits('org-batch-delete', [{ range: fullRange, text: kept.join('\n'), forceMoveMarkers: true }])
+    refreshOrgPreviewContent()
+    scheduleOrgValidate()
+    persistActiveOrgFile()
+    message.success(`已删除 ${sel.length} 个任务`)
+  } catch (e) {
+    logger.error('[OrgBatchDelete] failed', e)
+    message.error('批量删除失败：' + (e?.message || e))
+  }
+}
+
+// 批量上移/下移：要求选中为连续块组，将整组与相邻块整体交换一位（保留块间空行）。
+const handleBatchMoveOrgBlock = ({ blocks: picks, direction } = {}) => {
+  const ed = getActiveEditor()
+  const model = ed?.getModel?.()
+  if (!model || !Array.isArray(picks) || !picks.length) return
+  const dir = direction > 0 ? 1 : -1
+  try {
+    const list = parseTaskBlocks(model.getValue(), orgPreviewCategory.value)
+    if (list.length < 2) return
+    const idxs = resolveSelectedBlocks(list, picks)
+      .map((b) => list.findIndex((x) => x === b))
+      .filter((i) => i >= 0)
+      .sort((a, c) => a - c)
+    if (!idxs.length) return
+    const minIdx = idxs[0]
+    const maxIdx = idxs[idxs.length - 1]
+    if (maxIdx - minIdx + 1 !== idxs.length) {
+      message.info('批量移动需选择相邻的条目')
+      return
+    }
+    const neighborIdx = dir < 0 ? minIdx - 1 : maxIdx + 1
+    if (neighborIdx < 0 || neighborIdx >= list.length) {
+      message.info(dir < 0 ? '已在顶部' : '已在底部')
+      return
+    }
+    // 组行区间 [groupStart, groupEnd]；相邻块作为单块参与交换。
+    const groupStart = list[minIdx].blockStartLine
+    const groupEnd = list[maxIdx].blockEndLine
+    const neighbor = list[neighborIdx]
+    // 定义较前(first)/较后(second)两段及其间空行，输出 second + gap + first。
+    let first, second
+    if (dir < 0) {
+      first = { start: neighbor.blockStartLine, end: neighbor.blockEndLine }
+      second = { start: groupStart, end: groupEnd }
+    } else {
+      first = { start: groupStart, end: groupEnd }
+      second = { start: neighbor.blockStartLine, end: neighbor.blockEndLine }
+    }
+    const lineAt = (n) => model.getLineContent(n)
+    const firstLines = []
+    for (let n = first.start; n <= first.end; n += 1) firstLines.push(lineAt(n))
+    const gapLines = []
+    for (let n = first.end + 1; n <= second.start - 1; n += 1) gapLines.push(lineAt(n))
+    const secondLines = []
+    for (let n = second.start; n <= second.end; n += 1) secondLines.push(lineAt(n))
+    const regionStart = first.start
+    const regionEnd = second.end
+    const newLines = [...secondLines, ...gapLines, ...firstLines]
+    const range = new monaco.Range(regionStart, 1, regionEnd, model.getLineMaxColumn(regionEnd))
+    ed.executeEdits('org-batch-move', [{ range, text: newLines.join('\n'), forceMoveMarkers: true }])
+    refreshOrgPreviewContent()
+    scheduleOrgValidate()
+    persistActiveOrgFile()
+  } catch (e) {
+    logger.error('[OrgBatchMove] failed', e)
+    message.error('批量移动失败：' + (e?.message || e))
+  }
+}
+
+// 批量新建：在文档末尾追加 count 个新块（同类型）。
+const handleBatchCreateOrgBlock = ({ taskType, count } = {}) => {
+  const ed = getActiveEditor()
+  const model = ed?.getModel?.()
+  if (!model || !isOrgTaskFile.value) return
+  const n = Math.max(1, Math.min(20, parseInt(count, 10) || 1))
+  const type = taskType || 'task'
+  try {
+    const parts = []
+    for (let i = 0; i < n; i += 1) {
+      const nb = buildNewBlock({
+        category: orgPreviewCategory.value || 'work',
+        taskType: type,
+        id: type === 'other' ? `GX-OTHER-${Date.now().toString(36)}-${i}` : '',
+        createTime: formatGuaxiTime(),
+      })
+      parts.push(serializeBlock(nb))
+    }
+    const lastLine = model.getLineCount()
+    const col = model.getLineMaxColumn(lastLine)
+    const text = (model.getValue().trim() ? '\n\n' : '') + parts.join('\n\n') + '\n'
+    ed.executeEdits('org-batch-create', [{ range: new monaco.Range(lastLine, col, lastLine, col), text, forceMoveMarkers: true }])
+    refreshOrgPreviewContent()
+    scheduleOrgValidate()
+    persistActiveOrgFile()
+    message.success(`已新建 ${n} 个${type === 'bug' ? ' Bug' : type === 'other' ? '其他' : '任务'}`)
+  } catch (e) {
+    logger.error('[OrgBatchCreate] failed', e)
+    message.error('批量新建失败：' + (e?.message || e))
+  }
+}
+
 // 在光标所在块下方插入一个新子任务/子bug（系统生成唯一 ID）
 const createOrgSubBlock = (taskType) => {
   const ed = getActiveEditor()
@@ -23863,6 +24001,28 @@ const extractTypstOutlineEntries = (content, filePath, reason = 'unknown') => {
   return result
 }
 
+// GUAXI 任务块 .org：每个任务/bug 块作为一个一级大纲条目（供右侧栏大纲展示与跳转）。
+// 复用 parseTaskBlocks，kind='org-task' 供 GuaxiOutline 定制渲染（类型色点 + 状态标签）。
+const extractOrgTaskOutlineEntries = (content, filePath, reason = 'unknown') => {
+  let blocks = []
+  try {
+    blocks = parseTaskBlocks(String(content || ''), orgPreviewCategory.value)
+  } catch (e) {
+    logger.warn('[Outline] parse org task blocks failed', e)
+  }
+  const result = blocks.map((b) => ({
+    line: b.blockStartLine,
+    level: 1,
+    text: b.description || b.id || '(未命名)',
+    kind: 'org-task',
+    status: b.status || 'TODO',
+    taskType: b.taskType || 'task',
+    done: !!b.done,
+  }))
+  logger.info('[Outline] extracted org task blocks', { reason, filePath: String(filePath || ''), count: result.length })
+  return result
+}
+
 const extractSourceOutlineEntries = (content, filePath, reason = 'unknown') => {
   const normalizedPath = String(filePath || selectedFile.value?.path || activeTab.value?.path || '').trim()
   const lowerPath = normalizedPath.toLowerCase()
@@ -23874,6 +24034,9 @@ const extractSourceOutlineEntries = (content, filePath, reason = 'unknown') => {
   }
   if (lowerPath.endsWith('.typ')) {
     return extractTypstOutlineEntries(content, normalizedPath, reason)
+  }
+  if (lowerPath.endsWith('.org')) {
+    return extractOrgTaskOutlineEntries(content, normalizedPath, reason)
   }
 
   logger.info('[Outline] skip extraction because file type has no source outline parser', {
@@ -23942,6 +24105,13 @@ function jumpToLine(line, outlineItem = null) {
     if (handledByNotebook) {
       return
     }
+  }
+
+  // GUAXI 任务块 .org：大纲条目点击 → 定位编辑器块首行并高亮对应预览卡片。
+  if (outlineItem?.kind === 'org-task') {
+    handleOrgGotoLine(line)
+    activeOrgBlockLine.value = line
+    return
   }
 
   if (jumpToPdfPreviewOutlineLine(line, outlineItem)) {
@@ -28920,6 +29090,15 @@ body.guaxi-tab-dragging * {
   height: 4px;
   border-radius: 999px;
   background: rgba(100, 116, 139, 0.36);
+  transition: background-color 0.15s ease, width 0.15s ease;
+}
+
+/* 悬停/拖动时把这条抓手染成主题蓝，和左右侧边栏、latex 预览分隔条等其他拖动线保持一致的高亮反馈。
+   .dragging 挂在 dock 上（pythonConsoleResizing），整段拖动都亮，不会因鼠标移出抓手而闪断。 */
+.python-console-dock__resize-handle:hover .python-console-dock__resize-grip,
+.python-console-dock.dragging .python-console-dock__resize-grip {
+  width: 92px;
+  background: var(--n-color-primary, #61afef);
 }
 
 .python-console-panel {

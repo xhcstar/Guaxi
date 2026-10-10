@@ -3,11 +3,26 @@
 //! 用 Google 翻译公开 gtx 端点（keyless、auto 源语言检测），走境外代理路由；失败静默返回空。
 use super::super::proxy;
 
-/// 默认目标语言：覆盖学术/书籍/影音内容最密集的语种。en 价值最高，其余次之。
-pub const DEFAULT_TARGETS: [&str; 6] = ["en", "ja", "de", "fr", "ru", "es"];
+/// 多语检索开启时追加的目标语言（中英已由 cross_cn_en 强制覆盖，这里是“可选的其它语种”）。
+pub const EXTRA_TARGETS: [&str; 5] = ["ja", "de", "fr", "ru", "es"];
 
 fn client() -> Option<reqwest::Client> {
     proxy::client_for_source(&super::load_proxy(), true).ok()
+}
+
+/// 是否含 CJK（中日韩统一表意文字 / 假名 / 谚文）字符，用于判断中英互译方向。
+fn has_cjk(s: &str) -> bool {
+    s.chars().any(|c| {
+        ('\u{4e00}'..='\u{9fff}').contains(&c)
+            || ('\u{3040}'..='\u{30ff}').contains(&c)
+            || ('\u{ac00}'..='\u{d7af}').contains(&c)
+    })
+}
+
+/// 中英互译（始终执行，保证“中英双语召回必含”）：含 CJK 则译英，否则译中。
+pub async fn cross_cn_en(keyword: &str) -> Vec<String> {
+    let target = if has_cjk(keyword) { "en" } else { "zh-CN" };
+    translate_multi(keyword, &[target]).await
 }
 
 /// 把 keyword 译成单一目标语言。gtx 返回形如 [[[译文,原文,...],...],...]，拼接首层各段译文。

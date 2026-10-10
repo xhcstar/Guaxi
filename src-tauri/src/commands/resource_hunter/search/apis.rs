@@ -1324,3 +1324,55 @@ pub async fn dailymotion(kw: &str, limit: usize) -> Vec<ResourceItem> {
     out
 }
 
+/// 史密森尼开放获取（需 key "smithsonian"，api.data.gov，默认不启用）→ CC0 文物/高清图。
+pub async fn smithsonian(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let key = match api_key("smithsonian") { Some(k) => k, None => return vec![] };
+    let url = format!(
+        "https://api.si.edu/openaccess/api/v1.0/search?q={}&rows={}&api_key={}",
+        urlencoding::encode(kw), limit.min(25), urlencoding::encode(&key)
+    );
+    let json = match get_json(&url).await { Some(j) => j, None => return vec![] };
+    let rows = json.get("response").and_then(|r| r.get("rows")).and_then(|v| v.as_array());
+    let mut out = Vec::new();
+    for r in rows.into_iter().flatten() {
+        let title = r.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if title.is_empty() { continue; }
+        let dnr = r.get("content").and_then(|c| c.get("descriptiveNonRepeating"));
+        let media = dnr.and_then(|d| d.get("online_media")).and_then(|m| m.get("media")).and_then(|v| v.as_array());
+        let first = match media.and_then(|a| a.first()) { Some(m) => m, None => continue };
+        let dl = match first.get("content").and_then(|v| v.as_str()) {
+            Some(d) if d.starts_with("http") => d.to_string(), _ => continue,
+        };
+        let page = dnr.and_then(|d| d.get("record_link")).and_then(|v| v.as_str()).unwrap_or(&dl).to_string();
+        let mut it = item(&dl, title, ResourceKind::Image, "Smithsonian", page, Some(dl.clone()), Some("jpg"), 0.82);
+        it.thumbnail = first.get("thumbnail").and_then(|v| v.as_str()).map(|s| s.to_string());
+        out.push(it);
+    }
+    out
+}
+
+/// Europeana（需 key "europeana"，默认不启用）→ 欧洲文化遗产海量图片/媒体直链。
+pub async fn europeana(kw: &str, limit: usize) -> Vec<ResourceItem> {
+    let key = match api_key("europeana") { Some(k) => k, None => return vec![] };
+    let url = format!(
+        "https://api.europeana.eu/record/v2/search.json?wskey={}&query={}&rows={}&media=true&thumbnail=true",
+        urlencoding::encode(&key), urlencoding::encode(kw), limit.min(25)
+    );
+    let json = match get_json(&url).await { Some(j) => j, None => return vec![] };
+    let mut out = Vec::new();
+    for r in json.get("items").and_then(|v| v.as_array()).into_iter().flatten() {
+        let title = r.get("title").and_then(|v| v.as_array()).and_then(|a| a.first())
+            .and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if title.is_empty() { continue; }
+        let dl = r.get("edmIsShownBy").and_then(|v| v.as_array()).and_then(|a| a.first())
+            .and_then(|v| v.as_str()).map(|s| s.to_string());
+        let dl = match dl { Some(d) => d, None => continue };
+        let page = r.get("guid").and_then(|v| v.as_str()).unwrap_or(&dl).to_string();
+        let mut it = item(&dl, title, ResourceKind::Image, "Europeana", page, Some(dl.clone()), None, 0.8);
+        it.thumbnail = r.get("edmPreview").and_then(|v| v.as_array()).and_then(|a| a.first())
+            .and_then(|v| v.as_str()).map(|s| s.to_string());
+        out.push(it);
+    }
+    out
+}
+

@@ -18,7 +18,7 @@ import {
 } from '@vicons/fluent'
 
 const logger = createLogger('useContextMenu')
-export function useContextMenu({ store, message, reconvert = null }) {
+export function useContextMenu({ store, message, reconvert = null, onShare = null }) {
   const { confirm } = useConfirm();
   const showDropdown = ref(false);
   const x = ref(0);
@@ -352,10 +352,14 @@ export function useContextMenu({ store, message, reconvert = null }) {
     }
   };
 
-  // 方法：分享文件
+  // 方法：分享文件（局域网直达链接 + 二维码，供微信/QQ 扫码）
   const handleShare = (row) => {
     logger.info("分享", row);
-    message.info("分享功能待实现");
+    if (typeof onShare === "function") {
+      onShare(row);
+    } else {
+      message.info("分享功能不可用");
+    }
   };
 
   // 方法：移动文件

@@ -278,6 +278,7 @@ pub async fn gdb_mi_start(
     profile_id: String,
     program: Option<String>,
     args: Option<Vec<String>>,
+    attach_pid: Option<u32>,
 ) -> Result<String, String> {
     let handle = connect_authenticated(&app, &profile_id).await?;
     let mut channel = handle
@@ -285,9 +286,18 @@ pub async fn gdb_mi_start(
         .await
         .map_err(|e| format!("打开 gdb 通道失败: {e}"))?;
 
-    // 组装远端命令：gdb -q -nx -i=mi [--args program args...]
+    // 组装远端命令：
+    //  - 附加进程：gdb -q -nx -i=mi [program] -p PID（program 可空，仅供符号；否则取 /proc/PID/exe）
+    //  - 启动程序：gdb -q -nx -i=mi --args program args...
+    //  - 仅连 gdb：gdb -q -nx -i=mi
     let mut cmd = String::from("gdb -q -nx -i=mi");
-    if let Some(prog) = program.as_ref().filter(|s| !s.trim().is_empty()) {
+    if let Some(pid) = attach_pid {
+        if let Some(prog) = program.as_ref().filter(|s| !s.trim().is_empty()) {
+            cmd.push(' ');
+            cmd.push_str(&shell_quote(prog));
+        }
+        cmd.push_str(&format!(" -p {pid}"));
+    } else if let Some(prog) = program.as_ref().filter(|s| !s.trim().is_empty()) {
         cmd.push_str(" --args ");
         cmd.push_str(&shell_quote(prog));
         if let Some(a) = args {

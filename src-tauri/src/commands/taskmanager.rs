@@ -198,6 +198,22 @@ fn row_to_block(row: &rusqlite::Row) -> rusqlite::Result<TaskBlock> {
     Ok(serde_json::from_str(&json).unwrap_or_default())
 }
 
+/// 判断一个块是否"空壳"：既无 id/描述，也无任何正文内容/笔记。
+/// 这类块通常是误敲 START/END 或残留的半成品，不应进看板冒充 "(未命名)" 任务。
+/// 注意：仅用于索引层过滤；预览解析仍会展示它们以便用户补全或删除。
+fn block_is_empty(b: &TaskBlock) -> bool {
+    b.id.trim().is_empty()
+        && b.description.trim().is_empty()
+        && b.content.trim().is_empty()
+        && b.root_cause.trim().is_empty()
+        && b.condition_of_occurrence.trim().is_empty()
+        && b.fixed_details.trim().is_empty()
+        && b.testing_suggestions.trim().is_empty()
+        && b.extra_impacts.is_empty()
+        && b.custom_fields.is_empty()
+        && matches!(b.notes, task_block::TaskNotes::None)
+}
+
 fn upsert_block(conn: &Connection, b: &TaskBlock) -> Result<(), String> {
     let json = serde_json::to_string(b).map_err(|e| e.to_string())?;
     conn.execute(
@@ -228,6 +244,8 @@ fn upsert_block(conn: &Connection, b: &TaskBlock) -> Result<(), String> {
 fn scan_and_index(conn: &Connection) -> Result<usize, String> {
     let root = resolve_task_root()?;
     let mut total = 0usize;
+    // 本轮实际访问到的 .org 文件绝对路径，用于扫描结束后对账清理孤儿行。
+    let mut visited: Vec<String> = Vec::new();
     for cat in CATEGORIES {
         let dir = root.join(cat);
         if !dir.is_dir() {
@@ -246,6 +264,7 @@ fn scan_and_index(conn: &Connection) -> Result<usize, String> {
                 Ok(c) => c,
                 Err(_) => continue,
             };
+            visited.push(file_path.clone());
             // 补全缺失 id 并回写（最小行编辑，保留格式）
             let (content, changed) = task_block::backfill_ids(&content, cat);
             if changed {
@@ -259,13 +278,37 @@ fn scan_and_index(conn: &Connection) -> Result<usize, String> {
                 if b.internal_id.trim().is_empty() {
                     continue; // 理论上已补全
                 }
+                if block_is_empty(b) {
+                    continue; // 空壳块不入索引（避免 "(未命名)" 幽灵卡）
+                }
                 upsert_block(conn, b)?;
+                total += 1;
             }
-            total += blocks.len();
         }
     }
+    // 对账清理：删除已不存在于本轮扫描集合中的文件行（文件被删除/改名/移出 work|life|study）。
+    reconcile_orphan_rows(conn, &visited)?;
     info!(total, "[TaskManager] scanned and indexed guaxi task blocks");
     Ok(total)
+}
+
+/// 删除 task_items 中 file_path 不在本轮访问集合里的孤儿行。
+fn reconcile_orphan_rows(conn: &Connection, visited: &[String]) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare("SELECT DISTINCT file_path FROM task_items")
+        .map_err(|e| e.to_string())?;
+    let existing: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    for fp in existing {
+        if !visited.iter().any(|v| v == &fp) {
+            conn.execute("DELETE FROM task_items WHERE file_path=?1", params![fp])
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 // ───────── Tauri 命令 ─────────
@@ -565,6 +608,21 @@ fn apply_block_fields(b: &mut TaskBlock, input: &TaskUpdateInput) {
                 "affected_release" => b.affected_release = s,
                 "review_link" => b.review_link = s,
                 "content" => b.content = s,
+                "custom_fields" => {
+                    if let Some(arr) = v.as_array() {
+                        b.custom_fields = arr
+                            .iter()
+                            .filter_map(|x| {
+                                let name = x.get("name").and_then(|y| y.as_str())?.trim().to_string();
+                                if name.is_empty() {
+                                    return None;
+                                }
+                                let value = x.get("value").and_then(|y| y.as_str()).unwrap_or("").to_string();
+                                Some(task_block::CustomField { name, value })
+                            })
+                            .collect();
+                    }
+                }
                 "extra_impacts" => {
                     if let Some(arr) = v.as_array() {
                         b.extra_impacts = arr

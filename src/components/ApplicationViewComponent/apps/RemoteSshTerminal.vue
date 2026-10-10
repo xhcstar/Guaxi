@@ -6,7 +6,9 @@
     </div>
     <div class="ssh-side" v-show="!sideCollapsed" :style="{ width: sideWidth + 'px' }">
       <div class="ssh-side-head">
-        <span>连接会话</span>
+        <span class="ssh-sec-toggle" @click="connCollapsed = !connCollapsed">
+          <Icon :icon="connCollapsed ? chevronRightIcon : chevronDownIcon" width="14" height="14" />连接会话
+        </span>
         <span class="ssh-head-actions">
           <n-button size="tiny" type="primary" @click="openNewConn" title="新建连接">
             <template #icon><Icon :icon="plusIcon" width="15" height="15" /></template>新建
@@ -14,41 +16,40 @@
           <n-button size="tiny" quaternary @click="sideCollapsed = true" title="折叠面板"><Icon :icon="chevronLeftIcon" width="15" height="15" /></n-button>
         </span>
       </div>
-      <div class="ssh-profiles">
-        <div
-          v-for="p in profiles"
-          :key="p.id"
-          class="ssh-profile"
-          @click="connect(p)"
-          :title="'连接 ' + (p.name || p.host)"
-        >
-          <div class="ssh-profile-ico"><Icon :icon="serverIcon" width="16" height="16" /></div>
-          <div class="ssh-profile-main">
-            <div class="ssh-profile-name">{{ p.name || p.host }}</div>
-            <div class="ssh-profile-sub">{{ p.user }}@{{ p.host }}:{{ p.port }}</div>
+      <div class="ssh-profiles" v-show="!connCollapsed">
+        <div v-for="grp in groupedProfiles" :key="grp.group" class="ssh-folder">
+          <div class="ssh-folder-head" @click="toggleGroup(grp.group)">
+            <Icon :icon="groupOpen[grp.group] === false ? chevronRightIcon : chevronDownIcon" width="13" height="13" />
+            <Icon :icon="folderIcon" width="13" height="13" class="ssh-folder-ico" />
+            <span class="ssh-folder-name">{{ grp.group }}</span>
+            <span class="ssh-folder-count">{{ grp.items.length }}</span>
           </div>
-          <div class="ssh-profile-badge">{{ authLabel(p.auth) }}</div>
-          <div class="ssh-profile-actions">
-            <button class="ssh-ico-btn primary" @click.stop="connect(p)" title="连接"><Icon :icon="plugIcon" width="14" height="14" /></button>
-            <button class="ssh-ico-btn" @click.stop="openEditConn(p)" title="编辑"><Icon :icon="editIcon" width="14" height="14" /></button>
-            <button class="ssh-ico-btn danger" @click.stop="remove(p)" title="删除"><Icon :icon="trashIcon" width="14" height="14" /></button>
+          <div v-show="groupOpen[grp.group] !== false" class="ssh-folder-items">
+            <div
+              v-for="p in grp.items"
+              :key="p.id"
+              class="ssh-profile"
+              @click="connect(p)"
+              :title="'连接 ' + (p.name || p.host || p.serial_path)"
+            >
+              <div class="ssh-profile-ico"><Icon :icon="kindIcon(p.kind)" width="16" height="16" /></div>
+              <div class="ssh-profile-main">
+                <div class="ssh-profile-name">{{ p.name || p.host || p.serial_path }}</div>
+                <div class="ssh-profile-sub">{{ profileSub(p) }}</div>
+              </div>
+              <div class="ssh-profile-badge">{{ kindBadge(p) }}</div>
+              <div class="ssh-profile-actions">
+                <button class="ssh-ico-btn primary" @click.stop="connect(p)" title="连接"><Icon :icon="plugIcon" width="14" height="14" /></button>
+                <button class="ssh-ico-btn" @click.stop="openEditConn(p)" title="编辑"><Icon :icon="editIcon" width="14" height="14" /></button>
+                <button class="ssh-ico-btn danger" @click.stop="remove(p)" title="删除"><Icon :icon="trashIcon" width="14" height="14" /></button>
+              </div>
+            </div>
           </div>
         </div>
         <div v-if="!profiles.length" class="ssh-empty-side">还没有连接，点右上角“新建”添加 SSH / 串口 / Telnet。</div>
       </div>
 
-      <div class="ssh-recordings">
-        <div class="ssh-side-head"><span>会话录制</span><n-button size="tiny" @click="loadRecordings">刷新</n-button></div>
-        <div class="ssh-rec-list">
-          <div v-for="r in recordings" :key="r.path" class="ssh-rec" @click="$emit('open-in-analysis', r.path)" :title="r.path">
-            <div class="ssh-rec-name">{{ r.name }}</div>
-            <div class="ssh-rec-sub">{{ formatBytes(r.size) }} · 点开在日志分析中回放</div>
-          </div>
-          <div v-if="!recordings.length" class="ssh-empty-side">连接后自动录制，回放在这里打开。</div>
-        </div>
-      </div>
-
-      <SftpBrowser class="ssh-sftp" :profiles="profiles" />
+      <SftpBrowser class="ssh-sftp" :profiles="profiles" :active-profile-id="activeProfileId" />
     </div>
 
     <n-modal v-model:show="showConnModal" :mask-closable="false">
@@ -71,6 +72,7 @@
         <div class="ssh-modal-body">
           <template v-if="connTab === 'ssh'">
             <div class="ssh-field"><label>名称</label><n-input v-model:value="editing.name" size="small" placeholder="给这个连接起个名字" /></div>
+            <div class="ssh-field"><label>分组 / 文件夹</label><n-input v-model:value="editing.group" size="small" placeholder="如 生产 / 测试（空=未分组）" /></div>
             <div class="ssh-field">
               <label>主机 / IP</label>
               <div class="ssh-row">
@@ -80,7 +82,7 @@
               </div>
             </div>
             <div class="ssh-field"><label>用户名</label><n-input v-model:value="editing.user" size="small" placeholder="root" /></div>
-            <div class="ssh-field"><label>认证方式</label><n-select v-model:value="editing.auth" size="small" :options="authOptions" /></div>
+            <div class="ssh-field"><label>认证方式</label><n-select v-model:value="editing.auth" size="small" :options="authOptions" :to="false" /></div>
             <div class="ssh-field" v-if="editing.auth === 'key'"><label>私钥路径</label><n-input v-model:value="editing.key_path" size="small" placeholder="~/.ssh/id_ed25519" /></div>
             <template v-if="editing.auth === 'password'">
               <div class="ssh-field"><label>密码</label><n-input v-model:value="password" type="password" size="small" placeholder="存入系统 keychain" show-password-on="click" /></div>
@@ -95,6 +97,8 @@
           </template>
 
           <template v-else-if="connTab === 'serial'">
+            <div class="ssh-field"><label>名称</label><n-input v-model:value="editing.name" size="small" placeholder="给这个串口连接起个名字" /></div>
+            <div class="ssh-field"><label>分组 / 文件夹</label><n-input v-model:value="editing.group" size="small" placeholder="空=未分组" /></div>
             <div class="ssh-field">
               <label>串口</label>
               <div class="ssh-row">
@@ -111,6 +115,8 @@
           </template>
 
           <template v-else>
+            <div class="ssh-field"><label>名称</label><n-input v-model:value="editing.name" size="small" placeholder="给这个 Telnet 连接起个名字" /></div>
+            <div class="ssh-field"><label>分组 / 文件夹</label><n-input v-model:value="editing.group" size="small" placeholder="空=未分组" /></div>
             <div class="ssh-field">
               <label>Telnet 主机</label>
               <div class="ssh-row">
@@ -189,16 +195,42 @@
         <span v-if="!macros.length" class="ssh-tb-info">录制你敲的命令序列，停止时命名保存，点▶重放到当前会话。</span>
       </div>
     </div>
+
+    <!-- 右侧栏：会话录制（从左栏移出，避免左侧拥挤），可折叠 + 拖拽改宽 -->
+    <div class="ssh-recright-rail" v-if="recCollapsed" @click="recCollapsed = false" title="展开会话录制">
+      <Icon :icon="chevronLeftIcon" width="16" height="16" />
+      <span class="ssh-rail-text">会话录制</span>
+    </div>
+    <template v-else>
+      <div class="ssh-recresize" @mousedown="onRecResizeDown"></div>
+      <div class="ssh-side-right" :style="{ width: recWidth + 'px' }">
+        <div class="ssh-side-head">
+          <span>会话录制</span>
+          <span class="ssh-head-actions">
+            <n-button size="tiny" @click="loadRecordings">刷新</n-button>
+            <n-button size="tiny" quaternary @click="recCollapsed = true" title="折叠"><Icon :icon="chevronRightIcon" width="15" height="15" /></n-button>
+          </span>
+        </div>
+        <div class="ssh-rec-list">
+          <div v-for="r in recordings" :key="r.path" class="ssh-rec" @click="$emit('open-in-analysis', r.path)" :title="r.path">
+            <div class="ssh-rec-name">{{ r.name }}</div>
+            <div class="ssh-rec-sub">{{ formatBytes(r.size) }} · 点开在日志分析中回放</div>
+          </div>
+          <div v-if="!recordings.length" class="ssh-empty-side">连接后自动录制，回放在这里打开。</div>
+        </div>
+      </div>
+    </template>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { save } from '@tauri-apps/plugin-dialog'
 import { writeText, readText } from '@tauri-apps/plugin-clipboard-manager'
 import { writeTextFile } from '@tauri-apps/plugin-fs'
+import { useSettingsStore } from '../../../stores/settingsStore'
 import { Terminal } from 'xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import 'xterm/css/xterm.css'
@@ -218,6 +250,7 @@ import chevronLeftIcon from '@iconify-icons/lucide/chevron-left'
 import chevronRightIcon from '@iconify-icons/lucide/chevron-right'
 import chevronUpIcon from '@iconify-icons/lucide/chevron-up'
 import chevronDownIcon from '@iconify-icons/lucide/chevron-down'
+import folderIcon from '@iconify-icons/lucide/folder'
 import copyIcon from '@iconify-icons/lucide/copy'
 import pasteIcon from '@iconify-icons/lucide/clipboard-paste'
 import recordIcon from '@iconify-icons/lucide/circle'
@@ -226,6 +259,14 @@ import SftpBrowser from './SftpBrowser.vue'
 
 const emit = defineEmits(['open-in-analysis'])
 const logger = createLogger('RemoteSshTerminal')
+const settingsStore = useSettingsStore()
+const isDark = computed(() => settingsStore.appearanceTheme === 'dark')
+// 终端配色跟随主题：亮色给浅底深字，暗色维持原样。
+function termTheme() {
+  return isDark.value
+    ? { background: '#1e1e1e', foreground: '#d4d4d4', cursor: '#d4d4d4' }
+    : { background: '#f6f8fa', foreground: '#1f2328', cursor: '#1f2328', selectionBackground: '#b3d4fc' }
+}
 
 const authOptions = [
   { label: '默认密钥 (~/.ssh)', value: 'agent' },
@@ -243,6 +284,30 @@ const sessions = ref([]) // { session_id, host, kind }
 const termFontSize = ref(14)
 const sideWidth = ref(340)
 const sideCollapsed = ref(false)
+// 左栏分区折叠；右栏（会话录制）宽度/折叠。
+const connCollapsed = ref(false)
+const sftpCollapsed = ref(false)
+const recCollapsed = ref(false)
+const recWidth = ref(300)
+const groupOpen = reactive({})
+function toggleGroup(g) { groupOpen[g] = groupOpen[g] === false }
+// 把档案按 group 文件夹归类（无 group 归"未分组"），用于 Xshell/MobaXterm 式的分组列表。
+const groupedProfiles = computed(() => {
+  const map = new Map()
+  for (const p of profiles.value) {
+    const g = (p.group && p.group.trim()) ? p.group.trim() : '未分组'
+    if (!map.has(g)) map.set(g, [])
+    map.get(g).push(p)
+  }
+  return Array.from(map.entries()).map(([group, items]) => ({ group, items }))
+})
+function onRecResizeDown(e) {
+  const startX = e.clientX; const startW = recWidth.value
+  let resizing = true
+  const move = ev => { if (resizing) recWidth.value = Math.min(560, Math.max(220, startW - (ev.clientX - startX))) }
+  const up = () => { resizing = false; document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up) }
+  document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
+}
 
 // 连接向导弹窗：把 SSH 档案 / 串口 / Telnet 的表单从常驻左栏挪进弹窗，左栏只留会话列表。
 const showConnModal = ref(false)
@@ -255,6 +320,13 @@ const connTabs = [
 function authLabel(a) {
   return a === 'password' ? '密码' : a === 'key' ? '密钥' : '默认密钥'
 }
+function kindIcon(k) { return k === 'serial' ? usbIcon : (k === 'telnet' ? networkIcon : serverIcon) }
+function kindBadge(p) { return p.kind === 'serial' ? '串口' : (p.kind === 'telnet' ? 'Telnet' : authLabel(p.auth)) }
+function profileSub(p) {
+  if (p.kind === 'serial') return `${p.serial_path || ''} @ ${p.serial_baud || ''}`
+  if (p.kind === 'telnet') return `${p.host}:${p.port}`
+  return `${p.user}@${p.host}:${p.port}`
+}
 function openNewConn() {
   newProfile()
   connTab.value = 'ssh'
@@ -262,7 +334,9 @@ function openNewConn() {
 }
 function openEditConn(p) {
   edit(p)
-  connTab.value = 'ssh'
+  connTab.value = p.kind || 'ssh'
+  if (p.kind === 'serial') { serialPort.value = p.serial_path || null; serialBaud.value = p.serial_baud || 115200 }
+  else if (p.kind === 'telnet') { telnetHost.value = p.host || ''; telnetPort.value = p.port || 23 }
   showConnModal.value = true
 }
 async function saveAndConnect() {
@@ -337,6 +411,11 @@ function onSideResizeDown(e) {
   document.addEventListener('mouseup', up)
 }
 const activeSession = ref('')
+// 当前激活的 SSH 会话对应的档案 id——驱动 SFTP 面板自动连到同一主机（串口/telnet 无 SFTP）。
+const activeProfileId = computed(() => {
+  const s = sessions.value.find(x => x.session_id === activeSession.value)
+  return s && s.kind === 'ssh' ? (s.profile_id || null) : null
+})
 const serialPorts = ref([])
 const serialPort = ref(null)
 const serialBaud = ref(115200)
@@ -346,7 +425,7 @@ const termMap = new Map() // session_id -> { term, fit, el, unlisten, ro }
 const termEls = new Map()
 
 function blankProfile() {
-  return { id: '', name: '', host: '', port: 22, user: '', auth: 'agent', key_path: '' }
+  return { id: '', name: '', host: '', port: 22, user: '', auth: 'agent', key_path: '', kind: 'ssh', group: '', serial_path: '', serial_baud: 115200 }
 }
 
 function newProfile() {
@@ -398,11 +477,19 @@ function setTermEl(sid, el) {
 async function connect(p) {
   error.value = ''
   try {
-    const snap = await invoke('ssh_create_session', { profileId: p.id, cols: 120, rows: 32 })
-    sessions.value.push({ session_id: snap.session_id, host: snap.host, kind: 'ssh' })
-    activeSession.value = snap.session_id
-    await nextTick()
-    await mountTerminal(snap.session_id, 'ssh')
+    if (p.kind === 'serial') {
+      const sid = await invoke('serial_open', { path: p.serial_path, baud: p.serial_baud || 115200 })
+      sessions.value.push({ session_id: sid, host: p.name || p.serial_path, kind: 'serial', profile_id: p.id })
+      activeSession.value = sid; await nextTick(); await mountTerminal(sid, 'serial')
+    } else if (p.kind === 'telnet') {
+      const sid = await invoke('telnet_open', { host: p.host, port: p.port || 23 })
+      sessions.value.push({ session_id: sid, host: `${p.host}:${p.port}`, kind: 'telnet', profile_id: p.id })
+      activeSession.value = sid; await nextTick(); await mountTerminal(sid, 'telnet')
+    } else {
+      const snap = await invoke('ssh_create_session', { profileId: p.id, cols: 120, rows: 32 })
+      sessions.value.push({ session_id: snap.session_id, host: snap.host, kind: 'ssh', profile_id: snap.profile_id || p.id })
+      activeSession.value = snap.session_id; await nextTick(); await mountTerminal(snap.session_id, 'ssh')
+    }
     loadRecordings()
   } catch (e) {
     error.value = '连接失败: ' + (e?.message || e)
@@ -416,28 +503,33 @@ const WIRE = {
   telnet: { out: 'telnet-output', exit: 'telnet-exit', write: 'telnet_write', close: 'telnet_close' },
 }
 
+// 串口/telnet 也落档到"连接会话"（像 Xshell/MobaXterm 一样可复用、可归类），再按档案连接。
+async function saveConnProfile(profile) {
+  try {
+    const saved = await invoke('ssh_save_profile', { profile })
+    await loadProfiles()
+    return saved
+  } catch (e) { error.value = '保存失败: ' + (e?.message || e); return null }
+}
+
 async function connectSerial() {
   error.value = ''
   if (!serialPort.value) { error.value = '请选择串口'; return }
-  try {
-    const sid = await invoke('serial_open', { path: serialPort.value, baud: serialBaud.value })
-    sessions.value.push({ session_id: sid, host: `${serialPort.value}@${serialBaud.value}`, kind: 'serial' })
-    activeSession.value = sid
-    await nextTick(); await mountTerminal(sid, 'serial')
-    showConnModal.value = false
-  } catch (e) { error.value = '串口打开失败: ' + (e?.message || e) }
+  const prof = { ...blankProfile(), id: editing.id || '', name: editing.name || serialPort.value, kind: 'serial', serial_path: serialPort.value, serial_baud: serialBaud.value, group: editing.group || '' }
+  const saved = await saveConnProfile(prof)
+  if (!saved) return
+  showConnModal.value = false
+  await connect(saved)
 }
 
 async function connectTelnet() {
   error.value = ''
   if (!telnetHost.value) { error.value = '请输入主机'; return }
-  try {
-    const sid = await invoke('telnet_open', { host: telnetHost.value, port: telnetPort.value })
-    sessions.value.push({ session_id: sid, host: `${telnetHost.value}:${telnetPort.value}`, kind: 'telnet' })
-    activeSession.value = sid
-    await nextTick(); await mountTerminal(sid, 'telnet')
-    showConnModal.value = false
-  } catch (e) { error.value = 'Telnet 连接失败: ' + (e?.message || e) }
+  const prof = { ...blankProfile(), id: editing.id || '', name: editing.name || `${telnetHost.value}:${telnetPort.value}`, kind: 'telnet', host: telnetHost.value, port: telnetPort.value, group: editing.group || '' }
+  const saved = await saveConnProfile(prof)
+  if (!saved) return
+  showConnModal.value = false
+  await connect(saved)
 }
 
 async function loadSerialPorts() {
@@ -452,7 +544,7 @@ async function mountTerminal(sid, kind) {
     fontFamily: "'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, 'Courier New', monospace",
     fontSize: termFontSize.value,
     cursorBlink: true,
-    theme: { background: '#1e1e1e', foreground: '#d4d4d4' },
+    theme: termTheme(),
     scrollback: 5000,
   })
   const fit = new FitAddon()
@@ -512,6 +604,14 @@ function formatBytes(n) {
   return (n / 1024 / 1024).toFixed(1) + ' MB'
 }
 
+// 主题切换时，刷新所有已开终端的配色。
+watch(isDark, () => {
+  const theme = termTheme()
+  for (const [, rec] of termMap) {
+    try { rec.term.options.theme = theme } catch (_) {}
+  }
+})
+
 onMounted(() => { loadProfiles(); loadRecordings(); loadSerialPorts() })
 onBeforeUnmount(() => {
   for (const [sid, rec] of termMap) {
@@ -545,7 +645,7 @@ onBeforeUnmount(() => {
 .ssh-empty-side { padding: 12px; font-size: 12px; color: var(--guaxi-text-secondary, #9ca3af); }
 
 /* 连接向导弹窗 */
-.ssh-modal { width: 460px; max-width: 92vw; background: var(--guaxi-panel-bg); border: 1px solid var(--guaxi-border); border-radius: var(--tw-radius, 10px); box-shadow: var(--tw-elev, 0 8px 30px rgba(2,12,20,0.18)); overflow: hidden; font-family: var(--tw-ui-font, system-ui, sans-serif); }
+.ssh-modal { width: 460px; max-width: 92vw; background: var(--guaxi-panel-bg); border: 1px solid var(--guaxi-border); border-radius: var(--tw-radius, 10px); box-shadow: var(--tw-elev, 0 8px 30px rgba(2,12,20,0.18)); overflow: visible; font-family: var(--tw-ui-font, system-ui, sans-serif); }
 .ssh-modal-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--guaxi-border); font-weight: 600; }
 .ssh-modal-close { cursor: pointer; color: var(--guaxi-text-secondary); }
 .ssh-modal-close:hover { color: var(--tw-accent, #0ca6c0); }
@@ -603,7 +703,7 @@ onBeforeUnmount(() => {
 .ssh-macro-del { opacity: .6; }
 .ssh-macro-del:hover { opacity: 1; color: #e5484d; }
 .ssh-tab { padding: 5px 12px; font-size: 12px; border: 1px solid var(--guaxi-border); border-bottom: none; border-radius: 6px 6px 0 0; cursor: pointer; background: var(--guaxi-panel-bg, #f5f5f5); white-space: nowrap; }
-.ssh-tab.active { background: #1e1e1e; color: #d4d4d4; }
+.ssh-tab.active { background: var(--tw-code-bg); color: var(--tw-accent); }
 .ssh-tab-close { margin-left: 8px; opacity: 0.6; }
 .ssh-tab-close:hover { opacity: 1; }
 .ssh-term-hosts { flex: 1 1 auto; min-height: 0; position: relative; background: #1e1e1e; }
@@ -616,4 +716,24 @@ onBeforeUnmount(() => {
 .ssh-collapsed-rail { flex: 0 0 auto; width: 26px; display: flex; flex-direction: column; align-items: center; gap: 8px; padding-top: 12px; border-right: 1px solid var(--guaxi-border); background: color-mix(in srgb, var(--guaxi-panel-bg) 55%, transparent); cursor: pointer; color: var(--guaxi-text-secondary); }
 .ssh-collapsed-rail:hover { color: var(--tw-accent); background: var(--tw-accent-soft); }
 .ssh-rail-text { writing-mode: vertical-rl; font-size: 12px; letter-spacing: 2px; }
+
+/* 连接会话：文件夹分组 + 垂直滚动（Xshell/MobaXterm 风格） */
+.ssh-profiles { flex: 1 1 auto !important; max-height: none !important; min-height: 60px; overflow-y: auto; }
+.ssh-sec-toggle { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
+.ssh-sec-toggle:hover { color: var(--tw-accent); }
+.ssh-folder { margin-bottom: 4px; }
+.ssh-folder-head { display: flex; align-items: center; gap: 5px; padding: 4px 6px; font-size: 12px; cursor: pointer; color: var(--guaxi-text-secondary); border-radius: 6px; }
+.ssh-folder-head:hover { background: var(--tw-accent-soft); color: var(--tw-accent); }
+.ssh-folder-ico { color: #e0a53f; }
+.ssh-folder-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssh-folder-count { flex: 0 0 auto; font-size: 10px; padding: 0 6px; border-radius: 999px; background: var(--tw-accent-soft); color: var(--tw-accent); }
+.ssh-folder-items { display: flex; flex-direction: column; gap: 6px; padding: 2px 0 2px 8px; }
+
+/* 右侧栏：会话录制 */
+.ssh-side-right { flex: 0 0 auto; display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--guaxi-border); overflow: hidden; background: color-mix(in srgb, var(--guaxi-panel-bg) 30%, transparent); }
+.ssh-side-right .ssh-rec-list { flex: 1 1 auto; overflow-y: auto; min-height: 0; }
+.ssh-recresize { flex: 0 0 auto; width: 5px; cursor: col-resize; background: var(--guaxi-border); opacity: .5; transition: opacity .15s, background .15s; }
+.ssh-recresize:hover { opacity: 1; background: var(--tw-accent); }
+.ssh-recright-rail { flex: 0 0 auto; width: 26px; display: flex; flex-direction: column; align-items: center; gap: 8px; padding-top: 12px; border-left: 1px solid var(--guaxi-border); background: color-mix(in srgb, var(--guaxi-panel-bg) 55%, transparent); cursor: pointer; color: var(--guaxi-text-secondary); }
+.ssh-recright-rail:hover { color: var(--tw-accent); background: var(--tw-accent-soft); }
 </style>

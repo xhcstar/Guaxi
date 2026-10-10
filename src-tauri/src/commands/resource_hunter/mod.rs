@@ -210,6 +210,31 @@ pub async fn rh_list_engines() -> Result<Vec<search::engines::EngineMeta>, Strin
     Ok(search::engines::engine_metas())
 }
 
+/// 列出全部可用资源源（供「资源源」开关面板渲染）。
+#[command]
+pub async fn rh_list_sources() -> Result<Vec<search::sources::SourceMeta>, String> {
+    Ok(search::sources::source_metas())
+}
+
+/// 读取被禁用的资源源 id 列表（空=全部启用）。
+#[command]
+pub async fn rh_get_sources_off(app: AppHandle) -> Result<Vec<String>, String> {
+    ensure_init(&app).await?;
+    Ok(store::get_setting("sources_off")
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default())
+}
+
+/// 保存被禁用的资源源 id 列表。
+#[command]
+pub async fn rh_set_sources_off(app: AppHandle, ids: Vec<String>) -> Result<(), String> {
+    ensure_init(&app).await?;
+    let json = serde_json::to_string(&ids).map_err(|e| e.to_string())?;
+    store::set_setting("sources_off", &json)
+}
+
 #[command]
 pub async fn rh_delete_resource(app: AppHandle, id: String, remove_file: bool) -> Result<(), String> {
     ensure_init(&app).await?;

@@ -73,6 +73,7 @@ pub mod net_toolbox;
 pub mod net_conn;
 pub mod net_capture;
 pub mod sftp_fs;
+pub mod crypto_lab;
 pub mod frontend_logging;
 pub mod notebook_lab;
 pub mod flipboard_pipeline;

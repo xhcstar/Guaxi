@@ -93,6 +93,13 @@
               <n-select v-model:value="sortBy" size="small" class="rh-facet" :options="sortOptions" />
               <span class="rh-toolbar-spacer" />
               <span class="rh-count">{{ filteredResults.length }} / {{ results.length }}</span>
+              <n-tooltip v-if="sourceBreakdown.length" :delay="200" trigger="hover"><template #trigger>
+                <button class="rh-icon-btn"><Icon :icon="ic.radar" width="15" height="15" /></button>
+              </template>
+                <div class="rh-src-stat">
+                  <div v-for="[src, n] in sourceBreakdown" :key="src"><span>{{ src }}</span><b>{{ n }}</b></div>
+                </div>
+              </n-tooltip>
               <n-tooltip :delay="200"><template #trigger>
                 <button class="rh-icon-btn" :class="{ on: selected.length }" :disabled="!selected.length" @click="enqueueBatch">
                   <Icon :icon="ic.download" width="16" height="16" /><span v-if="selected.length" class="rh-mini-badge">{{ selected.length }}</span>
@@ -324,6 +331,24 @@
             </div>
 
             <div class="rh-set-card">
+              <div class="rh-set-title"><Icon :icon="ic.radar" width="16" height="16" />资源源</div>
+              <p class="rh-set-hint">勾选参与检索的结构化源。取消勾选则不请求该源。带 🔑 的需在下方填对应 Key 才生效；带地球标记的是境外源，走代理。</p>
+              <div v-for="g in sourceGroups" :key="g.key" class="rh-src-group">
+                <div class="rh-block-label">{{ g.label }}</div>
+                <div class="rh-eng-grid">
+                  <label v-for="s in (sourcesByKind[g.key] || [])" :key="s.id" class="rh-eng" :class="{ on: !sourcesOff.includes(s.id) }">
+                    <n-checkbox :checked="!sourcesOff.includes(s.id)" @update:checked="v => toggleSource(s.id, v)" />
+                    <span class="rh-eng-label">{{ s.label }}</span>
+                    <span v-if="s.needs_key" class="rh-src-key">🔑</span>
+                    <n-tooltip v-if="s.foreign" :delay="200"><template #trigger>
+                      <Icon :icon="ic.globe" width="13" height="13" class="rh-eng-foreign" />
+                    </template>境外源 · 走代理</n-tooltip>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div class="rh-set-card">
               <div class="rh-set-title"><Icon :icon="ic.shield" width="16" height="16" />高质量源 API Key</div>
               <p class="rh-set-hint">可选。填写后自动启用对应源，留空则跳过。Key 仅存本地。</p>
               <div class="rh-key-grid">
@@ -356,6 +381,16 @@
                   <span class="rh-key-label">Pixabay（图片/视频）</span>
                   <n-input v-model:value="apiKeys.pixabay" type="password" show-password-on="click"
                     placeholder="pixabay.com API Key" @blur="saveApiKeys" size="small" />
+                </label>
+                <label class="rh-key-row">
+                  <span class="rh-key-label">Smithsonian（文物/图片）</span>
+                  <n-input v-model:value="apiKeys.smithsonian" type="password" show-password-on="click"
+                    placeholder="api.data.gov API Key" @blur="saveApiKeys" size="small" />
+                </label>
+                <label class="rh-key-row">
+                  <span class="rh-key-label">Europeana（文化遗产）</span>
+                  <n-input v-model:value="apiKeys.europeana" type="password" show-password-on="click"
+                    placeholder="europeana.eu API Key (wskey)" @blur="saveApiKeys" size="small" />
                 </label>
               </div>
               <div class="rh-block-label">SearXNG 元搜索实例</div>
@@ -510,6 +545,8 @@ let hintTimer = null
 // 引擎/来源/代理
 const engineMetas = ref([])
 const engineOn = ref([])
+const sourceMetas = ref([])
+const sourcesOff = ref([])
 const webDiscovery = ref(true)
 const seedSites = ref(true)
 const proxy = ref({ mode: 'system', url: '', bypass: [], proxy_foreign_only: false })
@@ -517,7 +554,7 @@ const bypassText = ref('')
 const downloadDir = ref('')
 const speedLimit = ref(0)
 // 第三方 API Key（可选，填了对应源才启用）与 SearXNG 元搜索实例
-const apiKeys = ref({ core: '', pexels: '', jamendo: '', unpaywall_email: '', unsplash: '', pixabay: '' })
+const apiKeys = ref({ core: '', pexels: '', jamendo: '', unpaywall_email: '', unsplash: '', pixabay: '', smithsonian: '', europeana: '' })
 const searxngUrl = ref('')
 // 下载
 const tasks = ref({})
@@ -554,6 +591,28 @@ const sortOptions = [
   { label: '相关度', value: 'relevance' },
   { label: '标题', value: 'title' },
 ]
+// 资源源开关面板：按域分组展示
+const sourceGroups = [
+  { key: 'paper', label: '论文 / 学术' },
+  { key: 'book', label: '书籍 / 文档' },
+  { key: 'dataset', label: '数据集' },
+  { key: 'code', label: '代码' },
+  { key: 'image', label: '图片' },
+  { key: 'audio', label: '音频' },
+  { key: 'video', label: '视频' },
+  { key: 'mixed', label: '综合（多类型）' },
+]
+const sourcesByKind = computed(() => {
+  const m = {}
+  for (const s of sourceMetas.value) (m[s.kind] = m[s.kind] || []).push(s)
+  return m
+})
+// 本次检索各来源命中数（从结果直接统计，便于定位哪个源有效/无效）
+const sourceBreakdown = computed(() => {
+  const m = {}
+  for (const r of results.value) m[r.source] = (m[r.source] || 0) + 1
+  return Object.entries(m).sort((a, b) => b[1] - a[1])
+})
 const KIND_ORDER = ['paper', 'book', 'video', 'audio', 'image', 'code', 'other']
 const resultKinds = computed(() => {
   const counts = {}
@@ -842,6 +901,18 @@ async function loadEngines() {
     engineOn.value = engineMetas.value.filter((e) => e.default_on).map((e) => e.id)
   } catch (e) { logger.error(e) }
 }
+async function loadSources() {
+  try {
+    sourceMetas.value = (await invoke('rh_list_sources')) || []
+    sourcesOff.value = (await invoke('rh_get_sources_off')) || []
+  } catch (e) { logger.error(e) }
+}
+async function toggleSource(id, on) {
+  sourcesOff.value = on
+    ? sourcesOff.value.filter((x) => x !== id)
+    : [...sourcesOff.value, id]
+  try { await invoke('rh_set_sources_off', { ids: sourcesOff.value }) } catch (e) { message.error('保存失败: ' + e) }
+}
 function toggleEngine(id, v) {
   if (v) engineOn.value = [...engineOn.value, id]
   else engineOn.value = engineOn.value.filter((x) => x !== id)
@@ -926,7 +997,7 @@ async function resetDownloadDir() {
 
 onMounted(async () => {
   try { recent.value = JSON.parse(localStorage.getItem('rh_recent') || '[]') } catch (e) {}
-  await Promise.all([loadEngines(), loadProxy(), loadDownloadDir(), loadApiKeys(), refreshTasks(), loadLibrary()])
+  await Promise.all([loadEngines(), loadSources(), loadProxy(), loadDownloadDir(), loadApiKeys(), refreshTasks(), loadLibrary()])
   unlisten = await listen('resource_hunter://download_update', (evt) => {
     const p = evt.payload
     if (!p) return
@@ -1170,6 +1241,11 @@ onUnmounted(() => {
 .rh-eng.on { border-color: var(--rh-accent); background: color-mix(in srgb, var(--rh-accent) 8%, transparent); }
 .rh-eng-label { font-size: 13px; }
 .rh-eng-foreign { color: var(--guaxi-text-secondary); }
+.rh-src-group { display: flex; flex-direction: column; gap: 6px; }
+.rh-src-key { font-size: 11px; }
+.rh-src-stat { display: flex; flex-direction: column; gap: 3px; min-width: 160px; max-height: 320px; overflow-y: auto; }
+.rh-src-stat > div { display: flex; justify-content: space-between; gap: 16px; font-size: 12px; }
+.rh-src-stat b { font-variant-numeric: tabular-nums; }
 .rh-key-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
 .rh-key-row { display: flex; flex-direction: column; gap: 4px; }
 .rh-key-label { font-size: 12px; color: var(--guaxi-text-secondary); }

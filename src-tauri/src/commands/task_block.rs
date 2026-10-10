@@ -30,6 +30,15 @@ impl Default for TaskNotes {
     }
 }
 
+/// 用户自定义字段（不在 KNOWN_FIELDS 内的 `#NAME:` 行），按出现顺序保留，支持多行值。
+/// 用于让任务块 DSL 可扩展：解析时收集、序列化时原样写回，保证往返稳定。
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomField {
+    pub name: String,
+    pub value: String,
+}
+
 /// 一个任务/bug 块的结构化表示。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -67,6 +76,9 @@ pub struct TaskBlock {
     pub extra_impacts: Vec<String>,
     pub content: String,
     pub notes: TaskNotes,
+    /// 用户自定义字段（有序，原样往返）。
+    #[serde(default)]
+    pub custom_fields: Vec<CustomField>,
 
     pub file_path: String,
     /// 块起始行（`##GUAXI_TASK_START` 所在行，1 基）。
@@ -130,7 +142,41 @@ fn parse_field_line(line: &str) -> Option<(&'static str, String)> {
     None
 }
 
-/// 是否是 NOTES 起始行；返回 Some(Option<path>)：Some(Some(path)) 外链；Some(None) 内联起始。
+/// 若一行是未知字段声明 `#NAME:`（NAME 为大写字母与空格、英文冒号、且不在 KNOWN_FIELDS/NOTES 内），
+/// 返回 (字段名, 冒号后的值)。用于收集用户自定义字段。全角冒号不视为字段（交由校验器）。
+fn parse_custom_field_line(line: &str) -> Option<(String, String)> {
+    let trimmed = line.trim_start();
+    if !trimmed.starts_with('#') || trimmed.starts_with("##") {
+        return None;
+    }
+    let after = &trimmed[1..];
+    let mut name = String::new();
+    let mut rest_idx = None;
+    let mut byte_i = 0usize;
+    for ch in after.chars() {
+        if ch == ':' {
+            rest_idx = Some(byte_i + 1);
+            break;
+        }
+        if ch.is_ascii_uppercase() || ch == ' ' {
+            name.push(ch);
+            byte_i += ch.len_utf8();
+        } else {
+            return None;
+        }
+    }
+    let rest_idx = rest_idx?;
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+    if KNOWN_FIELDS.contains(&name.as_str()) || name == "NOTES START" || name == "NOTES END" {
+        return None;
+    }
+    let value = after[rest_idx..].trim().to_string();
+    Some((name, value))
+}
+
 fn parse_notes_start(line: &str) -> Option<Option<String>> {
     let trimmed = line.trim_start();
     let upper = trimmed.to_uppercase();
@@ -227,46 +273,56 @@ fn parse_one_block(body: &[&str], file_path: &str, category: &str) -> TaskBlock 
         notes: TaskNotes::None,
         ..Default::default()
     };
-    // 续行累加到“当前字段”
-    let mut current: Option<&'static str> = None;
+    // 续行累加到“当前字段”；当前字段可能是已知字段或自定义字段。
+    enum Cur {
+        Known(&'static str),
+        Custom(String),
+    }
+    let mut current: Option<Cur> = None;
     let mut buf: String = String::new();
 
     // 把缓冲值落到对应字段
-    fn flush(b: &mut TaskBlock, field: Option<&'static str>, buf: &str) {
+    fn flush(b: &mut TaskBlock, field: &Option<Cur>, buf: &str) {
         let val = buf.trim_end_matches('\n').to_string();
         let trimmed = val.trim().to_string();
         match field {
-            Some("MANAGE TASK TYPE") => { /* 目录推导优先，忽略文件值 */ }
-            Some("INTERNAL ID") => b.internal_id = trimmed,
-            Some("ID") => b.id = trimmed,
-            Some("PARENT TASK") => b.parent_id = trimmed,
-            Some("TYPE") => b.task_type = trimmed.to_lowercase(),
-            Some("DEADLINE") => b.deadline = trimmed,
-            Some("CREATE TIME") => b.create_time = trimmed,
-            Some("COMPLETED TIME") => b.completed_time = trimmed,
-            Some("ORIGIN") => b.origin = trimmed,
-            Some("SEVERITY") => b.severity = trimmed,
-            Some("PRIORITY") => b.priority = canonical_priority(&trimmed),
-            Some("STATUS") => {
-                b.status = canonical_status(&trimmed);
-                b.done = DONE_STATUS.iter().any(|s| *s == b.status);
-            }
-            Some("PROGRESS") => b.progress = trimmed,
-            Some("FIX STATUS") => b.fix_status = trimmed,
-            Some("DESCRIPTION") => b.description = trimmed,
-            Some("ROOT CAUSE") => b.root_cause = trimmed,
-            Some("CONDITION OF OCCURRENCE") => b.condition_of_occurrence = val,
-            Some("FIXED DETAILS") => b.fixed_details = val,
-            Some("TESTING SUGGESTIONS") => b.testing_suggestions = val,
-            Some("AFFECTED RELEASE") => b.affected_release = trimmed,
-            Some("REVIEW LINK") => b.review_link = trimmed,
-            Some("EXTRA IMPACT") => {
-                if !val.trim().is_empty() {
-                    b.extra_impacts.push(val);
+            Some(Cur::Known(name)) => match *name {
+                "MANAGE TASK TYPE" => { /* 目录推导优先，忽略文件值 */ }
+                "INTERNAL ID" => b.internal_id = trimmed,
+                "ID" => b.id = trimmed,
+                "PARENT TASK" => b.parent_id = trimmed,
+                "TYPE" => b.task_type = trimmed.to_lowercase(),
+                "DEADLINE" => b.deadline = trimmed,
+                "CREATE TIME" => b.create_time = trimmed,
+                "COMPLETED TIME" => b.completed_time = trimmed,
+                "ORIGIN" => b.origin = trimmed,
+                "SEVERITY" => b.severity = trimmed,
+                "PRIORITY" => b.priority = canonical_priority(&trimmed),
+                "STATUS" => {
+                    b.status = canonical_status(&trimmed);
+                    b.done = DONE_STATUS.iter().any(|s| *s == b.status);
                 }
+                "PROGRESS" => b.progress = trimmed,
+                "FIX STATUS" => b.fix_status = trimmed,
+                "DESCRIPTION" => b.description = trimmed,
+                "ROOT CAUSE" => b.root_cause = trimmed,
+                "CONDITION OF OCCURRENCE" => b.condition_of_occurrence = val,
+                "FIXED DETAILS" => b.fixed_details = val,
+                "TESTING SUGGESTIONS" => b.testing_suggestions = val,
+                "AFFECTED RELEASE" => b.affected_release = trimmed,
+                "REVIEW LINK" => b.review_link = trimmed,
+                "EXTRA IMPACT" => {
+                    if !val.trim().is_empty() {
+                        b.extra_impacts.push(val);
+                    }
+                }
+                "CONTENT" => b.content = val,
+                _ => {}
+            },
+            Some(Cur::Custom(name)) => {
+                b.custom_fields.push(CustomField { name: name.clone(), value: val });
             }
-            Some("CONTENT") => b.content = val,
-            _ => {}
+            None => {}
         }
     }
 
@@ -277,7 +333,7 @@ fn parse_one_block(body: &[&str], file_path: &str, category: &str) -> TaskBlock 
         // NOTES 起始：特殊整体消费
         if let Some(path_opt) = parse_notes_start(line) {
             // 先 flush 之前的字段
-            flush(&mut b, current, &buf);
+            flush(&mut b, &current, &buf);
             current = None;
             buf.clear();
             match path_opt {
@@ -306,11 +362,21 @@ fn parse_one_block(body: &[&str], file_path: &str, category: &str) -> TaskBlock 
             continue;
         }
 
+        // 已知字段（英文冒号）
         if let Some((field, val)) = parse_field_line(line) {
-            // 落上一字段
-            flush(&mut b, current, &buf);
+            flush(&mut b, &current, &buf);
             buf.clear();
-            current = Some(field);
+            current = Some(Cur::Known(field));
+            buf.push_str(&val);
+            buf.push('\n');
+            k += 1;
+            continue;
+        }
+        // 自定义字段（未知 #NAME:）
+        if let Some((name, val)) = parse_custom_field_line(line) {
+            flush(&mut b, &current, &buf);
+            buf.clear();
+            current = Some(Cur::Custom(name));
             buf.push_str(&val);
             buf.push('\n');
             k += 1;
@@ -324,7 +390,7 @@ fn parse_one_block(body: &[&str], file_path: &str, category: &str) -> TaskBlock 
         }
         k += 1;
     }
-    flush(&mut b, current, &buf);
+    flush(&mut b, &current, &buf);
     b
 }
 
@@ -464,6 +530,13 @@ pub fn serialize_block(b: &TaskBlock) -> String {
         push_multi(&mut out, "EXTRA IMPACT", ei);
     }
     push_multi(&mut out, "CONTENT", &b.content);
+    // 自定义字段：原样写回（CONTENT 之后、NOTES 之前）。
+    for cf in &b.custom_fields {
+        if cf.name.trim().is_empty() {
+            continue;
+        }
+        push_multi(&mut out, &cf.name, &cf.value);
+    }
     match &b.notes {
         TaskNotes::Inline(text) => {
             out.push_str("#NOTES START:\n");
@@ -674,7 +747,7 @@ fn validate_block(lines: &[&str], start_idx: usize, end_idx: usize, category: &s
             if full {
                 diags.push(diag(k + 1, "error", format!("字段「{}」请使用英文冒号 ':'（不要用全角 '：'）", name)));
             } else if !KNOWN_FIELDS.contains(&name.as_str()) {
-                diags.push(diag(k + 1, "warning", format!("未知字段「{}」，将被忽略；请检查拼写", name)));
+                // 未知字段视为用户自定义字段：合法，不再告警。
             } else {
                 let entry = fields.entry(name.clone()).or_insert((k + 1, value.clone(), 0));
                 entry.2 += 1;

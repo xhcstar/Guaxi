@@ -119,6 +119,9 @@
 
     <!-- 统一删除确认弹窗（条目删除/批量删除/右键删除共用） -->
     <ConfirmModal />
+
+    <!-- 文件分享（局域网直达链接 + 二维码） -->
+    <FileShareModal v-model:show="shareModalVisible" :row="shareRow" />
   </div>
 </template>
 
@@ -142,6 +145,7 @@ import TaskListDrawer from './components/TableViewComponents/TaskListDrawer.vue'
 import TableToolbar from './components/TableViewComponents/TableToolbar.vue'
 import DataTable from './components/TableViewComponents/DataTable.vue'
 import ContextMenu from './components/TableViewComponents/ContextMenu.vue'
+import FileShareModal from './components/TableViewComponents/FileShareModal.vue'
 import AddFileModal from './components/TableViewComponents/AddFileModal.vue'
 import ConfirmModal from './components/TableViewComponents/ConfirmModal.vue'
 import ShowOrEdit from './common/ShowOrEdit.vue'
@@ -402,6 +406,10 @@ const {
   convertFile
 })
 
+// ── 文件分享：局域网直达链接 + 二维码（右键「分享」触发）──
+const shareModalVisible = ref(false)
+const shareRow = ref(null)
+
 const {
   showDropdown,
   x,
@@ -412,7 +420,15 @@ const {
   rowProps,
   handleRowContextMenu,
   handleOpen
-} = useContextMenu({ store, message, reconvert: reconvertImportedFile })
+} = useContextMenu({
+  store,
+  message,
+  reconvert: reconvertImportedFile,
+  onShare: (row) => {
+    shareRow.value = row
+    shareModalVisible.value = true
+  },
+})
 
 // ── 视图模式：'table' 表格 / 'shelf' 书架（持久化用户偏好）──
 const VIEW_MODE_KEY = 'guaxi_repoview_mode'
@@ -736,7 +752,8 @@ onUnmounted(() => {
   flex-direction: column;
   height: 100%;
   overflow: hidden;
-  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', monospace;
+  /* 与主界面字体保持一致：继承应用默认 UI 字体（无衬线），不再强制等宽字体 */
+  font-family: inherit;
 }
 
 .toolbar-container {

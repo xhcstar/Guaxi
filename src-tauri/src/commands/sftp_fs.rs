@@ -7,8 +7,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use russh_sftp::client::SftpSession;
+use russh_sftp::protocol::OpenFlags;
 use serde::Serialize;
 use tauri::{command, AppHandle};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
 
@@ -108,13 +110,26 @@ pub async fn sftp_download(session_id: String, remote_path: String, local_path: 
 }
 
 /// 上传：本地 local_path → 远端 remote_path。
+///
+/// 不能用 `session.write()`——它只以 `OpenFlags::WRITE` 打开，目标不存在时远端返回
+/// SSH_FX_NO_SUCH_FILE（“写远端失败: No such file”）。这里显式带 CREATE|TRUNCATE 打开，
+/// 写完后 `shutdown()` 关句柄刷盘。
 #[command]
 pub async fn sftp_upload(session_id: String, local_path: String, remote_path: String) -> Result<u64, String> {
     let entry = get_entry(&session_id)?;
     let data = std::fs::read(&local_path).map_err(|e| format!("读本地失败: {e}"))?;
     let len = data.len() as u64;
     let guard = entry.lock().await;
-    guard.session.write(remote_path, &data).await.map_err(|e| format!("写远端失败: {e}"))?;
+    let mut file = guard
+        .session
+        .open_with_flags(
+            remote_path,
+            OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE,
+        )
+        .await
+        .map_err(|e| format!("打开远端文件失败: {e}"))?;
+    file.write_all(&data).await.map_err(|e| format!("写远端失败: {e}"))?;
+    file.shutdown().await.map_err(|e| format!("关闭远端文件失败: {e}"))?;
     Ok(len)
 }
 

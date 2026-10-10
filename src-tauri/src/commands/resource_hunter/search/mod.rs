@@ -10,6 +10,7 @@ pub mod llm;
 pub mod resolve;
 pub mod seed_sites;
 pub mod sniffer;
+pub mod sources;
 pub mod translate;
 
 /// 供子模块复用的代理配置读取。
@@ -320,79 +321,83 @@ where
 // PLACEHOLDER_RUN
 
 /// 领域 API 精确源：按需要的类型并发查结构化接口。每个源独立超时，慢源不拖累其它源。
-async fn api_sources(app: &tauri::AppHandle, kw: &str, kinds: &[ResourceKind], limit: usize) -> Vec<ResourceItem> {
+async fn api_sources(app: &tauri::AppHandle, kw: &str, kinds: &[ResourceKind], limit: usize, off: &std::collections::HashSet<String>) -> Vec<ResourceItem> {
     type BoxFut = std::pin::Pin<Box<dyn std::future::Future<Output = Vec<ResourceItem>> + Send>>;
     let mut futs: Vec<BoxFut> = Vec::new();
     let has = |k: ResourceKind| kinds.contains(&k);
     macro_rules! src {
-        ($secs:expr, $body:expr) => {{
-            futs.push(Box::pin(async move { timed($secs, $body).await }));
+        ($id:expr, $secs:expr, $body:expr) => {{
+            if !off.contains($id) {
+                futs.push(Box::pin(async move { timed($secs, $body).await }));
+            }
         }};
     }
     if has(ResourceKind::Paper) {
-        let k = kw.to_string(); src!(12, seed_sites::arxiv(&k, limit));
-        let k = kw.to_string(); src!(12, seed_sites::openalex(&k, limit));
-        let k = kw.to_string(); src!(12, apis::semantic_scholar(&k, limit));
-        let k = kw.to_string(); src!(12, apis::crossref(&k, limit));
-        let k = kw.to_string(); src!(12, apis::doaj(&k, limit));
-        let k = kw.to_string(); src!(14, apis::unpaywall(&k, limit));
-        let k = kw.to_string(); src!(14, apis::europepmc(&k, limit));
-        let k = kw.to_string(); src!(14, apis::core_api(&k, limit));
-        let k = kw.to_string(); src!(14, apis::pubmed(&k, limit));
-        let k = kw.to_string(); src!(12, apis::dblp(&k, limit));
-        let k = kw.to_string(); src!(14, apis::hal(&k, limit));
+        let k = kw.to_string(); src!("arxiv", 12, seed_sites::arxiv(&k, limit));
+        let k = kw.to_string(); src!("openalex", 12, seed_sites::openalex(&k, limit));
+        let k = kw.to_string(); src!("semantic_scholar", 12, apis::semantic_scholar(&k, limit));
+        let k = kw.to_string(); src!("crossref", 12, apis::crossref(&k, limit));
+        let k = kw.to_string(); src!("doaj", 12, apis::doaj(&k, limit));
+        let k = kw.to_string(); src!("unpaywall", 14, apis::unpaywall(&k, limit));
+        let k = kw.to_string(); src!("europepmc", 14, apis::europepmc(&k, limit));
+        let k = kw.to_string(); src!("core", 14, apis::core_api(&k, limit));
+        let k = kw.to_string(); src!("pubmed", 14, apis::pubmed(&k, limit));
+        let k = kw.to_string(); src!("dblp", 12, apis::dblp(&k, limit));
+        let k = kw.to_string(); src!("hal", 14, apis::hal(&k, limit));
     }
     if has(ResourceKind::Code) {
-        let k = kw.to_string(); src!(12, apis::github(&k, limit));
-        let k = kw.to_string(); src!(12, apis::gitlab(&k, limit));
-        let k = kw.to_string(); src!(12, apis::crates_io(&k, limit));
-        let k = kw.to_string(); src!(12, apis::npm_pkg(&k, limit));
-        let k = kw.to_string(); src!(12, apis::codeberg(&k, limit));
-        let k = kw.to_string(); src!(12, apis::huggingface(&k, "models", ResourceKind::Code, limit));
+        let k = kw.to_string(); src!("github", 12, apis::github(&k, limit));
+        let k = kw.to_string(); src!("gitlab", 12, apis::gitlab(&k, limit));
+        let k = kw.to_string(); src!("crates_io", 12, apis::crates_io(&k, limit));
+        let k = kw.to_string(); src!("npm", 12, apis::npm_pkg(&k, limit));
+        let k = kw.to_string(); src!("codeberg", 12, apis::codeberg(&k, limit));
+        let k = kw.to_string(); src!("hf_models", 12, apis::huggingface(&k, "models", ResourceKind::Code, limit));
     }
     if has(ResourceKind::Dataset) {
-        let k = kw.to_string(); src!(12, apis::zenodo(&k, limit));
-        let k = kw.to_string(); src!(12, apis::huggingface(&k, "datasets", ResourceKind::Dataset, limit));
-        let k = kw.to_string(); src!(14, apis::dataverse(&k, limit));
+        let k = kw.to_string(); src!("zenodo", 12, apis::zenodo(&k, limit));
+        let k = kw.to_string(); src!("hf_datasets", 12, apis::huggingface(&k, "datasets", ResourceKind::Dataset, limit));
+        let k = kw.to_string(); src!("dataverse", 14, apis::dataverse(&k, limit));
     }
     if has(ResourceKind::Book) {
-        let k = kw.to_string(); src!(12, apis::gutendex(&k, limit));
-        let k = kw.to_string(); src!(16, apis::libgen(&k, limit));
-        let k = kw.to_string(); src!(16, apis::annas_archive(&k, limit));
-        let k = kw.to_string(); src!(14, apis::open_library(&k, limit));
-        let k = kw.to_string(); src!(14, apis::doab(&k, limit));
+        let k = kw.to_string(); src!("gutendex", 12, apis::gutendex(&k, limit));
+        let k = kw.to_string(); src!("libgen", 16, apis::libgen(&k, limit));
+        let k = kw.to_string(); src!("annas", 16, apis::annas_archive(&k, limit));
+        let k = kw.to_string(); src!("open_library", 14, apis::open_library(&k, limit));
+        let k = kw.to_string(); src!("doab", 14, apis::doab(&k, limit));
         // Internet Archive 文本馆藏：keyless、CJK 友好、非 CF 门禁，且给真实 pdf/epub 直链。
         // 是中文书籍召回的可靠主力（英文向的 Gutendex/DOAB/OpenLibrary 对中文几乎无命中）。
-        let k = kw.to_string(); src!(18, apis::internet_archive(&k, "texts", ResourceKind::Book, limit));
+        let k = kw.to_string(); src!("internet_archive", 18, apis::internet_archive(&k, "texts", ResourceKind::Book, limit));
     }
     if has(ResourceKind::Image) {
-        let k = kw.to_string(); src!(12, apis::baidu_image(&k, limit));
-        let k = kw.to_string(); src!(12, apis::openverse(&k, "images", limit));
-        let k = kw.to_string(); src!(14, apis::wikimedia_commons(&k, limit));
-        let k = kw.to_string(); src!(16, apis::met_museum(&k, limit));
-        let k = kw.to_string(); src!(14, apis::nasa_images(&k, limit));
-        let k = kw.to_string(); src!(14, apis::pexels(&k, "image", limit));
-        let k = kw.to_string(); src!(12, apis::art_institute(&k, limit));
-        let k = kw.to_string(); src!(12, apis::cleveland_art(&k, limit));
-        let k = kw.to_string(); src!(12, apis::unsplash(&k, limit));
-        let k = kw.to_string(); src!(12, apis::pixabay(&k, "image", limit));
+        let k = kw.to_string(); src!("baidu_image", 12, apis::baidu_image(&k, limit));
+        let k = kw.to_string(); src!("openverse", 12, apis::openverse(&k, "images", limit));
+        let k = kw.to_string(); src!("wikimedia", 14, apis::wikimedia_commons(&k, limit));
+        let k = kw.to_string(); src!("met", 16, apis::met_museum(&k, limit));
+        let k = kw.to_string(); src!("nasa", 14, apis::nasa_images(&k, limit));
+        let k = kw.to_string(); src!("pexels", 14, apis::pexels(&k, "image", limit));
+        let k = kw.to_string(); src!("artic", 12, apis::art_institute(&k, limit));
+        let k = kw.to_string(); src!("cleveland", 12, apis::cleveland_art(&k, limit));
+        let k = kw.to_string(); src!("unsplash", 12, apis::unsplash(&k, limit));
+        let k = kw.to_string(); src!("pixabay", 12, apis::pixabay(&k, "image", limit));
+        let k = kw.to_string(); src!("smithsonian", 14, apis::smithsonian(&k, limit));
+        let k = kw.to_string(); src!("europeana", 14, apis::europeana(&k, limit));
     }
     if has(ResourceKind::Audio) {
-        let k = kw.to_string(); src!(12, apis::openverse(&k, "audio", limit));
-        let k = kw.to_string(); src!(18, apis::internet_archive(&k, "audio", ResourceKind::Audio, limit));
-        let k = kw.to_string(); src!(14, apis::librivox(&k, limit));
-        let k = kw.to_string(); src!(14, apis::jamendo(&k, limit));
-        let k = kw.to_string(); src!(14, apis::ccmixter(&k, limit));
-        let k = kw.to_string(); let a = app.clone(); src!(28, apis::ytsearch(&a, &k, "audio", limit));
+        let k = kw.to_string(); src!("openverse", 12, apis::openverse(&k, "audio", limit));
+        let k = kw.to_string(); src!("internet_archive", 18, apis::internet_archive(&k, "audio", ResourceKind::Audio, limit));
+        let k = kw.to_string(); src!("librivox", 14, apis::librivox(&k, limit));
+        let k = kw.to_string(); src!("jamendo", 14, apis::jamendo(&k, limit));
+        let k = kw.to_string(); src!("ccmixter", 14, apis::ccmixter(&k, limit));
+        let k = kw.to_string(); let a = app.clone(); src!("ytsearch", 28, apis::ytsearch(&a, &k, "audio", limit));
     }
     if has(ResourceKind::Video) {
-        let k = kw.to_string(); src!(18, apis::internet_archive(&k, "movies", ResourceKind::Video, limit));
-        let k = kw.to_string(); src!(14, apis::pexels(&k, "video", limit));
-        let k = kw.to_string(); src!(14, apis::invidious(&k, limit));
-        let k = kw.to_string(); src!(12, apis::bilibili_search(&k, limit));
-        let k = kw.to_string(); src!(14, apis::peertube(&k, limit));
-        let k = kw.to_string(); src!(14, apis::dailymotion(&k, limit));
-        let k = kw.to_string(); let a = app.clone(); src!(28, apis::ytsearch(&a, &k, "video", limit));
+        let k = kw.to_string(); src!("internet_archive", 18, apis::internet_archive(&k, "movies", ResourceKind::Video, limit));
+        let k = kw.to_string(); src!("pexels", 14, apis::pexels(&k, "video", limit));
+        let k = kw.to_string(); src!("invidious", 14, apis::invidious(&k, limit));
+        let k = kw.to_string(); src!("bilibili", 12, apis::bilibili_search(&k, limit));
+        let k = kw.to_string(); src!("peertube", 14, apis::peertube(&k, limit));
+        let k = kw.to_string(); src!("dailymotion", 14, apis::dailymotion(&k, limit));
+        let k = kw.to_string(); let a = app.clone(); src!("ytsearch", 28, apis::ytsearch(&a, &k, "video", limit));
     }
     join_all(futs).await.into_iter().flatten().collect()
 }
@@ -405,6 +410,8 @@ pub async fn run(app: &tauri::AppHandle, query: SearchQuery) -> Vec<ResourceItem
     }
     let _ = store::record_query(&keyword);
     let cfg = load_proxy();
+    // 用户在「资源源」面板里禁用的源，检索时直接不请求（节省扇出、尊重偏好）。
+    let off = sources::disabled_set();
     // 用户显式勾选优先；否则按关键词意图聚焦，意图不明时才全类型铺开。
     let kinds = if !query.kinds.is_empty() {
         query.kinds.clone()
@@ -452,7 +459,7 @@ pub async fn run(app: &tauri::AppHandle, query: SearchQuery) -> Vec<ResourceItem
         }
         let api_futs = api_terms
             .iter()
-            .map(|t| api_sources(app, t, &kinds, query.limit));
+            .map(|t| api_sources(app, t, &kinds, query.limit, &off));
         for group in join_all(api_futs).await {
             items.extend(group);
         }

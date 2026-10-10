@@ -240,7 +240,7 @@
               <span class="tm-spacer2" />
               <a @click="fxSelectAll(true)">全选</a> · <a @click="fxSelectAll(false)">清空</a>
             </div>
-            <label v-for="f in EXPORT_FIELDS" :key="f.key" class="tm-fx-chk">
+            <label v-for="f in allExportFields" :key="f.key" class="tm-fx-chk">
               <input type="checkbox" :value="f.key" v-model="fxFields" @change="buildFxText" /> {{ f.label }}
             </label>
           </div>
@@ -593,15 +593,27 @@ const fxPriorityOptions = [
   { label: '全部', value: 'all' }, { label: 'A', value: 'A' }, { label: 'B', value: 'B' }, { label: 'C', value: 'C' }, { label: '无', value: 'none' },
 ]
 const EXPORT_FIELDS = [
-  { key: 'id', label: 'ID' }, { key: 'taskType', label: '类型' }, { key: 'status', label: '状态' },
+  { key: 'id', label: 'ID' }, { key: 'manageType', label: '分类' }, { key: 'taskType', label: '类型' }, { key: 'status', label: '状态' },
   { key: 'severity', label: '严重度' }, { key: 'priority', label: '优先级' }, { key: 'origin', label: '来源' },
   { key: 'fixStatus', label: '修复状态' }, { key: 'progress', label: '进度' }, { key: 'deadline', label: '截止' },
   { key: 'createTime', label: '创建时间' }, { key: 'completedTime', label: '完成时间' }, { key: 'parentId', label: '父任务' },
   { key: 'description', label: '描述' }, { key: 'rootCause', label: '根本原因' }, { key: 'conditionOfOccurrence', label: '复现步骤' },
   { key: 'fixedDetails', label: '修复详情' }, { key: 'testingSuggestions', label: '测试建议' }, { key: 'affectedRelease', label: '影响版本' },
-  { key: 'reviewLink', label: 'Review' },
+  { key: 'reviewLink', label: 'Review' }, { key: 'content', label: '详情' }, { key: 'extraImpacts', label: 'Extra Impact' },
+  { key: 'notes', label: '笔记' },
 ]
 const fxFields = ref(['id', 'taskType', 'status', 'description', 'createTime', 'completedTime'])
+// 自定义字段：汇总当前数据里出现过的所有自定义字段名，动态并入导出字段列表。
+const customFieldKeys = computed(() => {
+  const names = new Set()
+  for (const b of fxData.value) {
+    for (const cf of (b.customFields || [])) {
+      if (cf && cf.name) names.add(cf.name)
+    }
+  }
+  return [...names].map((n) => ({ key: 'cf:' + n, label: n }))
+})
+const allExportFields = computed(() => EXPORT_FIELDS.concat(customFieldKeys.value))
 
 const fxMatched = computed(() => fxData.value.filter((b) => {
   if (fxFilter.category !== 'all' && (b.manageType || '') !== fxFilter.category) return false
@@ -631,12 +643,24 @@ const fxCount = (t) => fxMatched.value.filter((b) => (b.taskType || '') === t).l
 const fxDoneCount = computed(() => fxMatched.value.filter((b) => String(b.status || '').toUpperCase() === 'DONE').length)
 
 const fxFieldValue = (b, key) => {
+  if (key.startsWith('cf:')) {
+    const name = key.slice(3)
+    const cf = (b.customFields || []).find((x) => x && x.name === name)
+    return cf ? String(cf.value ?? '') : ''
+  }
   if (key === 'taskType') return typeLabel(b.taskType)
   if (key === 'status') return statusZh(String(b.status || '').toUpperCase())
+  if (key === 'manageType') return catLabel(b.manageType)
+  if (key === 'extraImpacts') return (Array.isArray(b.extraImpacts) ? b.extraImpacts : []).join('\n\n')
+  if (key === 'notes') {
+    const n = b.notes
+    if (!n || n.kind === 'none') return ''
+    return n.kind === 'file' ? `（外链）${n.value || ''}` : String(n.value || '')
+  }
   return String(b[key] ?? '')
 }
 const buildFxText = () => {
-  const fields = EXPORT_FIELDS.filter((f) => fxFields.value.includes(f.key))
+  const fields = allExportFields.value.filter((f) => fxFields.value.includes(f.key))
   const entries = fxMatched.value.map((b) => {
     if (fxOneLine.value) return fields.map((f) => `${f.label}: ${fxFieldValue(b, f.key).replace(/\n/g, ' ')}`).join(' | ')
     return fields.map((f) => {
@@ -647,7 +671,7 @@ const buildFxText = () => {
   fxText.value = entries.join(fxOneLine.value ? '\n' : '\n----------------------------------------\n')
 }
 const recomputeFx = () => nextTick(buildFxText)
-const fxSelectAll = (all) => { fxFields.value = all ? EXPORT_FIELDS.map((f) => f.key) : []; buildFxText() }
+const fxSelectAll = (all) => { fxFields.value = all ? allExportFields.value.map((f) => f.key) : []; buildFxText() }
 const openFieldExport = async () => {
   showFieldExport.value = true
   try {

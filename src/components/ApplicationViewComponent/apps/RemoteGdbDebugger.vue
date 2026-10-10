@@ -1,9 +1,14 @@
 <template>
   <div class="gdb-root">
     <div class="gdb-bar">
-      <n-select v-model:value="profileId" size="small" :options="profileOptions" placeholder="选择 SSH 档案" style="width:200px" />
-      <n-input v-model:value="program" size="small" placeholder="可执行文件路径(可空=仅连gdb)" style="width:260px" />
-      <n-input v-model:value="argsText" size="small" placeholder="参数(空格分隔)" style="width:160px" />
+      <n-select v-model:value="profileId" size="small" :options="profileOptions" placeholder="选择 SSH 档案" style="width:180px" />
+      <n-radio-group v-model:value="mode" size="small" :disabled="!!sessionId">
+        <n-radio-button value="launch">启动程序</n-radio-button>
+        <n-radio-button value="attach">附加进程</n-radio-button>
+      </n-radio-group>
+      <n-input v-model:value="program" size="small" :placeholder="mode === 'attach' ? '可执行文件(可空，仅符号)' : '可执行文件路径(可空=仅连gdb)'" style="width:230px" />
+      <n-input-number v-if="mode === 'attach'" v-model:value="attachPid" size="small" :min="1" :show-button="false" placeholder="PID" style="width:110px" />
+      <n-input v-else v-model:value="argsText" size="small" placeholder="参数(空格分隔)" style="width:150px" />
       <n-button size="small" type="primary" :loading="starting" :disabled="!!sessionId" @click="start">启动 gdb</n-button>
       <n-button size="small" v-if="sessionId" @click="stop">结束</n-button>
       <span class="gdb-status">{{ statusText }}</span>
@@ -11,7 +16,7 @@
     </div>
 
     <div class="gdb-palette" v-if="sessionId">
-      <n-button size="tiny" v-for="c in palette" :key="c.label" @click="runCmd(c.cmd)">
+      <n-button size="tiny" v-for="c in palette" :key="c.label" @click="c.fn ? c.fn() : runCmd(c.cmd)">
         <template #icon><Icon :icon="c.icon" width="13" height="13" /></template>{{ c.label }}
       </n-button>
       <div class="gdb-fontctl" title="控制台字号">
@@ -23,7 +28,7 @@
 
     <div class="gdb-body" v-if="sessionId">
       <div class="gdb-side" :style="{ width: gdbSideWidth + 'px' }">
-        <n-collapse :default-expanded-names="['breaks','threads','vars','watch']" arrow-placement="right">
+        <n-collapse :default-expanded-names="['breaks','callstack','locals','vars','watch']" arrow-placement="right">
           <n-collapse-item title="断点" name="breaks">
             <div class="gdb-actions">
               <n-input v-model:value="bpInput" size="small" placeholder="main / file.c:42 / func" style="flex:1" @keyup.enter="addBreak" />
@@ -55,11 +60,47 @@
             </div>
           </n-collapse-item>
 
+          <n-collapse-item title="调用栈" name="callstack">
+            <div class="gdb-actions"><n-button size="tiny" @click="refreshStack">刷新调用栈</n-button></div>
+            <div class="gdb-stack">
+              <div
+                v-for="f in callStack"
+                :key="f.level"
+                class="gdb-sframe"
+                :class="{ active: String(f.level) === String(curFrame) }"
+                @click="selectFrame(f.level)"
+                :title="f.fullname || f.file"
+              >
+                <span class="gdb-sframe-lv">#{{ f.level }}</span>
+                <span class="gdb-sframe-func">{{ f.func }}</span>
+                <span class="gdb-sframe-loc">{{ shortFile(f.file) }}<template v-if="f.line">:{{ f.line }}</template></span>
+              </div>
+              <div v-if="!callStack.length" class="gdb-hint">停在断点时自动加载，或点“刷新调用栈”。</div>
+            </div>
+          </n-collapse-item>
+
+          <n-collapse-item title="局部变量" name="locals">
+            <div class="gdb-actions"><n-button size="tiny" @click="refreshLocals">刷新</n-button><span class="gdb-hint">当前帧，停下自动刷新</span></div>
+            <table class="gdb-table">
+              <tbody>
+                <tr v-for="l in locals" :key="l.name">
+                  <td class="gdb-lname">{{ l.name }}</td>
+                  <td class="gdb-val">{{ l.value }}</td>
+                </tr>
+                <tr v-if="!locals.length"><td colspan="2" class="gdb-hint">停在断点时显示当前帧局部变量。</td></tr>
+              </tbody>
+            </table>
+          </n-collapse-item>
+
           <n-collapse-item title="变量树" name="vars">
             <div class="gdb-actions">
               <n-input v-model:value="exprInput" size="small" placeholder="*ptr / mystruct / arr" style="flex:1" @keyup.enter="addVar" />
               <n-button size="tiny" type="primary" @click="addVar">展开</n-button>
               <n-button size="tiny" :disabled="!varRoots.length" @click="sendVarTree">→编辑器</n-button>
+            </div>
+            <div class="gdb-actions">
+              <span class="gdb-hint">显示格式</span>
+              <n-select v-model:value="varFormat" size="tiny" :options="varFormatOptions" style="width:120px" @update:value="applyVarFormat" />
             </div>
             <div class="gdb-tree">
               <GdbVarNode v-for="n in varRoots" :key="n.name" :node="n" :depth="0" @expand="expandVar" />
@@ -85,16 +126,28 @@
             </table>
           </n-collapse-item>
 
-          <n-collapse-item title="内存 / 源码" name="mem">
+          <n-collapse-item title="寄存器" name="regs">
+            <div class="gdb-actions"><n-button size="tiny" @click="refreshRegisters">刷新寄存器</n-button></div>
+            <table class="gdb-table gdb-regs">
+              <thead><tr><th>寄存器</th><th>HEX</th><th>十进制</th></tr></thead>
+              <tbody>
+                <tr v-for="r in registers" :key="r.name">
+                  <td class="gdb-rname">{{ r.name }}</td>
+                  <td class="gdb-val">{{ r.hex }}</td>
+                  <td class="gdb-val">{{ r.dec }}</td>
+                </tr>
+                <tr v-if="!registers.length"><td colspan="3" class="gdb-hint">停下后点“刷新寄存器”。</td></tr>
+              </tbody>
+            </table>
+          </n-collapse-item>
+
+          <n-collapse-item title="内存" name="mem">
             <div class="gdb-actions">
-              <n-input v-model:value="memAddr" size="small" placeholder="&buf 或 0x..." style="flex:1" />
+              <n-input v-model:value="memAddr" size="small" placeholder="&buf 或 0x..." style="flex:1" @keyup.enter="readMem" />
               <n-input-number v-model:value="memCount" size="small" :min="1" :max="4096" :show-button="false" style="width:80px" />
-            </div>
-            <div class="gdb-actions">
               <n-button size="tiny" type="primary" @click="readMem">读内存</n-button>
-              <n-button size="tiny" @click="listSource">显示当前源码</n-button>
             </div>
-            <pre class="gdb-mem">{{ memText }}</pre>
+            <pre class="gdb-mem">{{ memText || '按十六进制 + ASCII 展示内存块。' }}</pre>
           </n-collapse-item>
 
           <n-collapse-item title="宏" name="macros">
@@ -123,6 +176,34 @@
       <div class="gdb-sideresize" @mousedown="onGdbResizeDown"></div>
 
       <div class="gdb-center">
+        <div class="gdb-source" :style="{ height: sourceHeight + 'px' }">
+          <div class="gdb-source-bar">
+            <n-radio-group v-model:value="sourceMode" size="tiny">
+              <n-radio-button value="local">本地源码</n-radio-button>
+              <n-radio-button value="remote">远端源码</n-radio-button>
+            </n-radio-group>
+            <n-input v-model:value="srcFromPrefix" size="tiny" placeholder="编译路径前缀 (可空)" style="width:150px" />
+            <span class="gdb-arrow">→</span>
+            <n-input v-model:value="srcToPrefix" size="tiny" :placeholder="sourceMode === 'local' ? '本地源码根' : '远端路径前缀(可空)'" style="width:160px" />
+            <n-button size="tiny" @click="pickLocalRoot" v-if="sourceMode === 'local'">选目录</n-button>
+            <n-button size="tiny" type="primary" @click="refreshSource">对照当前行</n-button>
+            <span class="gdb-src-loc" :title="sourceFile">{{ shortFile(sourceFile) }}<template v-if="sourceCurLine">:{{ sourceCurLine }}</template></span>
+          </div>
+          <div class="gdb-source-body" ref="sourceBodyRef" :style="{ fontSize: gdbFontSize + 'px' }">
+            <div
+              v-for="ln in sourceLines"
+              :key="ln.n"
+              class="gdb-srcline"
+              :class="{ cur: ln.n === sourceCurLine }"
+              :ref="el => { if (ln.n === sourceCurLine) curLineEl = el }"
+            >
+              <span class="gdb-srcno">{{ ln.n }}</span>
+              <span class="gdb-srctext">{{ ln.text }}</span>
+            </div>
+            <div v-if="!sourceLines.length" class="gdb-hint gdb-src-empty">{{ sourceHint }}</div>
+          </div>
+        </div>
+        <div class="gdb-vresize" @mousedown="onSourceResizeDown"></div>
         <div class="gdb-console" ref="consoleRef" :style="{ fontSize: gdbFontSize + 'px' }">
           <pre v-for="(l, i) in consoleLines" :key="i" :class="'gdb-l-' + l.kind">{{ l.text }}</pre>
         </div>
@@ -141,6 +222,7 @@ import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { open, save } from '@tauri-apps/plugin-dialog'
+import { readTextFile } from '@tauri-apps/plugin-fs'
 import { createLogger } from '../../../utils/logger'
 import { Icon } from '@iconify/vue'
 import playIcon from '@iconify-icons/lucide/play'
@@ -163,6 +245,8 @@ const profiles = ref([])
 const profileOptions = computed(() =>
   profiles.value.map(p => ({ label: `${p.name || p.host} (${p.user}@${p.host})`, value: p.id })))
 const profileId = ref(null)
+const mode = ref('launch')       // 'launch' | 'attach'
+const attachPid = ref(null)
 const program = ref('')
 const argsText = ref('')
 const starting = ref(false)
@@ -176,6 +260,13 @@ const consoleRef = ref(null)
 const cmdInput = ref('')
 const exprInput = ref('')
 const varRoots = ref([])
+const varFormat = ref('natural')
+const varFormatOptions = [
+  { label: '自然', value: 'natural' },
+  { label: '十六进制', value: 'hexadecimal' },
+  { label: '十进制', value: 'decimal' },
+  { label: '二进制', value: 'binary' },
+]
 const watchInput = ref('')
 const watches = ref([])
 const threads = ref([])
@@ -189,6 +280,24 @@ const macroName = ref('')
 const macroCmds = ref('')
 const macros = ref([])
 
+// 调用栈 / 局部变量 / 寄存器（结构化面板）
+const callStack = ref([])
+const curFrame = ref(0)
+const locals = ref([])
+const registers = ref([])
+
+// 跨机源码对照
+const sourceMode = ref('local')  // 'local' | 'remote'
+const srcFromPrefix = ref('')
+const srcToPrefix = ref('')
+const sourceLines = ref([])
+const sourceCurLine = ref(0)
+const sourceFile = ref('')
+const sourceHint = ref('停在断点时自动对照当前行；也可点“对照当前行”。')
+const sourceBodyRef = ref(null)
+let curLineEl = null
+const sourceHeight = ref(220)
+
 const palette = [
   { label: '运行', cmd: '-exec-run', icon: playIcon },
   { label: '继续', cmd: '-exec-continue', icon: fastForwardIcon },
@@ -196,9 +305,9 @@ const palette = [
   { label: '步入', cmd: '-exec-step', icon: arrowDownIcon },
   { label: '步出', cmd: '-exec-finish', icon: arrowUpIcon },
   { label: '中断', cmd: '-exec-interrupt', icon: pauseIcon },
-  { label: '调用栈', cmd: '-stack-list-frames', icon: layersIcon },
-  { label: '局部变量', cmd: '-stack-list-variables --all-values', icon: variableIcon },
-  { label: '寄存器', cmd: 'info registers', icon: cpuIcon },
+  { label: '调用栈', fn: () => refreshStack(), icon: layersIcon },
+  { label: '局部变量', fn: () => refreshLocals(), icon: variableIcon },
+  { label: '寄存器', fn: () => refreshRegisters(), icon: cpuIcon },
 ]
 const gdbFontSize = ref(14)
 function setGdbFontSize(v) { gdbFontSize.value = Math.min(28, Math.max(9, v)) }
@@ -242,7 +351,8 @@ function appendConsole(kind, text) {
 function onAsync(p) {
   if (p.class === 'stopped') {
     statusText.value = '已停下: ' + (p.payload?.reason || '')
-    refreshThreads(); refreshWatch()
+    curFrame.value = 0
+    refreshThreads(); refreshWatch(); refreshStack(); refreshLocals(); refreshSource()
   } else if (p.class === 'running') {
     statusText.value = '运行中'
   }
@@ -250,12 +360,22 @@ function onAsync(p) {
 
 async function start() {
   if (!profileId.value) { error.value = '请选择 SSH 档案'; return }
+  if (mode.value === 'attach' && !attachPid.value) { error.value = '附加模式需要填 PID'; return }
   starting.value = true; error.value = ''
   try {
     const args = argsText.value.trim() ? argsText.value.trim().split(/\s+/) : []
-    sessionId.value = await invoke('gdb_mi_start', { profileId: profileId.value, program: program.value || null, args })
+    sessionId.value = await invoke('gdb_mi_start', {
+      profileId: profileId.value,
+      program: program.value || null,
+      args,
+      attachPid: mode.value === 'attach' ? Number(attachPid.value) : null,
+    })
     statusText.value = '已连接'
-    appendConsole('log', '[gdb 已启动]')
+    appendConsole('log', mode.value === 'attach' ? `[gdb 已启动，附加到 PID ${attachPid.value}]` : '[gdb 已启动]')
+    if (mode.value === 'attach') {
+      // attach 会把进程停住：主动拉一次栈/局部变量/线程/源码。
+      setTimeout(() => { refreshThreads(); refreshStack(); refreshLocals(); refreshSource() }, 300)
+    }
   } catch (e) { error.value = '启动失败: ' + (e?.message || e) } finally { starting.value = false }
 }
 
@@ -277,8 +397,26 @@ async function addVar() {
   const r = await runCmd(`-var-create - * ${expr}`)
   const p = r?.payload
   if (p && p.name) {
+    if (varFormat.value !== 'natural') {
+      await runCmd(`-var-set-format ${p.name} ${varFormat.value}`)
+      const er = await runCmd(`-var-evaluate-expression ${p.name}`)
+      if (er?.payload?.value != null) p.value = er.payload.value
+    }
     varRoots.value.push({ name: p.name, expr, value: p.value || '', type: p.type || '', numchild: parseInt(p.numchild || '0', 10), children: [], expanded: false })
   }
+}
+// 变量树显示格式切换：对所有已创建的 var 对象（含子节点）设格式并重取值，便于按 hex/dec/bin 看复杂结构。
+async function applyVarFormat() {
+  const fmt = varFormat.value
+  const walk = async nodes => {
+    for (const n of nodes) {
+      await runCmd(`-var-set-format ${n.name} ${fmt}`)
+      const er = await runCmd(`-var-evaluate-expression ${n.name}`)
+      if (er?.payload?.value != null) n.value = er.payload.value
+      if (n.children.length) await walk(n.children)
+    }
+  }
+  await walk(varRoots.value)
 }
 async function expandVar(node) {
   if (node.expanded) { node.expanded = false; return }
@@ -323,9 +461,129 @@ async function readMem() {
   if (!memAddr.value) return
   const r = await runCmd(`-data-read-memory-bytes ${memAddr.value} ${memCount.value}`)
   const mem = r?.payload?.memory || []
-  memText.value = mem.map(m => `${m.begin || m.addr || ''}: ${m.contents || ''}`).join('\n') || '(无数据)'
+  // 把各块的连续 hex 串格式化成经典 hexdump：地址 | 16 字节 hex | ASCII。
+  const rows = []
+  for (const m of mem) {
+    const base = parseInt(m.begin || m.addr || '0', 16)
+    const hex = (m.contents || '').replace(/[^0-9a-fA-F]/g, '')
+    const bytes = []
+    for (let i = 0; i + 1 < hex.length; i += 2) bytes.push(parseInt(hex.slice(i, i + 2), 16))
+    for (let off = 0; off < bytes.length; off += 16) {
+      const chunk = bytes.slice(off, off + 16)
+      const addr = (base + off).toString(16).padStart(16, '0')
+      const hexCells = chunk.map(b => b.toString(16).padStart(2, '0'))
+      while (hexCells.length < 16) hexCells.push('  ')
+      const hexStr = hexCells.slice(0, 8).join(' ') + '  ' + hexCells.slice(8).join(' ')
+      const ascii = chunk.map(b => (b >= 32 && b < 127) ? String.fromCharCode(b) : '.').join('')
+      rows.push(`0x${addr}  ${hexStr}  |${ascii}|`)
+    }
+  }
+  memText.value = rows.join('\n') || '(无数据)'
 }
-async function listSource() { await runCmd('list'); memText.value = '源码已输出到控制台'; tab.value = 'console' }
+
+// ---- 调用栈 / 局部变量 / 寄存器 结构化面板 ----
+function shortFile(f) {
+  if (!f) return ''
+  const parts = String(f).replace(/\\/g, '/').split('/')
+  return parts[parts.length - 1] || f
+}
+async function refreshStack() {
+  if (!sessionId.value) return
+  const r = await runCmd('-stack-list-frames')
+  const frames = r?.payload?.stack || []
+  callStack.value = frames.map(f => ({
+    level: f.level, func: f.func || '??',
+    file: f.file || f.fullname || '', fullname: f.fullname || f.file || '', line: f.line || '', addr: f.addr || '',
+  }))
+}
+async function selectFrame(level) {
+  if (!sessionId.value) return
+  curFrame.value = level
+  await runCmd(`-stack-select-frame ${level}`)
+  await refreshLocals(); await refreshSource(); await refreshWatch()
+}
+async function refreshLocals() {
+  if (!sessionId.value) return
+  const r = await runCmd('-stack-list-variables --all-values')
+  const vars = r?.payload?.variables || []
+  locals.value = vars.map(v => ({ name: v.name, value: v.value != null ? String(v.value) : '' }))
+}
+async function refreshRegisters() {
+  if (!sessionId.value) return
+  const nr = await runCmd('-data-list-register-names')
+  const names = nr?.payload?.['register-names'] || []
+  const vr = await runCmd('-data-list-register-values x')
+  const vals = vr?.payload?.['register-values'] || []
+  const hexByNum = {}
+  for (const rv of vals) hexByNum[rv.number] = rv.value
+  const out = []
+  names.forEach((nm, i) => {
+    if (!nm) return
+    const hex = hexByNum[String(i)] || hexByNum[i]
+    if (hex == null) return
+    let dec = ''
+    try { dec = BigInt(hex).toString(10) } catch (_) { dec = '' }
+    out.push({ name: nm, hex, dec })
+  })
+  registers.value = out
+}
+
+// ---- 跨机源码对照（本地 readTextFile / 远端 ssh_read_text_file） ----
+function mapSourcePath(fullpath) {
+  const from = srcFromPrefix.value.trim()
+  const to = srcToPrefix.value.trim()
+  let p = fullpath
+  if (from && p.startsWith(from)) p = to.replace(/[\\/]+$/, '') + p.slice(from.length)
+  else if (!from && to) {
+    // 无前缀时：把编译路径的文件名拼到目标根下（最朴素映射）。
+    p = to.replace(/[\\/]+$/, '') + '/' + shortFile(p)
+  }
+  return p
+}
+async function pickLocalRoot() {
+  try {
+    const sel = await open({ directory: true, multiple: false, title: '选择本地源码根目录' })
+    if (sel) srcToPrefix.value = typeof sel === 'string' ? sel : sel?.path
+  } catch (_) {}
+}
+async function refreshSource() {
+  if (!sessionId.value) return
+  const r = await runCmd('-stack-info-frame')
+  const fr = r?.payload?.frame
+  if (!fr) { sourceHint.value = '当前无栈帧（先运行到断点）。'; return }
+  const full = fr.fullname || fr.file || ''
+  const line = parseInt(fr.line || '0', 10)
+  sourceFile.value = full
+  sourceCurLine.value = line
+  if (!full) { sourceLines.value = []; sourceHint.value = '当前帧无源码信息。'; return }
+  const target = mapSourcePath(full)
+  try {
+    let text = ''
+    if (sourceMode.value === 'local') {
+      text = await readTextFile(target)
+    } else {
+      // 远端：同时把映射告诉 gdb，使其内部 list/断点源码定位也一致。
+      if (srcFromPrefix.value.trim() && srcToPrefix.value.trim()) {
+        await runCmd(`-interpreter-exec console ${miQuote(`set substitute-path ${srcFromPrefix.value.trim()} ${srcToPrefix.value.trim()}`)}`)
+      }
+      text = await invoke('ssh_read_text_file', { profileId: profileId.value, path: target, maxBytes: 1048576 })
+    }
+    sourceLines.value = text.split(/\r?\n/).map((t, i) => ({ n: i + 1, text: t }))
+    await nextTick()
+    if (curLineEl && curLineEl.scrollIntoView) curLineEl.scrollIntoView({ block: 'center' })
+  } catch (e) {
+    sourceLines.value = []
+    sourceHint.value = `读取源码失败（${shortFile(target)}）：${e?.message || e}`
+  }
+}
+let sourceResizing = false
+function onSourceResizeDown(e) {
+  sourceResizing = true
+  const startY = e.clientY; const startH = sourceHeight.value
+  const move = ev => { if (sourceResizing) sourceHeight.value = Math.min(640, Math.max(80, startH + ev.clientY - startY)) }
+  const up = () => { sourceResizing = false; document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up) }
+  document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
+}
 
 function addMacro() {
   const n = macroName.value.trim(); if (!n || !macroCmds.value.trim()) return
@@ -440,4 +698,34 @@ async function loadMacros() {
 .gdb-tree { max-height: 260px; overflow: auto; }
 .gdb-threads { max-height: 200px; overflow: auto; }
 .gdb-mem { max-height: 220px; overflow: auto; }
+
+/* 1c：调试显示区统一用与终端(xterm)一致的等宽字体栈，避免落到非等宽的编辑器字体。 */
+.gdb-root { --gdb-mono: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, 'Courier New', monospace; }
+.gdb-console, .gdb-mem, .gdb-tree, .gdb-val, .gdb-frame, .gdb-source-body { font-family: var(--gdb-mono) !important; }
+
+/* 调用栈 / 局部变量 / 寄存器面板 */
+.gdb-stack { font-size: 12px; max-height: 220px; overflow: auto; }
+.gdb-sframe { display: flex; gap: 6px; align-items: baseline; padding: 4px 6px; cursor: pointer; border-bottom: 1px solid var(--guaxi-border-weak, rgba(0,0,0,0.06)); white-space: nowrap; }
+.gdb-sframe:hover { background: var(--guaxi-hover-bg, rgba(0,0,0,0.04)); }
+.gdb-sframe.active { background: var(--tw-accent-soft); box-shadow: inset 3px 0 0 var(--tw-accent); }
+.gdb-sframe-lv { color: var(--guaxi-text-secondary); font-family: var(--gdb-mono); flex: 0 0 auto; }
+.gdb-sframe-func { color: var(--tw-accent); overflow: hidden; text-overflow: ellipsis; }
+.gdb-sframe-loc { color: var(--guaxi-text-secondary); font-family: var(--gdb-mono); margin-left: auto; flex: 0 0 auto; }
+.gdb-lname, .gdb-rname { color: #79c0ff; font-family: var(--gdb-mono); }
+.gdb-regs { max-height: 260px; }
+.gdb-regs .gdb-val { white-space: nowrap; }
+
+/* 源码对照面板（居中列顶部，可上下拖拽） */
+.gdb-source { flex: 0 0 auto; min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--guaxi-border); border-radius: var(--tw-radius-sm); overflow: hidden; background: var(--tw-code-bg); }
+.gdb-source-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 5px 8px; border-bottom: 1px solid var(--guaxi-border); background: color-mix(in srgb, var(--guaxi-panel-bg) 45%, transparent); flex: 0 0 auto; }
+.gdb-arrow { color: var(--guaxi-text-secondary); }
+.gdb-src-loc { font-size: 11px; color: var(--tw-accent); font-family: var(--gdb-mono); margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
+.gdb-source-body { flex: 1 1 auto; min-height: 0; overflow: auto; background: var(--tw-code-bg); color: var(--tw-code-fg); padding: 4px 0; }
+.gdb-srcline { display: flex; white-space: pre; line-height: 1.5; }
+.gdb-srcline.cur { background: rgba(255,196,0,0.16); box-shadow: inset 3px 0 0 #f5a524; }
+.gdb-srcno { flex: 0 0 auto; width: 52px; text-align: right; padding-right: 12px; color: var(--guaxi-text-secondary); opacity: .7; user-select: none; }
+.gdb-srctext { flex: 1 1 auto; }
+.gdb-src-empty { padding: 12px; }
+.gdb-vresize { flex: 0 0 auto; height: 5px; cursor: row-resize; background: var(--guaxi-border); opacity: .5; margin: 4px 0; border-radius: 3px; transition: opacity .15s, background .15s; }
+.gdb-vresize:hover { opacity: 1; background: var(--tw-accent); }
 </style>

@@ -29,6 +29,7 @@ function emptyBlock() {
     rootCause: '', conditionOfOccurrence: '', fixedDetails: '', testingSuggestions: '',
     affectedRelease: '', reviewLink: '', extraImpacts: [], content: '',
     notes: { kind: 'none', value: '' },
+    customFields: [],
     blockStartLine: 0, blockEndLine: 0,
   }
 }
@@ -44,6 +45,26 @@ function parseFieldLine(line) {
     return { name: nameUpper, value: m[2].trim() }
   }
   return null
+}
+
+// 未知字段声明 `#NAME:`（大写字母与空格 + 英文冒号，且不在 KNOWN_FIELDS/NOTES 内）→ 自定义字段。
+// 全角冒号不视为字段（交由校验器/续行逻辑），与后端 parse_custom_field_line 对齐。
+function parseCustomFieldLine(line) {
+  const trimmed = line.replace(/^\s+/, '')
+  if (!trimmed.startsWith('#') || trimmed.startsWith('##')) return null
+  const after = trimmed.slice(1)
+  let name = ''
+  let restIdx = -1
+  for (let i = 0; i < after.length; i++) {
+    const ch = after[i]
+    if (ch === ':') { restIdx = i + 1; break }
+    if ((ch >= 'A' && ch <= 'Z') || ch === ' ') { name += ch } else { return null }
+  }
+  if (restIdx < 0) return null
+  const nm = name.trim()
+  if (!nm) return null
+  if (KNOWN_FIELDS.includes(nm) || nm === 'NOTES START' || nm === 'NOTES END') return null
+  return { name: nm, value: after.slice(restIdx).trim() }
 }
 
 function parseNotesStart(line) {
@@ -122,16 +143,20 @@ function setField(b, name, rawVal) {
 function parseOneBlock(bodyLines, category) {
   const b = emptyBlock()
   b.manageType = category || ''
-  let current = null
+  let current = null       // 已知字段名
+  let customName = null    // 自定义字段名
   let buf = ''
-  const flush = () => { if (current !== null) setField(b, current, buf) }
+  const flush = () => {
+    if (current !== null) setField(b, current, buf)
+    else if (customName !== null) b.customFields.push({ name: customName, value: buf.replace(/\n+$/, '') })
+  }
 
   let k = 0
   while (k < bodyLines.length) {
     const line = bodyLines[k]
     const notes = parseNotesStart(line)
     if (notes !== undefined) {
-      flush(); current = null; buf = ''
+      flush(); current = null; customName = null; buf = ''
       if (notes.path) {
         b.notes = { kind: 'file', value: notes.path }
         k++
@@ -149,11 +174,21 @@ function parseOneBlock(bodyLines, category) {
     if (field) {
       flush(); buf = ''
       current = field.name
+      customName = null
       buf += field.value + '\n'
       k++
       continue
     }
-    if (current !== null) { buf += line + '\n' }
+    const custom = parseCustomFieldLine(line)
+    if (custom) {
+      flush(); buf = ''
+      current = null
+      customName = custom.name
+      buf += custom.value + '\n'
+      k++
+      continue
+    }
+    if (current !== null || customName !== null) { buf += line + '\n' }
     k++
   }
   flush()
@@ -234,6 +269,10 @@ export function serializeBlock(b) {
   f('REVIEW LINK', b.reviewLink)
   for (const ei of (b.extraImpacts || [])) fmulti('EXTRA IMPACT', ei)
   fmulti('CONTENT', b.content)
+  // 自定义字段：原样写回（CONTENT 之后、NOTES 之前）。
+  for (const cf of (b.customFields || [])) {
+    if (cf && cf.name && String(cf.name).trim()) fmulti(cf.name, cf.value)
+  }
   if (b.notes && b.notes.kind === 'inline') {
     out.push('#NOTES START:')
     out.push(...String(b.notes.value || '').split('\n'))
@@ -285,6 +324,7 @@ export function buildNewBlock({ category = 'work', taskType = 'task', id = '', p
     testingSuggestions: '', affectedRelease: '', reviewLink: '',
     extraImpacts: DEFAULT_EXTRA_IMPACTS.slice(),
     content: '', notes: { kind: 'inline', value: '' },
+    customFields: [],
     blockStartLine: 0, blockEndLine: 0,
   }
 }
@@ -354,7 +394,7 @@ export function validateTaskBlocks(content, category = '') {
         if (decl.full) {
           push(k + 1, 'error', `字段「${decl.name}」请使用英文冒号 ':'（不要用全角 '：'）`)
         } else if (!KNOWN_FIELDS.includes(decl.name)) {
-          push(k + 1, 'warning', `未知字段「${decl.name}」，将被忽略；请检查拼写`)
+          // 未知字段视为用户自定义字段：合法，不再告警。
         } else {
           const e = fields.get(decl.name) || { line: k + 1, value: decl.value, count: 0 }
           e.count += 1

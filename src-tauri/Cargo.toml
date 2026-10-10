@@ -194,6 +194,29 @@ webpki-roots = "0.26"
 # 网络抓包：运行时动态加载 Npcap 的 wpcap.dll(不依赖 SDK 链接库，机器没装则优雅提示)。
 libloading = "0.8"
 
+# ============ 证书 / 密钥 / 加解密工作台（纯 Rust；无 openssl / 无 NASM，PKI 走 rcgen+ring）============
+# rcgen 用 ring 后端（避开 aws-lc-rs 的 NASM）；RSA 生成走 rsa crate 再喂给 rcgen 签名。
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem", "x509-parser"] }
+rsa = { version = "0.9", features = ["sha2", "pem"] }
+# rsa 0.9 的 keygen 需要 rand_core 0.6 的 RNG，项目主 rand 是 0.9，这里单独引 0.8 并重命名避免冲突。
+rand08 = { package = "rand", version = "0.8" }
+ecdsa = { version = "0.16", features = ["pem"] }
+p256 = { version = "0.13", features = ["ecdsa", "pem", "pkcs8"] }
+p384 = { version = "0.13", features = ["ecdsa", "pem", "pkcs8"] }
+ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core", "pem"] }
+pkcs8 = { version = "0.10", features = ["pem", "std"] }
+pkcs1 = { version = "0.7", features = ["pem"] }
+spki = { version = "0.7", features = ["pem"] }
+sec1 = { version = "0.7", features = ["pem"] }
+signature = "2"
+sha1 = "0.10"
+ctr = "0.9"
+chacha20poly1305 = "0.10"
+# PKCS#12 / PFX 拆包与打包（纯 Rust：rc2/des/cbc/hmac/sha1）。
+p12 = "0.6"
+# 证书有效期计算（rcgen 的 not_before/not_after 用 time::OffsetDateTime）。
+time = "0.3"
+
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
 # 直接从 Chrome profile 的 Cookies 库读登录态（免二开浏览器抢占 profile）：

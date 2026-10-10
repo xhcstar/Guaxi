@@ -1,7 +1,9 @@
 <template>
   <div class="rt-root">
-    <n-tabs v-model:value="activeTab" type="line" class="rt-tabs" pane-class="rt-pane" display-directive="show:lazy">
-      <n-tab-pane name="log">
+    <!-- display-directive 必须加在每个 n-tab-pane 上（它是 pane 的 prop，默认 'if' 会卸载非激活页）；
+         写在 n-tabs 上会被 naive-ui 静默忽略，导致切 Tab 丢终端/GDB 会话/日志。 -->
+    <n-tabs v-model:value="activeTab" type="line" class="rt-tabs" pane-class="rt-pane">
+      <n-tab-pane name="log" display-directive="show:lazy">
         <template #tab><span class="tw-tab"><Icon :icon="fileSearchIcon" width="16" height="16" />日志分析</span></template>
         <div class="rt-log">
           <div class="rt-toolbar">
@@ -304,19 +306,19 @@
         </div>
       </n-tab-pane>
 
-      <n-tab-pane name="terminal">
+      <n-tab-pane name="terminal" display-directive="show:lazy">
         <template #tab><span class="tw-tab"><Icon :icon="terminalIcon" width="16" height="16" />实时终端</span></template>
         <RemoteSshTerminal @open-in-analysis="onReplay" />
       </n-tab-pane>
-      <n-tab-pane name="gdb">
+      <n-tab-pane name="gdb" display-directive="show:lazy">
         <template #tab><span class="tw-tab"><Icon :icon="bugIcon" width="16" height="16" />GDB 调试</span></template>
         <RemoteGdbDebugger />
       </n-tab-pane>
-      <n-tab-pane name="toolbox">
+      <n-tab-pane name="toolbox" display-directive="show:lazy">
         <template #tab><span class="tw-tab"><Icon :icon="wrenchIcon" width="16" height="16" />工具箱</span></template>
         <RemoteToolbox @import-file="onReplay" />
       </n-tab-pane>
-      <n-tab-pane name="network">
+      <n-tab-pane name="network" display-directive="show:lazy">
         <template #tab><span class="tw-tab"><Icon :icon="networkIcon" width="16" height="16" />网络</span></template>
         <RemoteNetworkToolbox />
       </n-tab-pane>
@@ -936,7 +938,7 @@ onBeforeUnmount(() => {
 })</script>
 
 <style scoped>
-.rt-root { height: 100%; display: flex; flex-direction: column; background: var(--guaxi-content-bg); --tw-ui-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif; --tw-mono-font: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace); --tw-accent: #0ca6c0; --tw-accent-2: #1fbfd6; --tw-accent-soft: rgba(12,166,192,0.12); --tw-radius: 10px; --tw-radius-sm: 7px; --tw-code-bg: #0f1720; --tw-code-fg: #d6dee8; --tw-elev: 0 1px 2px rgba(2,12,20,0.12), 0 6px 20px rgba(2,12,20,0.10); font-family: var(--tw-ui-font); font-size: 13px; color: var(--guaxi-text-primary); }
+.rt-root { height: 100%; display: flex; flex-direction: column; background: var(--guaxi-content-bg); --tw-ui-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif; --tw-mono-font: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace); --tw-accent: #0ca6c0; --tw-accent-2: #1fbfd6; --tw-accent-soft: rgba(12,166,192,0.12); --tw-radius: 10px; --tw-radius-sm: 7px; --tw-code-bg: #f6f8fa; --tw-code-fg: #1f2328; --tw-elev: 0 1px 2px rgba(2,12,20,0.12), 0 6px 20px rgba(2,12,20,0.10); font-family: var(--tw-ui-font); font-size: 13px; color: var(--guaxi-text-primary); }
 :root[data-guaxi-theme='dark'] .rt-root { --tw-accent: #3dd6e8; --tw-accent-2: #22b8cf; --tw-accent-soft: rgba(61,214,232,0.14); --tw-code-bg: #0b1118; --tw-code-fg: #d8e0eb; }
 .rt-tabs { height: 100%; display: flex; flex-direction: column; }
 .rt-tabs :deep(.n-tabs-nav) { flex: 0 0 auto; }

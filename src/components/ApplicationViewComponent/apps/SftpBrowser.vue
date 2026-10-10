@@ -37,7 +37,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { Icon } from '@iconify/vue'
@@ -51,10 +51,15 @@ import fileIcon from '@iconify-icons/lucide/file'
 import editIcon from '@iconify-icons/lucide/pencil'
 import trashIcon from '@iconify-icons/lucide/trash-2'
 
-const props = defineProps({ profiles: { type: Array, default: () => [] } })
+const props = defineProps({
+  profiles: { type: Array, default: () => [] },
+  // 当前激活 SSH 会话的档案 id：有值即自动连到同主机的 SFTP（见下方 watch）。
+  activeProfileId: { type: [String, null], default: null },
+})
 const profileId = ref(null)
 const profileOptions = computed(() => props.profiles.map(p => ({ label: p.name || p.host, value: p.id })))
 const sftpId = ref('')
+const connectedProfileId = ref('')
 const cwd = ref('/')
 const entries = ref([])
 const error = ref('')
@@ -80,13 +85,22 @@ async function connect() {
   try {
     const r = await invoke('sftp_connect', { profileId: profileId.value })
     sftpId.value = r.session_id
+    connectedProfileId.value = profileId.value
     cwd.value = r.home || '/'
     await list(cwd.value)
   } catch (e) { error.value = '连接失败: ' + (e?.message || e) } finally { loading.value = false }
 }
 async function disconnect() {
-  if (sftpId.value) { await invoke('sftp_close', { sessionId: sftpId.value }).catch(() => {}); sftpId.value = ''; entries.value = [] }
+  if (sftpId.value) { await invoke('sftp_close', { sessionId: sftpId.value }).catch(() => {}); sftpId.value = ''; connectedProfileId.value = ''; entries.value = [] }
 }
+
+// SSH 连上后自动把 SFTP 连到同一主机；切到别的主机 Tab 时自动重连；该主机会话全关则不动已连接。
+watch(() => props.activeProfileId, async (pid) => {
+  if (!pid || pid === connectedProfileId.value || loading.value) return
+  if (sftpId.value) await disconnect()
+  profileId.value = pid
+  await connect()
+}, { immediate: true })
 async function list(path) {
   if (!sftpId.value) return
   error.value = ''
