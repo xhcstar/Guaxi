@@ -47,7 +47,7 @@ defineProps({
   }
 })
 
-defineEmits(['update:checked-row-keys', 'row-contextmenu'])
+const emit = defineEmits(['update:checked-row-keys', 'row-contextmenu'])
 
 const tableRef = ref(null)
 
@@ -56,7 +56,10 @@ defineExpose({
   sort: (column, order) => tableRef.value?.sort(column, order),
   filter: (filters) => tableRef.value?.filter(filters),
   clearFilters: () => tableRef.value?.filter(null),
-  clearSorter: () => tableRef.value?.sort(null)
+  clearSorter: () => tableRef.value?.sort(null),
+  // naive n-data-table 没有 clearSelection:选中态由父组件通过 checked-row-keys 控制,
+  // 这里发一个空数组让父组件清空选择(修复 resetTableState 调用不存在方法的报错)。
+  clearSelection: () => emit('update:checked-row-keys', [])
 })
 </script>
 

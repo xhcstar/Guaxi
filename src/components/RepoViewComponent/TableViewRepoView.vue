@@ -445,6 +445,10 @@ const sortOptions = [
   { label: '按入库时间排序', key: 'date' },
 ]
 
+// 事件订阅的取消函数（在 async onMounted 内赋值，由同步 onUnmounted 统一清理）
+let repoUnsubscribeClipper = null
+let repoUnsubscribeFilesChanged = null
+
 const {
   showDropdown,
   x,
@@ -752,8 +756,10 @@ onMounted(async () => {
     await eventStore.initGlobalListeners()
     await eventStore.registerEventType('repo_imported_files_changed')
 
-    // 订阅事件（带自动注册）
-    const unsubscribe = eventStore.subscribe(
+    // 订阅事件（带自动注册）；注意:此处位于 async onMounted 的 await 之后,
+    // 不能再调用 onUnmounted（会丢失组件实例并告警）。改为把 unsubscribe 存到外层变量,
+    // 由下方同步注册的 onUnmounted 统一清理。
+    repoUnsubscribeClipper = eventStore.subscribe(
       'add_web_clipper_file_event',
       (payload) => {
         logger.info('处理事件:', payload)
@@ -761,13 +767,10 @@ onMounted(async () => {
       }
     )
 
-    const unsubscribeRepoImportedFilesChanged = eventStore.subscribe(
+    repoUnsubscribeFilesChanged = eventStore.subscribe(
       'repo_imported_files_changed',
       refreshRepoFilesAfterImportChange
     )
-
-    onUnmounted(unsubscribe)
-    onUnmounted(unsubscribeRepoImportedFilesChanged)
   } catch (error) {
     logger.error('事件系统初始化失败:', error)
   }
@@ -778,6 +781,8 @@ onMounted(async () => {
 onUnmounted(() => {
   document.removeEventListener('click', handleGlobalClick, true)
   window.removeEventListener('resize', handleWindowResize)
+  if (typeof repoUnsubscribeClipper === 'function') repoUnsubscribeClipper()
+  if (typeof repoUnsubscribeFilesChanged === 'function') repoUnsubscribeFilesChanged()
 })
 </script>
 
