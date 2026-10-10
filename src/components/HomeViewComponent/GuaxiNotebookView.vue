@@ -1099,7 +1099,9 @@ let disposeNotebookDataLabBridge = null
 let notebookDataLabRpcUnlisten = null
 
 const themeClass = computed(() => (String(props.theme || '').toLowerCase() === 'dark' ? 'theme-dark' : 'theme-light'))
-const isNotebookTopToolbarVisible = computed(() => notebookTopToolbarRevealed.value || notebookSearchVisible.value)
+// 顶部工具条的显隐只由“鼠标靠近顶部 / 聚焦 / 选中 Python Cell”这类自身触发决定，
+// 不再和搜索面板联动：Ctrl+F 只弹查找框，不把工具条一起拽出来（对齐预览模式手感）。
+const isNotebookTopToolbarVisible = computed(() => notebookTopToolbarRevealed.value)
 const activeNotebookPythonCell = computed(() => notebookCells.value.find((cell) => (
   cell?.type === 'python' && String(cell?.key || '') === String(activeNotebookPythonCellKey.value || '')
 )) || null)
@@ -1246,7 +1248,7 @@ const NOTEBOOK_TOP_TOOLBAR_POINTER_IGNORE_SELECTOR = [
 
 // 设计说明：
 // 1. 探索模式顶部工具条默认压缩成极薄的吸顶感应层，只在鼠标靠近顶部或键盘聚焦时展开。
-// 2. 搜索面板打开时强制保持工具条可见，避免搜索条和工具条的 sticky 叠层在滚动时来回跳动。
+// 2. 工具条显隐与搜索面板相互独立，查找框自成浮层（见 .guaxi-notebook__search-panel-shell）。
 const setNotebookTopToolbarRevealed = (visible, reason = 'unknown') => {
   if (notebookTopToolbarRevealed.value === visible) return
   notebookTopToolbarRevealed.value = visible
@@ -1259,10 +1261,6 @@ const revealNotebookTopToolbar = (reason = 'unknown') => {
 }
 
 const hideNotebookTopToolbar = (reason = 'unknown') => {
-  if (notebookSearchVisible.value) {
-    logger.debug('[NotebookToolbar] keep toolbar visible because search panel is active', { reason })
-    return
-  }
   setNotebookTopToolbarRevealed(false, reason)
 }
 
@@ -3612,7 +3610,6 @@ const getNotebookSearchSeedText = () => {
 
 const openNotebookSearch = async ({ seedFromSelection = true } = {}) => {
   const seed = seedFromSelection ? getNotebookSearchSeedText() : ''
-  revealNotebookTopToolbar('open-search')
   notebookSearchVisible.value = true
   if (seed) notebookSearchKeyword.value = seed
   logger.info('[Notebook] open search panel', { seeded: !!seed })
@@ -3628,7 +3625,6 @@ const closeNotebookSearch = () => {
   notebookSearchRegexInvalid.value = false
   logger.info('[Notebook] close search panel')
   clearNotebookSearchHighlights()
-  scheduleHideNotebookTopToolbar('close-search')
 }
 
 const focusNextNotebookSearchMatch = () => {
@@ -9546,10 +9542,10 @@ defineExpose({
 
 .guaxi-notebook__search-panel-shell {
   position: sticky;
-  /* 浮层工具条的视觉高度约 50px（min-height 42px + sticky top 6px + 呼吸位）；
-     这里用这个常量而不是 shell 预留高度来下压查找框，让 Ctrl+F 查找条稳定落在工具条下方——
-     shell 预留高度现在恒为阅读态的 8px，若仍跟它走查找框会顶到工具条身上。 */
-  top: calc(var(--guaxi-notebook-sticky-top) + 50px);
+  /* 查找框自成浮层，贴着顶部右上角（对齐预览模式的 .preview-find-widget：top 8px / 右对齐）。
+     不再 +50px 下压——工具条已不随搜索弹出，无需为它腾出下方空位；
+     工具条若因鼠标靠近顶部而浮现，它居中、查找框靠右，宽视口下互不遮挡。 */
+  top: var(--guaxi-notebook-sticky-top);
   z-index: 24;
   min-height: 36px;
   display: flex;
