@@ -1,7 +1,7 @@
 <template>
   <div class="top-toolbar">
-    <n-space justify="space-between" align="center" :size="8">
-      <n-space class="toolbar-left" :size="4">
+    <n-space justify="space-between" align="center" :size="8" :wrap="false" class="top-toolbar-row">
+      <n-space class="toolbar-left" :size="4" :wrap="false">
         <!-- 转换任务列表按钮 -->
         <n-tooltip trigger="hover">
           <template #trigger>
@@ -90,8 +90,10 @@
         </n-tooltip>
       </n-space>
 
-      <!-- 右侧空间保留 -->
-      <n-space></n-space>
+      <!-- 右侧:表格操作区（视图切换/查重/插件/排序/筛选/导入等,由父组件以图标按钮填入） -->
+      <n-space class="toolbar-right" align="center" :size="4" :wrap="false">
+        <slot name="right" />
+      </n-space>
     </n-space>
   </div>
 </template>

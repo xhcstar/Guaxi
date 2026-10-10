@@ -326,6 +326,30 @@ body {
   overflow: hidden;
 }
 
+/* 统一浮层字体：naive-ui 的下拉菜单 / 抽屉 / 弹窗 / 气泡会 teleport 到 <body>，
+   拿不到页面组件内的字体设置，也不总是跟随 config-provider 的 fontFamily，
+   这里全局强制让这些浮层与主界面同一份字体（--guaxi-editor-font-family）。 */
+.n-dropdown-menu,
+.n-dropdown-menu *,
+.n-drawer,
+.n-drawer *,
+.n-modal,
+.n-modal *,
+.n-popover,
+.n-popover *,
+.n-tooltip,
+.n-tooltip * {
+  font-family: var(
+    --guaxi-editor-font-family,
+    'Maple Mono NF CN',
+    'JetBrainsMono Nerd Font Mono',
+    Consolas,
+    monospace,
+    'Microsoft YaHei',
+    'Courier New'
+  ) !important;
+}
+
 pre,
 .hljs,
 .code-segment {

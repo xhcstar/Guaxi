@@ -4,7 +4,73 @@
     <!-- 顶部工具栏 -->
     <TopToolbar :progresses="progresses" :categorized-progresses="categorizedProgresses" :conversion-tasks="conversionTasks"
       @toggle-task-list="toggleTaskList" @backup-database="backupDatabase" @recover-database="recoverDatabase"
-      @import-items="importItems" @export-items="exportItems" @sync-repo="handleSyncRepo" />
+      @import-items="importItems" @export-items="exportItems" @sync-repo="handleSyncRepo">
+      <!-- 右侧:表格操作区(图标按钮,与左侧图标同一行) -->
+      <template #right>
+        <div class="view-toggle" role="group" aria-label="视图切换">
+          <button class="view-toggle-btn" :class="{ on: viewMode === 'table' }" title="表格视图" @click="setViewMode('table')">
+            <n-icon :component="Table20Regular" :size="16" />
+          </button>
+          <button class="view-toggle-btn" :class="{ on: viewMode === 'shelf' }" title="书架视图" @click="setViewMode('shelf')">
+            <n-icon :component="Library20Regular" :size="16" />
+          </button>
+        </div>
+        <n-tooltip v-if="checkedRowKeys.length" trigger="hover">
+          <template #trigger>
+            <n-button text class="tbl-action-btn tbl-action-btn--danger" @click="handleBatchDelete">
+              <n-icon :component="Delete20Regular" :size="18" />
+            </n-button>
+          </template>删除选中 ({{ checkedRowKeys.length }})
+        </n-tooltip>
+        <n-tooltip v-if="checkedRowKeys.length" trigger="hover">
+          <template #trigger>
+            <n-button text class="tbl-action-btn" @click="handleBatchConvert">
+              <n-icon :component="ArrowSync20Regular" :size="18" />
+            </n-button>
+          </template>批量转换 ({{ checkedRowKeys.length }})
+        </n-tooltip>
+        <n-tooltip trigger="hover">
+          <template #trigger>
+            <n-button text class="tbl-action-btn" @click="handleFindDuplicates">
+              <n-icon :component="DocumentCopy20Regular" :size="18" />
+            </n-button>
+          </template>查重(按文件内容)
+        </n-tooltip>
+        <n-dropdown trigger="click" :options="repoPluginOptions" @select="handleRepoPluginSelect"
+          @update:show="onRepoPluginDropdownShow">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-button text class="tbl-action-btn" :loading="pluginRunning">
+                <n-icon :component="PuzzlePiece20Regular" :size="18" />
+              </n-button>
+            </template>运行插件
+          </n-tooltip>
+        </n-dropdown>
+        <n-dropdown trigger="click" :options="sortOptions" @select="handleSort">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-button text class="tbl-action-btn">
+                <n-icon :component="ArrowSort20Regular" :size="18" />
+              </n-button>
+            </template>排序方式
+          </n-tooltip>
+        </n-dropdown>
+        <n-tooltip trigger="hover">
+          <template #trigger>
+            <n-button text class="tbl-action-btn" @click="handleClearFilters">
+              <n-icon :component="FilterDismiss20Regular" :size="18" />
+            </n-button>
+          </template>清除筛选
+        </n-tooltip>
+        <n-tooltip trigger="hover">
+          <template #trigger>
+            <n-button text class="tbl-action-btn tbl-action-btn--primary" @click="showAddFileModal">
+              <n-icon :component="FolderAdd20Regular" :size="18" />
+            </n-button>
+          </template>导入文件
+        </n-tooltip>
+      </template>
+    </TopToolbar>
 
     <!-- 任务列表抽屉 -->
     <TaskListDrawer :show="showTaskList" @update:show="showTaskList = $event" :progresses="progresses" :categorized-progresses="categorizedProgresses" :clear-failed-tasks="clearFailedTasks" :cancel-sync="cancelSyncTask" :conversion-tasks="conversionTasks" :retry-task="retryConversionTask" :cancel-task="cancelConversionTask" :delete-task="deleteConversionTask" :clear-finished="clearFinishedConversionTasks" />
@@ -36,53 +102,6 @@
     </n-drawer>
 
     <!-- 搜索栏 -->
-
-    <!-- 表格工具栏 + 视图切换 -->
-    <div class="toolbar-container">
-      <div class="view-toggle" role="group" aria-label="视图切换">
-        <button
-          class="view-toggle-btn"
-          :class="{ on: viewMode === 'table' }"
-          title="表格视图"
-          @click="setViewMode('table')"
-        >
-          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-            <path fill="currentColor" d="M3 5h18v2H3V5zm0 6h18v2H3v-2zm0 6h18v2H3v-2z" />
-          </svg>
-          <span>表格</span>
-        </button>
-        <button
-          class="view-toggle-btn"
-          :class="{ on: viewMode === 'shelf' }"
-          title="书架视图"
-          @click="setViewMode('shelf')"
-        >
-          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-            <path fill="currentColor" d="M4 3h3v16H4V3zm4 0h3v16H8V3zm6.4.6l2.9.8l-3.6 13.4l-2.9-.8L14.4 3.6zM4 20h16v1H4v-1z" />
-          </svg>
-          <span>书架</span>
-        </button>
-      </div>
-      <n-button v-if="checkedRowKeys.length" size="small" type="error" secondary class="batch-delete-btn"
-        @click="handleBatchDelete">
-        <template #icon>
-          <n-icon :component="Delete20Regular" :size="16" />
-        </template>
-        删除选中 ({{ checkedRowKeys.length }})
-      </n-button>
-      <n-button v-if="checkedRowKeys.length" size="small" secondary class="batch-convert-btn"
-        @click="handleBatchConvert">
-        批量转换 ({{ checkedRowKeys.length }})
-      </n-button>
-      <n-button size="small" tertiary class="dedup-btn" @click="handleFindDuplicates">
-        查重
-      </n-button>
-      <n-dropdown trigger="click" :options="repoPluginOptions" @select="handleRepoPluginSelect"
-        @update:show="onRepoPluginDropdownShow">
-        <n-button size="small" tertiary class="repo-plugin-btn" :loading="pluginRunning">运行插件</n-button>
-      </n-dropdown>
-      <TableToolbar class="toolbar-flex" @sort="handleSort" @clear-filters="handleClearFilters" @add-file="showAddFileModal" />
-    </div>
 
     <!-- 数据表格容器 -->
     <div v-show="viewMode === 'table'" class="table-container" ref="tableContainerRef">
@@ -129,7 +148,17 @@
 import { createLogger } from '../../utils/logger'
 import { ref, onMounted, onUnmounted, computed, watch, nextTick, h } from 'vue'
 import { useMessage, NButton, NIcon } from 'naive-ui'
-import { Delete20Regular } from '@vicons/fluent'
+import {
+  Delete20Regular,
+  Table20Regular,
+  Library20Regular,
+  DocumentCopy20Regular,
+  PuzzlePiece20Regular,
+  ArrowSort20Regular,
+  FilterDismiss20Regular,
+  FolderAdd20Regular,
+  ArrowSync20Regular,
+} from '@vicons/fluent'
 import { invoke } from '@tauri-apps/api/core'
 import { useConfirm } from './composables/useConfirm.js'
 import { runGuaxiPlugin, listPluginsForSurface } from '../../utils/guaxiPluginRunner'
@@ -142,7 +171,6 @@ import { useEventStore } from '../../stores/eventsStore'
 // Components
 import TopToolbar from './components/TableViewComponents/TopToolbar.vue'
 import TaskListDrawer from './components/TableViewComponents/TaskListDrawer.vue'
-import TableToolbar from './components/TableViewComponents/TableToolbar.vue'
 import DataTable from './components/TableViewComponents/DataTable.vue'
 import ContextMenu from './components/TableViewComponents/ContextMenu.vue'
 import FileShareModal from './components/TableViewComponents/FileShareModal.vue'
@@ -409,6 +437,13 @@ const {
 // ── 文件分享：局域网直达链接 + 二维码（右键「分享」触发）──
 const shareModalVisible = ref(false)
 const shareRow = ref(null)
+
+// 顶部工具栏「排序」下拉选项（原 TableToolbar 内置，这里内联以便图标化放入顶栏）
+const sortOptions = [
+  { label: '按文件名排序', key: 'name' },
+  { label: '按所属文件库排序', key: 'library' },
+  { label: '按入库时间排序', key: 'date' },
+]
 
 const {
   showDropdown,
@@ -756,27 +791,23 @@ onUnmounted(() => {
   font-family: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New');
 }
 
-.toolbar-container {
-  padding: 8px 16px;
-  flex-shrink: 0;
-  background-color: var(--guaxi-panel-bg);
-  border-bottom: 1px solid var(--guaxi-border);
-  display: flex;
+/* 顶栏右侧表格操作区:图标按钮,与左侧 TopToolbar 图标同一行 */
+.tbl-action-btn {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
   align-items: center;
-  gap: 12px;
+  justify-content: center;
+  border-radius: 7px;
+  color: var(--guaxi-text-secondary);
+  transition: color 0.15s ease, background-color 0.15s ease;
 }
-
-.toolbar-flex {
-  flex: 1;
-  min-width: 0;
+.tbl-action-btn:hover {
+  color: var(--n-color-primary, #2dd4bf);
+  background-color: var(--guaxi-hover-bg);
 }
-
-.batch-delete-btn {
-  flex: 0 0 auto;
-  border-radius: 6px;
-  height: 32px;
-  font-weight: 500;
-}
+.tbl-action-btn--danger:hover { color: var(--guaxi-error, #e06c75); }
+.tbl-action-btn--primary { color: var(--n-color-primary, #2dd4bf); }
 
 /* 表格 / 书架 分段切换 */
 .view-toggle {
@@ -790,9 +821,10 @@ onUnmounted(() => {
 .view-toggle-btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
-  height: 28px;
-  padding: 0 12px;
+  height: 26px;
+  padding: 0 8px;
   border: 0;
   border-radius: 6px;
   background: transparent;

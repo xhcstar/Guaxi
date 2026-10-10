@@ -1,7 +1,7 @@
 <template>
-  <n-space justify="space-between" align="center" class="toolbar">
+  <n-space justify="space-between" align="center" class="toolbar" :wrap="false">
     <!-- 左侧操作按钮 -->
-    <n-space class="actions" :size="8">
+    <n-space class="actions" :size="8" :wrap="false">
       <n-dropdown :options="sortOptions" trigger="click" @select="handleSortSelect">
         <n-tooltip trigger="hover">
           <template #trigger>
@@ -100,7 +100,13 @@ const FilterOffIcon = {
 .actions {
   display: flex;
   gap: 4px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+}
+
+.action-button,
+.add-file-button {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .action-button {
