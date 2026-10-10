@@ -109,37 +109,76 @@
 
           <n-tab-pane name="chain" tab="证书链/签发">
             <div class="tb-sec">
+              <div class="tb-h">CA 库（生成后自动记录，签发时直接下拉选，无需粘贴 PEM）</div>
+              <table class="tb-table" v-if="caList.length">
+                <thead><tr><th>名称</th><th>主题</th><th>算法</th><th>类型</th><th></th></tr></thead>
+                <tbody>
+                  <tr v-for="c in caList" :key="c.id">
+                    <td>{{ c.name }}</td>
+                    <td class="tb-res">{{ c.subject_cn }}</td>
+                    <td>{{ c.algo }}</td>
+                    <td>{{ c.is_root ? '根 CA' : '中间 CA' }}</td>
+                    <td><n-button size="tiny" @click="exportCa(c)">导出</n-button> <n-button size="tiny" text @click="deleteCa(c)">删</n-button></td>
+                  </tr>
+                </tbody>
+              </table>
+              <div v-else class="tb-hint">还没有 CA，先在下面"新建 CA"生成一个根 CA。</div>
+              <span v-if="error" class="tb-err">{{ error }}</span>
+            </div>
+
+            <div class="tb-sec">
+              <div class="tb-h">主题信息（新建 CA 与签发终端证书共用，CN 单独填）</div>
               <div class="tb-row">
-                <n-select v-model:value="certProfile" size="small" :options="certProfileOptions" style="width:150px" />
-                <n-input v-model:value="certCn" size="small" placeholder="CN，如 Root CA / server.com" style="width:220px" />
-                <n-input v-model:value="certOrg" size="small" placeholder="组织 O(可空)" style="width:150px" />
-                <n-input-number v-model:value="certDays" size="small" :min="1" :show-button="false" style="width:110px" />
-                <span class="tb-res">天</span>
+                <n-input v-model:value="subjC" size="small" placeholder="国家 C(如 CN)" style="width:110px" />
+                <n-input v-model:value="subjST" size="small" placeholder="省 ST" style="width:130px" />
+                <n-input v-model:value="subjL" size="small" placeholder="市 L" style="width:130px" />
+                <n-input v-model:value="subjO" size="small" placeholder="组织 O" style="width:150px" />
+                <n-input v-model:value="subjOU" size="small" placeholder="部门 OU" style="width:130px" />
               </div>
               <div class="tb-row">
-                <n-input v-model:value="certSans" size="small" placeholder="SAN 逗号分隔(server/client 用)" style="flex:1;min-width:200px" />
-                <n-select v-model:value="certKeyAlgo" size="small" :options="keyAlgoOptions" style="width:130px" />
+                <n-select v-model:value="chainAlgo" size="small" :options="keyAlgoOptions" style="width:120px" />
+                <n-select v-if="chainAlgo==='rsa'" v-model:value="chainBits" size="small" :options="rsaBitsOptions" style="width:110px" />
+                <n-select v-if="chainAlgo==='ec'" v-model:value="chainCurve" size="small" :options="ecCurveOptions" style="width:110px" />
+                <n-input-number v-model:value="chainDays" size="small" :min="1" :show-button="false" style="width:120px" /><span class="tb-res">天</span>
               </div>
-              <div class="tb-h" style="margin-top:4px">颁发者（留空=自签根 CA；填入则由该 CA 签发）</div>
-              <n-input v-model:value="issuerCert" type="textarea" size="small" :rows="3" placeholder="颁发者证书 PEM" />
-              <n-input v-model:value="issuerKey" type="textarea" size="small" :rows="3" placeholder="颁发者私钥 PEM" />
-              <div class="tb-row" style="margin-top:8px">
-                <n-button size="small" type="primary" :loading="certLoading" @click="issueCert">签发证书</n-button>
-                <n-button size="small" :disabled="!certOut" @click="sendToEditor('```\n'+(certKeyOut||'')+certOut+'\n```')">→ 编辑器</n-button>
-                <span class="tb-res">也可在"CSR 签发"里用 CA 直签已有 CSR</span>
-              </div>
+            </div>
+
+            <div class="tb-sec">
+              <div class="tb-h">新建 CA（上级留空=自签根 CA；选上级=生成中间 CA）</div>
               <div class="tb-row">
-                <n-input v-model:value="signCsrPem" type="textarea" size="small" :rows="2" placeholder="已有 CSR PEM（用上面的颁发者签发）" style="flex:1" />
-                <n-button size="small" :loading="signCsrLoading" @click="signCsr">CA 签发此 CSR</n-button>
+                <n-input v-model:value="caName" size="small" placeholder="CA 名称(便于识别)" style="width:190px" />
+                <n-input v-model:value="caCn" size="small" placeholder="CA CN(如 Root CA ECC)" style="width:210px" />
+                <n-select v-model:value="caParent" size="small" :options="caParentOptions" placeholder="上级 CA(空=根)" clearable style="width:200px" />
+                <n-button size="small" type="primary" :loading="caLoading" @click="createCa">生成 CA</n-button>
               </div>
-              <pre class="tb-out" v-if="certKeyOut">{{ certKeyOut }}</pre>
-              <pre class="tb-out" v-if="certOut">{{ certOut }}</pre>
-              <div class="tb-row" style="margin-top:8px">
-                <n-input v-model:value="verifyIssuer" type="textarea" size="small" :rows="2" placeholder="验签：颁发者证书 PEM" style="flex:1" />
-                <n-button size="small" @click="verifyCert">验证 cert 由 issuer 签名</n-button>
-                <span class="tb-res" v-if="verifyResult!==null">{{ verifyResult ? '✓ 验证通过' : '✗ 验证失败' }}</span>
+            </div>
+
+            <div class="tb-sec">
+              <div class="tb-h">签发终端证书（server / client）</div>
+              <div class="tb-row">
+                <n-select v-model:value="issueCaId" size="small" :options="caSelectOptions" placeholder="选择签发 CA" style="width:210px" />
+                <n-select v-model:value="leafProfile" size="small" :options="leafProfileOptions" style="width:120px" />
+                <n-input v-model:value="leafCn" size="small" placeholder="CN(如 server.example.com)" style="width:220px" />
+                <n-input v-model:value="leafSans" size="small" placeholder="SAN 逗号分隔(可空)" style="flex:1;min-width:150px" />
+                <n-button size="small" type="primary" :loading="leafLoading" @click="issueLeaf">签发</n-button>
               </div>
-              <n-input v-model:value="verifyCertPem" type="textarea" size="small" :rows="2" placeholder="验签：待验证证书 PEM（空=用上面签发结果）" />
+              <div class="tb-row" v-if="leafCertOut">
+                <n-button size="small" @click="saveText(leafKeyOut,'server.key')">保存私钥</n-button>
+                <n-button size="small" @click="saveText(leafCertOut,'server.crt')">保存证书</n-button>
+                <n-button size="small" @click="sendToEditor('```\n'+leafKeyOut+leafCertOut+'\n```')">→ 编辑器</n-button>
+              </div>
+              <pre class="tb-out" v-if="leafCertOut">{{ leafKeyOut }}{{ leafCertOut }}</pre>
+            </div>
+
+            <div class="tb-sec">
+              <div class="tb-h">导入已有 CA 到库</div>
+              <div class="tb-row">
+                <n-input v-model:value="importCaName" size="small" placeholder="名称" style="width:160px" />
+                <n-button size="small" @click="pickCaFile('cert')">选证书文件</n-button>
+                <n-button size="small" @click="pickCaFile('key')">选私钥文件</n-button>
+                <n-button size="small" type="primary" :disabled="!importCertPem||!importKeyPem" @click="importCa">导入</n-button>
+                <span class="tb-res">{{ importCertPem?'证书✓':'' }} {{ importKeyPem?'私钥✓':'' }}</span>
+              </div>
             </div>
           </n-tab-pane>
           <n-tab-pane name="pfx" tab="PFX">
@@ -503,40 +542,82 @@ async function genCsr() {
   } catch (e) { error.value = 'CSR 生成失败: ' + (e?.message || e) } finally { csrLoading.value = false }
 }
 
-const certProfile = ref('ca'); const certCn = ref(''); const certOrg = ref(''); const certDays = ref(3650)
-const certSans = ref(''); const certKeyAlgo = ref('ec'); const issuerCert = ref(''); const issuerKey = ref('')
-const certOut = ref(''); const certKeyOut = ref(''); const certLoading = ref(false)
-const signCsrPem = ref(''); const signCsrLoading = ref(false)
-const verifyIssuer = ref(''); const verifyCertPem = ref(''); const verifyResult = ref(null)
-const certProfileOptions = [{ label: 'CA（根/中间）', value: 'ca' }, { label: '服务端', value: 'server' }, { label: '客户端', value: 'client' }]
-async function issueCert() {
-  error.value = ''; certLoading.value = true
-  try {
-    const r = await invoke('crypto_issue_cert', {
-      subjectCn: certCn.value, org: certOrg.value || null,
-      sans: certSans.value.split(',').map(s => s.trim()).filter(Boolean),
-      profile: certProfile.value, days: certDays.value,
-      subjectKeyPem: null, algo: certKeyAlgo.value, rsaBits: 2048, curve: 'p256',
-      issuerCertPem: issuerCert.value.trim() || null, issuerKeyPem: issuerKey.value.trim() || null,
-    })
-    certOut.value = r.cert_pem; certKeyOut.value = r.key_pem || ''
-  } catch (e) { error.value = '签发失败: ' + (e?.message || e) } finally { certLoading.value = false }
+// ---- 证书链/签发：CA 库驱动（后台记录 CA，签发下拉选，无需粘贴 PEM）----
+const subjC = ref('CN'); const subjST = ref(''); const subjL = ref(''); const subjO = ref(''); const subjOU = ref('')
+const chainAlgo = ref('ec'); const chainBits = ref(2048); const chainCurve = ref('p256'); const chainDays = ref(3650)
+const caList = ref([])
+const caName = ref(''); const caCn = ref(''); const caParent = ref(null); const caLoading = ref(false)
+const issueCaId = ref(null); const leafProfile = ref('server'); const leafCn = ref(''); const leafSans = ref('')
+const leafLoading = ref(false); const leafCertOut = ref(''); const leafKeyOut = ref('')
+const importCaName = ref(''); const importCertPem = ref(''); const importKeyPem = ref('')
+const leafProfileOptions = [{ label: '服务端', value: 'server' }, { label: '客户端', value: 'client' }]
+const caSelectOptions = computed(() => caList.value.map(c => ({ label: `${c.name} (${c.is_root ? '根' : '中间'})`, value: c.id })))
+const caParentOptions = computed(() => caList.value.map(c => ({ label: `${c.name}`, value: c.id })))
+function subjectObj(cn) {
+  return { country: subjC.value || null, state: subjST.value || null, locality: subjL.value || null, org: subjO.value || null, orgUnit: subjOU.value || null, commonName: cn }
 }
-async function signCsr() {
+function chainKeyArgs() {
+  return { algo: chainAlgo.value, rsaBits: chainAlgo.value === 'rsa' ? chainBits.value : null, curve: chainAlgo.value === 'ec' ? chainCurve.value : null }
+}
+async function loadCaList() { try { caList.value = await invoke('crypto_ca_list') } catch (e) { error.value = '读 CA 库失败: ' + (e?.message || e) } }
+async function createCa() {
   error.value = ''
-  if (!signCsrPem.value.trim() || !issuerCert.value.trim() || !issuerKey.value.trim()) { error.value = '需要 CSR + 颁发者证书 + 颁发者私钥'; return }
-  signCsrLoading.value = true
+  if (!caName.value.trim() || !caCn.value.trim()) { error.value = '需要 CA 名称 + CN'; return }
+  caLoading.value = true
   try {
-    certOut.value = await invoke('crypto_sign_csr', { csrPem: signCsrPem.value, issuerCertPem: issuerCert.value, issuerKeyPem: issuerKey.value, profile: certProfile.value === 'ca' ? 'server' : certProfile.value, days: certDays.value })
-    certKeyOut.value = ''
-  } catch (e) { error.value = '签发失败: ' + (e?.message || e) } finally { signCsrLoading.value = false }
+    await invoke('crypto_ca_create', { name: caName.value, subject: subjectObj(caCn.value), ...chainKeyArgs(), days: chainDays.value, issuerCaId: caParent.value || null })
+    caName.value = ''; caCn.value = ''
+    await loadCaList()
+  } catch (e) { error.value = '生成 CA 失败: ' + (e?.message || e) } finally { caLoading.value = false }
 }
-async function verifyCert() {
-  error.value = ''; verifyResult.value = null
-  const cert = verifyCertPem.value.trim() || certOut.value
-  if (!cert || !verifyIssuer.value.trim()) { error.value = '需要待验证证书 + 颁发者证书'; return }
-  try { verifyResult.value = await invoke('crypto_verify_cert', { certPem: cert, issuerPem: verifyIssuer.value }) }
-  catch (e) { error.value = '验证失败: ' + (e?.message || e) }
+async function issueLeaf() {
+  error.value = ''; leafCertOut.value = ''; leafKeyOut.value = ''
+  if (!issueCaId.value || !leafCn.value.trim()) { error.value = '需要选择签发 CA + 填 CN'; return }
+  leafLoading.value = true
+  try {
+    const r = await invoke('crypto_issue_from_ca', {
+      caId: issueCaId.value, subject: subjectObj(leafCn.value), profile: leafProfile.value,
+      sans: leafSans.value.split(',').map(s => s.trim()).filter(Boolean), ...chainKeyArgs(), days: chainDays.value,
+    })
+    leafCertOut.value = r.cert_pem; leafKeyOut.value = r.key_pem || ''
+  } catch (e) { error.value = '签发失败: ' + (e?.message || e) } finally { leafLoading.value = false }
+}
+async function exportCa(c) {
+  try {
+    const r = await invoke('crypto_ca_export', { id: c.id })
+    const dir = await save({ title: '保存 CA（选基名，会写 .crt 与 .key）', defaultPath: (c.name || 'ca') + '.crt' })
+    if (!dir) return
+    const base = String(dir).replace(/\.(crt|cer|pem)$/i, '')
+    await writeFile(base + '.crt', new TextEncoder().encode(r.cert_pem))
+    await writeFile(base + '.key', new TextEncoder().encode(r.key_pem))
+    error.value = '已导出: ' + base + '.crt / .key'
+  } catch (e) { error.value = '导出失败: ' + (e?.message || e) }
+}
+async function deleteCa(c) {
+  if (!window.confirm(`从库中删除 CA「${c.name}」？（不影响已签发的证书）`)) return
+  try { await invoke('crypto_ca_delete', { id: c.id }); await loadCaList() } catch (e) { error.value = '删除失败: ' + (e?.message || e) }
+}
+async function pickCaFile(which) {
+  const sel = await open({ multiple: false, directory: false, title: which === 'cert' ? '选择 CA 证书' : '选择 CA 私钥' })
+  if (!sel) return
+  const path = typeof sel === 'string' ? sel : sel?.path
+  try {
+    const txt = new TextDecoder().decode(await readFile(path))
+    if (which === 'cert') importCertPem.value = txt; else importKeyPem.value = txt
+  } catch (e) { error.value = '读取失败: ' + (e?.message || e) }
+}
+async function importCa() {
+  error.value = ''
+  if (!importCaName.value.trim()) { error.value = '需要名称'; return }
+  try {
+    await invoke('crypto_ca_import', { name: importCaName.value, certPem: importCertPem.value, keyPem: importKeyPem.value })
+    importCaName.value = ''; importCertPem.value = ''; importKeyPem.value = ''
+    await loadCaList()
+  } catch (e) { error.value = '导入失败: ' + (e?.message || e) }
+}
+async function saveText(content, defName) {
+  try { const p = await save({ defaultPath: defName }); if (p) { await writeFile(p, new TextEncoder().encode(content)); error.value = '已保存: ' + p } }
+  catch (e) { error.value = '保存失败: ' + (e?.message || e) }
 }
 
 const pfxKey = ref(''); const pfxCerts = ref(''); const pfxBuildPwd = ref(''); const pfxBuildLoading = ref(false)
@@ -665,7 +746,7 @@ async function sendToEditor(content) {
   catch (e) { error.value = '发送失败: ' + (e?.message || e) }
 }
 
-onMounted(async () => { try { profiles.value = await invoke('ssh_list_profiles') } catch (e) { logger.error('profiles', e) } })
+onMounted(async () => { try { profiles.value = await invoke('ssh_list_profiles') } catch (e) { logger.error('profiles', e) } ; loadCaList() })
 
 // J：多机时间轴对齐——导入多份日志，把各自快照按时间戳排到同一条时间线。
 const multiLogs = ref([]) // { name, sessionId, points: [[ts, laneIndex], ...] }

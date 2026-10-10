@@ -227,8 +227,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  /* 与主界面字体保持一致：继承应用默认 UI 字体（无衬线） */
-  font-family: inherit;
+  /* 与主界面统一:复用 App.vue :root 的 --guaxi-editor-font-family（Maple Mono NF CN） */
+  font-family: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New');
 }
 
 .repo-header {
@@ -432,8 +432,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   background: var(--guaxi-panel-bg);
   border: 1px solid rgba(229, 72, 77, 0.4);
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(229, 72, 77, 0.15);
-  /* 与主界面字体保持一致：继承应用默认 UI 字体（无衬线） */
-  font-family: inherit;
+  /* 与主界面统一:复用 App.vue :root 的 --guaxi-editor-font-family（Maple Mono NF CN） */
+  font-family: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New');
   animation: del-pop 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.1) both;
 }
 @keyframes del-pop {

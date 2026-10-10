@@ -31,7 +31,7 @@
     <!-- 插件结果抽屉 -->
     <n-drawer v-model:show="pluginReportDrawerVisible" :width="480" placement="right">
       <n-drawer-content :title="pluginReportTitle || '插件结果'" closable>
-        <pre class="plugin-report">{{ pluginReportText }}</pre>
+        <pre class="plugin-report" style="font-family: inherit">{{ pluginReportText }}</pre>
       </n-drawer-content>
     </n-drawer>
 
@@ -752,8 +752,8 @@ onUnmounted(() => {
   flex-direction: column;
   height: 100%;
   overflow: hidden;
-  /* 与主界面字体保持一致：继承应用默认 UI 字体（无衬线），不再强制等宽字体 */
-  font-family: inherit;
+  /* 与主界面统一:复用 App.vue :root 的 --guaxi-editor-font-family（Maple Mono NF CN） */
+  font-family: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New');
 }
 
 .toolbar-container {

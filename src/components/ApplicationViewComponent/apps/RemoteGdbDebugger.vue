@@ -371,10 +371,16 @@ async function start() {
       attachPid: mode.value === 'attach' ? Number(attachPid.value) : null,
     })
     statusText.value = '已连接'
-    appendConsole('log', mode.value === 'attach' ? `[gdb 已启动，附加到 PID ${attachPid.value}]` : '[gdb 已启动]')
+    appendConsole('log', mode.value === 'attach' ? `[gdb 已启动，正在附加 PID ${attachPid.value}]` : '[gdb 已启动]')
     if (mode.value === 'attach') {
-      // attach 会把进程停住：主动拉一次栈/局部变量/线程/源码。
-      setTimeout(() => { refreshThreads(); refreshStack(); refreshLocals(); refreshSource() }, 300)
+      // 用 MI 命令显式附加：能拿到结构化结果与 *stopped 事件；attach 停住后要手动“继续”才会跑到断点。
+      const r = await runCmd(`-target-attach ${Number(attachPid.value)}`)
+      if (r?.class === 'error') {
+        error.value = '附加失败: ' + (r?.payload?.msg || '可能无权限(需与目标同用户/root)或 PID 不存在')
+      } else {
+        statusText.value = `已附加 PID ${attachPid.value}（已停住，加断点后点"继续"）`
+        await refreshThreads(); await refreshStack(); await refreshLocals(); await refreshSource()
+      }
     }
   } catch (e) { error.value = '启动失败: ' + (e?.message || e) } finally { starting.value = false }
 }

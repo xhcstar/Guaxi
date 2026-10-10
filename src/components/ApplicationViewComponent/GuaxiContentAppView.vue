@@ -40,8 +40,8 @@ import LifeAlbumApp from "./apps/LifeAlbumApp.vue"
 import MusicPlayerApp from "./apps/MusicPlayerApp.vue"
 import LanguageTranslatorApp from "./apps/LanguageTranslatorApp.vue"
 import FileTransferAssistantApp from "./apps/FileTransferAssistantApp.vue"
-import PythonPlaygroundApp from "./apps/PythonPlaygroundApp.vue"
-import PlaceholderApp from "./apps/PlaceholderApp.vue"
+// import PythonPlaygroundApp from "./apps/PythonPlaygroundApp.vue"
+// import PlaceholderApp from "./apps/PlaceholderApp.vue"
 import TODOApp from "./apps/TODO.vue"
 import TTSBookApp from "./apps/TTSBookApp.vue"
 import OcrApp from "./apps/OcrApp.vue"
@@ -133,16 +133,16 @@ const apps = [
     color: 'linear-gradient(135deg, #ff9a9e, #fecfef)',
     component: FileTransferAssistantApp
   },
-  {
-    id: 'tools-python-playground',
-    name: 'Python Playground',
-    category: 'tools',
-    categoryLabel: '工具类',
-    description: '运行/调试 Python 脚本：自动化、数据分析与智能处理',
-    icon: '🐍',
-    color: 'linear-gradient(135deg, #a1c4fd, #c2e9fb)',
-    component: PythonPlaygroundApp
-  },
+  // {
+  //   id: 'tools-python-playground',
+  //   name: 'Python Playground',
+  //   category: 'tools',
+  //   categoryLabel: '工具类',
+  //   description: '运行/调试 Python 脚本：自动化、数据分析与智能处理',
+  //   icon: '🐍',
+  //   color: 'linear-gradient(135deg, #a1c4fd, #c2e9fb)',
+  //   component: PythonPlaygroundApp
+  // },
   {
     id: 'tools-tts-book',
     name: '有声书 / 配音工坊',
@@ -173,16 +173,16 @@ const apps = [
     color: 'linear-gradient(135deg, #30cfd0, #330867)',
     component: RemoteTerminalApp
   },
-  {
-    id: 'work-kanban',
-    name: '任务看板',
-    category: 'work',
-    categoryLabel: '工作类',
-    description: '用看板视图管理任务和进度',
-    icon: '📌',
-    color: 'linear-gradient(135deg, #89f7fe, #66a6ff)',
-    component: PlaceholderApp
-  },
+  // {
+  //   id: 'work-kanban',
+  //   name: '任务看板',
+  //   category: 'work',
+  //   categoryLabel: '工作类',
+  //   description: '用看板视图管理任务和进度',
+  //   icon: '📌',
+  //   color: 'linear-gradient(135deg, #89f7fe, #66a6ff)',
+  //   component: PlaceholderApp
+  // },
   {
     id: 'work-timer',
     name: '简历生成',

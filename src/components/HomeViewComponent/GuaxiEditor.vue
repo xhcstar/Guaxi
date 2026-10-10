@@ -21277,6 +21277,10 @@ const handleExportOrgBlock = async (b) => {
     if (v) parts.push(`Extra Impact: \n${v}`)
   }
   parts.push(field('Review', b.reviewLink))
+  // 用户自定义字段：原样导出（字段名 + 内容），空值输出 N/A，编号列表换行。
+  for (const cf of (b.customFields || [])) {
+    if (cf && cf.name && String(cf.name).trim()) parts.push(field(cf.name, cf.value))
+  }
   try { await navigator.clipboard.writeText(parts.join('\n')); message.success('已复制提交信息') }
   catch { message.error('复制失败') }
 }

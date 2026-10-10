@@ -128,7 +128,7 @@
                 @click.stop
               />
               <span v-else class="otp-card-title" title="单击定位 · 双击改标题" @click="$emit('goto-line', b.blockStartLine)" @dblclick.stop="startTitleEdit(b)" v-html="hl(b.description || b.id || '(未命名)')" />
-              <button class="otp-mini xs" :class="{ ok: flashed === 'desc:' + b.blockStartLine }" title="复制描述" @click.stop="copyDesc(b)">{{ flashed === 'desc:' + b.blockStartLine ? '✓' : '⧉' }}</button>
+              <button class="otp-mini xs" :class="{ ok: flashed === 'desc:' + b.blockStartLine }" title="复制描述" @click.stop="copyDesc(b)">{{ flashed === 'desc:' + b.blockStartLine ? '✓' : '❏' }}</button>
               <!-- 状态：点击弹原生下拉快速切换 -->
               <span class="otp-status-wrap">
                 <span class="otp-status" :class="'st-' + (b.status || 'TODO')">{{ statusLabel(b.status) }}</span>
@@ -231,6 +231,20 @@
                     title="日历选择创建时间"
                     :value="toDateTimeInput(draft.createTime)"
                     @change="onPickCreateTime"
+                  />
+                </div>
+              </label>
+              <label>完成时间
+                <div class="otp-date-field">
+                  <input v-model="draft.completedTime" placeholder="留空则由软件自动计算" />
+                  <span class="otp-date-icon" aria-hidden="true">📅</span>
+                  <input
+                    type="datetime-local"
+                    step="1"
+                    class="otp-date-overlay"
+                    title="日历选择完成时间（留空则自动计算）"
+                    :value="toDateTimeInput(draft.completedTime)"
+                    @change="onPickCompletedTime"
                   />
                 </div>
               </label>
@@ -622,6 +636,9 @@ const cancelEdit = () => {
 }
 const saveEdit = () => {
   draft.done = draft.status === 'DONE' || draft.status === 'CANCELLED'
+  // 完成时间：非完成态不保留完成时间（与后端 backfill 一致）；
+  // 完成态且用户留空 → 保持为空，交由后端在重扫描时自动计算当前时间。
+  if (!draft.done) draft.completedTime = ''
   emit('apply-block', { startLine: draft.blockStartLine, endLine: draft.blockEndLine, text: serializeBlock(draft) })
   editingLine.value = 0
 }
@@ -674,6 +691,11 @@ const onPickDeadline = (e) => {
 const onPickCreateTime = (e) => {
   const m = String(e?.target?.value || '').match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/)
   if (m) draft.createTime = `${m[1]}年${m[2]}月${m[3]}日 ${m[4]}:${m[5]}:${m[6] || '00'}`
+}
+// 完成时间：用户选择即写入；留空则由后端 backfill 在完成态时自动计算。
+const onPickCompletedTime = (e) => {
+  const m = String(e?.target?.value || '').match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/)
+  if (m) draft.completedTime = `${m[1]}年${m[2]}月${m[3]}日 ${m[4]}:${m[5]}:${m[6] || '00'}`
 }
 
 // ── 光标同步：滚动到激活块 ──

@@ -287,16 +287,17 @@ pub async fn gdb_mi_start(
         .map_err(|e| format!("打开 gdb 通道失败: {e}"))?;
 
     // 组装远端命令：
-    //  - 附加进程：gdb -q -nx -i=mi [program] -p PID（program 可空，仅供符号；否则取 /proc/PID/exe）
+    //  - 附加进程：gdb -q -nx -i=mi [program]（program 可空，仅供符号）。
+    //    注意：不在命令行用 `-p PID` —— 那样 attach 发生在 MI 前端订阅之前，*stopped 事件丢失、
+    //    且 attach 失败只打印到控制台。改由前端在会话建立后发 `-target-attach PID`，拿到结构化结果与停住事件。
     //  - 启动程序：gdb -q -nx -i=mi --args program args...
     //  - 仅连 gdb：gdb -q -nx -i=mi
     let mut cmd = String::from("gdb -q -nx -i=mi");
-    if let Some(pid) = attach_pid {
+    if attach_pid.is_some() {
         if let Some(prog) = program.as_ref().filter(|s| !s.trim().is_empty()) {
             cmd.push(' ');
             cmd.push_str(&shell_quote(prog));
         }
-        cmd.push_str(&format!(" -p {pid}"));
     } else if let Some(prog) = program.as_ref().filter(|s| !s.trim().is_empty()) {
         cmd.push_str(" --args ");
         cmd.push_str(&shell_quote(prog));

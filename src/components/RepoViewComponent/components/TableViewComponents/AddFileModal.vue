@@ -1,7 +1,7 @@
 // AddFileModal.vue
 <template>
   <n-modal :show="show" @update:show="$emit('update:show', $event)" title="添加文件" preset="dialog" :mask-closable="false"
-    :closable="false" class="add-file-modal" style="width: 90%; max-width: 800px;">
+    :closable="false" class="add-file-modal" style="width: 90%; max-width: 800px; font-family: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New');">
     <n-form :model="form" :rules="rules" label-placement="left" label-width="auto" label-align="right" size="medium"
       ref="formRef" class="custom-form">
       <n-form-item v-for="column in formColumns" :key="column.key" :label="column.title" :path="column.key"
@@ -280,6 +280,8 @@ const formColumns = computed(() => {
   padding: 20px 0;
   max-height: 70vh;
   overflow-y: auto;
+  /* 与主界面统一:复用 App.vue :root 的 --guaxi-editor-font-family（Maple Mono NF CN） */
+  font-family: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New');
 }
 
 .form-item {
@@ -310,6 +312,7 @@ const formColumns = computed(() => {
   border-radius: 6px;
   transition: all 0.2s ease;
   min-width: 80px;
+  font-family: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New');
 }
 
 .submit-button:hover {
@@ -324,6 +327,7 @@ const formColumns = computed(() => {
   border-radius: 6px;
   transition: all 0.2s ease;
   min-width: 80px;
+    font-family: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New');
 }
 
 .cancel-button:hover {

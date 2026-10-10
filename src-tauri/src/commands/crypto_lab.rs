@@ -4,9 +4,12 @@
 //! 对称/非对称加解密、签名验签走 RustCrypto；PFX 拆打包走 p12。
 //! 解析复用 x509-parser / pkcs8 / sec1。文件导入由前端 plugin-fs 读入后传 base64/PEM。
 
+use std::path::PathBuf;
+
 use base64::Engine;
-use serde::Serialize;
-use tauri::command;
+use serde::{Deserialize, Serialize};
+use tauri::{command, AppHandle, Manager};
+use uuid::Uuid;
 
 fn b64() -> base64::engine::general_purpose::GeneralPurpose {
     base64::engine::general_purpose::STANDARD
@@ -636,6 +639,263 @@ pub fn crypto_hash(algo: String, data_b64: String) -> Result<String, String> {
         a => return Err(format!("不支持的散列: {a}")),
     };
     Ok(hex_out)
+}
+
+// ============================ CA 库（后台记录 CA，签发时下拉选择，无需粘贴 PEM） ============================
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Subject {
+    #[serde(default)]
+    pub country: Option<String>,
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default)]
+    pub locality: Option<String>,
+    #[serde(default)]
+    pub org: Option<String>,
+    #[serde(default)]
+    pub org_unit: Option<String>,
+    pub common_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaEntry {
+    pub id: String,
+    pub name: String,
+    pub algo: String,
+    pub subject_cn: String,
+    pub cert_pem: String,
+    pub key_pem: String,
+    pub is_root: bool,
+    #[serde(default)]
+    pub parent_id: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct CaSummary {
+    pub id: String,
+    pub name: String,
+    pub algo: String,
+    pub subject_cn: String,
+    pub is_root: bool,
+    pub parent_id: Option<String>,
+}
+
+fn ca_summary(e: &CaEntry) -> CaSummary {
+    CaSummary {
+        id: e.id.clone(),
+        name: e.name.clone(),
+        algo: e.algo.clone(),
+        subject_cn: e.subject_cn.clone(),
+        is_root: e.is_root,
+        parent_id: e.parent_id.clone(),
+    }
+}
+
+fn ca_store_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("取应用数据目录失败: {e}"))?
+        .join("crypto_lab");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("建目录失败: {e}"))?;
+    Ok(dir.join("ca_store.json"))
+}
+
+fn read_cas(app: &AppHandle) -> Result<Vec<CaEntry>, String> {
+    let p = ca_store_path(app)?;
+    if !p.exists() {
+        return Ok(Vec::new());
+    }
+    let data = std::fs::read_to_string(&p).map_err(|e| format!("读 CA 库失败: {e}"))?;
+    serde_json::from_str(&data).map_err(|e| format!("解析 CA 库失败: {e}"))
+}
+
+fn write_cas(app: &AppHandle, cas: &[CaEntry]) -> Result<(), String> {
+    let p = ca_store_path(app)?;
+    let json = serde_json::to_string_pretty(cas).map_err(|e| e.to_string())?;
+    std::fs::write(&p, json).map_err(|e| format!("写 CA 库失败: {e}"))
+}
+
+fn dn_from_subject(s: &Subject) -> DistinguishedName {
+    let mut dn = DistinguishedName::new();
+    for (t, v) in [
+        (DnType::CountryName, &s.country),
+        (DnType::StateOrProvinceName, &s.state),
+        (DnType::LocalityName, &s.locality),
+        (DnType::OrganizationName, &s.org),
+        (DnType::OrganizationalUnitName, &s.org_unit),
+    ] {
+        if let Some(x) = v.as_ref().filter(|x| !x.trim().is_empty()) {
+            dn.push(t, x.clone());
+        }
+    }
+    dn.push(DnType::CommonName, s.common_name.clone());
+    dn
+}
+
+fn push_sans(p: &mut CertificateParams, sans: &[String]) -> Result<(), String> {
+    for s in sans.iter().filter(|s| !s.trim().is_empty()) {
+        if let Ok(ip) = s.parse::<std::net::IpAddr>() {
+            p.subject_alt_names.push(SanType::IpAddress(ip));
+        } else {
+            let ia5 = s.clone().try_into().map_err(|_| format!("非法 DNS SAN: {s}"))?;
+            p.subject_alt_names.push(SanType::DnsName(ia5));
+        }
+    }
+    Ok(())
+}
+
+/// 重建一个 CA 的 rcgen Issuer 证书（用于读取 DN + 用其私钥签名）。
+fn ca_issuer(ca: &CaEntry) -> Result<(KeyPair, rcgen::Certificate), String> {
+    let kp = KeyPair::from_pem(&ca.key_pem).map_err(|e| format!("载入 CA 私钥失败: {e}"))?;
+    let params = CertificateParams::from_ca_cert_pem(&ca.cert_pem)
+        .map_err(|e| format!("解析 CA 证书失败: {e}"))?;
+    let cert = params.self_signed(&kp).map_err(|e| format!("重建 CA 失败: {e}"))?;
+    Ok((kp, cert))
+}
+
+#[command]
+pub fn crypto_ca_list(app: AppHandle) -> Result<Vec<CaSummary>, String> {
+    Ok(read_cas(&app)?.iter().map(ca_summary).collect())
+}
+
+/// 新建 CA：issuer_ca_id 为空=自签根 CA；否则由该 CA 签发为中间 CA。后台记录 cert+key。
+#[command]
+#[allow(clippy::too_many_arguments)]
+pub fn crypto_ca_create(
+    app: AppHandle,
+    name: String,
+    subject: Subject,
+    algo: String,
+    rsa_bits: Option<u32>,
+    curve: Option<String>,
+    days: i64,
+    issuer_ca_id: Option<String>,
+) -> Result<CaSummary, String> {
+    let (kp, priv_pem, _pub) = gen_keypair(&algo, rsa_bits, curve)?;
+    let mut params = CertificateParams::default();
+    params.distinguished_name = dn_from_subject(&subject);
+    apply_profile(&mut params, "ca", days);
+
+    let mut cas = read_cas(&app)?;
+    let (cert_pem, is_root, parent_id) = match issuer_ca_id.filter(|s| !s.is_empty()) {
+        Some(pid) => {
+            let parent = cas.iter().find(|c| c.id == pid).ok_or("上级 CA 不存在")?.clone();
+            let (issuer_kp, issuer_cert) = ca_issuer(&parent)?;
+            let cert = params
+                .signed_by(&kp, &issuer_cert, &issuer_kp)
+                .map_err(|e| format!("中间 CA 签发失败: {e}"))?;
+            (cert.pem(), false, Some(pid))
+        }
+        None => {
+            let cert = params.self_signed(&kp).map_err(|e| format!("根 CA 自签失败: {e}"))?;
+            (cert.pem(), true, None)
+        }
+    };
+    let entry = CaEntry {
+        id: Uuid::new_v4().to_string(),
+        name,
+        algo,
+        subject_cn: subject.common_name,
+        cert_pem,
+        key_pem: priv_pem,
+        is_root,
+        parent_id,
+    };
+    let summary = ca_summary(&entry);
+    cas.push(entry);
+    write_cas(&app, &cas)?;
+    Ok(summary)
+}
+
+#[command]
+pub fn crypto_ca_import(
+    app: AppHandle,
+    name: String,
+    cert_pem: String,
+    key_pem: String,
+) -> Result<CaSummary, String> {
+    let probe = CaEntry {
+        id: String::new(),
+        name: String::new(),
+        algo: String::new(),
+        subject_cn: String::new(),
+        cert_pem: cert_pem.clone(),
+        key_pem: key_pem.clone(),
+        is_root: true,
+        parent_id: None,
+    };
+    let _ = ca_issuer(&probe)?;
+    let der = pem_to_der_of(&cert_pem, "CERTIFICATE")?;
+    let subject_cn = x509_parser::parse_x509_certificate(&der)
+        .ok()
+        .map(|(_, c)| c.subject().to_string())
+        .unwrap_or_default();
+    let mut cas = read_cas(&app)?;
+    let entry = CaEntry {
+        id: Uuid::new_v4().to_string(),
+        name,
+        algo: "imported".into(),
+        subject_cn,
+        cert_pem,
+        key_pem,
+        is_root: true,
+        parent_id: None,
+    };
+    let summary = ca_summary(&entry);
+    cas.push(entry);
+    write_cas(&app, &cas)?;
+    Ok(summary)
+}
+
+#[command]
+pub fn crypto_ca_delete(app: AppHandle, id: String) -> Result<(), String> {
+    let mut cas = read_cas(&app)?;
+    cas.retain(|c| c.id != id);
+    write_cas(&app, &cas)
+}
+
+#[derive(Serialize)]
+pub struct CaExport {
+    pub cert_pem: String,
+    pub key_pem: String,
+}
+
+#[command]
+pub fn crypto_ca_export(app: AppHandle, id: String) -> Result<CaExport, String> {
+    let cas = read_cas(&app)?;
+    let ca = cas.iter().find(|c| c.id == id).ok_or("CA 不存在")?;
+    Ok(CaExport { cert_pem: ca.cert_pem.clone(), key_pem: ca.key_pem.clone() })
+}
+
+/// 用库里的 CA 直接签发 server/client 终端证书，返回证书 + 新生成私钥。
+#[command]
+#[allow(clippy::too_many_arguments)]
+pub fn crypto_issue_from_ca(
+    app: AppHandle,
+    ca_id: String,
+    subject: Subject,
+    profile: String,
+    sans: Vec<String>,
+    algo: String,
+    rsa_bits: Option<u32>,
+    curve: Option<String>,
+    days: i64,
+) -> Result<IssueResult, String> {
+    let cas = read_cas(&app)?;
+    let ca = cas.iter().find(|c| c.id == ca_id).ok_or("签发 CA 不存在")?;
+    let (kp, priv_pem, _pub) = gen_keypair(&algo, rsa_bits, curve)?;
+    let mut params = CertificateParams::default();
+    params.distinguished_name = dn_from_subject(&subject);
+    push_sans(&mut params, &sans)?;
+    apply_profile(&mut params, &profile, days);
+    let (issuer_kp, issuer_cert) = ca_issuer(ca)?;
+    let cert = params
+        .signed_by(&kp, &issuer_cert, &issuer_kp)
+        .map_err(|e| format!("签发失败: {e}"))?;
+    Ok(IssueResult { cert_pem: cert.pem(), key_pem: Some(priv_pem) })
 }
 
 

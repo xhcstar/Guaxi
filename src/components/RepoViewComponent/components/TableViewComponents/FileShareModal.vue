@@ -123,6 +123,8 @@ watch(
 .fsm-card {
   width: 420px;
   max-width: 92vw;
+  /* 与主界面统一字体 */
+  font-family: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New');
   background: var(--guaxi-panel-bg);
   border: 1px solid var(--guaxi-border);
   border-radius: 12px;

@@ -81,11 +81,11 @@
             </button>
             <button type="button" class="feature-card" @click="scrollToSection('task')">
               <div class="feature-title">任务管理</div>
-              <div class="feature-desc">工作/生活/学习分类，看板、日历、统计，Org/JSON 导入，报表导出，任务库 Git 同步。</div>
+              <div class="feature-desc">工作/生活/学习分类、日历、统计，Org/JSON 导入，报表导出，任务库 Git 同步。</div>
             </button>
             <button type="button" class="feature-card" @click="scrollToSection('apps')">
               <div class="feature-title">应用与工具</div>
-              <div class="feature-desc">相册、TO DO、音乐、翻译、文件传输、Python Playground、有声书/配音工坊，以及数据与数学工作区。</div>
+              <div class="feature-desc">相册、TO DO、音乐、翻译、文件传输、有声书/配音工坊。</div>
             </button>
             <button type="button" class="feature-card" @click="scrollToSection('setting')">
               <div class="feature-title">设置与同步</div>
@@ -500,11 +500,9 @@
             <li>音乐播放器：播放本地或在线音乐，支持播放列表和收藏。</li>
             <li>翻译助手：多语言互译与单词收藏，配合语言学习记录使用。</li>
             <li>文件传输助手：接收服务、局域网发现、HTTP 直连、WebRTC 房间码、任务暂停/继续/取消、目录 HTTP 分享。</li>
-            <li>Python Playground：运行和调试 Python 脚本，可用于自动化、数据分析和智能处理。</li>
             <li>有声书 / 配音工坊：导入 PDF、Word、Markdown、TXT、EPUB，清洗文本并合成语音，支持队列、暂停、停止和音频播放。</li>
             <li>模板管理：维护 Markdown 模板，支持默认模板、新建、导入、编辑、删除和插入到编辑器。</li>
             <li>PPT 制作与管理：基于 Slidev 管理演示源文件，支持目录树、轻量编辑器、预览服务、导出 PPTX 和从知识库材料插入卡片。</li>
-            <li>数据实验室 / 数学工作区：围绕 Python 变量、表格、结构视图、分析方法、图表和报告生成展开，适合数据分析和数学笔记。</li>
           </ul>
 
           <div class="figure">

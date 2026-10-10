@@ -88,8 +88,8 @@ const handleClickOutside = () => {
   background: var(--guaxi-header-bg);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.22);
   pointer-events: auto;
-  /* 与主界面字体保持一致：继承应用默认 UI 字体（无衬线），不再强制等宽字体 */
-  font-family: inherit;
+  /* 与主界面统一:复用 App.vue :root 的 --guaxi-editor-font-family（Maple Mono NF CN） */
+  font-family: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New');
   /* 取消内部垂直滚动条：完整显示所有条目（不截断） */
   max-height: none !important;
 }

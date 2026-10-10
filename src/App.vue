@@ -131,6 +131,12 @@ const themeOverrides = computed(() => {
   const p = settingsStore.appearanceTheme === 'dark' ? ONE_DARK : ONE_DARK_LIGHT
   return {
     common: {
+      // 全局统一 UI 字体:与主界面 / 编辑器同一份（--guaxi-editor-font-family，Maple Mono NF CN）。
+      // naive-ui 的下拉菜单、抽屉、弹窗等会 teleport 到 body,只有通过 config-provider 的
+      // common.fontFamily 才能让这些浮层也跟随同一字体,否则会回退到 naive-ui 默认无衬线字体,
+      // 造成「表格是等宽、右键菜单/抽屉却是另一种字体」的不一致。
+      fontFamily:
+        "'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New'",
       primaryColor: p.primary,
       primaryColorHover: p.primary,
       primaryColorPressed: p.primary,
