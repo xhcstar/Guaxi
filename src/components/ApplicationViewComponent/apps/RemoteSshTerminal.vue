@@ -229,7 +229,6 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { save } from '@tauri-apps/plugin-dialog'
 import { writeText, readText } from '@tauri-apps/plugin-clipboard-manager'
-import { writeTextFile } from '@tauri-apps/plugin-fs'
 import { useSettingsStore } from '../../../stores/settingsStore'
 import { Terminal } from 'xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -380,7 +379,7 @@ async function doSave() {
   for (let i = 0; i < buf.length; i++) { const l = buf.getLine(i); lines.push(l ? l.translateToString(true) : '') }
   const path = await save({ title: '保存终端内容', defaultPath: 'terminal.log' }).catch(() => null)
   if (!path) return
-  try { await writeTextFile(path, lines.join('\n')); searchInfo.value = '已保存' } catch (_) { searchInfo.value = '保存失败' }
+  try { await invoke('write_file_content', { path, content: lines.join('\n') }); searchInfo.value = '已保存' } catch (_) { searchInfo.value = '保存失败' }
 }
 function startRecord() { recordBuf.value = ''; recording.value = true }
 function stopRecord() {

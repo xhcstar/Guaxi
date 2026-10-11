@@ -79,34 +79,6 @@
             </div>
           </n-tab-pane>
 
-          <n-tab-pane name="key" tab="密钥生成">
-            <div class="tb-sec">
-              <div class="tb-row">
-                <n-select v-model:value="keyAlgo" size="small" :options="keyAlgoOptions" style="width:140px" />
-                <n-select v-if="keyAlgo==='rsa'" v-model:value="rsaBits" size="small" :options="rsaBitsOptions" style="width:120px" />
-                <n-select v-if="keyAlgo==='ec'" v-model:value="ecCurve" size="small" :options="ecCurveOptions" style="width:120px" />
-                <n-button size="small" type="primary" :loading="keyLoading" @click="genKey">生成密钥</n-button>
-                <n-button size="small" :disabled="!genPrivPem" @click="sendToEditor('```\n'+genPrivPem+'\n'+genPubPem+'\n```')">→ 编辑器</n-button>
-              </div>
-              <pre class="tb-out" v-if="genPrivPem">{{ genPrivPem }}{{ genPubPem }}</pre>
-            </div>
-          </n-tab-pane>
-          <n-tab-pane name="csr" tab="CSR">
-            <div class="tb-sec">
-              <div class="tb-row">
-                <n-input v-model:value="csrCn" size="small" placeholder="CN 通用名，如 example.com" style="width:220px" />
-                <n-input v-model:value="csrOrg" size="small" placeholder="组织 O(可空)" style="width:160px" />
-                <n-input v-model:value="csrSans" size="small" placeholder="SAN 逗号分隔: a.com,10.0.0.1" style="flex:1;min-width:200px" />
-              </div>
-              <n-input v-model:value="csrKey" type="textarea" size="small" :rows="4" placeholder="私钥 PEM（留空用上面生成的密钥）" />
-              <div class="tb-row" style="margin-top:8px">
-                <n-button size="small" type="primary" :loading="csrLoading" @click="genCsr">生成 CSR</n-button>
-                <n-button size="small" :disabled="!csrOut" @click="sendToEditor('```\n'+csrOut+'\n```')">→ 编辑器</n-button>
-              </div>
-              <pre class="tb-out" v-if="csrOut">{{ csrOut }}</pre>
-            </div>
-          </n-tab-pane>
-
           <n-tab-pane name="chain" tab="证书链/签发">
             <div class="tb-sec">
               <div class="tb-h">CA 库（生成后自动记录，签发时直接下拉选，无需粘贴 PEM）</div>
@@ -180,6 +152,40 @@
                 <span class="tb-res">{{ importCertPem?'证书✓':'' }} {{ importKeyPem?'私钥✓':'' }}</span>
               </div>
             </div>
+
+            <div class="tb-sec">
+              <div class="tb-h">独立密钥 / CSR / 签名验签（即用即生成，可保存）</div>
+              <div class="tb-row">
+                <span class="tb-res">密钥</span>
+                <n-select v-model:value="keyAlgo" size="small" :options="keyAlgoOptions" style="width:120px" />
+                <n-select v-if="keyAlgo==='rsa'" v-model:value="rsaBits" size="small" :options="rsaBitsOptions" style="width:100px" />
+                <n-select v-if="keyAlgo==='ec'" v-model:value="ecCurve" size="small" :options="ecCurveOptions" style="width:100px" />
+                <n-button size="small" type="primary" :loading="keyLoading" @click="genKey">生成密钥</n-button>
+                <n-button size="small" :disabled="!genPrivPem" @click="saveText(genPrivPem,'key.key')">保存私钥</n-button>
+                <n-button size="small" :disabled="!genPubPem" @click="saveText(genPubPem,'key.pub')">保存公钥</n-button>
+              </div>
+              <pre class="tb-out" v-if="genPrivPem">{{ genPrivPem }}{{ genPubPem }}</pre>
+              <div class="tb-row" style="margin-top:6px">
+                <span class="tb-res">CSR</span>
+                <n-input v-model:value="csrCn" size="small" placeholder="CN" style="width:180px" />
+                <n-input v-model:value="csrSans" size="small" placeholder="SAN 逗号分隔" style="width:220px" />
+                <n-button size="small" :loading="csrLoading" @click="genCsr">生成 CSR(用上面密钥)</n-button>
+                <n-button size="small" :disabled="!csrOut" @click="saveText(csrOut,'request.csr')">保存 CSR</n-button>
+              </div>
+              <pre class="tb-out" v-if="csrOut">{{ csrOut }}</pre>
+              <div class="tb-row" style="margin-top:6px">
+                <span class="tb-res">签名验签</span>
+                <n-select v-model:value="signScheme" size="small" :options="signSchemeOptions" style="width:180px" />
+                <n-checkbox v-model:checked="signTextInput" size="small">明文输入</n-checkbox>
+                <n-button size="small" type="primary" @click="runSign">签名</n-button>
+                <n-button size="small" @click="runVerify">验签</n-button>
+                <span class="tb-res" v-if="signVerifyResult!==null">{{ signVerifyResult ? '✓ 通过' : '✗ 失败' }}</span>
+              </div>
+              <n-input v-model:value="signKey" type="textarea" size="small" :rows="2" placeholder="签名=私钥 PEM / 验签=公钥 PEM（空=用上面生成的密钥）" />
+              <n-input v-model:value="signData" type="textarea" size="small" :rows="2" placeholder="原始数据" />
+              <n-input v-model:value="signSig" size="small" placeholder="签名(base64)" />
+              <pre class="tb-out" v-if="signOut">{{ signOut }}</pre>
+            </div>
           </n-tab-pane>
           <n-tab-pane name="pfx" tab="PFX">
             <div class="tb-sec">
@@ -193,67 +199,60 @@
             </div>
           </n-tab-pane>
 
-          <n-tab-pane name="sym" tab="对称加解密">
-            <div class="tb-sec">
-              <div class="tb-row">
-                <n-select v-model:value="symAlgo" size="small" :options="symAlgoOptions" style="width:150px" />
-                <n-select v-if="symAlgo==='aes'" v-model:value="symMode" size="small" :options="symModeOptions" style="width:110px" />
-                <n-input v-model:value="symKey" size="small" placeholder="key(hex)" style="width:200px" />
-                <n-input v-model:value="symIv" size="small" placeholder="iv/nonce(hex)" style="width:160px" />
-              </div>
-              <n-input v-model:value="symData" type="textarea" size="small" :rows="3" placeholder="数据（加密=base64 或文本；解密=base64 密文）" />
-              <div class="tb-row" style="margin-top:8px">
-                <n-input v-if="symMode==='gcm'||symAlgo==='chacha20poly1305'" v-model:value="symAad" size="small" placeholder="AAD(hex, 可空)" style="width:200px" />
-                <n-checkbox v-model:checked="symTextInput" size="small">输入是明文(非base64)</n-checkbox>
-                <n-button size="small" type="primary" @click="runSym(true)">加密</n-button>
-                <n-button size="small" @click="runSym(false)">解密</n-button>
-              </div>
-              <pre class="tb-out" v-if="symOut">{{ symOut }}</pre>
-            </div>
-          </n-tab-pane>
+          <n-tab-pane name="crypt" tab="加解密">
+            <n-tabs type="segment" size="small" v-model:value="cryptTab" style="margin-top:4px">
+              <n-tab-pane name="sym" tab="对称加解密">
+                <div class="tb-sec">
+                  <div class="tb-row">
+                    <n-select v-model:value="symAlgo" size="small" :options="symAlgoOptions" style="width:170px" />
+                    <n-select v-if="symAlgo==='aes'" v-model:value="symMode" size="small" :options="symModeOptions" style="width:100px" />
+                    <n-select v-if="symAlgo==='aes'" v-model:value="symKeyBits" size="small" :options="aesKeyBitsOptions" style="width:110px" />
+                  </div>
+                  <div class="tb-row">
+                    <n-input v-model:value="symKey" size="small" :placeholder="`key(hex, ${symKeyLen()}字节)`" style="width:230px" />
+                    <n-button size="tiny" @click="genSymKey">生成Key</n-button>
+                    <n-input v-model:value="symIv" size="small" :placeholder="`iv/nonce(hex, ${symIvLen()}字节)`" style="width:200px" />
+                    <n-button size="tiny" @click="genSymIv">生成IV</n-button>
+                  </div>
+                  <div class="tb-hint">提示：AES 密钥 16/24/32 字节=128/192/256 位；CBC/CTR 的 IV 16 字节；GCM / ChaCha20 的 nonce 12 字节。参数可手填或点"生成"用安全随机。</div>
+                  <n-input v-model:value="symData" type="textarea" size="small" :rows="3" placeholder="数据（加密=勾选明文则填文本，否则填 base64；解密=base64 密文）" />
+                  <div class="tb-row" style="margin-top:8px">
+                    <n-input v-if="symMode==='gcm'||symAlgo==='chacha20poly1305'" v-model:value="symAad" size="small" placeholder="AAD(hex, 可空)" style="width:200px" />
+                    <n-checkbox v-model:checked="symTextInput" size="small">输入是明文(非base64)</n-checkbox>
+                    <n-button size="small" type="primary" @click="runSym(true)">加密</n-button>
+                    <n-button size="small" @click="runSym(false)">解密</n-button>
+                  </div>
+                  <pre class="tb-out" v-if="symOut">{{ symOut }}</pre>
+                </div>
+              </n-tab-pane>
 
-          <n-tab-pane name="asym" tab="RSA 加解密">
-            <div class="tb-sec">
-              <div class="tb-row">
-                <n-select v-model:value="rsaScheme" size="small" :options="rsaSchemeOptions" style="width:150px" />
-                <n-checkbox v-model:checked="rsaTextInput" size="small">输入是明文(非base64)</n-checkbox>
-                <n-button size="small" type="primary" @click="runRsa('encrypt')">公钥加密</n-button>
-                <n-button size="small" @click="runRsa('decrypt')">私钥解密</n-button>
-              </div>
-              <n-input v-model:value="rsaKey" type="textarea" size="small" :rows="3" placeholder="公钥 PEM(加密) / 私钥 PEM(解密)" />
-              <n-input v-model:value="rsaData" type="textarea" size="small" :rows="2" placeholder="数据" />
-              <pre class="tb-out" v-if="rsaOut">{{ rsaOut }}</pre>
-            </div>
-          </n-tab-pane>
+              <n-tab-pane name="asym" tab="非对称(RSA)">
+                <div class="tb-sec">
+                  <div class="tb-row">
+                    <n-select v-model:value="rsaScheme" size="small" :options="rsaSchemeOptions" style="width:160px" />
+                    <n-checkbox v-model:checked="rsaTextInput" size="small">输入是明文(非base64)</n-checkbox>
+                    <n-button size="small" type="primary" @click="runRsa('encrypt')">公钥加密</n-button>
+                    <n-button size="small" @click="runRsa('decrypt')">私钥解密</n-button>
+                  </div>
+                  <div class="tb-hint">公钥加密、私钥解密；RSA 单次加密明文长度受密钥位数限制（OAEP/SHA-256 下 2048 位约 190 字节）。大数据请用对称密钥 + RSA 封装。</div>
+                  <n-input v-model:value="rsaKey" type="textarea" size="small" :rows="3" placeholder="公钥 PEM(加密) / 私钥 PEM(解密)" />
+                  <n-input v-model:value="rsaData" type="textarea" size="small" :rows="2" placeholder="数据" />
+                  <pre class="tb-out" v-if="rsaOut">{{ rsaOut }}</pre>
+                </div>
+              </n-tab-pane>
 
-          <n-tab-pane name="sign" tab="签名/验签">
-            <div class="tb-sec">
-              <div class="tb-row">
-                <n-select v-model:value="signScheme" size="small" :options="signSchemeOptions" style="width:190px" />
-                <n-checkbox v-model:checked="signTextInput" size="small">输入是明文(非base64)</n-checkbox>
-              </div>
-              <n-input v-model:value="signKey" type="textarea" size="small" :rows="3" placeholder="签名=私钥 PEM / 验签=公钥 PEM" />
-              <n-input v-model:value="signData" type="textarea" size="small" :rows="2" placeholder="原始数据" />
-              <div class="tb-row" style="margin-top:8px">
-                <n-button size="small" type="primary" @click="runSign">签名</n-button>
-                <n-input v-model:value="signSig" size="small" placeholder="签名(base64)" style="flex:1" />
-                <n-button size="small" @click="runVerify">验签</n-button>
-                <span class="tb-res" v-if="signVerifyResult!==null">{{ signVerifyResult ? '✓ 通过' : '✗ 失败' }}</span>
-              </div>
-              <pre class="tb-out" v-if="signOut">{{ signOut }}</pre>
-            </div>
-          </n-tab-pane>
-
-          <n-tab-pane name="hash" tab="散列">
-            <div class="tb-sec">
-              <div class="tb-row">
-                <n-select v-model:value="hashAlgo" size="small" :options="hashAlgoOptions" style="width:120px" />
-                <n-checkbox v-model:checked="hashTextInput" size="small">输入是明文(非base64)</n-checkbox>
-                <n-button size="small" type="primary" @click="runHash">计算</n-button>
-              </div>
-              <n-input v-model:value="hashData" type="textarea" size="small" :rows="2" placeholder="数据" />
-              <pre class="tb-out" v-if="hashOut">{{ hashOut }}</pre>
-            </div>
+              <n-tab-pane name="hash" tab="散列">
+                <div class="tb-sec">
+                  <div class="tb-row">
+                    <n-select v-model:value="hashAlgo" size="small" :options="hashAlgoOptions" style="width:120px" />
+                    <n-checkbox v-model:checked="hashTextInput" size="small">输入是明文(非base64)</n-checkbox>
+                    <n-button size="small" type="primary" @click="runHash">计算</n-button>
+                  </div>
+                  <n-input v-model:value="hashData" type="textarea" size="small" :rows="2" placeholder="数据" />
+                  <pre class="tb-out" v-if="hashOut">{{ hashOut }}</pre>
+                </div>
+              </n-tab-pane>
+            </n-tabs>
           </n-tab-pane>
         </n-tabs>
       </n-tab-pane>
@@ -341,7 +340,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { open, save } from '@tauri-apps/plugin-dialog'
-import { readFile, writeFile } from '@tauri-apps/plugin-fs'
+import { readFile } from '@tauri-apps/plugin-fs'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { ScatterChart } from 'echarts/charts'
@@ -588,8 +587,8 @@ async function exportCa(c) {
     const dir = await save({ title: '保存 CA（选基名，会写 .crt 与 .key）', defaultPath: (c.name || 'ca') + '.crt' })
     if (!dir) return
     const base = String(dir).replace(/\.(crt|cer|pem)$/i, '')
-    await writeFile(base + '.crt', new TextEncoder().encode(r.cert_pem))
-    await writeFile(base + '.key', new TextEncoder().encode(r.key_pem))
+    await invoke('write_file_content', { path: base + '.crt', content: r.cert_pem })
+    await invoke('write_file_content', { path: base + '.key', content: r.key_pem })
     error.value = '已导出: ' + base + '.crt / .key'
   } catch (e) { error.value = '导出失败: ' + (e?.message || e) }
 }
@@ -616,7 +615,7 @@ async function importCa() {
   } catch (e) { error.value = '导入失败: ' + (e?.message || e) }
 }
 async function saveText(content, defName) {
-  try { const p = await save({ defaultPath: defName }); if (p) { await writeFile(p, new TextEncoder().encode(content)); error.value = '已保存: ' + p } }
+  try { const p = await save({ defaultPath: defName }); if (p) { await invoke('write_file_content', { path: p, content }); error.value = '已保存: ' + p } }
   catch (e) { error.value = '保存失败: ' + (e?.message || e) }
 }
 
@@ -629,7 +628,7 @@ async function buildPfx() {
   try {
     const b64 = await invoke('crypto_pfx_build', { keyPem: pfxKey.value, certsPem: certs, password: pfxBuildPwd.value, name: 'guaxi' })
     const path = await save({ defaultPath: 'bundle.pfx', filters: [{ name: 'PFX', extensions: ['pfx', 'p12'] }] })
-    if (path) { await writeFile(path, b64ToU8(b64)); error.value = '已保存 PFX: ' + path }
+    if (path) { await invoke('write_file_bytes_base64', { path, base64: b64 }); error.value = '已保存 PFX: ' + path }
   } catch (e) { error.value = '打包失败: ' + (e?.message || e) } finally { pfxBuildLoading.value = false }
 }
 
@@ -638,8 +637,15 @@ const binReport = ref(null); const binLoading = ref(false)
 // 对称加解密
 const symAlgo = ref('aes'); const symMode = ref('cbc'); const symKey = ref(''); const symIv = ref(''); const symAad = ref('')
 const symData = ref(''); const symTextInput = ref(true); const symOut = ref('')
+const cryptTab = ref('sym'); const symKeyBits = ref(256)
 const symAlgoOptions = [{ label: 'AES', value: 'aes' }, { label: 'ChaCha20Poly1305', value: 'chacha20poly1305' }]
 const symModeOptions = [{ label: 'CBC', value: 'cbc' }, { label: 'CTR', value: 'ctr' }, { label: 'GCM', value: 'gcm' }]
+const aesKeyBitsOptions = [{ label: '128 位', value: 128 }, { label: '192 位', value: 192 }, { label: '256 位', value: 256 }]
+function symKeyLen() { if (symAlgo.value === 'aes') return symKeyBits.value / 8; if (symAlgo.value === 'chacha20poly1305') return 32; return 16 }
+function symIvLen() { return (symMode.value === 'gcm' || symAlgo.value === 'chacha20poly1305') ? 12 : 16 }
+function randHex(n) { const u = new Uint8Array(n); crypto.getRandomValues(u); return Array.from(u, b => b.toString(16).padStart(2, '0')).join('') }
+function genSymKey() { symKey.value = randHex(symKeyLen()) }
+function genSymIv() { symIv.value = randHex(symIvLen()) }
 async function runSym(encrypt) {
   error.value = ''; symOut.value = ''
   const dataB64 = encrypt && symTextInput.value ? strToB64(symData.value) : symData.value.trim()
@@ -675,14 +681,14 @@ async function runSign() {
   error.value = ''; signOut.value = ''
   const dataB64 = signTextInput.value ? strToB64(signData.value) : signData.value.trim()
   try {
-    const sig = await invoke('crypto_sign', { keyPem: signKey.value, dataB64, scheme: signScheme.value })
+    const sig = await invoke('crypto_sign', { keyPem: signKey.value.trim() || genPrivPem.value, dataB64, scheme: signScheme.value })
     signOut.value = '签名(base64):\n' + sig; signSig.value = sig
   } catch (e) { error.value = '签名失败: ' + (e?.message || e) }
 }
 async function runVerify() {
   error.value = ''; signVerifyResult.value = null
   const dataB64 = signTextInput.value ? strToB64(signData.value) : signData.value.trim()
-  try { signVerifyResult.value = await invoke('crypto_verify', { pubPem: signKey.value, dataB64, sigB64: signSig.value, scheme: signScheme.value }) }
+  try { signVerifyResult.value = await invoke('crypto_verify', { pubPem: signKey.value.trim() || genPubPem.value, dataB64, sigB64: signSig.value, scheme: signScheme.value }) }
   catch (e) { error.value = '验签失败: ' + (e?.message || e) }
 }
 

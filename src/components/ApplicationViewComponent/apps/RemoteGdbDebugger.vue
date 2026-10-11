@@ -8,6 +8,7 @@
       </n-radio-group>
       <n-input v-model:value="program" size="small" :placeholder="mode === 'attach' ? '可执行文件(可空，仅符号)' : '可执行文件路径(可空=仅连gdb)'" style="width:230px" />
       <n-input-number v-if="mode === 'attach'" v-model:value="attachPid" size="small" :min="1" :show-button="false" placeholder="PID" style="width:110px" />
+      <n-checkbox v-if="mode === 'attach'" v-model:checked="useSudo" size="small">sudo</n-checkbox>
       <n-input v-else v-model:value="argsText" size="small" placeholder="参数(空格分隔)" style="width:150px" />
       <n-button size="small" type="primary" :loading="starting" :disabled="!!sessionId" @click="start">启动 gdb</n-button>
       <n-button size="small" v-if="sessionId" @click="stop">结束</n-button>
@@ -213,7 +214,16 @@
         </div>
       </div>
     </div>
-    <div v-else class="gdb-empty">选择 SSH 档案与可执行文件，启动远端 gdb -i=mi 开始调试。</div>
+    <div v-else class="gdb-empty">
+      <template v-if="consoleLines.length">
+        <div class="gdb-dead-note">会话已结束。以下是 gdb 输出（含失败原因），排查后可重新启动：</div>
+        <div class="gdb-console gdb-console-dead" :style="{ fontSize: gdbFontSize + 'px' }">
+          <pre v-for="(l, i) in consoleLines" :key="i" :class="'gdb-l-' + l.kind">{{ l.text }}</pre>
+        </div>
+        <n-button size="small" @click="consoleLines = []">清空输出</n-button>
+      </template>
+      <template v-else>选择 SSH 档案与可执行文件，启动远端 gdb -i=mi 开始调试。</template>
+    </div>
   </div>
 </template>
 
@@ -247,6 +257,7 @@ const profileOptions = computed(() =>
 const profileId = ref(null)
 const mode = ref('launch')       // 'launch' | 'attach'
 const attachPid = ref(null)
+const useSudo = ref(false)
 const program = ref('')
 const argsText = ref('')
 const starting = ref(false)
@@ -334,7 +345,12 @@ onMounted(async () => {
     if (ev.payload?.session_id === sessionId.value) onAsync(ev.payload)
   }))
   unlisteners.push(await listen('gdb-mi-exit', ev => {
-    if (ev.payload?.session_id === sessionId.value) { statusText.value = '已退出'; sessionId.value = '' }
+    if (ev.payload?.session_id === sessionId.value) {
+      statusText.value = '已退出'
+      appendConsole('log', '[gdb 进程已退出]')
+      sessionId.value = ''
+      // 保留 consoleLines 供用户查看失败原因（空状态区会继续显示）。
+    }
   }))
 })
 onBeforeUnmount(() => {
@@ -362,6 +378,7 @@ async function start() {
   if (!profileId.value) { error.value = '请选择 SSH 档案'; return }
   if (mode.value === 'attach' && !attachPid.value) { error.value = '附加模式需要填 PID'; return }
   starting.value = true; error.value = ''
+  consoleLines.value = []
   try {
     const args = argsText.value.trim() ? argsText.value.trim().split(/\s+/) : []
     sessionId.value = await invoke('gdb_mi_start', {
@@ -369,14 +386,27 @@ async function start() {
       program: program.value || null,
       args,
       attachPid: mode.value === 'attach' ? Number(attachPid.value) : null,
+      useSudo: mode.value === 'attach' ? useSudo.value : false,
     })
     statusText.value = '已连接'
     appendConsole('log', mode.value === 'attach' ? `[gdb 已启动，正在附加 PID ${attachPid.value}]` : '[gdb 已启动]')
     if (mode.value === 'attach') {
       // 用 MI 命令显式附加：能拿到结构化结果与 *stopped 事件；attach 停住后要手动“继续”才会跑到断点。
       const r = await runCmd(`-target-attach ${Number(attachPid.value)}`)
-      if (r?.class === 'error') {
-        error.value = '附加失败: ' + (r?.payload?.msg || '可能无权限(需与目标同用户/root)或 PID 不存在')
+      if (!r) {
+        // runCmd 返回 null = 命令失败/会话已断（gdb 退出）。错误已由 runCmd 写入 error；
+        // 若因 sudo 需要 TTY/密码或 ptrace 受限导致 gdb 退出，控制台会显示其 stderr（见下方空状态区）。
+        if (!sessionId.value) statusText.value = '附加失败：gdb 进程已退出（见下方输出）'
+        else statusText.value = '附加未返回结果'
+      } else if (r.class === 'error') {
+        const msg = r?.payload?.msg || ''
+        if (/ptrace|Operation not permitted/i.test(msg)) {
+          error.value = '附加失败(ptrace 受限): ' + msg + ' —— 请勾选 sudo 重试，或在目标机 root 下执行 `echo 0 > /proc/sys/kernel/yama/ptrace_scope`，或确保与目标进程同一用户。'
+        } else if (/tty|password|sudo/i.test(msg)) {
+          error.value = '附加失败(sudo): ' + msg + ' —— 需目标机免密 sudo（NOPASSWD），且若配置了 requiretty 已自动申请 PTY。'
+        } else {
+          error.value = '附加失败: ' + (msg || '可能无权限或 PID 不存在')
+        }
       } else {
         statusText.value = `已附加 PID ${attachPid.value}（已停住，加断点后点"继续"）`
         await refreshThreads(); await refreshStack(); await refreshLocals(); await refreshSource()
@@ -666,7 +696,9 @@ async function loadMacros() {
 .gdb-thread-h { font-weight: 500; }
 .gdb-frame { color: var(--guaxi-text-secondary, #6b7280); font-family: var(--guaxi-mono-font, monospace); }
 .gdb-mem { background: #1e1e1e; color: #d4d4d4; font-family: var(--guaxi-mono-font, monospace); font-size: 12px; padding: 8px; border-radius: 6px; white-space: pre-wrap; word-break: break-all; min-height: 120px; }
-.gdb-empty { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; color: var(--guaxi-text-secondary, #6b7280); font-size: 13px; }
+.gdb-empty { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--guaxi-text-secondary, #6b7280); font-size: 13px; padding: 12px; min-height: 0; }
+.gdb-dead-note { flex: 0 0 auto; color: #e5484d; align-self: flex-start; }
+.gdb-console-dead { flex: 1 1 auto; width: 100%; min-height: 0; overflow: auto; }
 
 /* ---- 美化层 ---- */
 .gdb-root { font-family: var(--tw-ui-font); }

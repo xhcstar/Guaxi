@@ -279,6 +279,7 @@ pub async fn gdb_mi_start(
     program: Option<String>,
     args: Option<Vec<String>>,
     attach_pid: Option<u32>,
+    use_sudo: Option<bool>,
 ) -> Result<String, String> {
     let handle = connect_authenticated(&app, &profile_id).await?;
     let mut channel = handle
@@ -292,7 +293,13 @@ pub async fn gdb_mi_start(
     //    且 attach 失败只打印到控制台。改由前端在会话建立后发 `-target-attach PID`，拿到结构化结果与停住事件。
     //  - 启动程序：gdb -q -nx -i=mi --args program args...
     //  - 仅连 gdb：gdb -q -nx -i=mi
-    let mut cmd = String::from("gdb -q -nx -i=mi");
+    //  attach 非子进程常受 ptrace_scope 限制：可勾选 sudo（需目标免密 sudo），用 `sudo -n` 非交互避免挂起。
+    let sudo = use_sudo.unwrap_or(false);
+    let mut cmd = if sudo {
+        String::from("sudo -n gdb -q -nx -i=mi")
+    } else {
+        String::from("gdb -q -nx -i=mi")
+    };
     if attach_pid.is_some() {
         if let Some(prog) = program.as_ref().filter(|s| !s.trim().is_empty()) {
             cmd.push(' ');
@@ -307,6 +314,13 @@ pub async fn gdb_mi_start(
                 cmd.push_str(&shell_quote(&arg));
             }
         }
+    }
+    // sudo 常配 `requiretty`：无 PTY 时会报 "you must have a tty to run sudo"。
+    // 勾选 sudo 时给通道申请一个 PTY（MI 下我们自己的回显行会被 classify 忽略，不影响解析）。
+    if sudo {
+        let _ = channel
+            .request_pty(false, "xterm", 200, 50, 0, 0, &[])
+            .await;
     }
     channel
         .exec(true, cmd.as_bytes())
@@ -416,7 +430,21 @@ fn handle_line(
                 json!({ "session_id": session_id, "class": class, "payload": payload }),
             );
         }
-        Record::Ignore => {}
+        Record::Ignore => {
+            // 非 MI 文本（sudo 报错、gdb 启动错误、权限提示等）照样推到控制台，便于诊断——
+            // 否则这些关键失败信息会被静默吞掉。排除空行、gdb 提示符与我们自己回显的命令行。
+            let t = line.trim();
+            if !t.is_empty()
+                && t != "(gdb)"
+                && !t.starts_with('(')
+                && !(t.starts_with('-') && !t.starts_with("-->"))
+            {
+                let _ = app.emit(
+                    GDB_OUTPUT_EVENT,
+                    json!({ "session_id": session_id, "kind": "log", "text": format!("{t}\n") }),
+                );
+            }
+        }
     }
 }
 
