@@ -79,9 +79,10 @@ fn classify_pem_labels(labels: &[String]) -> String {
 // ============================ 密钥 / 证书生成（rcgen + rsa） ============================
 
 use rcgen::{
-    BasicConstraints, CertificateParams, CertificateSigningRequestParams, DistinguishedName, DnType,
-    ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose, SanType, PKCS_ECDSA_P256_SHA256,
-    PKCS_ECDSA_P384_SHA384, PKCS_ED25519,
+    BasicConstraints, CertificateParams, CertificateRevocationListParams,
+    CertificateSigningRequestParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa,
+    KeyIdMethod, KeyPair, KeyUsagePurpose, RevocationReason, RevokedCertParams, SanType,
+    SerialNumber, PKCS_ECDSA_P256_SHA256, PKCS_ECDSA_P384_SHA384, PKCS_ED25519,
 };
 use time::{Duration, OffsetDateTime};
 
@@ -217,6 +218,10 @@ pub struct IssueResult {
     pub cert_pem: String,
     /// 当后端代为生成了 subject 私钥时回传（PEM）。
     pub key_pem: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub serial: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leaf_id: Option<String>,
 }
 
 /// 统一签发：self-signed(root CA)、CA 签 intermediate、CA 直签 server/client 都走这里。
@@ -266,7 +271,7 @@ pub fn crypto_issue_cert(
             .map_err(|e| format!("自签失败: {e}"))?
             .pem(),
     };
-    Ok(IssueResult { cert_pem, key_pem: gen_key_pem })
+    Ok(IssueResult { cert_pem, key_pem: gen_key_pem, serial: None, leaf_id: None })
 }
 
 /// 用 CA 直接签发一份已有 CSR。
@@ -660,6 +665,15 @@ pub struct Subject {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RevokedRec {
+    pub serial: u64,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CaEntry {
     pub id: String,
     pub name: String,
@@ -670,6 +684,42 @@ pub struct CaEntry {
     pub is_root: bool,
     #[serde(default)]
     pub parent_id: Option<String>,
+    /// 分类库：rsa | ecc | sm2 | pqc（旧档案无此字段，按 algo 推断）。
+    #[serde(default)]
+    pub category: String,
+    /// 下一个要分配的证书序列号（CA 自身用 1）。
+    #[serde(default = "default_serial_counter")]
+    pub serial_counter: u64,
+    /// 下一个 CRL 号。
+    #[serde(default = "default_crl_number")]
+    pub crl_number: u64,
+    #[serde(default)]
+    pub revoked: Vec<RevokedRec>,
+}
+
+fn default_serial_counter() -> u64 {
+    2
+}
+fn default_crl_number() -> u64 {
+    1
+}
+
+fn algo_to_category(algo: &str) -> String {
+    match algo {
+        "rsa" => "rsa",
+        "ec" => "ecc",
+        "sm2" => "sm2",
+        s if s.starts_with("ml-") || s == "pqc" => "pqc",
+        _ => "ecc",
+    }
+    .to_string()
+}
+fn ca_category(e: &CaEntry) -> String {
+    if e.category.is_empty() {
+        algo_to_category(&e.algo)
+    } else {
+        e.category.clone()
+    }
 }
 
 #[derive(Serialize)]
@@ -677,9 +727,12 @@ pub struct CaSummary {
     pub id: String,
     pub name: String,
     pub algo: String,
+    pub category: String,
     pub subject_cn: String,
     pub is_root: bool,
     pub parent_id: Option<String>,
+    pub revoked_count: usize,
+    pub crl_number: u64,
 }
 
 fn ca_summary(e: &CaEntry) -> CaSummary {
@@ -687,9 +740,12 @@ fn ca_summary(e: &CaEntry) -> CaSummary {
         id: e.id.clone(),
         name: e.name.clone(),
         algo: e.algo.clone(),
+        category: ca_category(e),
         subject_cn: e.subject_cn.clone(),
         is_root: e.is_root,
         parent_id: e.parent_id.clone(),
+        revoked_count: e.revoked.len(),
+        crl_number: e.crl_number,
     }
 }
 
@@ -762,52 +818,82 @@ pub fn crypto_ca_list(app: AppHandle) -> Result<Vec<CaSummary>, String> {
 }
 
 /// 新建 CA：issuer_ca_id 为空=自签根 CA；否则由该 CA 签发为中间 CA。后台记录 cert+key。
+/// category: rsa | ecc 本地 rcgen 签发；sm2 | pqc 需 `tlcp` 特性(Tongsuo)，否则报错。
 #[command]
 #[allow(clippy::too_many_arguments)]
 pub fn crypto_ca_create(
     app: AppHandle,
     name: String,
+    category: String,
     subject: Subject,
-    algo: String,
     rsa_bits: Option<u32>,
     curve: Option<String>,
     days: i64,
     issuer_ca_id: Option<String>,
 ) -> Result<CaSummary, String> {
-    let (kp, priv_pem, _pub) = gen_keypair(&algo, rsa_bits, curve)?;
-    let mut params = CertificateParams::default();
-    params.distinguished_name = dn_from_subject(&subject);
-    apply_profile(&mut params, "ca", days);
-
+    let cat = if category.trim().is_empty() { "ecc".to_string() } else { category };
     let mut cas = read_cas(&app)?;
-    let (cert_pem, is_root, parent_id) = match issuer_ca_id.filter(|s| !s.is_empty()) {
-        Some(pid) => {
-            let parent = cas.iter().find(|c| c.id == pid).ok_or("上级 CA 不存在")?.clone();
-            let (issuer_kp, issuer_cert) = ca_issuer(&parent)?;
-            let cert = params
-                .signed_by(&kp, &issuer_cert, &issuer_kp)
-                .map_err(|e| format!("中间 CA 签发失败: {e}"))?;
-            (cert.pem(), false, Some(pid))
-        }
-        None => {
-            let cert = params.self_signed(&kp).map_err(|e| format!("根 CA 自签失败: {e}"))?;
-            (cert.pem(), true, None)
-        }
+    let parent_idx = match issuer_ca_id.as_ref().filter(|s| !s.is_empty()) {
+        Some(pid) => Some(cas.iter().position(|c| &c.id == pid).ok_or("上级 CA 不存在")?),
+        None => None,
     };
+    let is_root = parent_idx.is_none();
+
+    let (algo_stored, cert_pem, key_pem) = if cat == "sm2" || cat == "pqc" {
+        // SM2/PQC 证书用 Tongsuo 引擎（feature=tlcp）；默认构建会返回未启用错误。
+        let parent = parent_idx.map(|i| cas[i].clone());
+        let (cert, key) = engine_ca_create(&cat, &subject, days, parent.as_ref())?;
+        (cat.clone(), cert, key)
+    } else {
+        let algo = if cat == "rsa" { "rsa" } else { "ec" };
+        let (kp, priv_pem, _pub) = gen_keypair(algo, rsa_bits, curve)?;
+        let mut params = CertificateParams::default();
+        params.distinguished_name = dn_from_subject(&subject);
+        apply_profile(&mut params, "ca", days);
+        let cert_pem = match parent_idx {
+            Some(i) => {
+                let sn = take_serial(&mut cas, i);
+                params.serial_number = Some(SerialNumber::from(sn));
+                let parent = cas[i].clone();
+                let (issuer_kp, issuer_cert) = ca_issuer(&parent)?;
+                params
+                    .signed_by(&kp, &issuer_cert, &issuer_kp)
+                    .map_err(|e| format!("中间 CA 签发失败: {e}"))?
+                    .pem()
+            }
+            None => {
+                params.serial_number = Some(SerialNumber::from(1u64));
+                params.self_signed(&kp).map_err(|e| format!("根 CA 自签失败: {e}"))?.pem()
+            }
+        };
+        (algo.to_string(), cert_pem, priv_pem)
+    };
+
     let entry = CaEntry {
         id: Uuid::new_v4().to_string(),
         name,
-        algo,
+        algo: algo_stored,
         subject_cn: subject.common_name,
         cert_pem,
-        key_pem: priv_pem,
+        key_pem,
         is_root,
-        parent_id,
+        parent_id: parent_idx.map(|i| cas[i].id.clone()),
+        category: cat,
+        serial_counter: 2,
+        crl_number: 1,
+        revoked: Vec::new(),
     };
     let summary = ca_summary(&entry);
     cas.push(entry);
     write_cas(&app, &cas)?;
     Ok(summary)
+}
+
+/// 取 CA 的下一个序列号并自增（内存中），调用方负责随后 write_cas 落盘。
+fn take_serial(cas: &mut [CaEntry], idx: usize) -> u64 {
+    let n = cas[idx].serial_counter.max(2);
+    cas[idx].serial_counter = n + 1;
+    n
 }
 
 #[command]
@@ -826,6 +912,10 @@ pub fn crypto_ca_import(
         key_pem: key_pem.clone(),
         is_root: true,
         parent_id: None,
+        category: "imported".into(),
+        serial_counter: 2,
+        crl_number: 1,
+        revoked: Vec::new(),
     };
     let _ = ca_issuer(&probe)?;
     let der = pem_to_der_of(&cert_pem, "CERTIFICATE")?;
@@ -834,16 +924,7 @@ pub fn crypto_ca_import(
         .map(|(_, c)| c.subject().to_string())
         .unwrap_or_default();
     let mut cas = read_cas(&app)?;
-    let entry = CaEntry {
-        id: Uuid::new_v4().to_string(),
-        name,
-        algo: "imported".into(),
-        subject_cn,
-        cert_pem,
-        key_pem,
-        is_root: true,
-        parent_id: None,
-    };
+    let entry = CaEntry { id: Uuid::new_v4().to_string(), name, subject_cn, ..probe };
     let summary = ca_summary(&entry);
     cas.push(entry);
     write_cas(&app, &cas)?;
@@ -870,32 +951,441 @@ pub fn crypto_ca_export(app: AppHandle, id: String) -> Result<CaExport, String> 
     Ok(CaExport { cert_pem: ca.cert_pem.clone(), key_pem: ca.key_pem.clone() })
 }
 
-/// 用库里的 CA 直接签发 server/client 终端证书，返回证书 + 新生成私钥。
+/// 用库里的 CA 直接签发 server/client 终端证书：分配序列号、存入终端证书库、返回证书+私钥。
+/// 终端证书的算法默认跟随 CA 的类别（SM2/PQC 走 Tongsuo 引擎）。
 #[command]
-#[allow(clippy::too_many_arguments)]
 pub fn crypto_issue_from_ca(
     app: AppHandle,
     ca_id: String,
     subject: Subject,
     profile: String,
     sans: Vec<String>,
-    algo: String,
-    rsa_bits: Option<u32>,
-    curve: Option<String>,
     days: i64,
 ) -> Result<IssueResult, String> {
+    let mut cas = read_cas(&app)?;
+    let idx = cas.iter().position(|c| c.id == ca_id).ok_or("签发 CA 不存在")?;
+    let cat = ca_category(&cas[idx]);
+    let serial = take_serial(&mut cas, idx);
+
+    let (cert_pem, key_pem) = if cat == "sm2" || cat == "pqc" {
+        let ca = cas[idx].clone();
+        engine_issue_leaf(&ca, &subject, &profile, &sans, days, serial)?
+    } else {
+        let algo = if cat == "rsa" { "rsa" } else { "ec" };
+        let (kp, priv_pem, _pub) = gen_keypair(algo, None, None)?;
+        let mut params = CertificateParams::default();
+        params.distinguished_name = dn_from_subject(&subject);
+        push_sans(&mut params, &sans)?;
+        apply_profile(&mut params, &profile, days);
+        params.serial_number = Some(SerialNumber::from(serial));
+        let ca = cas[idx].clone();
+        let (issuer_kp, issuer_cert) = ca_issuer(&ca)?;
+        let cert = params
+            .signed_by(&kp, &issuer_cert, &issuer_kp)
+            .map_err(|e| format!("签发失败: {e}"))?;
+        (cert.pem(), priv_pem)
+    };
+
+    // 持久化：CA 序列号自增落盘 + 终端证书入库。
+    write_cas(&app, &cas)?;
+    let leaf = LeafEntry {
+        id: Uuid::new_v4().to_string(),
+        name: subject.common_name.clone(),
+        kind: profile.clone(),
+        ca_id: ca_id.clone(),
+        subject_cn: subject.common_name,
+        serial,
+        cert_pem: cert_pem.clone(),
+        key_pem: key_pem.clone(),
+        created: now_str(),
+    };
+    let leaf_id = leaf.id.clone();
+    let mut leaves = read_leaves(&app)?;
+    leaves.push(leaf);
+    write_leaves(&app, &leaves)?;
+
+    Ok(IssueResult {
+        cert_pem,
+        key_pem: Some(key_pem),
+        serial: Some(serial),
+        leaf_id: Some(leaf_id),
+    })
+}
+
+fn now_str() -> String {
+    OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default()
+}
+
+// ============================ 终端证书库（client/server leaf_store.json） ============================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LeafEntry {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub ca_id: String,
+    pub subject_cn: String,
+    pub serial: u64,
+    pub cert_pem: String,
+    pub key_pem: String,
+    #[serde(default)]
+    pub created: String,
+}
+
+#[derive(Serialize)]
+pub struct LeafSummary {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub ca_id: String,
+    pub ca_name: String,
+    pub subject_cn: String,
+    pub serial: u64,
+    pub created: String,
+}
+
+fn leaf_store_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("取应用数据目录失败: {e}"))?
+        .join("crypto_lab");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("建目录失败: {e}"))?;
+    Ok(dir.join("leaf_store.json"))
+}
+fn read_leaves(app: &AppHandle) -> Result<Vec<LeafEntry>, String> {
+    let p = leaf_store_path(app)?;
+    if !p.exists() {
+        return Ok(Vec::new());
+    }
+    serde_json::from_str(&std::fs::read_to_string(&p).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("解析终端证书库失败: {e}"))
+}
+fn write_leaves(app: &AppHandle, v: &[LeafEntry]) -> Result<(), String> {
+    let p = leaf_store_path(app)?;
+    std::fs::write(&p, serde_json::to_string_pretty(v).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("写终端证书库失败: {e}"))
+}
+
+#[command]
+pub fn crypto_leaf_list(app: AppHandle) -> Result<Vec<LeafSummary>, String> {
     let cas = read_cas(&app)?;
-    let ca = cas.iter().find(|c| c.id == ca_id).ok_or("签发 CA 不存在")?;
-    let (kp, priv_pem, _pub) = gen_keypair(&algo, rsa_bits, curve)?;
-    let mut params = CertificateParams::default();
-    params.distinguished_name = dn_from_subject(&subject);
-    push_sans(&mut params, &sans)?;
-    apply_profile(&mut params, &profile, days);
-    let (issuer_kp, issuer_cert) = ca_issuer(ca)?;
-    let cert = params
-        .signed_by(&kp, &issuer_cert, &issuer_kp)
-        .map_err(|e| format!("签发失败: {e}"))?;
-    Ok(IssueResult { cert_pem: cert.pem(), key_pem: Some(priv_pem) })
+    let name_of = |id: &str| cas.iter().find(|c| c.id == id).map(|c| c.name.clone()).unwrap_or_default();
+    Ok(read_leaves(&app)?
+        .into_iter()
+        .map(|l| LeafSummary {
+            ca_name: name_of(&l.ca_id),
+            id: l.id,
+            name: l.name,
+            kind: l.kind,
+            ca_id: l.ca_id,
+            subject_cn: l.subject_cn,
+            serial: l.serial,
+            created: l.created,
+        })
+        .collect())
+}
+
+#[command]
+pub fn crypto_leaf_delete(app: AppHandle, id: String) -> Result<(), String> {
+    let mut v = read_leaves(&app)?;
+    v.retain(|l| l.id != id);
+    write_leaves(&app, &v)
+}
+
+#[derive(Serialize)]
+pub struct LeafExport {
+    pub cert_pem: String,
+    pub key_pem: String,
+    /// 叶证书 + 一路到根的 CA 证书，拼成完整链。
+    pub chain_pem: String,
+}
+
+/// 顺 ca_id→parent_id 取到根，返回"叶 + 各级 CA"证书链。
+fn build_chain(cas: &[CaEntry], leaf_cert: &str, ca_id: &str) -> String {
+    let mut out = String::from(leaf_cert);
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    let mut cur = Some(ca_id.to_string());
+    let mut guard = 0;
+    while let Some(id) = cur {
+        guard += 1;
+        if guard > 32 {
+            break;
+        }
+        match cas.iter().find(|c| c.id == id) {
+            Some(ca) => {
+                out.push_str(&ca.cert_pem);
+                if !out.ends_with('\n') {
+                    out.push('\n');
+                }
+                cur = ca.parent_id.clone();
+            }
+            None => break,
+        }
+    }
+    out
+}
+
+#[command]
+pub fn crypto_leaf_export(app: AppHandle, id: String) -> Result<LeafExport, String> {
+    let leaves = read_leaves(&app)?;
+    let l = leaves.iter().find(|x| x.id == id).ok_or("证书不存在")?;
+    let cas = read_cas(&app)?;
+    Ok(LeafExport {
+        cert_pem: l.cert_pem.clone(),
+        key_pem: l.key_pem.clone(),
+        chain_pem: build_chain(&cas, &l.cert_pem, &l.ca_id),
+    })
+}
+
+// ============================ 吊销 + CRL ============================
+
+fn revocation_reason(s: &str) -> Option<RevocationReason> {
+    match s {
+        "keyCompromise" => Some(RevocationReason::KeyCompromise),
+        "caCompromise" => Some(RevocationReason::CaCompromise),
+        "affiliationChanged" => Some(RevocationReason::AffiliationChanged),
+        "superseded" => Some(RevocationReason::Superseded),
+        "cessationOfOperation" => Some(RevocationReason::CessationOfOperation),
+        "certificateHold" => Some(RevocationReason::CertificateHold),
+        "privilegeWithdrawn" => Some(RevocationReason::PrivilegeWithdrawn),
+        _ => Some(RevocationReason::Unspecified),
+    }
+}
+
+#[command]
+pub fn crypto_ca_revoke(app: AppHandle, ca_id: String, serial: u64, reason: String) -> Result<(), String> {
+    let mut cas = read_cas(&app)?;
+    let ca = cas.iter_mut().find(|c| c.id == ca_id).ok_or("CA 不存在")?;
+    if !ca.revoked.iter().any(|r| r.serial == serial) {
+        ca.revoked.push(RevokedRec { serial, reason, at: now_str() });
+    }
+    write_cas(&app, &cas)
+}
+
+/// 生成该 CA 的 CRL（PEM），crl_number 自增。SM2/PQC 的 CRL 走引擎。
+#[command]
+pub fn crypto_ca_gen_crl(app: AppHandle, ca_id: String) -> Result<String, String> {
+    let mut cas = read_cas(&app)?;
+    let idx = cas.iter().position(|c| c.id == ca_id).ok_or("CA 不存在")?;
+    let cat = ca_category(&cas[idx]);
+    let crl_number = cas[idx].crl_number.max(1);
+    let ca = cas[idx].clone();
+
+    let pem = if cat == "sm2" || cat == "pqc" {
+        engine_gen_crl(&ca, crl_number)?
+    } else {
+        let (issuer_kp, issuer_cert) = ca_issuer(&ca)?;
+        let now = OffsetDateTime::now_utc();
+        let revoked_certs = ca
+            .revoked
+            .iter()
+            .map(|r| RevokedCertParams {
+                serial_number: SerialNumber::from(r.serial),
+                revocation_time: now,
+                reason_code: revocation_reason(&r.reason),
+                invalidity_date: None,
+            })
+            .collect();
+        let params = CertificateRevocationListParams {
+            this_update: now,
+            next_update: now + Duration::days(30),
+            crl_number: SerialNumber::from(crl_number),
+            issuing_distribution_point: None,
+            revoked_certs,
+            key_identifier_method: KeyIdMethod::Sha256,
+        };
+        params
+            .signed_by(&issuer_cert, &issuer_kp)
+            .map_err(|e| format!("CRL 生成失败: {e}"))?
+            .pem()
+            .map_err(|e| format!("CRL 编码失败: {e}"))?
+    };
+
+    cas[idx].crl_number = crl_number + 1;
+    write_cas(&app, &cas)?;
+    Ok(pem)
+}
+
+// ============================ SM2/PQC 引擎挂钩（feature=tlcp，默认未启用即报错） ============================
+
+#[cfg(not(feature = "tlcp"))]
+fn engine_ca_create(
+    _cat: &str,
+    _subject: &Subject,
+    _days: i64,
+    _parent: Option<&CaEntry>,
+) -> Result<(String, String), String> {
+    Err("SM2/PQC 证书需启用 `tlcp` 特性并安装 Tongsuo（见 docs/remote-terminal-workshop-design.md §5.3）".into())
+}
+#[cfg(not(feature = "tlcp"))]
+fn engine_issue_leaf(
+    _ca: &CaEntry,
+    _subject: &Subject,
+    _profile: &str,
+    _sans: &[String],
+    _days: i64,
+    _serial: u64,
+) -> Result<(String, String), String> {
+    Err("SM2/PQC 签发需启用 `tlcp` 特性并安装 Tongsuo".into())
+}
+#[cfg(not(feature = "tlcp"))]
+fn engine_gen_crl(_ca: &CaEntry, _crl_number: u64) -> Result<String, String> {
+    Err("SM2/PQC CRL 需启用 `tlcp` 特性并安装 Tongsuo".into())
+}
+
+#[cfg(feature = "tlcp")]
+fn engine_ca_create(
+    cat: &str,
+    subject: &Subject,
+    days: i64,
+    parent: Option<&CaEntry>,
+) -> Result<(String, String), String> {
+    crate::commands::crypto_engine::ca_create(cat, subject, days, parent)
+}
+#[cfg(feature = "tlcp")]
+fn engine_issue_leaf(
+    ca: &CaEntry,
+    subject: &Subject,
+    profile: &str,
+    sans: &[String],
+    days: i64,
+    serial: u64,
+) -> Result<(String, String), String> {
+    crate::commands::crypto_engine::issue_leaf(ca, subject, profile, sans, days, serial)
+}
+#[cfg(feature = "tlcp")]
+fn engine_gen_crl(ca: &CaEntry, crl_number: u64) -> Result<String, String> {
+    crate::commands::crypto_engine::gen_crl(ca, crl_number)
+}
+
+// ============================ 受管资产库：私钥 / CSR / CRL（asset_store.json） ============================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetEntry {
+    pub id: String,
+    /// key | csr | crl
+    pub kind: String,
+    pub name: String,
+    #[serde(default)]
+    pub algo: String,
+    pub pem: String,
+    /// key 的公钥 PEM（可空）。
+    #[serde(default)]
+    pub pem2: String,
+    #[serde(default)]
+    pub created: String,
+}
+
+#[derive(Serialize)]
+pub struct AssetSummary {
+    pub id: String,
+    pub kind: String,
+    pub name: String,
+    pub algo: String,
+    pub created: String,
+}
+
+fn asset_store_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("取应用数据目录失败: {e}"))?
+        .join("crypto_lab");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("建目录失败: {e}"))?;
+    Ok(dir.join("asset_store.json"))
+}
+fn read_assets(app: &AppHandle) -> Result<Vec<AssetEntry>, String> {
+    let p = asset_store_path(app)?;
+    if !p.exists() {
+        return Ok(Vec::new());
+    }
+    serde_json::from_str(&std::fs::read_to_string(&p).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("解析资产库失败: {e}"))
+}
+fn write_assets(app: &AppHandle, v: &[AssetEntry]) -> Result<(), String> {
+    let p = asset_store_path(app)?;
+    std::fs::write(&p, serde_json::to_string_pretty(v).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("写资产库失败: {e}"))
+}
+
+/// 列出资产；kind 为空=全部，否则按 key|csr|crl 过滤。
+#[command]
+pub fn crypto_asset_list(app: AppHandle, kind: Option<String>) -> Result<Vec<AssetSummary>, String> {
+    let want = kind.unwrap_or_default();
+    Ok(read_assets(&app)?
+        .into_iter()
+        .filter(|a| want.is_empty() || a.kind == want)
+        .map(|a| AssetSummary { id: a.id, kind: a.kind, name: a.name, algo: a.algo, created: a.created })
+        .collect())
+}
+
+/// 保存/导入一项资产（key/csr/crl）。生成或导入都走这里。
+#[command]
+pub fn crypto_asset_save(
+    app: AppHandle,
+    kind: String,
+    name: String,
+    algo: Option<String>,
+    pem: String,
+    pem2: Option<String>,
+) -> Result<AssetSummary, String> {
+    if pem.trim().is_empty() {
+        return Err("内容为空".into());
+    }
+    let mut v = read_assets(&app)?;
+    let entry = AssetEntry {
+        id: Uuid::new_v4().to_string(),
+        kind,
+        name,
+        algo: algo.unwrap_or_default(),
+        pem,
+        pem2: pem2.unwrap_or_default(),
+        created: now_str(),
+    };
+    let summary = AssetSummary {
+        id: entry.id.clone(),
+        kind: entry.kind.clone(),
+        name: entry.name.clone(),
+        algo: entry.algo.clone(),
+        created: entry.created.clone(),
+    };
+    v.push(entry);
+    write_assets(&app, &v)?;
+    Ok(summary)
+}
+
+#[derive(Serialize)]
+pub struct AssetFull {
+    pub kind: String,
+    pub name: String,
+    pub algo: String,
+    pub pem: String,
+    pub pem2: String,
+}
+
+#[command]
+pub fn crypto_asset_get(app: AppHandle, id: String) -> Result<AssetFull, String> {
+    let v = read_assets(&app)?;
+    let a = v.iter().find(|x| x.id == id).ok_or("资产不存在")?;
+    Ok(AssetFull {
+        kind: a.kind.clone(),
+        name: a.name.clone(),
+        algo: a.algo.clone(),
+        pem: a.pem.clone(),
+        pem2: a.pem2.clone(),
+    })
+}
+
+#[command]
+pub fn crypto_asset_delete(app: AppHandle, id: String) -> Result<(), String> {
+    let mut v = read_assets(&app)?;
+    v.retain(|a| a.id != id);
+    write_assets(&app, &v)
 }
 
 

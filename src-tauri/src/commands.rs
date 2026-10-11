@@ -74,6 +74,9 @@ pub mod net_conn;
 pub mod net_capture;
 pub mod sftp_fs;
 pub mod crypto_lab;
+// 国密 TLCP/SM2/PQC 引擎：仅在 `tlcp` 特性下编译（绑定 Tongsuo）。默认构建不包含。
+#[cfg(feature = "tlcp")]
+pub mod crypto_engine;
 pub mod frontend_logging;
 pub mod notebook_lab;
 pub mod flipboard_pipeline;

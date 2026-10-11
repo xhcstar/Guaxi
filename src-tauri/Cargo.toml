@@ -15,6 +15,10 @@ default-run = "guaxi"
 name = "guaxi_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# 国密 TLCP / SM2 / PQC：默认关闭。启用：OPENSSL_DIR=/opt/tongsuo85 cargo build --features tlcp
+[features]
+tlcp = ["dep:openssl", "dep:openssl-sys"]
+
 [build-dependencies]
 tauri-build = { version = "2.5.3", features = [] }
 zip = "6.0.0"
@@ -216,6 +220,10 @@ chacha20poly1305 = "0.10"
 p12 = "0.6"
 # 证书有效期计算（rcgen 的 not_before/not_after 用 time::OffsetDateTime）。
 time = "0.3"
+# SM2/TLCP/PQC（可选特性 `tlcp`）：绑定 Tongsuo(铜锁)。默认不启用、不编译，避免无 Tongsuo 时破坏构建。
+# 启用需本机装好 Tongsuo 并 OPENSSL_DIR 指向它（勿开 vendored，否则会拉官方 OpenSSL）。
+openssl = { version = "0.10", optional = true }
+openssl-sys = { version = "0.9", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
