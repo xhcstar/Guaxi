@@ -1027,6 +1027,8 @@ onUnmounted(() => {
   background: var(--guaxi-content-bg, #fff);
   color: var(--guaxi-text-primary, #1f2328);
   font-size: 14px;
+  /* 与主界面/编辑器同一份 UI 字体，避免嗅探器回退到浏览器默认无衬线字体造成不一致 */
+  font-family: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei');
   --rh-accent: #2563eb;
   --k-paper: #4f6bed; --k-book: #8b5cf6; --k-video: #ef4444;
   --k-audio: #f59e0b; --k-image: #10b981; --k-other: #6b7280; --k-code: #0ea5e9;
