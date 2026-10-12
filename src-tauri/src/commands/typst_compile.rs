@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use chrono::{Datelike, Local, Timelike};
 use once_cell::sync::Lazy;
 use serde::Serialize;
-use tracing::info;
+use tracing::{info, warn};
 
 use typst::diag::{FileError, FileResult, SourceDiagnostic};
 use typst::foundations::{Bytes, Datetime};
@@ -345,6 +345,9 @@ fn input_dir_of(source_path: &str) -> Result<(PathBuf, PathBuf), String> {
 }
 
 /// 为 Typst 实时预览构建 PDF：把编辑器内容编译为临时 PDF，返回路径。
+///
+/// 输出路径**稳定**（同一份 .typ 每次重建都覆写同一个文件），这样 `GuaxiPdfViewer`
+/// 才会走 `incrementalReconcile` 逐页增量渲染，而不是整篇冷重载。
 #[tauri::command]
 pub async fn build_typ_pdf_preview(source_path: String, content: String) -> Result<String, String> {
     let (source, input_dir) = input_dir_of(&source_path)?;
@@ -356,17 +359,23 @@ pub async fn build_typ_pdf_preview(source_path: String, content: String) -> Resu
 
     let pdf_bytes = compile_typ_and_cache(&source_path, input_dir, content)?;
 
-    let tmp_base = std::env::temp_dir().join("guaxi_typst_preview");
-    let _ = std::fs::create_dir_all(&tmp_base);
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| e.to_string())?;
-    let outdir = tmp_base.join(format!("{}", now.as_nanos()));
-    std::fs::create_dir_all(&outdir).map_err(|e| format!("创建预览输出目录失败: {e}"))?;
+    let outdir = crate::commands::docprocess::preview_build_dir("typst", &source_path)?;
     let pdf_path = outdir.join(format!(".guaxi_preview_{stem}.pdf"));
-    std::fs::write(&pdf_path, &pdf_bytes).map_err(|e| format!("写入预览 PDF 失败: {e}"))?;
 
-    Ok(pdf_path.to_string_lossy().to_string())
+    // 先写同目录临时文件再 rename：`fs::write` 会先截断目标文件，若瞬时被阅读器读到
+    // 就是半个 PDF；rename 在同一文件系统内是原子的，稳定路径上永远只有完整文件。
+    let staging = outdir.join(format!(".guaxi_preview_{stem}.pdf.tmp"));
+    std::fs::write(&staging, &pdf_bytes).map_err(|e| format!("写入预览 PDF 失败: {e}"))?;
+    std::fs::rename(&staging, &pdf_path).map_err(|e| format!("提交预览 PDF 失败: {e}"))?;
+
+    // 稳定路径是覆写同一个文件，而 pdfium 的文档缓存只按 mtime 判断新鲜度，
+    // 同一时间刻度内重建会命中旧缓存继续吐上一次的字节。显式失效。
+    let pdf_path_str = pdf_path.to_string_lossy().to_string();
+    if let Err(e) = crate::commands::pdf_reader::invalidate_pdf(&pdf_path_str).await {
+        warn!(err = %e, "[TypstPreview] 失效 PDF 缓存失败，阅读器可能仍显示上一次的渲染结果");
+    }
+
+    Ok(pdf_path_str)
 }
 
 /// 导出：从磁盘源文件编译并写到目标路径。

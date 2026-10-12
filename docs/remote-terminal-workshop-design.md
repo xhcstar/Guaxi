@@ -68,10 +68,18 @@
 
 纯 Rust：rcgen(ring)+RustCrypto(rsa/ecdsa/p256/p384/ed25519-dalek/pkcs8/pkcs1/sec1/spki)+x509-parser+p12。子页：
 
-- **[已实现] 解析/导入**：`crypto_load_bytes`（识别 PEM/DER/PFX/key/csr/cert）；`crypto_inspect`（x509 摘要 + ASN.1 dump）；PFX 拆包 `crypto_pfx_parse(password)`。
-- **[已实现] 证书链/签发（CA 库驱动）**：后台 CA 库（`crypto_lab/ca_store.json`）记录名称/主题/算法/cert/key/是否根/父 id。命令：`crypto_ca_list / crypto_ca_create(subject,algo,days,issuer_ca_id) / crypto_ca_import / crypto_ca_delete / crypto_ca_export`；用库内 CA 直签终端证书 `crypto_issue_from_ca(ca_id, subject, profile=server|client, sans, algo, days)`。主题支持 C/ST/L/O/OU/CN。独立密钥/CSR/签名验签折叠在此页：`crypto_gen_key / crypto_gen_csr / crypto_sign / crypto_verify / crypto_verify_cert`。
+UI 约定（全页统一）：
+- **顶部子标签栏固定**，只有内容区滚动（`.cx-pane` 不滚、`.cx-tabs` 的 pane 自己滚），不随垂直滚动消失。
+- **按钮一律用图标 + `n-tooltip` 中文说明**（`.tb-ib`，含 primary/danger/lg 变体），需要解释的字段旁挂 `?` 帮助图标（`.tb-help`）。
+- **填写项都给默认值与说明**：主题字段默认 `C=CN / ST=Shannxi / L=xi'an / O=XA / OU=Dev`，有效期默认 3650 天；并支持把 openssl 的 `-subj` 串（`/C=CN/ST=…/CN=…` 或逗号形式）**粘贴后一键解析填入**。
+- **算法/参数全量列出**：RSA 1024/2048/3072/4096/8192、ECDSA P-256/P-384、Ed25519（P-521 需 rcgen 的 aws_lc 后端，本机无 NASM 故不提供）；签名方案含 RSA PKCS#1 与 PSS 的 SHA-256/384/512、ECDSA、Ed25519；散列 MD5/SHA-1/256/384/512。
+
+- **[已实现] 解析/导入**：`crypto_load_bytes`（识别 PEM/DER/PFX/key/csr/cert）；`crypto_inspect`（x509 摘要 + ASN.1 dump）；PFX 拆包 `crypto_pfx_parse(password)`。**`crypto_pem_details(input)`**：解析证书/私钥/公钥/CSR/CRL，返回可读字段（主题/颁发者/序列号/有效期/签名与公钥算法/是否 CA/是否自签）、SAN 列表、SHA-256 指纹、归一化 PEM、DER(base64)，驱动"查看"弹窗。
+- **[已实现] 证书链/签发（CA 库驱动）**：后台 CA 库（`crypto_lab/ca_store.json`）记录名称/类别/主题/算法/cert/key/是否根/父 id/序列号计数/CRL 号/吊销表。命令：`crypto_ca_list / crypto_ca_create(name,category,subject,rsa_bits,curve,days,issuer_ca_id) / crypto_ca_import / crypto_ca_delete / crypto_ca_export`；用库内 CA 直签终端证书 `crypto_issue_from_ca(ca_id, subject, profile=server|client, sans, days)`；吊销 `crypto_ca_revoke`、CRL `crypto_ca_gen_crl`；终端证书库 `crypto_leaf_list/delete/export`（`export` 顺 `parent_id` 拼完整**证书链**）。
+- **[已实现] 查看/管理**：CA 行、终端证书行、资产行都带**查看图标**——弹窗分「字段明细 / PEM 原文 / DER(base64) / ASN.1」四页，均可一键复制；证书与其配套私钥在同一行并列可见（CA 与叶证书都是证书+私钥成对入库）。
 - **[已实现] PFX**：`crypto_pfx_build(key_pem, certs_pem[], password)` 打包，`crypto_pfx_parse` 拆包。
 - **[已实现] 加解密（单页，分 对称/非对称/散列）**：对称 `crypto_sym`（AES-128/192/256 的 CBC/CTR/GCM、ChaCha20Poly1305；key/IV 可"生成"或手填，带长度提示）；非对称 `crypto_rsa_crypt`（RSA OAEP/PKCS1）；散列 `crypto_hash`（MD5/SHA-1/256/384/512）。
+- **[已实现] 受管资产库**：`crypto_asset_list/save/get/delete`（`asset_store.json`）统一管理私钥/CSR/CRL，可导入/查看/导出/删除。
 - 文件写盘统一走后端 `fileprocess::write_file_content / write_file_bytes_base64`（不受前端 `allow-write-file` 作用域限制——修"导出 forbidden path"）。
 
 ### 5.2 [规划] 受管 PKI 资产库（key/CSR/CRL + 四类 CA + 终端证书库）
@@ -103,6 +111,6 @@
 - gdb_mi：`gdb_mi_start(profileId,program,args,attachPid,useSudo)` `gdb_mi_command` `gdb_mi_raw` `gdb_mi_close` `gdb_save_macros` `gdb_load_macros`；事件 `gdb-mi-output/async/exit`。
 - ssh_terminal/serial_telnet/sftp_fs：见 §3。
 - remote_terminal_tools：`ssh_exec_capture` `ssh_read_text_file` `gdb_coredump_analyze` `ssh_start_periodic/stop` `binary_analyze` `crypto_inspect`。
-- crypto_lab：`crypto_load_bytes` `crypto_gen_key` `crypto_gen_csr` `crypto_issue_cert` `crypto_sign_csr` `crypto_verify_cert` `crypto_pfx_parse/build` `crypto_sym` `crypto_rsa_crypt` `crypto_sign/verify` `crypto_hash` `crypto_ca_list/create/import/delete/export` `crypto_issue_from_ca`；[规划] `crypto_ca_revoke/gen_crl` `crypto_leaf_*`。
+- crypto_lab：`crypto_load_bytes` `crypto_pem_details` `crypto_gen_key` `crypto_gen_csr` `crypto_issue_cert` `crypto_sign_csr` `crypto_verify_cert` `crypto_pfx_parse/build` `crypto_sym` `crypto_rsa_crypt` `crypto_sign/verify` `crypto_hash` `crypto_ca_list/create/import/delete/export/revoke/gen_crl` `crypto_issue_from_ca` `crypto_leaf_list/delete/export` `crypto_asset_list/save/get/delete`；[可选特性 tlcp] `crypto_engine::{ca_create,issue_leaf,gen_crl}`、`crypto_engine::ntls`。
 
 

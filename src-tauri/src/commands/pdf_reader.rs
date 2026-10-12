@@ -170,6 +170,21 @@ where
     rx.await.map_err(|_| "PDF worker 无响应".to_string())?
 }
 
+/// 让某路径的文档缓存失效，下次访问必然重新读取字节。
+///
+/// 用途：LaTeX/Typst 预览现在把 PDF 写到**稳定路径**（同一份文档每次重建都覆写同一个文件），
+/// 这样阅读器才能走增量对账（只重渲变化页）。但 `with_doc` 只按 mtime 判断新鲜度，
+/// 同一个秒级刻度内覆写会命中旧缓存、把上一次构建的字节继续吐出来。
+/// 因此写入方必须在写完 PDF 后显式调用这里，与 `pdf_save` / `pdf_add_highlight` 的做法一致。
+pub async fn invalidate_pdf(path: &str) -> Result<(), String> {
+    let path = path.to_string();
+    run_pdf(move |state| {
+        state.invalidate(&path);
+        Ok(())
+    })
+    .await
+}
+
 /// `run_pdf` 的同步版：供 `spawn_blocking` 等非 async 上下文使用（如 tts_book 的文本抽取回退）。
 /// 阻塞当前线程直到工作线程返回；绝不能在 pdfium 工作线程自身内部调用（会死锁）。
 pub fn run_pdf_blocking<R, F>(f: F) -> Result<R, String>

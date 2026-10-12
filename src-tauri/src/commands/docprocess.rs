@@ -20,6 +20,7 @@ use svg::node::element::{Rectangle, Text as SvgText};
 use svg::Document;
 use regex::Regex;
 use reqwest::Client;
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command as TokioCommand;
 use tokio::time::{sleep, Duration};
@@ -1667,10 +1668,57 @@ pub async fn export_tex_pdf_tectonic(input_path: String, output_path: String) ->
     Ok(())
 }
 
+/// 预览构建目录（稳定）：按 `<引擎>/<源文件路径哈希>` 分目录，使同一份文档每次重建
+/// 都落到**同一个输出路径**。
+///
+/// 这是前端增量渲染的前提：`GuaxiPdfViewer` 只在 PDF 路径不变时才走 `incrementalReconcile`
+/// （逐页指纹 diff、保留未变页的位图与滚动位置）；路径一变就整篇冷重载、重新栅格化所有页。
+/// 放在 Guaxi 配置目录下（与 codex-home / cognition 同级），不用系统临时目录——那是随时会被清的。
+pub(crate) fn preview_build_dir(engine: &str, source_key: &str) -> Result<PathBuf, String> {
+    let config_path = crate::commands::settingview::get_config_path();
+    let config_dir = config_path
+        .parent()
+        .ok_or_else(|| "无法获取 Guaxi 配置目录".to_string())?;
+    let mut hasher = Sha256::new();
+    hasher.update(source_key.as_bytes());
+    let digest = format!("{:x}", hasher.finalize());
+    let dir = config_dir
+        .join("preview_build")
+        .join(engine)
+        .join(&digest[..16]);
+    fs::create_dir_all(&dir).map_err(|e| format!("创建预览构建目录失败: {e}"))?;
+    Ok(dir)
+}
+
+/// 正在构建的预览进程：key = 源文件路径，value = PID。
+///
+/// 前端只能丢弃过期构建的**结果**（latexBuildSeq），杀不掉已经在跑的 tectonic；
+/// 所以这里按文档记 PID，新一轮构建开始前先杀掉上一轮，避免过期构建堆积抢占 CPU。
+static LATEX_PREVIEW_PIDS: OnceLock<Mutex<HashMap<String, u32>>> = OnceLock::new();
+
+fn latex_preview_pids() -> &'static Mutex<HashMap<String, u32>> {
+    LATEX_PREVIEW_PIDS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 杀掉同一文档上一轮还没结束的预览构建（若有）。
+fn kill_previous_latex_preview(key: &str) {
+    let pid = latex_preview_pids()
+        .lock()
+        .ok()
+        .and_then(|mut guard| guard.remove(key));
+    if let Some(pid) = pid {
+        info!(pid, key, "[LatexPreview] 终止上一轮过期构建");
+        crate::guaxiservices::process_shutdown::terminate_process_tree(pid, "latex-preview");
+    }
+}
+
 /// 为 LaTeX 实时预览构建 PDF：
 /// - `source_path`：当前 .tex 文件路径（用于定位其所在目录，保证 \input/图片等相对依赖可解析）。
 /// - `content`：编辑器当前内容（未必已落盘）；写入源目录下的临时 .tex 再编译，从而支持"实时预览"。
 /// 返回生成的 PDF 临时文件路径，前端用 read_file_bytes_base64 读取后用 pdf.js 渲染。
+///
+/// 输出路径**稳定**（见 `latex_preview_build_dir`）并保留中间文件：既让前端能增量渲染，
+/// 也让多趟（目录/交叉引用）收敛更快。`.synctex.gz` 与 PDF 同目录，`synctex_path_for` 仍能派生。
 #[tauri::command]
 pub async fn build_tex_pdf_preview(source_path: String, content: String) -> Result<String, String> {
     let source = PathBuf::from(source_path.trim());
@@ -1694,16 +1742,16 @@ pub async fn build_tex_pdf_preview(source_path: String, content: String) -> Resu
 
     let (tectonic_path, is_bundled) = find_tectonic_exe_for_export()?;
 
-    let tmp_base = std::env::temp_dir().join("guaxi_tectonic_preview");
-    let _ = fs::create_dir_all(&tmp_base);
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| e.to_string())?;
-    let outdir = tmp_base.join(format!("{}", now.as_nanos()));
-    let _ = fs::remove_dir_all(&outdir);
-    fs::create_dir_all(&outdir).map_err(|e| format!("创建预览输出目录失败: {e}"))?;
+    let key = source.to_string_lossy().to_string();
+    let outdir = preview_build_dir("latex", &key)?;
 
-    let mut cmd = Command::new(&tectonic_path);
+    // 同文档的上一轮构建先杀掉：过期构建既浪费 CPU，又可能在同一个稳定输出目录里
+    // 用旧内容覆盖新结果（两次写入的先后顺序不确定）。
+    kill_previous_latex_preview(&key);
+
+    // 用 tokio 的进程 API 而非 std：std 的 `output()` 会把当前 tokio 工作线程阻塞整个
+    // 编译期间（数秒~数十秒），期间其它 IPC 命令全部排队，整个界面跟着发卡。
+    let mut cmd = TokioCommand::new(&tectonic_path);
 
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
@@ -1714,15 +1762,45 @@ pub async fn build_tex_pdf_preview(source_path: String, content: String) -> Resu
         .arg("--outdir")
         .arg(&outdir)
         .arg("--synctex") // 生成 <stem>.synctex.gz，供内嵌阅读器做双向定位
+        .arg("--keep-intermediates") // 保留 .aux/.toc：多趟交叉引用收敛更快
         .arg("--untrusted")
-        .arg(&tmp_tex);
+        .arg(&tmp_tex)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
 
-    let out = cmd.output();
+    let child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            let _ = fs::remove_file(&tmp_tex);
+            return Err(format!(
+                "启动 tectonic 失败: {e} (path={})",
+                tectonic_path.display()
+            ));
+        }
+    };
+    let pid = child.id();
+    if let Some(pid) = pid {
+        if let Ok(mut guard) = latex_preview_pids().lock() {
+            guard.insert(key.clone(), pid);
+        }
+    }
 
-    // 无论成功失败都清理源目录里的临时 .tex
+    let out = child.wait_with_output().await;
+
+    // 无论成功失败都清理：登记表 + 源目录里的临时 .tex。
+    // 注意只在登记的还是自己这个 PID 时才删，否则会把下一轮（更新）的登记抹掉，
+    // 让那个构建再也无法被后续构建取消。
+    if let Some(pid) = pid {
+        if let Ok(mut guard) = latex_preview_pids().lock() {
+            if guard.get(&key).copied() == Some(pid) {
+                guard.remove(&key);
+            }
+        }
+    }
     let _ = fs::remove_file(&tmp_tex);
 
-    let out = out.map_err(|e| format!("启动 tectonic 失败: {e} (path={})", tectonic_path.display()))?;
+    let out = out.map_err(|e| format!("等待 tectonic 结束失败: {e}"))?;
 
     if !out.status.success() {
         let stdout = String::from_utf8_lossy(&out.stdout).to_string();
@@ -1748,7 +1826,15 @@ pub async fn build_tex_pdf_preview(source_path: String, content: String) -> Resu
         ));
     }
 
-    Ok(pdf_path.to_string_lossy().to_string())
+    // 稳定路径是**覆写**同一个文件，而 pdfium 的文档缓存只按 mtime 判断新鲜度：
+    // 同一时间刻度内重建会命中旧缓存、把上一次构建的字节继续吐出来，前端就会认为"没变化"
+    // 而跳过重渲。这里显式失效，与 pdf_save / pdf_add_highlight 的做法一致。
+    let pdf_path_str = pdf_path.to_string_lossy().to_string();
+    if let Err(e) = crate::commands::pdf_reader::invalidate_pdf(&pdf_path_str).await {
+        warn!(err = %e, "[LatexPreview] 失效 PDF 缓存失败，阅读器可能仍显示上一次的渲染结果");
+    }
+
+    Ok(pdf_path_str)
 }
 
 #[tauri::command]

@@ -1224,12 +1224,16 @@
         @mousedown="startResizeLatexPreview"
       />
 
+      <!-- 预览 pdf-path 必须带 ?v=seq 的完整路径：PDF 输出路径现在是稳定的（同一份文档每次
+           重建覆写同一个文件），所以只有 query 变化才能触发 GuaxiPdfViewer 的重载 watcher；
+           它内部按 base（去掉 query）比较，base 不变 -> keepExisting=true -> 走
+           incrementalReconcile 逐页增量渲染，只重渲真正变化的页并保留滚动位置。 -->
       <GuaxiLatexPreview
         v-if="isPdfPreviewDoc && latexPreviewVisible"
         ref="latexPreviewRef"
         class="latex-preview-pane"
         :style="previewPaneStyle"
-        :pdf-path="latexPreviewRealPdfPath"
+        :pdf-path="latexPreviewPdfPath"
         :source-path="latexPreviewSourcePath"
         :building="latexPreviewBuilding"
         :error-text="latexPreviewError"
@@ -20669,17 +20673,17 @@ const buildLatexPreview = async () => {
 }
 
 // 实时预览：编辑停顿后防抖重建
+// 400ms：配合后端的"新构建先杀掉上一轮"，过期构建不会堆积，所以可以压得比原来（1200ms）低，
+// 手感更接近实时。真正的整篇重渲代价由阅读器的增量对账消化，不靠拉长防抖来省。
+const LATEX_PREVIEW_REBUILD_DEBOUNCE_MS = 400
 const scheduleLatexPreviewRebuild = () => {
   if (!latexPreviewVisible.value || !isPdfPreviewDoc.value) return
   if (latexBuildDebounceTimer) clearTimeout(latexBuildDebounceTimer)
   latexBuildDebounceTimer = setTimeout(() => {
     latexBuildDebounceTimer = null
     buildLatexPreview()
-  }, 1200)
+  }, LATEX_PREVIEW_REBUILD_DEBOUNCE_MS)
 }
-
-// pdfPath 去掉 query 后的真实路径（供 pane 读取）
-const latexPreviewRealPdfPath = computed(() => String(latexPreviewPdfPath.value).split('?')[0])
 
 // 源文件路径（供预览做双向定位：synctex / typst-ide 都按它匹配）
 const latexPreviewSourcePath = computed(() => selectedFile.value?.path || fileTreeStore.activeTab || '')

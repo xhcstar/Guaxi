@@ -486,7 +486,11 @@ fn chacha(key: &[u8], nonce: &[u8], data: &[u8], aad: &[u8], enc: bool) -> Resul
 // ============================ 非对称加解密 / 签名 / 验签 / 散列 ============================
 
 use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey};
+use rsa::traits::PublicKeyParts;
 use rsa::{RsaPrivateKey, RsaPublicKey};
+// FromDer 提供 X509CertificationRequest / CertificateRevocationList 的 from_der，
+// 需要在模块级引入（guess_der_tag 与命令体内都会用到）。
+use x509_parser::prelude::FromDer;
 
 fn load_rsa_public(pem: &str) -> Result<RsaPublicKey, String> {
     if let Ok(pk) = RsaPublicKey::from_public_key_pem(pem) {
@@ -527,23 +531,33 @@ pub fn crypto_rsa_crypt(
     }
 }
 
+/// RSA 签名方案：rsa-pkcs1-sha256|sha384|sha512、rsa-pss-sha256|sha384|sha512。
+/// 用宏按摘要展开，避免六份重复代码。
 #[command]
 pub fn crypto_sign(key_pem: String, data_b64: String, scheme: String) -> Result<String, String> {
     let data = b64_dec(&data_b64)?;
-    let sig: Vec<u8> = match scheme.as_str() {
-        "rsa-pkcs1-sha256" => {
+    macro_rules! pkcs1 {
+        ($d:ty) => {{
             use rsa::signature::{SignatureEncoding, Signer};
             let sk = RsaPrivateKey::from_pkcs8_pem(&key_pem).map_err(|e| e.to_string())?;
-            let signer = rsa::pkcs1v15::SigningKey::<sha2::Sha256>::new(sk);
-            signer.sign(&data).to_vec()
-        }
-        "rsa-pss-sha256" => {
+            rsa::pkcs1v15::SigningKey::<$d>::new(sk).sign(&data).to_vec()
+        }};
+    }
+    macro_rules! pss {
+        ($d:ty) => {{
             use rsa::signature::{RandomizedSigner, SignatureEncoding};
             let sk = RsaPrivateKey::from_pkcs8_pem(&key_pem).map_err(|e| e.to_string())?;
-            let signer = rsa::pss::SigningKey::<sha2::Sha256>::new(sk);
             let mut rng = rand08::rngs::OsRng;
-            signer.sign_with_rng(&mut rng, &data).to_vec()
-        }
+            rsa::pss::SigningKey::<$d>::new(sk).sign_with_rng(&mut rng, &data).to_vec()
+        }};
+    }
+    let sig: Vec<u8> = match scheme.as_str() {
+        "rsa-pkcs1-sha256" => pkcs1!(sha2::Sha256),
+        "rsa-pkcs1-sha384" => pkcs1!(sha2::Sha384),
+        "rsa-pkcs1-sha512" => pkcs1!(sha2::Sha512),
+        "rsa-pss-sha256" => pss!(sha2::Sha256),
+        "rsa-pss-sha384" => pss!(sha2::Sha384),
+        "rsa-pss-sha512" => pss!(sha2::Sha512),
         "ecdsa-p256" => {
             use p256::ecdsa::{signature::Signer, Signature, SigningKey};
             let sk = SigningKey::from_pkcs8_pem(&key_pem).map_err(|e| format!("载入 EC 私钥失败: {e}"))?;
@@ -576,25 +590,35 @@ pub fn crypto_verify(
 ) -> Result<bool, String> {
     let data = b64_dec(&data_b64)?;
     let sig = b64_dec(&sig_b64)?;
-    let ok = match scheme.as_str() {
-        "rsa-pkcs1-sha256" => {
+    macro_rules! pkcs1_v {
+        ($d:ty) => {{
             use rsa::signature::Verifier;
             let pk = load_rsa_public(&pub_pem)?;
-            let vk = rsa::pkcs1v15::VerifyingKey::<sha2::Sha256>::new(pk);
+            let vk = rsa::pkcs1v15::VerifyingKey::<$d>::new(pk);
             match rsa::pkcs1v15::Signature::try_from(sig.as_slice()) {
                 Ok(s) => vk.verify(&data, &s).is_ok(),
                 Err(_) => false,
             }
-        }
-        "rsa-pss-sha256" => {
+        }};
+    }
+    macro_rules! pss_v {
+        ($d:ty) => {{
             use rsa::signature::Verifier;
             let pk = load_rsa_public(&pub_pem)?;
-            let vk = rsa::pss::VerifyingKey::<sha2::Sha256>::new(pk);
+            let vk = rsa::pss::VerifyingKey::<$d>::new(pk);
             match rsa::pss::Signature::try_from(sig.as_slice()) {
                 Ok(s) => vk.verify(&data, &s).is_ok(),
                 Err(_) => false,
             }
-        }
+        }};
+    }
+    let ok = match scheme.as_str() {
+        "rsa-pkcs1-sha256" => pkcs1_v!(sha2::Sha256),
+        "rsa-pkcs1-sha384" => pkcs1_v!(sha2::Sha384),
+        "rsa-pkcs1-sha512" => pkcs1_v!(sha2::Sha512),
+        "rsa-pss-sha256" => pss_v!(sha2::Sha256),
+        "rsa-pss-sha384" => pss_v!(sha2::Sha384),
+        "rsa-pss-sha512" => pss_v!(sha2::Sha512),
         "ecdsa-p256" => {
             use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
             let vk = VerifyingKey::from_public_key_pem(&pub_pem).map_err(|e| e.to_string())?;
@@ -1387,6 +1411,212 @@ pub fn crypto_asset_delete(app: AppHandle, id: String) -> Result<(), String> {
     v.retain(|a| a.id != id);
     write_assets(&app, &v)
 }
+
+// ============================ 证书/私钥/CSR/CRL 详情（查看弹窗用）============================
+
+#[derive(Serialize)]
+pub struct PemDetails {
+    /// certificate | private_key | public_key | csr | crl | unknown
+    pub kind: String,
+    /// 归一化后的 PEM（供展示与复制）
+    pub pem: String,
+    /// DER 的 base64（供展示与复制）
+    pub der_b64: String,
+    /// DER 的 SHA-256 指纹（冒号分隔大写十六进制，便于与 openssl 对照）
+    pub fingerprint: String,
+    pub fields: Vec<(String, String)>,
+    pub sans: Vec<String>,
+}
+
+/// 把 PEM / base64 / hex 输入统一成 (标签, DER, PEM 文本)。
+fn normalize_input(input: &str) -> Result<(String, Vec<u8>, String), String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err("输入为空".into());
+    }
+    if trimmed.contains("-----BEGIN") {
+        let block = pem::parse(trimmed.as_bytes()).map_err(|e| format!("PEM 解析失败: {e}"))?;
+        let tag = block.tag().to_string();
+        let der = block.contents().to_vec();
+        // 直接用原文本，避免重新编码改变换行风格。
+        return Ok((tag, der, trimmed.to_string()));
+    }
+    let compact: String = trimmed.chars().filter(|c| !c.is_whitespace()).collect();
+    let der = if let Ok(b) = b64().decode(compact.as_bytes()) {
+        b
+    } else if let Ok(b) = hex::decode(&compact) {
+        b
+    } else {
+        return Err("无法识别：需要 PEM、base64 或 hex 编码的 DER".into());
+    };
+    // 裸 DER：按内容猜测标签并回编成 PEM
+    let tag = guess_der_tag(&der);
+    let pem_text = pem::encode(&pem::Pem::new(tag.clone(), der.clone()));
+    Ok((tag, der, pem_text))
+}
+
+fn guess_der_tag(der: &[u8]) -> String {
+    if x509_parser::parse_x509_certificate(der).is_ok() {
+        "CERTIFICATE".into()
+    } else if x509_parser::certification_request::X509CertificationRequest::from_der(der).is_ok() {
+        "CERTIFICATE REQUEST".into()
+    } else if x509_parser::revocation_list::CertificateRevocationList::from_der(der).is_ok() {
+        "X509 CRL".into()
+    } else if der.first() == Some(&0x30) {
+        "PRIVATE KEY".into()
+    } else {
+        "UNKNOWN".into()
+    }
+}
+
+fn fingerprint_of(der: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let d = Sha256::digest(der);
+    d.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(":")
+}
+
+fn san_list(cert: &x509_parser::certificate::X509Certificate) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Ok(Some(ext)) = cert.subject_alternative_name() {
+        for gn in &ext.value.general_names {
+            out.push(format!("{gn}"));
+        }
+    }
+    out
+}
+
+/// 解析一份证书/私钥/CSR/CRL，给出可读字段 + PEM + DER(base64) + 指纹。
+#[command]
+pub fn crypto_pem_details(input: String) -> Result<PemDetails, String> {
+    use x509_parser::prelude::X509CertificationRequest;
+    let (tag, der, pem_text) = normalize_input(&input)?;
+    let mut fields: Vec<(String, String)> = vec![("PEM 标签".into(), tag.clone())];
+    let mut sans: Vec<String> = Vec::new();
+    let mut kind = "unknown".to_string();
+
+    if tag.contains("CERTIFICATE") && !tag.contains("REQUEST") {
+        match x509_parser::parse_x509_certificate(&der) {
+            Ok((_, c)) => {
+                kind = "certificate".into();
+                fields.push(("版本".into(), format!("v{}", c.version().0 + 1)));
+                fields.push(("序列号".into(), c.raw_serial_as_string()));
+                fields.push(("主题".into(), c.subject().to_string()));
+                fields.push(("颁发者".into(), c.issuer().to_string()));
+                fields.push(("生效时间".into(), c.validity().not_before.to_string()));
+                fields.push(("失效时间".into(), c.validity().not_after.to_string()));
+                fields.push(("签名算法".into(), c.signature_algorithm.algorithm.to_id_string()));
+                fields.push(("公钥算法".into(), c.public_key().algorithm.algorithm.to_id_string()));
+                fields.push(("是否 CA".into(), if c.is_ca() { "是".into() } else { "否".to_string() }));
+                fields.push(("自签".into(), if c.subject() == c.issuer() { "是".into() } else { "否".to_string() }));
+                sans = san_list(&c);
+            }
+            Err(e) => fields.push(("证书解析".into(), format!("失败: {e}"))),
+        }
+    } else if tag.contains("REQUEST") {
+        kind = "csr".into();
+        match X509CertificationRequest::from_der(&der) {
+            Ok((_, csr)) => {
+                fields.push(("主题".into(), csr.certification_request_info.subject.to_string()));
+                fields.push(("签名算法".into(), csr.signature_algorithm.algorithm.to_id_string()));
+                if let Some(exts) = csr.requested_extensions() {
+                    for e in exts {
+                        if let x509_parser::extensions::ParsedExtension::SubjectAlternativeName(san) = e {
+                            for gn in &san.general_names {
+                                sans.push(format!("{gn}"));
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => fields.push(("CSR 解析".into(), format!("失败: {e}"))),
+        }
+    } else if tag.contains("CRL") {
+        kind = "crl".into();
+        match x509_parser::revocation_list::CertificateRevocationList::from_der(&der) {
+            Ok((_, crl)) => {
+                fields.push(("颁发者".into(), crl.issuer().to_string()));
+                fields.push(("签名算法".into(), crl.signature_algorithm.algorithm.to_id_string()));
+                fields.push(("本次更新".into(), crl.last_update().to_string()));
+                if let Some(n) = crl.next_update() {
+                    fields.push(("下次更新".into(), n.to_string()));
+                }
+                fields.push(("吊销条目".into(), crl.iter_revoked_certificates().count().to_string()));
+            }
+            Err(e) => fields.push(("CRL 解析".into(), format!("失败: {e}"))),
+        }
+    } else if tag.contains("PRIVATE KEY") {
+        kind = "private_key".into();
+        describe_key(&pem_text, &der, &mut fields, true);
+    } else if tag.contains("PUBLIC KEY") {
+        kind = "public_key".into();
+        describe_key(&pem_text, &der, &mut fields, false);
+    }
+
+    fields.push(("DER 长度".into(), format!("{} 字节", der.len())));
+    Ok(PemDetails {
+        kind,
+        pem: pem_text,
+        der_b64: b64_enc(&der),
+        fingerprint: fingerprint_of(&der),
+        fields,
+        sans,
+    })
+}
+
+/// 识别私钥/公钥算法与规格（RSA 位数 / EC 曲线 / Ed25519）。
+fn describe_key(pem_text: &str, der: &[u8], fields: &mut Vec<(String, String)>, is_private: bool) {
+    // RSA
+    if is_private {
+        if let Ok(sk) = RsaPrivateKey::from_pkcs8_pem(pem_text) {
+            fields.push(("算法".into(), "RSA".into()));
+            fields.push(("密钥长度".into(), format!("{} 位", sk.n().bits())));
+            return;
+        }
+    } else if let Ok(pk) = RsaPublicKey::from_public_key_pem(pem_text) {
+        fields.push(("算法".into(), "RSA".into()));
+        fields.push(("密钥长度".into(), format!("{} 位", pk.n().bits())));
+        return;
+    }
+    // EC（P-256 / P-384）
+    if is_private {
+        if p256::SecretKey::from_pkcs8_pem(pem_text).is_ok() {
+            fields.push(("算法".into(), "ECDSA".into()));
+            fields.push(("曲线".into(), "P-256 (prime256v1)".into()));
+            return;
+        }
+        if p384::SecretKey::from_pkcs8_pem(pem_text).is_ok() {
+            fields.push(("算法".into(), "ECDSA".into()));
+            fields.push(("曲线".into(), "P-384 (secp384r1)".into()));
+            return;
+        }
+    } else if let Ok(k) = p256::PublicKey::from_public_key_pem(pem_text) {
+        let _ = k;
+        fields.push(("算法".into(), "ECDSA".into()));
+        fields.push(("曲线".into(), "P-256 (prime256v1)".into()));
+        return;
+    } else if p384::PublicKey::from_public_key_pem(pem_text).is_ok() {
+        fields.push(("算法".into(), "ECDSA".into()));
+        fields.push(("曲线".into(), "P-384 (secp384r1)".into()));
+        return;
+    }
+    // Ed25519
+    {
+        use ed25519_dalek::pkcs8::{DecodePrivateKey, DecodePublicKey};
+        if is_private {
+            if ed25519_dalek::SigningKey::from_pkcs8_pem(pem_text).is_ok() {
+                fields.push(("算法".into(), "Ed25519".into()));
+                fields.push(("密钥长度".into(), "256 位 (EdDSA)".into()));
+                return;
+            }
+        } else if ed25519_dalek::VerifyingKey::from_public_key_pem(pem_text).is_ok() {
+            fields.push(("算法".into(), "Ed25519".into()));
+            fields.push(("密钥长度".into(), "256 位 (EdDSA)".into()));
+            return;
+        }
+    }
+    fields.push(("算法".into(), format!("未识别（DER {} 字节）", der.len())));
+}
+
 
 
 

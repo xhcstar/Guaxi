@@ -368,6 +368,7 @@ async fn main() {
             commands::crypto_lab::crypto_asset_save,
             commands::crypto_lab::crypto_asset_get,
             commands::crypto_lab::crypto_asset_delete,
+            commands::crypto_lab::crypto_pem_details,
             commands::serial_telnet::serial_list_ports,
             commands::serial_telnet::serial_open,
             commands::serial_telnet::serial_write,
