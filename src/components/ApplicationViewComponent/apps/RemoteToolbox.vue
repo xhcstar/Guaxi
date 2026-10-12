@@ -176,8 +176,8 @@
               </div>
               <div class="tb-row">
                 <n-tooltip trigger="hover"><template #trigger><n-select v-model:value="caCategory" size="small" :options="caCategoryOptions" style="width:130px" /></template>CA 类别：RSA / ECC（本地签发）· SM2 / PQC（需 tlcp 特性 + Tongsuo）</n-tooltip>
-                <n-tooltip trigger="hover"><template #trigger><n-select v-if="caCategory==='rsa'" v-model:value="chainBits" size="small" :options="rsaBitsOptions" style="width:160px" /></template>RSA 密钥长度。CA 建议 ≥ 3072 位</n-tooltip>
-                <n-tooltip trigger="hover"><template #trigger><n-select v-if="caCategory==='ecc'" v-model:value="chainCurve" size="small" :options="ecCurveOptions" style="width:150px" /></template>椭圆曲线。P-256 通用；P-384 更高强度</n-tooltip>
+                <n-tooltip v-if="caCategory==='rsa'" trigger="hover"><template #trigger><n-select v-model:value="chainBits" size="small" :options="rsaBitsOptions" style="width:160px" /></template>RSA 密钥长度。CA 建议 ≥ 3072 位</n-tooltip>
+                <n-tooltip v-if="caCategory==='ecc'" trigger="hover"><template #trigger><n-select v-model:value="chainCurve" size="small" :options="ecCurveOptions" style="width:150px" /></template>椭圆曲线。P-256 通用；P-384 更高强度</n-tooltip>
                 <n-tooltip trigger="hover"><template #trigger><n-input v-model:value="caName" size="small" placeholder="CA 名称（库内标识，如 root-ca-ecc）" style="width:210px" /></template>库内显示名，只用于你自己识别，不写进证书</n-tooltip>
                 <n-tooltip trigger="hover"><template #trigger><n-input v-model:value="caCn" size="small" placeholder="CA 的 CN，如 Root CA (ECC)" style="width:210px" /></template>CA 证书的 CN，会写进证书主题（可先用上面的"主题串"一键填入）</n-tooltip>
                 <n-tooltip trigger="hover"><template #trigger><n-select v-model:value="caParent" size="small" :options="caParentOptions" placeholder="上级 CA（空 = 根 CA）" clearable style="width:200px" /></template>留空 = 自签根 CA；选一个同类 CA = 由它签发中间 CA</n-tooltip>
@@ -268,8 +268,8 @@
               <div class="tb-row">
                 <span class="tb-res">密钥</span>
                 <n-tooltip trigger="hover"><template #trigger><n-select v-model:value="keyAlgo" size="small" :options="keyAlgoOptions" style="width:170px" /></template>密钥算法。当前库支持 RSA / ECDSA(P-256,P-384) / Ed25519</n-tooltip>
-                <n-tooltip trigger="hover"><template #trigger><n-select v-if="keyAlgo==='rsa'" v-model:value="rsaBits" size="small" :options="rsaBitsOptions" style="width:190px" /></template>RSA 位数：越大越安全也越慢，2048 起步，长期用 3072/4096</n-tooltip>
-                <n-tooltip trigger="hover"><template #trigger><n-select v-if="keyAlgo==='ec'" v-model:value="ecCurve" size="small" :options="ecCurveOptions" style="width:200px" /></template>椭圆曲线。P-256 最常见；P-384 更高强度（P-521 需要 aws-lc 后端，本机不可用）</n-tooltip>
+                <n-tooltip v-if="keyAlgo==='rsa'" trigger="hover"><template #trigger><n-select v-model:value="rsaBits" size="small" :options="rsaBitsOptions" style="width:190px" /></template>RSA 位数：越大越安全也越慢，2048 起步，长期用 3072/4096</n-tooltip>
+                <n-tooltip v-if="keyAlgo==='ec'" trigger="hover"><template #trigger><n-select v-model:value="ecCurve" size="small" :options="ecCurveOptions" style="width:200px" /></template>椭圆曲线。P-256 最常见；P-384 更高强度（P-521 需要 aws-lc 后端，本机不可用）</n-tooltip>
                 <n-tooltip trigger="hover"><template #trigger><button class="tb-ib primary" :class="{ 'tb-spin': keyLoading }" @click="genKey"><Icon :icon="plusIcon" width="15" height="15" /></button></template>生成密钥对（私钥 + 公钥）</n-tooltip>
                 <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" :disabled="!genPrivPem" @click="openView('生成的私钥', genPrivPem)"><Icon :icon="eyeIcon" width="15" height="15" /></button></template>查看私钥详情</n-tooltip>
                 <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" :disabled="!genPrivPem" @click="saveText(genPrivPem,'key.key')"><Icon :icon="saveIcon" width="15" height="15" /></button></template>保存私钥到文件</n-tooltip>
@@ -395,7 +395,7 @@
                 <div class="tb-sec">
                   <div class="tb-row">
                     <n-tooltip trigger="hover"><template #trigger><n-select v-model:value="symAlgo" size="small" :options="symAlgoOptions" style="width:260px" /></template>算法。分组密码支持 ECB/CBC/CFB/OFB/CTR；流密码与 AEAD 无需选模式</n-tooltip>
-                    <n-tooltip trigger="hover"><template #trigger><n-select v-if="symIsBlock" v-model:value="symMode" size="small" :options="symModeOptions" style="width:230px" /></template>工作模式。CBC/CFB/OFB/CTR 需要 IV；ECB 不需要 IV 但更弱；CBC/ECB 可用 PKCS7 填充</n-tooltip>
+                    <n-tooltip v-if="symIsBlock" trigger="hover"><template #trigger><n-select v-model:value="symMode" size="small" :options="symModeOptions" style="width:230px" /></template>工作模式。CBC/CFB/OFB/CTR 需要 IV；ECB 不需要 IV 但更弱；CBC/ECB 可用 PKCS7 填充</n-tooltip>
                     <n-tooltip v-if="symIsBlock && (symMode === 'ecb' || symMode === 'cbc')" trigger="hover"><template #trigger><n-checkbox v-model:checked="symPad" size="small">PKCS7 填充</n-checkbox></template>勾选 = 自动做 PKCS7 填充（数据长度可任意）；不勾 = 要求输入是分组大小的整数倍</n-tooltip>
                   </div>
                   <div class="tb-row">
@@ -416,7 +416,7 @@
                   </div>
                   <n-input v-model:value="symData" type="textarea" size="small" :rows="3" placeholder="数据（加密时勾选「明文输入」则填文本，否则填 base64；解密填 base64 密文）" />
                   <div class="tb-row" style="margin-top:8px">
-                    <n-tooltip trigger="hover"><template #trigger><n-input v-if="symIsAead" v-model:value="symAad" size="small" placeholder="AAD(hex, 可空)" style="width:200px" /></template>附加认证数据（仅 AEAD），十六进制，可留空</n-tooltip>
+                    <n-tooltip v-if="symIsAead" trigger="hover"><template #trigger><n-input v-model:value="symAad" size="small" placeholder="AAD(hex, 可空)" style="width:200px" /></template>附加认证数据（仅 AEAD），十六进制，可留空</n-tooltip>
                     <n-tooltip trigger="hover"><template #trigger><n-checkbox v-model:checked="symTextInput" size="small">明文输入</n-checkbox></template>勾选 = 输入是纯文本（不会按 base64 解码）；仅加密时生效</n-tooltip>
                     <n-tooltip trigger="hover"><template #trigger><button class="tb-ib primary lg" @click="runSym(true)"><Icon :icon="keyIcon" width="16" height="16" /></button></template>加密</n-tooltip>
                     <n-tooltip trigger="hover"><template #trigger><button class="tb-ib lg" @click="runSym(false)"><Icon :icon="eyeIcon" width="16" height="16" /></button></template>解密</n-tooltip>
