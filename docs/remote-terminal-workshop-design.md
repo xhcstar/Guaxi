@@ -48,7 +48,13 @@
 - MI 解析器把**非 MI 文本（sudo/gdb 的 stderr：ptrace/tty/password 等）转发到控制台**，不再静默吞掉。
 - gdb 退出后保留并在空状态区展示控制台输出；前端区分"会话已退出/ptrace 受限/sudo 需免密/PID 不存在"并给出对应提示（如 `echo 0 > /proc/sys/kernel/yama/ptrace_scope`、配置 NOPASSWD、同用户）。
 
-**[已实现] 调试面板（结构化而非往控制台 dump）**：左侧 accordion——断点、线程、调用栈（可点选帧 `-stack-select-frame`）、局部变量表（`-stack-list-variables`）、变量树（`-var-create`/`-var-list-children`，支持 natural/hex/dec/bin 格式切换 `-var-set-format`）、Watch、寄存器表（`-data-list-register-names`+`-data-list-register-values x`）、内存 hex+ASCII 视图（`-data-read-memory-bytes` 格式化）；居中列顶部**源码对照面板**（本地 `readTextFile` / 远端 `ssh_read_text_file` 两种来源，编译路径前缀→本地/远端根映射，停住按当前帧 file:line 高亮滚动，并对 gdb 下 `set substitute-path`）。字体与终端一致（`--gdb-mono`）。
+**[已实现] 三栏布局 + 固定标题的分块面板**：中间列固定为「源码对照 + 控制台 + 命令输入」；左右两侧各有一条**可拖宽**的侧栏，面板分块停放——
+- 左栏：断点、调用栈（可点选帧 `-stack-select-frame`）、局部变量（`-stack-list-variables`）、变量树（`-var-create`/`-var-list-children`，支持 natural/hex/dec/bin 切换 `-var-set-format`）；
+- 右栏：线程、Watch、寄存器（`-data-list-register-names` + `-data-list-register-values x`）、内存（`-data-read-memory-bytes` 格式化为 hex+ASCII）、宏。
+
+每个面板 = **固定标题条 + 独立滚动的内容区 + 底部拖拽手柄**：标题条（`gdb-panel-h`）不随内容滚动，也**可点击折叠**；内容区（`gdb-scroll`）自己滚动；手柄（`gdb-panel-rz`）上下拖拽改块高（`panelH`）。标题条右侧是**图标按钮**（`gdb-ib`，全部 `n-tooltip` 带中文说明），例如刷新 / 导出到主界面编辑器 / 删除 / 选目录 / 对照当前行 / 读内存。顶部命令板同样改为图标按钮（运行/继续/下一步/步入/步出/中断 + 全量刷新 + 结束），鼠标悬停给出快捷键与语义说明。
+
+居中列顶部**源码对照面板**：本地 `readTextFile` / 远端 `ssh_read_text_file` 两种来源，编译路径前缀→本地/远端根映射，停住按当前帧 file:line 高亮滚动，并对 gdb 下 `set substitute-path`；可一键发送到主界面编辑器。字体与终端一致（`--gdb-mono`）。
 
 ## 5. 工具箱（`RemoteToolbox.vue`）
 

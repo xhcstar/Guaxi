@@ -1844,7 +1844,11 @@ const mergeDirChildren = (prevChildren, freshChildren) => {
 }
 
 // 刷新指定模式下某目录的子树（合并式，保留展开态与已加载子树）
-const refreshModeDir = async (mode, dirPath) => {
+// options.expand：刷新后是否顺带把目标目录展开。
+// 文件系统事件（保存 / 外部改动）走 expand=false——刷新目录内容不应改变用户的展开/收起状态；
+// 新建、导入、重命名、删除这些用户显式操作仍按默认 true，保持原有行为。
+const refreshModeDir = async (mode, dirPath, options = {}) => {
+  const { expand = true } = options
   const target = normalizePath(dirPath)
   if (mode === 'plain') {
     const root = normalizePath(externalDir.value)
@@ -1859,7 +1863,7 @@ const refreshModeDir = async (mode, dirPath) => {
     if (node) {
       const fresh = await fetchDirChildren(target)
       node.children = mergeDirChildren(node.children, fresh)
-      if (!externalExpandedKeys.value.includes(target)) {
+      if (expand && !externalExpandedKeys.value.includes(target)) {
         externalExpandedKeys.value = [...externalExpandedKeys.value, target]
       }
     } else {
@@ -1880,7 +1884,7 @@ const refreshModeDir = async (mode, dirPath) => {
         if (node) {
           const fresh = await fetchDirChildren(target, true)
           node.children = mergeDirChildren(node.children, fresh)
-          if (!taskCatExpandedKeys[catKey].includes(target)) {
+          if (expand && !taskCatExpandedKeys[catKey].includes(target)) {
             taskCatExpandedKeys[catKey] = [...taskCatExpandedKeys[catKey], target]
           }
         } else {
@@ -3410,8 +3414,9 @@ const scheduleNonKbTreeRefresh = (changedPath, oldPath = '') => {
         }
         for (const t of targets) {
           // 仅刷新落在当前外部目录树范围内的目录，避免误触其它路径
+          // expand:false —— 保存 / 外部改动只刷新内容，不改变用户的展开状态
           if (t === root || t.startsWith(`${root}/`)) {
-            await refreshModeDir('plain', t)
+            await refreshModeDir('plain', t, { expand: false })
           }
         }
       } else if (viewMode.value === 'task') {
@@ -3420,10 +3425,10 @@ const scheduleNonKbTreeRefresh = (changedPath, oldPath = '') => {
           const cat = taskCatOfPath(t)
           if (!cat) continue
           handledCats.add(cat)
-          // 落在已加载分类范围内的目录：刷新该父目录
+          // 落在已加载分类范围内的目录：刷新该父目录（expand:false，不改变展开状态）
           const catPath = catPathOf(cat)
           if (t === catPath || t.startsWith(`${catPath}/`)) {
-            await refreshModeDir('task', t)
+            await refreshModeDir('task', t, { expand: false })
           }
         }
         // 事件落在未加载分类时降级刷新已加载分类根（维持原兜底行为）

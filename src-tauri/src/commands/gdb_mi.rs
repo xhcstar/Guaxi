@@ -363,6 +363,10 @@ pub async fn gdb_mi_start(
     tokio::spawn(async move {
         let mut pending: HashMap<u64, oneshot::Sender<Value>> = HashMap::new();
         let mut linebuf = String::new();
+        // 直到 gdb 的 MI 真正就绪（打印出 `(gdb)` 提示或任一 MI 记录）才下发命令。
+        // 否则在 su 认证/gdb 启动期间过早写入的 MI 命令会和密码输入抢同一个 PTY，导致 attach 丢失/超时。
+        let mut ready = false;
+        let mut queued: Vec<(u64, String, oneshot::Sender<Value>)> = Vec::new();
         loop {
             tokio::select! {
                 msg = channel.wait() => {
@@ -376,6 +380,16 @@ pub async fn gdb_mi_start(
                             linebuf.push_str(&String::from_utf8_lossy(data));
                             while let Some(pos) = linebuf.find('\n') {
                                 let line: String = linebuf.drain(..=pos).collect();
+                                let t = line.trim();
+                                // gdb MI 就绪探测：`(gdb)` 提示或 token 后首字符是 MI 记录符。
+                                if !ready {
+                                    let body = t.trim_start_matches(|c: char| c.is_ascii_digit());
+                                    if t == "(gdb)"
+                                        || body.starts_with(|c: char| "^*+=~@&".contains(c))
+                                    {
+                                        ready = true;
+                                    }
+                                }
                                 handle_line(line.trim_end(), &mut pending, &app, &sid);
                             }
                             // su 的密码提示不带换行，会留在 linebuf 尾部；见到提示就喂一次密码。
@@ -385,8 +399,14 @@ pub async fn gdb_mi_start(
                                     let _ = channel.data(format!("{pw}\n").as_bytes()).await;
                                     linebuf.clear();
                                 } else {
-                                    // 还没出现提示，放回去继续等。
                                     pw_to_send = Some(pw);
+                                }
+                            }
+                            // gdb 就绪后，把排队的命令按顺序补发。
+                            if ready && !queued.is_empty() {
+                                for (token, line, reply) in queued.drain(..) {
+                                    pending.insert(token, reply);
+                                    let _ = channel.data(format!("{token}{line}\n").as_bytes()).await;
                                 }
                             }
                         }
@@ -397,9 +417,13 @@ pub async fn gdb_mi_start(
                 cmd = rx.recv() => {
                     match cmd {
                         Some(GdbCmd::Mi { token, line, reply }) => {
-                            pending.insert(token, reply);
-                            let s = format!("{token}{line}\n");
-                            let _ = channel.data(s.as_bytes()).await;
+                            if ready {
+                                pending.insert(token, reply);
+                                let _ = channel.data(format!("{token}{line}\n").as_bytes()).await;
+                            } else {
+                                // gdb 尚未就绪（可能在 su 认证中）：先排队，就绪后再发。
+                                queued.push((token, line, reply));
+                            }
                         }
                         Some(GdbCmd::Raw(text)) => {
                             let _ = channel.data(text.as_bytes()).await;
