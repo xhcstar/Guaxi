@@ -634,7 +634,7 @@ import banIcon from '@iconify-icons/lucide/ban'
 import listIcon from '@iconify-icons/lucide/list'
 import playIcon from '@iconify-icons/lucide/play'
 import wandIcon from '@iconify-icons/lucide/wand-2'
-import helpIcon from '@iconify-icons/lucide/circle-help'
+import helpIcon from '@iconify-icons/lucide/help-circle'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
 
 use([CanvasRenderer, ScatterChart, GridComponent, TooltipComponent, LegendComponent, DataZoomComponent])

@@ -60,6 +60,8 @@
 
 顶层子页：计算器 / 证书·密钥 / 二进制分析 / Coredump / 远程执行 / 多机对齐。
 
+**[已实现] 计算器 IP 转换（IPv4 + IPv6）**：支持 IPv4 点分/十进制/0x 十六进制/CIDR（给出网段、掩码、网络与广播地址、可用范围、主机数，并附 `IPv4-mapped IPv6` 形式）；以及 **IPv6** 压缩写法 / 完整展开 / 128 位十六进制与十进制（BigInt）/ 二进制分组 / 内嵌 IPv4（`::ffff:a.b.c.d`）与地址类型归类（环回、链路本地 fe80::/10、唯一本地 fc00::/7、组播、全球单播、6to4、Teredo、文档示例 2001:db8::/32 等）；IPv6 CIDR 给出前缀掩码、网络地址、末地址、可用范围、地址总数与可用主机数。压缩遵循 RFC 5952（最长零段用 `::`，单段零不压缩）。
+
 **[已实现] Coredump（`remote_terminal_tools.rs::gdb_coredump_analyze`）**：远端 `gdb -batch` 抽全线程栈+寄存器，输出区**占满高度 + 字号可调**。
 **[已实现] 远程执行/定时采集**：`ssh_exec_capture`、`ssh_start_periodic`/`ssh_stop_periodic`，输出落盘可回喂分析。
 **[已实现] 二进制分析**：`binary_analyze`（goblin，段熵）。
@@ -77,8 +79,12 @@ UI 约定（全页统一）：
 - **[已实现] 解析/导入**：`crypto_load_bytes`（识别 PEM/DER/PFX/key/csr/cert）；`crypto_inspect`（x509 摘要 + ASN.1 dump）；PFX 拆包 `crypto_pfx_parse(password)`。**`crypto_pem_details(input)`**：解析证书/私钥/公钥/CSR/CRL，返回可读字段（主题/颁发者/序列号/有效期/签名与公钥算法/是否 CA/是否自签）、SAN 列表、SHA-256 指纹、归一化 PEM、DER(base64)，驱动"查看"弹窗。
 - **[已实现] 证书链/签发（CA 库驱动）**：后台 CA 库（`crypto_lab/ca_store.json`）记录名称/类别/主题/算法/cert/key/是否根/父 id/序列号计数/CRL 号/吊销表。命令：`crypto_ca_list / crypto_ca_create(name,category,subject,rsa_bits,curve,days,issuer_ca_id) / crypto_ca_import / crypto_ca_delete / crypto_ca_export`；用库内 CA 直签终端证书 `crypto_issue_from_ca(ca_id, subject, profile=server|client, sans, days)`；吊销 `crypto_ca_revoke`、CRL `crypto_ca_gen_crl`；终端证书库 `crypto_leaf_list/delete/export`（`export` 顺 `parent_id` 拼完整**证书链**）。
 - **[已实现] 查看/管理**：CA 行、终端证书行、资产行都带**查看图标**——弹窗分「字段明细 / PEM 原文 / DER(base64) / ASN.1」四页，均可一键复制；证书与其配套私钥在同一行并列可见（CA 与叶证书都是证书+私钥成对入库）。
-- **[已实现] PFX**：`crypto_pfx_build(key_pem, certs_pem[], password)` 打包，`crypto_pfx_parse` 拆包。
-- **[已实现] 加解密（单页，分 对称/非对称/散列）**：对称 `crypto_sym`（AES-128/192/256 的 CBC/CTR/GCM、ChaCha20Poly1305；key/IV 可"生成"或手填，带长度提示）；非对称 `crypto_rsa_crypt`（RSA OAEP/PKCS1）；散列 `crypto_hash`（MD5/SHA-1/256/384/512）。
+- **[已实现] PFX**：`crypto_pfx_build(key_pem, certs_pem[], password)` 打包；`crypto_pfx_parse(data_b64, password)` 拆包。**PFX 页同时提供打包与解包**：解包可直接选外部 .pfx/.p12、填密码，列出包内全部私钥与证书链，逐个查看/复制/保存（"解析/导入"页也支持选 PFX 文件自动拆包）。
+- **[已实现] 加解密（单页，分 对称/非对称/散列）**：
+  - 对称 `crypto_sym(algo, mode, key_hex, iv_hex, data_b64, encrypt, aad_hex, padding)`——**分组密码** AES-128/192/256、SM4、Camellia-128/192/256、Twofish、Serpent（128 位分组）与 DES、3DES/TDEA-3key、Blowfish、CAST5、RC2、IDEA（64 位分组），模式支持 **ECB / CBC / CFB / OFB / CTR**（ECB 无需 IV；ECB/CBC 可 PKCS7 填充，否则要求块对齐）；**流密码** ChaCha20、Salsa20；**AEAD** AES-128/256-GCM、ChaCha20-Poly1305（可填 AAD，密文带 16 字节认证标签）。key/IV 可一键安全随机生成，长度随所选算法提示。
+  - 非对称 `crypto_rsa_crypt`：PKCS#1 v1.5 与 **OAEP + SHA-1/256/384/512**。
+  - 散列 `crypto_hash`：MD5/SHA-1/256/384/512。
+  - 签名 `crypto_sign/verify`：RSA PKCS#1 与 PSS 的 SHA-256/384/512、ECDSA P-256/P-384、Ed25519。
 - **[已实现] 受管资产库**：`crypto_asset_list/save/get/delete`（`asset_store.json`）统一管理私钥/CSR/CRL，可导入/查看/导出/删除。
 - 文件写盘统一走后端 `fileprocess::write_file_content / write_file_bytes_base64`（不受前端 `allow-write-file` 作用域限制——修"导出 forbidden path"）。
 
