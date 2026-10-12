@@ -216,6 +216,23 @@ signature = "2"
 sha1 = "0.10"
 ctr = "0.9"
 chacha20poly1305 = "0.10"
+# 对称算法/模式的补全（全部 pin 在 cipher 0.4 线上，与 aes 0.8 / cbc 0.1 一致）。
+# 块密码：SM4 / Camellia / DES / 3DES / Blowfish / CAST5 / RC2 / Twofish / Serpent / IDEA
+ecb = "0.1"
+cfb-mode = "0.8"
+ofb = "0.6"
+cipher = "0.4"
+sm4 = "0.5"
+camellia = "0.1"
+cast5 = "0.11"
+twofish = "0.7"
+serpent = "0.5"
+idea = "0.5"
+blowfish = "0.9"
+rc2 = "0.8"
+des = "0.8"
+chacha20 = "0.9"
+salsa20 = "0.11"
 # PKCS#12 / PFX 拆包与打包（纯 Rust：rc2/des/cbc/hmac/sha1）。
 p12 = "0.6"
 # 证书有效期计算（rcgen 的 not_before/not_after 用 time::OffsetDateTime）。

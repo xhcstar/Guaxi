@@ -40,7 +40,7 @@
         <div class="tb-sec">
           <div class="tb-h">IP 地址转换</div>
           <div class="tb-row">
-            <n-input v-model:value="ipInput" size="small" placeholder="192.168.1.10 / 3232235786 / 0xC0A8010A / CIDR 10.0.0.0/24" style="width:400px" @input="convertIp" />
+            <n-input v-model:value="ipInput" size="small" placeholder="IPv4: 192.168.1.10 / 3232235786 / 0xC0A8010A / CIDR 10.0.0.0/24　·　IPv6: 2001:db8::1 / ::1 / fe80::1 / CIDR 2001:db8::/32" style="width:660px" @input="convertIp" />
           </div>
           <table class="tb-kv" v-if="ipOut">
             <tbody>
@@ -331,7 +331,7 @@
               <div class="tb-h">
                 打包 PFX（私钥 + 证书链 → .pfx）
                 <n-tooltip trigger="hover"><template #trigger><Icon :icon="helpIcon" width="13" height="13" class="tb-help" /></template>
-                把<b>一张私钥</b>与<b>至少一张证书</b>打包成 PKCS#12。证书按"叶证书在前、各级 CA 在后"的顺序填写。想拆包请到"解析/导入"页选 .pfx 文件。
+                把<b>一张私钥</b>与<b>至少一张证书</b>打包成 PKCS#12。证书按"叶证书在前、各级 CA 在后"的顺序填写。
                 </n-tooltip>
               </div>
               <n-input v-model:value="pfxKey" type="textarea" size="small" :rows="3" placeholder="私钥 PEM（-----BEGIN PRIVATE KEY-----）" />
@@ -343,6 +343,50 @@
                 </template>打包并保存为 .pfx 文件</n-tooltip>
               </div>
             </div>
+
+            <div class="tb-sec">
+              <div class="tb-h">
+                解包外部 PFX / P12
+                <n-tooltip trigger="hover"><template #trigger><Icon :icon="helpIcon" width="13" height="13" class="tb-help" /></template>
+                选一个外部 .pfx/.p12 文件，用密码拆出其中的全部私钥与证书链，可逐个查看、复制或保存。密码不对会报错，多试几个。
+                </n-tooltip>
+              </div>
+              <div class="tb-row">
+                <n-tooltip trigger="hover"><template #trigger><n-input v-model:value="pfxUnpackPwd" type="password" size="small" placeholder="PFX 保护密码（没有则留空）" show-password-on="click" style="width:240px" /></template>该 PFX 文件的保护密码；未加密的包留空即可</n-tooltip>
+                <n-tooltip trigger="hover"><template #trigger>
+                  <button class="tb-ib primary lg" :disabled="pfxUnpacking" @click="unpackPfxFile"><Icon :icon="pfxUnpacking ? refreshIcon : folderIcon" width="17" height="17" :class="{ 'tb-spin': pfxUnpacking }" /></button>
+                </template>选择 .pfx/.p12 文件并解包</n-tooltip>
+                <span class="tb-res" v-if="pfxName">{{ pfxName }}</span>
+                <span v-if="error" class="tb-err">{{ error }}</span>
+              </div>
+              <template v-if="pfxKeys.length || pfxCertsOut.length">
+                <div class="tb-sub">私钥（{{ pfxKeys.length }}）</div>
+                <table class="tb-table" v-for="(k, i) in pfxKeys" :key="'k' + i">
+                  <tbody><tr>
+                    <td class="tb-res">私钥 #{{ i + 1 }}</td>
+                    <td class="tb-ops">
+                      <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" @click="openView(`PFX 私钥 #${i+1}`, k)"><Icon :icon="eyeIcon" width="14" height="14" /></button></template>查看该私钥详情</n-tooltip>
+                      <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" @click="exportPem(k, pfxName + `.key${i+1}`)"><Icon :icon="saveIcon" width="14" height="14" /></button></template>保存该私钥为文件</n-tooltip>
+                    </td>
+                  </tr></tbody>
+                </table>
+                <div class="tb-sub">证书链（{{ pfxCertsOut.length }}）</div>
+                <table class="tb-table" v-for="(c, i) in pfxCertsOut" :key="'c' + i">
+                  <tbody><tr>
+                    <td class="tb-res">{{ i === 0 ? '叶证书' : 'CA 证书' }} #{{ i + 1 }}</td>
+                    <td class="tb-ops">
+                      <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" @click="openView(`PFX 证书 #${i+1}`, c)"><Icon :icon="eyeIcon" width="14" height="14" /></button></template>查看该证书详情</n-tooltip>
+                      <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" @click="exportPem(c, pfxName + `.crt${i+1}`)"><Icon :icon="saveIcon" width="14" height="14" /></button></template>保存该证书为文件</n-tooltip>
+                    </td>
+                  </tr></tbody>
+                </table>
+                <div class="tb-row">
+                  <n-tooltip trigger="hover"><template #trigger>
+                    <button class="tb-ib" @click="sendToEditor('```\n' + pfxKeys.join('\n') + pfxCertsOut.join('\n') + '\n```')"><Icon :icon="uploadIcon" width="15" height="15" /></button>
+                  </template>把全部私钥与证书发送到主界面编辑器</n-tooltip>
+                </div>
+              </template>
+            </div>
           </n-tab-pane>
 
           <n-tab-pane name="crypt" tab="加解密">
@@ -350,23 +394,33 @@
               <n-tab-pane name="sym" tab="对称加解密">
                 <div class="tb-sec">
                   <div class="tb-row">
-                    <n-select v-model:value="symAlgo" size="small" :options="symAlgoOptions" style="width:170px" />
-                    <n-select v-if="symAlgo==='aes'" v-model:value="symMode" size="small" :options="symModeOptions" style="width:100px" />
-                    <n-select v-if="symAlgo==='aes'" v-model:value="symKeyBits" size="small" :options="aesKeyBitsOptions" style="width:110px" />
+                    <n-tooltip trigger="hover"><template #trigger><n-select v-model:value="symAlgo" size="small" :options="symAlgoOptions" style="width:260px" /></template>算法。分组密码支持 ECB/CBC/CFB/OFB/CTR；流密码与 AEAD 无需选模式</n-tooltip>
+                    <n-tooltip trigger="hover"><template #trigger><n-select v-if="symIsBlock" v-model:value="symMode" size="small" :options="symModeOptions" style="width:230px" /></template>工作模式。CBC/CFB/OFB/CTR 需要 IV；ECB 不需要 IV 但更弱；CBC/ECB 可用 PKCS7 填充</n-tooltip>
+                    <n-tooltip v-if="symIsBlock && (symMode === 'ecb' || symMode === 'cbc')" trigger="hover"><template #trigger><n-checkbox v-model:checked="symPad" size="small">PKCS7 填充</n-checkbox></template>勾选 = 自动做 PKCS7 填充（数据长度可任意）；不勾 = 要求输入是分组大小的整数倍</n-tooltip>
                   </div>
                   <div class="tb-row">
-                    <n-tooltip trigger="hover"><template #trigger><n-input v-model:value="symKey" size="small" :placeholder="`key(hex, ${symKeyLen()}字节)`" style="width:230px" /></template>对称密钥（十六进制）。长度由上面的算法决定：AES-128=16 字节、192=24、256=32；ChaCha20=32</n-tooltip>
-                    <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" @click="genSymKey"><Icon :icon="wandIcon" width="15" height="15" /></button></template>用安全随机生成密钥（按当前算法长度）</n-tooltip>
-                    <n-tooltip trigger="hover"><template #trigger><n-input v-model:value="symIv" size="small" :placeholder="`iv/nonce(hex, ${symIvLen()}字节)`" style="width:200px" /></template>IV / nonce（十六进制）。CBC/CTR 用 16 字节；GCM 与 ChaCha20 用 12 字节</n-tooltip>
-                    <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" @click="genSymIv"><Icon :icon="refreshIcon" width="15" height="15" /></button></template>用安全随机生成 IV / nonce</n-tooltip>
+                    <n-tooltip trigger="hover"><template #trigger><n-input v-model:value="symKey" size="small" :placeholder="`key(hex, ${symKeyLen()} 字节)`" style="width:240px" /></template>密钥（十六进制），长度见占位符：{{ symEntry.label }} 需要 {{ symKeyLen() }} 字节</n-tooltip>
+                    <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" @click="genSymKey"><Icon :icon="wandIcon" width="15" height="15" /></button></template>用安全随机生成密钥（{{ symKeyLen() }} 字节）</n-tooltip>
+                    <template v-if="symNeedsIv || !symIsBlock">
+                      <n-tooltip trigger="hover"><template #trigger><n-input v-model:value="symIv" size="small" :placeholder="`${symIsAead ? 'nonce' : 'iv'}(hex, ${symIvLen()} 字节)`" style="width:210px" /></template>{{ symIsAead ? 'nonce' : 'IV' }}（十六进制），需要 {{ symIvLen() }} 字节</n-tooltip>
+                      <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" @click="genSymIv"><Icon :icon="refreshIcon" width="15" height="15" /></button></template>用安全随机生成 {{ symIsAead ? 'nonce' : 'IV' }}</n-tooltip>
+                    </template>
+                    <span v-else class="tb-hint">ECB 模式不需要 IV</span>
                   </div>
-                  <div class="tb-hint">提示：AES 密钥 16/24/32 字节 = 128/192/256 位；CBC/CTR 的 IV 16 字节；GCM / ChaCha20 的 nonce 12 字节。参数可手填或点"生成"用安全随机。</div>
+                  <div class="tb-hint">
+                    当前：{{ symEntry.label }}<template v-if="symIsBlock"> · 模式 {{ symMode.toUpperCase() }} · 分组 {{ symEntry.block }} 字节</template>
+                    <template v-if="symIsAead"> · AEAD，密文末尾附 16 字节认证标签，解密时密钥/nonce/AAD 必须与加密一致</template>
+                    <template v-else-if="!symIsBlock"> · 流密码，密钥长度须 {{ symKeyLen() }} 字节</template>
+                    <template v-else-if="symMode==='ecb' || symMode==='cbc'"> · 可勾选 PKCS7 填充处理任意长度数据</template>
+                    <template v-else> · 该模式要求输入长度为 {{ symEntry.block }} 字节的整数倍</template>
+                  </div>
                   <n-input v-model:value="symData" type="textarea" size="small" :rows="3" placeholder="数据（加密时勾选「明文输入」则填文本，否则填 base64；解密填 base64 密文）" />
                   <div class="tb-row" style="margin-top:8px">
-                    <n-tooltip trigger="hover"><template #trigger><n-input v-if="symMode==='gcm'||symAlgo==='chacha20poly1305'" v-model:value="symAad" size="small" placeholder="AAD(hex, 可空)" style="width:200px" /></template>附加认证数据（GCM / ChaCha20 专用），十六进制，可留空</n-tooltip>
+                    <n-tooltip trigger="hover"><template #trigger><n-input v-if="symIsAead" v-model:value="symAad" size="small" placeholder="AAD(hex, 可空)" style="width:200px" /></template>附加认证数据（仅 AEAD），十六进制，可留空</n-tooltip>
                     <n-tooltip trigger="hover"><template #trigger><n-checkbox v-model:checked="symTextInput" size="small">明文输入</n-checkbox></template>勾选 = 输入是纯文本（不会按 base64 解码）；仅加密时生效</n-tooltip>
                     <n-tooltip trigger="hover"><template #trigger><button class="tb-ib primary lg" @click="runSym(true)"><Icon :icon="keyIcon" width="16" height="16" /></button></template>加密</n-tooltip>
                     <n-tooltip trigger="hover"><template #trigger><button class="tb-ib lg" @click="runSym(false)"><Icon :icon="eyeIcon" width="16" height="16" /></button></template>解密</n-tooltip>
+                    <span v-if="error" class="tb-err">{{ error }}</span>
                   </div>
                   <pre class="tb-out" v-if="symOut">{{ symOut }}</pre>
                 </div>
@@ -662,10 +716,126 @@ function ipv4ToInt(s) {
   for (const x of p) { const b = Number(x); if (!Number.isInteger(b) || b < 0 || b > 255) return null; n = (n * 256) + b }
   return n >>> 0
 }
+
+// ---- IPv6 ----
+// 把 IPv6 文本解析成 8 组 16 位数字（BigInt 各位），失败返回 null。
+// 支持 :: 压缩、内嵌 IPv4（如 ::ffff:192.168.1.1）、大小写混写。
+function ipv6ToGroups(s) {
+  let t = s.trim()
+  if (!t.includes(':')) return null
+  // 内嵌 IPv4 尾巴：a:b:...:1.2.3.4 → 转成两组 16 位十六进制
+  const m = t.match(/^(.*:)(\d+\.\d+\.\d+\.\d+)$/)
+  if (m) {
+    const v4 = ipv4ToInt(m[2]); if (v4 == null) return null
+    t = m[1] + ((v4 >>> 16) & 0xffff).toString(16) + ':' + (v4 & 0xffff).toString(16)
+  }
+  const dbl = t.split('::')
+  if (dbl.length > 2) return null
+  const parse = seg => seg === '' ? [] : seg.split(':').map(g => {
+    if (!/^[0-9a-fA-F]{1,4}$/.test(g)) return null
+    return parseInt(g, 16)
+  })
+  const left = parse(dbl[0]); const right = dbl.length === 2 ? parse(dbl[1]) : []
+  if (left.includes(null) || right.includes(null)) return null
+  if (dbl.length === 2) {
+    const fill = 8 - left.length - right.length
+    if (fill < 0) return null
+    return [...left, ...Array(fill).fill(0), ...right]
+  }
+  return left.length === 8 ? left : null
+}
+function ipv6ToBig(groups) {
+  let n = 0n
+  for (const g of groups) n = (n << 16n) | BigInt(g)
+  return n
+}
+function bigToIpv6Groups(n) {
+  const g = []
+  for (let i = 7; i >= 0; i--) g.push(Number((n >> BigInt(i * 16)) & 0xffffn))
+  return g
+}
+// RFC 5952 规范压缩：小写、去前导零、最长零段用 :: 代替（≥2 段才压）。
+function groupsToIpv6(groups) {
+  let best = -1, bestLen = 0, cur = -1, curLen = 0
+  for (let i = 0; i < 8; i++) {
+    if (groups[i] === 0) { if (cur < 0) { cur = i; curLen = 1 } else curLen++ } else { cur = -1; curLen = 0 }
+    if (cur >= 0 && curLen > bestLen) { best = cur; bestLen = curLen }
+  }
+  if (bestLen < 2) return groups.map(g => g.toString(16)).join(':')
+  const head = groups.slice(0, best).map(g => g.toString(16)).join(':')
+  const tail = groups.slice(best + bestLen).map(g => g.toString(16)).join(':')
+  return head + '::' + tail
+}
+function groupsToExpanded(groups) {
+  return groups.map(g => g.toString(16).padStart(4, '0')).join(':')
+}
+function groupsToBinary(groups) {
+  return groups.map(g => g.toString(2).padStart(16, '0')).join(':')
+}
+// IPv6 常见归类，便于快速判断地址用途。
+function ipv6Kind(groups) {
+  const first = groups[0]
+  if (groups.every(g => g === 0)) return '未指定地址 (::)'
+  if (groups.slice(0, 7).every(g => g === 0) && groups[7] === 1) return '环回 (::1)'
+  if (first === 0x2002) return '6to4'
+  if (first === 0x2001 && groups[1] === 0x0db8) return '文档示例 (2001:db8::/32)'
+  if (first === 0x2001 && groups[1] === 0x0000) return 'Teredo'
+  if (first === 0xfe80) return '链路本地 (fe80::/10)'
+  if ((first & 0xffc0) === 0xfec0) return '站点本地 (fec0::/10, 已废弃)'
+  if ((first & 0xfe00) === 0xfc00) return '唯一本地 ULA (fc00::/7)'
+  if ((first & 0xff00) === 0xff00) return '组播 (ff00::/8)'
+  if ((first & 0xe000) === 0x2000) return '全球单播 (2000::/3)'
+  return '保留/其他'
+}
+
 function convertIp() {
   const s = ipInput.value.trim()
   if (!s) { ipOut.value = null; return }
-  // CIDR
+
+  // ================= IPv6 =================
+  if (s.includes(':')) {
+    const [addrPart, bitsStr] = s.includes('/') ? s.split('/') : [s, null]
+    const g = ipv6ToGroups(addrPart.trim())
+    if (!g) { ipOut.value = { 错误: '无效 IPv6 地址' }; return }
+    if (bitsStr != null) {
+      const bits = Number(bitsStr)
+      if (!Number.isInteger(bits) || bits < 0 || bits > 128) { ipOut.value = { 错误: '无效 IPv6 CIDR（前缀 0–128）' }; return }
+      const mask = bits === 0 ? 0n : (((1n << BigInt(bits)) - 1n) << BigInt(128 - bits))
+      const full = (1n << 128n) - 1n
+      const n = ipv6ToBig(g)
+      const network = n & mask
+      const last = network | (full ^ mask)
+      const hostCount = bits >= 127 ? (bits === 128 ? 1n : 2n) : (last - network - 1n)
+      const firstHost = bits >= 127 ? network : network + 1n
+      const lastHost = bits >= 127 ? last : last - 1n
+      ipOut.value = {
+        '地址类型': ipv6Kind(g),
+        '网段 (压缩)': `${groupsToIpv6(bigToIpv6Groups(network))}/${bits}`,
+        '网段 (展开)': `${groupsToExpanded(bigToIpv6Groups(network))}/${bits}`,
+        '前缀掩码': groupsToIpv6(bigToIpv6Groups(mask)),
+        '网络地址': groupsToIpv6(bigToIpv6Groups(network)),
+        '末地址': groupsToIpv6(bigToIpv6Groups(last)),
+        '可用范围': bits >= 128 ? '(单地址)' : `${groupsToIpv6(bigToIpv6Groups(firstHost))} - ${groupsToIpv6(bigToIpv6Groups(lastHost))}`,
+        '地址总数': (2n ** BigInt(128 - bits)).toLocaleString('en-US'),
+        '可用主机数': hostCount.toLocaleString('en-US'),
+      }
+      return
+    }
+    const n = ipv6ToBig(g)
+    ipOut.value = {
+      '地址类型': ipv6Kind(g),
+      '压缩写法': groupsToIpv6(g),
+      '完整展开': groupsToExpanded(g),
+      '十六进制': '0x' + n.toString(16).padStart(32, '0'),
+      '十进制 (大整数)': n.toString(),
+      '二进制': groupsToBinary(g),
+      '内嵌 IPv4 (如适用)': (g[0] === 0 && g[1] === 0 && g[2] === 0 && g[3] === 0 && g[4] === 0 && g[5] === 0xffff)
+        ? intToIpv4(((g[6] << 16) | g[7]) >>> 0) : '—',
+    }
+    return
+  }
+
+  // ================= IPv4 =================
   if (s.includes('/')) {
     const [ip, bitsStr] = s.split('/')
     const base = ipv4ToInt(ip.trim()); const bits = Number(bitsStr)
@@ -688,12 +858,15 @@ function convertIp() {
   if (/^\d+\.\d+\.\d+\.\d+$/.test(s)) n = ipv4ToInt(s)
   else if (/^0x[0-9a-f]+$/i.test(s)) n = parseInt(s, 16) >>> 0
   else if (/^\d+$/.test(s)) n = Number(s) >>> 0
-  if (n == null || isNaN(n)) { ipOut.value = { 错误: '无法识别（支持点分/十进制/0x十六进制/CIDR）' }; return }
+  if (n == null || isNaN(n)) { ipOut.value = { 错误: '无法识别（支持 IPv4 点分/十进制/0x十六进制/CIDR，或 IPv6 地址/CIDR）' }; return }
+  // IPv4 也给出对应 IPv4-mapped IPv6 写法，方便对照
+  const mapped = [0, 0, 0, 0, 0, 0xffff, (n >>> 16) & 0xffff, n & 0xffff]
   ipOut.value = {
     点分十进制: intToIpv4(n),
     十进制: (n >>> 0).toString(),
     十六进制: '0x' + (n >>> 0).toString(16).toUpperCase().padStart(8, '0'),
     二进制: (n >>> 0).toString(2).padStart(32, '0').replace(/(.{8})(?=.)/g, '$1.'),
+    'IPv4-mapped IPv6': groupsToIpv6(mapped),
   }
 }
 
@@ -1021,7 +1194,10 @@ async function deleteAsset(a) {
 }
 const assetKindLabel = { key: '私钥', csr: 'CSR', crl: 'CRL' }
 
+// ============ PFX：打包 + 解包外部 .pfx/.p12 ============
 const pfxKey = ref(''); const pfxCerts = ref(''); const pfxBuildPwd = ref(''); const pfxBuildLoading = ref(false)
+const pfxUnpackPwd = ref(''); const pfxUnpacking = ref(false)
+const pfxName = ref(''); const pfxKeys = ref([]); const pfxCertsOut = ref([])
 async function buildPfx() {
   error.value = ''
   const certs = splitPem(pfxCerts.value)
@@ -1033,18 +1209,78 @@ async function buildPfx() {
     if (path) { await invoke('write_file_bytes_base64', { path, base64: b64 }); error.value = '已保存 PFX: ' + path }
   } catch (e) { error.value = '打包失败: ' + (e?.message || e) } finally { pfxBuildLoading.value = false }
 }
+// 解包：选一个外部 .pfx/.p12，用密码拆出全部私钥与证书，可逐个查看/保存。
+async function unpackPfxFile() {
+  error.value = ''; pfxKeys.value = []; pfxCertsOut.value = []
+  const sel = await open({ multiple: false, directory: false, title: '选择要解包的 PFX/P12 文件', filters: [{ name: 'PKCS#12', extensions: ['pfx', 'p12'] }] })
+  if (!sel) return
+  const path = typeof sel === 'string' ? sel : sel?.path
+  pfxName.value = String(path).replace(/\\/g, '/').split('/').pop() || 'bundle'
+  pfxUnpacking.value = true
+  try {
+    const bytes = await readFile(path)
+    const r = await invoke('crypto_pfx_parse', { dataB64: u8ToB64(bytes), password: pfxUnpackPwd.value || '' })
+    pfxKeys.value = r.keys_pem || []
+    pfxCertsOut.value = r.certs_pem || []
+    if (!pfxKeys.value.length && !pfxCertsOut.value.length) error.value = '包里没有可提取的私钥/证书（密码是否正确？）'
+  } catch (e) { error.value = '解包失败: ' + (e?.message || e) + '（多为密码不对）' } finally { pfxUnpacking.value = false }
+}
+function exportPem(pem, name) { return saveText(pem, name) }
 
 const binReport = ref(null); const binLoading = ref(false)
 
-// 对称加解密
-const symAlgo = ref('aes'); const symMode = ref('cbc'); const symKey = ref(''); const symIv = ref(''); const symAad = ref('')
+// ============ 对称加解密：覆盖库内支持的全部算法与模式 ============
+// 分组密码（可用 ecb/cbc/cfb/ofb/ctr；ecb/cbc 可 PKCS7 填充）
+const SYM_BLOCK = [
+  { value: 'aes128', label: 'AES-128', key: 16, iv: 16, block: 16 },
+  { value: 'aes192', label: 'AES-192', key: 24, iv: 16, block: 16 },
+  { value: 'aes256', label: 'AES-256', key: 32, iv: 16, block: 16 },
+  { value: 'sm4', label: 'SM4（国密）', key: 16, iv: 16, block: 16 },
+  { value: 'camellia128', label: 'Camellia-128', key: 16, iv: 16, block: 16 },
+  { value: 'camellia192', label: 'Camellia-192', key: 24, iv: 16, block: 16 },
+  { value: 'camellia256', label: 'Camellia-256', key: 32, iv: 16, block: 16 },
+  { value: 'twofish', label: 'Twofish', key: 32, iv: 16, block: 16 },
+  { value: 'serpent', label: 'Serpent', key: 32, iv: 16, block: 16 },
+  { value: 'des', label: 'DES（64 位分组，弱）', key: 8, iv: 8, block: 8 },
+  { value: '3des', label: '3DES / TDEA-3key', key: 24, iv: 8, block: 8 },
+  { value: 'blowfish', label: 'Blowfish', key: 16, iv: 8, block: 8 },
+  { value: 'cast5', label: 'CAST5', key: 16, iv: 8, block: 8 },
+  { value: 'rc2', label: 'RC2', key: 16, iv: 8, block: 8 },
+  { value: 'idea', label: 'IDEA', key: 16, iv: 8, block: 8 },
+]
+// 流密码（无模式、无填充）
+const SYM_STREAM = [
+  { value: 'chacha20', label: 'ChaCha20（流）', key: 32, iv: 12 },
+  { value: 'salsa20', label: 'Salsa20（流）', key: 32, iv: 8 },
+]
+// AEAD（带认证标签，可填 AAD）
+const SYM_AEAD = [
+  { value: 'aes128gcm', label: 'AES-128-GCM（AEAD）', key: 16, iv: 12 },
+  { value: 'aes256gcm', label: 'AES-256-GCM（AEAD）', key: 32, iv: 12 },
+  { value: 'chacha20poly1305', label: 'ChaCha20-Poly1305（AEAD）', key: 32, iv: 12 },
+]
+const symAlgoOptions = [
+  { type: 'group', label: '分组密码（ECB/CBC/CFB/OFB/CTR）', children: SYM_BLOCK.map(a => ({ label: a.label, value: a.value })) },
+  { type: 'group', label: '流密码', children: SYM_STREAM.map(a => ({ label: a.label, value: a.value })) },
+  { type: 'group', label: 'AEAD 认证加密', children: SYM_AEAD.map(a => ({ label: a.label, value: a.value })) },
+]
+const symModeOptions = [
+  { label: 'CBC（需 IV，可填充）', value: 'cbc' },
+  { label: 'ECB（无需 IV，可填充，弱）', value: 'ecb' },
+  { label: 'CFB（需 IV，块对齐）', value: 'cfb' },
+  { label: 'OFB（需 IV，流式）', value: 'ofb' },
+  { label: 'CTR（需 IV，流式）', value: 'ctr' },
+]
+const symAlgo = ref('aes256'); const symMode = ref('cbc'); const symKey = ref(''); const symIv = ref(''); const symAad = ref('')
 const symData = ref(''); const symTextInput = ref(true); const symOut = ref('')
-const cryptTab = ref('sym'); const symKeyBits = ref(256)
-const symAlgoOptions = [{ label: 'AES', value: 'aes' }, { label: 'ChaCha20Poly1305', value: 'chacha20poly1305' }]
-const symModeOptions = [{ label: 'CBC', value: 'cbc' }, { label: 'CTR', value: 'ctr' }, { label: 'GCM', value: 'gcm' }]
-const aesKeyBitsOptions = [{ label: '128 位', value: 128 }, { label: '192 位', value: 192 }, { label: '256 位', value: 256 }]
-function symKeyLen() { if (symAlgo.value === 'aes') return symKeyBits.value / 8; if (symAlgo.value === 'chacha20poly1305') return 32; return 16 }
-function symIvLen() { return (symMode.value === 'gcm' || symAlgo.value === 'chacha20poly1305') ? 12 : 16 }
+const cryptTab = ref('sym'); const symPad = ref(true)
+const symEntry = computed(() => [...SYM_BLOCK, ...SYM_STREAM, ...SYM_AEAD].find(a => a.value === symAlgo.value) || SYM_BLOCK[0])
+const symIsBlock = computed(() => SYM_BLOCK.some(a => a.value === symAlgo.value))
+const symIsAead = computed(() => SYM_AEAD.some(a => a.value === symAlgo.value))
+// ECB 不需要 IV；流密码/AEAD 也没有 IV 概念（用 nonce）
+const symNeedsIv = computed(() => symIsBlock.value && symMode.value !== 'ecb')
+function symKeyLen() { return symEntry.value.key }
+function symIvLen() { return symEntry.value.iv || 16 }
 function randHex(n) { const u = new Uint8Array(n); crypto.getRandomValues(u); return Array.from(u, b => b.toString(16).padStart(2, '0')).join('') }
 function genSymKey() { symKey.value = randHex(symKeyLen()) }
 function genSymIv() { symIv.value = randHex(symIvLen()) }
@@ -1052,14 +1288,29 @@ async function runSym(encrypt) {
   error.value = ''; symOut.value = ''
   const dataB64 = encrypt && symTextInput.value ? strToB64(symData.value) : symData.value.trim()
   try {
-    const r = await invoke('crypto_sym', { algo: symAlgo.value, mode: symAlgo.value === 'aes' ? symMode.value : 'aead', keyHex: symKey.value, ivHex: symIv.value, dataB64, encrypt, aadHex: symAad.value || null })
+    const r = await invoke('crypto_sym', {
+      algo: symAlgo.value,
+      mode: symIsBlock.value ? symMode.value : 'stream',
+      keyHex: symKey.value,
+      ivHex: symNeedsIv.value || !symIsBlock.value ? (symIv.value || '') : '',
+      dataB64, encrypt,
+      aadHex: symAad.value || null,
+      padding: symIsBlock.value && (symMode.value === 'ecb' || symMode.value === 'cbc') ? symPad.value : null,
+    })
     symOut.value = encrypt ? ('密文(base64):\n' + r) : ('明文:\n' + b64ToText(r) + '\n\n(base64): ' + r)
   } catch (e) { error.value = (encrypt ? '加密' : '解密') + '失败: ' + (e?.message || e) }
 }
 
 // RSA 加解密
-const rsaScheme = ref('oaep'); const rsaKey = ref(''); const rsaData = ref(''); const rsaTextInput = ref(true); const rsaOut = ref('')
-const rsaSchemeOptions = [{ label: 'OAEP(SHA-256)', value: 'oaep' }, { label: 'PKCS1 v1.5', value: 'pkcs1' }]
+const rsaScheme = ref('oaep-sha256'); const rsaKey = ref(''); const rsaData = ref(''); const rsaTextInput = ref(true); const rsaOut = ref('')
+// RSA 加解密方案：库支持 PKCS#1 v1.5 与 OAEP(SHA-1/256/384/512)。
+const rsaSchemeOptions = [
+  { label: 'OAEP + SHA-256（推荐）', value: 'oaep-sha256' },
+  { label: 'OAEP + SHA-384', value: 'oaep-sha384' },
+  { label: 'OAEP + SHA-512', value: 'oaep-sha512' },
+  { label: 'OAEP + SHA-1（兼容老系统）', value: 'oaep-sha1' },
+  { label: 'PKCS#1 v1.5（老式，兼容）', value: 'pkcs1' },
+]
 async function runRsa(op) {
   error.value = ''; rsaOut.value = ''
   const dataB64 = op === 'encrypt' && rsaTextInput.value ? strToB64(rsaData.value) : rsaData.value.trim()
@@ -1268,6 +1519,7 @@ const multiChartOption = computed(() => {
 .tb-grp-n { font-size: 10px; padding: 0 6px; border-radius: 999px; background: var(--tw-accent-soft); }
 
 /* ===== 查看弹窗 ===== */
+.tb-sub { margin: 10px 0 4px; font-size: 12px; font-weight: 600; color: var(--tw-accent); }
 .tv-modal { display: flex; flex-direction: column; max-height: 82vh; background: var(--guaxi-panel-bg); border: 1px solid var(--guaxi-border); border-radius: var(--tw-radius); box-shadow: var(--tw-elev); overflow: hidden; font-family: var(--tw-ui-font); }
 .tv-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--guaxi-border); }
 .tv-head-ico { color: var(--tw-accent); flex: 0 0 auto; }

@@ -372,6 +372,7 @@ pub fn crypto_pfx_build(
 // ============================ 对称加解密 ============================
 
 #[command]
+#[allow(clippy::too_many_arguments)]
 pub fn crypto_sym(
     algo: String,
     mode: String,
@@ -380,6 +381,7 @@ pub fn crypto_sym(
     data_b64: String,
     encrypt: bool,
     aad_hex: Option<String>,
+    padding: Option<bool>,
 ) -> Result<String, String> {
     let key = hex::decode(key_hex.trim()).map_err(|e| format!("key 非法 hex: {e}"))?;
     let iv = hex::decode(iv_hex.trim()).map_err(|e| format!("iv/nonce 非法 hex: {e}"))?;
@@ -388,83 +390,170 @@ pub fn crypto_sym(
         Some(a) if !a.trim().is_empty() => hex::decode(a.trim()).map_err(|e| format!("aad 非法 hex: {e}"))?,
         _ => Vec::new(),
     };
-    let out = match algo.as_str() {
-        "aes" => match mode.as_str() {
-            "cbc" => aes_cbc(&key, &iv, &data, encrypt)?,
-            "ctr" => aes_ctr(&key, &iv, &data)?,
-            "gcm" => aes_gcm(&key, &iv, &data, &aad, encrypt)?,
-            m => return Err(format!("AES 不支持模式: {m}")),
-        },
-        "3des" => return Err("3DES 暂未启用（与 PKCS12 库的 des 版本冲突，已改用 AES/ChaCha20）".into()),
-        "chacha20poly1305" => chacha(&key, &iv, &data, &aad, encrypt)?,
-        a => return Err(format!("不支持算法: {a}")),
-    };
-    Ok(b64_enc(&out))
-}
-
-fn aes_cbc(key: &[u8], iv: &[u8], data: &[u8], enc: bool) -> Result<Vec<u8>, String> {
-    use cbc::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
-    macro_rules! run {
-        ($c:ty) => {{
-            if enc {
-                let e = <cbc::Encryptor<$c>>::new_from_slices(key, iv)
-                    .map_err(|e| format!("参数错: {e}"))?;
-                Ok(e.encrypt_padded_vec_mut::<Pkcs7>(data))
-            } else {
-                let d = <cbc::Decryptor<$c>>::new_from_slices(key, iv)
-                    .map_err(|e| format!("参数错: {e}"))?;
-                d.decrypt_padded_vec_mut::<Pkcs7>(data).map_err(|e| format!("解密失败: {e}"))
+    // 块密码通用分发：$c = 密码类型，$ctr = 对应位宽的 CTR 包装，$bs = 分组字节数。
+    // 支持模式：ecb / cbc / cfb（要求块对齐，可 PKCS7 填充）；ofb / ctr（流式，无填充）。
+    macro_rules! blk {
+        ($c:ty, $ctr:ty, $bs:expr) => {{
+            use cipher::{
+                block_padding::{NoPadding, Pkcs7},
+                BlockDecryptMut, BlockEncryptMut, KeyInit, KeyIvInit, StreamCipher,
+            };
+            let pad = padding.unwrap_or(true);
+            let aligned = data.len() % $bs == 0;
+            match mode.as_str() {
+                "ecb" => {
+                    if pad {
+                        if encrypt {
+                            let e = <ecb::Encryptor<$c>>::new_from_slice(&key)
+                                .map_err(|e| format!("密钥长度错: {e}"))?;
+                            Ok(e.encrypt_padded_vec_mut::<Pkcs7>(&data))
+                        } else {
+                            let d = <ecb::Decryptor<$c>>::new_from_slice(&key)
+                                .map_err(|e| format!("密钥长度错: {e}"))?;
+                            d.decrypt_padded_vec_mut::<Pkcs7>(&data).map_err(|e| format!("解密失败: {e}"))
+                        }
+                    } else {
+                        if !aligned {
+                            return Err(format!("ECB 无填充要求输入为 {} 字节的整数倍（当前 {}）", $bs, data.len()));
+                        }
+                        if encrypt {
+                            let e = <ecb::Encryptor<$c>>::new_from_slice(&key)
+                                .map_err(|e| format!("密钥长度错: {e}"))?;
+                            Ok(e.encrypt_padded_vec_mut::<NoPadding>(&data))
+                        } else {
+                            let d = <ecb::Decryptor<$c>>::new_from_slice(&key)
+                                .map_err(|e| format!("密钥长度错: {e}"))?;
+                            d.decrypt_padded_vec_mut::<NoPadding>(&data).map_err(|e| format!("解密失败: {e}"))
+                        }
+                    }
+                }
+                "cbc" => {
+                    if pad {
+                        if encrypt {
+                            let e = <cbc::Encryptor<$c>>::new_from_slices(&key, &iv)
+                                .map_err(|e| format!("密钥/IV 长度错: {e}"))?;
+                            Ok(e.encrypt_padded_vec_mut::<Pkcs7>(&data))
+                        } else {
+                            let d = <cbc::Decryptor<$c>>::new_from_slices(&key, &iv)
+                                .map_err(|e| format!("密钥/IV 长度错: {e}"))?;
+                            d.decrypt_padded_vec_mut::<Pkcs7>(&data).map_err(|e| format!("解密失败: {e}"))
+                        }
+                    } else {
+                        if !aligned {
+                            return Err(format!("CBC 无填充要求输入为 {} 字节的整数倍（当前 {}）", $bs, data.len()));
+                        }
+                        if encrypt {
+                            let e = <cbc::Encryptor<$c>>::new_from_slices(&key, &iv)
+                                .map_err(|e| format!("密钥/IV 长度错: {e}"))?;
+                            Ok(e.encrypt_padded_vec_mut::<NoPadding>(&data))
+                        } else {
+                            let d = <cbc::Decryptor<$c>>::new_from_slices(&key, &iv)
+                                .map_err(|e| format!("密钥/IV 长度错: {e}"))?;
+                            d.decrypt_padded_vec_mut::<NoPadding>(&data).map_err(|e| format!("解密失败: {e}"))
+                        }
+                    }
+                }
+                "cfb" => {
+                    if !aligned {
+                        return Err(format!("CFB 要求输入为 {} 字节的整数倍（当前 {}）", $bs, data.len()));
+                    }
+                    if encrypt {
+                        let e = <cfb_mode::Encryptor<$c>>::new_from_slices(&key, &iv)
+                            .map_err(|e| format!("密钥/IV 长度错: {e}"))?;
+                        Ok(e.encrypt_padded_vec_mut::<NoPadding>(&data))
+                    } else {
+                        let d = <cfb_mode::Decryptor<$c>>::new_from_slices(&key, &iv)
+                            .map_err(|e| format!("密钥/IV 长度错: {e}"))?;
+                        d.decrypt_padded_vec_mut::<NoPadding>(&data).map_err(|e| format!("解密失败: {e}"))
+                    }
+                }
+                "ofb" => {
+                    let mut buf = data.clone();
+                    let mut c = <ofb::Ofb<$c>>::new_from_slices(&key, &iv)
+                        .map_err(|e| format!("密钥/IV 长度错: {e}"))?;
+                    c.apply_keystream(&mut buf);
+                    Ok(buf)
+                }
+                "ctr" => {
+                    let mut buf = data.clone();
+                    let mut c = <$ctr>::new_from_slices(&key, &iv)
+                        .map_err(|e| format!("密钥/IV 长度错: {e}"))?;
+                    c.apply_keystream(&mut buf);
+                    Ok(buf)
+                }
+                m => Err(format!("该算法不支持模式 {m}（支持 ecb/cbc/cfb/ofb/ctr）")),
             }
         }};
     }
-    match key.len() {
-        16 => run!(aes::Aes128),
-        24 => run!(aes::Aes192),
-        32 => run!(aes::Aes256),
-        n => Err(format!("AES 密钥长度非法: {n} 字节")),
-    }
-}
 
-fn aes_ctr(key: &[u8], iv: &[u8], data: &[u8]) -> Result<Vec<u8>, String> {
-    use ctr::cipher::{KeyIvInit, StreamCipher};
-    macro_rules! run {
-        ($c:ty) => {{
-            let mut c = <$c>::new_from_slices(key, iv).map_err(|e| format!("参数错: {e}"))?;
-            let mut buf = data.to_vec();
+    let out = match algo.as_str() {
+        "aes128" => blk!(aes::Aes128, ctr::Ctr128BE<aes::Aes128>, 16),
+        "aes192" => blk!(aes::Aes192, ctr::Ctr128BE<aes::Aes192>, 16),
+        "aes256" => blk!(aes::Aes256, ctr::Ctr128BE<aes::Aes256>, 16),
+        // 旧值 "aes"：按密钥长度自动选 128/192/256
+        "aes" => match key.len() {
+            16 => blk!(aes::Aes128, ctr::Ctr128BE<aes::Aes128>, 16),
+            24 => blk!(aes::Aes192, ctr::Ctr128BE<aes::Aes192>, 16),
+            32 => blk!(aes::Aes256, ctr::Ctr128BE<aes::Aes256>, 16),
+            n => return Err(format!("AES 密钥需 16/24/32 字节，收到 {n}")),
+        },
+        "sm4" => blk!(sm4::Sm4, ctr::Ctr128BE<sm4::Sm4>, 16),
+        "camellia128" => blk!(camellia::Camellia128, ctr::Ctr128BE<camellia::Camellia128>, 16),
+        "camellia192" => blk!(camellia::Camellia192, ctr::Ctr128BE<camellia::Camellia192>, 16),
+        "camellia256" => blk!(camellia::Camellia256, ctr::Ctr128BE<camellia::Camellia256>, 16),
+        "twofish" => blk!(twofish::Twofish, ctr::Ctr128BE<twofish::Twofish>, 16),
+        "serpent" => blk!(serpent::Serpent, ctr::Ctr128BE<serpent::Serpent>, 16),
+        // ---- 64 位分组的经典密码 ----
+        "des" => blk!(des::Des, ctr::Ctr64BE<des::Des>, 8),
+        "3des" => blk!(des::TdesEde3, ctr::Ctr64BE<des::TdesEde3>, 8),
+        "blowfish" => blk!(blowfish::Blowfish, ctr::Ctr64BE<blowfish::Blowfish>, 8),
+        "cast5" => blk!(cast5::Cast5, ctr::Ctr64BE<cast5::Cast5>, 8),
+        "rc2" => blk!(rc2::Rc2, ctr::Ctr64BE<rc2::Rc2>, 8),
+        "idea" => blk!(idea::Idea, ctr::Ctr64BE<idea::Idea>, 8),
+        // ---- 流密码 ----
+        "chacha20" => {
+            use chacha20::cipher::{KeyIvInit, StreamCipher};
+            let mut buf = data.clone();
+            let mut c = chacha20::ChaCha20::new_from_slices(&key, &iv)
+                .map_err(|e| format!("密钥/nonce 长度错: {e}"))?;
             c.apply_keystream(&mut buf);
             Ok(buf)
-        }};
-    }
-    match key.len() {
-        16 => run!(ctr::Ctr128BE<aes::Aes128>),
-        24 => run!(ctr::Ctr128BE<aes::Aes192>),
-        32 => run!(ctr::Ctr128BE<aes::Aes256>),
-        n => Err(format!("AES 密钥长度非法: {n} 字节")),
-    }
-}
-
-fn aes_gcm(key: &[u8], nonce: &[u8], data: &[u8], aad: &[u8], enc: bool) -> Result<Vec<u8>, String> {
-    use aes_gcm::aead::{Aead, KeyInit, Payload};
-    use aes_gcm::{Aes128Gcm, Aes256Gcm, Nonce};
-    let n = Nonce::from_slice(nonce);
-    let pl = Payload { msg: data, aad };
-    macro_rules! run {
-        ($c:ty) => {{
-            let c = <$c>::new_from_slice(key).map_err(|e| format!("key 错: {e}"))?;
-            if enc {
-                c.encrypt(n, pl).map_err(|e| format!("加密失败: {e}"))
-            } else {
-                c.decrypt(n, pl).map_err(|e| format!("解密失败(认证?): {e}"))
+        }
+        "salsa20" => {
+            use salsa20::cipher::{KeyIvInit, StreamCipher};
+            let mut buf = data.clone();
+            let mut c = salsa20::Salsa20::new_from_slices(&key, &iv)
+                .map_err(|e| format!("密钥/nonce 长度错: {e}"))?;
+            c.apply_keystream(&mut buf);
+            Ok(buf)
+        }
+        // ---- AEAD（加密输出 = 密文 ‖ 认证标签；解密需 aad 一致）----
+        "aes128gcm" | "aes256gcm" | "aesgcm" => {
+            use aes_gcm::aead::{Aead, KeyInit, Payload};
+            use aes_gcm::{Aes128Gcm, Aes256Gcm, Nonce};
+            let n = Nonce::from_slice(&iv);
+            let pl = Payload { msg: &data, aad: &aad };
+            macro_rules! gcm {
+                ($c:ty) => {{
+                    let c = <$c>::new_from_slice(&key).map_err(|e| format!("密钥长度错: {e}"))?;
+                    if encrypt { c.encrypt(n, pl) } else { c.decrypt(n, pl) }
+                        .map_err(|e| format!("{}失败（密钥/nonce/AAD 是否一致？）: {e}", if encrypt { "加密" } else { "解密" }))
+                }};
             }
-        }};
-    }
-    match key.len() {
-        16 => run!(Aes128Gcm),
-        32 => run!(Aes256Gcm),
-        n => Err(format!("AES-GCM 密钥需 16/32 字节，收到 {n}")),
-    }
+            match (algo.as_str(), key.len()) {
+                ("aes128gcm", 16) | ("aesgcm", 16) => gcm!(Aes128Gcm),
+                ("aes256gcm", 32) | ("aesgcm", 32) => gcm!(Aes256Gcm),
+                ("aesgcm", n) => return Err(format!("AES-GCM 密钥需 16/32 字节，收到 {n}")),
+                (a, n) => return Err(format!("{a} 密钥长度应为 {n} 字节")),
+            }
+        }
+        "chacha20poly1305" => chacha(&key, &iv, &data, &aad, encrypt),
+        a => return Err(format!("不支持的算法: {a}")),
+    };
+    Ok(b64_enc(&out?))
 }
 
+/// ChaCha20-Poly1305（AEAD）：nonce 12 字节，可选 AAD；加密输出为 密文‖16 字节标签。
 fn chacha(key: &[u8], nonce: &[u8], data: &[u8], aad: &[u8], enc: bool) -> Result<Vec<u8>, String> {
     use chacha20poly1305::aead::{Aead, KeyInit, Payload};
     use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
@@ -477,11 +566,9 @@ fn chacha(key: &[u8], nonce: &[u8], data: &[u8], aad: &[u8], enc: bool) -> Resul
     if enc {
         c.encrypt(n, pl).map_err(|e| format!("加密失败: {e}"))
     } else {
-        c.decrypt(n, pl).map_err(|e| format!("解密失败(认证?): {e}"))
+        c.decrypt(n, pl).map_err(|e| format!("解密失败（密钥/nonce/AAD 是否一致？）: {e}"))
     }
 }
-
-// __PART5__
 
 // ============================ 非对称加解密 / 签名 / 验签 / 散列 ============================
 
@@ -500,6 +587,7 @@ fn load_rsa_public(pem: &str) -> Result<RsaPublicKey, String> {
     Ok(RsaPublicKey::from(&sk))
 }
 
+/// RSA 加解密。scheme：pkcs1（PKCS#1 v1.5）|oaep-sha1|oaep-sha256|oaep-sha384|oaep-sha512。
 #[command]
 pub fn crypto_rsa_crypt(
     op: String,
@@ -509,22 +597,29 @@ pub fn crypto_rsa_crypt(
 ) -> Result<String, String> {
     use rsa::{Oaep, Pkcs1v15Encrypt};
     let data = b64_dec(&data_b64)?;
+    // 按方案构造填充；用闭包把 pk/sk 的分支收敛成一次 match。
     if op == "encrypt" {
         let pk = load_rsa_public(&key_pem)?;
         let mut rng = rand08::rngs::OsRng;
-        let ct = if scheme == "pkcs1" {
-            pk.encrypt(&mut rng, Pkcs1v15Encrypt, &data)
-        } else {
-            pk.encrypt(&mut rng, Oaep::new::<sha2::Sha256>(), &data)
+        let ct = match scheme.as_str() {
+            "pkcs1" => pk.encrypt(&mut rng, Pkcs1v15Encrypt, &data),
+            "oaep-sha1" => pk.encrypt(&mut rng, Oaep::new::<sha1::Sha1>(), &data),
+            "oaep-sha256" => pk.encrypt(&mut rng, Oaep::new::<sha2::Sha256>(), &data),
+            "oaep-sha384" => pk.encrypt(&mut rng, Oaep::new::<sha2::Sha384>(), &data),
+            "oaep-sha512" => pk.encrypt(&mut rng, Oaep::new::<sha2::Sha512>(), &data),
+            s => return Err(format!("不支持的 RSA 加密方案: {s}")),
         }
-        .map_err(|e| format!("RSA 加密失败: {e}"))?;
+        .map_err(|e| format!("RSA 加密失败（明文过长或密钥太小？）: {e}"))?;
         Ok(b64_enc(&ct))
     } else {
         let sk = RsaPrivateKey::from_pkcs8_pem(&key_pem).map_err(|e| format!("载入私钥失败: {e}"))?;
-        let pt = if scheme == "pkcs1" {
-            sk.decrypt(Pkcs1v15Encrypt, &data)
-        } else {
-            sk.decrypt(Oaep::new::<sha2::Sha256>(), &data)
+        let pt = match scheme.as_str() {
+            "pkcs1" => sk.decrypt(Pkcs1v15Encrypt, &data),
+            "oaep-sha1" => sk.decrypt(Oaep::new::<sha1::Sha1>(), &data),
+            "oaep-sha256" => sk.decrypt(Oaep::new::<sha2::Sha256>(), &data),
+            "oaep-sha384" => sk.decrypt(Oaep::new::<sha2::Sha384>(), &data),
+            "oaep-sha512" => sk.decrypt(Oaep::new::<sha2::Sha512>(), &data),
+            s => return Err(format!("不支持的 RSA 解密方案: {s}")),
         }
         .map_err(|e| format!("RSA 解密失败: {e}"))?;
         Ok(b64_enc(&pt))
