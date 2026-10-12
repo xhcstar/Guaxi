@@ -8,8 +8,9 @@
       </n-radio-group>
       <n-input v-model:value="program" size="small" :placeholder="mode === 'attach' ? '可执行文件(可空，仅符号)' : '可执行文件路径(可空=仅连gdb)'" style="width:230px" />
       <n-input-number v-if="mode === 'attach'" v-model:value="attachPid" size="small" :min="1" :show-button="false" placeholder="PID" style="width:110px" />
-      <n-checkbox v-if="mode === 'attach'" v-model:checked="useSudo" size="small">sudo</n-checkbox>
-      <n-input v-else v-model:value="argsText" size="small" placeholder="参数(空格分隔)" style="width:150px" />
+      <n-select v-if="mode === 'attach'" v-model:value="escalate" size="small" :options="escalateOptions" style="width:110px" title="提权方式" />
+      <n-input v-if="mode === 'attach' && escalate === 'su'" v-model:value="escalatePassword" type="password" size="small" placeholder="root 密码" show-password-on="click" style="width:130px" />
+      <n-input v-else-if="mode !== 'attach'" v-model:value="argsText" size="small" placeholder="参数(空格分隔)" style="width:150px" />
       <n-button size="small" type="primary" :loading="starting" :disabled="!!sessionId" @click="start">启动 gdb</n-button>
       <n-button size="small" v-if="sessionId" @click="stop">结束</n-button>
       <span class="gdb-status">{{ statusText }}</span>
@@ -257,7 +258,13 @@ const profileOptions = computed(() =>
 const profileId = ref(null)
 const mode = ref('launch')       // 'launch' | 'attach'
 const attachPid = ref(null)
-const useSudo = ref(false)
+const escalate = ref('none')     // 'none' | 'sudo' | 'su'
+const escalatePassword = ref('')
+const escalateOptions = [
+  { label: '不提权', value: 'none' },
+  { label: 'sudo', value: 'sudo' },
+  { label: 'su root', value: 'su' },
+]
 const program = ref('')
 const argsText = ref('')
 const starting = ref(false)
@@ -377,6 +384,7 @@ function onAsync(p) {
 async function start() {
   if (!profileId.value) { error.value = '请选择 SSH 档案'; return }
   if (mode.value === 'attach' && !attachPid.value) { error.value = '附加模式需要填 PID'; return }
+  if (mode.value === 'attach' && escalate.value === 'su' && !escalatePassword.value) { error.value = 'su 提权需要填 root 密码'; return }
   starting.value = true; error.value = ''
   consoleLines.value = []
   try {
@@ -386,7 +394,8 @@ async function start() {
       program: program.value || null,
       args,
       attachPid: mode.value === 'attach' ? Number(attachPid.value) : null,
-      useSudo: mode.value === 'attach' ? useSudo.value : false,
+      escalate: mode.value === 'attach' ? escalate.value : 'none',
+      escalatePassword: mode.value === 'attach' && escalate.value === 'su' ? escalatePassword.value : null,
     })
     statusText.value = '已连接'
     appendConsole('log', mode.value === 'attach' ? `[gdb 已启动，正在附加 PID ${attachPid.value}]` : '[gdb 已启动]')
@@ -395,15 +404,17 @@ async function start() {
       const r = await runCmd(`-target-attach ${Number(attachPid.value)}`)
       if (!r) {
         // runCmd 返回 null = 命令失败/会话已断（gdb 退出）。错误已由 runCmd 写入 error；
-        // 若因 sudo 需要 TTY/密码或 ptrace 受限导致 gdb 退出，控制台会显示其 stderr（见下方空状态区）。
+        // 若因提权失败/ptrace 受限导致 gdb 退出，控制台会显示其 stderr（见下方空状态区）。
         if (!sessionId.value) statusText.value = '附加失败：gdb 进程已退出（见下方输出）'
         else statusText.value = '附加未返回结果'
       } else if (r.class === 'error') {
         const msg = r?.payload?.msg || ''
         if (/ptrace|Operation not permitted/i.test(msg)) {
-          error.value = '附加失败(ptrace 受限): ' + msg + ' —— 请勾选 sudo 重试，或在目标机 root 下执行 `echo 0 > /proc/sys/kernel/yama/ptrace_scope`，或确保与目标进程同一用户。'
-        } else if (/tty|password|sudo/i.test(msg)) {
-          error.value = '附加失败(sudo): ' + msg + ' —— 需目标机免密 sudo（NOPASSWD），且若配置了 requiretty 已自动申请 PTY。'
+          error.value = '附加失败(ptrace 受限): ' + msg + ' —— 选 sudo 或 su root 提权重试；或目标机 root 执行 `echo 0 > /proc/sys/kernel/yama/ptrace_scope`；或与目标进程同一用户。'
+        } else if (/not found|command not found/i.test(msg)) {
+          error.value = '附加失败: ' + msg + ' —— 目标机无 sudo，请改选 "su root" 并填 root 密码。'
+        } else if (/tty|password|authentication|su:/i.test(msg)) {
+          error.value = '附加失败(提权): ' + msg + ' —— 检查 root 密码；su 已在 PTY 上喂密码。'
         } else {
           error.value = '附加失败: ' + (msg || '可能无权限或 PID 不存在')
         }

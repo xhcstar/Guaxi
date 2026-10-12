@@ -273,6 +273,7 @@ fn gdb_rec_dir(app: &AppHandle) -> Result<PathBuf, String> {
 // ============================ 会话驱动（K1/K2） ============================
 
 #[command]
+#[allow(clippy::too_many_arguments)]
 pub async fn gdb_mi_start(
     app: AppHandle,
     profile_id: String,
@@ -280,6 +281,8 @@ pub async fn gdb_mi_start(
     args: Option<Vec<String>>,
     attach_pid: Option<u32>,
     use_sudo: Option<bool>,
+    escalate: Option<String>,
+    escalate_password: Option<String>,
 ) -> Result<String, String> {
     let handle = connect_authenticated(&app, &profile_id).await?;
     let mut channel = handle
@@ -287,40 +290,49 @@ pub async fn gdb_mi_start(
         .await
         .map_err(|e| format!("打开 gdb 通道失败: {e}"))?;
 
-    // 组装远端命令：
-    //  - 附加进程：gdb -q -nx -i=mi [program]（program 可空，仅供符号）。
-    //    注意：不在命令行用 `-p PID` —— 那样 attach 发生在 MI 前端订阅之前，*stopped 事件丢失、
-    //    且 attach 失败只打印到控制台。改由前端在会话建立后发 `-target-attach PID`，拿到结构化结果与停住事件。
+    // 提权方式：none / sudo / su。use_sudo 为旧参数，escalate 未给时据它推断。
+    let esc = escalate
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| if use_sudo.unwrap_or(false) { "sudo".into() } else { "none".into() });
+
+    // 先拼 gdb 核心命令：
+    //  - 附加进程：gdb -q -nx -i=mi [program]（不在命令行用 `-p PID`，由前端 -target-attach 发起）。
     //  - 启动程序：gdb -q -nx -i=mi --args program args...
-    //  - 仅连 gdb：gdb -q -nx -i=mi
-    //  attach 非子进程常受 ptrace_scope 限制：可勾选 sudo（需目标免密 sudo），用 `sudo -n` 非交互避免挂起。
-    let sudo = use_sudo.unwrap_or(false);
-    let mut cmd = if sudo {
-        String::from("sudo -n gdb -q -nx -i=mi")
-    } else {
-        String::from("gdb -q -nx -i=mi")
-    };
+    let mut core = String::from("gdb -q -nx -i=mi");
     if attach_pid.is_some() {
         if let Some(prog) = program.as_ref().filter(|s| !s.trim().is_empty()) {
-            cmd.push(' ');
-            cmd.push_str(&shell_quote(prog));
+            core.push(' ');
+            core.push_str(&shell_quote(prog));
         }
     } else if let Some(prog) = program.as_ref().filter(|s| !s.trim().is_empty()) {
-        cmd.push_str(" --args ");
-        cmd.push_str(&shell_quote(prog));
+        core.push_str(" --args ");
+        core.push_str(&shell_quote(prog));
         if let Some(a) = args {
             for arg in a {
-                cmd.push(' ');
-                cmd.push_str(&shell_quote(&arg));
+                core.push(' ');
+                core.push_str(&shell_quote(&arg));
             }
         }
     }
-    // sudo 常配 `requiretty`：无 PTY 时会报 "you must have a tty to run sudo"。
-    // 勾选 sudo 时给通道申请一个 PTY（MI 下我们自己的回显行会被 classify 忽略，不影响解析）。
-    if sudo {
-        let _ = channel
-            .request_pty(false, "xterm", 200, 50, 0, 0, &[])
-            .await;
+
+    // 按提权方式包裹：
+    //  - sudo：`sudo -n`（免密），非交互避免挂起；
+    //  - su：`su -c '<gdb…>'`，切 root 并在 PTY 上提示输入密码（无 sudo 的机器用这个）。
+    let cmd = match esc.as_str() {
+        "sudo" => format!("sudo -n {core}"),
+        "su" => format!("su -c {}", shell_quote(&core)),
+        _ => core,
+    };
+    // sudo 的 requiretty / su 读 /dev/tty 都需要 PTY。
+    let need_pty = esc == "sudo" || esc == "su";
+    // su 需要在看到密码提示时喂密码。
+    let mut pw_to_send: Option<String> = if esc == "su" {
+        escalate_password.filter(|s| !s.is_empty())
+    } else {
+        None
+    };
+    if need_pty {
+        let _ = channel.request_pty(false, "xterm", 200, 50, 0, 0, &[]).await;
     }
     channel
         .exec(true, cmd.as_bytes())
@@ -365,6 +377,17 @@ pub async fn gdb_mi_start(
                             while let Some(pos) = linebuf.find('\n') {
                                 let line: String = linebuf.drain(..=pos).collect();
                                 handle_line(line.trim_end(), &mut pending, &app, &sid);
+                            }
+                            // su 的密码提示不带换行，会留在 linebuf 尾部；见到提示就喂一次密码。
+                            if let Some(pw) = pw_to_send.take() {
+                                let low = linebuf.to_lowercase();
+                                if low.contains("password") || linebuf.contains("口令") || linebuf.contains("密码") {
+                                    let _ = channel.data(format!("{pw}\n").as_bytes()).await;
+                                    linebuf.clear();
+                                } else {
+                                    // 还没出现提示，放回去继续等。
+                                    pw_to_send = Some(pw);
+                                }
                             }
                         }
                         Some(russh::ChannelMsg::ExitStatus { .. }) | None => break,
