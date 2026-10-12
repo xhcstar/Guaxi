@@ -230,6 +230,15 @@ struct TypstJumpEntry {
 static JUMP_CACHE: Lazy<Mutex<HashMap<String, TypstJumpEntry>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
+/// 文件关闭时丢弃该文档的跳转缓存。
+/// 条目里常驻着编译用的 World 与整份 PagedDocument，大文档下内存占用可观，
+/// 标签关掉后没有理由再留着（下次预览会重新编译并重新填充）。
+pub fn forget_typst_jump_cache(source_path: &str) {
+    if let Ok(mut cache) = JUMP_CACHE.lock() {
+        cache.remove(source_path);
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct TypstForwardResult {
     pub page: u32,
@@ -359,7 +368,11 @@ pub async fn build_typ_pdf_preview(source_path: String, content: String) -> Resu
 
     let pdf_bytes = compile_typ_and_cache(&source_path, input_dir, content)?;
 
-    let outdir = crate::commands::docprocess::preview_build_dir("typst", &source_path)?;
+    // 构建目录的键走 docprocess 的统一规范化：清理（clear_preview_build）要用同一套哈希才能命中。
+    let outdir = crate::commands::docprocess::preview_build_dir(
+        "typst",
+        &crate::commands::docprocess::preview_source_key(&source_path),
+    )?;
     let pdf_path = outdir.join(format!(".guaxi_preview_{stem}.pdf"));
 
     // 先写同目录临时文件再 rename：`fs::write` 会先截断目标文件，若瞬时被阅读器读到

@@ -227,6 +227,10 @@ const props = defineProps({
   titleLabel: { type: String, default: '' },
   emptyText: { type: String, default: '暂无内容' },
   initialZoom: { type: Number, default: 1.3 },
+  // 默认缩放策略：'width' | 'page' | 'none'。
+  // 'none' 沿用旧行为（按 initialZoom 起始，不随容器尺寸变化重算）；LaTeX/Typst 预览传 'width'，
+  // 让默认阅读区域贴合面板，并在窗口 / 分栏尺寸变化时自动重算。
+  fitMode: { type: String, default: 'none' },
   // 消费者按需开启的能力
   features: {
     type: Object,
@@ -248,6 +252,8 @@ const emit = defineEmits([
 const MIN_ZOOM = 0.4
 const MAX_ZOOM = 4
 const zoom = ref(props.initialZoom)
+// 当前生效的自适应策略（'width' | 'page'）；'' 表示手动缩放，不再自动重算。
+const activeFitMode = ref(props.fitMode === 'width' || props.fitMode === 'page' ? props.fitMode : '')
 const cssScale = computed(() => zoom.value)
 // 渲染 DPI：目标是渲染像素 = 显示像素 × 设备像素比（1:1 物理像素，清晰且不过采样）。
 // 显示像素 = pt × zoom；物理像素 = 显示像素 × dpr；dpi = 72 × zoom × dpr。
@@ -338,6 +344,8 @@ const zoomOut = (reason = 'manual') => {
   logger.debug('PDF缩小', { reason, zoom: zoom.value })
 }
 const setZoom = (z, reason = 'manual') => {
+  // 手动缩放即退出自适应模式：否则之后任何一次窗口尺寸变化都会把用户的缩放顶掉。
+  activeFitMode.value = ''
   zoom.value = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, +Number(z).toFixed(2)))
   logger.debug('PDF缩放设置', { reason, zoom: zoom.value })
 }
@@ -350,19 +358,55 @@ const onWheel = (ev) => {
   if (ev.deltaY < 0) setZoom(zoom.value + step, 'ctrl-wheel')
   else if (ev.deltaY > 0) setZoom(zoom.value - step, 'ctrl-wheel')
 }
-const fitWidth = () => {
+// ─────────────────── 自适应缩放（适合宽度 / 适合整页）───────────────────
+// 设计说明：预览面板的宽度会随窗口和分栏拖拽变化，若只在初始时定一个 zoom，窗口一变阅读区
+// 就不再贴合面板。所以把"适合宽度/整页"做成一种**持续生效的模式**：打开文档、容器尺寸变化时
+// 都重算；一旦用户手动缩放（Ctrl+滚轮 / +− / 工具栏输入），立刻退出该模式，之后不再抢用户的缩放。
+const AUTO_FIT_DEBOUNCE_MS = 140
+let autoFitTimer = null
+
+const computeFitZoom = (mode) => {
   const el = bodyRef.value
   const first = pages[0]
-  if (!el || !first || !first.wPt) return
-  const avail = el.clientWidth - 36
-  setZoom(avail / first.wPt, 'fit-width')
+  if (!el || !first || !first.wPt || !first.hPt) return null
+  const zx = (el.clientWidth - 36) / first.wPt
+  if (mode === 'page') return Math.min(zx, (el.clientHeight - 36) / first.hPt)
+  return zx
+}
+
+// preserveScroll：重算前记住滚动比例、算完落回，拖动窗口时不丢阅读位置。
+// 新文档首次落位用 false —— 阅读位置由宿主的恢复流程负责，这里别去抢。
+const applyFit = ({ reason = 'auto', preserveScroll = false } = {}) => {
+  if (!activeFitMode.value) return false
+  const z = computeFitZoom(activeFitMode.value)
+  if (!z || !Number.isFinite(z) || z <= 0) return false
+  const next = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, +z.toFixed(2)))
+  if (next === zoom.value) return false
+  const ratio = preserveScroll ? scrollRatio() : 0
+  zoom.value = next
+  logger.debug('PDF自适应缩放', { reason, mode: activeFitMode.value, zoom: next })
+  if (preserveScroll) nextTick(() => restoreScroll(ratio))
+  return true
+}
+
+// 容器尺寸变化时重算。ResizeObserver 在拖拽过程中会连续触发，而每次改 zoom 都要把可见页
+// 按新 DPI 重新栅格化（不便宜），所以防抖。
+const scheduleAutoFit = (reason = 'resize') => {
+  if (!activeFitMode.value) return
+  if (autoFitTimer) clearTimeout(autoFitTimer)
+  autoFitTimer = setTimeout(() => {
+    autoFitTimer = null
+    applyFit({ reason, preserveScroll: true })
+  }, AUTO_FIT_DEBOUNCE_MS)
+}
+
+const fitWidth = () => {
+  activeFitMode.value = 'width'
+  applyFit({ reason: 'fit-width', preserveScroll: true })
 }
 const fitPage = () => {
-  const el = bodyRef.value
-  const first = pages[0]
-  if (!el || !first || !first.wPt || !first.hPt) return
-  const z = Math.min((el.clientWidth - 36) / first.wPt, (el.clientHeight - 36) / first.hPt)
-  setZoom(z, 'fit-page')
+  activeFitMode.value = 'page'
+  applyFit({ reason: 'fit-page', preserveScroll: true })
 }
 
 const isEditableTarget = (target) => {
@@ -499,9 +543,14 @@ const load = async (fp, keep) => {
   const prevRatio = keep ? scrollRatio() : 0
   const r = await doc.openDocument(fp, { keepExisting: keep })
   if (!r.ok) return
+  if (!keep) {
+    // 换了文档：回到宿主指定的默认自适应策略（上一个文档里的手动缩放不跨文档保留）。
+    activeFitMode.value = props.fitMode === 'width' || props.fitMode === 'page' ? props.fitMode : ''
+  }
   emit('ready', { totalPages: totalPages.value })
   await nextTick()
   if (keep) restoreScroll(prevRatio)
+  else applyFit({ reason: 'load' }) // 首帧之后页尺寸已知，按自适应策略定初始缩放
   updateVisible()
   renderVisible()
   scheduleLayoutRender('load')
@@ -523,6 +572,37 @@ const restoreScroll = (ratio) => {
   const el = bodyRef.value
   if (!el || !ratio) return
   el.scrollTop = ratio * (el.scrollHeight - el.clientHeight)
+}
+
+// 按比例落位，并跨帧重试到布局稳定为止。
+// 为什么不能只落一次：宿主恢复阅读位置是在 emit('ready') 那一刻发起的，和 load() 后面的
+// nextTick / renderVisible / scheduleLayoutRender 链是并发的；文档刚打开时页数组才 splice 重建，
+// 容器可能一度没有可滚动高度，此时落位会被浏览器 clamp 到顶部——表现就是"切回旧文档停在开头"。
+// Markdown / 即时渲染早就有带增长重试的落位（restoreScrollTopWithGrowthRetry），PDF 缺这一环，
+// 这里补齐：等可滚动高度连续两帧不再变化，再认为落位生效。
+const RESTORE_SCROLL_MAX_ATTEMPTS = 12
+const RESTORE_SCROLL_RETRY_DELAY_MS = 60
+const RESTORE_SCROLL_STABLE_FRAMES = 2
+const restoreScrollStable = async (ratio) => {
+  const target = Number(ratio)
+  if (!Number.isFinite(target) || target <= 0) return false
+  let lastMaxTop = -1
+  let stableCount = 0
+  for (let attempt = 0; attempt < RESTORE_SCROLL_MAX_ATTEMPTS; attempt += 1) {
+    await new Promise((resolve) => window.requestAnimationFrame(resolve))
+    const el = bodyRef.value
+    if (!el || !el.isConnected) return false
+    const maxTop = Math.max(0, el.scrollHeight - el.clientHeight)
+    if (maxTop > 0) {
+      el.scrollTop = target * maxTop
+      stableCount = maxTop === lastMaxTop ? stableCount + 1 : 0
+      lastMaxTop = maxTop
+      // 连续两帧可滚动高度不再变化，说明布局稳定，落位有效。
+      if (stableCount >= RESTORE_SCROLL_STABLE_FRAMES) return true
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, RESTORE_SCROLL_RETRY_DELAY_MS))
+  }
+  return lastMaxTop > 0
 }
 
 // ─────────────────── 虚拟化：渲染可见页 ───────────────────
@@ -1105,12 +1185,14 @@ const forwardSync = async ({ line, column = 1 } = {}) => {
       })
     }
     if (res && res.page) {
+      // 统一用后端的"整行 bbox"来画高亮框，不要直接采信 synctex 自带的盒子：
+      // synctex 的 `h` 记录是**词级**盒——width 只覆盖一个词，height/depth 常为 0，
+      // 用它渲染出来的高亮只盖住行首那个词（后端又把它 clamp 成 8pt 高），
+      // 视觉上就是"高亮条落在文字左上角、没盖住对应内容"。
+      // typst 只返回一个点、本来就走 locatePoint 扩成整行，所以那边一直是对的；这里让 LaTeX 对齐。
       let box = { page: res.page, x: res.x, y: res.y, w: res.w || 0, h: res.h || 0 }
-      // 没有 w/h（typst 只给点）时，向后端取整行 bbox 做完整高亮框。
-      if (!box.w || !box.h) {
-        const loc = await doc.locatePoint(res.page, res.x, res.y)
-        if (loc && loc.found) box = { page: res.page, x: loc.x, y: loc.y, w: loc.w, h: loc.h }
-      }
+      const loc = await doc.locatePoint(res.page, res.x, res.y)
+      if (loc && loc.found) box = { page: res.page, x: loc.x, y: loc.y, w: loc.w, h: loc.h }
       scrollToPagePoint(box.page, box.y)
       showFlashBox(box)
     }
@@ -1262,6 +1344,7 @@ defineExpose({
   refresh,
   scrollRatio,
   restoreScroll,
+  restoreScrollStable,
   goPreviousPage,
   goNextPage,
   commitPageInput,
@@ -1297,7 +1380,11 @@ watch(() => props.path, (p) => {
 onMounted(() => {
   nextTick(() => scheduleLayoutRender('mounted'))
   if (typeof ResizeObserver !== 'undefined') {
-    resizeObserver = new ResizeObserver(() => scheduleLayoutRender('resize'))
+    // 尺寸变化既要刷新布局，也要按自适应策略重算缩放（非自适应模式下 scheduleAutoFit 直接跳过）。
+    resizeObserver = new ResizeObserver(() => {
+      scheduleLayoutRender('resize')
+      scheduleAutoFit('resize')
+    })
     if (rootRef.value) resizeObserver.observe(rootRef.value)
     if (bodyRef.value) resizeObserver.observe(bodyRef.value)
     logger.debug('PDF阅读器尺寸监听已启用')
@@ -1314,6 +1401,7 @@ onBeforeUnmount(() => {
   if (flashTimer) clearTimeout(flashTimer)
   if (renderSettleTimer) clearTimeout(renderSettleTimer)
   if (zoomRenderTimer) clearTimeout(zoomRenderTimer)
+  if (autoFitTimer) clearTimeout(autoFitTimer)
   if (searchTimer) clearTimeout(searchTimer)
   if (scrollRaf) cancelAnimationFrame(scrollRaf)
   if (resizeRenderRaf) cancelAnimationFrame(resizeRenderRaf)

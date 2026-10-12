@@ -1674,7 +1674,9 @@ pub async fn export_tex_pdf_tectonic(input_path: String, output_path: String) ->
 /// 这是前端增量渲染的前提：`GuaxiPdfViewer` 只在 PDF 路径不变时才走 `incrementalReconcile`
 /// （逐页指纹 diff、保留未变页的位图与滚动位置）；路径一变就整篇冷重载、重新栅格化所有页。
 /// 放在 Guaxi 配置目录下（与 codex-home / cognition 同级），不用系统临时目录——那是随时会被清的。
-pub(crate) fn preview_build_dir(engine: &str, source_key: &str) -> Result<PathBuf, String> {
+/// 预览构建目录的**路径**（不创建目录）。
+/// 清理时必须用这个版本：`preview_build_dir` 会 create_dir_all，拿它去清理等于又把目录建回来。
+pub(crate) fn preview_build_dir_path(engine: &str, source_key: &str) -> Result<PathBuf, String> {
     let config_path = crate::commands::settingview::get_config_path();
     let config_dir = config_path
         .parent()
@@ -1682,12 +1684,24 @@ pub(crate) fn preview_build_dir(engine: &str, source_key: &str) -> Result<PathBu
     let mut hasher = Sha256::new();
     hasher.update(source_key.as_bytes());
     let digest = format!("{:x}", hasher.finalize());
-    let dir = config_dir
+    Ok(config_dir
         .join("preview_build")
         .join(engine)
-        .join(&digest[..16]);
+        .join(&digest[..16]))
+}
+
+/// 取（必要时创建）预览构建目录。见 `preview_build_dir_path` 的稳定性说明。
+pub(crate) fn preview_build_dir(engine: &str, source_key: &str) -> Result<PathBuf, String> {
+    let dir = preview_build_dir_path(engine, source_key)?;
     fs::create_dir_all(&dir).map_err(|e| format!("创建预览构建目录失败: {e}"))?;
     Ok(dir)
+}
+
+/// 预览构建目录的键（源文件路径的规范形式）。
+/// 两个 build_*_pdf_preview 与 clear_preview_build 必须共用这一套，否则清理算不出同一个哈希、
+/// 删不掉自己建的目录。
+pub(crate) fn preview_source_key(source_path: &str) -> String {
+    PathBuf::from(source_path.trim()).to_string_lossy().to_string()
 }
 
 /// 正在构建的预览进程：key = 源文件路径，value = PID。
@@ -1742,7 +1756,7 @@ pub async fn build_tex_pdf_preview(source_path: String, content: String) -> Resu
 
     let (tectonic_path, is_bundled) = find_tectonic_exe_for_export()?;
 
-    let key = source.to_string_lossy().to_string();
+    let key = preview_source_key(&source_path);
     let outdir = preview_build_dir("latex", &key)?;
 
     // 同文档的上一轮构建先杀掉：过期构建既浪费 CPU，又可能在同一个稳定输出目录里
@@ -1835,6 +1849,68 @@ pub async fn build_tex_pdf_preview(source_path: String, content: String) -> Resu
     }
 
     Ok(pdf_path_str)
+}
+
+/// 关闭文档时清掉该文件的预览构建产物，避免 `config/preview_build` 无限膨胀。
+///
+/// 覆盖三类残留：
+/// 1. `config/preview_build/{latex,typst}/<hash>/` —— PDF 及 `.aux/.toc/.synctex` 等中间文件；
+/// 2. 该 PDF 的页图缓存（直接复用 `pdf_session_close`，它同时让 pdfium 丢掉这份文档）；
+/// 3. **源目录**里的 `.guaxi_preview_<stem>.tex` —— 构建用的临时源文件，构建被中途杀掉时会留下。
+#[tauri::command]
+pub async fn clear_preview_build(source_path: String) -> Result<(), String> {
+    let raw = source_path.trim().to_string();
+    if raw.is_empty() {
+        return Ok(());
+    }
+    let source = PathBuf::from(&raw);
+    let stem = source
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string();
+
+    // 1. 先停掉可能还在往这些目录里写的构建，否则删完又被写回来。
+    kill_previous_latex_preview(&preview_source_key(&raw));
+    crate::commands::typst_compile::forget_typst_jump_cache(&raw);
+
+    // 2. 删构建目录。键同时尝试"规范化"与"原始"两种写法：typst 最早用原始串做键，
+    //    两种都试一次，免得历史目录成了谁也扫不到的残留。
+    let mut keys = vec![preview_source_key(&raw)];
+    if raw != keys[0] {
+        keys.push(raw.clone());
+    }
+    for engine in ["latex", "typst"] {
+        for key in &keys {
+            let Ok(dir) = preview_build_dir_path(engine, key) else {
+                continue;
+            };
+            if !dir.is_dir() {
+                continue;
+            }
+            if !stem.is_empty() {
+                // 顺带释放页图缓存并让 pdfium 丢掉这份 PDF（阅读器可能还握着上一次的字节）。
+                let pdf = dir.join(format!(".guaxi_preview_{stem}.pdf"));
+                let _ = crate::commands::pdf_reader::pdf_session_close(
+                    pdf.to_string_lossy().to_string(),
+                )
+                .await;
+            }
+            match fs::remove_dir_all(&dir) {
+                Ok(()) => info!(dir = %dir.display(), "[PreviewCleanup] 已删除预览构建目录"),
+                Err(e) => warn!(dir = %dir.display(), err = %e, "[PreviewCleanup] 删除预览构建目录失败"),
+            }
+        }
+    }
+
+    // 3. 源目录里的临时源文件（正常收尾时 build_tex_pdf_preview 自己会删，被中断时靠这里兜底）。
+    if !stem.is_empty() {
+        if let Some(parent) = source.parent() {
+            let _ = fs::remove_file(parent.join(format!(".guaxi_preview_{stem}.tex")));
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]

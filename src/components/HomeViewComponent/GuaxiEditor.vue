@@ -2952,14 +2952,19 @@ const restorePdfPreviewReadPosition = async (path, reason = 'unknown') => {
   const key = getPreviewReadPositionKey(path, 'pdf');
   const entry = key ? previewReadPositionCache.get(key) : null;
   const viewer = latexPreviewRef.value;
-  if (!entry || !viewer?.restoreScroll) return false;
+  if (!entry || !(viewer?.restoreScrollStable || viewer?.restoreScroll)) return false;
 
   suppressPreviewReadPositionSave = true;
   try {
     await nextTick();
     await new Promise((resolve) => window.requestAnimationFrame(resolve));
     const ratio = Number(entry.scrollRatio);
-    viewer.restoreScroll(Number.isFinite(ratio) ? ratio : 0);
+    const safeRatio = Number.isFinite(ratio) ? ratio : 0;
+    // 优先用"跨帧重试到布局稳定"的落位：文档刚打开时容器可能还没有可滚动高度，
+    // 只落一帧会被 clamp 到顶部，表现就是"切回来还停在开头"。
+    // 整个落位过程保持保存静音，避免把中间的过渡滚动位置当成该文件的阅读位置存下来。
+    if (viewer.restoreScrollStable) await viewer.restoreScrollStable(safeRatio);
+    else viewer.restoreScroll(safeRatio);
     logger.info('[PreviewReadPosition] restored pdf position', {
       reason,
       path: normalizePreviewReadPath(path),
@@ -20480,6 +20485,10 @@ const isPdfPreviewDoc = computed(() => isTexFile.value || isTypFile.value)
 const pdfPreviewLabel = computed(() => (isTypFile.value ? 'Typst' : 'LaTeX'))
 const latexPreviewVisible = ref(false)
 const latexPreviewPdfPath = ref('')
+// 当前这份 latexPreviewPdfPath 是**为哪个源文件**构建出来的。
+// 用途见 selectedFile watcher 里的兜底重建：PDF 输出路径现在是稳定的，"没有重新构建"
+// 就等于继续显示上一份文档的 PDF，而且不报错；用它判断"显示的还不是当前文件"。
+const latexPreviewBuiltForPath = ref('')
 const latexPreviewBuilding = ref(false)
 const latexPreviewError = ref('')
 let latexBuildDebounceTimer = null
@@ -20663,6 +20672,7 @@ const buildLatexPreview = async () => {
     if (seq !== latexBuildSeq) return // 被更晚的构建取代
     // 加 query 触发 pane 的 watch（即便路径相同也重新加载）
     latexPreviewPdfPath.value = `${pdfPath}?v=${seq}`
+    latexPreviewBuiltForPath.value = sourcePath
   } catch (err) {
     if (seq !== latexBuildSeq) return
     latexPreviewError.value = String(err?.message || err || '构建失败')
@@ -21542,6 +21552,21 @@ watch(selectedFile, async (newFile, oldFile) => {
     // 切到不同文档时，替用户把它恢复到自己上次的模式（内部仅在模式确有差异时才真正切换）。
     if (switchedToDifferentFile) {
       await restoreDocPreviewMode(nextPath, 'selected-file-changed')
+
+      // 兜底：切到另一份 .tex/.typ 后，确认预览面板显示的就是由这个文件构建出的 PDF。
+      // 上面的 syncPreviewSurfaceForActiveFile 受 isPreviewSurfaceRequested() 门控，模式判定不为真
+      // 时不会触发任何重建；而 PDF 输出路径现在是稳定的，"没有重建"就等于继续显示上一份文档的
+      // PDF，且不报任何错——这正是"打开 typst 却还是上一个 latex 的渲染结果"的成因。
+      // 只在确实还显示着别的文件时补一次，正常路径（已重建过）不会重复编译。
+      if (/\.(tex|typ)$/i.test(nextPath)
+        && latexPreviewVisible.value
+        && latexPreviewBuiltForPath.value !== nextPath) {
+        logger.info('[Preview] pane still shows another document, rebuilding for active file', {
+          nextPath,
+          showingBuiltFor: latexPreviewBuiltForPath.value,
+        })
+        buildLatexPreview()
+      }
     }
 
     await initGitService()
@@ -23671,6 +23696,18 @@ const closeTab = async (path, region) => {
   }
 
   fileTreeStore.closeTab(path, targetRegion);
+
+  // 标签真正关掉后，清理该文件的预览构建产物（PDF、.aux/.toc/.synctex，以及源目录里
+  // 构建用的临时 .tex）。仍在另一侧分屏里开着时不能清——那边可能还显示着这份预览。
+  if (!willRemainOpenInOther && /\.(tex|typ)$/i.test(path)) {
+    invoke('clear_preview_build', { sourcePath: path }).catch((err) => {
+      logger.warn('[PreviewCleanup] 清理预览构建产物失败', {
+        path,
+        error: String(err?.message || err),
+      })
+    })
+  }
+
   logger.info('[PythonRuntime] keep session alive after closing tab', {
     reason: 'close-tab',
     targetPath: path,

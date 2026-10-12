@@ -2,6 +2,7 @@
   <GuaxiPdfViewer
     ref="viewerRef"
     :path="pdfPath"
+    fit-mode="width"
     :source-path="sourcePath"
     :building="building"
     :error-text="errorText"
@@ -57,6 +58,9 @@ const goToPage = (page, options) => viewerRef.value?.goToPage(page, options)
 // 避免编辑器层需要知道 PDF 阅读器内部 DOM 结构。
 const scrollRatio = () => viewerRef.value?.scrollRatio?.() ?? 0
 const restoreScroll = (ratio) => viewerRef.value?.restoreScroll?.(ratio)
+// 跨帧重试到布局稳定的落位：切换文件后恢复阅读位置时用，避免文档刚打开、容器还没有
+// 可滚动高度时只落一帧被 clamp 到顶部。
+const restoreScrollStable = (ratio) => viewerRef.value?.restoreScrollStable?.(ratio)
 
-defineExpose({ forwardSync, goToPage, scrollRatio, restoreScroll })
+defineExpose({ forwardSync, goToPage, scrollRatio, restoreScroll, restoreScrollStable })
 </script>
