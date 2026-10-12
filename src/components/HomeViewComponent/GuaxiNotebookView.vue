@@ -9543,11 +9543,15 @@ defineExpose({
 .guaxi-notebook__search-panel-shell {
   position: sticky;
   /* 查找框自成浮层，贴着顶部右上角（对齐预览模式的 .preview-find-widget：top 8px / 右对齐）。
-     不再 +50px 下压——工具条已不随搜索弹出，无需为它腾出下方空位；
-     工具条若因鼠标靠近顶部而浮现，它居中、查找框靠右，宽视口下互不遮挡。 */
+     关键：高度归零 + overflow 可见，让查找框不占纵向布局——否则它作为 flex 子项的 36px
+     高度会在弹出时把下方正文整体下推，影响阅读。负 margin 抵消 flex 容器的 6px gap，做到零位移。
+     sticky 仍保留，滚动时查找框钉在顶部不随正文滚走。 */
   top: var(--guaxi-notebook-sticky-top);
   z-index: 24;
-  min-height: 36px;
+  height: 0;
+  min-height: 0;
+  margin-top: -6px;
+  overflow: visible;
   display: flex;
   align-items: flex-start;
   justify-content: flex-end;
@@ -11189,6 +11193,10 @@ defineExpose({
     position: static;
     top: auto;
     height: auto;
+    /* 窄视口下查找框回到常规流内（在工具条下方成行），需抵消宽视口的浮层处理：
+       恢复自然高度、清掉用于消 gap 的负 margin，否则会上移盖住工具条。 */
+    min-height: auto;
+    margin-top: 0;
     display: flex;
     justify-content: flex-start;
     pointer-events: auto;

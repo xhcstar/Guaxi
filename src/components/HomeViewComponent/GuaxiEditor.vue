@@ -21535,6 +21535,11 @@ watch(selectedFile, async (newFile, oldFile) => {
       })
     }
 
+    // 切到不同文档时，替用户把它恢复到自己上次的模式（内部仅在模式确有差异时才真正切换）。
+    if (switchedToDifferentFile) {
+      await restoreDocPreviewMode(nextPath, 'selected-file-changed')
+    }
+
     await initGitService()
   } else {
     disposeAllVsCodeTextModelsForOwner(PRIMARY_EDITOR_VSCODE_MODEL_OWNER, 'selected-file-cleared')
@@ -21806,6 +21811,16 @@ const destroyRealtimeVditor = () => {
   }
 };
 
+// ───── 按文档记忆编辑器模式（编辑/预览/分屏/探索者）─────
+// 设计说明：
+// 1. 模式本身是全局单值（editorStore.homePreviewModeKey），过去切 A 的模式会连带把 B 也改掉。
+// 2. 这里按文件路径额外记一份，切 tab 时用 restoreDocPreviewMode 替用户“做一次模式切换”，
+//    让每个文档回到自己上次的模式；新文档没有记录时，沿用全局默认键（即上一次用的模式），符合直觉。
+// 3. 只复用既有的 handlePreviewModeSelect 来切换，不改动任何模式切换 / 渲染逻辑本身。
+// 4. 仅在单文件布局下登记与恢复：分屏布局两侧各持一份文件，全局模式语义不唯一，继续走原有逻辑。
+const docPreviewModeKeyByPath = new Map()
+const docModeKeyOf = (path) => normalizePreviewReadPath(path)
+
 const normalizeHomePreviewModeKey = (key) => {
   const k = String(key || '').trim().toLowerCase();
   return ['edit', 'preview', 'split', 'realtime', 'explorer'].includes(k) ? k : 'edit';
@@ -21823,6 +21838,12 @@ const getHomePreviewModeKeyFromState = () => {
 
 const setHomePreviewModeKeySafe = (key) => {
   const next = normalizeHomePreviewModeKey(key);
+
+  // 同步把这次模式记到“当前文档”名下，供切 tab 时按文档恢复。只在单文件布局登记。
+  if (layoutMode.value === 'single') {
+    const ownerPath = docModeKeyOf(selectedFile.value?.path || fileTreeStore.activeTab || '');
+    if (ownerPath) docPreviewModeKeyByPath.set(ownerPath, next);
+  }
 
   const setter = editorStore?.setHomePreviewModeKey;
   if (typeof setter === 'function') {
@@ -22039,6 +22060,39 @@ const restoreHomePreviewMode = async (from = 'mounted') => {
 
   logger.debug('[Editor] restoreHomePreviewMode', { from, desiredKey, currentKey });
   await handlePreviewModeSelect(desiredKey);
+};
+
+// 切到某个文档时，把它恢复到自己上次的模式（没记过的新文档沿用全局默认键）。
+// 复用 handlePreviewModeSelect 完成实际切换；切换期间静音阅读位置保存，避免读到切换瞬间被重置的视口。
+const restoreDocPreviewMode = async (path, reason = 'tab-switch') => {
+  if (layoutMode.value !== 'single') return;
+  const key = docModeKeyOf(path);
+  if (!key) return;
+
+  const remembered = docPreviewModeKeyByPath.get(key);
+  let targetKey = normalizeHomePreviewModeKey(remembered || editorStore.homePreviewModeKey);
+
+  // 目标模式与当前文档能力不匹配时静默降级为编辑模式：
+  // 否则 handlePreviewModeSelect 会弹“当前文档不支持预览 / Explorer 需要 Markdown”之类的提示。
+  // 典型场景：全局上次停在探索者/预览，这次打开的却是 .js 等不支持的文件——切 tab 不该打扰用户。
+  if (targetKey === 'explorer' && !canUseNotebookSurface.value) targetKey = 'edit';
+  if ((targetKey === 'preview' || targetKey === 'split') && !canPreview.value) targetKey = 'edit';
+
+  const currentKey = getHomePreviewModeKeyFromState();
+
+  if (targetKey === currentKey) {
+    // 模式已经一致：无需切换，但补登记一次，保证新文档也拥有自己的记录。
+    docPreviewModeKeyByPath.set(key, currentKey);
+    return;
+  }
+
+  logger.info('[Editor] restore per-document preview mode', { reason, path: key, targetKey, currentKey });
+  suppressReadPositionSaveDepth += 1;
+  try {
+    await handlePreviewModeSelect(targetKey);
+  } finally {
+    suppressReadPositionSaveDepth -= 1;
+  }
 };
 
 watch(previewMode, async (nextMode, prevMode) => {
