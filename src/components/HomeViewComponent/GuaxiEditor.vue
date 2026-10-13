@@ -20789,6 +20789,12 @@ const orgPreviewCategory = computed(() => {
 const isAnySplitPreview = computed(
   () => (isPdfPreviewDoc.value && latexPreviewVisible.value) || (isOrgTaskFile.value && orgPreviewVisible.value)
 )
+// 该文档是否具备“预览 / 分屏”这类渲染面。必须与 handlePreviewModeSelect 的分支一一对应：
+// Markdown / 代码 / 散文走 canPreview，.tex/.typ 走 PDF 面板，.org 走任务预览面板。
+// 三者能力彼此独立——只看 canPreview 会把 .org / .tex / .typ 误判成“不支持预览”。
+const canUsePreviewSurface = computed(
+  () => canPreview.value || isPdfPreviewDoc.value || isOrgTaskFile.value
+)
 // 全屏预览（编辑器隐藏）：previewMode=toggle 且 mode=preview。此时预览面板占满宽度、不显示 resizer。
 const previewPaneFull = computed(() => previewMode.value === 'toggle' && mode.value === 'preview')
 const previewPaneStyle = computed(() =>
@@ -22103,9 +22109,11 @@ const restoreDocPreviewMode = async (path, reason = 'tab-switch') => {
 
   // 目标模式与当前文档能力不匹配时静默降级为编辑模式：
   // 否则 handlePreviewModeSelect 会弹“当前文档不支持预览 / Explorer 需要 Markdown”之类的提示。
-  // 典型场景：全局上次停在探索者/预览，这次打开的却是 .js 等不支持的文件——切 tab 不该打扰用户。
+  // 典型场景：全局上次停在探索者/预览，这次打开的却是真正不支持的文件——切 tab 不该打扰用户。
+  // 判定必须用 canUsePreviewSurface（含 .tex/.typ/.org 各自的独立预览面）：只看 canPreview
+  // 会把这几类文档误判成“不支持预览”，把它们的模式记忆永远砸回编辑模式。
   if (targetKey === 'explorer' && !canUseNotebookSurface.value) targetKey = 'edit';
-  if ((targetKey === 'preview' || targetKey === 'split') && !canPreview.value) targetKey = 'edit';
+  if ((targetKey === 'preview' || targetKey === 'split') && !canUsePreviewSurface.value) targetKey = 'edit';
 
   const currentKey = getHomePreviewModeKeyFromState();
 
