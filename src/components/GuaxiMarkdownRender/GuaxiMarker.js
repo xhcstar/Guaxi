@@ -6,6 +6,9 @@ import "highlight.js/styles/atom-one-light.css";
 // 暗色 One Dark 代码配色 + 纯图片段落布局（作用域限定，详见文件内说明）。
 import "./guaxiMarkdownExtras.css";
 import { initMathJax, renderMath } from "./mathjaxConfig";
+// MathJax 3.2.2 的解析崩溃补丁：必须在 markdown-it-mathjax3 建出 TeX 输入 jax 之前生效，
+// 本模块求值时即安装（见该文件里的完整说明）。
+import "./mathjaxNullSafeCharacter";
 import { allowFileProtocolLinks } from "../../utils/markdownFileLink";
 import { createLogger } from '../../utils/logger'
 
@@ -2078,12 +2081,37 @@ export const detectIncompleteMathSyntax = (content) => {
 const MATH_RENDER_CACHE_LIMIT = 4000;
 const mathRenderCache = new Map();
 
+const escapeMathText = (text) =>
+  String(text ?? "").replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+
+// 单条公式失败不能拖垮整篇。MathJax 有过确定性的解析崩溃（见 mathjaxNullSafeCharacter.js）；
+// 万一将来又出现别的解析异常，这里让它只影响这一条公式（退化成显示原始 LaTeX），
+// 而不是让 renderMarkdown 外层 try/catch 把整篇文档退回成未渲染的源码。
+const mathRenderFailureFallback = (kind, latex) => (
+  kind === "block"
+    ? `<div class="math-block math-error">${escapeMathText(latex)}</div>`
+    : `<span class="math-inline math-error">${escapeMathText(latex)}</span>`
+);
+
 const memoizeMathRender = (kind, latex, produce) => {
   const key = `${kind}\u0000${latex}`;
   const cached = mathRenderCache.get(key);
   if (cached !== undefined) return cached;
 
-  const value = produce();
+  let value;
+  try {
+    value = produce();
+  } catch (error) {
+    // 注意**不写缓存**：补丁生效或输入变化后还应该能重新尝试，别把坏结果永久记住。
+    logger.error("[MarkdownRender] 单条公式渲染失败，降级为显示原始 LaTeX", {
+      kind,
+      error: String(error?.message || error),
+    });
+    return mathRenderFailureFallback(kind, latex);
+  }
+
   // 简单的 FIFO 上限：公式种类有限，超出后丢最旧的，避免长会话里无限增长。
   // （值还可能让 Map 提前 resize/重哈希，所以先判断再插入。）
   if (mathRenderCache.size >= MATH_RENDER_CACHE_LIMIT) {
@@ -2126,7 +2154,16 @@ export const renderMarkdown = async (content, options) => {
       }
     }
 
-    if (shouldEnableMath) {
+    // ───────── 数学归一化：只有"后端不可用"这条降级路径才用得到 ─────────
+    // 这三步原本在每次渲染时都无条件先跑一遍，但紧接着下面 fetch 成功时会把 finalContent
+    // 整个换成 result.processed_content —— 而那份是拿**原始 content** 生成的，于是这三步的
+    // 结果每次都被丢掉。8888 是 app 自己的主后端（启动即 bind），所以正常运行下必然走那条路，
+    // 这三步实际从未生效过。
+    // 现在改成放进 catch 里**现算**：后端正常时不再白跑三遍全文正则（流式渲染每个 chunk 都
+    // 省一次），后端失败时结果与原来逐字节一致 —— 那时 finalContent 仍等于原始 content。
+    const applyMathNormalizationFallback = () => {
+      if (!shouldEnableMath) return;
+
       const normalizedMathEnvironmentContent = normalizeLatexMathEnvironments(finalContent);
       if (normalizedMathEnvironmentContent !== finalContent) {
         logger.info("[MarkdownRender] normalize latex math environments", {
@@ -2144,18 +2181,18 @@ export const renderMarkdown = async (content, options) => {
         });
         finalContent = normalizedMathContent;
       }
-    }
 
-    if (shouldEnableMath && smartInlineMathFromCode) {
-      const normalizedInlineMathCodeContent = normalizeInlineMathCodeSpans(finalContent);
-      if (normalizedInlineMathCodeContent !== finalContent) {
-        logger.info("[MarkdownRender] normalize inline math-like code spans", {
-          beforeLength: String(finalContent || "").length,
-          afterLength: normalizedInlineMathCodeContent.length,
-        });
-        finalContent = normalizedInlineMathCodeContent;
+      if (smartInlineMathFromCode) {
+        const normalizedInlineMathCodeContent = normalizeInlineMathCodeSpans(finalContent);
+        if (normalizedInlineMathCodeContent !== finalContent) {
+          logger.info("[MarkdownRender] normalize inline math-like code spans", {
+            beforeLength: String(finalContent || "").length,
+            afterLength: normalizedInlineMathCodeContent.length,
+          });
+          finalContent = normalizedInlineMathCodeContent;
+        }
       }
-    }
+    };
 
     // 调用后端处理图片路径（接口不可用时，不影响后续 Markdown 本地渲染）
     try {
@@ -2191,6 +2228,8 @@ export const renderMarkdown = async (content, options) => {
       });
     } catch (err) {
       logger.warn("[MarkdownRender] 图片路径处理失败，继续本地渲染:", err);
+      // 后端不可用时才轮到本地做数学归一化（见上面 applyMathNormalizationFallback 的说明）。
+      applyMathNormalizationFallback();
     }
 
     // logger.info("result:", result);

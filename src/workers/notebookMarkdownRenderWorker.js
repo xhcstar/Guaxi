@@ -2,6 +2,8 @@ import MarkdownIt from 'markdown-it'
 import markdownItMathjax from 'markdown-it-mathjax3'
 import hljs from 'highlight.js'
 import { allowFileProtocolLinks } from '../utils/markdownFileLink'
+// MathJax 3.2.2 的解析崩溃补丁：必须在建出 TeX 输入 jax 之前生效，本模块求值时即安装。
+import '../components/GuaxiMarkdownRender/mathjaxNullSafeCharacter'
 
 const WORKER_LOG_PREFIX = '[NotebookMarkdownWorker]'
 
@@ -48,12 +50,32 @@ const renderPlainFenceBlock = (code, md) => {
 const MATH_RENDER_CACHE_LIMIT = 4000
 const mathRenderCache = new Map()
 
+const escapeMathText = (text) =>
+  String(text ?? '').replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ))
+
+// 单条公式失败不能拖垮整篇（详见 mathjaxNullSafeCharacter.js）。
+const mathRenderFailureFallback = (kind, latex) => (
+  kind === 'block'
+    ? `<div class="math-block math-error">${escapeMathText(latex)}</div>`
+    : `<span class="math-inline math-error">${escapeMathText(latex)}</span>`
+)
+
 const memoizeMathRender = (kind, latex, produce) => {
   const key = `${kind}\u0000${latex}`
   const cached = mathRenderCache.get(key)
   if (cached !== undefined) return cached
 
-  const value = produce()
+  let value
+  try {
+    value = produce()
+  } catch (error) {
+    // 不写缓存：补丁生效或输入变化后还应能重新尝试。
+    logWarn('single formula render failed, falling back to raw LaTeX', String(error?.message || error))
+    return mathRenderFailureFallback(kind, latex)
+  }
+
   if (mathRenderCache.size >= MATH_RENDER_CACHE_LIMIT) {
     const oldest = mathRenderCache.keys().next().value
     if (oldest !== undefined) mathRenderCache.delete(oldest)

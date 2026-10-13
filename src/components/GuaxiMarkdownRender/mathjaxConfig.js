@@ -5,6 +5,9 @@ import { liteAdaptor } from 'mathjax-full/js/adaptors/liteAdaptor';
 import { RegisterHTMLHandler } from 'mathjax-full/js/handlers/html';
 import { nextTick } from 'vue';
 import { createLogger } from '../../utils/logger'
+// MathJax 3.2.2 的解析崩溃补丁：这里也引入一次，保证无论先加载哪个入口，
+// TeX 输入 jax 建出来之前补丁都已生效（幂等）。
+import './mathjaxNullSafeCharacter'
 
 const logger = createLogger('mathjaxConfig')
 
