@@ -21,7 +21,6 @@ mod guaxiservices;
 mod state;
 
 use commands::file_watcher::FileWatcher;
-use guaxiservices::server::spawn_backend_services;
 
 use state::SharedState;
 
@@ -472,6 +471,11 @@ async fn main() {
             commands::preview_render_cache::preview_render_cache_put,
             commands::preview_render_cache::preview_render_cache_stats,
             commands::preview_render_cache::preview_render_cache_clear,
+            commands::service_control::service_list,
+            commands::service_control::service_start,
+            commands::service_control::service_stop,
+            commands::service_control::service_restart,
+            commands::service_control::service_set_autostart,
             commands::typst_compile::build_typ_pdf_preview,
             commands::typst_compile::export_typ_pdf,
             commands::typst_compile::typst_forward_search,
@@ -1089,19 +1093,22 @@ async fn main() {
             // 后台预下载本地翻译小模型（免费接口全挂时的兜底），只下模型不起进程。
             commands::translate_local::spawn_startup_model_provision();
 
-            let state_for_server = shared_state.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = start_backend_services(state_for_server).await {
-                    error!("Failed to start backend services: {}", e);
-                }
-            });
+            // 本地后端服务：按登记表启动（带退避重试，并尊重用户在「设置 → 服务器」里的停用偏好）。
+            // 以前是一次性 spawn、失败只打一行日志 —— 而 8888 挂掉会让 Markdown 的本地图片
+            // 全部渲染不出来（图片路径改写与 /markdown/api/images 都在这条服务上）。
+            // 端口暂时被占（TIME_WAIT / 上一实例收尾）时重试几次即可恢复；重试仍失败则放弃，
+            // 之后可在设置页手动启动。详见 service_control::autostart_services 的说明。
+            commands::service_control::autostart_services(shared_state.clone());
 
             tauri::async_runtime::spawn(async {
                 commands::p2psync::p2p_autostart_if_enabled().await;
             });
 
-            // 启动 Agent Server（Python 进程）
-            {
+            // 启动 Agent Server（Python 进程）。尊重「设置 → 服务器」里的停用偏好 ——
+            // 停用是持久化的，用户关掉之后重启应用不该自己又起来。
+            if !commands::service_control::autostart_enabled("agent-server") {
+                info!("Agent server 已被用户停用，跳过启动");
+            } else {
                 let app_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     if let Err(e) = commands::agent_server::ensure_agent_server_started(&app_handle).await {
@@ -1110,17 +1117,21 @@ async fn main() {
                 });
             }
 
-            // 启动 RSSHub sidecar（Node，复用 SlidevEnv 的 node.exe）。仅在已构建进包时启动；
-            // 未打包则 is_available() 为 false，直接跳过——聚合功能自动降级，不影响其余抓取。
-            tauri::async_runtime::spawn(async {
-                if commands::rsshub_server::is_available() {
-                    if let Err(e) = commands::rsshub_server::ensure_started().await {
-                        warn!("RSSHub 启动失败（聚合功能降级，不影响主功能）: {}", e);
+            // 启动 RSSHub sidecar（Node，复用 SlidevEnv 的 node.exe）。仅在已构建进包、且未被
+            // 用户停用时启动；未打包则 is_available() 为 false，直接跳过——聚合功能自动降级。
+            if !commands::service_control::autostart_enabled("rsshub") {
+                info!("RSSHub 已被用户停用，跳过启动");
+            } else {
+                tauri::async_runtime::spawn(async {
+                    if commands::rsshub_server::is_available() {
+                        if let Err(e) = commands::rsshub_server::ensure_started().await {
+                            warn!("RSSHub 启动失败（聚合功能降级，不影响主功能）: {}", e);
+                        }
+                    } else {
+                        info!("RSSHub 未打包，跳过启动（聚合功能不启用 RSSHub 源）");
                     }
-                } else {
-                    info!("RSSHub 未打包，跳过启动（聚合功能不启用 RSSHub 源）");
-                }
-            });
+                });
+            }
 
             #[cfg(desktop)]
             {

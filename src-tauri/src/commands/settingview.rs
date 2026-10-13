@@ -86,6 +86,10 @@ pub struct AppConfig {
     device_id: String,
     #[serde(default = "default_gc_cycle_seconds")]
     pub gc_cycle_seconds: u64,
+    /// 被用户在「设置 → 服务器」停用的后端服务 id；重启应用后不再自动拉起。
+    /// 供 `commands::service_control` 读取/写回。
+    #[serde(default)]
+    pub disabled_services: Vec<String>,
     #[serde(default)]
     lsp_syntax_highlight_enabled: bool,
     // 探索者笔记本的「注释/自然语言→生成 Python 代码」AI 辅助开关。
@@ -882,6 +886,7 @@ impl Default for AppConfig {
             asr_config: AsrConfig::default(),
             terminal_config: TerminalConfig::default(),
             film_studio_config: FilmStudioConfig::default(),
+            disabled_services: Vec::new(),
         }
     }
 }

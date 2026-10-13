@@ -96,6 +96,8 @@ pub mod syntax_highlight;
 pub mod typst_compile;
 pub mod pdf_reader;
 pub mod preview_render_cache;
+// 后端服务的登记表与启停控制（「设置 → 服务器」页面的后端）。
+pub mod service_control;
 pub mod synctex;
 pub mod task_block;
 pub mod taskmanager;
