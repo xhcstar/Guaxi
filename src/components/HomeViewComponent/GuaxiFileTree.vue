@@ -263,6 +263,7 @@
 
         <div v-if="taskActiveExpanded" class="active-tree-container" @wheel.stop>
           <GuaxiVirtualFileTree
+            ref="taskTreeRef"
             class="tree-component"
             :nodes="taskCatTrees[activeTaskCat]"
             v-model:expanded-keys="taskCatExpandedKeys[activeTaskCat]"
@@ -377,6 +378,7 @@
         </div>
         <div v-if="plainRootExpanded" class="active-tree-container" @wheel.stop>
           <GuaxiVirtualFileTree
+            ref="plainTreeRef"
             class="tree-component"
             :nodes="externalDirTree"
             v-model:expanded-keys="externalExpandedKeys"
@@ -680,6 +682,16 @@ const catPathOf = (key) => normalizePath(taskCategoryPaths.value[key] || '')
 const catZhOf = (key) => (TASK_CATEGORIES.find((c) => c.key === key)?.zh) || key
 const inactiveTaskCats = computed(() => TASK_CATEGORIES.filter((c) => c.key !== activeTaskCat.value))
 
+// 三种模式各有一个虚拟树实例（同一时刻只渲染一个），滚动定位时按模式取对应实例。
+const plainTreeRef = ref(null)
+const taskTreeRef = ref(null)
+const treeRefForMode = (mode) => {
+  if (mode === 'plain') return plainTreeRef.value
+  if (mode === 'task') return taskTreeRef.value
+  return treeRef.value
+}
+const activeTreeRef = computed(() => treeRefForMode(viewMode.value))
+
 // 打开历史（持久化在 localStorage）
 const OPEN_HISTORY_KEY = 'guaxi_filetree_open_dir_history'
 const openHistory = ref([])
@@ -855,15 +867,15 @@ const ensureExpandedForDir = (dirPath) => {
   }
 }
 
-const scrollToKey = async (key) => {
+const scrollToKey = async (key, align = 'center') => {
   await nextTick()
   await new Promise((r) => requestAnimationFrame(r))
 
-  const tree = treeRef.value
+  const tree = activeTreeRef.value
   if (!tree || typeof tree.scrollTo !== 'function') return
 
   try {
-    await Promise.resolve(tree.scrollTo({ key }))
+    await Promise.resolve(tree.scrollTo({ key, align }))
   } catch {
     return
   }
@@ -1974,12 +1986,50 @@ const removeInlineTempNode = (mode, node) => {
   }
 }
 
+// 选中某模式下的节点（只作用于该模式已渲染的树，不切换分类/仓库）
+const selectInMode = (mode, rawPath) => {
+  const target = normalizePath(rawPath)
+  if (!target) return
+  if (mode === 'plain') {
+    externalSelectedKeys.value = [target]
+    return
+  }
+  const cat = taskCatOfPath(target) || activeTaskCat.value
+  if (taskCatSelectedKeys[cat]) taskCatSelectedKeys[cat] = [target]
+}
+
+// 行内新建后先把新行滚入视口：虚拟列表只渲染可视区附近的行，节点在视口外时
+// input 根本没被渲染，focusEditingInput 找不到元素就无从聚焦，用户只能自己滚动过去。
+const scrollModeToKey = async (mode, key) => {
+  const tree = treeRefForMode(mode)
+  if (!tree || typeof tree.scrollTo !== 'function') return
+
+  await nextTick()
+  await new Promise((r) => requestAnimationFrame(r))
+
+  try {
+    await Promise.resolve(tree.scrollTo({ key: normalizePath(key), align: 'nearest' }))
+  } catch (e) {
+    logger.debug('[TreeScroll] scrollTo failed', e)
+  }
+}
+
 const beginInlineCreate = async ({ mode, parentDir, isDirectory }) => {
   if (inlineCreateCtx.value) cancelInlineCreate()
+  // 先把目标所在的树显示出来：分类收起或未激活时，行内新建的节点建在一棵没渲染的树里，
+  // 既看不见也编辑不了（task 的未激活分类还会因为是空数组而只加载出这一个新节点）。
+  if (mode === 'plain') {
+    plainRootExpanded.value = true
+  } else if (mode === 'task') {
+    const cat = taskCatOfPath(parentDir) || activeTaskCat.value
+    if (activeTaskCat.value !== cat) await activateTaskCat(cat)
+    taskActiveExpanded.value = true
+  }
   const node = insertInlineTempNode(mode, parentDir, isDirectory)
   inlineCreateCtx.value = { mode, parentDir: normalizePath(parentDir), isDirectory, node }
   startEditing(node)
-  await nextTick()
+  selectInMode(mode, node.id)
+  await scrollModeToKey(mode, node.id)
   await focusEditingInput(node.id)
 }
 
@@ -2002,6 +2052,9 @@ const handleInlineCommit = async () => {
     editingNode.value = null
     editName.value = ''
     await refreshModeDir(mode, parentDir)
+    // 刷新合并后行会重建：把选中态与视口落到真实节点上，光标即停在刚建出的文件/目录上。
+    selectInMode(mode, path)
+    await scrollModeToKey(mode, path)
     if (!isDirectory) {
       try {
         const res = await fileTreeStore.fetchFileContent(path)
@@ -2744,15 +2797,22 @@ const addNode = async (parentId, isDirectory = false) => {
     ensureExpandedForDir(parentNode.id)
   }
 
+  // 仓库整体收起时文件树没有渲染，新建的节点会建在看不见的地方：先把它展开。
+  if (fileTreeStore.activeRepoPath) {
+    fileTreeStore.expandedRepos.set(fileTreeStore.activeRepoPath, true)
+  }
+
   startEditing(newNode);
+
+  // 新建行进入选中态：编辑中的临时节点也要有高亮条，否则用户得自己在一大片节点里找它。
+  selectedKeys.value = [newNode.id];
+  lastSelectedKey.value = newNode.id;
 
   await nextTick()
   await scrollToKey(newNode.id)
   await focusEditingInput(newNode.id)
 
-  selectedKeys.value = [];
-
-  return new Promise((resolve) => {
+  const created = await new Promise((resolve) => {
     const unwatch = watch(editingNode, (newVal) => {
       if (!newVal) {
         unwatch();
@@ -2760,6 +2820,15 @@ const addNode = async (parentId, isDirectory = false) => {
       }
     });
   });
+
+  // 提交后树被刷新，临时节点已被真实节点替换：把选中态与视口落到真实 id 上。
+  if (created?.id) {
+    selectedKeys.value = [created.id]
+    lastSelectedKey.value = created.id
+    await scrollToKey(created.id, 'nearest')
+  }
+
+  return created;
 };
 
 // 处理编辑完成的函数
@@ -3173,14 +3242,97 @@ const buildAncestorDirs = (repoRoot, targetPath) => {
   return dirs
 }
 
+// ───── 树内定位（VSCode 式 autoReveal）：展开祖先 → 懒加载子目录 → 选中 → 滚动 ─────
+// 设计说明：虚拟树只渲染「展开链路上的已加载节点」。深层路径若只是塞进 expandedKeys 而不把
+// 每一级目录的 children 补齐，目标行根本不在 flat 里，选中态和滚动都会静默失效——这正是
+// 「打开文件后左栏不跟随」「面包屑点了没反应」的根因。
+const loadModeDirChildren = async (mode, node) => {
+  if (!node?.is_directory) return false
+  if (Array.isArray(node.children) && node.children.length) return true
+
+  try {
+    if (mode === 'kb') {
+      await fileTreeStore.fetchFileTree(normalizePath(node.id), { force: true })
+      node.children = sortFileTree(normalizeTreeIds(filterHiddenTree(fileTreeStore.fileTree)))
+    } else {
+      node.children = await fetchDirChildren(node.id, mode === 'task')
+    }
+    return true
+  } catch (error) {
+    logger.warn('[TreeReveal] 加载子目录失败', {
+      mode,
+      id: node.id,
+      error: String(error?.message || error || ''),
+    })
+    return false
+  }
+}
+
+const revealInModeTree = async (mode, rawPath, options = {}) => {
+  const { align = 'nearest' } = options
+  const target = normalizePath(rawPath)
+  if (!target || isHiddenPath(target)) return false
+
+  let root = ''
+  let tree = null
+  let catKey = null
+
+  if (mode === 'plain') {
+    root = normalizePath(externalDir.value)
+    tree = externalDirTree.value
+  } else if (mode === 'task') {
+    catKey = taskCatOfPath(target)
+    if (!catKey) return false
+    if (activeTaskCat.value !== catKey) await activateTaskCat(catKey)
+    root = catPathOf(catKey)
+    tree = taskCatTrees[catKey] || []
+  } else {
+    root = normalizePath(fileTreeStore.activeRepoPath)
+    tree = fileTree.value
+  }
+
+  // 目标不在当前模式的根目录下就不动：宁可不定位，也不要把左栏切到无关目录。
+  if (!root || !(target === root || target.startsWith(`${root}/`))) return false
+
+  for (const dir of buildAncestorDirs(root, target)) {
+    const node = findNodeById(tree, dir)
+    if (!node) return false
+    await loadModeDirChildren(mode, node)
+    if (mode === 'plain') {
+      if (!externalExpandedKeys.value.includes(dir)) externalExpandedKeys.value = [...externalExpandedKeys.value, dir]
+    } else if (mode === 'task') {
+      if (!taskCatExpandedKeys[catKey].includes(dir)) taskCatExpandedKeys[catKey] = [...taskCatExpandedKeys[catKey], dir]
+    } else if (!expandedKeys.value.includes(dir)) {
+      expandedKeys.value = [...expandedKeys.value, dir]
+    }
+  }
+
+  if (mode === 'plain') {
+    externalSelectedKeys.value = [target]
+  } else if (mode === 'task') {
+    taskCatSelectedKeys[catKey] = [target]
+  } else {
+    selectedKeys.value = [target]
+    lastSelectedKey.value = target
+  }
+
+  await nextTick()
+  try {
+    await Promise.resolve(treeRefForMode(mode)?.scrollTo?.({ key: target, align }))
+  } catch (e) {
+    logger.debug('[TreeReveal] scrollTo failed', e)
+  }
+  return true
+}
+
 // 由编辑器面包屑触发：切换仓库、展开并选中目标节点
-const revealPathInTree = async (absPath) => {
+const revealPathInTree = async (absPath, options = {}) => {
   const target = normalizePath(absPath)
-  if (!target) return
+  if (!target) return false
 
   if (isHiddenPath(target)) {
     logger.info('[BreadcrumbReveal] ignored hidden path', { target })
-    return
+    return false
   }
 
   const repoRoot = pickRepoRootForPath(target) || normalizePath(fileTreeStore.activeRepoPath)
@@ -3196,27 +3348,32 @@ const revealPathInTree = async (absPath) => {
       await loadRepoTree(repoRoot)
     }
 
-    const ancestors = buildAncestorDirs(repoRoot || activeRepo, target)
-    if (ancestors.length) {
-      expandedKeys.value = Array.from(new Set([...(expandedKeys.value || []), ...ancestors]))
-    }
-
-    selectedKeys.value = [target]
-    lastSelectedKey.value = target
-
-    await nextTick()
-
-    try {
-      treeRef.value?.scrollTo?.({ key: target })
-    } catch (e) {
-      logger.debug('[BreadcrumbReveal] tree scrollTo not available or failed', e)
-    }
-
-    logger.info('[BreadcrumbReveal] done', { repoRoot, target, expanded: ancestors.length })
+    const ok = await revealInModeTree('kb', target, { align: 'center', ...options })
+    logger.info('[BreadcrumbReveal] done', { repoRoot, target, ok })
+    return ok
   } catch (e) {
     logger.error('[BreadcrumbReveal] failed', e)
+    return false
   }
 };
+
+// 定位统一入口：左侧栏有三种模式，各自一棵树，按当前模式分派（面包屑在 plain/task 模式下
+// 传的就是该模式的路径，不能再按知识库逻辑处理）。
+const revealPathInSidebar = async (path, options = {}) => {
+  if (viewMode.value === 'kb') return revealPathInTree(path, options)
+  return revealInModeTree(viewMode.value, path, options)
+}
+
+// 打开文件后自动跟随（等价 VSCode 的 explorer.autoReveal）：点标签页、面包屑选文件、
+// 程序化 openFileInTab 都会切换 activeTab，据此展开并滚动左栏树到该文件。
+watch(
+  () => fileTreeStore.activeTab,
+  async (path) => {
+    if (!path) return
+    const ok = await revealPathInSidebar(path, { align: 'nearest' })
+    logger.debug('[TreeReveal] follow active tab', { path, ok })
+  }
+)
 
 // 处理文件创建事件
 const handleFileCreated = async (filePath) => {
@@ -3614,7 +3771,7 @@ onMounted(async () => {
       const path = typeof payload === 'string' ? payload : String(payload?.path || '')
       if (!path) return
       logger.info('[BreadcrumbReveal] event received', { path })
-      await revealPathInTree(path)
+      await revealPathInSidebar(path)
     })
     breadcrumbRevealUnlisten.value = unlisten
   } catch (e) {

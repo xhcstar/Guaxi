@@ -415,13 +415,14 @@ function onPointerUp(e) {
 }
 
 // ───── 暴露:滚动到指定 key ─────
+// align: 'center' 居中（面包屑定位）；'nearest' 仅在不可见时滚动（自动跟随打开的文件，避免抖动）。
 async function scrollTo(opts) {
   const key = normId(opts && opts.key)
   if (!key) return
   await nextTick()
   const idx = flat.value.findIndex((it) => normId(it.node.id) === key)
   if (idx < 0 || !rootRef.value) return
-  scrollIndexIntoView(idx, 'center')
+  scrollIndexIntoView(idx, (opts && opts.align) || 'center')
 }
 defineExpose({ scrollTo })
 

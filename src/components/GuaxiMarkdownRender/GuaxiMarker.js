@@ -9,6 +9,13 @@ import { initMathJax, renderMath } from "./mathjaxConfig";
 // MathJax 3.2.2 的解析崩溃补丁：必须在 markdown-it-mathjax3 建出 TeX 输入 jax 之前生效，
 // 本模块求值时即安装（见该文件里的完整说明）。
 import "./mathjaxNullSafeCharacter";
+// 公式记忆层（与 Worker 共用同一套键与上限）+ 主线程侧的后端持久缓存访问。
+import {
+  collectMathPayloadsFromTokens,
+  isMathMemoized,
+  memoizeMathRender as memoizeMathRenderBase,
+} from "./mathRenderMemo";
+import { preloadMathCache, scheduleMathBackfill } from "./previewRenderCacheClient";
 import { allowFileProtocolLinks } from "../../utils/markdownFileLink";
 import { createLogger } from '../../utils/logger'
 
@@ -2078,9 +2085,6 @@ export const detectIncompleteMathSyntax = (content) => {
 // 缓存的是**整条规则的最终输出**（含外层容器），不只是 MathJax 片段 ——
 // 顺带省掉旧实现里每个公式都要 createElement + innerHTML + outerHTML 的那一轮
 // "把 SVG 解析成 DOM 再序列化回字符串"的开销。
-const MATH_RENDER_CACHE_LIMIT = 4000;
-const mathRenderCache = new Map();
-
 const escapeMathText = (text) =>
   String(text ?? "").replace(/[&<>"']/g, (c) => (
     { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
@@ -2095,31 +2099,28 @@ const mathRenderFailureFallback = (kind, latex) => (
     : `<span class="math-inline math-error">${escapeMathText(latex)}</span>`
 );
 
+// 记忆层本体在 mathRenderMemo（与 Worker 共用同一套键与上限），这里只补一层失败兜底。
+// `produce()` 抛错时不会写进记忆层，坏结果不会被永久记住。
 const memoizeMathRender = (kind, latex, produce) => {
-  const key = `${kind}\u0000${latex}`;
-  const cached = mathRenderCache.get(key);
-  if (cached !== undefined) return cached;
-
-  let value;
   try {
-    value = produce();
+    return memoizeMathRenderBase(kind, latex, produce);
   } catch (error) {
-    // 注意**不写缓存**：补丁生效或输入变化后还应该能重新尝试，别把坏结果永久记住。
     logger.error("[MarkdownRender] 单条公式渲染失败，降级为显示原始 LaTeX", {
       kind,
       error: String(error?.message || error),
     });
     return mathRenderFailureFallback(kind, latex);
   }
+};
 
-  // 简单的 FIFO 上限：公式种类有限，超出后丢最旧的，避免长会话里无限增长。
-  // （值还可能让 Map 提前 resize/重哈希，所以先判断再插入。）
-  if (mathRenderCache.size >= MATH_RENDER_CACHE_LIMIT) {
-    const oldest = mathRenderCache.keys().next().value;
-    if (oldest !== undefined) mathRenderCache.delete(oldest);
-  }
-  mathRenderCache.set(key, value);
-  return value;
+// 渲染前把「记忆层里还没有的」公式一次性问一遍后端持久缓存。
+// 只往记忆层填空：不改 token、不改 Markdown 文本、不改任何渲染输出。
+// 全部已在记忆层时（同一会话里反复重渲染）连这次 IPC 都省掉。
+const preloadMathForTokens = async (tokens) => {
+  const payloads = collectMathPayloadsFromTokens(tokens);
+  if (!payloads.length) return;
+  const missing = payloads.filter((payload) => !isMathMemoized(payload));
+  if (missing.length) await preloadMathCache(missing);
 };
 
 export const renderMarkdown = async (content, options) => {
@@ -2734,9 +2735,14 @@ export const renderMarkdown = async (content, options) => {
       };
     }
 
-    // 执行渲染
+    // 执行渲染。拆成 parse + renderer.render 两步（与 md.render 完全等价，后者就是这么实现的），
+    // 好在两步之间插一次持久缓存的批量预热。token 流一个字节都不变，
+    // 因此 data-md-start-line / 标题 id / TOC 都不受影响。
+    const renderEnv = {};
+    const tokens = md.parse(finalContent, renderEnv);
+    await preloadMathForTokens(tokens);
     const container = document.createElement("div");
-    container.innerHTML = md.render(finalContent);
+    container.innerHTML = md.renderer.render(tokens, md.options, renderEnv);
 
     // 处理 Mermaid 图表。这里直接在离屏容器里生成最终 SVG，
     // 避免对尚未挂载到真实 DOM 的节点调用 mermaid.run() 导致所有调用方一起失败。
@@ -2809,6 +2815,8 @@ export const renderMarkdown = async (content, options) => {
     if (enableButtons) {
       addCopyButtons(container, { theme });
     }
+    // 把本次新算出来的公式排进回填队列（防抖 + 分批，非阻塞，不等磁盘）。
+    scheduleMathBackfill();
     // logger.info("渲染后的HTML:", container.innerHTML);
     return container.innerHTML;
   } catch (err) {

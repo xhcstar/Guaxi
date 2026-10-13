@@ -1450,6 +1450,13 @@ import tableColumnRemove from '@iconify-icons/mdi/table-column-remove'
 import { dirname, homeDir } from '@tauri-apps/api/path'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { renderMarkdown, addCopyButtons, addMediaViewerButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
+// 渲染结果的持久缓存：Worker 里没有 invoke，所以由主线程代查、代写（见 renderPreviewMarkdownHtmlWithWorker）。
+import {
+  collectInlineMathCandidates,
+  isMathMemoized,
+  primeMathMemo,
+} from '../GuaxiMarkdownRender/mathRenderMemo'
+import { fetchMathCache, queueMathEntries } from '../GuaxiMarkdownRender/previewRenderCacheClient'
 import { createGuaxiPythonCellEditorManager } from './utils/guaxiPythonCellEditor'
 import { buildPythonCellBlock, createPythonCellId, createPythonCellStableId, createPythonSessionId, dataframeToMarkdownTable, maskPythonCellBlocksForMarkdown, parsePythonCellBlocks } from './utils/guaxiPythonCellSyntax'
 import { maskMathCellBlocksForMarkdown } from './utils/guaxiMathCellSyntax'
@@ -19634,6 +19641,8 @@ const initPreviewMarkdownWorker = () => {
       if (!task) return
       previewMarkdownWorkerPendingTasks.delete(taskId)
       if (payload?.ok) {
+        // Worker 报回来的「本次新算出来的公式」由主线程统一写进持久缓存（Worker 里没有 invoke）。
+        queueMathEntries(payload?.mathNew)
         task.resolve(String(payload?.html || ''))
         return
       }
@@ -19673,20 +19682,40 @@ const disposePreviewMarkdownWorker = (reason = 'dispose') => {
   logger.info('[Preview] markdown worker disposed', { reason })
 }
 
-const renderPreviewMarkdownHtmlWithWorker = (content, options = {}, reason = 'unknown') => {
+const renderPreviewMarkdownHtmlWithWorker = async (content, options = {}, reason = 'unknown') => {
   const markdownText = String(content || '')
-  if (!markdownText.trim()) return Promise.resolve('')
+  if (!markdownText.trim()) return ''
   const worker = previewMarkdownWorker || initPreviewMarkdownWorker()
   if (!worker) {
-    return Promise.reject(new Error('Preview markdown worker unavailable'))
+    throw new Error('Preview markdown worker unavailable')
   }
+
+  const renderOptions = buildPreviewMarkdownRenderOptions(options)
+
+  // Worker 里没有 Tauri 的 invoke，所以持久缓存由主线程代查，把命中的公式随请求交给它。
+  // 这里按 Markdown 源码**粗略**挑候选公式，仅仅是优化提示：对不上的只是少命中几次，
+  // 渲染器规则仍按 token.content 精确取值，**绝不会渲染错**。
+  try {
+    const candidates = collectInlineMathCandidates(markdownText).filter((payload) => !isMathMemoized(payload))
+    if (candidates.length) {
+      const hits = await fetchMathCache(candidates)
+      if (hits) {
+        primeMathMemo(hits) // 主线程也记住，下次渲染不必再问后端
+        renderOptions.mathCache = hits
+      }
+    }
+  } catch (error) {
+    // 预热失败只是失去加速，渲染照常进行。
+    logger.warn('[Preview] math cache preload failed', { error: String(error?.message || error) })
+  }
+
   const taskId = ++previewMarkdownWorkerTaskId
   return new Promise((resolve, reject) => {
     previewMarkdownWorkerPendingTasks.set(taskId, { resolve, reject })
     worker.postMessage({
       id: taskId,
       content: markdownText,
-      options: buildPreviewMarkdownRenderOptions(options),
+      options: renderOptions,
       reason,
     })
   })
@@ -20447,6 +20476,17 @@ const {
   done: bilingualDone,
   errorText: bilingualError,
 } = bilingual;
+
+// 必须声明在 bilingualAvailable **之前**：下面 `watch(bilingualAvailable, ...)` 会在 setup 期间
+// 立刻求值它一次，而它读 showPreview —— 若 showPreview 声明在其后就会撞 TDZ
+// （Cannot access 'showPreview' before initialization），setup 中断、编辑器整块空白。
+// 只在"挂载时已经选中了 Markdown/散文文件"时才触发（那时 canBilingualTranslate 为真、
+// 不再被 && 短路），所以平时不容易发现。
+const showPreview = computed(() => {
+  if (!selectedFile.value || !canPreview.value) return false;
+  if (previewMode.value === 'realtime') return false;
+  return previewMode.value === 'toggle' ? mode.value === 'preview' : true;
+});
 
 const bilingualAvailable = computed(
   () => canBilingualTranslate.value
@@ -21648,12 +21688,6 @@ const isPreviewOnlyReadonly = computed(() =>
   previewMode.value === 'toggle' && mode.value === 'preview' && !showEditor.value
 );
 
-const showPreview = computed(() => {
-  if (!selectedFile.value || !canPreview.value) return false;
-  if (previewMode.value === 'realtime') return false;
-  return previewMode.value === 'toggle' ? mode.value === 'preview' : true;
-});
-
 const showEditorShell = computed(() => {
   // 设计说明：
   // 1. 终端面板现在已经从 editor-wrapper 中拆出，避免“无文件 + 打开终端”时仍然渲染出
@@ -22156,13 +22190,25 @@ watch(previewMode, async (nextMode, prevMode) => {
 
   if (nextMode === 'toggle') return;
 
-  if (!canPreview.value) {
-    message.warning('仅 Markdown 文件支持预览');
+  // 能力判定必须与 handlePreviewModeSelect 的分支一一对应：.tex/.typ 走 PDF 面板、
+  // .org 走任务预览面板，它们都是独立的预览面。这里原先只判 canPreview（Markdown/代码/散文），
+  // 于是 .org/.tex/.typ 一切到 split/preview 就被这个 watcher 砸回编辑模式 ——
+  // 表现就是"从 md 切回 org，原来的分屏模式被降级成编辑模式"。
+  // （restoreDocPreviewMode 里已经用 canUsePreviewSurface 修过同类问题，这里当时漏了。）
+  const realtimeUnsupported = nextMode === 'realtime' && !canPreview.value;
+  if (!canUsePreviewSurface.value || realtimeUnsupported) {
+    message.warning(
+      !canUsePreviewSurface.value ? '当前文档不支持预览' : '实时预览仅支持 Markdown 文件'
+    );
     previewMode.value = 'toggle';
     await setMainMode('edit');
     renderedHtml.value = '';
     return;
   }
+
+  // 有预览面，但当前不是 Markdown：.tex/.typ/.org 的预览内容由 handlePreviewModeSelect
+  // 各自的分支负责，这里不要再往下跑 Markdown 的初始化与渲染链。
+  if (!canPreview.value) return;
 
   if (nextMode === 'realtime') {
     pendingRealtimeScrollRestore.value = true;

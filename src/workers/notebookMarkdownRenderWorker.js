@@ -4,6 +4,12 @@ import hljs from 'highlight.js'
 import { allowFileProtocolLinks } from '../utils/markdownFileLink'
 // MathJax 3.2.2 的解析崩溃补丁：必须在建出 TeX 输入 jax 之前生效，本模块求值时即安装。
 import '../components/GuaxiMarkdownRender/mathjaxNullSafeCharacter'
+// 记忆层与主线程共用同一套键与上限（持久缓存由主线程负责，Worker 里没有 invoke）。
+import {
+  drainMathBackfill,
+  memoizeMathRender as memoizeMathRenderBase,
+  primeMathMemo,
+} from '../components/GuaxiMarkdownRender/mathRenderMemo'
 
 const WORKER_LOG_PREFIX = '[NotebookMarkdownWorker]'
 
@@ -43,13 +49,10 @@ const renderPlainFenceBlock = (code, md) => {
 }
 
 // ───────── MathJax 结果记忆化 ─────────
-// 与 GuaxiMarker.js 同一套做法（那边有详细说明）：markdown-it-mathjax3 每次渲染都会把
-// 每个公式现场编译成 SVG，单条约 0.94ms；一篇 240 公式的笔记一次渲染就有约 250ms 花在这里。
-// 公式 SVG 只由 LaTeX 源码决定，按源码记忆化后，编辑时未改动的公式全部命中，
-// 预览重渲染从数百毫秒降到个位数毫秒。命中时返回的就是未缓存时本会返回的同一个字符串。
-const MATH_RENDER_CACHE_LIMIT = 4000
-const mathRenderCache = new Map()
-
+// 记忆层本体在 mathRenderMemo（与主线程共用同一套键与上限，那边有详细说明）；
+// 这里只补一层失败兜底。持久缓存由主线程负责 —— Worker 里没有 Tauri 的 invoke，
+// 所以主线程随渲染请求把预热好的条目传进来（options.mathCache），
+// 再把本次新算出来的条目随响应带回去由主线程回填。
 const escapeMathText = (text) =>
   String(text ?? '').replace(/[&<>"']/g, (c) => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
@@ -63,25 +66,13 @@ const mathRenderFailureFallback = (kind, latex) => (
 )
 
 const memoizeMathRender = (kind, latex, produce) => {
-  const key = `${kind}\u0000${latex}`
-  const cached = mathRenderCache.get(key)
-  if (cached !== undefined) return cached
-
-  let value
   try {
-    value = produce()
+    return memoizeMathRenderBase(kind, latex, produce)
   } catch (error) {
     // 不写缓存：补丁生效或输入变化后还应能重新尝试。
     logWarn('single formula render failed, falling back to raw LaTeX', String(error?.message || error))
     return mathRenderFailureFallback(kind, latex)
   }
-
-  if (mathRenderCache.size >= MATH_RENDER_CACHE_LIMIT) {
-    const oldest = mathRenderCache.keys().next().value
-    if (oldest !== undefined) mathRenderCache.delete(oldest)
-  }
-  mathRenderCache.set(key, value)
-  return value
 }
 
 // 后端 /api/markdown/image_process 只匹配 ![](相对路径) 这种**图片**语法（见
@@ -436,16 +427,27 @@ const buildWorkerMarkdownRenderer = (sourceContent, options = {}) => {
 const renderMarkdownInWorker = async (content, options = {}) => {
   const sourceContent = String(content || '')
   const finalContent = await preprocessMarkdownContent(sourceContent, options)
+
+  // 主线程随请求带来的「持久缓存命中的公式」，先灌进记忆层。
+  // 只做填空：不改 token、不改 Markdown 文本、不改任何渲染输出。
+  primeMathMemo(options.mathCache)
+
   const md = buildWorkerMarkdownRenderer(sourceContent, options)
-  return md.render(finalContent)
+  const html = md.render(finalContent)
+
+  // 本次新算出来的公式带回去，由主线程写进后端持久缓存（Worker 里没有 Tauri 的 invoke）。
+  return { html, mathNew: drainMathBackfill() }
 }
 
 self.onmessage = async (event) => {
   const payload = event?.data || {}
   const id = payload?.id
   try {
-    const html = await renderMarkdownInWorker(String(payload?.content || ''), payload?.options || {})
-    self.postMessage({ id, ok: true, html })
+    const { html, mathNew } = await renderMarkdownInWorker(
+      String(payload?.content || ''),
+      payload?.options || {},
+    )
+    self.postMessage({ id, ok: true, html, mathNew })
   } catch (error) {
     logWarn('render failed', String(error?.message || error))
     self.postMessage({
