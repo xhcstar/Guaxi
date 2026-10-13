@@ -204,18 +204,31 @@
         <div class="gdb-source" :style="{ height: sourceHeight + 'px' }">
           <div class="gdb-source-bar">
             <n-radio-group v-model:value="sourceMode" size="tiny">
-              <n-radio-button value="local">本地源码</n-radio-button>
-              <n-radio-button value="remote">远端源码</n-radio-button>
+              <n-radio-button value="local">本机源码</n-radio-button>
+              <n-radio-button value="remote">编译机源码</n-radio-button>
             </n-radio-group>
-            <n-input v-model:value="srcFromPrefix" size="tiny" placeholder="编译路径前缀 (可空)" style="width:140px" />
-            <span class="gdb-arrow">→</span>
-            <n-input v-model:value="srcToPrefix" size="tiny" :placeholder="sourceMode === 'local' ? '本地源码根' : '远端路径前缀(可空)'" style="width:150px" />
-            <n-tooltip v-if="sourceMode === 'local'" trigger="hover"><template #trigger>
-              <button class="gdb-ib" @click="pickLocalRoot"><Icon :icon="folderIcon" width="14" height="14" /></button>
-            </template>选择本地源码根目录</n-tooltip>
+            <n-tooltip v-if="sourceMode === 'remote'" trigger="hover"><template #trigger>
+              <n-select v-model:value="sourceProfileId" size="tiny" :options="profileOptions" placeholder="SSH 档案(编译机)" style="width:170px" />
+            </template>源码放在哪台 Linux 编译机上：选一个 SSH 档案，之后自动用 SSH 去该机器读源码</n-tooltip>
+            <n-tooltip trigger="hover"><template #trigger>
+              <n-select v-model:value="sourceRule" size="tiny" :options="sourceRuleOptions" style="width:170px" />
+            </template>源码定位规则。构建方式不同，调试信息里的路径与源码真实位置的关系也不同：
+• 自动：依次试「原样 → 逐段砍前缀 → 常见构建根(/build,/src,/work…)替换 → 按文件名搜」，绝大多数情况都能命中；
+• 原地构建：产物就在工程目录里，用「原样」或「自动」；
+• chroot / docker 构建：容器内构建根（如 /build）会被换成你的源码根，用「自动」；
+• 按文件名搜索：只知道文件名时用（要求文件名在工程内唯一）</n-tooltip>
+            <n-tooltip trigger="hover"><template #trigger>
+              <n-input v-model:value="sourceRoot" size="tiny" :placeholder="sourceMode === 'local' ? '源码工程根目录（点右侧选）' : '编译机上的工程根目录（点右侧浏览）'" style="flex:1;min-width:200px" />
+            </template>源码工程根：本机就选目录；编译机就浏览远端目录。选好后下面的「源码根」就是你告诉我的唯一信息，其余路径映射我来处理</n-tooltip>
+            <n-tooltip trigger="hover"><template #trigger>
+              <button class="gdb-ib" @click="pickRoot"><Icon :icon="folderIcon" width="14" height="14" /></button>
+            </template>{{ sourceMode === 'local' ? '选择本机源码根目录' : '浏览编译机上的目录' }}</n-tooltip>
+            <n-tooltip v-if="sourceRule === 'prefix'" trigger="hover"><template #trigger>
+              <n-input v-model:value="srcFromPrefix" size="tiny" placeholder="构建根前缀，如 /build" style="width:150px" />
+            </template>调试信息里的构建根前缀（如 /build）；会被替换成上面的源码根</n-tooltip>
             <n-tooltip trigger="hover"><template #trigger>
               <button class="gdb-ib primary" @click="refreshSource"><Icon :icon="crosshairIcon" width="14" height="14" /></button>
-            </template>按当前帧 file:line 对照源码并高亮</n-tooltip>
+            </template>按当前帧 file:line 定位源码并高亮</n-tooltip>
             <n-tooltip trigger="hover"><template #trigger>
               <button class="gdb-ib" :disabled="!sourceLines.length" @click="sendSource"><Icon :icon="sendIcon" width="14" height="14" /></button>
             </template>把当前源码发到主界面编辑器</n-tooltip>
@@ -232,7 +245,10 @@
               <span class="gdb-srcno">{{ ln.n }}</span>
               <span class="gdb-srctext">{{ ln.text }}</span>
             </div>
-            <div v-if="!sourceLines.length" class="gdb-hint gdb-src-empty">{{ sourceHint }}</div>
+            <div v-if="!sourceLines.length" class="gdb-src-empty">
+              <div class="gdb-hint">{{ sourceHint }}</div>
+              <pre v-if="locateInfo" class="gdb-mem gdb-src-tried">{{ locateInfo }}</pre>
+            </div>
           </div>
         </div>
         <div class="gdb-vresize" @mousedown="onSourceResizeDown"></div>
@@ -426,6 +442,39 @@
       </template>
       <template v-else>选择 SSH 档案与可执行文件，启动远端 gdb -i=mi 开始调试。</template>
     </div>
+
+    <!-- 编译机目录浏览（选远端源码根） -->
+    <n-modal v-model:show="showRemotePick" :mask-closable="false" style="width:640px;max-width:94vw">
+      <div class="gdb-pick">
+        <div class="gdb-pick-h">
+          <Icon :icon="folderIcon" width="16" height="16" class="gdb-panel-ico" />
+          <span>浏览编译机上的目录</span>
+          <n-select v-model:value="sourceProfileId" size="small" :options="profileOptions" placeholder="SSH 档案" style="width:190px" @update:value="browseRemote(remotePath || '~')" />
+          <button class="gdb-ib" @click="showRemotePick = false"><Icon :icon="xIcon" width="16" height="16" /></button>
+        </div>
+        <div class="gdb-pick-bar">
+          <n-tooltip trigger="hover"><template #trigger>
+            <button class="gdb-ib" @click="remoteUp"><Icon :icon="arrowUpIcon" width="15" height="15" /></button>
+          </template>上级目录</n-tooltip>
+          <n-input v-model:value="remotePath" size="small" style="flex:1" @keyup.enter="browseRemote(remotePath)" />
+          <n-tooltip trigger="hover"><template #trigger>
+            <button class="gdb-ib" @click="browseRemote(remotePath)"><Icon :icon="refreshIcon" width="15" height="15" /></button>
+          </template>刷新</n-tooltip>
+        </div>
+        <div class="gdb-pick-list">
+          <div v-if="remoteLoading" class="gdb-hint">加载中…</div>
+          <div v-for="d in remoteDirs" :key="d" class="gdb-pick-item" @click="remoteEnter(d)">
+            <Icon :icon="folderIcon" width="14" height="14" class="gdb-pick-ico" />{{ d }}
+          </div>
+          <div v-if="!remoteLoading && !remoteDirs.length" class="gdb-hint">（没有子目录）</div>
+        </div>
+        <div class="gdb-pick-f">
+          <span class="gdb-hint">{{ remotePath }}</span>
+          <n-button size="small" @click="showRemotePick = false">取消</n-button>
+          <n-button size="small" type="primary" @click="remoteChoose">用当前目录作为源码根</n-button>
+        </div>
+      </div>
+    </n-modal>
   </div>
 </template>
 
@@ -434,7 +483,6 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } from 'v
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { open, save } from '@tauri-apps/plugin-dialog'
-import { readTextFile } from '@tauri-apps/plugin-fs'
 import { createLogger } from '../../../utils/logger'
 import { Icon } from '@iconify/vue'
 import playIcon from '@iconify-icons/lucide/play'
@@ -566,7 +614,6 @@ const registers = ref([])
 // 跨机源码对照
 const sourceMode = ref('local')  // 'local' | 'remote'
 const srcFromPrefix = ref('')
-const srcToPrefix = ref('')
 const sourceLines = ref([])
 const sourceCurLine = ref(0)
 const sourceFile = ref('')
@@ -997,24 +1044,61 @@ async function refreshAll() {
   await refreshRegisters(); await refreshWatch(); await refreshSource()
 }
 
-// ---- 跨机源码对照（本地 readTextFile / 远端 ssh_read_text_file） ----
-function mapSourcePath(fullpath) {
-  const from = srcFromPrefix.value.trim()
-  const to = srcToPrefix.value.trim()
-  let p = fullpath
-  if (from && p.startsWith(from)) p = to.replace(/[\\/]+$/, '') + p.slice(from.length)
-  else if (!from && to) {
-    // 无前缀时：把编译路径的文件名拼到目标根下（最朴素映射）。
-    p = to.replace(/[\\/]+$/, '') + '/' + shortFile(p)
-  }
-  return p
+// ---- 跨机源码对照 ----
+//
+// 用户只需要给一个"源码工程根"（本机目录，或编译机上的目录），
+// 路径映射（尤其 chroot/docker 构建里调试信息写的是 /build/... 这种情况）交给后端按规则解。
+const sourceRule = ref('auto')
+const sourceRoot = ref('')
+const sourceProfileId = ref(null)
+const sourceRuleOptions = [
+  { label: '自动（推荐）', value: 'auto' },
+  { label: '按原样', value: 'direct' },
+  { label: '前缀替换', value: 'prefix' },
+  { label: '按文件名搜索', value: 'search' },
+]
+const locateInfo = ref('')     // 定位结果/失败诊断
+// 远端目录浏览
+const showRemotePick = ref(false)
+const remotePath = ref('')
+const remoteDirs = ref([])
+const remoteLoading = ref(false)
+
+function pickRoot() {
+  if (sourceMode.value === 'local') return pickLocalRoot()
+  showRemotePick.value = true
+  if (!sourceProfileId.value) sourceProfileId.value = profileId.value
+  browseRemote(remotePath.value || '~')
 }
 async function pickLocalRoot() {
   try {
-    const sel = await open({ directory: true, multiple: false, title: '选择本地源码根目录' })
-    if (sel) srcToPrefix.value = typeof sel === 'string' ? sel : sel?.path
+    const sel = await open({ directory: true, multiple: false, title: '选择源码工程根目录' })
+    if (sel) { sourceRoot.value = typeof sel === 'string' ? sel : sel?.path; note('源码根已设为 ' + sourceRoot.value) }
   } catch (_) {}
 }
+async function browseRemote(path) {
+  if (!sourceProfileId.value) { error.value = '请先选一个 SSH 档案（编译机）'; return }
+  remoteLoading.value = true
+  try {
+    remoteDirs.value = await invoke('ssh_list_dirs', { profileId: sourceProfileId.value, path: path || '~' })
+    remotePath.value = path || '~'
+  } catch (e) { error.value = '列远端目录失败: ' + (e?.message || e) } finally { remoteLoading.value = false }
+}
+function remoteEnter(name) {
+  const base = remotePath.value.replace(/\/+$/, '')
+  browseRemote(`${base}/${name}`)
+}
+function remoteUp() {
+  const p = remotePath.value.replace(/\/+$/, '')
+  const i = p.lastIndexOf('/')
+  browseRemote(i > 0 ? p.slice(0, i) : '/')
+}
+function remoteChoose() {
+  sourceRoot.value = remotePath.value
+  showRemotePick.value = false
+  note('源码根（编译机）已设为 ' + sourceRoot.value)
+}
+
 async function refreshSource() {
   if (!sessionId.value || blockedWhileRunning('当前帧源码')) return
   const r = await runCmd('-stack-info-frame')
@@ -1024,25 +1108,47 @@ async function refreshSource() {
   const line = parseInt(fr.line || '0', 10)
   sourceFile.value = full
   sourceCurLine.value = line
-  if (!full) { sourceLines.value = []; sourceHint.value = '当前帧无源码信息。'; return }
-  const target = mapSourcePath(full)
+  if (!full) { sourceLines.value = []; sourceHint.value = '当前帧无源码信息。'; locateInfo.value = ''; return }
+  if (!sourceRoot.value.trim()) {
+    sourceLines.value = []
+    sourceHint.value = '请先选「源码工程根」（本机目录，或切到「编译机源码」浏览远端目录）。'
+    return
+  }
   try {
-    let text = ''
-    if (sourceMode.value === 'local') {
-      text = await readTextFile(target)
-    } else {
-      // 远端：同时把映射告诉 gdb，使其内部 list/断点源码定位也一致。
-      if (srcFromPrefix.value.trim() && srcToPrefix.value.trim()) {
-        await runCmd(`-interpreter-exec console ${miQuote(`set substitute-path ${srcFromPrefix.value.trim()} ${srcToPrefix.value.trim()}`)}`)
-      }
-      text = await invoke('ssh_read_text_file', { profileId: profileId.value, path: target, maxBytes: 1048576 })
+    const loc = await invoke('cmd_source_locate', {
+      req: {
+        debugPath: full,
+        root: sourceRoot.value,
+        rule: sourceRule.value,
+        toPrefix: sourceRoot.value,
+        profileId: sourceMode.value === 'remote' ? sourceProfileId.value : null,
+      },
+    })
+    if (!loc.found) {
+      sourceLines.value = []
+      sourceHint.value = loc.hint || '未找到源码。'
+      locateInfo.value = loc.tried && loc.tried.length
+        ? '尝试过:\n' + loc.tried.slice(0, 8).join('\n') + (loc.tried.length > 8 ? '\n…' : '')
+        : ''
+      return
     }
+    const text = await invoke('cmd_source_read', {
+      path: loc.path,
+      profileId: sourceMode.value === 'remote' ? sourceProfileId.value : null,
+      maxBytes: 1048576,
+    })
     sourceLines.value = text.split(/\r?\n/).map((t, i) => ({ n: i + 1, text: t }))
+    sourceHint.value = ''
+    locateInfo.value = `定位: ${loc.path}（${loc.rule}）`
+    // 顺带把映射告诉 gdb，使它内部的 list/断点源码定位也一致。
+    if (sourceMode.value === 'remote' && sourceRule.value === 'prefix' && srcFromPrefix.value.trim()) {
+      await runCmd(`-interpreter-exec console ${miQuote(`set substitute-path ${srcFromPrefix.value.trim()} ${sourceRoot.value.trim()}`)}`)
+    }
     await nextTick()
     if (curLineEl && curLineEl.scrollIntoView) curLineEl.scrollIntoView({ block: 'center' })
   } catch (e) {
     sourceLines.value = []
-    sourceHint.value = `读取源码失败（${shortFile(target)}）：${e?.message || e}`
+    sourceHint.value = `读取源码失败（${shortFile(full)}）：${e?.message || e}`
   }
 }
 let sourceResizing = false
@@ -1158,6 +1264,19 @@ async function loadMacros() {
 .gdb-mem { background: #1e1e1e; color: #d4d4d4; font-family: var(--guaxi-mono-font, monospace); font-size: 12px; padding: 8px; border-radius: 6px; white-space: pre-wrap; word-break: break-all; margin: 0; }
 .gdb-empty { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--guaxi-text-secondary, #6b7280); font-size: 13px; padding: 12px; min-height: 0; }
 .gdb-dead-note { flex: 0 0 auto; color: #e5484d; align-self: flex-start; }
+
+/* 编译机目录浏览弹窗 */
+.gdb-pick { display: flex; flex-direction: column; max-height: 80vh; background: var(--guaxi-panel-bg); border: 1px solid var(--guaxi-border); border-radius: var(--tw-radius); box-shadow: var(--tw-elev); overflow: hidden; font-family: var(--tw-ui-font); }
+.gdb-pick-h { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--guaxi-border); font-weight: 600; }
+.gdb-pick-bar { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--guaxi-border); }
+.gdb-pick-list { flex: 1 1 auto; min-height: 200px; max-height: 52vh; overflow: auto; padding: 6px 8px; }
+.gdb-pick-item { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; font-family: var(--gdb-mono); }
+.gdb-pick-item:hover { background: var(--tw-accent-soft); color: var(--tw-accent); }
+.gdb-pick-ico { color: #e0a53f; }
+.gdb-pick-f { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--guaxi-border); }
+.gdb-pick-f .gdb-hint { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gdb-src-empty { display: flex; flex-direction: column; gap: 8px; padding: 12px; }
+.gdb-src-tried { max-height: 200px; overflow: auto; margin: 0; font-size: 12px; }
 .gdb-console-dead { flex: 1 1 auto; width: 100%; min-height: 0; overflow: auto; }
 
 /* ---- 美化层 ---- */

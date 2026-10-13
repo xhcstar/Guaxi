@@ -21,7 +21,7 @@ mod guaxiservices;
 mod state;
 
 use commands::file_watcher::FileWatcher;
-use guaxiservices::server::start_backend_services;
+use guaxiservices::server::spawn_backend_services;
 
 use state::SharedState;
 
@@ -377,9 +377,17 @@ async fn main() {
             commands::cmd_dispatch::cmd_dispatch_to_yaml,
             commands::cmd_dispatch::cmd_dispatch_run,
             commands::cmd_dispatch::cmd_dispatch_cancel,
+            commands::cmd_dispatch::cmd_strategy_list,
+            commands::cmd_dispatch::cmd_strategy_save,
+            commands::cmd_dispatch::cmd_strategy_load,
+            commands::cmd_dispatch::cmd_strategy_delete,
+            commands::cmd_dispatch::cmd_dispatch_stage_pem,
             commands::cmd_catalog::cmd_catalog_list,
             commands::cmd_catalog::cmd_scenario_list,
             commands::cmd_catalog::cmd_scenario_render,
+            commands::source_locate::cmd_source_locate,
+            commands::source_locate::cmd_source_read,
+            commands::source_locate::ssh_list_dirs,
             commands::ssh_terminal::ssh_set_enable_secret,
             commands::ssh_terminal::ssh_delete_enable_secret,
             commands::ssh_terminal::ssh_has_enable_secret,

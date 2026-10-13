@@ -72,6 +72,17 @@ pub async fn ssh_read_text_file(
     exec_collect(&app, &profile_id, &cmd).await
 }
 
+/// 跑一条命令并只回输出，不落盘。
+///
+/// 供源码定位/远端目录枚举这类"探测型"调用复用（`ssh_exec_capture` 会写文件，不适合）。
+pub(crate) async fn ssh_exec_capture_quiet(
+    app: &AppHandle,
+    profile_id: &str,
+    command: &str,
+) -> Result<String, String> {
+    exec_collect(app, profile_id, command).await
+}
+
 #[derive(Serialize)]
 pub struct ExecResult {
     pub output: String,

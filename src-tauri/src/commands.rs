@@ -78,6 +78,8 @@ pub mod crypto_lab;
 pub mod cmd_dispatch;
 // 命令下发用的命令目录与场景模板（数据来自产品 CLI 手册）。
 pub mod cmd_catalog;
+// 源码定位（把调试信息里的路径映射到本机/远端源码，支持 chroot/docker 构建布局）。
+pub mod source_locate;
 // 国密 TLCP/SM2/PQC 引擎：仅在 `tlcp` 特性下编译（绑定 Tongsuo）。默认构建不包含。
 #[cfg(feature = "tlcp")]
 pub mod crypto_engine;

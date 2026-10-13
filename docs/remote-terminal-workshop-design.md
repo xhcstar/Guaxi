@@ -77,7 +77,23 @@
 
 每个面板 = **固定标题条 + 独立滚动的内容区 + 底部拖拽手柄**：标题条（`gdb-panel-h`）不随内容滚动，也**可点击折叠**；内容区（`gdb-scroll`）自己滚动；手柄（`gdb-panel-rz`）上下拖拽改块高（`panelH`）。标题条右侧是**图标按钮**（`gdb-ib`，全部 `n-tooltip` 带中文说明），例如刷新 / 导出到主界面编辑器 / 删除 / 选目录 / 对照当前行 / 读内存。顶部命令板同样改为图标按钮（运行/继续/下一步/步入/步出/中断 + 全量刷新 + 结束），鼠标悬停给出快捷键与语义说明。
 
-居中列顶部**源码对照面板**：本地 `readTextFile` / 远端 `ssh_read_text_file` 两种来源，编译路径前缀→本地/远端根映射，停住按当前帧 file:line 高亮滚动，并对 gdb 下 `set substitute-path`；可一键发送到主界面编辑器。字体与终端一致（`--gdb-mono`）。
+居中列顶部**源码对照面板**：停住时按当前帧 file:line 定位源码、高亮并滚动；可一键发送到主界面编辑器。字体与终端一致（`--gdb-mono`）。
+
+**源码定位（`source_locate.rs`）——用户只给一个"源码工程根"，路径映射由后端按规则解**：
+
+现实里调试信息里的路径几乎从不等于源码在你机器上的位置：原地/out-of-tree 构建还算对得上，但 **chroot / docker 构建**里工程被挂在容器内的 `/build`（本仓库正是这种：调试信息写 `/build/usr/click/lib/libssl_cli/ssl_cli.c`，源码在工程根的 `usr/click/lib/libssl_cli/ssl_cli.c`）；**源码还可能在另一台 Linux 编译机上**。所以提供规则，默认 `auto` 依次试：
+
+| 规则 | 做法 |
+|---|---|
+| 原样 | `debug_path` 直接用 |
+| **后缀匹配**（auto 里最有用） | 从左侧逐段砍掉调试路径的前缀，看剩下的是否存在于源码根下 —— 不需要知道构建根叫 `/build` 还是 `/src` |
+| 前缀替换 | 把常见构建根（`/build` `/builddir` `/src` `/source` `/work` `/workspace` `/code` `/app` `/root` `/opt`）换成源码根 |
+| 按文件名搜索 | 在源码根下按 basename 递归找（限深、排除 `node_modules/.git/target/out/.cache`；多个匹配时**不猜**，直接告诉用户缩小源码根） |
+
+- `cmd_source_locate`：只做路径解析与**存在性探测**，不下发任何命令；返回命中路径、用了哪条规则、**尝试过的候选**与下一步建议（找不到时把候选列出来便于诊断）。
+- `cmd_source_read`：读正文——本机 `std::fs`，远端走 `ssh_read_text_file`。
+- **远端（编译机）源码**：面板可切「编译机源码」，选 SSH 档案后用 `ssh_list_dirs`（`ls -1p` 只列目录）浏览远端目录选源码根，之后所有定位/读取都经 SSH 在该机器上完成。探测用一次 exec 把所有候选批量 `test -f`，省往返。
+- 规则为「前缀替换」时，顺手对 gdb 下 `set substitute-path`，让它内部的 `list`/断点定位也一致。
 
 ## 5. 工具箱（`RemoteToolbox.vue`）
 
@@ -137,7 +153,16 @@ UI 约定（全页统一）：
 
 把「按配置在设备上批量下发 CLI」做进工坊：配置驱动、支持多条命令聚合成高级流程、交互式设备 CLI 全自动走通。
 
-**为什么不是"exec 一条命令"**：这类设备的 CLI 是**交互式**的 —— 要 `enable` 进特权、`config terminal force` 进配置模式；导入证书/私钥时设备进入"粘贴 PEM"状态（提示 `use "..." on a single line`，以单独一行 `...` 结束）；还会出现 yes/no 确认与 `--more--` 分页。所以核心是一个**提示符状态机 + 常驻 shell 会话**（`DeviceCli`），与参考工具 `executor.py` 同模型。
+**为什么不是"exec 一条命令"**：这类 CLI 是**交互式**的。所以核心是一个**提示符状态机 + 常驻 shell 会话**（`DeviceCli`），并且要区分两种目标：
+
+- **设备 CLI**（`>` / `#` / `(config)#`）：要 `enable` 进特权、`config terminal force` 进配置模式；导入证书/私钥时设备进入"粘贴 PEM"状态（提示 `use "..." on a single line`，以单独一行 `...` 结束）；还有 yes/no 确认与 `--more--` 分页。
+- **Linux shell**（编译机，`user@host:~$` / `[root@host ~]#`）：**没有** enable/config 这一套，命令就是 shell 命令。若任务带 PEM 且命令里有 heredoc（`<<EOF`），就把 PEM 当作 heredoc 内容喂进去。
+
+会话类型可选 `自动探测 / 设备 CLI / Linux shell`。自动探测发一个空行看回显的提示符：`$` 结尾、或 `#` 结尾但带 `@host:`／方括号的判为 shell（Linux root 的 `#` 也是 `#`，靠这个区分），否则按设备 CLI。
+
+- **自动应答**：设备模式下 `type yes to continue` / `continue:` / `yes/no` / `are you sure` → 发 `YES`；两种模式都处理 `--more--`／`:` 分页。**shell 模式不代答 yes/no**（`rm -i`、`apt` 之类的确认不该被代替），但 sudo 口令提示会喂一次 enable 口令。
+- **结果判定**：设备 CLI 用硬失败标志（`invalid input`/`syntax error`/`access denied`/`failed`/`unknown command`…）+ 幂等成功标志（`already exists`/`not configured`…）+ **"交互未完成"守卫**；把"脱字符指示"收窄为**整行只有 `^` `~`** 才算失败，避免命令里出现 `^`（正则/路径）被误判。
+  **shell 模式改用真实退出码**：给命令追加 `; echo __DISPATCH_RC=$?`，以退出码为准（`cp` 失败不会打印任何关键词，关键词启发式对 shell 不可靠）。展示输出里会把探针行剥掉。可用「退出码」开关关掉（命令是交互式时）。
 
 - **提示符状态机**：按最后一行非空内容判定 `>`（用户）/ `#`（特权）/ `(config*)#`（配置）/ 密码提示 / PEM 等待。`ensure_config_mode()` 先空行探测，必要时 `config terminal force`，再必要时 `enable`(+enable 口令) 后重试。
 - **自动应答**：`type yes to continue` / `continue:` / `yes/no` / `are you sure` → 发 `YES`；`--more--` → 发空格；PEM 等待 → 发 PEM 正文 + 单独一行 `...`。
@@ -148,7 +173,10 @@ UI 约定（全页统一）：
 - **执行**：后台逐条执行，推事件 `cmd-dispatch-task`（status: running/ok/ok-idem/fail/skipped + reason + output）/ `cmd-dispatch-done`；`cmd_dispatch_cancel` 可中断；日志 JSONL 落盘 `app_data/cmd_dispatch/runs/<run_id>.jsonl`（字段对齐参考工具）。**失败即停**（`continue_on_error` 可关）。
 - **先看清再执行**：`cmd_dispatch_plan` 只展开+排序不下发，UI 用它做"预览将要逐条执行的命令"与配置校验。
 - **YAML ⇄ 任务表双向同步**：YAML 只由后端解析/生成（`cmd_dispatch_parse` / `cmd_dispatch_to_yaml`），前端不引 YAML 库，任务表的改动回写成 YAML 再送去预览/执行。
-- **凭据**：优先复用库内 SSH 档案；enable 口令另存 keychain（`guaxi-ssh-enable`）。配置里带 `global` 段时也可直接用它直连（兼容原工具用法）。
+- **凭证**：优先复用库内 SSH 档案；enable 口令另存 keychain（`guaxi-ssh-enable`）。配置里带 `global` 段时也可直接用它直连（兼容原工具用法）。
+- **编辑方式**：「图形」（任务表：命令列给足宽度、多行输入，长命令也能看全）与「文本」（整块 YAML，批量改效率高）两种模式切换，YAML 与任务表双向同步。
+- **策略库**（`cmd_strategy_*`，落 `app_data/cmd_dispatch/strategies.json`）：把一组 targets+tasks 存成命名策略，下次一键载入复用。**凭据不入库**（保存时清空 `global`），所以策略可安全分享。
+- **文件选择**（`cmd_dispatch_stage_pem`）：任务的 `pem_file` 可点文件图标从**证书页的 CA 库 / 终端证书库**直接取（证书/私钥/整链），或选任意本地文件；取出的内容落到受管目录 `app_data/cmd_dispatch/pem/` 并回填绝对路径（内容相同复用同一文件）。
 
 **命令目录（`cmd_catalog_list`）**：把手册里的命令做成结构化条目 `{group,name,syntax,summary,cmd_template,pem,params[{name,required,doc,example}]}`，覆盖 **SSL**（Ch13/14：`ssl host`、`ssl sni`、`ssl import rootca|interca|crlca|key|certificate`、`ssl activate certificate`、`ssl backup|restore`、`ssl csr`、`ssl sm2 import signkey|signcertificate|enckey|enccertificate` 及 SNI 变体）与 **SLB**（Ch8：`slb real <type>`、`slb group method|member`、`slb virtual https|http`、`slb policy static|hashurl`、`show slb real|virtual`）。UI 据此渲染"命令浏览器 + 参数表单 + 插入任务"。
 
@@ -165,6 +193,7 @@ UI 约定（全页统一）：
 - ssh_terminal/serial_telnet/sftp_fs：见 §3。
 - remote_terminal_tools：`ssh_exec_capture` `ssh_read_text_file` `gdb_coredump_analyze` `ssh_start_periodic/stop` `binary_analyze` `crypto_inspect`。
 - crypto_lab：`crypto_load_bytes` `crypto_pem_details` `crypto_gen_key` `crypto_gen_csr` `crypto_issue_cert` `crypto_sign_csr` `crypto_verify_cert` `crypto_pfx_parse/build` `crypto_sym` `crypto_rsa_crypt` `crypto_sign/verify` `crypto_hash` `crypto_ca_list/create/import/delete/export/revoke/gen_crl` `crypto_issue_from_ca` `crypto_leaf_list/delete/export` `crypto_asset_list/save/get/delete`；[可选特性 tlcp] `crypto_engine::{ca_create,issue_leaf,gen_crl}`、`crypto_engine::ntls`。
-- cmd_dispatch / cmd_catalog：`cmd_dispatch_plan`（只展开+排序，不下发）`cmd_dispatch_parse` / `cmd_dispatch_to_yaml`（YAML ⇄ 结构，供任务表双向同步）`cmd_dispatch_run` `cmd_dispatch_cancel` `cmd_catalog_list` `cmd_scenario_list` `cmd_scenario_render`；事件 `cmd-dispatch-task` / `cmd-dispatch-done`。ssh_terminal 另加 `ssh_set_enable_secret` / `ssh_delete_enable_secret` / `ssh_has_enable_secret`（enable 口令进 keychain）。
+- cmd_dispatch / cmd_catalog：`cmd_dispatch_plan`（只展开+排序，不下发）`cmd_dispatch_parse` / `cmd_dispatch_to_yaml`（YAML ⇄ 结构，供任务表双向同步）`cmd_dispatch_run` `cmd_dispatch_cancel` `cmd_dispatch_stage_pem`（PEM 落受管目录）`cmd_strategy_list/save/load/delete`（策略库）`cmd_catalog_list` `cmd_scenario_list` `cmd_scenario_render`；事件 `cmd-dispatch-task` / `cmd-dispatch-done`。ssh_terminal 另加 `ssh_set_enable_secret` / `ssh_delete_enable_secret` / `ssh_has_enable_secret`（enable 口令进 keychain）。
+- source_locate：`cmd_source_locate`（按规则把调试路径映射到本机/远端源码，返回命中路径 + 规则 + 尝试过的候选 + 建议）`cmd_source_read`（本机 fs / 远端 SSH 读正文）`ssh_list_dirs`（列远端子目录，选编译机源码根用）。
 
 

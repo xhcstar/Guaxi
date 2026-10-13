@@ -13,18 +13,35 @@
         <button class="tb-ib" :disabled="!profileId || !enablePassword" @click="saveEnable"><Icon :icon="keyIcon" width="15" height="15" /></button>
       </template>把 enable 密码存入系统 keychain（对应所选档案）</n-tooltip>
       <span class="cd-sep"></span>
+      <span class="cd-lbl">会话</span>
+      <n-tooltip trigger="hover"><template #trigger>
+        <n-select v-model:value="sessionMode" size="small" :options="sessionModeOptions" style="width:130px" />
+      </template>目标类型：自动探测 / 设备 CLI（enable + config terminal）/ Linux shell（编译机）。选错会导致"等待提示符超时"</n-tooltip>
+      <n-tooltip trigger="hover"><template #trigger>
+        <n-checkbox v-model:checked="probeRc" size="small">退出码</n-checkbox>
+      </template>shell 模式下给命令追加 `; echo RC=$?` 取真实退出码（比关键词猜测准）；命令若是交互式的请关掉</n-tooltip>
+      <span class="cd-sep"></span>
+      <n-tooltip trigger="hover"><template #trigger>
+        <n-select v-model:value="strategyId" size="small" :options="strategyOptions" placeholder="策略库" clearable style="width:170px" /></template>载入之前保存的策略（一组命令序列）</n-tooltip>
+      <n-tooltip trigger="hover"><template #trigger>
+        <button class="tb-ib" :disabled="!strategyId" @click="loadStrategy"><Icon :icon="downloadIcon" width="15" height="15" /></button>
+      </template>把选中的策略载入任务表</n-tooltip>
+      <n-tooltip trigger="hover"><template #trigger>
+        <button class="tb-ib primary" :disabled="!tasks.length" @click="openSaveStrategy"><Icon :icon="saveIcon" width="15" height="15" /></button>
+      </template>把当前任务表存成命名策略（凭据不入库）</n-tooltip>
+      <n-tooltip trigger="hover"><template #trigger>
+        <button class="tb-ib danger" :disabled="!strategyId" @click="deleteStrategy"><Icon :icon="trashIcon" width="15" height="15" /></button>
+      </template>删除选中策略</n-tooltip>
+      <span class="cd-sep"></span>
       <n-tooltip trigger="hover"><template #trigger>
         <button class="tb-ib" @click="importYaml"><Icon :icon="folderIcon" width="15" height="15" /></button>
       </template>导入现有 config.yaml（global/targets/tasks 全兼容）</n-tooltip>
       <n-tooltip trigger="hover"><template #trigger>
-        <n-select v-model:value="scenarioId" size="small" :options="scenarioOptions" placeholder="内置场景模板" style="width:230px" />
+        <n-select v-model:value="scenarioId" size="small" :options="scenarioOptions" placeholder="内置场景模板" style="width:200px" />
       </template>选一个内置高级流程模板，填参数后一键生成整套任务</n-tooltip>
       <n-tooltip trigger="hover"><template #trigger>
         <button class="tb-ib primary" :disabled="!scenarioId" @click="openScenario"><Icon :icon="wandIcon" width="15" height="15" /></button>
       </template>配置该场景的参数并生成任务</n-tooltip>
-      <n-tooltip v-if="scenarioId" trigger="hover"><template #trigger>
-        <Icon :icon="helpIcon" width="14" height="14" class="tb-help" />
-      </template>{{ scenarioSummary }}</n-tooltip>
       <span v-if="notice" class="cd-notice">{{ notice }}</span>
       <span v-if="error" class="cd-err">{{ error }}</span>
     </div>
@@ -36,60 +53,88 @@
           <Icon :icon="listIcon" width="13" height="13" class="cd-head-ico" />
           <span>任务表</span>
           <span class="cd-n">{{ tasks.length }} 条</span>
-          <n-tooltip trigger="hover"><template #trigger>
-            <button class="tb-ib" @click="addTask"><Icon :icon="plusIcon" width="14" height="14" /></button>
-          </template>新增一条任务</n-tooltip>
-          <n-tooltip trigger="hover"><template #trigger>
-            <button class="tb-ib" @click="toggleYaml"><Icon :icon="fileIcon" width="14" height="14" :class="{ 'tb-ok': showYaml }" /></button>
-          </template>显示/隐藏 YAML 原文（与任务表双向同步）</n-tooltip>
+          <n-radio-group v-model:value="editMode" size="tiny">
+            <n-radio-button value="gui">图形</n-radio-button>
+            <n-radio-button value="text">文本</n-radio-button>
+          </n-radio-group>
+          <template v-if="editMode === 'gui'">
+            <n-tooltip trigger="hover"><template #trigger>
+              <button class="tb-ib" @click="addTask"><Icon :icon="plusIcon" width="14" height="14" /></button>
+            </template>新增一条任务</n-tooltip>
+          </template>
+          <template v-else>
+            <n-tooltip trigger="hover"><template #trigger>
+              <button class="tb-ib primary" @click="loadYaml"><Icon :icon="uploadIcon" width="15" height="15" /></button>
+            </template>把文本解析回任务表（会覆盖当前任务表）</n-tooltip>
+            <n-tooltip trigger="hover"><template #trigger>
+              <button class="tb-ib" @click="exportYaml"><Icon :icon="saveIcon" width="15" height="15" /></button>
+            </template>导出 config.yaml 到文件</n-tooltip>
+          </template>
         </div>
         <div class="cd-scroll">
-          <div class="cd-targets">
-            <n-tooltip trigger="hover"><template #trigger>
-              <n-input :value="hostnamesText" size="tiny" placeholder="目标主机名，逗号分隔" style="width:100%" @update:value="setHostnames" />
-            </template>targets.hostnames：SSL 主机名等逻辑目标，逗号分隔</n-tooltip>
-            <n-tooltip trigger="hover"><template #trigger>
-              <n-input :value="domainsText" size="tiny" placeholder="域名，逗号分隔（可空 = 只做 host 级）" style="width:100%" @update:value="setDomains" />
-            </template>targets.domains：域名列表；可留空（只跑 host 级任务），或含空项表示同时跑 host 与 SNI</n-tooltip>
-          </div>
-          <table class="cd-table">
-            <thead><tr><th>id</th><th>命令</th><th>依赖</th><th>条件</th><th>PEM / index</th><th></th></tr></thead>
-            <tbody>
-              <tr v-for="(t, i) in tasks" :key="i">
-                <td><n-input v-model:value="t.id" size="tiny" placeholder="id" style="width:96px" @update:value="syncYaml" /></td>
-                <td><n-input v-model:value="t.cmd" size="tiny" placeholder="命令（支持 {hostname}/{domain}/{index}）" style="width:100%" @update:value="syncYaml" /></td>
-                <td><n-input :value="(t.depends_on || []).join(',')" size="tiny" placeholder="依赖 id" style="width:120px" @update:value="v => setDeps(t, v)" /></td>
-                <td class="cd-cond">
-                  <n-tooltip trigger="hover"><template #trigger><n-checkbox :checked="!!t.only_if_no_domain" size="small" @update:checked="v => { t.only_if_no_domain = v; if (v) t.only_if_domain = false; syncYaml() }">host</n-checkbox></template>只在 host 级（无域名）执行</n-tooltip>
-                  <n-tooltip trigger="hover"><template #trigger><n-checkbox :checked="!!t.only_if_domain" size="small" @update:checked="v => { t.only_if_domain = v; if (v) t.only_if_no_domain = false; syncYaml() }">sni</n-checkbox></template>只在关联了域名时执行（SNI 流程）</n-tooltip>
-                </td>
-                <td>
-                  <n-input v-model:value="t.pem_file" size="tiny" placeholder="PEM 文件(可空)" style="width:130px" @update:value="syncYaml" />
-                  <n-input v-model:value="t.index" size="tiny" placeholder="index" style="width:56px;margin-top:2px" @update:value="syncYaml" />
-                </td>
-                <td class="cd-ops">
-                  <n-tooltip trigger="hover"><template #trigger>
-                    <button class="tb-ib" @click="openCatalogFor(t)"><Icon :icon="bookIcon" width="14" height="14" /></button>
-                  </template>从命令目录给这条选个命令模板</n-tooltip>
-                  <n-tooltip trigger="hover"><template #trigger>
-                    <button class="tb-ib danger" @click="removeTask(i)"><Icon :icon="trashIcon" width="14" height="14" /></button>
-                  </template>删除该任务</n-tooltip>
-                </td>
-              </tr>
-              <tr v-if="!tasks.length"><td colspan="6" class="cd-hint">还没有任务。可「导入 config.yaml」或从「内置场景模板」生成。</td></tr>
-            </tbody>
-          </table>
-          <div class="cd-yaml" v-if="showYaml">
-            <n-input v-model:value="yamlText" type="textarea" :rows="14" placeholder="config.yaml 原文" @update:value="onYamlEdited" />
-            <div class="cd-row">
+          <!-- 文本模式：直接编辑 YAML，长命令/批量改效率高 -->
+          <template v-if="editMode === 'text'">
+            <n-input
+              v-model:value="yamlText"
+              type="textarea"
+              class="cd-yaml-edit"
+              placeholder="config.yaml 原文：targets + tasks ..."
+            />
+            <div class="cd-hint">改完点上面的上传图标解析回任务表。字段与参考工具的 config.yaml 完全一致。</div>
+          </template>
+
+          <template v-else>
+            <div class="cd-targets">
               <n-tooltip trigger="hover"><template #trigger>
-                <button class="tb-ib" @click="loadYaml"><Icon :icon="uploadIcon" width="15" height="15" /></button>
-              </template>把上面的 YAML 重新解析回任务表（会覆盖当前任务表）</n-tooltip>
+                <n-input :value="hostnamesText" size="small" placeholder="目标主机名，逗号分隔" style="width:100%" @update:value="setHostnames" />
+              </template>targets.hostnames：SSL 主机名等逻辑目标，逗号分隔</n-tooltip>
               <n-tooltip trigger="hover"><template #trigger>
-                <button class="tb-ib" @click="exportYaml"><Icon :icon="saveIcon" width="15" height="15" /></button>
-              </template>导出 config.yaml 到文件</n-tooltip>
+                <n-input :value="domainsText" size="small" placeholder="域名，逗号分隔（可空 = 只做 host 级）" style="width:100%" @update:value="setDomains" />
+              </template>targets.domains：域名列表；可留空（只跑 host 级任务）</n-tooltip>
             </div>
-          </div>
+            <table class="cd-table">
+              <thead><tr><th>id</th><th>命令</th><th>依赖</th><th>条件</th><th>PEM / index</th><th></th></tr></thead>
+              <tbody>
+                <tr v-for="(t, i) in tasks" :key="i">
+                  <td><n-input v-model:value="t.id" size="small" placeholder="id" style="width:110px" @update:value="syncYaml" /></td>
+                  <td class="cd-cmdcell">
+                    <n-input
+                      v-model:value="t.cmd"
+                      type="textarea"
+                      size="small"
+                      :autosize="{ minRows: 1, maxRows: 6 }"
+                      placeholder="命令（支持 {hostname}/{domain}/{index}）"
+                      @update:value="syncYaml"
+                    />
+                    <span v-if="t.description" class="cd-desc">{{ t.description }}</span>
+                  </td>
+                  <td><n-input :value="(t.depends_on || []).join(',')" size="small" placeholder="依赖 id" style="width:140px" @update:value="v => setDeps(t, v)" /></td>
+                  <td class="cd-cond">
+                    <n-tooltip trigger="hover"><template #trigger><n-checkbox :checked="!!t.only_if_no_domain" size="small" @update:checked="v => { t.only_if_no_domain = v; if (v) t.only_if_domain = false; syncYaml() }">host</n-checkbox></template>只在 host 级（无域名）执行</n-tooltip>
+                    <n-tooltip trigger="hover"><template #trigger><n-checkbox :checked="!!t.only_if_domain" size="small" @update:checked="v => { t.only_if_domain = v; if (v) t.only_if_no_domain = false; syncYaml() }">sni</n-checkbox></template>只在关联了域名时执行（SNI 流程）</n-tooltip>
+                  </td>
+                  <td class="cd-pemcell">
+                    <div class="cd-row">
+                      <n-input v-model:value="t.pem_file" size="small" placeholder="PEM 文件（可空）" style="flex:1" @update:value="syncYaml" />
+                      <n-tooltip trigger="hover"><template #trigger>
+                        <button class="tb-ib" @click="openPemPicker(t)"><Icon :icon="fileIcon" width="15" height="15" /></button>
+                      </template>选择要导入的证书/私钥文件：可从证书页的 CA 库 / 终端证书库直接取，也可选任意本地文件</n-tooltip>
+                    </div>
+                    <n-input v-model:value="t.index" size="small" placeholder="index" style="width:80px;margin-top:4px" @update:value="syncYaml" />
+                  </td>
+                  <td class="cd-ops">
+                    <n-tooltip trigger="hover"><template #trigger>
+                      <button class="tb-ib" @click="openCatalogFor(t)"><Icon :icon="bookIcon" width="15" height="15" /></button>
+                    </template>从命令目录给这条选个命令模板</n-tooltip>
+                    <n-tooltip trigger="hover"><template #trigger>
+                      <button class="tb-ib danger" @click="removeTask(i)"><Icon :icon="trashIcon" width="15" height="15" /></button>
+                    </template>删除该任务</n-tooltip>
+                  </td>
+                </tr>
+                <tr v-if="!tasks.length"><td colspan="6" class="cd-hint">还没有任务。可「导入 config.yaml」、从「内置场景模板」生成，或点左上角 + 手动加一条。</td></tr>
+              </tbody>
+            </table>
+          </template>
         </div>
       </div>
 
@@ -160,6 +205,82 @@
       </div>
     </n-modal>
 
+    <!-- 策略保存弹窗 -->
+    <n-modal v-model:show="showSaveStrategy" :mask-closable="false" style="width:520px;max-width:94vw">
+      <div class="cd-modal">
+        <div class="cd-modal-h">
+          <Icon :icon="saveIcon" width="16" height="16" class="cd-head-ico" />
+          <span>保存为策略</span>
+          <button class="tb-ib" @click="showSaveStrategy = false"><Icon :icon="xIcon" width="16" height="16" /></button>
+        </div>
+        <div class="cd-modal-b">
+          <div class="cd-field">
+            <label>策略名 *</label>
+            <n-input v-model:value="strategyName" size="small" placeholder="如 ssl-链-ECC-生产" />
+          </div>
+          <div class="cd-field">
+            <label>说明</label>
+            <n-input v-model:value="strategyDesc" size="small" placeholder="这条策略是干什么的（可空）" />
+          </div>
+          <div class="cd-hint">保存 targets + 全部任务（含映射后的命令与 PEM 路径）。凭据（ip/密码/enable）不会存进策略。</div>
+        </div>
+        <div class="cd-modal-f">
+          <n-button size="small" @click="showSaveStrategy = false">取消</n-button>
+          <n-button size="small" type="primary" @click="saveStrategy">保存</n-button>
+        </div>
+      </div>
+    </n-modal>
+
+    <!-- PEM 文件选择弹窗 -->
+    <n-modal v-model:show="showPem" :mask-closable="false" style="width:760px;max-width:94vw">
+      <div class="cd-modal">
+        <div class="cd-modal-h">
+          <Icon :icon="fileIcon" width="16" height="16" class="cd-head-ico" />
+          <span>选择要导入的文件（PEM）</span>
+          <button class="tb-ib" @click="showPem = false"><Icon :icon="xIcon" width="16" height="16" /></button>
+        </div>
+        <div class="cd-modal-b">
+          <div class="cd-row" style="margin-bottom:10px">
+            <n-button size="small" @click="pickLocalPem"><Icon :icon="folderIcon" width="14" height="14" />从任意位置选文件</n-button>
+            <span class="cd-hint">选中后会落到受管目录并填进该任务的 PEM 路径</span>
+          </div>
+          <div class="cd-sub">证书页 · CA 库</div>
+          <table class="cd-table" v-if="caList.length">
+            <tbody>
+              <tr v-for="c in caList" :key="c.id">
+                <td>{{ c.name }}</td>
+                <td class="cd-res">{{ c.subject_cn }}</td>
+                <td class="cd-ops">
+                  <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" @click="pickCaPem(c,'cert')"><Icon :icon="certIcon" width="15" height="15" /></button></template>用该 CA 的证书</n-tooltip>
+                  <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" @click="pickCaPem(c,'key')"><Icon :icon="key2Icon" width="15" height="15" /></button></template>用该 CA 的私钥</n-tooltip>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-else class="cd-hint">CA 库为空（可在工具箱 → 证书/密钥 里生成或导入）。</div>
+
+          <div class="cd-sub">证书页 · 终端证书库（client / server）</div>
+          <table class="cd-table" v-if="leafList.length">
+            <tbody>
+              <tr v-for="l in leafList" :key="l.id">
+                <td>{{ l.name }}</td>
+                <td class="cd-res">{{ l.ca_name }}</td>
+                <td class="cd-ops">
+                  <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" @click="pickLeafPem(l,'cert')"><Icon :icon="certIcon" width="15" height="15" /></button></template>用该证书</n-tooltip>
+                  <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" @click="pickLeafPem(l,'key')"><Icon :icon="key2Icon" width="15" height="15" /></button></template>用该私钥</n-tooltip>
+                  <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" @click="pickLeafPem(l,'chain')"><Icon :icon="listIcon" width="15" height="15" /></button></template>用整条证书链</n-tooltip>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-else class="cd-hint">终端证书库为空（可在证书页签发 server/client 证书）。</div>
+        </div>
+        <div class="cd-modal-f">
+          <n-button size="small" @click="showPem = false">关闭</n-button>
+        </div>
+      </div>
+    </n-modal>
+
     <!-- 命令目录弹窗 -->
     <n-modal v-model:show="showCatalog" :mask-closable="false" style="width:860px;max-width:94vw">
       <div class="cd-modal">
@@ -222,7 +343,14 @@ import playIcon from '@iconify-icons/lucide/play'
 import stopIcon from '@iconify-icons/lucide/square'
 import uploadIcon from '@iconify-icons/lucide/upload'
 import saveIcon from '@iconify-icons/lucide/save'
+import downloadIcon from '@iconify-icons/lucide/download'
 import xIcon from '@iconify-icons/lucide/x'
+import scrollTextIcon from '@iconify-icons/lucide/scroll-text'
+import keyRoundIcon from '@iconify-icons/lucide/key-round'
+
+// 证书图标沿用与证书页一致的语义（证书=卷轴、私钥=钥匙）。
+const certIcon = scrollTextIcon
+const key2Icon = keyRoundIcon
 
 // ============ 状态 ============
 const profiles = ref([])
@@ -232,8 +360,32 @@ const enablePassword = ref('')
 
 const cfg = ref({ global: {}, targets: { hostnames: [], domains: [] }, tasks: [], continue_on_error: false })
 const yamlText = ref('')
-const showYaml = ref(false)
+/// 编辑方式：图形任务表 / 文本 YAML。
+const editMode = ref('gui')
 const baseDir = ref('')
+
+/// 会话类型与退出码探针（选错会话类型会"等待提示符超时"）。
+const sessionMode = ref('auto')
+const sessionModeOptions = [
+  { label: '自动探测', value: 'auto' },
+  { label: '设备 CLI', value: 'device' },
+  { label: 'Linux shell', value: 'shell' },
+]
+const probeRc = ref(true)
+
+/// 策略库。
+const strategies = ref([])
+const strategyId = ref(null)
+const showSaveStrategy = ref(false)
+const strategyName = ref('')
+const strategyDesc = ref('')
+const strategyOptions = computed(() => strategies.value.map(s => ({ label: `${s.name} (${s.task_count})`, value: s.id })))
+
+/// PEM 选择器（可从证书页的 CA 库 / 终端证书库取，也可选任意本地文件）。
+const showPem = ref(false)
+const pemTarget = ref(null)
+const caList = ref([])
+const leafList = ref([])
 
 const catalog = ref([])
 const catalogQuery = ref('')
@@ -285,7 +437,86 @@ async function loadYaml() {
     note('已从 YAML 载入任务表')
   } catch (e) { error.value = 'YAML 解析失败: ' + (e?.message || e) }
 }
-function onYamlEdited() { /* 等用户点"载入"再解析，避免边打字边报错刷屏 */ }
+
+// ============ 策略库 ============
+async function loadStrategies() {
+  try { strategies.value = await invoke('cmd_strategy_list') } catch (_) {}
+}
+async function loadStrategy() {
+  if (!strategyId.value) return
+  try {
+    yamlText.value = await invoke('cmd_strategy_load', { id: strategyId.value })
+    await loadYaml()
+    const s = strategies.value.find(x => x.id === strategyId.value)
+    note(`已载入策略「${s?.name || ''}」（${tasks.value.length} 条任务）`)
+  } catch (e) { error.value = '载入策略失败: ' + (e?.message || e) }
+}
+function openSaveStrategy() {
+  const s = strategies.value.find(x => x.id === strategyId.value)
+  strategyName.value = s?.name || ''
+  strategyDesc.value = s?.description || ''
+  showSaveStrategy.value = true
+}
+async function saveStrategy() {
+  if (!strategyName.value.trim()) { error.value = '策略名不能为空'; return }
+  try {
+    await syncYaml()
+    const r = await invoke('cmd_strategy_save', {
+      id: strategyId.value || null,
+      name: strategyName.value,
+      description: strategyDesc.value || null,
+      configYaml: yamlText.value,
+    })
+    await loadStrategies()
+    strategyId.value = r.id
+    showSaveStrategy.value = false
+    note(`策略「${r.name}」已保存（${r.task_count} 条任务）`)
+  } catch (e) { error.value = '保存策略失败: ' + (e?.message || e) }
+}
+async function deleteStrategy() {
+  if (!strategyId.value) return
+  const s = strategies.value.find(x => x.id === strategyId.value)
+  if (!window.confirm(`删除策略「${s?.name || ''}」？`)) return
+  try { await invoke('cmd_strategy_delete', { id: strategyId.value }); strategyId.value = null; await loadStrategies(); note('策略已删除') }
+  catch (e) { error.value = '删除策略失败: ' + (e?.message || e) }
+}
+
+// ============ PEM 文件选择 ============
+async function openPemPicker(t) {
+  pemTarget.value = t
+  showPem.value = true
+  try { caList.value = await invoke('crypto_ca_list') } catch (_) {}
+  try { leafList.value = await invoke('crypto_leaf_list') } catch (_) {}
+}
+async function stagePem(name, content) {
+  try {
+    const p = await invoke('cmd_dispatch_stage_pem', { name, content })
+    if (pemTarget.value) { pemTarget.value.pem_file = p; syncYaml() }
+    showPem.value = false
+    note('已选用: ' + p)
+  } catch (e) { error.value = '落盘失败: ' + (e?.message || e) }
+}
+async function pickCaPem(c, which) {
+  try {
+    const r = await invoke('crypto_ca_export', { id: c.id })
+    await stagePem(`ca-${c.name}-${which}`, which === 'key' ? r.key_pem : r.cert_pem)
+  } catch (e) { error.value = '取 CA 内容失败: ' + (e?.message || e) }
+}
+async function pickLeafPem(l, which) {
+  try {
+    const r = await invoke('crypto_leaf_export', { id: l.id })
+    const content = which === 'key' ? r.key_pem : which === 'chain' ? r.chain_pem : r.cert_pem
+    await stagePem(`leaf-${l.name}-${which}`, content)
+  } catch (e) { error.value = '取证书内容失败: ' + (e?.message || e) }
+}
+async function pickLocalPem() {
+  const sel = await open({ multiple: false, directory: false, title: '选择证书/私钥文件' })
+  if (!sel) return
+  const p = typeof sel === 'string' ? sel : sel?.path
+  if (pemTarget.value) { pemTarget.value.pem_file = p; syncYaml() }
+  showPem.value = false
+  note('已选用: ' + p)
+}
 
 async function importYaml() {
   error.value = ''
@@ -309,7 +540,6 @@ async function exportYaml() {
     if (p) { await invoke('write_file_content', { path: p, content: yamlText.value }); note('已导出: ' + p) }
   } catch (e) { error.value = '导出失败: ' + (e?.message || e) }
 }
-function toggleYaml() { showYaml.value = !showYaml.value; if (showYaml.value) syncYaml() }
 
 // ============ 任务表 ============
 function addTask() {
@@ -432,7 +662,12 @@ async function doRun() {
       runId: runId.value,
       profileId: profileId.value || null,
       configYaml: yamlText.value,
-      opts: { baseDir: baseDir.value || null, continueOnError: null },
+      opts: {
+        baseDir: baseDir.value || null,
+        continueOnError: null,
+        mode: sessionMode.value,
+        probeRc: probeRc.value,
+      },
     })
     runStat.value = `执行中 0/${r.plan.task_count}`
   } catch (e) { error.value = '下发失败: ' + (e?.message || e); running.value = false }
@@ -481,6 +716,7 @@ onMounted(async () => {
   unlisteners.push(await listen('cmd-dispatch-task', onTask))
   unlisteners.push(await listen('cmd-dispatch-done', onDone))
   await syncYaml()
+  loadStrategies()
 })
 onBeforeUnmount(() => {
   unlisteners.forEach(u => u())
@@ -509,11 +745,20 @@ onBeforeUnmount(() => {
 .cd-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 8px 10px; }
 
 .cd-targets { display: flex; gap: 6px; margin-bottom: 8px; }
-.cd-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.cd-table th, .cd-table td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--guaxi-border-weak, rgba(0,0,0,0.06)); vertical-align: top; }
-.cd-table th { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--guaxi-text-secondary); position: sticky; top: 0; background: var(--guaxi-panel-bg); z-index: 1; }
+.cd-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.cd-table th, .cd-table td { text-align: left; padding: 8px 8px; border-bottom: 1px solid var(--guaxi-border-weak, rgba(0,0,0,0.06)); vertical-align: top; }
+.cd-table th { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--guaxi-text-secondary); position: sticky; top: 0; background: var(--guaxi-panel-bg); z-index: 1; }
 .cd-cond { white-space: nowrap; }
 .cd-ops { white-space: nowrap; }
+/* 命令可能很长：给足宽度，并用多行输入让整条命令都看得见 */
+.cd-cmdcell { min-width: 380px; }
+.cd-cmdcell :deep(.n-input__textarea-el), .cd-cmdcell :deep(.n-input__input-el) { font-family: var(--tw-mono-font); font-size: 13px; line-height: 1.5; }
+.cd-pemcell { min-width: 260px; }
+.cd-desc { display: block; margin-top: 3px; font-size: 11.5px; color: var(--guaxi-text-secondary); }
+.cd-res { font-family: var(--tw-mono-font); font-size: 12px; }
+.cd-sub { margin: 12px 0 4px; font-size: 12.5px; font-weight: 600; color: var(--tw-accent); }
+.cd-yaml-edit { height: 100%; }
+.cd-yaml-edit :deep(.n-input__textarea-el) { font-family: var(--tw-mono-font); font-size: 13px; line-height: 1.55; height: 100%; min-height: 60vh; }
 .cd-cmd { font-family: var(--tw-mono-font); max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cd-reason { font-size: 11px; color: var(--guaxi-text-secondary); max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cd-st { white-space: nowrap; }

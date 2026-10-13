@@ -375,6 +375,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager};
+use uuid::Uuid;
 
 use crate::commands::ssh_terminal::{
     connect_authenticated, connect_explicit, enable_secret, ClientHandler,
@@ -389,12 +390,28 @@ const QUIET: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Prompt {
+    /// 网络设备 CLI 的用户模式 `>`。
     User,
+    /// 网络设备 CLI 的特权模式 `#`。
     Priv,
+    /// 网络设备 CLI 的配置模式 `(config...)#`。
     Config,
+    /// POSIX shell 提示符（Linux 编译机）：`user@host:~$` 或 `user@host:~#`。
+    /// 这种目标不需要 enable/config terminal，命令就是 shell 命令。
+    Shell,
     Password,
     PemWait,
     Unknown,
+}
+
+/// 会话类型：设备 CLI（要 enable/config）还是普通 Linux shell。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum SessionKind {
+    /// 自动探测（默认）：看首个提示符长什么样再决定。
+    #[default]
+    Auto,
+    Device,
+    Shell,
 }
 
 /// 取缓冲区最后一行非空内容（提示符总在最后）。
@@ -422,6 +439,11 @@ fn classify_prompt(buf: &str) -> Prompt {
     {
         return Prompt::PemWait;
     }
+    // POSIX shell（Linux 编译机）：`user@host:path$` / `user@host:path#` / `[root@host ~]#`。
+    // 必须先于设备 CLI 判定：Linux 的 root 提示符也以 `#` 结尾，靠 `user@host` 特征区分。
+    if is_shell_prompt(line) {
+        return Prompt::Shell;
+    }
     if line.ends_with('#') {
         return if line.contains("(config") { Prompt::Config } else { Prompt::Priv };
     }
@@ -431,6 +453,25 @@ fn classify_prompt(buf: &str) -> Prompt {
     Prompt::Unknown
 }
 
+/// 识别 POSIX shell 提示符。
+///
+/// 覆盖常见形态：`user@host:~$`、`user@host:/path#`、`[root@host ~]#`、`bash-4.2$`、裸 `$` / `#`。
+/// 判据是"以 `$` 结尾，或以 `#` 结尾且带 `@host:` 或 `[...]` 这类 shell 特征" —— 后者用于把
+/// Linux root 的 `#` 与设备 CLI 的特权 `#` 区分开。
+fn is_shell_prompt(line: &str) -> bool {
+    let t = line.trim_end();
+    if t.ends_with('$') {
+        return true;
+    }
+    if t.ends_with('#') {
+        let head = &t[..t.len() - 1];
+        // `user@host:...` / `[user@host ...]` / `bash-5.1` 这类都算 shell；
+        // 而设备 CLI 的特权提示符通常是 `hostname#` 或 `hostname>`（无 @、无方括号）。
+        return head.contains('@') || head.trim_start().starts_with('[') || head.contains("bash");
+    }
+    false
+}
+
 /// 把可能很长的设备输出裁成"尾部若干行"，用于错误提示。
 fn tail_lines(s: &str, n: usize) -> String {
     let lines: Vec<&str> = s.lines().filter(|l| !l.trim().is_empty()).collect();
@@ -438,20 +479,52 @@ fn tail_lines(s: &str, n: usize) -> String {
     lines[start..].join("\n")
 }
 
-/// 交互式设备 CLI 会话。
+/// shell 模式下用来探真实退出码的标记。
+const RC_MARK: &str = "__DISPATCH_RC=";
+
+/// 交互式 CLI 会话（设备 CLI 或 Linux shell 都由它驱动）。
 struct DeviceCli {
     channel: russh::Channel<russh::client::Msg>,
     buf: String,
     /// 我们已读过的输出累计（用于日志/诊断），不受 buf 清空影响。
     transcript: String,
-    /// enable 口令：命令中途若掉出配置模式，重新进入时还要用。
+    /// enable 口令：命令中途若掉出配置模式，重新进入时还要用；shell 模式下也复用为 sudo 口令。
     enable_password: Option<String>,
+    /// 已探测出的会话类型（不会是 Auto）。
+    kind: SessionKind,
+    /// shell 模式是否追加退出码探针（`cmd; echo __DISPATCH_RC=$?`）。
+    /// 关键词启发式对 shell 不可靠（`cp` 失败不会打印任何关键词），拿真实退出码准得多。
+    probe_rc: bool,
+}
+
+/// 从缓冲区尾部若干行里找 shell 提示符（用于 Auto 模式的兜底判定）。
+fn looks_like_shell(buf: &str) -> bool {
+    buf.lines().rev().take(4).any(is_shell_prompt)
+}
+
+/// 取命令里的 heredoc 结束标记（`<<EOF` / `<<'EOF'` / `<<"EOF"`）。
+///
+/// shell 模式下要把一段 PEM 喂给命令（如 `cat > /etc/ssl/x.crt <<'EOF'`）时用它：
+/// 命令发出后紧接着把 PEM 正文与结束标记写进去，shell 就会把它们当作 heredoc 内容。
+fn heredoc_marker(cmd: &str) -> Option<String> {
+    let i = cmd.find("<<")?;
+    let rest = cmd[i + 2..].trim_start().trim_start_matches(['-', '\'', '"']);
+    let end = rest
+        .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .unwrap_or(rest.len());
+    if end == 0 {
+        None
+    } else {
+        Some(rest[..end].to_string())
+    }
 }
 
 impl DeviceCli {
     async fn open(
         handle: russh::client::Handle<ClientHandler>,
         enable_password: Option<String>,
+        requested: SessionKind,
+        probe_rc: bool,
     ) -> Result<Self, String> {
         let channel = handle
             .channel_open_session()
@@ -467,9 +540,51 @@ impl DeviceCli {
             .await
             .map_err(|e| format!("请求 shell 失败: {e}"))?;
 
-        let mut cli = DeviceCli { channel, buf: String::new(), transcript: String::new(), enable_password };
-        let pw = cli.enable_password.clone();
-        cli.ensure_config_mode(pw).await?;
+        let mut cli = DeviceCli {
+            channel,
+            buf: String::new(),
+            transcript: String::new(),
+            enable_password,
+            kind: SessionKind::Auto,
+            probe_rc,
+        };
+
+        // 探测会话类型：发一个空行看回显出来的提示符。
+        cli.buf.clear();
+        cli.send_raw("\n").await;
+        for _ in 0..3 {
+            match cli.wait_prompt(Duration::from_secs(8)).await {
+                Ok(_) => break,
+                Err(e) => {
+                    // 一次探不到就再试一次；仍不行才报错，并把原始输出一起给出来。
+                    if cli.buf.trim().is_empty() {
+                        return Err(e);
+                    }
+                    cli.buf.clear();
+                    cli.send_raw("\n").await;
+                }
+            }
+        }
+        cli.kind = match requested {
+            SessionKind::Auto => match classify_prompt(&cli.buf) {
+                Prompt::Shell => SessionKind::Shell,
+                Prompt::User | Prompt::Priv | Prompt::Config => SessionKind::Device,
+                // 认不出来：看整个尾部像不像 Linux shell（有 user@host:path$ 之类）。
+                _ => {
+                    if looks_like_shell(&cli.buf) {
+                        SessionKind::Shell
+                    } else {
+                        SessionKind::Device
+                    }
+                }
+            },
+            k => k,
+        };
+
+        if cli.kind == SessionKind::Device {
+            let pw = cli.enable_password.clone();
+            cli.ensure_config_mode(pw).await?;
+        }
         Ok(cli)
     }
 
@@ -505,18 +620,23 @@ impl DeviceCli {
     }
 
     /// 应答设备中途抛出的交互（确认、分页），返回是否处理过。
+    ///
+    /// shell 模式下**不自动答 yes/no** —— Linux 上的 `rm -i`、`apt` 之类确认不该被代答；
+    /// 但分页（`less`/`more` 的 `--more--` 或 `:`）仍自动翻，避免卡住。
     async fn answer_interaction(&mut self) -> bool {
         let low = self.buf.to_lowercase();
-        if low.contains("--more--") {
+        if low.contains("--more--") || low.ends_with("\n:") || low.ends_with("\r:") {
             self.buf.clear();
             self.send_raw(" ").await;
             return true;
         }
-        let confirm = ["type yes to continue", "yes/no", "continue:", "are you sure"];
-        if confirm.iter().any(|k| low.contains(k)) {
-            self.buf.clear();
-            self.send_raw("YES\n").await;
-            return true;
+        if self.kind != SessionKind::Shell {
+            let confirm = ["type yes to continue", "yes/no", "continue:", "are you sure"];
+            if confirm.iter().any(|k| low.contains(k)) {
+                self.buf.clear();
+                self.send_raw("YES\n").await;
+                return true;
+            }
         }
         false
     }
@@ -527,14 +647,18 @@ impl DeviceCli {
         loop {
             if self.answer_interaction().await {
                 // 已应答，继续等
-            } else if let p @ (Prompt::User | Prompt::Priv | Prompt::Config | Prompt::Password | Prompt::PemWait) =
-                classify_prompt(&self.buf)
+            } else if let p @ (Prompt::User
+            | Prompt::Priv
+            | Prompt::Config
+            | Prompt::Shell
+            | Prompt::Password
+            | Prompt::PemWait) = classify_prompt(&self.buf)
             {
                 return Ok(p);
             }
             if Instant::now() >= deadline {
                 return Err(format!(
-                    "等待设备提示符超时（最后输出）：\n{}",
+                    "等待提示符超时（最后输出）：\n{}",
                     tail_lines(&self.buf, 8)
                 ));
             }
@@ -544,7 +668,12 @@ impl DeviceCli {
     }
 
     /// 确保处于配置模式 `(config)#`。
+    ///
+    /// shell 模式（Linux 编译机）没有这一套，直接返回。
     async fn ensure_config_mode(&mut self, enable_password: Option<String>) -> Result<(), String> {
+        if self.kind == SessionKind::Shell {
+            return Ok(());
+        }
         self.buf.clear();
         self.send_raw("\n").await;
         match self.wait_prompt(Duration::from_secs(3)).await? {
@@ -592,23 +721,53 @@ impl DeviceCli {
         Ok(())
     }
 
-    /// 执行一条命令；`pem` 非空时按 PEM 粘贴流程补送。
+    /// 执行一条命令；`pem` 非空时按各自的输入流程补送。
+    ///
+    /// - 设备 CLI：进配置模式后发命令；设备若进入 PEM 粘贴状态，补送 PEM + 单独一行 `...`。
+    /// - shell 模式：直接发命令；若命令里有 heredoc（`<<EOF`）且带 pem，就把 PEM 当作 heredoc 内容喂进去。
     async fn run_cmd(&mut self, cmd: &str, pem: Option<&str>) -> TaskOutcome {
-        // 每条命令前都确保在配置模式（上一条可能把模式改了）。
         let pw = self.enable_password.clone();
-        if let Err(e) = self.ensure_config_mode(pw).await {
+        if let Err(e) = self.ensure_config_mode(pw.clone()).await {
             let out = self.buf.clone();
             return TaskOutcome::failed(cmd, &out, e);
         }
         self.buf.clear();
-        self.send_raw(&format!("{cmd}\n")).await;
+        // shell 模式追加退出码探针：`命令; echo __DISPATCH_RC=$?`。
+        // 对 heredoc 也成立（整行是一条命令行，正文从下一行开始）。
+        let probe_rc = self.kind == SessionKind::Shell && self.probe_rc;
+        let to_send = if probe_rc {
+            format!("{cmd}; echo \"{RC_MARK}$?\"")
+        } else {
+            cmd.to_string()
+        };
+        self.send_raw(&format!("{to_send}\n")).await;
 
-        let mut allow_pem = pem.is_some();
-        let mut used_pem = false;
+        // shell + heredoc：命令发出后立刻把正文与结束标记写进去。
+        let mut heredoc_fed = false;
+        if self.kind == SessionKind::Shell {
+            if let (Some(marker), Some(body)) = (heredoc_marker(cmd), pem) {
+                if !body.is_empty() {
+                    let mut payload = String::with_capacity(body.len() + marker.len() + 4);
+                    payload.push_str(body);
+                    if !payload.ends_with('\n') {
+                        payload.push('\n');
+                    }
+                    payload.push_str(&marker);
+                    payload.push('\n');
+                    self.send_raw(&payload).await;
+                    heredoc_fed = true;
+                }
+            }
+        }
+
+        let mut allow_pem = pem.is_some() && !heredoc_fed;
+        let mut used_pem = heredoc_fed;
         let mut output = String::new();
+        // shell 模式下 sudo 之类可能讨一次口令，最多喂一次。
+        let mut pw_tries = if self.kind == SessionKind::Shell && pw.is_some() { 1 } else { 0 };
 
-        // 最多两轮：第一轮可能撞上 PEM 粘贴状态，补送 PEM 后再等一次。
-        for _ in 0..2 {
+        // 最多两轮：第一轮可能撞上 PEM 粘贴/口令提示，处理后再等一次。
+        for _ in 0..3 {
             let budget = if used_pem { PEM_TIMEOUT } else { CMD_TIMEOUT };
             let p = match self.wait_prompt(budget).await {
                 Ok(p) => p,
@@ -623,7 +782,6 @@ impl DeviceCli {
                     self.buf.clear();
                     used_pem = true;
                     allow_pem = false;
-                    // PEM 正文 + 独立一行 `...` 结束输入。
                     let body = pem.unwrap_or("");
                     let mut payload = String::with_capacity(body.len() + 8);
                     payload.push_str(body);
@@ -632,6 +790,13 @@ impl DeviceCli {
                     }
                     payload.push_str("...\n");
                     self.send_raw(&payload).await;
+                }
+                Prompt::Password if pw_tries > 0 => {
+                    // shell 模式：把特权口令当 sudo 口令喂一次。
+                    output.push_str(&self.buf);
+                    self.buf.clear();
+                    pw_tries -= 1;
+                    self.send_raw(&format!("{}\n", pw.clone().unwrap_or_default())).await;
                 }
                 Prompt::Password => {
                     output.push_str(&self.buf);
@@ -647,8 +812,35 @@ impl DeviceCli {
                 }
             }
         }
-        TaskOutcome::judge(cmd, &output, used_pem)
+        let rc = if probe_rc { extract_rc(&output) } else { None };
+        TaskOutcome::judge(cmd, &output, used_pem, rc, self.kind == SessionKind::Shell)
     }
+}
+
+/// 从输出里取最后一个退出码探针的值。
+fn extract_rc(output: &str) -> Option<i32> {
+    let mut found = None;
+    for line in output.lines() {
+        if let Some(i) = line.rfind(RC_MARK) {
+            let digits: String = line[i + RC_MARK.len()..]
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '-')
+                .collect();
+            if let Ok(v) = digits.parse::<i32>() {
+                found = Some(v);
+            }
+        }
+    }
+    found
+}
+
+/// 把退出码探针相关的行从展示输出里去掉（含 PTY 回显的命令行与探针结果行）。
+fn strip_rc_probe(output: &str) -> String {
+    output
+        .lines()
+        .filter(|l| !l.contains(RC_MARK))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// 单条任务的执行结果（判定依据一并带出，便于诊断"为什么算失败"）。
@@ -675,10 +867,39 @@ impl TaskOutcome {
     ///
     /// 相比参考工具的 `^` 粗暴匹配，这里把"脱字符指示行"限定为**整行只有 ^ 与 ~** 才算失败，
     /// 避免命令里出现 `^`（正则、路径）时被误判。
-    fn judge(cmd: &str, output: &str, used_pem: bool) -> Self {
+    fn judge(cmd: &str, output: &str, used_pem: bool, rc: Option<i32>, shell: bool) -> Self {
+        // 0) shell 模式且拿到了真实退出码：以它为准，比关键词启发式可靠得多。
+        if let Some(code) = rc {
+            let shown = strip_rc_probe(output);
+            let low = shown.to_lowercase();
+            let soft = [
+                "already exists",
+                "already configured",
+                "no change",
+                "unchanged",
+                "isn't configured",
+                "not configured",
+            ];
+            let idem = soft.iter().find(|k| low.contains(**k)).map(|k| (*k).to_string());
+            return TaskOutcome {
+                success: code == 0,
+                idempotent: code == 0 && idem.is_some(),
+                reason: if code == 0 {
+                    match idem {
+                        Some(k) => format!("退出码 0（输出含 `{k}`，视为幂等）"),
+                        None => "退出码 0".to_string(),
+                    }
+                } else {
+                    format!("退出码 {code}")
+                },
+                output: shown,
+            };
+        }
+
         let low = output.to_lowercase();
 
         // 1) 交互没收干净就绝不判成功（否则会出现"报成功但其实还在等输入"）。
+        //    这条只对设备 CLI 有意义：shell 的完成信号就是提示符回落。
         let success_markers = [
             "import successful",
             "key import successful",
@@ -695,7 +916,7 @@ impl TaskOutcome {
             "enter the trusted root ca certificate file",
         ];
         let has_success = success_markers.iter().any(|k| low.contains(k));
-        if !has_success {
+        if !has_success && !shell {
             if let Some(k) = pending_markers.iter().find(|k| low.contains(**k)) {
                 let reason = format!("交互未完成：输出里仍有待输入提示 `{k}`");
                 return TaskOutcome { success: false, idempotent: false, reason, output: output.to_string() };
@@ -763,6 +984,25 @@ pub struct RunOpts {
     /// 覆盖配置里的 continue_on_error。
     #[serde(default)]
     pub continue_on_error: Option<bool>,
+    /// 会话类型：`auto`（默认，自动探测）/ `device`（网络设备 CLI）/ `shell`（Linux 编译机 shell）。
+    #[serde(default)]
+    pub mode: Option<String>,
+    /// shell 模式是否追加退出码探针（默认 true，判定更准）。
+    #[serde(default)]
+    pub probe_rc: Option<bool>,
+}
+
+impl RunOpts {
+    fn session_kind(&self) -> SessionKind {
+        match self.mode.as_deref().unwrap_or("auto") {
+            "device" => SessionKind::Device,
+            "shell" | "linux" => SessionKind::Shell,
+            _ => SessionKind::Auto,
+        }
+    }
+    fn probe_rc(&self) -> bool {
+        self.probe_rc.unwrap_or(true)
+    }
 }
 
 struct DispatchRun {
@@ -786,6 +1026,8 @@ async fn open_device(
     app: &AppHandle,
     profile_id: Option<&str>,
     cfg: &DispatchConfig,
+    kind: SessionKind,
+    probe_rc: bool,
 ) -> Result<(DeviceCli, String), String> {
     let (handle, enable_pw) = if let Some(pid) = profile_id.filter(|s| !s.is_empty()) {
         let h = connect_authenticated(app, pid).await?;
@@ -805,7 +1047,7 @@ async fn open_device(
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
         .unwrap_or_else(|| cfg.global.ip.clone().unwrap_or_default());
-    let cli = DeviceCli::open(handle, enable_pw).await?;
+    let cli = DeviceCli::open(handle, enable_pw, kind, probe_rc).await?;
     Ok((cli, label))
 }
 
@@ -858,6 +1100,8 @@ pub async fn cmd_dispatch_run(
         .insert(run_id.clone(), DispatchRun { cancel: cancel.clone() });
 
     let log_path = run_log_path(&app, &run_id).ok();
+    let kind = opts.session_kind();
+    let probe_rc = opts.probe_rc();
     let steps = plan.steps.clone();
     let base_dir = opts.base_dir.clone();
     let rid = run_id.clone();
@@ -868,7 +1112,8 @@ pub async fn cmd_dispatch_run(
             let _ = app2.emit("cmd-dispatch-task", v);
         };
         // 连接设备（失败要立刻告诉用户，而不是让界面一直等）。
-        let (mut cli, target) = match open_device(&app2, profile_id.as_deref(), &cfg).await {
+        let (mut cli, target) =
+            match open_device(&app2, profile_id.as_deref(), &cfg, kind, probe_rc).await {
             Ok(v) => v,
             Err(e) => {
                 let _ = app2.emit(
@@ -951,6 +1196,159 @@ pub fn cmd_dispatch_cancel(run_id: String) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+// ============================ 策略库（把一组命令序列存下来复用） ============================
+
+/// 一条命名策略：targets + tasks（**不保存凭据**，global 一律清空）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Strategy {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub created: String,
+    pub config: DispatchConfig,
+}
+
+#[derive(Serialize)]
+pub struct StrategySummary {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub created: String,
+    pub task_count: usize,
+    pub hostnames: Vec<String>,
+    pub domains: Vec<String>,
+}
+
+fn strategies_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("取应用数据目录失败: {e}"))?
+        .join("cmd_dispatch");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("建目录失败: {e}"))?;
+    Ok(dir.join("strategies.json"))
+}
+
+fn read_strategies(app: &AppHandle) -> Result<Vec<Strategy>, String> {
+    let p = strategies_path(app)?;
+    if !p.exists() {
+        return Ok(Vec::new());
+    }
+    let s = std::fs::read_to_string(&p).map_err(|e| format!("读取策略库失败: {e}"))?;
+    serde_json::from_str(&s).map_err(|e| format!("解析策略库失败: {e}"))
+}
+
+fn write_strategies(app: &AppHandle, v: &[Strategy]) -> Result<(), String> {
+    let p = strategies_path(app)?;
+    std::fs::write(&p, serde_json::to_string_pretty(v).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("写策略库失败: {e}"))
+}
+
+fn strategy_summary(s: &Strategy) -> StrategySummary {
+    StrategySummary {
+        id: s.id.clone(),
+        name: s.name.clone(),
+        description: s.description.clone(),
+        created: s.created.clone(),
+        task_count: s.config.tasks.len(),
+        hostnames: s.config.targets.hostnames.clone(),
+        domains: s.config.targets.domains.clone(),
+    }
+}
+
+#[command]
+pub fn cmd_strategy_list(app: AppHandle) -> Result<Vec<StrategySummary>, String> {
+    Ok(read_strategies(&app)?.iter().map(strategy_summary).collect())
+}
+
+/// 保存策略。`id` 为空=新建，否则覆盖同名 id。
+#[command]
+pub fn cmd_strategy_save(
+    app: AppHandle,
+    id: Option<String>,
+    name: String,
+    description: Option<String>,
+    config_yaml: String,
+) -> Result<StrategySummary, String> {
+    if name.trim().is_empty() {
+        return Err("策略名不能为空".into());
+    }
+    let mut cfg = parse_config(&config_yaml)?;
+    // 凭据不进策略库：策略是可分享/可复用的"命令序列"，不该夹带密码。
+    cfg.global = GlobalCfg::default();
+    let mut all = read_strategies(&app)?;
+    let sid = id.filter(|s| !s.is_empty()).unwrap_or_else(|| Uuid::new_v4().to_string());
+    let entry = match all.iter_mut().find(|s| s.id == sid) {
+        Some(existing) => {
+            existing.name = name;
+            existing.description = description;
+            existing.config = cfg;
+            existing.clone()
+        }
+        None => {
+            let e = Strategy {
+                id: sid,
+                name,
+                description,
+                created: chrono::Local::now().to_rfc3339(),
+                config: cfg,
+            };
+            all.push(e.clone());
+            e
+        }
+    };
+    write_strategies(&app, &all)?;
+    Ok(strategy_summary(&entry))
+}
+
+/// 载入策略：返回 config YAML（直接喂给任务表/预览/运行）。
+#[command]
+pub fn cmd_strategy_load(app: AppHandle, id: String) -> Result<String, String> {
+    let all = read_strategies(&app)?;
+    let s = all.iter().find(|s| s.id == id).ok_or("策略不存在")?;
+    serde_yaml::to_string(&s.config).map_err(|e| format!("生成 YAML 失败: {e}"))
+}
+
+#[command]
+pub fn cmd_strategy_delete(app: AppHandle, id: String) -> Result<(), String> {
+    let mut all = read_strategies(&app)?;
+    all.retain(|s| s.id != id);
+    write_strategies(&app, &all)
+}
+
+/// 把一段 PEM（来自 CA 库 / 终端证书库 / 任意来源）落到受管目录并返回绝对路径。
+///
+/// 任务表的 `pem_file` 需要的是**文件路径**，而从证书库取出来的是内容；
+/// 这里统一落到 `app_data/cmd_dispatch/pem/` 下，路径稳定、可重复引用、可打进策略里。
+#[command]
+pub fn cmd_dispatch_stage_pem(app: AppHandle, name: String, content: String) -> Result<String, String> {
+    if content.trim().is_empty() {
+        return Err("PEM 内容为空".into());
+    }
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("取应用数据目录失败: {e}"))?
+        .join("cmd_dispatch")
+        .join("pem");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("建目录失败: {e}"))?;
+    // 文件名：安全化 + 用一个短哈希防同名覆盖（同一内容复用同一个文件）。
+    let safe: String = name
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '_' })
+        .collect();
+    use sha2::{Digest, Sha256};
+    let h = Sha256::digest(content.as_bytes());
+    let tag: String = h.iter().take(4).map(|b| format!("{b:02x}")).collect();
+    let path = dir.join(format!("{safe}-{tag}.pem"));
+    if !path.exists() {
+        std::fs::write(&path, &content).map_err(|e| format!("写入 PEM 失败: {e}"))?;
+    }
+    Ok(path.to_string_lossy().to_string())
 }
 
 // ============================ 测试（纯逻辑，可离线跑） ============================
