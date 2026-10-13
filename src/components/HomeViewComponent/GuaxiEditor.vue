@@ -19710,6 +19710,14 @@ const finalizePreviewRenderedMath = (container) => {
 
 const finalizePreviewRenderedMermaid = async (container, options = {}, reason = 'unknown') => {
   if (!options?.mermaid) return
+
+  // 先看有没有图，再决定要不要 initialize。
+  // mermaid.initialize 会重建整台引擎（重新注册各图种检测器），是一笔固定开销；
+  // 原先不分青红皂白每次渲染都调一次，而文档里根本没有 mermaid 时这一下纯属白花。
+  // 没有 .mermaid 节点时下面的循环本来一次都不会执行，所以提前返回不改变任何输出。
+  const mermaidElements = Array.from(container.querySelectorAll('.mermaid'))
+  if (!mermaidElements.length) return
+
   const mermaidFontFamily = '"Trebuchet MS", "Noto Sans SC", "Microsoft YaHei", "PingFang SC", "Helvetica Neue", Arial, sans-serif'
   mermaid.initialize({
     startOnLoad: false,
@@ -19721,7 +19729,6 @@ const finalizePreviewRenderedMermaid = async (container, options = {}, reason = 
     },
   })
 
-  const mermaidElements = Array.from(container.querySelectorAll('.mermaid'))
   for (const element of mermaidElements) {
     try {
       const source = String(element.textContent || '')
@@ -19778,9 +19785,19 @@ const finalizePreviewRenderedMermaid = async (container, options = {}, reason = 
 const finalizePreviewRenderedHtml = async (html, options = {}, reason = 'unknown') => {
   const rawHtml = String(html || '')
   if (!rawHtml.trim()) return ''
+  const renderOptions = buildPreviewMarkdownRenderOptions(options)
+
+  // 下面两步都只作用于特定节点：mermaid 找 .mermaid，数学找 .math-*-container。
+  // 两者都不存在时它们都是空操作，那就直接原样返回 —— 省掉"把整篇 HTML 解析成 DOM
+  // 再序列化回字符串"这一轮往返（文档越大越贵，而且它现在已经是纯 JS 部分里最大的固定开销）。
+  const needsMermaid = !!renderOptions.mermaid && rawHtml.includes('class="mermaid"')
+  const needsMath =
+    !!renderOptions.math &&
+    (rawHtml.includes('math-inline-container') || rawHtml.includes('math-block-container'))
+  if (!needsMermaid && !needsMath) return rawHtml
+
   const container = document.createElement('div')
   container.innerHTML = rawHtml
-  const renderOptions = buildPreviewMarkdownRenderOptions(options)
   await finalizePreviewRenderedMermaid(container, renderOptions, reason)
   if (renderOptions.math) {
     finalizePreviewRenderedMath(container)

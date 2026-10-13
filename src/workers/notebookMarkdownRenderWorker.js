@@ -40,9 +40,42 @@ const renderPlainFenceBlock = (code, md) => {
   return `<pre class="hljs hljs-plain"><code class="language-plaintext">${escaped}</code></pre>`
 }
 
+// ───────── MathJax 结果记忆化 ─────────
+// 与 GuaxiMarker.js 同一套做法（那边有详细说明）：markdown-it-mathjax3 每次渲染都会把
+// 每个公式现场编译成 SVG，单条约 0.94ms；一篇 240 公式的笔记一次渲染就有约 250ms 花在这里。
+// 公式 SVG 只由 LaTeX 源码决定，按源码记忆化后，编辑时未改动的公式全部命中，
+// 预览重渲染从数百毫秒降到个位数毫秒。命中时返回的就是未缓存时本会返回的同一个字符串。
+const MATH_RENDER_CACHE_LIMIT = 4000
+const mathRenderCache = new Map()
+
+const memoizeMathRender = (kind, latex, produce) => {
+  const key = `${kind}\u0000${latex}`
+  const cached = mathRenderCache.get(key)
+  if (cached !== undefined) return cached
+
+  const value = produce()
+  if (mathRenderCache.size >= MATH_RENDER_CACHE_LIMIT) {
+    const oldest = mathRenderCache.keys().next().value
+    if (oldest !== undefined) mathRenderCache.delete(oldest)
+  }
+  mathRenderCache.set(key, value)
+  return value
+}
+
+// 后端 /api/markdown/image_process 只匹配 ![](相对路径) 这种**图片**语法（见
+// markdown_image_process.rs 的 process_image_paths）。正文里没有图片时它必然原样返回，
+// 却仍要付一次 HTTP 往返；预览与摘录列表每次渲染都要走这一趟，所以直接跳过。
+// 返回值与真实响应完全一致（processed_content === content、mappings 为空）。
+const IMAGE_MARKDOWN_RE = /!\[[^\]]*\]\([^)\s]+/
+
 const preprocessMarkdownContent = async (content, options = {}) => {
   const chatPreprocess = !!options.chatPreprocess
   let finalContent = String(content || '')
+
+  // No image syntax → the endpoint is a no-op. Skip the round trip.
+  if (!IMAGE_MARKDOWN_RE.test(finalContent)) {
+    return finalContent
+  }
 
   try {
     const preprocessApi = chatPreprocess
@@ -282,15 +315,18 @@ const buildWorkerMarkdownRenderer = (sourceContent, options = {}) => {
   const defaultParagraphClose = md.renderer.rules.paragraph_close || (() => '</p>')
   const defaultHeadingClose = md.renderer.rules.heading_close || ((tokens, idx) => `</${tokens[idx].tag}>`)
 
+  // preserveOriginal 要按源码行号回取原始行。原先这行 split 写在规则体里，等于**每渲染
+  // 一个段落就把整篇文档切一次**（段落数 × 文档长度的平方级开销）。整篇只切一次即可。
+  const sourceLines = preserveOriginal ? sourceContent.split(/\r?\n|\r/) : null
+
   md.renderer.rules.paragraph_open = (tokens, idx) => {
     const token = tokens[idx]
     const attrs = ['class="md-paragraph"']
     if (token && Array.isArray(token.map)) {
       attrs.push(`data-md-start-line="${token.map[0] + 1}"`)
       attrs.push(`data-md-end-line="${token.map[1] + 1}"`)
-      if (preserveOriginal) {
-        const originalLines = sourceContent.split(/\r?\n|\r/)
-        const original = originalLines[token.map[0]] || ''
+      if (sourceLines) {
+        const original = sourceLines[token.map[0]] || ''
         attrs.push(`data-md-original="${safeEncode(original)}"`)
       }
     }
@@ -348,22 +384,27 @@ const buildWorkerMarkdownRenderer = (sourceContent, options = {}) => {
     const originalInlineMath = md.renderer.rules.math_inline
     const originalBlockMath = md.renderer.rules.math_block
 
+    // 按 LaTeX 源码记忆化：公式 SVG 只由源码决定，编辑时未改动的公式直接命中缓存。
     md.renderer.rules.math_inline = (tokens, idx, renderOptions, env, self) => {
       const token = tokens[idx]
-      const originalLatex = `$${token.content}$`
-      const mathContent = originalInlineMath
-        ? originalInlineMath(tokens, idx, renderOptions, env, self)
-        : `<span class="math-inline">${token.content}</span>`
-      return `<span class="math-inline-container" data-md-original="${safeEncode(originalLatex)}">${mathContent}</span>`
+      return memoizeMathRender('inline', token.content, () => {
+        const originalLatex = `$${token.content}$`
+        const mathContent = originalInlineMath
+          ? originalInlineMath(tokens, idx, renderOptions, env, self)
+          : `<span class="math-inline">${token.content}</span>`
+        return `<span class="math-inline-container" data-md-original="${safeEncode(originalLatex)}">${mathContent}</span>`
+      })
     }
 
     md.renderer.rules.math_block = (tokens, idx, renderOptions, env, self) => {
       const token = tokens[idx]
-      const originalLatex = `$$${token.content}$$`
-      const mathContent = originalBlockMath
-        ? originalBlockMath(tokens, idx, renderOptions, env, self)
-        : `<div class="math-block">${token.content}</div>`
-      return `<div class="math-block-container" data-md-original="${safeEncode(originalLatex)}">${mathContent}</div>`
+      return memoizeMathRender('block', token.content, () => {
+        const originalLatex = `$$${token.content}$$`
+        const mathContent = originalBlockMath
+          ? originalBlockMath(tokens, idx, renderOptions, env, self)
+          : `<div class="math-block">${token.content}</div>`
+        return `<div class="math-block-container" data-md-original="${safeEncode(originalLatex)}">${mathContent}</div>`
+      })
     }
   }
 
