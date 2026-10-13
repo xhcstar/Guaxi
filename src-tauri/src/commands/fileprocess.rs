@@ -247,7 +247,6 @@ fn create_file_case_aware(path: &Path) -> Result<fs::File, String> {
 
 #[tauri::command]
 pub fn get_file_tree(path: String) -> Result<Vec<FileNode>, String> {
-    let raw_path = path.clone();
     let path = normalize_path(&path);
     let dir = Path::new(&path);
 
