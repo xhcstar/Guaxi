@@ -137,11 +137,47 @@ pub(crate) async fn connect_authenticated(
         .find(|p| p.id == profile_id)
         .ok_or_else(|| "连接档案不存在".to_string())?;
     let secret = get_secret(&profile.id);
+    connect_with_profile(&profile, secret).await
+}
+
+/// 按显式参数连接并认证。
+///
+/// 命令下发工具复用：既支持库内 SSH 档案，也支持直接吃配置文件里内联的凭据
+/// （参考工具的 config.yaml 把 ip/username/password 写在 global 段）。
+pub(crate) async fn connect_explicit(
+    host: &str,
+    port: u16,
+    user: &str,
+    auth: &str,
+    secret: Option<String>,
+    key_path: Option<&str>,
+) -> Result<client::Handle<ClientHandler>, String> {
+    let profile = SshProfile {
+        id: String::new(),
+        name: String::new(),
+        host: host.to_string(),
+        port,
+        user: user.to_string(),
+        auth: auth.to_string(),
+        key_path: key_path.map(|s| s.to_string()),
+        kind: "ssh".to_string(),
+        group: None,
+        serial_path: None,
+        serial_baud: None,
+    };
+    connect_with_profile(&profile, secret).await
+}
+
+/// 连接 + 认证的公共实现（两条入口共用）。
+pub(crate) async fn connect_with_profile(
+    profile: &SshProfile,
+    secret: Option<String>,
+) -> Result<client::Handle<ClientHandler>, String> {
     let config = Arc::new(client::Config { inactivity_timeout: None, ..Default::default() });
     let mut handle = client::connect(config, (profile.host.clone(), profile.port), ClientHandler)
         .await
         .map_err(|e| format!("SSH 连接失败: {e}"))?;
-    if !authenticate(&mut handle, &profile, secret).await? {
+    if !authenticate(&mut handle, profile, secret).await? {
         return Err("SSH 认证失败".to_string());
     }
     Ok(handle)
@@ -255,6 +291,48 @@ pub fn ssh_delete_secret(profile_id: String) -> Result<(), String> {
 #[command]
 pub fn ssh_has_secret(profile_id: String) -> Result<bool, String> {
     Ok(get_secret(&profile_id).is_some())
+}
+
+// -------- enable 密码（命令下发用：网络设备 CLI 的 `enable` 口令）--------
+//
+// 与登录密码分开存：同一档案可能登录用密钥、enable 用口令。仍然只进系统 keychain，不明文落盘。
+
+const KEYRING_ENABLE_SERVICE: &str = "guaxi-ssh-enable";
+
+fn get_enable_secret(profile_id: &str) -> Option<String> {
+    keyring::Entry::new(KEYRING_ENABLE_SERVICE, profile_id)
+        .ok()
+        .and_then(|e| e.get_password().ok())
+}
+
+#[command]
+pub fn ssh_set_enable_secret(profile_id: String, secret: String) -> Result<(), String> {
+    let entry =
+        keyring::Entry::new(KEYRING_ENABLE_SERVICE, &profile_id).map_err(|e| e.to_string())?;
+    entry
+        .set_password(&secret)
+        .map_err(|e| format!("写入 keychain 失败: {e}"))
+}
+
+#[command]
+pub fn ssh_delete_enable_secret(profile_id: String) -> Result<(), String> {
+    let entry =
+        keyring::Entry::new(KEYRING_ENABLE_SERVICE, &profile_id).map_err(|e| e.to_string())?;
+    match entry.delete_credential() {
+        Ok(_) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(format!("删除 keychain 失败: {e}")),
+    }
+}
+
+#[command]
+pub fn ssh_has_enable_secret(profile_id: String) -> Result<bool, String> {
+    Ok(get_enable_secret(&profile_id).is_some())
+}
+
+/// 供命令下发模块复用：取该档案的 enable 密码。
+pub(crate) fn enable_secret(profile_id: &str) -> Option<String> {
+    get_enable_secret(profile_id)
 }
 
 // -------- 会话（A1，russh） --------

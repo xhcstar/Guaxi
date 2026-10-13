@@ -74,6 +74,10 @@ pub mod net_conn;
 pub mod net_capture;
 pub mod sftp_fs;
 pub mod crypto_lab;
+// 命令下发（配置驱动的设备 CLI 批量执行）。
+pub mod cmd_dispatch;
+// 命令下发用的命令目录与场景模板（数据来自产品 CLI 手册）。
+pub mod cmd_catalog;
 // 国密 TLCP/SM2/PQC 引擎：仅在 `tlcp` 特性下编译（绑定 Tongsuo）。默认构建不包含。
 #[cfg(feature = "tlcp")]
 pub mod crypto_engine;

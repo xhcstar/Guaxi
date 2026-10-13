@@ -4928,6 +4928,7 @@ dependencies = [
  "sec1 0.7.3",
  "serde",
  "serde_json",
+ "serde_yaml",
  "serialport",
  "serpent",
  "sha1 0.10.6",

@@ -532,6 +532,11 @@
           <div v-else class="tb-hint">导入多份日志（如 client 与 server），每份的快照会排到同一条时间轴上，方便对因果。</div>
         </div>
       </n-tab-pane>
+
+      <n-tab-pane name="dispatch" tab="命令下发" class="cd-pane">
+        <template #tab><span class="tw-tab"><Icon :icon="sendIcon" width="15" height="15" />命令下发</span></template>
+        <CommandDispatchPanel />
+      </n-tab-pane>
     </n-tabs>
 
     <!-- 查看弹窗：字段明细 / PEM / DER(base64) / ASN.1，均可一键复制 -->
@@ -635,6 +640,8 @@ import listIcon from '@iconify-icons/lucide/list'
 import playIcon from '@iconify-icons/lucide/play'
 import wandIcon from '@iconify-icons/lucide/wand-2'
 import helpIcon from '@iconify-icons/lucide/help-circle'
+import sendIcon from '@iconify-icons/lucide/send'
+import CommandDispatchPanel from './CommandDispatchPanel.vue'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
 
 use([CanvasRenderer, ScatterChart, GridComponent, TooltipComponent, LegendComponent, DataZoomComponent])
@@ -1497,6 +1504,8 @@ const multiChartOption = computed(() => {
 /* ===== 证书子标签：顶部标签栏固定，只有内容区滚动 ===== */
 /* 证书页自己不滚（交给子标签的内容区滚），避免出现两层滚动条把标签栏顶走。 */
 .tb-tabs :deep(.cx-pane) { overflow: hidden; padding: 0; }
+/* 命令下发页同样是自管布局（自带左右分栏与各自滚动区）。 */
+.tb-tabs :deep(.cd-pane) { overflow: hidden; padding: 0; }
 .cx-tabs { height: 100%; display: flex; flex-direction: column; min-height: 0; }
 .cx-tabs :deep(.n-tabs-nav) { flex: 0 0 auto; position: sticky; top: 0; z-index: 3; padding: 8px 12px 0; background: var(--guaxi-content-bg); }
 .cx-tabs :deep(.n-tab-pane) { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 8px 12px 12px; box-sizing: border-box; }

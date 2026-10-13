@@ -133,7 +133,31 @@ UI 约定（全页统一）：
 - 风险（见用户方案）：`openssl-sys` 符号与现有 rustls/reqwest 冲突（`cargo tree -i openssl-sys` 保证唯一）；Tongsuo 跨小版本 NTLS 函数漂移；双证书链拼接顺序；Windows 编译需 Strawberry Perl+VS Build Tools+NASM。**合规定位：SM2 为主、ML-KEM 为叠加增强。**
 - 验证边界：该路径的链接/握手需在装好 Tongsuo 的机器上 `cargo build --features tlcp` + `OPENSSL_DIR=…` 真机验证；默认构建不含它。
 
+### 5.4 命令下发（`CommandDispatchPanel.vue` + `cmd_dispatch.rs` / `cmd_catalog.rs`）
+
+把「按配置在设备上批量下发 CLI」做进工坊：配置驱动、支持多条命令聚合成高级流程、交互式设备 CLI 全自动走通。
+
+**为什么不是"exec 一条命令"**：这类设备的 CLI 是**交互式**的 —— 要 `enable` 进特权、`config terminal force` 进配置模式；导入证书/私钥时设备进入"粘贴 PEM"状态（提示 `use "..." on a single line`，以单独一行 `...` 结束）；还会出现 yes/no 确认与 `--more--` 分页。所以核心是一个**提示符状态机 + 常驻 shell 会话**（`DeviceCli`），与参考工具 `executor.py` 同模型。
+
+- **提示符状态机**：按最后一行非空内容判定 `>`（用户）/ `#`（特权）/ `(config*)#`（配置）/ 密码提示 / PEM 等待。`ensure_config_mode()` 先空行探测，必要时 `config terminal force`，再必要时 `enable`(+enable 口令) 后重试。
+- **自动应答**：`type yes to continue` / `continue:` / `yes/no` / `are you sure` → 发 `YES`；`--more--` → 发空格；PEM 等待 → 发 PEM 正文 + 单独一行 `...`。
+- **结果判定**：硬失败标志（`invalid input`/`syntax error`/`access denied`/`failed`/`unknown command`…）+ 幂等成功标志（`already exists`/`not configured`…）+ **"交互未完成"守卫**（命令报成功但仍在等输入时判失败）。相比参考工具，把"脱字符指示"收窄为**整行只有 `^` `~`** 才算失败，避免命令里出现 `^`（正则/路径）被误判。**判定依据（命中了哪个关键词）与设备原始输出一起返回**，而不是只给一个 bool。
+- **配置**：`serde_yaml` 解析，**完全兼容**参考工具 config.yaml（`global`/`targets{hostnames,domains}`/`tasks[{id,cmd,pem_file,index,depends_on,only_if_domain,only_if_no_domain}]`）；`index: 1` 与 `"1"` 都接受。`{hostname}/{domain}/{index}` 占位符手写替换（不用 `format!`，命令里可能含 `{`）。
+- **展开**：照搬参考规则 —— `only_if_domain` 只取非空域名、`only_if_no_domain` 强制 `domain=""`、含 `{domain}` 遍历全部域名、否则只跑 host 级。
+- **DAG**：Kahn 排序 + **作用域化依赖解析**，并在原工具基础上**优先匹配同 index**（解决同名任务被 index 1/2/3 拆成多条时 `exact[0]` 可能选错的问题）；歧义写入 `warnings`，缺失依赖报"哪个任务的哪个依赖找不到"，成环**列出环上节点**。
+- **执行**：后台逐条执行，推事件 `cmd-dispatch-task`（status: running/ok/ok-idem/fail/skipped + reason + output）/ `cmd-dispatch-done`；`cmd_dispatch_cancel` 可中断；日志 JSONL 落盘 `app_data/cmd_dispatch/runs/<run_id>.jsonl`（字段对齐参考工具）。**失败即停**（`continue_on_error` 可关）。
+- **先看清再执行**：`cmd_dispatch_plan` 只展开+排序不下发，UI 用它做"预览将要逐条执行的命令"与配置校验。
+- **YAML ⇄ 任务表双向同步**：YAML 只由后端解析/生成（`cmd_dispatch_parse` / `cmd_dispatch_to_yaml`），前端不引 YAML 库，任务表的改动回写成 YAML 再送去预览/执行。
+- **凭据**：优先复用库内 SSH 档案；enable 口令另存 keychain（`guaxi-ssh-enable`）。配置里带 `global` 段时也可直接用它直连（兼容原工具用法）。
+
+**命令目录（`cmd_catalog_list`）**：把手册里的命令做成结构化条目 `{group,name,syntax,summary,cmd_template,pem,params[{name,required,doc,example}]}`，覆盖 **SSL**（Ch13/14：`ssl host`、`ssl sni`、`ssl import rootca|interca|crlca|key|certificate`、`ssl activate certificate`、`ssl backup|restore`、`ssl csr`、`ssl sm2 import signkey|signcertificate|enckey|enccertificate` 及 SNI 变体）与 **SLB**（Ch8：`slb real <type>`、`slb group method|member`、`slb virtual https|http`、`slb policy static|hashurl`、`show slb real|virtual`）。UI 据此渲染"命令浏览器 + 参数表单 + 插入任务"。
+
+**场景模板（`cmd_scenario_list` / `cmd_scenario_render`）**：一键生成整套任务（结构由 serde_yaml 生成，保证 YAML 合法）——
+- `ssl_chain`：clear → 建虚拟主机 →（SNI）→ 导入 rootca/interca/crlca → 导入服务端私钥与证书 → 激活（等价于参考 config.yaml 的产物）。
+- `slb_https_ssl`：定义后台服务 → 服务组 + 加成员 → 定义 HTTPS 虚拟服务 → 静态策略关联虚拟服务与后台服务 → 建 SSL 虚拟主机并绑定该虚拟服务 → SNI → 导入证书链与私钥 → 激活。
+
 ## 6. 网络（`RemoteNetworkToolbox.vue` + `net_conn.rs` / `net_toolbox.rs` / `net_capture.rs`）
+
 **[已实现]** 报文构造/解析（etherparse）、TCP/TLS 探测（`net_tls_inspect`，rustls+ring 报协议/套件/证书链）、抓包（运行时加载 Npcap）。**[规划/可选]** TLCP(国密)探测随 §5.3 `tlcp` 特性落地。
 
 ## 7. 关键命令/事件索引（后端）
@@ -141,5 +165,6 @@ UI 约定（全页统一）：
 - ssh_terminal/serial_telnet/sftp_fs：见 §3。
 - remote_terminal_tools：`ssh_exec_capture` `ssh_read_text_file` `gdb_coredump_analyze` `ssh_start_periodic/stop` `binary_analyze` `crypto_inspect`。
 - crypto_lab：`crypto_load_bytes` `crypto_pem_details` `crypto_gen_key` `crypto_gen_csr` `crypto_issue_cert` `crypto_sign_csr` `crypto_verify_cert` `crypto_pfx_parse/build` `crypto_sym` `crypto_rsa_crypt` `crypto_sign/verify` `crypto_hash` `crypto_ca_list/create/import/delete/export/revoke/gen_crl` `crypto_issue_from_ca` `crypto_leaf_list/delete/export` `crypto_asset_list/save/get/delete`；[可选特性 tlcp] `crypto_engine::{ca_create,issue_leaf,gen_crl}`、`crypto_engine::ntls`。
+- cmd_dispatch / cmd_catalog：`cmd_dispatch_plan`（只展开+排序，不下发）`cmd_dispatch_parse` / `cmd_dispatch_to_yaml`（YAML ⇄ 结构，供任务表双向同步）`cmd_dispatch_run` `cmd_dispatch_cancel` `cmd_catalog_list` `cmd_scenario_list` `cmd_scenario_render`；事件 `cmd-dispatch-task` / `cmd-dispatch-done`。ssh_terminal 另加 `ssh_set_enable_secret` / `ssh_delete_enable_secret` / `ssh_has_enable_secret`（enable 口令进 keychain）。
 
 
