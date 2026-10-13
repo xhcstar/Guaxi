@@ -705,7 +705,7 @@ pub struct AutoCellmetaCommitResult {
 
 #[tauri::command]
 pub fn auto_commit_cellmeta_changes(path: String) -> Result<AutoCellmetaCommitResult, String> {
-    info!("[CellmetaAutoCommit] checking repository: {}", path);
+    // info!("[CellmetaAutoCommit] checking repository: {}", path);
     let repo = Repository::discover(&path).map_err(|e| {
         error!("[CellmetaAutoCommit] failed to discover repository: {}", e);
         e.to_string()

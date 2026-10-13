@@ -251,9 +251,9 @@ pub fn get_file_tree(path: String) -> Result<Vec<FileNode>, String> {
     let path = normalize_path(&path);
     let dir = Path::new(&path);
 
-    info!("get_file_tree input: {}", raw_path);
-    info!("get_file_tree normalized: {}", dir.display());
-    info!("get_file_tree normalized(debug): {:?}", dir);
+    // info!("get_file_tree input: {}", raw_path);
+    // info!("get_file_tree normalized: {}", dir.display());
+    // info!("get_file_tree normalized(debug): {:?}", dir);
 
     if !dir.is_dir() {
         warn!("get_file_tree: not a directory: {}", dir.display());
