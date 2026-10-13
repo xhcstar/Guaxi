@@ -25,6 +25,14 @@ use std::os::windows::process::CommandExt;
 
 static PY_WORKER_STATES: OnceLock<Mutex<HashMap<String, Arc<Mutex<PythonWorkerState>>>>> =
     OnceLock::new();
+
+/// 当前常驻的 Python 执行会话数（设置页「服务器」用；每个会话是一个常驻子进程）。
+pub fn active_python_worker_count() -> usize {
+    PY_WORKER_STATES
+        .get()
+        .and_then(|store| store.lock().ok().map(|guard| guard.len()))
+        .unwrap_or(0)
+}
 static PY_WORKER_ACTIVE_REQUESTS: OnceLock<Mutex<HashMap<String, PythonActiveRequest>>> =
     OnceLock::new();
 // 当前前端发起的操作的进度回传通道。uv 对同一 venv 有文件锁、操作实际串行，

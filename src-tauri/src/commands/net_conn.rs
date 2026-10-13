@@ -188,6 +188,11 @@ fn servers() -> &'static Mutex<ServerMap> {
     SERVERS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// 当前在跑的监听服务数（设置页「服务器」用）。
+pub fn active_server_count() -> usize {
+    servers().lock().map(|guard| guard.len()).unwrap_or(0)
+}
+
 pub fn shutdown_all_servers() {
     if let Ok(g) = servers().lock() {
         for (_id, h) in g.iter() {

@@ -64,6 +64,11 @@ fn session_store() -> &'static Mutex<SessionMap> {
     GDB_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// 当前活跃调试会话数（设置页「服务器」用）。
+pub fn active_session_count() -> usize {
+    session_store().lock().map(|guard| guard.len()).unwrap_or(0)
+}
+
 /// 按 id 取会话句柄。
 fn get_session(session_id: &str) -> Result<Arc<GdbSession>, String> {
     session_store()

@@ -105,6 +105,11 @@ fn session_store() -> &'static Mutex<SessionMap> {
     SSH_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// 当前活跃会话数（设置页「服务器」用）。
+pub fn active_session_count() -> usize {
+    session_store().lock().map(|guard| guard.len()).unwrap_or(0)
+}
+
 /// 关闭软件时请求结束所有 ssh 会话。
 pub fn shutdown_all_sessions() {
     if let Ok(mut g) = session_store().lock() {

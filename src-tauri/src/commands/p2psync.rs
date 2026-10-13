@@ -581,6 +581,40 @@ fn endpoint_runtime() -> &'static Mutex<Option<P2PEndpointRuntime>> {
     P2P_ENDPOINT.get_or_init(|| Mutex::new(None))
 }
 
+/// P2P endpoint 是否在运行。
+/// 它用的是 QUIC（中继 + 打洞），没有固定监听端口，所以设置页不能用 TCP connect 探测，
+/// 只能问 iroh 自己。
+pub async fn p2p_endpoint_running() -> bool {
+    let guard = endpoint_runtime().lock().await;
+    guard
+        .as_ref()
+        .map(|runtime| !runtime.endpoint.is_closed())
+        .unwrap_or(false)
+}
+
+/// 关闭 P2P endpoint（设置页「服务器」用）。
+/// 会把 slot 取空，所以之后调用 `ensure_p2p_endpoint` 会重新建一个（见 `p2p_start_endpoint`）。
+/// 正在进行的同步会因连接中断而失败。
+pub async fn p2p_stop_endpoint() -> Result<(), String> {
+    let runtime = {
+        let mut guard = endpoint_runtime().lock().await;
+        guard.take()
+    };
+    match runtime {
+        Some(runtime) => {
+            runtime.endpoint.close().await;
+            info!("[P2PSync] endpoint closed");
+            Ok(())
+        }
+        None => Ok(()),
+    }
+}
+
+/// 启动 P2P endpoint（供设置页手动启动/重启）。
+pub async fn p2p_start_endpoint() -> Result<(), String> {
+    ensure_p2p_endpoint().await.map(|_| ())
+}
+
 /// 读取用户配置的传输并发度（每条连接同时打开的流数），下限 1，上限 32。
 fn p2p_transfer_concurrency() -> usize {
     let cfg = get_resource_repo_sync_config();

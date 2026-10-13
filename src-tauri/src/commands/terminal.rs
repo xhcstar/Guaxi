@@ -34,6 +34,11 @@ fn session_store() -> &'static Mutex<SessionMap> {
     TERMINAL_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// 当前活跃会话数。设置页「服务器」用它显示"N 个会话"，用户据此决定要不要一键全关。
+pub fn active_session_count() -> usize {
+    session_store().lock().map(|guard| guard.len()).unwrap_or(0)
+}
+
 /// 主程序退出时关闭所有内置终端会话。
 ///
 /// 设计说明：pty 里跑的是 shell，shell 下面往往还挂着用户自己起的进程（npm run dev、

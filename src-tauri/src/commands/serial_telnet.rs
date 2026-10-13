@@ -35,6 +35,11 @@ fn serial_store() -> &'static Mutex<SerialMap> {
     SERIAL_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// 当前打开的串口会话数（设置页「服务器」用）。
+pub fn serial_active_count() -> usize {
+    serial_store().lock().map(|guard| guard.len()).unwrap_or(0)
+}
+
 #[derive(Serialize)]
 pub struct SerialPortInfo {
     pub name: String,
@@ -142,6 +147,11 @@ type TelnetMap = HashMap<String, TelnetSession>;
 static TELNET_SESSIONS: OnceLock<Mutex<TelnetMap>> = OnceLock::new();
 fn telnet_store() -> &'static Mutex<TelnetMap> {
     TELNET_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 当前打开的 Telnet 会话数（设置页「服务器」用）。
+pub fn telnet_active_count() -> usize {
+    telnet_store().lock().map(|guard| guard.len()).unwrap_or(0)
 }
 
 pub fn shutdown_all_telnet() {

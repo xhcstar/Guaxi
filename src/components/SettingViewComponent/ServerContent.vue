@@ -16,43 +16,49 @@
 
     <div v-if="!services.length" class="srv-empty">正在读取服务列表…</div>
 
-    <div v-for="svc in services" :key="svc.id" class="srv-row">
-      <div class="srv-row__main">
-        <div class="srv-row__line">
-          <span class="srv-dot" :class="`is-${svc.status}`"></span>
-          <span class="srv-name">{{ svc.label }}</span>
-          <n-tag size="small" :type="statusTagType(svc.status)" :bordered="false">
-            {{ statusText(svc.status) }}
-          </n-tag>
-          <span v-if="svc.address" class="srv-addr">{{ svc.address }}</span>
-        </div>
-        <div class="srv-desc">{{ svc.description }}</div>
-      </div>
+    <template v-for="group in groupedServices" :key="group.name">
+      <div class="srv-group">{{ group.name }}</div>
 
-      <div class="srv-row__actions">
-        <n-tooltip trigger="hover">
-          <template #trigger>
-            <n-switch size="small" :value="svc.autostart" :disabled="!!busy[svc.id]"
-              @update:value="(value) => toggleAutostart(svc, value)">
-              <template #checked>自启</template>
-              <template #unchecked>停用</template>
-            </n-switch>
-          </template>
-          关掉后，重启应用也不会自动拉起它
-        </n-tooltip>
-        <n-button size="small" type="primary" tertiary :loading="!!busy[svc.id]"
-          :disabled="!svc.can_start || svc.status === 'running'" @click="act('start', svc)">启动</n-button>
-        <n-button size="small" type="error" tertiary :disabled="!svc.can_stop || svc.status !== 'running'"
-          @click="act('stop', svc)">停止</n-button>
-        <n-button size="small" tertiary :disabled="!svc.can_start || !svc.can_stop || !!busy[svc.id]"
-          @click="act('restart', svc)">重启</n-button>
+      <div v-for="svc in group.items" :key="svc.id" class="srv-row">
+        <div class="srv-row__main">
+          <div class="srv-row__line">
+            <span class="srv-dot" :class="`is-${svc.status}`"></span>
+            <span class="srv-name">{{ svc.label }}</span>
+            <n-tag size="small" :type="statusTagType(svc.status)" :bordered="false">
+              {{ statusText(svc.status) }}
+            </n-tag>
+            <span v-if="svc.detail" class="srv-detail">{{ svc.detail }}</span>
+            <span v-if="svc.address" class="srv-addr">{{ svc.address }}</span>
+          </div>
+          <div class="srv-desc">{{ svc.description }}</div>
+        </div>
+
+        <div class="srv-row__actions">
+          <!-- 会话池没有"自启"一说，别给它一个没有意义的开关。 -->
+          <n-tooltip v-if="svc.kind !== 'session'" trigger="hover">
+            <template #trigger>
+              <n-switch size="small" :value="svc.autostart" :disabled="!!busy[svc.id]"
+                @update:value="(value) => toggleAutostart(svc, value)">
+                <template #checked>自启</template>
+                <template #unchecked>停用</template>
+              </n-switch>
+            </template>
+            关掉后，重启应用也不会自动拉起它
+          </n-tooltip>
+          <n-button v-if="svc.can_start" size="small" type="primary" tertiary :loading="!!busy[svc.id]"
+            :disabled="svc.status === 'running'" @click="act('start', svc)">启动</n-button>
+          <n-button v-if="svc.can_stop" size="small" type="error" tertiary :disabled="svc.status !== 'running'"
+            @click="act('stop', svc)">{{ svc.kind === 'session' ? '全部关闭' : '停止' }}</n-button>
+          <n-button v-if="svc.can_start && svc.can_stop" size="small" tertiary :disabled="!!busy[svc.id]"
+            @click="act('restart', svc)">重启</n-button>
+        </div>
       </div>
-    </div>
+    </template>
   </div>
 </template>
 
 <script setup>
-import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { NButton, NSpace, NSwitch, NTag, NText, NTooltip, useMessage } from 'naive-ui'
 import { createLogger } from '../../utils/logger'
@@ -79,6 +85,21 @@ const statusTagType = (status) => ({
   stopped: 'default',
   disabled: 'warning',
 }[status] || 'default')
+
+// 按后端给的分组归拢，并保持后端返回的顺序（常驻 → 按需 → 会话），不在这里再排一遍。
+const groupedServices = computed(() => {
+  const order = []
+  const buckets = new Map()
+  for (const svc of services.value) {
+    const name = svc.group || '其他'
+    if (!buckets.has(name)) {
+      buckets.set(name, [])
+      order.push(name)
+    }
+    buckets.get(name).push(svc)
+  }
+  return order.map((name) => ({ name, items: buckets.get(name) }))
+})
 
 const refresh = async () => {
   if (refreshing.value) return
@@ -178,6 +199,14 @@ onBeforeUnmount(() => {
   color: var(--guaxi-text-secondary);
 }
 
+.srv-group {
+  margin: 14px 0 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--guaxi-text-secondary);
+}
+
 .srv-row {
   display: flex;
   align-items: flex-start;
@@ -235,6 +264,18 @@ onBeforeUnmount(() => {
   font-variant-numeric: tabular-nums;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 会话数量这类补充信息：给点底色，和端口/地址区分开，一眼能看出是"动态值"。 */
+.srv-detail {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--guaxi-text-secondary);
+  background: var(--guaxi-header-bg);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 

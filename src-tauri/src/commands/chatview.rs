@@ -173,24 +173,33 @@ static STREAM_CANCEL_REQUESTED: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(
 /// 设计说明：这两个进程是“按需常驻”的——用户用过一次本地大模型后就一直挂着等下次提问，
 /// 主程序退出时必须显式收掉，否则会残留占用显存/内存。llama-server 自身还会拉起
 /// 若干工作线程与子进程，所以走 `terminate_child`（先结束进程树再用句柄兜底）。
-pub fn shutdown_local_llm_servers() {
-    let targets: [(&str, &Lazy<Mutex<LocalDeepseekProcessState>>); 2] = [
-        ("llama-server(deepseek)", &LOCAL_DEEPSEEK_PROCESS),
-        ("llama-server(qwen)", &LOCAL_QWEN_PROCESS),
-    ];
-
-    for (label, holder) in targets {
-        match holder.lock() {
-            Ok(mut guard) => {
-                if let Some(mut child) = guard.child.take() {
-                    process_shutdown::terminate_child(label, &mut child);
-                }
-            }
-            Err(_) => {
-                warn!(label, "[chatview] 本地模型进程锁损坏，退出时无法回收");
+/// 停掉一个本地模型进程。抽出来是为了让 DeepSeek 与 Qwen 能**各自**停止 ——
+/// 它们监听不同端口（18080 / 18082），排障时常常只想动其中一个。
+fn shutdown_one_local_llm(label: &str, holder: &Lazy<Mutex<LocalDeepseekProcessState>>) {
+    match holder.lock() {
+        Ok(mut guard) => {
+            if let Some(mut child) = guard.child.take() {
+                process_shutdown::terminate_child(label, &mut child);
             }
         }
+        Err(_) => {
+            warn!(label, "[chatview] 本地模型进程锁损坏，退出时无法回收");
+        }
     }
+}
+
+pub fn shutdown_local_deepseek_server() {
+    shutdown_one_local_llm("llama-server(deepseek)", &LOCAL_DEEPSEEK_PROCESS);
+}
+
+pub fn shutdown_local_qwen_server() {
+    shutdown_one_local_llm("llama-server(qwen)", &LOCAL_QWEN_PROCESS);
+}
+
+/// 两个都停。沿用原来的语义，应用退出链仍在用它。
+pub fn shutdown_local_llm_servers() {
+    shutdown_local_deepseek_server();
+    shutdown_local_qwen_server();
 }
 
 pub(crate) fn reset_stream_cancel_flag() {

@@ -116,6 +116,11 @@ fn captures() -> &'static Mutex<CaptureMap> {
     CAPTURES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// 当前在跑的抓包会话数（设置页「服务器」用）。
+pub fn active_capture_count() -> usize {
+    captures().lock().map(|guard| guard.len()).unwrap_or(0)
+}
+
 pub fn shutdown_all_captures() {
     if let Ok(g) = captures().lock() {
         for (_id, h) in g.iter() {
