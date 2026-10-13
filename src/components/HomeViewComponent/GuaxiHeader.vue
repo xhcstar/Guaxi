@@ -129,12 +129,18 @@
         语言学习
       </n-tooltip>
 
-      <n-tooltip placement="bottom" trigger="hover">
-        <template #trigger>
-          <n-icon class="header-icon" size="20" :component="Screenshot24Regular" @click="CaptureScreenshot"></n-icon>
-        </template>
-        {{ headerShortcutTooltip('截图并插入', 'captureScreenshot') }}
-      </n-tooltip>
+      <!-- 点图标弹菜单，让用户自己选要不要隐藏窗口：隐藏时截到的是窗口**后面**的内容，
+           不隐藏才能截取本软件自己的界面。快捷键仍然直接走"隐藏窗口"那一档
+           （见 CaptureScreenshot），行为与以前一致。
+           嵌套顺序沿用工具栏里的既有约定：n-dropdown 在外、n-tooltip 在内。 -->
+      <n-dropdown trigger="click" :options="screenshotMenuOptions" @select="handleScreenshotMenuSelect">
+        <n-tooltip placement="bottom" trigger="hover">
+          <template #trigger>
+            <n-icon class="header-icon" size="20" :component="Screenshot24Regular"></n-icon>
+          </template>
+          {{ headerShortcutTooltip('截图并插入', 'captureScreenshot') }}
+        </n-tooltip>
+      </n-dropdown>
 
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
@@ -415,7 +421,7 @@
 import { createLogger } from '../../utils/logger'
 import { parseSearchQuery, matchesPathFilters } from '../../utils/searchQuerySyntax'
 import { computed, ref, h, onMounted, onUnmounted, nextTick, watch } from "vue";
-import { NIcon, NTooltip } from 'naive-ui'
+import { NDropdown, NIcon, NTooltip } from 'naive-ui'
 import { useSiderStore } from '../../stores/useSiderStore'
 import { useSiderHotkeys } from '../../composables/useSiderHotkeys'
 import { GUAXI_SHORTCUTS, shortcutTooltip, useGuaxiHotkeys } from '../../composables/useGuaxiHotkeys'
@@ -783,20 +789,29 @@ async function openLanguageLearningWindow() {
   }
 }
 
-async function CaptureScreenshot() {
+/**
+ * 截图并插入。
+ * - `hideWindow: true`：先把窗口最小化再截 —— 截到的是窗口**后面**的内容（原来的行为）。
+ * - `hideWindow: false`：保持窗口可见，用于截取本软件自己的界面。
+ * 只有真的隐藏过才还原：否则会把用户自己的窗口状态改掉（比如把已最小化的窗口弹出来抢焦点）。
+ */
+async function runScreenshotCapture({ hideWindow = true } = {}) {
   try {
-    try {
-      logger.debug('[Screenshot] Minimizing window before capture')
-      await appWindow.minimize()
-      await waitForWindowMinimized()
-    } catch (minErr) {
-      logger.warn('[Screenshot] Failed to minimize window:', minErr)
+    if (hideWindow) {
+      try {
+        logger.debug('[Screenshot] Minimizing window before capture')
+        await appWindow.minimize()
+        await waitForWindowMinimized()
+      } catch (minErr) {
+        logger.warn('[Screenshot] Failed to minimize window:', minErr)
+      }
     }
 
     const originalPath = fileTreeStore.selectedFile?.path
     logger.debug('[Screenshot] Triggered', {
       activeTab: fileTreeStore.activeTab,
-      selectedPath: originalPath
+      selectedPath: originalPath,
+      hideWindow
     })
 
     if (!originalPath) {
@@ -838,15 +853,32 @@ async function CaptureScreenshot() {
     logger.error('[Screenshot] Failed:', err)
     message.error('截图失败')
   } finally {
-    try {
-      logger.debug('[Screenshot] Restoring window after capture')
-      await appWindow.unminimize()
-      await appWindow.show()
-      await appWindow.setFocus()
-    } catch (restoreErr) {
-      logger.warn('[Screenshot] Failed to restore window:', restoreErr)
+    if (hideWindow) {
+      try {
+        logger.debug('[Screenshot] Restoring window after capture')
+        await appWindow.unminimize()
+        await appWindow.show()
+        await appWindow.setFocus()
+      } catch (restoreErr) {
+        logger.warn('[Screenshot] Failed to restore window:', restoreErr)
+      }
     }
   }
+}
+
+/** 快捷键走这一档：与改动前完全一致的"隐藏窗口再截"，行为不变。 */
+function CaptureScreenshot() {
+  return runScreenshotCapture({ hideWindow: true })
+}
+
+// 点图标弹出的两个选项；key 只用来区分是否隐藏窗口。
+const screenshotMenuOptions = [
+  { label: '隐藏当前窗口截图', key: 'hide' },
+  { label: '不隐藏当前窗口截图（可截取本软件内容）', key: 'keep' },
+]
+
+const handleScreenshotMenuSelect = (key) => {
+  void runScreenshotCapture({ hideWindow: key !== 'keep' })
 }
 
 // 设计说明：Header 图标快捷键只映射到已有 click 处理函数，不复制业务逻辑。

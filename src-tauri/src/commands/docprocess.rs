@@ -1704,6 +1704,37 @@ pub(crate) fn preview_source_key(source_path: &str) -> String {
     PathBuf::from(source_path.trim()).to_string_lossy().to_string()
 }
 
+/// 正在构建的文档锁：同一份文档的预览构建必须**串行**。
+///
+/// 为什么需要：Typst 的预览是**进程内**编译，没有子进程可以像 tectonic 那样"新构建先杀掉上一轮"
+/// （见 LATEX_PREVIEW_PIDS），于是两次构建可以真正并发跑。而它们写的是同一个临时文件名，
+/// 先完成的那个 `rename` 把临时文件移走之后，后一个 `rename` 就找不到源文件，
+/// 直接抛 "提交预览 PDF 失败: 系统找不到指定的文件。 (os error 2)" —— 这就是那条偶现报错的来源。
+/// 串行还顺带保证"后发起的构建最后落盘"，不会让旧内容盖掉新内容。
+static PREVIEW_BUILD_LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+    OnceLock::new();
+
+/// 取（必要时创建）某文档的构建锁。键与 `preview_source_key` 一致。
+pub(crate) fn preview_build_lock(key: &str) -> Arc<tokio::sync::Mutex<()>> {
+    let registry = PREVIEW_BUILD_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = registry.lock().unwrap_or_else(|e| e.into_inner());
+    guard
+        .entry(key.to_string())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
+}
+
+/// 构建期间唯一的临时文件后缀：即使上面的串行锁因故没生效，也不会两个构建踩同一个文件。
+pub(crate) fn preview_staging_suffix() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    format!("{nanos:x}{:x}", SEQ.fetch_add(1, Ordering::Relaxed))
+}
+
 /// 正在构建的预览进程：key = 源文件路径，value = PID。
 ///
 /// 前端只能丢弃过期构建的**结果**（latexBuildSeq），杀不掉已经在跑的 tectonic；
@@ -1888,6 +1919,14 @@ pub async fn clear_preview_build(source_path: String) -> Result<(), String> {
             if !dir.is_dir() {
                 continue;
             }
+            // 有构建正在进行时不能删：它正往这个目录里写临时文件，删掉会让它的 rename
+            // 找不到源文件而报"提交预览 PDF 失败 (os error 2)"。跳过即可 —— 下次打开该文档
+            // 会重建目录，关闭标签也还有后续机会清理。
+            let build_lock = preview_build_lock(key);
+            let Ok(_build_guard) = build_lock.try_lock() else {
+                info!(engine, key, "[PreviewCleanup] 该文档正在构建，跳过本次清理");
+                continue;
+            };
             if !stem.is_empty() {
                 // 顺带释放页图缓存并让 pdfium 丢掉这份 PDF（阅读器可能还握着上一次的字节）。
                 let pdf = dir.join(format!(".guaxi_preview_{stem}.pdf"));

@@ -366,18 +366,31 @@ pub async fn build_typ_pdf_preview(source_path: String, content: String) -> Resu
         .unwrap_or("preview")
         .to_string();
 
-    let pdf_bytes = compile_typ_and_cache(&source_path, input_dir, content)?;
+    // 同一份文档的构建必须串行 —— 详见 preview_build_lock 的说明。
+    // 锁一直持有到落盘完成：中间所有文件操作（建目录 / 写临时文件 / rename）都靠它排他，
+    // 否则两个并发构建会写同一个临时文件，后一个 rename 找不到源文件而报 os error 2。
+    let key = crate::commands::docprocess::preview_source_key(&source_path);
+    let build_lock = crate::commands::docprocess::preview_build_lock(&key);
+    let _build_guard = build_lock.lock().await;
 
-    // 构建目录的键走 docprocess 的统一规范化：清理（clear_preview_build）要用同一套哈希才能命中。
-    let outdir = crate::commands::docprocess::preview_build_dir(
-        "typst",
-        &crate::commands::docprocess::preview_source_key(&source_path),
-    )?;
+    // Typst 编译是**同步 CPU 活**：直接放在 async fn 里会占住当前 tokio 工作线程直到编完，
+    // 期间其它 IPC 命令只能排队（与 tectonic 那条是同类问题）。挪到阻塞线程池上执行。
+    let pdf_bytes = tokio::task::spawn_blocking(move || {
+        compile_typ_and_cache(&source_path, input_dir, content)
+    })
+    .await
+    .map_err(|e| format!("Typst 预览编译任务异常: {e}"))??;
+
+    let outdir = crate::commands::docprocess::preview_build_dir("typst", &key)?;
     let pdf_path = outdir.join(format!(".guaxi_preview_{stem}.pdf"));
 
     // 先写同目录临时文件再 rename：`fs::write` 会先截断目标文件，若瞬时被阅读器读到
     // 就是半个 PDF；rename 在同一文件系统内是原子的，稳定路径上永远只有完整文件。
-    let staging = outdir.join(format!(".guaxi_preview_{stem}.pdf.tmp"));
+    // 临时名带唯一后缀：上面那把锁已经保证串行，这里只是第二道防线。
+    let staging = outdir.join(format!(
+        ".guaxi_preview_{stem}.{}.pdf.tmp",
+        crate::commands::docprocess::preview_staging_suffix()
+    ));
     std::fs::write(&staging, &pdf_bytes).map_err(|e| format!("写入预览 PDF 失败: {e}"))?;
     std::fs::rename(&staging, &pdf_path).map_err(|e| format!("提交预览 PDF 失败: {e}"))?;
 
@@ -405,7 +418,10 @@ pub async fn export_typ_pdf(input_path: String, output_path: String) -> Result<(
     let content = std::fs::read_to_string(&input)
         .map_err(|e| format!("读取 .typ 源文件失败: {e}"))?;
 
-    let pdf_bytes = compile_typ_to_pdf(input_dir, content)?;
+    // 同上：同步 CPU 编译挪到阻塞线程池，别占住 tokio 工作线程。
+    let pdf_bytes = tokio::task::spawn_blocking(move || compile_typ_to_pdf(input_dir, content))
+        .await
+        .map_err(|e| format!("Typst 导出编译任务异常: {e}"))??;
 
     let output = PathBuf::from(output_path.trim());
     if let Some(parent) = output.parent() {
