@@ -20,13 +20,19 @@
         <button class="gdb-ib lg" @click="stop"><Icon :icon="stopIcon" width="17" height="17" /></button>
       </template>结束当前调试会话</n-tooltip>
       <span class="gdb-status">{{ statusText }}</span>
+      <span v-if="busy" class="gdb-busy" :title="busy.cmd">
+        <Icon :icon="refreshIcon" width="13" height="13" class="gdb-spin" />
+        {{ gdbReady ? '等待对端响应' : '正在建立（su 认证 / gdb 启动）' }} {{ busyElapsed }}s
+        <span v-if="gdbReady && busyElapsed >= WAIT_HINT_SECS" class="gdb-busy-slow">（较慢：对端可能在加载符号或链路卡顿，可继续等或点“中断”）</span>
+      </span>
+      <span v-else-if="notice" class="gdb-notice">{{ notice }}</span>
       <span v-if="error" class="gdb-error">{{ error }}</span>
     </div>
 
     <div class="gdb-palette" v-if="sessionId">
       <n-tooltip v-for="c in palette" :key="c.label" trigger="hover">
         <template #trigger>
-          <button class="gdb-ib lg primary" @click="c.fn ? c.fn() : runCmd(c.cmd)">
+          <button class="gdb-ib lg primary" @click="paletteRun(c)">
             <Icon :icon="c.icon" width="17" height="17" />
           </button>
         </template>
@@ -484,6 +490,46 @@ const starting = ref(false)
 const error = ref('')
 const sessionId = ref('')
 const statusText = ref('未连接')
+/// 目标是否正在运行。运行中时 gdb 会把栈/变量类命令排队直到停下，
+/// 期间命令不回复 → 前端干等超时。所以这些查询在运行中直接跳过并提示。
+const isRunning = ref(false)
+
+// ---- 命令等待状态（对端慢时给用户看"在等什么、等了多久"，而不是甩个错误）----
+/// 单条命令的等待上限。足够覆盖加载大符号表、慢链路；到点只停止等待、不报错。
+const WAIT_MAX_MS = 600_000
+/// 超过这个秒数就在界面上提示"对端响应偏慢"。
+const WAIT_HINT_SECS = 6
+/// 正在等待应答的命令（可能有并发，展示最早的一条）。
+const inflight = ref([])
+const busyElapsed = ref(0)
+const busy = computed(() => inflight.value[0] || null)
+/// gdb 的 MI 是否就绪（su 认证 + 启动完成）。由 ready 事件 + 等待期间的状态轮询共同维护，
+/// 用来把"还在建立"与"已就绪但对端慢"区分开显示。
+const gdbReady = ref(false)
+let ticker = null
+function ensureTicker() {
+  if (ticker) return
+  ticker = setInterval(() => {
+    const b = busy.value
+    busyElapsed.value = b ? Math.floor((Date.now() - b.started) / 1000) : 0
+  }, 1000)
+}
+function stopTickerIfIdle() {
+  if (ticker && !inflight.value.length) {
+    clearInterval(ticker)
+    ticker = null
+    busyElapsed.value = 0
+  }
+}
+// 提示（非错误）：用于"会话已结束""等待超时"这类需要告知但不算失败的情况。
+const notice = ref('')
+let noticeTimer = null
+function note(msg) {
+  notice.value = msg
+  if (noticeTimer) clearTimeout(noticeTimer)
+  noticeTimer = setTimeout(() => { notice.value = '' }, 15000)
+}
+function clearNote() { notice.value = ''; if (noticeTimer) { clearTimeout(noticeTimer); noticeTimer = null } }
 const tab = ref('console')
 
 const consoleLines = ref([])
@@ -587,12 +633,20 @@ onMounted(async () => {
       statusText.value = '已退出'
       appendConsole('log', '[gdb 进程已退出]')
       sessionId.value = ''
+      isRunning.value = false
+      gdbReady.value = false
+      inflight.value = []
+      stopTickerIfIdle()
       // 保留 consoleLines 供用户查看失败原因（空状态区会继续显示）。
     }
   }))
 })
 onBeforeUnmount(() => {
   unlisteners.forEach(u => u())
+  // 清掉等待计时器与提示定时器，避免组件卸载后还在跑。
+  if (ticker) { clearInterval(ticker); ticker = null }
+  if (noticeTimer) { clearTimeout(noticeTimer); noticeTimer = null }
+  inflight.value = []
   if (sessionId.value) invoke('gdb_mi_close', { sessionId: sessionId.value }).catch(() => {})
 })
 
@@ -603,13 +657,38 @@ function appendConsole(kind, text) {
 }
 
 function onAsync(p) {
+  if (p.class === 'ready') {
+    // gdb 的 MI 就绪（su 认证 + gdb 启动完成）。之前排队的命令此时才开始下发。
+    gdbReady.value = true
+    if (/建立|启动/.test(statusText.value)) statusText.value = 'gdb 已就绪'
+    return
+  }
+  if (p.class === 'notready') {
+    // 后端在就绪超时后主动告知，并把排队的命令以明确错误回掉。
+    gdbReady.value = false
+    error.value = p.payload?.msg || 'gdb 未在预期时间内就绪'
+    return
+  }
   if (p.class === 'stopped') {
+    isRunning.value = false
     statusText.value = '已停下: ' + (p.payload?.reason || '')
     curFrame.value = 0
-    refreshThreads(); refreshWatch(); refreshStack(); refreshLocals(); refreshSource()
+    // 顺序刷新（不要并发）：gdb 是单线程处理 MI 的，一次发一堆只会互相排队；
+    // 任一超时也会连累其它命令，表现为"命令失败: gdb 命令超时"。
+    refreshOnStop()
   } else if (p.class === 'running') {
-    statusText.value = '运行中'
+    isRunning.value = true
+    statusText.value = '运行中（栈/变量需停下后才能查）'
   }
+}
+
+/// 停住后的定向刷新：线程 → 调用栈 → 局部变量 → 源码。逐个 await，避免并发排队。
+async function refreshOnStop() {
+  await refreshThreads()
+  await refreshStack()
+  await refreshLocals()
+  await refreshSource()
+  if (watches.value.length) await refreshWatch()
 }
 
 async function start() {
@@ -617,6 +696,9 @@ async function start() {
   if (mode.value === 'attach' && !attachPid.value) { error.value = '附加模式需要填 PID'; return }
   if (mode.value === 'attach' && escalate.value === 'su' && !escalatePassword.value) { error.value = 'su 提权需要填 root 密码'; return }
   starting.value = true; error.value = ''
+  clearNote()
+  inflight.value = []
+  gdbReady.value = false
   consoleLines.value = []
   try {
     const args = argsText.value.trim() ? argsText.value.trim().split(/\s+/) : []
@@ -628,7 +710,9 @@ async function start() {
       escalate: mode.value === 'attach' ? escalate.value : 'none',
       escalatePassword: mode.value === 'attach' && escalate.value === 'su' ? escalatePassword.value : null,
     })
-    statusText.value = '已连接'
+    // 会话已建立，但 gdb 可能还在 su 认证 / 启动中（后端会在就绪后回发 ready 事件，
+    // 期间提交的命令会排队而不是丢失）。所以这里先如实显示"正在建立"。
+    statusText.value = mode.value === 'attach' ? '正在建立（su 认证 / gdb 启动）…' : '正在建立（gdb 启动中）…'
     appendConsole('log', mode.value === 'attach' ? `[gdb 已启动，正在附加 PID ${attachPid.value}]` : '[gdb 已启动]')
     if (mode.value === 'attach') {
       // 用 MI 命令显式附加：能拿到结构化结果与 *stopped 事件；attach 停住后要手动“继续”才会跑到断点。
@@ -650,6 +734,7 @@ async function start() {
           error.value = '附加失败: ' + (msg || '可能无权限或 PID 不存在')
         }
       } else {
+        isRunning.value = false
         statusText.value = `已附加 PID ${attachPid.value}（已停住，加断点后点"继续"）`
         await refreshThreads(); await refreshStack(); await refreshLocals(); await refreshSource()
       }
@@ -658,17 +743,100 @@ async function start() {
 }
 
 async function stop() {
-  if (sessionId.value) { await invoke('gdb_mi_close', { sessionId: sessionId.value }).catch(() => {}); sessionId.value = ''; statusText.value = '已结束' }
+  if (sessionId.value) {
+    await invoke('gdb_mi_close', { sessionId: sessionId.value }).catch(() => {})
+    sessionId.value = ''
+    statusText.value = '已结束'
+    isRunning.value = false
+    gdbReady.value = false
+    inflight.value = []
+    stopTickerIfIdle()
+    clearNote()
+  }
 }
 
-async function runCmd(cmd) {
+async function runCmd(cmd, opts = {}) {
   if (!sessionId.value) return null
   appendConsole('cmd', '» ' + cmd)
-  try { return await invoke('gdb_mi_command', { sessionId: sessionId.value, command: cmd }) }
-  catch (e) { error.value = '命令失败: ' + (e?.message || e); return null }
+  const session = sessionId.value
+  let token
+  try {
+    token = await invoke('gdb_mi_submit', { sessionId: session, command: cmd })
+  } catch (e) {
+    const m = e?.message || String(e)
+    // 会话已经没了不是"命令出错"：清掉本地会话状态并提示，用户直接重新发起即可。
+    // （否则会留下一个指向死会话的界面，之后每条命令都重复报同一个错。）
+    if (/会话已关闭|会话不存在|已结束/.test(m)) {
+      if (sessionId.value === session) {
+        sessionId.value = ''
+        isRunning.value = false
+        gdbReady.value = false
+      }
+      note(`会话已结束（${cmd} 未发出）。请重新“启动 gdb”。`)
+    } else {
+      error.value = '命令提交失败: ' + m
+    }
+    return null
+  }
+  const started = Date.now()
+  const limit = opts.timeoutMs ?? WAIT_MAX_MS
+  const entry = { cmd, token, started }
+  inflight.value = [...inflight.value, entry]
+  ensureTicker()
+  let tick = 0
+  try {
+    for (;;) {
+      let r
+      try {
+        r = await invoke('gdb_mi_await', { sessionId: session, token, waitMs: 800 })
+      } catch (e) {
+        // 会话结束/断开不是"命令失败"，要区分开说，而不是甩一个错误给用户。
+        const m = e?.message || String(e)
+        if (/已结束|已断开|不存在/.test(m)) note(`会话已结束，命令「${cmd}」未收到应答。`)
+        else note(`等待应答失败：${m}`)
+        return null
+      }
+      if (r) return r
+      if (sessionId.value !== session) return null   // 等待期间会话被关闭/重开
+      // 每 ~4s 同步一次会话状态：这样提示能区分"还在 su 认证/gdb 启动"和"已就绪但对端慢"，
+      // 也顺带兜住 ready 事件万一漏收的情况。
+      if (tick++ % 5 === 0) {
+        try {
+          const st = await invoke('gdb_mi_state', { sessionId: session })
+          gdbReady.value = !!st?.ready
+          if (!st?.alive) { note(`会话已结束，命令「${cmd}」未收到应答。`); return null }
+        } catch (_) { /* 状态查询失败不影响等待本身 */ }
+      }
+      const waited = Date.now() - started
+      if (waited > limit) {
+        note(`命令「${cmd}」等待超过 ${Math.round(waited / 1000)} 秒仍未返回，已停止等待。可点“中断”暂停目标，或结束会话重来。`)
+        return null
+      }
+    }
+  } finally {
+    inflight.value = inflight.value.filter(x => x !== entry)
+    stopTickerIfIdle()
+  }
 }
 
 async function submitCmd() { const c = cmdInput.value.trim(); if (!c) return; cmdInput.value = ''; await runCmd(c) }
+
+/// 执行类命令（run/continue/next/step/finish/interrupt）专用包装：
+/// 已经在跑时不再重复发 continue（gdb 会回 "Cannot execute this command while the target is running"，
+/// 而那条错误又会被我们当成"命令超时"式的失败显示）；发出后乐观标记运行中，
+/// 真正的 *running / *stopped 事件到达时会纠正。
+async function execCmd(cmd) {
+  const isResume = /^-exec-(run|continue|next|step|finish)$/.test(cmd)
+  if (isResume && isRunning.value) { statusText.value = '目标已在运行中（点“中断”可暂停）'; return null }
+  const r = await runCmd(cmd)
+  if (isResume) isRunning.value = true
+  if (/^-exec-interrupt$/.test(cmd)) isRunning.value = true
+  return r
+}
+function paletteRun(c) {
+  if (c.fn) return c.fn()
+  return /^-exec-/.test(c.cmd) ? execCmd(c.cmd) : runCmd(c.cmd)
+}
 // __BODY3__
 async function addVar() {
   const expr = exprInput.value.trim(); if (!expr || !sessionId.value) return
@@ -709,6 +877,7 @@ async function expandVar(node) {
 async function addWatch() { const e = watchInput.value.trim(); if (!e) return; watchInput.value = ''; watches.value.push({ expr: e, value: '', changed: false }); await refreshWatch() }
 function removeWatch(e) { watches.value = watches.value.filter(w => w.expr !== e) }
 async function refreshWatch() {
+  if (!watches.value.length || blockedWhileRunning('Watch 表达式')) return
   for (const w of watches.value) {
     const r = await runCmd(`-data-evaluate-expression ${miQuote(w.expr)}`)
     const v = r?.payload?.value ?? ''
@@ -725,7 +894,12 @@ async function refreshThreads() {
     frame: t.frame ? { level: t.frame.level, func: t.frame.func, file: t.frame.file || t.frame.fullname || '', line: t.frame.line || '' } : null,
   }))
 }
-function selectThread(id) { currentThread.value = id; runCmd(`-thread-select ${id}`).then(() => refreshWatch()) }
+async function selectThread(id) {
+  if (!sessionId.value || blockedWhileRunning('切换线程')) return
+  currentThread.value = id
+  await runCmd(`-thread-select ${id}`)
+  await refreshWatch()
+}
 
 async function refreshBreaks() {
   const r = await runCmd('-break-list')
@@ -765,8 +939,16 @@ function shortFile(f) {
   const parts = String(f).replace(/\\/g, '/').split('/')
   return parts[parts.length - 1] || f
 }
+/// 运行中禁止下发栈/变量类查询：gdb 会把它们排队到停下才回复，期间前端只会干等超时。
+/// 返回 true 表示"已拦截，调用方应直接 return"。
+function blockedWhileRunning(what) {
+  if (!isRunning.value) return false
+  note(`目标运行中：${what}需停下后才可查。点“中断”暂停目标，或等断点命中。`)
+  return true
+}
+
 async function refreshStack() {
-  if (!sessionId.value) return
+  if (!sessionId.value || blockedWhileRunning('调用栈')) return
   const r = await runCmd('-stack-list-frames')
   const frames = r?.payload?.stack || []
   callStack.value = frames.map(f => ({
@@ -781,13 +963,13 @@ async function selectFrame(level) {
   await refreshLocals(); await refreshSource(); await refreshWatch()
 }
 async function refreshLocals() {
-  if (!sessionId.value) return
+  if (!sessionId.value || blockedWhileRunning('局部变量')) return
   const r = await runCmd('-stack-list-variables --all-values')
   const vars = r?.payload?.variables || []
   locals.value = vars.map(v => ({ name: v.name, value: v.value != null ? String(v.value) : '' }))
 }
 async function refreshRegisters() {
-  if (!sessionId.value) return
+  if (!sessionId.value || blockedWhileRunning('寄存器')) return
   const nr = await runCmd('-data-list-register-names')
   const names = nr?.payload?.['register-names'] || []
   const vr = await runCmd('-data-list-register-values x')
@@ -807,8 +989,10 @@ async function refreshRegisters() {
 }
 
 /// 全量刷新：线程 / 调用栈 / 局部变量 / 寄存器 / Watch / 源码。
+/// 逐个 await（不并发），否则多个命令在 gdb 侧排队，任一卡住会连带全部超时。
 async function refreshAll() {
   if (!sessionId.value) return
+  if (blockedWhileRunning('调试信息')) return
   await refreshThreads(); await refreshStack(); await refreshLocals()
   await refreshRegisters(); await refreshWatch(); await refreshSource()
 }
@@ -832,7 +1016,7 @@ async function pickLocalRoot() {
   } catch (_) {}
 }
 async function refreshSource() {
-  if (!sessionId.value) return
+  if (!sessionId.value || blockedWhileRunning('当前帧源码')) return
   const r = await runCmd('-stack-info-frame')
   const fr = r?.payload?.frame
   if (!fr) { sourceHint.value = '当前无栈帧（先运行到断点）。'; return }
@@ -948,6 +1132,9 @@ async function loadMacros() {
 .gdb-bar { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--guaxi-border); flex-wrap: wrap; flex: 0 0 auto; }
 .gdb-status { font-size: 12px; color: var(--guaxi-text-secondary, #6b7280); }
 .gdb-error { font-size: 12px; color: #e5484d; }
+.gdb-notice { font-size: 12px; color: #f5a524; }
+.gdb-busy { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--tw-accent); }
+.gdb-busy-slow { color: #f5a524; }
 .gdb-palette { display: flex; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--guaxi-border); flex-wrap: wrap; flex: 0 0 auto; }
 .gdb-body { flex: 1 1 auto; min-height: 0; display: flex; }
 .gdb-tabs { height: 100%; width: 100%; display: flex; flex-direction: column; }

@@ -11,16 +11,16 @@
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{command, AppHandle, Emitter, Manager};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, Notify};
 use uuid::Uuid;
 
 use crate::commands::ssh_terminal::connect_authenticated;
@@ -29,9 +29,13 @@ const GDB_OUTPUT_EVENT: &str = "gdb-mi-output";
 const GDB_ASYNC_EVENT: &str = "gdb-mi-async";
 const GDB_EXIT_EVENT: &str = "gdb-mi-exit";
 
+/// gdb 未在这么多秒内就绪（su 认证 + gdb 启动）就判定为失败，把排队的命令以明确错误回掉。
+const READY_TIMEOUT_SECS: u64 = 45;
+
 enum GdbCmd {
-    /// 发送一条带 token 的 MI 命令，结果记录经 oneshot 回传。
-    Mi { token: u64, line: String, reply: oneshot::Sender<Value> },
+    /// 发送一条带 token 的 MI 命令。应答不在这里回传，而是由会话任务存进 `done`，
+    /// 前端用 `gdb_mi_await` 取——这样**前端超时/刷新都不会丢应答**。
+    Mi { token: u64, line: String },
     /// 发送一行原始文本（交互输入 / 目标进程 stdin）。
     Raw(String),
     Close,
@@ -40,18 +44,46 @@ enum GdbCmd {
 struct GdbSession {
     cmd_tx: mpsc::UnboundedSender<GdbCmd>,
     token: AtomicU64,
+    /// 已完成的应答（token → 应答体）。迟到的结果留在这里等前端来取，不丢。
+    done: Arc<Mutex<HashMap<u64, Value>>>,
+    /// 有新应答时唤醒所有正在 `await` 的等待者。
+    notify: Arc<Notify>,
+    /// 会话是否仍存活；置 false 时所有等待者应立即收到"已断开"而不是干等到超时。
+    alive: Arc<AtomicBool>,
+    /// gdb 的 MI 是否已就绪（su 认证 / gdb 启动完成）。
+    ready: Arc<AtomicBool>,
 }
 
 type SessionMap = HashMap<String, Arc<GdbSession>>;
 static GDB_SESSIONS: OnceLock<Mutex<SessionMap>> = OnceLock::new();
 
+/// `done` 最多保留的应答条数；超出丢最旧的，防止前端长期不取导致无界增长。
+const DONE_CAP: usize = 512;
+
 fn session_store() -> &'static Mutex<SessionMap> {
     GDB_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 按 id 取会话句柄。
+fn get_session(session_id: &str) -> Result<Arc<GdbSession>, String> {
+    session_store()
+        .lock()
+        .map_err(|_| "会话锁失败".to_string())?
+        .get(session_id)
+        .cloned()
+        .ok_or_else(|| "gdb 会话不存在（可能已结束）".to_string())
+}
+
+/// 结束一个会话：标记不存活并唤醒等待者，让在途的 await 立刻返回而不是等满超时。
+fn finish_session(s: &GdbSession) {
+    s.alive.store(false, Ordering::SeqCst);
+    s.notify.notify_waiters();
 }
 
 pub fn shutdown_all_sessions() {
     if let Ok(mut g) = session_store().lock() {
         for (_id, s) in g.drain() {
+            finish_session(&s);
             let _ = s.cmd_tx.send(GdbCmd::Close);
         }
     }
@@ -206,6 +238,25 @@ enum Record {
     Ignore,
 }
 
+/// 是否是 PTY 回显行——即"我们自己写进去的命令"被 tty 回显出来的副本。
+///
+/// MI 记录的形态是 `<token><记录符>...`，记录符必为 `^ * + = ~ @ &` 之一；
+/// 回显则是 `<token><原始命令文本>`（如 `25-stack-list-frames`）或裸命令行。
+/// 两者之别就在 token 后的那个字符，据此判定。
+fn is_echo_line(t: &str) -> bool {
+    if t.is_empty() {
+        return false;
+    }
+    let digits: String = t.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return false;
+    }
+    match t[digits.len()..].chars().next() {
+        Some(c) if "^*+=~@&".contains(c) => false,
+        _ => true,
+    }
+}
+
 fn classify(line: &str) -> Record {
     let t = line.trim_end();
     if t.is_empty() || t == "(gdb)" || t == "(gdb) " {
@@ -318,13 +369,22 @@ pub async fn gdb_mi_start(
     // 按提权方式包裹：
     //  - sudo：`sudo -n`（免密），非交互避免挂起；
     //  - su：`su -c '<gdb…>'`，切 root 并在 PTY 上提示输入密码（无 sudo 的机器用这个）。
+    //
+    // 关键：sudo/su 需要 PTY（requiretty / su 读 /dev/tty），但 PTY 默认**回显输入**——
+    // 我们写进去的每条 MI 命令都会被 tty 原样回显一遍混进 gdb 的 MI 输出流，既污染解析、
+    // 又可能与 gdb 的输出**交错截断**记录（*stopped 被吃掉，表现为"命令超时/卡在断点"）。
+    // 所以在同一 tty 上先 `stty -echo` 关回显，再 `exec` 成 gdb（不留多余 shell 进程）。
+    let need_pty = esc == "sudo" || esc == "su";
+    let core = if need_pty {
+        format!("stty -echo 2>/dev/null; exec {core}")
+    } else {
+        core
+    };
     let cmd = match esc.as_str() {
-        "sudo" => format!("sudo -n {core}"),
+        "sudo" => format!("sudo -n sh -c {}", shell_quote(&core)),
         "su" => format!("su -c {}", shell_quote(&core)),
         _ => core,
     };
-    // sudo 的 requiretty / su 读 /dev/tty 都需要 PTY。
-    let need_pty = esc == "sudo" || esc == "su";
     // su 需要在看到密码提示时喂密码。
     let mut pw_to_send: Option<String> = if esc == "su" {
         escalate_password.filter(|s| !s.is_empty())
@@ -351,24 +411,65 @@ pub async fn gdb_mi_start(
 
     let session_id = Uuid::new_v4().to_string();
     let (tx, mut rx) = mpsc::unbounded_channel::<GdbCmd>();
+    let done: Arc<Mutex<HashMap<u64, Value>>> = Arc::new(Mutex::new(HashMap::new()));
+    let notify = Arc::new(Notify::new());
+    let alive = Arc::new(AtomicBool::new(true));
+    let ready_flag = Arc::new(AtomicBool::new(false));
     session_store()
         .lock()
         .map_err(|_| "会话锁失败".to_string())?
         .insert(
             session_id.clone(),
-            Arc::new(GdbSession { cmd_tx: tx, token: AtomicU64::new(1) }),
+            Arc::new(GdbSession {
+                cmd_tx: tx,
+                token: AtomicU64::new(1),
+                done: done.clone(),
+                notify: notify.clone(),
+                alive: alive.clone(),
+                ready: ready_flag.clone(),
+            }),
         );
 
     let sid = session_id.clone();
     tokio::spawn(async move {
-        let mut pending: HashMap<u64, oneshot::Sender<Value>> = HashMap::new();
+        // 尚未就绪（su 认证 / gdb 启动中）时先存这里，就绪后补发。
+        let mut queued: Vec<(u64, String)> = Vec::new();
         let mut linebuf = String::new();
         // 直到 gdb 的 MI 真正就绪（打印出 `(gdb)` 提示或任一 MI 记录）才下发命令。
         // 否则在 su 认证/gdb 启动期间过早写入的 MI 命令会和密码输入抢同一个 PTY，导致 attach 丢失/超时。
         let mut ready = false;
-        let mut queued: Vec<(u64, String, oneshot::Sender<Value>)> = Vec::new();
+        // 就绪超时：su 密码错 / 远端没有 gdb / 登录脚本卡住时，不能一直静默排队。
+        // 触发一次后置 None（不再重触发）。
+        let mut ready_deadline: Option<Instant> = Some(Instant::now() + Duration::from_secs(READY_TIMEOUT_SECS));
         loop {
+            // 就绪哨兵：只在尚未就绪时计时，避免已经就绪后还在跑定时器。
+            let deadline_snapshot = ready_deadline;
+            let ready_timer = async move {
+                match deadline_snapshot {
+                    Some(d) => tokio::time::sleep_until(tokio::time::Instant::from_std(d)).await,
+                    None => std::future::pending::<()>().await,
+                }
+            };
             tokio::select! {
+                _ = ready_timer => {
+                    ready_deadline = None;
+                    if !ready {
+                        // 把排队的命令全部用明确错误回掉，别让前端无限等待。
+                        let msg = format!(
+                            "gdb 在 {READY_TIMEOUT_SECS}s 内未就绪：可能是 su/sudo 密码错误、远端未安装 gdb、或登录脚本卡住。请看下方输出排查。"
+                        );
+                        let mut d = done.lock().unwrap();
+                        for (token, _) in queued.drain(..) {
+                            d.insert(token, json!({ "class": "error", "payload": { "msg": msg } }));
+                        }
+                        drop(d);
+                        notify.notify_waiters();
+                        let _ = app.emit(
+                            GDB_ASYNC_EVENT,
+                            json!({ "session_id": sid, "class": "notready", "payload": { "msg": msg } }),
+                        );
+                    }
+                }
                 msg = channel.wait() => {
                     match msg {
                         Some(russh::ChannelMsg::Data { ref data })
@@ -381,6 +482,11 @@ pub async fn gdb_mi_start(
                             while let Some(pos) = linebuf.find('\n') {
                                 let line: String = linebuf.drain(..=pos).collect();
                                 let t = line.trim();
+                                // 丢掉 PTY 回显行：`<token>命令文本`。真 MI 记录的 token 后必然紧跟
+                                // 记录符 ^ * + = ~ @ &，否则就是 tty 把我们写进去的命令回显了一遍。
+                                if is_echo_line(t) {
+                                    continue;
+                                }
                                 // gdb MI 就绪探测：`(gdb)` 提示或 token 后首字符是 MI 记录符。
                                 if !ready {
                                     let body = t.trim_start_matches(|c: char| c.is_ascii_digit());
@@ -388,9 +494,15 @@ pub async fn gdb_mi_start(
                                         || body.starts_with(|c: char| "^*+=~@&".contains(c))
                                     {
                                         ready = true;
+                                        ready_flag.store(true, Ordering::SeqCst);
+                                        ready_deadline = None;
+                                        let _ = app.emit(
+                                            GDB_ASYNC_EVENT,
+                                            json!({ "session_id": sid, "class": "ready", "payload": {} }),
+                                        );
                                     }
                                 }
-                                handle_line(line.trim_end(), &mut pending, &app, &sid);
+                                handle_line(line.trim_end(), &done, &notify, &app, &sid);
                             }
                             // su 的密码提示不带换行，会留在 linebuf 尾部；见到提示就喂一次密码。
                             if let Some(pw) = pw_to_send.take() {
@@ -404,8 +516,7 @@ pub async fn gdb_mi_start(
                             }
                             // gdb 就绪后，把排队的命令按顺序补发。
                             if ready && !queued.is_empty() {
-                                for (token, line, reply) in queued.drain(..) {
-                                    pending.insert(token, reply);
+                                for (token, line) in queued.drain(..) {
                                     let _ = channel.data(format!("{token}{line}\n").as_bytes()).await;
                                 }
                             }
@@ -416,13 +527,12 @@ pub async fn gdb_mi_start(
                 }
                 cmd = rx.recv() => {
                     match cmd {
-                        Some(GdbCmd::Mi { token, line, reply }) => {
+                        Some(GdbCmd::Mi { token, line }) => {
                             if ready {
-                                pending.insert(token, reply);
                                 let _ = channel.data(format!("{token}{line}\n").as_bytes()).await;
                             } else {
                                 // gdb 尚未就绪（可能在 su 认证中）：先排队，就绪后再发。
-                                queued.push((token, line, reply));
+                                queued.push((token, line));
                             }
                         }
                         Some(GdbCmd::Raw(text)) => {
@@ -436,6 +546,13 @@ pub async fn gdb_mi_start(
         if let Ok(mut sessions) = session_store().lock() {
             sessions.remove(&sid);
         }
+        // 会话收尾：标记不存活 → 唤醒所有等待者（它们会立刻收到"已断开"而不是干等到超时），
+        // 并把还没被取走的应答清掉。
+        alive.store(false, Ordering::SeqCst);
+        notify.notify_waiters();
+        if let Ok(mut d) = done.lock() {
+            d.clear();
+        }
         let _ = app.emit(GDB_EXIT_EVENT, json!({ "session_id": sid }));
         let _ = channel.eof().await;
         // 保持 SSH handle 存活至会话结束——否则连接会随 gdb_mi_start 返回而关闭。
@@ -447,7 +564,8 @@ pub async fn gdb_mi_start(
 
 fn handle_line(
     line: &str,
-    pending: &mut HashMap<u64, oneshot::Sender<Value>>,
+    done: &Arc<Mutex<HashMap<u64, Value>>>,
+    notify: &Arc<Notify>,
     app: &AppHandle,
     session_id: &str,
 ) {
@@ -459,11 +577,22 @@ fn handle_line(
             );
         }
         Record::Result { token, class, payload } => {
+            // 只要带 token，就是某条命令的应答：一律存进 `done` 等前端来取。
+            // 绝不能因为"当前没有人在等"就当成异步事件推给前端——那会把迟到的
+            // ^done 伪装成 *stopped 之类的通知，让界面错乱。
             if let Some(tok) = token {
-                if let Some(sender) = pending.remove(&tok) {
-                    let _ = sender.send(json!({ "class": class, "payload": payload }));
-                    return;
+                if let Ok(mut d) = done.lock() {
+                    if d.len() >= DONE_CAP {
+                        // 简单防膨胀：清掉一半（都是前端已放弃的旧应答）。
+                        let keys: Vec<u64> = d.keys().take(DONE_CAP / 2).copied().collect();
+                        for k in keys {
+                            d.remove(&k);
+                        }
+                    }
+                    d.insert(tok, json!({ "class": class, "payload": payload }));
                 }
+                notify.notify_waiters();
+                return;
             }
             // 无 token 的结果记录当作通知推前端
             let _ = app.emit(
@@ -524,38 +653,80 @@ fn normalize_command(command: &str) -> String {
     }
 }
 
-/// K1：下发一条命令（MI 或 CLI），返回结构化结果记录 {class, payload}。
+/// K1a：**异步提交**一条命令（MI 或 CLI），立刻返回 token；应答用 `gdb_mi_await` 取。
+///
+/// 这是本模块的关键设计：命令与应答解耦，前端的等待时长完全由自己掌握——
+/// 对端慢（加载符号、链路卡）时不会被后端的固定超时掐断，迟到的应答也不会丢。
 #[command]
-pub async fn gdb_mi_command(session_id: String, command: String) -> Result<Value, String> {
-    let session = {
-        let store = session_store().lock().map_err(|_| "会话锁失败".to_string())?;
-        store.get(&session_id).cloned()
-    }
-    .ok_or_else(|| "gdb 会话不存在".to_string())?;
-
+pub fn gdb_mi_submit(session_id: String, command: String) -> Result<u64, String> {
+    let session = get_session(&session_id)?;
     let token = session.token.fetch_add(1, Ordering::SeqCst);
-    let (reply_tx, reply_rx) = oneshot::channel();
     let line = normalize_command(&command);
     session
         .cmd_tx
-        .send(GdbCmd::Mi { token, line, reply: reply_tx })
+        .send(GdbCmd::Mi { token, line })
         .map_err(|_| "gdb 会话已关闭".to_string())?;
+    Ok(token)
+}
 
-    match tokio::time::timeout(Duration::from_secs(30), reply_rx).await {
-        Ok(Ok(v)) => Ok(v),
-        Ok(Err(_)) => Err("gdb 未返回结果".to_string()),
-        Err(_) => Err("gdb 命令超时".to_string()),
+/// K1b：等待某 token 的应答，最多等 `wait_ms`（默认 1s，上限 60s）。
+///
+/// - 返回 `Some(应答体)`：拿到了（取走后不再保留）。
+/// - 返回 `None`：还在路上，调用方可以继续等（前端据此刷新"已等待 Ns"并允许取消）。
+/// - 返回 `Err(...)`：会话已结束/已断开——调用方应立即停止等待，而不是等满超时。
+#[command]
+pub async fn gdb_mi_await(
+    session_id: String,
+    token: u64,
+    wait_ms: Option<u64>,
+) -> Result<Option<Value>, String> {
+    let session = get_session(&session_id)?;
+    let budget = Duration::from_millis(wait_ms.unwrap_or(1000).min(60_000));
+    let deadline = Instant::now() + budget;
+    loop {
+        if let Ok(mut d) = session.done.lock() {
+            if let Some(v) = d.remove(&token) {
+                return Ok(Some(v));
+            }
+        }
+        // 会话已结束：立刻告知，别让前端干等到自己的上限。
+        if !session.alive.load(Ordering::SeqCst) {
+            return Err("会话已结束（gdb 进程已退出或连接断开）".to_string());
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(None);
+        }
+        // 有新应答会被唤醒；否则睡到本次预算用尽。
+        let _ = tokio::time::timeout(remaining, session.notify.notified()).await;
+    }
+}
+
+/// 便捷包装：提交 + 等满 timeout_ms（默认 60s）。保留给一次性调用的场景。
+#[command]
+pub async fn gdb_mi_command(
+    session_id: String,
+    command: String,
+    timeout_ms: Option<u64>,
+) -> Result<Value, String> {
+    let token = gdb_mi_submit(session_id.clone(), command)?;
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms.unwrap_or(60_000));
+    loop {
+        match gdb_mi_await(session_id.clone(), token, Some(1000)).await? {
+            Some(v) => return Ok(v),
+            None => {
+                if Instant::now() >= deadline {
+                    return Err("gdb 命令超时".to_string());
+                }
+            }
+        }
     }
 }
 
 /// 发送原始文本（交互输入 / 目标进程 stdin）。
 #[command]
 pub fn gdb_mi_raw(session_id: String, text: String) -> Result<(), String> {
-    let session = {
-        let store = session_store().lock().map_err(|_| "会话锁失败".to_string())?;
-        store.get(&session_id).cloned()
-    }
-    .ok_or_else(|| "gdb 会话不存在".to_string())?;
+    let session = get_session(&session_id)?;
     session.cmd_tx.send(GdbCmd::Raw(text)).map_err(|_| "gdb 会话已关闭".to_string())
 }
 
@@ -566,9 +737,30 @@ pub fn gdb_mi_close(session_id: String) -> Result<(), String> {
         store.remove(&session_id)
     };
     if let Some(s) = session {
+        // 先唤醒等待者：正在 `gdb_mi_await` 的前端应立刻收到"已结束"，而不是等满自己的上限。
+        finish_session(&s);
         let _ = s.cmd_tx.send(GdbCmd::Close);
     }
     Ok(())
+}
+
+/// 会话状态快照，供前端渲染"正在建立 / 等待应答 / 已结束"等提示。
+#[derive(Serialize)]
+pub struct GdbSessionState {
+    pub alive: bool,
+    pub ready: bool,
+    /// 尚未被取走的应答条数（可粗略反映"对端积压"）。
+    pub pending_results: usize,
+}
+
+#[command]
+pub fn gdb_mi_state(session_id: String) -> Result<GdbSessionState, String> {
+    let s = get_session(&session_id)?;
+    Ok(GdbSessionState {
+        alive: s.alive.load(Ordering::SeqCst),
+        ready: s.ready.load(Ordering::SeqCst),
+        pending_results: s.done.lock().map(|d| d.len()).unwrap_or(0),
+    })
 }
 
 // ============================ 调试宏（K7） ============================

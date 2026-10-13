@@ -89,6 +89,7 @@ pub mod tts_book;
 pub mod syntax_highlight;
 pub mod typst_compile;
 pub mod pdf_reader;
+pub mod preview_render_cache;
 pub mod synctex;
 pub mod task_block;
 pub mod taskmanager;

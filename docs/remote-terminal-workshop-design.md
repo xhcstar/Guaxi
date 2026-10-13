@@ -44,9 +44,32 @@
 - 仅连 gdb（coredump/手动）。
 
 **[已实现] attach 健壮性**（修"启动闪退/无法加断点"）：
-- `use_sudo` 勾选时命令前缀 `sudo -n`，并给通道**申请 PTY**（满足 sudo 的 `requiretty`）。
+- 提权方式 `none/sudo/su`：`sudo` 用 `sudo -n`（免密），`su` 用 `su -c '<cmd>'` 并在 PTY 上喂 root 密码。两者都需要 PTY（`requiretty` / su 读 `/dev/tty`），故申请 PTY。
+- **PTY 回显必须关掉**：PTY 默认把输入回显一遍，我们写进去的每条 MI 命令都会被 tty 回显混进 gdb 的 MI 输出流——既污染解析，又可能与 gdb 输出**交错截断**记录（`*stopped` 被吃掉 → 表现为"卡在断点/命令超时"）。做法是命令链前置 `stty -echo 2>/dev/null; exec`，并在解析器里用 `is_echo_line()` 兜底过滤（MI 记录的 token 后必为 `^ * + = ~ @ &`，否则就是回显）。
 - MI 解析器把**非 MI 文本（sudo/gdb 的 stderr：ptrace/tty/password 等）转发到控制台**，不再静默吞掉。
 - gdb 退出后保留并在空状态区展示控制台输出；前端区分"会话已退出/ptrace 受限/sudo 需免密/PID 不存在"并给出对应提示（如 `echo 0 > /proc/sys/kernel/yama/ptrace_scope`、配置 NOPASSWD、同用户）。
+
+**运行中不下发栈/变量查询**：目标运行中时 gdb 会把 `-stack-*` / `-var-*` / `-data-evaluate-expression` 之类的命令**排队到停下才回复**，前端只会干等超时——这是"命令超时/取不到结果"的主因。前端维护 `isRunning`（由 `*running` / `*stopped` 驱动，发出 resume 命令时乐观置位），`blockedWhileRunning()` 在这些查询入口直接拦截并提示"运行中，需停下后才可查"；`refreshAll` 与停住后的 `refreshOnStop` 都改为**逐个 await**（不再并发，避免多条命令在 gdb 侧排队互相拖累）。
+
+### 交互架构：提交 / 等待分离（对慢对端健壮）
+
+原设计是"发一条命令 → 后端固定 30s 超时 → 抛错给用户"，对**慢对端**（加载大符号表、链路卡顿、su 认证慢）不成立：不是对端坏了，只是慢；而超时后应答也被丢掉。现在拆成两步，等待时长完全由前端掌握：
+
+| 命令 | 作用 |
+|---|---|
+| `gdb_mi_submit(session_id, command) -> token` | 登记并下发，**立即返回 token**，不等应答 |
+| `gdb_mi_await(session_id, token, wait_ms) -> Option<Value>` | 取应答：`Some` 拿到；`None` 还在路上（可继续等）；`Err` 会话已结束 |
+| `gdb_mi_state(session_id) -> {alive, ready, pending_results}` | 会话状态快照 |
+| `gdb_mi_command(...)` | 一次性包装（submit + 等满），保留给单次调用场景 |
+
+要点：
+- **应答不再丢**：会话任务把每条带 token 的 Result 存进共享 `done: HashMap<token, Value>` 并 `notify_waiters()`；前端不管等多久、中途刷新几次，都能取到。旧实现用 oneshot，超时即丢，且**迟到的 `^done` 会被误当成异步通知推给前端**（会把界面搞乱）——现在带 token 的结果一律只进 `done`，绝不当异步事件。
+- **会话结束即时感知**：`alive` 置 false + 唤醒等待者，在途 `await` 立刻返回"会话已结束"，而不是干等满自己的上限。
+- **就绪超时**：su 认证 + gdb 启动若在 `READY_TIMEOUT_SECS`(45s) 内没完成，后端把**排队中的命令全部以明确错误回掉**并推 `notready` 事件（提示 su 密码错/远端无 gdb/登录脚本卡住），前端不会无限等。
+- **前端等待可见**：等待中的命令进入 `inflight`，顶栏显示"正在建立（su 认证 / gdb 启动）N s"或"等待对端响应 N s"，超过 6s 追加"较慢：对端可能在加载符号或链路卡顿，可继续等或点中断"。等待期间每 ~4s 用 `gdb_mi_state` 同步一次状态（既区分两种等待，也兜住 `ready` 事件漏收）。
+- **等待有上限但不报错**：单条命令上限 10 分钟，到点只"停止等待"并说明，不再抛 error。
+- **区分"提示"与"错误"**：会话结束、等待超时这类可自愈的情况走 `notice`（琥珀色、自动消失），只有真正的失败才进 `error`（红色）。
+- `done` 设上限 `DONE_CAP`(512) 防无界增长；组件卸载/结束会话时清理计时器与在途列表。
 
 **[已实现] 三栏布局 + 固定标题的分块面板**：中间列固定为「源码对照 + 控制台 + 命令输入」；左右两侧各有一条**可拖宽**的侧栏，面板分块停放——
 - 左栏：断点、调用栈（可点选帧 `-stack-select-frame`）、局部变量（`-stack-list-variables`）、变量树（`-var-create`/`-var-list-children`，支持 natural/hex/dec/bin 切换 `-var-set-format`）；
