@@ -151,6 +151,38 @@
             </template>
             行内代码
           </n-tooltip>
+          <!-- 字体颜色。Markdown 本身没有颜色语法，但 markdown-it 开着 `html: true`，
+               所以直接插内联 <span style="color:…"> 就能在预览与各阅读器里生效 ——
+               不动渲染器、不引入新语法。
+               弹层用 raw 自己排版，免得 naive-ui 的默认内边距/底色把色板网格撑得难看。 -->
+          <n-popover trigger="click" placement="bottom" :show-arrow="false" raw>
+            <template #trigger>
+              <n-tooltip placement="top" trigger="hover">
+                <template #trigger>
+                  <n-button text size="tiny">
+                    <Icon :icon="paletteIcon" width="16" height="16" />
+                  </n-button>
+                </template>
+                字体颜色
+              </n-tooltip>
+            </template>
+
+            <div class="gx-color-palette">
+              <div class="gx-color-palette__title">字体颜色</div>
+              <div class="gx-color-palette__grid">
+                <button v-for="swatch in FONT_COLOR_PALETTE" :key="swatch" type="button" class="gx-color-swatch"
+                  :style="{ '--gx-swatch': swatch }" :title="swatch" :aria-label="`字体颜色 ${swatch}`"
+                  @click="applyFontColor(swatch)"></button>
+              </div>
+              <div class="gx-color-palette__divider"></div>
+              <label class="gx-color-custom">
+                <span class="gx-color-custom__dot" :style="{ '--gx-swatch': customFontColor }"></span>
+                <span class="gx-color-custom__text">自定义颜色</span>
+                <span class="gx-color-custom__value">{{ customFontColor }}</span>
+                <input type="color" v-model="customFontColor" @change="applyFontColor(customFontColor)" />
+              </label>
+            </div>
+          </n-popover>
           <n-dropdown trigger="click" :options="codeBlockOptions" @select="handleCodeBlockSelect">
             <n-tooltip placement="top" trigger="hover">
               <template #trigger>
@@ -1063,6 +1095,36 @@
             </template>
             引用
           </n-tooltip>
+          <!-- 字体颜色：与主工具栏同一个色板（说明见上面的同名块）。放在这里更顺手 ——
+               浮动工具栏本来就是"选中文字"时浮出来的，套色正是选中之后的动作。 -->
+          <n-popover trigger="click" placement="bottom" :show-arrow="false" raw>
+            <template #trigger>
+              <n-tooltip placement="top" trigger="hover">
+                <template #trigger>
+                  <n-button text size="tiny">
+                    <Icon :icon="paletteIcon" width="16" height="16" />
+                  </n-button>
+                </template>
+                字体颜色
+              </n-tooltip>
+            </template>
+
+            <div class="gx-color-palette">
+              <div class="gx-color-palette__title">字体颜色</div>
+              <div class="gx-color-palette__grid">
+                <button v-for="swatch in FONT_COLOR_PALETTE" :key="swatch" type="button" class="gx-color-swatch"
+                  :style="{ '--gx-swatch': swatch }" :title="swatch" :aria-label="`字体颜色 ${swatch}`"
+                  @click="applyFontColor(swatch)"></button>
+              </div>
+              <div class="gx-color-palette__divider"></div>
+              <label class="gx-color-custom">
+                <span class="gx-color-custom__dot" :style="{ '--gx-swatch': customFontColor }"></span>
+                <span class="gx-color-custom__text">自定义颜色</span>
+                <span class="gx-color-custom__value">{{ customFontColor }}</span>
+                <input type="color" v-model="customFontColor" @change="applyFontColor(customFontColor)" />
+              </label>
+            </div>
+          </n-popover>
 
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
@@ -1400,6 +1462,7 @@ import headingIcon from '@iconify-icons/lucide/heading'
 import boldIcon from '@iconify-icons/lucide/bold'
 import italicIcon from '@iconify-icons/lucide/italic'
 import strikethroughIcon from '@iconify-icons/lucide/strikethrough'
+import paletteIcon from '@iconify-icons/lucide/palette'
 import linkIcon from '@iconify-icons/lucide/link'
 import quoteIcon from '@iconify-icons/lucide/quote'
 import codeIcon from '@iconify-icons/lucide/code'
@@ -13305,6 +13368,25 @@ const wrapSelection = (prefix, suffix, placeholder = '') => {
   }
 
   editor.focus();
+};
+
+// ───── 字体颜色 ─────
+// Markdown 没有颜色语法，但 markdown-it 开着 `html: true`，内联 HTML 会被原样保留，
+// 所以直接插入 <span style="color:…"> 就能在预览与各阅读器里生效，不需要动渲染器。
+// 色板刻意都选中间调：浅色底与深色底上都要读得清（同一份文档在两种主题下共用这套颜色）。
+const FONT_COLOR_PALETTE = [
+  '#e11d48', '#f97316', '#eab308', '#84cc16', '#22c55e', '#14b8a6',
+  '#06b6d4', '#3b82f6', '#6366f1', '#8b5cf6', '#d946ef', '#ec4899',
+  '#ef4444', '#f59e0b', '#10b981', '#0ea5e9', '#64748b', '#94a3b8',
+];
+
+const customFontColor = ref('#3b82f6');
+
+/** 把选中文字包进带颜色的 <span>；没有选区时插入占位文字并选中它，直接打字即可覆盖。 */
+const applyFontColor = (color) => {
+  const value = String(color || '').trim().toLowerCase();
+  if (!/^#[0-9a-f]{6}$/.test(value)) return;
+  wrapSelection(`<span style="color:${value}">`, '</span>', '文字');
 };
 
 const insertBlockSnippet = (snippet) => {
@@ -29833,6 +29915,113 @@ body.guaxi-tab-dragging * {
 
 :global(:root[data-guaxi-theme='dark']) .guaxi-inline-dataframe__table th {
   background: rgba(51, 65, 85, 0.72);
+}
+
+/* ───────────────────── 字体颜色色板 ───────────────────── */
+
+.gx-color-palette {
+  padding: 10px 12px 11px;
+  min-width: 208px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 10px;
+  background: var(--guaxi-panel-bg);
+  /* 弹层是 raw 的，阴影得自己给；否则浮在编辑器上会和背景糊在一起、分不出层次。 */
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18), 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+.gx-color-palette__title {
+  margin-bottom: 8px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--guaxi-text-secondary);
+}
+
+.gx-color-palette__grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 7px;
+}
+
+.gx-color-swatch {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  background: var(--gx-swatch);
+  /* 浅色块在浅色底上会“浮不起来”，用一圈极淡的内描边兜住边界。 */
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.gx-color-swatch:hover {
+  transform: scale(1.16);
+  /* 两层外环：先垫一圈面板底色把相邻色块隔开，再套一圈本色，像从色盘上“拿起一颗”。 */
+  box-shadow:
+    inset 0 0 0 1px rgba(0, 0, 0, 0.1),
+    0 0 0 2px var(--guaxi-panel-bg),
+    0 0 0 3.5px var(--gx-swatch);
+}
+
+.gx-color-swatch:active {
+  transform: scale(1.04);
+}
+
+.gx-color-palette__divider {
+  height: 1px;
+  margin: 11px 0 7px;
+  background: var(--guaxi-border);
+}
+
+.gx-color-custom {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 7px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+
+.gx-color-custom:hover {
+  background: var(--guaxi-header-bg);
+}
+
+.gx-color-custom__dot {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--gx-swatch);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+
+.gx-color-custom__text {
+  flex: 1 1 auto;
+  font-size: 12px;
+  color: var(--guaxi-text-primary);
+}
+
+.gx-color-custom__value {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--guaxi-text-secondary);
+}
+
+/* 原生取色器铺满整行、完全透明地接点击：省掉自绘输入框 + 十六进制校验那一堆代码，
+   而“点开系统取色盘”这个交互本身是用户熟悉的。 */
+.gx-color-custom input[type='color'] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  cursor: pointer;
 }
 
 </style>
