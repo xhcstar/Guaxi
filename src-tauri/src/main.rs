@@ -669,6 +669,8 @@ async fn main() {
             commands::settingview::set_terminal_config,
             commands::settingview::get_chat_record_root,
             commands::settingview::set_chat_record_root,
+            commands::settingview::get_marker_ocr_mode,
+            commands::settingview::set_marker_ocr_mode,
             commands::settingview::get_markdown_models_status,
             commands::settingview::get_local_deepseek_status,
             commands::settingview::get_local_qwen_status,

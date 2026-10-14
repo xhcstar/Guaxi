@@ -379,6 +379,42 @@ fn build_fast_plan(
     })
 }
 
+/// 按设置页的 OCR 策略决定 marker 调不调用 VLM。
+///
+/// 为什么要有策略而不是一个开关：CPU 上 VLM 解码只有约 6 token/s（170ms/token），
+/// 一次整页 OCR 要数分钟，上千页根本跑不完；但"干脆不用 OCR"又会让扫描件彻底没内容。
+/// 所以做成三档，默认 `auto`：
+/// - `auto`：**有 GPU 时按 `full`**（OCR 很快，不该为速度牺牲质量）；**没有 GPU 时**把判断
+///   下推给脚本——数字文档跳过 OCR（秒级），扫描件仍照常 OCR（慢但必要）。
+///   这样"只有 CPU 的机器"依然能处理扫描件，只是慢。
+/// - `full`：完全交给 marker（等价于它自己的行为，质量最高）。
+/// - `text_only`：永不调用 VLM，只抽文本层（最快；扫描件会几乎没有内容）。
+///
+/// `GUAXI_MARKER_DISABLE_OCR=1` 仍作为最高优先级的应急开关（排查用）。
+fn apply_marker_ocr_policy(cmd: &mut TokioCommand) {
+    let emergency_off = std::env::var("GUAXI_MARKER_DISABLE_OCR")
+        .map(|value| matches!(value.trim(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false);
+    if emergency_off {
+        cmd.args(["--ocr_mode", "text_only"]);
+        return;
+    }
+
+    let effective = match crate::commands::settingview::marker_ocr_mode().as_str() {
+        "text_only" => "text_only",
+        "full" => "full",
+        // auto：只有在没有 GPU 时才让脚本按文档类型判断。
+        _ => {
+            if super::provision::marker_uses_cuda() {
+                "full"
+            } else {
+                "auto"
+            }
+        }
+    };
+    cmd.args(["--ocr_mode", effective]);
+}
+
 /// Marker 引擎是否就绪：独立的 uv venv 或旧的 conda 分发版任一可用。
 pub fn marker_engine_ready() -> bool {
     super::provision::marker_runtime().is_some() || marker_available()
@@ -409,6 +445,7 @@ fn build_marker_plan(
                 .arg("markdown")
                 .arg("--paginate_output");
             apply_marker_mode(&mut cmd);
+            apply_marker_ocr_policy(&mut cmd);
             cmd.arg("--output_dir")
                 .arg(&expected_output_dir)
                 .arg("--progress_json");
@@ -555,6 +592,16 @@ fn apply_marker_env(cmd: &mut TokioCommand, model_dir: &str) {
     if std::env::var("HF_ENDPOINT").is_err() {
         cmd.env("HF_ENDPOINT", "https://hf-mirror.com");
     }
+    // 模型已在本地时进入 HuggingFace 离线模式。
+    //
+    // 为什么要这样：联网模式下 `snapshot_download` 每次转换都会先请求 HF API 核对 revision，
+    // 即便缓存命中也得走一次网络。实测就撞到过这一次请求被重置、整次转换直接失败的
+    // `httpx.ConnectError: [SSL: UNEXPECTED_EOF_WHILE_READING]`。对上千页的大任务来说，
+    // 一次瞬时抖动毁掉整轮转换是不可接受的。离线模式既去掉这个单点故障，也省掉加载前的网络往返。
+    if std::env::var("HF_HUB_OFFLINE").is_err() && super::provision::marker_models_ready() {
+        cmd.env("HF_HUB_OFFLINE", "1");
+        cmd.env("TRANSFORMERS_OFFLINE", "1");
+    }
     // 刻意**不**设置 SURYA_INFERENCE_KEEP_ALIVE：开启后推理服务会在转换进程退出后继续常驻，
     // 成为应用关不掉的孤儿进程（占住数 GB 内存/显存）。默认（关闭）下服务随转换进程一起结束，
     // 与应用既有的“不留残余进程”约定一致。用户若显式设置该变量则遵从用户。
@@ -562,6 +609,19 @@ fn apply_marker_env(cmd: &mut TokioCommand, model_dir: &str) {
     cmd.env("MODEL_CACHE_DIR", model_dir);
     // 代理：本地推理服务走 127.0.0.1，必须排除；境外下载则走系统代理。
     super::net::apply_proxy_env(cmd);
+
+    // 每次转换打一行运行参数，便于排查“到底有没有用上 GPU / 走了哪个后端”。
+    info!(
+        cuda_torch = super::provision::marker_uses_cuda(),
+        backend = std::env::var("SURYA_INFERENCE_BACKEND")
+            .unwrap_or_else(|_| "auto".to_string())
+            .as_str(),
+        llama_server = llama_server_ready,
+        models_local = super::provision::marker_models_ready(),
+        via_proxy = super::net::effective_proxy().is_some(),
+        mode = std::env::var("GUAXI_MARKER_MODE").unwrap_or_else(|_| "auto".to_string()).as_str(),
+        "[convert] marker 运行参数（GPU 加速需 cuda_torch=true 且 llama.cpp 为 CUDA 构建）"
+    );
 }
 
 fn build_mineru_plan(

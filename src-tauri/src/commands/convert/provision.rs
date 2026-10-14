@@ -1064,29 +1064,17 @@ fn tail_lines(text: &str, count: usize) -> String {
 
 // ───────────────────────── Marker：模型 ─────────────────────────
 
-/// HF 缓存里某个仓库目录是否存在（`HUGGINGFACE_HUB_CACHE` 直接指向模型目录）。
-fn hf_repo_cached(model_dir: &Path, repo_id: &str) -> bool {
-    let dir_name = format!("models--{}", repo_id.replace('/', "--"));
-    let dir = model_dir.join(dir_name);
-    if !dir.is_dir() {
-        return false;
-    }
-    // snapshot 目录下有真实文件才算数（只有 refs/locks 的空壳不算）。
-    let snapshots = dir.join("snapshots");
-    let Ok(entries) = std::fs::read_dir(&snapshots) else {
-        return false;
-    };
-    entries.flatten().any(|entry| entry.path().is_dir())
-}
-
-/// 模型是否齐全（廉价文件系统检查，供 UI 与启动装配判断）。
+/// 模型是否齐全（廉价文件系统检查，供 UI、启动装配与转换进程共用）。
+///
+/// 复用离线模型包同一套校验：必须真的能读到权重文件，而不只是"目录存在"。
+/// 这个判定还会决定两件事，所以必须验到文件级：
+/// - 跳过启动时的模型预下载；
+/// - 让转换进程进入 HuggingFace 离线模式（模型已在本地，不再需要联网核对 revision）。
 pub fn marker_models_ready() -> bool {
     let Ok(dir) = marker_model_dir() else {
         return false;
     };
-    hf_repo_cached(&dir, "datalab-to/surya-ocr-2-gguf")
-        && hf_repo_cached(&dir, "datalab-to/surya_layout2")
-        && dir.join("ocr_error_detection").join("2025_02_18").join("manifest.json").is_file()
+    crate::commands::settingview::verify_installed_markdown_models(&dir).is_ok()
 }
 
 /// 下载 marker/surya 模型（阻塞）。交给 fork 里的 `download_surya_models.py`：
@@ -1291,6 +1279,100 @@ pub fn spawn_startup_provision() {
             warn!(error = %e, "[convert] 启动装配任务 join 失败");
         }
     });
+}
+
+// ───────────────────────── surya 推理服务残留清理 ─────────────────────────
+
+/// surya 推理服务哨兵目录：`~/.cache/datalab/surya`（各平台同一路径，surya 自己写死）。
+fn surya_sentinel_dir() -> Option<PathBuf> {
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .ok()?;
+    if home.trim().is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(home).join(".cache").join("datalab").join("surya"))
+}
+
+/// 端口上确实有人在监听吗（用来确认哨兵对应的服务还活着，避免误杀复用了 PID 的无关进程）。
+fn port_is_listening(port: u16) -> bool {
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).is_ok()
+}
+
+/// 结束一个进程（尽力而为，失败只记日志）。
+fn kill_pid(pid: u32) {
+    #[cfg(windows)]
+    {
+        let mut cmd = Command::new("taskkill");
+        cmd.args(["/F", "/PID", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        no_window(&mut cmd);
+        let _ = cmd.status();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+/// 收掉残留的 surya 推理服务（VLM / 布局 / OCR 识别各一个独立进程）。
+///
+/// 为什么需要：这些服务是 surya 以“分离进程”方式拉起来的，正常退出时靠 atexit 收掉，
+/// **但转换被强杀（用户取消、任务失败、应用退出）时 atexit 不会执行**，它们就会变成
+/// 孤儿进程继续占着内存/显存——实测取消两次就留下了两个。
+///
+/// 做法：读 surya 自己写的哨兵 `<backend>_server.json`（含 pid 与 port），
+/// 确认该端口**仍在监听**后结束该进程并删掉哨兵。带端口校验是为了避免 PID 被复用后误杀无关进程。
+pub fn cleanup_surya_servers() {
+    let Some(dir) = surya_sentinel_dir() else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.ends_with("_server.json") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            // 哨兵损坏：删掉，避免下次读到旧的 PID。
+            let _ = std::fs::remove_file(&path);
+            continue;
+        };
+        let pid = value.get("pid").and_then(serde_json::Value::as_u64).unwrap_or(0) as u32;
+        let port = value.get("port").and_then(serde_json::Value::as_u64).unwrap_or(0) as u16;
+
+        if pid == 0 {
+            let _ = std::fs::remove_file(&path);
+            continue;
+        }
+        if port != 0 && !port_is_listening(port) {
+            // 端口已无人监听 → 服务早没了，只清哨兵。
+            let _ = std::fs::remove_file(&path);
+            continue;
+        }
+
+        kill_pid(pid);
+        let _ = std::fs::remove_file(&path);
+        info!(
+            backend = name.as_str(),
+            pid,
+            port,
+            "[convert] 已清理残留的 surya 推理服务进程"
+        );
+    }
 }
 
 #[cfg(test)]

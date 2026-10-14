@@ -31,6 +31,18 @@ static QUEUE: OnceLock<Arc<ConversionQueue>> = OnceLock::new();
 /// 全局最大并发（含 fast/heavy）。heavy 另受 heavy_lock 串行约束。
 const MAX_WORKERS: usize = 3;
 
+/// marker 引擎收尾：清理 surya 派生的推理服务残留进程。
+///
+/// 这些服务（VLM / 快速布局 / OCR 识别各一个）是 surya 以**分离进程**方式拉起来的，
+/// 正常退出时靠 atexit 收掉；但转换被强杀（用户取消、等待失败、应用退出）时 atexit 不会执行，
+/// 它们会变成孤儿继续占着内存/显存——上千页的任务里每个服务都是几百 MB 到数 GB，
+/// 不收拾会越积越多。因此取消与正常结束两条路径都要扫一遍。
+fn cleanup_marker_surya_servers(engine: Engine) {
+    if engine == Engine::Marker {
+        super::provision::cleanup_surya_servers();
+    }
+}
+
 #[derive(Clone, Serialize)]
 struct LegacyProgress {
     current: u32,
@@ -197,6 +209,7 @@ impl ConversionQueue {
             }
         };
 
+        let engine = plan.engine;
         let expected_md = plan.expected_md_path.clone();
         let mut cmd = plan.command;
 
@@ -315,6 +328,7 @@ impl ConversionQueue {
                         crate::guaxiservices::process_shutdown::unregister_managed_pid(converter_pid);
                         let _ = child.kill().await;
                         info!(task_id, "任务被取消，已终止子进程");
+                        cleanup_marker_surya_servers(engine);
                         // 取消状态已在 DB，直接返回
                         if let Some(h) = stdout_handle {
                             let _ = h.await;
@@ -338,6 +352,7 @@ impl ConversionQueue {
             let _ = h.await;
         }
         crate::guaxiservices::process_shutdown::unregister_managed_pid(converter_pid);
+        cleanup_marker_surya_servers(engine);
 
         let status = match status {
             Ok(s) => s,

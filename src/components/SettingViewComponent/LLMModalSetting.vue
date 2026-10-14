@@ -191,6 +191,14 @@
               <span class="status-name">Marker 运行环境</span>
             </div>
             <div class="status-right">
+              <n-select
+                size="tiny"
+                style="width: 168px"
+                :value="markerOcrMode"
+                :options="markerOcrModeOptions"
+                :disabled="loading || savingMarkerOcr"
+                @update:value="changeMarkerOcrMode"
+              />
               <n-button
                 size="tiny"
                 type="primary"
@@ -210,6 +218,7 @@
                   <div class="status-tip-title">Marker 运行环境</div>
                   <div class="status-tip-desc">首次启动会在后台自动装配（联网即可，无需手动配置）</div>
                   <div class="status-tip-desc">torch：{{ engineStatus.markerCuda ? 'CUDA 版（GPU 加速）' : 'CPU 版' }}</div>
+                  <div class="status-tip-desc">OCR 策略：{{ markerOcrModeHint }}</div>
                   <div v-if="engineStatus.markerDegraded" class="status-tip-desc">
                     降级模式：定制源码未取到，当前使用通用版 marker-pdf（功能不受影响）
                   </div>
@@ -772,6 +781,7 @@ const loadConfig = async () => {
     // 转换引擎（marker 运行环境 / 模型）的装配状态由后端统一提供；
     // 运行环境不再走离线压缩包，改由启动时后台自动装配。
     await refreshEngineStatus()
+    await refreshMarkerOcrMode()
 
     const localStatus = await invoke('get_local_deepseek_status')
     localDeepseekStatus.value = {
@@ -908,6 +918,55 @@ const markerEnvBadgeIcon = computed(() => {
   if (preparingMarkerEnv.value || engineStatus.value.markerProvisioning) return TimeOutline
   return engineStatus.value.markerReady ? CheckmarkCircleOutline : CloseCircleOutline
 })
+
+// ── marker 的 OCR 策略 ──
+// 为什么需要它：CPU 上 VLM 解码只有约 6 token/s，一次整页 OCR 要数分钟，上千页跑不完；
+// 但直接关掉 OCR 又会让扫描件彻底没内容。所以给三档，默认“自动”：
+// 有 GPU 时按“全质量”处理，没 GPU 时才让后端按文档类型决定（数字文档跳过、扫描件保留）。
+const markerOcrMode = ref('auto')
+const savingMarkerOcr = ref(false)
+const markerOcrModeOptions = [
+  { value: 'auto', label: '自动（推荐）' },
+  { value: 'full', label: '全质量（始终允许 OCR）' },
+  { value: 'text_only', label: '仅文本层（最快）' },
+]
+
+const markerOcrModeHint = computed(() => {
+  switch (markerOcrMode.value) {
+    case 'text_only':
+      return '永不调用 OCR：最快，但扫描件会几乎没有内容'
+    case 'full':
+      return '始终允许 OCR：质量最高；无 GPU 时扫描件每页可能要数分钟'
+    default:
+      return engineStatus.value.markerCuda
+        ? '已检测到 GPU：按「全质量」处理（OCR 很快，不牺牲质量）'
+        : '未检测到 GPU：数字文档自动跳过 OCR（快），扫描件仍走 OCR（较慢但可用）'
+  }
+})
+
+const refreshMarkerOcrMode = async () => {
+  try {
+    const mode = await invoke('get_marker_ocr_mode')
+    markerOcrMode.value = typeof mode === 'string' && mode ? mode : 'auto'
+  } catch (e) {
+    logger.error('读取 marker OCR 策略失败:', e)
+  }
+}
+
+const changeMarkerOcrMode = async (value) => {
+  savingMarkerOcr.value = true
+  try {
+    const mode = String(value || 'auto')
+    await invoke('set_marker_ocr_mode', { mode })
+    markerOcrMode.value = mode
+    message.success('已保存 OCR 策略，下次转换生效')
+  } catch (e) {
+    logger.error('保存 marker OCR 策略失败:', e)
+    message.error(`保存 OCR 策略失败: ${String(e?.message || e || '')}`)
+  } finally {
+    savingMarkerOcr.value = false
+  }
+}
 
 /// 读取转换引擎装配状态（marker 运行环境 / 模型）。
 const refreshEngineStatus = async () => {

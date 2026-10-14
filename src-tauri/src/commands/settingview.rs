@@ -70,6 +70,10 @@ pub struct AppConfig {
     slidev_repo_root: String,
     #[serde(default = "default_chat_record_root")]
     chat_record_root: String,
+    /// 文档转换（marker）的 OCR 策略：`auto` | `full` | `text_only`。
+    /// 语义见 `convert::engine::apply_marker_ocr_policy`；设置页可切换。
+    #[serde(default = "default_marker_ocr_mode")]
+    marker_ocr_mode: String,
     #[serde(default)]
     knowledge_bases_root: String,
     #[serde(default)]
@@ -846,6 +850,7 @@ impl Default for AppConfig {
             template_repo_path: "".to_string(),
             slidev_repo_root: "".to_string(),
             chat_record_root: default_chat_record_root(),
+            marker_ocr_mode: default_marker_ocr_mode(),
             knowledge_bases_root: "".to_string(),
             knowledge_bases_remote_url: "".to_string(),
             knowledge_bases_remote_username: "".to_string(),
@@ -1643,6 +1648,42 @@ pub fn set_chat_record_root(path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// marker OCR 策略的默认值：`auto`。
+///
+/// 为什么不直接默认 `full`：纯 CPU 机器上 VLM 解码只有约 6 token/s，扫描件每页要几分钟，
+/// 上千页基本跑不完；但也不能默认 `text_only`——那会让扫描件彻底没内容。
+/// `auto` 把判断交给运行时：有 GPU 就按 `full`（不该为了速度牺牲质量），
+/// 没 GPU 时才让脚本按文档类型决定（数字文档跳过 OCR，扫描件照常 OCR）。
+pub fn default_marker_ocr_mode() -> String {
+    "auto".to_string()
+}
+
+/// 当前 marker OCR 策略（已归一化，非法值回退默认）。
+pub fn marker_ocr_mode() -> String {
+    let mode = load_config().marker_ocr_mode.trim().to_ascii_lowercase();
+    match mode.as_str() {
+        "auto" | "full" | "text_only" => mode,
+        _ => default_marker_ocr_mode(),
+    }
+}
+
+#[tauri::command]
+pub fn get_marker_ocr_mode() -> String {
+    marker_ocr_mode()
+}
+
+#[tauri::command]
+pub fn set_marker_ocr_mode(mode: String) -> Result<(), String> {
+    let normalized = mode.trim().to_ascii_lowercase();
+    if !matches!(normalized.as_str(), "auto" | "full" | "text_only") {
+        return Err(format!("不支持的 marker OCR 策略: {mode}"));
+    }
+    let mut config = load_config();
+    config.marker_ocr_mode = normalized;
+    save_config(&config);
+    Ok(())
+}
+
 fn exe_dir() -> Result<PathBuf, String> {
     let exe_path = env::current_exe().map_err(|e| e.to_string())?;
     exe_path
@@ -2281,11 +2322,75 @@ fn find_snapshot_file(repo_dir: &Path, file_name: &str) -> Option<PathBuf> {
     None
 }
 
+/// 判断一个 HuggingFace 缓存仓库是否是**完整快照**。
+///
+/// 为什么完整性是硬要求：模型就地就绪后，转换进程会进入 `HF_HUB_OFFLINE=1` 离线模式
+/// （本地有模型就不必每次转换都先去 HF API 核对 revision，大陆网络下那次请求经常抖动，
+/// 实测撞到过它把整次转换打断）。而 huggingface_hub 在离线模式下会拿下载时留下的仓库清单
+/// `trees/<rev>.json` 逐个核对本地文件，**缺任何一个就直接抛 IncompleteSnapshotError**，
+/// 哪怕缺的只是不参与推理的 LICENSE / README.md。
+///
+/// 所以这里做与 hub 相同的核对：清单里的每个文件都必须在 snapshots 下真实存在（跟随符号链接），
+/// 且大小一致。清单不存在时**判定为不完整**——这样老版本下载脚本留下的"只下权重"的缓存会被
+/// 判为未就绪，从而触发一次补齐下载（下载脚本自身是整仓拉取），自愈成完整快照。
+fn hf_cache_complete(repo_dir: &Path) -> Result<(), String> {
+    let snapshots = repo_dir.join("snapshots");
+    let rev_dir = fs::read_dir(&snapshots)
+        .map_err(|e| format!("缺少 snapshots 目录 {}: {e}", snapshots.display()))?
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| path.is_dir())
+        .ok_or_else(|| format!("snapshots 目录为空: {}", snapshots.display()))?;
+
+    let rev = rev_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("无法解析 revision 名: {}", rev_dir.display()))?;
+
+    let tree_file = repo_dir.join("trees").join(format!("{rev}.json"));
+    let text = fs::read_to_string(&tree_file).map_err(|e| {
+        format!(
+            "缺少仓库清单 {}（无法确认缓存完整，需重新下载）: {e}",
+            tree_file.display()
+        )
+    })?;
+    let parsed: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("仓库清单解析失败: {e}"))?;
+    let files = parsed
+        .get("files")
+        .and_then(|value| value.as_object())
+        .ok_or_else(|| "仓库清单缺少 files 字段".to_string())?;
+
+    for (relative, meta) in files {
+        let local = rev_dir.join(relative.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let actual = fs::metadata(&local).map_err(|e| {
+            format!("缓存不完整：缺少 {relative}（{e}）")
+        })?;
+        if !actual.is_file() {
+            return Err(format!("缓存不完整：{relative} 不是文件"));
+        }
+        if let Some(expected) = meta.get("size").and_then(|value| value.as_u64()) {
+            if expected > 0 && actual.len() != expected {
+                return Err(format!(
+                    "缓存损坏：{relative} 大小不符（期望 {expected}，实际 {}）",
+                    actual.len()
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// 校验离线模型包的安装结果：关键权重必须**真的能读到**，而不是断链/被跳过后的空壳。
 ///
 /// 阈值 1 MB 只用来区分“真实权重”与“丢了链接后残留的路径文本文件”（几十字节），
 /// 不是精度门槛，因此不会因为模型换量化版本而误报。
-fn verify_installed_markdown_models(root: &Path) -> Result<(), String> {
+///
+/// 同时被文档转换模块复用（`provision::marker_models_ready`）：那里用它判定“模型是否齐全”，
+/// 而该判定又会决定是否跳过预下载、以及让转换进程进入 HF 离线模式，所以必须验到文件级，
+/// 而且要验到**完整快照**（见 [`hf_cache_complete`]）。
+pub(crate) fn verify_installed_markdown_models(root: &Path) -> Result<(), String> {
     const MIN_WEIGHT_BYTES: u64 = 1024 * 1024;
 
     let gguf_repo = root.join("models--datalab-to--surya-ocr-2-gguf");
@@ -2322,6 +2427,17 @@ fn verify_installed_markdown_models(root: &Path) -> Result<(), String> {
         return Err(
             "离线模型包不完整：缺少 ocr_error_detection/2025_02_18/manifest.json".to_string(),
         );
+    }
+
+    // 关键权重都在之后，还要确认 HF 缓存是**完整快照**：
+    // 转换进程的就绪判定会据此开启离线模式，而离线模式对不完整缓存是硬失败。
+    for repo in [
+        "models--datalab-to--surya-ocr-2-gguf",
+        "models--datalab-to--surya_layout2",
+    ] {
+        hf_cache_complete(&root.join(repo)).map_err(|error| {
+            format!("{error}（仓库 {repo}；重新下载模型即可补齐）")
+        })?;
     }
 
     Ok(())
