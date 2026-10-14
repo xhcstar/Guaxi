@@ -182,7 +182,14 @@ UI 约定（全页统一）：
 - **先看清再执行**：`cmd_dispatch_plan` 只展开+排序不下发，UI 用它做"预览将要逐条执行的命令"与配置校验。
 - **YAML ⇄ 任务表双向同步**：YAML 只由后端解析/生成（`cmd_dispatch_parse` / `cmd_dispatch_to_yaml`），前端不引 YAML 库，任务表的改动回写成 YAML 再送去预览/执行。
 - **凭证**：优先复用库内 SSH 档案；enable 口令另存 keychain（`guaxi-ssh-enable`）。配置里带 `global` 段时也可直接用它直连（兼容原工具用法）。
-- **编辑方式**：「图形」（任务表：命令列给足宽度、多行输入，长命令也能看全）与「文本」（整块 YAML，批量改效率高）两种模式切换，YAML 与任务表双向同步。
+- **编辑方式**：「图形」（任务表：命令列给足宽度、多行输入，长命令也能看全）与「文本」（**Monaco 编辑器**编辑整块 YAML，批量改效率高）两种模式切换，YAML 与任务表双向同步。
+  - Monaco **懒加载**：只有切到文本模式才 `import('monaco-editor')` + YAML 语法贡献（`basic-languages/yaml/yaml.contribution`，Monarch 分词，无需额外 worker），不打开这个模式就不付这份体积。
+  - **生命周期**：加载是异步的，用 `disposed` 闸门保证"组件已卸载 / 已切回图形模式"时不再去 `create`；离开文本模式立刻 `dispose()` editor 与 model（顺序：先 editor 后 model）；`onDidChangeModelContent` 的 disposable 一并释放；外部改写 `yamlText` 时经 `setValue` 同步进 model（`pushingToModel` 标志防成环）。
+  - **主题**：`getGuaxiMonacoTheme(appearanceTheme)` → `guaxi-light`/`guaxi-dark`，并 `watch` 应用外观变化调 `editor.setTheme()`（与仓库其它 monaco 用法一致）。
+- **用外部编辑器打开 / 在文件管理器中显示**（`cmd_open_in_os` / `cmd_reveal_in_os`，**走后端**）：配置 YAML、每个任务的 PEM 文件、本次运行的 JSONL 日志都能一键"用系统默认程序打开"或"在文件管理器中定位"。
+  - 配置没有对应文件时先落到受管固定路径 `cmd_dispatch/config.yaml`（重复打开复用同一文件，外部编辑器里 reload 即可）；导入过 config.yaml 则直接开用户那份。
+  - 相对 PEM 路径按「导入 config.yaml 的目录」解析（与执行时一致），解析不出绝对路径时明确提示而不是静默失败。
+  - **为什么不用前端 `plugin-opener`**：本仓库能力文件把 `opener:allow-open-path` 限定在 `$APPDATA/resume-builder/**`，前端 openPath 会被权限拦下；后端走系统 `start`/`open`/`xdg-open` 不受该作用域限制（复用 resource_hunter 里已有的 `open_in_os`/`reveal_in_os`，已提升为 `pub(crate)`）。
 - **策略库**（`cmd_strategy_*`，落 `app_data/cmd_dispatch/strategies.json`）：把一组 targets+tasks 存成命名策略，下次一键载入复用。**凭据不入库**（保存时清空 `global`），所以策略可安全分享。
 - **文件选择**（`cmd_dispatch_stage_pem`）：任务的 `pem_file` 可点文件图标从**证书页的 CA 库 / 终端证书库**直接取（证书/私钥/整链），或选任意本地文件；取出的内容落到受管目录 `app_data/cmd_dispatch/pem/` 并回填绝对路径（内容相同复用同一文件）。
 
@@ -201,7 +208,7 @@ UI 约定（全页统一）：
 - ssh_terminal/serial_telnet/sftp_fs：见 §3。
 - remote_terminal_tools：`ssh_exec_capture` `ssh_read_text_file` `gdb_coredump_analyze` `ssh_start_periodic/stop` `binary_analyze` `crypto_inspect`。
 - crypto_lab：`crypto_load_bytes` `crypto_pem_details` `crypto_gen_key` `crypto_gen_csr` `crypto_issue_cert` `crypto_sign_csr` `crypto_verify_cert` `crypto_pfx_parse/build` `crypto_sym` `crypto_rsa_crypt` `crypto_sign/verify` `crypto_hash` `crypto_ca_list/create/import/delete/export/revoke/gen_crl` `crypto_issue_from_ca` `crypto_leaf_list/delete/export` `crypto_asset_list/save/get/delete`；[可选特性 tlcp] `crypto_engine::{ca_create,issue_leaf,gen_crl}`、`crypto_engine::ntls`。
-- cmd_dispatch / cmd_catalog：`cmd_dispatch_plan`（只展开+排序，不下发）`cmd_dispatch_parse` / `cmd_dispatch_to_yaml`（YAML ⇄ 结构，供任务表双向同步）`cmd_dispatch_run` `cmd_dispatch_cancel` `cmd_dispatch_stage_pem`（PEM 落受管目录）`cmd_strategy_list/save/load/delete`（策略库）`cmd_catalog_list` `cmd_scenario_list` `cmd_scenario_render`；事件 `cmd-dispatch-task` / `cmd-dispatch-done`。ssh_terminal 另加 `ssh_set_enable_secret` / `ssh_delete_enable_secret` / `ssh_has_enable_secret`（enable 口令进 keychain）。
+- cmd_dispatch / cmd_catalog：`cmd_dispatch_plan`（只展开+排序，不下发）`cmd_dispatch_parse` / `cmd_dispatch_to_yaml`（YAML ⇄ 结构，供任务表双向同步）`cmd_dispatch_run` `cmd_dispatch_cancel` `cmd_dispatch_stage_pem`（PEM 落受管目录）`cmd_dispatch_stage_config`（YAML 落受管固定路径）`cmd_open_in_os` / `cmd_reveal_in_os`（用系统程序打开 / 在文件管理器中定位）`cmd_strategy_list/save/load/delete`（策略库）`cmd_catalog_list` `cmd_scenario_list` `cmd_scenario_render`；事件 `cmd-dispatch-task` / `cmd-dispatch-done`。ssh_terminal 另加 `ssh_set_enable_secret` / `ssh_delete_enable_secret` / `ssh_has_enable_secret`（enable 口令进 keychain）。
 - source_locate：`cmd_source_locate`（按规则把调试路径映射到本机/远端源码，返回命中路径 + 规则 + 尝试过的候选 + 建议）`cmd_source_read`（本机 fs / 远端 SSH 读正文）`ssh_list_dirs`（列远端子目录，选编译机源码根用）。
 
 

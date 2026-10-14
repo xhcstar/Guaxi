@@ -1032,6 +1032,9 @@ fn runs() -> &'static Mutex<RunMap> {
 pub struct RunStarted {
     pub run_id: String,
     pub plan: Plan,
+    /// 本次运行的 JSONL 日志路径（供 UI「用外部编辑器打开 / 在文件管理器中显示」）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_path: Option<String>,
 }
 
 /// 解析这次运行要用的连接凭据：优先库内 SSH 档案，否则用配置里 `global` 段。
@@ -1113,6 +1116,7 @@ pub async fn cmd_dispatch_run(
         .insert(run_id.clone(), DispatchRun { cancel: cancel.clone() });
 
     let log_path = run_log_path(&app, &run_id).ok();
+    let log_path_str = log_path.as_ref().map(|p| p.to_string_lossy().to_string());
     let kind = opts.session_kind();
     let probe_rc = opts.probe_rc();
     let steps = plan.steps.clone();
@@ -1197,7 +1201,7 @@ pub async fn cmd_dispatch_run(
         runs().lock().map(|mut m| m.remove(&rid)).ok();
     });
 
-    Ok(RunStarted { run_id, plan })
+    Ok(RunStarted { run_id, plan, log_path: log_path_str })
 }
 
 /// 取消一次运行：置标志（正在进行的命令会在下一次检查点退出）。
@@ -1331,6 +1335,39 @@ pub fn cmd_strategy_delete(app: AppHandle, id: String) -> Result<(), String> {
     let mut all = read_strategies(&app)?;
     all.retain(|s| s.id != id);
     write_strategies(&app, &all)
+}
+
+/// 用系统默认程序打开一个路径（YAML 配置、证书/私钥、运行日志…）。
+///
+/// 走**后端**而不是前端的 `plugin-opener`：`opener:allow-open-path` 在本仓库的能力文件里
+/// 被限定在 `$APPDATA/resume-builder/**`，前端直接 openPath 会被权限拦下；后端用系统
+/// `start`/`open`/`xdg-open` 则不受该作用域限制（与 resource_hunter 的同类命令一致）。
+#[command]
+pub fn cmd_open_in_os(path: String) -> Result<(), String> {
+    crate::commands::resource_hunter::open_in_os(&path)
+}
+
+/// 在系统文件管理器中定位一个文件。
+#[command]
+pub fn cmd_reveal_in_os(path: String) -> Result<(), String> {
+    crate::commands::resource_hunter::reveal_in_os(&path)
+}
+
+/// 把当前 YAML 配置落到受管目录的固定路径（`cmd_dispatch/config.yaml`），返回路径。
+///
+/// 给「用外部编辑器打开」用：固定文件名让重复打开复用同一个文件（外部编辑器里 reload 即可），
+/// 也让用户在文件管理器里能一眼找到。
+#[command]
+pub fn cmd_dispatch_stage_config(app: AppHandle, content: String) -> Result<String, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("取应用数据目录失败: {e}"))?
+        .join("cmd_dispatch");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("建目录失败: {e}"))?;
+    let path = dir.join("config.yaml");
+    std::fs::write(&path, content).map_err(|e| format!("写入配置失败: {e}"))?;
+    Ok(path.to_string_lossy().to_string())
 }
 
 /// 把一段 PEM（来自 CA 库 / 终端证书库 / 任意来源）落到受管目录并返回绝对路径。

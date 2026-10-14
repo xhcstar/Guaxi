@@ -375,7 +375,8 @@ pub async fn rh_import_library(app: AppHandle, path: String) -> Result<usize, St
     store::import_rows(&rows)
 }
 
-fn reveal_in_os(path: &str) -> Result<(), String> {
+/// 在系统文件管理器中定位路径。供其它模块（如命令下发）复用。
+pub(crate) fn reveal_in_os(path: &str) -> Result<(), String> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -419,7 +420,8 @@ fn reveal_in_os(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn open_in_os(path: &str) -> Result<(), String> {
+/// 用系统默认程序打开路径。供其它模块（如命令下发）复用。
+pub(crate) fn open_in_os(path: &str) -> Result<(), String> {
     #[cfg(windows)]
     {
         std::process::Command::new("cmd")

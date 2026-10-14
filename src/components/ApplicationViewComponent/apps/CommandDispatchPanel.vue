@@ -70,17 +70,18 @@
               <button class="tb-ib" @click="exportYaml"><Icon :icon="saveIcon" width="15" height="15" /></button>
             </template>导出 config.yaml 到文件</n-tooltip>
           </template>
+          <n-tooltip trigger="hover"><template #trigger>
+            <button class="tb-ib" @click="openConfigExternally"><Icon :icon="externalIcon" width="15" height="15" /></button>
+          </template>用系统默认程序（你的编辑器）打开这份 YAML。没有对应文件时会先存到受管目录，改完回来点上传图标重新载入</n-tooltip>
+          <n-tooltip trigger="hover"><template #trigger>
+            <button class="tb-ib" @click="revealConfig"><Icon :icon="revealIcon" width="15" height="15" /></button>
+          </template>在系统文件管理器中显示这份 YAML 文件</n-tooltip>
         </div>
-        <div class="cd-scroll">
-          <!-- 文本模式：直接编辑 YAML，长命令/批量改效率高 -->
+        <div class="cd-scroll" :class="{ 'cd-fill': editMode === 'text' }">
+          <!-- 文本模式：Monaco 编辑 YAML（懒加载，切进这个模式才加载 monaco） -->
           <template v-if="editMode === 'text'">
-            <n-input
-              v-model:value="yamlText"
-              type="textarea"
-              class="cd-yaml-edit"
-              placeholder="config.yaml 原文：targets + tasks ..."
-            />
-            <div class="cd-hint">改完点上面的上传图标解析回任务表。字段与参考工具的 config.yaml 完全一致。</div>
+            <div ref="yamlEditorEl" class="cd-yaml-monaco"></div>
+            <div class="cd-hint">改完点上面的上传图标解析回任务表。字段与参考工具的 config.yaml 完全一致。{{ yamlEditorReady ? '' : '（编辑器加载中…）' }}</div>
           </template>
 
           <template v-else>
@@ -119,6 +120,12 @@
                       <n-tooltip trigger="hover"><template #trigger>
                         <button class="tb-ib" @click="openPemPicker(t)"><Icon :icon="fileIcon" width="15" height="15" /></button>
                       </template>选择要导入的证书/私钥文件：可从证书页的 CA 库 / 终端证书库直接取，也可选任意本地文件</n-tooltip>
+                      <n-tooltip trigger="hover"><template #trigger>
+                        <button class="tb-ib" :disabled="!t.pem_file" @click="openFileExternally(t.pem_file)"><Icon :icon="externalIcon" width="15" height="15" /></button>
+                      </template>用系统默认程序打开这个证书/私钥文件</n-tooltip>
+                      <n-tooltip trigger="hover"><template #trigger>
+                        <button class="tb-ib" :disabled="!t.pem_file" @click="revealFile(t.pem_file)"><Icon :icon="revealIcon" width="15" height="15" /></button>
+                      </template>在系统文件管理器中显示这个文件</n-tooltip>
                     </div>
                     <n-input v-model:value="t.index" size="small" placeholder="index" style="width:80px;margin-top:4px" @update:value="syncYaml" />
                   </td>
@@ -155,6 +162,12 @@
             <button class="tb-ib danger" @click="doCancel"><Icon :icon="stopIcon" width="15" height="15" /></button>
           </template>取消本次下发</n-tooltip>
           <span class="cd-stat" v-if="runStat">{{ runStat }}</span>
+          <n-tooltip v-if="runLogPath" trigger="hover"><template #trigger>
+            <button class="tb-ib" @click="openFileExternally(runLogPath)"><Icon :icon="externalIcon" width="15" height="15" /></button>
+          </template>用系统默认程序打开本次运行的 JSONL 日志</n-tooltip>
+          <n-tooltip v-if="runLogPath" trigger="hover"><template #trigger>
+            <button class="tb-ib" @click="revealFile(runLogPath)"><Icon :icon="revealIcon" width="15" height="15" /></button>
+          </template>在系统文件管理器中显示本次运行的日志文件</n-tooltip>
           <span v-if="notice" class="cd-notice">{{ notice }}</span>
           <span v-if="error" class="cd-err">{{ error }}</span>
         </div>
@@ -324,11 +337,13 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { readTextFile } from '@tauri-apps/plugin-fs'
+import { useSettingsStore } from '../../../stores/settingsStore'
+import { getGuaxiMonacoTheme } from '../../../monaco/guaxiMonacoThemes'
 import { Icon } from '@iconify/vue'
 import keyIcon from '@iconify-icons/lucide/key-round'
 import folderIcon from '@iconify-icons/lucide/folder-open'
@@ -347,10 +362,13 @@ import downloadIcon from '@iconify-icons/lucide/download'
 import xIcon from '@iconify-icons/lucide/x'
 import scrollTextIcon from '@iconify-icons/lucide/scroll-text'
 import keyRoundIcon from '@iconify-icons/lucide/key-round'
+import externalIcon from '@iconify-icons/lucide/external-link'
 
 // 证书图标沿用与证书页一致的语义（证书=卷轴、私钥=钥匙）。
 const certIcon = scrollTextIcon
 const key2Icon = keyRoundIcon
+// 「在文件管理器中显示」沿用打开目录的图标。
+const revealIcon = folderIcon
 
 // ============ 状态 ============
 const profiles = ref([])
@@ -406,6 +424,10 @@ const running = ref(false)
 const runId = ref('')
 const runStat = ref('')
 const lastOutput = ref('')
+/// 本次运行的 JSONL 日志路径（后端返回，供外部打开/定位）。
+const runLogPath = ref('')
+/// 当前这份 YAML 对应的文件路径（导入过 config.yaml 就是它；否则首次"外部打开"时落受管目录）。
+const configPath = ref('')
 let unlisteners = []
 
 const leftWidth = ref(560)
@@ -420,6 +442,107 @@ function setHostnames(v) { cfg.value.targets.hostnames = v.split(',').map(s => s
 // 域名列表只放真实域名即可：host 级任务靠 only_if_no_domain 强制 domain=""，不依赖这里有没有空项。
 function setDomains(v) { cfg.value.targets.domains = v.split(',').map(s => s.trim()).filter(Boolean); syncYaml() }
 function setDeps(t, v) { t.depends_on = String(v).split(',').map(s => s.trim()).filter(Boolean); syncYaml() }
+
+// ============ Monaco（YAML 文本模式）============
+//
+// 加载策略：**懒加载**。只有切到「文本」模式才 dynamic import monaco 与 yaml 语法贡献，
+// 不打开这个模式就完全不加载（monaco 是 MB 级依赖）。加载是异步的，中途可能组件已卸载
+// 或用户又切回图形模式，所以用 disposed / 模式判断做闸门，避免"已销毁还去 create"。
+const settingsStore = useSettingsStore()
+const yamlEditorEl = ref(null)
+const yamlEditorReady = ref(false)
+let monacoNs = null            // import('monaco-editor') 的结果
+let yamlContributionLoaded = false
+let yamlEditor = null          // monaco editor 实例
+let yamlModel = null           // 独立的 model（dispose 时一并释放）
+let yamlChangeSub = null       // onDidChangeModelContent 的 disposable
+let creating = false
+let disposed = false
+/// 程序化写入 model 时置位，避免与 watch 互相触发成环。
+let pushingToModel = false
+
+async function loadMonaco() {
+  if (monacoNs) return monacoNs
+  const tasks = [import('monaco-editor')]
+  if (!yamlContributionLoaded) {
+    // YAML 是 basic-language（Monarch 分词），无需独立 worker，但要显式加载它的贡献点才有高亮。
+    tasks.push(
+      import('monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution').then(() => {
+        yamlContributionLoaded = true
+      }),
+    )
+  }
+  const [m] = await Promise.all(tasks)
+  monacoNs = m
+  return m
+}
+
+async function ensureYamlEditor() {
+  if (yamlEditor || creating || disposed) return
+  creating = true
+  try {
+    const m = await loadMonaco()
+    // 加载是异步的：回来时可能已卸载、或已切回图形模式、或容器还没渲染出来。
+    if (disposed || editMode.value !== 'text' || !yamlEditorEl.value) return
+    yamlModel = m.editor.createModel(yamlText.value || '', 'yaml')
+    yamlEditor = m.editor.create(yamlEditorEl.value, {
+      model: yamlModel,
+      theme: getGuaxiMonacoTheme(settingsStore.appearanceTheme),
+      automaticLayout: true,     // 容器尺寸变化（拖分隔条、切标签）自动重排
+      fontSize: 13,
+      lineNumbers: 'on',
+      tabSize: 2,
+      minimap: { enabled: false },
+      scrollBeyondLastLine: false,
+      wordWrap: 'on',
+      renderWhitespace: 'selection',
+      fixedOverflowWidgets: true,
+      scrollbar: { alwaysConsumeMouseWheel: false },
+    })
+    yamlChangeSub = yamlEditor.onDidChangeModelContent(() => {
+      if (pushingToModel || !yamlModel) return
+      yamlText.value = yamlModel.getValue()
+    })
+    yamlEditorReady.value = true
+    await nextTick()
+    yamlEditor.layout()
+  } catch (e) {
+    error.value = '加载 YAML 编辑器失败: ' + (e?.message || e)
+  } finally {
+    creating = false
+  }
+}
+
+function disposeYamlEditor() {
+  yamlChangeSub?.dispose?.()
+  yamlChangeSub = null
+  // 先销毁 editor 再销毁 model（顺序反了 monaco 会告警/残留）。
+  try { yamlEditor?.dispose() } catch (_) {}
+  try { yamlModel?.dispose() } catch (_) {}
+  yamlEditor = null
+  yamlModel = null
+  yamlEditorReady.value = false
+}
+
+// 切模式：进文本模式才创建，离开就立刻释放，不把 monaco 实例挂在后台。
+watch(editMode, async (v) => {
+  if (v === 'text') { await nextTick(); ensureYamlEditor() } else { disposeYamlEditor() }
+})
+
+// 外部改写了 yamlText（场景生成/导入/策略载入/图形模式编辑）：同步进编辑器。
+// 用 setValue 会清掉撤销栈，但那几件事本来就是"换掉整份配置"，语义上正确。
+watch(yamlText, (v) => {
+  if (!yamlModel || pushingToModel) return
+  if (yamlModel.getValue() !== v) {
+    pushingToModel = true
+    try { yamlModel.setValue(v || '') } finally { pushingToModel = false }
+  }
+})
+
+// 明暗主题跟随应用外观（setTheme 是全局的，与仓库里其它 monaco 用法一致）。
+watch(() => settingsStore.appearanceTheme, (t) => {
+  if (yamlEditor && monacoNs) monacoNs.editor.setTheme(getGuaxiMonacoTheme(t))
+})
 
 // ============ YAML 双向同步（YAML 只由后端解析，前端不引 YAML 库） ============
 let syncing = false
@@ -525,8 +648,9 @@ async function importYaml() {
   const path = typeof sel === 'string' ? sel : sel?.path
   try {
     yamlText.value = await readTextFile(path)
-    // PEM 相对路径以该配置文件所在目录为基准。
+    // PEM 相对路径以该配置文件所在目录为基准；同时记住文件本身，供「用外部编辑器打开」。
     baseDir.value = String(path).replace(/\\/g, '/').split('/').slice(0, -1).join('/')
+    configPath.value = path
     const c = await invoke('cmd_dispatch_parse', { configYaml: yamlText.value })
     cfg.value = { global: c.global || {}, targets: c.targets || { hostnames: [], domains: [] }, tasks: c.tasks || [], continue_on_error: !!c.continue_on_error }
     if (cfg.value.global?.ip && !profileId.value) note(`配置里带了 global.ip=${cfg.value.global.ip}，未选档案时将用它直连`)
@@ -537,8 +661,53 @@ async function exportYaml() {
   try {
     await syncYaml()
     const p = await save({ defaultPath: 'config.yaml', filters: [{ name: 'YAML', extensions: ['yaml', 'yml'] }] })
-    if (p) { await invoke('write_file_content', { path: p, content: yamlText.value }); note('已导出: ' + p) }
+    if (p) { await invoke('write_file_content', { path: p, content: yamlText.value }); configPath.value = p; note('已导出: ' + p) }
   } catch (e) { error.value = '导出失败: ' + (e?.message || e) }
+}
+
+// ============ 用外部编辑器打开 / 在文件管理器中显示 ============
+//
+// 相对路径按"导入 config.yaml 的目录"解析（与执行时的 PEM 解析规则一致），
+// 否则把相对路径交给系统也打不开。绝对路径（含盘符 / UNC / POSIX）直接用。
+function resolvePath(p) {
+  const s = String(p || '').trim()
+  if (!s) return ''
+  if (/^[A-Za-z]:[\\/]/.test(s) || s.startsWith('/') || s.startsWith('\\\\')) return s
+  if (baseDir.value) return baseDir.value.replace(/[\\/]+$/, '') + '/' + s.replace(/^\.\//, '')
+  return ''
+}
+async function openFileExternally(p) {
+  const abs = resolvePath(p)
+  if (!abs) {
+    error.value = `无法确定该文件的绝对路径（${p}）。相对路径需要先「导入 config.yaml」以确定基准目录，或直接填绝对路径。`
+    return
+  }
+  try { await invoke('cmd_open_in_os', { path: abs }) } catch (e) { error.value = '用外部程序打开失败: ' + (e?.message || e) }
+}
+async function revealFile(p) {
+  const abs = resolvePath(p)
+  if (!abs) { error.value = `无法定位：${p} 不是可解析的绝对路径（相对路径请先导入 config.yaml）。`; return }
+  try { await invoke('cmd_reveal_in_os', { path: abs }) } catch (e) { error.value = '在文件管理器中显示失败: ' + (e?.message || e) }
+}
+/// 保证当前 YAML 有一个磁盘文件：已导入/导出过就用它，否则落到受管目录（固定文件名）。
+async function ensureConfigFile() {
+  if (configPath.value) return configPath.value
+  await syncYaml()
+  configPath.value = await invoke('cmd_dispatch_stage_config', { content: yamlText.value })
+  return configPath.value
+}
+async function openConfigExternally() {
+  error.value = ''
+  try {
+    const p = await ensureConfigFile()
+    await invoke('cmd_open_in_os', { path: p })
+    note('已用外部程序打开（' + p + '）；改完回来点上传图标重新载入')
+  } catch (e) { error.value = '打开配置失败: ' + (e?.message || e) }
+}
+async function revealConfig() {
+  error.value = ''
+  try { await invoke('cmd_reveal_in_os', { path: await ensureConfigFile() }) }
+  catch (e) { error.value = '定位配置失败: ' + (e?.message || e) }
 }
 
 // ============ 任务表 ============
@@ -669,6 +838,7 @@ async function doRun() {
         probeRc: probeRc.value,
       },
     })
+    runLogPath.value = r.log_path || ''
     runStat.value = `执行中 0/${r.plan.task_count}`
   } catch (e) { error.value = '下发失败: ' + (e?.message || e); running.value = false }
 }
@@ -721,6 +891,10 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   unlisteners.forEach(u => u())
   if (noticeTimer) clearTimeout(noticeTimer)
+  // 先置 disposed 再释放：正在 await 的 ensureYamlEditor 回来后会看到它并直接退出，
+  // 不会在组件销毁后再去 create（那会留下永远无人释放的 editor/model）。
+  disposed = true
+  disposeYamlEditor()
 })
 </script>
 
@@ -757,8 +931,9 @@ onBeforeUnmount(() => {
 .cd-desc { display: block; margin-top: 3px; font-size: 11.5px; color: var(--guaxi-text-secondary); }
 .cd-res { font-family: var(--tw-mono-font); font-size: 12px; }
 .cd-sub { margin: 12px 0 4px; font-size: 12.5px; font-weight: 600; color: var(--tw-accent); }
-.cd-yaml-edit { height: 100%; }
-.cd-yaml-edit :deep(.n-input__textarea-el) { font-family: var(--tw-mono-font); font-size: 13px; line-height: 1.55; height: 100%; min-height: 60vh; }
+.cd-yaml-monaco { flex: 1 1 auto; min-height: 0; width: 100%; border: 1px solid var(--guaxi-border); border-radius: var(--tw-radius-sm); overflow: hidden; }
+/* 文本模式下让滚动交给 Monaco 自己，外层不再滚 */
+.cd-scroll.cd-fill { display: flex; flex-direction: column; overflow: hidden; gap: 6px; }
 .cd-cmd { font-family: var(--tw-mono-font); max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cd-reason { font-size: 11px; color: var(--guaxi-text-secondary); max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cd-st { white-space: nowrap; }
