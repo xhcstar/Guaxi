@@ -4308,7 +4308,12 @@ watch(canUseNotebookSurface, (enabled) => {
     })
     editorSurfaceMode.value = 'source'
     if (String(editorStore.homePreviewModeKey || '') === 'explorer') {
-      setHomePreviewModeKeySafe('edit')
+      // 设计说明（对应“从 Markdown 探索者模式切到 .org，org 的预览/分屏被降级成编辑模式”）：
+      // 本 watcher 的 pre-flush 早于 selectedFile watcher，触发时 selectedFile 已经是**新文件**，
+      // 但“探索者模式失效”是刚切走的那个 Markdown 文档的状态。这里只把全局键退回 edit，
+      // 绝不能登记到新文档名下：否则新文档自己的模式记忆会被 'edit' 覆盖，
+      // restoreDocPreviewMode 再读到的就是 edit，用户看到的就是“模式被降级成编辑模式”。
+      setHomePreviewModeKeySafe('edit', { registerDoc: false })
     }
   }
   if (enabled && editorSurfaceMode.value === 'source') {
@@ -22004,11 +22009,13 @@ const getHomePreviewModeKeyFromState = () => {
   return normalizeHomePreviewModeKey(previewMode.value);
 };
 
-const setHomePreviewModeKeySafe = (key) => {
+const setHomePreviewModeKeySafe = (key, { registerDoc = true } = {}) => {
   const next = normalizeHomePreviewModeKey(key);
 
   // 同步把这次模式记到“当前文档”名下，供切 tab 时按文档恢复。只在单文件布局登记。
-  if (layoutMode.value === 'single') {
+  // registerDoc=false 用于「能力兜底」式的降级：那种降级来自刚切走的文档或旧状态，
+  // 归属不明确，写进新文档名下会污染它自己的模式记忆。
+  if (registerDoc && layoutMode.value === 'single') {
     const ownerPath = docModeKeyOf(selectedFile.value?.path || fileTreeStore.activeTab || '');
     if (ownerPath) docPreviewModeKeyByPath.set(ownerPath, next);
   }
@@ -22245,14 +22252,16 @@ const restoreDocPreviewMode = async (path, reason = 'tab-switch') => {
   // 典型场景：全局上次停在探索者/预览，这次打开的却是真正不支持的文件——切 tab 不该打扰用户。
   // 判定必须用 canUsePreviewSurface（含 .tex/.typ/.org 各自的独立预览面）：只看 canPreview
   // 会把这几类文档误判成“不支持预览”，把它们的模式记忆永远砸回编辑模式。
-  if (targetKey === 'explorer' && !canUseNotebookSurface.value) targetKey = 'edit';
-  if ((targetKey === 'preview' || targetKey === 'split') && !canUsePreviewSurface.value) targetKey = 'edit';
+  let downgradedByCapability = false;
+  if (targetKey === 'explorer' && !canUseNotebookSurface.value) { targetKey = 'edit'; downgradedByCapability = true; }
+  if ((targetKey === 'preview' || targetKey === 'split') && !canUsePreviewSurface.value) { targetKey = 'edit'; downgradedByCapability = true; }
 
   const currentKey = getHomePreviewModeKeyFromState();
 
   if (targetKey === currentKey) {
     // 模式已经一致：无需切换，但补登记一次，保证新文档也拥有自己的记录。
-    docPreviewModeKeyByPath.set(key, currentKey);
+    // 能力兜底降级不算用户选择，不能写回：否则一次瞬时不可用就把该文档的记忆永久变成 edit。
+    if (!downgradedByCapability) docPreviewModeKeyByPath.set(key, currentKey);
     return;
   }
 
