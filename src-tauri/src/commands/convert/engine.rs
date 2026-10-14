@@ -251,7 +251,8 @@ pub async fn resolve_engine(requested: &str, input_path: &str) -> (Engine, Optio
         "fast" => Engine::Fast,
         "marker" => Engine::Marker,
         "mineru" => Engine::Mineru,
-        // 极速引擎只能被显式选择：探针脚本不认识 anydoc，auto 永远不会路由到它。
+        // 极速引擎（anydoc）：既可由用户显式选择，也会被探针路由到——
+        // 旧版 Office / RTF / OpenDocument（.doc/.ppt/.rtf/.odt…）只有它能读。
         "anydoc" => Engine::Anydoc,
         _ => {
             // auto：探针决定
@@ -814,6 +815,31 @@ mod tests {
         assert!(
             md.contains("Alice") && md.contains("Bob"),
             "markdown 应包含表格内容，实际: {md}"
+        );
+    }
+
+    /// 新路由的关键前提：旧版 Office 类格式必须真的能被 anydoc 读出来。
+    ///
+    /// 探针现在会把 `.doc/.ppt/.rtf/.odt…` 路由到极速引擎（因为快速引擎的 markitdown
+    /// 没有这些转换器）。这条测试用 RTF（纯文本、可手写）把该前提钉住，
+    /// 避免以后 anydoc 被换掉/降级时路由悄悄失效。
+    #[test]
+    fn convert_with_anydoc_handles_legacy_office_formats() {
+        let tmp = tempfile::TempDir::new().expect("temp dir");
+        let src = tmp.path().join("sample.rtf");
+        std::fs::write(
+            &src,
+            r"{\rtf1\ansi\deff0 {\fonttbl {\f0 Times;}}\f0\fs24 Hello RTF world.\par Second paragraph.\par}",
+        )
+        .expect("write rtf");
+
+        let out = tmp.path().join("sample").join("sample.md");
+        convert_with_anydoc(&src, &out).expect("RTF 应能被极速引擎转换");
+
+        let md = std::fs::read_to_string(&out).expect("read markdown");
+        assert!(
+            md.contains("Hello RTF world"),
+            "markdown 应包含正文，实际: {md}"
         );
     }
 

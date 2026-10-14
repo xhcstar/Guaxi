@@ -278,9 +278,29 @@ pub const PROBE_FILE: &str = "guaxi_probe.py";
 pub const MARKER_CONVERT_FILE: &str = "guaxi_marker_convert.py";
 pub const MINERU_CONVERT_FILE: &str = "guaxi_mineru_convert.py";
 
-/// 快速引擎所需的纯 Python 依赖（在托管 venv 中幂等安装）。
+/// 快速引擎所需的依赖（在托管 venv 中幂等安装）。
+///
 /// pymupdf4llm 会带入 PyMuPDF(fitz)，探针也依赖它做版面/公式分析。
-const FAST_ENGINE_PACKAGES: &[&str] = &["pymupdf4llm", "markitdown", "pymupdf"];
+///
+/// markitdown 的 Office 转换器依赖各自的可选 extra，而**本项目的依赖安装是按包名比对的**
+/// （`normalize_python_package_name` 会把 `markitdown[docx]` 里的 extras 剥成 `markitdown`，
+/// 于是被判定“已安装”而跳过安装），所以这里直接把底层包逐个列出来：
+/// - `mammoth`     → .docx
+/// - `python-pptx` → .pptx
+/// - `openpyxl`    → .xlsx
+/// - `xlrd`        → 旧版 .xls
+///
+/// 缺了它们 markitdown 会抛 MissingDependencyException，Word/PPT 直接转不了
+/// （实测：只装 `markitdown` 时 .docx 报 “dependencies needed to read .docx files have not been installed”）。
+const FAST_ENGINE_PACKAGES: &[&str] = &[
+    "pymupdf4llm",
+    "markitdown",
+    "pymupdf",
+    "mammoth",
+    "python-pptx",
+    "openpyxl",
+    "xlrd",
+];
 
 /// MinerU 强引擎的 pip 依赖（重，含 torch 与自有模型）。首次装配耗时长；
 /// 仅在“需要 mineru 且未装配”时按需触发。模型首次运行按需下载。

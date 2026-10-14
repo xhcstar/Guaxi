@@ -4,7 +4,8 @@
 //! - 简单文档走快速引擎（pymupdf4llm / markitdown），复杂理工科文档走强引擎（MinerU），
 //!   MinerU 不可用时自动回退到 marker。
 //! - 另有「极速引擎」（anydoc，纯 Rust）：零装配、进程内直调，只适合纯文本型文档、不做 OCR。
-//!   它不参与 auto 路由，只能由用户在下拉里显式选择。
+//!   既可以由用户在下拉里显式选择，也会被探针路由到——旧版 Office / RTF / OpenDocument
+//!   （.doc/.ppt/.rtf/.odt/.ods/.odp）只有它能读（快速引擎的 markitdown 没有这些转换器）。
 //! - 任务持久化到 SQLite `conversion_tasks`，支持进度检查、断点续跑、失败重试、取消。
 //! - 完全向后兼容：保留旧的 `conversion_progress` 事件与 `output_dir/{stem}/{stem}.md` 输出契约。
 //!
