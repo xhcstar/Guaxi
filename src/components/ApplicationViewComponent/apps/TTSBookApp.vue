@@ -652,7 +652,14 @@ const findSiblingJsonPath = (audioPath) => {
 
 const pickFiles = async () => {
   try {
-    const picked = await open({ multiple: true, directory: false, filters: [{ name: 'Book Files', extensions: ['pdf', 'docx', 'md', 'markdown', 'txt', 'epub'] }] })
+    const picked = await open({
+      multiple: true,
+      directory: false,
+      filters: [
+        { name: '电子书与文档', extensions: ['pdf', 'epub', 'mobi', 'azw3', 'docx', 'doc', 'md', 'markdown', 'txt'] },
+        { name: '所有文件', extensions: ['*'] },
+      ],
+    })
     if (typeof picked === 'string' && picked.trim()) {
       selectedFiles.value = [picked]
       return

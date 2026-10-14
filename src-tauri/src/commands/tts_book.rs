@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, hash_map::DefaultHasher};
 use std::fs;
 use std::hash::{Hash, Hasher};
-use std::io::Read;
+use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -41,7 +41,9 @@ struct TtsBookTaskControl {
 
 static TTS_BOOK_TASK_CONTROLS: Lazy<Mutex<HashMap<String, TtsBookTaskControl>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
-static PDF_EXTRACT_PANIC_HOOK_GUARD: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+/// 第三方解析库（pdf-extract / anydoc / ebook-rs）都可能被畸形输入触发 panic。
+/// panic hook 是进程级全局状态，并发替换会互相覆盖，所以本文件所有解析器共用这一把锁。
+static PARSER_PANIC_HOOK_GUARD: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 #[derive(Debug, Deserialize)]
 pub struct TtsBookConvertRequest {
@@ -292,7 +294,36 @@ pub async fn tts_book_convert(
     }
 
     let max_chunk_chars = request.max_chunk_chars.unwrap_or(180).clamp(80, 420);
-    let chunks = split_text_chunks_pro(&cleaned, max_chunk_chars);
+
+    // 先切章节、再在章节内部切分。这样整本音频就是所有分段的顺序拼接，
+    // 章节音频只是取其中一段切片——每段只合成一次。
+    // 旧实现先把整本逐段合成一遍、再逐章重新合成一遍，默认配置下 TTS 白跑一倍。
+    let chapters = if request.split_by_toc {
+        split_text_into_chapters(&cleaned, &extracted.toc)
+    } else {
+        Vec::new()
+    };
+    info!(chapter_count = chapters.len(), "tts_book_convert chapter split done");
+
+    // 未做章节拆分时把整份文本当作唯一一章来切分，后面的装配逻辑就不必再分叉。
+    let chunk_sources: Vec<&str> = if chapters.is_empty() {
+        vec![cleaned.as_str()]
+    } else {
+        chapters.iter().map(|(_, text)| text.as_str()).collect()
+    };
+
+    let mut chunks: Vec<TextChunk> = Vec::new();
+    let mut chapter_chunk_ranges: Vec<std::ops::Range<usize>> = Vec::with_capacity(chunk_sources.len());
+    for source in &chunk_sources {
+        let start = chunks.len();
+        chunks.extend(split_text_chunks_pro(source, max_chunk_chars));
+        chapter_chunk_ranges.push(start..chunks.len());
+    }
+    // split_text_chunks_pro 的 index 是各章从 1 重新数的，这里统一改成全局序号。
+    for (position, chunk) in chunks.iter_mut().enumerate() {
+        chunk.index = position + 1;
+    }
+
     info!(
         cleaned_chars = cleaned.chars().count(),
         chunk_count = chunks.len(),
@@ -318,18 +349,13 @@ pub async fn tts_book_convert(
         stem,
         cleaned_text_hash,
         max_chunk_chars,
-        if request.split_by_toc { "chap" } else { "full" }
+        // -v2：分段方案改成「先分章再分段」，段号语义随之变化，
+        // 旧缓存目录必须作废，否则会复用错位的分段音频。
+        if request.split_by_toc { "chap-v2" } else { "full-v2" }
     ));
     let chunk_dir = work_dir.join("chunks");
     fs::create_dir_all(&chunk_dir).map_err(|e| format!("创建分段缓存目录失败: {}", e))?;
     let resume_state_path = work_dir.join("resume_state.json");
-
-    let chapters = if request.split_by_toc {
-        split_text_into_chapters(&cleaned, &extracted.toc)
-    } else {
-        Vec::new()
-    };
-    info!(chapter_count = chapters.len(), "tts_book_convert chapter split done");
 
     let (source_size, source_modified_ms) = file_signature(&file_path)?;
     let mut resume_state = load_resume_state(&resume_state_path).unwrap_or_default();
@@ -465,7 +491,7 @@ pub async fn tts_book_convert(
                     index: index + 1,
                     title: chapter_title.clone(),
                     char_count: chapter_text.chars().count(),
-                    chunk_count: split_text_chunks_pro(chapter_text, max_chunk_chars).len(),
+                    chunk_count: chapter_chunk_ranges.get(index).map(|range| range.len()).unwrap_or(0),
                     text: chapter_text.clone(),
                 })
                 .collect(),
@@ -504,7 +530,15 @@ pub async fn tts_book_convert(
     let mut en_chunks = 0usize;
     let mut chunk_paths = Vec::with_capacity(chunks.len());
     let mut chunk_durations_ms = vec![0u64; chunks.len()];
-    for chunk in &chunks {
+    let mut last_resume_save_ms = unix_now_ms();
+    // sherpa CLI 一次只吃一段文本，而且它的 `--num-threads` 默认为 1——
+    // 串行跑等于全程只用一个核。这里按批并发：批内同时合成，
+    // 但落盘、进度与续转状态仍严格按顺序处理，语义与串行版本一致。
+    let batch_size = synthesis_concurrency();
+    let mut batch_start = 0usize;
+    while batch_start < chunks.len() {
+        let batch_end = (batch_start + batch_size).min(chunks.len());
+        let batch = &chunks[batch_start..batch_end];
         check_task_control(
             &task_id,
             &mut resume_state,
@@ -512,74 +546,102 @@ pub async fn tts_book_convert(
             completed_steps,
             total_steps,
         )?;
-        match chunk.lang {
-            ChunkLang::Zh => zh_chunks += 1,
-            ChunkLang::En => en_chunks += 1,
+
+        // 已在缓存里的分段不必再合成，只把缺的挑出来并发跑。
+        let missing = batch
+            .iter()
+            .enumerate()
+            .filter(|(_, chunk)| !chunk_dir.join(format!("{:05}.wav", chunk.index)).exists())
+            .map(|(offset, _)| offset)
+            .collect::<Vec<_>>();
+
+        let synthesized = futures_util::future::join_all(missing.iter().map(|offset| {
+            let chunk = &batch[*offset];
+            let exe = tts_exe.as_str();
+            let model = tts_model.as_str();
+            let tokens = tts_tokens.as_str();
+            let hint = tts_mode_hint.as_str();
+            let speaker = speaker_id.as_str();
+            let provider = execution_provider.as_str();
+            async move {
+                synthesize_chunk_audio(chunk, exe, model, tokens, hint, speaker, speed, provider).await
+            }
+        }))
+        .await;
+
+        let mut results: Vec<Option<Result<Vec<u8>, String>>> =
+            (0..batch.len()).map(|_| None).collect();
+        for (offset, result) in missing.iter().zip(synthesized) {
+            results[*offset] = Some(result);
         }
-        let chunk_path = chunk_dir.join(format!("{:05}.wav", chunk.index));
-        let resumed = chunk_path.exists();
-        if !resumed {
-            let bytes = synthesize_chunk_audio(
-                chunk,
-                &tts_exe,
-                &tts_model,
-                &tts_tokens,
-                &tts_mode_hint,
-                &speaker_id,
-                speed,
-                &execution_provider,
-            )
-            .await?;
-            fs::write(&chunk_path, bytes).map_err(|e| format!("写入分段音频失败: {}", e))?;
-        } else {
-            resumed_any = true;
-        }
-        if !resume_state.completed_chunks.contains(&chunk.index) {
-            resume_state.completed_chunks.push(chunk.index);
-            resume_state.completed_chunks.sort_unstable();
-            save_resume_state(&resume_state_path, &resume_state)?;
-        }
-        let chunk_bytes = fs::read(&chunk_path).map_err(|e| format!("读取分段音频失败: {}", e))?;
-        if let Some(duration) = chunk_durations_ms.get_mut(chunk.index.saturating_sub(1)) {
-            *duration = wav_duration_ms(&chunk_bytes)?;
-        }
-        chunk_paths.push(chunk_path);
-        completed_steps += 1;
-        let progress_message = if resumed {
-            format!("复用已完成分段 {}/{}", chunk.index, chunks.len())
-        } else {
-            format!("正在合成分段 {}/{}", chunk.index, chunks.len())
-        };
-        update_resume_state_progress(
-            &mut resume_state,
-            "synth_chunk",
-            progress_message.as_str(),
-            completed_steps,
-            total_steps,
-            TTS_BOOK_STATUS_RUNNING,
-        );
-        save_resume_state(&resume_state_path, &resume_state)?;
-        emit_tts_book_progress(
-            &window,
-            make_progress(
-                &task_id,
-                &file_path,
-                &file_name,
+
+        for (offset, chunk) in batch.iter().enumerate() {
+            match chunk.lang {
+                ChunkLang::Zh => zh_chunks += 1,
+                ChunkLang::En => en_chunks += 1,
+            }
+            let chunk_path = chunk_dir.join(format!("{:05}.wav", chunk.index));
+            let pending = results[offset].take();
+            let resumed = pending.is_none();
+            // 新合成的分段内存里已经有字节了，不必再读一次盘；只有复用旧分段才需要读。
+            let chunk_bytes = match pending {
+                Some(result) => {
+                    let bytes = result?;
+                    fs::write(&chunk_path, &bytes)
+                        .map_err(|e| format!("写入分段音频失败: {}", e))?;
+                    bytes
+                }
+                None => {
+                    resumed_any = true;
+                    fs::read(&chunk_path).map_err(|e| format!("读取分段音频失败: {}", e))?
+                }
+            };
+            // `completed_chunks` 只被用来取长度（见 saved_task_from_state），顺序无意义，
+            // 因此不必每段都排一次序。
+            if !resume_state.completed_chunks.contains(&chunk.index) {
+                resume_state.completed_chunks.push(chunk.index);
+            }
+            if let Some(duration) = chunk_durations_ms.get_mut(chunk.index.saturating_sub(1)) {
+                *duration = wav_duration_ms(&chunk_bytes)?;
+            }
+            chunk_paths.push(chunk_path);
+            completed_steps += 1;
+            let progress_message = if resumed {
+                format!("复用已完成分段 {}/{}", chunk.index, chunks.len())
+            } else {
+                format!("正在合成分段 {}/{}", chunk.index, chunks.len())
+            };
+            update_resume_state_progress(
+                &mut resume_state,
                 "synth_chunk",
+                progress_message.as_str(),
                 completed_steps,
                 total_steps,
-                if resumed {
-                    format!("复用已完成分段 {}/{}", chunk.index, chunks.len())
-                } else {
-                    format!("正在合成分段 {}/{}", chunk.index, chunks.len())
-                },
-                resumed,
-                false,
-                &output_path,
-                &segment_json_path,
-            ),
-        )?;
+                TTS_BOOK_STATUS_RUNNING,
+            );
+            save_resume_state_throttled(&mut last_resume_save_ms, &resume_state_path, &resume_state)?;
+            emit_tts_book_progress(
+                &window,
+                make_progress(
+                    &task_id,
+                    &file_path,
+                    &file_name,
+                    "synth_chunk",
+                    completed_steps,
+                    total_steps,
+                    progress_message,
+                    resumed,
+                    false,
+                    &output_path,
+                    &segment_json_path,
+                ),
+            )?;
+        }
+
+        batch_start = batch_end;
     }
+    // 分段循环里是节流落盘的，这里强制写一次，确保进入合并阶段前状态是完整的。
+    save_resume_state(&resume_state_path, &resume_state)?;
     info!(
         total_chunks = chunks.len(),
         zh_chunks,
@@ -604,15 +666,14 @@ pub async fn tts_book_convert(
                     index: index + 1,
                     title: chapter_title.clone(),
                     char_count: chapter_text.chars().count(),
-                    chunk_count: split_text_chunks_pro(chapter_text, max_chunk_chars).len(),
+                    chunk_count: chapter_chunk_ranges.get(index).map(|range| range.len()).unwrap_or(0),
                     text: chapter_text.clone(),
                 })
                 .collect(),
         },
     )?;
 
-    let merged_wav = merge_wav_files_with_postprocess(&chunk_paths, &chunks)?;
-    fs::write(&output_path, merged_wav).map_err(|e| format!("写入音频文件失败: {}", e))?;
+    merge_wav_files_to_path(&chunk_paths, &chunks, &output_path)?;
     resume_state.output_path = output_path.to_string_lossy().to_string();
     update_resume_state_progress(
         &mut resume_state,
@@ -658,37 +719,27 @@ pub async fn tts_book_convert(
             let chapter_stem = sanitize_file_stem(&truncate_title(chapter_title, 36));
             let chapter_name = format!("{:03}_{}.wav", index + 1, chapter_stem);
             let chapter_path = chapter_dir.join(chapter_name);
+            let range = chapter_chunk_ranges[index].clone();
+            if range.is_empty() {
+                completed_steps += 1;
+                continue;
+            }
             let resumed = chapter_path.exists();
             if !resumed {
-                let chapter_chunks = split_text_chunks_pro(chapter_text, max_chunk_chars);
-                if chapter_chunks.is_empty() {
-                    completed_steps += 1;
-                    continue;
-                }
                 info!(
                     chapter_index = index + 1,
                     chapter_title = chapter_title.as_str(),
                     chapter_chars = chapter_text.chars().count(),
-                    "tts_book_convert chapter synth start"
+                    chunk_count = range.len(),
+                    "tts_book_convert chapter merge start"
                 );
-                let (chapter_wav, _, _) = synthesize_wav_from_chunks(
-                    &chapter_chunks,
-                    &tts_exe,
-                    &tts_model,
-                    &tts_tokens,
-                    &tts_mode_hint,
-                    &speaker_id,
-                    speed,
-                    &execution_provider,
-                )
-                .await?;
-                fs::write(&chapter_path, chapter_wav)
-                    .map_err(|e| format!("写入章节音频失败: {}", e))?;
+                // 直接取该章对应的分段音频拼装，不再重新合成一遍。
+                merge_wav_files_to_path(&chunk_paths[range.clone()], &chunks[range], &chapter_path)?;
                 info!(
                     chapter_index = index + 1,
                     chapter_path = chapter_path.to_string_lossy().as_ref(),
                     cost_ms = chapter_start.elapsed().as_millis() as u64,
-                    "tts_book_convert chapter synth done"
+                    "tts_book_convert chapter merge done"
                 );
             } else {
                 resumed_any = true;
@@ -697,12 +748,10 @@ pub async fn tts_book_convert(
             chapter_output_paths.push(chapter_path_str.clone());
             if !resume_state.completed_chapters.contains(&(index + 1)) {
                 resume_state.completed_chapters.push(index + 1);
-                resume_state.completed_chapters.sort_unstable();
             }
             if !resume_state.chapter_output_paths.contains(&chapter_path_str) {
                 resume_state.chapter_output_paths.push(chapter_path_str);
             }
-            save_resume_state(&resume_state_path, &resume_state)?;
             completed_steps += 1;
             let progress_message = if resumed {
                 format!("复用已完成章节 {}/{}", index + 1, chapters.len())
@@ -717,7 +766,7 @@ pub async fn tts_book_convert(
                 total_steps,
                 TTS_BOOK_STATUS_RUNNING,
             );
-            save_resume_state(&resume_state_path, &resume_state)?;
+            save_resume_state_throttled(&mut last_resume_save_ms, &resume_state_path, &resume_state)?;
             emit_tts_book_progress(
                 &window,
                 make_progress(
@@ -1052,72 +1101,15 @@ fn update_resume_state_progress(
     state.progress = ((safe_current as f64 / safe_total as f64) * 100.0).round() as u8;
 }
 
-async fn synthesize_wav_from_chunks(
-    chunks: &[TextChunk],
-    tts_exe: &str,
-    tts_model: &str,
-    tts_tokens: &str,
-    tts_mode_hint: &str,
-    speaker_id: &str,
-    speed: Option<f32>,
-    execution_provider: &str,
-) -> Result<(Vec<u8>, usize, usize), String> {
-    let mut wav_parts: Vec<Vec<u8>> = Vec::with_capacity(chunks.len());
-    let mut zh_chunks = 0usize;
-    let mut en_chunks = 0usize;
+/// 并发合成数。每段都会起一个 sherpa 进程、各自加载一份约 310MB 的模型，
+/// 所以既要用满多核，又不能让模型副本翻太多倍。取核数与上限的较小值。
+const SYNTH_MAX_CONCURRENCY: usize = 4;
 
-    for (idx, chunk) in chunks.iter().enumerate() {
-        let chunk_start = Instant::now();
-        match chunk.lang {
-            ChunkLang::Zh => zh_chunks += 1,
-            ChunkLang::En => en_chunks += 1,
-        }
-        let prepared_text = prepare_chunk_text_for_tts(&chunk.text, chunk.lang);
-
-        info!(
-            index = idx + 1,
-            total = chunks.len(),
-            lang = match chunk.lang { ChunkLang::Zh => "zh", ChunkLang::En => "en" },
-            chars = prepared_text.chars().count(),
-            "tts_book_convert: synth chunk"
-        );
-
-        let rsp = audio_text_to_speech(TextToSpeechRequest {
-            common: AudioCommonRequest {
-                provider: SHERPA_PROVIDER.to_string(),
-                runtime_provider: execution_provider.to_string(),
-                model: tts_model.to_string(),
-                api_key: String::new(),
-                endpoint: tts_exe.to_string(),
-                tokens: tts_tokens.to_string(),
-                mode_hint: tts_mode_hint.to_string(),
-            },
-            input: prepared_text,
-            voice: speaker_id.to_string(),
-            response_format: "wav".to_string(),
-            sample_rate: None,
-            stream: Some(false),
-            speed,
-            gain: None,
-            max_tokens: None,
-        })
-        .await?;
-
-        let bytes = general_purpose::STANDARD
-            .decode(rsp.audio_base64.as_bytes())
-            .map_err(|e| format!("Base64 音频解码失败: {}", e))?;
-        info!(
-            index = idx + 1,
-            total = chunks.len(),
-            audio_bytes = bytes.len(),
-            cost_ms = chunk_start.elapsed().as_millis() as u64,
-            "tts_book_convert: synth chunk done"
-        );
-        wav_parts.push(bytes);
-    }
-
-    let merged_wav = merge_wav_parts_with_postprocess(&wav_parts, chunks)?;
-    Ok((merged_wav, zh_chunks, en_chunks))
+fn synthesis_concurrency() -> usize {
+    std::thread::available_parallelism()
+        .map(|value| value.get())
+        .unwrap_or(1)
+        .clamp(1, SYNTH_MAX_CONCURRENCY)
 }
 
 async fn synthesize_chunk_audio(
@@ -1173,16 +1165,6 @@ async fn synthesize_chunk_audio(
     Ok(bytes)
 }
 
-#[allow(dead_code)]
-fn merge_wav_files(paths: &[PathBuf]) -> Result<Vec<u8>, String> {
-    let mut parts = Vec::with_capacity(paths.len());
-    for path in paths {
-        let bytes = fs::read(path).map_err(|e| format!("读取音频分片失败: {}", e))?;
-        parts.push(bytes);
-    }
-    merge_wav_parts(&parts)
-}
-
 fn emit_tts_book_progress(window: &Window, payload: TtsBookProgress) -> Result<(), String> {
     window
         .emit("tts_book_progress", payload)
@@ -1226,9 +1208,29 @@ fn load_resume_state(path: &Path) -> Result<TtsBookResumeState, String> {
     serde_json::from_str(&raw).map_err(|e| format!("解析续转状态失败: {}", e))
 }
 
+/// 续转状态是内部检查点、不给人看，用紧凑 JSON 即可（pretty 会显著放大写入量）。
 fn save_resume_state(path: &Path, state: &TtsBookResumeState) -> Result<(), String> {
-    let raw = serde_json::to_string_pretty(state).map_err(|e| format!("序列化续转状态失败: {}", e))?;
+    let raw = serde_json::to_string(state).map_err(|e| format!("序列化续转状态失败: {}", e))?;
     fs::write(path, raw).map_err(|e| format!("写入续转状态失败: {}", e))
+}
+
+/// 每段都落盘会让总写入量随段数平方增长（`completed_chunks` 越来越长），
+/// 所以按时间节流。安全性由分段 WAV 文件本身兜底——续转时是用 `chunk_path.exists()`
+/// 判断复用，而不是 `completed_chunks`；暂停/终止等关键点由 `check_task_control` 强制落盘。
+const RESUME_SAVE_INTERVAL_MS: u128 = 5000;
+
+fn save_resume_state_throttled(
+    last_saved_ms: &mut u128,
+    path: &Path,
+    state: &TtsBookResumeState,
+) -> Result<(), String> {
+    let now = unix_now_ms();
+    if now.saturating_sub(*last_saved_ms) < RESUME_SAVE_INTERVAL_MS {
+        return Ok(());
+    }
+    save_resume_state(path, state)?;
+    *last_saved_ms = now;
+    Ok(())
 }
 
 fn write_segment_manifest(path: &Path, manifest: &SegmentManifest) -> Result<(), String> {
@@ -1307,9 +1309,11 @@ fn prepare_chunk_text_for_tts(text: &str, lang: ChunkLang) -> String {
     text.replace('\n', " ").trim().to_string()
 }
 
+/// 每个分段都要调 `normalize_zh_tts_text`，正则不能在里面现编。
+static ZH_FRACTION_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(\d+)\s*/\s*(\d+)").expect("valid regex"));
+
 fn normalize_zh_tts_text(text: &str) -> String {
-    let fraction_re = Regex::new(r"(\d+)\s*/\s*(\d+)").expect("valid regex");
-    fraction_re
+    ZH_FRACTION_RE
         .replace_all(text, |caps: &regex::Captures| format!("{}分之{}", &caps[2], &caps[1]))
         .to_string()
 }
@@ -1518,26 +1522,165 @@ async fn extract_document(path: &Path) -> Result<ExtractedDoc, String> {
             Ok(ExtractedDoc { title, text, toc })
         }
         "epub" => extract_epub_text(path, title),
-        "doc" => Err("暂不支持 .doc，请先另存为 .docx 后再转换".to_string()),
-        _ => Err("仅支持 txt/pdf/markdown/md/docx/epub 文件".to_string()),
+        "mobi" | "azw3" => {
+            let text = extract_ebook_text(path).await?;
+            let toc = extract_outline_lines(&text);
+            Ok(ExtractedDoc { title, text, toc })
+        }
+        "doc" => {
+            let text = extract_anydoc_text(path).await?;
+            let toc = extract_outline_lines(&text);
+            Ok(ExtractedDoc { title, text, toc })
+        }
+        _ => {
+            // 未知后缀不再按白名单直接拒绝，改看内容：能当文本读的就按纯文本处理。
+            // 否则「任意纯文本文件」只能靠无限堆后缀来覆盖。
+            // 先只读文件头再决定是否读全文：前端放开了「所有文件」，
+            // 误选大体积二进制（视频、镜像）时不能把它整个读进内存。
+            let head = read_file_head(path, PLAIN_TEXT_SNIFF_BYTES)?;
+            if !looks_like_plain_text(&head) {
+                let label = if ext.is_empty() {
+                    "该文件".to_string()
+                } else {
+                    format!(".{} 文件", ext)
+                };
+                return Err(format!(
+                    "{}的内容无法识别为文本，请确认它是纯文本或受支持的电子书格式",
+                    label
+                ));
+            }
+            let bytes = fs::read(path).map_err(|e| format!("读取文件失败: {}", e))?;
+            let text = decode_text_bytes(&bytes);
+            let toc = extract_outline_lines(&text);
+            Ok(ExtractedDoc { title, text, toc })
+        }
     }
 }
 
 fn read_text_with_fallback(path: &Path) -> Result<String, String> {
-    match fs::read_to_string(path) {
-        Ok(s) => Ok(normalize_line_endings(&s)),
+    let bytes = fs::read(path).map_err(|e| format!("读取文件失败: {}", e))?;
+    Ok(decode_text_bytes(&bytes))
+}
+
+/// 先按 UTF-8 解码，失败再退到 GBK（大量中文老书是 GBK/GB18030）。
+fn decode_text_bytes(bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(s) => normalize_line_endings(s),
         Err(_) => {
-            let bytes = fs::read(path).map_err(|e| format!("读取文件失败: {}", e))?;
-            let (decoded, _, _) = GBK.decode(&bytes);
-            Ok(normalize_line_endings(&decoded))
+            let (decoded, _, _) = GBK.decode(bytes);
+            normalize_line_endings(&decoded)
         }
+    }
+}
+
+/// 判定「是不是纯文本」时最多读这么多字节，避免把巨型二进制整个读进内存。
+const PLAIN_TEXT_SNIFF_BYTES: usize = 8192;
+
+/// 读文件开头至多 `limit` 字节。用于在决定是否读全文之前先嗅探内容类型。
+fn read_file_head(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
+    let mut file = fs::File::open(path).map_err(|e| format!("读取文件失败: {}", e))?;
+    let mut head = vec![0u8; limit];
+    let mut filled = 0usize;
+    while filled < limit {
+        match file.read(&mut head[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(e) => return Err(format!("读取文件失败: {}", e)),
+        }
+    }
+    head.truncate(filled);
+    Ok(head)
+}
+
+/// 判断一段字节能否当纯文本读：含 NUL 直接判为二进制，控制字符占比过高也判为二进制。
+/// 中文的 UTF-8 / GBK 多字节都在 0x80 以上，不会被误杀。
+/// 调用方负责限制传入长度（见 `PLAIN_TEXT_SNIFF_BYTES`）。
+fn looks_like_plain_text(bytes: &[u8]) -> bool {
+    if bytes.is_empty() {
+        return true;
+    }
+    if bytes.contains(&0) {
+        return false;
+    }
+    let control = bytes
+        .iter()
+        .filter(|b| matches!(**b, 0x01..=0x08 | 0x0b | 0x0c | 0x0e..=0x1f | 0x7f))
+        .count();
+    control * 100 <= bytes.len() * 5
+}
+
+/// 用 `catch_unwind` 把第三方解析库的 panic 限制在本次调用内，绝不向调用方展开。
+/// 前提：release 必须保持 `panic = "unwind"`（见 Cargo.toml 的 profile.release 说明）。
+fn with_parser_panic_guard<T>(f: impl FnOnce() -> T) -> Result<T, String> {
+    let _guard = PARSER_PANIC_HOOK_GUARD
+        .lock()
+        .map_err(|_| "解析器 panic hook 锁获取失败".to_string())?;
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let result = catch_unwind(AssertUnwindSafe(f));
+    std::panic::set_hook(previous_hook);
+    result.map_err(|_| "解析器内部错误（已隔离，不影响程序运行）".to_string())
+}
+
+/// 老版 Word 二进制（.doc）以及 anydoc 覆盖的其他文档：转 Markdown 后再压成纯文本。
+async fn extract_anydoc_text(path: &Path) -> Result<String, String> {
+    let path_buf = path.to_path_buf();
+    let parsed = tauri::async_runtime::spawn_blocking(move || {
+        let markdown = with_parser_panic_guard(|| anydoc::to_markdown(&path_buf))?;
+        markdown.map_err(|e| crate::commands::convert::engine::anydoc_error_message(&e))
+    })
+    .await
+    .map_err(|e| format!("文档解析任务失败: {}", e))?;
+
+    let text = markdown_to_plain_text(&parsed?);
+    if text.trim().is_empty() {
+        return Err("文档解析结果为空".to_string());
+    }
+    Ok(text)
+}
+
+/// MOBI / AZW3：anydoc 不覆盖这两类，走 ebook-rs 取每节的纯文本。
+async fn extract_ebook_text(path: &Path) -> Result<String, String> {
+    let path_buf = path.to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || {
+        let book = with_parser_panic_guard(|| ebook_rs::Book::from_file(&path_buf))?;
+        let book = book.map_err(|e| ebook_error_message(&e))?;
+        let blocks = book
+            .sections()
+            .iter()
+            .map(|section| section.plain_text.trim())
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>();
+        if blocks.is_empty() {
+            return Err("未能从该电子书中提取到正文".to_string());
+        }
+        Ok(blocks.join("\n\n"))
+    })
+    .await
+    .map_err(|e| format!("电子书解析任务失败: {}", e))?
+}
+
+fn ebook_error_message(e: &ebook_rs::EbookError) -> String {
+    use ebook_rs::EbookError as E;
+    match e {
+        E::DrmProtected(_) => "该电子书受 DRM 保护，无法解析，请先去 DRM 后再转换".to_string(),
+        E::InvalidFormat(detail) => format!(
+            "无法解析该电子书格式：{}。AZW3 若是 KF8 专有或 Huff/CDIC 压缩，可能不被支持",
+            detail
+        ),
+        E::CorruptedData(detail) => format!("该电子书数据损坏：{}", detail),
+        E::NotFound(detail) => format!("该电子书缺少必需内容：{}", detail),
+        E::Io(detail) => format!("读取电子书失败：{}", detail),
+        E::Xml(detail) => format!("电子书结构解析失败：{}", detail),
+        E::Zip(detail) => format!("解压电子书失败：{}", detail),
+        _ => format!("电子书解析失败：{}", e),
     }
 }
 
 async fn extract_pdf_text(path: &Path) -> Result<String, String> {
     let path_buf = path.to_path_buf();
     let primary = tauri::async_runtime::spawn_blocking(move || {
-        let _guard = PDF_EXTRACT_PANIC_HOOK_GUARD
+        let _guard = PARSER_PANIC_HOOK_GUARD
             .lock()
             .map_err(|_| "PDF 解析 panic hook 锁获取失败".to_string())?;
         let previous_hook = std::panic::take_hook();
@@ -1876,7 +2019,7 @@ fn extract_epub_text(path: &Path, title: String) -> Result<ExtractedDoc, String>
         .read_to_string(&mut opf_content)
         .map_err(|e| format!("读取 OPF 内容失败: {}", e))?;
 
-    let toc = extract_epub_toc_from_nav(&mut zip, &opf_content, &opf_dir);
+    let toc = extract_epub_toc(&mut zip, &opf_content, &opf_dir);
     let spine_files = resolve_epub_spine_files(&opf_content, &opf_dir);
 
     let mut text_blocks: Vec<String> = Vec::new();
@@ -1943,28 +2086,64 @@ fn resolve_epub_opf_path(zip: &mut ZipArchive<fs::File>) -> Result<(String, Stri
     Ok((opf_path, opf_dir))
 }
 
-fn resolve_epub_spine_files(opf_content: &str, opf_dir: &str) -> Vec<String> {
-    let item_re = Regex::new(r#"<item\s+[^>]*id=\"([^\"]+)\"[^>]*href=\"([^\"]+)\"[^>]*/?>"#)
-        .expect("valid regex");
-    let spine_re = Regex::new(r#"<itemref\s+[^>]*idref=\"([^\"]+)\"[^>]*/?>"#).expect("valid regex");
+// OPF 是 XML，属性顺序由书写者决定。旧实现用「id 必须在 href 之前」的单条正则去匹配
+// `<item>`，遇到 href 在前、或中间夹着 media-type 的书整条 manifest 就匹配为空，
+// spine 随之落空，最后退化成按 zip 条目顺序扫 HTML——阅读顺序就乱了。
+// 这里改成先切出每个标签、再逐个属性取值，与顺序无关。
+static OPF_ITEM_TAG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?is)<item\s[^>]*>").expect("valid regex"));
+static OPF_ITEMREF_TAG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?is)<itemref\s[^>]*>").expect("valid regex"));
+static OPF_ATTR_ID_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"(?i)\bid\s*=\s*["']([^"']*)["']"#).expect("valid regex"));
+static OPF_ATTR_IDREF_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(?i)\bidref\s*=\s*["']([^"']*)["']"#).expect("valid regex"));
+static OPF_ATTR_HREF_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(?i)\bhref\s*=\s*["']([^"']*)["']"#).expect("valid regex"));
+static OPF_ATTR_PROPERTIES_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(?i)\bproperties\s*=\s*["']([^"']*)["']"#).expect("valid regex"));
+static OPF_ATTR_MEDIATYPE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(?i)\bmedia-type\s*=\s*["']([^"']*)["']"#).expect("valid regex"));
 
+fn opf_attr(tag: &str, re: &Regex) -> Option<String> {
+    re.captures(tag).and_then(|c| c.get(1)).map(|m| m.as_str().to_string())
+}
+
+fn resolve_epub_spine_files(opf_content: &str, opf_dir: &str) -> Vec<String> {
     let mut manifest: HashMap<String, String> = HashMap::new();
-    for cap in item_re.captures_iter(opf_content) {
-        let id = cap.get(1).map(|m| m.as_str()).unwrap_or_default();
-        let href = cap.get(2).map(|m| m.as_str()).unwrap_or_default();
+    for tag in OPF_ITEM_TAG_RE.find_iter(opf_content).map(|m| m.as_str()) {
+        let Some(id) = opf_attr(tag, &OPF_ATTR_ID_RE) else { continue };
+        let Some(href) = opf_attr(tag, &OPF_ATTR_HREF_RE) else { continue };
         if !id.is_empty() && !href.is_empty() {
-            manifest.insert(id.to_string(), join_zip_path(opf_dir, href));
+            manifest.insert(id, join_zip_path(opf_dir, &href));
         }
     }
 
     let mut out = Vec::new();
-    for cap in spine_re.captures_iter(opf_content) {
-        let idref = cap.get(1).map(|m| m.as_str()).unwrap_or_default();
-        if let Some(path) = manifest.get(idref) {
-            out.push(path.clone());
+    for tag in OPF_ITEMREF_TAG_RE.find_iter(opf_content).map(|m| m.as_str()) {
+        if let Some(idref) = opf_attr(tag, &OPF_ATTR_IDREF_RE) {
+            if let Some(path) = manifest.get(&idref) {
+                out.push(path.clone());
+            }
         }
     }
     out
+}
+
+/// 在 OPF 的 `<item>` 列表里按谓词找一个条目的 href。
+fn find_opf_item_href(opf_content: &str, opf_dir: &str, matches: impl Fn(&str) -> bool) -> Option<String> {
+    OPF_ITEM_TAG_RE
+        .find_iter(opf_content)
+        .map(|m| m.as_str())
+        .find(|tag| matches(tag))
+        .and_then(|tag| opf_attr(tag, &OPF_ATTR_HREF_RE))
+        .map(|href| join_zip_path(opf_dir, &href))
+}
+
+/// EPUB3 用 nav 文档、EPUB2 用 NCX，两者都取不到才返回空，交给正文标题启发式兜底。
+fn extract_epub_toc(zip: &mut ZipArchive<fs::File>, opf_content: &str, opf_dir: &str) -> Vec<String> {
+    let nav = extract_epub_toc_from_nav(zip, opf_content, opf_dir);
+    if !nav.is_empty() {
+        return nav;
+    }
+    extract_epub_toc_from_ncx(zip, opf_content, opf_dir)
 }
 
 fn extract_epub_toc_from_nav(
@@ -1972,15 +2151,12 @@ fn extract_epub_toc_from_nav(
     opf_content: &str,
     opf_dir: &str,
 ) -> Vec<String> {
-    let nav_item_re = Regex::new(
-        r#"<item\s+[^>]*properties=\"[^\"]*nav[^\"]*\"[^>]*href=\"([^\"]+)\"[^>]*/?>"#,
-    )
-    .expect("valid regex");
-    let Some(nav_path) = nav_item_re
-        .captures(opf_content)
-        .and_then(|c| c.get(1))
-        .map(|m| join_zip_path(opf_dir, m.as_str()))
-    else {
+    // 用 token 全等而不是 `[^"]*nav[^"]*`：后者会把 `navigation`、`navy` 也算成 nav。
+    let Some(nav_path) = find_opf_item_href(opf_content, opf_dir, |tag| {
+        opf_attr(tag, &OPF_ATTR_PROPERTIES_RE)
+            .map(|props| props.split_whitespace().any(|token| token.eq_ignore_ascii_case("nav")))
+            .unwrap_or(false)
+    }) else {
         return vec![];
     };
 
@@ -2008,6 +2184,45 @@ fn extract_epub_toc_from_nav(
     out
 }
 
+/// EPUB2 的目录在 NCX（media-type application/x-dtbncx+xml）里。
+/// 只认 EPUB3 的 nav 会让老书的目录为空，章节拆分退化成正文标题启发式。
+fn extract_epub_toc_from_ncx(
+    zip: &mut ZipArchive<fs::File>,
+    opf_content: &str,
+    opf_dir: &str,
+) -> Vec<String> {
+    let Some(ncx_path) = find_opf_item_href(opf_content, opf_dir, |tag| {
+        opf_attr(tag, &OPF_ATTR_MEDIATYPE_RE)
+            .map(|v| v.to_ascii_lowercase().contains("dtbncx"))
+            .unwrap_or(false)
+    }) else {
+        return vec![];
+    };
+
+    let Ok(mut file) = zip.by_name(&ncx_path) else {
+        return vec![];
+    };
+    let mut xml = String::new();
+    if file.read_to_string(&mut xml).is_err() {
+        return vec![];
+    }
+
+    let doc = Html::parse_document(&xml);
+    let selector = scraper::Selector::parse("navlabel text").expect("valid selector");
+    let mut out = Vec::new();
+    for el in doc.select(&selector).take(200) {
+        let text = el.text().collect::<Vec<_>>().join(" ");
+        let t = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !t.is_empty() && !out.contains(&t) {
+            out.push(t);
+        }
+        if out.len() >= 40 {
+            break;
+        }
+    }
+    out
+}
+
 fn join_zip_path(base_dir: &str, rel: &str) -> String {
     let rel = rel.trim_start_matches('/');
     if base_dir.is_empty() {
@@ -2017,13 +2232,15 @@ fn join_zip_path(base_dir: &str, rel: &str) -> String {
     }
 }
 
+/// 每个 EPUB 章节文件都要过一遍 `html_to_text`，正则提到静态避免逐文件编译。
+static HTML_NO_SCRIPT_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?is)<(script|style|svg|noscript)[^>]*>.*?</(script|style|svg|noscript)>").expect("valid regex"));
+static HTML_BLOCK_BREAK_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)</?(p|div|section|article|li|ul|ol|blockquote|h[1-6]|tr|table|br)[^>]*>").expect("valid regex"));
+
 fn html_to_text(html: &str) -> String {
-    let no_script = Regex::new(r"(?is)<(script|style|svg|noscript)[^>]*>.*?</(script|style|svg|noscript)>")
-        .expect("valid regex")
-        .replace_all(html, " ");
-    let with_breaks = Regex::new(r"(?i)</?(p|div|section|article|li|ul|ol|blockquote|h[1-6]|tr|table|br)[^>]*>")
-        .expect("valid regex")
-        .replace_all(&no_script, "\n");
+    let no_script = HTML_NO_SCRIPT_RE.replace_all(html, " ");
+    let with_breaks = HTML_BLOCK_BREAK_RE.replace_all(&no_script, "\n");
     let doc = Html::parse_document(&with_breaks);
     let text = doc.root_element().text().collect::<Vec<_>>().join(" ");
     join_wrapped_lines(
@@ -2289,14 +2506,19 @@ fn is_ascii_word_like(text: &str) -> bool {
     text.chars().take(12).all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
 }
 
+/// `join_wrapped_lines` 会逐行调用 `looks_like_heading`，正则必须提到静态，
+/// 否则一本几十万字的书要重复编译数万次。
+static HEADING_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)^(第[一二三四五六七八九十百千万0-9]+[章节回卷篇].*|chapter\s+[0-9ivxlcdm]+.*|[0-9]+(?:\.[0-9]+){0,3}\s+.+)$")
+        .expect("valid regex")
+});
+
 fn looks_like_heading(line: &str) -> bool {
     let t = line.trim();
     if t.is_empty() || t.chars().count() > 80 {
         return false;
     }
-    Regex::new(r"(?i)^(第[一二三四五六七八九十百千万0-9]+[章节回卷篇].*|chapter\s+[0-9ivxlcdm]+.*|[0-9]+(?:\.[0-9]+){0,3}\s+.+)$")
-        .expect("valid regex")
-        .is_match(t)
+    HEADING_RE.is_match(t)
 }
 
 #[allow(dead_code)]
@@ -2485,6 +2707,9 @@ fn detect_chunk_lang(text: &str) -> ChunkLang {
     }
 }
 
+/// 内存版合并（整本音频解成 f32）。生产路径已换成 `merge_wav_files_to_path` 的流式实现，
+/// 这里只作为等价性测试的参照保留，避免它随 release 一起编进二进制。
+#[cfg(test)]
 fn merge_wav_parts(parts: &[Vec<u8>]) -> Result<Vec<u8>, String> {
     if parts.is_empty() {
         return Err("没有可拼接的音频分片".to_string());
@@ -2552,15 +2777,15 @@ fn parse_wav_fmt_data(bytes: &[u8]) -> Result<(Vec<u8>, Vec<u8>), String> {
     Ok((fmt, data))
 }
 
-fn build_wav(fmt_chunk_data: &[u8], data_chunk_data: &[u8]) -> Result<Vec<u8>, String> {
+/// 只拼 WAV 头（到 data 的长度字段为止，不含 data 载荷）。
+/// 流式合并时先写占位头、写完再回填，所以头和载荷必须能分开构造。
+fn build_wav_header(fmt_chunk_data: &[u8], data_size: u32) -> Vec<u8> {
     let fmt_size = fmt_chunk_data.len() as u32;
-    let data_size = data_chunk_data.len() as u32;
-
     let riff_size = 4u32
         .saturating_add(8u32.saturating_add(fmt_size))
         .saturating_add(8u32.saturating_add(data_size));
 
-    let mut out = Vec::with_capacity((riff_size as usize).saturating_add(8));
+    let mut out = Vec::with_capacity(fmt_chunk_data.len() + 44);
     out.extend_from_slice(b"RIFF");
     out.extend_from_slice(&riff_size.to_le_bytes());
     out.extend_from_slice(b"WAVE");
@@ -2574,6 +2799,14 @@ fn build_wav(fmt_chunk_data: &[u8], data_chunk_data: &[u8]) -> Result<Vec<u8>, S
 
     out.extend_from_slice(b"data");
     out.extend_from_slice(&data_size.to_le_bytes());
+    out
+}
+
+/// 整块构造 WAV。流式路径用的是 `build_wav_header` + 边写边补，这里只供测试构造样例。
+#[cfg(test)]
+fn build_wav(fmt_chunk_data: &[u8], data_chunk_data: &[u8]) -> Result<Vec<u8>, String> {
+    let data_size = data_chunk_data.len() as u32;
+    let mut out = build_wav_header(fmt_chunk_data, data_size);
     out.extend_from_slice(data_chunk_data);
     if data_size % 2 == 1 {
         out.push(0);
@@ -2806,15 +3039,171 @@ fn split_text_chunks_pro(text: &str, base_limit: usize) -> Vec<TextChunk> {
     chunks
 }
 
-fn merge_wav_files_with_postprocess(paths: &[PathBuf], chunks: &[TextChunk]) -> Result<Vec<u8>, String> {
-    let mut parts = Vec::with_capacity(paths.len());
-    for path in paths {
-        let bytes = fs::read(path).map_err(|e| format!("读取音频分片失败: {}", e))?;
-        parts.push(bytes);
+/// 段间淡接时长（毫秒）。
+const CROSSFADE_MS: u32 = 36;
+
+/// 把 `extra` 接到逻辑音频流末尾，同时只把最后 `keep` 个样本押后不写。
+///
+/// 之所以要押后：跨淡叠接会改写「上一段的尾部」，而这部分可能已经写出去了。
+/// 押后量只有 overlap（36ms）级别，所以既能流式写盘，又不改变原有淡接语义。
+fn write_held_back(
+    writer: &mut BufWriter<fs::File>,
+    tail: &mut Vec<f32>,
+    extra: &[f32],
+    keep: usize,
+    data_bytes: &mut u64,
+) -> Result<(), String> {
+    let total = tail.len() + extra.len();
+    if total <= keep {
+        tail.extend_from_slice(extra);
+        return Ok(());
     }
-    merge_wav_parts_with_postprocess(&parts, chunks)
+
+    let from_tail = tail.len().min(total - keep);
+    if from_tail > 0 {
+        let encoded = encode_pcm16_samples(&tail[..from_tail]);
+        writer.write_all(&encoded).map_err(|e| format!("写入音频失败: {}", e))?;
+        *data_bytes += encoded.len() as u64;
+        tail.drain(..from_tail);
+    }
+
+    let from_extra = total - keep - from_tail;
+    if from_extra > 0 {
+        let encoded = encode_pcm16_samples(&extra[..from_extra]);
+        writer.write_all(&encoded).map_err(|e| format!("写入音频失败: {}", e))?;
+        *data_bytes += encoded.len() as u64;
+    }
+    tail.extend_from_slice(&extra[from_extra..]);
+    Ok(())
 }
 
+/// 把占位头回填成真实长度。`writer` 必须已经 flush 过。
+fn patch_wav_header(
+    writer: &mut BufWriter<fs::File>,
+    fmt_chunk_data: &[u8],
+    data_bytes: u64,
+) -> Result<(), String> {
+    writer.flush().map_err(|e| format!("写入音频失败: {}", e))?;
+    let header = build_wav_header(fmt_chunk_data, data_bytes as u32);
+    let file = writer.get_mut();
+    file.seek(SeekFrom::Start(0)).map_err(|e| format!("写入音频失败: {}", e))?;
+    file.write_all(&header).map_err(|e| format!("写入音频失败: {}", e))?;
+    file.flush().map_err(|e| format!("写入音频失败: {}", e))
+}
+
+/// 流式合并音频分片到 `output_path`。
+///
+/// 旧实现把整本音频解成 f32 常驻内存再编码（3 小时书约 690MB、10 小时直接 OOM），
+/// 而且先把所有分段文件读进内存。这里改为逐段读取、边算边写，最后回填 WAV 长度。
+fn merge_wav_files_to_path(
+    paths: &[PathBuf],
+    chunks: &[TextChunk],
+    output_path: &Path,
+) -> Result<(), String> {
+    if paths.is_empty() {
+        return Err("没有可拼接的音频分片".to_string());
+    }
+
+    // 第一段决定 fmt 与采样参数。只有 16-bit PCM、且段数与文本数一一对应时
+    // 才做后处理与淡接，否则退化成纯字节拼接（与旧行为一致）。
+    let first = fs::read(&paths[0]).map_err(|e| format!("读取音频分片失败: {}", e))?;
+    let probed = parse_wav_fmt_data(&first)
+        .ok()
+        .and_then(|(fmt, _)| parse_wav_format_fields(&fmt).map(|fields| (fmt, fields)));
+    let Some((fmt, (audio_format, channels, sample_rate, bits_per_sample))) = probed else {
+        return concat_wav_files_to_path(paths, output_path);
+    };
+    if audio_format != 1 || bits_per_sample != 16 || paths.len() != chunks.len() {
+        return concat_wav_files_to_path(paths, output_path);
+    }
+
+    let file = fs::File::create(output_path).map_err(|e| format!("创建音频文件失败: {}", e))?;
+    let mut writer = BufWriter::new(file);
+    writer
+        .write_all(&build_wav_header(&fmt, 0))
+        .map_err(|e| format!("写入音频失败: {}", e))?;
+
+    let overlap_frames = ((sample_rate as usize * CROSSFADE_MS as usize) / 1000).max(1);
+    let overlap_samples = overlap_frames.saturating_mul(channels as usize);
+
+    let mut data_bytes = 0u64;
+    let mut tail: Vec<f32> = Vec::new();
+
+    for (index, path) in paths.iter().enumerate() {
+        let bytes = fs::read(path).map_err(|e| format!("读取音频分片失败: {}", e))?;
+        let (_, data) = parse_wav_fmt_data(&bytes)?;
+        let mut samples = decode_pcm16_samples(&data);
+        postprocess_segment_samples(&mut samples, sample_rate, channels);
+
+        if index == 0 {
+            write_held_back(&mut writer, &mut tail, &samples, overlap_samples, &mut data_bytes)?;
+            continue;
+        }
+
+        let pause_ms = derive_pause_after_ms(&chunks[index - 1].text);
+        if pause_ms <= 90 {
+            // tail 正好是已写出部分的最后一段，直接在它上面做淡出/淡入混合。
+            let blend = overlap_samples.min(tail.len()).min(samples.len());
+            for k in 0..blend {
+                let fade_out = 1.0 - (k as f32 / blend as f32);
+                let fade_in = k as f32 / blend as f32;
+                tail[k] = tail[k] * fade_out + samples[k] * fade_in;
+            }
+            write_held_back(&mut writer, &mut tail, &samples[blend..], overlap_samples, &mut data_bytes)?;
+        } else {
+            write_held_back(&mut writer, &mut tail, &samples, overlap_samples, &mut data_bytes)?;
+        }
+
+        let silence = build_silence_samples(sample_rate, channels, pause_ms);
+        write_held_back(&mut writer, &mut tail, &silence, overlap_samples, &mut data_bytes)?;
+    }
+
+    // 收尾：把押后的尾部补上，再回填真实长度。
+    let encoded = encode_pcm16_samples(&tail);
+    writer.write_all(&encoded).map_err(|e| format!("写入音频失败: {}", e))?;
+    data_bytes += encoded.len() as u64;
+    patch_wav_header(&mut writer, &fmt, data_bytes)
+}
+
+/// 纯字节拼接（不做后处理）。同样流式，避免把整本音频读进内存。
+fn concat_wav_files_to_path(paths: &[PathBuf], output_path: &Path) -> Result<(), String> {
+    let file = fs::File::create(output_path).map_err(|e| format!("创建音频文件失败: {}", e))?;
+    let mut writer = BufWriter::new(file);
+
+    let mut fmt_chunk: Option<Vec<u8>> = None;
+    let mut data_bytes = 0u64;
+    for (idx, path) in paths.iter().enumerate() {
+        let bytes = fs::read(path).map_err(|e| format!("读取音频分片失败: {}", e))?;
+        let (fmt, data) =
+            parse_wav_fmt_data(&bytes).map_err(|e| format!("第 {} 段 WAV 无效: {}", idx + 1, e))?;
+
+        match &fmt_chunk {
+            None => {
+                writer
+                    .write_all(&build_wav_header(&fmt, 0))
+                    .map_err(|e| format!("写入音频失败: {}", e))?;
+                fmt_chunk = Some(fmt);
+            }
+            Some(prev) if prev != &fmt => {
+                warn!(index = idx + 1, "WAV fmt chunk differs, continue with first fmt");
+            }
+            Some(_) => {}
+        }
+
+        writer.write_all(&data).map_err(|e| format!("写入音频失败: {}", e))?;
+        data_bytes += data.len() as u64;
+    }
+
+    let fmt = fmt_chunk.ok_or_else(|| "缺少 WAV fmt chunk".to_string())?;
+    // 奇数长度载荷要补一个填充字节，WAV 规范如此；build_wav 里也是这个行为。
+    if data_bytes % 2 == 1 {
+        writer.write_all(&[0u8]).map_err(|e| format!("写入音频失败: {}", e))?;
+    }
+    patch_wav_header(&mut writer, &fmt, data_bytes)
+}
+
+/// 内存版「后处理 + 淡接 + 静音」合并，作为 `merge_wav_files_to_path` 的等价性参照。
+#[cfg(test)]
 fn merge_wav_parts_with_postprocess(parts: &[Vec<u8>], chunks: &[TextChunk]) -> Result<Vec<u8>, String> {
     if parts.is_empty() {
         return Err("没有可拼接的音频分片".to_string());
@@ -2951,6 +3340,9 @@ fn build_silence_samples(sample_rate: u32, channels: u16, duration_ms: u32) -> V
     vec![0.0; frames.saturating_mul(channels as usize)]
 }
 
+/// 直接在累积缓冲尾部做淡接。流式路径改用 `write_held_back` 的押后写，
+/// 这里只作为等价性测试的参照保留。
+#[cfg(test)]
 fn append_with_crossfade(
     base: &mut Vec<f32>,
     next: &[f32],
@@ -2975,13 +3367,163 @@ fn append_with_crossfade(
     }
 
     let split_at = base.len() - overlap_samples;
-    let mut merged = base[..split_at].to_vec();
+    // 原地混合。旧的实现是 `base[..split_at].to_vec()` 再回写整个缓冲，
+    // 而本函数每段都会调用一次，累加长度线性增长 → 总体退化成 O(n²)。
+    // 重叠区只有 overlap_samples 个样本需要旧值，先取出来再截断即可。
+    let tail: Vec<f32> = base[split_at..].to_vec();
+    base.truncate(split_at);
+    base.reserve(next.len());
 
     for i in 0..overlap_samples {
         let fade_out = 1.0 - (i as f32 / overlap_samples as f32);
         let fade_in = i as f32 / overlap_samples as f32;
-        merged.push(base[split_at + i] * fade_out + next[i] * fade_in);
+        base.push(tail[i] * fade_out + next[i] * fade_in);
     }
-    merged.extend_from_slice(&next[overlap_samples..]);
-    *base = merged;
+    base.extend_from_slice(&next[overlap_samples..]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 纯文本嗅探是「任意纯文本文件」这条路的唯一判据，必须钉住行为：
+    /// UTF-8 / GBK 中文要被接受，二进制要被拒。
+    #[test]
+    fn plain_text_sniffing_accepts_text_and_rejects_binary() {
+        assert!(looks_like_plain_text("第一章 起源\n他说过一句话。".as_bytes()));
+        assert!(looks_like_plain_text(b""));
+
+        // GBK 中文：字节多在 0x81 以上，不能被误判成二进制。
+        let (gbk, _, _) = GBK.encode("第一章 起源。");
+        assert!(looks_like_plain_text(gbk.as_ref()));
+
+        // 含 NUL（PNG 头、可执行文件）直接判为二进制。
+        assert!(!looks_like_plain_text(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"));
+        // 无 NUL 但控制字符占比过高（二进制数据）同样判为二进制。
+        let noisy = (1u8..=255).cycle().take(1024).collect::<Vec<u8>>();
+        assert!(!looks_like_plain_text(&noisy));
+    }
+
+    fn pcm16_wav(samples: &[i16], sample_rate: u32, channels: u16) -> Vec<u8> {
+        let bits = 16u16;
+        let block_align = channels * bits / 8;
+        let byte_rate = sample_rate * block_align as u32;
+        let mut fmt = Vec::new();
+        fmt.extend_from_slice(&1u16.to_le_bytes());
+        fmt.extend_from_slice(&channels.to_le_bytes());
+        fmt.extend_from_slice(&sample_rate.to_le_bytes());
+        fmt.extend_from_slice(&byte_rate.to_le_bytes());
+        fmt.extend_from_slice(&block_align.to_le_bytes());
+        fmt.extend_from_slice(&bits.to_le_bytes());
+
+        let mut data = Vec::with_capacity(samples.len() * 2);
+        for sample in samples {
+            data.extend_from_slice(&sample.to_le_bytes());
+        }
+        build_wav(&fmt, &data).expect("构造样例 WAV")
+    }
+
+    /// 流式合并必须与旧的内存版逐字节一致——这是替换音频输出路径的唯一凭据。
+    #[test]
+    fn streaming_merge_matches_in_memory_reference() {
+        let tmp = tempfile::TempDir::new().expect("temp dir");
+        let (sample_rate, channels) = (16_000u32, 1u16);
+
+        // 段长特意长短不一，覆盖「比 overlap 还短」这类边界。
+        let specs: [(&str, usize); 5] = [
+            ("第一段。", 400),
+            ("第二段，", 120),
+            ("第三段；", 17),
+            ("第四段", 5),
+            ("第五段……", 900),
+        ];
+
+        let mut paths = Vec::new();
+        let mut parts = Vec::new();
+        let mut chunks = Vec::new();
+        for (index, (text, len)) in specs.iter().enumerate() {
+            let samples = (0..*len)
+                .map(|k| (((k as i32 * 37 + index as i32 * 11) % 2000) - 1000) as i16)
+                .collect::<Vec<_>>();
+            let bytes = pcm16_wav(&samples, sample_rate, channels);
+            let path = tmp.path().join(format!("{:05}.wav", index));
+            fs::write(&path, &bytes).expect("写入样例分片");
+            paths.push(path);
+            parts.push(bytes);
+            chunks.push(TextChunk {
+                index: index + 1,
+                text: (*text).to_string(),
+                lang: ChunkLang::Zh,
+            });
+        }
+
+        let expected = merge_wav_parts_with_postprocess(&parts, &chunks).expect("内存版合并");
+        let output_path = tmp.path().join("merged.wav");
+        merge_wav_files_to_path(&paths, &chunks, &output_path).expect("流式合并");
+        let actual = fs::read(&output_path).expect("读取合并结果");
+
+        if actual != expected {
+            let first_diff = actual.iter().zip(&expected).position(|(a, b)| a != b);
+            panic!(
+                "流式合并与内存版不一致：长度 {} vs {}，首个差异字节 {:?}",
+                actual.len(),
+                expected.len(),
+                first_diff
+            );
+        }
+    }
+
+    /// 与旧实现逐字对应的朴素版本，用来钉住 `append_with_crossfade` 原地化后的语义。
+    fn naive_crossfade(base: &[f32], next: &[f32], sample_rate: u32, channels: u16, crossfade_ms: u32) -> Vec<f32> {
+        let mut out = base.to_vec();
+        if base.is_empty() || next.is_empty() {
+            out.extend_from_slice(next);
+            return out;
+        }
+        let overlap_frames = ((sample_rate as usize * crossfade_ms as usize) / 1000).max(1);
+        let overlap = overlap_frames
+            .saturating_mul(channels as usize)
+            .min(base.len())
+            .min(next.len());
+        if overlap == 0 {
+            out.extend_from_slice(next);
+            return out;
+        }
+        let split_at = base.len() - overlap;
+        out.truncate(split_at);
+        for i in 0..overlap {
+            let fade_out = 1.0 - (i as f32 / overlap as f32);
+            let fade_in = i as f32 / overlap as f32;
+            out.push(base[split_at + i] * fade_out + next[i] * fade_in);
+        }
+        out.extend_from_slice(&next[overlap..]);
+        out
+    }
+
+    /// `derive_pause_after_ms` 最小返回 110ms，而淡接阈值是 `<= 90`，
+    /// 所以淡接分支在生产路径上其实走不到——只能直接测这个纯函数。
+    /// 它仍然值得测：原地化改动一旦写错，将来阈值被调整时就会静默产出错误音频。
+    #[test]
+    fn in_place_crossfade_keeps_original_semantics() {
+        let (sample_rate, channels, crossfade_ms) = (16_000u32, 1u16, 36u32);
+        let base: Vec<f32> = (0..100).map(|i| i as f32 * 0.01).collect();
+        let next: Vec<f32> = (0..40).map(|i| 1.0 - i as f32 * 0.01).collect();
+
+        let cases: Vec<(Vec<f32>, Vec<f32>)> = vec![
+            (base.clone(), next.clone()),
+            // next 比 overlap 还短。
+            (base.clone(), vec![0.5; 5]),
+            // base 比 overlap 还短。
+            (vec![0.25; 3], next.clone()),
+            (Vec::new(), next.clone()),
+            (base.clone(), Vec::new()),
+        ];
+
+        for (index, (b, n)) in cases.iter().enumerate() {
+            let mut actual = b.clone();
+            append_with_crossfade(&mut actual, n, sample_rate, channels, crossfade_ms);
+            let expected = naive_crossfade(b, n, sample_rate, channels, crossfade_ms);
+            assert_eq!(actual, expected, "第 {} 组输入原地化后语义变了", index);
+        }
+    }
 }

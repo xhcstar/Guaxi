@@ -105,6 +105,10 @@ comrak = "0.49.0"
 # 以及文本型 PDF）。无 Python、无 ML 模型、无需装配，进程内直调，中位耗时毫秒级。
 # 不做 OCR，扫描件会返回 NeedsOcr；调用侧用 catch_unwind 隔离其 panic（见 profile.release 说明）。
 anydoc = "0.2.4"
+# 电子书解析：MOBI / AZW3（anydoc 不覆盖这两类）。只用来取正文纯文本，
+# 默认特性里的 server/opds/mcp/parallel/mmap/zstd 全关掉，避免拖进 tiny_http、
+# rayon、memmap2 等与本体无关的重依赖。
+ebook-rs = { version = "0.17", default-features = false }
 petgraph = "0.6"
 fuzzy-matcher = "0.3.7"
 # 文件名索引的模糊匹配器（Helix 编辑器同款）。比 fuzzy-matcher 快一个量级，

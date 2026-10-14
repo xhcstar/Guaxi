@@ -576,7 +576,8 @@ pub fn convert_with_anydoc(input_path: &Path, output_md: &Path) -> Result<(), St
 
 /// 把 anydoc 的类型化错误翻译成给用户看的中文文案。
 /// `ConvertError` 标了 `#[non_exhaustive]`，兜底分支必须保留。
-fn anydoc_error_message(e: &anydoc::ConvertError) -> String {
+/// 有声书转换（`tts_book.rs`）解析 .doc 时复用同一份文案，故为 `pub(crate)`。
+pub(crate) fn anydoc_error_message(e: &anydoc::ConvertError) -> String {
     use anydoc::ConvertError as E;
     match e {
         E::Encrypted => "文档已加密或受密码保护，无法转换".to_string(),

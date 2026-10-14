@@ -357,6 +357,7 @@ dependencies = [
  "const-random",
  "getrandom 0.3.4",
  "once_cell",
+ "serde",
  "version_check",
  "zerocopy",
 ]
@@ -2087,6 +2088,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "compact_str"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79fcda08c33bb58b97008b2cdada6622500e949e060f5913361763121abd2416"
+dependencies = [
+ "castaway",
+ "cfg-if",
+ "itoa",
+ "serde",
+ "static_assertions",
+ "zmij",
+]
+
+[[package]]
 name = "compression-codecs"
 version = "0.4.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3288,6 +3303,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
+name = "ebook-rs"
+version = "0.17.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f6a83baf63df2ca8fc750e0a9317a03ee7179336ceb4a8695caead392c8bef8"
+dependencies = [
+ "aes 0.9.3",
+ "ahash",
+ "base64 0.23.1",
+ "cbc 0.2.1",
+ "compact_str 0.10.0",
+ "encoding_rs",
+ "flate2",
+ "memchr",
+ "parking_lot",
+ "percent-encoding",
+ "regex 1.12.2",
+ "roxmltree 0.21.1",
+ "serde",
+ "serde_json",
+ "sha1_smol",
+ "simdutf8",
+ "whatlang",
+ "zip 7.2.0",
+ "zlib-rs",
+]
+
+[[package]]
 name = "ecb"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4004,7 +4046,7 @@ version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbc773e24e02d4ddd8395fd30dc147524273a83e54e0f312d986ea30de5f5646"
 dependencies = [
- "roxmltree",
+ "roxmltree 0.20.0",
 ]
 
 [[package]]
@@ -4854,6 +4896,7 @@ dependencies = [
  "copia",
  "ctr 0.9.2",
  "des 0.8.1",
+ "ebook-rs",
  "ecb",
  "ecdsa 0.16.9",
  "ed25519-dalek 2.2.0",
@@ -10469,7 +10512,7 @@ dependencies = [
  "bincode 2.0.1",
  "bytemuck",
  "bytes",
- "compact_str",
+ "compact_str 0.9.1",
  "either",
  "flate2",
  "foldhash 0.2.0",
@@ -11816,6 +11859,15 @@ name = "roxmltree"
 version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
+
+[[package]]
+name = "roxmltree"
+version = "0.21.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1964b10c76125c36f8afe190065a4bf9a87bf324842c05701330bba9f1cacbb"
+dependencies = [
+ "memchr",
+]
 
 [[package]]
 name = "rquickjs"
@@ -15287,7 +15339,7 @@ dependencies = [
  "rayon",
  "regex 1.12.2",
  "regex-syntax 0.8.8",
- "roxmltree",
+ "roxmltree 0.20.0",
  "rust_decimal",
  "rustc-hash",
  "rustybuzz",
@@ -15872,7 +15924,7 @@ dependencies = [
  "kurbo 0.11.3",
  "log 0.4.29",
  "pico-args",
- "roxmltree",
+ "roxmltree 0.20.0",
  "rustybuzz",
  "simplecss",
  "siphasher 1.0.1",
@@ -16440,6 +16492,15 @@ name = "weezl"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
+
+[[package]]
+name = "whatlang"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5e8f38b596e2a359b755342473520a99421e43658548c79489ee221b728c107"
+dependencies = [
+ "hashbrown 0.15.5",
+]
 
 [[package]]
 name = "which"
@@ -17825,6 +17886,19 @@ dependencies = [
  "zeroize",
  "zopfli",
  "zstd",
+]
+
+[[package]]
+name = "zip"
+version = "7.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c42e33efc22a0650c311c2ef19115ce232583abbe80850bc8b66509ebef02de0"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "indexmap 2.14.2",
+ "memchr",
+ "typed-path",
 ]
 
 [[package]]

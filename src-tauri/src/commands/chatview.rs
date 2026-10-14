@@ -17,7 +17,7 @@ use std::fs::OpenOptions;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration as StdDuration;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
@@ -2177,6 +2177,9 @@ fn run_sherpa_onnx_cli_once(
     Ok(())
 }
 
+/// 每次合成的临时 WAV 序号，保证并发调用下文件名唯一。
+static SHERPA_TTS_TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
 async fn audio_text_to_speech_sherpa_onnx(request: TextToSpeechRequest) -> Result<TextToSpeechResponse, String> {
     let text = request.input.trim().to_string();
     if text.is_empty() {
@@ -2193,7 +2196,14 @@ async fn audio_text_to_speech_sherpa_onnx(request: TextToSpeechRequest) -> Resul
         "audio_text_to_speech using sherpa-onnx"
     );
     let modes = detect_sherpa_tts_modes(&cfg, &request.common.mode_hint);
-    let output_wav = env::temp_dir().join(format!("guaxi_sherpa_tts_{}.wav", Utc::now().timestamp_millis()));
+    // 临时文件名必须唯一：有声书转换会并发跑多段合成，
+    // 只靠毫秒时间戳会撞名，导致两段音频互相覆盖。
+    let temp_seq = SHERPA_TTS_TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let output_wav = env::temp_dir().join(format!(
+        "guaxi_sherpa_tts_{}_{}.wav",
+        Utc::now().timestamp_millis(),
+        temp_seq
+    ));
     let mut last_err = String::new();
     for mode in modes {
         match run_sherpa_onnx_cli_once(&cfg, &text, &output_wav, mode) {
