@@ -1892,12 +1892,8 @@ pub async fn language_learning_collect_audio_by_topic(
     }
     let learning_lang = normalize_learning_lang(input.learning_lang);
     let limit = input.limit.unwrap_or(24).clamp(1, 80) as usize;
-    let client = Client::builder()
-        .user_agent("Mozilla/5.0")
-        .connect_timeout(std::time::Duration::from_secs(8))
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .map_err(|e| format!("初始化网络客户端失败: {}", e))?;
+    // 采集源（archive.org / wikimedia / 用户自带的 RSS）基本都在境外，直连会连接超时。
+    let client = proxied_client_any()?;
     let mut out = Vec::new();
     let mut seen = HashSet::new();
     let mut selected_sources = input.sources.unwrap_or_default();
@@ -2439,12 +2435,8 @@ pub async fn language_learning_fetch_transcript_from_source(
     let provider = input.provider.unwrap_or_default();
     let notes = input.notes.unwrap_or_default();
     let page_url = extract_first_url(&notes);
-    let client = Client::builder()
-        .user_agent("Mozilla/5.0")
-        .connect_timeout(std::time::Duration::from_secs(8))
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .map_err(|e| format!("初始化网络客户端失败: {}", e))?;
+    // 转写素材同样在境外（视频页 / 播客页），直连一样会连接超时。
+    let client = proxied_client_for(&source_uri)?;
     let transcript = fetch_transcript_from_source(
         &client,
         if provider.trim().is_empty() {
@@ -3261,6 +3253,40 @@ fn infer_ext_from_uri(raw: &str) -> String {
     }
 }
 
+/// 读取应用级代理设置（资源嗅探 / 文档转换用的是同一份 `proxy` 设置）。
+fn load_proxy_config() -> crate::commands::resource_hunter::model::ProxyConfig {
+    crate::commands::resource_hunter::store::get_setting("proxy")
+        .ok()
+        .flatten()
+        .and_then(|value| serde_json::from_str(&value).ok())
+        .unwrap_or_default()
+}
+
+/// 语言学习里所有对外请求都从这里取 client。
+///
+/// 关键是带上代理：音频源（如 sphinx.acast.com）、素材站大多在境外，大陆直连会直接
+/// 连接超时——线上报的就是 `error trying to connect: operation timed out`
+/// （实测同一个 acast 地址直连超时、走系统代理 302 到真正的 CDN 上）。
+/// 而 reqwest **不会**自己去读 Windows 注册表里的系统代理，必须显式套上。
+/// 判定规则与资源嗅探、文档转换保持一致，都交给 resource_hunter::proxy：
+/// 设置里的代理模式（跟随系统 / 自定义 / 直连）→ 直连白名单 → 仅境外走代理。
+fn proxied_client_for(target: &str) -> Result<Client, String> {
+    let config = load_proxy_config();
+    crate::commands::resource_hunter::proxy::build_client_for(&config, target)
+}
+
+/// 一个 client 要打多个站点时用这个：只按代理模式取 URL，不做按目标的分流。
+///
+/// 采集器就是这种情况——同一把 client 要访问 archive.org、commons.wikimedia.org
+/// 和用户自带的 RSS 源，前两个都在境外且实测直连必超时（archive.org 直连 exit 28、
+/// 走代理 200）。分流规则需要单一目标才能判定，这里索性按模式统一走代理。
+fn proxied_client_any() -> Result<Client, String> {
+    let config = load_proxy_config();
+    crate::commands::resource_hunter::proxy::build_client_raw(
+        crate::commands::resource_hunter::proxy::effective_proxy_url(&config).as_deref(),
+    )
+}
+
 async fn prepare_entry_audio_file(row: &AudioResource, entry_dir: &Path) -> Result<PathBuf, String> {
     if !entry_dir.exists() {
         fs::create_dir_all(entry_dir).map_err(|e| format!("创建听力目录失败: {}", e))?;
@@ -3269,14 +3295,12 @@ async fn prepare_entry_audio_file(row: &AudioResource, entry_dir: &Path) -> Resu
     let audio_path = entry_dir.join(format!("media.{}", ext));
     let source = normalize_media_uri(&row.source_uri);
     if source.starts_with("http://") || source.starts_with("https://") {
-        let client = Client::builder()
-            .user_agent("Mozilla/5.0")
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .timeout(std::time::Duration::from_secs(300))
-            .build()
-            .map_err(|e| format!("初始化下载客户端失败: {}", e))?;
+        let client = proxied_client_for(&source)?;
         let resp = client
             .get(source.as_str())
+            // 整集音频动辄几十 MB，代理客户端默认的总超时不够用，这一条单独放宽；
+            // reqwest 里请求级的 timeout 会覆盖 client 上的那个。
+            .timeout(std::time::Duration::from_secs(300))
             .send()
             .await
             .map_err(|e| format!("下载音频失败: {}", e))?;
