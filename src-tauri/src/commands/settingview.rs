@@ -1520,7 +1520,28 @@ pub fn set_llm_config(llm_config: LlmConfig) {
 #[tauri::command]
 pub fn get_tts_config() -> TtsConfig {
     let config = load_config();
-    config.tts_config
+    let mut tts = config.tts_config;
+    // 与 get_asr_config 同样的兜底：任一字段为空就回退到内置默认。
+    //
+    // 注意 serde 的 `#[serde(default = ...)]` 只在**字段缺失**时生效，
+    // 配置里写成 `"model": ""` 时它不会兜底，语音侧就会拿到空路径。
+    // `exe` 已退役（语音改为进程内调用），保持原样即可。
+    if tts.provider.trim().is_empty() {
+        tts.provider = default_tts_provider();
+    }
+    if tts.model.trim().is_empty() {
+        tts.model = default_tts_model();
+    }
+    if tts.tokens.trim().is_empty() {
+        tts.tokens = default_tts_tokens();
+    }
+    if tts.output_dir.trim().is_empty() {
+        tts.output_dir = default_tts_output_dir();
+    }
+    if tts.speaker_id.trim().is_empty() {
+        tts.speaker_id = default_tts_speaker_id();
+    }
+    tts
 }
 
 #[tauri::command]

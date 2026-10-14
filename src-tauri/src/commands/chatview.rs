@@ -1734,6 +1734,18 @@ async fn audio_text_to_speech_sherpa_onnx(request: TextToSpeechRequest) -> Resul
     let model = request.common.model.clone();
     let tokens = request.common.tokens.clone();
 
+    // 日志放在解析之前：解析失败会提前返回，日志若在它后面就不会留下任何线索。
+    info!(
+        requested_model = request.common.model.trim(),
+        requested_tokens = request.common.tokens.trim(),
+        runtime_provider = request.common.runtime_provider.trim(),
+        mode_hint = request.common.mode_hint.trim(),
+        speaker,
+        speed,
+        text_len = text.len(),
+        "audio_text_to_speech using sherpa-onnx in-process"
+    );
+
     // 合成在进程内完成，模型只加载一次；cuda 失败时按老规矩回退 cpu。
     let mut last_err = String::new();
     for provider in provider_attempts(&request.common.runtime_provider) {
@@ -1744,14 +1756,6 @@ async fn audio_text_to_speech_sherpa_onnx(request: TextToSpeechRequest) -> Resul
             &provider,
             None,
         )?;
-        info!(
-            model = model.as_str(),
-            provider = provider.as_str(),
-            speaker,
-            speed,
-            text_len = text.len(),
-            "audio_text_to_speech using sherpa-onnx in-process"
-        );
 
         match crate::guaxiservices::speech::synthesize_wav(config, text.clone(), speaker, speed).await {
             Ok(wav) => {

@@ -31,7 +31,11 @@ pub fn resolve_resource_path(raw: &str) -> PathBuf {
     let normalized = trimmed.replace('\\', "/");
     if normalized == "utils" || normalized.starts_with("utils/") {
         if let Ok(path) = bundled_resources::ensure_relative_dir(&normalized) {
-            return path;
+            // 资源层万一解析出空路径，宁可退回原值也不要把它当结果传下去：
+            // 空路径最终只会变成一句「文件不存在：」这种没法排查的报错。
+            if !path.as_os_str().is_empty() {
+                return path;
+            }
         }
     }
     PathBuf::from(trimmed)
@@ -74,7 +78,12 @@ pub fn resolve_tts_engine_config(
         model_path = model_path.join("model.onnx");
     }
     if !model_path.is_file() {
-        return Err(format!("TTS 模型文件不存在：{}", model_path.display()));
+        // 把收到的原值一起带出来：路径为空这类问题光看「不存在：」根本没法排查。
+        return Err(format!(
+            "TTS 模型文件不存在：{}（收到 model=\"{}\"）",
+            model_path.display(),
+            model
+        ));
     }
     let base_dir = model_path
         .parent()
@@ -142,7 +151,11 @@ pub fn resolve_tts_engine_config(
 pub fn resolve_asr_engine_config(model: &str, provider: &str) -> Result<AsrEngineConfig, String> {
     let model_path = resolve_resource_path(model);
     if !model_path.exists() {
-        return Err(format!("ASR 模型不存在：{}", model_path.display()));
+        return Err(format!(
+            "ASR 模型不存在：{}（收到 model=\"{}\"）",
+            model_path.display(),
+            model
+        ));
     }
 
     let asr_model = if model_path.is_dir() {
