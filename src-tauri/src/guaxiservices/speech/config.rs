@@ -297,6 +297,41 @@ pub fn resolve_whisper_onnx_engine_config(
     })
 }
 
+/// 标点模型路径。找不到就返回 `None`——没有它识别照常工作，只是输出不带标点。
+///
+/// 模型包解出来会多一层同名目录，所以 `punctuation/model.onnx` 与
+/// `punctuation/*/model.onnx` 两种布局都要认。
+///
+/// 顺带做一次体积校验：截断的 ONNX 会让 sherpa 的 create 抛出 C++ 异常，
+/// 而那种异常穿透 FFI 会**直接 abort 进程**（路径不存在反而是优雅返回 None）。
+/// 与其赌下载完整性，不如在这里把明显不完整的文件挡掉。
+pub fn resolve_punctuation_model() -> Option<PathBuf> {
+    const MIN_MODEL_BYTES: u64 = 10 * 1024 * 1024;
+
+    let root = bundled_resources::ensure_relative_dir("utils/Models/punctuation").ok()?;
+    if !root.is_dir() {
+        return None;
+    }
+
+    let usable = |path: PathBuf| {
+        std::fs::metadata(&path)
+            .map(|meta| meta.len() >= MIN_MODEL_BYTES)
+            .unwrap_or(false)
+            .then_some(path)
+    };
+
+    let direct = root.join("model.onnx");
+    if direct.is_file() {
+        return usable(direct);
+    }
+
+    std::fs::read_dir(&root)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path().join("model.onnx"))
+        .find_map(|candidate| candidate.is_file().then(|| usable(candidate)).flatten())
+}
+
 /// 探测 CUDA 是否真的能用。
 ///
 /// 为什么必须"先探测再请求"，而不能"先试、失败再回退"：

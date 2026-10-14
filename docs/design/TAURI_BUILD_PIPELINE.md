@@ -296,8 +296,9 @@ npm run sherpa:fetch:cuda   # 额外准备 GPU 版原生库
 [`tools/run_tauri_with_utils.mjs`](/e:/Record/source/Vue/guaxi/tools/run_tauri_with_utils.mjs)
 **自动调用**（幂等，已存在即跳过），正常流程不必手动执行。它做四件事：
 
-1. 取 sherpa-onnx 的 Windows 静态库归档到 `src-tauri/.sherpa-onnx-libs/<ver>/`；
-2. 取模型（Kokoro TTS / SenseVoice ASR / whisper ONNX / Silero VAD）到 `src-tauri/utils/Models/`；
+1. 取 sherpa-onnx 的静态库归档到 `src-tauri/.sherpa-onnx-libs/<ver>/`（归档名随平台而异）；
+2. 取模型到 `src-tauri/utils/Models/`：Kokoro TTS、SenseVoice ASR、whisper ONNX、Silero VAD、
+   标点模型（CT-Transformer 中英，约 122MB，用于给识别结果补断句）；
 3. 下载走 curl，代理按「`*_PROXY` 环境变量 → Windows 注册表系统代理」依次解析；
 4. 大文件支持断点续传（保留 `.part`，失败不整包重下）。
 

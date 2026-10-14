@@ -25,6 +25,7 @@ const REPO = 'https://github.com/k2-fsa/sherpa-onnx/releases/download';
 const RELEASE = `${REPO}/v${VERSION}`;
 const TTS_MODELS = `${REPO}/tts-models`;
 const ASR_MODELS = `${REPO}/asr-models`;
+const PUNCT_MODELS = `${REPO}/punctuation-models`;
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC_TAURI = resolve(HERE, '..', 'src-tauri');
@@ -184,6 +185,27 @@ async function fileSize(path) {
   }
 }
 
+/// 当前平台对应的静态库归档名。
+///
+/// 必须与 `sherpa-onnx-sys` 的 build.rs 里写死的名字逐字一致，
+/// 否则 `SHERPA_ONNX_ARCHIVE_DIR` 里找不到它，构建会退回去联网下载（多半会卡住）。
+function nativeArchiveName() {
+  const arm = process.arch === 'arm64';
+  if (process.platform === 'win32') {
+    return arm
+      ? `sherpa-onnx-v${VERSION}-win-arm64-static-MT-Release-lib.tar.bz2`
+      : `sherpa-onnx-v${VERSION}-win-x64-static-MT-Release-lib.tar.bz2`;
+  }
+  if (process.platform === 'darwin') {
+    return arm
+      ? `sherpa-onnx-v${VERSION}-osx-arm64-static-lib.tar.bz2`
+      : `sherpa-onnx-v${VERSION}-osx-x64-static-lib.tar.bz2`;
+  }
+  return arm
+    ? `sherpa-onnx-v${VERSION}-linux-aarch64-static-lib.tar.bz2`
+    : `sherpa-onnx-v${VERSION}-linux-x64-static-lib.tar.bz2`;
+}
+
 /// 取归档里的第一个子目录路径（模型包都解出一层同名目录）。
 async function firstSubdir(parent) {
   const entries = await readdir(parent, { withFileTypes: true });
@@ -280,6 +302,14 @@ async function generateOnnxRuntimeImportLib(binutils, dllPath, outLibPath, workD
 /// 产出的目录同时放导入库与 DLL：前者供链接，后者会被 sherpa-onnx-sys 的 build.rs
 /// 自动拷到 exe 旁，省得再手工分发。
 async function prepareCudaLibs(proxy) {
+  if (process.platform !== 'win32') {
+    warn(
+      'GPU 预编译包目前只处理 Windows。其它平台需要自行构建带 CUDA 的 sherpa-onnx，' +
+        '再用 SHERPA_ONNX_LIB_DIR 指向它的 lib 目录。',
+    );
+    return;
+  }
+
   const name = `sherpa-onnx-v${VERSION}-cuda-12.x-cudnn-9.x-onnxruntime1.28.2-win-x64-cuda.tar.bz2`;
   const libDir = join(LIBS_ROOT, 'cuda-lib');
   const marker = join(libDir, '.prepared');
@@ -343,9 +373,9 @@ async function main() {
 
   const tasks = [];
 
-  // 1) 原生静态库。文件名必须与 sherpa-onnx-sys 里写死的完全一致，
-  //    否则 SHERPA_ONNX_ARCHIVE_DIR 找不到它、又会退回去联网下载。
-  const nativeName = `sherpa-onnx-v${VERSION}-win-x64-static-MT-Release-lib.tar.bz2`;
+  // 1) 原生静态库。文件名随平台而异（见 nativeArchiveName），
+  //    必须与 sherpa-onnx-sys 的 build.rs 期望的一致。
+  const nativeName = nativeArchiveName();
   tasks.push({
     name: nativeName,
     url: `${RELEASE}/${nativeName}`,
@@ -388,6 +418,23 @@ async function main() {
     target: join(MODELS_ROOT, 'vad', 'silero_vad.onnx'),
     unpack: 'raw',
     ready: async () => (await fileSize(join(MODELS_ROOT, 'vad', 'silero_vad.onnx'))) > 100 * 1024,
+  });
+
+  // 6) 标点模型：识别模型本身不输出标点，实时听写要靠它补断句。
+  //    中英混排的 CT-Transformer，约 70MB。
+  tasks.push({
+    name: 'sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12.tar.bz2',
+    url: `${PUNCT_MODELS}/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12.tar.bz2`,
+    target: join(MODELS_ROOT, 'punctuation', 'sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12'),
+    ready: async () =>
+      (await fileSize(
+        join(
+          MODELS_ROOT,
+          'punctuation',
+          'sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12',
+          'model.onnx',
+        ),
+      )) > 10 * 1024 * 1024,
   });
 
   const work = join(SRC_TAURI, '.sherpa-download-tmp');

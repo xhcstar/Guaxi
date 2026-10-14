@@ -7,13 +7,14 @@
 pub mod asr;
 pub mod cache;
 pub mod config;
+pub mod punct;
 pub mod tts;
 pub mod wav;
 
 pub use asr::{AsrEngineConfig, AsrSegment};
 pub use config::{
-    normalize_provider, resolve_asr_engine_config, resolve_tts_engine_config,
-    resolve_whisper_onnx_engine_config,
+    normalize_provider, resolve_asr_engine_config, resolve_punctuation_model,
+    resolve_tts_engine_config, resolve_whisper_onnx_engine_config,
 };
 pub use tts::TtsEngineConfig;
 pub use wav::AudioBuffer;
@@ -34,10 +35,17 @@ pub async fn synthesize_wav(
 }
 
 /// 识别 PCM16 WAV 字节里的语音。内部会重采样到识别器要求的 16kHz 单声道。
+///
+/// 识别结果会尽量补上标点：sherpa 的识别模型本身不输出标点，
+/// 实时听写攒出来就是一整段没有断句的字。标点模型缺失时原样返回，不影响识别。
 pub async fn transcribe_wav(config: AsrEngineConfig, wav_bytes: Vec<u8>) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let audio = AudioBuffer::decode_to_mono(&wav_bytes, asr::ASR_SAMPLE_RATE)?;
-        asr::transcribe(&config, &audio.samples)
+        let text = asr::transcribe(&config, &audio.samples)?;
+        Ok(match resolve_punctuation_model() {
+            Some(model) => punct::add_punctuation(&model, &config.provider, &text),
+            None => text,
+        })
     })
     .await
     .map_err(|e| format!("语音识别任务失败：{}", e))?
