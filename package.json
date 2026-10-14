@@ -17,6 +17,7 @@
     "sherpa:fetch": "node ./tools/fetch_sherpa_onnx_libs.mjs",
     "sherpa:fetch:force": "node ./tools/fetch_sherpa_onnx_libs.mjs --force",
     "sherpa:fetch:cuda": "node ./tools/fetch_sherpa_onnx_libs.mjs --cuda",
+    "sherpa:verify:cuda": "cargo run --quiet --manifest-path src-tauri/Cargo.toml --bin verify_cuda_runtime --",
     "rsshub:prepare": "node ./tools/prepare_rsshub_env.mjs",
     "rsshub:prepare:force": "node ./tools/prepare_rsshub_env.mjs --force",
     "download:asr-model": "powershell -ExecutionPolicy Bypass -File ./tools/download_asr_model.ps1",

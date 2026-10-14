@@ -10,13 +10,13 @@
 // 用法：
 //   node tools/fetch_sherpa_onnx_libs.mjs            # 缺什么补什么
 //   node tools/fetch_sherpa_onnx_libs.mjs --force    # 全部重下
-//   node tools/fetch_sherpa_onnx_libs.mjs --cuda     # 同时取 CUDA 版原生库（约 595MB）
+//   node tools/fetch_sherpa_onnx_libs.mjs --cuda     # 同时取 CUDA 版原生库与 CUDA 运行时（约 2GB）
 //
 // 下载走 curl：它原生支持代理、重定向、断点续传和「低速即放弃」，不用自己重建这些机制。
 
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, copyFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, copyFile, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -297,6 +297,226 @@ async function generateOnnxRuntimeImportLib(binutils, dllPath, outLibPath, workD
   return names.length;
 }
 
+// ── CUDA 运行时（GPU 构建必需）────────────────────────────────────────────
+//
+// onnxruntime 那个 CUDA EP 是按 CUDA 12.9 的符号集链接的，光有 onnxruntime*.dll 不够：
+// 少一个运行库就会 LoadLibrary 失败（error 126 / 127），或者在 EP 自己的初始化里崩掉
+// （error 1114），最终表现成「机器明明有 GPU 却在跑 CPU」，严重时直接 abort 进程。
+// 也不能指望构建机上装没装 CUDA Toolkit——一律取 NVIDIA 官方在 PyPI 上的
+// redistributable，版本对齐上面那个 cuda-12.x-cudnn-9.x-ORT 包：
+//   · CUDA 12.9 是因为 EP 要的 cudaLibrary* 系列符号到 12.8 才有；
+//   · cuDNN 只认 9.x（EP 里写死 CUDNN version < 9.0 就报错）。
+//
+// 这些 DLL 会被 sherpa-onnx-sys 的 build.rs 一并拷到 exe 旁，release 打包再按 resources
+// 收进安装包，所以 GPU 版分发包会因此大出 1GB 以上；CPU 构建不会走到这里。
+const CUDA_SERIES = '12.9';
+const CUDA_RUNTIME_STAMP = `cuda-runtime-v1:${CUDA_SERIES}`;
+// 每项的 series 是该**包自己的**版本前缀，不是 CUDA 版本——各家编号不统一：
+//   cudart/nvrtc 跟着 CUDA 版本（12.9.x），cuBLAS 也是（12.9.x），
+//   而 cuFFT 用的是库版本（11.x），cuDNN 用 9.x。包的 cu12 后缀已经限定了 CUDA 大版本。
+const CUDA_RUNTIME_WHEELS = [
+  {
+    pkg: 'nvidia-cuda-runtime-cu12',
+    series: CUDA_SERIES,
+    bin: 'nvidia/cuda_runtime/bin',
+    match: /^cudart64_\d+\.dll$/i,
+    what: 'CUDA 运行时 cudart',
+  },
+  {
+    pkg: 'nvidia-cublas-cu12',
+    series: CUDA_SERIES,
+    bin: 'nvidia/cublas/bin',
+    match: /^cublas(Lt)?64_\d+\.dll$/i,
+    what: 'cuBLAS / cuBLASLt',
+  },
+  {
+    pkg: 'nvidia-cufft-cu12',
+    series: '11.',
+    bin: 'nvidia/cufft/bin',
+    match: /^cufft64_\d+\.dll$/i,
+    what: 'cuFFT',
+  },
+  {
+    pkg: 'nvidia-cuda-nvrtc-cu12',
+    series: CUDA_SERIES,
+    bin: 'nvidia/cuda_nvrtc/bin',
+    match: /^nvrtc64_\d+_\d+\.dll$/i,
+    what: 'NVRTC',
+  },
+  {
+    pkg: 'nvidia-cudnn-cu12',
+    series: '9.',
+    bin: 'nvidia/cudnn/bin',
+    match: /^cudnn[A-Za-z_]*64_9.*\.dll$/i,
+    what: 'cuDNN 9',
+  },
+];
+
+function proxyArgs(proxy) {
+  return proxy ? ['--proxy', proxy] : [];
+}
+
+/// 版本号按数字段比较：`12.9.79` 要大于 `12.9.2.10`，按字符串排会判反。
+function compareVersions(a, b) {
+  const pa = a.split('.').map((part) => Number.parseInt(part, 10) || 0);
+  const pb = b.split('.').map((part) => Number.parseInt(part, 10) || 0);
+  for (let index = 0; index < Math.max(pa.length, pb.length); index += 1) {
+    const diff = (pa[index] || 0) - (pb[index] || 0);
+    if (diff !== 0) {
+      return diff;
+    }
+  }
+  return 0;
+}
+
+/// PyPI 索引候选：先镜像、后官方源。
+///
+/// 国内直连 pypi.org 经常直接断开（实测连 TLS 握手都过不去），而 python 运行时的
+/// pip.ini 本来就用清华源，这里保持一致；能直连的机器会自然落到官方源。
+function pypiIndexCandidates() {
+  const override = process.env.GUAXI_PYPI_INDEX;
+  return [
+    ...(override ? [override.replace(/\/+$/, '')] : []),
+    'https://pypi.tuna.tsinghua.edu.cn',
+    'https://pypi.org',
+  ];
+}
+
+/// 从 wheel 文件名里取版本号：`{发行版}-{版本}-{pytag}-{abitag}-{平台}.whl`。
+function versionFromWheel(filename, pkg) {
+  const normalized = pkg.replace(/[-_.]+/g, '_').toLowerCase();
+  const stem = filename.replace(/\.whl$/i, '');
+  const prefix = `${normalized}-`;
+  if (!stem.toLowerCase().startsWith(prefix)) {
+    return null;
+  }
+  return stem.slice(prefix.length).split('-')[0];
+}
+
+/// 挑一个 wheel：该包最新一个匹配版本前缀、且带 win_amd64 轮子的发行版。
+///
+/// 认的是 PEP 503 简单索引页，而不是 PyPI 的 JSON API：镜像的 JSON 经常滞后
+/// （实测清华源的 /pypi/nvidia-cuda-runtime-cu12/json 停在 12.6.37，同一个源的
+/// simple 索引里已经有 12.9.79），照 JSON 找会找不到版本、白白退回直连官方源。
+async function resolveWheelUrl(pkg, series, proxy) {
+  const attempts = [];
+  for (const index of pypiIndexCandidates()) {
+    const pageUrl = `${index}/simple/${pkg}/`;
+    const { code, stdout } = await capture('curl', ['-fsSL', ...proxyArgs(proxy), pageUrl]);
+    if (code !== 0 || !stdout.trim()) {
+      attempts.push(`${index}：curl 退出码 ${code}`);
+      continue;
+    }
+
+    const candidates = [];
+    for (const match of stdout.matchAll(/<a[^>]+href="([^"#]+)[^"]*"[^>]*>([^<]+)<\/a>/gi)) {
+      const href = match[1].replace(/&amp;/g, '&');
+      const filename = match[2].trim();
+      if (!filename.toLowerCase().endsWith('.whl') || !filename.includes('win_amd64')) {
+        continue;
+      }
+      const version = versionFromWheel(filename, pkg);
+      if (version && version.startsWith(series)) {
+        candidates.push({ version, href, filename });
+      }
+    }
+
+    if (candidates.length === 0) {
+      attempts.push(`${index}：索引页里没有 ${series}* 的 win_amd64 轮子`);
+      continue;
+    }
+
+    candidates.sort((a, b) => compareVersions(a.version, b.version));
+    const best = candidates[candidates.length - 1];
+    return {
+      version: best.version,
+      // 索引页里的 href 通常是 `../../packages/...` 这种相对路径，按页面地址解析。
+      url: new URL(best.href, pageUrl).href,
+      filename: best.filename,
+      index,
+    };
+  }
+  throw new Error(`找不到 ${pkg} ${series}* 的 win_amd64 轮子：\n    ${attempts.join('\n    ')}`);
+}
+
+/// 把 CUDA 运行时的 DLL 放进 cuda-lib 目录。
+///
+/// 放这一处就够了：sherpa-onnx-sys 的 build.rs 在 shared（gpu）模式下会把该目录下
+/// 所有 DLL 拷到 exe 旁，dev 与 release 一并覆盖。
+async function stageCudaRuntimeDlls(libDir, proxy) {
+  // wheel 缓存在这里不删：全套 1.5GB 上下，重下一次代价太高，
+  // 断点续传和「只缺一个组件时重跑」都要靠它。解压产物每轮清掉。
+  const work = join(LIBS_ROOT, 'cuda-runtime-tmp');
+  await mkdir(work, { recursive: true });
+
+  let totalBytes = 0;
+  for (const component of CUDA_RUNTIME_WHEELS) {
+    const wheel = await resolveWheelUrl(component.pkg, component.series, proxy);
+    const archive = join(work, wheel.filename);
+    if (force || !existsSync(archive)) {
+      info(`下载 ${component.what}：${wheel.filename}（来自 ${wheel.index}）`);
+      await download(wheel.url, archive, proxy);
+    } else {
+      info(`复用已下载的 ${wheel.filename}`);
+    }
+
+    const unpackedName = `${wheel.filename}.unpacked`;
+    const unpacked = join(work, unpackedName);
+    await rm(unpacked, { recursive: true, force: true });
+    await mkdir(unpacked, { recursive: true });
+    // wheel 就是个 zip。用相对名 + cwd 传给解压工具，避开 GNU tar 把盘符当主机名的坑。
+    await extractWheel(wheel.filename, unpackedName, work);
+
+    const binDir = join(unpacked, ...component.bin.split('/'));
+    if (!existsSync(binDir)) {
+      throw new Error(`${wheel.filename} 里没有 ${component.bin} 目录`);
+    }
+    const picked = (await readdir(binDir)).filter((name) => component.match.test(name)).sort();
+    if (picked.length === 0) {
+      throw new Error(`${wheel.filename} 的 ${component.bin} 里没有匹配 ${component.match} 的 DLL`);
+    }
+
+    for (const name of picked) {
+      const target = join(libDir, name);
+      await copyFile(join(binDir, name), target);
+      totalBytes += await fileSize(target);
+    }
+    info(`  ${component.what}：放入 ${picked.length} 个（${picked.join(', ')}）`);
+
+    // 每轮用完就清掉解压产物，只留 wheel（见函数开头对缓存的说明）。
+    await rm(unpacked, { recursive: true, force: true });
+  }
+
+  info(`CUDA 运行时已就绪，合计 ${(totalBytes / 1024 / 1024).toFixed(0)} MB`);
+}
+
+/// 解压 wheel（wheel 本身就是个 zip）。
+///
+/// 不能直接调 `tar`：从 Git Bash 里起到的 `tar` 是 GNU tar，它不认 zip
+/// （实测报 "This does not look like a tar archive"）；Windows 自带的 bsdtar 在
+/// System32 下，用绝对路径调它最稳。其它平台退回 unzip / GNU tar。
+async function extractWheel(archiveName, destinationName, cwd) {
+  const candidates = [];
+  if (process.platform === 'win32') {
+    const systemTar = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+    if (existsSync(systemTar)) {
+      candidates.push([systemTar, ['-xf', archiveName, '-C', destinationName]]);
+    }
+  }
+  candidates.push(['unzip', ['-oq', archiveName, '-d', destinationName]]);
+  candidates.push(['tar', ['-xf', archiveName, '-C', destinationName]]);
+
+  const failures = [];
+  for (const [command, args] of candidates) {
+    const result = await run(command, args, { cwd });
+    if (result.code === 0) {
+      return;
+    }
+    failures.push(`${command}：${result.stderr.trim() || `退出码 ${result.code}`}`);
+  }
+  throw new Error(`解压 wheel 失败：${archiveName}\n    ${failures.join('\n    ')}`);
+}
+
 /// 下载并装配 GPU 版原生库目录。
 ///
 /// 产出的目录同时放导入库与 DLL：前者供链接，后者会被 sherpa-onnx-sys 的 build.rs
@@ -314,8 +534,14 @@ async function prepareCudaLibs(proxy) {
   const libDir = join(LIBS_ROOT, 'cuda-lib');
   const marker = join(libDir, '.prepared');
   if (existsSync(marker) && !force) {
-    info(`CUDA 库目录已就绪，跳过：${libDir}`);
-    return;
+    // 标记里带上「装配了什么」的口径。只看归档名（旧标记）会让后来新增的 CUDA 运行时
+    // 在已经跑过一次的构建机上永远补不进去——那台机器就会一直产不出能用的 GPU 版。
+    const stamped = (await readFile(marker, 'utf8')).includes(CUDA_RUNTIME_STAMP);
+    if (stamped) {
+      info(`CUDA 库目录已就绪，跳过：${libDir}`);
+      return;
+    }
+    info(`CUDA 库目录缺少运行时标记（${CUDA_RUNTIME_STAMP}），重新装配…`);
   }
 
   const binutils = await findMsvcBinutils();
@@ -324,47 +550,61 @@ async function prepareCudaLibs(proxy) {
     return;
   }
 
-  const archive = join(LIBS_ROOT, name);
-  if (force || !existsSync(archive)) {
-    info(`下载 CUDA 版原生库（约 595MB）：${name}`);
-    await download(`${RELEASE}/${name}`, archive, proxy);
+  // 原生库那部分（解压归档、拷 DLL/导入库）很贵——595MB 的 tar.bz2 解一次要几分钟。
+  // 已经装配好就跳过，只补 CUDA 运行时，这样「上次只差运行时没补齐」的重跑是秒级的。
+  const nativeReady =
+    existsSync(join(libDir, 'onnxruntime_providers_cuda.dll')) &&
+    existsSync(join(libDir, 'onnxruntime.lib'));
+
+  if (nativeReady && !force) {
+    info(`原生库已装配，跳过解压，只补 CUDA 运行时：${libDir}`);
   } else {
-    info(`复用已下载的 ${name}`);
-  }
-
-  const work = join(LIBS_ROOT, `${name}.extracted`);
-  await rm(work, { recursive: true, force: true });
-  await mkdir(work, { recursive: true });
-  await extractTarBz2(name, `${name}.extracted`, LIBS_ROOT);
-
-  const root = join(work, name.replace(/\.tar\.bz2$/i, ''));
-  const srcLib = join(root, 'lib');
-  if (!existsSync(srcLib)) {
-    throw new Error(`CUDA 包里没有 lib 目录：${srcLib}`);
-  }
-
-  await rm(libDir, { recursive: true, force: true });
-  await mkdir(libDir, { recursive: true });
-
-  // DLL 与导入库都要：DLL 会被 build.rs 拷到 exe 旁。
-  for (const entry of await readdir(srcLib)) {
-    if (/\.(dll|lib)$/i.test(entry)) {
-      await copyFile(join(srcLib, entry), join(libDir, entry));
+    const archive = join(LIBS_ROOT, name);
+    if (force || !existsSync(archive)) {
+      info(`下载 CUDA 版原生库（约 595MB）：${name}`);
+      await download(`${RELEASE}/${name}`, archive, proxy);
+    } else {
+      info(`复用已下载的 ${name}`);
     }
+
+    const work = join(LIBS_ROOT, `${name}.extracted`);
+    await rm(work, { recursive: true, force: true });
+    await mkdir(work, { recursive: true });
+    await extractTarBz2(name, `${name}.extracted`, LIBS_ROOT);
+
+    const root = join(work, name.replace(/\.tar\.bz2$/i, ''));
+    const srcLib = join(root, 'lib');
+    if (!existsSync(srcLib)) {
+      throw new Error(`CUDA 包里没有 lib 目录：${srcLib}`);
+    }
+
+    await rm(libDir, { recursive: true, force: true });
+    await mkdir(libDir, { recursive: true });
+
+    // DLL 与导入库都要：DLL 会被 build.rs 拷到 exe 旁。
+    for (const entry of await readdir(srcLib)) {
+      if (/\.(dll|lib)$/i.test(entry)) {
+        await copyFile(join(srcLib, entry), join(libDir, entry));
+      }
+    }
+
+    const count = await generateOnnxRuntimeImportLib(
+      binutils,
+      join(srcLib, 'onnxruntime.dll'),
+      join(libDir, 'onnxruntime.lib'),
+      work,
+    );
+    info(`已生成 onnxruntime.lib（${count} 个导出符号）`);
+    await rm(work, { recursive: true, force: true });
   }
 
-  const count = await generateOnnxRuntimeImportLib(
-    binutils,
-    join(srcLib, 'onnxruntime.dll'),
-    join(libDir, 'onnxruntime.lib'),
-    work,
-  );
-  info(`已生成 onnxruntime.lib（${count} 个导出符号）`);
+  // 归档里只有 sherpa/onnxruntime 自己的 DLL，CUDA 运行时（cudart/cublas/cudnn…）
+  // 得另外补进来，否则 GPU 版装到机器上 EP 库根本加载不起来。
+  await stageCudaRuntimeDlls(libDir, proxy);
 
-  await rm(work, { recursive: true, force: true });
-  await writeFile(marker, `${name}\n`);
+  await writeFile(marker, `${name}\n${CUDA_RUNTIME_STAMP}\n`);
   info(`GPU 库目录就绪：${libDir}`);
-  info('用 GPU 构建：cargo build --no-default-features --features gpu（见 src-tauri/.cargo/config.toml 说明）');
+  info('用 GPU 构建：npm run tauri -- build --features gpu（会自己带上 SHERPA_ONNX_LIB_DIR 与打包配置）');
 }
 
 async function main() {

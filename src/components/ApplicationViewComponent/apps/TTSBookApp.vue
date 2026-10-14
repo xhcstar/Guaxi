@@ -124,7 +124,7 @@
                 <div class="option-card">
                   <div class="option-title">转换引擎</div>
                   <n-select v-model:value="executionProvider" :options="executionProviderOptions" />
-                  <div class="option-tip">切换 sherpa-onnx 的执行 provider</div>
+                  <div class="option-tip">自动 = CUDA 可用就用 GPU，否则用 CPU</div>
                 </div>
 
                 <div class="option-card">
@@ -407,7 +407,7 @@ const outputName = ref('')
 const maxChunkChars = ref(180)
 const splitByToc = ref(true)
 const modelPreset = ref('settings')
-const executionProvider = ref('cpu')
+const executionProvider = ref('auto')
 const speakerId = ref('0')
 const ttsSpeed = ref(1)
 const running = ref(false)
@@ -457,6 +457,7 @@ const modelOptions = computed(() => [
   { label: 'VITS Melo ZH/EN', value: 'vits_melo_zh_en' },
 ])
 const executionProviderOptions = [
+  { label: '自动（有 GPU 就用 GPU）', value: 'auto' },
   { label: 'CPU', value: 'cpu' },
   { label: 'GPU / CUDA', value: 'cuda' },
 ]

@@ -66,6 +66,100 @@ function usesGpuFeature(commandArgs) {
   return false;
 }
 
+/// GPU 版要打进安装包的那批 DLL：sherpa/onnxruntime 自己的 + CUDA 运行时。
+///
+/// CPU 版是静态链接的，一个 DLL 都不需要，所以这里只在 `--features gpu` 时才注入配置，
+/// 免得把 1GB 多的运行库塞进本来干净的 CPU 安装包。
+/// 目标写 "."＝安装目录根，也就是 guaxi.exe 旁边——DLL 必须在这里，
+/// Windows 的加载器才找得到（onnxruntime 也正是按这个顺序去找 provider 的）。
+///
+/// 落成文件再传路径，而不是把 JSON 直接塞进命令行：Windows 上这条命令要过 cmd.exe，
+/// 它那套引号规则会把带双引号的 JSON 拆坏（--config 两种形式都收，用文件最稳）。
+async function writeCudaRuntimeBundleConfig() {
+  const entries = await readdir(sherpaCudaLibDir, { withFileTypes: true });
+  const dlls = entries
+    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.dll'))
+    .map((entry) => entry.name)
+    .sort();
+  if (dlls.length === 0) {
+    throw new Error(
+      `CUDA 库目录里没有 DLL，无法生成 GPU 版打包配置：${sherpaCudaLibDir}\n` +
+        '        请先运行：npm run sherpa:fetch:cuda',
+    );
+  }
+
+  const srcTauriDir = path.join(projectRoot, 'src-tauri');
+  // 源路径必须相对 tauri.conf.json 所在目录（src-tauri）来写。
+  const relativeRoot = path
+    .relative(srcTauriDir, sherpaCudaLibDir)
+    .split(path.sep)
+    .join('/');
+  const resources = {};
+  for (const name of dlls) {
+    resources[`${relativeRoot}/${name}`] = '.';
+  }
+
+  const configPath = path.join(srcTauriDir, 'target', 'gpu-bundle-resources.json');
+  await mkdir(path.dirname(configPath), { recursive: true });
+  await writeFile(configPath, `${JSON.stringify({ bundle: { resources } }, null, 2)}\n`, 'utf8');
+  console.log(
+    `[tauri] GPU 版打包：随安装包附带 ${dlls.length} 个运行库 DLL（配置见 ${configPath}）`,
+  );
+  return configPath;
+}
+
+/// GPU 版构建完，在真正的产物目录上跑一次 CUDA 自检。
+///
+/// 权限分明：退出码 2（目录里缺该有的文件）是打包缺陷，直接中断构建，别发出去；
+/// 退出码 3（文件都在但本机加载不了——没插 N 卡、驱动太旧之类）只提醒，
+/// 因为包本身可能是好的，换台有 N 卡的机器就能用。
+async function verifyCudaRuntimeForRelease() {
+  if (process.platform !== 'win32') {
+    return;
+  }
+
+  const releaseDir = path.join(projectRoot, 'src-tauri', 'target', 'release');
+  if (!existsSync(releaseDir)) {
+    console.warn(`[tauri] 未找到 release 产物目录，跳过 CUDA 自检：${releaseDir}`);
+    return;
+  }
+
+  const buildExitCode = await run('cargo', [
+    'build',
+    '--quiet',
+    '--manifest-path',
+    'src-tauri/Cargo.toml',
+    '--bin',
+    'verify_cuda_runtime',
+  ]);
+  if (buildExitCode !== 0) {
+    console.warn('[tauri] CUDA 自检工具构建失败，跳过自检。');
+    return;
+  }
+
+  const verifier = path.join(projectRoot, 'src-tauri', 'target', 'debug', 'verify_cuda_runtime.exe');
+  if (!existsSync(verifier)) {
+    console.warn(`[tauri] 未找到 CUDA 自检工具，跳过自检：${verifier}`);
+    return;
+  }
+
+  console.log('[tauri] GPU 版自检：检查安装目录旁的 CUDA 运行库能否加载 …');
+  const exitCode = await run(verifier, ['--dir', releaseDir]);
+  if (exitCode === 2) {
+    console.error(
+      '[tauri] GPU 版自检发现打包缺陷（安装目录缺少 CUDA 运行库），已中止构建。\n' +
+        '        修复：运行 npm run sherpa:fetch:cuda 重新装配原生库。',
+    );
+    process.exit(2);
+  }
+  if (exitCode !== 0) {
+    console.warn(
+      '[tauri] GPU 版自检未通过：这份包在当前机器上不会启用 GPU（构建继续）。\n' +
+        '        目标是别的有 N 卡的机器时可以先忽略；要在本机用上 GPU，见上面自检输出的原因。',
+    );
+  }
+}
+
 function tauriInvocation() {
   // On Windows we invoke the generated `tauri.cmd` through cmd.exe.
   // Spawning the cmd shim directly is less reliable across shells.
@@ -215,6 +309,11 @@ async function main() {
       process.env.SHERPA_ONNX_LIB_DIR = sherpaCudaLibDir;
       console.log(`[tauri] GPU 构建：SHERPA_ONNX_LIB_DIR=${sherpaCudaLibDir}`);
     }
+    if (shouldPrepareForTauriCommand) {
+      // 光靠 sherpa 的 build.rs 只把 DLL 拷到 target 目录下的 exe 旁，进不了安装包；
+      // 这里补一份 resources 配置，打包时才会真的随安装目录落地。
+      tauriArgs.push('--config', await writeCudaRuntimeBundleConfig());
+    }
   }
 
   if (shouldPrepareForTauriCommand) {
@@ -293,6 +392,9 @@ async function main() {
   }
 
   if (shouldPrepareForTauriCommand && (tauriSubcommand === 'build' || tauriSubcommand === 'bundle')) {
+    if (usesGpuFeature(tauriArgs)) {
+      await verifyCudaRuntimeForRelease();
+    }
     await publishExternalWindowsBundles();
   }
 

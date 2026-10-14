@@ -383,20 +383,41 @@ fn probe_cuda() -> bool {
     }
 
     let mut attempted = Vec::new();
+    let mut loaded = false;
     for candidate in cuda_provider_dll_candidates() {
         match load_dynamic_library(&candidate) {
-            Ok(()) => return true,
+            Ok(()) => {
+                loaded = true;
+                break;
+            }
             Err(err) => attempted.push(format!("{}（{}）", candidate.display(), err)),
         }
     }
+    if !loaded {
+        warn!(
+            "CUDA 不可用（CUDA EP 动态库加载失败，通常是 CUDA 运行时版本旧于 EP 库要求的版本），\
+             本次改用 CPU：{}",
+            attempted.join("；")
+        );
+        return false;
+    }
 
-    warn!(
-        "CUDA 不可用（CUDA EP 动态库加载失败，通常是 CUDA 运行时版本旧于 EP 库要求的版本），\
-         本次改用 CPU：{}",
-        attempted.join("；")
-    );
-    false
+    // EP 库自己的导入表只挂了 cudart/cublas/cublasLt，cuDNN 是它建会话时再去加载的。
+    // 少一个 cuDNN，ORT 就在那里抛 C++ 异常把进程带走（同上，Rust 拦不住），
+    // 所以这里替它先试一次。
+    if let Err(err) = load_dynamic_library_by_name(CUDNN_DLL) {
+        warn!(
+            "CUDA 不可用（cuDNN 加载失败：{}），本次改用 CPU；缺 cuDNN {}",
+            err, CUDNN_DLL
+        );
+        return false;
+    }
+
+    true
 }
+
+/// cuDNN 9 的主库名。CUDA 12 / 13 两种变体都叫这个名字。
+const CUDNN_DLL: &str = "cudnn64_9.dll";
 
 /// CUDA EP 动态库的候选位置。
 ///
@@ -455,13 +476,61 @@ fn load_dynamic_library(_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// 按裸文件名加载一次动态库：走 Windows 的标准搜索顺序（exe 目录 → 系统目录 → PATH），
+/// 也就是 onnxruntime 自己找这些运行库时用的那条路径。
+#[cfg(target_os = "windows")]
+fn load_dynamic_library_by_name(name: &str) -> Result<(), String> {
+    use std::ffi::OsStr;
+    use std::iter::once;
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn LoadLibraryW(lp_lib_file_name: *const u16) -> *mut std::ffi::c_void;
+        fn FreeLibrary(h_lib_module: *mut std::ffi::c_void) -> i32;
+        fn GetLastError() -> u32;
+    }
+
+    let wide = OsStr::new(name).encode_wide().chain(once(0)).collect::<Vec<u16>>();
+    let handle = unsafe { LoadLibraryW(wide.as_ptr()) };
+    if handle.is_null() {
+        return Err(format!("错误码={}", unsafe { GetLastError() }));
+    }
+    unsafe {
+        let _ = FreeLibrary(handle);
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn load_dynamic_library_by_name(_name: &str) -> Result<(), String> {
+    Ok(())
+}
+
+/// 把调用方给的 provider 归一化成 sherpa 认的名字。
+///
+/// 空串（调用方没指定）和 "auto" 都表示"跟着硬件走"：有可用的 CUDA 就用 CUDA。
+/// 各朗读入口（划词朗读、听写…）都不传 provider，所以这条默认值决定了它们在
+/// 有 GPU 的机器上能不能吃到加速。
+/// 默认放宽是安全的——cuda 一律要先过 `cuda_available` 的探测，过不了就退回 CPU。
 pub fn normalize_provider(provider: &str) -> String {
     let requested = match provider.trim().to_lowercase().as_str() {
         "cuda" | "gpu" => "cuda",
         "coreml" => "coreml",
         "directml" => "directml",
         "trt" | "tensorrt" => "trt",
-        _ => "cpu",
+        "cpu" => "cpu",
+        "" | "auto" => {
+            if cuda_available() {
+                "cuda"
+            } else {
+                "cpu"
+            }
+        }
+        other => {
+            warn!(provider = other, "未知的执行 provider，按 CPU 处理");
+            "cpu"
+        }
     };
 
     // 需要 CUDA 的 provider 一律先确认可用性，见 cuda_available 的说明。

@@ -517,7 +517,12 @@ pub struct AudioCommonRequest {
 
 #[derive(Deserialize, Debug, Clone, Default)]
 pub struct TextToSpeechRequest {
-    #[serde(flatten)]
+    /// 前端把音频公共参数放在 `request.common` 下，所以这里就是普通的嵌套字段。
+    ///
+    /// 别改回 `#[serde(flatten)]`：那样只认 `{"provider":…,"input":…}` 的平铺形状，
+    /// 而前端发的 `{"common":{…},"input":…}` 会被当成未知字段丢掉（serde 默认忽略未知字段、
+    /// 不报错），provider/model/tokens 静默变成空串。
+    #[serde(default)]
     pub common: AudioCommonRequest,
     pub input: String,
     #[serde(default)]
@@ -542,7 +547,8 @@ pub struct TextToSpeechResponse {
 
 #[derive(Deserialize, Debug, Clone, Default)]
 pub struct SpeechToTextRequest {
-    #[serde(flatten)]
+    /// 与 `TextToSpeechRequest::common` 同理，前端发的是 `request.common` 这个嵌套对象。
+    #[serde(default)]
     pub common: AudioCommonRequest,
     #[serde(default)]
     pub file_path: String,
@@ -1731,8 +1737,26 @@ async fn audio_text_to_speech_sherpa_onnx(request: TextToSpeechRequest) -> Resul
 
     let speaker = resolve_tts_speaker(&request.voice);
     let speed = request.speed.unwrap_or(1.0);
-    let model = request.common.model.clone();
-    let tokens = request.common.tokens.clone();
+    // 与 ASR 同一条规矩：请求没带模型/tokens 就用设置里的默认值。
+    // 各朗读入口只传自己关心的字段，不该因为漏传一个路径就整条链路失败。
+    let configured = settingview::get_tts_config();
+    let model = if request.common.model.trim().is_empty() {
+        configured.model.clone()
+    } else {
+        request.common.model.clone()
+    };
+    let tokens = if request.common.tokens.trim().is_empty() {
+        configured.tokens.clone()
+    } else {
+        request.common.tokens.clone()
+    };
+    if model.trim().is_empty() {
+        return Err(
+            "未配置 TTS 模型：请在设置页指定模型文件（默认 utils/Models/tts/kokoro_multi_lang/model.onnx），\
+             或运行 tools/fetch_sherpa_onnx_libs.mjs 下载默认模型"
+                .to_string(),
+        );
+    }
 
     // 日志放在解析之前：解析失败会提前返回，日志若在它后面就不会留下任何线索。
     info!(

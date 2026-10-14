@@ -20,7 +20,8 @@ use zip::ZipArchive;
 
 const DEFAULT_MODEL: &str = "utils/Models/tts/kokoro_multi_lang/model.onnx";
 const DEFAULT_TOKENS: &str = "utils/Models/tts/kokoro_multi_lang/tokens.txt";
-const DEFAULT_EXECUTION_PROVIDER: &str = "cpu";
+/// 默认跟着硬件走：交给 speech::config 的探测决定用 CUDA 还是 CPU。
+const DEFAULT_EXECUTION_PROVIDER: &str = "auto";
 const TTS_BOOK_STATUS_QUEUED: &str = "queued";
 const TTS_BOOK_STATUS_RUNNING: &str = "running";
 const TTS_BOOK_STATUS_PAUSED: &str = "paused";
@@ -539,10 +540,11 @@ pub async fn tts_book_convert(
     let tts_speaker = speaker_id.trim().parse::<i32>().unwrap_or(0);
     let tts_speed = speed.unwrap_or(1.0);
 
-    // 界面上选了 GPU、探测却不通过时会被静默降级到 CPU（见 speech::config::cuda_available）。
+    // 界面上显式选了 GPU、探测却不通过时会被静默降级到 CPU（见 speech::config::cuda_available）。
     // 不说明的话，任务卡上只会看到"正在合成"，用户会以为 GPU 生效了。
-    let provider_fallback_note = (execution_provider != tts_synth_config.provider)
-        .then(|| format!("请求的 {} 不可用，本次已改用 CPU 合成", execution_provider.to_uppercase()));
+    // "auto" 不提示——那是"跟着硬件走"的正常结果，不算降级。
+    let provider_fallback_note = (execution_provider == "cuda" && tts_synth_config.provider != "cuda")
+        .then(|| "请求的 CUDA 不可用，本次已改用 CPU 合成".to_string());
     if let Some(note) = provider_fallback_note.as_deref() {
         emit_tts_book_progress(
             &window,
@@ -988,10 +990,12 @@ fn saved_task_from_state(state: &TtsBookResumeState) -> TtsBookSavedTask {
     }
 }
 
+/// "auto" 原样传下去，由 speech::config 按 CUDA 可用性决定；"cpu" 是用户显式选择，必须尊重。
 fn normalize_execution_provider(value: &str) -> String {
     match value.trim().to_lowercase().as_str() {
         "cuda" | "gpu" => "cuda".to_string(),
         "coreml" => "coreml".to_string(),
+        "cpu" => "cpu".to_string(),
         _ => DEFAULT_EXECUTION_PROVIDER.to_string(),
     }
 }
