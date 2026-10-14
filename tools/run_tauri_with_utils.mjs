@@ -297,6 +297,9 @@ async function main() {
     process.exit(sherpaExitCode);
   }
 
+  // 仅 GPU 构建时非空：见下面那段说明，它只在最终 tauri 调用时注入。
+  let gpuSherpaLibDir = null;
+
   if (usesGpuFeature(tauriArgs)) {
     if (!existsSync(sherpaCudaLibDir)) {
       console.error(
@@ -305,10 +308,12 @@ async function main() {
       );
       process.exit(1);
     }
-    if (!process.env.SHERPA_ONNX_LIB_DIR) {
-      process.env.SHERPA_ONNX_LIB_DIR = sherpaCudaLibDir;
-      console.log(`[tauri] GPU 构建：SHERPA_ONNX_LIB_DIR=${sherpaCudaLibDir}`);
-    }
+    // SHERPA_ONNX_LIB_DIR 只能给**最终的 tauri 调用**，绝不能挂在 process.env 上：
+    // 它会让 sherpa-onnx-sys 去这个目录找原生库，而 cuda-lib 里只有共享库与导入库，
+    // 下面那些默认特性（static）的辅助构建会直接报
+    // "could not find native static library `sherpa-onnx-core`"。
+    gpuSherpaLibDir = process.env.SHERPA_ONNX_LIB_DIR || sherpaCudaLibDir;
+    console.log(`[tauri] GPU 构建：SHERPA_ONNX_LIB_DIR=${gpuSherpaLibDir}`);
     if (shouldPrepareForTauriCommand) {
       // 光靠 sherpa 的 build.rs 只把 DLL 拷到 target 目录下的 exe 旁，进不了安装包；
       // 这里补一份 resources 配置，打包时才会真的随安装目录落地。
@@ -385,6 +390,9 @@ async function main() {
     {
       ...releaseCargoEnv(),
       ...(reuseExisting ? { GUAXI_REUSE_UTILS_ZIP: '1' } : {}),
+      // GPU 构建才注入，且只注入到这一层：tauri 拉起的 cargo 会继承它，
+      // 而上面那些辅助构建不会。
+      ...(gpuSherpaLibDir ? { SHERPA_ONNX_LIB_DIR: gpuSherpaLibDir } : {}),
     },
   );
   if (tauriExitCode !== 0) {
