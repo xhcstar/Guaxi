@@ -539,6 +539,29 @@ pub async fn tts_book_convert(
     let tts_speaker = speaker_id.trim().parse::<i32>().unwrap_or(0);
     let tts_speed = speed.unwrap_or(1.0);
 
+    // 界面上选了 GPU、探测却不通过时会被静默降级到 CPU（见 speech::config::cuda_available）。
+    // 不说明的话，任务卡上只会看到"正在合成"，用户会以为 GPU 生效了。
+    let provider_fallback_note = (execution_provider != tts_synth_config.provider)
+        .then(|| format!("请求的 {} 不可用，本次已改用 CPU 合成", execution_provider.to_uppercase()));
+    if let Some(note) = provider_fallback_note.as_deref() {
+        emit_tts_book_progress(
+            &window,
+            make_progress(
+                &task_id,
+                &file_path,
+                &file_name,
+                "synth_chunk",
+                completed_steps,
+                total_steps,
+                note.to_string(),
+                false,
+                false,
+                &output_path,
+                &segment_json_path,
+            ),
+        )?;
+    }
+
     // 引擎在进程内常驻，单实例内部已用 num_threads 吃满多核；再叠多路并发只会
     // 在同一把锁上排队、白占内存，所以这里串行。批结构保留——它同时承担
     // 「按顺序落盘、上报进度、更新续转状态」的职责。
@@ -800,6 +823,19 @@ pub async fn tts_book_convert(
         "tts_book_convert finished"
     );
 
+    // 降级说明挂在收尾消息上：分段进度是滚动覆盖的，只有这条会一直留在任务卡上。
+    let completed_message = {
+        let base = if resumed_any {
+            "转换完成，已从中断位置继续"
+        } else {
+            "转换完成"
+        };
+        match &provider_fallback_note {
+            Some(note) => format!("{}（{}）", base, note),
+            None => base.to_string(),
+        }
+    };
+
     emit_tts_book_progress(
         &window,
         make_progress(
@@ -809,11 +845,7 @@ pub async fn tts_book_convert(
             "completed",
             total_steps,
             total_steps,
-            if resumed_any {
-                "转换完成，已从中断位置继续".to_string()
-            } else {
-                "转换完成".to_string()
-            },
+            completed_message.clone(),
             resumed_any,
             false,
             &output_path,
@@ -822,11 +854,7 @@ pub async fn tts_book_convert(
     )?;
     resume_state.status = TTS_BOOK_STATUS_SUCCESS.to_string();
     resume_state.last_stage = "completed".to_string();
-    resume_state.last_message = if resumed_any {
-        "转换完成，已从中断位置继续".to_string()
-    } else {
-        "转换完成".to_string()
-    };
+    resume_state.last_message = completed_message;
     resume_state.progress = 100;
     resume_state.chapter_output_paths = chapter_output_paths.clone();
     save_resume_state(&resume_state_path, &resume_state)?;

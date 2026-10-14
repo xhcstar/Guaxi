@@ -4,6 +4,7 @@
 //! 目的只是换掉执行方式，不改变「同样输入得到同样引擎」这一行为。
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use tracing::warn;
 
@@ -352,25 +353,106 @@ pub fn resolve_punctuation_model() -> Option<PathBuf> {
 /// Rust 捕不住，**直接 abort 整个进程**（本机实测确认，报 "Rust cannot catch foreign exceptions"）。
 /// 也就是说回退分支根本没机会执行——只能提前判断，不能事后补救。
 ///
-/// 两个必要条件都满足才认为可用：
+/// 判断有三级，缺一不可：
 ///   · NVIDIA 驱动（nvcuda.dll）——没有它任何 CUDA EP 都不可能工作；
-///   · onnxruntime 的 CUDA EP 动态库——缺了它加载时就会抛异常。
+///   · onnxruntime 的 CUDA EP 动态库找得到；
+///   · 它**真的能被加载起来**。EP 库的导入表还挂着 cudart/cublas 等 CUDA 运行时，
+///     只看文件在不在会把「装了驱动和旧版 CUDA 运行时」判成可用：EP 库要的导出
+///     在旧版 cudart 里没有，LoadLibrary 就返回 error 127（实测：CUDA 12.6 的
+///     cudart64_12.dll 缺 cudaLibraryLoadData 等 4 个符号，而 EP 库是按这些符号链接的），
+///     接着就是上面那条 abort 路径。
+///
+/// 探测要把 EP 库整份映射一遍（约 500MB 的镜像，按需分页，实际驻留很小），
+/// 而 provider 每解析一次就会问一次，所以结果缓存：进程内只探一次，
+/// 装完 CUDA 运行时需要重启应用才能生效。
 pub fn cuda_available() -> bool {
-    let driver_ready = if cfg!(target_os = "windows") {
-        let root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
-        PathBuf::from(root).join("System32").join("nvcuda.dll").is_file()
-    } else {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(probe_cuda)
+}
+
+fn probe_cuda() -> bool {
+    if !cfg!(target_os = "windows") {
         // 其它平台暂不探测：判不准就退回 CPU，宁可慢一点也不要崩。
         return false;
+    }
+
+    let root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+    if !PathBuf::from(root).join("System32").join("nvcuda.dll").is_file() {
+        warn!("CUDA 不可用（缺 NVIDIA 驱动 nvcuda.dll），本次改用 CPU");
+        return false;
+    }
+
+    let mut attempted = Vec::new();
+    for candidate in cuda_provider_dll_candidates() {
+        match load_dynamic_library(&candidate) {
+            Ok(()) => return true,
+            Err(err) => attempted.push(format!("{}（{}）", candidate.display(), err)),
+        }
+    }
+
+    warn!(
+        "CUDA 不可用（CUDA EP 动态库加载失败，通常是 CUDA 运行时版本旧于 EP 库要求的版本），\
+         本次改用 CPU：{}",
+        attempted.join("；")
+    );
+    false
+}
+
+/// CUDA EP 动态库的候选位置。
+///
+/// onnxruntime 是拿裸文件名去 LoadLibrary 的，命中的是 Windows 的标准搜索顺序；
+/// exe 目录排第一，与实测崩溃时它选中的那个路径一致。打包分发会把 sherpa 的运行库
+/// 收在 `utils/sherpa-onnx` 下，那里也列一个候选。
+fn cuda_provider_dll_candidates() -> Vec<PathBuf> {
+    const EP_DLL: &str = "onnxruntime_providers_cuda.dll";
+
+    let Some(exe_dir) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+    else {
+        return Vec::new();
     };
 
-    let ep_ready = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join("onnxruntime_providers_cuda.dll")))
-        .map(|dll| dll.is_file())
-        .unwrap_or(false);
+    vec![
+        exe_dir.join(EP_DLL),
+        exe_dir.join("utils").join("sherpa-onnx").join(EP_DLL),
+    ]
+}
 
-    driver_ready && ep_ready
+/// 真正加载一次动态库，失败原因里带上 Windows 错误码。
+///
+/// 只 LoadLibrary 不取符号：导入表解析本身就覆盖了「依赖 DLL 缺失」和
+/// 「依赖 DLL 版本旧、没有需要的导出」这两种情形，正是要拦下的两类问题。
+#[cfg(target_os = "windows")]
+fn load_dynamic_library(path: &Path) -> Result<(), String> {
+    use std::ffi::OsStr;
+    use std::iter::once;
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn LoadLibraryW(lp_lib_file_name: *const u16) -> *mut std::ffi::c_void;
+        fn FreeLibrary(h_lib_module: *mut std::ffi::c_void) -> i32;
+        fn GetLastError() -> u32;
+    }
+
+    let wide = OsStr::new(path.as_os_str())
+        .encode_wide()
+        .chain(once(0))
+        .collect::<Vec<u16>>();
+    let handle = unsafe { LoadLibraryW(wide.as_ptr()) };
+    if handle.is_null() {
+        return Err(format!("错误码={}", unsafe { GetLastError() }));
+    }
+    unsafe {
+        let _ = FreeLibrary(handle);
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn load_dynamic_library(_path: &Path) -> Result<(), String> {
+    Ok(())
 }
 
 pub fn normalize_provider(provider: &str) -> String {
@@ -383,11 +465,9 @@ pub fn normalize_provider(provider: &str) -> String {
     };
 
     // 需要 CUDA 的 provider 一律先确认可用性，见 cuda_available 的说明。
+    // 不通过时 probe_cuda 已经打过一条带原因的 warn，这里只补上调用方请求的是什么。
     if matches!(requested, "cuda" | "trt") && !cuda_available() {
-        warn!(
-            requested = requested,
-            "CUDA 不可用（缺驱动或 EP 库），本次改用 CPU"
-        );
+        warn!(requested = requested, "改用 CPU 执行");
         return "cpu".to_string();
     }
 
