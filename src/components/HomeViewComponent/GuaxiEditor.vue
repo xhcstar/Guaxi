@@ -1170,10 +1170,14 @@
         <div class="breadcrumb-bar">
           <div ref="breadcrumbScrollRef" class="breadcrumb-scroll" @wheel.prevent="handleBreadcrumbWheel">
             <n-breadcrumb separator="›">
-              <n-breadcrumb-item v-for="it in breadcrumbItems" :key="it.key">
-                <span class="breadcrumb-item" :class="{ disabled: !!it.disabled }" :title="it.title"
-                  @click.stop="openBreadcrumbPicker(it, $event)">
-                  <Icon v-if="it.icon" class="breadcrumb-icon" :icon="it.icon" width="14" height="14" />
+              <n-breadcrumb-item v-for="(it, idx) in breadcrumbItems" :key="it.key">
+                <span
+                  class="breadcrumb-item"
+                  :class="{ disabled: !!it.disabled, 'is-current': idx === breadcrumbItems.length - 1 }"
+                  :title="it.title"
+                  @click.stop="openBreadcrumbPicker(it, $event)"
+                >
+                  <Icon v-if="it.icon" class="breadcrumb-icon" :icon="it.icon" width="15" height="15" />
                   <span class="breadcrumb-label">{{ it.label }}</span>
                 </span>
               </n-breadcrumb-item>
@@ -1505,6 +1509,18 @@ import texFileIcon from '@iconify-icons/vscode-icons/file-type-tex'
 import typFileIcon from '@iconify-icons/lucide/file-type-2'
 import orgTaskIcon from '@iconify-icons/lucide/clipboard-list'
 import hashIcon from '@iconify-icons/lucide/hash'
+// 面包屑图标：标题层级 / 任务类型（见 resolveOutlineEntryIcon）
+import heading1Icon from '@iconify-icons/lucide/heading-1'
+import heading2Icon from '@iconify-icons/lucide/heading-2'
+import heading3Icon from '@iconify-icons/lucide/heading-3'
+import heading4Icon from '@iconify-icons/lucide/heading-4'
+import heading5Icon from '@iconify-icons/lucide/heading-5'
+import heading6Icon from '@iconify-icons/lucide/heading-6'
+import pilcrowIcon from '@iconify-icons/lucide/pilcrow'
+import bugIcon from '@iconify-icons/lucide/bug'
+import listTodoIcon from '@iconify-icons/lucide/list-todo'
+import checkSquareIcon from '@iconify-icons/lucide/check-square'
+import { getFileTreeIcon } from './fileTreeIcons'
 
 import tableRowPlusAfter from '@iconify-icons/mdi/table-row-plus-after'
 import tableRowRemove from '@iconify-icons/mdi/table-row-remove'
@@ -4341,6 +4357,35 @@ const safeOutlineFlat = computed(() => {
   return []
 })
 
+// ── 面包屑图标：按“文件类型 / 标题层级 / 任务类型”取对应图标（对齐 VSCode 面包屑的语义）──
+// 设计说明：
+// 1. 文件一律复用文件树的扩展名映射（fileTreeIcons.js），保证“树里是 Py、面包屑却是通用文件”这类不一致不会出现。
+// 2. 标题按 level 给 heading-1..heading-6；LaTeX 的第 7 级（subparagraph）等超范围层级用 pilcrow 表示“段落”。
+// 3. .org 任务块按类型 + 完成态：Bug 用 bug；未完成用 list-todo，已完成用 check-square。
+const HEADING_ICON_BY_LEVEL = {
+  1: heading1Icon,
+  2: heading2Icon,
+  3: heading3Icon,
+  4: heading4Icon,
+  5: heading5Icon,
+  6: heading6Icon,
+}
+
+const resolveOutlineEntryIcon = (entry) => {
+  const kind = String(entry?.kind || '')
+  if (kind === 'org-task') {
+    if (String(entry?.taskType || '') === 'bug') return bugIcon
+    return entry?.done ? checkSquareIcon : listTodoIcon
+  }
+
+  const level = Number(entry?.level || 0)
+  if (HEADING_ICON_BY_LEVEL[level]) return HEADING_ICON_BY_LEVEL[level]
+  return level > 6 ? pilcrowIcon : hashIcon
+}
+
+// 目录 / 知识库根：沿用原有单色图标（currentColor，由 CSS 统一染色），与文件树视觉一致。
+const resolveBreadcrumbNodeIcon = (name, isDir) => (isDir ? folderIcon : getFileTreeIcon(name, false))
+
 const buildHeadingBreadcrumbItems = (outlineFlat, lineNumber) => {
   const arr = Array.isArray(outlineFlat) ? outlineFlat : []
   if (!arr.length) return []
@@ -4356,15 +4401,17 @@ const buildHeadingBreadcrumbItems = (outlineFlat, lineNumber) => {
     if (hLine > ln) break
 
     while (stack.length && stack[stack.length - 1].level >= level) stack.pop()
-    stack.push({ level, text, line: hLine })
+    // 带上 kind/taskType/done：.org 任务块与 Typst/LaTeX 标题的图标要靠它们区分。
+    stack.push({ level, text, line: hLine, kind: h?.kind, taskType: h?.taskType, done: h?.done })
   }
 
   return stack.map((h) => ({
     key: `heading:${h.line}:${h.level}:${h.text}`,
     label: h.text,
     title: `Ln ${h.line}: ${h.text}`,
-    icon: hashIcon,
+    icon: resolveOutlineEntryIcon(h),
     kind: 'heading',
+    level: h.level,
     line: h.line
   }))
 }
@@ -4477,7 +4524,7 @@ const buildBreadcrumbItems = (absPath) => {
         key: `path:${cursor}`,
         label: part,
         title: cursor,
-        icon: isLast ? fileTextIcon : folderIcon,
+        icon: resolveBreadcrumbNodeIcon(part, !isLast),
         kind: isLast ? 'file' : 'dir',
         path: cursor
       })
@@ -4487,7 +4534,7 @@ const buildBreadcrumbItems = (absPath) => {
   }
 
   const leaf = target.split('/').pop() || target
-  return [{ key: `leaf:${target}`, label: leaf, title: target, icon: fileTextIcon, kind: 'leaf', path: target }]
+  return [{ key: `leaf:${target}`, label: leaf, title: target, icon: getFileTreeIcon(leaf, false), kind: 'leaf', path: target }]
 }
 
 const breadcrumbItems = computed(() => {
@@ -4647,7 +4694,19 @@ const buildOutlineTreeWithParents = (flatOutline) => {
     if (!text || !Number.isFinite(level) || level <= 0 || !Number.isFinite(line) || line <= 0) return
 
     const key = `heading:${line}:${level}:${text}`
-    const node = { key, level, text, line, parent: null, children: [], _idx: idx }
+    const node = {
+      key,
+      level,
+      text,
+      line,
+      // 面包屑选择器要用同一套图标，所以把 .org 任务块的类型/完成态一并带上。
+      kind: item?.kind,
+      taskType: item?.taskType,
+      done: item?.done,
+      parent: null,
+      children: [],
+      _idx: idx,
+    }
 
     while (stack.length && stack[stack.length - 1].level >= node.level) stack.pop()
 
@@ -4705,7 +4764,7 @@ const openBreadcrumbPicker = (it, ev) => {
       key: `H:${n.key}`,
       label: n.text,
       title: `Ln ${n.line}: ${n.text}`,
-      icon: hashIcon,
+      icon: resolveOutlineEntryIcon(n),
       kind: 'heading',
       line: n.line,
     }))
@@ -4740,7 +4799,7 @@ const openBreadcrumbPicker = (it, ev) => {
             key: `P:${path}`,
             label,
             title: path,
-            icon: isDir ? folderIcon : fileTextIcon,
+            icon: resolveBreadcrumbNodeIcon(label, isDir),
             kind: isDir ? 'dir' : 'file',
             path,
             isFile: !isDir
@@ -25029,19 +25088,34 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
+/* 面包屑：路径段用次要色、当前段（最后一段）用主色强调，悬停给胶囊底色——对齐 VSCode 的层级感 */
+.breadcrumb-bar :deep(.n-breadcrumb-item__separator) {
+  margin: 0 4px;
+  color: var(--guaxi-text-secondary);
+  opacity: 0.55;
+  font-size: 12px;
+  line-height: 1;
+}
+
 .breadcrumb-item {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   max-width: 320px;
   min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 5px;
+  color: var(--guaxi-text-secondary);
   overflow: hidden;
-  text-overflow: ellipsis;
-  vertical-align: bottom;
   cursor: pointer;
   user-select: none;
-  padding: 0 4px;
-  border-radius: 4px;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.breadcrumb-item.is-current {
+  color: var(--guaxi-text-primary);
+  font-weight: 650;
 }
 
 .breadcrumb-item.disabled {
@@ -25049,21 +25123,25 @@ onUnmounted(() => {
   opacity: 0.6;
 }
 
+/* 文件类型图标来自 vscode-icons（自带配色，不跟随文字色）；目录/标题/知识库根是单色描线图标，随 currentColor 染色 */
 .breadcrumb-icon {
   flex: 0 0 auto;
-  opacity: 0.85;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.92;
 }
 
-.breadcrumb-label {
-  display: inline-block;
+.breadcrumb-item .breadcrumb-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .breadcrumb-item:hover {
-  color: var(--n-color-primary, #18a058);
-  background: rgba(127, 127, 127, 0.12);
+  color: var(--guaxi-text-primary);
+  background: rgba(127, 127, 127, 0.14);
 }
 
 .breadcrumb-item.disabled:hover {
