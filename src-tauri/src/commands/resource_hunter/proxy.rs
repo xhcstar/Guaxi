@@ -6,7 +6,8 @@ use std::time::Duration;
 use url::Url;
 
 /// 解析系统代理（跟随系统模式）。sysproxy 读 Windows 注册表 / 各平台设置。
-fn system_proxy_url() -> Option<String> {
+/// 文档转换链路（`commands::convert::net`）也复用它，故为 crate 可见。
+pub(crate) fn system_proxy_url() -> Option<String> {
     // 优先环境变量（部分终端/代理软件只设 env）。
     for key in ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy"] {
         if let Ok(v) = std::env::var(key) {

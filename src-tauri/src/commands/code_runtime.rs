@@ -79,7 +79,9 @@ const AUTO_DOWNLOAD_PYTHON_USER_AGENT: &str = "guaxi-python-runtime-bootstrap/1.
 #[cfg(windows)]
 const AUTO_DOWNLOAD_PYTHON_WINDOWS_PAGE_URL: &str = "https://www.python.org/downloads/windows/";
 const GET_PIP_BOOTSTRAP_URL: &str = "https://bootstrap.pypa.io/get-pip.py";
-const PYTHON_PIP_INDEX_URL: &str = "https://pypi.tuna.tsinghua.edu.cn/simple";
+/// 托管运行时统一使用的 PyPI 镜像。文档转换引擎从源码安装时也要显式带上它
+/// （venv 内的 pip.ini 对 uv 无效，uv 需要 `--index-url`），故为 crate 可见。
+pub const PYTHON_PIP_INDEX_URL: &str = "https://pypi.tuna.tsinghua.edu.cn/simple";
 const PYTHON_PIP_TRUSTED_HOST: &str = "pypi.tuna.tsinghua.edu.cn";
 
 // uv 供给：uv 二进制不进安装包，首次初始化时联网下载（与 python.org 下载对称）。
@@ -342,12 +344,14 @@ pub struct PythonTableExportResponse {
     pub table_count: Option<usize>,
 }
 
+/// 一个可执行的 Python 运行时描述：解释器路径 + 基础参数 + 所属运行时目录。
+/// 供文档转换引擎（`commands::convert::provision`）复用，故为 crate 可见。
 #[derive(Debug, Clone)]
-struct PythonLaunchSpec {
-    program: String,
-    base_args: Vec<String>,
-    source: String,
-    runtime_dir: PathBuf,
+pub struct PythonLaunchSpec {
+    pub program: String,
+    pub base_args: Vec<String>,
+    pub source: String,
+    pub runtime_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1175,6 +1179,74 @@ fn existing_uv_binary(runtime_dir: &Path) -> Option<PathBuf> {
     }
 }
 
+/// 同 [`existing_uv_binary`]，但允许回退到托管运行时里的那一份 uv。
+///
+/// 文档转换引擎的独立 venv 自己不下载 uv，直接借用 `utils/python_runtime/uv/uv.exe`：
+/// 既不必重复下载几十 MB，也照样享受 uv 的依赖解析与下载速度。
+fn existing_uv_binary_for_runtime(runtime_dir: &Path) -> Option<PathBuf> {
+    if let Some(uv) = existing_uv_binary(runtime_dir) {
+        return Some(uv);
+    }
+    let managed = python_runtime_dir().ok()?;
+    if managed == runtime_dir {
+        return None;
+    }
+    existing_uv_binary(&managed)
+}
+
+/// 构造一条已配好托管目录与无窗口标志的 `uv pip` 命令，供调用方追加子命令与参数。
+/// 找不到 uv 时返回 None（调用方回退 `python -m pip`）。
+///
+/// 注意：`--python <解释器>` 由调用方在子命令之后追加（uv 的全局参数放子命令后更稳）。
+pub fn uv_pip_base_command(runtime_dir: &Path, program: &str) -> Option<Command> {
+    let uv_path = existing_uv_binary_for_runtime(runtime_dir)?;
+    // uv 的缓存与解释器目录始终挂在托管运行时下，避免每个独立 venv 各缓存一份。
+    let uv_env_dir = python_runtime_dir().unwrap_or_else(|_| runtime_dir.to_path_buf());
+    let mut command = uv_command(&uv_path, &uv_env_dir);
+    command.arg("pip");
+    let _ = program;
+    Some(command)
+}
+
+/// 在指定解释器上执行一次 `pip install <args>`：优先 uv（快得多），缺失时回退 `python -m pip`。
+///
+/// 供文档转换引擎使用：从源码安装 marker/surya（`-e <path>`）、按索引换 torch 轮子
+/// （`--index-url` / `--reinstall`）这类安装**不是按包名幂等**的，因此不能走
+/// [`ensure_python_packages_installed`] 的“包名比对”路径。
+/// 返回 `(是否成功, stdout, stderr)`。
+pub fn install_pip_requirements(
+    spec: &PythonLaunchSpec,
+    args: &[String],
+) -> Result<(bool, String, String), String> {
+    // 装包会改变运行时状态，使“就绪缓存”失效，下次 spawn 重新探测。
+    invalidate_runtime_ready_cache();
+
+    let command = match uv_pip_base_command(&spec.runtime_dir, &spec.program) {
+        Some(mut command) => {
+            command.arg("install");
+            command.args(args);
+            command.args(["--python", spec.program.as_str()]);
+            command
+        }
+        None => {
+            let mut command = Command::new(&spec.program);
+            command
+                .args(&spec.base_args)
+                .args(["-m", "pip", "install"])
+                .args(args);
+            apply_python_process_no_window(&mut command);
+            command
+        }
+    };
+    run_command_streamed(command)
+}
+
+/// 读取一个**已存在**的“独立运行时”venv 描述（不创建、不修改任何东西）。
+/// 供调用方做廉价的“是否已装配”判断后再决定要不要走完整装配。
+pub fn isolated_runtime_spec(runtime_root: &Path) -> Result<PythonLaunchSpec, String> {
+    managed_python_launch_spec(runtime_root, ISOLATED_RUNTIME_SOURCE.to_string())
+}
+
 const PY_OP_LOG_EVENT: &str = "python-runtime-op-log";
 
 // 一次前端操作的进度回传：把 uv/pip 子进程的输出按 opId 打回给前端。
@@ -1292,7 +1364,7 @@ fn run_managed_package_op(
 ) -> Result<(bool, String, String), String> {
     // 装/卸/升级包会改变运行时状态,使"就绪缓存"失效,下次 spawn 重新探测并刷新。
     invalidate_runtime_ready_cache();
-    let command = match existing_uv_binary(&spec.runtime_dir) {
+    let command = match existing_uv_binary_for_runtime(&spec.runtime_dir) {
         Some(uv_path) => {
             let mut command = uv_command(&uv_path, &spec.runtime_dir);
             command.arg("pip");
@@ -1349,7 +1421,7 @@ fn run_managed_package_op(
 /// 列出托管 venv 里已安装的包（pip list --format=json 的原始数组），
 /// 优先 uv pip list，回退 `python -m pip list`。
 fn managed_pip_list_json(spec: &PythonLaunchSpec) -> Vec<Value> {
-    let command = match existing_uv_binary(&spec.runtime_dir) {
+    let command = match existing_uv_binary_for_runtime(&spec.runtime_dir) {
         Some(uv_path) => {
             let mut command = uv_command(&uv_path, &spec.runtime_dir);
             command.args([
@@ -1433,7 +1505,7 @@ fn remove_venv_dir_with_retry(venv_dir: &Path) -> Result<(), String> {
     ))
 }
 
-fn extract_zip_to_dir(zip_path: &Path, target_dir: &Path) -> Result<(), String> {
+pub(crate) fn extract_zip_to_dir(zip_path: &Path, target_dir: &Path) -> Result<(), String> {
     let file = fs::File::open(zip_path).map_err(|e| e.to_string())?;
     let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
     for index in 0..archive.len() {
@@ -1875,6 +1947,41 @@ fn resolve_bootstrap_python_base_launch_spec(download_version: Option<&str>) -> 
             Err(original_error)
         }
     }
+}
+
+/// 解析一个**系统**解释器作为最后的兜底（`python3` / `python`，Windows 上含 `py -3`）。
+///
+/// 只给“独立 venv”（文档转换引擎）用：与托管会话运行时不同，这里只是借系统解释器
+/// 创建一次环境，不会把用户的 Python cell 会话绑回外部解释器——那正是托管运行时
+/// 刻意拒绝系统 Python 的原因。
+fn resolve_system_python_base_launch_spec() -> Result<PythonLaunchSpec, String> {
+    let runtime_dir = python_runtime_dir()?;
+    let candidates: Vec<(&str, Vec<String>)> = if cfg!(windows) {
+        vec![
+            ("py", vec!["-3".to_string()]),
+            ("python", Vec::new()),
+            ("python3", Vec::new()),
+        ]
+    } else {
+        vec![("python3", Vec::new()), ("python", Vec::new())]
+    };
+
+    for (program, base_args) in candidates {
+        if can_probe_python_program(program, &base_args) {
+            info!(
+                program = program,
+                "[PythonRuntime] resolved system python for isolated runtime"
+            );
+            return Ok(PythonLaunchSpec {
+                program: program.to_string(),
+                base_args,
+                source: "system-python".to_string(),
+                runtime_dir,
+            });
+        }
+    }
+
+    Err("未找到可用的系统 Python（uv 也不可用），无法创建独立运行环境".to_string())
 }
 
 fn resolve_python_base_launch_spec_internal(prefer_managed_runtime: bool) -> Result<PythonLaunchSpec, String> {
@@ -2933,6 +3040,144 @@ pub fn ensure_managed_python_with_packages(
     // 因此后续每次启动几乎零开销，只在缺包时才真正执行 pip install。
     ensure_python_packages_installed(&spec, packages, reason)?;
     Ok((spec.program, spec.base_args))
+}
+
+// ───────────────────────── 独立用途的 venv（文档转换引擎专用） ─────────────────────────
+
+/// 独立运行时的 source 标记：与托管运行时区分开，便于日志与 runtime.json 排查。
+const ISOLATED_RUNTIME_SOURCE: &str = "isolated-runtime";
+
+/// 用 uv 在指定目录创建 venv（与托管运行时同一套供给链，但环境隔离）。
+fn create_isolated_virtualenv_with_uv(
+    uv_path: &Path,
+    runtime_root: &Path,
+    venv_dir: &Path,
+    version: &str,
+) -> Result<(), String> {
+    // uv 的解释器与缓存目录仍指向托管运行时：复用已下载的 python-build-standalone，
+    // 不再为文档引擎单独下一份解释器。
+    let uv_env_dir = python_runtime_dir().unwrap_or_else(|_| runtime_root.to_path_buf());
+
+    let mut install_cmd = uv_command(uv_path, &uv_env_dir);
+    install_cmd.args(["python", "install", version]);
+    let (install_ok, _, install_err) = run_command_streamed(install_cmd)?;
+    if !install_ok {
+        warn!(
+            version,
+            error = install_err.trim(),
+            "[PythonRuntime] uv install python via mirror failed, retry direct github"
+        );
+        let mut direct_cmd = uv_command_without_python_mirror(uv_path, &uv_env_dir);
+        direct_cmd.args(["python", "install", version]);
+        let (direct_ok, _, direct_err) = run_command_streamed(direct_cmd)?;
+        if !direct_ok {
+            return Err(format!(
+                "uv install python {version} failed: {}",
+                direct_err.trim()
+            ));
+        }
+    }
+
+    // 刻意不调用 clear_python_worker()：这里删的是另一个目录，没有常驻 worker 持有它，
+    // 而那个调用会顺带打断用户的 Python cell 会话。
+    remove_venv_dir_with_retry(venv_dir)?;
+    let mut venv_cmd = uv_command(uv_path, &uv_env_dir);
+    venv_cmd
+        .args(["venv", "--seed", "--python", version])
+        .arg(venv_dir)
+        .current_dir(runtime_root);
+    let (venv_ok, _, venv_err) = run_command_streamed(venv_cmd)?;
+    if !venv_ok {
+        return Err(format!("uv venv (python {version}) failed: {}", venv_err.trim()));
+    }
+    Ok(())
+}
+
+/// 为一个独立用途的运行时根目录准备 venv，并把给定依赖装进去。
+///
+/// 为什么需要它：文档转换引擎（marker / surya）对 `opencv-python-headless`、`pillow`、
+/// `transformers` 有精确版本约束，装进 Python cell 共用的托管 `.venv` 会与用户日常装包
+/// 互相污染，而且报错点离原因很远。这里复用**同一套** uv / 镜像 / 解释器供给链，
+/// 只在 `runtime_root` 下另建 `.venv`，两边彻底隔离。
+///
+/// 幂等：已存在、健康、且 Python 版本匹配时直接复用，只补齐缺失依赖。
+/// 阻塞 I/O，调用方应放到阻塞线程执行。
+pub fn ensure_isolated_venv_with_packages(
+    runtime_root: &Path,
+    python_version: Option<&str>,
+    packages: &[String],
+    reason: &str,
+) -> Result<PythonLaunchSpec, String> {
+    fs::create_dir_all(runtime_root)
+        .map_err(|e| format!("create isolated runtime dir failed: {e}"))?;
+    let venv_dir = managed_venv_dir(runtime_root);
+    let requested_version = python_version
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    let reusable = managed_python_launch_spec(runtime_root, ISOLATED_RUNTIME_SOURCE.to_string())
+        .ok()
+        .filter(|spec| managed_python_runtime_health(spec).is_ok())
+        .filter(|spec| {
+            requested_version
+                .map(|version| managed_python_version_matches(spec, version))
+                .unwrap_or(true)
+        });
+
+    let spec = match reusable {
+        Some(spec) => {
+            info!(
+                runtime_dir = runtime_root.to_string_lossy().as_ref(),
+                program = spec.program.as_str(),
+                "[PythonRuntime] reuse existing isolated virtual environment"
+            );
+            spec
+        }
+        None => {
+            // pip 镜像写进该 venv 自己的配置（`.venv/pip.ini`），
+            // 这样即使后续有人直接跑 `python -m pip` 也走国内镜像。
+            ensure_managed_pip_mirror(runtime_root)?;
+            let version = requested_version.unwrap_or(UV_DEFAULT_PYTHON_VERSION);
+            match resolve_uv_binary() {
+                Ok(uv_path) => {
+                    create_isolated_virtualenv_with_uv(&uv_path, runtime_root, &venv_dir, version)?;
+                    info!(
+                        version,
+                        venv_dir = venv_dir.to_string_lossy().as_ref(),
+                        "[PythonRuntime] isolated virtual environment created via uv"
+                    );
+                }
+                Err(uv_error) => {
+                    warn!(
+                        error = uv_error.as_str(),
+                        "[PythonRuntime] uv unavailable for isolated runtime, fallback to base python + venv"
+                    );
+                    // 优先用随包/可下载的基础解释器（Windows 的 embeddable 包）；
+                    // 拿不到就用系统解释器兜底——Linux 上通常只有这一条路，而独立 venv
+                    // 只是借它建一次环境，不像托管会话运行时那样会被绑死在系统 Python 上。
+                    let base_spec = resolve_bootstrap_python_base_launch_spec(None)
+                        .or_else(|_| resolve_system_python_base_launch_spec())?;
+                    create_managed_virtualenv(&base_spec, &venv_dir)?;
+                    sync_managed_runtime_support_files(&base_spec, &venv_dir)?;
+                }
+            }
+            let spec =
+                managed_python_launch_spec(runtime_root, ISOLATED_RUNTIME_SOURCE.to_string())?;
+            let pip_version = ensure_pip_available(&spec)?;
+            // 这里刻意**不忽略**失败：runtime.json 是“这个 venv 已经装配好”的标记，
+            // 写不进去会让下次启动判定为需要重建，从而反复重下数 GB 依赖。
+            write_runtime_marker(
+                &spec,
+                &pip_version,
+                requested_version.unwrap_or_default(),
+                false,
+            )?;
+            spec
+        }
+    };
+
+    ensure_python_packages_installed(&spec, packages, reason)?;
+    Ok(spec)
 }
 
 fn auto_repair_managed_runtime_if_needed(

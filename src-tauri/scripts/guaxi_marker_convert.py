@@ -1,3 +1,19 @@
+"""Guaxi 的 marker 单文件转换入口（跑在 marker 独立 uv venv 里）。
+
+与上游 `marker/scripts/convert_single.py` 的差异：
+
+1. `--progress_json`：把进度以单行 JSON 打到 stdout，供 Rust 侧调度器解析并回显到任务面板；
+2. `--output_dir` 直接作为产物目录——上游 `ConfigParser.get_output_folder()` 会在其后再追加
+   一层文件名子目录，而 Guaxi 已经把 `{基目录}/{文件名}` 算好传进来，再追加会导致产物路径对不上；
+3. 结束时额外输出 `conversion_result`，让上层确认产物真的写出了；
+4. Windows 可嵌入 Python 的多进程修复（见下）。
+
+关于 marker 2.x：布局 / OCR / 表格全部由 surya VLM 承担，模型跑在**独立推理服务**里。
+`create_model_dict()` 本身很轻（只是若干客户端），真正的重活在第一次转换时才发生
+——启动推理服务、必要时下载数 GB 权重。因此这里在“正在转换”之前给一句明确提示，
+避免用户以为程序卡死（Rust 侧已把模型目录与 llama.cpp 后端配好）。
+"""
+
 import os
 import sys
 
@@ -31,6 +47,8 @@ from marker.output import save_output
 configure_logging()
 logger = get_logger()
 
+OUTPUT_EXT = {"markdown": "md", "html": "html", "json": "json", "chunks": "json"}
+
 
 def _emit_progress(enabled: bool, current: int, total: int, message: str):
     if not enabled:
@@ -51,6 +69,7 @@ def _emit_progress(enabled: bool, current: int, total: int, message: str):
 
 @click.command(cls=CustomClickPrinter, help="Convert a single PDF to markdown.")
 @click.argument("fpath", type=str)
+@click.option("--paginate_output", is_flag=True, default=False)
 @click.option("--progress_json", is_flag=True, default=False)
 @ConfigParser.common_options
 def convert_single_cli(fpath: str, paginate_output: bool | None, progress_json: bool, **kwargs):
@@ -75,7 +94,12 @@ def convert_single_cli(fpath: str, paginate_output: bool | None, progress_json: 
             llm_service=config_parser.get_llm_service(),
         )
 
-        _emit_progress(progress_json, 55, 100, "正在转换")
+        _emit_progress(
+            progress_json,
+            55,
+            100,
+            "正在转换（首次运行需启动推理服务并下载模型，可能较久）",
+        )
         rendered = converter(fpath)
 
         _emit_progress(progress_json, 90, 100, "正在写入结果")
@@ -90,8 +114,9 @@ def convert_single_cli(fpath: str, paginate_output: bool | None, progress_json: 
         save_output(rendered, out_folder, base_name)
 
         output_format = kwargs.get("output_format", "markdown")
-        ext_map = {"markdown": "md", "html": "html", "json": "json", "chunks": "json"}
-        output_file = os.path.join(out_folder, f"{base_name}.{ext_map.get(output_format, 'md')}")
+        output_file = os.path.join(
+            out_folder, f"{base_name}.{OUTPUT_EXT.get(output_format, 'md')}"
+        )
         if progress_json:
             print(
                 json.dumps(

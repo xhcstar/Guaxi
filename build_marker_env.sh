@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+# ⚠️ 旧流程（Windows + conda 专用，已被自动装配取代，保留仅为兜底/排查）：
+# marker 的运行环境现在由 App 在**启动时自动装配**（uv 建独立 venv，在
+# `utils/MarkdownConvertor/.venv`，源码取自 Guaxi fork 的 guaxi-mods 分支，
+# 有 NVIDIA GPU 时自动装 CUDA 版 torch；模型启动时后台下载）。
+# 本脚本产出的 **conda 环境**（`marker-1.10.1/.venv`）不再被优先使用，
+# 只在自动装配失败时作为回退；设置页也已不再提供“运行环境离线加载”。
+# 新流程无需执行本脚本，也不需要 conda。
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"

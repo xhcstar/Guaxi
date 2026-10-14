@@ -1,8 +1,8 @@
 //! 引擎解析、探针与转换执行。
 //!
-//! 三个 Python 引擎共用同一套“路径解析 + 环境变量 + JSON 进度协议”约定：
-//! - fast  : marker venv 中的 `guaxi_fast_convert.py`（pymupdf4llm / markitdown）
-//! - marker: marker venv 中的 `convert_single.py`（保持与旧实现完全一致）
+//! 各引擎共用同一套“路径解析 + 环境变量 + JSON 进度协议”约定：
+//! - fast  : 托管 Python 中的 `guaxi_fast_convert.py`（pymupdf4llm / markitdown）
+//! - marker: 独立的 uv 托管 venv 中的 `guaxi_marker_convert.py`（源码取自 Guaxi fork）
 //! - mineru: 独立 venv `utils/MinerU/.venv` 中的 `guaxi_mineru_convert.py`
 //!
 //! 第四个引擎 anydoc 是纯 Rust 库，不上子进程、无需装配，由 [`convert_with_anydoc`]
@@ -180,7 +180,7 @@ pub struct ProbeResult {
 /// marker 可用则 marker，否则 fast（保证仍可转换）。
 pub async fn probe(input_path: &str) -> ProbeResult {
     let fallback = |reason: String| ProbeResult {
-        recommended: if marker_available() { "marker" } else { "fast" }.to_string(),
+        recommended: if marker_engine_ready() { "marker" } else { "fast" }.to_string(),
         reason,
         scores: serde_json::Value::Null,
     };
@@ -273,10 +273,9 @@ pub async fn resolve_engine(requested: &str, input_path: &str) -> (Engine, Optio
     }
 
     // Marker 路由说明：
-    // - 若 conda 分发版可用则直接用；
-    // - 否则 build_marker_plan 会按需装配“托管 pip 版 marker”（首次较慢，任务面板显示装配中）。
-    // 这里不强制降级到 fast，以保证复杂文档仍获得 marker 质量；仅当托管 marker 已装配或
-    // conda 版可用时才认为“就绪”，其余情况交由 build 阶段按需装配或报错重试。
+    // - 独立 uv venv 已装配则直接用；否则 build_marker_plan 会按需装配（首次较慢，
+    //   任务面板显示装配中），失败再回退旧的 conda 分发版；
+    // - 这里不强制降级到 fast，以保证复杂文档仍获得 marker 质量。
 
     (target, probe_result)
 }
@@ -380,6 +379,11 @@ fn build_fast_plan(
     })
 }
 
+/// Marker 引擎是否就绪：独立的 uv venv 或旧的 conda 分发版任一可用。
+pub fn marker_engine_ready() -> bool {
+    super::provision::marker_runtime().is_some() || marker_available()
+}
+
 fn build_marker_plan(
     input_path: &str,
     expected_output_dir: PathBuf,
@@ -387,7 +391,47 @@ fn build_marker_plan(
 ) -> Result<ConversionPlan, String> {
     let model_dir = surya_model_dir()?;
 
-    // 优先使用 conda 分发版（随安装目录，含预置 surya 模型，无需联网）。
+    // 主路径：独立 uv venv（源码取自 Guaxi fork 的定制分支，全部补丁生效）。
+    // 与 Python cell 共用的托管 venv 隔离，避免精确版本约束互相污染。
+    match super::provision::ensure_marker_engine_blocking() {
+        Ok(rt) => {
+            let script = rt.script_dir.join(super::provision::MARKER_CONVERT_FILE);
+            if !script.exists() {
+                return Err(format!("找不到 marker 转换脚本: {}", script.display()));
+            }
+            let pythonpath = marker_pythonpath(&rt, &script);
+            let mut cmd = TokioCommand::new(&rt.program);
+            cmd.args(&rt.base_args)
+                .arg("-u")
+                .arg(&script)
+                .arg(input_path)
+                .arg("--output_format")
+                .arg("markdown")
+                .arg("--paginate_output");
+            apply_marker_mode(&mut cmd);
+            cmd.arg("--output_dir")
+                .arg(&expected_output_dir)
+                .arg("--progress_json");
+            apply_common(&mut cmd, &rt.script_dir, pythonpath, &model_dir);
+            apply_marker_env(&mut cmd, &model_dir);
+            return Ok(ConversionPlan {
+                command: cmd,
+                expected_output_dir,
+                expected_md_path,
+                engine: Engine::Marker,
+                cwd: rt.script_dir,
+            });
+        }
+        Err(error) => {
+            warn!(
+                error = error.as_str(),
+                "[convert] 独立 Marker 运行环境不可用，尝试回退旧 conda 分发版"
+            );
+        }
+    }
+
+    // 兜底：旧的 conda 分发版（随安装目录分发过、且尚未清理的机器）。
+    // 这条路径保留是为了“升级期间不出空白”，确认新路径稳定后可移除。
     if let Ok(marker_src) = resolve_marker_source_dir() {
         if let Ok(python) = resolve_marker_python(&marker_src) {
             let script = marker_src.join("convert_single.py");
@@ -414,32 +458,110 @@ fn build_marker_plan(
         }
     }
 
-    // 回退：托管 pip 版 marker（自动装配 marker-pdf；surya 模型首次运行按需下载）。
-    let rt = super::provision::ensure_marker_engine_blocking()?;
-    let script = rt.script_dir.join(super::provision::MARKER_CONVERT_FILE);
-    if !script.exists() {
-        return Err(format!("找不到 marker 转换脚本: {}", script.display()));
-    }
-    let mut cmd = TokioCommand::new(&rt.program);
-    cmd.args(&rt.base_args)
-        .arg("-u")
-        .arg(&script)
-        .arg(input_path)
-        .arg("--output_format")
-        .arg("markdown")
-        .arg("--paginate_output")
-        .arg("--output_dir")
-        .arg(&expected_output_dir)
-        .arg("--progress_json");
-    apply_common(&mut cmd, &rt.script_dir, combined_pythonpath(&rt.script_dir), &model_dir);
+    Err(
+        "Marker 运行环境不可用：自动装配失败，且未找到旧的 conda 分发版。\
+         请在设置页查看失败原因并重试（常见原因是网络无法下载依赖或模型）。"
+            .to_string(),
+    )
+}
 
-    Ok(ConversionPlan {
-        command: cmd,
-        expected_output_dir,
-        expected_md_path,
-        engine: Engine::Marker,
-        cwd: rt.script_dir,
-    })
+/// marker 子进程的 PYTHONPATH：源码目录优先，保证定制补丁生效（editable 安装之外的兜底）。
+fn marker_pythonpath(rt: &super::provision::EngineRuntime, script: &Path) -> String {
+    let sep = if cfg!(windows) { ";" } else { ":" };
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(src) = &rt.marker_src {
+        parts.push(src.to_string_lossy().to_string());
+    }
+    if let Some(src) = &rt.surya_src {
+        parts.push(src.to_string_lossy().to_string());
+    }
+    parts.push(
+        script
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default(),
+    );
+    let existing = std::env::var("PYTHONPATH").unwrap_or_default();
+    if !existing.trim().is_empty() {
+        parts.push(existing);
+    }
+    parts.join(sep)
+}
+
+/// 转换模式：默认交给 marker 按设备自动选（GPU→balanced，CPU→fast），
+/// `GUAXI_MARKER_MODE=fast|balanced` 可强制覆盖。
+fn apply_marker_mode(cmd: &mut TokioCommand) {
+    if let Ok(mode) = std::env::var("GUAXI_MARKER_MODE") {
+        let mode = mode.trim().to_ascii_lowercase();
+        if mode == "fast" || mode == "balanced" {
+            cmd.arg("--mode").arg(mode);
+        }
+    }
+}
+
+/// Marker（surya VLM）运行所需的专用环境变量。
+///
+/// marker 2.x 起布局/OCR/表格全部由 surya VLM 承担，模型跑在**独立推理服务**里：
+/// - Windows 上自动探测到 NVIDIA 卡会去用 vLLM（要 Docker），桌面端不假设有 Docker，
+///   因此显式走 llama.cpp；
+/// - llama.cpp 复用应用已随包分发的 `utils/llama/llama-server.exe`（含多模态 mmproj 支持），
+///   不必再为文档引擎单独准备一份推理二进制；
+/// - 保留常驻推理服务，避免每次转换都重新加载数 GB 权重；
+/// - 模型缓存统一指向 `utils/Models/surya_models`（HF 快照 + s3 模型都落这里），
+///   这样才能随安装目录分发、支持离线加载。
+///
+/// 全部可用同名环境变量覆盖，便于排查。
+fn apply_marker_env(cmd: &mut TokioCommand, model_dir: &str) {
+    // llama.cpp 的 `llama-server`：应用随包分发在 utils/llama 下，Windows / Linux 通用，
+    // 优先复用它（用户显式设置了 LLAMA_CPP_BINARY 时遵从用户）。
+    let llama_server_ready = if std::env::var("LLAMA_CPP_BINARY").is_err() {
+        match crate::commands::settingview::resolve_llama_server_path() {
+            Some(path) => {
+                cmd.env("LLAMA_CPP_BINARY", path.to_string_lossy().to_string());
+                true
+            }
+            None => false,
+        }
+    } else {
+        true
+    };
+
+    // 后端选择：
+    // - Windows：必须显式指定 llamacpp。surya 会优先自动探测到 NVIDIA 卡并去用 vLLM，
+    //   而 vLLM 后端是跑在 Docker 容器里的，桌面端不假设有 Docker。
+    // - 其他平台：只要手上确实有 llama-server 就同样强制 llamacpp（避开 Docker 依赖）；
+    //   否则交给 surya 自己的设备探测——Linux + NVIDIA 且本机已有 vLLM 时，
+    //   用户能拿到比 llama.cpp 更快的后端。
+    if std::env::var("SURYA_INFERENCE_BACKEND").is_err() && (cfg!(windows) || llama_server_ready) {
+        cmd.env("SURYA_INFERENCE_BACKEND", "llamacpp");
+    }
+    if !llama_server_ready {
+        warn!(
+            "[convert] 未找到 utils/llama 下的 llama-server；若 surya 也自行找不到，\
+             marker 的 VLM 推理服务将无法启动"
+        );
+    }
+    // 有 GPU 时把全部层放到显存（纯 CPU 构建下是安全的 no-op）。
+    if std::env::var("LLAMA_CPP_NGL").is_err() {
+        cmd.env("LLAMA_CPP_NGL", "99");
+    }
+    // 首次启动服务要加载数 GB 权重，默认超时偏紧，这里放宽。
+    if std::env::var("SURYA_INFERENCE_STARTUP_TIMEOUT").is_err() {
+        cmd.env("SURYA_INFERENCE_STARTUP_TIMEOUT", "1800");
+    }
+    // HF 官方域名在大陆直连不可达。模型由上面的预下载负责，但转换时若仍有缺失
+    // （比如用户手动删了模型目录），surya 会自己按需下载——这里必须给同一个镜像，
+    // 否则转换会在“加载模型”一步长时间卡住后失败。用户已设置 HF_ENDPOINT 时尊重用户。
+    if std::env::var("HF_ENDPOINT").is_err() {
+        cmd.env("HF_ENDPOINT", "https://hf-mirror.com");
+    }
+    // 刻意**不**设置 SURYA_INFERENCE_KEEP_ALIVE：开启后推理服务会在转换进程退出后继续常驻，
+    // 成为应用关不掉的孤儿进程（占住数 GB 内存/显存）。默认（关闭）下服务随转换进程一起结束，
+    // 与应用既有的“不留残余进程”约定一致。用户若显式设置该变量则遵从用户。
+    // s3 模型（text_detection / ocr_error_detection）的缓存目录。
+    cmd.env("MODEL_CACHE_DIR", model_dir);
+    // 代理：本地推理服务走 127.0.0.1，必须排除；境外下载则走系统代理。
+    super::net::apply_proxy_env(cmd);
 }
 
 fn build_mineru_plan(

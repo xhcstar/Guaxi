@@ -144,21 +144,8 @@
           <n-form-item label="操作">
             <n-space>
               <n-button :disabled="installingModels" @click="pickMarkdownModelsArchive">选择压缩包...</n-button>
-              <n-button :disabled="installingModels" :loading="installingModels" type="primary" @click="installMarkdownModels">加载</n-button>
-            </n-space>
-          </n-form-item>
-        </n-form>
-
-        <n-divider />
-
-        <n-form label-placement="left" :label-width="220" :show-require-mark="false">
-          <n-form-item label="Markdown转换模型运行环境" :label-style="{ whiteSpace: 'normal', lineHeight: '1.2' }">
-            <n-input v-model:value="markdownConvertorEnvArchivePath" :disabled="copyingEnv" placeholder="选择Markdown转换模型运行环境" />
-          </n-form-item>
-          <n-form-item label="操作">
-            <n-space>
-              <n-button :disabled="copyingEnv" @click="pickMarkdownConvertorEnvArchive">选择压缩包...</n-button>
-              <n-button :disabled="copyingEnv" :loading="copyingEnv" type="primary" @click="installMarkdownConvertorEnv">拷贝</n-button>
+              <n-button :disabled="installingModels || downloadingModels" :loading="installingModels" type="primary" @click="installMarkdownModels">加载</n-button>
+              <n-button :disabled="installingModels || downloadingModels" :loading="downloadingModels" @click="downloadMarkdownModels">在线下载</n-button>
             </n-space>
           </n-form-item>
         </n-form>
@@ -192,6 +179,42 @@
                     <div class="status-tip-title">{{ item.tipTitle }}</div>
                     <div v-for="(line, idx) in item.tipLines" :key="idx" class="status-tip-desc">{{ line }}</div>
                   </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Marker 运行环境：首次启动后台自动装配（uv 建独立 venv + 按 GPU 选 torch） -->
+          <div class="status-item" :class="`is-${markerEnvState}`" role="listitem">
+            <div class="status-left">
+              <n-icon :component="ConstructOutline" />
+              <span class="status-name">Marker 运行环境</span>
+            </div>
+            <div class="status-right">
+              <n-button
+                size="tiny"
+                type="primary"
+                ghost
+                :loading="preparingMarkerEnv"
+                :disabled="loading || preparingMarkerEnv"
+                @click="prepareMarkerEnv"
+              >
+                准备 / 重试
+              </n-button>
+              <div class="status-pop-wrap" tabindex="0">
+                <span class="status-badge">
+                  <n-icon :component="markerEnvBadgeIcon" />
+                  <span>{{ markerEnvBadgeText }}</span>
+                </span>
+                <div class="status-popover" role="tooltip">
+                  <div class="status-tip-title">Marker 运行环境</div>
+                  <div class="status-tip-desc">首次启动会在后台自动装配（联网即可，无需手动配置）</div>
+                  <div class="status-tip-desc">torch：{{ engineStatus.markerCuda ? 'CUDA 版（GPU 加速）' : 'CPU 版' }}</div>
+                  <div v-if="engineStatus.markerDegraded" class="status-tip-desc">
+                    降级模式：定制源码未取到，当前使用通用版 marker-pdf（功能不受影响）
+                  </div>
+                  <div class="status-tip-desc">环境目录: {{ engineStatus.markerEnvDir || '-' }}</div>
+                  <div v-if="engineStatus.markerError" class="status-tip-desc">最近错误: {{ engineStatus.markerError }}</div>
                 </div>
               </div>
             </div>
@@ -385,12 +408,26 @@ const message = useMessage()
 const chatRecordRoot = ref('')
 
 const markdownModelsArchivePath = ref('')
-const markdownConvertorEnvArchivePath = ref('')
 const installingModels = ref(false)
-const copyingEnv = ref(false)
+const downloadingModels = ref(false)
 
 const markdownModelsStatus = ref({ installed: false, expected_path: '' })
-const markdownEnvStatus = ref({ installed: false, expected_path: '' })
+
+// 转换引擎装配状态（后端 `conversion_engine_status`）。
+// marker 的运行环境与模型都是**启动时后台自动装配**的，这里只做展示 + 手动重试；
+// 运行环境不再提供离线压缩包加载（已改为自动装配），模型仍保留离线加载。
+const engineStatus = ref({
+  markerReady: false,
+  markerProvisioning: false,
+  markerError: '',
+  markerCuda: false,
+  markerDegraded: false,
+  markerModelsReady: false,
+  markerModelsError: '',
+  markerModelsDir: '',
+  markerEnvDir: '',
+})
+const preparingMarkerEnv = ref(false)
 const codexStatus = ref({
   binary_path: '',
   binary_exists: false,
@@ -561,7 +598,6 @@ const statusItems = computed(() => {
   }
 
   const modelsState = loading.value ? 'info' : (markdownModelsStatus.value.installed ? 'ok' : 'warn')
-  const envState = loading.value ? 'info' : (markdownEnvStatus.value.installed ? 'ok' : 'warn')
 
   return [
     keyItem('chatgpt', 'ChatGPT', form.chatgpt_api_key),
@@ -578,17 +614,10 @@ const statusItems = computed(() => {
       badgeText: loading.value ? '检测中' : (markdownModelsStatus.value.installed ? '已加载' : '未加载'),
       badgeIcon: loading.value ? TimeOutline : (markdownModelsStatus.value.installed ? CheckmarkCircleOutline : CloseCircleOutline),
       tipTitle: 'Markdown 转换模型',
-      tipLines: [`期望路径：${markdownModelsStatus.value.expected_path || '-'}`, '未加载时请选择 surya_models.zip 并点击“安装”'],
-    },
-    {
-      id: 'markdown_env',
-      name: '转换环境',
-      icon: ConstructOutline,
-      state: envState,
-      badgeText: loading.value ? '检测中' : (markdownEnvStatus.value.installed ? '已加载' : '未加载'),
-      badgeIcon: loading.value ? TimeOutline : (markdownEnvStatus.value.installed ? CheckmarkCircleOutline : CloseCircleOutline),
-      tipTitle: '模型运行环境',
-      tipLines: [`期望路径：${markdownEnvStatus.value.expected_path || '-'}`, '未加载时请选择 MarkdownConvertor.zip 并点击“拷贝”'],
+      tipLines: [
+        `期望路径：${markdownModelsStatus.value.expected_path || '-'}`,
+        '启动时会自动在线下载；无网络时可选择 surya_models.zip 并点击“加载”',
+      ],
     },
     {
       id: 'codex_engine',
@@ -740,11 +769,9 @@ const loadConfig = async () => {
       expected_path: typeof modelsStatus?.expected_path === 'string' ? modelsStatus.expected_path : '',
     }
 
-    const envStatus = await invoke('get_markdown_convertor_env_status')
-    markdownEnvStatus.value = {
-      installed: Boolean(envStatus?.installed),
-      expected_path: typeof envStatus?.expected_path === 'string' ? envStatus.expected_path : '',
-    }
+    // 转换引擎（marker 运行环境 / 模型）的装配状态由后端统一提供；
+    // 运行环境不再走离线压缩包，改由启动时后台自动装配。
+    await refreshEngineStatus()
 
     const localStatus = await invoke('get_local_deepseek_status')
     localDeepseekStatus.value = {
@@ -865,35 +892,85 @@ const installMarkdownModels = async () => {
   }
 }
 
-const pickMarkdownConvertorEnvArchive = async () => {
+// ── Marker 运行环境（自动装配）状态 ──
+const markerEnvState = computed(() => {
+  if (preparingMarkerEnv.value || engineStatus.value.markerProvisioning) return 'info'
+  return engineStatus.value.markerReady ? 'ok' : 'warn'
+})
+
+const markerEnvBadgeText = computed(() => {
+  if (preparingMarkerEnv.value || engineStatus.value.markerProvisioning) return '装配中'
+  if (!engineStatus.value.markerReady) return '未就绪'
+  return engineStatus.value.markerCuda ? '已就绪 · GPU' : '已就绪 · CPU'
+})
+
+const markerEnvBadgeIcon = computed(() => {
+  if (preparingMarkerEnv.value || engineStatus.value.markerProvisioning) return TimeOutline
+  return engineStatus.value.markerReady ? CheckmarkCircleOutline : CloseCircleOutline
+})
+
+/// 读取转换引擎装配状态（marker 运行环境 / 模型）。
+const refreshEngineStatus = async () => {
   try {
-    const selected = await open({
-      multiple: false,
-      filters: [{ name: 'Archive', extensions: ['zip', '7z', 'rar'] }],
-    })
-    if (selected) markdownConvertorEnvArchivePath.value = String(selected)
+    const status = await invoke('conversion_engine_status')
+    engineStatus.value = {
+      markerReady: Boolean(status?.markerReady),
+      markerProvisioning: Boolean(status?.markerProvisioning),
+      markerError: typeof status?.markerError === 'string' ? status.markerError : '',
+      markerCuda: Boolean(status?.markerCuda),
+      markerDegraded: Boolean(status?.markerDegraded),
+      markerModelsReady: Boolean(status?.markerModelsReady),
+      markerModelsError: typeof status?.markerModelsError === 'string' ? status.markerModelsError : '',
+      markerModelsDir: typeof status?.markerModelsDir === 'string' ? status.markerModelsDir : '',
+      markerEnvDir: typeof status?.markerEnvDir === 'string' ? status.markerEnvDir : '',
+    }
   } catch (e) {
-    logger.error('选择模型运行环境压缩包失败:', e)
+    logger.error('读取转换引擎状态失败:', e)
   }
 }
 
-const installMarkdownConvertorEnv = async () => {
-  const p = markdownConvertorEnvArchivePath.value.trim()
-  if (!p) {
-    message.warning('请先选择运行环境压缩包')
-    return
-  }
-
-  copyingEnv.value = true
+/// 手动触发 marker 运行环境装配（首次启动后台已自动进行，这里是“重试”入口）。
+const prepareMarkerEnv = async () => {
+  preparingMarkerEnv.value = true
   try {
-    message.info('开始拷贝运行环境（预计约10分钟）')
-    const installedTo = await invoke('install_markdown_convertor_env_archive', { archivePath: p })
-    message.success(`运行环境压缩包已拷贝到: ${installedTo}`)
+    message.info('开始准备 Marker 运行环境（首次可能需要数分钟，取决于网络）')
+    await invoke('ensure_marker_engine_ready')
+    await refreshEngineStatus()
+    if (engineStatus.value.markerReady) {
+      message.success('Marker 运行环境已就绪')
+    } else {
+      message.warning(engineStatus.value.markerError || 'Marker 运行环境仍未就绪，请稍后重试')
+    }
   } catch (e) {
-    logger.error('拷贝模型运行环境压缩包失败:', e)
-    message.error('拷贝模型运行环境压缩包失败')
+    logger.error('准备 Marker 运行环境失败:', e)
+    message.error(`准备 Marker 运行环境失败: ${String(e?.message || e || '')}`)
   } finally {
-    copyingEnv.value = false
+    preparingMarkerEnv.value = false
+  }
+}
+
+/// 在线下载 marker 模型（离线加载仍保留在上面的“加载”按钮）。
+const downloadMarkdownModels = async () => {
+  downloadingModels.value = true
+  try {
+    message.info('开始下载 Markdown 转换模型（数 GB，请耐心等待）')
+    await invoke('ensure_marker_models_ready')
+    await refreshEngineStatus()
+    const modelsStatus = await invoke('get_markdown_models_status')
+    markdownModelsStatus.value = {
+      installed: Boolean(modelsStatus?.installed),
+      expected_path: typeof modelsStatus?.expected_path === 'string' ? modelsStatus.expected_path : '',
+    }
+    if (markdownModelsStatus.value.installed) {
+      message.success('Markdown 转换模型已就绪')
+    } else {
+      message.warning(engineStatus.value.markerModelsError || '模型仍未下载完整，请稍后重试')
+    }
+  } catch (e) {
+    logger.error('下载 Markdown 转换模型失败:', e)
+    message.error(`下载 Markdown 转换模型失败: ${String(e?.message || e || '')}`)
+  } finally {
+    downloadingModels.value = false
   }
 }
 

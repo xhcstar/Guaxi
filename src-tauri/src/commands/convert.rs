@@ -11,11 +11,14 @@
 //! 子模块：
 //! - [`task_store`]：SQLite 任务表的 CRUD / 查询封装（复用 repoview::init_db）。
 //! - [`engine`]：各引擎路径解析、探针、子进程构建，以及极速引擎的进程内转换。
+//! - [`net`]：转换链路的网络环境（跟随系统代理 / 直连）与带代理的下载。
+//! - [`provision`]：各引擎运行时的自动装配（uv 建 venv、依赖与模型下载）。
 //! - [`queue`]：后台队列 worker（放入 Tauri app state），并发控制 + 进度落库 + 事件广播。
 //! - [`commands`]：暴露给前端的 Tauri 命令。
 
 pub mod task_store;
 pub mod engine;
+pub mod net;
 pub mod provision;
 pub mod queue;
 pub mod commands;

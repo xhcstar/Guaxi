@@ -255,6 +255,25 @@ pub async fn ensure_fast_engine_ready() -> Result<super::provision::ProvisionSta
     Ok(super::provision::current_status())
 }
 
+/// 手动触发 Marker 运行环境装配（幂等）。
+/// 启动时已会后台自动装配；这个入口给设置页的“重试 / 立即准备”按钮用。
+#[tauri::command]
+pub async fn ensure_marker_engine_ready() -> Result<super::provision::ProvisionStatus, String> {
+    tokio::task::spawn_blocking(super::provision::ensure_marker_engine_blocking)
+        .await
+        .map_err(|e| format!("装配任务失败: {e}"))??;
+    Ok(super::provision::current_status())
+}
+
+/// 手动触发 Marker 模型下载（幂等：齐全时立即返回）。
+#[tauri::command]
+pub async fn ensure_marker_models_ready() -> Result<super::provision::ProvisionStatus, String> {
+    tokio::task::spawn_blocking(super::provision::ensure_marker_models_blocking)
+        .await
+        .map_err(|e| format!("模型下载任务失败: {e}"))??;
+    Ok(super::provision::current_status())
+}
+
 /// 向后兼容包装：旧前端仍可调用 convert_to_markdown 风格的阻塞式转换。
 /// 这里改为入队 + 轮询等待完成，保持“await 到转换结束”的调用语义。
 #[tauri::command]

@@ -754,43 +754,15 @@ pub(crate) fn cleanup_modelscope_download_dir(local_dir: &Path) {
 /// 对外开放给其它模块（本地翻译小模型）复用：国内直连魔搭比 HuggingFace 快得多。
 pub(crate) fn run_modelscope_download(local_dir: &Path, model_id: &str, filename: &str) -> Result<(), String> {
     let _ = bundled_resources::ensure_relative_dir("utils/python_libs")?;
-    let marker_src_dir = bundled_resources::ensure_relative_dir("utils/MarkdownConvertor/marker-1.10.1")?;
-    if !marker_src_dir.exists() {
-        return Err(
-            "找不到 marker-1.10.1 源码目录，请检查是否存在：<软件目录>\\utils\\MarkdownConvertor\\marker-1.10.1"
-                .to_string(),
-        );
-    }
 
-    let venv_dir = marker_src_dir.join(".venv");
-    let python_path = if cfg!(windows) {
-        let candidates = [
-            venv_dir.join("Scripts").join("python.exe"),
-            venv_dir.join("python.exe"),
-        ];
-        let mut found = None;
-        for p in candidates {
-            if p.exists() {
-                found = Some(p);
-                break;
-            }
-        }
-        found.ok_or_else(|| {
-            format!(
-                "找不到 Marker 虚拟环境中的 python，请先构建运行环境：{}",
-                venv_dir.to_string_lossy()
-            )
-        })?
-    } else {
-        let p = venv_dir.join("bin").join("python");
-        if !p.exists() {
-            return Err(format!(
-                "找不到 Marker 虚拟环境中的 python，请先构建运行环境：{}",
-                venv_dir.to_string_lossy()
-            ));
-        }
-        p
-    };
+    // 解释器来源统一交给文档转换模块解析：旧 conda 分发版 → marker 独立 venv → 托管运行时。
+    // 改造前这里写死“必须存在 utils/MarkdownConvertor/marker-1.10.1”，一旦不再随包分发 conda 环境，
+    // 本地 DeepSeek/Qwen 的模型下载就会直接断掉。
+    let python_path = crate::commands::convert::provision::resolve_aux_python().ok_or_else(|| {
+        "找不到可用的 Python 解释器：Marker 运行环境与托管运行时都不可用，\
+         请先在设置页确认运行环境已就绪"
+            .to_string()
+    })?;
 
     let script_path = bundled_resources::ensure_relative_dir("scripts/modelscope_download.py")?;
     if !script_path.is_file() {
@@ -1939,33 +1911,6 @@ fn extract_zip_to_dir(zip_path: &Path, target_dir: &Path) -> Result<(), String> 
     Ok(())
 }
 
-fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
-    fs::create_dir_all(dst).map_err(|e| e.to_string())?;
-
-    for entry in fs::read_dir(src).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let ty = entry.file_type().map_err(|e| e.to_string())?;
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-
-        if ty.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path)?;
-        } else if ty.is_file() {
-            if let Some(p) = dst_path.parent() {
-                if !p.exists() {
-                    fs::create_dir_all(p).map_err(|e| e.to_string())?;
-                }
-            }
-            if dst_path.exists() {
-                let _ = fs::remove_file(&dst_path);
-            }
-            fs::copy(&src_path, &dst_path).map_err(|e| e.to_string())?;
-        }
-    }
-
-    Ok(())
-}
-
 fn find_dir_by_name(root: &Path, name: &str, max_depth: usize) -> Option<PathBuf> {
     if max_depth == 0 || !root.is_dir() {
         return None;
@@ -2044,7 +1989,9 @@ fn local_qwen_model_path() -> Result<PathBuf, String> {
     ))
 }
 
-fn resolve_llama_server_path() -> Option<PathBuf> {
+/// 解析 `utils/llama` 下的 llama-server 可执行文件。
+/// 文档转换引擎（marker 的 surya VLM 走 llama.cpp 后端）也复用它，故为 crate 可见。
+pub(crate) fn resolve_llama_server_path() -> Option<PathBuf> {
     let llama_dir = bundled_resources::ensure_relative_dir("utils/llama").ok()?;
     if !llama_dir.exists() {
         return None;
@@ -2075,8 +2022,13 @@ pub async fn get_markdown_models_status() -> Result<MarkdownInstallStatus, Strin
     tauri::async_runtime::spawn_blocking(move || {
         let expected = bundled_resources::ensure_relative_dir("utils/Models/surya_models")?;
 
+        // marker 2.x 的模型集合与 1.x 完全不同（VLM 的 GGUF + rf-detr 布局 + s3 的
+        // ocr_error）。单看目录是否存在，会把 1.x 留下来的、已经失效的模型目录误判成
+        // “已加载”，因此改为检查关键模型是否齐全。
+        let installed = crate::commands::convert::provision::marker_models_ready();
+
         Ok(MarkdownInstallStatus {
-            installed: expected.is_dir(),
+            installed,
             expected_path: expected.to_string_lossy().to_string(),
         })
     })
@@ -2281,18 +2233,98 @@ pub async fn install_local_qwen_model_from_file(source_path: String) -> Result<S
     Ok(model_path.to_string_lossy().to_string())
 }
 
-#[tauri::command]
-pub async fn get_markdown_convertor_env_status() -> Result<MarkdownInstallStatus, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let expected = bundled_resources::ensure_relative_dir("utils/MarkdownConvertor/marker-1.10.1")?;
+/// 目录复制，且**跟随符号链接**并把目标内容落地成真实文件。
+///
+/// marker 2.x 的模型取自 HuggingFace 缓存布局：`blobs/<hash>` 存真实数据，
+/// `snapshots/<rev>/<name>` 只是指向它们的符号链接。而 `DirEntry::file_type()` **不跟随链接**
+/// ——链接既不是 `is_dir` 也不是 `is_file`，用通用复制会把它**静默跳过**，得到“安装提示成功、
+/// 模型实际不可用”这种最难排查的结果。因此这里改用 `fs::metadata`（跟随链接）判定类型，
+/// 用 `fs::copy`（同样跟随链接）复制内容；链接指向的目标不存在时直接报错，而不是留个空壳。
+fn copy_dir_recursive_follow_links(src: &Path, dst: &Path) -> Result<(), String> {
+    fs::create_dir_all(dst).map_err(|e| e.to_string())?;
+    for entry in fs::read_dir(src).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
 
-        Ok(MarkdownInstallStatus {
-            installed: expected.is_dir(),
-            expected_path: expected.to_string_lossy().to_string(),
-        })
-    })
-    .await
-    .map_err(|e| e.to_string())?
+        // fs::metadata 跟随符号链接；meta 失败说明是断链，直接报出来。
+        let meta = fs::metadata(&src_path)
+            .map_err(|e| format!("读取失败（可能是断链）: {} ({e})", src_path.to_string_lossy()))?;
+
+        if meta.is_dir() {
+            copy_dir_recursive_follow_links(&src_path, &dst_path)?;
+        } else if meta.is_file() {
+            if let Some(parent) = dst_path.parent() {
+                fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            if dst_path.exists() {
+                let _ = fs::remove_file(&dst_path);
+            }
+            fs::copy(&src_path, &dst_path).map_err(|e| {
+                format!("复制失败: {} -> {} ({e})", src_path.to_string_lossy(), dst_path.to_string_lossy())
+            })?;
+        }
+    }
+    Ok(())
+}
+
+/// 在 HuggingFace 缓存目录里找一个 snapshot 文件（`snapshots/<rev>/<name>`）。
+/// `is_file()` 跟随链接，因此断链会判为不存在——这正是我们要区分的情况。
+fn find_snapshot_file(repo_dir: &Path, file_name: &str) -> Option<PathBuf> {
+    let snapshots = repo_dir.join("snapshots");
+    for entry in fs::read_dir(&snapshots).ok()?.flatten() {
+        let candidate = entry.path().join(file_name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// 校验离线模型包的安装结果：关键权重必须**真的能读到**，而不是断链/被跳过后的空壳。
+///
+/// 阈值 1 MB 只用来区分“真实权重”与“丢了链接后残留的路径文本文件”（几十字节），
+/// 不是精度门槛，因此不会因为模型换量化版本而误报。
+fn verify_installed_markdown_models(root: &Path) -> Result<(), String> {
+    const MIN_WEIGHT_BYTES: u64 = 1024 * 1024;
+
+    let gguf_repo = root.join("models--datalab-to--surya-ocr-2-gguf");
+    let gguf = find_snapshot_file(&gguf_repo, "surya-2.gguf").ok_or_else(|| {
+        "离线模型包不完整：未找到 VLM 权重 surya-2.gguf".to_string()
+    })?;
+    let gguf_size = fs::metadata(&gguf).map(|m| m.len()).unwrap_or(0);
+    if gguf_size < MIN_WEIGHT_BYTES {
+        return Err(format!(
+            "离线模型包不可用：surya-2.gguf 只有 {gguf_size} 字节，通常是打包时丢掉了 HuggingFace \
+             缓存里的符号链接。请在能联网的机器上执行 \
+             `python download_surya_models.py --dest <目录> --dir surya_models --materialize` \
+             重新生成模型目录，再打包分发。"
+        ));
+    }
+    if find_snapshot_file(&gguf_repo, "surya-2-mmproj.gguf").is_none() {
+        return Err("离线模型包不完整：未找到 surya-2-mmproj.gguf（多模态投影权重）".to_string());
+    }
+
+    let layout_repo = root.join("models--datalab-to--surya_layout2");
+    let rfdetr = find_snapshot_file(&layout_repo, "rfdetr_layout.pth").ok_or_else(|| {
+        "离线模型包不完整：未找到布局模型 rfdetr_layout.pth（datalab-to/surya_layout2）".to_string()
+    })?;
+    if fs::metadata(&rfdetr).map(|m| m.len()).unwrap_or(0) < MIN_WEIGHT_BYTES {
+        return Err("离线模型包不可用：rfdetr_layout.pth 内容异常（疑似打包时丢失符号链接）".to_string());
+    }
+
+    if !root
+        .join("ocr_error_detection")
+        .join("2025_02_18")
+        .join("manifest.json")
+        .is_file()
+    {
+        return Err(
+            "离线模型包不完整：缺少 ocr_error_detection/2025_02_18/manifest.json".to_string(),
+        );
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -2342,7 +2374,9 @@ pub async fn install_markdown_models_archive(archive_path: String) -> Result<Str
 
             let dst_surya_models = models_dir.join("surya_models");
             remove_path_if_exists(&dst_surya_models)?;
-            copy_dir_recursive(&packaged_surya_models, &dst_surya_models)?;
+            // 跟随符号链接复制：HF 缓存布局下 snapshots/ 里是指向 blobs/ 的链接，
+            // 不跟随会静默丢文件（装完看着目录在、模型实际用不了）。
+            copy_dir_recursive_follow_links(&packaged_surya_models, &dst_surya_models)?;
 
             if !dst_surya_models.is_dir() {
                 return Err(format!(
@@ -2350,6 +2384,9 @@ pub async fn install_markdown_models_archive(archive_path: String) -> Result<Str
                     dst_surya_models.to_string_lossy()
                 ));
             }
+
+            // 装完立刻校验关键权重是否真的落地，避免把“空壳目录”当成安装成功。
+            verify_installed_markdown_models(&dst_surya_models)?;
 
             Ok(dst_surya_models.to_string_lossy().to_string())
         })();
@@ -2361,71 +2398,10 @@ pub async fn install_markdown_models_archive(archive_path: String) -> Result<Str
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
-pub async fn install_markdown_convertor_env_archive(archive_path: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let p = archive_path.trim();
-        if p.is_empty() {
-            return Err("archive_path is empty".to_string());
-        }
-
-        let zip_path = PathBuf::from(p);
-        if !zip_path.is_file() {
-            return Err(format!("找不到运行环境压缩包: {}", zip_path.to_string_lossy()));
-        }
-
-        if !zip_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|s| s.eq_ignore_ascii_case("zip"))
-            .unwrap_or(false)
-        {
-            return Err("运行环境压缩包仅支持 .zip".to_string());
-        }
-
-        let exe = exe_dir()?;
-        let utils_dir = bundled_resources::ensure_relative_dir("utils")?;
-        fs::create_dir_all(&utils_dir).map_err(|e| e.to_string())?;
-
-        let temp_dir = exe
-            .join("tmp")
-            .join(format!("markdown_convertor_env_{}", Uuid::new_v4()));
-        remove_path_if_exists(&temp_dir)?;
-        fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
-
-        let result: Result<String, String> = (|| {
-            info!(
-                archive_path = zip_path.to_string_lossy().as_ref(),
-                temp_dir = temp_dir.to_string_lossy().as_ref(),
-                "extracting markdown convertor env archive"
-            );
-
-            extract_zip_to_dir(&zip_path, &temp_dir)?;
-
-            let packaged_convertor_dir = find_dir_by_name(&temp_dir, "MarkdownConvertor", 5)
-                .ok_or_else(|| "压缩包内未找到 MarkdownConvertor 目录".to_string())?;
-
-            let dst_convertor_dir = utils_dir.join("MarkdownConvertor");
-            remove_path_if_exists(&dst_convertor_dir)?;
-            copy_dir_recursive(&packaged_convertor_dir, &dst_convertor_dir)?;
-
-            let expected = dst_convertor_dir.join("marker-1.10.1");
-            if !expected.is_dir() {
-                return Err(format!(
-                    "运行环境目录校验失败: {}",
-                    expected.to_string_lossy()
-                ));
-            }
-
-            Ok(expected.to_string_lossy().to_string())
-        })();
-
-        let _ = remove_path_if_exists(&temp_dir);
-        result
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
+// 说明：原先这里还有 `get_markdown_convertor_env_status` / `install_markdown_convertor_env_archive`
+// 一对命令，用于“离线加载转换运行环境”（把预打包好的 MarkdownConvertor.zip 拷进安装目录）。
+// marker 运行环境改为启动时自动装配（uv 建独立 venv + 按 GPU 选 torch）后，这套离线分发不再需要，
+// 已整体移除；模型仍保留离线加载入口（见上面的 install_markdown_models_archive）。
 
 #[tauri::command]
 pub fn get_active_repo_path() -> Option<String> {
