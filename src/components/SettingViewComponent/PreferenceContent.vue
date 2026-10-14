@@ -61,12 +61,19 @@
                 :disabled="loading || ttsSaving"
               />
             </n-form-item>
-            <n-form-item v-if="ttsProvider === 'sherpa-onnx'" label="Exe 路径">
-              <n-input
-                v-model:value="ttsExe"
-                placeholder="utils/sherpa-onnx/sherpa-onnx-offline-tts.exe"
-                :disabled="loading || ttsSaving"
-              />
+            <n-form-item v-if="ttsProvider === 'sherpa-onnx'" label="音色">
+              <n-space vertical :size="4">
+                <n-select
+                  v-model:value="ttsSpeakerId"
+                  :options="ttsSpeakerOptions"
+                  filterable
+                  tag
+                  placeholder="选择朗读音色"
+                  :disabled="loading || ttsSaving"
+                  style="width: 320px"
+                />
+                <span class="description">{{ ttsSpeakerHint }}</span>
+              </n-space>
             </n-form-item>
             <n-form-item label="测试文本">
               <n-input
@@ -129,17 +136,10 @@
                 :disabled="loading || asrSaving"
               />
             </n-form-item>
-            <n-form-item v-if="asrProvider === 'sherpa-onnx'" label="Exe 路径">
-              <n-input
-                v-model:value="asrExe"
-                placeholder="utils/sherpa-onnx/sherpa-onnx-offline.exe"
-                :disabled="loading || asrSaving"
-              />
-            </n-form-item>
             <n-form-item label="测试音频路径">
               <n-input
                 v-model:value="asrTestFilePath"
-                placeholder="填写本地音频文件绝对路径（wav/mp3/m4a/flac）"
+                placeholder="填写本地音频文件绝对路径（仅支持 wav）"
                 :disabled="loading || asrSaving || asrTesting"
               />
             </n-form-item>
@@ -317,7 +317,8 @@
 
 <script setup>
 import { createLogger } from '../../utils/logger'
-import { ref, onBeforeUnmount, onMounted, watch } from 'vue'
+import { ref, computed, onBeforeUnmount, onMounted, watch } from 'vue'
+import { buildSpeakerOptions, describeSpeaker } from '../../utils/ttsSpeakers'
 import { NCard, NSpace, NDivider, NForm, NFormItem, NInputNumber, NInput, NButton, NAlert, NSwitch, NSelect } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -362,6 +363,11 @@ const ttsProvider = ref('sherpa-onnx')
 const ttsModel = ref('')
 const ttsTokens = ref('')
 const ttsExe = ref('')
+/// 默认音色（Speaker ID）。各朗读入口在未显式指定时都会用它，
+/// 所以这里是"全局音色"的唯一入口。
+const ttsSpeakerId = ref('0')
+const ttsSpeakerOptions = computed(() => buildSpeakerOptions(ttsModel.value))
+const ttsSpeakerHint = computed(() => describeSpeaker(ttsModel.value, ttsSpeakerId.value))
 const ttsTestText = ref('你好，这是测试朗读。')
 const asrProvider = ref('sherpa-onnx')
 const asrModel = ref('')
@@ -436,6 +442,7 @@ onMounted(async () => {
         ttsModel.value = String(ttsConfig?.model || '').trim()
         ttsTokens.value = String(ttsConfig?.tokens || '').trim()
         ttsExe.value = String(ttsConfig?.exe || '').trim()
+        ttsSpeakerId.value = String(ttsConfig?.speaker_id || '0').trim() || '0'
         asrProvider.value = String(asrConfig?.provider || 'sherpa-onnx').trim() || 'sherpa-onnx'
         asrModel.value = String(asrConfig?.model || '').trim()
         asrExe.value = String(asrConfig?.exe || '').trim()
@@ -602,6 +609,7 @@ const handleTtsConfigSave = async () => {
         model: String(ttsModel.value || '').trim(),
         tokens: String(ttsTokens.value || '').trim(),
         exe: String(ttsExe.value || '').trim(),
+        speaker_id: String(ttsSpeakerId.value || '0').trim() || '0',
         output_dir: String(current?.output_dir || '').trim(),
       }
     })
@@ -610,6 +618,7 @@ const handleTtsConfigSave = async () => {
     ttsModel.value = String(saved?.model || '').trim()
     ttsTokens.value = String(saved?.tokens || '').trim()
     ttsExe.value = String(saved?.exe || '').trim()
+    ttsSpeakerId.value = String(saved?.speaker_id || '0').trim() || '0'
   } catch (error) {
     logger.error('保存 TTS 配置失败:', error)
   } finally {
@@ -747,7 +756,8 @@ const handleTtsTestReadAloud = async () => {
           tokens,
         },
         input: text,
-        voice: provider === 'sherpa-onnx' ? '0' : 'alex',
+        // 试听直接用当前选中的音色，这样不用先保存就能比较不同音色。
+        voice: provider === 'sherpa-onnx' ? String(ttsSpeakerId.value || '0').trim() : 'alex',
         response_format: responseFormat,
         stream: false,
       },

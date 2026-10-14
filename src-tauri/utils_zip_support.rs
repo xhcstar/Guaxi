@@ -28,8 +28,6 @@ const BUNDLE_EXTENSION: &str = ".tar.zst";
 const LEGACY_BUNDLES: &[&str] = &[
     "utils.zip",
     "SlidevEnv.zip",
-    "sherpa-onnx.zip",
-    "whisper.zip",
     "llama.zip",
     "python_libs.zip",
     "Models/tts.zip",
@@ -43,6 +41,9 @@ const SKIPPED_DIRECTORIES: &[&str] = &[
     // 不进入 tar.zst 自动打包，由独立机制随安装目录分发；缺失时运行时自动回退 marker。
     "MinerU",
     "Models/mineru_models",
+    // 语音已经改成进程内调用 sherpa-onnx 库，不再需要这些外部可执行文件与随附运行库。
+    "sherpa-onnx",
+    "whisper",
     GENERATED_BUNDLES_DIR,
 ];
 
@@ -106,6 +107,9 @@ pub fn should_skip(relative: &str) -> bool {
         || SKIPPED_DIRECTORIES.iter().any(|dir| {
             normalized == *dir || normalized.starts_with(&format!("{dir}/"))
         })
+        // 语音模型与原生库的下载归档只是中间产物，解压完就没用了。
+        // 一旦误留在 utils 下，就会被整包打进 release 白增几百 MB。
+        || normalized.to_ascii_lowercase().ends_with(".tar.bz2")
         || normalized.contains(".__extracting_")
         || normalized.ends_with("/.guaxi_extract_complete")
         || normalized.ends_with("/.guaxi_utils_extract_complete")
@@ -535,4 +539,28 @@ pub fn bundle_extension() -> &'static str {
 
 pub fn bundle_dir_name() -> &'static str {
     GENERATED_BUNDLES_DIR
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_skip;
+
+    /// 打包排除规则是「release 里别混进冗余」的唯一防线，钉住它。
+    #[test]
+    fn skips_download_archives_and_retired_speech_binaries() {
+        // 模型与原生库的下载归档只是中间产物，解压后就没用了，不能进包。
+        assert!(should_skip("Models/whisper_onnx/sherpa-onnx-whisper-base.en.tar.bz2"));
+        assert!(should_skip("Models/tts/kokoro-multi-lang-v1_1.tar.bz2"));
+
+        // 语音已改成进程内调用库，这两棵外部二进制树不该再进包。
+        assert!(should_skip("sherpa-onnx"));
+        assert!(should_skip("sherpa-onnx/sherpa-onnx-offline-tts.exe"));
+        assert!(should_skip("whisper"));
+        assert!(should_skip("whisper/whisper-cli.exe"));
+
+        // 运行期真正要加载的模型必须保留。
+        assert!(!should_skip("Models/tts/kokoro_multi_lang/model.onnx"));
+        assert!(!should_skip("Models/asr/sense-voice/tokens.txt"));
+        assert!(!should_skip("Models/vad/silero_vad.onnx"));
+    }
 }

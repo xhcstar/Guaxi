@@ -6132,7 +6132,8 @@ const readNotebookSelectionAloud = async () => {
       : 'FunAudioLLM/CosyVoice2-0.5B')
     const tokens = String(tts?.tokens || '').trim()
     const endpoint = provider === 'sherpa-onnx' ? String(tts?.exe || '').trim() : ''
-    const voice = provider === 'sherpa-onnx' ? '0' : 'alex'
+    // 同 GuaxiEditor：留空让后端用设置里配置的默认音色。
+    const voice = provider === 'sherpa-onnx' ? '' : 'alex'
     const responseFormat = provider === 'sherpa-onnx' ? 'wav' : 'mp3'
 
     logger.info('[NotebookSelection] start text to speech', {

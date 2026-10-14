@@ -1,4 +1,5 @@
 import { cp, mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
@@ -35,6 +36,35 @@ const windowsExtractHelperOutput = path.join(
   windowsNsisOutputDir,
   'extract_utils_bundles.exe',
 );
+
+// 语音功能的 GPU 构建需要 SHERPA_ONNX_LIB_DIR 指向已装配的 CUDA 库目录。
+// 与其让每台机器各自 export 一遍，不如在这里按 `--features gpu` 自动补上——
+// 命令因此保持成一条，文档和 CI 都不必再记环境变量。
+const SHERPA_VERSION = '1.13.8';
+const sherpaCudaLibDir = path.join(
+  projectRoot,
+  'src-tauri',
+  '.sherpa-onnx-libs',
+  SHERPA_VERSION,
+  'cuda-lib',
+);
+
+/// 只认 `--features gpu` / `--features=a,b` 这类显式写法，避免误匹配别的参数。
+function usesGpuFeature(commandArgs) {
+  for (let index = 0; index < commandArgs.length; index += 1) {
+    const arg = commandArgs[index];
+    if (arg === '--features' || arg === '-F') {
+      if ((commandArgs[index + 1] ?? '').split(',').includes('gpu')) {
+        return true;
+      }
+    } else if (arg.startsWith('--features=') || arg.startsWith('-F=')) {
+      if (arg.slice(arg.indexOf('=') + 1).split(',').includes('gpu')) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
 
 function tauriInvocation() {
   // On Windows we invoke the generated `tauri.cmd` through cmd.exe.
@@ -158,6 +188,34 @@ async function main() {
   // 并且刻意不校验退出码：拿不到 codex 时智能助手会回退到内置 Python Agent，
   // 不应该因为下载失败就阻断 dev / build。
   await run('node', ['./tools/fetch_codex_sidecar.mjs']);
+
+  // 语音功能的原生库与模型。必须放在这里（而不是 only-in-build 分支里），原因有两条：
+  //   · 原生库要赶在**任何** cargo 构建之前就位——sherpa-onnx 的 build.rs 找不到归档时
+  //     会自己去联网下载，而只有系统代理（注册表）的环境下会直接卡住；
+  //   · 模型要赶在 prepare_utils_zip 打包之前就位，否则不会被打进离线包。
+  // 脚本自身幂等（已存在即跳过），所以 dev 下重复执行没有代价。
+  const sherpaExitCode = await run('node', ['./tools/fetch_sherpa_onnx_libs.mjs']);
+  if (sherpaExitCode !== 0) {
+    console.error(
+      '[tauri] 语音库与模型准备失败。原生库缺失会让 cargo 构建直接失败，故在此中止；\n' +
+        '        可单独重试：node tools/fetch_sherpa_onnx_libs.mjs',
+    );
+    process.exit(sherpaExitCode);
+  }
+
+  if (usesGpuFeature(tauriArgs)) {
+    if (!existsSync(sherpaCudaLibDir)) {
+      console.error(
+        `[tauri] 指定了 gpu 特性，但 CUDA 库目录不存在：${sherpaCudaLibDir}\n` +
+          '        请先运行：npm run sherpa:fetch:cuda',
+      );
+      process.exit(1);
+    }
+    if (!process.env.SHERPA_ONNX_LIB_DIR) {
+      process.env.SHERPA_ONNX_LIB_DIR = sherpaCudaLibDir;
+      console.log(`[tauri] GPU 构建：SHERPA_ONNX_LIB_DIR=${sherpaCudaLibDir}`);
+    }
+  }
 
   if (shouldPrepareForTauriCommand) {
     // Release packaging depends on pre-copied frontend assets because the final

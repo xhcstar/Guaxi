@@ -15,9 +15,6 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
 use tauri::Manager;
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 use tracing::{info, warn};
@@ -29,8 +26,6 @@ use zip::{ZipArchive, ZipWriter};
 const LANG_LEARN_DIR_NAME: &str = "guaxi_language_learning";
 const LANG_LEARN_DB_NAME: &str = "language_learning.sqlite3";
 const LISTENING_ITEMS_DIR_NAME: &str = "guaxi_listening_items";
-#[cfg(target_os = "windows")]
-const CREATE_NO_WINDOW: u32 = 0x08000000;
 static LISTENING_SYNC_LOCK: Lazy<tokio::sync::Mutex<()>> =
     Lazy::new(|| tokio::sync::Mutex::new(()));
 static LISTENING_SYNC_PENDING_IDS: Lazy<std::sync::Mutex<HashSet<String>>> =
@@ -3311,187 +3306,76 @@ async fn prepare_entry_audio_file(row: &AudioResource, entry_dir: &Path) -> Resu
     Ok(audio_path)
 }
 
-fn parse_ts_to_sec(raw: &str) -> Option<f64> {
-    let t = raw.trim().replace(',', ".");
-    if t.is_empty() {
-        return None;
-    }
-    let parts = t.split(':').collect::<Vec<_>>();
-    if parts.len() == 3 {
-        let h = parts[0].trim().parse::<f64>().ok()?;
-        let m = parts[1].trim().parse::<f64>().ok()?;
-        let s = parts[2].trim().parse::<f64>().ok()?;
-        return Some(h * 3600.0 + m * 60.0 + s);
-    }
-    if parts.len() == 2 {
-        let m = parts[0].trim().parse::<f64>().ok()?;
-        let s = parts[1].trim().parse::<f64>().ok()?;
-        return Some(m * 60.0 + s);
-    }
-    parts[0].trim().parse::<f64>().ok()
-}
+fn resolve_whisper_models() -> Result<(PathBuf, PathBuf), String> {
+    let base = bundled_resources::ensure_relative_dir("utils/Models/whisper_onnx")?;
+    let model_dir = fs::read_dir(&base)
+        .map_err(|e| format!("读取 whisper 模型目录失败（{}）：{}", base.display(), e))?
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.is_dir()
+                && fs::read_dir(path)
+                    .map(|entries| {
+                        entries
+                            .flatten()
+                            .any(|entry| entry.file_name().to_string_lossy().ends_with("-tokens.txt"))
+                    })
+                    .unwrap_or(false)
+        })
+        .ok_or_else(|| {
+            format!(
+                "未在 {} 下找到 whisper ONNX 模型目录，请运行 tools/fetch_sherpa_onnx_libs 下载",
+                base.display()
+            )
+        })?;
 
-fn extract_whisper_segments(v: &serde_json::Value) -> Vec<(f64, f64, String)> {
-    let mut out = Vec::new();
-    if let Some(arr) = v.get("segments").and_then(|x| x.as_array()) {
-        for item in arr {
-            let start = item.get("start").and_then(|x| x.as_f64()).unwrap_or(0.0);
-            let end = item.get("end").and_then(|x| x.as_f64()).unwrap_or(start + 1.2);
-            let text = item
-                .get("text")
-                .and_then(|x| x.as_str())
-                .unwrap_or_default()
-                .trim()
-                .to_string();
-            if !text.is_empty() {
-                out.push((start.max(0.0), end.max(start + 0.4), text));
-            }
-        }
-    }
-    if out.is_empty() {
-        if let Some(arr) = v.get("transcription").and_then(|x| x.as_array()) {
-            for item in arr {
-                let mut start = item
-                    .get("offsets")
-                    .and_then(|x| x.get("from"))
-                    .and_then(|x| x.as_f64())
-                    .map(|x| x / 1000.0)
-                    .unwrap_or(0.0);
-                let mut end = item
-                    .get("offsets")
-                    .and_then(|x| x.get("to"))
-                    .and_then(|x| x.as_f64())
-                    .map(|x| x / 1000.0)
-                    .unwrap_or(start + 1.2);
-                if let Some(from) = item
-                    .get("timestamps")
-                    .and_then(|x| x.get("from"))
-                    .and_then(|x| x.as_str())
-                    .and_then(parse_ts_to_sec)
-                {
-                    start = from;
-                }
-                if let Some(to) = item
-                    .get("timestamps")
-                    .and_then(|x| x.get("to"))
-                    .and_then(|x| x.as_str())
-                    .and_then(parse_ts_to_sec)
-                {
-                    end = to;
-                }
-                let text = item
-                    .get("text")
-                    .and_then(|x| x.as_str())
-                    .unwrap_or_default()
-                    .trim()
-                    .to_string();
-                if !text.is_empty() {
-                    out.push((start.max(0.0), end.max(start + 0.4), text));
-                }
-            }
-        }
-    }
-    out
-}
-
-fn resolve_whisper_cli_and_model() -> Result<(PathBuf, PathBuf), String> {
-    let whisper_cli = if cfg!(target_os = "windows") {
-        bundled_resources::ensure_relative_dir("utils/whisper/whisper-cli.exe")?
-    } else {
-        bundled_resources::ensure_relative_dir("utils/whisper/whisper-cli")?
-    };
-    if !whisper_cli.exists() {
+    let vad = bundled_resources::ensure_relative_dir("utils/Models/vad/silero_vad.onnx")?;
+    if !vad.is_file() {
         return Err(format!(
-            "未找到 whisper 可执行文件: {}",
-            whisper_cli.to_string_lossy()
+            "未找到 VAD 模型：{}，请运行 tools/fetch_sherpa_onnx_libs 下载",
+            vad.display()
         ));
     }
-    let model_en = bundled_resources::ensure_relative_dir("utils/Models/whisper_models/ggml-base.en.bin")?;
-    let model_base = bundled_resources::ensure_relative_dir("utils/Models/whisper_models/ggml-base.bin")?;
-    let model = if model_en.exists() { model_en } else { model_base };
-    if !model.exists() {
-        return Err(format!(
-            "未找到 whisper 模型文件: {}",
-            model.to_string_lossy()
-        ));
-    }
-    Ok((whisper_cli, model))
+    Ok((model_dir, vad))
 }
 
 async fn run_whisper_and_build_sync_json(local_audio: &Path, entry_dir: &Path, target_lang: &str) -> Result<PathBuf, String> {
     if !entry_dir.exists() {
         fs::create_dir_all(entry_dir).map_err(|e| format!("创建听力目录失败: {}", e))?;
     }
-    let (whisper_cli, model_path) = resolve_whisper_cli_and_model()?;
-    let output_base = entry_dir.join("media");
-    let mut cmd = Command::new(&whisper_cli);
-    cmd.arg("-m")
-        .arg(model_path.to_string_lossy().to_string())
-        .arg("-f")
-        .arg(local_audio.to_string_lossy().to_string())
-        .arg("-oj")
-        .arg("-of")
-        .arg(output_base.to_string_lossy().to_string())
-        .arg("--language")
-        .arg("en");
-    #[cfg(target_os = "windows")]
-    {
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    let output = cmd
-        .output()
-        .map_err(|e| format!("执行 whisper 失败: {}", e))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        return Err(format!("whisper 转写失败: {}", stderr));
-    }
-    let whisper_json = {
-        let primary = entry_dir.join("media.json");
-        if primary.exists() {
-            primary
-        } else {
-            let mut fallback: Option<PathBuf> = None;
-            let entries = fs::read_dir(entry_dir).map_err(|e| format!("读取听力目录失败: {}", e))?;
-            for it in entries {
-                let entry = match it {
-                    Ok(v) => v,
-                    Err(_) => continue,
-                };
-                let p = entry.path();
-                if !p.is_file() {
-                    continue;
-                }
-                let is_json = p
-                    .extension()
-                    .and_then(|x| x.to_str())
-                    .map(|x| x.eq_ignore_ascii_case("json"))
-                    .unwrap_or(false);
-                if is_json {
-                    fallback = Some(p);
-                    break;
-                }
-            }
-            fallback.ok_or_else(|| "whisper 未生成 JSON 文件".to_string())?
-        }
-    };
-    let raw = fs::read_to_string(&whisper_json).map_err(|e| format!("读取 whisper 输出失败: {}", e))?;
-    let v: serde_json::Value =
-        serde_json::from_str(&raw).map_err(|e| format!("解析 whisper 输出失败: {}", e))?;
-    let parsed = extract_whisper_segments(&v);
+    let (model_dir, vad_model) = resolve_whisper_models()?;
+    let config = crate::guaxiservices::speech::resolve_whisper_onnx_engine_config(
+        &model_dir,
+        "cpu",
+        Some("en"),
+    )?;
+    // 音频整段读进内存交给识别器，不再落中间文件。
+    // 只支持 WAV——这与原来 whisper-cli 的输入限制是一致的，不是能力退步。
+    let wav_bytes = fs::read(local_audio)
+        .map_err(|e| format!("读取听力音频失败（{}）：{}", local_audio.display(), e))?;
+    info!(
+        audio = %local_audio.display(),
+        model_dir = %model_dir.display(),
+        bytes = wav_bytes.len(),
+        "language_learning whisper in-process"
+    );
+    let parsed = crate::guaxiservices::speech::transcribe_segments_wav(config, vad_model, wav_bytes)
+        .await
+        .map_err(|e| format!("转写失败：{}", e))?;
     if parsed.is_empty() {
-        return Err("whisper 输出不包含可用分段".to_string());
+        return Err("转写未得到可用分段，请检查音频内容".to_string());
     }
     let mut segments = Vec::new();
     let mut transcript_lines = Vec::new();
-    let source_lines = parsed.iter().map(|(_, _, text)| text.clone()).collect::<Vec<_>>();
+    let source_lines = parsed.iter().map(|segment| segment.text.clone()).collect::<Vec<_>>();
     let translated_lines = translate_segments_with_sentence_groups(&source_lines, target_lang).await;
-    for (idx, (start, end, text)) in parsed.iter().enumerate() {
-        transcript_lines.push(text.clone());
+    for (idx, segment) in parsed.iter().enumerate() {
+        transcript_lines.push(segment.text.clone());
         segments.push(WhisperSyncSegment {
             index: idx,
-            start_sec: *start,
-            end_sec: *end,
-            text: text.clone(),
+            start_sec: segment.start,
+            end_sec: segment.end,
+            text: segment.text.clone(),
             translated_text: translated_lines
                 .get(idx)
                 .map(|x| x.trim().to_string())
@@ -3502,18 +3386,16 @@ async fn run_whisper_and_build_sync_json(local_audio: &Path, entry_dir: &Path, t
     let payload = WhisperSyncPayload {
         version: "1.0".to_string(),
         generated_at: now_iso(),
-        model_path: model_path.to_string_lossy().to_string(),
+        model_path: model_dir.to_string_lossy().to_string(),
         audio_path: local_audio.to_string_lossy().to_string(),
         transcript: transcript_lines.join("\n"),
         segments,
     };
     let formatted =
         serde_json::to_string_pretty(&payload).map_err(|e| format!("构建同步 JSON 失败: {}", e))?;
-    if !entry_dir.exists() {
-        fs::create_dir_all(entry_dir).map_err(|e| format!("创建听力目录失败: {}", e))?;
-    }
-    fs::write(&whisper_json, formatted).map_err(|e| format!("写入同步 JSON 失败: {}", e))?;
-    Ok(whisper_json)
+    let sync_path = entry_dir.join("media.json");
+    fs::write(&sync_path, formatted).map_err(|e| format!("写入同步 JSON 失败: {}", e))?;
+    Ok(sync_path)
 }
 
 fn looks_like_audio_url(url: &str) -> bool {

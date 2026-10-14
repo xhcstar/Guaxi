@@ -1,0 +1,10 @@
+# sherpa-onnx 的原生静态库不让 build.rs 自己去 GitHub 下载：构建机常常只有
+# 注册表里的系统代理、没有 *_PROXY 环境变量，cargo 会卡在下载上。
+# 改由 tools/fetch_sherpa_onnx_libs.mjs 预取归档到 .sherpa-onnx-libs/<ver>/，
+# 构建期零联网，也满足 release 离线自足的要求。
+#
+# relative = true 让路径相对本文件所在目录解析，不受调用时 cwd 影响。
+# 若脚本探测到可链接的 GPU 库，会在子进程额外设 SHERPA_ONNX_LIB_DIR；
+# cargo 的 [env] 不会覆盖已存在的环境变量，两者不冲突。
+[env]
+SHERPA_ONNX_ARCHIVE_DIR = { value = ".sherpa-onnx-libs/1.13.8", relative = true }

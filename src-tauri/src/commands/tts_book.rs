@@ -1,6 +1,4 @@
-use crate::commands::chatview::{audio_text_to_speech, AudioCommonRequest, TextToSpeechRequest};
 use crate::commands::settingview;
-use base64::{engine::general_purpose, Engine as _};
 use encoding_rs::GBK;
 use lopdf::Document as LoDocument;
 use once_cell::sync::Lazy;
@@ -20,7 +18,6 @@ use tauri::{Emitter, Window};
 use tracing::{info, warn};
 use zip::ZipArchive;
 
-const SHERPA_PROVIDER: &str = "sherpa-onnx";
 const DEFAULT_MODEL: &str = "utils/Models/tts/kokoro_multi_lang/model.onnx";
 const DEFAULT_TOKENS: &str = "utils/Models/tts/kokoro_multi_lang/tokens.txt";
 const DEFAULT_EXECUTION_PROVIDER: &str = "cpu";
@@ -531,10 +528,21 @@ pub async fn tts_book_convert(
     let mut chunk_paths = Vec::with_capacity(chunks.len());
     let mut chunk_durations_ms = vec![0u64; chunks.len()];
     let mut last_resume_save_ms = unix_now_ms();
-    // sherpa CLI 一次只吃一段文本，而且它的 `--num-threads` 默认为 1——
-    // 串行跑等于全程只用一个核。这里按批并发：批内同时合成，
-    // 但落盘、进度与续转状态仍严格按顺序处理，语义与串行版本一致。
-    let batch_size = synthesis_concurrency();
+    // 引擎参数整轮解析一次即可；放进循环会每段重复做路径与资源探测。
+    let tts_synth_config = crate::guaxiservices::speech::resolve_tts_engine_config(
+        &tts_model,
+        &tts_tokens,
+        &tts_mode_hint,
+        &execution_provider,
+        None,
+    )?;
+    let tts_speaker = speaker_id.trim().parse::<i32>().unwrap_or(0);
+    let tts_speed = speed.unwrap_or(1.0);
+
+    // 引擎在进程内常驻，单实例内部已用 num_threads 吃满多核；再叠多路并发只会
+    // 在同一把锁上排队、白占内存，所以这里串行。批结构保留——它同时承担
+    // 「按顺序落盘、上报进度、更新续转状态」的职责。
+    let batch_size = 1usize;
     let mut batch_start = 0usize;
     while batch_start < chunks.len() {
         let batch_end = (batch_start + batch_size).min(chunks.len());
@@ -557,15 +565,8 @@ pub async fn tts_book_convert(
 
         let synthesized = futures_util::future::join_all(missing.iter().map(|offset| {
             let chunk = &batch[*offset];
-            let exe = tts_exe.as_str();
-            let model = tts_model.as_str();
-            let tokens = tts_tokens.as_str();
-            let hint = tts_mode_hint.as_str();
-            let speaker = speaker_id.as_str();
-            let provider = execution_provider.as_str();
-            async move {
-                synthesize_chunk_audio(chunk, exe, model, tokens, hint, speaker, speed, provider).await
-            }
+            let config = &tts_synth_config;
+            async move { synthesize_chunk_audio(chunk, config, tts_speaker, tts_speed).await }
         }))
         .await;
 
@@ -1101,26 +1102,11 @@ fn update_resume_state_progress(
     state.progress = ((safe_current as f64 / safe_total as f64) * 100.0).round() as u8;
 }
 
-/// 并发合成数。每段都会起一个 sherpa 进程、各自加载一份约 310MB 的模型，
-/// 所以既要用满多核，又不能让模型副本翻太多倍。取核数与上限的较小值。
-const SYNTH_MAX_CONCURRENCY: usize = 4;
-
-fn synthesis_concurrency() -> usize {
-    std::thread::available_parallelism()
-        .map(|value| value.get())
-        .unwrap_or(1)
-        .clamp(1, SYNTH_MAX_CONCURRENCY)
-}
-
 async fn synthesize_chunk_audio(
     chunk: &TextChunk,
-    tts_exe: &str,
-    tts_model: &str,
-    tts_tokens: &str,
-    tts_mode_hint: &str,
-    speaker_id: &str,
-    speed: Option<f32>,
-    execution_provider: &str,
+    config: &crate::guaxiservices::speech::TtsEngineConfig,
+    speaker: i32,
+    speed: f32,
 ) -> Result<Vec<u8>, String> {
     let chunk_start = Instant::now();
     let prepared_text = prepare_chunk_text_for_tts(&chunk.text, chunk.lang);
@@ -1132,30 +1118,15 @@ async fn synthesize_chunk_audio(
         "tts_book_convert: synth one chunk"
     );
 
-    let rsp = audio_text_to_speech(TextToSpeechRequest {
-        common: AudioCommonRequest {
-            provider: SHERPA_PROVIDER.to_string(),
-            runtime_provider: execution_provider.to_string(),
-            model: tts_model.to_string(),
-            api_key: String::new(),
-            endpoint: tts_exe.to_string(),
-            tokens: tts_tokens.to_string(),
-            mode_hint: tts_mode_hint.to_string(),
-        },
-        input: prepared_text,
-        voice: speaker_id.to_string(),
-        response_format: "wav".to_string(),
-        sample_rate: None,
-        stream: Some(false),
+    // 直接调进程内合成，音频以字节返回——省掉旧路径的临时文件与 base64 编解码往返。
+    let bytes = crate::guaxiservices::speech::synthesize_wav(
+        config.clone(),
+        prepared_text,
+        speaker,
         speed,
-        gain: None,
-        max_tokens: None,
-    })
+    )
     .await?;
 
-    let bytes = general_purpose::STANDARD
-        .decode(rsp.audio_base64.as_bytes())
-        .map_err(|e| format!("Base64 音频解码失败: {}", e))?;
     info!(
         index = chunk.index,
         audio_bytes = bytes.len(),

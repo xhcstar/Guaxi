@@ -1,0 +1,444 @@
+#!/usr/bin/env node
+// 准备语音功能所需的原生库与模型。
+//
+// 为什么要有这个脚本：
+//   · sherpa-onnx 的 Rust crate 默认会在构建时自己去 GitHub 下载预编译库，而构建机
+//     常常只有系统代理（注册表里）、没有 *_PROXY 环境变量，cargo 会直接卡在下载上。
+//     所以这里把归档预先取到本地，构建期零联网（见 src-tauri/.cargo/config.toml）。
+//   · 模型都不进 git（.gitignore 忽略了 utils/Models 下的相关目录），只能靠脚本获取。
+//
+// 用法：
+//   node tools/fetch_sherpa_onnx_libs.mjs            # 缺什么补什么
+//   node tools/fetch_sherpa_onnx_libs.mjs --force    # 全部重下
+//   node tools/fetch_sherpa_onnx_libs.mjs --cuda     # 同时取 CUDA 版原生库（约 595MB）
+//
+// 下载走 curl：它原生支持代理、重定向、断点续传和「低速即放弃」，不用自己重建这些机制。
+
+import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { mkdir, copyFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const VERSION = '1.13.8';
+const REPO = 'https://github.com/k2-fsa/sherpa-onnx/releases/download';
+const RELEASE = `${REPO}/v${VERSION}`;
+const TTS_MODELS = `${REPO}/tts-models`;
+const ASR_MODELS = `${REPO}/asr-models`;
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const SRC_TAURI = resolve(HERE, '..', 'src-tauri');
+const LIBS_ROOT = join(SRC_TAURI, '.sherpa-onnx-libs', VERSION);
+const MODELS_ROOT = join(SRC_TAURI, 'utils', 'Models');
+
+// 单次下载的超时与低速看门狗。国内直连 GitHub 经常极慢，宁可早失败也不要挂住。
+const TOTAL_TIMEOUT_MS = 60 * 60 * 1000;
+const STALL_TIMEOUT_MS = 60 * 1000;
+
+const force = process.argv.includes('--force');
+const withCuda = process.argv.includes('--cuda');
+
+function info(message) {
+  console.log(`[sherpa] ${message}`);
+}
+
+function warn(message) {
+  console.warn(`[sherpa] ${message}`);
+}
+
+function run(command, args, options = {}) {
+  return new Promise((resolvePromise) => {
+    let stderr = '';
+    const child = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'], ...options });
+    child.stderr?.on('data', (chunk) => {
+      stderr += chunk;
+    });
+    child.on('close', (code) => resolvePromise({ code: code ?? 1, stderr }));
+    child.on('error', (error) => resolvePromise({ code: 1, stderr: error.message }));
+  });
+}
+
+function capture(command, args) {
+  return new Promise((resolvePromise) => {
+    let stdout = '';
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'ignore'] });
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+    });
+    child.on('close', (code) => resolvePromise({ code: code ?? 1, stdout }));
+    child.on('error', () => resolvePromise({ code: 1, stdout: '' }));
+  });
+}
+
+// 解析系统代理：显式环境变量优先，其次是 Windows 注册表里的系统代理。
+//
+// 设计说明：GitHub release 在国内经常直连超时，而用户往往已经有一个可用的系统代理。
+// 取不到就直连，不影响在能直连的机器上使用。
+async function resolveSystemProxy() {
+  const fromEnv =
+    process.env.HTTPS_PROXY ||
+    process.env.https_proxy ||
+    process.env.ALL_PROXY ||
+    process.env.all_proxy ||
+    process.env.HTTP_PROXY ||
+    process.env.http_proxy;
+  if (fromEnv) {
+    return fromEnv;
+  }
+  if (process.platform !== 'win32') {
+    return null;
+  }
+
+  const key = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings';
+  const { code, stdout } = await capture('reg', ['query', key]);
+  if (code !== 0) {
+    return null;
+  }
+  // ProxyEnable 关掉时 ProxyServer 里可能还留着旧值，必须先看开关。
+  if (!/ProxyEnable\s+REG_DWORD\s+0x1/i.test(stdout)) {
+    return null;
+  }
+  const match = stdout.match(/ProxyServer\s+REG_SZ\s+(\S+)/i);
+  if (!match) {
+    return null;
+  }
+  // 可能是 `host:port`，也可能是 `http=host:port;https=host:port` 的分协议写法。
+  const raw = match[1];
+  let host = raw;
+  if (raw.includes('=')) {
+    const parts = Object.fromEntries(
+      raw.split(';').map((part) => {
+        const [scheme, value] = part.split('=');
+        return [scheme?.trim().toLowerCase(), value?.trim()];
+      }),
+    );
+    host = parts.https || parts.http || '';
+  }
+  if (!host) {
+    return null;
+  }
+  return /^\w+:\/\//.test(host) ? host : `http://${host}`;
+}
+
+async function download(url, destination, proxy) {
+  await mkdir(dirname(destination), { recursive: true });
+  const args = [
+    '-fL',
+    '--connect-timeout',
+    '30',
+    '--max-time',
+    String(Math.round(TOTAL_TIMEOUT_MS / 1000)),
+    '--speed-time',
+    String(Math.round(STALL_TIMEOUT_MS / 1000)),
+    '--speed-limit',
+    '1024',
+    '--retry',
+    '2',
+    '--progress-bar',
+    '-o',
+    destination,
+  ];
+  if (proxy) {
+    args.push('--proxy', proxy);
+  }
+  // 断点续传：模型动辄上 G，而代理链路经常中途挂住。保留 .part 让 curl 从断点继续，
+  // 比整个重下划算得多；配套 --retry-all-errors 才能把连接层错误也纳入重试。
+  args.push('-C', '-', '--retry-all-errors');
+  args.push(url);
+
+  const partial = `${destination}.part`;
+  if (force) {
+    await rm(partial, { force: true });
+  } else {
+    await mkdir(dirname(partial), { recursive: true });
+  }
+  // -o 的取值在参数表里位于 -C 之前，这里换成 .part 路径，成功后整体改名。
+  args[args.indexOf('-o') + 1] = partial;
+
+  const result = await run('curl', args);
+  if (result.code !== 0) {
+    // 失败时保留 .part，下次继续；真正的完整性由后续解压（bzip2 CRC）把关。
+    throw new Error(`下载失败：${url}\n${result.stderr.trim()}`);
+  }
+  await rm(destination, { force: true });
+  await rename(partial, destination);
+}
+
+// 解压 .tar.bz2。
+//
+// Windows 上有个坑：从 Git Bash 里调起的 GNU tar 会把 `D:\...` 当成 `主机:路径`
+// 去连远程（报 "Cannot connect to D: resolve failed"），而从 cmd 里调起的 bsdtar 又正常。
+// 所以这里一律传**相对文件名**并指定 cwd，彻底绕开盘符里的冒号。
+async function extractTarBz2(archiveName, destinationName, cwd) {
+  const result = await run('tar', ['-xjf', archiveName, '-C', destinationName], { cwd });
+  if (result.code !== 0) {
+    throw new Error(`解压失败：${archiveName}\n${result.stderr.trim()}`);
+  }
+}
+
+async function fileSize(path) {
+  try {
+    return (await stat(path)).size;
+  } catch {
+    return 0;
+  }
+}
+
+/// 取归档里的第一个子目录路径（模型包都解出一层同名目录）。
+async function firstSubdir(parent) {
+  const entries = await readdir(parent, { withFileTypes: true });
+  const found = entries.find((entry) => entry.isDirectory());
+  return found ? join(parent, found.name) : null;
+}
+
+/// 找到 MSVC 的 dumpbin/lib。
+///
+/// GPU 路径需要它们把 onnxruntime.dll 转成导入库——官方 CUDA 包只给了 DLL 和
+/// sherpa-onnx 自己的导入库，唯独缺 onnxruntime.lib，而 crate 的动态链接模式明确要求它。
+async function findMsvcBinutils() {
+  const vswhere = join(
+    process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)',
+    'Microsoft Visual Studio',
+    'Installer',
+    'vswhere.exe',
+  );
+  if (!existsSync(vswhere)) {
+    return null;
+  }
+  const { code, stdout } = await capture(vswhere, [
+    '-latest',
+    '-products',
+    '*',
+    '-property',
+    'installationPath',
+  ]);
+  if (code !== 0) {
+    return null;
+  }
+  const root = stdout.trim().split(/\r?\n/)[0]?.trim();
+  if (!root) {
+    return null;
+  }
+  const toolsDir = join(root, 'VC', 'Tools', 'MSVC');
+  if (!existsSync(toolsDir)) {
+    return null;
+  }
+  const versions = (await readdir(toolsDir)).sort().reverse();
+  for (const version of versions) {
+    const bin = join(toolsDir, version, 'bin', 'Hostx64', 'x64');
+    const dumpbin = join(bin, 'dumpbin.exe');
+    const lib = join(bin, 'lib.exe');
+    if (existsSync(dumpbin) && existsSync(lib)) {
+      return { dumpbin, lib };
+    }
+  }
+  return null;
+}
+
+/// 从 onnxruntime.dll 导出表生成 onnxruntime.lib。
+///
+/// 不这么做就只有两条路：自己编译带 GPU 的 sherpa-onnx（要 CUDA toolkit + cuDNN + 长构建），
+/// 或者放弃 GPU。实测这一步能跑通，且产出的链接结果可用。
+async function generateOnnxRuntimeImportLib(binutils, dllPath, outLibPath, workDir) {
+  const exportsTxt = join(workDir, 'onnxruntime_exports.txt');
+  const defFile = join(workDir, 'onnxruntime.def');
+
+  // 直接抓 dumpbin 的 stdout 再由 Node 落盘：绕开 `cmd /s /c` 对
+  // 「带空格且以引号开头的命令」那套引号剥离规则，少一类只在 Windows 上翻车的问题。
+  const dumpResult = await capture(binutils.dumpbin, ['/nologo', '/exports', dllPath]);
+  if (dumpResult.code !== 0 || !dumpResult.stdout.trim()) {
+    throw new Error('dumpbin 解析 onnxruntime.dll 导出表失败');
+  }
+  await writeFile(exportsTxt, dumpResult.stdout);
+  const text = dumpResult.stdout;
+  const names = [];
+  for (const line of text.split(/\r?\n/)) {
+    // 形如：  1    0 000587D0 OrtGetApiBase
+    const match = line.match(/^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+(\S+)\s*$/);
+    if (match) {
+      names.push(match[1]);
+    }
+  }
+  if (names.length === 0) {
+    throw new Error('未从 onnxruntime.dll 解析出任何导出符号');
+  }
+  await writeFile(defFile, `LIBRARY onnxruntime.dll\nEXPORTS\n${names.map((n) => `    ${n}`).join('\n')}\n`);
+
+  const result = await run(
+    binutils.lib,
+    [`/def:${defFile}`, '/machine:x64', `/out:${outLibPath}`],
+    { stdio: 'ignore' },
+  );
+  if (result.code !== 0) {
+    throw new Error(`lib.exe 生成导入库失败：${result.stderr.trim()}`);
+  }
+  return names.length;
+}
+
+/// 下载并装配 GPU 版原生库目录。
+///
+/// 产出的目录同时放导入库与 DLL：前者供链接，后者会被 sherpa-onnx-sys 的 build.rs
+/// 自动拷到 exe 旁，省得再手工分发。
+async function prepareCudaLibs(proxy) {
+  const name = `sherpa-onnx-v${VERSION}-cuda-12.x-cudnn-9.x-onnxruntime1.28.2-win-x64-cuda.tar.bz2`;
+  const libDir = join(LIBS_ROOT, 'cuda-lib');
+  const marker = join(libDir, '.prepared');
+  if (existsSync(marker) && !force) {
+    info(`CUDA 库目录已就绪，跳过：${libDir}`);
+    return;
+  }
+
+  const binutils = await findMsvcBinutils();
+  if (!binutils) {
+    warn('未找到 MSVC 的 dumpbin/lib（需要 VS 的 C++ 工具链），无法生成 onnxruntime.lib，跳过 GPU 准备。');
+    return;
+  }
+
+  const archive = join(LIBS_ROOT, name);
+  if (force || !existsSync(archive)) {
+    info(`下载 CUDA 版原生库（约 595MB）：${name}`);
+    await download(`${RELEASE}/${name}`, archive, proxy);
+  } else {
+    info(`复用已下载的 ${name}`);
+  }
+
+  const work = join(LIBS_ROOT, `${name}.extracted`);
+  await rm(work, { recursive: true, force: true });
+  await mkdir(work, { recursive: true });
+  await extractTarBz2(name, `${name}.extracted`, LIBS_ROOT);
+
+  const root = join(work, name.replace(/\.tar\.bz2$/i, ''));
+  const srcLib = join(root, 'lib');
+  if (!existsSync(srcLib)) {
+    throw new Error(`CUDA 包里没有 lib 目录：${srcLib}`);
+  }
+
+  await rm(libDir, { recursive: true, force: true });
+  await mkdir(libDir, { recursive: true });
+
+  // DLL 与导入库都要：DLL 会被 build.rs 拷到 exe 旁。
+  for (const entry of await readdir(srcLib)) {
+    if (/\.(dll|lib)$/i.test(entry)) {
+      await copyFile(join(srcLib, entry), join(libDir, entry));
+    }
+  }
+
+  const count = await generateOnnxRuntimeImportLib(
+    binutils,
+    join(srcLib, 'onnxruntime.dll'),
+    join(libDir, 'onnxruntime.lib'),
+    work,
+  );
+  info(`已生成 onnxruntime.lib（${count} 个导出符号）`);
+
+  await rm(work, { recursive: true, force: true });
+  await writeFile(marker, `${name}\n`);
+  info(`GPU 库目录就绪：${libDir}`);
+  info('用 GPU 构建：cargo build --no-default-features --features gpu（见 src-tauri/.cargo/config.toml 说明）');
+}
+
+async function main() {
+  const proxy = await resolveSystemProxy();
+  info(proxy ? `使用代理：${proxy}` : '未检测到代理，直连下载');
+
+  const tasks = [];
+
+  // 1) 原生静态库。文件名必须与 sherpa-onnx-sys 里写死的完全一致，
+  //    否则 SHERPA_ONNX_ARCHIVE_DIR 找不到它、又会退回去联网下载。
+  const nativeName = `sherpa-onnx-v${VERSION}-win-x64-static-MT-Release-lib.tar.bz2`;
+  tasks.push({
+    name: nativeName,
+    url: `${RELEASE}/${nativeName}`,
+    target: join(LIBS_ROOT, nativeName),
+    ready: async () => (await fileSize(join(LIBS_ROOT, nativeName))) > 50 * 1024 * 1024,
+    // 原生库只是把归档放到目录里，构建时由 build.rs 自己解压，这里不展开。
+    extract: false,
+  });
+
+  // 2) TTS：kokoro 多语模型。
+  tasks.push({
+    name: 'kokoro-multi-lang-v1_1.tar.bz2',
+    url: `${TTS_MODELS}/kokoro-multi-lang-v1_1.tar.bz2`,
+    target: join(MODELS_ROOT, 'tts', 'kokoro_multi_lang'),
+    ready: async () => (await fileSize(join(MODELS_ROOT, 'tts', 'kokoro_multi_lang', 'model.onnx'))) > 50 * 1024 * 1024,
+  });
+
+  // 3) ASR：SenseVoice 多语模型（默认配置指向这个目录）。
+  tasks.push({
+    name: 'sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2',
+    url: `${ASR_MODELS}/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2`,
+    target: join(MODELS_ROOT, 'asr', 'sense-voice'),
+    ready: async () => (await fileSize(join(MODELS_ROOT, 'asr', 'sense-voice', 'tokens.txt'))) > 1024,
+  });
+
+  // 4) 语言学习：whisper ONNX（时间轴由 VAD 提供，模型本身不需要 attention 输出）。
+  //    目标保留归档里的同名子目录，Rust 侧是按「目录下含 -tokens.txt」来定位的。
+  tasks.push({
+    name: 'sherpa-onnx-whisper-base.en.tar.bz2',
+    url: `${ASR_MODELS}/sherpa-onnx-whisper-base.en.tar.bz2`,
+    target: join(MODELS_ROOT, 'whisper_onnx', 'sherpa-onnx-whisper-base.en'),
+    ready: async () =>
+      (await fileSize(join(MODELS_ROOT, 'whisper_onnx', 'sherpa-onnx-whisper-base.en', 'base.en-tokens.txt'))) > 1024,
+  });
+
+  // 5) VAD：切分语音段用，模型很小。
+  tasks.push({
+    name: 'silero_vad.onnx',
+    url: `${ASR_MODELS}/silero_vad.onnx`,
+    target: join(MODELS_ROOT, 'vad', 'silero_vad.onnx'),
+    unpack: 'raw',
+    ready: async () => (await fileSize(join(MODELS_ROOT, 'vad', 'silero_vad.onnx'))) > 100 * 1024,
+  });
+
+  const work = join(SRC_TAURI, '.sherpa-download-tmp');
+  await mkdir(work, { recursive: true });
+
+  for (const task of tasks) {
+    if (!force && (await task.ready())) {
+      info(`已存在，跳过：${task.target}`);
+      continue;
+    }
+    const archive = join(work, task.name);
+
+    // 归档还在就直接复用：模型动辄上 G，重下代价太高。
+    if (force || !existsSync(archive)) {
+      info(`下载 ${task.name} …`);
+      await download(task.url, archive, proxy);
+    } else {
+      info(`复用已下载的 ${task.name}`);
+    }
+
+    await rm(task.target, { recursive: true, force: true });
+    await mkdir(dirname(task.target), { recursive: true });
+
+    if (task.extract === false || task.unpack === 'raw') {
+      // 原生库归档保持原样放置（由 build.rs 解压）；VAD 本身就是单个文件。
+      await rename(archive, task.target);
+    } else {
+      const stagingName = `${task.name}.extracted`;
+      const staging = join(work, stagingName);
+      await rm(staging, { recursive: true, force: true });
+      await mkdir(staging, { recursive: true });
+      await extractTarBz2(task.name, stagingName, work);
+
+      const stem = task.name.replace(/\.tar\.bz2$/i, '');
+      const nested = join(staging, stem);
+      const source = existsSync(nested) ? nested : (await firstSubdir(staging)) || staging;
+      await rename(source, task.target);
+      await rm(staging, { recursive: true, force: true });
+      await rm(archive, { force: true });
+    }
+    info(`完成：${task.target}`);
+  }
+
+  if (withCuda) {
+    await prepareCudaLibs(proxy);
+  }
+
+  info('全部就绪。');
+}
+
+main().catch((error) => {
+  warn(error?.message || String(error));
+  process.exit(1);
+});

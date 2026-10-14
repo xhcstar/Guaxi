@@ -18,6 +18,14 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # 国密 TLCP / SM2 / PQC：默认关闭。启用：OPENSSL_DIR=/opt/tongsuo85 cargo build --features tlcp
 [features]
 tlcp = ["dep:openssl", "dep:openssl-sys"]
+# 语音默认走 CPU 静态库：自包含、免分发 DLL，任何机器都能构建。
+default = ["sherpa-onnx/static"]
+# GPU（CUDA）：改用动态链接的 GPU 版运行库。要用 GPU 得先把原生库取好：
+#   node tools/fetch_sherpa_onnx_libs.mjs --cuda
+# 再把 SHERPA_ONNX_LIB_DIR 指向它，并关掉默认特性（static 与 shared 互斥）：
+#   SHERPA_ONNX_LIB_DIR=src-tauri/.sherpa-onnx-libs/1.13.8/cuda-lib \
+#     cargo build --no-default-features --features gpu
+gpu = ["sherpa-onnx/shared"]
 
 [build-dependencies]
 tauri-build = { version = "2.5.3", features = [] }
@@ -109,6 +117,15 @@ anydoc = "0.2.4"
 # 默认特性里的 server/opds/mcp/parallel/mmap/zstd 全关掉，避免拖进 tiny_http、
 # rayon、memmap2 等与本体无关的重依赖。
 ebook-rs = { version = "0.17", default-features = false }
+# 语音合成 / 识别：进程内直调，替代原来的 sherpa-onnx CLI 子进程（省掉每段重载模型的开销）。
+# 默认 `static` feature 会把官方预编译库静态链接进来，CPU 路径自包含、无需分发 DLL。
+# 构建期不让它自己去联网下载——由 tools/fetch_sherpa_onnx_libs.mjs 预取归档，
+# 经 src-tauri/.cargo/config.toml 的 SHERPA_ONNX_ARCHIVE_DIR 指过去（见该文件注释）。
+# 语音合成 / 识别：进程内直调，替代原来的 sherpa-onnx CLI 子进程（省掉每段重载模型的开销）。
+# 默认特性交给本 crate 的 `default`（见 [features]）：CPU 静态库自包含，GPU 走 `gpu` 特性。
+# 构建期不让它自己去联网下载——由 tools/fetch_sherpa_onnx_libs.mjs 预取归档，
+# 经 src-tauri/.cargo/config.toml 的 SHERPA_ONNX_ARCHIVE_DIR 指过去（见该文件注释）。
+sherpa-onnx = { version = "1.13.8", default-features = false }
 petgraph = "0.6"
 fuzzy-matcher = "0.3.7"
 # 文件名索引的模糊匹配器（Helix 编辑器同款）。比 fuzzy-matcher 快一个量级，

@@ -2427,7 +2427,9 @@ const readSelectionAloud = async () => {
     const model = String(tts?.model || '').trim() || (provider === 'sherpa-onnx' ? 'utils/Models/tts/kokoro_multi_lang/model.onnx' : 'FunAudioLLM/CosyVoice2-0.5B')
     const tokens = String(tts?.tokens || '').trim()
     const endpoint = provider === 'sherpa-onnx' ? String(tts?.exe || '').trim() : ''
-    const voice = provider === 'sherpa-onnx' ? '0' : 'alex'
+    // 留空即由后端回落到设置里配置的默认音色。这里不再硬编码编号，
+    // 否则用户在设置页选的音色在划词朗读处会被忽略。
+    const voice = provider === 'sherpa-onnx' ? '' : 'alex'
     const responseFormat = provider === 'sherpa-onnx' ? 'wav' : 'mp3'
     logger.info('[GuaxiEditor] 朗读配置', {
       provider,

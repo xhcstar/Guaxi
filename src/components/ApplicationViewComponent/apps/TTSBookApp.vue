@@ -390,6 +390,7 @@ import { listen } from '@tauri-apps/api/event'
 import { AddOutline, DocumentTextOutline, FolderOpenOutline, LibraryOutline, PauseOutline, PlayCircleOutline, PlayOutline, StopOutline, TrashOutline } from '@vicons/ionicons5'
 import { createLogger } from '../../../utils/logger'
 import { useSettingsStore } from '../../../stores/settingsStore'
+import { buildSpeakerOptions } from '../../../utils/ttsSpeakers'
 
 const logger = createLogger('TTSBookApp')
 const { message } = createDiscreteApi(['message'])
@@ -398,7 +399,6 @@ const settingsStore = useSettingsStore()
 const DEFAULT_TTS_EXE = 'utils/sherpa-onnx/sherpa-onnx-offline-tts.exe'
 const DEFAULT_MODEL = 'utils/Models/tts/kokoro_multi_lang/model.onnx'
 const DEFAULT_TOKENS = 'utils/Models/tts/kokoro_multi_lang/tokens.txt'
-const KOKORO_SPEAKER_NAMES = ['af_maple', 'af_sol', 'bf_vale', 'zf_001', 'zf_002', 'zf_003', 'zf_004', 'zf_005', 'zf_006', 'zf_007', 'zf_008', 'zf_017', 'zf_018', 'zf_019', 'zf_021', 'zf_022', 'zf_023', 'zf_024', 'zf_026', 'zf_027', 'zf_028', 'zf_032', 'zf_036', 'zf_038', 'zf_039', 'zf_040', 'zf_042', 'zf_043', 'zf_044', 'zf_046', 'zf_047', 'zf_048', 'zf_049', 'zf_051', 'zf_059', 'zf_060', 'zf_067', 'zf_070', 'zf_071', 'zf_072', 'zf_073', 'zf_074', 'zf_075', 'zf_076', 'zf_077', 'zf_078', 'zf_079', 'zf_083', 'zf_084', 'zf_085', 'zf_086', 'zf_087', 'zf_088', 'zf_090', 'zf_092', 'zf_093', 'zf_094', 'zf_099', 'zm_009', 'zm_010', 'zm_011', 'zm_012', 'zm_013', 'zm_014', 'zm_015', 'zm_016', 'zm_020', 'zm_025', 'zm_029', 'zm_030', 'zm_031', 'zm_033', 'zm_034', 'zm_035', 'zm_037', 'zm_041', 'zm_045', 'zm_050', 'zm_052', 'zm_053', 'zm_054', 'zm_055', 'zm_056', 'zm_057', 'zm_058', 'zm_061', 'zm_062', 'zm_063', 'zm_064', 'zm_065', 'zm_066', 'zm_068', 'zm_069', 'zm_080', 'zm_081', 'zm_082', 'zm_089', 'zm_091', 'zm_095', 'zm_096', 'zm_097', 'zm_098', 'zm_100']
 
 const ttsConfig = ref({ provider: 'sherpa-onnx', model: DEFAULT_MODEL, tokens: DEFAULT_TOKENS, exe: DEFAULT_TTS_EXE, outputDir: '' })
 const selectedFiles = ref([])
@@ -474,27 +474,7 @@ const resolveModelConfig = () => {
   return { model: String(ttsConfig.value.model || DEFAULT_MODEL), tokens: String(ttsConfig.value.tokens || DEFAULT_TOKENS), modeHint: inferModeHint(ttsConfig.value.model), label: '跟随全局设置' }
 }
 
-const speakerOptions = computed(() => {
-  if (String(resolveModelConfig().modeHint || '').toLowerCase() !== 'kokoro') {
-    return Array.from({ length: 16 }, (_, index) => ({ label: `Speaker ${index}`, value: String(index) }))
-  }
-  const groups = { chineseFemale: [], chineseMale: [], americanFemale: [], britishFemale: [], other: [] }
-  KOKORO_SPEAKER_NAMES.forEach((name, index) => {
-    const option = { label: `${index} · ${name}`, value: String(index) }
-    if (name.startsWith('zf_')) groups.chineseFemale.push(option)
-    else if (name.startsWith('zm_')) groups.chineseMale.push(option)
-    else if (name.startsWith('af_')) groups.americanFemale.push(option)
-    else if (name.startsWith('bf_')) groups.britishFemale.push(option)
-    else groups.other.push(option)
-  })
-  return [
-    { type: 'group', label: '美式女声', key: 'american-female', children: groups.americanFemale },
-    { type: 'group', label: '英式女声', key: 'british-female', children: groups.britishFemale },
-    { type: 'group', label: '中文女声', key: 'chinese-female', children: groups.chineseFemale },
-    { type: 'group', label: '中文男声', key: 'chinese-male', children: groups.chineseMale },
-    { type: 'group', label: '其他', key: 'other', children: groups.other },
-  ].filter((group) => group.children.length > 0)
-})
+const speakerOptions = computed(() => buildSpeakerOptions(resolveModelConfig().model))
 
 const basename = (p) => String(p || '').split(/[\\/]/).pop() || 'unknown'
 const dirname = (p) => {
@@ -584,6 +564,7 @@ const saveTtsOutputDirConfig = async (nextOutputDir) => {
         tokens: String(ttsConfig.value.tokens || DEFAULT_TOKENS),
         exe: String(ttsConfig.value.exe || DEFAULT_TTS_EXE),
         output_dir: String(nextOutputDir || '').trim(),
+        speaker_id: String(ttsConfig.value.speakerId || '0').trim() || '0',
       },
     })
   } catch (e) {
@@ -601,9 +582,17 @@ const loadTtsConfig = async () => {
       tokens: String(saved?.tokens || DEFAULT_TOKENS),
       exe: String(saved?.exe || DEFAULT_TTS_EXE),
       outputDir: savedOutputDir,
+      // 记住全局音色：本页保存配置时会回写整份 ttsConfig，
+      // 若不带这个字段就会把设置页选的音色覆盖成默认值。
+      speakerId: String(saved?.speaker_id || '0').trim() || '0',
     }
     if (!String(outputDir.value || '').trim()) {
       outputDir.value = savedOutputDir
+    }
+    // 初始音色跟随设置页的全局默认；用户在本页仍可逐次改动。
+    const savedSpeaker = String(saved?.speaker_id || '').trim()
+    if (savedSpeaker) {
+      speakerId.value = savedSpeaker
     }
   } catch (e) {
     logger.error('loadTtsConfig failed:', e)

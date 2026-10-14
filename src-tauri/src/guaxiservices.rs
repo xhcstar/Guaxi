@@ -1,6 +1,7 @@
 pub mod markdown_image_process;
 pub mod chrome_extension_service;
 pub mod bundled_resources;
+pub mod speech;
 pub mod lsp;
 pub mod lsp_extensions;
 pub mod process_shutdown;

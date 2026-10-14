@@ -23,6 +23,8 @@
   统一封装 `tauri dev / build / bundle` 的外层入口。
 - [`tools/copy_excalidraw_assets.mjs`](/e:/Record/source/Vue/guaxi/tools/copy_excalidraw_assets.mjs)
   预复制前端运行依赖的静态资源。
+- [`tools/fetch_sherpa_onnx_libs.mjs`](/e:/Record/source/Vue/guaxi/tools/fetch_sherpa_onnx_libs.mjs)
+  获取语音所需的原生库与模型；GPU 版还会生成 `onnxruntime.lib`（见第 6 节）。
 
 ### 2.2 Rust 构建与资源分包
 
@@ -34,6 +36,8 @@
   手动或脚本显式触发资源分包的命令行入口。
 - [`src-tauri/src/bin/extract_utils_bundles.rs`](/e:/Record/source/Vue/guaxi/src-tauri/src/bin/extract_utils_bundles.rs)
   Windows 安装阶段用于解包外部资源的 helper 可执行程序。
+- [`src-tauri/.cargo/config.toml`](/e:/Record/source/Vue/guaxi/src-tauri/.cargo/config.toml)
+  把 `SHERPA_ONNX_ARCHIVE_DIR` 指向预取的原生库归档，使构建期零联网。
 
 ### 2.3 运行时资源定位
 
@@ -79,6 +83,26 @@
 - `npm run tauri:bundle:reuse`
   复用已存在的 `utils` 分包执行 bundle。
 
+### 3.3 语音资源准备（新增）
+
+- `npm run sherpa:fetch`
+  获取语音所需的原生库与模型（幂等，已存在即跳过）。
+- `npm run sherpa:fetch:force`
+  忽略已有文件全部重下。
+- `npm run sherpa:fetch:cuda`
+  额外准备 GPU 版原生库（约 595MB 包 + 生成 `onnxruntime.lib`）。
+
+### 3.4 语音功能的 GPU 构建（新增）
+
+在常规命令后加 `-- --no-default-features --features gpu` 即可，例如：
+
+```bash
+npm run tauri -- dev -- --no-default-features --features gpu
+npm run tauri -- build -- --no-default-features --features gpu
+```
+
+详见第 6 节。
+
 说明：
 
 - `--reuse-utils-zip` 这个参数名是历史兼容名称。
@@ -100,18 +124,21 @@ npm run tauri -- dev
 
 1. `npm` 执行 [`tools/run_tauri_with_utils.mjs`](/e:/Record/source/Vue/guaxi/tools/run_tauri_with_utils.mjs)。
 2. 脚本识别到子命令是 `dev`。
-3. 因为 `dev` 不属于 `build/bundle`，所以不会触发：
+3. 脚本先跑两件**与子命令无关、dev 也要做**的准备（都幂等）：
+   - `node ./tools/fetch_codex_sidecar.mjs`
+   - `node ./tools/fetch_sherpa_onnx_libs.mjs`（原生库必须在 cargo 构建前就位，否则 build.rs 会去联网下载并卡住）
+4. 因为 `dev` 不属于 `build/bundle`，所以不会触发：
    - `copy_excalidraw_assets.mjs`
    - `prepare_utils_zip`
    - `extract_utils_bundles` 的 release 构建
-4. 脚本直接调用本地 `tauri dev`。
-5. Tauri 读取 [`src-tauri/tauri.conf.json`](/e:/Record/source/Vue/guaxi/src-tauri/tauri.conf.json)：
+5. 脚本直接调用本地 `tauri dev`。
+6. Tauri 读取 [`src-tauri/tauri.conf.json`](/e:/Record/source/Vue/guaxi/src-tauri/tauri.conf.json)：
    - `beforeDevCommand = npm run dev`
    - `devUrl = http://localhost:1420`
-6. Tauri 启动 Vite 开发服务器。
-7. Tauri 通过 Cargo 启动 Rust 主程序 `guaxi`。
-8. Cargo 在编译主程序前调用 [`src-tauri/build.rs`](/e:/Record/source/Vue/guaxi/src-tauri/build.rs)。
-9. `build.rs` 检测到 `PROFILE=debug`，输出跳过日志，不生成 `utils` 分包。
+7. Tauri 启动 Vite 开发服务器。
+8. Tauri 通过 Cargo 启动 Rust 主程序 `guaxi`。
+9. Cargo 在编译主程序前调用 [`src-tauri/build.rs`](/e:/Record/source/Vue/guaxi/src-tauri/build.rs)。
+10. `build.rs` 检测到 `PROFILE=debug`，输出跳过日志，不生成 `utils` 分包。
 
 ### 4.3 为什么 debug 不需要复制 utils
 
@@ -159,27 +186,33 @@ npm run tauri -- build --reuse-utils-zip
 
 1. `npm` 调用 [`tools/run_tauri_with_utils.mjs`](/e:/Record/source/Vue/guaxi/tools/run_tauri_with_utils.mjs)。
 2. 包装脚本识别到子命令是 `build`。
-3. 先执行资源预处理：
+3. 先跑两件与子命令无关的准备（幂等）：
+   - `node ./tools/fetch_codex_sidecar.mjs`
+   - `node ./tools/fetch_sherpa_onnx_libs.mjs`
+     - 原生库要赶在 cargo 构建前就位；
+     - 模型要赶在下一步 `prepare_utils_zip` 之前就位，否则不会进离线包。
+     - 若带了 `--features gpu`，脚本还会把 `SHERPA_ONNX_LIB_DIR` 指向装配好的 CUDA 库目录。
+4. 再执行资源预处理：
    - `node ./tools/copy_excalidraw_assets.mjs`
-4. 再执行资源分包：
+5. 再执行资源分包：
    - `cargo run --manifest-path src-tauri/Cargo.toml --bin prepare_utils_zip`
-5. `prepare_utils_zip` 调用 [`utils_zip_support.rs`](/e:/Record/source/Vue/guaxi/src-tauri/utils_zip_support.rs) 的 `prepare_utils_bundles()`。
-6. `prepare_utils_bundles()` 会扫描 [`src-tauri/utils`](/e:/Record/source/Vue/guaxi/src-tauri/utils)，按顶层目录或文件拆成多个 `*.tar.zst`。
-7. 这些分包生成到：
+6. `prepare_utils_zip` 调用 [`utils_zip_support.rs`](/e:/Record/source/Vue/guaxi/src-tauri/utils_zip_support.rs) 的 `prepare_utils_bundles()`。
+7. `prepare_utils_bundles()` 会扫描 [`src-tauri/utils`](/e:/Record/source/Vue/guaxi/src-tauri/utils)，按顶层目录或文件拆成多个 `*.tar.zst`。
+8. 这些分包生成到：
    - [`src-tauri/utils/__bundles`](/e:/Record/source/Vue/guaxi/src-tauri/utils/__bundles)
-8. 如果当前是 Windows，包装脚本还会构建：
+9. 如果当前是 Windows，包装脚本还会构建：
    - `extract_utils_bundles.exe`
    - 这一步会显式设置 `GUAXI_SKIP_BUNDLE_PREPARE=1`，避免 helper 的单独 release 编译再次触发 `build.rs` 重新打包 `utils` 分包。
-9. 之后脚本正式调用 `tauri build`。
-10. Tauri 先执行 [`src-tauri/tauri.conf.json`](/e:/Record/source/Vue/guaxi/src-tauri/tauri.conf.json) 中的：
+10. 之后脚本正式调用 `tauri build`。
+11. Tauri 先执行 [`src-tauri/tauri.conf.json`](/e:/Record/source/Vue/guaxi/src-tauri/tauri.conf.json) 中的：
     - `beforeBuildCommand = npm run build`
-11. 前端 `dist` 产物生成后，Cargo 开始 release 编译。
-12. Cargo 在编译前执行 [`build.rs`](/e:/Record/source/Vue/guaxi/src-tauri/build.rs)。
-13. `build.rs` 在 release 模式下再次调用 `prepare_utils_bundles()` 作为兜底。
+12. 前端 `dist` 产物生成后，Cargo 开始 release 编译。
+13. Cargo 在编译前执行 [`build.rs`](/e:/Record/source/Vue/guaxi/src-tauri/build.rs)。
+14. `build.rs` 在 release 模式下再次调用 `prepare_utils_bundles()` 作为兜底。
     - 如果设置了 `GUAXI_REUSE_UTILS_ZIP=1`，则尽量复用已有分包。
     - 如果设置了 `GUAXI_SKIP_BUNDLE_PREPARE=1`，则完全跳过分包准备，只执行正常的 Cargo/Tauri 构建流程。
-14. Tauri 继续生成 NSIS 安装器。
-15. 打包成功后，包装脚本把外部资源和 helper 复制到安装器同级目录：
+15. Tauri 继续生成 NSIS 安装器。
+16. 打包成功后，包装脚本把外部资源和 helper 复制到安装器同级目录：
     - `utils_bundles/*.tar.zst`
     - `extract_utils_bundles.exe`
     - `README_utils_bundles.txt`
@@ -231,9 +264,164 @@ Windows 打包成功后，发布目录中应至少包含：
 
 ---
 
-## 6. tar.zst 分包方案
+## 6. 语音功能的构建特性（CPU / GPU）
 
-### 6.1 为什么选择 tar.zst
+语音能力已从「启动外部可执行文件」改为**进程内调用 sherpa-onnx 库**。原生库由 Rust 依赖
+[`sherpa-onnx`](/e:/Record/source/Vue/guaxi/src-tauri/Cargo.toml) 及其 `-sys` 包提供，
+通过 Cargo feature 在「CPU 静态库」与「GPU 动态库」之间切换。
+
+### 6.1 两个 feature
+
+| feature | 链接方式 | 特点 |
+|---|---|---|
+| 默认 `default = ["sherpa-onnx/static"]` | 静态 | 自包含，**无需分发任何 DLL**，任何机器都能构建 |
+| `gpu` = `["sherpa-onnx/shared"]` | 动态 | 使用官方 CUDA 版运行库，支持 `provider=cuda` |
+
+两者互斥：`static` 与 `shared` 同时打开时，`sherpa-onnx-sys` 的 build.rs 会直接报错。
+因此 **GPU 构建必须带 `--no-default-features`**。定义位于
+[`src-tauri/Cargo.toml`](/e:/Record/source/Vue/guaxi/src-tauri/Cargo.toml) 的 `[features]`。
+
+### 6.2 依赖准备
+
+语音的模型与原生库都不进 git，由
+[`tools/fetch_sherpa_onnx_libs.mjs`](/e:/Record/source/Vue/guaxi/tools/fetch_sherpa_onnx_libs.mjs) 获取：
+
+```bash
+npm run sherpa:fetch        # 缺什么补什么（幂等）
+npm run sherpa:fetch:force  # 全部重下
+npm run sherpa:fetch:cuda   # 额外准备 GPU 版原生库
+```
+
+该脚本在 `dev / build / bundle` 时都会由
+[`tools/run_tauri_with_utils.mjs`](/e:/Record/source/Vue/guaxi/tools/run_tauri_with_utils.mjs)
+**自动调用**（幂等，已存在即跳过），正常流程不必手动执行。它做四件事：
+
+1. 取 sherpa-onnx 的 Windows 静态库归档到 `src-tauri/.sherpa-onnx-libs/<ver>/`；
+2. 取模型（Kokoro TTS / SenseVoice ASR / whisper ONNX / Silero VAD）到 `src-tauri/utils/Models/`；
+3. 下载走 curl，代理按「`*_PROXY` 环境变量 → Windows 注册表系统代理」依次解析；
+4. 大文件支持断点续传（保留 `.part`，失败不整包重下）。
+
+**为什么构建期不能让 Cargo 自己下**：`sherpa-onnx-sys` 的 build.rs 默认会自行去 GitHub
+下载预编译库，而构建机常常只有注册表里的系统代理、没有 `*_PROXY` 环境变量，cargo 会卡死。
+所以改由脚本预先取好，构建时经
+[`src-tauri/.cargo/config.toml`](/e:/Record/source/Vue/guaxi/src-tauri/.cargo/config.toml)
+的 `SHERPA_ONNX_ARCHIVE_DIR` 指过去，**构建期零联网**。
+
+### 6.3 CPU 构建（默认）
+
+不需要任何额外参数，dev 与 release 一致：
+
+```bash
+# dev
+npm run tauri -- dev
+
+# release（完整构建）
+npm run tauri -- build
+
+# release（复用已有 utils 分包）
+npm run tauri:build:reuse
+```
+
+### 6.4 GPU 构建
+
+先准备 CUDA 版原生库（只需一次）：
+
+```bash
+npm run sherpa:fetch:cuda
+```
+
+之后在 cargo 参数上加两个开关即可：
+
+```bash
+# dev
+npm run tauri -- dev -- --no-default-features --features gpu
+
+# release
+npm run tauri -- build -- --no-default-features --features gpu
+```
+
+`--` 之后的参数由 Tauri 转发给 cargo。
+
+**不需要手动设 `SHERPA_ONNX_LIB_DIR`**：包装脚本检测到 `--features gpu` 会自动把它指向
+装配好的 CUDA 库目录；目录不存在时会立即报错并提示先跑 `npm run sherpa:fetch:cuda`。
+
+直接使用 cargo（不经过包装脚本）时才需要自己设：
+
+```bash
+SHERPA_ONNX_LIB_DIR=src-tauri/.sherpa-onnx-libs/1.13.8/cuda-lib \
+  cargo build --no-default-features --features gpu
+```
+
+### 6.5 GPU 支持的原理：为什么要自己造 `onnxruntime.lib`
+
+官方提供 CUDA 预编译包
+`sherpa-onnx-v<ver>-cuda-12.x-cudnn-9.x-onnxruntime1.28.2-win-x64-cuda.tar.bz2`，
+但它**不能直接拿来链接**。包内 `lib/` 只有两类东西：
+
+- `sherpa-onnx-c-api.lib` / `sherpa-onnx-cxx-api.lib`：DLL 的导入库
+- `onnxruntime.dll`、`onnxruntime_providers_cuda.dll` 等：运行时 DLL
+
+而 `sherpa-onnx-sys` 的动态链接模式会发出两条链接指令：
+
+```text
+cargo:rustc-link-lib=dylib=sherpa-onnx-c-api
+cargo:rustc-link-lib=dylib=onnxruntime
+```
+
+第二条要求 `onnxruntime.lib` 存在，而 CUDA 包里没有这个文件，所以直接链接必然失败。
+
+注意不要想着「把静态包里那个 `onnxruntime.lib` 拷过来」——两者同名但**不是一回事**：
+静态包里的是**静态库**（配合 `-l static=onnxruntime` 把所有代码链进 exe），
+这里需要的是 `onnxruntime.dll` 的**导入库**，负责把对 DLL 的调用重定向过去。
+混用不会得到你要的结果。
+
+**解法：从 `onnxruntime.dll` 反推出导入库。** 这个 DLL 只导出 4 个符号：
+
+```text
+OrtGetApiBase
+OrtSessionOptionsAppendExecutionProvider_CPU
+OrtSessionOptionsAppendExecutionProvider_CUDA
+OrtSessionOptionsAppendExecutionProvider_Tensorrt
+```
+
+其中 `OrtSessionOptionsAppendExecutionProvider_CUDA` 的存在说明
+**CUDA provider 确实已经编进这个 DLL**，这也正是链接时必须提供这份导入库的原因。
+
+`npm run sherpa:fetch:cuda` 会自动完成三步：
+
+1. `dumpbin /exports onnxruntime.dll` 取导出表；
+2. 由导出表生成 `.def` 文件；
+3. `lib /def:... /machine:x64 /out:onnxruntime.lib` 产出导入库。
+
+需要用 MSVC 的 `dumpbin` / `lib`（脚本用 `vswhere` 定位；找不到会明确跳过并提示）。
+最终装配出的 `src-tauri/.sherpa-onnx-libs/<ver>/cuda-lib/` **同时含导入库与 DLL**——
+DLL 放在一起是有意的：shared 模式下 `sherpa-onnx-sys` 的 build.rs 会把 lib 目录里的 DLL
+自动拷到可执行文件旁，省得再单独分发。
+
+### 6.6 运行时的 provider 选择：必须先探测再请求
+
+`provider=cuda` 有一个必须提前规避的坑：**CUDA 组件缺失时，onnxruntime 抛出的 C++ 异常会
+穿透 FFI 边界，Rust 捕不住，直接 abort 整个进程**（实测报 `Rust cannot catch foreign exceptions`）。
+
+也就是说，「先试 cuda、失败再回退 cpu」这种写法**根本来不及执行回退，进程已经死了**。
+所以运行时改为**先探测再请求**（见 `src/guaxiservices/speech/config.rs` 的 `cuda_available()`）：
+只有 NVIDIA 驱动（`nvcuda.dll`）与 `onnxruntime_providers_cuda.dll` 都在时才会请求 cuda，
+否则在构造引擎之前就降级到 cpu，并打一条 warn 日志。
+
+### 6.7 release 打包注意
+
+- **CPU 构建**：静态库已链进 exe，`utils` 里不需要任何语音相关 DLL。
+- **GPU 构建**：`onnxruntime*.dll`（含约 496MB 的 `onnxruntime_providers_cuda.dll`）
+  会被 build.rs 拷到 exe 旁，打包时需一并分发。
+- 语音的**外部可执行文件目录已删除**（`utils/sherpa-onnx`、`utils/whisper`），
+  并在 [`utils_zip_support.rs`](/e:/Record/source/Vue/guaxi/src-tauri/utils_zip_support.rs)
+  的 `SKIPPED_DIRECTORIES` 中排除；下载归档（`*.tar.bz2`）同样不进包。
+
+---
+
+## 7. tar.zst 分包方案
+
+### 7.1 为什么选择 tar.zst
 
 相比之前的 zip 方案，`tar.zst` 更适合当前项目的大型运行时资源目录：
 
@@ -242,7 +430,7 @@ Windows 打包成功后，发布目录中应至少包含：
 - Rust 生态支持成熟，便于直接在构建链和安装 helper 中共用
 - 可以通过多线程与多分包并行进一步提速
 
-### 6.2 分包策略
+### 7.2 分包策略
 
 当前策略是按 `src-tauri/utils` 的顶层目录/文件拆分。
 
@@ -259,20 +447,25 @@ Windows 打包成功后，发布目录中应至少包含：
 - 安装时可以并行解包多个 bundle
 - 最终解包后的目录仍保持原始 `utils/...` 结构
 
-### 6.3 明确排除的目录
+### 7.3 明确排除的目录
 
 以下目录不会进入 release 分包：
 
 - `utils/MarkdownConvertor`
 - `utils/Models/surya_models`
+- `utils/MinerU`、`utils/Models/mineru_models`
+- `utils/sherpa-onnx`、`utils/whisper`（语音已改为进程内调用库，外部可执行文件已移除）
 
-这些规则定义在 [`utils_zip_support.rs`](/e:/Record/source/Vue/guaxi/src-tauri/utils_zip_support.rs) 的 `SKIPPED_DIRECTORIES` 中。
+此外，`utils` 下任何 `*.tar.bz2` 下载归档也不会进包：它们只是解压用的中间产物，
+留在目录里会把 release 白撑大几百 MB。
+
+这些规则定义在 [`utils_zip_support.rs`](/e:/Record/source/Vue/guaxi/src-tauri/utils_zip_support.rs) 的 `SKIPPED_DIRECTORIES` 与 `should_skip()` 中。
 
 ---
 
-## 7. 安装阶段如何解包
+## 8. 安装阶段如何解包
 
-### 7.1 Windows 安装时机
+### 8.1 Windows 安装时机
 
 Windows 安装器使用 [`installer-hooks.nsh`](/e:/Record/source/Vue/guaxi/src-tauri/installer-hooks.nsh)。
 
@@ -289,7 +482,7 @@ extract_utils_bundles.exe --bundle-root "$EXEDIR\utils_bundles" --destination "$
 - `$INSTDIR`
   应用最终安装目录
 
-### 7.2 为什么使用独立 Rust helper
+### 8.2 为什么使用独立 Rust helper
 
 之前尝试过：
 
@@ -308,7 +501,7 @@ extract_utils_bundles.exe --bundle-root "$EXEDIR\utils_bundles" --destination "$
 - 与构建期共用 Rust 资源处理逻辑
 - 更容易调试和扩展
 
-### 7.3 安装时的目录结构
+### 8.3 安装时的目录结构
 
 解包目标是：
 
@@ -328,7 +521,7 @@ extract_utils_bundles.exe --bundle-root "$EXEDIR\utils_bundles" --destination "$
 
 ---
 
-## 8. 运行时恢复机制
+## 9. 运行时恢复机制
 
 即使安装或首次解包中途中断，运行时也有恢复逻辑。
 
@@ -351,7 +544,7 @@ extract_utils_bundles.exe --bundle-root "$EXEDIR\utils_bundles" --destination "$
 
 ---
 
-## 9. 复用已有分包
+## 10. 复用已有分包
 
 当 `utils` 内容没有变化时，可以复用上一次生成的外部分包，节省很多时间。
 
@@ -394,21 +587,21 @@ npm run tauri:build:reuse
 
 ---
 
-## 10. 常见问题
+## 11. 常见问题
 
-### 10.1 为什么 dev 模式不复制 utils
+### 11.1 为什么 dev 模式不复制 utils
 
 因为复制几 GB 资源会让每次开发启动都非常慢。当前通过运行时路径回退，直接复用源码目录下的 `src-tauri/utils`。
 
-### 10.2 为什么 release 安装包旁边还要带额外文件
+### 11.2 为什么 release 安装包旁边还要带额外文件
 
 因为超大运行时资源不再嵌入 NSIS，而是改成外部分包，避免 NSIS 在超大资源场景下失败。
 
-### 10.3 为什么参数名还是 `--reuse-utils-zip`
+### 11.3 为什么参数名还是 `--reuse-utils-zip`
 
 这是为了兼容之前已经使用过的脚本或命令习惯。虽然现在底层已经是 `tar.zst` 分包，参数名暂时没有改掉。
 
-### 10.4 为什么 `prepare_utils_zip` 这个名字还保留
+### 11.4 为什么 `prepare_utils_zip` 这个名字还保留
 
 当前底层实现已经不再生成单个 `utils.zip`，而是生成：
 
@@ -434,7 +627,7 @@ npm run tauri:build:reuse
 
 也就是说，当前这些名称都属于“历史兼容入口”，不代表真实产物格式。
 
-### 10.5 为什么 helper 编译也会影响分包复用
+### 11.5 为什么 helper 编译也会影响分包复用
 
 Windows 发布流程中，安装阶段需要单独的 `extract_utils_bundles.exe`。
 
@@ -453,7 +646,7 @@ cargo build --release --bin extract_utils_bundles
 
 当前包装脚本已经显式处理了这一点。
 
-### 10.6 JSON 配置里为什么没有直接写详细注释
+### 11.6 JSON 配置里为什么没有直接写详细注释
 
 因为：
 
@@ -466,9 +659,9 @@ cargo build --release --bin extract_utils_bundles
 
 ---
 
-## 11. 推荐使用方式
+## 12. 推荐使用方式
 
-### 11.1 日常开发
+### 12.1 日常开发
 
 ```bash
 npm run tauri -- dev
@@ -479,8 +672,9 @@ npm run tauri -- dev
 - 不打包 `utils`
 - 不解包 `utils`
 - 直接使用源码目录中的 `src-tauri/utils`
+- 会自动确保语音的原生库与模型就位（幂等）
 
-### 11.2 正式发布
+### 12.2 正式发布
 
 首次完整构建：
 
@@ -507,9 +701,33 @@ npm run tauri:build:reuse
 - `extract_utils_bundles.exe`
 - `README_utils_bundles.txt`
 
+### 12.3 使用 GPU 的构建
+
+首次需要先准备 CUDA 版原生库：
+
+```bash
+npm run sherpa:fetch:cuda
+```
+
+之后在常规命令后追加 `-- --no-default-features --features gpu`：
+
+```bash
+# 开发
+npm run tauri -- dev -- --no-default-features --features gpu
+
+# 发布
+npm run tauri -- build -- --no-default-features --features gpu
+```
+
+要点：
+
+- 环境变量由包装脚本自动处理，不必手工设 `SHERPA_ONNX_LIB_DIR`；
+- GPU 构建产物依赖 `onnxruntime*.dll`，发布时需随 exe 一起分发；
+- 没有 NVIDIA 卡时，运行时探测会自动降级到 CPU，不会崩。
+
 ---
 
-## 12. 后续维护建议
+## 13. 后续维护建议
 
 如果后续继续扩展这套方案，建议优先遵守以下约束：
 

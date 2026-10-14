@@ -214,6 +214,10 @@ pub struct TtsConfig {
     pub exe: String,
     #[serde(default = "default_tts_output_dir")]
     pub output_dir: String,
+    /// 默认音色（Speaker ID）。请求里没显式给 voice 时用它，
+    /// 这样各个朗读入口不必各自硬编码一个编号。
+    #[serde(default = "default_tts_speaker_id")]
+    pub speaker_id: String,
 }
 
 impl Default for TtsConfig {
@@ -224,6 +228,7 @@ impl Default for TtsConfig {
             tokens: default_tts_tokens(),
             exe: default_tts_exe(),
             output_dir: default_tts_output_dir(),
+            speaker_id: default_tts_speaker_id(),
         }
     }
 }
@@ -465,12 +470,15 @@ fn default_tts_tokens() -> String {
     "utils/Models/tts/kokoro_multi_lang/tokens.txt".to_string()
 }
 
+/// 语音合成已改为进程内调用 sherpa-onnx 库，不再有外部可执行文件。
+/// `exe` 字段保留只为兼容既有的 guaxi_config.json，不再参与任何逻辑。
 fn default_tts_exe() -> String {
-    if cfg!(target_os = "windows") {
-        "utils/sherpa-onnx/sherpa-onnx-offline-tts.exe".to_string()
-    } else {
-        "utils/sherpa-onnx/sherpa-onnx-offline-tts".to_string()
-    }
+    String::new()
+}
+
+/// 默认音色。Kokoro 名单里 0 是 af_maple（美式女声），中英文都可用。
+fn default_tts_speaker_id() -> String {
+    "0".to_string()
 }
 
 fn default_tts_output_dir() -> String {
@@ -487,17 +495,14 @@ fn default_asr_provider() -> String {
 }
 
 fn default_asr_model() -> String {
-    // 默认指向随包的 SenseVoice 多语模型目录（zh/en/ja/ko/yue）。
-    // 通过 tools/download_asr_model 下载到该目录后即开箱可用。
+    // 默认指向 SenseVoice 多语模型目录（zh/en/ja/ko/yue）。
+    // 通过 tools/fetch_sherpa_onnx_libs.mjs 下载到该目录后即开箱可用。
     "utils/Models/asr/sense-voice".to_string()
 }
 
+/// 同 [`default_tts_exe`]：识别也已进程内化，这里只为兼容旧配置。
 fn default_asr_exe() -> String {
-    if cfg!(target_os = "windows") {
-        "utils/sherpa-onnx/sherpa-onnx-offline.exe".to_string()
-    } else {
-        "utils/sherpa-onnx/sherpa-onnx-offline".to_string()
-    }
+    String::new()
 }
 
 fn default_knowledge_bases_root() -> String {
@@ -1527,6 +1532,12 @@ pub fn set_tts_config(tts_config: TtsConfig) {
         tokens: tts_config.tokens.trim().to_string(),
         exe: tts_config.exe.trim().to_string(),
         output_dir: tts_config.output_dir.trim().to_string(),
+        // 空值回落默认，避免前端漏传这个字段时把用户选的音色清掉。
+        speaker_id: if tts_config.speaker_id.trim().is_empty() {
+            default_tts_speaker_id()
+        } else {
+            tts_config.speaker_id.trim().to_string()
+        },
     };
     if config.tts_config.provider.is_empty() {
         config.tts_config.provider = default_tts_provider();
