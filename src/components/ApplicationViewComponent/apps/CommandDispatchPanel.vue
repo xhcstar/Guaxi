@@ -343,6 +343,9 @@ import { listen } from '@tauri-apps/api/event'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { readTextFile } from '@tauri-apps/plugin-fs'
 import { useSettingsStore } from '../../../stores/settingsStore'
+import { createLogger } from '../../../utils/logger'
+import { useSshProfiles } from '../../../composables/useSshProfiles'
+import { readUiState, persistUiState, oneOf, within } from '../../../utils/uiState'
 import { getGuaxiMonacoTheme } from '../../../monaco/guaxiMonacoThemes'
 import { Icon } from '@iconify/vue'
 import keyIcon from '@iconify-icons/lucide/key-round'
@@ -371,29 +374,40 @@ const key2Icon = keyRoundIcon
 const revealIcon = folderIcon
 
 // ============ 状态 ============
-const profiles = ref([])
+const logger = createLogger('CommandDispatchPanel')
+const { profiles } = useSshProfiles(logger)
 const profileOptions = computed(() => profiles.value.map(p => ({ label: `${p.name || p.host}`, value: p.id })))
-const profileId = ref(null)
+// 面板选择记在本地：下次开窗接着用（各窗口同源共享一份；**enable 密码不在这里**，它在 keychain）。
+const UI = {
+  profile: 'guaxi_cmd_dispatch_profile',
+  sessionMode: 'guaxi_cmd_dispatch_session_mode',
+  probeRc: 'guaxi_cmd_dispatch_probe_rc',
+  editMode: 'guaxi_cmd_dispatch_edit_mode',
+  leftWidth: 'guaxi_cmd_dispatch_left_width',
+  strategy: 'guaxi_cmd_dispatch_strategy',
+}
+
+const profileId = ref(readUiState(UI.profile, null))
 const enablePassword = ref('')
 
 const cfg = ref({ global: {}, targets: { hostnames: [], domains: [] }, tasks: [], continue_on_error: false })
 const yamlText = ref('')
 /// 编辑方式：图形任务表 / 文本 YAML。
-const editMode = ref('gui')
+const editMode = ref(readUiState(UI.editMode, 'gui', oneOf('gui', 'text')))
 const baseDir = ref('')
 
 /// 会话类型与退出码探针（选错会话类型会"等待提示符超时"）。
-const sessionMode = ref('auto')
+const sessionMode = ref(readUiState(UI.sessionMode, 'auto', oneOf('auto', 'device', 'shell')))
 const sessionModeOptions = [
   { label: '自动探测', value: 'auto' },
   { label: '设备 CLI', value: 'device' },
   { label: 'Linux shell', value: 'shell' },
 ]
-const probeRc = ref(true)
+const probeRc = ref(readUiState(UI.probeRc, true))
 
 /// 策略库。
 const strategies = ref([])
-const strategyId = ref(null)
+const strategyId = ref(readUiState(UI.strategy, null))
 const showSaveStrategy = ref(false)
 const strategyName = ref('')
 const strategyDesc = ref('')
@@ -430,7 +444,7 @@ const runLogPath = ref('')
 const configPath = ref('')
 let unlisteners = []
 
-const leftWidth = ref(560)
+const leftWidth = ref(readUiState(UI.leftWidth, 560, within(380, 1000)))
 const notice = ref(''); let noticeTimer = null
 const error = ref('')
 function note(m) { notice.value = m; if (noticeTimer) clearTimeout(noticeTimer); noticeTimer = setTimeout(() => { notice.value = '' }, 12000) }
@@ -880,14 +894,35 @@ function onLeftResize(e) {
   document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up)
 }
 onMounted(async () => {
-  try { profiles.value = await invoke('ssh_list_profiles') } catch (_) {}
   try { catalog.value = await invoke('cmd_catalog_list') } catch (_) {}
   try { scenarios.value = await invoke('cmd_scenario_list') } catch (_) {}
   unlisteners.push(await listen('cmd-dispatch-task', onTask))
   unlisteners.push(await listen('cmd-dispatch-done', onDone))
   await syncYaml()
-  loadStrategies()
+  await loadStrategies()
+  // 上次用的策略还在就接着用：新开窗时任务表本来就是空的，自动载入不会覆盖任何东西。
+  if (strategyId.value && strategies.value.some((s) => s.id === strategyId.value)) await loadStrategy()
 })
+// 选择变化即落盘（左栏宽度也一样，拖一次就记住）。
+for (const [key, src] of [
+  [UI.profile, profileId], [UI.sessionMode, sessionMode], [UI.probeRc, probeRc],
+  [UI.editMode, editMode], [UI.leftWidth, leftWidth], [UI.strategy, strategyId],
+]) {
+  watch(src, (v) => persistUiState(key, v))
+}
+
+// 档案/策略可能已被删掉：列表到位后清掉失效的选中，避免下拉挂着不存在的项。
+watch(profiles, (list) => {
+  if (!list.length) return
+  const ids = new Set(list.map((p) => p.id))
+  if (profileId.value && !ids.has(profileId.value)) profileId.value = null
+})
+watch(strategies, (list) => {
+  if (!list.length) return
+  const ids = new Set(list.map((s) => s.id))
+  if (strategyId.value && !ids.has(strategyId.value)) strategyId.value = null
+})
+
 onBeforeUnmount(() => {
   unlisteners.forEach(u => u())
   if (noticeTimer) clearTimeout(noticeTimer)

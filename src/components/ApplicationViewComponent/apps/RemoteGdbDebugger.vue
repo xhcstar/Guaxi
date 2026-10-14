@@ -479,11 +479,13 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { createLogger } from '../../../utils/logger'
+import { useSshProfiles } from '../../../composables/useSshProfiles'
+import { readUiState, persistUiState, oneOf, within } from '../../../utils/uiState'
 import { Icon } from '@iconify/vue'
 import playIcon from '@iconify-icons/lucide/play'
 import fastForwardIcon from '@iconify-icons/lucide/fast-forward'
@@ -519,20 +521,37 @@ const logger = createLogger('RemoteGdbDebugger')
 
 import GdbVarNode from './GdbVarNode.vue'
 
-const profiles = ref([])
+const { profiles } = useSshProfiles(logger)
 const profileOptions = computed(() =>
   profiles.value.map(p => ({ label: `${p.name || p.host} (${p.user}@${p.host})`, value: p.id })))
-const profileId = ref(null)
-const mode = ref('launch')       // 'launch' | 'attach'
+// 面板选择记在本地：下次开窗接着用（各窗口同源共享一份，不含任何凭据）。
+const UI = {
+  profile: 'guaxi_gdb_profile',
+  mode: 'guaxi_gdb_mode',
+  escalate: 'guaxi_gdb_escalate',
+  program: 'guaxi_gdb_program',
+  fontSize: 'guaxi_gdb_font_size',
+  sideW: 'guaxi_gdb_side_width',
+  rightW: 'guaxi_gdb_right_width',
+  srcMode: 'guaxi_gdb_source_mode',
+  srcRule: 'guaxi_gdb_source_rule',
+  srcRoot: 'guaxi_gdb_source_root',
+  srcProfile: 'guaxi_gdb_source_profile',
+  srcFrom: 'guaxi_gdb_source_prefix',
+  srcHeight: 'guaxi_gdb_source_height',
+}
+
+const profileId = ref(readUiState(UI.profile, null))
+const mode = ref(readUiState(UI.mode, 'launch', oneOf('launch', 'attach')))   // 'launch' | 'attach'
 const attachPid = ref(null)
-const escalate = ref('none')     // 'none' | 'sudo' | 'su'
+const escalate = ref(readUiState(UI.escalate, 'none', oneOf('none', 'sudo', 'su')))   // 'none' | 'sudo' | 'su'
 const escalatePassword = ref('')
 const escalateOptions = [
   { label: '不提权', value: 'none' },
   { label: 'sudo', value: 'sudo' },
   { label: 'su root', value: 'su' },
 ]
-const program = ref('')
+const program = ref(readUiState(UI.program, ''))
 const argsText = ref('')
 const starting = ref(false)
 const error = ref('')
@@ -612,15 +631,15 @@ const locals = ref([])
 const registers = ref([])
 
 // 跨机源码对照
-const sourceMode = ref('local')  // 'local' | 'remote'
-const srcFromPrefix = ref('')
+const sourceMode = ref(readUiState(UI.srcMode, 'local', oneOf('local', 'remote')))  // 'local' | 'remote'
+const srcFromPrefix = ref(readUiState(UI.srcFrom, ''))
 const sourceLines = ref([])
 const sourceCurLine = ref(0)
 const sourceFile = ref('')
 const sourceHint = ref('停在断点时自动对照当前行；也可点“对照当前行”。')
 const sourceBodyRef = ref(null)
 let curLineEl = null
-const sourceHeight = ref(220)
+const sourceHeight = ref(readUiState(UI.srcHeight, 220, within(80, 640)))
 
 const palette = [
   { label: '运行 / 重新运行 (run)', cmd: '-exec-run', icon: playIcon },
@@ -630,10 +649,10 @@ const palette = [
   { label: '步出 (finish，执行到返回)', cmd: '-exec-finish', icon: arrowUpIcon },
   { label: '中断 (interrupt，暂停目标)', cmd: '-exec-interrupt', icon: pauseIcon },
 ]
-const gdbFontSize = ref(14)
+const gdbFontSize = ref(readUiState(UI.fontSize, 14, within(9, 28)))
 function setGdbFontSize(v) { gdbFontSize.value = Math.min(28, Math.max(9, v)) }
-const gdbSideWidth = ref(300)
-const gdbRightWidth = ref(300)
+const gdbSideWidth = ref(readUiState(UI.sideW, 300, within(200, 600)))
+const gdbRightWidth = ref(readUiState(UI.rightW, 300, within(200, 600)))
 function onGdbResizeDown(e) {
   const startX = e.clientX; const startW = gdbSideWidth.value
   let resizing = true
@@ -668,7 +687,6 @@ function miQuote(s) {
 // __BODY2__
 let unlisteners = []
 onMounted(async () => {
-  try { profiles.value = await invoke('ssh_list_profiles') } catch (e) { logger.error('list profiles', e) }
   unlisteners.push(await listen('gdb-mi-output', ev => {
     if (ev.payload?.session_id === sessionId.value) appendConsole(ev.payload.kind, ev.payload.text)
   }))
@@ -1048,9 +1066,9 @@ async function refreshAll() {
 //
 // 用户只需要给一个"源码工程根"（本机目录，或编译机上的目录），
 // 路径映射（尤其 chroot/docker 构建里调试信息写的是 /build/... 这种情况）交给后端按规则解。
-const sourceRule = ref('auto')
-const sourceRoot = ref('')
-const sourceProfileId = ref(null)
+const sourceRule = ref(readUiState(UI.srcRule, 'auto', oneOf('auto', 'direct', 'prefix', 'search')))
+const sourceRoot = ref(readUiState(UI.srcRoot, ''))
+const sourceProfileId = ref(readUiState(UI.srcProfile, null))
 const sourceRuleOptions = [
   { label: '自动（推荐）', value: 'auto' },
   { label: '按原样', value: 'direct' },
@@ -1063,6 +1081,25 @@ const showRemotePick = ref(false)
 const remotePath = ref('')
 const remoteDirs = ref([])
 const remoteLoading = ref(false)
+
+// 选择变化即落盘（布局类如宽度/字号/高度也一样，拖一次就记住）。
+// 放在所有被持久化的 ref 声明**之后**，否则会命中 TDZ。
+for (const [key, src] of [
+  [UI.profile, profileId], [UI.mode, mode], [UI.escalate, escalate], [UI.program, program],
+  [UI.fontSize, gdbFontSize], [UI.sideW, gdbSideWidth], [UI.rightW, gdbRightWidth],
+  [UI.srcMode, sourceMode], [UI.srcRule, sourceRule], [UI.srcRoot, sourceRoot],
+  [UI.srcProfile, sourceProfileId], [UI.srcFrom, srcFromPrefix], [UI.srcHeight, sourceHeight],
+]) {
+  watch(src, (v) => persistUiState(key, v))
+}
+
+// 档案可能已被删掉：列表到位后把失效的选中清空，避免下拉显示一个不存在的项。
+watch(profiles, (list) => {
+  if (!list.length) return
+  const ids = new Set(list.map((p) => p.id))
+  if (profileId.value && !ids.has(profileId.value)) profileId.value = null
+  if (sourceProfileId.value && !ids.has(sourceProfileId.value)) sourceProfileId.value = null
+})
 
 function pickRoot() {
   if (sourceMode.value === 'local') return pickLocalRoot()

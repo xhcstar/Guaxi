@@ -234,6 +234,7 @@ import { Terminal } from 'xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import 'xterm/css/xterm.css'
 import { createLogger } from '../../../utils/logger'
+import { useSshProfiles } from '../../../composables/useSshProfiles'
 import { Icon } from '@iconify/vue'
 import serverIcon from '@iconify-icons/lucide/server'
 import usbIcon from '@iconify-icons/lucide/usb'
@@ -273,7 +274,7 @@ const authOptions = [
   { label: '密码', value: 'password' },
 ]
 
-const profiles = ref([])
+const { profiles, reload: loadProfiles } = useSshProfiles(logger)
 const recordings = ref([])
 const editing = reactive(blankProfile())
 const password = ref('')
@@ -438,9 +439,6 @@ function edit(p) {
   password.value = ''
 }
 
-async function loadProfiles() {
-  try { profiles.value = await invoke('ssh_list_profiles') } catch (e) { logger.error('list profiles', e) }
-}
 
 async function saveProfile() {
   error.value = ''
@@ -611,7 +609,7 @@ watch(isDark, () => {
   }
 })
 
-onMounted(() => { loadProfiles(); loadRecordings(); loadSerialPorts() })
+onMounted(() => { loadRecordings(); loadSerialPorts() })
 onBeforeUnmount(() => {
   for (const [sid, rec] of termMap) {
     const w = WIRE[rec?.kind || 'ssh'] || WIRE.ssh

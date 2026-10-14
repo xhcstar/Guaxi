@@ -615,6 +615,7 @@ import { ScatterChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent, DataZoomComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
 import { createLogger } from '../../../utils/logger'
+import { useSshProfiles } from '../../../composables/useSshProfiles'
 import { Icon } from '@iconify/vue'
 import calcIcon from '@iconify-icons/lucide/calculator'
 import binaryIcon from '@iconify-icons/lucide/binary'
@@ -651,7 +652,7 @@ const logger = createLogger('RemoteToolbox')
 const error = ref('')
 
 // __TB_BODY__
-const profiles = ref([])
+const { profiles } = useSshProfiles(logger)
 const profileOptions = computed(() => profiles.value.map(p => ({ label: `${p.name || p.host}`, value: p.id })))
 const profileId = ref(null)
 
@@ -1416,7 +1417,7 @@ async function sendToEditor(content) {
   catch (e) { error.value = '发送失败: ' + (e?.message || e) }
 }
 
-onMounted(async () => { try { profiles.value = await invoke('ssh_list_profiles') } catch (e) { logger.error('profiles', e) } ; loadCaList(); loadAssets() })
+onMounted(async () => { loadCaList(); loadAssets() })
 
 // J：多机时间轴对齐——导入多份日志，把各自快照按时间戳排到同一条时间线。
 const multiLogs = ref([]) // { name, sessionId, points: [[ts, laneIndex], ...] }

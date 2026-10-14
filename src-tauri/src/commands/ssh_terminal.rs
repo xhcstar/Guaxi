@@ -21,6 +21,13 @@ use uuid::Uuid;
 
 const SSH_OUTPUT_EVENT: &str = "ssh-session-output";
 const SSH_EXIT_EVENT: &str = "ssh-session-exit";
+/// 档案列表变更广播。
+///
+/// 终端窗口里各标签页是**常驻**的（`display-directive="show:lazy"`），
+/// 各处的"SSH 档案"下拉只在挂载时读一次——在连接面板里新建/删除后，
+/// GDB、工具箱、命令下发这些页签不重新挂载就永远看到旧列表。
+/// 所以在唯一会写档案的地方广播一次，前端各处监听后自行重载。
+const SSH_PROFILES_CHANGED_EVENT: &str = "ssh-profiles-changed";
 const KEYRING_SERVICE: &str = "guaxi-ssh";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -263,6 +270,7 @@ pub fn ssh_save_profile(app: AppHandle, mut profile: SshProfile) -> Result<SshPr
         None => profiles.push(profile.clone()),
     }
     write_profiles(&app, &profiles)?;
+    let _ = app.emit(SSH_PROFILES_CHANGED_EVENT, ());
     Ok(profile)
 }
 
@@ -272,6 +280,7 @@ pub fn ssh_delete_profile(app: AppHandle, id: String) -> Result<(), String> {
     profiles.retain(|p| p.id != id);
     write_profiles(&app, &profiles)?;
     let _ = keyring::Entry::new(KEYRING_SERVICE, &id).and_then(|e| e.delete_credential());
+    let _ = app.emit(SSH_PROFILES_CHANGED_EVENT, ());
     Ok(())
 }
 

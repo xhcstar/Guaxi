@@ -24,6 +24,14 @@
 
 ## 3. 实时终端 / SSH / 串口 / Telnet（`RemoteSshTerminal.vue` + `ssh_terminal.rs` / `serial_telnet.rs`）
 
+**档案列表实时同步**：终端窗口的各个标签页是**常驻**的（`display-directive="show:lazy"`），组件只在挂载时读一次档案——在「实时终端」新建/删除连接后，GDB、工具箱、命令下发的档案下拉不重新挂载就会一直显示旧列表（"新增的会话在这里找不到，除非重开窗口"）。做法：`ssh_save_profile` / `ssh_delete_profile` 写盘后广播 `ssh-profiles-changed`（后端是唯一写档案的地方，覆盖面最全，且事件是全局广播、跨窗口也生效）；前端统一用 `composables/useSshProfiles.js` —— 挂载时加载一次 + 监听该事件重载，卸载时解绑（`listen` 是异步的，注册期间若已卸载会立刻 `off()`）。`RemoteSshTerminal` / `RemoteGdbDebugger` / `RemoteToolbox` / `CommandDispatchPanel` 四处共用它；`SftpBrowser` 通过 prop 拿列表，随父组件一起更新。
+
+**面板选择持久化**（`utils/uiState.js`）：GDB 与命令下发的选择/布局记在 localStorage，下次开窗接着用——与仓库既有做法一致（`GuaxiDiffPanel` 记分栏比例、`ResumeBuilderApp` 记模板等 30+ 处），各窗口同源共享一份，无需新增后端命令。
+- GDB：目标档案、启动/附加模式、提权方式、可执行文件路径、字号、左右侧栏宽度、源码来源/规则/源码根/编译机档案/构建根前缀、源码面板高度。
+- 命令下发：目标档案、会话类型、退出码开关、图形/文本编辑模式、左栏宽度、上次用的策略。
+- **不存任何凭据**（enable 口令在系统 keychain，策略库保存时也会清空 `global`）。
+- 读取带默认值与校验（枚举用 `oneOf`、尺寸用 `within`），脏数据/禁用存储一律退回默认；**档案或策略被删后，列表到位时自动清掉失效的选中**，避免下拉挂着一个不存在的项。命令下发还会在开窗时自动载入上次用的策略（此时任务表本就是空的，不会覆盖）。
+
 **[已实现] 连接档案（统一 `SshProfile`）**：`ssh_terminal.rs::SshProfile` 字段 `id,name,host,port,user,auth,key_path` + `kind("ssh"|"serial"|"telnet")`、`group`(文件夹)、`serial_path`、`serial_baud`（均 `#[serde(default)]`，旧档案兼容）。CRUD：`ssh_list_profiles / ssh_save_profile / ssh_delete_profile`；密码存系统 keychain：`ssh_set_secret / ssh_delete_secret / ssh_has_secret`。
 
 **[已实现] 会话**：SSH 走 russh 自带栈 `ssh_create_session(cols,rows)`→`ssh-session-output`/`ssh-session-exit`，输入/尺寸 `ssh_write_session`/`ssh_resize_session`，关闭 `ssh_close_session`；串口 `serial_open(path,baud)`、Telnet `telnet_open(host,port)`。前端按 `profile.kind` 分派连接，串口/Telnet 也落档入"连接会话"。
