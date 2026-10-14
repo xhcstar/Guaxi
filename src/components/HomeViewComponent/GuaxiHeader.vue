@@ -874,7 +874,7 @@ function CaptureScreenshot() {
 // 点图标弹出的两个选项；key 只用来区分是否隐藏窗口。
 const screenshotMenuOptions = [
   { label: '隐藏当前窗口截图', key: 'hide' },
-  { label: '不隐藏当前窗口截图（可截取本软件内容）', key: 'keep' },
+  { label: '不隐藏当前窗口截图', key: 'keep' },
 ]
 
 const handleScreenshotMenuSelect = (key) => {
