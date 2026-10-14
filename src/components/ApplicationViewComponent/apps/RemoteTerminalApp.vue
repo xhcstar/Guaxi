@@ -1,5 +1,8 @@
 <template>
-  <div class="rt-root">
+  <!-- abstract：不渲染额外 DOM，只是为了给工坊整棵子树调大 naive-ui 的字号/控件高度；
+       不传 theme，父级（App.vue）的明暗主题会被继承，overrides 则为深合并。 -->
+  <n-config-provider abstract :theme-overrides="rtThemeOverrides">
+    <div class="rt-root">
     <!-- display-directive 必须加在每个 n-tab-pane 上（它是 pane 的 prop，默认 'if' 会卸载非激活页）；
          写在 n-tabs 上会被 naive-ui 静默忽略，导致切 Tab 丢终端/GDB 会话/日志。 -->
     <n-tabs v-model:value="activeTab" type="line" class="rt-tabs" pane-class="rt-pane">
@@ -384,7 +387,8 @@
         <div v-else class="rt-chart-empty">无数据</div>
       </div>
     </n-modal>
-  </div>
+    </div>
+  </n-config-provider>
 </template>
 
 <script setup>
@@ -420,7 +424,34 @@ use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, DataZoomCompone
 
 const logger = createLogger('RemoteTerminalApp')
 
-const logFontSize = ref(14)
+/**
+ * 工坊整棵子树的 naive-ui 尺寸。
+ *
+ * 为什么需要：工坊界面里大量文本其实在 naive-ui 组件里（n-input/n-select/n-button/表格…），
+ * 它们的字号来自 naive-ui 主题而不是我们的 CSS —— 而且工坊用了很多 `size="tiny"`，
+ * naive-ui 默认 tiny = **12px**，正是"字太小"的主因。这里把 common 的字号与控件高度
+ * 整体抬一档（tiny 12→14、small 14→16、medium 14→16…），控件高度也同步加高，免得字大了挤在窄控件里。
+ * 传 undefined 的 theme 会继承 App.vue 的明暗主题，overrides 与父级是深合并。
+ */
+const rtThemeOverrides = {
+  common: {
+    fontSize: '16px',
+    fontSizeMini: '14px',
+    fontSizeTiny: '14px',
+    fontSizeSmall: '16px',
+    fontSizeMedium: '16px',
+    fontSizeLarge: '17px',
+    fontSizeHuge: '19px',
+    heightMini: '18px',
+    heightTiny: '26px',
+    heightSmall: '32px',
+    heightMedium: '38px',
+    heightLarge: '44px',
+    heightHuge: '50px',
+  },
+}
+
+const logFontSize = ref(16)
 const LINE_HEIGHT = computed(() => logFontSize.value + 7)
 function setLogFontSize(v) { logFontSize.value = Math.min(28, Math.max(9, v)) }
 const PAGE = 500
@@ -938,7 +969,7 @@ onBeforeUnmount(() => {
 })</script>
 
 <style scoped>
-.rt-root { height: 100%; display: flex; flex-direction: column; background: var(--guaxi-content-bg); --tw-ui-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif; --tw-mono-font: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace); --tw-accent: #0ca6c0; --tw-accent-2: #1fbfd6; --tw-accent-soft: rgba(12,166,192,0.12); --tw-radius: 10px; --tw-radius-sm: 7px; --tw-code-bg: #f6f8fa; --tw-code-fg: #1f2328; --tw-elev: 0 1px 2px rgba(2,12,20,0.12), 0 6px 20px rgba(2,12,20,0.10); font-family: var(--tw-ui-font); font-size: 13px; color: var(--guaxi-text-primary); }
+.rt-root { height: 100%; display: flex; flex-direction: column; background: var(--guaxi-content-bg); --tw-ui-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif; --tw-mono-font: var(--guaxi-editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace); --tw-accent: #0ca6c0; --tw-accent-2: #1fbfd6; --tw-accent-soft: rgba(12,166,192,0.12); --tw-radius: 10px; --tw-radius-sm: 7px; --tw-code-bg: #f6f8fa; --tw-code-fg: #1f2328; --tw-elev: 0 1px 2px rgba(2,12,20,0.12), 0 6px 20px rgba(2,12,20,0.10); font-family: var(--tw-ui-font); font-size: 16px; color: var(--guaxi-text-primary); }
 :root[data-guaxi-theme='dark'] .rt-root { --tw-accent: #3dd6e8; --tw-accent-2: #22b8cf; --tw-accent-soft: rgba(61,214,232,0.14); --tw-code-bg: #0b1118; --tw-code-fg: #d8e0eb; }
 .rt-tabs { height: 100%; display: flex; flex-direction: column; }
 .rt-tabs :deep(.n-tabs-nav) { flex: 0 0 auto; }
@@ -947,17 +978,17 @@ onBeforeUnmount(() => {
 .rt-tabs :deep(.rt-pane) { flex: 1 1 auto; min-height: 0; height: auto; padding: 0; }
 .rt-log { height: 100%; display: flex; flex-direction: column; min-height: 0; }
 .rt-toolbar { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--guaxi-border); flex: 0 0 auto; }
-.rt-meta { font-size: 12px; color: var(--guaxi-text-secondary, #6b7280); }
-.rt-error { font-size: 12px; color: #e5484d; }
+.rt-meta { font-size: 15px; color: var(--guaxi-text-secondary, #6b7280); }
+.rt-error { font-size: 15px; color: #e5484d; }
 .rt-inner { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .rt-inner-tabs { height: 100%; display: flex; flex-direction: column; }
 .rt-inner-tabs :deep(.rt-inner-pane) { height: 100%; padding: 0; min-height: 0; }
 
 .rt-body { height: 100%; display: flex; min-height: 0; }
 .rt-timeline { width: 300px; flex: 0 0 auto; border-right: 1px solid var(--guaxi-border); display: flex; flex-direction: column; min-height: 0; }
-.rt-timeline-title { padding: 8px 12px; font-size: 12px; font-weight: 600; border-bottom: 1px solid var(--guaxi-border); }
+.rt-timeline-title { padding: 8px 12px; font-size: 15px; font-weight: 600; border-bottom: 1px solid var(--guaxi-border); }
 .rt-timeline-list { flex: 1 1 auto; overflow-y: auto; min-height: 0; }
-.rt-frame { padding: 6px 12px; font-size: 12px; cursor: pointer; display: flex; gap: 8px; border-bottom: 1px solid var(--guaxi-border-weak, rgba(0,0,0,0.04)); }
+.rt-frame { padding: 6px 12px; font-size: 15px; cursor: pointer; display: flex; gap: 8px; border-bottom: 1px solid var(--guaxi-border-weak, rgba(0,0,0,0.04)); }
 .rt-frame:hover { background: var(--guaxi-hover-bg, rgba(0,0,0,0.04)); }
 .rt-frame.active { background: var(--guaxi-active-bg, rgba(59,130,246,0.12)); }
 .rt-frame-idx { color: var(--guaxi-text-secondary, #9ca3af); flex: 0 0 auto; }
@@ -971,17 +1002,17 @@ onBeforeUnmount(() => {
 
 .rt-analysis { height: 100%; display: flex; flex-direction: column; min-height: 0; padding: 10px 12px; gap: 10px; box-sizing: border-box; }
 .rt-actions { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; flex-wrap: wrap; }
-.rt-hint { font-size: 12px; color: var(--guaxi-text-secondary, #6b7280); }
+.rt-hint { font-size: 15px; color: var(--guaxi-text-secondary, #6b7280); }
 .rt-split { flex: 1 1 auto; min-height: 0; display: flex; gap: 12px; }
 .rt-table-wrap { flex: 1 1 55%; min-width: 0; overflow: auto; border: 1px solid var(--guaxi-border); border-radius: 6px; }
 .rt-table-wrap.full { flex: 1 1 auto; }
 .rt-chart-wrap { flex: 1 1 45%; min-width: 0; display: flex; flex-direction: column; border: 1px solid var(--guaxi-border); border-radius: 6px; padding: 8px; }
-.rt-chart-head { font-size: 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.rt-chart-head { font-size: 15px; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
 .rt-chart-head span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rt-chart { flex: 1 1 auto; min-height: 200px; width: 100%; }
-.rt-chart-empty { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; color: var(--guaxi-text-secondary, #6b7280); font-size: 12px; }
+.rt-chart-empty { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; color: var(--guaxi-text-secondary, #6b7280); font-size: 15px; }
 
-.rt-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.rt-table { width: 100%; border-collapse: collapse; font-size: 15px; }
 .rt-table th, .rt-table td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--guaxi-border-weak, rgba(0,0,0,0.06)); white-space: nowrap; }
 .rt-table th { position: sticky; top: 0; background: var(--guaxi-panel-bg, #f5f5f5); z-index: 1; }
 .rt-table tbody tr { cursor: pointer; }
@@ -992,7 +1023,7 @@ onBeforeUnmount(() => {
 .rt-delta-neg { color: #2b8a3e; }
 .rt-empty-cell { color: var(--guaxi-text-secondary, #9ca3af); text-align: center; padding: 20px; }
 
-.rt-empty { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; color: var(--guaxi-text-secondary, #6b7280); font-size: 13px; padding: 40px; text-align: center; }
+.rt-empty { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; color: var(--guaxi-text-secondary, #6b7280); font-size: 16px; padding: 40px; text-align: center; }
 
 /* ---- 美化层 ---- */
 .tw-tab { display: inline-flex; align-items: center; gap: 7px; font-weight: 500; }
@@ -1002,13 +1033,13 @@ onBeforeUnmount(() => {
 .rt-tabs :deep(.n-tabs-nav) { padding: 0 6px; }
 .rt-toolbar { padding: 10px 14px; gap: 10px; background: color-mix(in srgb, var(--guaxi-panel-bg) 60%, transparent); }
 .rt-meta { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-.rt-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; padding: 3px 9px; border-radius: 999px; background: var(--tw-accent-soft); color: var(--tw-accent); font-family: var(--tw-mono-font); }
+.rt-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 14px; padding: 3px 9px; border-radius: 999px; background: var(--tw-accent-soft); color: var(--tw-accent); font-family: var(--tw-mono-font); }
 .rt-timeline { width: 300px; }
-.rt-timeline-title { text-transform: uppercase; letter-spacing: 0.06em; font-size: 11px; color: var(--guaxi-text-secondary); background: color-mix(in srgb, var(--guaxi-panel-bg) 55%, transparent); display: flex; align-items: center; justify-content: space-between; }
+.rt-timeline-title { text-transform: uppercase; letter-spacing: 0.06em; font-size: 14px; color: var(--guaxi-text-secondary); background: color-mix(in srgb, var(--guaxi-panel-bg) 55%, transparent); display: flex; align-items: center; justify-content: space-between; }
 .rt-fontctl { display: inline-flex; align-items: center; gap: 3px; }
 .rt-fbtn { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border: none; background: transparent; color: var(--guaxi-text-secondary); cursor: pointer; border-radius: 50%; }
 .rt-fbtn:hover { background: var(--tw-accent-soft); color: var(--tw-accent); }
-.rt-fsz { min-width: 16px; text-align: center; font-size: 11px; color: var(--tw-accent); }
+.rt-fsz { min-width: 16px; text-align: center; font-size: 14px; color: var(--tw-accent); }
 .rt-line { color: var(--guaxi-text-primary); }
 .rt-lineno { color: var(--guaxi-text-secondary); opacity: .7; }
 .rt-split-resize { flex: 0 0 auto; width: 6px; cursor: col-resize; background: var(--guaxi-border); opacity: .4; border-radius: 3px; transition: opacity .15s, background .15s; }
@@ -1022,7 +1053,7 @@ onBeforeUnmount(() => {
 .rt-inner-tabs :deep(.n-tabs-tab) { font-family: var(--tw-ui-font); font-weight: 500; }
 .rt-inner-tabs :deep(.n-tabs-tab--active) { color: var(--tw-accent) !important; }
 .rt-table-wrap, .rt-chart-wrap { border-radius: var(--tw-radius-sm); border-color: color-mix(in srgb, var(--guaxi-border) 70%, transparent); }
-.rt-table th { text-transform: uppercase; letter-spacing: 0.04em; font-size: 11px; color: var(--guaxi-text-secondary); }
+.rt-table th { text-transform: uppercase; letter-spacing: 0.04em; font-size: 14px; color: var(--guaxi-text-secondary); }
 .rt-table tbody tr.active { background: var(--tw-accent-soft); }
 .rt-key { font-family: var(--tw-mono-font); }
 .rt-lineno { font-family: var(--tw-mono-font); }
@@ -1034,10 +1065,10 @@ onBeforeUnmount(() => {
 .rt-editor-close:hover { color: var(--tw-accent); }
 .rt-editor-body { padding: 16px 18px; overflow: auto; display: flex; flex-direction: column; gap: 12px; }
 .rt-ed-row { display: flex; align-items: center; gap: 10px; }
-.rt-ed-row > label { flex: 0 0 76px; font-size: 12px; color: var(--guaxi-text-secondary); }
+.rt-ed-row > label { flex: 0 0 76px; font-size: 15px; color: var(--guaxi-text-secondary); }
 .rt-ed-row > :deep(.n-input), .rt-ed-row > :deep(.n-radio-group) { flex: 1 1 auto; }
 .rt-ed-rules { border: 1px solid color-mix(in srgb, var(--guaxi-border) 70%, transparent); border-radius: var(--tw-radius-sm); padding: 10px 12px; }
-.rt-ed-rules-head { display: flex; align-items: center; justify-content: space-between; font-size: 12px; font-weight: 600; margin-bottom: 8px; color: var(--tw-accent); }
+.rt-ed-rules-head { display: flex; align-items: center; justify-content: space-between; font-size: 15px; font-weight: 600; margin-bottom: 8px; color: var(--tw-accent); }
 .rt-ed-rule { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .rt-ed-rule :deep(.n-input__input-el) { font-family: var(--tw-mono-font); }
 .rt-editor-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--guaxi-border); }

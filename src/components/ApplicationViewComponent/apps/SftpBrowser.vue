@@ -151,11 +151,11 @@ async function rename(e) {
 
 <style scoped>
 .sftp-root { display: flex; flex-direction: column; min-height: 0; font-family: var(--tw-ui-font); }
-.sftp-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; font-size: 12px; font-weight: 600; border-bottom: 1px solid var(--guaxi-border); }
+.sftp-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; font-size: 15px; font-weight: 600; border-bottom: 1px solid var(--guaxi-border); }
 .sftp-bar { padding: 8px 12px; }
 .sftp-path { display: flex; gap: 4px; align-items: center; padding: 6px 8px; }
 .sftp-tools { display: flex; gap: 6px; padding: 0 8px 6px; }
-.sftp-list { flex: 1 1 auto; overflow: auto; min-height: 0; font-size: 12px; }
+.sftp-list { flex: 1 1 auto; overflow: auto; min-height: 0; font-size: 15px; }
 .sftp-item { display: flex; align-items: center; gap: 6px; padding: 4px 10px; cursor: default; }
 .sftp-item:hover { background: var(--tw-accent-soft, rgba(12,166,192,0.12)); }
 .sftp-item:hover .sftp-actions { opacity: 1; }
@@ -166,5 +166,5 @@ async function rename(e) {
 .sftp-actions { display: inline-flex; gap: 6px; opacity: 0; color: var(--guaxi-text-secondary); }
 .sftp-actions :hover { color: var(--tw-accent); }
 .sftp-empty { padding: 12px; color: var(--guaxi-text-secondary); }
-.sftp-err { padding: 6px 12px; font-size: 12px; color: #e5484d; }
+.sftp-err { padding: 6px 12px; font-size: 15px; color: #e5484d; }
 </style>

@@ -194,6 +194,14 @@ UI 约定（全页统一）：
   - Monaco **懒加载**：只有切到文本模式才 `import('monaco-editor')` + YAML 语法贡献（`basic-languages/yaml/yaml.contribution`，Monarch 分词，无需额外 worker），不打开这个模式就不付这份体积。
   - **生命周期**：加载是异步的，用 `disposed` 闸门保证"组件已卸载 / 已切回图形模式"时不再去 `create`；离开文本模式立刻 `dispose()` editor 与 model（顺序：先 editor 后 model）；`onDidChangeModelContent` 的 disposable 一并释放；外部改写 `yamlText` 时经 `setValue` 同步进 model（`pushingToModel` 标志防成环）。
   - **主题**：`getGuaxiMonacoTheme(appearanceTheme)` → `guaxi-light`/`guaxi-dark`，并 `watch` 应用外观变化调 `editor.setTheme()`（与仓库其它 monaco 用法一致）。
+    **注意主题要先注册**：`guaxi-dark/light` 是 monaco 的**全局**主题注册表，而**每个窗口是独立的 monaco 实例**——本面板在独立应用窗口里，主窗口 GitPanel/编辑器注册的主题用不上。必须在懒加载时调一次 `defineGuaxiMonacoThemes(monaco)`（`monaco/guaxiMonacoThemes.js`，与 GitPanel 共用一份色值），否则 `create({theme:'guaxi-dark'})` 会**静默退回默认 `vs`**，表现就是"暗色模式下编辑器还是亮的"。
+
+### 工坊内字号（可读性）
+**关键认识：工坊界面里大量文本其实在 naive-ui 组件里**（`n-input`/`n-select`/`n-button`/表格…），它们的字号来自 **naive-ui 主题**而不是我们的 CSS——而且工坊用了很多 `size="tiny"`，naive-ui 默认 **tiny = 12px**，这正是"字太小"的主因。所以字号分两处调：
+
+1. **naive-ui 侧**（覆盖面最大）：在 `RemoteTerminalApp.vue` 根部套一层 `<n-config-provider abstract :theme-overrides="rtThemeOverrides">`。`abstract` 不渲染额外 DOM、不影响高度链；不传 `theme` 会**继承 App.vue 的明暗主题**，overrides 与父级是**深合并**（已读 naive-ui `ConfigProvider.mjs` 确认：`theme === undefined` 取继承值，`themeOverrides` 走 `merge({}, inherited, mine)`）。覆盖 `common` 的字号与**控件高度**：tiny 12→14、small/medium 14→16、base 16、large 17、huge 19；高度 tiny 22→26、small 28→32、medium 34→38（字大了控件不跟着高会挤）。
+2. **自有 CSS**：各面板的 `font-size` 声明整体抬了两轮，正文落在 ~15px（原 12px 档）。
+3. **可调字号的默认值**：日志控制台/xterm 终端/GDB 显示区 16、coredump 输出 15、Monaco 15.5；GDB 上限放宽到 32。GDB 的字号存储键改成 `guaxi_gdb_font_size_v2`——此前存过的小字号（用户两次反馈"太小"）不再套用，直接吃新默认。
 - **用外部编辑器打开 / 在文件管理器中显示**（`cmd_open_in_os` / `cmd_reveal_in_os`，**走后端**）：配置 YAML、每个任务的 PEM 文件、本次运行的 JSONL 日志都能一键"用系统默认程序打开"或"在文件管理器中定位"。
   - 配置没有对应文件时先落到受管固定路径 `cmd_dispatch/config.yaml`（重复打开复用同一文件，外部编辑器里 reload 即可）；导入过 config.yaml 则直接开用户那份。
   - 相对 PEM 路径按「导入 config.yaml 的目录」解析（与执行时一致），解析不出绝对路径时明确提示而不是静默失败。

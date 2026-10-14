@@ -530,7 +530,7 @@ const UI = {
   mode: 'guaxi_gdb_mode',
   escalate: 'guaxi_gdb_escalate',
   program: 'guaxi_gdb_program',
-  fontSize: 'guaxi_gdb_font_size',
+  fontSize: 'guaxi_gdb_font_size_v2',
   sideW: 'guaxi_gdb_side_width',
   rightW: 'guaxi_gdb_right_width',
   srcMode: 'guaxi_gdb_source_mode',
@@ -649,7 +649,7 @@ const palette = [
   { label: '步出 (finish，执行到返回)', cmd: '-exec-finish', icon: arrowUpIcon },
   { label: '中断 (interrupt，暂停目标)', cmd: '-exec-interrupt', icon: pauseIcon },
 ]
-const gdbFontSize = ref(readUiState(UI.fontSize, 14, within(9, 28)))
+const gdbFontSize = ref(readUiState(UI.fontSize, 16, within(9, 32)))
 function setGdbFontSize(v) { gdbFontSize.value = Math.min(28, Math.max(9, v)) }
 const gdbSideWidth = ref(readUiState(UI.sideW, 300, within(200, 600)))
 const gdbRightWidth = ref(readUiState(UI.rightW, 300, within(200, 600)))
@@ -1273,33 +1273,33 @@ async function loadMacros() {
 <style scoped>
 .gdb-root { height: 100%; display: flex; flex-direction: column; min-height: 0; background: var(--guaxi-content-bg); }
 .gdb-bar { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--guaxi-border); flex-wrap: wrap; flex: 0 0 auto; }
-.gdb-status { font-size: 12px; color: var(--guaxi-text-secondary, #6b7280); }
-.gdb-error { font-size: 12px; color: #e5484d; }
-.gdb-notice { font-size: 12px; color: #f5a524; }
-.gdb-busy { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--tw-accent); }
+.gdb-status { font-size: 15px; color: var(--guaxi-text-secondary, #6b7280); }
+.gdb-error { font-size: 15px; color: #e5484d; }
+.gdb-notice { font-size: 15px; color: #f5a524; }
+.gdb-busy { display: inline-flex; align-items: center; gap: 5px; font-size: 15px; color: var(--tw-accent); }
 .gdb-busy-slow { color: #f5a524; }
 .gdb-palette { display: flex; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--guaxi-border); flex-wrap: wrap; flex: 0 0 auto; }
 .gdb-body { flex: 1 1 auto; min-height: 0; display: flex; }
 .gdb-tabs { height: 100%; width: 100%; display: flex; flex-direction: column; }
 .gdb-tabs :deep(.gdb-pane) { height: 100%; padding: 8px 12px; min-height: 0; overflow: auto; }
-.gdb-console { height: calc(100% - 44px); overflow: auto; background: #1e1e1e; color: #d4d4d4; font-family: var(--guaxi-mono-font, monospace); font-size: 12px; padding: 8px; border-radius: 6px; }
+.gdb-console { height: calc(100% - 44px); overflow: auto; background: #1e1e1e; color: #d4d4d4; font-family: var(--guaxi-mono-font, monospace); font-size: 15px; padding: 8px; border-radius: 6px; }
 .gdb-console pre { margin: 0; white-space: pre-wrap; word-break: break-all; }
 .gdb-l-log { color: #9aa0a6; }
 .gdb-l-target { color: #79c0ff; }
 .gdb-l-cmd { color: #7ee787; }
 .gdb-input { display: flex; gap: 8px; margin-top: 8px; }
 .gdb-actions { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
-.gdb-hint { color: var(--guaxi-text-secondary, #9ca3af); font-size: 12px; padding: 12px; }
-.gdb-tree { font-family: var(--guaxi-mono-font, monospace); font-size: 12px; }.gdb-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.gdb-hint { color: var(--guaxi-text-secondary, #9ca3af); font-size: 15px; padding: 12px; }
+.gdb-tree { font-family: var(--guaxi-mono-font, monospace); font-size: 15px; }.gdb-table { width: 100%; border-collapse: collapse; font-size: 15px; }
 .gdb-table th, .gdb-table td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--guaxi-border-weak, rgba(0,0,0,0.06)); }
 .gdb-val { font-family: var(--guaxi-mono-font, monospace); white-space: pre-wrap; word-break: break-all; }
 .gdb-table tr.changed { background: rgba(255,196,0,0.16); }
-.gdb-threads { font-size: 12px; }
+.gdb-threads { font-size: 15px; }
 .gdb-thread { padding: 6px 8px; border-bottom: 1px solid var(--guaxi-border-weak, rgba(0,0,0,0.06)); cursor: pointer; }.gdb-thread.active { background: var(--guaxi-active-bg, rgba(59,130,246,0.12)); }
 .gdb-thread-h { font-weight: 500; }
 .gdb-frame { color: var(--guaxi-text-secondary, #6b7280); font-family: var(--guaxi-mono-font, monospace); }
-.gdb-mem { background: #1e1e1e; color: #d4d4d4; font-family: var(--guaxi-mono-font, monospace); font-size: 12px; padding: 8px; border-radius: 6px; white-space: pre-wrap; word-break: break-all; margin: 0; }
-.gdb-empty { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--guaxi-text-secondary, #6b7280); font-size: 13px; padding: 12px; min-height: 0; }
+.gdb-mem { background: #1e1e1e; color: #d4d4d4; font-family: var(--guaxi-mono-font, monospace); font-size: 15px; padding: 8px; border-radius: 6px; white-space: pre-wrap; word-break: break-all; margin: 0; }
+.gdb-empty { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--guaxi-text-secondary, #6b7280); font-size: 16px; padding: 12px; min-height: 0; }
 .gdb-dead-note { flex: 0 0 auto; color: #e5484d; align-self: flex-start; }
 
 /* 编译机目录浏览弹窗 */
@@ -1307,13 +1307,13 @@ async function loadMacros() {
 .gdb-pick-h { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--guaxi-border); font-weight: 600; }
 .gdb-pick-bar { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--guaxi-border); }
 .gdb-pick-list { flex: 1 1 auto; min-height: 200px; max-height: 52vh; overflow: auto; padding: 6px 8px; }
-.gdb-pick-item { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; font-family: var(--gdb-mono); }
+.gdb-pick-item { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 16px; font-family: var(--gdb-mono); }
 .gdb-pick-item:hover { background: var(--tw-accent-soft); color: var(--tw-accent); }
 .gdb-pick-ico { color: #e0a53f; }
 .gdb-pick-f { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--guaxi-border); }
 .gdb-pick-f .gdb-hint { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gdb-src-empty { display: flex; flex-direction: column; gap: 8px; padding: 12px; }
-.gdb-src-tried { max-height: 200px; overflow: auto; margin: 0; font-size: 12px; }
+.gdb-src-tried { max-height: 200px; overflow: auto; margin: 0; font-size: 15px; }
 .gdb-console-dead { flex: 1 1 auto; width: 100%; min-height: 0; overflow: auto; }
 
 /* ---- 美化层 ---- */
@@ -1327,12 +1327,12 @@ async function loadMacros() {
 .gdb-tabs :deep(.n-tabs-tab--active) { color: var(--tw-accent) !important; }
 .gdb-tabs :deep(.n-tabs-tab) { font-family: var(--tw-ui-font); }
 .gdb-tree, .gdb-val, .gdb-frame { font-family: var(--tw-mono-font); }
-.gdb-table th { text-transform: uppercase; letter-spacing: .04em; font-size: 11px; color: var(--guaxi-text-secondary); }
+.gdb-table th { text-transform: uppercase; letter-spacing: .04em; font-size: 14px; color: var(--guaxi-text-secondary); }
 .gdb-thread.active { background: var(--tw-accent-soft); box-shadow: inset 3px 0 0 var(--tw-accent); }
 .gdb-fontctl { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; padding: 2px 4px; border: 1px solid var(--guaxi-border); border-radius: 999px; }
 .gdb-fbtn { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: none; background: transparent; color: var(--guaxi-text-secondary); cursor: pointer; border-radius: 50%; }
 .gdb-fbtn:hover { background: var(--tw-accent-soft); color: var(--tw-accent); }
-.gdb-fsz { min-width: 20px; text-align: center; font-size: 12px; font-family: var(--tw-mono-font); color: var(--tw-accent); }
+.gdb-fsz { min-width: 20px; text-align: center; font-size: 15px; font-family: var(--tw-mono-font); color: var(--tw-accent); }
 
 /* 面板填满高度 + 亮色适配 */
 .gdb-tabs :deep(.gdb-pane) { height: 100%; display: flex; flex-direction: column; min-height: 0; background: var(--guaxi-content-bg); }
@@ -1354,11 +1354,11 @@ async function loadMacros() {
 .gdb-side { flex: 0 0 auto; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; overflow-x: hidden; border-right: 1px solid var(--guaxi-border); background: color-mix(in srgb, var(--guaxi-panel-bg) 35%, transparent); }
 .gdb-side.gdb-side-right { border-left: 1px solid var(--guaxi-border); }
 .gdb-panel { flex: 0 0 auto; display: flex; flex-direction: column; min-height: 0; border-bottom: 1px solid var(--guaxi-border-weak, rgba(0,0,0,0.08)); }
-.gdb-panel-h { flex: 0 0 auto; display: flex; align-items: center; gap: 5px; padding: 6px 8px; font-size: 12px; font-weight: 600; cursor: pointer; user-select: none; color: var(--guaxi-text-secondary); background: color-mix(in srgb, var(--guaxi-panel-bg) 60%, transparent); }
+.gdb-panel-h { flex: 0 0 auto; display: flex; align-items: center; gap: 5px; padding: 6px 8px; font-size: 15px; font-weight: 600; cursor: pointer; user-select: none; color: var(--guaxi-text-secondary); background: color-mix(in srgb, var(--guaxi-panel-bg) 60%, transparent); }
 .gdb-panel-h:hover { color: var(--tw-accent); }
 .gdb-panel-ico { color: var(--tw-accent); }
 .gdb-panel-t { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gdb-panel-n { flex: 0 0 auto; font-size: 10px; padding: 0 6px; border-radius: 999px; background: var(--tw-accent-soft); color: var(--tw-accent); font-family: var(--gdb-mono); }
+.gdb-panel-n { flex: 0 0 auto; font-size: 13.5px; padding: 0 6px; border-radius: 999px; background: var(--tw-accent-soft); color: var(--tw-accent); font-family: var(--gdb-mono); }
 .gdb-panel-b { flex: 0 0 auto; min-height: 0; display: flex; flex-direction: column; padding: 6px 8px 4px; overflow: hidden; }
 /* 只有面板内容滚动，标题固定 */
 .gdb-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; }
@@ -1380,7 +1380,7 @@ async function loadMacros() {
 .gdb-ellip { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 调用栈 / 局部变量 / 寄存器面板 */
-.gdb-stack { font-size: 12px; }
+.gdb-stack { font-size: 15px; }
 .gdb-sframe { display: flex; gap: 6px; align-items: baseline; padding: 4px 6px; cursor: pointer; border-bottom: 1px solid var(--guaxi-border-weak, rgba(0,0,0,0.06)); white-space: nowrap; }
 .gdb-sframe:hover { background: var(--guaxi-hover-bg, rgba(0,0,0,0.04)); }
 .gdb-sframe.active { background: var(--tw-accent-soft); box-shadow: inset 3px 0 0 var(--tw-accent); }
@@ -1394,7 +1394,7 @@ async function loadMacros() {
 .gdb-source { flex: 0 0 auto; min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--guaxi-border); border-radius: var(--tw-radius-sm); overflow: hidden; background: var(--tw-code-bg); }
 .gdb-source-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 5px 8px; border-bottom: 1px solid var(--guaxi-border); background: color-mix(in srgb, var(--guaxi-panel-bg) 45%, transparent); flex: 0 0 auto; }
 .gdb-arrow { color: var(--guaxi-text-secondary); }
-.gdb-src-loc { font-size: 11px; color: var(--tw-accent); font-family: var(--gdb-mono); margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
+.gdb-src-loc { font-size: 14px; color: var(--tw-accent); font-family: var(--gdb-mono); margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
 .gdb-source-body { flex: 1 1 auto; min-height: 0; overflow: auto; background: var(--tw-code-bg); color: var(--tw-code-fg); padding: 4px 0; }
 .gdb-srcline { display: flex; white-space: pre; line-height: 1.5; }
 .gdb-srcline.cur { background: rgba(255,196,0,0.16); box-shadow: inset 3px 0 0 #f5a524; }
