@@ -439,11 +439,13 @@ fn classify_prompt(buf: &str) -> Prompt {
     {
         return Prompt::PemWait;
     }
-    // POSIX shell（Linux 编译机）：`user@host:path$` / `user@host:path#` / `[root@host ~]#`。
-    // 必须先于设备 CLI 判定：Linux 的 root 提示符也以 `#` 结尾，靠 `user@host` 特征区分。
+    // POSIX shell（调试级别）：手册里的形式是 `[test@Demo ~]$`。
+    // 必须先于设备 CLI 判定（Linux root 的 `#` 也是 `#`）。
     if is_shell_prompt(line) {
         return Prompt::Shell;
     }
+    // 手册的四种提示符：`Demo>`（User）/ `Demo#`（Enable）/ `Demo(config)#`（Config）。
+    // 注意 `(config)#` 要在裸 `#` 之前判。
     if line.ends_with('#') {
         return if line.contains("(config") { Prompt::Config } else { Prompt::Priv };
     }
@@ -453,21 +455,21 @@ fn classify_prompt(buf: &str) -> Prompt {
     Prompt::Unknown
 }
 
-/// 识别 POSIX shell 提示符。
+/// 识别"调试级别"（Linux shell）提示符。
 ///
-/// 覆盖常见形态：`user@host:~$`、`user@host:/path#`、`[root@host ~]#`、`bash-4.2$`、裸 `$` / `#`。
-/// 判据是"以 `$` 结尾，或以 `#` 结尾且带 `@host:` 或 `[...]` 这类 shell 特征" —— 后者用于把
-/// Linux root 的 `#` 与设备 CLI 的特权 `#` 区分开。
+/// 判据严格按手册：调试级别是 `[test@Demo ~]$` —— **带 `@` 且以 `$` 结尾**。
+/// 早先我用"`[...]` 开头的 `#` 也算 shell"去兼容 `[root@host ~]#`，结果把设备自己的
+/// `[2Zsd4cWhQH:Standalone Mode]#` 误判成 shell（那是 Enable 级别），进而在
+/// `ensure_config_mode` 里跳过 `config terminal` 直接报"无法进入配置模式"。
+/// 现在只认 `@`：`[...]#` 一律按设备 CLI 处理。
 fn is_shell_prompt(line: &str) -> bool {
     let t = line.trim_end();
     if t.ends_with('$') {
         return true;
     }
     if t.ends_with('#') {
-        let head = &t[..t.len() - 1];
-        // `user@host:...` / `[user@host ...]` / `bash-5.1` 这类都算 shell；
-        // 而设备 CLI 的特权提示符通常是 `hostname#` 或 `hostname>`（无 @、无方括号）。
-        return head.contains('@') || head.trim_start().starts_with('[') || head.contains("bash");
+        // 仅 `user@host...#` / `[user@host ...]#` 这类带 @ 的才算 shell。
+        return t[..t.len() - 1].contains('@');
     }
     false
 }
@@ -674,51 +676,62 @@ impl DeviceCli {
         if self.kind == SessionKind::Shell {
             return Ok(());
         }
+        // 已在配置模式？
         self.buf.clear();
         self.send_raw("\n").await;
-        match self.wait_prompt(Duration::from_secs(3)).await? {
-            Prompt::Config => return Ok(()),
-            Prompt::Priv => {
-                self.buf.clear();
-                self.send_raw("config terminal force\n").await;
-                if self.wait_prompt(Duration::from_secs(6)).await? == Prompt::Config {
-                    return Ok(());
-                }
-            }
-            _ => {}
+        let mut p = self.wait_prompt(Duration::from_secs(4)).await?;
+        if p == Prompt::Config {
+            return Ok(());
         }
-        // 需要先进特权模式。
-        self.buf.clear();
-        self.send_raw("enable\n").await;
-        let mut p = self.wait_prompt(Duration::from_secs(6)).await?;
-        if p == Prompt::Password {
-            self.buf.clear();
-            self.send_raw(&format!("{}\n", enable_password.clone().unwrap_or_default())).await;
-            p = self.wait_prompt(Duration::from_secs(6)).await?;
-        }
+
+        // 还没到 Enable 级别就先 enable（手册：User 级别 `Demo>` → `enable` → `Demo#`）。
         if p == Prompt::User {
-            // 有些设备 enable 后还要补一次回车。
             self.buf.clear();
-            self.send_raw("\n").await;
-            p = self.wait_prompt(Duration::from_secs(3)).await?;
+            self.send_raw("enable\n").await;
+            p = self.wait_prompt(Duration::from_secs(8)).await?;
+            if p == Prompt::Password {
+                self.buf.clear();
+                self.send_raw(&format!("{}\n", enable_password.clone().unwrap_or_default())).await;
+                p = self.wait_prompt(Duration::from_secs(8)).await?;
+            }
+            if p == Prompt::User {
+                // 有的设备 enable 后还要补一次回车才回落提示符。
+                self.buf.clear();
+                self.send_raw("\n").await;
+                p = self.wait_prompt(Duration::from_secs(4)).await?;
+            }
         }
-        if p != Prompt::Priv && p != Prompt::Config {
+
+        if p == Prompt::Config {
+            return Ok(());
+        }
+        if p != Prompt::Priv {
             return Err(format!(
-                "无法进入特权/配置模式（最后输出）：\n{}",
+                "无法进入设备 CLI 的特权模式：识别到的提示符是 {:?}（期望 `主机名#` 或 `主机名(config)#`）。\n\
+                 若这其实是 Linux shell（`[user@host ~]$`），请把「会话」改成 Linux shell；\n\
+                 若已确认是设备 CLI，请检查 enable 密码是否正确。\n最后输出：\n{}",
+                last_line(&self.buf).to_string(),
                 tail_lines(&self.buf, 8)
             ));
         }
-        if p == Prompt::Priv {
+
+        // Enable 级别 → 配置级别。手册写 `config terminal`，老版本/参考脚本用 `config terminal force`，两个都试。
+        for cmd in ["config terminal force", "config terminal"] {
             self.buf.clear();
-            self.send_raw("config terminal force\n").await;
-            if self.wait_prompt(Duration::from_secs(6)).await? != Prompt::Config {
-                return Err(format!(
-                    "无法进入配置模式（最后输出）：\n{}",
-                    tail_lines(&self.buf, 8)
-                ));
+            self.send_raw(&format!("{cmd}\n")).await;
+            if self.wait_prompt(Duration::from_secs(8)).await? == Prompt::Config {
+                return Ok(());
+            }
+            if classify_prompt(&self.buf) != Prompt::Priv {
+                break;
             }
         }
-        Ok(())
+        Err(format!(
+            "已进入 Enable 级别（`{}`），但 `config terminal force` / `config terminal` 都没能进入配置模式。\n\
+             可能是该账号没有 Config 权限（手册：Enable 等级用户无法进入 Config 级别）。\n最后输出：\n{}",
+            last_line(&self.buf),
+            tail_lines(&self.buf, 8)
+        ))
     }
 
     /// 执行一条命令；`pem` 非空时按各自的输入流程补送。
@@ -1529,5 +1542,43 @@ tasks:
     fn parse_error_is_readable() {
         let err = parse_config("targets: [oops").unwrap_err();
         assert!(err.contains("配置解析失败"), "{err}");
+    }
+
+    /// 提示符分类必须按手册的四种形式来（Chapter1 访问控制的级别）：
+    /// `Demo>` / `Demo#` / `Demo(config)#` / 调试级别 `[test@Demo ~]$`。
+    #[test]
+    fn classify_prompts_per_manual() {
+        assert_eq!(classify_prompt("Demo>"), Prompt::User);
+        assert_eq!(classify_prompt("Demo#"), Prompt::Priv);
+        assert_eq!(classify_prompt("Demo(config)#"), Prompt::Config);
+
+        // 真实设备上的 Enable 提示符会带上模式名——**不能**当成 Linux shell。
+        // （这里正是线上那次"无法进入特权/配置模式"的根因。）
+        assert_eq!(
+            classify_prompt("[2Zsd4cWhQH:Standalone Mode]#"),
+            Prompt::Priv,
+            "方括号不等于 shell：设备用 [主机:模式]# 表示 Enable 级别"
+        );
+        assert_eq!(classify_prompt("[Demo:Standalone Mode(config)]#"), Prompt::Config);
+
+        // 调试级别（Linux shell）：手册形式带 @ 且以 $ 结尾。
+        assert_eq!(classify_prompt("[test@Demo ~]$"), Prompt::Shell);
+        assert_eq!(classify_prompt("dev@build:~/apv$"), Prompt::Shell);
+        assert_eq!(classify_prompt("[root@build ~]#"), Prompt::Shell);
+
+        // 噪声不该被误判成任何提示符。
+        assert_eq!(classify_prompt(""), Prompt::Unknown);
+        assert_eq!(classify_prompt("building target ... done"), Prompt::Unknown);
+    }
+
+    #[test]
+    fn shell_detection_requires_at_for_hash_prompt() {
+        // `#` 结尾：只有带 @ 的才算 shell，否则是设备 CLI。
+        assert!(is_shell_prompt("[root@build ~]#"));
+        assert!(!is_shell_prompt("[2Zsd4cWhQH:Standalone Mode]#"));
+        assert!(!is_shell_prompt("Demo#"));
+        // `$` 结尾一律算 shell。
+        assert!(is_shell_prompt("[test@Demo ~]$"));
+        assert!(is_shell_prompt("$"));
     }
 }

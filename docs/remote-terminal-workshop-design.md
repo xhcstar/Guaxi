@@ -155,10 +155,18 @@ UI 约定（全页统一）：
 
 **为什么不是"exec 一条命令"**：这类 CLI 是**交互式**的。所以核心是一个**提示符状态机 + 常驻 shell 会话**（`DeviceCli`），并且要区分两种目标：
 
-- **设备 CLI**（`>` / `#` / `(config)#`）：要 `enable` 进特权、`config terminal force` 进配置模式；导入证书/私钥时设备进入"粘贴 PEM"状态（提示 `use "..." on a single line`，以单独一行 `...` 结束）；还有 yes/no 确认与 `--more--` 分页。
-- **Linux shell**（编译机，`user@host:~$` / `[root@host ~]#`）：**没有** enable/config 这一套，命令就是 shell 命令。若任务带 PEM 且命令里有 heredoc（`<<EOF`），就把 PEM 当作 heredoc 内容喂进去。
+- **设备 CLI**（手册 Chapter1 的四种提示符）：
+  | 级别 | 提示符 | 说明 |
+  |---|---|---|
+  | User | `Demo>` | 只能跑 ping/traceroute 之类 |
+  | Enable | `Demo#` | `enable` + 口令进入（口令可空）。真实设备会把模式也显示出来，如 `[2Zsd4cWhQH:Standalone Mode]#` |
+  | Config | `Demo(config)#` | `config terminal`（老脚本用 `config terminal force`，两个都试） |
+  | 调试（Linux shell） | `[test@Demo ~]$` | 带 `@` 且以 `$` 结尾 |
 
-会话类型可选 `自动探测 / 设备 CLI / Linux shell`。自动探测发一个空行看回显的提示符：`$` 结尾、或 `#` 结尾但带 `@host:`／方括号的判为 shell（Linux root 的 `#` 也是 `#`，靠这个区分），否则按设备 CLI。
+  导入证书/私钥时设备进入"粘贴 PEM"状态（提示 `use "..." on a single line`，以单独一行 `...` 结束）；还有 yes/no 确认与 `--more--` 分页。
+- **Linux shell**（编译机调试级别）：**没有** enable/config 这一套，命令就是 shell 命令。若任务带 PEM 且命令里有 heredoc（`<<EOF`），就把 PEM 当作 heredoc 内容喂进去。
+
+会话类型可选 `自动探测 / 设备 CLI / Linux shell`。**shell 的判据只看 `@` 与 `$`**：`$` 结尾算 shell；`#` 结尾只有带 `@`（`[root@host ~]#`）才算 shell —— 曾经用"`[...]` 开头的 `#` 也算 shell"去兼容 `[root@host ~]#`，结果把设备自己的 `[主机:模式]#` 误判成 shell、跳过 `config terminal` 直接报"无法进入配置模式"，现在有单测守着这条。
 
 - **自动应答**：设备模式下 `type yes to continue` / `continue:` / `yes/no` / `are you sure` → 发 `YES`；两种模式都处理 `--more--`／`:` 分页。**shell 模式不代答 yes/no**（`rm -i`、`apt` 之类的确认不该被代替），但 sudo 口令提示会喂一次 enable 口令。
 - **结果判定**：设备 CLI 用硬失败标志（`invalid input`/`syntax error`/`access denied`/`failed`/`unknown command`…）+ 幂等成功标志（`already exists`/`not configured`…）+ **"交互未完成"守卫**；把"脱字符指示"收窄为**整行只有 `^` `~`** 才算失败，避免命令里出现 `^`（正则/路径）被误判。
