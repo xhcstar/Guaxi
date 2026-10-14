@@ -9318,6 +9318,12 @@ onBeforeUnmount(() => {
 })
 
 defineExpose({
+  // 父组件（探索者面由 v-if 渲染，离开即销毁）在切模式 / 切 tab 前调用，
+  // 把仍处于防抖中的 cell 内容编辑与整篇 markdown 回推落地，避免未落地的编辑随组件销毁一起丢失。
+  flushPendingMarkdown(reason = 'parent-request') {
+    flushPendingCellContentEdits()
+    flushNotebookMarkdown(`parent-flush:${reason}`)
+  },
   insertTemplateContent(content) {
     return insertTemplateContentIntoNotebook(content)
   },

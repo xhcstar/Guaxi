@@ -11938,18 +11938,18 @@ const ensureSecondaryEditor = () => {
   }
   secondaryMonacoLinkLikeDecorDisposable = installMonacoLinkLikeDecorations(secondaryEditor, { tag: 'right' });
 
-  const model = secondaryEditor.getModel();
-  if (model) {
-    model.onDidChangeContent(() => {
+  // 与左栏同理：内容监听挂在 editor 上，避免右栏换绑 model 后 rawContent/tab 停止同步。
+  if (secondaryEditor) {
+    secondaryEditor.onDidChangeModelContent(() => {
       if (!secondaryEditor) return;
-      if (model.getLanguageId() !== 'markdown') return;
+      if (secondaryEditor.getModel()?.getLanguageId() !== 'markdown') return;
       scheduleRefreshPythonCellManagers()
     });
 
     // 设计说明：
     // 1. 分栏模式下右侧源编辑器的内容需要尽快同步到 rawContent / tab store，预览区才能及时拿到最新文本。
     // 2. 这里把“轻量同步”与“重分析/高亮”拆开：前者即时执行，后者仍保留防抖，避免每个按键都做重活。
-    model.onDidChangeContent(() => {
+    secondaryEditor.onDidChangeModelContent(() => {
       if (sourceEditorProgrammaticSyncDepth > 0) {
         logger.debug('[Editor] skip right source immediate sync during programmatic update', {
           suppressedDepth: sourceEditorProgrammaticSyncDepth,
@@ -11959,13 +11959,15 @@ const ensureSecondaryEditor = () => {
       if (fileTreeStore.activeRegion !== 'right') return
       const path = getEditorBoundTabPath(secondaryEditor)
       if (!path) return
-      const content = model.getValue()
+      const rightModel = secondaryEditor.getModel()
+      if (!rightModel) return
+      const content = rightModel.getValue()
       rawContent.value = content
       fileTreeStore.updateTabContent(path, content)
       void retainVsCodeTextModel({
-        resource: model.uri,
+        resource: rightModel.uri,
         content,
-        languageId: model.getLanguageId?.() || 'plaintext',
+        languageId: rightModel.getLanguageId?.() || 'plaintext',
         owner: SECONDARY_EDITOR_VSCODE_MODEL_OWNER,
         reason: 'secondary-editor-immediate-sync',
         skipModelContentSync: true,
@@ -11976,7 +11978,7 @@ const ensureSecondaryEditor = () => {
       })
     })
 
-    model.onDidChangeContent(
+    secondaryEditor.onDidChangeModelContent(
       debounce(() => {
         if (sourceEditorProgrammaticSyncDepth > 0) {
           logger.debug('[Editor] skip right source debounced sync during programmatic update', {
@@ -11987,7 +11989,9 @@ const ensureSecondaryEditor = () => {
         if (fileTreeStore.activeRegion !== 'right') return;
         const path = getEditorBoundTabPath(secondaryEditor);
         if (!path) return;
-        const content = model.getValue();
+        const rightModel = secondaryEditor.getModel();
+        if (!rightModel) return;
+        const content = rightModel.getValue();
         rawContent.value = content;
         fileTreeStore.updateTabContent(path, content);
         updateGitDecorations();
@@ -12492,20 +12496,29 @@ const setupEditorListeners = () => {
     } catch { /* noop */ }
   });
 
-  const model = editor.getModel();
-  if (model) {
-    model.onDidChangeContent(() => {
+  // 监听一律挂在 editor 上（见下方说明），所以不再依赖 setup 时刻是否已经绑定 model：
+  // 应用刚启动、还没打开文件时 getModel() 可能是 null 或 Monaco 的默认 model，
+  // 真正的文件 model 是之后绑定上去的，那时再注册就来不及了。
+  if (editor) {
+    // 设计说明（关键 · 对应“预览渲染缺未保存内容 / 切回编辑模式内容被换回旧内容”）：
+    // 内容监听必须挂在 editor 上，不能挂在 editor.getModel() 的那一份 model 上。切文件时编辑器会
+    // setModel 换绑到另一份 model（resolveEditorModelUri 按文件路径建模），挂在旧 model 上的监听
+    // 从此不再触发：rawContent / tab 内容停在切文件那一刻，预览渲染的是旧内容，而切回编辑模式时
+    // syncSourceEditorContent 又拿这份旧 rawContent 覆盖正在编辑的 model——未保存内容就是这样丢的。
+    editor.onDidChangeModelContent(() => {
       if (!editor) return;
-      if (model.getLanguageId() !== 'markdown') return;
+      if (editor.getModel()?.getLanguageId() !== 'markdown') return;
       scheduleRefreshPythonCellManagers()
     });
 
-    model.onDidChangeContent((ev) => {
+    editor.onDidChangeModelContent((ev) => {
       if (!editor) return;
       if (tableInsertAutoFormatBusy) return;
       if (tableAutoFormatBusy) return;
       if (Date.now() - lastTableToolbarInsertAt < 450) return;
-      if (model.getLanguageId() !== 'markdown') return;
+      const activeModel = editor.getModel();
+      if (!activeModel) return;
+      if (activeModel.getLanguageId() !== 'markdown') return;
       const selection = editor.getSelection();
       if (!selection) return;
       if (!ev?.changes?.length) return;
@@ -12535,7 +12548,13 @@ const setupEditorListeners = () => {
           return;
         }
 
-        const targetLine = Math.min(model.getLineCount(), ctx.startLine + 2);
+        const liveModel = editor.getModel();
+        if (!liveModel) {
+          tableInsertAutoFormatBusy = false;
+          return;
+        }
+
+        const targetLine = Math.min(liveModel.getLineCount(), ctx.startLine + 2);
         editor.setPosition(new monaco.Position(targetLine, 3));
         updateTableToolbar();
         formatTable();
@@ -12566,21 +12585,24 @@ const setupEditorListeners = () => {
     // 设计说明：
     // 1. 预览区依赖 rawContent 变化触发刷新，如果这里也等重分析 debounce 完成，分栏模式就会出现“输入后明显滞后”的问题。
     // 2. 因此源文本与 tab 脏数据先即时同步，问题分析、语法高亮和 Git 装饰继续防抖，兼顾响应速度与整体开销。
-    model.onDidChangeContent(() => {
+    editor.onDidChangeModelContent(() => {
+      if (!editor) return;
       if (sourceEditorProgrammaticSyncDepth > 0) {
         logger.debug('[Editor] skip source immediate sync during programmatic update', {
           suppressedDepth: sourceEditorProgrammaticSyncDepth,
         });
         return;
       }
-      const content = model.getValue();
+      const liveModel = editor.getModel();
+      if (!liveModel) return;
+      const content = liveModel.getValue();
       const path = getEditorBoundTabPath(editor);
       rawContent.value = content;
       if (path) fileTreeStore.updateTabContent(path, content);
       scheduleLatexPreviewRebuild();
       scheduleOrgPreviewRefresh();
       scheduleOrgValidate();
-      if (isLargeDocument(model)) {
+      if (isLargeDocument(liveModel)) {
         syncPrimaryOverlayIdle();
       } else {
         syncPrimaryOverlayNow();
@@ -12605,7 +12627,7 @@ const setupEditorListeners = () => {
     };
     const scheduleWholeDocAnalysisIdle = debounce(runWholeDocAnalysis, LARGE_DOC_IDLE_ANALYSIS_DELAY_MS);
 
-    model.onDidChangeContent(
+    editor.onDidChangeModelContent(
       debounce(() => {
         if (sourceEditorProgrammaticSyncDepth > 0) {
           logger.debug('[Editor] skip source debounced sync during programmatic update', {
@@ -12613,12 +12635,14 @@ const setupEditorListeners = () => {
           });
           return;
         }
-        const content = model.getValue();
-        const languageId = model.getLanguageId() || 'plaintext';
-        const largeDoc = isLargeDocument(model);
+        const liveModel = editor.getModel();
+        if (!liveModel) return;
+        const content = liveModel.getValue();
+        const languageId = liveModel.getLanguageId() || 'plaintext';
+        const largeDoc = isLargeDocument(liveModel);
         if (!largeDoc) {
           // 常规文件：保持原行为，每次防抖做问题分析 + git 装饰。
-          const problems = analyzeContentForProblems(content, model, languageId);
+          const problems = analyzeContentForProblems(content, liveModel, languageId);
           editorStore.setProblems(problems);
         }
         rawContent.value = content;
@@ -15267,6 +15291,8 @@ const activateRegion = (region) => {
 
 // 更新编辑器内容
 const toggleEditorSurfaceMode = () => {
+  // 先把当前面的防抖编辑落地，再切换（探索者面是 v-if，切走后组件销毁，未落地的编辑会丢）。
+  flushActiveSurfaceDrafts('toggle-editor-surface')
   if (!canUseNotebookSurface.value) {
     editorSurfaceMode.value = 'source'
     return
@@ -15799,7 +15825,9 @@ const saveContent = async () => {
     throw new Error(messageText);
   }
 
-  flushPythonCellDrafts()
+  // 写盘前先把当前交互面防抖中的编辑落地：否则探索者面刚敲的内容还没回推到 rawContent/tab，
+  // 这一笔写盘写下去的却是旧内容（导出前那次保存也走这里）。
+  flushActiveSurfaceDrafts('save-content')
   const targetEditor = getActiveEditor();
   const content =
     previewMode.value === 'realtime' && realtimeVditor
@@ -16556,6 +16584,18 @@ const flushPythonCellDrafts = () => {
   if (typeof nextRight === 'string' && secondaryEditor?.getModel?.() && nextRight !== secondaryEditor.getModel().getValue()) {
     getPythonManagerApplyMarkdown(secondaryEditor)(nextRight, { action: 'pycell-flush-right' })
   }
+}
+
+// 离开当前交互面之前，把“还在防抖中”的编辑落地。
+// 探索者面（GuaxiNotebookView）由 v-if 渲染，离开即销毁：它的 cell 内容编辑有 250ms 防抖、
+// 整篇 markdown 回推有 140ms 防抖，父组件若不主动 flush，这些编辑会随组件销毁直接丢失，
+// 而随后 syncSourceEditorContent 只会拿旧的 rawContent 回填源编辑器——表现就是“切回编辑模式，文字被换回旧内容”。
+const flushActiveSurfaceDrafts = (reason = 'unknown') => {
+  if (editorSurfaceMode.value === 'notebook' && canUseNotebookSurface.value) {
+    notebookViewRef.value?.flushPendingMarkdown?.(reason)
+    return
+  }
+  flushPythonCellDrafts()
 }
 
 const normalizeConsoleOutput = (res) => {
@@ -21569,7 +21609,7 @@ const syncPreviewSurfaceForActiveFile = (reason = 'unknown') => {
 
 // 监听文件选择
 watch(selectedFile, async (newFile, oldFile) => {
-  flushPythonCellDrafts()
+  flushActiveSurfaceDrafts('selected-file-changed')
   const previousPreviewPath = oldFile?.path || lastSelectedFilePath.value || ''
   if (previousPreviewPath) {
     cancelMarkdownPreviewScrollSaveTimer('selected-file-before-change')
@@ -22044,6 +22084,9 @@ const setHomePreviewModeKeySafe = (key, { registerDoc = true } = {}) => {
 
 const handlePreviewModeSelect = async (key) => {
   const desiredKey = normalizeHomePreviewModeKey(key);
+  // 先落地当前交互面里防抖中的编辑，再保存阅读位置：否则换面后 rawContent 还是旧内容，
+  // 源编辑器会用旧内容回填（探索者 → 编辑模式最容易丢最后几次输入）。
+  flushActiveSurfaceDrafts('preview-mode-select');
   // 切模式前按“当前真正激活的界面”保存阅读位置（编辑/预览/分屏/探索者各自的载体不同）。
   saveActiveReadPositionForMode('preview-mode-select-before-change');
   logger.info('[Editor] handlePreviewModeSelect', {
@@ -22533,7 +22576,9 @@ const getParentDirectoryPath = (path) => {
 }
 
 const getCurrentExportMarkdown = () => {
-  flushPythonCellDrafts()
+  // 导出/渲染前先把当前交互面防抖中的编辑落地：探索者面未落地时，这里读到的是旧 markdown，
+  // 导出结果就会缺少最后几次输入。
+  flushActiveSurfaceDrafts('export-markdown')
   const targetEditor = getActiveEditor()
   if (previewMode.value === 'realtime' && realtimeVditor) {
     return realtimeVditor.getValue()
@@ -23789,7 +23834,7 @@ const handleTabMenuSelect = async (key) => {
 };
 
 const switchTab = (path, region) => {
-  flushPythonCellDrafts()
+  flushActiveSurfaceDrafts('switch-tab')
   const targetRegion = region || 'left';
   const currentPreviewPath = targetRegion === fileTreeStore.activeRegion
     ? (fileTreeStore.activeTab || selectedFile.value?.path || '')
@@ -23828,7 +23873,7 @@ const switchTab = (path, region) => {
 };
 
 const closeTab = async (path, region) => {
-  flushPythonCellDrafts()
+  flushActiveSurfaceDrafts('close-tab')
   const targetRegion = region || 'left';
   cancelMarkdownPreviewScrollSaveTimer('close-tab-before-change');
   cancelExplorerScrollSaveTimer('close-tab-before-change');
