@@ -1350,7 +1350,7 @@ fn detect_speaker_hint(text: &str) -> &'static str {
     }
 }
 
-fn derive_pause_after_ms(text: &str) -> u32 {
+pub(crate) fn derive_pause_after_ms(text: &str) -> u32 {
     let trimmed = text.trim_end();
     if trimmed.ends_with("……") || trimmed.ends_with('…') {
         520
@@ -2874,7 +2874,7 @@ fn normalize_book_punctuation(text: &str) -> String {
         .replace("……", "…")
 }
 
-fn split_into_sentences_pro(text: &str) -> Vec<String> {
+pub(crate) fn split_into_sentences_pro(text: &str) -> Vec<String> {
     let chars = text.chars().collect::<Vec<_>>();
     let mut out = Vec::new();
     let mut current = String::new();
@@ -2923,7 +2923,7 @@ fn split_into_sentences_pro(text: &str) -> Vec<String> {
     out
 }
 
-fn split_oversized_sentence_pro(sentence: &str, base_limit: usize) -> Vec<String> {
+pub(crate) fn split_oversized_sentence_pro(sentence: &str, base_limit: usize) -> Vec<String> {
     let trimmed = sentence.trim();
     if trimmed.is_empty() {
         return Vec::new();

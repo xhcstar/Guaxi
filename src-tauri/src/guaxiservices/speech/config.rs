@@ -148,6 +148,8 @@ pub fn resolve_tts_engine_config(
         }),
         provider: normalize_provider(provider),
         num_threads: default_num_threads(),
+        // 默认共用同一个实例；需要独立实例的调用方用 `with_instance` 换标签。
+        instance_tag: String::new(),
     })
 }
 

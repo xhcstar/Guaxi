@@ -121,7 +121,7 @@ pub(crate) fn resample_linear(input: &[f32], from_rate: i32, to_rate: i32) -> Ve
 
 /// 取出 WAV 的 `fmt ` 与 `data` 两个 chunk 载荷。
 /// 遍历 chunk 而不是按固定偏移读，才能容忍 `LIST`/`fact` 等前置块。
-fn parse_wav_chunks(bytes: &[u8]) -> Result<(Vec<u8>, Vec<u8>), String> {
+pub(crate) fn parse_wav_chunks(bytes: &[u8]) -> Result<(Vec<u8>, Vec<u8>), String> {
     if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
         return Err("不是有效的 WAV 文件".to_string());
     }

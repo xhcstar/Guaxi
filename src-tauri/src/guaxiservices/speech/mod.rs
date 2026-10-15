@@ -17,7 +17,7 @@ pub use config::{
     normalize_provider, resolve_asr_engine_config, resolve_punctuation_model,
     resolve_tts_engine_config, resolve_whisper_onnx_engine_config,
 };
-pub use tts::TtsEngineConfig;
+pub use tts::{release_engine, TtsEngineConfig};
 pub use wav::AudioBuffer;
 
 /// 合成语音，返回 PCM16 WAV 字节。

@@ -71,15 +71,24 @@
           :class="{ 'translating': isTranslating }">
           <n-icon :component="LanguageOutline" />
         </button>
+
+        <!-- 逐句朗读：读当前章节，换章会自动接着读下一章 -->
+        <button class="toggle-readaloud" :class="{ 'reading-aloud': readAloudPlaying }" @click="toggleReadAloud"
+          :title="readAloudTitle">
+          <n-icon :component="readAloudPlaying ? PauseOutline : PlayOutline" />
+        </button>
       </div>
     </div>
 
     <!-- 主内容区 -->
     <div class="epub-main-content">
       <div class="epub-left-wrapper" v-show="viewMode !== 'full-right' || showOutline" :style="{ width: leftPanelWidth }">
-        <div v-if="showOutline" class="outline-panel-wrapper outline-panel-wrapper-left" @click.stop>
+        <div v-if="showOutline" class="outline-panel-wrapper outline-panel-wrapper-left" @click.stop
+          :style="{ flexBasis: `${outlineWidth}px` }">
           <GuaxiOutline />
         </div>
+        <!-- 大纲列宽拖拽把手：原来那条"分隔线"只是 border-right，没有任何拖拽处理 -->
+        <div v-if="showOutline" class="outline-resize-handle" @mousedown.prevent="startOutlineResize"></div>
 
         <!-- 左侧epub文档预览区域 -->
         <div class="epub-source-panel guaxi-reader-scrollbar" v-show="viewMode !== 'full-right'">
@@ -142,7 +151,7 @@
           </button>
         </div>
 
-        <div v-if="selectionToolbarVisible" class="selection-toolbar"
+        <div v-if="selectionToolbarVisible" ref="selectionToolbarEl" class="selection-toolbar"
           :style="{ top: `${selectionToolbarTop}px`, left: `${selectionToolbarLeft}px` }" @mousedown.stop @click.stop @dblclick.stop>
           <div class="selection-toolbar-actions">
             <button class="selection-tool-btn" type="button" title="翻译" :disabled="selectionBusy || !selectionText"
@@ -164,6 +173,13 @@
             <button class="selection-tool-btn" type="button" title="插入笔记" :disabled="selectionBusy || !selectionInsertText"
               @click="insertSelectionResult">
               <n-icon :component="AddOutline" />
+            </button>
+            <!-- 朗读所选文本：播放中再点即停 -->
+            <button class="selection-tool-btn" type="button"
+              :title="selectionReadAloudBusy ? '停止朗读' : '朗读所选文本'"
+              :disabled="(!selectionText || selectionBusy) && !selectionReadAloudBusy"
+              @click="toggleSelectionReadAloud(normalizeSelectionTextForLanguageTasks(selectionText))">
+              <n-icon :component="selectionReadAloudBusy ? StopCircleOutline : VolumeHighOutline" />
             </button>
           </div>
         </div>
@@ -324,8 +340,14 @@ import {
   LibraryOutline,
   SearchOutline,
   ChatbubbleEllipsesOutline,
-  ColorWandOutline
+  ColorWandOutline,
+  PauseOutline,
+  PlayOutline,
+  StopCircleOutline,
+  VolumeHighOutline
 } from '@vicons/ionicons5'
+import { useReaderReadAloud } from '../../composables/useReaderReadAloud'
+import { useSelectionReadAloud } from '../../composables/useSelectionReadAloud'
 
 const logger = createLogger('GuaxiEpubReader')
 // 组件属性定义
@@ -541,9 +563,20 @@ let notesRenderToken = 0;
 const selectionToolbarVisible = ref(false)
 const selectionToolbarTop = ref(0)
 const selectionToolbarLeft = ref(0)
+const selectionToolbarEl = ref(null)
+// 划词浮动条的外框尺寸，与 .selection-toolbar 的 max-content 对应（6 个 34px 按钮 + 5×6px 间距 + 12px 内边距 + 2px 边框）。
+// 只用于首帧兜底：真实宽度在 nextTick 里按 offsetWidth 实测修正。
+const SELECTION_TOOLBAR_WIDTH = 248
+const SELECTION_TOOLBAR_HEIGHT = 42
 const selectionText = ref('')
 const selectionBusy = ref(false)
 const selectionInsertText = ref('')
+// 划词朗读：一小段文本走一次性合成，与逐句朗读共用引擎但**不同实例**，互不阻塞。
+// 浮动条一关就停止（否则工具栏没了、声音还在响，用户没有停止入口）。
+const { busy: selectionReadAloudBusy, toggle: toggleSelectionReadAloud } = useSelectionReadAloud({
+  visible: selectionToolbarVisible,
+  message,
+})
 const showAssistant = ref(false)
 
 const selectionTranslatePanelVisible = ref(false)
@@ -688,6 +721,37 @@ const isResizing = ref(false);
 const startX = ref(0);
 const startLeftWidth = ref(0);
 const leftPanelWidth = ref('50%');
+// 大纲列宽：可拖拽调整。原来写死 260px，且那条"分隔线"只是 border-right，没有任何拖拽处理。
+const outlineWidth = ref(260);
+const isOutlineResizing = ref(false);
+let outlineStartX = 0;
+let outlineStartWidth = 0;
+
+const startOutlineResize = (e) => {
+  isOutlineResizing.value = true;
+  outlineStartX = e.clientX;
+  outlineStartWidth = outlineWidth.value;
+  document.addEventListener('mousemove', handleOutlineResizeMove);
+  document.addEventListener('mouseup', stopOutlineResize);
+  document.body.style.cursor = 'col-resize';
+  document.body.style.userSelect = 'none';
+};
+
+const handleOutlineResizeMove = (e) => {
+  if (!isOutlineResizing.value) return;
+  const container = document.querySelector('.epub-main-content');
+  // 上限同时受窗口宽度约束，避免把正文挤没
+  const maxWidth = Math.min(560, (container?.offsetWidth || window.innerWidth) * 0.6);
+  outlineWidth.value = Math.max(160, Math.min(outlineStartWidth + e.clientX - outlineStartX, maxWidth));
+};
+
+const stopOutlineResize = () => {
+  isOutlineResizing.value = false;
+  document.removeEventListener('mousemove', handleOutlineResizeMove);
+  document.removeEventListener('mouseup', stopOutlineResize);
+  document.body.style.cursor = '';
+  document.body.style.userSelect = '';
+};
 const currentPage = ref(1)
 const totalPages = ref(0)
 const jumpPage = ref(1)
@@ -701,6 +765,10 @@ const readerStorageKey = computed(() => {
 });
 
 const pendingRestorePage = ref(null);
+// 朗读断点（第几段）。与页码一起存进阅读状态，重开文档即从这一句继续。
+const speechIndex = ref(-1);
+// 当前章节的 epub.js contents：正文在 iframe 里，朗读要用它的 document/window。
+const epubReadAloudContents = ref(null);
 const isHydrated = ref(false);
 
 const bookmarks = ref([]);
@@ -730,7 +798,7 @@ const loadReaderState = () => {
   try {
     const raw = localStorage.getItem(readerStorageKey.value);
     if (!raw) {
-      return { lastPage: 1, bookmarks: [], totalReadingMs: 0, completedAt: null, completedReadingMs: null };
+      return { lastPage: 1, bookmarks: [], totalReadingMs: 0, completedAt: null, completedReadingMs: null, speechIndex: -1 };
     }
     const parsed = JSON.parse(raw);
     return {
@@ -743,6 +811,8 @@ const loadReaderState = () => {
       totalReadingMs: Math.max(0, Number(parsed.totalReadingMs) || 0),
       completedAt: parsed.completedAt || null,
       completedReadingMs: parsed.completedReadingMs == null ? null : Math.max(0, Number(parsed.completedReadingMs) || 0),
+      // 0 是合法段号，不能用 `||` 兜底（会被当成假值丢掉）。
+      speechIndex: Number.isFinite(Number(parsed.speechIndex)) ? Math.max(-1, Math.trunc(Number(parsed.speechIndex))) : -1,
     };
   } catch {
     return { lastPage: 1, bookmarks: [], totalReadingMs: 0, completedAt: null, completedReadingMs: null };
@@ -760,6 +830,7 @@ const persistReaderState = () => {
         totalReadingMs: totalReadingMs.value,
         completedAt: completedAt.value,
         completedReadingMs: completedReadingMs.value,
+        speechIndex: speechIndex.value,
       })
     );
   } catch {
@@ -950,8 +1021,7 @@ const handleEpubContentsSelectionMouseUp = (contents) => {
   selectionText.value = text
 
   const pad = 8
-  const toolWidth = 140
-  const toolHeight = 40
+  const toolHeight = SELECTION_TOOLBAR_HEIGHT
 
   const absTop = iframeRect.top + rect.top
   const absBottom = iframeRect.top + rect.bottom
@@ -960,12 +1030,19 @@ const handleEpubContentsSelectionMouseUp = (contents) => {
   let top = absTop - toolHeight - 8
   if (top < pad) top = absBottom + 8
 
-  let left = absLeft
-  left = Math.max(pad, Math.min(left, window.innerWidth - toolWidth - pad))
-
   selectionToolbarTop.value = Math.round(top)
-  selectionToolbarLeft.value = Math.round(left)
+  selectionToolbarLeft.value = Math.round(
+    Math.max(pad, Math.min(absLeft, window.innerWidth - SELECTION_TOOLBAR_WIDTH - pad))
+  )
   selectionToolbarVisible.value = true
+  // 元素是刚创建的，下一帧按实测宽度把右边界夹取修准（常量只兜首帧）
+  nextTick(() => {
+    const el = selectionToolbarEl.value
+    if (!el) return
+    selectionToolbarLeft.value = Math.round(
+      Math.max(pad, Math.min(absLeft, window.innerWidth - el.offsetWidth - pad))
+    )
+  })
 }
 
 const bindEpubSelectionListeners = (rendition) => {
@@ -979,6 +1056,14 @@ const bindEpubSelectionListeners = (rendition) => {
 
     doc.addEventListener('mousedown', () => closeSelectionToolbar(), true)
     doc.addEventListener('mouseup', () => handleEpubContentsSelectionMouseUp(contents), true)
+
+    // 朗读：换章后正文节点整个换掉了，文本索引要重建；正在读就把这一章接着读下去，
+    // 而不是停下来让用户再点一次播放。
+    epubReadAloudContents.value = contents
+    readAloud.invalidate()
+    if (readAloud.isPlaying.value) {
+      readAloud.restart()
+    }
   }
 }
 
@@ -1128,10 +1213,23 @@ const applyZoomLevel = () => {
     return;
   }
 
+  // iframe 文档拿不到 App.vue 的全局样式，也继承不到 :root 上的 CSS 变量，
+  // 所以这里把当前主题的选区色解析成实际值再注入。
+  const selectionBg = getComputedStyle(document.documentElement)
+    .getPropertyValue('--guaxi-selection-bg').trim() || 'rgba(0, 122, 204, 0.26)';
   epubInstance.value.rendition.themes.register('zoom', {
     'body': {
       'zoom': `${zoomLevel.value * 100}%`,
       'line-height': '1.5' // 确保行高一致
+    },
+    '::selection': {
+      'background': selectionBg,
+      'color': 'inherit'
+    },
+    // 朗读高亮同样得注入 iframe：全局样式到不了 iframe 文档里
+    '::highlight(guaxi-readaloud)': {
+      'background-color': 'var(--guaxi-search-hit-active-bg, rgba(234, 92, 0, 0.5))',
+      'color': 'inherit'
     }
   });
   epubInstance.value.rendition.themes.select('zoom');
@@ -1426,7 +1524,43 @@ async function processNoteImage(imgElement) {
   }
 }
 
+// ───────────────────────── 逐句朗读 ─────────────────────────
+// EPUB 的正文在 iframe 里：root / scrollRoot / win 都取自当前章节的 contents，
+// 高亮也必须用 iframe 自己的 CSS.highlights（它挂在每个 window 上），样式由
+// applyZoomLevel 里的 epub.js 主题注入到 iframe 文档（那里同时注入了 ::selection）。
+const readAloud = useReaderReadAloud({
+  getContext: () => {
+    const contents = epubReadAloudContents.value
+    const doc = contents?.document instanceof Document ? contents.document : null
+    return {
+      root: doc ? doc.body : markdownContainer.value,
+      scrollRoot: doc ? doc.scrollingElement : markdownPanel.value,
+      win: contents?.window || window,
+      doc,
+    }
+  },
+  getIdentity: () => ({ library: props.library || '', fileName: props.fileName || '' }),
+  speechIndex,
+  onIndexChange: () => persistReaderState(),
+  message,
+  ownerLabel: 'GuaxiEpubReader',
+})
+
+const readAloudPlaying = readAloud.isPlaying
+const readAloudBuffering = readAloud.isBuffering
+const readAloudTitle = readAloud.title
+const toggleReadAloud = () => readAloud.toggle()
+const seekReadAloudAtPoint = (event) => readAloud.seekAtPoint(event)
+
+onBeforeUnmount(() => {
+  readAloud.clearHighlight()
+})
+
 const handleMarkdownClickAlt = async (e) => {
+  // 朗读进行中：点正文任意位置就从那一句开始读（"点哪读哪"，不用记快捷键）
+  if ((readAloudPlaying.value || readAloudBuffering.value) && seekReadAloudAtPoint(e)) {
+    return
+  }
   if (!e?.altKey) return
   return handleMarkdownClick(e)
 }
@@ -2154,18 +2288,25 @@ const handleSelectionMouseUp = () => {
   selectionText.value = text
 
   const pad = 8
-  const toolWidth = 140
-  const toolHeight = 40
+  const toolHeight = SELECTION_TOOLBAR_HEIGHT
 
   let top = rect.top - toolHeight - 8
   if (top < pad) top = rect.bottom + 8
 
-  let left = rect.left
-  left = Math.max(pad, Math.min(left, window.innerWidth - toolWidth - pad))
-
+  const left = rect.left
   selectionToolbarTop.value = Math.round(top)
-  selectionToolbarLeft.value = Math.round(left)
+  selectionToolbarLeft.value = Math.round(
+    Math.max(pad, Math.min(left, window.innerWidth - SELECTION_TOOLBAR_WIDTH - pad))
+  )
   selectionToolbarVisible.value = true
+  // 元素是刚创建的，下一帧按实测宽度把右边界夹取修准（常量只兜首帧）
+  nextTick(() => {
+    const el = selectionToolbarEl.value
+    if (!el) return
+    selectionToolbarLeft.value = Math.round(
+      Math.max(pad, Math.min(left, window.innerWidth - el.offsetWidth - pad))
+    )
+  })
 }
 
 const handleGlobalMouseDown = (e) => {
@@ -3612,6 +3753,28 @@ button:disabled {
   box-shadow: 0 2px 8px rgba(121, 80, 242, 0.3);
 }
 
+/* 朗读按钮：播放中换成醒目的橙色，让"正在朗读"一眼可辨 */
+.toggle-readaloud {
+  background-color: #0ca678;
+  color: white;
+  border: 1px solid #099268;
+  transition: all 0.2s;
+}
+
+.toggle-readaloud:hover {
+  background-color: #099268;
+  box-shadow: 0 2px 8px rgba(12, 166, 120, 0.3);
+}
+
+.toggle-readaloud.reading-aloud {
+  background-color: #f76707;
+  border-color: #e8590c;
+}
+
+.toggle-readaloud.reading-aloud:hover {
+  background-color: #e8590c;
+}
+
 /* 主内容区样式 */
 .epub-main-content {
   flex: 1;
@@ -3704,13 +3867,28 @@ button:disabled {
 }
 
 .outline-panel-wrapper {
-  flex: 0 0 260px;
-  min-width: 260px;
+  /* 宽度由内联 flex-basis（outlineWidth）决定，可拖拽调整 */
+  flex: 0 0 auto;
+  min-width: 0;
   height: 100%;
   overflow: hidden;
-  border-right: 1px solid var(--guaxi-border);
   box-sizing: border-box;
   background-color: var(--guaxi-panel-bg);
+}
+
+/* 大纲与正文之间的拖拽把手，兼作分隔线（原来只有一条拖不动的 border-right） */
+.outline-resize-handle {
+  flex: 0 0 3px;
+  width: 3px;
+  height: 100%;
+  background-color: var(--guaxi-border);
+  cursor: col-resize;
+  z-index: 10;
+  transition: background-color 0.2s;
+}
+
+.outline-resize-handle:hover {
+  background-color: #4acadb;
 }
 
 /* Markdown内容样式 */
@@ -3824,8 +4002,10 @@ button:disabled {
   align-items: stretch;
   gap: 6px;
   padding: 6px;
-  width: 320px;
+  /* 按图标内容收缩：固定 320px 会在按钮右侧留一大段空条 */
+  width: max-content;
   max-width: calc(100vw - 16px);
+  box-sizing: border-box;
   background: var(--guaxi-panel-bg);
   border: 1px solid var(--guaxi-border);
   border-radius: 10px;

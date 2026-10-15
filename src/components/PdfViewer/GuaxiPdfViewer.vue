@@ -336,14 +336,10 @@ const engineKind = computed(() => {
   return /typst/i.test(props.titleLabel) ? 'typst' : 'latex'
 })
 
-const zoomIn = (reason = 'manual') => {
-  zoom.value = Math.min(MAX_ZOOM, +(zoom.value + 0.1).toFixed(2))
-  logger.debug('PDF放大', { reason, zoom: zoom.value })
-}
-const zoomOut = (reason = 'manual') => {
-  zoom.value = Math.max(MIN_ZOOM, +(zoom.value - 0.1).toFixed(2))
-  logger.debug('PDF缩小', { reason, zoom: zoom.value })
-}
+// 手动缩放一律走 setZoom：它要顺带退出自适应模式，否则在 fit-mode='width' 下点了 +/− 之后，
+// 任何一次容器尺寸变化都会把用户的缩放顶回适合宽度。
+const zoomIn = (reason = 'manual') => setZoom(zoom.value + 0.1, reason)
+const zoomOut = (reason = 'manual') => setZoom(zoom.value - 0.1, reason)
 const setZoom = (z, reason = 'manual') => {
   // 手动缩放即退出自适应模式：否则之后任何一次窗口尺寸变化都会把用户的缩放顶掉。
   activeFitMode.value = ''
@@ -1651,7 +1647,11 @@ onBeforeUnmount(() => {
   cursor: text;
   user-select: text;
 }
-.gpv__text-seg::selection { background: rgba(97, 175, 239, 0.4); }
+/* PDF 文字层是透明叠层，选区色沿用主题变量，和阅读器/编辑器保持一致。 */
+.gpv__text-seg::selection {
+  background: var(--guaxi-selection-strong-bg, rgba(97, 175, 239, 0.4));
+  color: inherit;
+}
 
 .gpv__search-rect {
   position: absolute;

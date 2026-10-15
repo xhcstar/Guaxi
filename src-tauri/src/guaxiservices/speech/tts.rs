@@ -44,19 +44,41 @@ pub struct TtsEngineConfig {
     /// "cpu" | "cuda" | "coreml" | "directml" | "trt" | ...
     pub provider: String,
     pub num_threads: i32,
+    /// 实例标签，参与缓存键，用来给不同**用途**分配互不阻塞的引擎实例。
+    ///
+    /// 为什么需要：`synthesize` 在整段生成期间一直持有实例锁，所以共用实例的调用方
+    /// 会互相排队——逐句朗读这种长任务会把划词朗读、有声书堵在门外。换一个标签就拿到
+    /// 独立实例。默认空串，即与改动前"大家共用同一个实例"的行为完全一致。
+    pub instance_tag: String,
 }
 
 impl TtsEngineConfig {
+    /// 派生一份"用途隔离 + 线程预算"的副本：只换实例标签与线程数，模型等参数不动。
+    pub fn with_instance(mut self, tag: &str, num_threads: i32) -> Self {
+        self.instance_tag = tag.to_string();
+        self.num_threads = num_threads.max(1);
+        self
+    }
+
     /// 缓存键：任一参数变化都必须换实例，否则会拿旧模型合成。
     fn cache_key(&self) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        format!("{:?}|{}|{}|{}", self.model, self.rule_fsts.is_some(), self.provider, self.num_threads)
-            .hash(&mut hasher);
+        format!(
+            "{:?}|{}|{}|{}|{}",
+            self.model, self.rule_fsts.is_some(), self.provider, self.num_threads, self.instance_tag
+        )
+        .hash(&mut hasher);
         if let Some(rule_fsts) = &self.rule_fsts {
             rule_fsts.hash(&mut hasher);
         }
         hasher.finish()
     }
+}
+
+/// 卸载该配置对应的引擎实例，回收其占用的内存（会话结束时用，见 `EngineCache::release`）。
+/// 返回是否真的卸载了。
+pub fn release_engine(config: &TtsEngineConfig) -> bool {
+    TTS_CACHE.release(config.cache_key())
 }
 
 /// 合成一段文本。模型已加载过则直接复用，不再重新读盘。

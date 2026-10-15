@@ -48,7 +48,7 @@ fn sleep_retry() {
     thread::sleep(Duration::from_millis(FILE_OP_RETRY_DELAY_MS));
 }
 
-fn remove_dir_all_with_retry(path: &Path) -> Result<(), String> {
+pub(crate) fn remove_dir_all_with_retry(path: &Path) -> Result<(), String> {
     if !path.exists() {
         return Ok(());
     }

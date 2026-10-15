@@ -456,6 +456,34 @@ pre::-webkit-scrollbar-track,
   white-space: pre-wrap;
 }
 
+/* 设计说明（阅读器里的划词选中）：此前各阅读器的正文选区只有浏览器默认的浅色，
+   和编辑器预览不统一。这里复用与编辑器同一组 --guaxi-selection-* 变量。
+   EPUB 的正文渲染在 iframe 里，全局样式到不了，另由 epub.js 主题注入（见 GuaxiEpubReader）。 */
+.markdown-content ::selection,
+.text-preview-container ::selection,
+.docx ::selection,
+.docx-wrapper ::selection {
+  background: var(--guaxi-selection-bg, rgba(0, 122, 204, 0.26));
+  color: inherit;
+}
+
+/* 代码块底色本来就深，选区再半透明就看不出来了，这里单独加深一档。 */
+.markdown-content pre ::selection,
+.markdown-content pre::selection,
+.markdown-content code ::selection,
+.markdown-content code::selection {
+  background: var(--guaxi-selection-strong-bg, rgba(0, 122, 204, 0.4));
+  color: inherit;
+}
+
+/* 逐句朗读的当前句高亮。用 CSS Custom Highlight 而非包裹 DOM：正文是 v-html 渲染的，
+   插节点会破坏链接/代码块/锚点。整块规则必须放在全局样式里——::highlight() 没有可挂载的
+   元素，写在 scoped 里会被加上 data-v 属性而彻底失效。 */
+::highlight(guaxi-readaloud) {
+  background-color: var(--guaxi-search-hit-active-bg, rgba(234, 92, 0, 0.5));
+  color: inherit;
+}
+
 .markdown-content {
   width: 100%;
   box-sizing: border-box;
