@@ -1309,6 +1309,7 @@
         @export="handleLatexExport"
         @ready="handleLatexPreviewReady"
         @reverse-jump="handlePreviewReverseJump"
+        @scroll="handlePdfPreviewScroll"
       />
 
       <GuaxiOrgTaskPreview
@@ -1336,6 +1337,7 @@
         @batch-delete="handleBatchDeleteOrgBlock"
         @batch-move="handleBatchMoveOrgBlock"
         @batch-create="handleBatchCreateOrgBlock"
+        @scroll="handleOrgPreviewScroll"
       />
 
       <transition name="python-console-slide">
@@ -2889,22 +2891,41 @@ const captureMarkdownPreviewReadPosition = (path, reason = 'unknown') => {
   return true;
 };
 
+// 设计说明（关键 · 对应“.org / .tex / .typ 的预览、分屏切 page 回来停在开头”）：
+// org 与 PDF 面板的比例是按需从 DOM 读的，容器被 v-show 隐藏、或被 KeepAlive 移出文档时读数恒为 0。
+// 两个面板用 null 表示“这会儿量不到”，这里必须据此放弃保存，否则会把缓存里的正确位置改成开头。
+const readPreviewPaneScrollRatio = (viewer) => {
+  if (typeof viewer?.scrollRatio !== 'function') return null;
+  const raw = viewer.scrollRatio();
+  if (raw === null || raw === undefined) return null;
+  const ratio = Number(raw);
+  return Number.isFinite(ratio) ? ratio : null;
+};
+
 const captureOrgPreviewReadPosition = (path, reason = 'unknown') => {
   const normalizedPath = normalizePreviewReadPath(path || selectedFile.value?.path || fileTreeStore.activeTab);
   const viewer = orgPreviewRef.value;
   if (!normalizedPath || !viewer?.scrollRatio) return false;
 
-  const ratio = Number(viewer.scrollRatio());
+  const ratio = readPreviewPaneScrollRatio(viewer);
+  if (ratio === null) {
+    logger.debug('[PreviewReadPosition] skip org save because the pane is not laid out', {
+      reason,
+      path: normalizedPath,
+    });
+    return false;
+  }
+
   rememberPreviewReadPosition({
     kind: 'org',
     path: normalizedPath,
-    scrollRatio: Number.isFinite(ratio) ? ratio : 0,
+    scrollRatio: ratio,
   });
 
   logger.debug('[PreviewReadPosition] saved org position', {
     reason,
     path: normalizedPath,
-    ratio: Number.isFinite(ratio) ? +ratio.toFixed(4) : 0,
+    ratio: +ratio.toFixed(4),
   });
   return true;
 };
@@ -2914,17 +2935,25 @@ const capturePdfPreviewReadPosition = (path, reason = 'unknown') => {
   const viewer = latexPreviewRef.value;
   if (!normalizedPath || !viewer?.scrollRatio) return false;
 
-  const ratio = Number(viewer.scrollRatio());
+  const ratio = readPreviewPaneScrollRatio(viewer);
+  if (ratio === null) {
+    logger.debug('[PreviewReadPosition] skip pdf save because the pane is not laid out', {
+      reason,
+      path: normalizedPath,
+    });
+    return false;
+  }
+
   rememberPreviewReadPosition({
     kind: 'pdf',
     path: normalizedPath,
-    scrollRatio: Number.isFinite(ratio) ? ratio : 0,
+    scrollRatio: ratio,
   });
 
   logger.debug('[PreviewReadPosition] saved pdf position', {
     reason,
     path: normalizedPath,
-    ratio: Number.isFinite(ratio) ? +ratio.toFixed(4) : 0,
+    ratio: +ratio.toFixed(4),
   });
   return true;
 };
@@ -3403,6 +3432,47 @@ const handleMarkdownPreviewScroll = () => {
     saveActivePreviewReadPosition('markdown-scroll', pathSnapshot);
   }, 180);
 };
+
+// 设计说明（对应“.org / .tex / .typ 的预览、分屏切 page 回来停在开头”）：
+// 1. 这三类文档没有 Markdown 那条“编辑区 = 预览区”的滚动监听，阅读位置此前只在切模式 / 切页面
+//    那一刻采样一次；而切页面时 KeepAlive 已经把 DOM 移出文档，采样只能得到 0
+//    （见 readPreviewPaneScrollRatio），缓存里于是永远只剩“文档开头”。
+// 2. 这里照搬 Markdown 预览的做法：面板滚动时防抖记录当前比例，任何时刻缓存里都是最新阅读位置，
+//    离开页面就不再需要、也无法临时读数。
+const PREVIEW_PANE_SCROLL_SAVE_DELAY_MS = 180;
+let previewPaneScrollSaveTimer = null;
+
+const cancelPreviewPaneScrollSaveTimer = (reason = 'unknown') => {
+  if (!previewPaneScrollSaveTimer) return;
+  window.clearTimeout(previewPaneScrollSaveTimer);
+  previewPaneScrollSaveTimer = null;
+  logger.debug('[PreviewReadPosition] cancelled pending pane scroll save', { reason });
+};
+
+const schedulePreviewPaneScrollSave = (capture, reason) => {
+  if (suppressPreviewReadPositionSave) return;
+  const pathSnapshot = normalizePreviewReadPath(selectedFile.value?.path || fileTreeStore.activeTab || '');
+  if (!pathSnapshot) return;
+
+  cancelPreviewPaneScrollSaveTimer(`${reason}:rescheduled`);
+  previewPaneScrollSaveTimer = window.setTimeout(() => {
+    previewPaneScrollSaveTimer = null;
+    if (suppressPreviewReadPositionSave || suppressReadPositionSaveDepth > 0) return;
+    const currentPath = normalizePreviewReadPath(selectedFile.value?.path || fileTreeStore.activeTab || '');
+    if (currentPath !== pathSnapshot) {
+      logger.debug('[PreviewReadPosition] skip delayed pane save because active file changed', {
+        reason,
+        pathSnapshot,
+        currentPath,
+      });
+      return;
+    }
+    capture(pathSnapshot, reason);
+  }, PREVIEW_PANE_SCROLL_SAVE_DELAY_MS);
+};
+
+const handlePdfPreviewScroll = () => schedulePreviewPaneScrollSave(capturePdfPreviewReadPosition, 'pdf-preview-scroll');
+const handleOrgPreviewScroll = () => schedulePreviewPaneScrollSave(captureOrgPreviewReadPosition, 'org-preview-scroll');
 
 const EDITOR_READ_POSITION_CACHE_LIMIT = 160;
 const editorReadPositionCache = new Map();
@@ -24721,13 +24791,18 @@ onActivated(async () => {
 
 // 设计说明（对应“切到其它页面再切回主页要保住阅读位置”）：
 // GuaxiHomePage 被 GuaxiMainLayout 的 KeepAlive 缓存，离开时组件不会 unmount，onUnmounted 不会触发。
-// 因此必须在 onDeactivated（此时 DOM 仍在布局中、读数有效）抓取位置，否则切回来只剩默认视口。
+// 因此必须在 onDeactivated 抓取位置，否则切回来只剩默认视口。
+// 注意：本钩子触发时 KeepAlive 已经把 DOM 移进游离的 storageContainer（Vue 先 move 再 invokeArrayFns），
+// 任何“从 DOM 读数”的载体在这里都读不到真实值：Markdown 靠 @scroll 持续记录，
+// org / PDF 面板靠各自的滚动监听（见 schedulePreviewPaneScrollSave），
+// 编辑器则走 Monaco 自己的 viewState —— 三者都不依赖这次读数。
 onDeactivated(() => {
   const path = selectedFile.value?.path || fileTreeStore.activeTab || '';
   if (!path) return;
   const saved = saveActiveReadPositionForMode('home-page-deactivated', path);
   cancelMarkdownPreviewScrollSaveTimer('home-page-deactivated');
   cancelExplorerScrollSaveTimer('home-page-deactivated');
+  cancelPreviewPaneScrollSaveTimer('home-page-deactivated');
   logger.info('[ReadPosition] captured on home page deactivate', {
     path: normalizePreviewReadPath(path),
     modeKey: getHomePreviewModeKeyFromState(),
@@ -24744,6 +24819,7 @@ onUnmounted(() => {
   }
   cancelMarkdownPreviewScrollSaveTimer('editor-unmount')
   cancelExplorerScrollSaveTimer('editor-unmount')
+  cancelPreviewPaneScrollSaveTimer('editor-unmount')
   if (latexBuildDebounceTimer) {
     clearTimeout(latexBuildDebounceTimer)
     latexBuildDebounceTimer = null

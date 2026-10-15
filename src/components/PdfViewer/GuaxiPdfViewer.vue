@@ -247,6 +247,7 @@ const emit = defineEmits([
   'selection',
   'ready',
   'highlight-click',
+  'scroll',
 ])
 
 const MIN_ZOOM = 0.4
@@ -563,9 +564,13 @@ const emitOutline = async () => {
   emit('outline', list)
 }
 
+// 设计说明：返回 null 表示“此刻量不到”，而不是 0。
+// 容器被 v-show 隐藏、或被 KeepAlive 移出文档时，scrollTop 恒为 0；宿主正是拿这个比例按文件
+// 记住阅读位置，把量不到的 0 当成真实读数，就会把正确位置覆盖成文档开头。
 const scrollRatio = () => {
   const el = bodyRef.value
-  if (!el || el.scrollHeight <= el.clientHeight) return 0
+  if (!el || !el.isConnected || el.clientHeight <= 0) return null
+  if (el.scrollHeight <= el.clientHeight) return 0
   return el.scrollTop / (el.scrollHeight - el.clientHeight)
 }
 const restoreScroll = (ratio) => {
@@ -616,6 +621,8 @@ let renderSettleTimer = null
 
 const onScroll = () => {
   markReaderScrollbarActive(bodyRef.value)
+  // 宿主（GuaxiEditor）据此按源文件记住 PDF 阅读位置，见 GuaxiLatexPreview 的转发。
+  emit('scroll')
   if (!scrollRaf) {
     scrollRaf = requestAnimationFrame(() => {
       scrollRaf = 0

@@ -71,7 +71,7 @@
     </div>
 
     <div class="otp-main">
-      <div class="otp-body" ref="bodyRef">
+      <div class="otp-body" ref="bodyRef" @scroll.passive="emit('scroll')">
         <div v-if="diagnostics.length" class="otp-diags">
           <div class="otp-diags-head">⚠ 语法检查（{{ errorCount }} 错误 / {{ warnCount }} 警告）</div>
           <div v-for="(d, di) in diagnostics" :key="di" class="otp-diag" :class="d.severity" @click="$emit('goto-line', d.line)">
@@ -347,7 +347,7 @@ const props = defineProps({
   activeBlockLine: { type: Number, default: 0 },
   canBack: { type: Boolean, default: false },
 })
-const emit = defineEmits(['rebuild', 'open-notes', 'goto-line', 'apply-block', 'copy-block', 'export-block', 'back', 'create-block', 'delete-block', 'insert-block', 'move-block', 'batch-delete', 'batch-move', 'batch-create'])
+const emit = defineEmits(['rebuild', 'open-notes', 'goto-line', 'apply-block', 'copy-block', 'export-block', 'back', 'create-block', 'delete-block', 'insert-block', 'move-block', 'batch-delete', 'batch-move', 'batch-create', 'scroll'])
 
 const blocks = computed(() => parseTaskBlocks(props.content, props.category))
 // ── 视图过滤器：仅影响显示，不修改源文件或移动逻辑 ──
@@ -712,9 +712,12 @@ const clampScrollRatio = (value) => {
   if (!Number.isFinite(n)) return 0
   return Math.min(1, Math.max(0, n))
 }
+// 设计说明：返回 null 表示“此刻量不到”，而不是 0。
+// 容器被 v-show 隐藏、或被 KeepAlive 移出文档时 scrollTop 恒为 0；宿主正是拿这个比例按文件
+// 记住阅读位置，把量不到的 0 当成真实读数，就会把正确位置覆盖成文档开头。
 const scrollRatio = () => {
   const el = bodyRef.value
-  if (!el) return 0
+  if (!el || !el.isConnected || el.clientHeight <= 0) return null
   const scrollableHeight = Math.max(0, el.scrollHeight - el.clientHeight)
   return scrollableHeight > 0 ? clampScrollRatio(el.scrollTop / scrollableHeight) : 0
 }

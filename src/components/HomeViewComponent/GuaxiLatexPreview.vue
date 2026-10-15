@@ -15,6 +15,7 @@
     @rebuild="$emit('rebuild')"
     @ready="(p) => $emit('ready', p)"
     @reverse-jump="(p) => $emit('reverse-jump', p)"
+    @scroll="$emit('scroll')"
   />
 </template>
 
@@ -36,7 +37,7 @@ const props = defineProps({
   titleLabel: { type: String, default: 'LaTeX' },
 })
 
-defineEmits(['export', 'rebuild', 'ready', 'reverse-jump'])
+defineEmits(['export', 'rebuild', 'ready', 'reverse-jump', 'scroll'])
 
 const viewerRef = ref(null)
 
@@ -56,7 +57,8 @@ const forwardSync = (payload) => viewerRef.value?.forwardSync(payload)
 const goToPage = (page, options) => viewerRef.value?.goToPage(page, options)
 // 设计说明：GuaxiEditor 会按源文件记住 PDF 阅读位置；这里继续转发基础阅读器的比例滚动 API，
 // 避免编辑器层需要知道 PDF 阅读器内部 DOM 结构。
-const scrollRatio = () => viewerRef.value?.scrollRatio?.() ?? 0
+// null 必须原样透传（容器不可测量），不能兜底成 0：宿主会把它当成“用户就在文档开头”存下来。
+const scrollRatio = () => viewerRef.value?.scrollRatio?.() ?? null
 const restoreScroll = (ratio) => viewerRef.value?.restoreScroll?.(ratio)
 // 跨帧重试到布局稳定的落位：切换文件后恢复阅读位置时用，避免文档刚打开、容器还没有
 // 可滚动高度时只落一帧被 clamp 到顶部。
