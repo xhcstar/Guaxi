@@ -825,7 +825,7 @@
 
 <script setup>
 import { computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
+import { invoke, convertFileSrc } from '@tauri-apps/api/core'
 import { Icon } from '@iconify/vue'
 import speechIcon from '@iconify-icons/lucide/messages-square'
 import badgeInfoIcon from '@iconify-icons/lucide/badge-info'
@@ -1538,26 +1538,10 @@ const normalizeLocalFilePath = (rawPath) => {
   return cleaned
 }
 
-const mediaObjectUrlCache = new Map()
-const inferMediaMimeByPath = (rawPath) => {
-  const path = String(rawPath || '').toLowerCase()
-  if (path.endsWith('.mp3')) return 'audio/mpeg'
-  if (path.endsWith('.m4a') || path.endsWith('.mp4')) return 'audio/mp4'
-  if (path.endsWith('.wav')) return 'audio/wav'
-  if (path.endsWith('.flac')) return 'audio/flac'
-  if (path.endsWith('.ogg')) return 'audio/ogg'
-  return 'application/octet-stream'
-}
-
 const inferMediaKindByPath = (rawPath) => {
   const path = String(rawPath || '').toLowerCase()
   if (/\.(mp4|webm|mov|mkv|m4v)(\?|#|$)/.test(path)) return 'video'
   return 'audio'
-}
-
-const readBinaryFileByPath = async (path) => {
-  const { readFile } = await import('@tauri-apps/plugin-fs')
-  return readFile(path)
 }
 
 const bytesFromBase64 = (base64Text) => {
@@ -1596,62 +1580,15 @@ const resolvePlayableMediaSrc = async (raw) => {
       : cleaned
   )
   if (/^[a-zA-Z]:[\\/]/.test(localPath) || localPath.startsWith('/')) {
-    if (mediaObjectUrlCache.has(localPath)) {
-      console.info('[LangLearning] media:use-cached-blob', {
-        localPath,
-        protocol: String(mediaObjectUrlCache.get(localPath) || '').split(':')[0],
-      })
-      return mediaObjectUrlCache.get(localPath)
-    }
-    try {
-      const payload = await invoke('language_learning_read_local_media_base64', { path: localPath })
-      const mime = String(payload?.mime || inferMediaMimeByPath(localPath))
-      const bytes = bytesFromBase64(payload?.base64 || '')
-      if (bytes.length) {
-        const blob = new Blob([bytes], { type: mime })
-        const objectUrl = URL.createObjectURL(blob)
-        mediaObjectUrlCache.set(localPath, objectUrl)
-        console.info('[LangLearning] media:local-backend-blob-created', {
-          localPath,
-          mime,
-          bytes: bytes.byteLength,
-          protocol: objectUrl.split(':')[0],
-        })
-        return objectUrl
-      }
-    } catch (err) {
-      console.warn('[LangLearning] media:local-backend-read-failed', {
-        localPath,
-        error: String(err?.message || err || ''),
-      })
-    }
-    const candidates = [
+    // 本地音频交给 asset 协议直接读盘：整文件 base64 过 IPC 会为每集播客
+    // 凭空造出一份等长字符串、在主线程逐字符解码，还要常驻一个 Blob。
+    const assetUrl = convertFileSrc(localPath)
+    console.info('[LangLearning] media:local-asset-url', {
       localPath,
-      localPath.replace(/\//g, '\\'),
-      localPath.replace(/\\/g, '/'),
-    ]
-    for (const candidate of candidates) {
-      try {
-        const bytes = await readBinaryFileByPath(candidate)
-        const blob = new Blob([bytes], { type: inferMediaMimeByPath(candidate) })
-        const objectUrl = URL.createObjectURL(blob)
-        mediaObjectUrlCache.set(localPath, objectUrl)
-        console.info('[LangLearning] media:local-fs-blob-created', {
-          localPath,
-          candidate,
-          bytes: bytes.byteLength,
-          protocol: objectUrl.split(':')[0],
-        })
-        return objectUrl
-      } catch (err) {
-        console.warn('[LangLearning] media:local-fs-read-failed', {
-          localPath,
-          candidate,
-          error: String(err?.message || err || ''),
-        })
-      }
-    }
-    return ''
+      sourceKind: inferMediaKindByPath(localPath),
+      protocol: String(assetUrl || '').split(':')[0],
+    })
+    return assetUrl
   }
   return cleaned
 }
@@ -4017,10 +3954,6 @@ onBeforeUnmount(() => {
     learningPronounceAudio = null
   }
   stopRandomCardAudio()
-  mediaObjectUrlCache.forEach((url) => {
-    URL.revokeObjectURL(url)
-  })
-  mediaObjectUrlCache.clear()
   if (syncQueueHideTimer) {
     window.clearTimeout(syncQueueHideTimer)
     syncQueueHideTimer = 0

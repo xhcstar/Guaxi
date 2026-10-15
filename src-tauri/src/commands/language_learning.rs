@@ -3375,21 +3375,16 @@ async fn run_whisper_and_build_sync_json(local_audio: &Path, entry_dir: &Path, t
         Some("en"),
     )?;
     let using_gpu = config.provider != "cpu";
-    // 音频整段读进内存交给识别器，不再落中间文件。
-    // 只支持 WAV——这与原来 whisper-cli 的输入限制是一致的，不是能力退步。
-    let wav_bytes = fs::read(local_audio)
-        .map_err(|e| format!("读取听力音频失败（{}）：{}", local_audio.display(), e))?;
     info!(
         audio = %local_audio.display(),
         model_dir = %model_dir.display(),
         provider = config.provider.as_str(),
-        bytes = wav_bytes.len(),
         "language_learning whisper in-process"
     );
-    let parsed = match crate::guaxiservices::speech::transcribe_segments_wav(
+    let parsed = match crate::guaxiservices::speech::transcribe_segments_audio(
         config,
         vad_model.clone(),
-        wav_bytes,
+        local_audio.to_path_buf(),
     )
     .await
     {
@@ -3403,11 +3398,13 @@ async fn run_whisper_and_build_sync_json(local_audio: &Path, entry_dir: &Path, t
                 "cpu",
                 Some("en"),
             )?;
-            let wav_bytes = fs::read(local_audio)
-                .map_err(|e| format!("读取听力音频失败（{}）：{}", local_audio.display(), e))?;
-            crate::guaxiservices::speech::transcribe_segments_wav(cpu_config, vad_model, wav_bytes)
-                .await
-                .map_err(|e| format!("转写失败：{}", e))?
+            crate::guaxiservices::speech::transcribe_segments_audio(
+                cpu_config,
+                vad_model,
+                local_audio.to_path_buf(),
+            )
+            .await
+            .map_err(|e| format!("转写失败：{}", e))?
         }
         Err(err) => return Err(format!("转写失败：{}", err)),
     };

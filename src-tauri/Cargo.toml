@@ -270,6 +270,7 @@ time = "0.3"
 # 启用需本机装好 Tongsuo 并 OPENSSL_DIR 指向它（勿开 vendored，否则会拉官方 OpenSSL）。
 openssl = { version = "0.10", optional = true }
 openssl-sys = { version = "0.9", optional = true }
+symphonia = { version = "0.6.1", features = ["mp3", "mpa", "aac", "isomp4"] }
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", default-features = false, features = ["windows-native"] }

@@ -7,6 +7,7 @@
 pub mod asr;
 pub mod cache;
 pub mod config;
+pub mod decode;
 pub mod punct;
 pub mod tts;
 pub mod wav;
@@ -52,13 +53,16 @@ pub async fn transcribe_wav(config: AsrEngineConfig, wav_bytes: Vec<u8>) -> Resu
 }
 
 /// 用 VAD 切段后逐段识别，返回带时间轴的分段（语言学习用）。
-pub async fn transcribe_segments_wav(
+///
+/// 入参是音频文件路径，容器由 `decode` 自动识别：采集来的听力多是 mp3/m4a，
+/// 早先这里直接按 WAV 解析，播客类资源全部解不开。
+pub async fn transcribe_segments_audio(
     config: AsrEngineConfig,
     vad_model: std::path::PathBuf,
-    wav_bytes: Vec<u8>,
+    audio_path: std::path::PathBuf,
 ) -> Result<Vec<AsrSegment>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let audio = AudioBuffer::decode_to_mono(&wav_bytes, asr::ASR_SAMPLE_RATE)?;
+        let audio = decode::decode_file_to_mono(&audio_path, asr::ASR_SAMPLE_RATE)?;
         asr::transcribe_segments_with_vad(&vad_model, &config, &audio.samples)
     })
     .await

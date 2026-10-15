@@ -16,10 +16,13 @@ use super::tts::{TtsEngineConfig, TtsModel};
 /// 默认线程数：语音推理是纯计算，给足核数即可。
 /// 注意 sherpa 的 CLI 默认是 1 线程，进程内调用要显式给值才不会退化成单核。
 fn default_num_threads() -> i32 {
+    // 上限留余量：推理是整核跑的，吃满所有逻辑核会拖慢界面。
+    // 但 8 对现在的多核机器过于保守——长音频转写（听力同步一集就是十几分钟）
+    // 是纯 CPU 瓶颈，核没用满就是白等，所以放宽到 16 这一档。
     std::thread::available_parallelism()
         .map(|value| value.get() as i32)
         .unwrap_or(4)
-        .clamp(1, 8)
+        .clamp(1, 16)
 }
 
 /// 解析 `utils/...` 这类随包资源路径（含 bundle 解压与 debug 回退），

@@ -101,7 +101,7 @@ impl AudioBuffer {
 }
 
 /// 线性插值重采样。语音识别对轻微的音质损失不敏感，不值得为此引入重采样库。
-fn resample_linear(input: &[f32], from_rate: i32, to_rate: i32) -> Vec<f32> {
+pub(crate) fn resample_linear(input: &[f32], from_rate: i32, to_rate: i32) -> Vec<f32> {
     if input.is_empty() || from_rate <= 0 || to_rate <= 0 || from_rate == to_rate {
         return input.to_vec();
     }
