@@ -1,10 +1,7 @@
 ﻿<template>
   <div class="tts-book-root" :class="{ 'tts-book-dark': isDarkTheme }">
     <header class="tts-header">
-      <div>
-        <p class="eyebrow">TTS Studio</p>
-        <h1 class="page-title">有声书转换</h1>
-      </div>
+      <h1 class="page-title">有声书转换</h1>
     </header>
 
     <section ref="layoutRef" class="tts-layout" :style="layoutVars">
@@ -259,12 +256,15 @@
       </div>
 
       <aside class="sidebar">
-        <n-card title="任务队列" size="small" class="tts-panel queue-panel">
+        <n-card title="任务" size="small" class="tts-panel queue-panel">
           <template #header-extra>
-            <span class="panel-extra">{{ totalTasks }} 项</span>
+            <n-tabs v-model:value="queueTab" type="segment" size="small" class="queue-tabs">
+              <n-tab name="active">进行中</n-tab>
+              <n-tab name="done">已完成</n-tab>
+            </n-tabs>
           </template>
 
-          <div class="queue-layout">
+          <div v-if="queueTab === 'active'" class="queue-layout">
             <div class="stat-grid">
               <div class="stat-card">
                 <div class="stat-label">总任务</div>
@@ -286,9 +286,9 @@
             </div>
 
             <div class="task-scroll">
-              <n-empty v-if="!tasks.length" description="暂无任务" />
+              <n-empty v-if="!activeTasks.length" description="暂无进行中的任务" />
               <n-list v-else bordered class="task-list">
-                <n-list-item v-for="task in tasks" :key="task.id">
+                <n-list-item v-for="task in activeTasks" :key="task.id">
                   <div class="queue-item">
                     <div class="task-main">
                       <div class="task-head">
@@ -387,6 +387,72 @@
               </n-list>
             </div>
           </div>
+
+          <div v-else class="records-layout">
+            <div class="records-toolbar">
+              <n-input v-model:value="recordQuery" clearable size="small" placeholder="搜索标题 / 文件名">
+                <template #prefix>
+                  <n-icon>
+                    <SearchOutline />
+                  </n-icon>
+                </template>
+              </n-input>
+              <n-tooltip>
+                <template #trigger>
+                  <n-button tertiary circle size="small" :loading="scanningRecords" @click="scanRecords">
+                    <template #icon>
+                      <n-icon>
+                        <RefreshOutline />
+                      </n-icon>
+                    </template>
+                  </n-button>
+                </template>
+                扫描输出目录，把已有的转换成果导入成记录
+              </n-tooltip>
+            </div>
+
+            <div class="records-scroll">
+              <n-empty v-if="!filteredRecords.length"
+                :description="records.length ? '没有匹配的记录' : '暂无已完成记录'" />
+              <n-list v-else bordered class="task-list">
+                <n-list-item v-for="record in filteredRecords" :key="record.id">
+                  <div class="queue-item">
+                    <div class="task-main">
+                      <div class="task-head">
+                        <n-tag size="small" type="success">已完成</n-tag>
+                        <span class="task-name">{{ record.title || record.file_name }}</span>
+                      </div>
+                      <div class="task-meta">{{ record.file_name }}</div>
+                      <div class="task-meta">{{ describeRecord(record) }}</div>
+                      <div class="task-meta">{{ formatFinishedAt(record.finished_at) }}</div>
+                    </div>
+
+                    <div class="queue-actions">
+                      <n-tooltip>
+                        <template #trigger>
+                          <n-button size="tiny" tertiary :disabled="!record.output_path" @click="playRecordAudio(record)">
+                            <template #icon>
+                              <n-icon>
+                                <PlayOutline />
+                              </n-icon>
+                            </template>
+                            音频
+                          </n-button>
+                        </template>
+                        在中间播放器中播放
+                      </n-tooltip>
+                      <n-button size="tiny" tertiary :disabled="!record.segment_json_path"
+                        @click="openOutput(record.segment_json_path)">JSON</n-button>
+                      <n-button size="tiny" tertiary :disabled="!record.chapter_output_paths?.length"
+                        @click="openOutput(record.chapter_output_paths[0])">章节</n-button>
+                      <n-button size="tiny" tertiary @click="renameRecord(record)">重命名</n-button>
+                      <n-button size="tiny" tertiary @click="deleteRecord(record)">删除</n-button>
+                    </div>
+                  </div>
+                </n-list-item>
+              </n-list>
+            </div>
+          </div>
         </n-card>
       </aside>
     </section>
@@ -394,12 +460,12 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { createDiscreteApi } from 'naive-ui'
+import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { createDiscreteApi, NInput } from 'naive-ui'
 import { open } from '@tauri-apps/plugin-dialog'
 import { invoke, convertFileSrc } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { AddOutline, DocumentTextOutline, FolderOpenOutline, LibraryOutline, PauseOutline, PlayCircleOutline, PlayOutline, StopOutline, TrashOutline } from '@vicons/ionicons5'
+import { AddOutline, DocumentTextOutline, FolderOpenOutline, LibraryOutline, PauseOutline, PlayCircleOutline, PlayOutline, RefreshOutline, SearchOutline, StopOutline, TrashOutline } from '@vicons/ionicons5'
 import { createLogger } from '../../../utils/logger'
 import { useSettingsStore } from '../../../stores/settingsStore'
 import { buildSpeakerOptions } from '../../../utils/ttsSpeakers'
@@ -441,6 +507,11 @@ const speakerId = ref(readUiState(UI.speakerId, null))
 const ttsSpeed = ref(readUiState(UI.speed, 1, within(0.2, 3)))
 const running = ref(false)
 const tasks = ref([])
+// 右栏的「进行中 / 已完成」切换。已完成那侧的数据来自后端的完成记录。
+const queueTab = ref('active')
+const records = ref([])
+const recordQuery = ref('')
+const scanningRecords = ref(false)
 const currentRunningTaskId = ref('')
 const audioRef = ref(null)
 const currentAudioSrc = ref('')
@@ -467,6 +538,16 @@ const totalTasks = computed(() => tasks.value.length)
 const successTasks = computed(() => tasks.value.filter((t) => t.status === 'success').length)
 const failedTasks = computed(() => tasks.value.filter((t) => t.status === 'error').length)
 const progressPercent = computed(() => totalTasks.value ? Math.round(tasks.value.reduce((sum, task) => sum + Number(task.progress || 0), 0) / totalTasks.value) : 0)
+// 「进行中」只列还没完成的：成功的那些已经归到「已完成」，两边都显示反而更难理解。
+// 统计卡仍按全部任务算，这样「成功」那一格才有意义。
+const activeTasks = computed(() => tasks.value.filter((task) => task.status !== 'success'))
+const filteredRecords = computed(() => {
+  const query = recordQuery.value.trim().toLowerCase()
+  if (!query) return records.value
+  return records.value.filter((record) =>
+    [record.title, record.file_name, record.source_file]
+      .some((field) => String(field || '').toLowerCase().includes(query)))
+})
 const hasPendingTasks = computed(() => tasks.value.some((task) => ['queued', 'paused'].includes(task.status)))
 const canStart = computed(() => !running.value && (selectedFiles.value.length > 0 || hasPendingTasks.value))
 const canPauseAll = computed(() => tasks.value.some((task) => task.status === 'running' || task.status === 'queued'))
@@ -1128,6 +1209,7 @@ for (const [key, source] of [
 onMounted(async () => {
   await loadTtsConfig()
   await loadSavedTasks()
+  await loadRecords()
   unlistenTtsBookProgress = await listen('tts_book_progress', (event) => applyTaskProgress(event.payload || {}))
 })
 
@@ -1212,6 +1294,8 @@ const startConvertQueue = async () => {
         message: Number(response?.chapter_count || 0) > 0 ? '转换完成，已输出音频、分段 JSON 和章节文件' : '转换完成，已输出音频和分段 JSON',
       })
       successCount += 1
+      // 该任务随后就归入「已完成」，刷新记录让它在那一页立刻可见。
+      void loadRecords()
     } catch (e) {
       const text = String(e?.message || e || '转换失败')
       if (text.includes('__TTS_BOOK_PAUSED__')) {
@@ -1320,6 +1404,127 @@ const openOutput = async (path) => {
     message.error('打开目录失败')
   }
 }
+
+// ───────────────────────── 已完成记录 ─────────────────────────
+
+const loadRecords = async () => {
+  try {
+    records.value = await invoke('tts_book_list_records')
+  } catch (e) {
+    logger.error('loadRecords failed:', e)
+  }
+}
+
+const scanRecords = async () => {
+  scanningRecords.value = true
+  try {
+    const imported = await invoke('tts_book_scan_records')
+    await loadRecords()
+    message.success(imported > 0 ? `已导入 ${imported} 条记录` : '没有发现可导入的产物')
+  } catch (e) {
+    logger.error('scanRecords failed:', e)
+    message.error(String(e?.message || e || '扫描失败'))
+  } finally {
+    scanningRecords.value = false
+  }
+}
+
+const renameRecord = (record) => {
+  let next = record.title || record.file_name || ''
+  dialog.info({
+    title: '重命名记录',
+    content: () =>
+      h(NInput, {
+        defaultValue: next,
+        placeholder: '新的标题（只改显示名，不动磁盘文件）',
+        onUpdateValue: (value) => {
+          next = value
+        },
+      }),
+    positiveText: '保存',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      const title = String(next || '').trim()
+      if (!title) {
+        message.warning('标题不能为空')
+        return false
+      }
+      try {
+        await invoke('tts_book_rename_record', { recordId: record.id, title })
+        await loadRecords()
+        message.success('已重命名')
+        return true
+      } catch (e) {
+        logger.error('renameRecord failed:', e)
+        message.error(String(e?.message || e || '重命名失败'))
+        return false
+      }
+    },
+  })
+}
+
+// 两个按钮都真的会删，所以把「连产物一起删」标成红色避免误点。
+// 与 ResourceHunterApp 的「删除记录 / 删除记录和文件」是同一套交互。
+const deleteRecord = (record) => {
+  dialog.warning({
+    title: '删除记录',
+    content: `「${record.title || record.file_name}」：可以只移除记录，或连同音频、分段 JSON、章节与分段缓存一起删掉（后者不可恢复）。`,
+    positiveText: '仅移除记录',
+    negativeText: '同时删除产物文件',
+    negativeButtonProps: { type: 'error', tertiary: true },
+    onPositiveClick: () => applyDeleteRecord(record, false),
+    onNegativeClick: () => applyDeleteRecord(record, true),
+  })
+}
+
+const applyDeleteRecord = async (record, removeFiles) => {
+  try {
+    await invoke('tts_book_delete_record', { recordId: record.id, removeFiles })
+    await loadRecords()
+    message.success(removeFiles ? '记录与产物已删除' : '记录已移除')
+  } catch (e) {
+    logger.error('deleteRecord failed:', e)
+    message.error(String(e?.message || e || '删除失败'))
+  }
+}
+
+const playRecordAudio = async (record) => {
+  if (!record.output_path) return
+  await loadPlayerSources({
+    audioPath: record.output_path,
+    jsonPath: record.segment_json_path || '',
+    title: record.title || record.file_name || basename(record.output_path),
+    taskId: record.id,
+  })
+}
+
+// 列表里那一行说明：分段数 · 字数 · 音色 · 体积
+const describeRecord = (record) => {
+  const parts = []
+  if (record.total_chunks) parts.push(`${record.total_chunks} 段`)
+  if (record.total_chars) parts.push(`${Number(record.total_chars).toLocaleString('zh-CN')} 字`)
+  if (record.speaker_id !== undefined && record.speaker_id !== null && String(record.speaker_id) !== '') {
+    parts.push(`Speaker ${record.speaker_id}`)
+  }
+  if (record.audio_bytes) parts.push(formatBytes(record.audio_bytes))
+  return parts.join(' · ')
+}
+
+const formatBytes = (bytes) => {
+  const value = Number(bytes || 0)
+  if (!value) return ''
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(0)} KB`
+  if (value < 1024 * 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MB`
+  return `${(value / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
+const formatFinishedAt = (value) => {
+  const text = String(value || '').trim()
+  if (!text) return ''
+  const date = new Date(text)
+  if (Number.isNaN(date.getTime())) return text
+  return date.toLocaleString('zh-CN', { hour12: false })
+}
 </script>
 
 <style scoped>
@@ -1338,6 +1543,7 @@ const openOutput = async (path) => {
   --tts-font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Microsoft YaHei', 'Courier New', monospace;
   --tts-resizer: rgba(76, 124, 168, 0.22);
   --tts-resizer-hover: rgba(76, 124, 168, 0.45);
+  --tts-header-h: 30px;
   height: 100%;
   min-height: 0;
   padding: 0;
@@ -1350,23 +1556,20 @@ const openOutput = async (path) => {
     linear-gradient(135deg, var(--tts-bg-1), var(--tts-bg-2));
 }
 
+// 顶栏高度写成变量：布局区要用 `calc(100% - var(--tts-header-h))` 跟它对齐，
+// 各写一份数字迟早会对不上。这里是「标题一条」的紧凑高度。
 .tts-header {
-  margin-bottom: 8px;
-  padding: 6px 10px 2px;
-}
-
-.eyebrow {
-  margin: 0 0 2px;
-  font-size: 11px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--tts-muted);
+  height: var(--tts-header-h);
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  box-sizing: border-box;
 }
 
 .page-title {
   margin: 0;
-  font-size: 22px;
-  line-height: 1.1;
+  font-size: 17px;
+  line-height: 1.2;
   color: var(--tts-title);
   font-weight: 700;
 }
@@ -1378,7 +1581,7 @@ const openOutput = async (path) => {
   align-items: stretch;
   min-width: 980px;
   width: 100%;
-  height: calc(100% - 52px);
+  height: calc(100% - var(--tts-header-h));
   min-height: 0;
 }
 
@@ -1414,6 +1617,7 @@ const openOutput = async (path) => {
 .panel-scroll,
 .files-scroll,
 .task-scroll,
+.records-scroll,
 .player-body {
   height: 100%;
   min-height: 0;
@@ -1426,6 +1630,27 @@ const openOutput = async (path) => {
   gap: 14px;
   height: 100%;
   min-height: 0;
+}
+
+/* 已完成那页：一行工具栏（检索 + 扫描）+ 占满剩余高度的列表。 */
+.records-layout {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  height: 100%;
+  min-height: 0;
+}
+
+.records-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+/* 分段开关放在卡片标题栏里，去掉自带的下外边距免得把标题撑高。 */
+.queue-tabs :deep(.n-tabs-nav) {
+  margin-bottom: 0;
 }
 
 .panel-block {

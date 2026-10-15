@@ -28,6 +28,8 @@ const TTS_BOOK_STATUS_PAUSED: &str = "paused";
 const TTS_BOOK_STATUS_STOPPED: &str = "stopped";
 const TTS_BOOK_STATUS_SUCCESS: &str = "success";
 const TTS_BOOK_INDEX_FILE: &str = "tts_book_resume_index.json";
+/// 已完成转换的记录索引（与续转索引分开：那份只留未完成任务）。
+const TTS_BOOK_RECORD_FILE: &str = "tts_book_records.json";
 const TTS_BOOK_PAUSE_SIGNAL: &str = "__TTS_BOOK_PAUSED__";
 const TTS_BOOK_STOP_SIGNAL: &str = "__TTS_BOOK_STOPPED__";
 
@@ -151,6 +153,9 @@ struct TtsBookResumeState {
     max_chunk_chars: usize,
     split_by_toc: bool,
     total_chunks: usize,
+    /// 清洗后可朗读的字符数。完成记录要用它做展示；`#[serde(default)]` 保证了
+    /// 旧的状态文件读进来是 0，不会因为新增字段而解析失败。
+    total_chars: usize,
     completed_chunks: Vec<usize>,
     completed_chapters: Vec<usize>,
     output_path: String,
@@ -162,6 +167,48 @@ struct TtsBookResumeState {
 #[serde(default)]
 struct TtsBookResumeIndex {
     tasks: Vec<String>,
+}
+
+/// 一条**已完成**转换的记录。
+///
+/// 为什么要单独存一份：`tts_book_list_saved_tasks` 只保留未完成任务（成功/终止的会被跳过），
+/// 于是转换一完成就没有任何地方能看到它了——既没法检索，也没法删。
+/// 完成时把元数据留一份，供管理界面列表/检索/打开/重命名/删除。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TtsBookRecord {
+    /// 任务标识（沿用 task_id）。
+    id: String,
+    /// 显示标题，可被用户重命名（只改这里，不动磁盘文件名）。
+    title: String,
+    file_name: String,
+    source_file: String,
+    output_dir: String,
+    /// 完整音频产物。
+    output_path: String,
+    segment_json_path: String,
+    chapter_output_paths: Vec<String>,
+    /// 该任务的分段缓存目录：内含成百上千个分段 WAV，是磁盘占用的大头，
+    /// 删除时需要精确回收，所以随记录一起存下来。
+    work_dir: String,
+    tts_model: String,
+    tts_mode_hint: String,
+    speaker_id: String,
+    speed: Option<f32>,
+    execution_provider: String,
+    max_chunk_chars: usize,
+    split_by_toc: bool,
+    total_chunks: usize,
+    total_chars: usize,
+    /// 完整音频字节数：列表展示与删除前提示用。
+    audio_bytes: u64,
+    /// 完成时间（RFC3339，UTC）。
+    finished_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+#[serde(default)]
+struct TtsBookRecordIndex {
+    records: Vec<TtsBookRecord>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -390,6 +437,8 @@ pub async fn tts_book_convert(
             cleaned_text_hash,
             max_chunk_chars,
             split_by_toc: request.split_by_toc,
+            // 转换完成时才填；这里只是新建状态。
+            total_chars: 0,
             total_chunks: chunks.len(),
             completed_chunks: Vec::new(),
             completed_chapters: Vec::new(),
@@ -859,7 +908,13 @@ pub async fn tts_book_convert(
     resume_state.last_message = completed_message;
     resume_state.progress = 100;
     resume_state.chapter_output_paths = chapter_output_paths.clone();
+    resume_state.total_chars = cleaned.chars().count();
     save_resume_state(&resume_state_path, &resume_state)?;
+    // 留一条完成记录供管理界面使用。写记录失败不该让一次已经成功的转换变成报错，
+    // 所以只记日志、不向上传播。
+    if let Err(error) = upsert_record(&resume_state, &work_dir) {
+        warn!(error = error.as_str(), "写入完成记录失败");
+    }
     unregister_resume_state(&resume_state_path)?;
     clear_task_control(&task_id);
 
@@ -902,6 +957,151 @@ pub fn tts_book_stop_all_tasks(task_ids: Vec<String>) -> Result<(), String> {
         set_task_control(&task_id, false, true)?;
     }
     Ok(())
+}
+
+// ───────────────────────── 已完成转换的记录管理 ─────────────────────────
+
+#[tauri::command]
+pub fn tts_book_list_records() -> Result<Vec<TtsBookRecord>, String> {
+    let mut index = load_record_index()?;
+    // 新完成的排前面：管理界面最关心刚转出来的那几本。
+    index.records.sort_by(|a, b| b.finished_at.cmp(&a.finished_at));
+    Ok(index.records)
+}
+
+#[tauri::command]
+pub fn tts_book_rename_record(record_id: String, title: String) -> Result<(), String> {
+    let trimmed = title.trim();
+    if trimmed.is_empty() {
+        return Err("标题不能为空".to_string());
+    }
+    let mut index = load_record_index()?;
+    let record = index
+        .records
+        .iter_mut()
+        .find(|record| record.id == record_id)
+        .ok_or_else(|| format!("找不到该记录：{}", record_id))?;
+    record.title = trimmed.to_string();
+    save_record_index(&index)
+}
+
+#[tauri::command]
+pub fn tts_book_delete_record(record_id: String, remove_files: bool) -> Result<(), String> {
+    let mut index = load_record_index()?;
+    let position = index
+        .records
+        .iter()
+        .position(|record| record.id == record_id)
+        .ok_or_else(|| format!("找不到该记录：{}", record_id))?;
+    let record = index.records.remove(position);
+    save_record_index(&index)?;
+
+    // 记录已经摘掉了，产物删失败也不该把这次调用整体判失败——
+    // 否则用户会以为记录还在，实际上它已经没了。
+    if remove_files {
+        delete_record_artifacts(&record)?;
+    }
+    Ok(())
+}
+
+/// 扫描输出目录，把历史上已经转换好的产物导入为记录。
+///
+/// 为什么要回填：完成记录是后加的，在此之前转换完的任务只在磁盘上留下一份
+/// `resume_state.json`（工作目录从不清理）。不导入的话，用户已有的成果在管理界面里
+/// 等于不存在。按 task_id / 产物路径去重，可以反复执行。
+#[tauri::command]
+pub fn tts_book_scan_records() -> Result<usize, String> {
+    let root = settingview::get_tts_config().output_dir.trim().to_string();
+    if root.is_empty() {
+        return Err("尚未配置输出目录，无法扫描".to_string());
+    }
+    let root = PathBuf::from(root);
+    if !root.is_dir() {
+        return Err(format!("输出目录不存在：{}", root.display()));
+    }
+
+    let mut index = load_record_index()?;
+    let before = index.records.len();
+
+    // 布局是 {output_dir}/{stem}/{stem}_tts_work_*/resume_state.json，扫两层就够。
+    for task_entry in fs::read_dir(&root)
+        .map_err(|e| format!("读取输出目录失败: {}", e))?
+        .flatten()
+    {
+        let task_dir = task_entry.path();
+        if !task_dir.is_dir() {
+            continue;
+        }
+        let Ok(work_entries) = fs::read_dir(&task_dir) else {
+            continue;
+        };
+        for work_entry in work_entries.flatten() {
+            let work_dir = work_entry.path();
+            if !work_dir.is_dir() {
+                continue;
+            }
+            let state_path = work_dir.join("resume_state.json");
+            if !state_path.is_file() {
+                continue;
+            }
+            let Ok(state) = load_resume_state(&state_path) else {
+                continue;
+            };
+            if state.status != TTS_BOOK_STATUS_SUCCESS {
+                continue;
+            }
+            upsert_record_into(&mut index, &state, &work_dir);
+        }
+    }
+
+    let imported = index.records.len().saturating_sub(before);
+    save_record_index(&index)?;
+    Ok(imported)
+}
+
+/// 删除一条记录登记在案的产物。
+///
+/// 只删**记录里明确列出的文件**和它自己的分段缓存目录——不做「整个 stem 目录一锅端」：
+/// 输出目录由用户配置，万一指向了共用目录，整目录删会误伤别的文件。
+fn delete_record_artifacts(record: &TtsBookRecord) -> Result<(), String> {
+    let mut failures: Vec<String> = Vec::new();
+
+    remove_file_if_present(&record.output_path, &mut failures);
+    remove_file_if_present(&record.segment_json_path, &mut failures);
+    for chapter in &record.chapter_output_paths {
+        remove_file_if_present(chapter, &mut failures);
+    }
+
+    // 分段缓存目录里全是本任务生成的中间产物，可以整目录回收。
+    let work_dir = record.work_dir.trim();
+    if !work_dir.is_empty() {
+        let target = Path::new(work_dir);
+        if target.is_dir() {
+            if let Err(error) = fs::remove_dir_all(target) {
+                failures.push(format!("{}（{}）", work_dir, error));
+            }
+        }
+    }
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("部分产物删除失败：{}", failures.join("；")))
+    }
+}
+
+fn remove_file_if_present(path: &str, failures: &mut Vec<String>) {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    let target = Path::new(trimmed);
+    if !target.is_file() {
+        return;
+    }
+    if let Err(error) = fs::remove_file(target) {
+        failures.push(format!("{}（{}）", trimmed, error));
+    }
 }
 
 #[tauri::command]
@@ -1000,7 +1200,8 @@ fn normalize_execution_provider(value: &str) -> String {
     }
 }
 
-fn resume_index_path() -> Result<PathBuf, String> {
+/// `{exe_dir}/data/tts_book/`：语音书籍的状态目录，续转索引与完成记录都放这里。
+fn tts_book_state_dir() -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| format!("获取程序目录失败: {}", e))?;
     let base = exe
         .parent()
@@ -1008,7 +1209,84 @@ fn resume_index_path() -> Result<PathBuf, String> {
         .join("data")
         .join("tts_book");
     fs::create_dir_all(&base).map_err(|e| format!("创建 TTSBook 状态目录失败: {}", e))?;
-    Ok(base.join(TTS_BOOK_INDEX_FILE))
+    Ok(base)
+}
+
+fn resume_index_path() -> Result<PathBuf, String> {
+    Ok(tts_book_state_dir()?.join(TTS_BOOK_INDEX_FILE))
+}
+
+fn records_path() -> Result<PathBuf, String> {
+    Ok(tts_book_state_dir()?.join(TTS_BOOK_RECORD_FILE))
+}
+
+fn load_record_index() -> Result<TtsBookRecordIndex, String> {
+    let path = records_path()?;
+    if !path.exists() {
+        return Ok(TtsBookRecordIndex::default());
+    }
+    let raw = fs::read_to_string(&path).map_err(|e| format!("读取完成记录失败: {}", e))?;
+    serde_json::from_str(&raw).map_err(|e| format!("解析完成记录失败: {}", e))
+}
+
+fn save_record_index(index: &TtsBookRecordIndex) -> Result<(), String> {
+    let path = records_path()?;
+    let raw = serde_json::to_string_pretty(index).map_err(|e| format!("序列化完成记录失败: {}", e))?;
+    fs::write(path, raw).map_err(|e| format!("写入完成记录失败: {}", e))
+}
+
+fn upsert_record(state: &TtsBookResumeState, work_dir: &Path) -> Result<(), String> {
+    let mut index = load_record_index()?;
+    upsert_record_into(&mut index, state, work_dir);
+    save_record_index(&index)
+}
+
+/// 在内存索引里插入或更新一条记录。扫描回填时逐个调用，最后统一落盘一次，
+/// 避免每条记录都读写一遍整个索引文件。
+///
+/// 去重同时看两处：`id`（同一个任务重跑）与 `output_path`（同一本书重新转换到同一产物）。
+/// 只认 task_id 的话，重新转换会一次留一条、越攒越多；只认产物路径又盖不住改了输出名的重跑。
+fn upsert_record_into(index: &mut TtsBookRecordIndex, state: &TtsBookResumeState, work_dir: &Path) {
+    let audio_bytes = fs::metadata(&state.output_path).map(|m| m.len()).unwrap_or(0);
+
+    let existing = index.records.iter().position(|record| {
+        record.id == state.task_id
+            || (!state.output_path.trim().is_empty() && record.output_path == state.output_path)
+    });
+
+    let record = TtsBookRecord {
+        // 更新时保留原 id，避免外部正拿着旧 id 做删除/重命名。
+        id: existing
+            .map(|position| index.records[position].id.clone())
+            .unwrap_or_else(|| state.task_id.clone()),
+        title: existing
+            .map(|position| index.records[position].title.clone())
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or_else(|| state.title.clone()),
+        file_name: state.file_name.clone(),
+        source_file: state.source_file.clone(),
+        output_dir: state.output_dir.clone(),
+        output_path: state.output_path.clone(),
+        segment_json_path: state.segment_json_path.clone(),
+        chapter_output_paths: state.chapter_output_paths.clone(),
+        work_dir: work_dir.to_string_lossy().to_string(),
+        tts_model: state.tts_model.clone(),
+        tts_mode_hint: state.tts_mode_hint.clone(),
+        speaker_id: state.speaker_id.clone(),
+        speed: state.speed,
+        execution_provider: state.execution_provider.clone(),
+        max_chunk_chars: state.max_chunk_chars,
+        split_by_toc: state.split_by_toc,
+        total_chunks: state.total_chunks,
+        total_chars: state.total_chars,
+        audio_bytes,
+        finished_at: chrono::Utc::now().to_rfc3339(),
+    };
+
+    match existing {
+        Some(position) => index.records[position] = record,
+        None => index.records.push(record),
+    }
 }
 
 fn load_resume_index() -> Result<TtsBookResumeIndex, String> {
@@ -3528,5 +3806,102 @@ mod tests {
             let expected = naive_crossfade(b, n, sample_rate, channels, crossfade_ms);
             assert_eq!(actual, expected, "第 {} 组输入原地化后语义变了", index);
         }
+    }
+
+    fn sample_record_state() -> TtsBookResumeState {
+        TtsBookResumeState {
+            task_id: "task-1".to_string(),
+            title: "测试书".to_string(),
+            file_name: "book.pdf".to_string(),
+            source_file: "/tmp/book.pdf".to_string(),
+            output_path: "/tmp/book_audiobook.wav".to_string(),
+            total_chunks: 7,
+            ..Default::default()
+        }
+    }
+
+    /// 完成记录的去重：同一个任务重跑、或同一本书重转到同一产物，都应更新而不是新增。
+    #[test]
+    fn record_upsert_updates_instead_of_duplicating() {
+        let mut index = TtsBookRecordIndex::default();
+        let mut state = sample_record_state();
+        let work = Path::new("/tmp/ttsbook-work");
+
+        upsert_record_into(&mut index, &state, work);
+        assert_eq!(index.records.len(), 1);
+
+        // 同一个 task_id 重跑。
+        state.total_chunks = 42;
+        upsert_record_into(&mut index, &state, work);
+        assert_eq!(index.records.len(), 1, "同一任务重跑不应新增记录");
+        assert_eq!(index.records[0].total_chunks, 42);
+
+        // 换了 task_id 但产物路径没变（同一本书重新转换）。
+        state.task_id = "another-task".to_string();
+        upsert_record_into(&mut index, &state, work);
+        assert_eq!(index.records.len(), 1, "产物路径相同不应新增记录");
+        assert_eq!(index.records[0].id, "task-1", "更新时应保留原 id");
+    }
+
+    /// 用户重命名过的标题不该被后续重跑覆盖回原名。
+    #[test]
+    fn record_upsert_keeps_user_renamed_title() {
+        let mut index = TtsBookRecordIndex::default();
+        let state = sample_record_state();
+        let work = Path::new("/tmp/ttsbook-work");
+
+        upsert_record_into(&mut index, &state, work);
+        index.records[0].title = "我改过的标题".to_string();
+        upsert_record_into(&mut index, &state, work);
+
+        assert_eq!(index.records[0].title, "我改过的标题");
+    }
+
+    /// 删除产物只动记录里登记的文件与它自己的分段目录，
+    /// 同目录下的其它文件必须毫发无损——输出目录是用户可配置的。
+    #[test]
+    fn delete_artifacts_only_touches_listed_paths() {
+        let tmp = tempfile::TempDir::new().expect("temp dir");
+        let root = tmp.path();
+        let audio = root.join("book_audiobook.wav");
+        let segments = root.join("book_segments.json");
+        let chapter = root.join("001_full.wav");
+        let neighbor = root.join("unrelated.txt");
+        let work_dir = root.join("book_tts_work_x");
+        fs::create_dir_all(&work_dir).expect("建分段目录");
+        for path in [&audio, &segments, &chapter, &neighbor] {
+            fs::write(path, b"x").expect("写样例文件");
+        }
+
+        let record = TtsBookRecord {
+            id: "task-1".to_string(),
+            title: "测试".to_string(),
+            file_name: "book.pdf".to_string(),
+            source_file: "book.pdf".to_string(),
+            output_dir: root.to_string_lossy().to_string(),
+            output_path: audio.to_string_lossy().to_string(),
+            segment_json_path: segments.to_string_lossy().to_string(),
+            chapter_output_paths: vec![chapter.to_string_lossy().to_string()],
+            work_dir: work_dir.to_string_lossy().to_string(),
+            tts_model: String::new(),
+            tts_mode_hint: String::new(),
+            speaker_id: "0".to_string(),
+            speed: None,
+            execution_provider: "cpu".to_string(),
+            max_chunk_chars: 180,
+            split_by_toc: true,
+            total_chunks: 1,
+            total_chars: 1,
+            audio_bytes: 1,
+            finished_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+
+        delete_record_artifacts(&record).expect("删除产物");
+
+        assert!(!audio.exists(), "音频应被删除");
+        assert!(!segments.exists(), "分段 JSON 应被删除");
+        assert!(!chapter.exists(), "章节音频应被删除");
+        assert!(!work_dir.exists(), "分段缓存目录应整目录回收");
+        assert!(neighbor.exists(), "同目录下未登记的文件不能被误删");
     }
 }
