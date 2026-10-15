@@ -622,4 +622,74 @@ pre::-webkit-scrollbar-track,
 :root[data-guaxi-theme='dark'] .mermaid svg {
   background-color: #ffffff !important;
 }
+
+/* ── 新手引导气泡（driver.js）──────────────────────────────────────
+   气泡由 driver.js 挂到 body 上，组件里的 scoped 样式够不着，只能全局定义。
+   选择器写成 `.driver-popover.guaxi-tour-popover`：driver.js 的基础规则带 `all: unset`，
+   同权重时会按打包顺序把我的样式清掉，提高一级优先级就不依赖顺序了。
+   颜色全走 --guaxi-* 变量，明暗主题自动跟随。 */
+.driver-popover.guaxi-tour-popover {
+  font-family: inherit;
+  background-color: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-primary);
+  border: 1px solid var(--guaxi-border);
+  border-radius: 10px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
+  max-width: 320px;
+  padding: 14px 16px;
+}
+
+.driver-popover.guaxi-tour-popover .driver-popover-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--guaxi-text-primary);
+}
+
+.driver-popover.guaxi-tour-popover .driver-popover-description {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--guaxi-text-secondary);
+}
+
+.driver-popover.guaxi-tour-popover .driver-popover-progress-text {
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+}
+
+.driver-popover.guaxi-tour-popover .driver-popover-close-btn {
+  color: var(--guaxi-text-secondary);
+}
+
+.driver-popover.guaxi-tour-popover .driver-popover-footer button {
+  border-radius: 6px;
+  padding: 3px 12px;
+  font-size: 12px;
+  text-shadow: none;
+  background-color: var(--guaxi-content-bg);
+  color: var(--guaxi-text-primary);
+  border: 1px solid var(--guaxi-border);
+}
+
+.driver-popover.guaxi-tour-popover .driver-popover-footer .driver-popover-next-btn {
+  background-color: var(--n-color-primary, #1890ff);
+  color: #fff;
+  border-color: transparent;
+}
+
+/* 箭头只改各方向里“不透明”的那一边，免得把另外三边的 transparent 覆盖掉。 */
+.driver-popover.guaxi-tour-popover .driver-popover-arrow-side-left {
+  border-left-color: var(--guaxi-panel-bg);
+}
+
+.driver-popover.guaxi-tour-popover .driver-popover-arrow-side-right {
+  border-right-color: var(--guaxi-panel-bg);
+}
+
+.driver-popover.guaxi-tour-popover .driver-popover-arrow-side-top {
+  border-top-color: var(--guaxi-panel-bg);
+}
+
+.driver-popover.guaxi-tour-popover .driver-popover-arrow-side-bottom {
+  border-bottom-color: var(--guaxi-panel-bg);
+}
 </style>

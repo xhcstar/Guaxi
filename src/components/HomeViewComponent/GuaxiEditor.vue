@@ -488,7 +488,7 @@
           <n-dropdown trigger="click" :options="previewModeOptions" @select="handlePreviewModeSelect">
             <n-tooltip placement="top" trigger="hover">
               <template #trigger>
-                <n-button text>
+                <n-button text data-tour="preview-mode">
                   <Icon :icon="previewModeIcon" width="16" height="16" />
                 </n-button>
               </template>

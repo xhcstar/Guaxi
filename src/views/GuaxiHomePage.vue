@@ -23,8 +23,10 @@ import GuaxiHeader from "../components/HomeViewComponent/GuaxiHeader.vue";
 import GuaxiContent from "../components/HomeViewComponent/GuaxiContent.vue";
 import { NMessageProvider } from 'naive-ui';
 import { createLogger } from '../utils/logger';
+import { useOnboardingTour } from '../composables/useOnboardingTour';
 
 const logger = createLogger('GuaxiHomePage');
+const { start: startOnboardingTour } = useOnboardingTour();
 let layoutCheckFrame = 0;
 
 /**
@@ -66,6 +68,9 @@ onMounted(async () => {
   window.addEventListener('resize', handleWindowResize);
   await nextTick();
   checkDocumentOverflow('mounted', true);
+  // 首次启动给一段新手引导；看过了就静默跳过。
+  // 必须放在 nextTick 之后：引导要定位的控件这时才在 DOM 里。
+  startOnboardingTour();
 });
 
 onBeforeUnmount(() => {

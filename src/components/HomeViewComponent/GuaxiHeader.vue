@@ -52,7 +52,7 @@
     <div class="header-right">
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
-          <n-icon class="header-icon" size="20" :component="BookAdd20Regular" @click="openCreateKnowledgeBase" />
+          <n-icon class="header-icon" size="20" data-tour="create-kb" :component="BookAdd20Regular" @click="openCreateKnowledgeBase" />
         </template>
         {{ headerShortcutTooltip('新建知识库', 'createKnowledgeBase') }}
       </n-tooltip>
@@ -171,6 +171,20 @@
           <n-icon class="header-icon" size="20" :component="PanelRightContract24Regular" @click="toggleRightSider"></n-icon>
         </template>
         切换右侧边栏
+      </n-tooltip>
+
+      <n-tooltip placement="bottom" trigger="hover">
+        <template #trigger>
+          <n-icon class="header-icon" size="20" @click="restartOnboardingTour">
+            <svg viewBox="0 0 24 24" width="18" height="18">
+              <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.7" />
+              <path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
+                d="M9.6 9.3a2.5 2.5 0 1 1 3.3 2.3c-.7.3-1 .9-1 1.6v.4" />
+              <circle cx="12" cy="16.7" r="1.05" fill="currentColor" />
+            </svg>
+          </n-icon>
+        </template>
+        重新观看新手引导
       </n-tooltip>
 
     </div>
@@ -424,6 +438,7 @@ import { computed, ref, h, onMounted, onUnmounted, nextTick, watch } from "vue";
 import { NDropdown, NIcon, NTooltip } from 'naive-ui'
 import { useSiderStore } from '../../stores/useSiderStore'
 import { useSiderHotkeys } from '../../composables/useSiderHotkeys'
+import { useOnboardingTour } from '../../composables/useOnboardingTour'
 import { GUAXI_SHORTCUTS, shortcutTooltip, useGuaxiHotkeys } from '../../composables/useGuaxiHotkeys'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
@@ -683,6 +698,13 @@ function openAssistantPanel() {
 const openCreateKnowledgeBase = () => {
   logger.info('打开新建知识库表单')
   knowledgeBaseStore.toggleForm(true)
+}
+
+// 「重新观看新手引导」。引导要定位的是首页的顶栏/文件树/编辑器，所以入口只能挂在这里——
+// 放设置页的话，那些控件根本不在 DOM 里，每一步都会退化成居中卡片。
+const restartOnboardingTour = () => {
+  const { start } = useOnboardingTour()
+  start({ force: true })
 }
 
 async function openTemplateManager() {

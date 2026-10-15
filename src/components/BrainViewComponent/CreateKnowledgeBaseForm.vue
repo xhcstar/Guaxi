@@ -5,7 +5,7 @@
     :bordered="false"
     :closable="false"
     :mask-closable="!submitting"
-    style="width: 640px; max-width: calc(100vw - 32px);"
+    style="width: 560px; max-width: calc(100vw - 32px);"
     size="large"
     class="knowledge-base-modal"
     @after-leave="resetForm"
@@ -40,7 +40,7 @@
         :show-require-mark="false"
         @submit.prevent="handleSubmit"
       >
-        <div class="kb-field-block kb-field-block-primary">
+        <div class="kb-field-block">
           <n-form-item label="知识库名称" path="knowledgeBaseName" required>
             <n-input
               v-model:value="knowledgeBaseStore.formData.knowledgeBaseName"
@@ -191,8 +191,6 @@ const closeForm = (force = false) => {
 .knowledge-base-modal {
   --kb-create-font: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
   --kb-create-hairline: rgba(148, 163, 184, 0.18);
-  --kb-create-hairline-soft: rgba(148, 163, 184, 0.1);
-  --kb-create-surface: color-mix(in srgb, var(--guaxi-panel-bg, #1f252d) 94%, transparent);
   border-radius: 10px;
   overflow: hidden;
   font-family: var(--kb-create-font);
@@ -221,21 +219,19 @@ const closeForm = (force = false) => {
 }
 
 .knowledge-base-modal :deep(.n-card) {
-  background: var(--guaxi-panel-bg);
+  /* 整个弹窗只有这一层表面：渐变点缀也放在这里。
+     之前 .kb-create-shell 又铺了一层底色，读起来就是「面板里套了个面板」。 */
+  background:
+    radial-gradient(circle at top right, rgba(33, 189, 236, 0.12), transparent 36%),
+    var(--guaxi-panel-bg);
   border: 1px solid var(--guaxi-border);
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
-}
-
-.kb-create-shell {
-  background:
-    radial-gradient(circle at top right, rgba(33, 189, 236, 0.12), transparent 34%),
-    var(--kb-create-surface);
 }
 
 .kb-create-header {
   display: flex;
   gap: 14px;
-  padding: 24px 26px 20px;
+  padding: 18px 22px 15px;
   border-bottom: 1px solid var(--kb-create-hairline);
   background: linear-gradient(180deg, rgba(148, 163, 184, 0.08), transparent);
 }
@@ -282,20 +278,13 @@ const closeForm = (force = false) => {
 }
 
 .kb-create-form {
-  padding: 20px 26px 22px;
+  padding: 16px 22px 18px;
 }
 
+/* 字段不再各自套一个描边方框：那是「一层套一层」的另一半来源。
+   分组靠间距和提示文案表达就够了，整张表单读起来是一个面。 */
 .kb-field-block {
-  padding: 14px 14px 12px;
-  margin-bottom: 12px;
-  border: 1px solid var(--kb-create-hairline-soft);
-  border-radius: 8px;
-  background: rgba(148, 163, 184, 0.04);
-}
-
-.kb-field-block-primary {
-  border-color: rgba(33, 189, 236, 0.22);
-  background: rgba(33, 189, 236, 0.055);
+  margin-bottom: 16px;
 }
 
 .field-hint {
@@ -359,8 +348,8 @@ const closeForm = (force = false) => {
   display: flex;
   justify-content: flex-end;
   gap: 12px;
-  margin-top: 18px;
-  padding-top: 16px;
+  margin-top: 14px;
+  padding-top: 14px;
   border-top: 1px solid var(--kb-create-hairline);
 }
 
@@ -371,11 +360,11 @@ const closeForm = (force = false) => {
 
 @media (max-width: 560px) {
   .kb-create-header {
-    padding: 20px;
+    padding: 16px 18px 14px;
   }
 
   .kb-create-form {
-    padding: 16px 18px 18px;
+    padding: 14px 18px 16px;
   }
 
   .form-footer {

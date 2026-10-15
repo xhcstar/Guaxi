@@ -102,7 +102,7 @@
             </n-tooltip>
             <n-tooltip trigger="hover">
               <template #trigger>
-                <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="handleAddFile(activeRepoPathItem)">
+                <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" data-tour="new-file" @click.stop="handleAddFile(activeRepoPathItem)">
                   <n-icon :component="FileAddIcon" size="16" />
                 </n-icon-wrapper>
               </template>
