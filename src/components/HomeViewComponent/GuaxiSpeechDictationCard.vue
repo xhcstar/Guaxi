@@ -27,11 +27,11 @@
       <input
         class="dictation-card__slider"
         type="range"
-        min="0.004"
-        max="0.05"
-        step="0.002"
-        :value="silenceThreshold"
-        @input="$emit('update:silenceThreshold', Number($event.target.value))"
+        min="0"
+        max="1"
+        step="0.02"
+        :value="sensitivity"
+        @input="$emit('update:silenceThreshold', thresholdFromSensitivity(Number($event.target.value)))"
       />
       <span class="dictation-card__hint">{{ sensitivityLabel }}</span>
     </div>
@@ -99,10 +99,36 @@ const statusTone = computed(() => {
   return ''
 })
 
+// 滑条表示的是「灵敏度」，往右越灵敏。
+//
+// 底层存的是静音阈值（采集到的音量 RMS 低于它就算静音，见 useSpeechDictation 里的
+// `rms >= silenceThreshold`），阈值越低越灵敏——两者方向相反。
+// 早先滑条直接把阈值绑成 min=0.004 / max=0.05，于是往右拖反而越来越不灵敏。
+// 这里在滑条边界上做一次反向映射：灵敏度 0 → 阈值上限（最不灵敏），1 → 下限（最灵敏）。
+const THRESHOLD_MIN = 0.004
+const THRESHOLD_MAX = 0.05
+
+const clampThreshold = (value) => {
+  const t = Number(value)
+  if (!Number.isFinite(t)) return THRESHOLD_MAX
+  return Math.min(Math.max(t, THRESHOLD_MIN), THRESHOLD_MAX)
+}
+
+const sensitivity = computed(
+  () => (THRESHOLD_MAX - clampThreshold(props.silenceThreshold)) / (THRESHOLD_MAX - THRESHOLD_MIN),
+)
+
+const thresholdFromSensitivity = (value) => {
+  const s = Math.min(Math.max(Number(value) || 0, 0), 1)
+  // 阈值只是个粗略门槛，留 4 位小数就够，免得绑定值拖出一串浮点尾巴。
+  return Number((THRESHOLD_MAX - s * (THRESHOLD_MAX - THRESHOLD_MIN)).toFixed(4))
+}
+
 const sensitivityLabel = computed(() => {
-  // 阈值越低越灵敏
-  if (props.silenceThreshold <= 0.008) return '高'
-  if (props.silenceThreshold >= 0.03) return '低'
+  // 按滑条位置给档位，这样文字和滑块位置始终对得上。
+  const s = sensitivity.value
+  if (s >= 0.67) return '高'
+  if (s <= 0.33) return '低'
   return '中'
 })
 
