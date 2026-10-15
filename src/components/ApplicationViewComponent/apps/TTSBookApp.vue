@@ -152,6 +152,18 @@
               <span class="panel-extra">{{ selectedFiles.length }} 个文件</span>
               <n-tooltip>
                 <template #trigger>
+                  <n-button tertiary circle size="small" :disabled="!selectedFiles.length" @click="clearSelectedFiles">
+                    <template #icon>
+                      <n-icon>
+                        <TrashOutline />
+                      </n-icon>
+                    </template>
+                  </n-button>
+                </template>
+                清空已打开文件
+              </n-tooltip>
+              <n-tooltip>
+                <template #trigger>
                   <n-button tertiary circle size="small" @click="pickFiles">
                     <template #icon>
                       <n-icon>
@@ -382,7 +394,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { createDiscreteApi } from 'naive-ui'
 import { open } from '@tauri-apps/plugin-dialog'
 import { invoke, convertFileSrc } from '@tauri-apps/api/core'
@@ -391,25 +403,42 @@ import { AddOutline, DocumentTextOutline, FolderOpenOutline, LibraryOutline, Pau
 import { createLogger } from '../../../utils/logger'
 import { useSettingsStore } from '../../../stores/settingsStore'
 import { buildSpeakerOptions } from '../../../utils/ttsSpeakers'
+import { readUiState, persistUiState, oneOf, within } from '../../../utils/uiState'
+import { useTtsBookFiles } from '../../../composables/useTtsBookFiles'
 
 const logger = createLogger('TTSBookApp')
-const { message } = createDiscreteApi(['message'])
+const { message, dialog } = createDiscreteApi(['message', 'dialog'])
 const settingsStore = useSettingsStore()
 
 const DEFAULT_TTS_EXE = 'utils/sherpa-onnx/sherpa-onnx-offline-tts.exe'
 const DEFAULT_MODEL = 'utils/Models/tts/kokoro_multi_lang/model.onnx'
 const DEFAULT_TOKENS = 'utils/Models/tts/kokoro_multi_lang/tokens.txt'
 
+// 本页的「上次选择」按项目既有惯例存 localStorage（见 utils/uiState.js）。
+// 这些都是每次进来都得重填的参数，不记住很烦人；键名沿用 `guaxi_<页面>_<字段>`。
+const UI = {
+  outputName: 'guaxi_ttsbook_output_name',
+  maxChunkChars: 'guaxi_ttsbook_max_chunk_chars',
+  splitByToc: 'guaxi_ttsbook_split_by_toc',
+  modelPreset: 'guaxi_ttsbook_model_preset',
+  executionProvider: 'guaxi_ttsbook_execution_provider',
+  speakerId: 'guaxi_ttsbook_speaker_id',
+  speed: 'guaxi_ttsbook_speed',
+}
+
 const ttsConfig = ref({ provider: 'sherpa-onnx', model: DEFAULT_MODEL, tokens: DEFAULT_TOKENS, exe: DEFAULT_TTS_EXE, outputDir: '' })
-const selectedFiles = ref([])
+// 已打开文件走「本次运行内保留」（模块作用域），不要跨重启——见 useTtsBookFiles 的说明。
+const selectedFiles = useTtsBookFiles()
 const outputDir = ref('')
-const outputName = ref('')
-const maxChunkChars = ref(180)
-const splitByToc = ref(true)
-const modelPreset = ref('settings')
-const executionProvider = ref('auto')
-const speakerId = ref('0')
-const ttsSpeed = ref(1)
+const outputName = ref(readUiState(UI.outputName, ''))
+const maxChunkChars = ref(readUiState(UI.maxChunkChars, 180, within(80, 420)))
+const splitByToc = ref(readUiState(UI.splitByToc, true))
+// 模型/引擎用白名单校验：选项以后改过时，旧值不该被还原成一个已不存在的选项。
+const modelPreset = ref(readUiState(UI.modelPreset, 'settings', oneOf('settings', 'kokoro_multi_lang', 'vits_melo_zh_en')))
+const executionProvider = ref(readUiState(UI.executionProvider, 'auto', oneOf('auto', 'cpu', 'cuda')))
+// null 表示本页还没记住过，由 loadTtsConfig 用全局默认补上。
+const speakerId = ref(readUiState(UI.speakerId, null))
+const ttsSpeed = ref(readUiState(UI.speed, 1, within(0.2, 3)))
 const running = ref(false)
 const tasks = ref([])
 const currentRunningTaskId = ref('')
@@ -590,10 +619,9 @@ const loadTtsConfig = async () => {
     if (!String(outputDir.value || '').trim()) {
       outputDir.value = savedOutputDir
     }
-    // 初始音色跟随设置页的全局默认；用户在本页仍可逐次改动。
-    const savedSpeaker = String(saved?.speaker_id || '').trim()
-    if (savedSpeaker) {
-      speakerId.value = savedSpeaker
+    // 本页没记住过音色时才跟随设置页的全局默认；一旦在本页选过就以本页为准。
+    if (speakerId.value === null) {
+      speakerId.value = String(saved?.speaker_id || '').trim() || '0'
     }
   } catch (e) {
     logger.error('loadTtsConfig failed:', e)
@@ -665,6 +693,20 @@ const pickFiles = async () => {
 
 const removeSelected = (file) => {
   selectedFiles.value = selectedFiles.value.filter((p) => p !== file)
+}
+
+// 批量移除的入口：单个文件的删除仍在每张卡片上。
+const clearSelectedFiles = () => {
+  if (!selectedFiles.value.length) return
+  dialog.warning({
+    title: '清空已打开文件',
+    content: `移除全部 ${selectedFiles.value.length} 个已打开文件？只清空这个列表，不会动磁盘上的文件。`,
+    positiveText: '清空',
+    negativeText: '取消',
+    onPositiveClick: () => {
+      selectedFiles.value = []
+    },
+  })
 }
 
 const pickOutputDir = async () => {
@@ -1068,6 +1110,19 @@ const startMiddleResize = (event) => {
   }
   window.addEventListener('pointermove', handleGlobalPointerMove)
   window.addEventListener('pointerup', stopDragging)
+}
+
+// 选择变化即落盘。放在所有被持久化的 ref 声明**之后**，否则会命中 TDZ。
+for (const [key, source] of [
+  [UI.outputName, outputName],
+  [UI.maxChunkChars, maxChunkChars],
+  [UI.splitByToc, splitByToc],
+  [UI.modelPreset, modelPreset],
+  [UI.executionProvider, executionProvider],
+  [UI.speakerId, speakerId],
+  [UI.speed, ttsSpeed],
+]) {
+  watch(source, (value) => persistUiState(key, value))
 }
 
 onMounted(async () => {
