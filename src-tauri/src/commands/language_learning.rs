@@ -17,7 +17,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use tauri::Manager;
 use tauri::{WebviewUrl, WebviewWindowBuilder};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use urlencoding::encode;
 use uuid::Uuid;
 use zip::write::FileOptions;
@@ -2710,7 +2710,15 @@ pub fn language_learning_generate_whisper_sync_json_async(
     let lang = learning_lang.clone();
     tauri::async_runtime::spawn(async move {
         let _guard = LISTENING_SYNC_LOCK.lock().await;
-        let _ = language_learning_generate_whisper_sync_json(app_handle, id.clone(), lang).await;
+        // 这里原来是 `let _ = ...`：同步一旦失败就彻底没有痕迹，前端只表现为「没有翻译」，
+        // 日志里全是下游的噪声（coverage:zero、empty path）。失败原因至少要留一条。
+        if let Err(error) = language_learning_generate_whisper_sync_json(app_handle, id.clone(), lang).await {
+            warn!(
+                audio_id = id.as_str(),
+                error = error.as_str(),
+                "听力同步转写失败"
+            );
+        }
         if let Ok(mut pending) = LISTENING_SYNC_PENDING_IDS.lock() {
             pending.remove(&id);
         }
@@ -2957,7 +2965,9 @@ fn normalize_media_uri(raw: &str) -> String {
 fn sync_json_has_full_translation(raw_path: &str) -> bool {
     let path = normalize_media_uri(raw_path);
     if path.is_empty() {
-        info!("sync_json_has_full_translation: empty path");
+        // 条目还没生成过同步 JSON 时就是这个状态，属于常态：一条 INFO 会让整张听力
+        // 列表每刷新一次就刷一屏日志，把真正的问题淹掉。
+        debug!("sync_json_has_full_translation: empty path");
         return false;
     }
     let p = PathBuf::from(path);

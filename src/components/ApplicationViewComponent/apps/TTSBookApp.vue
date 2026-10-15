@@ -1,7 +1,6 @@
 ﻿<template>
   <div class="tts-book-root" :class="{ 'tts-book-dark': isDarkTheme }">
     <header class="tts-header">
-      <h1 class="page-title">有声书转换</h1>
     </header>
 
     <section ref="layoutRef" class="tts-layout" :style="layoutVars">

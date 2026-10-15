@@ -2287,7 +2287,10 @@ const refreshAudioTranslationCoverage = async (rows) => {
       timeline = buildTranscriptTimeline(String(row?.transcript || ''), Number(row?.duration_sec || 0))
     }
     const stat = resolveTranslationCoverageFromTimeline(timeline)
-    if (stat.total <= 0 || stat.ratio <= 0) {
+    // 还没生成过同步 JSON 的条目 coverage 必然是 0——那是「还没同步」，不是异常。
+    // 只有「同步 JSON 就在那儿却一条译文都没有」才值得报警；否则整张听力列表每刷新
+    // 一次就刷十几行 warn，真正的问题反而被淹掉。
+    if (syncPath && stat.total > 0 && stat.ratio <= 0) {
       console.warn('[LangLearning] coverage:zero', {
         id,
         title: String(row?.title || ''),

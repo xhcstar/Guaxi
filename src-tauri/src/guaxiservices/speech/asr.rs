@@ -90,6 +90,10 @@ const VAD_MIN_SPEECH_SECS: f32 = 0.25;
 const VAD_MAX_SPEECH_SECS: f32 = 20.0;
 /// Silero 在 16kHz 下的标准窗口。
 const VAD_WINDOW_SIZE: i32 = 512;
+/// whisper 只处理小于 30 秒的音频，超长输入会被**静默截断**（sherpa 只打一行 warning，
+/// 然后丢掉后面的内容）。VAD 的 max_speech_duration 并不总能兜住（实测长音频里出现过
+/// 远超 30 秒的分段），所以这里再按 28 秒硬切一道，留 2 秒余量。
+const WHISPER_MAX_CHUNK_SECS: f64 = 28.0;
 
 /// 先用 VAD 切出语音段，再逐段识别，从而拿到带时间轴的分段。
 ///
@@ -124,34 +128,60 @@ pub fn transcribe_segments_with_vad(
     let vad = VoiceActivityDetector::create(&vad_config, 30.0)
         .ok_or_else(|| format!("创建 VAD 失败，请检查模型文件：{}", vad_model.display()))?;
 
+    let mut segments = Vec::new();
+    // 边喂边取：VAD 是流式的，内部段落队列容量有限。早先是「先把整段音频喂完、再取分段」，
+    // 结果十几分钟的播客只转写出开头一分钟左右——中间闭合的分段在队列里被丢掉了，
+    // 同时 sherpa 会不停地打 circular-buffer Overflow。
     for chunk in samples.chunks(VAD_WINDOW_SIZE as usize) {
         vad.accept_waveform(chunk);
+        take_ready_segments(&vad, config, &mut segments)?;
     }
     // 把尾部还没闭合的语音段冲出来，否则最后一句会丢。
     vad.flush();
+    take_ready_segments(&vad, config, &mut segments)?;
 
-    let mut segments = Vec::new();
+    Ok(segments)
+}
+
+/// 取走 VAD 里已经闭合的分段并逐段识别，按需再切分。
+///
+/// 识别是同步阻塞的，所以在喂音频的循环里顺手取走；VAD 的对象内部有锁，
+/// 用 `&self` 即可（见 sherpa-onnx 的绑定）。
+fn take_ready_segments(
+    vad: &VoiceActivityDetector,
+    config: &AsrEngineConfig,
+    out: &mut Vec<AsrSegment>,
+) -> Result<(), String> {
+    let sample_rate = ASR_SAMPLE_RATE as f64;
+    // 只有 whisper 有 30 秒硬限制，别的模型整段喂进去更准、也更省一次解码。
+    let max_chunk = if matches!(config.model, AsrModel::Whisper { .. }) {
+        (sample_rate * WHISPER_MAX_CHUNK_SECS) as usize
+    } else {
+        usize::MAX
+    };
+
     while let Some(segment) = vad.front() {
-        let start = segment.start() as f64 / ASR_SAMPLE_RATE as f64;
-        let duration = segment.samples().len() as f64 / ASR_SAMPLE_RATE as f64;
-        let text = match transcribe(config, segment.samples()) {
-            Ok(text) => text,
-            Err(err) => {
-                vad.pop();
-                return Err(err);
+        let start_samples = segment.start().max(0) as usize;
+        let samples = segment.samples();
+        let mut offset = 0usize;
+        while offset < samples.len() {
+            let end = offset.saturating_add(max_chunk).min(samples.len());
+            let text = transcribe(config, &samples[offset..end])?;
+            if !text.is_empty() {
+                let start_sec = (start_samples + offset) as f64 / sample_rate;
+                let end_sec = (start_samples + end) as f64 / sample_rate;
+                out.push(AsrSegment {
+                    start: start_sec,
+                    end: end_sec.max(start_sec + 0.4),
+                    text,
+                });
             }
-        };
-        if !text.is_empty() {
-            segments.push(AsrSegment {
-                start: start.max(0.0),
-                end: (start + duration).max(start + 0.4),
-                text,
-            });
+            offset = end;
         }
         vad.pop();
     }
 
-    Ok(segments)
+    Ok(())
 }
 
 /// 跑一次识别，拿原始结果（文本 + token 级时间戳）。
@@ -233,8 +263,10 @@ fn model_config(model: &AsrModel, provider: &str, num_threads: i32) -> OfflineMo
                 decoder: Some(decoder.clone()),
                 language: language.clone(),
                 task: Some("transcribe".to_string()),
-                // 语言学习的同步 JSON 需要时间轴，只有开了这个才有逐 token 时间戳。
-                enable_token_timestamps: true,
+                // 时间轴由 VAD 定边界（见 transcribe_segments_with_vad），不需要逐 token 时间戳。
+                // 预编译的 whisper 模型本来就没有 cross-attention 输出，开着它只会在每次调用时
+                // 多打一行 "timestamps will not be available" 的 warning，白占解码时间。
+                enable_token_timestamps: false,
                 ..Default::default()
             };
             config.tokens = Some(tokens.clone());
