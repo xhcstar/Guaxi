@@ -204,6 +204,7 @@
       <n-drawer-content title="按字段筛选导出" closable>
         <div class="tm-fx">
           <div class="tm-fx-filters">
+            <div class="tm-fx-fields-head"><span>快捷筛选</span></div>
             <div class="tm-fx-row">
               <label>分类
                 <n-select v-model:value="fxFilter.category" size="small" :options="fxCategoryOptions" @update:value="recomputeFx" />
@@ -228,6 +229,33 @@
               <label>完成止<n-date-picker v-model:formatted-value="fxFilter.completedTo" value-format="yyyy-MM-dd" type="date" size="small" clearable @update:formatted-value="recomputeFx" /></label>
               <label class="grow">描述含<n-input v-model:value="fxFilter.keyword" size="small" clearable placeholder="关键字" @update:value="recomputeFx" /></label>
             </div>
+
+            <!-- 字段条件：覆盖全部默认字段与自定义字段（来源/修复状态/进度/根本原因/影响版本…） -->
+            <div class="tm-fx-conds">
+              <div class="tm-fx-fields-head">
+                <span>字段条件</span>
+                <span class="tm-spacer2" />
+                <a @click="addCond">+ 添加条件</a>
+                <template v-if="fxConds.length"> · <a @click="clearConds">清空</a></template>
+              </div>
+              <div v-for="(c, i) in fxConds" :key="c.uid" class="tm-fx-cond">
+                <n-select v-model:value="c.field" size="small" class="fx-cond-field" :options="fxFieldOptions" placeholder="字段" @update:value="(v) => onCondFieldChange(c, v)" />
+                <n-select v-model:value="c.op" size="small" class="fx-cond-op" :options="condOpOptions(c)" @update:value="recomputeFx" />
+                <template v-if="!condNoValue(c)">
+                  <n-select v-if="condMulti(c)" v-model:value="c.values" size="small" multiple class="fx-cond-val" :options="condEnumOptions(c)" placeholder="多个值" @update:value="recomputeFx" />
+                  <n-select v-else-if="condEnumSingle(c)" v-model:value="c.value" size="small" clearable class="fx-cond-val" :options="condEnumOptions(c)" placeholder="值" @update:value="recomputeFx" />
+                  <template v-else-if="condIsDate(c)">
+                    <n-date-picker v-model:formatted-value="c.value" value-format="yyyy-MM-dd" type="date" size="small" clearable class="fx-cond-date" placeholder="日期" @update:formatted-value="recomputeFx" />
+                    <n-date-picker v-if="c.op === 'range'" v-model:formatted-value="c.value2" value-format="yyyy-MM-dd" type="date" size="small" clearable class="fx-cond-date" placeholder="至" @update:formatted-value="recomputeFx" />
+                  </template>
+                  <n-input v-else v-model:value="c.value" size="small" clearable class="fx-cond-val" placeholder="值" @update:value="recomputeFx" />
+                </template>
+                <n-button size="tiny" quaternary title="删除条件" @click="removeCond(i)">✕</n-button>
+              </div>
+              <div v-if="!fxConds.length" class="tm-fx-hint">
+                可对任意默认字段（来源 / 修复状态 / 进度 / 根本原因 / 影响版本 / 复现步骤…）与自定义字段添加条件。
+              </div>
+            </div>
           </div>
 
           <div class="tm-fx-stat">
@@ -237,6 +265,7 @@
           <div class="tm-fx-fields">
             <div class="tm-fx-fields-head">
               <span>导出字段</span>
+              <span class="tm-fx-fields-count">默认 {{ FIELD_DEFS.length }} 项 · 自定义 {{ customFieldKeys.length }} 项 · 已选 {{ fxFields.length }}</span>
               <span class="tm-spacer2" />
               <a @click="fxSelectAll(true)">全选</a> · <a @click="fxSelectAll(false)">清空</a>
             </div>
@@ -592,18 +621,38 @@ const fxSeverityOptions = [
 const fxPriorityOptions = [
   { label: '全部', value: 'all' }, { label: 'A', value: 'A' }, { label: 'B', value: 'B' }, { label: 'C', value: 'C' }, { label: '无', value: 'none' },
 ]
-const EXPORT_FIELDS = [
-  { key: 'id', label: 'ID' }, { key: 'manageType', label: '分类' }, { key: 'taskType', label: '类型' }, { key: 'status', label: '状态' },
-  { key: 'severity', label: '严重度' }, { key: 'priority', label: '优先级' }, { key: 'origin', label: '来源' },
-  { key: 'fixStatus', label: '修复状态' }, { key: 'progress', label: '进度' }, { key: 'deadline', label: '截止' },
-  { key: 'createTime', label: '创建时间' }, { key: 'completedTime', label: '完成时间' }, { key: 'parentId', label: '父任务' },
-  { key: 'description', label: '描述' }, { key: 'rootCause', label: '根本原因' }, { key: 'conditionOfOccurrence', label: '复现步骤' },
-  { key: 'fixedDetails', label: '修复详情' }, { key: 'testingSuggestions', label: '测试建议' }, { key: 'affectedRelease', label: '影响版本' },
-  { key: 'reviewLink', label: 'Review' }, { key: 'content', label: '详情' }, { key: 'extraImpacts', label: 'Extra Impact' },
-  { key: 'notes', label: '笔记' },
+// 字段注册表：任务块 DSL 的全部默认字段（顺序与后端 KNOWN_FIELDS / 模板一致）。
+// 同时驱动「导出字段」勾选表与「字段条件」筛选器，新增默认字段只需改这一处。
+// type: enum（有固定取值，下拉选择）/ date（中文或 ISO 日期，按时间比较）/ text（其余，按文本匹配）
+const enumOptionsOf = (pairs) => pairs.map(([value, label]) => ({ value, label }))
+const FIELD_DEFS = [
+  { key: 'manageType', label: '分类', type: 'enum', options: enumOptionsOf([['work', '工作'], ['life', '生活'], ['study', '学习']]) },
+  { key: 'internalId', label: '内部 ID', type: 'text' },
+  { key: 'id', label: 'ID', type: 'text' },
+  { key: 'parentId', label: '父任务', type: 'text' },
+  { key: 'taskType', label: '类型', type: 'enum', options: enumOptionsOf([['bug', 'Bug'], ['task', '任务'], ['other', '其他']]) },
+  { key: 'deadline', label: '截止', type: 'date' },
+  { key: 'createTime', label: '创建时间', type: 'date' },
+  { key: 'completedTime', label: '完成时间', type: 'date' },
+  { key: 'origin', label: '来源', type: 'enum', options: enumOptionsOf([['customer', 'customer'], ['qa', 'qa'], ['dev', 'dev'], ['other', 'other']]) },
+  { key: 'severity', label: '严重度', type: 'enum', options: enumOptionsOf(['critical', 'major', 'normal', 'minor', 'trivial'].map((v) => [v, v])) },
+  { key: 'priority', label: '优先级', type: 'enum', options: enumOptionsOf([['A', 'A'], ['B', 'B'], ['C', 'C']]) },
+  { key: 'status', label: '状态', type: 'enum', options: enumOptionsOf(Object.entries(STATUS_ZH).map(([code, zh]) => [code, `${zh} ${code}`])) },
+  { key: 'progress', label: '进度', type: 'text' },
+  { key: 'fixStatus', label: '修复状态', type: 'enum', options: enumOptionsOf(['debug', 'test', 'review', 'approval', 'fixed', 'other'].map((v) => [v, v])) },
+  { key: 'description', label: '描述', type: 'text' },
+  { key: 'rootCause', label: '根本原因', type: 'text' },
+  { key: 'conditionOfOccurrence', label: '复现步骤', type: 'text' },
+  { key: 'fixedDetails', label: '修复详情', type: 'text' },
+  { key: 'testingSuggestions', label: '测试建议', type: 'text' },
+  { key: 'affectedRelease', label: '影响版本', type: 'text' },
+  { key: 'reviewLink', label: 'Review', type: 'text' },
+  { key: 'extraImpacts', label: 'Extra Impact', type: 'text' },
+  { key: 'content', label: '详情', type: 'text' },
+  { key: 'notes', label: '笔记', type: 'text' },
 ]
 const fxFields = ref(['id', 'taskType', 'status', 'description', 'createTime', 'completedTime'])
-// 自定义字段：汇总当前数据里出现过的所有自定义字段名，动态并入导出字段列表。
+// 自定义字段：汇总当前数据里出现过的所有自定义字段名，动态并入字段列表（筛选与导出共用）。
 const customFieldKeys = computed(() => {
   const names = new Set()
   for (const b of fxData.value) {
@@ -611,9 +660,76 @@ const customFieldKeys = computed(() => {
       if (cf && cf.name) names.add(cf.name)
     }
   }
-  return [...names].map((n) => ({ key: 'cf:' + n, label: n }))
+  return [...names].map((n) => ({ key: 'cf:' + n, label: n, type: 'text' }))
 })
-const allExportFields = computed(() => EXPORT_FIELDS.concat(customFieldKeys.value))
+const allExportFields = computed(() => FIELD_DEFS.concat(customFieldKeys.value))
+const fieldDef = (key) => allExportFields.value.find((f) => f.key === key)
+const fxFieldOptions = computed(() => allExportFields.value.map((f) => ({ label: f.label, value: f.key })))
+
+// 字段条件：任意默认/自定义字段 + 比较操作符。日期类字段用 cnDateToIso 归一化后比较，
+// 因此 "2026年06月20日" 与 "2026-6-20" 视作同一天。
+const OPS_BY_TYPE = {
+  enum: [['eq', '等于'], ['ne', '不等于'], ['in', '属于其中之一'], ['empty', '为空'], ['nempty', '不为空']],
+  date: [['gte', '不早于'], ['lte', '不晚于'], ['range', '区间'], ['empty', '为空'], ['nempty', '不为空']],
+  text: [['contains', '包含'], ['ncontains', '不包含'], ['eq', '等于'], ['ne', '不等于'], ['empty', '为空'], ['nempty', '不为空']],
+}
+const fxConds = ref([])
+let condUid = 0
+const condType = (c) => fieldDef(c?.field)?.type || 'text'
+const condEnumOptions = (c) => fieldDef(c?.field)?.options || []
+const condOpOptions = (c) => OPS_BY_TYPE[condType(c)].map(([value, label]) => ({ value, label }))
+const condNoValue = (c) => c?.op === 'empty' || c?.op === 'nempty'
+const condMulti = (c) => !!condEnumOptions(c).length && c?.op === 'in'
+const condEnumSingle = (c) => !!condEnumOptions(c).length && !condNoValue(c) && !condMulti(c)
+const condIsDate = (c) => condType(c) === 'date' && !condNoValue(c)
+const addCond = () => {
+  fxConds.value.push({ uid: ++condUid, field: 'origin', op: 'eq', value: null, value2: null, values: [] })
+  recomputeFx()
+}
+const removeCond = (i) => { fxConds.value.splice(i, 1); recomputeFx() }
+const clearConds = () => { fxConds.value = []; recomputeFx() }
+// 换字段后旧操作符可能不适用（如 text→date 的「包含」），重置为该项类型的首个操作符并清值。
+// key 由事件显式传入，不依赖 v-model 是否已写回 c.field。
+const onCondFieldChange = (c, key) => {
+  const type = fieldDef(key || c.field)?.type || 'text'
+  c.op = OPS_BY_TYPE[type][0][0]
+  c.value = null; c.value2 = null; c.values = []
+  recomputeFx()
+}
+// 筛选用的原始值：枚举字段用英文规范值（与 options 的 value 对齐），日期字段用原文（比较时再归一化）。
+const condRawValue = (b, key) => {
+  if (key.startsWith('cf:')) {
+    const name = key.slice(3)
+    const cf = (b.customFields || []).find((x) => x && x.name === name)
+    return cf ? String(cf.value ?? '') : ''
+  }
+  if (key === 'extraImpacts') return (Array.isArray(b.extraImpacts) ? b.extraImpacts : []).join('\n')
+  if (key === 'notes') {
+    const n = b.notes
+    if (!n || n.kind === 'none') return ''
+    return String(n.value || '')
+  }
+  if (key === 'status') return String(b.status || '').toUpperCase()
+  return String(b[key] ?? '')
+}
+const matchCond = (b, c) => {
+  if (!c || !c.field || !c.op) return true
+  const s = condRawValue(b, c.field)
+  const t = s.trim()
+  switch (c.op) {
+    case 'empty': return !t
+    case 'nempty': return !!t
+    case 'eq': return t === String(c.value ?? '').trim()
+    case 'ne': return t !== String(c.value ?? '').trim()
+    case 'in': return (c.values || []).includes(t)
+    case 'contains': return t.toLowerCase().includes(String(c.value ?? '').toLowerCase())
+    case 'ncontains': return !t.toLowerCase().includes(String(c.value ?? '').toLowerCase())
+    case 'gte': { const iso = cnDateToIso(s); return !!iso && !!c.value && iso >= c.value }
+    case 'lte': { const iso = cnDateToIso(s); return !!iso && !!c.value && iso <= c.value }
+    case 'range': { const iso = cnDateToIso(s); return !!iso && (!c.value || iso >= c.value) && (!c.value2 || iso <= c.value2) }
+    default: return true
+  }
+}
 
 const fxMatched = computed(() => fxData.value.filter((b) => {
   if (fxFilter.category !== 'all' && (b.manageType || '') !== fxFilter.category) return false
@@ -637,17 +753,13 @@ const fxMatched = computed(() => fxData.value.filter((b) => {
     const k = fxFilter.keyword.toLowerCase()
     if (!String(b.description || '').toLowerCase().includes(k) && !String(b.id || '').toLowerCase().includes(k)) return false
   }
+  for (const c of fxConds.value) if (!matchCond(b, c)) return false
   return true
 }))
 const fxCount = (t) => fxMatched.value.filter((b) => (b.taskType || '') === t).length
 const fxDoneCount = computed(() => fxMatched.value.filter((b) => String(b.status || '').toUpperCase() === 'DONE').length)
 
 const fxFieldValue = (b, key) => {
-  if (key.startsWith('cf:')) {
-    const name = key.slice(3)
-    const cf = (b.customFields || []).find((x) => x && x.name === name)
-    return cf ? String(cf.value ?? '') : ''
-  }
   if (key === 'taskType') return typeLabel(b.taskType)
   if (key === 'status') return statusZh(String(b.status || '').toUpperCase())
   if (key === 'manageType') return catLabel(b.manageType)
@@ -657,7 +769,7 @@ const fxFieldValue = (b, key) => {
     if (!n || n.kind === 'none') return ''
     return n.kind === 'file' ? `（外链）${n.value || ''}` : String(n.value || '')
   }
-  return String(b[key] ?? '')
+  return condRawValue(b, key)
 }
 const buildFxText = () => {
   const fields = allExportFields.value.filter((f) => fxFields.value.includes(f.key))
@@ -1037,6 +1149,16 @@ onUnmounted(() => {
 .tm-fx-fields { border: 1px solid var(--guaxi-border); border-radius: 8px; padding: 10px 12px; }
 .tm-fx-fields-head { display: flex; align-items: center; font-size: 12px; color: var(--guaxi-text-secondary); margin-bottom: 8px; }
 .tm-fx-fields-head a { color: #2080f0; cursor: pointer; }
+.tm-fx-fields-count { margin-left: 8px; opacity: 0.75; }
+
+/* 字段条件（任意默认/自定义字段 + 操作符） */
+.tm-fx-conds { border: 1px solid var(--guaxi-border); border-radius: 8px; padding: 10px 12px; }
+.tm-fx-cond { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.tm-fx-cond .fx-cond-field { flex: 0 0 150px; }
+.tm-fx-cond .fx-cond-op { flex: 0 0 110px; }
+.tm-fx-cond .fx-cond-val { flex: 1 1 auto; min-width: 120px; }
+.tm-fx-cond .fx-cond-date { flex: 0 0 150px; }
+.tm-fx-hint { font-size: 12px; color: var(--guaxi-text-secondary); opacity: 0.85; line-height: 1.6; }
 .tm-fx-chk { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; margin: 3px 12px 3px 0; cursor: pointer; }
 .tm-fx-opts { font-size: 13px; }
 .tm-fx-preview-wrap { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 220px; }

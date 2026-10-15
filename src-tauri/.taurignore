@@ -1,0 +1,43 @@
+# .taurignore — tauri dev 的文件监听忽略表（gitignore 语法，相对本目录即 src-tauri）。
+#
+# 背景：`tauri dev` 会监听 cargo 工作区（= 本目录）下的文件变化，任意变化都会打印
+# "File ... changed. Rebuilding application..." 并重新编译 Rust。但开发时有不少目录
+# 是运行期/脚本写入的（每天滚动的日志、下载的模型与资源、构建产物），它们的写入会
+# 平白触发一次全量重建。这里把这类目录排除掉，只让真正的构建输入（src/、Cargo.toml、
+# build.rs、tauri.conf.json、capabilities/、icons/…）驱动重建。
+#
+# 注意：
+# · 不带前导 "/" 的名字在任意层级都匹配，所以 `logs/` 同时命中 <项目根>/logs 与本目录 logs。
+# · 下面把 CLI 内置的默认忽略项（node_modules/、target/、gen/、Cargo.lock、.DS_Store）
+#   一并写全：若某个版本用本文件覆盖默认表，也不会因此漏掉它们。
+
+# ── 运行期日志 ──
+# tracing_appender::rolling::daily("logs", "logfile.log") 按天滚动；story_studio 也往 logs/ 写 <job-id>.jsonl
+logs/
+*.log
+*.log.*
+*.jsonl
+
+# ── 下载 / 生成的运行时资源 ──
+# utils/：模型（whisper、sherpa、tts）、python_libs、codex、rsshub、__bundles 等，
+#         由 tools/fetch_*.mjs 与运行期下载写入；debug 下直接读源码树，无需重编。
+# .sherpa-onnx-libs/、.sherpa-download-tmp/：sherpa 原生库归档与下载暂存。
+utils/
+.sherpa-onnx-libs/
+.sherpa-download-tmp/
+
+# ── 构建产物（CLI 默认值，写全以防被本文件覆盖）──
+target/
+gen/
+Cargo.lock
+node_modules/
+
+# ── Python 字节码缓存 ──
+# 应用内调用的 scripts/*.py 会在同目录生成 __pycache__（运行期写入，非构建输入）
+__pycache__/
+*.pyc
+*.pyo
+
+# ── 系统杂项 ──
+.DS_Store
+Thumbs.db
