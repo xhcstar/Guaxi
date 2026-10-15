@@ -3368,11 +3368,13 @@ async fn run_whisper_and_build_sync_json(local_audio: &Path, entry_dir: &Path, t
         fs::create_dir_all(entry_dir).map_err(|e| format!("创建听力目录失败: {}", e))?;
     }
     let (model_dir, vad_model) = resolve_whisper_models()?;
+    // 有可用的 CUDA 就走 GPU，没有就在 resolve 阶段自己退回 CPU。
     let config = crate::guaxiservices::speech::resolve_whisper_onnx_engine_config(
         &model_dir,
-        "cpu",
+        "auto",
         Some("en"),
     )?;
+    let using_gpu = config.provider != "cpu";
     // 音频整段读进内存交给识别器，不再落中间文件。
     // 只支持 WAV——这与原来 whisper-cli 的输入限制是一致的，不是能力退步。
     let wav_bytes = fs::read(local_audio)
@@ -3380,12 +3382,35 @@ async fn run_whisper_and_build_sync_json(local_audio: &Path, entry_dir: &Path, t
     info!(
         audio = %local_audio.display(),
         model_dir = %model_dir.display(),
+        provider = config.provider.as_str(),
         bytes = wav_bytes.len(),
         "language_learning whisper in-process"
     );
-    let parsed = crate::guaxiservices::speech::transcribe_segments_wav(config, vad_model, wav_bytes)
-        .await
-        .map_err(|e| format!("转写失败：{}", e))?;
+    let parsed = match crate::guaxiservices::speech::transcribe_segments_wav(
+        config,
+        vad_model.clone(),
+        wav_bytes,
+    )
+    .await
+    {
+        Ok(parsed) => parsed,
+        // CUDA 探针只能验到「动态库能加载」，建会话/推理仍可能失败（驱动版本、显存、算子）。
+        // 这种时候退回 CPU 重跑一次，别让加速器把整条听力同步拖垮。
+        Err(err) if using_gpu => {
+            warn!(error = err.as_str(), "GPU 转写失败，回退 CPU 重试");
+            let cpu_config = crate::guaxiservices::speech::resolve_whisper_onnx_engine_config(
+                &model_dir,
+                "cpu",
+                Some("en"),
+            )?;
+            let wav_bytes = fs::read(local_audio)
+                .map_err(|e| format!("读取听力音频失败（{}）：{}", local_audio.display(), e))?;
+            crate::guaxiservices::speech::transcribe_segments_wav(cpu_config, vad_model, wav_bytes)
+                .await
+                .map_err(|e| format!("转写失败：{}", e))?
+        }
+        Err(err) => return Err(format!("转写失败：{}", err)),
+    };
     if parsed.is_empty() {
         return Err("转写未得到可用分段，请检查音频内容".to_string());
     }

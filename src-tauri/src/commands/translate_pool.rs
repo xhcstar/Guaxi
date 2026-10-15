@@ -520,8 +520,23 @@ pub async fn cache_get_persistent(from: &str, to: &str, text: &str) -> Option<St
 
 // ---------------------------------------------------------------- 单次调用
 
-/// 调用一家接口翻译一组文本。批量接口一次发完；非批量接口由这里做有界并发拆分，
-/// 而不是逐条串行——串行是原本划词要等七八秒的主因。
+/// 单次接口请求的超时。预算必须按「一次请求」给，不能套在整个批次上：
+/// 批量接口按 max_batch 分块串行发送，整篇听力（几十组句子）会被拆成多次请求，
+/// 若共用一份 2.6s 预算，每次请求都成功也会在预算处被判超时，白等一轮再换下一家。
+async fn call_provider(
+    spec: &'static ProviderSpec,
+    texts: Vec<String>,
+    from: String,
+    to: String,
+) -> Result<Vec<String>, PoolError> {
+    match tokio::time::timeout(Duration::from_millis(attempt_timeout_ms()), (spec.call)(texts, from, to)).await {
+        Ok(inner) => inner,
+        Err(_) => Err(PoolError::net(format!("{} 超时", spec.name))),
+    }
+}
+
+/// 调用一家接口翻译一组文本。批量接口按 max_batch 分块；非批量接口由这里做有界并发拆分，
+/// 而不是逐条串行——串行是原本划词要等七八秒的主因。每次实际请求各自计时（见 call_provider）。
 async fn invoke_provider(
     spec: &'static ProviderSpec,
     texts: Vec<String>,
@@ -534,7 +549,7 @@ async fn invoke_provider(
     if spec.batch {
         let mut out = Vec::with_capacity(texts.len());
         for chunk in texts.chunks(spec.max_batch.max(1)) {
-            let part = (spec.call)(chunk.to_vec(), from.clone(), to.clone()).await?;
+            let part = call_provider(spec, chunk.to_vec(), from.clone(), to.clone()).await?;
             if part.len() < chunk.len() {
                 return Err(PoolError::bad(format!(
                     "{} 返回条数不足（{}/{}）",
@@ -549,7 +564,7 @@ async fn invoke_provider(
     }
 
     if texts.len() == 1 {
-        return (spec.call)(texts, from, to).await;
+        return call_provider(spec, texts, from, to).await;
     }
 
     let conc = per_text_concurrency();
@@ -557,7 +572,7 @@ async fn invoke_provider(
         .map(|(idx, text)| {
             let from = from.clone();
             let to = to.clone();
-            async move { (idx, (spec.call)(vec![text], from, to).await) }
+            async move { (idx, call_provider(spec, vec![text], from, to).await) }
         })
         .buffer_unordered(conc)
         .collect::<Vec<_>>()
@@ -575,7 +590,23 @@ async fn invoke_provider(
     Ok(out)
 }
 
-/// 带健康度记账和超时的单次尝试。
+/// 一次尝试的整体上限：单次请求预算 × 预计要发几轮请求，再封顶。
+/// 单请求预算（见 call_provider）保证某一次请求卡住不会吃掉整批的额度；
+/// 这层上限保证某家慢接口不会把调用方一直吊着。
+fn attempt_budget_ms(spec: &ProviderSpec, text_count: usize) -> u64 {
+    const TOTAL_CAP_MS: u64 = 20_000;
+    let per_round = if spec.batch {
+        spec.max_batch.max(1)
+    } else {
+        per_text_concurrency()
+    };
+    let rounds = (text_count.max(1) + per_round - 1) / per_round;
+    attempt_timeout_ms()
+        .saturating_mul(rounds.max(1) as u64)
+        .min(TOTAL_CAP_MS)
+}
+
+/// 带健康度记账的单次尝试。
 async fn run_attempt(
     spec: &'static ProviderSpec,
     texts: Vec<String>,
@@ -584,7 +615,7 @@ async fn run_attempt(
 ) -> Result<Vec<String>, PoolError> {
     note_dispatch(spec.name, spec.base_rtt_ms);
     let started = Instant::now();
-    let budget = Duration::from_millis(attempt_timeout_ms());
+    let budget = Duration::from_millis(attempt_budget_ms(spec, texts.len()));
     let result = match tokio::time::timeout(budget, invoke_provider(spec, texts, from, to)).await {
         Ok(inner) => inner,
         Err(_) => Err(PoolError::net(format!("{} 超时", spec.name))),
@@ -604,11 +635,22 @@ pub async fn translate_batch(
     from: &str,
     to: &str,
 ) -> Result<(Vec<String>, String), PoolError> {
+    translate_batch_with_fanout(texts, from, to, fanout()).await
+}
+
+/// 同上，但并发家数由调用方指定。逐条补救时传 1：只问当前最优的一家，
+/// 否则 N 条 × fanout 家会在瞬间打出成百个请求，直接把免费接口打成风控冷却。
+async fn translate_batch_with_fanout(
+    texts: &[String],
+    from: &str,
+    to: &str,
+    want: usize,
+) -> Result<(Vec<String>, String), PoolError> {
     if texts.is_empty() {
         return Ok((Vec::new(), String::new()));
     }
     warmup();
-    let candidates = pick_providers(texts.len(), to, fanout());
+    let candidates = pick_providers(texts.len(), to, want);
     if candidates.is_empty() {
         return Err(PoolError::bad("翻译接口池为空（检查 GUAXI_TRANSLATE_PROVIDERS）"));
     }
@@ -796,7 +838,7 @@ pub async fn translate_texts(texts: &[String], from: &str, to: &str) -> PoolBatc
                     let text = texts[idx].clone();
                     let from = from.to_string();
                     let to = to.to_string();
-                    async move { (idx, translate_batch(&[text], &from, &to).await) }
+                    async move { (idx, translate_batch_with_fanout(&[text], &from, &to, 1).await) }
                 })
                 .buffer_unordered(conc)
                 .collect::<Vec<_>>()

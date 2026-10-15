@@ -747,7 +747,8 @@
             <n-radio-button value="default">默认策略（平均从每个源抓取）</n-radio-button>
             <n-radio-button value="custom">自定义本次来源</n-radio-button>
           </n-radio-group>
-          <n-tag size="small" type="info">可用来源 {{ collectAvailableSourceOptions.length }} 个</n-tag>
+          <n-tag size="small" :type="collectAvailableSourceOptions.length ? 'info' : 'warning'">可用来源 {{ collectAvailableSourceOptions.length }} 个</n-tag>
+          <div v-if="!collectAvailableSourceOptions.length" class="collect-source-hint">{{ collectSourceEmptyHint }}</div>
           <n-select
             v-if="collectSourceMode === 'custom'"
             v-model:value="collectSourceIds"
@@ -874,7 +875,27 @@ const message = useMessage()
 const activeTab = ref('manager')
 const keyword = ref('')
 const learningLangStorageKey = 'guaxi_language_learning_target_lang'
-const learningLang = ref(window.localStorage.getItem(learningLangStorageKey) || 'zh')
+const listeningSourceStorageKey = 'guaxi_language_listening_sources_v1'
+// 学习语言同时决定听力源的语言筛选，默认值若与已配置来源不符，开箱状态下永远抓不到资源
+const pickLearningLangFromStoredSources = () => {
+  try {
+    const rows = JSON.parse(window.localStorage.getItem(listeningSourceStorageKey) || '[]')
+    if (!Array.isArray(rows)) return ''
+    const counts = new Map()
+    rows.filter((x) => x && x.enabled !== false).forEach((x) => {
+      const tag = String(x?.language_tag || '').trim().toLowerCase()
+      if (!tag || tag === 'all') return
+      counts.set(tag, (counts.get(tag) || 0) + 1)
+    })
+    const top = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]
+    return top?.[0] || ''
+  } catch {
+    return ''
+  }
+}
+const learningLang = ref(
+  window.localStorage.getItem(learningLangStorageKey) || pickLearningLangFromStoredSources() || 'en'
+)
 const selectedShelf = ref('all')
 const records = ref([])
 const audioResources = ref([])
@@ -954,7 +975,6 @@ const audioTranslationCoverageMap = ref({})
 let audioTranslationCoverageRefreshSerial = 0
 const sourceManagerVisible = ref(false)
 let randomCardAudioPlayer = null
-const listeningSourceStorageKey = 'guaxi_language_listening_sources_v1'
 const listeningSources = ref([])
 const newSourceName = ref('')
 const newSourceProvider = ref('')
@@ -1108,6 +1128,24 @@ const collectAvailableSourcePayload = computed(() => {
       language_tag: x.language_tag,
       max_duration_sec: Math.round(Math.min(30, Math.max(1, Number(x.max_duration_min || 30))) * 60),
     }))
+})
+const resolveLearningLangLabel = (value) => {
+  const key = String(value || '').trim().toLowerCase()
+  if (!key) return ''
+  const hit = learningLangOptions.find((x) => x.value === key)
+  return String(hit?.label || key)
+}
+const learningLangLabel = computed(() => resolveLearningLangLabel(learningLang.value))
+const collectSourceEmptyHint = computed(() => {
+  const enabled = listeningSources.value.filter((x) => x.enabled && x.feed_url)
+  if (!enabled.length) return '当前没有已启用的听力源，请先在听力源管理器启用来源。'
+  const lang = String(learningLang.value || '').trim().toLowerCase()
+  const otherTags = [...new Set(enabled
+    .map((x) => String(x.language_tag || '').trim().toLowerCase())
+    .filter((t) => t && t !== 'all' && t !== lang))]
+  const otherLabels = otherTags.map((t) => resolveLearningLangLabel(t)).filter(Boolean)
+  const otherText = otherLabels.length ? `，现有来源为「${otherLabels.join('、')}」` : ''
+  return `已启用 ${enabled.length} 个听力源，但语言都与当前学习语言「${learningLangLabel.value}」不匹配${otherText}。请在听力源管理器修改来源语言，或切换顶部学习语言。`
 })
 const mergeListeningSourcesWithDefaults = (currentList) => {
   const current = (Array.isArray(currentList) ? currentList : [])
@@ -2644,7 +2682,7 @@ const openCreateDialog = () => {
   recordForm.translated_text = ''
   recordForm.record_type = selectedShelf.value === 'my_paragraphs' ? 'paragraph' : 'sentence'
   recordForm.source_lang = 'auto'
-  recordForm.target_lang = learningLang.value
+  recordForm.target_lang = 'zh'
   recordForm.engine = 'Manual'
   recordEditVisible.value = true
 }
@@ -2734,7 +2772,7 @@ const openCollectSourceDialog = () => {
 const confirmCollectListeningByTopic = async () => {
   const available = collectAvailableSourcePayload.value
   if (!available.length) {
-    message.warning('当前没有可用听力源，请先在听力源管理器启用来源')
+    message.warning(collectSourceEmptyHint.value)
     return
   }
   let selected = available
@@ -2765,7 +2803,7 @@ const collectListeningByTopic = async (selectedSourcesOverride = null) => {
       ? selectedSourcesOverride
       : collectAvailableSourcePayload.value.map(({ id, ...rest }) => rest)
     if (!selectedSources.length) {
-      message.warning('当前没有可用听力源，请先在听力源管理器启用来源')
+      message.warning(collectSourceEmptyHint.value)
       return
     }
     const rows = await invoke('language_learning_collect_audio_by_topic', {
@@ -4805,6 +4843,16 @@ onBeforeUnmount(() => {
   border: 1px solid var(--guaxi-border);
   border-radius: 8px;
   padding: 8px;
+}
+
+.collect-source-hint {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--guaxi-text-secondary);
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px dashed color-mix(in srgb, #f0a020 45%, var(--guaxi-border));
+  background: color-mix(in srgb, #f0a020 12%, var(--guaxi-panel-bg));
 }
 
 .chip-wrap {
