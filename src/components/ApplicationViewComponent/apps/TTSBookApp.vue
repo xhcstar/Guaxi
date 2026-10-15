@@ -1556,8 +1556,8 @@ const formatFinishedAt = (value) => {
     linear-gradient(135deg, var(--tts-bg-1), var(--tts-bg-2));
 }
 
-// 顶栏高度写成变量：布局区要用 `calc(100% - var(--tts-header-h))` 跟它对齐，
-// 各写一份数字迟早会对不上。这里是「标题一条」的紧凑高度。
+/* 顶栏高度写成变量：布局区要用 `calc(100% - var(--tts-header-h))` 跟它对齐，
+   各写一份数字迟早会对不上。这里是「标题一条」的紧凑高度。 */
 .tts-header {
   height: var(--tts-header-h);
   display: flex;
