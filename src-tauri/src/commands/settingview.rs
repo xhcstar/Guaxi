@@ -938,8 +938,25 @@ pub fn load_config() -> AppConfig {
         return default_config;
     }
 
-    let config_data = fs::read_to_string(&config_path).expect("无法读取配置文件");
-    let mut v: serde_json::Value = serde_json::from_str(&config_data).expect("无法解析配置文件");
+    // 这里绝不能 panic：读配置的地方非常多（每次朗读、每个分段都要读一遍），
+    // 而保存配置是「先截断再写」，撞上写的中间态就会读到空内容或半截内容。
+    // 与其把整个应用打挂，不如退回默认配置——真损坏的原文件会先备份，设置不会凭空消失。
+    let raw = fs::read_to_string(&config_path).unwrap_or_default();
+    let mut v: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(value) => value,
+        Err(error) => {
+            warn!(
+                error = %error,
+                path = config_path.to_string_lossy().as_ref(),
+                "配置文件无法解析，暂用默认配置"
+            );
+            // 空文件多半是「写了一半」的瞬间，动它反而会踩到写侧；有内容却解析不了才是真损坏。
+            if !raw.trim().is_empty() {
+                stash_corrupt_config(&config_path);
+            }
+            serde_json::json!({})
+        }
+    };
 
     let device_id = v
         .pointer("/device_id")
@@ -1101,7 +1118,15 @@ pub fn load_config() -> AppConfig {
     try_decrypt("/knowledge_bases_remote_token");
     try_decrypt("/lsp_github_token");
 
-    let mut config: AppConfig = serde_json::from_value(v).expect("无法解析配置文件");
+    let mut config: AppConfig = match serde_json::from_value(v) {
+        Ok(config) => config,
+        Err(error) => {
+            // 与上面同理：字段对不上也退回默认配置，并触发一次修复性重写。
+            warn!(error = %error, "配置字段无法映射，改用默认配置");
+            needs_save = true;
+            AppConfig::default()
+        }
+    };
 
     if config.device_id.trim().is_empty() {
         config.device_id = Uuid::new_v4().to_string();
@@ -1114,6 +1139,22 @@ pub fn load_config() -> AppConfig {
     }
 
     config
+}
+
+/// 把损坏的配置文件挪到一边留作取证。
+///
+/// 不这么做的话，紧接着的修复性 `save_config` 会用默认配置直接覆盖掉它，用户的设置就真没了。
+/// 文件名带时间戳，反复损坏也不会互相覆盖。
+fn stash_corrupt_config(config_path: &Path) {
+    let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+    let backup = config_path.with_file_name(format!("guaxi_config.corrupt-{}.json", stamp));
+    match fs::rename(config_path, &backup) {
+        Ok(()) => warn!(
+            backup = backup.to_string_lossy().as_ref(),
+            "已把损坏的配置文件备份到一旁"
+        ),
+        Err(error) => warn!(error = %error, "备份损坏的配置文件失败"),
+    }
 }
 
 pub fn save_config(config: &AppConfig) {
@@ -1240,7 +1281,21 @@ pub fn save_config(config: &AppConfig) {
     encrypt_field(&mut val, "/lsp_github_token");
 
     let json = serde_json::to_string_pretty(&val).unwrap();
-    fs::write(&config_path, json).expect("无法写入配置文件");
+    // 原子落盘：`fs::write` 是先截断再写，中间那一瞬间文件是空的，
+    // 而读配置的地方很多（每次朗读、每个分段都要读一遍），撞上就会解析失败。
+    // 先写临时文件、再改名过去——同卷改名是原子的，读侧永远看不到中间态。
+    let temp_path = config_path.with_extension("json.tmp");
+    let write_result = fs::write(&temp_path, &json).and_then(|()| fs::rename(&temp_path, &config_path));
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&temp_path);
+        // 写失败不再 panic：这里只是保存设置，不该把应用打挂。
+        warn!(
+            error = %error,
+            path = config_path.to_string_lossy().as_ref(),
+            "写入配置文件失败"
+        );
+        return;
+    }
 
     info!(
         config_path = config_path.to_string_lossy().as_ref(),
