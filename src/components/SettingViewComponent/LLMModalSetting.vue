@@ -193,6 +193,14 @@
             <div class="status-right">
               <n-select
                 size="tiny"
+                style="width: 150px"
+                :value="markerReadingOrder"
+                :options="markerReadingOrderOptions"
+                :disabled="loading || savingMarkerReadingOrder"
+                @update:value="changeMarkerReadingOrder"
+              />
+              <n-select
+                size="tiny"
                 style="width: 168px"
                 :value="markerOcrMode"
                 :options="markerOcrModeOptions"
@@ -219,6 +227,7 @@
                   <div class="status-tip-desc">首次启动会在后台自动装配（联网即可，无需手动配置）</div>
                   <div class="status-tip-desc">torch：{{ engineStatus.markerCuda ? 'CUDA 版（GPU 加速）' : 'CPU 版' }}</div>
                   <div class="status-tip-desc">OCR 策略：{{ markerOcrModeHint }}</div>
+                  <div class="status-tip-desc">阅读顺序：{{ markerReadingOrderHint }}</div>
                   <div v-if="engineStatus.markerDegraded" class="status-tip-desc">
                     降级模式：定制源码未取到，当前使用通用版 marker-pdf（功能不受影响）
                   </div>
@@ -782,6 +791,7 @@ const loadConfig = async () => {
     // 运行环境不再走离线压缩包，改由启动时后台自动装配。
     await refreshEngineStatus()
     await refreshMarkerOcrMode()
+    await refreshMarkerReadingOrder()
 
     const localStatus = await invoke('get_local_deepseek_status')
     localDeepseekStatus.value = {
@@ -965,6 +975,47 @@ const changeMarkerOcrMode = async (value) => {
     message.error(`保存 OCR 策略失败: ${String(e?.message || e || '')}`)
   } finally {
     savingMarkerOcr.value = false
+  }
+}
+
+// ── marker 的阅读顺序策略 ──
+// marker 2.x 默认按 PDF 字符流排块（多栏页面上更准），但"打印成 PDF"的文档
+// 字符流顺序常与版面不一致——标题会被写在正文之后，于是标题与正文分家。
+// 默认取版面顺序，需要多栏优化时可切回字符流。
+const markerReadingOrder = ref('layout')
+const savingMarkerReadingOrder = ref(false)
+const markerReadingOrderOptions = [
+  { value: 'layout', label: '顺序：版面（推荐）' },
+  { value: 'pdftext', label: '顺序：PDF 字符流' },
+]
+
+const markerReadingOrderHint = computed(() => (
+  markerReadingOrder.value === 'pdftext'
+    ? '按 PDF 字符流排块：多栏论文通常更准，但浏览器打印/导出的 PDF 可能把标题排到文末'
+    : '按版面位置排块：网页打印/导出型 PDF 更稳，标题不会与正文分家'
+))
+
+const refreshMarkerReadingOrder = async () => {
+  try {
+    const order = await invoke('get_marker_reading_order')
+    markerReadingOrder.value = order === 'pdftext' ? 'pdftext' : 'layout'
+  } catch (e) {
+    logger.error('读取 marker 阅读顺序失败:', e)
+  }
+}
+
+const changeMarkerReadingOrder = async (value) => {
+  savingMarkerReadingOrder.value = true
+  try {
+    const order = String(value || 'layout')
+    await invoke('set_marker_reading_order', { order })
+    markerReadingOrder.value = order
+    message.success('已保存阅读顺序，下次转换生效')
+  } catch (e) {
+    logger.error('保存 marker 阅读顺序失败:', e)
+    message.error(`保存阅读顺序失败: ${String(e?.message || e || '')}`)
+  } finally {
+    savingMarkerReadingOrder.value = false
   }
 }
 

@@ -416,6 +416,25 @@ fn apply_marker_ocr_policy(cmd: &mut TokioCommand) {
     cmd.args(["--ocr_mode", effective]);
 }
 
+/// 按设置页的阅读顺序策略决定 marker 用什么顺序排块。
+///
+/// marker 2.x 的 `use_pdftext_reading_order` 默认为真：只要页面有文字层，就按 PDF 字符流
+/// 的序号重排所有块，跳过版面模型的阅读顺序头——多栏页面上这样更准，所以它是上游的选择。
+/// 但字符流顺序并不等于视觉顺序：浏览器「打印成 PDF」的网页会先输出正文、最后才写各节标题，
+/// 按字符流排就会把标题整段挪到文末，标题与正文分家。因此 Guaxi 默认取 `layout`
+/// （即传 false，等价于 marker 1.x 的版面/模型排序），需要时可在设置页切回 `pdftext`。
+///
+/// 只在独立 venv（marker 2.x）这条路径上传：旧的 conda 分发版是 1.10.1，没有这个选项，
+/// 传过去会被 CLI 判为未知参数。
+fn apply_marker_reading_order(cmd: &mut TokioCommand) {
+    let value = if crate::commands::settingview::marker_reading_order() == "pdftext" {
+        "true"
+    } else {
+        "false"
+    };
+    cmd.args(["--use_pdftext_reading_order", value]);
+}
+
 /// Marker 引擎是否就绪：独立的 uv venv 或旧的 conda 分发版任一可用。
 pub fn marker_engine_ready() -> bool {
     super::provision::marker_runtime().is_some() || marker_available()
@@ -447,6 +466,7 @@ fn build_marker_plan(
                 .arg("--paginate_output");
             apply_marker_mode(&mut cmd);
             apply_marker_ocr_policy(&mut cmd);
+            apply_marker_reading_order(&mut cmd);
             cmd.arg("--output_dir")
                 .arg(&expected_output_dir)
                 .arg("--progress_json");

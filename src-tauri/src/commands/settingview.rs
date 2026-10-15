@@ -74,6 +74,10 @@ pub struct AppConfig {
     /// 语义见 `convert::engine::apply_marker_ocr_policy`；设置页可切换。
     #[serde(default = "default_marker_ocr_mode")]
     marker_ocr_mode: String,
+    /// 文档转换（marker）的阅读顺序策略：`layout` | `pdftext`。
+    /// 语义见 `convert::engine::apply_marker_reading_order`；设置页可切换。
+    #[serde(default = "default_marker_reading_order")]
+    marker_reading_order: String,
     #[serde(default)]
     knowledge_bases_root: String,
     #[serde(default)]
@@ -851,6 +855,7 @@ impl Default for AppConfig {
             slidev_repo_root: "".to_string(),
             chat_record_root: default_chat_record_root(),
             marker_ocr_mode: default_marker_ocr_mode(),
+            marker_reading_order: default_marker_reading_order(),
             knowledge_bases_root: "".to_string(),
             knowledge_bases_remote_url: "".to_string(),
             knowledge_bases_remote_username: "".to_string(),
@@ -1680,6 +1685,42 @@ pub fn set_marker_ocr_mode(mode: String) -> Result<(), String> {
     }
     let mut config = load_config();
     config.marker_ocr_mode = normalized;
+    save_config(&config);
+    Ok(())
+}
+
+/// marker 阅读顺序策略的默认值：`layout`。
+///
+/// marker 2.x 默认按 PDF 字符流排块（`use_pdftext_reading_order=true`），这在多栏页面上
+/// 比模型的阅读顺序头更准；但字符流顺序与版面顺序并不总是一致——浏览器「打印成 PDF」
+/// 的网页会先输出正文、最后才写各节标题，按字符流排序就会把标题整段挪到文末，
+/// 与正文分家。版面顺序对这类文档稳定得多，所以默认取 `layout`。
+pub fn default_marker_reading_order() -> String {
+    "layout".to_string()
+}
+
+/// 当前 marker 阅读顺序策略（已归一化，非法值回退默认）。
+pub fn marker_reading_order() -> String {
+    let order = load_config().marker_reading_order.trim().to_ascii_lowercase();
+    match order.as_str() {
+        "layout" | "pdftext" => order,
+        _ => default_marker_reading_order(),
+    }
+}
+
+#[tauri::command]
+pub fn get_marker_reading_order() -> String {
+    marker_reading_order()
+}
+
+#[tauri::command]
+pub fn set_marker_reading_order(order: String) -> Result<(), String> {
+    let normalized = order.trim().to_ascii_lowercase();
+    if !matches!(normalized.as_str(), "layout" | "pdftext") {
+        return Err(format!("不支持的 marker 阅读顺序: {order}"));
+    }
+    let mut config = load_config();
+    config.marker_reading_order = normalized;
     save_config(&config);
     Ok(())
 }
