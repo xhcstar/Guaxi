@@ -26,8 +26,9 @@
 
 <script setup>
 import { NTree, NIcon } from 'naive-ui'
-import { TextBulletListTree20Filled, List24Filled } from '@vicons/fluent'
+import { Icon } from '@iconify/vue'
 import { Code24Regular } from '@vicons/fluent'
+import { resolveOutlineEntryIcon } from './outlineEntryIcon'
 import { storeToRefs } from 'pinia'
 import { useOutlineStore } from '../../stores/outlineStore'
 import { h, computed, ref, watch } from 'vue'
@@ -165,20 +166,19 @@ const renderLabel = ({ option }) => {
 }
 
 // 渲染前缀图标
+// 与面包屑导航共用同一份解析（outlineEntryIcon.js）：标题按层级给 heading-1..heading-6，
+// .org 任务块按类型/完成态给 bug / list-todo / check-square。
+// 以前这里另用一套（一级 List24、其余 TextBulletListTree），于是同一个标题在面包屑和大纲里长得不一样。
+// python / math cell 保留各自图标：它们不是标题，代码/Σ 比"第 N 级标题"更有信息量。
 const renderPrefix = ({ option }) => {
-    if (option.kind === 'org-task') {
-        return h('span', { class: ['outline-tt-dot', 'tt-' + (option.taskType || 'task')] })
-    }
     if (option.kind === 'python-cell') {
         return h(NIcon, null, { default: () => h(Code24Regular) })
     }
     if (option.kind === 'math-cell') {
         return h(NIcon, null, { default: () => h('span', { class: 'outline-math-icon' }, 'Σ') })
     }
-    if (option.level === 1) {
-        return h(NIcon, null, { default: () => h(List24Filled) })
-    }
-    return h(NIcon, null, { default: () => h(TextBulletListTree20Filled) })
+    const icon = resolveOutlineEntryIcon(option)
+    return icon ? h(Icon, { icon, width: 16, height: 16, class: 'outline-entry-icon' }) : null
 }
 
 // 点击跳转
@@ -287,19 +287,15 @@ const handleExpandedKeysUpdate = (keys) => {
     color: #0891b2;
 }
 
-/* GUAXI 任务块 .org 大纲条目：类型色点前缀 + 文本 + 状态小标签 */
-.outline-tt-dot {
-    display: inline-block;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    flex: 0 0 8px;
-    margin-top: 6px;
-    background: #2080f0;
+/* 大纲条目图标：与面包屑导航同源（见 outlineEntryIcon.js）。
+   这里只管对齐与透明度，颜色交给 currentColor，和面包屑里的图标观感保持一致。 */
+.outline-entry-icon {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.92;
 }
-.outline-tt-dot.tt-bug { background: #d03050; }
-.outline-tt-dot.tt-task { background: #2080f0; }
-.outline-tt-dot.tt-other { background: #8a8f99; }
 
 :deep(.outline-org-task) {
     display: inline-flex;

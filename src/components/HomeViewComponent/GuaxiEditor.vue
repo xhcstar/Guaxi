@@ -1520,18 +1520,8 @@ import fileTextIcon from '@iconify-icons/lucide/file-text'
 import texFileIcon from '@iconify-icons/vscode-icons/file-type-tex'
 import typFileIcon from '@iconify-icons/lucide/file-type-2'
 import orgTaskIcon from '@iconify-icons/lucide/clipboard-list'
-import hashIcon from '@iconify-icons/lucide/hash'
-// 面包屑图标：标题层级 / 任务类型（见 resolveOutlineEntryIcon）
-import heading1Icon from '@iconify-icons/lucide/heading-1'
-import heading2Icon from '@iconify-icons/lucide/heading-2'
-import heading3Icon from '@iconify-icons/lucide/heading-3'
-import heading4Icon from '@iconify-icons/lucide/heading-4'
-import heading5Icon from '@iconify-icons/lucide/heading-5'
-import heading6Icon from '@iconify-icons/lucide/heading-6'
-import pilcrowIcon from '@iconify-icons/lucide/pilcrow'
-import bugIcon from '@iconify-icons/lucide/bug'
-import listTodoIcon from '@iconify-icons/lucide/list-todo'
-import checkSquareIcon from '@iconify-icons/lucide/check-square'
+// 标题层级 / 任务类型图标：与右侧大纲面板共用同一份解析（见 outlineEntryIcon.js）
+import { resolveOutlineEntryIcon } from './outlineEntryIcon'
 import { getFileTreeIcon } from './fileTreeIcons'
 
 import tableRowPlusAfter from '@iconify-icons/mdi/table-row-plus-after'
@@ -4445,31 +4435,10 @@ const safeOutlineFlat = computed(() => {
   return []
 })
 
-// ── 面包屑图标：按“文件类型 / 标题层级 / 任务类型”取对应图标（对齐 VSCode 面包屑的语义）──
-// 设计说明：
-// 1. 文件一律复用文件树的扩展名映射（fileTreeIcons.js），保证“树里是 Py、面包屑却是通用文件”这类不一致不会出现。
-// 2. 标题按 level 给 heading-1..heading-6；LaTeX 的第 7 级（subparagraph）等超范围层级用 pilcrow 表示“段落”。
-// 3. .org 任务块按类型 + 完成态：Bug 用 bug；未完成用 list-todo，已完成用 check-square。
-const HEADING_ICON_BY_LEVEL = {
-  1: heading1Icon,
-  2: heading2Icon,
-  3: heading3Icon,
-  4: heading4Icon,
-  5: heading5Icon,
-  6: heading6Icon,
-}
-
-const resolveOutlineEntryIcon = (entry) => {
-  const kind = String(entry?.kind || '')
-  if (kind === 'org-task') {
-    if (String(entry?.taskType || '') === 'bug') return bugIcon
-    return entry?.done ? checkSquareIcon : listTodoIcon
-  }
-
-  const level = Number(entry?.level || 0)
-  if (HEADING_ICON_BY_LEVEL[level]) return HEADING_ICON_BY_LEVEL[level]
-  return level > 6 ? pilcrowIcon : hashIcon
-}
+// ── 面包屑图标 ──
+// 标题层级 / .org 任务类型这一份解析与右侧大纲面板**共用同一实现**（见 outlineEntryIcon.js），
+// 否则同一个标题在两处会长得不一样。文件类型仍走下面 resolveBreadcrumbNodeIcon 的扩展名映射，
+// 保证“树里是 Py、面包屑却是通用文件”这类不一致不会出现。
 
 // 目录 / 知识库根：沿用原有单色图标（currentColor，由 CSS 统一染色），与文件树视觉一致。
 const resolveBreadcrumbNodeIcon = (name, isDir) => (isDir ? folderIcon : getFileTreeIcon(name, false))
@@ -25660,29 +25629,8 @@ onUnmounted(() => {
   background: transparent;
 }
 
-.breadcrumb-picker-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 220px;
-  max-width: 420px;
-}
-
-.breadcrumb-picker-icon {
-  flex: 0 0 auto;
-  opacity: 0.9;
-}
-
-.breadcrumb-picker-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.breadcrumb-picker-item.active .breadcrumb-picker-label {
-  font-weight: 650;
-}
+/* 面包屑下拉的布局见下方全局样式块：下拉内容由 n-dropdown 渲染、拿不到 scoped 作用域，
+   写在这里的选择器不会命中（这正是当初"图标和文字紧挨着"的原因）。 */
 
 .toolbar {
   display: flex;
@@ -28587,6 +28535,35 @@ body.guaxi-tab-dragging * {
 .breadcrumb-picker-dropdown .breadcrumb-picker-item,
 .breadcrumb-picker-dropdown .breadcrumb-picker-label {
   font-family: inherit !important;
+}
+
+/* 设计说明（关键 · 对应"面包屑下拉里图标和文字紧挨着"）：
+   下拉内容是 teleport 到 body、由 n-dropdown 渲染的，而 label 的 vnode 是在独立函数
+   （makeBreadcrumbPickerOption）里创建的——**拿不到本组件的 scoped 作用域属性**，
+   所以 scoped 块里那份 .breadcrumb-picker-item 的 gap/min-width 从来没生效过。
+   布局必须写在全局块，并用 .breadcrumb-picker-dropdown 收窄作用域。 */
+.breadcrumb-picker-dropdown .breadcrumb-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 220px;
+  max-width: 420px;
+}
+
+.breadcrumb-picker-dropdown .breadcrumb-picker-icon {
+  flex: 0 0 auto;
+  opacity: 0.9;
+}
+
+.breadcrumb-picker-dropdown .breadcrumb-picker-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.breadcrumb-picker-dropdown .breadcrumb-picker-item.active .breadcrumb-picker-label {
+  font-weight: 650;
 }
 
 /* Mermaid图表样式 */
