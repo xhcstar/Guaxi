@@ -33,6 +33,36 @@ export const DEFAULT_MARKDOWN_FORMAT_OPTIONS = {
   fix_extra_whitespace: true,
 }
 
+/**
+ * 主编辑器（Monaco）显示配置的默认值。
+ *
+ * 必须与后端 `EditorDisplayConfig` 的 `default_editor_*` 逐字段一致——那是老用户升级后实际会用到的值；
+ * 前端留一份是为了首帧（配置还没 invoke 回来）建编辑器时不会用错字号。
+ * 取值刻意等于 GuaxiEditor 原先写死的 `fontSize: 18` 与 `minimap.enabled: false`。
+ */
+export const DEFAULT_EDITOR_DISPLAY_OPTIONS = {
+  font_family: "'Maple Mono NF CN','JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New'",
+  font_size: 18,
+  minimap_enabled: false,
+}
+
+/** 主编辑器字号区间，与后端 EDITOR_FONT_SIZE_MIN / MAX 对齐。 */
+export const EDITOR_FONT_SIZE_MIN = 8
+export const EDITOR_FONT_SIZE_MAX = 48
+
+/**
+ * 主编辑器行高 = 字号 × 4/3。
+ *
+ * 4/3 正好等于 GuaxiEditor 原先写死的 18px 字号 / 24px 行高，所以默认字号下行高不变；
+ * 行高写死成一个常数的话，用户把字号调到 24 就会开始压字。
+ * 设置页的预览和编辑器本身都用这一个函数，避免预览与实机对不上。
+ */
+export const resolveEditorLineHeight = (fontSize) => {
+  const size = Number(fontSize)
+  const safe = Number.isFinite(size) && size > 0 ? size : DEFAULT_EDITOR_DISPLAY_OPTIONS.font_size
+  return Math.round((safe * 4) / 3)
+}
+
 export const useSettingsStore = defineStore("settings", {
   state: () => ({
     selectedMenu: "noterepo",
@@ -47,6 +77,10 @@ export const useSettingsStore = defineStore("settings", {
     // Markdown 格式化选项。以前写死在 GuaxiEditor 的 invokeMarkdownFormat 里，用户改不了。
     markdownFormat: { ...DEFAULT_MARKDOWN_FORMAT_OPTIONS },
     markdownFormatLoaded: false,
+    // 主编辑器（Monaco）的字体、字号与小地图开关。键名沿用后端 config 的字段名，
+    // 与 markdownFormat 一样不做驼峰转换，省掉一层映射。
+    editorDisplay: { ...DEFAULT_EDITOR_DISPLAY_OPTIONS },
+    editorDisplayLoaded: false,
   }),
   actions: {
     setSelectedMenu(menu) {
@@ -131,7 +165,46 @@ export const useSettingsStore = defineStore("settings", {
       }
     },
 
-    async loadAppearanceConfig() {      if (this.appearanceLoaded) {
+    async loadEditorDisplayConfig() {
+      if (this.editorDisplayLoaded) return
+      try {
+        const loaded = await invoke('get_editor_display_config')
+        if (loaded && typeof loaded === 'object') {
+          // 与 markdownFormat 同一套写法：合并而不是整体替换，后端将来新增字段时前端不会丢。
+          this.editorDisplay = { ...DEFAULT_EDITOR_DISPLAY_OPTIONS, ...loaded }
+        }
+      } catch (error) {
+        console.warn('[SettingsStore] load editor display config failed, keep defaults:', error)
+      }
+      this.editorDisplayLoaded = true
+    },
+
+    /**
+     * 局部更新主编辑器显示配置并落盘；调用方只传要改的字段。
+     *
+     * 先改 store（编辑器上的 watcher 会立刻 updateOptions，所见即所得），再写配置文件；
+     * 后端会把字号夹到合法区间后回传，所以最后用返回的那份覆盖本地值——
+     * 否则输入框里会留着 200 而编辑器实际用的是 48。
+     */
+    async setEditorDisplayOption(key, value) {
+      const next = { ...this.editorDisplay, [key]: value }
+      this.editorDisplay = next
+      this.editorDisplayLoaded = true
+      try {
+        const saved = await invoke('set_editor_display_config', {
+          editorDisplayConfig: next,
+        })
+        if (saved && typeof saved === 'object') {
+          this.editorDisplay = { ...DEFAULT_EDITOR_DISPLAY_OPTIONS, ...saved }
+        }
+      } catch (error) {
+        console.error('[SettingsStore] editor display config persist failed:', error)
+        throw error
+      }
+    },
+
+    async loadAppearanceConfig() {
+      if (this.appearanceLoaded) {
         this.applyAppearanceTheme(this.appearanceTheme)
         await this.loadCodeThemeConfig()
         return

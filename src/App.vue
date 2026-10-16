@@ -80,6 +80,9 @@ onMounted(async () => {
   await settingsStore.loadAppearanceConfig()
   // Markdown 格式化选项与外观配置一起在启动时读回：首帧就要用，不能等用户按下格式化才加载。
   await settingsStore.loadMarkdownFormatConfig()
+  // 主编辑器的字体/字号/小地图同理：编辑器是按需懒建的，配置必须先到位，
+  // 否则首个打开的标签页会先按默认字号渲染一次再跳变。
+  await settingsStore.loadEditorDisplayConfig()
   decorateGlobalNavIcons()
   navIconObserver = new MutationObserver(decorateGlobalNavIcons)
   navIconObserver.observe(document.body, {

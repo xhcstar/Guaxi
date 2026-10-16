@@ -186,6 +186,73 @@
 
       <!-- 编辑器 -->
       <n-card id="pref-editor" class="pref-card" title="编辑器">
+        <h3>编辑器外观</h3>
+        <p class="description">
+          主编辑器（Monaco）的字体、字号和小地图开关。改动即时生效并写入 guaxi_config.json，
+          不用重启，也不用重新打开标签页。
+        </p>
+        <n-form label-placement="left" label-width="auto" :show-require-mark="false">
+          <n-form-item label="字体">
+            <n-space vertical :size="4" style="width: 100%">
+              <n-select
+                :value="settingsStore.editorDisplay.font_family"
+                :options="editorFontFamilyOptions"
+                filterable
+                tag
+                :disabled="loading || editorDisplaySaving"
+                placeholder="选择预设，或直接输入 CSS font-family"
+                style="width: 420px; max-width: 100%"
+                @update:value="(v) => handleEditorDisplayChange('font_family', String(v || ''))"
+              />
+              <span class="description">
+                预设之外想用自己的字体，可以直接输入整条 CSS font-family 回退链后回车确认；
+                字体没装时按链上顺序回退，不会变成方块。
+              </span>
+            </n-space>
+          </n-form-item>
+          <n-form-item label="字号">
+            <n-space align="center" :size="8">
+              <n-input-number
+                :value="settingsStore.editorDisplay.font_size"
+                :min="EDITOR_FONT_SIZE_MIN"
+                :max="EDITOR_FONT_SIZE_MAX"
+                :step="1"
+                :precision="0"
+                :disabled="loading || editorDisplaySaving"
+                style="width: 140px"
+                @update:value="(v) => handleEditorDisplayChange('font_size', Number(v) || DEFAULT_EDITOR_DISPLAY_OPTIONS.font_size)"
+              />
+              <span class="description">
+                允许 {{ EDITOR_FONT_SIZE_MIN }}–{{ EDITOR_FONT_SIZE_MAX }}。行高按字号的 4/3 自动跟随（默认 18px 字号 / 24px 行高）。
+              </span>
+            </n-space>
+          </n-form-item>
+          <n-form-item label="小地图">
+            <n-space align="center" :size="8">
+              <n-switch
+                :value="settingsStore.editorDisplay.minimap_enabled"
+                :disabled="loading || editorDisplaySaving"
+                @update:value="(v) => handleEditorDisplayChange('minimap_enabled', v)"
+              />
+              <span class="description">编辑器右侧的代码缩略图，默认关闭。</span>
+            </n-space>
+          </n-form-item>
+          <n-form-item label="预览">
+            <div class="editor-display-preview" :style="editorDisplayPreviewStyle">
+              <div>
+                <span class="tok-kw">def</span> <span class="tok-fn">greet</span>(name):
+              </div>
+              <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="tok-kw">return</span> <span class="tok-str">f"你好，{name}"</span> <span class="tok-cmt"># 中英混排 iIlL1 0123</span></div>
+            </div>
+          </n-form-item>
+        </n-form>
+        <p class="description">
+          提示：编辑器里按住 Ctrl 滚动滚轮也能临时缩放，但那只是当前窗口的临时值，不会写进配置，
+          重新打开后会回到这里的字号。
+        </p>
+
+        <n-divider />
+
         <h3>LSP 配置</h3>
         <p class="description">
           LSP 能力统一由下方语言扩展提供；安装对应扩展后，新建或重新打开编辑器即可获得语法高亮和语义补全。
@@ -408,7 +475,13 @@ import { buildSpeakerOptions, describeSpeaker } from '../../utils/ttsSpeakers'
 import { NCard, NSpace, NDivider, NForm, NFormItem, NInputNumber, NInput, NButton, NAlert, NSwitch, NSelect } from 'naive-ui'
 import { DEFAULT_CODE_THEME_ID, GUAXI_CODE_THEMES } from '../../monaco/codeThemes'
 import { invoke } from '@tauri-apps/api/core'
-import { useSettingsStore } from '../../stores/settingsStore'
+import {
+  useSettingsStore,
+  DEFAULT_EDITOR_DISPLAY_OPTIONS,
+  EDITOR_FONT_SIZE_MIN,
+  EDITOR_FONT_SIZE_MAX,
+  resolveEditorLineHeight,
+} from '../../stores/settingsStore'
 import LspExtensionPanel from './LspExtensionPanel.vue'
 import GuaxiPluginManager from './GuaxiPluginManager.vue'
 
@@ -448,6 +521,29 @@ const codeThemeOptions = GUAXI_CODE_THEMES.map((theme) => ({ label: theme.label,
 const pythonCodegenAssistEnabled = ref(false)
 // Markdown 格式化选项存在 settingsStore 里（启动时已 load），这里只跟一个"正在保存"的开关。
 const markdownFormatSaving = ref(false)
+// 编辑器外观（字体 / 字号 / 小地图）同理，值在 settingsStore 里。
+const editorDisplaySaving = ref(false)
+// 预设字体链。标签只写字体名，选中后落盘的是整条 CSS font-family，
+// 所以用户没装这个字体时仍有稳定回退（前两项是项目自己在用的那份栈）。
+const editorFontFamilyOptions = [
+  { label: 'Maple Mono NF CN（默认）', value: DEFAULT_EDITOR_DISPLAY_OPTIONS.font_family },
+  { label: 'JetBrains Mono', value: "'JetBrainsMono Nerd Font Mono', Consolas, monospace" },
+  { label: 'Cascadia Code', value: "'Cascadia Code', 'Cascadia Mono', Consolas, monospace" },
+  { label: 'Fira Code', value: "'Fira Code', 'JetBrainsMono Nerd Font Mono', Consolas, monospace" },
+  { label: 'Consolas', value: "Consolas, 'Courier New', monospace" },
+  { label: '中文优先（Noto Sans CJK）', value: "'Noto Sans CJK SC', 'Microsoft YaHei', Consolas, monospace" },
+  { label: '系统等宽', value: 'monospace' },
+]
+const editorDisplayPreviewStyle = computed(() => {
+  const display = settingsStore.editorDisplay
+  const size = Number(display.font_size) || DEFAULT_EDITOR_DISPLAY_OPTIONS.font_size
+  return {
+    fontFamily: display.font_family || DEFAULT_EDITOR_DISPLAY_OPTIONS.font_family,
+    fontSize: `${size}px`,
+    // 与 GuaxiEditor 共用同一个换算，预览的行距/换行位置才和实机一致。
+    lineHeight: `${resolveEditorLineHeight(size)}px`,
+  }
+})
 const webrtcSignalUrl = ref('')
 const terminalDefaultProfile = ref('powershell')
 const terminalGitBashPath = ref('')
@@ -510,6 +606,7 @@ onMounted(async () => {
     loading.value = true
     await Promise.all([
       settingsStore.loadAppearanceConfig(),
+      settingsStore.loadEditorDisplayConfig(),
       (async () => {
         const [seconds, enabled, signalUrl, ttsConfig, asrConfig, terminalConfig, codegenAssist] = await Promise.all([
           invoke('get_gc_cycle_seconds'),
@@ -649,6 +746,23 @@ const handleMarkdownFormatChange = async (key, value) => {
     logger.error('更新 Markdown 格式化选项失败:', error)
   } finally {
     markdownFormatSaving.value = false
+  }
+}
+
+/**
+ * 编辑器外观的三项都走同一条保存路径：先改 store（编辑器上的 watcher 立刻 updateOptions，
+ * 所见即所得），再由 store 落盘。字体链是自由输入的，空串挡在这里——
+ * 清空等于没配置，放过去会让编辑器回退到浏览器默认字体，和"恢复默认"的语义也不一样。
+ */
+const handleEditorDisplayChange = async (key, value) => {
+  if (key === 'font_family' && !String(value || '').trim()) return
+  try {
+    editorDisplaySaving.value = true
+    await settingsStore.setEditorDisplayOption(key, value)
+  } catch (error) {
+    logger.error('更新编辑器外观配置失败:', error)
+  } finally {
+    editorDisplaySaving.value = false
   }
 }
 
@@ -1024,6 +1138,36 @@ onBeforeUnmount(() => {
   margin-top: 4px;
   color: var(--guaxi-text-secondary);
   font-size: 13px;
+}
+
+/* 编辑器外观的实时预览：字体/字号/行高由行内 style 跟着 store 走，这里只管排版与描边。
+   代码配色用主题变量，和「代码配色主题」那两项的实际效果保持同一套色。 */
+.editor-display-preview {
+  max-width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 8px;
+  background: var(--guaxi-content-bg);
+  color: var(--guaxi-text-primary);
+  white-space: pre;
+  overflow-x: auto;
+  font-variant-ligatures: contextual;
+}
+
+.editor-display-preview .tok-kw {
+  color: var(--guaxi-syntax-keyword);
+}
+
+.editor-display-preview .tok-fn {
+  color: var(--guaxi-syntax-function);
+}
+
+.editor-display-preview .tok-str {
+  color: var(--guaxi-syntax-string);
+}
+
+.editor-display-preview .tok-cmt {
+  color: var(--guaxi-syntax-comment);
 }
 
 .lsp-status-panel {

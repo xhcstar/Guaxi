@@ -126,6 +126,9 @@ pub struct AppConfig {
     /// 用户改不了；现在落到配置里，由「设置 → 编辑器」驱动。
     #[serde(default = "default_markdown_format_options")]
     markdown_format_options: crate::commands::markdowncheck::MarkdownFormatOptions,
+    /// 主编辑器（Monaco）的字体、字号与小地图开关，由「设置 → 编辑器 → 编辑器外观」驱动。
+    #[serde(default)]
+    editor_display_config: EditorDisplayConfig,
 }
 
 /// Markdown 格式化的默认选项。
@@ -745,6 +748,51 @@ impl Default for AppearanceConfig {
     }
 }
 
+/// 主编辑器字号的合法区间。前端输入框和后端夹取都按这一组来，
+/// 低于 8px 看不清、高于 48px 一屏放不下几行，都不是有意义的配置。
+const EDITOR_FONT_SIZE_MIN: u16 = 8;
+const EDITOR_FONT_SIZE_MAX: u16 = 48;
+
+fn default_editor_font_family() -> String {
+    // 必须与 GuaxiEditor 原先写死的 fontFamily 逐字一致（含引号与回退链），
+    // 否则老用户升级后第一次看到的就是另一种字体的编辑器。
+    "'Maple Mono NF CN','JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New'".to_string()
+}
+
+fn default_editor_font_size() -> u16 {
+    18
+}
+
+fn default_editor_minimap_enabled() -> bool {
+    false
+}
+
+/// 主编辑器（Monaco）的显示配置：字体链、字号、小地图开关。
+///
+/// 默认值刻意等于 GuaxiEditor 原先写死的那组（`fontSize: 18`、`minimap.enabled: false`），
+/// 所以升级后没动过设置的用户，看到的编辑器和以前逐像素一致。
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct EditorDisplayConfig {
+    #[serde(default = "default_editor_font_family")]
+    pub font_family: String,
+    // 用 u16 而非 u8：字号是前端输入框传来的，u8 遇到 300 会在反序列化阶段直接报错，
+    // 连"夹到上限"的机会都没有。
+    #[serde(default = "default_editor_font_size")]
+    pub font_size: u16,
+    #[serde(default = "default_editor_minimap_enabled")]
+    pub minimap_enabled: bool,
+}
+
+impl Default for EditorDisplayConfig {
+    fn default() -> Self {
+        EditorDisplayConfig {
+            font_family: default_editor_font_family(),
+            font_size: default_editor_font_size(),
+            minimap_enabled: default_editor_minimap_enabled(),
+        }
+    }
+}
+
 /// AI 影像工坊的持久化配置：Blender / FFmpeg 可执行文件路径与本地资产库根目录。
 /// 空字符串表示“未配置”，前端会回退到自动探测。这些不是机密，明文保存即可。
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -908,6 +956,7 @@ impl Default for AppConfig {
             terminal_config: TerminalConfig::default(),
             film_studio_config: FilmStudioConfig::default(),
             markdown_format_options: default_markdown_format_options(),
+            editor_display_config: EditorDisplayConfig::default(),
             disabled_services: Vec::new(),
         }
     }
@@ -1400,6 +1449,50 @@ pub fn set_code_theme(code_theme: String) {
     let mut config = load_config();
     config.code_theme = next;
     save_config(&config);
+}
+
+#[tauri::command]
+pub fn get_editor_display_config() -> EditorDisplayConfig {
+    let config = load_config();
+    config.editor_display_config
+}
+
+/// 保存主编辑器显示配置，并回传规范化后的结果。
+///
+/// 返回而不是 `()`：字号的入参来自可手打的输入框，后端会把它夹到 [8, 48]、
+/// 字体为空时回退到默认字体链。前端必须拿到真正落盘的那份值，
+/// 否则界面上会留着 200 而编辑器用的是 48，两边对不上。
+#[tauri::command]
+pub fn set_editor_display_config(
+    editor_display_config: EditorDisplayConfig,
+) -> EditorDisplayConfig {
+    let next = normalize_editor_display_config(editor_display_config);
+    info!(
+        font_family = next.font_family.as_str(),
+        font_size = next.font_size,
+        minimap_enabled = next.minimap_enabled,
+        "set_editor_display_config"
+    );
+
+    let mut config = load_config();
+    config.editor_display_config = next.clone();
+    save_config(&config);
+    next
+}
+
+fn normalize_editor_display_config(input: EditorDisplayConfig) -> EditorDisplayConfig {
+    let font_family = input.font_family.trim();
+    EditorDisplayConfig {
+        font_family: if font_family.is_empty() {
+            default_editor_font_family()
+        } else {
+            font_family.to_string()
+        },
+        font_size: input
+            .font_size
+            .clamp(EDITOR_FONT_SIZE_MIN, EDITOR_FONT_SIZE_MAX),
+        minimap_enabled: input.minimap_enabled,
+    }
 }
 
 #[tauri::command]

@@ -1442,7 +1442,7 @@ import { ref, computed, watch, onMounted, onUnmounted, onActivated, onDeactivate
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useEditorStore } from '../../stores/editorStore'
 import { useEditorBridgeStore } from '../../stores/editorBridgeStore'
-import { useSettingsStore } from '../../stores/settingsStore'
+import { useSettingsStore, DEFAULT_EDITOR_DISPLAY_OPTIONS, resolveEditorLineHeight } from '../../stores/settingsStore'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
 import { useSiderStore } from '../../stores/useSiderStore'
@@ -1650,6 +1650,31 @@ const GUAXI_MONACO_UNICODE_HIGHLIGHT_OPTIONS = Object.freeze({
   nonBasicASCII: false,
   invisibleCharacters: true,
 })
+
+/**
+ * 「设置 → 编辑器 → 编辑器外观」驱动的四条 Monaco 显示项：字体、字号、行高、小地图。
+ *
+ * 缺省值来自 settingsStore 的 DEFAULT_EDITOR_DISPLAY_OPTIONS，与后端 `default_editor_*` 一致：
+ * 没动过设置的用户算出来就是原先写死的那组（18px 字号、24px 行高、无小地图），逐像素不差。
+ * 行高必须跟着字号一起算——行高写死 24px 时，用户一按设置把字号调到 24 就会开始压字。
+ */
+const buildEditorDisplayMonacoOptions = (display) => {
+  const merged = { ...DEFAULT_EDITOR_DISPLAY_OPTIONS, ...(display || {}) }
+  const rawFontSize = Number(merged.font_size)
+  const fontSize = Number.isFinite(rawFontSize) && rawFontSize > 0
+    ? Math.round(rawFontSize)
+    : DEFAULT_EDITOR_DISPLAY_OPTIONS.font_size
+  return {
+    fontSize,
+    fontFamily: String(merged.font_family || '').trim() || DEFAULT_EDITOR_DISPLAY_OPTIONS.font_family,
+    lineHeight: resolveEditorLineHeight(fontSize),
+    minimap: {
+      enabled: !!merged.minimap_enabled,
+      showSlider: 'always',
+      size: 'fit',
+    },
+  }
+}
 
 const ensureLatexLanguage = () => {
   const exists = monaco.languages.getLanguages().some((lang) => lang.id === 'latex')
@@ -1923,6 +1948,10 @@ const fileTreeStore = useFileTreeStore()
 const editorStore = useEditorStore()
 const editorBridgeStore = useEditorBridgeStore()
 const settingsStore = useSettingsStore()
+// 主编辑器的字体/字号/小地图要赶在第一个标签页建编辑器之前读回来。
+// 不能只等 App.vue 的启动加载：父组件的 onMounted 晚于此处，首个标签页会先按默认字号渲染一次再跳变。
+// 这是幂等的（store 里有 loaded 标记），设置页里那次调用不会重复读配置。
+void settingsStore.loadEditorDisplayConfig()
 const knowledgeBaseStore = useKnowledgeBaseStore()
 const rightSiderStore = useRightSiderStore()
 const siderStore = useSiderStore()
@@ -2043,6 +2072,10 @@ const PYTHON_RUNTIME_RECOMMENDED_PACKAGES = [
 ]
 const getMonacoThemeName = () => (settingsStore.appearanceTheme === 'dark' ? 'guaxi-dark' : 'guaxi-light')
 const getMarkdownPreviewThemeName = () => (settingsStore.appearanceTheme === 'dark' ? 'dark' : 'default')
+// 编辑器外观（字体/字号/行高/小地图）读的是「设置 → 编辑器 → 编辑器外观」那一组值。
+const editorDisplayMonacoOptions = () => buildEditorDisplayMonacoOptions(settingsStore.editorDisplay)
+// 主页被 KeepAlive 停用时改设置只能记账，等 onActivated 回到有布局的状态再推给编辑器。
+let editorDisplayApplyPending = false
 let previewMermaidRenderSeq = 0
 const renderPreviewMermaidDiagrams = async (container) => {
   const renderSeq = ++previewMermaidRenderSeq
@@ -11418,6 +11451,49 @@ const applyMonacoThemeByLsp = (enabled) => {
   applyMonacoTheme('lsp')
 }
 
+/**
+ * 把编辑器外观（字体 / 字号 / 行高 / 小地图）推给已存在的编辑器实例。
+ *
+ * 主编辑器是懒建的，create 时就已经带上这组值；这个函数只为「用户在设置页改了」服务——
+ * 设置页和主页同窗口、共用同一份 pinia，所以不需要重启、也不用重开标签页。
+ * 右侧分屏编辑器创建时是拷主编辑器的 rawOptions，之后不会自动跟随，这里一并更新。
+ *
+ * 布局守卫：Monaco 的字体度量要读容器（CharWidthReader 量字符宽度），
+ * 主页被 KeepAlive 移出文档时容器量出来是 0 宽，这时候 updateOptions 会把错的度量写进缓存。
+ * 所以只在 `isEditorSurfaceLaidOut` 为真时动手，否则记 pending，交给 onActivated 补。
+ */
+const applyEditorDisplayOptions = (source = 'manual') => {
+  const options = editorDisplayMonacoOptions()
+  let applied = 0
+
+  for (const [target, instance] of [['primary', editor], ['secondary', secondaryEditor]]) {
+    if (!instance) continue
+    if (!isEditorSurfaceLaidOut(instance)) {
+      editorDisplayApplyPending = true
+      continue
+    }
+    try {
+      instance.updateOptions(options)
+      instance.layout?.()
+      applied += 1
+    } catch (error) {
+      logger.warn('[Editor] apply editor display options failed', { source, target, error })
+    }
+  }
+
+  if (applied > 0) editorDisplayApplyPending = false
+
+  logger.info('[Editor] editor display options applied', {
+    source,
+    applied,
+    pending: editorDisplayApplyPending,
+    fontFamily: options.fontFamily,
+    fontSize: options.fontSize,
+    lineHeight: options.lineHeight,
+    minimapEnabled: options.minimap.enabled,
+  })
+}
+
 const refreshLspRuntimeSnapshotOnce = async (reason = 'editor') => {
   // Design note: installing an extension updates the backend snapshot before
   // the already-open editor knows about it. Share one refresh promise so cursor
@@ -11962,11 +12038,9 @@ const initEditor = () => {
     // 2. 默认淡化会让暗色主题下大段源码发灰，和 TreeSitter 语义配色互相干扰。
     // 3. 保留诊断但关闭未使用代码淡化，保证编辑模式与探索者模式都清晰可读。
     showUnused: false,
-    minimap: {
-      enabled: false,  // 启用迷你地图
-      showSlider: 'always',
-      size: 'fit'
-    },
+    // 字体 / 字号 / 行高 / 小地图由「设置 → 编辑器 → 编辑器外观」决定，
+    // 取值见 buildEditorDisplayMonacoOptions；默认即原先写死的 18px、无小地图。
+    ...editorDisplayMonacoOptions(),
     glyphMargin: true, // 启用行号左侧边栏
     lineDecorationsWidth: 6,
     // 设计说明（折叠 · 对应 Q2）：
@@ -12013,14 +12087,11 @@ const initEditor = () => {
     lineNumbers: 'on',
     lineNumbersMinChars: 3,  // 最小行号宽度
     scrollBeyondLastLine: false,
-    fontSize: 18,  // 调整为更合适的字号
-    fontFamily: "'Maple Mono NF CN','JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New'",
     fontLigatures: true,
     // wrappingIndent: 'indent',  // 换行缩进
     renderWhitespace: 'selection',  // 选中时显示空白字符
     unicodeHighlight: GUAXI_MONACO_UNICODE_HIGHLIGHT_OPTIONS,
     renderLineHighlight: 'line',  // 高亮当前行
-    lineHeight: 24,  // 行高
     padding: {
       top: 8,  // 顶部内边距
       bottom: 8  // 底部内边距
@@ -25095,6 +25166,23 @@ watch(
   { flush: 'post' }
 )
 
+// 「设置 → 编辑器 → 编辑器外观」改动即时应用到编辑器。
+// 设置页与主页同窗口、共用同一份 pinia，所以这里不需要 CustomEvent：store 一变就跑。
+// 主页此刻被 KeepAlive 停用时（用户正停在设置页）容器没有布局，applyEditorDisplayOptions
+// 会把这次改动记成 pending，等 onActivated 回到主页时补上。
+watch(
+  () => settingsStore.editorDisplay,
+  (display) => {
+    logger.info('[Editor] editor display setting changed', {
+      fontFamily: display?.font_family,
+      fontSize: display?.font_size,
+      minimapEnabled: display?.minimap_enabled,
+    })
+    applyEditorDisplayOptions('settings')
+  },
+  { deep: true, flush: 'post' }
+)
+
 onMounted(() => {
   restorePythonConsoleState()
   window.addEventListener('keydown', handleKeyDown);
@@ -25186,6 +25274,13 @@ onActivated(async () => {
   if (path) {
     await nextTick();
     void restoreActiveReadPositionForMode('activated-restored', path).catch(() => {});
+  }
+
+  // 在设置页改过编辑器外观、而当时主页容器还没有布局的那次改动，在这里补上：
+  // 此刻 DOM 已经回到文档里，Monaco 才量得准字体宽度。
+  if (editorDisplayApplyPending) {
+    await nextTick();
+    applyEditorDisplayOptions('activated-pending');
   }
 })
 
