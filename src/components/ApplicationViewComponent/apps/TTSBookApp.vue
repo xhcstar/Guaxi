@@ -1,458 +1,530 @@
-﻿<template>
+<template>
   <div class="tts-book-root" :class="{ 'tts-book-dark': isDarkTheme }">
+    <!-- 顶栏承担全局读数与队列操作：原先这块是空的，指标却挤在侧栏里。 -->
     <header class="tts-header">
+      <div class="brand">
+        <n-icon size="17" class="brand-icon">
+          <LibraryOutline />
+        </n-icon>
+        <h1 class="brand-title">有声书工坊</h1>
+      </div>
+
+      <div class="stat-strip">
+        <span class="stat-chip">
+          <b>{{ totalResources }}</b><em>资源</em>
+        </span>
+        <span class="stat-chip tone-idle">
+          <b>{{ idleCount }}</b><em>待转换</em>
+        </span>
+        <span class="stat-chip tone-running">
+          <b>{{ activeCount }}</b><em>进行中</em>
+        </span>
+        <span class="stat-chip tone-done">
+          <b>{{ successCount }}</b><em>已完成</em>
+        </span>
+        <span class="stat-chip tone-error">
+          <b>{{ failedCount }}</b><em>失败</em>
+        </span>
+      </div>
+
+      <div class="header-meter">
+        <n-progress type="line" :percentage="queuePercent" :height="6" :show-indicator="false" :status="queueStatus" />
+        <span class="meter-label">{{ queuePercent }}%</span>
+      </div>
+
+      <div class="header-actions">
+        <n-tooltip>
+          <template #trigger>
+            <n-button size="small" secondary @click="pickFiles">
+              <template #icon>
+                <n-icon>
+                  <AddOutline />
+                </n-icon>
+              </template>
+              导入
+            </n-button>
+          </template>
+          导入电子书或文档（可多选）
+        </n-tooltip>
+        <n-tooltip>
+          <template #trigger>
+            <n-button size="small" type="primary" :loading="running" :disabled="!canStart" @click="startConvertQueue()">
+              <template #icon>
+                <n-icon>
+                  <PlayCircleOutline />
+                </n-icon>
+              </template>
+              开始转换
+            </n-button>
+          </template>
+          把待转换的资源全部加入队列并开始
+        </n-tooltip>
+        <n-tooltip>
+          <template #trigger>
+            <n-button size="small" secondary circle :disabled="!canPauseAll" @click="pauseAllTasks">
+              <template #icon>
+                <n-icon>
+                  <PauseOutline />
+                </n-icon>
+              </template>
+            </n-button>
+          </template>
+          暂停全部
+        </n-tooltip>
+        <n-tooltip>
+          <template #trigger>
+            <n-button size="small" secondary circle :disabled="!canStopAll" @click="stopAllTasks">
+              <template #icon>
+                <n-icon>
+                  <StopOutline />
+                </n-icon>
+              </template>
+            </n-button>
+          </template>
+          停止全部
+        </n-tooltip>
+        <n-tooltip>
+          <template #trigger>
+            <n-button size="small" secondary circle :disabled="running" @click="clearFinished">
+              <template #icon>
+                <n-icon>
+                  <TrashOutline />
+                </n-icon>
+              </template>
+            </n-button>
+          </template>
+          清理已结束的任务
+        </n-tooltip>
+        <n-tooltip>
+          <template #trigger>
+            <n-button size="small" quaternary circle class="rail-toggle"
+              :class="{ active: !paramsCollapsed }" @click="toggleParamsRail">
+              <template #icon>
+                <n-icon>
+                  <OptionsOutline />
+                </n-icon>
+              </template>
+            </n-button>
+          </template>
+          {{ paramsCollapsed ? '展开转换参数' : '收起转换参数' }}
+        </n-tooltip>
+      </div>
     </header>
 
-    <section ref="layoutRef" class="tts-layout" :style="layoutVars">
-      <n-card title="转换参数" size="small" class="tts-panel control-panel">
-        <div class="panel-scroll">
-          <n-space vertical :size="16">
-            <div class="panel-block">
-              <div class="block-head">
-                <div class="block-label">任务控制</div>
-                <div class="block-hint">队列操作快捷入口</div>
-              </div>
-              <div class="action-toolbar">
+    <section ref="layoutRef" class="tts-body" :style="layoutVars">
+      <aside v-if="!paramsCollapsed" class="rail params-rail">
+        <div class="rail-scroll">
+          <div class="param-group">
+            <div class="group-title">输出</div>
+            <label class="field">
+              <span class="field-label">输出目录</span>
+              <div class="field-row">
+                <n-input size="small" v-model:value="outputDir" placeholder="默认 tts_output" clearable />
                 <n-tooltip>
                   <template #trigger>
-                    <n-button
-                      circle
-                      type="primary"
-                      class="action-btn action-btn-primary"
-                      :loading="running"
-                      :disabled="!canStart"
-                      @click="startConvertQueue"
-                    >
-                      <template #icon>
-                        <n-icon>
-                          <PlayCircleOutline />
-                        </n-icon>
-                      </template>
-                    </n-button>
-                  </template>
-                  开始转换
-                </n-tooltip>
-                <n-tooltip>
-                  <template #trigger>
-                    <n-button circle secondary class="action-btn" :disabled="!canPauseAll" @click="pauseAllTasks">
-                      <template #icon>
-                        <n-icon>
-                          <PauseOutline />
-                        </n-icon>
-                      </template>
-                    </n-button>
-                  </template>
-                  暂停全部
-                </n-tooltip>
-                <n-tooltip>
-                  <template #trigger>
-                    <n-button circle secondary class="action-btn" :disabled="!canStopAll" @click="stopAllTasks">
-                      <template #icon>
-                        <n-icon>
-                          <StopOutline />
-                        </n-icon>
-                      </template>
-                    </n-button>
-                  </template>
-                  停止全部
-                </n-tooltip>
-                <n-tooltip>
-                  <template #trigger>
-                    <n-button circle secondary class="action-btn" :disabled="running" @click="clearFinished">
-                      <template #icon>
-                        <n-icon>
-                          <TrashOutline />
-                        </n-icon>
-                      </template>
-                    </n-button>
-                  </template>
-                  清理完成任务
-                </n-tooltip>
-              </div>
-            </div>
-
-            <div class="panel-block">
-              <div class="block-label">输出设置</div>
-              <div class="toolbar-row">
-                <n-input v-model:value="outputDir" placeholder="输出目录，默认使用软件同级目录下的 tts_output" clearable />
-                <n-tooltip>
-                  <template #trigger>
-                    <n-button tertiary @click="pickOutputDir">
+                    <n-button size="small" tertiary @click="pickOutputDir">
                       <template #icon>
                         <n-icon>
                           <FolderOpenOutline />
                         </n-icon>
                       </template>
-                      目录
                     </n-button>
                   </template>
                   选择输出目录
                 </n-tooltip>
               </div>
-              <n-input v-model:value="outputName" placeholder="输出文件名，仅单文件任务生效" />
+            </label>
+            <label class="field">
+              <span class="field-label">输出文件名</span>
+              <n-input size="small" v-model:value="outputName" placeholder="仅单文件任务生效" />
+            </label>
+          </div>
+
+          <div class="param-group">
+            <div class="group-title">合成</div>
+            <label class="field">
+              <span class="field-label">模型</span>
+              <n-select size="small" v-model:value="modelPreset" :options="modelOptions" />
+              <span class="field-tip">{{ resolvedModelLabel }}</span>
+            </label>
+            <div class="field-pair">
+              <label class="field">
+                <span class="field-label">音色</span>
+                <n-select size="small" filterable v-model:value="speakerId" :options="speakerOptions"
+                  placeholder="选择说话人" />
+              </label>
+              <label class="field field-narrow">
+                <span class="field-label">语速</span>
+                <n-input-number size="small" v-model:value="ttsSpeed" :min="0.2" :max="3" :step="0.1"
+                  :precision="1" />
+              </label>
             </div>
-
-            <div class="panel-block">
-              <div class="block-label">合成参数</div>
-              <div class="options-grid">
-                <div class="option-card option-card-wide">
-                  <div class="option-title">模型</div>
-                  <n-select v-model:value="modelPreset" :options="modelOptions" />
-                  <div class="option-tip">{{ resolvedModelLabel }}</div>
-                </div>
-
-                <div class="option-card">
-                  <div class="option-title">Speaker ID</div>
-                  <n-select v-model:value="speakerId" filterable :options="speakerOptions" placeholder="选择说话人" />
-                </div>
-
-                <div class="option-card">
-                  <div class="option-title">语速</div>
-                  <n-input-number v-model:value="ttsSpeed" :min="0.2" :max="3" :step="0.1" :precision="1"
-                    style="width: 100%" />
-                </div>
-
-                <div class="option-card">
-                  <div class="option-title">分段长度</div>
-                  <n-input-number v-model:value="maxChunkChars" :min="80" :max="420" :step="10" style="width: 100%" />
-                </div>
-
-                <div class="option-card">
-                  <div class="option-title">转换引擎</div>
-                  <n-select v-model:value="executionProvider" :options="executionProviderOptions" />
-                  <div class="option-tip">自动 = CUDA 可用就用 GPU，否则用 CPU</div>
-                </div>
-
-                <div class="option-card">
-                  <div class="option-title">章节拆分</div>
-                  <n-switch v-model:value="splitByToc">
-                    <template #checked>开启</template>
-                    <template #unchecked>关闭</template>
-                  </n-switch>
-                </div>
-              </div>
+            <div class="field-pair">
+              <label class="field">
+                <span class="field-label">分段长度</span>
+                <n-input-number size="small" v-model:value="maxChunkChars" :min="80" :max="420" :step="10" />
+              </label>
+              <label class="field">
+                <span class="field-label">引擎</span>
+                <n-select size="small" v-model:value="executionProvider" :options="executionProviderOptions" />
+              </label>
             </div>
-
-          </n-space>
+            <div class="field-tip push-down">引擎「自动」= 有 CUDA 就用 GPU，否则回退 CPU</div>
+            <label class="field field-inline">
+              <span class="field-label">章节拆分</span>
+              <n-switch size="small" v-model:value="splitByToc">
+                <template #checked>开启</template>
+                <template #unchecked>关闭</template>
+              </n-switch>
+            </label>
+          </div>
         </div>
-      </n-card>
+      </aside>
 
-      <div class="col-resizer" title="拖动调整左侧栏宽度" @pointerdown="startColumnResize('left', $event)">
+      <div v-if="!paramsCollapsed" class="col-resizer" title="拖动调整参数栏宽度"
+        @pointerdown="startColumnResize('left', $event)">
         <div class="resizer-dot" />
       </div>
 
-      <section ref="middleColumnRef" class="middle-column" :style="middleVars">
-        <n-card title="已打开文件" size="small" class="tts-panel files-panel">
-          <template #header-extra>
-            <div class="files-header-actions">
-              <span class="panel-extra">{{ selectedFiles.length }} 个文件</span>
-              <n-tooltip>
-                <template #trigger>
-                  <n-button tertiary circle size="small" :disabled="!selectedFiles.length" @click="clearSelectedFiles">
-                    <template #icon>
-                      <n-icon>
-                        <TrashOutline />
-                      </n-icon>
-                    </template>
-                  </n-button>
-                </template>
-                清空已打开文件
-              </n-tooltip>
-              <n-tooltip>
-                <template #trigger>
-                  <n-button tertiary circle size="small" @click="pickFiles">
-                    <template #icon>
-                      <n-icon>
-                        <AddOutline />
-                      </n-icon>
-                    </template>
-                  </n-button>
-                </template>
-                添加文件（支持单个或批量添加）
-              </n-tooltip>
-            </div>
-          </template>
+      <!-- 资源库：源文件、队列任务、已完成记录统一成一条生命周期，不再分三处显示。 -->
+      <section class="library">
+        <div class="lib-toolbar">
+          <div class="lib-search">
+            <n-input v-model:value="libraryQuery" size="small" clearable placeholder="搜索书名 / 文件名 / 源文件">
+              <template #prefix>
+                <n-icon>
+                  <SearchOutline />
+                </n-icon>
+              </template>
+            </n-input>
+          </div>
 
-          <div class="files-scroll">
-            <n-empty v-if="!selectedFiles.length" description="还没有打开文件" />
-            <div v-else class="file-grid">
-              <div v-for="file in selectedFiles" :key="file" class="file-card">
-                <div class="file-icon">
-                  <n-icon size="18">
-                    <DocumentTextOutline />
-                  </n-icon>
+          <div class="facet-row">
+            <button v-for="item in facets" :key="item.value" type="button" class="facet"
+              :class="{ on: facet === item.value }" @click="facet = item.value">
+              {{ item.label }}
+              <span class="facet-count">{{ item.count }}</span>
+            </button>
+          </div>
+
+          <div class="lib-tools">
+            <n-button-group size="small">
+              <n-tooltip>
+                <template #trigger>
+                  <n-button :type="viewMode === 'list' ? 'primary' : 'default'" :secondary="viewMode !== 'list'"
+                    @click="viewMode = 'list'">
+                    <template #icon>
+                      <n-icon>
+                        <ListOutline />
+                      </n-icon>
+                    </template>
+                  </n-button>
+                </template>
+                列表视图
+              </n-tooltip>
+              <n-tooltip>
+                <template #trigger>
+                  <n-button :type="viewMode === 'grid' ? 'primary' : 'default'" :secondary="viewMode !== 'grid'"
+                    @click="viewMode = 'grid'">
+                    <template #icon>
+                      <n-icon>
+                        <GridOutline />
+                      </n-icon>
+                    </template>
+                  </n-button>
+                </template>
+                书架视图
+              </n-tooltip>
+            </n-button-group>
+
+            <n-tooltip>
+              <template #trigger>
+                <n-button size="small" secondary circle :loading="scanningRecords" @click="scanRecords">
+                  <template #icon>
+                    <n-icon>
+                      <RefreshOutline />
+                    </n-icon>
+                  </template>
+                </n-button>
+              </template>
+              扫描输出目录，把已有的转换成果导入成记录
+            </n-tooltip>
+
+            <n-tooltip>
+              <template #trigger>
+                <n-button size="small" secondary circle :disabled="!selectedFiles.length" @click="clearSelectedFiles">
+                  <template #icon>
+                    <n-icon>
+                      <TrashOutline />
+                    </n-icon>
+                  </template>
+                </n-button>
+              </template>
+              清空待转换的导入文件
+            </n-tooltip>
+          </div>
+        </div>
+
+        <div class="lib-scroll">
+          <n-empty v-if="!filteredResources.length"
+            :description="libraryQuery || facet !== 'all' ? '没有匹配的资源' : '还没有资源，先导入电子书或文档'" />
+
+          <div v-else class="res-collection" :class="`view-${viewMode}`">
+            <article v-for="res in filteredResources" :key="res.key" class="res-item" :class="`st-${res.status}`">
+              <div class="res-format">
+                <span class="format-text">{{ res.ext || '???' }}</span>
+                <span v-if="res.chapterCount" class="format-count">{{ res.chapterCount }}章</span>
+              </div>
+
+              <div class="res-main">
+                <div class="res-head">
+                  <span class="res-title" :title="res.title">{{ res.title }}</span>
+                  <span class="res-status">{{ statusLabel(res) }}</span>
                 </div>
-                <div class="file-info">
-                  <div class="file-name">{{ basename(file) }}</div>
-                  <div class="file-meta">{{ fileTypeLabel(file) }}</div>
-                </div>
-                <n-tooltip>
+                <div class="res-file" :title="res.filePath">{{ res.fileName }}</div>
+                <div v-if="res.meta" class="res-meta">{{ res.meta }}</div>
+                <n-progress v-if="res.status === 'running' || res.status === 'paused' || res.status === 'queued'"
+                  type="line" :percentage="res.progress" :show-indicator="false" :height="5" class="res-progress"
+                  :status="res.status === 'paused' ? 'warning' : 'info'" />
+              </div>
+
+              <div class="res-actions">
+                <!-- 待转换：还没进队列 -->
+                <template v-if="res.status === 'idle'">
+                  <n-tooltip>
+                    <template #trigger>
+                      <n-button size="tiny" tertiary :disabled="running" @click="startSingle(res)">
+                        <template #icon>
+                          <n-icon>
+                            <PlayOutline />
+                          </n-icon>
+                        </template>
+                      </n-button>
+                    </template>
+                    转换这一个
+                  </n-tooltip>
+                  <n-tooltip>
+                    <template #trigger>
+                      <n-button size="tiny" tertiary @click="removeSelected(res.filePath)">
+                        <template #icon>
+                          <n-icon>
+                            <TrashOutline />
+                          </n-icon>
+                        </template>
+                      </n-button>
+                    </template>
+                    移除
+                  </n-tooltip>
+                </template>
+
+                <!-- 队列中：排队 / 暂停 -->
+                <template v-else-if="res.status === 'queued' || res.status === 'paused'">
+                  <n-tooltip>
+                    <template #trigger>
+                      <n-button size="tiny" tertiary :disabled="running" @click="resumeResource(res)">
+                        <template #icon>
+                          <n-icon>
+                            <PlayOutline />
+                          </n-icon>
+                        </template>
+                      </n-button>
+                    </template>
+                    继续任务
+                  </n-tooltip>
+                  <n-tooltip>
+                    <template #trigger>
+                      <n-button size="tiny" tertiary @click="stopResource(res)">
+                        <template #icon>
+                          <n-icon>
+                            <StopOutline />
+                          </n-icon>
+                        </template>
+                      </n-button>
+                    </template>
+                    终止任务
+                  </n-tooltip>
+                </template>
+
+                <!-- 处理中 -->
+                <template v-else-if="res.status === 'running'">
+                  <n-tooltip>
+                    <template #trigger>
+                      <n-button size="tiny" tertiary @click="pauseResource(res)">
+                        <template #icon>
+                          <n-icon>
+                            <PauseOutline />
+                          </n-icon>
+                        </template>
+                      </n-button>
+                    </template>
+                    暂停任务
+                  </n-tooltip>
+                  <n-tooltip>
+                    <template #trigger>
+                      <n-button size="tiny" tertiary @click="stopResource(res)">
+                        <template #icon>
+                          <n-icon>
+                            <StopOutline />
+                          </n-icon>
+                        </template>
+                      </n-button>
+                    </template>
+                    终止任务
+                  </n-tooltip>
+                </template>
+
+                <!-- 失败 / 已终止：可重试 -->
+                <template v-else-if="res.status === 'error' || res.status === 'stopped'">
+                  <n-tooltip>
+                    <template #trigger>
+                      <n-button size="tiny" tertiary :disabled="running" @click="resumeResource(res)">
+                        <template #icon>
+                          <n-icon>
+                            <RefreshOutline />
+                          </n-icon>
+                        </template>
+                      </n-button>
+                    </template>
+                    重新转换
+                  </n-tooltip>
+                  <n-tooltip>
+                    <template #trigger>
+                      <n-button size="tiny" tertiary :disabled="running" @click="clearTasksByStatus">
+                        <template #icon>
+                          <n-icon>
+                            <TrashOutline />
+                          </n-icon>
+                        </template>
+                      </n-button>
+                    </template>
+                    清理已结束的任务
+                  </n-tooltip>
+                </template>
+
+                <!-- 已完成：播放 / 查看产物 / 改名 / 删除 -->
+                <template v-else-if="res.status === 'success'">
+                  <n-tooltip>
+                    <template #trigger>
+                      <n-button size="tiny" tertiary :disabled="!res.outputPath" @click="playResource(res)">
+                        <template #icon>
+                          <n-icon>
+                            <PlayOutline />
+                          </n-icon>
+                        </template>
+                      </n-button>
+                    </template>
+                    在右侧播放器播放
+                  </n-tooltip>
+                  <n-tooltip v-if="res.segmentJsonPath">
+                    <template #trigger>
+                      <n-button size="tiny" tertiary @click="openOutput(res.segmentJsonPath)">
+                        <template #icon>
+                          <n-icon>
+                            <DocumentTextOutline />
+                          </n-icon>
+                        </template>
+                      </n-button>
+                    </template>
+                    打开分段 JSON
+                  </n-tooltip>
+                  <n-tooltip v-if="res.chapterOutputPaths.length">
+                    <template #trigger>
+                      <n-button size="tiny" tertiary @click="openOutput(res.chapterOutputPaths[0])">
+                        <template #icon>
+                          <n-icon>
+                            <AlbumsOutline />
+                          </n-icon>
+                        </template>
+                      </n-button>
+                    </template>
+                    打开章节音频位置
+                  </n-tooltip>
+                  <n-tooltip v-if="res.kind === 'record'">
+                    <template #trigger>
+                      <n-button size="tiny" tertiary @click="renameRecord(res.record)">
+                        <template #icon>
+                          <n-icon>
+                            <CreateOutline />
+                          </n-icon>
+                        </template>
+                      </n-button>
+                    </template>
+                    重命名
+                  </n-tooltip>
+                  <n-tooltip v-if="res.kind === 'record'">
+                    <template #trigger>
+                      <n-button size="tiny" tertiary @click="deleteRecord(res.record)">
+                        <template #icon>
+                          <n-icon>
+                            <TrashOutline />
+                          </n-icon>
+                        </template>
+                      </n-button>
+                    </template>
+                    删除记录或连同产物
+                  </n-tooltip>
+                </template>
+
+                <n-tooltip v-if="res.filePath">
                   <template #trigger>
-                    <n-button quaternary circle @click="removeSelected(file)">
+                    <n-button size="tiny" quaternary @click="openOutput(res.filePath)">
                       <template #icon>
                         <n-icon>
-                          <TrashOutline />
+                          <FolderOpenOutline />
                         </n-icon>
                       </template>
                     </n-button>
                   </template>
-                  移除文件
+                  在文件管理器中定位
                 </n-tooltip>
               </div>
-            </div>
+            </article>
           </div>
-        </n-card>
-
-        <div class="row-resizer" title="拖动调整中间区域上下高度" @pointerdown="startMiddleResize($event)">
-          <div class="resizer-dot" />
         </div>
-
-        <n-card title="音频播放器" size="small" class="tts-panel player-panel">
-          <template #header-extra>
-            <div class="player-header-actions">
-              <span class="panel-extra">{{ playerTitle || '等待播放' }}</span>
-              <n-tooltip>
-                <template #trigger>
-                  <n-button circle tertiary size="small" @click="pickPlayerMedia">
-                    <template #icon>
-                      <n-icon>
-                        <FolderOpenOutline />
-                      </n-icon>
-                    </template>
-                  </n-button>
-                </template>
-                选择音频和字幕 JSON
-              </n-tooltip>
-            </div>
-          </template>
-
-          <div class="player-body">
-            <n-empty v-if="!currentAudioSrc" description="点击右侧任务队列中的音频按钮即可在这里播放" />
-            <template v-else>
-              <audio ref="audioRef" class="audio-element" :src="currentAudioSrc" controls preload="metadata"
-                @loadedmetadata="handleAudioMetadata" @canplay="handleAudioCanPlay" @play="handleAudioPlay"
-                @timeupdate="handleAudioTimeUpdate" @ended="handleAudioEnded" @error="handleAudioError" />
-
-              <div class="subtitle-panel">
-                <div class="subtitle-label">当前字幕</div>
-                <div class="subtitle-current">{{ currentSubtitleText }}</div>
-                <div class="subtitle-list">
-                  <button v-for="(item, index) in subtitleTimeline" :key="`${index}-${item.text}`" type="button"
-                    class="subtitle-item" :class="{ active: index === currentSubtitleIndex }"
-                    @click="seekToSubtitle(index)">
-                    <span class="subtitle-index">{{ index + 1 }}</span>
-                    <span class="subtitle-text">{{ item.text }}</span>
-                  </button>
-                </div>
-              </div>
-            </template>
-          </div>
-        </n-card>
       </section>
 
-      <div class="col-resizer" title="拖动调整右侧栏宽度" @pointerdown="startColumnResize('right', $event)">
+      <div class="col-resizer" title="拖动调整播放器宽度" @pointerdown="startColumnResize('right', $event)">
         <div class="resizer-dot" />
       </div>
 
-      <aside class="sidebar">
-        <n-card title="任务" size="small" class="tts-panel queue-panel">
-          <template #header-extra>
-            <n-tabs v-model:value="queueTab" type="segment" size="small" class="queue-tabs">
-              <n-tab name="active">进行中</n-tab>
-              <n-tab name="done">已完成</n-tab>
-            </n-tabs>
-          </template>
-
-          <div v-if="queueTab === 'active'" class="queue-layout">
-            <div class="stat-grid">
-              <div class="stat-card">
-                <div class="stat-label">总任务</div>
-                <div class="stat-value">{{ totalTasks }}</div>
-              </div>
-              <div class="stat-card">
-                <div class="stat-label">成功</div>
-                <div class="stat-value success">{{ successTasks }}</div>
-              </div>
-              <div class="stat-card">
-                <div class="stat-label">失败</div>
-                <div class="stat-value error">{{ failedTasks }}</div>
-              </div>
-            </div>
-
-            <div class="progress-card">
-              <div class="block-label">任务完成度</div>
-              <n-progress type="line" :percentage="progressPercent" :show-indicator="true" :height="10" />
-            </div>
-
-            <div class="task-scroll">
-              <n-empty v-if="!activeTasks.length" description="暂无进行中的任务" />
-              <n-list v-else bordered class="task-list">
-                <n-list-item v-for="task in activeTasks" :key="task.id">
-                  <div class="queue-item">
-                    <div class="task-main">
-                      <div class="task-head">
-                        <n-tag size="small" :type="tagType(task.status)">{{ taskStatusLabel(task) }}</n-tag>
-                        <span class="task-name">{{ task.fileName }}</span>
-                      </div>
-                      <div class="task-meta">{{ task.message }}</div>
-                      <n-progress v-if="task.status === 'running' || task.progress > 0 || task.status === 'success'"
-                        type="line" :percentage="task.progress" :show-indicator="true" :height="8"
-                        :status="task.status === 'error' ? 'error' : task.status === 'success' ? 'success' : 'info'" />
-                      <div v-if="task.stats" class="task-meta">
-                        分段 {{ task.stats.total_chunks }}，中文 {{ task.stats.zh_chunks }}，英文 {{ task.stats.en_chunks }}
-                      </div>
-                      <div v-if="task.chapterCount > 0" class="task-meta">章节音频 {{ task.chapterCount }} 个</div>
-                    </div>
-
-                    <div class="queue-actions">
-                      <n-tooltip v-if="task.status === 'running'">
-                        <template #trigger>
-                          <n-button quaternary circle size="small" @click="pauseTask(task)">
-                            <template #icon>
-                              <n-icon>
-                                <PauseOutline />
-                              </n-icon>
-                            </template>
-                          </n-button>
-                        </template>
-                        暂停任务
-                      </n-tooltip>
-                      <n-tooltip v-else-if="task.status === 'paused' || task.status === 'queued'">
-                        <template #trigger>
-                          <n-button quaternary circle size="small" :disabled="running" @click="resumeTask(task)">
-                            <template #icon>
-                              <n-icon>
-                                <PlayOutline />
-                              </n-icon>
-                            </template>
-                          </n-button>
-                        </template>
-                        继续任务
-                      </n-tooltip>
-                      <n-tooltip v-if="task.status !== 'success' && task.status !== 'stopped'">
-                        <template #trigger>
-                          <n-button quaternary circle size="small" @click="stopTask(task)">
-                            <template #icon>
-                              <n-icon>
-                                <StopOutline />
-                              </n-icon>
-                            </template>
-                          </n-button>
-                        </template>
-                        终止任务
-                      </n-tooltip>
-                      <n-tooltip v-if="task.status === 'success' && task.outputPath">
-                        <template #trigger>
-                          <n-button size="tiny" tertiary @click="playTaskAudio(task)">
-                            <template #icon>
-                              <n-icon>
-                                <PlayOutline />
-                              </n-icon>
-                            </template>
-                            音频
-                          </n-button>
-                        </template>
-                        在中间播放器中播放
-                      </n-tooltip>
-                      <n-tooltip v-if="task.status === 'success' && task.segmentJsonPath">
-                        <template #trigger>
-                          <n-button size="tiny" tertiary @click="openOutput(task.segmentJsonPath)">
-                            <template #icon>
-                              <n-icon>
-                                <DocumentTextOutline />
-                              </n-icon>
-                            </template>
-                            JSON
-                          </n-button>
-                        </template>
-                        打开分段 JSON
-                      </n-tooltip>
-                      <n-tooltip v-if="task.status === 'success' && task.chapterOutputPaths?.length">
-                        <template #trigger>
-                          <n-button size="tiny" tertiary @click="openOutput(task.chapterOutputPaths[0])">
-                            <template #icon>
-                              <n-icon>
-                                <LibraryOutline />
-                              </n-icon>
-                            </template>
-                            章节
-                          </n-button>
-                        </template>
-                        打开章节音频位置
-                      </n-tooltip>
-                    </div>
-                  </div>
-                </n-list-item>
-              </n-list>
-            </div>
-          </div>
-
-          <div v-else class="records-layout">
-            <div class="records-toolbar">
-              <n-input v-model:value="recordQuery" clearable size="small" placeholder="搜索标题 / 文件名">
-                <template #prefix>
+      <aside class="rail player-rail">
+        <header class="rail-head">
+          <span class="rail-title">播放器</span>
+          <span class="rail-sub">{{ playerTitle || '等待播放' }}</span>
+          <n-tooltip>
+            <template #trigger>
+              <n-button size="tiny" tertiary circle @click="pickPlayerMedia">
+                <template #icon>
                   <n-icon>
-                    <SearchOutline />
+                    <FolderOpenOutline />
                   </n-icon>
                 </template>
-              </n-input>
-              <n-tooltip>
-                <template #trigger>
-                  <n-button tertiary circle size="small" :loading="scanningRecords" @click="scanRecords">
-                    <template #icon>
-                      <n-icon>
-                        <RefreshOutline />
-                      </n-icon>
-                    </template>
-                  </n-button>
-                </template>
-                扫描输出目录，把已有的转换成果导入成记录
-              </n-tooltip>
-            </div>
+              </n-button>
+            </template>
+            选择音频和字幕 JSON
+          </n-tooltip>
+        </header>
 
-            <div class="records-scroll">
-              <n-empty v-if="!filteredRecords.length"
-                :description="records.length ? '没有匹配的记录' : '暂无已完成记录'" />
-              <n-list v-else bordered class="task-list">
-                <n-list-item v-for="record in filteredRecords" :key="record.id">
-                  <div class="queue-item">
-                    <div class="task-main">
-                      <div class="task-head">
-                        <n-tag size="small" type="success">已完成</n-tag>
-                        <span class="task-name">{{ record.title || record.file_name }}</span>
-                      </div>
-                      <div class="task-meta">{{ record.file_name }}</div>
-                      <div class="task-meta">{{ describeRecord(record) }}</div>
-                      <div class="task-meta">{{ formatFinishedAt(record.finished_at) }}</div>
-                    </div>
+        <div class="player-body">
+          <n-empty v-if="!currentAudioSrc" description="点资源库里的播放按钮，音频会在这里播放" />
+          <template v-else>
+            <audio ref="audioRef" class="audio-element" :src="currentAudioSrc" controls preload="metadata"
+              @loadedmetadata="handleAudioMetadata" @canplay="handleAudioCanPlay" @play="handleAudioPlay"
+              @timeupdate="handleAudioTimeUpdate" @ended="handleAudioEnded" @error="handleAudioError" />
 
-                    <div class="queue-actions">
-                      <n-tooltip>
-                        <template #trigger>
-                          <n-button size="tiny" tertiary :disabled="!record.output_path" @click="playRecordAudio(record)">
-                            <template #icon>
-                              <n-icon>
-                                <PlayOutline />
-                              </n-icon>
-                            </template>
-                            音频
-                          </n-button>
-                        </template>
-                        在中间播放器中播放
-                      </n-tooltip>
-                      <n-button size="tiny" tertiary :disabled="!record.segment_json_path"
-                        @click="openOutput(record.segment_json_path)">JSON</n-button>
-                      <n-button size="tiny" tertiary :disabled="!record.chapter_output_paths?.length"
-                        @click="openOutput(record.chapter_output_paths[0])">章节</n-button>
-                      <n-button size="tiny" tertiary @click="renameRecord(record)">重命名</n-button>
-                      <n-button size="tiny" tertiary @click="deleteRecord(record)">删除</n-button>
-                    </div>
-                  </div>
-                </n-list-item>
-              </n-list>
+            <div class="subtitle-panel">
+              <div class="current-subtitle">{{ currentSubtitleText }}</div>
+              <div v-if="subtitleTimeline.length" class="subtitle-list">
+                <button v-for="(item, index) in subtitleTimeline" :key="`${index}-${item.text}`" type="button"
+                  class="subtitle-item" :class="{ active: index === currentSubtitleIndex }" @click="seekToSubtitle(index)">
+                  <span class="subtitle-index">{{ index + 1 }}</span>
+                  <span class="subtitle-text">{{ item.text }}</span>
+                </button>
+              </div>
+              <div v-else class="subtitle-empty">该音频暂无分段字幕</div>
             </div>
-          </div>
-        </n-card>
+          </template>
+        </div>
       </aside>
     </section>
   </div>
@@ -464,7 +536,7 @@ import { createDiscreteApi, NInput } from 'naive-ui'
 import { open } from '@tauri-apps/plugin-dialog'
 import { invoke, convertFileSrc } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { AddOutline, DocumentTextOutline, FolderOpenOutline, LibraryOutline, PauseOutline, PlayCircleOutline, PlayOutline, RefreshOutline, SearchOutline, StopOutline, TrashOutline } from '@vicons/ionicons5'
+import { AddOutline, AlbumsOutline, CreateOutline, DocumentTextOutline, FolderOpenOutline, GridOutline, LibraryOutline, ListOutline, OptionsOutline, PauseOutline, PlayCircleOutline, PlayOutline, RefreshOutline, SearchOutline, StopOutline, TrashOutline } from '@vicons/ionicons5'
 import { createLogger } from '../../../utils/logger'
 import { useSettingsStore } from '../../../stores/settingsStore'
 import { buildSpeakerOptions } from '../../../utils/ttsSpeakers'
@@ -489,6 +561,11 @@ const UI = {
   executionProvider: 'guaxi_ttsbook_execution_provider',
   speakerId: 'guaxi_ttsbook_speaker_id',
   speed: 'guaxi_ttsbook_speed',
+  leftWidth: 'guaxi_ttsbook_left_width',
+  rightWidth: 'guaxi_ttsbook_right_width',
+  paramsCollapsed: 'guaxi_ttsbook_params_collapsed',
+  facet: 'guaxi_ttsbook_facet',
+  viewMode: 'guaxi_ttsbook_view_mode',
 }
 
 const ttsConfig = ref({ provider: 'sherpa-onnx', model: DEFAULT_MODEL, tokens: DEFAULT_TOKENS, exe: DEFAULT_TTS_EXE, outputDir: '' })
@@ -506,12 +583,8 @@ const speakerId = ref(readUiState(UI.speakerId, null))
 const ttsSpeed = ref(readUiState(UI.speed, 1, within(0.2, 3)))
 const running = ref(false)
 const tasks = ref([])
-// 右栏的「进行中 / 已完成」切换。已完成那侧的数据来自后端的完成记录。
-const queueTab = ref('active')
 const records = ref([])
-const recordQuery = ref('')
 const scanningRecords = ref(false)
-const currentRunningTaskId = ref('')
 const audioRef = ref(null)
 const currentAudioSrc = ref('')
 const currentPlayingTaskId = ref('')
@@ -520,10 +593,12 @@ const playerTitle = ref('')
 const currentSubtitleIndex = ref(-1)
 const subtitleTimeline = ref([])
 const layoutRef = ref(null)
-const middleColumnRef = ref(null)
-const leftColWidth = ref(340)
-const rightColWidth = ref(340)
-const middleTopHeight = ref(300)
+const leftColWidth = ref(readUiState(UI.leftWidth, 300, within(260, 620)))
+const rightColWidth = ref(readUiState(UI.rightWidth, 380, within(280, 560)))
+const paramsCollapsed = ref(readUiState(UI.paramsCollapsed, false))
+const facet = ref(readUiState(UI.facet, 'all', oneOf('all', 'idle', 'running', 'success', 'error')))
+const viewMode = ref(readUiState(UI.viewMode, 'list', oneOf('list', 'grid')))
+const libraryQuery = ref('')
 const dragState = ref(null)
 let unlistenTtsBookProgress = null
 let currentAudioObjectUrl = ''
@@ -533,32 +608,6 @@ let currentAudioFallbackTried = false
 let currentAudioFallbackInFlight = false
 
 const isDarkTheme = computed(() => settingsStore.appearanceTheme === 'dark')
-const totalTasks = computed(() => tasks.value.length)
-const successTasks = computed(() => tasks.value.filter((t) => t.status === 'success').length)
-const failedTasks = computed(() => tasks.value.filter((t) => t.status === 'error').length)
-const progressPercent = computed(() => totalTasks.value ? Math.round(tasks.value.reduce((sum, task) => sum + Number(task.progress || 0), 0) / totalTasks.value) : 0)
-// 「进行中」只列还没完成的：成功的那些已经归到「已完成」，两边都显示反而更难理解。
-// 统计卡仍按全部任务算，这样「成功」那一格才有意义。
-const activeTasks = computed(() => tasks.value.filter((task) => task.status !== 'success'))
-const filteredRecords = computed(() => {
-  const query = recordQuery.value.trim().toLowerCase()
-  if (!query) return records.value
-  return records.value.filter((record) =>
-    [record.title, record.file_name, record.source_file]
-      .some((field) => String(field || '').toLowerCase().includes(query)))
-})
-const hasPendingTasks = computed(() => tasks.value.some((task) => ['queued', 'paused'].includes(task.status)))
-const canStart = computed(() => !running.value && (selectedFiles.value.length > 0 || hasPendingTasks.value))
-const canPauseAll = computed(() => tasks.value.some((task) => task.status === 'running' || task.status === 'queued'))
-const canStopAll = computed(() => tasks.value.some((task) => ['running', 'queued', 'paused', 'error'].includes(task.status)))
-const currentSubtitleText = computed(() => currentSubtitleIndex.value >= 0 ? (subtitleTimeline.value[currentSubtitleIndex.value]?.text || '等待字幕...') : '等待字幕...')
-const layoutVars = computed(() => ({
-  '--left-col-width': `${Math.round(leftColWidth.value)}px`,
-  '--right-col-width': `${Math.round(rightColWidth.value)}px`,
-}))
-const middleVars = computed(() => ({
-  '--middle-top-height': `${Math.round(middleTopHeight.value)}px`,
-}))
 
 const modelOptions = computed(() => [
   { label: '跟随全局设置', value: 'settings' },
@@ -570,6 +619,141 @@ const executionProviderOptions = [
   { label: 'CPU', value: 'cpu' },
   { label: 'GPU / CUDA', value: 'cuda' },
 ]
+
+// ───────────────────────── 统一资源模型 ─────────────────────────
+// 源文件（待转换）、队列任务（进行中）、完成记录（已完成）在语义上是同一条
+// 生命周期的三个阶段，之前被拆成三个列表，右栏「进行中 / 已完成」的分页
+// 也因此重复。这里合流成一份 resources，列表只管渲染，视图切换交给 facet。
+const extOf = (name) => String(name || '').split(/[\\/]/).pop()?.split('.').pop()?.toUpperCase() || ''
+
+const recordResource = (record) => ({
+  key: `record-${record.id}`,
+  kind: 'record',
+  record,
+  taskId: String(record.id || ''),
+  title: String(record.title || record.file_name || '未命名'),
+  fileName: String(record.file_name || ''),
+  filePath: String(record.source_file || ''),
+  ext: extOf(record.file_name || record.source_file),
+  status: 'success',
+  progress: 100,
+  outputPath: String(record.output_path || ''),
+  segmentJsonPath: String(record.segment_json_path || ''),
+  chapterOutputPaths: Array.isArray(record.chapter_output_paths) ? record.chapter_output_paths : [],
+  chapterCount: Array.isArray(record.chapter_output_paths) ? record.chapter_output_paths.length : 0,
+  meta: describeRecord(record),
+})
+
+const taskResource = (task) => ({
+  key: `task-${task.taskId || task.id}`,
+  kind: 'task',
+  task,
+  taskId: String(task.taskId || task.id),
+  title: String(task.title || task.fileName || '未命名'),
+  fileName: String(task.fileName || ''),
+  filePath: String(task.filePath || ''),
+  ext: extOf(task.fileName || task.filePath),
+  status: task.status,
+  progress: Number(task.progress || 0),
+  outputPath: String(task.outputPath || ''),
+  segmentJsonPath: String(task.segmentJsonPath || ''),
+  chapterOutputPaths: Array.isArray(task.chapterOutputPaths) ? task.chapterOutputPaths : [],
+  chapterCount: Number(task.chapterCount || 0),
+  meta: describeTask(task),
+})
+
+const sourceResource = (file) => ({
+  key: `source-${file}`,
+  kind: 'source',
+  taskId: '',
+  title: basename(file),
+  fileName: basename(file),
+  filePath: String(file || ''),
+  ext: extOf(file),
+  status: 'idle',
+  progress: 0,
+  outputPath: '',
+  segmentJsonPath: '',
+  chapterOutputPaths: [],
+  chapterCount: 0,
+  meta: '待加入队列',
+})
+
+// 成功任务的展示交给完成记录（后端索引才是权威），但记录万一没读出来时
+// 不能让结果凭空消失，所以按 taskId 去重后仍保留没有对应记录的那几条。
+const resources = computed(() => {
+  const list = []
+  const indexedRecords = new Set(records.value.map((record) => String(record.id)))
+  for (const task of tasks.value) {
+    if (task.status === 'success' && indexedRecords.has(String(task.taskId || task.id))) continue
+    list.push(taskResource(task))
+  }
+  for (const record of records.value) list.push(recordResource(record))
+  for (const file of selectedFiles.value) list.push(sourceResource(file))
+  const rank = { running: 0, queued: 1, paused: 2, error: 3, idle: 4, stopped: 5, success: 6 }
+  return list.sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9))
+})
+
+const matchesFacet = (res, value) => {
+  if (value === 'all') return true
+  if (value === 'idle') return res.status === 'idle'
+  if (value === 'running') return ['running', 'queued', 'paused'].includes(res.status)
+  if (value === 'success') return res.status === 'success'
+  return ['error', 'stopped'].includes(res.status)
+}
+
+const filteredResources = computed(() => {
+  const query = libraryQuery.value.trim().toLowerCase()
+  return resources.value.filter((res) => {
+    if (!matchesFacet(res, facet.value)) return false
+    if (!query) return true
+    return [res.title, res.fileName, res.filePath].some((field) => String(field || '').toLowerCase().includes(query))
+  })
+})
+
+const countOf = (value) => resources.value.filter((res) => matchesFacet(res, value)).length
+const facets = computed(() => [
+  { value: 'all', label: '全部', count: resources.value.length },
+  { value: 'idle', label: '待转换', count: countOf('idle') },
+  { value: 'running', label: '进行中', count: countOf('running') },
+  { value: 'success', label: '已完成', count: countOf('success') },
+  { value: 'error', label: '失败', count: countOf('error') },
+])
+
+const totalResources = computed(() => resources.value.length)
+const idleCount = computed(() => countOf('idle'))
+const successCount = computed(() => countOf('success'))
+const failedCount = computed(() => countOf('error'))
+const activeCount = computed(() => countOf('running'))
+// 进度只对「已入队」的资源算：刚导入还没开始的文件不该把完成度拉低。
+const queuePercent = computed(() => {
+  const pending = activeCount.value + failedCount.value + tasks.value.filter((t) => t.status === 'stopped').length
+  const done = successCount.value
+  const total = done + pending
+  return total ? Math.round((done / total) * 100) : 0
+})
+
+const queueStatus = computed(() => {
+  if (running.value) return 'info'
+  if (failedCount.value) return 'error'
+  return successCount.value && queuePercent.value === 100 ? 'success' : 'default'
+})
+
+const hasPendingTasks = computed(() => tasks.value.some((task) => ['queued', 'paused'].includes(task.status)))
+const canStart = computed(() => !running.value && (selectedFiles.value.length > 0 || hasPendingTasks.value))
+const canPauseAll = computed(() => tasks.value.some((task) => task.status === 'running' || task.status === 'queued'))
+const canStopAll = computed(() => tasks.value.some((task) => ['running', 'queued', 'paused', 'error'].includes(task.status)))
+
+const currentSubtitleText = computed(() => currentSubtitleIndex.value >= 0 ? (subtitleTimeline.value[currentSubtitleIndex.value]?.text || '等待字幕...') : '等待字幕...')
+
+// 参数栏收起时把整条轨道从网格里摘掉，而不是留一列 0 宽度的空位。
+const layoutVars = computed(() => ({
+  '--left-col-width': `${Math.round(leftColWidth.value)}px`,
+  '--right-col-width': `${Math.round(rightColWidth.value)}px`,
+  '--body-columns': paramsCollapsed.value
+    ? `minmax(520px, 1fr) 8px var(--right-col-width)`
+    : `var(--left-col-width) 8px minmax(520px, 1fr) 8px var(--right-col-width)`,
+}))
 
 const inferModeHint = (model) => {
   const value = String(model || '').toLowerCase()
@@ -594,26 +778,15 @@ const dirname = (p) => {
 }
 
 const resolvedModelLabel = computed(() => `${resolveModelConfig().label} · ${basename(resolveModelConfig().model)}`)
-const fileTypeLabel = (file) => {
-  const ext = basename(file).split('.').pop()?.toLowerCase() || ''
-  return ext ? ext.toUpperCase() : '未知类型'
-}
 
-const tagType = (status) => {
-  if (status === 'queued') return 'default'
-  if (status === 'running') return 'info'
-  if (status === 'paused') return 'warning'
-  if (status === 'success') return 'success'
-  if (status === 'error' || status === 'stopped') return 'error'
-  return 'default'
-}
-const taskStatusLabel = (task) => {
-  if (task.status === 'queued') return '排队中'
-  if (task.status === 'running') return task.resumed ? '继续处理中' : '处理中'
-  if (task.status === 'paused') return '已暂停'
-  if (task.status === 'stopped') return '已终止'
-  if (task.status === 'success') return '已完成'
-  if (task.status === 'error') return '失败'
+const statusLabel = (res) => {
+  if (res.status === 'idle') return '待转换'
+  if (res.status === 'queued') return '排队中'
+  if (res.status === 'running') return res.task?.resumed ? '继续处理中' : `处理中 ${res.progress}%`
+  if (res.status === 'paused') return `已暂停 ${res.progress}%`
+  if (res.status === 'stopped') return '已终止'
+  if (res.status === 'success') return '已完成'
+  if (res.status === 'error') return '失败'
   return '未知'
 }
 
@@ -623,9 +796,13 @@ const updateTask = (taskId, patch) => {
   tasks.value.splice(index, 1, { ...tasks.value[index], ...patch })
 }
 
+const findTask = (res) => tasks.value.find((item) => (item.taskId || item.id) === res.taskId)
+
 const clearFinished = () => {
   tasks.value = tasks.value.filter((t) => ['running', 'queued', 'paused'].includes(t.status))
 }
+
+const clearTasksByStatus = clearFinished
 
 const snapshotCurrentTaskConfig = () => {
   const resolvedModel = resolveModelConfig()
@@ -758,13 +935,13 @@ const pickFiles = async () => {
         { name: '所有文件', extensions: ['*'] },
       ],
     })
-    if (typeof picked === 'string' && picked.trim()) {
-      selectedFiles.value = [picked]
-      return
-    }
-    if (Array.isArray(picked)) {
-      selectedFiles.value = [...new Set(picked.map((p) => String(p || '').trim()).filter(Boolean))]
-    }
+    const incoming = (typeof picked === 'string' ? [picked] : Array.isArray(picked) ? picked : [])
+      .map((p) => String(p || '').trim())
+      .filter(Boolean)
+    if (!incoming.length) return
+    // 追加而不是替换：资源库是台账，「导入」就该往里加，清空另有入口。
+    selectedFiles.value = [...new Set([...selectedFiles.value, ...incoming])]
+    facet.value = 'idle'
   } catch (e) {
     logger.error('pickFiles failed:', e)
     message.error('选择文件失败')
@@ -775,12 +952,12 @@ const removeSelected = (file) => {
   selectedFiles.value = selectedFiles.value.filter((p) => p !== file)
 }
 
-// 批量移除的入口：单个文件的删除仍在每张卡片上。
+// 批量移除的入口：单个资源的删除仍在每张卡片上。
 const clearSelectedFiles = () => {
   if (!selectedFiles.value.length) return
   dialog.warning({
-    title: '清空已打开文件',
-    content: `移除全部 ${selectedFiles.value.length} 个已打开文件？只清空这个列表，不会动磁盘上的文件。`,
+    title: '清空待转换文件',
+    content: `移除全部 ${selectedFiles.value.length} 个待转换文件？只清空这个列表，不会动磁盘上的文件。`,
     positiveText: '清空',
     negativeText: '取消',
     onPositiveClick: () => {
@@ -1027,13 +1204,13 @@ const seekToSubtitle = (index) => {
   audioRef.value.play().catch((e) => logger.warn('seekToSubtitle play failed:', e))
 }
 
-const playTaskAudio = async (task) => {
-  if (!task?.outputPath) return
+const playResource = async (res) => {
+  if (!res?.outputPath) return
   await loadPlayerSources({
-    audioPath: task.outputPath,
-    jsonPath: task.segmentJsonPath || '',
-    title: task.fileName || basename(task.outputPath),
-    taskId: task.id,
+    audioPath: res.outputPath,
+    jsonPath: res.segmentJsonPath || '',
+    title: res.title || basename(res.outputPath),
+    taskId: res.taskId,
   })
 }
 
@@ -1137,36 +1314,21 @@ const stopDragging = () => {
 const handleGlobalPointerMove = (event) => {
   const state = dragState.value
   if (!state) return
-
-  if (state.type === 'left' || state.type === 'right') {
-    const containerWidth = Number(layoutRef.value?.clientWidth || 0)
-    if (containerWidth <= 0) return
-    const splitterWidth = 20
-    const middleMin = 520
-    const sideMin = 260
-    const sideMax = 560
-    if (state.type === 'left') {
-      const rawLeft = state.startLeft + (event.clientX - state.startX)
-      const maxByMiddle = containerWidth - rightColWidth.value - middleMin - splitterWidth * 2
-      leftColWidth.value = clamp(rawLeft, sideMin, Math.max(sideMin, Math.min(sideMax, maxByMiddle)))
-      return
-    }
-    const rawRight = state.startRight - (event.clientX - state.startX)
-    const maxByMiddle = containerWidth - leftColWidth.value - middleMin - splitterWidth * 2
-    rightColWidth.value = clamp(rawRight, sideMin, Math.max(sideMin, Math.min(sideMax, maxByMiddle)))
+  const containerWidth = Number(layoutRef.value?.clientWidth || 0)
+  if (containerWidth <= 0) return
+  const splitterWidth = 16
+  const middleMin = 520
+  const sideMin = 280
+  const sideMax = 560
+  if (state.type === 'left') {
+    const rawLeft = state.startLeft + (event.clientX - state.startX)
+    const maxByMiddle = containerWidth - rightColWidth.value - middleMin - splitterWidth * 2
+    leftColWidth.value = clamp(rawLeft, sideMin, Math.max(sideMin, Math.min(sideMax, maxByMiddle)))
     return
   }
-
-  if (state.type === 'middle') {
-    const middleHeight = Number(middleColumnRef.value?.clientHeight || 0)
-    if (middleHeight <= 0) return
-    const splitterHeight = 10
-    const minTop = 180
-    const minBottom = 220
-    const maxTop = middleHeight - minBottom - splitterHeight
-    const rawTop = state.startTop + (event.clientY - state.startY)
-    middleTopHeight.value = clamp(rawTop, minTop, Math.max(minTop, maxTop))
-  }
+  const rawRight = state.startRight - (event.clientX - state.startX)
+  const maxByMiddle = containerWidth - leftColWidth.value - middleMin - splitterWidth * 2
+  rightColWidth.value = clamp(rawRight, sideMin, Math.max(sideMin, Math.min(sideMax, maxByMiddle)))
 }
 
 const startColumnResize = (type, event) => {
@@ -1181,15 +1343,8 @@ const startColumnResize = (type, event) => {
   window.addEventListener('pointerup', stopDragging)
 }
 
-const startMiddleResize = (event) => {
-  event.preventDefault()
-  dragState.value = {
-    type: 'middle',
-    startY: event.clientY,
-    startTop: middleTopHeight.value,
-  }
-  window.addEventListener('pointermove', handleGlobalPointerMove)
-  window.addEventListener('pointerup', stopDragging)
+const toggleParamsRail = () => {
+  paramsCollapsed.value = !paramsCollapsed.value
 }
 
 // 选择变化即落盘。放在所有被持久化的 ref 声明**之后**，否则会命中 TDZ。
@@ -1201,6 +1356,11 @@ for (const [key, source] of [
   [UI.executionProvider, executionProvider],
   [UI.speakerId, speakerId],
   [UI.speed, ttsSpeed],
+  [UI.leftWidth, leftColWidth],
+  [UI.rightColWidth, rightColWidth],
+  [UI.paramsCollapsed, paramsCollapsed],
+  [UI.facet, facet],
+  [UI.viewMode, viewMode],
 ]) {
   watch(source, (value) => persistUiState(key, value))
 }
@@ -1221,16 +1381,16 @@ onBeforeUnmount(() => {
   }
 })
 
-const enqueueSelectedFiles = () => {
-  const incoming = selectedFiles.value
-    .map((file) => String(file || '').trim())
-    .filter(Boolean)
+const enqueueSources = (files) => {
+  const wanted = [...new Set(files.map((file) => String(file || '').trim()).filter(Boolean))]
+  const incoming = wanted
     .filter((file) => !tasks.value.some((task) => task.filePath === file && ['queued', 'running', 'paused'].includes(task.status)))
     .map((file) => createTask(file))
   if (incoming.length) {
     tasks.value = [...incoming, ...tasks.value]
   }
-  selectedFiles.value = []
+  const taken = new Set(wanted)
+  selectedFiles.value = selectedFiles.value.filter((file) => !taken.has(file))
 }
 
 const buildTaskRequest = (task, totalCount) => {
@@ -1242,7 +1402,7 @@ const buildTaskRequest = (task, totalCount) => {
     task_id: task.taskId || task.id,
     file_path: task.filePath,
     output_dir: targetOutputDir,
-    output_name: totalCount === 1 ? String(task.outputName || '').trim() : String(task.outputName || '').trim(),
+    output_name: String(task.outputName || '').trim(),
     max_chunk_chars: Number(task.maxChunkChars || 180),
     split_by_toc: !!task.splitByToc,
     tts_model: task.ttsModel || DEFAULT_MODEL,
@@ -1254,9 +1414,14 @@ const buildTaskRequest = (task, totalCount) => {
   }
 }
 
-const startConvertQueue = async () => {
-  if (!canStart.value) return
-  enqueueSelectedFiles()
+// onlyFile 只给单条资源的「转换这一个」用；不传则把库里全部待转换文件一起入队。
+const startConvertQueue = async (onlyFile = '') => {
+  if (!running.value) {
+    const pool = onlyFile ? [onlyFile] : selectedFiles.value
+    if (pool.length) {
+      enqueueSources(pool)
+    }
+  }
   const queue = tasks.value.filter((task) => ['queued', 'paused'].includes(task.status))
   if (!queue.length) return
 
@@ -1269,7 +1434,6 @@ const startConvertQueue = async () => {
   for (let i = 0; i < queue.length; i += 1) {
     const task = tasks.value.find((item) => (item.taskId || item.id) === (queue[i].taskId || queue[i].id))
     if (!task || !['queued', 'paused'].includes(task.status)) continue
-    currentRunningTaskId.value = task.taskId || task.id
     updateTask(task.id, {
       status: 'running',
       resumed: task.resumed || task.status === 'paused' || Number(task.progress || 0) > 0,
@@ -1293,7 +1457,7 @@ const startConvertQueue = async () => {
         message: Number(response?.chapter_count || 0) > 0 ? '转换完成，已输出音频、分段 JSON 和章节文件' : '转换完成，已输出音频和分段 JSON',
       })
       successCount += 1
-      // 该任务随后就归入「已完成」，刷新记录让它在那一页立刻可见。
+      // 该任务随后归入完成记录，刷新后资源库里立刻可见。
       void loadRecords()
     } catch (e) {
       const text = String(e?.message || e || '转换失败')
@@ -1310,8 +1474,6 @@ const startConvertQueue = async () => {
         updateTask(task.id, { status: 'error', progress: Math.max(Number(task.progress || 0), 0), message: text })
         failedCount += 1
       }
-    } finally {
-      currentRunningTaskId.value = ''
     }
   }
 
@@ -1325,13 +1487,19 @@ const startConvertQueue = async () => {
   }
 }
 
-const pauseTask = async (task) => {
+const startSingle = async (res) => {
+  await startConvertQueue(res.filePath)
+}
+
+const pauseResource = async (res) => {
+  const task = findTask(res)
+  if (!task) return
   if (task.status === 'running') {
     try {
       await invoke('tts_book_pause_task', { taskId: task.taskId || task.id })
       updateTask(task.id, { message: '已请求暂停，当前分段完成后会暂停' })
     } catch (e) {
-      logger.error('pauseTask failed:', e)
+      logger.error('pauseResource failed:', e)
       message.error('暂停任务失败')
     }
     return
@@ -1341,13 +1509,15 @@ const pauseTask = async (task) => {
   }
 }
 
-const stopTask = async (task) => {
+const stopResource = async (res) => {
+  const task = findTask(res)
+  if (!task) return
   if (task.status === 'running') {
     try {
       await invoke('tts_book_stop_task', { taskId: task.taskId || task.id })
       updateTask(task.id, { message: '已请求终止，当前分段完成后会停止' })
     } catch (e) {
-      logger.error('stopTask failed:', e)
+      logger.error('stopResource failed:', e)
       message.error('终止任务失败')
     }
     return
@@ -1355,7 +1525,10 @@ const stopTask = async (task) => {
   updateTask(task.id, { status: 'stopped', message: '任务已终止' })
 }
 
-const resumeTask = async (task) => {
+// 暂停/失败/终止后重新入队都走这一条：后端会用同一份 resume_state 接着做。
+const resumeResource = async (res) => {
+  const task = findTask(res)
+  if (!task) return
   updateTask(task.id, { status: 'queued', message: '等待继续处理...' })
   if (!running.value) {
     await startConvertQueue()
@@ -1487,34 +1660,41 @@ const applyDeleteRecord = async (record, removeFiles) => {
   }
 }
 
-const playRecordAudio = async (record) => {
-  if (!record.output_path) return
-  await loadPlayerSources({
-    audioPath: record.output_path,
-    jsonPath: record.segment_json_path || '',
-    title: record.title || record.file_name || basename(record.output_path),
-    taskId: record.id,
-  })
-}
-
-// 列表里那一行说明：分段数 · 字数 · 音色 · 体积
-const describeRecord = (record) => {
-  const parts = []
-  if (record.total_chunks) parts.push(`${record.total_chunks} 段`)
-  if (record.total_chars) parts.push(`${Number(record.total_chars).toLocaleString('zh-CN')} 字`)
-  if (record.speaker_id !== undefined && record.speaker_id !== null && String(record.speaker_id) !== '') {
-    parts.push(`Speaker ${record.speaker_id}`)
-  }
-  if (record.audio_bytes) parts.push(formatBytes(record.audio_bytes))
-  return parts.join(' · ')
-}
-
 const formatBytes = (bytes) => {
   const value = Number(bytes || 0)
   if (!value) return ''
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(0)} KB`
   if (value < 1024 * 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MB`
   return `${(value / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
+// 完成记录的说明行：完成时间 · 段数 · 字数 · 体积 · 音色。
+// 时间放最前面：这一行会被截断，放在末尾等于永远看不见。
+const describeRecord = (record) => {
+  const parts = []
+  const finished = formatFinishedAt(record.finished_at)
+  if (finished) parts.push(finished)
+  if (record.total_chunks) parts.push(`${record.total_chunks} 段`)
+  if (record.total_chars) parts.push(`${Number(record.total_chars).toLocaleString('zh-CN')} 字`)
+  if (record.audio_bytes) parts.push(formatBytes(record.audio_bytes))
+  if (record.speaker_id !== undefined && record.speaker_id !== null && String(record.speaker_id) !== '') {
+    parts.push(`Speaker ${record.speaker_id}`)
+  }
+  return parts.join(' · ')
+}
+
+const describeTask = (task) => {
+  const parts = []
+  const total = Number(task.stats?.total_chunks || 0)
+  if (total) {
+    const zh = Number(task.stats?.zh_chunks || 0)
+    const en = Number(task.stats?.en_chunks || 0)
+    // 续转任务只带总段数，中英拆分为 0 时显示出来只会让人以为统计坏了。
+    parts.push(zh || en ? `分段 ${total}（中 ${zh} / 英 ${en}）` : `分段 ${total}`)
+  }
+  if (task.chapterCount > 0) parts.push(`章节音频 ${task.chapterCount} 个`)
+  if (task.message) parts.push(task.message)
+  return parts.join(' · ')
 }
 
 const formatFinishedAt = (value) => {
@@ -1528,54 +1708,141 @@ const formatFinishedAt = (value) => {
 
 <style scoped>
 .tts-book-root {
-  --tts-bg-1: #edf6ff;
-  --tts-bg-2: #f5fbf6;
-  --tts-panel: rgba(255, 255, 255, 0.9);
-  --tts-panel-strong: rgba(255, 255, 255, 0.96);
-  --tts-border: rgba(39, 83, 122, 0.12);
-  --tts-title: #173857;
-  --tts-text: #2a4760;
-  --tts-muted: #6d8496;
-  --tts-stat: rgba(255, 255, 255, 0.72);
-  --tts-success: #198754;
-  --tts-error: #c0384c;
-  --tts-font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Microsoft YaHei', 'Courier New', monospace;
-  --tts-resizer: rgba(76, 124, 168, 0.22);
+  --tts-bg-1: #eef4fb;
+  --tts-bg-2: #f7fbf8;
+  --tts-panel: rgba(255, 255, 255, 0.86);
+  --tts-panel-solid: rgba(255, 255, 255, 0.95);
+  --tts-rail: rgba(250, 253, 255, 0.7);
+  --tts-border: rgba(31, 71, 109, 0.13);
+  --tts-hairline: rgba(31, 71, 109, 0.07);
+  --tts-title: #12334f;
+  --tts-text: #2b4a66;
+  --tts-muted: #71879b;
+  --tts-accent: #2f6fd0;
+  --tts-st-idle: #7c8fa3;
+  --tts-st-queued: #4b7fd6;
+  --tts-st-running: #1091b8;
+  --tts-st-paused: #c08a1e;
+  --tts-st-error: #c8443f;
+  --tts-st-stopped: #8a8f98;
+  --tts-st-done: #1f9d63;
+  --tts-resizer: rgba(76, 124, 168, 0.2);
   --tts-resizer-hover: rgba(76, 124, 168, 0.45);
-  --tts-header-h: 30px;
+  --tts-header-h: 46px;
+  --tts-font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Microsoft YaHei', 'Courier New', monospace;
   height: 100%;
   min-height: 0;
   padding: 0;
   box-sizing: border-box;
   overflow: hidden;
   font-family: var(--tts-font-family);
+  color: var(--tts-text);
   background:
     radial-gradient(circle at 0% 0%, rgba(123, 196, 255, 0.2), transparent 32%),
     radial-gradient(circle at 100% 0%, rgba(128, 224, 170, 0.16), transparent 28%),
     linear-gradient(135deg, var(--tts-bg-1), var(--tts-bg-2));
 }
 
-/* 顶栏高度写成变量：布局区要用 `calc(100% - var(--tts-header-h))` 跟它对齐，
-   各写一份数字迟早会对不上。这里是「标题一条」的紧凑高度。 */
+/* ───────── 顶栏：标题 + 全局读数 + 队列进度 + 操作 ───────── */
 .tts-header {
   height: var(--tts-header-h);
   display: flex;
   align-items: center;
-  padding: 0 10px;
+  gap: 18px;
+  padding: 0 12px;
   box-sizing: border-box;
+  border-bottom: 1px solid var(--tts-border);
+  background: var(--tts-panel-solid);
+  backdrop-filter: blur(12px);
 }
 
-.page-title {
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.brand-icon {
+  color: var(--tts-accent);
+}
+
+.brand-title {
   margin: 0;
-  font-size: 17px;
-  line-height: 1.2;
-  color: var(--tts-title);
+  font-size: 14px;
   font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--tts-title);
+  white-space: nowrap;
 }
 
-.tts-layout {
+.stat-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.stat-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--tts-hairline);
+  background: var(--tts-rail);
+  font-size: 11px;
+  color: var(--tts-muted);
+}
+
+.stat-chip b {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--tts-title);
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-chip em {
+  font-style: normal;
+}
+
+.stat-chip.tone-idle b { color: var(--tts-st-idle); }
+.stat-chip.tone-running b { color: var(--tts-st-running); }
+.stat-chip.tone-done b { color: var(--tts-st-done); }
+.stat-chip.tone-error b { color: var(--tts-st-error); }
+
+.header-meter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 120px;
+  max-width: 420px;
+}
+
+.meter-label {
+  font-size: 11px;
+  color: var(--tts-muted);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.rail-toggle.active {
+  color: var(--tts-accent);
+}
+
+/* ───────── 主体三轨 ───────── */
+.tts-body {
   display: grid;
-  grid-template-columns: minmax(260px, var(--left-col-width)) 10px minmax(520px, 1fr) 10px minmax(260px, var(--right-col-width));
+  grid-template-columns: var(--body-columns);
   gap: 0;
   align-items: stretch;
   min-width: 980px;
@@ -1584,212 +1851,372 @@ const formatFinishedAt = (value) => {
   min-height: 0;
 }
 
-.middle-column {
-  display: grid;
-  grid-template-rows: minmax(180px, var(--middle-top-height)) 10px minmax(220px, 1fr);
-  gap: 0;
+.rail {
   min-height: 0;
-}
-
-.sidebar {
   display: flex;
   flex-direction: column;
-  min-height: 0;
-}
-
-.tts-panel {
-  min-height: 0;
-  height: 100%;
-  border: none;
-  background: var(--tts-panel);
+  background: var(--tts-rail);
   backdrop-filter: blur(10px);
 }
 
-.control-panel {
+.params-rail {
   border-right: 1px solid var(--tts-border);
 }
 
-.sidebar .queue-panel {
-  border-left: 1px solid var(--tts-border);
+.rail-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--tts-hairline);
+  flex-shrink: 0;
 }
 
-.panel-scroll,
-.files-scroll,
-.task-scroll,
-.records-scroll,
-.player-body {
-  height: 100%;
+.rail-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--tts-title);
+}
+
+.rail-sub {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  color: var(--tts-muted);
+  text-align: right;
+}
+
+.rail-scroll {
+  flex: 1;
   min-height: 0;
   overflow: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
-.queue-layout {
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
-  gap: 14px;
-  height: 100%;
-  min-height: 0;
-}
-
-/* 已完成那页：一行工具栏（检索 + 扫描）+ 占满剩余高度的列表。 */
-.records-layout {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 12px;
-  height: 100%;
-  min-height: 0;
-}
-
-.records-toolbar {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: center;
-}
-
-/* 分段开关放在卡片标题栏里，去掉自带的下外边距免得把标题撑高。 */
-.queue-tabs :deep(.n-tabs-nav) {
-  margin-bottom: 0;
-}
-
-.panel-block {
+/* ───────── 参数（紧凑表单，取代原来的气泡卡片阵） ───────── */
+.param-group {
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 
-.block-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.block-label {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--tts-title);
-}
-
-.block-hint,
-.option-tip,
-.panel-extra,
-.task-meta,
-.file-meta {
-  font-size: 12px;
+.group-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
   color: var(--tts-muted);
+  text-transform: uppercase;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--tts-hairline);
 }
 
-.toolbar-row {
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.field-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tts-text);
+}
+
+.field-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
+  gap: 6px;
+  align-items: center;
 }
 
-.options-grid {
+.field-pair {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 
-.action-toolbar {
-  display: flex;
+.field-pair .field-narrow {
+  max-width: 120px;
+}
+
+.field-inline {
+  flex-direction: row;
   align-items: center;
-  gap: 10px;
+  justify-content: space-between;
+}
+
+.field-tip {
+  font-size: 11px;
+  color: var(--tts-muted);
+  overflow-wrap: anywhere;
+}
+
+.field-tip.push-down {
+  margin-top: -4px;
+}
+
+/* ───────── 资源库 ───────── */
+.library {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  min-width: 0;
+  background: var(--tts-panel);
+}
+
+.lib-toolbar {
+  display: grid;
+  grid-template-columns: minmax(160px, 280px) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
   padding: 10px 12px;
-  border-radius: 14px;
-  border: 1px solid var(--tts-border);
-  background: var(--tts-panel-strong);
+  border-bottom: 1px solid var(--tts-hairline);
 }
 
-.action-btn {
-  width: 36px;
-  height: 36px;
-}
-
-.action-btn-primary {
-  width: 40px;
-  height: 40px;
-}
-
-.option-card {
+.facet-row {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px;
-  border-radius: 14px;
-  border: 1px solid var(--tts-border);
-  background: var(--tts-panel-strong);
-}
-
-.option-card-wide {
-  grid-column: 1 / -1;
-}
-
-.option-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--tts-text);
-}
-
-.file-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 12px;
-}
-
-.file-card {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 12px;
   align-items: center;
-  padding: 14px;
-  border-radius: 16px;
-  border: 1px solid var(--tts-border);
-  background: linear-gradient(145deg, rgba(255, 255, 255, 0.92), rgba(244, 249, 255, 0.88));
-}
-
-.file-icon {
-  width: 36px;
-  height: 36px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 12px;
-  color: #3e7ad8;
-  background: rgba(92, 149, 233, 0.12);
-}
-
-.file-info,
-.task-main {
+  gap: 6px;
+  flex-wrap: wrap;
   min-width: 0;
 }
 
-.file-name {
+.facet {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--tts-hairline);
+  background: transparent;
+  color: var(--tts-muted);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.facet:hover {
+  color: var(--tts-title);
+  border-color: var(--tts-border);
+  background: rgba(47, 111, 208, 0.06);
+}
+
+.facet.on {
+  color: #fff;
+  border-color: transparent;
+  background: var(--tts-accent);
+}
+
+.facet-count {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+.facet.on .facet-count {
+  opacity: 0.9;
+}
+
+.lib-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.lib-scroll {
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+
+.res-collection.view-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.res-collection.view-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+  align-content: start;
+}
+
+/* 状态色只落在左边那条「书脊」上，列表整体保持安静。 */
+.res-item {
+  --st-color: var(--tts-st-idle);
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px 10px 16px;
+  border: 1px solid var(--tts-border);
+  border-radius: 10px;
+  background: var(--tts-panel-solid);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.res-item:hover {
+  border-color: rgba(47, 111, 208, 0.3);
+  box-shadow: 0 6px 18px -12px rgba(18, 51, 79, 0.5);
+}
+
+.res-item::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  top: 9px;
+  bottom: 9px;
+  width: 3px;
+  border-radius: 999px;
+  background: var(--st-color);
+}
+
+.res-item.st-queued { --st-color: var(--tts-st-queued); }
+.res-item.st-running { --st-color: var(--tts-st-running); }
+.res-item.st-paused { --st-color: var(--tts-st-paused); }
+.res-item.st-error { --st-color: var(--tts-st-error); }
+.res-item.st-stopped { --st-color: var(--tts-st-stopped); }
+.res-item.st-success { --st-color: var(--tts-st-done); }
+
+.res-item.st-running::before {
+  animation: spine-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes spine-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.res-format {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 46px;
+  height: 46px;
+  border-radius: 8px;
+  border: 1px solid var(--tts-hairline);
+  background: linear-gradient(150deg, rgba(47, 111, 208, 0.1), rgba(47, 111, 208, 0.03));
+  flex-shrink: 0;
+}
+
+.format-text {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--tts-accent);
+}
+
+.format-count {
+  font-size: 9px;
+  color: var(--tts-muted);
+}
+
+.res-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.res-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.res-title {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  color: var(--tts-title);
+  font-size: 13px;
   font-weight: 600;
+  color: var(--tts-title);
 }
 
-.task-name {
+.res-status {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--st-color);
+  white-space: nowrap;
+}
+
+.res-file,
+.res-meta {
   min-width: 0;
-  color: var(--tts-title);
-  font-weight: 600;
-  white-space: normal;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-  line-height: 1.45;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  color: var(--tts-muted);
 }
 
-.files-header-actions {
+.res-progress {
+  margin-top: 4px;
+}
+
+.res-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
+/* 书架视图：同样的标记换一套排布，不再写第二份模板。 */
+.res-collection.view-grid .res-item {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 10px;
+  padding: 14px 12px 10px 16px;
+}
+
+.res-collection.view-grid .res-format {
+  width: 100%;
+  height: 56px;
+  flex-direction: row;
+  gap: 6px;
+}
+
+.res-collection.view-grid .format-text {
+  font-size: 13px;
+}
+
+.res-collection.view-grid .res-head {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.res-collection.view-grid .res-title {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+
+.res-collection.view-grid .res-actions {
+  justify-content: flex-start;
+  border-top: 1px solid var(--tts-hairline);
+  padding-top: 8px;
+}
+
+/* ───────── 分栏拖拽 ───────── */
 .col-resizer {
   display: flex;
   align-items: center;
@@ -1800,207 +2227,105 @@ const formatFinishedAt = (value) => {
   background: linear-gradient(180deg, transparent, var(--tts-resizer), transparent);
 }
 
-.row-resizer {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: row-resize;
-  user-select: none;
-  touch-action: none;
-  background: linear-gradient(90deg, transparent, var(--tts-resizer), transparent);
-}
-
-.col-resizer:hover,
-.row-resizer:hover {
+.col-resizer:hover {
   background: linear-gradient(180deg, transparent, var(--tts-resizer-hover), transparent);
 }
 
-.row-resizer:hover {
-  background: linear-gradient(90deg, transparent, var(--tts-resizer-hover), transparent);
-}
-
 .resizer-dot {
-  width: 4px;
+  width: 3px;
   height: 34px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.6);
 }
 
-.row-resizer .resizer-dot {
-  width: 34px;
-  height: 4px;
+/* ───────── 播放器 ───────── */
+.player-rail {
+  border-left: 1px solid var(--tts-border);
 }
 
 .player-body {
+  flex: 1;
+  min-height: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  gap: 14px;
-  height: 100%;
-  min-height: 0;
-}
-
-.player-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  gap: 12px;
+  padding: 12px;
+  overflow: hidden;
 }
 
 .audio-element {
   width: 100%;
-  min-height: 46px;
+  min-height: 44px;
   flex-shrink: 0;
 }
 
 .subtitle-panel {
   display: grid;
-  grid-template-rows: auto auto minmax(120px, 1fr);
-  gap: 12px;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
   min-height: 0;
   overflow: hidden;
 }
 
-.subtitle-label {
-  font-size: 12px;
-  color: var(--tts-muted);
-}
-
-.subtitle-current {
-  padding: 14px;
-  border-radius: 14px;
+.current-subtitle {
+  padding: 12px;
+  border-radius: 10px;
   border: 1px solid var(--tts-border);
-  background: var(--tts-panel-strong);
+  background: var(--tts-panel-solid);
   color: var(--tts-title);
-  /* 字体设置移至统一类 */
+  font-size: 15px;
+  line-height: 1.7;
 }
 
 .subtitle-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
   overflow: auto;
+  min-height: 0;
 }
 
 .subtitle-item {
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr);
-  gap: 10px;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 8px;
   align-items: start;
   width: 100%;
-  padding: 10px 12px;
-  border: 1px solid var(--tts-border);
-  border-radius: 12px;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
   background: transparent;
   color: var(--tts-text);
   text-align: left;
   cursor: pointer;
-  /* 添加统一字体设置 */
-  font-family: var(--tts-font-family);
-  font-size: 15px;
-  line-height: 1.7;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.65;
+  transition: background 0.15s ease;
+}
+
+.subtitle-item:hover {
+  background: rgba(47, 111, 208, 0.06);
 }
 
 .subtitle-item.active {
-  background: rgba(77, 136, 229, 0.12);
-  border-color: rgba(77, 136, 229, 0.28);
+  background: rgba(47, 111, 208, 0.12);
+  border-color: rgba(47, 111, 208, 0.26);
 }
 
 .subtitle-index {
+  font-size: 11px;
+  color: var(--tts-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.subtitle-empty {
   font-size: 12px;
   color: var(--tts-muted);
+  padding: 4px 2px;
 }
 
-.subtitle-text {
-  line-height: 1.6;
-  /* 继承父元素的字体设置 */
-  font-family: inherit;
-  font-size: inherit;
-  color: inherit;
-}
-
-/* 为.subtitle-current添加相同的字体设置 */
-.subtitle-current {
-  font-family: var(--tts-font-family);
-  font-size: 15px;
-  line-height: 1.7;
-}
-
-.stat-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.stat-card,
-.progress-card {
-  padding: 12px;
-  border-radius: 14px;
-  border: 1px solid var(--tts-border);
-  background: var(--tts-stat);
-}
-
-.stat-label {
-  font-size: 12px;
-  color: var(--tts-muted);
-}
-
-.stat-value {
-  margin-top: 6px;
-  font-size: 28px;
-  line-height: 1;
-  font-weight: 700;
-  color: var(--tts-title);
-}
-
-.stat-value.success {
-  color: var(--tts-success);
-}
-
-.stat-value.error {
-  color: var(--tts-error);
-}
-
-.queue-item {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.task-main {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.task-head {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  min-width: 0;
-}
-
-.task-head :deep(.n-tag) {
-  flex-shrink: 0;
-}
-
-.queue-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.tts-book-root :deep(.n-card) {
-  border-radius: 0;
-  height: 100%;
-  background: var(--tts-panel);
-}
-
-.tts-book-root :deep(.n-card > .n-card__content) {
-  height: calc(100% - 52px);
-  min-height: 0;
-  background: transparent;
-}
-
-.tts-book-root :deep(.n-card-header__main),
+/* ───────── naive-ui 外观对齐 ───────── */
 .tts-book-root :deep(.n-button),
 .tts-book-root :deep(.n-base-selection),
 .tts-book-root :deep(.n-input),
@@ -2008,8 +2333,7 @@ const formatFinishedAt = (value) => {
 .tts-book-root :deep(.n-tag),
 .tts-book-root :deep(.n-empty),
 .tts-book-root :deep(.n-progress),
-.tts-book-root :deep(.n-list),
-.tts-book-root :deep(.n-list-item) {
+.tts-book-root :deep(.n-switch) {
   font-family: inherit;
 }
 
@@ -2019,30 +2343,30 @@ const formatFinishedAt = (value) => {
   background: rgba(255, 255, 255, 0.92);
 }
 
+/* ───────── 深色 ───────── */
 .tts-book-root.tts-book-dark {
   --tts-bg-1: #101924;
   --tts-bg-2: #0e141d;
-  --tts-panel: rgba(18, 27, 39, 0.9);
-  --tts-panel-strong: rgba(18, 27, 39, 0.96);
+  --tts-panel: rgba(18, 27, 39, 0.88);
+  --tts-panel-solid: rgba(19, 28, 40, 0.94);
+  --tts-rail: rgba(15, 23, 34, 0.7);
   --tts-border: rgba(126, 158, 189, 0.18);
+  --tts-hairline: rgba(126, 158, 189, 0.1);
   --tts-title: #e7f0fb;
   --tts-text: #c7d5e5;
   --tts-muted: #8ea2b8;
-  --tts-stat: rgba(14, 20, 29, 0.72);
+  --tts-accent: #5f9bea;
+  --tts-st-idle: #8ea2b8;
+  --tts-st-queued: #6ea3f0;
+  --tts-st-running: #3fc0e0;
+  --tts-st-paused: #e0b44e;
+  --tts-st-error: #ec7a72;
+  --tts-st-stopped: #98a0aa;
+  --tts-st-done: #4fc98c;
   --tts-resizer: rgba(142, 162, 184, 0.24);
   --tts-resizer-hover: rgba(142, 162, 184, 0.48);
 }
 
-.tts-book-root.tts-book-dark .file-card,
-.tts-book-root.tts-book-dark .subtitle-current,
-.tts-book-root.tts-book-dark .subtitle-item {
-  background: linear-gradient(145deg, rgba(19, 30, 43, 0.98), rgba(14, 22, 32, 0.92));
-}
-
-.tts-book-root.tts-book-dark :deep(.n-card),
-.tts-book-root.tts-book-dark :deep(.n-list),
-.tts-book-root.tts-book-dark :deep(.n-list-item),
-.tts-book-root.tts-book-dark :deep(.n-empty),
 .tts-book-root.tts-book-dark :deep(.n-input .n-input-wrapper),
 .tts-book-root.tts-book-dark :deep(.n-input-number .n-input-wrapper),
 .tts-book-root.tts-book-dark :deep(.n-base-selection) {
@@ -2050,7 +2374,6 @@ const formatFinishedAt = (value) => {
   color: #d7e5f5;
 }
 
-.tts-book-root.tts-book-dark :deep(.n-card-header__main),
 .tts-book-root.tts-book-dark :deep(.n-empty__description),
 .tts-book-root.tts-book-dark :deep(.n-input__input-el),
 .tts-book-root.tts-book-dark :deep(.n-base-selection-label) {
