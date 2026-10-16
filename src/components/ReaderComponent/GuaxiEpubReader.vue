@@ -3804,20 +3804,7 @@ button:disabled {
   transform: scale(1.02);
 }
 
-/* 选中和高亮样式 */
-.markdown-content :deep(.selected),
-.markdown-content :deep(.hovered) {
-  background-color: rgba(72, 215, 240, 0.2);
-  box-shadow: 0 0 0 2px rgba(65, 210, 230, 0.5);
-  transform: scale(1.005);
-  outline: none;
-  cursor: pointer;
-}
-
-.markdown-content :deep(.selected) {
-  background-color: rgba(33, 213, 236, 0.3);
-  box-shadow: 0 0 0 3px rgba(85, 231, 207, 0.7);
-}
+/* 悬停 / 选中、以及页内搜索命中的配色已抽到 readerChrome.css（六个阅读器共用一份）。 */
 
 /* 选择消息样式 */
 .selection-message {
@@ -3975,17 +3962,6 @@ button:disabled {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-}
-
-.markdown-content :deep(.inpage-match) {
-  background: rgba(255, 230, 120, 0.55);
-  border-radius: 4px;
-  padding: 0 2px;
-}
-
-.markdown-content :deep(.inpage-match-active) {
-  background: rgba(255, 180, 80, 0.75);
-  box-shadow: 0 0 0 2px rgba(255, 180, 80, 0.35);
 }
 
 /* 笔记面板样式 */

@@ -269,3 +269,40 @@
   background-color: rgba(255, 107, 107, 0.08);
   box-shadow: inset 3px 0 0 #ff6b6b;
 }
+
+/* ── 右栏里的两种"标记" ─────────────────────────────────────────
+   这里只有两种语义，就只给两种颜色：
+   · 悬停 / 选中（鼠标指着、或点过准备摘录的那一段）→ 走 App.vue 共享的"命中"橙色系，
+     和 Monaco、预览、探索者一致；
+   · 页内搜索命中 → 荧光笔黄。
+   以前悬停/选中在四个阅读器里各写一套青色（rgba(72,215,240) 等），只有转换版 PDF
+   阅读器改成了共享变量，于是同一个手势在不同阅读器里是两种颜色。 */
+
+.markdown-content .selected,
+.markdown-content .hovered {
+  background-color: var(--guaxi-search-hit-bg, rgba(234, 92, 0, 0.28));
+  box-shadow: 0 0 0 2px var(--guaxi-search-hit-active-border, rgba(246, 154, 60, 0.9));
+  transform: scale(1.005);
+  outline: none;
+  cursor: pointer;
+}
+
+.markdown-content .selected {
+  background-color: var(--guaxi-search-hit-active-bg, rgba(234, 92, 0, 0.5));
+  box-shadow: 0 0 0 3px var(--guaxi-search-hit-active-border, rgba(246, 154, 60, 0.9));
+}
+
+/* 页内搜索命中。.pdf-text-layer 那条是旧 PDF.js 路径（新阅读器的命中画在 .gpv 里，
+   见 GuaxiPdfViewer 的 .gpv__search-rect）。 */
+.markdown-content .inpage-match,
+.pdf-text-layer .inpage-match {
+  background: rgba(255, 230, 120, 0.55);
+  border-radius: 4px;
+  padding: 0 2px;
+}
+
+.markdown-content .inpage-match-active,
+.pdf-text-layer .inpage-match-active {
+  background: rgba(255, 180, 80, 0.75);
+  box-shadow: 0 0 0 2px rgba(255, 180, 80, 0.35);
+}

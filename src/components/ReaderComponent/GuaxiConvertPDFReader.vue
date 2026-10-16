@@ -5911,22 +5911,7 @@ button:disabled {
   transform: scale(1.02);
 }
 
-/* 54. 选中和高亮样式
-   跟着 App.vue 里那套共享的"命中"变量走（与 Monaco、预览、探索者一致），
-   不再自己写一套青色——之前这四种状态在四个地方各是一种颜色。 */
-.markdown-content :deep(.selected),
-.markdown-content :deep(.hovered) {
-  background-color: var(--guaxi-search-hit-bg, rgba(234, 92, 0, 0.28));
-  box-shadow: 0 0 0 2px var(--guaxi-search-hit-active-border, rgba(246, 154, 60, 0.9));
-  transform: scale(1.005);
-  outline: none;
-  cursor: pointer;
-}
-
-.markdown-content :deep(.selected) {
-  background-color: var(--guaxi-search-hit-active-bg, rgba(234, 92, 0, 0.5));
-  box-shadow: 0 0 0 3px var(--guaxi-search-hit-active-border, rgba(246, 154, 60, 0.9));
-}
+/* 54. 悬停 / 选中与页内命中的配色已抽到 readerChrome.css（六个阅读器共用一份）。 */
 
 /* 55. 选择消息样式 */
 .selection-message {
@@ -6349,19 +6334,6 @@ button:disabled {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-}
-
-.markdown-content :deep(.inpage-match),
-.pdf-text-layer :deep(.inpage-match) {
-  background: rgba(255, 230, 120, 0.55);
-  border-radius: 4px;
-  padding: 0 2px;
-}
-
-.markdown-content :deep(.inpage-match-active),
-.pdf-text-layer :deep(.inpage-match-active) {
-  background: rgba(255, 180, 80, 0.75);
-  box-shadow: 0 0 0 2px rgba(255, 180, 80, 0.35);
 }
 
 /* 56. 笔记面板样式 */
