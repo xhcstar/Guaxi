@@ -117,6 +117,14 @@ fn format_with_comrak(content: &str, options: &MarkdownFormatOptions) -> Result<
     comrak_options.extension.footnotes = true;
     comrak_options.extension.description_lists = true;
     comrak_options.extension.front_matter_delimiter = Some("---".to_string());
+    // 数学块必须原样保留。
+    // 不开这个扩展时，`$$...$$` 只是一段普通段落文本，format_commonmark 序列化时会把里面的
+    // 反斜杠转义成 `\\`——而 `\\` 在 LaTeX 里是换行，公式直接被改坏（用户反馈"格式化后公式渲染失败"）。
+    // 开启后 `$...$` / `$$...$$` 解析成 Math 节点，cm.rs 的 format_math 用 Escaping::Literal
+    // 原样写回，一字不动。
+    // 识别规则与 GitHub 一致（开 `$` 后不能紧跟空白、闭 `$` 前不能是空白、闭 `$` 后不能是数字），
+    // 所以正文里的货币写法（如 `$5 和 $10`）不会被误吞成公式。
+    comrak_options.extension.math_dollars = true;
 
     comrak_options.render.width = if options.max_line_width == 0 { 0 } else { options.max_line_width };
 
