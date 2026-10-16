@@ -3330,6 +3330,26 @@ const revealInModeTree = async (mode, rawPath, options = {}) => {
     }
   }
 
+  // 设计说明（对应"面包屑里点目录展开不了、看不到里面的文件"）：
+  // buildAncestorDirs 只给到目标的**祖先链**（循环到 parts.length - 1），所以目标本身若是目录，
+  // 上面那一轮只会把它所在的那一行选中并滚过去，它自己仍是收起的——于是"定位到目录"看起来毫无反应。
+  // 这里补上：目标是目录时把它也展开（并懒加载其子节点）。
+  //
+  // **刻意做成 opt-in**：只有面包屑那条调用会传 expandTargetDir，'打开文件自动跟随标签页'那条不传。
+  // 这样文件树原有行为（跟随 activeTab 时只展开祖先、不改目标节点状态）一字不变，
+  // 新行为的影响面严格限制在"从面包屑点目录"这一个动作上。
+  const targetNode = findNodeById(tree, target)
+  if (options.expandTargetDir === true && targetNode?.is_directory) {
+    await loadModeDirChildren(mode, targetNode)
+    if (mode === 'plain') {
+      if (!externalExpandedKeys.value.includes(target)) externalExpandedKeys.value = [...externalExpandedKeys.value, target]
+    } else if (mode === 'task') {
+      if (!taskCatExpandedKeys[catKey].includes(target)) taskCatExpandedKeys[catKey] = [...taskCatExpandedKeys[catKey], target]
+    } else if (!expandedKeys.value.includes(target)) {
+      expandedKeys.value = [...expandedKeys.value, target]
+    }
+  }
+
   if (mode === 'plain') {
     externalSelectedKeys.value = [target]
   } else if (mode === 'task') {
@@ -3793,8 +3813,10 @@ onMounted(async () => {
       const payload = event?.payload
       const path = typeof payload === 'string' ? payload : String(payload?.path || '')
       if (!path) return
-      logger.info('[BreadcrumbReveal] event received', { path })
-      await revealPathInSidebar(path)
+      // 从面包屑来的定位：允许展开目标目录（其余调用方不传这个标志，行为不变）。
+      const expandTargetDir = typeof payload === 'object' && payload?.expandTargetDir === true
+      logger.info('[BreadcrumbReveal] event received', { path, expandTargetDir })
+      await revealPathInSidebar(path, { expandTargetDir })
     })
     breadcrumbRevealUnlisten.value = unlisten
   } catch (e) {

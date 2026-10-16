@@ -4621,7 +4621,7 @@ const handleBreadcrumbClick = async (it) => {
 
   logger.info('[Breadcrumb] reveal in file tree', { label: it?.label, path })
   try {
-    await emit(EVENT_REVEAL_IN_FILE_TREE, { path })
+    await emit(EVENT_REVEAL_IN_FILE_TREE, { path, expandTargetDir: true })
   } catch (e) {
     logger.warn('[Breadcrumb] emit reveal event failed:', e)
   }
@@ -4921,7 +4921,7 @@ const handleBreadcrumbPickerSelect = async (key) => {
     if (payload.isFile) {
       await fileTreeStore.openFileInTab(path)
     }
-    await emit(EVENT_REVEAL_IN_FILE_TREE, { path })
+    await emit(EVENT_REVEAL_IN_FILE_TREE, { path, expandTargetDir: true })
   } catch (e) {
     logger.warn('[BreadcrumbPicker] select failed:', e)
   }
