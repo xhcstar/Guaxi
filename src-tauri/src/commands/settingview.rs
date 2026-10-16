@@ -122,6 +122,29 @@ pub struct AppConfig {
     terminal_config: TerminalConfig,
     #[serde(default)]
     film_studio_config: FilmStudioConfig,
+    /// Markdown 格式化的选项。以前这组值硬编码在 GuaxiEditor 的 invokeMarkdownFormat 里，
+    /// 用户改不了；现在落到配置里，由「设置 → 编辑器」驱动。
+    #[serde(default = "default_markdown_format_options")]
+    markdown_format_options: crate::commands::markdowncheck::MarkdownFormatOptions,
+}
+
+/// Markdown 格式化的默认选项。
+///
+/// 取值刻意等于 GuaxiEditor 原先写死的那一组（折行 80、清理行尾空白开启）：升级后
+/// 没动过设置的用户，格式化结果和以前逐字节一致。
+/// **不要**退回 `MarkdownFormatOptions::default()`——它是 max_line_width=120、
+/// 且 indent/list 等语义与编辑器一直在用的那组不同，会让老用户一升级就发现文档被重排。
+fn default_markdown_format_options() -> crate::commands::markdowncheck::MarkdownFormatOptions {
+    crate::commands::markdowncheck::MarkdownFormatOptions {
+        max_line_width: 80,
+        indent_width: 2,
+        list_indent: 2,
+        format_tables: true,
+        format_lists: true,
+        preserve_code_blocks: true,
+        remove_extra_blank_lines: true,
+        fix_extra_whitespace: true,
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -884,6 +907,7 @@ impl Default for AppConfig {
             asr_config: AsrConfig::default(),
             terminal_config: TerminalConfig::default(),
             film_studio_config: FilmStudioConfig::default(),
+            markdown_format_options: default_markdown_format_options(),
             disabled_services: Vec::new(),
         }
     }
@@ -1345,6 +1369,21 @@ pub fn set_lsp_syntax_highlight_enabled(enabled: bool) {
 pub fn get_code_theme() -> String {
     let config = load_config();
     config.code_theme
+}
+
+#[tauri::command]
+pub fn get_markdown_format_options() -> crate::commands::markdowncheck::MarkdownFormatOptions {
+    let config = load_config();
+    config.markdown_format_options
+}
+
+#[tauri::command]
+pub fn set_markdown_format_options(
+    options: crate::commands::markdowncheck::MarkdownFormatOptions,
+) {
+    let mut config = load_config();
+    config.markdown_format_options = options;
+    save_config(&config);
 }
 
 #[tauri::command]

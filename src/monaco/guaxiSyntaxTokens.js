@@ -109,9 +109,45 @@ export const isDottedMemberAtOffset = (sourceText = '', startOffset = 0) => {
   return text[cursor] === '.'
 }
 
+// Markdown 正文的 capture 名。
+//
+// **当前在用的 grammar 是 tree-sitter-md，它产出的是 `text.*`**：
+//   标题 text.title、斜体 text.emphasis、加粗 text.strong、行内代码 text.literal、
+//   链接文字 text.reference、链接地址 text.uri。
+// `markup.*` 是另一套命名习惯（nvim-treesitter 的写法），这里一并保留，换 grammar 时不至于再漏一次。
+//
+// 之前这张表两种名字都写成了 markup.*：后端白名单里没有 text.*，capture 在
+// `HighlightConfiguration::configure` 阶段就被整条丢弃，于是编辑器里 Markdown 正文
+// **一条高亮都没有**——不是"颜色选得不对"，是"根本没命中"。
+const MARKDOWN_CAPTURE_TO_TOKEN = {
+  // tree-sitter-md（当前）
+  'text.title': 'class',
+  'text.emphasis': 'decorator',
+  'text.strong': 'keyword',
+  // text.literal 同时覆盖"行内代码"与"围栏代码块的外层节点"，
+  // 围栏内容本身由注入的语言着色，这里影响的是标记行与行内代码，取 string 与既有语义一致。
+  'text.literal': 'string',
+  'text.reference': 'function',
+  'text.uri': 'function',
+  // 兼容另一套命名
+  'markup.heading': 'class',
+  'markup.bold': 'keyword',
+  'markup.italic': 'decorator',
+  'markup.raw': 'string',
+  'markup.raw.block': 'string',
+  'markup.raw.inline': 'string',
+  'markup.quote': 'comment',
+  'markup.list': 'punctuation',
+  'markup.link': 'function',
+  'markup.link.url': 'function',
+}
+
 export const mapTreeSitterCaptureToGuaxiToken = (tokenType, options = {}) => {
   const type = String(tokenType || '').toLowerCase()
   if (!type) return ''
+
+  const markdownToken = MARKDOWN_CAPTURE_TO_TOKEN[type]
+  if (markdownToken) return markdownToken
 
   let mapped = ''
   if (type.includes('comment')) mapped = 'comment'

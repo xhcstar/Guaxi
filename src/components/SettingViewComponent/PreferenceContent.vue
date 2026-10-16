@@ -212,6 +212,79 @@
           代码配色同时作用于编辑器里的代码块、探索者 cell，以及 Markdown 预览/阅读器/导出的代码块。
           每套主题自带亮色与暗色两套配色，随外观主题自动切换。
         </p>
+
+        <h3>Markdown 格式化</h3>
+        <p class="description">
+          右键菜单里「Markdown 格式化（全文 / 选中）」使用的参数。这组值以前写死在编辑器代码里，
+          现在可以按自己的写法调整；改动即时落盘。
+        </p>
+        <n-form label-placement="left" label-width="auto" :show-require-mark="false">
+          <n-form-item label="折行宽度（0 = 不折行）">
+            <n-input-number
+              :value="settingsStore.markdownFormat.max_line_width"
+              :min="0"
+              :max="400"
+              :disabled="loading || markdownFormatSaving"
+              style="width: 160px"
+              @update:value="(v) => handleMarkdownFormatChange('max_line_width', Number(v) || 0)"
+            />
+          </n-form-item>
+          <n-form-item label="缩进宽度">
+            <n-input-number
+              :value="settingsStore.markdownFormat.indent_width"
+              :min="1"
+              :max="8"
+              :disabled="loading || markdownFormatSaving"
+              style="width: 160px"
+              @update:value="(v) => handleMarkdownFormatChange('indent_width', Number(v) || 2)"
+            />
+          </n-form-item>
+          <n-form-item label="列表缩进">
+            <n-input-number
+              :value="settingsStore.markdownFormat.list_indent"
+              :min="1"
+              :max="8"
+              :disabled="loading || markdownFormatSaving"
+              style="width: 160px"
+              @update:value="(v) => handleMarkdownFormatChange('list_indent', Number(v) || 2)"
+            />
+          </n-form-item>
+          <n-form-item label="格式化表格">
+            <n-switch
+              :value="settingsStore.markdownFormat.format_tables"
+              :disabled="loading || markdownFormatSaving"
+              @update:value="(v) => handleMarkdownFormatChange('format_tables', v)"
+            />
+          </n-form-item>
+          <n-form-item label="格式化列表">
+            <n-switch
+              :value="settingsStore.markdownFormat.format_lists"
+              :disabled="loading || markdownFormatSaving"
+              @update:value="(v) => handleMarkdownFormatChange('format_lists', v)"
+            />
+          </n-form-item>
+          <n-form-item label="保留代码块内格式">
+            <n-switch
+              :value="settingsStore.markdownFormat.preserve_code_blocks"
+              :disabled="loading || markdownFormatSaving"
+              @update:value="(v) => handleMarkdownFormatChange('preserve_code_blocks', v)"
+            />
+          </n-form-item>
+          <n-form-item label="移除多余空行">
+            <n-switch
+              :value="settingsStore.markdownFormat.remove_extra_blank_lines"
+              :disabled="loading || markdownFormatSaving"
+              @update:value="(v) => handleMarkdownFormatChange('remove_extra_blank_lines', v)"
+            />
+          </n-form-item>
+          <n-form-item label="清理行尾空白">
+            <n-switch
+              :value="settingsStore.markdownFormat.fix_extra_whitespace"
+              :disabled="loading || markdownFormatSaving"
+              @update:value="(v) => handleMarkdownFormatChange('fix_extra_whitespace', v)"
+            />
+          </n-form-item>
+        </n-form>
         <LspExtensionPanel />
 
         <h3>AI 代码辅助</h3>
@@ -373,6 +446,8 @@ const codeTheme = ref(DEFAULT_CODE_THEME_ID)
 // 主题清单是前端资产（每套自带明暗两套调色板 + 上游 highlight.js 样式表），后端只存 id 字符串。
 const codeThemeOptions = GUAXI_CODE_THEMES.map((theme) => ({ label: theme.label, value: theme.id }))
 const pythonCodegenAssistEnabled = ref(false)
+// Markdown 格式化选项存在 settingsStore 里（启动时已 load），这里只跟一个"正在保存"的开关。
+const markdownFormatSaving = ref(false)
 const webrtcSignalUrl = ref('')
 const terminalDefaultProfile = ref('powershell')
 const terminalGitBashPath = ref('')
@@ -563,6 +638,17 @@ const handleCodeThemeChange = async (value) => {
     logger.error('更新代码配色主题失败:', error)
   } finally {
     loading.value = false
+  }
+}
+
+const handleMarkdownFormatChange = async (key, value) => {
+  try {
+    markdownFormatSaving.value = true
+    await settingsStore.setMarkdownFormatOption(key, value)
+  } catch (error) {
+    logger.error('更新 Markdown 格式化选项失败:', error)
+  } finally {
+    markdownFormatSaving.value = false
   }
 }
 

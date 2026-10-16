@@ -14,6 +14,25 @@ const console = {
   error: (...args) => logger.error(...args),
 }
 
+/**
+ * Markdown 格式化选项的默认值。
+ *
+ * 必须与后端 `default_markdown_format_options()` 逐字段一致——那是老用户升级后实际会用到的值。
+ * 前端留一份是为了首帧（配置还没 invoke 回来）时格式化不会用错参数。
+ * 注意这组值（折行 80、清理行尾空白开启）与 `MarkdownFormatOptions::default()` 不同，
+ * 改之前先想清楚会不会把已有文档重排。
+ */
+export const DEFAULT_MARKDOWN_FORMAT_OPTIONS = {
+  max_line_width: 80,
+  indent_width: 2,
+  list_indent: 2,
+  format_tables: true,
+  format_lists: true,
+  preserve_code_blocks: true,
+  remove_extra_blank_lines: true,
+  fix_extra_whitespace: true,
+}
+
 export const useSettingsStore = defineStore("settings", {
   state: () => ({
     selectedMenu: "noterepo",
@@ -25,6 +44,9 @@ export const useSettingsStore = defineStore("settings", {
     // 代码配色主题（编辑器语法色 + Markdown 代码块配色共用同一套）
     codeTheme: DEFAULT_CODE_THEME_ID,
     codeThemeLoaded: false,
+    // Markdown 格式化选项。以前写死在 GuaxiEditor 的 invokeMarkdownFormat 里，用户改不了。
+    markdownFormat: { ...DEFAULT_MARKDOWN_FORMAT_OPTIONS },
+    markdownFormatLoaded: false,
   }),
   actions: {
     setSelectedMenu(menu) {
@@ -82,8 +104,34 @@ export const useSettingsStore = defineStore("settings", {
       }
     },
 
-    async loadAppearanceConfig() {
-      if (this.appearanceLoaded) {
+    async loadMarkdownFormatConfig() {
+      if (this.markdownFormatLoaded) return
+      try {
+        const loaded = await invoke('get_markdown_format_options')
+        if (loaded && typeof loaded === 'object') {
+          // 后端读到的是落盘值；合并而不是整体替换，这样将来后端新增字段时前端不会把它丢掉。
+          this.markdownFormat = { ...DEFAULT_MARKDOWN_FORMAT_OPTIONS, ...loaded }
+        }
+      } catch (error) {
+        console.warn('[SettingsStore] load markdown format options failed, keep defaults:', error)
+      }
+      this.markdownFormatLoaded = true
+    },
+
+    /** 局部更新某项格式化选项并落盘；调用方只传要改的字段。 */
+    async setMarkdownFormatOption(key, value) {
+      const next = { ...this.markdownFormat, [key]: value }
+      this.markdownFormat = next
+      this.markdownFormatLoaded = true
+      try {
+        await invoke('set_markdown_format_options', { options: next })
+      } catch (error) {
+        console.error('[SettingsStore] markdown format options persist failed:', error)
+        throw error
+      }
+    },
+
+    async loadAppearanceConfig() {      if (this.appearanceLoaded) {
         this.applyAppearanceTheme(this.appearanceTheme)
         await this.loadCodeThemeConfig()
         return

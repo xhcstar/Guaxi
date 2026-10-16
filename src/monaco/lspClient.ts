@@ -9,6 +9,7 @@ import {
   CompletionRequest,
   DidChangeTextDocumentNotification,
   DidOpenTextDocumentNotification,
+  DocumentFormattingRequest,
   SemanticTokensRequest,
 } from 'vscode-languageserver-protocol'
 import {
@@ -59,6 +60,44 @@ const LSP_FAILURE_THRESHOLD = 3
 const LSP_STOP_TIMEOUT_MS = 350
 const lspFailureTracker = new Map<string, { count: number; firstAt: number }>()
 const directCompletionProviderDisposables = new Map<string, monaco.IDisposable>()
+
+// 由编辑器注入的抑制断言：判断「这个位置是否由内嵌（围栏代码块 / 数学块）补全负责」。
+// 在那种位置向 markdown 服务端要补全毫无意义（光标在代码里，markdown 的链接补全用不上），
+// 而 Monaco 要等所有 provider 返回才弹窗——这趟请求会白拖慢每一次按键
+// （实测 marksman 每次约 260ms，且它前面还会先做一次整篇 markdown 的 didChange）。
+// 断言由编辑器提供是为了复用那边已有的围栏/数学块判定，不在这一层重复实现一遍。
+let directCompletionSuppressor:
+  | ((languageId: string, model: monaco.editor.ITextModel, position: monaco.Position) => boolean)
+  | null = null
+
+export const setDirectCompletionSuppressor = (
+  fn: ((languageId: string, model: monaco.editor.ITextModel, position: monaco.Position) => boolean) | null
+) => {
+  directCompletionSuppressor = typeof fn === 'function' ? fn : null
+}
+
+const logDirectCompletionSuppressedOnce = (() => {
+  const logged = new Set<string>()
+  return (languageId: string, reason: string) => {
+    if (logged.has(languageId)) return
+    logged.add(languageId)
+    logger.info('[LSP] direct completion suppressed at this position', { languageId, reason })
+  }
+})()
+
+// 服务端推送的诊断（textDocument/publishDiagnostics）的订阅者。
+// markdown 的链接诊断就来自这里——marksman 会报出指向不存在笔记的链接，比自研检查更准。
+type LspDiagnosticsListener = (languageId: string, params: unknown) => void
+const lspDiagnosticListeners = new Set<LspDiagnosticsListener>()
+
+/** 订阅各语言服务端推送的诊断；返回取消订阅函数。 */
+export const onLspDiagnostics = (listener: LspDiagnosticsListener) => {
+  if (typeof listener !== 'function') return () => {}
+  lspDiagnosticListeners.add(listener)
+  return () => {
+    lspDiagnosticListeners.delete(listener)
+  }
+}
 const directSyncedDocuments = new Map<string, { version: number; content: string; languageId: string; modelVersionId?: number }>()
 // 补全前文档同步的「沉降」等待：原 35ms 是每次补全的固定延迟。
 // 降到 8ms：足够让 didChange 通知在补全请求前被服务端按序处理，又显著降低补全可感延迟。
@@ -644,6 +683,11 @@ export const provideDirectLspCompletionSuggestions = async (
   // 这条无用请求连同它前面的全篇 didChange（40KB 的 markdown 文档）一起卡在每一次按键的关键路径上。
   if (!serverDeclaresCompletionProvider(entry.client)) {
     logCompletionCapabilitySkipOnce(clientKey, normalizedLanguageId)
+    return []
+  }
+  // 光标在内嵌代码块/数学块里时由内嵌补全负责，这里直接放弃。
+  if (directCompletionSuppressor?.(normalizedLanguageId, model, position)) {
+    logDirectCompletionSuppressedOnce(normalizedLanguageId, 'embedded-block-owns-position')
     return []
   }
   const documentUri = String(model.uri?.toString?.() || entry.documentUri || '')
@@ -1609,6 +1653,21 @@ export function initLspClient(
     lspFailureTracker.delete(clientKey)
     lspRetryBlockedUntil.delete(clientKey)
 
+    // 在 start() 之前挂上，避免漏掉启动后立刻推送的头部诊断。
+    try {
+      client.onNotification('textDocument/publishDiagnostics', (params: unknown) => {
+        for (const listener of lspDiagnosticListeners) {
+          // 单个订阅者出错不应影响其它订阅者，也不该打断这条通知链路。
+          try { listener(normalizedLanguageId, params) } catch { /* ignore */ }
+        }
+      })
+    } catch (error) {
+      logger.warn('[LSP] failed to attach diagnostics listener', {
+        languageId: normalizedLanguageId,
+        error: String((error as Error)?.message || error),
+      })
+    }
+
     Promise.resolve(client.start())
       .then(() => {
         const active = lspClients.get(clientKey)
@@ -1671,4 +1730,185 @@ export function disposeAllLspClients() {
   lspConnectionState.forEach((_value, languageId) => {
     setLspConnectionState(languageId, 'disconnected', 'manual-dispose')
   })
+}
+
+// ───── 定义查询 ─────
+// markdown 用它解析链接目标：marksman 认识 `[[wiki 链接]]` 与相对链接，能给出目标文件位置。
+// 自研的链接打开逻辑只认相对路径，所以 wiki 链接这一块是靠这里补上的。
+const serverDeclaresDefinition = (client: MonacoLanguageClient | null): boolean => {
+  const capabilities = (client as unknown as {
+    initializeResult?: { capabilities?: { definitionProvider?: unknown } }
+  } | null)?.initializeResult?.capabilities
+  return !!capabilities?.definitionProvider
+}
+
+export type LspLocation = { uri: string; line: number; column: number }
+
+/** 该语言当前是否有服务端能解析定义。 */
+export const supportsLspDefinition = (languageId: string): boolean => {
+  const normalizedLanguageId = normalizeLanguageId(languageId)
+  if (!normalizedLanguageId) return false
+  const entry = lspClients.get(getLspClientKey(normalizedLanguageId))
+  return !!entry?.client && !entry.disposed && serverDeclaresDefinition(entry.client)
+}
+
+/** 查询定义位置（1 基行列）。没有提供方 / 未连接 / 失败时返回 null。 */
+export const requestLspDefinition = async (
+  languageId: string,
+  model: monaco.editor.ITextModel,
+  position: monaco.Position
+): Promise<LspLocation[] | null> => {
+  const normalizedLanguageId = normalizeLanguageId(languageId)
+  if (!normalizedLanguageId) return null
+  const clientKey = getLspClientKey(normalizedLanguageId)
+  const entry = lspClients.get(clientKey)
+  if (!entry?.client || entry.disposed) return null
+  if (!serverDeclaresDefinition(entry.client)) return null
+
+  const documentUri = String(model.uri?.toString?.() || entry.documentUri || '')
+  const directClientReady = await ensureLspClientReadyForDirectRequest(
+    entry,
+    clientKey,
+    normalizedLanguageId,
+    documentUri
+  )
+  if (!directClientReady) return null
+
+  try {
+    // 与补全一致：先把当前内容同步过去，否则服务端可能按旧文本解析位置。
+    const synced = await synchronizeDirectLspTextDocument(entry, clientKey, normalizedLanguageId, model)
+    if (!synced) return null
+
+    const result = await (entry.client as unknown as {
+      sendRequest: (type: unknown, params: unknown, token?: unknown) => Promise<unknown>
+    }).sendRequest('textDocument/definition', {
+      textDocument: { uri: documentUri },
+      position: {
+        line: Math.max(0, Number(position.lineNumber || 1) - 1),
+        character: Math.max(0, Number(position.column || 1) - 1),
+      },
+    })
+
+    const items = Array.isArray(result) ? result : (result ? [result] : [])
+    return items
+      .map((item) => {
+        const entryLike = item as {
+          uri?: unknown
+          range?: { start?: { line?: number; character?: number } }
+          targetUri?: unknown
+          targetSelectionRange?: { start?: { line?: number; character?: number } }
+        }
+        const uri = String(entryLike?.targetUri ?? entryLike?.uri ?? '')
+        const start = entryLike?.targetSelectionRange?.start || entryLike?.range?.start
+        if (!uri || !start) return null
+        return {
+          uri,
+          line: Number(start.line || 0) + 1,
+          column: Number(start.character || 0) + 1,
+        }
+      })
+      .filter((item): item is LspLocation => !!item)
+  } catch (error) {
+    logger.warn('[LSP] definition request failed', {
+      languageId: normalizedLanguageId,
+      clientKey,
+      error: String((error as Error)?.message || error),
+    })
+    return null
+  }
+}
+
+// ───── LSP 文档格式化（能力驱动）─────
+// 目前内置服务端里没有任何一个为 markdown 声明 documentFormattingProvider（marksman 没有格式化能力，
+// 实测其能力清单里不含这一项），所以这是一条「有提供方就用、没有就回退内置格式化」的通道：
+// 装上真正的格式化扩展（prettier / remark 之类）之后自动生效，无需再改调用方。
+const serverDeclaresDocumentFormatting = (client: MonacoLanguageClient | null): boolean => {
+  const capabilities = (client as unknown as {
+    initializeResult?: { capabilities?: { documentFormattingProvider?: unknown } }
+  } | null)?.initializeResult?.capabilities
+  return !!capabilities?.documentFormattingProvider
+}
+
+/** 该语言当前是否有服务端能提供整篇格式化。 */
+export const supportsLspDocumentFormatting = (languageId: string): boolean => {
+  const normalizedLanguageId = normalizeLanguageId(languageId)
+  if (!normalizedLanguageId) return false
+  const entry = lspClients.get(getLspClientKey(normalizedLanguageId))
+  return !!entry?.client && !entry.disposed && serverDeclaresDocumentFormatting(entry.client)
+}
+
+export type LspFormattingEdit = {
+  startLineNumber: number
+  startColumn: number
+  endLineNumber: number
+  endColumn: number
+  text: string
+}
+
+/**
+ * 向服务端请求整篇格式化，返回按 Monaco 1 基行列表达的编辑列表。
+ * 没有提供方 / 未连接 / 请求失败时返回 null，调用方据此回退到内置格式化。
+ */
+export const requestLspDocumentFormatting = async (
+  languageId: string,
+  model: monaco.editor.ITextModel,
+  options: { tabSize?: number; insertSpaces?: boolean } = {}
+): Promise<LspFormattingEdit[] | null> => {
+  // IME 组合期间不动文档：与补全同样的理由，避免打断中文输入。
+  if (isAnyLspImeComposing()) return null
+
+  const normalizedLanguageId = normalizeLanguageId(languageId)
+  if (!normalizedLanguageId) return null
+  const clientKey = getLspClientKey(normalizedLanguageId)
+  const entry = lspClients.get(clientKey)
+  if (!entry?.client || entry.disposed) return null
+  if (!serverDeclaresDocumentFormatting(entry.client)) return null
+
+  const documentUri = String(model.uri?.toString?.() || entry.documentUri || '')
+  const directClientReady = await ensureLspClientReadyForDirectRequest(
+    entry,
+    clientKey,
+    normalizedLanguageId,
+    documentUri
+  )
+  if (!directClientReady) return null
+
+  try {
+    // 复用补全前那套同步：格式化必须基于服务端手里的最新内容，否则会按旧文本给编辑。
+    const synced = await synchronizeDirectLspTextDocument(entry, clientKey, normalizedLanguageId, model)
+    if (!synced) return null
+
+    const result = await (entry.client as unknown as {
+      sendRequest: (type: typeof DocumentFormattingRequest.type, params: unknown, token?: unknown) => Promise<unknown>
+    }).sendRequest(DocumentFormattingRequest.type, {
+      textDocument: { uri: documentUri },
+      options: {
+        tabSize: Number(options.tabSize) > 0 ? Number(options.tabSize) : 2,
+        insertSpaces: options.insertSpaces !== false,
+      },
+    })
+
+    if (!Array.isArray(result)) return null
+    return result.map((edit) => {
+      const item = edit as {
+        range?: { start?: { line?: number; character?: number }; end?: { line?: number; character?: number } }
+        newText?: unknown
+      }
+      return {
+        startLineNumber: Number(item?.range?.start?.line || 0) + 1,
+        startColumn: Number(item?.range?.start?.character || 0) + 1,
+        endLineNumber: Number(item?.range?.end?.line || 0) + 1,
+        endColumn: Number(item?.range?.end?.character || 0) + 1,
+        text: String(item?.newText ?? ''),
+      }
+    })
+  } catch (error) {
+    logger.warn('[LSP] document formatting request failed', {
+      languageId: normalizedLanguageId,
+      clientKey,
+      documentUri,
+      error: String((error as Error)?.message || error),
+    })
+    return null
+  }
 }

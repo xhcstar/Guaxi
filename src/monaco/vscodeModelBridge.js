@@ -357,13 +357,13 @@ export const replaceModelContentPreserveUndo = (
   if (isBridgeImeComposing()) {
     // 临时诊断：这条路径会静默丢弃一次内容同步，若被丢的恰好是“加载新内容”，
     // 编辑器就会停在旧内容上，看起来像“内容被换回旧内容”。定位后删除。
-    logger.warn('[ContentProbe] full model replace skipped while IME composing', {
-      logPrefix,
-      reason,
-      owner,
-      uri: String(uri || ''),
-      newLen: String(content ?? '').length,
-    })
+    // logger.warn('[ContentProbe] full model replace skipped while IME composing', {
+    //   logPrefix,
+    //   reason,
+    //   owner,
+    //   uri: String(uri || ''),
+    //   newLen: String(content ?? '').length,
+    // })
     return model
   }
 
@@ -387,14 +387,14 @@ export const replaceModelContentPreserveUndo = (
   // ── 临时诊断（定位“未保存内容被换回旧内容”后整段删除）──
   // 这里是全量写 model 的唯一收口，把调用方(logPrefix/reason)、owner 与新旧长度记成 warn 级日志，
   // 可直接在 D:\guaxi\logs\logfile.log.<date> 里看出是哪条链路用旧内容覆盖了正在编辑的文档。
-  logger.warn('[ContentProbe] full model replace', {
-    logPrefix,
-    reason,
-    owner,
-    uri: String(uri || ''),
-    oldLen: currentContent.length,
-    newLen: nextContent.length,
-  })
+  // logger.warn('[ContentProbe] full model replace', {
+  //   logPrefix,
+  //   reason,
+  //   owner,
+  //   uri: String(uri || ''),
+  //   oldLen: currentContent.length,
+  //   newLen: nextContent.length,
+  // })
 
   const fullRange = typeof model.getFullModelRange === 'function'
     ? model.getFullModelRange()

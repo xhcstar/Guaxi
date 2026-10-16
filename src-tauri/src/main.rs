@@ -646,6 +646,8 @@ async fn main() {
             commands::settingview::set_lsp_syntax_highlight_enabled,
             commands::settingview::get_code_theme,
             commands::settingview::set_code_theme,
+            commands::settingview::get_markdown_format_options,
+            commands::settingview::set_markdown_format_options,
             commands::settingview::get_python_codegen_assist_enabled,
             commands::settingview::set_python_codegen_assist_enabled,
             commands::settingview::get_lsp_github_token,

@@ -1418,6 +1418,16 @@
       <GuaxiKbContextPanel v-model:visible="kbContextVisible" :anchor="kbContextAnchor"
         :query="kbContextQuery" @jump="handleKbContextJump" />
 
+      <!-- 链接悬停预览：只读，在鼠标旁显示目标笔记开头。
+           pointer-events:none 很关键——否则这个浮层会截走鼠标，导致自己在悬停时抖动/闪烁。 -->
+      <div v-if="linkHoverPreview.visible" class="link-hover-preview"
+        :style="{ left: linkHoverPreview.x + 'px', top: (linkHoverPreview.y + 18) + 'px' }">
+        <div class="link-hover-preview__title">{{ linkHoverPreview.title }}</div>
+        <div v-if="linkHoverPreview.loading" class="link-hover-preview__hint">读取中…</div>
+        <div v-else-if="linkHoverPreview.error" class="link-hover-preview__hint">{{ linkHoverPreview.error }}</div>
+        <pre v-else class="link-hover-preview__body">{{ linkHoverPreview.body }}</pre>
+      </div>
+
     </div>
     <!-- 添加 GitPanel 组件 -->
     <!--
@@ -1571,6 +1581,10 @@ import {
   waitForLspConnection,
   resetLspDisabled,
   provideDirectLspCompletionSuggestions,
+  setDirectCompletionSuppressor,
+  onLspDiagnostics,
+  supportsLspDocumentFormatting,
+  requestLspDocumentFormatting,
   provideLspSemanticTokens,
   getLspSemanticTokensLegend,
   setLspImeComposing
@@ -3750,6 +3764,8 @@ let editor = null;
 let secondaryEditor = null;
 let monacoCtrlClickDisposable = null;
 let secondaryMonacoCtrlClickDisposable = null;
+let monacoLinkHoverDisposable = null;
+let secondaryMonacoLinkHoverDisposable = null;
 let monacoLinkLikeDecorDisposable = null;
 let secondaryMonacoLinkLikeDecorDisposable = null;
 let editorEffectsLeft = null;
@@ -6186,6 +6202,129 @@ const openWikilinkFromHref = async (href, { baseDocPath, source } = {}) => {
   }
 };
 
+// ───── Markdown 链接悬停预览（只读）─────
+// 悬停到链接上时在鼠标旁显示目标笔记的开头若干行。只读：解析出目标路径后读文件，**不打开也不写入**。
+// 链接判定与 Ctrl+Click 复用同一套（extractClickableTokenAtLineColumn + 同一批分类函数），
+// 避免出现「悬停认得出来、点击却打不开」的错位。
+const LINK_HOVER_DELAY_MS = 260;
+const LINK_HOVER_PREVIEW_LINES = 12;
+
+const emptyLinkHoverPreview = () => ({ visible: false, x: 0, y: 0, title: '', body: '', loading: false, error: '' });
+const linkHoverPreview = ref(emptyLinkHoverPreview());
+let linkHoverTimer = null;
+let linkHoverActiveToken = '';
+
+const clearLinkHoverPreview = () => {
+  if (linkHoverTimer) {
+    window.clearTimeout(linkHoverTimer);
+    linkHoverTimer = null;
+  }
+  linkHoverActiveToken = '';
+  if (linkHoverPreview.value.visible) {
+    linkHoverPreview.value = emptyLinkHoverPreview();
+  }
+};
+
+const basenameOfPath = (value) => String(value || '').split(/[\\/]/).filter(Boolean).pop() || '';
+
+// 只解析出绝对路径，不触发任何打开行为。
+const resolveHoverLinkTarget = async (token, baseDocPath) => {
+  const lower = String(token || '').trim().toLowerCase();
+  try {
+    if (lower.startsWith('guaxi://wikilink')) {
+      const u = new URL(token);
+      const file = stripLinkBoundaryPunct(u.searchParams.get('file') || '');
+      // [[#anchor]]：不带 file 时指向当前文档。
+      if (!file) return normalizeFsPath(baseDocPath || '');
+      const primary = await resolveFsLinkToAbsolute(ensureMarkdownExt(file), { baseDocPath });
+      if (primary) return primary;
+      if (!isBareWikilinkFileName(file)) return '';
+      // 与打开 wiki 链接时同一个兜底：知识库内按 basename 找。
+      return await findMarkdownByBasenameInRepo(file, {
+        repoRoot: normalizeFsPath(fileTreeStore.activeRepoPath || ''),
+      }) || '';
+    }
+
+    const { link } = splitFsLinkAndAnchor(token);
+    if (!link || !isPathLikeToken(link)) return '';
+    return await resolveFsLinkToAbsolute(link, { baseDocPath }) || '';
+  } catch (error) {
+    logger.debug('[LinkHover] resolve target failed', { token }, error);
+    return '';
+  }
+};
+
+const isMarkdownPreviewTarget = (value) => /\.(md|markdown|mdown)$/i.test(String(value || ''));
+
+const loadLinkHoverPreview = async (absPath, x, y) => {
+  const title = basenameOfPath(absPath);
+  linkHoverPreview.value = { visible: true, x, y, title, body: '', loading: true, error: '' };
+  try {
+    const text = String(await invoke('read_file_content', { path: absPath }) || '');
+    const body = text.split('\n').slice(0, LINK_HOVER_PREVIEW_LINES).join('\n').trim();
+    linkHoverPreview.value = { visible: true, x, y, title, body, loading: false, error: '' };
+  } catch (error) {
+    logger.debug('[LinkHover] read target failed', { path: absPath }, error);
+    linkHoverPreview.value = { visible: true, x, y, title, body: '', loading: false, error: '无法读取该笔记' };
+  }
+};
+
+const installMonacoLinkHoverPreview = (targetEditor) => {
+  if (!targetEditor) return null;
+
+  const disposable = targetEditor.onMouseMove((ev) => {
+    const pos = ev?.target?.position;
+    const model = targetEditor.getModel?.();
+    if (!pos || !model || model.getLanguageId?.() !== 'markdown') {
+      clearLinkHoverPreview();
+      return;
+    }
+
+    const lineContent = model.getLineContent(pos.lineNumber);
+    const token = stripLinkBoundaryPunct(extractClickableTokenAtLineColumn(lineContent, pos.column));
+    const lower = String(token || '').trim().toLowerCase();
+    const isWikilink = lower.startsWith('guaxi://wikilink');
+    const isUrl = isHttpUrl(token);
+    const isPath = !isUrl && !isWikilink && isPathLikeToken(token);
+    // 外链不预览：它的目标是网页，读不到本地内容。
+    if (!token || isUrl || (!isWikilink && !isPath)) {
+      clearLinkHoverPreview();
+      return;
+    }
+
+    const x = Number(ev?.event?.posx || 0);
+    const y = Number(ev?.event?.posy || 0);
+
+    // 还停在同一链接上：只跟着鼠标挪位置，不重新解析。
+    if (token === linkHoverActiveToken) {
+      if (linkHoverPreview.value.visible) {
+        linkHoverPreview.value.x = x;
+        linkHoverPreview.value.y = y;
+      }
+      return;
+    }
+
+    clearLinkHoverPreview();
+    linkHoverActiveToken = token;
+
+    linkHoverTimer = window.setTimeout(async () => {
+      linkHoverTimer = null;
+      if (linkHoverActiveToken !== token) return;
+
+      const baseDocPath = fileTreeStore.activeTab || selectedFile.value?.path || '';
+      const absPath = await resolveHoverLinkTarget(token, baseDocPath);
+      if (linkHoverActiveToken !== token) return;
+      if (!absPath || !isMarkdownPreviewTarget(absPath)) {
+        linkHoverActiveToken = '';
+        return;
+      }
+      await loadLinkHoverPreview(absPath, x, y);
+    }, LINK_HOVER_DELAY_MS);
+  });
+
+  return disposable;
+};
+
 // 本地文件链接的统一打开策略。编辑模式（Ctrl+Click）、预览模式、分屏模式、探索者模式
 // 四处全部走这一个函数，避免同一个链接在不同模式下有不同下场。
 //
@@ -7072,6 +7211,60 @@ const registerFilesystemPathCompletionFeatures = () => {
   });
 };
 
+// ───── 语言服务端诊断并入问题列表 ─────
+// markdown 的死链诊断由 marksman 通过 textDocument/publishDiagnostics 推过来，比自研检查准。
+// 状态栏（GuaxiEditorStatusBar）读的是 editorStore.problems 里的两个计数，所以这里把
+// 「自研分析」与「LSP 诊断」的计数相加后上报；只统计当前打开的那一篇，避免别的文档的诊断串进来。
+const lspDiagnosticCounts = ref({ errors: 0, warnings: 0 });
+let lspDiagnosticUri = '';
+
+const getActiveModelUri = () => String(editor?.getModel?.()?.uri?.toString?.() || '');
+
+// 统一的上报口：两处问题分析调用点都改走这里，保证 LSP 诊断始终被算进去。
+const publishProblems = (problems) => {
+  const base = problems && typeof problems === 'object' ? problems : {};
+  const lsp = lspDiagnosticUri && lspDiagnosticUri === getActiveModelUri()
+    ? lspDiagnosticCounts.value
+    : { errors: 0, warnings: 0 };
+  editorStore.setProblems({
+    errors: Number(base.errors || 0) + Number(lsp.errors || 0),
+    warnings: Number(base.warnings || 0) + Number(lsp.warnings || 0),
+  });
+};
+
+const applyLspDiagnostics = (languageId, params) => {
+  const uri = String(params?.uri || '');
+  if (!uri || uri !== getActiveModelUri()) return;
+
+  let errors = 0;
+  let warnings = 0;
+  for (const item of Array.isArray(params?.diagnostics) ? params.diagnostics : []) {
+    // LSP 严重度：1=Error 2=Warning 3=Info 4=Hint；只把错误与警告计入状态栏。
+    const severity = Number(item?.severity || 1);
+    if (severity === 1) errors += 1;
+    else if (severity === 2) warnings += 1;
+  }
+
+  lspDiagnosticUri = uri;
+  lspDiagnosticCounts.value = { errors, warnings };
+  logger.info('[LspDiagnostics] language server diagnostics merged', {
+    languageId: String(languageId || ''),
+    uri,
+    errors,
+    warnings,
+  });
+
+  // 计数变了就把当前文档重新上报一次（自研结果未变，只是重算合并后的总数）。
+  const model = editor?.getModel?.();
+  if (model) {
+    publishProblems(analyzeContentForProblems(
+      model.getValue(),
+      model,
+      model.getLanguageId() || 'plaintext'
+    ));
+  }
+};
+
 const registerMarkdownLanguageFeatures = () => {
   if (markdownFeaturesRegistered) return;
   if (!prepareMarkdownLanguageFeatureRegistration()) return;
@@ -7691,6 +7884,25 @@ const registerMarkdownLanguageFeatures = () => {
       return null;
     }
   }));
+
+  // 让 lspClient 知道「哪些位置由内嵌（围栏/数学块）补全负责」，它据此跳过向 markdown 服务端的
+  // 那次白跑往返。判定直接复用这里已有的上下文解析，不重复实现围栏识别。
+  setDirectCompletionSuppressor((languageId, model, position) => (
+    languageId === 'markdown'
+    && !!(
+      getMarkdownMathContext(model, position)
+      || getMarkdownFenceContext(model, position)
+    )
+  ))
+
+  // 订阅各语言服务端推送的诊断（markdown 的死链诊断来自 marksman）。只订阅一次。
+  onLspDiagnostics((languageId, params) => {
+    try {
+      applyLspDiagnostics(languageId, params)
+    } catch (error) {
+      logger.warn('[LspDiagnostics] applying diagnostics failed', error)
+    }
+  })
 
   publishMarkdownLanguageFeatureRegistration()
 };
@@ -12210,6 +12422,11 @@ const ensureSecondaryEditor = () => {
     secondaryMonacoCtrlClickDisposable = null;
   }
   secondaryMonacoCtrlClickDisposable = installMonacoCtrlClickOpen(secondaryEditor, { tag: 'right' });
+  if (secondaryMonacoLinkHoverDisposable) {
+    secondaryMonacoLinkHoverDisposable.dispose();
+    secondaryMonacoLinkHoverDisposable = null;
+  }
+  secondaryMonacoLinkHoverDisposable = installMonacoLinkHoverPreview(secondaryEditor);
 
   if (secondaryMonacoLinkLikeDecorDisposable) {
     secondaryMonacoLinkLikeDecorDisposable.dispose();
@@ -12739,6 +12956,11 @@ const setupEditorListeners = () => {
     monacoCtrlClickDisposable = null;
   }
   monacoCtrlClickDisposable = installMonacoCtrlClickOpen(editor, { tag: 'left' });
+  if (monacoLinkHoverDisposable) {
+    monacoLinkHoverDisposable.dispose();
+    monacoLinkHoverDisposable = null;
+  }
+  monacoLinkHoverDisposable = installMonacoLinkHoverPreview(editor);
 
   if (monacoLinkLikeDecorDisposable) {
     monacoLinkLikeDecorDisposable.dispose();
@@ -12901,7 +13123,7 @@ const setupEditorListeners = () => {
       const content = m.getValue();
       const languageId = m.getLanguageId() || 'plaintext';
       const problems = analyzeContentForProblems(content, m, languageId);
-      editorStore.setProblems(problems);
+      publishProblems(problems);
       updateGitDecorations();
     };
     const scheduleWholeDocAnalysisIdle = debounce(runWholeDocAnalysis, LARGE_DOC_IDLE_ANALYSIS_DELAY_MS);
@@ -12922,7 +13144,7 @@ const setupEditorListeners = () => {
         if (!largeDoc) {
           // 常规文件：保持原行为，每次防抖做问题分析 + git 装饰。
           const problems = analyzeContentForProblems(content, liveModel, languageId);
-          editorStore.setProblems(problems);
+          publishProblems(problems);
         }
         rawContent.value = content;
         const path = getEditorBoundTabPath(editor);
@@ -13379,19 +13601,12 @@ const ensureMarkdownEditor = (targetEditor = getActiveEditor()) => {
 };
 
 const invokeMarkdownFormat = async (content) => {
+  // 选项来自设置（不再写死在这里，见「设置 → 编辑器」）。
+  // store 里那份默认值与后端 default_markdown_format_options() 一致，没配过的用户行为不变。
   const response = await invoke('markdown_format', {
     request: {
       content,
-      options: {
-        max_line_width: 0,
-        indent_width: 2,
-        list_indent: 2,
-        format_tables: true,
-        format_lists: true,
-        preserve_code_blocks: true,
-        remove_extra_blank_lines: true,
-        fix_extra_whitespace: false
-      }
+      options: { ...settingsStore.markdownFormat }
     }
   });
 
@@ -13414,6 +13629,49 @@ const invokeMarkdownFormat = async (content) => {
   return tableAligned;
 };
 
+// 把服务端返回的格式化编辑套用到当前文本上，得到最终内容。
+// 走「编辑列表 → 文本」而不是直接改模型，是为了复用下面那条已经稳定的整篇写回路径（撤销栈、位置记录等行为一致）。
+const applyLspFormattingEditsToText = (model, edits) => {
+  try {
+    let text = model.getValue();
+    const resolved = edits
+      .map((edit) => ({
+        start: model.getOffsetAt({ lineNumber: edit.startLineNumber, column: edit.startColumn }),
+        end: model.getOffsetAt({ lineNumber: edit.endLineNumber, column: edit.endColumn }),
+        text: edit.text,
+      }))
+      // 从后往前套用，前面的偏移才不会被后面的编辑顶偏。
+      .sort((a, b) => b.start - a.start);
+    for (const edit of resolved) {
+      text = text.slice(0, edit.start) + edit.text + text.slice(edit.end);
+    }
+    return text;
+  } catch (error) {
+    logger.warn('[MarkdownFormat] applying LSP formatting edits failed', error);
+    return null;
+  }
+};
+
+// 整篇格式化的内容来源：有服务端提供 documentFormattingProvider 就优先用它，否则回退内置格式化。
+// 目前内置服务端里没有一个为 markdown 声明该能力（marksman 没有），所以实际走的是内置那条；
+// 将来装上格式化扩展后这条会自动生效。
+const resolveMarkdownFormattedContent = async (model, original) => {
+  if (supportsLspDocumentFormatting('markdown')) {
+    const edits = await requestLspDocumentFormatting('markdown', model, { tabSize: 2, insertSpaces: true });
+    if (edits?.length) {
+      const applied = applyLspFormattingEditsToText(model, edits);
+      if (typeof applied === 'string') {
+        logger.info('[MarkdownFormat] formatted by language server', {
+          editCount: edits.length,
+          length: applied.length,
+        });
+        return applied;
+      }
+    }
+  }
+  return invokeMarkdownFormat(original);
+};
+
 const formatMarkdownDocument = async () => {
   if (!ensureMarkdownEditor()) return;
 
@@ -13424,7 +13682,7 @@ const formatMarkdownDocument = async () => {
 
   try {
     suppressEditLocationRecording = true;
-    const formatted = await invokeMarkdownFormat(original);
+    const formatted = await resolveMarkdownFormattedContent(model, original);
 
     if (formatted === original) {
       message.info('无需格式化');
@@ -25013,6 +25271,14 @@ onUnmounted(() => {
     monacoCtrlClickDisposable.dispose();
     monacoCtrlClickDisposable = null;
   }
+  if (monacoLinkHoverDisposable) {
+    monacoLinkHoverDisposable.dispose();
+    monacoLinkHoverDisposable = null;
+  }
+  if (secondaryMonacoLinkHoverDisposable) {
+    secondaryMonacoLinkHoverDisposable.dispose();
+    secondaryMonacoLinkHoverDisposable = null;
+  }
   if (secondaryMonacoCtrlClickDisposable) {
     secondaryMonacoCtrlClickDisposable.dispose();
     secondaryMonacoCtrlClickDisposable = null;
@@ -30380,6 +30646,49 @@ body.guaxi-tab-dragging * {
   border: 0;
   opacity: 0;
   cursor: pointer;
+}
+
+/* ===== Markdown 链接悬停预览（只读） =====
+   在鼠标旁显示目标笔记开头。pointer-events:none 是必需的：浮层一旦可接收鼠标事件，
+   就会把鼠标从链接上"抢"走，于是自己被清掉、鼠标再落回链接又弹出来，来回抖动。 */
+.link-hover-preview {
+  position: fixed;
+  z-index: 2600;
+  max-width: 420px;
+  max-height: 220px;
+  padding: 8px 10px;
+  overflow: hidden;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 6px;
+  background: var(--guaxi-panel-bg, #ffffff);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.16);
+  pointer-events: none;
+}
+
+.link-hover-preview__title {
+  margin-bottom: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--guaxi-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.link-hover-preview__hint {
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+}
+
+.link-hover-preview__body {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  font-family: inherit;
+  color: var(--guaxi-text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: hidden;
 }
 
 </style>

@@ -78,6 +78,8 @@ const decorateGlobalNavIcons = () => {
 
 onMounted(async () => {
   await settingsStore.loadAppearanceConfig()
+  // Markdown 格式化选项与外观配置一起在启动时读回：首帧就要用，不能等用户按下格式化才加载。
+  await settingsStore.loadMarkdownFormatConfig()
   decorateGlobalNavIcons()
   navIconObserver = new MutationObserver(decorateGlobalNavIcons)
   navIconObserver.observe(document.body, {

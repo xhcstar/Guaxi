@@ -85,6 +85,16 @@ const HIGHLIGHT_NAMES: &[&str] = &[
     "string.regexp",
     "string.special",
     "tag",
+    // Markdown 正文：tree-sitter-md 产出的 capture 是 `text.*`，不是上面那组 `markup.*`。
+    // 两边都留着：白名单外的 capture 会被直接丢弃（configure 是「按点分段全字匹配」，
+    // markup.heading 的段 [markup, heading] 命中不了 [text, title]），所以缺了这几条
+    // Markdown 的标题 / 强调 / 行内代码 / 链接在编辑器里就完全没有颜色。
+    "text.title",
+    "text.literal",
+    "text.emphasis",
+    "text.strong",
+    "text.reference",
+    "text.uri",
     "type",
     "type.builtin",
     "type.parameter",
@@ -297,6 +307,17 @@ fn language_specs() -> Vec<LanguageSpec> {
             injections_query: tree_sitter_md::INJECTION_QUERY_BLOCK,
             locals_query: "",
         },
+        // 行内语法是**独立的一份 grammar**。block 语法不解析 `**粗体**`、`` `行内代码` ``、
+        // `[链接](url)` 这些行内结构；它把整段行内文本标成 (inline) 节点，再由
+        // INJECTION_QUERY_BLOCK 注入 `markdown_inline` 去解析。
+        // 不注册这一条，注入回调就查不到配置，行内标记一个 capture 都产不出来。
+        LanguageSpec {
+            id: "markdown_inline",
+            language: tree_sitter_md::INLINE_LANGUAGE.into(),
+            highlights_query: tree_sitter_md::HIGHLIGHT_QUERY_INLINE,
+            injections_query: tree_sitter_md::INJECTION_QUERY_INLINE,
+            locals_query: "",
+        },
         LanguageSpec {
             id: "javascript",
             language: tree_sitter_javascript::LANGUAGE.into(),
@@ -435,6 +456,13 @@ fn css_class_for_highlight(name: &str) -> &'static str {
         "markup.heading" => "hljs-section",
         "markup.link" | "markup.link.url" => "hljs-link",
         "markup.raw" | "markup.raw.block" | "markup.raw.inline" => "hljs-code",
+        // 同上：Markdown 真正产出的是 text.*。这几个类名上游主题里都有定义
+        // （.hljs-section / -emphasis / -strong / -link），所以导出出来的 HTML 也跟着有颜色。
+        "text.title" => "hljs-section",
+        "text.reference" | "text.uri" => "hljs-link",
+        "text.literal" => "hljs-code",
+        "text.emphasis" => "hljs-emphasis",
+        "text.strong" => "hljs-strong",
         "module" => "hljs-title class_",
         "number" => "hljs-number",
         "operator" => "hljs-operator",
