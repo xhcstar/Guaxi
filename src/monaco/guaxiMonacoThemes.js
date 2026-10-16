@@ -40,9 +40,35 @@ export const refreshGuaxiMonacoThemePalettes = (codeThemeId) => {
 // 所以代码主题变化时只要在这里调一次，所有 Monaco 实例会一起跟着变，不必逐个通知宿主组件。
 let lastMonacoRef = null
 
+/**
+ * 「代码主题变了，请把你自己的同名主题重新注册一遍」的回调。
+ *
+ * Monaco 的 defineTheme 是**注册时快照**：上面那两个共享对象后来被就地换新，
+ * 已经注册过的主题不会跟着变。以前只有本文件里的 defineGuaxiMonacoThemes 会被重注册，
+ * 而编辑器（GuaxiEditor）是**自己**定义 guaxi-light/guaxi-dark 的（UI chrome 色值不同），
+ * 于是换主题时编辑器的语法与语义配色纹丝不动——Markdown 正文高亮走的正是语义 token，一起被冻住。
+ *
+ * 所以谁定义同名主题，谁就在这里登记一下自己的重注册函数。
+ */
+const codeThemeReapplyListeners = new Set()
+
+/** 登记一个重注册回调，返回反注册函数。 */
+export const onGuaxiMonacoCodeThemeReapply = (listener) => {
+  if (typeof listener !== 'function') return () => {}
+  codeThemeReapplyListeners.add(listener)
+  return () => codeThemeReapplyListeners.delete(listener)
+}
+
 /** 代码主题变化后：刷新共享色板 → 用同名重新注册 → 让全局主题重新生效。 */
 export const reapplyGuaxiMonacoCodeTheme = (codeThemeId, appearanceTheme) => {
   refreshGuaxiMonacoThemePalettes(codeThemeId)
+  for (const listener of codeThemeReapplyListeners) {
+    try {
+      listener(codeThemeId, appearanceTheme)
+    } catch (error) {
+      console.warn?.('[theme] code theme reapply listener failed', error)
+    }
+  }
   if (!lastMonacoRef) return
   try {
     defineGuaxiMonacoThemes(lastMonacoRef)

@@ -1571,7 +1571,7 @@ import { debounce } from 'lodash-es'
 import * as monaco from 'monaco-editor'
 import { initVimMode, VimMode } from 'monaco-vim';
 import { initTextmate } from '../../monaco/textmateLoader'
-import { GUAXI_MONACO_SEMANTIC_TOKEN_COLORS, GUAXI_MONACO_THEME_RULES } from '../../monaco/guaxiMonacoThemes'
+import { GUAXI_MONACO_SEMANTIC_TOKEN_COLORS, GUAXI_MONACO_THEME_RULES, onGuaxiMonacoCodeThemeReapply } from '../../monaco/guaxiMonacoThemes'
 import { getGuaxiSyntaxClassForCapture } from '../../monaco/guaxiSyntaxTokens'
 import {
   initLspClient,
@@ -11750,38 +11750,17 @@ const autoFoldNotebookSentinels = (targetEditor, reason = 'manual') => {
   }, 120)
 }
 
-// 初始化编辑器
-const initEditor = () => {
-  logger.debug('[Editor] initEditor called', {
-    hasContainer: !!editorContainer.value,
-    selectedPath: selectedFile.value?.path,
-    activeTab: fileTreeStore.activeTab
-  })
-
-  if (!selectedFile.value) return
-
-  if (!editorContainer.value) {
-    if (!initEditorPending) {
-      initEditorPending = true;
-      nextTick(() => {
-        initEditorPending = false;
-        if (!editor && editorContainer.value) {
-          initEditor();
-        }
-      });
-    }
-    logger.debug('[Editor] editor container not ready');
-    return;
-  }
-
-  // 获取文件扩展名并确定语言
-  const language = resolveMonacoLanguageByPath(selectedFile.value?.path || '');
-
-  ensureLanguagePairingConfig(language)
-
-  const isDark = document.documentElement.dataset.guaxiTheme === 'dark';
-
-  monaco.editor.defineTheme('guaxi-light', {
+/**
+ * 注册编辑器这一套 guaxi-light / guaxi-dark（含 UI chrome 色值）。
+ *
+ * 做成函数是为了「换代码主题后能再调一次」：Monaco 的 defineTheme 是**注册时快照**，
+ * 共享色板（GUAXI_MONACO_THEME_RULES / GUAXI_MONACO_SEMANTIC_TOKEN_COLORS）后来被
+ * refreshGuaxiMonacoThemePalettes 就地换新，编辑器手里那份不会跟着变。
+ * 以前只在 initEditor 里注册一次，所以切换代码主题时编辑器的语法/语义配色纹丝不动
+ * ——Markdown 正文高亮走的正是语义 token，一起被冻住。
+ */
+const defineGuaxiEditorMonacoThemes = (m) => {
+  m.editor.defineTheme('guaxi-light', {
     base: 'vs',
     inherit: true,
     // 设计说明：多个组件会重复注册同名 guaxi theme，语法 token 色板必须共用同一份定义。
@@ -11864,7 +11843,7 @@ const initEditor = () => {
     }
   });
 
-  monaco.editor.defineTheme('guaxi-dark', {
+  m.editor.defineTheme('guaxi-dark', {
     base: 'vs-dark',
     inherit: true,
     // 设计说明：暗色模式 Python 高亮漂移的根因是多个组件维护了不同的 `guaxi-dark` token 表。
@@ -11932,6 +11911,46 @@ const initEditor = () => {
       'scrollbar.shadow': '#00000066'
     }
   });
+};
+
+// 代码主题一变就重新注册这一套，并让 Monaco 重新应用当前主题（否则重注册不会立刻生效）。
+onGuaxiMonacoCodeThemeReapply(() => {
+  defineGuaxiEditorMonacoThemes(monaco);
+  monaco.editor.setTheme(getMonacoThemeName());
+});
+
+// 初始化编辑器
+const initEditor = () => {
+  logger.debug('[Editor] initEditor called', {
+    hasContainer: !!editorContainer.value,
+    selectedPath: selectedFile.value?.path,
+    activeTab: fileTreeStore.activeTab
+  })
+
+  if (!selectedFile.value) return
+
+  if (!editorContainer.value) {
+    if (!initEditorPending) {
+      initEditorPending = true;
+      nextTick(() => {
+        initEditorPending = false;
+        if (!editor && editorContainer.value) {
+          initEditor();
+        }
+      });
+    }
+    logger.debug('[Editor] editor container not ready');
+    return;
+  }
+
+  // 获取文件扩展名并确定语言
+  const language = resolveMonacoLanguageByPath(selectedFile.value?.path || '');
+
+  ensureLanguagePairingConfig(language)
+
+  const isDark = document.documentElement.dataset.guaxiTheme === 'dark';
+
+  defineGuaxiEditorMonacoThemes(monaco);
 
   const themeName = isDark ? 'guaxi-dark' : 'guaxi-light';
   logger.debug('[theme] monaco chrome palette prepared', {

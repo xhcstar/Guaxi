@@ -185,7 +185,7 @@ import { debounce } from 'lodash-es'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { createLogger } from '../../utils/logger'
-import { GUAXI_MONACO_SEMANTIC_TOKEN_COLORS, GUAXI_MONACO_THEME_RULES } from '../../monaco/guaxiMonacoThemes'
+import { GUAXI_MONACO_SEMANTIC_TOKEN_COLORS, GUAXI_MONACO_THEME_RULES, onGuaxiMonacoCodeThemeReapply } from '../../monaco/guaxiMonacoThemes'
 import { maskPythonCellBlocksForMarkdown } from './utils/guaxiPythonCellSyntax'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useOutlineStore } from '../../stores/outlineStore'
@@ -272,8 +272,11 @@ const logLayout = (stage, extra = {}) => {
 }
 
 let guaxiMonacoThemesReady = false
-const ensureGuaxiMonacoThemes = () => {
-  if (guaxiMonacoThemesReady) return
+// force：换代码主题时要重新注册一遍。Monaco 的 defineTheme 是注册时快照，
+// 共享色板（GUAXI_MONACO_THEME_RULES / _SEMANTIC_TOKEN_COLORS）后来被就地换新，
+// 不重注册的话 Slidev 面板的语法/语义配色会一直停在旧主题。
+const ensureGuaxiMonacoThemes = (force = false) => {
+  if (guaxiMonacoThemesReady && !force) return
 
   monaco.editor.defineTheme('guaxi-light', {
     base: 'vs',
@@ -394,6 +397,12 @@ const applyMonacoTheme = () => {
     logger.warn('[theme] apply failed', e)
   }
 }
+
+// 代码主题变化：先强制重新注册这一套同名主题，再让 Monaco 应用一次。
+onGuaxiMonacoCodeThemeReapply(() => {
+  ensureGuaxiMonacoThemes(true)
+  applyMonacoTheme()
+})
 
 const disposeMonaco = () => {
   editorDisposables.forEach((d) => d?.dispose?.())
