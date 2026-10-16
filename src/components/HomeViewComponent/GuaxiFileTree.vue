@@ -493,6 +493,7 @@ import { Folder20Regular as FolderIcon, ChannelAdd20Regular as FileAddIcon, Fold
 import { useEditorBridgeStore } from '../../stores/editorBridgeStore'
 import { useDiffCompareStore, diffPathBaseName } from '../../stores/diffCompareStore'
 import { GUAXI_SHORTCUTS, shortcutTooltip, useGuaxiHotkeys } from '../../composables/useGuaxiHotkeys'
+import { updateMarkdownLinksAfterRename } from '../../utils/markdownLinkRename'
 
 const logger = createLogger('GuaxiFileTree')
 const message = useMessage();
@@ -2157,7 +2158,29 @@ const commitInlineRename = async () => {
     editingNode.value = null
     editName.value = ''
     await refreshModeDir(mode, parent)
-    message.success('已重命名')
+
+    // 重命名后自动更新全库指向它的链接（wiki 链接 + 相对路径链接）。
+    // 整段包在 try/catch 里：链接更新出任何问题，都不能影响「重命名本身已经成功」这个事实。
+    let linkUpdate = null
+    if (isMarkdownFilePath(oldId) && isMarkdownFilePath(dest)) {
+      try {
+        linkUpdate = await updateMarkdownLinksAfterRename({
+          repoRoot: fileTreeStore.activeRepoPath || '',
+          oldPath: oldId,
+          newPath: dest,
+          // 打开着的文件跳过：它们可能有未保存的编辑，读盘再写回会丢掉用户正在改的内容。
+          openPaths: (fileTreeStore.openTabs || []).map((tab) => normalizePath(tab.path)),
+        })
+      } catch (error) {
+        logger.warn('[Rename] link update threw, rename itself succeeded', { oldId, dest }, error)
+      }
+    }
+
+    message.success(
+      linkUpdate && linkUpdate.linksChanged
+        ? `已重命名，并更新了 ${linkUpdate.linksChanged} 处链接（${linkUpdate.filesChanged} 个文件）`
+        : '已重命名'
+    )
   } catch (e) {
     editingNode.value = null
     editName.value = ''
