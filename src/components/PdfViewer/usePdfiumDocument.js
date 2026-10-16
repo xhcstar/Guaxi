@@ -146,12 +146,15 @@ export default function usePdfiumDocument() {
   // 渲染单页（按 dpi）。token 取消：快速滚动/缩放时丢弃过期结果。
   const renderPage = async (page, dpi) => {
     if (!activePath) return
-    // 已渲染好同 dpi：跳过。
-    if (page.image && page.dpi === dpi) return
-    // 正在渲染同 dpi：跳过——注意要比对"正在渲染的 dpi"而非"已完成的 dpi"。
-    // 首渲染期间 page.dpi 仍是 0，若拿它判断会导致去重失效，每帧 updateVisible 都重排一次
-    // 整页栅格化，把单线程 pdfium worker 冲爆，可见页迟迟渲染不出来。
-    if (page.rendering && page.renderingDpi === dpi) return
+    // 手里（或正在生成）的位图只要分辨率够用就复用：缩小、以及小幅放大都不必重栅格化，
+    // 既省掉一次后端往返，也不再往缓存目录里按 dpi 逐值堆积页图。
+    // 注意要一并算上"正在渲染的 dpi"：首渲染期间 page.dpi 还是 0，只用它判断会让去重失效，
+    // 每帧 updateVisible 都重排一次整页栅格化，把单线程 pdfium worker 冲爆。
+    const available = Math.max(
+      Number(page.dpi) || 0,
+      page.rendering ? Number(page.renderingDpi) || 0 : 0
+    )
+    if ((page.image || page.rendering) && available >= dpi) return
     page.rendering = true
     page.renderingDpi = dpi
     const myToken = ++page.renderToken

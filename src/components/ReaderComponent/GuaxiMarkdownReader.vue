@@ -1,7 +1,7 @@
 <template>
   <div class="markdown-viewer-container">
     <!-- 顶部控制栏 -->
-    <div class="markdown-controls">
+    <div class="markdown-controls guaxi-reader-controls" :style="{ '--pdf-progress': `${progressPercent}%` }">
       <div class="page-info">
         <span>第 {{ currentPage }} 页 / 共 {{ totalPages }} 页（{{ progressPercent }}%）</span>
         <span v-if="completedReadingMs">已完成：{{ formatDuration(completedReadingMs) }}</span>
@@ -10,14 +10,11 @@
       <div class="page-navigation">
         <button @click="prevPage" :disabled="currentPage <= 1" title="上一页">
           <n-icon :component="ArrowBackOutline" />
-          <span class="btn-text">上一页</span>
         </button>
 
-        <input type="number" v-model.number="jumpPage" min="1" :max="totalPages" @keyup.enter="goToPage"
-          style="font-size: 12px;">
+        <input type="number" v-model.number="jumpPage" min="1" :max="totalPages" @keyup.enter="goToPage">
 
         <button @click="nextPage" :disabled="currentPage >= totalPages" title="下一页">
-          <span class="btn-text">下一页</span>
           <n-icon :component="ArrowForwardOutline" />
         </button>
       </div>
@@ -25,58 +22,72 @@
       <div class="right-controls">
         <button class="fit-width" @click="fitToWidth" title="将页面调整为适合宽度">
           <n-icon :component="ExpandOutline" />
-          <span class="btn-text">适合宽度</span>
-        </button>
-        <button class="zoom-out" @click="zoomOut" :disabled="zoomLevel <= 0.5" title="缩小">
-          <n-icon :component="RemoveOutline" />
-        </button>
-        <span class="zoom-level">{{ Math.round(zoomLevel * 100) }}%</span>
-        <button class="zoom-in" @click="zoomIn" :disabled="zoomLevel >= 2" title="放大">
-          <n-icon :component="AddOutline" />
         </button>
 
-        <n-dropdown trigger="click" :options="viewModeOptions" @select="handleViewModeSelect">
-          <n-button class="layout-switch" text title="切换布局">
+        <span class="ctl-sep" />
+
+        <div class="ctl-group ctl-group--zoom">
+          <button class="zoom-out" @click="zoomOut" :disabled="zoomLevel <= 0.5" title="缩小">
+            <n-icon :component="RemoveOutline" />
+          </button>
+          <span class="zoom-level">{{ Math.round(zoomLevel * 100) }}%</span>
+          <button class="zoom-in" @click="zoomIn" :disabled="zoomLevel >= 2" title="放大">
+            <n-icon :component="AddOutline" />
+          </button>
+        </div>
+
+        <span class="ctl-sep" />
+
+        <div class="ctl-group">
+          <n-dropdown trigger="click" :options="viewModeOptions" @select="handleViewModeSelect">
+            <n-button class="layout-switch" text title="切换布局">
+              <template #icon>
+                <n-icon :component="OptionsOutline" />
+              </template>
+            </n-button>
+          </n-dropdown>
+
+          <n-button class="layout-switch" text
+            :title="isBookmarkedCurrent ? `取消书签（第 ${currentPage} 页）` : `添加书签（第 ${currentPage} 页）`"
+            @click="toggleBookmarkCurrentPage">
             <template #icon>
-              <n-icon :component="OptionsOutline" />
+              <n-icon :component="BookmarksOutline" />
             </template>
           </n-button>
-        </n-dropdown>
 
-        <n-button class="layout-switch" text
-          :title="isBookmarkedCurrent ? `取消书签（第 ${currentPage} 页）` : `添加书签（第 ${currentPage} 页）`"
-          @click="toggleBookmarkCurrentPage">
-          <template #icon>
-            <n-icon :component="BookmarksOutline" />
-          </template>
-        </n-button>
+          <n-dropdown trigger="click" :options="bookmarkOptions" @select="handleBookmarkSelect">
+            <n-button class="layout-switch" text title="书签列表">
+              <template #icon>
+                <n-icon :component="LibraryOutline" />
+              </template>
+            </n-button>
+          </n-dropdown>
+        </div>
 
-        <n-dropdown trigger="click" :options="bookmarkOptions" @select="handleBookmarkSelect">
-          <n-button class="layout-switch" text title="书签列表">
-            <template #icon>
-              <n-icon :component="LibraryOutline" />
-            </template>
-          </n-button>
-        </n-dropdown>
+        <span class="ctl-sep" />
 
-        <!-- 显示/隐藏笔记按钮 -->
-        <button class="toggle-notes" @click="toggleNotesPanel" :title="showNotes ? '隐藏笔记' : '显示笔记'">
-          <n-icon :component="DocumentTextOutline" />
-        </button>
-        <button class="toggle-assistant" @click="toggleAssistantPanel" :title="showAssistant ? '隐藏助手' : '显示助手'">
-          <n-icon :component="ChatbubbleEllipsesOutline" />
-        </button>
+        <div class="ctl-group">
+          <!-- 显示/隐藏笔记按钮 -->
+          <button class="toggle-notes" :class="{ active: showNotes }" @click="toggleNotesPanel"
+            :title="showNotes ? '隐藏笔记' : '显示笔记'">
+            <n-icon :component="DocumentTextOutline" />
+          </button>
+          <button class="toggle-assistant" :class="{ active: showAssistant }" @click="toggleAssistantPanel"
+            :title="showAssistant ? '隐藏助手' : '显示助手'">
+            <n-icon :component="ChatbubbleEllipsesOutline" />
+          </button>
 
-        <button class="toggle-translate" @click="toggleTranslate" :title="showTranslation ? '隐藏译文' : '显示译文'"
-          :class="{ 'translating': isTranslating }">
-          <n-icon :component="LanguageOutline" />
-        </button>
+          <button class="toggle-translate" @click="toggleTranslate" :title="showTranslation ? '隐藏译文' : '显示译文'"
+            :class="{ 'translating': isTranslating }">
+            <n-icon :component="LanguageOutline" />
+          </button>
 
-        <!-- 逐句朗读：点开即从断点连续朗读，当前句高亮并跟随滚动 -->
-        <button class="toggle-readaloud" :class="{ 'reading-aloud': readAloudPlaying }" @click="toggleReadAloud"
-          :title="readAloudTitle">
-          <n-icon :component="readAloudPlaying ? PauseOutline : PlayOutline" />
-        </button>
+          <!-- 逐句朗读：点开即从断点连续朗读，当前句高亮并跟随滚动 -->
+          <button class="toggle-readaloud" :class="{ 'reading-aloud': readAloudPlaying }" @click="toggleReadAloud"
+            :title="readAloudTitle">
+            <n-icon :component="readAloudPlaying ? PauseOutline : PlayOutline" />
+          </button>
+        </div>
       </div>
     </div>
 
@@ -3395,19 +3406,6 @@ watchEffect((onInvalidate) => {
   overflow: hidden;
 }
 
-.markdown-controls {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  height: 28px;
-  padding: 6px 8px;
-  background-color: var(--guaxi-panel-bg);
-  border-bottom: 1px solid var(--guaxi-border);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-  overflow: hidden;
-  white-space: nowrap;
-}
-
 button {
   padding: 5px 8px;
   background-color: var(--guaxi-panel-bg);
@@ -3436,112 +3434,6 @@ button:disabled {
   cursor: not-allowed;
   transform: none;
   box-shadow: none;
-}
-
-.page-info {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--guaxi-text-primary);
-  padding: 5px 8px;
-  background-color: var(--guaxi-panel-bg);
-  border-radius: 6px;
-  border: 1px solid var(--guaxi-border);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-}
-
-.page-navigation {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-shrink: 0;
-}
-
-.page-navigation input {
-  width: 50px;
-  padding: 6px;
-  text-align: center;
-  border: 1px solid var(--guaxi-border);
-  border-radius: 6px;
-  background-color: var(--guaxi-panel-bg);
-  color: var(--guaxi-text-primary);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-}
-
-.right-controls {
-  display: flex;
-  gap: 10px;
-  flex-shrink: 0;
-}
-
-.zoom-level {
-  min-width: 20px;
-  text-align: center;
-  font-size: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 5px 8px;
-}
-
-.zoom-in,
-.zoom-out {
-  background-color: #f8f9fa;
-  color: #495057;
-  border: 1px solid #e9ecef;
-}
-
-.zoom-in:hover,
-.zoom-out:hover {
-  background-color: #f1f3f5;
-}
-
-.zoom-in:disabled,
-.zoom-out:disabled {
-  background-color: #95a5a6;
-  cursor: not-allowed;
-}
-
-.fit-width {
-  background-color: #f8f9fa;
-  color: #495057;
-  border: 1px solid #e9ecef;
-  padding: 5px 8px;
-}
-
-.toggle-notes {
-  background-color: #4dabf7;
-  color: white;
-  border: 1px solid #339af0;
-  transition: all 0.2s;
-}
-
-.toggle-notes:hover {
-  background-color: #339af0;
-  box-shadow: 0 2px 8px rgba(77, 171, 247, 0.3);
-}
-
-.toggle-assistant {
-  background-color: #7048e8;
-  color: white;
-  border: 1px solid #5f3dc4;
-  transition: all 0.2s;
-}
-
-.toggle-assistant:hover {
-  background-color: #5f3dc4;
-  box-shadow: 0 2px 8px rgba(112, 72, 232, 0.3);
-}
-
-.export-notes {
-  background-color: #20c997;
-  color: white;
-  border: 1px solid #12b886;
-  transition: all 0.2s;
-}
-
-.export-notes:hover {
-  background-color: #12b886;
-  box-shadow: 0 2px 8px rgba(32, 201, 151, 0.3);
 }
 
 .markdown-main-content {
@@ -3902,14 +3794,42 @@ button:disabled {
   right: 0;
 }
 
+/* 笔记头部：原来是写死的饱和蓝色块 + 白字，暗色主题下就是面板顶上一整块突兀的亮色，
+   和面板自身的主题色也对不上。改成跟随主题的安静表面——与面板同色，靠一条分隔线
+   与内容区分开，标题用主题文字色。 */
 .notes-header {
   padding: 12px 16px;
-  background-color: #4dabf7;
-  color: white;
+  background-color: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-primary);
+  border-bottom: 1px solid var(--guaxi-border);
   display: flex;
   justify-content: space-between;
   align-items: center;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+/* 关闭键也要跟着走主题。头部原来是白字，而按钮底色由全局 button 规则给
+   （var(--guaxi-panel-bg)），叠在饱和色头部上就是"浅底白字"；暗色主题下同样对不上。 */
+.notes-header .close-btn,
+.assistant-header .close-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--guaxi-text-secondary);
+  box-shadow: none;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.notes-header .close-btn:hover,
+.assistant-header .close-btn:hover {
+  background: var(--guaxi-hover-bg);
+  color: var(--guaxi-text-primary);
+  transform: none;
+  box-shadow: none;
 }
 
 .notes-header h3 {
@@ -3948,12 +3868,12 @@ button:disabled {
 
 .assistant-header {
   padding: 12px 16px;
-  background-color: #7048e8;
-  color: white;
+  background-color: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-primary);
+  border-bottom: 1px solid var(--guaxi-border);
   display: flex;
   justify-content: space-between;
   align-items: center;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .assistant-header h3 {
@@ -4152,41 +4072,6 @@ button:disabled {
 }
 
 
-/* 68. 翻译按钮样式 */
-.toggle-translate {
-  background-color: #7950f2;
-  color: white;
-  border: 1px solid #6741d9;
-  transition: all 0.2s;
-}
-
-.toggle-translate:hover {
-  background-color: #6741d9;
-  box-shadow: 0 2px 8px rgba(121, 80, 242, 0.3);
-}
-
-/* 朗读按钮：播放中换成醒目的橙色，让"正在朗读"一眼可辨 */
-.toggle-readaloud {
-  background-color: #0ca678;
-  color: white;
-  border: 1px solid #099268;
-  transition: all 0.2s;
-}
-
-.toggle-readaloud:hover {
-  background-color: #099268;
-  box-shadow: 0 2px 8px rgba(12, 166, 120, 0.3);
-}
-
-.toggle-readaloud.reading-aloud {
-  background-color: #f76707;
-  border-color: #e8590c;
-}
-
-.toggle-readaloud.reading-aloud:hover {
-  background-color: #e8590c;
-}
-
 .composite-note-editor {
   box-sizing: border-box;
   width: 100%;
@@ -4212,32 +4097,6 @@ button:disabled {
 
 .dark .composite-note-editor {
   background-color: rgba(255, 255, 255, 0.04);
-}
-
-/* 69. Markdown行样式 */
-.markdown-line {
-  margin-bottom: 1em;
-}
-
-/* 70. 原文和译文样式 */
-.original-content {
-  padding: 8px;
-  border-radius: 4px;
-  background-color: rgba(255, 255, 255, 0.8);
-}
-
-.translated-content {
-  padding: 8px;
-  margin-top: 4px;
-  border-radius: 4px;
-  background-color: rgba(245, 245, 245, 0.8);
-  border-left: 3px solid #7950f2;
-  color: #555;
-}
-
-.error-translation {
-  border-left: 3px solid #ff6b6b;
-  background-color: rgba(255, 107, 107, 0.05);
 }
 
 .translation-error-message {
@@ -4288,7 +4147,7 @@ button:disabled {
   left: 0;
   right: 0;
   height: 2px;
-  background-color: #4dabf7;
+  background-color: var(--n-color-primary, #4dabf7);
   animation: translating-progress 2s infinite;
 }
 
@@ -4300,15 +4159,6 @@ button:disabled {
   100% {
     transform: translateX(100%);
   }
-}
-
-.skipped-translation {
-  opacity: 0.7;
-  border-left: 3px solid #ccc;
-  padding-left: 8px;
-  margin-left: 4px;
-  font-style: italic;
-  color: #666;
 }
 
 .translation-skipped-marker {

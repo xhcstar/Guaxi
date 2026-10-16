@@ -14,7 +14,6 @@
 <script setup>
 import { createLogger } from '../../utils/logger'
 import { computed } from 'vue'
-// import GuaxiPDFReader from './GuaxiPDFReader.vue'
 import GuaxiConvertPDFReader from './GuaxiConvertPDFReader.vue'
 import GuaxiMarkdownReader from './GuaxiMarkdownReader.vue'
 import GuaxiHtmlReader from './GuaxiHtmlReader.vue'

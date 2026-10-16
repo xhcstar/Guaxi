@@ -59,13 +59,25 @@ const toggleAssistantPanel = () => {
   color: var(--guaxi-text-secondary);
 }
 
+/* 助手面板头部：原来写死紫色底 + 白字，和另外五个阅读器一个毛病，
+   暗色主题下是面板顶上一整块突兀的亮色。统一改成跟随主题的安静表面。 */
 .toggle-assistant {
-  border: 1px solid #5f3dc4;
-  background-color: #7048e8;
-  color: white;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border: none;
   border-radius: 6px;
-  padding: 4px 10px;
+  background-color: transparent;
+  color: var(--guaxi-text-secondary);
   cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.toggle-assistant:hover {
+  background-color: var(--guaxi-hover-bg);
+  color: var(--guaxi-text-primary);
 }
 
 .assistant-panel {
@@ -93,8 +105,9 @@ const toggleAssistantPanel = () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background-color: #7048e8;
-  color: white;
+  background-color: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-primary);
+  border-bottom: 1px solid var(--guaxi-border);
 }
 
 .assistant-header h3 {
@@ -103,11 +116,23 @@ const toggleAssistantPanel = () => {
 }
 
 .close-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: none;
+  border-radius: 6px;
   background: transparent;
-  color: white;
+  color: var(--guaxi-text-secondary);
   font-size: 20px;
+  line-height: 1;
+  padding: 2px 6px;
   cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.close-btn:hover {
+  background-color: var(--guaxi-hover-bg);
+  color: var(--guaxi-text-primary);
 }
 
 .assistant-content {

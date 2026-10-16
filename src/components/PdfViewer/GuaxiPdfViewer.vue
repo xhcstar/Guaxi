@@ -30,20 +30,28 @@
         </span>
         <button
           type="button"
-          class="gpv__btn"
+          class="gpv__btn gpv__btn--icon"
           title="上一个匹配（Shift+Enter）"
           aria-label="上一个匹配"
           :disabled="!searchHits.length"
           @click="prevHit"
-        >‹</button>
+        >
+          <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+            <path d="M15.5 5.5 9 12l6.5 6.5-1.4 1.4L6.2 12l7.9-7.9 1.4 1.4Z" fill="currentColor" />
+          </svg>
+        </button>
         <button
           type="button"
-          class="gpv__btn"
+          class="gpv__btn gpv__btn--icon"
           title="下一个匹配（Enter）"
           aria-label="下一个匹配"
           :disabled="!searchHits.length"
           @click="nextHit"
-        >›</button>
+        >
+          <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+            <path d="m8.5 18.5 6.5-6.5-6.5-6.5 1.4-1.4 7.9 7.9-7.9 7.9-1.4-1.4Z" fill="currentColor" />
+          </svg>
+        </button>
       </div>
 
       <span class="gpv__divider" />
@@ -89,22 +97,38 @@
       </div>
       <span class="gpv__divider" />
 
-      <button type="button" class="gpv__btn" :disabled="zoom <= MIN_ZOOM" title="缩小（-）" aria-label="缩小" @click="zoomOut('toolbar')">−</button>
-      <span class="gpv__zoom">{{ Math.round(zoom * 100) }}%</span>
-      <button type="button" class="gpv__btn" :disabled="zoom >= MAX_ZOOM" title="放大（+）" aria-label="放大" @click="zoomIn('toolbar')">＋</button>
-      <button type="button" class="gpv__btn" title="适合宽度（W）" aria-label="适合宽度" @click="fitWidth">⤢</button>
+      <div class="gpv__zoom-cluster">
+        <button type="button" class="gpv__btn gpv__btn--icon" :disabled="zoom <= MIN_ZOOM" title="缩小（-）" aria-label="缩小" @click="zoomOut('toolbar')">
+          <RemoveOutline />
+        </button>
+        <span class="gpv__zoom">{{ Math.round(zoom * 100) }}%</span>
+        <button type="button" class="gpv__btn gpv__btn--icon" :disabled="zoom >= MAX_ZOOM" title="放大（+）" aria-label="放大" @click="zoomIn('toolbar')">
+          <AddOutline />
+        </button>
+      </div>
+      <button type="button" class="gpv__btn gpv__btn--icon" title="适合宽度（W）" aria-label="适合宽度" @click="fitWidth">
+        <ExpandOutline />
+      </button>
       <span class="gpv__divider" />
-      <button type="button" class="gpv__btn" title="向左旋转 90°（[）" aria-label="向左旋转 90°" @click="rotateLeft('toolbar')">↺</button>
-      <button type="button" class="gpv__btn" title="向右旋转 90°（]）" aria-label="向右旋转 90°" @click="rotateRight('toolbar')">↻</button>
+      <button type="button" class="gpv__btn gpv__btn--icon" title="向左旋转 90°（[）" aria-label="向左旋转 90°" @click="rotateLeft('toolbar')">
+        <RefreshCircleOutline :rotate="90" />
+      </button>
+      <button type="button" class="gpv__btn gpv__btn--icon" title="向右旋转 90°（]）" aria-label="向右旋转 90°" @click="rotateRight('toolbar')">
+        <RefreshCircleOutline :rotate="-90" />
+      </button>
       <button
         type="button"
-        class="gpv__btn"
+        class="gpv__btn gpv__btn--icon"
         :class="{ 'gpv__btn--active': panMode }"
-        title="拖动平移模式（H；开启后按住拖动页面；中键拖动始终可平移）"
-        aria-label="切换拖动平移模式"
+        title="锁定拖动平移（H）。平时在页面空白处直接拖动即可平移，无需开启"
+        aria-label="锁定拖动平移模式"
         @click="togglePanMode('toolbar')"
-      >✋</button>
-      <button v-if="features.rebuild" type="button" class="gpv__btn" title="重新构建" @click="$emit('rebuild')">⟳</button>
+      >
+        <HandRightOutline />
+      </button>
+      <button v-if="features.rebuild" type="button" class="gpv__btn gpv__btn--icon" title="重新构建" @click="$emit('rebuild')">
+        <RefreshOutline />
+      </button>
       <button
         v-if="features.export"
         type="button"
@@ -118,7 +142,7 @@
     <div
       class="gpv__body guaxi-reader-scrollbar"
       ref="bodyRef"
-      :class="{ 'gpv__body--pan': panMode }"
+      :class="{ 'gpv__body--pan': panEffective, 'gpv__body--panning': isPanning }"
       @scroll="onScroll"
       @mousedown="onBodyMouseDown"
       @wheel="onWheel"
@@ -152,6 +176,7 @@
               :width="Math.round(page.wPt * cssScale)"
               :height="Math.round(page.hPt * cssScale)"
               draggable="false"
+              decoding="async"
               alt="预览页"
             />
             <div v-else class="gpv__page-skeleton">{{ page.num }}</div>
@@ -181,9 +206,10 @@
                 v-for="(rc, ri) in hl.rects"
                 :key="`${hl.annot_id}-${ri}`"
                 class="gpv__hl-rect"
+                :class="{ 'is-selected': !!selectedHighlightId && hl.annot_id === selectedHighlightId }"
                 :style="hlStyle(rc, hl.color)"
-                :title="hl.note || ''"
-                @click.stop="onHighlightClick(hl, page.num)"
+                :title="highlightHint(hl)"
+                @click.stop="onHighlightClick(hl, page.num, $event)"
               />
             </template>
 
@@ -208,6 +234,14 @@
 <script setup>
 import { ref, reactive, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import {
+  AddOutline,
+  ExpandOutline,
+  HandRightOutline,
+  RefreshCircleOutline,
+  RefreshOutline,
+  RemoveOutline,
+} from '@vicons/ionicons5'
 import { createLogger } from '../../utils/logger'
 import { markReaderScrollbarActive } from '../ReaderComponent/readerScrollbar'
 import usePdfiumDocument from './usePdfiumDocument'
@@ -231,6 +265,9 @@ const props = defineProps({
   // 'none' 沿用旧行为（按 initialZoom 起始，不随容器尺寸变化重算）；LaTeX/Typst 预览传 'width'，
   // 让默认阅读区域贴合面板，并在窗口 / 分栏尺寸变化时自动重算。
   fitMode: { type: String, default: 'none' },
+  // 当前选中的高亮 annot_id（由宿主维护）。选中的那一块会额外圈出来；
+  // 之所以不由本组件自己记，是因为宿主还要拿它联动右侧的笔记面板。
+  selectedHighlightId: { type: String, default: '' },
   // 消费者按需开启的能力
   features: {
     type: Object,
@@ -257,13 +294,19 @@ const zoom = ref(props.initialZoom)
 const activeFitMode = ref(props.fitMode === 'width' || props.fitMode === 'page' ? props.fitMode : '')
 const cssScale = computed(() => zoom.value)
 // 渲染 DPI：目标是渲染像素 = 显示像素 × 设备像素比（1:1 物理像素，清晰且不过采样）。
-// 显示像素 = pt × zoom；物理像素 = 显示像素 × dpr；dpi = 72 × zoom × dpr。
-// 之前用 zoom×144 等于恒定 2× 过采样（面积 4×），是渲染慢的主因。dpr 上限取 2 避免超清屏过载。
+// 但取值必须落到下面这条**阶梯**上，不能直接用连续值。后端的页图磁盘缓存键是
+// `p{页}@{dpi}_{mtime}.jpg`——dpi 连续的话，Ctrl+滚轮每动一格就得到一个新 dpi
+// （111 → 114 → 118 …），每一格都要重新栅格化、还各留一份缓存文件；量化到阶梯后，
+// 小幅缩放落回同一档，直接命中缓存，缩放因此变得跟手。
+// 阶梯往上取整（宁可略清晰也不欠采样），上限仍是 384 dpi（A4 约 3300×4700，和之前一致）。
 const devicePixelRatio = (typeof window !== 'undefined' && window.devicePixelRatio) || 1
 const renderScale = Math.min(2, Math.max(1, devicePixelRatio))
-const renderDpi = computed(() =>
-  Math.min(384, Math.max(72, Math.round(zoom.value * 72 * renderScale)))
-)
+const DPI_LADDER = [72, 96, 120, 144, 192, 240, 288, 384]
+const renderDpi = computed(() => {
+  const ideal = zoom.value * 72 * renderScale
+  for (const d of DPI_LADDER) if (d >= ideal) return d
+  return DPI_LADDER[DPI_LADDER.length - 1]
+})
 
 // ───────────────────────── 旋转 ─────────────────────────
 // 角度 0/90/180/270。CSS 旋转内层包裹（pageInnerStyle），外层占位按旋转后尺寸交换宽高。
@@ -672,40 +715,84 @@ const renderVisible = ({ bufferFactor = 1 } = {}) => {
   const bottom = top + el.clientHeight
   const BUFFER = el.clientHeight * bufferFactor
 
+  const active = []
   for (const page of pages) {
     const node = pageEls.get(page.num)
     if (!node) continue
     const nTop = node.offsetTop
-    const nBottom = nTop + node.offsetHeight
-    const inRange = nBottom >= top - BUFFER && nTop <= bottom + BUFFER
-    if (inRange) {
-      doc.renderPage(page, renderDpi.value)
-      ensureText(page)
-      if (props.features.annotations) doc.loadHighlights(page)
+    const nHeight = node.offsetHeight
+    if (nTop + nHeight >= top - BUFFER && nTop <= bottom + BUFFER) {
+      active.push({ page, center: nTop + nHeight / 2 })
     } else if (page.image && Math.abs(page.num - currentPage.value) > 6) {
       doc.freePage(page)
     }
   }
+
+  // 提交顺序就是出图顺序：后端只有一个 pdfium 工作线程、按 FIFO 取任务。若按 DOM 顺序
+  // （文档自上而下）提交，滚到第 300 页、缓冲区覆盖 297–303 时，会先栅格化 297 再轮到 300，
+  // 用户在看的那页反而最后出图。改成按离视口中心由近及远排序，当前页永远第一个渲。
+  const viewportCenter = (top + bottom) / 2
+  active.sort((a, b) => Math.abs(a.center - viewportCenter) - Math.abs(b.center - viewportCenter))
+
+  for (const { page } of active) {
+    doc.renderPage(page, renderDpi.value)
+    ensureText(page)
+    if (props.features.annotations) doc.loadHighlights(page)
+  }
 }
 
-// ─────────────────── 拖动平移（抓手模式 / 中键，带轻惯性）───────────────────
+// ─────────────────── 拖动平移（空白拖 / 空格 / 中键，带轻惯性）───────────────────
+// 交互对齐主流阅读器：不必先去点工具栏。默认就是抓手——在页面空白（行间空隙、页边、
+// 图区）按下即拖动平移；在文字上按下仍然是划词选择；按住空格可临时强制平移（松手还原）；
+// 中键拖动始终平移；工具栏 ✋ 用来"锁死"平移模式，连文字上也能拖。
 const panMode = ref(false)
+const spaceHeld = ref(false)
+const isPanning = ref(false)
+const panEffective = computed(() => panMode.value || spaceHeld.value)
 let panState = null
 let panRaf = 0
 const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : 0)
+// 拖动惯性的速度上限（px/ms）：见 onPanMove 里的说明。
+const MAX_PAN_VELOCITY = 6
 
 const togglePanMode = (reason = 'manual') => {
   panMode.value = !panMode.value
   logger.info('PDF拖动平移模式切换', { reason, enabled: panMode.value })
 }
 
+// 只有落在透明文本层的文字段上才算"要划词"；行间空隙/页边/图片区都归为可拖动，
+// 这样与 Acrobat、Chrome 内置阅读器的取舍一致（那边也是拖文字选中、拖空白平移）。
+const isOnSelectableText = (ev) => {
+  const seg = ev.target?.closest?.('.gpv__text-seg')
+  return Boolean(seg && String(seg.textContent || '').trim())
+}
+
+// 按下点是否落在原生滚动条上。滚动条属于滚动容器本身，mousedown 的 target 就是容器，
+// 若不当成"空白"处理，拖滚动条滑块会被我们抢走并 preventDefault，滑块直接拖不动。
+// 判据是几何位置：指针落在内容框之外、边框盒之内，那一条就是滚动条。
+const isOnScrollbar = (el, ev) => {
+  const rect = el.getBoundingClientRect()
+  const vBar = el.offsetWidth - el.clientWidth
+  const hBar = el.offsetHeight - el.clientHeight
+  if (vBar > 0 && ev.clientX >= rect.left + el.clientLeft + el.clientWidth) return true
+  if (hBar > 0 && ev.clientY >= rect.top + el.clientTop + el.clientHeight) return true
+  return false
+}
+
 const onBodyMouseDown = (ev) => {
-  // 仅在抓手模式或按下中键时平移，避免与划词选择冲突。
-  if (!panMode.value && ev.button !== 1) return
   const el = bodyRef.value
   if (!el) return
+  // 滚动条任何时候都让给浏览器拖。
+  if (ev.button === 0 && isOnScrollbar(el, ev)) return
+  // 锁定平移 / 空格临时平移 = 明确要求平移，这时连文字上也要能拖；
+  // 其余情况左键落在文字上就是划词，不抢。
+  const locked = panMode.value || spaceHeld.value
+  if (ev.button === 0 && !locked && isOnSelectableText(ev)) return
+  // 右键留给上下文菜单；中键与左键进入平移。
+  if (ev.button !== 0 && ev.button !== 1) return
   if (panRaf) { cancelAnimationFrame(panRaf); panRaf = 0 }
   ev.preventDefault()
+  isPanning.value = true
   const t = nowMs()
   panState = {
     x: ev.clientX, y: ev.clientY,
@@ -723,8 +810,11 @@ const onPanMove = (ev) => {
   const now = nowMs()
   const dt = now - panState.t
   if (dt > 0) {
-    panState.vx = (ev.clientX - panState.lastX) / dt
-    panState.vy = (ev.clientY - panState.lastY) / dt
+    // 速度要封顶：dt 极小时（合成事件、卡顿后补发的一帧）算出来的速度能到上千 px/ms，
+    // 惯性循环会把几百页的文档一帧甩到底。真实鼠标最猛的甩动也在 10px/ms 以内，取 6 封顶。
+    const clamp = (v) => Math.max(-MAX_PAN_VELOCITY, Math.min(MAX_PAN_VELOCITY, v))
+    panState.vx = clamp((ev.clientX - panState.lastX) / dt)
+    panState.vy = clamp((ev.clientY - panState.lastY) / dt)
     panState.lastX = ev.clientX
     panState.lastY = ev.clientY
     panState.t = now
@@ -733,6 +823,7 @@ const onPanMove = (ev) => {
 const onPanUp = () => {
   window.removeEventListener('mousemove', onPanMove, true)
   window.removeEventListener('mouseup', onPanUp, true)
+  isPanning.value = false
   const st = panState
   panState = null
   if (st && (Math.abs(st.vx) > 0.05 || Math.abs(st.vy) > 0.05)) startPanInertia(st.vx, st.vy)
@@ -761,6 +852,30 @@ const startPanInertia = (vx, vy) => {
   }
   panRaf = requestAnimationFrame(stepFn)
 }
+
+// 空格临时平移：监听挂在 window 上（不必先点中阅读器才生效，和主流阅读器一致），
+// 但只在阅读器真正可见时接管——宿主用 v-show 隐藏 PDF 面板时 body 高度为 0，不该再抢空格。
+// 走冒泡阶段而非捕获：让输入框等内部组件的空格优先。
+const viewerVisible = () => (bodyRef.value?.clientHeight || 0) > 0
+const isTypingTarget = (node) => {
+  const el = node instanceof HTMLElement ? node : null
+  if (!el) return false
+  return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable
+}
+const onSpaceDown = (ev) => {
+  if ((ev.key !== ' ' && ev.code !== 'Space') || ev.isComposing) return
+  if (ev.ctrlKey || ev.altKey || ev.metaKey) return
+  if (isTypingTarget(ev.target) || !viewerVisible()) return
+  // 阻止浏览器把空格当"向下翻页"——按住空格期间它只表示抓手。
+  ev.preventDefault()
+  spaceHeld.value = true
+}
+const onSpaceUp = (ev) => {
+  if (ev.key !== ' ' && ev.code !== 'Space') return
+  spaceHeld.value = false
+}
+// 切走窗口时按键抬起事件收不到，这里兜底清掉，避免回来后一直是抓手。
+const releaseSpacePan = () => { spaceHeld.value = false }
 
 // 加载字符层并测量 scaleX（让透明文本宽度对齐渲染图，原生选择高亮因此连续）。
 const ensureText = async (page) => {
@@ -828,15 +943,25 @@ const hlStyle = (rc, color) => {
     background: `rgba(${r}, ${g}, ${b}, ${Math.max(0, Math.min(1, a / 255))})`,
   }
 }
-const onHighlightClick = (hl, pageNum) => {
+const onHighlightClick = (hl, pageNum, ev) => {
   emit('highlight-click', {
     annotId: hl.annot_id,
     page: pageNum,
     note: hl.note || '',
     color: hl.color,
+    // 按住 Alt 才是"删除"。以前是单击直接删——没有确认、也没有任何提示，
+    // 光标和悬停描边都像"选中"，误删只能靠 Ctrl+Z 捞回来。
+    altKey: !!ev?.altKey,
     // 带上 rects，供宿主在删除后做撤销重建。
     rects: Array.isArray(hl.rects) ? hl.rects.map((r) => ({ ...r })) : [],
   })
+}
+
+// 高亮的提示文字。删除是破坏性操作，必须在悬停时就能看出怎么触发。
+const highlightHint = (hl) => {
+  const tip = '点击选中，Alt+点击删除'
+  const note = String(hl?.note || '').trim()
+  return note ? `${note}\n（${tip}）` : tip
 }
 
 // 缩放性能：缩放时 CSS 立即把现有图按新尺寸缩放（即时反馈，可能暂时模糊），
@@ -1113,6 +1238,28 @@ const showFlashBox = (box) => {
   flashTimer = setTimeout(() => { flashBox.value = null }, 1800)
 }
 
+// 供宿主按"来源锚点"定位（笔记卡的「回到原文」）：跳到锚点所在页，并把锚点范围框出来。
+// rects 是页内 pt 坐标，取并集——一条摘录可能跨多行、多个矩形。
+// 拿不到矩形时退化成只跳页：至少落到那一页，比完全回不去有用。
+const flashAnchor = ({ page, rects } = {}) => {
+  const p = Math.round(Number(page) || 0)
+  if (p < 1) return false
+  const list = Array.isArray(rects)
+    ? rects.filter((r) => r && Number.isFinite(r.x) && Number.isFinite(r.y) && r.w > 0 && r.h > 0)
+    : []
+  if (!list.length) {
+    goToPage(p)
+    return true
+  }
+  const x = Math.min(...list.map((r) => r.x))
+  const y = Math.min(...list.map((r) => r.y))
+  const w = Math.max(...list.map((r) => r.x + r.w)) - x
+  const h = Math.max(...list.map((r) => r.y + r.h)) - y
+  scrollToPagePoint(p, y)
+  showFlashBox({ page: p, x, y, w, h })
+  return true
+}
+
 const goToPage = (n, { align = 'top', retry = 6 } = {}) => {
   const num = Math.min(Math.max(1, Math.round(Number(n) || 1)), totalPages.value || 1)
   const el = bodyRef.value
@@ -1327,6 +1474,7 @@ const rotateTo = (deg) => { rotation.value = ((Math.round(deg / 90) * 90) % 360 
 defineExpose({
   forwardSync,
   goToPage,
+  flashAnchor,
   search: runSearch,
   runSearch,
   setSearchQuery: (q) => { searchQuery.value = q },
@@ -1357,7 +1505,8 @@ defineExpose({
   rotateTo,
   togglePan: () => { panMode.value = !panMode.value },
   setPanMode: (v) => { panMode.value = !!v },
-  state: { zoom, rotation, panMode, currentPage, pageInputValue, totalPages, searchHits, searchActiveIdx, searchQuery },
+  setSpacePan: (v) => { spaceHeld.value = !!v },
+  state: { zoom, rotation, panMode, spaceHeld, isPanning, currentPage, pageInputValue, totalPages, searchHits, searchActiveIdx, searchQuery },
 })
 
 // ───────────────────────── watchers ─────────────────────────
@@ -1398,6 +1547,9 @@ onMounted(() => {
 
 if (typeof window !== 'undefined') {
   window.addEventListener('mouseup', onBodyMouseUp, true)
+  window.addEventListener('keydown', onSpaceDown)
+  window.addEventListener('keyup', onSpaceUp)
+  window.addEventListener('blur', releaseSpacePan)
 }
 
 onBeforeUnmount(() => {
@@ -1415,6 +1567,9 @@ onBeforeUnmount(() => {
   }
   if (typeof window !== 'undefined') {
     window.removeEventListener('mouseup', onBodyMouseUp, true)
+    window.removeEventListener('keydown', onSpaceDown)
+    window.removeEventListener('keyup', onSpaceUp)
+    window.removeEventListener('blur', releaseSpacePan)
     window.removeEventListener('mousemove', onPanMove, true)
     window.removeEventListener('mouseup', onPanUp, true)
   }
@@ -1445,12 +1600,20 @@ onBeforeUnmount(() => {
   --gpv-text: #ddd;
   --gpv-toolbar-bg: #252525;
   --gpv-border: #3e4451;
-  --gpv-canvas-area: #525659;
+  --gpv-canvas-area: #4a4d52;
   --gpv-btn-text: #ddd;
   --gpv-hover-bg: rgba(255, 255, 255, 0.08);
   --gpv-error-bg: rgba(0, 0, 0, 0.35);
   --gpv-overlay-bg: rgba(0, 0, 0, 0.45);
   --gpv-overlay-text: #fff;
+  /* 画布氛围：一层自顶部洒下的柔光。固定于可视区（background-attachment: scroll 在
+     滚动容器里就是"不随内容走"），所以滚动时纸面像是在同一个光源下移动。 */
+  --gpv-canvas-sheen: radial-gradient(125% 85% at 50% 0%, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0) 62%);
+  --gpv-paper-shadow: 0 1px 1px rgba(0, 0, 0, 0.45), 0 10px 26px -8px rgba(0, 0, 0, 0.7);
+  --gpv-paper-ring: rgba(0, 0, 0, 0.5);
+  --gpv-skeleton-bg: #3f4248;
+  --gpv-skeleton-sheen: rgba(255, 255, 255, 0.06);
+  --gpv-skeleton-text: #6d727b;
 }
 .gpv.theme-light {
   --gpv-bg: #ffffff;
@@ -1463,14 +1626,20 @@ onBeforeUnmount(() => {
   --gpv-error-bg: rgba(0, 0, 0, 0.04);
   --gpv-overlay-bg: rgba(255, 255, 255, 0.7);
   --gpv-overlay-text: #1f2328;
+  --gpv-canvas-sheen: radial-gradient(125% 85% at 50% 0%, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0) 60%);
+  --gpv-paper-shadow: 0 1px 1px rgba(15, 23, 42, 0.08), 0 6px 18px -6px rgba(15, 23, 42, 0.28);
+  --gpv-paper-ring: rgba(15, 23, 42, 0.1);
+  --gpv-skeleton-bg: #f7f8fa;
+  --gpv-skeleton-sheen: rgba(255, 255, 255, 0.85);
+  --gpv-skeleton-text: #c3c8d0;
 }
 
 .gpv__toolbar {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
+  gap: 4px;
+  padding: 5px 8px;
   border-bottom: 1px solid var(--gpv-border);
   background: var(--gpv-toolbar-bg);
   font-size: 12px;
@@ -1515,10 +1684,10 @@ onBeforeUnmount(() => {
 .gpv__search-input {
   width: 130px;
   font-size: 12px;
-  padding: 2px 6px;
+  padding: 3px 8px;
   border: 1px solid var(--gpv-border);
-  border-radius: 6px;
-  background: transparent;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--gpv-text) 4%, transparent);
   color: var(--gpv-text);
 }
 .gpv__search-input:focus { outline: none; border-color: var(--n-color-primary, #61afef); }
@@ -1534,40 +1703,59 @@ onBeforeUnmount(() => {
 .gpv__page-input {
   width: 44px;
   font-size: 11px;
-  padding: 1px 4px;
+  padding: 2px 4px;
   text-align: center;
   border: 1px solid var(--gpv-border);
-  border-radius: 5px;
-  background: transparent;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--gpv-text) 4%, transparent);
   color: var(--gpv-text);
+  font-variant-numeric: tabular-nums;
 }
 .gpv__page-input::-webkit-inner-spin-button,
 .gpv__page-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .gpv__page-input:focus { outline: none; border-color: var(--n-color-primary, #61afef); }
-.gpv__zoom { font-size: 11px; opacity: 0.75; min-width: 38px; text-align: center; }
+.gpv__zoom {
+  min-width: 42px;
+  padding: 0 2px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: var(--gpv-text);
+  opacity: 0.8;
+  user-select: none;
+}
 
 .gpv__btn {
-  border: 1px solid var(--gpv-border);
+  border: none;
   background: transparent;
   color: var(--gpv-btn-text);
   border-radius: 6px;
-  padding: 2px 8px;
+  min-width: 26px;
+  height: 24px;
+  padding: 0 6px;
   font-size: 12px;
   cursor: pointer;
-  transition: background-color 0.15s, border-color 0.15s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.15s, color 0.15s, box-shadow 0.15s;
 }
-.gpv__btn:hover:not(:disabled) { background: var(--gpv-hover-bg); border-color: var(--n-color-primary, #61afef); }
+.gpv__btn:hover:not(:disabled) { background: var(--gpv-hover-bg); }
 .gpv__btn:focus-visible {
   outline: none;
-  border-color: var(--n-color-primary, #61afef);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--n-color-primary, #61afef) 28%, transparent);
 }
-.gpv__btn:disabled { opacity: 0.4; cursor: not-allowed; }
-.gpv__btn--primary { border-color: var(--n-color-primary, #61afef); color: var(--n-color-primary, #61afef); }
+.gpv__btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.gpv__btn--primary {
+  color: var(--n-color-primary, #61afef);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--n-color-primary, #61afef) 42%, transparent);
+}
 .gpv__btn--icon {
   width: 26px;
   height: 24px;
   padding: 0;
+  /* 图标按 1em 定尺寸，字号即图标大小（与父组件工具栏里的同款图标对齐） */
+  font-size: 16px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1578,9 +1766,20 @@ onBeforeUnmount(() => {
   flex: 0 0 auto;
 }
 .gpv__btn--active {
-  background: var(--n-color-primary, #61afef);
-  border-color: var(--n-color-primary, #61afef);
-  color: #fff;
+  background: color-mix(in srgb, var(--n-color-primary, #61afef) 18%, transparent);
+  color: var(--n-color-primary, #61afef);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--n-color-primary, #61afef) 42%, transparent);
+}
+
+/* 缩放收成一个胶囊：− 154% + 是同一件事的三个部分，不该看起来像三个独立按钮 */
+.gpv__zoom-cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  padding: 2px;
+  border: 1px solid var(--gpv-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--gpv-text) 5%, transparent);
 }
 
 .gpv__body {
@@ -1588,12 +1787,25 @@ onBeforeUnmount(() => {
   min-height: 0;
   position: relative;
   overflow: auto;
-  background: var(--gpv-canvas-area);
+  background-color: var(--gpv-canvas-area);
+  background-image: var(--gpv-canvas-sheen);
+  background-repeat: no-repeat;
+  /* 滚动容器里的 scroll（而非 local）= 背景不随内容走，柔光始终自可视区顶部洒下 */
+  background-attachment: scroll;
+  /* 默认就是抓手：主流阅读器里"拖空白即平移"是靠光标先告诉用户的。
+     文字段自己声明 cursor: text，所以文字上仍是文本光标，两者天然分开。 */
+  cursor: grab;
 }
-/* 抓手模式：手型光标 + 禁止文本选择，避免拖动时误选 */
-.gpv__body--pan { cursor: grab; user-select: none; }
-.gpv__body--pan:active { cursor: grabbing; }
+/* 锁定平移 / 空格临时平移：连文字上也能拖，因此禁止选中，文字段也换手型 */
+.gpv__body--pan { user-select: none; }
 .gpv__body--pan .gpv__text-seg { user-select: none; cursor: grab; }
+/* 拖动进行中（含中键、空白直接拖）：全区域统一攥拳光标 */
+.gpv__body--panning,
+.gpv__body--panning .gpv__text-seg { cursor: grabbing; }
+/* 非内容区不该显示抓手：错误日志要能选字复制，空态只是提示 */
+.gpv__error,
+.gpv__error *,
+.gpv__empty { cursor: auto; }
 
 .gpv__pages {
   display: flex;
@@ -1614,22 +1826,44 @@ onBeforeUnmount(() => {
   margin-right: auto;
   position: relative;
   background: #fff;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+  border-radius: 2px;
+  /* 纸张感：一道贴边的硬阴影压出厚度，一道大范围软阴影托起离开背景的高度，
+     再补一圈极淡的描边，白纸边缘在浅色画布上才不会"飘"。 */
+  box-shadow: var(--gpv-paper-shadow), 0 0 0 1px var(--gpv-paper-ring);
   flex: 0 0 auto;
   overflow: hidden;
 }
 /* 旋转内层：尺寸/位移/旋转全部走内联样式（pageInnerStyle） */
 .gpv__page-inner { position: absolute; }
 .gpv__page-img { display: block; user-select: none; }
+/* 未渲染页：不画斜条纹（像施工围挡），改成一道缓慢扫过的微光 + 一枚淡页码，
+   既说明"这页正在来"，又和纸面本身是同一个色系。 */
 .gpv__page-skeleton {
   position: absolute;
   inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #bbb;
-  font-size: 24px;
-  background: repeating-linear-gradient(45deg, #fafafa, #fafafa 10px, #f0f0f0 10px, #f0f0f0 20px);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--gpv-skeleton-text);
+  background-color: var(--gpv-skeleton-bg);
+  background-image: linear-gradient(
+    100deg,
+    rgba(255, 255, 255, 0) 30%,
+    var(--gpv-skeleton-sheen) 50%,
+    rgba(255, 255, 255, 0) 70%
+  );
+  background-size: 220% 100%;
+  background-repeat: no-repeat;
+  animation: gpv-skeleton-sweep 1.5s ease-in-out infinite;
+}
+@keyframes gpv-skeleton-sweep {
+  0% { background-position: 160% 0; }
+  100% { background-position: -60% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gpv__page-skeleton { animation: none; }
 }
 
 /* 透明文本层：文字本身透明，仅用于选择/复制 */
@@ -1674,6 +1908,14 @@ onBeforeUnmount(() => {
 }
 .gpv__hl-rect:hover {
   outline: 1px solid rgba(255, 140, 0, 0.8);
+}
+/* 选中的高亮：描边更重、再补一圈外发光，和悬停的细橘线明确区分开。
+   注意 .gpv__hl-rect 带 mix-blend-mode: multiply，所以这里靠 outline（不参与混合）
+   和自身阴影来表达，不改底色——改底色会被混合模式吃掉。 */
+.gpv__hl-rect.is-selected {
+  outline: 2px solid var(--n-color-primary, #61afef);
+  outline-offset: 1px;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--n-color-primary, #61afef) 30%, transparent);
 }
 
 /* 定位高亮：完整包裹文字的框 + 淡出 */

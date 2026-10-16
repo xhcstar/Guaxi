@@ -1,23 +1,20 @@
 <template>
   <div class="pdf-viewer-container">
     <!-- 顶部控制栏 -->
-    <div class="pdf-controls">
+    <div class="pdf-controls guaxi-reader-controls" :style="{ '--pdf-progress': `${progressPercent}%` }">
       <div class="page-info">
-        <span>第 {{ currentPage }} 页 / 共 {{ totalPages }} 页（{{ progressPercent }}%）</span>
-        <span v-if="completedReadingMs">已完成：{{ formatDuration(completedReadingMs) }}</span>
+        <span class="page-info-main">第 {{ currentPage }} 页 / 共 {{ totalPages }} 页（{{ progressPercent }}%）</span>
+        <span v-if="completedReadingMs" class="page-info-time">已完成：{{ formatDuration(completedReadingMs) }}</span>
       </div>
 
       <div class="page-navigation">
         <button @click="prevPage" :disabled="currentPage <= 1" title="上一页">
           <n-icon :component="ArrowBackOutline" />
-          <span class="btn-text">上一页</span>
         </button>
 
-        <input type="number" v-model.number="jumpPage" min="1" :max="totalPages" @keyup.enter="goToPage"
-          style="font-size: 12px;">
+        <input type="number" v-model.number="jumpPage" min="1" :max="totalPages" @keyup.enter="goToPage">
 
         <button @click="nextPage" :disabled="currentPage >= totalPages" title="下一页">
-          <span class="btn-text">下一页</span>
           <n-icon :component="ArrowForwardOutline" />
         </button>
       </div>
@@ -48,41 +45,56 @@
 
         <!-- 新版 pdfium 阅读器：工具栏外置到此处，统一驱动 GuaxiPdfViewer -->
         <template v-else>
-          <button title="撤销高亮 (Ctrl+Z)" :disabled="!canUndoHighlight" @click="undoHighlight">
-            <n-icon :component="ArrowUndoOutline" />
-          </button>
-          <button title="重做高亮 (Ctrl+Y)" :disabled="!canRedoHighlight" @click="redoHighlight">
-            <n-icon :component="ArrowRedoOutline" />
-          </button>
-          <button title="上一阅读位置 (Alt+←)" :disabled="!readingBackStack.length" @click="goReadingBack">
-            <n-icon :component="ChevronBackOutline" />
-          </button>
-          <button title="下一阅读位置 (Alt+→)" :disabled="!readingForwardStack.length" @click="goReadingForward">
-            <n-icon :component="ChevronForwardOutline" />
-          </button>
-          <button class="rotate-left" @click="viewerRotateLeft" title="向左旋转90度 (Ctrl+[)">
-            <n-icon :component="RefreshCircleOutline" :rotate="90" />
-          </button>
-          <button class="rotate-right" @click="viewerRotateRight" title="向右旋转90度 (Ctrl+])">
-            <n-icon :component="RefreshCircleOutline" :rotate="-90" />
-          </button>
-          <button class="pan-toggle" :class="{ active: viewerPanMode }" @click="viewerTogglePan" title="拖动平移 (空格切换)">
-            <n-icon :component="HandRightOutline" />
-          </button>
-          <button class="fit-width" @click="viewerFitWidth" title="适合宽度 (Ctrl+0)">
-            <n-icon :component="ExpandOutline" />
-          </button>
-          <button class="zoom-out" @click="viewerZoomOut" title="缩小 (Ctrl+-)">
-            <n-icon :component="RemoveOutline" />
-          </button>
-          <span class="zoom-level">{{ viewerZoomPercent }}%</span>
-          <button class="zoom-in" @click="viewerZoomIn" title="放大 (Ctrl++)">
-            <n-icon :component="AddOutline" />
-          </button>
+          <div class="ctl-group">
+            <button title="撤销高亮 (Ctrl+Z)" :disabled="!canUndoHighlight" @click="undoHighlight">
+              <n-icon :component="ArrowUndoOutline" />
+            </button>
+            <button title="重做高亮 (Ctrl+Y)" :disabled="!canRedoHighlight" @click="redoHighlight">
+              <n-icon :component="ArrowRedoOutline" />
+            </button>
+          </div>
+          <span class="ctl-sep" />
+          <div class="ctl-group">
+            <button title="上一阅读位置 (Alt+←)" :disabled="!readingBackStack.length" @click="goReadingBack">
+              <n-icon :component="ChevronBackOutline" />
+            </button>
+            <button title="下一阅读位置 (Alt+→)" :disabled="!readingForwardStack.length" @click="goReadingForward">
+              <n-icon :component="ChevronForwardOutline" />
+            </button>
+          </div>
+          <span class="ctl-sep" />
+          <div class="ctl-group">
+            <button class="rotate-left" @click="viewerRotateLeft" title="向左旋转90度 (Ctrl+[)">
+              <n-icon :component="RefreshCircleOutline" :rotate="90" />
+            </button>
+            <button class="rotate-right" @click="viewerRotateRight" title="向右旋转90度 (Ctrl+])">
+              <n-icon :component="RefreshCircleOutline" :rotate="-90" />
+            </button>
+            <button class="pan-toggle" :class="{ active: viewerPanActive }" @click="viewerTogglePan"
+              title="锁定拖动平移 (H)。平时在页面空白处直接拖动即可平移，无需开启">
+              <n-icon :component="HandRightOutline" />
+            </button>
+            <button class="fit-width" @click="viewerFitWidth" title="适合宽度 (Ctrl+0)">
+              <n-icon :component="ExpandOutline" />
+            </button>
+          </div>
+          <span class="ctl-sep" />
+          <div class="ctl-group ctl-group--zoom">
+            <button class="zoom-out" @click="viewerZoomOut" title="缩小 (Ctrl+-)">
+              <n-icon :component="RemoveOutline" />
+            </button>
+            <span class="zoom-level">{{ viewerZoomPercent }}%</span>
+            <button class="zoom-in" @click="viewerZoomIn" title="放大 (Ctrl++)">
+              <n-icon :component="AddOutline" />
+            </button>
+          </div>
+          <span class="ctl-sep" />
           <button class="pdf-search-toggle" @click="openPdfSearch" title="搜索 (Ctrl+F)">
             <n-icon :component="SearchOutline" />
           </button>
         </template>
+
+        <span class="ctl-sep" />
 
         <n-dropdown trigger="click" :options="viewModeOptions" @select="handleViewModeSelect">
           <n-button class="layout-switch" text title="切换布局">
@@ -108,11 +120,15 @@
           </n-button>
         </n-dropdown>
 
+        <span class="ctl-sep" />
+
         <!-- 显示/隐藏笔记按钮 -->
-        <button class="toggle-notes" @click="toggleNotesPanel" :title="showNotes ? '隐藏笔记' : '显示笔记'">
+        <button class="toggle-notes" :class="{ active: showNotes }" @click="toggleNotesPanel"
+          :title="showNotes ? '隐藏笔记' : '显示笔记'">
           <n-icon :component="DocumentTextOutline" />
         </button>
-        <button class="toggle-assistant" @click="toggleAssistantPanel" :title="showAssistant ? '隐藏助手' : '显示助手'">
+        <button class="toggle-assistant" :class="{ active: showAssistant }" @click="toggleAssistantPanel"
+          :title="showAssistant ? '隐藏助手' : '显示助手'">
           <n-icon :component="ChatbubbleEllipsesOutline" />
         </button>
 
@@ -175,6 +191,7 @@
             :theme="viewerTheme"
             :features="newViewerFeatures"
             fit-mode="width"
+            :selected-highlight-id="selectedHighlight?.annotId || ''"
             @ready="onViewerReady"
             @page-change="onViewerPageChange"
             @outline="onViewerOutline"
@@ -290,7 +307,7 @@
       <div class="resize-handle" v-show="viewMode === 'split'" @mousedown="startResize"></div>
 
       <!-- 右侧Markdown内容 -->
-      <div class="markdown-panel guaxi-reader-scrollbar" v-show="viewMode !== 'full-left' || mdSearchVisible" @click="handleMarkdownClickAlt" @dblclick="handleMarkdownClick" @mousemove="handleMarkdownHover"
+      <div class="markdown-panel guaxi-reader-scrollbar" ref="markdownPanel" v-show="viewMode !== 'full-left' || mdSearchVisible" @click="handleMarkdownClickAlt" @dblclick="handleMarkdownClick" @mousemove="handleMarkdownHover"
         @mouseleave="handleMarkdownLeave" @mouseenter="onMarkdownEnter"
         @mouseup="handleSelectionMouseUp">
 
@@ -354,8 +371,9 @@
           <n-icon :component="CloseOutline" size="18" />
         </button>
       </div>
-      <div class="notes-content guaxi-reader-scrollbar" @mouseenter="setScrollTargetFromEvent">
-        <n-card v-for="(card, index) in noteCards" :key="card.id" class="note-card" size="small" :title="card.title"
+      <div class="notes-content guaxi-reader-scrollbar" ref="notesContentEl" @mouseenter="setScrollTargetFromEvent">
+        <n-card v-for="(card, index) in noteCards" :key="card.id" class="note-card"
+          :class="{ 'note-card--flashing': flashingNoteIndex === index }" size="small" :title="card.title"
           :bordered="true" :segmented="{
             content: true,
             footer: 'soft'
@@ -398,9 +416,18 @@
           </div>
 
           <template #footer>
-            <n-text depth="3" style="font-size: 12px;">
-              {{ formatTime(card.timestamp) }}
-            </n-text>
+            <div class="note-card-footer">
+              <n-text depth="3" style="font-size: 12px;">
+                {{ formatTime(card.timestamp) }}
+              </n-text>
+              <!-- 摘录的"回到原文"：跳到锚点所在页并把那段文字框出来。
+                   旧笔记、以及从别处建的卡没有锚点，就不显示这个入口。 -->
+              <button v-if="cardAnchor(card)" class="note-anchor-btn" type="button"
+                :title="`回到原文（第 ${cardAnchor(card).page} 页）`" @click.stop="jumpToNoteAnchor(card)">
+                <n-icon :component="LocateOutline" size="13" />
+                <span>第 {{ cardAnchor(card).page }} 页</span>
+              </button>
+            </div>
           </template>
         </n-card>
 
@@ -518,6 +545,7 @@ import {
   LibraryOutline,
   SearchOutline,
   ColorWandOutline,
+  LocateOutline,
   ChatboxEllipsesOutline,
   ChatbubbleEllipsesOutline,
   ArrowUndoOutline,
@@ -694,11 +722,18 @@ const handleReaderShortcuts = (e) => {
     if (ctrl && ((e.key === 'y' || e.key === 'Y') || (e.shiftKey && (e.key === 'z' || e.key === 'Z')))) {
       e.preventDefault(); redoHighlight(); return
     }
+    // 删除选中的高亮。和上面的撤销是一对，所以挨着放。
+    if (!ctrl && !e.altKey && (e.key === 'Backspace' || e.key === 'Delete') && selectedHighlight.value) {
+      e.preventDefault(); deleteSelectedHighlight(); return
+    }
+    if (e.key === 'Escape' && selectedHighlight.value) {
+      e.preventDefault(); clearHighlightSelection(); return
+    }
     // 旋转 Ctrl+[ / Ctrl+]
     if (ctrl && e.key === '[') { e.preventDefault(); viewerRotateLeft(); return }
     if (ctrl && e.key === ']') { e.preventDefault(); viewerRotateRight(); return }
-    // 平移模式切换：空格
-    if (!ctrl && !e.altKey && e.key === ' ') { e.preventDefault(); viewerTogglePan(); return }
+    // 平移：空格改为"按住临时平移"，由 GuaxiPdfViewer 自己在 window 上接管
+    // （它要按可见性判断，并且需要 keyup 收尾），这里不再抢占空格。
     // 阅读位置 Alt+← / Alt+→
     if (e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); goReadingBack(); return }
     if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); goReadingForward(); return }
@@ -775,6 +810,15 @@ onBeforeUnmount(() => {
 })
 
 const markdownContainer = ref(null);
+// 逐句朗读要的滚动容器：正文在 markdownContainer 里，真正滚动的是外层 .markdown-panel。
+// 另外四个阅读器（Word/Epub/Markdown/Text）都有这个 ref，只有本组件当初漏了，
+// 于是在 useReaderReadAloud 的 getContext 里抛 ReferenceError —— 朗读一点就报错。
+const markdownPanel = ref(null);
+// 笔记面板的滚动容器，以及"刚从 PDF 高亮跳过来"的那张卡的下标——
+// 只滚动落位的话，用户不一定认得出是哪张，所以再闪一下。
+const notesContentEl = ref(null);
+const flashingNoteIndex = ref(-1);
+let noteFlashTimer = null;
 const noteHtmls = ref([]);
 const compositeSegments = ref([]);
 let notesRenderToken = 0;
@@ -788,6 +832,9 @@ const selectionToolbarEl = ref(null)
 const SELECTION_TOOLBAR_WIDTH = 248
 const SELECTION_TOOLBAR_HEIGHT = 42
 const selectionText = ref('')
+// 最近一次 PDF 选区在文档里的位置（页码 + 页内矩形 pt）。必须在"选中的那一刻"取：
+// 离开那一步 DOM 选区就没了，矩形再也取不到。之后「插入笔记」建卡时拿它当来源锚点。
+const lastPdfSelectionAnchor = ref(null)
 const selectionBusy = ref(false)
 const selectionInsertText = ref('')
 // 划词朗读：一小段文本走一次性合成，与逐句朗读共用引擎但**不同实例**，互不阻塞。
@@ -993,7 +1040,10 @@ const newViewerFeatures = {
 // viewerStateTick 在每次操作后自增，强制这些 computed 重新求值（兼容键盘路径直接调 viewer）。
 const viewerStateTick = ref(0)
 const bindViewerState = () => { viewerStateTick.value++ }
-const viewerPanMode = computed(() => { void viewerStateTick.value; return !!pdfViewer.value?.state?.panMode?.value })
+const viewerPanActive = computed(() => {
+  void viewerStateTick.value
+  return !!pdfViewer.value?.state?.panMode?.value || !!pdfViewer.value?.state?.spaceHeld?.value
+})
 const viewerZoomPercent = computed(() => {
   void viewerStateTick.value
   return Math.round((pdfViewer.value?.state?.zoom?.value || 1) * 100)
@@ -1025,7 +1075,20 @@ const onViewerPageChange = (n) => {
   }
   currentPage.value = p
   jumpPage.value = p
-  loadMarkdownPage(p)
+  scheduleLoadMarkdownPage(p)
+}
+
+// 连续滚动时 onViewerPageChange 是逐页触发的：不防抖的话，快速划过 20 页就要跑 20 次
+// load_markdown_content + 20 次 markdown 转换与重渲染，右侧面板一路白闪。
+// 只有这条滚动路径防抖；离散的翻页/跳转/大纲定位仍直接调用 loadMarkdownPage 立即加载。
+const MD_LOAD_DEBOUNCE_MS = 140
+let mdLoadTimer = null
+const scheduleLoadMarkdownPage = (pageNum) => {
+  if (mdLoadTimer) clearTimeout(mdLoadTimer)
+  mdLoadTimer = setTimeout(() => {
+    mdLoadTimer = null
+    loadMarkdownPage(pageNum)
+  }, MD_LOAD_DEBOUNCE_MS)
 }
 
 // ─────────── 阅读位置历史（上一/下一阅读位置）───────────
@@ -1089,6 +1152,12 @@ const onViewerSelection = ({ text } = {}) => {
     const rect = selection.getRangeAt(0).getBoundingClientRect()
     if (!rect || (rect.width === 0 && rect.height === 0)) { closeSelectionToolbar(); return }
     selectionText.value = t
+    // 顺手记下这次选区在 PDF 里的位置，供随后「插入笔记」当来源锚点用。
+    const selInfo = pdfViewer.value?.getSelectionRects?.()
+    lastPdfSelectionAnchor.value =
+      selInfo?.page && Array.isArray(selInfo.rects) && selInfo.rects.length
+        ? { page: selInfo.page, rects: selInfo.rects }
+        : null
     const pad = 8
     const toolHeight = SELECTION_TOOLBAR_HEIGHT
     let top = rect.top - toolHeight - 8
@@ -1108,16 +1177,50 @@ const onViewerSelection = ({ text } = {}) => {
   })
 }
 
-const onViewerHighlightClick = async ({ annotId, page, note, color, rects } = {}) => {
+// 高亮的选中态。宿主持有它，是因为选中之后还要联动右侧笔记面板（滚到对应摘录卡）。
+const selectedHighlight = ref(null)
+
+const clearHighlightSelection = () => {
+  if (selectedHighlight.value) selectedHighlight.value = null
+}
+
+// 单击 = 选中，Alt+点击 = 删除。
+// 以前单击直接删：没有确认，而光标和悬停描边都像"选中"——等于把一个破坏性操作
+// 藏在一个看起来无害的手势里，误删只能靠 Ctrl+Z 捞回来。
+const onViewerHighlightClick = async ({ annotId, page, note, color, rects, altKey } = {}) => {
   if (!annotId) return
-  const pg = page || currentPage.value
+  const pg = Number(page) || currentPage.value
   // 删除前已由 viewer 带回 rects/color/note，用于撤销时重建。
   const snapshot = { page: pg, annotId, note: note || '', color, rects: Array.isArray(rects) ? rects : [] }
-  const ok = await pdfViewer.value?.deleteHighlight(pg, annotId)
-  if (ok) {
-    pushHighlightHistory({ type: 'delete', ...snapshot })
-    message.info('已删除高亮')
+
+  if (!altKey) {
+    selectedHighlight.value = snapshot
+    scrollNotesToHighlight(snapshot)
+    logger.info('[高亮] 选中', { page: pg, annotId })
+    return
   }
+
+  const ok = await deleteHighlightBySnapshot(snapshot)
+  if (ok) message.info('已删除高亮（Ctrl+Z 可撤销）')
+}
+
+// 删除一条高亮并记入撤销栈：Alt+点击和 Backspace 共用这一条路径。
+const deleteHighlightBySnapshot = async (snapshot) => {
+  if (!snapshot?.annotId) return false
+  const ok = await pdfViewer.value?.deleteHighlight(snapshot.page, snapshot.annotId)
+  if (!ok) return false
+  pushHighlightHistory({ type: 'delete', ...snapshot })
+  if (selectedHighlight.value?.annotId === snapshot.annotId) selectedHighlight.value = null
+  return true
+}
+
+// 删除当前选中的高亮（Backspace / Delete），和 Ctrl+Z 撤销是一对。
+const deleteSelectedHighlight = async () => {
+  const sel = selectedHighlight.value
+  if (!sel) return false
+  const ok = await deleteHighlightBySnapshot({ ...sel })
+  if (ok) message.info('已删除高亮（Ctrl+Z 可撤销）')
+  return ok
 }
 
 // ─────────── 高亮撤销/重做历史 ───────────
@@ -1133,6 +1236,8 @@ const pushHighlightHistory = (entry) => {
 const undoHighlight = async () => {
   const entry = highlightUndoStack.value.pop()
   if (!entry) { message.info('没有可撤销的高亮操作'); return }
+  // 撤销/重做会让 annot_id 变化（重建的高亮由后端重新分配），旧的选中项已经指向不存在的对象。
+  clearHighlightSelection()
   if (entry.type === 'add') {
     // 撤销新增 -> 删除
     const ok = await pdfViewer.value?.deleteHighlight(entry.page, entry.annotId)
@@ -1150,6 +1255,7 @@ const undoHighlight = async () => {
 const redoHighlight = async () => {
   const entry = highlightRedoStack.value.pop()
   if (!entry) { message.info('没有可重做的高亮操作'); return }
+  clearHighlightSelection()
   if (entry.type === 'add') {
     const r = await pdfViewer.value?.reAddHighlight({
       page: entry.page, rects: entry.rects, color: entry.color, note: entry.note,
@@ -2123,7 +2229,9 @@ const handleMarkdownClick = async (e) => {
     const noteData = {
       type: noteType,
       content: noteContent, // 使用原始Markdown作为内容
-      originalMarkdown: originalMarkdown // 新增：存储原始Markdown
+      originalMarkdown: originalMarkdown, // 新增：存储原始Markdown
+      // 右侧 markdown 面板显示的正是当前页的正文，所以"当前页"就是这个摘录的来源位置。
+      anchor: { page: Number(currentPage.value) || 1 }
     };
 
     logger.info('确定的笔记类型:', noteType);
@@ -2287,7 +2395,9 @@ const appendToCurrentNote = (element) => {
     content: element.content || element.originalMarkdown,
     originalMarkdown: element.originalMarkdown || element.content,
     original_markdown: element.originalMarkdown || element.content,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    // 复合笔记的每条各记各的来源位置：长按 Alt 连续收集时，几条很可能来自不同页。
+    anchor: element.anchor || null
   };
 
   // 添加到items数组
@@ -2688,9 +2798,12 @@ const insertSelectionResult = async () => {
   const text = selectionInsertText.value.trim()
   if (!text) return
 
+  // 带上这次选区的来源位置，笔记卡之后就能"回到原文"。
+  // 没有实时选区信息时退化成当前页——至少能跳回那一页。
+  const anchor = lastPdfSelectionAnchor.value || { page: Number(currentPage.value) || 1 }
   const ok = insertIntoActiveNoteEditor(text)
   if (!ok) {
-    await addToNotes({ type: 'text', content: text, originalMarkdown: text })
+    await addToNotes({ type: 'text', content: text, originalMarkdown: text, anchor })
   }
 
   message.success('已插入笔记', { duration: 1200 })
@@ -2759,6 +2872,8 @@ const handleGlobalMouseDown = (e) => {
 
   if (t.closest('.selection-toolbar')) return
   if (t.closest('.pot-selection-translate-panel')) return
+  // 点在高亮上时先别清选中：那一下正要把它选上（click 在 mousedown 之后才到）。
+  if (!t.closest('.gpv__hl-rect')) clearHighlightSelection()
   closeSelectionToolbar()
 }
 
@@ -3985,16 +4100,22 @@ const loadPdfPage = async (pageNum) => {
 };
 
 // 加载Markdown页面
+// 加载令牌：连续滚动时可能有多次加载并发在途，慢的那次若后返回，会把右侧盖回旧页的内容。
+// 每个 await 之后比对一次，过期请求直接丢掉结果。
+let mdLoadToken = 0;
 const loadMarkdownPage = async (pageNum) => {
+  const token = ++mdLoadToken;
   try {
     if (!markdownFilePath.value) {
       await updateMarkdownPath();
+      if (token !== mdLoadToken) return;
     }
 
     const response = await invoke('load_markdown_content', {
       filepath: markdownFilePath.value,
       page: pageNum - 1
     });
+    if (token !== mdLoadToken) return;
 
     if (!response.success) {
       throw new Error(response.error || 'Failed to load markdown');
@@ -4004,7 +4125,9 @@ const loadMarkdownPage = async (pageNum) => {
     const mdDir = await dirname(markdownFilePath.value);
     markdownContent.value = response.content;
     // logger.info("markdownContent.value:", markdownContent.value);
-    markdownLines.value = await convertPdfRenderMarkdown(markdownContent.value, { libraryBasePath: mdDir });
+    const lines = await convertPdfRenderMarkdown(markdownContent.value, { libraryBasePath: mdDir });
+    if (token !== mdLoadToken) return;
+    markdownLines.value = lines;
     logger.info("markdownLines.value:", markdownLines.value);
 
     await nextTick();
@@ -4138,6 +4261,66 @@ const formatTime = (timestamp) => {
   return new Date(timestamp).toLocaleString()
 }
 
+// 笔记卡的来源锚点：取第一条带锚点的条目。复合笔记可能跨多页，这里回到第一处。
+// 锚点形状是 { page, rects? }——rects 是页内 pt 矩形，没有它也能只跳页。
+const cardAnchor = (card) => {
+  const items = Array.isArray(card?.items) ? card.items : []
+  const hit = items.find((it) => it?.anchor && Number(it.anchor.page) > 0)
+  return hit ? hit.anchor : null
+}
+
+const jumpToNoteAnchor = (card) => {
+  const anchor = cardAnchor(card)
+  if (!anchor) return
+  const page = Number(anchor.page) || 1
+  logger.info('[笔记] 回到原文', { page, rects: Array.isArray(anchor.rects) ? anchor.rects.length : 0 })
+  if (useNewPdfViewer.value) {
+    pdfViewer.value?.flashAnchor?.(anchor)
+  } else {
+    goToPage(page)
+  }
+}
+
+// ─────────── 高亮 → 笔记卡 ───────────
+// 高亮存在 .pdf 里、笔记卡存在 JSON 里，两边没有互相引用，所以只能按位置认：
+// 同一页、且锚点矩形与高亮矩形有重叠 → 就是同一段文字既被高亮又被摘录。
+// 只读匹配、不改数据；匹配不到就什么都不做（旧笔记根本没有锚点）。
+const rectsOverlap = (a, b) => {
+  if (!a || !b) return false
+  return (
+    Math.min(a.x + a.w, b.x + b.w) > Math.max(a.x, b.x) &&
+    Math.min(a.y + a.h, b.y + b.h) > Math.max(a.y, b.y)
+  )
+}
+
+const flashNoteCard = (index) => {
+  flashingNoteIndex.value = index
+  nextTick(() => {
+    const el = notesContentEl.value?.querySelectorAll('.note-card')?.[index]
+    el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  })
+  if (noteFlashTimer) clearTimeout(noteFlashTimer)
+  noteFlashTimer = setTimeout(() => { flashingNoteIndex.value = -1 }, 1600)
+}
+
+const scrollNotesToHighlight = (hl) => {
+  const rects = Array.isArray(hl?.rects) ? hl.rects : []
+  // 笔记面板没开的时候不自动弹出来——那是个 600px 的浮层，不该被一次点击拽出来
+  if (!rects.length || !showNotes.value) return
+  const idx = noteCards.value.findIndex((card) =>
+    (Array.isArray(card?.items) ? card.items : []).some((it) => {
+      const a = it?.anchor
+      if (!a || Number(a.page) !== Number(hl.page) || !Array.isArray(a.rects)) return false
+      return a.rects.some((r1) => rects.some((r2) => rectsOverlap(r1, r2)))
+    })
+  )
+  if (idx < 0) {
+    logger.debug('[高亮] 未找到对应的笔记卡', { page: hl.page })
+    return
+  }
+  flashNoteCard(idx)
+}
+
 // 添加新卡片
 const addNewCard = () => {
   const now = Date.now();
@@ -4210,7 +4393,8 @@ const addToNotes = async (element) => {
       content: normalizedElement.content,
       originalMarkdown: normalizedElement.originalMarkdown,
       original_markdown: normalizedElement.originalMarkdown,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      anchor: normalizedElement.anchor || null
     }]
   };
 
@@ -4322,7 +4506,10 @@ const updateBackendNotes = async (action, cardData) => {
           type: item.type || 'text',
           content: item.content || '',
           original_markdown: item.original_markdown || item.originalMarkdown || item.content || '',
-          timestamp: item.timestamp || new Date().toISOString()
+          timestamp: item.timestamp || new Date().toISOString(),
+          // 来源锚点必须显式带上：后端 update_notes_file 是按结构体反序列化再落盘的，
+          // 这里不带过去，锚点在保存那一刻就没了（不会报错，只是静默丢失）。
+          ...(item.anchor ? { anchor: item.anchor } : {})
         })),
         timestamp: cardData.timestamp || new Date().toISOString()
       },
@@ -5277,6 +5464,14 @@ onBeforeUnmount(() => {
   document.removeEventListener('mousemove', handleMouseMove);
   document.removeEventListener('mouseup', stopResize);
   window.removeEventListener('keyup', handleKeyUp);
+  if (mdLoadTimer) {
+    clearTimeout(mdLoadTimer);
+    mdLoadTimer = null;
+  }
+  if (noteFlashTimer) {
+    clearTimeout(noteFlashTimer);
+    noteFlashTimer = null;
+  }
   outlineStore.setOutline([]);
 });
 
@@ -5365,18 +5560,8 @@ watchEffect((onInvalidate) => {
   overflow: hidden;
 }
 
-/* 35. 控制栏样式 */
-.pdf-controls {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  height: 28px;
-  padding: 6px 8px;
-  background-color: var(--guaxi-panel-bg);
-  border-bottom: 1px solid var(--guaxi-border);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-  overflow: hidden;
-}
+/* 35~42 的工具栏样式已抽到 readerChrome.css（.guaxi-reader-controls），六个阅读器共用一份；
+   这里只保留本组件自己的按钮基础样式，摘录/批注/卡片那些按钮还依赖它。 */
 
 /* 36. 按钮基础样式 */
 button {
@@ -5397,7 +5582,6 @@ button {
 button:hover {
   background-color: var(--guaxi-header-bg);
   border-color: var(--guaxi-border);
-  transform: translateY(-1px);
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
@@ -5434,130 +5618,6 @@ button:disabled {
 
 .dark .composite-note-editor {
   background-color: rgba(255, 255, 255, 0.04);
-}
-
-/* 37. 页面信息样式 */
-.page-info {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--guaxi-text-primary);
-  padding: 5px 8px;
-  background-color: var(--guaxi-panel-bg);
-  border-radius: 6px;
-  border: 1px solid var(--guaxi-border);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-}
-
-/* 38. 页面导航样式 */
-.page-navigation {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-shrink: 0;
-}
-
-.page-navigation input {
-  width: 50px;
-  padding: 6px;
-  text-align: center;
-  border: 1px solid var(--guaxi-border);
-  border-radius: 6px;
-  background-color: var(--guaxi-panel-bg);
-  color: var(--guaxi-text-primary);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-}
-
-/* 39. 右侧控制区样式 */
-.right-controls {
-  display: flex;
-  gap: 10px;
-  flex-shrink: 0;
-}
-
-/* 40. 缩放控制样式 */
-.zoom-level {
-  min-width: 20px;
-  text-align: center;
-  font-size: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 5px 8px;
-}
-
-.zoom-in,
-.zoom-out {
-  background-color: var(--guaxi-header-bg);
-  color: var(--guaxi-text-primary);
-  border: 1px solid var(--guaxi-border);
-}
-
-.zoom-in:hover,
-.zoom-out:hover {
-  background-color: var(--guaxi-header-bg);
-}
-
-.zoom-in:disabled,
-.zoom-out:disabled {
-  background-color: var(--guaxi-header-bg);
-  color: var(--guaxi-text-secondary);
-  cursor: not-allowed;
-}
-
-/* 41. 旋转按钮样式 */
-.rotate-left,
-.rotate-right,
-.fit-width,
-.pan-toggle,
-.pdf-search-toggle {
-  background-color: var(--guaxi-header-bg);
-  color: var(--guaxi-text-primary);
-  border: 1px solid var(--guaxi-border);
-  padding: 5px 8px;
-}
-
-.rotate-left:hover,
-.rotate-right:hover,
-.fit-width:hover,
-.pan-toggle:hover,
-.pdf-search-toggle:hover {
-  background-color: var(--guaxi-header-bg);
-}
-
-.right-controls button:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.pan-toggle.active {
-  background-color: #4dabf7;
-  color: #fff;
-  border-color: #339af0;
-}
-
-/* 42. 笔记按钮样式 */
-.toggle-notes {
-  background-color: #4dabf7;
-  color: white;
-  border: 1px solid #339af0;
-  transition: all 0.2s;
-}
-
-.toggle-notes:hover {
-  background-color: #339af0;
-  box-shadow: 0 2px 8px rgba(77, 171, 247, 0.3);
-}
-
-.toggle-assistant {
-  background-color: #7048e8;
-  color: white;
-  border: 1px solid #5f3dc4;
-  transition: all 0.2s;
-}
-
-.toggle-assistant:hover {
-  background-color: #5f3dc4;
-  box-shadow: 0 2px 8px rgba(112, 72, 232, 0.3);
 }
 
 /* 43. 导出按钮样式 */
@@ -5851,19 +5911,21 @@ button:disabled {
   transform: scale(1.02);
 }
 
-/* 54. 选中和高亮样式 */
+/* 54. 选中和高亮样式
+   跟着 App.vue 里那套共享的"命中"变量走（与 Monaco、预览、探索者一致），
+   不再自己写一套青色——之前这四种状态在四个地方各是一种颜色。 */
 .markdown-content :deep(.selected),
 .markdown-content :deep(.hovered) {
-  background-color: rgba(72, 215, 240, 0.2);
-  box-shadow: 0 0 0 2px rgba(65, 210, 230, 0.5);
+  background-color: var(--guaxi-search-hit-bg, rgba(234, 92, 0, 0.28));
+  box-shadow: 0 0 0 2px var(--guaxi-search-hit-active-border, rgba(246, 154, 60, 0.9));
   transform: scale(1.005);
   outline: none;
   cursor: pointer;
 }
 
 .markdown-content :deep(.selected) {
-  background-color: rgba(33, 213, 236, 0.3);
-  box-shadow: 0 0 0 3px rgba(85, 231, 207, 0.7);
+  background-color: var(--guaxi-search-hit-active-bg, rgba(234, 92, 0, 0.5));
+  box-shadow: 0 0 0 3px var(--guaxi-search-hit-active-border, rgba(246, 154, 60, 0.9));
 }
 
 /* 55. 选择消息样式 */
@@ -6325,14 +6387,42 @@ button:disabled {
 }
 
 /* 57. 笔记头部样式 */
+/* 笔记头部：原来是写死的饱和蓝色块 + 白字，暗色主题下就是面板顶上一整块突兀的亮色，
+   和面板自身的主题色也对不上。改成跟随主题的安静表面——与面板同色，靠一条分隔线
+   与内容区分开，标题用主题文字色。 */
 .notes-header {
   padding: 12px 16px;
-  background-color: #4dabf7;
-  color: white;
+  background-color: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-primary);
+  border-bottom: 1px solid var(--guaxi-border);
   display: flex;
   justify-content: space-between;
   align-items: center;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+/* 关闭键也要跟着走主题。头部原来是白字，而按钮底色由全局 button 规则给
+   （var(--guaxi-panel-bg)），叠在饱和色头部上就是"浅底白字"；暗色主题下同样对不上。 */
+.notes-header .close-btn,
+.assistant-header .close-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--guaxi-text-secondary);
+  box-shadow: none;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.notes-header .close-btn:hover,
+.assistant-header .close-btn:hover {
+  background: var(--guaxi-hover-bg);
+  color: var(--guaxi-text-primary);
+  transform: none;
+  box-shadow: none;
 }
 
 .notes-header h3 {
@@ -6372,12 +6462,12 @@ button:disabled {
 
 .assistant-header {
   padding: 12px 16px;
-  background-color: #7048e8;
-  color: white;
+  background-color: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-primary);
+  border-bottom: 1px solid var(--guaxi-border);
   display: flex;
   justify-content: space-between;
   align-items: center;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .assistant-header h3 {
@@ -6462,6 +6552,47 @@ button:disabled {
   box-shadow: 0 1px 2px -2px rgba(0, 0, 0, 0.08),
     0 3px 6px 0 rgba(0, 0, 0, 0.06),
     0 5px 12px 4px rgba(0, 0, 0, 0.04);
+}
+
+/* 卡片页脚：时间在左、"回到原文"在右。
+   按钮做成安静的胶囊——它是"跳转"这个动作，不是当前状态，所以不抢颜色，
+   只在悬停时用主题色把自己点亮。 */
+.note-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.note-anchor-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--guaxi-text-secondary);
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.note-anchor-btn:hover {
+  background: var(--guaxi-hover-bg);
+  border-color: var(--n-color-primary, #4dabf7);
+  color: var(--n-color-primary, #4dabf7);
+  transform: none;
+  box-shadow: none;
+}
+
+/* 从 PDF 高亮跳过来的那张卡：只滚动落位不够，用户认不出是哪张，所以再圈一下。
+   用 color-mix 而不是直接写主题色，明暗两套主题下都不会过重。 */
+.note-card.note-card--flashing {
+  border-color: var(--n-color-primary, #4dabf7);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--n-color-primary, #4dabf7) 55%, transparent),
+    0 4px 14px -4px color-mix(in srgb, var(--n-color-primary, #4dabf7) 40%, transparent);
 }
 
 /* 61. 添加卡片容器样式 */
@@ -6593,66 +6724,9 @@ button:disabled {
 }
 
 
-/* 68. 翻译按钮样式 */
-.toggle-translate {
-  background-color: #7950f2;
-  color: white;
-  border: 1px solid #6741d9;
-  transition: all 0.2s;
-}
-
-.toggle-translate:hover {
-  background-color: #6741d9;
-  box-shadow: 0 2px 8px rgba(121, 80, 242, 0.3);
-}
-
-/* 朗读按钮：播放中换成醒目的橙色，让"正在朗读"一眼可辨 */
-.toggle-readaloud {
-  background-color: #0ca678;
-  color: white;
-  border: 1px solid #099268;
-  transition: all 0.2s;
-}
-
-.toggle-readaloud:hover {
-  background-color: #099268;
-  box-shadow: 0 2px 8px rgba(12, 166, 120, 0.3);
-}
-
-.toggle-readaloud.reading-aloud {
-  background-color: #f76707;
-  border-color: #e8590c;
-}
-
-.toggle-readaloud.reading-aloud:hover {
-  background-color: #e8590c;
-}
-
-/* 69. Markdown行样式 */
-.markdown-line {
-  margin-bottom: 1em;
-}
-
-/* 70. 原文和译文样式 */
-.original-content {
-  padding: 8px;
-  border-radius: 4px;
-  background-color: rgba(255, 255, 255, 0.8);
-}
-
-.translated-content {
-  padding: 8px;
-  margin-top: 4px;
-  border-radius: 4px;
-  background-color: rgba(245, 245, 245, 0.8);
-  border-left: 3px solid #7950f2;
-  color: #555;
-}
-
-.error-translation {
-  border-left: 3px solid #ff6b6b;
-  background-color: rgba(255, 107, 107, 0.05);
-}
+/* 翻译/朗读按钮的状态样式、以及右栏的双语行（.markdown-line / .original-content /
+   .translated-content / .skipped-translation / .error-translation）都已抽到
+   readerChrome.css，六个阅读器共用一份 —— 之前每个阅读器各抄一份，改一处要记得改六处。 */
 
 .translation-error-message {
   color: #ff6b6b;
@@ -6702,7 +6776,7 @@ button:disabled {
   left: 0;
   right: 0;
   height: 2px;
-  background-color: #4dabf7;
+  background-color: var(--n-color-primary, #4dabf7);
   animation: translating-progress 2s infinite;
 }
 
@@ -6716,20 +6790,22 @@ button:disabled {
   }
 }
 
+/* 导轨由 readerChrome.css 的 .skipped-translation 给（inset box-shadow）。
+   这里不要再写 border-left——两者叠加会在译文块左边出现两条竖线。 */
 .skipped-translation {
   opacity: 0.7;
-  border-left: 3px solid #ccc;
   padding-left: 8px;
   margin-left: 4px;
   font-style: italic;
-  color: #666;
+  color: var(--guaxi-text-secondary);
 }
 
 .translation-skipped-marker {
   display: inline-block;
   font-size: 0.8em;
-  background-color: #f0f0f0;
-  color: #999;
+  /* 原来写死浅灰底 + #999 字，暗色主题下是一块发亮的色片 */
+  background-color: var(--guaxi-hover-bg);
+  color: var(--guaxi-text-secondary);
   padding: 2px 6px;
   border-radius: 4px;
   margin-left: 8px;

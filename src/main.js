@@ -39,6 +39,9 @@ import vscodeFileTypeSvg from '@iconify-icons/vscode-icons/file-type-svg'
 import vscodeFileTypeAudio from '@iconify-icons/vscode-icons/file-type-audio'
 import vscodeFileTypeVideo from '@iconify-icons/vscode-icons/file-type-video'
 import "pdfjs-dist/web/pdf_viewer.css";
+// 六个阅读器共用的外壳样式（工具栏 + 双语行）。选择器都带 .guaxi-reader-controls 前缀，
+// 不会外溢；放在全局是为了让它们只有一份，而不是每个阅读器各抄一份然后各自漂移。
+import "./components/ReaderComponent/readerChrome.css";
 import App from "./App.vue";
 import router from "./router";
 import { createPinia } from 'pinia';

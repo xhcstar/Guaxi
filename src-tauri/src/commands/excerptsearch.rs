@@ -17,6 +17,11 @@ pub struct ExcerptItem {
     r#type: String,
     content: String,
     timestamp: String,
+    /// 来源锚点，和 guaxireader::NoteItem::anchor 是同一份数据。
+    /// 这里必须一起声明：read_excerpt_file 会把文件反序列化成这个结构再交给前端，
+    /// 少一个字段，摘录搜索结果里的锚点在读取时就被丢掉（磁盘上的 JSON 其实还在）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    anchor: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

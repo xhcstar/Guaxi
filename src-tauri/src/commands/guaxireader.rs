@@ -52,6 +52,11 @@ pub struct NoteItem {
     pub content: String,
     pub original_markdown: String,
     pub timestamp: String, // ISO 8601格式字符串
+    /// 摘自原文的位置锚点：PDF 是 { page, rects }，供笔记卡"回到原文"。
+    /// 类型用 Value 而不是具体结构——不同来源的锚点形状不同（页+矩形 / 行号），
+    /// 后端只做原样存取，不必跟着每种来源改。旧笔记没有这个字段，走 default。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

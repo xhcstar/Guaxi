@@ -1,0 +1,271 @@
+/*
+ * 六个阅读器（Word / Epub / Markdown / Text / PDF / 转换版 PDF）共用的阅读器外壳样式。
+ *
+ * 为什么单独抽一个文件：这套工具栏以前在每个阅读器里各抄了一份，于是"美化一个阅读器"
+ * 就等于把另外五个落下——它们长得一模一样却不一致，改一处要记得改六处。
+ * 现在只此一份，加阅读器只要在工具栏容器上多挂一个 .guaxi-reader-controls 即可。
+ *
+ * 选择器都带 .guaxi-reader-controls 前缀，所以：
+ *   1. 不会外溢到应用其它地方；
+ *   2. 按钮规则写成容器 → 区域 → button 的三段式（如 .guaxi-reader-controls .right-controls button），
+ *      优先级 (0,2,1) 稳定压过各阅读器里那条组件级的 `button[data-v-xxx]` 基础规则。
+ *      不能只写 .guaxi-reader-controls button：(0,1,1) 和它同优先级，胜负取决于样式注入顺序，
+ *      而 SFC 的 scoped 样式在 main.js 之后注入 —— 那样规则会静默失效。
+ *
+ * 设计取向：整条栏里唯一的颜色来源是"当前生效的状态"。按钮无边框、无投影，悬停只换底色；
+ * 功能靠分组和位置区分，不靠颜色。以前笔记 / 助手 / 翻译 / 朗读各配一套饱和色（蓝 / 紫 / 紫 / 绿），
+ * 一排按钮比正文还抢眼。
+ */
+
+/* ── 容器：三区布局 + 底部阅读进度细线 ─────────────────────────── */
+.guaxi-reader-controls {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 10px;
+  background-color: var(--guaxi-panel-bg);
+  border-bottom: 1px solid var(--guaxi-border);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* 进度贴在工具栏下沿，宽度即 --pdf-progress（各阅读器用内联样式给）。
+   没给的话就是 0，不会出错。 */
+.guaxi-reader-controls::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: var(--pdf-progress, 0%);
+  background: var(--n-color-primary, #4dabf7);
+  opacity: 0.85;
+  transition: width 0.25s ease;
+}
+
+/* ── 左：阅读状态 ─────────────────────────────────────────── */
+.guaxi-reader-controls .page-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+}
+
+.guaxi-reader-controls .page-info > span:first-child {
+  color: var(--guaxi-text-primary);
+  font-weight: 500;
+  white-space: nowrap;
+  /* 面板变窄时优先牺牲这段状态文字而不是右侧按钮：省略号收尾，
+     读起来是"被截断"，而不是被硬切掉半个字。 */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.guaxi-reader-controls .page-info > span + span {
+  white-space: nowrap;
+  opacity: 0.85;
+}
+
+/* ── 中：翻页胶囊 ─────────────────────────────────────────── */
+.guaxi-reader-controls .page-navigation {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  padding: 2px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 8px;
+  background-color: rgba(127, 127, 127, 0.06);
+}
+
+.guaxi-reader-controls .page-navigation input {
+  width: 46px;
+  padding: 3px 4px;
+  text-align: center;
+  border: none;
+  border-radius: 5px;
+  background-color: transparent;
+  color: var(--guaxi-text-primary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.guaxi-reader-controls .page-navigation input:focus {
+  outline: none;
+  background-color: var(--guaxi-panel-bg);
+  box-shadow: inset 0 0 0 1px var(--n-color-primary, #4dabf7);
+}
+
+.guaxi-reader-controls .page-navigation input::-webkit-inner-spin-button,
+.guaxi-reader-controls .page-navigation input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* ── 右：控制区，按用途分组 ─────────────────────────────────── */
+.guaxi-reader-controls .right-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.guaxi-reader-controls .ctl-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.guaxi-reader-controls .ctl-sep {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 16px;
+  background: var(--guaxi-border);
+}
+
+/* ── 工具栏按钮统一形态：安静图标键 ───────────────────────────── */
+.guaxi-reader-controls .right-controls button,
+.guaxi-reader-controls .right-controls .layout-switch,
+.guaxi-reader-controls .page-navigation button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background-color: transparent;
+  color: var(--guaxi-text-secondary);
+  box-shadow: none;
+  font-size: 15px;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.guaxi-reader-controls .right-controls button:hover:not(:disabled),
+.guaxi-reader-controls .right-controls .layout-switch:hover,
+.guaxi-reader-controls .page-navigation button:hover:not(:disabled) {
+  background-color: var(--guaxi-hover-bg);
+  color: var(--guaxi-text-primary);
+  transform: none;
+  box-shadow: none;
+}
+
+.guaxi-reader-controls .right-controls button:disabled,
+.guaxi-reader-controls .page-navigation button:disabled {
+  background-color: transparent;
+  color: var(--guaxi-text-secondary);
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* 整条栏唯一的颜色来源：当前正在生效的状态 */
+.guaxi-reader-controls .right-controls button.active,
+.guaxi-reader-controls .right-controls .toggle-translate.translating,
+.guaxi-reader-controls .right-controls .toggle-readaloud.reading-aloud {
+  background-color: color-mix(in srgb, var(--n-color-primary, #4dabf7) 16%, transparent);
+  color: var(--n-color-primary, #4dabf7);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--n-color-primary, #4dabf7) 42%, transparent);
+}
+
+/* 朗读进行中用一圈呼吸光代替原来的橙色底——在同一个色板里做动静区分，
+   比为了"一眼可辨"再往工具栏里插一个颜色干净得多。 */
+.guaxi-reader-controls .right-controls .toggle-readaloud.reading-aloud {
+  animation: guaxi-readaloud-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes guaxi-readaloud-pulse {
+  0%,
+  100% {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--n-color-primary, #4dabf7) 28%, transparent);
+  }
+
+  50% {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--n-color-primary, #4dabf7) 70%, transparent),
+      0 0 8px color-mix(in srgb, var(--n-color-primary, #4dabf7) 35%, transparent);
+  }
+}
+
+/* ── 缩放胶囊：− 154% + 是同一件事的三部分，不该看着像三个独立按钮 ── */
+.guaxi-reader-controls .ctl-group--zoom,
+.guaxi-reader-controls .right-controls .zoom-cluster {
+  gap: 0;
+  padding: 2px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 8px;
+  background-color: rgba(127, 127, 127, 0.06);
+}
+
+.guaxi-reader-controls .zoom-level {
+  min-width: 42px;
+  padding: 0 4px;
+  text-align: center;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--guaxi-text-secondary);
+  user-select: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .guaxi-reader-controls::after {
+    transition: none;
+  }
+
+  .guaxi-reader-controls .right-controls .toggle-readaloud.reading-aloud {
+    animation: none;
+    box-shadow: inset 0 0 0 1px var(--n-color-primary, #4dabf7);
+  }
+}
+
+/* ── 右栏的原文 / 译文双语行 ───────────────────────────────────
+   原文与译文是一对，用一条贯通两者的左侧导轨把它们绑在一起，而不是两个各自带底色的盒子——
+   并排的盒子会被读成两段互不相干的内容，上下扫视时也就看不出哪句对哪句。
+   悬停时整对一起浮起，进一步强化"这是一组"。 */
+.markdown-line {
+  margin-bottom: 1em;
+  padding-left: 10px;
+  border-left: 2px solid transparent;
+  border-radius: 0 6px 6px 0;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+
+.markdown-line:hover {
+  border-left-color: var(--guaxi-border);
+  background-color: var(--guaxi-hover-bg);
+}
+
+/* 译文是"增量"信息，靠一层极淡的主题色底 + 一道导轨标出主次。
+   原来写死的 #7950f2 紫和 rgba(245,245,245,.8) 浅灰在暗色主题下既刺眼又读不动。 */
+.original-content {
+  padding: 8px;
+  border-radius: 4px;
+}
+
+.translated-content {
+  padding: 8px;
+  margin-top: 4px;
+  border-radius: 4px;
+  background-color: color-mix(in srgb, var(--n-color-primary, #4dabf7) 7%, transparent);
+  box-shadow: inset 3px 0 0 var(--n-color-primary, #4dabf7);
+  color: var(--guaxi-text-secondary);
+}
+
+/* 未翻译的段落：导轨换成中性色，表明"这不是译文" */
+.skipped-translation {
+  opacity: 0.7;
+  box-shadow: inset 3px 0 0 var(--guaxi-border);
+}
+
+/* 翻译失败：保留原有的红色语义，但导轨跟着走，不再是一条突兀的纯色块 */
+.error-translation {
+  background-color: rgba(255, 107, 107, 0.08);
+  box-shadow: inset 3px 0 0 #ff6b6b;
+}
