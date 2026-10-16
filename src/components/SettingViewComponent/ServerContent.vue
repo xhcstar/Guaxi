@@ -9,7 +9,7 @@
         </div>
       </div>
       <n-space align="center" :size="10">
-        <n-text depth="3" class="srv-poll">每 3 秒自动刷新</n-text>
+        <n-text depth="3" class="srv-poll">每1小时自动刷新</n-text>
         <n-button size="small" tertiary :loading="refreshing" @click="refresh">刷新</n-button>
       </n-space>
     </div>
@@ -71,7 +71,7 @@ const services = ref([])
 const busy = reactive({})
 const refreshing = ref(false)
 
-const POLL_INTERVAL_MS = 3000
+const POLL_INTERVAL_MS = 3600000
 let pollTimer = null
 
 const statusText = (status) => ({
