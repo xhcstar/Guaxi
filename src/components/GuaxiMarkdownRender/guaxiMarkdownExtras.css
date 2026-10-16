@@ -1,122 +1,13 @@
 /*
  * 设计说明：
- * 1. 代码块配色（仅 Markdown 正文 fenced code，不影响 Monaco 里的 Python/Math Cell 编辑器）：
- *    - 亮色：沿用 highlight.js 的 atom-one-light（在 GuaxiMarker.js 里 import），即 "One Light"。
- *    - 暗色：此处提供 atom-one-dark(One Dark) 配色，作用域限定在 .dark-mode / .dark 下，
- *      覆盖 atom-one-light 的 .hljs* 规则（类选择器叠加，特异性更高）。
- *    settingsStore 在暗色时给 <html> 加 .dark-mode，故 html.dark-mode 选择器可全局生效。
+ * 1. 代码块配色不再放在这里。Markdown 代码块的 `.hljs-*` 颜色改由代码配色主题注入
+ *    （见 src/monaco/codeThemes.js）：同一时刻只把「当前主题 + 当前明暗」的那一张
+ *    highlight.js 样式表注入 <style>，因此不会出现多张主题互相覆盖，配色也等于上游主题本身。
+ *    GuaxiMarker.js 里 import 的 atom-one-light 保留为注入前的兜底。
  * 2. 图片布局：仅含图片的段落（相邻图片之间无其它 Markdown 元素 → markdown-it 归到同一段落）
  *    采用 flex 居中 + 自动换行：能并排就并排、放不下自动换行、整体居中，且不强制缩小到不可读。
  *    用 :has() 精确命中“纯图片段落”，不改 DOM，保留行号等数据属性；预览与探索者模式同源生效。
  */
-
-/* ===================== One Dark 代码块配色（暗色模式） ===================== */
-.dark-mode .hljs,
-.dark .hljs {
-  color: #abb2bf;
-  background: #282c34;
-}
-.dark-mode .hljs-comment,
-.dark-mode .hljs-quote,
-.dark .hljs-comment,
-.dark .hljs-quote {
-  color: #5c6370;
-  font-style: italic;
-}
-.dark-mode .hljs-doctag,
-.dark-mode .hljs-keyword,
-.dark-mode .hljs-formula,
-.dark .hljs-doctag,
-.dark .hljs-keyword,
-.dark .hljs-formula {
-  color: #c678dd;
-}
-.dark-mode .hljs-section,
-.dark-mode .hljs-name,
-.dark-mode .hljs-selector-tag,
-.dark-mode .hljs-deletion,
-.dark-mode .hljs-subst,
-.dark .hljs-section,
-.dark .hljs-name,
-.dark .hljs-selector-tag,
-.dark .hljs-deletion,
-.dark .hljs-subst {
-  color: #e06c75;
-}
-.dark-mode .hljs-literal,
-.dark .hljs-literal {
-  color: #56b6c2;
-}
-.dark-mode .hljs-string,
-.dark-mode .hljs-regexp,
-.dark-mode .hljs-addition,
-.dark-mode .hljs-attribute,
-.dark-mode .hljs-meta .hljs-string,
-.dark .hljs-string,
-.dark .hljs-regexp,
-.dark .hljs-addition,
-.dark .hljs-attribute,
-.dark .hljs-meta .hljs-string {
-  color: #98c379;
-}
-.dark-mode .hljs-attr,
-.dark-mode .hljs-variable,
-.dark-mode .hljs-template-variable,
-.dark-mode .hljs-type,
-.dark-mode .hljs-selector-class,
-.dark-mode .hljs-selector-attr,
-.dark-mode .hljs-selector-pseudo,
-.dark-mode .hljs-number,
-.dark .hljs-attr,
-.dark .hljs-variable,
-.dark .hljs-template-variable,
-.dark .hljs-type,
-.dark .hljs-selector-class,
-.dark .hljs-selector-attr,
-.dark .hljs-selector-pseudo,
-.dark .hljs-number {
-  color: #d19a66;
-}
-.dark-mode .hljs-symbol,
-.dark-mode .hljs-bullet,
-.dark-mode .hljs-link,
-.dark-mode .hljs-meta,
-.dark-mode .hljs-selector-id,
-.dark-mode .hljs-title,
-.dark .hljs-symbol,
-.dark .hljs-bullet,
-.dark .hljs-link,
-.dark .hljs-meta,
-.dark .hljs-selector-id,
-.dark .hljs-title {
-  color: #61aeee;
-}
-.dark-mode .hljs-built_in,
-.dark-mode .hljs-title.class_,
-.dark-mode .hljs-class .hljs-title,
-.dark .hljs-built_in,
-.dark .hljs-title.class_,
-.dark .hljs-class .hljs-title {
-  color: #e6c07b;
-}
-.dark-mode .hljs-title.function_,
-.dark-mode .hljs-function .hljs-title,
-.dark .hljs-title.function_,
-.dark .hljs-function .hljs-title {
-  color: #61afef;
-}
-.dark-mode .hljs-emphasis,
-.dark .hljs-emphasis {
-  font-style: italic;
-}
-.dark-mode .hljs-strong,
-.dark .hljs-strong {
-  font-weight: 700;
-}
-.dark-mode .hljs-link,
-.dark .hljs-link {
-  text-decoration: underline;
-}
 
 /* ===================== 图片布局：纯图片段落 flex 居中自适应 ===================== */
 /* 普通段落内的图片始终响应式，避免溢出容器 */

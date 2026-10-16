@@ -198,7 +198,20 @@
               @update:value="handleLspHighlightChange"
             />
           </n-form-item>
+          <n-form-item label="代码配色主题">
+            <n-select
+              v-model:value="codeTheme"
+              :options="codeThemeOptions"
+              :disabled="loading"
+              style="max-width: 240px"
+              @update:value="handleCodeThemeChange"
+            />
+          </n-form-item>
         </n-form>
+        <p class="description">
+          代码配色同时作用于编辑器里的代码块、探索者 cell，以及 Markdown 预览/阅读器/导出的代码块。
+          每套主题自带亮色与暗色两套配色，随外观主题自动切换。
+        </p>
         <LspExtensionPanel />
 
         <h3>AI 代码辅助</h3>
@@ -320,6 +333,7 @@ import { createLogger } from '../../utils/logger'
 import { ref, computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { buildSpeakerOptions, describeSpeaker } from '../../utils/ttsSpeakers'
 import { NCard, NSpace, NDivider, NForm, NFormItem, NInputNumber, NInput, NButton, NAlert, NSwitch, NSelect } from 'naive-ui'
+import { DEFAULT_CODE_THEME_ID, GUAXI_CODE_THEMES } from '../../monaco/codeThemes'
 import { invoke } from '@tauri-apps/api/core'
 import { useSettingsStore } from '../../stores/settingsStore'
 import LspExtensionPanel from './LspExtensionPanel.vue'
@@ -355,6 +369,9 @@ const themeOptions = [
 const themeValue = ref('light')
 const gcCycleHours = ref(1)
 const lspHighlightEnabled = ref(false)
+const codeTheme = ref(DEFAULT_CODE_THEME_ID)
+// 主题清单是前端资产（每套自带明暗两套调色板 + 上游 highlight.js 样式表），后端只存 id 字符串。
+const codeThemeOptions = GUAXI_CODE_THEMES.map((theme) => ({ label: theme.label, value: theme.id }))
 const pythonCodegenAssistEnabled = ref(false)
 const webrtcSignalUrl = ref('')
 const terminalDefaultProfile = ref('powershell')
@@ -452,6 +469,7 @@ onMounted(async () => {
     ])
 
     themeValue.value = settingsStore.appearanceTheme
+    codeTheme.value = settingsStore.codeTheme
   } catch (error) {
     logger.error('加载偏好设置失败:', error)
     gcCycleHours.value = 1
@@ -529,6 +547,20 @@ const handleLspHighlightChange = async (value) => {
     )
   } catch (error) {
     logger.error('更新 LSP 语法高亮配置失败:', error)
+  } finally {
+    loading.value = false
+  }
+}
+
+const handleCodeThemeChange = async (value) => {
+  try {
+    loading.value = true
+    // 走 store：它一次性完成「落库 + 换掉 Markdown 代码块样式表 + 让 Monaco 重新应用主题」，
+    // 避免这里再单独 invoke 一次后端。
+    await settingsStore.setCodeTheme(value)
+    codeTheme.value = settingsStore.codeTheme
+  } catch (error) {
+    logger.error('更新代码配色主题失败:', error)
   } finally {
     loading.value = false
   }

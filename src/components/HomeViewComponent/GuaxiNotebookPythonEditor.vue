@@ -104,77 +104,36 @@ const NOTEBOOK_TREE_SITTER_TOKEN_CLASS_BY_TYPE = Object.fromEntries(
   ])
 )
 
-const buildNotebookUtf8LineIndex = (text) => {
-  const encoder = new TextEncoder()
-  const lineStartBytes = [0]
-  const lineStartOffsets = [0]
-  let byteOffset = 0
-  for (let offset = 0; offset < text.length;) {
-    const codePoint = text.codePointAt(offset) || 0
-    const char = String.fromCodePoint(codePoint)
-    byteOffset += encoder.encode(char).length
-    offset += char.length
-    if (char === '\n') {
-      lineStartBytes.push(byteOffset)
-      lineStartOffsets.push(offset)
-    }
-  }
-  return { encoder, lineStartBytes, lineStartOffsets }
-}
-
-const findNotebookLineForByte = (lineStartBytes, byteOffset) => {
-  let low = 0
-  let high = lineStartBytes.length - 1
-  while (low <= high) {
-    const mid = Math.floor((low + high) / 2)
-    if (lineStartBytes[mid] <= byteOffset) low = mid + 1
-    else high = mid - 1
-  }
-  return Math.max(0, high)
-}
-
-const notebookPositionFromByteOffset = (text, index, byteOffset) => {
-  const line = findNotebookLineForByte(index.lineStartBytes, byteOffset)
-  const lineStartByte = index.lineStartBytes[line]
-  const lineStartOffset = index.lineStartOffsets[line]
-  const targetBytes = Math.max(0, byteOffset - lineStartByte)
-  let consumedBytes = 0
-  let column = 0
-  for (let offset = lineStartOffset; offset < text.length && consumedBytes < targetBytes;) {
-    const codePoint = text.codePointAt(offset) || 0
-    const char = String.fromCodePoint(codePoint)
-    if (char === '\n') break
-    const charBytes = index.encoder.encode(char).length
-    if (consumedBytes + charBytes > targetBytes) break
-    consumedBytes += charBytes
-    column += char.length
-    offset += char.length
-  }
-  return { line, column }
-}
-
 const buildNotebookTreeSitterDecorations = (activeModel, spans) => {
   const text = activeModel?.getValue?.() || ''
-  const index = buildNotebookUtf8LineIndex(text)
   const decorations = []
 
   for (const span of spans || []) {
     if (!span || span.end_byte <= span.start_byte) continue
-    const start = notebookPositionFromByteOffset(text, index, span.start_byte)
-    const end = notebookPositionFromByteOffset(text, index, span.end_byte)
-    if (start.line !== end.line) continue
+    // 行列与 UTF-16 偏移都由后端一次算好（syntax_highlight.rs 的 resolve_token_span_positions）。
+    // 这里原本要为整个 cell 逐字符建一份 UTF-8 索引（每个字符一次 TextEncoder.encode），
+    // 现在只用后端给的数字：后端给 1 基列，换回这个文件用的 0 基。
+    const startLine = Number(span.line ?? 0)
+    const endLine = Number(span.end_line ?? 0)
+    const startColumn0 = Number(span.start_column ?? 0) - 1
+    const endColumn0 = Number(span.end_column ?? 0) - 1
+    if (startColumn0 < 0 || endColumn0 < 0) {
+      // 后端没给解析结果时不按 0 列去猜，否则会把整行染错。
+      continue
+    }
+    if (startLine !== endLine) continue
 
     const mappedType = mapTreeSitterCaptureToGuaxiToken(span.token_type, {
       sourceText: text,
-      startOffset: index.lineStartOffsets[start.line] + start.column,
+      startOffset: Number(span.start_utf16 ?? 0),
     })
     const className = NOTEBOOK_TREE_SITTER_TOKEN_CLASS_BY_TYPE[mappedType]
     if (!className) continue
 
-    const startColumn = start.column + 1
-    const endColumn = Math.max(startColumn, end.column + 1)
+    const startColumn = startColumn0 + 1
+    const endColumn = Math.max(startColumn, endColumn0 + 1)
     decorations.push({
-      range: new monacoRef.Range(start.line + 1, startColumn, start.line + 1, endColumn),
+      range: new monacoRef.Range(startLine + 1, startColumn, startLine + 1, endColumn),
       options: { inlineClassName: className },
     })
   }
@@ -366,11 +325,16 @@ const highlightVariableOccurrences = (variableName, reason = 'session-variable-f
   return true
 }
 
-// 大 cell 阈值（行数）：超过即对每键 O(n) 的 overlay 同步/高亮加大防抖，保证万行 cell 输入流畅。
+// 大 cell 阈值：超过即对每键 O(n) 的 overlay 同步/高亮加大防抖，保证长 cell 输入流畅。
+// 除行数外也看字符数：几行长但很宽的 cell（比如粘贴进来的数据/长字符串）同样是 O(n) 的负担。
 const LARGE_NOTEBOOK_CELL_LINE_THRESHOLD = 2000
+const LARGE_NOTEBOOK_CELL_CHAR_THRESHOLD = 120000
 const isLargeNotebookCell = () => {
   try {
-    return !!model && typeof model.getLineCount === 'function' && model.getLineCount() > LARGE_NOTEBOOK_CELL_LINE_THRESHOLD
+    if (!model || typeof model.getLineCount !== 'function') return false
+    if (model.getLineCount() > LARGE_NOTEBOOK_CELL_LINE_THRESHOLD) return true
+    return typeof model.getValueLength === 'function'
+      && model.getValueLength() > LARGE_NOTEBOOK_CELL_CHAR_THRESHOLD
   } catch {
     return false
   }

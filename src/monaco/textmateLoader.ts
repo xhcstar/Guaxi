@@ -63,60 +63,6 @@ const normalizeTreeSitterLanguageId = (languageId: string) => {
   return id
 }
 
-const buildUtf8LineIndex = (text: string) => {
-  const encoder = new TextEncoder()
-  const lineStartBytes = [0]
-  const lineStartOffsets = [0]
-  let byteOffset = 0
-  for (let offset = 0; offset < text.length;) {
-    const codePoint = text.codePointAt(offset) || 0
-    const char = String.fromCodePoint(codePoint)
-    byteOffset += encoder.encode(char).length
-    offset += char.length
-    if (char === '\n') {
-      lineStartBytes.push(byteOffset)
-      lineStartOffsets.push(offset)
-    }
-  }
-  return { encoder, lineStartBytes, lineStartOffsets }
-}
-
-const findLineForByte = (lineStartBytes: number[], byteOffset: number) => {
-  let low = 0
-  let high = lineStartBytes.length - 1
-  while (low <= high) {
-    const mid = Math.floor((low + high) / 2)
-    if (lineStartBytes[mid] <= byteOffset) low = mid + 1
-    else high = mid - 1
-  }
-  return Math.max(0, high)
-}
-
-const positionFromByteOffset = (
-  text: string,
-  index: ReturnType<typeof buildUtf8LineIndex>,
-  byteOffset: number
-) => {
-  const line = findLineForByte(index.lineStartBytes, byteOffset)
-  const lineStartByte = index.lineStartBytes[line]
-  const lineStartOffset = index.lineStartOffsets[line]
-  const targetBytes = Math.max(0, byteOffset - lineStartByte)
-  let consumedBytes = 0
-  let column = 0
-  for (let offset = lineStartOffset; offset < text.length && consumedBytes < targetBytes;) {
-    const codePoint = text.codePointAt(offset) || 0
-    const char = String.fromCodePoint(codePoint)
-    if (char === '\n') break
-    const charBytes = index.encoder.encode(char).length
-    if (consumedBytes + charBytes > targetBytes) break
-    consumedBytes += charBytes
-    column += char.length
-    offset += char.length
-  }
-  // charOffset：该字节位置对应的「字符偏移」（在传入的 text 内），供 token 映射判断点号成员调用。
-  return { line, column, charOffset: lineStartOffset + column }
-}
-
 const lineLengthAt = (model: monaco.editor.ITextModel, zeroBasedLine: number) => {
   const lineNumber = zeroBasedLine + 1
   if (lineNumber < 1 || lineNumber > model.getLineCount()) return 0
@@ -164,30 +110,39 @@ const encodeTreeSitterSemanticTokens = (
   sourceCode?: string,
 ) => {
   const text = typeof sourceCode === 'string' ? sourceCode : model.getValue()
-  const index = buildUtf8LineIndex(text)
   const rowsByRange = new Map<string, { row: number[]; priority: number }>()
 
   for (const span of spans || []) {
     if (span.end_byte <= span.start_byte) continue
-    const start = positionFromByteOffset(text, index, span.start_byte)
-    const end = positionFromByteOffset(text, index, span.end_byte)
-    const tokenType = mapTreeSitterSemanticTokenType(span, text, start.charOffset)
-    const tokenIndex = treeSitterSemanticTokenTypes.indexOf(tokenType)
-    if (tokenIndex < 0) continue
-
-    if (start.line === end.line) {
-      const length = Math.max(0, end.column - start.column)
-      upsertSemanticTokenRow(rowsByRange, start.line + lineOffset, start.column, length, tokenIndex, tokenType)
+    // 行列与字符偏移都由后端一次算好（syntax_highlight.rs 的 resolve_token_span_positions），
+    // 这里原本要为整段 code 逐字符建一份 UTF-8 索引（每个字符一次 TextEncoder.encode）。
+    // 后端给 1 基列，这个文件用 0 基，所以减 1。
+    const startLine = Number(span.line ?? 0)
+    const endLine = Number(span.end_line ?? 0)
+    const startColumn = Number(span.start_column ?? 0) - 1
+    const endColumn = Number(span.end_column ?? 0) - 1
+    if (startColumn < 0 || endColumn < 0) {
+      // 后端没给解析结果时不按 0 列去猜，否则整行都会染错。
       continue
     }
 
-    const firstLength = Math.max(0, lineLengthAt(model, start.line + lineOffset) - start.column)
-    upsertSemanticTokenRow(rowsByRange, start.line + lineOffset, start.column, firstLength, tokenIndex, tokenType)
-    for (let line = start.line + 1; line < end.line; line += 1) {
+    const tokenType = mapTreeSitterSemanticTokenType(span, text, Number(span.start_utf16 ?? 0))
+    const tokenIndex = treeSitterSemanticTokenTypes.indexOf(tokenType)
+    if (tokenIndex < 0) continue
+
+    if (startLine === endLine) {
+      const length = Math.max(0, endColumn - startColumn)
+      upsertSemanticTokenRow(rowsByRange, startLine + lineOffset, startColumn, length, tokenIndex, tokenType)
+      continue
+    }
+
+    const firstLength = Math.max(0, lineLengthAt(model, startLine + lineOffset) - startColumn)
+    upsertSemanticTokenRow(rowsByRange, startLine + lineOffset, startColumn, firstLength, tokenIndex, tokenType)
+    for (let line = startLine + 1; line < endLine; line += 1) {
       const length = lineLengthAt(model, line + lineOffset)
       upsertSemanticTokenRow(rowsByRange, line + lineOffset, 0, length, tokenIndex, tokenType)
     }
-    upsertSemanticTokenRow(rowsByRange, end.line + lineOffset, 0, end.column, tokenIndex, tokenType)
+    upsertSemanticTokenRow(rowsByRange, endLine + lineOffset, 0, endColumn, tokenIndex, tokenType)
   }
 
   const rows = Array.from(rowsByRange.values()).map((item) => item.row)

@@ -107,6 +107,21 @@ pub struct HighlightTokensRequest {
     pub language: Option<String>,
 }
 
+// Markdown 文档里的代码块以前是一个块一次 IPC、而且串行 await，几十个块就是几十次往返。
+// 这里把整篇的块合并成一次请求：未变化的块在 collect_highlight_token_spans 里直接命中 LRU，
+// 真正需要解析的只有当前正在编辑的那一两个块。
+#[derive(Debug, Deserialize)]
+pub struct HighlightTokensBatchRequest {
+    pub blocks: Vec<HighlightTokensRequest>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct HighlightTokensBatchResponse {
+    // 与请求里的 blocks 按位置一一对应，前端按顺序取回即可。
+    pub blocks: Vec<HighlightTokensResponse>,
+    pub elapsed_ms: u128,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct HighlightBatchRequest {
     pub blocks: Vec<HighlightCodeBlockRequest>,
@@ -139,11 +154,71 @@ pub struct HighlightBatchResponse {
     pub elapsed_ms: u128,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct HighlightTokenSpan {
     pub start_byte: usize,
     pub end_byte: usize,
     pub token_type: String,
+    // 前端要把 span 变成 Monaco decoration，需要的是「块内行号 + UTF-16 列」，不是字节偏移。
+    // 这段换算原本在前端逐字符做（每个字符还分配一个 Uint8Array），挪到这里一次前向扫描即可，
+    // 而且能随 span 一起进缓存——前端命中缓存时不必重算。
+    // line 为 0 基（相对传入的 code），列与 Monaco 一致：1 基、按 UTF-16 码元计。
+    pub line: usize,
+    pub start_column: usize,
+    pub end_line: usize,
+    pub end_column: usize,
+    // 0 基 UTF-16 偏移。token 类型判定（如"点号成员访问"）按 JS 字符串下标回看一个字符，
+    // 需要的是这个而不是字节偏移——多字节字符下两者不相等。
+    pub start_utf16: usize,
+}
+
+/// 把 UTF-8 字节偏移解析成 (0 基行号, 1 基 UTF-16 列)。
+/// 游标只前进不回退：把每个 span 的起止偏移按升序排好一次扫完，整体 O(code 长度)。
+///
+/// 语义要点：只消费**起点早于目标偏移**的字符。因此当偏移正好落在换行符上时，
+/// 停在上一行行尾（列 = 行尾 + 1）而不是下一行行首——前端原来的实现就是这么定义的。
+fn resolve_token_span_positions(code: &str, spans: &mut [HighlightTokenSpan]) {
+    if spans.is_empty() {
+        return;
+    }
+
+    let mut pending: Vec<(usize, bool, usize)> = Vec::with_capacity(spans.len() * 2);
+    for (index, span) in spans.iter().enumerate() {
+        pending.push((span.start_byte, false, index));
+        pending.push((span.end_byte, true, index));
+    }
+    pending.sort_unstable_by_key(|entry| entry.0);
+
+    let mut byte = 0usize;
+    let mut line = 0usize;
+    let mut column = 1usize;
+    let mut utf16 = 0usize;
+
+    for (target, is_end, index) in pending {
+        while byte < target {
+            // tree-sitter 给出的偏移一定落在字符边界上。
+            let Some(ch) = code[byte..].chars().next() else {
+                break;
+            };
+            byte += ch.len_utf8();
+            utf16 += ch.len_utf16();
+            if ch == '\n' {
+                line += 1;
+                column = 1;
+            } else {
+                column += ch.len_utf16();
+            }
+        }
+
+        if is_end {
+            spans[index].end_line = line;
+            spans[index].end_column = column;
+        } else {
+            spans[index].line = line;
+            spans[index].start_column = column;
+            spans[index].start_utf16 = utf16;
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -169,6 +244,20 @@ struct LanguageSpec {
 static HIGHLIGHT_CACHE: Lazy<Mutex<LruCache<u64, HighlightCodeResponse>>> = Lazy::new(|| {
     Mutex::new(LruCache::new(
         NonZeroUsize::new(HIGHLIGHT_CACHE_CAPACITY).expect("non-zero highlight cache capacity"),
+    ))
+});
+
+// 设计说明：
+// 1. token span 这条路径此前完全没有缓存：Markdown 的每个围栏代码块、探索者的每个 Python cell、
+//    以及 TreeSitter 的可视区语义高亮，同一段代码每次都要新建 Highlighter 再解析一遍。
+//    同文件里走 HTML 的 highlight_code_block 早就有 HIGHLIGHT_CACHE，token 路径漏了同样一层。
+// 2. 键与 HTML 路径保持一致（语言 + 代码内容），但不带 theme——token span 只有类型，不含颜色。
+// 3. 只缓存解析成功的结果：unsupported / 解析失败可能反映的是 server 侧状态，不该被记住。
+const TOKEN_SPANS_CACHE_CAPACITY: usize = 1024;
+
+static TOKEN_SPANS_CACHE: Lazy<Mutex<LruCache<u64, HighlightTokensResponse>>> = Lazy::new(|| {
+    Mutex::new(LruCache::new(
+        NonZeroUsize::new(TOKEN_SPANS_CACHE_CAPACITY).expect("non-zero token spans cache capacity"),
     ))
 });
 
@@ -382,6 +471,7 @@ fn push_latex_span(spans: &mut Vec<HighlightTokenSpan>, start_byte: usize, end_b
             start_byte,
             end_byte,
             token_type: token_type.to_string(),
+            ..Default::default()
         });
     }
 }
@@ -788,7 +878,7 @@ fn collect_latex_token_spans(
     }
 }
 
-fn collect_highlight_token_spans(code: &str, raw_language: &str, debug_id: u64) -> HighlightTokensResponse {
+fn compute_highlight_token_spans(code: &str, raw_language: &str, debug_id: u64) -> HighlightTokensResponse {
     let start = Instant::now();
     let requested_language = raw_language.to_string();
     let language = normalize_language(raw_language);
@@ -802,7 +892,9 @@ fn collect_highlight_token_spans(code: &str, raw_language: &str, debug_id: u64) 
     );
 
     if language == "latex" {
-        return collect_latex_token_spans(code, &requested_language, debug_id, start);
+        let mut response = collect_latex_token_spans(code, &requested_language, debug_id, start);
+        resolve_token_span_positions(code, &mut response.spans);
+        return response;
     }
 
     let Some(config) = HIGHLIGHT_CONFIGS.get(language.as_str()) else {
@@ -843,6 +935,7 @@ fn collect_highlight_token_spans(code: &str, raw_language: &str, debug_id: u64) 
                                     start_byte: start,
                                     end_byte: end,
                                     token_type: token_type.clone(),
+                                    ..Default::default()
                                 });
                             }
                         }
@@ -882,6 +975,9 @@ fn collect_highlight_token_spans(code: &str, raw_language: &str, debug_id: u64) 
         *token_type_counts.entry(span.token_type.clone()).or_insert(0) += 1;
     }
 
+    // 在这里一次算好行列，结果随 span 一起进 LRU：前端命中缓存时无需再逐字符换算。
+    resolve_token_span_positions(code, &mut spans);
+
     debug!(
         target: "syntax_highlight",
         debug_id,
@@ -901,6 +997,43 @@ fn collect_highlight_token_spans(code: &str, raw_language: &str, debug_id: u64) 
         engine: "tree-sitter-highlight".to_string(),
         elapsed_ms: start.elapsed().as_millis(),
     }
+}
+
+// 带 LRU 的对外入口：命中时只回填本次的 debug_id / 耗时，与 highlight_code_block 的做法一致。
+fn collect_highlight_token_spans(code: &str, raw_language: &str, debug_id: u64) -> HighlightTokensResponse {
+    let start = Instant::now();
+    let language = normalize_language(raw_language);
+    let key = cache_key(code, &language, "");
+
+    if let Some(cached) = TOKEN_SPANS_CACHE.lock().get(&key).cloned() {
+        debug!(
+            target: "syntax_highlight",
+            debug_id,
+            language,
+            code_bytes = code.len(),
+            span_count = cached.spans.len(),
+            elapsed_ms = start.elapsed().as_millis(),
+            "tree-sitter token cache hit"
+        );
+        return HighlightTokensResponse {
+            debug_id,
+            elapsed_ms: start.elapsed().as_millis(),
+            ..cached
+        };
+    }
+
+    let response = compute_highlight_token_spans(code, raw_language, debug_id);
+    if response.supported {
+        TOKEN_SPANS_CACHE.lock().put(
+            key,
+            HighlightTokensResponse {
+                debug_id: 0,
+                elapsed_ms: 0,
+                ..response.clone()
+            },
+        );
+    }
+    response
 }
 
 fn highlight_code_block(
@@ -1121,6 +1254,42 @@ pub async fn syntax_highlight_tokens(request: HighlightTokensRequest) -> Result<
 }
 
 #[tauri::command]
+pub async fn syntax_highlight_tokens_batch(
+    request: HighlightTokensBatchRequest,
+) -> Result<HighlightTokensBatchResponse, String> {
+    tokio::task::spawn_blocking(move || {
+        let start = Instant::now();
+        let block_count = request.blocks.len();
+        // 逐个走带缓存的计算：改动的块才真正解析，其余直接命中 LRU。
+        let blocks = request
+            .blocks
+            .into_iter()
+            .map(|block| {
+                collect_highlight_token_spans(
+                    &block.code,
+                    block.language.as_deref().unwrap_or("plaintext"),
+                    next_debug_id(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        info!(
+            target: "syntax_highlight",
+            block_count,
+            elapsed_ms = start.elapsed().as_millis(),
+            "tree-sitter token batch completed"
+        );
+
+        HighlightTokensBatchResponse {
+            blocks,
+            elapsed_ms: start.elapsed().as_millis(),
+        }
+    })
+    .await
+    .map_err(|error| format!("tree-sitter token batch task failed: {error}"))
+}
+
+#[tauri::command]
 pub async fn syntax_highlight_batch(request: HighlightBatchRequest) -> Result<HighlightBatchResponse, String> {
     tokio::task::spawn_blocking(move || highlight_batch_impl(request))
         .await
@@ -1179,4 +1348,91 @@ pub fn syntax_analyze_document(content: String, language: Option<String>) -> Res
         "endPosition": { "row": root.end_position().row, "column": root.end_position().column },
         "topLevelNodeKinds": node_kinds.into_iter().collect::<Vec<_>>(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 独立参考实现：直接从「目标偏移之前的那段文本」推导行列，不复用被测逻辑。
+    /// 语义与前端原实现一致——列是 1 基 UTF-16 码元数；偏移落在换行符上时停在上一行行尾。
+    fn reference_position(code: &str, byte_offset: usize) -> (usize, usize) {
+        let prefix = &code[..byte_offset];
+        let line = prefix.matches('\n').count();
+        let tail = prefix.rsplit('\n').next().unwrap_or("");
+        let column = tail.chars().map(|ch| ch.len_utf16()).sum::<usize>() + 1;
+        (line, column)
+    }
+
+    /// 独立参考实现：UTF-16 偏移就是「目标偏移之前那段文本按 UTF-16 计的长度」。
+    fn reference_utf16_offset(code: &str, byte_offset: usize) -> usize {
+        code[..byte_offset].encode_utf16().count()
+    }
+
+    fn span_at(start_byte: usize, end_byte: usize) -> HighlightTokenSpan {
+        HighlightTokenSpan {
+            start_byte,
+            end_byte,
+            token_type: "variable".to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// 这段换算一旦偏一个码元，中文笔记里的代码块配色就会整片错位，所以逐个字符边界比对。
+    #[test]
+    fn resolves_positions_at_every_char_boundary() {
+        let samples = [
+            "",
+            "\n",
+            "let a = 1;\nlet b = 2;\n",
+            "中文变量 = 2;\n另一行 = 3;\n",
+            "let e = \"😀\";\nlet f = 1;\n",
+            "a\n\n\nb",
+            "混合 mix 中文 😀\n第二行 second",
+            "没有换行的中文一行",
+        ];
+
+        for code in samples {
+            let mut offsets: Vec<usize> = code.char_indices().map(|(index, _)| index).collect();
+            offsets.push(code.len());
+
+            // 零宽区间（每个边界）+ 跨字符区间（每对相邻边界），覆盖 start/end 两种解析。
+            let mut spans: Vec<HighlightTokenSpan> =
+                offsets.iter().map(|offset| span_at(*offset, *offset)).collect();
+            for window in offsets.windows(2) {
+                spans.push(span_at(window[0], window[1]));
+            }
+
+            resolve_token_span_positions(code, &mut spans);
+
+            for span in &spans {
+                assert_eq!(
+                    (span.line, span.start_column),
+                    reference_position(code, span.start_byte),
+                    "start mismatch in {code:?} at byte {}",
+                    span.start_byte
+                );
+                assert_eq!(
+                    (span.end_line, span.end_column),
+                    reference_position(code, span.end_byte),
+                    "end mismatch in {code:?} at byte {}",
+                    span.end_byte
+                );
+                assert_eq!(
+                    span.start_utf16,
+                    reference_utf16_offset(code, span.start_byte),
+                    "start utf16 mismatch in {code:?} at byte {}",
+                    span.start_byte
+                );
+            }
+        }
+    }
+
+    /// 空输入不应该 panic，也不应该改动任何东西。
+    #[test]
+    fn handles_empty_span_list() {
+        let mut spans: Vec<HighlightTokenSpan> = Vec::new();
+        resolve_token_span_positions("let a = 1;", &mut spans);
+        assert!(spans.is_empty());
+    }
 }

@@ -2,20 +2,54 @@ import {
   buildGuaxiMonacoThemeRules,
   buildGuaxiSemanticTokenColors,
 } from './guaxiSyntaxTokens'
+import {
+  DEFAULT_CODE_THEME_ID,
+  getCodeThemePalette,
+  setActiveCodeThemeId,
+} from './codeThemes'
 
 // 设计说明：
 // 1. Monaco 的 theme 名称是全局注册表，同名 `guaxi-dark/guaxi-light` 被后注册者覆盖。
 // 2. 编辑器、Git 面板、Slidev 面板和 Notebook cell 都会使用这两个名字，因此语法 token 色板必须来自同一个文件。
 // 3. 各入口仍可保留自己的 editor 背景、补全面板等 UI 色值，但 rules 与 semanticTokenColors 不能再分叉。
+//
+// 代码主题功能：这两个对象改成「可变」的，由 refreshGuaxiMonacoThemePalettes 按当前激活的代码主题就地刷新。
+// 消费方读的是 `GUAXI_MONACO_THEME_RULES.light`，所以刷新后再注册即可换色，7 处调用点都不必改签名。
 
 export const GUAXI_MONACO_THEME_RULES = {
-  light: buildGuaxiMonacoThemeRules('light'),
-  dark: buildGuaxiMonacoThemeRules('dark'),
+  light: buildGuaxiMonacoThemeRules(getCodeThemePalette(DEFAULT_CODE_THEME_ID, 'light')),
+  dark: buildGuaxiMonacoThemeRules(getCodeThemePalette(DEFAULT_CODE_THEME_ID, 'dark')),
 }
 
 export const GUAXI_MONACO_SEMANTIC_TOKEN_COLORS = {
-  light: buildGuaxiSemanticTokenColors('light'),
-  dark: buildGuaxiSemanticTokenColors('dark'),
+  light: buildGuaxiSemanticTokenColors(getCodeThemePalette(DEFAULT_CODE_THEME_ID, 'light')),
+  dark: buildGuaxiSemanticTokenColors(getCodeThemePalette(DEFAULT_CODE_THEME_ID, 'dark')),
+}
+
+/** 按代码主题 + 明暗重算共享色板（就地替换，保持对象引用不变）。 */
+export const refreshGuaxiMonacoThemePalettes = (codeThemeId) => {
+  const active = setActiveCodeThemeId(codeThemeId)
+  GUAXI_MONACO_THEME_RULES.light = buildGuaxiMonacoThemeRules(getCodeThemePalette(active, 'light'))
+  GUAXI_MONACO_THEME_RULES.dark = buildGuaxiMonacoThemeRules(getCodeThemePalette(active, 'dark'))
+  GUAXI_MONACO_SEMANTIC_TOKEN_COLORS.light = buildGuaxiSemanticTokenColors(getCodeThemePalette(active, 'light'))
+  GUAXI_MONACO_SEMANTIC_TOKEN_COLORS.dark = buildGuaxiSemanticTokenColors(getCodeThemePalette(active, 'dark'))
+  return active
+}
+
+// Monaco 的 setTheme 是全局单例（整个 app 共用一份 monaco），
+// 所以代码主题变化时只要在这里调一次，所有 Monaco 实例会一起跟着变，不必逐个通知宿主组件。
+let lastMonacoRef = null
+
+/** 代码主题变化后：刷新共享色板 → 用同名重新注册 → 让全局主题重新生效。 */
+export const reapplyGuaxiMonacoCodeTheme = (codeThemeId, appearanceTheme) => {
+  refreshGuaxiMonacoThemePalettes(codeThemeId)
+  if (!lastMonacoRef) return
+  try {
+    defineGuaxiMonacoThemes(lastMonacoRef)
+    lastMonacoRef.editor.setTheme(getGuaxiMonacoTheme(appearanceTheme))
+  } catch (error) {
+    console.warn?.('[theme] reapply code theme failed', error)
+  }
 }
 
 /**
@@ -28,6 +62,8 @@ export const GUAXI_MONACO_SEMANTIC_TOKEN_COLORS = {
  * @param {typeof import('monaco-editor')} monaco
  */
 export function defineGuaxiMonacoThemes(monaco) {
+  // 记住实例：代码主题切换时要用它重新注册同名主题并让全局主题生效。
+  lastMonacoRef = monaco
   monaco.editor.defineTheme('guaxi-light', {
     base: 'vs',
     inherit: true,

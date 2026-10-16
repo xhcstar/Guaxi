@@ -166,8 +166,15 @@ export const getGuaxiSyntaxClassForCapture = (tokenType, options = {}) => {
   return getGuaxiSyntaxClassForToken(mapped, options?.prefix || 'md-fence-token')
 }
 
-export const buildGuaxiMonacoThemeRules = (themeName) => {
-  const palette = GUAXI_SYNTAX_TOKEN_COLORS[themeName] || GUAXI_SYNTAX_TOKEN_COLORS.light
+// 允许传 'light'/'dark'（历史调用方式）或直接传调色板对象（代码主题功能需要按主题取色）。
+// 兼容两种入参是为了不让 7 处既有调用点一起改签名。
+const resolveSyntaxPalette = (themeOrPalette) => {
+  if (themeOrPalette && typeof themeOrPalette === 'object') return themeOrPalette
+  return GUAXI_SYNTAX_TOKEN_COLORS[themeOrPalette] || GUAXI_SYNTAX_TOKEN_COLORS.light
+}
+
+export const buildGuaxiMonacoThemeRules = (themeOrPalette) => {
+  const palette = resolveSyntaxPalette(themeOrPalette)
   const tokenMap = {
     comment: 'comment',
     keyword: 'keyword',
@@ -222,8 +229,8 @@ export const buildGuaxiMonacoThemeRules = (themeName) => {
     }))
 }
 
-export const buildGuaxiSemanticTokenColors = (themeName) => {
-  const palette = GUAXI_SYNTAX_TOKEN_COLORS[themeName] || GUAXI_SYNTAX_TOKEN_COLORS.light
+export const buildGuaxiSemanticTokenColors = (themeOrPalette) => {
+  const palette = resolveSyntaxPalette(themeOrPalette)
   return {
     comment: palette.comment,
     string: palette.string,

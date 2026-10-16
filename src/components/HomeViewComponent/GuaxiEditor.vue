@@ -1458,7 +1458,7 @@ import { GUAXI_SHORTCUTS, matchesShortcut, shortcutText } from '../../composable
 import GuaxiOrgTaskPreview from './GuaxiOrgTaskPreview.vue'
 import { validateTaskBlocks, parseTaskBlocks, serializeBlock, replaceBlockInContent, buildNewBlock } from '../../utils/guaxiTaskParser'
 import GuaxiTerminalPanel from './GuaxiTerminalPanel.vue'
-import { EXPORT_SHELL_CSS, EXPORT_PYCELL_CSS } from './guaxiExportStyles'
+import { EXPORT_SHELL_CSS, EXPORT_PYCELL_CSS, buildExportCodeThemeCss } from './guaxiExportStyles'
 import { NTooltip, NIcon, useMessage, NDropdown, NPopover, NInputNumber, NBreadcrumb, NBreadcrumbItem, NSelect } from 'naive-ui'
 import { Icon } from '@iconify/vue'
 import { EyeOutline, LogoVimeo, CloseOutline, ExitOutline, SaveOutline, ArrowBackOutline, ArrowForwardOutline, AddOutline, BugOutline, DocumentAttachOutline, MicOutline } from '@vicons/ionicons5'
@@ -8219,57 +8219,6 @@ const shouldUseTreeSitterFenceHighlight = (languageId) => {
   return !!lang && TREE_SITTER_FENCE_HIGHLIGHT_LANGUAGES.has(lang);
 };
 
-const buildFenceUtf8LineIndex = (text) => {
-  const encoder = new TextEncoder();
-  const lineStartBytes = [0];
-  const lineStartOffsets = [0];
-  let byteOffset = 0;
-  for (let offset = 0; offset < text.length;) {
-    const codePoint = text.codePointAt(offset) || 0;
-    const char = String.fromCodePoint(codePoint);
-    byteOffset += encoder.encode(char).length;
-    offset += char.length;
-    if (char === '\n') {
-      lineStartBytes.push(byteOffset);
-      lineStartOffsets.push(offset);
-    }
-  }
-  return { encoder, lineStartBytes, lineStartOffsets };
-};
-
-const findFenceLineForByte = (lineStartBytes, byteOffset) => {
-  let low = 0;
-  let high = lineStartBytes.length - 1;
-  while (low <= high) {
-    const mid = Math.floor((low + high) / 2);
-    if (lineStartBytes[mid] <= byteOffset) low = mid + 1;
-    else high = mid - 1;
-  }
-  return Math.max(0, high);
-};
-
-const fencePositionFromByteOffset = (text, index, byteOffset) => {
-  const lineIndex = findFenceLineForByte(index.lineStartBytes, byteOffset);
-  const lineStartByte = index.lineStartBytes[lineIndex];
-  const lineStartOffset = index.lineStartOffsets[lineIndex];
-  const targetBytes = Math.max(0, byteOffset - lineStartByte);
-  let consumedBytes = 0;
-  let column = 0;
-
-  for (let offset = lineStartOffset; offset < text.length && consumedBytes < targetBytes;) {
-    const codePoint = text.codePointAt(offset) || 0;
-    const char = String.fromCodePoint(codePoint);
-    if (char === '\n') break;
-    const charBytes = index.encoder.encode(char).length;
-    if (consumedBytes + charBytes > targetBytes) break;
-    consumedBytes += charBytes;
-    column += char.length;
-    offset += char.length;
-  }
-
-  return { lineIndex, column: column + 1 };
-};
-
 const appendFenceBaseLineDecorations = (decorations, block, model, blockText) => {
   if (!decorations || !block || !model) return;
   const lineCount = Math.max(1, String(blockText || '').split('\n').length);
@@ -8289,7 +8238,6 @@ const appendTreeSitterFenceDecorations = (decorations, block, model, blockText, 
   const lineRanges = getEmbeddedBlockLineRanges({ ...block, blockText }, model);
   if (!lineRanges.length) return;
 
-  const index = buildFenceUtf8LineIndex(blockText);
   for (const span of spans) {
     const startByte = Number(span?.start_byte ?? span?.startByte ?? 0);
     const endByte = Number(span?.end_byte ?? span?.endByte ?? 0);
@@ -8298,12 +8246,30 @@ const appendTreeSitterFenceDecorations = (decorations, block, model, blockText, 
     const className = getGuaxiSyntaxClassForCapture(span?.token_type ?? span?.tokenType ?? '', {
       prefix: 'md-fence-token',
       sourceText: blockText,
-      startOffset: startByte,
+      // 这里要的是 JS 字符串下标（token 类型判定会 text[offset - 1] 回看一个字符判断是否点号成员访问），
+      // 所以用 UTF-16 偏移而不是字节偏移——块里只要出现过中文注释/字符串，两者就不相等。
+      // 纯 ASCII 块下两者相同，因此这个修正对既有观感没有影响，只修正含非 ASCII 的块。
+      startOffset: Number(span?.start_utf16 ?? startByte),
     });
     if (!className) continue;
 
-    const start = fencePositionFromByteOffset(blockText, index, startByte);
-    const end = fencePositionFromByteOffset(blockText, index, endByte);
+    // 行列由后端一次算好（resolve_token_span_positions），前端不再逐字符建 UTF-8 索引：
+    // 那是每个字符一次 String.fromCodePoint + TextEncoder.encode（各分配一个 Uint8Array），
+    // 而且是每轮高亮 pass 都要重跑一遍。现在它随 span 一起进缓存，命中时零成本。
+    const start = { lineIndex: Number(span?.line ?? 0), column: Number(span?.start_column ?? 0) };
+    const end = { lineIndex: Number(span?.end_line ?? 0), column: Number(span?.end_column ?? 0) };
+    if (!start.column || !end.column) {
+      // 前后端同包发布，正常不会走到这里；真走到了说明后端没给出解析结果，
+      // 宁可少装饰一段也不能按 0 列去猜——那会把整行染错。
+      logger.warn('[MarkdownFence][TreeSitter] span missing resolved positions, skipped', {
+        languageId: block.languageId,
+        tokenType: String(span?.token_type ?? ''),
+        startByte,
+        endByte,
+      });
+      continue;
+    }
+
     for (let lineIndex = start.lineIndex; lineIndex <= end.lineIndex; lineIndex += 1) {
       const lineRange = lineRanges[lineIndex];
       if (!lineRange) continue;
@@ -8486,6 +8452,94 @@ const fetchTreeSitterFenceTokenSpans = async (languageId, code, context = {}) =>
     });
     return null;
   }
+};
+
+// 按「语言 + 块内容」记账的结果表。块内容没变时结果必然相同。
+// 两个用途：
+//   markdownFenceSpanMemo —— 后端 tree-sitter 的 token span。打字过程中只有正在编辑的那一两个块
+//     需要重新请求后端；后端也有 LRU，但一道道请求本身（把块文本序列化上行）仍然要走 IPC。
+//   markdownFenceTokenLineMemo —— 非 tree-sitter 语言（css/json/yaml…）走 Monaco 自带 tokenizer 的结果，
+//     那是在**主线程**上跑的，整篇重涂时按块全部重跑一遍很浪费。
+const MARKDOWN_FENCE_SPAN_MEMO_LIMIT = 300;
+// tokenLines 是「数组的数组」，单条比 span 大得多，所以单独给一个更小的上限；
+// 它是纯提速缓存，被淘汰只是多跑一次 tokenizer，不影响正确性。
+const MARKDOWN_FENCE_TOKENLINE_MEMO_LIMIT = 150;
+// 记账表的键里带着整段块文本，所以超大块不进表：否则单条就可能留住几百 KB 的字符串。
+const MARKDOWN_FENCE_SPAN_MEMO_MAX_BLOCK_CHARS = 65536;
+const markdownFenceSpanMemo = new Map();
+const markdownFenceTokenLineMemo = new Map();
+
+const rememberBoundedMemoEntry = (memo, limit, key, value) => {
+  memo.delete(key);
+  memo.set(key, value);
+  while (memo.size > limit) {
+    const oldest = memo.keys().next().value;
+    if (oldest === undefined) break;
+    memo.delete(oldest);
+  }
+};
+
+const buildFenceMemoKey = (languageId, blockText) => `${languageId}\u0000${blockText}`;
+const isFenceMemoizable = (blockText) =>
+  String(blockText || '').length <= MARKDOWN_FENCE_SPAN_MEMO_MAX_BLOCK_CHARS;
+
+// 一次批量取回若干围栏代码块的 token span，返回值按「blocks 下标 → spans（不支持时为 null）」。
+// 设计说明：以前是每个块一次 invoke 且串行 await，一篇几十个块的笔记，每次输入停顿都要排队等几十次 IPC。
+const fetchFenceTokenSpansForBlocks = async (blocks, blockTexts, indexes, reason) => {
+  const spansByIndex = new Map();
+  const pending = [];
+  const requestBlocks = [];
+
+  for (const index of indexes) {
+    const languageId = normalizeTreeSitterFenceHighlightLanguage(blocks[index].languageId);
+    const blockText = blockTexts[index];
+    const memoizable = isFenceMemoizable(blockText);
+    const key = buildFenceMemoKey(languageId, blockText);
+    const cached = memoizable ? markdownFenceSpanMemo.get(key) : undefined;
+    if (cached) {
+      spansByIndex.set(index, cached.supported ? cached.spans : null);
+      continue;
+    }
+    pending.push({ index, key, memoizable });
+    requestBlocks.push({ code: blockText, language: languageId });
+  }
+
+  if (!requestBlocks.length) return spansByIndex;
+
+  try {
+    const response = await invoke('syntax_highlight_tokens_batch', {
+      request: { blocks: requestBlocks },
+    });
+    const results = Array.isArray(response?.blocks) ? response.blocks : [];
+
+    for (let i = 0; i < pending.length; i += 1) {
+      const target = pending[i];
+      const result = results[i];
+      if (!result) continue;
+      const supported = !!result.supported;
+      const spans = Array.isArray(result.spans) ? result.spans : [];
+      if (target.memoizable) {
+        rememberBoundedMemoEntry(markdownFenceSpanMemo, MARKDOWN_FENCE_SPAN_MEMO_LIMIT, target.key, { supported, spans });
+      }
+      spansByIndex.set(target.index, supported ? spans : null);
+    }
+
+    logger.debug('[MarkdownFence][TreeSitter] token batch resolved', {
+      reason,
+      requestedCount: requestBlocks.length,
+      reusedCount: indexes.length - requestBlocks.length,
+      backendElapsedMs: response?.elapsed_ms,
+    });
+  } catch (error) {
+    // 失败不写记忆表：下一轮换语言/换内容时还有机会重新拿到。
+    logger.warn('[MarkdownFence][TreeSitter] token batch request failed, fallback to Monaco tokenizer', {
+      reason,
+      requestedCount: requestBlocks.length,
+      error,
+    });
+  }
+
+  return spansByIndex;
 };
 
 const getEmbeddedBlockLineRanges = (embeddedCtx, model) => {
@@ -9379,7 +9433,8 @@ const getCachedMarkdownFenceBlocks = (model) => {
   return blocks;
 };
 
-// 大文档阈值（行数）：超过即启用「大文档自适应降级」。≤该值的文件行为完全不变。
+// 大文档阈值（沿用原语义，50000 行）。它被大纲生成、overlay 同步时机、问题分析/git 装饰三处共用，
+// 那三处都是「输入停顿多久后才刷新」的取舍，动手改阈值等于悄悄改这三处的响应时机，所以保持原样。
 const LARGE_DOCUMENT_LINE_THRESHOLD = 50000;
 const isLargeDocument = (model) => {
   try {
@@ -9389,11 +9444,27 @@ const isLargeDocument = (model) => {
   }
 };
 
-const shouldHighlightAllMarkdownFenceBlocks = (reason, model) => {
+// 整篇重新着色的代价正比于「这次要上色的代码行数」，不是文档总行数：
+// 一份两万行、只有几段短代码的笔记，整篇重涂很便宜；一份三千行、几乎全是代码块的笔记才贵。
+// 所以按代码块行数总额判，而不是拿文档长度当代理量——后者会误伤「长文里夹几段代码」这种常见写法。
+const HEAVY_HIGHLIGHT_BLOCK_LINE_BUDGET = 4000;
+const shouldLimitFenceHighlightToViewport = (blocks) => {
+  let codeLines = 0;
+  for (const block of blocks || []) {
+    codeLines += Math.max(0, Number(block?.blockEndLine || 0) - Number(block?.blockStartLine || 0) + 1);
+    if (codeLines > HEAVY_HIGHLIGHT_BLOCK_LINE_BUDGET) return true;
+  }
+  return false;
+};
+
+// 可视区向外扩一点，让视口外的相邻代码块预先上色。降级档下滚动过去时就不会先看到一段没上色的代码。
+const FENCE_HIGHLIGHT_VIEWPORT_MARGIN_LINES = 200;
+
+const shouldHighlightAllMarkdownFenceBlocks = (reason, blocks) => {
   const key = String(reason || '').toLowerCase();
-  // 大文档：内容编辑(debounced)时只高亮可视区，避免每次按键全量装饰所有代码块。
+  // 代码块很多时：内容编辑(debounced)只高亮可视区，避免每次按键把整篇重新装饰一遍。
   // 首次加载(init/content-sync/model)仍全量一次，保证打开即整篇着色。
-  if (isLargeDocument(model) && (key.includes('debounced') || key.includes('lsp-state'))) {
+  if (shouldLimitFenceHighlightToViewport(blocks) && (key.includes('debounced') || key.includes('lsp-state'))) {
     return false;
   }
   return key.includes('content-sync') ||
@@ -9417,10 +9488,13 @@ const updateMarkdownFenceSyntaxHighlight = async (targetEditor, reason) => {
     ? targetEditor.getVisibleRanges()
     : [];
   const allBlocks = getCachedMarkdownFenceBlocks(model);
-  const shouldHighlightAllBlocks = shouldHighlightAllMarkdownFenceBlocks(reason, model);
+  const shouldHighlightAllBlocks = shouldHighlightAllMarkdownFenceBlocks(reason, allBlocks);
+  // 降级档下可视区上下各留一段余量再取块：视口外紧邻的代码块会被一并上色，
+  // 快速滚动过去时不会先看到一段没上色的代码。全量档本来就是整篇，不受这里影响。
   let blocks = !shouldHighlightAllBlocks && visibleRanges.length
     ? allBlocks.filter((item) => visibleRanges.some((range) => (
-      item.blockEndLine >= range.startLineNumber && item.blockStartLine <= range.endLineNumber
+      item.blockEndLine >= range.startLineNumber - FENCE_HIGHLIGHT_VIEWPORT_MARGIN_LINES &&
+      item.blockStartLine <= range.endLineNumber + FENCE_HIGHLIGHT_VIEWPORT_MARGIN_LINES
     )))
     : allBlocks;
 
@@ -9483,18 +9557,24 @@ const updateMarkdownFenceSyntaxHighlight = async (targetEditor, reason) => {
     versionId,
   });
 
+  const blockTexts = blocks.map((block) => (
+    block.blockText ?? buildMarkdownFenceBlockText(model, block.blockStartLine, block.blockEndLine)
+  ));
+  const treeSitterBlockIndexes = [];
+  for (let i = 0; i < blocks.length; i += 1) {
+    if (shouldUseTreeSitterFenceHighlight(blocks[i].languageId)) treeSitterBlockIndexes.push(i);
+  }
+  const spansByIndex = await fetchFenceTokenSpansForBlocks(blocks, blockTexts, treeSitterBlockIndexes, reason);
+  if (state.requestSeq !== requestSeq) return;
+
   const decorations = [];
-  for (const block of blocks) {
-    const blockText = block.blockText ?? buildMarkdownFenceBlockText(model, block.blockStartLine, block.blockEndLine);
+  for (let blockIndex = 0; blockIndex < blocks.length; blockIndex += 1) {
+    const block = blocks[blockIndex];
+    const blockText = blockTexts[blockIndex];
     let appliedTreeSitterTokens = false;
 
-    if (shouldUseTreeSitterFenceHighlight(block.languageId)) {
-      const spans = await fetchTreeSitterFenceTokenSpans(block.languageId, blockText, {
-        reason,
-        blockStartLine: block.blockStartLine,
-        blockEndLine: block.blockEndLine,
-      });
-      if (state.requestSeq !== requestSeq) return;
+    if (spansByIndex.has(blockIndex)) {
+      const spans = spansByIndex.get(blockIndex);
       if (spans?.length) {
         appendFenceBaseLineDecorations(decorations, block, model, blockText);
         appendTreeSitterFenceDecorations(decorations, block, model, blockText, spans);
@@ -9529,12 +9609,32 @@ const updateMarkdownFenceSyntaxHighlight = async (targetEditor, reason) => {
     }
 
     if (!appliedTreeSitterTokens) {
-      try {
-        tokenLines = monaco.editor.tokenize(blockText || '', block.languageId) || [];
-      } catch (error) {
-        logger.warn('[MarkdownFence] tokenize failed', { language: block.languageId }, error);
-        appendFenceBaseLineDecorations(decorations, block, model, blockText);
-        continue;
+      // 非 tree-sitter 语言走 Monaco 自带的 tokenizer，那是在主线程上跑的；块内容没变时结果必然相同，
+      // 整篇重涂时按块全部重跑一遍是纯浪费，所以和 span 一样记账。
+      // 键用**原始** languageId：tokenize 用的就是它，而 Monaco 对 sh/bash 这类写法可能有各自的定义，
+      // 归一化后再做键会把两者的结果混在一起。
+      const tokenLineKey = buildFenceMemoKey(block.languageId, blockText);
+      const tokenLinesMemoizable = isFenceMemoizable(blockText);
+      const cachedTokenLines = tokenLinesMemoizable ? markdownFenceTokenLineMemo.get(tokenLineKey) : undefined;
+
+      if (cachedTokenLines) {
+        tokenLines = cachedTokenLines;
+      } else {
+        try {
+          tokenLines = monaco.editor.tokenize(blockText || '', block.languageId) || [];
+        } catch (error) {
+          logger.warn('[MarkdownFence] tokenize failed', { language: block.languageId }, error);
+          appendFenceBaseLineDecorations(decorations, block, model, blockText);
+          continue;
+        }
+        if (tokenLinesMemoizable) {
+          rememberBoundedMemoEntry(
+            markdownFenceTokenLineMemo,
+            MARKDOWN_FENCE_TOKENLINE_MEMO_LIMIT,
+            tokenLineKey,
+            tokenLines
+          );
+        }
       }
 
       // 设计思路：
@@ -9569,8 +9669,6 @@ const updateMarkdownFenceSyntaxHighlight = async (targetEditor, reason) => {
       }
       appendLanguageAwareFenceDecorations(decorations, block, model, blockText, reason);
     }
-
-    if (state.requestSeq !== requestSeq) return;
   }
 
   if (state.requestSeq !== requestSeq) return;
@@ -10364,6 +10462,20 @@ const getEmbeddedHostEditor = () => (
 )
 
 const provideEmbeddedVscodeCompletionSuggestions = async (virtualModel, positionInBlock, replaceRange, context, filterContext = null) => {
+  // ── 临时性能埋点（与 provideEmbeddedLspSuggestions 里的配套，定位完一起删）──
+  const perfT0 = performance.now()
+  let perfMark = perfT0
+  const perfVscodeLog = (stage, extra = {}) => {
+    logger.warn('[PerfVscode]', {
+      stage,
+      totalMs: Math.round(performance.now() - perfT0),
+      retainMs: Math.round(perfRetainAt - perfT0),
+      execMs: Math.round(perfExecAt - perfRetainAt),
+      ...extra,
+    })
+  }
+  let perfRetainAt = perfT0
+  let perfExecAt = perfT0
   try {
     await retainVsCodeTextModel({
       resource: virtualModel.uri,
@@ -10372,6 +10484,7 @@ const provideEmbeddedVscodeCompletionSuggestions = async (virtualModel, position
       owner: getMarkdownFenceVscodeModelOwner(virtualModel.getLanguageId?.() || ''),
       reason: 'embedded-vscode-completion',
     })
+    perfRetainAt = performance.now()
 
     const triggerCharacter = context?.triggerKind === monaco.languages.CompletionTriggerKind.TriggerCharacter
       ? String(context?.triggerCharacter || '')
@@ -10412,6 +10525,7 @@ const provideEmbeddedVscodeCompletionSuggestions = async (virtualModel, position
       ),
       completionTimeout,
     ])
+    perfExecAt = performance.now()
 
     if (result?.__guaxiCompletionTimeout) {
       logger.warn('[EmbeddedLsp] vscode completion command timed out', {
@@ -10422,6 +10536,7 @@ const provideEmbeddedVscodeCompletionSuggestions = async (virtualModel, position
         lineNumber: positionInBlock?.lineNumber || 0,
         column: positionInBlock?.column || 0,
       })
+      perfVscodeLog('timeout')
       return []
     }
 
@@ -10436,6 +10551,7 @@ const provideEmbeddedVscodeCompletionSuggestions = async (virtualModel, position
       itemCount: items.length,
       isIncomplete: !!result?.isIncomplete,
     })
+    perfVscodeLog('resolved', { items: items.length })
     if (!items.length) return []
 
     const suggestions = []
@@ -10634,6 +10750,21 @@ const buildEmbeddedReplaceRange = (model, position, embeddedCtx, virtualModel) =
 
 const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, context) => {
   if (!embeddedCtx) return [];
+  // ── 临时性能埋点：定位内嵌补全的时间花在哪一段。用 warn 级是因为前端 info/debug 不会写进 logfile.log。
+  //    只加计时，不改任何逻辑；定位完应整段删除。 ──
+  const perfStart = performance.now()
+  let perfMark = perfStart
+  const perf = {}
+  const perfStep = (name) => { const t = performance.now(); perf[name] = Math.round(t - perfMark); perfMark = t }
+  const perfLog = (stage, extra = {}) => {
+    logger.warn('[PerfCompletion]', {
+      languageId: embeddedCtx.languageId,
+      stage,
+      totalMs: Math.round(performance.now() - perfStart),
+      ...perf,
+      ...extra,
+    })
+  }
   const hostEditor = getEmbeddedHostEditor()
   const completionKey = buildEmbeddedCompletionCacheKey(model, position, embeddedCtx)
   if (completionKey && embeddedCompletionInFlightKeys.has(completionKey)) {
@@ -10657,8 +10788,10 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
     }, 0)
   }
   const virtualModel = prepareEmbeddedVirtualModel(embeddedCtx);
+  perfStep('prepare')
   if (!virtualModel) return [];
   const ready = await waitForLspConnection(embeddedCtx.languageId, EMBEDDED_LSP_READY_TIMEOUT_MS);
+  perfStep('waitConn')
   if (!ready) {
     logger.info('[EmbeddedLsp] completion skipped because connection is not ready', {
       languageId: embeddedCtx.languageId,
@@ -10668,12 +10801,16 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
       blockLineNumber: embeddedCtx.positionInBlock?.lineNumber || 0,
       blockColumn: embeddedCtx.positionInBlock?.column || 0,
     });
+    perfLog('not-ready')
     return [];
   }
 
   const replaceRange = buildEmbeddedReplaceRange(model, position, embeddedCtx, virtualModel);
+  perfStep('replaceRange')
   const filterContext = resolveEmbeddedCompletionFilterContext(model, position)
+  perfStep('filterCtx')
   const cachedSuggestions = readEmbeddedCompletionCache(hostEditor, model, position, embeddedCtx, replaceRange)
+  perfStep('cacheRead')
   if (cachedSuggestions.length) {
     logger.info('[EmbeddedLsp] completion resolved from hydrated cache', {
       languageId: embeddedCtx.languageId,
@@ -10685,6 +10822,7 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
       firstSuggestion: getCompletionItemLabelText(cachedSuggestions[0]?.label),
       firstSuggestionInsertText: String(cachedSuggestions[0]?.insertText || ''),
     })
+    perfLog('cache-hit', { items: cachedSuggestions.length })
     return cachedSuggestions
   }
   logger.debug('[EmbeddedLsp] resolved completion filter context', {
@@ -10707,6 +10845,7 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
     context,
     filterContext
   )
+  perfStep('vscodeCmd')
   if (vscodeSuggestions.length) {
     writeEmbeddedCompletionCache(hostEditor, model, position, embeddedCtx, vscodeSuggestions)
     if (hostEditor) {
@@ -10741,6 +10880,7 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
       firstSuggestion: getCompletionItemLabelText(vscodeSuggestions[0]?.label),
       firstSuggestionFilterText: String(vscodeSuggestions[0]?.filterText || ''),
     });
+    perfLog('vscode', { items: vscodeSuggestions.length })
     return vscodeSuggestions
   }
 
@@ -10751,6 +10891,7 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
     context || { triggerKind: monaco.languages.CompletionTriggerKind.Invoke },
     undefined
   )
+  perfStep('directLsp')
   if (directLspSuggestions.length) {
     const languageId = String(virtualModel.getLanguageId?.() || embeddedCtx.languageId || '')
     const mappedSuggestions = []
@@ -10792,6 +10933,7 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
       column: embeddedCtx.positionInBlock?.column || 0,
       firstSuggestion: getCompletionItemLabelText(dedupedDirectSuggestions[0]?.label),
     })
+    perfLog('direct', { raw: directLspSuggestions.length, kept: dedupedDirectSuggestions.length })
     if (dedupedDirectSuggestions.length) return dedupedDirectSuggestions
   }
 
@@ -10801,6 +10943,7 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
       languageId: embeddedCtx.languageId,
       documentUri: String(virtualModel.uri?.toString?.() || ''),
     });
+    perfLog('no-provider')
     return [];
   }
 
@@ -10874,6 +11017,7 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
     lineNumber: embeddedCtx.positionInBlock?.lineNumber || 0,
     column: embeddedCtx.positionInBlock?.column || 0,
   });
+  perfLog('monaco-providers', { items: dedupedSuggestions.length })
   return dedupedSuggestions;
 };
 
@@ -11709,6 +11853,7 @@ const initEditor = () => {
     reason: 'primary-editor-init',
   })
 
+
   void refreshLspEnabledSetting().then(() => {
     enableLspForEditorLanguage(editor, language, selectedFile.value?.path || '')
   })
@@ -11999,6 +12144,7 @@ const ensureSecondaryEditor = () => {
     owner: SECONDARY_EDITOR_VSCODE_MODEL_OWNER,
     reason: 'secondary-editor-init',
   })
+
 
   enableLspForEditorLanguage(secondaryEditor, language, rightPath || '');
   scheduleSourceSyntaxHighlight(secondaryEditor, 'init');
@@ -22733,7 +22879,7 @@ const buildPrintHtml = (bodyHtml, title, options = {}) => {
 <meta charset="utf-8" />
 ${baseTag}
 <title>${safeTitle}</title>
-<style>${EXPORT_SHELL_CSS}</style>
+<style>${EXPORT_SHELL_CSS}${buildExportCodeThemeCss()}</style>
 <style>${EXPORT_PYCELL_CSS}</style>
 </head>
 <body>

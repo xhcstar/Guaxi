@@ -100,6 +100,10 @@ pub struct AppConfig {
     pub disabled_services: Vec<String>,
     #[serde(default)]
     lsp_syntax_highlight_enabled: bool,
+    // 代码配色主题（编辑器语法色与 Markdown 代码块配色共用同一套）。取值是前端 codeThemes.js 里的主题 id。
+    // 这里只当字符串存、不校验取值：主题清单属于前端资产，后端不认识具体 id 时由前端回退到默认主题。
+    #[serde(default = "default_code_theme")]
+    code_theme: String,
     // 探索者笔记本的「注释/自然语言→生成 Python 代码」AI 辅助开关。
     // 默认关闭:未配置云端模型时会回退本地大模型,低配机器上提示很慢,由用户显式开启。
     #[serde(default)]
@@ -695,6 +699,12 @@ fn default_appearance_font_size() -> u8 {
     14
 }
 
+/// 代码配色主题的默认值：Atom One（暗色即 One Dark，亮色即 One Light）。
+/// 与前端 `src/monaco/codeThemes.js` 的 DEFAULT_CODE_THEME_ID 保持一致。
+fn default_code_theme() -> String {
+    "atom-one".to_string()
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct AppearanceConfig {
     #[serde(default = "default_appearance_theme")]
@@ -865,6 +875,7 @@ impl Default for AppConfig {
             device_id: Uuid::new_v4().to_string(),
             gc_cycle_seconds: default_gc_cycle_seconds(),
             lsp_syntax_highlight_enabled: false,
+            code_theme: default_code_theme(),
             python_codegen_assist_enabled: false,
             lsp_github_token: "".to_string(),
             webrtc_signal_url: "".to_string(),
@@ -1327,6 +1338,28 @@ pub fn get_lsp_syntax_highlight_enabled() -> bool {
 pub fn set_lsp_syntax_highlight_enabled(enabled: bool) {
     let mut config = load_config();
     config.lsp_syntax_highlight_enabled = enabled;
+    save_config(&config);
+}
+
+#[tauri::command]
+pub fn get_code_theme() -> String {
+    let config = load_config();
+    config.code_theme
+}
+
+#[tauri::command]
+pub fn set_code_theme(code_theme: String) {
+    let normalized = code_theme.trim().to_lowercase();
+    let next = if normalized.is_empty() {
+        default_code_theme()
+    } else {
+        normalized
+    };
+
+    info!(code_theme = next.as_str(), "set_code_theme");
+
+    let mut config = load_config();
+    config.code_theme = next;
     save_config(&config);
 }
 

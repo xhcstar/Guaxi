@@ -2,6 +2,8 @@
 import { defineStore } from "pinia";
 import { invoke } from '@tauri-apps/api/core'
 import { createLogger } from "../utils/logger"
+import { applyCodeThemeToDocument, DEFAULT_CODE_THEME_ID, normalizeCodeThemeId } from '../monaco/codeThemes'
+import { reapplyGuaxiMonacoCodeTheme } from '../monaco/guaxiMonacoThemes'
 
 const logger = createLogger("settingsStore")
 const console = {
@@ -20,6 +22,9 @@ export const useSettingsStore = defineStore("settings", {
     appearanceTheme: "light",
     appearanceFontSize: 14,
     appearanceLoaded: false,
+    // 代码配色主题（编辑器语法色 + Markdown 代码块配色共用同一套）
+    codeTheme: DEFAULT_CODE_THEME_ID,
+    codeThemeLoaded: false,
   }),
   actions: {
     setSelectedMenu(menu) {
@@ -35,11 +40,52 @@ export const useSettingsStore = defineStore("settings", {
       if (!document?.documentElement) return
       document.documentElement.dataset.guaxiTheme = t
       document.documentElement.classList.toggle('dark-mode', t === 'dark')
+      // 代码主题的明暗两套变量是随主题一起注入的，切明暗时只需把 Markdown 代码块那张样式表
+      // 换成对应版本，并让 Monaco 重新应用一次主题。
+      this.applyCodeTheme()
+    },
+
+    /** 把当前代码主题落到文档（`.hljs` 样式表）并让 Monaco 生效。幂等，可重复调用。 */
+    applyCodeTheme() {
+      applyCodeThemeToDocument(this.codeTheme, this.appearanceTheme)
+      reapplyGuaxiMonacoCodeTheme(this.codeTheme, this.appearanceTheme)
+    },
+
+    async loadCodeThemeConfig() {
+      if (this.codeThemeLoaded) {
+        this.applyCodeTheme()
+        return
+      }
+      try {
+        this.codeTheme = normalizeCodeThemeId(await invoke('get_code_theme'))
+      } catch (error) {
+        console.warn('[SettingsStore] load code theme failed, fall back to default:', error)
+        this.codeTheme = DEFAULT_CODE_THEME_ID
+      }
+      this.codeThemeLoaded = true
+      this.applyCodeTheme()
+    },
+
+    async setCodeTheme(id) {
+      const next = normalizeCodeThemeId(id)
+      this.codeTheme = next
+      this.codeThemeLoaded = true
+      this.applyCodeTheme()
+
+      console.log('[SettingsStore] apply code theme:', { next })
+
+      try {
+        await invoke('set_code_theme', { codeTheme: next })
+      } catch (error) {
+        console.error('[SettingsStore] code theme persist failed:', error)
+        throw error
+      }
     },
 
     async loadAppearanceConfig() {
       if (this.appearanceLoaded) {
         this.applyAppearanceTheme(this.appearanceTheme)
+        await this.loadCodeThemeConfig()
         return
       }
 
@@ -78,6 +124,8 @@ export const useSettingsStore = defineStore("settings", {
         this.appearanceLoaded = true
         this.applyAppearanceTheme(this.appearanceTheme)
       }
+
+      await this.loadCodeThemeConfig()
     },
 
     async setAppearanceTheme(theme) {
