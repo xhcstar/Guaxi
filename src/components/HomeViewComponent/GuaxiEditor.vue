@@ -4851,7 +4851,13 @@ const openBreadcrumbPicker = (it, ev) => {
           }
 
           const label = String(n?.label || path.split('/').pop() || path)
-          const isDir = Array.isArray(n?.children) && n.children.length > 0
+          // 目录判定必须优先看节点自身的标记：以前只用「有没有 children」判断，
+          // 而文件树是懒加载的——没展开过的目录 children 为空，于是被当成文件、配上文件图标
+          // （表现就是面包屑下拉里所有目录都显示成文档图标）。空目录同理也会误判。
+          // 两个字段名在代码里都存在（store 建节点用 isDirectory，后端元数据是 is_directory），所以都认。
+          const isDir = n?.is_directory === true
+            || n?.isDirectory === true
+            || (Array.isArray(n?.children) && n.children.length > 0)
           return {
             key: `P:${path}`,
             label,
