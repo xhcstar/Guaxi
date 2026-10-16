@@ -152,6 +152,30 @@ const waitForDirectLspDocumentSync = () =>
     window.setTimeout(resolve, DIRECT_LSP_SYNC_SETTLE_MS)
   })
 
+// 服务端在 initialize 里声明的补全能力。读法与 getServerSemanticLegend 同构。
+// 拿不到能力声明（客户端还没完成 initialize）时返回 true——保持原行为，不因为读不到就误拦。
+const serverDeclaresCompletionProvider = (client: MonacoLanguageClient | null): boolean => {
+  const capabilities = (client as unknown as {
+    initializeResult?: { capabilities?: { completionProvider?: unknown } }
+  } | null)?.initializeResult?.capabilities
+  if (!capabilities) return true
+  return !!capabilities.completionProvider
+}
+
+// 每种语言只记一次：这条日志用来确认「该语言确实没声明补全能力」，
+// 若将来发现某个语言的补全因此消失，看这一行就能定位。
+const logCompletionCapabilitySkipOnce = (() => {
+  const logged = new Set<string>()
+  return (clientKey: string, languageId: string) => {
+    if (logged.has(clientKey)) return
+    logged.add(clientKey)
+    logger.info('[LSP] direct completion skipped: server declares no completionProvider', {
+      clientKey,
+      languageId,
+    })
+  }
+})()
+
 const getLanguageClientRuntimeState = (client: MonacoLanguageClient | null) => {
   const candidate = client as (MonacoLanguageClient & {
     isRunning?: () => boolean
@@ -613,6 +637,13 @@ export const provideDirectLspCompletionSuggestions = async (
   const clientKey = getLspClientKey(normalizedLanguageId)
   const entry = lspClients.get(clientKey)
   if (!entry?.client || entry.disposed) {
+    return []
+  }
+  // 服务端没有声明 completionProvider 就不可能给出候选（marksman 就是这种：它只管链接与诊断）。
+  // 继续向它请求是纯浪费：实测每次约 260ms，而且 Monaco 要等所有 provider 返回才弹窗，
+  // 这条无用请求连同它前面的全篇 didChange（40KB 的 markdown 文档）一起卡在每一次按键的关键路径上。
+  if (!serverDeclaresCompletionProvider(entry.client)) {
+    logCompletionCapabilitySkipOnce(clientKey, normalizedLanguageId)
     return []
   }
   const documentUri = String(model.uri?.toString?.() || entry.documentUri || '')

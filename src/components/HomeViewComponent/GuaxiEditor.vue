@@ -8785,11 +8785,56 @@ const prepareEmbeddedVirtualModel = (embeddedCtx) => {
   return virtualModel;
 };
 
+// 预热：把围栏/数学块的虚拟文档**提前送到语言服务器**，让它在用户开始输入前就把这一篇分析完。
+//
+// 为什么需要：prepareEmbeddedVirtualModel 只写本地虚拟模型并启动客户端，文档内容要等到第一次补全
+// 请求才随 didOpen/didChange 发过去。实测（pyright + 785 字节的 python 围栏）第一次补全要 1450ms，
+// 同一处 6 秒后只要 12~27ms——那 1.4 秒全是服务端在补全那一刻才做的冷分析。
+// 这里补上「提前送内容 + 发一次结果丢弃的补全请求」，把这段分析挪进用户思考的时间。
+// 结果一律丢弃，不碰 suggest widget，因此对候选来源与展示没有任何影响。
+const embeddedLspWarmedKeys = new Set()
+
 const warmupEmbeddedLspForContext = (embeddedCtx) => {
   if (!embeddedCtx || !lspEnabled.value) return;
   const languageId = String(embeddedCtx.languageId || '').trim().toLowerCase();
   if (!languageId || !LSP_SUPPORTED_LANGUAGES.has(languageId)) return;
-  prepareEmbeddedVirtualModel(embeddedCtx);
+  const virtualModel = prepareEmbeddedVirtualModel(embeddedCtx);
+  if (!virtualModel) return;
+
+  // 每个「语言 + 虚拟文档 + 块」只预热一次：内容随后变化时，第一次真实补全发的是很小的 didChange，
+  // 服务端已是热态，增量更新远快于从头分析。
+  const warmKey = `${languageId}:${String(virtualModel.uri?.toString?.() || '')}:${embeddedCtx.blockStartLine}`;
+  if (embeddedLspWarmedKeys.has(warmKey)) return;
+  embeddedLspWarmedKeys.add(warmKey);
+
+  const positionInBlock = embeddedCtx.positionInBlock;
+  if (!positionInBlock) return;
+
+  void (async () => {
+    const startedAt = performance.now();
+    try {
+      const ready = await waitForLspConnection(languageId, EMBEDDED_LSP_READY_TIMEOUT_MS);
+      if (!ready) return;
+      const suggestions = await provideDirectLspCompletionSuggestions(
+        languageId,
+        virtualModel,
+        positionInBlock,
+        { triggerKind: monaco.languages.CompletionTriggerKind.Invoke },
+        undefined
+      );
+      logger.info('[EmbeddedLsp] warmup completion finished', {
+        languageId,
+        documentUri: String(virtualModel.uri?.toString?.() || ''),
+        blockStartLine: embeddedCtx.blockStartLine,
+        suggestionCount: suggestions.length,
+        elapsedMs: Math.round(performance.now() - startedAt),
+      });
+    } catch (error) {
+      // 预热失败不影响真实补全，下一轮真实请求仍会自己同步文档。
+      embeddedLspWarmedKeys.delete(warmKey);
+      logger.debug('[EmbeddedLsp] warmup failed', { languageId }, error);
+    }
+  })();
 };
 
 const fetchEmbeddedSemanticTokens = async (embeddedCtx) => {
@@ -9484,6 +9529,9 @@ const updateMarkdownFenceSyntaxHighlight = async (targetEditor, reason) => {
 
   const position = targetEditor.getPosition?.();
   const ctx = getMarkdownFenceContext(model, position);
+  // 光标进入围栏块时就把虚拟文档预热给语言服务器（与数学块的处理保持一致）。
+  // 这一步是补全速度的关键：不做的话服务端要到第一次补全请求才开始分析这一块。
+  if (ctx) warmupEmbeddedLspForContext(ctx);
   const visibleRanges = typeof targetEditor.getVisibleRanges === 'function'
     ? targetEditor.getVisibleRanges()
     : [];
@@ -10462,20 +10510,6 @@ const getEmbeddedHostEditor = () => (
 )
 
 const provideEmbeddedVscodeCompletionSuggestions = async (virtualModel, positionInBlock, replaceRange, context, filterContext = null) => {
-  // ── 临时性能埋点（与 provideEmbeddedLspSuggestions 里的配套，定位完一起删）──
-  const perfT0 = performance.now()
-  let perfMark = perfT0
-  const perfVscodeLog = (stage, extra = {}) => {
-    logger.warn('[PerfVscode]', {
-      stage,
-      totalMs: Math.round(performance.now() - perfT0),
-      retainMs: Math.round(perfRetainAt - perfT0),
-      execMs: Math.round(perfExecAt - perfRetainAt),
-      ...extra,
-    })
-  }
-  let perfRetainAt = perfT0
-  let perfExecAt = perfT0
   try {
     await retainVsCodeTextModel({
       resource: virtualModel.uri,
@@ -10484,7 +10518,6 @@ const provideEmbeddedVscodeCompletionSuggestions = async (virtualModel, position
       owner: getMarkdownFenceVscodeModelOwner(virtualModel.getLanguageId?.() || ''),
       reason: 'embedded-vscode-completion',
     })
-    perfRetainAt = performance.now()
 
     const triggerCharacter = context?.triggerKind === monaco.languages.CompletionTriggerKind.TriggerCharacter
       ? String(context?.triggerCharacter || '')
@@ -10525,7 +10558,6 @@ const provideEmbeddedVscodeCompletionSuggestions = async (virtualModel, position
       ),
       completionTimeout,
     ])
-    perfExecAt = performance.now()
 
     if (result?.__guaxiCompletionTimeout) {
       logger.warn('[EmbeddedLsp] vscode completion command timed out', {
@@ -10536,7 +10568,6 @@ const provideEmbeddedVscodeCompletionSuggestions = async (virtualModel, position
         lineNumber: positionInBlock?.lineNumber || 0,
         column: positionInBlock?.column || 0,
       })
-      perfVscodeLog('timeout')
       return []
     }
 
@@ -10551,7 +10582,6 @@ const provideEmbeddedVscodeCompletionSuggestions = async (virtualModel, position
       itemCount: items.length,
       isIncomplete: !!result?.isIncomplete,
     })
-    perfVscodeLog('resolved', { items: items.length })
     if (!items.length) return []
 
     const suggestions = []
@@ -10750,21 +10780,6 @@ const buildEmbeddedReplaceRange = (model, position, embeddedCtx, virtualModel) =
 
 const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, context) => {
   if (!embeddedCtx) return [];
-  // ── 临时性能埋点：定位内嵌补全的时间花在哪一段。用 warn 级是因为前端 info/debug 不会写进 logfile.log。
-  //    只加计时，不改任何逻辑；定位完应整段删除。 ──
-  const perfStart = performance.now()
-  let perfMark = perfStart
-  const perf = {}
-  const perfStep = (name) => { const t = performance.now(); perf[name] = Math.round(t - perfMark); perfMark = t }
-  const perfLog = (stage, extra = {}) => {
-    logger.warn('[PerfCompletion]', {
-      languageId: embeddedCtx.languageId,
-      stage,
-      totalMs: Math.round(performance.now() - perfStart),
-      ...perf,
-      ...extra,
-    })
-  }
   const hostEditor = getEmbeddedHostEditor()
   const completionKey = buildEmbeddedCompletionCacheKey(model, position, embeddedCtx)
   if (completionKey && embeddedCompletionInFlightKeys.has(completionKey)) {
@@ -10788,10 +10803,8 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
     }, 0)
   }
   const virtualModel = prepareEmbeddedVirtualModel(embeddedCtx);
-  perfStep('prepare')
   if (!virtualModel) return [];
   const ready = await waitForLspConnection(embeddedCtx.languageId, EMBEDDED_LSP_READY_TIMEOUT_MS);
-  perfStep('waitConn')
   if (!ready) {
     logger.info('[EmbeddedLsp] completion skipped because connection is not ready', {
       languageId: embeddedCtx.languageId,
@@ -10801,16 +10814,12 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
       blockLineNumber: embeddedCtx.positionInBlock?.lineNumber || 0,
       blockColumn: embeddedCtx.positionInBlock?.column || 0,
     });
-    perfLog('not-ready')
     return [];
   }
 
   const replaceRange = buildEmbeddedReplaceRange(model, position, embeddedCtx, virtualModel);
-  perfStep('replaceRange')
   const filterContext = resolveEmbeddedCompletionFilterContext(model, position)
-  perfStep('filterCtx')
   const cachedSuggestions = readEmbeddedCompletionCache(hostEditor, model, position, embeddedCtx, replaceRange)
-  perfStep('cacheRead')
   if (cachedSuggestions.length) {
     logger.info('[EmbeddedLsp] completion resolved from hydrated cache', {
       languageId: embeddedCtx.languageId,
@@ -10822,7 +10831,6 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
       firstSuggestion: getCompletionItemLabelText(cachedSuggestions[0]?.label),
       firstSuggestionInsertText: String(cachedSuggestions[0]?.insertText || ''),
     })
-    perfLog('cache-hit', { items: cachedSuggestions.length })
     return cachedSuggestions
   }
   logger.debug('[EmbeddedLsp] resolved completion filter context', {
@@ -10845,7 +10853,6 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
     context,
     filterContext
   )
-  perfStep('vscodeCmd')
   if (vscodeSuggestions.length) {
     writeEmbeddedCompletionCache(hostEditor, model, position, embeddedCtx, vscodeSuggestions)
     if (hostEditor) {
@@ -10880,7 +10887,6 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
       firstSuggestion: getCompletionItemLabelText(vscodeSuggestions[0]?.label),
       firstSuggestionFilterText: String(vscodeSuggestions[0]?.filterText || ''),
     });
-    perfLog('vscode', { items: vscodeSuggestions.length })
     return vscodeSuggestions
   }
 
@@ -10891,7 +10897,6 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
     context || { triggerKind: monaco.languages.CompletionTriggerKind.Invoke },
     undefined
   )
-  perfStep('directLsp')
   if (directLspSuggestions.length) {
     const languageId = String(virtualModel.getLanguageId?.() || embeddedCtx.languageId || '')
     const mappedSuggestions = []
@@ -10933,7 +10938,6 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
       column: embeddedCtx.positionInBlock?.column || 0,
       firstSuggestion: getCompletionItemLabelText(dedupedDirectSuggestions[0]?.label),
     })
-    perfLog('direct', { raw: directLspSuggestions.length, kept: dedupedDirectSuggestions.length })
     if (dedupedDirectSuggestions.length) return dedupedDirectSuggestions
   }
 
@@ -10943,7 +10947,6 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
       languageId: embeddedCtx.languageId,
       documentUri: String(virtualModel.uri?.toString?.() || ''),
     });
-    perfLog('no-provider')
     return [];
   }
 
@@ -11017,7 +11020,6 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
     lineNumber: embeddedCtx.positionInBlock?.lineNumber || 0,
     column: embeddedCtx.positionInBlock?.column || 0,
   });
-  perfLog('monaco-providers', { items: dedupedSuggestions.length })
   return dedupedSuggestions;
 };
 
