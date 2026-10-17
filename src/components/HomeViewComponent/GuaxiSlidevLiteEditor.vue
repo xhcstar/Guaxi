@@ -162,20 +162,24 @@
       :x="editorContextMenuPosition.x" :y="editorContextMenuPosition.y" @select="handleEditorContextMenuSelect"
       @clickoutside="() => (editorContextMenuVisible = false)" />
 
-    <div class="status-bar" v-if="activePath">
-      <div class="status-left">
-        <span class="status-item" :title="activePath">{{ fileName }}</span>
-        <span v-if="dirty" class="status-dirty">未保存</span>
-      </div>
-      <div class="status-right">
-        <span class="status-item">Ln {{ cursor.lineNumber }}, Col {{ cursor.column }}</span>
-      </div>
-    </div>
+    <!-- 与主编辑器同款底部状态栏：语言 / 问题 / LSP / 行尾符 / 光标 / 缩进 / 选区 -->
+    <GuaxiAuxEditorStatusBar
+      v-if="activePath"
+      class="slidev-status-bar"
+      :editor-instance="editorInstance"
+      language="markdown"
+    >
+      <template #leading>
+        <div class="status-item slidev-status-file" :title="activePath">
+          {{ fileName }}<span v-if="dirty" class="status-dirty"> · 未保存</span>
+        </div>
+      </template>
+    </GuaxiAuxEditorStatusBar>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch, nextTick, h } from 'vue'
+import { computed, onMounted, onUnmounted, ref, shallowRef, watch, nextTick, h } from 'vue'
 import * as monaco from 'monaco-editor'
 import 'monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution'
 import 'monaco-editor/esm/vs/editor/contrib/clipboard/browser/clipboard.js'
@@ -186,6 +190,13 @@ import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { createLogger } from '../../utils/logger'
 import { GUAXI_MONACO_SEMANTIC_TOKEN_COLORS, GUAXI_MONACO_THEME_RULES, onGuaxiMonacoCodeThemeReapply } from '../../monaco/guaxiMonacoThemes'
+import {
+  attachSharedEditorFeatures,
+  formatMarkdownEditor,
+  formatMarkdownSelection,
+  resolveSharedEditorDisplayOptions,
+} from '../../monaco/editorFeatures'
+import GuaxiAuxEditorStatusBar from './GuaxiAuxEditorStatusBar.vue'
 import { maskPythonCellBlocksForMarkdown } from './utils/guaxiPythonCellSyntax'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useOutlineStore } from '../../stores/outlineStore'
@@ -239,6 +250,9 @@ let model = null
 let editorReady = false
 let settingModel = false
 let editorDisposables = []
+// 状态栏用：不代理 Monaco 实例，只在实例创建/销毁时触发一次重新绑定。
+const editorInstance = shallowRef(null)
+let featuresDisposable = null
 
 let lastLayoutLogAt = 0
 const logLayout = (stage, extra = {}) => {
@@ -405,6 +419,9 @@ onGuaxiMonacoCodeThemeReapply(() => {
 })
 
 const disposeMonaco = () => {
+  featuresDisposable?.()
+  featuresDisposable = null
+  editorInstance.value = null
   editorDisposables.forEach((d) => d?.dispose?.())
   editorDisposables = []
   if (editor) {
@@ -1545,30 +1562,47 @@ const registerMarkdownActions = () => {
     keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyP],
     run: () => runEditorAction('editor.action.quickCommand')
   })
+
+  // 右键菜单里早就列了这两项，但之前没有注册对应 action（点了没反应）。
+  // 现在接到与主编辑器同一条链路：后端 comrak 格式化 + 共享表格对齐。
+  editor.addAction({
+    id: 'guaxi.markdown.formatDocument',
+    label: 'Markdown 格式化（全文）',
+    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyF],
+    run: async () => {
+      await formatMarkdownEditor(editor, 'slidev-editor')
+    }
+  })
+
+  editor.addAction({
+    id: 'guaxi.markdown.formatSelection',
+    label: 'Markdown 格式化（选中）',
+    run: async () => {
+      await formatMarkdownSelection(editor, 'slidev-editor')
+    }
+  })
 }
 
 const ensureEditor = async () => {
   if (editorReady || !editorRef.value) return
 
+  const display = resolveSharedEditorDisplayOptions()
   editor = monaco.editor.create(editorRef.value, {
     automaticLayout: true,
     readOnly: false,
     wordWrap: 'on',
-    minimap: { enabled: false },
+    minimap: display.minimap,
     scrollBeyondLastLine: false,
     renderLineHighlight: 'line',
-    fontSize: 18,
-    lineHeight: 24,
-    fontFamily: "'Maple Mono NF CN','JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New'",
+    fontSize: display.fontSize,
+    lineHeight: display.lineHeight,
+    fontFamily: display.fontFamily,
     padding: { top: 8, bottom: 8 },
     find: {
       addExtraSpaceOnTop: false
     },
-    contextmenu: {
-      enabled: true,
-      addDefaultActions: true,
-      addNavigationActions: true
-    }
+    // 右键菜单由本组件的 n-dropdown 提供，关掉 Monaco 自带菜单避免双弹。
+    contextmenu: false
   })
 
   outlineStore.setJumpToLine(jumpToLine)
@@ -1632,6 +1666,23 @@ const ensureEditor = async () => {
   registerMarkdownLanguageFeatures()
   applyMonacoTheme()
   updateEditorOptions()
+
+  // 与主编辑器一致的基础能力：主题同步 + Markdown LSP。
+  // 右键菜单与 Markdown 片段由本组件自有实现提供，避免重复弹出两份。
+  featuresDisposable = attachSharedEditorFeatures({
+    monaco,
+    editor,
+    language: 'markdown',
+    filePath: activePath.value || '',
+    enableContextMenu: false,
+    enableSnippets: false,
+    enableLsp: true,
+    lspDocumentUri: activePath.value || undefined,
+    lspWorkspacePath: activePath.value || undefined,
+    lspRequestSource: 'slidev-editor',
+  })
+  editorInstance.value = editor
+
   editorReady = true
   logger.info('[editor] created')
 }
@@ -3023,6 +3074,13 @@ onUnmounted(() => {
 
 .status-dirty {
   color: #d97706;
+}
+
+/* 底部状态栏的 leading 槽：文件名 + 未保存提示（状态栏本体由 GuaxiAuxEditorStatusBar 渲染） */
+.slidev-status-file {
+  max-width: 420px;
+  padding-right: 10px;
+  color: var(--guaxi-text-secondary, #8a8f98);
 }
 
 :deep(.search-highlight) {

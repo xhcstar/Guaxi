@@ -26,6 +26,7 @@ import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import 'monaco-editor/esm/vs/basic-languages/python/python.contribution'
 import { createLogger } from '../../utils/logger'
+import { attachSharedEditorFeatures, resolveSharedEditorDisplayOptions } from '../../monaco/editorFeatures'
 import { getLspConnectionState, initLspClient, waitForLspConnection, setLspImeComposing } from '../../monaco/lspClient'
 import { initTextmate } from '../../monaco/textmateLoader'
 import {
@@ -85,6 +86,7 @@ let savedQuickSuggestionsDuringIme
 // 说明这是「自己编辑的回声」，绝不能再回写 model（否则用旧值全量替换正在编辑的 model，回退输入、卡顿、打断中文）。
 let lastEmittedModelValue = null
 let currentAppliedTheme = ''
+let featuresDisposable = null
 let usesVscodeModelBridge = false
 let hostResizeObserver = null
 let serviceRefreshTimer = 0
@@ -718,9 +720,12 @@ const mountMonacoEditor = async () => {
       })
     }
     applyTheme()
+    const display = resolveSharedEditorDisplayOptions()
     editor = monacoRef.editor.create(host, {
       model,
       language: 'python',
+      // 右键菜单由 editorFeatures 提供，关掉 Monaco 自带菜单避免双弹。
+      contextmenu: false,
       minimap: { enabled: false },
       automaticLayout: true,
       // 大 cell 性能：万行 Python 也不卡 tokenize
@@ -766,9 +771,9 @@ const mountMonacoEditor = async () => {
       'semanticHighlighting.enabled': true,
       tabSize: 4,
       insertSpaces: true,
-      fontFamily: 'var(--editor-font-family, "Maple Mono NF CN", "JetBrainsMono Nerd Font Mono", Consolas, monospace)',
-      fontSize: 17,
-      lineHeight: PYTHON_EDITOR_LINE_HEIGHT,
+      fontFamily: display.fontFamily,
+      fontSize: display.fontSize,
+      lineHeight: display.lineHeight,
       padding: { top: 12, bottom: 12 },
       fixedOverflowWidgets: true,
       alwaysConsumeMouseWheel: false,
@@ -920,6 +925,14 @@ const mountMonacoEditor = async () => {
     compositionStartDisposable = editor.onDidCompositionStart?.(onImeStart)
     compositionEndDisposable = editor.onDidCompositionEnd?.(onImeEnd)
 
+    // 与主编辑器一致的基础能力：右键菜单、主题同步（LSP 已由上方逻辑启动）。
+    featuresDisposable = attachSharedEditorFeatures({
+      monaco: monacoRef,
+      editor,
+      language: 'python',
+      enableLsp: false,
+    })
+
     editorReady.value = true
     await nextTick()
     ensureHostHeight()
@@ -948,6 +961,8 @@ const mountMonacoEditor = async () => {
 }
 
 const disposeMonacoEditor = () => {
+  featuresDisposable?.()
+  featuresDisposable = null
   const currentModelUri = model?.uri || null
   window.clearTimeout(serviceRefreshTimer)
   serviceRefreshTimer = 0

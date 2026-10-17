@@ -28,6 +28,7 @@ import 'monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution'
 import 'monaco-editor/esm/vs/editor/contrib/clipboard/browser/clipboard.js'
 import 'monaco-editor/esm/vs/editor/standalone/browser/quickAccess/standaloneCommandsQuickAccess.js'
 import { createLogger } from '../../utils/logger'
+import { attachSharedEditorFeatures, resolveSharedEditorDisplayOptions } from '../../monaco/editorFeatures'
 import { initLspClient, setLspImeComposing } from '../../monaco/lspClient'
 import {
   replaceModelContentPreserveUndo,
@@ -77,6 +78,7 @@ let imeComposing = false
 let savedQuickSuggestionsDuringIme
 let lastEmittedModelValue = null
 let currentAppliedTheme = ''
+let featuresDisposable = null
 let mountMonacoEditorPromise = null
 let usesVscodeModelBridge = false
 
@@ -339,6 +341,14 @@ const mountMonacoEditor = async () => {
             usesVscodeModelBridge = true
           }
         }
+        if (!featuresDisposable) {
+          featuresDisposable = attachSharedEditorFeatures({
+            monaco: monacoRef,
+            editor,
+            language: 'markdown',
+            enableLsp: false,
+          })
+        }
         editorReady.value = true
         ensureHostHeight()
         logger.warn('[NotebookMarkdownEditor] reused existing Monaco editor bound to current host', {
@@ -376,9 +386,12 @@ const mountMonacoEditor = async () => {
         })
       }
       applyTheme()
+      const display = resolveSharedEditorDisplayOptions()
       editor = monacoRef.editor.create(host, {
         model,
         language: 'markdown',
+        // 右键菜单由 editorFeatures 提供，关掉 Monaco 自带菜单避免双弹。
+        contextmenu: false,
         minimap: { enabled: false },
         automaticLayout: true,
         lineNumbers: 'on',
@@ -407,9 +420,9 @@ const mountMonacoEditor = async () => {
         renderLineHighlight: 'none',
         occurrencesHighlight: 'off',
         selectionHighlight: false,
-        fontFamily: 'var(--editor-font-family, "Maple Mono NF CN", "JetBrainsMono Nerd Font Mono", Consolas, monospace)',
-        fontSize: 17,
-        lineHeight: MARKDOWN_EDITOR_LINE_HEIGHT,
+        fontFamily: display.fontFamily,
+        fontSize: display.fontSize,
+        lineHeight: display.lineHeight,
         padding: { top: 14, bottom: 14 },
         fixedOverflowWidgets: true,
         alwaysConsumeMouseWheel: false,
@@ -485,6 +498,16 @@ const mountMonacoEditor = async () => {
       compositionStartDisposable = editor.onDidCompositionStart?.(onImeStart)
       compositionEndDisposable = editor.onDidCompositionEnd?.(onImeEnd)
 
+      // 与主编辑器一致的基础能力：Markdown 片段、右键菜单、主题同步（LSP 已由下方逻辑启动）。
+      if (!featuresDisposable) {
+        featuresDisposable = attachSharedEditorFeatures({
+          monaco: monacoRef,
+          editor,
+          language: 'markdown',
+          enableLsp: false,
+        })
+      }
+
       editorReady.value = true
       await nextTick()
       ensureHostHeight()
@@ -519,6 +542,8 @@ const mountMonacoEditor = async () => {
 }
 
 const disposeMonacoEditor = () => {
+  featuresDisposable?.()
+  featuresDisposable = null
   const currentModelUri = model?.uri || null
   contentChangeDisposable?.dispose?.()
   contentChangeDisposable = null

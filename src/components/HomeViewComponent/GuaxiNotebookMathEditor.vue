@@ -25,6 +25,7 @@
 <script setup>
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { createLogger } from '../../utils/logger'
+import { attachSharedEditorFeatures, resolveSharedEditorDisplayOptions } from '../../monaco/editorFeatures'
 
 const props = defineProps({
   modelValue: {
@@ -64,6 +65,7 @@ let contentChangeDisposable = null
 let contentSizeDisposable = null
 let focusDisposable = null
 let blurDisposable = null
+let featuresDisposable = null
 let currentAppliedTheme = ''
 
 const MATH_EDITOR_LINE_HEIGHT = 22
@@ -218,12 +220,16 @@ const mountMonacoEditor = async () => {
   try {
     monacoRef = await import('monaco-editor')
     ensureLatexLanguage()
+    const display = resolveSharedEditorDisplayOptions()
     const virtualUri = buildMathVirtualUri()
     model = monacoRef.editor.createModel(String(props.modelValue || ''), 'latex', virtualUri)
     applyTheme()
     editor = monacoRef.editor.create(host, {
       model,
       language: 'latex',
+      // 右键菜单统一由 editorFeatures 的自定义菜单提供，关掉 Monaco 自带的，
+      // 否则两个菜单会同时弹出。
+      contextmenu: false,
       minimap: { enabled: false },
       automaticLayout: true,
       // 设计说明：配合上面的 latex 语言配置，开启括号/引号成对自动补全、删除联动与选区环绕，
@@ -257,9 +263,9 @@ const mountMonacoEditor = async () => {
       renderLineHighlight: 'line',
       tabSize: 4,
       insertSpaces: true,
-      fontFamily: 'var(--editor-font-family, "Maple Mono NF CN", "JetBrainsMono Nerd Font Mono", Consolas, monospace)',
-      fontSize: 18,
-      lineHeight: MATH_EDITOR_LINE_HEIGHT,
+      fontFamily: display.fontFamily,
+      fontSize: display.fontSize,
+      lineHeight: display.lineHeight,
       padding: { top: 12, bottom: 12 },
       fixedOverflowWidgets: true,
       alwaysConsumeMouseWheel: false,
@@ -296,6 +302,14 @@ const mountMonacoEditor = async () => {
       blurEditorToPage('escape')
     })
 
+    // 与主编辑器一致的基础能力：LaTeX 片段、右键菜单、主题同步。
+    featuresDisposable = attachSharedEditorFeatures({
+      monaco: monacoRef,
+      editor,
+      language: 'latex',
+      enableLsp: false,
+    })
+
     editorReady.value = true
     await nextTick()
     ensureHostHeight()
@@ -314,6 +328,8 @@ const mountMonacoEditor = async () => {
 }
 
 const disposeMonacoEditor = () => {
+  featuresDisposable?.()
+  featuresDisposable = null
   contentChangeDisposable?.dispose?.()
   contentChangeDisposable = null
   contentSizeDisposable?.dispose?.()

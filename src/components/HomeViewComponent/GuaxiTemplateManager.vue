@@ -182,6 +182,7 @@
 
         <div class="right">
           <div ref="contentEditorContainer" class="template-monaco-editor"></div>
+          <GuaxiAuxEditorStatusBar :editor-instance="contentEditorInstance" language="markdown" />
         </div>
       </div>
     </div>
@@ -190,11 +191,14 @@
 
 <script setup>
 import { createLogger } from '../../utils/logger'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { NButton, NCollapse, NCollapseItem, NInput, NList, NListItem, NTooltip, createDiscreteApi } from 'naive-ui'
 import { Icon } from '@iconify/vue'
 import * as monaco from 'monaco-editor'
 import 'monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution'
+import GuaxiAuxEditorStatusBar from './GuaxiAuxEditorStatusBar.vue'
+import { attachSharedEditorFeatures, resolveSharedEditorDisplayOptions, startSharedLsp } from '../../monaco/editorFeatures'
+import { GUAXI_MONACO_SEMANTIC_TOKEN_COLORS, GUAXI_MONACO_THEME_RULES } from '../../monaco/guaxiMonacoThemes'
 import filePlusIcon from '@iconify-icons/lucide/file-plus'
 import refreshCwIcon from '@iconify-icons/lucide/refresh-cw'
 import saveIcon from '@iconify-icons/lucide/save'
@@ -228,6 +232,9 @@ const SIDEBAR_MIN_WIDTH = 240
 const SIDEBAR_MAX_WIDTH = 720
 let contentEditor = null
 let contentModel = null
+// 供底部状态栏使用：shallowRef 不代理 Monaco 实例，只用来触发一次渲染。
+const contentEditorInstance = shallowRef(null)
+let featuresDisposable = null
 let suppressEditorChange = false
 let themeObserver = null
 let sidebarResizeStartX = 0
@@ -1051,7 +1058,11 @@ const defineTemplateEditorThemes = () => {
   monaco.editor.defineTheme('guaxi-template-light', {
     base: 'vs',
     inherit: true,
-    rules: [],
+    // 语法色板复用主编辑器那一份：设置页切换「代码配色主题」后，
+    // 这里通过 attachSharedEditorFeatures 的 ensureThemes 重注册，颜色跟着变。
+    rules: GUAXI_MONACO_THEME_RULES.light,
+    semanticHighlighting: true,
+    semanticTokenColors: GUAXI_MONACO_SEMANTIC_TOKEN_COLORS.light,
     colors: {
       'editor.background': '#ffffff',
       'editor.foreground': '#1f2937',
@@ -1065,7 +1076,9 @@ const defineTemplateEditorThemes = () => {
   monaco.editor.defineTheme('guaxi-template-dark', {
     base: 'vs-dark',
     inherit: true,
-    rules: [],
+    rules: GUAXI_MONACO_THEME_RULES.dark,
+    semanticHighlighting: true,
+    semanticTokenColors: GUAXI_MONACO_SEMANTIC_TOKEN_COLORS.dark,
     colors: {
       'editor.background': '#1f2329',
       'editor.foreground': '#d7dde8',
@@ -1159,33 +1172,101 @@ const setEditorContent = (value) => {
   suppressEditorChange = false
 }
 
+// 模板内容不是磁盘文件，但 LSP 需要 file:// 文档，而且扩展名决定语言服务器是否接管
+// （pyright 只分析 .py，markdown 服务只分析 .md），所以按语言各用一个虚拟文件。
+const buildTemplateVirtualUri = (language) => {
+  const ext = language === 'python' ? 'py' : 'md'
+  return monaco.Uri.parse(`file:///guaxi-template-manager/template-${Date.now()}.${ext}`)
+}
+
+// Python Cell 模板正文是纯 Python，若按 markdown 打开就永远拿不到 Python 语义补全。
+const PYTHON_TEMPLATE_TYPE_RE = /python\s*cell|python\s*模板|^python$/i
+
+const resolveTemplateLanguage = () => {
+  const type = String(editType.value || '').trim()
+  const name = String(editName.value || selectedName.value || '').trim()
+  return (PYTHON_TEMPLATE_TYPE_RE.test(type) || PYTHON_TEMPLATE_TYPE_RE.test(name)) ? 'python' : 'markdown'
+}
+
+let currentEditorLanguage = 'markdown'
+
+const handleContentModelChange = () => {
+  if (suppressEditorChange) return
+  editContent.value = contentModel?.getValue() || ''
+}
+
+const createTemplateModel = (language, content) => {
+  const nextModel = monaco.editor.createModel(
+    String(content || ''),
+    language,
+    buildTemplateVirtualUri(language)
+  )
+  nextModel.updateOptions({ tabSize: language === 'python' ? 4 : 2, insertSpaces: true })
+  nextModel.onDidChangeContent(handleContentModelChange)
+  return nextModel
+}
+
+const applyTemplateEditorLanguage = (reason = 'manual') => {
+  if (!contentEditor || !contentModel) return
+  const next = resolveTemplateLanguage()
+  if (next === currentEditorLanguage) return
+
+  const prev = currentEditorLanguage
+  const content = contentModel.getValue()
+  const previousModel = contentModel
+  contentModel = createTemplateModel(next, content)
+  contentEditor.setModel(contentModel)
+  previousModel?.dispose?.()
+  currentEditorLanguage = next
+
+  // 补全提供方按语言注册；换语言后为目标语言重新起一次 LSP，Python 模板才拿得到语义补全。
+  void startSharedLsp(contentEditor, next, contentModel.uri.toString(), {
+    requestSource: 'template-manager',
+    documentUri: contentModel.uri.toString(),
+  })
+  logger.info('[TemplateManager] editor language switched', { from: prev, to: next, reason })
+}
+
 const initContentEditor = () => {
   if (contentEditor || !contentEditorContainer.value) return
 
   defineTemplateEditorThemes()
-  const uri = monaco.Uri.parse(`inmemory://guaxi-template-manager/template-${Date.now()}.md`)
-  contentModel = monaco.editor.createModel(String(editContent.value || ''), 'markdown', uri)
+  const display = resolveSharedEditorDisplayOptions()
+  const initialLanguage = resolveTemplateLanguage()
+  contentModel = createTemplateModel(initialLanguage, editContent.value)
+  currentEditorLanguage = initialLanguage
   contentEditor = monaco.editor.create(contentEditorContainer.value, {
     model: contentModel,
     automaticLayout: true,
-    minimap: { enabled: false },
+    // 右键菜单由 editorFeatures 提供，关掉 Monaco 自带菜单避免双弹。
+    contextmenu: false,
+    minimap: display.minimap,
     scrollBeyondLastLine: false,
     wordWrap: 'on',
     lineNumbers: 'on',
     renderWhitespace: 'selection',
     tabSize: 2,
     insertSpaces: true,
-    fontFamily: TEMPLATE_EDITOR_FONT_FAMILY,
-    fontSize: TEMPLATE_EDITOR_FONT_SIZE,
-    lineHeight: 28,
+    fontFamily: display.fontFamily,
+    fontSize: display.fontSize,
+    lineHeight: display.lineHeight,
     readOnly: loading.value,
     theme: getTemplateEditorTheme(),
   })
 
-  contentModel.onDidChangeContent(() => {
-    if (suppressEditorChange) return
-    editContent.value = contentModel?.getValue() || ''
+  // 与主编辑器一致的基础能力：Markdown 片段、右键菜单、格式化、LSP、主题同步。
+  featuresDisposable = attachSharedEditorFeatures({
+    monaco,
+    editor: contentEditor,
+    language: initialLanguage,
+    filePath: contentModel.uri.toString(),
+    enableLsp: true,
+    lspDocumentUri: contentModel.uri.toString(),
+    lspRequestSource: 'template-manager',
+    ensureThemes: defineTemplateEditorThemes,
+    resolveThemeName: (dark) => (dark ? 'guaxi-template-dark' : 'guaxi-template-light'),
   })
+  contentEditorInstance.value = contentEditor
 
   themeObserver = new MutationObserver(() => applyTemplateEditorTheme())
   themeObserver.observe(document.documentElement, {
@@ -1532,6 +1613,11 @@ watch(editContent, (value) => {
   setEditorContent(value)
 })
 
+// 切换模板时类型跟着变：Python Cell 模板自动切到 python 语言，才能拿到 LSP 补全。
+watch(editType, () => {
+  applyTemplateEditorLanguage('type-change')
+})
+
 watch(loading, (value) => {
   contentEditor?.updateOptions?.({ readOnly: !!value })
 })
@@ -1547,6 +1633,9 @@ onBeforeUnmount(() => {
   stopSidebarResize()
   themeObserver?.disconnect?.()
   themeObserver = null
+  featuresDisposable?.()
+  featuresDisposable = null
+  contentEditorInstance.value = null
   contentEditor?.dispose?.()
   contentEditor = null
   contentModel?.dispose?.()
