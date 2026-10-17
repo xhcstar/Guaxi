@@ -317,7 +317,16 @@ async function main() {
     if (shouldPrepareForTauriCommand) {
       // 光靠 sherpa 的 build.rs 只把 DLL 拷到 target 目录下的 exe 旁，进不了安装包；
       // 这里补一份 resources 配置，打包时才会真的随安装目录落地。
-      tauriArgs.push('--config', await writeCudaRuntimeBundleConfig());
+      //
+      // 必须插在 `--` 之前：`--` 之后的参数 Tauri 会原样转交给 cargo，
+      // 而 cargo 的 `--config` 只认 TOML，传 JSON 路径会直接解析失败。
+      const configPath = await writeCudaRuntimeBundleConfig();
+      const separatorIndex = tauriArgs.indexOf('--');
+      if (separatorIndex === -1) {
+        tauriArgs.push('--config', configPath);
+      } else {
+        tauriArgs.splice(separatorIndex, 0, '--config', configPath);
+      }
     }
   }
 
