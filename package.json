@@ -10,6 +10,7 @@
     "check:search-syntax": "node ./tools/check_search_query_syntax.mjs",
     "check:search-preview": "node ./tools/check_search_preview.mjs",
     "check:icons": "node ./tools/check_offline_icons.mjs",
+    "test:frontend": "node --test \"tests/*.test.mjs\"",
     "prepare:tauri-assets": "node ./tools/copy_excalidraw_assets.mjs",
     "prepare:tauri-utils": "cargo run --quiet --manifest-path src-tauri/Cargo.toml --bin prepare_utils_zip",
     "codex:fetch": "node ./tools/fetch_codex_sidecar.mjs",

@@ -2201,13 +2201,42 @@ const buildNotebookSidecarPayload = (cells = [], markdown = '') => {
   }
 }
 
-const persistNotebookSidecar = async (reason = 'unknown') => {
-  const sidecarPath = getNotebookSidecarPath()
+const normalizeSidecarPathKey = (path) => String(path || '').trim().replace(/\\/g, '/').replace(/\/+$/g, '')
+
+// 侧车文件路径按“这份内容所属的文件”计算，而不是等到定时器触发时再读 props.filePath：
+// 文件切换/重命名/删除都可能发生在 220ms 防抖窗口内。
+const getNotebookSidecarPathFor = (filePath) => {
+  const normalized = String(filePath || '').trim()
+  if (!normalized) return ''
+  return `${normalized}.cellmeta`
+}
+
+const isPathStillOpen = (filePath) => {
+  const key = normalizeSidecarPathKey(filePath)
+  if (!key) return false
+  const tabs = Array.isArray(fileTreeStore.openTabs) ? fileTreeStore.openTabs : []
+  return tabs.some((tab) => normalizeSidecarPathKey(tab?.path) === key)
+}
+
+const persistNotebookSidecar = async (reason = 'unknown', targetFilePath = '') => {
+  const filePath = String(targetFilePath || props.filePath || '').trim()
+  const sidecarPath = getNotebookSidecarPathFor(filePath)
   if (!sidecarPath) return
+  // 目标文件已经被删除/重命名：不要按旧路径重建 .cellmeta。
+  if (!isPathStillOpen(filePath)) {
+    logger.info('[Notebook] skip sidecar persist because target file is no longer open', {
+      reason,
+      filePath,
+      sidecarPath,
+    })
+    return
+  }
   const payload = buildNotebookSidecarPayload(
     notebookCells.value,
     lastEmittedMarkdown.value || props.markdown,
   )
+  // payload.filePath 内部用的是 props.filePath，这里必须覆盖为内容真正所属的文件。
+  payload.filePath = filePath
   await invoke('write_file_content', {
     path: sidecarPath,
     content: JSON.stringify(payload, null, 2),
@@ -2224,16 +2253,25 @@ const schedulePersistNotebookSidecar = (reason = 'unknown', delay = 220) => {
   if (notebookSidecarPersistTimer) {
     window.clearTimeout(notebookSidecarPersistTimer)
   }
+  const scheduledFilePath = String(props.filePath || '')
   notebookSidecarPersistTimer = window.setTimeout(() => {
     notebookSidecarPersistTimer = 0
-    persistNotebookSidecar(reason).catch((error) => {
+    persistNotebookSidecar(reason, scheduledFilePath).catch((error) => {
       logger.warn('[Notebook] persist sidecar failed', {
         reason,
-        sidecarPath: getNotebookSidecarPath(),
+        sidecarPath: getNotebookSidecarPathFor(scheduledFilePath),
         error: String(error?.message || error),
       })
     })
   }, delay)
+}
+
+/** 文件切换/路径变更时取消尚未落地的侧车写盘。 */
+const cancelPendingSidecarPersist = (reason = 'unknown') => {
+  if (!notebookSidecarPersistTimer) return
+  window.clearTimeout(notebookSidecarPersistTimer)
+  notebookSidecarPersistTimer = 0
+  logger.info('[Notebook] cancelled pending sidecar persist', { reason })
 }
 
 const loadNotebookSidecar = async (markdown, reason = 'unknown') => {
@@ -3933,7 +3971,9 @@ const flushNotebookMarkdown = (reason = 'unknown') => {
   }
   const nextMarkdown = serializeNotebookCells(notebookCells.value)
   lastEmittedMarkdown.value = normalizeNotebookMarkdownText(nextMarkdown)
-  emit('update:markdown', nextMarkdown)
+  // 第二个参数带上“这份 Markdown 属于哪个文件”：父组件在切换文件的瞬间会先 flush 本组件的
+  // 防抖写回，此时 store 里的 selectedFile 已经指向新文件；不带路径的话旧内容会被写进新文件。
+  emit('update:markdown', nextMarkdown, String(props.filePath || ''))
   logger.info('[Notebook] flush notebook markdown', {
     reason,
     markdownLength: nextMarkdown.length,
@@ -7770,7 +7810,7 @@ const writeCellOutputToMarkdown = async (cell, moduleId = '') => {
     persistedStableId: !!normalized.persisted,
     outputKind: String(outputModule?.kind || normalizeDisplayType(snapshot?.display) || (snapshot?.dataframe ? 'dataframe' : 'text')),
   })
-  emit('update:markdown', nextMarkdown)
+  emit('update:markdown', nextMarkdown, String(props.filePath || ''))
   lastEmittedMarkdown.value = normalizeNotebookMarkdownText(nextMarkdown)
   schedulePersistNotebookSidecar('write-cell-output-to-markdown')
   message.success('Python Cell 输出已写回到源 Markdown')
@@ -9113,6 +9153,7 @@ watch(
       resolvedDisplayUrlMap.value = {}
       notebookSearchIndexReady.value = false
       clearNotebookSearchHighlights()
+      cancelPendingSidecarPersist('file-switch')
       logger.info('[Notebook] cleared rendered html maps for file switch', {
         previousFilePath: String(prevFilePath || ''),
         nextFilePath: String(props.filePath || ''),

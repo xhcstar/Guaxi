@@ -494,6 +494,7 @@ import { useEditorBridgeStore } from '../../stores/editorBridgeStore'
 import { useDiffCompareStore, diffPathBaseName } from '../../stores/diffCompareStore'
 import { GUAXI_SHORTCUTS, shortcutTooltip, useGuaxiHotkeys } from '../../composables/useGuaxiHotkeys'
 import { updateMarkdownLinksAfterRename } from '../../utils/markdownLinkRename'
+import { runFilePathMutationGuards } from '../../utils/filePathMutation'
 
 const logger = createLogger('GuaxiFileTree')
 const message = useMessage();
@@ -2123,6 +2124,64 @@ const genRename = async (mode, node) => {
   await focusEditingInput(node.id)
 }
 
+// ===== 文件路径变更（重命名/移动/删除）的统一处理 =====
+// 这部分逻辑以前分散在多个入口里，且只更新 openTabs、不更新分屏路径列表，
+// 也从不暂停写盘：重命名后 in-flight 的自动保存会按旧路径把文件写回来。
+// 现在统一走下面三个工具函数。
+
+/** 执行一次路径变更：先让编辑器落地防抖编辑，再暂停写盘，完成（成功或失败）后恢复。 */
+const runPathMutation = async (mutation, operation) => {
+  await runFilePathMutationGuards(mutation)
+  // 暂停新写入并等待在途写盘完成，再执行真正的移动/删除。
+  await fileTreeStore.beginPathMutation()
+  try {
+    return await operation()
+  } finally {
+    fileTreeStore.endPathMutation()
+  }
+}
+
+/**
+ * 重命名/移动后同步所有打开标签的路径。
+ * 同时处理：openTabs、左右分屏的路径列表、activeTab（以及其子文件）。
+ */
+const remapOpenTabsForPathChange = (oldPath, newPath, nextName = '') => {
+  const source = normalizePath(oldPath)
+  const dest = normalizePath(newPath)
+  if (!source || !dest || source === dest) return
+
+  const remapPath = (raw) => {
+    const path = normalizePath(raw)
+    if (path === source) return dest
+    if (path.startsWith(`${source}/`)) return dest + path.slice(source.length)
+    return raw
+  }
+
+  fileTreeStore.openTabs.forEach((tab) => {
+    const nextPath = remapPath(tab?.path)
+    if (nextPath === tab?.path) return
+    tab.path = nextPath
+    if (nextName && normalizePath(tab.path) === dest) tab.fileName = nextName
+  })
+  fileTreeStore.leftTabPaths = (fileTreeStore.leftTabPaths || []).map(remapPath)
+  fileTreeStore.rightTabPaths = (fileTreeStore.rightTabPaths || []).map(remapPath)
+
+  const active = normalizePath(fileTreeStore.activeTab)
+  if (active === source || active.startsWith(`${source}/`)) {
+    fileTreeStore.setActiveTab(remapPath(active))
+  } else {
+    // 活跃文件未受影响时也要刷新一次，让 selectedFile 与（可能已更新的）标签列表一致。
+    fileTreeStore.setActiveTab(fileTreeStore.activeTab)
+  }
+}
+
+/** 删除后关闭其下所有标签，避免自动保存把已删除的文件重新写回磁盘。 */
+const dropTabsAfterDelete = (path) => {
+  const target = normalizePath(path)
+  if (!target) return
+  fileTreeStore.dropTabsUnderPath(target)
+}
+
 const commitInlineRename = async () => {
   const ctx = inlineRenameCtx.value
   if (!ctx) { editingNode.value = null; editName.value = ''; return }
@@ -2139,21 +2198,10 @@ const commitInlineRename = async () => {
   const dest = normalizePath(`${parent}/${name}`)
   inlineRenameCtx.value = null
   try {
-    await invoke('move_path', { sourcePath: oldId, destinationPath: dest })
-    // 同步已打开标签页的路径
-    fileTreeStore.openTabs.forEach((tab) => {
-      const tp = normalizePath(tab.path)
-      if (tp === oldId) {
-        const wasActive = normalizePath(fileTreeStore.activeTab) === tp
-        tab.path = dest
-        tab.fileName = name
-        if (wasActive) fileTreeStore.setActiveTab(dest)
-      } else if (tp.startsWith(`${oldId}/`)) {
-        const np = dest + tp.slice(oldId.length)
-        const wasActive = normalizePath(fileTreeStore.activeTab) === tp
-        tab.path = np
-        if (wasActive) fileTreeStore.setActiveTab(np)
-      }
+    // 先让编辑器落地防抖编辑，再暂停写盘，避免重命名瞬间的自动保存写回旧路径。
+    await runPathMutation({ type: 'rename', oldPath: oldId, newPath: dest }, async () => {
+      await invoke('move_path', { sourcePath: oldId, destinationPath: dest })
+      remapOpenTabsForPathChange(oldId, dest, name)
     })
     editingNode.value = null
     editName.value = ''
@@ -2193,7 +2241,12 @@ const commitInlineRename = async () => {
 const genDelete = async (mode, node) => {
   const yes = await confirmDialog(`确定删除「${node.name}」吗？此操作不可撤销。`, { title: '删除确认', kind: 'warning', okLabel: '删除', cancelLabel: '取消' })
   if (!yes) return false
-  await invoke('delete_path', { path: normalizePath(node.id) })
+  const deletedPath = normalizePath(node.id)
+  await runPathMutation({ type: 'delete', oldPath: deletedPath }, async () => {
+    await invoke('delete_path', { path: deletedPath })
+    // 删除后立刻关闭相关标签，避免自动保存把文件重新创建出来。
+    dropTabsAfterDelete(deletedPath)
+  })
   await refreshModeDir(mode, parentDirOf(node.id))
   message.success('已删除')
   return true
@@ -2527,22 +2580,10 @@ const handleDropMove = async (sourceId, targetDirId) => {
   if (normalizePath(sourceParent) === targetDir) return // 已在目标目录
 
   try {
-    await invoke('move_path', { sourcePath, destinationPath })
-
-    // 更新打开的标签页路径(文件本身或目录前缀)
-    fileTreeStore.openTabs.forEach((tab) => {
-      const tp = normalizePath(tab.path)
-      if (tp === sourcePath) {
-        const wasActive = normalizePath(fileTreeStore.activeTab) === tp
-        tab.path = destinationPath
-        tab.fileName = name
-        if (wasActive) fileTreeStore.setActiveTab(destinationPath)
-      } else if (tp.startsWith(`${sourcePath}/`)) {
-        const np = destinationPath + tp.slice(sourcePath.length)
-        const wasActive = normalizePath(fileTreeStore.activeTab) === tp
-        tab.path = np
-        if (wasActive) fileTreeStore.setActiveTab(np)
-      }
+    await runPathMutation({ type: 'move', oldPath: sourcePath, newPath: destinationPath }, async () => {
+      await invoke('move_path', { sourcePath, destinationPath })
+      // 文件本身或目录下的子文件，路径统一重映射。
+      remapOpenTabsForPathChange(sourcePath, destinationPath, name)
     })
 
     if (!expandedKeys.value.includes(targetDir)) expandedKeys.value.push(targetDir)
@@ -2972,23 +3013,15 @@ const handleBlur = async () => {
 
   // 以下是原有重命名逻辑
   try {
-    if (node.is_directory) {
-      await invoke('rename_directory', { oldPath: oldId, newPath: newId });
-    } else {
-      await invoke('rename_path', { oldPath: oldId, newPath: newId });
-    }
-
-    // 更新标签页
-    const tabIndex = fileTreeStore.openTabs.findIndex(tab => tab.path === oldId);
-    if (tabIndex !== -1) {
-      fileTreeStore.openTabs[tabIndex].path = newId;
-      fileTreeStore.openTabs[tabIndex].fileName = editName.value;
-      // 同步内容（如果内容有变化）
-      fileTreeStore.openTabs[tabIndex].content = node.content || fileTreeStore.openTabs[tabIndex].content;
-      if (fileTreeStore.activeTab === oldId) {
-        fileTreeStore.setActiveTab(newId);
+    await runPathMutation({ type: 'rename', oldPath: oldId, newPath: newId }, async () => {
+      if (node.is_directory) {
+        await invoke('rename_directory', { oldPath: oldId, newPath: newId });
+      } else {
+        await invoke('rename_path', { oldPath: oldId, newPath: newId });
       }
-    }
+      // 目录重命名时，其下已打开的子文件也必须一起改路径；写盘在此期间被暂停。
+      remapOpenTabsForPathChange(oldId, newId, editName.value)
+    })
   } catch (error) {
     logger.error('重命名操作失败:', error);
     node.name = oldId.split(/[\\/]/).pop();
@@ -3019,8 +3052,12 @@ const deleteNode = async (nodeId) => {
   if (!ok) return
 
   try {
-    await invoke('delete_path', { path: normalizedId })
-    await handleFileRemoved(normalizedId)
+    await runPathMutation({ type: 'delete', oldPath: normalizedId }, async () => {
+      await invoke('delete_path', { path: normalizedId })
+      // 先关闭相关标签，再刷新树：避免自动保存把已删除的文件重新写回。
+      dropTabsAfterDelete(normalizedId)
+      await handleFileRemoved(normalizedId)
+    })
   } catch (error) {
     message.error(`删除失败: ${error.message}`)
     const parentPath = normalizedId.split('/').slice(0, -1).join('/') || normalizePath(fileTreeStore.activeRepoPath)
@@ -3091,7 +3128,10 @@ const moveNode = async (node) => {
     logger.info('源路径:', sourcePath);
     logger.info('目标路径:', destinationPath);
 
-    await invoke('move_path', { sourcePath, destinationPath });
+    await runPathMutation({ type: 'move', oldPath: sourcePath, newPath: destinationPath }, async () => {
+      await invoke('move_path', { sourcePath, destinationPath });
+      remapOpenTabsForPathChange(sourcePath, destinationPath, destinationPath.split('/').pop())
+    });
 
     const parentNode = findParentNode(fileTree.value, sourcePath);
     if (parentNode?.children?.length) {
@@ -3110,16 +3150,6 @@ const moveNode = async (node) => {
     } else {
       node.id = destinationPath;
       await loadFileTree({ force: true });
-    }
-
-    const tabIndex = fileTreeStore.openTabs.findIndex((tab) => normalizePath(tab.path) === sourcePath);
-    if (tabIndex !== -1) {
-      const tab = fileTreeStore.openTabs[tabIndex];
-      tab.path = destinationPath;
-      tab.fileName = destinationPath.split('/').pop();
-      if (fileTreeStore.activeTab && normalizePath(fileTreeStore.activeTab) === sourcePath) {
-        fileTreeStore.setActiveTab(destinationPath);
-      }
     }
 
     if (selectedKeys.value?.length && normalizePath(selectedKeys.value[0]) === sourcePath) {

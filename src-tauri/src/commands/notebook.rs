@@ -1254,3 +1254,79 @@ pub fn notebook_sync_from_markdown(markdown: String, sidecar_json: Option<String
         restored_from_sidecar: sidecar.as_ref().map(|payload| !payload.cells.is_empty()).unwrap_or(false),
     })
 }
+
+// ==================== 文档内容隔离回归测试 ====================
+//
+// 这些用例针对“切换/新建文件时内容串档”这一类问题：
+// Notebook 的解析必须是纯函数、只依赖传入的 Markdown，不能保留上一份文档的状态。
+#[cfg(test)]
+mod content_isolation_tests {
+    use super::*;
+
+    #[test]
+    fn empty_markdown_yields_no_custom_cells() {
+        for empty in ["", "\n", "\n\n", "   \n"] {
+            assert!(parse_python_cell_blocks(empty).is_empty(), "python cells on {:?}", empty);
+            assert!(parse_math_cell_blocks(empty).is_empty(), "math cells on {:?}", empty);
+        }
+    }
+
+    #[test]
+    fn python_cells_are_scoped_to_their_own_markdown() {
+        let doc_a = r#"<!--py {"id":"a"}-->
+print('a')
+<!--/py-->
+"#;
+        let doc_b = r#"<!--py {"id":"b"}-->
+print('b')
+<!--/py-->
+"#;
+
+        let blocks_a = parse_python_cell_blocks(doc_a);
+        let blocks_b = parse_python_cell_blocks(doc_b);
+
+        assert_eq!(blocks_a.len(), 1);
+        assert_eq!(blocks_b.len(), 1);
+        assert_eq!(blocks_a[0].code.trim(), "print('a')");
+        assert_eq!(blocks_b[0].code.trim(), "print('b')");
+        assert_ne!(blocks_a[0].code, blocks_b[0].code);
+    }
+
+    #[test]
+    fn math_cells_are_scoped_to_their_own_markdown() {
+        let doc_a = r#"<!--math {"id":"m-a"}-->
+a^2 + b^2 = c^2
+<!--/math-->
+"#;
+        let doc_b = r#"<!--math {"id":"m-b"}-->
+\int_0^1 x dx
+<!--/math-->
+"#;
+
+        let blocks_a = parse_math_cell_blocks(doc_a);
+        let blocks_b = parse_math_cell_blocks(doc_b);
+
+        assert_eq!(blocks_a.len(), 1);
+        assert_eq!(blocks_b.len(), 1);
+        assert_eq!(blocks_a[0].expression.trim(), "a^2 + b^2 = c^2");
+        assert_eq!(blocks_b[0].expression.trim(), r"\int_0^1 x dx");
+    }
+
+    #[test]
+    fn strip_output_blocks_only_removes_paired_output_markers() {
+        let markdown = "before\n<!-- guaxi:pyout:doc-1:start -->\nOUTPUT\n<!-- guaxi:pyout:doc-1:end -->\nafter\n";
+        let stripped = strip_output_blocks(markdown);
+
+        assert!(stripped.contains("before"));
+        assert!(stripped.contains("after"));
+        assert!(!stripped.contains("OUTPUT"));
+        assert!(!stripped.contains("guaxi:pyout"));
+    }
+
+    #[test]
+    fn unclosed_custom_cell_is_ignored_instead_of_swallowing_content() {
+        // 用户正在编辑、尚未补上结束标记时，不能把后续内容吞进 cell。
+        assert!(parse_python_cell_blocks("<!--py-->\nprint('x')\n").is_empty());
+        assert!(parse_math_cell_blocks("<!--math-->\nx^2\n").is_empty());
+    }
+}

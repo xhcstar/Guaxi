@@ -46,6 +46,8 @@ const normalizeTabPath = (p) => String(p || "").replace(/\\/g, "/");
 const normalizeNavigationRootKey = (p) => normalizeTabPath(p).replace(/\/+$/, "");
 const normalizeEditorContent = (content) => String(content ?? "").replace(/\r\n?/g, "\n");
 const EVENT_CELLMETA_FILE_CLOSED = "guaxi_cellmeta_file_closed";
+// 在途写盘的 promise 集合：路径变更前会等待它们落地，防止旧路径的写入在移动/删除后才完成。
+const inflightContentWrites = new Set();
 
 export const useFileTreeStore = defineStore("fileTreeStore", {
   state: () => ({
@@ -64,6 +66,8 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
     leftTabPaths: [],
     rightTabPaths: [],
     activeRegion: 'left',
+    // 重命名/移动/删除进行中：暂停所有写盘，避免异步写回把旧路径重新创建出来。
+    pathMutationDepth: 0,
     // 左侧边栏当前浏览上下文：
     // 1. 知识库、普通文件、任务三种模式使用不同的根目录与树数据，不能只依赖 activeRepoPath。
     // 2. 编辑器面包屑读取这份共享状态，确保左栏模式/目录/任务分类切换后默认根路径立即同步。
@@ -483,36 +487,101 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
     },
 
     async updateFileContent(path, content) {
+      // 设计说明（防止“文件复活”）：
+      // 1. 重命名/删除期间暂停写盘：in-flight 的自动保存若在 move/delete 之后落地，
+      //    会在旧路径重新创建文件，或把内容写到已经不属于它的路径。
+      // 2. 目标路径必须仍是打开中的标签：标签被关闭/删除/改名后，旧路径的延迟写盘直接丢弃。
+      if (this.pathMutationDepth > 0) {
+        console.warn("[fileTreeStore] write skipped during path mutation", { path });
+        return false;
+      }
+      const writeKey = normalizeTabPath(path);
+      const tracked = this.openTabs.some((tab) => normalizeTabPath(tab.path) === writeKey);
+      if (!tracked) {
+        console.warn("[fileTreeStore] write skipped for untracked path", { path });
+        return false;
+      }
+
+      // 记录在途写入，路径变更（beginPathMutation）会等待它落地：
+      // 否则 rename/delete 之后才完成的那一笔写盘会把旧路径重新创建出来。
+      const writeTask = (async () => {
+        try {
+          const editorBridgeStore = useEditorBridgeStore();
+          await editorBridgeStore.prepareWrite(path, "monaco", this);
+
+          const normalizedContent = normalizeEditorContent(content);
+          await invoke("write_file_content", { path, content: normalizedContent });
+
+          const tabIndex = this.openTabs.findIndex((tab) => normalizeTabPath(tab.path) === writeKey);
+          if (tabIndex !== -1) {
+            this.openTabs[tabIndex].content = normalizedContent;
+            this.openTabs[tabIndex].savedContent = normalizedContent;
+            this.openTabs[tabIndex].dirty = false;
+            this.openTabs[tabIndex].preview = this.generatePreview(normalizedContent);
+          }
+
+          if (this.selectedFile && normalizeTabPath(this.selectedFile.path) === writeKey) {
+            this.selectedFile.content = normalizedContent;
+          } else {
+            console.warn("当前选中的文件与更新的文件不匹配，未更新 selectedFile", { path });
+          }
+
+          await editorBridgeStore.markAfterWrite(path, this);
+          return true;
+        } catch (error) {
+          console.error("更新文件内容失败:", error);
+          throw error;
+        }
+      })();
+
+      inflightContentWrites.add(writeTask);
       try {
-        const editorBridgeStore = useEditorBridgeStore();
-        await editorBridgeStore.prepareWrite(path, "monaco", this);
-
-        const normalizedContent = normalizeEditorContent(content);
-        await invoke("write_file_content", { path, content: normalizedContent });
-
-        const tabIndex = this.openTabs.findIndex((tab) => tab.path === path);
-        if (tabIndex !== -1) {
-          this.openTabs[tabIndex].content = normalizedContent;
-          this.openTabs[tabIndex].savedContent = normalizedContent;
-          this.openTabs[tabIndex].dirty = false;
-          this.openTabs[tabIndex].preview = this.generatePreview(normalizedContent);
-        }
-
-        if (this.selectedFile && this.selectedFile.path === path) {
-          this.selectedFile.content = normalizedContent;
-        } else {
-          console.warn("当前选中的文件与更新的文件不匹配，未更新 selectedFile");
-        }
-
-        await editorBridgeStore.markAfterWrite(path, this);
-      } catch (error) {
-        console.error("更新文件内容失败:", error);
-        throw error;
+        return await writeTask;
+      } finally {
+        inflightContentWrites.delete(writeTask);
       }
     },
 
+    // 进入路径变更：先暂停新写入，再等待已在途的写盘完成，避免它们落到旧路径上。
+    async beginPathMutation() {
+      this.pathMutationDepth += 1;
+      if (inflightContentWrites.size) {
+        await Promise.allSettled(Array.from(inflightContentWrites));
+      }
+    },
+
+    endPathMutation() {
+      this.pathMutationDepth = Math.max(0, this.pathMutationDepth - 1);
+    },
+
+    /**
+     * 删除/重命名目录后，关闭其下所有已打开标签。
+     *
+     * 不关闭的话，这些标签会继续参与自动保存，把已经删掉的文件重新写回磁盘；
+     * 或者把旧目录的内容写进新路径。关闭后由调用方决定激活哪个相邻标签。
+     */
+    dropTabsUnderPath(path) {
+      const root = normalizeTabPath(path);
+      if (!root) return;
+      const isUnder = (candidate) => {
+        const key = normalizeTabPath(candidate);
+        return !!key && (key === root || key.startsWith(`${root}/`));
+      };
+
+      this.openTabs = this.openTabs.filter((tab) => !isUnder(tab?.path));
+      this.leftTabPaths = this.leftTabPaths.filter((p) => !isUnder(p));
+      this.rightTabPaths = this.rightTabPaths.filter((p) => !isUnder(p));
+      if (isUnder(this.activeTabLeft)) this.activeTabLeft = this.leftTabPaths[0] || null;
+      if (isUnder(this.activeTabRight)) this.activeTabRight = this.rightTabPaths[0] || null;
+
+      this.normalizeSplitLayout();
+      const focusPath = this.activeTabLeft || this.activeTabRight || null;
+      this.setActiveTab(focusPath, focusPath ? (this.activeRegion || 'left') : 'left');
+    },
+
     updateTabContent(path, content) {
-      const tabIndex = this.openTabs.findIndex((tab) => tab.path === path);
+      const pathKey = normalizeTabPath(path);
+      const tabIndex = this.openTabs.findIndex((tab) => normalizeTabPath(tab.path) === pathKey);
       if (tabIndex !== -1) {
         const tab = this.openTabs[tabIndex];
         const normalizedContent = normalizeEditorContent(content);
@@ -520,7 +589,7 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
         tab.preview = this.generatePreview(normalizedContent);
         tab.dirty = normalizeEditorContent(tab.savedContent) !== normalizedContent;
 
-        if (this.selectedFile && this.selectedFile.path === path) {
+        if (this.selectedFile && normalizeTabPath(this.selectedFile.path) === pathKey) {
           this.selectedFile.content = normalizedContent;
         }
       }

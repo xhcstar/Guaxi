@@ -190,13 +190,21 @@ export const useSlidevEditorStore = defineStore('slidevEditorStore', {
       const p = String(path || '')
       if (!p) return
 
+      // 路径已不在打开列表（被删除/改名）：不要再写盘，否则会把旧文件重新创建出来。
+      const key = normalizeTabPath(p)
+      const tracked = (Array.isArray(this.openTabs) ? this.openTabs : [])
+        .some((t) => normalizeTabPath(t?.path) === key)
+      if (!tracked) {
+        logger.warn('[save] skip write for untracked path', { path: p })
+        return
+      }
+
       const next = String(content ?? '')
       logger.info('[save] write', { path: p, len: next.length })
 
       try {
         await invoke('write_file_content', { path: p, content: next })
 
-        const key = normalizeTabPath(p)
         const tab = (Array.isArray(this.openTabs) ? this.openTabs : []).find((t) => normalizeTabPath(t?.path) === key)
         if (tab) {
           tab.content = next

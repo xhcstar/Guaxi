@@ -1571,6 +1571,13 @@ import {
   normalizeSeparatorCell,
   buildAlignedTableLines,
 } from '../../utils/markdownTableFormat'
+import {
+  isSameFilePath,
+  isPathWithin,
+  resolveModelBoundPath,
+  shouldApplyContentToActiveView,
+} from '../../utils/fileContentAttribution'
+import { registerFilePathMutationGuard } from '../../utils/filePathMutation'
 import { getGuaxiSyntaxClassForCapture } from '../../monaco/guaxiSyntaxTokens'
 import {
   initLspClient,
@@ -2040,6 +2047,8 @@ const notebookViewRef = ref(null)
 const notebookSurfaceRef = ref(null)
 const terminalPanelRef = ref(null)
 let notebookDiskPersistTimer = null
+// 延迟写盘的目标路径在调度时就固定下来，重命名/删除时按它精确取消。
+let notebookDiskPersistTargetPath = ''
 let notebookDiskPersistInFlight = false
 const pythonConsoleHeight = ref(240)
 const EDITOR_STATUS_BAR_HEIGHT = 22
@@ -3809,6 +3818,8 @@ let secondaryMonacoLinkLikeDecorDisposable = null;
 // 表格行里的 emoji 宽度归一化（见 installMonacoTableEmojiCellDecorations）。
 let monacoTableEmojiDecorDisposable = null;
 let secondaryMonacoTableEmojiDecorDisposable = null;
+// 文件树重命名/删除前的落地钩子。
+let pathMutationGuardDisposable = null;
 let editorEffectsLeft = null;
 let editorEffectsRight = null;
 
@@ -12724,12 +12735,19 @@ const ensureSecondaryEditor = () => {
         return
       }
       if (fileTreeStore.activeRegion !== 'right') return
-      const path = getEditorBoundTabPath(secondaryEditor)
-      if (!path) return
       const rightModel = secondaryEditor.getModel()
       if (!rightModel) return
       const content = rightModel.getValue()
-      rawContent.value = content
+      // 以 model 绑定路径为准：切换标签的瞬间 activeTabRight 可能已经指向新文件。
+      const path = resolveModelBoundPath({
+        modelUriToPath: editorModelUriToPath,
+        modelUri: String(rightModel.uri?.toString?.() || ''),
+        fallbackPath: getEditorBoundTabPath(secondaryEditor),
+      })
+      if (!path) return
+      if (shouldApplyContentToActiveView(path, fileTreeStore.activeTabRight || fileTreeStore.activeTab)) {
+        rawContent.value = content
+      }
       fileTreeStore.updateTabContent(path, content)
       void retainVsCodeTextModel({
         resource: rightModel.uri,
@@ -12754,12 +12772,18 @@ const ensureSecondaryEditor = () => {
           return
         }
         if (fileTreeStore.activeRegion !== 'right') return;
-        const path = getEditorBoundTabPath(secondaryEditor);
-        if (!path) return;
         const rightModel = secondaryEditor.getModel();
         if (!rightModel) return;
         const content = rightModel.getValue();
-        rawContent.value = content;
+        const path = resolveModelBoundPath({
+          modelUriToPath: editorModelUriToPath,
+          modelUri: String(rightModel.uri?.toString?.() || ''),
+          fallbackPath: getEditorBoundTabPath(secondaryEditor),
+        });
+        if (!path) return;
+        if (shouldApplyContentToActiveView(path, fileTreeStore.activeTabRight || fileTreeStore.activeTab)) {
+          rawContent.value = content;
+        }
         fileTreeStore.updateTabContent(path, content);
         updateGitDecorations();
         refreshMarkdownSuggestMode(secondaryEditor)
@@ -13378,8 +13402,15 @@ const setupEditorListeners = () => {
       const liveModel = editor.getModel();
       if (!liveModel) return;
       const content = liveModel.getValue();
-      const path = getEditorBoundTabPath(editor);
-      rawContent.value = content;
+      // 以 model 绑定路径为准：切换标签的瞬间 activeTab 可能已经指向新文件。
+      const path = resolveModelBoundPath({
+        modelUriToPath: editorModelUriToPath,
+        modelUri: String(liveModel.uri?.toString?.() || ''),
+        fallbackPath: getEditorBoundTabPath(editor),
+      });
+      if (shouldApplyContentToActiveView(path, fileTreeStore.activeTab)) {
+        rawContent.value = content;
+      }
       if (path) fileTreeStore.updateTabContent(path, content);
       scheduleLatexPreviewRebuild();
       scheduleOrgPreviewRefresh();
@@ -13427,8 +13458,14 @@ const setupEditorListeners = () => {
           const problems = analyzeContentForProblems(content, liveModel, languageId);
           publishProblems(problems);
         }
-        rawContent.value = content;
-        const path = getEditorBoundTabPath(editor);
+        const path = resolveModelBoundPath({
+          modelUriToPath: editorModelUriToPath,
+          modelUri: String(liveModel.uri?.toString?.() || ''),
+          fallbackPath: getEditorBoundTabPath(editor),
+        });
+        if (shouldApplyContentToActiveView(path, fileTreeStore.activeTab)) {
+          rawContent.value = content;
+        }
         if (path) fileTreeStore.updateTabContent(path, content);
         recordEditLocationFromEditor();
         updateTableToolbar();
@@ -15760,63 +15797,73 @@ const openSourceEditorSurface = () => {
   })
 }
 
-const applyNotebookMarkdown = (nextMarkdown) => {
+const applyNotebookMarkdown = (nextMarkdown, sourceFilePath = '') => {
   const nextText = String(nextMarkdown || '')
-  rawContent.value = nextText
+  // 写回内容的归属文件由子组件在 emit 时带过来。
+  // 切换文件的瞬间，store 里的 selectedFile 已经是新文件，而这份内容属于旧文件；
+  // 若这里用 selectedFile.path，旧文件的内容会被写进新文件（新建空文件“自带内容”的根因）。
+  const contentPath = String(sourceFilePath || selectedFile.value?.path || '').trim()
+  const activePath = String(selectedFile.value?.path || '').trim()
+  const belongsToActiveFile = !contentPath || contentPath === activePath
 
-  const targetEditor = editor || secondaryEditor
-  const model = targetEditor?.getModel?.()
-  if (model && model.getValue() !== nextText) {
-    replaceModelContentPreserveUndo(model, nextText, {
-      logPrefix: '[NotebookAutosave] sync source editor from notebook surface',
-      uri: String(model.uri?.toString?.() || ''),
-      owner: targetEditor === secondaryEditor
-        ? SECONDARY_EDITOR_VSCODE_MODEL_OWNER
-        : PRIMARY_EDITOR_VSCODE_MODEL_OWNER,
-      reason: 'apply-notebook-markdown',
-    })
+  if (belongsToActiveFile) {
+    rawContent.value = nextText
+
+    const targetEditor = editor || secondaryEditor
+    const model = targetEditor?.getModel?.()
+    if (model && model.getValue() !== nextText) {
+      replaceModelContentPreserveUndo(model, nextText, {
+        logPrefix: '[NotebookAutosave] sync source editor from notebook surface',
+        uri: String(model.uri?.toString?.() || ''),
+        owner: targetEditor === secondaryEditor
+          ? SECONDARY_EDITOR_VSCODE_MODEL_OWNER
+          : PRIMARY_EDITOR_VSCODE_MODEL_OWNER,
+        reason: 'apply-notebook-markdown',
+      })
+    }
   }
 
-  const targetPath = String(selectedFile.value?.path || '').trim()
-  if (targetPath) {
-    fileTreeStore.updateTabContent(targetPath, nextText)
+  if (contentPath) {
+    fileTreeStore.updateTabContent(contentPath, nextText)
   }
 
-  if (canPreview.value && previewMode.value !== 'realtime') {
+  if (belongsToActiveFile && canPreview.value && previewMode.value !== 'realtime') {
     renderDebounced(nextText)
   }
 
-  scheduleNotebookDiskPersist('apply-notebook-markdown', nextText)
+  scheduleNotebookDiskPersist('apply-notebook-markdown', nextText, 420, contentPath)
 }
 
-const persistNotebookToDisk = async (reason = 'unknown', nextText = null) => {
-  const targetPath = String(selectedFile.value?.path || '').trim()
-  if (!targetPath) {
+const persistNotebookToDisk = async (reason = 'unknown', nextText = null, targetPath = '') => {
+  // 路径在调度时就固定下来：内容可能属于“刚切走的那个文件”，
+  // 等到定时器触发时 selectedFile 已经指向新文件，不能再从 store 现取。
+  const resolvedPath = String(targetPath || selectedFile.value?.path || '').trim()
+  if (!resolvedPath) {
     logger.warn('[NotebookAutosave] skip persist because target path is empty', { reason })
     return false
   }
-  if (activeTab.value?.unsupported) {
+  const targetTab = fileTreeStore.openTabs.find((item) => item?.path === resolvedPath)
+  if (targetTab?.unsupported || (resolvedPath === String(selectedFile.value?.path || '') && activeTab.value?.unsupported)) {
     logger.warn('[NotebookAutosave] skip persist because file is unsupported', {
       reason,
-      targetPath,
+      targetPath: resolvedPath,
     })
     return false
   }
   if (notebookDiskPersistInFlight) {
     logger.debug('[NotebookAutosave] skip overlapping persist request', {
       reason,
-      targetPath,
+      targetPath: resolvedPath,
     })
     return false
   }
 
   const content = String(nextText ?? rawContent.value ?? '')
-  const tab = fileTreeStore.openTabs.find((item) => item?.path === targetPath)
-  const savedContent = String(tab?.savedContent ?? '')
+  const savedContent = String(targetTab?.savedContent ?? '')
   if (savedContent === content) {
     logger.debug('[NotebookAutosave] skip persist because file content is already saved', {
       reason,
-      targetPath,
+      targetPath: resolvedPath,
       length: content.length,
     })
     return true
@@ -15824,18 +15871,18 @@ const persistNotebookToDisk = async (reason = 'unknown', nextText = null) => {
 
   notebookDiskPersistInFlight = true
   try {
-    await fileTreeStore.updateFileContent(targetPath, content)
+    await fileTreeStore.updateFileContent(resolvedPath, content)
     editorStore.setLastAutoSaveAt(Date.now())
     logger.info('[NotebookAutosave] persisted notebook content to file', {
       reason,
-      targetPath,
+      targetPath: resolvedPath,
       length: content.length,
     })
     return true
   } catch (error) {
     logger.error('[NotebookAutosave] failed to persist notebook content to file', {
       reason,
-      targetPath,
+      targetPath: resolvedPath,
       error,
     })
     return false
@@ -15844,21 +15891,45 @@ const persistNotebookToDisk = async (reason = 'unknown', nextText = null) => {
   }
 }
 
-const scheduleNotebookDiskPersist = (reason = 'unknown', nextText = null, delay = 420) => {
+const scheduleNotebookDiskPersist = (reason = 'unknown', nextText = null, delay = 420, targetPath = '') => {
   if (notebookDiskPersistTimer) {
     window.clearTimeout(notebookDiskPersistTimer)
     notebookDiskPersistTimer = null
   }
   const scheduledContent = String(nextText ?? rawContent.value ?? '')
+  const scheduledTargetPath = String(targetPath || selectedFile.value?.path || '').trim()
+  notebookDiskPersistTargetPath = scheduledTargetPath
   notebookDiskPersistTimer = window.setTimeout(() => {
     notebookDiskPersistTimer = null
-    void persistNotebookToDisk(reason, scheduledContent)
+    const pathAtFire = notebookDiskPersistTargetPath
+    notebookDiskPersistTargetPath = ''
+    void persistNotebookToDisk(reason, scheduledContent, pathAtFire)
   }, delay)
   logger.debug('[NotebookAutosave] scheduled notebook disk persist', {
     reason,
     delay,
     length: scheduledContent.length,
+    targetPath: scheduledTargetPath,
   })
+}
+
+/**
+ * 重命名/删除/移动前取消针对该路径（或其子路径）的延迟写盘。
+ * 不取消的话，定时器会在后端移动/删除之后写回旧路径，把文件“复活”。
+ */
+const cancelPendingNotebookDiskPersistForPath = (path) => {
+  if (!notebookDiskPersistTimer || !path) return false
+  const scheduledPath = notebookDiskPersistTargetPath
+  if (!isSameFilePath(scheduledPath, path) && !isPathWithin(scheduledPath, path)) return false
+
+  window.clearTimeout(notebookDiskPersistTimer)
+  notebookDiskPersistTimer = null
+  notebookDiskPersistTargetPath = ''
+  logger.info('[NotebookAutosave] cancelled pending persist for path mutation', {
+    path,
+    scheduledPath,
+  })
+  return true
 }
 
 const flushNotebookDiskPersist = (reason = 'unknown', nextText = null) => {
@@ -16159,15 +16230,24 @@ const autoSaveDirtyTabs = async () => {
   try {
     flushPythonCellDrafts()
     const activePath = fileTreeStore.activeTab
-    if (activePath) {
-      const targetEditor = getActiveEditor()
-      const activeContent =
-        previewMode.value === 'realtime' && realtimeVditor
-          ? realtimeVditor.getValue()
-          : targetEditor
-            ? targetEditor.getValue()
-            : rawContent.value
-      fileTreeStore.updateTabContent(activePath, activeContent)
+    const autoSaveEditor = getActiveEditor()
+    const useRealtime = previewMode.value === 'realtime' && realtimeVditor
+    // 编辑器内容属于它当前绑定的 model；切换标签的瞬间 activeTab 可能已经指向新文件。
+    // 以 model 绑定路径优先，避免把旧文件内容写进新 tab。
+    const boundPath = !useRealtime && autoSaveEditor
+      ? resolveModelBoundPath({
+          modelUriToPath: editorModelUriToPath,
+          modelUri: String(autoSaveEditor.getModel?.()?.uri?.toString?.() || ''),
+        })
+      : ''
+    const contentPath = boundPath || String(activePath || '').trim()
+    if (contentPath) {
+      const activeContent = useRealtime
+        ? realtimeVditor.getValue()
+        : autoSaveEditor
+          ? autoSaveEditor.getValue()
+          : rawContent.value
+      fileTreeStore.updateTabContent(contentPath, activeContent)
     }
 
     const dirtyTabs = fileTreeStore.openTabs.filter((tab) => tab?.dirty)
@@ -16255,15 +16335,28 @@ const openCurrentFileInNeovim = async () => {
 const saveContent = async () => {
   if (!selectedFile.value) return;
 
-  if (activeTab.value?.unsupported) {
+  // 以编辑器 model 绑定路径为准：切换标签的瞬间 selectedFile 可能已经指向新文件，
+  // 而编辑器里还是旧文件的内容；按 selectedFile 写盘会把旧内容保存进新文件。
+  const saveEditor = getActiveEditor();
+  const useRealtimeSave = previewMode.value === 'realtime' && realtimeVditor;
+  const boundPath = !useRealtimeSave && saveEditor
+    ? resolveModelBoundPath({
+        modelUriToPath: editorModelUriToPath,
+        modelUri: String(saveEditor.getModel?.()?.uri?.toString?.() || ''),
+      })
+    : '';
+  const targetPath = String(boundPath || selectedFile.value?.path || activeTab.value?.path || '').trim();
+  if (!targetPath) return;
+
+  const targetTab = fileTreeStore.openTabs.find((tab) => isSameFilePath(tab?.path, targetPath));
+  if (targetTab?.unsupported) {
     message.warning('不支持编辑/保存该文件类型');
     return;
   }
 
   if (isCurrentFileObserverMode.value) {
-    const path = String(selectedFile.value?.path || activeTab.value?.path || '').trim();
     const messageText = '当前文件正在由 Neovim 编辑，Guaxi 处于旁观状态，已阻止写入';
-    logger.warn('[EditorBridge] blocked Guaxi save while Neovim owns write access', { path });
+    logger.warn('[EditorBridge] blocked Guaxi save while Neovim owns write access', { path: targetPath });
     message.warning(messageText);
     throw new Error(messageText);
   }
@@ -16271,21 +16364,20 @@ const saveContent = async () => {
   // 写盘前先把当前交互面防抖中的编辑落地：否则探索者面刚敲的内容还没回推到 rawContent/tab，
   // 这一笔写盘写下去的却是旧内容（导出前那次保存也走这里）。
   flushActiveSurfaceDrafts('save-content')
-  const targetEditor = getActiveEditor();
   const content =
-    previewMode.value === 'realtime' && realtimeVditor
+    useRealtimeSave
       ? realtimeVditor.getValue()
-      : targetEditor
-        ? targetEditor.getValue()
+      : saveEditor
+        ? saveEditor.getValue()
         : rawContent.value;
 
   try {
-    await fileTreeStore.updateFileContent(selectedFile.value.path, content);
+    await fileTreeStore.updateFileContent(targetPath, content);
     await updateGitStatus();
     message.info('修改已保存');
   } catch (error) {
     logger.error('[EditorBridge] saveContent failed', {
-      path: selectedFile.value.path,
+      path: targetPath,
       error,
     });
     message.error(`保存失败: ${error?.message || error}`);
@@ -16951,17 +17043,28 @@ const disposePythonCellManagers = () => {
 const getPythonManagerApplyMarkdown = (targetEditor) => (nextMarkdown, { action = 'pycell-apply' } = {}) => {
   const model = targetEditor?.getModel?.()
   if (!model) return
+  const nextText = String(nextMarkdown || '')
   const current = String(model.getValue() || '')
-  if (current === String(nextMarkdown || '')) return
-  model.setValue(String(nextMarkdown || ''))
-  rawContent.value = String(nextMarkdown || '')
-  const targetPath = targetEditor === secondaryEditor
-    ? String(fileTreeStore.activeTabRight || '').trim()
-    : String(fileTreeStore.activeTab || '').trim()
-  if (targetPath) {
-    fileTreeStore.updateTabContent(targetPath, String(nextMarkdown || ''))
+  if (current === nextText) return
+  model.setValue(nextText)
+
+  // 内容归属以「编辑器当前绑定的 model URI」为准，而不是 store 的 activeTab。
+  // flush 可能发生在“store 已切到新文件、编辑器还停在旧文件”的瞬间；
+  // 这时按 activeTab 写会把旧文件的 Python Cell 内容写进新文件。
+  const modelUri = String(model.uri?.toString?.() || '')
+  const boundPath = resolveModelBoundPath({ modelUriToPath: editorModelUriToPath, modelUri })
+  const activePath = String(selectedFile.value?.path || '').trim()
+  if (shouldApplyContentToActiveView(boundPath, activePath)) {
+    rawContent.value = nextText
   }
-  logger.info('[PyCellEditor] markdown applied', { action, targetPath, length: String(nextMarkdown || '').length })
+
+  const targetPath = boundPath || (targetEditor === secondaryEditor
+    ? String(fileTreeStore.activeTabRight || '').trim()
+    : String(fileTreeStore.activeTab || '').trim())
+  if (targetPath) {
+    fileTreeStore.updateTabContent(targetPath, nextText)
+  }
+  logger.info('[PyCellEditor] markdown applied', { action, targetPath, boundPath, activePath, length: nextText.length })
 }
 
 const createPythonCellManagerForEditor = (targetEditor) => {
@@ -25026,6 +25129,30 @@ watch(
 
 onMounted(() => {
   restorePythonConsoleState()
+  // 文件树在重命名/移动/删除前会先执行这里的守卫：
+  // 1. 把探索者 / Python Cell 防抖中的编辑落地到 tab；
+  // 2. 把编辑器当前内容回写给“它绑定的那个文件”（可能已经不是 activeTab）；
+  // 3. 取消会写回旧路径的延迟任务，避免文件被删除/改名后又被写回来。
+  pathMutationGuardDisposable = registerFilePathMutationGuard(async ({ type, oldPath } = {}) => {
+    const targetPath = String(oldPath || '').trim()
+    if (!targetPath) return
+    flushActiveSurfaceDrafts(`path-mutation:${type || 'unknown'}`)
+
+    const guardEditor = getActiveEditor()
+    const modelUri = String(guardEditor?.getModel?.()?.uri?.toString?.() || '')
+    const boundPath = resolveModelBoundPath({ modelUriToPath: editorModelUriToPath, modelUri })
+    if (guardEditor && isSameFilePath(boundPath, targetPath)) {
+      fileTreeStore.updateTabContent(boundPath, guardEditor.getValue())
+    }
+
+    cancelPendingNotebookDiskPersistForPath(targetPath)
+    logger.info('[PathMutation] editor drafts flushed before path mutation', {
+      type,
+      targetPath,
+      boundPath,
+    })
+  })
+
   window.addEventListener('keydown', handleKeyDown);
   window.addEventListener('guaxi:lsp-setting-changed', handleLspSettingChanged);
   document.addEventListener('selectionchange', handleGlobalSelectionChange, true)
@@ -25149,6 +25276,8 @@ onDeactivated(() => {
 })
 
 onUnmounted(() => {
+  pathMutationGuardDisposable?.()
+  pathMutationGuardDisposable = null
   saveActivePreviewReadPosition('editor-unmount')
   captureEditorReadPosition(selectedFile.value?.path || fileTreeStore.activeTab || '', getActiveEditor(), 'editor-unmount')
   if (previewRenderTimer) {

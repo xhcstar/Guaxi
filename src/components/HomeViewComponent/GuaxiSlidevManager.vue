@@ -1641,6 +1641,25 @@ const confirmCreate = async () => {
   }
 }
 
+// 删除文件/目录后关闭其下已打开的编辑器标签：
+// 不关闭的话，标签仍可保存，会把刚删掉的文件重新写回磁盘。
+const closeEditorTabsUnderPath = (deletedPath) => {
+  const root = normalizePath(deletedPath)
+  if (!root) return
+  const tabs = Array.isArray(slidevEditorStore.openTabs) ? [...slidevEditorStore.openTabs] : []
+  const toClose = tabs.filter((tab) => {
+    const p = normalizePath(tab?.path)
+    return !!p && (p === root || p.startsWith(`${root}/`))
+  })
+  for (const tab of toClose) closeTab(tab.path)
+  if (toClose.length) {
+    logger.info('[Slidev] closed editor tabs for deleted path', {
+      deletedPath: root,
+      closed: toClose.length,
+    })
+  }
+}
+
 const deleteSelected = async () => {
   const sel = getSelectedSlidevNode()
   if (!sel) {
@@ -1657,6 +1676,7 @@ const deleteSelected = async () => {
 
   try {
     await invoke('delete_path', { path: sel.key })
+    closeEditorTabsUnderPath(sel.key)
     await refreshSlidevRoot()
     message.success('删除成功')
   } catch (e) {
