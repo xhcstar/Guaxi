@@ -1442,7 +1442,7 @@ import { ref, computed, watch, onMounted, onUnmounted, onActivated, onDeactivate
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useEditorStore } from '../../stores/editorStore'
 import { useEditorBridgeStore } from '../../stores/editorBridgeStore'
-import { useSettingsStore, DEFAULT_EDITOR_DISPLAY_OPTIONS, resolveEditorLineHeight } from '../../stores/settingsStore'
+import { useSettingsStore, DEFAULT_EDITOR_DISPLAY_OPTIONS, resolveEditorLineHeight, resolveEditorFontFamily } from '../../stores/settingsStore'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
 import { useSiderStore } from '../../stores/useSiderStore'
@@ -1666,7 +1666,7 @@ const buildEditorDisplayMonacoOptions = (display) => {
     : DEFAULT_EDITOR_DISPLAY_OPTIONS.font_size
   return {
     fontSize,
-    fontFamily: String(merged.font_family || '').trim() || DEFAULT_EDITOR_DISPLAY_OPTIONS.font_family,
+    fontFamily: resolveEditorFontFamily(merged.font_family),
     lineHeight: resolveEditorLineHeight(fontSize),
     minimap: {
       enabled: !!merged.minimap_enabled,
@@ -2074,8 +2074,14 @@ const getMonacoThemeName = () => (settingsStore.appearanceTheme === 'dark' ? 'gu
 const getMarkdownPreviewThemeName = () => (settingsStore.appearanceTheme === 'dark' ? 'dark' : 'default')
 // 编辑器外观（字体/字号/行高/小地图）读的是「设置 → 编辑器 → 编辑器外观」那一组值。
 const editorDisplayMonacoOptions = () => buildEditorDisplayMonacoOptions(settingsStore.editorDisplay)
-// 主页被 KeepAlive 停用时改设置只能记账，等 onActivated 回到有布局的状态再推给编辑器。
+// 只用于判断「这批显示项是否已经推给编辑器」，避免重复 updateOptions 把 Ctrl+滚轮缩放的字号重置掉。
+const editorDisplaySignature = (options) => `${options.fontFamily}|${options.fontSize}|${options.minimap.enabled ? 1 : 0}`
+// 主页被 KeepAlive 停用（用户正停在设置页）时改的外观只记账，等 onActivated 回到有布局的状态再推给编辑器。
+// 不用「容器有没有布局」来判断：那套检查对 Monaco 的 DOM 与不同布局模式都太脆，
+// 直接跟踪页面激活状态最可靠。
+let homePageActive = true
 let editorDisplayApplyPending = false
+let lastAppliedEditorDisplaySignature = ''
 let previewMermaidRenderSeq = 0
 const renderPreviewMermaidDiagrams = async (container) => {
   const renderSeq = ++previewMermaidRenderSeq
@@ -3791,6 +3797,9 @@ let monacoLinkHoverDisposable = null;
 let secondaryMonacoLinkHoverDisposable = null;
 let monacoLinkLikeDecorDisposable = null;
 let secondaryMonacoLinkLikeDecorDisposable = null;
+// 表格行里的 emoji 宽度归一化（见 installMonacoTableEmojiCellDecorations）。
+let monacoTableEmojiDecorDisposable = null;
+let secondaryMonacoTableEmojiDecorDisposable = null;
 let editorEffectsLeft = null;
 let editorEffectsRight = null;
 
@@ -6780,6 +6789,166 @@ const installMonacoLinkLikeDecorations = (targetEditor, { tag = 'left' } = {}) =
         d1?.dispose?.();
         d2?.dispose?.();
         d3?.dispose?.();
+      } catch {
+        // ignore
+      }
+      if (timerId) {
+        window.clearTimeout(timerId);
+        timerId = null;
+      }
+      if (decorationIds.length) {
+        decorationIds = targetEditor.deltaDecorations(decorationIds, []);
+      }
+    }
+  };
+};
+
+// 探索者/Notebook 的哨兵块内部是原始 LaTeX / Python，不是 Markdown：
+// 表格对齐和 emoji 装饰都必须整块跳过，否则会把代码里的 `|` 当表格、把代码里的 emoji 缩小。
+const NOTEBOOK_OPAQUE_START_RES = [
+  /^\s*<!--\s*(?:math|py)(?:\s+\{.*\})?\s*-->\s*$/i,
+  /^\s*<!--\s*guaxi:pyout:.*:start\s*-->\s*$/i
+];
+const NOTEBOOK_OPAQUE_END_RES = [
+  /^\s*<!--\s*\/(?:math|py)\s*-->\s*$/i,
+  /^\s*<!--\s*guaxi:pyout:.*:end\s*-->\s*$/i
+];
+const isNotebookCellStartLine = (line) => NOTEBOOK_OPAQUE_START_RES.some((re) => re.test(String(line || '')));
+const isNotebookCellEndLine = (line) => NOTEBOOK_OPAQUE_END_RES.some((re) => re.test(String(line || '')));
+
+// 设计说明（表格源码对齐里的 emoji 宽度补丁）：
+// 1. formatMarkdownTablesInText 按「中文 = 2 格、emoji = 2 格」补空格，分隔行用等长的 `-` 对齐。
+// 2. 但彩色 emoji 实际由 Segoe UI Emoji 渲染，字宽 1.373em；而两格只有 1.2em（拉丁 0.6em × 2），
+//    也就是 2.29 格。空格只能补整数格，多出来的 0.29 格永远补不平：含 emoji 的行整体右移约 3px，
+//    分隔行是纯 ASCII 停在“理论位置”，看起来就是竖线上下对不齐。
+// 3. 与其改对齐算法，不如让 emoji 自己按两格渲染：给表格行里的 emoji 套一个缩小到「两格宽」的
+//    inline span。缩放比例不写死，用 canvas 按当前编辑器字体实测（换字体、换字号都能自适应）。
+// 4. 只扫描含 `|` 的行；超大文件（> 2MB）直接跳过，避免拖慢输入。
+const TABLE_EMOJI_CELL_CLASS = 'guaxi-table-emoji-cell'
+const TABLE_EMOJI_CLUSTER_RE = /\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic})*/gu
+const installMonacoTableEmojiCellDecorations = (targetEditor, { tag = 'left' } = {}) => {
+  if (!targetEditor) return null;
+
+  let decorationIds = [];
+  let timerId = null;
+  let measurementCanvas = null;
+  let emojiMetrics = null;
+
+  // 用 canvas 实测：等宽字体的单元格宽度 × 2 ÷ emoji 实际字宽 = 需要缩放的比例。
+  // 写不出通用常数（Meslo/Maple 都是 0.6em 一格，但换字体就不一定），所以按当前配置现算。
+  const refreshEmojiMetrics = () => {
+    try {
+      const display = buildEditorDisplayMonacoOptions(settingsStore.editorDisplay);
+      const baseSize = 100;
+      if (!measurementCanvas) measurementCanvas = document.createElement('canvas');
+      const ctx = measurementCanvas.getContext('2d');
+      if (!ctx) return;
+
+      ctx.font = `${baseSize}px ${display.fontFamily}`;
+      const cellWidth = ctx.measureText('0000').width / 4;
+      if (!(cellWidth > 0)) return;
+
+      emojiMetrics = { ctx, cellWidth };
+
+      const emojiWidth = ctx.measureText('✅').width;
+      if (!(emojiWidth > 0)) return;
+
+      const scale = Math.min(1, (cellWidth * 2) / emojiWidth);
+      targetEditor.getDomNode?.()?.style?.setProperty(
+        '--guaxi-table-emoji-scale',
+        `${scale.toFixed(4)}em`
+      );
+    } catch (error) {
+      logger.debug('[TableEmoji] measure failed, fall back to CSS default', { tag, error });
+    }
+  };
+
+  // 只在「实际宽度不是整数格」时才缩放：
+  // 彩色 emoji 是 2.29 格，需要缩到 2 格；而 ⚠（无变体选择符）这类由等宽字体自己渲染的符号
+  // 本来就是 1 格，缩了反而会错位。
+  const shouldNormalizeEmoji = (text) => {
+    if (!emojiMetrics) return true;
+    const { ctx, cellWidth } = emojiMetrics;
+    const width = ctx.measureText(text).width;
+    if (!(width > 0)) return false;
+    const ratio = width / cellWidth;
+    const nearest = Math.round(ratio);
+    return nearest > 0 && Math.abs(ratio - nearest) > 0.15;
+  };
+
+  const looksLikeTableLine = (text) => {
+    let pipes = 0;
+    for (let i = 0; i < text.length; i += 1) {
+      if (text[i] === '\\') {
+        i += 1;
+        continue;
+      }
+      if (text[i] === '|') pipes += 1;
+    }
+    return pipes >= 2;
+  };
+
+  const update = (reason) => {
+    const model = targetEditor.getModel?.();
+    if (!model) return;
+    if (model.getValueLength() > 2_000_000) return;
+
+    refreshEmojiMetrics();
+
+    const decs = [];
+    const lineCount = model.getLineCount();
+    let inOpaqueCell = false;
+    for (let ln = 1; ln <= lineCount; ln += 1) {
+      const text = model.getLineContent(ln);
+      // 自定义 cell 里的 emoji 属于代码/公式，不参与表格对齐的视觉修正。
+      if (inOpaqueCell) {
+        if (isNotebookCellEndLine(text)) inOpaqueCell = false;
+        continue;
+      }
+      if (isNotebookCellStartLine(text)) {
+        inOpaqueCell = true;
+        continue;
+      }
+      if (!text.includes('|') || !looksLikeTableLine(text)) continue;
+      TABLE_EMOJI_CLUSTER_RE.lastIndex = 0;
+      let match;
+      while ((match = TABLE_EMOJI_CLUSTER_RE.exec(text)) !== null) {
+        const length = match[0].length;
+        if (!length) break;
+        if (!shouldNormalizeEmoji(match[0])) continue;
+        const start = match.index;
+        decs.push({
+          range: new monaco.Range(ln, start + 1, ln, start + 1 + length),
+          options: {
+            inlineClassName: TABLE_EMOJI_CELL_CLASS,
+            stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
+          }
+        });
+      }
+    }
+
+    decorationIds = targetEditor.deltaDecorations(decorationIds, decs);
+    logger.debug('[TableEmoji] cell width normalized', { tag, reason, count: decs.length });
+  };
+
+  const schedule = (reason) => {
+    if (timerId) window.clearTimeout(timerId);
+    timerId = window.setTimeout(() => update(reason), 200);
+  };
+
+  const d1 = targetEditor.onDidChangeModel(() => schedule('model'));
+  const d2 = targetEditor.onDidChangeModelContent(() => schedule('content'));
+  schedule('init');
+
+  return {
+    // 字体/字号变了：内容没变，但 emoji 的缩放比例要按新字体重算。
+    refresh() {
+      schedule('font-change');
+    },
+    dispose() {
+      try {
+        d1?.dispose?.();
+        d2?.dispose?.();
       } catch {
         // ignore
       }
@@ -11458,20 +11627,32 @@ const applyMonacoThemeByLsp = (enabled) => {
  * 设置页和主页同窗口、共用同一份 pinia，所以不需要重启、也不用重开标签页。
  * 右侧分屏编辑器创建时是拷主编辑器的 rawOptions，之后不会自动跟随，这里一并更新。
  *
- * 布局守卫：Monaco 的字体度量要读容器（CharWidthReader 量字符宽度），
- * 主页被 KeepAlive 移出文档时容器量出来是 0 宽，这时候 updateOptions 会把错的度量写进缓存。
- * 所以只在 `isEditorSurfaceLaidOut` 为真时动手，否则记 pending，交给 onActivated 补。
+ * 主页被 KeepAlive 停用时（用户正停在设置页）Monaco 的容器已脱离文档，
+ * 这时 updateOptions 量出来的字体宽度不可信，所以只记 pending，等 onActivated 再补。
  */
 const applyEditorDisplayOptions = (source = 'manual') => {
   const options = editorDisplayMonacoOptions()
-  let applied = 0
 
+  // 还没有编辑器实例：新实例在 create 时会直接读 store，不需要这里补。
+  if (!editor && !secondaryEditor) return
+
+  if (!homePageActive) {
+    editorDisplayApplyPending = true
+    logger.info('[Editor] editor display apply deferred until home page activated', {
+      source,
+      fontFamily: options.fontFamily,
+      fontSize: options.fontSize,
+    })
+    return
+  }
+
+  // 配置没变就不碰编辑器：否则每次切回主页都会把用户用 Ctrl+滚轮临时缩放的字号重置掉。
+  const signature = editorDisplaySignature(options)
+  if (signature === lastAppliedEditorDisplaySignature) return
+
+  let applied = 0
   for (const [target, instance] of [['primary', editor], ['secondary', secondaryEditor]]) {
     if (!instance) continue
-    if (!isEditorSurfaceLaidOut(instance)) {
-      editorDisplayApplyPending = true
-      continue
-    }
     try {
       instance.updateOptions(options)
       instance.layout?.()
@@ -11481,12 +11662,17 @@ const applyEditorDisplayOptions = (source = 'manual') => {
     }
   }
 
-  if (applied > 0) editorDisplayApplyPending = false
+  if (applied > 0) {
+    lastAppliedEditorDisplaySignature = signature
+    editorDisplayApplyPending = false
+    // 表格里 emoji 的缩放比例依赖字体/字号，跟着显示项一起重算。
+    monacoTableEmojiDecorDisposable?.refresh?.()
+    secondaryMonacoTableEmojiDecorDisposable?.refresh?.()
+  }
 
   logger.info('[Editor] editor display options applied', {
     source,
     applied,
-    pending: editorDisplayApplyPending,
     fontFamily: options.fontFamily,
     fontSize: options.fontSize,
     lineHeight: options.lineHeight,
@@ -12119,6 +12305,8 @@ const initEditor = () => {
     },
     mouseWheelZoom: true  // 启用鼠标滚轮缩放
   });
+  // 创建时已经把这组显示项写进编辑器，记下签名：回到主页时 onActivated 就不必再推一遍。
+  lastAppliedEditorDisplaySignature = editorDisplaySignature(editorDisplayMonacoOptions())
   logger.info('[Editor] Monaco unicode highlight configured', {
     target: 'primary',
     ...GUAXI_MONACO_UNICODE_HIGHLIGHT_OPTIONS,
@@ -12499,6 +12687,12 @@ const ensureSecondaryEditor = () => {
   }
   secondaryMonacoLinkLikeDecorDisposable = installMonacoLinkLikeDecorations(secondaryEditor, { tag: 'right' });
 
+  if (secondaryMonacoTableEmojiDecorDisposable) {
+    secondaryMonacoTableEmojiDecorDisposable.dispose();
+    secondaryMonacoTableEmojiDecorDisposable = null;
+  }
+  secondaryMonacoTableEmojiDecorDisposable = installMonacoTableEmojiCellDecorations(secondaryEditor, { tag: 'right' });
+
   // 与左栏同理：内容监听挂在 editor 上，避免右栏换绑 model 后 rawContent/tab 停止同步。
   if (secondaryEditor) {
     secondaryEditor.onDidChangeModelContent(() => {
@@ -12578,6 +12772,10 @@ const disposeSecondaryEditor = () => {
   if (secondaryMonacoLinkLikeDecorDisposable) {
     secondaryMonacoLinkLikeDecorDisposable.dispose();
     secondaryMonacoLinkLikeDecorDisposable = null;
+  }
+  if (secondaryMonacoTableEmojiDecorDisposable) {
+    secondaryMonacoTableEmojiDecorDisposable.dispose();
+    secondaryMonacoTableEmojiDecorDisposable = null;
   }
 
   if (secondaryEditor) {
@@ -13032,6 +13230,12 @@ const setupEditorListeners = () => {
     monacoLinkLikeDecorDisposable = null;
   }
   monacoLinkLikeDecorDisposable = installMonacoLinkLikeDecorations(editor, { tag: 'left' });
+
+  if (monacoTableEmojiDecorDisposable) {
+    monacoTableEmojiDecorDisposable.dispose();
+    monacoTableEmojiDecorDisposable = null;
+  }
+  monacoTableEmojiDecorDisposable = installMonacoTableEmojiCellDecorations(editor, { tag: 'left' });
 
   scheduleSourceSyntaxHighlight(editor, 'init');
   refreshMarkdownSuggestMode(editor)
@@ -13771,6 +13975,30 @@ const formatMarkdownDocument = async () => {
   }
 };
 
+// 判断选区是否碰到探索者/Notebook 的自定义 cell。
+// 整篇格式化由后端把 cell 当不透明块保护；但“格式化选中”只把选区文本交给后端，
+// 选区里没有起止标记，后端无从判断，所以在这里兜底：选区与任何 cell 相交就跳过。
+const selectionTouchesNotebookCell = (model, selection) => {
+  if (!model || !selection) return false;
+  const selStart = selection.startLineNumber;
+  const selEnd = selection.endLineNumber;
+  let inCell = false;
+
+  for (let ln = 1; ln <= selEnd; ln += 1) {
+    const text = model.getLineContent(ln);
+    if (inCell) {
+      if (ln >= selStart) return true;
+      if (isNotebookCellEndLine(text)) inCell = false;
+      continue;
+    }
+    if (isNotebookCellStartLine(text)) {
+      inCell = true;
+      if (ln >= selStart) return true;
+    }
+  }
+  return false;
+};
+
 const formatMarkdownSelection = async () => {
   if (!ensureMarkdownEditor()) return;
 
@@ -13786,6 +14014,11 @@ const formatMarkdownSelection = async () => {
   const selectedText = model.getValueInRange(selection);
   if (!selectedText.trim()) {
     message.info('请先选择需要格式化的内容');
+    return;
+  }
+
+  if (selectionTouchesNotebookCell(model, selection)) {
+    message.warning('选区包含探索者 cell（<!--py--> / <!--math-->），已跳过格式化以免破坏代码');
     return;
   }
 
@@ -15150,13 +15383,29 @@ const formatMarkdownTablesInText = (content, source = 'manual') => {
   let inFence = false;
   let fenceChar = '';
   let fenceLen = 0;
+  let inOpaqueCell = false;
 
   // 设计说明：
   // 1. 后端 Markdown 格式化器目前只保留表格块，不负责源码列对齐。
   // 2. 这里在前端二次处理真实 Markdown 表格，跳过 fenced code block，避免误改代码中的 `|`。
   // 3. 分隔行可能不在当前扫描块第一行，取“分隔行上一行”作为表头，兼容表格前后紧贴其它含 `|` 的行。
+  // 4. 探索者/Notebook 的自定义 cell 整块跳过：里面的 `|`（Python 位运算、LaTeX）不是表格。
   for (let i = 0; i < lines.length;) {
     const line = lines[i] || '';
+
+    if (inOpaqueCell) {
+      result.push(line);
+      if (isNotebookCellEndLine(line)) inOpaqueCell = false;
+      i += 1;
+      continue;
+    }
+    if (isNotebookCellStartLine(line)) {
+      result.push(line);
+      inOpaqueCell = true;
+      i += 1;
+      continue;
+    }
+
     const fence = /^\s*(`{3,}|~{3,})/.exec(line);
     if (fence) {
       const mark = fence[1];
@@ -25257,6 +25506,7 @@ onMounted(() => {
 });
 
 onActivated(async () => {
+  homePageActive = true;
   const path = selectedFile.value?.path || fileTreeStore.activeTab || '';
 
   // restoreHomePreviewMode 可能内部走 handlePreviewModeSelect，其“切换前保存”会读到刚重置的滚动条，
@@ -25292,6 +25542,7 @@ onActivated(async () => {
 // org / PDF 面板靠各自的滚动监听（见 schedulePreviewPaneScrollSave），
 // 编辑器则走 Monaco 自己的 viewState —— 三者都不依赖这次读数。
 onDeactivated(() => {
+  homePageActive = false;
   const path = selectedFile.value?.path || fileTreeStore.activeTab || '';
   if (!path) return;
   const saved = saveActiveReadPositionForMode('home-page-deactivated', path);
@@ -25379,6 +25630,14 @@ onUnmounted(() => {
   if (secondaryMonacoLinkLikeDecorDisposable) {
     secondaryMonacoLinkLikeDecorDisposable.dispose();
     secondaryMonacoLinkLikeDecorDisposable = null;
+  }
+  if (monacoTableEmojiDecorDisposable) {
+    monacoTableEmojiDecorDisposable.dispose();
+    monacoTableEmojiDecorDisposable = null;
+  }
+  if (secondaryMonacoTableEmojiDecorDisposable) {
+    secondaryMonacoTableEmojiDecorDisposable.dispose();
+    secondaryMonacoTableEmojiDecorDisposable = null;
   }
 
   if (autoSaveTimerId) {
@@ -28387,6 +28646,17 @@ onUnmounted(() => {
 </style>
 
 <style>
+/* ───── 表格源码对齐：emoji 按正好 2 格渲染 ─────
+   彩色 emoji（Segoe UI Emoji）字宽 1.373em，而两格只有 1.2em（拉丁 0.6em × 2），
+   多出来的 0.29 格没法用整数个空格补平，含 emoji 的行会比纯 ASCII 的分隔行宽约 3px。
+   这里把表格行里的 emoji 缩到 0.877em：1.373 × 0.877 ≈ 1.204em，正好两格。
+   装饰器见 installMonacoTableEmojiCellDecorations（只作用于含 `|` 的行）。 */
+.monaco-editor .guaxi-table-emoji-cell {
+  /* 缩放比例由 installMonacoTableEmojiCellDecorations 用 canvas 按当前字体实测后写入；
+     读不到时（非表格行/测量失败）用 0.877 兜底，对 Maple/Meslo 仍然准确。 */
+  font-size: var(--guaxi-table-emoji-scale, 0.877em);
+}
+
 /* ───── 预览区双语全文翻译（译文块由 JS 注入到 v-html 内容里，必须写在非 scoped 块） ───── */
 .guaxi-bilingual-line {
   margin: 4px 0 10px;

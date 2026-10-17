@@ -197,16 +197,20 @@
               <n-select
                 :value="settingsStore.editorDisplay.font_family"
                 :options="editorFontFamilyOptions"
+                :loading="systemFontsLoading"
                 filterable
                 tag
                 :disabled="loading || editorDisplaySaving"
-                placeholder="选择预设，或直接输入 CSS font-family"
+                placeholder="选择预设或本机字体，也可直接输入 CSS font-family"
                 style="width: 420px; max-width: 100%"
+                @focus="loadSystemFonts"
                 @update:value="(v) => handleEditorDisplayChange('font_family', String(v || ''))"
               />
               <span class="description">
-                预设之外想用自己的字体，可以直接输入整条 CSS font-family 回退链后回车确认；
-                字体没装时按链上顺序回退，不会变成方块。
+                展开下拉时会读取本机已安装的字体（等宽的排在前面）；想用自己的字体链，
+                直接输入整条 CSS font-family 后回车确认即可，字体没装时按链上顺序回退，不会变成方块。
+                多数英文等宽字体（Meslo、Consolas、JetBrains Mono…）不含中文字形，
+                中文会沿回退链落到 Maple Mono NF CN / 微软雅黑——所以换字体后“中文看着没变、英文变了”是正常现象。
               </span>
             </n-space>
           </n-form-item>
@@ -480,6 +484,8 @@ import {
   DEFAULT_EDITOR_DISPLAY_OPTIONS,
   EDITOR_FONT_SIZE_MIN,
   EDITOR_FONT_SIZE_MAX,
+  EDITOR_FONT_FALLBACK_STACK,
+  resolveEditorFontFamily,
   resolveEditorLineHeight,
 } from '../../stores/settingsStore'
 import LspExtensionPanel from './LspExtensionPanel.vue'
@@ -525,7 +531,7 @@ const markdownFormatSaving = ref(false)
 const editorDisplaySaving = ref(false)
 // 预设字体链。标签只写字体名，选中后落盘的是整条 CSS font-family，
 // 所以用户没装这个字体时仍有稳定回退（前两项是项目自己在用的那份栈）。
-const editorFontFamilyOptions = [
+const editorFontPresetOptions = [
   { label: 'Maple Mono NF CN（默认）', value: DEFAULT_EDITOR_DISPLAY_OPTIONS.font_family },
   { label: 'JetBrains Mono', value: "'JetBrainsMono Nerd Font Mono', Consolas, monospace" },
   { label: 'Cascadia Code', value: "'Cascadia Code', 'Cascadia Mono', Consolas, monospace" },
@@ -534,11 +540,71 @@ const editorFontFamilyOptions = [
   { label: '中文优先（Noto Sans CJK）', value: "'Noto Sans CJK SC', 'Microsoft YaHei', Consolas, monospace" },
   { label: '系统等宽', value: 'monospace' },
 ]
+
+// 本机已安装字体由后端枚举（WebView 没有可用的系统字体 API），第一次展开下拉时才去读，
+// 不让设置页首屏等一次全量字体扫描。
+const systemFontFamilies = ref([])
+const systemFontsLoading = ref(false)
+let systemFontsRequested = false
+const loadSystemFonts = async () => {
+  if (systemFontsRequested) return
+  systemFontsRequested = true
+  systemFontsLoading.value = true
+  try {
+    const families = await invoke('list_system_fonts')
+    systemFontFamilies.value = Array.isArray(families)
+      ? families.filter((font) => font && typeof font.name === 'string' && font.name.trim())
+      : []
+    logger.info('读取系统字体列表完成', { count: systemFontFamilies.value.length })
+  } catch (error) {
+    // 读不到系统字体不影响预设与手输字体链，退化成只有预设即可。
+    logger.error('读取系统字体列表失败:', error)
+    systemFontFamilies.value = []
+  } finally {
+    systemFontsLoading.value = false
+  }
+}
+
+// 字体名里的单引号在 CSS font-family 里无法转义，直接去掉；其余字符原样放进引号即可。
+const quoteEditorFontFamily = (name) => `'${String(name || '').replace(/'/g, '')}'`
+
+// 选系统字体时补一段固定回退链。多数英文等宽字体（Meslo、Consolas、JetBrains Mono…）没有中文字形，
+// 不补的话中文会交给浏览器默认回退，同一份文档在换字体前后中文观感会悄悄变一次；
+// 补上之后语义很明确：英文/数字用你选的字体，缺字形时按这条链回退。
+// 回退段必须包含一个「中文正好占 2 格」的等宽字体，否则源码里对齐好的表格会看起来歪掉
+// （原因见 settingsStore 里 EDITOR_FONT_FALLBACK_STACK 的注释）。
+const buildSystemFontValue = (name) => `${quoteEditorFontFamily(name)}, ${EDITOR_FONT_FALLBACK_STACK}`
+
+const editorFontFamilyOptions = computed(() => {
+  const presetValues = new Set(editorFontPresetOptions.map((option) => option.value))
+  const systemOptions = systemFontFamilies.value
+    // 标签就用家族名本身：选中后下拉框显示的就是这个名字，别让“· 等宽”这类注释跑进选中值旁边。
+    .map((font) => ({ label: font.name, value: buildSystemFontValue(font.name) }))
+    // 预设里已有的字体不再在系统分组里重复出现。
+    .filter((option) => !presetValues.has(option.value))
+
+  // 早期版本存的是单字体值（如 `'MesloLGSDZ Nerd Font'`），它不在上面任何选项里；
+  // 补一条“当前”项，否则下拉框只能把整串原值当标签显示。
+  const currentFontFamily = String(settingsStore.editorDisplay.font_family || '').trim()
+  const knownValues = new Set([...editorFontPresetOptions, ...systemOptions].map((option) => option.value))
+  if (currentFontFamily && !knownValues.has(currentFontFamily)) {
+    systemOptions.unshift({ label: `当前：${currentFontFamily}`, value: currentFontFamily })
+  }
+
+  const systemGroupLabel = systemFontsLoading.value
+    ? '系统已安装字体（读取中…）'
+    : `系统已安装字体（${systemOptions.length}，等宽在前）`
+
+  return [
+    { type: 'group', label: '常用', key: 'preset', children: editorFontPresetOptions },
+    { type: 'group', label: systemGroupLabel, key: 'system', children: systemOptions },
+  ]
+})
 const editorDisplayPreviewStyle = computed(() => {
   const display = settingsStore.editorDisplay
   const size = Number(display.font_size) || DEFAULT_EDITOR_DISPLAY_OPTIONS.font_size
   return {
-    fontFamily: display.font_family || DEFAULT_EDITOR_DISPLAY_OPTIONS.font_family,
+    fontFamily: resolveEditorFontFamily(display.font_family),
     fontSize: `${size}px`,
     // 与 GuaxiEditor 共用同一个换算，预览的行距/换行位置才和实机一致。
     lineHeight: `${resolveEditorLineHeight(size)}px`,

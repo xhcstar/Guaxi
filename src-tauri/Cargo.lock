@@ -4948,6 +4948,7 @@ dependencies = [
  "etherparse",
  "exif",
  "flate2",
+ "fontdb",
  "fs_extra",
  "futures-util",
  "fuzzy-matcher",

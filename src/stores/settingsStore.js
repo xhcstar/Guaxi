@@ -51,6 +51,30 @@ export const EDITOR_FONT_SIZE_MIN = 8
 export const EDITOR_FONT_SIZE_MAX = 48
 
 /**
+ * 主编辑器字体链的中文/缺字回退段。
+ *
+ * 这里的 Maple Mono NF CN 是必需的，不是随手加的：它的中文字形宽 1.2em、拉丁 0.6em，
+ * 正好是 2 格；而源码编辑态的表格对齐（GuaxiEditor.formatMarkdownTablesInText）
+ * 也是按「中文 = 2 格」补空格的。换成比例字体回退（例如微软雅黑中文 1.0em）后，
+ * 中文行会逐字比对齐预期窄，表格竖线就会看起来对不齐。
+ */
+export const EDITOR_FONT_FALLBACK_STACK =
+  "'Maple Mono NF CN', Consolas, monospace, 'Microsoft YaHei', 'Courier New'"
+
+/**
+ * 把配置里的字体值解析成真正交给 CSS / Monaco 的 font-family。
+ *
+ * 单字体值（旧版本存下的 `'MesloLGSDZ Nerd Font'`，或用户手输的一个名字）补上回退链；
+ * 已经是逗号分隔字体链的原样返回。设置页预览和编辑器都用这一个函数，保证所见即所得。
+ */
+export const resolveEditorFontFamily = (fontFamily) => {
+  const raw = String(fontFamily || '').trim()
+  if (!raw) return DEFAULT_EDITOR_DISPLAY_OPTIONS.font_family
+  if (raw.includes(',')) return raw
+  return `${raw}, ${EDITOR_FONT_FALLBACK_STACK}`
+}
+
+/**
  * 主编辑器行高 = 字号 × 4/3。
  *
  * 4/3 正好等于 GuaxiEditor 原先写死的 18px 字号 / 24px 行高，所以默认字号下行高不变；

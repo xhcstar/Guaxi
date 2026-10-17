@@ -75,14 +75,115 @@ fn format_markdown_production(
 ) -> Result<String, MarkdownError> {
     let line_ending = detect_line_ending(content);
 
+    // 探索者/Notebook 的自定义 cell 是“源码里的不透明区块”：
+    // <!--math--> ... <!--/math-->、<!--py--> ... <!--/py-->、<!-- guaxi:pyout:...:start --> ... :end -->
+    // 内部是原始 LaTeX / Python，不是 Markdown。先整块抽出来换成占位注释，
+    // 格式化完再原样放回去——否则 comrak 会把 Python 代码揉成段落、把 `*args` 转义、
+    // 把 `# 注释` 当成标题（实测如此），cell 语法直接坏掉。
+    let extracted = extract_opaque_cells(content);
+
     if !options.format_lists {
-        let formatted = SimpleMarkdownFormatter::new(options.clone()).format(content)?;
-        return Ok(apply_line_ending(&formatted, line_ending));
+        let formatted = SimpleMarkdownFormatter::new(options.clone()).format(&extracted.text)?;
+        let restored = restore_opaque_cells(&formatted, &extracted.blocks);
+        return Ok(apply_line_ending(&restored, line_ending));
     }
 
-    let formatted = format_with_comrak(content, options)?;
+    let formatted = format_with_comrak(&extracted.text, options)?;
     let normalized = postprocess_markdown(&formatted, options);
-    Ok(apply_line_ending(&normalized, line_ending))
+    let restored = restore_opaque_cells(&normalized, &extracted.blocks);
+    Ok(apply_line_ending(&restored, line_ending))
+}
+
+/// 需要整块原样保留的自定义 cell 类型。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OpaqueCellKind {
+    Math,
+    Python,
+    PythonOutput,
+}
+
+/// 识别 cell 起始行。语法与后端 notebook.rs 的解析保持一致：
+/// `<!--math-->` / `<!--math {...}-->`、`<!--py-->` / `<!--py {...}-->`、`<!-- guaxi:pyout:...:start -->`。
+fn opaque_cell_start_kind(line: &str) -> Option<OpaqueCellKind> {
+    let text = line.trim();
+    if text == "<!--math-->" || (text.starts_with("<!--math ") && text.ends_with("-->")) {
+        return Some(OpaqueCellKind::Math);
+    }
+    if text == "<!--py-->" || (text.starts_with("<!--py ") && text.ends_with("-->")) {
+        return Some(OpaqueCellKind::Python);
+    }
+    if text.starts_with("<!-- guaxi:pyout:") && text.ends_with(":start -->") {
+        return Some(OpaqueCellKind::PythonOutput);
+    }
+    None
+}
+
+fn is_opaque_cell_end(kind: OpaqueCellKind, line: &str) -> bool {
+    let text = line.trim();
+    match kind {
+        OpaqueCellKind::Math => text == "<!--/math-->",
+        OpaqueCellKind::Python => text == "<!--/py-->",
+        OpaqueCellKind::PythonOutput => {
+            text.starts_with("<!-- guaxi:pyout:") && text.ends_with(":end -->")
+        }
+    }
+}
+
+struct OpaqueCells {
+    /// 把 cell 换成占位注释后的正文，交给格式化器。
+    text: String,
+    /// 各 cell 的原始文本（含起止标记行），按占位编号索引。
+    blocks: Vec<String>,
+}
+
+/// 抽出所有自定义 cell，用单行 HTML 注释占位。
+///
+/// 占位用 HTML 注释是因为 comrak 会把注释块原样输出，不会被转义或重排（实测）。
+/// 找不到结束标记时把剩余内容整体当不透明块：宁可少格式化，也不能把用户代码改坏。
+fn extract_opaque_cells(content: &str) -> OpaqueCells {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut out: Vec<String> = Vec::with_capacity(lines.len() + 8);
+    let mut blocks: Vec<String> = Vec::new();
+    let mut i = 0usize;
+
+    while i < lines.len() {
+        if let Some(kind) = opaque_cell_start_kind(lines[i]) {
+            let end_idx = (i + 1..lines.len())
+                .find(|&j| is_opaque_cell_end(kind, lines[j]))
+                .unwrap_or_else(|| lines.len().saturating_sub(1));
+
+            blocks.push(lines[i..=end_idx].join("\n"));
+            out.push(String::new());
+            out.push(format!("<!--guaxi:opaque:{}-->", blocks.len() - 1));
+            out.push(String::new());
+            i = end_idx + 1;
+            continue;
+        }
+
+        out.push(lines[i].to_string());
+        i += 1;
+    }
+
+    let mut text = out.join("\n");
+    if content.ends_with('\n') {
+        text.push('\n');
+    }
+    OpaqueCells { text, blocks }
+}
+
+fn restore_opaque_cells(formatted: &str, blocks: &[String]) -> String {
+    if blocks.is_empty() {
+        return formatted.to_string();
+    }
+
+    let mut result = formatted.to_string();
+    for (idx, block) in blocks.iter().enumerate() {
+        let marker = format!("<!--guaxi:opaque:{}-->", idx);
+        if let Some(pos) = result.find(&marker) {
+            result.replace_range(pos..pos + marker.len(), block);
+        }
+    }
+    result
 }
 
 fn detect_line_ending(content: &str) -> &'static str {
@@ -128,13 +229,128 @@ fn format_with_comrak(content: &str, options: &MarkdownFormatOptions) -> Result<
 
     comrak_options.render.width = if options.max_line_width == 0 { 0 } else { options.max_line_width };
 
-    let root = parse_document(&arena, content, &comrak_options);
+    // 解析前先把块级公式的围栏和正文拆开：Math 节点是行内节点，
+    // format_math 又是纯拼接，围栏紧贴正文时会被粘成 `其中：$$` / `$$ 后文`（见下方函数注释）。
+    let isolated = isolate_display_math_blocks(content);
+    let root = parse_document(&arena, &isolated, &comrak_options);
     let mut out = String::with_capacity(content.len().saturating_add(128));
 
     format_commonmark(root, &comrak_options, &mut out)
         .map_err(|e| MarkdownError::FormatError(e.to_string()))?;
 
     Ok(out)
+}
+
+/// 让独占一行的 `$$` 围栏与相邻正文之间至少隔一个空行。
+///
+/// 背景：comrak 的 `math_dollars` 把 `$$...$$` 解析成 Math 节点，但序列化
+/// （cm.rs 的 format_math）只是原样拼 `$$` + 内容 + `$$`，**不会补换行**。
+/// 于是这种常见写法——正文下一行直接写 `$$`，中间不空行——
+/// 会被粘成 `其中： $$` 和 `$$ 后文`，阅读器就认不出这是块级公式了
+/// （用户反馈"格式化后数学公式渲染失败"的截图正是这种形态）。
+///
+/// 只处理行首没有缩进、并且整行就是 `$$` 的围栏：
+/// 列表/引用里的 `$$` 带缩进或 `>` 前缀，硬插空行会改变它们的嵌套结构，
+/// 这种交给解析器原样处理。代码围栏里的 `$$` 一律不碰。
+fn isolate_display_math_blocks(content: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut out: Vec<&str> = Vec::with_capacity(lines.len() + 8);
+    let mut in_display_math = false;
+    let mut in_code_fence = false;
+    let mut code_fence = "";
+
+    for (idx, raw) in lines.iter().enumerate() {
+        let trimmed_start = raw.trim_start();
+        let is_code_fence = trimmed_start.starts_with("```") || trimmed_start.starts_with("~~~");
+
+        if is_code_fence {
+            if in_code_fence {
+                if trimmed_start.starts_with(code_fence) {
+                    in_code_fence = false;
+                    code_fence = "";
+                }
+            } else {
+                in_code_fence = true;
+                code_fence = if trimmed_start.starts_with("~~~") { "~~~" } else { "```" };
+            }
+            out.push(raw);
+            continue;
+        }
+
+        if in_code_fence {
+            out.push(raw);
+            continue;
+        }
+
+        let is_dollar_fence = raw.trim() == "$$";
+        let is_flush_left = !raw.starts_with(' ') && !raw.starts_with('\t');
+
+        if in_display_math {
+            out.push(raw);
+            if is_dollar_fence && is_flush_left {
+                in_display_math = false;
+                // 闭合围栏后面紧跟正文时补一个空行，避免 `$$ 后文`。
+                if lines
+                    .get(idx + 1)
+                    .map_or(false, |next| !next.trim().is_empty())
+                {
+                    out.push("");
+                }
+            }
+            continue;
+        }
+
+        if is_dollar_fence && is_flush_left {
+            // 开围栏前面紧跟正文时补一个空行，避免 `其中：$$`。
+            if out.last().map_or(false, |prev| !prev.trim().is_empty()) {
+                out.push("");
+            }
+            out.push(raw);
+            in_display_math = true;
+            continue;
+        }
+
+        // 修复旧版本格式化器留下的粘连形态：`其中：$$` + 若干公式行 + 独占一行的 `$$`。
+        // 只在「整行只有一个 `$$`、且在行尾」时才拆，避免误伤 `文字 $$x^2$$ 后文` 这类行内公式。
+        if is_flush_left
+            && !is_dollar_fence
+            && raw.ends_with("$$")
+            && raw.matches("$$").count() == 1
+            && is_glued_display_math_opener(&lines, idx)
+        {
+            out.push(raw[..raw.len() - 2].trim_end());
+            out.push("");
+            out.push("$$");
+            in_display_math = true;
+            continue;
+        }
+
+        out.push(raw);
+    }
+
+    let mut result = out.join("\n");
+    if content.ends_with('\n') {
+        result.push('\n');
+    }
+    result
+}
+
+/// 判断 `lines[idx]` 末尾的 `$$` 是不是一个被粘到正文行尾的块级公式开围栏：
+/// 往下找必须在一段连续非空行里遇到独占一行的 `$$`（闭围栏），中间不能再出现别的 `$$`。
+fn is_glued_display_math_opener(lines: &[&str], idx: usize) -> bool {
+    for raw in lines.iter().skip(idx + 1) {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return false;
+        }
+        if trimmed == "$$" {
+            return true;
+        }
+        if trimmed.contains("$$") {
+            return false;
+        }
+    }
+    false
 }
 
 fn unescape_heading_dots(line: &str) -> Option<String> {
@@ -313,6 +529,7 @@ impl SimpleMarkdownFormatter {
     pub fn format(&self, content: &str) -> Result<String, MarkdownError> {
         let lines: Vec<&str> = content.lines().collect();
         let mut formatted_lines: Vec<String> = Vec::new(); // 改为 String 类型
+        let mut in_display_math = false;
 
         let mut i = 0;
         while i < lines.len() {
@@ -334,6 +551,24 @@ impl SimpleMarkdownFormatter {
                 let (code_lines, skip) = self.extract_code_block(&lines[i..]);
                 formatted_lines.extend(code_lines);
                 i += skip;
+                continue;
+            }
+
+            // 块级公式（独占一行的 `$$`）内容一字不动，也不按宽度折行：
+            // LaTeX 里的空格有语义（运算符间距、对齐），按词折行会把公式直接拆坏。
+            if in_display_math {
+                formatted_lines.push(line.to_string());
+                if line.trim() == "$$" {
+                    in_display_math = false;
+                }
+                i += 1;
+                continue;
+            }
+
+            if line.trim() == "$$" && !line.starts_with(' ') && !line.starts_with('\t') {
+                formatted_lines.push(line.to_string());
+                in_display_math = true;
+                i += 1;
                 continue;
             }
 
@@ -951,4 +1186,236 @@ pub async fn markdown_format_quick(content: String) -> Result<FormatResponse, Ma
     };
 
     markdown_format(request).await
+}
+
+// ==================== 数学块格式化回归测试 ====================
+#[cfg(test)]
+mod math_block_format_tests {
+    use super::*;
+
+    fn format_with(options: MarkdownFormatOptions, input: &str) -> String {
+        format_markdown_production(input, &options).expect("格式化失败")
+    }
+
+    fn default_options() -> MarkdownFormatOptions {
+        MarkdownFormatOptions {
+            max_line_width: 80,
+            ..Default::default()
+        }
+    }
+
+    /// 正文下一行直接写 `$$`（中间不空行）是最常见的写法。
+    /// 格式化后开围栏必须仍在行首，否则阅读器认不出这是块级公式。
+    #[test]
+    fn display_math_directly_after_text_keeps_its_own_block() {
+        let input = r"其中：
+$$
+\hat{H} = -\frac{\hbar^2}{2m} \nabla^2 + V(\mathbf{r})
+$$
+";
+        let out = format_with(default_options(), input);
+
+        assert!(
+            out.contains(r"其中：
+
+$$"),
+            "开围栏没有和正文拆开:\n{out}"
+        );
+        assert!(
+            out.contains(r"\hat{H} = -\frac{\hbar^2}{2m} \nabla^2 + V(\mathbf{r})"),
+            "公式内容被改写（反斜杠/空格不能变）:\n{out}"
+        );
+    }
+
+    #[test]
+    fn display_math_directly_before_text_is_separated() {
+        let input = "$$\nx^2\n$$\n后面这句话\n";
+        let out = format_with(default_options(), input);
+
+        assert!(
+            out.contains("$$\n\n后面这句话"),
+            "闭围栏粘到了后文上:\n{out}"
+        );
+    }
+
+    /// 行内公式和货币写法不能被当成块级围栏处理。
+    #[test]
+    fn inline_math_and_currency_stay_intact() {
+        let input = "花费 $5 和 $10，行内公式 $x^2$ 保持行内。\n";
+        let out = format_with(default_options(), input);
+
+        assert!(out.contains("$5 和 $10"), "货币写法被改动:\n{out}");
+        assert!(out.contains("$x^2$"), "行内公式被改动:\n{out}");
+    }
+
+    /// 旧版格式化器已经把 `其中：$$` 粘连过一次的文件，再格式化一次应当被拆回块级公式。
+    #[test]
+    fn repairs_previously_glued_math_opener() {
+        let input = r"其中：$$
+\hat{H} = -\frac{\hbar^2}{2m} \nabla^2 + V(\mathbf{r})
+$$
+";
+        let out = format_with(default_options(), input);
+
+        assert!(
+            out.contains(r"其中：
+
+$$"),
+            "粘连的开围栏没有被拆回独立段落:\n{out}"
+        );
+        assert!(
+            out.contains(r"\hat{H} = -\frac{\hbar^2}{2m} \nabla^2 + V(\mathbf{r})"),
+            "公式内容被改写:\n{out}"
+        );
+    }
+
+    /// 代码块里的 `$$` 是普通文本，不能被当成公式围栏拆开。
+    #[test]
+    fn dollar_fences_inside_code_block_are_untouched() {
+        let input = "```text\n$$\nx^2\n$$\n```\n\n正文\n";
+        let out = format_with(default_options(), input);
+
+        assert!(
+            out.contains("```text\n$$\nx^2\n$$\n```"),
+            "代码块里的 $$ 被改动了:\n{out}"
+        );
+    }
+
+    /// 关掉「格式化列表」会走 SimpleMarkdownFormatter，它也必须原样保留公式，
+    /// 尤其不能按行宽折行——LaTeX 里的空格是有语义的。
+    #[test]
+    fn simple_formatter_keeps_display_math_verbatim() {
+        let options = MarkdownFormatOptions {
+            format_lists: false,
+            max_line_width: 40,
+            ..Default::default()
+        };
+        let input = r"$$
+\hat{H} = -\frac{\hbar^2}{2m} \nabla^2 + V(\mathbf{r})
+$$
+";
+        let out = format_with(options, input);
+
+        assert!(
+            out.contains(r"\hat{H} = -\frac{\hbar^2}{2m} \nabla^2 + V(\mathbf{r})"),
+            "极速格式化把公式折行/改写了:\n{out}"
+        );
+        assert_eq!(
+            out.lines().filter(|line| line.contains(r"\frac")).count(),
+            1,
+            "公式被拆成了多行:\n{out}"
+        );
+    }
+}
+
+// ==================== 自定义 cell 原样保留的回归测试 ====================
+#[cfg(test)]
+mod opaque_cell_format_tests {
+    use super::*;
+
+    fn format_with(options: MarkdownFormatOptions, input: &str) -> String {
+        format_markdown_production(input, &options).expect("格式化失败")
+    }
+
+    fn default_options() -> MarkdownFormatOptions {
+        MarkdownFormatOptions {
+            max_line_width: 80,
+            ..Default::default()
+        }
+    }
+
+    /// Python cell 里是原始 Python，不是 Markdown：缩进、`|`、`*args`、`#` 注释都不能动。
+    #[test]
+    fn python_cell_content_is_kept_verbatim() {
+        let cell = r#"<!--py {"id":"py-1","storage":"cellmeta"}-->
+# Python Cell
+x = a | b
+y = *args
+print(f"hello {x}")
+<!--/py-->"#;
+        let input = format!("正文\n\n{}\n\n后续段落\n", cell);
+        let out = format_with(default_options(), &input);
+
+        assert!(out.contains(cell), "Python cell 内容被改写:\n{out}");
+    }
+
+    #[test]
+    fn math_cell_content_is_kept_verbatim() {
+        let cell = r#"<!--math {"id":"math-1","storage":"cellmeta"}-->
+$$
+\begin{aligned}
+\nabla \cdot \mathbf{E} &= \frac{\rho}{\varepsilon_0}
+\end{aligned}
+$$
+<!--/math-->"#;
+        let input = format!("正文\n\n{}\n\n后续段落\n", cell);
+        let out = format_with(default_options(), &input);
+
+        assert!(out.contains(cell), "Math cell 内容被改写:\n{out}");
+    }
+
+    #[test]
+    fn empty_math_cell_keeps_markers_adjacent() {
+        let cell = r#"<!--math {"id":"math-1","storage":"cellmeta"}-->
+<!--/math-->"#;
+        let input = format!("正文\n\n{}\n", cell);
+        let out = format_with(default_options(), &input);
+
+        assert!(out.contains(cell), "空 cell 的起止标记被拆开:\n{out}");
+    }
+
+    #[test]
+    fn python_output_block_is_kept_verbatim() {
+        let cell = r#"<!-- guaxi:pyout:abc:start -->
+输出内容
+- 列表项
+<!-- guaxi:pyout:abc:end -->"#;
+        let input = format!("正文\n\n{}\n", cell);
+        let out = format_with(default_options(), &input);
+
+        assert!(out.contains(cell), "输出块内容被改写:\n{out}");
+    }
+
+    /// 保护只针对 cell：cell 之外的正文仍然要正常格式化。
+    #[test]
+    fn text_outside_cells_is_still_formatted() {
+        let input = "#    标题\n\n普通段落\n\n<!--py-->\nx = 1\n<!--/py-->\n";
+        let out = format_with(default_options(), input);
+
+        assert!(out.contains("# 标题"), "cell 外的标题没有被格式化:\n{out}");
+        assert!(
+            out.contains("<!--py-->\nx = 1\n<!--/py-->"),
+            "cell 内容被改写:\n{out}"
+        );
+    }
+
+    /// 未闭合的 cell（用户还在写）：宁可少格式化，也不能把后面的代码重新排版。
+    #[test]
+    fn unterminated_cell_is_preserved_to_end_of_file() {
+        let input = "正文\n\n<!--py-->\ndef f(*args):\n    return args\n";
+        let out = format_with(default_options(), input);
+
+        assert!(
+            out.contains("<!--py-->\ndef f(*args):\n    return args"),
+            "未闭合的 cell 被重新排版:\n{out}"
+        );
+    }
+
+    /// 关掉「格式化列表」走的极速路径同样要跳过 cell。
+    #[test]
+    fn simple_formatter_path_also_keeps_cells() {
+        let options = MarkdownFormatOptions {
+            format_lists: false,
+            max_line_width: 40,
+            ..Default::default()
+        };
+        let cell = r#"<!--py-->
+x = a | b
+y = *args
+<!--/py-->"#;
+        let input = format!("{}\n", cell);
+        let out = format_with(options, &input);
+
+        assert!(out.contains(cell), "极速格式化改写了 cell:\n{out}");
+    }
 }

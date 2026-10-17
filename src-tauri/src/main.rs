@@ -650,6 +650,7 @@ async fn main() {
             commands::settingview::set_markdown_format_options,
             commands::settingview::get_editor_display_config,
             commands::settingview::set_editor_display_config,
+            commands::settingview::list_system_fonts,
             commands::settingview::get_python_codegen_assist_enabled,
             commands::settingview::set_python_codegen_assist_enabled,
             commands::settingview::get_lsp_github_token,

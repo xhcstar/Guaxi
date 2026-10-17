@@ -1495,6 +1495,69 @@ fn normalize_editor_display_config(input: EditorDisplayConfig) -> EditorDisplayC
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct SystemFontFamily {
+    pub name: String,
+    /// 等宽字体在代码编辑器里更常用，前端据此把它们排到下拉列表前面。
+    pub monospaced: bool,
+}
+
+#[tauri::command]
+pub async fn list_system_fonts() -> Vec<SystemFontFamily> {
+    tauri::async_runtime::spawn_blocking(collect_system_font_families)
+        .await
+        .unwrap_or_default()
+}
+
+/// 枚举本机已安装的字体家族。
+///
+/// 为什么放在后端：WebView 里没有可用的系统字体枚举 API——`window.queryLocalFonts()`
+/// 需要浏览器层的权限授权，嵌在 Tauri 的 WebView2 里拿不到，所以只能自己读字体库。
+/// fontdb 解析的是字体文件本身（Windows 读系统 Fonts 目录与用户字体目录），
+/// 得到的家族名可以直接写进 CSS font-family；它本来就是 resvg/usvg 的传递依赖，
+/// 提成直接依赖不会多编译一份。
+///
+/// 结果在进程内缓存：首次全量解析要几百毫秒，而一次运行期间字体列表不会变。
+/// 命令声明成 async + spawn_blocking，解析时不会占住 UI 线程。
+fn collect_system_font_families() -> Vec<SystemFontFamily> {
+    static CACHE: std::sync::OnceLock<Vec<SystemFontFamily>> = std::sync::OnceLock::new();
+    CACHE
+        .get_or_init(|| {
+            let mut db = fontdb::Database::new();
+            db.load_system_fonts();
+
+            // 同一个家族常有多套字重/斜体，faces() 会重复给出；按家族名去重。
+            // 只要该家族任意一个 face 是等宽的，就把它当等宽字体（用户找的就是这种）。
+            let mut by_family: std::collections::BTreeMap<String, bool> =
+                std::collections::BTreeMap::new();
+            for face in db.faces() {
+                for (family, _language) in &face.families {
+                    let name = family.trim();
+                    if name.is_empty() {
+                        continue;
+                    }
+                    let monospaced = by_family.entry(name.to_string()).or_insert(false);
+                    *monospaced = *monospaced || face.monospaced;
+                }
+            }
+
+            let mut families: Vec<SystemFontFamily> = by_family
+                .into_iter()
+                .map(|(name, monospaced)| SystemFontFamily { name, monospaced })
+                .collect();
+            // 等宽优先，其次按名字（忽略大小写）排序，中文字体不会因为编码顺序散在末尾。
+            families.sort_by(|a, b| {
+                b.monospaced
+                    .cmp(&a.monospaced)
+                    .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            });
+
+            info!(count = families.len(), "list_system_fonts");
+            families
+        })
+        .clone()
+}
+
 #[tauri::command]
 pub fn get_python_codegen_assist_enabled() -> bool {
     let config = load_config();

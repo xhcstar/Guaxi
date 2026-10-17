@@ -115,6 +115,9 @@ flate2 = "1.0.30"
 tar = "0.4.44"
 zstd = { version = "0.13.2", features = ["zstdmt"] }
 comrak = "0.49.0"
+# 系统字体枚举（设置 → 编辑器 → 编辑器外观的字体下拉）。fontdb 本来就是 resvg/usvg 的传递依赖，
+# 这里只是提成直接依赖、复用同一份编译产物；它直接解析字体文件，拿到的家族名可写进 CSS font-family。
+fontdb = "0.23"
 # 文档转换「极速引擎」：纯 Rust 的多格式文档 -> Markdown（Word/PPT/Excel/OpenDocument/RTF/EPUB/CSV
 # 以及文本型 PDF）。无 Python、无 ML 模型、无需装配，进程内直调，中位耗时毫秒级。
 # 不做 OCR，扫描件会返回 NeedsOcr；调用侧用 catch_unwind 隔离其 panic（见 profile.release 说明）。
