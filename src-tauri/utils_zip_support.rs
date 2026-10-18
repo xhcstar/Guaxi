@@ -121,20 +121,52 @@ pub fn prepare_utils_bundles(
     manifest_dir: &Path,
     reuse_existing: bool,
 ) -> Result<PrepareResult, String> {
-    let started_at = Instant::now();
     let utils_dir = manifest_dir.join("utils");
-    let bundle_dir = utils_dir.join(GENERATED_BUNDLES_DIR);
-
     if !utils_dir.is_dir() {
         return Err(format!("utils dir not found: {}", utils_dir.display()));
     }
+    prepare_bundles_in_dir(
+        &utils_dir,
+        &utils_dir.join(GENERATED_BUNDLES_DIR),
+        reuse_existing,
+        None,
+    )
+}
+
+/// Bundles an arbitrary payload directory with the same archive layout the
+/// installer's extraction helper understands. Used for payloads that must land
+/// in the install root but cannot fit inside the NSIS installer itself, such as
+/// the CUDA runtime DLLs. `include_extension` keeps staging files (import libs,
+/// .exp) out of the payload when only one file type should ship.
+pub fn prepare_payload_bundles(
+    source_dir: &Path,
+    bundle_dir: &Path,
+    reuse_existing: bool,
+    include_extension: Option<&str>,
+) -> Result<PrepareResult, String> {
+    if !source_dir.is_dir() {
+        return Err(format!(
+            "payload source dir not found: {}",
+            source_dir.display()
+        ));
+    }
+    prepare_bundles_in_dir(source_dir, bundle_dir, reuse_existing, include_extension)
+}
+
+fn prepare_bundles_in_dir(
+    source_dir: &Path,
+    bundle_dir: &Path,
+    reuse_existing: bool,
+    include_extension: Option<&str>,
+) -> Result<PrepareResult, String> {
+    let started_at = Instant::now();
 
     // Reusing previously generated bundles is important for large release
     // payloads: repacking multi-GB resources can take many minutes.
-    if reuse_existing && has_existing_bundles(&bundle_dir) {
-        let bundle_count = count_existing_bundles(&bundle_dir);
+    if reuse_existing && has_existing_bundles(bundle_dir) {
+        let bundle_count = count_existing_bundles(bundle_dir);
         return Ok(PrepareResult {
-            bundle_dir,
+            bundle_dir: bundle_dir.to_path_buf(),
             strategy: BundleStrategy::RustTarZstd,
             reused_existing: true,
             elapsed_ms: started_at.elapsed().as_millis(),
@@ -145,16 +177,16 @@ pub fn prepare_utils_bundles(
         });
     }
 
-    reset_bundle_dir(&bundle_dir)?;
-    let bundles = collect_bundle_specs(&utils_dir, &bundle_dir)?;
+    reset_bundle_dir(bundle_dir)?;
+    let bundles = collect_bundle_specs(source_dir, bundle_dir, include_extension)?;
     let aggregate_stats = summarize_bundle_specs(&bundles);
 
-    // Each top-level utils entry becomes one bundle file. Compressing those
+    // Each top-level payload entry becomes one bundle file. Compressing those
     // bundles in parallel is the main coarse-grained speedup in this pipeline.
     bundles.par_iter().try_for_each(prepare_single_bundle)?;
 
     Ok(PrepareResult {
-        bundle_dir,
+        bundle_dir: bundle_dir.to_path_buf(),
         strategy: BundleStrategy::RustTarZstd,
         reused_existing: false,
         elapsed_ms: started_at.elapsed().as_millis(),
@@ -389,9 +421,13 @@ fn sanitize_relative_path(path: &Path) -> Option<PathBuf> {
     }
 }
 
-fn collect_bundle_specs(utils_dir: &Path, bundle_dir: &Path) -> Result<Vec<BundleSpec>, String> {
-    let mut entries = fs::read_dir(utils_dir)
-        .map_err(|e| format!("failed to read dir {}: {e}", utils_dir.display()))?
+fn collect_bundle_specs(
+    source_dir: &Path,
+    bundle_dir: &Path,
+    include_extension: Option<&str>,
+) -> Result<Vec<BundleSpec>, String> {
+    let mut entries = fs::read_dir(source_dir)
+        .map_err(|e| format!("failed to read dir {}: {e}", source_dir.display()))?
         .flatten()
         .collect::<Vec<_>>();
     entries.sort_by_key(|entry| entry.path());
@@ -399,12 +435,25 @@ fn collect_bundle_specs(utils_dir: &Path, bundle_dir: &Path) -> Result<Vec<Bundl
     let mut bundles = Vec::new();
     for entry in entries {
         let path = entry.path();
+
+        // Only filter top-level files: payload directories keep their whole tree.
+        if let Some(extension) = include_extension {
+            let matches = path
+                .extension()
+                .and_then(OsStr::to_str)
+                .map(|value| value.eq_ignore_ascii_case(extension))
+                .unwrap_or(false);
+            if path.is_file() && !matches {
+                continue;
+            }
+        }
+
         let relative = path
-            .strip_prefix(utils_dir)
+            .strip_prefix(source_dir)
             .map_err(|e| {
                 format!(
                     "failed to strip prefix {} from {}: {e}",
-                    utils_dir.display(),
+                    source_dir.display(),
                     path.display()
                 )
             })?
@@ -414,10 +463,10 @@ fn collect_bundle_specs(utils_dir: &Path, bundle_dir: &Path) -> Result<Vec<Bundl
             continue;
         }
 
-        // We bundle by top-level utils entry so installation can publish,
+        // We bundle by top-level payload entry so installation can publish,
         // replace and troubleshoot large runtime chunks independently.
         let bundle_entries = if path.is_dir() {
-            let nested = collect_entries(utils_dir, &path)?;
+            let nested = collect_entries(source_dir, &path)?;
             if nested.is_empty() {
                 vec![BundleEntrySpec {
                     relative: relative.clone(),

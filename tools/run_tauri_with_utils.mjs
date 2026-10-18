@@ -36,6 +36,16 @@ const windowsExtractHelperOutput = path.join(
   windowsNsisOutputDir,
   'extract_utils_bundles.exe',
 );
+const windowsCudaRuntimeSourceBundlesDir = path.join(
+  projectRoot,
+  'src-tauri',
+  'target',
+  'cuda-runtime-bundles',
+);
+const windowsCudaRuntimeBundlesDir = path.join(
+  windowsNsisOutputDir,
+  'cuda_runtime_bundles',
+);
 
 // 语音功能的 GPU 构建需要 SHERPA_ONNX_LIB_DIR 指向已装配的 CUDA 库目录。
 // 与其让每台机器各自 export 一遍，不如在这里按 `--features gpu` 自动补上——
@@ -64,48 +74,6 @@ function usesGpuFeature(commandArgs) {
     }
   }
   return false;
-}
-
-/// GPU 版要打进安装包的那批 DLL：sherpa/onnxruntime 自己的 + CUDA 运行时。
-///
-/// CPU 版是静态链接的，一个 DLL 都不需要，所以这里只在 `--features gpu` 时才注入配置，
-/// 免得把 1GB 多的运行库塞进本来干净的 CPU 安装包。
-/// 目标写 "."＝安装目录根，也就是 guaxi.exe 旁边——DLL 必须在这里，
-/// Windows 的加载器才找得到（onnxruntime 也正是按这个顺序去找 provider 的）。
-///
-/// 落成文件再传路径，而不是把 JSON 直接塞进命令行：Windows 上这条命令要过 cmd.exe，
-/// 它那套引号规则会把带双引号的 JSON 拆坏（--config 两种形式都收，用文件最稳）。
-async function writeCudaRuntimeBundleConfig() {
-  const entries = await readdir(sherpaCudaLibDir, { withFileTypes: true });
-  const dlls = entries
-    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.dll'))
-    .map((entry) => entry.name)
-    .sort();
-  if (dlls.length === 0) {
-    throw new Error(
-      `CUDA 库目录里没有 DLL，无法生成 GPU 版打包配置：${sherpaCudaLibDir}\n` +
-        '        请先运行：npm run sherpa:fetch:cuda',
-    );
-  }
-
-  const srcTauriDir = path.join(projectRoot, 'src-tauri');
-  // 源路径必须相对 tauri.conf.json 所在目录（src-tauri）来写。
-  const relativeRoot = path
-    .relative(srcTauriDir, sherpaCudaLibDir)
-    .split(path.sep)
-    .join('/');
-  const resources = {};
-  for (const name of dlls) {
-    resources[`${relativeRoot}/${name}`] = '.';
-  }
-
-  const configPath = path.join(srcTauriDir, 'target', 'gpu-bundle-resources.json');
-  await mkdir(path.dirname(configPath), { recursive: true });
-  await writeFile(configPath, `${JSON.stringify({ bundle: { resources } }, null, 2)}\n`, 'utf8');
-  console.log(
-    `[tauri] GPU 版打包：随安装包附带 ${dlls.length} 个运行库 DLL（配置见 ${configPath}）`,
-  );
-  return configPath;
 }
 
 /// GPU 版构建完，在真正的产物目录上跑一次 CUDA 自检。
@@ -218,7 +186,39 @@ function releaseCargoEnv() {
   };
 }
 
-async function publishExternalWindowsBundles() {
+async function collectBundleEntries(dir, label) {
+  let entries = [];
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch (error) {
+    throw new Error(`读取 ${label} 分包目录失败: ${dir} (${error.message})`);
+  }
+
+  const files = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.tar.zst')) {
+      continue;
+    }
+    const fullPath = path.join(dir, entry.name);
+    const fileStat = await stat(fullPath);
+    files.push({ name: entry.name, fullPath, size: fileStat.size });
+  }
+
+  if (files.length === 0) {
+    throw new Error(`未找到可发布的 ${label} 分包: ${dir}`);
+  }
+  return files;
+}
+
+async function publishBundleDir(bundleEntries, targetDir) {
+  await rm(targetDir, { recursive: true, force: true });
+  await mkdir(targetDir, { recursive: true });
+  for (const entry of bundleEntries) {
+    await cp(entry.fullPath, path.join(targetDir, entry.name));
+  }
+}
+
+async function publishExternalWindowsBundles(includeCudaRuntime) {
   if (process.platform !== 'win32') {
     return;
   }
@@ -226,55 +226,46 @@ async function publishExternalWindowsBundles() {
   // Windows installers do not embed the large utils runtime payload anymore.
   // Instead, release builds publish external bundle files next to the setup EXE,
   // and the NSIS post-install hook expands them into `$INSTDIR\\utils`.
-  let sourceEntries = [];
-  try {
-    sourceEntries = await readdir(utilsBundlesSourceDir, { withFileTypes: true });
-  } catch (error) {
-    throw new Error(`读取 utils 分包目录失败: ${utilsBundlesSourceDir} (${error.message})`);
-  }
-
-  const zipEntries = [];
-  for (const entry of sourceEntries) {
-    if (
-      !entry.isFile() ||
-      !entry.name.toLowerCase().endsWith('.tar.zst')
-    ) {
-      continue;
-    }
-    const fullPath = path.join(utilsBundlesSourceDir, entry.name);
-    const fileStat = await stat(fullPath);
-    zipEntries.push({ name: entry.name, fullPath, size: fileStat.size });
-  }
-
-  if (zipEntries.length === 0) {
-    throw new Error(`未找到可发布的 utils 分包: ${utilsBundlesSourceDir}`);
-  }
+  const utilsEntries = await collectBundleEntries(utilsBundlesSourceDir, 'utils');
+  // The GPU build externalizes the CUDA runtime for the same reason: bundled
+  // into the installer it pushes the NSIS data block past its ~2GB limit.
+  const cudaEntries = includeCudaRuntime
+    ? await collectBundleEntries(windowsCudaRuntimeSourceBundlesDir, 'CUDA 运行库')
+    : [];
 
   await mkdir(windowsNsisOutputDir, { recursive: true });
-  await rm(windowsExternalBundlesDir, { recursive: true, force: true });
-  await mkdir(windowsExternalBundlesDir, { recursive: true });
-
-  for (const entry of zipEntries) {
-    await cp(entry.fullPath, path.join(windowsExternalBundlesDir, entry.name));
-  }
+  await publishBundleDir(utilsEntries, windowsExternalBundlesDir);
   await cp(windowsExtractHelperSource, windowsExtractHelperOutput);
+  if (includeCudaRuntime) {
+    await publishBundleDir(cudaEntries, windowsCudaRuntimeBundlesDir);
+  }
 
-  const totalBytes = zipEntries.reduce((sum, entry) => sum + entry.size, 0);
+  const totalBytes = [...utilsEntries, ...cudaEntries].reduce(
+    (sum, entry) => sum + entry.size,
+    0,
+  );
   const readme = [
-    'Keep "utils_bundles" and "extract_utils_bundles.exe" next to the Guaxi setup executable.',
-    'The installer reads these external tar.zst bundle files during installation and expands them into the installed utils directory.',
+    'Keep "utils_bundles", "cuda_runtime_bundles" (GPU builds) and "extract_utils_bundles.exe" next to the Guaxi setup executable.',
+    'The installer reads these external tar.zst bundle files during installation: utils bundles expand into the installed utils directory, CUDA runtime bundles into the install root next to guaxi.exe.',
     '',
-    `Bundle count: ${zipEntries.length}`,
+    `Utils bundle count: ${utilsEntries.length}`,
+    ...(includeCudaRuntime ? [`CUDA runtime bundle count: ${cudaEntries.length}`] : []),
     `Total bytes: ${totalBytes}`,
     '',
-    ...zipEntries.map((entry) => `${entry.name}\t${entry.size}`),
+    ...utilsEntries.map((entry) => `utils_bundles/${entry.name}\t${entry.size}`),
+    ...cudaEntries.map((entry) => `cuda_runtime_bundles/${entry.name}\t${entry.size}`),
     '',
   ].join('\n');
   await writeFile(windowsExternalReadme, readme, 'utf8');
 
   console.log(
-    `[utils.bundle] published external windows bundles dir=${windowsExternalBundlesDir} bundleCount=${zipEntries.length} totalBytes=${totalBytes}`,
+    `[utils.bundle] published external windows bundles dir=${windowsExternalBundlesDir} bundleCount=${utilsEntries.length} totalBytes=${totalBytes}`,
   );
+  if (includeCudaRuntime) {
+    console.log(
+      `[cuda.bundle] published external windows bundles dir=${windowsCudaRuntimeBundlesDir} bundleCount=${cudaEntries.length}`,
+    );
+  }
 }
 
 async function main() {
@@ -315,17 +306,30 @@ async function main() {
     gpuSherpaLibDir = process.env.SHERPA_ONNX_LIB_DIR || sherpaCudaLibDir;
     console.log(`[tauri] GPU 构建：SHERPA_ONNX_LIB_DIR=${gpuSherpaLibDir}`);
     if (shouldPrepareForTauriCommand) {
-      // 光靠 sherpa 的 build.rs 只把 DLL 拷到 target 目录下的 exe 旁，进不了安装包；
-      // 这里补一份 resources 配置，打包时才会真的随安装目录落地。
-      //
-      // 必须插在 `--` 之前：`--` 之后的参数 Tauri 会原样转交给 cargo，
-      // 而 cargo 的 `--config` 只认 TOML，传 JSON 路径会直接解析失败。
-      const configPath = await writeCudaRuntimeBundleConfig();
-      const separatorIndex = tauriArgs.indexOf('--');
-      if (separatorIndex === -1) {
-        tauriArgs.push('--config', configPath);
-      } else {
-        tauriArgs.splice(separatorIndex, 0, '--config', configPath);
+      // 2.7GB 的 CUDA 运行库不能作为 bundle.resources 塞进安装包：连同
+      // guaxi.exe 会超过 makensis 数据块的 ~2GB 上限，直接报
+      // "error mmapping datablock" 打包失败。这里沿用 utils 的外置分包机制，
+      // 构建期压成 tar.zst，安装时由 extract_utils_bundles 解压到 $INSTDIR
+      // （guaxi.exe 旁边，Windows 加载器与 onnxruntime 都在那里找 DLL）。
+      const prepareArgs = [
+        'run',
+        '--quiet',
+        '--manifest-path',
+        'src-tauri/Cargo.toml',
+        '--bin',
+        'prepare_cuda_runtime_bundle',
+        '--',
+        '--source-dir',
+        gpuSherpaLibDir,
+        '--bundle-dir',
+        windowsCudaRuntimeSourceBundlesDir,
+      ];
+      if (reuseExisting) {
+        prepareArgs.push('--reuse-existing');
+      }
+      const prepareExitCode = await run('cargo', prepareArgs);
+      if (prepareExitCode !== 0) {
+        process.exit(prepareExitCode);
       }
     }
   }
@@ -409,10 +413,11 @@ async function main() {
   }
 
   if (shouldPrepareForTauriCommand && (tauriSubcommand === 'build' || tauriSubcommand === 'bundle')) {
-    if (usesGpuFeature(tauriArgs)) {
+    const isGpuBuild = usesGpuFeature(tauriArgs);
+    if (isGpuBuild) {
       await verifyCudaRuntimeForRelease();
     }
-    await publishExternalWindowsBundles();
+    await publishExternalWindowsBundles(isGpuBuild);
   }
 
   process.exit(tauriExitCode);

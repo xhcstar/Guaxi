@@ -38,20 +38,26 @@ fn main() {
         std::process::exit(1);
     });
 
-    // Keep the completion marker next to `utils`, not inside it, so the user's
-    // runtime resource directory stays clean and only contains actual resources.
-    let marker = destination
-        .parent()
-        .unwrap_or(&destination)
-        .join(".guaxi_utils_extract_complete");
-    fs::write(&marker, b"ok").unwrap_or_else(|error| {
-        eprintln!("failed to write marker {}: {error}", marker.display());
-        std::process::exit(1);
-    });
+    // Payloads extracted into the install root (the CUDA runtime DLLs) must not
+    // leave bookkeeping files next to the app, and their "destination parent" is
+    // outside $INSTDIR entirely. The installer hook passes --no-marker for them.
+    let write_marker = !std::env::args().skip(1).any(|arg| arg == "--no-marker");
+    if write_marker {
+        // Keep the completion marker next to `utils`, not inside it, so the user's
+        // runtime resource directory stays clean and only contains actual resources.
+        let marker = destination
+            .parent()
+            .unwrap_or(&destination)
+            .join(".guaxi_utils_extract_complete");
+        fs::write(&marker, b"ok").unwrap_or_else(|error| {
+            eprintln!("failed to write marker {}: {error}", marker.display());
+            std::process::exit(1);
+        });
 
-    let legacy_marker = destination.join(".guaxi_utils_extract_complete");
-    if legacy_marker.is_file() {
-      let _ = fs::remove_file(&legacy_marker);
+        let legacy_marker = destination.join(".guaxi_utils_extract_complete");
+        if legacy_marker.is_file() {
+            let _ = fs::remove_file(&legacy_marker);
+        }
     }
 
     println!(
