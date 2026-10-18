@@ -162,8 +162,10 @@ fn prepare_bundles_in_dir(
     let started_at = Instant::now();
 
     // Reusing previously generated bundles is important for large release
-    // payloads: repacking multi-GB resources can take many minutes.
-    if reuse_existing && has_existing_bundles(bundle_dir) {
+    // payloads: repacking multi-GB resources can take many minutes. An
+    // interrupted run leaves bundle temp files behind, so reuse only when the
+    // directory holds exactly the expected bundle set.
+    if reuse_existing && bundles_are_complete(source_dir, bundle_dir, include_extension)? {
         let bundle_count = count_existing_bundles(bundle_dir);
         return Ok(PrepareResult {
             bundle_dir: bundle_dir.to_path_buf(),
@@ -221,8 +223,19 @@ pub fn extract_bundle_archives_to_destination(
     Ok(bundles.len())
 }
 
-fn has_existing_bundles(bundle_dir: &Path) -> bool {
-    count_existing_bundles(bundle_dir) > 0
+/// True when `bundle_dir` holds exactly the bundles the source directory
+/// describes. Interrupted runs leave `.tmp` files and only a subset of the
+/// renamed bundles, which must not be mistaken for a complete payload.
+fn bundles_are_complete(
+    source_dir: &Path,
+    bundle_dir: &Path,
+    include_extension: Option<&str>,
+) -> Result<bool, String> {
+    let specs = collect_bundle_specs(source_dir, bundle_dir, include_extension)?;
+    let existing = bundle_files(bundle_dir)?;
+    Ok(!specs.is_empty()
+        && existing.len() == specs.len()
+        && specs.iter().all(|bundle| bundle.bundle_path.is_file()))
 }
 
 fn count_existing_bundles(bundle_dir: &Path) -> usize {
