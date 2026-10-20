@@ -204,9 +204,22 @@ pub fn crypto_gen_csr(
     common_name: String,
     org: Option<String>,
     sans: Vec<String>,
+    subject: Option<Subject>,
 ) -> Result<String, String> {
     let kp = KeyPair::from_pem(&key_pem).map_err(|e| format!("载入私钥失败: {e}"))?;
-    let params = build_params(&common_name, org, &sans, "server", 825)?;
+    let has_subject = subject.is_some();
+    let mut params = match subject {
+        Some(s) => {
+            let mut p = CertificateParams::default();
+            p.distinguished_name = dn_from_subject(&s);
+            p
+        }
+        None => build_params(&common_name, org, &sans, "server", 825)?,
+    };
+    if has_subject {
+        push_sans(&mut params, &sans)?;
+        apply_profile(&mut params, "server", 825);
+    }
     let csr = params.serialize_request(&kp).map_err(|e| format!("CSR 生成失败: {e}"))?;
     csr.pem().map_err(|e| format!("CSR 编码失败: {e}"))
 }
@@ -781,6 +794,30 @@ pub struct Subject {
     #[serde(default)]
     pub org_unit: Option<String>,
     pub common_name: String,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub serial_number: Option<String>,
+    #[serde(default)]
+    pub street: Option<String>,
+    #[serde(default)]
+    pub postal_code: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub given_name: Option<String>,
+    #[serde(default)]
+    pub surname: Option<String>,
+    #[serde(default)]
+    pub initials: Option<String>,
+    #[serde(default)]
+    pub pseudonym: Option<String>,
+    #[serde(default)]
+    pub generation_qualifier: Option<String>,
+    #[serde(default)]
+    pub dn_qualifier: Option<String>,
+    #[serde(default)]
+    pub organization_identifier: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -904,6 +941,26 @@ fn dn_from_subject(s: &Subject) -> DistinguishedName {
     ] {
         if let Some(x) = v.as_ref().filter(|x| !x.trim().is_empty()) {
             dn.push(t, x.clone());
+        }
+    }
+    // rcgen 0.13 只内置了五个常用 DN 类型，其余用标准 OID 作为 CustomDnType。
+    let extras: [(&[u64], &Option<String>); 12] = [
+        (&[1, 2, 840, 113549, 1, 9, 1], &s.email),
+        (&[2, 5, 4, 5], &s.serial_number),
+        (&[2, 5, 4, 9], &s.street),
+        (&[2, 5, 4, 17], &s.postal_code),
+        (&[2, 5, 4, 12], &s.title),
+        (&[2, 5, 4, 42], &s.given_name),
+        (&[2, 5, 4, 4], &s.surname),
+        (&[2, 5, 4, 43], &s.initials),
+        (&[2, 5, 4, 65], &s.pseudonym),
+        (&[2, 5, 4, 44], &s.generation_qualifier),
+        (&[2, 5, 4, 46], &s.dn_qualifier),
+        (&[2, 5, 4, 97], &s.organization_identifier),
+    ];
+    for (oid, v) in extras {
+        if let Some(x) = v.as_ref().filter(|x| !x.trim().is_empty()) {
+            dn.push(DnType::CustomDnType(oid.to_vec()), x.clone());
         }
     }
     dn.push(DnType::CommonName, s.common_name.clone());
@@ -1050,9 +1107,126 @@ pub fn crypto_ca_import(
     Ok(summary)
 }
 
+/// 把远端 Tongsuo 生成的 CA 直接入库（不做 rcgen 解析，SM2/PQC 也能存）。
 #[command]
-pub fn crypto_ca_delete(app: AppHandle, id: String) -> Result<(), String> {
+pub fn crypto_ca_import_pem(
+    app: AppHandle,
+    name: String,
+    category: String,
+    algo: Option<String>,
+    cert_pem: String,
+    key_pem: String,
+    subject_cn: Option<String>,
+    parent_id: Option<String>,
+) -> Result<CaSummary, String> {
+    if name.trim().is_empty() {
+        return Err("CA 名称不能为空".into());
+    }
+    if !cert_pem.contains("-----BEGIN ") || !key_pem.contains("-----BEGIN ") {
+        return Err("CA 证书或私钥不是 PEM 内容".into());
+    }
+    let parsed_cn = match pem_to_der_of(&cert_pem, "CERTIFICATE") {
+        Ok(d) => x509_parser::parse_x509_certificate(&d)
+            .ok()
+            .map(|(_, c)| c.subject().to_string())
+            .unwrap_or_default(),
+        Err(_) => String::new(),
+    };
+    let subject_cn = subject_cn
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| if parsed_cn.is_empty() { name.clone() } else { parsed_cn });
     let mut cas = read_cas(&app)?;
+    let entry = CaEntry {
+        id: Uuid::new_v4().to_string(),
+        name,
+        algo: algo.unwrap_or_else(|| category.clone()),
+        subject_cn,
+        cert_pem,
+        key_pem,
+        is_root: parent_id.is_none(),
+        parent_id,
+        category,
+        serial_counter: 2,
+        crl_number: 1,
+        revoked: Vec::new(),
+    };
+    let summary = ca_summary(&entry);
+    cas.push(entry);
+    write_cas(&app, &cas)?;
+    Ok(summary)
+}
+
+fn cert_serial_from_pem(pem_text: &str) -> u64 {
+    match pem_to_der_of(pem_text, "CERTIFICATE") {
+        Ok(d) => x509_parser::parse_x509_certificate(&d)
+            .ok()
+            .map(|(_, c)| {
+                c.raw_serial()
+                    .iter()
+                    .fold(0u64, |acc, b| acc.wrapping_shl(8) | *b as u64)
+            })
+            .unwrap_or(0),
+        Err(_) => 0,
+    }
+}
+
+/// 把远端 Tongsuo 签发的终端证书入库。
+#[command]
+pub fn crypto_leaf_import_pem(
+    app: AppHandle,
+    name: String,
+    kind: String,
+    ca_id: String,
+    cert_pem: String,
+    key_pem: String,
+    subject_cn: Option<String>,
+) -> Result<LeafSummary, String> {
+    if !cert_pem.contains("-----BEGIN ") || !key_pem.contains("-----BEGIN ") {
+        return Err("终端证书或私钥不是 PEM 内容".into());
+    }
+    let cas = read_cas(&app)?;
+    let ca = cas.iter().find(|c| c.id == ca_id).ok_or("签发 CA 不存在")?;
+    let parsed_cn = match pem_to_der_of(&cert_pem, "CERTIFICATE") {
+        Ok(d) => x509_parser::parse_x509_certificate(&d)
+            .ok()
+            .map(|(_, c)| c.subject().to_string())
+            .unwrap_or_default(),
+        Err(_) => String::new(),
+    };
+    let subject_cn = subject_cn
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(parsed_cn);
+    let entry = LeafEntry {
+        id: Uuid::new_v4().to_string(),
+        name,
+        kind,
+        ca_id: ca.id.clone(),
+        subject_cn,
+        serial: cert_serial_from_pem(&cert_pem),
+        cert_pem,
+        key_pem,
+        created: now_str(),
+    };
+    let summary = LeafSummary {
+        id: entry.id.clone(),
+        name: entry.name.clone(),
+        kind: entry.kind.clone(),
+        ca_id: entry.ca_id.clone(),
+        ca_name: ca.name.clone(),
+        subject_cn: entry.subject_cn.clone(),
+        serial: entry.serial,
+        created: entry.created.clone(),
+    };
+    let mut leaves = read_leaves(&app)?;
+    leaves.push(entry);
+    write_leaves(&app, &leaves)?;
+    Ok(summary)
+}
+
+#[command]
+pub fn crypto_ca_delete(app: AppHandle, id: String) -> Result<(), String> {    let mut cas = read_cas(&app)?;
     cas.retain(|c| c.id != id);
     write_cas(&app, &cas)
 }

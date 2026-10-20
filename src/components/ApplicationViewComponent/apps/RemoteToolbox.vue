@@ -126,8 +126,8 @@
                           <button class="tb-ib" @click="exportCa(c)"><Icon :icon="downloadIcon" width="14" height="14" /></button>
                         </template>导出该 CA 的证书(.crt) 与私钥(.key)</n-tooltip>
                         <n-tooltip trigger="hover"><template #trigger>
-                          <button class="tb-ib" @click="genCrl(c)"><Icon :icon="banIcon" width="14" height="14" /></button>
-                        </template>生成该 CA 的吊销列表 CRL 并保存</n-tooltip>
+                          <button class="tb-ib" :disabled="isRemoteCa(c)" @click="genCrl(c)"><Icon :icon="banIcon" width="14" height="14" /></button>
+                        </template>{{ isRemoteCa(c) ? '远程 SM2/PQC CA 的 CRL 请在远端 Tongsuo 上生成' : '生成该 CA 的吊销列表 CRL 并保存' }}</n-tooltip>
                         <n-tooltip trigger="hover"><template #trigger>
                           <button class="tb-ib danger" @click="deleteCa(c)"><Icon :icon="trashIcon" width="14" height="14" /></button>
                         </template>从库中删除该 CA（不影响已签发证书）</n-tooltip>
@@ -140,31 +140,28 @@
               <span v-if="error" class="tb-err">{{ error }}</span>
             </div>
 
-            <div class="tb-sec">
+            <div class="tb-sec" v-if="needRemoteTools">
               <div class="tb-h">
-                主题信息（新建 CA 与签发终端证书共用）
+                远程 Tongsuo（SM2 / PQC 使用）
                 <n-tooltip trigger="hover"><template #trigger><Icon :icon="helpIcon" width="13" height="13" class="tb-help" /></template>
-                X.509 主题是证书里的身份信息：C=国家(两位代码，如 CN)、ST=省/州、L=城市、O=组织、OU=部门、CN=通用名（服务端证书这里必须是域名，如 server.example.com）。留空则使用默认值。
+                  SM2/PQC 的密钥、CA、签发、验签都在远端 Tongsuo 上执行；生成结果会自动写入下方 CA 库和终端证书库。KeyUsage：CA=keyCertSign,cRLSign；签名证书=digitalSignature；加密证书=keyEncipherment；叶证书带 serverAuth,clientAuth。
                 </n-tooltip>
               </div>
+              <div class="tb-hint">工具路径指远端 Linux 上的 Tongsuo/openssl 可执行文件；本机不需要安装 Tongsuo。Tongsuo 8.5+ 把 Dilithium 改名为 ML-DSA-44/65/87，后端会自动探测实际算法名；Falcon 是否可用取决于该 Tongsuo 构建。未配置或工具不可用时会直接报远端错误。</div>
               <div class="tb-row">
-                <n-tooltip trigger="hover"><template #trigger><n-input v-model:value="subjC" size="small" placeholder="国家 C" style="width:110px" /></template>C —— 国家/地区，两位代码，如 CN / US / JP</n-tooltip>
-                <n-tooltip trigger="hover"><template #trigger><n-input v-model:value="subjST" size="small" placeholder="省 ST" style="width:120px" /></template>ST —— 省 / 州，如 Shannxi / California</n-tooltip>
-                <n-tooltip trigger="hover"><template #trigger><n-input v-model:value="subjL" size="small" placeholder="市 L" style="width:120px" /></template>L —— 城市，如 xi'an / Beijing</n-tooltip>
-                <n-tooltip trigger="hover"><template #trigger><n-input v-model:value="subjO" size="small" placeholder="组织 O" style="width:130px" /></template>O —— 组织 / 公司名，如 XA / Acme Inc</n-tooltip>
-                <n-tooltip trigger="hover"><template #trigger><n-input v-model:value="subjOU" size="small" placeholder="部门 OU" style="width:120px" /></template>OU —— 部门 / 团队，如 Dev / Ops</n-tooltip>
-                <n-tooltip trigger="hover"><template #trigger><n-input-number v-model:value="chainDays" size="small" :min="1" :max="36500" :show-button="false" style="width:110px" /></template>证书有效期（天）。根 CA 常用 3650（10 年），服务端证书常用 365～825</n-tooltip>
-                <span class="tb-res">天</span>
+                <n-select v-model:value="toolProfileId" size="small" :options="profileOptions" placeholder="SSH 档案" style="width:180px" />
+                <n-input v-model:value="toolPath" size="small" placeholder="远端工具路径，如 /opt/tongsuo/bin/openssl" style="flex:1;min-width:260px" />
+                <n-tooltip trigger="hover"><template #trigger>
+                  <button class="tb-ib" :disabled="!remotePid()" @click="browseToolPath"><Icon :icon="folderIcon" width="16" height="16" /></button>
+                </template>浏览远端，选择 Tongsuo/openssl 可执行文件</n-tooltip>
+                <n-input v-model:value="toolEnv" size="small" placeholder="环境变量，如 LD_LIBRARY_PATH=/opt/tongsuo/lib" style="flex:1;min-width:240px" />
+                <n-button size="small" :disabled="!remotePid()" @click="detectRemoteAlgos">检测算法</n-button>
               </div>
               <div class="tb-row">
-                <n-tooltip trigger="hover"><template #trigger>
-                  <n-input v-model:value="subjectText" size="small" placeholder="粘贴 openssl 主题串，如 /C=CN/ST=Shannxi/L=xi'an/O=XA/OU=Dev/CN=Root CA" style="flex:1;min-width:280px" @keyup.enter="parseSubjectString" />
-                </template>把 openssl -subj 里那串直接粘进来，会自动拆分填入上面的字段（CN 同时填到"新建 CA"与"签发终端证书"的 CN）</n-tooltip>
-                <n-tooltip trigger="hover"><template #trigger>
-                  <button class="tb-ib" @click="parseSubjectString"><Icon :icon="wandIcon" width="15" height="15" /></button>
-                </template>解析并填入上面的主题字段</n-tooltip>
-                <span class="tb-res">{{ subjectHint }}</span>
+                <span v-if="caStatus" class="tb-res">{{ caStatus }}</span>
+                <span v-if="error" class="tb-err">{{ error }}</span>
               </div>
+              <pre v-if="remoteAlgoList" class="tb-out">{{ remoteAlgoList }}</pre>
             </div>
 
             <div class="tb-sec">
@@ -174,20 +171,19 @@
                 「上级 CA」留空 = 生成自签的<b>根 CA</b>；选一个同类上级 = 由它签发<b>中间 CA</b>（构成 root → intermediate 链）。算法随类别自动匹配：RSA 选位数、ECC 选曲线。
                 </n-tooltip>
               </div>
+              <SubjectEditor v-model="caSubject" :defaults="SUBJECT_DEFAULTS" title="CA 主题信息" />
               <div class="tb-row">
-                <n-tooltip trigger="hover"><template #trigger><n-select v-model:value="caCategory" size="small" :options="caCategoryOptions" style="width:130px" /></template>CA 类别：RSA / ECC 本地签发。SM2 / PQC 请用下方「远程工具台」在装了 Tongsuo 的 Linux 机器上执行</n-tooltip>
+                <n-tooltip trigger="hover"><template #trigger><n-select v-model:value="caCategory" size="small" :options="caCategoryOptions" style="width:150px" /></template>CA 类别：RSA / ECC 本地签发；SM2 / PQC 自动走上方「远程 Tongsuo」，生成后写入同一个 CA 库</n-tooltip>
                 <n-tooltip v-if="caCategory==='rsa'" trigger="hover"><template #trigger><n-select v-model:value="chainBits" size="small" :options="rsaBitsOptions" style="width:160px" /></template>RSA 密钥长度。CA 建议 ≥ 3072 位</n-tooltip>
                 <n-tooltip v-if="caCategory==='ecc'" trigger="hover"><template #trigger><n-select v-model:value="chainCurve" size="small" :options="ecCurveOptions" style="width:150px" /></template>椭圆曲线。P-256 通用；P-384 更高强度</n-tooltip>
+                <n-tooltip v-if="caCategory==='pqc'" trigger="hover"><template #trigger><n-select v-model:value="pqcAlgo" size="small" :options="pqcAlgoOptions" style="width:200px" /></template>PQC 算法。Tongsuo 8.5+ 使用 NIST 名称 ML-DSA-44/65/87；后端会自动探测并映射。Falcon 需要该构建实际提供</n-tooltip>
                 <n-tooltip trigger="hover"><template #trigger><n-input v-model:value="caName" size="small" placeholder="CA 名称（库内标识，如 root-ca-ecc）" style="width:210px" /></template>库内显示名，只用于你自己识别，不写进证书</n-tooltip>
-                <n-tooltip trigger="hover"><template #trigger><n-input v-model:value="caCn" size="small" placeholder="CA 的 CN，如 Root CA (ECC)" style="width:210px" /></template>CA 证书的 CN，会写进证书主题（可先用上面的"主题串"一键填入）</n-tooltip>
+                <n-tooltip trigger="hover"><template #trigger><n-input-number v-model:value="chainDays" size="small" :min="1" :max="36500" :show-button="false" style="width:110px" /></template>证书有效期（天）。根 CA 常用 3650（10 年）</n-tooltip>
+                <span class="tb-res">天</span>
                 <n-tooltip trigger="hover"><template #trigger><n-select v-model:value="caParent" size="small" :options="caParentOptions" placeholder="上级 CA（空 = 根 CA）" clearable style="width:200px" /></template>留空 = 自签根 CA；选一个同类 CA = 由它签发中间 CA</n-tooltip>
                 <n-tooltip trigger="hover"><template #trigger>
                   <button class="tb-ib primary lg" :disabled="caLoading" @click="createCa"><Icon :icon="caLoading ? refreshIcon : plusIcon" width="17" height="17" :class="{ 'tb-spin': caLoading }" /></button>
                 </template>按当前参数生成 CA（证书 + 私钥自动入库）</n-tooltip>
-              </div>
-              <div class="tb-hint">
-                SM2 / PQC、TLCP 联调不再要求本机原生编译：在 Linux 机器上准备好 Tongsuo 后，用「远程执行 → 远程工具台」调用它的命令路径即可，生成的证书也能直接下载回来。
-                <n-button size="tiny" style="margin-left:8px" @click="goRemoteTool">打开远程工具台</n-button>
               </div>
             </div>
 
@@ -198,11 +194,14 @@
                 选一个库内 CA 作为<b>签发者</b>，为下面的 CN 签发终端证书。服务端证书的 CN/SAN 必须是<b>客户端实际访问的域名或 IP</b>，否则校验不过；客户端证书用于双向认证。生成的证书+私钥会进下方"终端证书库"。
                 </n-tooltip>
               </div>
+              <SubjectEditor v-model="leafSubject" :defaults="SUBJECT_DEFAULTS" title="终端证书主题信息" />
               <div class="tb-row">
                 <n-tooltip trigger="hover"><template #trigger><n-select v-model:value="issueCaId" size="small" :options="caSelectOptions" placeholder="选择签发 CA" style="width:230px" /></template>用哪个 CA 签发（显示类别与根/中间）</n-tooltip>
+                <n-tooltip v-if="selectedIssueCa?.category==='sm2'" trigger="hover"><template #trigger><n-select v-model:value="sm2CertType" size="small" :options="sm2CertTypeOptions" style="width:210px" /></template>SM2 双证书里的签名证书（digitalSignature）或加密证书（keyEncipherment）；也可以一次生成两套</n-tooltip>
                 <n-tooltip trigger="hover"><template #trigger><n-select v-model:value="leafProfile" size="small" :options="leafProfileOptions" style="width:120px" /></template>服务端 = 含 serverAuth，用于 HTTPS/TLS 服务；客户端 = 含 clientAuth，用于 mTLS 客户端</n-tooltip>
-                <n-tooltip trigger="hover"><template #trigger><n-input v-model:value="leafCn" size="small" placeholder="CN，如 server.example.com" style="width:220px" /></template>证书的 CN。服务端证书建议直接写域名（或用 IP）</n-tooltip>
                 <n-tooltip trigger="hover"><template #trigger><n-input v-model:value="leafSans" size="small" placeholder="SAN 逗号分隔，如 a.com,www.a.com,10.0.0.1" style="flex:1;min-width:180px" /></template>主题备用名（SAN）。现代浏览器只看 SAN，务必把域名/IP 都列上，逗号分隔</n-tooltip>
+                <n-tooltip trigger="hover"><template #trigger><n-input-number v-model:value="chainDays" size="small" :min="1" :max="36500" :show-button="false" style="width:110px" /></template>终端证书有效期（天），常用 365～825</n-tooltip>
+                <span class="tb-res">天</span>
                 <n-tooltip trigger="hover"><template #trigger>
                   <button class="tb-ib primary lg" :disabled="leafLoading" @click="issueLeaf"><Icon :icon="leafLoading ? refreshIcon : certificateIcon" width="17" height="17" :class="{ 'tb-spin': leafLoading }" /></button>
                 </template>用所选 CA 签发终端证书并入库</n-tooltip>
@@ -235,7 +234,8 @@
                       <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" @click="exportLeaf(l,'cert')"><Icon :icon="certificateIcon" width="14" height="14" /></button></template>导出证书 .crt</n-tooltip>
                       <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" @click="exportLeaf(l,'key')"><Icon :icon="downloadIcon" width="14" height="14" /></button></template>导出私钥 .key</n-tooltip>
                       <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" @click="exportLeaf(l,'chain')"><Icon :icon="saveIcon" width="14" height="14" /></button></template>导出完整证书链 .chain.pem</n-tooltip>
-                      <n-tooltip trigger="hover"><template #trigger><button class="tb-ib danger" @click="revokeCa(l.ca_id, l.serial)"><Icon :icon="banIcon" width="14" height="14" /></button></template>吊销该证书（登记到签发 CA 的吊销列表，随后可生成 CRL）</n-tooltip>
+                      <n-tooltip v-if="leafCaCategory(l)==='sm2'||leafCaCategory(l)==='pqc'" trigger="hover"><template #trigger><button class="tb-ib" @click="verifyLeafChain(l)"><Icon :icon="certificateIcon" width="14" height="14" /></button></template>用远端 Tongsuo 校验证书链（SM2/PQC）</n-tooltip>
+                      <n-tooltip trigger="hover"><template #trigger><button class="tb-ib danger" :disabled="leafCaCategory(l)==='sm2'||leafCaCategory(l)==='pqc'" @click="revokeCa(l.ca_id, l.serial)"><Icon :icon="banIcon" width="14" height="14" /></button></template>{{ leafCaCategory(l)==='sm2'||leafCaCategory(l)==='pqc' ? '远程 SM2/PQC 证书的吊销请在远端 Tongsuo 上执行' : '吊销该证书（登记到签发 CA 的吊销列表，随后可生成 CRL）' }}</n-tooltip>
                       <n-tooltip trigger="hover"><template #trigger><button class="tb-ib danger" @click="deleteLeaf(l)"><Icon :icon="trashIcon" width="14" height="14" /></button></template>从库中删除该证书</n-tooltip>
                     </td>
                   </tr>
@@ -248,6 +248,9 @@
               <div class="tb-h">导入已有 CA 到库</div>
               <div class="tb-row">
                 <n-input v-model:value="importCaName" size="small" placeholder="名称（库内标识）" style="width:200px" />
+                <n-tooltip trigger="hover"><template #trigger>
+                  <n-select v-model:value="importCaCategory" size="small" :options="importCaCategoryOptions" style="width:140px" />
+                </template>按证书算法选择类别；SM2/PQC 直接入库，不做本机密钥解析。PQC 使用「新建 CA」处选择的算法。</n-tooltip>
                 <n-tooltip trigger="hover"><template #trigger>
                   <button class="tb-ib" :class="{ 'tb-ok': !!importCertPem }" @click="pickCaFile('cert')"><Icon :icon="certificateIcon" width="15" height="15" /></button>
                 </template>{{ importCertPem ? '已选到 CA 证书（点击重新选择）' : '选择 CA 证书文件（PEM / DER）' }}</n-tooltip>
@@ -270,7 +273,7 @@
               </div>
               <div class="tb-row">
                 <span class="tb-res">密钥</span>
-                <n-tooltip trigger="hover"><template #trigger><n-select v-model:value="keyAlgo" size="small" :options="keyAlgoOptions" style="width:170px" /></template>密钥算法。当前库支持 RSA / ECDSA(P-256,P-384) / Ed25519</n-tooltip>
+                <n-tooltip trigger="hover"><template #trigger><n-select v-model:value="keyAlgo" size="small" :options="keyAlgoOptions" style="width:200px" /></template>密钥算法。RSA / ECDSA / Ed25519 在本机生成；SM2 和 PQC 选择带「远程」的项，会在远端 Tongsuo 上生成</n-tooltip>
                 <n-tooltip v-if="keyAlgo==='rsa'" trigger="hover"><template #trigger><n-select v-model:value="rsaBits" size="small" :options="rsaBitsOptions" style="width:190px" /></template>RSA 位数：越大越安全也越慢，2048 起步，长期用 3072/4096</n-tooltip>
                 <n-tooltip v-if="keyAlgo==='ec'" trigger="hover"><template #trigger><n-select v-model:value="ecCurve" size="small" :options="ecCurveOptions" style="width:200px" /></template>椭圆曲线。P-256 最常见；P-384 更高强度（P-521 需要 aws-lc 后端，本机不可用）</n-tooltip>
                 <n-tooltip trigger="hover"><template #trigger><button class="tb-ib primary" :class="{ 'tb-spin': keyLoading }" @click="genKey"><Icon :icon="plusIcon" width="15" height="15" /></button></template>生成密钥对（私钥 + 公钥）</n-tooltip>
@@ -280,14 +283,14 @@
                 <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" :disabled="!genPrivPem" @click="saveAsset('key', keyAlgo+' key', keyAlgo, genPrivPem, genPubPem)"><Icon :icon="uploadIcon" width="15" height="15" /></button></template>把密钥对存进下方"受管资产库"</n-tooltip>
               </div>
               <pre class="tb-out" v-if="genPrivPem">{{ genPrivPem }}{{ genPubPem }}</pre>
+              <SubjectEditor v-model="csrSubject" :defaults="SUBJECT_DEFAULTS" title="CSR 主题信息" />
               <div class="tb-row" style="margin-top:6px">
                 <span class="tb-res">CSR</span>
-                <n-tooltip trigger="hover"><template #trigger><n-input v-model:value="csrCn" size="small" placeholder="CN，如 example.com" style="width:200px" /></template>CSR 的 CN，通常写域名或设备名</n-tooltip>
                 <n-tooltip trigger="hover"><template #trigger><n-input v-model:value="csrSans" size="small" placeholder="SAN 逗号分隔（可空）" style="width:240px" /></template>主题备用名，逗号分隔；域名或 IP 都写这里</n-tooltip>
                 <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" @click="genCsr"><Icon :icon="wandIcon" width="15" height="15" /></button></template>用上面生成的私钥签发 CSR</n-tooltip>
                 <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" :disabled="!csrOut" @click="openView('生成的 CSR', csrOut)"><Icon :icon="eyeIcon" width="15" height="15" /></button></template>查看 CSR 详情</n-tooltip>
                 <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" :disabled="!csrOut" @click="saveText(csrOut,'request.csr')"><Icon :icon="saveIcon" width="15" height="15" /></button></template>保存 CSR 到文件</n-tooltip>
-                <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" :disabled="!csrOut" @click="saveAsset('csr', csrCn+' csr', '', csrOut, '')"><Icon :icon="uploadIcon" width="15" height="15" /></button></template>把 CSR 存进资产库</n-tooltip>
+                <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" :disabled="!csrOut" @click="saveAsset('csr', (csrSubject.commonName||'csr')+' csr', '', csrOut, '')"><Icon :icon="uploadIcon" width="15" height="15" /></button></template>把 CSR 存进资产库</n-tooltip>
               </div>
               <pre class="tb-out" v-if="csrOut">{{ csrOut }}</pre>
               <div class="tb-row" style="margin-top:6px">
@@ -528,14 +531,20 @@
 
           <n-tab-pane name="tool" tab="远程工具台">
             <div class="tb-sec">
-              <div class="tb-hint">在远端 Linux 上调用你自备的工具（Tongsuo/openssl 等）。填工具路径后，命令里的 <code>{tool}</code> 会被安全替换；SM2/PQC、TLCP 联调都可以在这里做。NFS 已挂载到本机时，直接把挂载目录当本地路径使用即可。需要 sudo 时请用有权限的账号或在目标机配置 NOPASSWD（此执行通道不代输 sudo 口令）。</div>
+              <div class="tb-hint">在远端 Linux 上调用你自备的工具（Tongsuo/openssl 等）。工具路径和工作目录都可以直接浏览远端选择；命令里的 <code>{tool}</code> 会被安全替换。需要 sudo 时请用有权限的账号或在目标机配置 NOPASSWD。</div>
               <div class="tb-row">
                 <n-select v-model:value="toolProfileId" size="small" :options="profileOptions" placeholder="SSH 档案" style="width:180px" />
                 <n-input v-model:value="toolPath" size="small" placeholder="远端工具路径，如 /opt/tongsuo/bin/openssl" style="flex:1;min-width:260px" />
+                <n-tooltip trigger="hover"><template #trigger>
+                  <button class="tb-ib" :disabled="!(toolProfileId || profileId)" @click="browseToolPath"><Icon :icon="folderIcon" width="16" height="16" /></button>
+                </template>浏览远端，选择工具可执行文件</n-tooltip>
                 <n-button size="small" :loading="toolProbing" :disabled="!(toolProfileId || profileId) || !toolPath" @click="probeTool">探测</n-button>
               </div>
               <div class="tb-row">
-                <n-input v-model:value="toolWorkdir" size="small" placeholder="工作目录（可空）" style="width:240px" />
+                <n-input v-model:value="toolWorkdir" size="small" placeholder="工作目录（可空）" style="flex:1;min-width:240px" />
+                <n-tooltip trigger="hover"><template #trigger>
+                  <button class="tb-ib" :disabled="!(toolProfileId || profileId)" @click="browseWorkdir"><Icon :icon="folderIcon" width="16" height="16" /></button>
+                </template>浏览远端，选择工作目录</n-tooltip>
                 <n-input v-model:value="toolEnv" size="small" placeholder="环境变量，如 LD_LIBRARY_PATH=/opt/tongsuo/lib" style="flex:1;min-width:240px" />
                 <n-input-number v-model:value="toolTimeout" size="small" :min="1" :max="3600" style="width:120px" />
                 <span class="tb-res">超时(秒)</span>
@@ -549,16 +558,17 @@
 
               <div class="tb-grp">文件传输（本机 ↔ 远端）</div>
               <div class="tb-row">
-                <n-button size="small" @click="pickUploadLocal"><Icon :icon="folderIcon" width="14" height="14" />选择本地文件</n-button>
-                <n-input v-model:value="uploadLocalPath" size="small" placeholder="本地文件路径" style="flex:1;min-width:180px" />
-                <n-input v-model:value="uploadRemotePath" size="small" placeholder="远端路径，如 /tmp/server.crt" style="flex:1;min-width:180px" />
-                <n-button size="small" :disabled="!(toolProfileId || profileId) || !uploadLocalPath || !uploadRemotePath" @click="doUpload">上传</n-button>
+                <n-button size="small" type="primary" :disabled="!(toolProfileId || profileId)" @click="pickAndUpload"><Icon :icon="uploadIcon" width="14" height="14" />上传本地文件…</n-button>
+                <n-button size="small" :disabled="!(toolProfileId || profileId)" @click="pickAndDownload"><Icon :icon="downloadIcon" width="14" height="14" />从远端下载…</n-button>
+                <span class="tb-res">上传：选本地文件 → 选远端目录；下载：选远端文件 → 选保存位置</span>
               </div>
+
+              <div class="tb-grp">把远端文件系统挂到本机</div>
               <div class="tb-row">
-                <n-input v-model:value="downloadRemotePath" size="small" placeholder="远端文件路径，如 /tmp/sm2.crt" style="flex:1;min-width:180px" />
-                <n-button size="small" @click="pickDownloadLocal"><Icon :icon="saveIcon" width="14" height="14" />选择保存位置</n-button>
-                <n-input v-model:value="downloadLocalPath" size="small" placeholder="本地保存路径" style="flex:1;min-width:180px" />
-                <n-button size="small" :disabled="!(toolProfileId || profileId) || !downloadRemotePath || !downloadLocalPath" @click="doDownload">下载</n-button>
+                <n-button size="small" :loading="mounting" :disabled="!mountStatus.available || !(toolProfileId || profileId)" @click="doMount">挂载为本地目录</n-button>
+                <n-button size="small" v-if="mountPoint" @click="openMount"><Icon :icon="folderIcon" width="14" height="14" />打开挂载目录</n-button>
+                <n-button size="small" v-if="mountPoint" @click="doUnmount">卸载</n-button>
+                <span class="tb-res">{{ mountPoint || mountStatus.hint || '挂载后可用系统文件浏览器像本机文件一样操作远端' }}</span>
               </div>
               <pre class="tb-out tb-out-tall">{{ toolOut }}</pre>
             </div>
@@ -583,6 +593,16 @@
         <CommandDispatchPanel />
       </n-tab-pane>
     </n-tabs>
+
+    <RemoteFilePicker
+      :show="picker.show"
+      :profile-id="picker.profileId"
+      :mode="picker.mode"
+      :title="picker.title"
+      :initial-path="picker.initial"
+      @update:show="v => picker.show = v"
+      @pick="onRemotePicked"
+    />
 
     <!-- 查看弹窗：字段明细 / PEM / DER(base64) / ASN.1，均可一键复制 -->
     <n-modal v-model:show="viewOpen" :mask-closable="true" style="width:820px;max-width:94vw">
@@ -650,7 +670,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, reactive, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { readFile } from '@tauri-apps/plugin-fs'
@@ -688,6 +708,9 @@ import wandIcon from '@iconify-icons/lucide/wand-2'
 import helpIcon from '@iconify-icons/lucide/help-circle'
 import sendIcon from '@iconify-icons/lucide/send'
 import CommandDispatchPanel from './CommandDispatchPanel.vue'
+import RemoteFilePicker from './RemoteFilePicker.vue'
+import SubjectEditor from './SubjectEditor.vue'
+import { readUiState, persistUiState, oneOf } from '../../../utils/uiState'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
 
 use([CanvasRenderer, ScatterChart, GridComponent, TooltipComponent, LegendComponent, DataZoomComponent])
@@ -981,41 +1004,7 @@ function safeFileName(s) {
   return String(s || 'item').replace(/[\\/:*?<>|·\s]+/g, '_').slice(0, 80)
 }
 
-// ============ 主题串解析：支持 openssl 的 /C=CN/ST=x/... 与逗号形式 ============
-const subjectText = ref('')
-const subjectHint = ref('')
-function parseSubjectString() {
-  const raw = subjectText.value.trim()
-  subjectHint.value = ''
-  if (!raw) { subjectHint.value = '请输入主题串'; return }
-  // /C=CN/ST=Shannxi/L=xi'an/O=XA/OU=Dev/CN=Root CA  或  C=CN, ST=x, O=y, CN=z
-  const map = {}
-  const re = /\/([A-Za-z]+)\s*=\s*([^/]*)/g
-  let m
-  let matched = false
-  while ((m = re.exec(raw)) !== null) {
-    map[m[1].toUpperCase()] = m[2].trim()
-    matched = true
-  }
-  if (!matched) {
-    for (const part of raw.split(/[,\n]/)) {
-      const i = part.indexOf('=')
-      if (i > 0) {
-        map[part.slice(0, i).trim().toUpperCase()] = part.slice(i + 1).trim()
-        matched = true
-      }
-    }
-  }
-  if (!matched) { subjectHint.value = '无法识别，示例：/C=CN/ST=Shannxi/L=xi\'an/O=XA/OU=Dev/CN=Root CA'; return }
-  const applied = []
-  if (map.C != null) { subjC.value = map.C; applied.push('C') }
-  if (map.ST != null) { subjST.value = map.ST; applied.push('ST') }
-  if (map.L != null) { subjL.value = map.L; applied.push('L') }
-  if (map.O != null) { subjO.value = map.O; applied.push('O') }
-  if (map.OU != null) { subjOU.value = map.OU; applied.push('OU') }
-  if (map.CN != null) { caCn.value = map.CN; leafCn.value = map.CN; applied.push('CN') }
-  subjectHint.value = applied.length ? `已填入: ${applied.join(' / ')}` : '未识别到 C/ST/L/O/OU/CN 字段'
-}
+// ============ 通用编码工具 ============
 const loadedKind = ref(''); const pfxPassword = ref(''); const pfxOut = ref('')
 function u8ToB64(u8) { let s = ''; const chunk = 0x8000; for (let i = 0; i < u8.length; i += chunk) s += String.fromCharCode.apply(null, u8.subarray(i, i + chunk)); return btoa(s) }
 function b64ToU8(b) { const bin = atob(b); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u }
@@ -1051,6 +1040,12 @@ const keyAlgoOptions = [
   { label: 'RSA（推荐 ≥2048）', value: 'rsa' },
   { label: 'ECDSA（P-256/P-384）', value: 'ec' },
   { label: 'Ed25519（EdDSA）', value: 'ed25519' },
+  { label: 'SM2（远程 Tongsuo）', value: 'remote:sm2' },
+  { label: 'Falcon-512（远程，需 Tongsuo 提供）', value: 'remote:falcon512' },
+  { label: 'Falcon-1024（远程，需 Tongsuo 提供）', value: 'remote:falcon1024' },
+  { label: 'Dilithium2 / ML-DSA-44（远程）', value: 'remote:dilithium2' },
+  { label: 'Dilithium3 / ML-DSA-65（远程）', value: 'remote:dilithium3' },
+  { label: 'Dilithium5 / ML-DSA-87（远程）', value: 'remote:dilithium5' },
 ]
 const rsaBitsOptions = [
   { label: 'RSA-1024（不安全，仅测试）', value: 1024 },
@@ -1065,75 +1060,156 @@ const ecCurveOptions = [
 ]
 const genPrivPem = ref(''); const genPubPem = ref(''); const keyLoading = ref(false)
 async function genKey() {
-  error.value = ''; keyLoading.value = true
+  error.value = ''
+  const remoteAlg = keyAlgo.value.startsWith('remote:') ? keyAlgo.value.slice(7) : ''
+  if (remoteAlg && !remoteConfigured()) return
+  keyLoading.value = true
   try {
-    const r = await invoke('crypto_gen_key', { algo: keyAlgo.value, rsaBits: keyAlgo.value === 'rsa' ? rsaBits.value : null, curve: keyAlgo.value === 'ec' ? ecCurve.value : null })
-    genPrivPem.value = r.private_pem; genPubPem.value = r.public_pem
+    if (remoteAlg) {
+      const r = await invoke('crypto_remote_gen_key', { profileId: remotePid(), algorithm: remoteAlg, opts: remoteOpts() })
+      genPrivPem.value = r.keyPem; genPubPem.value = r.pubPem
+      caStatus.value = `已生成 ${remoteAlg} 密钥对`
+    } else {
+      const r = await invoke('crypto_gen_key', { algo: keyAlgo.value, rsaBits: keyAlgo.value === 'rsa' ? rsaBits.value : null, curve: keyAlgo.value === 'ec' ? ecCurve.value : null })
+      genPrivPem.value = r.private_pem; genPubPem.value = r.public_pem
+    }
   } catch (e) { error.value = '生成失败: ' + (e?.message || e) } finally { keyLoading.value = false }
 }
 
-const csrCn = ref(''); const csrOrg = ref(''); const csrSans = ref(''); const csrKey = ref(''); const csrOut = ref(''); const csrLoading = ref(false)
+const csrSans = ref(''); const csrKey = ref(''); const csrOut = ref(''); const csrLoading = ref(false)
 async function genCsr() {
   error.value = ''
   const key = csrKey.value.trim() || genPrivPem.value
   if (!key) { error.value = '需要私钥（填入或先生成）'; return }
+  if (!csrSubject.value.commonName?.trim()) { error.value = '请填写 CSR 的通用名 CN'; return }
+  const remoteAlg = keyAlgo.value.startsWith('remote:') ? keyAlgo.value.slice(7) : ''
+  if (remoteAlg && !remoteConfigured()) return
   csrLoading.value = true
   try {
-    csrOut.value = await invoke('crypto_gen_csr', { keyPem: key, commonName: csrCn.value, org: csrOrg.value || null, sans: csrSans.value.split(',').map(s => s.trim()).filter(Boolean) })
+    const sans = csrSans.value.split(',').map(s => s.trim()).filter(Boolean)
+    if (remoteAlg) {
+      const r = await invoke('crypto_remote_gen_csr', {
+        profileId: remotePid(), keyPem: key,
+        subject: remoteSubjectFrom(csrSubject.value, csrSans.value), opts: remoteOpts(),
+      })
+      csrOut.value = r.csrPem
+      caStatus.value = `已生成 ${remoteAlg} CSR`
+    } else {
+      csrOut.value = await invoke('crypto_gen_csr', {
+        keyPem: key,
+        commonName: csrSubject.value.commonName,
+        org: csrSubject.value.org || null,
+        sans,
+        subject: { ...csrSubject.value },
+      })
+    }
   } catch (e) { error.value = 'CSR 生成失败: ' + (e?.message || e) } finally { csrLoading.value = false }
 }
 
 // ---- 证书链/签发：CA 库驱动（后台记录 CA，签发下拉选，无需粘贴 PEM）----
-// 主题默认值（用户不填即用这些）；与 gencert.sh 里 openssl -subj 的写法一致。
-const subjC = ref('CN'); const subjST = ref('Shannxi'); const subjL = ref("xi'an")
-const subjO = ref('XA'); const subjOU = ref('Dev')
+// ---- 证书主题：CA / 终端证书 / CSR 各一套，互不影响；改动自动落 localStorage ----
+const SUBJECT_DEFAULTS = {
+  commonName: '', country: 'CN', state: 'Shannxi', locality: "xi'an", org: 'XA', orgUnit: 'Dev',
+  email: '', serialNumber: '', street: '', postalCode: '', title: '', givenName: '', surname: '',
+  initials: '', pseudonym: '', generationQualifier: '', dnQualifier: '', organizationIdentifier: '',
+}
+function loadSubject(key) {
+  return { ...SUBJECT_DEFAULTS, ...readUiState(key, {}, (v) => v && typeof v === 'object' && !Array.isArray(v)) }
+}
+const caSubject = ref(loadSubject('guaxi_cert_subject_ca'))
+const leafSubject = ref(loadSubject('guaxi_cert_subject_leaf'))
+const csrSubject = ref(loadSubject('guaxi_cert_subject_csr'))
+for (const [key, src] of [
+  ['guaxi_cert_subject_ca', caSubject],
+  ['guaxi_cert_subject_leaf', leafSubject],
+  ['guaxi_cert_subject_csr', csrSubject],
+]) {
+  watch(src, (v) => persistUiState(key, v), { deep: true })
+}
 const chainBits = ref(2048); const chainCurve = ref('p256'); const chainDays = ref(3650)
-const caCategory = ref('ecc')
-// SM2/PQC 不再在本机原生生成：保留后端 tlcp 代码，但 UI 引导到远程工具台。
+const caCategory = ref(readUiState('guaxi_cert_ca_category', 'ecc', oneOf('rsa', 'ecc', 'sm2', 'pqc')))
+// RSA/ECC 本地签发；SM2/PQC 自动走远端 Tongsuo（同一套 CA 库/终端证书库）。
 const caCategoryOptions = [
   { label: 'RSA', value: 'rsa' }, { label: 'ECC', value: 'ecc' },
+  { label: 'SM2（国密）', value: 'sm2' }, { label: 'PQC（后量子）', value: 'pqc' },
+]
+const pqcAlgo = ref(readUiState('guaxi_cert_pqc_algo', 'dilithium3', oneOf('falcon512', 'falcon1024', 'dilithium2', 'dilithium3', 'dilithium5')))
+const pqcAlgoOptions = [
+  { label: 'Falcon-512（需 Tongsuo 提供）', value: 'falcon512' },
+  { label: 'Falcon-1024（需 Tongsuo 提供）', value: 'falcon1024' },
+  { label: 'Dilithium2 / ML-DSA-44', value: 'dilithium2' },
+  { label: 'Dilithium3 / ML-DSA-65', value: 'dilithium3' },
+  { label: 'Dilithium5 / ML-DSA-87', value: 'dilithium5' },
 ]
 const caList = ref([])
 const leafList = ref([])
-const caName = ref(''); const caCn = ref(''); const caParent = ref(null); const caLoading = ref(false)
-const issueCaId = ref(null); const leafProfile = ref('server'); const leafCn = ref(''); const leafSans = ref('')
+const caName = ref(''); const caParent = ref(null); const caLoading = ref(false)
+// 切类别时清掉可能不兼容的上级 CA。
+watch(caCategory, () => { caParent.value = null })
+const issueCaId = ref(null); const leafProfile = ref(readUiState('guaxi_cert_leaf_profile', 'server', oneOf('server', 'client'))); const leafSans = ref(readUiState('guaxi_cert_leaf_sans', ''))
+const sm2CertType = ref(readUiState('guaxi_cert_sm2_type', 'dual', oneOf('dual', 'sign', 'enc')))
+const sm2CertTypeOptions = [
+  { label: '双证书（签名 + 加密）', value: 'dual' },
+  { label: '只生成签名证书', value: 'sign' },
+  { label: '只生成加密证书', value: 'enc' },
+]
 const leafLoading = ref(false); const leafCertOut = ref(''); const leafKeyOut = ref('')
 const importCaName = ref(''); const importCertPem = ref(''); const importKeyPem = ref('')
+const importCaCategory = ref('auto')
+const importCaCategoryOptions = [
+  { label: '自动（RSA/ECC）', value: 'auto' },
+  { label: 'RSA', value: 'rsa' },
+  { label: 'ECC', value: 'ecc' },
+  { label: 'SM2', value: 'sm2' },
+  { label: 'PQC', value: 'pqc' },
+]
 const leafProfileOptions = [{ label: '服务端', value: 'server' }, { label: '客户端', value: 'client' }]
 const catLabel = { rsa: 'RSA', ecc: 'ECC', sm2: 'SM2', pqc: 'PQC', imported: '导入' }
-// SM2/PQC CA 只能查看/导出，不再参与本机签发（签发请走远程工具台）。
-const caSelectOptions = computed(() => caList.value
-  .filter(c => c.category === 'rsa' || c.category === 'ecc')
-  .map(c => ({ label: `[${catLabel[c.category] || c.category}] ${c.name} (${c.is_root ? '根' : '中间'})`, value: c.id })))
+// 四类 CA 都能签发；SM2/PQC 的签发会自动走远程 Tongsuo。
+const caSelectOptions = computed(() => caList.value.map(c => ({
+  label: `[${catLabel[c.category] || c.category}${c.category === 'pqc' && c.algo && c.algo !== 'pqc' ? '/' + c.algo : ''}] ${c.name} (${c.is_root ? '根' : '中间'})`,
+  value: c.id,
+})))
 const caParentOptions = computed(() => caList.value.filter(c => c.category === caCategory.value).map(c => ({ label: c.name, value: c.id })))
 // 四类 CA 库分组
 const caGroups = computed(() => ['rsa', 'ecc', 'sm2', 'pqc'].map(cat => ({ cat, label: catLabel[cat], items: caList.value.filter(c => c.category === cat) })))
-function subjectObj(cn) {
-  return { country: subjC.value || null, state: subjST.value || null, locality: subjL.value || null, org: subjO.value || null, orgUnit: subjOU.value || null, commonName: cn }
+function subjectFromEditor(s) {
+  return {
+    country: s.country || null, state: s.state || null, locality: s.locality || null,
+    org: s.org || null, orgUnit: s.orgUnit || null, commonName: s.commonName || '',
+    email: s.email || null, serialNumber: s.serialNumber || null, street: s.street || null,
+    postalCode: s.postalCode || null, title: s.title || null, givenName: s.givenName || null,
+    surname: s.surname || null, initials: s.initials || null, pseudonym: s.pseudonym || null,
+    generationQualifier: s.generationQualifier || null, dnQualifier: s.dnQualifier || null,
+    organizationIdentifier: s.organizationIdentifier || null,
+  }
 }
 async function loadCaList() { try { caList.value = await invoke('crypto_ca_list'); leafList.value = await invoke('crypto_leaf_list') } catch (e) { error.value = '读库失败: ' + (e?.message || e) } }
 async function createCa() {
   error.value = ''
-  if (!caName.value.trim() || !caCn.value.trim()) { error.value = '需要 CA 名称 + CN'; return }
+  if (!caName.value.trim() || !caSubject.value.commonName?.trim()) { error.value = '需要 CA 名称 + CN'; return }
+  if (caCategory.value === 'sm2' || caCategory.value === 'pqc') return createRemoteCa()
   caLoading.value = true
   try {
     await invoke('crypto_ca_create', {
-      name: caName.value, category: caCategory.value, subject: subjectObj(caCn.value),
+      name: caName.value, category: caCategory.value, subject: subjectFromEditor(caSubject.value),
       rsaBits: caCategory.value === 'rsa' ? chainBits.value : null,
       curve: caCategory.value === 'ecc' ? chainCurve.value : null,
       days: chainDays.value, issuerCaId: caParent.value || null,
     })
-    caName.value = ''; caCn.value = ''; caParent.value = null
+    caName.value = ''; caParent.value = null
     await loadCaList()
   } catch (e) { error.value = '生成 CA 失败: ' + (e?.message || e) } finally { caLoading.value = false }
 }
 async function issueLeaf() {
   error.value = ''; leafCertOut.value = ''; leafKeyOut.value = ''
-  if (!issueCaId.value || !leafCn.value.trim()) { error.value = '需要选择签发 CA + 填 CN'; return }
+  if (!issueCaId.value || !leafSubject.value.commonName?.trim()) { error.value = '需要选择签发 CA + 填 CN'; return }
+  const ca = caList.value.find(c => c.id === issueCaId.value)
+  if (ca && (ca.category === 'sm2' || ca.category === 'pqc')) return issueRemoteLeaf(ca)
   leafLoading.value = true
   try {
     const r = await invoke('crypto_issue_from_ca', {
-      caId: issueCaId.value, subject: subjectObj(leafCn.value), profile: leafProfile.value,
+      caId: issueCaId.value, subject: subjectFromEditor(leafSubject.value), profile: leafProfile.value,
       sans: leafSans.value.split(',').map(s => s.trim()).filter(Boolean), days: chainDays.value,
     })
     leafCertOut.value = r.cert_pem; leafKeyOut.value = r.key_pem || ''
@@ -1141,12 +1217,21 @@ async function issueLeaf() {
   } catch (e) { error.value = '签发失败: ' + (e?.message || e) } finally { leafLoading.value = false }
 }
 async function revokeCa(ca_id, serial) {
+  const ca = caList.value.find(c => c.id === ca_id)
+  if (ca && (ca.category === 'sm2' || ca.category === 'pqc')) {
+    error.value = '远程 SM2/PQC CA 的吊销/CRL 请在远端 Tongsuo 上执行'
+    return
+  }
   const reason = window.prompt('吊销原因 (keyCompromise/superseded/cessationOfOperation/…)', 'superseded')
   if (reason === null) return
   try { await invoke('crypto_ca_revoke', { caId: ca_id, serial, reason }); error.value = `已登记吊销 serial=${serial}` }
   catch (e) { error.value = '吊销失败: ' + (e?.message || e) }
 }
 async function genCrl(c) {
+  if (c.category === 'sm2' || c.category === 'pqc') {
+    error.value = '远程 SM2/PQC CA 的 CRL 请在远端 Tongsuo 上生成'
+    return
+  }
   try {
     const pem = await invoke('crypto_ca_gen_crl', { caId: c.id })
     await saveText(pem, (c.name || 'ca') + '.crl.pem')
@@ -1207,8 +1292,20 @@ async function importCa() {
   error.value = ''
   if (!importCaName.value.trim()) { error.value = '需要名称'; return }
   try {
-    await invoke('crypto_ca_import', { name: importCaName.value, certPem: importCertPem.value, keyPem: importKeyPem.value })
-    importCaName.value = ''; importCertPem.value = ''; importKeyPem.value = ''
+    if (importCaCategory.value === 'sm2' || importCaCategory.value === 'pqc') {
+      await invoke('crypto_ca_import_pem', {
+        name: importCaName.value,
+        category: importCaCategory.value,
+        algo: importCaCategory.value === 'pqc' ? pqcAlgo.value : 'sm2',
+        certPem: importCertPem.value,
+        keyPem: importKeyPem.value,
+        subjectCn: null,
+        parentId: null,
+      })
+    } else {
+      await invoke('crypto_ca_import', { name: importCaName.value, certPem: importCertPem.value, keyPem: importKeyPem.value })
+    }
+    importCaName.value = ''; importCertPem.value = ''; importKeyPem.value = ''; importCaCategory.value = 'auto'
     await loadCaList()
   } catch (e) { error.value = '导入失败: ' + (e?.message || e) }
 }
@@ -1396,16 +1493,40 @@ const signSchemeOptions = [
 async function runSign() {
   error.value = ''; signOut.value = ''
   const dataB64 = signTextInput.value ? strToB64(signData.value) : signData.value.trim()
+  const remoteAlg = keyAlgo.value.startsWith('remote:') ? keyAlgo.value.slice(7) : ''
+  if (remoteAlg && !remoteConfigured()) return
   try {
-    const sig = await invoke('crypto_sign', { keyPem: signKey.value.trim() || genPrivPem.value, dataB64, scheme: signScheme.value })
-    signOut.value = '签名(base64):\n' + sig; signSig.value = sig
+    if (remoteAlg) {
+      const r = await invoke('crypto_remote_sign', {
+        profileId: remotePid(), algorithm: remoteAlg,
+        keyPem: signKey.value.trim() || genPrivPem.value,
+        dataB64, opts: remoteOpts(),
+      })
+      signOut.value = '签名(base64):\n' + r.signatureB64; signSig.value = r.signatureB64
+    } else {
+      const sig = await invoke('crypto_sign', { keyPem: signKey.value.trim() || genPrivPem.value, dataB64, scheme: signScheme.value })
+      signOut.value = '签名(base64):\n' + sig; signSig.value = sig
+    }
   } catch (e) { error.value = '签名失败: ' + (e?.message || e) }
 }
 async function runVerify() {
   error.value = ''; signVerifyResult.value = null
   const dataB64 = signTextInput.value ? strToB64(signData.value) : signData.value.trim()
-  try { signVerifyResult.value = await invoke('crypto_verify', { pubPem: signKey.value.trim() || genPubPem.value, dataB64, sigB64: signSig.value, scheme: signScheme.value }) }
-  catch (e) { error.value = '验签失败: ' + (e?.message || e) }
+  const remoteAlg = keyAlgo.value.startsWith('remote:') ? keyAlgo.value.slice(7) : ''
+  if (remoteAlg && !remoteConfigured()) return
+  try {
+    if (remoteAlg) {
+      const r = await invoke('crypto_remote_verify_sign', {
+        profileId: remotePid(), algorithm: remoteAlg,
+        pubPem: signKey.value.trim() || genPubPem.value,
+        dataB64, signatureB64: signSig.value, opts: remoteOpts(),
+      })
+      signVerifyResult.value = r.ok
+      if (!r.ok) error.value = r.output
+    } else {
+      signVerifyResult.value = await invoke('crypto_verify', { pubPem: signKey.value.trim() || genPubPem.value, dataB64, sigB64: signSig.value, scheme: signScheme.value })
+    }
+  } catch (e) { error.value = '验签失败: ' + (e?.message || e) }
 }
 
 // 散列
@@ -1447,10 +1568,27 @@ async function runExec() {
 function importCapture() { if (execSaved.value) emit('import-file', execSaved.value) }
 
 // ---- 远程工具台：在远端 Linux 上调用自备工具（Tongsuo/openssl），并做文件传输 ----
-const toolProfileId = ref(null)
-const toolPath = ref('')
-const toolWorkdir = ref('')
-const toolEnv = ref('')
+const toolProfileId = ref(readUiState('guaxi_remote_tool_profile', null))
+const toolPath = ref(readUiState('guaxi_remote_tool_path', ''))
+const toolWorkdir = ref(readUiState('guaxi_remote_tool_workdir', ''))
+const toolEnv = ref(readUiState('guaxi_remote_tool_env', ''))
+for (const [key, src] of [
+  ['guaxi_remote_tool_profile', toolProfileId],
+  ['guaxi_remote_tool_path', toolPath],
+  ['guaxi_remote_tool_workdir', toolWorkdir],
+  ['guaxi_remote_tool_env', toolEnv],
+  ['guaxi_cert_ca_category', caCategory],
+  ['guaxi_cert_pqc_algo', pqcAlgo],
+  ['guaxi_cert_leaf_profile', leafProfile],
+  ['guaxi_cert_leaf_sans', leafSans],
+  ['guaxi_cert_sm2_type', sm2CertType],
+]) {
+  watch(src, (v) => persistUiState(key, v))
+}
+watch(profiles, (list) => {
+  if (!list.length) return
+  if (toolProfileId.value && !list.some((p) => p.id === toolProfileId.value)) toolProfileId.value = null
+})
 const toolTimeout = ref(120)
 const toolTemplate = ref(null)
 const toolCommand = ref('{tool} version')
@@ -1459,8 +1597,13 @@ const toolLoading = ref(false)
 const toolProbing = ref(false)
 const toolExit = ref(null)
 const toolMs = ref(0)
-const uploadLocalPath = ref(''); const uploadRemotePath = ref('')
-const downloadRemotePath = ref(''); const downloadLocalPath = ref('')
+// 远端文件选择器 + 挂载状态
+const picker = reactive({ show: false, profileId: '', mode: 'file', title: '', initial: '' })
+let pickerAction = null
+const lastRemoteDir = ref('')
+const mountStatus = reactive({ available: false, binary: '', hint: '' })
+const mountPoint = ref('')
+const mounting = ref(false)
 
 // 模板只是起点；命令框可自由改，适配不同 Tongsuo/openssl 版本。
 const toolTemplates = [
@@ -1474,17 +1617,15 @@ const toolTemplates = [
   { value: 'sm4-enc', label: 'SM4 加密文件', cmd: '{tool} enc -sm4-cbc -salt -in plain.txt -out plain.enc -pass pass:changeit' },
   { value: 'sm4-dec', label: 'SM4 解密文件', cmd: '{tool} enc -d -sm4-cbc -in plain.enc -out plain.txt -pass pass:changeit' },
   { value: 'tlcp', label: 'TLCP/握手测试', cmd: '{tool} s_client -connect 127.0.0.1:4433 -ntls -servername example.com' },
+  { value: 'falcon512', label: 'Falcon512 生成私钥', cmd: '{tool} genpkey -algorithm falcon512 -out falcon512.key' },
+  { value: 'dilithium3', label: 'Dilithium3 生成私钥', cmd: '{tool} genpkey -algorithm dilithium3 -out dilithium3.key' },
+  { value: 'dilithium5', label: 'Dilithium5 生成私钥', cmd: '{tool} genpkey -algorithm dilithium5 -out dilithium5.key' },
   { value: 'pqc-key', label: 'PQC 生成密钥 (ML-KEM)', cmd: '{tool} genpkey -algorithm MLKEM768 -out mlkem.key' },
 ]
 const toolTemplateOptions = toolTemplates.map(t => ({ label: t.label, value: t.value }))
 function applyToolTemplate(v) {
   const t = toolTemplates.find(x => x.value === v)
   if (t) toolCommand.value = t.cmd
-}
-function goRemoteTool() {
-  activeTab.value = 'exec'
-  execTab.value = 'tool'
-  if (!toolProfileId.value) toolProfileId.value = profileId.value
 }
 function baseName(p) {
   return String(p || '').replace(/\\/g, '/').split('/').filter(Boolean).pop() || ''
@@ -1522,44 +1663,255 @@ async function probeTool() {
   toolProbing.value = true
   try { await execRemoteTool('{tool} version') } finally { toolProbing.value = false }
 }
-async function pickUploadLocal() {
-  const sel = await open({ multiple: false, directory: false, title: '选择要上传到远端的文件' })
+function activePid() {
+  return toolProfileId.value || profileId.value || ''
+}
+function joinRemote(dir, name) {
+  if (!dir || dir === '/') return '/' + name
+  return String(dir).replace(/\/+$/, '') + '/' + name
+}
+function parentRemote(p) {
+  const s = String(p || '/').replace(/\/+$/, '')
+  if (!s || s === '/') return '/'
+  const i = s.lastIndexOf('/')
+  return i <= 0 ? '/' : s.slice(0, i)
+}
+function openRemotePicker(mode, title, initial, action) {
+  const pid = activePid()
+  if (!pid) { error.value = '需要 SSH 档案'; return }
+  picker.profileId = pid
+  picker.mode = mode
+  picker.title = title
+  picker.initial = initial || lastRemoteDir.value || ''
+  pickerAction = action
+  picker.show = true
+}
+function onRemotePicked(path) {
+  const a = pickerAction
+  pickerAction = null
+  picker.show = false
+  a?.(path)
+}
+function browseToolPath() {
+  openRemotePicker('file', '选择远端工具可执行文件', parentRemote(toolPath.value), (p) => { toolPath.value = p })
+}
+function browseWorkdir() {
+  openRemotePicker('dir', '选择远端工作目录', toolWorkdir.value, (p) => { toolWorkdir.value = p })
+}
+async function pickAndUpload() {
+  error.value = ''
+  const pid = activePid()
+  if (!pid) { error.value = '需要 SSH 档案'; return }
+  const sel = await open({ multiple: false, directory: false, title: '选择要上传的本地文件' })
   if (!sel) return
-  const p = typeof sel === 'string' ? sel : sel?.path
-  uploadLocalPath.value = p
-  if (!uploadRemotePath.value) uploadRemotePath.value = '/tmp/' + baseName(p)
+  const local = typeof sel === 'string' ? sel : sel?.path
+  openRemotePicker('dir', '选择远端目标目录', toolWorkdir.value, async (dir) => {
+    lastRemoteDir.value = dir
+    const remote = joinRemote(dir, baseName(local))
+    try {
+      const r = await invoke('remote_tool_upload', { profileId: pid, localPath: local, remotePath: remote })
+      toolOut.value = `已上传 ${r.bytes} 字节\n${r.localPath} → ${r.remotePath}`
+    } catch (e) { error.value = '上传失败: ' + (e?.message || e) }
+  })
 }
-async function doUpload() {
+function pickAndDownload() {
   error.value = ''
-  const pid = toolProfileId.value || profileId.value
+  const pid = activePid()
   if (!pid) { error.value = '需要 SSH 档案'; return }
-  try {
-    const r = await invoke('remote_tool_upload', {
-      profileId: pid,
-      localPath: uploadLocalPath.value,
-      remotePath: uploadRemotePath.value,
-    })
-    toolOut.value = `已上传 ${r.bytes} 字节\n${r.localPath} → ${r.remotePath}`
-  } catch (e) { error.value = '上传失败: ' + (e?.message || e) }
+  openRemotePicker('file', '选择要下载的远端文件', toolWorkdir.value, async (remote) => {
+    lastRemoteDir.value = parentRemote(remote)
+    const p = await save({ defaultPath: baseName(remote) || 'download.bin' })
+    if (!p) return
+    try {
+      const r = await invoke('remote_tool_download', { profileId: pid, remotePath: remote, localPath: p })
+      toolOut.value = `已下载 ${r.bytes} 字节\n${r.remotePath} → ${r.localPath}`
+    } catch (e) { error.value = '下载失败: ' + (e?.message || e) }
+  })
 }
-async function pickDownloadLocal() {
-  const p = await save({ defaultPath: baseName(downloadRemotePath.value) || 'download.bin' })
-  if (p) downloadLocalPath.value = p
+async function loadMountStatus() {
+  try { Object.assign(mountStatus, await invoke('remote_mount_status')) } catch (_) {}
 }
-async function doDownload() {
+async function doMount() {
   error.value = ''
-  const pid = toolProfileId.value || profileId.value
+  const pid = activePid()
   if (!pid) { error.value = '需要 SSH 档案'; return }
+  mounting.value = true
   try {
-    const r = await invoke('remote_tool_download', {
-      profileId: pid,
-      remotePath: downloadRemotePath.value,
-      localPath: downloadLocalPath.value,
-    })
-    toolOut.value = `已下载 ${r.bytes} 字节\n${r.remotePath} → ${r.localPath}`
-  } catch (e) { error.value = '下载失败: ' + (e?.message || e) }
+    const r = await invoke('remote_mount', { profileId: pid, mountPoint: null })
+    mountPoint.value = r.mountPoint
+    toolOut.value = `已挂载远端根目录：${r.mountPoint}\n现在可以用系统文件浏览器直接浏览远端文件。`
+  } catch (e) { error.value = '挂载失败: ' + (e?.message || e) }
+  finally { mounting.value = false }
+}
+async function openMount() {
+  if (!mountPoint.value) return
+  try { await invoke('cmd_open_in_os', { path: mountPoint.value }) }
+  catch (e) { error.value = '打开挂载目录失败: ' + (e?.message || e) }
+}
+async function doUnmount() {
+  if (!mountPoint.value) return
+  try {
+    await invoke('remote_unmount', { mountPoint: mountPoint.value })
+    mountPoint.value = ''
+    toolOut.value = '已卸载远端目录'
+  } catch (e) { error.value = '卸载失败: ' + (e?.message || e) }
 }
 watch(profileId, (v) => { if (v && !toolProfileId.value) toolProfileId.value = v })
+
+// ---- 远程 Tongsuo：SM2/PQC 与 RSA/ECC 共用同一套 CA/证书流程 ----
+const caStatus = ref('')
+const remoteAlgoList = ref('')
+const selectedIssueCa = computed(() => caList.value.find(c => c.id === issueCaId.value) || null)
+const needRemoteTools = computed(() => {
+  const cat = selectedIssueCa.value?.category
+  return caCategory.value === 'sm2' || caCategory.value === 'pqc'
+    || cat === 'sm2' || cat === 'pqc'
+    || keyAlgo.value.startsWith('remote:')
+})
+function isRemoteCa(c) { return !!c && (c.category === 'sm2' || c.category === 'pqc') }
+function leafCaCategory(l) { return caList.value.find(c => c.id === l.ca_id)?.category || '' }
+function caChainPem(ca) {
+  let out = ca.cert_pem.endsWith('\n') ? ca.cert_pem : ca.cert_pem + '\n'
+  let cur = ca.parent_id; let guard = 0
+  while (cur && guard++ < 32) {
+    const p = caList.value.find(c => c.id === cur)
+    if (!p) break
+    out += p.cert_pem.endsWith('\n') ? p.cert_pem : p.cert_pem + '\n'
+    cur = p.parent_id
+  }
+  return out
+}
+function remotePid() { return toolProfileId.value || profileId.value || '' }
+function remoteOpts() {
+  return {
+    toolPath: toolPath.value.trim() || null,
+    workdir: toolWorkdir.value.trim() || null,
+    env: toolEnv.value.trim() || null,
+    timeoutSecs: 600,
+  }
+}
+function remoteSubjectFrom(s, sans) {
+  return {
+    c: s.country || null, st: s.state || null, l: s.locality || null,
+    o: s.org || null, ou: s.orgUnit || null, cn: s.commonName || '',
+    email: s.email || null, serialNumber: s.serialNumber || null, street: s.street || null,
+    postalCode: s.postalCode || null, title: s.title || null, givenName: s.givenName || null,
+    surname: s.surname || null, initials: s.initials || null, pseudonym: s.pseudonym || null,
+    generationQualifier: s.generationQualifier || null, dnQualifier: s.dnQualifier || null,
+    organizationIdentifier: s.organizationIdentifier || null,
+    sans: String(sans || '').trim() || null,
+  }
+}
+function remoteConfigured() {
+  if (!remotePid()) { error.value = '请先在上方「远程 Tongsuo」选择 SSH 档案'; return false }
+  if (!toolPath.value.trim()) { error.value = '请先填写/浏览远端 Tongsuo 工具路径'; return false }
+  return true
+}
+async function detectRemoteAlgos() {
+  error.value = ''; remoteAlgoList.value = ''
+  if (!remoteConfigured()) return
+  try {
+    remoteAlgoList.value = await invoke('crypto_remote_algorithms', { profileId: remotePid(), opts: remoteOpts() })
+    caStatus.value = '已获取远端算法列表'
+  } catch (e) { error.value = '检测算法失败: ' + (e?.message || e) }
+}
+
+async function createRemoteCa() {
+  if (!remoteConfigured()) return
+  caLoading.value = true
+  caStatus.value = ''
+  try {
+    const alg = caCategory.value === 'pqc' ? pqcAlgo.value : 'sm2'
+    let parentCert = null; let parentKey = null
+    if (caParent.value) {
+      const p = await invoke('crypto_ca_export', { id: caParent.value })
+      parentCert = p.cert_pem; parentKey = p.key_pem
+    }
+    const r = await invoke('crypto_remote_create_ca', {
+      profileId: remotePid(), algorithm: alg,
+      subject: remoteSubjectFrom(caSubject.value, null), days: chainDays.value, opts: remoteOpts(),
+      parentCertPem: parentCert, parentKeyPem: parentKey,
+    })
+    await invoke('crypto_ca_import_pem', {
+      name: caName.value, category: caCategory.value, algo: alg,
+      certPem: r.certPem, keyPem: r.keyPem,
+      subjectCn: caSubject.value.commonName, parentId: caParent.value || null,
+    })
+    caName.value = ''; caParent.value = null
+    await loadCaList()
+    caStatus.value = `已生成并写入 CA 库（${alg}${parentCert ? '，由上级 CA 签发' : ''}）`
+  } catch (e) { error.value = '生成 CA 失败: ' + (e?.message || e) } finally { caLoading.value = false }
+}
+
+async function issueRemoteLeaf(ca) {
+  if (!remoteConfigured()) return
+  leafLoading.value = true
+  caStatus.value = ''
+  try {
+    const m = await invoke('crypto_ca_export', { id: ca.id })
+    const cn = leafSubject.value.commonName
+    const subj = remoteSubjectFrom(leafSubject.value, leafSans.value)
+    if (ca.category === 'sm2') {
+      if (sm2CertType.value !== 'dual') {
+        const usage = sm2CertType.value === 'enc' ? 'enc' : 'sign'
+        const label = usage === 'enc' ? '加密' : '签名'
+        const r = await invoke('crypto_remote_issue_cert', {
+          profileId: remotePid(), algorithm: 'sm2', caCertPem: m.cert_pem, caKeyPem: m.key_pem,
+          subject: subj, days: chainDays.value, usage, opts: remoteOpts(),
+        })
+        await invoke('crypto_leaf_import_pem', {
+          name: `${cn} · ${label}`, kind: leafProfile.value, caId: ca.id,
+          certPem: r.certPem, keyPem: r.keyPem, subjectCn: cn,
+        })
+        leafCertOut.value = r.certPem; leafKeyOut.value = r.keyPem
+        caStatus.value = `SM2 ${label}证书已签发并写入终端证书库`
+      } else {
+        const r = await invoke('crypto_remote_issue_sm2_dual', {
+          profileId: remotePid(), caCertPem: m.cert_pem, caKeyPem: m.key_pem,
+          subject: subj, days: chainDays.value, opts: remoteOpts(),
+        })
+        await invoke('crypto_leaf_import_pem', {
+          name: `${cn} · 签名`, kind: leafProfile.value, caId: ca.id,
+          certPem: r.signCertPem, keyPem: r.signKeyPem, subjectCn: cn,
+        })
+        await invoke('crypto_leaf_import_pem', {
+          name: `${cn} · 加密`, kind: leafProfile.value, caId: ca.id,
+          certPem: r.encCertPem, keyPem: r.encKeyPem, subjectCn: cn,
+        })
+        leafCertOut.value = r.signCertPem; leafKeyOut.value = r.signKeyPem
+        caStatus.value = 'SM2 双证书已签发并写入终端证书库（签名 + 加密）'
+      }
+    } else {
+      const alg = ca.algo && ca.algo !== 'pqc' ? ca.algo : pqcAlgo.value
+      const usage = leafProfile.value === 'client' ? 'client' : 'server'
+      const r = await invoke('crypto_remote_issue_cert', {
+        profileId: remotePid(), algorithm: alg, caCertPem: m.cert_pem, caKeyPem: m.key_pem,
+        subject: subj, days: chainDays.value, usage, opts: remoteOpts(),
+      })
+      await invoke('crypto_leaf_import_pem', {
+        name: cn, kind: leafProfile.value, caId: ca.id,
+        certPem: r.certPem, keyPem: r.keyPem, subjectCn: cn,
+      })
+      leafCertOut.value = r.certPem; leafKeyOut.value = r.keyPem
+      caStatus.value = `已签发并写入终端证书库（${alg}）`
+    }
+    await loadCaList()
+  } catch (e) { error.value = '签发失败: ' + (e?.message || e) } finally { leafLoading.value = false }
+}
+
+async function verifyLeafChain(l) {
+  const ca = caList.value.find(c => c.id === l.ca_id)
+  if (!isRemoteCa(ca)) { error.value = '远程链校验仅用于 SM2/PQC 证书'; return }
+  if (!remoteConfigured()) return
+  try {
+    const leaf = await invoke('crypto_leaf_export', { id: l.id })
+    const r = await invoke('crypto_remote_verify_chain', {
+      profileId: remotePid(), certPem: leaf.cert_pem, caPem: caChainPem(ca), opts: remoteOpts(),
+    })
+    caStatus.value = r.ok ? `证书链校验通过：${l.name}` : `证书链校验失败：${r.output}`
+    if (!r.ok) error.value = r.output
+  } catch (e) { error.value = '校验失败: ' + (e?.message || e) }
+}
 
 const periodSecs = ref(10); const collectorId = ref(''); const collectorPath = ref('')
 async function startPeriodic() {
@@ -1583,7 +1935,7 @@ async function sendToEditor(content) {
   catch (e) { error.value = '发送失败: ' + (e?.message || e) }
 }
 
-onMounted(async () => { loadCaList(); loadAssets() })
+onMounted(async () => { loadCaList(); loadAssets(); loadMountStatus() })
 
 // J：多机时间轴对齐——导入多份日志，把各自快照按时间戳排到同一条时间线。
 const multiLogs = ref([]) // { name, sessionId, points: [[ts, laneIndex], ...] }

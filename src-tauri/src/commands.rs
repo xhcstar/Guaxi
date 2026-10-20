@@ -77,6 +77,8 @@ pub mod net_conn;
 pub mod net_capture;
 pub mod sftp_fs;
 pub mod crypto_lab;
+// 远程 Tongsuo/OpenSSL 的 SM2/PQC 证书工作流（不要求本机安装 Tongsuo）。
+pub mod crypto_remote;
 // 命令下发（配置驱动的设备 CLI 批量执行）。
 pub mod cmd_dispatch;
 // 命令下发用的命令目录与场景模板（数据来自产品 CLI 手册）。

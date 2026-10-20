@@ -238,6 +238,19 @@ fn get_secret(profile_id: &str) -> Option<String> {
         .and_then(|e| e.get_password().ok())
 }
 
+/// 给远程工具台/挂载等复用：按 id 取档案与 keychain 里的口令。
+pub(crate) fn profile_credentials(
+    app: &AppHandle,
+    profile_id: &str,
+) -> Result<(SshProfile, Option<String>), String> {
+    let p = read_profiles(app)?
+        .into_iter()
+        .find(|p| p.id == profile_id)
+        .ok_or_else(|| "连接档案不存在".to_string())?;
+    let secret = get_secret(profile_id);
+    Ok((p, secret))
+}
+
 fn default_key_paths() -> Vec<PathBuf> {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))

@@ -224,30 +224,31 @@ pub fn cmd_catalog_list() -> Vec<CatalogCommand> {
         },
 
         // ---------------- SSL 全局 / 设置 ----------------
-        // 不同设备版本有的把这两条做成 `ssl settings` / `ssl globals`，有的要加 `show`；
-        // 这里两种写法都收录，模板可直接改，避免版本差异导致命令不可用。
+        // 实测设备（ArrayOS APV 10.0.0.805）只接受配置级的 `ssl settings` / `ssl globals`，
+        // 不存在 `show ssl settings` / `show ssl globals`。
         C {
             id: "ssl_settings", group: "SSL 全局", name: "ssl settings",
-            syntax: "ssl settings",
-            summary: "查看/设置 SSL 全局参数。部分版本写作 `show ssl settings`，若本命令报未知命令，改用下一条。",
+            syntax: "ssl settings [acceptchain|alpn|certfilter|ciphersuite|clientauth|clientcert|crl|curves|description|monitor|ocsp|protocol|reneg|reuse|servername|signalgo|sm2pqcgroup|tlsv13|verifycert ...]",
+            summary: "调整 SSL 主机级参数（需在 config 模式）。不带参数时列出可用子命令；具体子命令参数可在设备上继续用 `?` 查看。",
             cmd_template: "ssl settings", pem: false, params: vec![],
         },
         C {
-            id: "show_ssl_settings", group: "SSL 全局", name: "show ssl settings",
-            syntax: "show ssl settings",
-            summary: "查看 SSL 全局参数（带 show 的版本）。",
-            cmd_template: "show ssl settings", pem: false, params: vec![],
+            id: "ssl_globals", group: "SSL 全局", name: "ssl globals",
+            syntax: "ssl globals [certchkinterval|certexpdays|crl|ems|encryptkey|fastcrl|protocol|renegotiation|sessiontimeout|statistics|ticketlimit|verifycert ...]",
+            summary: "调整 SSL 全局参数（需在 config 模式）。不带参数时列出可用子命令。",
+            cmd_template: "ssl globals", pem: false, params: vec![],
         },
         C {
-            id: "ssl_globals", group: "SSL 全局", name: "ssl globals",
-            syntax: "ssl globals",
-            summary: "查看/设置 SSL 全局配置。部分版本写作 `show ssl globals`，若本命令报未知命令，改用下一条。",
-            cmd_template: "ssl globals", pem: false, params: vec![],
+            id: "show_ssl_settings", group: "SSL 全局", name: "show ssl settings",
+            syntax: "show ssl settings <host_name>",
+            summary: "查看指定 SSL 主机的生效配置（实测：必须带主机名；不带会提示 Host name）。",
+            cmd_template: "show ssl settings {hostname}", pem: false,
+            params: vec![p("host_name", true, "SSL 主机名", "vhost")],
         },
         C {
             id: "show_ssl_globals", group: "SSL 全局", name: "show ssl globals",
             syntax: "show ssl globals",
-            summary: "查看 SSL 全局配置（带 show 的版本）。",
+            summary: "查看 SSL 全局配置（实测有效，无参数）。",
             cmd_template: "show ssl globals", pem: false, params: vec![],
         },
 

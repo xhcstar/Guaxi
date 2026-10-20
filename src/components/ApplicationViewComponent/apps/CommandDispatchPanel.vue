@@ -22,12 +22,13 @@
       </template>shell 模式下给命令追加 `; echo RC=$?` 取真实退出码（比关键词猜测准）；命令若是交互式的请关掉</n-tooltip>
       <span class="cd-sep"></span>
       <n-tooltip trigger="hover"><template #trigger>
-        <n-select v-model:value="strategyId" size="small" :options="strategyOptions" placeholder="策略库" clearable style="width:170px" /></template>载入之前保存的策略（一组命令序列）</n-tooltip>
+        <button class="cd-strategy-btn" @click="showStrategyLibrary = true">
+          <Icon :icon="bookIcon" width="16" height="16" />
+          <span class="cd-strategy-label" :title="strategyLabel">{{ strategyLabel }}</span>
+        </button>
+      </template>打开策略库：可搜索、滚动查看全部策略，点击条目载入；悬停可看完整说明</n-tooltip>
       <n-tooltip trigger="hover"><template #trigger>
-        <button class="tb-ib" :disabled="!strategyId" @click="loadStrategy"><Icon :icon="downloadIcon" width="15" height="15" /></button>
-      </template>把选中的策略载入任务表</n-tooltip>
-      <n-tooltip trigger="hover"><template #trigger>
-        <button class="tb-ib primary" :disabled="!tasks.length" @click="openSaveStrategy"><Icon :icon="saveIcon" width="15" height="15" /></button>
+        <button class="tb-ib primary" :disabled="!tasks.length" @click="openSaveStrategy"><Icon :icon="saveIcon" width="16" height="16" /></button>
       </template>把当前任务表存成命名策略（凭据不入库）</n-tooltip>
       <n-tooltip trigger="hover"><template #trigger>
         <button class="tb-ib danger" :disabled="!strategyId || isBuiltinStrategy" @click="deleteStrategy"><Icon :icon="trashIcon" width="16" height="16" /></button>
@@ -248,6 +249,47 @@
       </div>
     </n-modal>
 
+    <!-- 策略库弹窗 -->
+    <n-modal v-model:show="showStrategyLibrary" :mask-closable="true" style="width:760px;max-width:94vw">
+      <div class="cd-modal">
+        <div class="cd-modal-h">
+          <Icon :icon="bookIcon" width="16" height="16" class="cd-head-ico" />
+          <span>策略库</span>
+          <n-input v-model:value="strategyQuery" size="small" placeholder="搜索名称 / 说明 / 主机 / 域名" clearable style="width:280px" />
+          <span class="cd-head-spacer"></span>
+          <button class="tb-ib" @click="showStrategyLibrary = false"><Icon :icon="xIcon" width="16" height="16" /></button>
+        </div>
+        <div class="cd-modal-b cd-strat-list">
+          <div
+            v-for="s in filteredStrategies"
+            :key="s.id"
+            class="cd-strat-row"
+            :class="{ active: s.id === strategyId }"
+            @click="loadStrategyById(s.id)"
+          >
+            <div class="cd-strat-head">
+              <span class="cd-strat-name" :title="s.name">{{ s.name }}</span>
+              <span v-if="s.builtin" class="cd-tag">内置</span>
+              <span class="cd-strat-count">{{ s.task_count }} 条</span>
+              <span class="cd-head-spacer"></span>
+              <n-tooltip v-if="!s.builtin" trigger="hover"><template #trigger>
+                <button class="tb-ib danger" @click.stop="deleteStrategyById(s.id)"><Icon :icon="trashIcon" width="16" height="16" /></button>
+              </template>删除该策略</n-tooltip>
+            </div>
+            <div class="cd-strat-meta" :title="`主机: ${(s.hostnames || []).join(', ') || '—'}\n域名: ${(s.domains || []).join(', ') || '—'}`">
+              主机 {{ (s.hostnames || []).join(', ') || '—' }} · 域名 {{ (s.domains || []).join(', ') || '—' }}
+            </div>
+            <div v-if="s.description" class="cd-strat-desc" :title="s.description">{{ s.description }}</div>
+          </div>
+          <div v-if="!filteredStrategies.length" class="cd-hint">没有匹配的策略。</div>
+        </div>
+        <div class="cd-modal-f">
+          <n-button size="small" :disabled="!tasks.length" @click="openSaveStrategyFromLibrary">保存当前任务表</n-button>
+          <n-button size="small" @click="showStrategyLibrary = false">关闭</n-button>
+        </div>
+      </div>
+    </n-modal>
+
     <!-- 策略保存弹窗 -->
     <n-modal v-model:show="showSaveStrategy" :mask-closable="false" style="width:520px;max-width:94vw">
       <div class="cd-modal">
@@ -328,8 +370,8 @@
                 <td>{{ c.name }}</td>
                 <td class="cd-res">{{ c.subject_cn }}</td>
                 <td class="cd-ops">
-                  <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" @click="pickCaPem(c,'cert')"><Icon :icon="certIcon" width="15" height="15" /></button></template>用该 CA 的证书</n-tooltip>
-                  <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" @click="pickCaPem(c,'key')"><Icon :icon="key2Icon" width="15" height="15" /></button></template>用该 CA 的私钥</n-tooltip>
+                  <n-tooltip trigger="hover"><template #trigger><n-button size="tiny" @click="pickCaPem(c,'cert')">证书</n-button></template>用该 CA 的证书</n-tooltip>
+                  <n-tooltip trigger="hover"><template #trigger><n-button size="tiny" @click="pickCaPem(c,'key')">私钥</n-button></template>用该 CA 的私钥</n-tooltip>
                 </td>
               </tr>
             </tbody>
@@ -343,14 +385,31 @@
                 <td>{{ l.name }}</td>
                 <td class="cd-res">{{ l.ca_name }}</td>
                 <td class="cd-ops">
-                  <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" @click="pickLeafPem(l,'cert')"><Icon :icon="certIcon" width="15" height="15" /></button></template>用该证书</n-tooltip>
-                  <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" @click="pickLeafPem(l,'key')"><Icon :icon="key2Icon" width="15" height="15" /></button></template>用该私钥</n-tooltip>
-                  <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" @click="pickLeafPem(l,'chain')"><Icon :icon="listIcon" width="15" height="15" /></button></template>用整条证书链</n-tooltip>
+                  <n-tooltip trigger="hover"><template #trigger><n-button size="tiny" @click="pickLeafPem(l,'cert')">证书</n-button></template>用该证书</n-tooltip>
+                  <n-tooltip trigger="hover"><template #trigger><n-button size="tiny" @click="pickLeafPem(l,'key')">私钥</n-button></template>用该私钥</n-tooltip>
+                  <n-tooltip trigger="hover"><template #trigger><n-button size="tiny" @click="pickLeafPem(l,'chain')">证书链</n-button></template>用整条证书链</n-tooltip>
                 </td>
               </tr>
             </tbody>
           </table>
           <div v-else class="cd-hint">终端证书库为空（可在证书页签发 server/client 证书）。</div>
+
+          <div class="cd-sub">证书页 · 受管资产库（私钥 / CSR / CRL）</div>
+          <table class="cd-table" v-if="pemAssets.length">
+            <tbody>
+              <tr v-for="a in pemAssets" :key="a.id">
+                <td>{{ a.name }}</td>
+                <td class="cd-res">{{ pemAssetKindLabel[a.kind] || a.kind }}</td>
+                <td class="cd-res">{{ a.algo || '—' }}</td>
+                <td class="cd-ops">
+                  <n-button v-if="a.kind === 'key'" size="tiny" @click="pickAssetPem(a,'key')">私钥</n-button>
+                  <n-button v-if="a.kind === 'key'" size="tiny" @click="pickAssetPem(a,'pub')">公钥</n-button>
+                  <n-button v-if="a.kind === 'csr'" size="tiny" @click="pickAssetPem(a,'csr')">CSR</n-button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-else class="cd-hint">受管资产库为空（可在证书页把独立密钥/CSR 存入库）。</div>
         </div>
         <div class="cd-modal-f">
           <n-button size="small" @click="showPem = false">关闭</n-button>
@@ -411,6 +470,7 @@ import { createLogger } from '../../../utils/logger'
 import { useSshProfiles } from '../../../composables/useSshProfiles'
 import { readUiState, persistUiState, oneOf, within } from '../../../utils/uiState'
 import { getGuaxiMonacoTheme, defineGuaxiMonacoThemes } from '../../../monaco/guaxiMonacoThemes'
+import { resolveSharedEditorDisplayOptions } from '../../../monaco/editorFeatures'
 import { Icon } from '@iconify/vue'
 import keyIcon from '@iconify-icons/lucide/key-round'
 import folderIcon from '@iconify-icons/lucide/folder-open'
@@ -425,18 +485,12 @@ import playIcon from '@iconify-icons/lucide/play'
 import stopIcon from '@iconify-icons/lucide/square'
 import uploadIcon from '@iconify-icons/lucide/upload'
 import saveIcon from '@iconify-icons/lucide/save'
-import downloadIcon from '@iconify-icons/lucide/download'
 import xIcon from '@iconify-icons/lucide/x'
-import scrollTextIcon from '@iconify-icons/lucide/scroll-text'
-import keyRoundIcon from '@iconify-icons/lucide/key-round'
 import externalIcon from '@iconify-icons/lucide/external-link'
 import panelRightIcon from '@iconify-icons/lucide/panel-right'
 import shieldIcon from '@iconify-icons/lucide/shield-check'
 import minusIcon from '@iconify-icons/lucide/minus'
 
-// 证书图标沿用与证书页一致的语义（证书=卷轴、私钥=钥匙）。
-const certIcon = scrollTextIcon
-const key2Icon = keyRoundIcon
 // 「在文件管理器中显示」沿用打开目录的图标。
 const revealIcon = folderIcon
 
@@ -481,7 +535,39 @@ const showSaveStrategy = ref(false)
 const strategyName = ref('')
 const strategyDesc = ref('')
 const isBuiltinStrategy = computed(() => !!strategies.value.find(s => s.id === strategyId.value)?.builtin)
-const strategyOptions = computed(() => strategies.value.map(s => ({ label: `${s.builtin ? '内置 · ' : ''}${s.name} (${s.task_count})`, value: s.id })))
+const showStrategyLibrary = ref(false)
+const strategyQuery = ref('')
+const currentStrategy = computed(() => strategies.value.find(s => s.id === strategyId.value) || null)
+const strategyLabel = computed(() => currentStrategy.value
+  ? `${currentStrategy.value.builtin ? '内置 · ' : ''}${currentStrategy.value.name} (${currentStrategy.value.task_count})`
+  : '策略库')
+const filteredStrategies = computed(() => {
+  const q = strategyQuery.value.trim().toLowerCase()
+  if (!q) return strategies.value
+  return strategies.value.filter(s =>
+    [s.name, s.description, ...(s.hostnames || []), ...(s.domains || [])]
+      .filter(Boolean).some(v => String(v).toLowerCase().includes(q)))
+})
+function loadStrategyById(id) {
+  strategyId.value = id
+  showStrategyLibrary.value = false
+  loadStrategy()
+}
+function openSaveStrategyFromLibrary() {
+  showStrategyLibrary.value = false
+  openSaveStrategy()
+}
+async function deleteStrategyById(id) {
+  const s = strategies.value.find(x => x.id === id)
+  if (!s || s.builtin) return
+  if (!window.confirm(`删除策略「${s.name}」？`)) return
+  try {
+    await invoke('cmd_strategy_delete', { id })
+    if (strategyId.value === id) strategyId.value = null
+    await loadStrategies()
+    note('策略已删除')
+  } catch (e) { error.value = '删除策略失败: ' + (e?.message || e) }
+}
 
 /// 任务级校验（主命令成功后跑校验命令 + 核对期望关键字）。
 const showVerify = ref(false)
@@ -490,7 +576,7 @@ const verifyCmd = ref('')
 const verifyExpect = ref('')
 const verifyPresets = [
   { label: 'show ssl host', value: 'show ssl host' },
-  { label: 'show ssl settings', value: 'show ssl settings' },
+  { label: 'show ssl settings {hostname}', value: 'show ssl settings {hostname}' },
   { label: 'show ssl globals', value: 'show ssl globals' },
   { label: 'ssl settings', value: 'ssl settings' },
   { label: 'ssl globals', value: 'ssl globals' },
@@ -501,6 +587,8 @@ const showPem = ref(false)
 const pemTarget = ref(null)
 const caList = ref([])
 const leafList = ref([])
+const pemAssets = ref([])
+const pemAssetKindLabel = { key: '私钥', csr: 'CSR', crl: 'CRL' }
 
 const catalog = ref([])
 const catalogQuery = ref('')
@@ -530,7 +618,7 @@ let unlisteners = []
 /// 执行面板默认收起，编辑区占满；预览/下发时自动打开。
 const rightPaneOpen = ref(readUiState(UI.rightOpen, false))
 const rightWidth = ref(readUiState(UI.rightWidth, 520, within(360, 1200)))
-const yamlFontSize = ref(readUiState(UI.fontSize, 17, within(12, 32)))
+const yamlFontSize = ref(readUiState(UI.fontSize, 18, within(12, 32)))
 const notice = ref(''); let noticeTimer = null
 const error = ref('')
 function note(m) { notice.value = m; if (noticeTimer) clearTimeout(noticeTimer); noticeTimer = setTimeout(() => { notice.value = '' }, 12000) }
@@ -593,12 +681,15 @@ async function ensureYamlEditor() {
     const m = await loadMonaco()
     // 加载是异步的：回来时可能已卸载、或已切回图形模式、或容器还没渲染出来。
     if (disposed || editMode.value !== 'text' || !yamlEditorEl.value) return
+    const shared = resolveSharedEditorDisplayOptions()
     yamlModel = m.editor.createModel(yamlText.value || '', 'yaml')
     yamlEditor = m.editor.create(yamlEditorEl.value, {
       model: yamlModel,
       theme: getGuaxiMonacoTheme(settingsStore.appearanceTheme),
       automaticLayout: true,     // 容器尺寸变化（拖分隔条、切标签）自动重排
       fontSize: yamlFontSize.value,
+      fontFamily: shared.fontFamily,
+      lineHeight: shared.lineHeight,
       lineNumbers: 'on',
       tabSize: 2,
       minimap: { enabled: false },
@@ -754,12 +845,7 @@ async function saveStrategy() {
   } catch (e) { error.value = '保存策略失败: ' + (e?.message || e) }
 }
 async function deleteStrategy() {
-  if (!strategyId.value) return
-  if (isBuiltinStrategy.value) { note('内置策略不可删除'); return }
-  const s = strategies.value.find(x => x.id === strategyId.value)
-  if (!window.confirm(`删除策略「${s?.name || ''}」？`)) return
-  try { await invoke('cmd_strategy_delete', { id: strategyId.value }); strategyId.value = null; await loadStrategies(); note('策略已删除') }
-  catch (e) { error.value = '删除策略失败: ' + (e?.message || e) }
+  if (strategyId.value) await deleteStrategyById(strategyId.value)
 }
 
 // ============ PEM 文件选择 ============
@@ -768,6 +854,7 @@ async function openPemPicker(t) {
   showPem.value = true
   try { caList.value = await invoke('crypto_ca_list') } catch (_) {}
   try { leafList.value = await invoke('crypto_leaf_list') } catch (_) {}
+  try { pemAssets.value = await invoke('crypto_asset_list', { kind: null }) } catch (_) {}
 }
 async function stagePem(name, content) {
   try {
@@ -791,12 +878,25 @@ async function pickLeafPem(l, which) {
   } catch (e) { error.value = '取证书内容失败: ' + (e?.message || e) }
 }
 async function pickLocalPem() {
-  const sel = await open({ multiple: false, directory: false, title: '选择证书/私钥文件' })
+  const sel = await open({
+    multiple: false,
+    directory: false,
+    title: '选择证书/私钥/CSR 文件',
+    filters: [{ name: '证书 / 私钥', extensions: ['pem', 'crt', 'cer', 'key', 'pub', 'csr'] }],
+  })
   if (!sel) return
   const p = typeof sel === 'string' ? sel : sel?.path
   if (pemTarget.value) { pemTarget.value.pem_file = p; syncYaml() }
   showPem.value = false
   note('已选用: ' + p)
+}
+async function pickAssetPem(a, which) {
+  try {
+    const r = await invoke('crypto_asset_get', { id: a.id })
+    const content = which === 'pub' ? r.pem2 : r.pem
+    if (!String(content || '').trim()) { error.value = '该资产没有可用内容'; return }
+    await stagePem(`asset-${a.name}-${which}`, content)
+  } catch (e) { error.value = '取资产内容失败: ' + (e?.message || e) }
 }
 
 async function importYaml() {
@@ -1158,6 +1258,17 @@ onBeforeUnmount(() => {
 .tb-ib.danger:hover:not(:disabled) { color: #e5484d; background: color-mix(in srgb, #e5484d 12%, transparent); }
 .cd-fs-lbl { font-size: 13.5px; color: var(--guaxi-text-secondary); }
 .cd-fs { min-width: 22px; text-align: center; font-size: 14px; font-family: var(--tw-mono-font); color: var(--tw-accent); }
+.cd-strategy-btn { display: inline-flex; align-items: center; gap: 6px; height: 28px; max-width: 260px; padding: 0 10px; border: 1px solid var(--guaxi-border); border-radius: 6px; background: transparent; color: var(--guaxi-text-secondary); cursor: pointer; font-size: 14px; }
+.cd-strategy-btn:hover { border-color: var(--tw-accent); color: var(--tw-accent); }
+.cd-strategy-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cd-strat-list { max-height: 60vh; overflow: auto; padding: 8px 10px; }
+.cd-strat-row { padding: 10px 12px; margin-bottom: 8px; border: 1px solid var(--guaxi-border-weak, rgba(0,0,0,.08)); border-radius: 8px; cursor: pointer; }
+.cd-strat-row:hover { background: var(--tw-accent-soft); border-color: var(--tw-accent); }
+.cd-strat-row.active { box-shadow: inset 3px 0 0 var(--tw-accent); }
+.cd-strat-head { display: flex; align-items: center; gap: 8px; }
+.cd-strat-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 600; }
+.cd-strat-count { flex: 0 0 auto; font-size: 13px; color: var(--guaxi-text-secondary); }
+.cd-strat-meta, .cd-strat-desc { margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; color: var(--guaxi-text-secondary); }
 
 .cd-targets { display: flex; gap: 6px; margin-bottom: 8px; }
 .cd-table { width: 100%; border-collapse: collapse; font-size: 16px; }
