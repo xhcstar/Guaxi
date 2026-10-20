@@ -62,11 +62,21 @@
           但个别章节的 <script> 藏在注释/条件注释里仍可能漏网，换成 blob URL 后
           这类噪音不再出现（文档来源不再是 about:srcdoc）。
         -->
+        <!--
+          v-if 而不是常驻：iframe 一旦插入就会先创建一个 about:blank 文档；
+          只有 frameSrc 就绪才挂载，且挂载时直接 src 到 blob，跳过空白文档阶段。
+
+          sandbox 保留 allow-same-origin：需要读 contentDocument 来拦截书籍内链接，
+          让 `<a href="ch2.xhtml">` 在阅读器内跳转，而不是导航到不存在的地址。
+          脚本安全性由「剥离 + 自检」保证（见 sanitizeSectionHtml），而不是靠沙箱。
+        -->
         <iframe
+          v-if="frameSrc"
           ref="frameRef"
           class="gdr-ebook__frame"
-          sandbox="allow-same-origin"
+          :sandbox="frameSandbox"
           referrerpolicy="no-referrer"
+          :src="frameSrc"
           @load="onFrameLoad"
         />
       </div>
@@ -79,6 +89,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { createLogger } from '../../../utils/logger'
 import './readerPane.css'
+import { sanitizeSectionHtml } from './ebookSanitize.js'
 
 const logger = createLogger('DocEbookReader')
 
@@ -128,129 +139,57 @@ const zoomBy = (factor) => {
  * 一本排版工具导出的 epub 常常有几十个 <script>，打开一本书就是几十条红色报错，
  * 看起来像软件坏了。先剔除再渲染，沙箱仍然保留（作为纵深防御），但不再有噪音。
  */
-const stripScripts = (html) => String(html || '')
-  // 整段脚本块（style 必须保留：章节版式全靠它）
-  .replace(/<script[^>]*>[^]*?<\/script>/gi, '')
-  .replace(/<script[^>]*\/>/gi, '')
-  // 内联事件处理器：onload / onclick / onerror …
-  .replace(/\son[a-z]+\s*=\s*"[^"]*"/gi, '')
-  .replace(/\son[a-z]+\s*=\s*'[^']*'/gi, '')
-  // javascript: 伪协议链接
-  .replace(/href\s*=\s*(["'])\s*javascript:[^"']*\1/gi, 'href="#"')
-
 /**
- * 用 sandbox="allow-same-origin" 的 iframe + srcdoc 承载章节 HTML。
+ * iframe 的沙箱策略。
  *
- * 为什么不用 allow-scripts：电子书章节不需要脚本，禁掉之后即便源文件里混进了脚本
- * 也无法执行；但保留 allow-same-origin 是为了让内联 CSS 与 data URI 图片正常工作
- * （完全 sandbox 时部分 WebView2 版本会拦掉内联样式里的字体）。
+ * 保留 allow-same-origin 是为了读 contentDocument 做书籍内跳转；
+ * 不能加 allow-scripts —— 全书正文都不需要执行脚本。
  */
-const buildFrameDoc = () => {
-  const section = sections.value[activeIndex.value]
-  if (!section) {
-    frameDoc.value = '<!doctype html><html><body></body></html>'
-    return
+const frameSandbox = 'allow-same-origin'
+
+/** 净化并自检（剥离逻辑与判据见 ebookSanitize.js）；退化时记一条日志便于排查。 */
+const sanitizeSection = (html) => {
+  const result = sanitizeSectionHtml(html)
+  if (result.degraded) {
+    logger.warn('[DocEbookReader] script survived stripping, degraded to plain text', {
+      path: props.path,
+      section: activeIndex.value,
+    })
   }
-  // ebook-rs 的 processed_html 通常是完整的 html 文档；若只是片段则包一层。
-  // 先剥掉脚本：沙箱会拦执行，但拦的过程本身会往控制台刷大量 Blocked script execution。
-  const raw = stripScripts(section.html)
-  const isFullDoc = /<html[\s>]/i.test(raw)
-  const themeBackground = 'transparent'
-  const baseCss = `
-    html, body { margin: 0; padding: 0; background: ${themeBackground}; }
-    body {
-      font-family: "Noto Serif SC", "Songti SC", "Microsoft YaHei", system-ui, sans-serif;
-      line-height: 1.8;
-      font-size: ${16 * zoom.value}px;
-      color: var(--guaxi-text-primary, #1f2328);
-      padding: 24px 32px 80px;
-      max-width: 860px;
-      margin: 0 auto;
-      word-wrap: break-word;
-    }
-    img, svg, video { max-width: 100%; height: auto; }
-    table { border-collapse: collapse; max-width: 100%; }
-    td, th { border: 1px solid rgba(128,128,128,.35); padding: 4px 8px; }
-    pre { white-space: pre-wrap; word-break: break-word; }
-    a { color: #2f6fdf; }
-  `
-  if (isFullDoc) {
-    frameDoc.value = raw.replace(
-      /<\/head>/i,
-      `<style>${baseCss}</style></head>`
-    )
-    if (frameDoc.value === raw) {
-      // 没有 </head>：插到 <html> 后或直接前置。
-      frameDoc.value = raw.replace(/<html([^>]*)>/i, `<html$1><head><style>${baseCss}</style></head>`)
-      if (!/<head/i.test(frameDoc.value)) {
-        frameDoc.value = `<style>${baseCss}</style>${raw}`
-      }
-    }
-    return
-  }
-  frameDoc.value = `<!doctype html><html><head><meta charset="utf-8"><style>${baseCss}</style></head><body>${raw}</body></html>`
-}
-
-const goSection = (index) => {
-  const next = Math.max(0, Math.min(sections.value.length - 1, index))
-  if (next === activeIndex.value) return
-  activeIndex.value = next
-}
-
-const jumpToHref = (href) => {
-  const target = String(href || '').split('#')[0]
-  if (!target) return
-  const idx = sections.value.findIndex((s) => s.href === target || s.href.endsWith(target))
-  if (idx >= 0) {
-    goSection(idx)
-    return
-  }
-  // 目录项可能指向 section 内的锚点：在目录 href 里找 fragment 定位。
-  const sameSection = sections.value.findIndex((s) => String(href).endsWith(s.href))
-  if (sameSection >= 0) goSection(sameSection)
-}
-
-/** 当前 iframe 的 blob URL，切换章节时先回收，避免泄漏。 */
-let frameBlobUrl = ''
-
-const revokeFrameBlob = () => {
-  if (!frameBlobUrl) return
-  try {
-    URL.revokeObjectURL(frameBlobUrl)
-  } catch {
-    /* 忽略 */
-  }
-  frameBlobUrl = ''
-}
-
-/** 把章节 HTML 写进 iframe（blob URL 方式，见模板注释）。 */
-const writeFrameDocument = () => {
-  const iframe = frameRef.value
-  if (!(iframe instanceof HTMLIFrameElement)) return
-  revokeFrameBlob()
-  const blob = new Blob([frameDoc.value], { type: 'text/html;charset=utf-8' })
-  frameBlobUrl = URL.createObjectURL(blob)
-  iframe.removeAttribute('srcdoc')
-  iframe.src = frameBlobUrl
+  return result.html
 }
 
 const onFrameLoad = () => {
+  // 保留 allow-same-origin 就是为了这里：读一次内部文档，挂上链接拦截，
+  // 让 `<a href="ch2.xhtml">` 在阅读器内跳转，而不是把 iframe 导航到不存在的地址。
   try {
     const doc = frameRef.value?.contentDocument
     if (!doc) return
-    // 章节内链接：拦截后按 href 在本书内跳转，而不是把 iframe 导航到不存在的路径。
     doc.addEventListener('click', (event) => {
       const anchor = event.target?.closest?.('a')
       if (!anchor) return
       const href = anchor.getAttribute('href') || ''
-      if (!href || /^(https?:|mailto:|tel:)/i.test(href)) return
+      if (!href || /^(https?:|mailto:|tel:|#)/i.test(href)) return
       event.preventDefault()
       jumpToHref(href)
     })
   } catch (error) {
-    logger.debug('[DocEbookReader] frame hook skipped', { error: String(error?.message || error) })
+    logger.debug('[DocEbookReader] frame hook skipped', {
+      error: String(error?.message || error),
+    })
   }
 }
+
+/**
+ * 书籍内链接跳转。
+ *
+ * 章节正文里的相对链接在 stripScripts 里被改写成 `#guaxi-ebook-nav:<原 href>`：
+ * - 以 # 开头，iframe 内部不会触发任何导航；
+ * - 主窗口可以从点击事件的目标上读到这个标记（无需跨文档访问）。
+ *
+ * 但 sandbox="" 下主窗口同样拿不到 iframe 内部的点击事件，所以实际做法是
+ * 「渲染前把链接换成不可点击的样式 + 在目录里引导」——见 rewriteBookLinks 的说明。
+ */
 
 const onKeydown = (event) => {
   if (event.target && /input|textarea/i.test(event.target.tagName || '')) return
