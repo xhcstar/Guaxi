@@ -1,15 +1,26 @@
 <template>
   <div class="gdb-root">
     <div class="gdb-bar">
-      <n-select v-model:value="profileId" size="small" :options="profileOptions" placeholder="选择 SSH 档案" style="width:180px" />
+      <n-tooltip trigger="hover"><template #trigger>
+        <n-select v-model:value="transport" size="small" :options="transportOptions" :disabled="!!sessionId" style="width:120px" />
+      </template>调试通道。SSH 走库内连接档案；串口 / Telnet 用「实时终端」里已建立的会话——调试网络相关程序、只能从串口控制台操作时用这两种</n-tooltip>
+      <template v-if="transport === 'ssh'">
+        <n-select v-model:value="profileId" size="small" :options="profileOptions" placeholder="选择 SSH 档案" style="width:180px" />
+      </template>
+      <template v-else>
+        <n-select v-model:value="consoleSessionId" size="small" :options="consoleSessionOptions" :placeholder="transport === 'serial' ? '选择已连接的串口会话' : '选择已连接的 Telnet 会话'" style="width:230px" />
+        <n-tooltip trigger="hover"><template #trigger>
+          <button class="gdb-ib" @click="reloadConsoleSessions"><Icon :icon="refreshIcon" width="14" height="14" /></button>
+        </template>刷新可用的串口 / Telnet 会话（先在「实时终端」里连上）</n-tooltip>
+      </template>
       <n-radio-group v-model:value="mode" size="small" :disabled="!!sessionId">
         <n-radio-button value="launch">启动程序</n-radio-button>
         <n-radio-button value="attach">附加进程</n-radio-button>
       </n-radio-group>
       <n-input v-model:value="program" size="small" :placeholder="mode === 'attach' ? '可执行文件(可空，仅符号)' : '可执行文件路径(可空=仅连gdb)'" style="width:230px" />
       <n-input-number v-if="mode === 'attach'" v-model:value="attachPid" size="small" :min="1" :show-button="false" placeholder="PID" style="width:110px" />
-      <n-select v-if="mode === 'attach'" v-model:value="escalate" size="small" :options="escalateOptions" style="width:110px" title="提权方式" />
-      <n-input v-if="mode === 'attach' && escalate === 'su'" v-model:value="escalatePassword" type="password" size="small" placeholder="root 密码" show-password-on="click" style="width:130px" />
+      <n-select v-if="mode === 'attach' && transport === 'ssh'" v-model:value="escalate" size="small" :options="escalateOptions" style="width:110px" title="提权方式" />
+      <n-input v-if="mode === 'attach' && transport === 'ssh' && escalate === 'su'" v-model:value="escalatePassword" type="password" size="small" placeholder="root 密码" show-password-on="click" style="width:130px" />
       <n-input v-else-if="mode !== 'attach'" v-model:value="argsText" size="small" placeholder="参数(空格分隔)" style="width:150px" />
       <n-tooltip trigger="hover"><template #trigger>
         <button class="gdb-ib primary lg gdb-launch" :disabled="!!sessionId || starting" @click="start">
@@ -51,6 +62,22 @@
         </template>
         结束调试会话
       </n-tooltip>
+      <n-tooltip trigger="hover">
+        <template #trigger>
+          <button class="gdb-ib lg" @click="leftCollapsed = !leftCollapsed">
+            <Icon :icon="panelLeftIcon" width="17" height="17" :class="{ 'gdb-muted': leftCollapsed }" />
+          </button>
+        </template>
+        {{ leftCollapsed ? '显示左栏（断点/调用栈/变量）' : '隐藏左栏，源码区更宽' }}
+      </n-tooltip>
+      <n-tooltip trigger="hover">
+        <template #trigger>
+          <button class="gdb-ib lg" @click="rightCollapsed = !rightCollapsed">
+            <Icon :icon="panelRightIcon" width="17" height="17" :class="{ 'gdb-muted': rightCollapsed }" />
+          </button>
+        </template>
+        {{ rightCollapsed ? '显示右栏（线程/寄存器/内存）' : '隐藏右栏，源码区更宽' }}
+      </n-tooltip>
       <div class="gdb-fontctl" title="控制台/源码字号">
         <button class="gdb-fbtn" @click="setGdbFontSize(gdbFontSize - 1)"><Icon :icon="minusIcon" width="13" height="13" /></button>
         <span class="gdb-fsz">{{ gdbFontSize }}</span>
@@ -60,7 +87,7 @@
 
     <div class="gdb-body" v-if="sessionId">
       <!-- ===== 左栏：断点 / 调用栈 / 局部变量 / 变量树 ===== -->
-      <div class="gdb-side" :style="{ width: gdbSideWidth + 'px' }">
+      <div class="gdb-side" v-show="!leftCollapsed" :style="{ width: gdbSideWidth + 'px' }">
         <!-- 断点 -->
         <section class="gdb-panel">
           <header class="gdb-panel-h" @click="togglePanel('breaks')">
@@ -197,7 +224,7 @@
         </section>
       </div>
 
-      <div class="gdb-sideresize" @mousedown="onGdbResizeDown"></div>
+      <div class="gdb-sideresize" v-show="!leftCollapsed" @mousedown="onGdbResizeDown"></div>
 
       <!-- ===== 中间：源码 + 控制台 ===== -->
       <div class="gdb-center">
@@ -230,6 +257,9 @@
               <button class="gdb-ib primary" @click="refreshSource"><Icon :icon="crosshairIcon" width="14" height="14" /></button>
             </template>按当前帧 file:line 定位源码并高亮</n-tooltip>
             <n-tooltip trigger="hover"><template #trigger>
+              <button class="gdb-ib" :class="{ primary: followFrame }" @click="followFrame = !followFrame"><Icon :icon="followIcon" width="14" height="14" /></button>
+            </template>{{ followFrame ? '跟随调用栈：停止/切帧/单步时自动跳到对应源码行（已开启）' : '跟随调用栈：停止/切帧/单步时自动跳到对应源码行（已关闭）' }}</n-tooltip>
+            <n-tooltip trigger="hover"><template #trigger>
               <button class="gdb-ib" :disabled="!sourceLines.length" @click="sendSource"><Icon :icon="sendIcon" width="14" height="14" /></button>
             </template>把当前源码发到主界面编辑器</n-tooltip>
             <span class="gdb-src-loc" :title="sourceFile">{{ shortFile(sourceFile) }}<template v-if="sourceCurLine">:{{ sourceCurLine }}</template></span>
@@ -239,10 +269,14 @@
               v-for="ln in sourceLines"
               :key="ln.n"
               class="gdb-srcline"
-              :class="{ cur: ln.n === sourceCurLine }"
+              :class="{ cur: ln.n === sourceCurLine, bp: hasBreakpointAt(ln.n) }"
               :ref="el => { if (ln.n === sourceCurLine) curLineEl = el }"
+              @click="onSourceLineClick(ln)"
+              @dblclick="toggleSourceBreakpoint(ln)"
+              :title="`第 ${ln.n} 行 · 单击定位 / 双击切换断点`"
             >
               <span class="gdb-srcno">{{ ln.n }}</span>
+              <span class="gdb-srcbp">{{ hasBreakpointAt(ln.n) ? '●' : '' }}</span>
               <span class="gdb-srctext">{{ ln.text }}</span>
             </div>
             <div v-if="!sourceLines.length" class="gdb-src-empty">
@@ -264,8 +298,8 @@
       </div>
 
       <!-- ===== 右栏：线程 / Watch / 寄存器 / 内存 / 宏 ===== -->
-      <div class="gdb-sideresize" @mousedown="onGdbRightResizeDown"></div>
-      <div class="gdb-side gdb-side-right" :style="{ width: gdbRightWidth + 'px' }">
+      <div class="gdb-sideresize" v-show="!rightCollapsed" @mousedown="onGdbRightResizeDown"></div>
+      <div class="gdb-side gdb-side-right" v-show="!rightCollapsed" :style="{ width: gdbRightWidth + 'px' }">
         <!-- 线程 -->
         <section class="gdb-panel">
           <header class="gdb-panel-h" @click="togglePanel('threads')">
@@ -505,6 +539,9 @@ import chevronRightIcon from '@iconify-icons/lucide/chevron-right'
 import sendIcon from '@iconify-icons/lucide/external-link'
 import folderIcon from '@iconify-icons/lucide/folder-open'
 import crosshairIcon from '@iconify-icons/lucide/crosshair'
+import followIcon from '@iconify-icons/lucide/locate-fixed'
+import panelLeftIcon from '@iconify-icons/lucide/panel-left'
+import panelRightIcon from '@iconify-icons/lucide/panel-right'
 import saveIcon from '@iconify-icons/lucide/save'
 import downloadIcon from '@iconify-icons/lucide/download'
 import uploadIcon from '@iconify-icons/lucide/upload'
@@ -542,6 +579,26 @@ const UI = {
 }
 
 const profileId = ref(readUiState(UI.profile, null))
+/// 调试通道：ssh | serial | telnet（串口/Telnet 复用「实时终端」里已建立的会话）。
+const transport = ref(readUiState('guaxi_gdb_transport', 'ssh', oneOf('ssh', 'serial', 'telnet')))
+const transportOptions = [
+  { label: 'SSH', value: 'ssh' },
+  { label: '串口', value: 'serial' },
+  { label: 'Telnet', value: 'telnet' },
+]
+const consoleSessionId = ref('')
+const consoleSessions = ref([])
+const consoleSessionOptions = computed(() =>
+  consoleSessions.value
+    .filter(s => s.kind === transport.value)
+    .map(s => ({ label: s.label || s.id, value: s.id })),
+)
+async function reloadConsoleSessions() {
+  try { consoleSessions.value = await invoke('console_list_sessions') } catch (_) { consoleSessions.value = [] }
+  const ids = consoleSessionOptionIds()
+  if (ids.length && !ids.includes(consoleSessionId.value)) consoleSessionId.value = ids[0]
+}
+function consoleSessionOptionIds() { return consoleSessionOptions.value.map(o => o.value) }
 const mode = ref(readUiState(UI.mode, 'launch', oneOf('launch', 'attach')))   // 'launch' | 'attach'
 const attachPid = ref(null)
 const escalate = ref(readUiState(UI.escalate, 'none', oneOf('none', 'sudo', 'su')))   // 'none' | 'sudo' | 'su'
@@ -635,6 +692,14 @@ const sourceMode = ref(readUiState(UI.srcMode, 'local', oneOf('local', 'remote')
 const srcFromPrefix = ref(readUiState(UI.srcFrom, ''))
 const sourceLines = ref([])
 const sourceCurLine = ref(0)
+const followFrame = ref(readUiState('guaxi_gdb_follow_frame', true))
+function hasBreakpointAt(n) {
+  const file = sourceFile.value
+  if (!file) return false
+  return breaks.value.some(b => b.line === String(n) && b.file && (
+    b.file === file || file.endsWith('/' + b.file) || b.file.endsWith('/' + shortFile(file))
+  ))
+}
 const sourceFile = ref('')
 const sourceHint = ref('停在断点时自动对照当前行；也可点“对照当前行”。')
 const sourceBodyRef = ref(null)
@@ -653,6 +718,8 @@ const gdbFontSize = ref(readUiState(UI.fontSize, 16, within(9, 32)))
 function setGdbFontSize(v) { gdbFontSize.value = Math.min(28, Math.max(9, v)) }
 const gdbSideWidth = ref(readUiState(UI.sideW, 300, within(200, 600)))
 const gdbRightWidth = ref(readUiState(UI.rightW, 300, within(200, 600)))
+const leftCollapsed = ref(readUiState('guaxi_gdb_left_collapsed', false))
+const rightCollapsed = ref(readUiState('guaxi_gdb_right_collapsed', false))
 function onGdbResizeDown(e) {
   const startX = e.clientX; const startW = gdbSideWidth.value
   let resizing = true
@@ -687,6 +754,7 @@ function miQuote(s) {
 // __BODY2__
 let unlisteners = []
 onMounted(async () => {
+  reloadConsoleSessions()
   unlisteners.push(await listen('gdb-mi-output', ev => {
     if (ev.payload?.session_id === sessionId.value) appendConsole(ev.payload.kind, ev.payload.text)
   }))
@@ -752,14 +820,19 @@ async function refreshOnStop() {
   await refreshThreads()
   await refreshStack()
   await refreshLocals()
-  await refreshSource()
+  if (followFrame.value) await refreshSource()
   if (watches.value.length) await refreshWatch()
 }
 
 async function start() {
-  if (!profileId.value) { error.value = '请选择 SSH 档案'; return }
+  if (transport.value === 'ssh') {
+    if (!profileId.value) { error.value = '请选择 SSH 档案'; return }
+  } else if (!consoleSessionId.value) {
+    error.value = transport.value === 'serial' ? '请先在「实时终端」连上串口，再在这里选择该会话' : '请先在「实时终端」连上 Telnet，再在这里选择该会话'
+    return
+  }
   if (mode.value === 'attach' && !attachPid.value) { error.value = '附加模式需要填 PID'; return }
-  if (mode.value === 'attach' && escalate.value === 'su' && !escalatePassword.value) { error.value = 'su 提权需要填 root 密码'; return }
+  if (mode.value === 'attach' && transport.value === 'ssh' && escalate.value === 'su' && !escalatePassword.value) { error.value = 'su 提权需要填 root 密码'; return }
   starting.value = true; error.value = ''
   clearNote()
   inflight.value = []
@@ -768,12 +841,15 @@ async function start() {
   try {
     const args = argsText.value.trim() ? argsText.value.trim().split(/\s+/) : []
     sessionId.value = await invoke('gdb_mi_start', {
-      profileId: profileId.value,
+      profileId: transport.value === 'ssh' ? profileId.value : null,
       program: program.value || null,
       args,
       attachPid: mode.value === 'attach' ? Number(attachPid.value) : null,
-      escalate: mode.value === 'attach' ? escalate.value : 'none',
-      escalatePassword: mode.value === 'attach' && escalate.value === 'su' ? escalatePassword.value : null,
+      transport: transport.value,
+      serialSessionId: transport.value === 'serial' ? consoleSessionId.value : null,
+      telnetSessionId: transport.value === 'telnet' ? consoleSessionId.value : null,
+      escalate: mode.value === 'attach' && transport.value === 'ssh' ? escalate.value : 'none',
+      escalatePassword: mode.value === 'attach' && transport.value === 'ssh' && escalate.value === 'su' ? escalatePassword.value : null,
     })
     // 会话已建立，但 gdb 可能还在 su 认证 / 启动中（后端会在就绪后回发 ready 事件，
     // 期间提交的命令会排队而不是丢失）。所以这里先如实显示"正在建立"。
@@ -969,7 +1045,13 @@ async function selectThread(id) {
 async function refreshBreaks() {
   const r = await runCmd('-break-list')
   const body = r?.payload?.BreakpointTable?.body || []
-  breaks.value = body.map(b => ({ number: b.number, where: b.func ? `${b.func} @ ${b.file || ''}:${b.line || ''}` : (b['original-location'] || b.addr || ''), times: b.times || '0' }))
+  breaks.value = body.map(b => ({
+    number: b.number,
+    file: b.file || '',
+    line: b.line || '',
+    where: b.func ? `${b.func} @ ${b.file || ''}:${b.line || ''}` : (b['original-location'] || b.addr || ''),
+    times: b.times || '0',
+  }))
 }
 async function addBreak() { const loc = bpInput.value.trim(); if (!loc) return; bpInput.value = ''; await runCmd(`-break-insert ${loc}`); await refreshBreaks() }
 async function delBreak(n) { await runCmd(`-break-delete ${n}`); await refreshBreaks() }
@@ -1026,6 +1108,29 @@ async function selectFrame(level) {
   curFrame.value = level
   await runCmd(`-stack-select-frame ${level}`)
   await refreshLocals(); await refreshSource(); await refreshWatch()
+}
+/// 点击源码行：查看该行是否可下断点，并在该行设置断点（VS Code 式点击跳转/下断点）。
+/// 左键单击 = 跳到该行；如已在断点则提示；双击 = 在该行 toggle 断点。
+function onSourceLineClick(ln) {
+  if (!ln) return
+  sourceCurLine.value = ln.n
+}
+async function toggleSourceBreakpoint(ln) {
+  if (!sessionId.value || !ln) return
+  const file = sourceFile.value
+  if (!file) return
+  const loc = `${file}:${ln.n}`
+  const existing = breaks.value.find(b => b.file && b.line === String(ln.n) && (b.file === file || file.endsWith('/' + b.file) || b.file.endsWith('/' + shortFile(file))))
+  if (existing) {
+    await runCmd(`-break-delete ${existing.number}`)
+    await refreshBreaks()
+    note(`已删除断点 ${loc}`)
+    return
+  }
+  const r = await runCmd(`-break-insert ${miQuote(loc)}`)
+  await refreshBreaks()
+  if (r?.class === 'error') note(`下断点失败：${r?.payload?.msg || loc}`)
+  else note(`已在 ${loc} 下断点`)
 }
 async function refreshLocals() {
   if (!sessionId.value || blockedWhileRunning('局部变量')) return
@@ -1086,6 +1191,10 @@ const remoteLoading = ref(false)
 // 放在所有被持久化的 ref 声明**之后**，否则会命中 TDZ。
 for (const [key, src] of [
   [UI.profile, profileId], [UI.mode, mode], [UI.escalate, escalate], [UI.program, program],
+  ['guaxi_gdb_transport', transport],
+  ['guaxi_gdb_follow_frame', followFrame],
+  ['guaxi_gdb_left_collapsed', leftCollapsed],
+  ['guaxi_gdb_right_collapsed', rightCollapsed],
   [UI.fontSize, gdbFontSize], [UI.sideW, gdbSideWidth], [UI.rightW, gdbRightWidth],
   [UI.srcMode, sourceMode], [UI.srcRule, sourceRule], [UI.srcRoot, sourceRoot],
   [UI.srcProfile, sourceProfileId], [UI.srcFrom, srcFromPrefix], [UI.srcHeight, sourceHeight],
@@ -1093,7 +1202,9 @@ for (const [key, src] of [
   watch(src, (v) => persistUiState(key, v))
 }
 
-// 档案可能已被删掉：列表到位后把失效的选中清空，避免下拉显示一个不存在的项。
+watch(transport, (v) => {
+  if (v !== 'ssh') reloadConsoleSessions()
+})
 watch(profiles, (list) => {
   if (!list.length) return
   const ids = new Set(list.map((p) => p.id))
@@ -1396,8 +1507,12 @@ async function loadMacros() {
 .gdb-arrow { color: var(--guaxi-text-secondary); }
 .gdb-src-loc { font-size: 14px; color: var(--tw-accent); font-family: var(--gdb-mono); margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
 .gdb-source-body { flex: 1 1 auto; min-height: 0; overflow: auto; background: var(--tw-code-bg); color: var(--tw-code-fg); padding: 4px 0; }
-.gdb-srcline { display: flex; white-space: pre; line-height: 1.5; }
+.gdb-srcline { display: flex; white-space: pre; line-height: 1.5; cursor: text; }
+.gdb-srcline:hover { background: rgba(127,127,127,0.10); }
 .gdb-srcline.cur { background: rgba(255,196,0,0.16); box-shadow: inset 3px 0 0 #f5a524; }
+.gdb-srcline.bp .gdb-srcbp { color: #e5484d; }
+.gdb-srcbp { flex: 0 0 auto; width: 14px; text-align: center; user-select: none; font-size: .9em; }
+.gdb-muted { opacity: .45; }
 .gdb-srcno { flex: 0 0 auto; width: 52px; text-align: right; padding-right: 12px; color: var(--guaxi-text-secondary); opacity: .7; user-select: none; }
 .gdb-srctext { flex: 1 1 auto; }
 .gdb-src-empty { padding: 12px; }

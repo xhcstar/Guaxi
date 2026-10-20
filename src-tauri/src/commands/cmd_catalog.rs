@@ -191,9 +191,16 @@ pub fn cmd_catalog_list() -> Vec<CatalogCommand> {
         },
         C {
             id: "ssl_settings_clientauth", group: "SSL 设置", name: "ssl settings clientauth（双向认证）",
-            syntax: "ssl settings clientauth <host_name>",
-            summary: "为 SSL 主机开启客户端证书认证（mTLS）。实测该子命令只接主机名，随后进入开关选择。",
+            syntax: "ssl settings clientauth <host_name>      /  no ssl settings clientauth <host_name>",
+            summary: "开启/关闭 SSL 主机的客户端证书认证（mTLS）。开启用 `ssl settings clientauth <host>`；关闭用 `no ssl settings clientauth <host>`，**不是** `... \"on/off\"`。",
             cmd_template: "ssl settings clientauth {hostname}", pem: false,
+            params: vec![],
+        },
+        C {
+            id: "no_ssl_settings_clientauth", group: "SSL 设置", name: "no ssl settings clientauth（关闭双向认证）",
+            syntax: "no ssl settings clientauth <host_name>",
+            summary: "关闭该主机的客户端证书认证。",
+            cmd_template: "no ssl settings clientauth {hostname}", pem: false,
             params: vec![],
         },
         C {
@@ -850,7 +857,7 @@ fn build_host_mtls() -> DispatchConfig {
     act.verify_cmd = Some("show ssl settings {hostname}".into());
 
     let mut clientauth = tpl("clientauth", "ssl settings clientauth {hostname}", &["activate"]);
-    clientauth.description = Some("开启双向认证（mTLS）".into());
+    clientauth.description = Some("开启双向认证（mTLS）；关闭用 no ssl settings clientauth {hostname}".into());
     let mut protocol = tpl("protocol", "ssl settings protocol {hostname} \"TLSv1:TLSv11:TLSv12:TLSv13\"", &["clientauth"]);
     protocol.description = Some("设置 TLS 版本".into());
     let mut cipher = tpl("ciphersuite", "ssl settings ciphersuite {hostname} \"AES256-GCM-SHA384:AES128-GCM-SHA256\"", &["protocol"]);

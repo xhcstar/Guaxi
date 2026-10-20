@@ -418,6 +418,7 @@ async fn main() {
             commands::serial_telnet::telnet_open,
             commands::serial_telnet::telnet_write,
             commands::serial_telnet::telnet_close,
+            commands::serial_telnet::console_list_sessions,
             commands::ocr::ocr_recognize,
             commands::ocr::screenshot_ocr,
             commands::chatview::get_chat_answer,

@@ -328,25 +328,68 @@ fn gdb_rec_dir(app: &AppHandle) -> Result<PathBuf, String> {
 
 // ============================ 会话驱动（K1/K2） ============================
 
+/// GDB 的传输方式。
+///
+/// SSH 是常态；串口/Telnet 用于调试网络相关程序——那些机器只有串口控制台
+/// （或只能 telnet 到串口服务器），此时没有 SSH 可用。
+enum GdbTransport {
+    Ssh {
+        channel: russh::Channel<russh::client::Msg>,
+        /// su 提权密码（仅 PTY 场景）。
+        pending_password: Option<String>,
+    },
+    Serial { rx: mpsc::UnboundedReceiver<Vec<u8>>, session_id: String },
+    Telnet { rx: mpsc::UnboundedReceiver<Vec<u8>>, session_id: String },
+}
+
+impl GdbTransport {
+    async fn send(&mut self, text: &str) -> Result<(), String> {
+        match self {
+            GdbTransport::Ssh { channel, .. } => channel
+                .data(text.as_bytes())
+                .await
+                .map_err(|e| format!("写 SSH 通道失败: {e}")),
+            GdbTransport::Serial { session_id, .. } => {
+                crate::commands::serial_telnet::serial_write_bytes(session_id, text.as_bytes())
+            }
+            GdbTransport::Telnet { session_id, .. } => {
+                crate::commands::serial_telnet::telnet_write_bytes(session_id, text.as_bytes())
+            }
+        }
+    }
+}
+
+/// 从当前传输读一段原始字节；连接结束返回 None。
+async fn recv_bytes(t: &mut GdbTransport) -> Option<Vec<u8>> {
+    match t {
+        GdbTransport::Ssh { channel, .. } => loop {
+            match channel.wait().await {
+                Some(russh::ChannelMsg::Data { data }) => return Some(data.to_vec()),
+                Some(russh::ChannelMsg::ExtendedData { data, .. }) => return Some(data.to_vec()),
+                Some(russh::ChannelMsg::ExitStatus { .. }) | None => return None,
+                Some(_) => continue,
+            }
+        },
+        GdbTransport::Serial { rx, .. } | GdbTransport::Telnet { rx, .. } => rx.recv().await,
+    }
+}
+
 #[command]
 #[allow(clippy::too_many_arguments)]
 pub async fn gdb_mi_start(
     app: AppHandle,
-    profile_id: String,
+    profile_id: Option<String>,
     program: Option<String>,
     args: Option<Vec<String>>,
     attach_pid: Option<u32>,
     use_sudo: Option<bool>,
     escalate: Option<String>,
     escalate_password: Option<String>,
+    transport: Option<String>,
+    serial_session_id: Option<String>,
+    telnet_session_id: Option<String>,
 ) -> Result<String, String> {
-    let handle = connect_authenticated(&app, &profile_id).await?;
-    let mut channel = handle
-        .channel_open_session()
-        .await
-        .map_err(|e| format!("打开 gdb 通道失败: {e}"))?;
-
-    // 提权方式：none / sudo / su。use_sudo 为旧参数，escalate 未给时据它推断。
+    let kind = transport.unwrap_or_else(|| "ssh".to_string());
     let esc = escalate
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| if use_sudo.unwrap_or(false) { "sudo".into() } else { "none".into() });
@@ -371,15 +414,51 @@ pub async fn gdb_mi_start(
         }
     }
 
-    // 按提权方式包裹：
-    //  - sudo：`sudo -n`（免密），非交互避免挂起；
-    //  - su：`su -c '<gdb…>'`，切 root 并在 PTY 上提示输入密码（无 sudo 的机器用这个）。
-    //
-    // 关键：sudo/su 需要 PTY（requiretty / su 读 /dev/tty），但 PTY 默认**回显输入**——
-    // 我们写进去的每条 MI 命令都会被 tty 原样回显一遍混进 gdb 的 MI 输出流，既污染解析、
-    // 又可能与 gdb 的输出**交错截断**记录（*stopped 被吃掉，表现为"命令超时/卡在断点"）。
-    // 所以在同一 tty 上先 `stty -echo` 关回显，再 `exec` 成 gdb（不留多余 shell 进程）。
-    let need_pty = esc == "sudo" || esc == "su";
+    // SSH 时必须把连接 handle 保持到会话结束；串口/Telnet 没有 handle。
+    let mut ssh_handle: Option<russh::client::Handle<crate::commands::ssh_terminal::ClientHandler>> = None;
+    let (mut transport, need_pty, esc) = if kind == "serial" || kind == "telnet" {
+        // 串口/Telnet 上登录的是一次性 shell；没有 sudo/su 的概念（本就是直接控制台）。
+        let sid = if kind == "serial" {
+            serial_session_id.ok_or("串口调试需要先连接一个串口会话")?
+        } else {
+            telnet_session_id.ok_or("Telnet 调试需要先连接一个 Telnet 会话")?
+        };
+        let rx = if kind == "serial" {
+            crate::commands::serial_telnet::serial_subscribe(&sid)?
+        } else {
+            crate::commands::serial_telnet::telnet_subscribe(&sid)?
+        };
+        let t = if kind == "serial" {
+            GdbTransport::Serial { rx, session_id: sid }
+        } else {
+            GdbTransport::Telnet { rx, session_id: sid }
+        };
+        (t, false, "none".to_string())
+    } else {
+        let pid = profile_id
+            .filter(|s| !s.trim().is_empty())
+            .ok_or("SSH 调试需要选择连接档案")?;
+        let handle = connect_authenticated(&app, &pid).await?;
+        let channel = handle
+            .channel_open_session()
+            .await
+            .map_err(|e| format!("打开 gdb 通道失败: {e}"))?;
+        ssh_handle = Some(handle);
+        let need = esc == "sudo" || esc == "su";
+        let pw = if esc == "su" {
+            escalate_password.filter(|s| !s.is_empty())
+        } else {
+            None
+        };
+        (
+            GdbTransport::Ssh { channel, pending_password: pw },
+            need,
+            esc.clone(),
+        )
+    };
+
+    // 按提权方式包裹（仅 SSH）：sudo -n 免密，su 需要 PTY 喂密码。
+    let need_pty = need_pty;
     let core = if need_pty {
         format!("stty -echo 2>/dev/null; exec {core}")
     } else {
@@ -390,20 +469,28 @@ pub async fn gdb_mi_start(
         "su" => format!("su -c {}", shell_quote(&core)),
         _ => core,
     };
-    // su 需要在看到密码提示时喂密码。
-    let mut pw_to_send: Option<String> = if esc == "su" {
-        escalate_password.filter(|s| !s.is_empty())
-    } else {
-        None
+    let mut pw_to_send: Option<String> = match &mut transport {
+        GdbTransport::Ssh { pending_password, .. } => pending_password.take(),
+        _ => None,
     };
-    if need_pty {
-        let _ = channel.request_pty(false, "xterm", 200, 50, 0, 0, &[]).await;
+    if let GdbTransport::Ssh { channel, .. } = &mut transport {
+        if need_pty {
+            let _ = channel.request_pty(false, "xterm", 200, 50, 0, 0, &[]).await;
+        }
+        channel
+            .exec(true, cmd.as_bytes())
+            .await
+            .map_err(|e| format!("启动 gdb 失败: {e}"))?;
+    } else {
+        // 串口/Telnet：先发一条空行确认控制台在用，再发 gdb 命令。
+        // 串口设备通常已有登录 shell（root），直接执行即可。
+        let _ = transport.send("\n").await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        transport
+            .send(&format!("{cmd}\n"))
+            .await
+            .map_err(|e| format!("在远端控制台启动 gdb 失败: {e}"))?;
     }
-    channel
-        .exec(true, cmd.as_bytes())
-        .await
-        .map_err(|e| format!("启动 gdb 失败: {e}"))?;
-
     // 录制文件（K2）
     let ts = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
     let rec_path = gdb_rec_dir(&app)?.join(format!("gdb-{ts}.log"));
@@ -475,15 +562,14 @@ pub async fn gdb_mi_start(
                         );
                     }
                 }
-                msg = channel.wait() => {
-                    match msg {
-                        Some(russh::ChannelMsg::Data { ref data })
-                        | Some(russh::ChannelMsg::ExtendedData { ref data, .. }) => {
+                data = recv_bytes(&mut transport) => {
+                    match data {
+                        Some(data) => {
                             if let Some(w) = recorder.as_mut() {
-                                let _ = w.write_all(data);
+                                let _ = w.write_all(&data);
                                 let _ = w.flush();
                             }
-                            linebuf.push_str(&String::from_utf8_lossy(data));
+                            linebuf.push_str(&String::from_utf8_lossy(&data));
                             while let Some(pos) = linebuf.find('\n') {
                                 let line: String = linebuf.drain(..=pos).collect();
                                 let t = line.trim();
@@ -513,7 +599,7 @@ pub async fn gdb_mi_start(
                             if let Some(pw) = pw_to_send.take() {
                                 let low = linebuf.to_lowercase();
                                 if low.contains("password") || linebuf.contains("口令") || linebuf.contains("密码") {
-                                    let _ = channel.data(format!("{pw}\n").as_bytes()).await;
+                                    let _ = transport.send(&format!("{pw}\n")).await;
                                     linebuf.clear();
                                 } else {
                                     pw_to_send = Some(pw);
@@ -522,26 +608,25 @@ pub async fn gdb_mi_start(
                             // gdb 就绪后，把排队的命令按顺序补发。
                             if ready && !queued.is_empty() {
                                 for (token, line) in queued.drain(..) {
-                                    let _ = channel.data(format!("{token}{line}\n").as_bytes()).await;
+                                    let _ = transport.send(&format!("{token}{line}\n")).await;
                                 }
                             }
                         }
-                        Some(russh::ChannelMsg::ExitStatus { .. }) | None => break,
-                        _ => {}
+                        None => break,
                     }
                 }
                 cmd = rx.recv() => {
                     match cmd {
                         Some(GdbCmd::Mi { token, line }) => {
                             if ready {
-                                let _ = channel.data(format!("{token}{line}\n").as_bytes()).await;
+                                let _ = transport.send(&format!("{token}{line}\n")).await;
                             } else {
                                 // gdb 尚未就绪（可能在 su 认证中）：先排队，就绪后再发。
                                 queued.push((token, line));
                             }
                         }
                         Some(GdbCmd::Raw(text)) => {
-                            let _ = channel.data(text.as_bytes()).await;
+                            let _ = transport.send(&text).await;
                         }
                         Some(GdbCmd::Close) | None => break,
                     }
@@ -559,9 +644,12 @@ pub async fn gdb_mi_start(
             d.clear();
         }
         let _ = app.emit(GDB_EXIT_EVENT, json!({ "session_id": sid }));
-        let _ = channel.eof().await;
+        // SSH 通道要显式 eof；串口/Telnet 不关闭（那是用户的控制台会话，留着继续用）。
+        if let GdbTransport::Ssh { channel, .. } = &mut transport {
+            let _ = channel.eof().await;
+        }
         // 保持 SSH handle 存活至会话结束——否则连接会随 gdb_mi_start 返回而关闭。
-        drop(handle);
+        drop(ssh_handle);
     });
 
     Ok(session_id)
