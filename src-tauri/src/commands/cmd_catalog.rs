@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use tauri::command;
 
-use super::cmd_dispatch::{DispatchConfig, GlobalCfg, Targets, TaskTemplate};
+use super::cmd_dispatch::{DispatchConfig, GlobalCfg, Targets, TaskAnswer, TaskTemplate};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CatalogParam {
@@ -145,17 +145,23 @@ pub fn cmd_catalog_list() -> Vec<CatalogCommand> {
         },
         C {
             id: "ssl_backup_certificate", group: "SSL 证书", name: "ssl backup certificate",
-            syntax: "ssl backup certificate <host_name> <file_name|url> <password> [domain_name]",
-            summary: "把主机（或某域名）的证书与私钥备份成文件。clear ssl host 不会清除这些备份。",
-            cmd_template: "ssl backup certificate {hostname} backup.pfx \"passw0rd\"", pem: false,
-            params: vec![p("password", true, "备份文件的保护密码", "passw0rd")],
+            syntax: "ssl backup certificate <host_name|all> \"<name>.tgz\" \"<password>\"",
+            summary: "把主机（或全部）的证书与私钥备份成 .tgz。实测：文件名只允许 0-9/a-z/A-Z/_，必须 .tgz；如只给主机名会再问文件名与密码。",
+            cmd_template: "ssl backup certificate {hostname} \"guaxi_backup.tgz\" \"passw0rd\"", pem: false,
+            params: vec![
+                p("file_name", true, "备份文件名，必须以 .tgz 结尾，只允许字母数字下划线", "guaxi_backup.tgz"),
+                p("password", true, "备份文件的保护密码", "passw0rd"),
+            ],
         },
         C {
             id: "ssl_restore_certificate", group: "SSL 证书", name: "ssl restore certificate",
-            syntax: "ssl restore certificate <host_name> <file_name|url> <password> [domain_name] [certificate_type]",
-            summary: "从 ssl backup certificate 生成的备份文件恢复证书与私钥。",
-            cmd_template: "ssl restore certificate {hostname} backup.pfx \"passw0rd\"", pem: false,
-            params: vec![p("password", true, "备份文件的保护密码", "passw0rd")],
+            syntax: "ssl restore certificate <host_name|all> \"<name>.tgz\" \"<password>\"",
+            summary: "从 ssl backup certificate 生成的 .tgz 恢复。实测会先问 Type YES to proceed，再校验备份内容。",
+            cmd_template: "ssl restore certificate {hostname} \"guaxi_backup.tgz\" \"passw0rd\"", pem: false,
+            params: vec![
+                p("file_name", true, "备份文件名（.tgz）", "guaxi_backup.tgz"),
+                p("password", true, "备份文件的保护密码", "passw0rd"),
+            ],
         },
         C {
             id: "ssl_csr", group: "SSL 证书", name: "ssl csr",
@@ -163,6 +169,67 @@ pub fn cmd_catalog_list() -> Vec<CatalogCommand> {
             summary: "为指定主机生成 CSR 与密钥对（交互式，会依次询问国家/省份/城市/组织/部门）。同时生成一张仅供测试的证书。key_length 可取 1024/2048/4096。",
             cmd_template: "ssl csr {hostname} 2048 1 1", pem: false,
             params: vec![p("key_length", false, "密钥长度 1024 | 2048 | 4096", "2048")],
+        },
+        C {
+            id: "ssl_deactivate_certificate", group: "SSL 激活", name: "ssl deactivate certificate",
+            syntax: "ssl deactivate certificate <host_name>",
+            summary: "停用指定主机的证书（实测会再问 Server Name Indication，输入 \"\" 表示跳过域名）。",
+            cmd_template: "ssl deactivate certificate {hostname}", pem: false,
+            params: vec![],
+        },
+        C {
+            id: "ssl_start", group: "SSL 激活", name: "ssl start",
+            syntax: "ssl start <host_name>",
+            summary: "启动指定 SSL 主机。",
+            cmd_template: "ssl start {hostname}", pem: false, params: vec![],
+        },
+        C {
+            id: "ssl_stop", group: "SSL 激活", name: "ssl stop",
+            syntax: "ssl stop <host_name>",
+            summary: "停止指定 SSL 主机。",
+            cmd_template: "ssl stop {hostname}", pem: false, params: vec![],
+        },
+        C {
+            id: "ssl_settings_clientauth", group: "SSL 设置", name: "ssl settings clientauth（双向认证）",
+            syntax: "ssl settings clientauth <host_name>",
+            summary: "为 SSL 主机开启客户端证书认证（mTLS）。实测该子命令只接主机名，随后进入开关选择。",
+            cmd_template: "ssl settings clientauth {hostname}", pem: false,
+            params: vec![],
+        },
+        C {
+            id: "ssl_settings_clientcert", group: "SSL 设置", name: "ssl settings clientcert",
+            syntax: "ssl settings clientcert minkey <host_name> <bits>",
+            summary: "限制客户端证书的最小密钥长度（minkey 子命令）。",
+            cmd_template: "ssl settings clientcert minkey {hostname} 2048", pem: false,
+            params: vec![p("bits", true, "最小密钥长度", "2048")],
+        },
+        C {
+            id: "ssl_settings_protocol", group: "SSL 设置", name: "ssl settings protocol",
+            syntax: "ssl settings protocol <host_name> \"<versions>\"",
+            summary: "设置主机支持的 SSL/TLS 版本。实测格式：冒号连接，如 TLSv1:TLSv11:TLSv12 或 ALL。不含 SM2v11 时设备会提示移除国密套件。",
+            cmd_template: "ssl settings protocol {hostname} \"TLSv1:TLSv11:TLSv12:TLSv13\"", pem: false,
+            params: vec![p("versions", true, "版本串，冒号分隔；ALL 表示全部", "TLSv1:TLSv11:TLSv12:TLSv13")],
+        },
+        C {
+            id: "ssl_settings_ciphersuite", group: "SSL 设置", name: "ssl settings ciphersuite",
+            syntax: "ssl settings ciphersuite <host_name> \"<suites>\"",
+            summary: "设置主机套件。实测需写成与当前 protocol 兼容的冒号串；不兼容时设备会给出该 protocol 下可用套件清单。",
+            cmd_template: "ssl settings ciphersuite {hostname} \"AES256-GCM-SHA384:AES128-GCM-SHA256\"", pem: false,
+            params: vec![p("suites", true, "套件串，冒号分隔", "AES256-GCM-SHA384:AES128-GCM-SHA256")],
+        },
+        C {
+            id: "ssl_settings_curves", group: "SSL 设置", name: "ssl settings curves",
+            syntax: "ssl settings curves <host_name> \"<curves>\"",
+            summary: "设置主机支持的椭圆曲线（含 x25519_mlkem768 等混合组）。",
+            cmd_template: "ssl settings curves {hostname} \"secp256r1:secp384r1:x25519_mlkem768\"", pem: false,
+            params: vec![p("curves", true, "曲线串，冒号分隔", "secp256r1:secp384r1:x25519_mlkem768")],
+        },
+        C {
+            id: "ssl_globals_protocol", group: "SSL 设置", name: "ssl globals protocol",
+            syntax: "ssl globals protocol {virtual|real} \"<versions>\"",
+            summary: "设置全局 SSL 版本（虚拟主机或后台主机分别设置）。",
+            cmd_template: "ssl globals protocol virtual \"TLSv1:TLSv11:TLSv12:TLSv13\"", pem: false,
+            params: vec![p("versions", true, "版本串", "TLSv1:TLSv11:TLSv12:TLSv13")],
         },
 
         // ---------------- SM2 ----------------
@@ -423,7 +490,13 @@ fn tpl(id: &str, cmd: &str, deps: &[&str]) -> TaskTemplate {
         description: None,
         verify_cmd: None,
         expect: vec![],
+        answers: vec![],
     }
+}
+
+/// 需要 YES 确认的命令（激活、恢复等）。
+fn yes_answer(when: &str) -> TaskAnswer {
+    TaskAnswer { when: when.into(), reply: "YES".into(), repeat: false }
 }
 
 fn with_pem(mut t: TaskTemplate, path: String) -> TaskTemplate {
@@ -668,7 +741,129 @@ pub(crate) fn builtin_strategies() -> Vec<BuiltinStrategyDef> {
         config: no_creds(build_slb_https_ssl(&ScenarioOptions::default())),
     });
 
+    out.push(BuiltinStrategyDef {
+        id: "builtin:import_one",
+        name: "单独导入某类证书与私钥",
+        description: "只导入一组私钥 + 证书（可再激活）。默认按 RSA 模板，改算法时把命令换成 ssl sm2 import ... 或与 PQC 对应即可。",
+        config: build_import_one(),
+    });
+    out.push(BuiltinStrategyDef {
+        id: "builtin:backup_restore",
+        name: "全量备份 → 恢复",
+        description: "先导入并激活 host 级、域名级证书，再 ssl backup certificate all，最后 ssl restore certificate 并确认 YES。实测备份文件名须为字母数字下划线 + .tgz。",
+        config: build_backup_restore(),
+    });
+    out.push(BuiltinStrategyDef {
+        id: "builtin:host_mtls",
+        name: "新建主机 + 导入 + 激活 + 双向认证",
+        description: "建 vhost/rhost → 导入证书链与私钥 → 激活 → 开启 clientauth → 设置 protocol/ciphersuite。",
+        config: build_host_mtls(),
+    });
+
     out
+}
+
+fn build_import_one() -> DispatchConfig {
+    let mut key = tpl("import_key", "ssl import key {hostname} {index}", &[]);
+    key = only_host(with_index(with_pem(key, "./cfgfiles/RSA/serverkey_rsa.key".into()), "1".into()));
+    key.description = Some("导入私钥（RSA/ECC 用 ssl import key；国密改成 ssl sm2 import signkey）".into());
+    let mut cert = tpl("import_cert", "ssl import certificate {hostname} {index}", &["import_key"]);
+    cert = only_host(with_index(with_pem(cert, "./cfgfiles/RSA/servercert_rsa.crt".into()), "1".into()));
+    cert.description = Some("导入证书（国密改成 ssl sm2 import signcertificate）".into());
+    let mut act = tpl("activate", "ssl activate certificate {hostname} {index} \"\" all", &["import_cert"]);
+    act = only_host(with_index(act, "1".into()));
+    act.description = Some("激活证书".into());
+    act.verify_cmd = Some("show ssl settings {hostname}".into());
+    act.expect = vec!["{hostname}".into()];
+    DispatchConfig {
+        global: GlobalCfg::default(),
+        targets: Targets { hostnames: vec!["vhost".into()], domains: vec![String::new()] },
+        tasks: vec![key, cert, act],
+        continue_on_error: false,
+    }
+}
+
+fn build_backup_restore() -> DispatchConfig {
+    let id = "1".to_string();
+    let mk_host = |tid: &str, cmd: &str, pem: Option<&str>, deps: &[&str], desc: &str| {
+        let mut t = tpl(tid, cmd, deps);
+        t.index = Some(id.clone());
+        t.only_if_no_domain = true;
+        t.description = Some(desc.into());
+        match pem {
+            Some(p) => with_pem(t, p.into()),
+            None => t,
+        }
+    };
+    let mk_sni = |tid: &str, cmd: &str, pem: Option<&str>, deps: &[&str], desc: &str| {
+        let mut t = tpl(tid, cmd, deps);
+        t.index = Some(id.clone());
+        t.only_if_domain = true;
+        t.description = Some(desc.into());
+        match pem {
+            Some(p) => with_pem(t, p.into()),
+            None => t,
+        }
+    };
+    let mut backup = tpl("backup_all", "ssl backup certificate all \"guaxi_backup.tgz\" \"changeit\"", &["activate_sni"]);
+    backup.description = Some("备份全量证书（文件名只能字母数字下划线，后缀 .tgz）".into());
+    let mut restore = tpl("restore_all", "ssl restore certificate all \"guaxi_backup.tgz\" \"changeit\"", &["backup_all"]);
+    restore.description = Some("恢复备份（设备会问 YES，自动应答）".into());
+    restore.answers = vec![yes_answer("type yes to proceed")];
+    restore.verify_cmd = Some("show ssl host".into());
+
+    DispatchConfig {
+        global: GlobalCfg::default(),
+        targets: Targets { hostnames: vec!["vhost".into()], domains: vec![String::new(), "www.example.com".into()] },
+        tasks: vec![
+            mk_host("rootca_host", "ssl import rootca {hostname}", Some("./cfgfiles/RSA/rootca_rsa.crt"), &[], "host 级：导入根 CA"),
+            mk_sni("rootca_sni", "ssl import rootca {hostname} {domain}", Some("./cfgfiles/RSA/rootca_rsa.crt"), &[], "域名级：导入根 CA"),
+            mk_host("interca_host", "ssl import interca {hostname}", Some("./cfgfiles/RSA/interca_rsa.crt"), &["rootca_host"], "host 级：导入中间 CA"),
+            mk_sni("interca_sni", "ssl import interca {hostname} {domain}", Some("./cfgfiles/RSA/interca_rsa.crt"), &["rootca_sni"], "域名级：导入中间 CA"),
+            mk_host("key_host", "ssl import key {hostname} {index}", Some("./cfgfiles/RSA/serverkey_rsa.key"), &["interca_host"], "host 级：导入私钥"),
+            mk_host("cert_host", "ssl import certificate {hostname} {index}", Some("./cfgfiles/RSA/servercert_rsa.crt"), &["key_host"], "host 级：导入证书"),
+            mk_host("activate_host", "ssl activate certificate {hostname} {index} \"\" all", None, &["cert_host"], "host 级：激活"),
+            mk_sni("key_sni", "ssl import key {hostname} {index} {domain}", Some("./cfgfiles/RSA/serverkey_rsa.key"), &["interca_sni"], "域名级：导入私钥"),
+            mk_sni("cert_sni", "ssl import certificate {hostname} {index} {domain}", Some("./cfgfiles/RSA/servercert_rsa.crt"), &["key_sni"], "域名级：导入证书"),
+            mk_sni("activate_sni", "ssl activate certificate {hostname} {index} {domain} all", None, &["cert_sni"], "域名级：激活"),
+            backup,
+            restore,
+        ],
+        continue_on_error: false,
+    }
+}
+
+fn build_host_mtls() -> DispatchConfig {
+    let mut create = tpl("create", "ssl host virtual {hostname}", &[]);
+    create.description = Some("新建虚拟主机（后台主机改成 ssl host real {hostname}）".into());
+    let mut sni = tpl("sni", "ssl sni {hostname} {domain}", &["create"]);
+    sni.only_if_domain = true;
+    let mut key = with_pem(tpl("key", "ssl import key {hostname} {index}", &["create"]), "./cfgfiles/RSA/serverkey_rsa.key".into());
+    key.index = Some("1".into());
+    key.only_if_no_domain = true;
+    let mut cert = with_pem(tpl("cert", "ssl import certificate {hostname} {index}", &["key"]), "./cfgfiles/RSA/servercert_rsa.crt".into());
+    cert.index = Some("1".into());
+    cert.only_if_no_domain = true;
+    let mut act = tpl("activate", "ssl activate certificate {hostname} {index} \"\" all", &["cert"]);
+    act.index = Some("1".into());
+    act.only_if_no_domain = true;
+    act.verify_cmd = Some("show ssl settings {hostname}".into());
+
+    let mut clientauth = tpl("clientauth", "ssl settings clientauth {hostname}", &["activate"]);
+    clientauth.description = Some("开启双向认证（mTLS）".into());
+    let mut protocol = tpl("protocol", "ssl settings protocol {hostname} \"TLSv1:TLSv11:TLSv12:TLSv13\"", &["clientauth"]);
+    protocol.description = Some("设置 TLS 版本".into());
+    let mut cipher = tpl("ciphersuite", "ssl settings ciphersuite {hostname} \"AES256-GCM-SHA384:AES128-GCM-SHA256\"", &["protocol"]);
+    cipher.description = Some("设置套件（需与 protocol 兼容）".into());
+    let mut start = tpl("start", "ssl start {hostname}", &["ciphersuite"]);
+    start.description = Some("启动主机".into());
+
+    DispatchConfig {
+        global: GlobalCfg::default(),
+        targets: Targets { hostnames: vec!["vhost".into()], domains: vec![String::new(), "www.example.com".into()] },
+        tasks: vec![create, sni, key, cert, act, clientauth, protocol, cipher, start],
+        continue_on_error: false,
+    }
 }
 
 /// 内置策略不携带任何连接凭据。
@@ -695,6 +890,7 @@ fn sm2_task(
         description: Some(description.to_string()),
         verify_cmd: None,
         expect: vec![],
+        answers: vec![],
     }
 }
 

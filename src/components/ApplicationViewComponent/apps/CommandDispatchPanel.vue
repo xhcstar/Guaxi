@@ -98,76 +98,125 @@
 
           <template v-else>
             <div class="cd-targets">
-              <n-tooltip trigger="hover"><template #trigger>
-                <n-input :value="hostnamesText" size="small" placeholder="目标主机名，逗号分隔" style="width:100%" @update:value="setHostnames" />
-              </template>targets.hostnames：SSL 主机名等逻辑目标，逗号分隔</n-tooltip>
-              <n-tooltip trigger="hover"><template #trigger>
-                <n-input :value="domainsText" size="small" placeholder="域名，逗号分隔（可空 = 只做 host 级）" style="width:100%" @update:value="setDomains" />
-              </template>targets.domains：域名列表；可留空（只跑 host 级任务）</n-tooltip>
+              <label class="cd-tgt">
+                <span class="cd-tgt-lbl">主机名</span>
+                <n-tooltip trigger="hover"><template #trigger>
+                  <n-input :value="hostnamesText" size="small" placeholder="逗号分隔，如 vhost,rhost" @update:value="setHostnames" />
+                </template>targets.hostnames：SSL 主机名等逻辑目标，逗号分隔</n-tooltip>
+              </label>
+              <label class="cd-tgt">
+                <span class="cd-tgt-lbl">域名</span>
+                <n-tooltip trigger="hover"><template #trigger>
+                  <n-input :value="domainsText" size="small" placeholder="可空 = 只做 host 级" @update:value="setDomains" />
+                </template>targets.domains：域名列表；可留空（只跑 host 级任务）</n-tooltip>
+              </label>
+              <span class="cd-tgt-info">共 {{ tasks.length }} 条任务 · 可拖列边界调整宽度，双击单元格标题可自动适配</span>
             </div>
-            <table class="cd-table cd-task-table">
-              <colgroup>
-                <col style="width:128px" />
-                <col />
-                <col style="width:150px" />
-                <col style="width:118px" />
-                <col style="width:280px" />
-                <col style="width:64px" />
-                <col style="width:84px" />
-              </colgroup>
-              <thead><tr><th>id</th><th>命令</th><th>依赖</th><th>条件</th><th>PEM / index</th><th>校验</th><th></th></tr></thead>
-              <tbody>
-                <tr v-for="(t, i) in tasks" :key="i">
-                  <td><n-input v-model:value="t.id" size="small" placeholder="id" style="width:100%" @update:value="syncYaml" /></td>
-                  <td class="cd-cmdcell">
-                    <n-input
-                      v-model:value="t.cmd"
-                      type="textarea"
-                      size="small"
-                      :autosize="{ minRows: 1, maxRows: 8 }"
-                      placeholder="命令（支持 {hostname}/{domain}/{index}）"
-                      @update:value="syncYaml"
-                    />
-                    <span v-if="t.description" class="cd-desc">{{ t.description }}</span>
-                    <span v-if="t.verify_cmd" class="cd-verify-tag" :title="'校验命令: ' + t.verify_cmd">校验 ✓</span>
-                  </td>
-                  <td><n-input :value="(t.depends_on || []).join(',')" size="small" placeholder="依赖 id" style="width:100%" @update:value="v => setDeps(t, v)" /></td>
-                  <td class="cd-cond">
-                    <n-tooltip trigger="hover"><template #trigger><n-checkbox :checked="!!t.only_if_no_domain" size="small" @update:checked="v => { t.only_if_no_domain = v; if (v) t.only_if_domain = false; syncYaml() }">host</n-checkbox></template>只在 host 级（无域名）执行</n-tooltip>
-                    <n-tooltip trigger="hover"><template #trigger><n-checkbox :checked="!!t.only_if_domain" size="small" @update:checked="v => { t.only_if_domain = v; if (v) t.only_if_no_domain = false; syncYaml() }">sni</n-checkbox></template>只在关联了域名时执行（SNI 流程）</n-tooltip>
-                  </td>
-                  <td class="cd-pemcell">
-                    <div class="cd-row">
-                      <n-input v-model:value="t.pem_file" size="small" placeholder="PEM 文件（可空）" style="flex:1;min-width:0" @update:value="syncYaml" />
+            <div class="cd-tbl-wrap">
+              <table class="cd-table cd-task-table">
+                <colgroup>
+                  <col v-for="(c, ci) in taskColumns" :key="c.key" :style="{ width: colWidths[ci] + 'px' }" />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th v-for="(c, ci) in taskColumns" :key="c.key" :title="c.hint">
+                      <span class="cd-th-lbl">{{ c.label }}</span>
+                      <span
+                        v-if="ci < taskColumns.length - 1"
+                        class="cd-col-resizer"
+                        title="拖动调整列宽"
+                        @mousedown.prevent="onColResize(ci, $event)"
+                        @dblclick.stop="autoFitColumn(ci)"
+                      ></span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(t, i) in tasks" :key="i">
+                    <td>
+                      <n-input v-model:value="t.id" size="small" placeholder="任务 id" :title="t.id" @update:value="syncYaml" />
+                    </td>
+                    <td class="cd-cmdcell" @dblclick.self="openTaskEditor(t)">
+                      <n-input
+                        v-model:value="t.cmd"
+                        type="textarea"
+                        size="small"
+                        :autosize="{ minRows: 2, maxRows: 6 }"
+                        placeholder="命令（支持 {hostname}/{domain}/{index}）"
+                        :title="t.cmd"
+                        @update:value="syncYaml"
+                      />
+                      <div class="cd-cell-foot">
+                        <n-tooltip v-if="t.description || t.verify_cmd || (t.answers && t.answers.length)" trigger="hover">
+                          <template #trigger>
+                            <span class="cd-badge" @click="openTaskEditor(t)">
+                              <Icon :icon="infoIcon" width="13" height="13" />
+                              <span v-if="t.verify_cmd">校验</span>
+                              <span v-if="t.answers && t.answers.length">交互 {{ t.answers.length }}</span>
+                              <span v-if="t.description && !t.verify_cmd && !(t.answers && t.answers.length)">说明</span>
+                            </span>
+                          </template>
+                          <div class="cd-tip">
+                            <div v-if="t.description">{{ t.description }}</div>
+                            <div v-if="t.verify_cmd">校验：{{ t.verify_cmd }}</div>
+                            <div v-if="t.expect && t.expect.length">期望：{{ t.expect.join('、') }}</div>
+                            <div v-if="t.answers && t.answers.length">交互：{{ t.answers.map(a => `“${a.when}” → ${a.reply}`).join('；') }}</div>
+                          </div>
+                        </n-tooltip>
+                        <span class="cd-head-spacer"></span>
+                        <n-tooltip trigger="hover"><template #trigger>
+                          <button class="tb-ib" @click="openTaskEditor(t)"><Icon :icon="expandIcon" width="15" height="15" /></button>
+                        </template>打开大编辑器（完整命令 / 说明 / 交互应答 / 校验）</n-tooltip>
+                      </div>
+                    </td>
+                    <td>
+                      <n-input :value="(t.depends_on || []).join(',')" size="small" placeholder="依赖 id" :title="(t.depends_on || []).join(', ')" @update:value="v => setDeps(t, v)" />
+                    </td>
+                    <td class="cd-cond">
+                      <n-tooltip trigger="hover"><template #trigger><n-checkbox :checked="!!t.only_if_no_domain" size="small" @update:checked="v => { t.only_if_no_domain = v; if (v) t.only_if_domain = false; syncYaml() }">host</n-checkbox></template>只在 host 级（无域名）执行</n-tooltip>
+                      <n-tooltip trigger="hover"><template #trigger><n-checkbox :checked="!!t.only_if_domain" size="small" @update:checked="v => { t.only_if_domain = v; if (v) t.only_if_no_domain = false; syncYaml() }">sni</n-checkbox></template>只在关联了域名时执行（SNI 流程）</n-tooltip>
+                    </td>
+                    <td class="cd-pemcell">
+                      <div class="cd-row">
+                        <n-tooltip trigger="hover"><template #trigger>
+                          <n-input v-model:value="t.pem_file" size="small" placeholder="PEM 文件（可空）" style="flex:1;min-width:0" :title="t.pem_file" @update:value="syncYaml" />
+                        </template>{{ t.pem_file || '未选择文件' }}</n-tooltip>
+                        <n-tooltip trigger="hover"><template #trigger>
+                          <button class="tb-ib" @click="openPemPicker(t)"><Icon :icon="fileIcon" width="16" height="16" /></button>
+                        </template>选择要导入的证书/私钥文件：可从证书页的 CA 库 / 终端证书库直接取，也可选任意本地文件</n-tooltip>
+                        <n-tooltip trigger="hover"><template #trigger>
+                          <button class="tb-ib" :disabled="!t.pem_file" @click="openFileExternally(t.pem_file)"><Icon :icon="externalIcon" width="16" height="16" /></button>
+                        </template>用系统默认程序打开这个证书/私钥文件</n-tooltip>
+                        <n-tooltip trigger="hover"><template #trigger>
+                          <button class="tb-ib" :disabled="!t.pem_file" @click="revealFile(t.pem_file)"><Icon :icon="revealIcon" width="16" height="16" /></button>
+                        </template>在系统文件管理器中显示这个文件</n-tooltip>
+                      </div>
+                      <div class="cd-row cd-index-row">
+                        <span class="cd-mini-lbl">索引导入证书/私钥使用的证书索引</span>
+                        <n-input-number v-model:value="t.index" size="small" :min="1" :max="3" :show-button="false" placeholder="index" style="width:88px" @update:value="syncYaml" />
+                      </div>
+                    </td>
+                    <td class="cd-verify-cell">
                       <n-tooltip trigger="hover"><template #trigger>
-                        <button class="tb-ib" @click="openPemPicker(t)"><Icon :icon="fileIcon" width="16" height="16" /></button>
-                      </template>选择要导入的证书/私钥文件：可从证书页的 CA 库 / 终端证书库直接取，也可选任意本地文件</n-tooltip>
+                        <button class="tb-ib" :class="{ primary: !!t.verify_cmd }" @click="openVerify(t)"><Icon :icon="shieldIcon" width="16" height="16" /></button>
+                      </template>{{ t.verify_cmd ? '已配置执行后校验，点击修改' : '配置执行后校验：跑一条校验命令，并检查输出是否包含期望关键字' }}</n-tooltip>
+                    </td>
+                    <td class="cd-ops">
                       <n-tooltip trigger="hover"><template #trigger>
-                        <button class="tb-ib" :disabled="!t.pem_file" @click="openFileExternally(t.pem_file)"><Icon :icon="externalIcon" width="16" height="16" /></button>
-                      </template>用系统默认程序打开这个证书/私钥文件</n-tooltip>
+                        <button class="tb-ib" @click="openTaskEditor(t)"><Icon :icon="expandIcon" width="16" height="16" /></button>
+                      </template>打开大编辑器</n-tooltip>
                       <n-tooltip trigger="hover"><template #trigger>
-                        <button class="tb-ib" :disabled="!t.pem_file" @click="revealFile(t.pem_file)"><Icon :icon="revealIcon" width="16" height="16" /></button>
-                      </template>在系统文件管理器中显示这个文件</n-tooltip>
-                    </div>
-                    <n-input v-model:value="t.index" size="small" placeholder="index" style="width:100%;margin-top:4px" @update:value="syncYaml" />
-                  </td>
-                  <td class="cd-verify-cell">
-                    <n-tooltip trigger="hover"><template #trigger>
-                      <button class="tb-ib" :class="{ primary: !!t.verify_cmd }" @click="openVerify(t)"><Icon :icon="shieldIcon" width="16" height="16" /></button>
-                    </template>配置执行后校验：跑一条校验命令，并检查输出是否包含期望关键字</n-tooltip>
-                  </td>
-                  <td class="cd-ops">
-                    <n-tooltip trigger="hover"><template #trigger>
-                      <button class="tb-ib" @click="openCatalogFor(t)"><Icon :icon="bookIcon" width="16" height="16" /></button>
-                    </template>从命令目录给这条选个命令模板</n-tooltip>
-                    <n-tooltip trigger="hover"><template #trigger>
-                      <button class="tb-ib danger" @click="removeTask(i)"><Icon :icon="trashIcon" width="16" height="16" /></button>
-                    </template>删除该任务</n-tooltip>
-                  </td>
-                </tr>
-                <tr v-if="!tasks.length"><td colspan="7" class="cd-hint">还没有任务。可「导入 config.yaml」、从「内置场景模板」生成，或点左上角 + 手动加一条。</td></tr>
-              </tbody>
-            </table>
+                        <button class="tb-ib" @click="openCatalogFor(t)"><Icon :icon="bookIcon" width="16" height="16" /></button>
+                      </template>从命令目录给这条选个命令模板</n-tooltip>
+                      <n-tooltip trigger="hover"><template #trigger>
+                        <button class="tb-ib danger" @click="removeTask(i)"><Icon :icon="trashIcon" width="16" height="16" /></button>
+                      </template>删除该任务</n-tooltip>
+                    </td>
+                  </tr>
+                  <tr v-if="!tasks.length"><td colspan="7" class="cd-hint">还没有任务。可「导入 config.yaml」、从「内置场景模板」生成，或点左上角 + 手动加一条。</td></tr>
+                </tbody>
+              </table>
+            </div>
           </template>
         </div>
       </div>
@@ -245,6 +294,89 @@
         <div class="cd-modal-f">
           <n-button size="small" @click="showScenario = false">取消</n-button>
           <n-button size="small" type="primary" @click="renderScenario">生成任务</n-button>
+        </div>
+      </div>
+    </n-modal>
+
+    <!-- 任务大编辑器 -->
+    <n-modal v-model:show="showTaskEditor" :mask-closable="false" style="width:900px;max-width:95vw">
+      <div class="cd-modal">
+        <div class="cd-modal-h">
+          <Icon :icon="expandIcon" width="16" height="16" class="cd-head-ico" />
+          <span>编辑任务</span>
+          <span class="cd-tag">{{ editorTask?.id || '新任务' }}</span>
+          <span class="cd-head-spacer"></span>
+          <button class="tb-ib" @click="showTaskEditor = false"><Icon :icon="xIcon" width="16" height="16" /></button>
+        </div>
+        <div class="cd-modal-b" v-if="editorTask">
+          <div class="cd-edit-grid">
+            <label class="cd-field2">
+              <span>任务 ID</span>
+              <n-input v-model:value="editorTask.id" size="small" placeholder="如 import_key" />
+            </label>
+            <label class="cd-field2">
+              <span>证书索引 index</span>
+              <n-input v-model:value="editorTask.index" size="small" placeholder="1 / 2 / 3" />
+            </label>
+            <label class="cd-field2 cd-span2">
+              <span>依赖（逗号分隔的任务 id）</span>
+              <n-input :value="(editorTask.depends_on || []).join(', ')" size="small" placeholder="如 sm2_sign_key_host" @update:value="setEditorDeps" />
+            </label>
+          </div>
+
+          <label class="cd-field2">
+            <span>命令（支持 {hostname} / {domain} / {index}）</span>
+            <n-input v-model:value="editorTask.cmd" type="textarea" size="small" :autosize="{ minRows: 3, maxRows: 10 }" class="cd-mono-input" />
+          </label>
+
+          <label class="cd-field2">
+            <span>说明（只显示在悬停提示里）</span>
+            <n-input v-model:value="editorTask.description" size="small" placeholder="这条任务是做什么的" />
+          </label>
+
+          <div class="cd-edit-grid">
+            <label class="cd-field2">
+              <span>PEM 文件</span>
+              <n-input v-model:value="editorTask.pem_file" size="small" placeholder="可空" />
+            </label>
+            <div class="cd-field2">
+              <span>条件</span>
+              <div class="cd-row">
+                <n-checkbox v-model:checked="editorTask.only_if_no_domain">只 host 级</n-checkbox>
+                <n-checkbox v-model:checked="editorTask.only_if_domain">只 SNI 域名级</n-checkbox>
+              </div>
+            </div>
+          </div>
+
+          <div class="cd-sub">执行后校验</div>
+          <div class="cd-edit-grid">
+            <label class="cd-field2">
+              <span>校验命令</span>
+              <n-input v-model:value="editorTask.verify_cmd" size="small" placeholder="如 show ssl settings {hostname}" />
+            </label>
+            <label class="cd-field2">
+              <span>期望关键字（逗号分隔）</span>
+              <n-input :value="(editorTask.expect || []).join(',')" size="small" @update:value="v => editorTask.expect = v.split(',').map(s => s.trim()).filter(Boolean)" />
+            </label>
+          </div>
+
+          <div class="cd-sub">
+            交互应答
+            <n-button size="tiny" style="margin-left:8px" @click="addAnswer(editorTask)">增加一条</n-button>
+          </div>
+          <div class="cd-hint">设备出现提示时自动发送对应内容，例如激活命令问 “[YES/(NO)]” 时答 YES；备份命令先问文件名、再问密码，可加两条按顺序匹配。</div>
+          <div v-for="(a, ai) in (editorTask.answers || [])" :key="ai" class="cd-answer-row">
+            <n-input v-model:value="a.when" size="small" placeholder="提示包含的文字，如 [YES/(NO)]" style="flex:2" />
+            <span class="cd-arrow">→</span>
+            <n-input v-model:value="a.reply" size="small" placeholder="自动发送的内容" style="flex:1" />
+            <n-checkbox v-model:checked="a.repeat" size="small">重复</n-checkbox>
+            <button class="tb-ib danger" @click="editorTask.answers.splice(ai, 1)"><Icon :icon="trashIcon" width="16" height="16" /></button>
+          </div>
+          <div v-if="!(editorTask.answers || []).length" class="cd-hint">未配置交互应答。激活/恢复等命令通常需要一条 YES。</div>
+        </div>
+        <div class="cd-modal-f">
+          <n-button size="small" @click="showTaskEditor = false">取消</n-button>
+          <n-button size="small" type="primary" @click="saveTaskEditor">保存</n-button>
         </div>
       </div>
     </n-modal>
@@ -341,6 +473,21 @@
             <n-input v-model:value="verifyExpect" type="textarea" size="small" :autosize="{ minRows: 2, maxRows: 5 }" placeholder="每行一个，或用逗号分隔；全部命中才算校验通过" />
             <span class="cd-doc">例如 activate 后校验 `show ssl host` 输出里出现 {hostname} 与 active/activated；关键字也支持占位符。</span>
           </div>
+
+          <div class="cd-sub">
+            交互应答
+            <n-button size="tiny" style="margin-left:8px" @click="addVerifyAnswer">增加一条</n-button>
+          </div>
+          <div class="cd-hint">
+            设备弹出提示时自动发送对应内容。实测：激活问 “[YES/(NO)]” → 答 YES；恢复问 “Type YES to proceed” → 答 YES；备份先问文件名、再问密码，可加两条按顺序匹配。未配置时也会自动应答常见的 YES/NO 确认。
+          </div>
+          <div v-for="(a, ai) in verifyAnswers" :key="ai" class="cd-answer-row">
+            <n-input v-model:value="a.when" size="small" placeholder="提示包含的文字，如 [YES/(NO)]" style="flex:2" />
+            <span class="cd-arrow">→</span>
+            <n-input v-model:value="a.reply" size="small" placeholder="自动发送的内容" style="flex:1" />
+            <n-checkbox v-model:checked="a.repeat" size="small">重复</n-checkbox>
+            <button class="tb-ib danger" @click="verifyAnswers.splice(ai, 1)"><Icon :icon="trashIcon" width="16" height="16" /></button>
+          </div>
         </div>
         <div class="cd-modal-f">
           <n-button size="small" @click="clearVerify">清除校验</n-button>
@@ -359,56 +506,58 @@
           <button class="tb-ib" @click="showPem = false"><Icon :icon="xIcon" width="16" height="16" /></button>
         </div>
         <div class="cd-modal-b">
-          <div class="cd-row" style="margin-bottom:10px">
+          <div class="cd-pick-head">
+            <n-input v-model:value="pemQuery" size="small" placeholder="搜索名称 / 主题 / 算法" clearable style="width:260px" />
             <n-button size="small" @click="pickLocalPem"><Icon :icon="folderIcon" width="14" height="14" />从任意位置选文件</n-button>
+            <span class="cd-head-spacer"></span>
             <span class="cd-hint">选中后会落到受管目录并填进该任务的 PEM 路径</span>
           </div>
-          <div class="cd-sub">证书页 · CA 库</div>
-          <table class="cd-table" v-if="caList.length">
-            <tbody>
-              <tr v-for="c in caList" :key="c.id">
-                <td>{{ c.name }}</td>
-                <td class="cd-res">{{ c.subject_cn }}</td>
-                <td class="cd-ops">
-                  <n-tooltip trigger="hover"><template #trigger><n-button size="tiny" @click="pickCaPem(c,'cert')">证书</n-button></template>用该 CA 的证书</n-tooltip>
-                  <n-tooltip trigger="hover"><template #trigger><n-button size="tiny" @click="pickCaPem(c,'key')">私钥</n-button></template>用该 CA 的私钥</n-tooltip>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+
+          <div class="cd-sub">CA 库 <span class="cd-count">{{ filteredCas.length }}</span></div>
+          <div class="cd-pick-list" v-if="filteredCas.length">
+            <div v-for="c in filteredCas" :key="c.id" class="cd-pick-row">
+              <div class="cd-pick-main">
+                <span class="cd-pick-name" :title="c.name">{{ c.name }}</span>
+                <span class="cd-pick-sub" :title="c.subject_cn">{{ c.subject_cn }}</span>
+              </div>
+              <div class="cd-pick-ops">
+                <n-button size="tiny" @click="pickCaPem(c,'cert')"><Icon :icon="certIcon" width="14" height="14" />证书</n-button>
+                <n-button size="tiny" @click="pickCaPem(c,'key')"><Icon :icon="key2Icon" width="14" height="14" />私钥</n-button>
+              </div>
+            </div>
+          </div>
           <div v-else class="cd-hint">CA 库为空（可在工具箱 → 证书/密钥 里生成或导入）。</div>
 
-          <div class="cd-sub">证书页 · 终端证书库（client / server）</div>
-          <table class="cd-table" v-if="leafList.length">
-            <tbody>
-              <tr v-for="l in leafList" :key="l.id">
-                <td>{{ l.name }}</td>
-                <td class="cd-res">{{ l.ca_name }}</td>
-                <td class="cd-ops">
-                  <n-tooltip trigger="hover"><template #trigger><n-button size="tiny" @click="pickLeafPem(l,'cert')">证书</n-button></template>用该证书</n-tooltip>
-                  <n-tooltip trigger="hover"><template #trigger><n-button size="tiny" @click="pickLeafPem(l,'key')">私钥</n-button></template>用该私钥</n-tooltip>
-                  <n-tooltip trigger="hover"><template #trigger><n-button size="tiny" @click="pickLeafPem(l,'chain')">证书链</n-button></template>用整条证书链</n-tooltip>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+          <div class="cd-sub">终端证书库 <span class="cd-count">{{ filteredLeaves.length }}</span></div>
+          <div class="cd-pick-list" v-if="filteredLeaves.length">
+            <div v-for="l in filteredLeaves" :key="l.id" class="cd-pick-row">
+              <div class="cd-pick-main">
+                <span class="cd-pick-name" :title="l.name">{{ l.name }}</span>
+                <span class="cd-pick-sub" :title="l.ca_name">{{ l.ca_name }}</span>
+              </div>
+              <div class="cd-pick-ops">
+                <n-button size="tiny" @click="pickLeafPem(l,'cert')">证书</n-button>
+                <n-button size="tiny" @click="pickLeafPem(l,'key')">私钥</n-button>
+                <n-button size="tiny" @click="pickLeafPem(l,'chain')">证书链</n-button>
+              </div>
+            </div>
+          </div>
           <div v-else class="cd-hint">终端证书库为空（可在证书页签发 server/client 证书）。</div>
 
-          <div class="cd-sub">证书页 · 受管资产库（私钥 / CSR / CRL）</div>
-          <table class="cd-table" v-if="pemAssets.length">
-            <tbody>
-              <tr v-for="a in pemAssets" :key="a.id">
-                <td>{{ a.name }}</td>
-                <td class="cd-res">{{ pemAssetKindLabel[a.kind] || a.kind }}</td>
-                <td class="cd-res">{{ a.algo || '—' }}</td>
-                <td class="cd-ops">
-                  <n-button v-if="a.kind === 'key'" size="tiny" @click="pickAssetPem(a,'key')">私钥</n-button>
-                  <n-button v-if="a.kind === 'key'" size="tiny" @click="pickAssetPem(a,'pub')">公钥</n-button>
-                  <n-button v-if="a.kind === 'csr'" size="tiny" @click="pickAssetPem(a,'csr')">CSR</n-button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+          <div class="cd-sub">受管资产库（私钥 / CSR） <span class="cd-count">{{ filteredAssets.length }}</span></div>
+          <div class="cd-pick-list" v-if="filteredAssets.length">
+            <div v-for="a in filteredAssets" :key="a.id" class="cd-pick-row">
+              <div class="cd-pick-main">
+                <span class="cd-pick-name" :title="a.name">{{ a.name }}</span>
+                <span class="cd-pick-sub">{{ pemAssetKindLabel[a.kind] || a.kind }} · {{ a.algo || '—' }}</span>
+              </div>
+              <div class="cd-pick-ops">
+                <n-button v-if="a.kind === 'key'" size="tiny" @click="pickAssetPem(a,'key')">私钥</n-button>
+                <n-button v-if="a.kind === 'key'" size="tiny" @click="pickAssetPem(a,'pub')">公钥</n-button>
+                <n-button v-if="a.kind === 'csr'" size="tiny" @click="pickAssetPem(a,'csr')">CSR</n-button>
+              </div>
+            </div>
+          </div>
           <div v-else class="cd-hint">受管资产库为空（可在证书页把独立密钥/CSR 存入库）。</div>
         </div>
         <div class="cd-modal-f">
@@ -486,13 +635,19 @@ import stopIcon from '@iconify-icons/lucide/square'
 import uploadIcon from '@iconify-icons/lucide/upload'
 import saveIcon from '@iconify-icons/lucide/save'
 import xIcon from '@iconify-icons/lucide/x'
+import scrollTextIcon from '@iconify-icons/lucide/scroll-text'
+import keyRoundIcon from '@iconify-icons/lucide/key-round'
 import externalIcon from '@iconify-icons/lucide/external-link'
 import panelRightIcon from '@iconify-icons/lucide/panel-right'
 import shieldIcon from '@iconify-icons/lucide/shield-check'
 import minusIcon from '@iconify-icons/lucide/minus'
+import infoIcon from '@iconify-icons/lucide/info'
+import expandIcon from '@iconify-icons/lucide/maximize-2'
 
 // 「在文件管理器中显示」沿用打开目录的图标。
 const revealIcon = folderIcon
+const certIcon = scrollTextIcon
+const key2Icon = keyRoundIcon
 
 // ============ 状态 ============
 const logger = createLogger('CommandDispatchPanel')
@@ -574,6 +729,87 @@ const showVerify = ref(false)
 const verifyTarget = ref(null)
 const verifyCmd = ref('')
 const verifyExpect = ref('')
+const verifyAnswers = ref([])
+
+/// 任务大编辑器（小表格里放不下的完整编辑）。
+const showTaskEditor = ref(false)
+const editorTask = ref(null)
+let editorIndex = -1
+function cloneTask(t) {
+  return JSON.parse(JSON.stringify({
+    id: t.id || '', cmd: t.cmd || '', pem_file: t.pem_file || '', index: t.index || '',
+    depends_on: t.depends_on || [], only_if_domain: !!t.only_if_domain, only_if_no_domain: !!t.only_if_no_domain,
+    description: t.description || '', verify_cmd: t.verify_cmd || '', expect: t.expect || [], answers: t.answers || [],
+  }))
+}
+function openTaskEditor(t) {
+  editorIndex = cfg.value.tasks.indexOf(t)
+  editorTask.value = cloneTask(t)
+  if (!editorTask.value.answers) editorTask.value.answers = []
+  showTaskEditor.value = true
+}
+function setEditorDeps(v) {
+  if (!editorTask.value) return
+  editorTask.value.depends_on = String(v).split(',').map(s => s.trim()).filter(Boolean)
+}
+function addAnswer(t) {
+  if (!t.answers) t.answers = []
+  t.answers.push({ when: '', reply: 'YES', repeat: false })
+}
+function saveTaskEditor() {
+  if (editorIndex < 0 || !cfg.value.tasks[editorIndex] || !editorTask.value) return
+  const cleaned = cloneTask(editorTask.value)
+  cleaned.answers = (cleaned.answers || []).filter(a => String(a.when || '').trim())
+  cleaned.expect = (cleaned.expect || []).filter(Boolean)
+  if (!cleaned.verify_cmd) cleaned.verify_cmd = ''
+  if (!cleaned.description) cleaned.description = null
+  cfg.value.tasks[editorIndex] = cleaned
+  showTaskEditor.value = false
+  syncYaml()
+}
+
+/// 可调列宽（记住上次宽度）。
+const taskColumns = [
+  { key: 'id', label: '任务 ID', hint: '任务的逻辑 id，depends_on 引用它', w: 150 },
+  { key: 'cmd', label: '命令', hint: '支持 {hostname} / {domain} / {index} 占位符；双击打开大编辑器', w: 380 },
+  { key: 'deps', label: '依赖', hint: '必须在此任务之前执行的 id，逗号分隔', w: 150 },
+  { key: 'cond', label: '执行条件', hint: 'host = 只在 host 级执行；sni = 只在对每个域名执行', w: 130 },
+  { key: 'pem', label: 'PEM 文件 / 索引', hint: '要导入或使用的证书/私钥文件，以及设备上的证书索引', w: 300 },
+  { key: 'verify', label: '校验', hint: '执行后自动跑校验命令并核对期望关键字', w: 70 },
+  { key: 'ops', label: '操作', hint: '编辑、从命令目录插入、删除', w: 110 },
+]
+const colWidths = ref(readUiState(
+  'guaxi_cmd_dispatch_col_widths',
+  taskColumns.map(c => c.w),
+  (v) => Array.isArray(v) && v.length === taskColumns.length && v.every(n => Number.isFinite(n)),
+))
+watch(colWidths, (v) => persistUiState('guaxi_cmd_dispatch_col_widths', v), { deep: true })
+function onColResize(ci, e) {
+  const startX = e.clientX
+  const startW = colWidths.value[ci]
+  const move = (ev) => {
+    const next = [...colWidths.value]
+    next[ci] = Math.max(60, Math.min(900, startW + ev.clientX - startX))
+    colWidths.value = next
+  }
+  const up = () => {
+    document.removeEventListener('mousemove', move)
+    document.removeEventListener('mouseup', up)
+  }
+  document.addEventListener('mousemove', move)
+  document.addEventListener('mouseup', up)
+}
+function autoFitColumn(ci) {
+  const longest = tasks.value.reduce((m, t) => {
+    const v = [t.id, t.cmd, (t.depends_on || []).join(','), t.pem_file, String(t.index || '')]
+    const idx = { id: 0, cmd: 1, deps: 2, pem: 3 }[taskColumns[ci].key]
+    if (idx == null) return m
+    return Math.max(m, String(v[idx] || '').split('\n').reduce((n, line) => Math.max(n, line.length), 0))
+  }, 0)
+  const next = [...colWidths.value]
+  next[ci] = Math.max(80, Math.min(900, longest * 9 + 90))
+  colWidths.value = next
+}
 const verifyPresets = [
   { label: 'show ssl host', value: 'show ssl host' },
   { label: 'show ssl settings {hostname}', value: 'show ssl settings {hostname}' },
@@ -588,7 +824,16 @@ const pemTarget = ref(null)
 const caList = ref([])
 const leafList = ref([])
 const pemAssets = ref([])
+const pemQuery = ref('')
 const pemAssetKindLabel = { key: '私钥', csr: 'CSR', crl: 'CRL' }
+function pemHit(...vals) {
+  const q = pemQuery.value.trim().toLowerCase()
+  if (!q) return true
+  return vals.filter(Boolean).some(v => String(v).toLowerCase().includes(q))
+}
+const filteredCas = computed(() => caList.value.filter(c => pemHit(c.name, c.subject_cn)))
+const filteredLeaves = computed(() => leafList.value.filter(l => pemHit(l.name, l.ca_name, l.subject_cn)))
+const filteredAssets = computed(() => pemAssets.value.filter(a => pemHit(a.name, a.kind, a.algo)))
 
 const catalog = ref([])
 const catalogQuery = ref('')
@@ -971,16 +1216,17 @@ async function revealConfig() {
 
 // ============ 任务表 ============
 function addTask() {
-  cfg.value.tasks.push({ id: 'task' + (tasks.value.length + 1), cmd: '', pem_file: '', index: '', depends_on: [], only_if_domain: false, only_if_no_domain: false, verify_cmd: '', expect: [] })
+  cfg.value.tasks.push({ id: 'task' + (tasks.value.length + 1), cmd: '', pem_file: '', index: '', depends_on: [], only_if_domain: false, only_if_no_domain: false, verify_cmd: '', expect: [], answers: [] })
   syncYaml()
 }
 function removeTask(i) { cfg.value.tasks.splice(i, 1); syncYaml() }
 
-// ============ 任务级校验 ============
+// ============ 任务级校验 / 交互应答 ============
 function openVerify(t) {
   verifyTarget.value = t
   verifyCmd.value = t.verify_cmd || ''
   verifyExpect.value = (t.expect || []).join('\n')
+  verifyAnswers.value = JSON.parse(JSON.stringify(t.answers || []))
   showVerify.value = true
 }
 function saveVerify() {
@@ -991,16 +1237,21 @@ function saveVerify() {
     .split(/[,\n]/)
     .map(s => s.trim())
     .filter(Boolean)
+  t.answers = verifyAnswers.value.filter(a => String(a.when || '').trim())
   showVerify.value = false
   syncYaml()
-  note(t.verify_cmd ? '已设置执行后校验' : '已清除执行后校验')
+  note(t.verify_cmd || t.answers.length ? '已保存校验 / 交互设置' : '已清除校验 / 交互设置')
 }
 function clearVerify() {
   const t = verifyTarget.value
-  if (t) { t.verify_cmd = ''; t.expect = []; syncYaml() }
+  if (t) { t.verify_cmd = ''; t.expect = []; t.answers = []; syncYaml() }
   verifyCmd.value = ''
   verifyExpect.value = ''
+  verifyAnswers.value = []
   showVerify.value = false
+}
+function addVerifyAnswer() {
+  verifyAnswers.value.push({ when: '', reply: 'YES', repeat: false })
 }
 
 // ============ 命令目录 ============
@@ -1270,22 +1521,54 @@ onBeforeUnmount(() => {
 .cd-strat-count { flex: 0 0 auto; font-size: 13px; color: var(--guaxi-text-secondary); }
 .cd-strat-meta, .cd-strat-desc { margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; color: var(--guaxi-text-secondary); }
 
-.cd-targets { display: flex; gap: 6px; margin-bottom: 8px; }
-.cd-table { width: 100%; border-collapse: collapse; font-size: 16px; }
-.cd-table th, .cd-table td { text-align: left; padding: 8px 8px; border-bottom: 1px solid var(--guaxi-border-weak, rgba(0,0,0,0.06)); vertical-align: top; }
-.cd-table th { font-size: 15px; text-transform: uppercase; letter-spacing: .04em; color: var(--guaxi-text-secondary); position: sticky; top: 0; background: var(--guaxi-panel-bg); z-index: 1; }
-.cd-task-table { table-layout: fixed; min-width: 880px; }
+.cd-targets { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+.cd-tgt { display: flex; align-items: center; gap: 6px; flex: 1 1 260px; min-width: 0; }
+.cd-tgt-lbl { flex: 0 0 auto; font-size: 14px; color: var(--guaxi-text-secondary); }
+.cd-tgt-info { flex: 0 0 auto; font-size: 13px; color: var(--guaxi-text-secondary); }
+/* 横向可滚：列宽可拖，总宽超出时出现滚动条而不是挤压内容。 */
+.cd-tbl-wrap { overflow: auto; min-height: 0; max-width: 100%; }
+.cd-table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 16px; }
+.cd-table th, .cd-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--guaxi-border-weak, rgba(0,0,0,0.06)); vertical-align: top; }
+.cd-table th { font-size: 14px; letter-spacing: .02em; color: var(--guaxi-text-secondary); position: sticky; top: 0; background: var(--guaxi-panel-bg); z-index: 2; white-space: nowrap; }
+.cd-task-table { table-layout: fixed; }
+.cd-table thead tr { position: relative; }
+.cd-th-lbl { display: inline-block; padding-right: 6px; }
+/* 列边界拖拽条：悬停变亮，双击自动适配。 */
+.cd-col-resizer { position: absolute; top: 0; bottom: 0; right: -3px; width: 7px; cursor: col-resize; z-index: 3; }
+.cd-col-resizer::after { content: ''; position: absolute; top: 4px; bottom: 4px; left: 3px; width: 1px; background: var(--guaxi-border); }
+.cd-col-resizer:hover::after { background: var(--tw-accent); width: 2px; left: 2.5px; }
 .cd-cond { white-space: nowrap; }
 .cd-ops { white-space: nowrap; text-align: right; }
 .cd-verify-cell { text-align: center; }
-/* 命令可能很长：多行输入 + 自适应行高，整条命令都能看全。 */
+/* 命令多行输入：整条命令都能看全，且自动换行。 */
 .cd-cmdcell { min-width: 0; }
-.cd-cmdcell :deep(.n-input__textarea-el), .cd-cmdcell :deep(.n-input__input-el) { font-family: var(--tw-mono-font); font-size: 16px; line-height: 1.5; }
+.cd-cmdcell :deep(.n-input__textarea-el), .cd-cmdcell :deep(.n-input__input-el) { font-family: var(--tw-mono-font); font-size: 15px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.cd-cmdcell :deep(.n-input) { width: 100%; }
 .cd-pemcell { min-width: 0; }
-.cd-desc { display: block; margin-top: 3px; font-size: 14px; color: var(--guaxi-text-secondary); }
-.cd-verify-tag { display: inline-block; margin-top: 4px; padding: 0 7px; border-radius: 999px; font-size: 13px; color: var(--tw-accent); background: var(--tw-accent-soft); }
+.cd-cell-foot { display: flex; align-items: center; gap: 4px; margin-top: 2px; min-height: 20px; }
+.cd-badge { display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; border-radius: 999px; font-size: 12.5px; color: var(--tw-accent); background: var(--tw-accent-soft); cursor: pointer; }
+.cd-badge:hover { filter: brightness(1.15); }
+.cd-tip { max-width: 380px; white-space: normal; line-height: 1.5; font-size: 13.5px; }
+.cd-index-row { align-items: center; gap: 6px; }
+.cd-mini-lbl { flex: 1 1 auto; min-width: 0; font-size: 12.5px; color: var(--guaxi-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cd-res { font-family: var(--tw-mono-font); font-size: 15px; }
 .cd-sub { margin: 12px 0 4px; font-size: 15.5px; font-weight: 600; color: var(--tw-accent); }
+.cd-edit-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; margin-bottom: 10px; }
+.cd-field2 { display: flex; flex-direction: column; gap: 4px; min-width: 0; margin-bottom: 10px; }
+.cd-field2 > span { font-size: 13.5px; color: var(--guaxi-text-secondary); }
+.cd-span2 { grid-column: span 2; }
+.cd-mono-input :deep(.n-input__textarea-el) { font-family: var(--tw-mono-font); font-size: 14px; }
+.cd-answer-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.cd-arrow { color: var(--tw-accent); font-size: 14px; }
+.cd-pick-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+.cd-count { font-size: 13px; color: var(--guaxi-text-secondary); font-weight: 400; margin-left: 4px; }
+.cd-pick-list { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow: auto; padding-right: 4px; }
+.cd-pick-row { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border: 1px solid var(--guaxi-border-weak, rgba(0,0,0,.08)); border-radius: 6px; }
+.cd-pick-row:hover { border-color: var(--tw-accent); background: var(--tw-accent-soft); }
+.cd-pick-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1 1 auto; }
+.cd-pick-name { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cd-pick-sub { font-size: 12.5px; color: var(--guaxi-text-secondary); font-family: var(--tw-mono-font); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cd-pick-ops { display: flex; gap: 4px; flex: 0 0 auto; }
 .cd-yaml-monaco { flex: 1 1 auto; min-height: 0; width: 100%; border: 1px solid var(--guaxi-border); border-radius: var(--tw-radius-sm); overflow: hidden; }
 /* 文本模式下让滚动交给 Monaco 自己，外层不再滚，编辑器占满整高。 */
 .cd-scroll.cd-fill { display: flex; flex-direction: column; overflow: hidden; padding: 0; gap: 0; }

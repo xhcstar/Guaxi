@@ -54,6 +54,16 @@ pub struct Targets {
     pub domains: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TaskAnswer {
+    /// 输出尾部出现这段文字（不区分大小写）时就发送 `reply`。
+    pub when: String,
+    pub reply: String,
+    /// 是否每次都应答（默认只应答一次）。
+    #[serde(default)]
+    pub repeat: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskTemplate {
     pub id: String,
@@ -79,6 +89,9 @@ pub struct TaskTemplate {
     /// 校验命令输出必须包含的关键字（不区分大小写）；空表示只看校验命令本身是否成功。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub expect: Vec<String>,
+    /// 交互式命令的分步应答（按顺序匹配设备提示）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub answers: Vec<TaskAnswer>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -110,6 +123,7 @@ pub struct ConcreteTask {
     pub description: Option<String>,
     pub verify_cmd: String,
     pub expect: Vec<String>,
+    pub answers: Vec<TaskAnswer>,
 }
 
 /// 渲染 `{hostname}` / `{domain}` / `{index}`（以及 `{id}`）。
@@ -178,6 +192,7 @@ pub fn expand(cfg: &DispatchConfig) -> Vec<ConcreteTask> {
                     description: t.description.clone(),
                     verify_cmd: String::new(),
                     expect: Vec::new(),
+                    answers: t.answers.clone(),
                 };
                 task.cmd = render(&t.cmd, &task);
                 task.verify_cmd = t
@@ -514,6 +529,8 @@ struct DeviceCli {
     /// shell 模式是否追加退出码探针（`cmd; echo __DISPATCH_RC=$?`）。
     /// 关键词启发式对 shell 不可靠（`cp` 失败不会打印任何关键词），拿真实退出码准得多。
     probe_rc: bool,
+    /// 任务级分步应答（备份/恢复等）。
+    answers: Vec<AnswerStep>,
 }
 
 /// 从缓冲区尾部若干行里找 shell 提示符（用于 Auto 模式的兜底判定）。
@@ -536,6 +553,43 @@ fn heredoc_marker(cmd: &str) -> Option<String> {
     } else {
         Some(rest[..end].to_string())
     }
+}
+
+/// 通用确认词 → 回复。实测设备用 `[YES/(NO)]:` / `Type YES to proceed, NO to abort:`。
+fn generic_confirm_reply(low: &str) -> Option<&'static str> {
+    const CONFIRM: [&str; 11] = [
+        "[yes/(no)]",
+        "[yes/no]",
+        "(y/n)",
+        "(yes/no)",
+        "type yes to proceed",
+        "to proceed, no to abort",
+        "type yes to continue",
+        "yes/no",
+        "continue:",
+        "are you sure",
+        "do you want to",
+    ];
+    if CONFIRM.iter().any(|k| low.contains(k)) {
+        Some("YES")
+    } else {
+        None
+    }
+}
+
+#[derive(Debug, Clone)]
+struct AnswerStep {
+    when: String,
+    reply: String,
+    repeat: bool,
+    used: bool,
+}
+
+/// 任务级分步应答的第一个可用匹配。
+fn match_answer(low: &str, answers: &[AnswerStep]) -> Option<usize> {
+    answers
+        .iter()
+        .position(|a| !a.when.trim().is_empty() && !a.used && low.contains(&a.when.to_lowercase()))
 }
 
 impl DeviceCli {
@@ -566,6 +620,7 @@ impl DeviceCli {
             enable_password,
             kind: SessionKind::Auto,
             probe_rc,
+            answers: Vec::new(),
         };
 
         // 探测会话类型：发一个空行看回显出来的提示符。
@@ -638,24 +693,47 @@ impl DeviceCli {
         let _ = self.channel.data(s.as_bytes()).await;
     }
 
-    /// 应答设备中途抛出的交互（确认、分页），返回是否处理过。
+    /// 应答设备中途抛出的交互（确认、分页、分步输入），返回是否处理过。
     ///
     /// shell 模式下**不自动答 yes/no** —— Linux 上的 `rm -i`、`apt` 之类确认不该被代答；
     /// 但分页（`less`/`more` 的 `--more--` 或 `:`）仍自动翻，避免卡住。
+    ///
+    /// 设备模式下先匹配任务级 `answers`（按顺序、每条默认只答一次），
+    /// 再退到通用确认词（含 `[YES/(NO)]:`、`(y/n)`、`YES to proceed` 等实测形式）。
     async fn answer_interaction(&mut self) -> bool {
         let low = self.buf.to_lowercase();
-        if low.contains("--more--") || low.ends_with("\n:") || low.ends_with("\r:") {
+        if low.contains("--more--") {
             self.buf.clear();
             self.send_raw(" ").await;
             return true;
         }
-        if self.kind != SessionKind::Shell {
-            let confirm = ["type yes to continue", "yes/no", "continue:", "are you sure"];
-            if confirm.iter().any(|k| low.contains(k)) {
-                self.buf.clear();
-                self.send_raw("YES\n").await;
-                return true;
+        // 分页符 `:` 不能乱答：备份/恢复的提示也以冒号结尾。
+        if self.kind == SessionKind::Shell && (low.ends_with("\n:") || low.ends_with("\r:")) {
+            self.buf.clear();
+            self.send_raw(" ").await;
+            return true;
+        }
+        if self.kind == SessionKind::Shell {
+            return false;
+        }
+
+        // 1) 任务级分步应答：匹配尾部输出，按顺序使用。
+        if let Some(i) = match_answer(&low, &self.answers) {
+            let reply = self.answers[i].reply.clone();
+            let repeat = self.answers[i].repeat;
+            if !repeat {
+                self.answers[i].used = true;
             }
+            self.buf.clear();
+            self.send_raw(&format!("{reply}\n")).await;
+            return true;
+        }
+
+        // 2) 通用确认：实测设备用 `[YES/(NO)]:` / `Type YES to proceed, NO to abort:`。
+        if let Some(reply) = generic_confirm_reply(&low) {
+            self.buf.clear();
+            self.send_raw(&format!("{reply}\n")).await;
+            return true;
         }
         false
     }
@@ -756,6 +834,31 @@ impl DeviceCli {
     /// - 设备 CLI：进配置模式后发命令；设备若进入 PEM 粘贴状态，补送 PEM + 单独一行 `...`。
     /// - shell 模式：直接发命令；若命令里有 heredoc（`<<EOF`）且带 pem，就把 PEM 当作 heredoc 内容喂进去。
     async fn run_cmd(&mut self, cmd: &str, pem: Option<&str>) -> TaskOutcome {
+        self.run_cmd_with_answers(cmd, pem, &[]).await
+    }
+
+    /// 同上，但带任务级分步应答（备份/恢复先问文件名、再问密码）。
+    async fn run_cmd_with_answers(
+        &mut self,
+        cmd: &str,
+        pem: Option<&str>,
+        answers: &[TaskAnswer],
+    ) -> TaskOutcome {
+        self.answers = answers
+            .iter()
+            .map(|a| AnswerStep {
+                when: a.when.clone(),
+                reply: a.reply.clone(),
+                repeat: a.repeat,
+                used: false,
+            })
+            .collect();
+        let out = self.run_cmd_inner(cmd, pem).await;
+        self.answers.clear();
+        out
+    }
+
+    async fn run_cmd_inner(&mut self, cmd: &str, pem: Option<&str>) -> TaskOutcome {
         let pw = self.enable_password.clone();
         if let Err(e) = self.ensure_config_mode(pw.clone()).await {
             let out = self.buf.clone();
@@ -856,8 +959,9 @@ impl DeviceCli {
         pem: Option<&str>,
         verify_cmd: &str,
         expect: &[String],
+        answers: &[TaskAnswer],
     ) -> TaskOutcome {
-        let main = self.run_cmd(cmd, pem).await;
+        let main = self.run_cmd_with_answers(cmd, pem, answers).await;
         if !main.success || verify_cmd.trim().is_empty() {
             return main;
         }
@@ -987,11 +1091,13 @@ impl TaskOutcome {
             "certificate import successful",
             "activation successful",
             "activated successfully",
+            "is activated successfully",
             "activate success",
             "backup successful",
             "backup success",
             "restore successful",
             "restored successfully",
+            "files restored successfully",
             "(config",
         ];
         let pending_markers = [
@@ -1248,6 +1354,7 @@ pub async fn cmd_dispatch_run(
                     if pem.is_empty() { None } else { Some(&pem) },
                     &t.verify_cmd,
                     &t.expect,
+                    &t.answers,
                 )
                 .await;
             done += 1;
@@ -1602,6 +1709,7 @@ tasks:
             description: None,
             verify_cmd: String::new(),
             expect: vec![],
+            answers: vec![],
         };
         assert_eq!(render("a {unknown} b {hostname}", &dummy), "a {unknown} b h");
         assert_eq!(render("json { \"a\": 1 }", &dummy), "json { \"a\": 1 }");
@@ -1696,16 +1804,22 @@ tasks:
   index: 2
   verify_cmd: "show ssl host {hostname}"
   expect: ["vhost", "activated"]
+  answers:
+  - when: "[YES/(NO)]"
+    reply: YES
 "#;
         let cfg = parse_config(yaml).unwrap();
         let t = &expand(&cfg)[0];
         assert_eq!(t.verify_cmd, "show ssl host vhost");
         assert_eq!(t.expect, vec!["vhost".to_string(), "activated".to_string()]);
-        // 回写 YAML 时可选字段应保留，未配置时不产生噪声。
+        assert_eq!(t.answers.len(), 1);
+        assert_eq!(t.answers[0].reply, "YES");
         let out = serde_yaml::to_string(&cfg).unwrap();
         assert!(out.contains("verify_cmd"));
+        assert!(out.contains("answers"));
         let bare = parse_config("targets: { hostnames: [h], domains: [\"\"] }\ntasks: [{ id: a, cmd: x }]").unwrap();
         assert!(!serde_yaml::to_string(&bare).unwrap().contains("verify_cmd"));
+        assert!(!serde_yaml::to_string(&bare).unwrap().contains("answers"));
     }
 
     #[test]
@@ -1715,6 +1829,24 @@ tasks:
         assert!(list.iter().all(|b| !b.config.tasks.is_empty()), "内置策略必须有内容");
         assert!(list.iter().any(|b| b.id.contains("sm2")), "应包含 SM2 流程");
         assert!(list.iter().all(|b| is_builtin_id(b.id)));
+    }
+
+    #[test]
+    fn interactive_prompts_are_recognized() {
+        // 实测设备的形式：激活问 [YES/(NO)]:，恢复问 Type YES to proceed。
+        assert_eq!(generic_confirm_reply("do you want to activate ... [yes/(no)]:"), Some("YES"));
+        assert_eq!(generic_confirm_reply("type yes to proceed, no to abort:"), Some("YES"));
+        assert_eq!(generic_confirm_reply("are you sure"), Some("YES"));
+        assert_eq!(generic_confirm_reply("enter file name"), None);
+        // 任务级应答按配置顺序匹配，且用过一次就不再命中。
+        let mut steps = vec![
+            AnswerStep { when: "file name".into(), reply: "\"bk.tgz\"".into(), repeat: false, used: false },
+            AnswerStep { when: "password".into(), reply: "pw".into(), repeat: false, used: false },
+        ];
+        assert_eq!(match_answer("file name or url", &steps), Some(0));
+        steps[0].used = true;
+        assert_eq!(match_answer("file name or url", &steps), None);
+        assert_eq!(match_answer("password", &steps), Some(1));
     }
 
     #[test]
