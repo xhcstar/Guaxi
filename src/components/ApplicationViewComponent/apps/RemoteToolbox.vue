@@ -1,6 +1,6 @@
 <template>
   <div class="tb-root">
-    <n-tabs type="line" size="small" class="tb-tabs" pane-class="tb-pane">
+    <n-tabs v-model:value="activeTab" type="line" size="small" class="tb-tabs" pane-class="tb-pane">
       <n-tab-pane name="calc" tab="计算器">
         <template #tab><span class="tw-tab"><Icon :icon="calcIcon" width="15" height="15" />计算器</span></template>
         <div class="tb-sec">
@@ -175,7 +175,7 @@
                 </n-tooltip>
               </div>
               <div class="tb-row">
-                <n-tooltip trigger="hover"><template #trigger><n-select v-model:value="caCategory" size="small" :options="caCategoryOptions" style="width:130px" /></template>CA 类别：RSA / ECC（本地签发）· SM2 / PQC（需 tlcp 特性 + Tongsuo）</n-tooltip>
+                <n-tooltip trigger="hover"><template #trigger><n-select v-model:value="caCategory" size="small" :options="caCategoryOptions" style="width:130px" /></template>CA 类别：RSA / ECC 本地签发。SM2 / PQC 请用下方「远程工具台」在装了 Tongsuo 的 Linux 机器上执行</n-tooltip>
                 <n-tooltip v-if="caCategory==='rsa'" trigger="hover"><template #trigger><n-select v-model:value="chainBits" size="small" :options="rsaBitsOptions" style="width:160px" /></template>RSA 密钥长度。CA 建议 ≥ 3072 位</n-tooltip>
                 <n-tooltip v-if="caCategory==='ecc'" trigger="hover"><template #trigger><n-select v-model:value="chainCurve" size="small" :options="ecCurveOptions" style="width:150px" /></template>椭圆曲线。P-256 通用；P-384 更高强度</n-tooltip>
                 <n-tooltip trigger="hover"><template #trigger><n-input v-model:value="caName" size="small" placeholder="CA 名称（库内标识，如 root-ca-ecc）" style="width:210px" /></template>库内显示名，只用于你自己识别，不写进证书</n-tooltip>
@@ -185,7 +185,10 @@
                   <button class="tb-ib primary lg" :disabled="caLoading" @click="createCa"><Icon :icon="caLoading ? refreshIcon : plusIcon" width="17" height="17" :class="{ 'tb-spin': caLoading }" /></button>
                 </template>按当前参数生成 CA（证书 + 私钥自动入库）</n-tooltip>
               </div>
-              <div v-if="caCategory==='sm2'||caCategory==='pqc'" class="tb-hint">SM2 / PQC 证书需启用 <code>tlcp</code> 特性并安装 Tongsuo（见设计文档 §5.3），默认构建会提示未启用。</div>
+              <div class="tb-hint">
+                SM2 / PQC、TLCP 联调不再要求本机原生编译：在 Linux 机器上准备好 Tongsuo 后，用「远程执行 → 远程工具台」调用它的命令路径即可，生成的证书也能直接下载回来。
+                <n-button size="tiny" style="margin-left:8px" @click="goRemoteTool">打开远程工具台</n-button>
+              </div>
             </div>
 
             <div class="tb-sec">
@@ -503,22 +506,64 @@
 
       <n-tab-pane name="exec" tab="远程执行">
         <template #tab><span class="tw-tab"><Icon :icon="zapIcon" width="15" height="15" />远程执行</span></template>
-        <div class="tb-sec">
-          <div class="tb-row">
-            <n-select v-model:value="profileId" size="small" :options="profileOptions" placeholder="SSH 档案" style="width:180px" />
-            <n-input v-model:value="execCmd" size="small" placeholder="远程命令，如 dmesg | tail -100" style="flex:1;min-width:240px" @keyup.enter="runExec" />
-            <n-button size="small" type="primary" :loading="execLoading" @click="runExec">执行</n-button>
-            <n-button size="small" :disabled="!execSaved" @click="importCapture">导入分析</n-button>
-          </div>
-          <div class="tb-row">
-            <span class="tb-h">定时采集</span>
-            <n-input-number v-model:value="periodSecs" size="small" :min="1" style="width:110px" />
-            <n-button size="small" v-if="!collectorId" @click="startPeriodic">开始</n-button>
-            <n-button size="small" v-else @click="stopPeriodic">停止采集</n-button>
-            <span class="tb-res" v-if="collectorId">采集中 → {{ collectorPath }}</span>
-          </div>
-          <pre class="tb-out">{{ execOut }}</pre>
-        </div>
+        <n-tabs type="segment" size="small" v-model:value="execTab" class="tb-exec-tabs">
+          <n-tab-pane name="cmd" tab="命令执行">
+            <div class="tb-sec">
+              <div class="tb-row">
+                <n-select v-model:value="profileId" size="small" :options="profileOptions" placeholder="SSH 档案" style="width:180px" />
+                <n-input v-model:value="execCmd" size="small" placeholder="远程命令，如 dmesg | tail -100" style="flex:1;min-width:240px" @keyup.enter="runExec" />
+                <n-button size="small" type="primary" :loading="execLoading" @click="runExec">执行</n-button>
+                <n-button size="small" :disabled="!execSaved" @click="importCapture">导入分析</n-button>
+              </div>
+              <div class="tb-row">
+                <span class="tb-h">定时采集</span>
+                <n-input-number v-model:value="periodSecs" size="small" :min="1" style="width:110px" />
+                <n-button size="small" v-if="!collectorId" @click="startPeriodic">开始</n-button>
+                <n-button size="small" v-else @click="stopPeriodic">停止采集</n-button>
+                <span class="tb-res" v-if="collectorId">采集中 → {{ collectorPath }}</span>
+              </div>
+              <pre class="tb-out">{{ execOut }}</pre>
+            </div>
+          </n-tab-pane>
+
+          <n-tab-pane name="tool" tab="远程工具台">
+            <div class="tb-sec">
+              <div class="tb-hint">在远端 Linux 上调用你自备的工具（Tongsuo/openssl 等）。填工具路径后，命令里的 <code>{tool}</code> 会被安全替换；SM2/PQC、TLCP 联调都可以在这里做。NFS 已挂载到本机时，直接把挂载目录当本地路径使用即可。需要 sudo 时请用有权限的账号或在目标机配置 NOPASSWD（此执行通道不代输 sudo 口令）。</div>
+              <div class="tb-row">
+                <n-select v-model:value="toolProfileId" size="small" :options="profileOptions" placeholder="SSH 档案" style="width:180px" />
+                <n-input v-model:value="toolPath" size="small" placeholder="远端工具路径，如 /opt/tongsuo/bin/openssl" style="flex:1;min-width:260px" />
+                <n-button size="small" :loading="toolProbing" :disabled="!(toolProfileId || profileId) || !toolPath" @click="probeTool">探测</n-button>
+              </div>
+              <div class="tb-row">
+                <n-input v-model:value="toolWorkdir" size="small" placeholder="工作目录（可空）" style="width:240px" />
+                <n-input v-model:value="toolEnv" size="small" placeholder="环境变量，如 LD_LIBRARY_PATH=/opt/tongsuo/lib" style="flex:1;min-width:240px" />
+                <n-input-number v-model:value="toolTimeout" size="small" :min="1" :max="3600" style="width:120px" />
+                <span class="tb-res">超时(秒)</span>
+              </div>
+              <div class="tb-row">
+                <n-select v-model:value="toolTemplate" size="small" :options="toolTemplateOptions" placeholder="命令模板" style="width:230px" @update:value="applyToolTemplate" />
+                <n-button size="small" type="primary" :loading="toolLoading" :disabled="!(toolProfileId || profileId)" @click="runTool">执行</n-button>
+                <span class="tb-res" v-if="toolExit !== null" :class="{ 'tb-exit-bad': toolExit !== 0 }">退出码 {{ toolExit }} · {{ toolMs }} ms</span>
+              </div>
+              <n-input v-model:value="toolCommand" type="textarea" size="small" :autosize="{ minRows: 3, maxRows: 8 }" placeholder="{tool} version" class="tb-mono" />
+
+              <div class="tb-grp">文件传输（本机 ↔ 远端）</div>
+              <div class="tb-row">
+                <n-button size="small" @click="pickUploadLocal"><Icon :icon="folderIcon" width="14" height="14" />选择本地文件</n-button>
+                <n-input v-model:value="uploadLocalPath" size="small" placeholder="本地文件路径" style="flex:1;min-width:180px" />
+                <n-input v-model:value="uploadRemotePath" size="small" placeholder="远端路径，如 /tmp/server.crt" style="flex:1;min-width:180px" />
+                <n-button size="small" :disabled="!(toolProfileId || profileId) || !uploadLocalPath || !uploadRemotePath" @click="doUpload">上传</n-button>
+              </div>
+              <div class="tb-row">
+                <n-input v-model:value="downloadRemotePath" size="small" placeholder="远端文件路径，如 /tmp/sm2.crt" style="flex:1;min-width:180px" />
+                <n-button size="small" @click="pickDownloadLocal"><Icon :icon="saveIcon" width="14" height="14" />选择保存位置</n-button>
+                <n-input v-model:value="downloadLocalPath" size="small" placeholder="本地保存路径" style="flex:1;min-width:180px" />
+                <n-button size="small" :disabled="!(toolProfileId || profileId) || !downloadRemotePath || !downloadLocalPath" @click="doDownload">下载</n-button>
+              </div>
+              <pre class="tb-out tb-out-tall">{{ toolOut }}</pre>
+            </div>
+          </n-tab-pane>
+        </n-tabs>
       </n-tab-pane>
       <n-tab-pane name="multi" tab="多机对齐">
         <template #tab><span class="tw-tab"><Icon :icon="gitCompareIcon" width="15" height="15" />多机对齐</span></template>
@@ -605,7 +650,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { readFile } from '@tauri-apps/plugin-fs'
@@ -655,6 +700,9 @@ const error = ref('')
 const { profiles } = useSshProfiles(logger)
 const profileOptions = computed(() => profiles.value.map(p => ({ label: `${p.name || p.host}`, value: p.id })))
 const profileId = ref(null)
+// 外层标签可控：证书页的 SM2/PQC 引导按钮要能直接跳到「远程执行」。
+const activeTab = ref('calc')
+const execTab = ref('cmd')
 
 const numInput = ref('')
 const numOut = ref(null)
@@ -1041,9 +1089,9 @@ const subjC = ref('CN'); const subjST = ref('Shannxi'); const subjL = ref("xi'an
 const subjO = ref('XA'); const subjOU = ref('Dev')
 const chainBits = ref(2048); const chainCurve = ref('p256'); const chainDays = ref(3650)
 const caCategory = ref('ecc')
+// SM2/PQC 不再在本机原生生成：保留后端 tlcp 代码，但 UI 引导到远程工具台。
 const caCategoryOptions = [
   { label: 'RSA', value: 'rsa' }, { label: 'ECC', value: 'ecc' },
-  { label: 'SM2 (国密)', value: 'sm2' }, { label: 'PQC (后量子)', value: 'pqc' },
 ]
 const caList = ref([])
 const leafList = ref([])
@@ -1053,7 +1101,10 @@ const leafLoading = ref(false); const leafCertOut = ref(''); const leafKeyOut = 
 const importCaName = ref(''); const importCertPem = ref(''); const importKeyPem = ref('')
 const leafProfileOptions = [{ label: '服务端', value: 'server' }, { label: '客户端', value: 'client' }]
 const catLabel = { rsa: 'RSA', ecc: 'ECC', sm2: 'SM2', pqc: 'PQC', imported: '导入' }
-const caSelectOptions = computed(() => caList.value.map(c => ({ label: `[${catLabel[c.category] || c.category}] ${c.name} (${c.is_root ? '根' : '中间'})`, value: c.id })))
+// SM2/PQC CA 只能查看/导出，不再参与本机签发（签发请走远程工具台）。
+const caSelectOptions = computed(() => caList.value
+  .filter(c => c.category === 'rsa' || c.category === 'ecc')
+  .map(c => ({ label: `[${catLabel[c.category] || c.category}] ${c.name} (${c.is_root ? '根' : '中间'})`, value: c.id })))
 const caParentOptions = computed(() => caList.value.filter(c => c.category === caCategory.value).map(c => ({ label: c.name, value: c.id })))
 // 四类 CA 库分组
 const caGroups = computed(() => ['rsa', 'ecc', 'sm2', 'pqc'].map(cat => ({ cat, label: catLabel[cat], items: caList.value.filter(c => c.category === cat) })))
@@ -1395,6 +1446,121 @@ async function runExec() {
 }
 function importCapture() { if (execSaved.value) emit('import-file', execSaved.value) }
 
+// ---- 远程工具台：在远端 Linux 上调用自备工具（Tongsuo/openssl），并做文件传输 ----
+const toolProfileId = ref(null)
+const toolPath = ref('')
+const toolWorkdir = ref('')
+const toolEnv = ref('')
+const toolTimeout = ref(120)
+const toolTemplate = ref(null)
+const toolCommand = ref('{tool} version')
+const toolOut = ref('')
+const toolLoading = ref(false)
+const toolProbing = ref(false)
+const toolExit = ref(null)
+const toolMs = ref(0)
+const uploadLocalPath = ref(''); const uploadRemotePath = ref('')
+const downloadRemotePath = ref(''); const downloadLocalPath = ref('')
+
+// 模板只是起点；命令框可自由改，适配不同 Tongsuo/openssl 版本。
+const toolTemplates = [
+  { value: 'version', label: '查看版本', cmd: '{tool} version' },
+  { value: 'sm2-key', label: 'SM2 生成私钥', cmd: '{tool} ecparam -genkey -name SM2 -out sm2.key' },
+  { value: 'sm2-self', label: 'SM2 自签证书', cmd: '{tool} req -new -x509 -key sm2.key -out sm2.crt -days 365 -sm3' },
+  { value: 'sm2-csr', label: 'SM2 生成 CSR', cmd: '{tool} req -new -key sm2.key -sm3 -subj "/CN=sm2.example.com" -out sm2.csr' },
+  { value: 'sm2-issue', label: 'SM2 用 CA 签发证书', cmd: '{tool} x509 -req -in sm2.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out sm2.crt -days 365 -sm3' },
+  { value: 'sm2-sign', label: 'SM2 签名', cmd: '{tool} sm2utl -sign -in msg.txt -inkey sm2.key -out msg.sig' },
+  { value: 'sm2-verify', label: 'SM2 验签', cmd: '{tool} sm2utl -verify -in msg.txt -sigfile msg.sig -pubin -inkey sm2.pub' },
+  { value: 'sm4-enc', label: 'SM4 加密文件', cmd: '{tool} enc -sm4-cbc -salt -in plain.txt -out plain.enc -pass pass:changeit' },
+  { value: 'sm4-dec', label: 'SM4 解密文件', cmd: '{tool} enc -d -sm4-cbc -in plain.enc -out plain.txt -pass pass:changeit' },
+  { value: 'tlcp', label: 'TLCP/握手测试', cmd: '{tool} s_client -connect 127.0.0.1:4433 -ntls -servername example.com' },
+  { value: 'pqc-key', label: 'PQC 生成密钥 (ML-KEM)', cmd: '{tool} genpkey -algorithm MLKEM768 -out mlkem.key' },
+]
+const toolTemplateOptions = toolTemplates.map(t => ({ label: t.label, value: t.value }))
+function applyToolTemplate(v) {
+  const t = toolTemplates.find(x => x.value === v)
+  if (t) toolCommand.value = t.cmd
+}
+function goRemoteTool() {
+  activeTab.value = 'exec'
+  execTab.value = 'tool'
+  if (!toolProfileId.value) toolProfileId.value = profileId.value
+}
+function baseName(p) {
+  return String(p || '').replace(/\\/g, '/').split('/').filter(Boolean).pop() || ''
+}
+async function execRemoteTool(command) {
+  error.value = ''
+  const pid = toolProfileId.value || profileId.value
+  if (!pid) { error.value = '需要 SSH 档案'; return }
+  toolLoading.value = true
+  toolOut.value = ''
+  toolExit.value = null
+  toolMs.value = 0
+  try {
+    const r = await invoke('remote_tool_exec', {
+      profileId: pid,
+      command,
+      opts: {
+        toolPath: toolPath.value.trim() || null,
+        workdir: toolWorkdir.value.trim() || null,
+        env: toolEnv.value.trim() || null,
+        timeoutSecs: Number(toolTimeout.value) || 120,
+      },
+    })
+    toolOut.value = `$ ${r.command}\n\n${r.output || '(无输出)'}`
+    toolExit.value = r.exitCode
+    toolMs.value = r.durationMs
+  } catch (e) {
+    error.value = '远程执行失败: ' + (e?.message || e)
+  } finally {
+    toolLoading.value = false
+  }
+}
+async function runTool() { await execRemoteTool(toolCommand.value) }
+async function probeTool() {
+  toolProbing.value = true
+  try { await execRemoteTool('{tool} version') } finally { toolProbing.value = false }
+}
+async function pickUploadLocal() {
+  const sel = await open({ multiple: false, directory: false, title: '选择要上传到远端的文件' })
+  if (!sel) return
+  const p = typeof sel === 'string' ? sel : sel?.path
+  uploadLocalPath.value = p
+  if (!uploadRemotePath.value) uploadRemotePath.value = '/tmp/' + baseName(p)
+}
+async function doUpload() {
+  error.value = ''
+  const pid = toolProfileId.value || profileId.value
+  if (!pid) { error.value = '需要 SSH 档案'; return }
+  try {
+    const r = await invoke('remote_tool_upload', {
+      profileId: pid,
+      localPath: uploadLocalPath.value,
+      remotePath: uploadRemotePath.value,
+    })
+    toolOut.value = `已上传 ${r.bytes} 字节\n${r.localPath} → ${r.remotePath}`
+  } catch (e) { error.value = '上传失败: ' + (e?.message || e) }
+}
+async function pickDownloadLocal() {
+  const p = await save({ defaultPath: baseName(downloadRemotePath.value) || 'download.bin' })
+  if (p) downloadLocalPath.value = p
+}
+async function doDownload() {
+  error.value = ''
+  const pid = toolProfileId.value || profileId.value
+  if (!pid) { error.value = '需要 SSH 档案'; return }
+  try {
+    const r = await invoke('remote_tool_download', {
+      profileId: pid,
+      remotePath: downloadRemotePath.value,
+      localPath: downloadLocalPath.value,
+    })
+    toolOut.value = `已下载 ${r.bytes} 字节\n${r.remotePath} → ${r.localPath}`
+  } catch (e) { error.value = '下载失败: ' + (e?.message || e) }
+}
+watch(profileId, (v) => { if (v && !toolProfileId.value) toolProfileId.value = v })
+
 const periodSecs = ref(10); const collectorId = ref(''); const collectorPath = ref('')
 async function startPeriodic() {
   if (!profileId.value || !execCmd.value) { error.value = '需要档案 + 命令'; return }
@@ -1491,6 +1657,10 @@ const multiChartOption = computed(() => {
 .tb-kv td:first-child { color: var(--tw-accent); font-weight: 600; }
 .tb-res { font-family: var(--tw-mono-font); }
 .tb-out { background: var(--tw-code-bg); color: var(--tw-code-fg); font-family: var(--tw-mono-font); border-radius: var(--tw-radius-sm); line-height: 1.55; }
+.tb-exec-tabs :deep(.n-tabs-nav) { margin-bottom: 8px; }
+.tb-mono :deep(.n-input__textarea-el), .tb-mono :deep(.n-input__input-el) { font-family: var(--tw-mono-font); font-size: 15px; }
+.tb-out-tall { min-height: 220px; max-height: 58vh; }
+.tb-exit-bad { color: #e5484d; }
 .tb-table th { text-transform: uppercase; letter-spacing: .04em; font-size: 14px; color: var(--guaxi-text-secondary); }
 
 /* Coredump：主分析区占满整个 pane 高度，输出字号可调。 */

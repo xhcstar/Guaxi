@@ -73,6 +73,12 @@ pub struct TaskTemplate {
     pub only_if_no_domain: bool,
     #[serde(default)]
     pub description: Option<String>,
+    /// 主命令成功后自动执行的一条校验命令（同样支持占位符）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verify_cmd: Option<String>,
+    /// 校验命令输出必须包含的关键字（不区分大小写）；空表示只看校验命令本身是否成功。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expect: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -102,6 +108,8 @@ pub struct ConcreteTask {
     pub index: String,
     pub depends_on: Vec<String>,
     pub description: Option<String>,
+    pub verify_cmd: String,
+    pub expect: Vec<String>,
 }
 
 /// 渲染 `{hostname}` / `{domain}` / `{index}`（以及 `{id}`）。
@@ -168,8 +176,17 @@ pub fn expand(cfg: &DispatchConfig) -> Vec<ConcreteTask> {
                     index,
                     depends_on: t.depends_on.clone(),
                     description: t.description.clone(),
+                    verify_cmd: String::new(),
+                    expect: Vec::new(),
                 };
                 task.cmd = render(&t.cmd, &task);
+                task.verify_cmd = t
+                    .verify_cmd
+                    .as_ref()
+                    .map(|p| render(p, &task))
+                    .unwrap_or_default();
+                // 期望关键字同样支持占位符（如 {hostname}）。
+                task.expect = t.expect.iter().map(|e| render(e, &task)).collect();
                 task.pem_file = t
                     .pem_file
                     .as_ref()
@@ -828,6 +845,57 @@ impl DeviceCli {
         let rc = if probe_rc { extract_rc(&output) } else { None };
         TaskOutcome::judge(cmd, &output, used_pem, rc, self.kind == SessionKind::Shell)
     }
+
+    /// 执行一条任务：主命令成功后，若配置了校验命令就跑一次并核对期望关键字。
+    ///
+    /// 激活/备份/恢复这类命令只看主命令输出容易"报成功但实际没生效"，
+    /// 所以把校验做成任务级的一等字段：主命令 + 可选校验命令 + 期望关键字。
+    async fn run_task(
+        &mut self,
+        cmd: &str,
+        pem: Option<&str>,
+        verify_cmd: &str,
+        expect: &[String],
+    ) -> TaskOutcome {
+        let main = self.run_cmd(cmd, pem).await;
+        if !main.success || verify_cmd.trim().is_empty() {
+            return main;
+        }
+        let check = self.run_cmd(verify_cmd, None).await;
+        let low = check.output.to_lowercase();
+        let missing: Vec<String> = expect
+            .iter()
+            .filter(|k| !k.trim().is_empty() && !low.contains(&k.to_lowercase()))
+            .cloned()
+            .collect();
+        let ok = check.success && missing.is_empty();
+
+        let mut output = main.output.clone();
+        if !output.ends_with('\n') {
+            output.push('\n');
+        }
+        output.push_str(&format!("\n[校验] {verify_cmd}\n"));
+        output.push_str(&check.output);
+
+        let reason = if ok {
+            if expect.is_empty() {
+                format!("命令成功；校验命令已执行（{}）", check.reason)
+            } else {
+                format!("命令成功；校验通过（期望关键字 {} 均命中）", expect.join(", "))
+            }
+        } else if !check.success {
+            format!("命令已执行，但校验失败：{}", check.reason)
+        } else {
+            format!("命令已执行，但校验输出缺少关键字：{}", missing.join(", "))
+        };
+
+        TaskOutcome {
+            success: ok,
+            idempotent: ok && main.idempotent,
+            reason,
+            output,
+        }
+    }
 }
 
 /// 从输出里取最后一个退出码探针的值。
@@ -917,6 +985,13 @@ impl TaskOutcome {
             "import successful",
             "key import successful",
             "certificate import successful",
+            "activation successful",
+            "activated successfully",
+            "activate success",
+            "backup successful",
+            "backup success",
+            "restore successful",
+            "restored successfully",
             "(config",
         ];
         let pending_markers = [
@@ -1167,7 +1242,14 @@ pub async fn cmd_dispatch_run(
                     continue;
                 }
             };
-            let outcome = cli.run_cmd(&t.cmd, if pem.is_empty() { None } else { Some(&pem) }).await;
+            let outcome = cli
+                .run_task(
+                    &t.cmd,
+                    if pem.is_empty() { None } else { Some(&pem) },
+                    &t.verify_cmd,
+                    &t.expect,
+                )
+                .await;
             done += 1;
             if !outcome.success {
                 failed += 1;
@@ -1238,6 +1320,38 @@ pub struct StrategySummary {
     pub task_count: usize,
     pub hostnames: Vec<String>,
     pub domains: Vec<String>,
+    /// 内置策略：随应用提供、始终存在、不可删除/覆盖。
+    pub builtin: bool,
+}
+
+/// 内置策略的 id 前缀。用户策略用 UUID，不会撞上。
+const BUILTIN_PREFIX: &str = "builtin:";
+
+fn is_builtin_id(id: &str) -> bool {
+    id.starts_with(BUILTIN_PREFIX)
+}
+
+/// 内置策略（不可删除，保证策略库永远有内容）。
+fn builtin_strategies() -> Vec<Strategy> {
+    crate::commands::cmd_catalog::builtin_strategies()
+        .into_iter()
+        .map(|b| Strategy {
+            id: b.id.to_string(),
+            name: b.name.to_string(),
+            description: Some(b.description.to_string()),
+            created: "内置".to_string(),
+            config: b.config,
+        })
+        .collect()
+}
+
+/// 内置 + 用户策略（内置在前）；用户库损坏时只返回内置项。
+fn all_strategies(app: &AppHandle) -> Vec<Strategy> {
+    let mut v = builtin_strategies();
+    if let Ok(user) = read_strategies(app) {
+        v.extend(user);
+    }
+    v
 }
 
 fn strategies_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
@@ -1274,12 +1388,13 @@ fn strategy_summary(s: &Strategy) -> StrategySummary {
         task_count: s.config.tasks.len(),
         hostnames: s.config.targets.hostnames.clone(),
         domains: s.config.targets.domains.clone(),
+        builtin: is_builtin_id(&s.id),
     }
 }
 
 #[command]
 pub fn cmd_strategy_list(app: AppHandle) -> Result<Vec<StrategySummary>, String> {
-    Ok(read_strategies(&app)?.iter().map(strategy_summary).collect())
+    Ok(all_strategies(&app).iter().map(strategy_summary).collect())
 }
 
 /// 保存策略。`id` 为空=新建，否则覆盖同名 id。
@@ -1298,7 +1413,10 @@ pub fn cmd_strategy_save(
     // 凭据不进策略库：策略是可分享/可复用的"命令序列"，不该夹带密码。
     cfg.global = GlobalCfg::default();
     let mut all = read_strategies(&app)?;
-    let sid = id.filter(|s| !s.is_empty()).unwrap_or_else(|| Uuid::new_v4().to_string());
+    // 内置策略不可覆盖：选中内置项时按"另存为新策略"处理。
+    let sid = id
+        .filter(|s| !s.is_empty() && !is_builtin_id(s))
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
     let entry = match all.iter_mut().find(|s| s.id == sid) {
         Some(existing) => {
             existing.name = name;
@@ -1325,13 +1443,21 @@ pub fn cmd_strategy_save(
 /// 载入策略：返回 config YAML（直接喂给任务表/预览/运行）。
 #[command]
 pub fn cmd_strategy_load(app: AppHandle, id: String) -> Result<String, String> {
-    let all = read_strategies(&app)?;
-    let s = all.iter().find(|s| s.id == id).ok_or("策略不存在")?;
+    // 内置策略不依赖用户库文件；用户库损坏时仍能载入内置项。
+    let found = if is_builtin_id(&id) {
+        builtin_strategies().into_iter().find(|s| s.id == id)
+    } else {
+        read_strategies(&app)?.into_iter().find(|s| s.id == id)
+    };
+    let s = found.ok_or("策略不存在")?;
     serde_yaml::to_string(&s.config).map_err(|e| format!("生成 YAML 失败: {e}"))
 }
 
 #[command]
 pub fn cmd_strategy_delete(app: AppHandle, id: String) -> Result<(), String> {
+    if is_builtin_id(&id) {
+        return Err("内置策略不可删除".into());
+    }
     let mut all = read_strategies(&app)?;
     all.retain(|s| s.id != id);
     write_strategies(&app, &all)
@@ -1474,6 +1600,8 @@ tasks:
             index: "1".into(),
             depends_on: vec![],
             description: None,
+            verify_cmd: String::new(),
+            expect: vec![],
         };
         assert_eq!(render("a {unknown} b {hostname}", &dummy), "a {unknown} b h");
         assert_eq!(render("json { \"a\": 1 }", &dummy), "json { \"a\": 1 }");
@@ -1556,6 +1684,37 @@ tasks:
         let err = build_plan(&parse_config(yaml).unwrap()).unwrap_err();
         assert!(err.contains("环"), "{err}");
         assert!(err.contains('a') && err.contains('b'), "应列出环上的节点: {err}");
+    }
+
+    #[test]
+    fn verify_fields_expand_with_placeholders() {
+        let yaml = r#"
+targets: { hostnames: [vhost], domains: [""] }
+tasks:
+- id: activate
+  cmd: "ssl activate certificate {hostname} {index} \"\" all"
+  index: 2
+  verify_cmd: "show ssl host {hostname}"
+  expect: ["vhost", "activated"]
+"#;
+        let cfg = parse_config(yaml).unwrap();
+        let t = &expand(&cfg)[0];
+        assert_eq!(t.verify_cmd, "show ssl host vhost");
+        assert_eq!(t.expect, vec!["vhost".to_string(), "activated".to_string()]);
+        // 回写 YAML 时可选字段应保留，未配置时不产生噪声。
+        let out = serde_yaml::to_string(&cfg).unwrap();
+        assert!(out.contains("verify_cmd"));
+        let bare = parse_config("targets: { hostnames: [h], domains: [\"\"] }\ntasks: [{ id: a, cmd: x }]").unwrap();
+        assert!(!serde_yaml::to_string(&bare).unwrap().contains("verify_cmd"));
+    }
+
+    #[test]
+    fn strategy_builtins_are_always_present() {
+        let list = crate::commands::cmd_catalog::builtin_strategies();
+        assert!(list.len() >= 2, "内置策略不能为空");
+        assert!(list.iter().all(|b| !b.config.tasks.is_empty()), "内置策略必须有内容");
+        assert!(list.iter().any(|b| b.id.contains("sm2")), "应包含 SM2 流程");
+        assert!(list.iter().all(|b| is_builtin_id(b.id)));
     }
 
     #[test]

@@ -30,58 +30,69 @@
         <button class="tb-ib primary" :disabled="!tasks.length" @click="openSaveStrategy"><Icon :icon="saveIcon" width="15" height="15" /></button>
       </template>把当前任务表存成命名策略（凭据不入库）</n-tooltip>
       <n-tooltip trigger="hover"><template #trigger>
-        <button class="tb-ib danger" :disabled="!strategyId" @click="deleteStrategy"><Icon :icon="trashIcon" width="15" height="15" /></button>
-      </template>删除选中策略</n-tooltip>
+        <button class="tb-ib danger" :disabled="!strategyId || isBuiltinStrategy" @click="deleteStrategy"><Icon :icon="trashIcon" width="16" height="16" /></button>
+      </template>{{ isBuiltinStrategy ? '内置策略不可删除' : '删除选中策略' }}</n-tooltip>
       <span class="cd-sep"></span>
       <n-tooltip trigger="hover"><template #trigger>
-        <button class="tb-ib" @click="importYaml"><Icon :icon="folderIcon" width="15" height="15" /></button>
+        <button class="tb-ib" @click="importYaml"><Icon :icon="folderIcon" width="16" height="16" /></button>
       </template>导入现有 config.yaml（global/targets/tasks 全兼容）</n-tooltip>
       <n-tooltip trigger="hover"><template #trigger>
         <n-select v-model:value="scenarioId" size="small" :options="scenarioOptions" placeholder="内置场景模板" style="width:200px" />
       </template>选一个内置高级流程模板，填参数后一键生成整套任务</n-tooltip>
       <n-tooltip trigger="hover"><template #trigger>
-        <button class="tb-ib primary" :disabled="!scenarioId" @click="openScenario"><Icon :icon="wandIcon" width="15" height="15" /></button>
+        <button class="tb-ib primary" :disabled="!scenarioId" @click="openScenario"><Icon :icon="wandIcon" width="16" height="16" /></button>
       </template>配置该场景的参数并生成任务</n-tooltip>
+      <n-tooltip trigger="hover"><template #trigger>
+        <button class="tb-ib" :class="{ primary: rightPaneOpen }" @click="rightPaneOpen = !rightPaneOpen"><Icon :icon="panelRightIcon" width="16" height="16" /></button>
+      </template>{{ rightPaneOpen ? '隐藏执行面板' : '显示执行面板（预览/下发时会自动打开）' }}</n-tooltip>
       <span v-if="notice" class="cd-notice">{{ notice }}</span>
       <span v-if="error" class="cd-err">{{ error }}</span>
     </div>
 
     <div class="cd-body">
-      <!-- ============ 左：可视化任务表 ============ -->
-      <div class="cd-left" :style="{ width: leftWidth + 'px' }">
+      <!-- ============ 左：任务编辑区（默认占满） ============ -->
+      <div class="cd-left">
         <div class="cd-head">
-          <Icon :icon="listIcon" width="13" height="13" class="cd-head-ico" />
+          <Icon :icon="listIcon" width="15" height="15" class="cd-head-ico" />
           <span>任务表</span>
           <span class="cd-n">{{ tasks.length }} 条</span>
-          <n-radio-group v-model:value="editMode" size="tiny">
+          <n-radio-group :value="editMode" size="tiny" @update:value="switchMode">
             <n-radio-button value="gui">图形</n-radio-button>
             <n-radio-button value="text">文本</n-radio-button>
           </n-radio-group>
           <template v-if="editMode === 'gui'">
             <n-tooltip trigger="hover"><template #trigger>
-              <button class="tb-ib" @click="addTask"><Icon :icon="plusIcon" width="14" height="14" /></button>
+              <button class="tb-ib" @click="addTask"><Icon :icon="plusIcon" width="16" height="16" /></button>
             </template>新增一条任务</n-tooltip>
           </template>
           <template v-else>
             <n-tooltip trigger="hover"><template #trigger>
-              <button class="tb-ib primary" @click="loadYaml"><Icon :icon="uploadIcon" width="15" height="15" /></button>
-            </template>把文本解析回任务表（会覆盖当前任务表）</n-tooltip>
+              <button class="tb-ib primary" @click="loadYaml"><Icon :icon="uploadIcon" width="16" height="16" /></button>
+            </template>把文本解析回任务表（切回图形/保存/预览时也会自动解析）</n-tooltip>
             <n-tooltip trigger="hover"><template #trigger>
-              <button class="tb-ib" @click="exportYaml"><Icon :icon="saveIcon" width="15" height="15" /></button>
+              <button class="tb-ib" @click="exportYaml"><Icon :icon="saveIcon" width="16" height="16" /></button>
             </template>导出 config.yaml 到文件</n-tooltip>
+            <span class="cd-sep"></span>
+            <span class="cd-fs-lbl">字号</span>
+            <button class="tb-ib" title="缩小字号" @click="setYamlFontSize(yamlFontSize - 1)"><Icon :icon="minusIcon" width="16" height="16" /></button>
+            <span class="cd-fs">{{ yamlFontSize }}</span>
+            <button class="tb-ib" title="放大字号" @click="setYamlFontSize(yamlFontSize + 1)"><Icon :icon="plusIcon" width="16" height="16" /></button>
           </template>
           <n-tooltip trigger="hover"><template #trigger>
-            <button class="tb-ib" @click="openConfigExternally"><Icon :icon="externalIcon" width="15" height="15" /></button>
+            <button class="tb-ib" @click="openConfigExternally"><Icon :icon="externalIcon" width="16" height="16" /></button>
           </template>用系统默认程序（你的编辑器）打开这份 YAML。没有对应文件时会先存到受管目录，改完回来点上传图标重新载入</n-tooltip>
           <n-tooltip trigger="hover"><template #trigger>
-            <button class="tb-ib" @click="revealConfig"><Icon :icon="revealIcon" width="15" height="15" /></button>
+            <button class="tb-ib" @click="revealConfig"><Icon :icon="revealIcon" width="16" height="16" /></button>
           </template>在系统文件管理器中显示这份 YAML 文件</n-tooltip>
+          <span class="cd-head-spacer"></span>
+          <n-tooltip trigger="hover"><template #trigger>
+            <button class="tb-ib" :class="{ primary: rightPaneOpen }" @click="rightPaneOpen = !rightPaneOpen"><Icon :icon="panelRightIcon" width="16" height="16" /></button>
+          </template>{{ rightPaneOpen ? '隐藏执行面板' : '显示执行面板' }}</n-tooltip>
         </div>
         <div class="cd-scroll" :class="{ 'cd-fill': editMode === 'text' }">
           <!-- 文本模式：Monaco 编辑 YAML（懒加载，切进这个模式才加载 monaco） -->
           <template v-if="editMode === 'text'">
             <div ref="yamlEditorEl" class="cd-yaml-monaco"></div>
-            <div class="cd-hint">改完点上面的上传图标解析回任务表。字段与参考工具的 config.yaml 完全一致。{{ yamlEditorReady ? '' : '（编辑器加载中…）' }}</div>
           </template>
 
           <template v-else>
@@ -93,84 +104,102 @@
                 <n-input :value="domainsText" size="small" placeholder="域名，逗号分隔（可空 = 只做 host 级）" style="width:100%" @update:value="setDomains" />
               </template>targets.domains：域名列表；可留空（只跑 host 级任务）</n-tooltip>
             </div>
-            <table class="cd-table">
-              <thead><tr><th>id</th><th>命令</th><th>依赖</th><th>条件</th><th>PEM / index</th><th></th></tr></thead>
+            <table class="cd-table cd-task-table">
+              <colgroup>
+                <col style="width:128px" />
+                <col />
+                <col style="width:150px" />
+                <col style="width:118px" />
+                <col style="width:280px" />
+                <col style="width:64px" />
+                <col style="width:84px" />
+              </colgroup>
+              <thead><tr><th>id</th><th>命令</th><th>依赖</th><th>条件</th><th>PEM / index</th><th>校验</th><th></th></tr></thead>
               <tbody>
                 <tr v-for="(t, i) in tasks" :key="i">
-                  <td><n-input v-model:value="t.id" size="small" placeholder="id" style="width:110px" @update:value="syncYaml" /></td>
+                  <td><n-input v-model:value="t.id" size="small" placeholder="id" style="width:100%" @update:value="syncYaml" /></td>
                   <td class="cd-cmdcell">
                     <n-input
                       v-model:value="t.cmd"
                       type="textarea"
                       size="small"
-                      :autosize="{ minRows: 1, maxRows: 6 }"
+                      :autosize="{ minRows: 1, maxRows: 8 }"
                       placeholder="命令（支持 {hostname}/{domain}/{index}）"
                       @update:value="syncYaml"
                     />
                     <span v-if="t.description" class="cd-desc">{{ t.description }}</span>
+                    <span v-if="t.verify_cmd" class="cd-verify-tag" :title="'校验命令: ' + t.verify_cmd">校验 ✓</span>
                   </td>
-                  <td><n-input :value="(t.depends_on || []).join(',')" size="small" placeholder="依赖 id" style="width:140px" @update:value="v => setDeps(t, v)" /></td>
+                  <td><n-input :value="(t.depends_on || []).join(',')" size="small" placeholder="依赖 id" style="width:100%" @update:value="v => setDeps(t, v)" /></td>
                   <td class="cd-cond">
                     <n-tooltip trigger="hover"><template #trigger><n-checkbox :checked="!!t.only_if_no_domain" size="small" @update:checked="v => { t.only_if_no_domain = v; if (v) t.only_if_domain = false; syncYaml() }">host</n-checkbox></template>只在 host 级（无域名）执行</n-tooltip>
                     <n-tooltip trigger="hover"><template #trigger><n-checkbox :checked="!!t.only_if_domain" size="small" @update:checked="v => { t.only_if_domain = v; if (v) t.only_if_no_domain = false; syncYaml() }">sni</n-checkbox></template>只在关联了域名时执行（SNI 流程）</n-tooltip>
                   </td>
                   <td class="cd-pemcell">
                     <div class="cd-row">
-                      <n-input v-model:value="t.pem_file" size="small" placeholder="PEM 文件（可空）" style="flex:1" @update:value="syncYaml" />
+                      <n-input v-model:value="t.pem_file" size="small" placeholder="PEM 文件（可空）" style="flex:1;min-width:0" @update:value="syncYaml" />
                       <n-tooltip trigger="hover"><template #trigger>
-                        <button class="tb-ib" @click="openPemPicker(t)"><Icon :icon="fileIcon" width="15" height="15" /></button>
+                        <button class="tb-ib" @click="openPemPicker(t)"><Icon :icon="fileIcon" width="16" height="16" /></button>
                       </template>选择要导入的证书/私钥文件：可从证书页的 CA 库 / 终端证书库直接取，也可选任意本地文件</n-tooltip>
                       <n-tooltip trigger="hover"><template #trigger>
-                        <button class="tb-ib" :disabled="!t.pem_file" @click="openFileExternally(t.pem_file)"><Icon :icon="externalIcon" width="15" height="15" /></button>
+                        <button class="tb-ib" :disabled="!t.pem_file" @click="openFileExternally(t.pem_file)"><Icon :icon="externalIcon" width="16" height="16" /></button>
                       </template>用系统默认程序打开这个证书/私钥文件</n-tooltip>
                       <n-tooltip trigger="hover"><template #trigger>
-                        <button class="tb-ib" :disabled="!t.pem_file" @click="revealFile(t.pem_file)"><Icon :icon="revealIcon" width="15" height="15" /></button>
+                        <button class="tb-ib" :disabled="!t.pem_file" @click="revealFile(t.pem_file)"><Icon :icon="revealIcon" width="16" height="16" /></button>
                       </template>在系统文件管理器中显示这个文件</n-tooltip>
                     </div>
-                    <n-input v-model:value="t.index" size="small" placeholder="index" style="width:80px;margin-top:4px" @update:value="syncYaml" />
+                    <n-input v-model:value="t.index" size="small" placeholder="index" style="width:100%;margin-top:4px" @update:value="syncYaml" />
+                  </td>
+                  <td class="cd-verify-cell">
+                    <n-tooltip trigger="hover"><template #trigger>
+                      <button class="tb-ib" :class="{ primary: !!t.verify_cmd }" @click="openVerify(t)"><Icon :icon="shieldIcon" width="16" height="16" /></button>
+                    </template>配置执行后校验：跑一条校验命令，并检查输出是否包含期望关键字</n-tooltip>
                   </td>
                   <td class="cd-ops">
                     <n-tooltip trigger="hover"><template #trigger>
-                      <button class="tb-ib" @click="openCatalogFor(t)"><Icon :icon="bookIcon" width="15" height="15" /></button>
+                      <button class="tb-ib" @click="openCatalogFor(t)"><Icon :icon="bookIcon" width="16" height="16" /></button>
                     </template>从命令目录给这条选个命令模板</n-tooltip>
                     <n-tooltip trigger="hover"><template #trigger>
-                      <button class="tb-ib danger" @click="removeTask(i)"><Icon :icon="trashIcon" width="15" height="15" /></button>
+                      <button class="tb-ib danger" @click="removeTask(i)"><Icon :icon="trashIcon" width="16" height="16" /></button>
                     </template>删除该任务</n-tooltip>
                   </td>
                 </tr>
-                <tr v-if="!tasks.length"><td colspan="6" class="cd-hint">还没有任务。可「导入 config.yaml」、从「内置场景模板」生成，或点左上角 + 手动加一条。</td></tr>
+                <tr v-if="!tasks.length"><td colspan="7" class="cd-hint">还没有任务。可「导入 config.yaml」、从「内置场景模板」生成，或点左上角 + 手动加一条。</td></tr>
               </tbody>
             </table>
           </template>
         </div>
       </div>
 
-      <div class="cd-vresize" @mousedown="onLeftResize"></div>
+      <template v-if="rightPaneOpen">
+        <div class="cd-vresize" @mousedown="onRightResize"></div>
 
-      <!-- ============ 右：执行 ============ -->
-      <div class="cd-right">
-        <div class="cd-head">
-          <Icon :icon="playIcon" width="13" height="13" class="cd-head-ico" />
-          <span>执行</span>
-          <n-tooltip trigger="hover"><template #trigger>
-            <button class="tb-ib" :disabled="running" @click="doPlan"><Icon :icon="listIcon" width="14" height="14" /></button>
-          </template>预览：展开 targets 并做依赖排序，列出将要逐条执行的命令（不下发）</n-tooltip>
-          <n-tooltip trigger="hover"><template #trigger>
-            <button class="tb-ib primary" :disabled="running || !tasks.length" @click="doRun"><Icon :icon="playIcon" width="15" height="15" /></button>
-          </template>开始下发（失败即停，除非配置里 continue_on_error）</n-tooltip>
-          <n-tooltip v-if="running" trigger="hover"><template #trigger>
-            <button class="tb-ib danger" @click="doCancel"><Icon :icon="stopIcon" width="15" height="15" /></button>
-          </template>取消本次下发</n-tooltip>
-          <span class="cd-stat" v-if="runStat">{{ runStat }}</span>
-          <n-tooltip v-if="runLogPath" trigger="hover"><template #trigger>
-            <button class="tb-ib" @click="openFileExternally(runLogPath)"><Icon :icon="externalIcon" width="15" height="15" /></button>
-          </template>用系统默认程序打开本次运行的 JSONL 日志</n-tooltip>
-          <n-tooltip v-if="runLogPath" trigger="hover"><template #trigger>
-            <button class="tb-ib" @click="revealFile(runLogPath)"><Icon :icon="revealIcon" width="15" height="15" /></button>
-          </template>在系统文件管理器中显示本次运行的日志文件</n-tooltip>
-          <span v-if="notice" class="cd-notice">{{ notice }}</span>
-          <span v-if="error" class="cd-err">{{ error }}</span>
-        </div>
+        <!-- ============ 右：执行（可收起） ============ -->
+        <div class="cd-right" :style="{ width: rightWidth + 'px' }">
+          <div class="cd-head">
+            <Icon :icon="playIcon" width="15" height="15" class="cd-head-ico" />
+            <span>执行</span>
+            <n-tooltip trigger="hover"><template #trigger>
+              <button class="tb-ib" :disabled="running" @click="doPlan"><Icon :icon="listIcon" width="16" height="16" /></button>
+            </template>预览：展开 targets 并做依赖排序，列出将要逐条执行的命令（不下发）</n-tooltip>
+            <n-tooltip trigger="hover"><template #trigger>
+              <button class="tb-ib primary" :disabled="running || !tasks.length" @click="doRun"><Icon :icon="playIcon" width="16" height="16" /></button>
+            </template>开始下发（失败即停，除非配置里 continue_on_error）</n-tooltip>
+            <n-tooltip v-if="running" trigger="hover"><template #trigger>
+              <button class="tb-ib danger" @click="doCancel"><Icon :icon="stopIcon" width="16" height="16" /></button>
+            </template>取消本次下发</n-tooltip>
+            <span class="cd-stat" v-if="runStat">{{ runStat }}</span>
+            <n-tooltip v-if="runLogPath" trigger="hover"><template #trigger>
+              <button class="tb-ib" @click="openFileExternally(runLogPath)"><Icon :icon="externalIcon" width="16" height="16" /></button>
+            </template>用系统默认程序打开本次运行的 JSONL 日志</n-tooltip>
+            <n-tooltip v-if="runLogPath" trigger="hover"><template #trigger>
+              <button class="tb-ib" @click="revealFile(runLogPath)"><Icon :icon="revealIcon" width="16" height="16" /></button>
+            </template>在系统文件管理器中显示本次运行的日志文件</n-tooltip>
+            <span class="cd-head-spacer"></span>
+            <n-tooltip trigger="hover"><template #trigger>
+              <button class="tb-ib" @click="rightPaneOpen = false"><Icon :icon="xIcon" width="16" height="16" /></button>
+            </template>收起执行面板</n-tooltip>
+          </div>
         <div class="cd-scroll">
           <table class="cd-table" v-if="steps.length">
             <thead><tr><th>#</th><th>状态</th><th>命令</th><th>说明</th></tr></thead>
@@ -193,6 +222,7 @@
           </div>
         </div>
       </div>
+      </template>
     </div>
 
     <!-- 场景参数弹窗 -->
@@ -223,7 +253,7 @@
       <div class="cd-modal">
         <div class="cd-modal-h">
           <Icon :icon="saveIcon" width="16" height="16" class="cd-head-ico" />
-          <span>保存为策略</span>
+          <span>{{ isBuiltinStrategy ? '另存为策略' : '保存为策略' }}</span>
           <button class="tb-ib" @click="showSaveStrategy = false"><Icon :icon="xIcon" width="16" height="16" /></button>
         </div>
         <div class="cd-modal-b">
@@ -235,11 +265,45 @@
             <label>说明</label>
             <n-input v-model:value="strategyDesc" size="small" placeholder="这条策略是干什么的（可空）" />
           </div>
-          <div class="cd-hint">保存 targets + 全部任务（含映射后的命令与 PEM 路径）。凭据（ip/密码/enable）不会存进策略。</div>
+          <div class="cd-hint">保存 targets + 全部任务（含映射后的命令与 PEM 路径）。凭据（ip/密码/enable）不会存进策略。{{ isBuiltinStrategy ? '当前选中的是内置策略，保存会新建一份用户策略。' : '' }}</div>
         </div>
         <div class="cd-modal-f">
           <n-button size="small" @click="showSaveStrategy = false">取消</n-button>
           <n-button size="small" type="primary" @click="saveStrategy">保存</n-button>
+        </div>
+      </div>
+    </n-modal>
+
+    <!-- 任务校验弹窗 -->
+    <n-modal v-model:show="showVerify" :mask-closable="false" style="width:620px;max-width:94vw">
+      <div class="cd-modal">
+        <div class="cd-modal-h">
+          <Icon :icon="shieldIcon" width="16" height="16" class="cd-head-ico" />
+          <span>执行后校验</span>
+          <button class="tb-ib" @click="showVerify = false"><Icon :icon="xIcon" width="16" height="16" /></button>
+        </div>
+        <div class="cd-modal-b">
+          <div class="cd-hint">主命令成功后，自动再执行一条校验命令；期望关键字会不区分大小写地检查校验命令的输出。留空表示不做额外校验。</div>
+          <div class="cd-field">
+            <label>校验命令</label>
+            <n-input v-model:value="verifyCmd" size="small" placeholder="如 show ssl host {hostname}" />
+            <span class="cd-doc">支持 {hostname}/{domain}/{index} 占位符；设备 CLI 与 Linux shell 都可用。</span>
+          </div>
+          <div class="cd-field">
+            <label>常用校验</label>
+            <n-select :options="verifyPresets" size="small" placeholder="选一条预置校验命令（会填入上框）" @update:value="v => verifyCmd = v" />
+            <span class="cd-doc">SSL 主机状态用 show ssl host；全局配置用 ssl settings / ssl globals（或带 show 的版本）。</span>
+          </div>
+          <div class="cd-field">
+            <label>期望关键字</label>
+            <n-input v-model:value="verifyExpect" type="textarea" size="small" :autosize="{ minRows: 2, maxRows: 5 }" placeholder="每行一个，或用逗号分隔；全部命中才算校验通过" />
+            <span class="cd-doc">例如 activate 后校验 `show ssl host` 输出里出现 {hostname} 与 active/activated；关键字也支持占位符。</span>
+          </div>
+        </div>
+        <div class="cd-modal-f">
+          <n-button size="small" @click="clearVerify">清除校验</n-button>
+          <n-button size="small" @click="showVerify = false">取消</n-button>
+          <n-button size="small" type="primary" @click="saveVerify">保存</n-button>
         </div>
       </div>
     </n-modal>
@@ -366,6 +430,9 @@ import xIcon from '@iconify-icons/lucide/x'
 import scrollTextIcon from '@iconify-icons/lucide/scroll-text'
 import keyRoundIcon from '@iconify-icons/lucide/key-round'
 import externalIcon from '@iconify-icons/lucide/external-link'
+import panelRightIcon from '@iconify-icons/lucide/panel-right'
+import shieldIcon from '@iconify-icons/lucide/shield-check'
+import minusIcon from '@iconify-icons/lucide/minus'
 
 // 证书图标沿用与证书页一致的语义（证书=卷轴、私钥=钥匙）。
 const certIcon = scrollTextIcon
@@ -383,7 +450,9 @@ const UI = {
   sessionMode: 'guaxi_cmd_dispatch_session_mode',
   probeRc: 'guaxi_cmd_dispatch_probe_rc',
   editMode: 'guaxi_cmd_dispatch_edit_mode',
-  leftWidth: 'guaxi_cmd_dispatch_left_width',
+  rightOpen: 'guaxi_cmd_dispatch_right_open',
+  rightWidth: 'guaxi_cmd_dispatch_right_width',
+  fontSize: 'guaxi_cmd_dispatch_yaml_font_size',
   strategy: 'guaxi_cmd_dispatch_strategy',
 }
 
@@ -411,7 +480,21 @@ const strategyId = ref(readUiState(UI.strategy, null))
 const showSaveStrategy = ref(false)
 const strategyName = ref('')
 const strategyDesc = ref('')
-const strategyOptions = computed(() => strategies.value.map(s => ({ label: `${s.name} (${s.task_count})`, value: s.id })))
+const isBuiltinStrategy = computed(() => !!strategies.value.find(s => s.id === strategyId.value)?.builtin)
+const strategyOptions = computed(() => strategies.value.map(s => ({ label: `${s.builtin ? '内置 · ' : ''}${s.name} (${s.task_count})`, value: s.id })))
+
+/// 任务级校验（主命令成功后跑校验命令 + 核对期望关键字）。
+const showVerify = ref(false)
+const verifyTarget = ref(null)
+const verifyCmd = ref('')
+const verifyExpect = ref('')
+const verifyPresets = [
+  { label: 'show ssl host', value: 'show ssl host' },
+  { label: 'show ssl settings', value: 'show ssl settings' },
+  { label: 'show ssl globals', value: 'show ssl globals' },
+  { label: 'ssl settings', value: 'ssl settings' },
+  { label: 'ssl globals', value: 'ssl globals' },
+]
 
 /// PEM 选择器（可从证书页的 CA 库 / 终端证书库取，也可选任意本地文件）。
 const showPem = ref(false)
@@ -444,7 +527,10 @@ const runLogPath = ref('')
 const configPath = ref('')
 let unlisteners = []
 
-const leftWidth = ref(readUiState(UI.leftWidth, 560, within(380, 1000)))
+/// 执行面板默认收起，编辑区占满；预览/下发时自动打开。
+const rightPaneOpen = ref(readUiState(UI.rightOpen, false))
+const rightWidth = ref(readUiState(UI.rightWidth, 520, within(360, 1200)))
+const yamlFontSize = ref(readUiState(UI.fontSize, 17, within(12, 32)))
 const notice = ref(''); let noticeTimer = null
 const error = ref('')
 function note(m) { notice.value = m; if (noticeTimer) clearTimeout(noticeTimer); noticeTimer = setTimeout(() => { notice.value = '' }, 12000) }
@@ -512,7 +598,7 @@ async function ensureYamlEditor() {
       model: yamlModel,
       theme: getGuaxiMonacoTheme(settingsStore.appearanceTheme),
       automaticLayout: true,     // 容器尺寸变化（拖分隔条、切标签）自动重排
-      fontSize: 15.5,
+      fontSize: yamlFontSize.value,
       lineNumbers: 'on',
       tabSize: 2,
       minimap: { enabled: false },
@@ -547,10 +633,37 @@ function disposeYamlEditor() {
   yamlEditorReady.value = false
 }
 
-// 切模式：进文本模式才创建，离开就立刻释放，不把 monaco 实例挂在后台。
-watch(editMode, async (v) => {
-  if (v === 'text') { await nextTick(); ensureYamlEditor() } else { disposeYamlEditor() }
-})
+// 切模式：先完成同步/解析，再真正切换视图。
+// 这样解析失败时可以原地留在文本模式，编辑器 DOM 不会被卸载。
+let switchingMode = false
+/// 图形模式是否改过任务表：没改就保留文本模式里的原始 YAML（注释/排版不丢）。
+let cfgDirty = false
+async function switchMode(v) {
+  if (switchingMode || v === editMode.value) return
+  switchingMode = true
+  try {
+    if (v === 'text') {
+      if (cfgDirty) await serializeCfg()
+      editMode.value = 'text'
+      await nextTick()
+      ensureYamlEditor()
+    } else {
+      await parseYamlIntoConfig()
+      disposeYamlEditor()
+      editMode.value = 'gui'
+    }
+  } catch (e) {
+    error.value = (v === 'text' ? '生成 YAML 失败: ' : 'YAML 解析失败，已留在文本模式: ') + (e?.message || e)
+  } finally {
+    switchingMode = false
+  }
+}
+
+function setYamlFontSize(v) {
+  yamlFontSize.value = Math.min(32, Math.max(12, Math.round(v)))
+  yamlEditor?.updateOptions({ fontSize: yamlFontSize.value })
+  nextTick(() => yamlEditor?.layout())
+}
 
 // 外部改写了 yamlText（场景生成/导入/策略载入/图形模式编辑）：同步进编辑器。
 // 用 setValue 会清掉撤销栈，但那几件事本来就是"换掉整份配置"，语义上正确。
@@ -568,20 +681,40 @@ watch(() => settingsStore.appearanceTheme, (t) => {
 })
 
 // ============ YAML 双向同步（YAML 只由后端解析，前端不引 YAML 库） ============
-let syncing = false
+/// 把当前任务表序列化成 YAML（不关心当前编辑模式）。
+async function serializeCfg() {
+  yamlText.value = await invoke('cmd_dispatch_to_yaml', { config: cfg.value })
+  return yamlText.value
+}
+/// 图形模式改动的回写。文本模式下绝不覆盖编辑器内容。
 async function syncYaml() {
-  if (syncing) return
-  syncing = true
-  try { yamlText.value = await invoke('cmd_dispatch_to_yaml', { config: cfg.value }) }
+  if (editMode.value === 'text') return yamlText.value
+  cfgDirty = true
+  try { return await serializeCfg() }
   catch (e) { error.value = '生成 YAML 失败: ' + (e?.message || e) }
-  finally { syncing = false }
+}
+/// 解析文本并应用到任务表（图形模式/预览/运行/保存前调用）。
+async function parseYamlIntoConfig() {
+  const c = await invoke('cmd_dispatch_parse', { configYaml: yamlText.value })
+  cfg.value = { global: c.global || {}, targets: c.targets || { hostnames: [], domains: [] }, tasks: c.tasks || [], continue_on_error: !!c.continue_on_error }
+  cfgDirty = false
+  return c
 }
 async function loadYaml() {
   try {
-    const c = await invoke('cmd_dispatch_parse', { configYaml: yamlText.value })
-    cfg.value = { global: c.global || {}, targets: c.targets || { hostnames: [], domains: [] }, tasks: c.tasks || [], continue_on_error: !!c.continue_on_error }
+    await parseYamlIntoConfig()
     note('已从 YAML 载入任务表')
   } catch (e) { error.value = 'YAML 解析失败: ' + (e?.message || e) }
+}
+/// 保证 cfg 与当前编辑器内容一致：
+/// 文本模式解析 YAML；图形模式序列化任务表。返回将要用于预览/运行的 YAML。
+async function ensureCfgFromCurrentMode() {
+  if (editMode.value === 'text') {
+    await parseYamlIntoConfig()
+    return yamlText.value
+  }
+  await serializeCfg()
+  return yamlText.value
 }
 
 // ============ 策略库 ============
@@ -592,26 +725,27 @@ async function loadStrategy() {
   if (!strategyId.value) return
   try {
     yamlText.value = await invoke('cmd_strategy_load', { id: strategyId.value })
-    await loadYaml()
+    await parseYamlIntoConfig()
     const s = strategies.value.find(x => x.id === strategyId.value)
-    note(`已载入策略「${s?.name || ''}」（${tasks.value.length} 条任务）`)
+    note(`已载入${s?.builtin ? '内置' : ''}策略「${s?.name || ''}」（${tasks.value.length} 条任务）`)
   } catch (e) { error.value = '载入策略失败: ' + (e?.message || e) }
 }
 function openSaveStrategy() {
   const s = strategies.value.find(x => x.id === strategyId.value)
-  strategyName.value = s?.name || ''
+  strategyName.value = s ? (s.builtin ? `${s.name} 副本` : s.name) : ''
   strategyDesc.value = s?.description || ''
   showSaveStrategy.value = true
 }
 async function saveStrategy() {
   if (!strategyName.value.trim()) { error.value = '策略名不能为空'; return }
   try {
-    await syncYaml()
+    const y = await ensureCfgFromCurrentMode()
     const r = await invoke('cmd_strategy_save', {
-      id: strategyId.value || null,
+      // 内置策略不可覆盖：保存时按新建处理。
+      id: isBuiltinStrategy.value ? null : (strategyId.value || null),
       name: strategyName.value,
       description: strategyDesc.value || null,
-      configYaml: yamlText.value,
+      configYaml: y,
     })
     await loadStrategies()
     strategyId.value = r.id
@@ -621,6 +755,7 @@ async function saveStrategy() {
 }
 async function deleteStrategy() {
   if (!strategyId.value) return
+  if (isBuiltinStrategy.value) { note('内置策略不可删除'); return }
   const s = strategies.value.find(x => x.id === strategyId.value)
   if (!window.confirm(`删除策略「${s?.name || ''}」？`)) return
   try { await invoke('cmd_strategy_delete', { id: strategyId.value }); strategyId.value = null; await loadStrategies(); note('策略已删除') }
@@ -676,15 +811,16 @@ async function importYaml() {
     configPath.value = path
     const c = await invoke('cmd_dispatch_parse', { configYaml: yamlText.value })
     cfg.value = { global: c.global || {}, targets: c.targets || { hostnames: [], domains: [] }, tasks: c.tasks || [], continue_on_error: !!c.continue_on_error }
+    cfgDirty = false
     if (cfg.value.global?.ip && !profileId.value) note(`配置里带了 global.ip=${cfg.value.global.ip}，未选档案时将用它直连`)
     note(`已导入 ${String(path).replace(/\\/g, '/').split('/').pop()}`)
   } catch (e) { error.value = '导入失败: ' + (e?.message || e) }
 }
 async function exportYaml() {
   try {
-    await syncYaml()
+    const y = await ensureCfgFromCurrentMode()
     const p = await save({ defaultPath: 'config.yaml', filters: [{ name: 'YAML', extensions: ['yaml', 'yml'] }] })
-    if (p) { await invoke('write_file_content', { path: p, content: yamlText.value }); configPath.value = p; note('已导出: ' + p) }
+    if (p) { await invoke('write_file_content', { path: p, content: y }); configPath.value = p; note('已导出: ' + p) }
   } catch (e) { error.value = '导出失败: ' + (e?.message || e) }
 }
 
@@ -715,8 +851,8 @@ async function revealFile(p) {
 /// 保证当前 YAML 有一个磁盘文件：已导入/导出过就用它，否则落到受管目录（固定文件名）。
 async function ensureConfigFile() {
   if (configPath.value) return configPath.value
-  await syncYaml()
-  configPath.value = await invoke('cmd_dispatch_stage_config', { content: yamlText.value })
+  const y = await ensureCfgFromCurrentMode()
+  configPath.value = await invoke('cmd_dispatch_stage_config', { content: y })
   return configPath.value
 }
 async function openConfigExternally() {
@@ -735,10 +871,37 @@ async function revealConfig() {
 
 // ============ 任务表 ============
 function addTask() {
-  cfg.value.tasks.push({ id: 'task' + (tasks.value.length + 1), cmd: '', pem_file: '', index: '', depends_on: [], only_if_domain: false, only_if_no_domain: false })
+  cfg.value.tasks.push({ id: 'task' + (tasks.value.length + 1), cmd: '', pem_file: '', index: '', depends_on: [], only_if_domain: false, only_if_no_domain: false, verify_cmd: '', expect: [] })
   syncYaml()
 }
 function removeTask(i) { cfg.value.tasks.splice(i, 1); syncYaml() }
+
+// ============ 任务级校验 ============
+function openVerify(t) {
+  verifyTarget.value = t
+  verifyCmd.value = t.verify_cmd || ''
+  verifyExpect.value = (t.expect || []).join('\n')
+  showVerify.value = true
+}
+function saveVerify() {
+  const t = verifyTarget.value
+  if (!t) return
+  t.verify_cmd = verifyCmd.value.trim()
+  t.expect = verifyExpect.value
+    .split(/[,\n]/)
+    .map(s => s.trim())
+    .filter(Boolean)
+  showVerify.value = false
+  syncYaml()
+  note(t.verify_cmd ? '已设置执行后校验' : '已清除执行后校验')
+}
+function clearVerify() {
+  const t = verifyTarget.value
+  if (t) { t.verify_cmd = ''; t.expect = []; syncYaml() }
+  verifyCmd.value = ''
+  verifyExpect.value = ''
+  showVerify.value = false
+}
 
 // ============ 命令目录 ============
 const catalogGroups = computed(() => {
@@ -781,10 +944,14 @@ function insertCatalog(replace) {
     if (c.id.includes('activate')) t.index = t.index || '1'
     syncYaml()
   } else {
-    cfg.value.tasks.push({ id: c.id, cmd, pem_file: c.pem ? './cfgfiles/' : '', index: '', depends_on: deps, only_if_domain: false, only_if_no_domain: false })
+    cfg.value.tasks.push({ id: c.id, cmd, pem_file: c.pem ? './cfgfiles/' : '', index: '', depends_on: deps, only_if_domain: false, only_if_no_domain: false, verify_cmd: '', expect: [] })
     syncYaml()
   }
   showCatalog.value = false
+  // 激活/备份/恢复只看主命令输出容易"报成功但没生效"：提醒去配校验。
+  if (/(activate|backup|restore)/.test(c.id)) {
+    note('已插入。激活/备份/恢复类命令建议点该行的盾牌图标配置「执行后校验」')
+  }
 }
 
 // ============ 场景模板 ============
@@ -814,6 +981,7 @@ async function renderScenario() {
     yamlText.value = y
     const c = await invoke('cmd_dispatch_parse', { configYaml: y })
     cfg.value = { global: c.global || {}, targets: c.targets || { hostnames: [], domains: [] }, tasks: c.tasks || [], continue_on_error: !!c.continue_on_error }
+    cfgDirty = false
     showScenario.value = false
     note(`已按场景「${currentScenarioName.value}」生成 ${tasks.value.length} 条任务`)
   } catch (e) { error.value = '生成场景失败: ' + (e?.message || e) }
@@ -824,23 +992,32 @@ function statusLabel(s) {
   return { pending: '待执行', running: '执行中', ok: '成功', 'ok-idem': '幂等', fail: '失败', skipped: '跳过' }[s] || s
 }
 function resetSteps(planSteps) {
-  steps.value = planSteps.map(t => ({ key: t.task_key || t.taskKey, cmd: t.cmd, status: 'pending', reason: '' }))
+  steps.value = planSteps.map(t => ({
+    key: t.task_key || t.taskKey,
+    cmd: t.cmd,
+    status: 'pending',
+    reason: t.verify_cmd ? `校验: ${t.verify_cmd}` : '',
+  }))
 }
 async function doPlan() {
   error.value = ''
   try {
-    await syncYaml()
-    const plan = await invoke('cmd_dispatch_plan', { configYaml: yamlText.value })
+    const y = await ensureCfgFromCurrentMode()
+    const plan = await invoke('cmd_dispatch_plan', { configYaml: y })
     resetSteps(plan.steps)
     warnings.value = plan.warnings || []
     runStat.value = `共 ${plan.task_count} 条（${plan.target_count} 个目标）`
+    rightPaneOpen.value = true
   } catch (e) { error.value = '预览失败: ' + (e?.message || e) }
 }
 async function doRun() {
   error.value = ''
-  await syncYaml()
+  let y
+  try { y = await ensureCfgFromCurrentMode() }
+  catch (e) { error.value = '配置有问题: ' + (e?.message || e); return }
+  rightPaneOpen.value = true
   try {
-    const plan = await invoke('cmd_dispatch_plan', { configYaml: yamlText.value })
+    const plan = await invoke('cmd_dispatch_plan', { configYaml: y })
     resetSteps(plan.steps)
     warnings.value = plan.warnings || []
   } catch (e) { error.value = '配置有问题: ' + (e?.message || e); return }
@@ -853,7 +1030,7 @@ async function doRun() {
     const r = await invoke('cmd_dispatch_run', {
       runId: runId.value,
       profileId: profileId.value || null,
-      configYaml: yamlText.value,
+      configYaml: y,
       opts: {
         baseDir: baseDir.value || null,
         continueOnError: null,
@@ -895,10 +1072,10 @@ async function saveEnable() {
   try { await invoke('ssh_set_enable_secret', { profileId: profileId.value, secret: enablePassword.value }); note('enable 密码已存入 keychain') }
   catch (e) { error.value = '保存失败: ' + (e?.message || e) }
 }
-function onLeftResize(e) {
-  const startX = e.clientX; const startW = leftWidth.value
+function onRightResize(e) {
+  const startX = e.clientX; const startW = rightWidth.value
   let on = true
-  const mv = ev => { if (on) leftWidth.value = Math.min(1000, Math.max(380, startW + ev.clientX - startX)) }
+  const mv = ev => { if (on) rightWidth.value = Math.min(1200, Math.max(360, startW - (ev.clientX - startX))) }
   const up = () => { on = false; document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up) }
   document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up)
 }
@@ -907,15 +1084,23 @@ onMounted(async () => {
   try { scenarios.value = await invoke('cmd_scenario_list') } catch (_) {}
   unlisteners.push(await listen('cmd-dispatch-task', onTask))
   unlisteners.push(await listen('cmd-dispatch-done', onDone))
-  await syncYaml()
+  await serializeCfg()
   await loadStrategies()
-  // 上次用的策略还在就接着用：新开窗时任务表本来就是空的，自动载入不会覆盖任何东西。
-  if (strategyId.value && strategies.value.some((s) => s.id === strategyId.value)) await loadStrategy()
+  // 上次用的策略还在就接着用；否则新开窗时自动载入第一个内置策略，
+  // 保证策略库和任务表都有内容（内置策略始终存在、不可删除）。
+  if (strategyId.value && strategies.value.some((s) => s.id === strategyId.value)) {
+    await loadStrategy()
+  } else if (!cfg.value.tasks.length && strategies.value.length) {
+    strategyId.value = strategies.value[0].id
+    await loadStrategy()
+  }
+  if (editMode.value === 'text') { await nextTick(); ensureYamlEditor() }
 })
-// 选择变化即落盘（左栏宽度也一样，拖一次就记住）。
+// 选择变化即落盘（右栏宽度/字号也一样）。
 for (const [key, src] of [
   [UI.profile, profileId], [UI.sessionMode, sessionMode], [UI.probeRc, probeRc],
-  [UI.editMode, editMode], [UI.leftWidth, leftWidth], [UI.strategy, strategyId],
+  [UI.editMode, editMode], [UI.rightOpen, rightPaneOpen], [UI.rightWidth, rightWidth],
+  [UI.fontSize, yamlFontSize], [UI.strategy, strategyId],
 ]) {
   watch(src, (v) => persistUiState(key, v))
 }
@@ -952,32 +1137,48 @@ onBeforeUnmount(() => {
 .cd-stat { font-size: 15px; color: var(--tw-accent); font-family: var(--tw-mono-font); }
 
 .cd-body { flex: 1 1 auto; min-height: 0; display: flex; }
-.cd-left { flex: 0 0 auto; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--guaxi-border); }
-.cd-right { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+/* 编辑区占满剩余宽度；执行面板默认收起，打开时才占一栏。 */
+.cd-left { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+.cd-right { flex: 0 0 auto; min-width: 360px; display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--guaxi-border); }
 .cd-vresize { flex: 0 0 auto; width: 5px; cursor: col-resize; background: var(--guaxi-border); opacity: .5; }
 .cd-vresize:hover { opacity: 1; background: var(--tw-accent); }
 
-.cd-head { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 6px 10px; font-size: 15px; font-weight: 600; border-bottom: 1px solid var(--guaxi-border-weak, rgba(0,0,0,0.08)); color: var(--guaxi-text-secondary); background: color-mix(in srgb, var(--guaxi-panel-bg) 60%, transparent); }
+.cd-head { flex: 0 0 auto; display: flex; align-items: center; gap: 7px; padding: 6px 10px; font-size: 15px; font-weight: 600; border-bottom: 1px solid var(--guaxi-border-weak, rgba(0,0,0,0.08)); color: var(--guaxi-text-secondary); background: color-mix(in srgb, var(--guaxi-panel-bg) 60%, transparent); flex-wrap: wrap; row-gap: 4px; }
 .cd-head-ico { color: var(--tw-accent); }
+.cd-head-spacer { flex: 1 1 auto; }
 .cd-n { font-size: 13.5px; padding: 0 6px; border-radius: 999px; background: var(--tw-accent-soft); color: var(--tw-accent); }
 .cd-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 8px 10px; }
+
+/* 图标按钮：本面板是独立组件，父级 RemoteToolbox 的 scoped 样式管不到这里。 */
+.tb-ib { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex: 0 0 auto; padding: 0; border: none; border-radius: 6px; background: transparent; color: var(--guaxi-text-secondary); cursor: pointer; transition: background .12s, color .12s; vertical-align: middle; }
+.tb-ib svg { width: 16px !important; height: 16px !important; }
+.tb-ib:hover:not(:disabled) { background: var(--tw-accent-soft); color: var(--tw-accent); }
+.tb-ib:disabled { opacity: .35; cursor: not-allowed; }
+.tb-ib.primary { color: var(--tw-accent); }
+.tb-ib.danger:hover:not(:disabled) { color: #e5484d; background: color-mix(in srgb, #e5484d 12%, transparent); }
+.cd-fs-lbl { font-size: 13.5px; color: var(--guaxi-text-secondary); }
+.cd-fs { min-width: 22px; text-align: center; font-size: 14px; font-family: var(--tw-mono-font); color: var(--tw-accent); }
 
 .cd-targets { display: flex; gap: 6px; margin-bottom: 8px; }
 .cd-table { width: 100%; border-collapse: collapse; font-size: 16px; }
 .cd-table th, .cd-table td { text-align: left; padding: 8px 8px; border-bottom: 1px solid var(--guaxi-border-weak, rgba(0,0,0,0.06)); vertical-align: top; }
 .cd-table th { font-size: 15px; text-transform: uppercase; letter-spacing: .04em; color: var(--guaxi-text-secondary); position: sticky; top: 0; background: var(--guaxi-panel-bg); z-index: 1; }
+.cd-task-table { table-layout: fixed; min-width: 880px; }
 .cd-cond { white-space: nowrap; }
-.cd-ops { white-space: nowrap; }
-/* 命令可能很长：给足宽度，并用多行输入让整条命令都看得见 */
-.cd-cmdcell { min-width: 380px; }
+.cd-ops { white-space: nowrap; text-align: right; }
+.cd-verify-cell { text-align: center; }
+/* 命令可能很长：多行输入 + 自适应行高，整条命令都能看全。 */
+.cd-cmdcell { min-width: 0; }
 .cd-cmdcell :deep(.n-input__textarea-el), .cd-cmdcell :deep(.n-input__input-el) { font-family: var(--tw-mono-font); font-size: 16px; line-height: 1.5; }
-.cd-pemcell { min-width: 260px; }
+.cd-pemcell { min-width: 0; }
 .cd-desc { display: block; margin-top: 3px; font-size: 14px; color: var(--guaxi-text-secondary); }
+.cd-verify-tag { display: inline-block; margin-top: 4px; padding: 0 7px; border-radius: 999px; font-size: 13px; color: var(--tw-accent); background: var(--tw-accent-soft); }
 .cd-res { font-family: var(--tw-mono-font); font-size: 15px; }
 .cd-sub { margin: 12px 0 4px; font-size: 15.5px; font-weight: 600; color: var(--tw-accent); }
 .cd-yaml-monaco { flex: 1 1 auto; min-height: 0; width: 100%; border: 1px solid var(--guaxi-border); border-radius: var(--tw-radius-sm); overflow: hidden; }
-/* 文本模式下让滚动交给 Monaco 自己，外层不再滚 */
-.cd-scroll.cd-fill { display: flex; flex-direction: column; overflow: hidden; gap: 6px; }
+/* 文本模式下让滚动交给 Monaco 自己，外层不再滚，编辑器占满整高。 */
+.cd-scroll.cd-fill { display: flex; flex-direction: column; overflow: hidden; padding: 0; gap: 0; }
+.cd-scroll.cd-fill .cd-yaml-monaco { border: none; border-radius: 0; }
 .cd-cmd { font-family: var(--tw-mono-font); max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cd-reason { font-size: 14px; color: var(--guaxi-text-secondary); max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cd-st { white-space: nowrap; }

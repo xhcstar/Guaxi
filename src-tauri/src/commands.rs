@@ -69,6 +69,8 @@ pub mod remote_terminal;
 pub mod ssh_terminal;
 pub mod gdb_mi;
 pub mod remote_terminal_tools;
+// 远程工具台：在 SSH 档案对应的远程 Linux 上执行用户自备工具并传输文件。
+pub mod remote_tool;
 pub mod serial_telnet;
 pub mod net_toolbox;
 pub mod net_conn;

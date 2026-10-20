@@ -136,7 +136,7 @@ pub fn cmd_catalog_list() -> Vec<CatalogCommand> {
         C {
             id: "ssl_activate_certificate", group: "SSL 激活", name: "ssl activate certificate",
             syntax: "ssl activate certificate <host_name> [certificate_index] [domain_name] [certificate_type]",
-            summary: "激活指定主机/域名下的证书。类型可取 rsa / ecc / sm2 / all（默认 all）。不关联域名时每主机可激活 RSA、ECC 各一及一对 SM2。",
+            summary: "激活指定主机/域名下的证书。类型可取 rsa / ecc / sm2 / all（默认 all）。不关联域名时每主机可激活 RSA、ECC 各一及一对 SM2。建议在任务里配「校验命令」（如 show ssl host）和期望关键字，确认激活真的生效。",
             cmd_template: "ssl activate certificate {hostname} {index} \"\" all", pem: false,
             params: vec![
                 p("certificate_index", false, "证书索引 1/2/3，默认 1", "1"),
@@ -221,6 +221,34 @@ pub fn cmd_catalog_list() -> Vec<CatalogCommand> {
             summary: "SNI（按域名）导入 SM2 加密证书。",
             cmd_template: "ssl sm2 sni import enccertificate {hostname} {domain} {index}", pem: true,
             params: vec![p("domain_name", true, "域名", "www.example.com")],
+        },
+
+        // ---------------- SSL 全局 / 设置 ----------------
+        // 不同设备版本有的把这两条做成 `ssl settings` / `ssl globals`，有的要加 `show`；
+        // 这里两种写法都收录，模板可直接改，避免版本差异导致命令不可用。
+        C {
+            id: "ssl_settings", group: "SSL 全局", name: "ssl settings",
+            syntax: "ssl settings",
+            summary: "查看/设置 SSL 全局参数。部分版本写作 `show ssl settings`，若本命令报未知命令，改用下一条。",
+            cmd_template: "ssl settings", pem: false, params: vec![],
+        },
+        C {
+            id: "show_ssl_settings", group: "SSL 全局", name: "show ssl settings",
+            syntax: "show ssl settings",
+            summary: "查看 SSL 全局参数（带 show 的版本）。",
+            cmd_template: "show ssl settings", pem: false, params: vec![],
+        },
+        C {
+            id: "ssl_globals", group: "SSL 全局", name: "ssl globals",
+            syntax: "ssl globals",
+            summary: "查看/设置 SSL 全局配置。部分版本写作 `show ssl globals`，若本命令报未知命令，改用下一条。",
+            cmd_template: "ssl globals", pem: false, params: vec![],
+        },
+        C {
+            id: "show_ssl_globals", group: "SSL 全局", name: "show ssl globals",
+            syntax: "show ssl globals",
+            summary: "查看 SSL 全局配置（带 show 的版本）。",
+            cmd_template: "show ssl globals", pem: false, params: vec![],
         },
 
         // ---------------- SLB ----------------
@@ -392,6 +420,8 @@ fn tpl(id: &str, cmd: &str, deps: &[&str]) -> TaskTemplate {
         only_if_domain: false,
         only_if_no_domain: false,
         description: None,
+        verify_cmd: None,
+        expect: vec![],
     }
 }
 
@@ -586,6 +616,132 @@ fn build_slb_https_ssl(opts: &ScenarioOptions) -> DispatchConfig {
             domains: split_domains(&get(p, "domains", "")),
         },
         tasks: head,
+        continue_on_error: false,
+    }
+}
+
+// ============================ 内置策略（与用户策略同一个库，不可删除） ============================
+
+pub(crate) struct BuiltinStrategyDef {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub description: &'static str,
+    pub config: DispatchConfig,
+}
+
+/// 随应用提供的内置策略。`cmd_strategy_list` 会把它们和用户策略合并返回，
+/// 并保证策略库永远非空；它们不可删除、不可覆盖（保存时自动另存为新策略）。
+pub(crate) fn builtin_strategies() -> Vec<BuiltinStrategyDef> {
+    let mut out = vec![
+        BuiltinStrategyDef {
+            id: "builtin:sm2_import",
+            name: "SM2 国密双证书导入 + 激活",
+            description: "导入 SM2 签名/加密私钥与证书，再激活 host 级证书。PEM 路径按 ./cfgfiles/SM2 预填，可在任务表里改。",
+            config: build_sm2_import(),
+        },
+        BuiltinStrategyDef {
+            id: "builtin:ssl_chain_rsa",
+            name: "SSL 主机 + 证书链 + 激活（RSA）",
+            description: "clear → 建虚拟主机 → 导入 rootca/interca/crlca → 导入 RSA 私钥与证书 → 激活；PEM 目录默认 ./cfgfiles/RSA。",
+            config: no_creds(build_ssl_chain(&ScenarioOptions::default())),
+        },
+    ];
+
+    let mut ecc = HashMap::new();
+    ecc.insert("algo".to_string(), "ecc".to_string());
+    ecc.insert("pem_dir".to_string(), "./cfgfiles/ECC".to_string());
+    out.push(BuiltinStrategyDef {
+        id: "builtin:ssl_chain_ecc",
+        name: "SSL 主机 + 证书链 + 激活（ECC）",
+        description: "同 RSA 流程，证书与私钥目录默认 ./cfgfiles/ECC。",
+        config: no_creds(build_ssl_chain(&ScenarioOptions {
+            params: ecc,
+            ..ScenarioOptions::default()
+        })),
+    });
+
+    out.push(BuiltinStrategyDef {
+        id: "builtin:slb_https_ssl",
+        name: "SLB HTTPS + SSL 证书链 + 激活",
+        description: "后台服务 → 服务组 → HTTPS 虚拟服务 → 静态策略 → SSL 虚拟主机绑定 → SNI → 证书链 → 激活。",
+        config: no_creds(build_slb_https_ssl(&ScenarioOptions::default())),
+    });
+
+    out
+}
+
+/// 内置策略不携带任何连接凭据。
+fn no_creds(mut cfg: DispatchConfig) -> DispatchConfig {
+    cfg.global = GlobalCfg::default();
+    cfg
+}
+
+fn sm2_task(
+    id: &str,
+    cmd: &str,
+    pem: Option<String>,
+    deps: &[&str],
+    description: &str,
+) -> TaskTemplate {
+    TaskTemplate {
+        id: id.to_string(),
+        cmd: cmd.to_string(),
+        pem_file: pem,
+        index: Some("1".to_string()),
+        depends_on: deps.iter().map(|s| s.to_string()).collect(),
+        only_if_domain: false,
+        only_if_no_domain: true,
+        description: Some(description.to_string()),
+        verify_cmd: None,
+        expect: vec![],
+    }
+}
+
+fn build_sm2_import() -> DispatchConfig {
+    let dir = "./cfgfiles/SM2";
+    DispatchConfig {
+        global: GlobalCfg::default(),
+        targets: Targets {
+            hostnames: vec!["vhost".to_string()],
+            domains: vec![String::new()],
+        },
+        tasks: vec![
+            sm2_task(
+                "sm2_sign_key_host",
+                "ssl sm2 import signkey {hostname} {index}",
+                Some(format!("{dir}/sm2signkey.key")),
+                &[],
+                "导入 SM2 签名私钥",
+            ),
+            sm2_task(
+                "sm2_enc_key_host",
+                "ssl sm2 import enckey {hostname} {index}",
+                Some(format!("{dir}/sm2enckey.key")),
+                &[],
+                "导入 SM2 加密私钥",
+            ),
+            sm2_task(
+                "sm2_sign_cert_host",
+                "ssl sm2 import signcertificate {hostname} {index}",
+                Some(format!("{dir}/sm2signcert.crt")),
+                &["sm2_sign_key_host"],
+                "导入 SM2 签名证书（需先导入签名私钥）",
+            ),
+            sm2_task(
+                "sm2_enc_cert_host",
+                "ssl sm2 import enccertificate {hostname} {index}",
+                Some(format!("{dir}/sm2encert.crt")),
+                &["sm2_enc_key_host"],
+                "导入 SM2 加密证书（需先导入加密私钥）",
+            ),
+            sm2_task(
+                "activate_host",
+                "ssl activate certificate {hostname} {index} \"\" all",
+                None,
+                &["sm2_sign_cert_host", "sm2_enc_cert_host"],
+                "激活证书；建议给该任务配校验命令（如 show ssl host）与期望关键字",
+            ),
+        ],
         continue_on_error: false,
     }
 }
