@@ -17,7 +17,8 @@
         阅读 PDF / 电子书 / 图片时它们不适用，收起来能把高度让给内容。
 
         默认显示 = 与改造前完全一致；状态存在 siderStore，按窗口记住。
-        图标用「收起 / 展开」两态：正在显示时给的是收起（Contract），点它即隐藏。
+        图标用「收拢 / 展开」两态：上下双箭头向中线收 = 正在显示，点它把两条收起；
+        上下双箭头向外张开 = 已隐藏，点它让两条回来。比原先的「面板」图标更直白。
       -->
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
@@ -25,7 +26,7 @@
             class="header-icon editor-chrome-toggle"
             :class="{ active: isEditorChromeShown }"
             size="20"
-            :component="isEditorChromeShown ? PanelTopContract20Filled : PanelTopExpand20Filled"
+            :component="isEditorChromeShown ? ArrowMinimizeVertical20Filled : ArrowMaximizeVertical20Filled"
             @click="toggleEditorChrome"
           />
         </template>
@@ -499,8 +500,8 @@ import {
   TaskListSquareLtr20Regular,
   PanelLeftContract24Regular,
   PanelRightContract24Regular,
-  PanelTopContract20Filled,
-  PanelTopExpand20Filled
+  ArrowMinimizeVertical20Filled,
+  ArrowMaximizeVertical20Filled
 } from '@vicons/fluent'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'

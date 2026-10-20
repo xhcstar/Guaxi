@@ -208,18 +208,46 @@
   color: var(--guaxi-accent, #2f6fdf);
 }
 
+/* 目录分隔线：热区 9px（居中 1px 可见线），太细的 5px 在 4K 屏上很难命中。 */
 .gdr-ebook__splitter {
+  position: relative;
   flex: 0 0 auto;
-  width: 5px;
+  width: 9px;
+  margin: 0 -2px;
   cursor: col-resize;
   background: transparent;
+  z-index: 2;
 }
 
-.gdr-ebook__splitter:hover {
+.gdr-ebook__splitter::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
   background: var(--guaxi-border, #e1e4e8);
+  transition: background 0.12s ease, width 0.12s ease;
+}
+
+.gdr-ebook__splitter:hover::before,
+.gdr-ebook__splitter.is-active::before {
+  width: 2px;
+  background: var(--guaxi-accent, #2f6fdf);
+}
+
+/* 拖拽期间盖住正文：iframe 会截获 mousemove，遮罩让事件始终落在父窗口上。 */
+.gdr-ebook__main.is-resizing::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  cursor: col-resize;
 }
 
 .gdr-ebook__main {
+  position: relative;
   flex: 1 1 auto;
   min-width: 0;
   display: flex;

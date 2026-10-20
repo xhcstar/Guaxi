@@ -48,9 +48,13 @@
       <div
         v-if="tocVisible && toc.length"
         class="gdr-ebook__splitter"
+        :class="{ 'is-active': resizing }"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="拖动调整目录宽度"
         @mousedown.prevent="startTocResize"
       />
-      <div class="gdr-ebook__main">
+      <div class="gdr-ebook__main" :class="{ 'is-resizing': resizing }">
         <iframe
           ref="frameRef"
           class="gdr-ebook__frame"
@@ -86,6 +90,8 @@ const sections = ref([])
 const toc = ref([])
 const activeIndex = ref(0)
 const tocVisible = ref(true)
+// 拖拽目录分隔线期间为 true：给正文挂遮罩，避免事件被 iframe 吃掉。
+const resizing = ref(false)
 const tocWidth = ref(250)
 const zoom = ref(1)
 const frameDoc = ref('')
@@ -228,8 +234,20 @@ const onKeydown = (event) => {
 }
 
 let tocResize = null
+
+/**
+ * 开始拖拽目录分隔线。
+ *
+ * 关键在 iframe：右侧正文是 <iframe>，鼠标一旦移进去，mousemove 就由 iframe 自己的
+ * 文档接收，父窗口再也收不到事件 —— 表现就是「拖到一半就断、没法改宽度」。
+ * 拖拽期间给正文盖一层透明遮罩（.is-resizing），事件始终落在父窗口上。
+ */
 const startTocResize = (event) => {
+  event.preventDefault()
   tocResize = { startX: event.clientX, startWidth: tocWidth.value }
+  resizing.value = true
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
   window.addEventListener('mousemove', onTocResize)
   window.addEventListener('mouseup', stopTocResize)
 }
@@ -241,6 +259,9 @@ const onTocResize = (event) => {
 
 const stopTocResize = () => {
   tocResize = null
+  resizing.value = false
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
   window.removeEventListener('mousemove', onTocResize)
   window.removeEventListener('mouseup', stopTocResize)
 }
