@@ -37,6 +37,7 @@
         <span v-if="gdbReady && busyElapsed >= WAIT_HINT_SECS" class="gdb-busy-slow">（较慢：对端可能在加载符号或链路卡顿，可继续等或点“中断”）</span>
       </span>
       <span v-else-if="notice" class="gdb-notice">{{ notice }}</span>
+      <span v-if="copiedTag" class="gdb-notice">{{ copiedTag }}</span>
       <span v-if="error" class="gdb-error">{{ error }}</span>
     </div>
 
@@ -78,6 +79,12 @@
         </template>
         {{ rightCollapsed ? '显示右栏（线程/寄存器/内存）' : '隐藏右栏，源码区更宽' }}
       </n-tooltip>
+      <n-tooltip trigger="hover">
+        <template #trigger>
+          <button class="gdb-ib lg" @click="copyPanel(consoleText, '控制台')"><Icon :icon="copyIcon" width="17" height="17" /></button>
+        </template>
+        复制全部控制台输出
+      </n-tooltip>
       <div class="gdb-fontctl" title="控制台/源码字号">
         <button class="gdb-fbtn" @click="setGdbFontSize(gdbFontSize - 1)"><Icon :icon="minusIcon" width="13" height="13" /></button>
         <span class="gdb-fsz">{{ gdbFontSize }}</span>
@@ -98,6 +105,9 @@
             <n-tooltip trigger="hover"><template #trigger>
               <button class="gdb-ib" @click.stop="refreshBreaks"><Icon :icon="refreshIcon" width="13" height="13" /></button>
             </template>刷新断点列表</n-tooltip>
+            <n-tooltip trigger="hover"><template #trigger>
+              <button class="gdb-ib" :disabled="!breaks.length" @click.stop="copyPanel(breaksText, '断点')"><Icon :icon="copyIcon" width="13" height="13" /></button>
+            </template>复制全部断点</n-tooltip>
           </header>
           <div class="gdb-panel-b" v-show="!panelCollapsed.breaks" :style="{ height: panelH.breaks + 'px' }">
             <div class="gdb-actions">
@@ -137,6 +147,9 @@
               <button class="gdb-ib" @click.stop="refreshStack"><Icon :icon="refreshIcon" width="13" height="13" /></button>
             </template>刷新调用栈</n-tooltip>
             <n-tooltip trigger="hover"><template #trigger>
+              <button class="gdb-ib" :disabled="!callStack.length" @click.stop="copyPanel(stackText, '调用栈')"><Icon :icon="copyIcon" width="13" height="13" /></button>
+            </template>复制调用栈</n-tooltip>
+            <n-tooltip trigger="hover"><template #trigger>
               <button class="gdb-ib" :disabled="!callStack.length" @click.stop="sendStack"><Icon :icon="sendIcon" width="13" height="13" /></button>
             </template>把调用栈发到主界面编辑器</n-tooltip>
           </header>
@@ -148,7 +161,8 @@
                 class="gdb-sframe"
                 :class="{ active: String(f.level) === String(curFrame) }"
                 @click="selectFrame(f.level)"
-                :title="(f.fullname || f.file) + (f.line ? ':' + f.line : '')"
+                @dblclick.stop="copyRow(`#${f.level} ${f.func} @ ${f.fullname || f.file}${f.line ? ':' + f.line : ''}`)"
+                :title="(f.fullname || f.file) + (f.line ? ':' + f.line : '') + '（双击复制此行）'"
               >
                 <span class="gdb-sframe-lv">#{{ f.level }}</span>
                 <span class="gdb-sframe-func">{{ f.func }}</span>
@@ -171,6 +185,9 @@
               <button class="gdb-ib" @click.stop="refreshLocals"><Icon :icon="refreshIcon" width="13" height="13" /></button>
             </template>刷新当前帧局部变量</n-tooltip>
             <n-tooltip trigger="hover"><template #trigger>
+              <button class="gdb-ib" :disabled="!locals.length" @click.stop="copyPanel(localsText, '局部变量')"><Icon :icon="copyIcon" width="13" height="13" /></button>
+            </template>复制局部变量</n-tooltip>
+            <n-tooltip trigger="hover"><template #trigger>
               <button class="gdb-ib" :disabled="!locals.length" @click.stop="sendLocals"><Icon :icon="sendIcon" width="13" height="13" /></button>
             </template>把局部变量发到主界面编辑器</n-tooltip>
           </header>
@@ -178,7 +195,7 @@
             <div class="gdb-scroll">
               <table class="gdb-table">
                 <tbody>
-                  <tr v-for="l in locals" :key="l.name">
+                  <tr v-for="l in locals" :key="l.name" @dblclick="copyRow(`${l.name} = ${l.value}`)" title="双击复制该变量">
                     <td class="gdb-lname">{{ l.name }}</td>
                     <td class="gdb-val">{{ l.value }}</td>
                   </tr>
@@ -197,6 +214,9 @@
             <Icon :icon="expandTreeIcon" width="13" height="13" class="gdb-panel-ico" />
             <span class="gdb-panel-t">变量树</span>
             <span class="gdb-panel-n">{{ varRoots.length }}</span>
+            <n-tooltip trigger="hover"><template #trigger>
+              <button class="gdb-ib" :disabled="!varRoots.length" @click.stop="copyPanel(varTreeText, '变量树')"><Icon :icon="copyIcon" width="13" height="13" /></button>
+            </template>复制变量树</n-tooltip>
             <n-tooltip trigger="hover"><template #trigger>
               <button class="gdb-ib" :disabled="!varRoots.length" @click.stop="sendVarTree"><Icon :icon="sendIcon" width="13" height="13" /></button>
             </template>把变量树发到主界面编辑器</n-tooltip>
@@ -260,6 +280,9 @@
               <button class="gdb-ib" :class="{ primary: followFrame }" @click="followFrame = !followFrame"><Icon :icon="followIcon" width="14" height="14" /></button>
             </template>{{ followFrame ? '跟随调用栈：停止/切帧/单步时自动跳到对应源码行（已开启）' : '跟随调用栈：停止/切帧/单步时自动跳到对应源码行（已关闭）' }}</n-tooltip>
             <n-tooltip trigger="hover"><template #trigger>
+              <button class="gdb-ib" :disabled="!sourceLines.length" @click="copyPanel(sourceText, '源码')"><Icon :icon="copyIcon" width="14" height="14" /></button>
+            </template>复制源码</n-tooltip>
+            <n-tooltip trigger="hover"><template #trigger>
               <button class="gdb-ib" :disabled="!sourceLines.length" @click="sendSource"><Icon :icon="sendIcon" width="14" height="14" /></button>
             </template>把当前源码发到主界面编辑器</n-tooltip>
             <span class="gdb-src-loc" :title="sourceFile">{{ shortFile(sourceFile) }}<template v-if="sourceCurLine">:{{ sourceCurLine }}</template></span>
@@ -275,7 +298,8 @@
               @dblclick="toggleSourceBreakpoint(ln)"
               :title="`第 ${ln.n} 行 · 单击定位 / 双击切换断点`"
             >
-              <span class="gdb-srcno">{{ ln.n }}</span>
+              <span class="gdb-srcno" :title="`第 ${ln.n} 行（双击复制该行）`"
+                @dblclick.stop="copyRow(String(ln.n).padStart(5) + '  ' + ln.text)">{{ ln.n }}</span>
               <span class="gdb-srcbp">{{ hasBreakpointAt(ln.n) ? '●' : '' }}</span>
               <span class="gdb-srctext">{{ ln.text }}</span>
             </div>
@@ -286,8 +310,8 @@
           </div>
         </div>
         <div class="gdb-vresize" @mousedown="onSourceResizeDown"></div>
-        <div class="gdb-console" ref="consoleRef" :style="{ fontSize: gdbFontSize + 'px' }">
-          <pre v-for="(l, i) in consoleLines" :key="i" :class="'gdb-l-' + l.kind">{{ l.text }}</pre>
+        <div class="gdb-console" ref="consoleRef" :style="{ fontSize: gdbFontSize + 'px' }" @dblclick="copyPanel(consoleText, '控制台')" title="双击复制全部控制台输出">
+          <pre v-for="(l, i) in consoleLines" :key="i" :class="'gdb-l-' + l.kind" @dblclick.stop="copyRow(l.text)" :title="'双击复制该行'">{{ l.text }}</pre>
         </div>
         <div class="gdb-input">
           <n-input v-model:value="cmdInput" size="small" placeholder="输入 MI(-exec-next) 或 CLI(bt) 命令回车执行" @keyup.enter="submitCmd" />
@@ -310,10 +334,13 @@
             <n-tooltip trigger="hover"><template #trigger>
               <button class="gdb-ib" @click.stop="refreshThreads"><Icon :icon="refreshIcon" width="13" height="13" /></button>
             </template>刷新线程列表</n-tooltip>
+            <n-tooltip trigger="hover"><template #trigger>
+              <button class="gdb-ib" :disabled="!threads.length" @click.stop="copyPanel(threadsText, '线程')"><Icon :icon="copyIcon" width="13" height="13" /></button>
+            </template>复制线程列表</n-tooltip>
           </header>
           <div class="gdb-panel-b" v-show="!panelCollapsed.threads" :style="{ height: panelH.threads + 'px' }">
             <div class="gdb-scroll">
-              <div v-for="t in threads" :key="t.id" class="gdb-thread" :class="{ active: t.id === currentThread }" @click="selectThread(t.id)">
+              <div v-for="t in threads" :key="t.id" class="gdb-thread" :class="{ active: t.id === currentThread }" @click="selectThread(t.id)" @dblclick.stop="copyRow(threadText(t))" title="双击复制该线程">
                 <div class="gdb-thread-h">线程 {{ t.id }} <span v-if="t.name">({{ t.name }})</span> — {{ t.state }}</div>
                 <div class="gdb-frame" v-if="t.frame">#{{ t.frame.level }} {{ t.frame.func }} @ {{ t.frame.file }}:{{ t.frame.line }}</div>
               </div>
@@ -334,6 +361,9 @@
               <button class="gdb-ib" @click.stop="refreshWatch"><Icon :icon="refreshIcon" width="13" height="13" /></button>
             </template>刷新并高亮变化</n-tooltip>
             <n-tooltip trigger="hover"><template #trigger>
+              <button class="gdb-ib" :disabled="!watches.length" @click.stop="copyPanel(watchText, 'Watch')"><Icon :icon="copyIcon" width="13" height="13" /></button>
+            </template>复制全部 Watch</n-tooltip>
+            <n-tooltip trigger="hover"><template #trigger>
               <button class="gdb-ib" :disabled="!watches.length" @click.stop="sendWatch"><Icon :icon="sendIcon" width="13" height="13" /></button>
             </template>把 Watch 发到主界面编辑器</n-tooltip>
           </header>
@@ -347,7 +377,7 @@
             <div class="gdb-scroll">
               <table class="gdb-table">
                 <tbody>
-                  <tr v-for="w in watches" :key="w.expr" :class="{ changed: w.changed }">
+                  <tr v-for="w in watches" :key="w.expr" :class="{ changed: w.changed }" @dblclick="copyRow(`${w.expr} = ${w.value}`)" title="双击复制该 Watch">
                     <td class="gdb-ellip" :title="w.expr">{{ w.expr }}</td>
                     <td class="gdb-val">{{ w.value }}</td>
                     <td><n-tooltip trigger="hover"><template #trigger>
@@ -373,6 +403,9 @@
               <button class="gdb-ib" @click.stop="refreshRegisters"><Icon :icon="refreshIcon" width="13" height="13" /></button>
             </template>刷新寄存器</n-tooltip>
             <n-tooltip trigger="hover"><template #trigger>
+              <button class="gdb-ib" :disabled="!registers.length" @click.stop="copyPanel(registersText, '寄存器')"><Icon :icon="copyIcon" width="13" height="13" /></button>
+            </template>复制寄存器</n-tooltip>
+            <n-tooltip trigger="hover"><template #trigger>
               <button class="gdb-ib" :disabled="!registers.length" @click.stop="sendRegisters"><Icon :icon="sendIcon" width="13" height="13" /></button>
             </template>把寄存器发到主界面编辑器</n-tooltip>
           </header>
@@ -381,7 +414,7 @@
               <table class="gdb-table gdb-regs">
                 <thead><tr><th>寄存器</th><th>HEX</th><th>十进制</th></tr></thead>
                 <tbody>
-                  <tr v-for="r in registers" :key="r.name">
+                  <tr v-for="r in registers" :key="r.name" @dblclick="copyRow(`${r.name} = ${r.hex} (${r.dec})`)" title="双击复制该寄存器">
                     <td class="gdb-rname">{{ r.name }}</td>
                     <td class="gdb-val">{{ r.hex }}</td>
                     <td class="gdb-val">{{ r.dec }}</td>
@@ -401,6 +434,9 @@
             <Icon :icon="memoryIcon" width="13" height="13" class="gdb-panel-ico" />
             <span class="gdb-panel-t">内存</span>
             <n-tooltip trigger="hover"><template #trigger>
+              <button class="gdb-ib" :disabled="!memText" @click.stop="copyPanel(memOutText, '内存')"><Icon :icon="copyIcon" width="13" height="13" /></button>
+            </template>复制内存视图</n-tooltip>
+            <n-tooltip trigger="hover"><template #trigger>
               <button class="gdb-ib" :disabled="!memText" @click.stop="sendMem"><Icon :icon="sendIcon" width="13" height="13" /></button>
             </template>把内存视图发到主界面编辑器</n-tooltip>
           </header>
@@ -413,7 +449,7 @@
               </template>读取内存（hex + ASCII）</n-tooltip>
             </div>
             <div class="gdb-scroll">
-              <pre class="gdb-mem">{{ memText || '按十六进制 + ASCII 展示内存块。' }}</pre>
+              <pre class="gdb-mem" @dblclick="copyRow(memText)" title="双击复制全部内存内容">{{ memText || '按十六进制 + ASCII 展示内存块。' }}</pre>
             </div>
           </div>
           <div class="gdb-panel-rz" v-show="!panelCollapsed.mem" @mousedown="panelResizeDown('mem', $event)"></div>
@@ -543,6 +579,7 @@ import followIcon from '@iconify-icons/lucide/locate-fixed'
 import panelLeftIcon from '@iconify-icons/lucide/panel-left'
 import panelRightIcon from '@iconify-icons/lucide/panel-right'
 import saveIcon from '@iconify-icons/lucide/save'
+import copyIcon from '@iconify-icons/lucide/copy'
 import downloadIcon from '@iconify-icons/lucide/download'
 import uploadIcon from '@iconify-icons/lucide/upload'
 import stopIcon from '@iconify-icons/lucide/square'
@@ -1324,45 +1361,104 @@ async function sendToEditor(content) {
   try { await invoke('emit_template_insert', { content }) }
   catch (e) { error.value = '发送到编辑器失败: ' + (e?.message || e) }
 }
+
+// ---- 复制：每个面板都能整块复制，单行/单元格也能直接复制 ----
+/// 统一写剪贴板：优先 Tauri clipboard 插件，退回 navigator.clipboard。
+async function writeClipboard(text) {
+  const s = String(text ?? '')
+  if (!s) return
+  try {
+    const { writeText } = await import('@tauri-apps/plugin-clipboard-manager')
+    await writeText(s)
+  } catch (_) {
+    try { await navigator.clipboard.writeText(s) }
+    catch (e) { error.value = '复制失败: ' + (e?.message || e); return }
+  }
+  copiedTag.value = `已复制 ${s.split('\n').length > 1 ? s.split('\n').length + ' 行' : '1 项'}`
+  if (copyTimer) clearTimeout(copyTimer)
+  copyTimer = setTimeout(() => { copiedTag.value = '' }, 1800)
+}
+const copiedTag = ref('')
+let copyTimer = null
+
+/// 各面板的纯文本表示（同时供"复制"与"发到编辑器"使用）。
+function stackText() {
+  return callStack.value
+    .map(f => `#${f.level} ${f.func} @ ${f.fullname || f.file}${f.line ? ':' + f.line : ''}`)
+    .join('\n')
+}
+function localsText() {
+  return locals.value.map(l => `${l.name} = ${l.value}`).join('\n')
+}
+function varTreeText() {
+  const out = []
+  for (const n of varRoots.value) flattenVar(n, 0, out)
+  return out.join('\n')
+}
+function watchText() {
+  return watches.value.map(w => `${w.expr} = ${w.value}`).join('\n')
+}
+function registersText() {
+  return registers.value.map(r => `${r.name} = ${r.hex} (${r.dec})`).join('\n')
+}
+function threadsText() {
+  return threads.value.map(threadText).join('\n')
+}
+function threadText(t) {
+  const head = `线程 ${t.id}${t.name ? ` (${t.name})` : ''} — ${t.state}`
+  return t.frame ? `${head}\n  #${t.frame.level} ${t.frame.func} @ ${t.frame.file}:${t.frame.line}` : head
+}
+function breaksText() {
+  return breaks.value.map(b => `#${b.number} ${b.where}（命中 ${b.times}）`).join('\n')
+}
+function sourceText() {
+  return sourceLines.value.map(l => String(l.n).padStart(5) + '  ' + l.text).join('\n')
+}
+function consoleText() {
+  return consoleLines.value.map(l => l.text).join('\n')
+}
+function memOutText() { return memText.value || '' }
+
+/// 面板复制：传一个返回文本的函数即可。
+async function copyPanel(getText, name) {
+  const text = getText()
+  if (!text) { note(`${name}为空，没有可复制的内容`); return }
+  await writeClipboard(text)
+}
+/// 行/单元格复制：附加一个标记，避免误判。
+async function copyRow(text) { await writeClipboard(text) }
 function flattenVar(node, depth, out) {
   out.push('  '.repeat(depth) + `${node.expr || node.name}${node.type ? ': ' + node.type : ''} = ${node.value}`)
   if (node.expanded) for (const c of node.children) flattenVar(c, depth + 1, out)
 }
 function sendVarTree() {
-  const out = []
-  for (const n of varRoots.value) flattenVar(n, 0, out)
-  if (out.length) sendToEditor('```\n' + out.join('\n') + '\n```\n')
+  const text = varTreeText()
+  if (text) sendToEditor('```\n' + text + '\n```\n')
 }
 function sendWatch() {
-  if (!watches.value.length) return
-  const text = watches.value.map(w => `${w.expr} = ${w.value}`).join('\n')
-  sendToEditor('```\n' + text + '\n```\n')
+  const text = watchText()
+  if (text) sendToEditor('```\n' + text + '\n```\n')
 }
 function sendStack() {
-  if (!callStack.value.length) return
-  const text = callStack.value
-    .map(f => `#${f.level} ${f.func} @ ${f.fullname || f.file}${f.line ? ':' + f.line : ''}`)
-    .join('\n')
-  sendToEditor('```\n' + text + '\n```\n')
+  const text = stackText()
+  if (text) sendToEditor('```\n' + text + '\n```\n')
 }
 function sendLocals() {
-  if (!locals.value.length) return
-  const text = locals.value.map(l => `${l.name} = ${l.value}`).join('\n')
-  sendToEditor('```\n' + text + '\n```\n')
+  const text = localsText()
+  if (text) sendToEditor('```\n' + text + '\n```\n')
 }
 function sendRegisters() {
-  if (!registers.value.length) return
-  const text = registers.value.map(r => `${r.name} = ${r.hex} (${r.dec})`).join('\n')
-  sendToEditor('```\n' + text + '\n```\n')
+  const text = registersText()
+  if (text) sendToEditor('```\n' + text + '\n```\n')
 }
 function sendMem() {
   if (!memText.value) return
   sendToEditor('```\n' + memText.value + '\n```\n')
 }
 function sendSource() {
-  if (!sourceLines.value.length) return
-  const body = sourceLines.value.map(l => String(l.n).padStart(5) + '  ' + l.text).join('\n')
-  sendToEditor(`\`\`\`${shortFile(sourceFile.value)}\n${body}\n\`\`\`\n`)
+  const text = sourceText()
+  if (!text) return
+  sendToEditor(`\`\`\`${shortFile(sourceFile.value)}\n${text}\n\`\`\`\n`)
 }
 async function saveMacros() {
   try {
@@ -1513,7 +1609,8 @@ async function loadMacros() {
 .gdb-srcline.bp .gdb-srcbp { color: #e5484d; }
 .gdb-srcbp { flex: 0 0 auto; width: 14px; text-align: center; user-select: none; font-size: .9em; }
 .gdb-muted { opacity: .45; }
-.gdb-srcno { flex: 0 0 auto; width: 52px; text-align: right; padding-right: 12px; color: var(--guaxi-text-secondary); opacity: .7; user-select: none; }
+.gdb-srcno { flex: 0 0 auto; width: 52px; text-align: right; padding-right: 12px; color: var(--guaxi-text-secondary); opacity: .7; user-select: none; cursor: copy; }
+.gdb-srcno:hover { opacity: 1; color: var(--tw-accent); }
 .gdb-srctext { flex: 1 1 auto; }
 .gdb-src-empty { padding: 12px; }
 .gdb-vresize { flex: 0 0 auto; height: 5px; cursor: row-resize; background: var(--guaxi-border); opacity: .5; margin: 4px 0; border-radius: 3px; transition: opacity .15s, background .15s; }
