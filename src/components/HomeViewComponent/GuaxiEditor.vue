@@ -1213,7 +1213,26 @@
           :style="pythonConsoleVisible ? { paddingBottom: `${pythonConsoleHeight + pythonConsoleBottomOffset}px` } : undefined"
         >
           <div ref="editorContainer" class="editor-container" :style="firstPaneFlexStyle" @mousedown="activateRegion('left')">
-            <!-- 编辑器内容将在这里渲染 -->
+            <!--
+              只读阅读器覆盖层（纯增量）。
+
+              为什么放在 editor-container **内部**：它需要跟着分辨/分屏一起裁剪与缩放，
+              而 Monaco 是直接挂在这个 div 上的（monaco.editor.create(editorContainer.value)）。
+              本组件以 absolute 覆盖在上面，不改动 Monaco 的任何 DOM/model/尺寸，
+              因此「切到阅读器再切回来」对编辑器完全无损。
+
+              什么时候出现：当前激活标签被 openTargetKind 判定为非文本（PDF / Word / 电子书 /
+              表格 / 图片 / 音视频 / HTML / 二进制）。文本标签永不挂载它。
+            -->
+            <ReaderPane
+              v-if="activeReaderTarget"
+              :target="activeReaderTarget"
+              :path="activeReaderPath"
+              :file-name="activeReaderFileName"
+              :theme="settingsStore.appearanceTheme"
+              @force-editor="forceOpenInEditor"
+              @convert-to-markdown="convertReaderTabToMarkdown"
+            />
           </div>
           <!-- 分屏中间可拖拽分隔条：纵向(左右)调宽度，横向(上下)调高度。 -->
           <div
@@ -1265,6 +1284,15 @@
           <div v-if="layoutMode !== 'single'" ref="secondaryEditorContainer" class="editor-container"
             :style="secondPaneFlexStyle"
             @mousedown="activateRegion('right')">
+            <ReaderPane
+              v-if="secondaryReaderTarget"
+              :target="secondaryReaderTarget"
+              :path="activeReaderPathRight"
+              :file-name="activeReaderFileNameRight"
+              :theme="settingsStore.appearanceTheme"
+              @force-editor="forceOpenInEditor"
+              @convert-to-markdown="convertReaderTabToMarkdown"
+            />
           </div>
         </div>
 
@@ -1447,6 +1475,7 @@ import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
 import { useSiderStore } from '../../stores/useSiderStore'
 import { useDiffCompareStore, diffPathBaseName } from '../../stores/diffCompareStore'
+import { useReaderTabStore } from '../../stores/readerTabStore'
 import GuaxiEditorStatusBar from './GuaxiEditorStatusBar.vue'
 import GuaxiSelectionTranslatePanel from './GuaxiSelectionTranslatePanel.vue'
 import GuaxiKbContextPanel from './GuaxiKbContextPanel.vue'
@@ -1461,6 +1490,9 @@ import {
   setActiveSearchHit,
 } from '../../utils/domTextSearch'
 import GuaxiLatexPreview from './GuaxiLatexPreview.vue'
+// 只读阅读器覆盖层（PDF / Word / 电子书 / 表格 / 图片 / 音视频 / HTML / 二进制）。
+// 纯增量组件：仅当激活标签被判定为非文本时才挂载。
+import ReaderPane from './ReaderPane.vue'
 import GuaxiSpeechDictationCard from './GuaxiSpeechDictationCard.vue'
 import { useSpeechDictation } from '../../composables/useSpeechDictation'
 import { useBilingualPreview } from '../../composables/useBilingualPreview'
@@ -1531,6 +1563,7 @@ import tableColumnRemove from '@iconify-icons/mdi/table-column-remove'
 import { dirname, homeDir } from '@tauri-apps/api/path'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { renderMarkdown, addCopyButtons, addMediaViewerButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
+import { renderChartEmbeds, disposeChartInstances, bindExcalidrawOpenButtons } from '../GuaxiMarkdownRender/guaxiChartEmbeds'
 // 渲染结果的持久缓存：Worker 里没有 invoke，所以由主线程代查、代写（见 renderPreviewMarkdownHtmlWithWorker）。
 import {
   collectInlineMathCandidates,
@@ -1972,6 +2005,8 @@ const knowledgeBaseStore = useKnowledgeBaseStore()
 const rightSiderStore = useRightSiderStore()
 const siderStore = useSiderStore()
 const diffStore = useDiffCompareStore()
+// 阅读器标签登记表（纯增量）：只有非文本文件会进这张表，文本链路一次都不会查它。
+const readerTabStore = useReaderTabStore()
 const mode = ref('edit');
 const previewMode = ref('toggle');
 const editorSurfaceMode = ref('source')
@@ -4439,6 +4474,124 @@ const isCurrentFileObserverMode = computed(() => {
   return !!path && editorBridgeStore.isMonacoReadonly(path);
 });
 const isActiveTabReadOnly = computed(() => !!activeTab.value?.unsupported || isCurrentFileObserverMode.value);
+
+// ───── 阅读器覆盖层（纯增量）─────
+// 判定完全由 readerTabStore 的登记表驱动：只有「用户主动打开过一个非文本文件」才会有登记，
+// 文本标签恒为 null，因此下面的模板分支与后续 watch 对既有编辑行为零影响。
+const normalizeVisualPath = (path) => String(path || '').replace(/\\/g, '/')
+// 「用编辑器打开」的强制视图状态存放在 readerTabStore.editorMode 里：
+// 再次从文件树打开同一文件时要自动失效，跨组件生命周期也要保持，store 是唯一合理的位置。
+
+const activeReaderPath = computed(() => String(activeTab.value?.path || selectedFile.value?.path || '').trim())
+const activeReaderTarget = computed(() => {
+  const path = activeReaderPath.value
+  if (!path) return null
+  // 强制编辑模式：用户已经从阅读器里选了「用编辑器打开」，此时不再覆盖 Monaco。
+  if (readerTabStore.isEditorMode(path)) return null
+  return readerTabStore.targetFor(path)
+})
+const activeReaderFileName = computed(() => String(activeTab.value?.fileName || activeReaderPath.value.split(/[\\/]/).pop() || ''))
+
+// 右侧分屏：同一个 store，只是路径取自右侧 pane 的激活标签。
+const activeReaderPathRight = computed(() => String(fileTreeStore.activeTabRight || '').trim())
+const secondaryReaderTarget = computed(() => {
+  const path = activeReaderPathRight.value
+  if (!path) return null
+  if (path === activeReaderPath.value) return null // 同一文件分屏：左侧已覆盖，右侧保持编辑器
+  return readerTabStore.targetFor(path)
+})
+const activeReaderFileNameRight = computed(() => String(activeReaderPathRight.value.split(/[\\/]/).pop() || ''))
+
+/**
+ * 「用编辑器打开」：把已登记路径降级为文本，再走既有 openMarkdownInEditor 路径。
+ *
+ * 注意：这不是把二进制塞进 Monaco 就能编辑 —— 用户显式要求时，后端 read_file_content
+ * 仍会按 UTF-8 读取，失败则落入既有的 `unsupported` 占位文本分支（今天的行为），
+ * 所以这里只是「允许用户尝试」，不会制造新的写盘风险。
+ */
+const forceOpenInEditor = async (path) => {
+  const target = String(path || '').trim()
+  if (!target) return
+  // 先让 ReaderPane 让位：Monaco 一直是活着的，只是被覆盖层挡住。
+  readerTabStore.setEditorMode(target)
+  // 既有 openFileInTab 对「已开标签」只做聚焦、不替换内容；而该标签里存的是阅读器占位文本。
+  // 所以必须先关掉再重开，才能让 Monaco 绑定到真实内容。
+  const opened = fileTreeStore.openTabs.find(
+    (tab) => normalizeVisualPath(tab?.path) === normalizeVisualPath(target)
+  )
+  if (opened) {
+    try {
+      fileTreeStore.closeTab(opened.path, fileTreeStore.activeRegion || 'left')
+    } catch (error) {
+      logger.warn('[ReaderPane] close tab before reopen failed', {
+        path: target,
+        error: String(error?.message || error),
+      })
+    }
+  }
+  await openMarkdownInEditor(target)
+}
+
+/**
+ * 「转换为 Markdown」：把阅读器标签替换成同目录下的 .md 结果并打开。
+ *
+ * 产物写在原文件同级的 `<stem>.md`（已存在则加序号），媒体抽到 `<stem>_assets`；
+ * 这是纯新增文件，不覆盖任何已有内容。
+ */
+const convertReaderTabToMarkdown = async (path) => {
+  const src = String(path || '').trim()
+  if (!src) return
+  const baseDir = src.replace(/[\\/][^\\/]+$/, '')
+  const stem = (src.split(/[\\/]/).pop() || 'document').replace(/\.[^.]+$/, '')
+  let dst = `${baseDir}/${stem}.md`
+  try {
+    // 去重：同名 md 已存在时加 -1、-2…
+    const { exists } = await import('@tauri-apps/plugin-fs')
+    let seq = 0
+    while (await exists(dst)) {
+      seq += 1
+      dst = `${baseDir}/${stem}-${seq}.md`
+    }
+  } catch (error) {
+    logger.debug('[ReaderPane] dedupe check skipped', { error: String(error?.message || error) })
+  }
+
+  const loading = message.loading('正在转换为 Markdown…', { duration: 0 })
+  try {
+    const result = await invoke('convert_document_to_markdown', {
+      path: src,
+      quality: 'fast',
+      mediaRoot: null,
+    })
+    const markdown = String(result?.markdown || '')
+    if (!markdown.trim()) throw new Error('转换结果为空')
+    await invoke('write_file_content', { path: dst, content: markdown })
+    loading?.destroy?.()
+    message.success(`已生成 Markdown：${dst.split(/[\\/]/).pop()}`)
+
+    // 把资产目录（若转换引擎抽出了图片）一并搬到 md 同级，保证相对路径引用不失效。
+    const mediaDir = String(result?.mediaDir || '')
+    if (mediaDir) {
+      const dstMediaDir = `${baseDir}/${stem}_assets`
+      try {
+        await invoke('copy_path', { sourcePath: mediaDir, destinationPath: dstMediaDir })
+      } catch (copyError) {
+        logger.warn('[ReaderPane] copy media assets failed', {
+          mediaDir,
+          dstMediaDir,
+          error: String(copyError?.message || copyError),
+        })
+      }
+    }
+
+    readerTabStore.closeReader(src)
+    await openMarkdownInEditor(dst)
+  } catch (error) {
+    loading?.destroy?.()
+    logger.warn('[ReaderPane] convert to markdown failed', { path: src, error: String(error?.message || error) })
+    message.error(`转换失败：${String(error?.message || error)}`)
+  }
+}
 const isPathReadonlyForMonaco = (path, tab = null) => {
   if (tab?.unsupported) return true;
   const normalizedPath = String(path || tab?.path || '').trim();
@@ -21113,7 +21266,11 @@ const previewFileKind = computed(() =>
 
 const isMarkdownPreviewFile = computed(() => previewFileKind.value === 'markdown');
 
-const canPreview = computed(() => previewFileKind.value !== '');
+const canPreview = computed(() => {
+  // 阅读器标签不参与预览（占位文本没有渲染价值），直接判定为不可预览。
+  if (activeReaderTarget.value) return false;
+  return previewFileKind.value !== '';
+});
 
 // 只有 Markdown 与散文类文本才有可翻译的正文；代码文件按用户要求整体不翻译。
 const canBilingualTranslate = computed(
@@ -21157,6 +21314,8 @@ const {
 // 不再被 && 短路），所以平时不容易发现。
 const showPreview = computed(() => {
   if (!selectedFile.value || !canPreview.value) return false;
+  // 阅读器标签只有占位文本，预览没有意义；关掉预览，避免它盖住内嵌阅读器。
+  if (activeReaderTarget.value) return false;
   if (previewMode.value === 'realtime') return false;
   return previewMode.value === 'toggle' ? mode.value === 'preview' : true;
 });
@@ -22366,6 +22525,10 @@ const showEditorShell = computed(() => {
   // 1. 终端面板现在已经从 editor-wrapper 中拆出，避免“无文件 + 打开终端”时仍然渲染出
   //    面包屑栏和空编辑器容器，形成中间那块“未打开文件”的空区域。
   // 2. 这里保留 selectedFile 作为硬条件，让编辑区只在真正存在活动文件时出现。
+  // 3. 阅读器标签：即使处于「纯预览」模式也必须显示外壳，否则内嵌阅读器会被整块藏掉。
+  //    这个分支只在 activeReaderTarget 非空时成立（即用户确实打开了非文本文件），
+  //    文本文件的显示规则完全不变。
+  if (activeReaderTarget.value) return true;
   return !!selectedFile.value && ((previewMode.value !== 'realtime' && showEditor.value) || pythonConsoleVisible.value);
 });
 
@@ -22397,6 +22560,23 @@ watch(
   },
   { flush: 'post' }
 );
+
+// 阅读器覆盖层出现/消失时重排 Monaco。
+//
+// 必要性：阅读器是 absolute 覆盖层，不会改变 editor-container 的尺寸，所以 Monaco 的
+// 自动 ResizeObserver 不会触发重排。切到阅读器时 Monaco 本来就看不见（无所谓），
+// 但切回文本标签的瞬间需要一次 layout 让视口/滚动条立刻正确，避免首次滚动位置偏掉。
+// 这里只在覆盖层状态翻转时调用，不会造成持续重排。
+watch(activeReaderTarget, () => {
+  nextTick(() => {
+    try {
+      editor?.layout?.()
+      secondaryEditor?.layout?.()
+    } catch (error) {
+      logger.debug('[ReaderPane] monaco relayout skipped', { error: String(error?.message || error) })
+    }
+  })
+})
 
 watch([showEditor, editorSurfaceMode], ([editorVisible, surfaceMode]) => {
   if (!editorVisible) return
@@ -22997,6 +23177,20 @@ watch(renderedHtml, () => {
       void renderPreviewMermaidDiagrams(previewContainer.value).catch((error) => {
         logger.error('预览区 Mermaid 渲染失败', error);
       });
+      // 内嵌图表 / 白板：只处理带 pending 标记的块，幂等且不引入渲染期依赖。
+      try {
+        renderChartEmbeds(previewContainer.value);
+        bindExcalidrawOpenButtons(previewContainer.value, {
+          onOpen: (ref) => {
+            // 白板页没有「按路径打开」的入口参数，这里只做导航；场景路径放进提示里，
+            // 用户可直接在白板侧栏按同名打开，避免猜一个并不存在的 query 契约。
+            message.info(`已切换到白板；场景文件：${ref || '未指定'}`);
+            try { window.location.hash = '/excalidraw'; } catch { /* 忽略 */ }
+          },
+        });
+      } catch (error) {
+        logger.warn('[Preview] chart embeds failed', { error: String(error?.message || error) });
+      }
       if (pendingPreviewScrollRestore.value) {
         const el = previewContainer.value;
         const height = el.scrollHeight;
@@ -24450,6 +24644,11 @@ const closeTab = async (path, region) => {
 
   fileTreeStore.closeTab(path, targetRegion);
 
+  // 阅读器标签真正关闭时清理登记（仍在另一侧分屏开着则保留）。
+  if (!willRemainOpenInOther) {
+    readerTabStore.closeReader(path)
+  }
+
   // 标签真正关掉后，清理该文件的预览构建产物（PDF、.aux/.toc/.synctex，以及源目录里
   // 构建用的临时 .tex）。仍在另一侧分屏里开着时不能清——那边可能还显示着这份预览。
   if (!willRemainOpenInOther && /\.(tex|typ)$/i.test(path)) {
@@ -25292,6 +25491,8 @@ onUnmounted(() => {
     latexBuildDebounceTimer = null
   }
   try { dictation.stop() } catch { /* noop */ }
+  // 内嵌图表实例（ECharts）在卸载时释放，避免 WebGL/Canvas 上下文泄漏。
+  try { disposeChartInstances(previewContainer.value) } catch { /* noop */ }
   disposePreviewMarkdownWorker('editor-unmount')
   if (notebookDiskPersistTimer) {
     const pendingNotebookContent = String(rawContent.value ?? '')

@@ -5,6 +5,8 @@ import hljs from "highlight.js";
 import "highlight.js/styles/atom-one-light.css";
 // 暗色 One Dark 代码配色 + 纯图片段落布局（作用域限定，详见文件内说明）。
 import "./guaxiMarkdownExtras.css";
+// 新围栏（```chart / ```excalidraw）的容器样式。只新增选择器，不覆盖任何既有规则。
+import "./guaxiChartEmbeds.css";
 import { initMathJax, renderMath } from "./mathjaxConfig";
 // MathJax 3.2.2 的解析崩溃补丁：必须在 markdown-it-mathjax3 建出 TeX 输入 jax 之前生效，
 // 本模块求值时即安装（见该文件里的完整说明）。
@@ -2133,6 +2135,11 @@ export const renderMarkdown = async (content, options) => {
     buttons: enableButtons = true,
     pythonCells: enablePythonCells = false,
     codeCells: enableCodeCells = false,
+    // ```chart / ```excalidraw 内嵌块（默认开：只在真正出现这两个围栏时才产生占位与运行时代价）
+    chartEmbeds: enableChartEmbeds = true,
+    // 文档基准路径：内嵌块的 data: ./x.csv / 白板文件都按它解析。
+    // 必须在这里显式解构 —— 下面 fence 规则的作用域里拿不到 options 对象。
+    basePath = "",
     chatPreprocess = false,
     theme = "default",
     deferMathUntilComplete = false,
@@ -2564,12 +2571,43 @@ export const renderMarkdown = async (content, options) => {
       logger.warn("[MarkdownRender] installTocSupport failed", e);
     }
 
-    // 可执行代码块 / Mermaid：统一改写 fence，避免多次覆盖 renderer.rules.fence
-    if (enableMermaid || enablePythonCells || enableCodeCells) {
+    // 可执行代码块 / Mermaid：统一改写 fence，避免多次覆盖 renderer.rules.fence。
+    // embedBaseDoc 是上面解构出的 basePath 归一化结果，供 ```chart / ```excalidraw 解析相对路径。
+    const embedBaseDoc = typeof basePath === "string" ? basePath : "";
+
+    if (enableMermaid || enablePythonCells || enableCodeCells || enableChartEmbeds) {
       const defaultFence = md.renderer.rules.fence;
       md.renderer.rules.fence = (tokens, idx, options, env, self) => {
         const token = tokens[idx];
         const info = String(token?.info || '').trim();
+
+        // ```chart / ```excalidraw：只输出占位容器，真正的渲染在 DOM 挂载后由
+        // guaxiChartEmbeds 完成（渲染器不引入 echarts / excalidraw 依赖）。
+        if (enableChartEmbeds && /^chart(\s|$)/i.test(info)) {
+          const source = String(token.content || '')
+            .replace(/&gt;/g, ">")
+            .replace(/&lt;/g, "<")
+            .replace(/&amp;/g, "&");
+          const original = ["```" + info, source, "```"].join(String.fromCharCode(10));
+          return `<div class="guaxi-chart-block" data-guaxi-chart="1"${
+            preserveOriginal ? ` data-md-original="${safeEncode(original)}"` : ""
+          }>
+  <div class="guaxi-chart-block__canvas" data-chart-pending="1" data-chart-base="${safeEncode(embedBaseDoc)}" data-chart-source="${safeEncode(source)}">
+    <div class="guaxi-chart-block__placeholder">正在渲染图表…</div>
+  </div>
+</div>`;
+        }
+
+        if (enableChartEmbeds && /^excalidraw(\s|$)/i.test(info)) {
+          const source = String(token.content || "").trim();
+          const original = ["```" + info, source, "```"].join(String.fromCharCode(10));
+          return `<div class="guaxi-excalidraw-embed" data-guaxi-excalidraw="1"${
+            preserveOriginal ? ` data-md-original="${safeEncode(original)}"` : ""
+          }>
+  <div class="guaxi-excalidraw-embed__stage" data-excalidraw-pending="1" data-chart-base="${safeEncode(embedBaseDoc)}" data-excalidraw-path="${safeEncode(source)}"></div>
+  <div class="guaxi-excalidraw-embed__caption"><span>Excalidraw 白板</span><button type="button" data-excalidraw-open="${safeEncode(source)}">在其他窗口打开</button></div>
+</div>`;
+        }
 
         if (enableMermaid && info === "mermaid") {
           const content = String(token.content || '')

@@ -291,6 +291,9 @@ const installTocSupport = (md) => {
 }
 
 const buildWorkerMarkdownRenderer = (sourceContent, options = {}) => {
+  // 文档基准路径：```chart 的 data: ./x.csv 与 ```excalidraw 场景路径都按它解析。
+  // worker 里没有 invoke，这里只能把路径透传到 data-* 属性，供主线程后续使用。
+  const wrapperBasePath = String(options.basePath || options.filePath || '')
   const {
     preserveOriginal = false,
     mermaid: enableMermaid = true,
@@ -298,6 +301,8 @@ const buildWorkerMarkdownRenderer = (sourceContent, options = {}) => {
     codeHighlight: enableCodeHighlight = true,
     pythonCells: enablePythonCells = false,
     codeCells: enableCodeCells = false,
+    // ```chart / ```excalidraw 占位块（默认开；Worker 里只产出占位，实际渲染在主线程）
+    chartEmbeds: enableChartEmbeds = true,
   } = options
 
   const md = new MarkdownIt({
@@ -370,11 +375,36 @@ const buildWorkerMarkdownRenderer = (sourceContent, options = {}) => {
   installTaskListSupport(md)
   installTocSupport(md)
 
-  if (enableMermaid || enablePythonCells || enableCodeCells) {
+  if (enableMermaid || enablePythonCells || enableCodeCells || enableChartEmbeds) {
     const defaultFence = md.renderer.rules.fence
     md.renderer.rules.fence = (tokens, idx, renderOptions, env, self) => {
       const token = tokens[idx]
       const info = String(token?.info || '').trim()
+
+      // ```chart / ```excalidraw：Worker 里只产出占位（没有 DOM、也没有 Tauri invoke），
+      // 真正渲染由主线程的 guaxiChartEmbeds 完成。行为与 GuaxiMarker 保持一致。
+      if (enableChartEmbeds && /^chart(\s|$)/i.test(info)) {
+        const source = String(token.content || '')
+          .replace(/&gt;/g, '>')
+          .replace(/&lt;/g, '<')
+          .replace(/&amp;/g, '&')
+        const original = ['```' + info, source, '```'].join(String.fromCharCode(10))
+        // basePath 不在本函数的解构参数里，从闭包外的 options 取；worker 请求里会带上。
+        const embedBase = String(wrapperBasePath || '')
+        return `<div class="guaxi-chart-block" data-guaxi-chart="1"${
+          preserveOriginal ? ` data-md-original="${safeEncode(original)}"` : ''
+        }><div class="guaxi-chart-block__canvas" data-chart-pending="1" data-chart-base="${safeEncode(embedBase)}" data-chart-source="${safeEncode(source)}"><div class="guaxi-chart-block__placeholder">正在渲染图表…</div></div></div>`
+      }
+
+      if (enableChartEmbeds && /^excalidraw(\s|$)/i.test(info)) {
+        const source = String(token.content || '').trim()
+        const original = ['```' + info, source, '```'].join(String.fromCharCode(10))
+        // basePath 不在本函数的解构参数里，从闭包外的 options 取；worker 请求里会带上。
+        const embedBase = String(wrapperBasePath || '')
+        return `<div class="guaxi-excalidraw-embed" data-guaxi-excalidraw="1"${
+          preserveOriginal ? ` data-md-original="${safeEncode(original)}"` : ''
+        }><div class="guaxi-excalidraw-embed__stage" data-excalidraw-pending="1" data-chart-base="${safeEncode(embedBase)}" data-excalidraw-path="${safeEncode(source)}"></div><div class="guaxi-excalidraw-embed__caption"><span>Excalidraw 白板</span><button type="button" data-excalidraw-open="${safeEncode(source)}">在其他窗口打开</button></div></div>`
+      }
 
       if (enableMermaid && info === 'mermaid') {
         const content = String(token.content || '')

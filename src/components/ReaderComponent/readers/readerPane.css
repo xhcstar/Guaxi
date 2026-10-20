@@ -1,0 +1,361 @@
+/*
+ * 文档阅读器（主显示区内的只读预览）共用样式。
+ *
+ * 与 ReaderComponent/readerChrome.css 的关系：
+ * - readerChrome.css 服务的是**独立阅读器窗口**里的六个旧阅读器，选择器带
+ *   .guaxi-reader-controls 前缀；
+ * - 本文件服务的是**主编辑区内**嵌进标签页的新阅读器，根类名 .guaxi-doc-reader，
+ *   两者前缀不同，互不覆盖，因此互不构成回归风险。
+ */
+
+.guaxi-doc-reader {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--guaxi-content-bg, #fff);
+  color: var(--guaxi-text-primary, #1f2328);
+  z-index: 8;
+}
+
+.guaxi-doc-reader__bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--guaxi-border, #e1e4e8);
+  background: var(--guaxi-panel-bg, #fafbfc);
+  font-size: 12px;
+  user-select: none;
+}
+
+.guaxi-doc-reader__title {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 40%;
+}
+
+.guaxi-doc-reader__badge {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--guaxi-hover-bg, rgba(120, 120, 120, 0.12));
+  color: var(--guaxi-text-secondary, #6a737d);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.guaxi-doc-reader__meta {
+  color: var(--guaxi-text-secondary, #6a737d);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.guaxi-doc-reader__spacer {
+  flex: 1 1 auto;
+}
+
+.guaxi-doc-reader__btn {
+  appearance: none;
+  border: 1px solid var(--guaxi-border, #e1e4e8);
+  background: var(--guaxi-content-bg, #fff);
+  color: inherit;
+  border-radius: 6px;
+  height: 24px;
+  min-width: 24px;
+  padding: 0 8px;
+  font-size: 12px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.guaxi-doc-reader__btn:hover {
+  background: var(--guaxi-hover-bg, rgba(120, 120, 120, 0.1));
+}
+
+.guaxi-doc-reader__btn[disabled] {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.guaxi-doc-reader__body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.guaxi-doc-reader__center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 10px;
+  color: var(--guaxi-text-secondary, #6a737d);
+  font-size: 13px;
+  text-align: center;
+  padding: 24px;
+}
+
+.guaxi-doc-reader__error {
+  color: var(--n-color-error, #e06c75);
+  max-width: 640px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+}
+
+/* ── 图片查看器 ───────────────────────────────────────── */
+.gdr-image-stage {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background:
+    linear-gradient(45deg, rgba(128, 128, 128, 0.08) 25%, transparent 25%) 0 0 / 16px 16px,
+    linear-gradient(-45deg, rgba(128, 128, 128, 0.08) 25%, transparent 25%) 0 0 / 16px 16px,
+    linear-gradient(45deg, transparent 75%, rgba(128, 128, 128, 0.08) 75%) 0 0 / 16px 16px,
+    linear-gradient(-45deg, transparent 75%, rgba(128, 128, 128, 0.08) 75%) 0 0 / 16px 16px;
+  cursor: grab;
+}
+
+.gdr-image-stage.is-panning {
+  cursor: grabbing;
+}
+
+.gdr-image-canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.gdr-image-canvas img {
+  display: block;
+  max-width: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/* ── Word（docx-preview）──────────────────────────────── */
+.gdr-docx {
+  padding: 16px;
+}
+
+.gdr-docx :deep(.docx-wrapper) {
+  background: transparent;
+  padding: 0;
+}
+
+.gdr-docx :deep(.docx) {
+  margin: 0 auto 16px;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.12);
+  border-radius: 2px;
+}
+
+/* ── 电子书 ─────────────────────────────────────────── */
+.gdr-ebook {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+
+.gdr-ebook__toc {
+  flex: 0 0 auto;
+  width: 250px;
+  min-width: 150px;
+  max-width: 45%;
+  border-right: 1px solid var(--guaxi-border, #e1e4e8);
+  overflow: auto;
+  padding: 8px 6px;
+  background: var(--guaxi-panel-bg, #fafbfc);
+}
+
+.gdr-ebook__toc-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 4px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gdr-ebook__toc-item:hover {
+  background: var(--guaxi-hover-bg, rgba(120, 120, 120, 0.1));
+}
+
+.gdr-ebook__toc-item.is-active {
+  background: var(--guaxi-active-bg, rgba(64, 120, 220, 0.14));
+  color: var(--guaxi-accent, #2f6fdf);
+}
+
+.gdr-ebook__splitter {
+  flex: 0 0 auto;
+  width: 5px;
+  cursor: col-resize;
+  background: transparent;
+}
+
+.gdr-ebook__splitter:hover {
+  background: var(--guaxi-border, #e1e4e8);
+}
+
+.gdr-ebook__main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.gdr-ebook__frame {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  background: transparent;
+}
+
+/* ── 表格 ───────────────────────────────────────────── */
+.gdr-sheet {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.gdr-sheet__tabs {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--guaxi-border, #e1e4e8);
+}
+
+.gdr-sheet__tab {
+  border: 1px solid var(--guaxi-border, #e1e4e8);
+  background: var(--guaxi-content-bg, #fff);
+  color: inherit;
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.gdr-sheet__tab.is-active {
+  background: var(--guaxi-active-bg, rgba(64, 120, 220, 0.14));
+  border-color: var(--guaxi-accent, #2f6fdf);
+  color: var(--guaxi-accent, #2f6fdf);
+}
+
+.gdr-sheet__scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  position: relative;
+}
+
+.gdr-sheet table {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.gdr-sheet th,
+.gdr-sheet td {
+  border-right: 1px solid var(--guaxi-border, #e1e4e8);
+  border-bottom: 1px solid var(--guaxi-border, #e1e4e8);
+  padding: 3px 8px;
+  white-space: pre;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gdr-sheet th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--guaxi-panel-bg, #f3f4f6);
+  font-weight: 600;
+}
+
+.gdr-sheet td.is-rowhead,
+.gdr-sheet th.is-rowhead {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--guaxi-panel-bg, #f3f4f6);
+  color: var(--guaxi-text-secondary, #6a737d);
+  text-align: right;
+}
+
+.gdr-sheet__notice {
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--guaxi-text-secondary, #6a737d);
+  border-bottom: 1px dashed var(--guaxi-border, #e1e4e8);
+}
+
+/* ── 媒体 ───────────────────────────────────────────── */
+.gdr-media {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: #000;
+}
+
+.gdr-media video {
+  max-width: 100%;
+  max-height: 100%;
+  outline: none;
+}
+
+.gdr-media audio {
+  width: min(720px, 100%);
+}
+
+/* ── 只读 Markdown（旧版 Office / 幻灯片转换结果）─────── */
+.gdr-md {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 24px 28px 80px;
+  line-height: 1.75;
+  font-size: 14px;
+}
+
+.gdr-md :deep(img) {
+  max-width: 100%;
+}
+
+/* ── HTML ───────────────────────────────────────────── */
+.gdr-html {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+}

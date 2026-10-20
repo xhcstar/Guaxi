@@ -126,6 +126,10 @@ anydoc = "0.2.4"
 # 默认特性里的 server/opds/mcp/parallel/mmap/zstd 全关掉，避免拖进 tiny_http、
 # rayon、memmap2 等与本体无关的重依赖。
 ebook-rs = { version = "0.17", default-features = false }
+# 表格阅读器：xlsx / xls / ods 的纯 Rust 解析（SheetJS 的 Rust 等价物）。
+# 只开读取能力，不启用 picture/dates 等可选特性；zip 版本与 Cargo.lock 里已有的 7.x 系列对齐，
+# 避免为此再拉一套 zip 实现进构建图。
+calamine = { version = "0.34", default-features = false }
 # 语音合成 / 识别：进程内直调，替代原来的 sherpa-onnx CLI 子进程（省掉每段重载模型的开销）。
 # 默认 `static` feature 会把官方预编译库静态链接进来，CPU 路径自包含、无需分发 DLL。
 # 构建期不让它自己去联网下载——由 tools/fetch_sherpa_onnx_libs.mjs 预取归档，

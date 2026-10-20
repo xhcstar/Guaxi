@@ -69,7 +69,53 @@ pub async fn ocr_recognize(
         .map_err(|e| format!("解析 OCR 结果失败: {}", e))
 }
 
-/// 截图识别：拉起系统截图工具让用户框选，将截图存到临时文件后直接 OCR。
+/// 图片 OCR（给「导入时把图片转成 Markdown」这类后台任务复用）。
+///
+/// 与 [`ocr_recognize`] 走同一个 `/ocr` 端点，区别只是：
+/// - 不接收 `AppHandle`（调用方来自后台任务，没有窗口对象）；
+/// - 直接返回识别出的纯文本，而不是完整 JSON。
+///
+/// 设计说明：单独加一个函数而不是改 `ocr_recognize` 的签名，是为了让既有的截图识别、
+/// 选区识别等调用方一个字符都不用动——新增能力不允许改变既有入口的行为。
+pub(crate) async fn ocr_image_path(image_path: &str) -> Result<String, String> {
+    let path = image_path.trim();
+    if path.is_empty() {
+        return Err("图片路径为空".to_string());
+    }
+    if !std::path::Path::new(path).exists() {
+        return Err(format!("图片不存在: {}", path));
+    }
+
+    // agent_server 需要 AppHandle 才能自动拉起；这里没有，只能要求它已在运行。
+    // 正常使用中它几乎总是已启动（截图 OCR、选区 OCR 都会拉起），
+    // 未启动时给出可操作的提示，而不是抛一个原始的连接错误。
+    let resp = reqwest::Client::new()
+        .post(format!("{}/ocr", AGENT_SERVER_URL))
+        .json(&json!({ "image_path": path, "image_base64": "" }))
+        .timeout(Duration::from_secs(120))
+        .send()
+        .await
+        .map_err(|e| {
+            format!(
+                "OCR 请求失败（本地 OCR 服务未就绪时，请先使用一次截图识别以启动它）: {}",
+                e
+            )
+        })?;
+
+    if !resp.status().is_success() {
+        return Err(format!("OCR 服务返回错误: {}", resp.status()));
+    }
+
+    let value: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("解析 OCR 结果失败: {}", e))?;
+    Ok(value
+        .get("text")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string())
+}
 ///
 /// 返回 `{ cancelled, lines, text, image_base64 }`：
 /// - 用户取消（未产生截图）时返回 `cancelled: true`，其余为空；

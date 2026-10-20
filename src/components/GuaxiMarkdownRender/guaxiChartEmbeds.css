@@ -1,0 +1,128 @@
+/*
+ * 笔记内嵌图表的渲染前置样式。
+ *
+ * 覆盖两种新围栏：
+ *   ```chart       —— ECharts 数据图表（spec + 内联数据 / 外部文件）
+ *   ```excalidraw  —— Excalidraw 白板场景只读预览
+ *
+ * 与代码块 / mermaid 的视觉层级保持一致：图表自带浅色底板、圆角与内边距，
+ * 在预览、只读阅读器、导出 HTML/PDF 三条链路上都能正常显示（导出链路复用同一渲染器）。
+ */
+
+.guaxi-chart-block {
+  position: relative;
+  margin: 14px 0;
+  padding: 10px;
+  border: 1px solid var(--guaxi-border, #e1e4e8);
+  border-radius: 8px;
+  background: var(--guaxi-panel-bg, #fff);
+  overflow: hidden;
+}
+
+.guaxi-chart-block__canvas {
+  width: 100%;
+  min-height: 240px;
+}
+
+/* 图表未完成渲染（等待 ECharts 动态加载 / 数据文件读取中）时的骨架。 */
+.guaxi-chart-block__placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+  color: var(--guaxi-text-secondary, #6a737d);
+  font-size: 13px;
+}
+
+.guaxi-chart-block__error {
+  padding: 12px;
+  color: var(--n-color-error, #e06c75);
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 图表右上角工具条：导出 SVG/PNG 与「查看源码」，与 mermaid 的媒体按钮同位置。 */
+.guaxi-chart-block__tools {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  display: flex;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  z-index: 3;
+}
+
+.guaxi-chart-block:hover .guaxi-chart-block__tools {
+  opacity: 1;
+}
+
+.guaxi-chart-block__tool {
+  height: 24px;
+  min-width: 24px;
+  padding: 0 6px;
+  border-radius: 6px;
+  border: 1px solid var(--guaxi-border, #e1e4e8);
+  background: var(--guaxi-content-bg, #fff);
+  color: var(--guaxi-text-primary, #1f2328);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.guaxi-chart-block__tool:hover {
+  background: var(--guaxi-hover-bg, rgba(120, 120, 120, 0.1));
+}
+
+/* ── Excalidraw 只读预览 ─────────────────────────────── */
+.guaxi-excalidraw-embed {
+  position: relative;
+  margin: 14px 0;
+  border: 1px solid var(--guaxi-border, #e1e4e8);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--guaxi-panel-bg, #fff);
+}
+
+.guaxi-excalidraw-embed__stage {
+  width: 100%;
+  min-height: 220px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.guaxi-excalidraw-embed__stage svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.guaxi-excalidraw-embed__caption {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--guaxi-border, #e1e4e8);
+  font-size: 12px;
+  color: var(--guaxi-text-secondary, #6a737d);
+}
+
+.guaxi-excalidraw-embed__caption button {
+  margin-left: auto;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--guaxi-border, #e1e4e8);
+  background: var(--guaxi-content-bg, #fff);
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.guaxi-excalidraw-embed__error {
+  padding: 16px;
+  color: var(--n-color-error, #e06c75);
+  font-size: 13px;
+  white-space: pre-wrap;
+}

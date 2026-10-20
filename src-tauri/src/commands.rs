@@ -7,6 +7,9 @@ pub mod chatview;
 /// Codex Agent 引擎：以打包进安装包的 codex sidecar 驱动智能助手的 Agent 模式。
 pub mod codex_agent;
 pub mod docprocess;
+/// 文档阅读器后端支撑：文件类型嗅探、电子书/旧版 Office 阅读载荷、表格读取、导入用便携转换。
+/// 全部是新增的独立命令，不改动任何既有命令的行为。
+pub mod doc_reader;
 pub mod convert;
 pub mod import_suggest;
 pub mod file_watcher;

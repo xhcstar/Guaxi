@@ -15,6 +15,8 @@
             <li><button type="button" class="toc-link" @click="scrollToSection('home')">首页与编辑器</button></li>
             <li><button type="button" class="toc-link" @click="scrollToSection('search-local')">搜索与查询语法</button></li>
             <li><button type="button" class="toc-link" @click="scrollToSection('reader')">资料库与阅读器</button></li>
+            <li><button type="button" class="toc-link" @click="scrollToSection('open-and-import')">打开文件与导入</button></li>
+            <li><button type="button" class="toc-link" @click="scrollToSection('embedded-charts')">笔记内嵌图表与动画</button></li>
             <li><button type="button" class="toc-link" @click="scrollToSection('chat')">聊天与模型</button></li>
             <li><button type="button" class="toc-link" @click="scrollToSection('brain')">知识图谱</button></li>
             <li><button type="button" class="toc-link" @click="scrollToSection('cognition')">大脑（认知层）</button></li>
@@ -293,6 +295,142 @@
             </div>
             <div class="figure-caption">图 4：阅读器与笔记面板</div>
           </div>
+        </section>
+
+        <n-divider />
+
+        <section id="open-and-import">
+          <h2 class="h2">打开文件与导入</h2>
+          <p class="p">
+            左栏文件树的两个按钮现在都按「文件真实类型」工作：点开一个文件时，文本类文件仍然进入编辑器，
+            其余类型自动切换成只读阅读器。判定先看扩展名，扩展名不认识时再读文件头魔数，
+            所以把 PNG 改名成 <b>.txt</b> 也不会被当成文本硬读。
+          </p>
+
+          <h3 class="h3">打开文件：按类型分流</h3>
+          <ul class="manual-ul">
+            <li><b>文本类</b>（md / txt / 代码 / 配置 / csv / svg …）：与以前完全一致，在主显示区用编辑器打开，可编辑可保存。</li>
+            <li><b>PDF</b>：主显示区内嵌 PDF 阅读器，支持连续滚动、搜索、分页、目录和大纲、文字高亮批注。</li>
+            <li><b>Word</b>：<b>.docx</b> 用版式还原预览（保留页眉页脚表格）；<b>.doc / .rtf / .odt</b> 自动转成只读 Markdown 显示。</li>
+            <li><b>电子书</b>：epub / mobi / azw3 / azw / kfx / fb2 / lit / cbz，带目录侧栏与上一节/下一节。</li>
+            <li><b>表格</b>：xlsx / xls / ods，按工作表分页，首行可切换为表头，大表只渲染可视区域。</li>
+            <li><b>幻灯片</b>：pptx / ppt / odp，转成只读 Markdown（保留标题层级与要点）。</li>
+            <li><b>图片</b>：png / jpg / gif / webp / bmp / ico / tif / tiff / avif / heic，支持缩放、平移、旋转、适应窗口。</li>
+            <li><b>音视频</b>：mp3 / wav / flac / ogg / m4a / mp4 / mkv / webm / mov 等，用内置播放器；编码不支持时可一键「系统打开」。</li>
+            <li><b>HTML</b>：在隔离沙箱里渲染，默认禁止脚本，需要时可勾选「允许脚本」。</li>
+            <li><b>其它二进制</b>：给出文件大小与三个出口——在文件浏览器中打开、转换为 Markdown、用编辑器打开。</li>
+          </ul>
+          <p class="p">
+            阅读器标签与普通标签共用同一套标签栏：可以关闭、拖动排序、在一侧打开、分屏。
+            切回文本文件时编辑器保持原样，不会丢撤销历史或光标位置。
+            <b>用编辑器打开</b>会把当前文件改回编辑器视图（二进制内容会落入只读占位，不会误写盘）。
+          </p>
+
+          <h3 class="h3">导入文件：两种模式</h3>
+          <p class="p">
+            知识库、文件编辑、任务编辑三个模式里，「导入文件」图标与右键菜单里的「导入文件」都变成两项选择：
+          </p>
+          <ul class="manual-ul">
+            <li><b>原样导入（保留原格式）</b>：把文件原封不动拷进当前目录。与旧版行为一致；Markdown 直接入库。</li>
+            <li><b>转换为 Markdown 后导入</b>：按格式自动选引擎，生成同名 <b>.md</b>，原始文件不会被改动。</li>
+          </ul>
+          <p class="p">转换能力覆盖：</p>
+          <ul class="manual-ul">
+            <li>docx / pptx / xlsx / odt / rtf / epub / html / ipynb / org / rst / latex / fb2 / csv —— 走 pandoc 或极速引擎，秒级完成。</li>
+            <li>旧版 Office（doc / ppt / ods / odp）—— 只有极速引擎能读，自动路由，无需手动选择。</li>
+            <li>PDF（有文字层）—— 抽取正文与图片；扫描件会提示需要 OCR，改用仓库导入的 Marker 引擎即可。</li>
+            <li>图片（png / jpg / gif 等）—— 走离线 OCR，生成「图片引用 + 识别文字」的 Markdown。</li>
+            <li>电子书（epub / mobi / azw3 等）—— 按章节转成带标题的 Markdown。</li>
+          </ul>
+          <p class="p">
+            转换产物里的图片会统一放到与 Markdown 同级的 <b>&lt;文件名&gt;_assets</b> 目录，
+            用相对路径引用，随笔记一起被知识库和 Git 管理。
+          </p>
+        </section>
+
+        <n-divider />
+
+        <section id="embedded-charts">
+          <h2 class="h2">笔记内嵌图表与动画</h2>
+          <p class="p">
+            笔记里可以用围栏代码块直接嵌图表，不需要离开编辑器。所有内嵌块在
+            <b>编辑器预览、只读 Markdown 阅读器、导出 HTML/PDF</b> 三条链路上表现一致。
+          </p>
+
+          <h3 class="h3">1. 说明性结构图：mermaid</h3>
+          <p class="p">原有能力保持不变，适合流程图、时序图、状态图、ER 图、甘特图、思维导图、桑基图等。</p>
+          <pre class="manual-code">```mermaid
+flowchart LR
+  A[收集资料] --&gt; B[阅读摘录]
+  B --&gt; C[整理成笔记]
+  C --&gt; A
+```</pre>
+
+          <h3 class="h3">2. 数据图表：```chart</h3>
+          <p class="p">
+            用 ECharts 渲染。数据可以内联，也可以指向笔记同目录的 CSV / TSV / JSON 文件——
+            改数据文件后刷新预览就会更新，不必把几百行数据贴进正文。
+          </p>
+          <pre class="manual-code">```chart
+spec:
+  type: bar
+  x: month
+  y: [revenue, cost]
+  title: 季度营收对比
+data: ./data/sales.csv
+```</pre>
+          <p class="p">也可以把数据直接写进围栏：</p>
+          <pre class="manual-code">```chart
+spec:
+  type: line
+  x: day
+  y: [visitors]
+data: |
+  day,visitors
+  周一,120
+  周二,180
+  周三,160
+```</pre>
+          <ul class="manual-ul">
+            <li><b>type</b> 支持 line / bar / area / scatter / pie / doughnut（环形）。</li>
+            <li><b>x</b> 是横轴字段名，<b>y</b> 是一个或一组数值字段名（写成数组即为多序列）。</li>
+            <li>想完全掌控样式时，把整个 ECharts option 作为 JSON 直接写在围栏里即可。</li>
+            <li>鼠标悬停图表右上角可以导出 SVG / PNG；导出 PDF 时图表会一起栅格化进成品。</li>
+          </ul>
+
+          <h3 class="h3">3. 自由布局白板：```excalidraw</h3>
+          <p class="p">
+            围栏里写场景文件路径（相对当前笔记），渲染为只读 SVG。适合 drawio 那种自由摆放的说明性示意图，
+            画好后从白板页保存为 <b>.excalidraw</b> 即可在此嵌入。
+          </p>
+          <pre class="manual-code">```excalidraw
+./assets/architecture.excalidraw
+```</pre>
+          <p class="p">
+            下方会显示「Excalidraw 白板」说明条与「在其他窗口打开」按钮，点它会跳到白板页继续编辑。
+            嵌入块是静态 SVG，所以导出和打印都不会变形。
+          </p>
+
+          <h3 class="h3">4. 说明性动画</h3>
+          <p class="p">
+            动画不用新语法，用已有的 <b>Python Cell</b> 即可，托管环境默认已装好所需库：
+          </p>
+          <ul class="manual-ul">
+            <li><b>manim</b>：数学 / 流程演示动画，输出 mp4，结果直接显示在 Cell 下方。</li>
+            <li><b>matplotlib + FuncAnimation</b>：随时间变化的数据动图，支持导出 mp4 或内联帧动画。</li>
+            <li><b>plotly</b>：交互式图表，在隔离 iframe 里运行，可缩放、可悬停。</li>
+          </ul>
+          <p class="p">
+            写一个 <b>```python</b> 围栏，点「运行」或「运行并写回」；输出会以模块形式挂在 Cell 下方，
+            需要长期保留时用「写回」把它固化进笔记。
+          </p>
+
+          <h3 class="h3">5. 导出与兼容</h3>
+          <ul class="manual-ul">
+            <li>导出 HTML / PDF 走与预览同源的渲染器，mermaid、MathJax、图表、白板都会一起导出。</li>
+            <li>图表数据文件不会被打包进导出的 HTML；分享时把数据文件或截图一起带上更稳妥。</li>
+            <li>围栏语法写错时只会让那一块显示错误提示，不影响同一篇笔记的其它内容。</li>
+          </ul>
         </section>
 
         <n-divider />
@@ -888,6 +1026,22 @@ onMounted(() => {
 .manual-ul li,
 .ol li {
   margin: 2px 0;
+}
+
+/* 围栏示例：展示 ```chart / ```excalidraw 这类会「吃掉反引号」的语法。
+   必须用 pre 而不是普通段落，否则反引号会被当成行内代码分隔符。 */
+.manual-code {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 8px;
+  background: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-primary);
+  font-size: 12.5px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
 }
 
 /* 查询语法示例行。.manual 整体已经是等宽字体，这里只补一个可读的框，

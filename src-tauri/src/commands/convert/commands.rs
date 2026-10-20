@@ -11,6 +11,8 @@ use super::queue::ConversionQueue;
 use super::task_store::{self, ConversionTask, NewConversionTask};
 
 /// 入队请求。engine 取值：auto | fast | marker | mineru | anydoc（默认 auto）。
+///
+/// 从 `doc_reader` 的「导入时转换」复用同一套入队契约，故为 crate 可见。
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnqueueRequest {

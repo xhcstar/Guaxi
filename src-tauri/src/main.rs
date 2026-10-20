@@ -526,6 +526,11 @@ async fn main() {
             commands::pdf_reader::pdf_delete_highlight,
             commands::pdf_reader::pdf_page_highlights,
             commands::pdf_reader::pdf_save,
+            // 文档阅读器与「打开文件」分流（纯新增命令，不影响既有打开/转换链路）
+            commands::doc_reader::sniff_file_kind,
+            commands::doc_reader::read_document_for_reader,
+            commands::doc_reader::read_spreadsheet,
+            commands::doc_reader::convert_document_to_markdown,
             commands::synctex::synctex_forward,
             commands::synctex::synctex_inverse,
             commands::taskmanager::task_get_config,

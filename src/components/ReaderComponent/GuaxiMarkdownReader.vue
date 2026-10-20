@@ -325,6 +325,7 @@ import { openUrl } from '@tauri-apps/plugin-opener';
 import { storeToRefs } from 'pinia'
 import { repoStore } from '../../stores/repoStore'
 import { renderMarkdown, addCopyButtons, addMediaViewerButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
+import { renderChartEmbeds } from '../GuaxiMarkdownRender/guaxiChartEmbeds'
 import { maskPythonCellBlocksForMarkdown } from '../HomeViewComponent/utils/guaxiPythonCellSyntax'
 import { NCard, NButton, NIcon, NText, NModal, NSelect, useMessage, NDropdown } from 'naive-ui'
 import MarkdownIt from 'markdown-it'
@@ -1080,6 +1081,12 @@ async function convertMarkdownToLines(content, options = {}) {
       if (markdownContainer.value) {
         addCopyButtons(markdownContainer.value, { theme });
         addMediaViewerButtons(markdownContainer.value, { theme });
+        // 只渲染待处理的内嵌块，幂等；渲染失败只影响那一块。
+        try {
+          renderChartEmbeds(markdownContainer.value);
+        } catch (error) {
+          logger?.warn?.('[MarkdownReader] chart embeds failed', error);
+        }
       }
     });
 
@@ -1112,6 +1119,9 @@ async function convertMarkdownToLines(content, options = {}) {
           'span.katex-inline', 'div.mermaid', 'svg.mermaid',
           'mjx-container', 'mjx-math', 'mjx-assistive-mml',
           'div.hljs', 'code.hljs',
+          // 内嵌图表 / 白板：必须整块保留，否则逐行拆分会把占位容器拆散，
+          // 主线程就找不到完整的 data-chart-source 了。
+          'div.guaxi-chart-block', 'div.guaxi-excalidraw-embed',
           '[class^="hljs-"]', '[class*=" hljs-"]'];
 
         if (keepWholeTags.some(tag => node.matches(tag))) {
@@ -1233,7 +1243,10 @@ function shouldSkipTranslation(node) {
     // 3. 图表相关元素
     if (node.classList && (
       node.classList.contains('mermaid') ||
-      (node.tagName === 'SVG' && node.classList.contains('mermaid'))
+      (node.tagName === 'SVG' && node.classList.contains('mermaid')) ||
+      // 内嵌图表 / 白板同样不参与翻译与逐段切分。
+      node.classList.contains('guaxi-chart-block') ||
+      node.classList.contains('guaxi-excalidraw-embed')
     )) {
       return true;
     }

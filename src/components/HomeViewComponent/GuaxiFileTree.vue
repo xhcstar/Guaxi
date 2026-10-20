@@ -94,9 +94,12 @@
           <div class="repo-actions">
             <n-tooltip trigger="hover">
               <template #trigger>
-                <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="handleImportMarkdownFile(activeRepoPathItem)">
-                  <n-icon :component="DownloadOutline" size="16" />
-                </n-icon-wrapper>
+                <n-dropdown trigger="click" :options="importMenuOptions" placement="bottom-start"
+                  @select="(key) => handleImportMarkdownFile(activeRepoPathItem, key)">
+                  <n-icon-wrapper :size="22" :border-radius="4" class="action-icon">
+                    <n-icon :component="DownloadOutline" size="16" />
+                  </n-icon-wrapper>
+                </n-dropdown>
               </template>
               {{ fileTreeShortcutTooltip('导入文件', 'fileTreeImportFile') }}
             </n-tooltip>
@@ -171,9 +174,12 @@
               <div class="repo-actions">
                 <n-tooltip trigger="hover">
                   <template #trigger>
-                    <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="handleImportMarkdownFile(path)">
-                      <n-icon :component="DownloadOutline" size="16" />
-                    </n-icon-wrapper>
+                    <n-dropdown trigger="click" :options="importMenuOptions" placement="bottom-start"
+                      @select="(key) => handleImportMarkdownFile(path, key)">
+                      <n-icon-wrapper :size="22" :border-radius="4" class="action-icon">
+                        <n-icon :component="DownloadOutline" size="16" />
+                      </n-icon-wrapper>
+                    </n-dropdown>
                   </template>
                   {{ fileTreeShortcutTooltip('导入文件', 'fileTreeImportFile') }}
                 </n-tooltip>
@@ -228,9 +234,12 @@
           <div class="repo-actions">
             <n-tooltip trigger="hover">
               <template #trigger>
-                <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="taskCatImport(activeTaskCat)">
-                  <n-icon :component="DownloadOutline" size="16" />
-                </n-icon-wrapper>
+                <n-dropdown trigger="click" :options="importMenuOptions" placement="bottom-start"
+                  @select="(key) => taskCatImport(activeTaskCat, key)">
+                  <n-icon-wrapper :size="22" :border-radius="4" class="action-icon">
+                    <n-icon :component="DownloadOutline" size="16" />
+                  </n-icon-wrapper>
+                </n-dropdown>
               </template>
               {{ fileTreeShortcutTooltip('导入文件', 'fileTreeImportFile') }}
             </n-tooltip>
@@ -294,9 +303,12 @@
                 <div class="repo-actions">
                   <n-tooltip trigger="hover">
                     <template #trigger>
-                      <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="taskCatImport(cat.key)">
-                        <n-icon :component="DownloadOutline" size="16" />
-                      </n-icon-wrapper>
+                      <n-dropdown trigger="click" :options="importMenuOptions" placement="bottom-start"
+                        @select="(key) => taskCatImport(cat.key, key)">
+                        <n-icon-wrapper :size="22" :border-radius="4" class="action-icon">
+                          <n-icon :component="DownloadOutline" size="16" />
+                        </n-icon-wrapper>
+                      </n-dropdown>
                     </template>
                     {{ fileTreeShortcutTooltip('导入文件', 'fileTreeImportFile') }}
                   </n-tooltip>
@@ -344,9 +356,12 @@
           <div class="repo-actions">
             <n-tooltip trigger="hover">
               <template #trigger>
-                <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="plainHeaderImport">
-                  <n-icon :component="DownloadOutline" size="16" />
-                </n-icon-wrapper>
+                <n-dropdown trigger="click" :options="importMenuOptions" placement="bottom-start"
+                  @select="(key) => plainHeaderImport(key)">
+                  <n-icon-wrapper :size="22" :border-radius="4" class="action-icon">
+                    <n-icon :component="DownloadOutline" size="16" />
+                  </n-icon-wrapper>
+                </n-dropdown>
               </template>
               {{ fileTreeShortcutTooltip('导入文件', 'fileTreeImportFile') }}
             </n-tooltip>
@@ -478,6 +493,8 @@ import { createLogger } from '../../utils/logger'
 import { NIcon, useMessage, NModal, NForm, NFormItem, NInput, NButton, NSpace } from 'naive-ui'
 import { DocumentTextOutline, FolderOutline, AddOutline, TrashOutline, CreateOutline, MoveOutline, FolderOpenOutline, GlobeOutline, SettingsOutline, GitBranchOutline, DownloadOutline, FolderOpenOutline as OpenIcon, DocumentOutline, SwapHorizontalOutline, LibraryOutline, TimeOutline, ListOutline, CheckboxOutline, CopyOutline, DuplicateOutline, BrowsersOutline, GitCompareOutline } from '@vicons/ionicons5'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
+// 阅读器标签登记表（纯增量）：非文本文件打开时登记，文本链路不查它。
+import { useReaderTabStore } from '../../stores/readerTabStore'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore';
 import GuaxiVirtualFileTree from './GuaxiVirtualFileTree.vue';
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -639,6 +656,7 @@ const isPandocUnsupportedImport = (p) => {
 
 // 引入 Pinia store
 const fileTreeStore = useFileTreeStore()
+const readerTabStore = useReaderTabStore()
 const knowledgeBaseStore = useKnowledgeBaseStore()
 const settingsStore = useSettingsStore()
 const editorBridgeStore = useEditorBridgeStore()
@@ -733,6 +751,29 @@ const openMenuOptions = [
   { label: '打开文件', key: 'openFile', icon: () => h(NIcon, null, { default: () => h(DocumentOutline) }) },
   { label: '打开目录', key: 'openDir', icon: () => h(NIcon, null, { default: () => h(FolderOpenOutline) }) },
 ]
+
+/**
+ * 「导入文件」下拉：两种用户意图。
+ *
+ * - 原样导入：与改造前行为一致（直接拷贝原始文件；Markdown 直接入库）；
+ * - 转换为 Markdown：交给后端引擎路由（PDF/OCR/旧版 Office/电子书/表格都能处理），
+ *   产物是同名 .md，原始文件不会被改动。
+ *
+ * 入口图标与快捷键不变，只是把一次点击变成一次选择；默认项仍是「原样导入」。
+ */
+const IMPORT_MENU_OPTIONS = [
+  {
+    label: '原样导入（保留原格式）',
+    key: 'importFileCopy',
+    icon: () => h(NIcon, null, { default: () => h(DownloadOutline) }),
+  },
+  {
+    label: '转换为 Markdown 后导入',
+    key: 'importFileConvert',
+    icon: () => h(NIcon, null, { default: () => h(DocumentTextOutline) }),
+  },
+]
+const importMenuOptions = IMPORT_MENU_OPTIONS
 
 const activeRepoPathItem = computed(() => {
   const list = Array.isArray(fileTreeStore.repopathlist) ? fileTreeStore.repopathlist : []
@@ -1221,7 +1262,18 @@ const guessImportTargetDir = (repoPath) => {
   return normalizePath(parentPath);
 };
 
-const handleImportMarkdownFile = async (repoPath) => {
+/**
+ * 知识库导入。
+ *
+ * @param {string} repoPath 知识库根（用于定位目标目录）
+ * @param {'copy'|'convert'} action
+ *   copy —— 原样导入（Markdown 直接入库；其它二进制原样拷贝）；
+ *   convert —— 转换为 Markdown 后入库（引擎路由在 Rust 侧完成）。
+ *
+ * copy 分支保持与改造前一致的行为，新能力只落在 convert 分支，
+ * 因此既有用户的导入结果不会发生变化。
+ */
+const handleImportMarkdownFile = async (repoPath, action = 'copy') => {
   const targetDir = guessImportTargetDir(repoPath);
   if (!targetDir) {
     message.warning('未找到导入目标目录');
@@ -1243,6 +1295,22 @@ const handleImportMarkdownFile = async (repoPath) => {
 
     const dirNodes = await invoke('get_file_tree', { path: targetDir });
     const existingNames = Array.isArray(dirNodes) ? dirNodes.map((n) => n?.name).filter(Boolean) : [];
+
+    if (action === 'convert') {
+      await importAsConvertedMarkdown(srcPath, fileName, targetDir, existingNames);
+      return;
+    }
+
+    if (action === 'copy' && !isMarkdownFilePath(srcPath)) {
+      // 原样导入：直接拷贝原始文件（二进制/文档保持原格式，不改内容）。
+      const uniqueName = makeUniqueFileName(existingNames, fileName);
+      const dstPath = normalizePath(`${targetDir}/${uniqueName}`);
+      await invoke('copy_path', { sourcePath: srcPath, destinationPath: dstPath });
+      await refreshDirectory(targetDir);
+      logger.info('[ImportFile] raw copy import success', { srcPath, dstPath });
+      message.success('已原样导入');
+      return;
+    }
 
     if (isMarkdownFilePath(srcPath)) {
       // Markdown 文件：保持原有“读内容 → 写入目标目录”的直接入库行为。
@@ -1299,6 +1367,56 @@ const handleImportMarkdownFile = async (repoPath) => {
     logger.error('[ImportFile] failed:', error);
     message.error(`导入失败: ${error.message || error}`);
     await refreshDirectory(targetDir);
+  }
+};
+
+/**
+ * 「转换为 Markdown 后导入」。
+ *
+ * 统一走 `convert_document_to_markdown`，覆盖 pandoc 读不了的格式
+ * （PDF、图片 OCR、旧版 Office、电子书、表格）；引擎路由在 Rust 侧完成。
+ */
+const importAsConvertedMarkdown = async (srcPath, fileName, targetDir, existingNames) => {
+  const desiredMdName = `${stemname(fileName)}.md`;
+  const uniqueMdName = makeUniqueFileName(existingNames, desiredMdName);
+  const dstPath = normalizePath(`${targetDir}/${uniqueMdName}`);
+  const loading = message.loading('正在转换为 Markdown…', { duration: 0 });
+
+  try {
+    const result = await invoke('convert_document_to_markdown', {
+      path: srcPath,
+      quality: 'fast',
+      mediaRoot: null,
+    });
+    const markdown = String(result?.markdown || '');
+    if (!markdown.trim()) throw new Error('转换结果为空');
+
+    await invoke('write_file_content', { path: dstPath, content: markdown });
+
+    // 转换引擎若抽出了图片，整体搬到 md 同级的 `<stem>_assets`，保证相对引用可用。
+    const mediaDir = String(result?.mediaDir || '');
+    if (mediaDir) {
+      const dstMediaDir = normalizePath(`${targetDir}/${stemname(uniqueMdName)}_assets`);
+      try {
+        await invoke('copy_path', { sourcePath: mediaDir, destinationPath: dstMediaDir });
+      } catch (mediaError) {
+        logger.warn('[ImportFile] copy converted media failed', {
+          mediaDir,
+          dstMediaDir,
+          error: String(mediaError?.message || mediaError),
+        });
+      }
+    }
+
+    await refreshDirectory(targetDir);
+    logger.info('[ImportFile] convert import success', {
+      srcPath,
+      dstPath,
+      engine: result?.engine || '',
+    });
+    message.success(`已转换为 Markdown 并导入${result?.engine ? `（${result.engine}）` : ''}`);
+  } finally {
+    loading?.destroy?.();
   }
 };
 
@@ -1537,6 +1655,66 @@ const sortFileTree = (tree) => {
 // ─────────── 虚拟文件树事件处理 ───────────
 
 // 打开文件(虚拟树 open-file 事件):等价旧 handleSelect 的文件分支
+/**
+ * 统一的「打开一个文件」入口（纯增量改造）。
+ *
+ * 对**文本文件**，这里走的是与改造前完全相同的路径（fetchFileContent → openFileInTab），
+ * 一次额外的 IPC 都不会发生 —— openTargetKind 先做纯前端的扩展名判定，
+ * 只有非文本才进入阅读器分支。
+ *
+ * 非文本文件（PDF / Office / 电子书 / 表格 / 图片 / 音视频 / HTML / 二进制）：
+ *   1. 在 readerTabStore 登记为一个「阅读器标签」；
+ *   2. 仍用 openFileInTab 建标签（内容是占位文本 + unsupported 标记）；
+ *   3. GuaxiEditor 里的 ReaderPane 检测到登记后，覆盖在编辑区上显示真实内容。
+ *
+ * 为什么仍然建标签：这样标签栏、分屏、关闭、拖动排序等既有交互全部照旧，
+ * 用户不会遇到「打开了文件却没有标签」的新状态。
+ */
+const openFileByKind = async (path, { region = '', onMissing = null } = {}) => {
+  const normalized = normalizePath(path)
+  if (!normalized) return false
+
+  let target = null
+  try {
+    target = await readerTabStore.openReader(normalized, 'auto')
+  } catch (error) {
+    logger.warn('[OpenFile] reader routing failed, fallback to text path', {
+      path: normalized,
+      error: String(error?.message || error),
+    })
+    target = null
+  }
+
+  if (target && target.reader !== 'text') {
+    const placeholder = `该文件由内嵌阅读器显示（${String(target.reader)}）。
+
+路径：${normalized}`
+    await fileTreeStore.openFileInTab(normalized, placeholder, {
+      unsupported: true,
+      ...(region ? { region } : {}),
+    })
+    logger.info('[OpenFile] opened via reader', {
+      path: normalized,
+      reader: target.reader,
+      kind: target.kind,
+    })
+    return true
+  }
+
+  // ── 文本路径：与原实现逐行一致 ──
+  const res = await fileTreeStore.fetchFileContent(normalized)
+  if (!res?.ok) {
+    message.warning('文件不存在或已被删除')
+    if (typeof onMissing === 'function') await onMissing(normalized)
+    return false
+  }
+  await fileTreeStore.openFileInTab(normalized, res.content, {
+    unsupported: !!res.unsupported,
+    ...(region ? { region } : {}),
+  })
+  return true
+}
+
 const handleOpenFile = async (node) => {
   if (!node) return
   const normalizedKey = normalizePath(node.id)
@@ -1555,16 +1733,8 @@ const handleOpenFile = async (node) => {
   if (editingNode.value || node.isNew) return
 
   try {
-    const res = await fileTreeStore.fetchFileContent(node.id)
-    if (res?.ok) {
-      await fileTreeStore.openFileInTab(node.id, res.content, { unsupported: !!res.unsupported })
-      if (res.unsupported) {
-        message.warning('不支持打开该文件类型（仅支持文本/Markdown）')
-      }
-    } else {
-      message.warning('文件不存在或已被删除')
-      await handleFileRemoved(node.id)
-    }
+    // 文本文件不存在时沿用旧行为：顺手把已消失的节点从树上摘掉。
+    await openFileByKind(node.id, { onMissing: (p) => handleFileRemoved(p) })
   } catch (error) {
     logger.error('处理文件选中时出错:', error)
   }
@@ -1599,13 +1769,8 @@ const openExternalFile = async () => {
     if (!picked) return
     const filePath = Array.isArray(picked) ? picked[0] : picked
     if (!filePath) return
-    const res = await fileTreeStore.fetchFileContent(filePath)
-    if (res?.ok) {
-      await fileTreeStore.openFileInTab(filePath, res.content, { unsupported: !!res.unsupported })
-      if (res.unsupported) message.warning('不支持打开该文件类型（仅支持文本/Markdown）')
-    } else {
-      message.error('无法打开该文件')
-    }
+    // 按真实类型分流：文本进 Monaco，其余进内嵌阅读器。
+    await openFileByKind(filePath)
   } catch (error) {
     logger.error('打开文件失败:', error)
     message.error('打开文件失败')
@@ -1775,12 +1940,7 @@ const handleTaskLoadChildren = async (node) => {
 const handleTaskOpenFile = async (node) => {
   if (!node || node.is_directory) return
   try {
-    const res = await fileTreeStore.fetchFileContent(node.id)
-    if (res?.ok) {
-      await fileTreeStore.openFileInTab(node.id, res.content, { unsupported: !!res.unsupported })
-    } else {
-      message.warning('文件不存在或已被删除')
-    }
+    await openFileByKind(node.id)
   } catch (error) {
     logger.error('打开任务文件失败:', error)
   }
@@ -2094,10 +2254,61 @@ const genAddFolder = async (mode, dir) => {
   await beginInlineCreate({ mode, parentDir: dir, isDirectory: true })
 }
 
-const genImportFile = async (mode, dir) => {
+/**
+ * 文件 / 任务模式的导入。
+ *
+ * @param {'copy'|'convert'} action
+ *   copy（默认）—— 原样拷贝，行为与改造前完全一致；
+ *   convert —— 逐个转换为 Markdown 后入库（PDF/OCR/旧版 Office/电子书/表格都能处理）。
+ *
+ * 默认值是 'copy'，所以右键菜单与快捷键等旧入口不传 action 时仍走原路径。
+ */
+const genImportFile = async (mode, dir, action = 'copy') => {
   const picked = await open({ multiple: true, title: '导入文件' })
   if (!picked) return
   const list = Array.isArray(picked) ? picked : [picked]
+
+  if (action === 'convert') {
+    let ok = 0
+    let failed = 0
+    const loading = message.loading('正在转换为 Markdown…', { duration: 0 })
+    try {
+      const dirNodes = await invoke('get_file_tree', { path: dir }).catch(() => [])
+      const existing = new Set(
+        (Array.isArray(dirNodes) ? dirNodes : []).map((n) => String(n?.name || '')).filter(Boolean)
+      )
+      for (const src of list) {
+        const name = String(src).split(/[\\/]/).filter(Boolean).pop()
+        if (!name) continue
+        try {
+          const result = await invoke('convert_document_to_markdown', {
+            path: src,
+            quality: 'fast',
+            mediaRoot: null,
+          })
+          const markdown = String(result?.markdown || '')
+          if (!markdown.trim()) throw new Error('转换结果为空')
+          const base = /\.(md|markdown)$/i.test(name) ? name : `${stemname(name)}.md`
+          const unique = makeUniqueFileName(Array.from(existing), base)
+          existing.add(unique)
+          const dst = normalizePath(`${dir}/${unique}`)
+          await invoke('write_file_content', { path: dst, content: markdown })
+          ok += 1
+        } catch (e) {
+          failed += 1
+          logger.error('转换导入失败:', { src, error: String(e?.message || e) })
+        }
+      }
+    } finally {
+      loading?.destroy?.()
+    }
+    await refreshModeDir(mode, dir)
+    if (failed) message.warning(`已转换导入 ${ok} 个文件，${failed} 个失败`)
+    else message.success(`已转换导入 ${ok} 个文件`)
+    return
+  }
+
+  // ── 原样导入：与改造前逐行一致 ──
   let ok = 0
   for (const src of list) {
     const name = String(src).split(/[\\/]/).filter(Boolean).pop()
@@ -2173,6 +2384,9 @@ const remapOpenTabsForPathChange = (oldPath, newPath, nextName = '') => {
     // 活跃文件未受影响时也要刷新一次，让 selectedFile 与（可能已更新的）标签列表一致。
     fileTreeStore.setActiveTab(fileTreeStore.activeTab)
   }
+
+  // 阅读器登记表也要跟着搬，否则重命名后标签仍指向旧路径、覆盖层就消失了。
+  readerTabStore.remapPath(source, dest)
 }
 
 /** 删除后关闭其下所有标签，避免自动保存把已删除的文件重新写回磁盘。 */
@@ -2180,6 +2394,8 @@ const dropTabsAfterDelete = (path) => {
   const target = normalizePath(path)
   if (!target) return
   fileTreeStore.dropTabsUnderPath(target)
+  // 同步清理阅读器登记，避免路径复用后旧登记串到新文件上。
+  readerTabStore.closeUnderPath(target)
 }
 
 const commitInlineRename = async () => {
@@ -2339,7 +2555,12 @@ const genMenuOptions = computed(() => {
   const base = [
     { label: '新建文件', key: 'addFile', icon: () => h(NIcon, null, { default: () => h(AddOutline) }) },
     { label: '新建文件夹', key: 'addFolder', icon: () => h(NIcon, null, { default: () => h(FolderOpenOutline) }) },
-    { label: '导入文件', key: 'importFile', icon: () => h(NIcon, null, { default: () => h(DownloadOutline) }) },
+    {
+      label: '导入文件',
+      key: 'importFile',
+      icon: () => h(NIcon, null, { default: () => h(DownloadOutline) }),
+      children: IMPORT_MENU_OPTIONS,
+    },
   ]
   if (node && !isBlank) {
     base.push(
@@ -2375,7 +2596,9 @@ const handleGenMenuSelect = async (key) => {
   try {
     if (key === 'addFile') await genAddFile(mode, dir)
     else if (key === 'addFolder') await genAddFolder(mode, dir)
-    else if (key === 'importFile') await genImportFile(mode, dir)
+    else if (key === 'importFile') await genImportFile(mode, dir, 'copy')
+    else if (key === 'importFileCopy') await genImportFile(mode, dir, 'copy')
+    else if (key === 'importFileConvert') await genImportFile(mode, dir, 'convert')
     else if (key === 'rename' && node) await genRename(mode, node)
     else if (key === 'delete' && node) await genDelete(mode, node)
     else if (key === 'openInExplorer' && node) await genOpenExplorer(node)
@@ -2389,10 +2612,10 @@ const handleGenMenuSelect = async (key) => {
 // 头部动作图标：plain 作用于外部目录根；task 每个分类作用于该分类根目录
 const plainHeaderAddFile = () => genAddFile('plain', normalizePath(externalDir.value))
 const plainHeaderAddFolder = () => genAddFolder('plain', normalizePath(externalDir.value))
-const plainHeaderImport = () => genImportFile('plain', normalizePath(externalDir.value))
+const plainHeaderImport = (action = 'copy') => genImportFile('plain', normalizePath(externalDir.value), action)
 const taskCatAddFile = (key) => genAddFile('task', catPathOf(key))
 const taskCatAddFolder = (key) => genAddFolder('task', catPathOf(key))
-const taskCatImport = (key) => genImportFile('task', catPathOf(key))
+const taskCatImport = (key, action = 'copy') => genImportFile('task', catPathOf(key), action)
 
 const runFileTreeToolbarShortcut = async (action) => {
   logger.info('[FileTreeShortcut] toolbar shortcut requested', {
@@ -2700,16 +2923,8 @@ const copyNodePath = async (node, { relative = false } = {}) => {
 const openNodeToSide = async (node) => {
   if (!node?.id || node.is_directory) return
   try {
-    const res = await fileTreeStore.fetchFileContent(node.id)
-    if (!res?.ok) {
-      message.warning('文件不存在或已被删除')
-      return
-    }
-    await fileTreeStore.openFileInTab(node.id, res.content, {
-      unsupported: !!res.unsupported,
-      region: 'right',
-    })
-    if (res.unsupported) message.warning('不支持打开该文件类型（仅支持文本/Markdown）')
+    // 与主打开路径同源：非文本文件在右侧 pane 里同样交给 ReaderPane。
+    await openFileByKind(node.id, { region: 'right' })
   } catch (error) {
     logger.error('在一侧打开文件失败:', error)
     message.error('在一侧打开失败')
