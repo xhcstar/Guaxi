@@ -51,7 +51,14 @@
       :kind="target.kind"
     />
 
-    <!-- 幻灯片：pptx / ppt / odp 统一走转换后的只读 Markdown（保留标题层级与要点）。 -->
+    <!-- 幻灯片：pptx 走原生版式预览（@vue-office/pptx，离线、按需加载）；
+         老格式 .ppt / .odp 没有对应渲染内核，退回转换后的只读 Markdown 大纲。 -->
+    <DocPptxReader
+      v-else-if="target.reader === 'slides' && target.kind === 'pptx'"
+      :path="path"
+      :name="fileName"
+      :kind="target.kind"
+    />
     <DocMarkdownReader
       v-else-if="target.reader === 'slides'"
       :path="path"
@@ -114,6 +121,7 @@ import DocSpreadsheetReader from '../ReaderComponent/readers/DocSpreadsheetReade
 import DocMarkdownReader from '../ReaderComponent/readers/DocMarkdownReader.vue'
 import DocHtmlReader from '../ReaderComponent/readers/DocHtmlReader.vue'
 import DocMediaReader from '../ReaderComponent/readers/DocMediaReader.vue'
+import DocPptxReader from '../ReaderComponent/readers/DocPptxReader.vue'
 
 const logger = createLogger('ReaderPane')
 

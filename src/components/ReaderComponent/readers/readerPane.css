@@ -359,3 +359,35 @@
   border: 0;
   background: #fff;
 }
+
+/* ── Word（docx-preview）正文容器 ─────────────────────── */
+/* docx-preview 把文档样式渲染成 <style> 注入 <head> 后，正文容器只需负责滚动与居中；
+   这里显式给一个稳定宽度，避免 inWrapper 生成的 .docx-wrapper 在窄面板里塌缩。 */
+.gdr-docx-body {
+  overflow: auto;
+  background: var(--guaxi-content-bg, #fff);
+}
+
+.gdr-docx-body .gdr-docx {
+  min-width: min-content;
+}
+
+/* ── PPTX 版式预览 ───────────────────────────────────── */
+/* @vue-office/pptx 内部按 100% 宽高铺排，容器必须有确定尺寸与独立滚动。 */
+.gdr-pptx-host {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  background: #f0f0f0;
+}
+
+:root[data-guaxi-theme='dark'] .gdr-pptx-host,
+.dark .gdr-pptx-host {
+  background: #1e1e1e;
+}
+
+/* 版式页之间的留白与阴影，让多页 PPT 看起来是幻灯片而不是流水账。 */
+.gdr-pptx-host :deep(.pptx-preview-slide-wrapper) {
+  margin: 16px auto;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+}

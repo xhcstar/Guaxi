@@ -10,12 +10,21 @@
       <button class="guaxi-doc-reader__btn" title="重置缩放" :disabled="loading || !!errorText" @click="zoom = 1">100%</button>
     </div>
 
-    <div ref="bodyRef" class="guaxi-doc-reader__body">
+    <div ref="bodyRef" class="guaxi-doc-reader__body gdr-docx-body">
       <div v-if="loading" class="guaxi-doc-reader__center">正在解析文档…</div>
       <div v-else-if="errorText" class="guaxi-doc-reader__center">
         <div class="guaxi-doc-reader__error">{{ errorText }}</div>
       </div>
       <div v-show="!loading && !errorText" class="gdr-docx" :style="zoomStyle">
+        <!--
+          正文与样式分开放：
+          docx-preview 会把 Word 里定义的样式（字号、颜色、缩进、编号）写成 <style> 标签，
+          第三个参数 styleContainer 决定这些样式插到哪。以前传 undefined -> 它默认插进
+          bodyContainer，也就是正文容器自身——一旦外部容器有 overflow/transform，
+          这些 <style> 就随容器一起被裁剪/失效，页面看上去「完全没有格式」。
+
+          现在把样式插到页面 <head>：样式与文档结构分离，缩放/滚动都不影响它生效。
+        -->
         <div ref="hostRef" />
       </div>
     </div>
@@ -81,7 +90,10 @@ const loadDocument = async () => {
     if (!host) throw new Error('预览容器尚未就绪')
     host.innerHTML = ''
 
-    await renderAsync(new Uint8Array(bytes), host, undefined, {
+    // 样式单独挂到 <head>，见模板里的说明。
+    const styleHost = document.head
+
+    await renderAsync(new Uint8Array(bytes), host, styleHost, {
       inWrapper: true,
       ignoreWidth: false,
       ignoreHeight: false,

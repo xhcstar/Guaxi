@@ -92,10 +92,10 @@
             {{ getRepoName(activeRepoPathItem) }}
           </div>
           <div class="repo-actions">
-            <n-dropdown trigger="click" :options="importMenuOptions" placement="bottom-start" @select="(key) => handleImportMarkdownFile(activeRepoPathItem, key)">
+            <n-dropdown trigger="click" :options="importMenuOptions" placement="bottom-start" @click.stop @select="(key) => handleImportMarkdownFile(activeRepoPathItem, key)">
               <n-tooltip trigger="hover">
                 <template #trigger>
-                  <n-icon-wrapper :size="22" :border-radius="4" class="action-icon">
+                  <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop>
                     <n-icon :component="DownloadOutline" size="16" />
                   </n-icon-wrapper>
                 </template>
@@ -171,10 +171,10 @@
                 {{ getRepoName(path) }}
               </div>
               <div class="repo-actions">
-                <n-dropdown trigger="click" :options="importMenuOptions" placement="bottom-start" @select="(key) => handleImportMarkdownFile(path, key)">
+                <n-dropdown trigger="click" :options="importMenuOptions" placement="bottom-start" @click.stop @select="(key) => handleImportMarkdownFile(path, key)">
                   <n-tooltip trigger="hover">
                     <template #trigger>
-                      <n-icon-wrapper :size="22" :border-radius="4" class="action-icon">
+                      <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop>
                         <n-icon :component="DownloadOutline" size="16" />
                       </n-icon-wrapper>
                     </template>
@@ -230,10 +230,10 @@
             {{ catZhOf(activeTaskCat) }}
           </div>
           <div class="repo-actions">
-            <n-dropdown trigger="click" :options="importMenuOptions" placement="bottom-start" @select="(key) => taskCatImport(activeTaskCat, key)">
+            <n-dropdown trigger="click" :options="importMenuOptions" placement="bottom-start" @click.stop @select="(key) => taskCatImport(activeTaskCat, key)">
               <n-tooltip trigger="hover">
                 <template #trigger>
-                  <n-icon-wrapper :size="22" :border-radius="4" class="action-icon">
+                  <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop>
                     <n-icon :component="DownloadOutline" size="16" />
                   </n-icon-wrapper>
                 </template>
@@ -298,10 +298,10 @@
                   {{ cat.zh }}
                 </div>
                 <div class="repo-actions">
-                  <n-dropdown trigger="click" :options="importMenuOptions" placement="bottom-start" @select="(key) => taskCatImport(cat.key, key)">
+                  <n-dropdown trigger="click" :options="importMenuOptions" placement="bottom-start" @click.stop @select="(key) => taskCatImport(cat.key, key)">
                     <n-tooltip trigger="hover">
                       <template #trigger>
-                        <n-icon-wrapper :size="22" :border-radius="4" class="action-icon">
+                        <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop>
                           <n-icon :component="DownloadOutline" size="16" />
                         </n-icon-wrapper>
                       </template>
@@ -350,10 +350,10 @@
             {{ getDirDisplayName(externalDir) }}
           </div>
           <div class="repo-actions">
-            <n-dropdown trigger="click" :options="importMenuOptions" placement="bottom-start" @select="(key) => plainHeaderImport(key)">
+            <n-dropdown trigger="click" :options="importMenuOptions" placement="bottom-start" @click.stop @select="(key) => plainHeaderImport(key)">
               <n-tooltip trigger="hover">
                 <template #trigger>
-                  <n-icon-wrapper :size="22" :border-radius="4" class="action-icon">
+                  <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop>
                     <n-icon :component="DownloadOutline" size="16" />
                   </n-icon-wrapper>
                 </template>

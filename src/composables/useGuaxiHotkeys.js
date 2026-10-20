@@ -25,6 +25,9 @@ export const GUAXI_SHORTCUTS = Object.freeze({
   captureScreenshot: { ctrl: true, alt: true, code: 'KeyX', label: 'Ctrl+Alt+X' },
   openTemplateManager: { ctrl: true, alt: true, code: 'KeyT', label: 'Ctrl+Alt+T' },
   openResourceRepoManager: { ctrl: true, alt: true, code: 'KeyR', label: 'Ctrl+Alt+R' },
+  // 工具栏 / 面包屑显隐。选 Ctrl+Alt+G（Guide/Gutter）是刻意的：
+  // Ctrl+Alt+字母已被主界面图标占满一族，G 是这套规则里唯一还空着、且语义贴切的一个。
+  toggleEditorChrome: { ctrl: true, alt: true, code: 'KeyG', label: 'Ctrl+Alt+G' },
 
   editorExportPdf: { ctrl: true, alt: true, code: 'KeyE', label: 'Ctrl+Alt+E' },
   editorExportDocx: { ctrl: true, alt: true, code: 'KeyW', label: 'Ctrl+Alt+W' },

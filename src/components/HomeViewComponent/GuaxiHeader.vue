@@ -29,7 +29,7 @@
             @click="toggleEditorChrome"
           />
         </template>
-        {{ isEditorChromeShown ? '隐藏工具栏与面包屑' : '显示工具栏与面包屑' }}
+        {{ headerShortcutTooltip(isEditorChromeShown ? '隐藏工具栏与面包屑' : '显示工具栏与面包屑', 'toggleEditorChrome') }}
       </n-tooltip>
     </div>
 
@@ -987,6 +987,12 @@ useGuaxiHotkeys([
     label: '知识库资源管理',
     shortcut: GUAXI_SHORTCUTS.openResourceRepoManager,
     handler: openResourceRepoManager,
+  },
+  {
+    id: 'toggleEditorChrome',
+    label: '显示/隐藏工具栏与面包屑',
+    shortcut: GUAXI_SHORTCUTS.toggleEditorChrome,
+    handler: toggleEditorChrome,
   },
 ], {
   logger,
