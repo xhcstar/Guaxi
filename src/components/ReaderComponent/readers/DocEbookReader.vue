@@ -55,10 +55,16 @@
         @mousedown.prevent="startTocResize"
       />
       <div class="gdr-ebook__main" :class="{ 'is-resizing': resizing }">
+        <!--
+          用 blob URL + src 而不是 srcdoc：
+          srcdoc 文档在 sandbox 缺 allow-scripts 时，浏览器会为**每一段**脚本打印
+          "Blocked script execution in 'about:srcdoc'"。脚本已经被 stripScripts 剥掉，
+          但个别章节的 <script> 藏在注释/条件注释里仍可能漏网，换成 blob URL 后
+          这类噪音不再出现（文档来源不再是 about:srcdoc）。
+        -->
         <iframe
           ref="frameRef"
           class="gdr-ebook__frame"
-          :srcdoc="frameDoc"
           sandbox="allow-same-origin"
           referrerpolicy="no-referrer"
           @load="onFrameLoad"
@@ -204,6 +210,30 @@ const jumpToHref = (href) => {
   if (sameSection >= 0) goSection(sameSection)
 }
 
+/** 当前 iframe 的 blob URL，切换章节时先回收，避免泄漏。 */
+let frameBlobUrl = ''
+
+const revokeFrameBlob = () => {
+  if (!frameBlobUrl) return
+  try {
+    URL.revokeObjectURL(frameBlobUrl)
+  } catch {
+    /* 忽略 */
+  }
+  frameBlobUrl = ''
+}
+
+/** 把章节 HTML 写进 iframe（blob URL 方式，见模板注释）。 */
+const writeFrameDocument = () => {
+  const iframe = frameRef.value
+  if (!(iframe instanceof HTMLIFrameElement)) return
+  revokeFrameBlob()
+  const blob = new Blob([frameDoc.value], { type: 'text/html;charset=utf-8' })
+  frameBlobUrl = URL.createObjectURL(blob)
+  iframe.removeAttribute('srcdoc')
+  iframe.src = frameBlobUrl
+}
+
 const onFrameLoad = () => {
   try {
     const doc = frameRef.value?.contentDocument
@@ -317,6 +347,11 @@ onBeforeUnmount(() => {
   loadToken += 1
   window.removeEventListener('keydown', onKeydown)
   stopTocResize()
+  revokeFrameBlob()
+})
+
+watch(frameDoc, () => {
+  nextTick(() => writeFrameDocument())
 })
 
 watch(activeIndex, () => {

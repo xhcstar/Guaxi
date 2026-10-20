@@ -646,7 +646,10 @@ const canRemoveSelectedTemplate = computed(() => (
   && customTemplates.value.some((template) => template.id === selectedTemplateId.value)
 ))
 
-const renderedSourceHtml = computed(() => normalizeStandaloneHtml(renderResumeTemplate(sourceHtml.value)))
+// 预览专用：剥掉脚本后再交给 sandbox iframe，避免控制台刷 "Blocked script execution"。
+const renderedSourceHtml = computed(() =>
+  stripScriptsForPreview(normalizeStandaloneHtml(renderResumeTemplate(sourceHtml.value)))
+)
 
 const createId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`
 
@@ -1205,6 +1208,23 @@ function buildResumeArticleHtml() {
 function buildListHtml(lines, className = 'resume-list') {
   if (!lines.length) return ''
   return `<ul class="${className}">${lines.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>`
+}
+
+/**
+ * 预览用 HTML：剥掉 <script> 与内联事件。
+ *
+ * 预览 iframe 的 sandbox 只给 allow-same-origin、不给 allow-scripts，
+ * 浏览器会为每段脚本打印 "Blocked script execution in 'about:srcdoc'"，
+ * 简历模板里带点脚本就刷屏。预览本来也不需要执行脚本，直接剔除更干净。
+ *
+ * 注意：只影响**预览**；导出/保存仍走原始 sourceHtml，不会被这里改动。
+ */
+function stripScriptsForPreview(html) {
+  return String(html || '')
+    .replace(/<script[^>]*>[^]*?<\/script>/gi, '')
+    .replace(/<script[^>]*\/>/gi, '')
+    .replace(/\son[a-z]+\s*=\s*"[^"]*"/gi, '')
+    .replace(/\son[a-z]+\s*=\s*'[^']*'/gi, '')
 }
 
 function normalizeStandaloneHtml(html) {

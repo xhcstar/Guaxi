@@ -15,18 +15,22 @@
       <div v-else-if="errorText" class="guaxi-doc-reader__center">
         <div class="guaxi-doc-reader__error">{{ errorText }}</div>
       </div>
-      <div v-show="!loading && !errorText" class="gdr-docx" :style="zoomStyle">
-        <!--
-          正文与样式分开放：
-          docx-preview 会把 Word 里定义的样式（字号、颜色、缩进、编号）写成 <style> 标签，
-          第三个参数 styleContainer 决定这些样式插到哪。以前传 undefined -> 它默认插进
-          bodyContainer，也就是正文容器自身——一旦外部容器有 overflow/transform，
-          这些 <style> 就随容器一起被裁剪/失效，页面看上去「完全没有格式」。
+      <!--
+        正文与样式都放进 Shadow DOM。
 
-          现在把样式插到页面 <head>：样式与文档结构分离，缩放/滚动都不影响它生效。
-        -->
-        <div ref="hostRef" />
-      </div>
+        docx-preview 生成的是**无前缀的裸选择器**：`p.MsoNormal`、`.docx table td {}`，
+        甚至 `p { margin: 0 }` 这类全局标签规则。它们一旦注入页面 <head>，就会把整个
+        应用改形 —— 实测表现就是打开 Word 后主界面被一个巨大黑块覆盖。
+
+        Shadow DOM 让文档样式只能作用于宿主内部：既解决了「污染全局」，也解决了
+        「样式被外层布局裁剪导致没有格式」——正文与样式在同一棵影子树里。
+      -->
+      <div
+        ref="shadowHostRef"
+        v-show="!loading && !errorText"
+        class="gdr-docx"
+        :style="zoomStyle"
+      />
     </div>
   </div>
 </template>
@@ -46,8 +50,8 @@ const props = defineProps({
   kind: { type: String, default: 'docx' },
 })
 
-const hostRef = ref(null)
 const bodyRef = ref(null)
+const shadowHostRef = ref(null)
 const loading = ref(true)
 const errorText = ref('')
 const zoom = ref(1)
@@ -58,6 +62,8 @@ const zoomStyle = computed(() => ({
   width: `${100 / zoom.value}%`,
 }))
 
+/** 当前挂载的影子根；换文档/卸载时整体丢弃，不做增量清理。 */
+let shadowRoot = null
 let loadToken = 0
 
 const zoomBy = (factor) => {
@@ -65,11 +71,35 @@ const zoomBy = (factor) => {
 }
 
 /**
- * docx-preview 的 renderAsync 需要 ArrayBuffer / Uint8Array / Blob。
- * 后端 `read_word_file` 返回的是字节数组（既有命令，未改动）。
+ * 准备一个干净的 Shadow DOM 容器。
  *
- * 这里只支持 .docx（OOXML）。.doc / .rtf / .odt 由 ReaderPane 走「转换后只读 Markdown」分支，
- * 不会进到本组件。
+ * `mode: 'open'` 只影响能否从外部脚本访问影子树，样式隔离效果与 closed 相同。
+ * 选 open 是为了将来做文本选择/搜索时还能访问到内容。
+ */
+const ensureShadowRoot = () => {
+  const host = shadowHostRef.value
+  if (!host) return null
+  // 同一个宿主不能 attachShadow 两次：换文档时先清空旧影子树的内容。
+  if (!shadowRoot) {
+    shadowRoot = host.attachShadow({ mode: 'open' })
+  }
+  shadowRoot.innerHTML = ''
+
+  // 影子树里的基础排版兜底：docx-preview 默认样式假设宿主已提供白底与页面居中。
+  const base = document.createElement('style')
+  base.textContent = `
+    :host { display: block; }
+    .docx-wrapper { background: transparent; padding: 16px; }
+    .docx-wrapper > section.docx { margin: 0 auto 16px; }
+  `
+  shadowRoot.appendChild(base)
+  return shadowRoot
+}
+
+/**
+ * 加载并渲染 .docx。
+ *
+ * 只支持 OOXML（.doc / .rtf / .odt 由 ReaderPane 走「转换后只读 Markdown」分支）。
  */
 const loadDocument = async () => {
   const token = ++loadToken
@@ -86,14 +116,16 @@ const loadDocument = async () => {
     if (!bytes || !bytes.length) throw new Error('文件内容为空')
 
     await nextTick()
-    const host = hostRef.value
-    if (!host) throw new Error('预览容器尚未就绪')
-    host.innerHTML = ''
+    const root = ensureShadowRoot()
+    if (!root) throw new Error('预览容器尚未就绪')
 
-    // 样式单独挂到 <head>，见模板里的说明。
-    const styleHost = document.head
+    // 正文容器与样式容器都落在影子根里：任何一条样式都出不了这个边界。
+    const body = document.createElement('div')
+    const styleHost = document.createElement('div')
+    root.appendChild(styleHost)
+    root.appendChild(body)
 
-    await renderAsync(new Uint8Array(bytes), host, styleHost, {
+    await renderAsync(new Uint8Array(bytes), body, styleHost, {
       inWrapper: true,
       ignoreWidth: false,
       ignoreHeight: false,
@@ -108,12 +140,18 @@ const loadDocument = async () => {
     })
     if (token !== loadToken) return
     loading.value = false
-    logger.info('[DocDocxReader] rendered', { path: props.path, nodes: host.childElementCount })
+    logger.info('[DocDocxReader] rendered in shadow root', {
+      path: props.path,
+      nodes: body.childElementCount,
+    })
   } catch (error) {
     if (token !== loadToken) return
     loading.value = false
     errorText.value = String(error?.message || error || error)
-    logger.warn('[DocDocxReader] render failed', { path: props.path, error: String(error?.message || error) })
+    logger.warn('[DocDocxReader] render failed', {
+      path: props.path,
+      error: String(error?.message || error),
+    })
   }
 }
 
@@ -122,6 +160,7 @@ onMounted(loadDocument)
 onBeforeUnmount(() => {
   // 递增 token 让在途渲染的结果被丢弃，避免卸载后写 DOM。
   loadToken += 1
+  shadowRoot = null
 })
 
 watch(() => props.path, loadDocument)

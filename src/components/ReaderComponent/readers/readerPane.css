@@ -149,20 +149,13 @@
 }
 
 /* ── Word（docx-preview）──────────────────────────────── */
+/* 宿主只是影子树的挂载点；正文排版全部在影子树内部的 <style> 里（见组件注释）。 */
 .gdr-docx {
-  padding: 16px;
-}
-
-.gdr-docx :deep(.docx-wrapper) {
-  background: transparent;
   padding: 0;
 }
 
-.gdr-docx :deep(.docx) {
-  margin: 0 auto 16px;
-  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.12);
-  border-radius: 2px;
-}
+/* :deep() 对 Shadow DOM 无效（样式无法穿透影子边界），所以这里不再写 .docx-wrapper 规则；
+   那部分改由组件挂载时注入影子根的 base 样式负责。 */
 
 /* ── 电子书 ─────────────────────────────────────────── */
 .gdr-ebook {
