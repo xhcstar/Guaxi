@@ -448,17 +448,35 @@ fn read_ebook_blocking(path: &Path, kind: &str) -> Result<EbookPayload, String> 
     })?;
 
     let mut sections = Vec::with_capacity(book.sections.len());
+    let mut repaired_sections = 0usize;
     for section in &book.sections {
         // 空白章节（封面占位、版权页空壳）直接跳过，避免阅读器里出现整页空白。
         if section.plain_text.trim().is_empty() && !section.processed_html.contains("<img") {
             continue;
         }
+        // 编码兜底：MOBI/AZW3 头里的 codec 常标错，会导致整章「UTF-8 被当 Latin-1」的乱码。
+        // 只在判定为乱码时才动，正常书原样返回（见 repair_html_text_nodes 的说明）。
+        let raw_html = section.processed_html.clone();
+        let html = repair_html_text_nodes(&raw_html);
+        let repaired = html != raw_html;
+        if repaired {
+            repaired_sections += 1;
+        }
         sections.push(EbookSection {
             index: section.index,
             href: section.href.clone(),
-            html: section.processed_html.clone(),
+            html,
             text_chars: section.char_count,
         });
+    }
+
+    if repaired_sections > 0 {
+        tracing::info!(
+            path = %path.display(),
+            repaired_sections,
+            total_sections = sections.len(),
+            "[Reader] repaired latin1-mangled ebook text"
+        );
     }
 
     if sections.is_empty() {
@@ -467,12 +485,16 @@ fn read_ebook_blocking(path: &Path, kind: &str) -> Result<EbookPayload, String> 
 
     let mut toc = Vec::new();
     flatten_nav(&book.toc, 0, &mut toc);
+    // 目录标题同样可能乱码（它常直接取自文件里的书名/章节名）。
+    for item in toc.iter_mut() {
+        item.label = repair_plain_text(&item.label);
+    }
 
-    let title = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("未命名电子书")
-        .to_string();
+    let title = repair_plain_text(
+        path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("未命名电子书"),
+    );
 
     Ok(EbookPayload {
         title,
@@ -480,6 +502,268 @@ fn read_ebook_blocking(path: &Path, kind: &str) -> Result<EbookPayload, String> 
         sections,
         toc,
     })
+}
+
+// ───────────────────────── 电子书编码兜底 ─────────────────────────
+//
+// 背景：MOBI / AZW3 的文件头里有一个 `codec` 字段标称文本编码，但大量实际文件
+// 标错了（或干脆不标）。ebook-rs 按标称值解码，于是正文变成「UTF-8 字节被当
+// Latin-1/CP1252 逐字节读」的乱码——例如「第」的 UTF-8 字节 E7 AC AC，
+// 会被读成 `ç¬¬` 三个拉丁字符。EPUB 里若 XHTML 缺 `<meta charset>` 也会这样。
+//
+// 兜底思路（只做「可逆还原」，不做猜测性替换，避免把正常文本改坏）：
+//   1. 判定：文本里有大量 U+0080..U+00FF 的单字节高位字符，且几乎不含正常的
+//      非拉丁文字（CJK 等）。正常中文书不会长这样。
+//   2. 还原：把这些字符按 CP1252/Latin-1 还原成字节，再按 UTF-8 严格解码。
+//      严格解码失败就说明这个假设不成立，原样返回——绝不产出「半个字符」。
+//   3. 还原后若 CJK 字符显著增多，才采用；否则维持原样。
+//
+// 刻意不做「试遍所有编码挑最像的」：那种做法在正常书上也可能误判，
+// 一旦误判就是把用户的书内容改掉。
+
+/// 判定一个字符是否落在「Latin-1 高位区」——乱码的典型分布 (U+0080..U+00FF)。
+fn is_latin1_high(ch: char) -> bool {
+    let c = ch as u32;
+    (0x80..=0xFF).contains(&c)
+}
+
+/// 是否是正常书写会出现的非拉丁文字（CJK、假名、谚文、全角标点等）。
+fn is_cjk_like(ch: char) -> bool {
+    let c = ch as u32;
+    (0x4E00..=0x9FFF).contains(&c)   // CJK 统一表意
+        || (0x3400..=0x4DBF).contains(&c) // 扩展 A
+        || (0x3040..=0x30FF).contains(&c) // 平假名 / 片假名
+        || (0xAC00..=0xD7AF).contains(&c) // 谚文
+        || (0xF900..=0xFAFF).contains(&c) // 兼容表意
+        || (0xFF00..=0xFFEF).contains(&c) // 全角标点 / 全角字母
+}
+
+/// 统计样本里两类字符的数量，返回 `(latin1_high, cjk_like, total)`。
+fn sample_counts(text: &str, limit: usize) -> (usize, usize, usize) {
+    let mut latin = 0usize;
+    let mut cjk = 0usize;
+    let mut total = 0usize;
+    for ch in text.chars().take(limit) {
+        if ch.is_whitespace() {
+            continue;
+        }
+        total += 1;
+        if is_latin1_high(ch) {
+            latin += 1;
+        } else if is_cjk_like(ch) {
+            cjk += 1;
+        }
+    }
+    (latin, cjk, total)
+}
+
+/// 文本是否像「UTF-8 被按 Latin-1 读」的乱码。
+fn looks_latin1_mangled(text: &str) -> bool {
+    let (latin, cjk, total) = sample_counts(text, 4000);
+    if total < 20 {
+        return false; // 样本太少，不动
+    }
+    // 正常中文书：CJK 占绝对多数，latin 高位字符接近 0。
+    // 乱码：latin 高位字符占比很高，而 CJK 几乎为 0。
+    let latin_ratio = latin as f64 / total as f64;
+    let cjk_ratio = cjk as f64 / total as f64;
+    latin_ratio > 0.20 && cjk_ratio < 0.02
+}
+
+/// CP1252 在 0x80..=0x9F 区间把控制符换成了可见字符，其中五个码位映射到
+/// **超出 0xFF 的 Unicode 码点**（Œ U+0152、œ U+0153、Š U+0160、š U+0161、Ž U+017D、
+/// ž U+017E、Ÿ U+0178）。只按「码位 <= 0xFF」判断会漏掉它们，导致整段还原被放弃 ——
+/// 这正是截图里出现 `ĉ`、`…` 这类字符却始终修不好的原因。
+///
+/// 这里做一次反向查表：Unicode 码点 -> 原字节。命中即返回。
+fn cp1252_reverse(code: u32) -> Option<u8> {
+    // 0x00..=0x7F：ASCII，码点即字节值。
+    if code < 0x80 {
+        return Some(code as u8);
+    }
+    // 0xA0..=0xFF：Latin-1 直接映射。
+    //
+    // 注意 0x80..=0x9F 必须落到下面的 CP1252 表，而**不能**直接返回 Some(code as u8)：
+    // 那些码位在 CP1252 里是可见字符，若原样保留，真正的 Latin-1 控制符也会被当成
+    // 「可还原字节」，于是「含非单字节字符就放弃」的保护形同虚设。
+    if (0xA0..=0xFF).contains(&code) {
+        return Some(code as u8);
+    }
+    // CP1252 有 5 个**未定义**码位（0x81 0x8D 0x8F 0x90 0x9D）。解码器遇到它们时
+    // 通常原样输出对应的 C1 控制符（U+0081 等）。乱码文本里这些字节很常见（UTF-8
+    // 续字节大量落在 0x80..0x9F），因此必须承认「C1 控制符 -> 原字节」这条映射，
+    // 否则整段还原会因为这些个别字符而失败。
+    if (0x80..=0x9F).contains(&code) {
+        return Some(code as u8);
+    }
+    // 其余是 CP1252 的可见字符映射表。
+    const TABLE: [(u32, u8); 27] = [
+        (0x20AC, 0x80), // €
+        (0x201A, 0x82), // ‚
+        (0x0192, 0x83), // ƒ
+        (0x201E, 0x84), // „
+        (0x2026, 0x85), // …
+        (0x2020, 0x86), // †
+        (0x2021, 0x87), // ‡
+        (0x02C6, 0x88), // ˆ
+        (0x2030, 0x89), // ‰
+        (0x0160, 0x8A), // Š
+        (0x2039, 0x8B), // ‹
+        (0x0152, 0x8C), // Œ
+        (0x017D, 0x8E), // Ž
+        (0x2018, 0x91), // ‘
+        (0x2019, 0x92), // ’
+        (0x201C, 0x93), // “
+        (0x201D, 0x94), // ”
+        (0x2022, 0x95), // •
+        (0x2013, 0x96), // –
+        (0x2014, 0x97), // —
+        (0x02DC, 0x98), // ˜
+        (0x2122, 0x99), // ™
+        (0x0161, 0x9A), // š
+        (0x203A, 0x9B), // ›
+        (0x0153, 0x9C), // œ
+        (0x017E, 0x9E), // ž
+        (0x0178, 0x9F), // Ÿ
+    ];
+    TABLE.iter().find(|(c, _)| *c == code).map(|(_, b)| *b)
+}
+
+#[cfg(test)]
+mod cp1252_reverse_tests {
+    use super::cp1252_reverse;
+
+    #[test]
+    fn maps_ascii_and_latin1() {
+        assert_eq!(cp1252_reverse('A' as u32), Some(0x41));
+        assert_eq!(cp1252_reverse('é' as u32), Some(0xE9));
+    }
+
+    #[test]
+    fn maps_cp1252_specials_above_0xff() {
+        assert_eq!(cp1252_reverse('Œ' as u32), Some(0x8C));
+        assert_eq!(cp1252_reverse('œ' as u32), Some(0x9C));
+        assert_eq!(cp1252_reverse('…' as u32), Some(0x85));
+        assert_eq!(cp1252_reverse('€' as u32), Some(0x80));
+    }
+
+    #[test]
+    fn rejects_characters_that_cannot_come_from_one_byte() {
+        // 关键保护：中日韩字符绝不能被当成「单字节乱码」还原，否则正常文本会被改坏。
+        assert_eq!(cp1252_reverse('第' as u32), None);
+        assert_eq!(cp1252_reverse('あ' as u32), None);
+        assert_eq!(cp1252_reverse('한' as u32), None);
+        assert_eq!(cp1252_reverse('😀' as u32), None);
+    }
+}
+
+/// 按 Latin-1 把每个字符取回单字节。遇到 > 0xFF 的字符返回 None。
+fn decode_latin1_bytes(text: &str) -> Option<Vec<u8>> {
+    let mut bytes = Vec::with_capacity(text.len());
+    for ch in text.chars() {
+        let code = ch as u32;
+        if code > 0xFF {
+            return None; // 非单字节字符，不是这种乱码
+        }
+        bytes.push(code as u8);
+    }
+    Some(bytes)
+}
+
+/// 按 CP1252 把可见字符反查回单字节。任何一个字符反查不到就返回 None。
+fn decode_cp1252_bytes(text: &str) -> Option<Vec<u8>> {
+    let mut bytes = Vec::with_capacity(text.len());
+    for ch in text.chars() {
+        bytes.push(cp1252_reverse(ch as u32)?);
+    }
+    Some(bytes)
+}
+
+/// 尝试把「Latin-1 形态」的文本还原成正确的 UTF-8。
+///
+/// 返回 `Some(还原后的文本)` 表示还原成功且结果更像正常文本；否则 `None`。
+fn try_repair_latin1_utf8(text: &str) -> Option<String> {
+    // CP1252 比纯 Latin-1 多出 0x80..0x9F 的可打印字符（Word 导出的文档常见）。
+    // 能按 CP1252 单字节编码回去的，就按 CP1252 还原；否则退回 Latin-1。
+    // 两种还原顺序都试一遍，取第一个能通过严格 UTF-8 解码的结果：
+    //
+    // 1) Latin-1 优先：0x80..0x9F 原样保留为控制符。这是**最常见的形态** ——
+    //    UTF-8 的续字节大量落在 0x80..0x9F，只有按 Latin-1 才能原样取回。
+    // 2) CP1252 兜底：0x80..0x9F 被解成 € … Œ 等可见字符（Word/浏览器导出常见）。
+    //    注意 CP1252 有 5 个未定义码位（0x81/0x8D/0x8F/0x90/0x9D），碰到它们这条路线
+    //    必然失败，所以不能只走这一条。
+    //
+    // 顺序反过来（CP1252 优先）会让「续字节恰好在 0x80..0x9F」的普通 UTF-8 乱码
+    // 永远还原不了 —— 这正是最初那版兜底失效的原因。
+    let decoded = decode_latin1_bytes(text)
+        .and_then(|bytes| std::str::from_utf8(&bytes).ok().map(str::to_string))
+        .or_else(|| {
+            decode_cp1252_bytes(text)
+                .and_then(|bytes| std::str::from_utf8(&bytes).ok().map(str::to_string))
+        });
+
+    // 严格解码失败即说明「这串字节本来就是单字节文本」，不做替换式解码。
+    let repaired = decoded?;
+
+    // 还原后必须「明显更像正文」才采用，防止把真正的西文文本改坏。
+    let (_, cjk_before, _) = sample_counts(text, 4000);
+    let (_, cjk_after, _) = sample_counts(&repaired, 4000);
+    if cjk_after > cjk_before * 2 + 20 {
+        Some(repaired)
+    } else {
+        None
+    }
+}
+
+/// 对一段 HTML 做编码兜底：只处理文本节点内容，不动标签与属性。
+///
+/// 为什么不能整段处理：HTML 里的 `class="a"` 之类全是 ASCII，混进去会把
+/// 「整段是否乱码」的判定稀释掉；而且直接替换整段字符串有破坏标签结构的风险。
+fn repair_html_text_nodes(html: &str) -> String {
+    if !looks_latin1_mangled(html) {
+        return html.to_string();
+    }
+
+    let mut out = String::with_capacity(html.len());
+    let mut in_tag = false;
+    let mut text_buf = String::new();
+
+    let flush = |buf: &mut String, out: &mut String| {
+        if buf.is_empty() {
+            return;
+        }
+        match try_repair_latin1_utf8(buf) {
+            Some(fixed) => out.push_str(&fixed),
+            None => out.push_str(buf),
+        }
+        buf.clear();
+    };
+
+    for ch in html.chars() {
+        match ch {
+            '<' => {
+                flush(&mut text_buf, &mut out);
+                in_tag = true;
+                out.push(ch);
+            }
+            '>' => {
+                in_tag = false;
+                out.push(ch);
+            }
+            _ if in_tag => out.push(ch),
+            _ => text_buf.push(ch),
+        }
+    }
+    flush(&mut text_buf, &mut out);
+    out
+}
+
+/// 对纯文本做同样的兜底（目录标题、书名等）。
+fn repair_plain_text(text: &str) -> String {
+    if !looks_latin1_mangled(text) {
+        return text.to_string();
+    }
+    try_repair_latin1_utf8(text).unwrap_or_else(|| text.to_string())
 }
 
 fn ebook_error_message(e: &ebook_rs::EbookError) -> String {
@@ -1275,6 +1559,91 @@ mod tests {
             sniff_file_kind(txt.to_string_lossy().to_string()).unwrap().kind,
             "text"
         );
+    }
+
+    /// 构造「UTF-8 被按 Latin-1 读」的乱码：把正确文本的 UTF-8 字节逐字节映射成字符。
+    fn mangle_as_latin1(text: &str) -> String {
+        text.as_bytes().iter().map(|&b| b as char).collect()
+    }
+
+    #[test]
+    fn detects_and_repairs_latin1_mangled_chinese() {
+        let original = "第二十六史。这是一本讲中国历史的书，内容很长，足以让判定生效。";
+        let mangled = mangle_as_latin1(original);
+        assert!(looks_latin1_mangled(&mangled), "应识别为乱码");
+        assert_eq!(try_repair_latin1_utf8(&mangled).as_deref(), Some(original));
+    }
+
+    #[test]
+    fn repairs_html_text_nodes_without_touching_tags() {
+        let original = "<p class=\"x\">这是一段正常的中文正文，用来验证标签不会被破坏。</p>";
+        let mangled = mangle_as_latin1(original);
+        let fixed = repair_html_text_nodes(&mangled);
+        assert!(fixed.contains("这是一段正常的中文正文"));
+        // 标签结构必须原样保留（属性是 ASCII，乱码化后仍是 ASCII）
+        assert!(fixed.contains("<p class=\"x\">"));
+        assert!(fixed.contains("</p>"));
+    }
+
+    #[test]
+    fn repairs_cp1252_style_mojibake() {
+        // 截图里的真实形态：UTF-8 字节落在 0x80..0x9F 时，会被 **CP1252**（而非 Latin-1）
+        // 解成 € ‚ ƒ „ … † ‡ ˆ ‰ Š ‹ Œ Ž ‘ ’ “ ” • – — ˜ ™ 等可见字符，
+        // 其中 Š/š/Œ/œ/Ž/ž/Ÿ 的码点都 **大于 0xFF**。只按 <= 0xFF 判定会整段放弃还原。
+        const CP1252: [(u8, char); 27] = [
+            (0x80, '€'), (0x82, '‚'), (0x83, 'ƒ'), (0x84, '„'), (0x85, '…'),
+            (0x86, '†'), (0x87, '‡'), (0x88, 'ˆ'), (0x89, '‰'), (0x8A, 'Š'),
+            (0x8B, '‹'), (0x8C, 'Œ'), (0x8E, 'Ž'), (0x91, '‘'), (0x92, '’'),
+            (0x93, '“'), (0x94, '”'), (0x95, '•'), (0x96, '–'), (0x97, '—'),
+            (0x98, '˜'), (0x99, '™'), (0x9A, 'š'), (0x9B, '›'), (0x9C, 'œ'),
+            (0x9E, 'ž'), (0x9F, 'Ÿ'),
+        ];
+        let decode_cp1252 = |bytes: &[u8]| -> String {
+            bytes
+                .iter()
+                .map(|&b| {
+                    CP1252
+                        .iter()
+                        .find(|(byte, _)| *byte == b)
+                        .map(|(_, ch)| *ch)
+                        .unwrap_or(b as char)
+                })
+                .collect()
+        };
+
+        let original = "第二十六史 这是一本讲述中国历史的电子书，正文内容足够长，可以触发判定。";
+        let mangled = decode_cp1252(original.as_bytes());
+
+        // 前提校验：确实含超出 0xFF 的字符，否则这个测试就退化成 Latin-1 场景了
+        assert!(
+            mangled.chars().any(|c| c as u32 > 0xFF),
+            "样本应包含 CP1252 特有字符，实际: {mangled}"
+        );
+        assert!(looks_latin1_mangled(&mangled), "应识别为乱码");
+        assert_eq!(try_repair_latin1_utf8(&mangled).as_deref(), Some(original));
+    }
+
+    #[test]
+    fn leaves_normal_chinese_untouched() {
+        let normal = "这是一本很正常的中文电子书，没有任何乱码问题，不应该被改动。";
+        assert!(!looks_latin1_mangled(normal));
+        assert_eq!(repair_plain_text(normal), normal);
+        assert_eq!(repair_html_text_nodes(&format!("<p>{normal}</p>")), format!("<p>{normal}</p>"));
+    }
+
+    #[test]
+    fn leaves_genuine_latin_text_untouched() {
+        // 真正的法/德文：高位字符多，但还原成 UTF-8 会失败（或还原后 CJK 不增加），必须原样保留。
+        let french = "C'est une très longue phrase en français, avec des accents é à ç ù, et assez de texte pour dépasser le seuil.";
+        assert_eq!(repair_plain_text(french), french);
+    }
+
+    #[test]
+    fn short_text_is_never_touched() {
+        // 样本太短时不做任何判定，避免把标题等短串改坏。
+        let tiny = mangle_as_latin1("史");
+        assert!(!looks_latin1_mangled(&tiny));
+        assert_eq!(repair_plain_text(&tiny), tiny);
     }
 
     #[test]
