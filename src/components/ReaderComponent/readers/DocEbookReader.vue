@@ -108,6 +108,25 @@ const zoomBy = (factor) => {
 }
 
 /**
+ * 去掉章节 HTML 里的脚本与内联事件，避免浏览器控制台刷屏。
+ *
+ * 为什么必须主动剥离，而不是靠 sandbox 拦：
+ * sandbox 不给 allow-scripts 时，浏览器照样会为每一段内联脚本打印
+ * "Blocked script execution in 'about:srcdoc' because the document's frame is sandboxed"。
+ * 一本排版工具导出的 epub 常常有几十个 <script>，打开一本书就是几十条红色报错，
+ * 看起来像软件坏了。先剔除再渲染，沙箱仍然保留（作为纵深防御），但不再有噪音。
+ */
+const stripScripts = (html) => String(html || '')
+  // 整段脚本块（style 必须保留：章节版式全靠它）
+  .replace(/<script[^>]*>[^]*?<\/script>/gi, '')
+  .replace(/<script[^>]*\/>/gi, '')
+  // 内联事件处理器：onload / onclick / onerror …
+  .replace(/\son[a-z]+\s*=\s*"[^"]*"/gi, '')
+  .replace(/\son[a-z]+\s*=\s*'[^']*'/gi, '')
+  // javascript: 伪协议链接
+  .replace(/href\s*=\s*(["'])\s*javascript:[^"']*\1/gi, 'href="#"')
+
+/**
  * 用 sandbox="allow-same-origin" 的 iframe + srcdoc 承载章节 HTML。
  *
  * 为什么不用 allow-scripts：电子书章节不需要脚本，禁掉之后即便源文件里混进了脚本
@@ -121,7 +140,8 @@ const buildFrameDoc = () => {
     return
   }
   // ebook-rs 的 processed_html 通常是完整的 html 文档；若只是片段则包一层。
-  const raw = String(section.html || '')
+  // 先剥掉脚本：沙箱会拦执行，但拦的过程本身会往控制台刷大量 Blocked script execution。
+  const raw = stripScripts(section.html)
   const isFullDoc = /<html[\s>]/i.test(raw)
   const themeBackground = 'transparent'
   const baseCss = `

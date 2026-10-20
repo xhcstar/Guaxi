@@ -90,7 +90,8 @@
         @select="handleTabMenuSelect" @clickoutside="tabMenuVisible = false" />
 
 
-      <div class="toolbar">
+      <!-- 格式工具栏：受 Header 上的「显示/隐藏工具栏与面包屑」开关控制（默认显示）。 -->
+      <div v-show="editorChromeVisible" class="toolbar">
         <div v-if="previewMode !== 'realtime' && editorSurfaceMode !== 'notebook'" class="toolbar-editing-actions" :class="{ 'is-preview-readonly': isPreviewOnlyReadonly || isCurrentFileObserverMode }">
           <n-dropdown trigger="click" :options="headingOptions" @select="handleHeadingSelect">
             <n-tooltip placement="top" trigger="hover">
@@ -1167,7 +1168,8 @@
           </n-tooltip>
         </div>
 
-        <div class="breadcrumb-bar">
+        <!-- 面包屑导航：与格式工具栏同一个开关；只读阅读器下收起可把高度让给正文。 -->
+        <div v-show="editorChromeVisible" class="breadcrumb-bar">
           <div ref="breadcrumbScrollRef" class="breadcrumb-scroll" @wheel.prevent="handleBreadcrumbWheel">
             <n-breadcrumb separator="›">
               <n-breadcrumb-item v-for="(it, idx) in breadcrumbItems" :key="it.key">
@@ -4474,6 +4476,14 @@ const isCurrentFileObserverMode = computed(() => {
   return !!path && editorBridgeStore.isMonacoReadonly(path);
 });
 const isActiveTabReadOnly = computed(() => !!activeTab.value?.unsupported || isCurrentFileObserverMode.value);
+
+/**
+ * 编辑区上下装饰条（格式工具栏 + 面包屑）是否显示。
+ *
+ * 开关按钮在主窗口 Header 上，状态存在 siderStore 里（两个组件树共享）。
+ * 默认 true —— 与改造前完全一致；用户折叠后按窗口记住。
+ */
+const editorChromeVisible = computed(() => siderStore.isEditorChromeShown('home'));
 
 // ───── 阅读器覆盖层（纯增量）─────
 // 判定完全由 readerTabStore 的登记表驱动：只有「用户主动打开过一个非文本文件」才会有登记，
@@ -13121,11 +13131,39 @@ const computeUnsavedLineChanges = () => {
   }
 }
 
+/**
+ * 该目录是否在一个可用的 Git 仓库里。
+ *
+ * 为什么要先问一句：打开任意目录下的文件（比如「打开文件」选到 Downloads 里的一个
+ * 文档）时，旧逻辑会无条件 new 一个 GitService 再拉分支/状态，后端 `Repository::discover`
+ * 失败就把整条错误栈打进控制台。对非仓库目录来说这不是错误，只是「这里没有 Git」，
+ * 所以先探测、探测不到就静默跳过，状态栏也不显示 Git 信息。
+ */
+const isDirectoryInGitRepo = async (dir) => {
+  if (!dir) return false
+  try {
+    return await invoke('is_git_repository', { path: dir })
+  } catch (error) {
+    logger.debug('[Git] repository probe failed, treat as non-repo', {
+      dir,
+      error: String(error?.message || error),
+    })
+    return false
+  }
+}
+
 // 初始化 Git 服务
 const initGitService = async () => {
   const filePath = selectedFile.value?.path
   if (filePath) {
     const dir = await dirname(filePath)
+    if (!(await isDirectoryInGitRepo(dir))) {
+      logger.debug('[Git] initGitService skipped (not a git repository)', { filePath, dir })
+      gitService.value = null
+      editorStore.setGitBranch('')
+      editorStore.clearGitDecorations()
+      return
+    }
     logger.debug('[Git] initGitService', { filePath, dir })
     gitService.value = new GitService(dir)
     await updateGitStatus()

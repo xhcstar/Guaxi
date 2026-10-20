@@ -9,6 +9,28 @@
         切换左侧边栏
       </n-tooltip>
       <div class="logo-text">Guaxi</div>
+
+      <!--
+        编辑区上下装饰条的显隐开关（格式工具栏 + 面包屑导航）。
+
+        为什么放在 Header 左侧：这两条属于「中间编辑区」的装饰，而切换按钮要长期可见；
+        阅读 PDF / 电子书 / 图片时它们不适用，收起来能把高度让给内容。
+
+        默认显示 = 与改造前完全一致；状态存在 siderStore，按窗口记住。
+        图标用「收起 / 展开」两态：正在显示时给的是收起（Contract），点它即隐藏。
+      -->
+      <n-tooltip placement="bottom" trigger="hover">
+        <template #trigger>
+          <n-icon
+            class="header-icon editor-chrome-toggle"
+            :class="{ active: isEditorChromeShown }"
+            size="20"
+            :component="isEditorChromeShown ? PanelTopContract20Filled : PanelTopExpand20Filled"
+            @click="toggleEditorChrome"
+          />
+        </template>
+        {{ isEditorChromeShown ? '隐藏工具栏与面包屑' : '显示工具栏与面包屑' }}
+      </n-tooltip>
     </div>
 
     <!-- 中间：搜索框 -->
@@ -476,7 +498,9 @@ import {
   Folder20Regular,
   TaskListSquareLtr20Regular,
   PanelLeftContract24Regular,
-  PanelRightContract24Regular
+  PanelRightContract24Regular,
+  PanelTopContract20Filled,
+  PanelTopExpand20Filled
 } from '@vicons/fluent'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -650,6 +674,16 @@ const splitHorizontal = () => {
   }
   fileTreeStore.splitCurrentTab('horizontal');
 };
+
+/**
+ * 编辑区装饰条（格式工具栏 + 面包屑）当前是否显示。
+ * 未初始化时返回 true —— 老用户升级后界面不变。
+ */
+const isEditorChromeShown = computed(() => siderStore.isEditorChromeShown(viewKey))
+
+const toggleEditorChrome = () => {
+  siderStore.toggleEditorChrome(viewKey)
+}
 
 const toggleLeftSider = () => {
   siderStore.toggleLeftSider(viewKey)
@@ -2753,6 +2787,12 @@ onMounted(async () => {
   opacity: 0.8;
   transform: scale(1.05);
   background-color: rgba(0, 0, 0, 0.05);
+}
+
+/* 编辑区装饰条开关：显示时给一点强调色，和侧栏开关的「已开启」观感一致。 */
+.editor-chrome-toggle.active {
+  color: var(--guaxi-accent, #2f6fdf);
+  background-color: rgba(47, 111, 223, 0.12);
 }
 
 /* 搜索下拉菜单（自绘，避免 Naive Dropdown label 布局干扰） */
