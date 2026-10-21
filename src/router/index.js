@@ -10,6 +10,7 @@ import GuaxiRepoPage from '../views/GuaxiRepoPage.vue'
 import GuaxiStatisticsPage from '../views/GuaxiStatisticsPage.vue'
 import ExcalidrawPage from '../views/ExcalidrawPage.vue'
 import GuaxiReader from '../components/ReaderComponent/GuaxiReader.vue'
+import DocReaderWindow from '../components/ReaderComponent/DocReaderWindow.vue'
 import GuaxiMainLayout from '../components/GuaxiMainLayout.vue'
 import GitPanel from '../components/HomeViewComponent/GitPanel.vue'
 import GuaxiTemplateManager from '../components/HomeViewComponent/GuaxiTemplateManager.vue'
@@ -173,6 +174,19 @@ export const routes = [
       fileName: route.query.fileName,
       library: route.query.library,
       importFileId: route.query.importFileId,
+    })
+  },
+  {
+    path: '/doc-reader',
+    name: 'doc-reader',
+    component: DocReaderWindow,
+    // 独立窗口：参数全部来自 URL query（Windows 路径含空格/中文时必须显式编码）。
+    props: (route) => ({
+      path: route.query.path,
+      name: route.query.name,
+      kind: route.query.kind,
+      reader: route.query.reader,
+      theme: route.query.theme,
     })
   },
   {

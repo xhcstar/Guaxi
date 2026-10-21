@@ -440,6 +440,234 @@ fn is_mobi_family(kind: &str) -> bool {
     matches!(kind, "mobi" | "azw3" | "kfx")
 }
 
+/// 判断字节流是否为 PalmDB/MOBI 容器。
+fn is_palm_doc(bytes: &[u8]) -> bool {
+    bytes.len() > 78 && &bytes[60..68] == b"BOOKMOBI"
+}
+
+/// PalmDOC LZ77 解压（MOBI compression=2）。
+///
+/// 与 `ebook_rs::mobi::decompress_palmdoc` 同语义，本地实现一份是为了在重排路径里
+/// 完全掌握「解压后裁剪」的时机：ebook-rs 解压后不再按 `record_size` 裁剪，尾部
+/// 元数据会被拼进正文，导致整本回退成 Latin-1。
+fn decompress_palmdoc_records(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len() * 2);
+    let mut i = 0usize;
+    while i < data.len() {
+        let byte = data[i];
+        i += 1;
+        match byte {
+            0x00 => out.push(0),
+            0x09..=0x7F => out.push(byte),
+            0x01..=0x08 => {
+                let count = byte as usize;
+                let end = (i + count).min(data.len());
+                out.extend_from_slice(&data[i..end]);
+                i = end;
+            }
+            0xC0..=0xFF => {
+                out.push(b' ');
+                out.push(byte ^ 0x80);
+            }
+            _ => {
+                // 0x80..=0xBF：LZ77 回引（距离 11 位，长度 3 位 + 3）。
+                if i >= data.len() {
+                    out.push(byte);
+                    continue;
+                }
+                let next = data[i];
+                i += 1;
+                let distance = (((byte as usize) & 0x3F) << 5) | ((next as usize) >> 3);
+                let length = ((next as usize) & 0x07) + 3;
+                if distance == 0 || distance > out.len() {
+                    out.push(byte);
+                    out.push(next);
+                } else {
+                    for _ in 0..length {
+                        let value = out[out.len() - distance];
+                        out.push(value);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// 未压缩（compression=1）MOBI 的正文重排。
+///
+/// 背景：MOBI 的文本区被切成固定大小的记录（`record_size`，通常 4096），每条记录末尾还挂着
+/// 变长的 **trailing entries**（多媒体/索引表，属于记录元数据，不是正文）。ebook-rs 直接把
+/// 记录边界内的全部字节当正文拼接，于是每 4096 字节就混进 5 个左右的二进制字节。
+///
+/// 后果很严重：拼接结果不是合法 UTF-8，ebook-rs 便整本回退到 CP1252 解码 ——
+/// 一本正常的中文书因此变成「å¬¬ä¸€ç« 」式的乱码，而图片（单独记录）反而正常。
+///
+/// 修法只依赖 PalmDOC 头里的两个权威字段，不做任何猜测：
+///   - `record_size`：每条记录的有效正文长度；
+///   - `text_length`：整本正文的总长度。
+/// 用两者裁剪后得到的字节流是干净的 UTF-8。
+///
+/// 返回 `None` 表示这不是可以安全重排的输入（字段异常、HUFF 压缩），交给调用方走原路径。
+fn reassemble_mobi_text(bytes: &[u8]) -> Option<String> {
+    if !is_palm_doc(bytes) {
+        return None;
+    }
+    let record_count = u16::from_be_bytes([bytes[76], bytes[77]]) as usize;
+    if record_count < 2 || record_count > 100_000 {
+        return None;
+    }
+
+    let record_offset = |idx: usize| -> Option<usize> {
+        let at = 78 + idx * 8;
+        if at + 4 > bytes.len() {
+            return None;
+        }
+        Some(u32::from_be_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]) as usize)
+    };
+
+    let first = record_offset(0)?;
+    let second = record_offset(1)?;
+    if first >= second || second > bytes.len() {
+        return None;
+    }
+    let header = &bytes[first..second];
+
+    // PalmDOC 头：0..2 压缩方式，4..8 正文总长，8..10 记录数，10..12 记录大小。
+    if header.len() < 12 {
+        return None;
+    }
+    let compression = u16::from_be_bytes([header[0], header[1]]);
+    let text_length = u32::from_be_bytes([header[4], header[5], header[6], header[7]]) as usize;
+    let text_records = u16::from_be_bytes([header[8], header[9]]) as usize;
+    let record_size = u16::from_be_bytes([header[10], header[11]]) as usize;
+    if text_records == 0 || record_size == 0 || text_length == 0 {
+        return None;
+    }
+
+    let mut raw: Vec<u8> = Vec::with_capacity(text_length);
+    for idx in 1..=text_records {
+        let start = record_offset(idx)?;
+        let end = record_offset(idx + 1).unwrap_or(bytes.len()).min(bytes.len());
+        if start >= end {
+            return None;
+        }
+        let chunk = &bytes[start..end];
+        // 压缩记录先解压，再统一按 record_size 裁剪 —— trailing entries 在解压之后
+        // 才位于记录末尾，顺序不能反。
+        let decoded = match compression {
+            1 => chunk.to_vec(),
+            2 => decompress_palmdoc_records(chunk),
+            _ => return None, // 17480 = HUFF/CDIC，不支持
+        };
+        let usable = decoded.len().min(record_size);
+        raw.extend_from_slice(&decoded[..usable]);
+        if raw.len() >= text_length {
+            break;
+        }
+    }
+    raw.truncate(text_length);
+
+    // 严格解码：失败就说明这套假设不成立（例如正文本身真是 CP1252），交给上层兜底。
+    String::from_utf8(raw).ok()
+}
+
+/// 把整本 MOBI HTML 切成章节。
+///
+/// 必须与 ebook-rs 的 `split_mobi_html` 保持完全一致的切分规则，否则重排文本与
+/// `book.sections` 对不上位。规则有两条：
+///   1. 优先按 `<mbp:pagebreak>`（MOBI 7 及更早）；
+///   2. 一个都没有时（AZW3/KF8）退回按 `<h1>/<h2>/<h3>` 起始位置切。
+fn split_mobi_html_for_remux(html: &str, expected: usize) -> Option<Vec<String>> {
+    let mut parts: Vec<String> = Vec::new();
+    let lower = html.to_ascii_lowercase();
+    let mut cursor = 0usize;
+
+    while let Some(rel) = lower[cursor..].find("<mbp:pagebreak") {
+        let at = cursor + rel;
+        if at > cursor {
+            let chunk = html[cursor..at].trim();
+            if !chunk.is_empty() {
+                parts.push(chunk.to_string());
+            }
+        }
+        // 跳过整个标签（`<mbp:pagebreak/>` 与 `<mbp:pagebreak ...>` 两种写法）。
+        cursor = html[at..].find('>').map(|i| at + i + 1).unwrap_or(at + 13);
+    }
+    if cursor < html.len() {
+        let tail = html[cursor..].trim();
+        if !tail.is_empty() {
+            parts.push(tail.to_string());
+        }
+    }
+
+    // KF8/AZW3 没有 pagebreak：退回标题切分（与 ebook-rs 同样的 <=1 触发条件）。
+    if parts.len() <= 1 {
+        parts.clear();
+        let mut boundaries: Vec<usize> = vec![0];
+        for (byte_idx, _) in html.char_indices() {
+            if byte_idx <= 200 {
+                continue;
+            }
+            let slice = &html[byte_idx..];
+            for tag in ["<h1", "<h2", "<h3"] {
+                if slice
+                    .get(..tag.len())
+                    .is_some_and(|sub| sub.eq_ignore_ascii_case(tag))
+                {
+                    boundaries.push(byte_idx);
+                    break;
+                }
+            }
+        }
+        boundaries.sort_unstable();
+        boundaries.dedup();
+        if boundaries.len() > 1 {
+            for i in 0..boundaries.len() {
+                let start = boundaries[i];
+                let end = boundaries.get(i + 1).copied().unwrap_or(html.len());
+                let chunk = html[start..end].trim();
+                if !chunk.is_empty() {
+                    parts.push(chunk.to_string());
+                }
+            }
+        } else {
+            parts.push(html.trim().to_string());
+        }
+    }
+
+    // ebook-rs 的 sections 不含纯空壳段；用同一判据过滤后才能逐一对位。
+    let non_empty: Vec<String> = parts
+        .into_iter()
+        .filter(|chunk| {
+            !html_text_without_tags(chunk).trim().is_empty() || chunk.contains("<img")
+        })
+        .collect();
+
+    if non_empty.len() == expected {
+        Some(non_empty)
+    } else {
+        None
+    }
+}
+
+/// 去掉 HTML 标签后的文本（用于判断一个 section 是不是纯空壳）。
+///
+/// 只做最小的标签剔除，不解析实体 —— 目的仅是「有没有可见内容」，不是精确提取。
+fn html_text_without_tags(html: &str) -> String {
+    let mut out = String::with_capacity(html.len() / 4);
+    let mut in_tag = false;
+    for ch in html.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    out
+}
+
 fn read_ebook_blocking(path: &Path, kind: &str) -> Result<EbookPayload, String> {
     let size = file_size(path)?;
     if size > EBOOK_MAX_INPUT_BYTES {
@@ -450,9 +678,50 @@ fn read_ebook_blocking(path: &Path, kind: &str) -> Result<EbookPayload, String> 
         ));
     }
 
+    // MOBI/AZW3 先试一次「按 PalmDOC 头重排正文」：这本原文没有被压缩，但记录尾部混着
+    // 二进制元数据，直接交给 ebook-rs 会整本退化成 Latin-1 乱码。重排成功就用干净文本，
+    // 失败则完全走原有的解析路径（行为不变）。
+    let remuxed_text = if is_mobi_family(kind) {
+        match std::fs::read(path) {
+            Ok(bytes) => reassemble_mobi_text(&bytes),
+            Err(err) => {
+                tracing::warn!(path = %path.display(), error = %err, "[Reader] mobi remux read failed");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let book = with_parser_panic_guard(|| {
         ebook_rs::Book::from_file(path).map_err(|e| ebook_error_message(&e))
     })?;
+
+    // 把重排后的整本 HTML 按 `<mbp:pagebreak>` 切回章节。
+    //
+    // 必须用与 ebook-rs 相同的分隔标记（它同样按 pagebreak 切 spine），这样两边章节边界
+    // 一致，才能逐一对位替换文本。按字符均分是不行的 —— 会把 HTML 标签切成两半。
+    // 切出来是「全部段」，而 ebook-rs 的 sections 里不含纯空壳段；因此这里只保留
+    // 有可见文字的段，再与 sections 逐一对位。数量对不上就不用重排结果。
+    let remuxed_html: Option<Vec<String>> = remuxed_text.and_then(|text| {
+        let parts = split_mobi_html_for_remux(&text, book.sections.len());
+        if parts.is_none() {
+            tracing::debug!(
+                path = %path.display(),
+                sections = book.sections.len(),
+                "[Reader] mobi remux section count mismatch, falling back"
+            );
+        }
+        parts
+    });
+
+    if remuxed_html.is_some() {
+        tracing::info!(
+            path = %path.display(),
+            sections = book.sections.len(),
+            "[Reader] mobi text remuxed from palmdoc records"
+        );
+    }
 
     let mut sections = Vec::with_capacity(book.sections.len());
     let mut repaired_sections = 0usize;
@@ -482,6 +751,13 @@ fn read_ebook_blocking(path: &Path, kind: &str) -> Result<EbookPayload, String> 
         // 空白章节（封面占位、版权页空壳）直接跳过，避免阅读器里出现整页空白。
         if section.plain_text.trim().is_empty() && !section.processed_html.contains("<img") {
             continue;
+        }
+        // 如果重排拿到了干净正文，就用它覆盖 ebook-rs 输出的乱码章节内容。
+        // 按顺序对位：重排流与 ebook-rs 切出的 spine 顺序一致，章节数不等时退回原内容。
+        if let Some(html) = remuxed_html.as_ref().and_then(|list| list.get(section.index)) {
+            if !html.trim().is_empty() {
+                section.processed_html = html.clone();
+            }
         }
         // 编码兜底：MOBI/AZW3 头里的 codec 常标错，会导致整章「UTF-8 被当 Latin-1」的乱码。
         // 只在判定为乱码时才动，正常书原样返回（见 repair_html_text_nodes 的说明）。
@@ -715,6 +991,94 @@ mod cp1252_reverse_tests {
         assert_eq!(cp1252_reverse('あ' as u32), None);
         assert_eq!(cp1252_reverse('한' as u32), None);
         assert_eq!(cp1252_reverse('😀' as u32), None);
+    }
+}
+
+#[cfg(test)]
+mod mobi_remux_tests {
+    use super::{reassemble_mobi_text, split_mobi_html_for_remux};
+
+    /// 构造一个最小 PalmDB/MOBI 头部：records 从 record 0 开始，record 0 放 PalmDOC 头。
+    fn build_palm_doc(compression: u16, record_size: usize, text: &[u8], per_trailing: usize) -> Vec<u8> {
+        let text_len = text.len();
+        let chunks: Vec<&[u8]> = text.chunks(record_size).collect();
+        let record_count = chunks.len() + 1;
+
+        let mut header = vec![0u8; 78 + record_count * 8];
+        header[60..68].copy_from_slice(b"BOOKMOBI");
+        header[76..78].copy_from_slice(&(record_count as u16).to_be_bytes());
+
+        // record 0：PalmDOC 头 + 后续填充。
+        let mut rec0 = Vec::new();
+        rec0.extend_from_slice(&compression.to_be_bytes());
+        rec0.extend_from_slice(&[0, 0]);
+        rec0.extend_from_slice(&(text_len as u32).to_be_bytes());
+        rec0.extend_from_slice(&(chunks.len() as u16).to_be_bytes());
+        rec0.extend_from_slice(&(record_size as u16).to_be_bytes());
+        rec0.extend_from_slice(&[0; 4]);
+
+        let mut records: Vec<Vec<u8>> = vec![rec0];
+        for chunk in &chunks {
+            let mut rec = chunk.to_vec();
+            // 模拟 trailing entries：正文之后追加二进制元数据。
+            rec.extend(std::iter::repeat(0xAAu8).take(per_trailing));
+            records.push(rec);
+        }
+
+        let mut out = header;
+        let mut offset = out.len();
+        for idx in 0..records.len() {
+            let at = 78 + idx * 8;
+            out[at..at + 4].copy_from_slice(&(offset as u32).to_be_bytes());
+            offset += records[idx].len();
+        }
+        for rec in records {
+            out.extend_from_slice(&rec);
+        }
+        out
+    }
+
+    #[test]
+    fn strips_trailing_entries_and_returns_clean_utf8() {
+        let body = "<p>索引 第一章 拜占庭的失落之城</p>".repeat(400);
+        let bytes = build_palm_doc(1, 4096, body.as_bytes(), 5);
+        let restored = reassemble_mobi_text(&bytes).expect("应能重排");
+        assert_eq!(restored, body, "重排结果必须与原文逐字节一致");
+    }
+
+    #[test]
+    fn ignores_non_mobi_input() {
+        assert!(reassemble_mobi_text(b"not a mobi file at all").is_none());
+    }
+
+    #[test]
+    fn splices_by_pagebreak_and_filters_empty_sections() {
+        let html = "<html><body><p>甲</p><mbp:pagebreak/><div></div><mbp:pagebreak/><p>乙</p></body></html>";
+        let parts = split_mobi_html_for_remux(html, 2).expect("应切成 2 节");
+        assert_eq!(parts.len(), 2);
+        assert!(parts[0].contains('甲'));
+        assert!(parts[1].contains('乙'));
+    }
+
+    #[test]
+    fn section_count_mismatch_returns_none() {
+        // 实际切出 2 节，但期望 3 节 —— 必须放弃重排，让调用方退回原解析路径。
+        let html = "<p>甲</p><mbp:pagebreak/><p>乙</p>";
+        assert!(split_mobi_html_for_remux(html, 3).is_none());
+    }
+
+    #[test]
+    fn falls_back_to_heading_split_when_no_pagebreak() {
+        // 前 200 字节内出现的标题不算分界（与 ebook-rs 的 byte_idx > 200 阈值一致）。
+        // 与真实 AZW3 一致：第一个 <h1> 之前在 200 字节之后只有标题本身，没有额外正文段。
+        let filler = "x".repeat(240);
+        let html = format!(
+            "<html><body>{filler}<h1>第一章</h1><p>正文一</p><h2>第二章</h2><p>正文二</p></body></html>"
+        );
+        let parts = split_mobi_html_for_remux(&html, 3).expect("应按标题切 3 节");
+        assert_eq!(parts.len(), 3);
+        assert!(parts[1].contains("第一章"));
+        assert!(parts[2].contains("第二章"));
     }
 }
 

@@ -43,6 +43,7 @@ fn item(id_src: &str, title: String, kind: ResourceKind, source: &str, page: Str
         download_url: dl,
         magnet: None,
         needs_ytdlp: false,
+        needs_pan: false,
         format: fmt.map(|s| s.to_string()),
         thumbnail: None,
         author: None,

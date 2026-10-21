@@ -161,6 +161,7 @@ async fn finish_ok(app: &AppHandle, id: &str, local_path: String) {
             download_url: e.task.urls.first().cloned(),
             magnet: None,
             needs_ytdlp: e.task.via_ytdlp,
+            needs_pan: false,
             format: None,
             thumbnail: None,
             author: None,

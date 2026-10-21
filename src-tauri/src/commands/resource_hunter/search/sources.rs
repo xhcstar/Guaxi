@@ -40,6 +40,13 @@ pub fn source_metas() -> Vec<SourceMeta> {
         s("annas", "Anna's Archive", "book", false, true),
         s("open_library", "Open Library", "book", false, true),
         s("doab", "DOAB", "book", false, true),
+        // 中文/公版书籍直下站：苦瓜书盘给 epub/azw3/mobi 直链，Standard Ebooks 是精校公版书。
+        s("kgbook", "苦瓜书盘（中文书）", "book", false, false),
+        s("standard_ebooks", "Standard Ebooks", "book", false, true),
+        // GitHub 上的书籍仓库：从 README/文件树里捞 PDF/EPUB，而不是给整仓 zip。
+        s("github_books", "GitHub 书籍仓库", "book", false, true),
+        // 网盘分享发行：中文书的主要流通方式，只能发现+打开，不能匿名下。
+        s("pansearch", "PanSearch 网盘搜索", "book", false, true),
         // 代码
         s("github", "GitHub", "code", false, true),
         s("gitlab", "GitLab", "code", false, true),

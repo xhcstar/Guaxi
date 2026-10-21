@@ -5,8 +5,10 @@ use futures_util::future::join_all;
 use sha2::{Digest, Sha256};
 
 pub mod apis;
+pub mod book_sources;
 pub mod engines;
 pub mod llm;
+pub mod pan_sources;
 pub mod resolve;
 pub mod seed_sites;
 pub mod sniffer;
@@ -101,6 +103,10 @@ fn source_authority(source: &str) -> f32 {
         "GitHub" | "GitLab" | "crates.io" | "npm" | "HuggingFace" | "Codeberg" => 0.92,
         "Zenodo" | "Dataverse" | "Figshare" => 0.9,
         "Gutenberg" | "OpenLibrary" | "DOAB" => 0.86,
+        "苦瓜书盘" | "StandardEbooks" => 0.84,
+        // 网盘分享：内容是书，但拿到手要靠转存，可下载性打折。
+        "夸克网盘" | "阿里云盘" | "百度网盘" | "迅雷云盘" | "123云盘" | "天翼云盘" | "115网盘"
+        | "移动云盘" | "PikPak" => 0.7,
         "Wikimedia" | "Openverse" | "InternetArchive" | "MetMuseum" | "NASA"
         | "LibriVox" | "Pexels" | "Jamendo" | "ArtInstitute" | "ClevelandArt"
         | "Unsplash" | "Pixabay" | "ccMixter" => 0.82,
@@ -321,7 +327,7 @@ where
 // PLACEHOLDER_RUN
 
 /// 领域 API 精确源：按需要的类型并发查结构化接口。每个源独立超时，慢源不拖累其它源。
-async fn api_sources(app: &tauri::AppHandle, kw: &str, kinds: &[ResourceKind], limit: usize, off: &std::collections::HashSet<String>) -> Vec<ResourceItem> {
+async fn api_sources(app: Option<&tauri::AppHandle>, kw: &str, kinds: &[ResourceKind], limit: usize, off: &std::collections::HashSet<String>) -> Vec<ResourceItem> {
     type BoxFut = std::pin::Pin<Box<dyn std::future::Future<Output = Vec<ResourceItem>> + Send>>;
     let mut futs: Vec<BoxFut> = Vec::new();
     let has = |k: ResourceKind| kinds.contains(&k);
@@ -367,6 +373,13 @@ async fn api_sources(app: &tauri::AppHandle, kw: &str, kinds: &[ResourceKind], l
         // Internet Archive 文本馆藏：keyless、CJK 友好、非 CF 门禁，且给真实 pdf/epub 直链。
         // 是中文书籍召回的可靠主力（英文向的 Gutendex/DOAB/OpenLibrary 对中文几乎无命中）。
         let k = kw.to_string(); src!("internet_archive", 18, apis::internet_archive(&k, "texts", ResourceKind::Book, limit));
+        // 中文书直下站（苦瓜书盘，境内直连）与精校公版书（Standard Ebooks）。
+        let k = kw.to_string(); src!("kgbook", 16, book_sources::kgbook(&k, limit));
+        let k = kw.to_string(); src!("standard_ebooks", 16, book_sources::standard_ebooks(&k, limit));
+        // 仓库里的书籍文件（README 直链 / 文件树枚举），与「代码」域的整仓 zip 是两回事。
+        let k = kw.to_string(); src!("github_books", 20, book_sources::github_books(&k, limit));
+        // 网盘分享：中文书的另一条主流通路，只能发现+打开（见 pan_sources 模块说明）。
+        let k = kw.to_string(); src!("pansearch", 20, pan_sources::pansearch(&k, limit));
     }
     if has(ResourceKind::Image) {
         let k = kw.to_string(); src!("baidu_image", 12, apis::baidu_image(&k, limit));
@@ -388,7 +401,7 @@ async fn api_sources(app: &tauri::AppHandle, kw: &str, kinds: &[ResourceKind], l
         let k = kw.to_string(); src!("librivox", 14, apis::librivox(&k, limit));
         let k = kw.to_string(); src!("jamendo", 14, apis::jamendo(&k, limit));
         let k = kw.to_string(); src!("ccmixter", 14, apis::ccmixter(&k, limit));
-        let k = kw.to_string(); let a = app.clone(); src!("ytsearch", 28, apis::ytsearch(&a, &k, "audio", limit));
+        if let Some(a) = app.cloned() { let k = kw.to_string(); src!("ytsearch", 28, apis::ytsearch(&a, &k, "audio", limit)); }
     }
     if has(ResourceKind::Video) {
         let k = kw.to_string(); src!("internet_archive", 18, apis::internet_archive(&k, "movies", ResourceKind::Video, limit));
@@ -397,18 +410,27 @@ async fn api_sources(app: &tauri::AppHandle, kw: &str, kinds: &[ResourceKind], l
         let k = kw.to_string(); src!("bilibili", 12, apis::bilibili_search(&k, limit));
         let k = kw.to_string(); src!("peertube", 14, apis::peertube(&k, limit));
         let k = kw.to_string(); src!("dailymotion", 14, apis::dailymotion(&k, limit));
-        let k = kw.to_string(); let a = app.clone(); src!("ytsearch", 28, apis::ytsearch(&a, &k, "video", limit));
+        if let Some(a) = app.cloned() { let k = kw.to_string(); src!("ytsearch", 28, apis::ytsearch(&a, &k, "video", limit)); }
     }
     join_all(futs).await.into_iter().flatten().collect()
 }
 
-/// 执行一次检索。
+/// 执行一次检索（命令入口）。
 pub async fn run(app: &tauri::AppHandle, query: SearchQuery) -> Vec<ResourceItem> {
+    let keyword = query.keyword.trim().to_string();
+    if !keyword.is_empty() {
+        let _ = store::record_query(&keyword);
+    }
+    run_impl(Some(app), query).await
+}
+
+/// 检索主体：与 Tauri 无关的部分都在这里，便于离线测试。
+/// `app` 为 None 时跳过依赖应用上下文的源（yt-dlp 搜索）。
+pub(crate) async fn run_impl(app: Option<&tauri::AppHandle>, query: SearchQuery) -> Vec<ResourceItem> {
     let keyword = query.keyword.trim().to_string();
     if keyword.is_empty() {
         return vec![];
     }
-    let _ = store::record_query(&keyword);
     let cfg = load_proxy();
     // 用户在「资源源」面板里禁用的源，检索时直接不请求（节省扇出、尊重偏好）。
     let off = sources::disabled_set();
@@ -507,7 +529,7 @@ pub async fn run(app: &tauri::AppHandle, query: SearchQuery) -> Vec<ResourceItem
     items.retain(|it| seen.insert(it.id.clone()));
     // 解析层：对“只有详情页、没有直链”的条目（Anna's/OpenLibrary/DOI 落地页等）尽力解析出
     // 可下载直链（md5→LibGen/IPFS、OpenLibrary→IA、DOI→OA PDF），让更多源真正可下。
-    resolve::resolve_items(&mut items).await;
+    let items = resolve::resolve_items(items).await;
     let mut items = sniffer::verify(items, &kinds).await;
     let terms: Vec<Vec<String>> = search_terms.iter().map(|t| tokenize(t)).collect();
     let terms_lc: Vec<String> = search_terms.iter().map(|s| s.to_lowercase()).collect();

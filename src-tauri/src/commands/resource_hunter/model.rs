@@ -45,6 +45,9 @@ pub struct ResourceItem {
     pub magnet: Option<String>,
     /// 是否需要 yt-dlp 解析（视频/音频站点页面）。
     pub needs_ytdlp: bool,
+    /// 网盘分享：匿名只能看不能下，须在浏览器里登录后转存。前端据此改写动作提示。
+    #[serde(default)]
+    pub needs_pan: bool,
     pub format: Option<String>,
     pub thumbnail: Option<String>,
     pub author: Option<String>,

@@ -79,6 +79,16 @@ pub fn build_client_for(cfg: &ProxyConfig, target: &str) -> Result<Client, Strin
 
 /// 不分流、直接指定代理（或直连）构造 Client。
 pub fn build_client_raw(proxy_url: Option<&str>) -> Result<Client, String> {
+    build_client_with_redirect(proxy_url, true)
+}
+
+/// 同 `build_client_raw`，但不自动跟随重定向：
+/// 需要检查 302 的 Location（再自行决定跳不跳）的调用方用它。
+pub fn build_client_raw_no_redirect(proxy_url: Option<&str>) -> Result<Client, String> {
+    build_client_with_redirect(proxy_url, false)
+}
+
+fn build_client_with_redirect(proxy_url: Option<&str>, follow_redirect: bool) -> Result<Client, String> {
     let mut builder = Client::builder()
         .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(60))
@@ -86,6 +96,9 @@ pub fn build_client_raw(proxy_url: Option<&str>) -> Result<Client, String> {
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
              (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
         );
+    if !follow_redirect {
+        builder = builder.redirect(reqwest::redirect::Policy::none());
+    }
     if let Some(url) = proxy_url {
         let proxy = reqwest::Proxy::all(url).map_err(|e| format!("代理地址无效: {e}"))?;
         builder = builder.proxy(proxy);

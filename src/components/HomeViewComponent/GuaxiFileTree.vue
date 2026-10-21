@@ -1688,7 +1688,17 @@ const sortFileTree = (tree) => {
  * 为什么仍然建标签：这样标签栏、分屏、关闭、拖动排序等既有交互全部照旧，
  * 用户不会遇到「打开了文件却没有标签」的新状态。
  */
-const openFileByKind = async (path, { region = '', onMissing = null } = {}) => {
+/**
+ * 打开一个文档。
+ *
+ * 二进制文档（PDF / 电子书 / Office / 表格 / 图片 / 音视频 / HTML）现在打开在**独立阅读器窗口**里：
+ * 阅读器要长出搜索、书签、批注、Office 编辑这些能力，继续挤在编辑器标签页里每加一个功能
+ * 都得先证明不碰 Monaco 和自动保存链路；独立窗口有自己的组件树，改它不影响主界面。
+ *
+ * 保留「在标签页中打开」：`inline` 为 true 时走原来的覆盖层路径。
+ * 这是退路而不是主路径 —— 用户从右键菜单显式选择时才走。
+ */
+const openFileByKind = async (path, { region = '', onMissing = null, inline = false } = {}) => {
   const normalized = normalizePath(path)
   if (!normalized) return false
 
@@ -1704,6 +1714,32 @@ const openFileByKind = async (path, { region = '', onMissing = null } = {}) => {
   }
 
   if (target && target.reader !== 'text') {
+    // 独立窗口：主编辑器不建标签、不挂覆盖层，完全让位。
+    if (!inline) {
+      try {
+        const fileName = normalized.replace(/\\/g, '/').split('/').filter(Boolean).pop() || ''
+        await invoke('create_doc_reader_window', {
+          path: normalized,
+          name: fileName,
+          kind: String(target.kind || ''),
+          reader: String(target.reader || ''),
+          theme: settingsStore.appearanceTheme,
+        })
+        logger.info('[OpenFile] opened in doc reader window', {
+          path: normalized,
+          reader: target.reader,
+          kind: target.kind,
+        })
+        return true
+      } catch (error) {
+        // 窗口建不起来（极少见）时退回标签页覆盖层，不能让文件打不开。
+        logger.warn('[OpenFile] doc reader window failed, fallback to inline reader', {
+          path: normalized,
+          error: String(error?.message || error),
+        })
+      }
+    }
+
     const placeholder = `该文件由内嵌阅读器显示（${String(target.reader)}）。
 
 路径：${normalized}`
@@ -1711,7 +1747,7 @@ const openFileByKind = async (path, { region = '', onMissing = null } = {}) => {
       unsupported: true,
       ...(region ? { region } : {}),
     })
-    logger.info('[OpenFile] opened via reader', {
+    logger.info('[OpenFile] opened via inline reader', {
       path: normalized,
       reader: target.reader,
       kind: target.kind,
@@ -2591,6 +2627,11 @@ const genMenuOptions = computed(() => {
     if (!node.is_directory && isMarkdownFilePath(node.id)) {
       base.push({ label: '在浏览器中查看', key: 'openInBrowser', icon: () => h(NIcon, null, { default: () => h(GlobeOutline) }) })
     }
+    // 文档默认开在独立阅读器窗口；这里给一条「仍在标签页里看」的退路，
+    // 便于读者一边读、一边在同一窗口对照编辑其它笔记。
+    if (!node.is_directory && readerTabStore.isReaderPath(node.id)) {
+      base.push({ label: '在标签页中打开', key: 'openInTab', icon: () => h(NIcon, null, { default: () => h(DocumentOutline) }) })
+    }
   }
   return base
 })
@@ -2626,6 +2667,7 @@ const handleGenMenuSelect = async (key) => {
     else if (key === 'openInExplorer' && node) await genOpenExplorer(node)
     else if (key === 'openInNeovim' && node) await openNodeInNeovim(node, `file-tree-${mode}`)
     else if (key === 'openInBrowser' && node) await openMarkdownInBrowser(node.id)
+    else if (key === 'openInTab' && node) await openFileByKind(node.id, { inline: true })
   } catch (e) {
     logger.error('文件操作失败:', e)
     message.error('操作失败: ' + (e?.message || e))

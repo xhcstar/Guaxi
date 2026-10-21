@@ -282,6 +282,7 @@ fn file_item(id_src: &str, title: &str, url: &str, ext: &str, kind: ResourceKind
         download_url: Some(url.to_string()),
         magnet: None,
         needs_ytdlp: false,
+        needs_pan: false,
         format: if ext.is_empty() { None } else { Some(ext.to_string()) },
         thumbnail: None,
         author: None,

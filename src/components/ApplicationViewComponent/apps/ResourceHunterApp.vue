@@ -126,13 +126,13 @@
               <n-virtual-list v-if="resultView==='list' && filteredResults.length" class="rh-scroll" :items="filteredResults" :item-size="60" key-field="id">
                 <template #default="{ item }">
                   <RhItem :item="item" view="list" :kind-meta="KIND" selectable :selected="selected.includes(item.id)"
-                    :actions="resultActions" @toggle="toggleSel" @act="onResultAct" />
+                    :actions="resultActionsFor(item)" @toggle="toggleSel" @act="onResultAct" />
                 </template>
               </n-virtual-list>
               <n-scrollbar v-else class="rh-scroll">
                 <div v-if="filteredResults.length" class="rh-grid">
                   <RhItem v-for="item in filteredResults" :key="item.id" :item="item" view="grid" :kind-meta="KIND"
-                    :thumb="thumbFor(item)" selectable :selected="selected.includes(item.id)" :actions="resultActions" @toggle="toggleSel" @act="onResultAct" />
+                    :thumb="thumbFor(item)" selectable :selected="selected.includes(item.id)" :actions="resultActionsFor(item)" @toggle="toggleSel" @act="onResultAct" />
                 </div>
                 <div v-else class="rh-empty-mini">没有符合当前筛选的结果</div>
               </n-scrollbar>
@@ -758,11 +758,18 @@ async function enqueue(item) {
   }
 }
 async function enqueueBatch() {
-  const items = filteredResults.value.filter((r) => selected.value.includes(r.id))
-  if (!items.length) return
+  const picked = filteredResults.value.filter((r) => selected.value.includes(r.id))
+  if (!picked.length) return
+  // 网盘分享拿不到匿名直链，混进批量只会换来一批失败任务；先剔出来并说明。
+  const items = picked.filter((r) => !r.needs_pan)
+  const skipped = picked.length - items.length
+  if (!items.length) {
+    message.warning(`选中的 ${skipped} 项都是网盘分享，需在浏览器打开后登录转存`)
+    return
+  }
   try {
     const ids = await invoke('rh_enqueue_batch', { items })
-    message.success(`已加入 ${ids.length} 个下载任务`)
+    message.success(`已加入 ${ids.length} 个下载任务${skipped ? `，跳过 ${skipped} 项网盘分享` : ''}`)
     selected.value = []
     workspace.value = 'downloads'
   } catch (e) {
@@ -773,6 +780,12 @@ function onResultAct(key, item) {
   if (key === 'open') openOnline(item)
   else if (key === 'download') enqueue(item)
 }
+// 网盘分享匿名下载拿不到地址，只能浏览器打开后登录转存：
+// 主按钮直接变成「浏览器打开」，并说明原因，别让用户等到下载失败才发现。
+const resultActionsFor = (item) =>
+  item && item.needs_pan
+    ? [{ key: 'open', icon: externalIcon, tip: '浏览器打开（网盘分享，需登录转存）', cls: 'primary' }]
+    : resultActions
 function onLibAct(key, item) {
   if (key === 'open') openPath(item.local_path)
   else if (key === 'reveal') reveal(item.local_path)

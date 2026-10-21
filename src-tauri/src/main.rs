@@ -532,6 +532,8 @@ async fn main() {
             commands::doc_reader::read_document_for_reader,
             commands::doc_reader::read_spreadsheet,
             commands::doc_reader::convert_document_to_markdown,
+            commands::doc_reader_window::create_doc_reader_window,
+            commands::doc_reader_window::close_doc_reader_window,
             commands::synctex::synctex_forward,
             commands::synctex::synctex_inverse,
             commands::taskmanager::task_get_config,

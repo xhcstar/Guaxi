@@ -15,6 +15,7 @@
         <span v-if="item.size_hint" class="rhi-fmt">{{ fmtSize(item.size_hint) }}</span>
         <span v-if="item.needs_ytdlp" class="rhi-tag">yt-dlp</span>
         <span v-if="item.magnet" class="rhi-tag">磁力</span>
+        <span v-if="item.needs_pan" class="rhi-tag warn">网盘分享</span>
         <span v-for="t in extraTags" :key="t" class="rhi-tag">{{ t }}</span>
         <span v-if="typeof item.relevance === 'number'" class="rhi-rel">{{ (item.relevance * 100).toFixed(0) }}%</span>
       </div>
@@ -80,6 +81,8 @@ function fmtSize(b) {
 .rhi-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--guaxi-text-secondary, #57606a); margin-top: 4px; }
 .rhi-fmt { font-weight: 600; letter-spacing: .3px; }
 .rhi-tag { padding: 0 6px; border-radius: 4px; background: var(--guaxi-border, #eef); font-size: 11px; }
+/* 网盘分享：不是「下不了」而是「要转存」，用中性偏警示色与普通标签区分。 */
+.rhi-tag.warn { background: color-mix(in srgb, var(--k-audio, #f59e0b) 20%, transparent); color: var(--k-audio, #b45309); }
 .rhi-rel { margin-left: auto; }
 .rhi.grid .rhi-rel { margin-left: 0; }
 .rhi-actions { display: flex; gap: 4px; flex-shrink: 0; }

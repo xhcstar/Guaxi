@@ -55,6 +55,14 @@ fn ext_for(item: &ResourceItem) -> String {
 }
 
 fn build_task(app: &AppHandle, item: &ResourceItem) -> Result<DownloadTask, String> {
+    // 网盘分享匿名拿不到下载地址（夸克要转存、阿里云盘要登录），
+    // 直接入队只会得到一个必然失败的任务，不如在此说清楚该怎么做。
+    if item.needs_pan {
+        return Err(format!(
+            "「{}」是网盘分享，需在浏览器打开后登录转存再下载；可点「浏览器打开」跳转",
+            item.source
+        ));
+    }
     let dir = store::downloads_dir(app)?;
     let stem = format!("{}-{}", sanitize(&item.title), &item.id[..item.id.len().min(6)]);
     let dest = if item.needs_ytdlp {

@@ -5292,6 +5292,10 @@ const pythonRuntimeOperationSummary = computed(() => {
 let unlistenTemplateInsert = null
 let templateInsertListenerUnmounted = false
 let neovimExitedUnlisten = null
+/** 独立阅读器窗口发来的「交给编辑器」请求。 */
+let docReaderBridgeUnlisten = null
+/** 独立阅读器窗口发来的「转换为 Markdown」请求。 */
+let docReaderConvertUnlisten = null
 const PENDING_TEMPLATE_INSERT_KEY = 'guaxi.pending_template_insert'
 const TEMPLATE_INSERT_DEDUP_MS = 1500
 let lastTemplateInsertPayload = ''
@@ -5365,6 +5369,35 @@ const safeUnlistenTemplateInsert = () => {
 
 onMounted(async () => {
   templateInsertListenerUnmounted = false
+
+  // 独立阅读器窗口里没有编辑器，所以「用编辑器打开 / 转换为 Markdown」必须回到主窗口执行。
+  // 阅读器窗口 emit 事件，这里接住并走既有实现 —— 逻辑只有一份，两边不会分叉。
+  try {
+    docReaderBridgeUnlisten = await listen('doc-reader:open-in-editor', async (event) => {
+      const path = String(event?.payload?.path || '').trim()
+      if (!path) return
+      logger.info('[DocReaderBridge] open in editor requested', { path })
+      await forceOpenInEditor(path)
+    })
+  } catch (error) {
+    logger.warn('[DocReaderBridge] listen open-in-editor failed', {
+      error: String(error?.message || error),
+    })
+  }
+
+  try {
+    docReaderConvertUnlisten = await listen('doc-reader:convert-to-markdown', async (event) => {
+      const path = String(event?.payload?.path || '').trim()
+      if (!path) return
+      logger.info('[DocReaderBridge] convert to markdown requested', { path })
+      await convertReaderTabToMarkdown(path)
+    })
+  } catch (error) {
+    logger.warn('[DocReaderBridge] listen convert failed', {
+      error: String(error?.message || error),
+    })
+  }
+
   try {
     const unlisten = await listen('template_insert_event', async (event) => {
       const content = typeof event?.payload?.content === 'string' ? event.payload.content : ''
@@ -25895,6 +25928,14 @@ onUnmounted(() => {
   if (pythonRuntimeOpLogUnlisten) {
     try { Promise.resolve(pythonRuntimeOpLogUnlisten()).catch(() => {}) } catch {}
     pythonRuntimeOpLogUnlisten = null
+  }
+  if (docReaderBridgeUnlisten) {
+    try { Promise.resolve(docReaderBridgeUnlisten()).catch(() => {}) } catch {}
+    docReaderBridgeUnlisten = null
+  }
+  if (docReaderConvertUnlisten) {
+    try { Promise.resolve(docReaderConvertUnlisten()).catch(() => {}) } catch {}
+    docReaderConvertUnlisten = null
   }
 });
 
