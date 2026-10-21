@@ -2,8 +2,10 @@ use crate::commands::notebook::preprocess_markdown_for_static_render;
 use crate::commands::knowledgebase::get_knowledge_base_list;
 use actix_web::{get, web, HttpResponse};
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use tracing::{error, info, warn};
 use urlencoding::{decode, encode};
 fn escape_html(input: &str) -> String {
@@ -43,6 +45,87 @@ fn filename_ascii_fallback(name: &str) -> String {
     }
 }
 
+/// 用户在软件内**显式**点过「在浏览器中查看」的文件。
+///
+/// 预览端点的放行规则原本只有「文件落在某个知识库根目录下」，这对知识编辑模式够用，
+/// 但文件编辑 / 任务编辑模式打开的是任意外部目录（含可配置的任务根目录），
+/// 它们不在知识库根下，直接请求会 403。
+///
+/// 这里沿用 `markdown_image_process::ResolvedImageRegistry` 的思路：授权只来自软件内的一次
+/// 明确动作（前端调用 `remember_browser_preview_path` 命令），HTTP 端点本身不扩大可见范围 ——
+/// 没有这条登记，任意外部路径依然读不到。
+const REMEMBERED_PREVIEW_LIMIT: usize = 2_000;
+
+fn remembered_preview_files() -> &'static Mutex<HashSet<PathBuf>> {
+    static REGISTRY: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn remember_preview_file(path: &Path) {
+    let Ok(mut files) = remembered_preview_files().lock() else {
+        return;
+    };
+    if files.len() >= REMEMBERED_PREVIEW_LIMIT {
+        files.clear();
+    }
+    files.insert(path.to_path_buf());
+}
+
+fn is_remembered_preview_file(path: &Path) -> bool {
+    remembered_preview_files()
+        .lock()
+        .map(|files| files.contains(path))
+        .unwrap_or(false)
+}
+
+/// 该文件是否与某个「显式点开预览」的 Markdown 同目录。
+///
+/// 图表围栏的 `data: ./x.csv` 是相对笔记目录解析的；被预览的笔记既然已被用户显式放行，
+/// 它自己目录下的数据文件也应可读，否则 plain/task 模式的图表在浏览器里全是读取失败。
+fn is_sibling_of_remembered_preview(path: &Path) -> bool {
+    let Some(dir) = path.parent() else {
+        return false;
+    };
+    remembered_preview_files()
+        .lock()
+        .map(|files| files.iter().any(|f| f.parent() == Some(dir)))
+        .unwrap_or(false)
+}
+
+/// 前端「在浏览器中查看」前调用：把该 Markdown 文件登记为本次会话可预览。
+///
+/// 只接受真实存在的 .md/.markdown 文件；目录、二进制一律拒绝，
+/// 免得这条命令被当成通用的「放行任意路径」入口。
+#[tauri::command]
+pub fn remember_browser_preview_path(path: String) -> Result<(), String> {
+    // 这里收到的是前端直接给的文件系统路径，不做百分号解码：
+    // 文件名里带 `%` 时解码会失败，而 IPC 这条路本来就不需要编解码。
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("Empty path".to_string());
+    }
+    // 只在 Windows 上剥掉 `\\?\` 前缀：这个前缀本身就是以两个反斜杠开头，
+    // 在其它平台上无条件剥会把 UNC 风格的绝对路径改坏。
+    let raw = trimmed.strip_prefix(r"\\?\").unwrap_or(trimmed);
+    let file_canon = PathBuf::from(raw)
+        .canonicalize()
+        .map_err(|_| "File not found".to_string())?;
+
+    if !file_canon.is_file() {
+        return Err("Not a file".to_string());
+    }
+    if !is_markdown_file(&file_canon) {
+        return Err("Not a markdown file".to_string());
+    }
+
+    remember_preview_file(&file_canon);
+    info!(
+        file = file_canon.to_string_lossy().as_ref(),
+        "browser preview: path allowed for preview"
+    );
+    Ok(())
+}
+
 fn resolve_allowed_markdown_file(raw_path: &str) -> Result<PathBuf, String> {
     info!(raw_path = raw_path, "browser preview: resolve file start");
 
@@ -77,6 +160,17 @@ fn resolve_allowed_markdown_file(raw_path: &str) -> Result<PathBuf, String> {
 
     if !is_markdown_file(&file_canon) {
         return Err("Not a markdown file".to_string());
+    }
+
+    // 用户在软件内显式点开过的文件直接放行：允许根可能一个都没有（没配知识库），
+    // 也可能不覆盖 plain/task 模式的外部目录，这条登记就是补上后者。
+    // 放在查询知识库之前，避免「没配知识库 / 库表打不开」把已授权的预览一起挡掉。
+    if is_remembered_preview_file(&file_canon) {
+        info!(
+            file = file_canon.to_string_lossy().as_ref(),
+            "browser preview: allowed by explicit user request"
+        );
+        return Ok(file_canon);
     }
 
     let kbs = get_knowledge_base_list().map_err(|e| e.to_string())?;
@@ -159,6 +253,11 @@ fn resolve_allowed_data_file(raw_path: &str) -> Result<PathBuf, String> {
     let resource_root = crate::commands::settingview::get_image_bed_root();
     if let Ok(canon) = PathBuf::from(resource_root.trim()).canonicalize() {
         allowed_roots.push(canon);
+    }
+
+    // 已显式放行预览的笔记本身，及其同目录下的数据文件。
+    if is_remembered_preview_file(&file_canon) || is_sibling_of_remembered_preview(&file_canon) {
+        return Ok(file_canon);
     }
 
     if allowed_roots.is_empty() {
@@ -1426,4 +1525,62 @@ pub fn browser_preview_config(cfg: &mut web::ServiceConfig) {
         .service(browser_asset_echarts_wordcloud)
         .service(browser_asset_highlight_css)
         .service(browser_preview);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unique_temp_file(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "guaxi_preview_test_{}_{}",
+            std::process::id(),
+            name
+        ));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    #[test]
+    fn explicit_request_allows_markdown_outside_knowledge_bases() {
+        // 这条登记就是为 plain/task 模式的外部目录准备的：它们不在任何知识库根下。
+        let dir = unique_temp_file("allow");
+        let file = dir.join("note.md");
+        fs::write(&file, "# hi").expect("write temp md");
+        let canon = file.canonicalize().expect("canonicalize");
+
+        assert!(!is_remembered_preview_file(&canon));
+        remember_preview_file(&canon);
+        assert!(is_remembered_preview_file(&canon));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn only_the_exact_file_and_its_neighbours_are_allowed() {
+        let dir = unique_temp_file("scope");
+        let note = dir.join("note.md");
+        let sibling = dir.join("data.csv");
+        let outsider = dir.join("sub").join("other.csv");
+        fs::write(&note, "# hi").expect("write note");
+        fs::write(&sibling, "a,b").expect("write sibling");
+        fs::create_dir_all(outsider.parent().unwrap()).expect("create sub");
+        fs::write(&outsider, "a,b").expect("write outsider");
+
+        let note_canon = note.canonicalize().expect("canon note");
+        remember_preview_file(&note_canon);
+
+        // 同目录的数据文件（图表 data: ./x.csv）放行，其它目录不放行。
+        assert!(is_sibling_of_remembered_preview(
+            &sibling.canonicalize().expect("canon sibling")
+        ));
+        assert!(!is_sibling_of_remembered_preview(
+            &outsider.canonicalize().expect("canon outsider")
+        ));
+        assert!(!is_remembered_preview_file(
+            &outsider.canonicalize().expect("canon outsider")
+        ));
+
+        fs::remove_dir_all(&dir).ok();
+    }
 }

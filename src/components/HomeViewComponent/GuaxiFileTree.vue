@@ -637,6 +637,29 @@ const isMarkdownFilePath = (p) => {
   return v.endsWith('.md') || v.endsWith('.markdown')
 }
 
+// 「在浏览器中查看」三种模式共用：预览端点本身只认知识库根，plain/task 的外部目录
+// 需要先让后端登记这次显式请求，否则会 403。
+const openMarkdownInBrowser = async (filePath) => {
+  const nodePath = normalizePath(filePath)
+  if (!nodePath) return
+  if (!isMarkdownFilePath(nodePath)) {
+    message.warning('仅支持 Markdown 文件')
+    return
+  }
+  try {
+    await invoke('remember_browser_preview_path', { path: nodePath })
+  } catch (error) {
+    logger.warn('[OpenInBrowser] register preview path failed', {
+      path: nodePath,
+      error: String(error?.message || error),
+    })
+    message.error('无法在浏览器中打开该文件')
+    return
+  }
+  const url = `http://localhost:8888/browser/preview?path=${encodeURIComponent(nodePath)}`
+  await openUrl(url)
+}
+
 // pandoc 只能“导出”PDF、不能把 PDF/图片作为输入解析（会报 “Unknown input format pdf”）。
 // 侧边栏快速导入仅覆盖 pandoc 能读取的文本类文档；PDF、扫描件、图片等需走仓库导入的
 // marker/OCR 流程，这里提前拦截并给出明确提示，避免把 pandoc 的失败堆栈直接抛给用户。
@@ -2564,6 +2587,10 @@ const genMenuOptions = computed(() => {
       { label: '在文件浏览器中打开', key: 'openInExplorer', icon: () => h(NIcon, null, { default: () => h(FolderOutline) }) },
       { label: '用 Neovim 打开', key: 'openInNeovim', icon: renderNeovimIcon },
     )
+    // 浏览器预览只对 Markdown 文件有意义，目录与非 Markdown 文件不显示这一项。
+    if (!node.is_directory && isMarkdownFilePath(node.id)) {
+      base.push({ label: '在浏览器中查看', key: 'openInBrowser', icon: () => h(NIcon, null, { default: () => h(GlobeOutline) }) })
+    }
   }
   return base
 })
@@ -2598,6 +2625,7 @@ const handleGenMenuSelect = async (key) => {
     else if (key === 'delete' && node) await genDelete(mode, node)
     else if (key === 'openInExplorer' && node) await genOpenExplorer(node)
     else if (key === 'openInNeovim' && node) await openNodeInNeovim(node, `file-tree-${mode}`)
+    else if (key === 'openInBrowser' && node) await openMarkdownInBrowser(node.id)
   } catch (e) {
     logger.error('文件操作失败:', e)
     message.error('操作失败: ' + (e?.message || e))
@@ -2998,13 +3026,7 @@ const handleContextMenuSelect = async (key) => {
         break;
       case 'openInBrowser':
         if (selectedNode.value && !selectedNode.value.is_directory) {
-          const nodePath = normalizePath(selectedNode.value.id)
-          if (!isMarkdownFilePath(nodePath)) {
-            message.warning('仅支持 Markdown 文件')
-            break
-          }
-          const url = `http://localhost:8888/browser/preview?path=${encodeURIComponent(nodePath)}`
-          await openUrl(url)
+          await openMarkdownInBrowser(selectedNode.value.id)
         }
         break;
     }

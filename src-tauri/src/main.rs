@@ -503,6 +503,7 @@ async fn main() {
             commands::preview_render_cache::preview_render_cache_put,
             commands::preview_render_cache::preview_render_cache_stats,
             commands::preview_render_cache::preview_render_cache_clear,
+            guaxiservices::markdown_browser::remember_browser_preview_path,
             commands::service_control::service_list,
             commands::service_control::service_start,
             commands::service_control::service_stop,
