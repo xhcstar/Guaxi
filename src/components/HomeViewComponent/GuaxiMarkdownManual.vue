@@ -62,6 +62,11 @@ import { Icon } from '@iconify/vue'
 import mdiCheck from '@iconify-icons/mdi/check'
 import mdiContentCopy from '@iconify-icons/mdi/content-copy'
 import { renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker.js'
+import {
+  renderChartEmbeds,
+  disposeChartInstances,
+  bindExcalidrawOpenButtons,
+} from '../GuaxiMarkdownRender/guaxiChartEmbeds'
 import markdownManualRaw from '../../assets/MarkdownTest.md?raw'
 import { useSettingsStore } from '../../stores/settingsStore'
 
@@ -239,6 +244,29 @@ const renderMermaidIn = async (rootEl) => {
   }
 }
 
+/**
+ * 渲染 `chart` / `excalidraw` 围栏。
+ *
+ * 渲染器只吐出占位 div，「正在渲染图表…」必须由 renderChartEmbeds 在 DOM 挂载后接管，
+ * 否则手册里的图表示例永远停在占位状态。与编辑器预览用同一套入口，行为保持一致。
+ */
+const renderEmbedsIn = (rootEl) => {
+  const root = rootEl instanceof Element ? rootEl : null
+  if (!root) return
+
+  try {
+    renderChartEmbeds(root)
+    bindExcalidrawOpenButtons(root, {
+      onOpen: (ref) => {
+        // 手册窗口没有白板页上下文，只把路径记到日志；不伪造一个并不存在的跳转契约。
+        logger.info('[MarkdownManual] excalidraw open requested', { ref })
+      },
+    })
+  } catch (e) {
+    logger.warn('[MarkdownManual] chart embeds failed:', e)
+  }
+}
+
 const parseCards = (src) => {
   const lines = String(src || '').split(/\r?\n|\r/)
   const idxs = []
@@ -262,6 +290,13 @@ const parseCards = (src) => {
 
 const doRender = async () => {
   loading.value = true
+  // 主题切换会整批重建卡片：旧图表实例必须先销毁，否则 ECharts 实例挂在被丢弃的
+  // DOM 上，ResizeObserver 也跟着泄漏。
+  try {
+    disposeChartInstances(previewContainerRef.value)
+  } catch {
+    /* 首次渲染时容器还不存在 */
+  }
   try {
     logger.info('[MarkdownManual] cards render start:', {
       theme: normalizedTheme.value,
@@ -295,6 +330,7 @@ const doRender = async () => {
 
   await nextTick()
   await renderMermaidIn(previewContainerRef.value)
+  await renderEmbedsIn(previewContainerRef.value)
   await nextTick()
 
   if (activeCardId.value) {
@@ -327,6 +363,11 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   stopResize()
   window.removeEventListener('resize', resetSplit)
+  try {
+    disposeChartInstances(previewContainerRef.value)
+  } catch {
+    /* 已卸载 */
+  }
 })
 
 watch(normalizedTheme, async () => {

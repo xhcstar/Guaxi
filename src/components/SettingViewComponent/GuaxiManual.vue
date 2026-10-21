@@ -405,13 +405,30 @@ data: |
   周三,160
 ```</pre>
           <h4 class="h4">数据可以放在哪里</h4>
-          <p class="p">`data` 支持三种路径写法，不再局限于笔记同级目录：</p>
+          <p class="p">`data` 支持四种路径写法：</p>
           <ul class="manual-ul">
+            <li><b>资源库</b>：以 <code>resource:</code> 开头，指向<b>资源库内的副本</b>，如 <code>resource:charts/2026/10/sales.csv</code>。这是<b>推荐写法</b>，见下方说明。</li>
             <li><b>相对路径</b>：相对<b>当前笔记所在目录</b>，如 <code>./data/sales.csv</code>、<code>../shared/x.csv</code>。</li>
             <li><b>绝对路径</b>：系统任意位置，如 <code>D:/datasets/sales.csv</code>。</li>
             <li><b>用户目录</b>：以 <code>~/</code> 开头，如 <code>~/datasets/sales.csv</code>。</li>
           </ul>
           <p class="p">支持格式：<b>.csv</b>（逗号分隔）、<b>.tsv</b>（制表符分隔）、<b>.json</b>。</p>
+
+          <h4 class="h4">数据来源管理（推荐固化进资源库）</h4>
+          <p class="p">
+            直接引用本机绝对路径的图表，一旦数据文件被移走、清理，或者笔记换一台机器打开，
+            图表就画不出来。把数据文件<b>固化进资源库</b>可以避免这个问题：
+          </p>
+          <ul class="manual-ul">
+            <li>编辑器工具栏点<b>图表</b>按钮，选一个 <code>.csv</code> / <code>.tsv</code> / <code>.json</code> 文件；</li>
+            <li>文件会被复制到资源库的 <code>charts/年/月/</code> 下，并在文档里插入一段引用 <code>resource:</code> 路径的围栏；</li>
+            <li>随后按需改 <code>spec</code> 里的 <code>type</code> / <code>x</code> / <code>y</code> 即可。</li>
+          </ul>
+          <p class="p">
+            回退机制：相对路径或绝对路径读不到时，会再用同一相对路径去资源库里找一次。
+            所以即使文档里保留着旧的 <code>./data/sales.csv</code>，只要同名文件在资源库中，图表照样能渲染。
+            资源库本身可以通过同步功能带到其他机器，实现「笔记 + 数据」一起迁移。
+          </p>
 
           <h4 class="h4">支持的图表类型（26 种）</h4>
           <p class="p">
@@ -496,7 +513,7 @@ data: |
           <h3 class="h3">5. 导出与兼容</h3>
           <ul class="manual-ul">
             <li>导出 HTML / PDF 走与预览同源的渲染器，mermaid、MathJax、图表、白板都会一起导出。</li>
-            <li>图表数据文件不会被打包进导出的 HTML；分享时把数据文件或截图一起带上更稳妥。</li>
+            <li>图表数据文件不会被打包进导出的 HTML；分享时把数据文件（或用 <code>resource:</code> 入库后的资源库）或截图一起带上更稳妥。</li>
             <li>围栏语法写错时只会让那一块显示错误提示，不影响同一篇笔记的其它内容。</li>
           </ul>
         </section>

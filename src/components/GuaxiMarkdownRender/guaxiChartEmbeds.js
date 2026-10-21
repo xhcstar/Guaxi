@@ -108,33 +108,81 @@ async function resolveLocalRef(ref, baseDir) {
 /**
  * 读取外部数据文件。
  *
- * 支持三种写法，覆盖「数据来自任意位置」的需求：
- *   1. 相对路径（`./data/x.csv`、`../shared/x.csv`）—— 相对**当前笔记所在目录**；
- *   2. 绝对路径（`D:/data/x.csv`、`/home/u/x.csv`）；
- *   3. 用户主目录（`~/datasets/x.csv`）。
+ * 引用顺序（这是「换机器/挪文件后图表还能画出来」的关键）：
+ *   1. `resource:charts/sales.csv` —— 显式指向资源库内副本，最稳；
+ *   2. `./data/x.csv`、`../shared/x.csv` —— 相对当前笔记所在目录；
+ *   3. `D:/data/x.csv`、`/home/u/x.csv` —— 绝对路径；
+ *   4. `~/datasets/x.csv` —— 用户主目录。
  *
- * 读取失败时抛出带路径的明确错误，而不是让图表静默变空。
+ * 第 2/3 步读不到时再回退到资源库同名相对路径：笔记里的写法不用改，
+ * 只要数据文件被纳入资源库，原文件被挪走或换机器也能继续渲染。
  */
 async function loadExternalData(ref, baseDir) {
   const raw = String(ref || '').trim()
   if (!raw) throw new Error('data 为空')
 
-  const abs = await resolveLocalRef(raw, baseDir)
-  const ext = String(abs.split('.').pop() || '').toLowerCase()
-  const format = ext === 'json' ? 'json' : ext === 'tsv' ? 'tsv' : ext === 'csv' ? 'csv' : 'auto'
-
-  try {
-    const text = await invoke('read_file_content', { path: abs })
-    logger.info('[ChartEmbed] loaded external data', { ref: raw, abs, format })
-    return { text: String(text || ''), format }
-  } catch (error) {
-    const hint =
-      format === 'auto'
-        ? '支持 .csv / .tsv / .json 三种数据文件'
-        : '请确认路径正确、文件是 UTF-8 文本'
-    throw new Error(`读取数据文件失败：${abs}
-${hint}`)
+  const extOf = (p) => String(p.split('.').pop() || '').toLowerCase()
+  const formatOf = (p) => {
+    const ext = extOf(p)
+    return ext === 'json' ? 'json' : ext === 'tsv' ? 'tsv' : ext === 'csv' ? 'csv' : 'auto'
   }
+
+  const ATTEMPTS = []
+
+  // 1) 显式资源库引用
+  if (/^resource:/i.test(raw)) {
+    const rel = raw.replace(/^resource:/i, '').replace(/^[/\\]+/, '')
+    const abs = await invoke('resolve_resource_path', { relativePath: rel })
+    ATTEMPTS.push({ label: '资源库', abs })
+  } else {
+    try {
+      const abs = await resolveLocalRef(raw, baseDir)
+      ATTEMPTS.push({ label: '文档目录', abs })
+    } catch (error) {
+      // 相对路径没有基准目录时，仍然值得试一次资源库。
+      logger.info('[ChartEmbed] local ref unresolved, falling back to resource library', {
+        ref: raw,
+        reason: String(error?.message || error),
+      })
+    }
+    // 无论上面成功与否，都追加资源库回退 —— 文档目录那份可能已经不在了。
+    if (!/^([a-zA-Z]:[/\\]|\/|~[/\\])/.test(raw)) {
+      try {
+        const rel = raw.replace(/^\.\//, '').replace(/^[/\\]+/, '')
+        const abs = await invoke('resolve_resource_path', { relativePath: rel })
+        ATTEMPTS.push({ label: '资源库', abs })
+      } catch {
+        /* 资源库未配置时不构成故障 */
+      }
+    }
+  }
+
+  if (!ATTEMPTS.length) {
+    throw new Error(
+      `无法解析数据引用「${raw}」：当前文档没有可用的基准目录。请改用绝对路径（如 D:/data/x.csv）、~/ 开头，或 resource: 开头的资源库路径。`
+    )
+  }
+
+  const tried = []
+  for (const { label, abs } of ATTEMPTS) {
+    try {
+      const text = await invoke('read_file_content', { path: abs })
+      logger.info('[ChartEmbed] loaded external data', {
+        ref: raw,
+        abs,
+        via: label,
+        format: formatOf(abs),
+      })
+      return { text: String(text || ''), format: formatOf(abs) }
+    } catch (error) {
+      tried.push(`${label} ${abs}: ${String(error?.message || error)}`)
+    }
+  }
+
+  throw new Error(`读取数据文件失败：${raw}
+已尝试：
+${tried.map((t) => `  - ${t}`).join('\n')}
+支持 .csv / .tsv / .json 三种数据文件。也可以把数据文件放进资源库后用 resource:相对路径 引用。`)
 }
 
 // ───────────────────────── 渲染入口 ─────────────────────────
@@ -187,6 +235,42 @@ const isDarkTheme = () => {
 }
 
 /**
+ * 把一个 chart 围栏解析成可直接喂给 ECharts 的 option。
+ *
+ * 实时渲染与导出静态渲染共用这一份逻辑：两边各写一遍必然漂移，
+ * 出现「预览能画、导出画不出来」这类只在某一侧复现的问题。
+ *
+ * @param {string} source 围栏正文
+ * @param {string} baseDocPath 当前文档路径（解析相对数据文件用）
+ */
+async function buildOptionFromFence(source, baseDocPath) {
+  const parsed = parseChartFence(source)
+  if (!parsed.spec) {
+    throw new Error('无法解析 chart 围栏（spec 需要是 JSON）')
+  }
+
+  let rawData = parsed.data
+  let format = parsed.dataFormat
+  if (parsed.data && !parsed.dataInline && !parsed.data.includes('\n')) {
+    const loaded = await loadExternalData(parsed.data, dirnameOf(baseDocPath))
+    rawData = loaded.text
+    format = loaded.format
+  }
+
+  const records = normalizeDataset(rawData, format)
+  const typeKey = normalizeChartType(parsed.spec?.type)
+  const extensionRequires = CHART_TYPES[typeKey]?.family === 'extension'
+    ? EXTENSION_BUILDERS[typeKey]?.requires
+    : null
+  const option = buildChartOption(parsed.spec, records)
+
+  // 扩展包类型（liquidFill / wordCloud）必须先注册系列，否则 setOption 会静默画空白。
+  if (extensionRequires) await ensureExtension(extensionRequires)
+
+  return { option, records, parsed, typeKey }
+}
+
+/**
  * 渲染单个 chart 容器。
  * @param {HTMLElement} el 渲染器产出的 .guaxi-chart-block__canvas
  */
@@ -199,28 +283,7 @@ async function renderChartBlock(el) {
   const baseDocPath = safeDecode(el.getAttribute('data-chart-base') || '')
 
   try {
-    const parsed = parseChartFence(source)
-    if (!parsed.spec) {
-      throw new Error('无法解析 chart 围栏（spec 需要是 JSON）')
-    }
-
-    let rawData = parsed.data
-    let format = parsed.dataFormat
-    if (parsed.data && !parsed.dataInline && !parsed.data.includes('\n')) {
-      const loaded = await loadExternalData(parsed.data, dirnameOf(baseDocPath))
-      rawData = loaded.text
-      format = loaded.format
-    }
-
-    const records = normalizeDataset(rawData, format)
-    const typeKey = normalizeChartType(parsed.spec?.type)
-    const extensionRequires = CHART_TYPES[typeKey]?.family === 'extension'
-      ? EXTENSION_BUILDERS[typeKey]?.requires
-      : null
-    const option = buildChartOption(parsed.spec, records)
-
-    // 扩展包类型（liquidFill / wordCloud）必须先注册系列，否则 setOption 会静默画空白。
-    if (extensionRequires) await ensureExtension(extensionRequires)
+    const { option, records, parsed } = await buildOptionFromFence(source, baseDocPath)
 
     const echarts = await loadECharts()
     const instance = echarts.init(el, isDarkTheme() ? 'dark' : null, { renderer: 'canvas' })
@@ -264,6 +327,36 @@ async function renderChartBlock(el) {
 }
 
 /**
+ * 读取嵌入块引用的文本文件（excalidraw 场景 JSON 等）。
+ *
+ * 与 loadExternalData 同一套回退顺序：文档目录 → 资源库。
+ * 白板场景文件比数据文件更容易「画完随手另存到别处」，资源库回退在这里同样必要。
+ */
+async function readEmbedFile(ref, baseDir) {
+  const raw = String(ref || '').trim()
+  if (!raw) throw new Error('路径为空')
+
+  if (/^resource:/i.test(raw)) {
+    const rel = raw.replace(/^resource:/i, '').replace(/^[/\\]+/, '')
+    const abs = await invoke('resolve_resource_path', { relativePath: rel })
+    return { abs, text: String(await invoke('read_file_content', { path: abs }) || '') }
+  }
+
+  try {
+    const abs = await resolveLocalRef(raw, baseDir)
+    const text = String(await invoke('read_file_content', { path: abs }) || '')
+    return { abs, text }
+  } catch (error) {
+    // 绝对路径读不到时不再猜；相对路径才回退到资源库同名位置。
+    if (/^([a-zA-Z]:[/\\]|\/|~[/\\])/.test(raw)) throw error
+    const rel = raw.replace(/^\.\//, '').replace(/^[/\\]+/, '')
+    const abs = await invoke('resolve_resource_path', { relativePath: rel })
+    logger.info('[ChartEmbed] embed file fell back to resource library', { ref: raw, abs })
+    return { abs, text: String(await invoke('read_file_content', { path: abs }) || '') }
+  }
+}
+
+/**
  * 渲染单个 excalidraw 容器。
  *
  * 优先用官方 exportToSvg 生成静态 SVG（无 React、无交互，导出到 PDF 也安全）；
@@ -279,13 +372,12 @@ async function renderExcalidrawBlock(el) {
 
   try {
     if (!scenePath) throw new Error('缺少场景文件路径')
-    // 与 chart 的 data 保持同一套路径规则：相对（笔记目录）/ 绝对 / ~ 开头。
-    const abs = await resolveLocalRef(scenePath, dirnameOf(baseDocPath))
-    const raw = await invoke('read_file_content', { path: abs })
+    // 与 chart 的 data 保持同一套路径规则：相对（笔记目录）/ 绝对 / ~ 开头 / resource: 资源库。
+    const { abs, text } = await readEmbedFile(scenePath, dirnameOf(baseDocPath))
 
     let scene
     try {
-      scene = JSON.parse(String(raw || '{}'))
+      scene = JSON.parse(String(text || '{}'))
     } catch (error) {
       throw new Error(`场景文件不是合法 JSON：${error.message}`)
     }
@@ -320,6 +412,126 @@ async function renderExcalidrawBlock(el) {
     wrap.innerHTML = `<div class="guaxi-excalidraw-embed__error">白板渲染失败：${message.replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]))}</div>`
     logger.warn('[ExcalidrawEmbed] render failed', { error: message })
   }
+}
+
+/**
+ * 把一段 chart 围栏直接渲染成 SVG 字符串（**不碰 DOM、不建实例**）。
+ *
+ * 供导出链路使用：导出的 HTML 字符串在第 3 行就已经定型，之后不会有任何 DOM 挂载，
+ * `renderChartEmbeds` 那套「挂载后再画」的机制根本不会被触发 —— 这就是导出成品里
+ * 只剩「正在渲染图表…」占位文字的原因。这里在导出前同步把图变成内联 SVG。
+ *
+ * 失败时返回 null 而不是抛错：一张图坏掉不应该让整篇文档导出失败。
+ */
+export async function renderChartFenceToSvg(source, baseDocPath) {
+  try {
+    const { option } = await buildOptionFromFence(String(source || ''), String(baseDocPath || ''))
+    return await renderChartSvg(option)
+  } catch (error) {
+    logger.warn('[ChartEmbed] export svg render failed', {
+      error: String(error?.message || error),
+    })
+    return null
+  }
+}
+
+/**
+ * 把一段 excalidraw 围栏渲染成 SVG 字符串。
+ *
+ * 与实时渲染的区别只有一处：实时版把 SVG 塞进页面元素，这里只要字符串。
+ * 导出必须走这条，理由同 renderChartFenceToSvg。
+ */
+export async function renderExcalidrawFenceToSvg(scenePath, baseDocPath) {
+  try {
+    const { text } = await readEmbedFile(String(scenePath || ''), dirnameOf(String(baseDocPath || '')))
+    const scene = JSON.parse(String(text || '{}'))
+    const elements = Array.isArray(scene.elements) ? scene.elements : []
+    const appState = scene.appState && typeof scene.appState === 'object' ? scene.appState : {}
+    if (!elements.length) throw new Error('场景里没有图形元素')
+
+    const mod = await import('@excalidraw/excalidraw')
+    const exportToSvg = mod.exportToSvg || mod.default?.exportToSvg
+    if (typeof exportToSvg !== 'function') throw new Error('Excalidraw 导出接口不可用')
+
+    const svg = await exportToSvg({
+      elements,
+      appState: {
+        ...appState,
+        exportBackground: true,
+        viewBackgroundColor: appState.viewBackgroundColor || '#ffffff',
+      },
+      files: scene.files || {},
+    })
+    return svg?.outerHTML || ''
+  } catch (error) {
+    logger.warn('[ExcalidrawEmbed] export svg render failed', {
+      error: String(error?.message || error),
+    })
+    return null
+  }
+}
+
+/**
+ * 把渲染器产出的占位块就地替换成静态 SVG（导出前调用）。
+ *
+ * 只处理仍带 pending 标记的块；已经由 renderChartEmbeds 画好的块保留原样 ——
+ * 实时渲染的结果本来就是带按钮的合法 DOM，替换反而会丢掉交互。
+ */
+export async function materializeChartEmbedsForExport(root) {
+  if (!(root instanceof HTMLElement)) return { charts: 0, boards: 0, failed: 0 }
+  let charts = 0
+  let boards = 0
+  let failed = 0
+
+  const chartNodes = Array.from(
+    root.querySelectorAll('.guaxi-chart-block__canvas[data-chart-pending]')
+  )
+  for (const el of chartNodes) {
+    const source = safeDecode(el.getAttribute('data-chart-source') || '')
+    const baseDocPath = safeDecode(el.getAttribute('data-chart-base') || '')
+    const svg = await renderChartFenceToSvg(source, baseDocPath)
+    if (!svg) {
+      failed += 1
+      el.innerHTML = '<div class="guaxi-chart-block__error">图表导出渲染失败</div>'
+      continue
+    }
+    el.innerHTML = svg
+    el.removeAttribute('data-chart-pending')
+    const svgEl = el.querySelector('svg')
+    if (svgEl instanceof SVGElement) {
+      // 导出页要按纸宽排布，固定像素宽会溢出或留下大片空白。
+      svgEl.removeAttribute('width')
+      svgEl.removeAttribute('height')
+      svgEl.style.cssText = 'max-width:100%;height:auto;'
+    }
+    charts += 1
+  }
+
+  const boardNodes = Array.from(
+    root.querySelectorAll('.guaxi-excalidraw-embed__stage[data-excalidraw-pending]')
+  )
+  for (const el of boardNodes) {
+    const scenePath = safeDecode(el.getAttribute('data-excalidraw-path') || '')
+    const baseDocPath = safeDecode(el.getAttribute('data-chart-base') || '')
+    const svg = await renderExcalidrawFenceToSvg(scenePath, baseDocPath)
+    if (!svg) {
+      failed += 1
+      el.innerHTML = '<div class="guaxi-excalidraw-embed__error">白板导出渲染失败</div>'
+      continue
+    }
+    el.innerHTML = svg
+    el.removeAttribute('data-excalidraw-pending')
+    const svgEl = el.querySelector('svg')
+    if (svgEl instanceof SVGElement) {
+      svgEl.removeAttribute('width')
+      svgEl.removeAttribute('height')
+      svgEl.style.cssText = 'max-width:100%;height:auto;'
+    }
+    boards += 1
+  }
+
+  logger.info('[ChartEmbed] materialized for export', { charts, boards, failed })
+  return { charts, boards, failed }
 }
 
 /** 销毁容器内的图表实例（容器被替换/组件卸载时调用）。 */

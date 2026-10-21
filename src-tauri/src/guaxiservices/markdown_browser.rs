@@ -123,8 +123,55 @@ fn resolve_allowed_markdown_file(raw_path: &str) -> Result<PathBuf, String> {
     Ok(file_canon)
 }
 
-fn collect_markdown_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    for entry in fs::read_dir(dir)? {
+/// 解析预览页要读取的数据文件，并限制在允许的根目录内。
+///
+/// 允许的根与 markdown 预览一致：所有知识库根 + 资源库根。
+/// 只放行纯文本类扩展名 —— 这个端点是为了让图表读到 CSV/JSON，不是通用文件读取接口。
+fn resolve_allowed_data_file(raw_path: &str) -> Result<PathBuf, String> {
+    const DATA_EXTS: [&str; 6] = ["csv", "tsv", "json", "md", "markdown", "excalidraw"];
+
+    let decoded = decode(raw_path)
+        .map_err(|_| "Invalid path encoding".to_string())?
+        .into_owned();
+    let decoded = decoded.trim_start_matches(r"\\?\");
+    let file_canon = PathBuf::from(decoded)
+        .canonicalize()
+        .map_err(|_| "File not found".to_string())?;
+
+    if !file_canon.is_file() {
+        return Err("Not a file".to_string());
+    }
+    let ext = file_canon
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !DATA_EXTS.contains(&ext.as_str()) {
+        return Err("Unsupported data file".to_string());
+    }
+
+    let mut allowed_roots: Vec<PathBuf> = Vec::new();
+    for kb in get_knowledge_base_list().unwrap_or_default() {
+        if let Ok(canon) = PathBuf::from(kb.location).canonicalize() {
+            allowed_roots.push(canon);
+        }
+    }
+    let resource_root = crate::commands::settingview::get_image_bed_root();
+    if let Ok(canon) = PathBuf::from(resource_root.trim()).canonicalize() {
+        allowed_roots.push(canon);
+    }
+
+    if allowed_roots.is_empty() {
+        return Err("No allowed roots".to_string());
+    }
+    if allowed_roots.iter().any(|root| file_canon.starts_with(root)) {
+        Ok(file_canon)
+    } else {
+        Err("Forbidden".to_string())
+    }
+}
+
+fn collect_markdown_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {    for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
 
@@ -367,6 +414,90 @@ async fn browser_raw(query: web::Query<PathQuery>) -> HttpResponse {
     }
 }
 
+/// 预览页读取**数据文件**（图表数据 / 白板场景）用。
+///
+/// 与 /browser/raw 的区别只有两点：不限定 .md 扩展名，且不做 Markdown 预处理 ——
+/// 图表要的是原始 CSV/JSON 文本。允许的根目录与 markdown 预览完全一致
+/// （知识库根 + 资源库根），不会因为多开一个端点而放宽可见范围。
+#[get("/browser/file")]
+async fn browser_file(query: web::Query<PathQuery>) -> HttpResponse {
+    let file_path = match resolve_allowed_data_file(&query.path) {
+        Ok(v) => v,
+        Err(msg) => {
+            warn!(
+                path = query.path.as_str(),
+                error = msg.as_str(),
+                "browser preview: /browser/file resolve failed"
+            );
+            return match msg.as_str() {
+                "Forbidden" => HttpResponse::Forbidden().body(msg),
+                "File not found" => HttpResponse::NotFound().body(msg),
+                _ => HttpResponse::BadRequest().body(msg),
+            };
+        }
+    };
+
+    match web::block(move || fs::read_to_string(file_path)).await {
+        Ok(Ok(content)) => HttpResponse::Ok()
+            .content_type("text/plain; charset=utf-8")
+            .append_header(("Cache-Control", "no-store"))
+            .body(content),
+        Ok(Err(e)) => {
+            error!(error = %e, "browser preview: /browser/file read failed");
+            HttpResponse::InternalServerError().finish()
+        }
+        Err(e) => {
+            error!(error = %e, "browser preview: /browser/file worker failed");
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+/// 预览页按**资源库相对路径**读取数据文件。
+///
+/// 图表的 `resource:` 引用在软件内有后端命令解析；静态预览页没有 Tauri IPC，
+/// 只能用 HTTP，于是这里提供等价的一条路。相对路径里的 `..` 直接拒绝。
+#[get("/browser/resource")]
+async fn browser_resource(query: web::Query<PathQuery>) -> HttpResponse {
+    let rel = query.path.trim().replace('\\', "/");
+    if rel.is_empty() || rel.starts_with('/') || rel.split('/').any(|seg| seg == "..") {
+        return HttpResponse::BadRequest().body("Invalid resource path");
+    }
+
+    let root = crate::commands::settingview::get_image_bed_root();
+    let root = root.trim();
+    if root.is_empty() {
+        return HttpResponse::BadRequest().body("Resource root not configured");
+    }
+    let abs = PathBuf::from(format!(
+        "{}/{}",
+        root.trim_end_matches(['/', '\\']),
+        rel
+    ));
+    // 只有落在资源库根目录内的文件才允许读。
+    let (Ok(canon), Ok(root_canon)) = (abs.canonicalize(), Path::new(root).canonicalize()) else {
+        return HttpResponse::NotFound().body("File not found");
+    };
+    if !canon.starts_with(&root_canon) {
+        return HttpResponse::Forbidden().body("Forbidden");
+    }
+
+    match web::block(move || fs::read_to_string(canon)).await {
+        Ok(Ok(content)) => HttpResponse::Ok()
+            .content_type("text/plain; charset=utf-8")
+            .append_header(("Cache-Control", "no-store"))
+            .body(content),
+        Ok(Err(e)) => {
+            error!(error = %e, "browser preview: /browser/resource read failed");
+            HttpResponse::InternalServerError().finish()
+        }
+        Err(e) => {
+            error!(error = %e, "browser preview: /browser/resource worker failed");
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
 #[get("/browser/download")]
 async fn browser_download(query: web::Query<PathQuery>) -> HttpResponse {
     info!(
@@ -478,6 +609,8 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
             pre code.hljs, code.hljs, .hljs {{ background: transparent !important; }}
             code {{ font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace; }}
             img {{ max-width: 100%; }}
+            .guaxi-chart {{ width: 100%; min-height: 240px; margin: 14px 0; }}
+            .guaxi-excalidraw-note {{ margin: 12px 0; padding: 10px 12px; border: 1px dashed rgba(0,0,0,0.16); border-radius: 8px; font-size: 13px; color: rgba(31,35,40,0.7); }}
             a {{ color: #0969da; }}
             .content a[id^="guaxi-toc-"] {{ display: block; position: relative; top: -72px; visibility: hidden; pointer-events: none; }}
             .guaxi-media-group {{
@@ -581,6 +714,9 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
           <script src="/browser/assets/mermaid/mermaid.min.js"></script>
           <script id="MathJax-script" src="/browser/assets/mathjax/tex-svg.js"></script>
           <script src="/browser/assets/highlightjs/highlight.min.js"></script>
+          <script src="/browser/assets/echarts/echarts.min.js"></script>
+          <script src="/browser/assets/echarts/echarts-liquidfill.min.js"></script>
+          <script src="/browser/assets/echarts/echarts-wordcloud.min.js"></script>
           </head>
         <body>
           <div class="topbar">
@@ -657,6 +793,393 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
               }});
             }}
 
+            async function renderChartDrafts(root, drafts, baseDirHint) {{
+              if (!drafts || !drafts.length) return;
+              if (!window.echarts) {{
+                drafts.forEach((draft) => {{
+                  const el = root.querySelector('#' + draft.id);
+                  if (el) el.textContent = '图表渲染需要 ECharts，但资源未加载';
+                }});
+                return;
+              }}
+
+              for (const draft of drafts) {{
+                const el = root.querySelector('#' + draft.id);
+                if (!el) continue;
+                try {{
+                  const parsed = parseChartSource(draft.source);
+                  if (!parsed.spec) throw new Error('spec 不是合法 JSON');
+                  let text = parsed.data;
+                  if (parsed.dataRef) {{
+                    text = await loadChartData(parsed.dataRef, baseDirHint);
+                  }}
+                  const rows = parseChartRows(text);
+                  if (!rows.length) throw new Error('数据为空');
+                  el.style.height = '360px';
+                  const chart = window.echarts.init(el, null, {{ renderer: 'svg' }});
+                  chart.setOption(buildChartOption(parsed.spec, rows), true);
+                  window.addEventListener('resize', () => {{
+                    try {{ chart.resize(); }} catch (_) {{}}
+                  }});
+                }} catch (error) {{
+                  el.textContent = '图表渲染失败：' + ((error && error.message) || error);
+                }}
+              }}
+            }}
+
+            // 围栏解析：与软件内同构的极简版（spec 用 JSON，data 支持内联块与路径）。
+            function parseChartSource(source) {{
+              const text = String(source || '');
+              let spec = null;
+              let data = '';
+              let dataRef = '';
+              const lines = text.split(/\r?\n/);
+              let mode = '';
+              const specLines = [];
+              const dataLines = [];
+
+              for (const line of lines) {{
+                const trimmed = line.trim();
+                if (!trimmed) {{ if (mode === 'data') dataLines.push(''); continue; }}
+                const m = trimmed.match(/^(spec|data)\s*:\s*(.*)$/i);
+                if (m && !/^\s/.test(line)) {{
+                  mode = m[1].toLowerCase();
+                  const rest = m[2].trim();
+                  if (mode === 'data' && rest && rest !== '|' && rest !== '>') {{
+                    const looksPath = /^resource:/i.test(rest) || /^\.{{0,2}}\//.test(rest)
+                      || /^[a-zA-Z]:[\\/]/.test(rest) || /\.(csv|tsv|json)$/i.test(rest);
+                    if (looksPath) dataRef = rest;
+                    else dataLines.push(rest);
+                  }}
+                  continue;
+                }}
+                if (mode === 'data') dataLines.push(line);
+                else if (mode === 'spec') specLines.push(line);
+              }}
+
+              const specText = specLines.join('\n').trim();
+              if (specText) {{
+                try {{ spec = JSON.parse(specText); }} catch (_) {{
+                  try {{ spec = parseSimpleYaml(specText); }} catch (_) {{ spec = null; }}
+                }}
+              }}
+              data = dataLines.join('\n').trim();
+              return {{ spec: spec, data: data, dataRef: dataRef }};
+            }}
+
+            // 极简 YAML 子集：只支持「key: value」与「[a, b]」数组，覆盖手册里所有 spec 写法。
+            // 不处理嵌套对象 —— 遇到就原样留成字符串，由 ECharts 自己忽略。
+            function parseSimpleYaml(text) {{
+              const out = {{}};
+              for (const raw of String(text).split(/\r?\n/)) {{
+                const line = raw.replace(/\t/g, '  ');
+                const trimmed = line.trim();
+                if (!trimmed || trimmed.startsWith('#')) continue;
+                const m = trimmed.match(/^([^:]+):\s*(.*)$/);
+                if (!m) continue;
+                const key = m[1].trim();
+                const value = m[2].trim();
+                if (!value) {{ out[key] = true; continue; }}
+                if (/^\[.*\]$/.test(value)) {{
+                  out[key] = value.slice(1, -1).split(',').map((v) => v.trim()).filter(Boolean);
+                  continue;
+                }}
+                if (/^['"].*['"]$/.test(value)) {{ out[key] = value.slice(1, -1); continue; }}
+                if (/^(true|false)$/i.test(value)) {{ out[key] = value.toLowerCase() === 'true'; continue; }}
+                if (/^-?\d+(\.\d+)?$/.test(value)) {{ out[key] = Number(value); continue; }}
+                out[key] = value;
+              }}
+              return Object.keys(out).length ? out : null;
+            }}
+
+            function parseChartRows(text) {{
+              const raw = String(text || '').trim();
+              if (!raw) return [];
+              if (/^[[{{]/.test(raw)) {{
+                try {{
+                  const parsed = JSON.parse(raw);
+                  const arr = Array.isArray(parsed) ? parsed : (parsed.data || parsed.rows || []);
+                  return Array.isArray(arr) ? arr : [];
+                }} catch (_) {{ return []; }}
+              }}
+              const delim = raw.indexOf('\t') >= 0 ? '\t' : ',';
+              const lines = raw.split(/\r?\n/).filter((l) => l.trim());
+              if (lines.length < 2) return [];
+              const header = lines[0].split(delim).map((h) => h.trim());
+              return lines.slice(1).map((line) => {{
+                const cells = line.split(delim);
+                const row = {{}};
+                header.forEach((key, i) => {{
+                  const v = String(cells[i] == null ? '' : cells[i]).trim();
+                  row[key] = v !== '' && /^-?\d+(\.\d+)?$/.test(v) ? Number(v) : v;
+                }});
+                return row;
+              }});
+            }}
+
+            async function loadChartData(ref, baseDirHint) {{
+              // 1) 资源库引用：交给后端解析，前端不需要知道库根目录。
+              if (/^resource:/i.test(ref)) {{
+                const rel = ref.replace(/^resource:/i, '').replace(/^[/\\]+/, '');
+                const resp = await fetch('/browser/resource?path=' + encodeURIComponent(rel));
+                if (!resp.ok) throw new Error('资源库数据读取失败: ' + resp.status);
+                return await resp.text();
+              }}
+              // 2) 相对路径：相对当前笔记目录，经 /browser/raw 同源的静态读取端点。
+              const absolute = /^([a-zA-Z]:[\\/]|\/|~[\\/])/.test(ref)
+                ? ref
+                : ((baseDirHint ? baseDirHint.replace(/[\\/]+$/, '') + '/' : '') + ref.replace(/^\.\//, ''));
+              const resp = await fetch('/browser/file?path=' + encodeURIComponent(absolute));
+              if (!resp.ok) throw new Error('数据文件读取失败: ' + resp.status + ' ' + absolute);
+              return await resp.text();
+            }}
+
+            /**
+             * 组装 ECharts option。
+             *
+             * 只覆盖通用族（直角坐标系的 line/bar/area/waterfall/scatter + 饼图家族）：
+             * 这是手册与日常笔记里 95% 的用法。未覆盖的类型会明确提示，
+             * 而不是画出一张错图 —— 静态预览是只读视图，宁缺毋滥。
+             */
+            function buildChartOption(spec, rows) {{
+              const type = String(spec.type || 'line').toLowerCase().replace(/[\s_-]/g, '');
+              const xKey = String(spec.x || Object.keys(rows[0] || {{}})[0] || '');
+              let yKeys = Array.isArray(spec.y) ? spec.y.map(String)
+                : (spec.y ? [String(spec.y)] : Object.keys(rows[0] || {{}}).filter((k) => k !== xKey));
+              if (!yKeys.length) yKeys = ['value'];
+
+              const cats = rows.map((r) => String(r[xKey] === undefined ? '' : r[xKey]));
+              const num = (v) => (typeof v === 'number' ? v : (Number.isFinite(Number(v)) && v !== '' ? Number(v) : null));
+              const title = spec.title ? {{ text: String(spec.title), left: 'center' }} : undefined;
+              const legend = spec.legend === false ? undefined : {{ bottom: 0 }};
+              const tooltip = spec.tooltip === false ? undefined : {{ trigger: 'axis' }};
+              const grid = {{ left: 48, right: 24, top: title ? 56 : 24, bottom: legend ? 48 : 32 }};
+
+              const isPie = ['pie', 'doughnut', 'donut', 'ring', 'circle', 'rosetype'].includes(type);
+              if (type === 'liquidfill') {{
+                // 水球图：扩展包已由页面脚本注册；未注册时 ECharts 会画空白，这里显式提示。
+                const val = num(rows[0][yKeys[0]]) || 0;
+                return {{
+                  title: title,
+                  series: [{{
+                    type: 'liquidFill',
+                    data: [Math.max(0, Math.min(1, (spec.max ? val / Number(spec.max) : val)))],
+                    radius: '78%',
+                    label: {{ formatter: spec.formatter || '{{c}}' }},
+                  }}],
+                }};
+              }}
+
+              if (type === 'wordcloud') {{
+                const wordKey = xKey;
+                const weightKey = yKeys[0];
+                return {{
+                  title: title,
+                  series: [{{
+                    type: 'wordCloud',
+                    shape: 'circle',
+                    sizeRange: Array.isArray(spec.sizeRange) ? spec.sizeRange : [14, 56],
+                    rotationRange: [0, 0],
+                    gridSize: 8,
+                    textStyle: {{ color: () => 'rgb(' + [
+                      60 + Math.round(Math.random() * 120),
+                      80 + Math.round(Math.random() * 100),
+                      140 + Math.round(Math.random() * 100),
+                    ].join(',') + ')' }},
+                    data: rows.map((r) => ({{ name: String(r[wordKey] === undefined ? '' : r[wordKey]), value: num(r[weightKey]) || 0 }})),
+                  }}],
+                }};
+              }}
+
+              if (type === 'funnel') {{
+                const nameKey = xKey;
+                const valueKey = yKeys[0];
+                return {{
+                  title: title,
+                  tooltip: {{ trigger: 'item' }},
+                  legend: legend,
+                  series: [{{
+                    type: 'funnel',
+                    left: '12%', right: '12%', top: title ? 64 : 24, bottom: legend ? 48 : 24,
+                    sort: 'descending',
+                    gap: 2,
+                    label: {{ position: 'inside', formatter: '{{b}} {{c}}' }},
+                    data: rows.map((r) => ({{ name: String(r[nameKey] === undefined ? '' : r[nameKey]), value: num(r[valueKey]) || 0 }})),
+                  }}],
+                }};
+              }}
+
+              if (type === 'gauge') {{
+                // 单行数据 = 单环；多行 = 多环（与软件内语义一致）。
+                const valueKey = yKeys[0];
+                const nameKey = spec.x ? String(spec.x) : '';
+                const max = Number(spec.max) || 100;
+                const items = rows.slice(0, 6).map((r, i) => ({{
+                  name: nameKey ? String(r[nameKey] === undefined ? '' : r[nameKey]) : (spec.title ? String(spec.title) : ('指标 ' + (i + 1))),
+                  value: num(r[valueKey]) || 0,
+                }}));
+                const axisLine = {{ lineStyle: {{ width: 12 }} }};
+                const series = items.map((item, i) => ({{
+                  type: 'gauge',
+                  name: item.name,
+                  min: 0,
+                  max: max,
+                  radius: (items.length > 1 ? (86 - i * 14) : 78) + '%',
+                  startAngle: 210, endAngle: -30,
+                  splitNumber: 5,
+                  axisLine: axisLine,
+                  pointer: {{ width: 4 }},
+                  detail: {{ formatter: spec.formatter || '{{value}}', fontSize: 16, offsetCenter: [0, '62%'] }},
+                  title: {{ fontSize: 12, offsetCenter: [0, '82%'] }},
+                  data: [item],
+                }}));
+                return {{ title: title, series: series }};
+              }}
+
+              if (type === 'radar') {{
+                const nameKey = xKey;
+                const indicators = yKeys.map((k) => ({{ name: k, max: Math.max(...rows.map((r) => num(r[k]) || 0)) * 1.2 || 1 }}));
+                return {{
+                  title: title,
+                  tooltip: spec.tooltip === false ? undefined : {{}},
+                  legend: legend,
+                  radar: {{ indicator: indicators, radius: '62%', center: ['50%', title ? '56%' : '52%'] }},
+                  series: [{{
+                    type: 'radar',
+                    data: rows.slice(0, 8).map((r) => ({{
+                      name: String(r[nameKey] === undefined ? '' : r[nameKey]),
+                      value: yKeys.map((k) => num(r[k]) || 0),
+                    }})),
+                  }}],
+                }};
+              }}
+
+              if (type === 'sankey') {{
+                const sourceKey = String(spec.source || xKey);
+                const targetKey = spec.target ? String(spec.target) : (yKeys[0] || 'target');
+                const valueKey = spec.value ? String(spec.value) : (yKeys[1] || 'value');
+                const names = [];
+                const links = [];
+                rows.forEach((r) => {{
+                  const s = String(r[sourceKey] === undefined ? '' : r[sourceKey]);
+                  const t = String(r[targetKey] === undefined ? '' : r[targetKey]);
+                  if (!names.includes(s)) names.push(s);
+                  if (!names.includes(t)) names.push(t);
+                  links.push({{ source: s, target: t, value: num(r[valueKey]) || 0 }});
+                }});
+                return {{
+                  title: title,
+                  tooltip: {{ trigger: 'item' }},
+                  series: [{{
+                    type: 'sankey',
+                    left: 24, right: 24, top: title ? 56 : 24, bottom: 24,
+                    data: names.map((n) => ({{ name: n }})),
+                    links: links,
+                    emphasis: {{ focus: 'adjacency' }},
+                  }}],
+                }};
+              }}
+
+              // 未覆盖的类型在函数末尾统一报错（见 buildChartOption 结尾）。
+
+              if (isPie) {{
+                const nameKey = xKey;
+                const valueKey = yKeys[0];
+                return {{
+                  title: title,
+                  tooltip: spec.tooltip === false ? undefined : {{ trigger: 'item' }},
+                  legend: legend,
+                  series: [{{
+                    name: spec.title ? String(spec.title) : '占比',
+                    type: 'pie',
+                    radius: (type === 'pie') ? (spec.radius || '62%') : (spec.radius || ['42%', '66%']),
+                    itemStyle: {{ borderRadius: 4, borderColor: '#fff', borderWidth: 1 }},
+                    label: {{ formatter: '{{b}}: {{d}}%' }},
+                    data: rows.map((r) => ({{ name: String(r[nameKey] === undefined ? '' : r[nameKey]), value: num(r[valueKey]) || 0 }})),
+                  }}],
+                }};
+              }}
+
+              // 走到这里只剩直角坐标系的通用族；其余类型明确报错而不是画一张错图。
+              const supportedCartesian = ['line', 'area', 'bar', 'column', 'waterfall', 'pictorialbar', 'scatter', 'bubble'];
+              if (!supportedCartesian.includes(type)) {{
+                throw new Error('静态预览暂不支持该图表类型：' + type + '（请在软件内查看完整图表）');
+              }}
+              const scatterLike = ['scatter', 'bubble'].includes(type);
+              if (scatterLike) {{
+                return {{
+                  title: title,
+                  tooltip: {{ trigger: 'item' }},
+                  legend: legend,
+                  grid: grid,
+                  xAxis: {{ type: 'category', data: cats, name: spec.xName || '' }},
+                  yAxis: {{ type: 'value', name: spec.yName || '' }},
+                  series: yKeys.map((k) => ({{
+                    name: k,
+                    type: 'scatter',
+                    symbolSize: Number(spec.symbolSize) || 10,
+                    data: rows.map((r) => num(r[k])),
+                  }})),
+                }};
+              }}
+
+              const isStack = spec.stack === true || typeof spec.stack === 'string';
+              if (type === 'waterfall') {{
+                // 瀑布图：由增量推累计。
+                const deltas = rows.map((r) => num(r[yKeys[0]]) || 0);
+                const base = [];
+                const value = [];
+                let acc = 0;
+                deltas.forEach((d, i) => {{
+                  if (spec.total === true && i === deltas.length - 1) {{
+                    base.push(0); value.push(acc);
+                  }} else {{
+                    base.push(d >= 0 ? acc : acc + d); value.push(Math.abs(d)); acc += d;
+                  }}
+                }});
+                const series = [
+                  {{ name: 'base', type: 'bar', stack: 'wf', itemStyle: {{ color: 'transparent' }}, emphasis: {{ itemStyle: {{ color: 'transparent' }} }}, data: base }},
+                  {{ name: yKeys[0], type: 'bar', stack: 'wf', data: value }},
+                ];
+                return {{ title: title, tooltip: tooltip, legend: legend, grid: grid,
+                  xAxis: {{ type: 'category', data: cats }}, yAxis: {{ type: 'value' }}, series: series }};
+              }}
+
+              const horizontal = String(spec.orient || '').toLowerCase() === 'horizontal';
+              const isBar = ['bar', 'waterfall', 'pictorialbar', 'column'].includes(type) || horizontal;
+              const series = yKeys.map((k, i) => {{
+                const base = {{
+                  name: k,
+                  type: isBar ? 'bar' : 'line',
+                  data: rows.map((r) => num(r[k])),
+                }};
+                if (isBar) {{
+                  base.barMaxWidth = 42;
+                  if (spec.showBackground) base.showBackground = true;
+                  if (isStack) base.stack = typeof spec.stack === 'string' ? spec.stack : 'total';
+                  if (Array.isArray(spec.itemColors) && spec.itemColors[i]) base.itemStyle = {{ color: spec.itemColors[i] }};
+                }} else {{
+                  if (spec.smooth) base.smooth = true;
+                  if (spec.step) base.step = spec.step === true ? 'middle' : String(spec.step);
+                  base.symbolSize = Number(spec.symbolSize) || 6;
+                  if (type === 'area' || spec.areaStyle) base.areaStyle = {{ opacity: 0.25 }};
+                }}
+                return base;
+              }});
+
+              const catAxis = {{ type: 'category', data: cats, name: spec.xName || '' }};
+              const valAxis = {{ type: 'value', name: spec.yName || '', min: spec.axisMin, max: spec.axisMax }};
+              return {{
+                title: title,
+                tooltip: tooltip,
+                legend: legend,
+                grid: grid,
+                xAxis: horizontal ? valAxis : catAxis,
+                yAxis: horizontal ? catAxis : valAxis,
+                series: series,
+              }};
+            }}
+
             async function loadAndRender() {{
               if (!contentEl) {{
                 throw new Error('Missing #content element');
@@ -697,9 +1220,32 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
               }}
 
               const mdIt = window.markdownit({{ html: true, linkify: true, breaks: true }});
+              // ```chart 围栏：先转成占位 div，渲染完 markdown 后再由 ECharts 接管。
+              // 渲染器是独立的静态页面，不能复用软件内的图表模块，所以这里只做
+              // 「解析围栏 → 组装最小 option → echarts.init」这一条最小路径。
+              const chartDrafts = [];
+              const defaultFence = mdIt.renderer.rules.fence;
+              mdIt.renderer.rules.fence = (tokens, idx, options, env, self) => {{
+                const token = tokens[idx];
+                const info = String((token && token.info) || '').trim();
+                if (/^chart(\s|$)/i.test(info)) {{
+                  const id = 'guaxi-chart-' + chartDrafts.length;
+                  chartDrafts.push({{ id: id, source: String(token.content || '') }});
+                  return '<div class="guaxi-chart" id="' + id + '"></div>';
+                }}
+                // excalidraw 围栏：静态预览里没有导出器，直接把场景文件路径渲染成一条提示，
+                // 至少不会像代码块那样让人以为内容丢了。
+                if (/^excalidraw(\s|$)/i.test(info)) {{
+                  const scenePath = String(token.content || '').trim();
+                  return '<div class="guaxi-excalidraw-note">Excalidraw 白板：<code>'
+                    + escapeHtml(scenePath) + '</code>（请在软件内查看）</div>';
+                }}
+                return defaultFence(tokens, idx, options, env, self);
+              }};
 
               contentEl.innerHTML = mdIt.render(processed);
               enhanceMediaGroups(contentEl);
+              await renderChartDrafts(contentEl, chartDrafts, baseDir);
 
               if (window.MathJax) {{
                 try {{
@@ -825,6 +1371,35 @@ async fn browser_asset_highlight_js() -> HttpResponse {
         .body(include_str!("../../assets/vendor/highlight.min.js"))
 }
 
+/// ECharts UMD 包，供 ```chart 围栏在静态预览页里画图。
+///
+/// 预览页是独立于前端渲染器的静态页面（markdown-it + 少量内联脚本），
+/// 不共享前端的图表模块，因此这里直接把官方 UMD 包分发给页面。
+#[get("/browser/assets/echarts/echarts.min.js")]
+async fn browser_asset_echarts() -> HttpResponse {
+    HttpResponse::Ok()
+        .content_type("application/javascript; charset=utf-8")
+        .append_header(("Cache-Control", "no-store"))
+        .body(include_str!("../../assets/vendor/echarts.min.js"))
+}
+
+/// 图表扩展包（水球图 / 词云）。它们靠副作用把系列注册进 `window.echarts`。
+#[get("/browser/assets/echarts/echarts-liquidfill.min.js")]
+async fn browser_asset_echarts_liquidfill() -> HttpResponse {
+    HttpResponse::Ok()
+        .content_type("application/javascript; charset=utf-8")
+        .append_header(("Cache-Control", "no-store"))
+        .body(include_str!("../../assets/vendor/echarts-liquidfill.min.js"))
+}
+
+#[get("/browser/assets/echarts/echarts-wordcloud.min.js")]
+async fn browser_asset_echarts_wordcloud() -> HttpResponse {
+    HttpResponse::Ok()
+        .content_type("application/javascript; charset=utf-8")
+        .append_header(("Cache-Control", "no-store"))
+        .body(include_str!("../../assets/vendor/echarts-wordcloud.min.js"))
+}
+
 #[get("/browser/assets/highlightjs/styles/atom-one-light.css")]
 async fn browser_asset_highlight_css() -> HttpResponse {
     HttpResponse::Ok()
@@ -839,11 +1414,16 @@ pub fn browser_preview_config(cfg: &mut web::ServiceConfig) {
         .service(browser_knowledge_bases)
         .service(browser_knowledge_base_files)
         .service(browser_raw)
+        .service(browser_file)
+        .service(browser_resource)
         .service(browser_download)
         .service(browser_asset_markdown_it)
         .service(browser_asset_mermaid)
         .service(browser_asset_mathjax)
         .service(browser_asset_highlight_js)
+        .service(browser_asset_echarts)
+        .service(browser_asset_echarts_liquidfill)
+        .service(browser_asset_echarts_wordcloud)
         .service(browser_asset_highlight_css)
         .service(browser_preview);
 }

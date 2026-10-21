@@ -274,6 +274,14 @@
           </n-tooltip>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
+              <n-button text size="tiny" @click="insertChartWithDataFile">
+                <Icon :icon="chartIcon" width="16" height="16" />
+              </n-button>
+            </template>
+            图表（数据入资源库）
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
               <n-button text size="tiny" @click="insertHorizontalRule">
                 <Icon :icon="minusIcon" width="16" height="16" />
               </n-button>
@@ -1524,6 +1532,7 @@ import listOrderedIcon from '@iconify-icons/lucide/list-ordered'
 import listChecksIcon from '@iconify-icons/lucide/list-checks'
 import tableIcon from '@iconify-icons/lucide/table'
 import imageIcon from '@iconify-icons/lucide/image'
+import chartIcon from '@iconify-icons/lucide/bar-chart-3'
 import minusIcon from '@iconify-icons/lucide/minus'
 import undoIcon from '@iconify-icons/lucide/undo'
 import redoIcon from '@iconify-icons/lucide/redo'
@@ -1565,7 +1574,8 @@ import tableColumnRemove from '@iconify-icons/mdi/table-column-remove'
 import { dirname, homeDir } from '@tauri-apps/api/path'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { renderMarkdown, addCopyButtons, addMediaViewerButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
-import { renderChartEmbeds, disposeChartInstances, bindExcalidrawOpenButtons } from '../GuaxiMarkdownRender/guaxiChartEmbeds'
+import { renderChartEmbeds, disposeChartInstances, bindExcalidrawOpenButtons, materializeChartEmbedsForExport, renderChartFenceToSvg, renderExcalidrawFenceToSvg } from '../GuaxiMarkdownRender/guaxiChartEmbeds'
+import { svgToPngBlob } from '../GuaxiMarkdownRender/guaxiChartExport'
 // 渲染结果的持久缓存：Worker 里没有 invoke，所以由主线程代查、代写（见 renderPreviewMarkdownHtmlWithWorker）。
 import {
   collectInlineMathCandidates,
@@ -1580,7 +1590,10 @@ import { getPythonCellSnapshot, patchPythonCellSnapshot } from './utils/guaxiPyt
 import { createMarkdownPreviewSegments } from './utils/guaxiNotebookCells'
 import {
   CODE_BLOCK_SNIPPETS,
+  CHART_DATA_EXTENSIONS,
   MARKDOWN_IMAGE_EXTENSIONS,
+  buildChartDataResourceTarget,
+  buildChartFenceWithDataRef,
   buildMarkdownImageResourceTarget,
   buildMarkdownImageSyntax,
   buildMarkdownTable,
@@ -15873,8 +15886,74 @@ const insertImage = async () => {
   }
 };
 
-const insertCodeBlock = (lang) => {
-  const v = String(lang || '').trim();
+/**
+ * 选一个数据文件 → 复制进资源库 → 插入引用资源库副本的 chart 围栏。
+ *
+ * 为什么必须复制而不是只写原路径：图表引用本机绝对路径时，文件一挪、换一台机器、
+ * 或者把笔记分享出去，图就画不出来。入库后文档里只留 `resource:charts/...`，
+ * 只要资源库同步到位，引用在哪里都成立。
+ */
+const insertChartWithDataFile = async () => {
+  try {
+    const targetEditor = getActiveEditor();
+    if (!ensureMarkdownEditor(targetEditor)) {
+      logger.warn('[ChartData] insert aborted because markdown editor is not ready');
+      return;
+    }
+
+    const selected = await open({
+      multiple: false,
+      directory: false,
+      filters: [{ name: '图表数据', extensions: CHART_DATA_EXTENSIONS }]
+    });
+    const sourcePath = normalizePickedLocalPath(Array.isArray(selected) ? selected[0] : selected);
+    if (!sourcePath) {
+      logger.debug('[ChartData] insert cancelled by user');
+      return;
+    }
+
+    const root = String(await invoke('get_image_bed_root') || '').trim();
+    if (!root) throw new Error('资源库根目录不可用');
+
+    const target = buildChartDataResourceTarget(sourcePath);
+    const destDir = joinResourceRepoPath(root, target.relativeDir);
+    const absolutePath = joinResourceRepoPath(root, target.relativePath);
+
+    await invoke('copy_image_file', {
+      srcPath: sourcePath,
+      destDir,
+      fileName: target.fileName
+    });
+
+    await invoke('add_resource', {
+      resource: {
+        resource_type: 'data',
+        file_name: target.fileName,
+        relative_path: target.relativePath,
+        absolute_path: absolutePath,
+        owner_file_path: String(selectedFile.value?.path || fileTreeStore.activeTab || '').trim(),
+        created_at: '',
+        extra: JSON.stringify({ source: 'chart-data-insert', original_path: sourcePath })
+      }
+    });
+
+    const fence = buildChartFenceWithDataRef({ ref: target.ref });
+    const inserted = insertMarkdownTextAtCursor(fence, 'markdown-chart-data-insert');
+    if (!inserted) throw new Error('插入失败：Markdown 编辑器未就绪');
+
+    message.success(`数据已存入资源库：${target.ref}\n请按需修改 spec 的 type / x / y`);
+    logger.info('[ChartData] data imported and chart fence inserted', {
+      sourcePath,
+      ref: target.ref,
+      absolutePath
+    });
+  } catch (error) {
+    logger.error('[ChartData] insert chart data failed', error);
+    message.error(`插入图表失败：${String(error?.message || error || '')}`);
+  }
+};
+
+const insertCodeBlock = (lang) => {  const v = String(lang || '').trim();
   const prefix = v ? `\`\`\`${v}\n` : '```\n';
   wrapSelection(prefix, '\n```\n', '代码');
 };
@@ -23605,6 +23684,41 @@ const stripInteractiveExportArtifacts = (bodyHtml) => {
   }
 }
 
+/**
+ * 把导出 HTML 里的图表 / 白板占位块就地替换成内联 SVG。
+ *
+ * 为什么需要这一步：Markdown 渲染器对 ```chart 只输出占位 div，真正的绘制由
+ * renderChartEmbeds 在**已挂载的 DOM** 上异步完成。而导出 HTML 是一个字符串，
+ * 从未挂载过，于是成品里永远只有「正在渲染图表…」这行占位文字。
+ * 这里在字符串阶段用一个游离容器完成同样的工作，再取回 innerHTML。
+ *
+ * 失败时的行为：单块失败只让该块显示错误提示，绝不影响整篇导出。
+ */
+const materializeChartEmbedsInHtml = async (bodyHtml, context) => {
+  const html = String(bodyHtml || '')
+  if (!html.trim()) return html
+  if (!html.includes('data-chart-pending') && !html.includes('data-excalidraw-pending')) {
+    return html
+  }
+
+  try {
+    const host = document.createElement('div')
+    host.innerHTML = html
+    await materializeChartEmbedsForExport(host)
+    logger.info('[Export] chart embeds materialized', {
+      inputPath: context?.inputPath,
+      hasChart: html.includes('data-chart-pending'),
+      hasBoard: html.includes('data-excalidraw-pending'),
+    })
+    return host.innerHTML
+  } catch (error) {
+    logger.warn('[Export] materialize chart embeds failed, keep original html', {
+      error: String(error?.message || error),
+    })
+    return html
+  }
+}
+
 const renderMarkdownForExportHtml = async (context) => {
   const rawMarkdown = String(context?.markdown || '')
   // 设计说明：
@@ -23631,7 +23745,9 @@ const renderMarkdownForExportHtml = async (context) => {
     },
     'export-rendered-html',
   )
-  const bodyHtml = stripInteractiveExportArtifacts(rawBodyHtml)
+  const bodyHtml = stripInteractiveExportArtifacts(
+    await materializeChartEmbedsInHtml(rawBodyHtml, context),
+  )
   const html = buildPrintHtml(bodyHtml, context.title, { baseHref: context.baseHref })
 
   logger.info('[Export] render markdown to export html complete', {
@@ -24072,6 +24188,109 @@ const prerenderMermaidForPandoc = async (markdown) => {
   return result
 }
 
+/**
+ * SVG → 白底 PNG 字节 + 逻辑尺寸。
+ *
+ * 复用图表模块的 svgToPngBlob（它已经处理了「ECharts SVG 无背板 → 透明底」的问题），
+ * 再补一个尺寸返回值：pandoc 导出需要按逻辑宽换算成英寸，否则图会超出页宽。
+ */
+const svgToPngBlobBytes = async (svgText) => {
+  const blob = await svgToPngBlob(svgText)
+  const bytes = new Uint8Array(await blob.arrayBuffer())
+
+  // 逻辑尺寸优先取 viewBox；没有就退 width/height 属性。
+  const vb = String(svgText.match(/viewBox=["']([^"']+)["']/i)?.[1] || '').trim().split(/[\s,]+/).map(Number)
+  let width = vb.length === 4 && Number.isFinite(vb[2]) && vb[2] > 0 ? vb[2] : 0
+  if (!width) {
+    const w = Number(svgText.match(/\bwidth=["']([\d.]+)/i)?.[1])
+    if (Number.isFinite(w) && w > 0) width = w
+  }
+  return { bytes, width: width || 900 }
+}
+
+/**
+ * 把 Markdown 里的 ```chart / ```excalidraw 围栏预渲染成 PNG 并替换成图片引用。
+ *
+ * 与 mermaid 的处理完全同源：pandoc 不认识这些围栏，原样输出就是代码块。
+ * 复用 renderChartFenceToSvg / renderExcalidrawFenceToSvg 拿到 SVG，
+ * 再走既有的「SVG → 白底 PNG」栅格化路径，落盘后用绝对路径引用。
+ *
+ * 尽力而为：单块失败保留源码并记录，绝不阻断导出。
+ */
+const prerenderChartEmbedsForPandoc = async (markdown, baseDocPath) => {
+  const text = String(markdown || '')
+  if (!/```\s*chart\b/.test(text) && !/```\s*excalidraw\b/.test(text)) return text
+
+  let join
+  let writeFile
+  let mkdir
+  let baseDir
+  try {
+    const pathApi = await import('@tauri-apps/api/path')
+    join = pathApi.join
+    ;({ writeFile, mkdir } = await import('@tauri-apps/plugin-fs'))
+    baseDir = await join(await pathApi.tempDir(), 'guaxi_export_chart', String(Date.now()))
+    await mkdir(baseDir, { recursive: true })
+  } catch (error) {
+    logger.warn('[Export] prepare chart temp dir failed, keep source blocks', {
+      error: String(error?.message || error),
+    })
+    return text
+  }
+
+  const fenceRe = /(`{3,})[ \t]*(chart|excalidraw)[^\n]*\n([\s\S]*?)\n?\1/g
+  const blocks = []
+  let match
+  while ((match = fenceRe.exec(text)) !== null) {
+    blocks.push({ full: match[0], kind: match[2].toLowerCase(), body: match[3] })
+  }
+  if (!blocks.length) return text
+
+  let result = text
+  let rendered = 0
+  let failures = 0
+  let firstError = ''
+
+  for (let i = 0; i < blocks.length; i += 1) {
+    const body = String(blocks[i].body || '').trim()
+    if (!body) continue
+    try {
+      const svg = blocks[i].kind === 'chart'
+        ? await renderChartFenceToSvg(body, baseDocPath)
+        : await renderExcalidrawFenceToSvg(body, baseDocPath)
+      if (!svg) throw new Error('SVG 渲染返回空')
+
+      const png = await svgToPngBlobBytes(svg)
+      const fileName = `${blocks[i].kind}_${i + 1}.png`
+      const filePath = await join(baseDir, fileName)
+      await writeFile(filePath, png.bytes)
+      const displayWidthIn = Math.min(6, Math.max(1, png.width / 96))
+      const ref = `![${blocks[i].kind}](${filePath.replace(/\\/g, '/')}){width=${displayWidthIn.toFixed(2)}in}`
+      // 函数式 replace：路径里出现 $ 时不会被当成替换占位符。
+      result = result.replace(blocks[i].full, () => ref)
+      rendered += 1
+    } catch (error) {
+      failures += 1
+      if (!firstError) firstError = String(error?.message || error)
+      logger.warn('[Export] chart prerender failed, keep source block', {
+        index: i,
+        kind: blocks[i].kind,
+        error: String(error?.message || error),
+      })
+    }
+  }
+
+  logger.info('[Export] chart embeds prerendered for pandoc export', {
+    total: blocks.length,
+    rendered,
+    failures,
+  })
+  if (blocks.length > 0 && rendered === 0) {
+    message.warning(`图表导出渲染失败（${firstError || '未知错误'}），成品中将保留源码`)
+  }
+  return result
+}
+
 const exportMarkdownPandoc = async (context, outputPath) => {
   logger.info('[Export] export markdown via pandoc', {
     inputPath: context.inputPath,
@@ -24082,6 +24301,8 @@ const exportMarkdownPandoc = async (context, outputPath) => {
   // 只有当确实把 mermaid 替换成图片后才传 sourceMarkdown；否则保持后端从磁盘读原文的既有行为。
   const originalMarkdown = String(context?.markdown || '')
   let processedMarkdown = await prerenderMermaidForPandoc(originalMarkdown)
+  // 图表 / 白板与 mermaid 同理：pandoc 不认识这些围栏，必须先渲染成图片。
+  processedMarkdown = await prerenderChartEmbedsForPandoc(processedMarkdown, context?.inputPath)
   // 设计说明：EPUB 阅读器普遍不渲染 MathML，块级公式会退化成 LaTeX 源码，
   // 这里把块级数学公式预渲染成图片（docx 走 OMML、PDF 走浏览器，均无需此步）。
   if (context.format === 'epub') {

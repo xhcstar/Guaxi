@@ -286,6 +286,34 @@ pub fn read_file_content(path: String) -> Result<String, String> {
     fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
+/// 把资源库相对路径解析成绝对路径（资源库根目录由配置决定，前端不必知道它）。
+///
+/// 图表数据文件的引用顺序是「文档目录 → 资源库」，资源库这一层走这里：
+/// 前端只知道 `charts/sales.csv` 这样的库内相对路径，换机器后只要资源库同步到位就能取到，
+/// 不会因为原机器上的绝对路径不存在而渲染失败。
+#[tauri::command]
+pub fn resolve_resource_path(relative_path: String) -> Result<String, String> {
+    let rel = relative_path.trim().replace('\\', "/");
+    if rel.is_empty() {
+        return Err("资源库相对路径为空".to_string());
+    }
+    // 越权防护：库内相对路径不允许跳出根目录。
+    if rel.split('/').any(|seg| seg == "..") || rel.starts_with('/') {
+        return Err(format!("资源库相对路径非法: {}", relative_path));
+    }
+
+    let root = crate::commands::settingview::get_image_bed_root();
+    let root = root.trim();
+    if root.is_empty() {
+        return Err("资源库根目录未配置".to_string());
+    }
+    Ok(format!(
+        "{}/{}",
+        root.trim_end_matches(['/', '\\']).replace('\\', "/"),
+        rel
+    ))
+}
+
 #[tauri::command]
 pub fn get_file_meta(path: String) -> Result<FileMeta, String> {
     let normalized = normalize_path(&path);

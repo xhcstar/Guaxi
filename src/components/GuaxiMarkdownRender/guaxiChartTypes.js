@@ -386,10 +386,12 @@ function ganttRenderItem(params, api) {
   const end = api.coord([api.value(2), categoryIndex])
   const height = api.size([0, 1])[1] * 0.5
   const rectShape = { x: start[0], y: start[1] - height / 2, width: Math.max(2, end[0] - start[0]), height }
+  // api.style() 在 ECharts 5 已弃用，会在控制台刷 DEPRECATED 警告；
+  // 颜色来自数据项的 itemStyle，这里直接读出来写字面量 style。
   return {
     type: 'rect',
     shape: rectShape,
-    style: api.style(),
+    style: { fill: params?.style?.fill ?? params?.itemStyle?.color ?? '#5470c6' },
     emphasis: { style: { stroke: '#000' } },
   }
 }

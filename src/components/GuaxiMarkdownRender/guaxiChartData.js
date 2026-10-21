@@ -245,6 +245,7 @@ export function parseChartFence(source) {
         const value = rest.trim()
         if (value && value !== '|' && value !== '>') {
           const looksPath =
+            /^resource:/i.test(value) ||
             /^\.{0,2}\//.test(value) ||
             /^[a-zA-Z]:[\\/]/.test(value) ||
             /\.(csv|tsv|json)$/i.test(value)

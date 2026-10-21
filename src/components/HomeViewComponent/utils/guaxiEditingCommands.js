@@ -132,6 +132,44 @@ export const buildMarkdownImageSyntax = ({ alt = 'image', url = '' } = {}) => {
   return `![${String(alt || 'image')}](${String(url || '')})\n`;
 };
 
+/** 图表数据文件允许的扩展名。 */
+export const CHART_DATA_EXTENSIONS = ['csv', 'tsv', 'json'];
+
+/**
+ * 数据文件在资源库里的落点。
+ *
+ * 与图片不同，数据文件**保留原始文件名**（不追加时间戳）：参考文档里写的是
+ * `resource:data/sales.csv`，只有名字稳定，换机器同步后同一个引用才继续有效。
+ * 同名时由调用方决定覆盖还是改名。
+ */
+export const buildChartDataResourceTarget = (sourcePath, date = new Date()) => {
+  const fileName = getFileNameFromPath(sourcePath);
+  const ext = String(fileName.split('.').pop() || '').trim().toLowerCase();
+  if (!CHART_DATA_EXTENSIONS.includes(ext)) {
+    throw new Error(`不支持的数据文件类型：.${ext}（支持 .csv / .tsv / .json）`);
+  }
+  const stem = sanitizeResourceFileSegment(fileName.replace(/\.[^.]+$/, ''), 'data');
+  const safeName = `${stem}.${ext}`;
+  const year = String(date.getFullYear());
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const relativeDir = joinResourceRepoPath('charts', year, month);
+  return {
+    fileName: safeName,
+    relativeDir,
+    relativePath: joinResourceRepoPath(relativeDir, safeName),
+    // 参考文档里写这个，不随本机资源库根目录变化。
+    ref: `resource:${joinResourceRepoPath(relativeDir, safeName)}`,
+  };
+};
+
+/** 生成一个 `chart` 围栏，数据走资源库引用。 */
+export const buildChartFenceWithDataRef = ({ ref = '', type = 'bar', x = 'name', y = 'value', title = '' } = {}) => {
+  const lines = ['```chart', 'spec:', `  type: ${type}`, `  x: ${x}`, `  y: [${y}]`];
+  if (title) lines.push(`  title: ${title}`);
+  lines.push(`data: ${ref}`, '```', '');
+  return lines.join('\n');
+};
+
 export const getSharedEditingCommandManifest = () => ({
   version: 1,
   generatedBy: 'Guaxi',

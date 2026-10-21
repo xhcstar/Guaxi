@@ -571,6 +571,7 @@ async fn main() {
             commands::fileprocess::get_file_tree,
             commands::fileprocess::fuzzy_search_files,
             commands::fileprocess::read_file_content,
+            commands::fileprocess::resolve_resource_path,
             commands::fileprocess::get_file_meta,
             commands::fileprocess::read_file_bytes_base64,
             commands::fileprocess::write_file_bytes_base64,

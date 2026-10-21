@@ -53,6 +53,49 @@ export const EXPORT_SHELL_CSS = `
     background: #f6f8fa;
   }
 
+  /* chart / excalidraw 导出块。
+   * 导出时占位块已经被替换成内联 SVG（见 materializeChartEmbedsForExport），
+   * 这里只需要保证「自适应纸宽 + 不会被分页切断 + 不出现屏幕专用的工具条」。
+   */
+  .export-content .guaxi-chart-block,
+  .export-content .guaxi-excalidraw-embed {
+    margin: 14px 0;
+    padding: 10px;
+    border: 1px solid #e1e4e8;
+    border-radius: 8px;
+    background: #ffffff;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .export-content .guaxi-chart-block__canvas,
+  .export-content .guaxi-excalidraw-embed__stage {
+    width: 100%;
+    min-height: 0;
+  }
+
+  .export-content .guaxi-chart-block svg,
+  .export-content .guaxi-excalidraw-embed svg {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    margin: 0 auto;
+  }
+
+  /* 屏幕上的「查看 / 导出 / 在别处打开」交互在成品里没有意义，直接隐藏。 */
+  .export-content .guaxi-chart-block__tools,
+  .export-content .guaxi-excalidraw-embed__caption {
+    display: none;
+  }
+
+  .export-content .guaxi-chart-block__placeholder,
+  .export-content .guaxi-chart-block__error,
+  .export-content .guaxi-excalidraw-embed__error {
+    padding: 12px;
+    color: #b42318;
+    font-size: 13px;
+  }
+
   .export-content .hljs-doctag,
   .export-content .hljs-keyword,
   .export-content .hljs-meta .hljs-keyword,
