@@ -19,6 +19,10 @@
         :disabled="loading || !!errorText"
         @click="setMode('outline')"
       >大纲</button>
+      <button class="guaxi-doc-reader__btn" title="缩小" :disabled="loading || !!errorText || viewMode !== 'slides'" @click="zoomBy(1 / 1.15)">−</button>
+      <span class="guaxi-doc-reader__meta" style="min-width: 46px; text-align: center">{{ Math.round(zoom * 100) }}%</span>
+      <button class="guaxi-doc-reader__btn" title="放大" :disabled="loading || !!errorText || viewMode !== 'slides'" @click="zoomBy(1.15)">＋</button>
+      <button class="guaxi-doc-reader__btn" title="重置缩放" :disabled="viewMode !== 'slides'" @click="zoom = 1">100%</button>
       <button class="guaxi-doc-reader__btn" title="重新加载" :disabled="loading" @click="reload">重新加载</button>
     </div>
 
@@ -33,7 +37,12 @@
       </div>
 
       <!-- 版式视图：@vue-office/pptx 自带渲染内核，离线可用。 -->
-      <div v-show="!loading && !errorText && viewMode === 'slides'" ref="pptxHostRef" class="gdr-pptx-host" />
+      <div
+        v-show="!loading && !errorText && viewMode === 'slides'"
+        ref="pptxHostRef"
+        class="gdr-pptx-host"
+        :style="zoomStyle"
+      />
 
       <!-- 大纲视图：渲染失败或用户主动切换时的兜底，走已有的转换链路。 -->
       <div v-if="!loading && viewMode === 'outline'" ref="outlineRef" class="gdr-md" v-html="outlineHtml" />
@@ -62,6 +71,8 @@ const outlineRef = ref(null)
 const loading = ref(true)
 const errorText = ref('')
 const viewMode = ref('slides')
+/** 版式视图的缩放倍数。@vue-office/pptx 按容器宽度自适应，这里用 zoom 叠加用户缩放。 */
+const zoom = ref(1)
 const slideCount = ref(0)
 const outlineHtml = ref('')
 let outlineMarkdown = ''
@@ -69,6 +80,12 @@ let outlineMarkdown = ''
 let loadToken = 0
 let pptxInstance = null
 let pptxModPromise = null
+
+const zoomStyle = computed(() => ({ zoom: zoom.value }))
+
+const zoomBy = (factor) => {
+  zoom.value = Math.min(3, Math.max(0.5, +(zoom.value * factor).toFixed(3)))
+}
 
 const themeName = () => {
   try {
@@ -167,6 +184,7 @@ const mountPptx = async (bytes) => {
 }
 
 const reload = () => {
+  zoom.value = 1
   void load(false)
 }
 

@@ -360,3 +360,52 @@ export function buildChartOption(spec, records) {
 
   return option
 }
+
+/**
+ * 把 option 里「跟随主题」的部分改写成浅色取值。
+ *
+ * 用户写的 spec 通常不指定颜色，ECharts 会取当前主题的默认值；如果页面是深色，
+ * 导出的图就是深底浅字。这里只调整**没有显式指定**的项，显式指定的配色一律保留。
+ */
+export function buildLightOption(option) {
+  if (!option || typeof option !== 'object') return option
+  const out = { ...option }
+
+  // 背景固定白（spec 里显式写了 backgroundColor 就尊重它）
+  if (!out.backgroundColor) out.backgroundColor = '#ffffff'
+
+  // 标题与图例文字在没有显式颜色时改成深灰
+  if (out.title && typeof out.title === 'object' && !out.title.textStyle?.color) {
+    out.title = { ...out.title, textStyle: { color: '#1f2328', ...(out.title.textStyle || {}) } }
+  }
+  if (out.legend && typeof out.legend === 'object' && !out.legend.textStyle?.color) {
+    out.legend = { ...out.legend, textStyle: { color: '#4a4f57', ...(out.legend.textStyle || {}) } }
+  }
+
+  // 坐标轴：轴线/刻度/文字统一浅色主题
+  const lightenAxis = (axis) => {
+    if (!axis || typeof axis !== 'object') return axis
+    const next = { ...axis }
+    next.axisLabel = { color: '#4a4f57', ...(next.axisLabel || {}) }
+    next.axisLine = {
+      ...(next.axisLine || {}),
+      lineStyle: { color: '#c9ced6', ...(next.axisLine?.lineStyle || {}) },
+    }
+    if (next.splitLine) {
+      next.splitLine = {
+        ...next.splitLine,
+        lineStyle: { color: '#eef0f3', ...(next.splitLine?.lineStyle || {}) },
+      }
+    }
+    if (next.name && !next.nameTextStyle?.color) {
+      next.nameTextStyle = { color: '#4a4f57', ...(next.nameTextStyle || {}) }
+    }
+    return next
+  }
+  if (Array.isArray(out.xAxis)) out.xAxis = out.xAxis.map(lightenAxis)
+  else if (out.xAxis) out.xAxis = lightenAxis(out.xAxis)
+  if (Array.isArray(out.yAxis)) out.yAxis = out.yAxis.map(lightenAxis)
+  else if (out.yAxis) out.yAxis = lightenAxis(out.yAxis)
+
+  return out
+}

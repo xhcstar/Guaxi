@@ -12,11 +12,18 @@
 
 import { invoke } from '@tauri-apps/api/core'
 import { createLogger } from '../../utils/logger'
+import {
+  attachChartButtons,
+  renderChartSvg,
+  buildBaseName,
+} from './guaxiChartExport'
 
 const logger = createLogger('ChartEmbeds')
 
 /** 已挂载的图表实例：容器 → 实例，卸载时统一 dispose，避免内存泄漏。 */
 const chartInstances = new WeakMap()
+/** 图表容器 → 已解析好的 option + 数据源，供「查看 / 导出」重建 SVG 用。 */
+const chartOptions = new WeakMap()
 /** 标记已处理过的容器，防止 MutationObserver 反复重渲染。 */
 const processed = new WeakSet()
 
@@ -72,17 +79,48 @@ const joinPath = (base, rel) => {
 
 /**
  * 读取外部数据文件。
- * @param {string} ref 相对/绝对路径
- * @param {string} baseDir 文档所在目录
+ *
+ * 支持三种写法，覆盖「数据来自任意位置」的需求：
+ *   1. 相对路径（`./data/x.csv`、`../shared/x.csv`）—— 相对**当前笔记所在目录**；
+ *   2. 绝对路径（`D:/data/x.csv`、`/home/u/x.csv`）；
+ *   3. 用户主目录（`~/datasets/x.csv`）。
+ *
+ * 读取失败时抛出带路径的明确错误，而不是让图表静默变空。
  */
 async function loadExternalData(ref, baseDir) {
-  const isAbsolute = /^[a-zA-Z]:[\\/]/.test(ref) || ref.startsWith('/')
-  const abs = isAbsolute ? ref : joinPath(baseDir, ref)
-  const text = await invoke('read_file_content', { path: abs })
+  const raw = String(ref || '').trim()
+  if (!raw) throw new Error('data 为空')
+
+  let abs
+  if (/^~[\\/]/.test(raw)) {
+    const { homeDir, join } = await import('@tauri-apps/api/path')
+    abs = await join(await homeDir(), raw.replace(/^~[\\/]+/, ''))
+  } else if (/^[a-zA-Z]:[\\/]/.test(raw) || raw.startsWith('/')) {
+    abs = raw.replace(/\\/g, '/')
+  } else {
+    if (!baseDir) {
+      throw new Error(
+        `无法解析相对路径「${raw}」：当前文档没有可用的基准目录。请改用绝对路径（如 D:/data/x.csv）或 ~/ 开头的路径。`
+      )
+    }
+    abs = joinPath(baseDir, raw)
+  }
+
   const ext = String(abs.split('.').pop() || '').toLowerCase()
-  const format = ext === 'json' ? 'json' : ext === 'tsv' ? 'tsv' : 'csv'
-  logger.info('[ChartEmbed] loaded external data', { ref, abs, format })
-  return { text: String(text || ''), format }
+  const format = ext === 'json' ? 'json' : ext === 'tsv' ? 'tsv' : ext === 'csv' ? 'csv' : 'auto'
+
+  try {
+    const text = await invoke('read_file_content', { path: abs })
+    logger.info('[ChartEmbed] loaded external data', { ref: raw, abs, format })
+    return { text: String(text || ''), format }
+  } catch (error) {
+    const hint =
+      format === 'auto'
+        ? '支持 .csv / .tsv / .json 三种数据文件'
+        : '请确认路径正确、文件是 UTF-8 文本'
+    throw new Error(`读取数据文件失败：${abs}
+${hint}`)
+  }
 }
 
 // ───────────────────────── 渲染入口 ─────────────────────────
@@ -157,6 +195,15 @@ async function renderChartBlock(el) {
     }
 
     el.removeAttribute('data-chart-pending')
+    chartOptions.set(el, { option })
+
+    // 「查看 / 导出」按钮：与 mermaid、图片的媒体按钮同位置同观感。
+    // 导出时按 SVG 渲染器重建一次图表（ECharts 没有 canvas→svg 的接口）。
+    attachChartButtons(block, {
+      getSvg: () => renderChartSvg(option),
+      getBaseName: () => buildBaseName(block, 1),
+    })
+
     logger.info('[ChartEmbed] rendered', {
       records: records.length,
       type: String(parsed.spec.type || ''),
@@ -244,6 +291,7 @@ export function disposeChartInstances(root) {
     }
     el.__guaxiChartObserver?.disconnect?.()
     el.__guaxiChartObserver = null
+    chartOptions.delete(el)
     processed.delete(el)
   })
   root.querySelectorAll('.guaxi-excalidraw-embed__stage').forEach((el) => {

@@ -56,11 +56,18 @@ const loading = ref(true)
 const errorText = ref('')
 const zoom = ref(1)
 
-const zoomStyle = computed(() => ({
-  transform: `scale(${zoom.value})`,
-  transformOrigin: 'top center',
-  width: `${100 / zoom.value}%`,
-}))
+/**
+ * 缩放样式。
+ *
+ * 用 CSS `zoom` 而不是 `transform: scale`：
+ * - `transform` 不参与布局，缩放后可视区域与滚动条不对应（放大后右侧内容滚不到）；
+ * - 早先还额外写了 `width: 100/zoom` 去补偿，但 transform 根本不改宽度，
+ *   这层补偿只会让内容在放大时横向溢出、缩小时留下空白 —— 正是「缩放状态不对」的表现。
+ * - `zoom` 直接改布局尺寸，滚动、命中、文本换行都跟着一起缩放。
+ *
+ * WebView2（Chromium）与 Safari 都支持；Firefox 也已从 126 起支持。
+ */
+const zoomStyle = computed(() => ({ zoom: zoom.value }))
 
 /** 当前挂载的影子根；换文档/卸载时整体丢弃，不做增量清理。 */
 let shadowRoot = null

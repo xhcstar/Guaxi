@@ -1458,6 +1458,190 @@ erDiagram
 ```
 
 
+## 10A. 内嵌图表（```chart）
+
+> Guaxi 扩展语法。图表用 ECharts 渲染，支持「查看 / 导出 SVG / 导出 PNG」。
+> 数据可内联，也可指向任意本地文件（相对笔记目录、绝对路径、或 `~/` 开头的用户目录）。
+
+### 10A.1 最小示例（内联数据）
+
+```chart
+spec:
+  type: line
+  x: day
+  y: [visitors]
+data: |
+  day,visitors
+  周一,120
+  周二,180
+  周三,160
+```
+
+### 10A.2 柱状图 + 多序列 + 标题
+
+`y` 写成数组即为多序列，自动出现图例。
+
+```chart
+spec:
+  type: bar
+  x: month
+  y: [revenue, cost]
+  title: 季度营收对比
+data: |
+  month,revenue,cost
+  一月,120,40
+  二月,180,60
+  三月,160,55
+```
+
+### 10A.3 面积图
+
+`type: area` 等价于折线图加填充。`smooth: true` 可开启平滑曲线。
+
+```chart
+spec:
+  type: area
+  x: week
+  y: [orders]
+  smooth: true
+data: |
+  week,orders
+  W1,32
+  W2,45
+  W3,38
+  W4,61
+```
+
+### 10A.4 饼图 / 环形图
+
+`pie` 为实心饼图，`doughnut` 为环形。取 `x` 列作名称、`y` 第一个字段作数值。
+
+```chart
+spec:
+  type: donut
+  x: channel
+  y: [share]
+  title: 渠道占比
+data: |
+  channel,share
+  自然搜索,42
+  直接访问,28
+  社交媒体,18
+  其它,12
+```
+
+### 10A.5 散点图
+
+`y` 给两个字段时，分别作为 x / y 坐标。`symbolSize` 控制点大小。
+
+```chart
+spec:
+  type: scatter
+  y: [height, weight]
+  symbolSize: 14
+data: |
+  height,weight
+  160,52
+  168,60
+  172,66
+  178,72
+  183,80
+```
+
+### 10A.6 数据来自外部文件
+
+`data` 指向文件路径时，支持三种写法：
+
+| 写法 | 含义 | 示例 |
+| --- | --- | --- |
+| 相对路径 | 相对**当前笔记所在目录** | `./data/sales.csv`、`../shared/x.csv` |
+| 绝对路径 | 系统任意位置 | `D:/datasets/sales.csv` |
+| 用户目录 | 以 `~/` 开头 | `~/datasets/sales.csv` |
+
+支持 `.csv` / `.tsv` / `.json` 三种格式。
+
+```chart
+spec:
+  type: line
+  x: date
+  y: [close]
+  title: 收盘价
+data: ./data/stock.csv
+```
+
+### 10A.7 数据来自 JSON 文件
+
+JSON 支持三种形态：顶层数组、`{"data": [...]}`、`{"rows": [...]}`。
+
+```chart
+spec:
+  type: bar
+  x: name
+  y: [score]
+data: |
+  [
+    { "name": "甲", "score": 88 },
+    { "name": "乙", "score": 92 },
+    { "name": "丙", "score": 75 }
+  ]
+```
+
+### 10A.8 TSV 数据
+
+用制表符分隔时自动识别（也可在文件名上用 `.tsv`）。
+
+```chart
+spec:
+  type: bar
+  x: item
+  y: [count]
+data: |
+  item	count
+  苹果	12
+  香蕉	7
+  橙子	9
+```
+
+### 10A.9 直接写完整 ECharts option
+
+不想记简化语法时，可以把整个 option 作为 JSON 写进围栏，完全掌控样式。
+
+```chart
+{
+  "title": { "text": "自定义配色" },
+  "xAxis": { "type": "category", "data": ["A", "B", "C"] },
+  "yAxis": { "type": "value" },
+  "series": [
+    { "type": "bar", "data": [5, 20, 36], "itemStyle": { "color": "#5470c6" } }
+  ]
+}
+```
+
+### 10A.10 语法速查
+
+| 字段 | 取值 | 说明 |
+| --- | --- | --- |
+| `spec.type` | `line` / `bar` / `area` / `scatter` / `pie` / `doughnut` | 图表类型，缺省 `line` |
+| `spec.x` | 字段名 | 横轴分类字段；饼图用作名称 |
+| `spec.y` | 字段名或数组 | 数值字段；数组即多序列 |
+| `spec.title` | 字符串 | 图表标题 |
+| `spec.smooth` | `true` / `false` | 折线是否平滑 |
+| `spec.symbolSize` | 数字 | 散点大小 |
+| `spec.xName` / `yName` | 字符串 | 轴名称 |
+| `data` | 内联文本或路径 | 数据来源 |
+
+**数据格式要求**：首行为表头，其余每行为一条记录；数值列会尽量转成数字，空单元格保留为空。CSV 支持引号包裹（引号内可含逗号与换行）。
+
+### 10A.11 白板（```excalidraw）
+
+```excalidraw
+./assets/architecture.excalidraw
+```
+
+围栏内容为场景文件路径，规则与 `chart` 的 `data` 一致（相对 / 绝对 / `~/`）。
+渲染为只读 SVG，带「在其他窗口打开」按钮。
+
+
 ## 11. 其他元素
 
 ### 11.1 脚注

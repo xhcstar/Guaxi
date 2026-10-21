@@ -381,7 +381,7 @@ flowchart LR
 
           <h3 class="h3">2. 数据图表：```chart</h3>
           <p class="p">
-            用 ECharts 渲染。数据可以内联，也可以指向笔记同目录的 CSV / TSV / JSON 文件——
+            用 ECharts 渲染。数据可以内联，也可以指向<b>任意位置</b>的 CSV / TSV / JSON 文件——
             改数据文件后刷新预览就会更新，不必把几百行数据贴进正文。
           </p>
           <pre class="manual-code">```chart
@@ -404,11 +404,37 @@ data: |
   周二,180
   周三,160
 ```</pre>
+          <h4 class="h4">数据可以放在哪里</h4>
+          <p class="p">`data` 支持三种路径写法，不再局限于笔记同级目录：</p>
           <ul class="manual-ul">
-            <li><b>type</b> 支持 line / bar / area / scatter / pie / doughnut（环形）。</li>
-            <li><b>x</b> 是横轴字段名，<b>y</b> 是一个或一组数值字段名（写成数组即为多序列）。</li>
+            <li><b>相对路径</b>：相对<b>当前笔记所在目录</b>，如 <code>./data/sales.csv</code>、<code>../shared/x.csv</code>。</li>
+            <li><b>绝对路径</b>：系统任意位置，如 <code>D:/datasets/sales.csv</code>。</li>
+            <li><b>用户目录</b>：以 <code>~/</code> 开头，如 <code>~/datasets/sales.csv</code>。</li>
+          </ul>
+          <p class="p">支持格式：<b>.csv</b>（逗号分隔）、<b>.tsv</b>（制表符分隔）、<b>.json</b>。</p>
+
+          <h4 class="h4">spec 字段</h4>
+          <ul class="manual-ul">
+            <li><b>type</b>：<code>line</code> / <code>bar</code> / <code>area</code> / <code>scatter</code> / <code>pie</code> / <code>doughnut</code>，缺省 <code>line</code>。</li>
+            <li><b>x</b>：横轴分类字段名；饼图里用作扇区名称。</li>
+            <li><b>y</b>：一个字段名，或一组字段名的数组（数组即为多序列，自动出图例）。</li>
+            <li><b>title</b>：图表标题。<b>smooth</b>：折线是否平滑。<b>symbolSize</b>：散点大小。</li>
+            <li><b>xName</b> / <b>yName</b>：轴名称。</li>
+          </ul>
+
+          <h4 class="h4">数据格式</h4>
+          <ul class="manual-ul">
+            <li><b>CSV / TSV</b>：首行是表头，其余每行一条记录；数值列自动转成数字，空单元格留空。</li>
+            <li><b>引号包裹</b>：CSV 单元格可用双引号包裹，引号内可含逗号与换行。</li>
+            <li><b>JSON</b>：支持顶层数组、<code>{"data": [...]}</code>、<code>{"rows": [...]}</code> 三种形态。</li>
+          </ul>
+
+          <h4 class="h4">查看与导出</h4>
+          <ul class="manual-ul">
+            <li>鼠标悬停图表右上角出现三个按钮：<b>查看</b>（放大预览）、<b>SVG</b>（矢量导出）、<b>PNG</b>（位图导出）。</li>
+            <li>PNG 导出会<b>自动铺白底</b>——否则透明底图表贴到深色文档里文字会看不见。</li>
+            <li>导出 PDF 时图表会一起栅格化进成品。</li>
             <li>想完全掌控样式时，把整个 ECharts option 作为 JSON 直接写在围栏里即可。</li>
-            <li>鼠标悬停图表右上角可以导出 SVG / PNG；导出 PDF 时图表会一起栅格化进成品。</li>
           </ul>
 
           <h3 class="h3">3. 自由布局白板：```excalidraw</h3>
@@ -1016,6 +1042,26 @@ onMounted(() => {
   margin: 14px 0 6px;
   font-size: 15px;
   line-height: 1.4;
+}
+
+/* 比 h3 再降一级的小标题：用于把长章节（如内嵌图表）切成「数据/字段/导出」几块。 */
+.h4 {
+  margin: 12px 0 4px;
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--guaxi-text-primary);
+  opacity: 0.92;
+}
+
+/* 行内代码：字段名、路径、类型值这类词需要可辨识，但不能抢正文的注意力。 */
+.manual code,
+.p code,
+.manual-ul code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--guaxi-hover-bg, rgba(120, 120, 120, 0.12));
+  font-size: 0.94em;
 }
 
 .p {

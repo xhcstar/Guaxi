@@ -2680,17 +2680,18 @@ useGuaxiHotkeys([
 
 
 // 外部目录树：打开文件
+/**
+ * 文件编辑模式：打开外部目录里的文件。
+ *
+ * 与知识库模式共用同一条分流逻辑（openFileByKind）：文本进 Monaco，
+ * 其余交给内嵌阅读器。此前这里只走 fetchFileContent，于是 .docx / .epub / .pptx
+ * 在「文件编辑」模式下只会落进「不支持该文件类型」的占位文本。
+ */
 const handleExternalOpenFile = async (node) => {
   if (!node || node.is_directory) return
   externalSelectedKeys.value = [node.id]
   try {
-    const res = await fileTreeStore.fetchFileContent(node.id)
-    if (res?.ok) {
-      await fileTreeStore.openFileInTab(node.id, res.content, { unsupported: !!res.unsupported })
-      if (res.unsupported) message.warning('不支持打开该文件类型（仅支持文本/Markdown）')
-    } else {
-      message.warning('文件不存在或已被删除')
-    }
+    await openFileByKind(node.id)
   } catch (error) {
     logger.error('打开外部文件失败:', error)
   }

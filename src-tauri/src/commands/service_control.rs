@@ -657,12 +657,56 @@ fn spawn_start_with_retry(def: &'static ServiceDef) {
 
 // ─────────────────────────── 对外命令 ───────────────────────────
 
+/// 兜底探测：没有可用运行时的时候，只做同步端口检查（覆盖绝大多数服务）。
+fn futures_lite_blocking(def: &ServiceDef) -> bool {
+    if let Some(count) = def.count {
+        return count() > 0;
+    }
+    if let Some(port) = def.port {
+        return tcp_listening(port);
+    }
+    false
+}
+
 #[tauri::command]
 pub async fn service_list() -> Vec<ServiceInfo> {
     let disabled = disabled_services();
+
+    // 并行探测，而不是逐个 await。
+    //
+    // 为什么要改：每个服务最多花 150ms 做 TCP 探测（端口没人监听时要等满超时），
+    // 12 个服务里 10 个是端口探测 —— 串行最坏要 1.5 秒。设置页打开时就会明显卡一下，
+    // 而这些探测彼此完全独立，没有理由排队。
+    // 端口探测用的是同步 TcpStream::connect_timeout，直接 await 会占住 async worker 线程。
+    // 丢进阻塞线程池后，UI 线程与其它命令都不受影响。
+    //
+    // 注意：probe 里既有同步 TCP 探测、也有 async 检查（p2p），所以在阻塞线程里
+    // 用 handle.block_on 驱动一次轻量运行时是最直接的写法。
+    let probes = tokio::task::spawn_blocking(|| {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build();
+        match rt {
+            Ok(rt) => rt.block_on(futures_util::future::join_all(
+                SERVICE_DEFS.iter().map(|def| is_running(def)),
+            )),
+            // 建不出运行时（极少数资源受限场景）就退回逐个探测，行为仍然正确。
+            Err(_) => SERVICE_DEFS
+                .iter()
+                .map(|def| futures_lite_blocking(def))
+                .collect::<Vec<_>>(),
+        }
+    })
+    .await
+    .unwrap_or_default();
+    let mut running_map = std::collections::HashMap::with_capacity(SERVICE_DEFS.len());
+    for (def, running) in SERVICE_DEFS.iter().zip(probes) {
+        running_map.insert(def.id, running);
+    }
+
     let mut out = Vec::with_capacity(SERVICE_DEFS.len());
     for def in SERVICE_DEFS {
-        let running = is_running(def).await;
+        let running = running_map.get(def.id).copied().unwrap_or(false);
         let autostart = !disabled.iter().any(|item| item == def.id);
         let status = if running {
             ServiceStatus::Running

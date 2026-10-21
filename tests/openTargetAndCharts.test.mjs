@@ -190,3 +190,29 @@ test('buildChartOption 识别「直接贴 option 本体」的写法', () => {
   assert.equal(option.xAxis, undefined)
   assert.deepEqual(option.title, { text: '占比' })
 })
+
+// ───────────────────────── 图表导出（新） ─────────────────────────
+
+test('buildLightOption 在未指定颜色时强制浅色', async () => {
+  const { buildLightOption } = await import('../src/components/GuaxiMarkdownRender/guaxiChartData.js')
+  const out = buildLightOption({
+    title: { text: 'T' },
+    xAxis: { type: 'category', data: ['a'] },
+    yAxis: { type: 'value' },
+    series: [{ type: 'bar', data: [1] }],
+  })
+  assert.equal(out.backgroundColor, '#ffffff')
+  assert.equal(out.title.textStyle.color, '#1f2328')
+  assert.equal(out.xAxis.axisLabel.color, '#4a4f57')
+})
+
+test('buildLightOption 尊重用户显式指定的配色', async () => {
+  const { buildLightOption } = await import('../src/components/GuaxiMarkdownRender/guaxiChartData.js')
+  const out = buildLightOption({
+    backgroundColor: '#000000',
+    title: { text: 'T', textStyle: { color: '#ff0000' } },
+    series: [],
+  })
+  assert.equal(out.backgroundColor, '#000000', '显式背景色不能被覆盖')
+  assert.equal(out.title.textStyle.color, '#ff0000', '显式标题色不能被覆盖')
+})

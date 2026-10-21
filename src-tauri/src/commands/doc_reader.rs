@@ -470,6 +470,31 @@ fn read_ebook_blocking(path: &Path, kind: &str) -> Result<EbookPayload, String> 
         });
     }
 
+    // 诊断：记录每本书的图片形态，便于定位「图片不显示」是内联失败还是路径问题。
+    {
+        let img_total: usize = sections.iter().map(|s| s.html.matches("<img").count()).sum();
+        let data_uri: usize = sections.iter().map(|s| s.html.matches("src=\"data:").count()).sum();
+        let rel_src: usize = sections
+            .iter()
+            .map(|s| {
+                s.html
+                    .matches("src=\"")
+                    .count()
+                    .saturating_sub(s.html.matches("src=\"data:").count())
+            })
+            .sum();
+        tracing::info!(
+            path = %path.display(),
+            kind = kind,
+            sections = sections.len(),
+            img_total,
+            img_data_uri = data_uri,
+            img_other_src = rel_src,
+            repaired_sections,
+            "[Reader] ebook image diagnostics"
+        );
+    }
+
     if repaired_sections > 0 {
         tracing::info!(
             path = %path.display(),
@@ -720,7 +745,18 @@ fn try_repair_latin1_utf8(text: &str) -> Option<String> {
 /// 为什么不能整段处理：HTML 里的 `class="a"` 之类全是 ASCII，混进去会把
 /// 「整段是否乱码」的判定稀释掉；而且直接替换整段字符串有破坏标签结构的风险。
 fn repair_html_text_nodes(html: &str) -> String {
+    // 诊断：乱码判定失败时，把样本特征打出来，便于定位「为什么这本书没被修复」。
+    let (latin, cjk, total) = sample_counts(html, 4000);
     if !looks_latin1_mangled(html) {
+        if total >= 20 && latin * 100 / total.max(1) > 10 {
+            tracing::debug!(
+                latin,
+                cjk,
+                total,
+                sample = %html.chars().take(80).collect::<String>(),
+                "[Reader] text looks suspicious but not repaired"
+            );
+        }
         return html.to_string();
     }
 
