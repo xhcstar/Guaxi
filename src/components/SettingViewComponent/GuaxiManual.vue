@@ -413,13 +413,42 @@ data: |
           </ul>
           <p class="p">支持格式：<b>.csv</b>（逗号分隔）、<b>.tsv</b>（制表符分隔）、<b>.json</b>。</p>
 
+          <h4 class="h4">支持的图表类型（26 种）</h4>
+          <p class="p">
+            覆盖趋势、对比、占比、分布、多维、流向、转化、指标、层级、关系、地理、金融、统计等场景，
+            另有水球图与词云两个扩展包（按需加载，不用则不占体积）：
+          </p>
+          <ul class="manual-ul">
+            <li><b>趋势</b>：<code>line</code>（平滑/阶梯/面积）、<code>area</code></li>
+            <li><b>对比</b>：<code>bar</code>（堆叠/横向/背景条）、<code>waterfall</code> 瀑布、<code>pictorialbar</code> 象形柱</li>
+            <li><b>占比</b>：<code>pie</code> / <code>doughnut</code> / <code>ring</code>（<code>roseType</code> 玫瑰图）</li>
+            <li><b>分布</b>：<code>scatter</code>（三维气泡）、<code>effectscatter</code>、<code>boxplot</code> 箱线、<code>heatmap</code> 热力</li>
+            <li><b>多维</b>：<code>radar</code> 雷达、<code>parallel</code> 平行坐标</li>
+            <li><b>流向/转化/指标</b>：<code>sankey</code> 桑基、<code>funnel</code> 漏斗、<code>gauge</code> 仪表盘（单环/多环）</li>
+            <li><b>层级</b>：<code>tree</code> 树、<code>treemap</code> 矩形树、<code>sunburst</code> 旭日</li>
+            <li><b>关系/地理</b>：<code>graph</code> 关系图、<code>map</code> 地图、<code>lines</code> 路径</li>
+            <li><b>金融/统计</b>：<code>candlestick</code> K线、<code>themeriver</code> 主题河流</li>
+            <li><b>万能</b>：<code>custom</code>（<code>variant: gantt</code> 甘特图、<code>bullet</code> 子弹图）</li>
+            <li><b>扩展</b>：<code>liquidfill</code> 水球、<code>wordcloud</code> 词云</li>
+          </ul>
+          <p class="p">
+            别名：<code>kline</code>→candlestick、<code>donut</code>→doughnut、<code>bubble</code>→scatter、
+            <code>violin</code>→boxplot、<code>liquid</code>→liquidfill。
+          </p>
+
           <h4 class="h4">spec 字段</h4>
           <ul class="manual-ul">
-            <li><b>type</b>：<code>line</code> / <code>bar</code> / <code>area</code> / <code>scatter</code> / <code>pie</code> / <code>doughnut</code>，缺省 <code>line</code>。</li>
+            <li><b>type</b>：见上表，缺省 <code>line</code>。</li>
             <li><b>x</b>：横轴分类字段名；饼图里用作扇区名称。</li>
             <li><b>y</b>：一个字段名，或一组字段名的数组（数组即为多序列，自动出图例）。</li>
             <li><b>title</b>：图表标题。<b>smooth</b>：折线是否平滑。<b>symbolSize</b>：散点大小。</li>
             <li><b>xName</b> / <b>yName</b>：轴名称。</li>
+            <li><b>stack</b>：堆叠；<b>orient: horizontal</b>：横向柱状；<b>showBackground</b>：背景条。</li>
+            <li><b>fields</b>：多列图（K线/箱线/路径）的显式列名数组。</li>
+            <li><b>path</b>：树/矩形树/旭日图的层级列，用 <code>/</code> 分隔（如 <code>研发部/前端</code>）。</li>
+            <li><b>source</b> / <b>target</b> / <b>value</b>：桑基图与关系图的列名。</li>
+            <li><b>variant</b>：<code>custom</code> 的内置变体（<code>gantt</code> / <code>bullet</code>）。</li>
+            <li><b>seriesStyle</b> / <b>xAxisStyle</b> / <b>yAxisStyle</b>：直接覆盖任意 ECharts 字段。</li>
           </ul>
 
           <h4 class="h4">数据格式</h4>

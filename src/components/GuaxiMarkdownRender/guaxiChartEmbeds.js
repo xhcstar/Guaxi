@@ -17,6 +17,7 @@ import {
   renderChartSvg,
   buildBaseName,
 } from './guaxiChartExport'
+import { CHART_TYPES, EXTENSION_BUILDERS, normalizeChartType } from './guaxiChartTypes'
 
 const logger = createLogger('ChartEmbeds')
 
@@ -78,6 +79,33 @@ const joinPath = (base, rel) => {
 }
 
 /**
+ * 把围栏里写的本地引用解析成绝对路径。
+ *
+ * 三种写法统一在这里处理，chart 的 `data` 与 excalidraw 的场景路径共用：
+ *   1. `~/...`  -> 用户主目录（交给 Tauri 的 path API 拼）； 
+ *   2. 绝对路径 -> 原样（统一成正斜杠）；
+ *   3. 相对路径 -> 相对当前文档所在目录。
+ */
+async function resolveLocalRef(ref, baseDir) {
+  const value = String(ref || '').trim()
+  if (!value) throw new Error('路径为空')
+
+  if (/^~[/\\]/.test(value)) {
+    const { homeDir, join } = await import('@tauri-apps/api/path')
+    return await join(await homeDir(), value.replace(/^~[/\\]+/, ''))
+  }
+  if (/^[a-zA-Z]:[/\\]/.test(value) || value.startsWith('/')) {
+    return value.replace(/\\/g, '/')
+  }
+  if (!baseDir) {
+    throw new Error(
+      `无法解析相对路径「${value}」：当前文档没有可用的基准目录。请改用绝对路径（如 D:/data/x.csv）或 ~/ 开头的路径。`
+    )
+  }
+  return joinPath(baseDir, value)
+}
+
+/**
  * 读取外部数据文件。
  *
  * 支持三种写法，覆盖「数据来自任意位置」的需求：
@@ -91,21 +119,7 @@ async function loadExternalData(ref, baseDir) {
   const raw = String(ref || '').trim()
   if (!raw) throw new Error('data 为空')
 
-  let abs
-  if (/^~[\\/]/.test(raw)) {
-    const { homeDir, join } = await import('@tauri-apps/api/path')
-    abs = await join(await homeDir(), raw.replace(/^~[\\/]+/, ''))
-  } else if (/^[a-zA-Z]:[\\/]/.test(raw) || raw.startsWith('/')) {
-    abs = raw.replace(/\\/g, '/')
-  } else {
-    if (!baseDir) {
-      throw new Error(
-        `无法解析相对路径「${raw}」：当前文档没有可用的基准目录。请改用绝对路径（如 D:/data/x.csv）或 ~/ 开头的路径。`
-      )
-    }
-    abs = joinPath(baseDir, raw)
-  }
-
+  const abs = await resolveLocalRef(raw, baseDir)
   const ext = String(abs.split('.').pop() || '').toLowerCase()
   const format = ext === 'json' ? 'json' : ext === 'tsv' ? 'tsv' : ext === 'csv' ? 'csv' : 'auto'
 
@@ -126,6 +140,31 @@ ${hint}`)
 // ───────────────────────── 渲染入口 ─────────────────────────
 
 let echartsModulePromise = null
+/**
+ * 已加载的扩展包（liquidfill / wordcloud）。
+ *
+ * 扩展包必须在使用前 import 一次 —— 它们靠副作用把系列类型注册进 ECharts。
+ * 按需加载而不是静态 import：只有文档里真的用了水球图/词云才付这份体积。
+ */
+const loadedExtensions = new Set()
+
+async function ensureExtension(name) {
+  if (loadedExtensions.has(name)) return
+  try {
+    if (name === 'echarts-liquidfill') {
+      await import('echarts-liquidfill')
+    } else if (name === 'echarts-wordcloud') {
+      await import('echarts-wordcloud')
+    }
+    loadedExtensions.add(name)
+    logger.info('[ChartEmbed] extension loaded', { name })
+  } catch (error) {
+    throw new Error(
+      `图表扩展包「${name}」加载失败：${String(error?.message || error)}`
+    )
+  }
+}
+
 const loadECharts = () => {
   if (!echartsModulePromise) {
     // 动态 import：只有文档里真的出现 ```chart 时才加载 ECharts 全量包。
@@ -174,7 +213,14 @@ async function renderChartBlock(el) {
     }
 
     const records = normalizeDataset(rawData, format)
+    const typeKey = normalizeChartType(parsed.spec?.type)
+    const extensionRequires = CHART_TYPES[typeKey]?.family === 'extension'
+      ? EXTENSION_BUILDERS[typeKey]?.requires
+      : null
     const option = buildChartOption(parsed.spec, records)
+
+    // 扩展包类型（liquidFill / wordCloud）必须先注册系列，否则 setOption 会静默画空白。
+    if (extensionRequires) await ensureExtension(extensionRequires)
 
     const echarts = await loadECharts()
     const instance = echarts.init(el, isDarkTheme() ? 'dark' : null, { renderer: 'canvas' })
@@ -233,8 +279,8 @@ async function renderExcalidrawBlock(el) {
 
   try {
     if (!scenePath) throw new Error('缺少场景文件路径')
-    const isAbsolute = /^[a-zA-Z]:[\\/]/.test(scenePath) || scenePath.startsWith('/')
-    const abs = isAbsolute ? scenePath : joinPath(dirnameOf(baseDocPath), scenePath)
+    // 与 chart 的 data 保持同一套路径规则：相对（笔记目录）/ 绝对 / ~ 开头。
+    const abs = await resolveLocalRef(scenePath, dirnameOf(baseDocPath))
     const raw = await invoke('read_file_content', { path: abs })
 
     let scene

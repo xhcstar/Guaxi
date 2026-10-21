@@ -1617,18 +1617,310 @@ data: |
 }
 ```
 
-### 10A.10 语法速查
+### 10A.10 全部支持的图表类型
+
+| 族 | type | 说明 |
+| --- | --- | --- |
+| 趋势 | `line` | 折线。`smooth` 平滑、`step` 阶梯、`areaStyle` 面积填充 |
+| 趋势 | `area` | 等同 `line` + 填充 |
+| 对比 | `bar` | 柱状/条形。`stack` 堆叠、`orient: horizontal` 横向、`showBackground` 背景条 |
+| 对比 | `waterfall` | 瀑布图（由增量推累计，`total: true` 显示合计） |
+| 对比 | `pictorialbar` | 象形柱图（`symbol` 指定图形） |
+| 占比 | `pie` / `doughnut` / `ring` | 饼图/环形。`roseType: angle` 南丁格尔玫瑰 |
+| 分布 | `scatter` | 散点。`size` 指定第三维映射到点大小 |
+| 分布 | `effectscatter` | 带涟漪动画的散点 |
+| 分布 | `boxplot` | 箱线图。`fields` 给五数，或让库自动计算 |
+| 分布 | `heatmap` | 热力图（矩阵形式，带 visualMap） |
+| 多维 | `radar` | 雷达图 |
+| 多维 | `parallel` | 平行坐标系 |
+| 流向 | `sankey` | 桑基图。`source`/`target`/`value` 三列 |
+| 转化 | `funnel` | 漏斗图（默认降序） |
+| 指标 | `gauge` | 仪表盘。单行数据=单环；多行=多环 |
+| 层级 | `tree` | 树图。`path` 列用 `/` 分隔层级 |
+| 层级 | `treemap` | 矩形树图 |
+| 层级 | `sunburst` | 旭日图 |
+| 关系 | `graph` | 关系图。`source`/`target` 两列 |
+| 地理 | `map` | 地图（需 `map` 指定已注册的 GeoJSON 名） |
+| 地理 | `lines` | 路径图（四列坐标） |
+| 金融 | `candlestick` | K 线（`fields: [open, close, low, high]`） |
+| 统计 | `themeriver` | 主题河流图（`[时间, 值, 主题]` 三列） |
+| 万能 | `custom` | 自定义。`variant: gantt` 画甘特图，`variant: bullet` 画子弹图 |
+| 扩展 | `liquidfill` | 水球图（ECHarts 扩展包，按需加载） |
+| 扩展 | `wordcloud` | 词云（扩展包，按需加载） |
+
+**别名**：`kline`→candlestick、`donut`→doughnut、`bubble`→scatter、`violin`→boxplot、
+`liquid`→liquidfill、`network`→graph、`waterful`→waterfall。
+
+### 10A.11 各类型示例
+
+#### 堆叠柱状 + 背景条
+
+```chart
+spec:
+  type: bar
+  x: month
+  y: [online, offline]
+  stack: true
+  showBackground: true
+  title: 渠道对比
+data: |
+  month,online,offline
+  一月,120,80
+  二月,160,90
+  三月,140,70
+```
+
+#### 瀑布图
+
+```chart
+spec:
+  type: waterfall
+  x: item
+  y: [delta]
+  total: true
+  title: 收入构成
+data: |
+  item,delta
+  期初,100
+  新增,40
+  流失,-25
+  退款,-10
+```
+
+#### 雷达图
+
+```chart
+spec:
+  type: radar
+  x: name
+  y: [速度, 稳定性, 易用性, 成本]
+data: |
+  name,速度,稳定性,易用性,成本
+  方案A,90,70,85,60
+  方案B,75,88,70,80
+```
+
+#### 桑基图
+
+```chart
+spec:
+  type: sankey
+  x: source
+  y: [target, value]
+  title: 流量去向
+data: |
+  source,target,value
+  首页,列表,60
+  首页,详情,40
+  列表,详情,45
+  详情,下单,35
+```
+
+#### 仪表盘（单值）
+
+```chart
+spec:
+  type: gauge
+  y: [value]
+  max: 100
+  formatter: '{value}%'
+data: |
+  value
+  78
+```
+
+#### 仪表盘（多环）
+
+```chart
+spec:
+  type: gauge
+  x: name
+  y: [value]
+  max: 100
+data: |
+  name,value
+  CPU,62
+  内存,78
+  磁盘,45
+```
+
+#### 漏斗图
+
+```chart
+spec:
+  type: funnel
+  x: stage
+  y: [count]
+  title: 转化漏斗
+data: |
+  stage,count
+  曝光,1000
+  点击,420
+  加购,180
+  下单,96
+```
+
+#### 树图（组织架构）
+
+```chart
+spec:
+  type: tree
+  path: path
+  y: [value]
+  orient: LR
+data: |
+  path,value
+  总公司/研发部/前端,20
+  总公司/研发部/后端,30
+  总公司/产品部,15
+  分公司/销售部,25
+```
+
+#### 旭日图
+
+```chart
+spec:
+  type: sunburst
+  path: path
+  y: [value]
+data: |
+  path,value
+  技术/前端,30
+  技术/后端,50
+  产品,20
+```
+
+#### 关系图
+
+```chart
+spec:
+  type: graph
+  x: source
+  y: [target, weight]
+  layout: force
+data: |
+  source,target,weight
+  笔记A,笔记B,2
+  笔记B,笔记C,1
+  笔记C,笔记A,3
+```
+
+#### 热力图（矩阵）
+
+```chart
+spec:
+  type: heatmap
+  x: day
+  y: [hour, value]
+  title: 访问热力
+data: |
+  day,hour,value
+  周一,9,12
+  周一,14,30
+  周二,9,18
+  周二,14,42
+```
+
+#### K 线
+
+```chart
+spec:
+  type: candlestick
+  x: date
+  fields: [open, close, low, high]
+data: |
+  date,open,close,low,high
+  10-01,100,110,98,112
+  10-02,110,105,102,113
+  10-03,105,118,104,120
+```
+
+#### 甘特图
+
+```chart
+spec:
+  type: custom
+  variant: gantt
+  x: task
+  y: [start, end]
+data: |
+  task,start,end
+  需求,0,3
+  设计,2,5
+  开发,4,12
+  测试,10,15
+```
+
+#### 象形柱图
+
+```chart
+spec:
+  type: pictorialbar
+  x: month
+  y: [score]
+  symbol: circle
+data: |
+  month,score
+  一月,120
+  二月,180
+  三月,160
+```
+
+#### 水球图（扩展包）
+
+```chart
+spec:
+  type: liquidfill
+  y: [value]
+  max: 100
+  formatter: '完成 {c}%'
+data: |
+  value
+  68
+```
+
+#### 词云（扩展包）
+
+```chart
+spec:
+  type: wordcloud
+  x: word
+  y: [weight]
+  sizeRange: [14, 56]
+data: |
+  word,weight
+  知识管理,90
+  笔记,80
+  检索,70
+  复盘,60
+  阅读,55
+```
+
+### 10A.12 语法速查
 
 | 字段 | 取值 | 说明 |
 | --- | --- | --- |
-| `spec.type` | `line` / `bar` / `area` / `scatter` / `pie` / `doughnut` | 图表类型，缺省 `line` |
-| `spec.x` | 字段名 | 横轴分类字段；饼图用作名称 |
+| `spec.type` | 见上表 | 图表类型，缺省 `line` |
+| `spec.x` | 字段名 | 横轴分类字段；饼图/漏斗等用作名称 |
 | `spec.y` | 字段名或数组 | 数值字段；数组即多序列 |
 | `spec.title` | 字符串 | 图表标题 |
-| `spec.smooth` | `true` / `false` | 折线是否平滑 |
-| `spec.symbolSize` | 数字 | 散点大小 |
-| `spec.xName` / `yName` | 字符串 | 轴名称 |
-| `data` | 内联文本或路径 | 数据来源 |
+| `spec.smooth` | 布尔 | 折线平滑 |
+| `spec.step` | `start`/`middle`/`end` | 阶梯折线 |
+| `spec.stack` | 布尔/字符串 | 堆叠分组名 |
+| `spec.orient` | `horizontal` | 横向柱状 |
+| `spec.showBackground` | 布尔 | 柱状背景条 |
+| `spec.roseType` | `angle`/`radius` | 玫瑰图 |
+| `spec.radius` | 字符串或数组 | 饼图半径（数组为内外径） |
+| `spec.size` | 字段名 | 散点第三维（点大小） |
+| `spec.fields` | 数组 | 多列图（K线/箱线/路径）的显式列名 |
+| `spec.path` | 字段名 | 树/矩形树/旭日图的层级列（`/` 分隔） |
+| `spec.source`/`target`/`value` | 字段名 | 桑基/关系图的列名 |
+| `spec.variant` | `gantt`/`bullet` | custom 图的内置变体 |
+| `spec.seriesStyle` | 对象 | 直接覆盖任意 ECharts series 字段 |
+| `spec.xAxisStyle`/`yAxisStyle` | 对象 | 直接覆盖轴配置 |
+| `spec.legend` | 布尔 | `false` 关闭图例 |
+| `spec.tooltip` | 布尔/对象 | `false` 关闭；对象则原样使用 |
+| `data` | 内联文本或路径 | 数据来源（相对/绝对/`~/`） |
 
 **数据格式要求**：首行为表头，其余每行为一条记录；数值列会尽量转成数字，空单元格保留为空。CSV 支持引号包裹（引号内可含逗号与换行）。
 

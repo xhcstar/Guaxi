@@ -1,4 +1,24 @@
-// 内嵌图表的纯数据逻辑（零依赖、无副作用，便于单测）。
+// 内嵌图表的纯数据逻辑（便于单测）。
+//
+// 依赖说明：这里唯一的外部依赖是同目录的 guaxiChartTypes.js（同样是纯函数模块，
+// 不碰 DOM / Tauri），因此仍然可以被 Node 测试直接加载。
+
+import {
+  CHART_TYPES,
+  normalizeChartType,
+  supportedChartTypes,
+  fieldOf,
+  fieldsOf,
+  titleOf,
+  legendOf,
+  tooltipOf,
+  gridOf,
+  categoryAxis,
+  valueAxis,
+} from './guaxiChartTypes.js'
+//
+// 图表类型的具体 option 组装在 guaxiChartTypes.js（按族登记的 builder 表），
+// 这里只负责「解析围栏 → 取数据 → 调用对应 builder → 补齐公共外壳」。
 //
 // 为什么单独一个文件：guaxiChartEmbeds.js 要 import Tauri 的 invoke、logger 和动态
 // ECharts，Node 的测试进程无法直接加载它。把「解析围栏 / 解析 CSV / 组装 option」
@@ -282,11 +302,12 @@ export function buildChartOption(spec, records) {
   if (!spec || typeof spec !== 'object') {
     throw new Error('缺少 spec（示例：spec: {"type":"bar","x":"month","y":["revenue"]}）')
   }
-  // 完整 ECharts option：包一层 option 显式给出，或直接贴 option 本体（有 series/xAxis/yAxis）。
-  // 两种写法都要支持 —— 手册里承诺"可以直接贴整个 option"，那就必须真的按 option 处理，
-  // 否则它会被当成 spec 走默认 line 分支，画出一张空图。
+
+  // 完整 ECharts option：包一层 option 显式给出，或直接贴 option 本体。
+  // 手册承诺「可以直接贴整个 option」，那就必须真的按 option 处理，
+  // 否则它会被当成 spec 走默认分支，画出一张空图。
   const looksLikeOption =
-    spec.option && typeof spec.option === 'object'
+    (spec.option && typeof spec.option === 'object')
     || Array.isArray(spec.series)
     || spec.xAxis !== undefined
     || spec.yAxis !== undefined
@@ -297,68 +318,90 @@ export function buildChartOption(spec, records) {
     return option
   }
 
-  const type = String(spec.type || 'line').toLowerCase()
-  const xKey = String(spec.x || spec.xField || '')
-  const yRaw = spec.y ?? spec.yField
-  const yKeys = Array.isArray(yRaw) ? yRaw.map(String) : (yRaw ? [String(yRaw)] : [])
-  const title = spec.title ? { text: String(spec.title) } : undefined
-  const legend = yKeys.length > 1 ? { top: spec.title ? 32 : 0 } : undefined
+  const typeKey = normalizeChartType(spec.type)
+  if (!typeKey) {
+    throw new Error(
+      `不支持的图表类型「${spec.type}」。可用类型：${supportedChartTypes().join(' / ')}`
+    )
+  }
+  const entry = CHART_TYPES[typeKey]
 
-  const categories = xKey ? records.map((r) => r[xKey]) : records.map((_, i) => String(i + 1))
-  const xAxis = { type: 'category', data: categories, axisLabel: { hideOverlap: true } }
-  if (spec.xType === 'time' || spec.xType === 'value') xAxis.type = spec.xType
-  if (spec.xName) xAxis.name = String(spec.xName)
+  const xKey = fieldOf(spec, 'x', 'xField')
+  const yKeys = fieldsOf(spec, 'y', 'yField')
+  const title = titleOf(spec)
 
-  if (type === 'pie' || type === 'doughnut' || type === 'ring') {
-    const valueKey = yKeys[0] || Object.keys(records[0] || {})[1]
-    const nameKey = xKey || Object.keys(records[0] || {})[0]
+  // 交给类型 builder 生成 series / 片段。builder 的契约统一，因此这里不需要
+  // 为每种图写 if 分支 —— 新增类型只在 guaxiChartTypes 里登记即可。
+  const built = entry.builder(spec, records, xKey, yKeys)
+
+  // builder 可以返回数组（纯 series）或对象（自带 axis / visualMap 等）。
+  // builder 的返回形态有两种：
+  //   1) 纯 series 数组，或单个 series 对象（heatmap / parallel 这类只产出一条系列的图）；
+  //   2) 片段对象 { series, xAxis?, yAxis?, ... }。
+  // 区分依据：片段一定带 `series` 字段，而且不是 ECharts 的 series 本体
+  // （series 本体必有 type）。
+  let series
+  let fragment = null
+  if (Array.isArray(built)) {
+    series = built
+  } else if (built && typeof built === 'object' && built.series !== undefined) {
+    fragment = built
+    series = Array.isArray(built.series) ? built.series : [built.series]
+  } else if (built && typeof built === 'object') {
+    series = [built]
+  } else {
+    throw new Error('图表构造器没有返回任何 series')
+  }
+
+  const seriesCount = Array.isArray(series) ? series.length : 1
+  const legend = legendOf(spec, { seriesCount })
+  const tooltip = tooltipOf(spec, entry.family === 'cartesian' ? 'axis' : 'item')
+
+  // 独立布局：图表自己管坐标，不拼 grid / axis。
+  if (entry.family === 'independent' || entry.family === 'extension') {
+    const option = {
+      title,
+      tooltip,
+      legend,
+      series,
+      ...(fragment ? { ...fragment, series } : {}),
+    }
+    return option
+  }
+
+  // 自定义族：builder 自带坐标轴（甘特图等）。
+  if (entry.family === 'custom') {
     return {
       title,
-      tooltip: { trigger: 'item' },
+      tooltip,
       legend,
-      series: [
-        {
-          type: 'pie',
-          radius: type === 'pie' ? '62%' : ['42%', '68%'],
-          data: records.map((r) => ({
-            name: String(r[nameKey] ?? ''),
-            value: Number(r[valueKey]) || 0,
-          })),
-          label: { formatter: '{b}: {d}%' },
-        },
-      ],
+      series,
+      ...(fragment || {}),
+      ...(fragment?.xAxis ? {} : { xAxis: categoryAxis(spec, records, xKey), yAxis: valueAxis(spec) }),
+      ...(fragment?.grid ? {} : { grid: gridOf(spec, { hasLegend: !!legend }) }),
     }
   }
 
-  const series = yKeys.map((key) => ({
-    name: key,
-    type: type === 'area' ? 'line' : type,
-    data: records.map((r) => r[key]),
-    ...(type === 'area' ? { areaStyle: {} } : {}),
-    ...(type === 'line' ? { smooth: !!spec.smooth } : {}),
-  }))
+  // 笛卡尔系：拼装 grid + 双轴。
+  // 横向柱状由 buildBar 通过 horizontal 标记；其余类型按 x 分类轴 / y 数值轴的默认布局。
+  const horizontal = fragment?.horizontal === true
+    || spec.orient === 'horizontal'
+    || spec.horizontal === true
+  const xAxis = fragment?.xAxis
+    ?? (horizontal ? valueAxis(spec) : categoryAxis(spec, records, xKey))
+  const yAxis = fragment?.yAxis
+    ?? (horizontal ? categoryAxis(spec, records, xKey) : valueAxis(spec))
 
-  const option = {
+  return {
     title,
-    tooltip: { trigger: type === 'scatter' ? 'item' : 'axis' },
+    tooltip,
     legend,
-    grid: { left: 48, right: 24, top: title ? 60 : 28, bottom: 40, containLabel: true },
+    grid: fragment?.grid ?? gridOf(spec, { hasLegend: !!legend }),
     xAxis,
-    yAxis: { type: 'value', name: spec.yName ? String(spec.yName) : undefined },
+    yAxis,
+    ...(fragment?.visualMap ? { visualMap: fragment.visualMap } : {}),
     series,
   }
-
-  if (type === 'scatter' && yKeys.length >= 2) {
-    option.xAxis = { type: 'value' }
-    option.series = [{
-      type: 'scatter',
-      name: spec.title ? String(spec.title) : 'scatter',
-      data: records.map((r) => [Number(r[yKeys[0]]) || 0, Number(r[yKeys[1]]) || 0]),
-      symbolSize: Number(spec.symbolSize || 10),
-    }]
-  }
-
-  return option
 }
 
 /**

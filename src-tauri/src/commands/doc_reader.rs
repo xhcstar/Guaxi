@@ -397,8 +397,10 @@ pub struct EbookTocItem {
 
 /// 电子书阅读器所需的一次性载荷。
 ///
-/// `sections[i].html` 是 ebook-rs `processed_html` 的原样输出：CSS、图片（已内联为
-/// data URI）、字体都已处理过，前端只需塞进 sandbox iframe 即可显示。
+/// `sections[i].html` 取自 ebook-rs `Book::get_section()` 的 `processed_html`：CSS、图片
+/// （已内联为 data URI）、字体都已处理过，前端只需塞进 sandbox iframe 即可显示。
+/// 注意不能直接读 `book.sections[i].processed_html` —— 资源内联只在 `get_section()` /
+/// `load_section_lazy()` 里执行，裸字段还是原始相对路径。
 /// 这样做的代价是首屏一次性传输整本 HTML，但换来的是零额外依赖、零资源路径解析，
 /// 对「打开一本本地电子书」这个场景足够。
 #[derive(Debug, Serialize)]
@@ -433,6 +435,11 @@ fn flatten_nav(points: &[ebook_rs::NavPoint], depth: usize, out: &mut Vec<EbookT
     }
 }
 
+/// MOBI 家族（MOBI/AZW3/KFX）在 ebook-rs 内部用 OEBPS 拍平结构，图片路径需要按该布局解析。
+fn is_mobi_family(kind: &str) -> bool {
+    matches!(kind, "mobi" | "azw3" | "kfx")
+}
+
 fn read_ebook_blocking(path: &Path, kind: &str) -> Result<EbookPayload, String> {
     let size = file_size(path)?;
     if size > EBOOK_MAX_INPUT_BYTES {
@@ -449,7 +456,29 @@ fn read_ebook_blocking(path: &Path, kind: &str) -> Result<EbookPayload, String> 
 
     let mut sections = Vec::with_capacity(book.sections.len());
     let mut repaired_sections = 0usize;
-    for section in &book.sections {
+    for section_ref in &book.sections {
+        // 必须走 get_section()：图片/字体/样式的 data URI 内联只在那里执行，
+        // 直接读 book.sections 拿到的是原始相对路径（`../images/00001.jpeg`），
+        // 在 sandbox iframe 的 blob 文档里没有基址可解析，图片就是空白。
+        let mut section = book.get_section(section_ref.index).unwrap_or_else(|err| {
+            tracing::warn!(
+                path = %path.display(),
+                index = section_ref.index,
+                error = %err,
+                "[Reader] get_section failed, falling back to unprocessed html"
+            );
+            section_ref.clone()
+        });
+        // MOBI/AZW3 的兜底：ebook-rs 把图片写进归档的 `OEBPS/images/...`，却把 section 的
+        // full_path 设成裸的 `section_N.html`，于是 get_section 按相对路径反查必然 Miss。
+        // 用图片实际所在的 OEBPS 目录再跑一遍内联（EPUB 的路径本就是对的，这里再跑也不会重复）。
+        if is_mobi_family(kind) {
+            section.processed_html = ebook_rs::section::process_section_resources(
+                &section.processed_html,
+                "OEBPS/section.xhtml",
+                &book.archive,
+            );
+        }
         // 空白章节（封面占位、版权页空壳）直接跳过，避免阅读器里出现整页空白。
         if section.plain_text.trim().is_empty() && !section.processed_html.contains("<img") {
             continue;
@@ -541,7 +570,7 @@ fn read_ebook_blocking(path: &Path, kind: &str) -> Result<EbookPayload, String> 
 //      非拉丁文字（CJK 等）。正常中文书不会长这样。
 //   2. 还原：把这些字符按 CP1252/Latin-1 还原成字节，再按 UTF-8 严格解码。
 //      严格解码失败就说明这个假设不成立，原样返回——绝不产出「半个字符」。
-//   3. 还原后若 CJK 字符显著增多，才采用；否则维持原样。
+//   3. 还原后若 CJK 字符确有增多，才采用；否则维持原样。
 //
 // 刻意不做「试遍所有编码挑最像的」：那种做法在正常书上也可能误判，
 // 一旦误判就是把用户的书内容改掉。
@@ -582,17 +611,24 @@ fn sample_counts(text: &str, limit: usize) -> (usize, usize, usize) {
     (latin, cjk, total)
 }
 
-/// 文本是否像「UTF-8 被按 Latin-1 读」的乱码。
-fn looks_latin1_mangled(text: &str) -> bool {
-    let (latin, cjk, total) = sample_counts(text, 4000);
-    if total < 20 {
-        return false; // 样本太少，不动
+/// 文本是否像「UTF-8 被按 Latin-1 读」的乱码（按已统计好的字符数判定）。
+fn looks_latin1_mangled_counts(latin: usize, cjk: usize, total: usize) -> bool {
+    // 3 是「一个汉字被拆成 3 个拉丁字符」的长度，低于它没有判断意义。
+    // 真正的误判保护在 try_repair_latin1_utf8：严格 UTF-8 解码 + CJK 必须增多。
+    if total < 3 {
+        return false;
     }
     // 正常中文书：CJK 占绝对多数，latin 高位字符接近 0。
     // 乱码：latin 高位字符占比很高，而 CJK 几乎为 0。
     let latin_ratio = latin as f64 / total as f64;
     let cjk_ratio = cjk as f64 / total as f64;
     latin_ratio > 0.20 && cjk_ratio < 0.02
+}
+
+/// 文本是否像「UTF-8 被按 Latin-1 读」的乱码。
+fn looks_latin1_mangled(text: &str) -> bool {
+    let (latin, cjk, total) = sample_counts(text, 4000);
+    looks_latin1_mangled_counts(latin, cjk, total)
 }
 
 /// CP1252 在 0x80..=0x9F 区间把控制符换成了可见字符，其中五个码位映射到
@@ -682,6 +718,53 @@ mod cp1252_reverse_tests {
     }
 }
 
+#[cfg(test)]
+mod repair_html_text_nodes_tests {
+    use super::repair_html_text_nodes;
+
+    /// 「索引」的 UTF-8 字节 e7 b4 a2 e5 bc 95 被按 Latin-1 逐字节读出来，
+    /// 末尾 0x95 又落在 CP1252 的「•」上 —— 这就是 MOBI/AZW3 最常见的畸形。
+    const MANGLED_INDEX: &str = "ç´¢å¼•";
+    const CLEAN_INDEX: &str = "索引";
+
+    #[test]
+    fn repairs_mangling_inside_a_short_text_node() {
+        // 关键回归：整段 HTML 里 ASCII 标签占绝大多数，按整段统计时乱码字符
+        // 只占约 19%，低于 20% 阈值，于是这一章一直修不掉。判定必须逐文本节点。
+        let html = format!("<h1 class=\"front\" id=\"a024\">{}</h1><p class=\"c1\" aid=\"LTSU\">x</p>", MANGLED_INDEX);
+        assert!(repair_html_text_nodes(&html).contains(CLEAN_INDEX));
+    }
+
+    #[test]
+    fn repairs_a_node_of_only_a_few_characters() {
+        // 旧版要求还原后 CJK 至少多 20 个，短标题（4 个字）永远通不过。
+        assert_eq!(repair_html_text_nodes(MANGLED_INDEX), CLEAN_INDEX);
+    }
+
+    #[test]
+    fn leaves_normal_chinese_untouched() {
+        let html = "<p>拜占庭的失落之城</p>";
+        assert_eq!(repair_html_text_nodes(html), html);
+    }
+
+    #[test]
+    fn leaves_normal_english_untouched() {
+        // 真正的西文文本必须原样返回：严格 UTF-8 解码这一关会拦下它。
+        let html = "<p>Table of Contents — 57</p>";
+        assert_eq!(repair_html_text_nodes(html), html);
+    }
+
+    #[test]
+    fn never_rewrites_markup_attributes() {
+        // 属性里的 ASCII 与标签结构不能被动，否则 class/id 会被改坏。
+        let html = format!("<img class=\"img-a\" alt=\"图\" src=\"../images/00001.jpeg\"/>{}", MANGLED_INDEX);
+        let out = repair_html_text_nodes(&html);
+        assert!(out.contains("class=\"img-a\""));
+        assert!(out.contains("src=\"../images/00001.jpeg\""));
+        assert!(out.ends_with(CLEAN_INDEX));
+    }
+}
+
 /// 按 Latin-1 把每个字符取回单字节。遇到 > 0xFF 的字符返回 None。
 fn decode_latin1_bytes(text: &str) -> Option<Vec<u8>> {
     let mut bytes = Vec::with_capacity(text.len());
@@ -730,10 +813,14 @@ fn try_repair_latin1_utf8(text: &str) -> Option<String> {
     // 严格解码失败即说明「这串字节本来就是单字节文本」，不做替换式解码。
     let repaired = decoded?;
 
-    // 还原后必须「明显更像正文」才采用，防止把真正的西文文本改坏。
-    let (_, cjk_before, _) = sample_counts(text, 4000);
-    let (_, cjk_after, _) = sample_counts(&repaired, 4000);
-    if cjk_after > cjk_before * 2 + 20 {
+    // 还原后必须「更像正文」才采用，防止把真正的西文文本改坏：
+    // 严格 UTF-8 解码已经挡掉了绝大多数情形，这里再要求 CJK 数量确有增长。
+    //
+    // 不能用固定额度（旧版是 +20）：ePub 的文本节点常常只有几个字
+    // （「索引」被拆成一条 TOC 节点），固定额度会让短节点永远修不掉。
+    let (_, cjk_before, _) = sample_counts(text, usize::MAX);
+    let (_, cjk_after, _) = sample_counts(&repaired, usize::MAX);
+    if cjk_after > cjk_before {
         Some(repaired)
     } else {
         None
@@ -742,36 +829,42 @@ fn try_repair_latin1_utf8(text: &str) -> Option<String> {
 
 /// 对一段 HTML 做编码兜底：只处理文本节点内容，不动标签与属性。
 ///
-/// 为什么不能整段处理：HTML 里的 `class="a"` 之类全是 ASCII，混进去会把
-/// 「整段是否乱码」的判定稀释掉；而且直接替换整段字符串有破坏标签结构的风险。
+/// 判定粒度是**单个文本节点**，不是整段 HTML：标签与属性几乎全是 ASCII，按整段统计
+/// 会把乱码字符的占比稀释掉 —— 只有 19% 乱码字符的索引页正好卡在 20% 阈值下，
+/// 整章因此一直修不掉。逐节点判定也只替换文本，标签结构原样保留。
 fn repair_html_text_nodes(html: &str) -> String {
-    // 诊断：乱码判定失败时，把样本特征打出来，便于定位「为什么这本书没被修复」。
-    let (latin, cjk, total) = sample_counts(html, 4000);
-    if !looks_latin1_mangled(html) {
-        if total >= 20 && latin * 100 / total.max(1) > 10 {
-            tracing::debug!(
-                latin,
-                cjk,
-                total,
-                sample = %html.chars().take(80).collect::<String>(),
-                "[Reader] text looks suspicious but not repaired"
-            );
-        }
-        return html.to_string();
-    }
-
     let mut out = String::with_capacity(html.len());
     let mut in_tag = false;
     let mut text_buf = String::new();
 
+    // 诊断：节点被判为可疑却没还原成功时，把特征打出来，便于定位「为什么这本书没被修复」。
     let flush = |buf: &mut String, out: &mut String| {
         if buf.is_empty() {
             return;
         }
-        match try_repair_latin1_utf8(buf) {
-            Some(fixed) => out.push_str(&fixed),
-            None => out.push_str(buf),
+        // 纯 ASCII 节点不可能是这种乱码，直接放行（英文小说占绝大多数）。
+        if !buf.is_ascii() {
+            let (latin, cjk, total) = sample_counts(buf, usize::MAX);
+            if looks_latin1_mangled_counts(latin, cjk, total) {
+                match try_repair_latin1_utf8(buf) {
+                    Some(fixed) => {
+                        out.push_str(&fixed);
+                        buf.clear();
+                        return;
+                    }
+                    None => {
+                        tracing::debug!(
+                            latin,
+                            cjk,
+                            total,
+                            sample = %buf.chars().take(80).collect::<String>(),
+                            "[Reader] text looks suspicious but not repaired"
+                        );
+                    }
+                }
+            }
         }
+        out.push_str(buf);
         buf.clear();
     };
 
@@ -1675,11 +1768,21 @@ mod tests {
     }
 
     #[test]
-    fn short_text_is_never_touched() {
-        // 样本太短时不做任何判定，避免把标题等短串改坏。
-        let tiny = mangle_as_latin1("史");
-        assert!(!looks_latin1_mangled(&tiny));
-        assert_eq!(repair_plain_text(&tiny), tiny);
+    fn short_titles_are_still_repaired() {
+        // 「索引」这种两字标题乱码后只有 6 个字符。旧版的「样本少于 20 个字符就不动」
+        // 让这类短标题永远修不掉 —— 而目录页标题恰恰全是短串。
+        let tiny = mangle_as_latin1("索引");
+        assert!(looks_latin1_mangled(&tiny), "短标题也应被识别，实际: {tiny}");
+        assert_eq!(repair_plain_text(&tiny), "索引");
+    }
+
+    #[test]
+    fn a_truncated_byte_run_is_never_guessed() {
+        // 只还原能通过严格 UTF-8 解码的片段：截断在多字节序列中间时原样返回，
+        // 绝不产出「半个字符」。单字「史」(3 字节完整) 可还原，这里取半截。
+        let mangled = mangle_as_latin1("史");
+        let truncated: String = mangled.chars().take(2).collect();
+        assert_eq!(repair_plain_text(&truncated), truncated);
     }
 
     #[test]
