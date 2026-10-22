@@ -221,14 +221,27 @@ const loadECharts = () => {
   return echartsModulePromise
 }
 
-const isDarkTheme = () => {
+/**
+ * 判断图表该用深色还是浅色主题。
+ *
+ * 主题标记有两个来源：
+ *   1. 主窗口把主题落在 `documentElement.dataset.guaxiTheme`（settingsStore.applyAppearanceTheme）；
+ *   2. 独立窗口（如手册窗口）只在组件根元素上设 `data-theme`，documentElement 保持未知。
+ * 只看第 1 种会让第 2 种永远是浅色，所以这里再按渲染容器向上找一次最近的 data-theme。
+ */
+const isDarkTheme = (scope) => {
   try {
     const root = document?.documentElement
-    return (
-      !!root?.classList?.contains?.('dark') ||
-      !!root?.classList?.contains?.('dark-mode') ||
+    if (
+      root?.classList?.contains?.('dark') ||
+      root?.classList?.contains?.('dark-mode') ||
       root?.dataset?.guaxiTheme === 'dark'
-    )
+    ) {
+      return true
+    }
+    const themed = scope?.closest?.('[data-theme]')
+    if (themed) return themed.getAttribute('data-theme') === 'dark'
+    return false
   } catch {
     return false
   }
@@ -286,7 +299,7 @@ async function renderChartBlock(el) {
     const { option, records, parsed } = await buildOptionFromFence(source, baseDocPath)
 
     const echarts = await loadECharts()
-    const instance = echarts.init(el, isDarkTheme() ? 'dark' : null, { renderer: 'canvas' })
+    const instance = echarts.init(el, isDarkTheme(el) ? 'dark' : null, { renderer: 'canvas' })
     instance.setOption(option, true)
     chartInstances.set(el, instance)
 

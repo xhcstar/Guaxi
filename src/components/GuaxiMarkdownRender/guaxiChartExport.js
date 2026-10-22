@@ -76,6 +76,65 @@ function buildBaseName(block, index) {
 
 
 /**
+ * 生成**静态** SVG 前先把动画彻底关掉。
+ *
+ * 为什么必须关：ECharts 的 SVG 渲染器会给折线/柱状等系列生成一段进场动画，
+ * 动画的 `clipPath` 在 0% 时是一个零宽矩形（`d="M78 79l0 0l0 378..."`），
+ * 100% 才是完整区域。SVG 一旦离开浏览器（<img> 栅格化、打印成 PDF、被嵌进
+ * 静态预览页），CSS 动画不会运行，图形就永远停在 0% —— 于是导出结果里
+ * 只剩背景和坐标轴，折线、树图连线、标签全部被裁掉。
+ *
+ * 关掉动画后 ECharts 不再输出 `@keyframes`，clipPath 直接是最终几何。
+ * series 上也可能挂动画（用户可以直接贴整段 ECharts option），所以逐条覆盖。
+ */
+function freezeChartAnimation(option) {
+  if (!option || typeof option !== 'object') return option
+  const out = {
+    ...option,
+    animation: false,
+    animationDuration: 0,
+    animationDurationUpdate: 0,
+  }
+  if (Array.isArray(out.series)) {
+    out.series = out.series.map((s) => (s && typeof s === 'object' ? { ...s, animation: false } : s))
+  } else if (out.series && typeof out.series === 'object') {
+    out.series = { ...out.series, animation: false }
+  }
+  return out
+}
+
+const hasWordCloudSeries = (option) => {
+  const list = Array.isArray(option?.series) ? option.series : (option?.series ? [option.series] : [])
+  return list.some((s) => String(s?.type || '').toLowerCase() === 'wordcloud')
+}
+
+/**
+ * 等第一次真正绘制完成再取 SVG。
+ *
+ * 词云（echarts-wordcloud）的布局是**异步**的：它在离屏 canvas 上逐轮尝试摆放文字，
+ * `setOption` 返回时画面里还是空的。原先在这里立刻 `getDataURL`，导出的词云就是
+ * 一张 200 多字节的空 SVG —— 这正是「词云内容为空」的直接原因。
+ * 其余类型都是同步绘制，一次 refresh 就够，不做任何等待。
+ */
+async function waitForWordCloudLayout(instance, timeoutMs = 2500, intervalMs = 16) {
+  const deadline = Date.now() + timeoutMs
+  const painted = () => {
+    try {
+      instance.getZr().refreshImmediately()
+      const svg = instance.getDom()?.querySelector('svg')
+      return !!svg?.querySelector('text')
+    } catch {
+      return false
+    }
+  }
+  while (Date.now() < deadline) {
+    if (painted()) return true
+    await new Promise((resolve) => setTimeout(resolve, intervalMs))
+  }
+  return painted()
+}
+
+/**
  * 把 ECharts 实例导出成 SVG 字符串。
  *
  * 为什么用 SVG 而不是 canvas：ECharts 的 canvas 渲染器拿不到矢量结果，
@@ -98,7 +157,11 @@ export async function renderChartSvg(option, { width = 900, height = 520 } = {})
     // 第三个参数（theme）固定传 null 而不是 'dark'：导出必须与当前界面主题解耦。
     // 图表本身的配色若来自 spec，仍会原样保留。
     instance = echarts.init(host, null, { renderer: 'svg', width, height })
-    instance.setOption(buildLightOption(option), true)
+    // buildLightOption 会给 option 补上 backgroundColor，ECharts 会据此输出背板矩形：
+    // 少了它，SVG 离开深色页面后就是透明底 + 深灰字，看着像「内容丢了」。
+    instance.setOption(freezeChartAnimation(buildLightOption(option)), true)
+    // 扩展包（词云）的布局是异步的，必须等它真正落笔后再序列化。
+    if (hasWordCloudSeries(option)) await waitForWordCloudLayout(instance)
     // SVG 渲染器下 getDataURL 返回 data:image/svg+xml;charset=UTF-8,...
     const dataUrl = instance.getDataURL({ type: 'svg' })
     const comma = String(dataUrl).indexOf(',')

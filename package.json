@@ -12,6 +12,7 @@
     "check:icons": "node ./tools/check_offline_icons.mjs",
     "test:frontend": "node --test \"tests/*.test.mjs\"",
     "prepare:tauri-assets": "node ./tools/copy_excalidraw_assets.mjs",
+    "prepare:excalidraw-export": "node ./tools/build_excalidraw_export_bundle.mjs",
     "prepare:tauri-utils": "cargo run --quiet --manifest-path src-tauri/Cargo.toml --bin prepare_utils_zip",
     "codex:fetch": "node ./tools/fetch_codex_sidecar.mjs",
     "codex:fetch:force": "node ./tools/fetch_codex_sidecar.mjs --force",

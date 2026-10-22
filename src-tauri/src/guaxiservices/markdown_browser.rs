@@ -709,6 +709,16 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
             code {{ font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace; }}
             img {{ max-width: 100%; }}
             .guaxi-chart {{ width: 100%; min-height: 240px; margin: 14px 0; }}
+            .guaxi-excalidraw {{
+              margin: 14px 0;
+              padding: 10px;
+              border: 1px solid rgba(0,0,0,0.12);
+              border-radius: 8px;
+              background: #fff;
+              text-align: center;
+              overflow: auto;
+            }}
+            .guaxi-excalidraw svg {{ display: block; max-width: 100%; height: auto; margin: 0 auto; }}
             .guaxi-excalidraw-note {{ margin: 12px 0; padding: 10px 12px; border: 1px dashed rgba(0,0,0,0.16); border-radius: 8px; font-size: 13px; color: rgba(31,35,40,0.7); }}
             a {{ color: #0969da; }}
             .content a[id^="guaxi-toc-"] {{ display: block; position: relative; top: -72px; visibility: hidden; pointer-events: none; }}
@@ -816,6 +826,8 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
           <script src="/browser/assets/echarts/echarts.min.js"></script>
           <script src="/browser/assets/echarts/echarts-liquidfill.min.js"></script>
           <script src="/browser/assets/echarts/echarts-wordcloud.min.js"></script>
+          <script>window.process={{env:{{NODE_ENV:'production'}},platform:'browser',versions:{{}}}};window.global=window;</script>
+          <script src="/browser/assets/excalidraw/excalidraw-export.js"></script>
           </head>
         <body>
           <div class="topbar">
@@ -892,6 +904,86 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
               }});
             }}
 
+            /**
+             * 图表主题：固定浅色。
+             *
+             * 静态预览页是一张白底网页（body / .content 都是白底），图表必须跟它一致。
+             * 早先这里传 null（ECharts 默认浅色）本身是对的；真正的问题是软件内：
+             * 深色主题下实时图表用了 dark 主题，导出时又被强制改成浅色，
+             * 导致「预览里能看见、导出里看不见」。两边统一成浅色后，所见即所得。
+             */
+            function guaxiPreviewChartTheme() {{
+              return null;
+            }}
+
+            /**
+             * 等图表完成第一笔绘制。
+             *
+             * 词云（echarts-wordcloud）的布局在离屏 canvas 上异步进行，`setOption` 返回时
+             * 画面还是空的；此时若被截图或打印，结果就是一张空图。
+             * 非扩展类型同步绘制，第一次探测就会命中，不产生可感知的等待。
+             */
+            async function waitForChartPaint(chart, spec, timeoutMs = 3000) {{
+              const isWordCloud = /^wordcloud$/i.test(String((spec && spec.type) || ''));
+              const deadline = Date.now() + timeoutMs;
+              const painted = () => {{
+                try {{
+                  chart.getZr().refreshImmediately();
+                  const svg = chart.getDom() && chart.getDom().querySelector('svg');
+                  if (!isWordCloud) return !!svg && svg.childElementCount > 2;
+                  return !!svg && !!svg.querySelector('text');
+                }} catch (_) {{
+                  return true;
+                }}
+              }};
+              while (Date.now() < deadline) {{
+                if (painted()) return true;
+                await new Promise((resolve) => setTimeout(resolve, 50));
+              }}
+              return painted();
+            }}
+
+            /**
+             * 渲染 excalidraw 白板：读场景 JSON → 交给官方 exportToSvg → 内联 SVG。
+             *
+             * 之前静态页只显示一行「请在软件内查看」的提示，内容等于丢失。
+             * 现在把官方导出器随页面分发，场景文件走与图表数据相同的读取端点，
+             * 因此相对路径 / 绝对路径 / resource: 三种写法行为一致。
+             */
+            async function renderExcalidrawDrafts(root, drafts, baseDirHint) {{
+              if (!drafts || !drafts.length) return;
+              const exporter = window.GuaxiExcalidrawExport;
+              for (const draft of drafts) {{
+                const el = root.querySelector('#' + draft.id);
+                if (!el) continue;
+                if (!exporter || typeof exporter.exportToSvg !== 'function') {{
+                  el.innerHTML = '<div class="guaxi-excalidraw-note">白板导出器未加载，无法渲染：'
+                    + escapeHtml(draft.source) + '</div>';
+                  continue;
+                }}
+                try {{
+                  const text = await loadChartData(draft.source, baseDirHint);
+                  const scene = JSON.parse(text);
+                  const elements = Array.isArray(scene.elements) ? scene.elements : [];
+                  const appState = scene.appState && typeof scene.appState === 'object' ? scene.appState : {{}};
+                  if (!elements.length) throw new Error('场景里没有图形元素');
+                  const svg = await exporter.exportToSvg({{
+                    elements: elements,
+                    appState: Object.assign({{}}, appState, {{
+                      exportBackground: true,
+                      viewBackgroundColor: appState.viewBackgroundColor || '#ffffff',
+                    }}),
+                    files: scene.files || {{}},
+                  }});
+                  el.innerHTML = '';
+                  el.appendChild(svg);
+                }} catch (error) {{
+                  el.innerHTML = '<div class="guaxi-excalidraw-note">白板渲染失败：'
+                    + escapeHtml((error && error.message) || String(error)) + '</div>';
+                }}
+              }}
+            }}
+
             async function renderChartDrafts(root, drafts, baseDirHint) {{
               if (!drafts || !drafts.length) return;
               if (!window.echarts) {{
@@ -915,8 +1007,11 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
                   const rows = parseChartRows(text);
                   if (!rows.length) throw new Error('数据为空');
                   el.style.height = '360px';
-                  const chart = window.echarts.init(el, null, {{ renderer: 'svg' }});
+                  const chart = window.echarts.init(el, guaxiPreviewChartTheme(), {{ renderer: 'svg' }});
                   chart.setOption(buildChartOption(parsed.spec, rows), true);
+                  // 词云布局是异步的（离屏 canvas 逐轮摆放文字），这里等它真正出字，
+                  // 否则静态页截图/打印时会得到一张空图。其余类型同步绘制，循环立刻结束。
+                  await waitForChartPaint(chart, parsed.spec);
                   window.addEventListener('resize', () => {{
                     try {{ chart.resize(); }} catch (_) {{}}
                   }});
@@ -1323,6 +1418,7 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
               // 渲染器是独立的静态页面，不能复用软件内的图表模块，所以这里只做
               // 「解析围栏 → 组装最小 option → echarts.init」这一条最小路径。
               const chartDrafts = [];
+              const excalidrawDrafts = [];
               const defaultFence = mdIt.renderer.rules.fence;
               mdIt.renderer.rules.fence = (tokens, idx, options, env, self) => {{
                 const token = tokens[idx];
@@ -1332,12 +1428,14 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
                   chartDrafts.push({{ id: id, source: String(token.content || '') }});
                   return '<div class="guaxi-chart" id="' + id + '"></div>';
                 }}
-                // excalidraw 围栏：静态预览里没有导出器，直接把场景文件路径渲染成一条提示，
-                // 至少不会像代码块那样让人以为内容丢了。
+                // excalidraw 围栏：静态页里用官方 exportToSvg 渲染成只读 SVG。
+                // 导出器随页面一起分发（见 /browser/assets/excalidraw/excalidraw-export.js），
+                // 场景文件读取复用图表数据那条端点。
                 if (/^excalidraw(\s|$)/i.test(info)) {{
                   const scenePath = String(token.content || '').trim();
-                  return '<div class="guaxi-excalidraw-note">Excalidraw 白板：<code>'
-                    + escapeHtml(scenePath) + '</code>（请在软件内查看）</div>';
+                  const id = 'guaxi-excalidraw-' + excalidrawDrafts.length;
+                  excalidrawDrafts.push({{ id: id, source: scenePath }});
+                  return '<div class="guaxi-excalidraw" id="' + id + '"></div>';
                 }}
                 return defaultFence(tokens, idx, options, env, self);
               }};
@@ -1345,6 +1443,7 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
               contentEl.innerHTML = mdIt.render(processed);
               enhanceMediaGroups(contentEl);
               await renderChartDrafts(contentEl, chartDrafts, baseDir);
+              await renderExcalidrawDrafts(contentEl, excalidrawDrafts, baseDir);
 
               if (window.MathJax) {{
                 try {{
@@ -1499,6 +1598,19 @@ async fn browser_asset_echarts_wordcloud() -> HttpResponse {
         .body(include_str!("../../assets/vendor/echarts-wordcloud.min.js"))
 }
 
+/// Excalidraw 官方导出器的独立构建（含内嵌字体），供静态预览页把白板场景渲染成 SVG。
+///
+/// 为什么要单独打一份：前端用的是 React 组件包，静态页没有 React、也没有打包器。
+/// 这个 IIFE 暴露 `window.GuaxiExcalidrawExport.exportToSvg`，产物里字体与图片都是
+/// data URL，因此离线打开预览页也能正确显示。
+#[get("/browser/assets/excalidraw/excalidraw-export.js")]
+async fn browser_asset_excalidraw_export() -> HttpResponse {
+    HttpResponse::Ok()
+        .content_type("application/javascript; charset=utf-8")
+        .append_header(("Cache-Control", "no-store"))
+        .body(include_str!("../../assets/vendor/excalidraw-export.js"))
+}
+
 #[get("/browser/assets/highlightjs/styles/atom-one-light.css")]
 async fn browser_asset_highlight_css() -> HttpResponse {
     HttpResponse::Ok()
@@ -1523,6 +1635,7 @@ pub fn browser_preview_config(cfg: &mut web::ServiceConfig) {
         .service(browser_asset_echarts)
         .service(browser_asset_echarts_liquidfill)
         .service(browser_asset_echarts_wordcloud)
+        .service(browser_asset_excalidraw_export)
         .service(browser_asset_highlight_css)
         .service(browser_preview);
 }
@@ -1582,5 +1695,37 @@ mod tests {
         ));
 
         fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 预览页必须真的把白板交给导出器，而不是退回「请在软件内查看」的提示。
+    ///
+    /// 这条约束曾经以两种方式被破坏：脚本没引入、或围栏仍渲染成旧提示文本。
+    /// 页面的 HTML 是 `format!` 字符串，编译期不会检查其中脚本内容，所以用测试兜住。
+    #[test]
+    fn preview_page_wires_excalidraw_exporter() {
+        let source = include_str!("markdown_browser.rs");
+        assert!(
+            source.contains("/browser/assets/excalidraw/excalidraw-export.js"),
+            "预览页缺少 excalidraw 导出器脚本"
+        );
+        assert!(
+            source.contains("renderExcalidrawDrafts"),
+            "预览页缺少白板渲染函数"
+        );
+        assert!(
+            !source.contains("guaxi-excalidraw-note\">Excalidraw 白板："),
+            "白板仍会退化成「请在软件内查看」的提示"
+        );
+    }
+
+    /// 图表必须在静态页里等异步布局完成，否则词云会导出成空图。
+    #[test]
+    fn preview_page_waits_for_async_chart_layout() {
+        let source = include_str!("markdown_browser.rs");
+        assert!(source.contains("waitForChartPaint"), "缺少等待绘制的逻辑");
+        assert!(
+            source.contains("await waitForChartPaint(chart, parsed.spec)"),
+            "渲染入口没有调用等待逻辑"
+        );
     }
 }
