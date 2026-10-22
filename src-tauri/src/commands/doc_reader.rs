@@ -579,6 +579,7 @@ fn reassemble_mobi_text(bytes: &[u8]) -> Option<String> {
     if html.contains("kindle:") {
         if let Some(rewritten) = rewrite_kindle_refs(
             &html,
+            bytes,
             &text_stream,
             &record_offset,
             text_records,
@@ -623,6 +624,7 @@ fn decode_kindle_index(raw: &str) -> Option<usize> {
 /// 未使用的图（封面、缩略图）会占号但不被引用，不影响映射。
 fn rewrite_kindle_refs(
     html: &str,
+    bytes: &[u8],
     text_stream: &[u8],
     record_offset: &dyn Fn(usize) -> Option<usize>,
     text_records: usize,
