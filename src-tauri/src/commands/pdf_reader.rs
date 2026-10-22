@@ -1173,6 +1173,49 @@ pub async fn pdf_page_highlights(path: String, page: usize) -> Result<Vec<Highli
     .await
 }
 
+/// 一次性列出整本 PDF 里由本应用写入的高亮批注。
+///
+/// 为什么不在前端逐页调用 `pdf_page_highlights`：一本 5000 页的 PDF 会发 5000 次
+/// IPC 往返，每次都要重新打开/遍历页面。这里在同一个文档句柄里扫一遍，
+/// 一次往返拿全——批注通常只有几十条，扫描本身很便宜。
+///
+/// 只收录带本应用哨兵标记的 Stamp 批注，其它程序写的批注一律忽略，
+/// 避免把别人的批注误删误改。
+#[tauri::command]
+pub async fn pdf_list_highlights(path: String) -> Result<Vec<HighlightInfo>, String> {
+    run_pdf(move |state| {
+        state.with_doc(&path, |document| {
+            let total = document.pages().len() as usize;
+            let mut out = Vec::new();
+            for page_idx in 0..total {
+                let Ok(pdf_page) = document.pages().get(page_idx as u16) else {
+                    continue;
+                };
+                let anns = pdf_page.annotations();
+                for i in 0..anns.len() {
+                    let Ok(a) = anns.get(i) else { continue };
+                    if a.as_stamp_annotation().is_none() {
+                        continue;
+                    }
+                    let Some(c) = a.contents() else { continue };
+                    if let Some((id, note, rects, color)) = parse_marker(&c) {
+                        out.push(HighlightInfo {
+                            annot_id: id,
+                            page: page_idx + 1,
+                            rects,
+                            color,
+                            note,
+                        });
+                    }
+                }
+            }
+            out.sort_by_key(|h| h.page);
+            Ok(out)
+        })
+    })
+    .await
+}
+
 /// 保存文档（默认覆盖原路径，可另存到 dest_path）。
 #[tauri::command]
 pub async fn pdf_save(path: String, dest_path: Option<String>) -> Result<(), String> {
@@ -1183,4 +1226,48 @@ pub async fn pdf_save(path: String, dest_path: Option<String>) -> Result<(), Str
         Ok(())
     })
     .await
+}
+
+#[cfg(test)]
+mod highlight_marker_tests {
+    use super::{parse_marker, HL_MARKER};
+
+    /// 本应用写入批注时用的 Contents 形态：哨兵前缀 + JSON。
+    fn marked(json: &str) -> String {
+        format!("{}{}", HL_MARKER, json)
+    }
+
+    #[test]
+    fn parses_a_well_formed_marker() {
+        // 这是本应用自己写下的形状，必须能原样读回来，否则「重新打开 PDF 后批注消失」。
+        let contents = marked(r#"{"id":"gx-123","note":"重点","rects":[{"x":1.0,"y":2.0,"w":3.0,"h":4.0}],"color":[255,235,59,90]}"#);
+        let parsed = parse_marker(&contents).expect("应能解析");
+        assert_eq!(parsed.0, "gx-123");
+        assert_eq!(parsed.1, "重点");
+        assert_eq!(parsed.2.len(), 1);
+        assert_eq!(parsed.3, [255, 235, 59, 90]);
+    }
+
+    #[test]
+    fn rejects_contents_without_our_marker() {
+        // 别的阅读器写的批注不能被当成我们的 —— 否则删改会波及他人内容。
+        assert!(parse_marker("Just a normal note").is_none());
+        assert!(parse_marker(r#"{"id":"x"}"#).is_none());
+    }
+
+    #[test]
+    fn rejects_marker_with_broken_json() {
+        // 坏数据要被识别为「不可用」，而不是 panic 或返回半条批注。
+        assert!(parse_marker(&marked("{ not json")).is_none());
+        assert!(parse_marker(&marked(r#"{"note":"没有 id"}"#)).is_none());
+    }
+
+    #[test]
+    fn marker_in_the_middle_of_text_still_parses() {
+        // 有些工具会在 Contents 前后附加自己的文字；只要哨兵在，其后就是 JSON。
+        let contents = format!("prefix text {} {{\"id\":\"gx-9\"}}", HL_MARKER);
+        let parsed = parse_marker(&contents).expect("哨兵之后的 JSON 应被采用");
+        assert_eq!(parsed.0, "gx-9");
+        assert_eq!(parsed.1, "", "缺 note 时为空串而不是失败");
+    }
 }

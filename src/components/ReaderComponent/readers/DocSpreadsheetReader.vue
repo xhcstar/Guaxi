@@ -8,10 +8,29 @@
       </span>
       <span class="guaxi-doc-reader__spacer" />
       <label class="guaxi-doc-reader__meta" style="display: inline-flex; align-items: center; gap: 4px">
-        <input v-model="firstRowAsHeader" type="checkbox" />
+        <input v-model="firstRowAsHeader" type="checkbox" aria-label="把首行当作表头" />
         首行为表头
       </label>
-      <button class="guaxi-doc-reader__btn" title="跳到首行" @click="scrollToRow(0)">⤒</button>
+      <button
+        v-if="hasAnyFormula"
+        class="guaxi-doc-reader__icon-btn"
+        :class="{ 'is-on': showFormulas }"
+        :title="showFormulas ? '显示计算结果' : '显示公式'"
+        :aria-label="showFormulas ? '显示计算结果' : '显示公式'"
+        :aria-pressed="showFormulas"
+        @click="showFormulas = !showFormulas"
+      >
+        <Icon :icon="formulaIcon" width="15" height="15" />
+      </button>
+      <CraftEditButton :path="path" :kind="kind" />
+      <button
+        class="guaxi-doc-reader__icon-btn"
+        title="跳到首行"
+        aria-label="跳到首行"
+        @click="scrollToRow(0)"
+      >
+        <Icon :icon="toTopIcon" width="15" height="15" />
+      </button>
     </div>
 
     <div v-if="loading" class="guaxi-doc-reader__body">
@@ -59,8 +78,13 @@
             </tr>
             <tr v-for="rowIndex in visibleRows" :key="`r-${rowIndex}`">
               <td class="is-rowhead">{{ rowIndex + 1 }}</td>
-              <td v-for="c in maxCols" :key="`c-${rowIndex}-${c}`" :title="cellAt(rowIndex, c - 1)">
-                {{ cellAt(rowIndex, c - 1) }}
+              <td
+                v-for="c in maxCols"
+                :key="`c-${rowIndex}-${c}`"
+                :class="{ 'is-formula': showFormulas && !!formulaAt(rowIndex, c - 1) }"
+                :title="cellTooltip(rowIndex, c - 1)"
+              >
+                {{ displayCell(rowIndex, c - 1) }}
               </td>
             </tr>
             <tr v-if="bottomSpacer > 0" :style="{ height: `${bottomSpacer}px` }">
@@ -77,6 +101,10 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { createLogger } from '../../../utils/logger'
+import CraftEditButton from './CraftEditButton.vue'
+import { Icon } from '@iconify/vue'
+import toTopIcon from '@iconify-icons/lucide/arrow-up-to-line'
+import formulaIcon from '@iconify-icons/lucide/sigma'
 import './readerPane.css'
 
 const logger = createLogger('DocSpreadsheetReader')
@@ -97,6 +125,8 @@ const errorText = ref('')
 const sheets = ref([])
 const activeSheetIdx = ref(0)
 const firstRowAsHeader = ref(true)
+/** 公式视图：有公式的格子显示公式而非计算结果。 */
+const showFormulas = ref(false)
 const payloadTruncated = ref(false)
 const scrollRef = ref(null)
 const scrollTop = ref(0)
@@ -170,6 +200,40 @@ const cellAt = (rowIndex, col) => {
   if (!row) return ''
   return row[col] ?? ''
 }
+
+/** 该格的公式；没有公式返回空串。 */
+const formulaAt = (rowIndex, col) => {
+  const sheet = activeSheet.value
+  if (!sheet?.formulas) return ''
+  const row = sheet.formulas[rowIndex]
+  if (!row) return ''
+  return row[col] ?? ''
+}
+
+/**
+ * 当前单元格要显示什么。
+ *
+ * 公式视图下，有公式的格子显示 `=SUM(A1:A9)`（前面补等号，与实际输入一致），
+ * 没有公式的格子仍然显示值 —— 否则整张表会变成大片空白，反而看不出结构。
+ */
+const displayCell = (rowIndex, col) => {
+  if (showFormulas.value) {
+    const f = formulaAt(rowIndex, col)
+    if (f) return f.startsWith('=') ? f : `=${f}`
+  }
+  return cellAt(rowIndex, col)
+}
+
+/** 除了值之外还能看到什么（给 title 用，悬停时补充信息）。 */
+const cellTooltip = (rowIndex, col) => {
+  const value = cellAt(rowIndex, col)
+  const f = formulaAt(rowIndex, col)
+  if (!f) return value
+  const formulaText = f.startsWith('=') ? f : `=${f}`
+  return `${value}\n${formulaText}`
+}
+
+const hasAnyFormula = computed(() => !!activeSheet.value?.hasFormulas)
 
 const onScroll = () => {
   const el = scrollRef.value

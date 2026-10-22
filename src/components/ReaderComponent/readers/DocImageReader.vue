@@ -5,13 +5,45 @@
       <span class="guaxi-doc-reader__badge">{{ dimsLabel }}</span>
       <span v-if="mime" class="guaxi-doc-reader__badge">{{ mime }}</span>
       <span class="guaxi-doc-reader__spacer" />
-      <button class="guaxi-doc-reader__btn" title="缩小 (-)" :disabled="loading || errorText" @click="zoomBy(1 / 1.2)">−</button>
-      <span class="guaxi-doc-reader__meta" style="min-width: 46px; text-align: center">{{ Math.round(scale * 100) }}%</span>
-      <button class="guaxi-doc-reader__btn" title="放大 (+)" :disabled="loading || errorText" @click="zoomBy(1.2)">＋</button>
-      <button class="guaxi-doc-reader__btn" title="适应窗口 (0)" :disabled="loading || errorText" @click="fitToWindow">适应窗口</button>
-      <button class="guaxi-doc-reader__btn" title="原始大小 (1)" :disabled="loading || errorText" @click="actualSize">1:1</button>
-      <button class="guaxi-doc-reader__btn" title="向左旋转 (R)" :disabled="loading || errorText" @click="rotate(-90)">⟲</button>
-      <button class="guaxi-doc-reader__btn" title="向右旋转 (Shift+R)" :disabled="loading || errorText" @click="rotate(90)">⟳</button>
+      <ZoomControl v-model="scale" :ratio="1.2" :disabled="loading || errorText" />
+      <span class="guaxi-doc-reader__divider" />
+      <button
+        class="guaxi-doc-reader__icon-btn"
+        title="适应窗口（0）"
+        aria-label="适应窗口"
+        :disabled="loading || errorText"
+        @click="fitToWindow"
+      >
+        <Icon :icon="maximizeIcon" width="15" height="15" />
+      </button>
+      <button
+        class="guaxi-doc-reader__icon-btn"
+        title="原始大小（1）"
+        aria-label="原始大小"
+        :disabled="loading || errorText"
+        @click="actualSize"
+      >
+        <Icon :icon="scanIcon" width="15" height="15" />
+      </button>
+      <span class="guaxi-doc-reader__divider" />
+      <button
+        class="guaxi-doc-reader__icon-btn"
+        title="向左旋转（R）"
+        aria-label="向左旋转"
+        :disabled="loading || errorText"
+        @click="rotate(-90)"
+      >
+        <Icon :icon="rotateLeftIcon" width="15" height="15" />
+      </button>
+      <button
+        class="guaxi-doc-reader__icon-btn"
+        title="向右旋转（Shift+R）"
+        aria-label="向右旋转"
+        :disabled="loading || errorText"
+        @click="rotate(90)"
+      >
+        <Icon :icon="rotateRightIcon" width="15" height="15" />
+      </button>
     </div>
 
     <div
@@ -43,6 +75,12 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { convertFileSrc } from '@tauri-apps/api/core'
+import { Icon } from '@iconify/vue'
+import maximizeIcon from '@iconify-icons/lucide/maximize-2'
+import scanIcon from '@iconify-icons/lucide/scan'
+import rotateLeftIcon from '@iconify-icons/lucide/rotate-ccw'
+import rotateRightIcon from '@iconify-icons/lucide/rotate-cw'
+import ZoomControl from './ZoomControl.vue'
 import { createLogger } from '../../../utils/logger'
 import './readerPane.css'
 

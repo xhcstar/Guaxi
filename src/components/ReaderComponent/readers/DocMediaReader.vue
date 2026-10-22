@@ -4,7 +4,14 @@
       <span class="guaxi-doc-reader__title" :title="path">{{ name }}</span>
       <span class="guaxi-doc-reader__badge">{{ isVideo ? 'VIDEO' : 'AUDIO' }}</span>
       <span class="guaxi-doc-reader__spacer" />
-      <button class="guaxi-doc-reader__btn" title="在系统播放器中打开" @click="openExternally">系统打开</button>
+      <button
+        class="guaxi-doc-reader__icon-btn"
+        title="在系统播放器中打开"
+        aria-label="在系统播放器中打开"
+        @click="openExternally"
+      >
+        <Icon :icon="externalIcon" width="15" height="15" />
+      </button>
     </div>
 
     <div class="guaxi-doc-reader__body" style="overflow: hidden">
@@ -37,6 +44,8 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { openPath } from '@tauri-apps/plugin-opener'
+import { Icon } from '@iconify/vue'
+import externalIcon from '@iconify-icons/lucide/external-link'
 import { createLogger } from '../../../utils/logger'
 import './readerPane.css'
 

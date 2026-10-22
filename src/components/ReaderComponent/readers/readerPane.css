@@ -78,8 +78,18 @@
   gap: 4px;
 }
 
-.guaxi-doc-reader__btn:hover {
+.guaxi-doc-reader__btn:hover:not(:disabled) {
   background: var(--guaxi-hover-bg, rgba(120, 120, 120, 0.1));
+}
+
+/* 带图标 + 文字的动作按钮：图标与文字之间留 6px，比纯文字按钮更易扫读。 */
+.guaxi-doc-reader__btn > svg {
+  flex: 0 0 auto;
+}
+
+.guaxi-doc-reader__btn:focus-visible {
+  outline: 2px solid #2f6fdf;
+  outline-offset: 1px;
 }
 
 .guaxi-doc-reader__btn[disabled] {
@@ -411,4 +421,387 @@
 .gdr-pptx-host :deep(.pptx-preview-slide-wrapper) {
   margin: 16px auto;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+}
+
+/* ───────────────────────── 电子书阅读器：搜索 / 面板 / 设置 ───────────────────────── */
+
+/* 工具栏里的分隔线（搜索、书签、笔记、设置一组与翻页组之间）。 */
+.guaxi-doc-reader__divider {
+  width: 1px;
+  height: 16px;
+  background: var(--guaxi-border, #e1e4e8);
+  margin: 0 2px;
+  flex: 0 0 auto;
+}
+
+/*
+ * 纯图标按钮。
+ *
+ * 与 .guaxi-doc-reader__btn（带文字）并存：文字按钮仍用于「只有文字才说得清」的动作，
+ * 图标按钮用于一眼可辨的动作。每个图标按钮必须同时带 title 与 aria-label ——
+ * 图标本身不提供可读文本，缺了这两个，鼠标用户和读屏用户都失去线索。
+ */
+.guaxi-doc-reader__icon-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--guaxi-text-primary, #1f2328);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.guaxi-doc-reader__icon-btn:hover:not(:disabled) {
+  background: var(--guaxi-hover-bg, rgba(15, 23, 42, 0.06));
+}
+
+.guaxi-doc-reader__icon-btn:active:not(:disabled) {
+  background: rgba(15, 23, 42, 0.10);
+}
+
+/* 开关态（面板已打开）：用底色而不是换图标，避免图标语义在两种状态间漂移。 */
+.guaxi-doc-reader__icon-btn.is-on {
+  background: rgba(47, 111, 223, 0.12);
+  border-color: rgba(47, 111, 223, 0.35);
+  color: #2f6fdf;
+}
+
+.guaxi-doc-reader__icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* 键盘焦点必须可见：工具栏是高频操作区，焦点环不能靠 :hover 兜底。 */
+.guaxi-doc-reader__icon-btn:focus-visible {
+  outline: 2px solid #2f6fdf;
+  outline-offset: 1px;
+}
+
+/* 深色主题下 .is-on 的强调色要更亮，否则在深底上看不出「已开启」。 */
+.dark .guaxi-doc-reader__icon-btn.is-on,
+.dark-mode .guaxi-doc-reader__icon-btn.is-on,
+:root[data-guaxi-theme='dark'] .guaxi-doc-reader__icon-btn.is-on {
+  background: rgba(108, 182, 255, 0.18);
+  border-color: rgba(108, 182, 255, 0.42);
+  color: #6cb6ff;
+}
+
+.gdr-ebook__progress {
+  font-variant-numeric: tabular-nums;
+  min-width: 40px;
+  text-align: center;
+}
+
+/* 搜索条：与工具栏同一行下方，独立一条。 */
+.gdr-ebook__searchbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--guaxi-border, #e1e4e8);
+  background: var(--guaxi-panel-bg, #fafbfc);
+  flex: 0 0 auto;
+}
+
+.gdr-ebook__search-input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--guaxi-border, #e1e4e8);
+  border-radius: 6px;
+  background: var(--guaxi-content-bg, #fff);
+  color: var(--guaxi-text-primary, #1f2328);
+  font-size: 13px;
+  outline: none;
+}
+
+.gdr-ebook__search-input:focus {
+  border-color: var(--guaxi-accent, #00adff);
+}
+
+/* 右侧面板：与左侧目录对称。 */
+.gdr-ebook__panel {
+  flex: 0 0 auto;
+  min-width: 220px;
+  max-width: 45%;
+  border-left: 1px solid var(--guaxi-border, #e1e4e8);
+  background: var(--guaxi-panel-bg, #fafbfc);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.gdr-ebook__panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--guaxi-border, #e1e4e8);
+  font-size: 13px;
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+
+.gdr-ebook__panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+}
+
+.gdr-ebook__panel-action {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border: 1px dashed var(--guaxi-border, #e1e4e8);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--guaxi-text-primary, #1f2328);
+  font-size: 12px;
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+
+.gdr-ebook__panel-action:hover {
+  border-color: var(--guaxi-accent, #00adff);
+  color: var(--guaxi-accent, #00adff);
+}
+
+.gdr-ebook__panel-item {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  border-radius: 6px;
+  margin-bottom: 4px;
+}
+
+.gdr-ebook__panel-item:hover {
+  background: rgba(127, 127, 127, 0.10);
+}
+
+.gdr-ebook__panel-item-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 8px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.gdr-ebook__panel-item-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gdr-ebook__panel-item-sub {
+  font-size: 11px;
+  opacity: 0.6;
+}
+
+.gdr-ebook__panel-item-del {
+  flex: 0 0 auto;
+  width: 24px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  opacity: 0.45;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.gdr-ebook__panel-item-del:hover {
+  opacity: 1;
+  color: #e06c75;
+}
+
+.gdr-ebook__note-quote {
+  display: block;
+  padding-left: 8px;
+  border-left: 3px solid #ffd600;
+  opacity: 0.85;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.gdr-ebook__note-body {
+  margin-top: 4px;
+  opacity: 0.8;
+}
+
+/* 显示设置的分段控件 */
+.gdr-ebook__setting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 4px;
+  font-size: 12px;
+}
+
+.gdr-ebook__setting > span:first-child {
+  flex: 0 0 40px;
+  opacity: 0.75;
+}
+
+.gdr-ebook__setting input[type='range'] {
+  flex: 1;
+  min-width: 0;
+}
+
+.gdr-ebook__setting-val {
+  flex: 0 0 46px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+.gdr-ebook__seg {
+  flex: 1;
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.gdr-ebook__seg button {
+  padding: 3px 9px;
+  border: 1px solid var(--guaxi-border, #e1e4e8);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.gdr-ebook__seg button.is-on {
+  border-color: var(--guaxi-accent, #00adff);
+  color: var(--guaxi-accent, #00adff);
+  background: rgba(0, 173, 255, 0.10);
+}
+
+/* 公式视图下，有公式的单元格用等宽字体 + 不同颜色，与普通值区分开。 */
+.gdr-sheet td.is-formula {
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
+  color: #8250df;
+  white-space: nowrap;
+}
+
+.dark .gdr-sheet td.is-formula,
+.dark-mode .gdr-sheet td.is-formula,
+:root[data-guaxi-theme='dark'] .gdr-sheet td.is-formula {
+  color: #c297ff;
+}
+
+/* ───────────────────────── PPTX 幻灯片导航 ───────────────────────── */
+
+/* 正文区变成 flex：左侧导航固定宽，右侧幻灯片占满剩余。 */
+.gdr-pptx-layout {
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.gdr-pptx-layout > .gdr-pptx-host,
+.gdr-pptx-layout > .gdr-md {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+}
+
+.gdr-pptx-layout > .guaxi-doc-reader__center {
+  flex: 1;
+}
+
+.gdr-pptx-outline {
+  flex: 0 0 auto;
+  width: 210px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--guaxi-border, #e1e4e8);
+  background: var(--guaxi-panel-bg, #fafbfc);
+}
+
+.gdr-pptx-outline__head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--guaxi-border, #e1e4e8);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.gdr-pptx-outline__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px;
+}
+
+.gdr-pptx-outline__item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.gdr-pptx-outline__item:hover {
+  background: var(--guaxi-hover-bg, rgba(15, 23, 42, 0.06));
+}
+
+.gdr-pptx-outline__item.is-active {
+  background: rgba(47, 111, 223, 0.12);
+  color: #2f6fdf;
+}
+
+.gdr-pptx-outline__item:focus-visible {
+  outline: 2px solid #2f6fdf;
+  outline-offset: 1px;
+}
+
+.gdr-pptx-outline__num {
+  flex: 0 0 20px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.55;
+}
+
+.gdr-pptx-outline__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

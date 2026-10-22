@@ -5,11 +5,26 @@
       <span class="guaxi-doc-reader__badge">{{ kind.toUpperCase() }} → Markdown</span>
       <span class="guaxi-doc-reader__meta">{{ engineLabel }}</span>
       <span class="guaxi-doc-reader__spacer" />
-      <button class="guaxi-doc-reader__btn" title="缩小" :disabled="loading || !!errorText" @click="zoomBy(1 / 1.12)">−</button>
-      <span class="guaxi-doc-reader__meta" style="min-width: 44px; text-align: center">{{ Math.round(zoom * 100) }}%</span>
-      <button class="guaxi-doc-reader__btn" title="放大" :disabled="loading || !!errorText" @click="zoomBy(1.12)">＋</button>
-      <button class="guaxi-doc-reader__btn" title="重新转换" :disabled="loading" @click="reload(true)">重新转换</button>
-      <button class="guaxi-doc-reader__btn" title="复制 Markdown 源码" :disabled="!markdown" @click="copyMarkdown">复制源码</button>
+      <ZoomControl v-model="zoom" :ratio="1.12" :disabled="loading || !!errorText" />
+      <span class="guaxi-doc-reader__divider" />
+      <button
+        class="guaxi-doc-reader__icon-btn"
+        title="重新转换（用当前引擎重新解析源文件）"
+        aria-label="重新转换"
+        :disabled="loading"
+        @click="reload(true)"
+      >
+        <Icon :icon="refreshIcon" width="15" height="15" />
+      </button>
+      <button
+        class="guaxi-doc-reader__icon-btn"
+        title="复制 Markdown 源码"
+        aria-label="复制 Markdown 源码"
+        :disabled="!markdown"
+        @click="copyMarkdown"
+      >
+        <Icon :icon="copyIcon" width="15" height="15" />
+      </button>
     </div>
 
     <div ref="bodyRef" class="guaxi-doc-reader__body">
@@ -31,6 +46,10 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useMessage } from 'naive-ui'
 import { renderMarkdown, addCopyButtons, addMediaViewerButtons } from '../../GuaxiMarkdownRender/GuaxiMarker'
+import { Icon } from '@iconify/vue'
+import refreshIcon from '@iconify-icons/lucide/refresh-cw'
+import copyIcon from '@iconify-icons/lucide/copy'
+import ZoomControl from './ZoomControl.vue'
 import { createLogger } from '../../../utils/logger'
 import './readerPane.css'
 

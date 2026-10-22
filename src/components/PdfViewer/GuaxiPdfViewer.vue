@@ -155,10 +155,18 @@
         {{ emptyText }}
       </div>
 
-      <!-- 连续滚动：每页一个占位容器，可见页才渲染图片/文本层 -->
+      <!--
+        连续滚动：**只为可见页建 DOM**。
+
+        原先 v-for 遍历全部 pages，5000 页就是 5000 个 .gpv__page 节点（每个还带文本层、
+        高亮层等子节点），首次挂载与每次样式变化都要重排几万次 DOM，滚动必然卡。
+        现在上下各放一个 spacer 撑出真实高度，中间只渲染视口附近的页 —— DOM 节点数
+        恒定在 10 页左右，与总页数无关。
+      -->
       <div v-show="hasPdf && !errorText" class="gpv__pages">
+        <div class="gpv__spacer" :style="{ height: `${spacerTop}px` }" aria-hidden="true" />
         <div
-          v-for="page in pages"
+          v-for="page in windowedPages"
           :key="page.num"
           :ref="(el) => setPageRef(page.num, el)"
           class="gpv__page"
@@ -221,6 +229,7 @@
             />
           </div>
         </div>
+        <div class="gpv__spacer" :style="{ height: `${spacerBottom}px` }" aria-hidden="true" />
       </div>
 
       <div v-if="building" class="gpv__overlay">
@@ -356,6 +365,120 @@ const pageEls = new Map()
 const setPageRef = (num, el) => {
   if (el) pageEls.set(num, el)
   else pageEls.delete(num)
+}
+
+/**
+ * 每页的垂直布局几何（不读 DOM）。
+ *
+ * 为什么必须脱离 DOM：原先滚动与渲染都通过 `el.offsetTop / offsetHeight` 取位置，
+ * 这两个属性会强制同步重排（layout thrash）。5000 页的 PDF 一次滚动就要读 10000 次，
+ * 每帧都卡；而且页数越多越慢。
+ *
+ * 页面尺寸完全由 `wPt/hPt * cssScale` 决定，垂直方向就是依次堆叠，因此位置可以纯算：
+ * 累加高度即可。
+ *
+ * 与 .gpv__pages 的 CSS 必须严格对齐：容器有 `padding: 12px` 与 `gap: 12px`，
+ * 所以首页偏移 12px、页间距 12px。改 CSS 就必须同步改这两个常量，否则滚动定位会漂。
+ */
+const PAGES_PADDING = 12
+const PAGE_GAP = 12
+
+const pageGeometry = computed(() => {
+  const scale = cssScale.value
+  const rotated = isRotated90.value
+  const out = new Array(pages.value.length)
+  let y = PAGES_PADDING
+  for (let i = 0; i < pages.value.length; i += 1) {
+    const page = pages.value[i]
+    const w = Math.round(page.wPt * scale)
+    const h = Math.round(page.hPt * scale)
+    const boxH = rotated ? w : h
+    out[i] = { num: page.num, top: y, height: boxH }
+    y += boxH + PAGE_GAP
+  }
+  return out
+})
+
+/**
+ * 当前应当挂载 DOM 的页区间 [start, end)。
+ *
+ * 与「渲染哪些页」是两件事：渲染（调后端出图）区间更窄、由 renderVisible 控制；
+ * 这里只为 DOM 存活服务，缓冲更大一些，避免快速滚动时频繁增删节点。
+ *
+ * 关键：无论 PDF 有 10 页还是 5000 页，这里最多返回约十几页。
+ */
+const WINDOW_BUFFER_SCREENS = 1.5
+const windowRange = ref({ start: 0, end: 0 })
+
+const windowedPages = computed(() => {
+  const geo = pageGeometry.value
+  const { start, end } = windowRange.value
+  if (!geo.length) return []
+  const slice = geo.slice(Math.max(0, start), Math.min(geo.length, end))
+  const byNum = new Map()
+  for (const page of pages.value) byNum.set(page.num, page)
+  return slice.map((item) => byNum.get(item.num)).filter(Boolean)
+})
+
+/** 上方 spacer 的高度 = 第一个已挂载页之前所有页（含间距）的总高度。 */
+const spacerTop = computed(() => {
+  const geo = pageGeometry.value
+  const { start } = windowRange.value
+  if (!start || !geo.length) return 0
+  const first = geo[Math.min(start, geo.length - 1)]
+  return Math.max(0, first.top - PAGES_PADDING)
+})
+
+/** 下方 spacer 的高度 = 已挂载页之后剩余的总高度。 */
+const spacerBottom = computed(() => {
+  const geo = pageGeometry.value
+  const { end } = windowRange.value
+  if (!geo.length || end >= geo.length) return 0
+  const last = geo[end - 1] || geo[geo.length - 1]
+  const lastBottom = last.top + last.height
+  const containerHeight = geo[geo.length - 1].top + geo[geo.length - 1].height
+  return Math.max(0, containerHeight - lastBottom)
+})
+
+/**
+ * 按滚动位置重算窗口区间。
+ *
+ * 二分定位可见区间，复杂度 O(log n + k)，k 是挂载页数 —— 与总页数无关。
+ */
+const recomputeWindow = () => {
+  const el = bodyRef.value
+  const geo = pageGeometry.value
+  if (!el || !geo.length) {
+    windowRange.value = { start: 0, end: 0 }
+    return
+  }
+  const top = el.scrollTop
+  const bottom = top + el.clientHeight
+  const buffer = el.clientHeight * WINDOW_BUFFER_SCREENS
+  const from = top - buffer
+  const to = bottom + buffer
+
+  const lowerBound = (value) => {
+    let lo = 0
+    let hi = geo.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (geo[mid].top + geo[mid].height < value) lo = mid + 1
+      else hi = mid
+    }
+    return lo
+  }
+
+  const start = lowerBound(from)
+  let end = start
+  while (end < geo.length && geo[end].top <= to) end += 1
+
+  const nextStart = Math.max(0, Math.min(start, geo.length))
+  const nextEnd = Math.max(nextStart, Math.min(end, geo.length))
+  const prev = windowRange.value
+  if (prev.start !== nextStart || prev.end !== nextEnd) {
+    windowRange.value = { start: nextStart, end: nextEnd }
+  }
 }
 
 let resizeObserver = null
@@ -680,24 +803,44 @@ const scheduleRenderVisible = () => {
 }
 
 // 廉价：只算可见范围、更新当前页，不触发任何后端调用。
+//
+// 位置来自 pageGeometry（纯计算），不再逐页读 offsetTop/offsetHeight：
+// 5000 页时那套写法每帧要触发 10000 次同步重排。
 const updateVisible = () => {
   const el = bodyRef.value
-  if (!el || !pages.length) return
+  if (!el || !pages.value.length) return
+  // 先更新窗口区间：DOM 只保留附近页，下面的可见页计算与它用的是同一份几何。
+  recomputeWindow()
   const top = el.scrollTop
   const bottom = top + el.clientHeight
 
+  const geo = pageGeometry.value
   let firstVisible = currentPage.value
   let bestOverlap = 0
 
-  for (const page of pages) {
-    const node = pageEls.get(page.num)
-    if (!node) continue
-    const nTop = node.offsetTop
-    const nBottom = nTop + node.offsetHeight
-    const overlap = Math.min(nBottom, bottom) - Math.max(nTop, top)
+  // 几何按 top 升序，找到第一个「下边缘越过视口上沿」的页，向后扫到离开视口为止。
+  // 用二分定位起点，避免每次都从第 1 页开始线性扫。
+  let lo = 0
+  let hi = geo.length - 1
+  let start = 0
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (geo[mid].top + geo[mid].height < top) {
+      lo = mid + 1
+    } else {
+      start = mid
+      hi = mid - 1
+    }
+  }
+
+  for (let i = start; i < geo.length; i += 1) {
+    const item = geo[i]
+    if (item.top > bottom) break
+    const nBottom = item.top + item.height
+    const overlap = Math.min(nBottom, bottom) - Math.max(item.top, top)
     if (overlap > bestOverlap) {
       bestOverlap = overlap
-      firstVisible = page.num
+      firstVisible = item.num
     }
   }
   if (firstVisible !== currentPage.value) {
@@ -710,22 +853,28 @@ const updateVisible = () => {
 // bufferFactor=0 时只渲染严格可见页——缩放时用它，避免一次重渲多页大位图导致卡顿。
 const renderVisible = ({ bufferFactor = 1 } = {}) => {
   const el = bodyRef.value
-  if (!el || !pages.length) return
+  if (!el || !pages.value.length) return
   const top = el.scrollTop
   const bottom = top + el.clientHeight
   const BUFFER = el.clientHeight * bufferFactor
 
+  // 可见区间完全由几何算出（不读 DOM），再反查页码对应的 page 对象。
+  const geo = pageGeometry.value
+  const byNum = new Map()
+  for (const page of pages.value) byNum.set(page.num, page)
+
   const active = []
-  for (const page of pages) {
-    const node = pageEls.get(page.num)
-    if (!node) continue
-    const nTop = node.offsetTop
-    const nHeight = node.offsetHeight
-    if (nTop + nHeight >= top - BUFFER && nTop <= bottom + BUFFER) {
-      active.push({ page, center: nTop + nHeight / 2 })
-    } else if (page.image && Math.abs(page.num - currentPage.value) > 6) {
-      doc.freePage(page)
-    }
+  for (const item of geo) {
+    if (item.top + item.height < top - BUFFER) continue
+    if (item.top > bottom + BUFFER) break
+    const page = byNum.get(item.num)
+    if (page) active.push({ page, center: item.top + item.height / 2 })
+  }
+
+  // 释放远离视口的已渲染页，避免 5000 页把内存吃穿。
+  for (const page of pages.value) {
+    if (!page.image) continue
+    if (Math.abs(page.num - currentPage.value) > 6) doc.freePage(page)
   }
 
   // 提交顺序就是出图顺序：后端只有一个 pdfium 工作线程、按 FIFO 取任务。若按 DOM 顺序
@@ -1819,6 +1968,19 @@ onBeforeUnmount(() => {
   min-width: 100%;
   gap: 12px;
   padding: 12px;
+}
+
+/*
+ * 窗口化滚动用的占位条。
+ *
+ * flex 容器里必须 flex:0 0 auto，否则 spacer 会被 flex 压缩成 0 高，
+ * 滚动条总长度就没了 —— 表现为「滚到一半就到底」。
+ * gap 已由容器提供，spacer 自身不再加间距，否则高度会多算一份。
+ */
+.gpv__spacer {
+  flex: 0 0 auto;
+  width: 1px;
+  pointer-events: none;
 }
 
 .gpv__page {

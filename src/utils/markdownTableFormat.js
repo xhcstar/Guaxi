@@ -329,6 +329,22 @@ const formatMarkdownTableBlockLines = (lines) => {
   return buildAlignedTableLines(paddedRows);
 };
 
+// 探索者/Notebook 的自定义 cell 与图表围栏都是「源码不透明」的区块：
+// 里面的 `|`（Python 位运算、LaTeX、图表内联 CSV 的列分隔）不是表格分隔符。
+// 这两个判定与后端 markdowncheck.rs 的 extract_opaque_cells 保持一致。
+const NOTEBOOK_CELL_START_RES = [/^<!--math(\s[^>]*)?-->$/, /^<!--py(\s[^>]*)?-->$/, /^<!-- guaxi:pyout:.*:start -->$/];
+const NOTEBOOK_CELL_END_RES = [/^<!--\/math-->$/, /^<!--\/py-->$/, /^<!-- guaxi:pyout:.*:end -->$/];
+
+const isNotebookCellStartLine = (line) => {
+  const text = String(line || '').trim();
+  return NOTEBOOK_CELL_START_RES.some((re) => re.test(text));
+};
+
+const isNotebookCellEndLine = (line) => {
+  const text = String(line || '').trim();
+  return NOTEBOOK_CELL_END_RES.some((re) => re.test(text));
+};
+
 const formatMarkdownTablesInText = (content, source = 'manual') => {
   const text = String(content ?? '');
   if (!text.includes('|')) return text;

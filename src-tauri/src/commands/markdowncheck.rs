@@ -102,6 +102,56 @@ enum OpaqueCellKind {
     PythonOutput,
 }
 
+/// 图表 / 白板围栏的 info string（```chart、```excalidraw）。
+///
+/// 它们与 cell 一样属于「源码是不透明配置」的区块：围栏里是 YAML 风格的 spec 与
+/// 内联 CSV/TSV 数据，行尾空格、缩进层级、`|` 分隔符都是语义的一部分。
+/// 走一遍 Markdown 序列化虽然目前能原样保留，但那是解析器的实现细节：
+/// 一旦有哪条后处理（裁行尾空白、按宽度重排、把 `-1,2` 当列表项）碰到它，
+/// 图表就会静默变成空白或画错。所以直接按不透明块处理，不依赖下游行为。
+const CHART_FENCE_INFOS: [&str; 2] = ["chart", "excalidraw"];
+
+/// 识别图表 / 白板围栏的起始行：```chart、```excalidraw（含 `~~~` 与带属性的写法）。
+fn chart_fence_start(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let rest = if let Some(r) = trimmed.strip_prefix("```") {
+        r
+    } else if let Some(r) = trimmed.strip_prefix("~~~") {
+        r
+    } else {
+        return false;
+    };
+    let info = rest.trim_start().to_ascii_lowercase();
+    CHART_FENCE_INFOS
+        .iter()
+        .any(|name| info == *name || info.starts_with(&format!("{name} ")))
+}
+
+/// 判断某一行能否闭合 `opener` 打开的围栏。
+///
+/// 与 CommonMark 一致：必须同字符、长度不短于开启围栏，且闭合行不能带 info string。
+fn is_fence_close(line: &str, opener: &str) -> bool {
+    let trimmed = line.trim_start();
+    let open_ch = opener.chars().next().unwrap_or('`');
+    let close_ch = if trimmed.starts_with("```") {
+        '`'
+    } else if trimmed.starts_with("~~~") {
+        '~'
+    } else {
+        return false;
+    };
+    if close_ch != open_ch {
+        return false;
+    }
+    let close_len = trimmed.chars().take_while(|c| *c == close_ch).count();
+    let open_len = opener.chars().take_while(|c| *c == open_ch).count();
+    if close_len < open_len {
+        return false;
+    }
+    // 闭合围栏行只允许围栏字符与空白（带 info string 的行是新的开启围栏）。
+    trimmed[close_len..].trim().is_empty()
+}
+
 /// 识别 cell 起始行。语法与后端 notebook.rs 的解析保持一致：
 /// `<!--math-->` / `<!--math {...}-->`、`<!--py-->` / `<!--py {...}-->`、`<!-- guaxi:pyout:...:start -->`。
 fn opaque_cell_start_kind(line: &str) -> Option<OpaqueCellKind> {
@@ -136,7 +186,7 @@ struct OpaqueCells {
     blocks: Vec<String>,
 }
 
-/// 抽出所有自定义 cell，用单行 HTML 注释占位。
+/// 抽出所有自定义 cell 与图表围栏，用单行 HTML 注释占位。
 ///
 /// 占位用 HTML 注释是因为 comrak 会把注释块原样输出，不会被转义或重排（实测）。
 /// 找不到结束标记时把剩余内容整体当不透明块：宁可少格式化，也不能把用户代码改坏。
@@ -146,16 +196,33 @@ fn extract_opaque_cells(content: &str) -> OpaqueCells {
     let mut blocks: Vec<String> = Vec::new();
     let mut i = 0usize;
 
+    let push_block = |out: &mut Vec<String>, blocks: &mut Vec<String>, text: String| {
+        blocks.push(text);
+        out.push(String::new());
+        out.push(format!("<!--guaxi:opaque:{}-->", blocks.len() - 1));
+        out.push(String::new());
+    };
+
     while i < lines.len() {
         if let Some(kind) = opaque_cell_start_kind(lines[i]) {
             let end_idx = (i + 1..lines.len())
                 .find(|&j| is_opaque_cell_end(kind, lines[j]))
                 .unwrap_or_else(|| lines.len().saturating_sub(1));
 
-            blocks.push(lines[i..=end_idx].join("\n"));
-            out.push(String::new());
-            out.push(format!("<!--guaxi:opaque:{}-->", blocks.len() - 1));
-            out.push(String::new());
+            push_block(&mut out, &mut blocks, lines[i..=end_idx].join("\n"));
+            i = end_idx + 1;
+            continue;
+        }
+
+        // 图表 / 白板围栏：连同内部 YAML 与内联数据整块保留。
+        // 未闭合时按 CommonMark 语义延续到文末（与解析器一致），同样整块保留。
+        if chart_fence_start(lines[i]) {
+            let opener = lines[i].trim_start();
+            let end_idx = (i + 1..lines.len())
+                .find(|&j| is_fence_close(lines[j], opener))
+                .unwrap_or_else(|| lines.len().saturating_sub(1));
+
+            push_block(&mut out, &mut blocks, lines[i..=end_idx].join("\n"));
             i = end_idx + 1;
             continue;
         }
@@ -1418,4 +1485,107 @@ y = *args
 
         assert!(out.contains(cell), "极速格式化改写了 cell:\n{out}");
     }
+
+    // ───── 图表 / 白板围栏：整块不透明，格式化不能改动其中任何一个字节 ─────
+    //
+    // 围栏里是 YAML 风格的 spec 与内联 CSV/TSV。行尾空格、缩进层级、`|` 分隔符
+    // 都是语义的一部分，改动任意一处都会让图表静默变空或画错。
+
+    const CHART_FENCE: &str = r#"```chart
+spec:
+  type: line
+  x: month
+  y: [revenue, cost]
+  title: 月度趋势
+data: |
+  month,revenue,cost
+  一月,120,80
+  二月,150,95
+```"#;
+
+    const EXCALIDRAW_FENCE: &str = r#"```excalidraw
+./assets/architecture.excalidraw
+```"#;
+
+    #[test]
+    fn chart_fence_is_preserved_verbatim() {
+        let input = format!("# 标题\n\n{CHART_FENCE}\n\n正文段落。\n");
+        let out = format_with(default_options(), input.as_str());
+        assert!(out.contains(CHART_FENCE), "图表围栏被改写:\n{out}");
+    }
+
+    #[test]
+    fn excalidraw_fence_is_preserved_verbatim() {
+        let input = format!("{EXCALIDRAW_FENCE}\n");
+        let out = format_with(default_options(), input.as_str());
+        assert!(out.contains(EXCALIDRAW_FENCE), "白板围栏被改写:\n{out}");
+    }
+
+    /// 围栏内容看起来像 Markdown（标题 / 列表 / 竖线）时也不能被当成正文重排。
+    #[test]
+    fn chart_content_that_looks_like_markdown_is_not_reformatted() {
+        let fence = "```chart\nspec:\n  title: \"# 不是标题\"\n  x: \"- 不是列表\"\ndata: |\n  a|b\n  -1,2\n```";
+        let input = format!("{fence}\n");
+        let out = format_with(default_options(), &input);
+        assert!(out.contains(fence), "图表内容被当成正文重排:\n{out}");
+    }
+
+    /// YAML 块标量里的行尾空格是有意义的：关掉「保留代码块」也不能裁掉。
+    #[test]
+    fn chart_fence_keeps_trailing_spaces_even_without_preserve_code_blocks() {
+        let fence = "```chart\nspec:\n  type: line\ndata: |\n  a,b  \n  1,2  \n```";
+        let options = MarkdownFormatOptions {
+            preserve_code_blocks: false,
+            ..default_value_for_chart_tests()
+        };
+        let out = format_with(options, fence);
+        assert!(out.contains(fence), "行尾空格被裁掉:\n{out:?}");
+    }
+
+    /// `~~~~chart` 与带属性的 info string 同样要按图表块处理。
+    #[test]
+    fn tilde_and_attributed_chart_fences_are_preserved() {
+        let tilde = "~~~chart\nspec:\n  type: line\ndata: |\n  月,值\n  一月,1\n~~~";
+        let attributed = "```chart width=800\nspec:\n  type: line\n```";
+        let input = format!("{tilde}\n\n{attributed}\n");
+        let out = format_with(default_options(), input.as_str());
+        assert!(out.contains(tilde), "~~~chart 围栏被改写:\n{out}");
+        assert!(out.contains(attributed), "带属性的图表围栏被改写:\n{out}");
+    }
+
+    /// 极速路径（关闭「格式化列表」）也必须跳过图表围栏。
+    /// 这条曾经真的会坏：那条路径只认 ``` 围栏，`~~~chart` 会被按普通文本重排。
+    #[test]
+    fn simple_formatter_path_also_keeps_chart_fences() {
+        let options = MarkdownFormatOptions {
+            format_lists: false,
+            max_line_width: 40,
+            ..default_value_for_chart_tests()
+        };
+        let tilde = "~~~chart\nspec:\n  type: line\ndata: |\n  月,值\n  一月,1\n~~~";
+        let out = format_with(options.clone(), &format!("{tilde}\n"));
+        assert!(out.contains(tilde), "极速路径改写了 ~~~chart:\n{out}");
+
+        let out = format_with(options, &format!("{CHART_FENCE}\n"));
+        assert!(out.contains(CHART_FENCE), "极速路径改写了图表围栏:\n{out}");
+    }
+
+    /// 未闭合的图表围栏（用户还在写）：延续到文末整块保留，不能重排后面的内容。
+    #[test]
+    fn unterminated_chart_fence_is_preserved_to_end_of_file() {
+        let input = "正文\n\n```chart\nspec:\n  type: line\n  # 注释\n";
+        let out = format_with(default_options(), input);
+        assert!(
+            out.contains("```chart\nspec:\n  type: line\n  # 注释"),
+            "未闭合的图表围栏被重排:\n{out}"
+        );
+    }
+
+    fn default_value_for_chart_tests() -> MarkdownFormatOptions {
+        MarkdownFormatOptions {
+            max_line_width: 80,
+            ..Default::default()
+        }
+    }
 }
+

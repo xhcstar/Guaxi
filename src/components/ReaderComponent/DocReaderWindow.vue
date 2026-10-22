@@ -66,8 +66,17 @@ const normalizedTheme = computed(() => {
 const loading = ref(true)
 const errorText = ref('')
 const target = ref(null)
+/**
+ * 当前展示的路径。
+ *
+ * 平时就是窗口参数里的 path；导出 PDF 后会切换成新生成的 PDF 路径。
+ * 用 ref 而不是直接从 props 派生，因为切换后要与 props 脱钩。
+ */
+const activePath = ref('')
+let openPdfUnlisten = null
 
-const path = computed(() => String(props.path || '').trim())
+
+const path = computed(() => activePath.value || String(props.path || '').trim())
 const fileName = computed(() => {
   const fromProps = String(props.name || '').trim()
   if (fromProps) return fromProps
@@ -181,10 +190,43 @@ onMounted(async () => {
     })
   }
   await loadTarget()
+
+  // 子组件（如 Office 阅读器）导出 PDF 后，把本窗口切换成 PDF 视图。
+  // 用事件而不是直接改 props：ReaderPane 是通用容器，不该知道「PDF 是从哪导出来的」。
+  try {
+    const { listen } = await import('@tauri-apps/api/event')
+    openPdfUnlisten = await listen('doc-reader:open-pdf', async (event) => {
+      const nextPath = String(event?.payload?.path || '').trim()
+      if (!nextPath) return
+      logger.info('[DocReaderWindow] switch to exported pdf', { path: nextPath })
+      switchingPath.value = nextPath
+      const name = nextPath.replace(/\\/g, '/').split('/').filter(Boolean).pop() || ''
+      try {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window')
+        await getCurrentWindow().setTitle(name)
+      } catch {
+        /* 忽略 */
+      }
+      target.value = { kind: 'pdf', reader: 'pdf', mime: 'application/pdf', size: 0, container: false }
+      activePath.value = nextPath
+    })
+  } catch (error) {
+    logger.warn('[DocReaderWindow] listen open-pdf failed', {
+      error: String(error?.message || error),
+    })
+  }
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
+  if (openPdfUnlisten) {
+    try {
+      Promise.resolve(openPdfUnlisten()).catch(() => {})
+    } catch {
+      /* 已注销 */
+    }
+    openPdfUnlisten = null
+  }
 })
 </script>
 

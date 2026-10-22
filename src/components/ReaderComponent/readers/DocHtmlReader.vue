@@ -5,11 +5,23 @@
       <span class="guaxi-doc-reader__badge">HTML</span>
       <span class="guaxi-doc-reader__meta">{{ frameNote }}</span>
       <span class="guaxi-doc-reader__spacer" />
-      <label class="guaxi-doc-reader__meta" style="display: inline-flex; align-items: center; gap: 4px">
-        <input v-model="allowScripts" type="checkbox" />
+      <label
+        class="guaxi-doc-reader__meta"
+        style="display: inline-flex; align-items: center; gap: 4px"
+        title="默认不执行页面脚本；仅在你信任该文件时勾选"
+      >
+        <input v-model="allowScripts" type="checkbox" aria-label="允许执行页面脚本" />
         允许脚本
       </label>
-      <button class="guaxi-doc-reader__btn" :disabled="loading" @click="reload">重新加载</button>
+      <button
+        class="guaxi-doc-reader__icon-btn"
+        title="重新加载"
+        aria-label="重新加载"
+        :disabled="loading"
+        @click="reload"
+      >
+        <Icon :icon="refreshIcon" width="15" height="15" />
+      </button>
     </div>
 
     <div class="guaxi-doc-reader__body" style="overflow: hidden">
@@ -31,6 +43,8 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { Icon } from '@iconify/vue'
+import refreshIcon from '@iconify-icons/lucide/refresh-cw'
 import { createLogger } from '../../../utils/logger'
 import './readerPane.css'
 

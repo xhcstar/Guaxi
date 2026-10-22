@@ -1347,6 +1347,16 @@ pub struct SheetData {
     pub name: String,
     pub rows: Vec<Vec<String>>,
     pub truncated: bool,
+    /// 与 `rows` 同形的公式矩阵；空格子为空串。
+    ///
+    /// 为什么单独一份而不是塞进 cells：前端要能「在值/公式之间切换」，
+    /// 两份并行结构比每格包一个 `{ value, formula }` 对象更省传输量
+    /// （绝大多数格子没有公式，包成对象会让 JSON 变大数倍）。
+    #[serde(default)]
+    pub formulas: Vec<Vec<String>>,
+    /// 是否存在至少一条公式（前端据此决定要不要显示切换按钮）。
+    #[serde(default)]
+    pub has_formulas: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -1385,6 +1395,9 @@ fn read_spreadsheet_blocking(path: &Path) -> Result<SpreadsheetPayload, String> 
         let rows_taken = height.min(SPREADSHEET_MAX_ROWS);
         total_rows += height;
 
+        // 公式单独取一次。取不到（老格式、纯值文件）不影响值本身。
+        let formula_range = workbook.worksheet_formula(&name).ok();
+
         let mut rows = Vec::with_capacity(rows_taken);
         for row in range.rows().take(rows_taken) {
             let mut cells = Vec::with_capacity(width);
@@ -1415,10 +1428,43 @@ fn read_spreadsheet_blocking(path: &Path) -> Result<SpreadsheetPayload, String> 
             any_truncated = true;
         }
 
+        // 公式矩阵：与 rows 同形同尺寸，空格子填空串。
+        let mut formulas = Vec::with_capacity(rows_taken);
+        let mut has_formulas = false;
+        for (r, row) in range.rows().take(rows_taken).enumerate() {
+            let mut formula_row = Vec::with_capacity(width);
+            for c in 0..width {
+                let f = formula_range
+                    .as_ref()
+                    .and_then(|fr| {
+                        let (h, w) = (fr.height(), fr.width());
+                        if r < h && c < w {
+                            fr.get((r, c))
+                        } else {
+                            None
+                        }
+                    })
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_default();
+                if !f.is_empty() {
+                    has_formulas = true;
+                }
+                formula_row.push(if f.chars().count() > SPREADSHEET_MAX_CELL_CHARS {
+                    f.chars().take(SPREADSHEET_MAX_CELL_CHARS).collect::<String>() + "…"
+                } else {
+                    f
+                });
+            }
+            let _ = row; // rows 已在上面按值填过
+            formulas.push(formula_row);
+        }
+
         sheets.push(SheetData {
             name,
             rows,
             truncated: height > rows_taken || range.width() > width,
+            formulas,
+            has_formulas,
         });
     }
 

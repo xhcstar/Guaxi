@@ -4,10 +4,8 @@
       <span class="guaxi-doc-reader__title" :title="path">{{ name }}</span>
       <span class="guaxi-doc-reader__badge">{{ kind.toUpperCase() }}</span>
       <span class="guaxi-doc-reader__spacer" />
-      <button class="guaxi-doc-reader__btn" title="缩小" :disabled="loading || !!errorText" @click="zoomBy(1 / 1.15)">−</button>
-      <span class="guaxi-doc-reader__meta" style="min-width: 46px; text-align: center">{{ Math.round(zoom * 100) }}%</span>
-      <button class="guaxi-doc-reader__btn" title="放大" :disabled="loading || !!errorText" @click="zoomBy(1.15)">＋</button>
-      <button class="guaxi-doc-reader__btn" title="重置缩放" :disabled="loading || !!errorText" @click="zoom = 1">100%</button>
+      <CraftEditButton :path="path" :kind="kind" />
+      <ZoomControl v-model="zoom" :disabled="loading || !!errorText" />
     </div>
 
     <div ref="bodyRef" class="guaxi-doc-reader__body gdr-docx-body">
@@ -40,6 +38,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { renderAsync } from 'docx-preview'
 import { createLogger } from '../../../utils/logger'
+import CraftEditButton from './CraftEditButton.vue'
+import ZoomControl from './ZoomControl.vue'
 import './readerPane.css'
 
 const logger = createLogger('DocDocxReader')
