@@ -697,7 +697,8 @@ const wireApiOptions = [
 ]
 
 const agentEngineOptions = [
-  { value: 'codex', label: 'Codex（内置 codex，速度快、工具全）' },
+  { value: 'app-server', label: 'App-Server（工作台默认：可转向、逐动作审批、看 diff）' },
+  { value: 'codex', label: 'Codex exec（一轮一进程，兼容旧行为）' },
   { value: 'builtin', label: '内置 Python Agent（回退方案）' },
 ]
 
@@ -776,7 +777,10 @@ const loadConfig = async () => {
     form.codex_sandbox = typeof cfg?.codex_sandbox === 'string' && cfg.codex_sandbox
       ? cfg.codex_sandbox
       : 'workspace-write'
-    form.agent_engine = cfg?.agent_engine === 'builtin' ? 'builtin' : 'codex'
+    // 三档引擎：只有在这三个值里才照搬，其余（含老配置里的空串）一律落到工作台默认档。
+    form.agent_engine = ['app-server', 'codex', 'builtin'].includes(cfg?.agent_engine)
+      ? cfg.agent_engine
+      : 'app-server'
 
     const root = await invoke('get_chat_record_root')
     chatRecordRoot.value = typeof root === 'string' ? root : ''

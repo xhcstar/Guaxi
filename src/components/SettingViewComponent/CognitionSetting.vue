@@ -542,6 +542,7 @@ import {
   BrainCircuit20Regular,
   Broom20Regular,
   Copy20Regular,
+  Cursor20Regular,
   Database20Regular,
   DatabaseSearch20Regular,
   Edit20Regular,
@@ -603,19 +604,24 @@ const TIER_HINTS = {
   write: '写入：新建笔记、加标签、建关联、改状态、改画像。会真的改你的文件。',
   network: '出网：搜索、加入抓取队列。抓回的内容进收件箱，不会直接进知识库。',
   exec: '重活：重建索引、生成向量、抽取信念、生成简报。会拉起外部进程、耗时较长。',
+  gui: '操控本机：截屏、枚举/激活窗口、移动鼠标、打字、读写剪贴板。'
+    + '开启后 AI 会真的接管你的鼠标和键盘——每一次动作仍然要你逐条确认，'
+    + '「操作电脑」模式还需要模型支持图像输入。',
 }
 const TIER_ICONS = {
   read: Eye20Regular,
   write: Edit20Regular,
   network: Globe20Regular,
   exec: Flash20Regular,
+  // 操控本机用鼠标指针，和「执行重活」的闪电区分开。
+  gui: Cursor20Regular,
 }
 const tierRows = computed(() =>
   (st.value?.tiers || []).map(([key, granted]) => ({
     key,
     granted,
     icon: TIER_ICONS[key] || ShieldKeyhole20Regular,
-    label: { read: '只读', write: '写入', network: '出网', exec: '重活' }[key] || key,
+    label: { read: '只读', write: '写入', network: '出网', exec: '重活', gui: '操控本机' }[key] || key,
     hint: TIER_HINTS[key] || '',
   })),
 )

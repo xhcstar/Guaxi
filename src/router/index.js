@@ -2,6 +2,7 @@ import { computed, h } from 'vue'
 import { createRouter, createWebHistory, useRoute } from 'vue-router'
 import GuaxiHomePage from '../views/GuaxiHomePage.vue'
 import GuaxiChatPage from '../views/GuaxiChatPage.vue'
+import GuaxiAgentWorkspacePage from '../views/GuaxiAgentWorkspacePage.vue'
 import GuaxiBrainPage from '../views/GuaxiBrainPage.vue'
 import GuaxiApplicationPage from '../views/GuaxiApplicationPage.vue'
 import GuaxiSearchPage from '../views/GuaxiSearchPage.vue'
@@ -119,8 +120,16 @@ export const routes = [
   {
     path: '/chat',
     name: 'chat',
-    component: GuaxiChatPage,
+    component: GuaxiAgentWorkspacePage,
     meta: navMeta('chat'),
+  },
+  {
+    // 旧聊天页保留一个版本：新的工作台覆盖了「Agent 任务」，但「多模型闲聊 / 网页模型」
+    // 这些场景还没搬过去。并存一段时间，确认覆盖后再删。
+    path: '/chat-legacy',
+    name: 'chatLegacy',
+    component: GuaxiChatPage,
+    meta: { navLabel: '旧版对话' },
   },
   {
     path: '/repository',

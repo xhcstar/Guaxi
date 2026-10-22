@@ -170,6 +170,7 @@ fn shutdown_background_processes(reason: &str) {
     commands::agent_server::stop_agent_server();
     commands::rsshub_server::stop();
     commands::codex_agent::stop_codex_agent();
+    commands::codex_app_server::stop();
     commands::chatview::shutdown_local_llm_servers();
     commands::embedding::shutdown_embedding_server();
     commands::translate_local::shutdown_local_translate_server();
@@ -426,6 +427,20 @@ async fn main() {
             commands::chatview::agent_chat_stream,
             commands::chatview::agent_tool_decision,
             commands::codex_agent::codex_agent_status,
+            // Agent 工作台：codex app-server 引擎
+            commands::codex_app_server::agent_engine_status,
+            commands::codex_app_server::agent_list_models,
+            commands::codex_app_server::agent_start_thread,
+            commands::codex_app_server::agent_resume_thread,
+            commands::codex_app_server::agent_read_thread,
+            commands::codex_app_server::agent_list_threads,
+            commands::codex_app_server::agent_start_turn,
+            commands::codex_app_server::agent_steer_turn,
+            commands::codex_app_server::agent_interrupt_turn,
+            commands::codex_app_server::agent_resolve_approval,
+            commands::codex_app_server::agent_rename_thread,
+            commands::codex_app_server::agent_archive_thread,
+            commands::codex_app_server::agent_restart_engine,
             commands::cc_switch::detect_cc_switch_config,
             commands::chatview::audio_text_to_speech,
             commands::chatview::audio_speech_to_text,

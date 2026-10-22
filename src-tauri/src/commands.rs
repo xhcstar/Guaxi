@@ -6,6 +6,11 @@ pub mod cc_switch;
 pub mod chatview;
 /// Codex Agent 引擎：以打包进安装包的 codex sidecar 驱动智能助手的 Agent 模式。
 pub mod codex_agent;
+/// Codex App-Server 引擎：常驻 JSON-RPC 进程，提供 steer / 审批 / 计划 / diff / 用量，
+/// 供 Agent 工作台使用。与 `codex_agent` 共用同一个二进制与配置，失败可降级到它。
+pub mod codex_app_server;
+/// 电脑操控：截屏、窗口、鼠标键盘、剪贴板。全部受 `Tier::Gui` 管制，默认关闭。
+pub mod computer;
 pub mod docprocess;
 /// 文档阅读器后端支撑：文件类型嗅探、电子书/旧版 Office 阅读载荷、表格读取、导入用便携转换。
 /// 全部是新增的独立命令，不改动任何既有命令的行为。

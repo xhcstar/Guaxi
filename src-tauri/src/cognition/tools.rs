@@ -10,6 +10,7 @@
 //! - `Write`   默认关闭：改知识库、改状态、改画像。
 //! - `Network` 默认关闭：出网抓取、搜索。
 //! - `Exec`    默认关闭：拉起外部进程（转换、构建索引这类重活）。
+//! - `Gui`     默认关闭：截屏、窗口、鼠标键盘、剪贴板——动的是用户正在用的那台机器。
 //!
 //! 另有一条独立的闸：`untrusted=true` 的调用（由不可信内容驱动的链路）
 //! **无论授权如何都只能用 Read 级工具**。这是防止"爬回来的网页指挥 Agent
@@ -29,6 +30,10 @@ pub enum Tier {
     Write,
     Network,
     Exec,
+    /// 操控本机：截屏、窗口、鼠标键盘、剪贴板。
+    /// 单列一级而不是塞进 Exec，是因为它动的是用户正在用的那台机器，
+    /// 「跑个构建命令」和「移动你的鼠标」不该共用一个开关。
+    Gui,
 }
 
 impl Tier {
@@ -38,6 +43,7 @@ impl Tier {
             Tier::Write => "write",
             Tier::Network => "network",
             Tier::Exec => "exec",
+            Tier::Gui => "gui",
         }
     }
     /// 授权开关的设置键。read 恒为真，其余默认关闭。
@@ -47,6 +53,7 @@ impl Tier {
             Tier::Write => "tool_tier_write",
             Tier::Network => "tool_tier_network",
             Tier::Exec => "tool_tier_exec",
+            Tier::Gui => "tool_tier_gui",
         }
     }
 }
@@ -474,6 +481,81 @@ static REGISTRY: Lazy<Vec<ToolSpec>> = Lazy::new(|| {
                     "modelid": n("模型 id，默认走本地")
                 }),
                 &["kbName"],
+            ),
+        ),
+        // ── 操控本机（Gui）。默认关闭，且每一次动作都要经确认——
+        // 工具清单里写清楚「会动用户的鼠标」，让模型也知道这不是无副作用的操作。
+        spec(
+            "guaxi_screen_capture",
+            Tier::Gui,
+            "截取当前屏幕（或指定区域），返回图片路径与尺寸。操作电脑前应先用它确认屏幕状态。",
+            obj(
+                json!({
+                    "region": s("可选，'x,y,w,h' 逻辑像素；省略表示整屏"),
+                    "grid": b("是否叠加编号网格（默认 true），便于用「第 7 格」表达位置"),
+                    "cols": n("网格列数，默认 12"),
+                    "rows": n("网格行数，默认 8")
+                }),
+                &[],
+            ),
+        ),
+        spec(
+            "guaxi_screen_ocr",
+            Tier::Gui,
+            "截屏并对当前屏幕做文字识别，返回带坐标的文本块。配合 guaxi_screen_capture 定位可点击的文字。",
+            obj(json!({}), &[]),
+        ),
+        spec(
+            "guaxi_window_list",
+            Tier::Gui,
+            "列出当前所有可见窗口（标题、进程、矩形）。",
+            obj(json!({}), &[]),
+        ),
+        spec(
+            "guaxi_window_focus",
+            Tier::Gui,
+            "按标题子串激活一个窗口。",
+            obj(json!({ "title": s("窗口标题中的一段文字") }), &["title"]),
+        ),
+        spec(
+            "guaxi_mouse",
+            Tier::Gui,
+            "移动鼠标、点击、双击、右键、拖拽或滚动。坐标为逻辑像素，与截图坐标一致。",
+            obj(
+                json!({
+                    "action": s("move | click | double_click | right_click | drag | scroll"),
+                    "x": n("目标 x"),
+                    "y": n("目标 y"),
+                    "toX": n("drag 终点 x"),
+                    "toY": n("drag 终点 y"),
+                    "amount": n("scroll 滚轮格数，正数向上")
+                }),
+                &["action"],
+            ),
+        ),
+        spec(
+            "guaxi_keyboard",
+            Tier::Gui,
+            "输入文本或按键。type 输入任意文本；key 按单键；hotkey 按组合键（如 ctrl+s）。",
+            obj(
+                json!({
+                    "action": s("type | key | hotkey"),
+                    "text": s("type 时要输入的文本"),
+                    "keys": json!({ "type": "array", "items": { "type": "string" }, "description": "key/hotkey 的按键名，如 [\"ctrl\", \"s\"]" })
+                }),
+                &["action"],
+            ),
+        ),
+        spec(
+            "guaxi_clipboard",
+            Tier::Gui,
+            "读写剪贴板文本。",
+            obj(
+                json!({
+                    "action": s("read | write"),
+                    "text": s("write 时要写入的文本")
+                }),
+                &["action"],
             ),
         ),
     ]
@@ -929,6 +1011,130 @@ async fn execute(name: &str, a: &Value) -> Result<Value, String> {
             .await?;
             Ok(serde_json::to_value(r).map_err(|e| e.to_string())?)
         }
+        // ── Gui：操控本机。坐标一律是逻辑像素，与截图坐标同一坐标系。
+        "guaxi_screen_capture" => {
+            let dir = capture_dir()?;
+            let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S-%3f");
+            let raw = dir.join(format!("capture-{stamp}.png"));
+            let region = parse_region(opt_str(a, "region"))?;
+            let shot = crate::commands::computer::capture_screen(region, &raw)?;
+            // 默认叠网格：模型用「第几格」表达位置比裸坐标稳，审批卡里也好解释。
+            if opt_bool(a, "grid", true) {
+                let gridded = dir.join(format!("capture-{stamp}-grid.png"));
+                let cols = opt_usize(a, "cols", 12).clamp(1, 40) as u32;
+                let rows = opt_usize(a, "rows", 8).clamp(1, 40) as u32;
+                match crate::commands::computer::draw_grid(&raw, &gridded, cols, rows) {
+                    Ok(()) => {
+                        return Ok(json!({
+                            "path": gridded.to_string_lossy(),
+                            "rawPath": shot.path,
+                            "width": shot.width, "height": shot.height,
+                            "scale": shot.scale,
+                            "grid": { "cols": cols, "rows": rows,
+                                      "cellWidth": shot.width / cols, "cellHeight": shot.height / rows },
+                            "hint": "坐标从 (0,0) 起算，网格编号按行优先（左上角是 1 号）"
+                        }));
+                    }
+                    Err(e) => warn!("[cognition] 网格叠加失败，返回原图: {e}"),
+                }
+            }
+            Ok(json!({
+                "path": shot.path, "width": shot.width, "height": shot.height,
+                "scale": shot.scale,
+                "origin": { "x": shot.origin_x, "y": shot.origin_y }
+            }))
+        }
+        "guaxi_screen_ocr" => {
+            let app = crate::cognition::runtime::app_handle()
+                .ok_or_else(|| "AppHandle 未就绪，暂时无法 OCR".to_string())?;
+            let dir = capture_dir()?;
+            let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S-%3f");
+            let raw = dir.join(format!("ocr-{stamp}.png"));
+            crate::commands::computer::capture_screen(None, &raw)?;
+            let v = crate::commands::ocr::ocr_recognize(
+                app,
+                Some(raw.to_string_lossy().to_string()),
+                None,
+            )
+            .await?;
+            Ok(json!({ "path": raw.to_string_lossy(), "ocr": v }))
+        }
+        "guaxi_window_list" => {
+            let list = crate::commands::computer::list_windows()?;
+            Ok(json!({ "windows": list, "count": list.len() }))
+        }
+        "guaxi_window_focus" => {
+            let w = crate::commands::computer::find_window(&req_str(a, "title")?)?;
+            crate::commands::computer::focus_window(w.handle)?;
+            Ok(json!({ "ok": true, "window": w }))
+        }
+        "guaxi_mouse" => {
+            let action = crate::commands::computer::MouseAction {
+                action: req_str(a, "action")?,
+                x: a.get("x").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+                y: a.get("y").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+                to_x: a.get("toX").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+                to_y: a.get("toY").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+                amount: a.get("amount").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+            };
+            crate::commands::computer::mouse(&action)
+        }
+        "guaxi_keyboard" => {
+            let keys = a
+                .get("keys")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let action = crate::commands::computer::KeyboardAction {
+                action: req_str(a, "action")?,
+                text: opt_str(a, "text").unwrap_or_default(),
+                keys,
+            };
+            crate::commands::computer::keyboard(&action)
+        }
+        "guaxi_clipboard" => match req_str(a, "action")?.as_str() {
+            "read" => {
+                let t = crate::commands::computer::read_clipboard_text()?;
+                Ok(json!({ "text": t, "chars": t.chars().count() }))
+            }
+            "write" => {
+                crate::commands::computer::write_clipboard_text(&opt_str(a, "text").unwrap_or_default())?;
+                Ok(json!({ "ok": true }))
+            }
+            other => Err(format!("未知剪贴板动作: {other}")),
+        },
         other => Err(format!("工具 {other} 尚未实现分发")),
     }
+}
+
+
+/// 截图落盘目录。放在认知数据目录下的 `screens/`，与 profile、简报同一处，
+/// 便于按目录清理；不塞进知识库，避免被索引成正文。
+fn capture_dir() -> Result<std::path::PathBuf, String> {
+    let base = store::cog_data_dir()?.join("screens");
+    if !base.exists() {
+        std::fs::create_dir_all(&base).map_err(|e| format!("创建截图目录失败: {e}"))?;
+    }
+    Ok(base)
+}
+
+/// 解析 `'x,y,w,h'`。省略或格式不对都按整屏处理——截图失败比"截错区域"更容易被发现。
+fn parse_region(raw: Option<String>) -> Result<Option<(i32, i32, i32, i32)>, String> {
+    let Some(text) = raw else { return Ok(None) };
+    let t = text.trim();
+    if t.is_empty() {
+        return Ok(None);
+    }
+    let parts: Vec<i32> = t
+        .split(',')
+        .filter_map(|p| p.trim().parse::<i32>().ok())
+        .collect();
+    if parts.len() != 4 {
+        return Err("region 需要 'x,y,w,h' 四个整数".to_string());
+    }
+    Ok(Some((parts[0], parts[1], parts[2], parts[3])))
 }

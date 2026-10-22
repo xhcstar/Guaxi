@@ -27,7 +27,7 @@ use tracing::{info, warn};
 use crate::commands::settingview;
 
 /// 传给 codex 的环境变量名，与生成的 config.toml 里 `env_key` 保持一致。
-const CODEX_API_KEY_ENV: &str = "GUAXI_CODEX_API_KEY";
+pub const CODEX_API_KEY_ENV: &str = "GUAXI_CODEX_API_KEY";
 /// 生成的 config.toml 里的供应商标识，固定名字便于每次幂等重写。
 const CODEX_PROVIDER_ID: &str = "guaxi";
 /// 供应商未配置密钥时的占位值：cc-switch 代理会用上游真实密钥改写，这里只需非空。
@@ -158,6 +158,51 @@ struct CodexProvider {
     model: String,
     source: &'static str,
 }
+
+/// 给 app-server 引擎看的一份供应商快照。
+///
+/// `codex exec` 与 `codex app-server` 是同一个二进制、同一份 `config.toml`，
+/// 所以两条链路必须用完全相同的供应商解析与配置生成。这里把私有类型包一层，
+/// 是为了让新引擎能复用而不用把 `CodexProvider` 的字段全部公开。
+pub struct EngineProvider {
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
+    pub source: &'static str,
+}
+
+pub fn resolve_provider_for_engine() -> Result<EngineProvider, String> {
+    resolve_provider().map(|p| EngineProvider {
+        base_url: p.base_url,
+        api_key: p.api_key,
+        model: p.model,
+        source: p.source,
+    })
+}
+
+pub fn resolve_sandbox_mode_for_engine() -> String {
+    resolve_sandbox_mode()
+}
+
+pub fn write_codex_config_for_engine(
+    home: &PathBuf,
+    provider: &EngineProvider,
+    sandbox: &str,
+) -> Result<(), String> {
+    let inner = CodexProvider {
+        base_url: provider.base_url.clone(),
+        api_key: provider.api_key.clone(),
+        model: provider.model.clone(),
+        source: provider.source,
+    };
+    write_codex_config(home, &inner, sandbox)
+}
+
+/// 读取 codex 版本号（设置页状态面板）。
+pub async fn read_version(binary: &PathBuf) -> String {
+    read_codex_version(binary).await
+}
+
 
 /// 解析要交给 codex 的供应商：优先 cc-switch 本地代理，否则退回自定义 OpenAI 兼容配置。
 ///

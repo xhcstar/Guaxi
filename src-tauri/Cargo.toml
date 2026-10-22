@@ -284,7 +284,17 @@ mp3lame-encoder = "0.2.5"
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
 # 直接从 Chrome profile 的 Cookies 库读登录态（免二开浏览器抢占 profile）：
 # Local State 里的 AES 主密钥用 DPAPI(CryptUnprotectData) 解开。
-windows-sys = { version = "0.59", features = ["Win32_Security_Cryptography", "Win32_Foundation"] }
+windows-sys = { version = "0.59", features = [
+    "Win32_Security_Cryptography",
+    "Win32_Foundation",
+    # 电脑操控（commands/computer.rs）：截屏、窗口枚举、鼠标键盘注入、剪贴板。
+    # 这些 feature 只影响 windows-sys 的绑定表，不新增任何原生依赖。
+    "Win32_Graphics_Gdi",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", default-features = false, features = ["apple-native"] }

@@ -169,7 +169,9 @@ fn default_codex_sandbox() -> String {
 }
 
 fn default_agent_engine() -> String {
-    "codex".to_string()
+    // 新装与老配置（字段缺失）都默认走 app-server：它是工作台的主引擎。
+    // 起不来时会自动降级到 codex exec，用户不会因此失去 Agent 能力。
+    "app-server".to_string()
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -211,7 +213,13 @@ pub struct LlmConfig {
     pub codex_model: String,
     #[serde(default = "default_codex_sandbox")]
     pub codex_sandbox: String,
-    /// Agent 引擎：`codex`（沙箱 codex exec）或 `builtin`（Python agent_server 回退）。
+    /// Agent 引擎：
+    /// - `app-server`：常驻 codex app-server，支持 steer / 审批 / 计划 / diff（工作台默认）
+    /// - `codex`：一轮一进程的 `codex exec`
+    /// - `builtin`：Python agent_server
+    ///
+    /// 三者是**降级链**，不是互斥选项：选了 app-server 但它起不来时，仍会退到 codex，
+    /// 再退到 builtin。设置在 `default_agent_engine` 里给出默认档。
     #[serde(default = "default_agent_engine")]
     pub agent_engine: String,
 }

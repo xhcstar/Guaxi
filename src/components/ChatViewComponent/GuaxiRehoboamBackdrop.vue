@@ -13,6 +13,18 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  /**
+   * 仪表数据。给定时，圈上的每一段都必须对应真实数据；没拿到就不画满，
+   * 保持基线——仪表一旦会「假装有数据」就退化回壁纸了。
+   *
+   * 形状：
+   *   { tokenRate: number(0-1 归一), toolCount: number, pending: number,
+   *     itemIndex: number, caption: string }
+   */
+  telemetry: {
+    type: Object,
+    default: null,
+  },
 })
 
 const logger = createLogger('GuaxiRehoboamBackdrop')
@@ -217,7 +229,12 @@ const drawInnerRings = (ctx, centerX, centerY, radius, elapsedSeconds, theme) =>
 }
 
 const drawOuterWaves = (ctx, centerX, centerY, radius, elapsedSeconds, theme) => {
-  const intensity = props.active ? 1.16 : 1
+  // 波动幅度 = token 输出速率。没有遥测时退回原来的 active 二值语义，
+  // 老调用点（聊天页背景）行为完全不变。
+  const rate = props.telemetry ? Math.max(0, Math.min(1, Number(props.telemetry.tokenRate) || 0)) : null
+  const intensity = rate === null
+    ? (props.active ? 1.16 : 1)
+    : 0.82 + rate * 0.62
 
   ctx.save()
   ctx.globalCompositeOperation = theme.isDark ? 'screen' : 'multiply'
@@ -247,19 +264,78 @@ const drawOuterWaves = (ctx, centerX, centerY, radius, elapsedSeconds, theme) =>
     ctx.stroke()
   })
 
+  // 事件锚点的亮度表示「有几件事在等你」。没有待批时全部压到最低，不喧宾夺主。
+  const pending = Math.max(0, Number(props.telemetry?.pending) || 0)
   EVENT_ANCHORS.slice(0, 4).forEach((anchor, index) => {
     const pulse = (Math.sin(elapsedSeconds * 1.3 + anchor.phase * TAU) + 1) / 2
+    const lit = index < Math.min(pending, 4) ? 1 : 0
     ctx.save()
     ctx.beginPath()
     ctx.arc(centerX, centerY, radius * (0.89 + index * 0.025), anchor.angle - 0.04 - pulse * 0.03, anchor.angle + 0.04 + pulse * 0.03)
     ctx.strokeStyle = theme.inkStrong
-    ctx.globalAlpha = props.active ? 0.42 + pulse * 0.18 : 0.2 + pulse * 0.12
-    ctx.lineWidth = 1.2 + pulse * 1.3
+    const base = props.active ? 0.42 + pulse * 0.18 : 0.2 + pulse * 0.12
+    // 待批时提到接近满亮，并加粗一点；这是整块仪表里唯一会"抢眼"的东西。
+    ctx.globalAlpha = lit ? Math.min(0.95, base + 0.35) : base * 0.45
+    ctx.lineWidth = 1.2 + pulse * 1.3 + lit * 0.9
     ctx.lineCap = 'round'
     ctx.stroke()
     ctx.restore()
   })
 
+  ctx.restore()
+}
+
+/**
+ * 环上的工具分段：每调用一次工具点亮一段。
+ *
+ * 上限 24 段——再多就糊成一圈，反而看不出数量。到了上限就停住，表示"很多"，
+ * 具体次数在右侧面板里给准确值。
+ */
+const TOOL_TICK_MAX = 24
+
+const drawToolTicks = (ctx, centerX, centerY, radius, theme) => {
+  const count = Math.max(0, Math.min(TOOL_TICK_MAX, Number(props.telemetry?.toolCount) || 0))
+  if (!count) return
+  const inner = radius * 0.74
+  const outer = radius * 0.79
+  ctx.save()
+  ctx.lineCap = 'round'
+  for (let i = 0; i < count; i += 1) {
+    // 从正上方起顺时针排布，与"新的一段接在末尾"的直觉一致。
+    const angle = -Math.PI / 2 + (i / TOOL_TICK_MAX) * TAU
+    ctx.beginPath()
+    ctx.moveTo(centerX + Math.cos(angle) * inner, centerY + Math.sin(angle) * inner)
+    ctx.lineTo(centerX + Math.cos(angle) * outer, centerY + Math.sin(angle) * outer)
+    ctx.strokeStyle = theme.inkStrong
+    ctx.globalAlpha = 0.55
+    ctx.lineWidth = 1.6
+    ctx.stroke()
+  }
+  ctx.restore()
+}
+
+/**
+ * 环心文字：模式 + 工作区。只在够宽时画，否则会被环吃掉。
+ * 等宽小字、低对比度——它是刻度说明，不是标题。
+ */
+const drawCaption = (ctx, width, height, centerX, centerY, radius) => {
+  const caption = String(props.telemetry?.caption || '').trim()
+  if (!caption || width < 520 || radius < 110) return
+  ctx.save()
+  ctx.fillStyle = readTheme().ink
+  ctx.globalAlpha = 0.5
+  ctx.font = `500 ${Math.max(11, Math.round(radius * 0.075))}px var(--guaxi-editor-font-family, monospace)`
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  // 最多两行：第一行模式，第二行工作区。
+  const [first, second] = caption.split('\n')
+  const lineH = Math.max(14, Math.round(radius * 0.1))
+  const startY = centerY - (second ? lineH / 2 : 0)
+  ctx.fillText(first.slice(0, 24), centerX, startY)
+  if (second) {
+    ctx.globalAlpha = 0.36
+    ctx.fillText(second.slice(0, 30), centerX, startY + lineH)
+  }
   ctx.restore()
 }
 
@@ -312,9 +388,11 @@ const drawScene = (time = performance.now()) => {
   // 米灰背景、中心环形仪器、外围波动轮廓和低对比度扫描线。
   drawBackground(ctx, width, height, centerX, centerY, radius, theme)
   drawInnerRings(ctx, centerX, centerY, radius, elapsedSeconds, theme)
+  drawToolTicks(ctx, centerX, centerY, radius, theme)
   drawOuterWaves(ctx, centerX, centerY, radius, elapsedSeconds, theme)
   drawSweep(ctx, centerX, centerY, radius, elapsedSeconds, theme)
   drawEventDistortions(ctx, centerX, centerY, radius, elapsedSeconds, theme)
+  drawCaption(ctx, width, height, centerX, centerY, radius)
 
   if (!reducedMotion) {
     animationFrameId = window.requestAnimationFrame(drawScene)
@@ -336,6 +414,18 @@ watch(
       drawScene()
     }
   }
+)
+
+// 减少动效时画面是静止的，遥测变化必须主动重绘一次，否则仪表停在旧状态上。
+// 正常动效下每帧都在画，不需要这个 watch 额外触发。
+watch(
+  () => props.telemetry,
+  () => {
+    if (reducedMotion) {
+      drawScene()
+    }
+  },
+  { deep: true }
 )
 
 onMounted(() => {

@@ -61,6 +61,7 @@ pub async fn cognition_status() -> Result<CognitionStatus, String> {
             ("write".into(), tools::tier_granted(tools::Tier::Write)),
             ("network".into(), tools::tier_granted(tools::Tier::Network)),
             ("exec".into(), tools::tier_granted(tools::Tier::Exec)),
+            ("gui".into(), tools::tier_granted(tools::Tier::Gui)),
         ],
         deliberate_interval_secs: store::get_i64("deliberate_interval_secs", 300),
         deliberate_modelid: store::get_i64("deliberate_modelid", 6),

@@ -5456,9 +5456,15 @@ pub async fn agent_chat_stream(app: AppHandle, request: AgentRequest) -> Result<
             .await;
     let _ = &cog_episode;
 
-    // Agent 引擎分流：默认走打包进 Guaxi 的 codex sidecar（更快、工具更全），
-    // codex 不可用（二进制缺失 / 供应商没配 / 进程起不来）时静默回退到内置 Python Agent，
-    // 保证这个功能不会因为 codex 的问题整体不可用。
+    // Agent 引擎分流。三档是一条降级链，不是互斥选项：
+    //   app-server（常驻，支持 steer / 审批 / 计划 / diff）
+    //     → codex exec（一轮一进程）
+    //       → 内置 Python Agent
+    // 任意一环起不来就退到下一环，保证这个功能不会因为某个引擎的问题整体不可用。
+    //
+    // 注意：右侧助手走的是这条单轮链路，用 app-server 只能拿到「发一句、等结束」，
+    // 收益有限且多一个常驻进程；工作台（AgentWorkspace）自己直接调 app-server 的命令。
+    // 所以这里只把 `codex` 与 `builtin` 两档当作单轮引擎，`app-server` 落到 `codex`。
     let engine = settingview::get_llm_config().agent_engine;
     if engine.trim() != "builtin" {
         let codex_request = crate::commands::codex_agent::CodexAgentRequest {
