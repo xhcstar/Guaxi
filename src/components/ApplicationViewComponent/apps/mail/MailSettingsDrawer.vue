@@ -1,0 +1,297 @@
+<template>
+  <div class="mail-modal-backdrop" @click.self="$emit('close')">
+    <div class="mail-modal" role="dialog" aria-label="外观与设置">
+      <div class="mail-modal-head">
+        <h2 class="mail-modal-title">外观与设置</h2>
+        <button class="mail-modal-close" @click="$emit('close')">×</button>
+      </div>
+
+      <div class="mail-modal-body">
+        <!-- 主题 -->
+        <div class="mail-flabel" style="margin-bottom: 8px">主题</div>
+        <div class="mail-theme-grid">
+          <button
+            v-for="theme in themes"
+            :key="theme.id"
+            class="mail-theme-card"
+            :class="{ 'is-active': settings.theme === theme.id }"
+            @click="$emit('update', { theme: theme.id })"
+          >
+            <div class="mail-theme-swatches">
+              <span
+                v-for="token in ['bg', 'panel', 'text', 'accent']"
+                :key="token"
+                class="mail-theme-swatch"
+                :style="{ background: theme.tokens?.[token] || 'transparent' }"
+              ></span>
+            </div>
+            <div class="mail-theme-name">
+              {{ theme.name }}
+              <span class="mail-hint">{{ theme.mode === 'dark' ? '深色' : '浅色' }}</span>
+            </div>
+          </button>
+        </div>
+
+        <!-- 密度 -->
+        <div class="mail-field">
+          <label class="mail-flabel">界面密度</label>
+          <div style="display: flex; gap: 6px">
+            <button
+              v-for="item in densityOptions"
+              :key="item.value"
+              class="mail-chip"
+              :class="{ 'is-on': settings.density === item.value }"
+              @click="$emit('update', { density: item.value })"
+            >
+              {{ item.label }}
+            </button>
+          </div>
+        </div>
+
+        <!-- 字体 -->
+        <div class="mail-field-row">
+          <div class="mail-field">
+            <label class="mail-flabel">阅读字体</label>
+            <select
+              class="mail-input"
+              :value="settings.readingFont"
+              @change="$emit('update', { readingFont: $event.target.value })"
+            >
+              <option value="system">跟随系统</option>
+              <option v-for="font in fontOptions" :key="font" :value="font">{{ font }}</option>
+            </select>
+          </div>
+          <div class="mail-field">
+            <label class="mail-flabel">阅读字号（{{ settings.readingSize }}px）</label>
+            <input
+              class="mail-input"
+              type="range"
+              min="12"
+              max="22"
+              :value="settings.readingSize"
+              @input="$emit('update', { readingSize: Number($event.target.value) })"
+            />
+          </div>
+        </div>
+
+        <div class="mail-field">
+          <label class="mail-flabel">主色（留空使用主题自带）</label>
+          <div style="display: flex; gap: 6px; align-items: center">
+            <input
+              type="color"
+              :value="settings.accentOverride || themeAccent"
+              style="width: 36px; height: 30px; border: 1px solid var(--mail-border); border-radius: 6px; background: transparent"
+              @input="$emit('update', { accentOverride: $event.target.value })"
+            />
+            <input
+              class="mail-input"
+              :value="settings.accentOverride"
+              placeholder="例如 #7aa2f7"
+              @change="$emit('update', { accentOverride: $event.target.value.trim() })"
+            />
+            <button
+              v-if="settings.accentOverride"
+              class="mail-btn"
+              @click="$emit('update', { accentOverride: '' })"
+            >
+              恢复
+            </button>
+          </div>
+        </div>
+
+        <!-- 代理 -->
+        <div class="mail-section-divider"></div>
+        <div class="mail-flabel" style="margin-bottom: 8px">网络代理（收发信都走它）</div>
+        <div class="mail-field-row">
+          <div class="mail-field">
+            <label class="mail-flabel">模式</label>
+            <select
+              class="mail-input"
+              :value="settings.proxy?.mode || 'system'"
+              @change="updateProxy({ mode: $event.target.value })"
+            >
+              <option value="none">直连</option>
+              <option value="system">跟随系统</option>
+              <option value="custom">自定义</option>
+            </select>
+          </div>
+          <div class="mail-field">
+            <label class="mail-flabel">代理地址</label>
+            <input
+              class="mail-input"
+              :value="settings.proxy?.url || ''"
+              :disabled="settings.proxy?.mode !== 'custom'"
+              placeholder="socks5://127.0.0.1:1080"
+              @change="updateProxy({ url: $event.target.value.trim() })"
+            />
+          </div>
+        </div>
+        <div class="mail-field">
+          <label class="mail-flabel">不走代理的主机（逗号分隔）</label>
+          <input
+            class="mail-input"
+            :value="(settings.proxy?.bypass || []).join(', ')"
+            placeholder="corp.local, localhost"
+            @change="updateBypass($event.target.value)"
+          />
+        </div>
+
+        <!-- 同步与发送 -->
+        <div class="mail-section-divider"></div>
+        <div class="mail-field-row">
+          <div class="mail-field">
+            <label class="mail-flabel">自动同步间隔（秒）</label>
+            <input
+              class="mail-input"
+              type="number"
+              min="30"
+              :value="settings.pollSeconds"
+              @change="$emit('update', { pollSeconds: Math.max(30, Number($event.target.value) || 90) })"
+            />
+          </div>
+          <div class="mail-field">
+            <label class="mail-flabel">发送撤回窗口（秒，0 关闭）</label>
+            <input
+              class="mail-input"
+              type="number"
+              min="0"
+              :value="settings.undoSendSeconds"
+              @change="$emit('update', { undoSendSeconds: Math.max(0, Number($event.target.value) || 0) })"
+            />
+          </div>
+        </div>
+
+        <div class="mail-field">
+          <label class="mail-flabel">本地邮件保留天数（0 = 永久；只清本地缓存，星标邮件不动）</label>
+          <input
+            class="mail-input"
+            type="number"
+            min="0"
+            :value="settings.retentionDays"
+            @change="$emit('update', { retentionDays: Math.max(0, Number($event.target.value) || 0) })"
+          />
+        </div>
+
+        <label class="mail-check">
+          <input
+            type="checkbox"
+            :checked="settings.inlineImages"
+            @change="$emit('update', { inlineImages: $event.target.checked })"
+          />
+          默认加载邮件里的外部图片（关闭更安全：不给发件人回执信标）
+        </label>
+        <label class="mail-check">
+          <input
+            type="checkbox"
+            :checked="settings.showHeaders"
+            @change="$emit('update', { showHeaders: $event.target.checked })"
+          />
+          在阅读区显示原始邮件头
+        </label>
+        <label class="mail-check">
+          <input
+            type="checkbox"
+            :checked="settings.groupThreads"
+            @change="$emit('update', { groupThreads: $event.target.checked })"
+          />
+          在收件箱里按会话聚合同一主题的邮件
+        </label>
+        <label class="mail-check">
+          <input
+            type="checkbox"
+            :checked="settings.rulesEnabled"
+            @change="$emit('update', { rulesEnabled: $event.target.checked })"
+          />
+          启用收信规则
+        </label>
+        <label class="mail-check">
+          <input
+            type="checkbox"
+            :checked="settings.composeHtml"
+            @change="$emit('update', { composeHtml: $event.target.checked })"
+          />
+          新邮件默认使用富文本
+        </label>
+      </div>
+
+      <div class="mail-modal-foot">
+        <button class="mail-btn is-danger" @click="clearCache">清空本地缓存</button>
+        <span class="spacer"></span>
+        <button class="mail-btn is-primary" @click="$emit('close')">完成</button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { computed, onMounted, ref } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
+
+const props = defineProps({
+  settings: { type: Object, required: true },
+  themes: { type: Array, default: () => [] },
+})
+const emit = defineEmits(['close', 'update'])
+
+const densityOptions = [
+  { value: 'compact', label: '紧凑' },
+  { value: 'comfortable', label: '舒适' },
+  { value: 'spacious', label: '宽松' },
+]
+
+const fonts = ref([])
+
+onMounted(async () => {
+  try {
+    const families = await invoke('list_system_fonts')
+    // 排到最前面的是等宽字体，阅读场景更需要衬线/正文类字体，所以再按名字排一次。
+    fonts.value = (families || []).map((f) => f.name).slice(0, 200)
+  } catch {
+    fonts.value = []
+  }
+})
+
+const fontOptions = computed(() => {
+  const common = ['Source Han Serif SC', '思源宋体', '霞鹜文楷', 'LXGW WenKai', 'Microsoft YaHei', 'SimSun']
+  const seen = new Set()
+  return [...common, ...fonts.value].filter((name) => {
+    if (!name || seen.has(name)) return false
+    seen.add(name)
+    return true
+  })
+})
+
+const themeAccent = computed(
+  () => props.themes.find((t) => t.id === props.settings.theme)?.tokens?.accent || '#5b7cfa',
+)
+
+function updateProxy(patch) {
+  emit('update', { proxy: { ...(props.settings.proxy || {}), ...patch } })
+}
+
+function updateBypass(text) {
+  const bypass = String(text || '')
+    .split(/[,;，；]/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+  updateProxy({ bypass })
+}
+
+async function clearCache() {
+  if (!window.confirm('清空本地缓存的邮件？服务器上的邮件不会被删除，下次同步会重新拉取。')) return
+  try {
+    await invoke('mail_clear_cache', { accountId: null })
+    window.location.reload()
+  } catch (error) {
+    window.alert(String(error?.message || error))
+  }
+}
+</script>
+
+<style scoped>
+.mail-section-divider {
+  height: 1px;
+  background: var(--mail-border);
+  margin: 20px 0 16px;
+}
+</style>

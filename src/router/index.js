@@ -42,6 +42,7 @@ import ResumeBuilderApp from '../components/ApplicationViewComponent/apps/Resume
 import AIFilmStudioApp from '../components/ApplicationViewComponent/apps/AIFilmStudioApp.vue'
 import RemoteTerminalApp from '../components/ApplicationViewComponent/apps/RemoteTerminalApp.vue'
 import ResourceHunterApp from '../components/ApplicationViewComponent/apps/ResourceHunterApp.vue'
+import MailApp from '../components/ApplicationViewComponent/apps/MailApp.vue'
 
 const APP_COMPONENT_MAP = {
   'life-album': LifeAlbumApp,
@@ -56,6 +57,7 @@ const APP_COMPONENT_MAP = {
   'creation-ai-film-studio': AIFilmStudioApp,
   'tools-remote-terminal': RemoteTerminalApp,
   'tools-resource-hunter': ResourceHunterApp,
+  'tools-mail': MailApp,
 }
 
 const GuaxiAppWindow = {
@@ -65,7 +67,7 @@ const GuaxiAppWindow = {
     const appId = computed(() => String(route.params?.appId || ''))
     const Comp = computed(() => APP_COMPONENT_MAP[appId.value] || PlaceholderApp)
     // Workbench-style apps own their full window layout, so the route host should not add outer padding.
-    const fullBleedAppIds = new Set(['life-album', 'music-player', 'tools-tts-book', 'work-timer', 'creation-ai-film-studio', 'tools-remote-terminal', 'tools-resource-hunter'])
+    const fullBleedAppIds = new Set(['life-album', 'music-player', 'tools-tts-book', 'work-timer', 'creation-ai-film-studio', 'tools-remote-terminal', 'tools-resource-hunter', 'tools-mail'])
     const hostPadding = computed(() => (fullBleedAppIds.has(appId.value) ? '0px' : '16px'))
 
     return () =>

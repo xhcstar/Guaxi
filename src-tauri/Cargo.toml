@@ -279,6 +279,12 @@ openssl = { version = "0.10", optional = true }
 openssl-sys = { version = "0.9", optional = true }
 symphonia = { version = "0.6.1", features = ["mp3", "mpa", "aac", "isomp4"] }
 mp3lame-encoder = "0.2.5"
+imap = { version = "2.4.1", default-features = false }
+mail-parser = { version = "0.11.9", features = ["serde", "full_encoding"] }
+lettre = { version = "0.11.23", default-features = false, features = ["builder", "hostname"] }
+rustls-native-certs = "0.8.5"
+socks = "0.3.4"
+ego-tree = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", default-features = false, features = ["windows-native"] }

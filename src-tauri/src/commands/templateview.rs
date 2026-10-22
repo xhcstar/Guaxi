@@ -157,6 +157,8 @@ pub async fn open_application_window(
         "tools-tts-book" => (1280.0, 800.0, 1024.0, 680.0, true),
         "tools-remote-terminal" => (1280.0, 800.0, 1024.0, 640.0, true),
         "tools-resource-hunter" => (1280.0, 800.0, 1024.0, 640.0, true),
+        // 邮箱客户端：三栏 + 阅读区，窄了会挤掉邮件列表，和工作台一样默认最大化。
+        "tools-mail" => (1440.0, 900.0, 1120.0, 680.0, true),
         _ => (1024.0, 720.0, 820.0, 560.0, false),
     };
 

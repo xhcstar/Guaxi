@@ -49,6 +49,7 @@ import ResumeBuilderApp from "./apps/ResumeBuilderApp.vue"
 import AIFilmStudioApp from "./apps/AIFilmStudioApp.vue"
 import RemoteTerminalApp from "./apps/RemoteTerminalApp.vue"
 import ResourceHunterApp from "./apps/ResourceHunterApp.vue"
+import MailApp from "./apps/MailApp.vue"
 
 const logger = createLogger('GuaxiContentAppView')
 const settingsStore = useSettingsStore()
@@ -63,6 +64,16 @@ const categories = [
 ]
 
 const apps = [
+  {
+    id: 'tools-mail',
+    name: '邮件',
+    category: 'work',
+    categoryLabel: '工作类',
+    description: '多账户 IMAP/SMTP 客户端：收信规则、分类标签、延迟发送与撤回，全链路支持代理',
+    icon: '✉',
+    color: 'linear-gradient(135deg, #5b7cfa, #2b3a67)',
+    component: MailApp
+  },
   {
     id: 'tools-resource-hunter',
     name: '资源嗅探下载',

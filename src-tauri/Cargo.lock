@@ -5014,6 +5014,7 @@ dependencies = [
  "ecb",
  "ecdsa 0.16.9",
  "ed25519-dalek 2.2.0",
+ "ego-tree",
  "encoding_rs",
  "etherparse",
  "exif",

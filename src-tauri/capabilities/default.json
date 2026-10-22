@@ -39,7 +39,10 @@
     {
       "identifier": "opener:allow-open-url",
       "allow": [
-        { "url": "vscode://file/*" }
+        { "url": "vscode://file/*" },
+        { "url": "https://*" },
+        { "url": "http://*" },
+        { "url": "mailto:*" }
       ]
     },
     "dialog:default",
