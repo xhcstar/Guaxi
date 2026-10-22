@@ -87,12 +87,13 @@
   flex: 1 1 auto;
   display: grid;
   /* 宽度由 MailApp 写在行内样式里（可拖拽），这里只给兜底值。 */
-  /* 侧栏 / 分隔条 / 列表 / 分隔条 / 阅读器 */
+  /* 侧栏 / 分隔条 / 列表 / 分隔条 / 阅读器
+     分隔条净占 6px（元素 11px + margin-left:-5px），刚好够画出细线与手柄。 */
   grid-template-columns:
     var(--mail-sidebar-w, 232px)
-    1px
+    6px
     var(--mail-list-w, 340px)
-    1px
+    6px
     minmax(0, 1fr);
   min-height: 0;
   overflow: hidden;
@@ -114,15 +115,15 @@
      两个都收    ：展开条 / 展开条 / 阅读器
    分隔条视觉宽 1px（命中区靠 padding 撑开，不影响布局），展开条 18/24px。 */
 .mail-shell.is-sidebar-collapsed {
-  grid-template-columns: 18px var(--mail-list-w, 340px) 1px minmax(0, 1fr);
+  grid-template-columns: 18px var(--mail-list-w, 340px) 6px minmax(0, 1fr);
 }
 
 .mail-shell.is-list-collapsed {
-  grid-template-columns: var(--mail-sidebar-w, 232px) 1px 24px minmax(0, 1fr);
+  grid-template-columns: var(--mail-sidebar-w, 232px) 6px 24px minmax(0, 1fr);
 }
 
 .mail-shell.is-list-collapsed:not(:has(.mail-reader)) {
-  grid-template-columns: var(--mail-sidebar-w, 232px) 1px 24px;
+  grid-template-columns: var(--mail-sidebar-w, 232px) 6px 24px;
 }
 
 .mail-shell.is-sidebar-collapsed.is-list-collapsed {
@@ -133,12 +134,99 @@
   grid-template-columns: 18px 24px;
 }
 
+/* ---------- 栏边界：可拖拽的分隔条 + 折叠手柄 ---------- */
+
+/* 命中区宽 11px（1px 的线几乎点不中），视觉线用 ::before 画在正中，
+   再用负 margin 把多出来的宽度向两侧抵消，不影响三栏的实际宽度。 */
+.mail-splitter {
+  position: relative;
+  z-index: 4;
+  width: 11px;
+  margin-left: -5px;
+  cursor: col-resize;
+}
+
+.mail-splitter::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 5px;
+  width: 1px;
+  background: var(--mail-border);
+  transition: background-color 0.12s ease, width 0.12s ease;
+}
+
+.mail-splitter:hover::before,
+.mail-splitter.is-dragging::before {
+  background: var(--mail-accent);
+  width: 2px;
+}
+
+/* 折叠手柄：竖直贴在边界上，常驻低对比、悬停变亮。
+   完全隐藏会让人不知道这里能操作，常驻全亮又会变成视觉噪音。 */
+.mail-collapse-handle {
+  position: absolute;
+  top: 50%;
+  left: 5px;
+  transform: translate(-50%, -50%);
+  width: 16px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--mail-border);
+  border-radius: 4px;
+  background: var(--mail-panel);
+  color: var(--mail-text-muted);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.12s ease, color 0.12s ease, background-color 0.12s ease;
+}
+
+.mail-splitter:hover .mail-collapse-handle,
+.mail-collapse-handle:focus-visible {
+  opacity: 1;
+}
+
+.mail-collapse-handle:hover {
+  background: var(--mail-accent);
+  border-color: var(--mail-accent);
+  color: var(--mail-accent-text);
+}
+
+.mail-collapse-handle:disabled {
+  opacity: 0;
+  cursor: default;
+}
+
+/* 折叠后左缘常驻的展开手柄。 */
+.mail-expand-rail {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  background: var(--mail-panel);
+  border-right: 1px solid var(--mail-border);
+}
+
+/* 列表折叠后的展开条：跟左侧栏同一个底色，看起来是「列表栏被收成了一条」，
+   而不是阅读区边上悬着一个孤零零的按钮。 */
+.mail-expand-rail.is-list {
+  width: 24px;
+  background: var(--mail-sidebar);
+  border-right: 1px solid var(--mail-border);
+  padding-left: 2px;
+}
+
 .mail-expand-rail .mail-collapse-handle {
   position: static;
   transform: none;
   opacity: 1;
-  width: 16px;
+  width: 14px;
   height: 44px;
+  font-size: 10px;
 }
 
 .mail-pane {
@@ -973,16 +1061,16 @@
   .mail-shell {
     grid-template-columns:
       min(var(--mail-sidebar-w, 232px), 200px)
-      1px
+      6px
       min(var(--mail-list-w, 340px), 300px)
-      1px
+      6px
       minmax(0, 1fr);
   }
   .mail-shell.is-sidebar-collapsed {
-    grid-template-columns: 18px min(var(--mail-list-w, 340px), 300px) 1px minmax(0, 1fr);
+    grid-template-columns: 18px min(var(--mail-list-w, 340px), 300px) 6px minmax(0, 1fr);
   }
   .mail-shell.is-list-collapsed {
-    grid-template-columns: min(var(--mail-sidebar-w, 232px), 200px) 1px 24px minmax(0, 1fr);
+    grid-template-columns: min(var(--mail-sidebar-w, 232px), 200px) 6px 24px minmax(0, 1fr);
   }
   .mail-shell.is-sidebar-collapsed.is-list-collapsed {
     grid-template-columns: 18px 24px minmax(0, 1fr);
@@ -993,13 +1081,13 @@
   /* 收纳成「列表 + 覆盖式阅读」：铺两栏会把两边都挤得不能读。 */
   /* 窄屏只保留「侧栏 + 阅读器」，列表被覆盖式阅读取代。 */
   .mail-shell {
-    grid-template-columns: 184px 1px minmax(0, 1fr);
+    grid-template-columns: 184px 6px minmax(0, 1fr);
   }
   .mail-shell.is-sidebar-collapsed {
     grid-template-columns: 18px minmax(0, 1fr);
   }
   .mail-shell.is-list-collapsed {
-    grid-template-columns: 184px 1px 24px minmax(0, 1fr);
+    grid-template-columns: 184px 6px 24px minmax(0, 1fr);
   }
   .mail-shell.is-sidebar-collapsed.is-list-collapsed {
     grid-template-columns: 18px 24px minmax(0, 1fr);
