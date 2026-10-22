@@ -5,6 +5,7 @@
   "windows": [
     "main",
     "reader-*",
+    "doc-reader-*",
     "template_manager",
     "knowledge_base_manager",
     "resource_repo_manager",

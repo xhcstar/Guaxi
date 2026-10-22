@@ -170,19 +170,19 @@
       />
       <div class="gdr-ebook__main" :class="{ 'is-resizing': resizing }">
         <!--
-          用 blob URL + src 而不是 srcdoc：
-          srcdoc 文档在 sandbox 缺 allow-scripts 时，浏览器会为**每一段**脚本打印
-          "Blocked script execution in 'about:srcdoc'"。脚本已经被 stripScripts 剥掉，
-          但个别章节的 <script> 藏在注释/条件注释里仍可能漏网，换成 blob URL 后
-          这类噪音不再出现（文档来源不再是 about:srcdoc）。
+          用 blob URL + src 而不是 srcdoc：章节文档一次成型、可直接挂载，
+          切章时 revoke 掉即可释放内存；也避开 srcdoc 先创建 about:blank
+          过渡文档的那一跳。
         -->
         <!--
           v-if 而不是常驻：iframe 一旦插入就会先创建一个 about:blank 文档；
           只有 frameSrc 就绪才挂载，且挂载时直接 src 到 blob，跳过空白文档阶段。
 
-          sandbox 保留 allow-same-origin：需要读 contentDocument 来拦截书籍内链接，
-          让 `<a href="ch2.xhtml">` 在阅读器内跳转，而不是导航到不存在的地址。
-          脚本安全性由「剥离 + 自检」保证（见 sanitizeSectionHtml），而不是靠沙箱。
+          sandbox 同时给 allow-scripts 与 allow-same-origin：前者让漏网脚本不再刷
+          "Blocked script execution" 报错、依赖 JS 的交互式章节也能渲染，后者用来
+          读 contentDocument 拦截书籍内链接，让 `<a href="ch2.xhtml">` 在阅读器内
+          跳转。这两项的组合按规范等于取消沙箱，所以脚本安全性完全由「剥离 + 自检」
+          保证（见 sanitizeSectionHtml），不能把净化当成可选步骤。
         -->
         <iframe
           v-if="frameSrc"
@@ -584,19 +584,23 @@ const zoomBy = (factor) => {
 /**
  * 去掉章节 HTML 里的脚本与内联事件，避免浏览器控制台刷屏。
  *
- * 为什么必须主动剥离，而不是靠 sandbox 拦：
- * sandbox 不给 allow-scripts 时，浏览器照样会为每一段内联脚本打印
- * "Blocked script execution in 'about:srcdoc' because the document's frame is sandboxed"。
- * 一本排版工具导出的 epub 常常有几十个 <script>，打开一本书就是几十条红色报错，
- * 看起来像软件坏了。先剔除再渲染，沙箱仍然保留（作为纵深防御），但不再有噪音。
+ * 一本排版工具导出的 epub 常常有几十个 <script>，不剥离就是几十条红色报错，
+ * 看起来像软件坏了。脚本的拦截现在由 sandbox 的 allow-scripts 放开了，
+ * 所以剥离不再有「消音」这层收益，但它是阻止书籍脚本拿到父窗口（进而拿到
+ * Tauri IPC）的唯一防线，必须保留。
  */
 /**
  * iframe 的沙箱策略。
  *
- * 保留 allow-same-origin 是为了读 contentDocument 做书籍内跳转；
- * 不能加 allow-scripts —— 全书正文都不需要执行脚本。
+ * 需要 allow-same-origin：读 contentDocument 做书籍内跳转、滚动同步、主题注入。
+ * 需要 allow-scripts：少了它，净化没覆盖到的脚本会被浏览器逐条拦截并打印
+ * "Blocked script execution in 'blob:...'"，一本 epub 能刷出几十条。
+ *
+ * 代价要说清楚：按 HTML 规范，allow-scripts 与 allow-same-origin 同时出现等于取消
+ * 沙箱——章节里的脚本可以拿到父窗口，进而拿到 Tauri IPC。所以 ebookSanitize 的
+ * 剥离与自检是唯一的安全防线，不能因为这里放开了脚本就把它去掉。
  */
-const frameSandbox = 'allow-same-origin'
+const frameSandbox = 'allow-scripts allow-same-origin'
 
 /** 净化并自检（剥离逻辑与判据见 ebookSanitize.js）；退化时记一条日志便于排查。 */
 const sanitizeSection = (html) => {

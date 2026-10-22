@@ -12,7 +12,7 @@
   <div class="gdr-zoom" role="group" aria-label="缩放">
     <button
       class="guaxi-doc-reader__icon-btn"
-      :disabled="disabled || value <= min"
+      :disabled="disabled || modelValue <= min"
       title="缩小"
       aria-label="缩小"
       @click="step(1 / ratio)"
@@ -26,11 +26,11 @@
       aria-label="重置缩放为 100%"
       @click="reset"
     >
-      {{ Math.round(value * 100) }}%
+      {{ Math.round(modelValue * 100) }}%
     </button>
     <button
       class="guaxi-doc-reader__icon-btn"
-      :disabled="disabled || value >= max"
+      :disabled="disabled || modelValue >= max"
       title="放大"
       aria-label="放大"
       @click="step(ratio)"
