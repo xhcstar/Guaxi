@@ -17,39 +17,50 @@
       </div>
 
       <div class="mail-compose-fields">
-        <div class="mail-compose-line">
-          <span class="key">收件人</span>
-          <input
-            :value="joinList(draft.to)"
-            placeholder="a@example.com, 姓名 <b@example.com>"
-            spellcheck="false"
-            @input="setList('to', $event.target.value)"
-          />
-          <button class="mail-fmt-btn" title="抄送" @click="$emit('update', { showCc: !draft.showCc })">
-            Cc
-          </button>
-          <button class="mail-fmt-btn" title="密送" @click="$emit('update', { showBcc: !draft.showBcc })">
-            Bcc
-          </button>
-        </div>
-        <div v-if="draft.showCc" class="mail-compose-line">
-          <span class="key">抄送</span>
-          <input
-            :value="joinList(draft.cc)"
-            placeholder="抄送"
-            spellcheck="false"
-            @input="setList('cc', $event.target.value)"
-          />
-        </div>
-        <div v-if="draft.showBcc" class="mail-compose-line">
-          <span class="key">密送</span>
-          <input
-            :value="joinList(draft.bcc)"
-            placeholder="密送"
-            spellcheck="false"
-            @input="setList('bcc', $event.target.value)"
-          />
-        </div>
+        <AddressInput
+          :model-value="draft.to"
+          label="收件人"
+          placeholder="输入姓名或邮箱，回车确认"
+          :suggest="suggestAddress"
+          :expand-group="expandGroup"
+          @update:model-value="$emit('update', { to: $event })"
+        >
+          <template #actions>
+            <button class="mail-fmt-btn" title="抄送" @click="$emit('update', { showCc: !draft.showCc })">
+              Cc
+            </button>
+            <button class="mail-fmt-btn" title="密送" @click="$emit('update', { showBcc: !draft.showBcc })">
+              Bcc
+            </button>
+            <button
+              class="mail-fmt-btn"
+              title="从通讯录选择"
+              :class="{ 'is-on': pickerOpen }"
+              @click="pickerOpen = !pickerOpen"
+            >
+              通讯录
+            </button>
+          </template>
+        </AddressInput>
+
+        <AddressInput
+          v-if="draft.showCc"
+          :model-value="draft.cc"
+          label="抄送"
+          placeholder="抄送地址"
+          :suggest="suggestAddress"
+          :expand-group="expandGroup"
+          @update:model-value="$emit('update', { cc: $event })"
+        />
+        <AddressInput
+          v-if="draft.showBcc"
+          :model-value="draft.bcc"
+          label="密送"
+          placeholder="密送地址"
+          :suggest="suggestAddress"
+          :expand-group="expandGroup"
+          @update:model-value="$emit('update', { bcc: $event })"
+        />
         <div class="mail-compose-line">
           <span class="key">主题</span>
           <input
@@ -59,6 +70,14 @@
           />
         </div>
       </div>
+
+      <AddressPicker
+        v-if="pickerOpen"
+        :exclude="[...draft.to, ...draft.cc, ...draft.bcc]"
+        @pick="onPickAddress"
+        @pick-group="onPickGroup"
+        @close="pickerOpen = false"
+      />
 
       <div class="mail-compose-toolbar">
         <template v-if="!sourceMode">
@@ -161,6 +180,9 @@
 <script setup>
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { open } from '@tauri-apps/plugin-dialog'
+import { useContactsStore } from '../../../../stores/contactsStore'
+import AddressInput from './AddressInput.vue'
+import AddressPicker from './AddressPicker.vue'
 import { createLogger } from '../../../../utils/logger'
 
 const logger = createLogger('MailComposer')
@@ -175,6 +197,8 @@ const props = defineProps({
 const emit = defineEmits(['update', 'send', 'save-draft', 'close'])
 
 const editorRef = ref(null)
+const pickerOpen = ref(false)
+const contacts = useContactsStore()
 const sourceMode = ref(false)
 const htmlSource = ref(props.draft.html || '')
 const sending = ref(false)
@@ -303,6 +327,42 @@ function sanitizePastedHtml(html) {
   }
   walk(doc.body)
   return doc.body.innerHTML
+}
+
+/** 地址栏补全：联系人与历史往来地址统一走 contacts store。 */
+async function suggestAddress(prefix) {
+  return contacts.suggest(prefix)
+}
+
+/** 点选通讯组：展开成成员地址追加到当前字段。 */
+async function expandGroup(id) {
+  return contacts.expandGroup(id)
+}
+
+function onPickAddress(address) {
+  const value = String(address || '').trim()
+  if (!value) return
+  if (!draft.to.some((item) => sameAddress(item, value))) {
+    emit('update', { to: [...draft.to, value] })
+  }
+}
+
+async function onPickGroup(groupId) {
+  const addresses = await contacts.expandGroup(groupId)
+  const next = [...draft.to]
+  for (const address of addresses || []) {
+    if (!next.some((item) => sameAddress(item, address))) next.push(address)
+  }
+  emit('update', { to: next })
+  pickerOpen.value = false
+}
+
+function sameAddress(a, b) {
+  const norm = (value) => {
+    const match = String(value || '').match(/<([^>]+)>/)
+    return (match ? match[1] : value).trim().toLowerCase()
+  }
+  return norm(a) === norm(b)
 }
 
 async function pickAttachments() {

@@ -20,6 +20,7 @@
         文件夹
       </button>
       <span class="mail-toolbar-sep"></span>
+      <button class="mail-btn" @click="$emit('contacts')">通讯录</button>
       <button class="mail-btn" @click="$emit('rules')">收信规则</button>
       <button class="mail-btn" @click="$emit('accounts')">账户</button>
       <button class="mail-btn" @click="$emit('settings')">外观</button>
@@ -35,7 +36,7 @@ const props = defineProps({
   lastSyncAt: { type: Number, default: 0 },
   unread: { type: Number, default: 0 },
 })
-defineEmits(['sync', 'refresh', 'compose', 'accounts', 'rules', 'settings'])
+defineEmits(['sync', 'refresh', 'compose', 'accounts', 'rules', 'settings', 'contacts'])
 
 // 相对时间需要每分钟重算一次；用一个本地 tick 驱动，不依赖 store 变化。
 const tick = ref(Date.now())

@@ -14,6 +14,7 @@
 //! 口令只进系统 keychain（service = `guaxi-mail`，account = 账户 id），
 //! 库里连密文都不存——这样备份 / 同步数据库不会把口令带出去。
 
+pub mod contacts;
 pub mod imap;
 pub mod mime;
 pub mod model;
@@ -46,6 +47,7 @@ fn ensure_init(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
     store::init(app)?;
+    contacts::store::init()?;
     let _ = INITED.set(());
     Ok(())
 }
@@ -290,6 +292,7 @@ pub async fn mail_sync_folder(
     .map_err(|e| format!("同步任务失败: {e}"))??;
 
     store::touch_account_sync(&account_id, chrono::Utc::now().timestamp())?;
+    collect_contacts(&account, &items);
 
     if settings.rules_enabled && !items.is_empty() {
         let rules = store::list_rules()?;
@@ -310,6 +313,36 @@ pub async fn mail_sync_folder(
         let _ = app.emit(MAIL_NEW_EVENT, &items);
     }
     Ok(items)
+}
+
+
+/// 同步完一批邮件后，把发件人 / 收件人自动收录进通讯录。
+///
+/// 放在同步返回之后、规则执行之前：规则可能把邮件移走或删掉，之后再收录就找不到它们了。
+/// 收录失败不影响同步结果（通讯录是附属功能，不该让收信失败）。
+fn collect_contacts(account: &Account, items: &[MessageSummary]) {
+    if items.is_empty() {
+        return;
+    }
+    let own = vec![account.email.clone(), account.login_name()];
+    for message in items {
+        if message.outgoing {
+            continue;
+        }
+        let to: Vec<contacts::model::LabeledValue> = serde_json::from_str(&message.to_json).unwrap_or_default();
+        let cc: Vec<contacts::model::LabeledValue> = serde_json::from_str(&message.cc_json).unwrap_or_default();
+        if let Err(e) = contacts::store::touch_from_message(
+            &own,
+            &message.from_name,
+            &message.from_addr,
+            &to,
+            &cc,
+            message.date,
+        ) {
+            warn!(error = %e, uid = message.uid, "mail: 自动收录联系人失败");
+            return;
+        }
+    }
 }
 
 /// 对新到邮件跑规则。只有「标读 / 星标 / 打标签」是本地即时生效的；
@@ -519,6 +552,7 @@ async fn sync_one(account: &Account, folder: &str) -> Result<usize, String> {
     .await
     .map_err(|e| format!("同步任务失败: {e}"))??;
     store::touch_account_sync(&account.id, chrono::Utc::now().timestamp())?;
+    collect_contacts(account, &items);
 
     if settings.rules_enabled && !items.is_empty() {
         let rules = store::list_rules()?;

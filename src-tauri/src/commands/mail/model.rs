@@ -299,17 +299,6 @@ pub struct MailAddress {
     pub address: String,
 }
 
-impl MailAddress {
-    /// `Name <addr>` / `addr`，用于回复时填收件人框。
-    pub fn display(&self) -> String {
-        if self.name.trim().is_empty() {
-            self.address.clone()
-        } else {
-            format!("{} <{}>", self.name, self.address)
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AttachmentMeta {

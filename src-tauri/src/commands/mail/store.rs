@@ -34,7 +34,13 @@ pub fn db_path(app: &AppHandle) -> Result<PathBuf, String> {
     data_root(app).map(|d| d.join("mail.db"))
 }
 
+/// 供同模块族（通讯录）复用：通讯录与邮箱共用一个库，需要同一个连接入口。
+pub(crate) fn connection() -> Result<Connection, String> {
+    open()
+}
+
 fn open() -> Result<Connection, String> {
+
     let path = DB_PATH.get().ok_or("邮箱库未初始化")?;
     let conn = Connection::open(path).map_err(|e| format!("打开邮箱库失败: {e}"))?;
     conn.pragma_update(None, "journal_mode", "WAL").ok();

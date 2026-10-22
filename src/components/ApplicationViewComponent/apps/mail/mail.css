@@ -1155,10 +1155,15 @@
   max-height: 90vh;
 }
 .mail-compose-fields {
+  position: relative;
+  /* 高于工具栏与正文：地址补全浮层要压在它们之上，否则会被裁掉一半。 */
+  z-index: 40;
   padding: 0 18px;
   border-bottom: 1px solid var(--mail-border);
 }
 .mail-compose-line {
+  /* 地址补全浮层以本行为锚点做绝对定位。 */
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1280,4 +1285,9 @@
   height: 16px;
   background: var(--mail-border);
   margin: 0 2px;
+}
+
+/* 通讯录是三栏工作台：给足高度，否则联系人列表只能露出五六行。 */
+.mail-modal.contacts-modal {
+  height: min(760px, 90vh);
 }

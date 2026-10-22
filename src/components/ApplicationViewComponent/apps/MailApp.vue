@@ -32,6 +32,7 @@
         @refresh="onRefreshFolders"
         @compose="onCompose"
         @accounts="openAccounts"
+        @contacts="showContacts = true"
         @rules="showRules = true"
         @settings="openSettings"
       />
@@ -125,6 +126,14 @@
       @select="onAccountSelected"
     />
 
+    <!-- 通讯录 -->
+    <ContactsDialog
+      v-if="showContacts"
+      @close="showContacts = false"
+      @compose-to="onComposeTo"
+      @open-message="onOpenContactMessage"
+    />
+
     <!-- 规则管理 -->
     <MailRulesDialog
       v-if="showRules"
@@ -196,12 +205,14 @@ import MailReader from './mail/MailReader.vue'
 import MailComposer from './mail/MailComposer.vue'
 import MailAccountDialog from './mail/MailAccountDialog.vue'
 import MailRulesDialog from './mail/MailRulesDialog.vue'
+import ContactsDialog from './mail/ContactsDialog.vue'
 import MailSettingsDrawer from './mail/MailSettingsDrawer.vue'
 
 const store = useMailStore()
 
 const showAccounts = ref(false)
 const showRules = ref(false)
+const showContacts = ref(false)
 const showSettings = ref(false)
 const toast = ref(null)
 const contextMenu = ref(null)

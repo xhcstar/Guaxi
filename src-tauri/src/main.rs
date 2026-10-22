@@ -697,6 +697,21 @@ async fn main() {
 
             // 邮箱客户端（应用页「邮件」卡片）
             commands::mail::mail_list_accounts,
+            // 通讯录（联系人 / 通讯组 / vCard 导入导出）
+            commands::mail::contacts::mail_list_contacts,
+            commands::mail::contacts::mail_get_contact,
+            commands::mail::contacts::mail_save_contact,
+            commands::mail::contacts::mail_delete_contact,
+            commands::mail::contacts::mail_contact_stats,
+            commands::mail::contacts::mail_contact_suggest,
+            commands::mail::contacts::mail_contact_messages,
+            commands::mail::contacts::mail_list_contact_groups,
+            commands::mail::contacts::mail_save_contact_group,
+            commands::mail::contacts::mail_delete_contact_group,
+            commands::mail::contacts::mail_expand_contact_group,
+            commands::mail::contacts::mail_import_contacts,
+            commands::mail::contacts::mail_export_contacts,
+            commands::mail::contacts::mail_contacts_rebuild_from_mail,
             commands::mail::mail_save_account,
             commands::mail::mail_delete_account,
             commands::mail::mail_has_secret,
