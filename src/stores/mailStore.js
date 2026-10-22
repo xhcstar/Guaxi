@@ -36,6 +36,8 @@ const emptySettings = () => ({
   undoSendSeconds: 10,
   proxy: { mode: 'system', url: null, bypass: [] },
   groupThreads: true,
+  sidebarCollapsed: false,
+  listCollapsed: false,
   rulesEnabled: true,
   retentionDays: 0,
   composeHtml: true,

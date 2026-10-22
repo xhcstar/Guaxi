@@ -17,7 +17,7 @@
             <li><button type="button" class="toc-link" @click="scrollToSection('reader')">资料库与阅读器</button></li>
             <li><button type="button" class="toc-link" @click="scrollToSection('open-and-import')">打开文件与导入</button></li>
             <li><button type="button" class="toc-link" @click="scrollToSection('embedded-charts')">笔记内嵌图表与动画</button></li>
-            <li><button type="button" class="toc-link" @click="scrollToSection('chat')">聊天与模型</button></li>
+            <li><button type="button" class="toc-link" @click="scrollToSection('chat')">智能助手（Agent 工作台）</button></li>
             <li><button type="button" class="toc-link" @click="scrollToSection('brain')">知识图谱</button></li>
             <li><button type="button" class="toc-link" @click="scrollToSection('cognition')">大脑（认知层）</button></li>
             <li><button type="button" class="toc-link" @click="scrollToSection('search')">知识源与收集</button></li>
@@ -66,8 +66,8 @@
               <div class="feature-desc">管理导入资料，打开 PDF、Word、Markdown、文本、EPUB、HTML 等阅读器，支持页内搜索、摘录、翻译、笔记和助手。</div>
             </button>
             <button type="button" class="feature-card" @click="scrollToSection('chat')">
-              <div class="feature-title">聊天与模型</div>
-              <div class="feature-desc">多会话、会话搜索、重命名/保存/导出、消息多选发送到编辑器、附件、翻译模式、本地模型与云端模型切换。</div>
+              <div class="feature-title">智能助手（Agent 工作台）</div>
+              <div class="feature-desc">给任务而不是给问题：它能读文件、跑命令、查资料、看屏幕并操作电脑；逐动作审批、运行账本、计划与 diff 都在同一页。</div>
             </button>
             <button type="button" class="feature-card" @click="scrollToSection('brain')">
               <div class="feature-title">知识图谱</div>
@@ -524,23 +524,90 @@ data: |
         <n-divider />
 
         <section id="chat">
-          <h2 class="h2">聊天与模型</h2>
+          <h2 class="h2">智能助手（Agent 工作台）</h2>
           <p class="p">
-            聊天页由会话列表、中央消息区和右侧上下文区域组成。它适合做资料问答、写作辅助、翻译、总结和把结果回流到编辑器。
+            智能助手页不是聊天框，而是一个<b>工作台</b>：你给它一个任务，它自己读文件、跑命令、查资料，
+            把每一步摆在你面前；需要你拍板的时候才来打断你。它由会话栏、转录区、右侧仪表三部分组成。
+          </p>
+
+          <h3 class="h3">三栏各自负责什么</h3>
+          <ul class="manual-ul">
+            <li><b>左：任务栏。</b>一条任务就是一个独立的工作目录加上一套沙箱策略。点 ＋ 新建，点条目切换，右键删除。条目下方的小圆点表示状态：琥珀色在跑，红色上次失败。</li>
+            <li><b>中：转录与账本。</b>上面是你和它的对话；一轮结束后下方出现「本次运行」账本，逐行列出这条任务里跑过的命令、改过的文件。点任意一行展开命令原文、退出码和输出。</li>
+            <li><b>右：仪表。</b>雷荷波圆环是这台机器正在运转的状态：外圈波动随输出速率起伏，环上的短刻度每调用一次工具点亮一段，圈外的亮点代表「有几件事在等你」。下面依次是计划、改动、用量、模式与沙箱。</li>
+          </ul>
+
+          <h3 class="h3">四种任务模式</h3>
+          <p class="p">
+            输入框上沿的模式切换的是<b>它能做什么</b>，不是提示词措辞。模式在建任务时决定，之后跟着任务走。
+          </p>
+          <div class="feature-grid">
+            <div class="feature-card">
+              <div class="feature-title">探索</div>
+              <div class="feature-desc">只读。能检索、读文件、画关系，不能改任何东西。适合「这个库里有几处提到 X」这类问题。</div>
+            </div>
+            <div class="feature-card">
+              <div class="feature-title">编码</div>
+              <div class="feature-desc">可改工作区内的文件、跑测试、看 diff。适合让它动手改代码或批量整理笔记。</div>
+            </div>
+            <div class="feature-card">
+              <div class="feature-title">研究</div>
+              <div class="feature-desc">只读但允许联网。先查你自己的知识库，再上网补充，并要求它分开写清两类出处。</div>
+            </div>
+            <div class="feature-card">
+              <div class="feature-title">操作电脑</div>
+              <div class="feature-desc">截屏、点按窗口、打字。需要先在设置里开启「操控本机」授权，且模型要支持图像输入。</div>
+            </div>
+          </div>
+
+          <h3 class="h3">审批：它动手之前会问你</h3>
+          <p class="p">
+            只要动作有副作用（执行命令、改文件、申请额外权限），界面会弹出一张确认卡，把
+            <b>要做什么</b>写在最上面：完整命令、工作目录、涉及哪些文件、每个文件增删多少行。
+            看清楚再决定：
           </p>
           <ul class="manual-ul">
-            <li>会话列表支持搜索、新建、切换、重命名、保存对话、导出会话和删除会话。</li>
-            <li>中央消息区支持复制、分享、重新生成、多选消息、全选可见消息，并可把选中消息发送到编辑器。</li>
-            <li>输入区支持附件、翻译模式和模型选择；本地 DeepSeek / Qwen 会在切换时尝试启动对应本地服务。</li>
-            <li>模型来源来自设置页：ChatGPT、DeepSeek、Qwen、Kimi、豆包、硅基流动、自定义模型和本地模型。</li>
+            <li><b>拒绝</b>永远在左边，点错也不会造成后果；拒绝后它会换一种做法，而不是硬来。</li>
+            <li>命令类审批多一个<b>本会话允许</b>：同类命令在这一轮里不再逐条问。</li>
+            <li>没有「全部允许」。同时有多条待批时逐个处理，仪表右上角显示还有几条。</li>
+            <li>超过 5 分钟没有回应会按拒绝处理，不会让任务一直挂在那里。</li>
+          </ul>
+
+          <h3 class="h3">运行中还能改指令</h3>
+          <p class="p">
+            它跑着的时候，输入框没有锁死。直接输入新要求按 Enter，这条指令会<b>插进当前这一轮</b>
+            （转录里标为「转向」），不用停下来重说一遍。想彻底中止就按 <b>Esc</b> 或点「停止」。
+          </p>
+
+          <h3 class="h3">常用操作</h3>
+          <ul class="manual-ul">
+            <li><b>换工作目录</b>：点输入区上沿的「工作区」。换目录等于换任务，当前转录会清空，因为上一次的执行是在旧目录里发生的。</li>
+            <li><b>看改动</b>：仪表「改动」区列了本次改过的文件，点「查看完整 diff」在独立的差异窗口里逐行对照。</li>
+            <li><b>换模型</b>：点「模型」。清单由引擎直接读出，标注了哪些模型能看图像，这是「操作电脑」模式的前提。</li>
+            <li><b>快捷键</b>：Enter 发送（运行中为转向），Shift+Enter 换行，Esc 停止。</li>
           </ul>
 
           <div class="figure">
             <div class="figure-box">
-              <img class="figure-img" :src="manualImage('page-chat')" alt="聊天页面" />
+              <img
+                v-if="!isFigurePending('page-chat') && manualImage('page-chat')"
+                class="figure-img"
+                :src="manualImage('page-chat')"
+                alt="Agent 工作台"
+                @error="markFigurePending('page-chat')"
+              />
+              <div v-else class="figure-pending">{{ figurePath('page-chat') }}</div>
             </div>
-            <div class="figure-caption">图 5：聊天页面</div>
+            <div class="figure-caption">图 5：Agent 工作台（截图待补：把新的工作台截图放进 src/assets/manual/page-chat.png 与 page-chat-dark.png）</div>
           </div>
+
+          <h3 class="h3">旧版对话页</h3>
+          <p class="p">
+            原来的多模型聊天页还在，地址是 <code>/chat-legacy</code>。它保留给这些场景：网页版模型（ChatGPT / 元宝）、
+            翻译模式、以及不需要动手的纯闲聊。工作台覆盖了「让 AI 干活」，但闲聊和网页模型还没搬过去，
+            所以两者并存一段时间。旧页的会话列表支持搜索、新建、重命名、保存、导出和删除；
+            消息区支持复制、分享、重新生成、多选后发送到编辑器。
+          </p>
         </section>
 
         <n-divider />

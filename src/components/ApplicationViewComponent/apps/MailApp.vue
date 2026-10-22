@@ -28,6 +28,11 @@
         :syncing="store.syncing"
         :last-sync-at="store.lastSyncAt"
         :unread="store.totalUnread"
+        :sidebar-collapsed="Boolean(settings.sidebarCollapsed)"
+        :list-collapsed="Boolean(settings.listCollapsed)"
+        :can-collapse-list="Boolean(store.detail || store.detailLoading || settings.listCollapsed)"
+        @toggle-sidebar="toggleSidebar"
+        @toggle-list="toggleList"
         @sync="onSync"
         @refresh="onRefreshFolders"
         @compose="onCompose"
@@ -37,8 +42,15 @@
         @settings="openSettings"
       />
 
-      <div class="mail-shell">
+      <div
+        class="mail-shell"
+        :class="{
+          'is-sidebar-collapsed': Boolean(settings.sidebarCollapsed),
+          'is-list-collapsed': Boolean(settings.listCollapsed),
+        }"
+      >
         <MailSidebar
+          v-show="!settings.sidebarCollapsed"
           :accounts="store.accounts"
           :folders-by-account="store.foldersByAccount"
           :active-account-id="store.activeAccountId"
@@ -54,7 +66,17 @@
           @add-account="openAccounts"
         />
 
+        <button
+          v-if="settings.listCollapsed"
+          class="mail-rail-toggle"
+          title="展开邮件列表"
+          @click="toggleList"
+        >
+          列表 ▸
+        </button>
+
         <MailListPane
+          v-show="!settings.listCollapsed"
           :messages="store.messages"
           :selected="store.selected"
           :title="listTitle"
@@ -87,9 +109,10 @@
           @toggle-flag="onToggleFlagCurrent"
           @toggle-unread="onToggleUnreadCurrent"
           @save-attachment="onSaveAttachment"
+          :close-label="settings.listCollapsed ? '收起邮件' : '返回列表'"
           @close="closeReader"
         />
-        <div v-else class="mail-pane mail-reader">
+        <div v-else-if="!settings.listCollapsed" class="mail-pane mail-reader">
           <div class="mail-reader-placeholder">
             选中左侧的一封邮件开始阅读。<br />
             未读邮件带一条细色条，点开即标记为已读。
@@ -236,6 +259,21 @@ const rootStyle = computed(() => {
   }
 })
 
+/** 收起左侧账户栏：只影响布局，不改变当前选中项。 */
+function toggleSidebar() {
+  store.saveSettings({ sidebarCollapsed: !settings.value.sidebarCollapsed }).catch(() => {})
+}
+
+/** 收起邮件列表：只有已经打开一封邮件时才允许，否则会得到一片空白。 */
+function toggleList() {
+  const next = !settings.value.listCollapsed
+  if (next && !store.detail) {
+    notify('先打开一封邮件，再收起列表', true)
+    return
+  }
+  store.saveSettings({ listCollapsed: next }).catch(() => {})
+}
+
 const listTitle = computed(() => {
   if (store.activeLabel) return `分类：${store.activeLabel}`
   if (store.searchQuery.trim()) return '搜索结果'
@@ -289,6 +327,9 @@ async function onRefreshFolders() {
 
 async function onOpenMessage(row) {
   closeContextMenu()
+  if (settings.value.listCollapsed) {
+    store.saveSettings({ listCollapsed: false }).catch(() => {})
+  }
   // 聚合行：先展开整个会话的列表，再打开最新那封，用户点一下就能看到来龙去脉。
   if (row?.threadUids?.length > 1) {
     await store.loadThread(row)

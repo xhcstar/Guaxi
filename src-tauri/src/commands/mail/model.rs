@@ -490,6 +490,12 @@ pub struct MailSettings {
     /// 收件箱是否把同一 thread_key 合成一行。
     #[serde(default = "default_true")]
     pub group_threads: bool,
+    /// 左侧账户/文件夹栏是否收起（给列表腾宽度）。
+    #[serde(default)]
+    pub sidebar_collapsed: bool,
+    /// 中间邮件列表是否收起（只读长邮件时用）。
+    #[serde(default)]
+    pub list_collapsed: bool,
     #[serde(default = "default_true")]
     pub rules_enabled: bool,
     /// 本地保留天数；0 表示不清理。
@@ -553,6 +559,8 @@ impl Default for MailSettings {
             undo_send_seconds: default_undo_seconds(),
             proxy: ProxyConfig::default(),
             group_threads: true,
+            sidebar_collapsed: false,
+            list_collapsed: false,
             rules_enabled: true,
             retention_days: 0,
             compose_html: true,

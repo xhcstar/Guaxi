@@ -386,10 +386,10 @@ const PAGE_GAP = 12
 const pageGeometry = computed(() => {
   const scale = cssScale.value
   const rotated = isRotated90.value
-  const out = new Array(pages.value.length)
+  const out = new Array(pages.length)
   let y = PAGES_PADDING
-  for (let i = 0; i < pages.value.length; i += 1) {
-    const page = pages.value[i]
+  for (let i = 0; i < pages.length; i += 1) {
+    const page = pages[i]
     const w = Math.round(page.wPt * scale)
     const h = Math.round(page.hPt * scale)
     const boxH = rotated ? w : h
@@ -416,7 +416,7 @@ const windowedPages = computed(() => {
   if (!geo.length) return []
   const slice = geo.slice(Math.max(0, start), Math.min(geo.length, end))
   const byNum = new Map()
-  for (const page of pages.value) byNum.set(page.num, page)
+  for (const page of pages) byNum.set(page.num, page)
   return slice.map((item) => byNum.get(item.num)).filter(Boolean)
 })
 
@@ -808,7 +808,7 @@ const scheduleRenderVisible = () => {
 // 5000 页时那套写法每帧要触发 10000 次同步重排。
 const updateVisible = () => {
   const el = bodyRef.value
-  if (!el || !pages.value.length) return
+  if (!el || !pages.length) return
   // 先更新窗口区间：DOM 只保留附近页，下面的可见页计算与它用的是同一份几何。
   recomputeWindow()
   const top = el.scrollTop
@@ -853,7 +853,7 @@ const updateVisible = () => {
 // bufferFactor=0 时只渲染严格可见页——缩放时用它，避免一次重渲多页大位图导致卡顿。
 const renderVisible = ({ bufferFactor = 1 } = {}) => {
   const el = bodyRef.value
-  if (!el || !pages.value.length) return
+  if (!el || !pages.length) return
   const top = el.scrollTop
   const bottom = top + el.clientHeight
   const BUFFER = el.clientHeight * bufferFactor
@@ -861,7 +861,7 @@ const renderVisible = ({ bufferFactor = 1 } = {}) => {
   // 可见区间完全由几何算出（不读 DOM），再反查页码对应的 page 对象。
   const geo = pageGeometry.value
   const byNum = new Map()
-  for (const page of pages.value) byNum.set(page.num, page)
+  for (const page of pages) byNum.set(page.num, page)
 
   const active = []
   for (const item of geo) {
@@ -872,7 +872,7 @@ const renderVisible = ({ bufferFactor = 1 } = {}) => {
   }
 
   // 释放远离视口的已渲染页，避免 5000 页把内存吃穿。
-  for (const page of pages.value) {
+  for (const page of pages) {
     if (!page.image) continue
     if (Math.abs(page.num - currentPage.value) > 6) doc.freePage(page)
   }

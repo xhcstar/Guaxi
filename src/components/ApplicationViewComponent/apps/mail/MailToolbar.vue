@@ -9,6 +9,32 @@
     </div>
 
     <div class="mail-toolbar-actions">
+      <button
+        class="mail-icon-btn mail-layout-btn"
+        :class="{ 'is-on': !sidebarCollapsed }"
+        :title="sidebarCollapsed ? '展开账户与文件夹栏' : '收起账户与文件夹栏'"
+        :aria-label="sidebarCollapsed ? '展开账户与文件夹栏' : '收起账户与文件夹栏'"
+        :aria-pressed="!sidebarCollapsed"
+        @click="$emit('toggle-sidebar')"
+      >
+        <span class="mail-layout-glyph" aria-hidden="true">
+          <i class="col col-a"></i><i class="col col-b"></i>
+        </span>
+      </button>
+      <button
+        class="mail-icon-btn mail-layout-btn"
+        :class="{ 'is-on': !listCollapsed }"
+        :disabled="!canCollapseList"
+        :title="listCollapsed ? '展开邮件列表' : '收起邮件列表'"
+        :aria-label="listCollapsed ? '展开邮件列表' : '收起邮件列表'"
+        :aria-pressed="!listCollapsed"
+        @click="$emit('toggle-list')"
+      >
+        <span class="mail-layout-glyph" aria-hidden="true">
+          <i class="col col-b"></i><i class="col col-c"></i>
+        </span>
+      </button>
+      <span class="mail-toolbar-sep"></span>
       <button class="mail-btn is-primary" @click="$emit('compose')">✎ 写邮件</button>
       <span class="mail-toolbar-sep"></span>
       <button class="mail-btn" :disabled="syncing" @click="$emit('sync')">
@@ -35,8 +61,22 @@ const props = defineProps({
   syncing: { type: Boolean, default: false },
   lastSyncAt: { type: Number, default: 0 },
   unread: { type: Number, default: 0 },
+  sidebarCollapsed: { type: Boolean, default: false },
+  listCollapsed: { type: Boolean, default: false },
+  /** 没有打开邮件时不允许收起列表，否则会得到一片空白。 */
+  canCollapseList: { type: Boolean, default: false },
 })
-defineEmits(['sync', 'refresh', 'compose', 'accounts', 'rules', 'settings', 'contacts'])
+defineEmits([
+  'sync',
+  'refresh',
+  'compose',
+  'accounts',
+  'rules',
+  'settings',
+  'contacts',
+  'toggle-sidebar',
+  'toggle-list',
+])
 
 // 相对时间需要每分钟重算一次；用一个本地 tick 驱动，不依赖 store 变化。
 const tick = ref(Date.now())
@@ -103,6 +143,32 @@ const stale = computed(() => props.lastSyncAt && tick.value - props.lastSyncAt >
   align-items: center;
   gap: 6px;
   margin-left: auto;
+}
+
+/* 布局切换用「两列小方块」表达收起/展开的是哪一栏：
+   第一个按钮亮左侧两格（账户栏），第二个亮右侧两格（列表）。
+   纯字符图标 ▤/▥ 在小尺寸下几乎分辨不出，这里改成绘制。 */
+.mail-layout-btn {
+  width: 30px;
+}
+
+.mail-layout-glyph {
+  display: flex;
+  gap: 2px;
+  align-items: stretch;
+  height: 13px;
+}
+
+.mail-layout-glyph .col {
+  width: 4px;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.28;
+  transition: opacity 0.12s ease;
+}
+
+.mail-layout-btn.is-on .mail-layout-glyph .col {
+  opacity: 1;
 }
 
 /* .mail-toolbar-sep 的样式放在 mail.css（全局）：阅读区工具栏也用同一个类，

@@ -6,7 +6,9 @@
 
     <template v-else-if="detail">
       <header class="mail-reader-head">
-        <button class="mail-btn" @click="$emit('close')" title="关闭阅读区">‹ 返回列表</button>
+        <button class="mail-btn" @click="$emit('close')" :title="closeLabel">
+          ‹ {{ closeLabel }}
+        </button>
         <div class="mail-reader-toolbar">
           <button class="mail-btn" @click="$emit('reply', detail)">回复</button>
           <button class="mail-btn" @click="$emit('reply-all', detail)">全部回复</button>
@@ -95,6 +97,8 @@ const props = defineProps({
   settings: { type: Object, default: () => ({}) },
   themeMode: { type: String, default: 'dark' },
   monoFont: { type: String, default: '' },
+  /** 列表收起时「返回列表」没有目标，换成「收起邮件」。 */
+  closeLabel: { type: String, default: '返回列表' },
 })
 defineEmits([
   'reply',
