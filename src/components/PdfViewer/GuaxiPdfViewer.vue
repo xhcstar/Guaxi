@@ -1372,11 +1372,19 @@ const getSelectionInfo = () => {
 const flashBox = ref(null)
 let flashTimer = null
 
+/**
+ * 滚动到某页内的竖直位置（pt）。
+ *
+ * 与 goToPage 同理：不能用 `node.offsetTop` —— 目标页在虚拟滚动下可能还没挂载
+ * （源码正向定位常跳到很远的页）。用 pageGeometry 算页面顶边，再加页内偏移。
+ */
 const scrollToPagePoint = (pageNum, yPt) => {
   const el = bodyRef.value
-  const node = pageEls.get(pageNum)
-  if (!el || !node) return
-  const target = node.offsetTop + yPt * cssScale.value - el.clientHeight * 0.35
+  if (!el) return
+  const item = pageGeometry.value[pageNum - 1]
+  if (!item) return
+  const target = item.top + yPt * cssScale.value - el.clientHeight * 0.35
+  recomputeWindow()
   el.scrollTo({ top: Math.max(0, target), behavior: 'smooth' })
   scheduleRenderVisible()
 }
@@ -1409,39 +1417,56 @@ const flashAnchor = ({ page, rects } = {}) => {
   return true
 }
 
-const goToPage = (n, { align = 'top', retry = 6 } = {}) => {
+/**
+ * 跳转到指定页。
+ *
+ * 滚动位置**完全由 pageGeometry 算出**，不再依赖目标页的 DOM 节点。
+ *
+ * 这是虚拟滚动带来的一处关键改写：以前每页都有 DOM，`node.offsetTop` 随时可读；
+ * 现在只有视口附近十几页被挂载，跳到一个远处的页（比如 597 页里的第 500 页）
+ * 时该节点根本不存在，旧写法会一路重试到失败。
+ *
+ * 正确做法是先算出目标页的理论位置直接滚过去，滚动事件里会自动重算窗口、
+ * 把目标页挂载出来 —— 两者的数据源是同一份几何，位置天然一致。
+ */
+const goToPage = (n, { align = 'top' } = {}) => {
   const num = Math.min(Math.max(1, Math.round(Number(n) || 1)), totalPages.value || 1)
   const el = bodyRef.value
-  const node = pageEls.get(num)
-  if (!el || !node) {
-    // 设计说明：PDF 打开和布局切换时，页数组可能已经建立，但 v-for 的页面 DOM 仍在下一帧才挂载。
-    // 此时立即判定失败会让左侧阅读器停在空白态；短暂重试可保持跳页语义，同时不改变后续滚动/渲染逻辑。
-    if (retry > 0) {
-      logger.debug('PDF页码跳转等待页面节点', {
-        targetPage: num,
-        retry,
-        hasBody: Boolean(el),
-        hasPageNode: Boolean(node),
-        totalPages: totalPages.value,
-      })
-      nextTick(() => {
-        requestAnimationFrame(() => {
-          scheduleLayoutRender('go-to-page-retry')
-          goToPage(num, { align, retry: retry - 1 })
-        })
-      })
-      return
-    }
-    logger.warn('PDF页码跳转失败：页面节点未就绪', { targetPage: num, totalPages: totalPages.value })
+  if (!el) {
+    logger.warn('PDF页码跳转失败：滚动容器未就绪', { targetPage: num })
     return
   }
+
+  const geo = pageGeometry.value
+  const item = geo[num - 1]
+  if (!item) {
+    logger.warn('PDF页码跳转失败：页码超出几何范围', {
+      targetPage: num,
+      totalPages: totalPages.value,
+      geometry: geo.length,
+    })
+    return
+  }
+
   const offset = align === 'center' ? el.clientHeight * 0.3 : 8
-  el.scrollTo({ top: Math.max(0, node.offsetTop - offset), behavior: 'smooth' })
+  // 首页顶边就是容器的 padding（12px），减去 offset 会得到 4px 这种「没滚到底」的值，
+  // 视觉上留一截空白。直接贴顶更符合「跳到第一页」的预期。
+  const top = num === 1 ? 0 : Math.max(0, item.top - offset)
+
+  // 滚过去之后窗口会重算并挂载目标页；这里先把「当前页」定下来，
+  // 避免滚动动画期间页码指示器还停在旧值。
   currentPage.value = num
   syncPageInput()
   emit('page-change', num)
+
+  // 立即重算一次窗口：平滑滚动的第一帧之前就把目标页放进 DOM，
+  // 用户不会看到一屏空白再慢慢填内容。
+  recomputeWindow()
+  el.scrollTo({ top, behavior: 'smooth' })
+
+  // 滚动结束后再校准一次（滚动过程中布局可能因图片加载而变化）。
   scheduleRenderVisible()
-  logger.info('PDF页码跳转完成', { targetPage: num, totalPages: totalPages.value })
+  logger.info('PDF页码跳转完成', { targetPage: num, totalPages: totalPages.value, top })
 }
 
 const syncPageInput = () => {

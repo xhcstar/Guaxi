@@ -112,7 +112,7 @@ fn is_safe_image_src(value: &str) -> bool {
 }
 
 /// 属性白名单：未知属性一律丢弃；`on*` 永远丢弃。
-fn attr_allowed(_tag: &str, name: &str, value: &str) -> bool {
+fn attr_allowed(tag: &str, name: &str, value: &str) -> bool {
     if name.starts_with("on") {
         return false;
     }
@@ -130,6 +130,16 @@ fn attr_allowed(_tag: &str, name: &str, value: &str) -> bool {
             || lower.contains("behavior:")
             || lower.contains("-moz-binding"));
     }
+    // 表格的「装饰属性」（边框 / 单元格内边距 / 底色）在邮件里几乎总是排版工具留下的，
+    // Outlook 那种多层 table 嵌套逐层描边，读起来像一堆套娃框（真实踩到过）。
+    // 这些一律剥掉，由阅读区的样式表统一表格外观；真正表达布局意图的
+    // width / align / colspan / rowspan 仍然保留。
+    if matches!(tag, "table" | "td" | "th" | "tr" | "tbody" | "thead" | "tfoot")
+        && matches!(name, "border" | "cellpadding" | "cellspacing" | "bgcolor" | "background")
+    {
+        return false;
+    }
+
     matches!(
         name,
         "href"

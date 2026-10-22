@@ -496,6 +496,12 @@ pub struct MailSettings {
     /// 中间邮件列表是否收起（只读长邮件时用）。
     #[serde(default)]
     pub list_collapsed: bool,
+    /// 左侧账户栏宽度（px）。0 表示用默认值，由前端兜底。
+    #[serde(default)]
+    pub sidebar_width: u32,
+    /// 中间邮件列表宽度（px）。
+    #[serde(default)]
+    pub list_width: u32,
     #[serde(default = "default_true")]
     pub rules_enabled: bool,
     /// 本地保留天数；0 表示不清理。
@@ -561,6 +567,8 @@ impl Default for MailSettings {
             group_threads: true,
             sidebar_collapsed: false,
             list_collapsed: false,
+            sidebar_width: 232,
+            list_width: 340,
             rules_enabled: true,
             retention_days: 0,
             compose_html: true,

@@ -548,7 +548,7 @@ fn reassemble_mobi_text(bytes: &[u8]) -> Option<String> {
     let mut raw: Vec<u8> = Vec::with_capacity(text_length);
     for idx in 1..=text_records {
         let start = record_offset(idx)?;
-        let end = record_offset(idx + 1).unwrap_or(bytes.len()).min(bytes.len());
+        let end = record_offset(idx + 1).unwrap_or(usize::MAX);
         if start >= end {
             return None;
         }
@@ -567,9 +567,245 @@ fn reassemble_mobi_text(bytes: &[u8]) -> Option<String> {
         }
     }
     raw.truncate(text_length);
+    // flow 的 FDST 偏移是基于解压后正文流的绝对位置，替换前先留一份原始字节。
+    let text_stream = raw.clone();
 
     // 严格解码：失败就说明这套假设不成立（例如正文本身真是 CP1252），交给上层兜底。
-    String::from_utf8(raw).ok()
+    let mut html = String::from_utf8(raw).ok()?;
+
+    // KF8/AZW3 的正文用 `kindle:embed:` / `kindle:flow:` 伪协议引用资源，
+    // 浏览器不认识这个 scheme（ERR_UNKNOWN_URL_SCHEME），必须就地换成 data URI。
+    // 这一层 ebook-rs 没有做：它只认十进制 `recindex=`，而 KF8 用的是 base32。
+    if html.contains("kindle:") {
+        if let Some(rewritten) = rewrite_kindle_refs(
+            &html,
+            &text_stream,
+            &record_offset,
+            text_records,
+            record_count,
+        ) {
+            html = rewritten;
+        }
+    }
+
+    Some(html)
+}
+
+/// base32 序号解码（KF8 的 `kindle:embed:000J` 形态）。
+///
+/// 字母表是 `0-9A-V`，与 PalmDB 的 base32 一致。全数字的写法在 MOBI 7 里也有，
+/// 这里统一按 base32 解，纯数字串会得到与十进制相同的结果，不会歧义。
+fn decode_kindle_index(raw: &str) -> Option<usize> {
+    if raw.is_empty() || raw.len() > 8 {
+        return None;
+    }
+    let mut value: usize = 0;
+    for ch in raw.chars() {
+        let digit = match ch {
+            '0'..='9' => ch as usize - '0' as usize,
+            'A'..='V' => ch as usize - 'A' as usize + 10,
+            'a'..='v' => ch as usize - 'a' as usize + 10,
+            _ => return None,
+        };
+        value = value.checked_mul(32)?.checked_add(digit)?;
+    }
+    Some(value)
+}
+
+/// 把 KF8 的 `kindle:embed:` / `kindle:flow:` 引用替换成 data URI。
+///
+/// 为什么不能按 `first_non_book + N` 直接索引：KF8 的资源区前面还排着 INDX 索引表
+/// （目录、位置索引等），`kindle:embed:0001` 指向的是「第一个**媒体**资源」而不是
+/// 「资源区第一条记录」。按序号硬算会命中 INDX 的二进制块，得到一堆坏图。
+///
+/// 正确做法：先扫一遍资源区，按出现顺序收集真正的媒体记录（按魔数判定），
+/// 再用 `embed N → media[N-1]` 映射。实测每本 KF8 都是这个顺序，
+/// 未使用的图（封面、缩略图）会占号但不被引用，不影响映射。
+fn rewrite_kindle_refs(
+    html: &str,
+    text_stream: &[u8],
+    record_offset: &dyn Fn(usize) -> Option<usize>,
+    text_records: usize,
+    record_count: usize,
+) -> Option<String> {
+    // 资源区：正文记录之后。第一条是资源头，媒体从这里往后连续排列。
+    let resource_start = (1 + text_records).max(1);
+    if resource_start >= record_count {
+        return None;
+    }
+
+    let record_bytes = |idx: usize| -> Option<Vec<u8>> {
+        if idx >= record_count {
+            return None;
+        }
+        let start = record_offset(idx)?;
+        let end = record_offset(idx + 1).unwrap_or(bytes.len()).min(bytes.len());
+        if start >= end {
+            return None;
+        }
+        Some(bytes[start..end].to_vec())
+    };
+
+    // 按顺序收集媒体记录。只认图片/字体，INDX/FLIS/FCIS/FDST 这些结构性记录跳过。
+    let mut media: Vec<(String, Vec<u8>)> = Vec::new();
+    for idx in resource_start..record_count {
+        let Some(data) = record_bytes(idx) else { continue };
+        if data.len() < 4 {
+            continue;
+        }
+        if let Some(mime) = sniff_media_mime(&data) {
+            media.push((mime.to_string(), data));
+        }
+    }
+
+    // flow 区（碎片化 CSS）由 FDST 记录描述：偏移是**解压后正文流**里的绝对位置。
+    // 因此这里需要把拼好的正文再切一遍，而不是去翻记录。
+    let flows: Vec<String> = extract_flows(text_stream, &record_bytes, record_count);
+
+    // 一次扫描完成替换：从 `kindle:` 起始，解析到引号/空白/`>`/`)` 为止。
+    let mut out = String::with_capacity(html.len() * 2);
+    let mut i = 0usize;
+    const PREFIX: &str = "kindle:";
+
+    while i < html.len() {
+        if !html[i..].starts_with(PREFIX) {
+            let ch = html[i..].chars().next().unwrap_or(' ');
+            out.push(ch);
+            i += ch.len_utf8();
+            continue;
+        }
+
+        let rest = &html[i + PREFIX.len()..];
+        let end_rel = rest
+            .find(|c: char| c == '"' || c == '\'' || c.is_whitespace() || c == '>' || c == ')')
+            .unwrap_or(rest.len());
+        let whole = &html[i..i + PREFIX.len() + end_rel];
+        let body = &whole[PREFIX.len()..];
+
+        let (kind, tail) = match body.split_once(':') {
+            Some(v) => v,
+            None => {
+                out.push_str(&whole);
+                i += whole.len();
+                continue;
+            }
+        };
+        let index_part = tail.split(['?', ':']).next().unwrap_or("");
+        let mime_hint = tail
+            .split_once("mime=")
+            .map(|(_, m)| m.split(['&', '?']).next().unwrap_or("").to_string())
+            .unwrap_or_default();
+
+        let replacement = match kind {
+            "embed" => decode_kindle_index(index_part)
+                .and_then(|n| media.get(n.wrapping_sub(1)))
+                .map(|(mime, data)| {
+                    let chosen = if mime_hint.is_empty() { mime.as_str() } else { mime_hint.as_str() };
+                    data_uri(chosen, data)
+                }),
+            "flow" => {
+                // FDST 描述的 flow 按序号排列；取不到序号时把全部 CSS 合并给出，
+                // 多带样式不会影响正确性。
+                let css = match decode_kindle_index(index_part).and_then(|n| flows.get(n.wrapping_sub(1))) {
+                    Some(one) => one.clone(),
+                    None => flows.join("\n"),
+                };
+                if css.trim().is_empty() {
+                    None
+                } else {
+                    let m = if mime_hint.is_empty() { "text/css" } else { mime_hint.as_str() };
+                    Some(data_uri(m, css.as_bytes()))
+                }
+            }
+            // `kindle:pos:` 是书内跳转锚点，不是资源；保留原样由前端当普通 href 处理。
+            _ => None,
+        };
+
+        match replacement {
+            Some(uri) => {
+                out.push_str(&uri);
+                i += whole.len();
+            }
+            None => {
+                // 替换失败时原样保留，让问题显式暴露而不是静默丢内容。
+                out.push_str(&whole);
+                i += whole.len();
+            }
+        }
+    }
+
+    Some(out)
+}
+
+/// 探测媒体资源的 MIME；结构性记录（INDX/FDST/…）返回 None。
+fn sniff_media_mime(data: &[u8]) -> Option<&'static str> {
+    if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return Some("image/jpeg");
+    }
+    if data.starts_with(&[0x89, b'P', b'N', b'G']) {
+        return Some("image/png");
+    }
+    if data.starts_with(b"GIF8") {
+        return Some("image/gif");
+    }
+    if data.len() > 12 && data.starts_with(b"RIFF") && &data[8..12] == b"WEBP" {
+        return Some("image/webp");
+    }
+    if data.starts_with(b"OTTO") {
+        return Some("font/otf");
+    }
+    if data.starts_with(&[0x00, 0x01, 0x00, 0x00]) && data.len() > 4 {
+        return Some("font/ttf");
+    }
+    // 结构性记录：这些绝不能当图片返回。
+    for tag in [b"INDX".as_slice(), b"FDST", b"FLIS", b"FCIS", b"RESC", b"CONT"] {
+        if data.starts_with(tag) {
+            return None;
+        }
+    }
+    None
+}
+
+/// 从 FDST 记录里切出各个 flow（通常是 CSS）。
+///
+/// FDST 记录结构：`FDST`(4) + hdr_len(4) + count(4) + count 个 (start,end) 大端 u32 偏移对。
+/// 偏移是**解压后正文流**里的绝对位置 —— 不是记录号也不是文件偏移，
+/// 所以必须拿拼好的 `text_stream` 来切。
+fn extract_flows(
+    text_stream: &[u8],
+    record_bytes: &dyn Fn(usize) -> Option<Vec<u8>>,
+    record_count: usize,
+) -> Vec<String> {
+    for idx in 1..record_count {
+        let Some(rec) = record_bytes(idx) else { continue };
+        if !rec.starts_with(b"FDST") || rec.len() < 12 {
+            continue;
+        }
+        let count = u32::from_be_bytes([rec[8], rec[9], rec[10], rec[11]]) as usize;
+        if count == 0 || count > 1024 || rec.len() < 12 + count * 8 {
+            continue;
+        }
+        let mut out = Vec::with_capacity(count);
+        for k in 0..count {
+            let at = 12 + k * 8;
+            let start = u32::from_be_bytes([rec[at], rec[at + 1], rec[at + 2], rec[at + 3]]) as usize;
+            let end = u32::from_be_bytes([rec[at + 4], rec[at + 5], rec[at + 6], rec[at + 7]]) as usize;
+            if start >= end || end > text_stream.len() {
+                out.push(String::new());
+                continue;
+            }
+            out.push(String::from_utf8_lossy(&text_stream[start..end]).to_string());
+        }
+        return out;
+    }
+    Vec::new()
+}
+
+/// base64 data URI。
+fn data_uri(mime: &str, data: &[u8]) -> String {
+    use base64::Engine as _;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(data);
+    format!("data:{};base64,{}", mime, b64)
 }
 
 /// 把整本 MOBI HTML 切成章节。
@@ -991,6 +1227,48 @@ mod cp1252_reverse_tests {
         assert_eq!(cp1252_reverse('あ' as u32), None);
         assert_eq!(cp1252_reverse('한' as u32), None);
         assert_eq!(cp1252_reverse('😀' as u32), None);
+    }
+}
+
+#[cfg(test)]
+mod kindle_ref_tests {
+    use super::{decode_kindle_index, sniff_media_mime};
+
+    #[test]
+    fn decodes_base32_indices() {
+        // KF8 的 embed 编号是 base32：000J = 19，而不是「J」或十进制。
+        assert_eq!(decode_kindle_index("0001"), Some(1));
+        assert_eq!(decode_kindle_index("0009"), Some(9));
+        assert_eq!(decode_kindle_index("000A"), Some(10));
+        assert_eq!(decode_kindle_index("000J"), Some(19));
+        assert_eq!(decode_kindle_index("000V"), Some(31));
+        assert_eq!(decode_kindle_index("0010"), Some(32), "跨位后必须进位正确");
+    }
+
+    #[test]
+    fn rejects_invalid_indices() {
+        assert_eq!(decode_kindle_index(""), None);
+        assert_eq!(decode_kindle_index("WXYZ"), None, "W 之后不是合法 base32 位");
+        assert_eq!(decode_kindle_index("0001extra"), None, "过长的串应当拒绝");
+        assert_eq!(decode_kindle_index("00-1"), None);
+    }
+
+    #[test]
+    fn never_treats_structural_records_as_media() {
+        // 这是之前的实际 bug：把 INDX 索引表当图片返回，页面全是坏图。
+        assert_eq!(sniff_media_mime(&[0x49, 0x4e, 0x44, 0x58, 0, 0, 0, 0xc0]), None, "INDX");
+        assert_eq!(sniff_media_mime(&[0x46, 0x44, 0x53, 0x54, 0, 0, 0, 0x0c]), None, "FDST");
+        assert_eq!(sniff_media_mime(&[0x46, 0x4c, 0x49, 0x53, 0, 0, 0, 0x08]), None, "FLIS");
+        assert_eq!(sniff_media_mime(&[0x46, 0x43, 0x49, 0x53, 0, 0, 0, 0x14]), None, "FCIS");
+        assert_eq!(sniff_media_mime(b"RESC"), None);
+    }
+
+    #[test]
+    fn recognises_real_media_magic() {
+        assert_eq!(sniff_media_mime(&[0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]), Some("image/jpeg"));
+        assert_eq!(sniff_media_mime(&[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Some("image/png"));
+        assert_eq!(sniff_media_mime(b"GIF89a"), Some("image/gif"));
+        assert_eq!(sniff_media_mime(b"nonsense"), None);
     }
 }
 

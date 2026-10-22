@@ -86,7 +86,14 @@
 .mail-shell {
   flex: 1 1 auto;
   display: grid;
-  grid-template-columns: 232px minmax(280px, 380px) minmax(0, 1fr);
+  /* 宽度由 MailApp 写在行内样式里（可拖拽），这里只给兜底值。 */
+  /* 侧栏 / 分隔条 / 列表 / 分隔条 / 阅读器 */
+  grid-template-columns:
+    var(--mail-sidebar-w, 232px)
+    1px
+    var(--mail-list-w, 340px)
+    1px
+    minmax(0, 1fr);
   min-height: 0;
   overflow: hidden;
 }
@@ -100,47 +107,38 @@
 }
 
 /* 折叠：账户栏收成 0，列表占据剩下的空间。 */
+/* 网格列必须与实际渲染的子节点一一对应。四种组合的子节点是：
+     默认        ：侧栏 / 分隔条 / 列表 / 分隔条 / 阅读器
+     只收侧栏    ：展开条 / 列表 / 分隔条 / 阅读器
+     只收列表    ：侧栏 / 分隔条 / 展开条 / 阅读器
+     两个都收    ：展开条 / 展开条 / 阅读器
+   分隔条视觉宽 1px（命中区靠 padding 撑开，不影响布局），展开条 18/24px。 */
 .mail-shell.is-sidebar-collapsed {
-  /* 侧栏已 v-show 隐藏，网格里只剩「列表 + 阅读器」。 */
-  grid-template-columns: minmax(280px, 380px) minmax(0, 1fr);
+  grid-template-columns: 18px var(--mail-list-w, 340px) 1px minmax(0, 1fr);
 }
 
 .mail-shell.is-list-collapsed {
-  /* 列表隐藏，剩下「侧栏 + 窄条 + 阅读器」；
-     没有打开邮件时阅读器占位块也被移除，只剩「侧栏 + 窄条」。 */
-  grid-template-columns: 232px 24px minmax(0, 1fr);
+  grid-template-columns: var(--mail-sidebar-w, 232px) 1px 24px minmax(0, 1fr);
 }
 
 .mail-shell.is-list-collapsed:not(:has(.mail-reader)) {
-  grid-template-columns: 232px 24px;
+  grid-template-columns: var(--mail-sidebar-w, 232px) 1px 24px;
 }
 
 .mail-shell.is-sidebar-collapsed.is-list-collapsed {
-  grid-template-columns: 24px minmax(0, 1fr);
+  grid-template-columns: 18px 24px minmax(0, 1fr);
 }
 
 .mail-shell.is-sidebar-collapsed.is-list-collapsed:not(:has(.mail-reader)) {
-  grid-template-columns: 24px;
+  grid-template-columns: 18px 24px;
 }
 
-/* 列表折叠时留一个窄条，点它把列表拉回来——完全消失会让人找不到入口。 */
-.mail-rail-toggle {
-  flex: 0 0 auto;
-  width: 24px;
-  border: 1px solid var(--mail-border);
-  border-left: 0;
-  background: var(--mail-panel);
-  color: var(--mail-text-muted);
-  cursor: pointer;
-  font-size: 11px;
-  padding: 0;
-  /* 竖排一个「列表」提示，避免只是一根看不懂的竖条。 */
-  writing-mode: vertical-rl;
-  letter-spacing: 0.2em;
-}
-.mail-rail-toggle:hover {
-  color: var(--mail-accent);
-  background: var(--mail-panel-hover);
+.mail-expand-rail .mail-collapse-handle {
+  position: static;
+  transform: none;
+  opacity: 1;
+  width: 16px;
+  height: 44px;
 }
 
 .mail-pane {
@@ -155,7 +153,7 @@
 
 .mail-sidebar {
   background: var(--mail-sidebar);
-  border-right: 1px solid var(--mail-border);
+  /* 右边界由 .mail-splitter 画，这里不再重复描边（否则成双线）。 */
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -354,7 +352,7 @@
 
 .mail-list-pane {
   background: var(--mail-panel);
-  border-right: 1px solid var(--mail-border);
+  /* 同上：边界线交给分隔条。 */
 }
 
 .mail-list-head {
@@ -737,10 +735,50 @@
   border-radius: 4px;
 }
 
+/* 邮件正文的表格：出版级邮件几乎全靠 table 排版，而且层层嵌套。
+   清洗层已经剥掉了 border / cellpadding / bgcolor 这些装饰属性，
+   这里再兜一道底——包括已缓存的旧邮件（它们入库时还没剥）。
+   目标：默认**看不见框线**，只有内容需要时才用细线分隔，
+   最外层永远不描边。 */
 .mail-body table {
   max-width: 100%;
   border-collapse: collapse;
   table-layout: auto;
+  border: 0;
+  /* Outlook 常给 table 写死 width="600"，窄阅读区里会横向溢出。 */
+  width: auto;
+}
+
+.mail-body table table,
+.mail-body table table table {
+  /* 嵌套层级不额外加边距/边框，避免「套娃框」。 */
+  border: 0;
+  margin: 0;
+}
+
+.mail-body th,
+.mail-body td {
+  border: 0;
+  padding: 0;
+  vertical-align: top;
+}
+
+/* 只有「数据表」才需要可见的格线：正文里显式带 thead 的表格按数据表呈现。 */
+.mail-body table:has(> thead) th,
+.mail-body table:has(> thead) td {
+  border-bottom: 1px solid var(--mail-border);
+  padding: 6px 10px;
+}
+.mail-body table:has(> thead) th {
+  font-weight: 600;
+  color: var(--mail-text-secondary);
+  text-align: left;
+}
+
+/* 单元格里直接放图（邮件常见的「图片按钮」）不要圆角，否则会出现一圈内框。 */
+.mail-body table img {
+  border-radius: 0;
+  display: block;
 }
 
 .mail-body a {
@@ -931,34 +969,40 @@
 /* ---------- 窄窗口 ---------- */
 
 @media (max-width: 1180px) {
+  /* 窄屏把可拖拽宽度收窄：用户拖出来的宽度在 13 寸屏上会把阅读区挤没。 */
   .mail-shell {
-    grid-template-columns: 200px minmax(240px, 340px) minmax(0, 1fr);
+    grid-template-columns:
+      min(var(--mail-sidebar-w, 232px), 200px)
+      1px
+      min(var(--mail-list-w, 340px), 300px)
+      1px
+      minmax(0, 1fr);
   }
-  /* 折叠态必须显式重申，否则会被上面的窄屏规则覆盖回去。 */
   .mail-shell.is-sidebar-collapsed {
-    grid-template-columns: minmax(240px, 340px) minmax(0, 1fr);
+    grid-template-columns: 18px min(var(--mail-list-w, 340px), 300px) 1px minmax(0, 1fr);
   }
   .mail-shell.is-list-collapsed {
-    grid-template-columns: 200px 24px minmax(0, 1fr);
+    grid-template-columns: min(var(--mail-sidebar-w, 232px), 200px) 1px 24px minmax(0, 1fr);
   }
   .mail-shell.is-sidebar-collapsed.is-list-collapsed {
-    grid-template-columns: 24px minmax(0, 1fr);
+    grid-template-columns: 18px 24px minmax(0, 1fr);
   }
 }
 
 @media (max-width: 960px) {
   /* 收纳成「列表 + 覆盖式阅读」：铺两栏会把两边都挤得不能读。 */
+  /* 窄屏只保留「侧栏 + 阅读器」，列表被覆盖式阅读取代。 */
   .mail-shell {
-    grid-template-columns: 184px minmax(0, 1fr);
+    grid-template-columns: 184px 1px minmax(0, 1fr);
   }
   .mail-shell.is-sidebar-collapsed {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: 18px minmax(0, 1fr);
   }
   .mail-shell.is-list-collapsed {
-    grid-template-columns: 184px 24px minmax(0, 1fr);
+    grid-template-columns: 184px 1px 24px minmax(0, 1fr);
   }
   .mail-shell.is-sidebar-collapsed.is-list-collapsed {
-    grid-template-columns: 24px minmax(0, 1fr);
+    grid-template-columns: 18px 24px minmax(0, 1fr);
   }
   .mail-shell .mail-reader {
     position: absolute;

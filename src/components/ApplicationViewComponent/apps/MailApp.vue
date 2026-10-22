@@ -28,11 +28,6 @@
         :syncing="store.syncing"
         :last-sync-at="store.lastSyncAt"
         :unread="store.totalUnread"
-        :sidebar-collapsed="Boolean(settings.sidebarCollapsed)"
-        :list-collapsed="Boolean(settings.listCollapsed)"
-        :can-collapse-list="Boolean(store.detail || store.detailLoading || settings.listCollapsed)"
-        @toggle-sidebar="toggleSidebar"
-        @toggle-list="toggleList"
         @sync="onSync"
         @refresh="onRefreshFolders"
         @compose="onCompose"
@@ -48,9 +43,10 @@
           'is-sidebar-collapsed': Boolean(settings.sidebarCollapsed),
           'is-list-collapsed': Boolean(settings.listCollapsed),
         }"
+        :style="shellStyle"
       >
         <MailSidebar
-          v-show="!settings.sidebarCollapsed"
+          v-if="!settings.sidebarCollapsed"
           :accounts="store.accounts"
           :folders-by-account="store.foldersByAccount"
           :active-account-id="store.activeAccountId"
@@ -66,17 +62,53 @@
           @add-account="openAccounts"
         />
 
-        <button
-          v-if="settings.listCollapsed"
-          class="mail-rail-toggle"
-          title="展开邮件列表"
-          @click="toggleList"
+        <!-- 栏边界：拖拽调宽；中间的小手柄点一下收起/展开。
+             控制某一栏的开关就该长在那一栏的边上，而不是顶栏的图标。 -->
+        <div
+          v-if="!settings.sidebarCollapsed"
+          class="mail-splitter"
+          :class="{ 'is-dragging': dragging === 'sidebar' }"
+          title="拖动调整宽度，双击收起"
+          @mousedown.prevent="startDrag('sidebar', $event)"
+          @dblclick="toggleSidebar"
         >
-          列表 ▸
-        </button>
+          <button
+            class="mail-collapse-handle"
+            title="收起账户与文件夹栏"
+            aria-label="收起账户与文件夹栏"
+            @mousedown.stop
+            @click.stop="toggleSidebar"
+          >
+            ‹
+          </button>
+        </div>
+
+        <!-- 侧栏收起后，在左缘留一个展开手柄，避免「找不到入口」。 -->
+        <div v-if="settings.sidebarCollapsed" class="mail-expand-rail">
+          <button
+            class="mail-collapse-handle is-reversed"
+            title="展开账户与文件夹栏"
+            aria-label="展开账户与文件夹栏"
+            @click="toggleSidebar"
+          >
+            ›
+          </button>
+        </div>
+
+        <!-- 列表收起后：左缘留一条常驻手柄，否则没有任何入口把它拉回来。 -->
+        <div v-if="settings.listCollapsed" class="mail-expand-rail is-list">
+          <button
+            class="mail-collapse-handle is-reversed"
+            title="展开邮件列表"
+            aria-label="展开邮件列表"
+            @click="toggleList"
+          >
+            ›
+          </button>
+        </div>
 
         <MailListPane
-          v-show="!settings.listCollapsed"
+          v-if="!settings.listCollapsed"
           :messages="store.messages"
           :selected="store.selected"
           :title="listTitle"
@@ -93,6 +125,26 @@
           @toggle-star="store.setFlagged"
           @contextmenu="onRowContextMenu"
         />
+
+        <div
+          v-if="!settings.listCollapsed"
+          class="mail-splitter"
+          :class="{ 'is-dragging': dragging === 'list' }"
+          title="拖动调整宽度，双击收起"
+          @mousedown.prevent="startDrag('list', $event)"
+          @dblclick="toggleList"
+        >
+          <button
+            class="mail-collapse-handle"
+            title="收起邮件列表"
+            aria-label="收起邮件列表"
+            :disabled="!canCollapseList"
+            @mousedown.stop
+            @click.stop="toggleList"
+          >
+            ‹
+          </button>
+        </div>
 
         <MailReader
           v-if="store.detail || store.detailLoading"
@@ -259,6 +311,74 @@ const rootStyle = computed(() => {
   }
 })
 
+/** 没有打开邮件时不允许收起列表，否则会得到一片空白。 */
+const canCollapseList = computed(() => Boolean(store.detail || store.detailLoading))
+
+const dragging = ref(null)
+let dragStartX = 0
+let dragStartWidth = 0
+
+const SIDEBAR_MIN = 180
+const SIDEBAR_MAX = 360
+const LIST_MIN = 260
+const LIST_MAX = 620
+
+const sidebarWidth = computed(() => {
+  const value = Number(settings.value.sidebarWidth) || 232
+  return Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, value))
+})
+
+const listWidth = computed(() => {
+  const value = Number(settings.value.listWidth) || 340
+  return Math.min(LIST_MAX, Math.max(LIST_MIN, value))
+})
+
+const shellStyle = computed(() => ({
+  '--mail-sidebar-w': `${sidebarWidth.value}px`,
+  '--mail-list-w': `${listWidth.value}px`,
+}))
+
+function startDrag(which, event) {
+  dragging.value = which
+  dragStartX = event.clientX
+  dragStartWidth = which === 'sidebar' ? sidebarWidth.value : listWidth.value
+  document.addEventListener('mousemove', onDragMove)
+  document.addEventListener('mouseup', endDrag)
+  document.body.style.cursor = 'col-resize'
+  // 拖拽期间禁止选中文本，否则整页会被刷蓝。
+  document.body.style.userSelect = 'none'
+}
+
+function onDragMove(event) {
+  if (!dragging.value) return
+  const delta = event.clientX - dragStartX
+  if (dragging.value === 'sidebar') {
+    store.settings.sidebarWidth = clamp(dragStartWidth + delta, SIDEBAR_MIN, SIDEBAR_MAX)
+  } else {
+    store.settings.listWidth = clamp(dragStartWidth + delta, LIST_MIN, LIST_MAX)
+  }
+}
+
+function endDrag() {
+  if (!dragging.value) return
+  const which = dragging.value
+  dragging.value = null
+  document.removeEventListener('mousemove', onDragMove)
+  document.removeEventListener('mouseup', endDrag)
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+  // 拖完才落库：拖动过程中每帧写设置会把 sqlite 打满。
+  const patch =
+    which === 'sidebar'
+      ? { sidebarWidth: store.settings.sidebarWidth }
+      : { listWidth: store.settings.listWidth }
+  store.saveSettings(patch).catch(() => {})
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, Math.round(value)))
+}
+
 /** 收起左侧账户栏：只影响布局，不改变当前选中项。 */
 function toggleSidebar() {
   store.saveSettings({ sidebarCollapsed: !settings.value.sidebarCollapsed }).catch(() => {})
@@ -304,6 +424,8 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  document.removeEventListener('mousemove', onDragMove)
+  document.removeEventListener('mouseup', endDrag)
   store.dispose()
   clearTimeout(toastTimer)
   clearInterval(pendingTimer)

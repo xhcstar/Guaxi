@@ -108,3 +108,57 @@ assert.equal(smallRange.start, 0)
 assert.equal(smallRange.end, 10, '视口足够大时必须挂载全部页')
 
 console.log('pdfVirtualScroll: ok')
+
+// ───────────────────────── 跳页：不能依赖目标页已挂载 ─────────────────────────
+//
+// 回归背景：虚拟滚动只挂载视口附近十几页。跳到远处的页（597 页里的第 500 页）时
+// 目标节点根本不存在，旧实现靠 `node.offsetTop` + 重试，必然失败并报
+// 「页面节点未就绪」。正确做法是用同一份几何算出目标位置再滚过去。
+
+/** 复刻 goToPage 的位置计算。 */
+const pageScrollTop = (geo, pageNum, { viewportHeight = 900, align = 'top' } = {}) => {
+  const item = geo[pageNum - 1]
+  if (!item) return null
+  const offset = align === 'center' ? viewportHeight * 0.3 : 8
+  // 首页贴顶：容器有 12px padding，减 offset 会留下 4px 空白。
+  if (pageNum === 1) return 0
+  return Math.max(0, item.top - offset)
+}
+
+// 1) 跳到很远的页也能算出位置，且不需要该页在 DOM 里。
+const far = pageScrollTop(big, 500, { viewportHeight: viewport })
+assert.ok(far !== null, '第 500 页必须能算出滚动位置')
+assert.ok(far > 0, '远页的滚动位置应大于 0')
+
+// 2) 滚到那个位置后，窗口应当把第 500 页包含进来 —— 这是「跳过去就能看到」的充要条件。
+const afterJump = computeWindow(big, { scrollTop: far, clientHeight: viewport })
+assert.ok(
+  afterJump.start <= 499 && afterJump.end > 499,
+  `滚动到第 500 页的位置后窗口必须覆盖它，实际 [${afterJump.start}, ${afterJump.end})`
+)
+
+// 3) 位置与几何一致：滚过去后视口顶部正好落在目标页顶边附近。
+const targetPage = big[499]
+assert.ok(Math.abs((far + 8) - targetPage.top) < 1, '滚动位置应精确对齐目标页顶边')
+
+// 4) 首页不能算出负数。
+assert.equal(pageScrollTop(big, 1), 0, '第 1 页应滚到容器顶部')
+
+// 5) 越过末页返回 null（而不是崩）。
+assert.equal(pageScrollTop(big, 99999), null)
+
+// 6) 页内竖直偏移定位（源码正向跳转）同样不依赖 DOM。
+const scrollToPoint = (geo, pageNum, yPt, scale = 1, viewportHeight = 900) => {
+  const item = geo[pageNum - 1]
+  if (!item) return null
+  return Math.max(0, item.top + yPt * scale - viewportHeight * 0.35)
+}
+const pointTop = scrollToPoint(big, 300, 200)
+assert.ok(pointTop !== null && pointTop > 0, '页内定位必须能算出位置')
+const pointWindow = computeWindow(big, { scrollTop: pointTop, clientHeight: viewport })
+assert.ok(
+  pointWindow.start <= 299 && pointWindow.end > 299,
+  '页内定位后窗口必须覆盖第 300 页'
+)
+
+console.log('pdfJumpToPage: ok')

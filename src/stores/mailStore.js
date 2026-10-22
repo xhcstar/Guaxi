@@ -38,6 +38,8 @@ const emptySettings = () => ({
   groupThreads: true,
   sidebarCollapsed: false,
   listCollapsed: false,
+  sidebarWidth: 232,
+  listWidth: 340,
   rulesEnabled: true,
   retentionDays: 0,
   composeHtml: true,
