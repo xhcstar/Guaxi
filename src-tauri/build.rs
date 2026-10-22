@@ -4,6 +4,15 @@ use std::path::PathBuf;
 mod utils_zip_support;
 
 fn main() {
+    // Windows 主线程栈默认只有 1MB，而 Tauri 的 generate_handler! 会把所有命令展开
+    // 到同一个闭包里的巨大 match 中；debug 构建（-O0）不合并各分支的栈槽，帧大小≈
+    // 命令数 × 0.9KB。命令涨到 900 多个后该帧已约 870KB，IPC 回调又跑在主线程上，
+    // 再叠加命令自身的帧就会爆栈（0xC00000FD，表现为启动几秒后进程直接退出）。
+    // 这里把主线程栈保留区提到 16MB；只影响虚拟地址保留，提交仍按页增长。
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        println!("cargo:rustc-link-arg-bins=/STACK:16777216");
+    }
+
     // Cargo runs this script before compiling the main Tauri crate.
     // We use it as a release-mode safety net: even if the outer npm wrapper
     // was skipped, a release build still gets the external utils bundles.
