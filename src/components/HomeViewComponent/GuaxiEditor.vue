@@ -1682,6 +1682,17 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen, emit } from '@tauri-apps/api/event'
 import { save, open, confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
 import { commands as vscodeCommands, Position as VscodePosition, Uri as VscodeUri } from 'vscode'
+// 阅读位置的决策逻辑（路径归一 / 载体选择 / 缓存 / 滚动目标换算）。
+// 抽成纯模块是为了能在 Node 里跑回归测试——这段逻辑以前只能靠人工点界面验证，
+// 而它出的 bug 恰好都是"切回文件后回到开头"这种只在特定顺序下复现的。
+import {
+  normalizeReadPath,
+  previewReadKindForPath,
+  readPositionKey,
+  planReadPositionRestore,
+  resolveScrollTarget,
+  READ_POSITION_CACHE_LIMIT,
+} from './readPositionCore.js'
 
 // 设计说明：自定义 neovim 图标使用 Vue 组件而非 @iconify/vue 的 body 对象，
 // 避免 release 构建下 tree-shaking / 压缩导致 Icon 组件无法解析自定义数据，退化为终端图标。
@@ -2888,7 +2899,7 @@ let lastTableToolbarInsertAt = 0;
 const scrollRatio = ref(0);
 const pendingPreviewScrollRestore = ref(false);
 const pendingPreviewScrollLine = ref(null);
-const PREVIEW_READ_POSITION_CACHE_LIMIT = 160;
+const PREVIEW_READ_POSITION_CACHE_LIMIT = READ_POSITION_CACHE_LIMIT;
 const previewReadPositionCache = new Map();
 let markdownPreviewScrollSaveTimer = null;
 let pendingPreviewReadPositionRestoreKey = '';
@@ -2908,24 +2919,17 @@ const REALTIME_VDITOR_INIT_TIMEOUT_MS = 12000
 const PRIMARY_EDITOR_VSCODE_MODEL_OWNER = 'guaxi-editor-primary'
 const SECONDARY_EDITOR_VSCODE_MODEL_OWNER = 'guaxi-editor-secondary'
 
-const normalizePreviewReadPath = (path) => String(path || '').replace(/\\/g, '/').trim();
-const getPreviewReadKindForPath = (path) => {
-  const p = normalizePreviewReadPath(path).toLowerCase();
-  if (/\.(tex|typ)$/.test(p)) return 'pdf';
-  if (/\.(md|markdown)$/.test(p)) return 'markdown';
-  if (/\.org$/.test(p)) return 'org';
-  return '';
-};
+// 复用 readPositionCore 的实现：这两条规则是整个位置的寻址基础，
+// 组件与测试必须用同一份，否则测试通过了线上仍可能对不上。
+const normalizePreviewReadPath = normalizeReadPath;
+const getPreviewReadKindForPath = previewReadKindForPath;
 const cancelMarkdownPreviewScrollSaveTimer = (reason = 'unknown') => {
   if (!markdownPreviewScrollSaveTimer) return;
   window.clearTimeout(markdownPreviewScrollSaveTimer);
   markdownPreviewScrollSaveTimer = null;
   logger.debug('[PreviewReadPosition] cancelled pending markdown scroll save', { reason });
 };
-const getPreviewReadPositionKey = (path, kind = getPreviewReadKindForPath(path)) => {
-  const normalizedPath = normalizePreviewReadPath(path);
-  return normalizedPath && kind ? `${kind}:${normalizedPath}` : '';
-};
+const getPreviewReadPositionKey = readPositionKey;
 const rememberPreviewReadPosition = (entry) => {
   const key = getPreviewReadPositionKey(entry?.path, entry?.kind);
   if (!key) return;
@@ -3103,13 +3107,14 @@ const RESTORE_SCROLL_STABLE_FRAMES = 2;
 
 const restoreScrollTopWithGrowthRetry = async (getElement, entry, { reason = 'unknown', label = 'scroll' } = {}) => {
   const storedTop = Number(entry?.scrollTop);
-  const storedRatio = Number(entry?.scrollRatio);
-  const targetTop = Number.isFinite(storedTop) ? Math.max(0, storedTop) : 0;
   let lastMaxTop = -1;
   let stableCount = 0;
   let applied = 0;
   let reached = false;
   let attempts = 0;
+  // 目标值与「像素还是比例」的判断交给 readPositionCore，组件只负责逐帧落位。
+  // 这样同一套换算规则能被 Node 测试覆盖（tests/editorReadPosition.test.mjs）。
+  let targetTop = Math.max(0, Number.isFinite(storedTop) ? storedTop : 0);
 
   for (let attempt = 1; attempt <= RESTORE_SCROLL_MAX_ATTEMPTS; attempt += 1) {
     attempts = attempt;
@@ -3118,12 +3123,17 @@ const restoreScrollTopWithGrowthRetry = async (getElement, entry, { reason = 'un
     if (!(el instanceof HTMLElement) || !el.isConnected) break;
 
     const maxTop = Math.max(0, el.scrollHeight - el.clientHeight);
-    const reachable = targetTop <= maxTop + 2;
     stableCount = maxTop === lastMaxTop ? stableCount + 1 : 0;
     lastMaxTop = maxTop;
 
-    const fallbackTop = Number.isFinite(storedRatio) && storedRatio > 0 ? storedRatio * maxTop : maxTop;
-    const nextTop = Math.min(Math.max(0, reachable ? targetTop : fallbackTop), maxTop);
+    // 每帧重新换算：文档在渐进渲染中长高时，像素目标会从"越界"变成"可达"。
+    const target = resolveScrollTarget(entry, {
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    });
+    targetTop = target.top;
+    const reachable = target.source === 'pixels';
+    const nextTop = Math.min(Math.max(0, target.top), maxTop);
     el.scrollTop = nextTop;
     applied = el.scrollTop;
 
@@ -3467,19 +3477,27 @@ const restoreActiveReadPositionForMode = async (reason = 'unknown', pathOverride
 
   const targetEditor = editorOverride || getActiveEditor();
   const modeKey = getHomePreviewModeKeyFromState();
-  if (modeKey === 'explorer') return restoreExplorerReadPosition(path, reason);
-  if (modeKey === 'edit') return restoreEditorReadPosition(path, targetEditor, reason);
-  if (modeKey === 'realtime') return restoreRealtimeReadPosition(path, reason);
 
-  const kind = getPreviewReadKindForPath(path);
+  // 「该恢复哪几个载体、顺序如何」统一由 readPositionCore 决定，
+  // 组件只负责把每个载体的恢复动作接上。这样这条规则能被 Node 测试覆盖。
+  const { carriers } = planReadPositionRestore({ modeKey, path, modeChanging: false });
   let restored = false;
-  if (kind) {
-    queuePreviewReadPositionRestore(path, kind, reason);
-    await nextTick();
-    restored = !!(await restoreQueuedPreviewReadPosition(kind, path, reason));
-  }
-  if (modeKey === 'split') {
-    restored = !!(await restoreEditorReadPosition(path, targetEditor, reason)) || restored;
+  for (const carrier of carriers) {
+    if (carrier === 'editor') {
+      restored = !!(await restoreEditorReadPosition(path, targetEditor, reason)) || restored;
+    } else if (carrier === 'explorer') {
+      restored = !!(await restoreExplorerReadPosition(path, reason)) || restored;
+    } else if (carrier === 'realtime') {
+      restored = !!(await restoreRealtimeReadPosition(path, reason)) || restored;
+    } else {
+      // markdown / pdf / org：由各自「渲染完成后消费恢复队列」的链路负责落位。
+      const kind = carrier;
+      const queued = queuePreviewReadPositionRestore(path, kind, reason);
+      if (queued) {
+        await nextTick();
+        restored = !!(await restoreQueuedPreviewReadPosition(kind, path, reason)) || restored;
+      }
+    }
   }
   return restored;
 };
@@ -22570,7 +22588,11 @@ watch(selectedFile, async (newFile, oldFile) => {
         syncSourceEditorContent('selected-file-changed')
       }
     })
-    void restoreReadPositionAfterFileSwitch(nextPath, 'selected-file-changed')
+    // 阅读位置的落位推迟到模式恢复之后（见下方 restoreDocPreviewMode）。
+    // 原因：A 在编辑模式、B 记忆为预览模式时，此刻界面还停在编辑载体上，
+    // 直接落位会把 B 的预览位置写进一个马上要被 v-show 隐藏的容器，
+    // 等模式真正切到预览时容器刚显示、scrollTop 为 0，用户看到的就是"回到开头"。
+    // 所以这里不再立即落位，改由模式恢复完统一触发一次。
 
     const targetEditor = getActiveEditor();
     if (targetEditor) {
@@ -22596,7 +22618,16 @@ watch(selectedFile, async (newFile, oldFile) => {
 
     // 切到不同文档时，替用户把它恢复到自己上次的模式（内部仅在模式确有差异时才真正切换）。
     if (switchedToDifferentFile) {
-      await restoreDocPreviewMode(nextPath, 'selected-file-changed')
+      const modeChanged = await restoreDocPreviewMode(nextPath, 'selected-file-changed')
+      // 模式没变：按原来的时机落位即可（此时载体与切走前一致）。
+      // 模式变了：必须等新载体渲染出来再落位，否则写到旧载体上。
+      await restoreReadPositionAfterFileSwitch(nextPath, 'selected-file-changed')
+      if (modeChanged) {
+        // 再补一轮：预览/PDF/探索者的容器是在模式切换里挂载或显示出来的，
+        // 上面那次落位可能早于它拿到布局盒（display:none 下 scrollTop 恒为 0）。
+        await nextTick()
+        await restoreReadPositionAfterFileSwitch(nextPath, 'selected-file-changed-after-mode')
+      }
 
       // 兜底：切到另一份 .tex/.typ 后，确认预览面板显示的就是由这个文件构建出的 PDF。
       // 上面的 syncPreviewSurfaceForActiveFile 受 isPreviewSurfaceRequested() 门控，模式判定不为真
@@ -23159,9 +23190,13 @@ const restoreHomePreviewMode = async (from = 'mounted') => {
 // 切到某个文档时，把它恢复到自己上次的模式（没记过的新文档沿用全局默认键）。
 // 复用 handlePreviewModeSelect 完成实际切换；切换期间静音阅读位置保存，避免读到切换瞬间被重置的视口。
 const restoreDocPreviewMode = async (path, reason = 'tab-switch') => {
-  if (layoutMode.value !== 'single') return;
+  // 返回值语义：true 表示「为了切到本文档的记忆模式，真的执行了一次模式切换」。
+  // 调用方据此决定是否要重新落位——模式切换会改变阅读位置的载体
+  // （编辑=Monaco / 预览=容器 scrollTop / 探索者=notebook），
+  // 切换前落位等于写到了一个即将被隐藏的元素上。
+  if (layoutMode.value !== 'single') return false;
   const key = docModeKeyOf(path);
-  if (!key) return;
+  if (!key) return false;
 
   const remembered = docPreviewModeKeyByPath.get(key);
   let targetKey = normalizeHomePreviewModeKey(remembered || editorStore.homePreviewModeKey);
@@ -23181,7 +23216,7 @@ const restoreDocPreviewMode = async (path, reason = 'tab-switch') => {
     // 模式已经一致：无需切换，但补登记一次，保证新文档也拥有自己的记录。
     // 能力兜底降级不算用户选择，不能写回：否则一次瞬时不可用就把该文档的记忆永久变成 edit。
     if (!downgradedByCapability) docPreviewModeKeyByPath.set(key, currentKey);
-    return;
+    return false;
   }
 
   logger.info('[Editor] restore per-document preview mode', { reason, path: key, targetKey, currentKey });
@@ -23191,6 +23226,7 @@ const restoreDocPreviewMode = async (path, reason = 'tab-switch') => {
   } finally {
     suppressReadPositionSaveDepth -= 1;
   }
+  return true;
 };
 
 watch(previewMode, async (nextMode, prevMode) => {
