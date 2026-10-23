@@ -667,12 +667,29 @@ const onWheel = (ev) => {
 const AUTO_FIT_DEBOUNCE_MS = 140
 let autoFitTimer = null
 
+/**
+ * 适合宽度 / 适合整页的目标缩放。
+ *
+ * 两个细节直接从实测里来：
+ *
+ * 1. `clientWidth` 不含纵向滚动条，但它**不占布局空间**（滚动条浮在内容上），
+ *    所以可用宽度还得减去 `offsetWidth - clientWidth`，否则页面右缘会被滚动条压掉几像素。
+ * 2. 内边距是 .gpv__pages 的 16px × 2 = 32px，必须与常量 PAGES_PADDING/PAGE_GAP 同源，
+ *    写死 36 会在改内边距时悄悄错位。
+ */
 const computeFitZoom = (mode) => {
   const el = bodyRef.value
   const first = pages[0]
   if (!el || !first || !first.wPt || !first.hPt) return null
-  const zx = (el.clientWidth - 36) / first.wPt
-  if (mode === 'page') return Math.min(zx, (el.clientHeight - 36) / first.hPt)
+  const scrollbar = Math.max(0, el.offsetWidth - el.clientWidth)
+  const pad = PAGES_PADDING * 2
+  const availW = el.clientWidth - scrollbar - pad
+  const zx = availW / first.wPt
+  if (mode === 'page') {
+    const scrollbarH = Math.max(0, el.offsetHeight - el.clientHeight)
+    const availH = el.clientHeight - scrollbarH - pad
+    return Math.min(zx, availH / first.hPt)
+  }
   return zx
 }
 
