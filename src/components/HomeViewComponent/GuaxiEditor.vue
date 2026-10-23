@@ -8641,7 +8641,11 @@ const getMarkdownFenceContext = (model, position) => {
       Math.max(1, safePosition.column)
     ),
     blockStartLine,
-    blockEndLine
+    blockEndLine,
+    // 未闭合（找不到收尾围栏，按延续到文末处理）；与 getMarkdownFenceBlocks 的字段保持一致，
+    // 上色阶段据此跳过「还没写语言」的未闭合块。
+    unclosed: fenceEndLine > model.getLineCount(),
+    fenceHasLanguage: !!String(fenceLang || '').trim(),
   };
 };
 
@@ -8678,6 +8682,33 @@ const getMarkdownFenceBlocks = (model) => {
       fenceToken = '';
       fenceLang = '';
       fenceStartLine = 0;
+    }
+  }
+
+  // 未闭合的围栏（用户正在敲 ``` 或误删了收尾行）必须按「延续到文末」处理。
+  //
+  // 这里曾经直接丢弃这类块，而 getMarkdownFenceContext 却把它判定为「到文末的代码块」。
+  // 两份实现对同一份文本给出不同结论，于是出现只在光标附近发生的错乱：
+  // 光标在未闭合块里时 context 会把它当代码行去涂色，块的边界一改，
+  // 后面的普通正文就跟着被染成代码颜色，直到下一次整篇重扫才恢复。
+  // CommonMark 的语义也是「未闭合围栏延续到文末」，这里与之对齐。
+  //
+  // 没有语言标记时（用户刚敲下 ``` 还没输入语言）仍要列出该块——补全与上下文判定依赖它，
+  // 但上色阶段要跳过：把它按 plaintext 铺 md-fence-token-base，会把后面整篇正文染成代码色。
+  if (inFence) {
+    const languageId = resolveFenceLanguageId(fenceLang);
+    if (languageId) {
+      const blockStartLine = fenceStartLine + 1;
+      const blockEndLine = Math.max(blockStartLine, model.getLineCount());
+      if (blockStartLine <= model.getLineCount()) {
+        blocks.push({
+          languageId,
+          blockStartLine,
+          blockEndLine,
+          unclosed: true,
+          fenceHasLanguage: !!String(fenceLang || '').trim(),
+        });
+      }
     }
   }
 
@@ -8806,6 +8837,10 @@ const clearDirectFileSyntaxHighlight = (targetEditor) => {
 const clearMarkdownFenceSyntaxHighlight = (targetEditor) => {
   if (!targetEditor) return;
   const state = getMarkdownFenceHighlightState(targetEditor);
+  // 清空时一并作废在途请求：否则一个已经发出的异步请求随后落地，
+  // 会用编辑前的块信息把刚清掉的装饰重新涂上（动态改围栏时最典型的「删了还在」）。
+  state.requestSeq = (state.requestSeq || 0) + 1;
+  state.lastKey = '';
   if (!state.decorations?.length) return;
   state.decorations = targetEditor.deltaDecorations(state.decorations, []);
 };
@@ -10175,17 +10210,20 @@ const updateMarkdownFenceSyntaxHighlight = async (targetEditor, reason) => {
     ? targetEditor.getVisibleRanges()
     : [];
   const allBlocks = getCachedMarkdownFenceBlocks(model);
-  const shouldHighlightAllBlocks = shouldHighlightAllMarkdownFenceBlocks(reason, allBlocks);
+  // 未闭合且还没写语言的围栏只参与「它是什么块」的判定（补全/上下文），不上色：
+  // 用户刚敲下 ``` 时若按 plaintext 铺色，后面整篇正文都会变成代码色。
+  const paintableBlocks = allBlocks.filter((item) => !(item?.unclosed && item?.fenceHasLanguage === false));
+  const shouldHighlightAllBlocks = shouldHighlightAllMarkdownFenceBlocks(reason, paintableBlocks);
   // 降级档下可视区上下各留一段余量再取块：视口外紧邻的代码块会被一并上色，
   // 快速滚动过去时不会先看到一段没上色的代码。全量档本来就是整篇，不受这里影响。
   let blocks = !shouldHighlightAllBlocks && visibleRanges.length
-    ? allBlocks.filter((item) => visibleRanges.some((range) => (
+    ? paintableBlocks.filter((item) => visibleRanges.some((range) => (
       item.blockEndLine >= range.startLineNumber - FENCE_HIGHLIGHT_VIEWPORT_MARGIN_LINES &&
       item.blockStartLine <= range.endLineNumber + FENCE_HIGHLIGHT_VIEWPORT_MARGIN_LINES
     )))
-    : allBlocks;
+    : paintableBlocks;
 
-  if (ctx) {
+  if (ctx && ctx.languageId && !(ctx.unclosed && ctx.fenceHasLanguage === false)) {
     const sameBlock = (item) => (
       item?.blockStartLine === ctx.blockStartLine &&
       item?.blockEndLine === ctx.blockEndLine &&
@@ -10205,7 +10243,18 @@ const updateMarkdownFenceSyntaxHighlight = async (targetEditor, reason) => {
   } else if (!visibleRanges.length && blocks.length > EMBEDDED_VISIBLE_BLOCK_LIMIT) {
     blocks = blocks.slice(0, EMBEDDED_VISIBLE_BLOCK_LIMIT);
   }
+  // 先自增请求序号，再处理「没有可涂块」的提前返回。
+  //
+  // 顺序很重要：requestSeq 的作用是「作废所有在途的旧请求」。如果像之前那样
+  // 在自增之前 return，那么「用户删掉收尾 ``` → 本没有块可涂 → 提前返回」这条路径
+  // 不会让在途的旧请求失效，它随后落地并用**编辑前**的块信息把刚清掉的颜色又涂回去，
+  // 表现为「删了围栏，正文还是花的」。动态输入时最容易撞上。
+  const state = getMarkdownFenceHighlightState(targetEditor);
+  const requestSeq = (state.requestSeq || 0) + 1;
+  state.requestSeq = requestSeq;
+
   if (!blocks.length) {
+    state.lastKey = '';
     clearMarkdownFenceSyntaxHighlight(targetEditor);
     return;
   }
@@ -10219,9 +10268,6 @@ const updateMarkdownFenceSyntaxHighlight = async (targetEditor, reason) => {
     await ensureMarkdownFenceTokenizerReady(targetEditor, languageId);
   }
 
-  const state = getMarkdownFenceHighlightState(targetEditor);
-  const requestSeq = (state.requestSeq || 0) + 1;
-  state.requestSeq = requestSeq;
   const versionId = typeof model.getVersionId === 'function'
     ? model.getVersionId()
     : model.getAlternativeVersionId?.() || 0;
@@ -10548,6 +10594,9 @@ const getMarkdownMathHighlightState = (targetEditor) => {
 const clearMarkdownMathSyntaxHighlight = (targetEditor) => {
   if (!targetEditor) return;
   const state = getMarkdownMathHighlightState(targetEditor);
+  // 同围栏高亮：清空时作废在途请求，避免旧响应落地后把装饰涂回来。
+  state.requestSeq = (state.requestSeq || 0) + 1;
+  state.lastKey = '';
   if (!state.decorations?.length) return;
   state.decorations = targetEditor.deltaDecorations(state.decorations, []);
 };
@@ -10562,7 +10611,15 @@ const updateMarkdownMathSyntaxHighlight = async (targetEditor, reason) => {
 
   const position = targetEditor.getPosition?.();
   const ctx = getMarkdownMathContext(model, position);
+
+  // 与围栏高亮同理：先自增 requestSeq 作废在途请求，再处理「没有数学块」的提前返回。
+  // 否则用户删掉 $$ 围栏后，在途的旧请求会带着编辑前的块信息落地，把刚清掉的颜色涂回去。
+  const state = getMarkdownMathHighlightState(targetEditor);
+  const requestSeq = (state.requestSeq || 0) + 1;
+  state.requestSeq = requestSeq;
+
   if (!ctx) {
+    state.lastKey = '';
     clearMarkdownMathSyntaxHighlight(targetEditor);
     return;
   }
@@ -10570,9 +10627,6 @@ const updateMarkdownMathSyntaxHighlight = async (targetEditor, reason) => {
   await ensureMarkdownFenceTokenizerReady(targetEditor, ctx.languageId);
   warmupEmbeddedLspForContext(ctx);
 
-  const state = getMarkdownMathHighlightState(targetEditor);
-  const requestSeq = (state.requestSeq || 0) + 1;
-  state.requestSeq = requestSeq;
   const versionId = typeof model.getVersionId === 'function'
     ? model.getVersionId()
     : model.getAlternativeVersionId?.() || 0;
