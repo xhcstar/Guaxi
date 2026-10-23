@@ -52,6 +52,8 @@ import {
   parseChartFence,
   buildChartOption,
 } from './guaxiChartData'
+import { getBundledSample, listBundledSamples } from './guaxiChartSamples.bundled'
+import { isBundledRef } from './guaxiChartSamples'
 
 // ───────────────────────── 数据加载 ─────────────────────────
 
@@ -109,6 +111,7 @@ async function resolveLocalRef(ref, baseDir) {
  * 读取外部数据文件。
  *
  * 引用顺序（这是「换机器/挪文件后图表还能画出来」的关键）：
+ *   0. `bundled:charts/stock.csv` —— 随包内置的示例数据，与机器环境无关；
  *   1. `resource:charts/sales.csv` —— 显式指向资源库内副本，最稳；
  *   2. `./data/x.csv`、`../shared/x.csv` —— 相对当前笔记所在目录；
  *   3. `D:/data/x.csv`、`/home/u/x.csv` —— 绝对路径；
@@ -120,6 +123,19 @@ async function resolveLocalRef(ref, baseDir) {
 async function loadExternalData(ref, baseDir) {
   const raw = String(ref || '').trim()
   if (!raw) throw new Error('data 为空')
+
+  // 随包示例：直接取自前端包内的静态文本，不走文件系统。
+  // 手册里的示例必须开箱能画，因此这条排在最前、命中即返回。
+  if (isBundledRef(raw)) {
+    const sample = getBundledSample(raw)
+    if (!sample) {
+      throw new Error(`没有内置样本「${raw}」。
+可用样本：
+${listBundledSamples().map((k) => `  - bundled:${k}`).join('\n')}
+内置样本只用于学习和演示；自己的数据请用 resource: / 相对路径 / 绝对路径。`)
+    }
+    return { text: sample.text, format: sample.format }
+  }
 
   const extOf = (p) => String(p.split('.').pop() || '').toLowerCase()
   const formatOf = (p) => {
@@ -335,6 +351,16 @@ async function renderChartBlock(el) {
 async function readEmbedFile(ref, baseDir) {
   const raw = String(ref || '').trim()
   if (!raw) throw new Error('路径为空')
+
+  if (isBundledRef(raw)) {
+    const sample = getBundledSample(raw)
+    if (!sample) {
+      throw new Error(`没有内置样本「${raw}」。
+可用样本：
+${listBundledSamples().map((k) => `  - bundled:${k}`).join('\n')}`)
+    }
+    return { abs: raw, text: sample.text }
+  }
 
   if (/^resource:/i.test(raw)) {
     const rel = raw.replace(/^resource:/i, '').replace(/^[/\\]+/, '')

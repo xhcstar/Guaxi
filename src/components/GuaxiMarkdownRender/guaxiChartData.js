@@ -246,6 +246,7 @@ export function parseChartFence(source) {
         if (value && value !== '|' && value !== '>') {
           const looksPath =
             /^resource:/i.test(value) ||
+            /^bundled:/i.test(value) ||
             /^\.{0,2}\//.test(value) ||
             /^[a-zA-Z]:[\\/]/.test(value) ||
             /\.(csv|tsv|json)$/i.test(value)

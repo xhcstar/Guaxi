@@ -1462,6 +1462,7 @@ erDiagram
 
 > Guaxi 扩展语法。图表用 ECharts 渲染，支持「查看 / 导出 SVG / 导出 PNG」。
 > 数据可内联，也可指向任意本地文件（相对笔记目录、绝对路径、或 `~/` 开头的用户目录）。
+> 想直接看外部文件的例子而不必准备数据，用 `bundled:` 引用随软件打包的样本，见 10A.6。
 
 ### 10A.1 最小示例（内联数据）
 
@@ -1550,15 +1551,19 @@ data: |
 
 ### 10A.6 数据来自外部文件
 
-`data` 指向文件路径时，支持三种写法：
+`data` 指向文件路径时，支持四种写法：
 
 | 写法 | 含义 | 示例 |
 | --- | --- | --- |
+| 内置样本 | 随软件打包的示例数据，任何机器都能用 | `bundled:charts/stock.csv` |
+| 资源库 | 用户资源库内的副本，跨机器同步 | `resource:charts/2026/10/sales.csv` |
 | 相对路径 | 相对**当前笔记所在目录** | `./data/sales.csv`、`../shared/x.csv` |
 | 绝对路径 | 系统任意位置 | `D:/datasets/sales.csv` |
-| 用户目录 | 以 `~/` 开头 | `~/datasets/sales.csv` |
 
-支持 `.csv` / `.tsv` / `.json` 三种格式。
+以 `~/` 开头的路径表示用户主目录。支持 `.csv` / `.tsv` / `.json` 三种格式。
+`resource:` 只在资源库里确实有那个文件时才可用，所以手册里不拿它当可执行示例。
+
+下面这个例子引用内置样本，复制到任何笔记里都能直接画出来：
 
 ```chart
 spec:
@@ -1566,7 +1571,7 @@ spec:
   x: date
   y: [close]
   title: 收盘价
-data: ./data/stock.csv
+data: bundled:charts/stock.csv
 ```
 
 ### 10A.7 数据来自 JSON 文件
@@ -1898,8 +1903,10 @@ data: |
 
 #### 数据放在资源库（跨机器可用的写法）
 
-把数据文件固化进资源库后，用 `resource:` 引用库内副本：
+把数据文件固化进资源库后，用 `resource:` 引用库内副本。下面是**写法模板**（不是可执行的示例，
+因为资源库里还没有这个文件）：
 
+````markdown
 ```chart
 spec:
   type: bar
@@ -1908,16 +1915,32 @@ spec:
   title: 季度营收对比
 data: resource:charts/2026/10/sales.csv
 ```
+````
 
 编辑器工具栏的「图表」按钮会自动完成「复制进资源库 → 插入这段围栏」。
 
-三种引用写法的区别：
+想直接看到这张图，把 `data` 换成 `bundled:charts/2026/10/sales.csv` —— 内置样本用同一份数据：
+
+```chart
+spec:
+  type: bar
+  x: month
+  y: [revenue, cost]
+  title: 季度营收对比（内置样本）
+data: bundled:charts/2026/10/sales.csv
+```
+
+四种引用写法的区别：
 
 | 写法 | 示例 | 数据文件被挪走 / 换机器时 |
 | --- | --- | --- |
+| 内置样本 | `bundled:charts/2026/10/sales.csv` | 随软件走，永远可用；只读，供学习演示 |
 | 资源库 | `resource:charts/2026/10/sales.csv` | 只要资源库同步到位就能继续渲染 |
 | 相对笔记 | `./data/sales.csv` | 读不到时回退到资源库同名路径 |
 | 绝对路径 | `D:/datasets/sales.csv` | 换机器必然失效，仅本机临时使用 |
+
+内置样本清单：`charts/stock.csv`（日线收盘价）、`charts/2026/10/sales.csv`（月度营收成本）、
+`boards/architecture.excalidraw`（白板示例）。它们只用于演示，自己的数据请放资源库。
 
 ### 10A.12 语法速查
 
@@ -1943,17 +1966,17 @@ data: resource:charts/2026/10/sales.csv
 | `spec.xAxisStyle`/`yAxisStyle` | 对象 | 直接覆盖轴配置 |
 | `spec.legend` | 布尔 | `false` 关闭图例 |
 | `spec.tooltip` | 布尔/对象 | `false` 关闭；对象则原样使用 |
-| `data` | 内联文本或路径 | 数据来源（`resource:` / 相对 / 绝对 / `~/`） |
+| `data` | 内联文本或路径 | 数据来源（`bundled:` / `resource:` / 相对 / 绝对 / `~/`） |
 
 **数据格式要求**：首行为表头，其余每行为一条记录；数值列会尽量转成数字，空单元格保留为空。CSV 支持引号包裹（引号内可含逗号与换行）。
 
 ### 10A.11 白板（```excalidraw）
 
 ```excalidraw
-./assets/architecture.excalidraw
+bundled:boards/architecture.excalidraw
 ```
 
-围栏内容为场景文件路径，规则与 `chart` 的 `data` 一致（`resource:` / 相对 / 绝对 / `~/`）。
+围栏内容为场景文件路径，规则与 `chart` 的 `data` 一致（`bundled:` / `resource:` / 相对 / 绝对 / `~/`）。
 渲染为只读 SVG，带「在其他窗口打开」按钮。
 
 
