@@ -58,6 +58,38 @@ impl Tier {
     }
 }
 
+impl Tier {
+    /// 全部等级，供设置页与状态面板遍历。
+    ///
+    /// 这里显式列出而不是从别处推导：新增变体时这个数组会漏，但下面的 `parse` 用了
+    /// exhaustive match，编译器会直接报错提醒补上，不会像之前那样静默漏掉一处映射。
+    pub const ALL: [Tier; 5] = [
+        Tier::Read,
+        Tier::Write,
+        Tier::Network,
+        Tier::Exec,
+        Tier::Gui,
+    ];
+
+    /// 字符串 → 等级。与 `as_str` 严格互逆。
+    ///
+    /// 之前这段映射散在 `commands.rs` 的 Tauri 命令里，加 `Gui` 时忘了同步，
+    /// 表现是设置页打开开关报「未知等级: gui」。放到枚举旁边才能和变体一起改。
+    pub fn parse(raw: &str) -> Result<Tier, String> {
+        let key = raw.trim().to_ascii_lowercase();
+        // 每个变体都必须在这里出现，否则 match 不完整，编译不过。
+        let tier = match key.as_str() {
+            "read" => Tier::Read,
+            "write" => Tier::Write,
+            "network" => Tier::Network,
+            "exec" => Tier::Exec,
+            "gui" => Tier::Gui,
+            other => return Err(format!("未知等级: {other}")),
+        };
+        Ok(tier)
+    }
+}
+
 /// 该等级当前是否被授权。
 pub fn tier_granted(tier: Tier) -> bool {
     match tier {

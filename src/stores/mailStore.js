@@ -305,6 +305,23 @@ export const useMailStore = defineStore('mail', {
       this.loadMessages()
     },
 
+    /** 删除自建文件夹（服务器 + 本地缓存）。 */
+    async deleteFolder(name) {
+      if (!this.activeAccountId) throw new Error('请先选择账户')
+      await invoke('mail_delete_folder', { accountId: this.activeAccountId, name })
+      const list = (this.foldersByAccount[this.activeAccountId] || []).filter(
+        (f) => f.name !== name,
+      )
+      this.foldersByAccount = { ...this.foldersByAccount, [this.activeAccountId]: list }
+      if (this.activeFolder === name) {
+        const inbox = list.find((f) => f.role === 'inbox')
+        this.activeFolder = inbox?.name || 'INBOX'
+        this.scope = 'all'
+        this.loadMessages()
+      }
+      await this.reloadUnread()
+    },
+
     async createFolder(name) {
       if (!this.activeAccountId) throw new Error('请先选择账户')
       await invoke('mail_create_folder', { accountId: this.activeAccountId, name })

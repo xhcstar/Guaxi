@@ -56,13 +56,11 @@ pub async fn cognition_status() -> Result<CognitionStatus, String> {
         belief: belief::stats().unwrap_or_default(),
         eval_items: evolve::eval_set_size(),
         recall_weights: recall::channel_weights(),
-        tiers: vec![
-            ("read".into(), true),
-            ("write".into(), tools::tier_granted(tools::Tier::Write)),
-            ("network".into(), tools::tier_granted(tools::Tier::Network)),
-            ("exec".into(), tools::tier_granted(tools::Tier::Exec)),
-            ("gui".into(), tools::tier_granted(tools::Tier::Gui)),
-        ],
+        // 遍历 Tier::ALL 而不是手写清单：新增等级时状态面板会自动跟上。
+        tiers: tools::Tier::ALL
+            .iter()
+            .map(|t| (t.as_str().to_string(), tools::tier_granted(*t)))
+            .collect(),
         deliberate_interval_secs: store::get_i64("deliberate_interval_secs", 300),
         deliberate_modelid: store::get_i64("deliberate_modelid", 6),
         max_interrupts_per_day: store::get_i64("max_interrupts_per_day", 3),
@@ -325,13 +323,8 @@ pub fn cognition_tools_list() -> Vec<tools::ToolSpec> {
 
 #[tauri::command]
 pub fn cognition_tool_set_tier(tier: String, granted: bool) -> Result<(), String> {
-    let t = match tier.trim() {
-        "write" => tools::Tier::Write,
-        "network" => tools::Tier::Network,
-        "exec" => tools::Tier::Exec,
-        "read" => tools::Tier::Read,
-        other => return Err(format!("未知等级: {other}")),
-    };
+    // 解析逻辑放在 `Tier::parse`（与枚举定义同处），避免新增等级时漏改这里。
+    let t = tools::Tier::parse(&tier)?;
     tools::set_tier_granted(t, granted)
 }
 

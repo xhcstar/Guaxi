@@ -28,6 +28,8 @@
         :syncing="store.syncing"
         :last-sync-at="store.lastSyncAt"
         :unread="store.totalUnread"
+        :sidebar-collapsed="Boolean(settings.sidebarCollapsed)"
+        @toggle-sidebar="toggleSidebar"
         @sync="onSync"
         @refresh="onRefreshFolders"
         @compose="onCompose"
@@ -60,6 +62,8 @@
           @select-scope="store.selectScope"
           @compose="onCompose"
           @add-account="openAccounts"
+          @create-folder="onCreateFolder"
+          @delete-folder="onDeleteFolder"
         />
 
         <!-- 栏边界：拖拽调宽；中间的小手柄点一下收起/展开。
@@ -80,18 +84,6 @@
             @click.stop="toggleSidebar"
           >
             ‹
-          </button>
-        </div>
-
-        <!-- 侧栏收起后，在左缘留一个展开手柄，避免「找不到入口」。 -->
-        <div v-if="settings.sidebarCollapsed" class="mail-expand-rail">
-          <button
-            class="mail-collapse-handle is-reversed"
-            title="展开账户与文件夹栏"
-            aria-label="展开账户与文件夹栏"
-            @click="toggleSidebar"
-          >
-            ›
           </button>
         </div>
 
@@ -252,6 +244,9 @@
         移到「{{ folder.displayName }}」
       </button>
       <div class="mail-context-sep"></div>
+      <button class="mail-context-item" @click="contextAction('saveEml')">另存为 .eml（含附件）</button>
+      <button class="mail-context-item" @click="contextAction('saveHtml')">另存为 .html（正文）</button>
+      <div class="mail-context-sep"></div>
       <button class="mail-context-item is-danger" @click="contextAction('delete')">删除</button>
     </div>
 
@@ -271,6 +266,7 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
 import { useMailStore } from '../../../stores/mailStore'
 import { densityMetrics, monoFontStack, readingFontStack, themeToStyle } from './mail/theme'
 import MailToolbar from './mail/MailToolbar.vue'
@@ -439,6 +435,79 @@ async function onSync() {
   if (result.errors?.length) notify(result.errors[0], true)
   else if (result.added) notify(`收到 ${result.added} 封新邮件`)
   else notify('已是最新')
+}
+
+async function onCreateFolder(name) {
+  try {
+    await store.createFolder(name)
+    notify(`已创建「${name}」`)
+  } catch (error) {
+    notify(String(error?.message || error), true)
+  }
+}
+
+async function onDeleteFolder(folder) {
+  if (folder.role !== 'custom') {
+    notify('系统文件夹不能删除', true)
+    return
+  }
+  if (
+    !window.confirm(
+      `删除文件夹「${folder.displayName}」？
+
+服务器上该文件夹及其中的邮件会一并删除，无法撤销。`,
+    )
+  ) {
+    return
+  }
+  try {
+    await store.deleteFolder(folder.name)
+    notify(`已删除「${folder.displayName}」`)
+  } catch (error) {
+    notify(String(error?.message || error), true)
+  }
+}
+
+/** 另存为：.eml（原始报文，含附件）或 .html（正文）。 */
+async function saveMessageAs(row, kind) {
+  const { save } = await import('@tauri-apps/plugin-dialog')
+  // 文件名里不能出现路径分隔符与 Windows 保留字符，否则保存对话框会直接失败。
+  // 用字符码构造，避免多层字符串转义把反斜杠吃掉（这里踩过一次）。
+  const ILLEGAL = new Set([
+    String.fromCharCode(92), '/', ':', '*', '?', '"', '<', '>', '|',
+    String.fromCharCode(13), String.fromCharCode(10),
+  ])
+  const subject = [...(row.subject || '邮件')]
+    .map((ch) => (ILLEGAL.has(ch) ? '_' : ch))
+    .join('')
+    .slice(0, 80)
+  const path = await save({
+    title: kind === 'eml' ? '另存为 .eml' : '另存为 .html',
+    defaultPath: `${subject}.${kind}`,
+    filters: [
+      {
+        name: kind === 'eml' ? '邮件报文' : '网页',
+        extensions: [kind],
+      },
+    ],
+  })
+  if (!path) return
+  if (kind === 'eml') {
+    await invoke('mail_save_as_eml', {
+      accountId: row.accountId,
+      folder: row.folder,
+      uid: row.uid,
+      targetPath: path,
+    })
+  } else {
+    await invoke('mail_save_as_html', {
+      accountId: row.accountId,
+      folder: row.folder,
+      uid: row.uid,
+      targetPath: path,
+    })
+  }
+  notify(`已保存到 ${path}`)
 }
 
 async function onRefreshFolders() {
@@ -634,6 +703,8 @@ async function contextAction(action, target) {
     if (action === 'flag') await store.setFlagged(row, !row.flagged)
     if (action === 'move') await store.moveMessages([row], target)
     if (action === 'delete') await store.deleteMessages([row])
+    if (action === 'saveEml') await saveMessageAs(row, 'eml')
+    if (action === 'saveHtml') await saveMessageAs(row, 'html')
   } catch (error) {
     notify(String(error?.message || error), true)
   }

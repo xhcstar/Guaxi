@@ -276,7 +276,13 @@ fn reindex_message(
             segment(&from_addr),
             segment(&from_name),
             segment(&to_json),
-            segment(&body),
+            // 正文若已加密，不做分词——密文索引既无意义又会污染检索结果。
+            // 主题、发件人、收件人仍在索引里，信头级搜索不受影响。
+            if body.starts_with(super::crypto::ENC_PREFIX) {
+                String::new()
+            } else {
+                segment(&body)
+            },
         ],
     )
     .map_err(|e| format!("写入索引失败: {e}"))?;
@@ -513,6 +519,37 @@ pub fn unread_counts() -> Result<Vec<(String, u32)>, String> {
     Ok(rows)
 }
 
+/// 删除文件夹行及其本地缓存（服务器侧已由 imap::delete_folder 删掉）。
+pub fn delete_folder_row(account_id: &str, name: &str) -> Result<(), String> {
+    let mut conn = open()?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    if fts_available_conn(&tx) {
+        tx.execute(
+            "DELETE FROM messages_fts WHERE rowid IN
+             (SELECT rowid FROM messages WHERE account_id=?1 AND folder=?2)",
+            params![account_id, name],
+        )
+        .ok();
+    }
+    tx.execute(
+        "DELETE FROM messages WHERE account_id=?1 AND folder=?2",
+        params![account_id, name],
+    )
+    .ok();
+    tx.execute(
+        "DELETE FROM message_bodies WHERE account_id=?1 AND folder=?2",
+        params![account_id, name],
+    )
+    .ok();
+    tx.execute(
+        "DELETE FROM folders WHERE account_id=?1 AND name=?2",
+        params![account_id, name],
+    )
+    .ok();
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// UIDVALIDITY 变化时整段作废某个文件夹的本地缓存。
 pub fn clear_folder_messages(account_id: &str, folder: &str) -> Result<(), String> {
     let mut conn = open()?;
@@ -659,17 +696,74 @@ pub fn upsert_body(
 ) -> Result<(), String> {
     let mut conn = open()?;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+    // 本地加密（默认开）：正文与附件清单在落盘前加密。
+    // 代价要说明白——正文加密后 FTS 索引不到它，正文搜索会退化，
+    // 这一点由 `encrypted_body_index_placeholder` 在前面挡住，不会静默失效。
+    let encrypt = encryption_enabled();
+    let sealed_html = match html {
+        Some(value) if encrypt => Some(crypto::encrypt(account_id, value)?),
+        other => other.map(|v| v.to_string()),
+    };
+    let sealed_text = if encrypt {
+        crypto::encrypt(account_id, text)?
+    } else {
+        text.to_string()
+    };
+    let sealed_attachments = if encrypt {
+        crypto::encrypt(account_id, attachments_json)?
+    } else {
+        attachments_json.to_string()
+    };
+
     tx.execute(
         r#"INSERT INTO message_bodies (account_id, folder, uid, html, text, attachments_json, body_fetched)
            VALUES (?1,?2,?3,?4,?5,?6,1)
            ON CONFLICT(account_id, folder, uid) DO UPDATE SET
                 html=excluded.html, text=excluded.text,
                 attachments_json=excluded.attachments_json, body_fetched=1"#,
-        params![account_id, folder, uid, html, text, attachments_json],
+        params![account_id, folder, uid, sealed_html, sealed_text, sealed_attachments],
     )
     .map_err(|e| e.to_string())?;
     reindex_message(&tx, account_id, folder, uid)?;
     tx.commit().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 本地加密开关的进程内缓存。默认开启——「默认安全」比「默认好用」更该是默认值。
+static ENCRYPT_CACHE: once_cell::sync::OnceCell<std::sync::atomic::AtomicBool> =
+    once_cell::sync::OnceCell::new();
+
+fn encrypt_flag() -> &'static std::sync::atomic::AtomicBool {
+    ENCRYPT_CACHE.get_or_init(|| {
+        let value = open()
+            .ok()
+            .and_then(|conn| {
+                conn.query_row("SELECT value FROM meta WHERE key='encrypt_local'", [], |r| {
+                    r.get::<_, String>(0)
+                })
+                .ok()
+            })
+            // 没有这条设置（老库）时按默认开启。
+            .map(|v| v != "0")
+            .unwrap_or(true);
+        std::sync::atomic::AtomicBool::new(value)
+    })
+}
+
+pub fn encryption_enabled() -> bool {
+    encrypt_flag().load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn set_encryption_enabled(enabled: bool) -> Result<(), String> {
+    let conn = open()?;
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES ('encrypt_local', ?1)
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        params![if enabled { "1" } else { "0" }],
+    )
+    .map_err(|e| format!("保存加密设置失败: {e}"))?;
+    encrypt_flag().store(enabled, std::sync::atomic::Ordering::Relaxed);
     Ok(())
 }
 
@@ -680,21 +774,39 @@ pub fn get_body(
     uid: u32,
 ) -> Result<Option<(Option<String>, String, String, bool)>, String> {
     let conn = open()?;
-    conn.query_row(
-        "SELECT html, text, attachments_json, body_fetched FROM message_bodies
-         WHERE account_id=?1 AND folder=?2 AND uid=?3",
-        params![account_id, folder, uid],
-        |row| {
-            Ok((
-                row.get::<_, Option<String>>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, i32>(3)? != 0,
-            ))
-        },
-    )
-    .optional()
-    .map_err(|e| e.to_string())
+    let raw: Option<(Option<String>, String, String, bool)> = conn
+        .query_row(
+            "SELECT html, text, attachments_json, body_fetched FROM message_bodies
+             WHERE account_id=?1 AND folder=?2 AND uid=?3",
+            params![account_id, folder, uid],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i32>(3)? != 0,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+
+    let Some((html, text, attachments, fetched)) = raw else {
+        return Ok(None);
+    };
+
+    // 解密。历史明文（没有 enc:v1: 前缀）原样返回，老数据不需要迁移。
+    // 解密失败（换机器、密钥丢失）时给一句人话，而不是把 base64 甩到界面上。
+    let unseal = |value: &str| -> String {
+        match crypto::decrypt(account_id, value) {
+            Ok(Some(plain)) => plain,
+            Ok(None) => value.to_string(),
+            Err(_) => "⚠ 这封邮件的内容无法解密（加密密钥已变更或数据来自另一台设备）".to_string(),
+        }
+    };
+
+    let html = html.map(|value| unseal(&value)).filter(|value| !value.is_empty());
+    Ok(Some((html, unseal(&text), unseal(&attachments), fetched)))
 }
 
 pub fn get_summary(

@@ -24,6 +24,9 @@
   --mail-reading-size: 15px;
   --mail-radius: 10px;
   --mail-radius-sm: 6px;
+  /* 正文纸面：与界面主题解耦，默认浅色。 */
+  --mail-doc-bg: #ffffff;
+  --mail-doc-text: #22262c;
 
   display: flex;
   flex-direction: column;
@@ -108,30 +111,32 @@
 }
 
 /* 折叠：账户栏收成 0，列表占据剩下的空间。 */
-/* 网格列必须与实际渲染的子节点一一对应。四种组合的子节点是：
-     默认        ：侧栏 / 分隔条 / 列表 / 分隔条 / 阅读器
-     只收侧栏    ：展开条 / 列表 / 分隔条 / 阅读器
-     只收列表    ：侧栏 / 分隔条 / 展开条 / 阅读器
-     两个都收    ：展开条 / 展开条 / 阅读器
-   分隔条视觉宽 1px（命中区靠 padding 撑开，不影响布局），展开条 18/24px。 */
+/* 网格列必须与实际渲染的子节点一一对应（用 v-if，不用 v-show——
+   隐藏的元素仍然占网格列，列数会对不上）。四种组合：
+     默认     ：侧栏 / 分隔条 / 列表 / 分隔条 / 阅读器
+     只收侧栏 ：列表 / 分隔条 / 阅读器
+     只收列表 ：侧栏 / 分隔条 / 展开条 / 阅读器
+     两个都收 ：展开条 / 阅读器
+   分隔条净占 6px（元素 11px + 负 margin 5px），展开条 24px。 */
 .mail-shell.is-sidebar-collapsed {
-  grid-template-columns: 18px var(--mail-list-w, 340px) 6px minmax(0, 1fr);
+  /* 侧栏完全消失，不留窄条：入口在顶栏的菜单图标上。 */
+  grid-template-columns: var(--mail-list-w, 340px) 6px minmax(0, 1fr);
 }
 
 .mail-shell.is-list-collapsed {
   grid-template-columns: var(--mail-sidebar-w, 232px) 6px 24px minmax(0, 1fr);
+}
+/* 侧栏折叠 + 列表折叠：子节点是「展开条 + 阅读器」，没有侧栏也没有侧栏分隔条。 */
+.mail-shell.is-sidebar-collapsed.is-list-collapsed {
+  grid-template-columns: 24px minmax(0, 1fr);
 }
 
 .mail-shell.is-list-collapsed:not(:has(.mail-reader)) {
   grid-template-columns: var(--mail-sidebar-w, 232px) 6px 24px;
 }
 
-.mail-shell.is-sidebar-collapsed.is-list-collapsed {
-  grid-template-columns: 18px 24px minmax(0, 1fr);
-}
-
 .mail-shell.is-sidebar-collapsed.is-list-collapsed:not(:has(.mail-reader)) {
-  grid-template-columns: 18px 24px;
+  grid-template-columns: 24px;
 }
 
 /* ---------- 栏边界：可拖拽的分隔条 + 折叠手柄 ---------- */
@@ -305,10 +310,42 @@
 }
 
 .mail-section-label {
-  font-size: 11px;
+  /* 侧栏字号整体偏小是真实反馈：分区标题 11 → 12，条目 12.5 → 13.5。 */
+  font-size: 12px;
   color: var(--mail-text-muted);
-  padding: 12px 6px 4px;
+  padding: 12px 6px 6px;
   user-select: none;
+}
+
+.mail-section-label.is-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.mail-section-action {
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--mail-text-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.mail-section-action:hover {
+  background: var(--mail-panel-hover);
+  color: var(--mail-accent);
+}
+
+.mail-folder-create {
+  padding: 4px 6px;
+}
+.mail-folder-create .mail-input {
+  font-size: 13px;
+  padding: 4px 8px;
 }
 
 .mail-account {
@@ -317,6 +354,7 @@
   gap: 8px;
   width: 100%;
   padding: 7px 8px;
+  font-size: 13px;
   border: 0;
   border-radius: var(--mail-radius-sm);
   background: transparent;
@@ -346,7 +384,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .mail-badge {
@@ -376,7 +414,7 @@
   background: transparent;
   color: var(--mail-text-secondary);
   font: inherit;
-  font-size: 12.5px;
+  font-size: 13.5px;
   text-align: left;
   cursor: pointer;
 }
@@ -804,17 +842,46 @@
 
 /* 正文排版：邮件自带字号与行高各不相同，这里统一一次。
    正文用衬线是可读性考虑，但只在「阅读区」生效，界面仍然是无衬线。 */
+/* 邮件正文的「纸」：邮件是按浅底设计的（营销邮件常直接写死黑字/白底），
+   强行把文字改成浅色会让暗色主题下整封信变成一团深灰——真实反馈过。
+   做法是给正文一个独立的阅读纸面：暗色主题下也保持浅底深字，
+   这是 Gmail / Outlook 的既有做法，也符合「邮件原貌」的预期。 */
 .mail-body {
   font-family: var(--mail-font-reading);
   font-size: var(--mail-reading-size);
   line-height: 1.72;
-  color: var(--mail-text);
   word-break: break-word;
   overflow-wrap: anywhere;
+  color: var(--mail-doc-text);
+  background: var(--mail-doc-bg);
+  border-radius: 8px;
+  padding: 18px 20px;
+  /* 正文里显式写死颜色（color: #000 / background: #fff）时，
+     也要保证它们落在纸面上而不是主题底上。 */
+  isolation: isolate;
 }
 
 .mail-body .guaxi-mail-body {
   max-width: 76ch;
+}
+
+.mail-body--plain {
+  white-space: pre-wrap;
+  margin: 0;
+  font-family: var(--mail-font-reading);
+}
+
+/* 链接在浅色纸上必须换成深一点的主色：主题里的 accent 是为深色界面挑的，
+   直接铺在白底上对比度不够。 */
+.mail-body a {
+  color: #1a5fd0;
+}
+
+/* 邮件自带的浅色块（比如灰色小卡片）在白纸上才有对比；
+   在暗色主题下不要把它们的背景改成深色。 */
+.mail-body [bgcolor] {
+  /* bgcolor 已在清洗层剥除；这里只是兜底旧缓存。 */
+  background-color: transparent !important;
 }
 
 .mail-body img {
@@ -1067,13 +1134,13 @@
       minmax(0, 1fr);
   }
   .mail-shell.is-sidebar-collapsed {
-    grid-template-columns: 18px min(var(--mail-list-w, 340px), 300px) 6px minmax(0, 1fr);
+    grid-template-columns: min(var(--mail-list-w, 340px), 300px) 6px minmax(0, 1fr);
   }
   .mail-shell.is-list-collapsed {
     grid-template-columns: min(var(--mail-sidebar-w, 232px), 200px) 6px 24px minmax(0, 1fr);
   }
   .mail-shell.is-sidebar-collapsed.is-list-collapsed {
-    grid-template-columns: 18px 24px minmax(0, 1fr);
+    grid-template-columns: 6px 24px minmax(0, 1fr);
   }
 }
 
@@ -1084,13 +1151,13 @@
     grid-template-columns: 184px 6px minmax(0, 1fr);
   }
   .mail-shell.is-sidebar-collapsed {
-    grid-template-columns: 18px minmax(0, 1fr);
+    grid-template-columns: 6px minmax(0, 1fr);
   }
   .mail-shell.is-list-collapsed {
     grid-template-columns: 184px 6px 24px minmax(0, 1fr);
   }
   .mail-shell.is-sidebar-collapsed.is-list-collapsed {
-    grid-template-columns: 18px 24px minmax(0, 1fr);
+    grid-template-columns: 6px 24px minmax(0, 1fr);
   }
   .mail-shell .mail-reader {
     position: absolute;
@@ -1360,9 +1427,33 @@
 }
 
 /* 写信窗口 */
+/* 写信窗口：默认给足够大的写作区，支持最大化与手动调整尺寸。
+   「太小」是真实反馈——写长邮件时正文区只有两三百像素高。 */
 .mail-composer {
-  width: min(860px, 94vw);
-  max-height: 90vh;
+  width: min(980px, 94vw);
+  height: min(760px, 90vh);
+  max-width: 96vw;
+  max-height: 96vh;
+  min-width: 520px;
+  min-height: 380px;
+  /* 右下角可拖动改变大小；两轴都放开。 */
+  resize: both;
+  overflow: hidden;
+}
+
+/* 最大化：铺满整个可用区域，正文获得全部剩余高度。 */
+.mail-composer.is-maximized {
+  width: 96vw !important;
+  height: 94vh !important;
+  resize: none;
+}
+
+.mail-composer-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 .mail-compose-fields {
   position: relative;
@@ -1440,7 +1531,8 @@
 .mail-compose-body {
   flex: 1 1 auto;
   min-height: 200px;
-  max-height: 46vh;
+  /* 不设 max-height：窗口拉大 / 最大化时正文要跟着长，
+     之前固定 46vh，最大化也还是那么高，等于白拉。 */
   overflow-y: auto;
 }
 .mail-compose-editor {
@@ -1467,8 +1559,9 @@
 }
 
 .mail-compose-source {
+  flex: 1 1 auto;
   width: 100%;
-  min-height: 260px;
+  min-height: 200px;
   padding: 14px 18px;
   border: 0;
   background: var(--mail-code-bg);

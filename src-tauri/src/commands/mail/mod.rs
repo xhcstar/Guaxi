@@ -15,6 +15,8 @@
 //! 库里连密文都不存——这样备份 / 同步数据库不会把口令带出去。
 
 pub mod contacts;
+/// 本地静态加密：正文与附件清单在落盘前加密，密钥存系统 keychain。
+pub mod crypto;
 pub mod imap;
 pub mod mime;
 pub mod model;
@@ -260,6 +262,38 @@ pub async fn mail_create_folder(
     tauri::async_runtime::spawn_blocking(move || imap::create_folder(&account, &password, &name))
         .await
         .map_err(|e| format!("创建文件夹任务失败: {e}"))??;
+    Ok(())
+}
+
+/// 删除自建文件夹。角色文件夹（收件箱/已发送/草稿/垃圾箱/归档）一律拒绝——
+/// 删掉它们通常意味着连同邮件一起消失，不该由一个右键菜单触发。
+#[command]
+pub async fn mail_delete_folder(
+    app: AppHandle,
+    account_id: String,
+    name: String,
+) -> Result<(), String> {
+    ensure_init(&app)?;
+    let account = load_account(&account_id)?;
+    let folders = store::list_folders(&account_id)?;
+    let folder = folders
+        .iter()
+        .find(|f| f.name == name)
+        .ok_or_else(|| "文件夹不存在".to_string())?;
+    if folder.role != FolderRole::Custom {
+        return Err(format!(
+            "「{}」是系统文件夹，不能删除",
+            folder.display_name
+        ));
+    }
+    let password = account_password(&account)?;
+    let (acc, folder_name) = (account.clone(), name.clone());
+    tauri::async_runtime::spawn_blocking(move || {
+        imap::delete_folder(&acc, &password, &folder_name)
+    })
+    .await
+    .map_err(|e| format!("删除文件夹任务失败: {e}"))??;
+    store::delete_folder_row(&account_id, &name)?;
     Ok(())
 }
 
@@ -879,6 +913,78 @@ fn unique_path(dir: &std::path::Path, filename: &str) -> std::path::PathBuf {
         }
     }
     dir.join(format!("{stem}-{}{}", Uuid::new_v4(), ext))
+}
+
+/// 把整封邮件（含附件）另存为 `.eml`。
+///
+/// 用原始报文而不是重新拼一份：「另存为」的用途是归档 / 转交 / 交给别的客户端打开，
+/// 原始 RFC822 才能被 Thunderbird、Outlook、邮件取证工具原样读取。
+#[command]
+pub async fn mail_save_as_eml(
+    app: AppHandle,
+    account_id: String,
+    folder: String,
+    uid: u32,
+    target_path: String,
+) -> Result<String, String> {
+    ensure_init(&app)?;
+    let account = load_account(&account_id)?;
+    let password = account_password(&account)?;
+    let (f, u) = (folder.clone(), uid);
+    let raw =
+        tauri::async_runtime::spawn_blocking(move || imap::fetch_raw(&account, &password, &f, u))
+            .await
+            .map_err(|e| format!("取信任务失败: {e}"))??;
+    std::fs::write(&target_path, &raw).map_err(|e| format!("写入文件失败: {e}"))?;
+    Ok(target_path)
+}
+
+/// 把邮件正文另存为 `.html`（单文件，图片仍是远端地址）。
+#[command]
+pub async fn mail_save_as_html(
+    app: AppHandle,
+    account_id: String,
+    folder: String,
+    uid: u32,
+    target_path: String,
+) -> Result<String, String> {
+    ensure_init(&app)?;
+    let (html, text, _, _) = store::get_body(&account_id, &folder, uid)?
+        .ok_or_else(|| "本地没有这封邮件的正文".to_string())?;
+    let summary = store::get_summary(&account_id, &folder, uid)?
+        .ok_or_else(|| "邮件不存在".to_string())?;
+    let title = if summary.subject.trim().is_empty() {
+        "（无主题）".to_string()
+    } else {
+        summary.subject.clone()
+    };
+    let body = html.unwrap_or_else(|| format!("<pre>{}</pre>", escape_html(&text)));
+    let doc = format!(
+        "<!doctype html><meta charset=\"utf-8\"><title>{}</title>         <style>body{{font-family:system-ui,'Microsoft YaHei',sans-serif;max-width:820px;         margin:32px auto;padding:0 20px;line-height:1.7;color:#222}}         img{{max-width:100%}}</style>{}",
+        escape_html(&title),
+        body
+    );
+    std::fs::write(&target_path, doc).map_err(|e| format!("写入文件失败: {e}"))?;
+    Ok(target_path)
+}
+
+fn escape_html(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// 本地加密开关（默认开）。关闭后新正文明文落盘，已有密文仍可读。
+#[command]
+pub async fn mail_get_encryption_enabled(app: AppHandle) -> Result<bool, String> {
+    ensure_init(&app)?;
+    Ok(store::encryption_enabled())
+}
+
+#[command]
+pub async fn mail_set_encryption_enabled(app: AppHandle, enabled: bool) -> Result<(), String> {
+    ensure_init(&app)?;
+    store::set_encryption_enabled(enabled)
 }
 
 // ---------------------------------------------------------------------------

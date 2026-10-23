@@ -196,6 +196,21 @@
           />
           在收件箱里按会话聚合同一主题的邮件
         </label>
+        <div class="mail-section-divider"></div>
+        <div class="mail-flabel" style="margin-bottom: 6px">本地加密</div>
+        <label class="mail-check">
+          <input
+            type="checkbox"
+            :checked="encryptionEnabled"
+            @change="toggleEncryption($event.target.checked)"
+          />
+          正文与附件在本地数据库中加密存储（密钥存系统凭据库）
+        </label>
+        <p class="mail-hint" style="margin: 0 0 8px">
+          关闭后新到的邮件正文明文落盘，已有密文仍可读。开启加密后，<strong>正文搜索</strong>不再可用
+          ——密文无法建立全文索引；主题、发件人、收件人、时间的搜索不受影响。
+        </p>
+
         <label class="mail-check">
           <input
             type="checkbox"
@@ -240,6 +255,25 @@ const densityOptions = [
 ]
 
 const fonts = ref([])
+const encryptionEnabled = ref(true)
+
+onMounted(async () => {
+  try {
+    encryptionEnabled.value = await invoke('mail_get_encryption_enabled')
+  } catch {
+    encryptionEnabled.value = true
+  }
+})
+
+async function toggleEncryption(enabled) {
+  try {
+    await invoke('mail_set_encryption_enabled', { enabled })
+    encryptionEnabled.value = enabled
+  } catch (error) {
+    window.alert(String(error?.message || error))
+    encryptionEnabled.value = !enabled
+  }
+}
 
 onMounted(async () => {
   try {

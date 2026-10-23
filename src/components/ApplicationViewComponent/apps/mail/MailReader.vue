@@ -67,7 +67,7 @@
           v-html="renderedHtml"
           @click="onBodyClick"
         ></div>
-        <pre v-else class="mail-body" style="white-space: pre-wrap">{{ detail.text }}</pre>
+        <pre v-else class="mail-body mail-body--plain">{{ detail.text }}</pre>
 
         <div v-if="detail.attachments?.length" class="mail-attachments">
           <button

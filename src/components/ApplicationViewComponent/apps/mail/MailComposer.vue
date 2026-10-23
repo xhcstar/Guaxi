@@ -1,6 +1,11 @@
 <template>
   <div class="mail-modal-backdrop" @click.self="$emit('close')">
-    <div class="mail-modal mail-composer" role="dialog" aria-label="写邮件">
+    <div
+      class="mail-modal mail-composer"
+      :class="{ 'is-maximized': maximized }"
+      role="dialog"
+      aria-label="写邮件"
+    >
       <div class="mail-modal-head">
         <h2 class="mail-modal-title">{{ title }}</h2>
         <select
@@ -13,6 +18,14 @@
             {{ account.email }}
           </option>
         </select>
+        <button
+          class="mail-icon-btn"
+          :title="maximized ? '还原窗口' : '最大化'"
+          :aria-label="maximized ? '还原窗口' : '最大化'"
+          @click="maximized = !maximized"
+        >
+          <n-icon :component="maximized ? ContractOutline : ExpandOutline" />
+        </button>
         <button class="mail-modal-close" title="关闭" @click="$emit('close')">×</button>
       </div>
 
@@ -137,14 +150,13 @@
       </div>
 
       <div class="mail-compose-body">
-        <div v-if="sourceMode" class="mail-compose-body">
-          <textarea
-            class="mail-compose-source"
-            :value="htmlSource"
-            spellcheck="false"
-            @input="htmlSource = $event.target.value"
-          ></textarea>
-        </div>
+        <textarea
+          v-if="sourceMode"
+          class="mail-compose-source"
+          :value="htmlSource"
+          spellcheck="false"
+          @input="htmlSource = $event.target.value"
+        ></textarea>
         <div
           v-else
           ref="editorRef"
@@ -179,6 +191,8 @@
 
 <script setup>
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { NIcon } from 'naive-ui'
+import { ContractOutline, ExpandOutline } from '@vicons/ionicons5'
 import { open } from '@tauri-apps/plugin-dialog'
 import { useContactsStore } from '../../../../stores/contactsStore'
 import AddressInput from './AddressInput.vue'
@@ -197,6 +211,7 @@ const props = defineProps({
 const emit = defineEmits(['update', 'send', 'save-draft', 'close'])
 
 const editorRef = ref(null)
+const maximized = ref(false)
 const pickerOpen = ref(false)
 const contacts = useContactsStore()
 const sourceMode = ref(false)

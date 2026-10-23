@@ -419,6 +419,28 @@ pub fn create_folder(account: &Account, password: &str, name: &str) -> Result<()
     Ok(())
 }
 
+/// 删除服务器上的文件夹（`DELETE`）。
+///
+/// 只允许删「用户自建」的文件夹：收件箱 / 已发送 / 草稿 / 垃圾箱这些角色文件夹
+/// 一旦删掉，服务端往往是整个文件夹连同里面的邮件一起没，属于不可逆操作。
+/// 调用方（命令层）已经做过角色校验，这里再挡一道。
+pub fn delete_folder(account: &Account, password: &str, name: &str) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("文件夹名为空".to_string());
+    }
+    if name.eq_ignore_ascii_case("INBOX") {
+        return Err("收件箱不能删除".to_string());
+    }
+    let mut session = login(account, password)?;
+    let encoded = utf7::encode(name);
+    session
+        .delete(&encoded)
+        .map_err(|e| format!("删除文件夹失败: {e}"))?;
+    let _ = session.logout();
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // 同步
 // ---------------------------------------------------------------------------

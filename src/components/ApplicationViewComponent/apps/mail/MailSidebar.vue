@@ -71,18 +71,40 @@
           <span class="mail-folder-name">全部邮件</span>
         </button>
 
-        <div class="mail-section-label">文件夹</div>
+        <div class="mail-section-label is-row">
+          <span>文件夹</span>
+          <button
+            class="mail-section-action"
+            title="新建文件夹"
+            aria-label="新建文件夹"
+            @click="startCreateFolder"
+          >
+            ＋
+          </button>
+        </div>
         <button
           v-for="folder in folders"
           :key="folder.name"
           class="mail-folder"
           :class="{ 'is-active': scope === 'folder' && activeFolder === folder.name }"
           @click="$emit('select-folder', folder.name)"
+          @contextmenu.prevent="openFolderMenu(folder, $event)"
         >
           <span class="mail-folder-icon">{{ folderIcon(folder.role) }}</span>
           <span class="mail-folder-name" :title="folder.displayName">{{ folder.displayName }}</span>
           <span v-if="folder.unread" class="mail-badge">{{ folder.unread }}</span>
         </button>
+        <div v-if="creating" class="mail-folder-create">
+          <input
+            ref="createInput"
+            v-model="newFolderName"
+            class="mail-input"
+            placeholder="文件夹名，回车创建"
+            @keydown.enter.prevent="commitCreateFolder"
+            @keydown.esc="cancelCreateFolder"
+            @blur="cancelCreateFolder"
+          />
+        </div>
       </template>
 
       <template v-if="labels.length">
@@ -100,11 +122,31 @@
         </button>
       </template>
     </div>
+
+    <!-- 文件夹右键菜单：自建文件夹可删除；系统文件夹只给「标记已读」这类安全动作。 -->
+    <div
+      v-if="folderMenu"
+      class="mail-context"
+      :style="{ left: `${folderMenu.x}px`, top: `${folderMenu.y}px` }"
+      @click.stop
+    >
+      <button class="mail-context-item" @click="menuAction('select')">打开</button>
+      <button class="mail-context-item" @click="menuAction('create')">新建文件夹…</button>
+      <div class="mail-context-sep"></div>
+      <button
+        class="mail-context-item is-danger"
+        :disabled="folderMenu.folder.role !== 'custom'"
+        :title="folderMenu.folder.role !== 'custom' ? '系统文件夹不能删除' : ''"
+        @click="menuAction('delete')"
+      >
+        删除文件夹
+      </button>
+    </div>
   </aside>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
 
 const props = defineProps({
   accounts: { type: Array, default: () => [] },
@@ -116,7 +158,61 @@ const props = defineProps({
   scope: { type: String, default: 'all' },
   unread: { type: Object, default: () => ({}) },
 })
-defineEmits(['select-account', 'select-folder', 'select-scope', 'compose', 'add-account'])
+const emit = defineEmits([
+  'select-account',
+  'select-folder',
+  'select-scope',
+  'compose',
+  'add-account',
+  'create-folder',
+  'delete-folder',
+])
+
+const creating = ref(false)
+const newFolderName = ref('')
+const createInput = ref(null)
+const folderMenu = ref(null)
+
+async function startCreateFolder() {
+  creating.value = true
+  newFolderName.value = ''
+  await nextTick()
+  createInput.value?.focus()
+}
+
+function commitCreateFolder() {
+  const name = newFolderName.value.trim()
+  creating.value = false
+  newFolderName.value = ''
+  if (name) emit('create-folder', name)
+}
+
+function cancelCreateFolder() {
+  creating.value = false
+  newFolderName.value = ''
+}
+
+function openFolderMenu(folder, event) {
+  const x = Math.min(event.clientX, window.innerWidth - 200)
+  const y = Math.min(event.clientY, window.innerHeight - 160)
+  folderMenu.value = { folder, x, y }
+  setTimeout(() => document.addEventListener('click', closeFolderMenu, { once: true }), 0)
+}
+
+function closeFolderMenu() {
+  folderMenu.value = null
+}
+
+async function menuAction(action) {
+  const folder = folderMenu.value?.folder
+  closeFolderMenu()
+  if (!folder) return
+  if (action === 'select') emit('select-folder', folder.name)
+  if (action === 'create') await startCreateFolder()
+  if (action === 'delete') emit('delete-folder', folder)
+}
+
+onBeforeUnmount(() => document.removeEventListener('click', closeFolderMenu))
 
 const folders = computed(() => {
   const list = props.foldersByAccount[props.activeAccountId] || []

@@ -1,6 +1,15 @@
 <template>
   <header class="mail-toolbar">
     <div class="mail-toolbar-left">
+      <button
+        v-if="sidebarCollapsed"
+        class="mail-icon-btn"
+        title="展开账户与文件夹栏"
+        aria-label="展开账户与文件夹栏"
+        @click="$emit('toggle-sidebar')"
+      >
+        <n-icon :component="MenuOutline" />
+      </button>
       <span class="mail-toolbar-count" v-if="unread">{{ unread }} 封未读</span>
       <span class="mail-toolbar-count is-muted" v-else>没有未读邮件</span>
       <span class="mail-toolbar-sync" :class="{ 'is-stale': stale }">
@@ -9,32 +18,69 @@
     </div>
 
     <div class="mail-toolbar-actions">
-      <button class="mail-btn is-primary" @click="$emit('compose')">✎ 写邮件</button>
-      <span class="mail-toolbar-sep"></span>
-      <button class="mail-btn" :disabled="syncing" @click="$emit('sync')">
-        <span v-if="syncing" class="mail-spin"></span>
-        <span v-else>↻</span>
-        同步
-      </button>
-      <button class="mail-btn" :disabled="syncing" @click="$emit('refresh')" title="重新发现文件夹">
-        文件夹
+      <button class="mail-btn is-primary" @click="$emit('compose')">
+        <n-icon :component="CreateOutline" />
+        <span>写邮件</span>
       </button>
       <span class="mail-toolbar-sep"></span>
-      <button class="mail-btn" @click="$emit('contacts')">通讯录</button>
-      <button class="mail-btn" @click="$emit('rules')">收信规则</button>
-      <button class="mail-btn" @click="$emit('accounts')">账户</button>
-      <button class="mail-btn" @click="$emit('settings')">外观</button>
+
+      <button
+        class="mail-icon-btn"
+        :disabled="syncing"
+        title="同步收件"
+        aria-label="同步收件"
+        @click="$emit('sync')"
+      >
+        <n-icon v-if="!syncing" :component="RefreshOutline" />
+        <span v-else class="mail-spin"></span>
+      </button>
+      <button
+        class="mail-icon-btn"
+        :disabled="syncing"
+        title="重新发现文件夹"
+        aria-label="重新发现文件夹"
+        @click="$emit('refresh')"
+      >
+        <n-icon :component="FolderOpenOutline" />
+      </button>
+
+      <span class="mail-toolbar-sep"></span>
+
+      <button class="mail-icon-btn" title="通讯录" aria-label="通讯录" @click="$emit('contacts')">
+        <n-icon :component="PeopleOutline" />
+      </button>
+      <button class="mail-icon-btn" title="收信规则" aria-label="收信规则" @click="$emit('rules')">
+        <n-icon :component="FunnelOutline" />
+      </button>
+      <button class="mail-icon-btn" title="账户" aria-label="账户" @click="$emit('accounts')">
+        <n-icon :component="PersonCircleOutline" />
+      </button>
+      <button class="mail-icon-btn" title="外观与设置" aria-label="外观与设置" @click="$emit('settings')">
+        <n-icon :component="OptionsOutline" />
+      </button>
     </div>
   </header>
 </template>
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { NIcon } from 'naive-ui'
+import {
+  CreateOutline,
+  FolderOpenOutline,
+  FunnelOutline,
+  MenuOutline,
+  OptionsOutline,
+  PeopleOutline,
+  PersonCircleOutline,
+  RefreshOutline,
+} from '@vicons/ionicons5'
 
 const props = defineProps({
   syncing: { type: Boolean, default: false },
   lastSyncAt: { type: Number, default: 0 },
   unread: { type: Number, default: 0 },
+  sidebarCollapsed: { type: Boolean, default: false },
 })
 defineEmits([
   'sync',
@@ -44,6 +90,7 @@ defineEmits([
   'rules',
   'settings',
   'contacts',
+  'toggle-sidebar',
 ])
 
 // 相对时间需要每分钟重算一次；用一个本地 tick 驱动，不依赖 store 变化。
@@ -82,7 +129,7 @@ const stale = computed(() => props.lastSyncAt && tick.value - props.lastSyncAt >
 
 .mail-toolbar-left {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 10px;
   min-width: 0;
 }
@@ -109,8 +156,24 @@ const stale = computed(() => props.lastSyncAt && tick.value - props.lastSyncAt >
 .mail-toolbar-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   margin-left: auto;
+}
+
+/* 图标按钮：比文字按钮紧凑得多，也不会因为中英文混排长短不齐。 */
+.mail-toolbar-actions .mail-icon-btn {
+  width: 30px;
+  height: 30px;
+  font-size: 17px;
+}
+
+.mail-toolbar-actions .mail-btn.is-primary {
+  gap: 6px;
+  padding: 0 12px;
+}
+
+.mail-toolbar-actions .mail-btn.is-primary :deep(.n-icon) {
+  font-size: 16px;
 }
 
 /* .mail-toolbar-sep 的样式放在 mail.css（全局）：阅读区工具栏也用同一个类，
