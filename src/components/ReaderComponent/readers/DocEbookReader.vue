@@ -8,6 +8,54 @@
       </span>
       <span class="guaxi-doc-reader__spacer" />
 
+      <!--
+        搜索条就放在工具栏中间那段空白里（原先是纯 spacer），不再另起一整行。
+        阅读时正文最值钱，为了一个搜索框把正文整体下推 34px 没有道理；
+        这里按需展开、按需收起，工具栏高度始终不变。
+      -->
+      <div v-if="searchOpen" class="gdr-ebook__search">
+        <input
+          ref="searchInputRef"
+          v-model="searchQuery"
+          class="gdr-ebook__search-input"
+          type="search"
+          placeholder="在全书范围内搜索…"
+          aria-label="在全书范围内搜索，Enter 下一个，Shift+Enter 上一个，Esc 关闭"
+          @input="runSearch"
+          @keydown.enter.prevent="nextMatch($event.shiftKey ? -1 : 1)"
+          @keydown.esc.prevent="toggleSearch"
+        />
+        <span class="guaxi-doc-reader__meta gdr-ebook__search-count">
+          {{ searchHits.length ? `${searchCursor + 1} / ${searchHits.length}` : (searchQuery ? '无结果' : '') }}
+        </span>
+        <button
+          class="guaxi-doc-reader__icon-btn"
+          title="上一个匹配（Shift+Enter）"
+          aria-label="上一个匹配"
+          :disabled="!searchHits.length"
+          @click="nextMatch(-1)"
+        >
+          <Icon :icon="arrowUpIcon" width="15" height="15" />
+        </button>
+        <button
+          class="guaxi-doc-reader__icon-btn"
+          title="下一个匹配（Enter）"
+          aria-label="下一个匹配"
+          :disabled="!searchHits.length"
+          @click="nextMatch(1)"
+        >
+          <Icon :icon="arrowDownIcon" width="15" height="15" />
+        </button>
+        <button
+          class="guaxi-doc-reader__icon-btn"
+          title="关闭搜索（Esc）"
+          aria-label="关闭搜索"
+          @click="toggleSearch"
+        >
+          <Icon :icon="closeIcon" width="15" height="15" />
+        </button>
+      </div>
+
       <!-- 图标按钮统一带 title + aria-label：鼠标悬停有提示，读屏也能读。 -->
       <button
         class="guaxi-doc-reader__icon-btn"
@@ -52,25 +100,76 @@
 
       <span class="guaxi-doc-reader__divider" />
 
-      <button
-        class="guaxi-doc-reader__icon-btn"
-        title="上一节（←）"
-        aria-label="上一节"
-        :disabled="activeIndex <= 0"
-        @click="goSection(activeIndex - 1)"
-      >
-        <Icon :icon="chevronLeftIcon" width="15" height="15" />
-      </button>
-      <span class="gdr-ebook__progress" :title="progressLabel ? `全书进度 ${progressLabel}` : ''">{{ progressLabel }}</span>
-      <button
-        class="guaxi-doc-reader__icon-btn"
-        title="下一节（→）"
-        aria-label="下一节"
-        :disabled="activeIndex >= sections.length - 1"
-        @click="goSection(activeIndex + 1)"
-      >
-        <Icon :icon="chevronRightIcon" width="15" height="15" />
-      </button>
+      <!--
+        缩放：电子书正文是流式的，缩放等同于改字号，所以这里和「显示设置」里的字号
+        滑杆共用 zoom —— 读者从工具栏点 + 时，正文立刻变大，不需要先去开面板。
+      -->
+      <div class="gdr-ebook__zoom" role="group" aria-label="缩放">
+        <button
+          class="guaxi-doc-reader__icon-btn"
+          title="缩小（Ctrl+-）"
+          aria-label="缩小"
+          :disabled="zoom <= 0.5"
+          @click="zoomBy(0.9)"
+        >
+          <Icon :icon="minusIcon" width="15" height="15" />
+        </button>
+        <span class="gdr-ebook__zoom-val" :title="`当前缩放 ${Math.round(zoom * 100)}%`">{{ Math.round(zoom * 100) }}%</span>
+        <button
+          class="guaxi-doc-reader__icon-btn"
+          title="放大（Ctrl+=）"
+          aria-label="放大"
+          :disabled="zoom >= 3"
+          @click="zoomBy(1.1)"
+        >
+          <Icon :icon="plusIcon" width="15" height="15" />
+        </button>
+      </div>
+
+      <!--
+        节导航收成一枚胶囊：← [12] / 340 60% →。
+        三样东西是同一件事（我在哪、怎么挪），分组之后工具栏的节奏和 PDF 那边一致，
+        也不会因为夹在图标按钮中间而显得零散。搜索展开时整组自动淡出，
+        把中间那段宽度让给输入框（见 .guaxi-doc-reader__bar:has(.gdr-ebook__search)）。
+      -->
+      <span class="gdr-ebook__nav gdr-ebook__nav--collapsible">
+        <button
+          class="guaxi-doc-reader__icon-btn"
+          title="上一节（←）"
+          aria-label="上一节"
+          :disabled="activeIndex <= 0"
+          @click="goSection(activeIndex - 1)"
+        >
+          <Icon :icon="chevronLeftIcon" width="15" height="15" />
+        </button>
+        <!--
+          节定位：可直接输入节号跳转。电子书常有几百节，只靠 ← → 一节一节挪
+          在长篇里根本不可用；输入框比滑杆精确（读者知道自己在第几节，不知道百分比）。
+        -->
+        <span class="gdr-ebook__section-jump" :title="progressLabel ? `全书进度 ${progressLabel}` : ''">
+          <input
+            v-model="sectionInput"
+            class="gdr-ebook__section-input"
+            type="number"
+            min="1"
+            :max="sections.length || 1"
+            aria-label="跳转到第几节"
+            @keydown.enter.prevent="commitSectionInput"
+            @blur="syncSectionInput"
+          />
+          <span class="gdr-ebook__section-total">/ {{ sections.length }}</span>
+          <span class="gdr-ebook__progress">{{ progressLabel }}</span>
+        </span>
+        <button
+          class="guaxi-doc-reader__icon-btn"
+          title="下一节（→）"
+          aria-label="下一节"
+          :disabled="activeIndex >= sections.length - 1"
+          @click="goSection(activeIndex + 1)"
+        >
+          <Icon :icon="chevronRightIcon" width="15" height="15" />
+        </button>
+      </span>
 
       <span class="guaxi-doc-reader__divider" />
 
@@ -101,50 +200,6 @@
       </button>
     </div>
 
-
-    <!-- 搜索条 -->
-    <div v-if="searchOpen" class="gdr-ebook__searchbar">
-      <input
-        ref="searchInputRef"
-        v-model="searchQuery"
-        class="gdr-ebook__search-input"
-        type="search"
-        placeholder="在全书范围内搜索…"
-        aria-label="在全书范围内搜索，Enter 下一个，Esc 关闭"
-        @input="runSearch"
-        @keydown.enter.prevent="nextMatch(1)"
-        @keydown.esc.prevent="toggleSearch"
-      />
-      <span class="guaxi-doc-reader__meta gdr-ebook__search-count">
-        {{ searchHits.length ? `${searchCursor + 1} / ${searchHits.length}` : (searchQuery ? '无结果' : '') }}
-      </span>
-      <button
-        class="guaxi-doc-reader__icon-btn"
-        title="上一个匹配（Shift+Enter）"
-        aria-label="上一个匹配"
-        :disabled="!searchHits.length"
-        @click="nextMatch(-1)"
-      >
-        <Icon :icon="arrowUpIcon" width="15" height="15" />
-      </button>
-      <button
-        class="guaxi-doc-reader__icon-btn"
-        title="下一个匹配（Enter）"
-        aria-label="下一个匹配"
-        :disabled="!searchHits.length"
-        @click="nextMatch(1)"
-      >
-        <Icon :icon="arrowDownIcon" width="15" height="15" />
-      </button>
-      <button
-        class="guaxi-doc-reader__icon-btn"
-        title="关闭搜索（Esc）"
-        aria-label="关闭搜索"
-        @click="toggleSearch"
-      >
-        <Icon :icon="closeIcon" width="15" height="15" />
-      </button>
-    </div>
 
     <!-- 划词译文面板：与编辑器 / PDF 阅读器同一套组件，交互一致。 -->
     <GuaxiSelectionTranslatePanel
@@ -367,6 +422,8 @@ import arrowUpIcon from '@iconify-icons/lucide/arrow-up'
 import arrowDownIcon from '@iconify-icons/lucide/arrow-down'
 import volumeIcon from '@iconify-icons/lucide/volume-2'
 import stopIcon from '@iconify-icons/lucide/square'
+import minusIcon from '@iconify-icons/lucide/minus'
+import plusIcon from '@iconify-icons/lucide/plus'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { createLogger } from '../../../utils/logger'
 import { useReaderReadAloud } from '../../../composables/useReaderReadAloud'
@@ -375,6 +432,7 @@ import { useSelectionReadAloud } from '../../../composables/useSelectionReadAlou
 import GuaxiSelectionTranslatePanel from '../../HomeViewComponent/GuaxiSelectionTranslatePanel.vue'
 import './readerPane.css'
 import { sanitizeSectionHtml } from './ebookSanitize.js'
+import { normalizeWithMap } from '../readerSearch'
 
 const logger = createLogger('DocEbookReader')
 
@@ -478,19 +536,81 @@ const searchHits = ref([])
 const searchCursor = ref(0)
 const searchInputRef = ref(null)
 
-const toggleSearch = () => {
-  searchOpen.value = !searchOpen.value
-  if (searchOpen.value) {
-    nextTick(() => searchInputRef.value?.focus())
-  } else {
-    searchQuery.value = ''
-    searchHits.value = []
-    searchCursor.value = 0
-    clearSearchHighlights()
+/**
+ * 正文里的文本节点（按文档顺序），搜索与高亮共用这一份。
+ *
+ * 为什么不拿原始 HTML 字符串做正则剥标签来算偏移：浏览器解析后的 DOM 会处理实体
+ * （`&nbsp;` `&amp;`）、注释、`<br>`、空白折叠，正则剥标签得到的是另一套文本，
+ * 两套文本的偏移一旦混用，就会出现「搜的是中文、高亮落在别处」。
+ *
+ * 只排除 script/style —— 它们不是正文。阅读器自己插入的 <mark> 不用排除：
+ * 包标记只是把文本节点切碎，拼接结果不变，偏移因此保持稳定。
+ */
+const collectTextNodes = (doc) => {
+  if (!doc?.body) return []
+  const out = []
+  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, {
+    acceptNode: (node) => {
+      if (!node.nodeValue) return NodeFilter.FILTER_REJECT
+      if (node.parentElement?.closest?.('script, style, head, title')) return NodeFilter.FILTER_REJECT
+      return NodeFilter.FILTER_ACCEPT
+    },
+  })
+  let node = walker.nextNode()
+  while (node) {
+    out.push(node)
+    node = walker.nextNode()
+  }
+  return out
+}
+
+/** 把一段 HTML 解析成正文文本（与 iframe 渲染走同一条 HTML→DOM 路径）。 */
+const sectionText = (html) => {
+  try {
+    const parsed = new DOMParser().parseFromString(String(html || ''), 'text/html')
+    return collectTextNodes(parsed).map((n) => n.nodeValue || '').join('')
+  } catch {
+    return ''
   }
 }
 
-/** 在章节 HTML 的文本节点里找匹配，返回 [{ sectionIndex, index, snippet }]。 */
+/** 在规范化串里找出全部匹配，返回原文下标区间 [{ start, end }]。 */
+const findMatches = (normalized, needle) => {
+  const out = []
+  if (!needle) return out
+  let from = 0
+  while (out.length < 2000) {
+    const at = normalized.text.indexOf(needle, from)
+    if (at < 0) break
+    const last = at + needle.length - 1
+    const start = normalized.map[at]
+    const end = normalized.map[last] + 1
+    if (Number.isInteger(start) && Number.isInteger(end) && end > start) out.push({ start, end })
+    from = at + Math.max(1, needle.length)
+  }
+  return out
+}
+
+const toggleSearch = () => {
+  searchOpen.value = !searchOpen.value
+  if (searchOpen.value) {
+    nextTick(() => searchInputRef.value?.focus?.())
+    return
+  }
+  searchQuery.value = ''
+  searchHits.value = []
+  searchCursor.value = 0
+  clearSearchHighlights()
+}
+
+/**
+ * 全文搜索。
+ *
+ * 每一节都走 sectionText()（DOMParser）→ 同一套规范化，因此「计数」与「能跳过去、
+ * 跳过去能高亮」是同一个判断。命中只存 `{ sectionIndex, localIndex }`：
+ * 切到那一节之后重新在该节正文里定位第 localIndex 个匹配再包高亮，
+ * 不跨文档搬运偏移 —— 这是旧实现错位的另一条来源。
+ */
 const runSearch = () => {
   const query = String(searchQuery.value || '').trim()
   if (!query) {
@@ -499,27 +619,26 @@ const runSearch = () => {
     clearSearchHighlights()
     return
   }
-  const lowerQuery = query.toLowerCase()
+  const needle = normalizeWithMap(query).text
   const hits = []
   sections.value.forEach((section, sectionIndex) => {
-    const text = htmlToPlainText(section.html)
-    const lower = text.toLowerCase()
-    let from = 0
-    while (hits.length < 2000) {
-      const at = lower.indexOf(lowerQuery, from)
-      if (at < 0) break
+    if (hits.length >= 2000) return
+    const normalized = normalizeWithMap(sectionText(section.html))
+    findMatches(normalized, needle).forEach((range, localIndex) => {
+      if (hits.length >= 2000) return
       hits.push({
         sectionIndex,
-        index: at,
-        snippet: text.slice(Math.max(0, at - 30), at + query.length + 30).trim(),
+        localIndex,
+        snippet: normalized.text.slice(Math.max(0, range.start - 30), range.end + 30).trim(),
       })
-      from = at + lowerQuery.length
-    }
+    })
   })
   searchHits.value = hits
-  searchCursor.value = 0
+  // 当前节里的第一个命中优先，读者不必被拽去第一章。
+  const here = hits.findIndex((h) => h.sectionIndex === activeIndex.value)
+  searchCursor.value = here >= 0 ? here : 0
   logger.info('[DocEbookReader] search done', { query, hits: hits.length })
-  if (hits.length) void goToHit(0)
+  if (hits.length) void goToHit(searchCursor.value)
 }
 
 const nextMatch = (delta) => {
@@ -528,7 +647,7 @@ const nextMatch = (delta) => {
   void goToHit(next)
 }
 
-/** 跳到第 n 个匹配：切到对应章节，再在 iframe 内高亮。 */
+/** 跳到第 n 个匹配：必要时切章，等正文就绪后在当前文档里重新定位并高亮。 */
 const goToHit = async (n) => {
   searchCursor.value = n
   const hit = searchHits.value[n]
@@ -536,10 +655,9 @@ const goToHit = async (n) => {
   if (hit.sectionIndex !== activeIndex.value) {
     activeIndex.value = hit.sectionIndex
     await nextTick()
-    // 章节切换是异步写 blob 的，等 iframe load 完再高亮。
     await waitForFrame()
   }
-  applySearchHighlight(hit.index, String(searchQuery.value || '').length)
+  applySearchHighlight(hit.localIndex)
 }
 
 const waitForFrame = async () => {
@@ -549,44 +667,58 @@ const waitForFrame = async () => {
   }
 }
 
-/** 在 iframe 文档里把第 n 个匹配包成 <mark>。 */
-const applySearchHighlight = (charIndex, length) => {
+/**
+ * 在当前 iframe 文档里高亮第 n 个匹配。
+ *
+ * 偏移在这里**现算**（同一个 normalizeWithMap + findMatches），因此与页面上的文字
+ * 严格对应；命中跨多个文本节点时（一句话被 <em>/<a> 切开）逐节点包，
+ * 视觉上仍是连续的一段。
+ */
+const applySearchHighlight = (localIndex) => {
   const doc = frameRef.value?.contentDocument
   if (!doc?.body) return
   clearSearchHighlights()
-  try {
-    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, {
-      acceptNode: (node) => (node.nodeValue && node.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT),
-    })
-    let consumed = 0
-    let node = walker.nextNode()
-    while (node) {
-      const text = node.nodeValue || ''
-      if (consumed + text.length > charIndex) {
-        const start = charIndex - consumed
-        const end = Math.min(text.length, start + length)
-        const range = doc.createRange()
-        range.setStart(node, start)
-        range.setEnd(node, end)
-        const mark = doc.createElement('mark')
-        mark.className = 'gx-hit is-current'
-        try {
-          range.surroundContents(mark)
-          mark.scrollIntoView({ block: 'center', behavior: 'smooth' })
-        } catch {
-          /* 跨节点匹配时 surroundContents 会失败，退化为只滚动到该节点 */
-          node.parentElement?.scrollIntoView({ block: 'center', behavior: 'smooth' })
-        }
-        return
-      }
-      consumed += text.length
-      node = walker.nextNode()
-    }
-  } catch (error) {
-    logger.debug('[DocEbookReader] search highlight failed', {
-      error: String(error?.message || error),
-    })
+  const nodes = collectTextNodes(doc)
+  if (!nodes.length) return
+
+  const starts = []
+  let raw = ''
+  for (const node of nodes) {
+    starts.push(raw.length)
+    raw += node.nodeValue || ''
   }
+  const normalized = normalizeWithMap(raw)
+  const needle = normalizeWithMap(searchQuery.value).text
+  const match = findMatches(normalized, needle)[localIndex]
+  if (!match) {
+    nodes[0]?.parentElement?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
+    return
+  }
+
+  // 原文区间 → 每个节点的交集 → 逐节点包 <mark>。
+  let firstMark = null
+  for (let i = 0; i < nodes.length; i += 1) {
+    const node = nodes[i]
+    const text = node.nodeValue || ''
+    const nodeStart = starts[i]
+    const from = Math.max(match.start, nodeStart) - nodeStart
+    const to = Math.min(match.end, nodeStart + text.length) - nodeStart
+    if (to <= from) continue
+    try {
+      const range = doc.createRange()
+      range.setStart(node, from)
+      range.setEnd(node, to)
+      const mark = doc.createElement('mark')
+      mark.className = 'gx-hit is-current'
+      range.surroundContents(mark)
+      if (!firstMark) firstMark = mark
+    } catch (error) {
+      logger.debug('[DocEbookReader] search highlight segment failed', {
+        error: String(error?.message || error),
+      })
+    }
+  }
+  firstMark?.scrollIntoView({ block: 'center', behavior: 'smooth' })
 }
 
 const clearSearchHighlights = () => {
@@ -598,18 +730,6 @@ const clearSearchHighlights = () => {
     while (el.firstChild) parent.insertBefore(el.firstChild, el)
     parent.removeChild(el)
   })
-}
-
-/** 章节 HTML → 纯文本（搜索用，不参与渲染）。 */
-const htmlToPlainText = (html) => {
-  const withBreaks = String(html || '')
-    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/(p|div|li|h[1-6]|tr)>/gi, '\n')
-  const noTags = withBreaks.replace(/<[^>]+>/g, '')
-  const textarea = document.createElement('textarea')
-  textarea.innerHTML = noTags
-  return textarea.value
 }
 
 const tocActiveIdx = computed(() => {
@@ -692,23 +812,48 @@ const buildFrameDoc = () => {
       --gx-link: ${themeVars.link};
       --gx-quote: ${themeVars.border};
     }
+    /*
+     * 正文排版。
+     *
+     * 只改「读者会用眼睛判断」的那几项：行宽、行距、段距、首行缩进、标题层级。
+     * 不覆盖书籍自带的字体与颜色 —— 那本书的排版是它的身份，阅读器只负责让它
+     * 在屏幕上站得住。段距用 em 而不是 px：字号一改，段与段的呼吸感按比例跟着变。
+     */
     body {
       font-family: ${fontStack};
       line-height: ${p.lineHeight};
       font-size: ${p.fontSize * zoom.value}px;
       color: var(--gx-fg);
       background: var(--gx-bg);
-      padding: 24px 32px 80px;
+      /* border-box：maxWidth 是「读者看到的行宽」而不是内容盒宽。
+         用 content-box 时左右各 48px 内边距会加在外面，实际行宽比设置值宽 96px，
+         行太长，眼睛回扫会跳行。 */
+      box-sizing: border-box;
+      padding: 40px 48px 96px;
       max-width: ${p.maxWidth}px;
       margin: 0 auto;
       word-wrap: break-word;
+      /* 中英混排：允许在汉字之间断行，但别把西文单词拦腰截断。 */
+      overflow-wrap: break-word;
+      hyphens: none;
+      text-rendering: optimizeLegibility;
     }
+    /* 段距按字号缩放；标题与正文拉开层次，让翻页时一眼能看出「这是新的一节」。 */
+    p { margin: 0 0 0.9em; }
+    p + p { text-indent: 2em; }
+    h1, h2, h3, h4, h5, h6 { line-height: 1.35; margin: 1.6em 0 0.7em; font-weight: 600; }
+    h1 { font-size: 1.6em; }
+    h2 { font-size: 1.3em; }
+    h3 { font-size: 1.12em; }
+    h1 + p, h2 + p, h3 + p, h4 + p { text-indent: 0; }
     img, svg, video { max-width: 100%; height: auto; }
-    table { border-collapse: collapse; max-width: 100%; }
+    table { border-collapse: collapse; max-width: 100%; margin: 1em 0; }
     td, th { border: 1px solid var(--gx-quote); padding: 4px 8px; }
     pre { white-space: pre-wrap; word-break: break-word; }
     blockquote { border-left: 3px solid var(--gx-quote); margin-left: 0; padding-left: 12px; opacity: .85; }
     a { color: var(--gx-link); }
+    /* 正文里的选中色跟随主题，而不是浏览器默认的蓝。 */
+    ::selection { background: color-mix(in srgb, var(--gx-link) 30%, transparent); }
     /* 搜索命中：整章内所有匹配用浅黄底，当前匹配用橙色描边。 */
     mark.gx-hit { background: rgba(255, 214, 0, .55); color: inherit; padding: 0; }
     mark.gx-hit.is-current { background: rgba(255, 140, 0, .75); outline: 2px solid rgba(255, 110, 0, .9); }
@@ -741,6 +886,26 @@ const goSection = (index) => {
   const next = Math.max(0, Math.min(sections.value.length - 1, index))
   if (next === activeIndex.value) return
   activeIndex.value = next
+}
+
+// ───────────────────────── 节跳转 ─────────────────────────
+// 输入框显示的是 1-based 节号，内部状态一律 0-based，转换只发生在这一层，
+// 免得别处（目录、书签、搜索）混用两种编号。
+
+const sectionInput = ref('1')
+
+const syncSectionInput = () => {
+  sectionInput.value = String(activeIndex.value + 1)
+}
+
+const commitSectionInput = () => {
+  const n = Math.round(Number(sectionInput.value))
+  if (!Number.isFinite(n) || n < 1) {
+    syncSectionInput()
+    return
+  }
+  goSection(n - 1)
+  syncSectionInput()
 }
 
 /** 去掉 `../`、`./` 与开头的 `/`，让不同来源的路径能直接比较。 */
@@ -867,7 +1032,7 @@ const onFrameLoad = () => {
   if (searchHits.value.length && searchQuery.value) {
     const hit = searchHits.value[searchCursor.value]
     if (hit && hit.sectionIndex === activeIndex.value) {
-      applySearchHighlight(hit.index, String(searchQuery.value).length)
+      applySearchHighlight(hit.localIndex)
     }
   }
 }
@@ -938,7 +1103,7 @@ const updateProgressLabel = () => {
 const addBookmarkAtCurrent = async () => {
   if (!bookKey.value) return
   const section = sections.value[activeIndex.value]
-  const heading = htmlToPlainText(section?.html || '').trim().slice(0, 40) || `第 ${activeIndex.value + 1} 节`
+  const heading = sectionText(section?.html || '').trim().slice(0, 40) || `第 ${activeIndex.value + 1} 节`
   try {
     const bm = await invoke('reader_add_bookmark', {
       bookKey: bookKey.value,
@@ -1294,6 +1459,7 @@ const loadBook = async () => {
     }
 
     buildFrameDoc()
+    syncSectionInput()
     loading.value = false
     logger.info('[DocEbookReader] loaded', {
       path: props.path,
@@ -1405,6 +1571,7 @@ watch(frameDoc, () => {
 })
 
 watch(activeIndex, () => {
+  syncSectionInput()
   buildFrameDoc()
   nextTick(() => {
     // 切节后回到顶部，否则会停在上一节的滚动位置。

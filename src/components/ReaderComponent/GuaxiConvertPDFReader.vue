@@ -5640,6 +5640,8 @@ button:disabled {
   overflow: hidden;
   gap: 0;
   min-height: 0;
+  /* 页内搜索条按 absolute 挂在这里（见 .inpage-search-bar），需要定位上下文。 */
+  position: relative;
 }
 
 .pdf-left-wrapper {
@@ -6279,11 +6281,15 @@ button:disabled {
   box-shadow: 0 0 0 2px var(--n-color-primary, #4dabf7);
 }
 
+/*
+ * 页内搜索：吸附在各自正文区的上角，而不是浮在窗口 top:64px。
+ * 分栏阅读时固定到视口的搜索条会压住另一栏的内容，也不跟随面板宽度变化。
+ */
 .inpage-search-bar {
-  position: fixed;
-  top: 64px;
-  right: 16px;
-  z-index: 1200;
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  z-index: 30;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -6296,12 +6302,12 @@ button:disabled {
 }
 
 .inpage-search-bar-pdf {
-  left: 16px;
+  left: 12px;
   right: auto;
 }
 
 .inpage-search-bar-md {
-  right: 16px;
+  right: 12px;
   left: auto;
 }
 

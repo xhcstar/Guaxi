@@ -143,6 +143,28 @@ export default function usePdfiumDocument() {
     }
   }
 
+  /**
+   * 预解码一张页图。
+   *
+   * 【为什么必须先预解码再换 src】直接把 `<img src>` 换掉时，Chromium 会立刻清空已显示的
+   * 位图，等新图解码完才重新画 —— 中间那帧就是白/灰底。翻页时这一下非常明显：
+   * 明明磁盘缓存已经命中、后端几毫秒就返回了，读者还是先看到一次空白。
+   * 用 new Image() 先把新图读进解码缓存，再赋值给 <img>，切换就是一次已在缓存里的绘制。
+   *
+   * 失败也要 resolve：宁可显示一张可能还没解码好的图，也不能因为一次解码失败把页卡在骨架上。
+   */
+  const decodeImage = (url) => new Promise((resolve) => {
+    if (typeof Image === 'undefined') { resolve(); return }
+    const img = new Image()
+    let done = false
+    const finish = () => { if (!done) { done = true; resolve() } }
+    img.onload = finish
+    img.onerror = finish
+    img.src = url
+    // asset 协议在个别情况下既不触发 load 也不触发 error（解码被取消），给一个上限。
+    setTimeout(finish, 1500)
+  })
+
   // 渲染单页（按 dpi）。token 取消：快速滚动/缩放时丢弃过期结果。
   const renderPage = async (page, dpi) => {
     if (!activePath) return
@@ -165,12 +187,33 @@ export default function usePdfiumDocument() {
       if (myToken !== page.renderToken) return
       // 后端把页图写入临时 PNG，经 asset 协议加载，不再传 base64。加 mtime/dpi 已体现在
       // 文件名里，convertFileSrc 得到的 URL 随之变化，浏览器据此自然失效旧图。
-      page.image = convertFileSrc(resp.image_path)
+      const url = convertFileSrc(resp.image_path)
+      await decodeImage(url)
+      if (myToken !== page.renderToken) return
+      page.image = url
       page.dpi = resp.dpi
     } catch (e) {
       logger.error('渲染页失败', { page: page.num, error: String(e?.message || e) })
     } finally {
       if (myToken === page.renderToken) page.rendering = false
+    }
+  }
+
+  /**
+   * 预热相邻页。
+   *
+   * 「点下一页 → 一片灰等图」的根因不是渲染慢，而是**没有提前渲染**：磁盘缓存和 pdfium
+   * 都很快，但要等滚动到那一页才开始。翻页是高度可预测的动作，提前把前后一页按当前 dpi
+   * 栅格化好，翻过去就是即时出图。
+   *
+   * 只热相邻一页，且不复用正在渲染的判据 —— 它和 renderPage 共用同一套去重逻辑，
+   * 已在渲染或分辨率已够时会直接返回，不会重复提交任务。
+   */
+  const prefetchAdjacent = (page, dpi) => {
+    if (!activePath || !page) return
+    for (const delta of [1, -1]) {
+      const target = pages[page.num - 1 + delta]
+      if (target) void renderPage(target, dpi)
     }
   }
 
@@ -322,6 +365,7 @@ export default function usePdfiumDocument() {
     openDocument,
     closeDocument,
     renderPage,
+    prefetchAdjacent,
     loadText,
     freePage,
     getOutline,

@@ -895,23 +895,70 @@ pub async fn pdf_search(
                     Ok(s) => s,
                     Err(_) => continue,
                 };
-                // 逐个命中：find_next() 返回一组 segments（命中可能跨行）。
+                // 逐个命中。rect 不再直接采信 `seg.bounds()`：
+                //
+                // pdfium 的 `FPDFText_CountRects` 会把**同一行、同字体**的命中字符合并成
+                // 一个包围盒。当命中的字符在字符流里不连续（双栏排版、水印、乱序的
+                // CJK 文本流都很常见），这个盒子会横跨中间那些**没有命中**的文字 ——
+                // 屏幕上就是「高亮框罩着一大片无关内容」。
+                //
+                // 所以这里改成：拿到命中的字符区间后，逐字取 tight box，按「同一行 +
+                // 水平相邻」切段。段内连续、段间断开，高亮因此严格贴合关键字本身。
                 while let Some(result_segments) = search.find_next() {
                     let mut rects = Vec::new();
                     let mut snippet = String::new();
                     for seg in result_segments.iter() {
-                        let r = seg.bounds();
-                        let left = r.left().value;
-                        let right = r.right().value;
-                        let top = r.top().value;
-                        let bottom = r.bottom().value;
-                        rects.push(PdfSearchRect {
-                            x: left,
-                            y: page_h - top,
-                            w: (right - left).max(0.0),
-                            h: (top - bottom).max(0.0),
-                        });
-                        snippet.push_str(&seg.text());
+                        // 片段文字同样不能用 `seg.text()`：那是 `FPDFText_GetBoundedText`
+                        // 的几何查询（「这个矩形里有哪些字」），会把盒内的邻接文字一起带出来，
+                        // 与命中词并不等价。改由字符逐个拼接。
+                        let Ok(chars) = seg.chars() else { continue };
+                        let mut prev: Option<(f32, f32, f32, f32)> = None;
+                        let mut text = String::new();
+                        for ch in chars.iter() {
+                            let Some(c) = ch.unicode_char() else { continue };
+                            if c.is_control() {
+                                continue;
+                            }
+                            // 空白字符没有可见盒子，但要保留在片段里（词间空格）。
+                            if c.is_whitespace() {
+                                text.push(if c == '\u{00a0}' { ' ' } else { c });
+                                continue;
+                            }
+                            text.push(c);
+                            let Ok(r) = ch.tight_bounds() else { continue };
+                            let (left, right) = (r.left().value, r.right().value);
+                            let (top, bottom) = (r.top().value, r.bottom().value);
+                            if right <= left || top <= bottom {
+                                continue;
+                            }
+                            let merged = match prev {
+                                // 同一行判定用**垂直重叠占较矮者的比例**，而不是比较顶/
+                                // 底坐标是否接近：同一行里标点、上下标、中英混排的字高
+                                // 差得很多，比坐标会把它们拆成两段；比重叠比例则稳定。
+                                // 水平上也要求相邻（间隙小于字高的一半），
+                                // 否则「同一行但隔了很远」的两个词会被连成一条长条。
+                                Some((pl, pt, pr, pb)) => {
+                                    let overlap = (top.min(pt) - bottom.max(pb)).max(0.0);
+                                    let min_h = (top - bottom).min(pt - pb).max(0.01);
+                                    if overlap / min_h >= 0.5 && (left - pr) <= (top - bottom) * 0.6 {
+                                        rects.pop();
+                                        Some((pl.min(left), pt.max(top), pr.max(right), pb.min(bottom)))
+                                    } else {
+                                        None
+                                    }
+                                }
+                                None => None,
+                            };
+                            let cur = merged.unwrap_or((left, top, right, bottom));
+                            prev = Some(cur);
+                            rects.push(PdfSearchRect {
+                                x: cur.0,
+                                y: page_h - cur.1,
+                                w: cur.2 - cur.0,
+                                h: cur.1 - cur.3,
+                            });
+                        }
+                        snippet.push_str(&text);
                     }
                     if rects.is_empty() {
                         continue;

@@ -7,60 +7,80 @@
     @keydown="onViewerKeydown"
     @mousedown.capture="focusViewerForKeyboard"
   >
+    <!--
+      工具栏：一条，不分两行，也不靠一堆竖分隔线切块。
+
+      分组用「胶囊」表达：搜索 / 翻页 / 缩放各自成组，组内是同一件事的三个部分，
+      组间只留空隙。低频动作（旋转、平移锁定、重建、导出）收进「更多」菜单，
+      因为一页 PDF 里 90% 的时间只用到前两组 —— 把它们全平铺出来，
+      工具栏会长到把正文挤走，这正是原先一列图标看不过来的原因。
+    -->
     <div v-if="features.toolbar !== false" class="gpv__toolbar">
-      <span v-if="titleLabel" class="gpv__title">{{ titleLabel }}</span>
+      <span v-if="titleLabel" class="gpv__title" :title="titleLabel">{{ titleLabel }}</span>
       <span class="gpv__status" :class="statusTone">{{ status }}</span>
       <div class="gpv__spacer" />
 
-      <!-- 搜索 -->
-      <div v-if="features.search && hasPdf && !errorText" class="gpv__search">
-        <input
-          ref="searchInputRef"
-          v-model="searchQuery"
-          class="gpv__search-input"
-          type="text"
-          placeholder="在 PDF 中搜索"
-          aria-label="在 PDF 中搜索，Enter 下一个，Shift+Enter 上一个，Esc 清空"
-          title="在 PDF 中搜索（Enter 下一个，Shift+Enter 上一个，Esc 清空）"
-          @input="scheduleSearch('input')"
-          @keydown="onSearchInputKeydown"
-        />
-        <span v-if="searchHits.length" class="gpv__search-count">
-          {{ searchActiveIdx + 1 }}/{{ searchHits.length }}
-        </span>
+      <!-- 搜索：默认只是一个图标，点开才让输入框占用宽度 -->
+      <div v-if="features.search && hasPdf && !errorText" class="gpv__search" :class="{ 'is-open': searchOpen }">
         <button
           type="button"
           class="gpv__btn gpv__btn--icon"
-          title="上一个匹配（Shift+Enter）"
-          aria-label="上一个匹配"
-          :disabled="!searchHits.length"
-          @click="prevHit"
+          :class="{ 'gpv__btn--active': searchOpen }"
+          title="在 PDF 中搜索（Ctrl+F）"
+          aria-label="在 PDF 中搜索"
+          :aria-expanded="searchOpen"
+          @click="toggleSearch"
         >
-          <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
-            <path d="M15.5 5.5 9 12l6.5 6.5-1.4 1.4L6.2 12l7.9-7.9 1.4 1.4Z" fill="currentColor" />
-          </svg>
+          <SearchOutline />
         </button>
-        <button
-          type="button"
-          class="gpv__btn gpv__btn--icon"
-          title="下一个匹配（Enter）"
-          aria-label="下一个匹配"
-          :disabled="!searchHits.length"
-          @click="nextHit"
-        >
-          <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
-            <path d="m8.5 18.5 6.5-6.5-6.5-6.5 1.4-1.4 7.9 7.9-7.9 7.9-1.4-1.4Z" fill="currentColor" />
-          </svg>
-        </button>
+        <template v-if="searchOpen">
+          <input
+            ref="searchInputRef"
+            v-model="searchQuery"
+            class="gpv__search-input"
+            type="text"
+            placeholder="搜索…"
+            aria-label="在 PDF 中搜索，Enter 下一个，Shift+Enter 上一个，Esc 清空"
+            title="在 PDF 中搜索（Enter 下一个，Shift+Enter 上一个，Esc 清空）"
+            @input="scheduleSearch('input')"
+            @keydown="onSearchInputKeydown"
+          />
+          <span v-if="searchHits.length" class="gpv__search-count">
+            {{ searchActiveIdx + 1 }}/{{ searchHits.length }}
+          </span>
+          <button
+            type="button"
+            class="gpv__btn gpv__btn--icon"
+            title="上一个匹配（Shift+Enter）"
+            aria-label="上一个匹配"
+            :disabled="!searchHits.length"
+            @click="prevHit"
+          >
+            <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+              <path d="M15.5 5.5 9 12l6.5 6.5-1.4 1.4L6.2 12l7.9-7.9 1.4 1.4Z" fill="currentColor" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="gpv__btn gpv__btn--icon"
+            title="下一个匹配（Enter）"
+            aria-label="下一个匹配"
+            :disabled="!searchHits.length"
+            @click="nextHit"
+          >
+            <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+              <path d="m8.5 18.5 6.5-6.5-6.5-6.5 1.4-1.4 7.9 7.9-7.9 7.9-1.4-1.4Z" fill="currentColor" />
+            </svg>
+          </button>
+        </template>
       </div>
 
-      <span class="gpv__divider" />
-      <div v-if="features.pagination !== false" class="gpv__pager" aria-label="PDF 分页导航">
+      <div v-if="features.pagination !== false" class="gpv__cluster" aria-label="PDF 分页导航">
         <button
           type="button"
           class="gpv__btn gpv__btn--icon"
           :disabled="!canGoPreviousPage"
-          title="上一页"
+          title="上一页（PageUp）"
           aria-label="上一页"
           @click="goPreviousPage"
         >
@@ -69,24 +89,24 @@
           </svg>
         </button>
         <span class="gpv__page-indicator">
-        <input
-          class="gpv__page-input"
-          type="number"
-          min="1"
-          :max="totalPages || 1"
-          v-model="pageInputValue"
-          title="跳转到页码"
-          aria-label="跳转到页码"
-          @keydown="onPageInputKeydown"
-          @blur="syncPageInput"
-        />
-        / {{ totalPages }}
+          <input
+            class="gpv__page-input"
+            type="number"
+            min="1"
+            :max="totalPages || 1"
+            v-model="pageInputValue"
+            title="跳转到页码"
+            aria-label="跳转到页码"
+            @keydown="onPageInputKeydown"
+            @blur="syncPageInput"
+          />
+          <span class="gpv__page-total">/ {{ totalPages }}</span>
         </span>
         <button
           type="button"
           class="gpv__btn gpv__btn--icon"
           :disabled="!canGoNextPage"
-          title="下一页"
+          title="下一页（PageDown）"
           aria-label="下一页"
           @click="goNextPage"
         >
@@ -95,48 +115,81 @@
           </svg>
         </button>
       </div>
-      <span class="gpv__divider" />
 
-      <div class="gpv__zoom-cluster">
+      <div class="gpv__cluster">
         <button type="button" class="gpv__btn gpv__btn--icon" :disabled="zoom <= MIN_ZOOM" title="缩小（-）" aria-label="缩小" @click="zoomOut('toolbar')">
           <RemoveOutline />
         </button>
-        <span class="gpv__zoom">{{ Math.round(zoom * 100) }}%</span>
+        <button
+          type="button"
+          class="gpv__zoom"
+          title="适合宽度（W）"
+          aria-label="适合宽度"
+          @click="fitWidth"
+        >{{ Math.round(zoom * 100) }}%</button>
         <button type="button" class="gpv__btn gpv__btn--icon" :disabled="zoom >= MAX_ZOOM" title="放大（+）" aria-label="放大" @click="zoomIn('toolbar')">
           <AddOutline />
         </button>
       </div>
-      <button type="button" class="gpv__btn gpv__btn--icon" title="适合宽度（W）" aria-label="适合宽度" @click="fitWidth">
+
+      <button type="button" class="gpv__btn gpv__btn--icon" title="适合整页（P）" aria-label="适合整页" @click="fitPage">
         <ExpandOutline />
       </button>
-      <span class="gpv__divider" />
-      <button type="button" class="gpv__btn gpv__btn--icon" title="向左旋转 90°（[）" aria-label="向左旋转 90°" @click="rotateLeft('toolbar')">
-        <RefreshCircleOutline :rotate="90" />
-      </button>
-      <button type="button" class="gpv__btn gpv__btn--icon" title="向右旋转 90°（]）" aria-label="向右旋转 90°" @click="rotateRight('toolbar')">
-        <RefreshCircleOutline :rotate="-90" />
-      </button>
-      <button
-        type="button"
-        class="gpv__btn gpv__btn--icon"
-        :class="{ 'gpv__btn--active': panMode }"
-        title="锁定拖动平移（H）。平时在页面空白处直接拖动即可平移，无需开启"
-        aria-label="锁定拖动平移模式"
-        @click="togglePanMode('toolbar')"
-      >
-        <HandRightOutline />
-      </button>
-      <button v-if="features.rebuild" type="button" class="gpv__btn gpv__btn--icon" title="重新构建" @click="$emit('rebuild')">
-        <RefreshOutline />
-      </button>
-      <button
-        v-if="features.export"
-        type="button"
-        class="gpv__btn gpv__btn--primary"
-        :disabled="!hasPdf"
-        title="导出 PDF"
-        @click="$emit('export')"
-      >导出</button>
+
+      <!--
+        低频动作收进菜单；点外面 / Esc 关闭。
+
+        菜单用 Teleport 挂到 body 并 fixed 定位：工具栏有 `overflow-x: auto`（为了让窄窗口
+        横向滚动而不是换行变高），而 overflow 不为 visible 的祖先会**裁掉**绝对定位的
+        弹出层 —— 菜单明明渲染了，却只剩工具栏那 39px 高的一截可见。
+        Teleport 同时避开 scoped 样式的祖先限定，所以下面的样式写了全局块。
+      -->
+      <div ref="moreRef" class="gpv__more">
+        <button
+          type="button"
+          class="gpv__btn gpv__btn--icon"
+          :class="{ 'gpv__btn--active': moreOpen }"
+          title="更多"
+          aria-label="更多操作"
+          :aria-expanded="moreOpen"
+          @click.stop="toggleMoreMenu"
+        >
+          <EllipsisHorizontalOutline />
+        </button>
+      </div>
+      <Teleport to="body">
+        <div
+          v-if="moreOpen"
+          class="gpv-menu-pop"
+          :class="`theme-${theme}`"
+          role="menu"
+          :style="moreMenuStyle"
+          @click.stop
+        >
+          <button type="button" class="gpv-menu-pop__item" role="menuitem" @click="runMenuAction(() => rotateLeft('toolbar'))">
+            <RefreshCircleOutline :rotate="90" /> 向左旋转 90°
+          </button>
+          <button type="button" class="gpv-menu-pop__item" role="menuitem" @click="runMenuAction(() => rotateRight('toolbar'))">
+            <RefreshCircleOutline :rotate="-90" /> 向右旋转 90°
+          </button>
+          <button
+            type="button"
+            class="gpv-menu-pop__item"
+            role="menuitemcheckbox"
+            :aria-checked="panMode"
+            @click="runMenuAction(() => togglePanMode('toolbar'))"
+          >
+            <HandRightOutline /> 锁定拖动平移
+            <span v-if="panMode" class="gpv-menu-pop__check">✓</span>
+          </button>
+          <button v-if="features.rebuild" type="button" class="gpv-menu-pop__item" role="menuitem" @click="runMenuAction(() => $emit('rebuild'))">
+            <RefreshOutline /> 重新构建
+          </button>
+          <button v-if="features.export" type="button" class="gpv-menu-pop__item" role="menuitem" :disabled="!hasPdf" @click="runMenuAction(() => $emit('export'))">
+            导出 PDF
+          </button>
+        </div>
+      </Teleport>
     </div>
 
     <div
@@ -245,11 +298,13 @@ import { ref, reactive, computed, watch, nextTick, onMounted, onBeforeUnmount } 
 import { invoke } from '@tauri-apps/api/core'
 import {
   AddOutline,
+  EllipsisHorizontalOutline,
   ExpandOutline,
   HandRightOutline,
   RefreshCircleOutline,
   RefreshOutline,
   RemoveOutline,
+  SearchOutline,
 } from '@vicons/ionicons5'
 import { createLogger } from '../../utils/logger'
 import { markReaderScrollbarActive } from '../ReaderComponent/readerScrollbar'
@@ -381,11 +436,11 @@ const setPageRef = (num, el) => {
  * 页面尺寸完全由 `wPt/hPt * cssScale` 决定，垂直方向就是依次堆叠，因此位置可以纯算：
  * 累加高度即可。
  *
- * 与 .gpv__pages 的 CSS 必须严格对齐：容器有 `padding: 12px` 与 `gap: 12px`，
- * 所以首页偏移 12px、页间距 12px。改 CSS 就必须同步改这两个常量，否则滚动定位会漂。
+ * 与 .gpv__pages 的 CSS 必须严格对齐：容器有 `padding: 16px` 与 `gap: 16px`，
+ * 所以首页偏移 16px、页间距 16px。改 CSS 就必须同步改这两个常量，否则滚动定位会漂。
  */
-const PAGES_PADDING = 12
-const PAGE_GAP = 12
+const PAGES_PADDING = 16
+const PAGE_GAP = 16
 
 const pageGeometry = computed(() => {
   const scale = cssScale.value
@@ -679,6 +734,8 @@ const focusViewerForKeyboard = (ev) => {
 
 const focusSearchInput = async (reason = 'shortcut') => {
   if (!props.features.search || !hasPdf.value || props.errorText) return
+  // Ctrl+F / `/` 进入搜索时，输入框可能还收着 —— 先展开再聚焦。
+  searchOpen.value = true
   await nextTick()
   searchInputRef.value?.focus?.()
   searchInputRef.value?.select?.()
@@ -1269,9 +1326,67 @@ const searchQuery = ref('')
 const searchHits = ref([])
 const searchActiveIdx = ref(0)
 const searchRectsByPage = ref({})
+// 搜索框默认收起：工具栏上只留一个放大镜，点开才展开输入框。
+// 常驻一个 130px 输入框会让「翻页 + 缩放」这组高频控件被推到右边，窄窗口里尤其明显。
+const searchOpen = ref(false)
+const moreOpen = ref(false)
 let searchTimer = null
 let searchSeq = 0
 let lastSearchedQuery = ''
+
+/** 关闭「更多」菜单。注册在 window 上：点菜单外的任何地方（含阅读区）都该收起它。 */
+const moreRef = ref(null)
+const moreMenuPos = ref({ top: 0, right: 0 })
+const closeMoreMenu = () => { moreOpen.value = false }
+const onEscCloseMore = (ev) => {
+  if (ev.key === 'Escape' && moreOpen.value) {
+    moreOpen.value = false
+    ev.stopPropagation()
+  }
+}
+
+/**
+ * 菜单是 Teleport 到 body 的 fixed 元素，位置按触发按钮实时算。
+ *
+ * 为什么是 fixed + 视口坐标：工具栏自己会横向滚动，若用相对定位，只要工具栏一滚
+ * 菜单就跟着漂；用 getBoundingClientRect 在打开那一刻取一次，之后读者滚动工具栏
+ * 也不会错位（菜单本来就该在点开的位置）。
+ * 右对齐而不是让它溢出屏幕右侧：按钮永远在工具栏末尾，菜单比按钮宽得多。
+ */
+const moreMenuStyle = computed(() => ({
+  top: `${moreMenuPos.value.top}px`,
+  right: `${moreMenuPos.value.right}px`,
+}))
+
+const toggleMoreMenu = () => {
+  if (!moreOpen.value) {
+    const rect = moreRef.value?.getBoundingClientRect()
+    if (rect) {
+      moreMenuPos.value = {
+        top: rect.bottom + 6,
+        right: Math.max(8, window.innerWidth - rect.right),
+      }
+    }
+  }
+  moreOpen.value = !moreOpen.value
+}
+
+const runMenuAction = (fn) => {
+  moreOpen.value = false
+  fn()
+}
+
+const toggleSearch = async () => {
+  searchOpen.value = !searchOpen.value
+  if (searchOpen.value) {
+    await nextTick()
+    searchInputRef.value?.focus?.()
+    return
+  }
+  // 收起时清空结果：否则高亮矩形会留在页面上，而搜索框已经不见了，
+  // 读者没有任何入口能把它清掉。
+  clearSearch('search-closed')
+}
 
 const resetSearchState = () => {
   searchSeq += 1
@@ -1659,6 +1774,16 @@ const goToPage = (n, { align = 'top' } = {}) => {
   // 立即重算一次窗口：平滑滚动的第一帧之前就把目标页放进 DOM，
   // 用户不会看到一屏空白再慢慢填内容。
   recomputeWindow()
+
+  // 目标页高优先级渲染，并顺带预热它的前后一页。
+  // 翻页是「可预测的下一步」，提前把邻页栅格化好，连翻时就不再每页都等一次骨架。
+  // 这里不 await：骨架只是兜底，真实目标是滚动动画停止时图已经在解码缓存里。
+  const target = pages[num - 1]
+  if (target) {
+    doc.renderPage(target, renderDpi.value)
+    doc.prefetchAdjacent(target, renderDpi.value)
+  }
+
   smoothScrollTo(el, top, 'go-to-page')
 
   // 滚动结束后再校准一次（滚动过程中布局可能因图片加载而变化）。
@@ -1924,6 +2049,10 @@ if (typeof window !== 'undefined') {
   window.addEventListener('keydown', onSpaceDown)
   window.addEventListener('keyup', onSpaceUp)
   window.addEventListener('blur', releaseSpacePan)
+  // 「更多」菜单：点外面 / Esc 收起。用 mousedown 捕获阶段，保证在页面自身的
+  // 平移、选词等处理之前就把菜单关掉，不会出现「点了一下，菜单还在、同时又平移了」。
+  window.addEventListener('mousedown', closeMoreMenu, true)
+  window.addEventListener('keydown', onEscCloseMore)
 }
 
 onBeforeUnmount(() => {
@@ -1946,6 +2075,8 @@ onBeforeUnmount(() => {
     window.removeEventListener('blur', releaseSpacePan)
     window.removeEventListener('mousemove', onPanMove, true)
     window.removeEventListener('mouseup', onPanUp, true)
+    window.removeEventListener('mousedown', closeMoreMenu, true)
+    window.removeEventListener('keydown', onEscCloseMore)
   }
   doc.closeDocument()
 })
@@ -1978,51 +2109,67 @@ onBeforeUnmount(() => {
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--n-color-primary, #61afef) 72%, transparent);
 }
 
+/*
+ * 配色取向（对齐 PDF Expert 一类「内容优先」的阅读器）：
+ * 画布不是主角，纸面才是。所以画布用**中性的暖灰**而不是蓝灰，饱和度压到最低；
+ * 页面本身不加描边、不加圆角，只用两层阴影把它从画布上托起来。
+ * 深色主题同理：画布比工具栏更深，纸面（PDF 本身是白底）自然成为画面里最亮的东西。
+ *
+ * 之前最刺眼的是 #4a4d52 / #eef0f3 这类偏冷的灰，配上每页一圈 1px 描边和 2px 圆角，
+ * 看起来像「一堆堆在灰色桌面上的卡片」，而不是正在读的一份文档。
+ */
 .gpv.theme-dark {
-  --gpv-bg: #1e1e1e;
-  --gpv-text: #ddd;
-  --gpv-toolbar-bg: #252525;
-  --gpv-border: #3e4451;
-  --gpv-canvas-area: #4a4d52;
-  --gpv-btn-text: #ddd;
-  --gpv-hover-bg: rgba(255, 255, 255, 0.08);
+  --gpv-bg: #1a1c1f;
+  --gpv-text: #dfe3e8;
+  --gpv-toolbar-bg: #202326;
+  --gpv-border: #303438;
+  --gpv-canvas-area: #16181a;
+  --gpv-btn-text: #c9ced4;
+  --gpv-hover-bg: rgba(255, 255, 255, 0.07);
   --gpv-error-bg: rgba(0, 0, 0, 0.35);
-  --gpv-overlay-bg: rgba(0, 0, 0, 0.45);
-  --gpv-overlay-text: #fff;
-  /* 画布氛围：一层自顶部洒下的柔光。固定于可视区（background-attachment: scroll 在
-     滚动容器里就是"不随内容走"），所以滚动时纸面像是在同一个光源下移动。 */
-  --gpv-canvas-sheen: radial-gradient(125% 85% at 50% 0%, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0) 62%);
-  --gpv-paper-shadow: 0 1px 1px rgba(0, 0, 0, 0.45), 0 10px 26px -8px rgba(0, 0, 0, 0.7);
-  --gpv-paper-ring: rgba(0, 0, 0, 0.5);
-  --gpv-skeleton-bg: #3f4248;
-  --gpv-skeleton-sheen: rgba(255, 255, 255, 0.06);
-  --gpv-skeleton-text: #6d727b;
+  --gpv-overlay-bg: rgba(22, 24, 26, 0.72);
+  --gpv-overlay-text: #e6e9ec;
+  --gpv-canvas-sheen: radial-gradient(120% 70% at 50% 0%, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0) 70%);
+  /* 深色画布上，纸面靠「一圈极淡的亮边 + 一片大范围黑影」离开背景，
+     不要再用 1px 的实描边（那会在白纸边缘画出一条脏线）。 */
+  --gpv-paper-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05), 0 2px 6px rgba(0, 0, 0, 0.45), 0 18px 40px -12px rgba(0, 0, 0, 0.75);
+  --gpv-skeleton-bg: #23262a;
+  --gpv-skeleton-sheen: rgba(255, 255, 255, 0.05);
+  --gpv-skeleton-text: #4a4f56;
+  --gpv-cluster-bg: rgba(255, 255, 255, 0.05);
+  --gpv-cluster-border: rgba(255, 255, 255, 0.07);
+  --gpv-menu-bg: #26292d;
+  --gpv-menu-ring: rgba(255, 255, 255, 0.1);
 }
 .gpv.theme-light {
   --gpv-bg: #ffffff;
   --gpv-text: #1f2328;
-  --gpv-toolbar-bg: #f5f6f8;
-  --gpv-border: #d0d7de;
-  --gpv-canvas-area: #eef0f3;
-  --gpv-btn-text: #1f2328;
-  --gpv-hover-bg: rgba(0, 0, 0, 0.06);
+  --gpv-toolbar-bg: #fbfbfa;
+  --gpv-border: #e2e2df;
+  --gpv-canvas-area: #e8e7e3;
+  --gpv-btn-text: #3b4148;
+  --gpv-hover-bg: rgba(15, 23, 42, 0.06);
   --gpv-error-bg: rgba(0, 0, 0, 0.04);
-  --gpv-overlay-bg: rgba(255, 255, 255, 0.7);
+  --gpv-overlay-bg: rgba(232, 231, 227, 0.78);
   --gpv-overlay-text: #1f2328;
-  --gpv-canvas-sheen: radial-gradient(125% 85% at 50% 0%, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0) 60%);
-  --gpv-paper-shadow: 0 1px 1px rgba(15, 23, 42, 0.08), 0 6px 18px -6px rgba(15, 23, 42, 0.28);
-  --gpv-paper-ring: rgba(15, 23, 42, 0.1);
-  --gpv-skeleton-bg: #f7f8fa;
-  --gpv-skeleton-sheen: rgba(255, 255, 255, 0.85);
-  --gpv-skeleton-text: #c3c8d0;
+  --gpv-canvas-sheen: radial-gradient(120% 70% at 50% 0%, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0) 70%);
+  --gpv-paper-shadow: 0 1px 2px rgba(28, 25, 23, 0.08), 0 12px 28px -10px rgba(28, 25, 23, 0.32);
+  --gpv-skeleton-bg: #f2f1ed;
+  --gpv-skeleton-sheen: rgba(255, 255, 255, 0.9);
+  --gpv-skeleton-text: #b9b7b1;
+  --gpv-cluster-bg: rgba(15, 23, 42, 0.035);
+  --gpv-cluster-border: rgba(15, 23, 42, 0.06);
+  --gpv-menu-bg: #ffffff;
+  --gpv-menu-ring: rgba(15, 23, 42, 0.1);
 }
 
 .gpv__toolbar {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 5px 8px;
+  gap: 6px;
+  height: 38px;
+  padding: 0 10px;
   border-bottom: 1px solid var(--gpv-border);
   background: var(--gpv-toolbar-bg);
   font-size: 12px;
@@ -2033,6 +2180,7 @@ onBeforeUnmount(() => {
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
+  position: relative;
 }
 .gpv__toolbar::-webkit-scrollbar { height: 0; display: none; }
 /* 工具栏内所有项都不被压缩换行；标题/状态可省略号，留出可点击控件空间。 */
@@ -2045,68 +2193,125 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
   flex-shrink: 1;
   min-width: 0;
-  max-width: 40%;
+  max-width: 34%;
+  letter-spacing: 0.01em;
 }
 .gpv__status {
   font-size: 11px;
-  opacity: 0.7;
+  opacity: 0.55;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   flex-shrink: 1;
   min-width: 0;
 }
-.gpv__status.ok { color: #2da44e; opacity: 1; }
+.gpv__status.ok { color: #2da44e; opacity: 0.9; }
 .gpv.theme-dark .gpv__status.ok { color: #98c379; }
 .gpv__status.error { color: #cf222e; opacity: 1; }
 .gpv.theme-dark .gpv__status.error { color: #e06c75; }
-.gpv__spacer { flex: 1 1 auto; }
-.gpv__divider { width: 1px; height: 16px; background: var(--gpv-border); margin: 0 2px; }
+.gpv__spacer { flex: 1 1 auto; min-width: 8px; }
 
-.gpv__search { display: flex; align-items: center; gap: 4px; }
-.gpv__search-input {
-  width: 130px;
-  font-size: 12px;
-  padding: 3px 8px;
-  border: 1px solid var(--gpv-border);
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--gpv-text) 4%, transparent);
-  color: var(--gpv-text);
-}
-.gpv__search-input:focus { outline: none; border-color: var(--n-color-primary, #61afef); }
-.gpv__search-count { font-size: 11px; opacity: 0.7; min-width: 32px; text-align: center; }
-
-.gpv__pager {
+/*
+ * 分组：同一件事的几个控件装进一枚胶囊，组与组之间只留空隙。
+ * 这替代了原先一列竖分隔线 —— 分隔线切出来的是「一排等价的按钮」，
+ * 而读者心里其实是三组：找内容、翻页、调大小。
+ */
+.gpv__cluster {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  flex: 0 0 auto;
+  gap: 1px;
+  padding: 2px;
+  border-radius: 9px;
+  background: var(--gpv-cluster-bg);
+  box-shadow: inset 0 0 0 1px var(--gpv-cluster-border);
 }
-.gpv__page-indicator { font-size: 11px; opacity: 0.85; min-width: 58px; text-align: center; display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
-.gpv__page-input {
-  width: 44px;
-  font-size: 11px;
-  padding: 2px 4px;
-  text-align: center;
-  border: 1px solid var(--gpv-border);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--gpv-text) 4%, transparent);
+
+.gpv__search {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px;
+  border-radius: 9px;
+  background: var(--gpv-cluster-bg);
+  box-shadow: inset 0 0 0 1px var(--gpv-cluster-border);
+  transition: background-color 0.15s;
+}
+.gpv__search.is-open { background: var(--gpv-cluster-bg); }
+.gpv__search-input {
+  width: 168px;
+  height: 24px;
+  font-size: 12px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 7px;
+  background: var(--gpv-bg);
   color: var(--gpv-text);
-  font-variant-numeric: tabular-nums;
+  box-shadow: inset 0 0 0 1px var(--gpv-cluster-border);
 }
-.gpv__page-input::-webkit-inner-spin-button,
-.gpv__page-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
-.gpv__page-input:focus { outline: none; border-color: var(--n-color-primary, #61afef); }
-.gpv__zoom {
-  min-width: 42px;
+.gpv__search-input:focus { outline: none; box-shadow: inset 0 0 0 1px var(--n-color-primary, #61afef); }
+.gpv__search-input::placeholder { color: var(--gpv-text); opacity: 0.4; }
+.gpv__search-count {
+  font-size: 11px;
+  opacity: 0.65;
+  min-width: 38px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  padding-right: 2px;
+}
+
+.gpv__page-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   padding: 0 2px;
   font-size: 11px;
+  color: var(--gpv-text);
+  opacity: 0.9;
+}
+.gpv__page-input {
+  width: 38px;
+  height: 20px;
+  font-size: 11px;
+  padding: 0 2px;
+  text-align: center;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--gpv-text);
+  font-variant-numeric: tabular-nums;
+}
+.gpv__page-input:hover { background: var(--gpv-hover-bg); }
+.gpv__page-input::-webkit-inner-spin-button,
+.gpv__page-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.gpv__page-input:focus {
+  outline: none;
+  background: var(--gpv-bg);
+  box-shadow: inset 0 0 0 1px var(--n-color-primary, #61afef);
+}
+.gpv__page-total { opacity: 0.6; font-variant-numeric: tabular-nums; }
+
+/* 百分比本身就是「适合宽度」按钮：点一下立刻贴合面板，这是读者最常按的那个动作。 */
+.gpv__zoom {
+  min-width: 46px;
+  height: 24px;
+  padding: 0 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--gpv-text);
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
   text-align: center;
-  color: var(--gpv-text);
-  opacity: 0.8;
+  cursor: pointer;
   user-select: none;
 }
+.gpv__zoom:hover { background: var(--gpv-hover-bg); }
+.gpv__zoom:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--n-color-primary, #61afef) 28%, transparent);
+}
+
+.gpv__more { display: inline-flex; }
 
 .gpv__btn {
   border: none;
@@ -2128,14 +2333,10 @@ onBeforeUnmount(() => {
   outline: none;
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--n-color-primary, #61afef) 28%, transparent);
 }
-.gpv__btn:disabled { opacity: 0.35; cursor: not-allowed; }
-.gpv__btn--primary {
-  color: var(--n-color-primary, #61afef);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--n-color-primary, #61afef) 42%, transparent);
-}
+.gpv__btn:disabled { opacity: 0.32; cursor: not-allowed; }
 .gpv__btn--icon {
-  width: 26px;
-  height: 24px;
+  width: 28px;
+  height: 26px;
   padding: 0;
   /* 图标按 1em 定尺寸，字号即图标大小（与父组件工具栏里的同款图标对齐） */
   font-size: 16px;
@@ -2143,27 +2344,19 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   line-height: 0;
+  border-radius: 7px;
 }
 .gpv__btn--icon svg {
   display: block;
   flex: 0 0 auto;
+  opacity: 0.85;
 }
+.gpv__btn--icon:hover:not(:disabled) svg { opacity: 1; }
 .gpv__btn--active {
-  background: color-mix(in srgb, var(--n-color-primary, #61afef) 18%, transparent);
+  background: color-mix(in srgb, var(--n-color-primary, #61afef) 16%, transparent);
   color: var(--n-color-primary, #61afef);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--n-color-primary, #61afef) 42%, transparent);
 }
-
-/* 缩放收成一个胶囊：− 154% + 是同一件事的三个部分，不该看起来像三个独立按钮 */
-.gpv__zoom-cluster {
-  display: inline-flex;
-  align-items: center;
-  gap: 0;
-  padding: 2px;
-  border: 1px solid var(--gpv-border);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--gpv-text) 5%, transparent);
-}
+.gpv__btn--active svg { opacity: 1; }
 
 .gpv__body {
   flex: 1 1 auto;
@@ -2204,8 +2397,9 @@ onBeforeUnmount(() => {
      也会多出一条横向滚动条（实测 982 vs 958）。border-box 下 100% 就是整条可视宽。 */
   box-sizing: border-box;
   min-width: 100%;
-  gap: 12px;
-  padding: 12px;
+  /* 页间距与内边距一致：纸张之间是「一叠纸的空隙」，不是卡片之间的 margin。 */
+  gap: 16px;
+  padding: 16px;
 }
 
 /*
@@ -2226,44 +2420,63 @@ onBeforeUnmount(() => {
   margin-right: auto;
   position: relative;
   background: #fff;
-  border-radius: 2px;
-  /* 纸张感：一道贴边的硬阴影压出厚度，一道大范围软阴影托起离开背景的高度，
-     再补一圈极淡的描边，白纸边缘在浅色画布上才不会"飘"。 */
-  box-shadow: var(--gpv-paper-shadow), 0 0 0 1px var(--gpv-paper-ring);
+  /* 不要圆角、不要描边：PDF 本身就是一张矩形页面，给它加 2px 圆角和 1px 边框，
+     等于把文档画成「卡片」，放大到页边时那圈线会明显切掉纸的边缘。 */
+  border-radius: 0;
+  /* 纸张感全部交给阴影：贴边一层压出厚度，远处一层托起高度。 */
+  box-shadow: var(--gpv-paper-shadow);
   flex: 0 0 auto;
   overflow: hidden;
+  /* 图加载完成时淡入，替代「灰块突然变成页面」的跳变；
+     骨架和纸面同底色，所以过渡期间看不出闪烁。 */
+  transition: background-color 0.18s ease;
 }
 /* 旋转内层：尺寸/位移/旋转全部走内联样式（pageInnerStyle） */
 .gpv__page-inner { position: absolute; }
 .gpv__page-img { display: block; user-select: none; }
-/* 未渲染页：不画斜条纹（像施工围挡），改成一道缓慢扫过的微光 + 一枚淡页码，
-   既说明"这页正在来"，又和纸面本身是同一个色系。 */
+/*
+ * 未渲染页的占位。
+ *
+ * 【为什么不再用灰块】原先整页铺 #f7f8fa 再扫一道高光，在浅色画布上就是一块明显的
+ * 灰矩形 —— 翻页的那一瞬间，读者看到的是「一张灰卡片」而不是「这张纸正在显影」。
+ * 现在改成：底色就是纸色（白），只留极淡的页码和一条细扫描线，视觉上等同于
+ * 「白纸正在变清晰」，与 PDF Expert / Preview 那种即时出图的感觉一致。
+ *
+ * 骨架已经预先把页图解码进缓存（见 usePdfiumDocument.decodeImage），所以这里大多数
+ * 时候只在首屏出现一瞬，不该喧宾夺主。
+ */
 .gpv__page-skeleton {
   position: absolute;
   inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
   color: var(--gpv-skeleton-text);
-  background-color: var(--gpv-skeleton-bg);
+  background-color: #fff;
   background-image: linear-gradient(
-    100deg,
-    rgba(255, 255, 255, 0) 30%,
+    180deg,
+    rgba(255, 255, 255, 0) 0%,
     var(--gpv-skeleton-sheen) 50%,
-    rgba(255, 255, 255, 0) 70%
+    rgba(255, 255, 255, 0) 100%
   );
-  background-size: 220% 100%;
+  background-size: 100% 46%;
   background-repeat: no-repeat;
-  animation: gpv-skeleton-sweep 1.5s ease-in-out infinite;
+  background-position: 0 -60%;
+  animation: gpv-skeleton-sweep 1.4s ease-in-out infinite;
 }
 @keyframes gpv-skeleton-sweep {
-  0% { background-position: 160% 0; }
-  100% { background-position: -60% 0; }
+  0% { background-position: 0 -60%; }
+  100% { background-position: 0 160%; }
 }
 @media (prefers-reduced-motion: reduce) {
   .gpv__page-skeleton { animation: none; }
+}
+/* 深色主题下「纸」仍是白的（PDF 本身白底），骨架跟着用白，才不会有灰块闪一下。 */
+.gpv.theme-dark .gpv__page-skeleton {
+  background-color: #fafafa;
+  color: #c9c9c4;
 }
 
 /* 透明文本层：文字本身透明，仅用于选择/复制 */
@@ -2381,4 +2594,63 @@ onBeforeUnmount(() => {
   animation: gpv-spin 0.8s linear infinite;
 }
 @keyframes gpv-spin { to { transform: rotate(360deg); } }
+
+/*
+ * 「更多」菜单：Teleport 到 body 的浮层。
+ *
+ * 必须写在**全局**块里：scoped 样式会给选择器加 data-v 属性，而 Teleport 出来的节点
+ * 虽然在 body 下，Vue 仍会给它加 data-v —— 但祖先限定（.gpv .xxx）不成立，且这里刻意
+ * 不用 .gpv 前缀（菜单不在 .gpv 里面），所以按主题类收窄。
+ *
+ * 图标尺寸要显式给：vicons 的 <svg> 没有自带宽高，在 flex 行里会撑到内容盒的尺寸，
+ * 菜单会变成一条竖长的白条。
+ */
+.gpv-menu-pop {
+  position: fixed;
+  z-index: 3000;
+  min-width: 190px;
+  padding: 5px;
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 12px;
+}
+.gpv-menu-pop.theme-light {
+  background: #ffffff;
+  color: #1f2328;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.1), 0 12px 32px -8px rgba(15, 23, 42, 0.35);
+}
+.gpv-menu-pop.theme-dark {
+  background: #26292d;
+  color: #dfe3e8;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1), 0 12px 32px -8px rgba(0, 0, 0, 0.7);
+}
+.gpv-menu-pop__item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.gpv-menu-pop__item svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  opacity: 0.75;
+}
+.gpv-menu-pop__item:hover:not(:disabled) { background: rgba(128, 128, 128, 0.14); }
+.gpv-menu-pop__item:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(97, 175, 239, 0.5);
+}
+.gpv-menu-pop__item:disabled { opacity: 0.4; cursor: not-allowed; }
+.gpv-menu-pop__check { margin-left: auto; color: #61afef; }
 </style>

@@ -312,6 +312,7 @@
 
 <script setup>
 import { createLogger } from '../../utils/logger'
+import { findMatchesInDom, wrapMatches, unwrapMatches } from './readerSearch'
 import { ref, computed, watchEffect, onMounted, onBeforeUnmount, watch, nextTick, h } from 'vue'
 import { markReaderScrollbarActive } from './readerScrollbar'
 import { invoke } from '@tauri-apps/api/core'
@@ -2363,14 +2364,9 @@ const gotoPrevSearchMatch = () => {
 const clearInPageSearchHighlights = () => {
   const container = markdownContainer.value
   if (!container) return
-
-  const marks = container.querySelectorAll('span.inpage-match, span.inpage-match-active')
-  marks.forEach((mark) => {
-    const parent = mark.parentNode
-    if (!parent) return
-    parent.replaceChild(document.createTextNode(mark.textContent || ''), mark)
-    parent.normalize()
-  })
+  // 命中元素只带 'inpage-match'；'inpage-match-active' 是叠加的当前项类名，
+  // 包一层即可全部拆掉，不必再加第二条查询。
+  unwrapMatches(container, 'inpage-match')
 }
 
 const applyInPageSearch = () => {
@@ -2385,54 +2381,12 @@ const applyInPageSearch = () => {
   const container = markdownContainer.value
   if (!container) return
 
-  const qLower = query.toLowerCase()
+  // 共用 readerSearch：规范化（全角/不换行空格/零宽字符）+ 跨节点命中。
+  // 旧的逐节点 indexOf 会对不上被 <em>/<a> 切开的词，也会因全角标点而错位。
+  const matches = findMatchesInDom(container, query)
+  if (!matches.length) return
 
-  const walker = document.createTreeWalker(
-    container,
-    NodeFilter.SHOW_TEXT,
-    {
-      acceptNode(node) {
-        if (!node?.textContent || !node.textContent.trim()) return NodeFilter.FILTER_REJECT
-        const parent = node.parentElement
-        if (!parent) return NodeFilter.FILTER_REJECT
-        if (parent.closest('script, style')) return NodeFilter.FILTER_REJECT
-        return NodeFilter.FILTER_ACCEPT
-      }
-    }
-  )
-
-  const textNodes = []
-  while (walker.nextNode()) textNodes.push(walker.currentNode)
-
-  textNodes.forEach((textNode) => {
-    const text = textNode.textContent || ''
-    const lower = text.toLowerCase()
-
-    let idx = lower.indexOf(qLower)
-    if (idx === -1) return
-
-    const frag = document.createDocumentFragment()
-    let last = 0
-
-    while (idx !== -1) {
-      if (idx > last) frag.appendChild(document.createTextNode(text.slice(last, idx)))
-
-      const span = document.createElement('span')
-      span.className = 'inpage-match'
-      span.textContent = text.slice(idx, idx + query.length)
-      frag.appendChild(span)
-      inPageSearchMatches.value.push(span)
-
-      last = idx + query.length
-      idx = lower.indexOf(qLower, last)
-    }
-
-    if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)))
-
-    const parent = textNode.parentNode
-    if (parent) parent.replaceChild(frag, textNode)
-  })
-
+  inPageSearchMatches.value = wrapMatches(matches, 'inpage-match')
   if (inPageSearchMatches.value.length) {
     nextTick(() => updateActiveSearchMatch(0))
   }
@@ -3917,20 +3871,27 @@ button:disabled {
   cursor: not-allowed;
 }
 
+/*
+ * 页内搜索：吸附在正文区右上角，而不是浮在窗口 top:64px 的固定位置。
+ *
+ * 固定到视口的问题：正文是滚动的，搜索条却纹丝不动地压在上面一截文字上，
+ * 而且窗口一分栏（拆分视图 / 侧栏展开）它就偏到容器外面去了。
+ * 改成 absolute 挂在正文容器上：位置跟着正文走，也始终落在阅读区域的右上角。
+ */
 .inpage-search-bar {
-  position: fixed;
-  top: 64px;
-  right: 16px;
-  z-index: 1200;
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  z-index: 30;
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px;
+  padding: 5px;
   background: var(--guaxi-panel-bg);
   border: 1px solid var(--guaxi-border);
   border-radius: 10px;
   backdrop-filter: blur(8px);
-  box-shadow: var(--guaxi-header-shadow);
+  box-shadow: 0 4px 16px -4px rgba(0, 0, 0, 0.22);
 }
 
 .inpage-search-input {

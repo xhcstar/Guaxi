@@ -492,38 +492,121 @@
   color: #6cb6ff;
 }
 
+.gdr-ebook__section-jump {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 2px;
+  font-size: 11px;
+  color: var(--guaxi-text-secondary, #6a737d);
+}
+
+.gdr-ebook__section-input {
+  width: 36px;
+  height: 20px;
+  padding: 0 2px;
+  text-align: center;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--guaxi-text-primary, #1f2328);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.gdr-ebook__section-input::-webkit-inner-spin-button,
+.gdr-ebook__section-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.gdr-ebook__section-input:hover { background: var(--guaxi-hover-bg, rgba(120, 120, 120, 0.1)); }
+.gdr-ebook__section-input:focus {
+  outline: none;
+  border-color: var(--guaxi-accent, #00adff);
+  background: var(--guaxi-content-bg, #fff);
+}
+
+.gdr-ebook__section-total { opacity: 0.7; font-variant-numeric: tabular-nums; }
+
 .gdr-ebook__progress {
   font-variant-numeric: tabular-nums;
   min-width: 40px;
   text-align: center;
 }
 
-/* 搜索条：与工具栏同一行下方，独立一条。 */
-.gdr-ebook__searchbar {
+/*
+ * 搜索：占用工具栏中间那段空白，不另起一行。
+ *
+ * 输入框用 flex:1 + max-width 的折中：宽屏下不会拉成一条横贯整个窗口的巨框
+ * （那会把右侧的分页/字号等按钮推得太远），窄屏下也能缩到可用为止。
+ */
+.gdr-ebook__search {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--guaxi-border, #e1e4e8);
-  background: var(--guaxi-panel-bg, #fafbfc);
-  flex: 0 0 auto;
+  gap: 4px;
+  flex: 1 1 220px;
+  min-width: 160px;
+  max-width: 420px;
 }
 
 .gdr-ebook__search-input {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
-  height: 26px;
+  height: 24px;
   padding: 0 8px;
   border: 1px solid var(--guaxi-border, #e1e4e8);
   border-radius: 6px;
   background: var(--guaxi-content-bg, #fff);
   color: var(--guaxi-text-primary, #1f2328);
-  font-size: 13px;
+  font-size: 12px;
   outline: none;
 }
 
 .gdr-ebook__search-input:focus {
   border-color: var(--guaxi-accent, #00adff);
+}
+
+/* 节导航胶囊：← [n]/total 进度 → 。 */
+.gdr-ebook__nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding: 2px;
+  border-radius: 9px;
+  background: var(--guaxi-hover-bg, rgba(120, 120, 120, 0.08));
+}
+
+/*
+ * 搜索展开时（:has 在 WebView2 / Chromium 111+ 可用），节导航与缩小组淡出。
+ *
+ * 为什么不直接删掉：撤掉节点会让右侧按钮整体左跳一格，读者正在点的「下一节」
+ * 忽然换了位置。淡出 + width:0 让它们退出视线的同时保持相邻关系稳定，
+ * 关闭搜索后原样回来。
+ */
+.guaxi-doc-reader__bar:has(.gdr-ebook__search) .gdr-ebook__nav--collapsible {
+  opacity: 0;
+  width: 0;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.gdr-ebook__zoom {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.gdr-ebook__zoom-val {
+  min-width: 40px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--guaxi-text-secondary, #6a737d);
+}
+
+.gdr-ebook__search-count {
+  font-size: 11px;
+  min-width: 48px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 /* 右侧面板：与左侧目录对称。 */
