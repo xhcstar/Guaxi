@@ -987,6 +987,272 @@ pub async fn mail_set_encryption_enabled(app: AppHandle, enabled: bool) -> Resul
     store::set_encryption_enabled(enabled)
 }
 
+/// 标记为垃圾邮件：移动到垃圾箱（没有垃圾箱就用 Junk 角色文件夹，再退回收件箱旁的默认名）。
+#[command]
+pub async fn mail_junk_messages(
+    app: AppHandle,
+    account_id: String,
+    folder: String,
+    uids: Vec<u32>,
+) -> Result<(), String> {
+    ensure_init(&app)?;
+    let target = junk_folder_name(&account_id)?;
+    move_batch(&app, &account_id, &folder, &uids, &target).await
+}
+
+/// 取消垃圾标记：把邮件移回收件箱。
+#[command]
+pub async fn mail_unmark_junk(
+    app: AppHandle,
+    account_id: String,
+    folder: String,
+    uids: Vec<u32>,
+) -> Result<(), String> {
+    ensure_init(&app)?;
+    let inbox = store::list_folders(&account_id)?
+        .into_iter()
+        .find(|f| f.role == FolderRole::Inbox)
+        .map(|f| f.name)
+        .ok_or_else(|| "账户没有收件箱".to_string())?;
+    move_batch(&app, &account_id, &folder, &uids, &inbox).await
+}
+
+fn junk_folder_name(account_id: &str) -> Result<String, String> {
+    let folders = store::list_folders(account_id)?;
+    folders
+        .iter()
+        .find(|f| f.role == FolderRole::Junk)
+        .map(|f| f.name.clone())
+        .ok_or_else(|| "该账户没有垃圾邮件文件夹（可在文件夹列表里新建「垃圾邮件」）".to_string())
+}
+
+/// 批量移动的共用实现：一次 IMAP 往返搬完整批，而不是逐封调用。
+async fn move_batch(
+    app: &AppHandle,
+    account_id: &str,
+    folder: &str,
+    uids: &[u32],
+    target: &str,
+) -> Result<(), String> {
+    ensure_init(app)?;
+    if uids.is_empty() {
+        return Ok(());
+    }
+    let account = load_account(account_id)?;
+    let password = account_password(&account)?;
+    let (acc, f, t) = (account.clone(), folder.to_string(), target.to_string());
+    let batch = uids.to_vec();
+    tauri::async_runtime::spawn_blocking(move || imap::move_messages(&acc, &password, &f, &batch, &t))
+        .await
+        .map_err(|e| format!("移动任务失败: {e}"))??;
+    for uid in uids {
+        let _ = store::delete_message(account_id, folder, *uid);
+    }
+    Ok(())
+}
+
+/// 批量标记已读 / 未读 / 星标。一次往返，不逐封发命令。
+#[command]
+pub async fn mail_batch_flags(
+    app: AppHandle,
+    account_id: String,
+    folder: String,
+    uids: Vec<u32>,
+    seen: Option<bool>,
+    flagged: Option<bool>,
+) -> Result<(), String> {
+    ensure_init(&app)?;
+    if uids.is_empty() {
+        return Ok(());
+    }
+    let account = load_account(&account_id)?;
+    let password = account_password(&account)?;
+    let (acc, f) = (account.clone(), folder.clone());
+    let batch = uids.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        imap::set_flags(&acc, &password, &f, &batch, seen, flagged)
+    })
+    .await
+    .map_err(|e| format!("批量标记失败: {e}"))??;
+    store::set_local_flags(&account_id, &folder, &uids, seen, flagged, None)
+}
+
+/// 批量删除（移入垃圾箱；已在垃圾箱则永久删除）。
+#[command]
+pub async fn mail_batch_delete(
+    app: AppHandle,
+    account_id: String,
+    folder: String,
+    uids: Vec<u32>,
+) -> Result<(), String> {
+    ensure_init(&app)?;
+    if uids.is_empty() {
+        return Ok(());
+    }
+    let folders = store::list_folders(&account_id)?;
+    let current = folders
+        .iter()
+        .find(|f| f.name == folder)
+        .map(|f| f.role)
+        .unwrap_or(FolderRole::Custom);
+    let trash = folders
+        .iter()
+        .find(|f| f.role == FolderRole::Trash)
+        .map(|f| f.name.clone());
+
+    match (current, trash) {
+        (FolderRole::Trash, _) | (_, None) => {
+            let account = load_account(&account_id)?;
+            let password = account_password(&account)?;
+            let (acc, f) = (account.clone(), folder.clone());
+            let batch = uids.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                imap::delete_permanently(&acc, &password, &f, &batch)
+            })
+            .await
+            .map_err(|e| format!("删除任务失败: {e}"))??;
+        }
+        (_, Some(trash)) => {
+            move_batch(&app, &account_id, &folder, &uids, &trash).await?;
+        }
+    }
+    for uid in &uids {
+        let _ = store::delete_message(&account_id, &folder, *uid);
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// 存储路径 / 备份恢复
+// ---------------------------------------------------------------------------
+
+/// 读取当前存储配置：实际生效目录 + 自定义目录（空表示默认）。
+#[command]
+pub async fn mail_storage_info(app: AppHandle) -> Result<serde_json::Value, String> {
+    ensure_init(&app)?;
+    let active = store::data_root(&app)?;
+    let db = store::db_path(&app)?;
+    let size = std::fs::metadata(&db).map(|m| m.len()).unwrap_or(0);
+    Ok(serde_json::json!({
+        "activeDir": active.to_string_lossy(),
+        "customDir": store::read_storage_dir(),
+        "dbPath": db.to_string_lossy(),
+        "dbBytes": size,
+    }))
+}
+
+/// 迁移邮件库到新目录。
+///
+/// 步骤刻意做成「先复制、校验、再切换」：直接 move 一旦中途失败，
+/// 用户会同时失去新旧两份数据。切换成功后才删源文件。
+#[command]
+pub async fn mail_migrate_storage(app: AppHandle, target_dir: String) -> Result<serde_json::Value, String> {
+    ensure_init(&app)?;
+    let target = std::path::PathBuf::from(target_dir.trim());
+    if target_dir.trim().is_empty() {
+        return Err("目标目录为空".to_string());
+    }
+    std::fs::create_dir_all(&target).map_err(|e| format!("创建目录失败: {e}"))?;
+
+    let source = store::db_path(&app)?;
+    let dest = target.join("mail.db");
+    if source == dest {
+        return Err("目标与当前目录相同".to_string());
+    }
+    if dest.exists() {
+        return Err(format!("目标已存在 {}，请换一个目录或先改名", dest.display()));
+    }
+
+    // 先 checkpoint，确保 WAL 里的数据也写进主库文件，否则复制出来的库会丢最近的写入。
+    store::checkpoint()?;
+    std::fs::copy(&source, &dest).map_err(|e| format!("复制数据库失败: {e}"))?;
+
+    let src_len = std::fs::metadata(&source).map(|m| m.len()).unwrap_or(0);
+    let dst_len = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
+    if src_len != dst_len {
+        let _ = std::fs::remove_file(&dest);
+        return Err("复制后大小不一致，已回滚（原库未改动）".to_string());
+    }
+
+    // 切换：写配置 + 换内存里的路径。此后的连接都指向新文件。
+    store::set_storage_dir(&target.to_string_lossy())?;
+    store::switch_db_path(dest.clone())?;
+
+    // 源文件保留为 `.bak`，不直接删——用户确认新位置能用之后再自己清。
+    let backup = source.with_extension("db.bak");
+    let _ = std::fs::rename(&source, &backup);
+    // WAL/SHM 一起挪走，否则新位置的库会读到旧的 -wal。
+    for suffix in ["-wal", "-shm"] {
+        let from = source.with_file_name(format!("mail.db{suffix}"));
+        if from.exists() {
+            let _ = std::fs::rename(&from, backup.with_file_name(format!("mail.db.bak{suffix}")));
+        }
+    }
+
+    Ok(serde_json::json!({
+        "dbPath": dest.to_string_lossy(),
+        "backupPath": backup.to_string_lossy(),
+    }))
+}
+
+/// 把整个邮件库导出为备份文件（`.db`，可直接再导入）。
+#[command]
+pub async fn mail_backup(app: AppHandle, target_path: String) -> Result<String, String> {
+    ensure_init(&app)?;
+    store::checkpoint()?;
+    let source = store::db_path(&app)?;
+    std::fs::copy(&source, &target_path).map_err(|e| format!("写备份失败: {e}"))?;
+    Ok(target_path)
+}
+
+/// 从备份文件恢复。
+///
+/// 覆盖前先把当前库改名留档（`.before-restore`），恢复失败能退回去——
+/// 「恢复」是少数几个一旦出错就彻底丢数据的操作，必须留后路。
+#[command]
+pub async fn mail_restore(app: AppHandle, source_path: String) -> Result<(), String> {
+    ensure_init(&app)?;
+    let src = std::path::PathBuf::from(source_path.trim());
+    if !src.exists() {
+        return Err("备份文件不存在".to_string());
+    }
+
+    // 校验：是不是一个能打开的 SQLite，且含有我们需要的表。
+    {
+        let conn = rusqlite::Connection::open_with_flags(
+            &src,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .map_err(|e| format!("备份文件无法打开: {e}"))?;
+        let ok: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='messages'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| format!("备份文件已损坏: {e}"))?;
+        if ok == 0 {
+            return Err("备份文件里没有邮件表，可能不是本应用的备份".to_string());
+        }
+    }
+
+    let dest = store::db_path(&app)?;
+    store::checkpoint()?;
+
+    let safety = dest.with_extension("db.before-restore");
+    if dest.exists() {
+        std::fs::copy(&dest, &safety).map_err(|e| format!("备份当前库失败: {e}"))?;
+    }
+    std::fs::copy(&src, &dest).map_err(|e| format!("写入恢复文件失败: {e}"))?;
+    // 恢复后旧的 WAL 会让新库读到过期页，必须清掉。
+    for suffix in ["-wal", "-shm"] {
+        let p = dest.with_file_name(format!("mail.db{suffix}"));
+        let _ = std::fs::remove_file(p);
+    }
+    store::reset_runtime_caches();
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // 发送
 // ---------------------------------------------------------------------------

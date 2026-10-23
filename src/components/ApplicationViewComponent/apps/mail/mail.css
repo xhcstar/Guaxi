@@ -443,8 +443,9 @@
 }
 
 .mail-sidebar-footer {
+  flex: 0 0 auto;
   border-top: 1px solid var(--mail-border);
-  padding: 8px;
+  padding: 6px 8px;
   display: flex;
   gap: 4px;
 }
@@ -524,12 +525,20 @@
 .mail-search input {
   flex: 1 1 auto;
   min-width: 0;
+  /* WebView2 对 input 会套一层 UA 默认外观（边框 + 内阴影），只写 border:0
+     在某些主题下仍能看到第二圈边——看起来像「两个搜索框叠在一起」。
+     这里把 appearance 一并复位。 */
+  appearance: none;
+  -webkit-appearance: none;
   border: 0;
+  border-radius: 0;
   outline: 0;
+  box-shadow: none;
   background: transparent;
   color: var(--mail-text);
   font: inherit;
-  font-size: 12.5px;
+  font-size: 13px;
+  padding: 0;
 }
 .mail-search input::placeholder {
   color: var(--mail-text-muted);
@@ -1448,13 +1457,6 @@
   resize: none;
 }
 
-.mail-composer-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
 .mail-compose-fields {
   position: relative;
   /* 高于工具栏与正文：地址补全浮层要压在它们之上，否则会被裁掉一半。 */
@@ -1531,11 +1533,15 @@
 .mail-compose-body {
   flex: 1 1 auto;
   min-height: 200px;
+  display: flex;
+  flex-direction: column;
   /* 不设 max-height：窗口拉大 / 最大化时正文要跟着长，
      之前固定 46vh，最大化也还是那么高，等于白拉。 */
   overflow-y: auto;
 }
 .mail-compose-editor {
+  /* 撑满正文区：窗口拉大/最大化时写作区跟着长，而不是缩在上半截。 */
+  flex: 1 1 auto;
   min-height: 200px;
   padding: 16px 18px;
   outline: 0;
@@ -1593,4 +1599,126 @@
 /* 通讯录是三栏工作台：给足高度，否则联系人列表只能露出五六行。 */
 .mail-modal.contacts-modal {
   height: min(760px, 90vh);
+}
+
+/* ---------- 侧栏底部：设置入口 ---------- */
+
+.mail-footer-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: var(--mail-radius-sm);
+  background: transparent;
+  color: var(--mail-text-secondary);
+  font: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mail-footer-btn:hover {
+  background: var(--mail-panel-hover);
+  color: var(--mail-text);
+}
+
+.mail-footer-icon {
+  width: 15px;
+  text-align: center;
+  font-size: 14px;
+  opacity: 0.8;
+}
+
+/* ---------- 批量选择 ---------- */
+
+.mail-selectall {
+  display: grid;
+  place-items: center;
+  margin-left: auto;
+  padding: 0 4px;
+  cursor: pointer;
+}
+
+.mail-row-check {
+  position: absolute;
+  left: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  /* 默认半透明，悬停或已有选择时更明显——复选框不该抢邮件的视觉重心。 */
+  opacity: 0.45;
+  transition: opacity 0.12s ease;
+}
+
+.mail-row:hover .mail-row-check,
+.mail-row.is-checked .mail-row-check {
+  opacity: 1;
+}
+
+.mail-row-check input {
+  accent-color: var(--mail-accent);
+  cursor: pointer;
+}
+
+/* 有勾选时整行左侧留出复选框的空间，避免压在头像上。 */
+.mail-row.is-checked {
+  background: var(--mail-selection);
+}
+
+.mail-selectall input {
+  accent-color: var(--mail-accent);
+  cursor: pointer;
+}
+
+.mail-batch-bar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  padding: 6px 0;
+  border-top: 1px solid var(--mail-border);
+  border-bottom: 1px solid var(--mail-border);
+  margin: 4px 0;
+}
+
+.mail-batch-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mail-accent);
+  margin-right: 2px;
+}
+
+.mail-chip.is-danger {
+  color: var(--mail-danger);
+}
+
+.mail-search-error {
+  margin: 0 var(--mail-pad) 6px;
+  padding: 6px 10px;
+  border-radius: var(--mail-radius-sm);
+  background: color-mix(in srgb, var(--mail-danger) 14%, transparent);
+  color: var(--mail-danger);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+/* 拖拽落点：文件夹整行高亮并给出虚线边框。 */
+.mail-folder.is-drop-target {
+  background: var(--mail-accent-soft);
+  outline: 1px dashed var(--mail-accent);
+  outline-offset: -1px;
+  color: var(--mail-accent);
+}
+
+.mail-row[draggable='true'] {
+  cursor: grab;
+}
+.mail-row.is-dragging {
+  opacity: 0.5;
 }

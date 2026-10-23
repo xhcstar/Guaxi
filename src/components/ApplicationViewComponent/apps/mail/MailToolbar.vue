@@ -55,9 +55,6 @@
       <button class="mail-icon-btn" title="账户" aria-label="账户" @click="$emit('accounts')">
         <n-icon :component="PersonCircleOutline" />
       </button>
-      <button class="mail-icon-btn" title="外观与设置" aria-label="外观与设置" @click="$emit('settings')">
-        <n-icon :component="OptionsOutline" />
-      </button>
     </div>
   </header>
 </template>
@@ -70,7 +67,6 @@ import {
   FolderOpenOutline,
   FunnelOutline,
   MenuOutline,
-  OptionsOutline,
   PeopleOutline,
   PersonCircleOutline,
   RefreshOutline,
@@ -88,7 +84,6 @@ defineEmits([
   'compose',
   'accounts',
   'rules',
-  'settings',
   'contacts',
   'toggle-sidebar',
 ])

@@ -123,6 +123,15 @@
       </template>
     </div>
 
+    <!-- 底部：设置入口。Outlook / Thunderbird / Mailspring 都把它放在左下角，
+         顶栏留给高频动作，设置属于低频全局配置。 -->
+    <div class="mail-sidebar-footer">
+      <button class="mail-footer-btn" title="外观与设置" @click="$emit('settings')">
+        <span class="mail-footer-icon" aria-hidden="true">⚙</span>
+        <span class="mail-footer-label">设置</span>
+      </button>
+    </div>
+
     <!-- 文件夹右键菜单：自建文件夹可删除；系统文件夹只给「标记已读」这类安全动作。 -->
     <div
       v-if="folderMenu"
@@ -166,12 +175,29 @@ const emit = defineEmits([
   'add-account',
   'create-folder',
   'delete-folder',
+  'settings',
+  'drop-on-folder',
 ])
 
 const creating = ref(false)
 const newFolderName = ref('')
 const createInput = ref(null)
 const folderMenu = ref(null)
+/** 拖拽悬停中的文件夹（用于高亮可放区域）。 */
+const dropTarget = ref('')
+
+function onDragOver(folder) {
+  dropTarget.value = folder.name
+}
+
+function onDragLeave(folder) {
+  if (dropTarget.value === folder.name) dropTarget.value = ''
+}
+
+function onDrop(folder) {
+  dropTarget.value = ''
+  emit('drop-on-folder', folder.name)
+}
 
 async function startCreateFolder() {
   creating.value = true

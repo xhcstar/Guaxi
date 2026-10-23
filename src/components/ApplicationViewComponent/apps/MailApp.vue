@@ -64,6 +64,8 @@
           @add-account="openAccounts"
           @create-folder="onCreateFolder"
           @delete-folder="onDeleteFolder"
+          @settings="showSettings = true"
+          @drop-on-folder="onDropOnFolder"
         />
 
         <!-- 栏边界：拖拽调宽；中间的小手柄点一下收起/展开。
@@ -116,6 +118,15 @@
           @open="onOpenMessage"
           @toggle-star="store.setFlagged"
           @contextmenu="onRowContextMenu"
+          :selected-keys="store.selectedKeys"
+          :search-error="store.searchError"
+          :move-targets="moveTargets"
+          @toggle-select="store.toggleSelect"
+          @select-all="store.selectAll"
+          @clear-selection="store.clearSelection"
+          @batch="onBatch"
+          @drag-start="onDragStart"
+          @drag-end="onDragEnd"
         />
 
         <div
@@ -228,11 +239,16 @@
       :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
       @click.stop
     >
+      <div v-if="contextCount > 1" class="mail-context-head">已选 {{ contextCount }} 封</div>
       <button class="mail-context-item" @click="contextAction('markRead')">
         {{ contextMenu.row.seen ? '标为未读' : '标为已读' }}
       </button>
       <button class="mail-context-item" @click="contextAction('flag')">
         {{ contextMenu.row.flagged ? '取消星标' : '加星标' }}
+      </button>
+      <button class="mail-context-item" @click="contextAction('junk')">标为垃圾邮件</button>
+      <button v-if="contextInJunk" class="mail-context-item" @click="contextAction('unmarkJunk')">
+        不是垃圾邮件
       </button>
       <div class="mail-context-sep"></div>
       <button
@@ -698,13 +714,95 @@ async function contextAction(action, target) {
   const row = contextMenu.value?.row
   closeContextMenu()
   if (!row) return
+
+  // 右键菜单作用于「当前选择集」：单选时就是那一封，多选时整批。
+  // Outlook 也是这个行为——否则右键一堆选中的邮件却只处理一封，很容易误操作。
+  const rows = store.selectedRows().length ? store.selectedRows() : [row]
+
   try {
-    if (action === 'markRead') await store.setSeen([row], !row.seen)
-    if (action === 'flag') await store.setFlagged(row, !row.flagged)
-    if (action === 'move') await store.moveMessages([row], target)
-    if (action === 'delete') await store.deleteMessages([row])
-    if (action === 'saveEml') await saveMessageAs(row, 'eml')
-    if (action === 'saveHtml') await saveMessageAs(row, 'html')
+    if (action === 'saveEml' || action === 'saveHtml') {
+      await saveMessageAs(row, action === 'saveEml' ? 'eml' : 'html')
+      return
+    }
+    if (action === 'markRead') {
+      await store.runBatch(row.seen ? 'unread' : 'read')
+      return
+    }
+    if (action === 'flag') {
+      await store.runBatch(row.flagged ? 'unflag' : 'flag')
+      return
+    }
+    if (action === 'junk') {
+      await store.runBatch('junk')
+      notify(`已移到垃圾邮件（${rows.length} 封）`)
+      return
+    }
+    if (action === 'unmarkJunk') {
+      await store.runBatch('unmarkJunk')
+      notify(`已移回收件箱（${rows.length} 封）`)
+      return
+    }
+    if (action === 'move' && target) {
+      await store.runBatch('move', target)
+      notify(`已移动 ${rows.length} 封`)
+      return
+    }
+    if (action === 'delete') {
+      await store.runBatch('delete')
+      notify(`已删除 ${rows.length} 封`)
+    }
+  } catch (error) {
+    notify(String(error?.message || error), true)
+  }
+}
+
+const contextCount = computed(() => store.selectedKeys.length || 1)
+const contextInJunk = computed(() => {
+  const row = contextMenu.value?.row
+  if (!row) return false
+  const list = store.foldersByAccount[row.accountId] || []
+  return list.some((f) => f.name === row.folder && f.role === 'junk')
+})
+
+/** 可拖放到 / 批量移动到哪些文件夹。 */
+const moveTargets = computed(() => {
+  const accountId = store.activeAccountId
+  return (store.foldersByAccount[accountId] || []).filter((f) => f.selectable)
+})
+
+let draggingRows = []
+
+function onDragStart(row) {
+  draggingRows = store.selectedRows().length ? store.selectedRows() : [row]
+}
+
+function onDragEnd() {
+  draggingRows = []
+}
+
+/** 列表动作条发出的批量命令。 */
+async function onBatch(action, target) {
+  try {
+    await store.runBatch(action, target)
+    if (action === 'junk') notify('已移到垃圾邮件')
+    if (action === 'delete') notify('已删除')
+    if (action === 'move') notify('已移动')
+  } catch (error) {
+    notify(String(error?.message || error), true)
+  }
+}
+
+/** 拖到侧栏文件夹上：把正在拖的那批邮件移过去。 */
+async function onDropOnFolder(folderName) {
+  const source = store.selectedRows()
+  const rows = draggingRows.length ? draggingRows : source
+  draggingRows = []
+  if (!rows.length) return
+  // 拖到源文件夹本身没有意义。
+  if (rows.every((r) => r.folder === folderName)) return
+  try {
+    await store.runBatch('move', folderName)
+    notify(`已移动 ${rows.length} 封到该文件夹`)
   } catch (error) {
     notify(String(error?.message || error), true)
   }

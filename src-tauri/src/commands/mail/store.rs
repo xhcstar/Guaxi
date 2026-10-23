@@ -18,16 +18,64 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 
-static DB_PATH: OnceCell<PathBuf> = OnceCell::new();
+/// 数据库路径。用户可以把邮件库放到别的盘，所以不能用 OnceCell（不可变）。
+static DB_PATH: once_cell::sync::Lazy<std::sync::RwLock<Option<PathBuf>>> =
+    once_cell::sync::Lazy::new(|| std::sync::RwLock::new(None));
 
-fn data_root(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
+/// 默认数据根目录：<app_data>/mail。
+fn default_data_root(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
         .app_data_dir()
-        .map_err(|e| format!("获取应用数据目录失败: {e}"))?
-        .join("mail");
+        .map_err(|e| format!("获取应用数据目录失败: {e}"))
+        .map(|dir| dir.join("mail"))
+}
+
+/// 当前生效的数据根目录：用户指定了自定义路径就用它，否则用默认位置。
+pub fn data_root(app: &AppHandle) -> Result<PathBuf, String> {
+    let custom = read_storage_dir();
+    let dir = if custom.trim().is_empty() {
+        default_data_root(app)?
+    } else {
+        PathBuf::from(custom.trim())
+    };
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建邮箱数据目录失败: {e}"))?;
     Ok(dir)
+}
+
+fn current_db_path() -> Option<PathBuf> {
+    DB_PATH.read().ok().and_then(|guard| guard.clone())
+}
+
+fn set_db_path(path: PathBuf) {
+    if let Ok(mut guard) = DB_PATH.write() {
+        *guard = Some(path);
+    }
+}
+
+/// 自定义存储路径（存在 meta 表；空表示用默认位置）。
+pub fn read_storage_dir() -> String {
+    let Ok(conn) = open() else {
+        // 库还没建好（首次启动）：退回默认，避免递归。
+        return String::new();
+    };
+    conn.query_row("SELECT value FROM meta WHERE key='storage_dir'", [], |r| {
+        r.get::<_, String>(0)
+    })
+    .optional()
+    .ok()
+    .flatten()
+    .unwrap_or_default()
+}
+
+pub fn set_storage_dir(dir: &str) -> Result<(), String> {
+    let conn = open()?;
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES ('storage_dir', ?1)
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        params![dir],
+    )
+    .map_err(|e| format!("保存存储路径失败: {e}"))?;
+    Ok(())
 }
 
 pub fn db_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -40,8 +88,7 @@ pub(crate) fn connection() -> Result<Connection, String> {
 }
 
 fn open() -> Result<Connection, String> {
-
-    let path = DB_PATH.get().ok_or("邮箱库未初始化")?;
+    let path = current_db_path().ok_or("邮箱库未初始化")?;
     let conn = Connection::open(path).map_err(|e| format!("打开邮箱库失败: {e}"))?;
     conn.pragma_update(None, "journal_mode", "WAL").ok();
     conn.pragma_update(None, "busy_timeout", 5000).ok();
@@ -50,7 +97,7 @@ fn open() -> Result<Connection, String> {
 
 pub fn init(app: &AppHandle) -> Result<(), String> {
     let path = db_path(app)?;
-    let _ = DB_PATH.set(path);
+    set_db_path(path);
     let conn = open()?;
     conn.execute_batch(
         r#"
@@ -115,6 +162,18 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
         CREATE INDEX IF NOT EXISTS idx_messages_date ON messages (account_id, folder, date DESC);
         CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages (thread_key);
         CREATE INDEX IF NOT EXISTS idx_messages_from ON messages (from_addr);
+
+        -- 十万封量级的检索支撑：
+        -- 1) 跨账户「全部邮件」按时间倒序要能走索引，不能全表排序；
+        -- 2) 未读 / 星标 / 附件是最高频的过滤条件，做成部分索引后
+        --    查询只扫命中的行，不受总条数影响；
+        -- 3) 大小写不敏感的发件人匹配（LOWER(from_addr)）单独建表达式索引，
+        --    否则每次搜索都要对全表做函数计算。
+        CREATE INDEX IF NOT EXISTS idx_messages_date_all ON messages (date DESC, uid DESC);
+        CREATE INDEX IF NOT EXISTS idx_messages_unread ON messages (date DESC) WHERE seen = 0;
+        CREATE INDEX IF NOT EXISTS idx_messages_flagged ON messages (date DESC) WHERE flagged = 1;
+        CREATE INDEX IF NOT EXISTS idx_messages_attach ON messages (date DESC) WHERE has_attachments = 1;
+        CREATE INDEX IF NOT EXISTS idx_messages_from_lower ON messages (LOWER(from_addr));
 
         CREATE TABLE IF NOT EXISTS message_bodies (
             account_id TEXT NOT NULL,
@@ -550,6 +609,31 @@ pub fn delete_folder_row(account_id: &str, name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// 把 WAL 内容并回主库文件。
+///
+/// 复制 / 迁移 / 备份之前必须先做：WAL 模式下最近的写入还在 `-wal` 里，
+/// 只复制主库文件会得到一份「少了几十封邮件」的旧数据。
+pub fn checkpoint() -> Result<(), String> {
+    let conn = open()?;
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+        .map_err(|e| format!("整理数据库失败: {e}"))?;
+    Ok(())
+}
+
+/// 切换运行期使用的数据库路径（迁移后调用）。
+pub fn switch_db_path(path: std::path::PathBuf) -> Result<(), String> {
+    set_db_path(path);
+    Ok(())
+}
+
+/// 清掉所有依赖「当前库内容」的进程内缓存。
+/// 恢复备份 / 切换路径后如果不清，加密开关仍按旧库回答，行为会错位。
+pub fn reset_runtime_caches() {
+    if let Ok(mut guard) = ENCRYPT_CACHE.write() {
+        *guard = None;
+    }
+}
+
 /// UIDVALIDITY 变化时整段作废某个文件夹的本地缓存。
 pub fn clear_folder_messages(account_id: &str, folder: &str) -> Result<(), String> {
     let mut conn = open()?;
@@ -702,16 +786,16 @@ pub fn upsert_body(
     // 这一点由 `encrypted_body_index_placeholder` 在前面挡住，不会静默失效。
     let encrypt = encryption_enabled();
     let sealed_html = match html {
-        Some(value) if encrypt => Some(crypto::encrypt(account_id, value)?),
+        Some(value) if encrypt => Some(super::crypto::encrypt(account_id, value)?),
         other => other.map(|v| v.to_string()),
     };
     let sealed_text = if encrypt {
-        crypto::encrypt(account_id, text)?
+        super::crypto::encrypt(account_id, text)?
     } else {
         text.to_string()
     };
     let sealed_attachments = if encrypt {
-        crypto::encrypt(account_id, attachments_json)?
+        super::crypto::encrypt(account_id, attachments_json)?
     } else {
         attachments_json.to_string()
     };
@@ -731,28 +815,35 @@ pub fn upsert_body(
 }
 
 /// 本地加密开关的进程内缓存。默认开启——「默认安全」比「默认好用」更该是默认值。
-static ENCRYPT_CACHE: once_cell::sync::OnceCell<std::sync::atomic::AtomicBool> =
-    once_cell::sync::OnceCell::new();
+/// 用 RwLock 而不是 OnceCell：切换库 / 恢复备份后要能把缓存清掉。
+static ENCRYPT_CACHE: once_cell::sync::Lazy<std::sync::RwLock<Option<bool>>> =
+    once_cell::sync::Lazy::new(|| std::sync::RwLock::new(None));
 
-fn encrypt_flag() -> &'static std::sync::atomic::AtomicBool {
-    ENCRYPT_CACHE.get_or_init(|| {
-        let value = open()
-            .ok()
-            .and_then(|conn| {
-                conn.query_row("SELECT value FROM meta WHERE key='encrypt_local'", [], |r| {
-                    r.get::<_, String>(0)
-                })
-                .ok()
+fn encrypt_flag() -> bool {
+    if let Ok(guard) = ENCRYPT_CACHE.read() {
+        if let Some(value) = *guard {
+            return value;
+        }
+    }
+    let value = open()
+        .ok()
+        .and_then(|conn| {
+            conn.query_row("SELECT value FROM meta WHERE key='encrypt_local'", [], |r| {
+                r.get::<_, String>(0)
             })
-            // 没有这条设置（老库）时按默认开启。
-            .map(|v| v != "0")
-            .unwrap_or(true);
-        std::sync::atomic::AtomicBool::new(value)
-    })
+            .ok()
+        })
+        // 没有这条设置（老库）时按默认开启。
+        .map(|v| v != "0")
+        .unwrap_or(true);
+    if let Ok(mut guard) = ENCRYPT_CACHE.write() {
+        *guard = Some(value);
+    }
+    value
 }
 
 pub fn encryption_enabled() -> bool {
-    encrypt_flag().load(std::sync::atomic::Ordering::Relaxed)
+    encrypt_flag()
 }
 
 pub fn set_encryption_enabled(enabled: bool) -> Result<(), String> {
@@ -763,7 +854,9 @@ pub fn set_encryption_enabled(enabled: bool) -> Result<(), String> {
         params![if enabled { "1" } else { "0" }],
     )
     .map_err(|e| format!("保存加密设置失败: {e}"))?;
-    encrypt_flag().store(enabled, std::sync::atomic::Ordering::Relaxed);
+    if let Ok(mut guard) = ENCRYPT_CACHE.write() {
+        *guard = Some(enabled);
+    }
     Ok(())
 }
 
@@ -798,7 +891,7 @@ pub fn get_body(
     // 解密。历史明文（没有 enc:v1: 前缀）原样返回，老数据不需要迁移。
     // 解密失败（换机器、密钥丢失）时给一句人话，而不是把 base64 甩到界面上。
     let unseal = |value: &str| -> String {
-        match crypto::decrypt(account_id, value) {
+        match super::crypto::decrypt(account_id, value) {
             Ok(Some(plain)) => plain,
             Ok(None) => value.to_string(),
             Err(_) => "⚠ 这封邮件的内容无法解密（加密密钥已变更或数据来自另一台设备）".to_string(),
@@ -1049,13 +1142,16 @@ pub fn search(query: &SearchQuery) -> Result<Vec<MessageSummary>, String> {
     if use_fts {
         let expr = fts_query(&query.text);
         if !expr.is_empty() {
-            // MATCH 左操作数可以是表名（整表）或列名（单列）。
+            // MATCH 的左操作数必须是**表名或列名本身，不能用别名**：
+            // 写成 `f MATCH ?` 会直接报 `no such column: f`，而前端把错误当
+            // 「检索失败」静默回退成普通列表——表现就是「输入了但结果没变」。
+            // 这是实际踩到的 bug，不是理论问题。
             let target = match query.field.as_deref().unwrap_or("all") {
-                "subject" => "f.subject",
-                "from" => "f.from_addr",
-                "to" => "f.to_text",
-                "body" => "f.body",
-                _ => "f",
+                "subject" => "messages_fts.subject",
+                "from" => "messages_fts.from_addr",
+                "to" => "messages_fts.to_text",
+                "body" => "messages_fts.body",
+                _ => "messages_fts",
             };
             sql.push_str(&format!(" AND {target} MATCH ?"));
             args.push(Box::new(expr));

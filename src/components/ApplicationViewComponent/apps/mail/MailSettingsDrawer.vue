@@ -227,6 +227,45 @@
           />
           新邮件默认使用富文本
         </label>
+
+        <div class="mail-section-divider"></div>
+        <div class="mail-flabel" style="margin-bottom: 6px">存储位置</div>
+        <p class="mail-hint" style="margin: 0 0 8px">
+          当前目录：<code>{{ storage.activeDir || '（读取中）' }}</code>
+          <template v-if="storage.dbBytes">
+            · 数据库 {{ (storage.dbBytes / 1024 / 1024).toFixed(1) }} MB
+          </template>
+        </p>
+        <div class="mail-field-row">
+          <div class="mail-field">
+            <label class="mail-flabel">目标目录</label>
+            <input
+              class="mail-input"
+              :value="targetDir"
+              placeholder="例如 D:\\Mail\\guaxi"
+              @input="targetDir = $event.target.value"
+            />
+          </div>
+          <div class="mail-field">
+            <label class="mail-flabel">迁移</label>
+            <button class="mail-btn" :disabled="migrating" @click="migrateStorage">
+              {{ migrating ? '迁移中…' : '迁移到该目录' }}
+            </button>
+          </div>
+        </div>
+        <p class="mail-hint" style="margin: 0 0 10px">
+          迁移会先复制并校验大小，成功后才切换；原库保留为 <code>mail.db.bak</code>，确认无误后可自行删除。
+        </p>
+
+        <div class="mail-flabel" style="margin-bottom: 6px">备份与恢复</div>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap">
+          <button class="mail-btn" @click="backupDb">备份到文件…</button>
+          <button class="mail-btn is-danger" @click="restoreDb">从备份恢复…</button>
+        </div>
+        <p class="mail-hint" style="margin: 6px 0 0">
+          备份是完整的 SQLite 库（含所有账户的本地邮件）。恢复前会把当前库另存为
+          <code>mail.db.before-restore</code>，恢复失败可手工退回去。
+        </p>
       </div>
 
       <div class="mail-modal-foot">
@@ -256,6 +295,87 @@ const densityOptions = [
 
 const fonts = ref([])
 const encryptionEnabled = ref(true)
+const storage = ref({ activeDir: '', customDir: '', dbPath: '', dbBytes: 0 })
+const migrating = ref(false)
+const targetDir = ref('')
+
+async function loadStorage() {
+  try {
+    storage.value = await invoke('mail_storage_info')
+    targetDir.value = storage.value.customDir || ''
+  } catch {
+    /* 设置页拿不到存储信息不算致命，保持默认展示 */
+  }
+}
+
+async function migrateStorage() {
+  const target = (targetDir.value || '').trim()
+  if (!target) {
+    window.alert('请先填写目标目录')
+    return
+  }
+  if (
+    !window.confirm(
+      `把邮件库迁移到：
+${target}
+
+会复制并校验，成功后切换；原库保留为 .bak。继续？`,
+    )
+  ) {
+    return
+  }
+  migrating.value = true
+  try {
+    const result = await invoke('mail_migrate_storage', { targetDir: target })
+    window.alert(`迁移完成：
+${result.dbPath}
+
+原库已备份为：
+${result.backupPath}`)
+    await loadStorage()
+  } catch (error) {
+    window.alert(String(error?.message || error))
+  } finally {
+    migrating.value = false
+  }
+}
+
+async function backupDb() {
+  const { save } = await import('@tauri-apps/plugin-dialog')
+  const path = await save({
+    title: '备份邮件库',
+    defaultPath: `mail-backup-${new Date().toISOString().slice(0, 10)}.db`,
+    filters: [{ name: '邮件库', extensions: ['db'] }],
+  })
+  if (!path) return
+  try {
+    await invoke('mail_backup', { targetPath: path })
+    window.alert(`已备份到：
+${path}`)
+  } catch (error) {
+    window.alert(String(error?.message || error))
+  }
+}
+
+async function restoreDb() {
+  const { open } = await import('@tauri-apps/plugin-dialog')
+  const path = await open({
+    multiple: false,
+    title: '选择备份文件',
+    filters: [{ name: '邮件库', extensions: ['db'] }],
+  })
+  if (!path) return
+  if (!window.confirm('恢复会用备份覆盖当前本地邮件库（账户与设置也一起回到备份时的状态）。继续？')) {
+    return
+  }
+  try {
+    await invoke('mail_restore', { sourcePath: path })
+    window.alert('恢复完成，即将重新加载。')
+    window.location.reload()
+  } catch (error) {
+    window.alert(String(error?.message || error))
+  }
+}
 
 onMounted(async () => {
   try {

@@ -129,13 +129,23 @@ pub fn account_key(account_id: &str) -> Result<[u8; 32], String> {
 /// 「数据库被单独拷走」时读不出内容——这正是要防的主要场景。
 fn device_key(account_id: &str) -> Result<[u8; 32], String> {
     use sha2::{Digest, Sha256};
-    let device = crate::commands::settingview::load_config().device_id;
-    if device.trim().is_empty() {
+
+    // 不碰 AppConfig 的私有字段：用「机器名 + 用户主目录 + 账户 id」派生。
+    // 这三样在同一台机器的同一用户下是稳定的，换机器就会变——正是我们要的语义。
+    let mut stable = String::new();
+    if let Ok(name) = std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")) {
+        stable.push_str(&name);
+    }
+    if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
+        stable.push_str(&home);
+    }
+    if stable.trim().is_empty() {
         return Err("无法获取设备标识，本地加密不可用".to_string());
     }
+
     let mut hasher = Sha256::new();
     hasher.update(b"guaxi-mail-at-rest-v1");
-    hasher.update(device.as_bytes());
+    hasher.update(stable.as_bytes());
     hasher.update(b"\0");
     hasher.update(account_id.as_bytes());
     let digest = hasher.finalize();

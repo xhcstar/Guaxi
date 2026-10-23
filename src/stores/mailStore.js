@@ -73,6 +73,10 @@ export const useMailStore = defineStore('mail', {
     outbox: [],
     rules: [],
     syncing: false,
+    searching: false,
+    /** 批量选择：{ accountId, folder, uid } 的唯一键集合。 */
+    selectedKeys: [],
+    searchError: '',
     lastSyncAt: 0,
     lastError: '',
     pollTimer: null,
@@ -339,7 +343,7 @@ export const useMailStore = defineStore('mail', {
       }
     },
 
-    async loadMessages({ silent = false } = {}) {
+    async loadMessages({ silent = false, seq = null } = {}) {
       if (!this.ready && !silent) return
       const searching =
         Boolean(this.searchQuery.trim()) ||
@@ -364,27 +368,17 @@ export const useMailStore = defineStore('mail', {
 
       try {
         const rows = await invoke('mail_search', { query })
+        // 过期请求：整批结果丢掉，不能覆盖更新的一次搜索。
+        if (seq !== null && seq !== this.searchSeq) return
         this.messages = await this.groupThreadsIfNeeded(rows || [])
+        this.searchError = ''
       } catch (error) {
-        // 搜索条件本身可能让 SQL 失效（极端输入）；退回列表接口，避免整页空白。
-        logger.warn('检索失败，回退到列表', error)
-        if (this.activeAccountId && this.scope === 'all') {
-          try {
-            const rows = await invoke('mail_list_messages', {
-              accountId: this.activeAccountId,
-              folder: this.activeFolder,
-              limit: 200,
-              offset: 0,
-            })
-            this.messages = rows || []
-          } catch (fallbackError) {
-            logger.error('加载邮件失败', fallbackError)
-            this.messages = []
-          }
-        } else {
-          this.messages = []
-        }
-        if (searching) this.lastError = String(error?.message || error)
+        // 以前这里会「静默回退成普通列表」——于是 SQL 写错也看起来像正常页面，
+        // 搜索 bug 藏了很久（MATCH 用别名就是被这样掩盖的）。
+        // 现在如实把错误暴露到列表头部，并且**不再**用全量列表冒充搜索结果。
+        logger.error('检索失败', error)
+        this.searchError = String(error?.message || error)
+        this.messages = []
       }
     },
 
@@ -605,7 +599,16 @@ export const useMailStore = defineStore('mail', {
     },
 
     async runSearch() {
-      await this.loadMessages()
+      // 递增序号：快速输入会连发多个请求，慢的后到会把新结果覆盖掉，
+      // 表现就是「搜索框里是新词，列表还是旧词的结果」。
+      const seq = (this.searchSeq || 0) + 1
+      this.searchSeq = seq
+      this.searching = true
+      try {
+        await this.loadMessages({ seq })
+      } finally {
+        if (this.searchSeq === seq) this.searching = false
+      }
     },
 
     clearSearch() {
@@ -613,6 +616,87 @@ export const useMailStore = defineStore('mail', {
       this.searchFilters = { unreadOnly: false, starredOnly: false, hasAttachment: false }
       this.activeLabel = ''
       this.loadMessages()
+    },
+
+    // ---------------- 批量操作 ----------------
+
+    keyOf(row) {
+      return `${row.accountId}:${row.folder}:${row.uid}`
+    },
+
+    rowByKey(key) {
+      return this.messages.find((m) => this.keyOf(m) === key) || null
+    },
+
+    toggleSelect(row, checked) {
+      const key = this.keyOf(row)
+      if (checked) {
+        if (!this.selectedKeys.includes(key)) this.selectedKeys.push(key)
+      } else {
+        this.selectedKeys = this.selectedKeys.filter((k) => k !== key)
+      }
+    },
+
+    selectAll(checked) {
+      this.selectedKeys = checked ? this.messages.map((m) => this.keyOf(m)) : []
+    },
+
+    clearSelection() {
+      this.selectedKeys = []
+    },
+
+    /** 选中的行，按账户分组（IMAP 命令是 per-account 的）。 */
+    selectedRows() {
+      return this.selectedKeys.map((k) => this.rowByKey(k)).filter(Boolean)
+    },
+
+    async runBatch(action, target) {
+      const rows = this.selectedRows()
+      if (!rows.length) return
+      const groups = new Map()
+      for (const row of rows) {
+        const key = `${row.accountId}::${row.folder}`
+        if (!groups.has(key)) groups.set(key, [])
+        groups.get(key).push(row)
+      }
+      for (const list of groups.values()) {
+        const { accountId, folder } = list[0]
+        const uids = list.map((m) => m.uid)
+        switch (action) {
+          case 'read':
+            await invoke('mail_batch_flags', { accountId, folder, uids, seen: true, flagged: null })
+            list.forEach((m) => (m.seen = true))
+            break
+          case 'unread':
+            await invoke('mail_batch_flags', { accountId, folder, uids, seen: false, flagged: null })
+            list.forEach((m) => (m.seen = false))
+            break
+          case 'flag':
+            await invoke('mail_batch_flags', { accountId, folder, uids, seen: null, flagged: true })
+            list.forEach((m) => (m.flagged = true))
+            break
+          case 'unflag':
+            await invoke('mail_batch_flags', { accountId, folder, uids, seen: null, flagged: false })
+            list.forEach((m) => (m.flagged = false))
+            break
+          case 'junk':
+            await invoke('mail_junk_messages', { accountId, folder, uids })
+            break
+          case 'move':
+            await invoke('mail_batch_flags', { accountId, folder, uids, seen: null, flagged: null }).catch(() => {})
+            await invoke('mail_move_messages', { accountId, folder, uids, target })
+            break
+          case 'delete':
+            await invoke('mail_batch_delete', { accountId, folder, uids })
+            break
+          case 'unmarkJunk':
+            await invoke('mail_unmark_junk', { accountId, folder, uids })
+            break
+        }
+      }
+      this.clearSelection()
+      await Promise.all([this.loadMessages({ silent: true }), this.reloadUnread()])
+      await this.loadFolders(this.activeAccountId).catch(() => {})
     },
 
     async suggest(prefix) {

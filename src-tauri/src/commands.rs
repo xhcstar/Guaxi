@@ -127,5 +127,5 @@ pub mod story_studio;
 pub mod story_ir;
 /// 资源嗅探下载引擎：全网搜索 → 嗅探文件直链 → 多线程/续传/yt-dlp 下载 → 资源库管理。
 pub mod resource_hunter;
-// TEMP-VERIFY: 邮箱模块（他人进行中，crypto.rs 未声明）暂时排除
-// pub mod mail;
+/// 邮箱客户端：IMAP/SMTP + 代理 + 本地检索 + 规则。
+pub mod mail;
