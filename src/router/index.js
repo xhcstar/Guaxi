@@ -86,19 +86,12 @@ const GuaxiAppWindow = {
   },
 }
 
-// 设计说明：最左侧全局导航栏在多个页面中有重复实现，导航项和快捷键 id 统一放在路由层声明。
+// 设计说明：最左侧全局导航栏在多个页面中有重复实现，导航项和快捷键 id 统一声明在
+// `navigationItems.js`（导航列组件也要用它，放在这里会形成循环依赖）。
+// 这里 re-export，保持 `import { mainNavigationItems } from '../router/index.js'` 的老引用可用。
 // App 根组件会读取这份配置注册全局快捷键，并给当前页面渲染出来的 icon 自动补充 title/aria-label。
-export const mainNavigationItems = Object.freeze([
-  { path: '/', routeName: 'main', label: '知识编辑', shortcutId: 'navHome' },
-  { path: '/chat', routeName: 'chat', label: '智能助手', shortcutId: 'navChat' },
-  { path: '/repository', routeName: 'repository', label: '仓库', shortcutId: 'navRepository' },
-  { path: '/brain', routeName: 'brain', label: '知识图谱', shortcutId: 'navBrain' },
-  { path: '/application', routeName: 'application', label: '应用', shortcutId: 'navApplication' },
-  { path: '/statistics', routeName: 'statistics', label: '统计', shortcutId: 'navStatistics' },
-  { path: '/search', routeName: 'search', label: '搜索', shortcutId: 'navSearch' },
-  { path: '/excalidraw', routeName: 'excalidraw', label: '白板', shortcutId: 'navExcalidraw' },
-  { path: '/setting', routeName: 'setting', label: '设置', shortcutId: 'navSetting' },
-])
+export { mainNavigationItems } from './navigationItems.js'
+import { mainNavigationItems } from './navigationItems.js'
 
 const navMeta = (routeName) => {
   const item = mainNavigationItems.find((entry) => entry.routeName === routeName)

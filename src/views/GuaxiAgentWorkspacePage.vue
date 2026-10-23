@@ -1,6 +1,9 @@
 <template>
   <n-message-provider placement="bottom">
     <div class="agent-page">
+      <!-- 全局导航列：工作台自己的三段布局占满右侧，导航列单独占 44px。
+           用户从这里可以随时切走，不会困在 /chat 里。 -->
+      <GuaxiNavRail />
       <AgentWorkspace />
     </div>
   </n-message-provider>
@@ -16,6 +19,7 @@
  */
 import { NMessageProvider } from 'naive-ui'
 import AgentWorkspace from '../components/AgentWorkspace/AgentWorkspace.vue'
+import GuaxiNavRail from '../components/GuaxiNavRail.vue'
 import { createLogger } from '../utils/logger'
 
 const logger = createLogger('GuaxiAgentWorkspacePage')
@@ -25,10 +29,17 @@ logger.info('Agent 工作台页面已挂载')
 
 <style scoped>
 .agent-page {
+  display: flex;
   height: 100vh;
   margin: 0;
   padding: 0;
   overflow: hidden;
   background: var(--guaxi-content-bg);
+}
+
+/* 导航列固定宽度，工作台吸收剩余空间。 */
+.agent-page > :last-child {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 </style>
