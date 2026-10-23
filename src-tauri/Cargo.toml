@@ -52,6 +52,14 @@ codegen-units = 16
 panic = "unwind"
 strip = "debuginfo"
 
+# dev 构建里唯一必须开优化的依赖：PDF 阅读器每页出图都要跑一次 JPEG 编码，
+# 而 image 的编码器是逐像素的纯计算循环 —— 未优化时单页 293ms，一个首屏四页就是
+# 1.5 秒纯等待（实测 4 页串行编码 1550ms → 开 O3 后 987ms）。
+# 只给这一个依赖开优化：它编译产物独立，不会拖慢其它 crate 的增量构建，
+# 也不影响断点调试本项目自己的代码。
+[profile.dev.package.image]
+opt-level = 3
+
 [dependencies]
 tauri = { version = "2.9.5", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"

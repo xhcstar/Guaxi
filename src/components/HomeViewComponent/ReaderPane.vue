@@ -9,7 +9,7 @@
     2. 只处理「由 openTargetKind 判定为非文本」的标签；文本标签根本不会挂载本组件。
     3. 所有后端调用都是新增命令；PDF 复用 pdfium 会话与虚拟滚动，不另起一套渲染。
   -->
-  <div v-if="target" class="guaxi-doc-reader" :data-reader="target.reader" @keydown.stop>
+  <div v-if="target" ref="pdfRootEl" class="guaxi-doc-reader" :data-reader="target.reader" @keydown.stop>
     <template v-if="target.reader === 'pdf'">
       <!--
         PDF 的辅助侧栏：大纲 / 批注 二选一。
@@ -106,6 +106,39 @@
         @page-change="onPdfPageChange"
         @highlight-click="onPdfHighlightClick"
       />
+
+      <!--
+        划词高亮条：浮在选区附近。
+
+        为什么由宿主提供、而不是塞进 GuaxiPdfViewer 的工具栏：阅读器是通用组件，
+        LaTeX 预览那边的高亮靠编辑器侧驱动，它不需要这个按钮；而「读完一段想划下来」
+        是独立阅读场景最核心的动作，缺了它阅读器就只能看不能记。
+
+        只在真正选中文字时出现：不做常驻按钮，避免和缩放/翻页这些「随时可用」的控件
+        混在一起，也让「选中 → 高亮」这个因果一眼可见。
+      -->
+      <div
+        v-if="pdfSelectionToolbar"
+        class="gdr-pdf-hl-bar"
+        :style="{ left: `${pdfSelectionAnchor.left}px`, top: `${pdfSelectionAnchor.top}px` }"
+        @mousedown.prevent
+      >
+        <span class="gdr-pdf-hl-bar__hint">{{ pdfSelectionPreview }}</span>
+        <span class="gdr-pdf-hl-bar__swatches">
+          <button
+            v-for="(c, i) in PDF_HL_PRESETS"
+            :key="i"
+            class="gdr-pdf-hl-bar__swatch"
+            :class="{ 'is-on': i === pdfHighlightPresetIdx }"
+            :style="{ background: rgbaToCss(c) }"
+            :title="'用此颜色高亮'"
+            @click="addPdfHighlightFromSelection(c)"
+          />
+        </span>
+        <button class="gdr-pdf-hl-bar__cancel" title="取消选择（Esc）" @click="clearPdfSelection">
+          Esc
+        </button>
+      </div>
 
       <!--
         侧栏开关：浮在正文左上角。
@@ -234,7 +267,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { Icon } from '@iconify/vue'
 import closeIcon from '@iconify-icons/lucide/x'
@@ -418,6 +451,142 @@ const onPdfHighlightClick = (payload) => {
 const onPdfHighlightAdded = () => {
   if (pdfAside.value === 'notes') void refreshPdfHighlights()
 }
+
+// ───────────────────────── 划词高亮（独立阅读场景）─────────────────────────
+// 用户在正文里选中一段文字 → 底部浮出颜色条 → 点一个颜色即写入 .pdf。
+// 写回由 GuaxiPdfViewer.addHighlightFromSelection 负责（乐观覆盖层 + 后台落盘），
+// 这里只管交互与「高亮后同步批注列表」。
+
+/** 高亮色板：与转换阅读器一致，最后一位是 0..255 的 alpha。 */
+const PDF_HL_PRESETS = [
+  [255, 235, 59, 110],   // 黄
+  [76, 217, 100, 110],   // 绿
+  [64, 196, 255, 110],   // 蓝
+  [255, 145, 180, 110],  // 粉
+  [255, 159, 67, 110],   // 橙
+]
+const pdfHighlightPresetIdx = ref(0)
+const pdfSelectionToolbar = ref(false)
+const pdfSelectionText = ref('')
+/** 浮动条的左上角（相对阅读器容器）。 */
+const pdfSelectionAnchor = ref({ left: 0, top: 0 })
+/** 浮条上展示的选区摘要：太长会把浮条撑到半屏，宁可在浮条上截断。 */
+const pdfSelectionPreview = computed(() => {
+  const t = String(pdfSelectionText.value || '').trim().replace(/\s+/g, ' ')
+  if (!t) return ''
+  return t.length > 24 ? `${t.slice(0, 24)}…` : t
+})
+const pdfRootEl = ref(null)
+
+/**
+ * 选好文字后算浮条位置。
+ *
+ * 用选区第一个 range 的屏幕矩形，而不是跟随鼠标：缩放、旋转、滚动之后鼠标位置
+ * 与选区早已无关，而矩形始终贴着那段文字。浮条放在选区下方；下方放不下就翻到上方。
+ * 坐标换算到阅读器容器内，浮条因此用 absolute 定位、不受滚动影响。
+ */
+const placePdfSelectionToolbar = () => {
+  const sel = window.getSelection?.()
+  if (!sel || !sel.rangeCount) return false
+  const rect = sel.getRangeAt(0).getBoundingClientRect()
+  if (!rect || (!rect.width && !rect.height)) return false
+  const root = pdfRootEl.value?.getBoundingClientRect?.()
+  if (!root) return false
+  const BAR_H = 34
+  const left = Math.min(
+    Math.max(8, rect.left - root.left + rect.width / 2),
+    Math.max(8, root.width - 8)
+  )
+  const below = rect.bottom - root.top + 8
+  const top = below + BAR_H <= root.height ? below : Math.max(8, rect.top - root.top - BAR_H - 8)
+  // 浮条以 left 为中心，交给 CSS 的 translateX(-50%) 对齐。
+  pdfSelectionAnchor.value = { left: Math.round(left), top: Math.round(top) }
+  return true
+}
+
+/** 鼠标抬起 / 键盘选择后调用：有选中就浮出，没选中就收起。 */
+const syncPdfSelectionToolbar = () => {
+  if (props.target?.reader !== 'pdf') return
+  const text = String(window.getSelection?.() || '').trim()
+  if (!text) {
+    pdfSelectionToolbar.value = false
+    pdfSelectionText.value = ''
+    return
+  }
+  pdfSelectionText.value = text
+  if (placePdfSelectionToolbar()) pdfSelectionToolbar.value = true
+}
+
+const clearPdfSelection = () => {
+  window.getSelection?.()?.removeAllRanges()
+  pdfSelectionToolbar.value = false
+  pdfSelectionText.value = ''
+}
+
+/**
+ * 给当前选区加上指定颜色的高亮。
+ *
+ * 关键点：先把选区矩形算出来再清选区 —— addHighlightFromSelection 内部会
+ * removeAllRanges，如果宿主这边先清，它拿到的就是空选区。
+ */
+const addPdfHighlightFromSelection = async (color) => {
+  const idx = PDF_HL_PRESETS.indexOf(color)
+  if (idx >= 0) pdfHighlightPresetIdx.value = idx
+  const viewer = pdfViewerRef.value
+  if (!viewer?.addHighlightFromSelection) return
+  try {
+    const res = await viewer.addHighlightFromSelection({ color })
+    pdfSelectionToolbar.value = false
+    pdfSelectionText.value = ''
+    if (!res) {
+      logger.warn('[ReaderPane] highlight skipped: no valid selection')
+      return
+    }
+    logger.info('[ReaderPane] pdf highlight added', { page: res.page, annotId: res.annotId })
+    // 新增的批注要让侧栏列表跟上；没开着也刷新一下，下次展开就是新的。
+    void refreshPdfHighlights()
+  } catch (error) {
+    logger.warn('[ReaderPane] add pdf highlight failed', {
+      error: String(error?.message || error),
+    })
+  }
+}
+
+/** 选区变化（键盘 Shift+方向键、双击选词）也要跟手。 */
+let pdfSelectionSyncTimer = null
+const schedulePdfSelectionSync = () => {
+  if (pdfSelectionSyncTimer) clearTimeout(pdfSelectionSyncTimer)
+  pdfSelectionSyncTimer = setTimeout(() => {
+    pdfSelectionSyncTimer = null
+    syncPdfSelectionToolbar()
+  }, 80)
+}
+
+const onPdfSelectionEscape = (ev) => {
+  if (ev.key !== 'Escape') return
+  if (!pdfSelectionToolbar.value) return
+  ev.preventDefault()
+  ev.stopPropagation()
+  clearPdfSelection()
+}
+
+onMounted(() => {
+  // 候选区在 window 上：阅读器的文本层是 transparent span，事件目标就是这些 span，
+  // 挂在容器上也能收到；但键盘选择不产生 mouseup，所以 selectionchange 也要听。
+  window.addEventListener('mouseup', schedulePdfSelectionSync)
+  window.addEventListener('keyup', schedulePdfSelectionSync)
+  document.addEventListener('selectionchange', schedulePdfSelectionSync)
+  window.addEventListener('keydown', onPdfSelectionEscape, true)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('mouseup', schedulePdfSelectionSync)
+  window.removeEventListener('keyup', schedulePdfSelectionSync)
+  document.removeEventListener('selectionchange', schedulePdfSelectionSync)
+  window.removeEventListener('keydown', onPdfSelectionEscape, true)
+  if (pdfSelectionSyncTimer) clearTimeout(pdfSelectionSyncTimer)
+})
+
 
 watch(
   () => [props.path, props.target?.reader],
@@ -661,6 +830,58 @@ const openExternally = async () => {
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
+
+/* 划词高亮条：浮在选区附近，深色玻璃底 + 高对比按钮。
+   translateX(-50%) 与 placePdfSelectionToolbar 里「以 left 为中心」的算法配套，
+   宽度因此可以随内容伸缩而不用在 JS 里再量一次。 */
+.gdr-pdf-hl-bar {
+  position: absolute;
+  z-index: 20;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: rgba(24, 26, 30, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 12px;
+  white-space: nowrap;
+  user-select: none;
+}
+.gdr-pdf-hl-bar__hint {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.72;
+}
+.gdr-pdf-hl-bar__swatches { display: inline-flex; gap: 5px; }
+.gdr-pdf-hl-bar__swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.28);
+  cursor: pointer;
+  transition: transform 0.12s, box-shadow 0.12s;
+}
+.gdr-pdf-hl-bar__swatch:hover { transform: scale(1.14); }
+.gdr-pdf-hl-bar__swatch.is-on {
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85);
+}
+.gdr-pdf-hl-bar__cancel {
+  margin-left: 2px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: transparent;
+  color: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.gdr-pdf-hl-bar__cancel:hover { background: rgba(255, 255, 255, 0.1); }
 
 .guaxi-doc-reader__fallback {
   position: absolute;

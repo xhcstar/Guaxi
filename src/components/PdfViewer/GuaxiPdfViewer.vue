@@ -308,9 +308,13 @@ const cssScale = computed(() => zoom.value)
 // （111 → 114 → 118 …），每一格都要重新栅格化、还各留一份缓存文件；量化到阶梯后，
 // 小幅缩放落回同一档，直接命中缓存，缩放因此变得跟手。
 // 阶梯往上取整（宁可略清晰也不欠采样），上限仍是 384 dpi（A4 约 3300×4700，和之前一致）。
+//
+// 密度：档位之间的比值不能超过 ~1.3。原来的 144→192 是 1.33 倍，而 1.42（常见默认缩放）
+// 恰好跨过 144 落到 192 —— 一档之差就是 3.56MP vs 2.00MP 的编码量，屏幕上看不出区别，
+// 等待时间却接近翻倍。补进 168 之后，1.2~1.5 这一段都落在 168，首次出图明显更快。
 const devicePixelRatio = (typeof window !== 'undefined' && window.devicePixelRatio) || 1
 const renderScale = Math.min(2, Math.max(1, devicePixelRatio))
-const DPI_LADDER = [72, 96, 120, 144, 192, 240, 288, 384]
+const DPI_LADDER = [72, 96, 120, 144, 168, 192, 240, 288, 384]
 const renderDpi = computed(() => {
   const ideal = zoom.value * 72 * renderScale
   for (const d of DPI_LADDER) if (d >= ideal) return d
@@ -502,14 +506,81 @@ const engineKind = computed(() => {
   return /typst/i.test(props.titleLabel) ? 'typst' : 'latex'
 })
 
+// ───────────────────────── 缩放锚点 ─────────────────────────
+// 缩放不能总以内容左上角为原点：那样每放大一档，正在看的那一行就往下跑出视口，
+// 用户得反复手动往回滚 —— 这正是「缩放不在屏幕中心」的体感来源。
+//
+// 做法：改 zoom 之前把锚点记成**几何坐标**（页码 + 页内 pt），而不是像素。
+// 为什么不能记像素：虚拟滚动下缩小会让附近页被卸载、spacer 顶替，内容总高在
+// 同一帧内缩水，浏览器立刻把 scrollTop 夹回新的上限 —— 像素锚点在写入前就已经失效。
+// 页码 + 页内 pt 只依赖 pageGeometry（纯计算，与 DOM 挂载无关），缩放前后都成立。
+//
+// 锚点默认取视口中心；Ctrl+滚轮传指针位置，缩放就以指针下的内容为不动点。
+const captureZoomAnchor = (clientX, clientY) => {
+  const el = bodyRef.value
+  if (!el) return null
+  const rect = el.getBoundingClientRect()
+  let ax = rect.width / 2
+  let ay = rect.height / 2
+  if (Number.isFinite(clientX) && Number.isFinite(clientY)) {
+    const px = clientX - rect.left
+    const py = clientY - rect.top
+    if (px >= 0 && px <= rect.width && py >= 0 && py <= rect.height) {
+      ax = px
+      ay = py
+    }
+  }
+  // 屏幕内偏移 → 未缩放 pt 坐标（换算全程用滚动量本身，不做任何 DOM 测量）。
+  const geo = pageGeometry.value
+  if (!geo.length) return null
+  const pageOffset = (el.scrollTop + ay - PAGES_PADDING) / zoom.value
+  // 找到该 pt 位置所在的页（页高已按当前 zoom 换算回 pt）。
+  let lo = 0
+  let hi = geo.length - 1
+  let idx = 0
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (geo[mid].top <= el.scrollTop + ay) {
+      idx = mid
+      lo = mid + 1
+    } else {
+      hi = mid - 1
+    }
+  }
+  const item = geo[idx]
+  const yInPagePt = Math.max(0, pageOffset - item.top / zoom.value)
+  return { pageIdx: idx, yInPagePt, ax, ay, xPt: el.scrollLeft / zoom.value }
+}
+
+const applyZoomAnchor = (anchor) => {
+  if (!anchor) return
+  const el = bodyRef.value
+  if (!el) return
+  const geo = pageGeometry.value
+  const item = geo[Math.min(anchor.pageIdx, geo.length - 1)]
+  if (!item) return
+  el.scrollTop = Math.max(0, item.top + anchor.yInPagePt * zoom.value - anchor.ay)
+  el.scrollLeft = Math.max(0, anchor.xPt * zoom.value - anchor.ax)
+}
+
 // 手动缩放一律走 setZoom：它要顺带退出自适应模式，否则在 fit-mode='width' 下点了 +/− 之后，
 // 任何一次容器尺寸变化都会把用户的缩放顶回适合宽度。
 const zoomIn = (reason = 'manual') => setZoom(zoom.value + 0.1, reason)
 const zoomOut = (reason = 'manual') => setZoom(zoom.value - 0.1, reason)
-const setZoom = (z, reason = 'manual') => {
+const setZoom = (z, reason = 'manual', anchorAt = null) => {
+  const next = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, +Number(z).toFixed(2)))
+  if (next === zoom.value) return
+  const anchor = captureZoomAnchor(anchorAt?.clientX, anchorAt?.clientY)
   // 手动缩放即退出自适应模式：否则之后任何一次窗口尺寸变化都会把用户的缩放顶掉。
   activeFitMode.value = ''
-  zoom.value = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, +Number(z).toFixed(2)))
+  zoom.value = next
+  // 几何是按 zoom 算出来的，必须在 DOM 应用新尺寸之后才能落滚动位置。
+  nextTick(() => {
+    applyZoomAnchor(anchor)
+    // 缩放后可见页变了，立刻按新视口重算（不必等滚动事件）。
+    if (scrollRaf) { cancelAnimationFrame(scrollRaf); scrollRaf = 0 }
+    updateVisible()
+  })
   logger.debug('PDF缩放设置', { reason, zoom: zoom.value })
 }
 
@@ -518,8 +589,8 @@ const onWheel = (ev) => {
   if (!(ev.ctrlKey || ev.metaKey)) return
   ev.preventDefault()
   const step = Math.min(0.5, 0.0015 * Math.abs(ev.deltaY) + 0.05)
-  if (ev.deltaY < 0) setZoom(zoom.value + step, 'ctrl-wheel')
-  else if (ev.deltaY > 0) setZoom(zoom.value - step, 'ctrl-wheel')
+  if (ev.deltaY < 0) setZoom(zoom.value + step, 'ctrl-wheel', { clientX: ev.clientX, clientY: ev.clientY })
+  else if (ev.deltaY > 0) setZoom(zoom.value - step, 'ctrl-wheel', { clientX: ev.clientX, clientY: ev.clientY })
 }
 // ─────────────────── 自适应缩放（适合宽度 / 适合整页）───────────────────
 // 设计说明：预览面板的宽度会随窗口和分栏拖拽变化，若只在初始时定一个 zoom，窗口一变阅读区
@@ -537,18 +608,20 @@ const computeFitZoom = (mode) => {
   return zx
 }
 
-// preserveScroll：重算前记住滚动比例、算完落回，拖动窗口时不丢阅读位置。
+// preserveAnchor：重算前记住视口中心指向的内容位置、算完落回同一处，拖动窗口时不丢阅读位置。
+// 为什么不用「滚动比例」：比例在两个文档/两处内容的高度分布不同时会漂，而读者关心的是
+// 「我正在看的那一行别跑掉」——锚点坐标恰好就是这件事。
 // 新文档首次落位用 false —— 阅读位置由宿主的恢复流程负责，这里别去抢。
-const applyFit = ({ reason = 'auto', preserveScroll = false } = {}) => {
+const applyFit = ({ reason = 'auto', preserveAnchor = false } = {}) => {
   if (!activeFitMode.value) return false
   const z = computeFitZoom(activeFitMode.value)
   if (!z || !Number.isFinite(z) || z <= 0) return false
   const next = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, +z.toFixed(2)))
   if (next === zoom.value) return false
-  const ratio = preserveScroll ? scrollRatio() : 0
+  const anchor = preserveAnchor ? captureZoomAnchor() : null
   zoom.value = next
   logger.debug('PDF自适应缩放', { reason, mode: activeFitMode.value, zoom: next })
-  if (preserveScroll) nextTick(() => restoreScroll(ratio))
+  if (preserveAnchor) nextTick(() => applyZoomAnchor(anchor))
   return true
 }
 
@@ -559,17 +632,17 @@ const scheduleAutoFit = (reason = 'resize') => {
   if (autoFitTimer) clearTimeout(autoFitTimer)
   autoFitTimer = setTimeout(() => {
     autoFitTimer = null
-    applyFit({ reason, preserveScroll: true })
+    applyFit({ reason, preserveAnchor: true })
   }, AUTO_FIT_DEBOUNCE_MS)
 }
 
 const fitWidth = () => {
   activeFitMode.value = 'width'
-  applyFit({ reason: 'fit-width', preserveScroll: true })
+  applyFit({ reason: 'fit-width', preserveAnchor: true })
 }
 const fitPage = () => {
   activeFitMode.value = 'page'
-  applyFit({ reason: 'fit-page', preserveScroll: true })
+  applyFit({ reason: 'fit-page', preserveAnchor: true })
 }
 
 const isEditableTarget = (target) => {
@@ -1755,8 +1828,17 @@ onBeforeUnmount(() => {
 .gpv {
   display: flex;
   flex-direction: column;
-  width: 100%;
-  height: 100%;
+  /* 尺寸交给宿主，但**只靠 flex 拉伸**，绝不写 width/height。
+     【为什么不能写 width: 100%】宿主（ReaderPane）靠 `left: 260px; right: 0` 给侧栏
+     让位。绝对定位元素同时有 left/right 和 width 时，width 胜出、right 被忽略，
+     于是阅读器仍占满整条宽度、只是整体右移 260px —— 右边缘连同页面右半截直接落到
+     窗口外（被 overflow 裁掉），表现就是「缩放后右侧被截断」。更糟的是容器尺寸没变，
+     ResizeObserver 收不到通知，贴合宽度的自适应永远不重算。
+     【为什么用 align-self/justify-self】有些宿主把它放进 grid 或块级容器
+     （GuaxiSyntaxManualWindow 的 section 就是 grid 项），没有 width 时会塌成内容宽；
+     stretch 只在对应轴上生效，flex 宿主里本来就是默认值，不会改变行为。 */
+  align-self: stretch;
+  justify-self: stretch;
   min-width: 0;
   min-height: 0;
   background: var(--gpv-bg);
@@ -1990,6 +2072,10 @@ onBeforeUnmount(() => {
   align-items: flex-start;
   /* 让容器至少和最宽的页一样宽，保证横向滚动范围覆盖整页。 */
   width: max-content;
+  /* 必须显式 border-box：本文件没有全局 `* { box-sizing }`，默认 content-box 下
+     `min-width: 100%` 只撑满内容盒、再往外加 24px padding，于是页宽恰好放得下时
+     也会多出一条横向滚动条（实测 982 vs 958）。border-box 下 100% 就是整条可视宽。 */
+  box-sizing: border-box;
   min-width: 100%;
   gap: 12px;
   padding: 12px;

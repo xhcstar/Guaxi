@@ -1,5 +1,6 @@
 import { createApp, h, nextTick } from 'vue'
 import GuaxiPdfViewer from '../src/components/PdfViewer/GuaxiPdfViewer.vue'
+import ReaderPane from '../src/components/HomeViewComponent/ReaderPane.vue'
 
 // ── mock Tauri IPC ────────────────────────────────────────────────────────────
 // 只 mock PDF 阅读器真正会调的几条命令；页面用一张真实 A4 尺寸的占位图代替 pdfium 输出。
@@ -8,12 +9,14 @@ const PAGE_H_PT = 841.89
 const TOTAL = 40
 
 const params = new URLSearchParams(location.search)
+const usePane = params.get('pane') === '1'
 const aside = params.get('aside') === '1'
 const startZoom = Number(params.get('zoom') || 1.3)
 const fit = params.get('fit') || 'width'
 
 window.__TAURI_INTERNALS__ = {
-  invoke: async (cmd) => {
+  invoke: async (cmd, args) => {
+    if (cmd === 'pdf_add_highlight') { (window.__hlCalls ||= []).push(args); return { annot_id: 'h-test-1' } }
     if (cmd === 'pdf_session_open' || cmd === 'pdf_open') {
       return {
         total_pages: TOTAL,
@@ -24,7 +27,17 @@ window.__TAURI_INTERNALS__ = {
       const dpi = 144
       return { page: 1, dpi, image_path: `C:/fake/page.png` }
     }
-    if (cmd === 'pdf_page_chars') return { page: 1, w_pt: PAGE_W_PT, h_pt: PAGE_H_PT, chars: [] }
+    if (cmd === 'pdf_page_chars') {
+      // 造一行可选中文字：前端会按字号/间距分组成透明 span。
+      const chars = []
+      const text = '选择这段文字就能看到高亮工具条'
+      let x = 80
+      for (const ch of text) {
+        chars.push({ c: ch, x, y: 120, w: 14, h: 16, font_size: 16 })
+        x += 15
+      }
+      return { page: 1, w_pt: PAGE_W_PT, h_pt: PAGE_H_PT, chars }
+    }
     if (cmd === 'pdf_outline') return []
     if (cmd === 'pdf_page_highlights') return []
     if (cmd === 'pdf_list_highlights') return []
@@ -47,7 +60,14 @@ const hostStyle = {
 createApp({
   setup() {
     return () =>
-      h('div', { style: hostStyle, id: 'stage' }, [
+      usePane
+        ? h(ReaderPane, {
+            path: 'C:/fake/book.pdf',
+            fileName: 'book.pdf',
+            theme: 'dark',
+            target: { reader: 'pdf', kind: 'pdf', size: 1024 },
+          })
+        : h('div', { style: hostStyle, id: 'stage' }, [
         aside ? h('aside', { style: { position: 'absolute', left: 0, top: 0, bottom: 0, width: '260px', background: '#2b2d31', zIndex: 9 } }) : null,
         h(GuaxiPdfViewer, {
           id: 'viewer',
