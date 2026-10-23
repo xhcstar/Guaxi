@@ -1695,6 +1695,38 @@ pub struct PemDetails {
     pub fingerprint: String,
     pub fields: Vec<(String, String)>,
     pub sans: Vec<String>,
+    /// 解析后的证书扩展（每项：名称 / 是否 critical / 值）。非证书为空。
+    #[serde(default)]
+    pub extensions: Vec<CertExtension>,
+    /// 公钥细节（算法、位数、曲线、公钥十六进制）。
+    #[serde(default)]
+    pub public_key: Option<PubKeyInfo>,
+    /// 签名值（十六进制，按行分组）。
+    #[serde(default)]
+    pub signature_hex: String,
+    /// 与 `openssl x509 -text` 等价的纯文本，可直接复制。
+    #[serde(default)]
+    pub openssl_text: String,
+}
+
+#[derive(Serialize, Clone)]
+pub struct CertExtension {
+    /// 扩展的英文名（openssl 风格，如 X509v3 Basic Constraints）
+    pub name: String,
+    pub oid: String,
+    pub critical: bool,
+    pub value: String,
+}
+
+#[derive(Serialize, Clone)]
+pub struct PubKeyInfo {
+    pub algorithm: String,
+    pub algorithm_oid: String,
+    /// 例如 "2048 bit" / "256 bit" / "Ed25519"
+    pub size: String,
+    #[serde(default)]
+    pub curve: Option<String>,
+    pub hex: String,
 }
 
 /// 把 PEM / base64 / hex 输入统一成 (标签, DER, PEM 文本)。
@@ -1744,6 +1776,335 @@ fn fingerprint_of(der: &[u8]) -> String {
     d.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(":")
 }
 
+/// OID → 人可读名称。
+///
+/// 先查 x509-parser 自带的 OID 注册表（覆盖 RSA/ECDSA/Ed25519 等常见算法），
+/// 再查下面这张表补上国密与后量子算法——这些 OID 注册表里没有，
+/// 不补的话界面上只能看到一串数字。
+fn oid_name(oid: &x509_parser::oid_registry::Oid) -> String {
+    let id = oid.to_id_string();
+    let extra: &[(&str, &str)] = &[
+        // 国密
+        ("1.2.156.10197.1.301", "sm2 (SM2 signature)"),
+        ("1.2.156.10197.1.301.1", "SM2-with-SM3"),
+        ("1.2.156.10197.1.501", "sm3"),
+        ("1.2.156.10197.1.401", "sm2sign-with-sm3"),
+        ("1.2.156.10197.1.104.2", "sm4-cbc"),
+        ("1.2.156.10197.1.104.1", "sm4-ecb"),
+        // NIST PQC（ML-DSA，原 Dilithium）
+        ("2.16.840.1.101.3.4.3.17", "ML-DSA-44 (Dilithium2)"),
+        ("2.16.840.1.101.3.4.3.18", "ML-DSA-65 (Dilithium3)"),
+        ("2.16.840.1.101.3.4.3.19", "ML-DSA-87 (Dilithium5)"),
+        ("2.16.840.1.101.3.4.3.1", "ML-KEM-512"),
+        ("2.16.840.1.101.3.4.3.2", "ML-KEM-768"),
+        ("2.16.840.1.101.3.4.3.3", "ML-KEM-1024"),
+        // Falcon
+        ("1.3.9999.3.1", "falcon-512"),
+        ("1.3.9999.3.6", "falcon-512"),
+        ("1.3.9999.3.9", "falcon-1024"),
+        // 常见扩展
+        ("2.5.29.14", "X509v3 Subject Key Identifier"),
+        ("2.5.29.15", "X509v3 Key Usage"),
+        ("2.5.29.17", "X509v3 Subject Alternative Name"),
+        ("2.5.29.18", "X509v3 Issuer Alternative Name"),
+        ("2.5.29.19", "X509v3 Basic Constraints"),
+        ("2.5.29.30", "X509v3 Name Constraints"),
+        ("2.5.29.31", "X509v3 CRL Distribution Points"),
+        ("2.5.29.32", "X509v3 Certificate Policies"),
+        ("2.5.29.33", "X509v3 Policy Mappings"),
+        ("2.5.29.35", "X509v3 Authority Key Identifier"),
+        ("2.5.29.36", "X509v3 Policy Constraints"),
+        ("2.5.29.37", "X509v3 Extended Key Usage"),
+        ("2.5.29.46", "X509v3 Freshest CRL"),
+        ("2.5.29.54", "X509v3 Inhibit Any Policy"),
+        ("1.3.6.1.5.5.7.1.1", "Authority Information Access"),
+        ("1.3.6.1.5.5.7.1.24", "TLS Feature"),
+        ("1.3.6.1.4.1.11129.2.4.2", "CT Precertificate SCTs"),
+        // EKU 用途
+        ("1.3.6.1.5.5.7.3.1", "TLS Web Server Authentication"),
+        ("1.3.6.1.5.5.7.3.2", "TLS Web Client Authentication"),
+        ("1.3.6.1.5.5.7.3.3", "Code Signing"),
+        ("1.3.6.1.5.5.7.3.4", "E-mail Protection"),
+        ("1.3.6.1.5.5.7.3.8", "Time Stamping"),
+        ("1.3.6.1.5.5.7.3.9", "OCSP Signing"),
+        ("2.5.29.37.0", "Any Extended Key Usage"),
+        // AIA 方法
+        ("1.3.6.1.5.5.7.48.1", "OCSP"),
+        ("1.3.6.1.5.5.7.48.2", "CA Issuers"),
+        // 曲线
+        ("1.2.840.10045.3.1.7", "prime256v1 (NIST P-256)"),
+        ("1.3.132.0.34", "secp384r1 (NIST P-384)"),
+        ("1.3.132.0.35", "secp521r1 (NIST P-521)"),
+        ("1.3.132.0.10", "secp256k1"),
+        ("1.2.156.10197.1.301.1", "SM2 curve"),
+    ];
+    if let Some((_, v)) = extra.iter().find(|(k, _)| *k == id) {
+        return format!("{v} ({id})");
+    }
+    let reg = x509_parser::objects::oid_registry();
+    if let Some(e) = reg.get(oid) {
+        return format!("{} ({id})", e.sn());
+    }
+    id
+}
+
+fn hex_colon(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02X}")).collect::<Vec<_>>().join(":")
+}
+
+/// openssl 那种按 16 字节换行、每字节冒号分隔的十六进制块。
+fn hex_block(b: &[u8], indent: &str) -> String {
+    b.chunks(16)
+        .map(|c| format!("{indent}{}", hex_colon(c)))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn general_name_text(gn: &x509_parser::extensions::GeneralName) -> String {
+    use x509_parser::extensions::GeneralName as G;
+    match gn {
+        G::DNSName(s) => format!("DNS:{s}"),
+        G::RFC822Name(s) => format!("email:{s}"),
+        G::URI(s) => format!("URI:{s}"),
+        G::IPAddress(b) => match b.len() {
+            4 => format!("IP Address:{}", std::net::Ipv4Addr::new(b[0], b[1], b[2], b[3])),
+            16 => {
+                let mut a = [0u8; 16];
+                a.copy_from_slice(b);
+                format!("IP Address:{}", std::net::Ipv6Addr::from(a))
+            }
+            _ => format!("IP Address:{}", hex_colon(b)),
+        },
+        G::DirectoryName(dn) => format!("DirName:{}", dn),
+        G::RegisteredID(oid) => format!("Registered ID:{}", oid_name(oid)),
+        other => format!("{other}"),
+    }
+}
+
+/// 公钥细节：算法名、位数、曲线、公钥十六进制。
+fn public_key_info(spki: &x509_parser::x509::SubjectPublicKeyInfo) -> PubKeyInfo {
+    use x509_parser::public_key::PublicKey;
+    let alg_oid = &spki.algorithm.algorithm;
+    let alg = oid_name(alg_oid);
+    let raw = spki.subject_public_key.data.to_vec();
+    let parsed = spki.parsed().ok();
+    let (size, curve) = match &parsed {
+        Some(PublicKey::RSA(k)) => (format!("{} bit", k.key_size()), None),
+        Some(PublicKey::EC(p)) => {
+            let curve = spki
+                .algorithm
+                .parameters
+                .as_ref()
+                .and_then(|a| a.as_oid().ok())
+                .map(|o| oid_name(&o));
+            (format!("{} bit", p.key_size()), curve)
+        }
+        Some(PublicKey::DSA(_)) => ("DSA".to_string(), None),
+        Some(PublicKey::GostR3410(_)) | Some(PublicKey::GostR3410_2012(_)) => ("GOST".to_string(), None),
+        _ => {
+            // SM2 / PQC 等 x509-parser 不认识的算法：按曲线参数或字节长度给个大概。
+            let curve = spki
+                .algorithm
+                .parameters
+                .as_ref()
+                .and_then(|a| a.as_oid().ok())
+                .map(|o| oid_name(&o));
+            (String::new(), curve)
+        }
+    };
+    PubKeyInfo {
+        algorithm: alg,
+        algorithm_oid: alg_oid.to_id_string(),
+        size,
+        curve,
+        hex: hex_block(&raw, "                "),
+    }
+}
+
+/// 逐条把扩展解析成人能看懂的文本。
+fn describe_extensions(cert: &x509_parser::certificate::X509Certificate) -> Vec<CertExtension> {
+    use x509_parser::extensions::ParsedExtension as P;
+    let mut out = Vec::new();
+    for ext in cert.extensions() {
+        let name = oid_name(&ext.oid);
+        let value = match ext.parsed_extension() {
+            P::SubjectKeyIdentifier(kid) => hex_colon(kid.0),
+            P::AuthorityKeyIdentifier(a) => {
+                let mut parts = Vec::new();
+                if let Some(k) = &a.key_identifier {
+                    parts.push(format!("keyid:{}", hex_colon(k.0)));
+                }
+                if let Some(issuers) = &a.authority_cert_issuer {
+                    for i in issuers {
+                        parts.push(format!("DirName:{}", general_name_text(i)));
+                    }
+                }
+                if let Some(s) = a.authority_cert_serial {
+                    parts.push(format!("serial:{}", hex_colon(s)));
+                }
+                parts.join("\n")
+            }
+            P::KeyUsage(ku) => format!("{ku}"),
+            P::ExtendedKeyUsage(eku) => {
+                let mut v = Vec::new();
+                if eku.any { v.push("Any Extended Key Usage".to_string()); }
+                if eku.server_auth { v.push("TLS Web Server Authentication".into()); }
+                if eku.client_auth { v.push("TLS Web Client Authentication".into()); }
+                if eku.code_signing { v.push("Code Signing".into()); }
+                if eku.email_protection { v.push("E-mail Protection".into()); }
+                if eku.time_stamping { v.push("Time Stamping".into()); }
+                if eku.ocsp_signing { v.push("OCSP Signing".into()); }
+                for o in &eku.other {
+                    v.push(oid_name(o));
+                }
+                v.join(", ")
+            }
+            P::BasicConstraints(bc) => {
+                let mut s = format!("CA:{}", if bc.ca { "TRUE" } else { "FALSE" });
+                if let Some(p) = bc.path_len_constraint {
+                    s.push_str(&format!("\nPath Length Constraint: {p}"));
+                }
+                s
+            }
+            P::SubjectAlternativeName(san) => san
+                .general_names
+                .iter()
+                .map(general_name_text)
+                .collect::<Vec<_>>()
+                .join("\n"),
+            P::IssuerAlternativeName(ian) => ian
+                .general_names
+                .iter()
+                .map(general_name_text)
+                .collect::<Vec<_>>()
+                .join("\n"),
+            P::CertificatePolicies(pols) => pols
+                .iter()
+                .map(|p| {
+                    let id = oid_name(&p.policy_id);
+                    match &p.policy_qualifiers {
+                        Some(qs) if !qs.is_empty() => {
+                            let q = qs
+                                .iter()
+                                .map(|q| format!("{}", oid_name(&q.policy_qualifier_id)))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            format!("Policy: {id} (qualifiers: {q})")
+                        }
+                        _ => format!("Policy: {id}"),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+            P::CRLDistributionPoints(dp) => {
+                let mut v = Vec::new();
+                for p in dp.iter() {
+                    match &p.distribution_point {
+                        Some(x509_parser::extensions::DistributionPointName::FullName(names)) => {
+                            for n in names {
+                                v.push(format!("Full Name:\n  {}", general_name_text(n)));
+                            }
+                        }
+                        Some(x509_parser::extensions::DistributionPointName::NameRelativeToCRLIssuer(_)) => {
+                            v.push("Relative Name to CRL Issuer".into());
+                        }
+                        None => v.push("(no distribution point name)".into()),
+                    }
+                }
+                v.join("\n")
+            }
+            P::AuthorityInfoAccess(aia) => aia
+                .iter()
+                .map(|d| format!("{} - {}", oid_name(&d.access_method), general_name_text(&d.access_location)))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            P::NameConstraints(nc) => {
+                let mut v = Vec::new();
+                for p in nc.permitted_subtrees.iter().flatten() {
+                    v.push(format!("Permitted: {}", general_name_text(&p.base)));
+                }
+                for p in nc.excluded_subtrees.iter().flatten() {
+                    v.push(format!("Excluded: {}", general_name_text(&p.base)));
+                }
+                v.join("\n")
+            }
+            P::PolicyConstraints(pc) => {
+                let mut v = Vec::new();
+                if let Some(n) = pc.require_explicit_policy {
+                    v.push(format!("Require Explicit Policy: {n}"));
+                }
+                if let Some(n) = pc.inhibit_policy_mapping {
+                    v.push(format!("Inhibit Policy Mapping: {n}"));
+                }
+                v.join("\n")
+            }
+            P::InhibitAnyPolicy(n) => n.skip_certs.to_string(),
+            P::NSCertType(t) => format!("{t}"),
+            P::NsCertComment(s) => (*s).to_string(),
+            P::SCT(scts) => format!("{} Signed Certificate Timestamp(s)", scts.len()),
+            P::UnsupportedExtension { .. } | P::Unparsed => {
+                // 未识别：给出原始 DER 十六进制，至少不丢信息。
+                format!("(raw DER)\n{}", hex_block(ext.value, "  "))
+            }
+            P::ParseError { error } => format!("(解析失败: {error})"),
+            other => format!("{other:?}"),
+        };
+        out.push(CertExtension {
+            name,
+            oid: ext.oid.to_id_string(),
+            critical: ext.critical,
+            value,
+        });
+    }
+    out
+}
+
+/// 生成与 `openssl x509 -noout -text` 基本一致的文本，便于用户对照与复制。
+fn cert_openssl_text(
+    cert: &x509_parser::certificate::X509Certificate,
+    pk: &PubKeyInfo,
+    exts: &[CertExtension],
+) -> String {
+    let mut s = String::from("Certificate:\n    Data:\n");
+    s.push_str(&format!("        Version: {} (0x{:x})\n", cert.version().0 + 1, cert.version().0));
+    let serial = cert.raw_serial_as_string();
+    s.push_str("        Serial Number:\n");
+    s.push_str(&format!("            {serial}\n"));
+    s.push_str(&format!("        Signature Algorithm: {}\n", cert.signature_algorithm.algorithm.to_id_string()));
+    s.push_str(&format!("        Issuer: {}\n", cert.issuer()));
+    s.push_str("        Validity\n");
+    s.push_str(&format!("            Not Before: {}\n", cert.validity().not_before));
+    s.push_str(&format!("            Not After : {}\n", cert.validity().not_after));
+    s.push_str(&format!("        Subject: {}\n", cert.subject()));
+    s.push_str("        Subject Public Key Info:\n");
+    s.push_str(&format!("            Public Key Algorithm: {}\n", pk.algorithm));
+    if !pk.size.is_empty() {
+        s.push_str(&format!("                Public-Key: ({})\n", pk.size));
+    }
+    s.push_str(&format!("                pub:\n{}\n", pk.hex));
+    if let Some(c) = &pk.curve {
+        s.push_str(&format!("                ASN1 OID: {c}\n"));
+    }
+    if !exts.is_empty() {
+        s.push_str("        X509v3 extensions:\n");
+        for e in exts {
+            s.push_str(&format!(
+                "            {}:{}\n",
+                e.name,
+                if e.critical { " critical" } else { "" }
+            ));
+            for line in e.value.lines() {
+                s.push_str(&format!("                {line}\n"));
+            }
+        }
+    }
+    s.push_str(&format!("    Signature Algorithm: {}\n", cert.signature_algorithm.algorithm.to_id_string()));
+    s.push_str("    Signature Value:\n");
+    s.push_str(&hex_block(&cert.signature_value.data, "        "));
+    s.push('\n');
+    s
+}
+
 fn san_list(cert: &x509_parser::certificate::X509Certificate) -> Vec<String> {
     let mut out = Vec::new();
     if let Ok(Some(ext)) = cert.subject_alternative_name() {
@@ -1762,19 +2123,35 @@ pub fn crypto_pem_details(input: String) -> Result<PemDetails, String> {
     let mut fields: Vec<(String, String)> = vec![("PEM 标签".into(), tag.clone())];
     let mut sans: Vec<String> = Vec::new();
     let mut kind = "unknown".to_string();
+    let mut extensions: Vec<CertExtension> = Vec::new();
+    let mut public_key: Option<PubKeyInfo> = None;
+    let mut signature_hex = String::new();
+    let mut openssl_text = String::new();
 
     if tag.contains("CERTIFICATE") && !tag.contains("REQUEST") {
         match x509_parser::parse_x509_certificate(&der) {
             Ok((_, c)) => {
                 kind = "certificate".into();
+                public_key = Some(public_key_info(c.public_key()));
+                extensions = describe_extensions(&c);
+                signature_hex = hex_block(&c.signature_value.data, "");
+                let pk = public_key.as_ref().unwrap();
+                openssl_text = cert_openssl_text(&c, pk, &extensions);
+
                 fields.push(("版本".into(), format!("v{}", c.version().0 + 1)));
                 fields.push(("序列号".into(), c.raw_serial_as_string()));
+                fields.push(("签名算法".into(), oid_name(&c.signature_algorithm.algorithm)));
                 fields.push(("主题".into(), c.subject().to_string()));
                 fields.push(("颁发者".into(), c.issuer().to_string()));
                 fields.push(("生效时间".into(), c.validity().not_before.to_string()));
                 fields.push(("失效时间".into(), c.validity().not_after.to_string()));
-                fields.push(("签名算法".into(), c.signature_algorithm.algorithm.to_id_string()));
-                fields.push(("公钥算法".into(), c.public_key().algorithm.algorithm.to_id_string()));
+                fields.push(("公钥算法".into(), pk.algorithm.clone()));
+                if !pk.size.is_empty() {
+                    fields.push(("公钥长度".into(), pk.size.clone()));
+                }
+                if let Some(curve) = &pk.curve {
+                    fields.push(("椭圆曲线".into(), curve.clone()));
+                }
                 fields.push(("是否 CA".into(), if c.is_ca() { "是".into() } else { "否".to_string() }));
                 fields.push(("自签".into(), if c.subject() == c.issuer() { "是".into() } else { "否".to_string() }));
                 sans = san_list(&c);
@@ -1786,14 +2163,54 @@ pub fn crypto_pem_details(input: String) -> Result<PemDetails, String> {
         match X509CertificationRequest::from_der(&der) {
             Ok((_, csr)) => {
                 fields.push(("主题".into(), csr.certification_request_info.subject.to_string()));
-                fields.push(("签名算法".into(), csr.signature_algorithm.algorithm.to_id_string()));
-                if let Some(exts) = csr.requested_extensions() {
-                    for e in exts {
-                        if let x509_parser::extensions::ParsedExtension::SubjectAlternativeName(san) = e {
+                fields.push(("签名算法".into(), oid_name(&csr.signature_algorithm.algorithm)));
+                let pk = public_key_info(&csr.certification_request_info.subject_pki);
+                fields.push(("公钥算法".into(), pk.algorithm.clone()));
+                if let Some(c) = &pk.curve { fields.push(("椭圆曲线".into(), c.clone())); }
+                if !pk.size.is_empty() { fields.push(("公钥长度".into(), pk.size.clone())); }
+                public_key = Some(pk);
+                // CSR 的扩展在 attribute 里，是完整的 X509Extension（带 OID / critical）。
+                use x509_parser::cri_attributes::ParsedCriAttribute;
+                for attr in csr.certification_request_info.iter_attributes() {
+                    let ParsedCriAttribute::ExtensionRequest(req) = attr.parsed_attribute() else { continue };
+                    for e in &req.extensions {
+                        let name = oid_name(&e.oid);
+                        let value = match e.parsed_extension() {
+                            x509_parser::extensions::ParsedExtension::SubjectAlternativeName(san) => san
+                                .general_names
+                                .iter()
+                                .map(general_name_text)
+                                .collect::<Vec<_>>()
+                                .join("\n"),
+                            x509_parser::extensions::ParsedExtension::KeyUsage(ku) => format!("{ku}"),
+                            x509_parser::extensions::ParsedExtension::ExtendedKeyUsage(eku) => {
+                                let mut v = Vec::new();
+                                if eku.server_auth { v.push("TLS Web Server Authentication".to_string()); }
+                                if eku.client_auth { v.push("TLS Web Client Authentication".to_string()); }
+                                if eku.code_signing { v.push("Code Signing".into()); }
+                                if eku.email_protection { v.push("E-mail Protection".into()); }
+                                if eku.time_stamping { v.push("Time Stamping".into()); }
+                                if eku.ocsp_signing { v.push("OCSP Signing".into()); }
+                                for o in &eku.other { v.push(oid_name(o)); }
+                                v.join(", ")
+                            }
+                            x509_parser::extensions::ParsedExtension::BasicConstraints(bc) => format!(
+                                "CA:{}",
+                                if bc.ca { "TRUE" } else { "FALSE" }
+                            ),
+                            _ => "(见 PEM 原文)".into(),
+                        };
+                        if let x509_parser::extensions::ParsedExtension::SubjectAlternativeName(san) = e.parsed_extension() {
                             for gn in &san.general_names {
                                 sans.push(format!("{gn}"));
                             }
                         }
+                        extensions.push(CertExtension {
+                            name,
+                            oid: e.oid.to_id_string(),
+                            critical: e.critical,
+                            value,
+                        });
                     }
                 }
             }
@@ -1804,7 +2221,7 @@ pub fn crypto_pem_details(input: String) -> Result<PemDetails, String> {
         match x509_parser::revocation_list::CertificateRevocationList::from_der(&der) {
             Ok((_, crl)) => {
                 fields.push(("颁发者".into(), crl.issuer().to_string()));
-                fields.push(("签名算法".into(), crl.signature_algorithm.algorithm.to_id_string()));
+                fields.push(("签名算法".into(), oid_name(&crl.signature_algorithm.algorithm)));
                 fields.push(("本次更新".into(), crl.last_update().to_string()));
                 if let Some(n) = crl.next_update() {
                     fields.push(("下次更新".into(), n.to_string()));
@@ -1829,6 +2246,10 @@ pub fn crypto_pem_details(input: String) -> Result<PemDetails, String> {
         fingerprint: fingerprint_of(&der),
         fields,
         sans,
+        extensions,
+        public_key,
+        signature_hex,
+        openssl_text,
     })
 }
 
@@ -1890,3 +2311,73 @@ fn describe_key(pem_text: &str, der: &[u8], fields: &mut Vec<(String, String)>, 
 
 
 
+
+// ============================ 测试（纯逻辑，可离线跑） ============================
+#[cfg(test)]
+mod detail_tests {
+    use super::*;
+
+    /// 用 rcgen 现场生成一张带扩展的证书，检查解析输出是人可读的。
+    #[test]
+    fn pem_details_names_oids_and_extensions() {
+        use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair};
+        let kp = KeyPair::generate().unwrap();
+        let mut params = CertificateParams::default();
+        let mut dn = DistinguishedName::new();
+        dn.push(DnType::CountryName, "CN");
+        dn.push(DnType::CommonName, "detail-test");
+        params.distinguished_name = dn;
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        params.key_usages = vec![
+            rcgen::KeyUsagePurpose::KeyCertSign,
+            rcgen::KeyUsagePurpose::CrlSign,
+        ];
+        params.subject_alt_names = vec![rcgen::SanType::DnsName("detail-test.example.com".try_into().unwrap())];
+        let cert = params.self_signed(&kp).unwrap();
+        let pem_text = cert.pem();
+
+        let d = crypto_pem_details(pem_text.clone()).unwrap();
+        assert_eq!(d.kind, "certificate");
+
+        let field = |k: &str| d.fields.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone()).unwrap_or_default();
+        // 签名/公钥算法必须是可读名称，而不是纯 OID。
+        let sig = field("签名算法");
+        assert!(sig.contains("ecdsa") || sig.contains("ECDSA"), "签名算法应可读: {sig}");
+        assert!(sig.contains('('), "应附带 OID 方便对照: {sig}");
+        let pk = field("公钥算法");
+        assert!(pk.contains("EC") || pk.contains("id-ecPublicKey"), "公钥算法应可读: {pk}");
+        assert!(field("公钥长度").contains("bit"), "{:?}", field("公钥长度"));
+        assert!(field("椭圆曲线").contains("P-256"), "{:?}", field("椭圆曲线"));
+
+        // 扩展：Basic Constraints / Key Usage / SKI 都应被解析成文本。
+        let names: Vec<String> = d.extensions.iter().map(|e| e.name.clone()).collect();
+        assert!(names.iter().any(|n| n.contains("Basic Constraints")), "{names:?}");
+        let bc = d.extensions.iter().find(|e| e.name.contains("Basic Constraints")).unwrap();
+        assert!(bc.critical, "CA 的 basicConstraints 应为 critical");
+        assert!(bc.value.contains("CA:TRUE"), "{}", bc.value);
+        assert!(bc.oid.starts_with("2.5.29.19"));
+
+        let ku = d.extensions.iter().find(|e| e.name.contains("Key Usage")).expect("缺少 Key Usage");
+        assert!(ku.value.contains("Key Cert Sign"), "{}", ku.value);
+
+        // SAN 扩展也要能显示成 DNS:xxx，而不是裸 OID。
+        let san_ext = d.extensions.iter().find(|e| e.name.contains("Subject Alternative Name")).expect("缺少 SAN");
+        assert!(san_ext.value.contains("DNS:detail-test.example.com"), "{}", san_ext.value);
+
+        // 公钥细节 + openssl 风格文本。
+        let pk = d.public_key.as_ref().expect("缺少公钥信息");
+        assert!(pk.hex.contains(':'), "公钥应以冒号分隔十六进制展示");
+        assert!(d.openssl_text.contains("X509v3 extensions:"), "{}", d.openssl_text);
+        assert!(d.openssl_text.contains("Signature Value:"), "{}", d.openssl_text);
+        assert!(!d.signature_hex.is_empty());
+    }
+
+    #[test]
+    fn oid_names_cover_sm2_and_ml_dsa() {
+        use x509_parser::der_parser::oid;
+        assert!(oid_name(&oid!(1.2.156.10197.1.301)).contains("SM2"));
+        assert!(oid_name(&oid!(2.16.840.1.101.3.4.3.17)).contains("ML-DSA-44"));
+        assert!(oid_name(&oid!(2.16.840.1.101.3.4.3.18)).contains("ML-DSA-65"));
+        assert!(oid_name(&oid!(2.16.840.1.101.3.4.3.19)).contains("ML-DSA-87"));
+    }
+}

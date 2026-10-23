@@ -616,6 +616,8 @@
         </div>
         <div class="tv-tabs">
           <button class="tv-tab" :class="{ active: viewTab === 'fields' }" @click="viewTab = 'fields'">字段明细</button>
+          <button class="tv-tab" :class="{ active: viewTab === 'exts' }" @click="viewTab = 'exts'">扩展</button>
+          <button class="tv-tab" :class="{ active: viewTab === 'text' }" @click="viewTab = 'text'">OpenSSL 文本</button>
           <button class="tv-tab" :class="{ active: viewTab === 'pem' }" @click="viewTab = 'pem'">PEM 原文</button>
           <button class="tv-tab" :class="{ active: viewTab === 'b64' }" @click="viewTab = 'b64'">DER (base64)</button>
           <button class="tv-tab" :class="{ active: viewTab === 'asn1' }" @click="viewTab = 'asn1'">ASN.1</button>
@@ -628,16 +630,66 @@
               <table class="tb-kv tv-kv">
                 <tbody><tr v-for="(kv, i) in viewDetails.fields" :key="i"><td>{{ kv[0] }}</td><td class="tv-v">{{ kv[1] }}</td></tr></tbody>
               </table>
+              <template v-if="viewDetails.public_key">
+                <div class="tv-sub">公钥</div>
+                <table class="tb-kv tv-kv">
+                  <tbody>
+                    <tr><td>算法</td><td class="tv-v">{{ viewDetails.public_key.algorithm }}</td></tr>
+                    <tr v-if="viewDetails.public_key.size"><td>长度</td><td class="tv-v">{{ viewDetails.public_key.size }}</td></tr>
+                    <tr v-if="viewDetails.public_key.curve"><td>曲线</td><td class="tv-v">{{ viewDetails.public_key.curve }}</td></tr>
+                    <tr><td>公钥</td><td class="tv-v"><pre class="tv-pubkey">{{ viewDetails.public_key.hex }}</pre>
+                      <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" @click="doCopy(viewDetails.public_key.hex,'pub')"><Icon :icon="copyIcon" width="14" height="14" /></button></template>复制公钥十六进制</n-tooltip>
+                    </td></tr>
+                  </tbody>
+                </table>
+              </template>
               <template v-if="viewDetails.sans.length">
                 <div class="tv-sub">主题备用名 (SAN)</div>
                 <div class="tv-sans">
                   <span v-for="(s, i) in viewDetails.sans" :key="i" class="tv-san">{{ s }}</span>
                 </div>
               </template>
+              <template v-if="viewDetails.signature_hex">
+                <div class="tv-sub">签名值
+                  <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" @click="doCopy(viewDetails.signature_hex,'sig')"><Icon :icon="copyIcon" width="14" height="14" /></button></template>复制签名值</n-tooltip>
+                  <span v-if="viewCopied==='sig'" class="tv-ok">已复制</span>
+                </div>
+                <pre class="tv-pre tv-sig">{{ viewDetails.signature_hex }}</pre>
+              </template>
               <div class="tv-sub">SHA-256 指纹</div>
               <div class="tv-mono tv-fp">{{ viewDetails.fingerprint }}
                 <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" @click="doCopy(viewDetails.fingerprint,'fp')"><Icon :icon="copyIcon" width="14" height="14" /></button></template>复制指纹</n-tooltip>
               </div>
+            </template>
+            <template v-else-if="viewTab === 'exts'">
+              <div class="tv-bar">
+                <span class="tv-hint">{{ viewDetails.extensions.length }} 条扩展；critical 的扩展带红色标记</span>
+                <span class="tv-head-spacer"></span>
+                <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" @click="doCopy(extensionsText(viewDetails.extensions),'exts')"><Icon :icon="copyIcon" width="15" height="15" /></button></template>复制全部扩展</n-tooltip>
+                <span v-if="viewCopied==='exts'" class="tv-ok">已复制</span>
+              </div>
+              <div v-if="!viewDetails.extensions.length" class="tv-hint">该对象没有扩展。</div>
+              <div v-for="(e, i) in viewDetails.extensions" :key="i" class="tv-ext">
+                <div class="tv-ext-h">
+                  <span class="tv-ext-name">{{ e.name }}</span>
+                  <span v-if="e.critical" class="tv-ext-critical">critical</span>
+                  <span class="tv-ext-oid" :title="e.oid">{{ e.oid }}</span>
+                  <n-tooltip trigger="hover"><template #trigger>
+                    <button class="tb-ib" @click="doCopy(e.name + '\n' + e.value, 'ext' + i)"><Icon :icon="copyIcon" width="14" height="14" /></button>
+                  </template>复制这条扩展</n-tooltip>
+                </div>
+                <pre class="tv-ext-v">{{ e.value }}</pre>
+              </div>
+            </template>
+            <template v-else-if="viewTab === 'text'">
+              <div class="tv-bar">
+                <span class="tv-hint">与 `openssl x509 -in cert -noout -text` 等价的文本</span>
+                <span class="tv-head-spacer"></span>
+                <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" @click="doCopy(viewDetails.openssl_text,'ostext')"><Icon :icon="copyIcon" width="15" height="15" /></button></template>复制全文</n-tooltip>
+                <n-tooltip trigger="hover"><template #trigger><button class="tb-ib" @click="saveText(viewDetails.openssl_text, safeFileName(viewTitle) + '.txt')"><Icon :icon="saveIcon" width="15" height="15" /></button></template>保存为文本文件</n-tooltip>
+                <span v-if="viewCopied==='ostext'" class="tv-ok">已复制</span>
+              </div>
+              <pre class="tv-pre">{{ viewDetails.openssl_text || '（该对象没有 openssl 文本形式）' }}</pre>
             </template>
             <template v-else-if="viewTab === 'pem'">
               <div class="tv-bar">
@@ -992,6 +1044,13 @@ async function openView(label, pem) {
     viewLoading.value = false
   }
 }
+// 把扩展列表拼成纯文本（复制用）。
+function extensionsText(exts) {
+  return (exts || []).map(e =>
+    `${e.name}${e.critical ? ' (critical)' : ''}\n  OID: ${e.oid}\n${e.value.split('\n').map(l => '  ' + l).join('\n')}`
+  ).join('\n\n')
+}
+
 async function doCopy(text, tag) {
   try {
     await writeText(String(text))
@@ -2075,4 +2134,13 @@ const multiChartOption = computed(() => {
 .tv-ok { font-size: 15px; color: #30a46c; }
 .tv-err { color: #e5484d; font-size: 15px; }
 .tv-pre { margin: 0; padding: 10px; border-radius: var(--tw-radius-sm); background: var(--tw-code-bg); color: var(--tw-code-fg); font-family: var(--tw-mono-font); font-size: 15px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
+.tv-head-spacer { flex: 1 1 auto; }
+.tv-pubkey { margin: 0; font-family: var(--tw-mono-font); font-size: 14px; line-height: 1.45; white-space: pre; overflow-x: auto; }
+.tv-sig { max-height: 220px; overflow: auto; }
+.tv-ext { margin-bottom: 10px; border: 1px solid var(--guaxi-border-weak, rgba(0,0,0,.08)); border-radius: var(--tw-radius-sm); overflow: hidden; }
+.tv-ext-h { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: color-mix(in srgb, var(--guaxi-panel-bg) 55%, transparent); }
+.tv-ext-name { font-size: 15px; font-weight: 600; }
+.tv-ext-critical { font-size: 12.5px; padding: 0 7px; border-radius: 999px; color: #e5484d; background: color-mix(in srgb, #e5484d 14%, transparent); }
+.tv-ext-oid { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--tw-mono-font); font-size: 13px; color: var(--guaxi-text-secondary); }
+.tv-ext-v { margin: 0; padding: 8px 10px; background: var(--tw-code-bg); color: var(--tw-code-fg); font-family: var(--tw-mono-font); font-size: 14px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
 </style>
