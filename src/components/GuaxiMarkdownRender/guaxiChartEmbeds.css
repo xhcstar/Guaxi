@@ -22,6 +22,10 @@
 .guaxi-chart-block__canvas {
   width: 100%;
   min-height: 240px;
+  /* 图表固定浅色渲染（见 guaxiChartEmbeds.js 的 CHART_THEME），画布必须给白底：
+     否则暗色界面下是「深色卡片 + 透明画布」，导出又变白底，两处观感不一致。 */
+  background: #ffffff;
+  border-radius: 6px;
 }
 
 /* 图表未完成渲染（等待 ECharts 动态加载 / 数据文件读取中）时的骨架。 */

@@ -231,11 +231,26 @@ function ensureSvgBackground(svgText) {
 
 // ───────────────────────── 查看器 ─────────────────────────
 
+/* 与 mermaid / 图片查看器同一套图标，保证三个查看器的按钮观感一致。 */
+const OVERLAY_ICONS = {
+  close: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L12 13.41l-6.29 6.3-1.42-1.41L10.59 12 4.29 5.71 5.7 4.29 12 10.59l6.29-6.3z"/></svg>',
+  plus: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19 11H13V5h-2v6H5v2h6v6h2v-6h6z"/></svg>',
+  minus: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19 13H5v-2h14v2z"/></svg>',
+  view: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 5c-7 0-11 7-11 7s4 7 11 7 11-7 11-7-4-7-11-7zm0 12a5 5 0 1 1 0-10 5 5 0 0 1 0 10z"/></svg>',
+  save: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5 20h14v-2H5v2zm7-18-5.5 5.5 1.42 1.42L11 6.84V16h2V6.84l3.08 3.08 1.42-1.42L12 2z"/></svg>',
+}
+
 /**
  * 打开图表查看器浮层。
  *
- * 只做图表需要的三件事：按容器宽度自适应缩放、拖拽平移、导出。
- * 与 mermaid 的查看器视觉保持一致（同一个半透明遮罩 + 白色面板）。
+ * 之前这里是个「按内容撑开的白色小面板」：面板宽度取决于 SVG 的原始宽度，
+ * 于是同一篇文档里 mermaid 能铺满 95% 屏幕、图表却挤在中间一小块，观感完全不一致。
+ * 现在与 mermaid / 图片查看器共用同一套尺寸与交互：
+ *   - 95vw × 92vh 全屏面板，白色底；
+ *   - 右上角「缩小 / 放大 / 1:1 / 关闭」；
+ *   - 滚轮按光标定点缩放，按住拖拽平移，双击还原，Esc 关闭；
+ *   - 左上角提示条。
+ * 导出按钮保留在工具栏里（图表特有的能力，不因为对齐而丢掉）。
  */
 export function openChartOverlay({ title, svgText, onExportSvg, onExportPng }) {
   const overlay = document.createElement('div')
@@ -244,73 +259,283 @@ export function openChartOverlay({ title, svgText, onExportSvg, onExportPng }) {
 
   const panel = document.createElement('div')
   panel.style.cssText =
-    'position:relative;max-width:94vw;max-height:92vh;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.35);display:flex;flex-direction:column;'
+    'position:relative;max-width:95vw;max-height:92vh;background:rgba(255,255,255,0.98);border:1px solid rgba(0,0,0,0.12);border-radius:10px;overflow:hidden;'
 
-  const bar = document.createElement('div')
-  bar.style.cssText =
-    'display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid rgba(0,0,0,.1);font:12px/1.4 system-ui,sans-serif;color:#333;'
+  const toolbar = document.createElement('div')
+  toolbar.style.cssText = 'position:absolute;right:8px;top:8px;display:flex;gap:6px;z-index:2;'
 
-  const titleEl = document.createElement('span')
-  titleEl.textContent = title || '图表预览'
-  titleEl.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'
+  const legend = document.createElement('div')
+  // 提示条贴在面板底部居中：工具栏固定在右上角，窗口窄时（三分栏视图）两者若都在顶部
+  // 就会互相挤压，提示条被截断。贴底还能避开画布主体。
+  legend.style.cssText =
+    'position:absolute;left:50%;bottom:10px;transform:translateX(-50%);display:flex;flex-wrap:wrap;justify-content:center;gap:6px 12px;align-items:center;padding:6px 10px;border-radius:8px;background:rgba(255,255,255,0.94);border:1px solid rgba(0,0,0,0.12);color:rgba(0,0,0,0.7);font-size:12px;line-height:1.3;z-index:2;max-width:calc(95vw - 24px);box-sizing:border-box;'
 
-  const mkBtn = (text, title2) => {
+  const mkLegendItem = (iconSvg, text) => {
+    const item = document.createElement('span')
+    item.style.cssText = 'display:inline-flex;align-items:center;gap:6px;white-space:nowrap;'
+    const icon = document.createElement('span')
+    icon.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;line-height:0;flex:0 0 auto;'
+    icon.innerHTML = iconSvg
+    const label = document.createElement('span')
+    label.textContent = text
+    item.append(icon, label)
+    return item
+  }
+
+  const mkTool = (iconSvg, titleText, fallbackText) => {
     const b = document.createElement('button')
     b.type = 'button'
-    b.textContent = text
-    b.title = title2 || text
+    b.title = titleText
+    b.setAttribute('aria-label', titleText)
     b.style.cssText =
-      'height:26px;padding:0 10px;border-radius:6px;border:1px solid rgba(0,0,0,.15);background:#fff;color:#333;font-size:12px;cursor:pointer;'
+      'height:30px;min-width:30px;padding:0 8px;border-radius:8px;color:rgba(0,0,0,0.75);background:rgba(255,255,255,0.95);border:1px solid rgba(0,0,0,0.12);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;line-height:0;'
+    if (fallbackText) {
+      b.textContent = fallbackText
+      b.style.fontSize = '12px'
+      b.style.lineHeight = '1'
+    } else {
+      const icon = document.createElement('span')
+      icon.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;line-height:0;'
+      icon.innerHTML = iconSvg
+      b.appendChild(icon)
+    }
     return b
   }
 
-  const btnSvg = mkBtn('导出 SVG', '导出为矢量 SVG')
-  const btnPng = mkBtn('导出 PNG', '导出为位图 PNG（白底）')
-  const btnClose = mkBtn('关闭', '关闭 (Esc)')
+  const btnMinus = mkTool(OVERLAY_ICONS.minus, '缩小（滚轮/按钮）')
+  const btnPlus = mkTool(OVERLAY_ICONS.plus, '放大（滚轮/按钮）')
+  const btnReset = mkTool('', '还原（双击画布也可以）', '1:1')
+  const btnSvg = mkTool(OVERLAY_ICONS.save, '导出为矢量 SVG')
+  const btnPng = mkTool(OVERLAY_ICONS.save, '导出为位图 PNG（白底）')
+  const btnClose = mkTool(OVERLAY_ICONS.close, '关闭 (Esc)')
 
-  bar.append(titleEl, btnSvg, btnPng, btnClose)
+  // 导出按钮带文字：图表的导出有 SVG / PNG 两种，纯图标分不清。
+  const withLabel = (btn, text) => {
+    const span = document.createElement('span')
+    span.textContent = text
+    span.style.cssText = 'margin-left:6px;font-size:12px;line-height:1;'
+    btn.appendChild(span)
+    btn.style.minWidth = '0'
+    btn.style.padding = '0 10px'
+    return btn
+  }
+  withLabel(btnSvg, 'SVG')
+  withLabel(btnPng, 'PNG')
 
+  toolbar.append(btnMinus, btnPlus, btnReset, btnSvg, btnPng, btnClose)
+
+  // 设计同 mermaid：transform: scale() 不参与布局，只加 scale 时放大后既滚不到也拖不动，
+  // 所以这里自己维护 translate + scale，滚轮按光标定点缩放，按住拖动平移。
   const stage = document.createElement('div')
   stage.style.cssText =
-    'overflow:auto;padding:16px;background:#f5f5f5;max-height:calc(92vh - 44px);'
+    'width:95vw;height:92vh;max-width:95vw;max-height:92vh;display:flex;align-items:center;justify-content:center;overflow:hidden;padding:44px 24px 56px;box-sizing:border-box;background:rgba(255,255,255,0.98);cursor:grab;touch-action:none;'
+
+  const contentWrap = document.createElement('div')
+  contentWrap.style.cssText = 'transform-origin:center center;will-change:transform;'
+  stage.appendChild(contentWrap)
+
+  // 标题不塞进提示条：窗口窄时会把三条操作提示挤掉。改为画布上方的独立一行。
+  const titleBar = document.createElement('div')
+  titleBar.style.cssText =
+    'position:absolute;left:50%;top:52px;transform:translateX(-50%);max-width:calc(95vw - 24px);padding:4px 10px;border-radius:8px;background:rgba(255,255,255,0.92);border:1px solid rgba(0,0,0,0.1);color:rgba(0,0,0,0.8);font-size:12px;font-weight:600;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;z-index:2;'
+  titleBar.textContent = title || '图表预览'
+
+  legend.appendChild(mkLegendItem(OVERLAY_ICONS.plus, '滚轮缩放（按光标定点）'))
+  legend.appendChild(mkLegendItem(OVERLAY_ICONS.view, '按住拖动查看细节'))
+  legend.appendChild(mkLegendItem(OVERLAY_ICONS.close, '双击还原 · Esc 关闭'))
 
   const holder = document.createElement('div')
-  holder.style.cssText = 'display:inline-block;min-width:100%;text-align:center;'
+  holder.style.cssText = 'display:block;'
   holder.innerHTML = String(svgText || '')
   const svgEl = holder.querySelector('svg')
   if (svgEl instanceof SVGElement) {
-    // 自适应：撑满面板宽度，同时不超过原始尺寸的 2 倍。
-    svgEl.removeAttribute('width')
-    svgEl.removeAttribute('height')
-    svgEl.style.cssText = 'max-width:100%;height:auto;display:inline-block;'
+    // 保留原始尺寸参与缩放计算；铺满屏幕的适配交给下面的 fitToStage。
+    svgEl.style.display = 'block'
+    svgEl.style.maxWidth = 'none'
+    svgEl.style.maxHeight = 'none'
   }
-  stage.appendChild(holder)
+  contentWrap.appendChild(holder)
 
-  panel.append(bar, stage)
-  overlay.appendChild(panel)
+  const ZOOM_MIN = 0.1
+  const ZOOM_MAX = 8
+  let zoom = 1
+  let panX = 0
+  let panY = 0
+  let fittedScale = 1
+
+  const applyTransform = () => {
+    contentWrap.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom * fittedScale})`
+  }
+
+  /**
+   * 初始适配：让图表完整落在可视区里。
+   *
+   * 图表 SVG 固定 900×520 输出，直接按原始像素显示会在小窗口里溢出；
+   * 这里按「可视区 / 内容尺寸」算一个基准缩放，用户后续的缩放叠加在它之上。
+   */
+  const fitToStage = () => {
+    const rect = stage.getBoundingClientRect()
+    const contentRect = holder.getBoundingClientRect()
+    const availW = Math.max(1, rect.width - 48)
+    const availH = Math.max(1, rect.height - 64)
+    const contentW = Math.max(1, contentRect.width / Math.max(fittedScale, 0.0001))
+    const contentH = Math.max(1, contentRect.height / Math.max(fittedScale, 0.0001))
+    fittedScale = Math.min(availW / contentW, availH / contentH, 4)
+    if (!(fittedScale > 0) || !Number.isFinite(fittedScale)) fittedScale = 1
+    applyTransform()
+  }
+
+  const zoomAt = (nextZoom, anchorX, anchorY) => {
+    const target = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, nextZoom))
+    if (target === zoom) return
+    const rect = contentWrap.getBoundingClientRect()
+    const centerX = rect.left + rect.width / 2 - panX
+    const centerY = rect.top + rect.height / 2 - panY
+    const dx = anchorX - centerX
+    const dy = anchorY - centerY
+    const ratio = target / zoom
+    panX = dx - ratio * (dx - panX)
+    panY = dy - ratio * (dy - panY)
+    zoom = target
+    applyTransform()
+  }
+
+  const zoomAtStageCenter = (nextZoom) => {
+    const rect = stage.getBoundingClientRect()
+    zoomAt(nextZoom, rect.left + rect.width / 2, rect.top + rect.height / 2)
+  }
+
+  const resetView = () => {
+    zoom = 1
+    panX = 0
+    panY = 0
+    applyTransform()
+  }
+
+  let dragging = false
+  let dragStartX = 0
+  let dragStartY = 0
+  let dragOriginX = 0
+  let dragOriginY = 0
+  let dragMoved = false
+
+  const onDragMove = (e) => {
+    if (!dragging) return
+    const dx = e.clientX - dragStartX
+    const dy = e.clientY - dragStartY
+    if (!dragMoved && Math.abs(dx) + Math.abs(dy) > 2) dragMoved = true
+    panX = dragOriginX + dx
+    panY = dragOriginY + dy
+    applyTransform()
+  }
+
+  const endDrag = () => {
+    if (!dragging) return
+    dragging = false
+    stage.style.cursor = 'grab'
+    window.removeEventListener('mousemove', onDragMove, true)
+    window.removeEventListener('mouseup', endDrag, true)
+  }
 
   const close = () => {
-    document.removeEventListener('keydown', onKey, true)
-    overlay.remove()
+    try {
+      endDrag()
+      document.removeEventListener('keydown', onKey, true)
+      if (typeof resizeObserver !== 'undefined') resizeObserver?.disconnect?.()
+      overlay.remove()
+    } catch {
+      /* 已移除 */
+    }
   }
+
   const onKey = (event) => {
     if (event.key === 'Escape') {
       event.preventDefault()
       close()
     }
   }
-  overlay.addEventListener('click', (event) => {
-    if (event.target === overlay) close()
-  })
+
   btnClose.addEventListener('click', close)
+  btnPlus.addEventListener('click', () => zoomAtStageCenter(zoom * 1.1))
+  btnMinus.addEventListener('click', () => zoomAtStageCenter(zoom / 1.1))
+  btnReset.addEventListener('click', resetView)
+
+  if (typeof onExportSvg === 'function') {
+    btnSvg.addEventListener('click', (event) => { event.stopPropagation(); onExportSvg() })
+  } else {
+    btnSvg.disabled = true
+  }
+  if (typeof onExportPng === 'function') {
+    btnPng.addEventListener('click', (event) => { event.stopPropagation(); onExportPng() })
+  } else {
+    btnPng.disabled = true
+  }
+
+  overlay.addEventListener('click', (event) => {
+    // 拖拽结束时鼠标可能正好落在遮罩上，这一下不该被当成「点空白关闭」。
+    if (event.target === overlay && !dragMoved) close()
+    dragMoved = false
+  })
+
+  stage.addEventListener('mousedown', (event) => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    dragging = true
+    dragMoved = false
+    dragStartX = event.clientX
+    dragStartY = event.clientY
+    dragOriginX = panX
+    dragOriginY = panY
+    stage.style.cursor = 'grabbing'
+    window.addEventListener('mousemove', onDragMove, true)
+    window.addEventListener('mouseup', endDrag, true)
+  })
+
+  stage.addEventListener('dblclick', (event) => {
+    event.preventDefault()
+    resetView()
+  })
+
+  stage.addEventListener(
+    'wheel',
+    (event) => {
+      event.preventDefault()
+      const delta = event.deltaY > 0 ? 0.9 : 1.1
+      zoomAt(zoom * delta, event.clientX, event.clientY)
+    },
+    { passive: false },
+  )
+
   document.addEventListener('keydown', onKey, true)
 
-  if (typeof onExportSvg === 'function') btnSvg.addEventListener('click', () => onExportSvg())
-  else btnSvg.disabled = true
-  if (typeof onExportPng === 'function') btnPng.addEventListener('click', () => onExportPng())
-  else btnPng.disabled = true
-
+  panel.appendChild(toolbar)
+  panel.appendChild(legend)
+  panel.appendChild(titleBar)
+  panel.appendChild(stage)
+  overlay.appendChild(panel)
   document.body.appendChild(overlay)
+
+  // 首帧后按可视区适配；窗口尺寸变化时重新适配（用户已手动缩放则保持不动）。
+  //
+  // 刻意不依赖 requestAnimationFrame：浮层刚 append 时 stage 已经有布局尺寸
+  // （宽度由 CSS 的 95vw 决定，不依赖内容），直接量即可。rAF 在窗口最小化 /
+  // 被遮挡时不会触发，用了它就会出现「打开查看器后图没有适配」的空窗。
+  let resizeObserver = null
+  const runFit = () => {
+    try {
+      fitToStage()
+    } catch {
+      /* 容器已移除 */
+    }
+  }
+  runFit()
+  if (typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(() => {
+      if (zoom === 1 && panX === 0 && panY === 0) runFit()
+    })
+    resizeObserver.observe(stage)
+  }
+
   return { close }
 }
 

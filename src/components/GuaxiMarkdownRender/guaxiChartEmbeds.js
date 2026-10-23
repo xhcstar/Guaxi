@@ -222,30 +222,17 @@ const loadECharts = () => {
 }
 
 /**
- * 判断图表该用深色还是浅色主题。
+ * 图表**始终**用浅色渲染，与界面深浅色无关。
  *
- * 主题标记有两个来源：
- *   1. 主窗口把主题落在 `documentElement.dataset.guaxiTheme`（settingsStore.applyAppearanceTheme）；
- *   2. 独立窗口（如手册窗口）只在组件根元素上设 `data-theme`，documentElement 保持未知。
- * 只看第 1 种会让第 2 种永远是浅色，所以这里再按渲染容器向上找一次最近的 data-theme。
+ * 之前的实现会跟随 documentElement 的暗色标记并用 ECharts 内置 dark 主题，
+ * 结果是暗色界面下图表变成深底浅字：在界面里勉强能看，但一旦离开这个页面
+ * （导出 SVG/PNG、打印成 PDF、贴进其它文档）就只剩一片深色，内容等于丢失。
+ * 导出的那条链路本来就被强制成浅色（guaxiChartExport.renderChartSvg 用
+ * buildLightOption + 白底），两边不一致正是「预览里看得见、导出里看不见」的来源。
+ *
+ * 现在统一浅色：画布由 guaxiChartEmbeds.css 铺白底，界面深浅色只影响周围的卡片外观。
  */
-const isDarkTheme = (scope) => {
-  try {
-    const root = document?.documentElement
-    if (
-      root?.classList?.contains?.('dark') ||
-      root?.classList?.contains?.('dark-mode') ||
-      root?.dataset?.guaxiTheme === 'dark'
-    ) {
-      return true
-    }
-    const themed = scope?.closest?.('[data-theme]')
-    if (themed) return themed.getAttribute('data-theme') === 'dark'
-    return false
-  } catch {
-    return false
-  }
-}
+const CHART_THEME = null
 
 /**
  * 把一个 chart 围栏解析成可直接喂给 ECharts 的 option。
@@ -299,7 +286,7 @@ async function renderChartBlock(el) {
     const { option, records, parsed } = await buildOptionFromFence(source, baseDocPath)
 
     const echarts = await loadECharts()
-    const instance = echarts.init(el, isDarkTheme(el) ? 'dark' : null, { renderer: 'canvas' })
+    const instance = echarts.init(el, CHART_THEME, { renderer: 'canvas' })
     instance.setOption(option, true)
     chartInstances.set(el, instance)
 
