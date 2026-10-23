@@ -713,6 +713,11 @@ const taskActiveExpanded = ref(true)
 // 任务模式是否已完成首次初始化：仅首次进入时加载三类目录，之后切换模式保留已展开/已加载状态，
 // 避免每次切换都把文件树与展开条目重置回默认态。
 const taskModeInitialized = ref(false)
+// 注意：这里必须是 reactive，不能换成 shallowReactive。
+// 虚拟树把 `taskCatTrees[activeTaskCat]` 直接当 props.nodes，目录展开时
+// handleTaskLoadChildren / refreshModeDir 会**就地**给 node.children 赋值；
+// shallowReactive 只代理顶层，这类修改不会触发虚拟树重算，表现为「展开目录后子节点不显示」。
+// 模式切换的耗时问题由下面 watch 去掉 deep 解决，不靠这里。
 const taskCatTrees = reactive({ work: [], life: [], study: [] })
 const taskCatExpandedKeys = reactive({ work: [], life: [], study: [] })
 const taskCatSelectedKeys = reactive({ work: [], life: [], study: [] })
@@ -845,25 +850,32 @@ const isTreeLoading = ref(false)
 // 设计说明：
 // 1. 左侧边栏的三种模式分别维护独立根目录和树数据，GuaxiEditor 不能通过 activeRepoPath 推断 plain/task 模式。
 // 2. 这里把当前可见模式的“根路径 + 文件树”同步到共享 store，面包屑即可使用与左栏完全相同的浏览上下文。
-// 3. deep 监听同时覆盖懒加载目录 children 的变化，避免面包屑同级候选停留在加载前的旧树。
+// 3. 【不要加 deep】这个 watch 曾经是 `deep: true`，每切换一次模式都要把整棵响应式树完整走一遍：
+//    实测 1.26 万节点 88ms、4.2 万节点 269ms，而且是同步执行——用户点下模式切换图标后要干等这么久，
+//    节点越多越明显。树本身是不可变替换的（loadFileTree / fetchDirChildren 都赋新数组），
+//    引用变化就够了；懒加载的原地 children 赋值由 refreshSidebarNavigationContext() 显式通知（见下）。
 // 4. 此处使用局部归一化函数，因为通用 normalizePath 在组件后半段声明；immediate 监听不能提前访问它。
 const normalizeSidebarNavigationPath = (path) => String(path || '').replace(/\\/g, '/').replace(/\/+$/, '')
 
-const syncSidebarNavigationContext = () => {
-  let rootPath = ''
-  let tree = []
-
+// 当前模式的根路径与树（只读引用，不遍历内容）。
+const currentSidebarNavigationSource = () => {
   if (viewMode.value === 'plain') {
-    rootPath = normalizeSidebarNavigationPath(externalDir.value)
-    tree = externalDirTree.value
-  } else if (viewMode.value === 'task') {
-    rootPath = catPathOf(activeTaskCat.value)
-    tree = taskCatTrees[activeTaskCat.value] || []
-  } else {
-    rootPath = normalizeSidebarNavigationPath(fileTreeStore.activeRepoPath)
-    tree = fileTree.value
+    return { rootPath: normalizeSidebarNavigationPath(externalDir.value), tree: externalDirTree.value }
   }
+  if (viewMode.value === 'task') {
+    return {
+      rootPath: catPathOf(activeTaskCat.value),
+      tree: taskCatTrees[activeTaskCat.value] || [],
+    }
+  }
+  return {
+    rootPath: normalizeSidebarNavigationPath(fileTreeStore.activeRepoPath),
+    tree: fileTree.value,
+  }
+}
 
+const syncSidebarNavigationContext = () => {
+  const { rootPath, tree } = currentSidebarNavigationSource()
   fileTreeStore.setSidebarNavigationContext({
     mode: viewMode.value,
     rootPath,
@@ -871,19 +883,48 @@ const syncSidebarNavigationContext = () => {
   })
 }
 
+/**
+ * 通知面包屑「树内容变了」，但不做深度监听。
+ *
+ * 懒加载会把 children 直接赋到已有节点上（`node.children = ...`），树的引用不变，
+ * 上面的浅监听看不到这类变化，面包屑的同级候选就会停在加载前的旧树。
+ * 这类操作只发生在用户展开/刷新目录时，次数有限，由调用点显式通知即可。
+ *
+ * 用 requestAnimationFrame 合并同一轮的多次变更（一次展开可能连着改几层）。
+ */
+let sidebarContextSyncFrame = 0
+const refreshSidebarNavigationContext = () => {
+  if (sidebarContextSyncFrame) return
+  const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (cb) => setTimeout(cb, 16)
+  sidebarContextSyncFrame = raf(() => {
+    sidebarContextSyncFrame = 0
+    syncSidebarNavigationContext()
+  })
+}
+
+// 【源一律写成 getter】这是本组件最容易踩的坑，改动前请读完：
+//
+// 1. watch 的源如果直接传 `reactive` 对象（例如旧写法里的 `taskCatTrees` /
+//    `taskCategoryPaths`），Vue 会**隐式按 deep 订阅**——不是我们显式写的 `deep: true`，
+//    而是传对象本身就等于 deep。`taskCatTrees` 里是整棵任务树，于是每次切换模式、
+//    每次读到它们，都要把树完整走一遍。实测 2.1 万节点约 150ms、4.2 万节点约 270ms，
+//    全部同步阻塞在点击回调里 —— 这就是「切回知识库特别慢」的真正原因。
+// 2. 改成 getter 后，Vue 只比较返回值：`() => taskCatTrees[activeTaskCat.value]` 返回数组引用，
+//    任务树整体替换（`taskCatTrees[key] = ...`）会触发，节点内部变化不会——正是我们要的粒度。
+// 3. 懒加载对 children 的就地赋值仍由 refreshSidebarNavigationContext() 覆盖，见下方说明。
 watch(
   [
     viewMode,
     externalDir,
-    externalDirTree,
+    () => externalDirTree.value,
     activeTaskCat,
-    taskCategoryPaths,
-    taskCatTrees,
+    () => taskCategoryPaths.value,
+    () => taskCatTrees[activeTaskCat.value],
     () => fileTreeStore.activeRepoPath,
-    fileTree,
+    () => fileTree.value,
   ],
   syncSidebarNavigationContext,
-  { deep: true, immediate: true }
+  { immediate: true }
 )
 
 // 右键菜单状态
@@ -1804,6 +1845,7 @@ const handleLoadChildren = async (node) => {
     await fileTreeStore.fetchFileTree(dirId, { force: true })
     const filteredChildren = filterHiddenTree(fileTreeStore.fileTree)
     node.children = sortFileTree(normalizeTreeIds(filteredChildren))
+    refreshSidebarNavigationContext()
     await scrollToKey(dirId)
   } catch (error) {
     logger.error('加载子目录内容失败:', error)
@@ -1985,6 +2027,7 @@ const handleTaskLoadChildren = async (node) => {
   if (!node?.is_directory) return
   try {
     node.children = await fetchDirChildren(node.id, true)
+    refreshSidebarNavigationContext()
   } catch (error) {
     logger.error('加载任务子目录失败:', error)
   }
@@ -2091,6 +2134,7 @@ const refreshModeDir = async (mode, dirPath, options = {}) => {
     if (node) {
       const fresh = await fetchDirChildren(target)
       node.children = mergeDirChildren(node.children, fresh)
+      refreshSidebarNavigationContext()
       if (expand && !externalExpandedKeys.value.includes(target)) {
         externalExpandedKeys.value = [...externalExpandedKeys.value, target]
       }
@@ -2112,6 +2156,7 @@ const refreshModeDir = async (mode, dirPath, options = {}) => {
         if (node) {
           const fresh = await fetchDirChildren(target, true)
           node.children = mergeDirChildren(node.children, fresh)
+          refreshSidebarNavigationContext()
           if (expand && !taskCatExpandedKeys[catKey].includes(target)) {
             taskCatExpandedKeys[catKey] = [...taskCatExpandedKeys[catKey], target]
           }
@@ -2188,6 +2233,7 @@ const insertInlineTempNode = (mode, parentDir, isDirectory) => {
       }
     }
   }
+  refreshSidebarNavigationContext()
   return node
 }
 
@@ -2776,6 +2822,7 @@ const handleExternalLoadChildren = async (node) => {
     await fileTreeStore.fetchFileTree(dirId, { force: true })
     const filtered = filterHiddenTree(fileTreeStore.fileTree)
     node.children = sortFileTree(normalizeTreeIds(filtered))
+    refreshSidebarNavigationContext()
   } catch (error) {
     logger.error('加载外部子目录失败:', error)
   }
@@ -2840,6 +2887,7 @@ const cancelEditing = async () => {
       }
     } else {
       parentNode.children = parentNode.children.filter(n => n.id !== node.id)
+      refreshSidebarNavigationContext()
       if (normalizePath(parentPath) === normalizePath(fileTreeStore.activeRepoPath)) {
         await loadFileTree()
       } else {
@@ -3111,6 +3159,7 @@ const addNode = async (parentId, isDirectory = false) => {
       await fileTreeStore.fetchFileTree(parentNode.id)
       const filteredChildren = filterHiddenTree(fileTreeStore.fileTree)
       parentNode.children = sortFileTree(normalizeTreeIds(filteredChildren))
+      refreshSidebarNavigationContext()
     }
   }
 
@@ -3130,6 +3179,7 @@ const addNode = async (parentId, isDirectory = false) => {
     fileTree.value = [newNode, ...fileTree.value];
   } else {
     parentNode.children = [newNode, ...(parentNode.children || [])];
+    refreshSidebarNavigationContext()
   }
 
   if (!isRoot && parentNode?.id) {
@@ -3180,6 +3230,7 @@ const handleEditComplete = async (node, parentNode, isDirectory, isRoot, resolve
 
     if (parentNode?.children) {
       parentNode.children = parentNode.children.filter(n => n.id !== node.id)
+      refreshSidebarNavigationContext()
     }
   }
 
@@ -3251,6 +3302,7 @@ const handleBlur = async () => {
         }
       } else {
         parentNode.children = parentNode.children.filter(n => n.id !== oldId);
+        refreshSidebarNavigationContext()
         if (normalizePath(parentPath) === normalizePath(fileTreeStore.activeRepoPath)) {
           await loadFileTree();
         } else {
@@ -3503,6 +3555,7 @@ const refreshDirectory = async (directoryId) => {
     })
 
     directoryNode.children = [...newChildren]
+    refreshSidebarNavigationContext()
 
     if (wasExpanded && !expandedKeys.value.includes(targetDir)) {
       expandedKeys.value.push(targetDir)
@@ -3585,6 +3638,7 @@ const loadModeDirChildren = async (mode, node) => {
     } else {
       node.children = await fetchDirChildren(node.id, mode === 'task')
     }
+    refreshSidebarNavigationContext()
     return true
   } catch (error) {
     logger.warn('[TreeReveal] 加载子目录失败', {
