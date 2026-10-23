@@ -58,9 +58,25 @@ struct ServerHandle {
     tx: mpsc::UnboundedSender<String>,
     pid: u32,
     user_agent: String,
+    /// 必须持有 Child 本体。
+    ///
+    /// `Command::kill_on_drop(true)` 的语义是「这个 Child 值被释放时杀掉进程」。
+    /// 之前只把 pid 存进全局状态、把 Child 留成局部变量，于是 ensure_started 一返回
+    /// 就 drop 掉了它——进程立刻被杀，握手明明成功，下一次调用却报「app-server 未运行」。
+    /// 现在句柄跟着全局状态活，进程才真正常驻。
+    ///
+    child: tokio::process::Child,
 }
 
 static SERVER: LazyLock<Mutex<Option<ServerHandle>>> = LazyLock::new(|| Mutex::new(None));
+
+/// 启动串行化。
+///
+/// 工作台一次挂载就会并发触发 `agent_engine_status` / `agent_list_models` /
+/// `agent_start_thread`，三者都走 `ensure_started`。没有这把锁时它们会各自
+/// spawn 一个 app-server，后两次把前一次的句柄覆盖掉，被覆盖的那个进程随即
+/// 因为 kill_on_drop 死掉——表现同样是「连上了但马上又未运行」。
+static START_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// 等待响应的 JSON-RPC 请求：id → 结果发送端。
 /// 携带 `Result`，让错误响应用 `Err` 表达，调用方不会把 `{"__error":..}` 当成正常结果。
@@ -202,12 +218,33 @@ fn rpc_reply_error(id: u64, message: String) {
 
 /// 启动并握手。已经启动且进程还活着时直接复用。
 pub async fn ensure_started(app: &AppHandle) -> Result<String, String> {
+    // 快路径：已经连上就不排队。
     {
-        let guard = SERVER.lock().map_err(|e| e.to_string())?;
-        if let Some(h) = guard.as_ref() {
-            if sender_alive(h) {
+        let mut guard = SERVER.lock().map_err(|e| e.to_string())?;
+        if let Some(h) = guard.as_mut() {
+            if sender_alive(h) && process_alive(h) && !h.user_agent.is_empty() {
                 return Ok(h.user_agent.clone());
             }
+        }
+    }
+
+    // 慢路径串行化：拿到锁后必须再查一次，排队期间别人可能已经连好了。
+    let _start_guard = START_LOCK.lock().await;
+    {
+        let mut guard = SERVER.lock().map_err(|e| e.to_string())?;
+        if let Some(h) = guard.as_mut() {
+            if sender_alive(h) && process_alive(h) && !h.user_agent.is_empty() {
+                return Ok(h.user_agent.clone());
+            }
+        }
+        // 走到这里说明旧句柄已经不可用。先摘掉再重启，否则会留下一个
+        // 指向死进程的条目；被覆盖的 Child 也会连带触发一次 kill。
+        if let Some(stale) = guard.take() {
+            warn!(
+                pid = stale.pid,
+                "[codex_app_server] 旧进程已退出，重新拉起"
+            );
+            crate::guaxiservices::process_shutdown::unregister_managed_pid(stale.pid);
         }
     }
 
@@ -268,6 +305,8 @@ pub async fn ensure_started(app: &AppHandle) -> Result<String, String> {
             tx,
             pid,
             user_agent: String::new(),
+            // 把句柄交给全局状态：这是进程能活过本函数返回的关键。
+            child,
         });
     }
 
@@ -317,7 +356,17 @@ pub async fn ensure_started(app: &AppHandle) -> Result<String, String> {
 }
 
 fn sender_alive(h: &ServerHandle) -> bool {
+    // 两条都看：写端可能还挂着，但进程已经退出（崩溃、被外部杀掉）。
+    // 只看 tx 会误判成「已连接」，于是后续请求全部写进黑洞。
     !h.tx.is_closed()
+}
+
+/// 检查句柄对应的进程是否还活着。
+///
+/// `try_wait` 在进程已退出时返回 `Some(status)`。这里不改状态，
+/// 真正的清理交给 `stdout` 读端（它退出时会按 pid 摘掉句柄）。
+fn process_alive(h: &mut ServerHandle) -> bool {
+    matches!(h.child.try_wait(), Ok(None))
 }
 
 /// 收掉进程（软件退出 / 手动重置）。
@@ -540,14 +589,31 @@ pub async fn agent_engine_status() -> EngineStatus {
             }
         }
     }
-    if let Ok(guard) = SERVER.lock() {
-        if let Some(h) = guard.as_ref() {
-            status.running = sender_alive(h);
+    if let Ok(mut guard) = SERVER.lock() {
+        if let Some(h) = guard.as_mut() {
+            // running 要按进程真实状态算，不能只看写端还在。
+            // 否则进程崩了、句柄还没被读端摘掉时，界面会显示「已连接」。
+            status.running = sender_alive(h) && process_alive(h);
             status.pid = h.pid;
             status.user_agent = h.user_agent.clone();
         }
     }
     status
+}
+
+/// 引擎当前是否可用：连上过、进程还活着、且没有待处理的启动错误。
+/// 工作台用它决定「发送」按钮是否可点，避免点了才发现连不上。
+#[tauri::command]
+pub async fn agent_engine_ready() -> bool {
+    let (alive, handshaked) = SERVER
+        .lock()
+        .ok()
+        .and_then(|mut g| {
+            g.as_mut()
+                .map(|h| (sender_alive(h) && process_alive(h), !h.user_agent.is_empty()))
+        })
+        .unwrap_or((false, false));
+    alive && handshaked
 }
 
 /// 可用模型清单。`model/list` 不需要供应商凭证（实测），所以即使还没配 Key 也能拉出来，

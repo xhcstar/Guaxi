@@ -230,11 +230,57 @@ export const useAgentWorkspaceStore = defineStore('agentWorkspace', {
       } catch (err) {
         this.engineError = String(err?.message || err)
         logger.error('[agent] engine status failed', err)
+        return this.engine
+      }
+
+      // 状态查询只读，不会拉起进程。这里主动预热一次：打开工作台就连上引擎，
+      // 否则要等到第一次发送才失败，用户看到的是一句「未运行」，却不知道其实可以重试。
+      if (this.engine?.binary_exists && !this.engine?.running) {
+        try {
+          await this.warmUpEngine()
+        } catch (err) {
+          // 预热失败不在这里报错：真正的失败原因留给首次发送时展示，
+          // 避免一进页面就弹一条用户还看不懂的错误。
+          logger.warn('[agent] engine warm-up failed', { error: String(err?.message || err) })
+        }
+      }
+      return this.engine
+    },
+
+    /**
+     * 确保 app-server 已连接。成功返回 true。
+     *
+     * 走 `agent_list_models`：它内部会 `ensure_started`，并且不需要供应商凭证，
+     * 是最轻量的「把引擎拉起来」的调用。失败时把原因记进 engineError，
+     * 让界面能显示可读的原因而不是只转圈。
+     */
+    async warmUpEngine() {
+      try {
+        const res = await invoke('agent_list_models')
+        this.models = Array.isArray(res?.data) ? res.data : []
+        this.engineError = ''
+        await this.refreshEngineState()
+        return true
+      } catch (err) {
+        const msg = String(err?.message || err)
+        this.engineError = msg
+        logger.warn('[agent] engine unavailable', { error: msg })
+        return false
+      }
+    },
+
+    async refreshEngineState() {
+      try {
+        this.engine = await invoke('agent_engine_status')
+      } catch {
+        // 状态刷新失败不影响已经建立的连接，忽略。
       }
       return this.engine
     },
 
     async loadModels() {
+      // 预热已经顺带拉过清单，避免挂载时对同一个接口发两次请求。
+      if (this.models.length) return this.models
       try {
         const res = await invoke('agent_list_models')
         this.models = Array.isArray(res?.data) ? res.data : []
@@ -244,6 +290,15 @@ export const useAgentWorkspaceStore = defineStore('agentWorkspace', {
         this.models = []
       }
       return this.models
+    },
+
+    /** 手动重连（界面上「重试连接」用）。 */
+    async retryEngine() {
+      this.engineError = ''
+      this.models = []
+      const ok = await this.warmUpEngine()
+      if (!ok) throw new Error(this.engineError || '引擎仍不可用')
+      return this.engine
     },
 
     async restartEngine() {

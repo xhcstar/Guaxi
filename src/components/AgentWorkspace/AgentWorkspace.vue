@@ -24,6 +24,15 @@
         </button>
       </header>
 
+      <!-- 引擎连不上时把原因摆在最上面，并给一个重试入口。
+           不给重试的话，用户只会看到「未运行」，既不知道能不能修，也不知道该等还是该动。 -->
+      <div v-if="engineBlocked" class="workspace-alert">
+        <span class="alert-text">{{ engineBlocked }}</span>
+        <button type="button" class="alert-btn" :disabled="retrying" @click="onRetryEngine">
+          {{ retrying ? '重连中…' : '重试连接' }}
+        </button>
+      </div>
+
       <div ref="scrollRef" class="workspace-transcript" @scroll="onScroll">
         <div v-if="!messages.length" class="workspace-empty">
           <p class="empty-title">给这台机器一个任务</p>
@@ -165,6 +174,28 @@ const runningKey = computed(() => (store.running ? store.currentKey : ''))
 const modeLabel = computed(() => store.currentMode?.label || '编码')
 
 /** GUI 是否已授权：设置里的总开关 + 认知层的 Tier::Gui 两者都开才可用。 */
+/** 引擎不可用的可读原因；为空表示一切正常。 */
+const engineBlocked = computed(() => {
+  const e = store.engine
+  if (store.engineError) return store.engineError
+  if (e && !e.binary_exists) return '没有找到 codex 可执行文件，Agent 无法运行'
+  return ''
+})
+
+const retrying = ref(false)
+
+const onRetryEngine = async () => {
+  retrying.value = true
+  try {
+    await store.retryEngine()
+    message.success('引擎已连接')
+  } catch (err) {
+    message.error(String(err?.message || err))
+  } finally {
+    retrying.value = false
+  }
+}
+
 const guiEnabled = computed(() => {
   const tier = cognition.status?.tiers?.find?.((t) => t?.[0] === 'gui')
   return Boolean(tier?.[1])
@@ -392,6 +423,42 @@ const openDiff = () => {
 }
 
 .workspace-link:hover { color: var(--guaxi-text-primary); }
+
+.workspace-alert {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 24px 8px;
+  padding: 8px 12px;
+  border: 1px solid rgba(180, 125, 26, 0.45);
+  border-radius: 6px;
+  background: rgba(180, 125, 26, 0.08);
+}
+
+.alert-text {
+  flex: 1 1 auto;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #b47d1a;
+  word-break: break-word;
+}
+
+.alert-btn {
+  flex: 0 0 auto;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 5px;
+  border: 1px solid rgba(180, 125, 26, 0.55);
+  background: transparent;
+  color: #b47d1a;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.alert-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
 
 .workspace-transcript {
   flex: 1 1 auto;

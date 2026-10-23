@@ -429,6 +429,7 @@ async fn main() {
             commands::codex_agent::codex_agent_status,
             // Agent 工作台：codex app-server 引擎
             commands::codex_app_server::agent_engine_status,
+            commands::codex_app_server::agent_engine_ready,
             commands::codex_app_server::agent_list_models,
             commands::codex_app_server::agent_start_thread,
             commands::codex_app_server::agent_resume_thread,
