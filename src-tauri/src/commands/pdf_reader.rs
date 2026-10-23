@@ -839,26 +839,52 @@ pub struct PdfSearchResponse {
     pub query: String,
     pub total: usize,
     pub hits: Vec<PdfSearchHit>,
+    /// 本次实际扫描到的最后一页（1-based）。前端据此续扫下一页区间。
+    #[serde(default)]
+    pub scanned_to: usize,
+    /// 文档总页数。`scanned_to < total_pages` 表示还有没扫的部分。
+    #[serde(default)]
+    pub total_pages: usize,
 }
 
 /// 全文搜索：返回每个命中所在页 + 命中矩形（pt，左上原点）+ 片段。大小写不敏感。
 #[tauri::command]
-pub async fn pdf_search(path: String, query: String) -> Result<PdfSearchResponse, String> {
+pub async fn pdf_search(
+    path: String,
+    query: String,
+    from_page: Option<usize>,
+    to_page: Option<usize>,
+) -> Result<PdfSearchResponse, String> {
     let q = query.trim().to_string();
     if q.is_empty() {
         return Ok(PdfSearchResponse {
             query: q,
             total: 0,
             hits: vec![],
+            scanned_to: 0,
+            total_pages: 0,
         });
     }
+    let from = from_page.unwrap_or(1).max(1);
+    let to = to_page.unwrap_or(0);
 
     run_pdf(move |state| {
         state.with_doc(&path, |document| {
             let mut hits = Vec::new();
             let options = PdfSearchOptions::new();
 
-            for (idx, page) in document.pages().iter().enumerate() {
+            let total_pages = document.pages().len() as usize;
+            let start = from.min(total_pages.max(1));
+            let end = if to == 0 { total_pages } else { to.min(total_pages) };
+
+            // 按页范围扫，且用 `get()` 逐页加载而不是 `iter()`：
+            // `iter()` 会把每一页都真的 FPDF_LoadPage 一遍（5000 页实测 500 毫秒），
+            // 而搜索本来就是「按范围推进」的活，没必要为没扫到的部分付加载成本。
+            for idx in (start - 1)..end {
+                let page = match document.pages().get(idx as u16) {
+                    Ok(p) => p,
+                    Err(_) => continue,
+                };
                 let page_h = page.height().value;
                 let text_page = match page.text() {
                     Ok(t) => t,
@@ -902,6 +928,8 @@ pub async fn pdf_search(path: String, query: String) -> Result<PdfSearchResponse
                 query: q.clone(),
                 total: hits.len(),
                 hits,
+                scanned_to: end,
+                total_pages,
             })
         })
     })

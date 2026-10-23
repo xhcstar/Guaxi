@@ -206,14 +206,48 @@ export default function usePdfiumDocument() {
     }
   }
 
-  const search = async (query) => {
+  /**
+   * 全书搜索，按固定页块增量推进。
+   *
+   * 【为什么要分批而不是一次扫全本】5000 页的文档里，一次搜索会在 pdfium 工作线程上
+   * 占满几百毫秒到数秒 —— 期间所有翻页、缩放请求都在排队，整个阅读器像卡死。
+   * 分成 400 页一块后，每块之间让出线程，前几块的结果可以立刻返回并跳转，
+   * 后面的块在后台继续补。对读者来说：一搜就能看到前几十个结果，而不是等全套扫完。
+   *
+   * @param {string} query
+   * @param {{chunkSize?:number, onProgress?:Function}} [opts]
+   *   onProgress({ hits, scannedTo, total }) 每扫完一块回调一次。
+   */
+  const search = async (query, { chunkSize = 400, onProgress = null } = {}) => {
     const q = String(query || '').trim()
     if (!q || !activePath) return { query: q, total: 0, hits: [] }
+    const all = []
+    let from = 1
+    let totalPages = 0
     try {
-      return await invoke('pdf_search', { path: activePath, query: q })
+      // 首块之后才知道总页数；循环条件因此写在体内。
+      while (true) {
+        const resp = await invoke('pdf_search', {
+          path: activePath,
+          query: q,
+          fromPage: from,
+          toPage: from + chunkSize - 1,
+        })
+        totalPages = Number(resp?.total_pages || 0)
+        const hits = Array.isArray(resp?.hits) ? resp.hits : []
+        all.push(...hits)
+        const scannedTo = Number(resp?.scanned_to || from + chunkSize - 1)
+        if (typeof onProgress === 'function') {
+          onProgress({ hits: all.slice(), scannedTo, total: totalPages })
+        }
+        if (!totalPages || scannedTo >= totalPages) break
+        from = scannedTo + 1
+      }
+      return { query: q, total: all.length, hits: all }
     } catch (e) {
       logger.error('搜索失败', { error: String(e?.message || e) })
-      return { query: q, total: 0, hits: [] }
+      // 已经扫到的部分仍然有价值：返回它们，而不是一失败就全部作废。
+      return { query: q, total: all.length, hits: all }
     }
   }
 

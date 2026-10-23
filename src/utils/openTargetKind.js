@@ -55,7 +55,7 @@ const SPREADSHEET_EXTS = new Set(['xlsx', 'xls', 'ods'])
 /** 幻灯片（交给 pptx 预览 / anydoc）。 */
 const SLIDES_EXTS = new Set(['pptx', 'ppt', 'odp'])
 
-/** Word（docx 由 docx-preview 直接渲染；doc 走 anydoc 转 Markdown）。 */
+/** Word 文档。打开后交给本机 Office/WPS，否则 WordCraft —— 不在 Guaxi 内自绘版式。 */
 const WORD_EXTS = new Set(['docx', 'doc', 'rtf', 'odt'])
 
 /** 明确应当留在编辑器里的文本扩展名。 */

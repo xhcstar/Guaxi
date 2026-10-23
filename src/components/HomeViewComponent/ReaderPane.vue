@@ -40,6 +40,16 @@
             >
               批注
             </button>
+            <button
+              class="gdr-pdf-aside__tab"
+              :class="{ 'is-on': pdfAside === 'translate' }"
+              role="tab"
+              :aria-selected="pdfAside === 'translate'"
+              title="本页译文"
+              @click="pdfAside = 'translate'"
+            >
+              译文
+            </button>
           </div>
           <button
             class="guaxi-doc-reader__icon-btn"
@@ -66,6 +76,53 @@
           >
             {{ item.title || '未命名' }}
           </button>
+        </div>
+
+        <!-- 译文：只翻当前页，结果按段并排给出原/译对照。 -->
+        <div v-else-if="pdfAside === 'translate'" class="gdr-pdf-aside__body">
+          <div class="gdr-xlate">
+            <div class="gdr-xlate__head">
+              <span class="gdr-xlate__title">{{ typeof pageTranslateTarget === 'number' ? `第 ${pageTranslateTarget} 页` : pageTranslateTarget }}</span>
+              <button
+                class="gdr-xlate__btn"
+                type="button"
+                :disabled="pageTranslateBusy"
+                @click="translateCurrentPage"
+              >
+                {{ pageTranslateBusy ? '翻译中…' : pageTranslateRows.length ? '重新翻译' : '翻译本页' }}
+              </button>
+            </div>
+            <div v-if="pageTranslateBusy" class="gdr-xlate__progress">
+              <span class="gdr-xlate__bar" :style="{ width: `${Math.round(pageTranslateProgress * 100)}%` }" />
+            </div>
+            <!-- 范围：单页 vs 全文。全文只翻「已经加载过文本层」的页，见 translateWholeDoc。 -->
+            <div class="gdr-xlate__scope">
+              <button
+                class="gdr-xlate__scope-btn"
+                :class="{ 'is-on': xlateScope === 'page' }"
+                type="button"
+                @click="xlateScope = 'page'"
+              >本页</button>
+              <button
+                class="gdr-xlate__scope-btn"
+                :class="{ 'is-on': xlateScope === 'book' }"
+                type="button"
+                @click="xlateScope = 'book'"
+              >全文</button>
+              <span v-if="xlateScope === 'book'" class="gdr-xlate__scope-note">
+                只翻已加载的页，滚动过的部分才可翻
+              </span>
+            </div>
+            <div v-if="pageTranslateError" class="gdr-xlate__error">{{ pageTranslateError }}</div>
+            <div v-if="!pageTranslateRows.length && !pageTranslateBusy" class="gdr-pdf-aside__empty">
+              把这一页的文字翻成中文。段落与原文逐段对照，方便边读边核对。
+            </div>
+            <div v-for="(row, i) in pageTranslateRows" :key="i" class="gdr-xlate__row">
+              <p class="gdr-xlate__src">{{ row.source }}</p>
+              <p v-if="row.target" class="gdr-xlate__dst">{{ row.target }}</p>
+              <p v-else-if="pageTranslateBusy" class="gdr-xlate__pending">…</p>
+            </div>
+          </div>
         </div>
 
         <div v-else class="gdr-pdf-aside__body">
@@ -124,6 +181,21 @@
         @mousedown.prevent
       >
         <span class="gdr-pdf-hl-bar__hint">{{ pdfSelectionPreview }}</span>
+        <!--
+          译 / 读：读完一段想弄懂它，比「想标记它」更常见，
+          所以这两个动作排在高亮色之前。
+        -->
+        <button class="gdr-pdf-hl-bar__action" title="翻译选中的文字" @click="openPdfTranslate">
+          翻译
+        </button>
+        <button
+          class="gdr-pdf-hl-bar__action"
+          :title="pdfReadAloudPlaying ? '停止朗读' : '朗读选中的文字'"
+          @click="speakPdfSelection"
+        >
+          {{ pdfReadAloudPlaying ? '停止' : '朗读' }}
+        </button>
+        <span class="gdr-pdf-hl-bar__sep" />
         <span class="gdr-pdf-hl-bar__swatches">
           <button
             v-for="(c, i) in PDF_HL_PRESETS"
@@ -139,6 +211,30 @@
           Esc
         </button>
       </div>
+
+      <!-- 划词译文面板：与电子书 / 编辑器同一套组件，交互一致。 -->
+      <GuaxiSelectionTranslatePanel
+        v-if="pdfTranslate.visible.value"
+        :pos="pdfTranslate.pos.value"
+        :raw="pdfTranslate.raw.value"
+        :result="pdfTranslate.result.value"
+        :error="pdfTranslate.error.value"
+        :busy="pdfTranslate.busy.value"
+        :pinned="pdfTranslate.pinned.value"
+        :items="pdfTranslate.items.value"
+        :from-lang="pdfTranslate.fromLang.value"
+        :to-lang="pdfTranslate.toLang.value"
+        :lang-options="pdfTranslate.langOptions"
+        :word-meta="pdfTranslate.wordMeta.value"
+        @translate="pdfTranslate.translate(pdfTranslate.raw.value)"
+        @copy="pdfTranslate.copyResult()"
+        @swap-langs="pdfTranslate.swapLangs()"
+        @toggle-pin="pdfTranslate.togglePin()"
+        @update:pos="(v) => { pdfTranslate.pos.value = v }"
+        @update:from-lang="(v) => { pdfTranslate.fromLang.value = v }"
+        @update:to-lang="(v) => { pdfTranslate.toLang.value = v }"
+        @close="pdfTranslate.close()"
+      />
 
       <!--
         侧栏开关：浮在正文左上角。
@@ -156,6 +252,14 @@
           @click="pdfAside = 'outline'"
         >
           <Icon :icon="outlineIcon" width="15" height="15" />
+        </button>
+        <button
+          class="guaxi-doc-reader__icon-btn"
+          title="本页译文"
+          aria-label="本页译文"
+          @click="pdfAside = 'translate'"
+        >
+          <Icon :icon="translateIcon" width="15" height="15" />
         </button>
         <button
           class="guaxi-doc-reader__icon-btn"
@@ -177,37 +281,26 @@
       :variant="'single'"
     />
 
-    <DocDocxReader
-      v-else-if="target.reader === 'word' && target.kind === 'docx'"
+    <!--
+      Office 文档（word / spreadsheet / slides）统一交给 DocOfficeReader。
+
+      【为什么不再按格式分派到各自的只读渲染器】
+      docx-preview、@vue-office/pptx、calamine 拼出来的版式永远是「差不多但不对」：
+      分页、母版、图表、修订都还原不了。更糟的是它把同一份文件变成两种东西 ——
+      在这里看到的样子和用 Office 打开的样子不一样，用户无法信任其中任何一个。
+      现在只有一条路：交给真正会编辑它的程序（本机 Office/WPS，否则 WordCraft 系列），
+      直接在原文件上工作，Guaxi 不产出任何中间产物。
+    -->
+    <DocOfficeReader
+      v-else-if="isOfficeReader"
       :path="path"
       :name="fileName"
       :kind="target.kind"
+      :size="target.size"
     />
 
     <DocEbookReader
       v-else-if="target.reader === 'ebook'"
-      :path="path"
-      :name="fileName"
-      :kind="target.kind"
-    />
-
-    <DocSpreadsheetReader
-      v-else-if="target.reader === 'spreadsheet'"
-      :path="path"
-      :name="fileName"
-      :kind="target.kind"
-    />
-
-    <!-- 幻灯片：pptx 走原生版式预览（@vue-office/pptx，离线、按需加载）；
-         老格式 .ppt / .odp 没有对应渲染内核，退回转换后的只读 Markdown 大纲。 -->
-    <DocPptxReader
-      v-else-if="target.reader === 'slides' && target.kind === 'pptx'"
-      :path="path"
-      :name="fileName"
-      :kind="target.kind"
-    />
-    <DocMarkdownReader
-      v-else-if="target.reader === 'slides'"
       :path="path"
       :name="fileName"
       :kind="target.kind"
@@ -221,14 +314,6 @@
 
     <DocMediaReader
       v-else-if="target.reader === 'media'"
-      :path="path"
-      :name="fileName"
-      :kind="target.kind"
-    />
-
-    <!-- doc / rtf / odt：anydoc 转 Markdown 的只读视图。 -->
-    <DocMarkdownReader
-      v-else-if="target.reader === 'word'"
       :path="path"
       :name="fileName"
       :kind="target.kind"
@@ -273,6 +358,7 @@ import { Icon } from '@iconify/vue'
 import closeIcon from '@iconify-icons/lucide/x'
 import outlineIcon from '@iconify-icons/lucide/list-tree'
 import noteIcon from '@iconify-icons/lucide/edit-3'
+import translateIcon from '@iconify-icons/lucide/languages'
 import folderIcon from '@iconify-icons/lucide/folder'
 import convertIcon from '@iconify-icons/lucide/file-output'
 import codeIcon from '@iconify-icons/lucide/code'
@@ -280,15 +366,20 @@ import { openPath } from '@tauri-apps/plugin-opener'
 import { createLogger } from '../../utils/logger'
 import GuaxiPdfViewer from '../PdfViewer/GuaxiPdfViewer.vue'
 import DocImageReader from '../ReaderComponent/readers/DocImageReader.vue'
-import DocDocxReader from '../ReaderComponent/readers/DocDocxReader.vue'
 import DocEbookReader from '../ReaderComponent/readers/DocEbookReader.vue'
-import DocSpreadsheetReader from '../ReaderComponent/readers/DocSpreadsheetReader.vue'
-import DocMarkdownReader from '../ReaderComponent/readers/DocMarkdownReader.vue'
 import DocHtmlReader from '../ReaderComponent/readers/DocHtmlReader.vue'
 import DocMediaReader from '../ReaderComponent/readers/DocMediaReader.vue'
-import DocPptxReader from '../ReaderComponent/readers/DocPptxReader.vue'
+import DocOfficeReader from '../ReaderComponent/readers/DocOfficeReader.vue'
+import GuaxiSelectionTranslatePanel from './GuaxiSelectionTranslatePanel.vue'
+import { usePageTranslate, splitIntoParagraphs } from '../../composables/usePageTranslate'
+import { useSelectionReadAloud } from '../../composables/useSelectionReadAloud'
 
 const logger = createLogger('ReaderPane')
+
+/** word / spreadsheet / slides 三个 reader 分组，现在都由 DocOfficeReader 承接。 */
+const isOfficeReader = computed(() =>
+  ['word', 'spreadsheet', 'slides'].includes(String(props.target?.reader || ''))
+)
 
 const props = defineProps({
   /** 阅读器描述对象（openTargetKind.resolveOpenTarget 的返回值）。null 表示不接管。 */
@@ -357,6 +448,7 @@ const onOutline = (raw) => {
 /** 大纲项高亮跟随当前页：取最后一个起始页不晚于当前页的条目。 */
 const onPdfPageChange = (page) => {
   const num = Number(page) || 0
+  pdfCurrentPage.value = num || 1
   let idx = -1
   outlineItems.value.forEach((item, i) => {
     if (item.page && item.page <= num) idx = i
@@ -553,6 +645,135 @@ const addPdfHighlightFromSelection = async (color) => {
 }
 
 /** 选区变化（键盘 Shift+方向键、双击选词）也要跟手。 */
+// 划词翻译与朗读：PDF 阅读器的选区就在主文档里（透明文本层），所以用默认选区来源即可。
+const pdfReadAloud = useSelectionReadAloud({})
+const pdfReadAloudPlaying = pdfReadAloud.busy
+const pdfTranslate = usePageTranslate({ getContainer: () => pdfRootEl.value || null })
+
+const openPdfTranslate = () => {
+  const text = String(pdfSelectionText.value || '').trim()
+  if (!text) return
+  pdfTranslate.translateText(text, pdfSelectionAnchor.value)
+  pdfSelectionToolbar.value = false
+}
+
+const speakPdfSelection = () => {
+  const text = String(pdfSelectionText.value || '').trim()
+  if (!text) return
+  if (pdfReadAloudPlaying.value) {
+    pdfReadAloud.stop()
+    return
+  }
+  void pdfReadAloud.toggle(text)
+  pdfSelectionToolbar.value = false
+}
+
+/**
+ * 全文翻译。
+ *
+ * 【为什么只翻已加载的页】文本层来自已渲染页，未渲染的页在内存里没有文字。
+ * 让用户「先滚完 5000 页」显然不可行，所以这里如实按已加载范围翻，并在界面上说明。
+ * 想要更完整的全文翻译，正确的做法是后端提供整本文本抽取 —— 那是另一件事，
+ * 不能靠前端在这里假装做到。
+ */
+const translateWholeDoc = async () => {
+  const viewer = pdfViewerRef.value
+  if (!viewer?.exportText) return
+  pageTranslateError.value = ''
+  const { text, loadedPages } = viewer.exportText()
+  const t = String(text || '').trim()
+  if (!t) {
+    pageTranslateError.value = '还没有任何页加载过文本层，先翻几页再试。'
+    return
+  }
+  if (loadedPages.length < 3) {
+    pageTranslateError.value = `目前只有 ${loadedPages.length} 页可用，先多翻几页再试全文翻译。`
+    return
+  }
+  pageTranslateTarget.value = `全文（${loadedPages.length} 页）`
+  const paragraphs = splitIntoParagraphs(t)
+  if (!paragraphs.length) return
+  pageTranslateRows.value = paragraphs.map((source) => ({ source, target: '' }))
+  pageTranslateBusy.value = true
+  pageTranslateProgress.value = 0
+  try {
+    const results = await pdfTranslate.translateParagraphs(paragraphs, (partial, done) => {
+      pageTranslateRows.value = paragraphs.map((source, i) => ({
+        source,
+        target: String(partial[i] || ''),
+      }))
+      pageTranslateProgress.value = done / paragraphs.length
+    })
+    const failed = results.filter((x) => !x).length
+    if (failed) pageTranslateError.value = `${failed} 段没有翻译成功，可以重试。`
+    logger.info('[ReaderPane] whole doc translated', { pages: loadedPages.length, paragraphs: paragraphs.length, failed })
+  } catch (error) {
+    pageTranslateError.value = String(error?.message || error)
+  } finally {
+    pageTranslateBusy.value = false
+  }
+}
+
+/** 当前页（供页码联动，也决定「本页译文」翻哪一页）。 */
+const pdfCurrentPage = ref(1)
+
+// ───────────────────────── 本页译文（整页翻译）─────────────────────────
+// 与划词翻译的区别：这是「整页读完想对照一遍」的场景，结果要能留在侧栏里慢慢看，
+// 而不是划一下、看了一眼就消失。
+const pageTranslateRows = ref([])
+const pageTranslateBusy = ref(false)
+const pageTranslateProgress = ref(0)
+const pageTranslateError = ref('')
+const pageTranslateTarget = ref(1)
+/** 'page' | 'book'：译文范围。 */
+const xlateScope = ref('page')
+
+const translateCurrentPage = async () => {
+  if (xlateScope.value === 'book') {
+    await translateWholeDoc()
+    return
+  }
+  const viewer = pdfViewerRef.value
+  if (!viewer?.pageTextAt) return
+  pageTranslateError.value = ''
+  const page = Number(pdfCurrentPage.value) || 1
+  pageTranslateTarget.value = page
+  const text = String(viewer.pageTextAt(page) || '').trim()
+  if (!text) {
+    pageTranslateError.value = '这一页还没有加载文本层，先滚动到这一页再试。'
+    return
+  }
+  const paragraphs = splitIntoParagraphs(text)
+  if (!paragraphs.length) {
+    pageTranslateError.value = '这一页没有可翻译的文字（可能是扫描件或纯图片页）。'
+    return
+  }
+  pageTranslateRows.value = paragraphs.map((source) => ({ source, target: '' }))
+  pageTranslateBusy.value = true
+  pageTranslateProgress.value = 0
+  try {
+    const results = await pdfTranslate.translateParagraphs(paragraphs, (partial, done) => {
+      pageTranslateRows.value = paragraphs.map((source, i) => ({
+        source,
+        target: String(partial[i] || ''),
+      }))
+      pageTranslateProgress.value = done / paragraphs.length
+    })
+    pageTranslateRows.value = paragraphs.map((source, i) => ({
+      source,
+      target: String(results[i] || ''),
+    }))
+    const failed = results.filter((t) => !t).length
+    if (failed) pageTranslateError.value = `${failed} 段没有翻译成功，可以点「重新翻译」重试。`
+    logger.info('[ReaderPane] page translated', { page, paragraphs: paragraphs.length, failed })
+  } catch (error) {
+    pageTranslateError.value = String(error?.message || error)
+    logger.warn('[ReaderPane] page translate failed', { error: pageTranslateError.value })
+  } finally {
+    pageTranslateBusy.value = false
+  }
+}
+
 let pdfSelectionSyncTimer = null
 const schedulePdfSelectionSync = () => {
   if (pdfSelectionSyncTimer) clearTimeout(pdfSelectionSyncTimer)
@@ -882,6 +1103,119 @@ const openExternally = async () => {
   cursor: pointer;
 }
 .gdr-pdf-hl-bar__cancel:hover { background: rgba(255, 255, 255, 0.1); }
+
+/* 译 / 读：和颜色圆点并列，但用文字按钮 —— 这两个是「动作」，不是「取值」。 */
+.gdr-pdf-hl-bar__action {
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.gdr-pdf-hl-bar__action:hover { background: rgba(255, 255, 255, 0.16); }
+/* 译文侧栏：原文/译文逐段对照。原文用稍弱的颜色，译文是正文色。 */
+.gdr-xlate {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px;
+}
+.gdr-xlate__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  position: sticky;
+  top: 0;
+  background: inherit;
+  padding: 2px 0;
+}
+.gdr-xlate__title { font-size: 12px; font-weight: 600; }
+.gdr-xlate__btn {
+  padding: 4px 10px;
+  border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--n-color-primary, #61afef) 45%, transparent);
+  background: transparent;
+  color: var(--n-color-primary, #61afef);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.gdr-xlate__btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.gdr-xlate__progress {
+  height: 2px;
+  border-radius: 1px;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  overflow: hidden;
+}
+.gdr-xlate__bar {
+  display: block;
+  height: 100%;
+  background: var(--n-color-primary, #61afef);
+  transition: width 0.2s;
+}
+.gdr-xlate__scope {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.gdr-xlate__scope-btn {
+  padding: 2px 9px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  background: transparent;
+  color: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0.72;
+}
+.gdr-xlate__scope-btn.is-on {
+  opacity: 1;
+  border-color: color-mix(in srgb, var(--n-color-primary, #61afef) 55%, transparent);
+  color: var(--n-color-primary, #61afef);
+}
+.gdr-xlate__scope-note {
+  font-size: 10.5px;
+  opacity: 0.5;
+}
+
+.gdr-xlate__error {
+  font-size: 11.5px;
+  color: #cf222e;
+  line-height: 1.6;
+}
+.gdr-xlate__row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 9px;
+  border-radius: 8px;
+  background: color-mix(in srgb, currentColor 4%, transparent);
+}
+.gdr-xlate__src {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.65;
+  opacity: 0.62;
+}
+.gdr-xlate__dst {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.75;
+}
+.gdr-xlate__pending { margin: 0; opacity: 0.4; }
+
+.gdr-pdf-hl-bar__sep {
+  width: 1px;
+  height: 14px;
+  background: rgba(255, 255, 255, 0.18);
+}
 
 .guaxi-doc-reader__fallback {
   position: absolute;

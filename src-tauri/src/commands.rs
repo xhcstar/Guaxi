@@ -19,6 +19,7 @@ pub mod doc_reader_window;
 pub mod convert;
 pub mod craft_app;
 pub mod craft_cli;
+pub mod office_app;
 pub mod reader_state;
 pub mod import_suggest;
 pub mod file_watcher;

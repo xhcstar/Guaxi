@@ -548,8 +548,11 @@ fn reassemble_mobi_text(bytes: &[u8]) -> Option<String> {
     let mut raw: Vec<u8> = Vec::with_capacity(text_length);
     for idx in 1..=text_records {
         let start = record_offset(idx)?;
-        let end = record_offset(idx + 1).unwrap_or(usize::MAX);
-        if start >= end {
+        // 最后一条正文记录没有「下一条偏移」可用：取到文件末尾。
+        // 这里必须 clamp 到 bytes.len() —— 直接用 usize::MAX 会在切片时 panic，
+        // 而 MOBI 的偏移表本来就可能是截断/畸形的，解析器绝不能因此崩掉整个进程。
+        let end = record_offset(idx + 1).unwrap_or(bytes.len()).min(bytes.len());
+        if start >= end || start >= bytes.len() {
             return None;
         }
         let chunk = &bytes[start..end];
@@ -630,6 +633,79 @@ fn rewrite_kindle_refs(
     text_records: usize,
     record_count: usize,
 ) -> Option<String> {
+    let table = kindle_asset_table_inner(bytes, Some(text_stream), record_offset, text_records, record_count)?;
+    Some(rewrite_kindle_refs_with_table(html, &table))
+}
+
+/// 一部 KF8 书的资源表：`kindle:embed:N` / `kindle:flow:N` 各自解析好的 data URI。
+///
+/// 拆成独立结构的原因见 `kindle_asset_table` 的说明：资源解析不该被「正文章节能否对齐」牵制。
+struct KindleAssets {
+    /// 按资源区出现顺序排列的媒体：(mime, 字节)。
+    media: Vec<(String, Vec<u8>)>,
+    /// FDST 描述的各段 flow（通常是 CSS），已按序号排列。
+    flows: Vec<String>,
+}
+
+/// 从原始 MOBI/KF8 字节里建资源表；与正文怎么切分无关。
+///
+/// `text_stream` 是**解压后**的正文字节流（FDST 偏移基于它的绝对位置）。拿不到时仍能建出
+/// 媒体表，只是解不出 flow（CSS 会缺失，但不影响图片）。
+fn kindle_asset_table(bytes: &[u8], text_stream: Option<&[u8]>) -> Option<KindleAssets> {
+    if !is_palm_doc(bytes) {
+        return None;
+    }
+    let record_count = u16::from_be_bytes([bytes[76], bytes[77]]) as usize;
+    if record_count < 2 || record_count > 100_000 {
+        return None;
+    }
+    let offsets: Vec<usize> = {
+        let mut v = Vec::with_capacity(record_count);
+        for idx in 0..record_count {
+            let at = 78 + idx * 8;
+            if at + 4 > bytes.len() {
+                return None;
+            }
+            v.push(u32::from_be_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]) as usize);
+        }
+        v
+    };
+    let record_offset = move |idx: usize| -> Option<usize> { offsets.get(idx).copied() };
+
+    // 正文记录数来自 PalmDOC 头（record 0）。
+    let first = record_offset(0)?;
+    let second = record_offset(1)?;
+    if first >= second || second > bytes.len() {
+        return None;
+    }
+    let header = &bytes[first..second];
+    if header.len() < 12 {
+        return None;
+    }
+    let text_records = u16::from_be_bytes([header[8], header[9]]) as usize;
+    if text_records == 0 {
+        return None;
+    }
+
+    // 只要有原始字节就能建资源表；文本流缺失时传空，media 仍照常收集。
+    let empty: &[u8] = &[];
+    let inner = kindle_asset_table_inner(
+        bytes,
+        text_stream.or(Some(empty)),
+        &record_offset,
+        text_records,
+        record_count,
+    )?;
+    Some(inner)
+}
+
+fn kindle_asset_table_inner(
+    bytes: &[u8],
+    text_stream: Option<&[u8]>,
+    record_offset: &dyn Fn(usize) -> Option<usize>,
+    text_records: usize,
+    record_count: usize,
+) -> Option<KindleAssets> {
     // 资源区：正文记录之后。第一条是资源头，媒体从这里往后连续排列。
     let resource_start = (1 + text_records).max(1);
     if resource_start >= record_count {
@@ -662,8 +738,21 @@ fn rewrite_kindle_refs(
 
     // flow 区（碎片化 CSS）由 FDST 记录描述：偏移是**解压后正文流**里的绝对位置。
     // 因此这里需要把拼好的正文再切一遍，而不是去翻记录。
-    let flows: Vec<String> = extract_flows(text_stream, &record_bytes, record_count);
+    let flows: Vec<String> = text_stream
+        .map(|stream| extract_flows(stream, &record_bytes, record_count))
+        .unwrap_or_default();
 
+    Some(KindleAssets { media, flows })
+}
+
+/// 用已建好的资源表替换 HTML 里的 `kindle:` 引用。
+///
+/// 与 `rewrite_kindle_refs` 的区别：不碰原始字节、不重新扫资源区，可以在**每一章**上
+/// 反复调用，成本只有一次字符串扫描。
+fn rewrite_kindle_refs_with_table(html: &str, table: &KindleAssets) -> String {
+    if !html.contains("kindle:") {
+        return html.to_string();
+    }
     // 一次扫描完成替换：从 `kindle:` 起始，解析到引号/空白/`>`/`)` 为止。
     let mut out = String::with_capacity(html.len() * 2);
     let mut i = 0usize;
@@ -700,7 +789,7 @@ fn rewrite_kindle_refs(
 
         let replacement = match kind {
             "embed" => decode_kindle_index(index_part)
-                .and_then(|n| media.get(n.wrapping_sub(1)))
+                .and_then(|n| table.media.get(n.wrapping_sub(1)))
                 .map(|(mime, data)| {
                     let chosen = if mime_hint.is_empty() { mime.as_str() } else { mime_hint.as_str() };
                     data_uri(chosen, data)
@@ -708,9 +797,11 @@ fn rewrite_kindle_refs(
             "flow" => {
                 // FDST 描述的 flow 按序号排列；取不到序号时把全部 CSS 合并给出，
                 // 多带样式不会影响正确性。
-                let css = match decode_kindle_index(index_part).and_then(|n| flows.get(n.wrapping_sub(1))) {
+                let css = match decode_kindle_index(index_part).and_then(|n| table.flows.get(n.wrapping_sub(1))) {
                     Some(one) => one.clone(),
-                    None => flows.join("\n"),
+                    None if table.flows.is_empty() => String::new(),
+                    None => table.flows.join("
+"),
                 };
                 if css.trim().is_empty() {
                     None
@@ -719,7 +810,7 @@ fn rewrite_kindle_refs(
                     Some(data_uri(m, css.as_bytes()))
                 }
             }
-            // `kindle:pos:` 是书内跳转锚点，不是资源；保留原样由前端当普通 href 处理。
+            // `kindle:pos:` 是书内跳转锚点，不是资源；交给前端当普通锚点处理。
             _ => None,
         };
 
@@ -736,7 +827,7 @@ fn rewrite_kindle_refs(
         }
     }
 
-    Some(out)
+    out
 }
 
 /// 探测媒体资源的 MIME；结构性记录（INDX/FDST/…）返回 None。
@@ -919,9 +1010,9 @@ fn read_ebook_blocking(path: &Path, kind: &str) -> Result<EbookPayload, String> 
     // MOBI/AZW3 先试一次「按 PalmDOC 头重排正文」：这本原文没有被压缩，但记录尾部混着
     // 二进制元数据，直接交给 ebook-rs 会整本退化成 Latin-1 乱码。重排成功就用干净文本，
     // 失败则完全走原有的解析路径（行为不变）。
-    let remuxed_text = if is_mobi_family(kind) {
+    let mobi_bytes = if is_mobi_family(kind) {
         match std::fs::read(path) {
-            Ok(bytes) => reassemble_mobi_text(&bytes),
+            Ok(bytes) => Some(bytes),
             Err(err) => {
                 tracing::warn!(path = %path.display(), error = %err, "[Reader] mobi remux read failed");
                 None
@@ -930,6 +1021,18 @@ fn read_ebook_blocking(path: &Path, kind: &str) -> Result<EbookPayload, String> 
     } else {
         None
     };
+
+    let remuxed_text = mobi_bytes.as_deref().and_then(reassemble_mobi_text);
+
+    // KF8 的 `kindle:embed:` / `kindle:flow:` 资源表，从原始字节里单独建一份。
+    //
+    // 为什么不能只依赖重排路径：`reassemble_mobi_text` 只有在「章节数对得上」时才会被采用，
+    // 对不上就走 ebook-rs 的原始输出 —— 而那份输出里 `kindle:embed:000J?mime=image/jpeg`
+    // 原样留着，浏览器不认识这个 scheme，图片就是空白（AZW3 的实测形态）。资源表和正文
+    // 切分是两件独立的事，没有理由被章节对齐结果牵连。
+    let kindle_assets = mobi_bytes.as_deref().and_then(|bytes| {
+        kindle_asset_table(bytes, remuxed_text.as_deref().map(|t| t.as_bytes()))
+    });
 
     let book = with_parser_panic_guard(|| {
         ebook_rs::Book::from_file(path).map_err(|e| ebook_error_message(&e))
@@ -976,26 +1079,36 @@ fn read_ebook_blocking(path: &Path, kind: &str) -> Result<EbookPayload, String> 
             );
             section_ref.clone()
         });
-        // MOBI/AZW3 的兜底：ebook-rs 把图片写进归档的 `OEBPS/images/...`，却把 section 的
-        // full_path 设成裸的 `section_N.html`，于是 get_section 按相对路径反查必然 Miss。
-        // 用图片实际所在的 OEBPS 目录再跑一遍内联（EPUB 的路径本就是对的，这里再跑也不会重复）。
-        if is_mobi_family(kind) {
-            section.processed_html = ebook_rs::section::process_section_resources(
-                &section.processed_html,
-                "OEBPS/section.xhtml",
-                &book.archive,
-            );
-        }
-        // 空白章节（封面占位、版权页空壳）直接跳过，避免阅读器里出现整页空白。
-        if section.plain_text.trim().is_empty() && !section.processed_html.contains("<img") {
-            continue;
-        }
         // 如果重排拿到了干净正文，就用它覆盖 ebook-rs 输出的乱码章节内容。
         // 按顺序对位：重排流与 ebook-rs 切出的 spine 顺序一致，章节数不等时退回原内容。
+        //
+        // 【顺序很重要】这一步必须在内联资源之前。重排流是原始 HTML，里面的图片还是
+        // `images/img_0004.jpg` 这样的相对路径；先内联再覆盖，等于把刚做好的 data URI
+        // 整体换掉 —— 这正是 MOBI 打开后一张图都不显示的根因（28 个 <img> 全部回到裸路径）。
         if let Some(html) = remuxed_html.as_ref().and_then(|list| list.get(section.index)) {
             if !html.trim().is_empty() {
                 section.processed_html = html.clone();
             }
+        }
+        // 内联资源（正文已定稿）：把相对路径的图片/样式换成 data URI。
+        //
+        // 直接调 ebook-rs 的 process_section_resources 而不自己写一套路径解析，是为了和
+        // EPUB 的行为完全一致（同一份实现、同一套 percent-decode 与 ../ 归一化规则）。
+        // MOBI/AZW3 的 section.href 是裸 `section_N.html`，而资源实际在 `OEBPS/images/`，
+        // 所以用 `OEBPS/section.xhtml` 作基址再跑一遍 —— 命中就直接内联，Miss 则原样返回。
+        section.processed_html = ebook_rs::section::process_section_resources(
+            &section.processed_html,
+            if is_mobi_family(kind) { "OEBPS/section.xhtml" } else { &section.href },
+            &book.archive,
+        );
+        // KF8/AZW3 的 `kindle:` 伪协议在 blob 文档里没有对应的 scheme，必须换成 data URI。
+        // 放在内联之后：前面那步只认相对路径，`kindle:embed:` 会被它跳过。
+        if let Some(assets) = kindle_assets.as_ref() {
+            section.processed_html = rewrite_kindle_refs_with_table(&section.processed_html, assets);
+        }
+        // 空白章节（封面占位、版权页空壳）直接跳过，避免阅读器里出现整页空白。
+        if section.plain_text.trim().is_empty() && !section.processed_html.contains("<img") {
+            continue;
         }
         // 编码兜底：MOBI/AZW3 头里的 codec 常标错，会导致整章「UTF-8 被当 Latin-1」的乱码。
         // 只在判定为乱码时才动，正常书原样返回（见 repair_html_text_nodes 的说明）。
@@ -1234,7 +1347,51 @@ mod cp1252_reverse_tests {
 
 #[cfg(test)]
 mod kindle_ref_tests {
-    use super::{decode_kindle_index, sniff_media_mime};
+    use super::{decode_kindle_index, sniff_media_mime, KindleAssets};
+    use super::rewrite_kindle_refs_with_table;
+
+    fn jpeg_bytes() -> Vec<u8> {
+        // 最小可识别为 JPEG 的头，足够让 sniff_media_mime 认出来。
+        let mut v = vec![0xFFu8, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
+        v.extend(std::iter::repeat(0u8).take(64));
+        v
+    }
+
+    #[test]
+    fn rewrites_embed_refs_to_data_uri() {
+        // KF8 正文里真实出现的形态：`src="kindle:embed:000J?mime=image/jpeg"`。
+        // 不替换的话浏览器报 ERR_UNKNOWN_URL_SCHEME，图片整章空白。
+        let table = KindleAssets {
+            media: vec![("image/jpeg".to_string(), jpeg_bytes())],
+            flows: vec![],
+        };
+        let html = r#"<img src="kindle:embed:0001?mime=image/jpeg" />"#;
+        let out = rewrite_kindle_refs_with_table(html, &table);
+        assert!(out.contains("src=\"data:image/jpeg;base64,"), "实际: {out}");
+        assert!(!out.contains("kindle:embed"), "不应残留伪协议: {out}");
+    }
+
+    #[test]
+    fn rewrites_flow_refs_to_css_data_uri() {
+        // flow 是碎片化 CSS。`kindle:flow:0002` 里的尾串在真实文件里可能是截断的，
+        // 序号解析不到时退回「合并全部 flow」，只要样式不丢即可。
+        let table = KindleAssets {
+            media: vec![],
+            flows: vec!["p{color:red}".to_string()],
+        };
+        let html = r#"<link rel="stylesheet" href="kindle:flow:0002?mime=text/css" />"#;
+        let out = rewrite_kindle_refs_with_table(html, &table);
+        assert!(out.contains("data:text/css;base64,"), "实际: {out}");
+        assert!(!out.contains("kindle:flow"), "不应残留伪协议: {out}");
+    }
+
+    #[test]
+    fn leaves_pos_anchor_and_plain_html_untouched() {
+        // `kindle:pos:` 是书内跳转锚点，不是资源；普通 HTML 更不能被改动。
+        let table = KindleAssets { media: vec![], flows: vec![] };
+        let html = r#"<a href="kindle:pos:fid:0006:off:0000000000">跳</a><p>正文</p>"#;
+        assert_eq!(rewrite_kindle_refs_with_table(html, &table), html);
+    }
 
     #[test]
     fn decodes_base32_indices() {
@@ -1305,17 +1462,35 @@ mod mobi_remux_tests {
             records.push(rec);
         }
 
+        // 偏移表在真实文件里总有 record_count 项：最后一条记录的结束位置靠
+        // 「下一条偏移」推出来，因此额外写一条哨兵（= 全部数据之后）。
         let mut out = header;
+        out.resize(78 + (records.len() + 1) * 8, 0);
+        out[76..78].copy_from_slice(&((records.len() + 1) as u16).to_be_bytes());
         let mut offset = out.len();
         for idx in 0..records.len() {
             let at = 78 + idx * 8;
             out[at..at + 4].copy_from_slice(&(offset as u32).to_be_bytes());
             offset += records[idx].len();
         }
+        let tail_at = 78 + records.len() * 8;
+        out[tail_at..tail_at + 4].copy_from_slice(&(offset as u32).to_be_bytes());
         for rec in records {
             out.extend_from_slice(&rec);
         }
         out
+    }
+
+    #[test]
+    fn truncated_offset_table_returns_none_instead_of_panicking() {
+        // 真实世界里的 MOBI 可能被截断、偏移表可能短于 record_count。
+        // 解析器必须安静地放弃重排（返回 None），而不是在切片处 panic 掉整个进程。
+        let body = "<p>第一章</p>".repeat(200);
+        let mut bytes = build_palm_doc(1, 4096, body.as_bytes(), 5);
+        // 砍掉尾部一半数据，制造「偏移指向文件之外」的畸形态。
+        bytes.truncate(bytes.len() / 2 + 40);
+        let restored = reassemble_mobi_text(&bytes);
+        assert!(restored.is_none() || !restored.unwrap().is_empty());
     }
 
     #[test]

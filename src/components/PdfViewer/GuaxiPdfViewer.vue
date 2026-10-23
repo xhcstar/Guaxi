@@ -414,14 +414,27 @@ const pageGeometry = computed(() => {
 const WINDOW_BUFFER_SCREENS = 1.5
 const windowRange = ref({ start: 0, end: 0 })
 
+// 页码 → page 对象的下标表。页码恒为 1..n 连续，直接按索引取即可，
+// 不必每帧重建 Map —— 5000 页时那是一次 5000 项的分配 + 哈希，而它发生在**每次滚动**里。
+const pageByNum = computed(() => {
+  const table = new Array(pages.length + 1)
+  for (let i = 0; i < pages.length; i += 1) table[pages[i].num] = pages[i]
+  return table
+})
+
 const windowedPages = computed(() => {
   const geo = pageGeometry.value
   const { start, end } = windowRange.value
   if (!geo.length) return []
-  const slice = geo.slice(Math.max(0, start), Math.min(geo.length, end))
-  const byNum = new Map()
-  for (const page of pages) byNum.set(page.num, page)
-  return slice.map((item) => byNum.get(item.num)).filter(Boolean)
+  const table = pageByNum.value
+  const out = []
+  const from = Math.max(0, start)
+  const to = Math.min(geo.length, end)
+  for (let i = from; i < to; i += 1) {
+    const page = table[geo[i].num]
+    if (page) out.push(page)
+  }
+  return out
 })
 
 /** 上方 spacer 的高度 = 第一个已挂载页之前所有页（含间距）的总高度。 */
@@ -672,10 +685,31 @@ const focusSearchInput = async (reason = 'shortcut') => {
   logger.info('PDF搜索框聚焦', { reason })
 }
 
+/**
+ * 平滑滚动到指定位置，页面不可见时退回瞬时滚动。
+ *
+ * 为什么需要这层包装：WebView2 在窗口最小化 / 被系统节流 / 文档隐藏时会**整次丢弃**
+ * `behavior:'smooth'` 的滚动调用——实测同一容器 smooth 滚到 3,000,000 后 scrollTop
+ * 仍是 0，而同步赋值立刻到位。跳页、搜索命中、大纲跳转、正反向定位全走这里，
+ * 不加兜底就会表现成「点了完全没反应」，而且只在用户切走窗口再回来时偶发。
+ */
+const smoothScrollTo = (el, top, reason) => {
+  if (!el) return
+  const hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden'
+  if (hidden) {
+    el.scrollTop = Math.max(0, top)
+    logger.debug('PDF跳转（页面不可见，瞬时落位）', { reason, top })
+    return
+  }
+  el.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
+}
+
 const scrollViewerBy = (deltaY, reason) => {
   const el = bodyRef.value
   if (!el) return
-  el.scrollBy({ top: deltaY, behavior: 'smooth' })
+  const hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden'
+  if (hidden) el.scrollTop += deltaY
+  else el.scrollBy({ top: deltaY, behavior: 'smooth' })
   scheduleRenderVisible()
   logger.debug('PDF键盘滚动', { reason, deltaY })
 }
@@ -931,24 +965,43 @@ const renderVisible = ({ bufferFactor = 1 } = {}) => {
   const bottom = top + el.clientHeight
   const BUFFER = el.clientHeight * bufferFactor
 
-  // 可见区间完全由几何算出（不读 DOM），再反查页码对应的 page 对象。
+  // 可见区间完全由几何算出（不读 DOM），再按页码直接索引 page 对象。
   const geo = pageGeometry.value
-  const byNum = new Map()
-  for (const page of pages) byNum.set(page.num, page)
+  const table = pageByNum.value
 
+  // 先用二分找到可见区间起点，只扫视口附近那几十项 —— 原实现从第 1 页线性扫到
+  // 当前页，滚到 4000 页时每次滚动要白扫 4000 次比较。
   const active = []
-  for (const item of geo) {
-    if (item.top + item.height < top - BUFFER) continue
+  let lo = 0
+  let hi = geo.length - 1
+  let startIdx = 0
+  const fromY = top - BUFFER
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (geo[mid].top + geo[mid].height < fromY) lo = mid + 1
+    else { startIdx = mid; hi = mid - 1 }
+  }
+  for (let i = startIdx; i < geo.length; i += 1) {
+    const item = geo[i]
     if (item.top > bottom + BUFFER) break
-    const page = byNum.get(item.num)
+    const page = table[item.num]
     if (page) active.push({ page, center: item.top + item.height / 2 })
   }
 
   // 释放远离视口的已渲染页，避免 5000 页把内存吃穿。
-  for (const page of pages) {
+  // 只扫当前页前后一个窗口：全量扫 5000 页会把「每次滚动」变成 5000 次比较，
+  // 而真正可能超距的只有跳页时遗留的那几页。
+  const center = currentPage.value
+  const releaseFrom = Math.max(0, center - 1 - 8)
+  const releaseTo = Math.min(pages.length, center + 8)
+  for (let i = releaseFrom; i < releaseTo; i += 1) {
+    const page = pages[i]
+    if (!page) continue
     if (!page.image) continue
-    if (Math.abs(page.num - currentPage.value) > 6) doc.freePage(page)
+    if (Math.abs(page.num - center) > 6) doc.freePage(page)
   }
+  // 其余已渲染页（跳页后遗留的）由 host 的 LRU 兜底释放；这里不再全量扫，
+  // 否则每次滚动都是 5000 次比较。
 
   // 提交顺序就是出图顺序：后端只有一个 pdfium 工作线程、按 FIFO 取任务。若按 DOM 顺序
   // （文档自上而下）提交，滚到第 300 页、缓冲区覆盖 297–303 时，会先栅格化 297 再轮到 300，
@@ -1242,7 +1295,24 @@ const runSearch = async (reason = 'manual') => {
   const seq = ++searchSeq
   logger.info('PDF搜索开始', { reason, keywordLength: q.length })
   try {
-    const resp = await doc.search(q)
+    // 增量搜索：每扫完一块就把已有结果显示出来，读者不必等整本扫完。
+    // 首块命中后立刻跳转过去，后续块继续补进列表（缩略图式的「边搜边给」）。
+    let firstChunkShown = false
+    const resp = await doc.search(q, {
+      onProgress: ({ hits: partial, scannedTo, total }) => {
+        if (seq !== searchSeq) return
+        if (!partial.length || !scannedTo) return
+        searchHits.value = partial
+        rebuildSearchRects()
+        if (!firstChunkShown) {
+          firstChunkShown = true
+          gotoSearchHit(0, 'search-first-chunk')
+        }
+        if (total) {
+          status.value = `搜索中… ${scannedTo}/${total} 页，${partial.length} 个匹配`
+        }
+      },
+    })
     if (seq !== searchSeq) {
       logger.debug('PDF搜索结果已过期，忽略', { reason, keywordLength: q.length })
       return
@@ -1441,6 +1511,60 @@ const getSelectionInfo = () => {
   return { text, page: pageNum }
 }
 
+// ─────────────────── 文本导出（整页 / 全文翻译用）───────────────────
+/**
+ * 取某一页的纯文本，按视觉行拼回段落。
+ *
+ * 数据源就是已加载的文本层（`page.lines`），不会额外调用后端 —— 读者能看到的那一页
+ * 必然是已渲染的，它的文字一定在内存里。未加载时返回空串，由调用方先滚动到该页。
+ *
+ * 行拼接规则：同一行 span 内文字已是完整行；行与行之间，上一行以句末标点结尾
+ * 就换行（视为段落边界），否则补一个空格 —— 中文排版里硬换行的句子要接回去，
+ * 否则翻译接口会对半句话逐句翻，结果支离破碎。
+ */
+const pageTextAt = (num) => {
+  const page = pages[Number(num) - 1]
+  if (!page || !Array.isArray(page.lines) || !page.lines.length) return ''
+  const rows = page.lines
+    .map((l) => ({
+      text: String(l.text || '').replace(/\s+$/g, ''),
+      top: l.topPt,
+    }))
+    .filter((r) => r.text.trim())
+    .sort((a, b) => a.top - b.top)
+  let out = ''
+  for (const row of rows) {
+    if (!out) {
+      out = row.text
+      continue
+    }
+    if (/[。！？.!?:：;；】」』”’]$/.test(out)) out += '\n' + row.text
+    else out += ' ' + row.text
+  }
+  return out.trim()
+}
+
+/**
+ * 导出整本文本（逐页，空行分段）。
+ *
+ * 逐页读 `pageTextAt`，未渲染的页没有文本层可用 —— 这对「全文翻译」是个真实的限制：
+ * 让用户翻完 5000 页再翻译没有意义。因此这里对未加载页显式跳过，并在返回值里告知
+ * 实际取到的页数，由宿主决定是提示「先加载更多页」还是就按已加载的部分翻。
+ */
+const exportText = ({ fromPage = 1, toPage = 0 } = {}) => {
+  const start = Math.max(1, Number(fromPage) || 1)
+  const end = Math.min(pages.length, Number(toPage) || pages.length)
+  const parts = []
+  const loadedPages = []
+  for (let n = start; n <= end; n += 1) {
+    const t = pageTextAt(n)
+    if (!t) continue
+    loadedPages.push(n)
+    parts.push(t)
+  }
+  return { text: parts.join('\n\n'), loadedPages, requested: { start, end } }
+}
+
 // ─────────────────── 正向：源码 -> PDF（含完整高亮框）───────────────────
 const flashBox = ref(null)
 let flashTimer = null
@@ -1458,7 +1582,7 @@ const scrollToPagePoint = (pageNum, yPt) => {
   if (!item) return
   const target = item.top + yPt * cssScale.value - el.clientHeight * 0.35
   recomputeWindow()
-  el.scrollTo({ top: Math.max(0, target), behavior: 'smooth' })
+  smoothScrollTo(el, target, 'page-point')
   scheduleRenderVisible()
 }
 
@@ -1535,7 +1659,7 @@ const goToPage = (n, { align = 'top' } = {}) => {
   // 立即重算一次窗口：平滑滚动的第一帧之前就把目标页放进 DOM，
   // 用户不会看到一屏空白再慢慢填内容。
   recomputeWindow()
-  el.scrollTo({ top, behavior: 'smooth' })
+  smoothScrollTo(el, top, 'go-to-page')
 
   // 滚动结束后再校准一次（滚动过程中布局可能因图片加载而变化）。
   scheduleRenderVisible()
@@ -1731,6 +1855,9 @@ defineExpose({
   getOutline: doc.getOutline,
   getSelectionInfo,
   getSelectionRects,
+  // 整页 / 全文翻译的数据源
+  pageTextAt,
+  exportText,
   addHighlightFromSelection,
   reAddHighlight,
   deleteHighlight,

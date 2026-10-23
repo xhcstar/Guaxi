@@ -293,6 +293,11 @@ lettre = { version = "0.11.23", default-features = false, features = ["builder",
 rustls-native-certs = "0.8.5"
 socks = "0.3.4"
 ego-tree = "0.10"
+# 通知：故意锁在 2.3.x —— 2.4+ 要求 tauri ^2.10，会把 tauri/wry 整体升级。
+tauri-plugin-notification = "=2.3.3"
+cms = "0.2.3"
+x509-cert = "0.3.0"
+pgp = "0.21.0"
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
@@ -308,6 +313,9 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Memory",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
+    # Office/WPS 检测：只读 HKCU/HKLM 的 App Paths 与 .docx 关联，
+    # 用系统自带注册表 API，不引 winreg 之类的新依赖。
+    "Win32_System_Registry",
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

@@ -43,6 +43,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import { Icon } from '@iconify/vue'
 import refreshIcon from '@iconify-icons/lucide/refresh-cw'
 import { createLogger } from '../../../utils/logger'
@@ -75,6 +76,49 @@ const frameNote = computed(() => {
 
 let blobUrl = ''
 let loadToken = 0
+
+/**
+ * 给 HTML 文档注入链接分流脚本。
+ *
+ * 用 postMessage 而不是直接 `window.open`：sandbox 文档没有 allow-popups，
+ * `window.open` 会被静默拦掉；消息通道不受沙箱限制，且宿主能拿回原始 href。
+ */
+const LINK_BRIDGE = `<script>(function(){
+  document.addEventListener('click', function (e) {
+    var a = e.target && e.target.closest ? e.target.closest('a') : null;
+    if (!a) return;
+    var href = String(a.getAttribute('href') || '').trim();
+    if (!href) return;
+    if (/^javascript:/i.test(href)) { e.preventDefault(); return; }
+    if (!/^(https?:|mailto:|tel:)/i.test(href)) return;
+    e.preventDefault();
+    parent.postMessage({ __guaxiLink: href }, '*');
+  }, true);
+})();<\/script>`
+
+const withLinkBridge = (html) => {
+  if (!allowScripts.value) {
+    // 脚本被禁用时注入的这段不会执行，但仍会作为文本留在文档里；
+    // 这种情况下浏览器默认导航也无法避免，故只在允许脚本时注入。
+    return html
+  }
+  const at = html.search(/<\/body>/i)
+  if (at >= 0) return html.slice(0, at) + LINK_BRIDGE + html.slice(at)
+  return html + LINK_BRIDGE
+}
+
+const onHostMessage = (event) => {
+  // 只接受来自本组件 iframe 的消息：blob URL 本身就是唯一标识。
+  if (!frameRef.value || event.source !== frameRef.value.contentWindow) return
+  const href = event.data && event.data.__guaxiLink
+  if (!href) return
+  openUrl(String(href)).catch((error) => {
+    logger.warn('[DocHtmlReader] open link failed', {
+      href,
+      error: String(error?.message || error),
+    })
+  })
+}
 
 const revokeBlob = () => {
   if (blobUrl) {
@@ -115,7 +159,13 @@ const load = async () => {
     if (token !== loadToken) return
     if (!html.trim()) throw new Error('HTML 文件内容为空')
 
-    const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
+    // 在文档里挂一段极小的链接分流脚本。
+    //
+    // 这个 iframe 是**完全 sandboxed**（不给 allow-same-origin），所以宿主读不到
+    // contentDocument、无法像电子书那���在外部挂监听；只能把处理逻辑随文档一起送进去。
+    // 注入的脚本只做一件事：把绝对外链的默认导航改成 postMessage 回宿主，
+    // 由宿主用系统浏览器打开 —— 否则点一个链接，阅读器本身就被导航走了。
+    const blob = new Blob([withLinkBridge(html)], { type: 'text/html;charset=utf-8' })
     blobUrl = URL.createObjectURL(blob)
     if (frameRef.value) frameRef.value.src = blobUrl
     loading.value = false
@@ -136,11 +186,13 @@ const reload = () => {
 }
 
 onMounted(() => {
+  window.addEventListener('message', onHostMessage)
   void load()
 })
 
 onBeforeUnmount(() => {
   loadToken += 1
+  window.removeEventListener('message', onHostMessage)
   revokeBlob()
 })
 

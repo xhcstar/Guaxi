@@ -1,7 +1,14 @@
 <template>
   <n-message-provider>
     <div class="guaxi-reader">
-      <component :is="readerComponent" v-if="readerComponent" :filePath="filePath" :fileType="fileType"
+      <!-- Office 文档走统一入口：交给本机 Office/WPS，否则 WordCraft 系列，不再自绘版式。 -->
+      <DocOfficeReader
+        v-if="isOfficeType"
+        :path="filePath"
+        :name="fileName"
+        :kind="fileType"
+      />
+      <component :is="readerComponent" v-else-if="readerComponent" :filePath="filePath" :fileType="fileType"
         :fileName="fileName" :library="library" :importFileId="Number(importFileId) || 0" @close=" emit('close')" />
       <div v-else class="unknown-type">
         不支持的文件类型: {{ fileType }}
@@ -18,8 +25,8 @@ import GuaxiConvertPDFReader from './GuaxiConvertPDFReader.vue'
 import GuaxiMarkdownReader from './GuaxiMarkdownReader.vue'
 import GuaxiHtmlReader from './GuaxiHtmlReader.vue'
 import GuaxiEpubReader from './GuaxiEpubReader.vue'
-import GuaxiWordReader from './GauxiWordReader.vue'
 import GuaxiTextReader from './GuaxiTextReader.vue'
+import DocOfficeReader from './readers/DocOfficeReader.vue'
 
 const logger = createLogger('GuaxiReader')
 // import { Base64 } from 'js-base64'
@@ -62,6 +69,13 @@ const props = defineProps({
 // })
 
 // 更严格的组件选择逻辑
+/** Office 三件套（含旧格式）不再自绘，统一交给 DocOfficeReader。 */
+const isOfficeType = computed(() =>
+  ['doc', 'docx', 'word', 'xls', 'xlsx', 'ods', 'ppt', 'pptx', 'odp', 'rtf', 'odt'].includes(
+    String(props.fileType || '').toLowerCase()
+  )
+)
+
 const readerComponent = computed(() => {
   const { fileType, filePath, fileName, library } = props
   logger.info('readerComponent', fileType, filePath, fileName, library)
@@ -78,9 +92,6 @@ const readerComponent = computed(() => {
     html: GuaxiHtmlReader,
     htm: GuaxiHtmlReader,
     epub: GuaxiEpubReader,
-    doc: GuaxiWordReader,
-    docx: GuaxiWordReader,
-    word: GuaxiWordReader,
     txt: GuaxiTextReader
   }
 

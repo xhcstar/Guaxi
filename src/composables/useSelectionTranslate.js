@@ -53,7 +53,15 @@ const normalizeSelectionText = (raw) => {
     .trim()
 }
 
-export function useSelectionTranslate({ maxChars = 4000, getContainer = null } = {}) {
+/**
+ * @param {object} [opts]
+ * @param {number} [opts.maxChars] 超过这么长的选区不翻译（避免把整章塞进接口）。
+ * @param {() => HTMLElement|null} [opts.getContainer] 面板绝对定位的参照容器。
+ * @param {() => Selection|null} [opts.getSelection] 选区来源。
+ *   默认取主文档的 `window.getSelection()`；阅读器正文在 iframe 里时必须传入
+ *   `() => iframe.contentDocument.getSelection()`，否则永远选不中任何文字。
+ */
+export function useSelectionTranslate({ maxChars = 4000, getContainer = null, getSelection = null } = {}) {
   const visible = ref(false)
   const pinned = ref(false)
   const busy = ref(false)
@@ -215,7 +223,7 @@ export function useSelectionTranslate({ maxChars = 4000, getContainer = null } =
       if (!event?.ctrlKey) {
         return false
       }
-      const sel = window.getSelection?.()
+      const sel = getSelection ? getSelection() : window.getSelection?.()
       const text = sel ? String(sel.toString() || '').trim() : ''
       if (!text) {
         if (visible.value && !pinned.value) close()

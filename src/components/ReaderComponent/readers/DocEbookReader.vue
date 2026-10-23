@@ -1,5 +1,5 @@
 <template>
-  <div class="guaxi-doc-reader" data-reader="ebook">
+  <div ref="ebookRoot" class="guaxi-doc-reader" data-reader="ebook">
     <div class="guaxi-doc-reader__bar">
       <span class="guaxi-doc-reader__title" :title="path">{{ title || name }}</span>
       <span class="guaxi-doc-reader__badge">{{ kindLabel }}</span>
@@ -84,6 +84,21 @@
       >
         <Icon :icon="tocIcon" width="15" height="15" />
       </button>
+
+      <!--
+        朗读：从当前位置读起，边读边高亮当前句；再次点击停止。
+        「点哪读哪」由正文里的点击接管（见 onFrameLoad 的 dblclick 分流）。
+      -->
+      <button
+        class="guaxi-doc-reader__icon-btn"
+        :class="{ 'is-on': readAloudPlaying }"
+        :title="readAloudPlaying ? '停止朗读' : '从当前位置朗读'"
+        :aria-label="readAloudPlaying ? '停止朗读' : '朗读'"
+        :aria-pressed="readAloudPlaying"
+        @click="toggleReadAloud"
+      >
+        <Icon :icon="readAloudPlaying ? stopIcon : volumeIcon" width="15" height="15" />
+      </button>
     </div>
 
 
@@ -130,6 +145,30 @@
         <Icon :icon="closeIcon" width="15" height="15" />
       </button>
     </div>
+
+    <!-- 划词译文面板：与编辑器 / PDF 阅读器同一套组件，交互一致。 -->
+    <GuaxiSelectionTranslatePanel
+      v-if="selectionTranslate.visible.value"
+      :pos="selectionTranslate.pos.value"
+      :raw="selectionTranslate.raw.value"
+      :result="selectionTranslate.result.value"
+      :error="selectionTranslate.error.value"
+      :busy="selectionTranslate.busy.value"
+      :pinned="selectionTranslate.pinned.value"
+      :items="selectionTranslate.items.value"
+      :from-lang="selectionTranslate.fromLang.value"
+      :to-lang="selectionTranslate.toLang.value"
+      :lang-options="selectionTranslate.langOptions"
+      :word-meta="selectionTranslate.wordMeta.value"
+      @translate="selectionTranslate.translate(selectionTranslate.raw.value)"
+      @copy="selectionTranslate.copyResult()"
+      @swap-langs="selectionTranslate.swapLangs()"
+      @toggle-pin="selectionTranslate.togglePin()"
+      @update:pos="(v) => { selectionTranslate.pos.value = v }"
+      @update:from-lang="(v) => { selectionTranslate.fromLang.value = v }"
+      @update:to-lang="(v) => { selectionTranslate.toLang.value = v }"
+      @close="selectionTranslate.close()"
+    />
 
     <div v-if="loading" class="guaxi-doc-reader__body">
       <div class="guaxi-doc-reader__center">
@@ -326,7 +365,14 @@ import tocIcon from '@iconify-icons/lucide/list-tree'
 import closeIcon from '@iconify-icons/lucide/x'
 import arrowUpIcon from '@iconify-icons/lucide/arrow-up'
 import arrowDownIcon from '@iconify-icons/lucide/arrow-down'
+import volumeIcon from '@iconify-icons/lucide/volume-2'
+import stopIcon from '@iconify-icons/lucide/square'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import { createLogger } from '../../../utils/logger'
+import { useReaderReadAloud } from '../../../composables/useReaderReadAloud'
+import { useSelectionTranslate } from '../../../composables/useSelectionTranslate'
+import { useSelectionReadAloud } from '../../../composables/useSelectionReadAloud'
+import GuaxiSelectionTranslatePanel from '../../HomeViewComponent/GuaxiSelectionTranslatePanel.vue'
 import './readerPane.css'
 import { sanitizeSectionHtml } from './ebookSanitize.js'
 
@@ -697,25 +743,50 @@ const goSection = (index) => {
   activeIndex.value = next
 }
 
+/** 去掉 `../`、`./` 与开头的 `/`，让不同来源的路径能直接比较。 */
+const normalizeHrefPath = (raw) => {
+  const parts = []
+  for (const seg of String(raw || '').split('\\').join('/').split('/')) {
+    if (!seg || seg === '.') continue
+    if (seg === '..') { parts.pop(); continue }
+    parts.push(seg)
+  }
+  return parts.join('/')
+}
+
 /**
  * 按 href 跳到书籍内某一节。
  *
- * 目录项与章节内的相对链接都走这里：先按完整 href 精确匹配，
- * 再退一步用「谁以这个 href 结尾」做兜底（章节文件可能在子目录里）。
+ * 目录项与章节内的相对链接都走这里。匹配分三层，从严到松：
+ *   1. 归一化后整串相等；
+ *   2. 一方以另一方结尾（章节文件可能在不同目录层级，如 `part0006.html` vs `text/part0006.html`）；
+ *   3. 只比文件名（`OEBPS/text/part0006.html` 与 `part0006.html`）。
  * 目录项若指向节内锚点（`ch1.xhtml#part2`），只切到对应的节。
  */
 const jumpToHref = (href) => {
-  const target = String(href || '').split('#')[0]
+  const raw = String(href || '').split('#')[0]
+  if (!raw) return
+  const target = normalizeHrefPath(raw)
   if (!target) return
-  const idx = sections.value.findIndex(
-    (s) => s.href === target || String(s.href).endsWith(target)
-  )
+  const list = sections.value
+  const base = (h) => h.split('?')[0]
+  let idx = list.findIndex((s) => normalizeHrefPath(base(String(s.href))) === target)
+  if (idx < 0) {
+    idx = list.findIndex((s) => {
+      const sh = normalizeHrefPath(base(String(s.href)))
+      return sh.endsWith('/' + target) || target.endsWith('/' + sh)
+    })
+  }
+  if (idx < 0) {
+    const file = target.split('/').pop()
+    idx = list.findIndex((s) => normalizeHrefPath(base(String(s.href))).split('/').pop() === file)
+  }
   if (idx >= 0) {
     goSection(idx)
     return
   }
-  const sameSection = sections.value.findIndex((s) => String(href).endsWith(s.href))
-  if (sameSection >= 0) goSection(sameSection)
+  // 找不到对应章节：可能是 `kindle:pos:` 这类内部位置锚点，或指向书内不存在的资源。
+  logger.debug('[DocEbookReader] unresolvable in-book link', { href: raw })
 }
 
 /** 当前 iframe 的 blob URL，切换章节时先回收，避免泄漏。 */
@@ -756,8 +827,26 @@ const onFrameLoad = () => {
     doc.addEventListener('click', (event) => {
       const anchor = event.target?.closest?.('a')
       if (!anchor) return
-      const href = anchor.getAttribute('href') || ''
-      if (!href || /^(https?:|mailto:|tel:|#)/i.test(href)) return
+      const href = String(anchor.getAttribute('href') || '').trim()
+      // `javascript:` 一律吞掉：书内不应有，真有也不能在 blob 文档里执行。
+      if (!href || /^javascript:/i.test(href)) {
+        event.preventDefault()
+        return
+      }
+      // 外链交给系统浏览器。不能让它在这个 blob 文档里自行导航 —— 那会把整本书
+      // 的 iframe 变成那个网页，读者除了关掉重开没有别的退路。
+      if (/^(https?:|mailto:|tel:)/i.test(href)) {
+        event.preventDefault()
+        openUrl(href).catch((error) => {
+          logger.warn('[DocEbookReader] open external link failed', {
+            href,
+            error: String(error?.message || error),
+          })
+        })
+        return
+      }
+      // 纯页内锚点：交给浏览器滚到目标 id（同一节内）。
+      if (href.startsWith('#')) return
       event.preventDefault()
       jumpToHref(href)
     })
@@ -904,6 +993,33 @@ const onFrameSelection = () => {
   const bar = doc.createElement('div')
   bar.className = 'gx-selbar'
   bar.style.cssText = `position:absolute;left:${Math.max(4, rect.left)}px;top:${Math.max(4, rect.top - 34)}px;z-index:9999;display:flex;gap:4px;background:#222;border-radius:6px;padding:4px;box-shadow:0 4px 12px rgba(0,0,0,.3);`
+
+  // 实用动作：翻译这段文字、朗读这段文字。放在颜色之前 —— 「想弄懂它」比「想标记它」
+  // 更常发生在第一次划词的时候。
+  const actionBtn = (label, title, onClick) => {
+    const btn = doc.createElement('button')
+    btn.textContent = label
+    btn.title = title
+    btn.style.cssText =
+      'border:0;background:#3a3f47;color:#eaeaea;border-radius:4px;height:22px;padding:0 7px;font-size:11px;cursor:pointer;'
+    btn.addEventListener('mousedown', (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      onClick()
+    })
+    bar.appendChild(btn)
+  }
+  const sep = doc.createElement('span')
+  sep.style.cssText = 'width:1px;height:16px;background:rgba(255,255,255,.18);align-self:center;'
+  actionBtn('译', '翻译选中的文字', () => {
+    removeSelectionBar()
+    openTranslate(text, rect)
+  })
+  actionBtn('读', '朗读选中的文字', () => {
+    removeSelectionBar()
+    speakSelection(text)
+  })
+  bar.appendChild(sep)
 
   const colors = { '#ffd600': '黄', '#a5d6a7': '绿', '#90caf9': '蓝', '#f48fb1': '粉' }
   Object.entries(colors).forEach(([color, label]) => {
@@ -1095,6 +1211,12 @@ const onKeydown = (event) => {
     else if (panelMode.value) panelMode.value = ''
     return
   }
+  // 空格：朗读开关。放在翻节之前 —— 阅读时按空格「开始读」比「翻到下一节」更常用。
+  if (event.key === ' ') {
+    event.preventDefault()
+    toggleReadAloud()
+    return
+  }
   if (event.key === 'ArrowLeft') {
     event.preventDefault()
     goSection(activeIndex.value - 1)
@@ -1195,6 +1317,75 @@ onMounted(() => {
   window.addEventListener('keydown', onKeydown)
   void loadBook()
 })
+
+// ───────────────────────── 朗读 / 翻译 ─────────────────────────
+// 电子书的正文在 iframe 里，所以「读什么、选什么」都必须走 iframe 自己的 document/window，
+// 主文档的 window.getSelection() 永远是空的 —— 这是最容易踩的一个坑。
+
+/** 当前 iframe 的滚动容器（逐句朗读依赖它把高亮句滚进视口）。 */
+const frameScrollRoot = () => frameRef.value?.contentDocument?.scrollingElement || null
+
+const readAloud = useReaderReadAloud({
+  getContext: () => {
+    const doc = frameRef.value?.contentDocument
+    return {
+      root: doc?.body || null,
+      scrollRoot: frameScrollRoot(),
+      win: frameRef.value?.contentWindow || window,
+      doc: doc || null,
+    }
+  },
+  getIdentity: () => ({ library: '', fileName: props.path }),
+  // 换节后旧句索引失效，必须重建会话，否则会从上一章的进度继续读。
+  speechIndex: computed(() => activeIndex.value),
+  onIndexChange: () => {},
+  ownerLabel: 'DocEbookReader',
+})
+const readAloudPlaying = readAloud.isPlaying
+const toggleReadAloud = () => readAloud.toggle()
+
+/** 读一小段选中文字（一次性合成，不进逐句会话，互不干扰）。 */
+const selectionSpeech = useSelectionReadAloud({
+  visible: computed(() => !readAloudPlaying.value),
+})
+const speakSelection = (text) => {
+  const t = String(text || '').trim()
+  if (!t) return
+  void selectionSpeech.toggle(t)
+}
+
+// 划词翻译：选区来源必须指向 iframe 的 document。
+const ebookRoot = ref(null)
+const selectionTranslate = useSelectionTranslate({
+  getContainer: () => ebookRoot.value || null,
+  getSelection: () => frameRef.value?.contentDocument?.getSelection?.() || null,
+})
+
+/**
+ * 打开译文面板。
+ *
+ * 位置用「选区矩形相对阅读器容器」的坐标：iframe 里的 rect 是 iframe 视口坐标，
+ * 要再加上 iframe 元素自身在容器里的偏移，否则面板会飘到左上角。
+ */
+const openTranslate = (text, rect) => {
+  const t = String(text || '').trim()
+  if (!t) return
+  const frame = frameRef.value
+  const container = ebookRoot.value
+  if (!frame || !container) return
+  const fr = frame.getBoundingClientRect()
+  const cr = container.getBoundingClientRect()
+  const PW = 460
+  let left = fr.left - cr.left + (rect?.left ?? 0)
+  left = Math.max(8, Math.min(left, Math.max(8, cr.width - PW - 8)))
+  let top = fr.top - cr.top + (rect?.bottom ?? 0) + 8
+  if (top + 300 > cr.height) {
+    top = Math.max(8, fr.top - cr.top + (rect?.top ?? 0) - 308)
+  }
+  selectionTranslate.pos.value = { left: Math.round(left), top: Math.round(top) }
+  selectionTranslate.visible.value = true
+  selectionTranslate.translate(t)
+}
 
 onBeforeUnmount(() => {
   loadToken += 1
