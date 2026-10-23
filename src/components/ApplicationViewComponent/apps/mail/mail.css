@@ -1722,3 +1722,45 @@
 .mail-row.is-dragging {
   opacity: 0.5;
 }
+
+/* ---------- 全文翻译面板 ---------- */
+
+.mail-translation {
+  margin-bottom: 16px;
+  border: 1px solid var(--mail-border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.mail-translation-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  background: var(--mail-accent-soft);
+  color: var(--mail-accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.mail-translation-head .mail-btn {
+  margin-left: auto;
+  height: 24px;
+  font-size: 11.5px;
+}
+
+/* 译文也铺在同一张浅色纸面上，和原文保持一致的可读性。 */
+.mail-translation .mail-body {
+  border-radius: 0;
+  margin: 0;
+}
+
+/* 「新建文件夹」入口：作为列表里的一项，而不是只藏在分区标题的 ＋ 里。 */
+.mail-folder-add {
+  color: var(--mail-text-muted);
+  font-size: 13px;
+}
+
+.mail-folder-add:hover {
+  color: var(--mail-accent);
+}

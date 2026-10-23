@@ -365,6 +365,36 @@ pub fn list_folders(account: &Account, password: &str) -> Result<Vec<MailFolder>
         });
     }
 
+    // 补齐缺失的标准角色。
+    //
+    // 有的服务器没有「草稿箱」或「已发送」（新账户尤其常见），但用户仍需要一个
+    // 固定位置——Mailspring / Outlook 都会把这类入口一直显示出来。
+    // 这里补成占位项；第一次往里写（保存草稿 / 发信存档）时再由调用方 CREATE。
+    //
+    // 只补 草稿 / 已发送 / 已删除 这三个「必须有」的：
+    // 存档在部分服务商那里是 Gmail 的 All Mail（语义不同），不强行造一个。
+    for (role, display, default_name) in [
+        (FolderRole::Drafts, "草稿", "Drafts"),
+        (FolderRole::Sent, "已发送", "Sent"),
+        (FolderRole::Trash, "已删除", "Trash"),
+    ] {
+        if folders.iter().any(|f| f.role == role) {
+            continue;
+        }
+        folders.push(MailFolder {
+            account_id: account.id.clone(),
+            name: default_name.to_string(),
+            display_name: display.to_string(),
+            delimiter: None,
+            role,
+            unread: 0,
+            total: 0,
+            uid_validity: 0,
+            uid_next: 0,
+            selectable: true,
+        });
+    }
+
     folders.sort_by(|a, b| {
         role_order(a.role)
             .cmp(&role_order(b.role))
@@ -779,9 +809,22 @@ pub fn append_to_folder(
         .collect();
     let date: Option<chrono::DateTime<chrono::FixedOffset>> =
         Some(chrono::Local::now().fixed_offset());
-    session
+    // 服务器上还没有这个文件夹（新建账户常见）时先建再追加，
+    // 否则「保存草稿」会直接失败——用户会觉得草稿功能坏了。
+    if session
         .append_with_flags_and_date(&encoded, raw, &parsed_flags, date)
-        .map_err(|e| format!("保存到「{folder}」失败: {e}"))?;
+        .is_err()
+    {
+        session
+            .create(&encoded)
+            .map_err(|e| format!("创建「{folder}」失败: {e}"))?;
+        let _ = session.subscribe(&encoded);
+        let date: Option<chrono::DateTime<chrono::FixedOffset>> =
+            Some(chrono::Local::now().fixed_offset());
+        session
+            .append_with_flags_and_date(&encoded, raw, &parsed_flags, date)
+            .map_err(|e| format!("保存到「{folder}」失败: {e}"))?;
+    }
     let _ = session.logout();
     Ok(())
 }

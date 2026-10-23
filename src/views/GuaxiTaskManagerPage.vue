@@ -64,6 +64,14 @@
                     <span class="tm-type" :class="'tt-' + element.taskType">{{ typeLabel(element.taskType) }}</span>
                     <span v-if="element.deadline" class="tm-date deadline"><n-icon :component="Flag16Regular" />{{ element.deadline }}</span>
                     <span v-if="element.displayId" class="tm-did">{{ element.displayId }}</span>
+                    <button
+                      v-if="mailOriginOf(element)"
+                      class="tm-mail-origin"
+                      title="回到原邮件"
+                      @click.stop="openMailOrigin(element)"
+                    >
+                      ✉ 邮件
+                    </button>
                   </div>
                 </div>
               </template>
@@ -474,6 +482,33 @@ const showEditor = ref(false)
 const editing = ref(null)
 const saving = ref(false)
 const editForm = reactive({ status: '', title: '', deadline: '', notes: '' })
+/** 任务是从邮件转来的：取 :mailAccount/:mailFolder/:mailUid 自定义属性。 */
+function mailOriginOf(it) {
+  const fields = it.customFields || []
+  const pick = (name) => String(fields.find((f) => f && f.name === name)?.value || '')
+  const accountId = pick('mailAccount')
+  const folder = pick('mailFolder')
+  const uid = Number(pick('mailUid')) || 0
+  return accountId && folder && uid ? { accountId, folder, uid } : null
+}
+
+/**
+ * 回到原邮件：邮件窗口是独立窗口（label 固定为 app-tools-mail）。
+ * 这里不能跨窗口直接开某封邮件，退回「把定位写进剪贴板并在应用里提示」太绕，
+ * 改为发给邮件窗口一个事件——它监听后自己定位并打开。
+ */
+async function openMailOrigin(it) {
+  const origin = mailOriginOf(it)
+  if (!origin) return
+  try {
+    await invoke('mail_open_origin', origin)
+    message.success('已在邮件窗口中打开')
+  } catch (e) {
+    logger.warn('打开原邮件失败', e)
+    message.warning('邮件窗口没有打开，或这封邮件已不在本地')
+  }
+}
+
 const openEditor = (it) => {
   editing.value = it
   editForm.status = it.status || 'TODO'
@@ -1022,6 +1057,14 @@ onUnmounted(() => {
 .tm-type { font-size: 11px; padding: 0 6px; border-radius: 8px; color: #fff; }
 .tm-type.tt-bug { background: #d03050; } .tm-type.tt-task { background: #2080f0; } .tm-type.tt-other { background: #8a8f99; }
 .tm-did { font-size: 11px; color: var(--guaxi-text-secondary); opacity: 0.85; }
+/* 源自邮件的任务：给一个可点的来源标记，点它回到原邮件。 */
+.tm-mail-origin {
+  font-size: 11px; padding: 1px 7px; border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--guaxi-border) 80%, transparent);
+  background: transparent; color: var(--guaxi-text-secondary);
+  cursor: pointer; font-family: inherit; line-height: 1.6;
+}
+.tm-mail-origin:hover { color: #2080f0; border-color: #2080f0; }
 
 /* 日历 */
 .tm-calendar { flex: 1 1 auto; min-height: 0; padding: 12px; box-sizing: border-box; }

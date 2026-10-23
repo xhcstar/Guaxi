@@ -132,6 +132,9 @@
           源码
         </button>
         <button class="mail-fmt-btn" title="添加附件" @click="pickAttachments">📎 附件</button>
+        <button class="mail-fmt-btn" title="从笔记库选择文件作为附件" @click="pickFromNotes">
+          📚 笔记
+        </button>
 
         <span style="margin-left: auto"></span>
         <button class="mail-btn" :disabled="sending" @click="$emit('save-draft')">保存草稿</button>
@@ -190,10 +193,11 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
 import { ContractOutline, ExpandOutline } from '@vicons/ionicons5'
 import { open } from '@tauri-apps/plugin-dialog'
+import { invoke } from '@tauri-apps/api/core'
 import { useContactsStore } from '../../../../stores/contactsStore'
 import AddressInput from './AddressInput.vue'
 import AddressPicker from './AddressPicker.vue'
@@ -384,19 +388,118 @@ async function pickAttachments() {
   try {
     const files = await open({ multiple: true, title: '选择附件' })
     if (!files) return
-    const list = Array.isArray(files) ? files : [files]
-    const next = [...props.draft.attachments]
-    for (const path of list) {
-      if (!path) continue
-      if (next.some((a) => a.path === path)) continue
-      const name = path.replace(/\\/g, '/').split('/').pop()
-      next.push({ path, name })
-    }
-    emit('update', { attachments: next })
+    addPaths(Array.isArray(files) ? files : [files])
   } catch (error) {
     logger.warn('选择附件失败', error)
   }
 }
+
+/** 从笔记库挑文件作为附件：直接把笔记库目录当起始位置，省得用户自己找。 */
+async function pickFromNotes() {
+  try {
+    const root = await invoke('get_libraries_root').catch(() => '')
+    const files = await open({
+      multiple: true,
+      title: '从笔记库选择文件',
+      defaultPath: root || undefined,
+    })
+    if (!files) return
+    addPaths(Array.isArray(files) ? files : [files])
+  } catch (error) {
+    logger.warn('从笔记库选择附件失败', error)
+  }
+}
+
+function addPaths(list) {
+  const next = [...props.draft.attachments]
+  for (const path of list) {
+    if (!path) continue
+    if (next.some((a) => a.path === path)) continue
+    const name = path.replace(/\\/g, '/').split('/').pop()
+    next.push({ path, name })
+  }
+  emit('update', { attachments: next })
+}
+
+/** 把一段文本作为正文追加（用于「把邮件/笔记内容发出去」这类场景）。 */
+function appendBodyText(text, asQuote = false) {
+  const safe = String(text || '').trim()
+  if (!safe) return
+  const html = safe
+    .split(/\n{2,}/)
+    .map((p) => `<p>${escapeHtml(p).replace(/\n/g, '<br>')}</p>`)
+    .join('')
+  const wrapped = asQuote ? `<blockquote>${html}</blockquote>` : html
+  const nextHtml = `${props.draft.html || ''}${wrapped}`
+  emit('update', { html: nextHtml, text: `${props.draft.text || ''}\n\n${safe}` })
+  if (!sourceMode.value && editorRef.value) {
+    editorRef.value.innerHTML = nextHtml
+  }
+}
+
+function escapeHtml(text) {
+  return String(text || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+// ── 自动暂存 ──
+//
+// 每隔一段时间把当前草稿写进本地（不发送、不碰服务器）。目的很具体：
+// 写完一大段话，点关闭或切账户后内容不能凭空消失——邮件客户端里最容易让人恼火的事
+// 就是"写了半小时的邮件没了"。
+const draftId = ref(props.draft.id || `draft-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+let autosaveTimer = null
+const lastSavedAt = ref(0)
+
+async function stashNow() {
+  const hasContent =
+    props.draft.subject.trim() ||
+    (props.draft.html || '').trim() ||
+    props.draft.to.length ||
+    props.draft.text.trim()
+  if (!hasContent) return null
+  try {
+    const payload = {
+      ...props.draft,
+      id: draftId.value,
+      // 编辑区里的最新内容优先：用户可能还没触发 input 事件。
+      html: editorRef.value && !sourceMode.value ? editorRef.value.innerHTML : htmlSource.value,
+    }
+    await invoke('mail_stash_draft', { draft: payload })
+    lastSavedAt.value = Date.now()
+    return draftId.value
+  } catch (error) {
+    logger.warn('自动暂存失败', error)
+    return null
+  }
+}
+
+function startAutosave() {
+  stopAutosave()
+  // 20 秒一次：太频繁会不断写盘，太稀疏又会在崩溃时丢太多内容。
+  autosaveTimer = setInterval(() => {
+    stashNow()
+  }, 20_000)
+}
+
+function stopAutosave() {
+  if (autosaveTimer) {
+    clearInterval(autosaveTimer)
+    autosaveTimer = null
+  }
+}
+
+onMounted(startAutosave)
+
+onBeforeUnmount(() => {
+  stopAutosave()
+  // 关闭时立刻存一次：这一步才是"不会丢"的保证，定时器只是兜底。
+  stashNow()
+})
+
+defineExpose({ appendBodyText, addPaths, stashNow })
 
 function removeAttachment(path) {
   emit('update', { attachments: props.draft.attachments.filter((a) => a.path !== path) })

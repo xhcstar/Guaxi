@@ -206,6 +206,7 @@ const editing = ref(false)
 const testing = ref(false)
 const probeResult = ref(null)
 const secretStored = ref(false)
+const customMode = ref(false)
 const overrideProxy = ref(false)
 const bypassText = ref('')
 
@@ -281,6 +282,7 @@ function startNew() {
 }
 
 function startEdit(account) {
+  customMode.value = false
   Object.assign(form, blank(), {
     ...account,
     proxy: account.proxy ? { ...account.proxy } : { mode: 'system', url: '', bypass: [] },
@@ -298,7 +300,19 @@ function cancel() {
   probeResult.value = null
 }
 
+/** 自定义 / 内网邮箱：清空预填，全部字段由用户填。 */
+function startCustom() {
+  customMode.value = true
+  form.imapHost = ''
+  form.imapPort = 993
+  form.imapSecurity = 'ssl'
+  form.smtpHost = ''
+  form.smtpPort = 465
+  form.smtpSecurity = 'ssl'
+}
+
 function applyPreset(preset) {
+  customMode.value = false
   form.imapHost = preset.imapHost
   form.imapPort = preset.imapPort
   form.imapSecurity = 'ssl'

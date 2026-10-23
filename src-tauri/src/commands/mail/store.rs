@@ -1075,8 +1075,16 @@ pub fn search(query: &SearchQuery) -> Result<Vec<MessageSummary>, String> {
             "unread" => sql.push_str(" AND m.seen = 0 AND m.outgoing = 0"),
             "flagged" => sql.push_str(" AND m.flagged = 1"),
             "attachments" => sql.push_str(" AND m.has_attachments = 1"),
-            "drafts" => {
-                sql.push_str(" AND m.folder IN (SELECT name FROM folders WHERE role = 'drafts')")
+            // 按「角色」跨文件夹筛选：收件箱 / 已发送 / 草稿 / 垃圾箱 / 存档…
+            // 一个账户可能有多个同角色文件夹（例如自定义的「存档/2024」），
+            // 所以按 role 子查询而不是写死名字。
+            // 例外：`sent` 与 `drafts` 都要求「这是我自己发出的」，
+            // 否则归档里被误标成已发送的邮件也会混进来。
+            "inbox" | "sent" | "drafts" | "trash" | "junk" | "archive" => {
+                sql.push_str(
+                    " AND m.folder IN (SELECT name FROM folders WHERE role = ?)",
+                );
+                args.push(Box::new(scope.to_string()));
             }
             _ => {}
         }

@@ -17,6 +17,7 @@
 pub mod contacts;
 /// 本地静态加密：正文与附件清单在落盘前加密，密钥存系统 keychain。
 pub mod crypto;
+pub mod export;
 pub mod imap;
 pub mod mime;
 pub mod model;
@@ -1400,11 +1401,33 @@ pub async fn mail_save_draft(app: AppHandle, request: SendRequest) -> Result<(),
         .map(|f| f.name)
         .ok_or_else(|| "账户没有草稿箱".to_string())?;
     let acc = account.clone();
+    let drafts_for_append = drafts.clone();
+    let password_for_append = password.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        imap::append_to_folder(&acc, &password, &drafts, &raw, &["draft", "seen"])
+        imap::append_to_folder(&acc, &password_for_append, &drafts_for_append, &raw, &["draft", "seen"])
     })
     .await
     .map_err(|e| format!("保存草稿任务失败: {e}"))??;
+
+    // 立刻同步一次草稿箱，让它在侧栏里马上可见。
+    // 只按 UID 增量拉，不重拉整个文件夹。
+    let (uid_validity, _) = store::folder_uid_state(&account.id, &drafts)?;
+    let last_uid = store::last_uid(&account.id, &drafts)?;
+    let settings = store::load_settings();
+    let acc = account.clone();
+    let drafts_for_sync = drafts.clone();
+    let snippet_len = settings.snippet_len as usize;
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        imap::sync_folder(
+            &acc,
+            &password,
+            &drafts_for_sync,
+            uid_validity,
+            last_uid,
+            snippet_len,
+        )
+    })
+    .await;
     Ok(())
 }
 
@@ -1472,4 +1495,322 @@ pub async fn mail_builtin_themes(app: AppHandle) -> Result<Vec<model::CustomThem
 pub async fn mail_clear_cache(app: AppHandle, account_id: Option<String>) -> Result<(), String> {
     ensure_init(&app)?;
     store::clear_cache(account_id.as_deref())
+}
+
+// ---------------------------------------------------------------------------
+// 导出 / 笔记桥 / 任务桥 / 草稿暂存
+// ---------------------------------------------------------------------------
+
+/// 把一封邮件组装成导出用的输入。正文优先取缓存，缺失时向服务器补拉。
+async fn export_input(
+    account_id: &str,
+    folder: &str,
+    uid: u32,
+) -> Result<export::ExportInput, String> {
+    let summary = store::get_summary(account_id, folder, uid)?
+        .ok_or_else(|| "本地没有这封邮件的记录".to_string())?;
+
+    let cached = store::get_body(account_id, folder, uid)?;
+    let (html, text) = match cached {
+        Some((html, text, _, true)) if html.is_some() || !text.is_empty() => (html, text),
+        _ => {
+            let account = load_account(account_id)?;
+            let password = account_password(&account)?;
+            let (f, u) = (folder.to_string(), uid);
+            let raw = tauri::async_runtime::spawn_blocking(move || {
+                imap::fetch_raw(&account, &password, &f, u)
+            })
+            .await
+            .map_err(|e| format!("取信任务失败: {e}"))??;
+            let parsed = mime::parse(&raw, false).ok_or("无法解析邮件内容")?;
+            (parsed.html, parsed.text)
+        }
+    };
+
+    let date = chrono::DateTime::from_timestamp(summary.date, 0)
+        .map(|d| {
+            d.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_default();
+
+    // 地址显示成 "Name <addr>"，无名时只留地址。
+    let fmt_addr = |a: &model::MailAddress| {
+        if a.name.trim().is_empty() {
+            a.address.clone()
+        } else {
+            format!("{} <{}>", a.name, a.address)
+        }
+    };
+    let to = summary.to_addrs().iter().map(fmt_addr).collect::<Vec<_>>().join(", ");
+    let cc = summary.cc_addrs().iter().map(fmt_addr).collect::<Vec<_>>().join(", ");
+
+    Ok(export::ExportInput {
+        subject: summary.subject.clone(),
+        from_name: summary.from_name.clone(),
+        from_addr: summary.from_addr.clone(),
+        to,
+        cc,
+        date,
+        text,
+        html,
+        labels: summary.labels.clone(),
+        account_id: account_id.to_string(),
+        folder: folder.to_string(),
+        uid,
+    })
+}
+
+/// 导出单封邮件到文件。`format` = markdown | html | pdf | word | text。
+#[command]
+pub async fn mail_export_message(
+    app: AppHandle,
+    account_id: String,
+    folder: String,
+    uid: u32,
+    format: String,
+    target_path: String,
+) -> Result<String, String> {
+    ensure_init(&app)?;
+    if target_path.trim().is_empty() {
+        return Err("目标路径为空".to_string());
+    }
+    let fmt = export::ExportFormat::parse(&format);
+    let input = export_input(&account_id, &folder, uid).await?;
+
+    match fmt {
+        export::ExportFormat::Markdown => {
+            let content = export::to_markdown(&input);
+            std::fs::write(&target_path, content).map_err(|e| format!("写入失败: {e}"))?;
+        }
+        export::ExportFormat::Html => {
+            let content = export::to_html(&input);
+            std::fs::write(&target_path, content).map_err(|e| format!("写入失败: {e}"))?;
+        }
+        export::ExportFormat::Text => {
+            let content = export::to_text(&input);
+            std::fs::write(&target_path, content).map_err(|e| format!("写入失败: {e}"))?;
+        }
+        export::ExportFormat::Word => {
+            let bytes = export::to_docx(&input)?;
+            std::fs::write(&target_path, bytes).map_err(|e| format!("写入失败: {e}"))?;
+        }
+        export::ExportFormat::Pdf => {
+            let md = export::to_markdown(&input);
+            let typst = export::markdown_to_typst(&md);
+            // 编译根目录用临时目录：邮件导出不需要 @preview 包与本地相对资源。
+            let root = std::env::temp_dir();
+            let bytes = tauri::async_runtime::spawn_blocking(move || {
+                crate::commands::typst_compile::compile_typ_source_to_pdf(root, typst)
+            })
+            .await
+            .map_err(|e| format!("PDF 编译任务失败: {e}"))??;
+            std::fs::write(&target_path, bytes).map_err(|e| format!("写入失败: {e}"))?;
+        }
+    }
+    Ok(target_path)
+}
+
+/// 把邮件正文保存进笔记库（Markdown 文件，带 front matter）。
+///
+/// 直接写文件而不是走 `update_note`：笔记库本来就以磁盘文件为事实来源，
+/// 写进去之后既有的文件监听与索引会自然收录，不需要第二套入库逻辑。
+#[command]
+pub async fn mail_save_to_notes(
+    app: AppHandle,
+    account_id: String,
+    folder: String,
+    uid: u32,
+    subdir: Option<String>,
+) -> Result<String, String> {
+    ensure_init(&app)?;
+    let root = crate::commands::settingview::get_libraries_root();
+    if root.trim().is_empty() {
+        return Err("还没有设置笔记库目录（设置 → 笔记库）".to_string());
+    }
+    let input = export_input(&account_id, &folder, uid).await?;
+    let markdown = export::to_markdown(&input);
+
+    let mut dir = std::path::PathBuf::from(root.trim());
+    if let Some(sub) = subdir.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        // 只允许一层字面目录名，防止 `../` 逃出笔记库。
+        if sub.contains("..") || sub.contains('/') || sub.contains('\\') {
+            return Err("目录名不能包含路径分隔符".to_string());
+        }
+        dir = dir.join(sub);
+    }
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建目录失败: {e}"))?;
+
+    let stem = sanitize_filename(&format!(
+        "{}-{}",
+        chrono::Local::now().format("%Y%m%d"),
+        if input.subject.trim().is_empty() {
+            "邮件".to_string()
+        } else {
+            input.subject.clone()
+        }
+    ));
+    let mut path = dir.join(format!("{stem}.md"));
+    let mut index = 1;
+    while path.exists() {
+        path = dir.join(format!("{stem}-{index}.md"));
+        index += 1;
+        if index > 999 {
+            return Err("同名文件过多，请换一个目录".to_string());
+        }
+    }
+    std::fs::write(&path, markdown).map_err(|e| format!("写入笔记失败: {e}"))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// 把邮件转为任务管理器的一条任务。
+///
+/// 走 `task_import` 的 org 通道（任务系统唯一的事实来源是 .org 文件），
+/// 不直接写它的 SQLite 索引，避免两套写入路径打架。
+#[command]
+pub async fn mail_to_task(
+    app: AppHandle,
+    account_id: String,
+    folder: String,
+    uid: u32,
+    category: Option<String>,
+    status: Option<String>,
+    deadline: Option<String>,
+) -> Result<u32, String> {
+    ensure_init(&app)?;
+    let input = export_input(&account_id, &folder, uid).await?;
+    let cat = category.clone().unwrap_or_else(|| "work".into());
+    let org = export::mail_to_task_org(
+        &input,
+        &cat,
+        status.as_deref().unwrap_or("TODO"),
+        deadline.as_deref().unwrap_or(""),
+    );
+    let import = crate::commands::taskmanager::TaskImportInput {
+        category: cat,
+        target_file_name: "mail-inbox.org".to_string(),
+        source_kind: "org".to_string(),
+        content: org,
+    };
+    let count = tauri::async_runtime::spawn_blocking(move || {
+        crate::commands::taskmanager::task_import(import)
+    })
+    .await
+    .map_err(|e| format!("导入任务失败: {e}"))??;
+    Ok(count as u32)
+}
+
+/// 从任务/其它模块跳回原邮件：把邮件窗口带到前台，并让它打开指定邮件。
+///
+/// 邮件跑在独立窗口（label `app-tools-mail`）里，无法跨窗口直接操作它的 store，
+/// 所以这里负责「唤起窗口 + 广播定位」，具体打开由窗口自己完成。
+#[command]
+pub async fn mail_open_origin(
+    app: AppHandle,
+    account_id: String,
+    folder: String,
+    uid: u32,
+) -> Result<(), String> {
+    use tauri::{Emitter, Manager};
+    let label = "app-tools-mail";
+    let Some(window) = app.get_webview_window(label) else {
+        return Err("邮件窗口没有打开，请先在应用页打开「邮件」".to_string());
+    };
+    window.show().map_err(|e| format!("显示窗口失败: {e}"))?;
+    window.unminimize().ok();
+    window.set_focus().ok();
+    // 窗口已在前台但前端可能还没就绪：事件可能丢失，所以前端自己也会读一次待打开队列。
+    window
+        .emit(
+            "mail-open-origin",
+            serde_json::json!({
+                "accountId": account_id,
+                "folder": folder,
+                "uid": uid,
+            }),
+        )
+        .map_err(|e| format!("通知邮件窗口失败: {e}"))?;
+    Ok(())
+}
+
+/// 删除一条已存草稿（续写后保存 / 发送成功时调用，避免草稿箱重复堆积）。
+#[command]
+pub async fn mail_discard_draft(
+    app: AppHandle,
+    account_id: String,
+    folder: String,
+    uid: u32,
+) -> Result<(), String> {
+    ensure_init(&app)?;
+    let account = load_account(&account_id)?;
+    let password = account_password(&account)?;
+    let (f, u) = (folder.clone(), uid);
+    let acc = account.clone();
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        imap::delete_permanently(&acc, &password, &f, &[u])
+    })
+    .await;
+    let _ = store::delete_message(&account_id, &folder, uid);
+    Ok(())
+}
+
+/// 暂存草稿到本地（不发送）。关闭编辑器 / 切账户后仍可续写。
+#[command]
+pub async fn mail_stash_draft(app: AppHandle, draft: serde_json::Value) -> Result<String, String> {
+    ensure_init(&app)?;
+    let dir = store::data_root(&app)?.join("drafts");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建草稿目录失败: {e}"))?;
+    let id = draft
+        .get("id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let path = dir.join(format!("{id}.json"));
+    let payload = serde_json::json!({
+        "id": id,
+        "savedAt": chrono::Utc::now().timestamp(),
+        "draft": draft,
+    });
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| format!("保存草稿失败: {e}"))?;
+    Ok(id)
+}
+
+/// 列出本地暂存草稿（按保存时间倒序）。
+#[command]
+pub async fn mail_list_stashed_drafts(app: AppHandle) -> Result<Vec<serde_json::Value>, String> {
+    ensure_init(&app)?;
+    let dir = store::data_root(&app)?.join("drafts");
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut items: Vec<serde_json::Value> = Vec::new();
+    for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
+                items.push(value);
+            }
+        }
+    }
+    items.sort_by_key(|v| std::cmp::Reverse(v.get("savedAt").and_then(|x| x.as_i64()).unwrap_or(0)));
+    Ok(items)
+}
+
+#[command]
+pub async fn mail_delete_stashed_draft(app: AppHandle, id: String) -> Result<(), String> {
+    ensure_init(&app)?;
+    let path = store::data_root(&app)?.join("drafts").join(format!("{id}.json"));
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|e| format!("删除草稿失败: {e}"))?;
+    }
+    Ok(())
 }

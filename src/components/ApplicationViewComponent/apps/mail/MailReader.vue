@@ -26,6 +26,33 @@
           </button>
           <button class="mail-btn" @click="$emit('archive', detail)">归档</button>
           <button class="mail-btn is-danger" @click="$emit('delete', detail)">删除</button>
+          <span class="mail-toolbar-sep"></span>
+          <button
+            class="mail-btn"
+            :disabled="tools.translating.value"
+            :title="'把正文整封翻译成 ' + tools.targetLang.value"
+            @click="tools.translateAll()"
+          >
+            {{ tools.translating.value ? '翻译中…' : '翻译全文' }}
+          </button>
+          <button
+            class="mail-btn"
+            :class="{ 'is-primary': tools.readAloud.isPlaying.value }"
+            :title="tools.readAloud.isPlaying.value ? '暂停朗读' : '朗读正文'"
+            @click="tools.toggleReadAloud()"
+          >
+            {{ tools.readAloud.isPlaying.value ? '⏸ 暂停朗读' : '🔊 朗读' }}
+          </button>
+          <select class="mail-select" title="导出为…" @change="onExportChange($event)">
+            <option value="">导出…</option>
+            <option value="md">Markdown</option>
+            <option value="html">HTML</option>
+            <option value="pdf">PDF</option>
+            <option value="docx">Word</option>
+            <option value="txt">纯文本</option>
+          </select>
+          <button class="mail-btn" title="保存到笔记库" @click="tools.saveToNotes()">存入笔记</button>
+          <button class="mail-btn" title="转成一条任务" @click="tools.toTask()">转为任务</button>
         </div>
 
         <h1 class="mail-reader-subject">{{ detail.subject || '（无主题）' }}</h1>
@@ -53,6 +80,18 @@
         <div v-if="hasRemoteImages && imagesBlocked" class="mail-remote-banner">
           <span>这封邮件包含外部图片，默认没有加载。</span>
           <button class="mail-btn" @click="showImages">显示图片</button>
+        </div>
+
+        <div v-if="tools.translateError.value" class="mail-search-error">
+          {{ tools.translateError.value }}
+        </div>
+
+        <div v-if="tools.showTranslation.value" class="mail-translation">
+          <div class="mail-translation-head">
+            <span>全文翻译（{{ tools.targetLang.value }}）</span>
+            <button class="mail-btn" @click="tools.showTranslation.value = false">收起</button>
+          </div>
+          <div class="mail-body" v-html="tools.translatedHtml.value"></div>
         </div>
 
         <div v-if="showHeaders" class="mail-headers">
@@ -90,6 +129,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { avatarSeed } from './theme'
+import { useMailReaderTools } from './useMailReaderTools'
 
 const props = defineProps({
   detail: { type: Object, default: null },
@@ -113,6 +153,13 @@ defineEmits([
 ])
 
 const showHeaders = computed(() => Boolean(props.settings?.showHeaders))
+
+// 增强阅读：翻译 / 朗读 / 导出 / 笔记 / 任务
+const tools = useMailReaderTools({
+  getDetail: () => props.detail,
+  notify: (text, isError) => console.warn('[mail-reader]', isError ? 'error:' : '', text),
+  settings: props.settings,
+})
 
 /** 阅读区字号 / 字体由「外观」控制；正文根节点单独再落一次，避免邮件自带样式覆盖。 */
 const readingStyle = computed(() => ({
@@ -195,6 +242,13 @@ async function onBodyClick(event) {
   } catch {
     window.open(href, '_blank')
   }
+}
+
+/** 导出下拉：选完就复位，避免下次打开还停在上次那一项。 */
+function onExportChange(event) {
+  const kind = event.target.value
+  event.target.value = ''
+  if (kind) tools.exportAs(kind).catch((error) => console.warn('[mail-reader] 导出失败', error))
 }
 
 function sizeLabel(bytes) {

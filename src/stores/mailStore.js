@@ -171,7 +171,12 @@ export const useMailStore = defineStore('mail', {
           await this.reloadUnread()
           await this.loadMessages({ silent: true })
         })
-        this.unlisten.push(offSync, offNew)
+        // 从任务页 / 其它模块跳回原邮件：切到对应账户与文件夹，再打开它。
+        const offOrigin = await listen('mail-open-origin', async (event) => {
+          const payload = event?.payload || {}
+          await this.revealMessage(payload.accountId, payload.folder, payload.uid)
+        })
+        this.unlisten.push(offSync, offNew, offOrigin)
       } catch (error) {
         logger.warn('邮箱事件监听失败', error)
       }
@@ -414,6 +419,56 @@ export const useMailStore = defineStore('mail', {
       }
       out.sort((a, b) => b.date - a.date)
       return out
+    },
+
+    /** 从草稿箱续写：取回正文与收件人，装进编辑器。 */
+    async resumeDraft(row) {
+      const account = this.accountsById[row.accountId] || this.activeAccount || this.accounts[0]
+      if (!account) return
+      try {
+        const detail = await invoke('mail_get_message', {
+          accountId: row.accountId,
+          folder: row.folder,
+          uid: row.uid,
+        })
+        const draft = buildCompose('new', null, account, this.settings)
+        draft.to = (detail.to || []).map((a) => (a.name ? `${a.name} <${a.address}>` : a.address))
+        draft.cc = (detail.cc || []).map((a) => (a.name ? `${a.name} <${a.address}>` : a.address))
+        draft.showCc = draft.cc.length > 0
+        draft.subject = detail.subject || ''
+        draft.text = detail.text || ''
+        draft.html = detail.html || ''
+        draft.inReplyTo = detail.inReplyTo || null
+        draft.references = detail.references || null
+        // 附件只在本地有副本时才能续写；草稿里服务器上的附件不自动回填，
+        // 免得用户以为附件还在、实际发送时却缺失。
+        draft.attachments = []
+        // 记住来源：保存或发送后要删掉这条旧草稿，否则草稿箱会越堆越多。
+        draft.draftUid = row.uid
+        draft.draftFolder = row.folder
+        this.composing = draft
+      } catch (error) {
+        logger.error('打开草稿失败', error)
+        this.lastError = String(error?.message || error)
+      }
+    },
+
+    /** 定位并打开一封指定邮件（供外部跳转使用）。 */
+    async revealMessage(accountId, folder, uid) {
+      if (!accountId || !folder || !uid) return
+      if (this.activeAccountId !== accountId) {
+        this.activeAccountId = accountId
+        await this.loadFolders(accountId)
+      }
+      this.activeFolder = folder
+      this.scope = 'folder'
+      this.activeLabel = ''
+      await this.loadMessages({ silent: true })
+      const row =
+        this.messages.find(
+          (m) => m.accountId === accountId && m.folder === folder && m.uid === Number(uid),
+        ) || { accountId, folder, uid: Number(uid) }
+      await this.openMessage(row)
     },
 
     async loadThread(row) {
@@ -725,8 +780,43 @@ export const useMailStore = defineStore('mail', {
       this.composing = buildCompose(mode, source, account, this.settings)
     },
 
-    closeCompose() {
+    /**
+     * 关闭编辑器。有内容时先存进草稿箱——「写了半封关掉就没了」是最伤人的体验。
+     * 存草稿失败不阻塞关闭，但要把原因带到界面上。
+     */
+    async closeCompose({ saveDraft = true } = {}) {
+      const draft = this.composing
       this.composing = null
+      if (!saveDraft || !draft) return
+      const hasContent =
+        draft.subject?.trim() ||
+        (draft.html || '').trim() ||
+        (draft.text || '').trim() ||
+        draft.to?.length ||
+        draft.attachments?.length
+      if (!hasContent) return
+      try {
+        await invoke('mail_save_draft', {
+          request: {
+            accountId: draft.accountId,
+            to: draft.to,
+            cc: draft.cc,
+            bcc: draft.bcc,
+            subject: draft.subject,
+            text: draft.text,
+            html: draft.htmlMode ? draft.html : null,
+            inReplyTo: draft.inReplyTo,
+            references: draft.references,
+            attachments: (draft.attachments || []).map((a) => a.path),
+            saveToSent: true,
+          },
+        })
+        await this.loadFolders(draft.accountId).catch(() => {})
+        await this.reloadUnread()
+      } catch (error) {
+        logger.warn('关闭时保存草稿失败', error)
+        this.lastError = `草稿保存失败：${error?.message || error}`
+      }
     },
 
     async sendCompose({ useOutbox = false } = {}) {
@@ -747,12 +837,31 @@ export const useMailStore = defineStore('mail', {
       if (useOutbox && this.settings.undoSendSeconds > 0) {
         const item = await invoke('mail_queue_send', { request })
         this.outbox.push(item)
+        await this._discardSourceDraft(this.composing)
         this.composing = null
         return { queued: item }
       }
+      const sourceDraft = this.composing
       await invoke('mail_send', { request })
       this.composing = null
+      // 续写自草稿：发出去之后旧草稿就没用了，删掉它。
+      await this._discardSourceDraft(sourceDraft)
       return { sent: true }
+    },
+
+
+    /** 续写自草稿时，保存 / 发送成功后删掉服务器上的旧草稿。 */
+    async _discardSourceDraft(draft) {
+      if (!draft?.draftUid || !draft?.draftFolder) return
+      try {
+        await invoke('mail_discard_draft', {
+          accountId: draft.accountId,
+          folder: draft.draftFolder,
+          uid: draft.draftUid,
+        })
+      } catch (error) {
+        logger.warn('删除旧草稿失败', error)
+      }
     },
 
     async saveDraft() {
@@ -770,8 +879,13 @@ export const useMailStore = defineStore('mail', {
         attachments: this.composing.attachments.map((a) => a.path),
         saveToSent: true,
       }
+      const sourceDraft = this.composing
       await invoke('mail_save_draft', { request })
+      // 先存新的再删旧的：顺序反过来，一旦新草稿保存失败就会把原稿也弄丢。
+      await this._discardSourceDraft(sourceDraft)
       this.composing = null
+      await this.loadFolders(request.accountId).catch(() => {})
+      await this.reloadUnread()
     },
 
     async loadOutbox() {

@@ -37,6 +37,23 @@
 
       <!-- 聚合视图下不显示文件夹树：不同账户的同名文件夹混在一起没有意义 -->
       <template v-if="activeAccountId">
+        <!-- 标准文件夹：按角色固定分区，与 Mailspring / Outlook 的侧栏一致。
+             顺序是刻意的——用户最常看的收件箱在最上，草稿与已发送紧跟，
+             垃圾箱与存档这类低频入口沉底。 -->
+        <div class="mail-section-label">邮箱</div>
+        <button
+          v-for="entry in standardFolders"
+          :key="entry.key"
+          class="mail-folder"
+          :class="{ 'is-active': isFolderActive(entry) }"
+          @click="selectStandard(entry)"
+          @contextmenu.prevent="entry.folder && openFolderMenu(entry.folder, $event)"
+        >
+          <span class="mail-folder-icon">{{ entry.icon }}</span>
+          <span class="mail-folder-name">{{ entry.label }}</span>
+          <span v-if="entry.unread" class="mail-badge">{{ entry.unread }}</span>
+        </button>
+
         <div class="mail-section-label">快速查看</div>
         <button
           class="mail-folder"
@@ -45,6 +62,7 @@
         >
           <span class="mail-folder-icon">●</span>
           <span class="mail-folder-name">未读</span>
+          <span v-if="quickCounts.unread" class="mail-badge">{{ quickCounts.unread }}</span>
         </button>
         <button
           class="mail-folder"
@@ -71,28 +89,40 @@
           <span class="mail-folder-name">全部邮件</span>
         </button>
 
-        <div class="mail-section-label is-row">
-          <span>文件夹</span>
+        <!-- 用户自建的文件夹单独成区，避免与标准文件夹混在一起分不清 -->
+        <template v-if="customFolders.length">
+          <div class="mail-section-label is-row">
+            <span>我的文件夹</span>
+            <button
+              class="mail-section-action"
+              title="新建文件夹"
+              aria-label="新建文件夹"
+              @click="startCreateFolder"
+            >
+              ＋
+            </button>
+          </div>
           <button
-            class="mail-section-action"
-            title="新建文件夹"
-            aria-label="新建文件夹"
-            @click="startCreateFolder"
+            v-for="folder in customFolders"
+            :key="folder.name"
+            class="mail-folder"
+            :class="{ 'is-active': scope === 'folder' && activeFolder === folder.name }"
+            @click="$emit('select-folder', folder.name)"
+            @contextmenu.prevent="openFolderMenu(folder, $event)"
           >
-            ＋
+            <span class="mail-folder-icon">▢</span>
+            <span class="mail-folder-name" :title="folder.displayName">{{ folder.displayName }}</span>
+            <span v-if="folder.unread" class="mail-badge">{{ folder.unread }}</span>
           </button>
-        </div>
+        </template>
         <button
-          v-for="folder in folders"
-          :key="folder.name"
-          class="mail-folder"
-          :class="{ 'is-active': scope === 'folder' && activeFolder === folder.name }"
-          @click="$emit('select-folder', folder.name)"
-          @contextmenu.prevent="openFolderMenu(folder, $event)"
+          v-else
+          class="mail-folder mail-folder-add"
+          title="新建文件夹"
+          @click="startCreateFolder"
         >
-          <span class="mail-folder-icon">{{ folderIcon(folder.role) }}</span>
-          <span class="mail-folder-name" :title="folder.displayName">{{ folder.displayName }}</span>
-          <span v-if="folder.unread" class="mail-badge">{{ folder.unread }}</span>
+          <span class="mail-folder-icon">＋</span>
+          <span class="mail-folder-name">新建文件夹</span>
         </button>
         <div v-if="creating" class="mail-folder-create">
           <input
@@ -244,6 +274,77 @@ const folders = computed(() => {
   const list = props.foldersByAccount[props.activeAccountId] || []
   return list.filter((f) => f.selectable !== false)
 })
+
+/** 标准文件夹的固定顺序与显示名。服务器没建时后端会补占位项，这里再兜一次。 */
+const STANDARD_ROLES = [
+  { role: 'inbox', label: '收件箱', icon: '▣' },
+  { role: 'drafts', label: '草稿', icon: '✎' },
+  { role: 'sent', label: '已发送', icon: '↗' },
+  { role: 'archive', label: '存档', icon: '▤' },
+  { role: 'junk', label: '垃圾邮件', icon: '⚠' },
+  { role: 'trash', label: '已删除', icon: '🗑' },
+]
+
+/**
+ * 标准文件夹条目。
+ *
+ * 只要账户存在就展示全部角色——即使服务器上还没有那个文件夹。
+ * Mailspring / Outlook 都是这样：位置是固定的，用户不该因为服务商差异
+ * 而在侧栏里「找不到草稿箱」。
+ */
+const standardFolders = computed(() => {
+  const byRole = new Map()
+  for (const folder of folders.value) {
+    // 同角色若出现多个（如「存档」和「存档/2024」），取名字最短的那个当入口。
+    const current = byRole.get(folder.role)
+    if (!current || folder.name.length < current.name.length) byRole.set(folder.role, folder)
+  }
+  return STANDARD_ROLES.filter((entry) => entry.role !== 'archive' || byRole.has('archive')).map(
+    (entry) => {
+      const folder = byRole.get(entry.role) || null
+      return {
+        key: entry.role,
+        role: entry.role,
+        label: entry.label,
+        icon: entry.icon,
+        unread: folder?.unread || 0,
+        folder,
+      }
+    },
+  )
+})
+
+/** 用户自建文件夹：排除掉已被标准分区占用的角色与名字。 */
+const customFolders = computed(() => {
+  const standardNames = new Set(
+    standardFolders.value.filter((e) => e.folder).map((e) => e.folder.name),
+  )
+  return folders.value.filter(
+    (f) => f.role === 'custom' && !standardNames.has(f.name),
+  )
+})
+
+/** 快速查看里的未读角标：只统计收件箱，避免和账户徽标重复计数。 */
+const quickCounts = computed(() => {
+  const inbox = folders.value.find((f) => f.role === 'inbox')
+  return { unread: inbox?.unread || 0 }
+})
+
+function isFolderActive(entry) {
+  // 标准分区用 scope（跨文件夹按角色聚合），而不是锁定某个具体文件夹名。
+  if (entry.role === 'inbox') {
+    return props.scope === 'folder' && props.activeFolder === entry.folder?.name
+  }
+  return props.scope === entry.role
+}
+
+function selectStandard(entry) {
+  if (entry.role === 'inbox' && entry.folder) {
+    emit('select-folder', entry.folder.name)
+    return
+  }
+  emit('select-scope', entry.role)
+}
 
 const totalUnread = computed(() =>
   Object.values(props.unread).reduce((sum, n) => sum + (Number(n) || 0), 0),

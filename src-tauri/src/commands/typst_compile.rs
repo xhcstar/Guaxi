@@ -189,6 +189,14 @@ fn compile_typ_to_pdf(root: PathBuf, content: String) -> Result<Vec<u8>, String>
     Ok(pdf)
 }
 
+/// 把一段 Typst 源码直接编译成 PDF 字节，不落盘、不缓存。
+///
+/// 给「邮件导出为 PDF」这类一次性转换用：它们不关心增量预览与双向跳转，
+/// 只需要一份结果字节，所以不该复用它旁边的预览缓存（那会污染 jump 缓存）。
+pub fn compile_typ_source_to_pdf(root: std::path::PathBuf, content: String) -> Result<Vec<u8>, String> {
+    compile_typ_to_pdf(root, content)
+}
+
 /// 编译并同时缓存 World + 文档，供双向跳转（typst-ide）复用。返回 PDF 字节。
 ///
 /// 为什么缓存：jump_from_cursor / jump_from_click 需要"刚编译出来的那份"World 与 PagedDocument，
