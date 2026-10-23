@@ -140,7 +140,21 @@
         <div class="mail-section-divider"></div>
         <div class="mail-field-row">
           <div class="mail-field">
-            <label class="mail-flabel">自动同步间隔（秒）</label>
+            <label class="mail-flabel">新邮件获取方式</label>
+            <select
+              class="mail-input"
+              :value="settings.fetchMode || 'poll'"
+              @change="$emit('update', { fetchMode: $event.target.value })"
+            >
+              <option value="idle">服务器推送（IDLE，最省电最快）</option>
+              <option value="poll">定时轮询</option>
+            </select>
+            <span class="mail-hint">
+              服务器不支持 IDLE 时会自动退回轮询，不会连不上。
+            </span>
+          </div>
+          <div class="mail-field">
+            <label class="mail-flabel">轮询间隔（秒，IDLE 时为兜底）</label>
             <input
               class="mail-input"
               type="number"
@@ -148,6 +162,20 @@
               :value="settings.pollSeconds"
               @change="$emit('update', { pollSeconds: Math.max(30, Number($event.target.value) || 90) })"
             />
+          </div>
+        </div>
+
+        <div class="mail-field-row">
+          <div class="mail-field">
+            <label class="mail-flabel">多设备标记比对间隔（分钟）</label>
+            <input
+              class="mail-input"
+              type="number"
+              min="1"
+              :value="settings.flagSyncMinutes"
+              @change="$emit('update', { flagSyncMinutes: Math.max(1, Number($event.target.value) || 10) })"
+            />
+            <span class="mail-hint">手机上读过的邮件，最多这么久就会同步过来。</span>
           </div>
           <div class="mail-field">
             <label class="mail-flabel">发送撤回窗口（秒，0 关闭）</label>
@@ -159,6 +187,169 @@
               @change="$emit('update', { undoSendSeconds: Math.max(0, Number($event.target.value) || 0) })"
             />
           </div>
+        </div>
+
+        <div class="mail-field-row">
+          <div class="mail-field">
+            <label class="mail-flabel">附件总大小上限（MB）</label>
+            <input
+              class="mail-input"
+              type="number"
+              min="1"
+              :value="settings.attachmentLimitMb"
+              @change="$emit('update', { attachmentLimitMb: Math.max(1, Number($event.target.value) || 25) })"
+            />
+          </div>
+          <div class="mail-field">
+            <label class="mail-flabel">列表每页条数</label>
+            <input
+              class="mail-input"
+              type="number"
+              min="20"
+              :value="settings.pageSize"
+              @change="$emit('update', { pageSize: Math.max(20, Number($event.target.value) || 100) })"
+            />
+          </div>
+        </div>
+
+        <label class="mail-check">
+          <input
+            type="checkbox"
+            :checked="settings.offlineQueue"
+            @change="$emit('update', { offlineQueue: $event.target.checked })"
+          />
+          断网时把操作排队，恢复后自动补传
+        </label>
+        <label class="mail-check">
+          <input
+            type="checkbox"
+            :checked="settings.virtualList !== false"
+            @change="$emit('update', { virtualList: $event.target.checked })"
+          />
+          长邮件列表使用虚拟滚动（只渲染可见的行，上万封也不卡）
+        </label>
+        <label class="mail-check">
+          <input
+            type="checkbox"
+            :checked="settings.notifyNewMail"
+            @change="$emit('update', { notifyNewMail: $event.target.checked })"
+          />
+          收到新邮件时弹出系统通知
+          <button class="mail-btn" style="margin-left: 8px" @click="$emit('test-notification')">
+            试一下
+          </button>
+        </label>
+        <label class="mail-check">
+          <input
+            type="checkbox"
+            :checked="settings.warnDangerousAttachments"
+            @change="$emit('update', { warnDangerousAttachments: $event.target.checked })"
+          />
+          附件是可执行 / 脚本类型时提示（.exe、.scr 等）
+        </label>
+
+        <!-- 端到端加密 -->
+        <div class="mail-section-divider"></div>
+        <div class="mail-flabel" style="margin-bottom: 6px">端到端加密与签名</div>
+        <div class="mail-crypto-grid">
+          <div class="mail-crypto-card">
+            <div class="mail-crypto-head">
+              S/MIME
+              <span v-if="smime?.configured" :class="smime.expired ? 'bad' : 'ok'">
+                {{ smime.expired ? '证书已过期' : '已配置' }}
+              </span>
+              <span v-else class="mail-hint">未配置</span>
+            </div>
+            <p class="mail-hint">
+              企业环境常用：证书由 IT 统一下发。签名用你的私钥，加密需要收件人的证书。
+            </p>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap">
+              <button class="mail-btn" @click="importSmime">导入证书与私钥…</button>
+              <button v-if="smime?.configured" class="mail-btn is-danger" @click="removeSmime">
+                移除
+              </button>
+            </div>
+          </div>
+          <div class="mail-crypto-card">
+            <div class="mail-crypto-head">
+              OpenPGP
+              <span class="mail-hint">钥匙串 {{ pgpKeys.length }} 个</span>
+            </div>
+            <p class="mail-hint">技术圈常用：公钥互相交换，不依赖 CA。</p>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap">
+              <button class="mail-btn" @click="importPgp(false)">导入公钥…</button>
+              <button class="mail-btn" @click="importPgp(true)">导入私钥…</button>
+            </div>
+            <div v-if="pgpKeys.length" class="mail-pgp-list">
+              <div v-for="key in pgpKeys.slice(0, 8)" :key="key.fingerprint" class="mail-pgp-row">
+                <code>{{ shortFingerprint(key.fingerprint) }}</code>
+                <span>{{ key.userId || '（无用户标识）' }}</span>
+                <span class="mail-hint">{{ key.isSecret ? '私钥' : '公钥' }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 服务器端规则 -->
+        <div class="mail-section-divider"></div>
+        <div class="mail-flabel" style="margin-bottom: 6px">服务器端规则（Sieve）</div>
+        <p class="mail-hint" style="margin: 0 0 8px">
+          Outlook 式体验：规则跑在服务器上，关掉客户端也生效。只有支持 ManageSieve
+          的服务器（Fastmail、Dovecot、部分企业邮）能用；QQ / 163 / Exchange 不支持。
+        </p>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center">
+          <button class="mail-btn" :disabled="!activeAccountId" @click="previewSieve">
+            预览将要上传的脚本
+          </button>
+          <button class="mail-btn is-primary" :disabled="!activeAccountId" @click="pushSieve">
+            上传规则到服务器
+          </button>
+        </div>
+        <pre v-if="sieveScript" class="mail-sieve-preview">{{ sieveScript }}</pre>
+        <ul v-if="sieveWarnings.length" class="mail-sieve-warnings">
+          <li v-for="w in sieveWarnings" :key="w">{{ w }}</li>
+        </ul>
+
+        <!-- 模板 -->
+        <div class="mail-section-divider"></div>
+        <div class="mail-flabel" style="margin-bottom: 6px">邮件模板</div>
+        <div v-for="tpl in templates" :key="tpl.id" class="mail-account-row">
+          <span class="meta">
+            <span class="email">{{ tpl.name || '（未命名）' }}</span>
+            <span class="servers">{{ tpl.subject || '（无主题）' }}</span>
+          </span>
+          <button class="mail-btn is-danger" @click="removeTemplate(tpl)">删除</button>
+        </div>
+        <div class="mail-field-row">
+          <div class="mail-field">
+            <label class="mail-flabel">模板名称</label>
+            <input v-model="draftTemplate.name" class="mail-input" placeholder="例如：周报" />
+          </div>
+          <div class="mail-field">
+            <label class="mail-flabel">模板主题</label>
+            <input v-model="draftTemplate.subject" class="mail-input" placeholder="主题行" />
+          </div>
+        </div>
+        <textarea
+          v-model="draftTemplate.html"
+          class="mail-textarea"
+          rows="3"
+          placeholder="模板正文（HTML 或纯文本，写信时可以套用）"
+        ></textarea>
+        <button class="mail-btn" style="margin-top: 6px" @click="addTemplate">保存为新模板</button>
+
+        <!-- 诊断 -->
+        <div class="mail-section-divider"></div>
+        <div class="mail-flabel" style="margin-bottom: 6px">诊断</div>
+        <p class="mail-hint" style="margin: 0 0 8px">
+          导出报告包含账户配置、同步状态、待发/离线队列与错误信息；<strong>不含</strong>
+          邮件正文、口令与令牌。
+        </p>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap">
+          <button class="mail-btn" @click="$emit('export-diagnostics')">导出诊断报告…</button>
+          <button class="mail-btn" @click="$emit('reset-connections', activeAccountId)">
+            重置连接
+          </button>
         </div>
 
         <div class="mail-field">
@@ -284,8 +475,32 @@ import { invoke } from '@tauri-apps/api/core'
 const props = defineProps({
   settings: { type: Object, required: true },
   themes: { type: Array, default: () => [] },
+  templates: { type: Array, default: () => [] },
+  accounts: { type: Array, default: () => [] },
+  activeAccountId: { type: String, default: null },
+  // 需要返回值的操作走函数 props：Vue 的 emit 不回传结果。
+  oauthStatusFn: { type: Function, default: null },
+  sievePreviewFn: { type: Function, default: null },
+  sieveSyncFn: { type: Function, default: null },
+  smimeStatusFn: { type: Function, default: null },
+  pgpKeysFn: { type: Function, default: null },
 })
-const emit = defineEmits(['close', 'update'])
+const emit = defineEmits([
+  'close',
+  'update',
+  'save-template',
+  'delete-template',
+  'test-notification',
+  'export-diagnostics',
+  'reset-connections',
+])
+
+// 端到端加密 / Sieve / 模板的局部状态
+const smime = ref(null)
+const pgpKeys = ref([])
+const sieveScript = ref('')
+const sieveWarnings = ref([])
+const draftTemplate = ref({ name: '', subject: '', html: '' })
 
 const densityOptions = [
   { value: 'compact', label: '紧凑' },
@@ -376,6 +591,143 @@ async function restoreDb() {
     window.alert(String(error?.message || error))
   }
 }
+
+async function loadCrypto() {
+  if (props.smimeStatusFn && props.activeAccountId) {
+    smime.value = await props.smimeStatusFn(props.activeAccountId).catch(() => null)
+  }
+  if (props.pgpKeysFn) {
+    pgpKeys.value = await props.pgpKeysFn().catch(() => [])
+  }
+}
+
+async function importSmime() {
+  if (!props.activeAccountId) {
+    window.alert('请先选择一个账户')
+    return
+  }
+  const { open } = await import('@tauri-apps/plugin-dialog')
+  const files = await open({
+    multiple: true,
+    title: '选择证书与私钥（PEM）',
+    filters: [{ name: '证书 / 私钥', extensions: ['pem', 'crt', 'cer', 'key'] }],
+  })
+  if (!files) return
+  const list = Array.isArray(files) ? files : [files]
+  let certPem = ''
+  let keyPem = ''
+  try {
+    const { readTextFile } = await import('@tauri-apps/plugin-fs')
+    for (const path of list) {
+      const text = await readTextFile(path)
+      if (text.includes('PRIVATE KEY')) keyPem = text
+      else if (text.includes('CERTIFICATE')) certPem = text
+    }
+  } catch (error) {
+    window.alert(`读取文件失败：${error?.message || error}`)
+    return
+  }
+  if (!certPem || !keyPem) {
+    window.alert('需要同时选一份证书（CERTIFICATE）和一份私钥（PRIVATE KEY）')
+    return
+  }
+  try {
+    await invoke('mail_smime_import', {
+      accountId: props.activeAccountId,
+      certPem,
+      keyPem,
+    })
+    await loadCrypto()
+    window.alert('S/MIME 证书已导入（私钥存系统凭据库）')
+  } catch (error) {
+    window.alert(String(error?.message || error))
+  }
+}
+
+async function removeSmime() {
+  if (!props.activeAccountId) return
+  if (!window.confirm('移除 S/MIME 证书与私钥？之后将无法读取用旧证书加密的邮件。')) return
+  try {
+    await invoke('mail_smime_delete', { accountId: props.activeAccountId })
+    await loadCrypto()
+  } catch (error) {
+    window.alert(String(error?.message || error))
+  }
+}
+
+async function importPgp(secret) {
+  const { open } = await import('@tauri-apps/plugin-dialog')
+  const path = await open({
+    multiple: false,
+    title: secret ? '选择 PGP 私钥文件' : '选择 PGP 公钥文件',
+    filters: [{ name: 'OpenPGP 密钥', extensions: ['asc', 'pgp', 'gpg', 'key'] }],
+  })
+  if (!path) return
+  try {
+    await invoke('mail_pgp_import_file', { path, secret })
+    await loadCrypto()
+    window.alert('已导入到 PGP 钥匙串')
+  } catch (error) {
+    window.alert(String(error?.message || error))
+  }
+}
+
+function shortFingerprint(fp) {
+  const text = String(fp || '').replace(/\s+/g, '')
+  return text.length > 16 ? `${text.slice(0, 8)}…${text.slice(-8)}` : text
+}
+
+async function previewSieve() {
+  if (!props.sievePreviewFn || !props.activeAccountId) return
+  try {
+    const result = await props.sievePreviewFn(props.activeAccountId)
+    sieveScript.value = result?.script || ''
+    sieveWarnings.value = result?.warnings || []
+  } catch (error) {
+    window.alert(String(error?.message || error))
+  }
+}
+
+async function pushSieve() {
+  if (!props.sieveSyncFn || !props.activeAccountId) return
+  if (!window.confirm('把本地规则上传为服务器端脚本？同名脚本会被覆盖。')) return
+  try {
+    const warnings = await props.sieveSyncFn(props.activeAccountId)
+    sieveWarnings.value = warnings || []
+    window.alert(
+      warnings?.length
+        ? `已上传，但有 ${warnings.length} 条规则无法在服务器端表达（见下方说明）`
+        : '已上传并启用',
+    )
+  } catch (error) {
+    window.alert(String(error?.message || error))
+  }
+}
+
+async function addTemplate() {
+  const tpl = draftTemplate.value
+  if (!tpl.name.trim() && !tpl.subject.trim() && !tpl.html.trim()) return
+  try {
+    await emit('save-template', {
+      id: '',
+      name: tpl.name.trim() || tpl.subject.trim() || '未命名模板',
+      subject: tpl.subject,
+      html: tpl.html,
+      text: '',
+      createdAt: 0,
+    })
+    draftTemplate.value = { name: '', subject: '', html: '' }
+  } catch (error) {
+    window.alert(String(error?.message || error))
+  }
+}
+
+function removeTemplate(tpl) {
+  if (!window.confirm(`删除模板「${tpl.name}」？`)) return
+  emit('delete-template', tpl.id)
+}
+
+onMounted(loadCrypto)
 
 onMounted(async () => {
   try {

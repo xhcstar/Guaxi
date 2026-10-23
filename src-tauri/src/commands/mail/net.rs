@@ -67,6 +67,22 @@ impl Stream {
             }
         }
     }
+
+    /// 调整读超时。IDLE 需要「长时间阻塞等待服务器推送」，
+    /// 而普通同步需要短超时快速失败——同一个流两种语义，只能运行时切换。
+    pub fn set_read_timeout(&mut self, timeout: Option<Duration>) -> Result<(), String> {
+        match self {
+            Stream::Plain(tcp) => tcp
+                .set_read_timeout(timeout)
+                .map_err(|e| format!("设置读超时失败: {e}")),
+            Stream::Tls(tls) => {
+                let socket = tls.get_ref();
+                socket
+                    .set_read_timeout(timeout)
+                    .map_err(|e| format!("设置读超时失败: {e}"))
+            }
+        }
+    }
 }
 
 fn tls_config() -> Arc<ClientConfig> {

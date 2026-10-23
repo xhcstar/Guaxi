@@ -8,8 +8,49 @@
 
       <div class="mail-modal-body">
         <p class="mail-hint" style="margin-top: 0">
-          规则在本地同步到新邮件后执行，不依赖服务器端 Sieve。没有指定文件夹的规则只作用于收件箱。
+          规则在本地同步到新邮件后执行。没有指定文件夹的规则只作用于收件箱。
+          想让规则在服务器上生效（关掉客户端也跑），在「外观与设置 → 服务器端规则」里上传。
         </p>
+
+        <!-- 收发件人名单：比规则更简单的「一键拉黑 / 放行」，判定顺序也更靠前 -->
+        <div class="mail-section-divider"></div>
+        <div class="mail-flabel" style="margin-bottom: 6px">发件人名单（优先于规则）</div>
+        <p class="mail-hint" style="margin: 0 0 8px">
+          黑名单里的发件人直接进垃圾箱；白名单里的发件人跳过所有规则。
+          支持 <code>@域名</code>、完整地址、<code>*</code> 通配符，或直接写一段子串。
+        </p>
+        <div v-for="item in senderRules" :key="item.id" class="mail-rule">
+          <span class="mail-chip" :class="item.kind === 'block' ? 'is-on' : ''">
+            {{ item.kind === 'block' ? '黑名单' : '白名单' }}
+          </span>
+          <div class="mail-rule-main">
+            <div class="mail-rule-name">{{ item.pattern }}</div>
+            <div v-if="item.note" class="mail-rule-desc">{{ item.note }}</div>
+          </div>
+          <button class="mail-btn is-danger" @click="$emit('delete-sender-rule', item.id)">删除</button>
+        </div>
+        <div class="mail-field-row" style="align-items: flex-end">
+          <div class="mail-field">
+            <label class="mail-flabel">类型</label>
+            <select v-model="senderDraft.kind" class="mail-input">
+              <option value="block">黑名单（直接进垃圾箱）</option>
+              <option value="allow">白名单（跳过规则）</option>
+            </select>
+          </div>
+          <div class="mail-field">
+            <label class="mail-flabel">地址 / 域名 / 通配符</label>
+            <input
+              v-model="senderDraft.pattern"
+              class="mail-input"
+              placeholder="@spam.example 或 noreply-*@x.com"
+              @keyup.enter="addSenderRule"
+            />
+          </div>
+          <button class="mail-btn" style="margin-bottom: 2px" @click="addSenderRule">添加</button>
+        </div>
+
+        <div class="mail-section-divider"></div>
+        <div class="mail-flabel" style="margin-bottom: 8px">收信规则</div>
 
         <div v-for="rule in orderedRules" :key="rule.id" class="mail-rule">
           <label class="mail-check" style="margin: 2px 0 0">

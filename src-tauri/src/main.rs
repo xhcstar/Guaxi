@@ -266,6 +266,7 @@ async fn main() {
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(file_watcher)
         .manage(shared_state.clone())
         .invoke_handler(tauri::generate_handler![
@@ -773,6 +774,39 @@ async fn main() {
             commands::mail::mail_set_settings,
             commands::mail::mail_theme_tokens,
             commands::mail::mail_builtin_themes,
+            commands::mail::mail_oauth_start,
+            commands::mail::mail_oauth_poll,
+            commands::mail::mail_oauth_sign_out,
+            commands::mail::mail_oauth_status,
+            commands::mail::mail_offline_list,
+            commands::mail::mail_offline_count,
+            commands::mail::mail_offline_replay,
+            commands::mail::mail_connection_status,
+            commands::mail::mail_start_idle,
+            commands::mail::mail_stop_idle,
+            commands::mail::mail_list_delegate_folders,
+            commands::mail::mail_list_templates,
+            commands::mail::mail_save_template,
+            commands::mail::mail_delete_template,
+            commands::mail::mail_list_sender_rules,
+            commands::mail::mail_save_sender_rule,
+            commands::mail::mail_delete_sender_rule,
+            commands::mail::mail_check_attachments,
+            commands::mail::mail_is_dangerous_attachment,
+            commands::mail::mail_sieve_preview,
+            commands::mail::mail_sieve_sync,
+            commands::mail::mail_smime_status,
+            commands::mail::mail_smime_import,
+            commands::mail::mail_smime_save_peer,
+            commands::mail::mail_smime_delete_peer,
+            commands::mail::mail_smime_peer_status,
+            commands::mail::mail_smime_delete,
+            commands::mail::mail_pgp_keys,
+            commands::mail::mail_pgp_import_key,
+            commands::mail::mail_pgp_import_file,
+            commands::mail::mail_test_notification,
+            commands::mail::mail_export_diagnostics,
+            commands::mail::mail_reset_connections,
             commands::mail::mail_clear_cache,
             commands::templateview::emit_template_insert,
             commands::templateview::list_templates,

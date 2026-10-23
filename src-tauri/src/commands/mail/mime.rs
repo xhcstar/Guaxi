@@ -215,6 +215,36 @@ pub fn parse(raw: &[u8], block_remote_images: bool) -> Option<ParsedMessage> {
     })
 }
 
+/// 报文顶层 `Content-Type`（只看头部，不做完整解析）。
+///
+/// 用于在解析前判断「这是不是 S/MIME / PGP 加密封装」——完整解析一个加密报文
+/// 只会得到一堆 `application/octet-stream`，先认出类型才能走解密分支。
+pub fn top_level_content_type(raw: &[u8]) -> Option<String> {
+    let head_end = raw
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .or_else(|| raw.windows(2).position(|w| w == b"\n\n"))?;
+    let head = String::from_utf8_lossy(&raw[..head_end]);
+    // 头部可能折行（RFC 5322 允许续行以空白开头），先拼回去。
+    let mut unfolded = String::with_capacity(head.len());
+    for line in head.lines() {
+        if line.starts_with([' ', '\t']) {
+            unfolded.push(' ');
+            unfolded.push_str(line.trim_start());
+        } else {
+            unfolded.push('\n');
+            unfolded.push_str(line);
+        }
+    }
+    for line in unfolded.lines() {
+        let lower = line.to_ascii_lowercase();
+        if let Some(rest) = lower.strip_prefix("content-type:") {
+            return Some(rest.trim().to_string());
+        }
+    }
+    None
+}
+
 /// 取指定部件的原始字节（附件下载）。`part_offset` 是 `AttachmentMeta.part`。
 pub fn extract_part(raw: &[u8], part_offset: u32) -> Option<(Vec<u8>, String)> {
     let parser = MessageParser::default().with_minimal_headers();
@@ -243,6 +273,12 @@ pub fn parse_mailbox(raw: &str) -> Result<Mailbox, String> {
 }
 
 /// 组装去信。返回可以同时喂给 SMTP 与「保存到已发送」的原始字节。
+///
+/// 结构按 RFC 2046 选最合适的一种：
+/// - 没有附件、没有内联图：`multipart/alternative`（纯文本 + HTML）；
+/// - 有内联图：HTML 与图片一起进 `multipart/related`（`cid:` 引用），
+///   这样收信端把图片当作正文的一部分显示，而不是一堆乱七八糟的附件；
+/// - 有普通附件：最外层 `multipart/mixed` 包住上面那个。
 pub fn build(request: &SendRequest, from: &MailAddress, signature: &str) -> Result<Vec<u8>, String> {
     if request.to.is_empty() && request.cc.is_empty() && request.bcc.is_empty() {
         return Err("收件人为空".to_string());
@@ -281,8 +317,21 @@ pub fn build(request: &SendRequest, from: &MailAddress, signature: &str) -> Resu
     };
 
     let Some(html) = request.html.as_deref().filter(|h| !h.trim().is_empty()) else {
+        // 纯文本邮件：有附件时也要包成 multipart/mixed，否则附件无处安放。
+        if request.attachments.is_empty() {
+            return builder
+                .body(text_body)
+                .map(|m| m.formatted())
+                .map_err(|e| format!("组装邮件失败: {e}"));
+        }
+        let mut mixed = MultiPart::mixed().singlepart(
+            lettre::message::SinglePart::plain(text_body),
+        );
+        for attachment in build_attachments(&request.attachments)? {
+            mixed = mixed.singlepart(attachment);
+        }
         return builder
-            .body(text_body)
+            .multipart(mixed)
             .map(|m| m.formatted())
             .map_err(|e| format!("组装邮件失败: {e}"));
     };
@@ -297,15 +346,48 @@ pub fn build(request: &SendRequest, from: &MailAddress, signature: &str) -> Resu
     };
     let alternative = MultiPart::alternative_plain_html(text_body, html_with_sig);
 
-    if request.attachments.is_empty() {
+    // 内联图：`multipart/related` 的第一个部件是 HTML，其余是按 Content-ID 引用的图片。
+    // 只有真的存在内联图时才包 related —— 否则会多出一层没有必要的
+    // multipart/related，部分老客户端会因此把正文显示成空的。
+    let has_inline = !request.inline_images.is_empty();
+    let has_attachments = !request.attachments.is_empty();
+    let payload = if has_inline {
+        let mut related = MultiPart::related().multipart(alternative);
+        for inline in &request.inline_images {
+            let ctype = mime_guess::from_path(&inline.path)
+                .first_or_octet_stream()
+                .to_string();
+            let ctype = LettreContentType::parse(&ctype)
+                .map_err(|e| format!("内联图片类型无效（{}）: {e}", inline.path))?;
+            related = related.singlepart(build_inline_image(inline, ctype)?);
+        }
+        related
+    } else {
+        alternative
+    };
+
+    if !has_attachments {
         return builder
-            .multipart(alternative)
+            .multipart(payload)
             .map(|m| m.formatted())
             .map_err(|e| format!("组装邮件失败: {e}"));
     }
 
-    let mut mixed = MultiPart::mixed().multipart(alternative);
-    for path in &request.attachments {
+    let mut mixed = MultiPart::mixed().multipart(payload);
+    for attachment in build_attachments(&request.attachments)? {
+        mixed = mixed.singlepart(attachment);
+    }
+
+    builder
+        .multipart(mixed)
+        .map(|m| m.formatted())
+        .map_err(|e| format!("组装邮件失败: {e}"))
+}
+
+/// 构造一条普通附件。读取失败时给出「哪个文件」而不是一个裸 IO 错误。
+fn build_attachments(paths: &[String]) -> Result<Vec<lettre::message::SinglePart>, String> {
+    let mut out = Vec::with_capacity(paths.len());
+    for path in paths {
         let bytes = std::fs::read(path).map_err(|e| format!("读取附件失败（{path}）: {e}"))?;
         let filename = std::path::Path::new(path)
             .file_name()
@@ -317,13 +399,102 @@ pub fn build(request: &SendRequest, from: &MailAddress, signature: &str) -> Resu
             .to_string();
         let ctype = LettreContentType::parse(&guessed)
             .map_err(|e| format!("附件类型无效（{guessed}）: {e}"))?;
-        mixed = mixed.singlepart(Attachment::new(filename).body(bytes, ctype));
+        out.push(Attachment::new(filename).body(bytes, ctype));
     }
+    Ok(out)
+}
 
-    builder
-        .multipart(mixed)
-        .map(|m| m.formatted())
-        .map_err(|e| format!("组装邮件失败: {e}"))
+/// 内联图片部件：必须带 `Content-ID: <cid>` 与 `Content-Disposition: inline`，
+/// 否则收信端（尤其是 Outlook）会把它折叠成附件、正文里留一个破图。
+fn build_inline_image(
+    inline: &super::model::InlineImage,
+    ctype: LettreContentType,
+) -> Result<lettre::message::SinglePart, String> {
+    let bytes = std::fs::read(&inline.path)
+        .map_err(|e| format!("读取内联图片失败（{}）: {e}", inline.path))?;
+    let cid = inline
+        .content_id
+        .trim()
+        .trim_matches(['<', '>'])
+        .to_string();
+    let filename = if inline.filename.trim().is_empty() {
+        std::path::Path::new(&inline.path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("image")
+            .to_string()
+    } else {
+        inline.filename.clone()
+    };
+    Ok(Attachment::new_inline_with_name(cid, filename).body(bytes, ctype))
+}
+
+/// 附件体积检查：给前端在发送前提示（超限、危险类型）。
+///
+/// 返回的 `level` 只有三档，刻意做得粗：`dangerous` 是「双击可能执行」的类型，
+/// `large` 是超过配置上限，`ok` 是其余。这里的判定只用于**提示**，
+/// 真正拦截交给用户确认——企业里把 .exe 当附件发给同事是合法需求。
+pub fn check_attachments(paths: &[String], limit_mb: u32) -> Vec<super::model::AttachmentCheck> {
+    const DANGEROUS: &[&str] = &[
+        "exe", "scr", "com", "bat", "cmd", "pif", "msi", "vbs", "vbe", "js", "jse", "wsf",
+        "wsh", "ps1", "psm1", "hta", "cpl", "reg", "lnk", "jar", "application",
+    ];
+    let limit = (limit_mb.max(1) as u64) * 1024 * 1024;
+    paths
+        .iter()
+        .map(|path| {
+            let name = std::path::Path::new(path)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(path)
+                .to_string();
+            let metadata = std::fs::metadata(path);
+            let size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
+            let missing = metadata.is_err();
+            let ext = std::path::Path::new(path)
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let (level, detail) = if DANGEROUS.contains(&ext.as_str()) {
+                (
+                    "dangerous",
+                    format!(".{ext} 是可执行/脚本类型：收件人双击就可能运行"),
+                )
+            } else if size > limit {
+                (
+                    "large",
+                    format!(
+                        "{} MB，超过 {} MB 上限；多数邮件服务器会拒收",
+                        (size as f64 / 1048576.0).round() as u64,
+                        limit_mb
+                    ),
+                )
+            } else if missing {
+                // 附件路径失效（被移动 / 删除）：发送时 `mime::build` 会报错，
+                // 但这里先提示，用户不用等到点「发送」才发现。
+                ("large", "文件不存在或无法读取，发送时会失败".to_string())
+            } else {
+                ("ok", String::new())
+            };
+            super::model::AttachmentCheck {
+                path: path.clone(),
+                name,
+                size,
+                level: level.to_string(),
+                detail,
+            }
+        })
+        .collect()
+}
+
+/// 附件总大小（字节）。
+pub fn attachments_size(paths: &[String]) -> u64 {
+    paths
+        .iter()
+        .filter_map(|p| std::fs::metadata(p).ok())
+        .map(|m| m.len())
+        .sum()
 }
 
 fn html_escape(s: &str) -> String {
@@ -389,6 +560,8 @@ mod tests {
             references: None,
             attachments: vec![],
             save_to_sent: None,
+            inline_images: Vec::new(),
+            crypto_mode: String::new(),
         };
         let from = MailAddress {
             name: "我".into(),
@@ -415,12 +588,27 @@ mod tests {
             references: None,
             attachments: vec![],
             save_to_sent: None,
+            inline_images: Vec::new(),
+            crypto_mode: String::new(),
         };
         let from = MailAddress {
             name: String::new(),
             address: "me@example.com".into(),
         };
         assert!(build(&req, &from, "").is_err());
+    }
+
+    #[test]
+    fn top_level_content_type_reads_header() {
+        let raw = b"From: a@b.c
+Content-Type: application/pkcs7-mime;
+ smime-type=enveloped-data
+
+body";
+        let ct = top_level_content_type(raw).unwrap();
+        // 折行要拼回去，否则会只拿到一半的参数。
+        assert!(ct.contains("application/pkcs7-mime"));
+        assert!(ct.contains("smime-type=enveloped-data"));
     }
 
     #[test]

@@ -103,8 +103,14 @@ impl SmtpSession {
         &self.capabilities
     }
 
-    /// AUTH LOGIN / PLAIN。优先 LOGIN——国内企业邮对 PLAIN 的支持参差不齐。
-    pub fn authenticate(&mut self, username: &str, password: &str) -> Result<(), String> {
+
+    /// `oauth` 为 true 时走 XOAUTH2；`password` 此时是访问令牌。
+    pub fn authenticate_kind(
+        &mut self,
+        username: &str,
+        password: &str,
+        oauth: bool,
+    ) -> Result<(), String> {
         let lower: Vec<String> = self
             .capabilities
             .iter()
@@ -114,6 +120,31 @@ impl SmtpSession {
             .iter()
             .any(|c| c == "auth" || c.starts_with("auth=login") || c == "auth=login");
         let has_plain = lower.iter().any(|c| c.starts_with("auth=plain"));
+        let has_xoauth2 = lower
+            .iter()
+            .any(|c| c.starts_with("auth=xoauth2") || c == "auth=xoauth2");
+
+        if oauth {
+            if !has_xoauth2 {
+                // 少数服务器不声明但接受它（Exchange Online 传统上就不列 XOAUTH2）。
+                // 仍然尝试一次，失败时报出服务器原文，比「不支持」更有用。
+                debug!("mail: SMTP 未声明 AUTH XOAUTH2，仍尝试发送");
+            }
+            let token = base64(super::oauth::xoauth2_string(username, password).as_bytes());
+            let reply = self.command(&format!("AUTH XOAUTH2 {token}"))?;
+            if reply.code == 235 {
+                return Ok(());
+            }
+            // 失败时服务器可能回 `334 <base64 error>`：按 RFC 4954 需要回一个空行终止。
+            if reply.code == 334 {
+                let _ = self.command("");
+            }
+            return Err(format!(
+                "SMTP OAuth2 认证失败（{}）: {}",
+                reply.code,
+                reply.text()
+            ));
+        }
 
         if has_login {
             let reply = self.command("AUTH LOGIN")?;
@@ -149,14 +180,48 @@ impl SmtpSession {
         Ok(())
     }
 
+    /// 服务器声明的最大报文大小（`SIZE n`，字节）。`None` 表示未声明。
+    pub fn size_limit(&self) -> Option<u64> {
+        self.capabilities
+            .iter()
+            .find_map(|c| c.strip_prefix("SIZE ").and_then(|n| n.trim().parse().ok()))
+    }
+
+    /// 服务器是否支持 BDAT（RFC 3030 CHUNKING）。
+    pub fn supports_chunking(&self) -> bool {
+        self.supports("CHUNKING")
+    }
+
+    /// 服务器是否支持 8BITMIME：允许正文按原始 8 位字节传输，不必 base64 膨胀 33%。
+    pub fn supports_8bitmime(&self) -> bool {
+        self.supports("8BITMIME")
+    }
+
     /// 发送一封已经组装好的报文。`envelope_from` 是返回路径，
     /// `recipients` 是信封收件人（含 Bcc，与头部可见的收件人不同）。
+    ///
+    /// 有 CHUNKING 时走 BDAT 分块：不再需要 dot-stuffing 与整份缓冲，
+    /// 大附件的内存占用与出错重传成本都明显更低。没有则退回经典 DATA。
     pub fn send(&mut self, envelope_from: &str, recipients: &[String], raw: &[u8]) -> Result<(), String> {
         if recipients.is_empty() {
             return Err("收件人为空".to_string());
         }
 
-        let reply = self.command(&format!("MAIL FROM:<{}>", envelope_from.trim()))?;
+        // 不声明 BODY=8BITMIME，除非服务器支持；否则带高位字节的正文会被某些服务器拒收。
+        let body_param = if self.supports_8bitmime() && !is_ascii(raw) {
+            " BODY=8BITMIME"
+        } else {
+            ""
+        };
+        if let Some(limit) = self.size_limit() {
+            // 不提前拒绝：SIZE 参数只是「声明」，真正大小由服务器判定；
+            // 提前拒绝会让「服务器限制偏严格但实际能收」的场景失败。
+            debug!(limit, actual = raw.len(), "mail: 服务器声明的大小上限");
+        }
+        let reply = self.command(&format!(
+            "MAIL FROM:<{}>{body_param}",
+            envelope_from.trim()
+        ))?;
         if reply.code != 250 {
             return Err(format!(
                 "MAIL FROM 被拒绝（{}）: {}",
@@ -177,6 +242,14 @@ impl SmtpSession {
             }
         }
 
+        if self.supports_chunking() {
+            return self.send_bdat(raw);
+        }
+        self.send_data(raw)
+    }
+
+    /// 经典 DATA 阶段。
+    fn send_data(&mut self, raw: &[u8]) -> Result<(), String> {
         let reply = self.command("DATA")?;
         if reply.code != 354 {
             return Err(format!("DATA 被拒绝（{}）: {}", reply.code, reply.text()));
@@ -195,6 +268,49 @@ impl SmtpSession {
         let reply = self.read_reply()?;
         if reply.code != 250 {
             return Err(format!("服务器拒收（{}）: {}", reply.code, reply.text()));
+        }
+        Ok(())
+    }
+
+    /// BDAT 分块：`BDAT <len>\r\n<data>`，最后一块用 `BDAT <len> LAST`。
+    ///
+    /// 按 128 KB 分块：太小会拉长往返次数，太大则单次写入在网络抖动时重传代价高。
+    fn send_bdat(&mut self, raw: &[u8]) -> Result<(), String> {
+        const CHUNK: usize = 128 * 1024;
+        if raw.is_empty() {
+            let reply = self.command("BDAT 0 LAST")?;
+            return if reply.code == 250 {
+                Ok(())
+            } else {
+                Err(format!("BDAT 提交失败（{}）: {}", reply.code, reply.text()))
+            };
+        }
+        let chunks: Vec<&[u8]> = raw.chunks(CHUNK).collect();
+        let total = chunks.len();
+        for (index, chunk) in chunks.into_iter().enumerate() {
+            let last = index + 1 == total;
+            let header = if last {
+                format!("BDAT {} LAST", chunk.len())
+            } else {
+                format!("BDAT {}", chunk.len())
+            };
+            let out = self.stream.get_mut();
+            out.write_all(header.as_bytes())
+                .and_then(|_| out.write_all(b"\r\n"))
+                .and_then(|_| out.write_all(chunk))
+                .and_then(|_| out.flush())
+                .map_err(|e| io_err("写入 BDAT 分块失败", e))?;
+            let reply = self.read_reply()?;
+            if reply.code != 250 {
+                // 中途失败必须发 `RSET` 才能继续用这条连接（BDAT 状态没有自动回滚）。
+                let _ = self.command("RSET");
+                return Err(format!(
+                    "第 {} 块传输失败（{}）: {}",
+                    index + 1,
+                    reply.code,
+                    reply.text()
+                ));
+            }
         }
         Ok(())
     }
@@ -288,6 +404,11 @@ fn base64(bytes: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
+/// 是否包含非 ASCII 字节（判定要不要声明 BODY=8BITMIME）。
+fn is_ascii(bytes: &[u8]) -> bool {
+    bytes.iter().all(|b| b.is_ascii())
+}
+
 /// 发送一封邮件：建连 → 认证 → 投递 → 退出。
 pub fn send_raw(
     account: &Account,
@@ -304,11 +425,13 @@ pub fn send_raw(
         proxy,
         &helo_name(account),
     )?;
-    session.authenticate(&account.login_name(), password)?;
+    let oauth = account.auth_kind.eq_ignore_ascii_case("oauth2");
+    session.authenticate_kind(&account.login_name(), password, oauth)?;
     session.send(envelope_from, recipients, raw)?;
     session.quit();
     Ok(())
 }
+
 
 /// EHLO 名：用发件域，避免某些服务器把 `localhost` 判成垃圾邮件来源。
 fn helo_name(account: &Account) -> String {

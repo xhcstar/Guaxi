@@ -29,6 +29,9 @@
         :last-sync-at="store.lastSyncAt"
         :unread="store.totalUnread"
         :sidebar-collapsed="Boolean(settings.sidebarCollapsed)"
+        :offline-queued="store.offlineQueued"
+        :pending-send="store.pendingSend"
+        :idle-active="store.idleActive"
         @toggle-sidebar="toggleSidebar"
         @sync="onSync"
         @refresh="onRefreshFolders"
@@ -37,6 +40,7 @@
         @contacts="showContacts = true"
         @rules="showRules = true"
         @settings="openSettings"
+        @replay-offline="onReplayOffline"
       />
 
       <div
@@ -103,13 +107,19 @@
 
         <MailListPane
           v-if="!settings.listCollapsed"
+          ref="listPaneRef"
           :messages="store.messages"
           :selected="store.selected"
+          :active-key="activeKey"
           :title="listTitle"
           :loading="store.loading"
           :search-query="store.searchQuery"
           :search-field="store.searchField"
           :filters="store.searchFilters"
+          :virtual="settings.virtualList !== false"
+          :row-height="rowHeightPx"
+          :has-more="store.hasMore"
+          :loading-more="store.loadingMore"
           @update:search-query="onSearchInput"
           @update:search-field="(v) => (store.searchField = v)"
           @search="store.runSearch"
@@ -127,6 +137,7 @@
           @batch="onBatch"
           @drag-start="onDragStart"
           @drag-end="onDragEnd"
+          @load-more="store.loadMore"
         />
 
         <div
@@ -184,9 +195,13 @@
       :settings="settings"
       :theme-mode="store.theme?.mode || 'dark'"
       :undo-seconds="settings.undoSendSeconds"
+      :templates="store.templates"
+      :attachment-checks="attachmentChecks"
       @update="(patch) => Object.assign(store.composing, patch)"
       @send="onSend"
       @save-draft="onSaveDraft"
+      @apply-template="(tpl) => store.applyTemplate(tpl)"
+      @check-attachments="onCheckAttachments"
       @close="store.closeCompose"
     />
 
@@ -199,6 +214,8 @@
       @close="showAccounts = false"
       :test-fn="onTestAccount"
       :has-secret-fn="store.hasSecret"
+      :oauth-start-fn="store.startOAuth"
+      :oauth-poll-fn="onOAuthPoll"
       @saved="onAccountSaved"
       @deleted="onAccountDeleted"
       @select="onAccountSelected"
@@ -218,9 +235,12 @@
       :rules="store.rules"
       :accounts="store.accounts"
       :folders-by-account="store.foldersByAccount"
+      :sender-rules="store.senderRules"
       @close="showRules = false"
       @save="store.saveRule"
       @delete="store.deleteRule"
+      @save-sender-rule="store.saveSenderRule"
+      @delete-sender-rule="store.deleteSenderRule"
     />
 
     <!-- 外观与设置 -->
@@ -228,9 +248,38 @@
       v-if="showSettings"
       :settings="settings"
       :themes="themes"
+      :templates="store.templates"
+      :accounts="store.accounts"
+      :active-account-id="store.activeAccountId"
+      :oauth-status-fn="store.oauthStatusFor"
+      :sieve-preview-fn="previewSieve"
+      :sieve-sync-fn="syncSieve"
+      :smime-status-fn="smimeStatus"
+      :pgp-keys-fn="pgpKeys"
       @close="showSettings = false"
       @update="onSettingsUpdate"
+      @save-template="store.saveTemplate"
+      @delete-template="store.deleteTemplate"
+      @test-notification="onTestNotification"
+      @export-diagnostics="onExportDiagnostics"
+      @reset-connections="(id) => store.resetConnections(id)"
     />
+
+    <!-- 快捷键帮助 -->
+    <div v-if="showShortcuts" class="mail-modal-backdrop" @click.self="showShortcuts = false">
+      <div class="mail-modal" role="dialog" aria-label="键盘快捷键">
+        <div class="mail-modal-head">
+          <h2 class="mail-modal-title">键盘快捷键</h2>
+          <button class="mail-modal-close" @click="showShortcuts = false">×</button>
+        </div>
+        <div class="mail-modal-body">
+          <div v-for="item in shortcutList" :key="item.keys" class="mail-shortcut-row">
+            <kbd class="mail-kbd">{{ item.keys }}</kbd>
+            <span>{{ item.label }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!-- 右键菜单 -->
     <div
@@ -249,6 +298,12 @@
       <button class="mail-context-item" @click="contextAction('junk')">标为垃圾邮件</button>
       <button v-if="contextInJunk" class="mail-context-item" @click="contextAction('unmarkJunk')">
         不是垃圾邮件
+      </button>
+      <button class="mail-context-item is-danger" @click="contextAction('blockSender')">
+        把发件人加入黑名单
+      </button>
+      <button class="mail-context-item" @click="contextAction('allowSender')">
+        把发件人加入白名单
       </button>
       <div class="mail-context-sep"></div>
       <button
@@ -281,10 +336,11 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useMailStore } from '../../../stores/mailStore'
 import { densityMetrics, monoFontStack, readingFontStack, themeToStyle } from './mail/theme'
+import { SHORTCUT_LIST, useMailShortcuts } from './mail/useMailShortcuts'
 import MailToolbar from './mail/MailToolbar.vue'
 import MailSidebar from './mail/MailSidebar.vue'
 import MailListPane from './mail/MailListPane.vue'
@@ -301,11 +357,17 @@ const showAccounts = ref(false)
 const showRules = ref(false)
 const showContacts = ref(false)
 const showSettings = ref(false)
+const showShortcuts = ref(false)
 const toast = ref(null)
 const contextMenu = ref(null)
 const pendingSend = ref(null)
+const listPaneRef = ref(null)
+const activeKey = ref('')
+const attachmentChecks = ref([])
 let toastTimer = null
 let pendingTimer = null
+
+const shortcutList = SHORTCUT_LIST
 
 const settings = computed(() => store.settings)
 const themes = computed(() => [...store.builtinThemes, ...(settings.value.customThemes || [])])
@@ -426,6 +488,114 @@ function notify(text, error = false) {
   clearTimeout(toastTimer)
   toastTimer = setTimeout(() => (toast.value = null), error ? 5200 : 2600)
 }
+
+// ---------------- 虚拟滚动行高 ----------------
+//
+// 与 mail.css 的 --mail-row-height 同源：densityMetrics 已经把它算好了，
+// 这里取数值直接喂给列表组件，避免两边各写一份而慢慢走样。
+const rowHeightPx = computed(() => {
+  const value = densityMetrics(settings.value.density, settings.value.readingSize).rowHeight
+  return Number(String(value).replace('px', '')) || 74
+})
+
+/** 键盘导航的「当前行」：打开邮件时同步一次。 */
+watch(
+  () => store.detail,
+  (detail) => {
+    if (detail) activeKey.value = `${detail.accountId}:${detail.folder}:${detail.uid}`
+  },
+)
+
+// ---------------- 键盘快捷键 ----------------
+
+function step(delta) {
+  if (!store.messages.length) return
+  const index = store.messages.findIndex((m) => store.keyOf(m) === activeKey.value)
+  const next = Math.max(0, Math.min(store.messages.length - 1, index < 0 ? 0 : index + delta))
+  const row = store.messages[next]
+  if (!row) return
+  activeKey.value = store.keyOf(row)
+  listPaneRef.value?.ensureVisible(activeKey.value)
+  store.openMessage(row).catch(() => {})
+}
+
+/** 当前上下文：优先「当前行」，其次「已打开邮件」，最后「批量选中的第一封」。 */
+function currentRow() {
+  const byKey = store.rowByKey(activeKey.value)
+  if (byKey) return byKey
+  if (store.selected) return store.selected
+  const selected = store.selectedRows()
+  return selected[0] || null
+}
+
+function currentDetail() {
+  if (store.detail) return store.detail
+  return currentRow()
+}
+
+function replyCurrent(all = false) {
+  const detail = currentDetail()
+  if (!detail) return
+  onReply(detail, all)
+}
+
+useMailShortcuts(
+  {
+    next: () => step(1),
+    prev: () => step(-1),
+    open: () => {
+      const row = currentRow()
+      if (row) onOpenMessage(row)
+    },
+    reply: () => replyCurrent(false),
+    replyAll: () => replyCurrent(true),
+    forward: () => {
+      const detail = currentDetail()
+      if (detail) onForward(detail)
+    },
+    compose: () => onCompose(),
+    star: () => {
+      const row = currentRow()
+      if (row) store.setFlagged(row, !row.flagged)
+    },
+    unread: () => {
+      const row = currentRow()
+      if (row) {
+        store.setSeen([row], false).then(() => {
+          if (store.detail && store.detail.uid === row.uid) store.detail.seen = false
+        })
+      }
+    },
+    archive: () => {
+      const detail = currentDetail()
+      if (detail) onArchiveCurrent(detail)
+    },
+    delete: () => {
+      const detail = currentDetail()
+      if (detail) onDeleteCurrent(detail)
+    },
+    escape: () => {
+      if (showShortcuts.value) {
+        showShortcuts.value = false
+        return
+      }
+      if (contextMenu.value) {
+        closeContextMenu()
+        return
+      }
+      if (store.detail) closeReader()
+    },
+    help: () => (showShortcuts.value = true),
+    send: () => {
+      // Ctrl+Enter：只在写信时有效，交给编辑器自己的处理（避免与「打开」冲突）。
+    },
+  },
+  {
+    focusSearch: () => {
+      document.querySelector('.mail-search input')?.focus()
+    },
+  },
+)
 
 // ---------------- 生命周期 ----------------
 
@@ -750,12 +920,25 @@ async function contextAction(action, target) {
     if (action === 'delete') {
       await store.runBatch('delete')
       notify(`已删除 ${rows.length} 封`)
+      return
+    }
+    if (action === 'blockSender' || action === 'allowSender') {
+      const targets = [...new Set(rows.map((r) => String(r.fromAddr || '').trim().toLowerCase()))]
+        .filter(Boolean)
+      if (!targets.length) {
+        notify('这封邮件没有发件人地址', true)
+        return
+      }
+      const kind = action === 'blockSender' ? 'block' : 'allow'
+      for (const address of targets) {
+        await store.blockSender(address, kind)
+      }
+      notify(kind === 'block' ? `已加入黑名单：${targets.join('、')}` : `已加入白名单：${targets.join('、')}`)
     }
   } catch (error) {
     notify(String(error?.message || error), true)
   }
 }
-
 const contextCount = computed(() => store.selectedKeys.length || 1)
 const contextInJunk = computed(() => {
   const row = contextMenu.value?.row
@@ -888,15 +1071,19 @@ function openSettings() {
   showSettings.value = true
 }
 
-async function onAccountSaved({ account, secret }) {
+async function onAccountSaved({ account, secret, closeAfter = true }) {
   try {
-    await store.saveAccount(account, secret)
-    showAccounts.value = false
+    const saved = await store.saveAccount(account, secret)
+    if (closeAfter !== false) showAccounts.value = false
     notify('账户已保存')
-    const result = await store.syncNow()
-    if (result.errors?.length) notify(result.errors[0], true)
+    if (closeAfter !== false) {
+      const result = await store.syncNow()
+      if (result.errors?.length) notify(result.errors[0], true)
+    }
+    return saved
   } catch (error) {
     notify(String(error?.message || error), true)
+    throw error
   }
 }
 
@@ -909,6 +1096,14 @@ async function onTestAccount(account, secret) {
   return store.testAccount(account, secret)
 }
 
+/** OAuth 轮询：成功后把账户标记刷新一下，界面才能显示「已授权」。 */
+async function onOAuthPoll(accountId, provider, deviceCode) {
+  await store.pollOAuth(accountId, provider, deviceCode.deviceCode, deviceCode.interval)
+  const accounts = await invoke('mail_list_accounts').catch(() => null)
+  if (accounts) store.accounts = accounts
+  await store.resetConnections(accountId).catch(() => {})
+}
+
 async function onAccountSelected(id) {
   store.selectAccount(id)
   showAccounts.value = false
@@ -917,9 +1112,71 @@ async function onAccountSelected(id) {
 async function onSettingsUpdate(patch) {
   try {
     await store.saveSettings(patch)
+    // 改完设置后有些东西要重算：IDLE 开关、连接参数。
+    if ('fetchMode' in patch) {
+      if (patch.fetchMode === 'idle') store.startIdle().catch(() => {})
+      else store.stopIdle().catch(() => {})
+    }
+    if ('virtualList' in patch) {
+      // 虚拟滚动开关影响列表渲染方式，强制刷新一次。
+      await store.loadMessages({ silent: true })
+    }
   } catch (error) {
     notify(String(error?.message || error), true)
   }
+}
+
+async function onCheckAttachments(paths) {
+  attachmentChecks.value = await store.checkAttachments(paths)
+}
+
+async function onReplayOffline() {
+  const result = await store.replayOffline()
+  if (result?.failed) notify(`${result.failed} 条操作重放失败，网络恢复后会再试`, true)
+  else if (result?.replayed) notify(`已补传 ${result.replayed} 条离线操作`)
+  else notify('没有需要补传的操作')
+}
+
+async function onTestNotification() {
+  try {
+    await store.testNotification()
+    notify('已发送测试通知')
+  } catch (error) {
+    notify(String(error?.message || error), true)
+  }
+}
+
+async function onExportDiagnostics() {
+  try {
+    const { save } = await import('@tauri-apps/plugin-dialog')
+    const path = await save({
+      title: '导出诊断报告',
+      defaultPath: `guaxi-mail-diagnostics-${new Date().toISOString().slice(0, 10)}.json`,
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    })
+    if (!path) return
+    await store.exportDiagnostics(path)
+    notify(`诊断报告已保存到 ${path}`)
+  } catch (error) {
+    notify(String(error?.message || error), true)
+  }
+}
+
+async function previewSieve(accountId) {
+  return invoke('mail_sieve_preview', { accountId })
+}
+
+async function syncSieve(accountId) {
+  const warnings = await invoke('mail_sieve_sync', { accountId })
+  return warnings || []
+}
+
+async function smimeStatus(accountId) {
+  return invoke('mail_smime_status', { accountId })
+}
+
+async function pgpKeys() {
+  return invoke('mail_pgp_keys')
 }
 
 defineExpose({ expandThread })

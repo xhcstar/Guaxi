@@ -135,6 +135,44 @@
         <button class="mail-fmt-btn" title="从笔记库选择文件作为附件" @click="pickFromNotes">
           📚 笔记
         </button>
+        <button class="mail-fmt-btn" title="把图片插进正文（内联显示，不当作附件）" @click="pickInlineImages">
+          🖼 内联图
+        </button>
+
+        <select
+          v-if="templates.length"
+          class="mail-select"
+          style="max-width: 130px"
+          title="套用模板"
+          @change="onTemplateChange($event)"
+        >
+          <option value="">套用模板…</option>
+          <option v-for="t in templates" :key="t.id" :value="t.id">{{ t.name || '（未命名）' }}</option>
+        </select>
+
+        <button
+          v-if="needsPeerCert"
+          class="mail-fmt-btn"
+          :class="{ 'is-on': peerCertReady }"
+          :title="peerCertReady ? '收件人证书已导入' : '加密发送需要收件人的 S/MIME 证书'"
+          @click="importPeerCert"
+        >
+          {{ peerCertReady ? '✓ 收件人证书' : '⚠ 导入收件人证书' }}
+        </button>
+        <select
+          class="mail-select"
+          style="max-width: 150px"
+          :value="draft.cryptoMode || ''"
+          title="端到端加密 / 签名"
+          @change="$emit('update', { cryptoMode: $event.target.value })"
+        >
+          <option value="">不加密</option>
+          <option value="smime_sign">S/MIME 签名</option>
+          <option value="smime_encrypt">S/MIME 加密</option>
+          <option value="smime_sign_encrypt">S/MIME 签名并加密</option>
+          <option value="pgp_sign">PGP 签名</option>
+          <option value="pgp_encrypt">PGP 加密</option>
+        </select>
 
         <span style="margin-left: auto"></span>
         <button class="mail-btn" :disabled="sending" @click="$emit('save-draft')">保存草稿</button>
@@ -175,16 +213,29 @@
         ></div>
       </div>
 
-      <div v-if="draft.attachments.length" class="mail-attach-list">
+      <div v-if="draft.attachments.length || (draft.inlineImages || []).length" class="mail-attach-list">
         <button
           v-for="att in draft.attachments"
           :key="att.path"
           class="mail-attachment"
-          :title="`移除 ${att.path}`"
+          :class="{ 'is-danger': isDangerous(att.name) }"
+          :title="warningFor(att.name) || `移除 ${att.path}`"
           @click="removeAttachment(att.path)"
         >
-          <span>📄</span>
+          <span>{{ isDangerous(att.name) ? '⚠' : '📄' }}</span>
           <span class="mail-attachment-name">{{ att.name }}</span>
+          <span v-if="sizeHint(att.path)" class="mail-attachment-size">{{ sizeHint(att.path) }}</span>
+          <span class="mail-attachment-size">×</span>
+        </button>
+        <button
+          v-for="img in draft.inlineImages || []"
+          :key="img.contentId"
+          class="mail-attachment is-inline"
+          :title="`移除内联图片 ${img.name || img.path}`"
+          @click="removeInlineImage(img.contentId)"
+        >
+          <span>🖼</span>
+          <span class="mail-attachment-name">{{ img.name || '内联图片' }}</span>
           <span class="mail-attachment-size">×</span>
         </button>
       </div>
@@ -211,8 +262,19 @@ const props = defineProps({
   settings: { type: Object, default: () => ({}) },
   themeMode: { type: String, default: 'dark' },
   undoSeconds: { type: Number, default: 0 },
+  /** 模板清单（store.templates）。空数组时下拉不显示。 */
+  templates: { type: Array, default: () => [] },
+  /** 附件检查结果：[{ path, name, size, level, detail }]（store.checkAttachments）。 */
+  attachmentChecks: { type: Array, default: () => [] },
 })
-const emit = defineEmits(['update', 'send', 'save-draft', 'close'])
+const emit = defineEmits([
+  'update',
+  'send',
+  'save-draft',
+  'close',
+  'apply-template',
+  'check-attachments',
+])
 
 const editorRef = ref(null)
 const maximized = ref(false)
@@ -299,6 +361,27 @@ function toggleSource() {
 
 /** 粘贴时只保留纯文本与基本行内格式：外部网页的样式会毁掉整封邮件的排版。 */
 function onPaste(event) {
+  // 剪贴板里的图片：优先作为内联图（截图贴进正文是最常见的用法）。
+  const files = Array.from(event.clipboardData?.files || []).filter((f) =>
+    String(f.type || '').startsWith('image/'),
+  )
+  if (files.length) {
+    event.preventDefault()
+    for (const file of files) {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const dataUrl = String(reader.result || '')
+        const match = dataUrl.match(/^data:([^;]+);base64,(.*)$/)
+        if (!match) return
+        // 粘贴的图片没有本地路径：直接以 data URL 插入正文。
+        // 发送时仍能显示（邮件客户端都支持内联 data URL 的降级渲染）。
+        document.execCommand('insertHTML', false, `<img src="${dataUrl}" alt="粘贴的图片" />`)
+        onEditorInput()
+      }
+      reader.readAsDataURL(file)
+    }
+    return
+  }
   const html = event.clipboardData?.getData('text/html')
   if (html) {
     event.preventDefault()
@@ -410,6 +493,146 @@ async function pickFromNotes() {
   }
 }
 
+/** 把图片作为 `multipart/related` 的内联资源插进正文。 */
+async function pickInlineImages() {
+  try {
+    const files = await open({
+      multiple: true,
+      title: '选择要插入正文的图片',
+      filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'] }],
+    })
+    if (!files) return
+    addInlineImages(Array.isArray(files) ? files : [files])
+  } catch (error) {
+    logger.warn('选择内联图片失败', error)
+  }
+}
+
+/**
+ * 登记内联图片并把 `<img src="cid:...">` 插到光标处。
+ * Content-ID 用随机串而不是文件名：同名图片在多封邮件里复用同一 cid
+ * 会让收信端把缓存串起来（换了图却还显示旧图）。
+ */
+function addInlineImages(paths) {
+  if (sourceMode.value) {
+    window.alert('请先切回富文本模式再插入图片')
+    return
+  }
+  const next = [...(props.draft.inlineImages || [])]
+  for (const path of paths) {
+    if (!path) continue
+    const name = path.split(/[\\/]/).pop()
+    const contentId = `guaxi-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}@guaxi`
+    next.push({ contentId, path, name })
+    document.execCommand(
+      'insertHTML',
+      false,
+      `<img src="cid:${contentId}" alt="${escapeHtml(name)}" />`,
+    )
+  }
+  emit('update', { inlineImages: next })
+  onEditorInput()
+}
+
+function removeInlineImage(contentId) {
+  const next = (props.draft.inlineImages || []).filter((img) => img.contentId !== contentId)
+  emit('update', { inlineImages: next })
+  // 正文里对应的 img 一并删掉，否则收信端会看到一个破图。
+  if (editorRef.value) {
+    editorRef.value.querySelectorAll('img').forEach((img) => {
+      if (img.getAttribute('src') === `cid:${contentId}`) img.remove()
+    })
+    onEditorInput()
+  }
+}
+
+/** 套用模板：只覆盖主题与正文，保留收件人。 */
+function onTemplateChange(event) {
+  const id = event.target.value
+  event.target.value = ''
+  if (!id) return
+  const template = props.templates.find((t) => t.id === id)
+  if (!template) return
+  if (!window.confirm(`套用模板「${template.name}」会覆盖当前主题与正文，继续？`)) return
+  emit('apply-template', template)
+  if (editorRef.value && template.html) {
+    editorRef.value.innerHTML = template.html
+    lastHtml = template.html
+  }
+}
+
+// ── S/MIME 收件人证书 ──
+//
+// 加密发送必须有收件人的证书；没有就在工具栏上给一个明显的入口，
+// 而不是等到点「发送」才报「无法加密」。
+const needsPeerCert = computed(() => String(props.draft.cryptoMode || '').startsWith('smime_encrypt') || String(props.draft.cryptoMode || '').startsWith('smime_sign_encrypt'))
+const peerCertReady = ref(false)
+const peerAddress = computed(() => {
+  const first = props.draft.to?.[0] || ''
+  const match = String(first).match(/<([^>]+)>/)
+  return (match ? match[1] : first).trim().toLowerCase()
+})
+
+watch(
+  () => [needsPeerCert.value, peerAddress.value],
+  async ([need, address]) => {
+    if (!need || !address) {
+      peerCertReady.value = false
+      return
+    }
+    peerCertReady.value = await invoke('mail_smime_peer_status', { address }).catch(() => false)
+  },
+)
+
+async function importPeerCert() {
+  const address = peerAddress.value
+  if (!address) {
+    window.alert('请先填写收件人')
+    return
+  }
+  const { open } = await import('@tauri-apps/plugin-dialog')
+  const files = await open({
+    multiple: false,
+    title: `选择 ${address} 的 S/MIME 证书`,
+    filters: [{ name: '证书', extensions: ['pem', 'crt', 'cer'] }],
+  })
+  if (!files) return
+  try {
+    const { readTextFile } = await import('@tauri-apps/plugin-fs')
+    const certPem = await readTextFile(files)
+    await invoke('mail_smime_save_peer', { address, certPem })
+    peerCertReady.value = true
+  } catch (error) {
+    window.alert(String(error?.message || error))
+  }
+}
+
+/** 附件危险类型 / 超限提示。 */
+function checkOf(path) {
+  return props.attachmentChecks.find((c) => c.path === path) || null
+}
+
+function isDangerous(name) {
+  const ext = String(name || '').split('.').pop().toLowerCase()
+  return [
+    'exe', 'scr', 'com', 'bat', 'cmd', 'pif', 'msi', 'vbs', 'vbe', 'js', 'jse',
+    'wsf', 'wsh', 'ps1', 'psm1', 'hta', 'cpl', 'reg', 'lnk', 'jar',
+  ].includes(ext)
+}
+
+function warningFor(path) {
+  const check = checkOf(path)
+  if (!check) return ''
+  return check.level === 'ok' ? '' : check.detail
+}
+
+function sizeHint(path) {
+  const check = checkOf(path)
+  if (!check || !check.size) return ''
+  const mb = check.size / 1048576
+  return mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.max(1, Math.round(check.size / 1024))} KB`
+}
+
 function addPaths(list) {
   const next = [...props.draft.attachments]
   for (const path of list) {
@@ -419,6 +642,7 @@ function addPaths(list) {
     next.push({ path, name })
   }
   emit('update', { attachments: next })
+  emit('check-attachments', next.map((a) => a.path))
 }
 
 /** 把一段文本作为正文追加（用于「把邮件/笔记内容发出去」这类场景）。 */
@@ -502,7 +726,9 @@ onBeforeUnmount(() => {
 defineExpose({ appendBodyText, addPaths, stashNow })
 
 function removeAttachment(path) {
-  emit('update', { attachments: props.draft.attachments.filter((a) => a.path !== path) })
+  const next = props.draft.attachments.filter((a) => a.path !== path)
+  emit('update', { attachments: next })
+  emit('check-attachments', next.map((a) => a.path))
 }
 
 async function send(useOutbox) {

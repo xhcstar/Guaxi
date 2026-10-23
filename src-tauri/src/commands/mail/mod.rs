@@ -22,10 +22,24 @@ pub mod imap;
 pub mod mime;
 pub mod model;
 pub mod net;
+/// 系统通知、诊断导出、危险附件判定。
+pub mod notify;
+/// 离线写队列：断网时排队，恢复后重放。
+pub mod offline;
+/// OAuth2（XOAUTH2）：Gmail / Outlook 现代账户的唯一可用认证方式。
+pub mod oauth;
+pub mod pgp;
+pub mod pool;
 pub mod rules;
 pub mod sanitize;
+/// 服务器端规则（Sieve，RFC 5228 / RFC 5804）。
+pub mod sieve;
 pub mod smtp;
+pub mod smime;
+pub mod smime_crypto;
 pub mod store;
+/// 同步互斥 + 离线写队列。
+pub mod sync;
 pub mod theme;
 
 use model::{
@@ -51,6 +65,7 @@ fn ensure_init(app: &AppHandle) -> Result<(), String> {
     }
     store::init(app)?;
     contacts::store::init()?;
+    offline::init_table()?;
     let _ = INITED.set(());
     Ok(())
 }
@@ -86,7 +101,15 @@ pub fn effective_proxy(account: &Account) -> Option<&ProxyConfig> {
     account.proxy.as_ref()
 }
 
+/// 取「可用于认证的秘密」。
+///
+/// 密码账户是 keychain 里的口令 / 授权码；OAuth2 账户是访问令牌（过期自动刷新）。
+/// 所有调用点都走这里，认证方式的差异就被收敛到一个函数里——
+/// 否则每加一处「连服务器」的代码都要记得判断 `auth_kind`。
 fn account_password(account: &Account) -> Result<String, String> {
+    if account.auth_kind.eq_ignore_ascii_case("oauth2") {
+        return oauth::access_token(account);
+    }
     read_secret(&account.id).ok_or_else(|| {
         format!(
             "账户 {} 尚未保存密码或授权码，请在账户设置里填写",
@@ -97,6 +120,38 @@ fn account_password(account: &Account) -> Result<String, String> {
 
 fn load_account(account_id: &str) -> Result<Account, String> {
     store::get_account(account_id)?.ok_or_else(|| "账户不存在".to_string())
+}
+
+/// 执行一次「会写到服务器」的操作；断网失败时按配置入离线队列。
+///
+/// 关键点：**本地状态先改，服务器同步失败不算失败**。用户点了已读就应当立刻变已读，
+/// 网络问题留给队列去补——这正是「离线可用」的全部含义。
+/// 但认证失败、文件夹不存在这类永久性错误不能排队（重放一百次也不会成功），
+/// 由 `offline::is_offline_error` 判定。
+fn write_with_fallback(
+    account: &Account,
+    op: offline::OfflineOp,
+    action: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    let settings = store::load_settings();
+    match action() {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            if settings.offline_queue && offline::is_offline_error(&e) {
+                let mut op = op;
+                op.account_id = account.id.clone();
+                if op.created_at == 0 {
+                    op.created_at = chrono::Utc::now().timestamp();
+                }
+                if let Err(queue_error) = offline::enqueue(&op) {
+                    return Err(format!("{e}（离线排队也失败: {queue_error}）"));
+                }
+                info!(kind = %op.kind, folder = %op.folder, "mail: 网络问题，写操作已排队待重放");
+                return Ok(());
+            }
+            Err(e)
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -172,10 +227,17 @@ pub async fn mail_test_account(
 ) -> Result<Vec<model::ConnectionProbe>, String> {
     ensure_init(&app)?;
     // 新建账户时表单里的口令还没落库，优先用传进来的那份。
+    // OAuth2 账户的表单里没有口令字段：直接取（可能还要刷新的）访问令牌。
     let password = secret
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .or_else(|| read_secret(&account.id))
+        .or_else(|| {
+            if account.auth_kind.eq_ignore_ascii_case("oauth2") {
+                oauth::access_token(&account).ok()
+            } else {
+                read_secret(&account.id)
+            }
+        })
         .unwrap_or_default();
 
     let imap_probe = tauri::async_runtime::spawn_blocking({
@@ -210,7 +272,11 @@ fn smtp_probe(account: &Account, password: &str) -> model::ConnectionProbe {
         Ok(mut session) => {
             probe.capabilities = session.capabilities().to_vec();
             probe.stage = "auth".into();
-            match session.authenticate(&account.login_name(), password) {
+            match session.authenticate_kind(
+                &account.login_name(),
+                password,
+                account.auth_kind.eq_ignore_ascii_case("oauth2"),
+            ) {
                 Ok(()) => {
                     probe.ok = true;
                     probe.stage = "done".into();
@@ -306,6 +372,9 @@ pub async fn mail_delete_folder(
 // ---------------------------------------------------------------------------
 
 /// 同步一个文件夹。返回本次新增的邮件（前端据此更新列表）。
+///
+/// 整段在账户级互斥锁内执行：手动刷新、定时轮询、规则动作、发信后的草稿同步
+/// 四个触发源都会走到这里，没有锁时同一批 UID 会被并行拉取两遍。
 #[command]
 pub async fn mail_sync_folder(
     app: AppHandle,
@@ -314,31 +383,7 @@ pub async fn mail_sync_folder(
 ) -> Result<Vec<MessageSummary>, String> {
     ensure_init(&app)?;
     let account = load_account(&account_id)?;
-    let password = account_password(&account)?;
-    let settings = store::load_settings();
-    let (uid_validity, _) = store::folder_uid_state(&account_id, &folder)?;
-    let last_uid = store::last_uid(&account_id, &folder)?;
-    let snippet_len = settings.snippet_len as usize;
-
-    let items = tauri::async_runtime::spawn_blocking({
-        let account = account.clone();
-        let folder = folder.clone();
-        let password = password.clone();
-        move || imap::sync_folder(&account, &password, &folder, uid_validity, last_uid, snippet_len)
-    })
-    .await
-    .map_err(|e| format!("同步任务失败: {e}"))??;
-
-    store::touch_account_sync(&account_id, chrono::Utc::now().timestamp())?;
-    collect_contacts(&account, &items);
-
-    if settings.rules_enabled && !items.is_empty() {
-        let rules = store::list_rules()?;
-        if !rules.is_empty() {
-            apply_rules_to_new(&account, &password, &folder, &items, &rules).await;
-        }
-    }
-
+    let items = sync_folder_guarded(&account, &folder).await?;
     let _ = app.emit(
         MAIL_SYNC_EVENT,
         serde_json::json!({
@@ -347,10 +392,107 @@ pub async fn mail_sync_folder(
             "added": items.len(),
         }),
     );
-    if !items.is_empty() {
-        let _ = app.emit(MAIL_NEW_EVENT, &items);
+    emit_new_mail(&app, &account, &folder, &items);
+    Ok(items)
+}
+
+/// 同步单个文件夹的完整流程（加锁、增量、标记比对、规则、通知）。
+async fn sync_folder_guarded(
+    account: &Account,
+    folder: &str,
+) -> Result<Vec<MessageSummary>, String> {
+    let settings = store::load_settings();
+    let account_id = account.id.clone();
+    let folder_name = folder.to_string();
+    let acc = account.clone();
+
+    let items = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<MessageSummary>, String> {
+        let _guard = sync::lock_account(&account_id);
+        let (uid_validity, _) = store::folder_uid_state(&account_id, &folder_name)?;
+        let last_uid = store::last_uid(&account_id, &folder_name)?;
+        let items = imap::sync_folder_pooled(
+            &acc,
+            &folder_name,
+            uid_validity,
+            last_uid,
+            settings.snippet_len as usize,
+        )?;
+        // 增量之后按间隔做一次标记全量比对：增量只管「新信」，
+        // 而「已读 / 星标 / 被别处删掉」是就地变化，UID 不变。
+        //
+        // 间隔由 `flag_sync_minutes` 控制（默认 10 分钟）：全量比对要一次
+        // `UID FETCH (FLAGS)`，几万封也要几百 KB，每 90 秒跑一次没必要。
+        let interval_secs = (settings.flag_sync_minutes.max(1) as i64) * 60;
+        let last_flags = store::folder_flags_synced_at(&account_id, &folder_name);
+        let now = chrono::Utc::now().timestamp();
+        let due = last_flags == 0 || now - last_flags >= interval_secs;
+        if due {
+            match imap::sync_flags_pooled(&acc, &folder_name) {
+                Ok(result) => {
+                    if result.updated > 0 || result.removed > 0 {
+                        info!(
+                            folder = %folder_name,
+                            updated = result.updated,
+                            removed = result.removed,
+                            "mail: 多设备标记已同步"
+                        );
+                    }
+                    store::touch_folder_flags_synced(&account_id, &folder_name, now);
+                }
+                Err(e) => warn!(error = %e, "mail: 标记比对失败（不影响增量结果）"),
+            }
+        }
+        Ok(items)
+    })
+    .await
+    .map_err(|e| format!("同步任务失败: {e}"))??;
+
+    store::touch_account_sync(&account.id, chrono::Utc::now().timestamp())?;
+    collect_contacts(account, &items);
+
+    if settings.rules_enabled && !items.is_empty() {
+        let rules = store::list_rules()?;
+        if !rules.is_empty() {
+            apply_rules_to_new(account, &items, &rules).await;
+        }
     }
     Ok(items)
+}
+
+/// 新邮件通知：只在「确实有新邮件」且设置开启时发。
+fn emit_new_mail(app: &AppHandle, account: &Account, folder: &str, items: &[MessageSummary]) {
+    if items.is_empty() {
+        return;
+    }
+    let _ = app.emit(MAIL_NEW_EVENT, items);
+    let settings = store::load_settings();
+    if !settings.notify_new_mail {
+        return;
+    }
+    // 只对收件箱（以及没有角色信息的默认收件箱）提示：自己发出去的、
+    // 后台同步草稿箱 / 已发送的，不该让系统弹「新邮件」。
+    let role = store::list_folders(&account.id)
+        .ok()
+        .and_then(|list| list.into_iter().find(|f| f.name == folder))
+        .map(|f| f.role);
+    if !matches!(role, Some(FolderRole::Inbox) | None) {
+        return;
+    }
+    let notices: Vec<model::NewMailNotice> = items
+        .iter()
+        .filter(|m| !m.outgoing)
+        .take(5)
+        .map(|m| model::NewMailNotice {
+            account_id: m.account_id.clone(),
+            account_email: account.email.clone(),
+            folder: m.folder.clone(),
+            uid: m.uid,
+            from_name: m.from_name.clone(),
+            from_addr: m.from_addr.clone(),
+            subject: m.subject.clone(),
+        })
+        .collect();
+    notify::notify_new_mail(app, &notices);
 }
 
 
@@ -387,25 +529,48 @@ fn collect_contacts(account: &Account, items: &[MessageSummary]) {
 /// 移动、删除、转发需要服务器往返，失败时只记录日志，不阻塞同步。
 async fn apply_rules_to_new(
     account: &Account,
-    password: &str,
-    folder: &str,
     messages: &[MessageSummary],
     all_rules: &[MailRule],
 ) {
     let folders = store::list_folders(&account.id).unwrap_or_default();
-    let folder_role = folders
-        .iter()
-        .find(|f| f.name == folder)
-        .map(|f| f.role.as_str().to_string())
-        .unwrap_or_else(|| "custom".to_string());
     let trash = folders
         .iter()
         .find(|f| f.role == FolderRole::Trash)
         .map(|f| f.name.clone());
+    // 收/发件人名单比规则优先：命中的发件人直接按名单处理，不再跑规则。
+    let sender_rules = store::list_sender_rules().unwrap_or_default();
 
     for msg in messages {
         if msg.outgoing {
             continue;
+        }
+        let folder_role = msg
+            .folder
+            .as_str()
+            .is_empty()
+            .then(|| "custom".to_string())
+            .unwrap_or_else(|| {
+                folders
+                    .iter()
+                    .find(|f| f.name == msg.folder)
+                    .map(|f| f.role.as_str().to_string())
+                    .unwrap_or_else(|| "custom".to_string())
+            });
+        if let Some(verdict) = rules::sender_list_verdict(&sender_rules, &msg.from_addr, &msg.from_name) {
+            match verdict {
+                rules::SenderVerdict::Blocked => {
+                    if let Some(trash) = trash.as_ref() {
+                        apply_rule_move(account, msg, trash).await;
+                    } else {
+                        let _ = store::delete_message(&msg.account_id, &msg.folder, msg.uid);
+                    }
+                    continue;
+                }
+                rules::SenderVerdict::Allowed => {
+                    // 白名单：跳过后续规则，但仍要标为已读（用户明确在意的人）。
+                    continue;
+                }
+            }
         }
         let body = store::get_body(&msg.account_id, &msg.folder, msg.uid)
             .ok()
@@ -439,12 +604,12 @@ async fn apply_rules_to_new(
         }
 
         if merged.mark_read || merged.star {
-            let (acc, pw, folder_name) = (account.clone(), password.to_string(), folder.to_string());
+            let (acc, folder_name) = (account.clone(), msg.folder.clone());
             let uids = vec![msg.uid];
             let seen = if merged.mark_read { Some(true) } else { None };
             let flagged = if merged.star { Some(true) } else { None };
             let _ = tauri::async_runtime::spawn_blocking(move || {
-                imap::set_flags(&acc, &pw, &folder_name, &uids, seen, flagged)
+                imap::set_flags(&acc, "", &folder_name, &uids, seen, flagged)
             })
             .await;
         }
@@ -458,38 +623,38 @@ async fn apply_rules_to_new(
             }
         });
         if let Some(target) = move_target {
-            let (acc, pw, folder_name) = (account.clone(), password.to_string(), folder.to_string());
-            let uids = vec![msg.uid];
-            let moved = tauri::async_runtime::spawn_blocking(move || {
-                imap::move_messages(&acc, &pw, &folder_name, &uids, &target)
-            })
-            .await;
-            match moved {
-                Ok(Ok(())) => {
-                    let _ = store::delete_message(&msg.account_id, &msg.folder, msg.uid);
-                }
-                Ok(Err(e)) => error!(error = %e, uid = msg.uid, "mail: 规则移动邮件失败"),
-                Err(e) => error!(error = %e, uid = msg.uid, "mail: 规则移动任务失败"),
-            }
+            apply_rule_move(account, msg, &target).await;
         }
 
         if !merged.forward_to.is_empty() {
-            forward_by_rule(&account.clone(), password, msg, &merged.forward_to).await;
+            forward_by_rule(&account.clone(), msg, &merged.forward_to).await;
         }
     }
 }
 
-async fn forward_by_rule(
-    account: &Account,
-    password: &str,
-    msg: &MessageSummary,
-    recipients: &[String],
-) {
-    let (acc, pw) = (account.clone(), password.to_string());
-    let (folder, uid) = (msg.folder.clone(), msg.uid);
+/// 规则 / 名单触发的移动：搬完再删本地行，失败只记日志（不阻塞同步）。
+async fn apply_rule_move(account: &Account, msg: &MessageSummary, target: &str) {
+    let (acc, folder_name, target_owned) =
+        (account.clone(), msg.folder.clone(), target.to_string());
+    let uids = vec![msg.uid];
+    let moved = tauri::async_runtime::spawn_blocking(move || {
+        imap::move_messages(&acc, "", &folder_name, &uids, &target_owned)
+    })
+    .await;
+    match moved {
+        Ok(Ok(())) => {
+            let _ = store::delete_message(&msg.account_id, &msg.folder, msg.uid);
+        }
+        Ok(Err(e)) => error!(error = %e, uid = msg.uid, "mail: 规则移动邮件失败"),
+        Err(e) => error!(error = %e, uid = msg.uid, "mail: 规则移动任务失败"),
+    }
+}
+
+async fn forward_by_rule(account: &Account, msg: &MessageSummary, recipients: &[String]) {
+    let (acc, folder, uid) = (account.clone(), msg.folder.clone(), msg.uid);
     let recipients = recipients.to_vec();
     let result = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
-        let raw = imap::fetch_raw(&acc, &pw, &folder, uid)?;
+        let raw = imap::fetch_raw(&acc, "", &folder, uid)?;
         let parsed = mime::parse(&raw, false).ok_or("无法解析原邮件")?;
         let request = SendRequest {
             account_id: acc.id.clone(),
@@ -503,13 +668,16 @@ async fn forward_by_rule(
             references: None,
             attachments: vec![],
             save_to_sent: Some(false),
+            inline_images: Vec::new(),
+            crypto_mode: String::new(),
         };
         let from = MailAddress {
             name: acc.display_name.clone(),
             address: acc.email.clone(),
         };
         let bytes = mime::build(&request, &from, "")?;
-        smtp::send_raw(&acc, &pw, effective_proxy(&acc), &acc.email, &recipients, &bytes)
+        let secret = imap::auth_secret(&acc)?;
+        smtp::send_raw(&acc, &secret, effective_proxy(&acc), &acc.email, &recipients, &bytes)
     })
     .await;
     match result {
@@ -545,13 +713,26 @@ pub async fn mail_sync_all(app: AppHandle) -> Result<serde_json::Value, String> 
                 }
             },
         };
+        // 后台轮询只同步收件箱：已发送 / 草稿等文件夹的变化频率低，
+        // 每 90 秒把所有文件夹都拉一遍会让服务器负担与移动端耗电都变得不合理。
+        // 用户正在浏览的文件夹由前端单独调 `mail_sync_folder` 补。
         for folder in folders
             .iter()
             .filter(|f| f.role == FolderRole::Inbox && f.selectable)
         {
             match sync_one(&account, &folder.name).await {
                 Ok(n) => total += n,
-                Err(e) => errors.push(format!("{} / {}: {e}", account.email, folder.display_name)),
+                Err(e) => {
+                    // 网络类错误在轮询里很常见（笔记本合盖、切 Wi-Fi），
+                    // 不该把用户从「安静」模式里吵醒；只在日志留痕。
+                    warn!(
+                        account = %account.email,
+                        folder = %folder.display_name,
+                        error = %e,
+                        "mail: 定时同步失败"
+                    );
+                    errors.push(format!("{} / {}: {e}", account.email, folder.display_name));
+                }
             }
         }
     }
@@ -569,35 +750,7 @@ async fn refresh_folders_inner(account: &Account) -> Result<Vec<MailFolder>, Str
 }
 
 async fn sync_one(account: &Account, folder: &str) -> Result<usize, String> {
-    let password = account_password(account)?;
-    let settings = store::load_settings();
-    let (uid_validity, _) = store::folder_uid_state(&account.id, folder)?;
-    let last_uid = store::last_uid(&account.id, folder)?;
-    let acc = account.clone();
-    let folder_name = folder.to_string();
-    let snippet_len = settings.snippet_len as usize;
-    let password_for_sync = password.clone();
-    let items = tauri::async_runtime::spawn_blocking(move || {
-        imap::sync_folder(
-            &acc,
-            &password_for_sync,
-            &folder_name,
-            uid_validity,
-            last_uid,
-            snippet_len,
-        )
-    })
-    .await
-    .map_err(|e| format!("同步任务失败: {e}"))??;
-    store::touch_account_sync(&account.id, chrono::Utc::now().timestamp())?;
-    collect_contacts(account, &items);
-
-    if settings.rules_enabled && !items.is_empty() {
-        let rules = store::list_rules()?;
-        if !rules.is_empty() {
-            apply_rules_to_new(account, &password, folder, &items, &rules).await;
-        }
-    }
+    let items = sync_folder_guarded(account, folder).await?;
     Ok(items.len())
 }
 
@@ -677,6 +830,60 @@ pub async fn mail_get_message(
             tauri::async_runtime::spawn_blocking(move || imap::fetch_raw(&acc, &password, &f, u))
                 .await
                 .map_err(|e| format!("取信任务失败: {e}"))??;
+        // 端到端加密 / 签名：在解析 MIME 之前先解开。
+        //
+        // 这里只做「能解就解、解不开就说清楚」：拿不到私钥时把原始提示
+        // 放进正文，而不是让用户对着一个 `application/pkcs7-mime` 附件发呆。
+        let mut raw = raw;
+        let mut crypto_note: Option<String> = None;
+        if let Some(content_type) = mime::top_level_content_type(&raw) {
+            let lower = content_type.to_ascii_lowercase();
+            if lower.contains("application/pkcs7-mime") || lower.contains("application/x-pkcs7-mime") {
+                let acc = account.clone();
+                let body = String::from_utf8_lossy(&raw).to_string();
+                match tauri::async_runtime::spawn_blocking(move || smime::decrypt(&acc.id, &body))
+                    .await
+                    .map_err(|e| format!("解密任务失败: {e}"))?
+                {
+                    Ok(plain) => raw = plain,
+                    Err(e) => crypto_note = Some(e),
+                }
+            } else if lower.contains("application/pgp-encrypted") {
+                let dir = pgp::key_dir(&app)?;
+                let bytes = raw.clone();
+                match tauri::async_runtime::spawn_blocking(move || pgp::decrypt(&dir, &bytes, ""))
+                    .await
+                    .map_err(|e| format!("PGP 解密任务失败: {e}"))?
+                {
+                    Ok(plain) => raw = plain,
+                    Err(e) => crypto_note = Some(e),
+                }
+            } else if lower.contains("multipart/signed") && lower.contains("pgp") {
+                let dir = pgp::key_dir(&app)?;
+                let bytes = raw.clone();
+                if let Ok(result) = tauri::async_runtime::spawn_blocking(move || {
+                    pgp::verify(&dir, &bytes)
+                })
+                .await
+                .unwrap_or(Ok(pgp::PgpVerifyResult {
+                    signed: false,
+                    valid: false,
+                    key_id: String::new(),
+                    detail: String::new(),
+                    body: Vec::new(),
+                }))
+                {
+                    if !result.body.is_empty() {
+                        raw = result.body;
+                    }
+                    crypto_note = Some(if result.valid {
+                        format!("✓ PGP {}", result.detail)
+                    } else {
+                        format!("⚠ {}", result.detail)
+                    });
+                }
+            }
+        }
         let parsed = mime::parse(&raw, !settings.inline_images).ok_or("无法解析邮件内容")?;
         let attachments_json =
             serde_json::to_string(&parsed.attachments).unwrap_or_else(|_| "[]".into());
@@ -704,6 +911,18 @@ pub async fn mail_get_message(
         detail.headers = parsed.headers;
         if detail.date == 0 {
             detail.date = parsed.date;
+        }
+        if let Some(note) = crypto_note {
+            // 加密状态作为一条可见提示追加到正文顶部：
+            // 用户必须知道自己看到的是一封「验签通过 / 未通过」的邮件。
+            let banner = format!(
+                "<div class=\"guaxi-crypto-note\" style=\"padding:6px 10px;margin-bottom:10px;border:1px solid #b8791a;border-radius:6px;font-size:12px;color:#b8791a\">{}</div>",
+                escape_html(&note)
+            );
+            detail.html = Some(format!("{banner}{}", detail.html.unwrap_or_default()));
+            if detail.text.is_empty() {
+                detail.text = note;
+            }
         }
     }
 
@@ -733,15 +952,31 @@ async fn mark_seen_inner(
     seen: bool,
 ) -> Result<(), String> {
     let account = load_account(account_id)?;
-    let password = account_password(&account)?;
     let (f, u) = (folder.to_string(), uids.to_vec());
+    let op = offline::OfflineOp {
+        id: Uuid::new_v4().to_string(),
+        account_id: account_id.to_string(),
+        kind: "seen".into(),
+        folder: folder.to_string(),
+        uids: uids.to_vec(),
+        value: seen,
+        payload: String::new(),
+        created_at: chrono::Utc::now().timestamp(),
+        attempts: 0,
+        last_error: String::new(),
+    };
     let acc = account.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        imap::set_flags(&acc, &password, &f, &u, Some(seen), None)
+    let server = tauri::async_runtime::spawn_blocking(move || {
+        imap::set_flags(&acc, "", &f, &u, Some(seen), None)
     })
     .await
-    .map_err(|e| format!("标记任务失败: {e}"))??;
-    store::set_local_flags(account_id, folder, uids, Some(seen), None, None)
+    .map_err(|e| format!("标记任务失败: {e}"))?;
+    store::set_local_flags(account_id, folder, uids, Some(seen), None, None)?;
+    // 服务器那一路失败：断网就排队，其余报错。
+    match server {
+        Ok(()) => Ok(()),
+        Err(e) => write_with_fallback(&account, op, || Err(e)),
+    }
 }
 
 #[command]
@@ -754,15 +989,30 @@ pub async fn mail_set_flagged(
 ) -> Result<(), String> {
     ensure_init(&app)?;
     let account = load_account(&account_id)?;
-    let password = account_password(&account)?;
     let (f, u) = (folder.clone(), uids.clone());
+    let op = offline::OfflineOp {
+        id: Uuid::new_v4().to_string(),
+        account_id: account_id.clone(),
+        kind: "flagged".into(),
+        folder: folder.clone(),
+        uids: uids.clone(),
+        value: flagged,
+        payload: String::new(),
+        created_at: chrono::Utc::now().timestamp(),
+        attempts: 0,
+        last_error: String::new(),
+    };
     let acc = account.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        imap::set_flags(&acc, &password, &f, &u, None, Some(flagged))
+    let server = tauri::async_runtime::spawn_blocking(move || {
+        imap::set_flags(&acc, "", &f, &u, None, Some(flagged))
     })
     .await
-    .map_err(|e| format!("标记任务失败: {e}"))??;
-    store::set_local_flags(&account_id, &folder, &uids, None, Some(flagged), None)
+    .map_err(|e| format!("标记任务失败: {e}"))?;
+    store::set_local_flags(&account_id, &folder, &uids, None, Some(flagged), None)?;
+    match server {
+        Ok(()) => Ok(()),
+        Err(e) => write_with_fallback(&account, op, || Err(e)),
+    }
 }
 
 #[command]
@@ -788,16 +1038,32 @@ pub async fn mail_move_messages(
 ) -> Result<(), String> {
     ensure_init(&app)?;
     let account = load_account(&account_id)?;
-    let password = account_password(&account)?;
     let (f, u, t) = (folder.clone(), uids.clone(), target.clone());
+    let op = offline::OfflineOp {
+        id: Uuid::new_v4().to_string(),
+        account_id: account_id.clone(),
+        kind: "move".into(),
+        folder: folder.clone(),
+        uids: uids.clone(),
+        value: false,
+        payload: target.clone(),
+        created_at: chrono::Utc::now().timestamp(),
+        attempts: 0,
+        last_error: String::new(),
+    };
     let acc = account.clone();
-    tauri::async_runtime::spawn_blocking(move || imap::move_messages(&acc, &password, &f, &u, &t))
-        .await
-        .map_err(|e| format!("移动任务失败: {e}"))??;
+    let server = tauri::async_runtime::spawn_blocking(move || {
+        imap::move_messages(&acc, "", &f, &u, &t)
+    })
+    .await
+    .map_err(|e| format!("移动任务失败: {e}"))?;
     for uid in &uids {
         let _ = store::delete_message(&account_id, &folder, *uid);
     }
-    Ok(())
+    match server {
+        Ok(()) => Ok(()),
+        Err(e) => write_with_fallback(&account, op, || Err(e)),
+    }
 }
 
 /// 删除：默认移入垃圾箱；已经在垃圾箱里则永久删除。
@@ -1193,6 +1459,7 @@ pub async fn mail_migrate_storage(app: AppHandle, target_dir: String) -> Result<
         }
     }
 
+    pool::invalidate_all();
     Ok(serde_json::json!({
         "dbPath": dest.to_string_lossy(),
         "backupPath": backup.to_string_lossy(),
@@ -1254,6 +1521,8 @@ pub async fn mail_restore(app: AppHandle, source_path: String) -> Result<(), Str
         let _ = std::fs::remove_file(p);
     }
     store::reset_runtime_caches();
+    // 库整个换了：连接池里的会话绑的是旧库状态，IDLE 线程也要停。
+    pool::invalidate_all();
     Ok(())
 }
 
@@ -1264,10 +1533,10 @@ pub async fn mail_restore(app: AppHandle, source_path: String) -> Result<(), Str
 #[command]
 pub async fn mail_send(app: AppHandle, request: SendRequest) -> Result<(), String> {
     ensure_init(&app)?;
-    send_inner(&request).await
+    send_inner(&app, &request).await
 }
 
-async fn send_inner(request: &SendRequest) -> Result<(), String> {
+async fn send_inner(app: &AppHandle, request: &SendRequest) -> Result<(), String> {
     let account = load_account(&request.account_id)?;
     let password = account_password(&account)?;
     let from = MailAddress {
@@ -1275,7 +1544,62 @@ async fn send_inner(request: &SendRequest) -> Result<(), String> {
         address: account.email.clone(),
     };
     let save_to_sent = request.save_to_sent.unwrap_or(true);
-    let raw = mime::build(request, &from, &account.signature)?;
+
+    // 附件体积检查：超过上限直接拒绝，而不是让用户在 SMTP 超时五分钟之后
+    // 才看到一句「发送失败」。上限取设置里的值（默认 25 MB）。
+    let settings = store::load_settings();
+    let limit_bytes = (settings.attachment_limit_mb.max(1) as u64) * 1024 * 1024;
+    let total = mime::attachments_size(&request.attachments);
+    if total > limit_bytes {
+        return Err(format!(
+            "附件总大小 {:.1} MB，超过 {} MB 上限。请改用网盘链接，或在设置里调高上限。",
+            total as f64 / 1048576.0,
+            settings.attachment_limit_mb
+        ));
+    }
+
+    let mut raw = mime::build(request, &from, &account.signature)?;
+
+    // 端到端加密 / 签名：在 SMTP 之前对整份 MIME 再做一层封装。
+    let mode = request.crypto_mode.as_str();
+    if mode.starts_with("smime") || mode.starts_with("pgp") {
+        let account_for_crypto = account.clone();
+        let to_list = request.to.clone();
+        let mode = mode.to_string();
+        let signed_only = mode.contains("sign");
+        let app_for_pgp = app.clone();
+        raw = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<u8>, String> {
+            let key_dir = pgp::key_dir(&app_for_pgp)?;
+            let canonical = smime::canonicalize(&raw);
+            if mode.starts_with("pgp") {
+                if mode.contains("encrypt") {
+                    let recipient = to_list.first().cloned().unwrap_or_default();
+                    let encrypted = pgp::encrypt(&key_dir, &recipient, &canonical)?;
+                    Ok(pgp::wrap_encrypted(&encrypted))
+                } else {
+                    let signed = pgp::sign(&key_dir, &canonical, "")?;
+                    Ok(pgp::wrap_signed(&signed))
+                }
+            } else if signed_only && !mode.contains("encrypt") {
+                smime::sign(&account_for_crypto.id, &canonical)
+            } else {
+                // 加密：需要收件人证书。找不到证书时报清楚，
+                // 而不是默默退化成明文发送——后者是最危险的行为。
+                let cert = smime::recipient_certificate(&to_list)
+                    .ok_or_else(|| "没有收件人的 S/MIME 证书，无法加密发送".to_string())?;
+                if signed_only {
+                    // 标准顺序：先签名，再把签名结果加密。
+                    let signed = smime::sign(&account_for_crypto.id, &canonical)?;
+                    let wrapped = smime::wrap_signed_entity(&signed);
+                    smime::encrypt(&account_for_crypto.id, &wrapped, &cert)
+                } else {
+                    smime::encrypt(&account_for_crypto.id, &canonical, &cert)
+                }
+            }
+        })
+        .await
+        .map_err(|e| format!("加密封装失败: {e}"))??;
+    }
 
     let mut recipients: Vec<String> = Vec::new();
     for addr in request
@@ -1333,6 +1657,9 @@ pub async fn mail_queue_send(app: AppHandle, request: SendRequest) -> Result<Out
         to: request.to.join(", "),
         due_at: now + delay.max(1),
         created_at: now,
+        attempts: 0,
+        next_attempt_at: 0,
+        last_error: String::new(),
     };
     let payload = serde_json::to_string(&request).map_err(|e| e.to_string())?;
     store::enqueue_outbox(&item, &payload)?;
@@ -1362,7 +1689,7 @@ pub async fn mail_flush_outbox(app: AppHandle) -> Result<serde_json::Value, Stri
     let mut errors: Vec<String> = Vec::new();
     for (id, payload) in due {
         match serde_json::from_str::<SendRequest>(&payload) {
-            Ok(request) => match send_inner(&request).await {
+            Ok(request) => match send_inner(&app, &request).await {
                 Ok(()) => {
                     let _ = store::mark_outbox_sent(&id);
                     sent += 1;
@@ -1371,8 +1698,12 @@ pub async fn mail_flush_outbox(app: AppHandle) -> Result<serde_json::Value, Stri
                 // 同时把认领时间归零，下一次轮询会立刻重试；否则要等 5 分钟认领窗口过期，
                 // 用户会以为「点了立即发送没反应」。
                 Err(e) => {
-                    let _ = store::release_outbox(&id);
-                    errors.push(e);
+                    // 指数退避：失败后不立刻重试，而是把下次尝试时间推后。
+                    // 网络抖动时「每 90 秒猛撞一次」是最容易被服务器拉黑的形态。
+                    match store::note_outbox_failure(&id, &e) {
+                        Ok(delay) => errors.push(format!("{e}（{delay} 秒后重试）")),
+                        Err(_) => errors.push(e),
+                    }
                 }
             },
             Err(e) => {
@@ -1494,7 +1825,15 @@ pub async fn mail_builtin_themes(app: AppHandle) -> Result<Vec<model::CustomThem
 #[command]
 pub async fn mail_clear_cache(app: AppHandle, account_id: Option<String>) -> Result<(), String> {
     ensure_init(&app)?;
-    store::clear_cache(account_id.as_deref())
+    store::clear_cache(account_id.as_deref())?;
+    // 缓存清空后本地 UID 起点回到 0，连接池里的会话没有状态问题，
+    // 但文件夹的 `flags_synced_at` 已无意义——清掉，让下次同步立刻做全量比对。
+    if let Some(id) = account_id.as_deref() {
+        for folder in store::list_folders(id).unwrap_or_default() {
+            store::touch_folder_flags_synced(id, &folder.name, 0);
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1694,7 +2033,7 @@ pub async fn mail_to_task(
         content: org,
     };
     let count = tauri::async_runtime::spawn_blocking(move || {
-        crate::commands::taskmanager::task_import(import)
+        crate::commands::taskmanager::import_tasks(import)
     })
     .await
     .map_err(|e| format!("导入任务失败: {e}"))??;
@@ -1811,6 +2150,597 @@ pub async fn mail_delete_stashed_draft(app: AppHandle, id: String) -> Result<(),
     let path = store::data_root(&app)?.join("drafts").join(format!("{id}.json"));
     if path.exists() {
         std::fs::remove_file(&path).map_err(|e| format!("删除草稿失败: {e}"))?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// OAuth2
+// ---------------------------------------------------------------------------
+
+/// 发起设备码授权：返回给用户一个短码与网址。
+#[command]
+pub async fn mail_oauth_start(
+    app: AppHandle,
+    provider: String,
+    client_id: Option<String>,
+    scope: Option<String>,
+) -> Result<oauth::DeviceCode, String> {
+    ensure_init(&app)?;
+    let provider = oauth::provider_for(&provider)
+        .ok_or_else(|| format!("不支持的 OAuth 服务商: {provider}"))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        oauth::start_device_flow(&provider, client_id.as_deref(), scope.as_deref())
+    })
+    .await
+    .map_err(|e| format!("授权任务失败: {e}"))?
+}
+
+/// 轮询设备码换取令牌。成功后写进 keychain，并把账户标记为 oauth2。
+#[command]
+pub async fn mail_oauth_poll(
+    app: AppHandle,
+    account_id: String,
+    provider: String,
+    device_code: String,
+    interval: Option<u64>,
+    client_id: Option<String>,
+) -> Result<(), String> {
+    ensure_init(&app)?;
+    let provider_info = oauth::provider_for(&provider)
+        .ok_or_else(|| format!("不支持的 OAuth 服务商: {provider}"))?;
+    let tokens = tauri::async_runtime::spawn_blocking(move || {
+        oauth::poll_device_token(
+            &provider_info,
+            client_id.as_deref(),
+            &device_code,
+            interval.unwrap_or(5),
+        )
+    })
+    .await
+    .map_err(|e| format!("等待授权失败: {e}"))??;
+
+    oauth::save_tokens(&account_id, &tokens)?;
+    // 账户开启 OAuth2 并把提供商标记好。
+    if let Ok(Some(mut account)) = store::get_account(&account_id) {
+        account.auth_kind = "oauth2".to_string();
+        account.oauth_provider = provider;
+        account.oauth_expires = tokens.expires_at;
+        store::upsert_account(&account)?;
+        pool::invalidate(&account_id);
+    }
+    Ok(())
+}
+
+/// 退出 OAuth：清掉令牌并回到密码模式。
+#[command]
+pub async fn mail_oauth_sign_out(app: AppHandle, account_id: String) -> Result<(), String> {
+    ensure_init(&app)?;
+    oauth::delete_tokens(&account_id);
+    if let Ok(Some(mut account)) = store::get_account(&account_id) {
+        account.auth_kind = "password".to_string();
+        account.oauth_provider.clear();
+        account.oauth_expires = 0;
+        store::upsert_account(&account)?;
+    }
+    pool::invalidate(&account_id);
+    Ok(())
+}
+
+#[command]
+pub async fn mail_oauth_status(
+    app: AppHandle,
+    account_id: String,
+) -> Result<serde_json::Value, String> {
+    ensure_init(&app)?;
+    let tokens = oauth::load_tokens(&account_id);
+    Ok(serde_json::json!({
+        "connected": oauth::has_tokens(&account_id),
+        "expiresAt": tokens.as_ref().map(|t| t.expires_at).unwrap_or(0),
+        "expired": tokens.as_ref().map(|t| t.expires_at < chrono::Utc::now().timestamp()).unwrap_or(false),
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// 离线队列 / 连接状态
+// ---------------------------------------------------------------------------
+
+#[command]
+pub async fn mail_offline_list(
+    app: AppHandle,
+    account_id: Option<String>,
+) -> Result<Vec<offline::OfflineOp>, String> {
+    ensure_init(&app)?;
+    offline::list(account_id.as_deref())
+}
+
+#[command]
+pub async fn mail_offline_count(app: AppHandle, account_id: String) -> Result<i64, String> {
+    ensure_init(&app)?;
+    offline::count(&account_id)
+}
+
+/// 重放离线队列。返回重放成功 / 失败数与剩余条数。
+#[command]
+pub async fn mail_offline_replay(
+    app: AppHandle,
+    account_id: Option<String>,
+) -> Result<offline::ReplayResult, String> {
+    ensure_init(&app)?;
+    let accounts: Vec<Account> = match account_id.as_deref() {
+        Some(id) => vec![load_account(id)?],
+        None => store::list_accounts()?,
+    };
+    let mut combined = offline::ReplayResult::default();
+    for account in accounts {
+        let ops = offline::list(Some(&account.id))?;
+        for op in ops {
+            if op.attempts >= 5 {
+                continue;
+            }
+            let acc = account.clone();
+            let folder = op.folder.clone();
+            let uids = op.uids.clone();
+            let kind = op.kind.clone();
+            let payload = op.payload.clone();
+            let value = op.value;
+            let result = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+                match kind.as_str() {
+                    "seen" => imap::set_flags(&acc, "", &folder, &uids, Some(value), None),
+                    "flagged" => imap::set_flags(&acc, "", &folder, &uids, None, Some(value)),
+                    "move" => imap::move_messages(&acc, "", &folder, &uids, &payload),
+                    "delete" => imap::delete_permanently(&acc, "", &folder, &uids),
+                    other => Err(format!("未知的离线操作: {other}")),
+                }
+            })
+            .await
+            .map_err(|e| format!("重放任务失败: {e}"))?;
+            match result {
+                Ok(()) => {
+                    let _ = offline::remove(&op.id);
+                    combined.replayed += 1;
+                    if op.kind == "move" || op.kind == "delete" {
+                        for uid in &op.uids {
+                            let _ = store::delete_message(&account.id, &op.folder, *uid);
+                        }
+                    }
+                }
+                Err(e) => {
+                    combined.failed += 1;
+                    if combined.errors.len() < 5 {
+                        combined.errors.push(e);
+                    }
+                }
+            }
+        }
+        combined.remaining += offline::count(&account.id).unwrap_or(0);
+    }
+    Ok(combined)
+}
+
+/// 连接与队列状态（顶栏的「离线 / 待发 N 条」就靠它）。
+#[command]
+pub async fn mail_connection_status(
+    app: AppHandle,
+    account_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    ensure_init(&app)?;
+    let queued = match account_id.as_deref() {
+        Some(id) => offline::count(id).unwrap_or(0),
+        None => store::list_accounts()?
+            .iter()
+            .map(|a| offline::count(&a.id).unwrap_or(0))
+            .sum(),
+    };
+    let pending_send = store::list_outbox().map(|v| v.len()).unwrap_or(0);
+    Ok(serde_json::json!({
+        "offlineQueued": queued,
+        "pendingSend": pending_send,
+        "busyAccounts": sync::busy_accounts(),
+        "idleActive": account_id
+            .as_deref()
+            .map(pool::idle::is_running)
+            .unwrap_or(false),
+        "pooled": pool::pooled_accounts(),
+    }))
+}
+
+/// 启动某个账户的 IDLE 推送（打开邮件页时调用）。收到变更后前端会刷新。
+#[command]
+pub async fn mail_start_idle(
+    app: AppHandle,
+    account_id: String,
+    folder: Option<String>,
+) -> Result<bool, String> {
+    ensure_init(&app)?;
+    let account = load_account(&account_id)?;
+    let settings = store::load_settings();
+    if settings.fetch_mode != "idle" {
+        return Ok(false);
+    }
+    // 服务器不支持 IDLE 时不要硬起线程：`capabilities` 里没有 IDLE 就退回轮询。
+    let supports = tauri::async_runtime::spawn_blocking({
+        let acc = account.clone();
+        move || pool::lease(&acc).map(|l| l.supports("IDLE"))
+    })
+    .await
+    .map_err(|e| format!("检查 IDLE 能力失败: {e}"))??;
+    if !supports {
+        info!(account = %account.email, "mail: 服务器不支持 IDLE，继续用轮询");
+        return Ok(false);
+    }
+    let target = folder
+        .filter(|f| !f.trim().is_empty())
+        .unwrap_or_else(|| "INBOX".to_string());
+    let app_handle = app.clone();
+    let acc_id = account.id.clone();
+    pool::idle::start(account, target, move || {
+        let _ = app_handle.emit(
+            "mail-idle-change",
+            serde_json::json!({ "accountId": acc_id }),
+        );
+    })
+    .map_err(|e| format!("启动 IMAP IDLE 失败: {e}"))?;
+    Ok(true)
+}
+
+#[command]
+pub async fn mail_stop_idle(app: AppHandle, account_id: String) -> Result<(), String> {
+    ensure_init(&app)?;
+    pool::idle::stop(&account_id);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// 共享邮箱 / 委托访问
+// ---------------------------------------------------------------------------
+
+/// 列出某个共享邮箱下的文件夹，并把它们挂到账户的文件夹表里（`role = custom`，
+/// 名字保留服务器前缀）。
+///
+/// 共享邮箱在 IMAP 上没有「登录」这一步：用你自己的凭据登录后直接
+/// `SELECT "Other Users/team@corp.com/Inbox"`。所以本地不建独立账户，
+/// 而是把这些带前缀的文件夹挂在主账户下——同步、搜索、规则全部复用现有路径。
+#[command]
+pub async fn mail_list_delegate_folders(
+    app: AppHandle,
+    account_id: String,
+    mailbox: String,
+) -> Result<Vec<MailFolder>, String> {
+    ensure_init(&app)?;
+    let account = load_account(&account_id)?;
+    if !account.delegate.iter().any(|d| d.email.eq_ignore_ascii_case(&mailbox)) {
+        return Err(format!("{mailbox} 不在该账户的共享邮箱列表里"));
+    }
+    let secret = account_password(&account)?;
+    let mut folders = tauri::async_runtime::spawn_blocking({
+        let acc = account.clone();
+        let box_name = mailbox.clone();
+        move || imap::list_delegate_folders(&acc, &secret, &box_name)
+    })
+    .await
+    .map_err(|e| format!("读取共享邮箱失败: {e}"))??;
+    imap::mark_delegate_roles(&mut folders, &mailbox);
+
+    // 合并到账户的文件夹表：已有的同名前缀文件夹替换，其余保留。
+    let mut all = store::list_folders(&account_id)?;
+    let incoming: std::collections::HashSet<String> =
+        folders.iter().map(|f| f.name.clone()).collect();
+    all.retain(|f| !incoming.contains(&f.name));
+    all.extend(folders.iter().cloned());
+    store::replace_folders(&account_id, &all)?;
+    Ok(folders)
+}
+
+// ---------------------------------------------------------------------------
+// 模板 / 收发件人名单 / 附件检查
+// ---------------------------------------------------------------------------
+
+#[command]
+pub async fn mail_list_templates(app: AppHandle) -> Result<Vec<model::MailTemplate>, String> {
+    ensure_init(&app)?;
+    store::list_templates()
+}
+
+#[command]
+pub async fn mail_save_template(
+    app: AppHandle,
+    template: model::MailTemplate,
+) -> Result<model::MailTemplate, String> {
+    ensure_init(&app)?;
+    let mut template = template;
+    if template.id.trim().is_empty() {
+        template.id = Uuid::new_v4().to_string();
+    }
+    if template.created_at == 0 {
+        template.created_at = chrono::Utc::now().timestamp();
+    }
+    store::upsert_template(&template)?;
+    Ok(template)
+}
+
+#[command]
+pub async fn mail_delete_template(app: AppHandle, id: String) -> Result<(), String> {
+    ensure_init(&app)?;
+    store::delete_template(&id)
+}
+
+#[command]
+pub async fn mail_list_sender_rules(app: AppHandle) -> Result<Vec<model::SenderRule>, String> {
+    ensure_init(&app)?;
+    store::list_sender_rules()
+}
+
+#[command]
+pub async fn mail_save_sender_rule(
+    app: AppHandle,
+    rule: model::SenderRule,
+) -> Result<model::SenderRule, String> {
+    ensure_init(&app)?;
+    let mut rule = rule;
+    if rule.id.trim().is_empty() {
+        rule.id = Uuid::new_v4().to_string();
+    }
+    if rule.pattern.trim().is_empty() {
+        return Err("名单条目不能为空".to_string());
+    }
+    if !matches!(rule.kind.as_str(), "allow" | "block") {
+        return Err("名单类型只能是 allow 或 block".to_string());
+    }
+    if rule.created_at == 0 {
+        rule.created_at = chrono::Utc::now().timestamp();
+    }
+    store::upsert_sender_rule(&rule)?;
+    Ok(rule)
+}
+
+#[command]
+pub async fn mail_delete_sender_rule(app: AppHandle, id: String) -> Result<(), String> {
+    ensure_init(&app)?;
+    store::delete_sender_rule(&id)
+}
+
+/// 发送前的附件检查（大小上限 + 危险类型）。
+#[command]
+pub async fn mail_check_attachments(
+    app: AppHandle,
+    paths: Vec<String>,
+) -> Result<Vec<model::AttachmentCheck>, String> {
+    ensure_init(&app)?;
+    let settings = store::load_settings();
+    Ok(mime::check_attachments(&paths, settings.attachment_limit_mb))
+}
+
+#[command]
+pub async fn mail_is_dangerous_attachment(name: String) -> Result<bool, String> {
+    Ok(notify::is_dangerous_filename(&name))
+}
+
+// ---------------------------------------------------------------------------
+// Sieve 服务器端规则
+// ---------------------------------------------------------------------------
+
+/// 预演：生成 Sieve 脚本但不上传（设置页的「查看将要上传的脚本」）。
+#[command]
+pub async fn mail_sieve_preview(
+    app: AppHandle,
+    account_id: String,
+) -> Result<serde_json::Value, String> {
+    ensure_init(&app)?;
+    let account = load_account(&account_id)?;
+    let rules = store::list_rules()?;
+    let trash = store::list_folders(&account_id)?
+        .into_iter()
+        .find(|f| f.role == FolderRole::Trash)
+        .map(|f| f.name);
+    let (script, warnings) = sieve::generate(&account, &rules, trash.as_deref());
+    Ok(serde_json::json!({ "script": script, "warnings": warnings }))
+}
+
+/// 把规则镜像到服务器。
+#[command]
+pub async fn mail_sieve_sync(app: AppHandle, account_id: String) -> Result<Vec<String>, String> {
+    ensure_init(&app)?;
+    let mut account = load_account(&account_id)?;
+    let config = account
+        .sieve
+        .clone()
+        .filter(|c| c.mode != "off")
+        .ok_or_else(|| "还没有启用服务器端规则（设置 → 账户 → 服务器端规则）".to_string())?;
+    let rules = store::list_rules()?;
+    let trash = store::list_folders(&account_id)?
+        .into_iter()
+        .find(|f| f.role == FolderRole::Trash)
+        .map(|f| f.name);
+    let secret = account_password(&account)?;
+    let result = tauri::async_runtime::spawn_blocking({
+        let acc = account.clone();
+        let cfg = config.clone();
+        move || sieve::sync_rules(&acc, &cfg, &rules, trash.as_deref(), &secret)
+    })
+    .await
+    .map_err(|e| format!("上传服务器端规则失败: {e}"))?;
+
+    // 成功与失败都记录：失败原因（「这台服务器不支持 ManageSieve」）必须留在
+    // 账户配置里，否则用户每次点上传都只会看到一个瞬时弹窗，回来看不出上周就失败了。
+    if let Some(cfg) = account.sieve.as_mut() {
+        cfg.last_sync_at = chrono::Utc::now().timestamp();
+        cfg.last_error = match &result {
+            Ok(_) => String::new(),
+            Err(e) => e.clone(),
+        };
+    }
+    store::upsert_account(&account)?;
+    result
+}
+
+// ---------------------------------------------------------------------------
+// S/MIME 与 PGP
+// ---------------------------------------------------------------------------
+
+/// 当前账户的 S/MIME 身份摘要（不含私钥）。
+#[command]
+pub async fn mail_smime_status(
+    app: AppHandle,
+    account_id: String,
+) -> Result<serde_json::Value, String> {
+    ensure_init(&app)?;
+    let Some(identity) = smime::load_identity(&account_id) else {
+        return Ok(serde_json::json!({ "configured": false }));
+    };
+    let cert = smime::parse_certificate(&identity.cert_pem).ok();
+    Ok(serde_json::json!({
+        "configured": true,
+        "subject": cert.as_ref().map(smime::subject_cn).unwrap_or_default(),
+        "expired": cert.as_ref().map(smime::certificate_expired).unwrap_or(false),
+        "hasKey": !identity.key_pem.trim().is_empty(),
+    }))
+}
+
+#[command]
+pub async fn mail_smime_import(
+    app: AppHandle,
+    account_id: String,
+    cert_pem: String,
+    key_pem: String,
+) -> Result<(), String> {
+    ensure_init(&app)?;
+    smime::save_identity(
+        &account_id,
+        &smime::SmimeIdentity {
+            cert_pem,
+            key_pem,
+        },
+    )
+}
+
+/// 导入某个收件人的 S/MIME 证书（发加密邮件前必须有）。
+#[command]
+pub async fn mail_smime_save_peer(
+    app: AppHandle,
+    address: String,
+    cert_pem: String,
+) -> Result<(), String> {
+    ensure_init(&app)?;
+    if address.trim().is_empty() {
+        return Err("收件人地址为空".to_string());
+    }
+    smime::save_peer_certificate(&address, &cert_pem)
+}
+
+#[command]
+pub async fn mail_smime_delete_peer(app: AppHandle, address: String) -> Result<(), String> {
+    ensure_init(&app)?;
+    smime::delete_peer_certificate(&address);
+    Ok(())
+}
+
+/// 查询某个地址是否已有 S/MIME 证书。
+#[command]
+pub async fn mail_smime_peer_status(app: AppHandle, address: String) -> Result<bool, String> {
+    ensure_init(&app)?;
+    Ok(smime::load_peer_certificate(&address).is_some())
+}
+
+#[command]
+pub async fn mail_smime_delete(app: AppHandle, account_id: String) -> Result<(), String> {
+    ensure_init(&app)?;
+    smime::delete_identity(&account_id);
+    Ok(())
+}
+
+/// PGP 钥匙串摘要。
+#[command]
+pub async fn mail_pgp_keys(app: AppHandle) -> Result<Vec<pgp::PgpKeyInfo>, String> {
+    ensure_init(&app)?;
+    Ok(pgp::public_key_summaries(&app))
+}
+
+#[command]
+pub async fn mail_pgp_import_key(
+    app: AppHandle,
+    armored: String,
+    secret: bool,
+) -> Result<usize, String> {
+    ensure_init(&app)?;
+    let dir = pgp::key_dir(&app)?;
+    if secret {
+        // 私钥环落盘的那条路径要求是文件；写一份临时文件再走统一入口，
+        // 保证「粘贴导入」与「文件导入」走过完全相同的校验。
+        let path = std::env::temp_dir().join(format!("guaxi-pgp-{}.asc", Uuid::new_v4()));
+        std::fs::write(&path, armored).map_err(|e| format!("写入临时文件失败: {e}"))?;
+        let result = pgp::import_from_file(&dir, &path, true);
+        let _ = std::fs::remove_file(&path);
+        result
+    } else {
+        pgp::add_public_key(&dir, &armored)?;
+        Ok(1)
+    }
+}
+
+#[command]
+pub async fn mail_pgp_import_file(
+    app: AppHandle,
+    path: String,
+    secret: bool,
+) -> Result<usize, String> {
+    ensure_init(&app)?;
+    let dir = pgp::key_dir(&app)?;
+    pgp::import_from_file(&dir, std::path::Path::new(&path), secret)
+}
+
+// ---------------------------------------------------------------------------
+// 通知 / 诊断
+// ---------------------------------------------------------------------------
+
+/// 发一条测试通知（设置页的「试试通知」按钮）。
+#[command]
+pub async fn mail_test_notification(app: AppHandle) -> Result<(), String> {
+    ensure_init(&app)?;
+    notify::notify_new_mail(
+        &app,
+        &[model::NewMailNotice {
+            account_id: String::new(),
+            account_email: "Guaxi 邮箱".into(),
+            folder: "INBOX".into(),
+            uid: 0,
+            from_name: "Guaxi".into(),
+            from_addr: "noreply@guaxi.local".into(),
+            subject: "通知已开启，收到新邮件时会像这样提醒".into(),
+        }],
+    );
+    Ok(())
+}
+
+/// 导出诊断报告到指定文件。
+#[command]
+pub async fn mail_export_diagnostics(
+    app: AppHandle,
+    target_path: String,
+) -> Result<String, String> {
+    ensure_init(&app)?;
+    if target_path.trim().is_empty() {
+        return Err("目标路径为空".to_string());
+    }
+    let report = notify::diagnostics(&app)?;
+    std::fs::write(&target_path, report).map_err(|e| format!("写入诊断报告失败: {e}"))?;
+    Ok(target_path)
+}
+
+// ---------------------------------------------------------------------------
+// 连接管理
+// ---------------------------------------------------------------------------
+
+/// 清空连接池并重连（用户在设置里改了服务器参数之后调用）。
+#[command]
+pub async fn mail_reset_connections(
+    app: AppHandle,
+    account_id: Option<String>,
+) -> Result<(), String> {
+    ensure_init(&app)?;
+    match account_id {
+        Some(id) => pool::invalidate(&id),
+        None => pool::invalidate_all(),
     }
     Ok(())
 }

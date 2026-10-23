@@ -9,6 +9,9 @@
 //!    所以用 `ReplayStream` 把一行伪问候语垫在流前面。
 //! 2. 服务器上的非 ASCII 文件夹名是 IMAP modified UTF-7（`&XfJT0ZAB-`），
 //!    crate 原样发送会乱码，必须自己编解码（`utf7` 子模块）。
+//!
+//! 连接复用与 IDLE 见文件末尾的 `conn` 子模块：短连接模式在 `imap.rs` 里保留为
+//! 「拿不到长连接时的兜底」，而 UI 交互路径一律先问连接池。
 
 use super::model::{Account, FolderRole, MailFolder, MessageSummary};
 use super::net::{open_stream, Stream};
@@ -27,7 +30,7 @@ pub const MAX_FETCH_PER_SYNC: u32 = 200;
 // ---------------------------------------------------------------------------
 
 /// 在第一次读取时先吐出 `prefix`，之后透明转发给底层流。
-struct ReplayStream {
+pub struct ReplayStream {
     prefix: Vec<u8>,
     inner: Stream,
 }
@@ -60,6 +63,16 @@ impl Write for ReplayStream {
     }
     fn flush(&mut self) -> std::io::Result<()> {
         self.inner.flush()
+    }
+}
+
+impl ::imap::extensions::idle::SetReadTimeout for ReplayStream {
+    fn set_read_timeout(&mut self, timeout: Option<std::time::Duration>) -> ::imap::Result<()> {
+        // 底层 `Stream::set_read_timeout` 返回的是本模块的 String 错误，
+        // 这里要换成 imap crate 的错误类型（`SetReadTimeout` 的签名要求）。
+        self.inner
+            .set_read_timeout(timeout)
+            .map_err(|e| ::imap::Error::Io(std::io::Error::other(e)))
     }
 }
 
@@ -219,7 +232,10 @@ fn read_line(stream: &mut Stream) -> Result<String, String> {
 ///
 /// 两种安全模式最终都返回同一种会话类型：把底层流统一包进 `ReplayStream`
 /// （SSL 分支前缀为空，等价于透明转发），省掉一个枚举与两套调用点的重复。
-fn login(account: &Account, password: &str) -> Result<Session<ReplayStream>, String> {
+///
+/// `secret` 的含义取决于 `account.auth_kind`：`password` 时是口令 / 授权码，
+/// `oauth2` 时是访问令牌（由调用方用刷新令牌换好）。
+pub fn login(account: &Account, password: &str) -> Result<ImapSession, String> {
     let proxy = super::effective_proxy(account);
     let stream = open_stream(
         &account.imap_host,
@@ -261,10 +277,31 @@ fn login(account: &Account, password: &str) -> Result<Session<ReplayStream>, Str
     client
         .read_greeting()
         .map_err(|e| format!("读取 IMAP 问候失败: {e}"))?;
+    if account.auth_kind.eq_ignore_ascii_case("oauth2") {
+        let auth = super::oauth::XOAuth2::new(account.login_name(), password);
+        return client
+            .authenticate("XOAUTH2", &auth)
+            .map_err(|(e, _)| format!("IMAP OAuth2 认证失败（{}）: {e}", account.login_name()));
+    }
     client
         .login(account.login_name(), password)
         .map_err(|(e, _)| format!("IMAP 登录失败（{}）: {e}", account.login_name()))
 }
+
+/// 取一个「可直接用于认证」的秘密。
+///
+/// 密码账户直接用 keychain 里的口令；OAuth2 账户则先换访问令牌
+/// （过期时自动刷新），这样所有调用点都不需要关心认证方式的差异。
+pub fn auth_secret(account: &Account) -> Result<String, String> {
+    if account.auth_kind.eq_ignore_ascii_case("oauth2") {
+        super::oauth::access_token(account)
+    } else {
+        super::account_password(account)
+    }
+}
+
+/// 认证后的 IMAP 会话类型（连接池与短连接共用）。
+pub type ImapSession = Session<ReplayStream>;
 
 // ---------------------------------------------------------------------------
 // 文件夹
@@ -321,6 +358,8 @@ fn detect_role(name: &str, attributes: &[NameAttribute<'_>]) -> FolderRole {
 
 /// 列出文件夹并带回未读数。`LIST "" "*"` 一次拿全，`STATUS` 逐个查未读。
 pub fn list_folders(account: &Account, password: &str) -> Result<Vec<MailFolder>, String> {
+    // 文件夹发现是一次性重活，走短连接：它自己会 LOGOUT，
+    // 不必占用请求连接（否则同步中途发现文件夹会打断正在进行的 FETCH）。
     let mut session = login(account, password)?;
     let names = session
         .list(None, Some("*"))
@@ -489,6 +528,23 @@ pub fn sync_folder(
     snippet_len: usize,
 ) -> Result<Vec<MessageSummary>, String> {
     let mut session = login(account, password)?;
+    let summaries = sync_folder_with(account, &mut session, folder_name, uid_validity_hint, last_uid, snippet_len)?;
+    let _ = session.logout();
+    Ok(summaries)
+}
+
+/// 同步的核心：在一条已经认证、尚未 SELECT 的会话上完成增量拉取。
+///
+/// 拆出来是为了让连接池复用它——池里的连接已经 SELECT 过别的文件夹，
+/// 所以这里自己负责 SELECT；短连接路径直接复用同一份逻辑。
+pub fn sync_folder_with(
+    account: &Account,
+    session: &mut ImapSession,
+    folder_name: &str,
+    uid_validity_hint: u32,
+    last_uid: u32,
+    snippet_len: usize,
+) -> Result<Vec<MessageSummary>, String> {
     let mailbox = session
         .select(folder_name)
         .map_err(|e| format!("选择文件夹失败（{folder_name}）: {e}"))?;
@@ -524,7 +580,6 @@ pub fn sync_folder(
             uid_validity,
             mailbox.uid_next.unwrap_or(0),
         )?;
-        let _ = session.logout();
         return Ok(Vec::new());
     }
 
@@ -629,8 +684,214 @@ pub fn sync_folder(
         fetched = summaries.len(),
         "mail: 同步完成"
     );
-    let _ = session.logout();
     Ok(summaries)
+}
+
+/// 多设备一致性：把服务器上的 FLAGS 与存在性全量比对回本地。
+///
+/// 为什么需要它：增量同步只拉「UID 比本地大」的新邮件，而「已读 / 星标 / 回复过」
+/// 是**就地变化**的——手机上读了、别的客户端加了星，UID 不变，本地永远显示旧的。
+/// 别的客户端把邮件移走 / 删掉，本地也还留着。
+///
+/// 实现上没有走 CONDSTORE/QRESYNC：两者都需要服务器声明支持，而国内邮箱
+/// （QQ/163/阿里）普遍不支持，骨干路径不能押在可选扩展上。这里改用
+/// `UID FETCH (FLAGS)` 全量比对——只取 FLAGS 不取正文，十万封也就是几百 KB，
+/// 由 `flag_sync_minutes` 控制频率（默认 10 分钟），并且只比对本地已有的 UID。
+pub fn sync_flags(
+    session: &mut ImapSession,
+    account: &Account,
+    folder: &str,
+    local_uids: &[u32],
+) -> Result<FlagSyncResult, String> {
+    if local_uids.is_empty() {
+        return Ok(FlagSyncResult::default());
+    }
+    session
+        .select(folder)
+        .map_err(|e| format!("选择文件夹失败（{folder}）: {e}"))?;
+
+    let mut server: std::collections::HashMap<u32, (bool, bool, bool, bool)> =
+        std::collections::HashMap::new();
+    // 分块 FETCH：一次几千个 UID 的命令行会被服务器拒绝（RFC 3501 规定命令长度上限）。
+    for chunk in local_uids.chunks(500) {
+        let set = compact_uid_set(chunk);
+        let fetches = session
+            .uid_fetch(&set, "(UID FLAGS)")
+            .map_err(|e| format!("比对标记失败: {e}"))?;
+        for fetch in fetches.iter() {
+            let Some(uid) = fetch.uid else { continue };
+            let (mut seen, mut flagged, mut answered, mut deleted) = (false, false, false, false);
+            for flag in fetch.flags() {
+                match flag {
+                    Flag::Seen => seen = true,
+                    Flag::Flagged => flagged = true,
+                    Flag::Answered => answered = true,
+                    Flag::Deleted => deleted = true,
+                    _ => {}
+                }
+            }
+            server.insert(uid, (seen, flagged, answered, deleted));
+        }
+    }
+
+    let changed: Vec<(u32, bool, bool, bool, bool)> = server
+        .iter()
+        .map(|(uid, (s, f, a, d))| (*uid, *s, *f, *a, *d))
+        .collect();
+    let updated = store::apply_server_flags(&account.id, folder, &changed)?;
+
+    let present: std::collections::HashSet<u32> = server.keys().copied().collect();
+    let removed = store::drop_missing_uids(&account.id, folder, &present)?;
+
+    if updated > 0 || removed > 0 {
+        info!(
+            account = %account.email,
+            folder,
+            updated,
+            removed,
+            "mail: 多设备标记比对有变化"
+        );
+    }
+    Ok(FlagSyncResult { updated, removed })
+}
+
+#[derive(Debug, Default, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlagSyncResult {
+    pub updated: usize,
+    pub removed: usize,
+}
+
+/// 走连接池的增量同步（UI 交互路径统一用它）。连接池不可用时回退短连接。
+pub fn sync_folder_pooled(
+    account: &Account,
+    folder_name: &str,
+    uid_validity_hint: u32,
+    last_uid: u32,
+    snippet_len: usize,
+) -> Result<Vec<MessageSummary>, String> {
+    let mut lease = try_lease(account)?;
+    sync_folder_with(
+        account,
+        lease.session(),
+        folder_name,
+        uid_validity_hint,
+        last_uid,
+        snippet_len,
+    )
+}
+
+/// 走连接池的全量 FLAGS 比对。本地没有该文件夹的缓存时直接返回空结果，
+/// 不必为一个空文件夹做一次完整 SELECT。
+pub fn sync_flags_pooled(
+    account: &Account,
+    folder_name: &str,
+) -> Result<FlagSyncResult, String> {
+    let local = store::uids_in_folder(&account.id, folder_name)?;
+    if local.is_empty() {
+        return Ok(FlagSyncResult::default());
+    }
+    let mut lease = try_lease(account)?;
+    sync_flags(lease.session(), account, folder_name, &local)
+}
+
+/// 账户在有委托 / 共享邮箱时的「邮箱命名空间前缀」。
+///
+/// 三家的写法完全不同，必须分别处理：
+/// - Exchange / Office 365 / Dovecot：`Other Users/<邮箱>/<文件夹>`（分隔符是 `/`）；
+/// - Courier / 部分国内企业邮：`共享文件夹/<邮箱>/<文件夹>`；
+/// - iCloud：`Shared/<邮箱>/<文件夹>`。
+///
+/// 这里不做「探测」，因为探测意味着为每个账户多开一次 LIST 往返；
+/// 由用户在账户设置里选一个命名空间，默认按服务商类型猜一个。
+pub fn delegate_prefix(account: &Account, mailbox: &str) -> String {
+    let domain = mime::domain_of(&account.email);
+    if domain.ends_with("icloud.com") || domain.ends_with("me.com") {
+        return format!("Shared/{mailbox}");
+    }
+    if domain.ends_with("qq.com") || domain.ends_with("163.com") || domain.ends_with("126.com") {
+        return format!("共享文件夹/{mailbox}");
+    }
+    format!("Other Users/{mailbox}")
+}
+
+/// 列出一个共享邮箱下的文件夹（`LIST "<prefix>/*"`）。
+///
+/// 返回的文件夹名保持服务器原样（`Other Users/x@y.com/Inbox`），
+/// 调用方在前面加上「共享邮箱」分组展示。
+pub fn list_delegate_folders(
+    account: &Account,
+    password: &str,
+    mailbox: &str,
+) -> Result<Vec<MailFolder>, String> {
+    let mut session = login(account, password)?;
+    let prefix = delegate_prefix(account, mailbox);
+    // 先 LIST 前缀本身：有的服务器只暴露顶层子文件夹，`prefix/*` 不会递归。
+    let pattern = format!("{prefix}/*");
+    let names = session
+        .list(None, Some(&pattern))
+        .map_err(|e| format!("列出共享邮箱失败（{mailbox}）: {e}"))?;
+
+    let mut folders = Vec::new();
+    for name in names.iter() {
+        let selectable = !name
+            .attributes()
+            .iter()
+            .any(|a| matches!(a, NameAttribute::NoSelect));
+        if !selectable {
+            continue;
+        }
+        let raw_name = name.name().to_string();
+        let (unread, total) = match session.status(&raw_name, "(MESSAGES UNSEEN)") {
+            Ok(status) => (status.unseen.unwrap_or(0), status.exists),
+            Err(_) => (0, 0),
+        };
+        // 显示名去掉前缀，只留「邮箱/文件夹」之后的部分，读起来才不啰嗦。
+        let trimmed = raw_name
+            .strip_prefix(&format!("{prefix}/"))
+            .unwrap_or(&raw_name)
+            .to_string();
+        folders.push(MailFolder {
+            account_id: account.id.clone(),
+            display_name: utf7::decode(&trimmed),
+            name: raw_name,
+            delimiter: name.delimiter().map(|d| d.to_string()),
+            role: FolderRole::Custom,
+            unread,
+            total,
+            uid_validity: 0,
+            uid_next: 0,
+            selectable,
+        });
+    }
+    let _ = session.logout();
+    Ok(folders)
+}
+
+/// 把共享邮箱的收件箱等标准文件夹补成角色，方便侧栏与搜索按角色过滤。
+pub fn mark_delegate_roles(folders: &mut [MailFolder], mailbox: &str) {
+    let prefix = folders
+        .first()
+        .map(|f| f.name.rsplit_once('/').map(|(p, _)| p.to_string()).unwrap_or_default())
+        .unwrap_or_default();
+    let _ = mailbox;
+    for folder in folders.iter_mut() {
+        let tail = folder
+            .name
+            .rsplit_once('/')
+            .map(|(_, t)| t.to_ascii_lowercase())
+            .unwrap_or_default();
+        folder.role = match tail.as_str() {
+            "inbox" | "收件箱" => FolderRole::Inbox,
+            "sent items" | "sent" | "已发送" => FolderRole::Sent,
+            "drafts" | "草稿" => FolderRole::Drafts,
+            "deleted items" | "trash" | "已删除" => FolderRole::Trash,
+            "junk email" | "junk" | "垃圾邮件" => FolderRole::Junk,
+            "archive" | "存档" => FolderRole::Archive,
+            _ => FolderRole::Custom,
+        };
+    }
+    let _ = prefix;
 }
 
 /// UID 集合压缩成区间串（`1:5,8,10:12`），减少协议体积。
@@ -658,19 +919,35 @@ fn compact_uid_set(uids: &[u32]) -> String {
 
 /// 取单封邮件的完整原文（正文缺失时按需补拉；也用于附件下载）。
 pub fn fetch_raw(account: &Account, password: &str, folder: &str, uid: u32) -> Result<Vec<u8>, String> {
-    let mut session = login(account, password)?;
+    // 优先复用长连接：读一封信不该付一次完整 TLS 握手的代价。
+    if let Ok(mut lease) = try_lease(account) {
+        lease.select(folder)?;
+        return fetch_raw_with(lease.session(), uid);
+    }
+    let secret = if password.is_empty() { auth_secret(account)? } else { password.to_string() };
+    let mut session = login(account, &secret)?;
     session
         .select(folder)
         .map_err(|e| format!("选择文件夹失败: {e}"))?;
+    let raw = fetch_raw_with(&mut session, uid)?;
+    let _ = session.logout();
+    Ok(raw)
+}
+
+fn fetch_raw_with(session: &mut ImapSession, uid: u32) -> Result<Vec<u8>, String> {
     let fetches = session
         .uid_fetch(uid.to_string(), "(UID BODY.PEEK[])")
         .map_err(|e| format!("拉取邮件失败: {e}"))?;
-    let raw = fetches
+    fetches
         .iter()
         .find_map(|f| f.body().map(|b| b.to_vec()))
-        .ok_or_else(|| "服务器没有返回邮件内容".to_string())?;
-    let _ = session.logout();
-    Ok(raw)
+        .ok_or_else(|| "服务器没有返回邮件内容".to_string())
+}
+
+/// 尝试借用连接池里的长连接。失败（账户刚加、网络刚断）返回 Err，
+/// 调用方回退到短连接——保持「连接池是优化，不是唯一路径」。
+fn try_lease(account: &Account) -> Result<super::pool::Lease, String> {
+    super::pool::lease(account)
 }
 
 // ---------------------------------------------------------------------------
@@ -690,10 +967,26 @@ pub fn set_flags(
     if uids.is_empty() {
         return Ok(());
     }
-    let mut session = login(account, password)?;
+    if let Ok(mut lease) = try_lease(account) {
+        lease.select(folder)?;
+        return set_flags_with(lease.session(), uids, seen, flagged);
+    }
+    let secret = if password.is_empty() { auth_secret(account)? } else { password.to_string() };
+    let mut session = login(account, &secret)?;
     session
         .select(folder)
         .map_err(|e| format!("选择文件夹失败: {e}"))?;
+    let result = set_flags_with(&mut session, uids, seen, flagged);
+    let _ = session.logout();
+    result
+}
+
+fn set_flags_with(
+    session: &mut ImapSession,
+    uids: &[u32],
+    seen: Option<bool>,
+    flagged: Option<bool>,
+) -> Result<(), String> {
     let set = compact_uid_set(uids);
     let mut ops: Vec<String> = Vec::new();
     if let Some(v) = seen {
@@ -713,7 +1006,6 @@ pub fn set_flags(
             .uid_store(&set, &op)
             .map_err(|e| format!("更新标记失败: {e}"))?;
     }
-    let _ = session.logout();
     Ok(())
 }
 
@@ -728,15 +1020,31 @@ pub fn move_messages(
     if uids.is_empty() {
         return Ok(());
     }
-    let mut session = login(account, password)?;
+    if let Ok(mut lease) = try_lease(account) {
+        let supports_move = lease.supports("MOVE");
+        lease.select(folder)?;
+        return move_with(lease.session(), supports_move, uids, target);
+    }
+    let secret = if password.is_empty() { auth_secret(account)? } else { password.to_string() };
+    let mut session = login(account, &secret)?;
     let supports_move = session
         .capabilities()
         .map(|caps| caps.has_str("MOVE"))
         .unwrap_or(false);
-
     session
         .select(folder)
         .map_err(|e| format!("选择文件夹失败: {e}"))?;
+    let result = move_with(&mut session, supports_move, uids, target);
+    let _ = session.logout();
+    result
+}
+
+fn move_with(
+    session: &mut ImapSession,
+    supports_move: bool,
+    uids: &[u32],
+    target: &str,
+) -> Result<(), String> {
     let set = compact_uid_set(uids);
     let encoded_target = utf7::encode(target);
 
@@ -758,7 +1066,6 @@ pub fn move_messages(
                 .map_err(|e| format!("清理已删除邮件失败: {e}"))?;
         }
     }
-    let _ = session.logout();
     Ok(())
 }
 
@@ -772,10 +1079,21 @@ pub fn delete_permanently(
     if uids.is_empty() {
         return Ok(());
     }
-    let mut session = login(account, password)?;
+    if let Ok(mut lease) = try_lease(account) {
+        lease.select(folder)?;
+        return delete_permanently_with(lease.session(), uids);
+    }
+    let secret = if password.is_empty() { auth_secret(account)? } else { password.to_string() };
+    let mut session = login(account, &secret)?;
     session
         .select(folder)
         .map_err(|e| format!("选择文件夹失败: {e}"))?;
+    let result = delete_permanently_with(&mut session, uids);
+    let _ = session.logout();
+    result
+}
+
+fn delete_permanently_with(session: &mut ImapSession, uids: &[u32]) -> Result<(), String> {
     let set = compact_uid_set(uids);
     session
         .uid_store(&set, "+FLAGS.SILENT (\\Deleted)")
@@ -783,7 +1101,6 @@ pub fn delete_permanently(
     if session.uid_expunge(&set).is_err() {
         session.expunge().map_err(|e| format!("清理失败: {e}"))?;
     }
-    let _ = session.logout();
     Ok(())
 }
 

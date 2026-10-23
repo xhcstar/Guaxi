@@ -138,6 +138,25 @@
       </template>
 
       <template v-if="labels.length">
+        <template v-if="delegateGroups.length">
+          <div class="mail-section-label">共享邮箱</div>
+          <div v-for="group in delegateGroups" :key="group.mailbox" class="mail-delegate-group">
+            <div class="mail-delegate-title" :title="group.mailbox">{{ group.mailbox }}</div>
+            <button
+              v-for="folder in group.folders"
+              :key="folder.name"
+              class="mail-folder is-nested"
+              :class="{ 'is-active': scope === 'folder' && activeFolder === folder.name }"
+              :title="folder.name"
+              @click="$emit('select-folder', folder.name)"
+            >
+              <span class="mail-folder-icon">⌸</span>
+              <span class="mail-folder-name">{{ folder.displayName }}</span>
+              <span v-if="folder.unread" class="mail-badge">{{ folder.unread }}</span>
+            </button>
+          </div>
+        </template>
+
         <div class="mail-section-label">分类</div>
         <button
           v-for="[label, count] in labels"
@@ -314,14 +333,44 @@ const standardFolders = computed(() => {
   )
 })
 
-/** 用户自建文件夹：排除掉已被标准分区占用的角色与名字。 */
+/** 共享邮箱文件夹：名字带 `Other Users/...`、`Shared/...`、`共享文件夹/...` 前缀。 */
+const DELEGATE_PREFIXES = ['other users/', 'shared/', '共享文件夹/']
+
+/** 用户自建文件夹：排除掉已被标准分区占用的角色与名字，以及共享邮箱子树。 */
 const customFolders = computed(() => {
   const standardNames = new Set(
     standardFolders.value.filter((e) => e.folder).map((e) => e.folder.name),
   )
   return folders.value.filter(
-    (f) => f.role === 'custom' && !standardNames.has(f.name),
+    (f) =>
+      f.role === 'custom' &&
+      !standardNames.has(f.name) &&
+      !DELEGATE_PREFIXES.some((p) => f.name.toLowerCase().startsWith(p)),
   )
+})
+
+/**
+ * 共享邮箱：按邮箱地址分组展示。
+ *
+ * 一个共享邮箱通常有收件箱 / 已发送 / 已删除好几个文件夹，平铺在
+ * 「自建文件夹」里会完全分不清哪个属于谁，所以单独开一组、按邮箱折叠。
+ */
+const delegateGroups = computed(() => {
+  const groups = new Map()
+  for (const folder of folders.value) {
+    const lower = folder.name.toLowerCase()
+    const prefix = DELEGATE_PREFIXES.find((p) => lower.startsWith(p))
+    if (!prefix) continue
+    // `Other Users/team@x.com/Inbox` → 邮箱是第 2 段。
+    const segments = folder.name.split('/')
+    const mailbox = segments.length >= 3 ? segments[1] : segments[0]
+    if (!groups.has(mailbox)) groups.set(mailbox, [])
+    groups.get(mailbox).push(folder)
+  }
+  return [...groups.entries()].map(([mailbox, list]) => ({
+    mailbox,
+    folders: list.sort((a, b) => a.displayName.localeCompare(b.displayName)),
+  }))
 })
 
 /** 快速查看里的未读角标：只统计收件箱，避免和账户徽标重复计数。 */

@@ -1764,3 +1764,196 @@
 .mail-folder-add:hover {
   color: var(--mail-accent);
 }
+
+/* ── 虚拟滚动 ──
+   行是绝对定位的吗？不：用 transform + 一个占位 spacer 撑起总高度，
+   行本身仍是普通流布局。这样键盘 Tab、右键菜单定位、拖拽都还能正常工作，
+   而绝对定位会让「滚动容器里的一万行」失去这些能力。 */
+.mail-list-spacer {
+  position: relative;
+}
+.mail-list-spacer > .mail-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: var(--mail-row-height);
+  overflow: hidden;
+}
+
+/* 「加载更多」：固定高度，不参与行高计算。 */
+.mail-load-more {
+  display: flex;
+  justify-content: center;
+  padding: 14px;
+}
+.mail-load-more .mail-btn {
+  min-width: 120px;
+}
+
+/* 键盘导航的当前行：与「批量勾选」区分开，只给一条左侧强调色。 */
+.mail-row.is-active {
+  box-shadow: inset 2px 0 0 var(--mail-accent);
+}
+
+/* 快捷键帮助面板 */
+.mail-shortcut-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 6px 2px;
+  font-size: 12.5px;
+  color: var(--mail-text-secondary);
+}
+.mail-kbd {
+  min-width: 150px;
+  padding: 3px 8px;
+  border: 1px solid var(--mail-border-strong);
+  border-radius: 5px;
+  background: var(--mail-bg);
+  color: var(--mail-text);
+  font-family: var(--mail-font-mono, monospace);
+  font-size: 11.5px;
+  text-align: center;
+}
+
+/* 附件：危险类型与内联图片 */
+.mail-attachment.is-danger {
+  border-color: var(--mail-danger);
+  color: var(--mail-danger);
+}
+.mail-attachment.is-inline {
+  border-style: dashed;
+}
+
+/* 设置页：端到端加密 / Sieve / 模板 */
+.mail-crypto-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.mail-crypto-card {
+  padding: 10px 12px;
+  border: 1px solid var(--mail-border);
+  border-radius: 8px;
+  background: var(--mail-bg);
+}
+.mail-crypto-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 650;
+  margin-bottom: 6px;
+}
+.mail-crypto-head .ok {
+  color: var(--mail-success, #2f8a4a);
+}
+.mail-crypto-head .bad {
+  color: var(--mail-danger);
+}
+.mail-crypto-card .mail-hint {
+  margin: 0 0 8px !important;
+}
+.mail-pgp-list {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11.5px;
+}
+.mail-pgp-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  min-width: 0;
+}
+.mail-pgp-row code {
+  font-family: var(--mail-font-mono, monospace);
+  color: var(--mail-text-muted);
+  flex: 0 0 auto;
+}
+.mail-pgp-row span:nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mail-sieve-preview {
+  max-height: 200px;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--mail-border);
+  border-radius: 6px;
+  background: var(--mail-bg);
+  color: var(--mail-text-secondary);
+  font-family: var(--mail-font-mono, monospace);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+}
+.mail-sieve-warnings {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: var(--mail-warning, #b8791a);
+  font-size: 11.5px;
+}
+
+/* 账户对话框：OAuth2 设备码 */
+.mail-oauth-box {
+  padding: 10px 12px;
+  margin: 8px 0 4px;
+  border: 1px solid var(--mail-border);
+  border-radius: 8px;
+  background: var(--mail-bg);
+}
+.mail-oauth-state {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  font-size: 12.5px;
+  color: var(--mail-text-secondary);
+}
+.mail-oauth-state .bad {
+  color: var(--mail-danger);
+}
+.mail-device-code {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.mail-device-code code {
+  padding: 4px 10px;
+  border: 1px dashed var(--mail-border-strong);
+  border-radius: 6px;
+  font-family: var(--mail-font-mono, monospace);
+  font-size: 16px;
+  letter-spacing: 2px;
+  color: var(--mail-text);
+}
+
+/* 共享邮箱条目 */
+.mail-delegate-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+/* 共享邮箱分组 */
+.mail-delegate-group {
+  margin-bottom: 4px;
+}
+.mail-delegate-title {
+  padding: 4px 12px 2px;
+  font-size: 11px;
+  color: var(--mail-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mail-folder.is-nested {
+  padding-left: 24px;
+}

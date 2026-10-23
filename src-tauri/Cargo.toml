@@ -295,9 +295,15 @@ socks = "0.3.4"
 ego-tree = "0.10"
 # 通知：故意锁在 2.3.x —— 2.4+ 要求 tauri ^2.10，会把 tauri/wry 整体升级。
 tauri-plugin-notification = "=2.3.3"
-cms = "0.2.3"
-x509-cert = "0.3.0"
-pgp = "0.21.0"
+# S/MIME（CMS，RFC 5652）：签名 / 加密用 RustCrypto 的纯 Rust 实现，
+# 与项目其余密码学栈（rsa/p256/ed25519/ring）同一套，不引入 openssl。
+cms = { version = "0.2.3", default-features = false, features = ["builder", "std", "rsa", "sha1", "pem"] }
+x509-cert = { version = "0.2.5", features = ["pem"] }
+# CMS / X.509 的 ASN.1 编解码（与 cms、x509-cert 同一版本线；v0.7）。
+der = { version = "0.7", features = ["alloc", "oid", "std", "pem"] }
+const-oid = { version = "0.9", features = ["db"] }
+# OpenPGP（RFC 9580）：纯 Rust。只开标准特性，bzip2 压缩留给服务器决定（关掉以减小构建）。
+pgp = { version = "0.21.0", default-features = false, features = ["bzip2"] }
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", default-features = false, features = ["windows-native"] }

@@ -60,6 +60,63 @@
               <input v-model="form.username" class="mail-input" placeholder="可选" />
             </div>
             <div class="mail-field">
+              <label class="mail-flabel">认证方式</label>
+              <select v-model="form.authKind" class="mail-input">
+                <option value="password">密码 / 授权码</option>
+                <option value="oauth2">OAuth2（Gmail / Outlook 推荐）</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- OAuth2：设备码流程 -->
+          <div v-if="form.authKind === 'oauth2'" class="mail-oauth-box">
+            <div class="mail-field-row">
+              <div class="mail-field">
+                <label class="mail-flabel">服务商</label>
+                <select v-model="form.oauthProvider" class="mail-input">
+                  <option value="gmail">Google / Gmail</option>
+                  <option value="outlook">Microsoft / Outlook</option>
+                </select>
+              </div>
+              <div class="mail-field">
+                <label class="mail-flabel">授权状态</label>
+                <div class="mail-oauth-state">
+                  <template v-if="oauthState === 'done'">✓ 已授权</template>
+                  <template v-else-if="oauthState === 'waiting'">等待你在浏览器里输入代码…</template>
+                  <template v-else-if="oauthState === 'error'" class="bad">{{ oauthError }}</template>
+                  <template v-else>未授权</template>
+                </div>
+              </div>
+            </div>
+            <template v-if="deviceCode">
+              <p class="mail-hint" style="margin: 8px 0">
+                在浏览器打开下方网址，输入代码后回到这里等待完成（通常几秒内）。
+              </p>
+              <div class="mail-device-code">
+                <code>{{ deviceCode.userCode }}</code>
+                <button class="mail-btn" @click="openVerificationUrl">打开授权页</button>
+                <button class="mail-btn" :disabled="oauthState === 'waiting'" @click="pollAuth">
+                  我已经授权了
+                </button>
+              </div>
+              <p class="mail-hint" style="margin: 4px 0 0">{{ deviceCode.verificationUrl }}</p>
+            </template>
+            <button
+              v-else
+              class="mail-btn is-primary"
+              style="margin-top: 8px"
+              :disabled="oauthState === 'starting'"
+              @click="startAuth"
+            >
+              {{ oauthState === 'starting' ? '正在请求…' : '开始授权' }}
+            </button>
+            <p class="mail-hint" style="margin: 8px 0 0">
+              令牌只存在系统凭据库，不会写进本地数据库；备份邮件库不会带走它。
+            </p>
+          </div>
+
+          <div v-else class="mail-field-row">
+            <div class="mail-field">
               <label class="mail-flabel">
                 {{ secretStored ? '密码 / 授权码（已保存，留空表示不改）' : '密码 / 授权码' }}
               </label>
@@ -111,6 +168,52 @@
           <div class="mail-field">
             <label class="mail-flabel">签名</label>
             <textarea v-model="form.signature" class="mail-textarea" rows="3" placeholder="署名 / 联系方式，会附在每封邮件末尾"></textarea>
+          </div>
+
+          <!-- 共享邮箱 / 委托访问 -->
+          <div class="mail-field">
+            <label class="mail-flabel">共享邮箱 / 委托访问（团队收件箱）</label>
+            <p class="mail-hint" style="margin: 0 0 6px">
+              用你的凭据登录，直接读取被委托的邮箱（Exchange / Office 365 / Dovecot
+              支持；QQ / 163 不支持）。填了之后，侧栏里会多出这些邮箱的文件夹。
+            </p>
+            <div v-for="(item, index) in form.delegate" :key="index" class="mail-delegate-row">
+              <input v-model="item.email" class="mail-input" placeholder="team@corp.com" />
+              <input v-model="item.displayName" class="mail-input" placeholder="显示名（可选）" />
+              <button class="mail-btn is-danger" @click="form.delegate.splice(index, 1)">移除</button>
+            </div>
+            <button class="mail-btn" style="margin-top: 6px" @click="addDelegate">
+              ＋ 添加共享邮箱
+            </button>
+          </div>
+
+          <!-- 服务器端规则（Sieve） -->
+          <div class="mail-field">
+            <label class="mail-flabel">服务器端规则（Sieve，可选）</label>
+            <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap">
+              <select v-model="form.sieve.mode" class="mail-input" style="width: 140px">
+                <option value="off">不使用</option>
+                <option value="managesieve">ManageSieve</option>
+              </select>
+              <input
+                v-if="form.sieve.mode !== 'off'"
+                v-model="form.sieve.host"
+                class="mail-input"
+                placeholder="留空 = 与 IMAP 同主机"
+              />
+              <input
+                v-if="form.sieve.mode !== 'off'"
+                v-model.number="form.sieve.port"
+                class="mail-input"
+                type="number"
+                style="width: 90px"
+                placeholder="4190"
+              />
+            </div>
+            <span class="mail-hint">
+              只有支持 ManageSieve 的服务器（Fastmail、Dovecot、部分企业邮）可用；
+              QQ / 163 / Exchange 不支持，选了也连不上。
+            </span>
           </div>
 
           <!-- 代理：账户级覆盖全局 -->
@@ -189,6 +292,9 @@ const props = defineProps({
   // 需要拿结果的事情用函数 props 传进来。
   testFn: { type: Function, default: null },
   hasSecretFn: { type: Function, default: null },
+  /** OAuth 三步：发起设备码 → 轮询换令牌 → 查状态。由 store 提供。 */
+  oauthStartFn: { type: Function, default: null },
+  oauthPollFn: { type: Function, default: null },
 })
 const emit = defineEmits(['close', 'saved', 'deleted', 'select'])
 
@@ -209,6 +315,10 @@ const secretStored = ref(false)
 const customMode = ref(false)
 const overrideProxy = ref(false)
 const bypassText = ref('')
+// OAuth2 授权流程的界面状态
+const oauthState = ref('idle')
+const oauthError = ref('')
+const deviceCode = ref(null)
 
 const blank = () => ({
   id: '',
@@ -222,12 +332,16 @@ const blank = () => ({
   smtpSecurity: 'ssl',
   username: '',
   authKind: 'password',
+  oauthProvider: 'gmail',
+  oauthExpires: 0,
   accent: pickAccent(),
   signature: '',
   folderMap: {},
   createdAt: 0,
   lastSyncAt: 0,
   proxy: { mode: 'system', url: '', bypass: [] },
+  delegate: [],
+  sieve: { mode: 'off', host: '', port: 4190, security: 'starttls', script: 'guaxi', lastSyncAt: 0, lastError: '' },
   secret: '',
 })
 
@@ -272,9 +386,15 @@ function pickAccent() {
   return palette[props.accounts.length % palette.length]
 }
 
+function addDelegate() {
+  form.delegate.push({ email: '', username: '', displayName: '', linkedAccountId: '' })
+}
+
 function startNew() {
   Object.assign(form, blank())
   editing.value = true
+  oauthState.value = 'idle'
+  deviceCode.value = null
   probeResult.value = null
   secretStored.value = false
   overrideProxy.value = false
@@ -286,6 +406,18 @@ function startEdit(account) {
   Object.assign(form, blank(), {
     ...account,
     proxy: account.proxy ? { ...account.proxy } : { mode: 'system', url: '', bypass: [] },
+    // 老账户没有这些字段：统一补成合法结构，避免模板里访问 undefined。
+    delegate: (account.delegate || []).map((d) => ({ ...d })),
+    sieve: {
+      mode: 'off',
+      host: '',
+      port: 4190,
+      security: 'starttls',
+      script: 'guaxi',
+      lastSyncAt: 0,
+      lastError: '',
+      ...(account.sieve || {}),
+    },
     secret: '',
   })
   editing.value = true
@@ -321,6 +453,49 @@ function applyPreset(preset) {
   form.smtpSecurity = preset.smtpSecurity || 'ssl'
 }
 
+async function startAuth() {
+  if (!props.oauthStartFn) return
+  oauthState.value = 'starting'
+  oauthError.value = ''
+  try {
+    deviceCode.value = await props.oauthStartFn(form.oauthProvider)
+    oauthState.value = 'waiting'
+    // 自动轮询：用户不用手动点「我已经授权了」，但保留按钮作为兜底。
+    pollAuth().catch(() => {})
+  } catch (error) {
+    oauthState.value = 'error'
+    oauthError.value = String(error?.message || error)
+  }
+}
+
+async function pollAuth() {
+  if (!deviceCode.value || !props.oauthPollFn) return
+  oauthState.value = 'waiting'
+  oauthError.value = ''
+  try {
+    // 先确保账户已经存在于库里：令牌要挂在账户 id 上。
+    if (!form.id) {
+      await save(false)
+    }
+    await props.oauthPollFn(form.id, form.oauthProvider, deviceCode.value)
+    oauthState.value = 'done'
+  } catch (error) {
+    oauthState.value = 'error'
+    oauthError.value = String(error?.message || error)
+  }
+}
+
+async function openVerificationUrl() {
+  const url = deviceCode.value?.verificationUrl
+  if (!url) return
+  try {
+    const { openUrl } = await import('@tauri-apps/plugin-opener')
+    await openUrl(url)
+  } catch {
+    window.open(url, '_blank')
+  }
+}
+
 async function hasSecret(id) {
   if (!id || !props.hasSecretFn) return false
   try {
@@ -347,13 +522,13 @@ async function test() {
   }
 }
 
-async function save() {
+async function save(closeAfter = true) {
   const account = {
     ...form,
     proxy: overrideProxy.value ? { ...form.proxy } : null,
   }
   delete account.secret
-  emit('saved', { account, secret: form.secret })
+  emit('saved', { account, secret: form.secret, closeAfter })
 }
 
 function remove(account) {

@@ -15,6 +15,22 @@
       <span class="mail-toolbar-sync" :class="{ 'is-stale': stale }">
         {{ syncLabel }}
       </span>
+      <!-- 推送状态：IDLE 生效时新邮件是「即时到达」，用户能感知到行为变了。 -->
+      <span v-if="idleActive" class="mail-toolbar-pill is-live" title="服务器推送已开启">
+        实时
+      </span>
+      <!-- 离线队列：断网期间的操作在排队，恢复后自动补传。点击可手动重试。 -->
+      <button
+        v-if="offlineQueued"
+        class="mail-toolbar-pill is-offline"
+        :title="`${offlineQueued} 条操作待补传（断网期间的操作会在联网后自动重放）`"
+        @click="$emit('replay-offline')"
+      >
+        待补传 {{ offlineQueued }}
+      </button>
+      <span v-if="pendingSend" class="mail-toolbar-pill" :title="`${pendingSend} 封邮件在待发队列`">
+        待发 {{ pendingSend }}
+      </span>
     </div>
 
     <div class="mail-toolbar-actions">
@@ -77,6 +93,12 @@ const props = defineProps({
   lastSyncAt: { type: Number, default: 0 },
   unread: { type: Number, default: 0 },
   sidebarCollapsed: { type: Boolean, default: false },
+  /** 断网期间排队的写操作数。 */
+  offlineQueued: { type: Number, default: 0 },
+  /** 待发（撤回窗口 / 失败退避）的邮件数。 */
+  pendingSend: { type: Number, default: 0 },
+  /** IMAP IDLE 是否在推送。 */
+  idleActive: { type: Boolean, default: false },
 })
 defineEmits([
   'sync',
@@ -86,6 +108,7 @@ defineEmits([
   'rules',
   'contacts',
   'toggle-sidebar',
+  'replay-offline',
 ])
 
 // 相对时间需要每分钟重算一次；用一个本地 tick 驱动，不依赖 store 变化。
@@ -111,6 +134,30 @@ const stale = computed(() => props.lastSyncAt && tick.value - props.lastSyncAt >
 </script>
 
 <style scoped>
+.mail-toolbar-pill {
+  padding: 1px 8px;
+  border: 1px solid var(--mail-border-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--mail-text-muted);
+  font: inherit;
+  font-size: 11px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.mail-toolbar-pill.is-live {
+  border-color: var(--mail-success, #2f8a4a);
+  color: var(--mail-success, #2f8a4a);
+}
+.mail-toolbar-pill.is-offline {
+  border-color: var(--mail-warning, #b8791a);
+  color: var(--mail-warning, #b8791a);
+  cursor: pointer;
+}
+.mail-toolbar-pill.is-offline:hover {
+  background: var(--mail-panel-hover);
+}
+
 .mail-toolbar {
   flex: 0 0 auto;
   display: flex;

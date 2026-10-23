@@ -45,6 +45,14 @@ const emptySettings = () => ({
   composeHtml: true,
   inlineImages: false,
   customThemes: [],
+  // 可靠性相关的新设置
+  notifyNewMail: true,
+  attachmentLimitMb: 25,
+  flagSyncMinutes: 10,
+  offlineQueue: true,
+  pageSize: 100,
+  virtualList: true,
+  warnDangerousAttachments: true,
 })
 
 export const useMailStore = defineStore('mail', {
@@ -81,6 +89,21 @@ export const useMailStore = defineStore('mail', {
     lastError: '',
     pollTimer: null,
     unlisten: [],
+    /** 已加载的页码（「加载更多」按页累加，不再硬编码 300 条）。 */
+    pageCount: 1,
+    hasMore: false,
+    loadingMore: false,
+    /** 搜索序号：快速输入时丢弃过期结果。 */
+    searchSeq: 0,
+    /** 离线队列条数 / 待发邮件数（顶栏状态条）。 */
+    offlineQueued: 0,
+    pendingSend: 0,
+    idleActive: false,
+    /** 模板与收发件人名单（设置页 / 写信页共用）。 */
+    templates: [],
+    senderRules: [],
+    /** 当前账户的 MFA / OAuth 状态。 */
+    oauthStatus: null,
   }),
 
   getters: {
@@ -129,18 +152,22 @@ export const useMailStore = defineStore('mail', {
       if (this.ready) return
       this.loading = true
       try {
-        const [settings, themes, accounts, unread, rules] = await Promise.all([
+        const [settings, themes, accounts, unread, rules, templates, senderRules] = await Promise.all([
           invoke('mail_get_settings').catch(() => emptySettings()),
           invoke('mail_builtin_themes').catch(() => []),
           invoke('mail_list_accounts').catch(() => []),
           invoke('mail_unread_counts').catch(() => []),
           invoke('mail_list_rules').catch(() => []),
+          invoke('mail_list_templates').catch(() => []),
+          invoke('mail_list_sender_rules').catch(() => []),
         ])
         this.settings = { ...emptySettings(), ...(settings || {}) }
         this.builtinThemes = themes || []
         this.accounts = accounts || []
         this.unread = Object.fromEntries((unread || []).map(([id, n]) => [id, n]))
         this.rules = rules || []
+        this.templates = templates || []
+        this.senderRules = senderRules || []
 
         if (this.accounts.length && !this.activeAccountId) {
           this.activeAccountId = this.accounts[0].id
@@ -153,6 +180,14 @@ export const useMailStore = defineStore('mail', {
         await this.bindEvents()
         this.refreshLabels().catch(() => {})
         await this.flushOutbox()
+        // 启动时先把上一次断网期间排队的操作重放掉，再去看 IDLE。
+        this.replayOffline().catch(() => {})
+        this.startIdle().catch(() => {})
+        // 共享邮箱：启动时把已配置的委托邮箱重新展开一次（服务器上可能新增了文件夹）。
+        for (const account of this.accounts) {
+          if (account.delegate?.length) this.expandDelegates(account.id).catch(() => {})
+        }
+        this.refreshConnection().catch(() => {})
       } catch (error) {
         logger.error('邮箱初始化失败', error)
         this.lastError = String(error?.message || error)
@@ -176,7 +211,19 @@ export const useMailStore = defineStore('mail', {
           const payload = event?.payload || {}
           await this.revealMessage(payload.accountId, payload.folder, payload.uid)
         })
-        this.unlisten.push(offSync, offNew, offOrigin)
+        // IMAP IDLE：服务器说「有变化」就做一次增量同步。
+        // 这里不直接刷新列表，而是走 syncNow —— 列表数据来自本地库，
+        // 必须先落库再刷新，否则会读到旧数据。
+        const offIdle = await listen('mail-idle-change', async (event) => {
+          const payload = event?.payload || {}
+          if (payload.accountId && payload.accountId !== this.activeAccountId) {
+            // 其它账户的变化：只更新未读徽标，不打断当前阅读。
+            this.reloadUnread().catch(() => {})
+            return
+          }
+          await this.syncNow().catch(() => {})
+        })
+        this.unlisten.push(offSync, offNew, offOrigin, offIdle)
       } catch (error) {
         logger.warn('邮箱事件监听失败', error)
       }
@@ -219,6 +266,8 @@ export const useMailStore = defineStore('mail', {
       else this.accounts.push(saved)
       if (!this.activeAccountId) this.activeAccountId = saved.id
       await this.loadFolders(saved.id)
+      // 共享邮箱需要在保存后展开一次，否则侧栏里看不到它们的文件夹。
+      this.expandDelegates(saved.id).catch(() => {})
       return saved
     },
 
@@ -291,6 +340,29 @@ export const useMailStore = defineStore('mail', {
       }
     },
 
+    /** 展开某个共享邮箱的文件夹（账户设置里配了 delegate 之后调用）。 */
+    async loadDelegateFolders(accountId, mailbox) {
+      const folders = await invoke('mail_list_delegate_folders', { accountId, mailbox })
+      await this.loadFolders(accountId)
+      return folders || []
+    },
+
+    /** 把账户里配置的所有共享邮箱都展开（保存账户 / 启动时）。 */
+    async expandDelegates(accountId) {
+      const account = this.accounts.find((a) => a.id === accountId)
+      if (!account?.delegate?.length) return []
+      const out = []
+      for (const item of account.delegate) {
+        if (!item?.email) continue
+        try {
+          out.push(...(await this.loadDelegateFolders(accountId, item.email)))
+        } catch (error) {
+          logger.warn('展开共享邮箱失败', item.email, error)
+        }
+      }
+      return out
+    },
+
     async refreshFolders() {
       await Promise.all(this.accounts.map((a) => this.loadFolders(a.id, { refresh: true })))
       await this.reloadUnread()
@@ -348,7 +420,7 @@ export const useMailStore = defineStore('mail', {
       }
     },
 
-    async loadMessages({ silent = false, seq = null } = {}) {
+    async loadMessages({ silent = false, seq = null, append = false } = {}) {
       if (!this.ready && !silent) return
       const searching =
         Boolean(this.searchQuery.trim()) ||
@@ -358,6 +430,10 @@ export const useMailStore = defineStore('mail', {
         Boolean(this.activeLabel) ||
         this.scope === 'all'
 
+      const pageSize = Math.max(20, Number(this.settings.pageSize) || 100)
+      const offset = append ? this.messages.length : 0
+      // 增量请求多要一条：用来判断「还有没有下一页」，
+      // 否则用户要一直点「加载更多」直到点出一个空列表才知道到底了。
       const query = {
         accountIds: this.activeAccountId ? [this.activeAccountId] : [],
         folder: this.scope === 'folder' ? this.activeFolder : null,
@@ -368,14 +444,21 @@ export const useMailStore = defineStore('mail', {
         unreadOnly: this.searchFilters.unreadOnly ? true : null,
         starredOnly: this.searchFilters.starredOnly ? true : null,
         hasAttachment: this.searchFilters.hasAttachment ? true : null,
-        limit: 300,
+        limit: pageSize + 1,
+        offset,
       }
 
       try {
         const rows = await invoke('mail_search', { query })
         // 过期请求：整批结果丢掉，不能覆盖更新的一次搜索。
         if (seq !== null && seq !== this.searchSeq) return
-        this.messages = await this.groupThreadsIfNeeded(rows || [])
+        const list = rows || []
+        const hasMore = list.length > pageSize
+        const page = hasMore ? list.slice(0, pageSize) : list
+        const grouped = await this.groupThreadsIfNeeded(append ? [...this.messages, ...page] : page)
+        this.messages = grouped
+        this.hasMore = hasMore
+        this.pageCount = append ? this.pageCount + 1 : 1
         this.searchError = ''
       } catch (error) {
         // 以前这里会「静默回退成普通列表」——于是 SQL 写错也看起来像正常页面，
@@ -383,7 +466,18 @@ export const useMailStore = defineStore('mail', {
         // 现在如实把错误暴露到列表头部，并且**不再**用全量列表冒充搜索结果。
         logger.error('检索失败', error)
         this.searchError = String(error?.message || error)
-        this.messages = []
+        if (!append) this.messages = []
+      }
+    },
+
+    /** 上一页之后继续加载。 */
+    async loadMore() {
+      if (this.loadingMore || !this.hasMore) return
+      this.loadingMore = true
+      try {
+        await this.loadMessages({ silent: true, append: true })
+      } finally {
+        this.loadingMore = false
       }
     },
 
@@ -514,6 +608,10 @@ export const useMailStore = defineStore('mail', {
         await this.loadMessages({ silent: true })
         await this.flushOutbox()
         this.lastSyncAt = Date.now()
+        // 每次同步顺带补一次离线队列与连接状态：断网期间排队的操作
+        // 只要能连上就在这一轮被重放掉，不需要用户手动点。
+        this.replayOffline({ quiet: true }).catch(() => {})
+        this.refreshConnection().catch(() => {})
         if (!quiet && result?.errors?.length) {
           this.lastError = result.errors.join('\n')
         }
@@ -524,6 +622,224 @@ export const useMailStore = defineStore('mail', {
         return { added: 0, errors: [String(error)] }
       } finally {
         this.syncing = false
+      }
+    },
+
+    // ---------------- 离线队列 / IDLE / 连接状态 ----------------
+
+    /** 重放断网期间排队的写操作。 */
+    async replayOffline({ quiet = false } = {}) {
+      if (!this.settings.offlineQueue) return { replayed: 0, failed: 0 }
+      try {
+        const result = await invoke('mail_offline_replay', {
+          accountId: this.activeAccountId || null,
+        })
+        if (!quiet && result?.replayed) {
+          // 重放成功后列表里的标记可能与本地缓存不一致，刷一次。
+          await this.loadMessages({ silent: true })
+          await this.reloadUnread()
+        }
+        await this.refreshConnection()
+        return result || { replayed: 0, failed: 0 }
+      } catch (error) {
+        logger.warn('重放离线操作失败', error)
+        return { replayed: 0, failed: 0, errors: [String(error)] }
+      }
+    },
+
+    /** 拉取「离线队列 / 待发 / 同步中 / IDLE」状态。 */
+    async refreshConnection() {
+      try {
+        const status = await invoke('mail_connection_status', {
+          accountId: this.activeAccountId || null,
+        })
+        this.offlineQueued = Number(status?.offlineQueued || 0)
+        this.pendingSend = Number(status?.pendingSend || 0)
+        this.idleActive = Boolean(status?.idleActive)
+      } catch (error) {
+        logger.debug('读取连接状态失败', error)
+      }
+    },
+
+    /** 开启 IMAP IDLE（fetchMode = idle 时才真正启动）。 */
+    async startIdle() {
+      if (!this.activeAccountId) return false
+      if (this.settings.fetchMode !== 'idle') return false
+      try {
+        const started = await invoke('mail_start_idle', {
+          accountId: this.activeAccountId,
+          folder: this.activeFolder || 'INBOX',
+        })
+        this.idleActive = Boolean(started)
+        return Boolean(started)
+      } catch (error) {
+        logger.warn('启动 IDLE 失败，继续使用轮询', error)
+        this.idleActive = false
+        return false
+      }
+    },
+
+    async stopIdle(accountId = this.activeAccountId) {
+      if (!accountId) return
+      await invoke('mail_stop_idle', { accountId }).catch(() => {})
+      this.idleActive = false
+    },
+
+    // ---------------- OAuth2 ----------------
+
+    /** 发起设备码授权，返回给界面展示的短码与网址。 */
+    async startOAuth(provider, { clientId = null, scope = null } = {}) {
+      return invoke('mail_oauth_start', { provider, clientId, scope })
+    },
+
+    /** 轮询等待用户在浏览器里完成授权。 */
+    async pollOAuth(accountId, provider, deviceCode, interval = 5) {
+      await invoke('mail_oauth_poll', {
+        accountId,
+        provider,
+        deviceCode,
+        interval,
+        clientId: null,
+      })
+      this.oauthStatus = await this.oauthStatusFor(accountId).catch(() => null)
+      return this.oauthStatus
+    },
+
+    async oauthStatusFor(accountId) {
+      if (!accountId) return null
+      return invoke('mail_oauth_status', { accountId })
+    },
+
+    async signOutOAuth(accountId) {
+      await invoke('mail_oauth_sign_out', { accountId })
+      this.oauthStatus = null
+      const account = this.accounts.find((a) => a.id === accountId)
+      if (account) {
+        account.authKind = 'password'
+        account.oauthProvider = ''
+      }
+    },
+
+    // ---------------- 模板 ----------------
+
+    async loadTemplates() {
+      try {
+        this.templates = (await invoke('mail_list_templates')) || []
+      } catch (error) {
+        logger.warn('加载模板失败', error)
+      }
+    },
+
+    async saveTemplate(template) {
+      const saved = await invoke('mail_save_template', { template })
+      const index = this.templates.findIndex((t) => t.id === saved.id)
+      if (index >= 0) this.templates.splice(index, 1, saved)
+      else this.templates.push(saved)
+      return saved
+    },
+
+    async deleteTemplate(id) {
+      await invoke('mail_delete_template', { id })
+      this.templates = this.templates.filter((t) => t.id !== id)
+    },
+
+    /** 把模板套进当前草稿（保留收件人，只覆盖主题与正文）。 */
+    applyTemplate(template) {
+      if (!this.composing || !template) return
+      if (template.subject) this.composing.subject = template.subject
+      if (template.html) {
+        this.composing.html = template.html
+        this.composing.htmlMode = true
+      } else if (template.text) {
+        this.composing.html = ''
+        this.composing.htmlMode = false
+      }
+      if (template.text) this.composing.text = template.text
+    },
+
+    // ---------------- 收发件人名单 ----------------
+
+    async loadSenderRules() {
+      try {
+        this.senderRules = (await invoke('mail_list_sender_rules')) || []
+      } catch (error) {
+        logger.warn('加载名单失败', error)
+      }
+    },
+
+    async saveSenderRule(rule) {
+      const saved = await invoke('mail_save_sender_rule', { rule })
+      const index = this.senderRules.findIndex((r) => r.id === saved.id)
+      if (index >= 0) this.senderRules.splice(index, 1, saved)
+      else this.senderRules.push(saved)
+      return saved
+    },
+
+    async deleteSenderRule(id) {
+      await invoke('mail_delete_sender_rule', { id })
+      this.senderRules = this.senderRules.filter((r) => r.id !== id)
+    },
+
+    /** 把某个发件人一键拉黑 / 放行（邮件右键菜单用）。 */
+    async blockSender(address, kind = 'block') {
+      const rule = {
+        id: '',
+        kind,
+        pattern: String(address || '').trim().toLowerCase(),
+        note: '',
+        createdAt: 0,
+      }
+      if (!rule.pattern) return null
+      return this.saveSenderRule(rule)
+    },
+
+    // ---------------- 附件检查 / 诊断 ----------------
+
+    async checkAttachments(paths) {
+      try {
+        return (await invoke('mail_check_attachments', { paths })) || []
+      } catch {
+        return []
+      }
+    },
+
+    async exportDiagnostics(path) {
+      return invoke('mail_export_diagnostics', { targetPath: path })
+    },
+
+    async testNotification() {
+      return invoke('mail_test_notification')
+    },
+
+    async resetConnections(accountId = null) {
+      return invoke('mail_reset_connections', { accountId })
+    },
+
+    /** S/MIME：本账户身份状态（是否已导入证书与私钥）。 */
+    async smimeStatus(accountId = this.activeAccountId) {
+      if (!accountId) return null
+      try {
+        return await invoke('mail_smime_status', { accountId })
+      } catch {
+        return null
+      }
+    },
+
+    /** S/MIME：收件人证书是否已导入（加密发送的前提）。 */
+    async smimePeerStatus(address) {
+      try {
+        return await invoke('mail_smime_peer_status', { address })
+      } catch {
+        return false
+      }
+    },
+
+    /** PGP 钥匙串。 */
+    async pgpKeys() {
+      try {
+        return (await invoke('mail_pgp_keys')) || []
+      } catch {
+        return []
       }
     },
 
@@ -808,6 +1124,12 @@ export const useMailStore = defineStore('mail', {
             inReplyTo: draft.inReplyTo,
             references: draft.references,
             attachments: (draft.attachments || []).map((a) => a.path),
+            inlineImages: (draft.inlineImages || []).map((img) => ({
+              contentId: img.contentId,
+              path: img.path,
+              filename: img.name || '',
+            })),
+            cryptoMode: draft.cryptoMode || '',
             saveToSent: true,
           },
         })
@@ -821,6 +1143,16 @@ export const useMailStore = defineStore('mail', {
 
     async sendCompose({ useOutbox = false } = {}) {
       if (!this.composing) return
+      // 附件体积与危险类型检查：超限直接拦下，危险类型由界面确认过后再走到这里。
+      const paths = (this.composing.attachments || []).map((a) => a.path)
+      const checks = await this.checkAttachments(paths)
+      const tooLarge = checks.filter((c) => c.level === 'large')
+      if (tooLarge.length) {
+        const limit = this.settings.attachmentLimitMb
+        throw new Error(
+          `附件过大：${tooLarge.map((c) => c.name).join('、')}。总大小上限 ${limit} MB，请改用网盘链接。`,
+        )
+      }
       const request = {
         accountId: this.composing.accountId,
         to: this.composing.to,
@@ -831,7 +1163,13 @@ export const useMailStore = defineStore('mail', {
         html: this.composing.htmlMode ? this.composing.html : null,
         inReplyTo: this.composing.inReplyTo,
         references: this.composing.references,
-        attachments: this.composing.attachments.map((a) => a.path),
+        attachments: paths,
+        inlineImages: (this.composing.inlineImages || []).map((img) => ({
+          contentId: img.contentId,
+          path: img.path,
+          filename: img.name || '',
+        })),
+        cryptoMode: this.composing.cryptoMode || '',
         saveToSent: true,
       }
       if (useOutbox && this.settings.undoSendSeconds > 0) {
@@ -839,6 +1177,7 @@ export const useMailStore = defineStore('mail', {
         this.outbox.push(item)
         await this._discardSourceDraft(this.composing)
         this.composing = null
+        await this.refreshConnection().catch(() => {})
         return { queued: item }
       }
       const sourceDraft = this.composing
@@ -877,6 +1216,12 @@ export const useMailStore = defineStore('mail', {
         inReplyTo: this.composing.inReplyTo,
         references: this.composing.references,
         attachments: this.composing.attachments.map((a) => a.path),
+        inlineImages: (this.composing.inlineImages || []).map((img) => ({
+          contentId: img.contentId,
+          path: img.path,
+          filename: img.name || '',
+        })),
+        cryptoMode: this.composing.cryptoMode || '',
         saveToSent: true,
       }
       const sourceDraft = this.composing
@@ -960,6 +1305,8 @@ function buildCompose(mode, source, account, settings) {
     html: '',
     htmlMode: settings.composeHtml !== false,
     attachments: [],
+    inlineImages: [],
+    cryptoMode: '',
     inReplyTo: null,
     references: null,
     showCc: false,

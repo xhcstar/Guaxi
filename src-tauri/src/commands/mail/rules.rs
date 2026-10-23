@@ -141,6 +141,96 @@ pub fn merge_actions(actions: &[RuleAction]) -> RuleAction {
     merged
 }
 
+/// 收发件人名单的判定结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SenderVerdict {
+    Blocked,
+    Allowed,
+}
+
+/// 按名单判定发件人。
+///
+/// 匹配规则（由宽到窄）：
+/// - `*` 通配符（`@*.spam.example`、`noreply-*@x.com`）；
+/// - 以 `@` 开头：匹配整个域名（`@spam.example`）；
+/// - 含 `@`：精确匹配地址；
+/// - 否则：匹配地址或显示名里出现该子串。
+///
+/// **黑名单优先**：同时出现在两个名单里时按拉黑处理——用户把某人加进黑名单
+/// 的意图更强烈，一条误放行的代价远大于误删（后者还能从垃圾箱找回）。
+pub fn sender_list_verdict(
+    rules: &[super::model::SenderRule],
+    from_addr: &str,
+    from_name: &str,
+) -> Option<SenderVerdict> {
+    if rules.is_empty() {
+        return None;
+    }
+    let addr = from_addr.trim().to_ascii_lowercase();
+    let name = from_name.trim().to_ascii_lowercase();
+    let matches = |pattern: &str| -> bool {
+        let pattern = pattern.trim().to_ascii_lowercase();
+        if pattern.is_empty() {
+            return false;
+        }
+        if pattern.contains('*') {
+            return wildcard_match(&pattern, &addr) || wildcard_match(&pattern, &name);
+        }
+        if let Some(domain) = pattern.strip_prefix('@') {
+            return addr.ends_with(&format!("@{domain}"));
+        }
+        if pattern.contains('@') {
+            return addr == pattern;
+        }
+        addr.contains(&pattern) || name.contains(&pattern)
+    };
+
+    let mut allowed = false;
+    for rule in rules {
+        if !matches(&rule.pattern) {
+            continue;
+        }
+        match rule.kind.as_str() {
+            "block" => return Some(SenderVerdict::Blocked),
+            "allow" => allowed = true,
+            _ => {}
+        }
+    }
+    if allowed {
+        Some(SenderVerdict::Allowed)
+    } else {
+        None
+    }
+}
+
+/// 极简通配符匹配（只支持 `*`）。地址串很短，回溯风险可以忽略。
+fn wildcard_match(pattern: &str, text: &str) -> bool {
+    let (p, t): (Vec<char>, Vec<char>) = (pattern.chars().collect(), text.chars().collect());
+    let (mut pi, mut ti) = (0usize, 0usize);
+    let mut star: Option<usize> = None;
+    let mut mark = 0usize;
+    while ti < t.len() {
+        if pi < p.len() && (p[pi] == '?' || p[pi] == t[ti]) {
+            pi += 1;
+            ti += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star = Some(pi);
+            mark = ti;
+            pi += 1;
+        } else if let Some(s) = star {
+            pi = s + 1;
+            mark += 1;
+            ti = mark;
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == '*' {
+        pi += 1;
+    }
+    pi == p.len()
+}
+
 /// 标签串的增删（逗号分隔，去重保序）。
 pub fn apply_label_delta(current: &str, add: &[String], remove: &[String]) -> String {
     let mut labels: Vec<String> = current
@@ -179,10 +269,14 @@ mod tests {
             smtp_security: super::super::model::Security::Ssl,
             username: String::new(),
             auth_kind: "password".into(),
+            oauth_provider: String::new(),
+            oauth_expires: 0,
             proxy: None,
             accent: String::new(),
             signature: String::new(),
             folder_map: BTreeMap::new(),
+            delegate: Vec::new(),
+            sieve: None,
             created_at: 0,
             last_sync_at: 0,
         }

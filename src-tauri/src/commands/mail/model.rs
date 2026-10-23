@@ -91,9 +91,16 @@ pub struct Account {
     /// 登录名。留空则回退到邮箱地址（Gmail/QQ/163 都是地址本身，企业邮常需要短用户名）。
     #[serde(default)]
     pub username: String,
-    /// `password` | `oauth2`（当前只落地密码/授权码；OAuth2 预留字段，界面灰显）。
+    /// `password` | `oauth2`。`oauth2` 时 keychain 里存的是刷新令牌（或未过期时的访问令牌），
+    /// 由 `oauth` 模块按 `oauth_provider` 换取访问令牌。
     #[serde(default = "default_auth_kind")]
     pub auth_kind: String,
+    /// OAuth2 服务商标识：`gmail` | `outlook` | `custom`。
+    #[serde(default)]
+    pub oauth_provider: String,
+    /// 访问令牌过期时间（Unix 秒）。0 表示未知 / 不使用 OAuth。
+    #[serde(default)]
+    pub oauth_expires: i64,
     /// 代理配置（账户级覆盖全局设置）。`None` 表示跟随全局。
     #[serde(default)]
     pub proxy: Option<ProxyConfig>,
@@ -106,10 +113,64 @@ pub struct Account {
     /// 有的服务器用 `Sent Items`，有的用 `已发送`，用户可在这里覆盖自动识别。
     #[serde(default)]
     pub folder_map: std::collections::BTreeMap<String, String>,
+    /// 共享邮箱 / 委托访问：以「主账户凭据 + 代理邮箱」的形式登录，
+    /// 每个条目是一个邮箱地址。空表示普通个人账户。
+    #[serde(default)]
+    pub delegate: Vec<DelegateMailbox>,
+    /// 服务器端规则（Sieve）：是否尝试上传、使用的脚本名、以及最近一次同步结果。
+    #[serde(default)]
+    pub sieve: Option<SieveConfig>,
     #[serde(default)]
     pub created_at: i64,
     #[serde(default)]
     pub last_sync_at: i64,
+}
+
+/// 共享邮箱 / 委托访问配置。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DelegateMailbox {
+    pub email: String,
+    /// 登录名（Exchange 通常是 `域\用户` 或 UPN）；留空回退到邮箱地址。
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub display_name: String,
+    /// 已生效的共享邮箱本地账户 id（第一次展开时创建，之后复用它）。
+    /// 为空表示还没展开——共享邮箱不是一个独立的 server 账户，
+    /// 而是用主账户凭据登录后选定对方邮箱，所以本地用一条「影子账户」承载它。
+    #[serde(default)]
+    pub linked_account_id: String,
+}
+
+/// 服务器端规则（Sieve，RFC 5228）同步配置。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SieveConfig {
+    /// 管理通道：`managesieve`（RFC 5804，4190 端口）| `off`。
+    #[serde(default = "default_sieve_mode")]
+    pub mode: String,
+    #[serde(default)]
+    pub host: String,
+    #[serde(default)]
+    pub port: u16,
+    #[serde(default)]
+    pub security: Security,
+    /// 服务器上的脚本名。
+    #[serde(default = "default_sieve_script")]
+    pub script: String,
+    /// 最近一次上传时间与结果。
+    #[serde(default)]
+    pub last_sync_at: i64,
+    #[serde(default)]
+    pub last_error: String,
+}
+
+fn default_sieve_mode() -> String {
+    "off".to_string()
+}
+fn default_sieve_script() -> String {
+    "guaxi".to_string()
 }
 
 fn default_imap_port() -> u16 {
@@ -516,6 +577,37 @@ pub struct MailSettings {
     /// 自定义主题。
     #[serde(default)]
     pub custom_themes: Vec<CustomTheme>,
+    /// 新邮件系统通知。
+    #[serde(default = "default_true")]
+    pub notify_new_mail: bool,
+    /// 单封邮件附件总大小上限（MB）。超过时写信页会拒绝发送并提示改用链接。
+    #[serde(default = "default_attachment_limit")]
+    pub attachment_limit_mb: u32,
+    /// 多设备一致性：每隔多少分钟全量比对一次 FLAGS / 存在性（0 = 只在启动时）。
+    #[serde(default = "default_flag_sync_minutes")]
+    pub flag_sync_minutes: u32,
+    /// 离线队列：网络失败时把写操作排队，恢复后重放。
+    #[serde(default = "default_true")]
+    pub offline_queue: bool,
+    /// 列表每页条数（「加载更多」的步长）。
+    #[serde(default = "default_page_size")]
+    pub page_size: u32,
+    /// 邮件列表虚拟滚动（长列表只渲染视口内的行）。
+    #[serde(default = "default_true")]
+    pub virtual_list: bool,
+    /// 附件危险类型提示（.exe/.scr 等）。
+    #[serde(default = "default_true")]
+    pub warn_dangerous_attachments: bool,
+}
+
+fn default_attachment_limit() -> u32 {
+    25
+}
+fn default_flag_sync_minutes() -> u32 {
+    10
+}
+fn default_page_size() -> u32 {
+    100
 }
 
 fn default_theme() -> String {
@@ -574,6 +666,13 @@ impl Default for MailSettings {
             compose_html: true,
             inline_images: false,
             custom_themes: Vec::new(),
+            notify_new_mail: true,
+            attachment_limit_mb: default_attachment_limit(),
+            flag_sync_minutes: default_flag_sync_minutes(),
+            offline_queue: true,
+            page_size: default_page_size(),
+            virtual_list: true,
+            warn_dangerous_attachments: true,
         }
     }
 }
@@ -621,6 +720,23 @@ pub struct SendRequest {
     /// 是否保存到「已发送」。
     #[serde(default)]
     pub save_to_sent: Option<bool>,
+    /// 内联图片：`contentId` 对应 HTML 里的 `cid:xxx`，路径是本机文件。
+    /// 发送时会被组装进 `multipart/related`，而不是作为可见附件。
+    #[serde(default)]
+    pub inline_images: Vec<InlineImage>,
+    /// 端到端加密/签名：`none` | `smime_sign` | `smime_encrypt` | `smime_sign_encrypt` | `pgp_sign` | `pgp_encrypt`。
+    #[serde(default)]
+    pub crypto_mode: String,
+}
+
+/// 内联图片（写信页粘贴/插入的图片）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InlineImage {
+    pub content_id: String,
+    pub path: String,
+    #[serde(default)]
+    pub filename: String,
 }
 
 /// 待发送队列中的一项（延迟发送 / 撤回）。
@@ -633,6 +749,14 @@ pub struct OutboxItem {
     pub to: String,
     pub due_at: i64,
     pub created_at: i64,
+    /// 已经失败过的次数（指数退避的输入）。
+    #[serde(default)]
+    pub attempts: u32,
+    /// 退避窗口结束前不再重试。
+    #[serde(default)]
+    pub next_attempt_at: i64,
+    #[serde(default)]
+    pub last_error: String,
 }
 
 /// 通信测试结果（连接诊断页用）。
@@ -646,4 +770,65 @@ pub struct ConnectionProbe {
     pub detail: String,
     #[serde(default)]
     pub capabilities: Vec<String>,
+}
+
+/// 收/发件人名单（黑名单 / 白名单）。
+///
+/// 与「规则」分开的原因：规则的匹配串是自由文本，而名单是用户在设置页里
+/// 一行一个地址维护的清单——两者的心智模型不同。执行顺序上名单更优先：
+/// 命中黑名单直接删/归档，命中白名单则跳过后面的规则。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SenderRule {
+    pub id: String,
+    /// `allow` | `block`
+    pub kind: String,
+    /// 地址或域名（`@spam.example` 匹配整个域名；`a@b.c` 精确匹配地址，
+    /// 含 `*` 时按通配符匹配）。
+    pub pattern: String,
+    #[serde(default)]
+    pub note: String,
+    #[serde(default)]
+    pub created_at: i64,
+}
+
+/// 邮件模板（写信页的「套用模板」）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailTemplate {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub subject: String,
+    #[serde(default)]
+    pub html: String,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub created_at: i64,
+}
+
+/// 新邮件到达时用于系统通知的信息。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewMailNotice {
+    pub account_id: String,
+    pub account_email: String,
+    pub folder: String,
+    pub uid: u32,
+    pub from_name: String,
+    pub from_addr: String,
+    pub subject: String,
+}
+
+/// 附件大小上限检查结果。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentCheck {
+    pub path: String,
+    pub name: String,
+    pub size: u64,
+    /// `ok` | `large`（超过建议上限）| `dangerous`（可执行 / 脚本类）
+    pub level: String,
+    pub detail: String,
 }

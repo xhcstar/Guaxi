@@ -10,8 +10,8 @@
 //!   再交给 `unicode61`。索引里存的是词序列，中文两字词照样能命中。
 
 use super::model::{
-    Account, FolderRole, MailFolder, MailRule, MailSettings, MessageDetail, MessageSummary,
-    OutboxItem, SearchQuery,
+    Account, FolderRole, MailFolder, MailRule, MailSettings, MailTemplate, MessageDetail,
+    MessageSummary, OutboxItem, SearchQuery, SenderRule,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use std::path::PathBuf;
@@ -94,10 +94,17 @@ fn open() -> Result<Connection, String> {
     Ok(conn)
 }
 
+/// 当前 schema 版本。改表结构时 +1，并在 `migrate` 里追加对应的迁移步骤。
+///
+/// 为什么必须做版本化迁移：老用户的 `mail.db` 已经存在，`CREATE TABLE IF NOT EXISTS`
+/// 只会补新表、不会补新列；一旦某天查询里用到新列，整个邮件页会直接报
+/// 「no such column」而不是「少一个功能」。
+pub const SCHEMA_VERSION: i32 = 3;
+
 pub fn init(app: &AppHandle) -> Result<(), String> {
     let path = db_path(app)?;
     set_db_path(path);
-    let conn = open()?;
+    let mut conn = open()?;
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS accounts (
@@ -217,14 +224,90 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
     )
     .map_err(|e| format!("建表失败: {e}"))?;
 
-    // 追加列：老版本建的表没有 claimed_at，直接 ALTER 会报「重复列」，忽略即可。
-    let _ = conn.execute(
-        "ALTER TABLE outbox ADD COLUMN claimed_at INTEGER NOT NULL DEFAULT 0",
-        [],
-    );
-
+    migrate(&mut conn)?;
     ensure_search_index(&conn)?;
     Ok(())
+}
+
+/// 版本化迁移。`user_version` 为 0 表示「新库」或「迁移机制之前的老库」——
+/// 两种情况都走同一套幂等步骤（新库的表已经是最新的，ALTER 会因列已存在而被跳过）。
+fn migrate(conn: &mut Connection) -> Result<(), String> {
+    let version: i32 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap_or(0);
+    if version >= SCHEMA_VERSION {
+        return Ok(());
+    }
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    if version < 1 {
+        // v1：待发队列的重试与退避。老库只有 claimed_at 一道认领闩。
+        add_column(&tx, "outbox", "attempts", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column(&tx, "outbox", "next_attempt_at", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column(&tx, "outbox", "last_error", "TEXT NOT NULL DEFAULT ''")?;
+    }
+    if version < 2 {
+        // v2：多设备一致性。modseq 记录服务器给的状态修订号；flags_synced_at
+        // 让「定期全量比对 FLAGS」有明确的时间起点，而不是每次同步都重拉。
+        add_column(&tx, "messages", "modseq", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column(&tx, "folders", "modseq", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column(&tx, "folders", "flags_synced_at", "INTEGER NOT NULL DEFAULT 0")?;
+    }
+    if version < 3 {
+        // v3：OAuth2 元数据（令牌本体在 keychain）、共享邮箱、Sieve、模板与收发件人名单。
+        add_column(&tx, "accounts", "oauth_provider", "TEXT NOT NULL DEFAULT ''")?;
+        add_column(&tx, "accounts", "oauth_expires", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column(&tx, "accounts", "delegate_json", "TEXT NOT NULL DEFAULT ''")?;
+        add_column(&tx, "accounts", "sieve_json", "TEXT NOT NULL DEFAULT ''")?;
+        tx.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS templates (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL DEFAULT '',
+                subject TEXT NOT NULL DEFAULT '',
+                html TEXT NOT NULL DEFAULT '',
+                text TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL DEFAULT 0
+            );
+
+            -- 收/发件人名单：kind = allow（白名单）| block（黑名单）。
+            -- 规则引擎在最前面按它判定，规则表里不再堆一长串手写匹配串。
+            CREATE TABLE IF NOT EXISTS sender_rules (
+                id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL DEFAULT 'block',
+                pattern TEXT NOT NULL,
+                note TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL DEFAULT 0
+            );
+            "#,
+        )
+        .map_err(|e| format!("迁移到 v3 失败: {e}"))?;
+    }
+    tx.pragma_update(None, "user_version", SCHEMA_VERSION)
+        .map_err(|e| format!("写入 schema 版本失败: {e}"))?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 加列并在已存在时静默跳过。SQLite 没有 `ADD COLUMN IF NOT EXISTS`。
+fn add_column(
+    tx: &rusqlite::Transaction<'_>,
+    table: &str,
+    column: &str,
+    decl: &str,
+) -> Result<(), String> {
+    let exists: bool = tx
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(|e| e.to_string())?
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| e.to_string())?
+        .filter_map(Result::ok)
+        .any(|name| name == column);
+    if exists {
+        return Ok(());
+    }
+    tx.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"), [])
+        .map(|_| ())
+        .map_err(|e| format!("迁移 {table}.{column} 失败: {e}"))
 }
 
 /// 建检索索引。普通（非 external-content）FTS5 表：rowid 与 `messages.rowid` 对齐，
@@ -351,11 +434,14 @@ fn reindex_message(
 
 const ACCOUNT_COLS: &str = "id, email, display_name, imap_host, imap_port, imap_security, \
     smtp_host, smtp_port, smtp_security, username, auth_kind, proxy_json, accent, signature, \
-    folder_map_json, created_at, last_sync_at";
+    folder_map_json, created_at, last_sync_at, oauth_provider, oauth_expires, delegate_json, \
+    sieve_json";
 
 fn row_to_account(row: &Row<'_>) -> rusqlite::Result<Account> {
     let proxy_json: Option<String> = row.get(11)?;
     let folder_map_json: String = row.get(14)?;
+    let delegate_json: String = row.get(19)?;
+    let sieve_json: String = row.get(20)?;
     Ok(Account {
         id: row.get(0)?,
         email: row.get(1)?,
@@ -368,12 +454,16 @@ fn row_to_account(row: &Row<'_>) -> rusqlite::Result<Account> {
         smtp_security: super::model::Security::parse(&row.get::<_, String>(8)?),
         username: row.get(9)?,
         auth_kind: row.get(10)?,
+        oauth_provider: row.get(17)?,
+        oauth_expires: row.get(18)?,
         proxy: proxy_json
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok()),
         accent: row.get(12)?,
         signature: row.get(13)?,
         folder_map: serde_json::from_str(&folder_map_json).unwrap_or_default(),
+        delegate: serde_json::from_str(&delegate_json).unwrap_or_default(),
+        sieve: serde_json::from_str(&sieve_json).ok(),
         created_at: row.get(15)?,
         last_sync_at: row.get(16)?,
     })
@@ -410,8 +500,9 @@ pub fn upsert_account(account: &Account) -> Result<(), String> {
     conn.execute(
         r#"INSERT INTO accounts (id, email, display_name, imap_host, imap_port, imap_security,
                 smtp_host, smtp_port, smtp_security, username, auth_kind, proxy_json, accent,
-                signature, folder_map_json, created_at, last_sync_at)
-           VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
+                signature, folder_map_json, created_at, last_sync_at,
+                oauth_provider, oauth_expires, delegate_json, sieve_json)
+           VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)
            ON CONFLICT(id) DO UPDATE SET
                 email=excluded.email, display_name=excluded.display_name,
                 imap_host=excluded.imap_host, imap_port=excluded.imap_port,
@@ -419,7 +510,9 @@ pub fn upsert_account(account: &Account) -> Result<(), String> {
                 smtp_port=excluded.smtp_port, smtp_security=excluded.smtp_security,
                 username=excluded.username, auth_kind=excluded.auth_kind,
                 proxy_json=excluded.proxy_json, accent=excluded.accent,
-                signature=excluded.signature, folder_map_json=excluded.folder_map_json"#,
+                signature=excluded.signature, folder_map_json=excluded.folder_map_json,
+                oauth_provider=excluded.oauth_provider, oauth_expires=excluded.oauth_expires,
+                delegate_json=excluded.delegate_json, sieve_json=excluded.sieve_json"#,
         params![
             account.id,
             account.email,
@@ -445,10 +538,29 @@ pub fn upsert_account(account: &Account) -> Result<(), String> {
                 account.created_at
             },
             account.last_sync_at,
+            account.oauth_provider,
+            account.oauth_expires,
+            serde_json::to_string(&account.delegate).unwrap_or_else(|_| "[]".into()),
+            account
+                .sieve
+                .as_ref()
+                .and_then(|s| serde_json::to_string(s).ok())
+                .unwrap_or_default(),
         ],
     )
     .map_err(|e| format!("保存账户失败: {e}"))?;
     Ok(())
+}
+
+/// 只更新 OAuth 访问令牌的过期时间（刷新令牌后调用）。
+pub fn touch_oauth_expires(id: &str, expires: i64) -> Result<(), String> {
+    let conn = open()?;
+    conn.execute(
+        "UPDATE accounts SET oauth_expires=?1 WHERE id=?2",
+        params![expires, id],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }
 
 pub fn delete_account(id: &str) -> Result<(), String> {
@@ -684,6 +796,109 @@ pub fn folder_uid_state(account_id: &str, folder: &str) -> Result<(u32, u32), St
     .map_err(|e| e.to_string())
 }
 
+/// 上次全量比对状态的时间（多设备一致性）。
+pub fn folder_flags_synced_at(account_id: &str, folder: &str) -> i64 {
+    open()
+        .ok()
+        .and_then(|conn| {
+            conn.query_row(
+                "SELECT flags_synced_at FROM folders WHERE account_id=?1 AND name=?2",
+                params![account_id, folder],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
+        })
+        .unwrap_or(0)
+}
+
+pub fn touch_folder_flags_synced(account_id: &str, folder: &str, at: i64) {
+    if let Ok(conn) = open() {
+        let _ = conn.execute(
+            "UPDATE folders SET flags_synced_at=?1 WHERE account_id=?2 AND name=?3",
+            params![at, account_id, folder],
+        );
+    }
+}
+
+/// 服务器上已不存在的 UID：本地必须一并清掉，否则「别的客户端删了邮件，
+/// 桌面端还留着」——这正是多设备不一致最直观的形态。
+pub fn drop_missing_uids(
+    account_id: &str,
+    folder: &str,
+    present: &std::collections::HashSet<u32>,
+) -> Result<usize, String> {
+    let existing: Vec<u32> = {
+        let conn = open()?;
+        let mut stmt = conn
+            .prepare("SELECT uid FROM messages WHERE account_id=?1 AND folder=?2")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![account_id, folder], |r| r.get::<_, u32>(0))
+            .map_err(|e| e.to_string())?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| e.to_string())?;
+        rows
+    };
+    let missing: Vec<u32> = existing.into_iter().filter(|u| !present.contains(u)).collect();
+    for uid in &missing {
+        let _ = delete_message(account_id, folder, *uid);
+    }
+    Ok(missing.len())
+}
+
+/// 批量回写服务器 FLAGS（全量比对的结果）。
+///
+/// 单独成一个函数而不是复用 `set_local_flags`：那一个只处理 seen/flagged/labels，
+/// 而全量比对还要同步 `answered` / `draft` / `deleted`——否则「别的客户端回复过」
+/// 这条信息也会丢。
+pub fn apply_server_flags(
+    account_id: &str,
+    folder: &str,
+    rows: &[(u32, bool, bool, bool, bool)],
+) -> Result<usize, String> {
+    if rows.is_empty() {
+        return Ok(0);
+    }
+    let mut conn = open()?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    let mut changed = 0usize;
+    for (uid, seen, flagged, answered, deleted) in rows {
+        changed += tx
+            .execute(
+                "UPDATE messages SET seen=?1, flagged=?2, answered=?3, deleted=?4
+                 WHERE account_id=?5 AND folder=?6 AND uid=?7",
+                params![
+                    *seen as i32,
+                    *flagged as i32,
+                    *answered as i32,
+                    *deleted as i32,
+                    account_id,
+                    folder,
+                    uid
+                ],
+            )
+            .unwrap_or(0);
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(changed)
+}
+
+/// 本地某一页邮件的 UID（全量比对只比对「已经同步到本地的那部分」）。
+pub fn uids_in_folder(account_id: &str, folder: &str) -> Result<Vec<u32>, String> {
+    let conn = open()?;
+    let mut stmt = conn
+        .prepare("SELECT uid FROM messages WHERE account_id=?1 AND folder=?2 ORDER BY uid ASC")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![account_id, folder], |r| r.get::<_, u32>(0))
+        .map_err(|e| e.to_string())?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())?;
+    Ok(rows)
+}
+
 // ---------------- 邮件 ----------------
 
 const MSG_COLS: &str = "account_id, folder, uid, message_id, subject, from_name, from_addr, \
@@ -843,6 +1058,14 @@ fn encrypt_flag() -> bool {
 
 pub fn encryption_enabled() -> bool {
     encrypt_flag()
+}
+
+/// 当前库的 schema 版本（诊断报告用）。
+pub fn schema_version() -> i32 {
+    open()
+        .ok()
+        .and_then(|c| c.query_row("PRAGMA user_version", [], |r| r.get(0)).ok())
+        .unwrap_or(0)
 }
 
 pub fn set_encryption_enabled(enabled: bool) -> Result<(), String> {
@@ -1348,6 +1571,111 @@ pub fn delete_rule(id: &str) -> Result<(), String> {
     Ok(())
 }
 
+// ---------------- 收/发件人名单 ----------------
+
+pub fn list_sender_rules() -> Result<Vec<SenderRule>, String> {
+    let conn = open()?;
+    let mut stmt = conn
+        .prepare("SELECT id, kind, pattern, note, created_at FROM sender_rules ORDER BY created_at ASC")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(SenderRule {
+                id: row.get(0)?,
+                kind: row.get(1)?,
+                pattern: row.get(2)?,
+                note: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())?;
+    Ok(rows)
+}
+
+pub fn upsert_sender_rule(rule: &SenderRule) -> Result<(), String> {
+    let conn = open()?;
+    conn.execute(
+        "INSERT INTO sender_rules (id, kind, pattern, note, created_at) VALUES (?1,?2,?3,?4,?5)
+         ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, pattern=excluded.pattern, note=excluded.note",
+        params![
+            rule.id,
+            rule.kind,
+            rule.pattern,
+            rule.note,
+            if rule.created_at == 0 {
+                chrono::Utc::now().timestamp()
+            } else {
+                rule.created_at
+            }
+        ],
+    )
+    .map_err(|e| format!("保存名单失败: {e}"))?;
+    Ok(())
+}
+
+pub fn delete_sender_rule(id: &str) -> Result<(), String> {
+    let conn = open()?;
+    conn.execute("DELETE FROM sender_rules WHERE id=?1", params![id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ---------------- 模板 ----------------
+
+pub fn list_templates() -> Result<Vec<MailTemplate>, String> {
+    let conn = open()?;
+    let mut stmt = conn
+        .prepare("SELECT id, name, subject, html, text, created_at FROM templates ORDER BY created_at ASC")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(MailTemplate {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                subject: row.get(2)?,
+                html: row.get(3)?,
+                text: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())?;
+    Ok(rows)
+}
+
+pub fn upsert_template(item: &MailTemplate) -> Result<(), String> {
+    let conn = open()?;
+    conn.execute(
+        "INSERT INTO templates (id, name, subject, html, text, created_at) VALUES (?1,?2,?3,?4,?5,?6)
+         ON CONFLICT(id) DO UPDATE SET name=excluded.name, subject=excluded.subject,
+              html=excluded.html, text=excluded.text",
+        params![
+            item.id,
+            item.name,
+            item.subject,
+            item.html,
+            item.text,
+            if item.created_at == 0 {
+                chrono::Utc::now().timestamp()
+            } else {
+                item.created_at
+            }
+        ],
+    )
+    .map_err(|e| format!("保存模板失败: {e}"))?;
+    Ok(())
+}
+
+pub fn delete_template(id: &str) -> Result<(), String> {
+    let conn = open()?;
+    conn.execute("DELETE FROM templates WHERE id=?1", params![id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 // ---------------- 待发队列 ----------------
 
 pub fn enqueue_outbox(item: &OutboxItem, payload_json: &str) -> Result<(), String> {
@@ -1372,7 +1700,10 @@ pub fn enqueue_outbox(item: &OutboxItem, payload_json: &str) -> Result<(), Strin
 pub fn list_outbox() -> Result<Vec<OutboxItem>, String> {
     let conn = open()?;
     let mut stmt = conn
-        .prepare("SELECT id, account_id, subject, to_addrs, due_at, created_at FROM outbox WHERE sent=0 ORDER BY due_at ASC")
+        .prepare(
+            "SELECT id, account_id, subject, to_addrs, due_at, created_at, attempts, next_attempt_at, last_error
+             FROM outbox WHERE sent=0 ORDER BY due_at ASC",
+        )
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |row| {
@@ -1383,6 +1714,9 @@ pub fn list_outbox() -> Result<Vec<OutboxItem>, String> {
                 to: row.get(3)?,
                 due_at: row.get(4)?,
                 created_at: row.get(5)?,
+                attempts: row.get(6)?,
+                next_attempt_at: row.get(7)?,
+                last_error: row.get(8)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -1404,7 +1738,7 @@ pub fn take_due_outbox(now: i64) -> Result<Vec<(String, String)>, String> {
         let mut stmt = tx
             .prepare(
                 "SELECT id FROM outbox
-                 WHERE sent=0 AND due_at<=?1 AND claimed_at<=?2
+                 WHERE sent=0 AND due_at<=?1 AND claimed_at<=?2 AND next_attempt_at<=?1
                  ORDER BY due_at ASC",
             )
             .map_err(|e| e.to_string())?;
@@ -1447,12 +1781,45 @@ pub fn mark_outbox_sent(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// 释放认领：发送失败后立刻允许重试。
+/// 释放认领：发送失败后立刻允许重试（新代码走 `note_outbox_failure` 的退避，
+/// 这个保留给「用户手动点重试」的语义）。
+#[allow(dead_code)]
 pub fn release_outbox(id: &str) -> Result<(), String> {
     let conn = open()?;
     conn.execute("UPDATE outbox SET claimed_at=0 WHERE id=?1", params![id])
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// 退避间隔（秒）：1 分钟起，每次翻倍，封顶 1 小时。
+///
+/// 之前失败后把 `claimed_at` 归零，下一轮轮询（90 秒）立刻重撞一次。
+/// 网络断了的时候这会变成每 90 秒一次的固定尖峰，而且服务器把同一个连接
+/// 反复打回，IP 还可能被临时封禁。指数退避是 SMTP 客户端的基本礼貌。
+pub fn backoff_seconds(attempts: u32) -> i64 {
+    // 60s 起步，每次翻倍，上限 1 小时。
+    (60i64 << attempts.min(6)).min(3600)
+}
+
+/// 记录一次发送失败：次数 +1，并把下次可尝试时间推到退避之后。
+pub fn note_outbox_failure(id: &str, error: &str) -> Result<i64, String> {
+    let conn = open()?;
+    let attempts: i64 = conn
+        .query_row("SELECT attempts FROM outbox WHERE id=?1", params![id], |r| {
+            r.get(0)
+        })
+        .optional()
+        .map_err(|e| e.to_string())?
+        .unwrap_or(0);
+    let next_attempts = attempts + 1;
+    let delay = backoff_seconds(next_attempts as u32);
+    let next_at = chrono::Utc::now().timestamp() + delay;
+    conn.execute(
+        "UPDATE outbox SET claimed_at=0, attempts=?1, next_attempt_at=?2, last_error=?3 WHERE id=?4",
+        params![next_attempts, next_at, error, id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(delay)
 }
 
 pub fn drop_outbox(id: &str) -> Result<(), String> {

@@ -82,76 +82,91 @@
 
     <div v-if="searchError" class="mail-search-error">{{ searchError }}</div>
 
-    <div class="mail-list-scroll" role="list">
+    <div
+      ref="scrollRef"
+      class="mail-list-scroll"
+      role="list"
+      @scroll.passive="onScroll"
+    >
       <div v-if="!visible.length && !loading" class="mail-empty">
         <div class="mail-empty-title">这里没有邮件</div>
         <div v-if="searchQuery">换个关键词，或者清空搜索条件再试。</div>
         <div v-else>同步一下，或者切到别的文件夹看看。</div>
       </div>
 
-      <article
-        v-for="row in visible"
-        :key="rowKey(row)"
-        class="mail-row"
-        :class="{
-          'is-unread': !row.seen,
-          'is-selected': isSelected(row),
-          thread: row.threadCount > 1,
-        }"
-        role="listitem"
-        tabindex="0"
-        :draggable="true"
-        @click="onRowClick(row, $event)"
-        @keydown.enter="$emit('open', row)"
-        @contextmenu.prevent="onRowContextMenu(row, $event)"
-        @dragstart="onDragStart(row, $event)"
-        @dragend="$emit('drag-end')"
-      >
-        <label class="mail-row-check" @click.stop @mousedown.stop @dragstart.prevent>
-          <input
-            type="checkbox"
-            :checked="isChecked(row)"
-            @change="$emit('toggle-select', row, $event.target.checked)"
+      <!-- 虚拟滚动：只渲染视口附近的若干行。一万封邮件时若全量渲染，
+           光是 DOM 节点就有十几万个，切换文件夹会卡住一秒以上。 -->
+      <div v-if="virtual" class="mail-list-spacer" :style="{ height: `${totalHeight}px` }">
+        <article
+          v-for="item in windowRows"
+          :key="rowKey(item.row)"
+          class="mail-row"
+          :style="{ transform: `translateY(${item.top}px)` }"
+          :class="{
+            'is-unread': !item.row.seen,
+            'is-selected': isSelected(item.row),
+            'is-active': activeKey === rowKey(item.row),
+            thread: item.row.threadCount > 1,
+          }"
+          role="listitem"
+          tabindex="0"
+          :draggable="true"
+          @click="onRowClick(item.row, $event)"
+          @keydown.enter="$emit('open', item.row)"
+          @contextmenu.prevent="onRowContextMenu(item.row, $event)"
+          @dragstart="onDragStart(item.row, $event)"
+          @dragend="$emit('drag-end')"
+        >
+          <MailRowContent
+            :row="item.row"
+            :checked="isChecked(item.row)"
+            @toggle="(v) => $emit('toggle-select', item.row, v)"
+            @star="(v) => $emit('toggle-star', item.row, v)"
           />
-        </label>
-        <span class="mail-avatar" :style="avatarStyle(row)">{{ avatarLetter(row) }}</span>
+        </article>
+      </div>
 
-        <div class="mail-row-line">
-          <span class="mail-row-from">{{ fromLabel(row) }}</span>
-          <span class="mail-row-date">{{ dateLabel(row.date) }}</span>
-        </div>
+      <template v-else>
+        <article
+          v-for="row in visible"
+          :key="rowKey(row)"
+          class="mail-row"
+          :class="{
+            'is-unread': !row.seen,
+            'is-selected': isSelected(row),
+            'is-active': activeKey === rowKey(row),
+            thread: row.threadCount > 1,
+          }"
+          role="listitem"
+          tabindex="0"
+          :draggable="true"
+          @click="onRowClick(row, $event)"
+          @keydown.enter="$emit('open', row)"
+          @contextmenu.prevent="onRowContextMenu(row, $event)"
+          @dragstart="onDragStart(row, $event)"
+          @dragend="$emit('drag-end')"
+        >
+          <MailRowContent
+            :row="row"
+            :checked="isChecked(row)"
+            @toggle="(v) => $emit('toggle-select', row, v)"
+            @star="(v) => $emit('toggle-star', row, v)"
+          />
+        </article>
+      </template>
 
-        <div class="mail-row-line">
-          <span
-            class="mail-row-subject"
-            :data-thread-count="row.threadCount > 1 ? row.threadCount : null"
-            :title="row.subject || '（无主题）'"
-          >
-            {{ row.subject || '（无主题）' }}
-          </span>
-          <span class="mail-row-markers">
-            <span v-for="label in rowLabels(row)" :key="label" class="mail-label">{{ label }}</span>
-            <span v-if="row.hasAttachments" title="含附件">📎</span>
-            <button
-              class="mail-star"
-              :class="{ 'is-on': row.flagged }"
-              :title="row.flagged ? '取消星标' : '加星标'"
-              @click.stop="$emit('toggle-star', row, !row.flagged)"
-            >
-              {{ row.flagged ? '★' : '☆' }}
-            </button>
-          </span>
-        </div>
-
-        <div class="mail-row-snippet">{{ row.snippet || '（无正文预览）' }}</div>
-      </article>
+      <div v-if="hasMore" class="mail-load-more">
+        <button class="mail-btn" :disabled="loadingMore" @click="$emit('load-more')">
+          {{ loadingMore ? '加载中…' : '加载更多' }}
+        </button>
+      </div>
     </div>
   </section>
 </template>
 
 <script setup>
-import { computed } from 'vue'
-import { avatarSeed } from './theme'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import MailRowContent from './MailRowContent.vue'
 
 const emit = defineEmits([
   'open',
@@ -168,11 +183,15 @@ const emit = defineEmits([
   'batch',
   'drag-start',
   'drag-end',
+  'load-more',
+  'active-change',
 ])
 
 const props = defineProps({
   messages: { type: Array, default: () => [] },
   selected: { type: Object, default: null },
+  /** 键盘导航的「当前行」——与「已选中的批量勾选」是两件事。 */
+  activeKey: { type: String, default: '' },
   title: { type: String, default: '收件箱' },
   loading: { type: Boolean, default: false },
   searchQuery: { type: String, default: '' },
@@ -185,8 +204,87 @@ const props = defineProps({
   searchError: { type: String, default: '' },
   /** 拖拽时可以放下的目标文件夹。 */
   moveTargets: { type: Array, default: () => [] },
+  /** 是否还有下一页。 */
+  hasMore: { type: Boolean, default: false },
+  loadingMore: { type: Boolean, default: false },
+  /** 虚拟滚动开关（设置里可关掉，老机器或调试时有用）。 */
+  virtual: { type: Boolean, default: true },
+  /** 行高（px），虚拟滚动按它计算偏移。与 mail.css 里的 --mail-row-height 保持一致。 */
+  rowHeight: { type: Number, default: 76 },
 })
 const visible = computed(() => props.messages || [])
+
+// ---------------- 虚拟滚动 ----------------
+
+const scrollRef = ref(null)
+const scrollTop = ref(0)
+const viewportHeight = ref(600)
+/** 视口上下各多渲染几屏，快速滚动时不会看到空白。 */
+const OVERSCAN = 6
+
+const totalHeight = computed(() => visible.value.length * props.rowHeight)
+
+const windowRows = computed(() => {
+  if (!props.virtual) return []
+  const start = Math.max(0, Math.floor(scrollTop.value / props.rowHeight) - OVERSCAN)
+  const count = Math.ceil(viewportHeight.value / props.rowHeight) + OVERSCAN * 2
+  const end = Math.min(visible.value.length, start + count)
+  const out = []
+  for (let i = start; i < end; i += 1) {
+    out.push({ row: visible.value[i], top: i * props.rowHeight, index: i })
+  }
+  return out
+})
+
+function onScroll(event) {
+  scrollTop.value = event.target.scrollTop
+}
+
+let resizeObserver = null
+
+onMounted(() => {
+  if (!scrollRef.value) return
+  viewportHeight.value = scrollRef.value.clientHeight || 600
+  // ResizeObserver 比监听 window.resize 更准：侧栏折叠 / 拖拽调宽都会改变高度，
+  // 而窗口尺寸并不变。
+  if (typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver((entries) => {
+      const height = entries[0]?.contentRect?.height
+      if (height) viewportHeight.value = height
+    })
+    resizeObserver.observe(scrollRef.value)
+  }
+})
+
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
+})
+
+/** 列表切换（换文件夹 / 换账户 / 搜索）时回到顶部。 */
+watch(
+  () => [props.title, props.searchQuery, props.messages.length && props.messages[0]?.uid],
+  async () => {
+    await nextTick()
+    if (scrollRef.value) scrollRef.value.scrollTop = 0
+    scrollTop.value = 0
+  },
+)
+
+/** 键盘导航：把「当前行」滚进视口。老机器上平滑滚动会掉帧，这里用自动。 */
+function ensureVisible(key) {
+  if (!scrollRef.value || !key) return
+  const index = visible.value.findIndex((m) => rowKey(m) === key)
+  if (index < 0) return
+  const top = index * props.rowHeight
+  const el = scrollRef.value
+  if (top < el.scrollTop) {
+    el.scrollTop = top
+  } else if (top + props.rowHeight > el.scrollTop + el.clientHeight) {
+    el.scrollTop = top + props.rowHeight - el.clientHeight
+  }
+}
+
+defineExpose({ ensureVisible })
 
 const keyOf = (row) => `${row.accountId}:${row.folder}:${row.uid}`
 const allChecked = computed(
@@ -255,44 +353,8 @@ function isSelected(row) {
   return Boolean(sel && sel.accountId === row.accountId && sel.folder === row.folder && sel.uid === row.uid)
 }
 
-function avatarLetter(row) {
-  return avatarSeed(row.fromName, row.fromAddr).letter
-}
 
-function avatarStyle(row) {
-  const { hue } = avatarSeed(row.fromName, row.fromAddr)
-  return {
-    background: `hsl(${hue} 42% 48%)`,
-  }
-}
 
-function fromLabel(row) {
-  if (row.fromName && row.fromName.trim()) return row.fromName
-  return row.fromAddr || '（未知发件人）'
-}
 
-function rowLabels(row) {
-  return String(row.labels || '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .slice(0, 2)
-}
 
-function dateLabel(unix) {
-  if (!unix) return ''
-  const date = new Date(unix * 1000)
-  const now = new Date()
-  const sameDay =
-    date.getFullYear() === now.getFullYear() &&
-    date.getMonth() === now.getMonth() &&
-    date.getDate() === now.getDate()
-  if (sameDay) {
-    return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
-  }
-  if (date.getFullYear() === now.getFullYear()) {
-    return date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
-  }
-  return date.toLocaleDateString('zh-CN', { year: '2-digit', month: 'numeric', day: 'numeric' })
-}
 </script>
