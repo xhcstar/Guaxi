@@ -875,8 +875,8 @@ async fn execute(name: &str, a: &Value) -> Result<Value, String> {
             Ok(json!({ "episodes": list }))
         }
         "guaxi_task_query" => {
-            let r = crate::commands::taskmanager::task_query(
-                crate::commands::taskmanager::TaskQuery {
+            let r = crate::commands::taskmanager::query_blocks(
+                &crate::commands::taskmanager::TaskQuery {
                     category: opt_str(a, "category"),
                     status: opt_str(a, "status"),
                     done: a.get("done").and_then(|v| v.as_bool()),

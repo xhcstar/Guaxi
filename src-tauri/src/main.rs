@@ -578,6 +578,7 @@ async fn main() {
             commands::taskmanager::task_ensure_dirs,
             commands::taskmanager::task_scan_and_index,
             commands::taskmanager::task_query,
+            commands::taskmanager::task_query_fresh,
             commands::taskmanager::task_update_item,
             commands::taskmanager::task_import,
             commands::taskmanager::task_export_report,

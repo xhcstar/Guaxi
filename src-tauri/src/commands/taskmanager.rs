@@ -3,9 +3,10 @@
 //! 复用 commands/todo.rs 的 SQLite 模式（WAL、即用即关连接、Result<T,String>）。
 //! 目录结构：<task_root>/{work,life,study}/*.org，task_root 默认 exe 同级 `task/`，可配置覆盖。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, UNIX_EPOCH};
 use std::{env, fs};
 
 use chrono::{Datelike, Local, NaiveDate};
@@ -112,6 +113,9 @@ fn open_conn(db_path: &Path) -> Result<Connection, String> {
     let conn = Connection::open(db_path).map_err(|e| format!("打开任务数据库失败: {}", e))?;
     conn.pragma_update(None, "journal_mode", "WAL")
         .map_err(|e| format!("设置 WAL 失败: {}", e))?;
+    // 文件监听线程与前台命令会并发写索引，给锁等待一点余量，避免直接抛 SQLITE_BUSY。
+    conn.busy_timeout(Duration::from_secs(5))
+        .map_err(|e| format!("设置 busy_timeout 失败: {}", e))?;
     Ok(conn)
 }
 
@@ -132,6 +136,9 @@ fn setup_schema(conn: &Connection) -> Result<(), String> {
     };
     if needs_reset {
         conn.execute("DROP TABLE IF EXISTS task_items", [])
+            .map_err(|e| e.to_string())?;
+        // 索引表被重建时，文件指纹必须一起清空，否则增量扫描会误判"未变化"而留下空索引。
+        conn.execute("DROP TABLE IF EXISTS task_files", [])
             .map_err(|e| e.to_string())?;
     }
     if ver.as_deref() != Some(&SCHEMA_VERSION.to_string()) {
@@ -170,12 +177,25 @@ fn setup_schema(conn: &Connection) -> Result<(), String> {
         [],
     )
     .map_err(|e| e.to_string())?;
+
+    // task_files：每个 .org 文件上次索引时的 (mtime, size)。内容未变的文件在重扫时整份跳过，
+    // 避免把"打开导出面板"这种只需要最新索引的操作变成每次全量读盘+重解析+重写 JSON。
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS task_files (
+            file_path TEXT PRIMARY KEY,
+            mtime_nanos INTEGER NOT NULL DEFAULT 0,
+            size INTEGER NOT NULL DEFAULT 0
+        )",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
     for (idx, col) in [
         ("idx_task_status", "status"),
         ("idx_task_category", "category"),
         ("idx_task_type", "task_type"),
         ("idx_task_deadline", "deadline"),
         ("idx_task_file", "file_path"),
+        ("idx_task_completed", "completed_time"),
     ] {
         conn.execute(
             &format!("CREATE INDEX IF NOT EXISTS {} ON task_items({})", idx, col),
@@ -239,13 +259,48 @@ fn upsert_block(conn: &Connection, b: &TaskBlock) -> Result<(), String> {
     Ok(())
 }
 
-/// 扫描 task 根下三类目录的 .org，解析任务块并重建索引（先清空对应文件旧行）。
+/// 扫描串行化：文件监听线程与前台命令都会触发扫描，而扫描会回写 .org（补 id）。
+/// 两个扫描并发时既可能撞 SQLITE_BUSY，也可能互相覆盖补写内容，所以统一排队。
+static SCAN_LOCK: Mutex<()> = Mutex::new(());
+
+/// 扫描 task 根下三类目录的 .org，增量刷新索引。
+///
+/// 只重解析内容发生变化的文件（以 mtime+size 判定），未变化的文件整份跳过；
+/// 全部写操作放进一个事务，避免逐文件提交时把整轮扫描拖成几十次 fsync。
 /// 解析前为缺失 internal_id / other-id 的块就地补全并回写源文件。
+/// 返回索引中的任务块总数。
 fn scan_and_index(conn: &Connection) -> Result<usize, String> {
+    let _scan_guard = SCAN_LOCK.lock().map_err(|e| e.to_string())?;
+    scan_and_index_locked(conn, &[])
+}
+
+/// 同上，但点名强制重解析某些文件（文件监听用）。
+fn scan_and_index_forced(conn: &Connection, force: &[String]) -> Result<usize, String> {
+    let _scan_guard = SCAN_LOCK.lock().map_err(|e| e.to_string())?;
+    scan_and_index_locked(conn, force)
+}
+
+/// 已持有 SCAN_LOCK 的扫描本体（写文件的命令也持锁调用它，避免与扫描交叠）。
+///
+/// `force` 里的文件无条件重解析。文件监听已经知道是哪个文件变了，重扫时强制它，
+/// 这样即使 mtime 粒度粗、或改完大小又恰好相同，也不会被指纹判成"未变化"而漏掉。
+fn scan_and_index_locked(conn: &Connection, force: &[String]) -> Result<usize, String> {
     let root = resolve_task_root()?;
-    let mut total = 0usize;
+    // 上轮索引记录的文件指纹：file_path -> (mtime_nanos, size)
+    let known: HashMap<String, (i64, i64)> = {
+        let mut stmt = conn
+            .prepare("SELECT file_path, mtime_nanos, size FROM task_files")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, (r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))))
+            .map_err(|e| e.to_string())?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     // 本轮实际访问到的 .org 文件绝对路径，用于扫描结束后对账清理孤儿行。
-    let mut visited: Vec<String> = Vec::new();
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut parsed = 0usize;
     for cat in CATEGORIES {
         let dir = root.join(cat);
         if !dir.is_dir() {
@@ -260,18 +315,27 @@ fn scan_and_index(conn: &Connection) -> Result<usize, String> {
                 continue;
             }
             let file_path = path.to_string_lossy().to_string();
+            // 先登记为本轮访问过：随后取指纹/读盘失败也不能把它算成"已消失"而清掉索引。
+            visited.insert(file_path.clone());
+            let (mtime, size) = match file_stamp(path) {
+                Some(v) => v,
+                None => continue,
+            };
+            // 内容未变：索引行仍然有效，整份跳过（不再读盘、不再重解析、不再重写 JSON）。
+            // 监听线程点名要重扫的文件不受指纹约束。
+            if known.get(&file_path) == Some(&(mtime, size)) && !force.iter().any(|f| f == &file_path) {
+                continue;
+            }
             let content = match fs::read_to_string(path) {
                 Ok(c) => c,
                 Err(_) => continue,
             };
-            visited.push(file_path.clone());
             // 补全缺失 id 并回写（最小行编辑，保留格式）
             let (content, changed) = task_block::backfill_ids(&content, cat);
             if changed {
                 let _ = fs::write(path, &content);
             }
-            // 清空该文件旧行
-            conn.execute("DELETE FROM task_items WHERE file_path=?1", params![file_path])
+            tx.execute("DELETE FROM task_items WHERE file_path=?1", params![file_path])
                 .map_err(|e| e.to_string())?;
             let blocks = task_block::parse_blocks(&content, &file_path, cat);
             for b in &blocks {
@@ -281,32 +345,66 @@ fn scan_and_index(conn: &Connection) -> Result<usize, String> {
                 if block_is_empty(b) {
                     continue; // 空壳块不入索引（避免 "(未命名)" 幽灵卡）
                 }
-                upsert_block(conn, b)?;
-                total += 1;
+                upsert_block(&tx, b)?;
             }
+            // 回写可能改了内容，指纹按回写后的文件重新取。
+            let (mtime2, size2) = file_stamp(path).unwrap_or((mtime, size));
+            tx.execute(
+                "INSERT INTO task_files(file_path, mtime_nanos, size) VALUES(?1,?2,?3)
+                 ON CONFLICT(file_path) DO UPDATE SET mtime_nanos=excluded.mtime_nanos, size=excluded.size",
+                params![file_path, mtime2, size2],
+            )
+            .map_err(|e| e.to_string())?;
+            parsed += 1;
         }
     }
     // 对账清理：删除已不存在于本轮扫描集合中的文件行（文件被删除/改名/移出 work|life|study）。
-    reconcile_orphan_rows(conn, &visited)?;
-    info!(total, "[TaskManager] scanned and indexed guaxi task blocks");
-    Ok(total)
+    reconcile_orphan_rows(&tx, &visited)?;
+    tx.commit().map_err(|e| e.to_string())?;
+
+    let total: i64 = conn
+        .query_row("SELECT COUNT(*) FROM task_items", [], |r| r.get(0))
+        .unwrap_or(0);
+    info!(total, parsed, "[TaskManager] indexed guaxi task blocks");
+    Ok(total as usize)
 }
 
-/// 删除 task_items 中 file_path 不在本轮访问集合里的孤儿行。
-fn reconcile_orphan_rows(conn: &Connection, visited: &[String]) -> Result<(), String> {
-    let mut stmt = conn
-        .prepare("SELECT DISTINCT file_path FROM task_items")
-        .map_err(|e| e.to_string())?;
-    let existing: Vec<String> = stmt
-        .query_map([], |r| r.get::<_, String>(0))
-        .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
-        .collect();
-    for fp in existing {
-        if !visited.iter().any(|v| v == &fp) {
-            conn.execute("DELETE FROM task_items WHERE file_path=?1", params![fp])
-                .map_err(|e| e.to_string())?;
+/// 文件指纹：(mtime 纳秒, 字节数)。取不到时返回 None（该文件本轮跳过）。
+fn file_stamp(path: &Path) -> Option<(i64, i64)> {
+    let meta = fs::metadata(path).ok()?;
+    let nanos = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos() as i64)
+        .unwrap_or(0);
+    Some((nanos, meta.len() as i64))
+}
+
+/// 删除 task_items / task_files 中 file_path 不在本轮访问集合里的孤儿行。
+/// 以 task_items 为准枚举（而不是只看 task_files）：从旧版本升级上来时
+/// task_files 还是空的，只看它会让已删文件的索引行永远留在库里。
+fn reconcile_orphan_rows(conn: &Connection, visited: &HashSet<String>) -> Result<(), String> {
+    let mut stale: HashSet<String> = HashSet::new();
+    for sql in [
+        "SELECT DISTINCT file_path FROM task_items",
+        "SELECT file_path FROM task_files",
+    ] {
+        let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        for fp in rows.filter_map(|r| r.ok()) {
+            if !visited.contains(&fp) {
+                stale.insert(fp);
+            }
         }
+    }
+    for fp in stale {
+        conn.execute("DELETE FROM task_items WHERE file_path=?1", params![fp])
+            .map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM task_files WHERE file_path=?1", params![fp])
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -448,9 +546,13 @@ pub fn task_ensure_dirs() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-pub fn task_scan_and_index() -> Result<usize, String> {
-    let conn = init()?;
-    scan_and_index(&conn)
+pub async fn task_scan_and_index() -> Result<usize, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let conn = init()?;
+        scan_and_index(&conn)
+    })
+    .await
+    .map_err(|e| format!("扫描任务索引失败: {e}"))?
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -464,7 +566,15 @@ pub struct TaskQuery {
 }
 
 #[tauri::command]
-pub fn task_query(query: TaskQuery) -> Result<Vec<TaskBlock>, String> {
+pub async fn task_query(query: TaskQuery) -> Result<Vec<TaskBlock>, String> {
+    tauri::async_runtime::spawn_blocking(move || query_blocks(&query))
+        .await
+        .map_err(|e| format!("查询任务失败: {e}"))?
+}
+
+/// `task_query` 的同步实现。命令层用异步包装把它放到线程池，
+/// 进程内的其它 Rust 调用方（cognition 工具、报表）直接调这里，避免依赖 async 运行时。
+pub fn query_blocks(query: &TaskQuery) -> Result<Vec<TaskBlock>, String> {
     let conn = init()?;
     let mut sql = String::from("SELECT * FROM task_items WHERE 1=1");
     let mut args: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -527,7 +637,15 @@ pub struct TaskUpdateInput {
 }
 
 #[tauri::command]
-pub fn task_update_item(input: TaskUpdateInput) -> Result<Vec<TaskBlock>, String> {
+pub async fn task_update_item(input: TaskUpdateInput) -> Result<Vec<TaskBlock>, String> {
+    tauri::async_runtime::spawn_blocking(move || update_item(input))
+        .await
+        .map_err(|e| format!("更新任务失败: {e}"))?
+}
+
+fn update_item(input: TaskUpdateInput) -> Result<Vec<TaskBlock>, String> {
+    // 与扫描共用一把锁：扫描会回写 .org，若与这里的「读-改-写」交叠会互相覆盖。
+    let _scan_guard = SCAN_LOCK.lock().map_err(|e| e.to_string())?;
     let conn = init()?;
     let (file_path, category): (String, String) = conn
         .query_row(
@@ -564,6 +682,14 @@ pub fn task_update_item(input: TaskUpdateInput) -> Result<Vec<TaskBlock>, String
         if !b.internal_id.trim().is_empty() {
             upsert_block(&conn, b)?;
         }
+    }
+    // 索引已就此文件写为最新，记下指纹让随后的文件监听重扫整份跳过。
+    if let Some((mtime, size)) = file_stamp(Path::new(&file_path)) {
+        let _ = conn.execute(
+            "INSERT INTO task_files(file_path, mtime_nanos, size) VALUES(?1,?2,?3)
+             ON CONFLICT(file_path) DO UPDATE SET mtime_nanos=excluded.mtime_nanos, size=excluded.size",
+            params![file_path, mtime, size],
+        );
     }
     Ok(fresh)
 }
@@ -658,9 +784,15 @@ pub struct TaskImportInput {
 }
 
 #[tauri::command]
-pub fn task_import(input: TaskImportInput) -> Result<usize, String> {
-    let root = resolve_task_root()?;
-    let cat = if CATEGORIES.contains(&input.category.as_str()) {
+pub async fn task_import(input: TaskImportInput) -> Result<usize, String> {
+    tauri::async_runtime::spawn_blocking(move || import_tasks(input))
+        .await
+        .map_err(|e| format!("导入任务失败: {e}"))?
+}
+
+pub fn import_tasks(input: TaskImportInput) -> Result<usize, String> {
+    let _scan_guard = SCAN_LOCK.lock().map_err(|e| e.to_string())?;
+    let root = resolve_task_root()?;    let cat = if CATEGORIES.contains(&input.category.as_str()) {
         input.category.clone()
     } else {
         "work".to_string()
@@ -694,7 +826,7 @@ pub fn task_import(input: TaskImportInput) -> Result<usize, String> {
     fs::write(&target, &existing).map_err(|e| format!("写入导入目标失败: {}", e))?;
 
     let conn = init()?;
-    scan_and_index(&conn)
+    scan_and_index_locked(&conn, &[])
 }
 
 /// TaskBlock[] → DSL 文本（用于 JSON 导入）。
@@ -752,14 +884,27 @@ fn period_range(kind: &str, anchor: &str, from: &Option<String>, to: &Option<Str
 }
 
 #[tauri::command]
-pub fn task_export_report(input: ReportInput) -> Result<String, String> {
+pub async fn task_export_report(input: ReportInput) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        // 导出前先增量重扫，确保数据库与源文件一致（编辑器保存后立刻反映）。
+        // 增量扫描只碰内容变过的文件，没有实际变更时就是几个 stat。
+        if let Ok(conn) = init() {
+            let _ = scan_and_index(&conn);
+        }
+        export_report(input)
+    })
+    .await
+    .map_err(|e| format!("生成报表失败: {e}"))?
+}
+
+fn export_report(input: ReportInput) -> Result<String, String> {
     // 日报/周报/月报/半年报/年报 都用统一的报表模板（按 [start,end] 周期）
     const PERIOD_KINDS: &[&str] = &["daily", "weekly", "monthly", "halfyear", "yearly"];
     if PERIOD_KINDS.contains(&input.kind.as_str()) {
         return build_period_report(&input.kind, &input.from, &input.to);
     }
     let (from, to, label) = period_range(&input.kind, &input.date, &input.from, &input.to)?;
-    let items = task_query(TaskQuery {
+    let items = query_blocks(&TaskQuery {
         date_from: Some(from.clone()),
         date_to: Some(to.clone()),
         ..Default::default()
@@ -881,7 +1026,7 @@ fn build_period_report(kind: &str, from: &Option<String>, to: &Option<String>) -
         }
     };
 
-    let blocks = task_query(TaskQuery::default())?;
+    let blocks = query_blocks(&TaskQuery::default())?;
     // bug/任务（非「其他」均按 bug/任务对待，含 #TYPE 为空或未识别的块）
     let is_bug_or_task = |b: &TaskBlock| b.task_type != "other";
     let done: Vec<&TaskBlock> = blocks
@@ -951,10 +1096,30 @@ pub fn task_read_file(path: String) -> Result<String, String> {
 
 /// 写 .org 文件内容并重扫描索引。
 #[tauri::command]
-pub fn task_write_file(path: String, content: String) -> Result<usize, String> {
-    fs::write(&path, &content).map_err(|e| format!("写入失败: {}", e))?;
-    let conn = init()?;
-    scan_and_index(&conn)
+pub async fn task_write_file(path: String, content: String) -> Result<usize, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        // 写文件与扫描共用一把锁：否则监听线程可能在写入中途读到半份文件。
+        let _scan_guard = SCAN_LOCK.lock().map_err(|e| e.to_string())?;
+        fs::write(&path, &content).map_err(|e| format!("写入失败: {}", e))?;
+        let conn = init()?;
+        scan_and_index_locked(&conn, &[])
+    })
+    .await
+    .map_err(|e| format!("写入任务文件失败: {e}"))?
+}
+
+/// 「重扫 + 查询」一次往返：导出面板打开时前端原本要发两次 IPC，
+/// 且中间那次扫描会把整个 UI 线程占满。合并后批量读索引只付一次线程切换。
+#[tauri::command]
+pub async fn task_query_fresh(query: TaskQuery) -> Result<Vec<TaskBlock>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = init()?;
+        scan_and_index(&conn)?;
+        drop(conn);
+        query_blocks(&query)
+    })
+    .await
+    .map_err(|e| format!("刷新任务索引失败: {e}"))?
 }
 
 /// 写报表文件到任意路径（不触发扫描索引）。
@@ -1007,12 +1172,14 @@ pub fn task_start_watching(app: tauri::AppHandle) -> Result<(), String> {
                 Err(_) => break, // 发送端释放，watcher 已停
             };
             let mut relevant = event_touches_org(&first);
+            let mut touched: Vec<String> = org_paths_of(&first);
             // 去抖：在 400ms 静默窗口内继续收集
             loop {
                 match rx.recv_timeout(std::time::Duration::from_millis(400)) {
                     Ok(ev) => {
                         if event_touches_org(&ev) {
                             relevant = true;
+                            touched.extend(org_paths_of(&ev));
                         }
                     }
                     Err(_) => break,
@@ -1021,7 +1188,7 @@ pub fn task_start_watching(app: tauri::AppHandle) -> Result<(), String> {
             if !relevant {
                 continue;
             }
-            match init().and_then(|conn| scan_and_index(&conn)) {
+            match init().and_then(|conn| scan_and_index_forced(&conn, &touched)) {
                 Ok(n) => {
                     info!(count = n, "[TaskManager] reindexed after fs change");
                     let _ = app_for_thread.emit("guaxi:task-files-changed", n);
@@ -1036,13 +1203,23 @@ pub fn task_start_watching(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 fn event_touches_org(res: &notify::Result<notify::Event>) -> bool {
+    !org_paths_of(res).is_empty()
+}
+
+/// 事件里涉及的 .org 绝对路径（事件可能来自文件删除/改名，路径此时已不存在，仍照常返回）。
+fn org_paths_of(res: &notify::Result<notify::Event>) -> Vec<String> {
     match res {
-        Ok(ev) => ev.paths.iter().any(|p| {
-            p.extension()
-                .and_then(|e| e.to_str())
-                .map(|e| e.eq_ignore_ascii_case("org"))
-                .unwrap_or(false)
-        }),
-        Err(_) => false,
+        Ok(ev) => ev
+            .paths
+            .iter()
+            .filter(|p| {
+                p.extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.eq_ignore_ascii_case("org"))
+                    .unwrap_or(false)
+            })
+            .map(|p| p.to_string_lossy().to_string())
+            .collect(),
+        Err(_) => Vec::new(),
     }
 }

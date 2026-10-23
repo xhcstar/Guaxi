@@ -199,7 +199,7 @@
         </div>
         <template #footer>
           <n-space>
-            <n-button @click="genPreview" :loading="exporting">生成</n-button>
+            <n-button @click="genPreviewNow" :loading="exporting">生成</n-button>
             <n-button type="primary" :disabled="!exportPreview" @click="saveReport">保存到文件…</n-button>
             <n-button :disabled="!exportPreview" @click="copyReport">复制</n-button>
           </n-space>
@@ -305,7 +305,7 @@
 
 <script setup>
 import { createLogger } from '../utils/logger'
-import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, shallowRef, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   NTabs, NTab, NInput, NButton, NButtonGroup, NIcon, NTag, NSpin, NDrawer, NDrawerContent,
@@ -594,21 +594,36 @@ const reportKindLabel = () => (reportKindOptions.find((o) => o.value === exportF
 // 打开导出抽屉并立即生成一次预览
 const openExport = () => {
   showExport.value = true
-  genPreview()
+  genPreviewNow()
 }
-const genPreview = async () => {
+// 日期/报表类型变化时只防抖地生成预览：日期选择器在键盘输入过程中会连续发出
+// update:formatted-value，逐次触发一次后端往返会把抽屉拖得一顿一顿的。
+let previewSeq = 0
+let previewTimer = null
+const genPreview = () => {
+  // 立刻作废仍在途的旧请求，避免它回来时把刚改好的日期对应的预览盖掉。
+  previewSeq++
+  if (previewTimer) clearTimeout(previewTimer)
+  previewTimer = setTimeout(() => { previewTimer = null; genPreviewNow() }, 260)
+}
+const genPreviewNow = async () => {
+  if (previewTimer) { clearTimeout(previewTimer); previewTimer = null }
+  const seq = ++previewSeq
   exporting.value = true
   try {
-    // 导出前先重扫描，确保数据库与源文件一致（编辑器保存后立刻反映）
-    await invoke('task_scan_and_index').catch(() => {})
-    exportPreview.value = await invoke('task_export_report', {
+    // 重扫已在 task_export_report 内部做完（增量，内容没变的文件直接跳过），
+    // 不再单独发一次 task_scan_and_index —— 那会让每次改日期都多付一轮全量扫描。
+    const text = await invoke('task_export_report', {
       input: { kind: exportForm.kind, date: '', from: exportForm.from || null, to: exportForm.to || null, format: 'text' },
     })
+    if (seq !== previewSeq) return
+    exportPreview.value = text
   } catch (e) {
+    if (seq !== previewSeq) return
     logger.error('生成报表失败:', e)
     message.error('生成失败：' + (e?.message || e))
   } finally {
-    exporting.value = false
+    if (seq === previewSeq) exporting.value = false
   }
 }
 const saveReport = async () => {
@@ -630,7 +645,9 @@ const copyReport = async () => {
 
 // ── 按字段筛选导出 ──
 const showFieldExport = ref(false)
-const fxData = ref([])
+// 只整体替换、从不原地改：用 shallowRef 免掉对几百个任务块（含大段正文）的深层代理，
+// 筛选与生成预览时每次读字段都不必穿过 Proxy。
+const fxData = shallowRef([])
 const fxText = ref('')
 const fxOneLine = ref(false)
 const fxFilter = reactive({
@@ -817,17 +834,28 @@ const buildFxText = () => {
   })
   fxText.value = entries.join(fxOneLine.value ? '\n' : '\n----------------------------------------\n')
 }
-const recomputeFx = () => nextTick(buildFxText)
+const recomputeFx = () => {
+  if (fxTimer) clearTimeout(fxTimer)
+  fxTimer = setTimeout(() => { fxTimer = null; buildFxText() }, 120)
+}
+let fxTimer = null
 const fxSelectAll = (all) => { fxFields.value = all ? allExportFields.value.map((f) => f.key) : []; buildFxText() }
+// 打开面板：后端在一个后台任务里完成「增量重扫 + 查询」，前端只等一次往返，
+// 也不再额外发一次全量 task_scan_and_index。
+let fxLoading = false
 const openFieldExport = async () => {
   showFieldExport.value = true
+  if (fxLoading) return
+  fxLoading = true
+  if (fxTimer) { clearTimeout(fxTimer); fxTimer = null }
   try {
-    await invoke('task_scan_and_index').catch(() => {})
-    fxData.value = (await invoke('task_query', { query: {} })) || []
+    fxData.value = (await invoke('task_query_fresh', { query: {} })) || []
+    buildFxText()
   } catch (e) {
     logger.error('加载任务失败:', e); fxData.value = []
+  } finally {
+    fxLoading = false
   }
-  buildFxText()
 }
 const fxSaveFile = async () => {
   if (!fxText.value) return
@@ -974,6 +1002,8 @@ onMounted(async () => {
 onUnmounted(() => {
   try { unlisten?.() } catch {}
   if (searchTimer) clearTimeout(searchTimer)
+  if (previewTimer) clearTimeout(previewTimer)
+  if (fxTimer) clearTimeout(fxTimer)
 })
 </script>
 

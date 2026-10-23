@@ -419,8 +419,8 @@ async fn produce_due(report: &mut DeliberateReport) {
     let soon = (chrono::Local::now() + chrono::Duration::days(2))
         .format("%Y-%m-%d")
         .to_string();
-    let tasks = match crate::commands::taskmanager::task_query(
-        crate::commands::taskmanager::TaskQuery {
+    let tasks = match crate::commands::taskmanager::query_blocks(
+        &crate::commands::taskmanager::TaskQuery {
             category: None,
             status: None,
             done: Some(false),
