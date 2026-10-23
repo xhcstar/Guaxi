@@ -212,34 +212,6 @@ pub fn decrypt(account_id: &str, stored: &str) -> Result<Option<String>, String>
         .map_err(|e| format!("解密结果不是有效文本: {e}"))
 }
 
-/// 字节版本（附件）。
-pub fn encrypt_bytes(account_id: &str, plain: &[u8]) -> Result<Vec<u8>, String> {
-    let cipher = cipher(account_id)?;
-    let mut nonce_bytes = [0u8; 12];
-    OsRng
-        .try_fill_bytes(&mut nonce_bytes)
-        .map_err(|e| format!("生成随机数失败: {e}"))?;
-    let nonce = Nonce::from_slice(&nonce_bytes);
-    let sealed = cipher
-        .encrypt(nonce, plain)
-        .map_err(|e| format!("加密附件失败: {e}"))?;
-    let mut out = Vec::with_capacity(12 + sealed.len());
-    out.extend_from_slice(&nonce_bytes);
-    out.extend_from_slice(&sealed);
-    Ok(out)
-}
-
-pub fn decrypt_bytes(account_id: &str, blob: &[u8]) -> Result<Vec<u8>, String> {
-    if blob.len() <= 12 {
-        return Err("附件密文长度异常".to_string());
-    }
-    let cipher = cipher(account_id)?;
-    let nonce = Nonce::from_slice(&blob[..12]);
-    cipher
-        .decrypt(nonce, &blob[12..])
-        .map_err(|_| "无法解密附件（密钥已变更或数据来自另一台设备）".to_string())
-}
-
 /// 清掉密钥缓存（账户删除后调用，避免内存里留着一把没用的密钥）。
 pub fn forget(account_id: &str) {
     if let Ok(mut guard) = KEY_CACHE.lock() {
@@ -312,13 +284,4 @@ mod tests {
         delete_key(&b);
     }
 
-    #[test]
-    fn bytes_roundtrip() {
-        let account = format!("test-{}", uuid::Uuid::new_v4());
-        let data = vec![0u8, 1, 2, 255, 128, 64];
-        let sealed = encrypt_bytes(&account, &data).unwrap();
-        assert_ne!(sealed, data);
-        assert_eq!(decrypt_bytes(&account, &sealed).unwrap(), data);
-        delete_key(&account);
-    }
 }

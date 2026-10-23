@@ -142,6 +142,9 @@ pub async fn mail_delete_account(app: AppHandle, account_id: String) -> Result<(
     ensure_init(&app)?;
     store::delete_account(&account_id)?;
     delete_secret(&account_id);
+    // 本地加密密钥也要一起删：留着会在系统凭据库里堆孤儿条目，
+    // 而且下次用同一个账户 id 恢复数据时会因密钥不匹配而解不开。
+    crypto::delete_key(&account_id);
     Ok(())
 }
 

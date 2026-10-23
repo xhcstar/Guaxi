@@ -13,7 +13,6 @@ use super::model::{
     Account, FolderRole, MailFolder, MailRule, MailSettings, MessageDetail, MessageSummary,
     OutboxItem, SearchQuery,
 };
-use once_cell::sync::OnceCell;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
