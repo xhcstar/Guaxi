@@ -36,12 +36,17 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { createLogger } from '../../utils/logger'
 import { resolveOpenTarget, READER_KIND } from '../../utils/openTargetKind'
-import { useSettingsStore } from '../../stores/settingsStore'
-import ReaderPane from '../HomeViewComponent/ReaderPane.vue'
+import { applyReaderAppearance, loadReaderAppearance } from './readerAppearance'
+
+// ReaderPane 同时被主编辑器（标签内预览）与阅读器窗口使用。若这里静态引入，
+// 两个入口就共享了同一棵子树，Rollup 会把它并进主应用的大 chunk —— 阅读器窗口
+// 首帧因此被迫下载那些无关代码（实测近 10 MB）。异步引入后它成为两端共用的
+// 动态 chunk，阅读器入口只保留自己的薄壳。
+const ReaderPane = defineAsyncComponent(() => import('../HomeViewComponent/ReaderPane.vue'))
 
 const logger = createLogger('DocReaderWindow')
 
@@ -53,15 +58,17 @@ const props = defineProps({
   theme: { type: String, default: '' },
 })
 
-const settingsStore = useSettingsStore()
+/** 外观主题：窗口参数优先，其次读后端配置（不经过 settingsStore，见 readerAppearance.js）。 */
+const appearanceTheme = ref(String(props.theme || '').trim().toLowerCase())
 
 const normalizedTheme = computed(() => {
-  const fromProps = String(props.theme || '').trim().toLowerCase()
-  if (fromProps === 'dark' || fromProps === 'light') return fromProps
-  const fromStore = String(settingsStore.appearanceTheme || '').trim().toLowerCase()
-  if (fromStore === 'dark' || fromStore === 'light') return fromStore
+  const t = appearanceTheme.value
+  if (t === 'dark' || t === 'light') return t
   return 'light'
 })
+
+// 先按窗口参数把主题打上，避免首帧闪一下亮色。
+applyReaderAppearance(normalizedTheme.value)
 
 const loading = ref(true)
 const errorText = ref('')
@@ -182,14 +189,15 @@ const onKeydown = (event) => {
 
 onMounted(async () => {
   window.addEventListener('keydown', onKeydown)
-  try {
-    await settingsStore.loadAppearanceConfig()
-  } catch (error) {
-    logger.warn('[DocReaderWindow] loadAppearanceConfig failed', {
-      error: String(error?.message || error),
-    })
-  }
+  // 外观配置与「解析阅读器目标」互不依赖：并行做，首帧只等较慢的那个。
+  const appearancePromise = loadReaderAppearance().then((appearance) => {
+    const fromProps = String(props.theme || '').trim().toLowerCase()
+    const theme = fromProps === 'dark' || fromProps === 'light' ? fromProps : appearance.theme
+    appearanceTheme.value = theme
+    applyReaderAppearance(theme)
+  })
   await loadTarget()
+  await appearancePromise
 
   // 子组件（如 Office 阅读器）导出 PDF 后，把本窗口切换成 PDF 视图。
   // 用事件而不是直接改 props：ReaderPane 是通用容器，不该知道「PDF 是从哪导出来的」。

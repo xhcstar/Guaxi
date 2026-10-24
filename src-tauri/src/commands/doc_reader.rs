@@ -419,6 +419,12 @@ pub struct EbookSection {
     pub href: String,
     pub html: String,
     pub text_chars: usize,
+    /// 本节在原始正文流里的起始字节偏移。只有走过「重排」路径的电子书才有值；
+    /// 前端用它把书内位置锚点（`filepos` / `kindle:pos`）换算成「第几节」。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_offset: Option<usize>,
+    /// 本节在原始正文流里的字节长度（与 `start_offset` 配套）。
+    pub byte_len: usize,
 }
 
 fn flatten_nav(points: &[ebook_rs::NavPoint], depth: usize, out: &mut Vec<EbookTocItem>) {
@@ -600,7 +606,9 @@ fn reassemble_mobi_text(bytes: &[u8]) -> Option<String> {
 /// 字母表是 `0-9A-V`，与 PalmDB 的 base32 一致。全数字的写法在 MOBI 7 里也有，
 /// 这里统一按 base32 解，纯数字串会得到与十进制相同的结果，不会歧义。
 fn decode_kindle_index(raw: &str) -> Option<usize> {
-    if raw.is_empty() || raw.len() > 8 {
+    // KF8 的 `off:` 是 10 位 base32（`00000001C3`），embed 序号则只有 4 位；
+    // 上限放到 16 位仍然安全：位数再多就视为畸形，避免无谓的超长解析。
+    if raw.is_empty() || raw.len() > 16 {
         return None;
     }
     let mut value: usize = 0;
@@ -750,7 +758,9 @@ fn kindle_asset_table_inner(
 /// 与 `rewrite_kindle_refs` 的区别：不碰原始字节、不重新扫资源区，可以在**每一章**上
 /// 反复调用，成本只有一次字符串扫描。
 fn rewrite_kindle_refs_with_table(html: &str, table: &KindleAssets) -> String {
-    if !html.contains("kindle:") {
+    // 只认资源引用。`kindle:pos:` 是书内跳转，不归这里管；如果只按 "kindle:" 判断，
+    // 一个满是脚注链接的章节也要被逐字符扫一遍（KF8 章节很大，debug 下很明显）。
+    if !html.contains("kindle:embed:") && !html.contains("kindle:flow:") {
         return html.to_string();
     }
     // 一次扫描完成替换：从 `kindle:` 起始，解析到引号/空白/`>`/`)` 为止。
@@ -795,13 +805,59 @@ fn rewrite_kindle_refs_with_table(html: &str, table: &KindleAssets) -> String {
                     data_uri(chosen, data)
                 }),
             "flow" => {
-                // FDST 描述的 flow 按序号排列；取不到序号时把全部 CSS 合并给出，
-                // 多带样式不会影响正确性。
-                let css = match decode_kindle_index(index_part).and_then(|n| table.flows.get(n.wrapping_sub(1))) {
-                    Some(one) => one.clone(),
-                    None if table.flows.is_empty() => String::new(),
-                    None => table.flows.join("
-"),
+                // FDST 里的第一条 flow 在 KF8 实测中是**正文流**（约等于整本 HTML），
+                // 真正的 CSS 在它后面；而 `kindle:flow:0001` 指向的是 CSS 那几条。
+                // 所以不能一律按 `n-1` 取：那会把整本正文当成 CSS 塞进每一个
+                // `<link>` —— 27 个链接 × 485KB 文本，实测把 AZW3 的载荷撑到 22MB。
+                // 取法：先按「序号即下标」，结果不像 CSS 再退回 1-based；都没有就不内联。
+                let looks_css = |s: &str| {
+                    let head = s.trim_start();
+                    s.contains('{')
+                        && !head.starts_with("<?xml")
+                        && !head.starts_with("<html")
+                        && !head.starts_with("<!DOCTYPE")
+                };
+                let css = match decode_kindle_index(index_part) {
+                    Some(n) => {
+                        // 两种编号约定都存在：FDST 首条若是正文流，`kindle:flow:N`
+                        // 就是「下标 N」；否则是 1-based。先按首条是不是 CSS 判断，
+                        // 再对另一种约定做一次兜底。
+                        let zero_based = table
+                            .flows
+                            .first()
+                            .is_some_and(|first| !looks_css(first));
+                        let primary = if zero_based {
+                            table.flows.get(n)
+                        } else {
+                            n.checked_sub(1).and_then(|i| table.flows.get(i))
+                        };
+                        let fallback = if zero_based {
+                            n.checked_sub(1).and_then(|i| table.flows.get(i))
+                        } else {
+                            table.flows.get(n)
+                        };
+                        primary
+                            .filter(|s| looks_css(s))
+                            .or_else(|| fallback.filter(|s| looks_css(s)))
+                            .cloned()
+                            .unwrap_or_else(|| {
+                                // 序号对不上时的兜底：只合并**看起来是 CSS** 的 flow。
+                                // 绝不能把正文流（FDST 第一条）当 CSS 塞给每个 <link>，
+                                // 那正是 AZW3 载荷被撑到 22 MB 的原因。
+                                let css_flows: Vec<&String> =
+                                    table.flows.iter().filter(|s| looks_css(s)).collect();
+                                match css_flows.len() {
+                                    0 => String::new(),
+                                    1 => (*css_flows[0]).clone(),
+                                    _ => css_flows
+                                        .iter()
+                                        .map(|s| s.as_str())
+                                        .collect::<Vec<_>>()
+                                        .join("\n"),
+                                }
+                            })
+                    }
+                    None => String::new(),
                 };
                 if css.trim().is_empty() {
                     None
@@ -1059,51 +1115,71 @@ fn inline_recindex_images(
     out
 }
 
+/// 重排流里的一节：`html` 是原始文本 `[start, end)` 去掉首尾空白后的内容。
+///
+/// 保留偏移的原因：MOBI 7 的 `<a filepos=N>` 里 N 是**整本正文流**的字节偏移，
+/// 只有知道每一节在流里的位置，才能把链接换算成「第几节 + 节内哪一段」。
+#[derive(Debug, Clone)]
+struct RemuxPart {
+    start: usize,
+    end: usize,
+    html: String,
+}
+
+/// 取 `html[from..to]` 去掉首尾空白后的区间；全空白返回 None。
+fn trimmed_span(html: &str, from: usize, to: usize) -> Option<(usize, usize)> {
+    let slice = &html[from..to];
+    let lead = slice.len() - slice.trim_start().len();
+    let trailing_len = slice.trim_end().len();
+    if lead >= trailing_len {
+        return None;
+    }
+    Some((from + lead, from + trailing_len))
+}
+
 /// 把整本 MOBI HTML 切成章节。
 ///
 /// 必须与 ebook-rs 的 `split_mobi_html` 保持完全一致的切分规则，否则重排文本与
 /// `book.sections` 对不上位。规则有两条：
 ///   1. 优先按 `<mbp:pagebreak>`（MOBI 7 及更早）；
 ///   2. 一个都没有时（AZW3/KF8）退回按 `<h1>/<h2>/<h3>` 起始位置切。
-fn split_mobi_html_for_remux(html: &str, expected: usize) -> Option<Vec<String>> {
-    let mut parts: Vec<String> = Vec::new();
+fn split_mobi_html_for_remux(html: &str, expected: usize) -> Option<Vec<RemuxPart>> {
+    let mut parts: Vec<RemuxPart> = Vec::new();
+    let push_span = |parts: &mut Vec<RemuxPart>, from: usize, to: usize| {
+        if let Some((start, end)) = trimmed_span(html, from, to) {
+            parts.push(RemuxPart {
+                start,
+                end,
+                html: html[start..end].to_string(),
+            });
+        }
+    };
+
     let lower = html.to_ascii_lowercase();
     let mut cursor = 0usize;
 
     while let Some(rel) = lower[cursor..].find("<mbp:pagebreak") {
         let at = cursor + rel;
         if at > cursor {
-            let chunk = html[cursor..at].trim();
-            if !chunk.is_empty() {
-                parts.push(chunk.to_string());
-            }
+            push_span(&mut parts, cursor, at);
         }
         // 跳过整个标签（`<mbp:pagebreak/>` 与 `<mbp:pagebreak ...>` 两种写法）。
         cursor = html[at..].find('>').map(|i| at + i + 1).unwrap_or(at + 13);
     }
     if cursor < html.len() {
-        let tail = html[cursor..].trim();
-        if !tail.is_empty() {
-            parts.push(tail.to_string());
-        }
+        push_span(&mut parts, cursor, html.len());
     }
 
     // KF8/AZW3 没有 pagebreak：退回标题切分（与 ebook-rs 同样的 <=1 触发条件）。
     if parts.len() <= 1 {
         parts.clear();
+        // 用已经转成小写的整串做子串搜索：逐字符比较在 4 MB 级正文上
+        // （debug 构建）要几百毫秒，而这三轮子串扫描是线性的字符串搜索。
         let mut boundaries: Vec<usize> = vec![0];
-        for (byte_idx, _) in html.char_indices() {
-            if byte_idx <= 200 {
-                continue;
-            }
-            let slice = &html[byte_idx..];
-            for tag in ["<h1", "<h2", "<h3"] {
-                if slice
-                    .get(..tag.len())
-                    .is_some_and(|sub| sub.eq_ignore_ascii_case(tag))
-                {
-                    boundaries.push(byte_idx);
-                    break;
+        for tag in ["<h1", "<h2", "<h3"] {
+            for (idx, _) in lower.match_indices(tag) {
+                if idx > 200 {
+                    boundaries.push(idx);
                 }
             }
         }
@@ -1113,26 +1189,20 @@ fn split_mobi_html_for_remux(html: &str, expected: usize) -> Option<Vec<String>>
             for i in 0..boundaries.len() {
                 let start = boundaries[i];
                 let end = boundaries.get(i + 1).copied().unwrap_or(html.len());
-                let chunk = html[start..end].trim();
-                if !chunk.is_empty() {
-                    parts.push(chunk.to_string());
-                }
+                push_span(&mut parts, start, end);
             }
         } else {
-            parts.push(html.trim().to_string());
+            push_span(&mut parts, 0, html.len());
         }
     }
 
     // ebook-rs 的 sections 不含纯空壳段；用同一判据过滤后才能逐一对位。
-    let non_empty: Vec<String> = parts
-        .into_iter()
-        .filter(|chunk| {
-            !html_text_without_tags(chunk).trim().is_empty() || chunk.contains("<img")
-        })
-        .collect();
+    parts.retain(|part| {
+        !html_text_without_tags(&part.html).trim().is_empty() || part.html.contains("<img")
+    });
 
-    if non_empty.len() == expected {
-        Some(non_empty)
+    if parts.len() == expected {
+        Some(parts)
     } else {
         None
     }
@@ -1155,7 +1225,321 @@ fn html_text_without_tags(html: &str) -> String {
     out
 }
 
+// ───────────────────────── 书内链接（filepos / kindle:pos）─────────────────────────
+//
+// MOBI 7 的引用写法是 `<a filepos=0000123456>`：没有 href，浏览器不认，点了没反应。
+// KF8/AZW3 用 `href="kindle:pos:fid:0006:off:00000000A9"`：href 存在，但 `kindle:`
+// 是我们自己的 blob 文档无法解析的伪协议。两种都要换成「本阅读器认识的锚点」：
+//   - 链接改成 `href="#gx-pos-<绝对字节偏移>"`；
+//   - 在目标位置插入一个空锚点 `<a id="gx-pos-<偏移>"></a>`，前端据此精确滚动。
+// 前端再按每节的 `startOffset/byteLen` 判断目标属于哪一节，必要时先切节再滚动。
+
+/// 一处 HTML 编辑：把 `[start, end)` 换成 `text`；`start == end` 表示插入。
+struct HtmlEdit {
+    start: usize,
+    end: usize,
+    text: String,
+}
+
+fn apply_html_edits(html: &str, mut edits: Vec<HtmlEdit>) -> String {
+    edits.sort_by_key(|e| (e.start, e.end));
+    let mut out = String::with_capacity(html.len() + edits.len() * 24);
+    let mut cursor = 0usize;
+    for edit in edits {
+        if edit.start < cursor || edit.end > html.len() || edit.start > edit.end {
+            continue;
+        }
+        out.push_str(&html[cursor..edit.start]);
+        out.push_str(&edit.text);
+        cursor = edit.end;
+    }
+    out.push_str(&html[cursor..]);
+    out
+}
+
+/// 解析 `filepos=` 属性，产出「改写成 href」的编辑。
+fn filepos_attr_edits(html: &str) -> Vec<HtmlEdit> {
+    let bytes = html.as_bytes();
+    let mut edits = Vec::new();
+    let mut from = 0usize;
+    while let Some(rel) = html[from..].find("filepos") {
+        let at = from + rel;
+        from = at + "filepos".len();
+        // 必须真的在 `<a ...>` 标签里，避免正文里恰好出现 filepos 字样被改掉。
+        let tag_start = match html[..at].rfind('<') {
+            Some(lt) if !html[lt..at].contains('>') => lt,
+            _ => continue,
+        };
+        if !html[tag_start..].get(..2).is_some_and(|s| s.eq_ignore_ascii_case("<a")) {
+            continue;
+        }
+        let mut j = at + "filepos".len();
+        if bytes.get(j) != Some(&b'=') {
+            continue;
+        }
+        j += 1;
+        let quote = match bytes.get(j) {
+            Some(&q @ (b'"' | b'\'')) => {
+                j += 1;
+                Some(q)
+            }
+            _ => None,
+        };
+        let digits_start = j;
+        while j < bytes.len() && bytes[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j == digits_start {
+            continue;
+        }
+        let Ok(pos) = html[digits_start..j].parse::<usize>() else {
+            continue;
+        };
+        if let Some(q) = quote {
+            if bytes.get(j) != Some(&q) {
+                continue;
+            }
+            j += 1;
+        }
+        edits.push(HtmlEdit {
+            start: at,
+            end: j,
+            text: format!("href=\"#gx-pos-{pos}\""),
+        });
+        from = j;
+    }
+    edits
+}
+
+/// 在 `html`（对应整本偏移 `base` 起的片段）里，为列表中的目标偏移插入空锚点。
+///
+/// 目标若落在标签内部，就把锚点挪到该标签之后 —— 否则 `<a id>` 会被插进属性中途，
+/// 变成一段坏 HTML。
+fn anchor_insert_edits(html: &str, base: usize, targets: &[usize]) -> Vec<HtmlEdit> {
+    let mut edits = Vec::new();
+    for &target in targets {
+        if target < base {
+            continue;
+        }
+        let rel = target - base;
+        if rel > html.len() {
+            continue;
+        }
+        // `target` 是字节偏移，可能落在多字节字符中间（章节位置 + 引用 off）。
+        // 先推进到字符边界，否则下面的切片会 panic。
+        let mut rel = rel;
+        while rel < html.len() && !html.is_char_boundary(rel) {
+            rel += 1;
+        }
+        if rel >= html.len() {
+            continue;
+        }
+        let before = &html[..rel];
+        let inside_tag = before.rfind('<') > before.rfind('>');
+        let insert_at = if inside_tag {
+            match html[rel..].find('>') {
+                Some(off) => rel + off + 1,
+                None => continue,
+            }
+        } else {
+            rel
+        };
+        edits.push(HtmlEdit {
+            start: insert_at,
+            end: insert_at,
+            text: format!("<a id=\"gx-pos-{target}\"></a>"),
+        });
+    }
+    edits
+}
+
+/// 扫描整本正文里所有 `filepos` 目标。
+fn collect_filepos_targets(text: &str) -> Vec<usize> {
+    let mut out: Vec<usize> = Vec::new();
+    let mut from = 0usize;
+    while let Some(rel) = text[from..].find("filepos") {
+        let at = from + rel;
+        let mut j = at + "filepos".len();
+        from = j;
+        if text.as_bytes().get(j) != Some(&b'=') {
+            continue;
+        }
+        j += 1;
+        if matches!(text.as_bytes().get(j), Some(b'"' | b'\'')) {
+            j += 1;
+        }
+        let start = j;
+        while text.as_bytes().get(j).is_some_and(|b| b.is_ascii_digit()) {
+            j += 1;
+        }
+        if let Ok(pos) = text[start..j].parse::<usize>() {
+            out.push(pos);
+        }
+        from = j.max(from);
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// KF8 目录锚点：`<a href="kindle:pos:fid:XXXX:off:0">标题</a>`。
+struct Kf8TocAnchor {
+    fid: usize,
+    title: String,
+    end: usize,
+}
+
+fn scan_kf8_toc_anchors(text: &str) -> Vec<Kf8TocAnchor> {
+    let mut anchors = Vec::new();
+    let mut from = 0usize;
+    while let Some(rel) = text[from..].find("href=\"kindle:pos:") {
+        let href_at = from + rel;
+        let value_start = href_at + "href=\"".len();
+        let Some(value_end_rel) = text[value_start..].find('"') else { break };
+        let value_end = value_start + value_end_rel;
+        let Some((fid, off)) = parse_kindle_pos(&text[value_start..value_end]) else {
+            from = value_end + 1;
+            continue;
+        };
+        // 目录链接的 off 都是 0；正文里的引用链接 off 非零（或指向脚注片段）。
+        let Some(inner_start_rel) = text[value_end..].find('>') else { break };
+        let inner_start = value_end + inner_start_rel + 1;
+        let Some(inner_end_rel) = text[inner_start..].find("</a>") else { break };
+        let inner_end = inner_start + inner_end_rel;
+        let title = html_text_without_tags(&text[inner_start..inner_end]).trim().to_string();
+        from = inner_end + 4;
+        // 目录块在书籍正文之前；第一个脚注标记（`[1]`）出现即表示目录结束。
+        // 不在这里停，后面正文里零散的 off=0 链接会被误当成章节。
+        if title.starts_with('[') {
+            break;
+        }
+        if off != 0 || title.is_empty() || title.chars().count() > 80 {
+            continue;
+        }
+        anchors.push(Kf8TocAnchor {
+            fid,
+            title,
+            end: from,
+        });
+    }
+    anchors
+}
+
+fn parse_kindle_pos(value: &str) -> Option<(usize, usize)> {
+    let rest = value.strip_prefix("kindle:pos:")?;
+    let rest = rest.strip_prefix("fid:")?;
+    let (fid_raw, tail) = rest.split_once(":off:")?;
+    let fid = decode_kindle_index(fid_raw)?;
+    let off_raw = tail.split(['?', ':']).next().unwrap_or("");
+    let off = decode_kindle_index(off_raw)?;
+    Some((fid, off))
+}
+
+/// 建立 KF8 的 `fid → 正文字节位置` 表。
+///
+/// KF8 的 `kindle:pos` 用的是内部的 frag 索引，没有简单公式可算。这里用目录页做锚：
+/// 目录项的链接给出 fid，目录项的文字就是章节标题；标题在正文里**下一次**出现的位置
+/// 就是该章节的起点。顺序搜索（只往后找）避免「尾声」这类短标题命中前文的同一词。
+fn kf8_chapter_positions(text: &str) -> std::collections::BTreeMap<usize, usize> {
+    use std::collections::BTreeMap;
+    let anchors = scan_kf8_toc_anchors(text);
+    let mut map = BTreeMap::new();
+    let mut search_from = anchors.iter().map(|a| a.end).max().unwrap_or(0);
+    for anchor in &anchors {
+        if let Some(rel) = text[search_from..].find(&anchor.title) {
+            let pos = search_from + rel;
+            map.insert(anchor.fid, pos);
+            // 下一轮从标题之后开始找；标题末字是中文，`pos + 1` 会落在字符中间，
+            // 直接切片会 panic，必须推进到下一个字符边界。
+            search_from = pos + text[pos..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+        }
+    }
+    map
+}
+
+/// `kindle:pos` → 正文字节位置。
+///
+/// 目录里的 fid 有精确起点；正文引用常指向章节内部的脚注片段，那些 fid 不在目录里。
+/// 退路是「编号即阅读顺序」：落到编号更小的最近一个已知章节起点（脚注就在该章末尾）。
+fn resolve_kindle_pos(
+    fid: usize,
+    off: usize,
+    chapters: &std::collections::BTreeMap<usize, usize>,
+) -> Option<usize> {
+    if let Some(&pos) = chapters.get(&fid) {
+        return Some(pos.saturating_add(off));
+    }
+    chapters.range(..fid).next_back().map(|(_, &pos)| pos)
+}
+
+/// 把一节里的 `filepos` / `kindle:pos` 链接换成锚点链接，并插入目标锚点。
+///
+/// `targets` 是整本书里所有需要插锚点的正文偏移（已由调用方合并去重）。
+fn annotate_remux_part(
+    part: &RemuxPart,
+    targets: &[usize],
+    kf8_chapters: Option<&std::collections::BTreeMap<usize, usize>>,
+) -> String {
+    let mut edits = filepos_attr_edits(&part.html);
+
+    // kindle:pos 链接：只改 href 的值，引号与其余属性保持原样。
+    if let Some(chapters) = kf8_chapters {
+        let mut from = 0usize;
+        while let Some(rel) = part.html[from..].find("kindle:pos:") {
+            let at = from + rel;
+            let tail = &part.html[at..];
+            let end_rel = tail
+                .find(|c: char| c == '"' || c == '\'' || c == '>' || c.is_whitespace())
+                .unwrap_or(tail.len());
+            let value = &tail[..end_rel];
+            from = at + end_rel.max(1);
+            let Some((fid, off)) = parse_kindle_pos(value) else { continue };
+            let Some(target) = resolve_kindle_pos(fid, off, chapters) else { continue };
+            edits.push(HtmlEdit {
+                start: at,
+                end: at + end_rel,
+                text: format!("#gx-pos-{target}"),
+            });
+        }
+    }
+
+    // 目标锚点：只处理落在本节范围内的偏移。
+    let local: Vec<usize> = targets
+        .iter()
+        .copied()
+        .filter(|t| *t >= part.start && *t < part.end)
+        .collect();
+    edits.extend(anchor_insert_edits(&part.html, part.start, &local));
+    apply_html_edits(&part.html, edits)
+}
+
+/// 收集 KF8 的全部目标位置（已知章节起点 + 引用链接解析结果），用于插锚点。
+fn collect_kf8_targets(
+    text: &str,
+    chapters: &std::collections::BTreeMap<usize, usize>,
+) -> Vec<usize> {
+    let mut out: Vec<usize> = chapters.values().copied().collect();
+    let mut from = 0usize;
+    while let Some(rel) = text[from..].find("kindle:pos:") {
+        let at = from + rel;
+        let tail = &text[at..];
+        let end_rel = tail
+            .find(|c: char| c == '"' || c == '\'' || c == '>' || c.is_whitespace())
+            .unwrap_or(tail.len());
+        from = at + end_rel.max(1);
+        if let Some((fid, off)) = parse_kindle_pos(&tail[..end_rel]) {
+            if let Some(pos) = resolve_kindle_pos(fid, off, chapters) {
+                out.push(pos);
+            }
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 fn read_ebook_blocking(path: &Path, kind: &str) -> Result<EbookPayload, String> {
+    let parse_started = std::time::Instant::now();
     let size = file_size(path)?;
     if size > EBOOK_MAX_INPUT_BYTES {
         return Err(format!(
@@ -1197,9 +1581,30 @@ fn read_ebook_blocking(path: &Path, kind: &str) -> Result<EbookPayload, String> 
     let mobi_images = mobi_bytes.as_deref().map(mobi_image_table).unwrap_or_default();
     let mut recindex_cache: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
 
-    let book = with_parser_panic_guard(|| {
-        ebook_rs::Book::from_file(path).map_err(|e| ebook_error_message(&e))
-    })?;
+    // EPUB 走惰性解析：`Book::from_file` 会把每一节的 XHTML 都送进 HTML 解析器，
+    // 只为算出 `plain_text`（章节是否为空、字数）。阅读器并不需要那棵 DOM ——
+    // 搜索用的是前端自己的 DOMParser，分节只需要原始 HTML 字符串。
+    // debug 构建下这一步实测占了 EPUB 打开时间的大头（28 节约 10 秒），
+    // 惰性构造 + 直接读 archive 可以把它降到百毫秒级。
+    let lazy_epub = if kind == "epub" {
+        let bytes = std::fs::read(path).map_err(|e| format!("读取电子书失败: {}", e))?;
+        let archive = ebook_rs::archive::EpubArchive::from_bytes(&bytes)
+            .map_err(|e| ebook_error_message(&e))?;
+        let title_fallback = path.file_stem().and_then(|s| s.to_str()).unwrap_or("eBook");
+        Some(with_parser_panic_guard(|| {
+            ebook_rs::Book::from_archive_lazy(archive, title_fallback)
+                .map_err(|e| ebook_error_message(&e))
+        })?)
+    } else {
+        None
+    };
+    let epub_lazy = lazy_epub.is_some();
+    let book = match lazy_epub {
+        Some(book) => book,
+        None => with_parser_panic_guard(|| {
+            ebook_rs::Book::from_file(path).map_err(|e| ebook_error_message(&e))
+        })?,
+    };
 
     // 把重排后的整本 HTML 按 `<mbp:pagebreak>` 切回章节。
     //
@@ -1207,8 +1612,8 @@ fn read_ebook_blocking(path: &Path, kind: &str) -> Result<EbookPayload, String> 
     // 一致，才能逐一对位替换文本。按字符均分是不行的 —— 会把 HTML 标签切成两半。
     // 切出来是「全部段」，而 ebook-rs 的 sections 里不含纯空壳段；因此这里只保留
     // 有可见文字的段，再与 sections 逐一对位。数量对不上就不用重排结果。
-    let remuxed_html: Option<Vec<String>> = remuxed_text.and_then(|text| {
-        let parts = split_mobi_html_for_remux(&text, book.sections.len());
+    let remuxed_html: Option<Vec<RemuxPart>> = remuxed_text.as_deref().and_then(|text| {
+        let parts = split_mobi_html_for_remux(text, book.sections.len());
         if parts.is_none() {
             tracing::debug!(
                 path = %path.display(),
@@ -1227,21 +1632,70 @@ fn read_ebook_blocking(path: &Path, kind: &str) -> Result<EbookPayload, String> 
         );
     }
 
+    // 书内链接的目标位置。全部基于「重排后的正文流」的字节偏移，与 RemuxPart 的
+    // start/end 同一坐标系；前端靠每节的 startOffset/byteLen 找到目标所在节。
+    let kf8_chapters = remuxed_text.as_deref().map(|text| {
+        if text.contains("kindle:pos:") {
+            kf8_chapter_positions(text)
+        } else {
+            std::collections::BTreeMap::new()
+        }
+    });
+    let mut link_targets = remuxed_text
+        .as_deref()
+        .map(collect_filepos_targets)
+        .unwrap_or_default();
+    if let (Some(text), Some(chapters)) = (remuxed_text.as_deref(), kf8_chapters.as_ref()) {
+        if !chapters.is_empty() {
+            link_targets.extend(collect_kf8_targets(text, chapters));
+            link_targets.sort_unstable();
+            link_targets.dedup();
+        }
+    }
+
     let mut sections = Vec::with_capacity(book.sections.len());
     let mut repaired_sections = 0usize;
     for section_ref in &book.sections {
         // 必须走 get_section()：图片/字体/样式的 data URI 内联只在那里执行，
         // 直接读 book.sections 拿到的是原始相对路径（`../images/00001.jpeg`），
         // 在 sandbox iframe 的 blob 文档里没有基址可解析，图片就是空白。
-        let mut section = book.get_section(section_ref.index).unwrap_or_else(|err| {
-            tracing::warn!(
-                path = %path.display(),
-                index = section_ref.index,
-                error = %err,
-                "[Reader] get_section failed, falling back to unprocessed html"
-            );
-            section_ref.clone()
-        });
+        //
+        // 例外是惰性 EPUB：sections 里只有路径，正文按要求从 archive 里取，
+        // 资源内联由下面统一的 process_section_resources 完成。
+        let mut section = if epub_lazy {
+            match book.archive.read_string(&section_ref.full_path) {
+                Ok(raw) => {
+                    let mut hydrated = section_ref.clone();
+                    hydrated.plain_text = html_text_without_tags(&raw);
+                    hydrated.plain_text_lower = hydrated.plain_text.to_lowercase();
+                    hydrated.char_count = hydrated.plain_text.chars().count();
+                    hydrated.raw_html = raw.clone();
+                    hydrated.processed_html = raw;
+                    hydrated
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        href = %section_ref.full_path,
+                        error = %err,
+                        "[Reader] lazy epub section read failed"
+                    );
+                    section_ref.clone()
+                }
+            }
+        } else {
+            book.get_section(section_ref.index).unwrap_or_else(|err| {
+                tracing::warn!(
+                    path = %path.display(),
+                    index = section_ref.index,
+                    error = %err,
+                    "[Reader] get_section failed, falling back to unprocessed html"
+                );
+                section_ref.clone()
+            })
+        };
+        let mut section_start: Option<usize> = None;
+        let mut section_len = 0usize;
         // 如果重排拿到了干净正文，就用它覆盖 ebook-rs 输出的乱码章节内容。
         // 按顺序对位：重排流与 ebook-rs 切出的 spine 顺序一致，章节数不等时退回原内容。
         //
@@ -1249,9 +1703,18 @@ fn read_ebook_blocking(path: &Path, kind: &str) -> Result<EbookPayload, String> 
         // 还是 `<img recindex="00012">`，KF8 还是 `src="kindle:embed:…"`，都要在下面
         // 重新内联一遍；先内联再覆盖，等于把刚做好的 data URI 整体换掉 —— 这正是 MOBI
         // 打开后一张图都不显示的根因。
-        if let Some(html) = remuxed_html.as_ref().and_then(|list| list.get(section.index)) {
-            if !html.trim().is_empty() {
-                section.processed_html = html.clone();
+        if let Some(part) = remuxed_html.as_ref().and_then(|list| list.get(section.index)) {
+            if !part.html.trim().is_empty() {
+                // 链接改写与锚点插入必须在资源内联之前：锚点偏移是「原始正文流」里的
+                // 字节位置，内联把 data URI 插进去之后这些偏移就全错了。改写本身只动
+                // href 与空锚点，后续的内联/净化都不会碰它们。
+                section.processed_html = annotate_remux_part(
+                    part,
+                    &link_targets,
+                    kf8_chapters.as_ref().filter(|c| !c.is_empty()),
+                );
+                section_start = Some(part.start);
+                section_len = part.end.saturating_sub(part.start);
             }
         }
         // 内联资源（正文已定稿）：把相对路径的图片/样式换成 data URI。
@@ -1260,11 +1723,21 @@ fn read_ebook_blocking(path: &Path, kind: &str) -> Result<EbookPayload, String> 
         // EPUB 的行为完全一致（同一份实现、同一套 percent-decode 与 ../ 归一化规则）。
         // MOBI/AZW3 的 section.href 是裸 `section_N.html`，而资源实际在 `OEBPS/images/`，
         // 所以用 `OEBPS/section.xhtml` 作基址再跑一遍 —— 命中就直接内联，Miss 则原样返回。
-        section.processed_html = ebook_rs::section::process_section_resources(
-            &section.processed_html,
-            if is_mobi_family(kind) { "OEBPS/section.xhtml" } else { &section.href },
-            &book.archive,
-        );
+        //
+        // 重排过的 MOBI/AZW3 不用再跑：资源引用（recindex / kindle:embed / kindle:flow）
+        // 已经在上面逐节处理完，正文里剩下的 data URI 只会让这趟扫描白白遍历数 MB 的
+        // base64。EPUB 与没有重排的文件仍然走这里。
+        if !(is_mobi_family(kind) && section_start.is_some()) {
+            section.processed_html = ebook_rs::section::process_section_resources(
+                &section.processed_html,
+                if is_mobi_family(kind) {
+                    "OEBPS/section.xhtml"
+                } else {
+                    &section.full_path
+                },
+                &book.archive,
+            );
+        }
         // MOBI 7：`recindex` → data URI。必须放在内联之后、kindle: 改写之前或之后都无妨，
         // 但必须在重排内容覆盖之后 —— 重排流是唯一会重新引入 recindex 的来源。
         if let Some(bytes) = mobi_bytes.as_deref() {
@@ -1297,8 +1770,11 @@ fn read_ebook_blocking(path: &Path, kind: &str) -> Result<EbookPayload, String> 
             href: section.href.clone(),
             html,
             text_chars: section.char_count,
+            start_offset: section_start,
+            byte_len: section_len,
         });
     }
+
 
     // 诊断：记录每本书的图片形态，便于定位「图片不显示」是内联失败还是路径问题。
     {
@@ -1324,6 +1800,7 @@ fn read_ebook_blocking(path: &Path, kind: &str) -> Result<EbookPayload, String> 
             img_recindex_left = recindex,
             mobi_images = mobi_images.len(),
             repaired_sections,
+            parse_ms = parse_started.elapsed().as_millis(),
             "[Reader] ebook image diagnostics"
         );
     }
@@ -1688,8 +2165,11 @@ mod mobi_remux_tests {
         let html = "<html><body><p>甲</p><mbp:pagebreak/><div></div><mbp:pagebreak/><p>乙</p></body></html>";
         let parts = split_mobi_html_for_remux(html, 2).expect("应切成 2 节");
         assert_eq!(parts.len(), 2);
-        assert!(parts[0].contains('甲'));
-        assert!(parts[1].contains('乙'));
+        assert!(parts[0].html.contains('甲'));
+        assert!(parts[1].html.contains('乙'));
+        // 偏移必须指向原文，链接换算全靠它。
+        assert_eq!(&html[parts[0].start..parts[0].end], parts[0].html);
+        assert_eq!(&html[parts[1].start..parts[1].end], parts[1].html);
     }
 
     #[test]
@@ -1709,8 +2189,8 @@ mod mobi_remux_tests {
         );
         let parts = split_mobi_html_for_remux(&html, 3).expect("应按标题切 3 节");
         assert_eq!(parts.len(), 3);
-        assert!(parts[1].contains("第一章"));
-        assert!(parts[2].contains("第二章"));
+        assert!(parts[1].html.contains("第一章"));
+        assert!(parts[2].html.contains("第二章"));
     }
 }
 
@@ -1815,6 +2295,95 @@ mod mobi_recindex_tests {
         let table = mobi_image_table(b"not a mobi file at all, definitely longer than 78 bytes..........................");
         assert!(table.is_empty());
     }
+}
+
+#[cfg(test)]
+mod link_anchor_tests {
+    use super::{
+        anchor_insert_edits, apply_html_edits, filepos_attr_edits, kf8_chapter_positions,
+        parse_kindle_pos, resolve_kindle_pos,
+    };
+
+    #[test]
+    fn rewrites_bare_filepos_into_anchor_link() {
+        // MOBI 7 的真实写法：没有 href，filepos 的值是整本正文流的字节偏移。
+        let html = r#"<p><a filepos=0000009657>[1]</a> 正文</p>"#;
+        let out = apply_html_edits(html, filepos_attr_edits(html));
+        assert!(out.contains("href=\"#gx-pos-9657\""), "实际: {out}");
+        assert!(!out.contains("filepos"), "实际: {out}");
+    }
+
+    #[test]
+    fn rewrites_quoted_filepos_and_keeps_other_attributes() {
+        let html = r#"<a class="ref" filepos="00042">注</a>"#;
+        let out = apply_html_edits(html, filepos_attr_edits(html));
+        assert!(out.contains("href=\"#gx-pos-42\""), "实际: {out}");
+        assert!(out.contains("class=\"ref\""), "实际: {out}");
+    }
+
+    #[test]
+    fn does_not_touch_filepos_outside_anchor_tags() {
+        let html = "<p>正文里提到 filepos 这个词</p>";
+        let out = apply_html_edits(html, filepos_attr_edits(html));
+        assert_eq!(out, html);
+    }
+
+    #[test]
+    fn inserts_anchor_at_text_position() {
+        let html = "<p>abcdef</p>";
+        let out = apply_html_edits(html, anchor_insert_edits(html, 0, &[7]));
+        assert!(out.contains("abcd<a id=\"gx-pos-7\"></a>ef"), "实际: {out}");
+    }
+
+    #[test]
+    fn moves_anchor_out_of_a_tag() {
+        // 目标落在标签内部时必须挪到标签之后，否则 id 锚点会插进属性中间。
+        let html = "<p class=\"a\">x</p>";
+        let out = apply_html_edits(html, anchor_insert_edits(html, 0, &[2]));
+        assert!(
+            out.starts_with("<p class=\"a\"><a id=\"gx-pos-2\"></a>"),
+            "实际: {out}"
+        );
+    }
+
+    #[test]
+    fn parses_kindle_pos() {
+        assert_eq!(
+            parse_kindle_pos("kindle:pos:fid:0006:off:00000001C3"),
+            Some((6, 1411))
+        );
+        assert_eq!(parse_kindle_pos("kindle:embed:0001?mime=image/jpeg"), None);
+    }
+
+    #[test]
+    fn resolves_kindle_positions_from_toc_titles_in_order() {
+        // 目录页给出 fid → 标题；标题在正文里的「下一处」出现才是章节起点。
+        // 顺序搜索保证「尾声」这种短标题不会命中前文的同一个词。
+        let text = concat!(
+            "<a href=\"kindle:pos:fid:0006:off:0000000000\">序</a>",
+            "<a href=\"kindle:pos:fid:0008:off:0000000000\">第一章</a>",
+            "<p>这是一段前文。</p>",
+            "<h1>序</h1><p>序的正文</p>",
+            "<h1>第一章</h1><p>第一章正文</p>",
+        );
+        let map = kf8_chapter_positions(text);
+        let seq = *map.get(&6).expect("序 应有位置");
+        let ch1 = *map.get(&8).expect("第一章 应有位置");
+        assert!(seq < ch1, "顺序必须单调: {seq} < {ch1}");
+        assert!(text[seq..].starts_with("序"));
+        assert!(text[ch1..].starts_with("第一章"));
+    }
+
+    #[test]
+    fn unknown_fid_falls_back_to_previous_chapter() {
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(6usize, 100usize);
+        map.insert(8usize, 500usize);
+        assert_eq!(resolve_kindle_pos(7, 30, &map), Some(100));
+        assert_eq!(resolve_kindle_pos(8, 30, &map), Some(530));
+        assert_eq!(resolve_kindle_pos(2, 0, &map), None);
+    }
+
 }
 
 #[cfg(test)]
@@ -2958,4 +3527,5 @@ mod tests {
         assert_eq!(ConvertQuality::parse("").engine(), "anydoc");
         assert_eq!(ConvertQuality::parse("FAST").engine(), "anydoc");
     }
+
 }

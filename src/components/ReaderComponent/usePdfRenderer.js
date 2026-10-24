@@ -1,6 +1,9 @@
 import { ref, computed, watch, nextTick } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
+// 阅读器窗口走自己的入口（reader-main.js），没有 main.js 的全局 import；
+// PDF 相关样式跟着这个渲染器走，打开 PDF 时才会加载。
+import "pdfjs-dist/web/pdf_viewer.css";
 import { createLogger } from '../../utils/logger'
 
 const logger = createLogger('usePdfRenderer')

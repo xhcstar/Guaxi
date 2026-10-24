@@ -78,7 +78,9 @@ pub async fn create_doc_reader_window(
     if theme == "dark" || theme == "light" {
         query.push_str(&format!("&theme={}", encode(&theme)));
     }
-    let url = WebviewUrl::App(format!("/doc-reader?{}", query).into());
+    // 专用入口 reader.html：只挂载阅读器子树。走主入口（/doc-reader 路由）会连带启动
+    // Monaco/LSP 并加载全部路由页面，每个新窗口都要多花数秒。
+    let url = WebviewUrl::App(format!("/reader.html?{}", query).into());
 
     info!(
         "[DocReader] create window label={} kind={} reader={} path={}",

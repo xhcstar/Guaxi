@@ -352,7 +352,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { Icon } from '@iconify/vue'
 import closeIcon from '@iconify-icons/lucide/x'
@@ -364,15 +364,21 @@ import convertIcon from '@iconify-icons/lucide/file-output'
 import codeIcon from '@iconify-icons/lucide/code'
 import { openPath } from '@tauri-apps/plugin-opener'
 import { createLogger } from '../../utils/logger'
-import GuaxiPdfViewer from '../PdfViewer/GuaxiPdfViewer.vue'
-import DocImageReader from '../ReaderComponent/readers/DocImageReader.vue'
-import DocEbookReader from '../ReaderComponent/readers/DocEbookReader.vue'
-import DocHtmlReader from '../ReaderComponent/readers/DocHtmlReader.vue'
-import DocMediaReader from '../ReaderComponent/readers/DocMediaReader.vue'
-import DocOfficeReader from '../ReaderComponent/readers/DocOfficeReader.vue'
-import GuaxiSelectionTranslatePanel from './GuaxiSelectionTranslatePanel.vue'
 import { usePageTranslate, splitIntoParagraphs } from '../../composables/usePageTranslate'
 import { useSelectionReadAloud } from '../../composables/useSelectionReadAloud'
+
+// 各阅读器按需加载：打开一本 MOBI 不该把 pdfium 阅读器、Office 阅读器一起下载并解析。
+// 阅读器窗口是独立 webview，首帧速度几乎完全取决于入口加载了多少模块（见 reader-main.js）。
+const GuaxiPdfViewer = defineAsyncComponent(() => import('../PdfViewer/GuaxiPdfViewer.vue'))
+const DocImageReader = defineAsyncComponent(() => import('../ReaderComponent/readers/DocImageReader.vue'))
+const DocEbookReader = defineAsyncComponent(() => import('../ReaderComponent/readers/DocEbookReader.vue'))
+const DocHtmlReader = defineAsyncComponent(() => import('../ReaderComponent/readers/DocHtmlReader.vue'))
+const DocMediaReader = defineAsyncComponent(() => import('../ReaderComponent/readers/DocMediaReader.vue'))
+const DocOfficeReader = defineAsyncComponent(() => import('../ReaderComponent/readers/DocOfficeReader.vue'))
+// 翻译面板是阅读器里唯一依赖 naive-ui 的组件：只在真正翻译时加载。
+const GuaxiSelectionTranslatePanel = defineAsyncComponent(
+  () => import('./GuaxiSelectionTranslatePanel.vue')
+)
 
 const logger = createLogger('ReaderPane')
 

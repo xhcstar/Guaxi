@@ -20,6 +20,40 @@ export default defineConfig(async () => ({
   root: projectRoot,
   plugins: [
     vue(),
+    {
+      // 阅读器入口（reader.html）是「秒开」的关键路径：它只挂阅读器子树。
+      // Rollup 仍会给它加一条对 docs chunk（vditor/mermaid/markdown-it 等，约 8 MB）
+      // 的纯副作用 import —— 入口与 docs 之间并没有任何真实依赖（reader.html 的
+      // 静态图只有 vue / reader-core / 自己的样式）。这条 import 会让每个阅读器
+      // 窗口白下载并执行一整个无关的文档渲染大包，所以在这里从入口 chunk 里摘掉。
+      // 只动 isEntry 且 name === "reader" 的 chunk，主应用不受影响。
+      name: "reader-entry-drop-unused-docs",
+      apply: "build",
+      enforce: "post",
+      generateBundle(_options, bundle) {
+        const entry = Object.values(bundle).find(
+          (item) => item.type === "chunk" && item.isEntry && item.name === "reader"
+        );
+        if (!entry) return;
+        const dropped = entry.imports.filter((file) => /(^|\/)docs-[^/]*\.js$/.test(file));
+        if (!dropped.length) return;
+        entry.imports = entry.imports.filter((file) => !dropped.includes(file));
+        for (const file of dropped) {
+          const base = file.split("/").pop().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          entry.code = entry.code.replace(new RegExp(`import"\\./${base}";?`, "g"), "");
+        }
+        // HTML 里的预加载/样式链接由 Vite 的构建期在 chunk 依赖快照上生成，
+        // 这里一并摘掉 docs 的两种 link（同样的理由：阅读器不需要它们）。
+        const html = bundle["reader.html"];
+        if (html && html.type === "asset") {
+          html.source = String(html.source).replace(
+            /<link[^>]*(?:modulepreload|stylesheet)[^>]*href="\/assets\/docs-[^"]*"[^>]*>\s*/g,
+            ""
+          );
+        }
+        console.log("[reader-entry] dropped unused imports:", dropped);
+      },
+    },
     monacoEditorPlugin.default({
       // 注意这里的 .default
       publicPath: "assets/monaco-editor",
@@ -70,6 +104,12 @@ export default defineConfig(async () => ({
     reportCompressedSize: false,
     chunkSizeWarningLimit: 20000,
     rollupOptions: {
+      // 独立阅读器窗口走自己的入口（reader.html）：它只需要阅读器子树，不能把
+      // 整个应用（Monaco / LSP / 所有路由页面）的启动成本带进每一个新窗口。
+      input: {
+        main: path.resolve(projectRoot, "index.html"),
+        reader: path.resolve(projectRoot, "reader.html"),
+      },
       onwarn(warning, defaultHandler) {
         const message = String(warning?.message || "");
         if (ignoredBuildWarnings.some((pattern) => pattern.test(message))) {
@@ -78,13 +118,46 @@ export default defineConfig(async () => ({
         defaultHandler(warning);
       },
       output: {
-        manualChunks: {
-          vue: ["vue", "vue-router", "pinia"],
-          naiveui: ["naive-ui", "@vicons/antd", "@vicons/fa", "@vicons/fluent", "@vicons/tabler", "@vicons/ionicons5"],
-          monaco: ["monaco-editor", "monaco-vim", "monaco-editor-textmate", "monaco-languageclient", "monaco-textmate"],
-          excalidraw: ["react", "react-dom", "excalidraw-dev"],
-          docs: ["pdfjs-dist", "docx-preview", "epubjs", "markdown-it", "markdown-it-mathjax3", "mathjax-full", "mermaid", "vditor", "prismjs", "highlight.js"],
-          graph3d: ["three", "three-stdlib", "d3-force-3d"],
+        // 原来的对象写法把「包名 → chunk 名」一一列出；这里改成等价的函数形式，
+        // 只为多钉一个虚拟模块：Vite 的动态 import 预加载 helper（vite/preload-helper）。
+        // 不钉的话 Rollup 会把它塞进「第一个用到它的 chunk」，实测落进了 9.8 MB 的
+        // monaco —— 阅读器入口只 import 了这一个 helper，却因此把整个 Monaco 变成静态
+        // 依赖并预加载，reader.html 的「秒开」收益全没了。
+        manualChunks(id) {
+          // ReaderPane 同时被主编辑器（标签内预览）和独立阅读器窗口使用。两端共享的
+          // 模块会被 Rollup 塞进某个「两端都会加载」的既有 chunk；实测落进了 docs
+          // （pdfjs/vditor/mermaid，接近 10 MB），阅读器首帧因此被迫加载无关代码。
+          // 钉到自己的小 chunk 里，两端都只多付几十 KB。
+          if (
+            id.includes("/src/components/HomeViewComponent/ReaderPane.vue") ||
+            id.includes("/src/components/ReaderComponent/DocReaderWindow.vue")
+          ) {
+            return "reader-core";
+          }
+          // 阅读器自己的两份 CSS 单独成 chunk。不钉的话，它们的空模块会被 Rollup
+          // 并进 docs chunk，阅读器入口就会为了这点样式去静态加载 pdfjs/vditor 那个大包。
+          if (id.includes("/src/styles/guaxiBase.css") || id.includes("/readers/readerPane.css")) {
+            return "reader-styles";
+          }
+          if (id.includes('vite/preload-helper') || id.includes('vite/modulepreload')) {
+            return "shared";
+          }
+          const groups = {
+            vue: ["vue", "vue-router", "pinia"],
+            naiveui: ["naive-ui", "@vicons/antd", "@vicons/fa", "@vicons/fluent", "@vicons/tabler", "@vicons/ionicons5"],
+            monaco: ["monaco-editor", "monaco-vim", "monaco-editor-textmate", "monaco-languageclient", "monaco-textmate"],
+            excalidraw: ["react", "react-dom", "excalidraw-dev"],
+            docs: ["docx-preview", "epubjs", "markdown-it", "markdown-it-mathjax3", "mathjax-full", "mermaid", "vditor"],
+            pdf: ["pdfjs-dist"],
+            syntax: ["highlight.js", "prismjs"],
+            graph3d: ["three", "three-stdlib", "d3-force-3d"],
+          };
+          for (const [name, packages] of Object.entries(groups)) {
+            if (packages.some((pkg) => id.includes(`/node_modules/${pkg}/`) || id.endsWith(`/node_modules/${pkg}`))) {
+              return name;
+            }
+          }
+          return undefined;
         },
       },
     },

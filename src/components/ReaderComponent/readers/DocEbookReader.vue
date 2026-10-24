@@ -405,7 +405,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { Icon } from '@iconify/vue'
 // 图标走「import 对象」路径（不是 iconRegistry 里的名字）：release 包离线可用，
@@ -429,10 +429,15 @@ import { createLogger } from '../../../utils/logger'
 import { useReaderReadAloud } from '../../../composables/useReaderReadAloud'
 import { useSelectionTranslate } from '../../../composables/useSelectionTranslate'
 import { useSelectionReadAloud } from '../../../composables/useSelectionReadAloud'
-import GuaxiSelectionTranslatePanel from '../../HomeViewComponent/GuaxiSelectionTranslatePanel.vue'
 import './readerPane.css'
 import { sanitizeSectionHtml } from './ebookSanitize.js'
 import { normalizeWithMap } from '../readerSearch'
+
+// 划词翻译面板是阅读器里唯一用到 naive-ui 的组件，且只在真正翻译时才需要出现。
+// 异步加载让「打开一本书」不必先付 naive-ui 的解析成本。
+const GuaxiSelectionTranslatePanel = defineAsyncComponent(
+  () => import('../../HomeViewComponent/GuaxiSelectionTranslatePanel.vue')
+)
 
 const logger = createLogger('DocEbookReader')
 
@@ -758,15 +763,14 @@ const zoomBy = (factor) => {
 /**
  * iframe 的沙箱策略。
  *
- * 需要 allow-same-origin：读 contentDocument 做书籍内跳转、滚动同步、主题注入。
- * 需要 allow-scripts：少了它，净化没覆盖到的脚本会被浏览器逐条拦截并打印
- * "Blocked script execution in 'blob:...'"，一本 epub 能刷出几十条。
+ * 只需 allow-same-origin：读 contentDocument 做书内跳转、滚动同步、主题注入。
  *
- * 代价要说清楚：按 HTML 规范，allow-scripts 与 allow-same-origin 同时出现等于取消
- * 沙箱——章节里的脚本可以拿到父窗口，进而拿到 Tauri IPC。所以 ebookSanitize 的
- * 剥离与自检是唯一的安全防线，不能因为这里放开了脚本就把它去掉。
+ * 不再给 allow-scripts。按规范这两项同时出现等于取消沙箱，WebView2 每创建一个
+ * iframe 都会打印 "An iframe which has both allow-scripts and allow-same-origin…"，
+ * 翻几节就刷满控制台。章节里的脚本在 sanitizeSectionHtml 阶段已经剥离（有残留就整章
+ * 降级为纯文本），没有 allow-scripts 也不会再出现 "Blocked script execution" 噪音。
  */
-const frameSandbox = 'allow-scripts allow-same-origin'
+const frameSandbox = 'allow-same-origin'
 
 /** 净化并自检（剥离逻辑与判据见 ebookSanitize.js）；退化时记一条日志便于排查。 */
 const sanitizeSection = (html) => {
@@ -805,7 +809,7 @@ const buildFrameDoc = () => {
   const fontStack = FONT_STACKS[p.fontFamily] || FONT_STACKS.serif
   const themeVars = THEME_VARS[p.theme] || THEME_VARS.light
   const baseCss = `
-    html, body { margin: 0; padding: 0; background: transparent; }
+    html, body { margin: 0 !important; padding: 0 !important; background: transparent; }
     :root {
       --gx-bg: ${themeVars.bg};
       --gx-fg: ${themeVars.fg};
@@ -820,18 +824,19 @@ const buildFrameDoc = () => {
      * 在屏幕上站得住。段距用 em 而不是 px：字号一改，段与段的呼吸感按比例跟着变。
      */
     body {
-      font-family: ${fontStack};
-      line-height: ${p.lineHeight};
-      font-size: ${p.fontSize * zoom.value}px;
+      font-family: ${fontStack} !important;
+      line-height: ${p.lineHeight} !important;
+      font-size: ${p.fontSize * zoom.value}px !important;
       color: var(--gx-fg);
       background: var(--gx-bg);
-      /* border-box：maxWidth 是「读者看到的行宽」而不是内容盒宽。
-         用 content-box 时左右各 48px 内边距会加在外面，实际行宽比设置值宽 96px，
-         行太长，眼睛回扫会跳行。 */
-      box-sizing: border-box;
-      padding: 40px 48px 96px;
-      max-width: ${p.maxWidth}px;
-      margin: 0 auto;
+      /* 版式三件套必须带 !important：电子书自带的样式表几乎都给 <body> 写了
+         margin/padding（Calibre 的 .calibre 规则），类选择器的优先级高于元素
+         选择器，不带 !important 时「页宽 + 居中」会被整段覆盖 —— 表现就是正文
+         贴左、右侧留一大片空白。 */
+      box-sizing: border-box !important;
+      padding: 40px 48px 96px !important;
+      max-width: ${p.maxWidth}px !important;
+      margin: 0 auto !important;
       word-wrap: break-word;
       /* 中英混排：允许在汉字之间断行，但别把西文单词拦腰截断。 */
       overflow-wrap: break-word;
@@ -920,19 +925,18 @@ const normalizeHrefPath = (raw) => {
 }
 
 /**
- * 按 href 跳到书籍内某一节。
+ * 把章节 href 解析成 sections 下标（-1 表示解析不到）。
  *
  * 目录项与章节内的相对链接都走这里。匹配分三层，从严到松：
  *   1. 归一化后整串相等；
  *   2. 一方以另一方结尾（章节文件可能在不同目录层级，如 `part0006.html` vs `text/part0006.html`）；
  *   3. 只比文件名（`OEBPS/text/part0006.html` 与 `part0006.html`）。
- * 目录项若指向节内锚点（`ch1.xhtml#part2`），只切到对应的节。
  */
-const jumpToHref = (href) => {
+const resolveSectionIndex = (href) => {
   const raw = String(href || '').split('#')[0]
-  if (!raw) return
+  if (!raw) return -1
   const target = normalizeHrefPath(raw)
-  if (!target) return
+  if (!target) return -1
   const list = sections.value
   const base = (h) => h.split('?')[0]
   let idx = list.findIndex((s) => normalizeHrefPath(base(String(s.href))) === target)
@@ -946,12 +950,105 @@ const jumpToHref = (href) => {
     const file = target.split('/').pop()
     idx = list.findIndex((s) => normalizeHrefPath(base(String(s.href))).split('/').pop() === file)
   }
-  if (idx >= 0) {
-    goSection(idx)
+  return idx
+}
+
+/** 目录项点击：切到对应章节（目录项若带 `#锚点`，切过去后再滚到锚点）。 */
+const jumpToHref = (href) => {
+  const fragment = String(href || '').includes('#')
+    ? String(href).slice(String(href).indexOf('#') + 1)
+    : ''
+  const idx = resolveSectionIndex(href)
+  if (idx < 0) {
+    // 找不到对应章节：可能是书内不存在的资源，或某种内部位置引用。
+    logger.debug('[DocEbookReader] unresolvable in-book link', { href })
     return
   }
-  // 找不到对应章节：可能是 `kindle:pos:` 这类内部位置锚点，或指向书内不存在的资源。
-  logger.debug('[DocEbookReader] unresolvable in-book link', { href: raw })
+  followSectionJump(idx, fragment)
+}
+
+// ───────────────────────── 书内链接与位置锚点 ─────────────────────────
+// 后端在生成章节 HTML 时已经把 MOBI 的 `filepos`、KF8 的 `kindle:pos` 统一改写成
+// `#gx-pos-<正文流字节偏移>`，并在目标处插入了空锚点。这里只做三件事：
+//   1. `#gx-pos-N` → 用每节的 startOffset/byteLen 找到所属节，必要时先切节；
+//   2. `<a href="partXXXX.html#anchor">` → 切节 + 滚动到锚点（EPUB 的脚注/引用）；
+//   3. 纯 `#anchor` → 当前节内滚动。
+
+/** 跨节跳转时待消费的锚点 id；iframe 重新加载后执行一次。 */
+let pendingAnchor = ''
+
+const frameDocElement = (id) => frameRef.value?.contentDocument?.getElementById?.(id) || null
+
+/** 在当前章节里滚到某个锚点；找不到返回 false。 */
+const scrollToAnchor = (id) => {
+  const el = frameDocElement(id)
+  if (!el) return false
+  try {
+    el.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  } catch {
+    el.scrollIntoView()
+  }
+  return true
+}
+
+/** 正文流字节偏移 → 所在节下标（没有偏移信息的章节跳过）。 */
+const sectionIndexForPosition = (pos) => {
+  const list = sections.value
+  for (let i = 0; i < list.length; i += 1) {
+    const start = Number(list[i]?.startOffset)
+    const len = Number(list[i]?.byteLen)
+    if (!Number.isFinite(start) || !Number.isFinite(len) || len <= 0) continue
+    if (pos >= start && pos < start + len) return i
+  }
+  return -1
+}
+
+/** 跳到正文流里的某个字节位置。 */
+const jumpToPosition = (pos) => {
+  const idx = sectionIndexForPosition(pos)
+  if (idx < 0) {
+    logger.debug('[DocEbookReader] position not mapped to any section', { pos })
+    return
+  }
+  const anchor = `gx-pos-${pos}`
+  if (idx === activeIndex.value) {
+    scrollToAnchor(anchor)
+    return
+  }
+  pendingAnchor = anchor
+  goSection(idx)
+}
+
+/** 先切节再滚锚点；同节则直接滚。 */
+const followSectionJump = (idx, fragment) => {
+  if (idx === activeIndex.value) {
+    if (fragment) scrollToAnchor(fragment)
+    return
+  }
+  pendingAnchor = fragment || ''
+  goSection(idx)
+}
+
+/** 点击章节内链接的统一入口。 */
+const followInBookLink = (href) => {
+  if (href.startsWith('#gx-pos-')) {
+    const pos = Number(href.slice('#gx-pos-'.length))
+    if (Number.isFinite(pos)) jumpToPosition(pos)
+    return
+  }
+  if (href.startsWith('#')) {
+    scrollToAnchor(href.slice(1))
+    return
+  }
+  const hashAt = href.indexOf('#')
+  const path = hashAt >= 0 ? href.slice(0, hashAt) : href
+  const fragment = hashAt >= 0 ? href.slice(hashAt + 1) : ''
+  const idx = resolveSectionIndex(path)
+  if (idx < 0) {
+    if (fragment) scrollToAnchor(fragment)
+    return
+  }
+  followSectionJump(idx, fragment)
 }
 
 /** 当前 iframe 的 blob URL，切换章节时先回收，避免泄漏。 */
@@ -1010,10 +1107,10 @@ const onFrameLoad = () => {
         })
         return
       }
-      // 纯页内锚点：交给浏览器滚到目标 id（同一节内）。
-      if (href.startsWith('#')) return
+      // 书内链接统一由阅读器接管：切节 + 滚到锚点/正文位置。
+      // 不能交给浏览器默认导航 —— blob 文档没有对应的基址，点了只会白跑一趟。
       event.preventDefault()
-      jumpToHref(href)
+      followInBookLink(href)
     })
     // 滚动进度跟踪：用于保存阅读位置。
     doc.addEventListener('scroll', onFrameScroll, { passive: true })
@@ -1021,6 +1118,12 @@ const onFrameLoad = () => {
     doc.addEventListener('mouseup', onFrameSelection)
     // 恢复本节滚动位置（首次进书或跳转书签后由调用方设置）。
     applyPendingRestore()
+    // 跨节链接的落点：新文档就绪后滚到锚点（优先于上面恢复的滚动位置）。
+    if (pendingAnchor) {
+      const anchor = pendingAnchor
+      pendingAnchor = ''
+      scrollToAnchor(anchor)
+    }
     // 本章已有标注画上底色。
     applyAnnotationHighlights()
   } catch (error) {
@@ -1431,12 +1534,17 @@ const loadBook = async () => {
   sections.value = []
   toc.value = []
   activeIndex.value = 0
+  const startedAt = performance.now()
 
   try {
+    // 设置/进度与正文解析并行：四次 sqlite 读取没有理由串在整本书的解析后面。
+    // 两者都在首帧之前不能省，但并行之后首帧只等较慢的那个。
+    const settingsPromise = loadReaderSettings()
     const payload = await invoke('read_document_for_reader', {
       path: props.path,
       kind: props.kind,
     })
+    const parsedAt = performance.now()
     if (token !== loadToken) return
 
     if (!payload || payload.format !== 'ebook') {
@@ -1448,7 +1556,8 @@ const loadBook = async () => {
     if (!sections.value.length) throw new Error('这本书没有可显示的正文')
 
     // 先读回设置与进度：prefs 会影响 buildFrameDoc 的排版，必须先于渲染。
-    const savedState = await loadReaderSettings()
+    const savedState = await settingsPromise
+    const settingsAt = performance.now()
     if (token !== loadToken) return
     if (savedState && Number.isInteger(savedState.sectionIndex)) {
       activeIndex.value = Math.min(
@@ -1466,6 +1575,9 @@ const loadBook = async () => {
       sections: sections.value.length,
       toc: toc.value.length,
       resumedSection: activeIndex.value,
+      parseMs: Math.round(parsedAt - startedAt),
+      settingsMs: Math.round(settingsAt - parsedAt),
+      totalMs: Math.round(performance.now() - startedAt),
     })
   } catch (error) {
     if (token !== loadToken) return

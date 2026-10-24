@@ -1,0 +1,158 @@
+/*
+ * 独立阅读器窗口的基础样式：主题变量 + 根布局高度链。
+ *
+ * 阅读器窗口走 reader.html 专用入口，不复用 App.vue 的启动逻辑，但需要同一套
+ * CSS 变量（否则面板边框/文字色会退回硬编码亮色）与 html → body → #app 的高度链。
+ *
+ * 注意：这些变量与 App.vue 的全局 <style> 是**同一份定义的两份拷贝**。没有抽成
+ * 共享文件是刻意的 —— 两个入口共享同一个 CSS 模块会让 Rollup 把它归到主应用的
+ * 巨型 chunk 上，阅读器窗口就得连带加载那个 chunk（实测 9.5 MB），首帧收益全丢。
+ * 改配色时两处都要动。
+ */
+
+:root {
+  --guaxi-editor-font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
+  --guaxi-app-bg: #ffffff;
+  --guaxi-header-bg: #ffffff;
+  --guaxi-content-bg: #ffffff;
+  --guaxi-panel-bg: #ffffff;
+  --guaxi-border: #d0d7de;
+  /* 别名：部分组件误用了 --guaxi-border-color（带 -color 后缀），此前从未定义，
+     导致回退到亮色 #e0e0e6，在暗色模式下形成亮边。这里补齐别名。 */
+  --guaxi-border-color: var(--guaxi-border);
+  --guaxi-text-primary: #1f2328;
+  --guaxi-text-secondary: #57606a;
+  /* 别名：部分组件（统计看板图表、影像工坊、首页面板等）误用了 --guaxi-text-color
+     与 --guaxi-hover-bg，这两个此前从未定义，于是回退到硬编码亮色，暗色模式下
+     文字几乎看不清、悬停/进度槽发白。这里补齐别名，统一跟随主题。 */
+  --guaxi-text-color: var(--guaxi-text-primary);
+  --guaxi-hover-bg: rgba(15, 23, 42, 0.05);
+  --guaxi-header-shadow: 0px 1px 2px rgba(0, 0, 0, 0.06);
+  --guaxi-syntax-base: #383a42;
+  --guaxi-syntax-comment: #6a737d;
+  --guaxi-syntax-string: #22863a;
+  --guaxi-syntax-keyword: #a626a4;
+  --guaxi-syntax-number: #986801;
+  --guaxi-syntax-boolean: #986801;
+  --guaxi-syntax-regexp: #007c89;
+  --guaxi-syntax-operator: #007c89;
+  --guaxi-syntax-punctuation: #383a42;
+  --guaxi-syntax-type: #6f42c1;
+  --guaxi-syntax-class: #6f42c1;
+  --guaxi-syntax-function: #0969da;
+  --guaxi-syntax-method: #007c89;
+  --guaxi-syntax-property: #007c89;
+  --guaxi-syntax-parameter: #9a6700;
+  --guaxi-syntax-variable: #0550ae;
+  --guaxi-syntax-constant: #986801;
+  --guaxi-syntax-namespace: #6f42c1;
+  --guaxi-syntax-macro: #a626a4;
+  --guaxi-syntax-tag: #e45649;
+  --guaxi-syntax-attribute: #9a6700;
+  --guaxi-syntax-builtin: #0969da;
+  --guaxi-syntax-decorator: #a626a4;
+
+  /* 设计说明（统一选中与搜索命中的观感）：
+     预览、分屏、探索者三个模式此前各写一套颜色，和编辑模式的 Monaco 也不一致。
+     这里集中定义，四处共用；改一处就能全局调。
+     - selection 只改背景、保留前景色，代码块的语法着色不会被抹平；
+     - 搜索命中沿用 Monaco 的橙色系（findMatchHighlight / findMatch）。 */
+  --guaxi-selection-bg: rgba(0, 122, 204, 0.26);
+  --guaxi-selection-strong-bg: rgba(0, 122, 204, 0.4);
+  --guaxi-search-hit-bg: rgba(234, 92, 0, 0.28);
+  --guaxi-search-hit-active-bg: rgba(234, 92, 0, 0.5);
+  --guaxi-search-hit-active-border: rgba(246, 154, 60, 0.9);
+
+  /* 设计说明（搜索面板三个标签页共用的一套行样式）：
+     文件 / 内容 / 摘录 以前各写一套悬停和选中效果——三种圆角、三种阴影、三种位移，
+     同一个手势在三个标签页里长得不一样。这里把"行"的状态收成一组变量，三处引用。 */
+  --sr-row-hover: rgba(15, 23, 42, 0.05);
+  --sr-row-active: rgba(24, 144, 255, 0.12);
+  --sr-row-accent: #1890ff;
+  --sr-rail: rgba(148, 163, 184, 0.28);
+  --sr-hairline: rgba(148, 163, 184, 0.18);
+  --sr-fs-group: 15px;
+  --sr-fs-body: 14px;
+  --sr-fs-meta: 12px;
+  --sr-pad-x: 8px;
+  --sr-scrollbar: 8px;
+  --sr-scrollbar-thumb: rgba(15, 23, 42, 0.26);
+  --sr-scrollbar-thumb-hover: rgba(15, 23, 42, 0.42);
+}
+
+:root[data-guaxi-theme='dark'] {
+  --guaxi-app-bg: #282c34;
+  --guaxi-header-bg: #21252b;
+  --guaxi-content-bg: #282c34;
+  --guaxi-panel-bg: #21252b;
+  --guaxi-border: #3e4451;
+  --guaxi-border-color: var(--guaxi-border);
+  --guaxi-text-primary: #d8e0eb;
+  --guaxi-text-secondary: #9da5b4;
+  --guaxi-text-color: var(--guaxi-text-primary);
+  --guaxi-hover-bg: rgba(255, 255, 255, 0.07);
+  --guaxi-header-shadow: 0px 2px 4px rgba(0, 0, 0, 0.35);
+  --guaxi-syntax-base: #abb2bf;
+  --guaxi-syntax-comment: #5c6370;
+  --guaxi-syntax-string: #98c379;
+  --guaxi-syntax-keyword: #c678dd;
+  --guaxi-syntax-number: #d19a66;
+  --guaxi-syntax-boolean: #d19a66;
+  --guaxi-syntax-regexp: #56b6c2;
+  --guaxi-syntax-operator: #56b6c2;
+  --guaxi-syntax-punctuation: #abb2bf;
+  --guaxi-syntax-type: #e5c07b;
+  --guaxi-syntax-class: #e5c07b;
+  --guaxi-syntax-function: #61afef;
+  --guaxi-syntax-method: #56b6c2;
+  --guaxi-syntax-property: #56b6c2;
+  --guaxi-syntax-parameter: #d19a66;
+  --guaxi-syntax-variable: #d7deea;
+  --guaxi-syntax-constant: #d19a66;
+  --guaxi-syntax-namespace: #e5c07b;
+  --guaxi-syntax-macro: #c678dd;
+  --guaxi-syntax-tag: #e06c75;
+  --guaxi-syntax-attribute: #d19a66;
+  --guaxi-syntax-builtin: #56b6c2;
+  --guaxi-syntax-decorator: #c678dd;
+
+  /* 暗色主题下选区与命中都要更亮一档，否则压在深色底上几乎看不出来。 */
+  --guaxi-selection-bg: rgba(58, 150, 221, 0.38);
+  --guaxi-selection-strong-bg: rgba(58, 150, 221, 0.52);
+  --guaxi-search-hit-bg: rgba(234, 92, 0, 0.36);
+  --guaxi-search-hit-active-bg: rgba(234, 92, 0, 0.62);
+  --guaxi-search-hit-active-border: rgba(246, 154, 60, 0.95);
+
+  /* 深色底上叠加同样的透明度会看不出来，悬停改用白色微光，选中把蓝调再抬一档。 */
+  --sr-row-hover: rgba(255, 255, 255, 0.06);
+  --sr-row-active: rgba(24, 144, 255, 0.2);
+  --sr-row-accent: #4c9df8;
+  --sr-rail: rgba(148, 163, 184, 0.28);
+  --sr-hairline: rgba(148, 163, 184, 0.16);
+  --sr-scrollbar-thumb: rgba(255, 255, 255, 0.2);
+  --sr-scrollbar-thumb-hover: rgba(255, 255, 255, 0.34);
+}
+
+html,
+body {
+  /*
+   * 根布局设计说明：
+   * 1. 应用内部的文件树、编辑器等面板各自管理滚动，浏览器文档本身不参与滚动。
+   * 2. 清除 body 默认的 8px 外边距，避免页面使用满高布局时产生额外高度。
+   * 3. 建立 html -> body -> #app 的完整高度链，页面组件可以稳定继承窗口高度。
+   */
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--guaxi-app-bg);
+  color: var(--guaxi-text-primary);
+}
+
+#app {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
