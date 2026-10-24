@@ -227,29 +227,41 @@ const isNearBottom = () => {
   return el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_THRESHOLD
 }
 
+/**
+ * 是否跟随底部。流式渲染时正文高度是异步长出来的：按文本长度滚到底之后，
+ * Markdown 渲染完成还会再把内容撑高，所以不能只看「此刻离底部多远」——
+ * 用户往回翻的那一刻记为不跟随，之后高度再怎么变都不拽他。
+ */
+const stickToBottom = ref(true)
+
 const scrollToBottom = (smooth = false) => {
   const el = scrollRef.value
   if (!el) return
   el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
 }
 
-const jumpToBottom = () => scrollToBottom(true)
+const jumpToBottom = () => {
+  stickToBottom.value = true
+  scrollToBottom(true)
+}
 
 const onScroll = () => {
-  showJump.value = !isNearBottom()
+  stickToBottom.value = isNearBottom()
+  showJump.value = !stickToBottom.value
 }
 
 // 只有本来就在底部时才自动跟随；用户往回翻的时候就不要再把他拽下去。
 watch(
   () => [messages.value.length, messages.value.at(-1)?.text?.length, session.value?.ledger?.length],
   () => {
-    if (isNearBottom()) nextTick(() => scrollToBottom(false))
+    if (stickToBottom.value) nextTick(() => scrollToBottom(false))
   },
 )
 
 // ───────────── 生命周期
 
 let offNotification = null
+let transcriptObserver = null
 
 onMounted(async () => {
   await store.ensureListening()
@@ -261,11 +273,24 @@ onMounted(async () => {
   } catch (err) {
     logger.warn('[agent] cognition status failed', { error: String(err?.message || err) })
   }
+  // 正文高度由 Markdown 渲染异步决定（渲染完成才撑高），只盯文本长度的滚动
+  // 追不上这一次增长；跟随状态下按实际高度补滚一次。
+  const inner = scrollRef.value?.querySelector('.transcript-inner')
+  if (inner && typeof ResizeObserver !== 'undefined') {
+    transcriptObserver = new ResizeObserver(() => {
+      if (stickToBottom.value) scrollToBottom(false)
+    })
+    transcriptObserver.observe(inner)
+  }
   nextTick(() => scrollToBottom(false))
 })
 
 onBeforeUnmount(() => {
   if (typeof offNotification === 'function') offNotification()
+  if (transcriptObserver) {
+    transcriptObserver.disconnect()
+    transcriptObserver = null
+  }
 })
 
 // ───────────── 审批

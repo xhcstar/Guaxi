@@ -72,7 +72,11 @@ function makeSession(seed = {}) {
     // 会话级沙箱与审批策略：线程建立时下发，之后随 thread 走。
     sandbox: String(seed.sandbox || 'workspace-write'),
     approvalPolicy: String(seed.approvalPolicy || 'on-request'),
-    messages: Array.isArray(seed.messages) ? seed.messages : [],
+    messages: (Array.isArray(seed.messages) ? seed.messages : []).map((m) =>
+      // 历史上 turn/completed 没有收起流式标记，旧会话里可能残留 streaming: true。
+      // 启动时一律按「已结束」恢复：本次进程没有在跑，任何一条都不可能是流式中。
+      m && m.streaming ? { ...m, streaming: false } : m,
+    ),
     ledger: Array.isArray(seed.ledger) ? seed.ledger : [],
     plan: Array.isArray(seed.plan) ? seed.plan : [],
     usage: seed.usage && typeof seed.usage === 'object' ? seed.usage : null,
@@ -355,7 +359,8 @@ export const useAgentWorkspaceStore = defineStore('agentWorkspace', {
           this.running = false
           this.currentTurnId = ''
           session.status = String(p?.turn?.status || 'idle')
-          this.persist()
+          // 回合结束时必须收起流式标记：正文组件靠它决定是否跑公式 / 图表的完整渲染。
+          this.finishStreamingMessages()
           break
 
         case 'item/started':
@@ -364,6 +369,10 @@ export const useAgentWorkspaceStore = defineStore('agentWorkspace', {
 
         case 'item/completed':
           this.upsertLedgerItem(p?.item, { completed: true })
+          // agentMessage 的 item 对应一条正文消息，完成即收起流式标记。
+          // 不靠 item.type 判断：协议里部分 item 在 completed 时不再带 type，
+          // 而 finishStreamingMessage 找不到对应消息时会自己跳过。
+          this.finishStreamingMessage(p?.item)
           break
 
         case 'item/agentMessage/delta':
@@ -631,6 +640,25 @@ export const useAgentWorkspaceStore = defineStore('agentWorkspace', {
         if (m.streaming) m.streaming = false
       }
       this.persist()
+    },
+
+    /**
+     * 单条 agentMessage 的 item 已完成：这条消息不会再增长，收起流式标记，
+     * 让正文组件立刻跑一次完整渲染（公式、图表都在那一次落定）。
+     *
+     * item.text 是引擎给的最终全文，比逐字累积的 delta 更可信（delta 可能丢包）；
+     * 但只在它不短于已累积内容时采用，免得某个协议版本给的是片段而把正文截短。
+     */
+    finishStreamingMessage(item) {
+      const s = this.currentSession
+      const id = `a-${String(item?.id || '')}`
+      if (!s || id === 'a-') return
+      const msg = s.messages.find((m) => m.id === id)
+      if (!msg) return
+      const finalText = String(item?.text || '')
+      if (finalText.length >= msg.text.length) msg.text = finalText
+      msg.streaming = false
+      this.touch()
     },
 
     appendSystemNote(text) {

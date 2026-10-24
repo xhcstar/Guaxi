@@ -1,6 +1,5 @@
 <template>
-  <div v-if="streaming" class="agent-md agent-md--plain">{{ text }}</div>
-  <div v-else class="agent-md" v-html="html" />
+  <div class="agent-md" v-html="html" />
 </template>
 
 <script setup>
@@ -11,10 +10,14 @@
  * 不另引一套解析器——工作台里的回答和编辑器里的文档必须长得一样，否则同一段内容
  * 在两个地方排版不同，用户会以为哪里出错了。
  *
- * 流式期间不渲染：每个 delta 都跑一遍完整管线（含对 8888 后端的请求）代价太高，
- * 而且未闭合的 ``` 围栏会让整段闪烁。流式时显示纯文本，结束后一次性渲染成 HTML。
+ * 流式期间也渲染，但做了三层收敛：
+ * 1. 按固定间隔重绘（120ms），不是每个 delta 都跑一遍完整管线；
+ * 2. 上一次渲染还没结束就不再起新的，期间的变化只记一个「待重绘」标记；
+ * 3. 流式阶段打开 `deferMathUntilComplete`，公式没闭合时先不交给 MathJax，
+ *    否则会出现一半渲染好、一半还是 LaTeX 源码的混合状态。
+ * 流式结束后再跑一次完整管线（公式、mermaid 都在这一次落定）。
  */
-import { ref, watch } from 'vue'
+import { onBeforeUnmount, ref, watch } from 'vue'
 import { renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker'
 import { createLogger } from '../../utils/logger'
 
@@ -26,35 +29,109 @@ const props = defineProps({
 const logger = createLogger('AgentMarkdown')
 const html = ref('')
 
-let renderSeq = 0
+/** 流式重绘的最小间隔：再快人眼也读不出来，只会白烧解析和公式排版。 */
+const STREAM_INTERVAL_MS = 120
 
-const render = async () => {
-  const source = props.text || ''
-  if (!source || props.streaming) {
-    html.value = ''
+let renderSeq = 0
+let timer = null
+let inFlight = false
+let trailing = false
+let lastRenderAt = 0
+
+const escapeHtml = (s) =>
+  String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+
+const startRender = async () => {
+  if (inFlight) {
+    trailing = true
     return
   }
+  const source = props.text || ''
+  if (!source) {
+    html.value = ''
+    lastRenderAt = Date.now()
+    return
+  }
+
+  const streaming = props.streaming
   const seq = ++renderSeq
+  inFlight = true
+  lastRenderAt = Date.now()
   try {
     const out = await renderMarkdown(source, {
       basePath: '',
-      mermaid: true,
+      // 流式阶段先不跑 mermaid：图只有围栏闭合后才有意义，而这期间每 120ms
+      // 重新排一次图既慢又会闪，留给流式结束后的完整渲染。
+      mermaid: !streaming,
       math: true,
       codeHighlight: true,
       chatPreprocess: true,
       includeNotes: false,
-      deferMathUntilComplete: false,
+      deferMathUntilComplete: streaming,
       smartInlineMathFromCode: true,
     })
-    // 渲染是异步的：期间文本又变了就丢弃这次结果，避免旧内容覆盖新内容。
     if (seq === renderSeq) html.value = String(out || '')
   } catch (err) {
     logger.warn('[agent] markdown render failed', { error: String(err) })
-    if (seq === renderSeq) html.value = ''
+    // 渲染失败也不能让用户对着空白等：退回转义后的原文。
+    if (seq === renderSeq) html.value = `<pre class="agent-md-fallback">${escapeHtml(source)}</pre>`
+  } finally {
+    inFlight = false
+    if (trailing) {
+      trailing = false
+      requestRender()
+    }
   }
 }
 
-watch(() => [props.text, props.streaming], render, { immediate: true })
+const requestRender = () => {
+  if (inFlight) {
+    trailing = true
+    return
+  }
+  const since = Date.now() - lastRenderAt
+  if (since >= STREAM_INTERVAL_MS) {
+    startRender()
+    return
+  }
+  if (!timer) {
+    timer = setTimeout(() => {
+      timer = null
+      startRender()
+    }, STREAM_INTERVAL_MS - since)
+  }
+}
+
+watch(
+  () => [props.text, props.streaming],
+  () => {
+    if (!props.streaming) {
+      // 收尾必须立刻渲染：这一次决定公式和图表最终长什么样，不能等节流窗口。
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
+      startRender()
+      return
+    }
+    requestRender()
+  },
+  { immediate: true },
+)
+
+onBeforeUnmount(() => {
+  if (timer) {
+    clearTimeout(timer)
+    timer = null
+  }
+  // 让还在路上的渲染结果作废，避免卸载后写进已销毁的 ref。
+  renderSeq += 1
+})
 </script>
 
 <style scoped>
@@ -65,9 +142,12 @@ watch(() => [props.text, props.streaming], render, { immediate: true })
   word-break: break-word;
 }
 
-.agent-md--plain {
+.agent-md :deep(.agent-md-fallback) {
+  margin: 0;
   white-space: pre-wrap;
   font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
 }
 
 .agent-md :deep(p) {
