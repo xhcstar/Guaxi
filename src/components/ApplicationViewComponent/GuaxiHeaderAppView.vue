@@ -2,7 +2,7 @@
   <div class="guaxi-header">
     <!-- 左侧：Logo 和 Icon -->
     <div class="header-left">
-      <n-icon size="20" class="header-icon" :component="PanelLeftContract24Regular" @click="toggleLeftSider"></n-icon>
+      <GuaxiSiderToggle view-key="app" side="left" />
       <div class="logo-text">Guaxi</div>
     </div>
 
@@ -10,37 +10,17 @@
     <div class="header-right">
       <n-icon class="header-icon" size="20" :component="TextBulletListLtr20Filled"></n-icon>
       <n-icon class="header-icon" size="20" :component="Screenshot24Regular"></n-icon>
-      <n-icon class="header-icon" size="20" :component="PanelRightContract24Regular" @click="toggleRightSider"></n-icon>
+      <GuaxiSiderToggle view-key="app" side="right" />
     </div>
   </div>
 </template>
 
 <script setup>
-import { computed } from "vue";
-import { useSiderStore } from '../../stores/useSiderStore'
-import { useSiderHotkeys } from '../../composables/useSiderHotkeys'
+import GuaxiSiderToggle from '../GuaxiSiderToggle.vue'
 import {
-  PanelLeftContract24Regular,
-  PanelRightContract24Regular,
   TextBulletListLtr20Filled,
-  Screenshot24Regular
+  Screenshot24Regular,
 } from '@vicons/fluent'
-
-const viewKey = 'app'
-const siderStore = useSiderStore();
-
-const toggleLeftSider = () => {
-  siderStore.toggleLeftSider(viewKey)
-};
-
-const toggleRightSider = () => {
-  siderStore.toggleRightSider(viewKey)
-};
-
-useSiderHotkeys({
-  toggleLeft: toggleLeftSider,
-  toggleRight: toggleRightSider,
-})
 </script>
 
 <style scoped>

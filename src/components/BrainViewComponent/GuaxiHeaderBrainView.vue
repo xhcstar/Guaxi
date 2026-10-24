@@ -2,7 +2,7 @@
   <div class="guaxi-header">
     <!-- 左侧：Logo 和 Icon -->
     <div class="header-left">
-      <n-icon size="20" class="header-icon" :component="PanelLeftContract24Regular" @click="toggleLeftSider"></n-icon>
+      <GuaxiSiderToggle view-key="brain" side="left" />
       <div class="logo-text">Guaxi</div>
     </div>
 
@@ -40,46 +40,28 @@
           <span class="mode-label">图谱</span>
         </button>
       </div>
-      <n-icon class="header-icon" size="20" :component="PanelRightContract24Regular" @click="toggleRightSider"></n-icon>
+      <GuaxiSiderToggle view-key="brain" side="right" />
     </div>
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted } from 'vue'
-import { useSiderStore } from '../../stores/useSiderStore'
-import { useSiderHotkeys } from '../../composables/useSiderHotkeys'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
 import { useCognitionStore } from '../../stores/cognitionStore'
+import GuaxiSiderToggle from '../GuaxiSiderToggle.vue'
 
 import {
-  PanelLeftContract24Regular,
-  PanelRightContract24Regular,
   BrainCircuit20Regular,
   Flowchart20Regular
 } from '@vicons/fluent'
 
-const viewKey = 'brain'
-const siderStore = useSiderStore();
 const kbStore = useKnowledgeBaseStore();
 const cog = useCognitionStore();
 
 const viewMode = computed(() => cog.viewMode)
 // 超过 99 就不再显示具体数字：徽标是"有多少待处理"的信号，不是精确计数。
 const badgeText = computed(() => (cog.openNudgeCount > 99 ? '99+' : String(cog.openNudgeCount)))
-
-const toggleLeftSider = () => {
-  siderStore.toggleLeftSider(viewKey)
-};
-
-const toggleRightSider = () => {
-  siderStore.toggleRightSider(viewKey)
-};
-
-useSiderHotkeys({
-  toggleLeft: toggleLeftSider,
-  toggleRight: toggleRightSider,
-})
 
 onMounted(() => {
   // 顶栏徽标要在进入页面时就准确，不能等内容区加载完。

@@ -8,6 +8,9 @@
         class="nav-icon"
         :class="{ active: activePath === item.path }"
         :data-nav-path="item.path"
+        :title="item.label"
+        :aria-label="item.label"
+        :aria-current="activePath === item.path ? 'page' : undefined"
         @click="navigateTo(item.path)"
       >
         <span class="nav-glyph" v-html="item.svg" />
@@ -21,6 +24,9 @@
         class="nav-icon"
         :class="{ active: activePath === settingItem.path }"
         :data-nav-path="settingItem.path"
+        :title="settingItem.label"
+        :aria-label="settingItem.label"
+        :aria-current="activePath === settingItem.path ? 'page' : undefined"
         @click="navigateTo(settingItem.path)"
       >
         <span class="nav-glyph" v-html="settingItem.svg" />
@@ -34,16 +40,16 @@
  * 全局左侧导航图标列（44px 宽）。
  *
  * 背景：这条列此前在 Home / Chat / Brain / Repo / Search / Setting / Statistics /
- * Application / Excalidraw 等 11 个页面里各复制了一份，图形与样式完全一致。
- * 新增页面时如果忘了复制，界面就会少一列导航、并且再也回不去——这正是 Agent 工作台
- * 第一次上线时发生的事。所以这里把它提成唯一实现，新页面直接用。
+ * Application / Excalidraw 等页面的 `GuaxiSidebar*View.vue` 里各复制了一份。
+ * 复制件之间慢慢走样：有的把 SVG 的所有 fill / stroke 强制刷成 currentColor，
+ * 多色图标被压成实心色块，和这里的观感对不上；新增页面时如果忘了复制，
+ * 界面还会少一列导航、并且再也回不去。
  *
- * 与各页面里的 `GuaxiSidebar*View.vue` 的关系：
- * 那些组件 = 这条图标列 + 各自的右侧内容面板。它们没有共用，`GuaxiMainLayout` 只管分派页面。
- * 工作台没有右侧面板，所以只需要这条列；其余页面暂时维持原样，避免一次改动 11 个文件。
+ * 现在各页面的侧栏都直接用这个组件，图标、间距、悬停与高亮只有一处实现。
+ * 各页面自己的 `GuaxiSidebar*View.vue` 只负责图标列右侧的内容面板。
  *
- * 图标沿用原来那份 SVG 字符串：这些路径是从各页面复制过来的图形资产，
- * 换成图标库会直接改变观感，不属于本次修复的范围。
+ * 图标沿用原来那份 SVG 字符串：这些路径是沿用的图形资产，
+ * 换成图标库会直接改变观感，不属于本次统一的范围。
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { NIcon } from 'naive-ui'

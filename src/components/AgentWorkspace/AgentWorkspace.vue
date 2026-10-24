@@ -1,6 +1,14 @@
 <template>
-  <div class="workspace-root">
+  <div
+    class="workspace-root"
+    :class="{
+      'is-rail-collapsed': railCollapsed,
+      'is-instrument-collapsed': instrumentCollapsed,
+    }"
+  >
     <AgentSessionRail
+      v-if="!railCollapsed"
+      class="workspace-rail"
       :sessions="store.sessions"
       :current-key="store.currentKey"
       :running-key="runningKey"
@@ -108,6 +116,7 @@
     </main>
 
     <AgentInstrument
+      v-if="!instrumentCollapsed"
       class="workspace-instrument"
       :running="store.running"
       :approvals="store.approvals"
@@ -154,6 +163,7 @@ import AgentMarkdown from './AgentMarkdown.vue'
 import { AGENT_MODES, useAgentWorkspaceStore } from '../../stores/agentWorkspaceStore'
 import { useCognitionStore } from '../../stores/cognitionStore'
 import { useDiffCompareStore } from '../../stores/diffCompareStore'
+import { useSiderStore } from '../../stores/useSiderStore'
 import { createLogger } from '../../utils/logger'
 
 const logger = createLogger('AgentWorkspace')
@@ -161,6 +171,10 @@ const message = useMessage()
 const store = useAgentWorkspaceStore()
 const cognition = useCognitionStore()
 const diffStore = useDiffCompareStore()
+const siderStore = useSiderStore()
+
+const railCollapsed = computed(() => siderStore.isLeftSiderCollapsed.chat === true)
+const instrumentCollapsed = computed(() => siderStore.isRightSiderCollapsed.chat === true)
 
 const scrollRef = ref(null)
 const showApproval = ref(false)
@@ -369,13 +383,24 @@ const openDiff = () => {
 <style scoped>
 .workspace-root {
   display: grid;
-  /* 会话栏固定，转录弹性，仪表固定。仪表再宽也不挤占正文。 */
-  grid-template-columns: 196px minmax(0, 1fr) 268px;
+  /* 会话栏固定，转录弹性，仪表固定。仪表再宽也不挤占正文。
+     两侧宽度放在变量里：收起时只改变量，窄屏断点仍能整体换一套宽度。 */
+  --rail-width: 196px;
+  --instrument-width: 268px;
+  grid-template-columns: var(--rail-width) minmax(0, 1fr) var(--instrument-width);
   height: 100%;
   min-height: 0;
   overflow: hidden;
   background: var(--guaxi-content-bg);
   color: var(--guaxi-text-primary);
+}
+
+.workspace-root.is-rail-collapsed {
+  --rail-width: 0px;
+}
+
+.workspace-root.is-instrument-collapsed {
+  --instrument-width: 0px;
 }
 
 .workspace-main {
@@ -385,6 +410,17 @@ const openDiff = () => {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  /* 收起左右栏时对应轨道会被压到 0，这里按列固定位置：
+     否则只剩中间一栏时，它会被自动排进第一列（宽度 0）。 */
+  grid-column: 2;
+}
+
+.workspace-rail {
+  grid-column: 1;
+}
+
+.workspace-instrument {
+  grid-column: 3;
 }
 
 .workspace-head {
@@ -607,14 +643,15 @@ const openDiff = () => {
 
 @media (max-width: 1200px) {
   .workspace-root {
-    grid-template-columns: 170px minmax(0, 1fr) 232px;
+    --rail-width: 170px;
+    --instrument-width: 232px;
   }
 }
 
 @media (max-width: 980px) {
   /* 窄屏先收起仪表：正文比仪表重要。 */
   .workspace-root {
-    grid-template-columns: 170px minmax(0, 1fr);
+    grid-template-columns: var(--rail-width) minmax(0, 1fr);
   }
 
   .workspace-instrument {

@@ -3,17 +3,7 @@
     <div class="header-content">
       <!-- 左侧品牌和菜单 -->
       <div class="header-left">
-        <n-tooltip placement="bottom" trigger="hover">
-          <template #trigger>
-            <n-icon
-              size="20"
-              class="header-icon"
-              :component="PanelLeftContract24Regular"
-              @click="toggleLeftSidebar"
-            />
-          </template>
-          切换左侧边栏
-        </n-tooltip>
+        <GuaxiSiderToggle view-key="search" side="left" />
         <div class="logo">
           <span class="logo-text">KnowGuaxi</span>
         </div>
@@ -163,8 +153,7 @@ import { createLogger } from '../../utils/logger'
 import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useFlipboardStore } from '../../stores/flipboardStore.js'
-import { useSiderStore } from '../../stores/useSiderStore'
-import { PanelLeftContract24Regular } from '@vicons/fluent'
+import GuaxiSiderToggle from '../GuaxiSiderToggle.vue'
 import {
   SearchOutline,
   GridOutline,
@@ -191,9 +180,7 @@ const PauseIcon = PauseOutline
 const LoginIcon = LogInOutline
 
 const store = useFlipboardStore()
-const siderStore = useSiderStore()
 const message = useMessage()
-const viewKey = 'search'
 
 // 后台抓取总开关
 const scrapingEnabled = computed(() => store.scrapingEnabled.value)
@@ -329,10 +316,6 @@ const refreshHealth = async () => {
   } catch (e) {
     logger.error('FlipboardHeader: refreshHealth failed', e)
   }
-}
-
-const toggleLeftSidebar = () => {
-  siderStore.toggleLeftSider(viewKey)
 }
 </script>
 

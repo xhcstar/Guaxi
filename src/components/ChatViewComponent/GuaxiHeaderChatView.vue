@@ -2,7 +2,7 @@
   <div class="guaxi-header">
     <!-- 左侧：Logo 和 Icon -->
     <div class="header-left">
-      <n-icon size="20" class="header-icon" :component="PanelLeftContract24Regular" @click="toggleLeftSider"></n-icon>
+      <GuaxiSiderToggle view-key="chat" side="left" />
       <div class="logo-text">Guaxi</div>
       <ChatModelSelector class="model-selector" />
     </div>
@@ -21,7 +21,7 @@
     <!-- 右侧：功能图标 -->
     <div class="header-right">
       <n-icon class="header-icon" size="20" :component="Open20Regular" @click="openWebModel"></n-icon>
-      <n-icon class="header-icon" size="20" :component="PanelRightContract24Regular" @click="toggleRightSider"></n-icon>
+      <GuaxiSiderToggle view-key="chat" side="right" />
     </div>
   </div>
 </template>
@@ -30,14 +30,11 @@
 import { createLogger } from '../../utils/logger'
 import { useMessage } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
-import { useSiderStore } from '../../stores/useSiderStore'
 import { useChatStore } from '../../stores/chatStore'
 import { computed } from 'vue'
-import { useSiderHotkeys } from '../../composables/useSiderHotkeys'
 import ChatModelSelector from "./ChatModelSelector.vue"
+import GuaxiSiderToggle from '../GuaxiSiderToggle.vue'
 import {
-  PanelLeftContract24Regular,
-  PanelRightContract24Regular,
   Search20Filled,
   TextBulletListLtr20Filled,
   Screenshot24Regular,
@@ -46,8 +43,6 @@ import {
 } from '@vicons/fluent'
 
 const logger = createLogger('GuaxiHeaderChatView')
-const viewKey = 'chat'
-const siderStore = useSiderStore();
 const chatStore = useChatStore();
 const message = useMessage();
 const chatMessageSearchQuery = computed({
@@ -55,19 +50,6 @@ const chatMessageSearchQuery = computed({
   set: (v) => chatStore.setChatMessageSearchQuery(v),
 })
 
-
-const toggleLeftSider = () => {
-  siderStore.toggleLeftSider(viewKey)
-};
-
-const toggleRightSider = () => {
-  siderStore.toggleRightSider(viewKey)
-};
-
-useSiderHotkeys({
-  toggleLeft: toggleLeftSider,
-  toggleRight: toggleRightSider,
-})
 
 const showSearchPlaceholder = () => {
   logger.info('搜索框获得焦点 - 占位功能');

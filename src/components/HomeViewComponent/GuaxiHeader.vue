@@ -2,12 +2,7 @@
   <div class="guaxi-header">
     <!-- 左侧：Logo 和 Icon -->
     <div class="header-left">
-      <n-tooltip placement="bottom" trigger="hover">
-        <template #trigger>
-          <n-icon size="20" class="header-icon" :component="PanelLeftContract24Regular" @click="toggleLeftSider"></n-icon>
-        </template>
-        切换左侧边栏
-      </n-tooltip>
+      <GuaxiSiderToggle view-key="home" side="left" />
       <div class="logo-text">Guaxi</div>
 
       <!--
@@ -189,12 +184,7 @@
         {{ headerShortcutTooltip('横向分屏', 'splitHorizontal') }}
       </n-tooltip>
 
-      <n-tooltip placement="bottom" trigger="hover">
-        <template #trigger>
-          <n-icon class="header-icon" size="20" :component="PanelRightContract24Regular" @click="toggleRightSider"></n-icon>
-        </template>
-        切换右侧边栏
-      </n-tooltip>
+      <GuaxiSiderToggle view-key="home" side="right" />
 
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
@@ -460,7 +450,7 @@ import { parseSearchQuery, matchesPathFilters } from '../../utils/searchQuerySyn
 import { computed, ref, h, onMounted, onUnmounted, nextTick, watch } from "vue";
 import { NDropdown, NIcon, NTooltip } from 'naive-ui'
 import { useSiderStore } from '../../stores/useSiderStore'
-import { useSiderHotkeys } from '../../composables/useSiderHotkeys'
+import GuaxiSiderToggle from '../GuaxiSiderToggle.vue'
 import { useOnboardingTour } from '../../composables/useOnboardingTour'
 import { GUAXI_SHORTCUTS, shortcutTooltip, useGuaxiHotkeys } from '../../composables/useGuaxiHotkeys'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
@@ -498,8 +488,6 @@ import {
   Box20Regular,
   Folder20Regular,
   TaskListSquareLtr20Regular,
-  PanelLeftContract24Regular,
-  PanelRightContract24Regular,
   ArrowMinimizeVertical20Filled,
   ArrowMaximizeVertical20Filled
 } from '@vicons/fluent'
@@ -685,18 +673,6 @@ const isEditorChromeShown = computed(() => siderStore.isEditorChromeShown(viewKe
 const toggleEditorChrome = () => {
   siderStore.toggleEditorChrome(viewKey)
 }
-
-const toggleLeftSider = () => {
-  siderStore.toggleLeftSider(viewKey)
-}
-const toggleRightSider = () => {
-  siderStore.toggleRightSider(viewKey)
-}
-
-useSiderHotkeys({
-  toggleLeft: toggleLeftSider,
-  toggleRight: toggleRightSider,
-})
 
 function openOutlinePanel() {
   const isCollapsed = siderStore.isRightSiderCollapsed?.[viewKey]

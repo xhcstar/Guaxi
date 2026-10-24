@@ -2,7 +2,7 @@
   <div class="guaxi-header">
     <!-- 左侧：Logo 和 Icon -->
     <div class="header-left">
-      <n-icon size="20" class="header-icon" :component="PanelLeftContract24Regular" @click="toggleLeftSider"></n-icon>
+      <GuaxiSiderToggle view-key="repo" side="left" />
       <div class="logo-text">Guaxi</div>
     </div>
 
@@ -22,7 +22,7 @@
     <div class="header-right">
       <n-icon class="header-icon" size="20" :component="Share24Regular" title="资料库分享与发布"
         @click="openLibrarySite"></n-icon>
-      <n-icon class="header-icon" size="20" :component="PanelRightContract24Regular" @click="toggleRightSider"></n-icon>
+      <GuaxiSiderToggle view-key="repo" side="right" />
     </div>
   </div>
 
@@ -36,19 +36,16 @@
 import { createLogger } from '../../utils/logger'
 import { computed, ref, h } from "vue";
 import { NIcon, NDropdown, useMessage } from 'naive-ui'
-import { useSiderStore } from '../../stores/useSiderStore'
-import { useSiderHotkeys } from '../../composables/useSiderHotkeys'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { repoStore } from '../../stores/repoStore'
 import { useSearch } from './composables/useSearch.js'
+import GuaxiSiderToggle from '../GuaxiSiderToggle.vue'
 import {
   Screenshot24Regular,
   Search32Filled,
   TextBulletListLtr20Filled,
   DocumentSearch20Filled,
   DocumentSearch24Regular,
-  PanelLeftContract24Regular,
-  PanelRightContract24Regular,
   Share24Regular,
 } from '@vicons/fluent'
 import { invoke } from '@tauri-apps/api/core'
@@ -57,21 +54,12 @@ import { useRightSiderStore } from '../../stores/rightSiderStore'
 
 const logger = createLogger('GuaxiHeaderRepoView')
 const rightSiderStore = useRightSiderStore()
-const viewKey = 'repo'
-const siderStore = useSiderStore();
 const fileTreeStore = useFileTreeStore()
 const store = repoStore()
 const message = useMessage()
 const { handleSearch: handleTableSearch } = useSearch({ store, message })
 const searchInputRef = ref(null)
 const searchType = ref('keyword')
-const toggleLeftSider = () => {
-  siderStore.toggleLeftSider(viewKey)
-};
-
-const toggleRightSider = () => {
-  siderStore.toggleRightSider(viewKey)
-};
 
 // 资料库 · 分享与发布:在独立窗口打开库网站(展示文件库内容,支持本地阅读器查看/下载/联邦分享)。
 async function openLibrarySite() {
@@ -83,11 +71,6 @@ async function openLibrarySite() {
     message.error('打开资料库窗口失败')
   }
 }
-
-useSiderHotkeys({
-  toggleLeft: toggleLeftSider,
-  toggleRight: toggleRightSider,
-})
 
 async function CaptureScreenshot() {
   try {
