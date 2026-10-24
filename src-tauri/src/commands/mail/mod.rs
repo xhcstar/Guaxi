@@ -2187,6 +2187,12 @@ pub async fn mail_oauth_poll(
     client_id: Option<String>,
 ) -> Result<(), String> {
     ensure_init(&app)?;
+    let account_id = account_id.trim().to_string();
+    // 令牌必须挂在真实账户上。前端如果还没拿到保存后的 id（例如设备码流程里
+    // 先轮询后落库），这里宁可直接失败，也不要把令牌写到一个空 id 的凭据条目里——
+    // 那会让用户看到「账户已存在，但永远提示未授权」。
+    let mut account = store::get_account(&account_id)?
+        .ok_or_else(|| "账户还没有保存完成，无法写入授权令牌".to_string())?;
     let provider_info = oauth::provider_for(&provider)
         .ok_or_else(|| format!("不支持的 OAuth 服务商: {provider}"))?;
     let tokens = tauri::async_runtime::spawn_blocking(move || {
@@ -2202,13 +2208,11 @@ pub async fn mail_oauth_poll(
 
     oauth::save_tokens(&account_id, &tokens)?;
     // 账户开启 OAuth2 并把提供商标记好。
-    if let Ok(Some(mut account)) = store::get_account(&account_id) {
-        account.auth_kind = "oauth2".to_string();
-        account.oauth_provider = provider;
-        account.oauth_expires = tokens.expires_at;
-        store::upsert_account(&account)?;
-        pool::invalidate(&account_id);
-    }
+    account.auth_kind = "oauth2".to_string();
+    account.oauth_provider = provider;
+    account.oauth_expires = tokens.expires_at;
+    store::upsert_account(&account)?;
+    pool::invalidate(&account_id);
     Ok(())
 }
 

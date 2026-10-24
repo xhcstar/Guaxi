@@ -83,7 +83,9 @@
                 <div class="mail-oauth-state">
                   <template v-if="oauthState === 'done'">✓ 已授权</template>
                   <template v-else-if="oauthState === 'waiting'">等待你在浏览器里输入代码…</template>
-                  <template v-else-if="oauthState === 'error'" class="bad">{{ oauthError }}</template>
+                  <template v-else-if="oauthState === 'error'">
+                    <span class="bad">{{ oauthError }}</span>
+                  </template>
                   <template v-else>未授权</template>
                 </div>
               </div>
@@ -95,8 +97,11 @@
               <div class="mail-device-code">
                 <code>{{ deviceCode.userCode }}</code>
                 <button class="mail-btn" @click="openVerificationUrl">打开授权页</button>
-                <button class="mail-btn" :disabled="oauthState === 'waiting'" @click="pollAuth">
-                  我已经授权了
+                <button class="mail-btn" :disabled="polling" @click="pollAuth">
+                  {{ polling ? '等待授权…' : '我已经授权了' }}
+                </button>
+                <button v-if="oauthState === 'error'" class="mail-btn" @click="restartAuth">
+                  重新发起授权
                 </button>
               </div>
               <p class="mail-hint" style="margin: 4px 0 0">{{ deviceCode.verificationUrl }}</p>
@@ -270,7 +275,13 @@
           </button>
           <span class="spacer"></span>
           <button class="mail-btn" @click="cancel">取消</button>
-          <button class="mail-btn is-primary" :disabled="!canSave" @click="save">保存并同步</button>
+          <button
+            class="mail-btn is-primary"
+            :disabled="!canSave || saving || checkingAuth"
+            @click="save()"
+          >
+            {{ saving ? '保存中…' : checkingAuth ? '检查授权…' : '保存并同步' }}
+          </button>
         </template>
         <template v-else>
           <span class="spacer"></span>
@@ -295,6 +306,13 @@ const props = defineProps({
   /** OAuth 三步：发起设备码 → 轮询换令牌 → 查状态。由 store 提供。 */
   oauthStartFn: { type: Function, default: null },
   oauthPollFn: { type: Function, default: null },
+  /** 查询账户当前是否已经拿到 OAuth 令牌（编辑既有账户时决定是否要求重新授权）。 */
+  oauthStatusFn: { type: Function, default: null },
+  /**
+   * 真正落库的保存函数。必须是函数 prop 而不是 emit：设备码流程要在保存后
+   * 拿到账户 id，再把令牌挂到这个 id 上；Vue 的 emit 不回传返回值。
+   */
+  saveFn: { type: Function, default: null },
 })
 const emit = defineEmits(['close', 'saved', 'deleted', 'select'])
 
@@ -310,6 +328,10 @@ const presets = [
 
 const editing = ref(false)
 const testing = ref(false)
+const saving = ref(false)
+const polling = ref(false)
+/** 编辑 OAuth 账户时正在查询令牌状态：查完再允许保存，避免误判成「未授权」。 */
+const checkingAuth = ref(false)
 const probeResult = ref(null)
 const secretStored = ref(false)
 const customMode = ref(false)
@@ -319,6 +341,10 @@ const bypassText = ref('')
 const oauthState = ref('idle')
 const oauthError = ref('')
 const deviceCode = ref(null)
+/** 这个账户还没有可用的令牌：保存并关闭前必须先完成授权。 */
+const awaitingAuth = ref(false)
+/** 落库时的服务商：改了服务商就必须重新授权，旧令牌对新服务商无效。 */
+const savedProvider = ref('')
 
 const blank = () => ({
   id: '',
@@ -346,6 +372,19 @@ const blank = () => ({
 })
 
 const form = reactive(blank())
+
+watch(
+  () => form.oauthProvider,
+  (provider) => {
+    if (form.id && provider !== savedProvider.value) awaitingAuth.value = true
+    // 换服务商后旧的设备码不再有效，否则「我已经授权了」会拿旧码去新端点轮询。
+    if (deviceCode.value) {
+      deviceCode.value = null
+      oauthState.value = 'idle'
+      oauthError.value = ''
+    }
+  },
+)
 
 watch(overrideProxy, (on) => {
   if (!on) return
@@ -394,7 +433,12 @@ function startNew() {
   Object.assign(form, blank())
   editing.value = true
   oauthState.value = 'idle'
+  oauthError.value = ''
+  awaitingAuth.value = false
+  savedProvider.value = ''
   deviceCode.value = null
+  polling.value = false
+  checkingAuth.value = false
   probeResult.value = null
   secretStored.value = false
   overrideProxy.value = false
@@ -403,6 +447,7 @@ function startNew() {
 
 function startEdit(account) {
   customMode.value = false
+  checkingAuth.value = false
   Object.assign(form, blank(), {
     ...account,
     proxy: account.proxy ? { ...account.proxy } : { mode: 'system', url: '', bypass: [] },
@@ -425,6 +470,29 @@ function startEdit(account) {
   overrideProxy.value = Boolean(account.proxy)
   bypassText.value = (account.proxy?.bypass || []).join(', ')
   hasSecret(account.id).then((v) => (secretStored.value = v))
+  // OAuth 账户打开时先问一下令牌还在不在：没有令牌就要求先授权再保存，
+  // 否则保存出去的又是一个「永远提示未授权」的账户。
+  // 先按「需要授权」处理，查到令牌有效再放开——宁可多拦一次，也别放过。
+  awaitingAuth.value = account.authKind === 'oauth2'
+  savedProvider.value = account.oauthProvider || ''
+  oauthState.value = 'idle'
+  oauthError.value = ''
+  deviceCode.value = null
+  if (account.authKind === 'oauth2' && props.oauthStatusFn) {
+    checkingAuth.value = true
+    props
+      .oauthStatusFn(account.id)
+      .then((status) => {
+        if (form.id !== account.id) return
+        awaitingAuth.value = !status?.connected
+        // 令牌还在就把状态直接显示成「已授权」，避免每次打开都像要重新登录。
+        if (status?.connected) oauthState.value = 'done'
+      })
+      .catch(() => {})
+      .finally(() => {
+        checkingAuth.value = false
+      })
+  }
 }
 
 function cancel() {
@@ -455,6 +523,11 @@ function applyPreset(preset) {
 
 async function startAuth() {
   if (!props.oauthStartFn) return
+  if (!canSave.value) {
+    oauthState.value = 'error'
+    oauthError.value = '请先填写邮箱地址、IMAP 与 SMTP 服务器，再开始授权'
+    return
+  }
   oauthState.value = 'starting'
   oauthError.value = ''
   try {
@@ -468,20 +541,33 @@ async function startAuth() {
   }
 }
 
+/** 设备码过期 / 授权出错后重新发起：必须换一个新的 device code。 */
+function restartAuth() {
+  deviceCode.value = null
+  oauthState.value = 'idle'
+  oauthError.value = ''
+}
+
 async function pollAuth() {
-  if (!deviceCode.value || !props.oauthPollFn) return
+  if (!deviceCode.value || !props.oauthPollFn || polling.value) return
+  polling.value = true
   oauthState.value = 'waiting'
   oauthError.value = ''
   try {
-    // 先确保账户已经存在于库里：令牌要挂在账户 id 上。
-    if (!form.id) {
-      await save(false)
-    }
+    // 令牌要挂在账户 id 上，所以先确保账户已经在库里。
+    // save() 会把返回的 id 写回 form.id——这是重试时不再重复建账户的关键。
+    // 先把 awaitingAuth 置位：保存时据此跳过「拉文件夹」，避免没令牌就报未授权。
+    awaitingAuth.value = true
+    if (!form.id) await save(false)
+    if (!form.id) throw new Error('账户还没有保存完成，无法写入授权令牌')
     await props.oauthPollFn(form.id, form.oauthProvider, deviceCode.value)
+    awaitingAuth.value = false
     oauthState.value = 'done'
   } catch (error) {
     oauthState.value = 'error'
     oauthError.value = String(error?.message || error)
+  } finally {
+    polling.value = false
   }
 }
 
@@ -523,12 +609,47 @@ async function test() {
 }
 
 async function save(closeAfter = true) {
-  const account = {
-    ...form,
-    proxy: overrideProxy.value ? { ...form.proxy } : null,
+  if (saving.value) return null
+  if (!canSave.value) {
+    if (!closeAfter) throw new Error('请先填写邮箱地址、IMAP 与 SMTP 服务器')
+    return null
   }
-  delete account.secret
-  emit('saved', { account, secret: form.secret, closeAfter })
+  // OAuth2 账户还没有可用令牌时，保存只会得到一个「永远提示未授权」的账户。
+  // 授权已经完成（oauthState === 'done'）时放行；编辑一个令牌仍然有效的
+  // 既有账户时 awaitingAuth 为 false，也不会被拦。
+  if (
+    closeAfter &&
+    form.authKind === 'oauth2' &&
+    (awaitingAuth.value || !form.id) &&
+    oauthState.value !== 'done'
+  ) {
+    oauthState.value = 'error'
+    oauthError.value = '还没有完成授权：请先输入设备码完成授权，或把认证方式改回密码'
+    return null
+  }
+  saving.value = true
+  try {
+    const account = {
+      ...form,
+      proxy: overrideProxy.value ? { ...form.proxy } : null,
+    }
+    delete account.secret
+    if (!props.saveFn) {
+      emit('saved', { account, secret: form.secret, closeAfter })
+      return null
+    }
+    const saved = await props.saveFn(account, form.secret, {
+      closeAfter,
+      oauthPending: form.authKind === 'oauth2' && (awaitingAuth.value || !form.id),
+    })
+    // 记住服务端分配的 id：设备码轮询重试、后续再点保存都用它，不会再建新账户。
+    if (saved?.id) form.id = saved.id
+    savedProvider.value = form.oauthProvider || ''
+    if (closeAfter) emit('close')
+    return saved
+  } finally {
+    saving.value = false
+  }
 }
 
 function remove(account) {

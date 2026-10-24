@@ -361,31 +361,37 @@ pub fn list_folders(account: &Account, password: &str) -> Result<Vec<MailFolder>
     // 文件夹发现是一次性重活，走短连接：它自己会 LOGOUT，
     // 不必占用请求连接（否则同步中途发现文件夹会打断正在进行的 FETCH）。
     let mut session = login(account, password)?;
-    let names = session
-        .list(None, Some("*"))
-        .map_err(|e| format!("列出文件夹失败: {e}"))?;
-
-    let mut folders: Vec<MailFolder> = Vec::new();
-    for name in names.iter() {
-        let selectable = !name
-            .attributes()
-            .iter()
-            .any(|a| matches!(a, NameAttribute::NoSelect));
-        let raw_name = name.name().to_string();
-        let mut role = detect_role(&raw_name, name.attributes());
-        // 用户在账户里手工映射过的角色优先（键是服务器名，值是角色名）。
-        if let Some(role_name) = account.folder_map.get(&raw_name) {
-            role = FolderRole::parse(role_name.trim());
-        }
-
-        let (unread, total) = if selectable {
-            match session.status(&raw_name, "(MESSAGES UNSEEN)") {
-                Ok(status) => (status.unseen.unwrap_or(0), status.exists),
-                Err(e) => {
-                    debug!(folder = %raw_name, error = %e, "mail: STATUS 失败，按 0 处理");
-                    (0, 0)
-                }
+    // 先把 LIST 结果拷成自有数据：后面 STATUS 出错要重连，不能再借着 `names` 借用旧会话。
+    let mut listed: Vec<(String, Option<String>, bool, FolderRole)> = Vec::new();
+    {
+        let names = session
+            .list(None, Some("*"))
+            .map_err(|e| format!("列出文件夹失败: {e}"))?;
+        for name in names.iter() {
+            let selectable = !name
+                .attributes()
+                .iter()
+                .any(|a| matches!(a, NameAttribute::NoSelect));
+            let raw_name = name.name().to_string();
+            let mut role = detect_role(&raw_name, name.attributes());
+            // 用户在账户里手工映射过的角色优先（键是服务器名，值是角色名）。
+            if let Some(role_name) = account.folder_map.get(&raw_name) {
+                role = FolderRole::parse(role_name.trim());
             }
+            listed.push((
+                raw_name,
+                name.delimiter().map(|d| d.to_string()),
+                selectable,
+                role,
+            ));
+        }
+    }
+
+    let mut statuses = StatusReader::new(session, account, password);
+    let mut folders: Vec<MailFolder> = Vec::new();
+    for (raw_name, delimiter, selectable, role) in listed {
+        let (unread, total) = if selectable {
+            statuses.counts(&raw_name)
         } else {
             (0, 0)
         };
@@ -394,7 +400,7 @@ pub fn list_folders(account: &Account, password: &str) -> Result<Vec<MailFolder>
             account_id: account.id.clone(),
             display_name: utf7::decode(&raw_name),
             name: raw_name,
-            delimiter: name.delimiter().map(|d| d.to_string()),
+            delimiter,
             role,
             unread,
             total,
@@ -439,8 +445,141 @@ pub fn list_folders(account: &Account, password: &str) -> Result<Vec<MailFolder>
             .cmp(&role_order(b.role))
             .then_with(|| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()))
     });
-    let _ = session.logout();
+    let _ = statuses.logout();
     Ok(folders)
+}
+
+/// STATUS 的容错读取器。
+///
+/// 为什么不直接用 `Session::status`：crate 要求响应行完全按 RFC 文本解析。
+/// QQ 邮箱会用 GBK 回显中文文件夹名（如 `其他文件夹`），解析失败时它已经读掉了
+/// 那行响应，**却没有读掉这条命令的 tagged 完成行**；下一条 STATUS 会把上一条的
+/// 完成行当自己的，撞上 crate 内部的 `assert_eq!(tag, match_tag)` 并 panic
+/// （前端看到的就是 `task ... panicked with message "assertion left == right failed"`）。
+///
+/// 这里的做法：
+/// 1. 自己发 STATUS，只用宽松的数字扫描取 MESSAGES / UNSEEN；
+/// 2. 任何可能留下残留响应的错误都立刻重连，绝不把未读完的响应带到下一条命令。
+struct StatusReader<'a> {
+    account: &'a Account,
+    password: &'a str,
+    session: Option<ImapSession>,
+}
+
+impl<'a> StatusReader<'a> {
+    fn new(session: ImapSession, account: &'a Account, password: &'a str) -> Self {
+        Self {
+            account,
+            password,
+            session: Some(session),
+        }
+    }
+
+    /// 返回 `(未读数, 总数)`；拿不到时按 0 处理——未读角标不该阻断文件夹列表。
+    fn counts(&mut self, mailbox: &str) -> (u32, u32) {
+        let Some(session) = self.session.as_mut() else {
+            return (0, 0);
+        };
+        let Some(quoted) = quote_mailbox(mailbox) else {
+            return (0, 0);
+        };
+        let command = format!("STATUS {quoted} (MESSAGES UNSEEN)");
+        match session.run_command_and_read_response(&command) {
+            Ok(raw) => parse_status_counts(&raw),
+            Err(error) => {
+                let parsed = match &error {
+                    imap::Error::Parse(imap::error::ParseError::Invalid(bytes)) => {
+                        // 原始行可能含非 UTF-8（GBK）字节，lossy 只用于日志。
+                        debug!(
+                            folder = %mailbox,
+                            response = %String::from_utf8_lossy(bytes),
+                            "mail: STATUS 响应不是合法 IMAP 文本，改用宽松解析"
+                        );
+                        Some(parse_status_counts(bytes))
+                    }
+                    _ => None,
+                };
+                // NO/BAD 已经是一条完整应答；VALIDATE 压根没发出去。
+                // 其余错误（解析失败、IO、连接断开）都可能残留半条响应，必须换连接。
+                let poisoned = !matches!(
+                    &error,
+                    imap::Error::No(_) | imap::Error::Bad(_) | imap::Error::Validate(_)
+                );
+                if poisoned {
+                    debug!(folder = %mailbox, error = %error, "mail: STATUS 通道已不可靠，重连");
+                    self.session = match login(self.account, self.password) {
+                        Ok(session) => Some(session),
+                        Err(relogin) => {
+                            debug!(error = %relogin, "mail: STATUS 重连失败，后续文件夹按 0 处理");
+                            None
+                        }
+                    };
+                }
+                parsed.unwrap_or((0, 0))
+            }
+        }
+    }
+
+    fn logout(&mut self) {
+        if let Some(mut session) = self.session.take() {
+            let _ = session.logout();
+        }
+    }
+}
+
+/// `STATUS` 的邮箱名一律加引号并转义，避免名字里的空格 / 反斜杠 / 引号把命令切坏。
+fn quote_mailbox(name: &str) -> Option<String> {
+    if name.contains('\r') || name.contains('\n') {
+        return None;
+    }
+    let mut out = String::with_capacity(name.len() + 2);
+    out.push('"');
+    for ch in name.chars() {
+        if ch == '\\' || ch == '"' {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out.push('"');
+    Some(out)
+}
+
+/// 从 STATUS 响应里取 `UNSEEN` / `MESSAGES`。不依赖响应能整体解析成 UTF-8，
+/// 所以非 ASCII 回显（GBK）也照样能读出数字。
+fn parse_status_counts(bytes: &[u8]) -> (u32, u32) {
+    (
+        number_after(bytes, b"UNSEEN").unwrap_or(0),
+        number_after(bytes, b"MESSAGES").unwrap_or(0),
+    )
+}
+
+fn number_after(haystack: &[u8], key: &[u8]) -> Option<u32> {
+    if key.is_empty() || haystack.len() < key.len() {
+        return None;
+    }
+    let mut found = None;
+    for start in 0..=haystack.len() - key.len() {
+        if !haystack[start..start + key.len()].eq_ignore_ascii_case(key) {
+            continue;
+        }
+        let mut i = start + key.len();
+        while i < haystack.len() && haystack[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let digits = i;
+        while i < haystack.len() && haystack[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i > digits {
+            if let Ok(text) = std::str::from_utf8(&haystack[digits..i]) {
+                if let Ok(value) = text.parse::<u32>() {
+                    // 取最后一次出现：文件夹名本身含同名子串时也不会误取。
+                    found = Some(value);
+                }
+            }
+        }
+    }
+    found
 }
 
 fn role_order(role: FolderRole) -> u8 {
@@ -828,24 +967,32 @@ pub fn list_delegate_folders(
     let prefix = delegate_prefix(account, mailbox);
     // 先 LIST 前缀本身：有的服务器只暴露顶层子文件夹，`prefix/*` 不会递归。
     let pattern = format!("{prefix}/*");
-    let names = session
-        .list(None, Some(&pattern))
-        .map_err(|e| format!("列出共享邮箱失败（{mailbox}）: {e}"))?;
-
-    let mut folders = Vec::new();
-    for name in names.iter() {
-        let selectable = !name
-            .attributes()
+    let listed: Vec<(String, Option<String>)> = {
+        let names = session
+            .list(None, Some(&pattern))
+            .map_err(|e| format!("列出共享邮箱失败（{mailbox}）: {e}"))?;
+        names
             .iter()
-            .any(|a| matches!(a, NameAttribute::NoSelect));
-        if !selectable {
-            continue;
-        }
-        let raw_name = name.name().to_string();
-        let (unread, total) = match session.status(&raw_name, "(MESSAGES UNSEEN)") {
-            Ok(status) => (status.unseen.unwrap_or(0), status.exists),
-            Err(_) => (0, 0),
-        };
+            .filter(|name| {
+                !name
+                    .attributes()
+                    .iter()
+                    .any(|a| matches!(a, NameAttribute::NoSelect))
+            })
+            .map(|name| {
+                (
+                    name.name().to_string(),
+                    name.delimiter().map(|d| d.to_string()),
+                )
+            })
+            .collect()
+    };
+
+    let mut statuses = StatusReader::new(session, account, password);
+    let mut folders = Vec::new();
+    for (raw_name, delimiter) in listed {
+        // 共享邮箱里的文件夹同样可能是中文名，STATUS 走同一套容错读取。
+        let (unread, total) = statuses.counts(&raw_name);
         // 显示名去掉前缀，只留「邮箱/文件夹」之后的部分，读起来才不啰嗦。
         let trimmed = raw_name
             .strip_prefix(&format!("{prefix}/"))
@@ -855,16 +1002,16 @@ pub fn list_delegate_folders(
             account_id: account.id.clone(),
             display_name: utf7::decode(&trimmed),
             name: raw_name,
-            delimiter: name.delimiter().map(|d| d.to_string()),
+            delimiter,
             role: FolderRole::Custom,
             unread,
             total,
             uid_validity: 0,
             uid_next: 0,
-            selectable,
+            selectable: true,
         });
     }
-    let _ = session.logout();
+    statuses.logout();
     Ok(folders)
 }
 
@@ -1214,5 +1361,121 @@ mod tests {
         assert_eq!(detect_role("垃圾邮件", &[]), FolderRole::Junk);
         assert_eq!(detect_role("已删除", &[]), FolderRole::Trash);
         assert_eq!(detect_role("Project X", &[]), FolderRole::Custom);
+    }
+
+    #[test]
+    fn status_counts_survive_gbk_mailbox_echo() {
+        // QQ 邮箱的真实回显：文件夹名不是 UTF-8，整行无法按 RFC 解析，
+        // 但数字仍然要能取出来。
+        let line = b"* STATUS \"\xc6\xe4\xcb\xfb\xce\xc4\xbc\xfe\xbc\xd0\" (MESSAGES 173 UNSEEN 4)\r\n";
+        assert_eq!(parse_status_counts(line), (4, 173));
+    }
+
+    #[test]
+    fn status_counts_default_to_zero() {
+        assert_eq!(parse_status_counts(b"* OK nothing here\r\n"), (0, 0));
+        assert_eq!(parse_status_counts(b""), (0, 0));
+    }
+
+    #[test]
+    fn mailbox_names_are_quoted_and_escaped() {
+        assert_eq!(quote_mailbox("INBOX").as_deref(), Some("\"INBOX\""));
+        assert_eq!(quote_mailbox("a\"b").as_deref(), Some("\"a\\\"b\""));
+        assert!(quote_mailbox("a\nb").is_none());
+    }
+
+    /// 回归：QQ 用 GBK 回显文件夹名导致 STATUS 解析失败时，连接里会残留
+    /// 上一条命令的 tagged 完成行。以前继续在同一个会话上发下一条 STATUS，
+    /// 会撞上 imap crate 的标签断言直接 panic；现在必须换连接后继续。
+    #[test]
+    fn status_reader_reconnects_after_unparsable_response() {
+        use crate::commands::mail::model::Security;
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        fn serve(mut socket: std::net::TcpStream) {
+            use std::io::{BufRead, BufReader, Write as IoWrite};
+            socket.write_all(b"* OK fake IMAP ready\r\n").ok();
+            let mut reader = BufReader::new(socket.try_clone().expect("clone"));
+            let mut line = String::new();
+            loop {
+                line.clear();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break; // 客户端在解析失败后直接丢了这条连接
+                }
+                let tag = line.split_whitespace().next().unwrap_or("").to_string();
+                let upper = line.to_ascii_uppercase();
+                if upper.contains(" LOGIN ") {
+                    socket
+                        .write_all(format!("{tag} OK logged in\r\n").as_bytes())
+                        .ok();
+                } else if upper.contains(" STATUS ") {
+                    // GBK 编码的「其他文件夹」：imap crate 解析这一行会失败。
+                    socket
+                        .write_all(
+                            b"* STATUS \"\xc6\xe4\xcb\xfb\xce\xc4\xbc\xfe\xbc\xd0\" (MESSAGES 12 UNSEEN 3)\r\n",
+                        )
+                        .ok();
+                    socket
+                        .write_all(format!("{tag} OK status done\r\n").as_bytes())
+                        .ok();
+                } else if upper.contains(" LOGOUT") {
+                    socket
+                        .write_all(format!("* BYE\r\n{tag} OK bye\r\n").as_bytes())
+                        .ok();
+                    break;
+                } else {
+                    socket.write_all(format!("{tag} OK\r\n").as_bytes()).ok();
+                }
+            }
+        }
+        let server = std::thread::spawn(move || {
+            // 两次 STATUS 各自触发一次重连，最后一条连接用于 LOGOUT。
+            // 每条连接单独一个线程：重连发生在旧连接被丢弃之前，串行 accept 会卡住。
+            let mut handlers = Vec::new();
+            for _ in 0..3 {
+                let Ok((socket, _)) = listener.accept() else {
+                    break;
+                };
+                handlers.push(std::thread::spawn(move || serve(socket)));
+            }
+            for handler in handlers {
+                let _ = handler.join();
+            }
+        });
+
+        let account = Account {
+            id: "probe".into(),
+            email: "me@example.com".into(),
+            display_name: String::new(),
+            imap_host: "127.0.0.1".into(),
+            imap_port: port,
+            imap_security: Security::None,
+            smtp_host: String::new(),
+            smtp_port: 0,
+            smtp_security: Security::None,
+            username: String::new(),
+            auth_kind: "password".into(),
+            oauth_provider: String::new(),
+            oauth_expires: 0,
+            proxy: None,
+            accent: String::new(),
+            signature: String::new(),
+            folder_map: Default::default(),
+            delegate: Vec::new(),
+            sieve: None,
+            created_at: 0,
+            last_sync_at: 0,
+        };
+
+        let session = login(&account, "pw").expect("login");
+        let mut statuses = StatusReader::new(session, &account, "pw");
+        // `&UXZO1mWHTvZZOQ-` 是 QQ 上「其他文件夹」的 modified UTF-7 名字。
+        assert_eq!(statuses.counts("&UXZO1mWHTvZZOQ-"), (3, 12));
+        // 没有重连的话，这一条会读到上一条命令残留的 tagged 行并 panic。
+        assert_eq!(statuses.counts("Drafts"), (3, 12));
+        statuses.logout();
+        let _ = server.join();
     }
 }

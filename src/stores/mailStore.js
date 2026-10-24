@@ -259,15 +259,19 @@ export const useMailStore = defineStore('mail', {
 
     // ---------------- 账户 ----------------
 
-    async saveAccount(account, secret) {
+    async saveAccount(account, secret, { loadFolders = true } = {}) {
       const saved = await invoke('mail_save_account', { account, secret: secret || null })
       const index = this.accounts.findIndex((a) => a.id === saved.id)
       if (index >= 0) this.accounts.splice(index, 1, saved)
       else this.accounts.push(saved)
       if (!this.activeAccountId) this.activeAccountId = saved.id
-      await this.loadFolders(saved.id)
-      // 共享邮箱需要在保存后展开一次，否则侧栏里看不到它们的文件夹。
-      this.expandDelegates(saved.id).catch(() => {})
+      // 设备码授权还没完成时先不连服务器：此时既没有令牌，拉文件夹只会报
+      // 「还没有完成 OAuth 授权」，把控制台刷满。授权成功后由调用方补一次。
+      if (loadFolders) {
+        await this.loadFolders(saved.id)
+        // 共享邮箱需要在保存后展开一次，否则侧栏里看不到它们的文件夹。
+        this.expandDelegates(saved.id).catch(() => {})
+      }
       return saved
     },
 
@@ -1021,8 +1025,10 @@ export const useMailStore = defineStore('mail', {
       return this.selectedKeys.map((k) => this.rowByKey(k)).filter(Boolean)
     },
 
-    async runBatch(action, target) {
-      const rows = this.selectedRows()
+    async runBatch(action, target, explicitRows = null) {
+      // 显式传入的行优先：右键菜单可能只针对一封未勾选的邮件，
+      // 那时选择集是空的，不能退回 selectedRows()。
+      const rows = explicitRows?.length ? explicitRows : this.selectedRows()
       if (!rows.length) return
       const groups = new Map()
       for (const row of rows) {

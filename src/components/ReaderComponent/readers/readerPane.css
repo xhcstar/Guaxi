@@ -570,22 +570,27 @@
   padding: 2px;
   border-radius: 9px;
   background: var(--guaxi-hover-bg, rgba(120, 120, 120, 0.08));
+  /* 导航是阅读时的高频动作，任何情况下都不允许被压缩或挤掉。 */
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 /*
- * 搜索展开时（:has 在 WebView2 / Chromium 111+ 可用），节导航与缩小组淡出。
+ * 搜索展开时保留节导航。
  *
- * 为什么不直接删掉：撤掉节点会让右侧按钮整体左跳一格，读者正在点的「下一节」
- * 忽然换了位置。淡出 + width:0 让它们退出视线的同时保持相邻关系稳定，
- * 关闭搜索后原样回来。
+ * 旧实现用 :has 把导航淡出并把宽度压到 0，把位置让给搜索框 —— 但读者的实际动作
+ * 往往是「搜到一段 → 翻回上一节对照」，导航恰好在这时消失，等于把高频操作藏起来。
+ * 现在改成让标题和输入框一起让宽度：搜索框有上限（420px），窄窗口下先缩标题，
+ * 再缩输入框（min-width 120px），导航始终在。
  */
-.guaxi-doc-reader__bar:has(.gdr-ebook__search) .gdr-ebook__nav--collapsible {
-  opacity: 0;
-  width: 0;
+.guaxi-doc-reader__bar:has(.gdr-ebook__search) .guaxi-doc-reader__title {
+  max-width: 140px;
   min-width: 0;
-  padding: 0;
-  overflow: hidden;
-  pointer-events: none;
+}
+
+.guaxi-doc-reader__bar:has(.gdr-ebook__search) .gdr-ebook__search {
+  flex-basis: 200px;
+  min-width: 120px;
 }
 
 .gdr-ebook__zoom {

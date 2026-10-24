@@ -129,10 +129,10 @@
       <!--
         节导航收成一枚胶囊：← [12] / 340 60% →。
         三样东西是同一件事（我在哪、怎么挪），分组之后工具栏的节奏和 PDF 那边一致，
-        也不会因为夹在图标按钮中间而显得零散。搜索展开时整组自动淡出，
-        把中间那段宽度让给输入框（见 .guaxi-doc-reader__bar:has(.gdr-ebook__search)）。
+        也不会因为夹在图标按钮中间而显得零散。搜索展开时导航保持可见 ——
+        「搜到一段再翻回上一节对照」是阅读时的常见动作，不能在这时把它藏起来。
       -->
-      <span class="gdr-ebook__nav gdr-ebook__nav--collapsible">
+      <span class="gdr-ebook__nav">
         <button
           class="guaxi-doc-reader__icon-btn"
           title="上一节（←）"

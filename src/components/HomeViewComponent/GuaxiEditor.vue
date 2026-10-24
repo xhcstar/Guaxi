@@ -2899,6 +2899,14 @@ let lastTableToolbarInsertAt = 0;
 const scrollRatio = ref(0);
 const pendingPreviewScrollRestore = ref(false);
 const pendingPreviewScrollLine = ref(null);
+// 设计说明（关键 · 对应“从 B 的编辑模式切回 A 的预览模式后，A 停在开头”）：
+// 编辑→预览时把 Monaco 光标行同步到预览，是为了同一文件里“编辑完切预览”能跟手。
+// 但切文件时替用户恢复该文件记住的模式（restoreDocPreviewMode）也走同一条 setMainMode 路径，
+// 那一刻编辑器里是上一个文件的光标，或已被更新内容重置到第 1 行。
+// 若照样设置 pendingPreviewScrollLine，它会在渲染完成时抢在按文件缓存的阅读位置之前被消费，
+// 于是切回来的文件被定位到旧光标处（通常是开头）。这个开关让那次模式恢复跳过光标同步。
+// 用计数而不是布尔：连续快速切文件时两次模式恢复会重叠，布尔会被先结束的那次提前关掉。
+let suppressPreviewLineSyncDepth = 0;
 const PREVIEW_READ_POSITION_CACHE_LIMIT = READ_POSITION_CACHE_LIMIT;
 const previewReadPositionCache = new Map();
 let markdownPreviewScrollSaveTimer = null;
@@ -20509,10 +20517,14 @@ const setMainMode = async (nextMode) => {
   if (nextMode !== 'edit' && nextMode !== 'preview') return;
   if (mode.value === nextMode) return;
 
-  if (mode.value === 'edit' && nextMode === 'preview' && editor) {
-    const pos = editor.getPosition();
-    pendingPreviewScrollLine.value =
-      (pos && pos.lineNumber) || editorStore.cursorPosition.lineNumber || 1;
+  if (mode.value === 'edit' && nextMode === 'preview') {
+    // 切文件引起的模式恢复不复用“光标行跟随预览”：这次定位应由该文件自己的阅读位置决定。
+    const syncCursorLine = suppressPreviewLineSyncDepth === 0;
+    if (syncCursorLine && editor) {
+      const pos = editor.getPosition();
+      pendingPreviewScrollLine.value =
+        (pos && pos.lineNumber) || editorStore.cursorPosition.lineNumber || 1;
+    }
   }
 
   // 切换主模式前先按“当前真正激活的界面”存一次阅读位置（此时 mode 还没变，取到的仍是旧模式）。
@@ -22672,7 +22684,16 @@ watch(selectedFile, async (newFile, oldFile) => {
 
     // 切到不同文档时，替用户把它恢复到自己上次的模式（内部仅在模式确有差异时才真正切换）。
     if (switchedToDifferentFile) {
-      const modeChanged = await restoreDocPreviewMode(nextPath, 'selected-file-changed')
+      // 上一条光标定位（如果有）属于旧文件，落到新文件的渲染上就是错误跳转；先丢弃。
+      pendingPreviewScrollLine.value = null
+      // 下面这次模式恢复若进入预览，定位目标是新文件缓存的阅读位置，而不是旧文件的光标行。
+      suppressPreviewLineSyncDepth += 1
+      let modeChanged = false
+      try {
+        modeChanged = await restoreDocPreviewMode(nextPath, 'selected-file-changed')
+      } finally {
+        suppressPreviewLineSyncDepth -= 1
+      }
       // 模式没变：按原来的时机落位即可（此时载体与切走前一致）。
       // 模式变了：必须等新载体渲染出来再落位，否则写到旧载体上。
       await restoreReadPositionAfterFileSwitch(nextPath, 'selected-file-changed')

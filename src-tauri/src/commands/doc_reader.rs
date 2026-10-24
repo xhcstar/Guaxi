@@ -901,6 +901,164 @@ fn data_uri(mime: &str, data: &[u8]) -> String {
     format!("data:{};base64,{}", mime, b64)
 }
 
+/// 一条 MOBI 7 图片记录在原始文件里的位置。
+struct MobiImageRange {
+    mime: &'static str,
+    start: usize,
+    end: usize,
+}
+
+/// 建 MOBI 7 的 `recindex` → 图片记录表。
+///
+/// 编号规则必须与 ebook-rs 的 `extract_mobi_images_and_populate_archive` 一致：
+/// `img_num = rec_idx - first_image_index + 1`，按**记录位置**编号 —— 中间夹着的结构性
+/// 记录（资源头、索引表）占号但不出现在表里。少算这一位，`recindex="00012"` 就会指到
+/// 相邻的那张图，整本书的插图全错位。
+fn mobi_image_table(bytes: &[u8]) -> std::collections::HashMap<usize, MobiImageRange> {
+    use std::collections::HashMap;
+    let mut table = HashMap::new();
+    if !is_palm_doc(bytes) {
+        return table;
+    }
+    let record_count = u16::from_be_bytes([bytes[76], bytes[77]]) as usize;
+    if record_count < 2 || record_count > 100_000 {
+        return table;
+    }
+    let record_offset = |idx: usize| -> Option<usize> {
+        let at = 78 + idx * 8;
+        if at + 4 > bytes.len() {
+            return None;
+        }
+        Some(u32::from_be_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]) as usize)
+    };
+
+    let (Some(first), Some(second)) = (record_offset(0), record_offset(1)) else {
+        return table;
+    };
+    if first >= second || second > bytes.len() {
+        return table;
+    }
+    let header = &bytes[first..second];
+    if header.len() < 12 {
+        return table;
+    }
+    let text_records = u16::from_be_bytes([header[8], header[9]]) as usize;
+    if text_records == 0 {
+        return table;
+    }
+    // 首图记录号在 MOBI 头里（rec0[108..112]）；头缺失或值不可信时退回「正文之后」。
+    let first_image = if header.len() >= 112 && &header[16..20] == b"MOBI" {
+        let raw = u32::from_be_bytes([header[108], header[109], header[110], header[111]]) as usize;
+        if raw > 0 && raw < record_count {
+            raw
+        } else {
+            1 + text_records
+        }
+    } else {
+        1 + text_records
+    };
+    let start = first_image.max(1);
+    if start >= record_count {
+        return table;
+    }
+
+    for idx in start..record_count {
+        let Some(begin) = record_offset(idx) else { continue };
+        let end = if idx + 1 < record_count {
+            record_offset(idx + 1).unwrap_or(bytes.len())
+        } else {
+            bytes.len()
+        }
+        .min(bytes.len());
+        if begin >= end || begin >= bytes.len() {
+            continue;
+        }
+        let data = &bytes[begin..end];
+        if let Some(mime) = sniff_media_mime(data) {
+            table.insert(
+                idx - start + 1,
+                MobiImageRange {
+                    mime,
+                    start: begin,
+                    end,
+                },
+            );
+        }
+    }
+    table
+}
+
+/// 把 MOBI 7 正文里的 `<img recindex="00012">` 换成内联 data URI。
+///
+/// 为什么必须补这一层：MOBI 7 的图片引用不是 `<img src>`，而是 `recindex` 属性。
+/// ebook-rs 在它自己的解析路径里会把它改写成相对路径再放进 archive，但阅读器为了修
+/// Latin-1 乱码会用 PalmDOC 记录重排出来的**原始 HTML** 覆盖章节内容 —— 那份 HTML 里
+/// `recindex` 原样保留、没有任何 `src`，浏览器于是把每张图画成一个空框。
+/// `process_section_resources` 只认 `src`，补不了这一层。
+///
+/// `cache` 以图片编号为键：同一张图被多节引用时只编码一次（base64 很占内存）。
+fn inline_recindex_images(
+    html: &str,
+    bytes: &[u8],
+    images: &std::collections::HashMap<usize, MobiImageRange>,
+    cache: &mut std::collections::HashMap<usize, String>,
+) -> String {
+    const KEY: &str = "recindex";
+    if images.is_empty() || !html.contains(KEY) {
+        return html.to_string();
+    }
+
+    let mut out = String::with_capacity(html.len());
+    let mut i = 0usize;
+    while i < html.len() {
+        let rest = &html[i..];
+        if !rest.starts_with(KEY) {
+            let ch = rest.chars().next().unwrap_or(' ');
+            out.push(ch);
+            i += ch.len_utf8();
+            continue;
+        }
+
+        // 形如 `recindex="00012"`（少数文件用单引号）。
+        let after_key = &rest[KEY.len()..];
+        let mut parts = after_key.chars();
+        let quote = match (parts.next(), parts.next()) {
+            (Some('='), Some(q @ ('"' | '\''))) => q,
+            _ => {
+                out.push_str(KEY);
+                i += KEY.len();
+                continue;
+            }
+        };
+        let digits_from = 1 + quote.len_utf8();
+        let tail = &after_key[digits_from..];
+        let digits_len = tail.bytes().take_while(|b| b.is_ascii_digit()).count();
+        if digits_len == 0 || !tail[digits_len..].starts_with(quote) {
+            out.push_str(KEY);
+            i += KEY.len();
+            continue;
+        }
+
+        let num = tail[..digits_len].parse::<usize>().ok();
+        let Some(range) = num.and_then(|n| images.get(&n)) else {
+            // 找不到对应图片时原样保留，让问题显式暴露而不是静默丢图。
+            let span = KEY.len() + digits_from + digits_len + quote.len_utf8();
+            out.push_str(&rest[..span]);
+            i += span;
+            continue;
+        };
+
+        let uri = cache
+            .entry(num.unwrap())
+            .or_insert_with(|| data_uri(range.mime, &bytes[range.start..range.end]));
+        out.push_str("src=\"");
+        out.push_str(uri);
+        out.push('"');
+        i += KEY.len() + digits_from + digits_len + quote.len_utf8();
+    }
+    out
+}
+
 /// 把整本 MOBI HTML 切成章节。
 ///
 /// 必须与 ebook-rs 的 `split_mobi_html` 保持完全一致的切分规则，否则重排文本与
@@ -1034,6 +1192,11 @@ fn read_ebook_blocking(path: &Path, kind: &str) -> Result<EbookPayload, String> 
         kindle_asset_table(bytes, remuxed_text.as_deref().map(|t| t.as_bytes()))
     });
 
+    // MOBI 7 的图片引用是 `<img recindex="00012">`（没有 src）。重排路径会把 ebook-rs
+    // 已经改写好的相对路径整体覆盖掉，所以这里按同一套编号自己内联。
+    let mobi_images = mobi_bytes.as_deref().map(mobi_image_table).unwrap_or_default();
+    let mut recindex_cache: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
+
     let book = with_parser_panic_guard(|| {
         ebook_rs::Book::from_file(path).map_err(|e| ebook_error_message(&e))
     })?;
@@ -1082,9 +1245,10 @@ fn read_ebook_blocking(path: &Path, kind: &str) -> Result<EbookPayload, String> 
         // 如果重排拿到了干净正文，就用它覆盖 ebook-rs 输出的乱码章节内容。
         // 按顺序对位：重排流与 ebook-rs 切出的 spine 顺序一致，章节数不等时退回原内容。
         //
-        // 【顺序很重要】这一步必须在内联资源之前。重排流是原始 HTML，里面的图片还是
-        // `images/img_0004.jpg` 这样的相对路径；先内联再覆盖，等于把刚做好的 data URI
-        // 整体换掉 —— 这正是 MOBI 打开后一张图都不显示的根因（28 个 <img> 全部回到裸路径）。
+        // 【顺序很重要】这一步必须在内联资源之前。重排流是**原始** HTML：MOBI 7 的图片
+        // 还是 `<img recindex="00012">`，KF8 还是 `src="kindle:embed:…"`，都要在下面
+        // 重新内联一遍；先内联再覆盖，等于把刚做好的 data URI 整体换掉 —— 这正是 MOBI
+        // 打开后一张图都不显示的根因。
         if let Some(html) = remuxed_html.as_ref().and_then(|list| list.get(section.index)) {
             if !html.trim().is_empty() {
                 section.processed_html = html.clone();
@@ -1101,6 +1265,16 @@ fn read_ebook_blocking(path: &Path, kind: &str) -> Result<EbookPayload, String> 
             if is_mobi_family(kind) { "OEBPS/section.xhtml" } else { &section.href },
             &book.archive,
         );
+        // MOBI 7：`recindex` → data URI。必须放在内联之后、kindle: 改写之前或之后都无妨，
+        // 但必须在重排内容覆盖之后 —— 重排流是唯一会重新引入 recindex 的来源。
+        if let Some(bytes) = mobi_bytes.as_deref() {
+            section.processed_html = inline_recindex_images(
+                &section.processed_html,
+                bytes,
+                &mobi_images,
+                &mut recindex_cache,
+            );
+        }
         // KF8/AZW3 的 `kindle:` 伪协议在 blob 文档里没有对应的 scheme，必须换成 data URI。
         // 放在内联之后：前面那步只认相对路径，`kindle:embed:` 会被它跳过。
         if let Some(assets) = kindle_assets.as_ref() {
@@ -1139,6 +1313,7 @@ fn read_ebook_blocking(path: &Path, kind: &str) -> Result<EbookPayload, String> 
                     .saturating_sub(s.html.matches("src=\"data:").count())
             })
             .sum();
+        let recindex: usize = sections.iter().map(|s| s.html.matches("recindex").count()).sum();
         tracing::info!(
             path = %path.display(),
             kind = kind,
@@ -1146,6 +1321,8 @@ fn read_ebook_blocking(path: &Path, kind: &str) -> Result<EbookPayload, String> 
             img_total,
             img_data_uri = data_uri,
             img_other_src = rel_src,
+            img_recindex_left = recindex,
+            mobi_images = mobi_images.len(),
             repaired_sections,
             "[Reader] ebook image diagnostics"
         );
@@ -1534,6 +1711,109 @@ mod mobi_remux_tests {
         assert_eq!(parts.len(), 3);
         assert!(parts[1].contains("第一章"));
         assert!(parts[2].contains("第二章"));
+    }
+}
+
+#[cfg(test)]
+mod mobi_recindex_tests {
+    use super::{inline_recindex_images, mobi_image_table};
+    use std::collections::HashMap;
+
+    fn jpeg() -> Vec<u8> {
+        let mut v = vec![0xFFu8, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
+        v.extend(std::iter::repeat(0u8).take(32));
+        v
+    }
+
+    fn png() -> Vec<u8> {
+        let mut v = vec![0x89u8, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        v.extend(std::iter::repeat(0u8).take(32));
+        v
+    }
+
+    /// 最小 PalmDB/MOBI 容器：record 0 是 MOBI 头，`texts` 是正文记录，
+    /// `resources` 从记录号 `first_image` 起依次排列。
+    fn build_mobi(texts: &[Vec<u8>], first_image: usize, resources: &[Vec<u8>]) -> Vec<u8> {
+        let record_count = 1 + texts.len() + resources.len();
+        let mut out = vec![0u8; 78 + record_count * 8];
+        out[60..68].copy_from_slice(b"BOOKMOBI");
+        out[76..78].copy_from_slice(&(record_count as u16).to_be_bytes());
+
+        let mut rec0 = vec![0u8; 116];
+        rec0[0..2].copy_from_slice(&1u16.to_be_bytes());
+        let text_len: usize = texts.iter().map(|t| t.len()).sum();
+        rec0[4..8].copy_from_slice(&(text_len as u32).to_be_bytes());
+        rec0[8..10].copy_from_slice(&(texts.len() as u16).to_be_bytes());
+        rec0[10..12].copy_from_slice(&4096u16.to_be_bytes());
+        rec0[16..20].copy_from_slice(b"MOBI");
+        rec0[108..112].copy_from_slice(&(first_image as u32).to_be_bytes());
+
+        let mut records: Vec<&[u8]> = Vec::with_capacity(record_count);
+        records.push(&rec0);
+        for t in texts {
+            records.push(t);
+        }
+        for r in resources {
+            records.push(r);
+        }
+
+        let mut offset = out.len();
+        for (idx, rec) in records.iter().enumerate() {
+            let at = 78 + idx * 8;
+            out[at..at + 4].copy_from_slice(&(offset as u32).to_be_bytes());
+            offset += rec.len();
+        }
+        for rec in records {
+            out.extend_from_slice(rec);
+        }
+        out
+    }
+
+    #[test]
+    fn maps_recindex_to_data_uri_with_record_position_numbering() {
+        // 资源区第一条是结构性记录（RESC），它**占号**但不是图片：
+        // 编号必须按记录位置算，否则 recindex=2 会拿到 PNG 而不是 JPEG（整本错位）。
+        let bytes = build_mobi(
+            &[b"<p>x</p>".to_vec()],
+            2,
+            &[b"RESC\0\0\0\0\0\0\0\0".to_vec(), jpeg(), png()],
+        );
+        let table = mobi_image_table(&bytes);
+        assert_eq!(table.len(), 2, "结构性记录不能进表");
+
+        let mut cache = HashMap::new();
+        let html = r#"<img recindex="00002" width="600"/><img recindex="00003"/>"#;
+        let out = inline_recindex_images(html, &bytes, &table, &mut cache);
+        assert!(out.contains("src=\"data:image/jpeg;base64,"), "实际: {out}");
+        assert!(out.contains("src=\"data:image/png;base64,"), "实际: {out}");
+        assert!(!out.contains("recindex"), "属性应已全部替换: {out}");
+        assert!(out.contains("width=\"600\""), "其余属性必须保留: {out}");
+    }
+
+    #[test]
+    fn leaves_unresolved_recindex_untouched() {
+        let bytes = build_mobi(&[b"<p>x</p>".to_vec()], 2, &[jpeg()]);
+        let table = mobi_image_table(&bytes);
+        let mut cache = HashMap::new();
+        let html = r#"<img recindex="00009" alt="图"/>"#;
+        assert_eq!(inline_recindex_images(html, &bytes, &table, &mut cache), html);
+    }
+
+    #[test]
+    fn encodes_each_image_once_and_accepts_single_quotes() {
+        let bytes = build_mobi(&[b"<p>x</p>".to_vec()], 2, &[jpeg()]);
+        let table = mobi_image_table(&bytes);
+        let mut cache = HashMap::new();
+        let html = r#"<img recindex='1'/><img recindex="0001"/>"#;
+        let out = inline_recindex_images(html, &bytes, &table, &mut cache);
+        assert_eq!(out.matches("data:image/jpeg;base64,").count(), 2, "实际: {out}");
+        assert_eq!(cache.len(), 1, "同一张图只编码一次");
+    }
+
+    #[test]
+    fn ignores_non_mobi_input() {
+        let table = mobi_image_table(b"not a mobi file at all, definitely longer than 78 bytes..........................");
+        assert!(table.is_empty());
     }
 }
 

@@ -211,12 +211,13 @@
       :accounts="store.accounts"
       :settings="settings"
       :active-account-id="store.activeAccountId"
-      @close="showAccounts = false"
       :test-fn="onTestAccount"
       :has-secret-fn="store.hasSecret"
       :oauth-start-fn="store.startOAuth"
       :oauth-poll-fn="onOAuthPoll"
-      @saved="onAccountSaved"
+      :oauth-status-fn="store.oauthStatusFor"
+      :save-fn="onSaveAccount"
+      @close="showAccounts = false"
       @deleted="onAccountDeleted"
       @select="onAccountSelected"
     />
@@ -872,7 +873,13 @@ function onRowContextMenu({ row, event }) {
   const width = 200
   const x = Math.min(event.clientX, window.innerWidth - width - 8)
   const y = Math.min(event.clientY, window.innerHeight - 220)
-  contextMenu.value = { row, x, y }
+  // 右键不改变「勾选」状态：点中已勾选的行 → 整批；点在其他行 → 只作用于这一封，
+  // 同时清掉之前的勾选，避免批量操作落到用户看不见的邮件上。
+  const key = store.keyOf(row)
+  const inSelection = store.selectedKeys.includes(key)
+  if (!inSelection && store.selectedKeys.length) store.clearSelection()
+  const rows = inSelection ? store.selectedRows() : [row]
+  contextMenu.value = { row, rows, x, y }
   setTimeout(() => document.addEventListener('click', closeContextMenu, { once: true }), 0)
 }
 
@@ -881,13 +888,13 @@ function closeContextMenu() {
 }
 
 async function contextAction(action, target) {
-  const row = contextMenu.value?.row
+  const menu = contextMenu.value
   closeContextMenu()
-  if (!row) return
+  if (!menu?.row) return
+  const row = menu.row
 
-  // 右键菜单作用于「当前选择集」：单选时就是那一封，多选时整批。
-  // Outlook 也是这个行为——否则右键一堆选中的邮件却只处理一封，很容易误操作。
-  const rows = store.selectedRows().length ? store.selectedRows() : [row]
+  // 右键菜单作用于「当前选择集」：点中已勾选的行处理整批，点在其他行只处理这一封。
+  const rows = menu.rows?.length ? menu.rows : [row]
 
   try {
     if (action === 'saveEml' || action === 'saveHtml') {
@@ -895,30 +902,30 @@ async function contextAction(action, target) {
       return
     }
     if (action === 'markRead') {
-      await store.runBatch(row.seen ? 'unread' : 'read')
+      await store.runBatch(row.seen ? 'unread' : 'read', null, rows)
       return
     }
     if (action === 'flag') {
-      await store.runBatch(row.flagged ? 'unflag' : 'flag')
+      await store.runBatch(row.flagged ? 'unflag' : 'flag', null, rows)
       return
     }
     if (action === 'junk') {
-      await store.runBatch('junk')
+      await store.runBatch('junk', null, rows)
       notify(`已移到垃圾邮件（${rows.length} 封）`)
       return
     }
     if (action === 'unmarkJunk') {
-      await store.runBatch('unmarkJunk')
+      await store.runBatch('unmarkJunk', null, rows)
       notify(`已移回收件箱（${rows.length} 封）`)
       return
     }
     if (action === 'move' && target) {
-      await store.runBatch('move', target)
+      await store.runBatch('move', target, rows)
       notify(`已移动 ${rows.length} 封`)
       return
     }
     if (action === 'delete') {
-      await store.runBatch('delete')
+      await store.runBatch('delete', null, rows)
       notify(`已删除 ${rows.length} 封`)
       return
     }
@@ -939,7 +946,7 @@ async function contextAction(action, target) {
     notify(String(error?.message || error), true)
   }
 }
-const contextCount = computed(() => store.selectedKeys.length || 1)
+const contextCount = computed(() => contextMenu.value?.rows?.length || 1)
 const contextInJunk = computed(() => {
   const row = contextMenu.value?.row
   if (!row) return false
@@ -984,7 +991,7 @@ async function onDropOnFolder(folderName) {
   // 拖到源文件夹本身没有意义。
   if (rows.every((r) => r.folder === folderName)) return
   try {
-    await store.runBatch('move', folderName)
+    await store.runBatch('move', folderName, rows)
     notify(`已移动 ${rows.length} 封到该文件夹`)
   } catch (error) {
     notify(String(error?.message || error), true)
@@ -1071,14 +1078,20 @@ function openSettings() {
   showSettings.value = true
 }
 
-async function onAccountSaved({ account, secret, closeAfter = true }) {
+async function onSaveAccount(account, secret, { closeAfter = true, oauthPending = false } = {}) {
   try {
-    const saved = await store.saveAccount(account, secret)
-    if (closeAfter !== false) showAccounts.value = false
-    notify('账户已保存')
-    if (closeAfter !== false) {
-      const result = await store.syncNow()
-      if (result.errors?.length) notify(result.errors[0], true)
+    // 设备码授权还没完成时先不拉文件夹：没有令牌，连上去只会报「未授权」。
+    const saved = await store.saveAccount(account, secret, { loadFolders: !oauthPending })
+    notify(oauthPending ? '账户已保存，完成授权后会自动同步' : '账户已保存')
+    if (closeAfter && !oauthPending) {
+      // 同步可能持续几秒：先让它走后台，别把「保存中…」的弹窗一直挂着。
+      showAccounts.value = false
+      store
+        .syncNow()
+        .then((result) => {
+          if (result.errors?.length) notify(result.errors[0], true)
+        })
+        .catch(() => {})
     }
     return saved
   } catch (error) {
@@ -1102,6 +1115,25 @@ async function onOAuthPoll(accountId, provider, deviceCode) {
   const accounts = await invoke('mail_list_accounts').catch(() => null)
   if (accounts) store.accounts = accounts
   await store.resetConnections(accountId).catch(() => {})
+  // 授权成功后第一次连得上服务器：补一次文件夹与未读，侧栏不用等下一轮轮询。
+  await store.loadFolders(accountId, { refresh: true })
+  if (!store.activeAccountId || store.activeAccountId === accountId) {
+    store.selectAccount(accountId)
+  }
+}
+
+/** 通讯录里点邮箱地址：直接带着收件人打开写信窗口。 */
+function onComposeTo(email) {
+  const address = String(email || '').trim()
+  showContacts.value = false
+  store.startCompose('new')
+  if (store.composing && address) store.composing.to = [address]
+}
+
+/** 通讯录里点历史邮件：关掉通讯录，在阅读窗格打开那一封。 */
+function onOpenContactMessage(message) {
+  showContacts.value = false
+  if (message) onOpenMessage(message).catch(() => {})
 }
 
 async function onAccountSelected(id) {

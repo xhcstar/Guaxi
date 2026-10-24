@@ -304,9 +304,8 @@ function onRowClick(row, event) {
 }
 
 function onRowContextMenu(row, event) {
-  // 右键未勾选的行时，先把它加入选择（Outlook 的行为），
-  // 这样「右键菜单里的批量操作」作用于用户看得见的那批邮件。
-  if (!isChecked(row)) emit('toggle-select', row, true)
+  // 右键只负责弹出菜单，不改变勾选状态——「右键一下突然出现一堆复选框」
+  // 比「右键菜单只作用于点中的那一封」更让人意外。批量目标由父组件决定。
   emit('contextmenu', { row, event })
 }
 

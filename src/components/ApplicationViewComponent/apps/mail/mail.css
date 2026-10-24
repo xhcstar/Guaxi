@@ -605,15 +605,15 @@
 .mail-row {
   position: relative;
   display: grid;
-  /* 两列就够：头像 + 内容。日期与标记都靠 flex 的 margin-left:auto 贴右，
-     不再单开一列——第三列是 auto 宽度时，网格自动排布会把主题行塞进去，
-     和日期叠在同一格里（这就是「文字重叠」的成因）。 */
-  grid-template-columns: 30px minmax(0, 1fr);
+  /* 三列：复选框槽 + 头像 + 内容。复选框必须有自己的列——
+     以前用绝对定位压在左上角，会和头像（以及第一行文字）重叠。
+     日期与标记都靠 flex 的 margin-left:auto 贴右，不再单开一列。 */
+  grid-template-columns: 16px 30px minmax(0, 1fr);
   grid-template-rows: auto auto auto;
-  column-gap: 10px;
+  column-gap: 8px;
   row-gap: 2px;
   align-items: start;
-  padding: 10px var(--mail-pad) 10px calc(var(--mail-pad) - 2px);
+  padding: 10px var(--mail-pad) 10px calc(var(--mail-pad) - 4px);
   min-height: var(--mail-row-height);
   border-bottom: 1px solid var(--mail-border);
   border-left: 2px solid transparent;
@@ -636,7 +636,7 @@
 }
 
 .mail-avatar {
-  grid-column: 1;
+  grid-column: 2;
   grid-row: 1 / span 3;
   width: 28px;
   height: 28px;
@@ -657,11 +657,11 @@
 }
 /* 第一行是发件人 + 日期，第二行是主题 + 标记：显式占满内容列，各占一行。 */
 .mail-row-line:nth-of-type(1) {
-  grid-column: 2;
+  grid-column: 3;
   grid-row: 1;
 }
 .mail-row-line:nth-of-type(2) {
-  grid-column: 2;
+  grid-column: 3;
   grid-row: 2;
 }
 .mail-row-from {
@@ -690,7 +690,7 @@
   color: var(--mail-text);
 }
 .mail-row-snippet {
-  grid-column: 2;
+  grid-column: 3;
   grid-row: 3;
   margin-top: 3px;
   min-width: 0;
@@ -1642,33 +1642,33 @@
 }
 
 .mail-row-check {
-  position: absolute;
-  left: 2px;
-  top: 50%;
-  transform: translateY(-50%);
+  /* 复选框有自己的网格列，垂直居中，不再用绝对定位压在头像上。 */
+  grid-column: 1;
+  grid-row: 1 / span 3;
+  align-self: center;
+  justify-self: center;
   display: grid;
   place-items: center;
   width: 16px;
   height: 16px;
   cursor: pointer;
-  /* 默认半透明，悬停或已有选择时更明显——复选框不该抢邮件的视觉重心。 */
-  opacity: 0.45;
+  /* 平时完全隐藏（也不吃点击），悬停 / 键盘聚焦 / 已勾选时才出现：
+     复选框不该在没有选择意图时抢走邮件的视觉重心。 */
+  opacity: 0;
+  pointer-events: none;
   transition: opacity 0.12s ease;
 }
 
 .mail-row:hover .mail-row-check,
-.mail-row.is-checked .mail-row-check {
+.mail-row:focus-within .mail-row-check,
+.mail-row.is-selected .mail-row-check {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .mail-row-check input {
   accent-color: var(--mail-accent);
   cursor: pointer;
-}
-
-/* 有勾选时整行左侧留出复选框的空间，避免压在头像上。 */
-.mail-row.is-checked {
-  background: var(--mail-selection);
 }
 
 .mail-selectall input {
