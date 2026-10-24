@@ -863,6 +863,8 @@
   overflow-wrap: anywhere;
   color: var(--mail-doc-text);
   background: var(--mail-doc-bg);
+  /* 纸面永远是浅色：系统处于深色模式时，正文里的表单控件 / 滚动条也不要变黑。 */
+  color-scheme: light;
   border-radius: 8px;
   padding: 18px 20px;
   /* 正文里显式写死颜色（color: #000 / background: #fff）时，

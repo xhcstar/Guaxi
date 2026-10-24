@@ -1759,30 +1759,33 @@ pre code {
   border-color: rgba(255, 255, 255, 0.1) !important;
 }
 
-table {
+/* 这些规则只服务于聊天气泡里 v-html 渲染的 Markdown。
+   必须挂到 .message-content 下：以前是裸元素选择器，会作用到全应用的表格/图片——
+   邮件正文就被 `tr:nth-child(even)` 刷成了主题面板色，深色主题下出现整行深色块。 */
+.message-content table {
   width: 100%;
   border-collapse: collapse;
   border: 1px solid var(--guaxi-border);
 }
 
-th,
-td {
+.message-content th,
+.message-content td {
   border: 1px solid var(--guaxi-border);
   padding: 8px;
   text-align: center;
 }
 
-th {
+.message-content th {
   background-color: var(--guaxi-header-bg);
   color: var(--guaxi-text-primary);
   font-weight: bold;
 }
 
-tr:nth-child(even) {
+.message-content tr:nth-child(even) {
   background-color: var(--guaxi-panel-bg);
 }
 
-img {
+.message-content img {
   max-width: 100%;
   height: auto;
   display: block;

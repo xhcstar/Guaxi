@@ -216,6 +216,7 @@
       :oauth-start-fn="store.startOAuth"
       :oauth-poll-fn="onOAuthPoll"
       :oauth-status-fn="store.oauthStatusFor"
+      :oauth-complete-fn="onOAuthComplete"
       :save-fn="onSaveAccount"
       @close="showAccounts = false"
       @deleted="onAccountDeleted"
@@ -377,6 +378,9 @@ const rootStyle = computed(() => {
   const metrics = densityMetrics(settings.value.density, settings.value.readingSize)
   return {
     ...themeToStyle(store.theme, settings.value.accentOverride),
+    // 显式声明配色方案：系统同时在深色模式下，原生复选框 / 滚动条 / 日期控件
+    // 会跟着系统走而变成深灰色（亮色主题里出现「黑框」就是这么来的）。
+    colorScheme: store.theme?.mode === 'light' ? 'light' : 'dark',
     '--mail-font-reading': readingFontStack(settings.value.readingFont),
     '--mail-font-mono': monoFontStack(settings.value.monoFont),
     '--mail-reading-size': metrics.readingFontSize,
@@ -1111,7 +1115,12 @@ async function onTestAccount(account, secret) {
 
 /** OAuth 轮询：成功后把账户标记刷新一下，界面才能显示「已授权」。 */
 async function onOAuthPoll(accountId, provider, deviceCode) {
-  await store.pollOAuth(accountId, provider, deviceCode.deviceCode, deviceCode.interval)
+  const email = await store.pollOAuth(
+    accountId,
+    provider,
+    deviceCode.deviceCode,
+    deviceCode.interval,
+  )
   const accounts = await invoke('mail_list_accounts').catch(() => null)
   if (accounts) store.accounts = accounts
   await store.resetConnections(accountId).catch(() => {})
@@ -1120,6 +1129,23 @@ async function onOAuthPoll(accountId, provider, deviceCode) {
   if (!store.activeAccountId || store.activeAccountId === accountId) {
     store.selectAccount(accountId)
   }
+  return email
+}
+
+/** 浏览器没能自动回到本机时，用粘贴进来的回调地址完成 Outlook 授权。 */
+async function onOAuthComplete(accountId, flowId, provider, redirectUri, code) {
+  const email = await store.completeOAuth(
+    accountId,
+    flowId,
+    provider,
+    redirectUri,
+    code,
+  )
+  const accounts = await invoke('mail_list_accounts').catch(() => null)
+  if (accounts) store.accounts = accounts
+  await store.resetConnections(accountId).catch(() => {})
+  await store.loadFolders(accountId, { refresh: true })
+  return email
 }
 
 /** 通讯录里点邮箱地址：直接带着收件人打开写信窗口。 */

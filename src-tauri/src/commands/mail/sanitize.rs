@@ -14,9 +14,12 @@
 use scraper::Html;
 
 const DROP_TAGS: &[&str] = &[
-    "script", "iframe", "frame", "frameset", "object", "embed", "applet", "form", "input",
-    "button", "select", "textarea", "base", "meta", "link", "title", "noscript", "template",
-    "svg", "math",
+    // `style` 也丢掉：正文是直接 v-html 进主文档渲染的，邮件里的样式表会
+    // 作用到整个应用；更常见的是 `@media (prefers-color-scheme: dark)` 在
+    // 系统深色模式下把正文刷成深底，而文字仍用我们的深色纸面颜色，直接不可读。
+    "script", "style", "iframe", "frame", "frameset", "object", "embed", "applet", "form",
+    "input", "button", "select", "textarea", "base", "meta", "link", "title", "noscript",
+    "template", "svg", "math",
 ];
 
 pub fn sanitize(html: &str, block_remote: bool) -> String {
@@ -292,6 +295,15 @@ pub fn ensure_viewport(html: &str) -> String {
     format!("<div class=\"guaxi-mail-body\">{html}</div>")
 }
 
+/// 对「已经清洗过并缓存在库里」的正文补一次清洗。
+///
+/// 旧版本的清洗器会保留邮件里的 `<style>`，其中 `prefers-color-scheme: dark`
+/// 的规则会把正文刷成深底，而文字仍是纸面的深色，结果整封信不可读。缓存里的
+/// 正文不会因为换了清洗规则而自动更新，所以打开时对含 `<style>` 的旧缓存重洗一次。
+pub fn resanitize_cached(html: &str) -> String {
+    ensure_viewport(&sanitize(html, false))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -339,6 +351,18 @@ mod tests {
         let out = sanitize(r#"<p style="width: expression(alert(1))">x</p>"#, false);
         assert!(!out.contains("expression"));
         assert!(out.contains(">x</p>"));
+    }
+
+    #[test]
+    fn drops_style_blocks_entirely() {
+        // 邮件里的样式表会作用到整个应用；深色模式的 media query 还会把正文刷黑。
+        let out = sanitize(
+            r#"<style>@media (prefers-color-scheme: dark){body{background:#111}}</style><p>hi</p>"#,
+            false,
+        );
+        assert!(!out.contains("prefers-color-scheme"));
+        assert!(!out.contains("<style"));
+        assert!(out.contains("<p>hi</p>"));
     }
 
 

@@ -24,7 +24,8 @@
           </div>
 
           <div v-if="!accounts.length" class="mail-hint" style="margin-bottom: 14px">
-            还没有账户。下面选一个常用邮箱，其余字段会自动填好。
+            还没有账户。选一个常用邮箱会自动填好服务器；公司内部或自建邮件系统请点「自定义 / 公司邮箱」，
+            IMAP 与 SMTP 地址、端口和加密方式都可以手填。
           </div>
 
           <button class="mail-btn is-primary" @click="startNew">＋ 添加账户</button>
@@ -41,12 +42,17 @@
             >
               {{ preset.label }}
             </button>
+            <!-- 公司内部邮件系统 / 自建 IMAP/SMTP：清空服务器预填，所有字段手填。 -->
+            <button class="mail-chip" @click="startCustom">自定义 / 公司邮箱</button>
           </div>
 
           <div class="mail-field-row">
             <div class="mail-field">
               <label class="mail-flabel">邮箱地址</label>
               <input v-model="form.email" class="mail-input" placeholder="you@example.com" />
+              <span v-if="form.email.trim() && !emailValid" class="mail-hint" style="color: var(--mail-danger)">
+                请填写完整邮箱地址（例如 name@example.com），缺域名会连不上服务器
+              </span>
             </div>
             <div class="mail-field">
               <label class="mail-flabel">显示名称</label>
@@ -82,7 +88,7 @@
                 <label class="mail-flabel">授权状态</label>
                 <div class="mail-oauth-state">
                   <template v-if="oauthState === 'done'">✓ 已授权</template>
-                  <template v-else-if="oauthState === 'waiting'">等待你在浏览器里输入代码…</template>
+                  <template v-else-if="oauthState === 'waiting'">等待你在浏览器里完成登录…</template>
                   <template v-else-if="oauthState === 'error'">
                     <span class="bad">{{ oauthError }}</span>
                   </template>
@@ -92,12 +98,21 @@
             </div>
             <template v-if="deviceCode">
               <p class="mail-hint" style="margin: 8px 0">
-                在浏览器打开下方网址，输入代码后回到这里等待完成（通常几秒内）。
+                {{
+                  deviceCode.userCode
+                    ? '在浏览器打开下方网址，输入代码后回到这里等待完成（通常几秒内）。'
+                    : '在浏览器打开下方网址并完成 Microsoft 登录；看到「授权完成」后回到这里，应用会自动继续。'
+                }}
               </p>
               <div class="mail-device-code">
-                <code>{{ deviceCode.userCode }}</code>
+                <code v-if="deviceCode.userCode">{{ deviceCode.userCode }}</code>
                 <button class="mail-btn" @click="openVerificationUrl">打开授权页</button>
-                <button class="mail-btn" :disabled="polling" @click="pollAuth">
+                <button
+                  v-if="deviceCode.userCode"
+                  class="mail-btn"
+                  :disabled="polling"
+                  @click="pollAuth"
+                >
                   {{ polling ? '等待授权…' : '我已经授权了' }}
                 </button>
                 <button v-if="oauthState === 'error'" class="mail-btn" @click="restartAuth">
@@ -105,6 +120,27 @@
                 </button>
               </div>
               <p class="mail-hint" style="margin: 4px 0 0">{{ deviceCode.verificationUrl }}</p>
+              <details v-if="!deviceCode.userCode" class="mail-oauth-manual" style="margin-top: 8px">
+                <summary class="mail-hint" style="cursor: pointer">浏览器没有自动回到应用？</summary>
+                <p class="mail-hint" style="margin: 6px 0">
+                  登录完成后浏览器会跳到 http://localhost:端口/?code=… 的地址；如果那个页面打不开，
+                  把地址栏里的完整地址粘贴到这里，由应用完成最后一步。
+                </p>
+                <div style="display: flex; gap: 6px">
+                  <input
+                    v-model="callbackUrl"
+                    class="mail-input"
+                    placeholder="http://localhost:.../?code=...&state=..."
+                  />
+                  <button
+                    class="mail-btn"
+                    :disabled="!callbackUrl.trim() || completing"
+                    @click="completeManual"
+                  >
+                    {{ completing ? '处理中…' : '完成授权' }}
+                  </button>
+                </div>
+              </details>
             </template>
             <button
               v-else
@@ -308,6 +344,8 @@ const props = defineProps({
   oauthPollFn: { type: Function, default: null },
   /** 查询账户当前是否已经拿到 OAuth 令牌（编辑既有账户时决定是否要求重新授权）。 */
   oauthStatusFn: { type: Function, default: null },
+  /** 浏览器无法自动回到本机时，用粘贴进来的回调地址完成授权。 */
+  oauthCompleteFn: { type: Function, default: null },
   /**
    * 真正落库的保存函数。必须是函数 prop 而不是 emit：设备码流程要在保存后
    * 拿到账户 id，再把令牌挂到这个 id 上；Vue 的 emit 不回传返回值。
@@ -320,11 +358,40 @@ const presets = [
   { label: 'QQ 邮箱', email: '', imapHost: 'imap.qq.com', imapPort: 993, smtpHost: 'smtp.qq.com', smtpPort: 465, hint: '需要 QQ 邮箱设置里生成的授权码' },
   { label: '163 邮箱', email: '', imapHost: 'imap.163.com', imapPort: 993, smtpHost: 'smtp.163.com', smtpPort: 465, hint: '需要客户端授权密码' },
   { label: '126 邮箱', email: '', imapHost: 'imap.126.com', imapPort: 993, smtpHost: 'smtp.126.com', smtpPort: 465, hint: '需要客户端授权密码' },
-  { label: 'Gmail', email: '', imapHost: 'imap.gmail.com', imapPort: 993, smtpHost: 'smtp.gmail.com', smtpPort: 465, hint: '需要开启两步验证并使用应用专用密码' },
-  { label: 'Outlook', email: '', imapHost: 'outlook.office365.com', imapPort: 993, smtpHost: 'smtp.office365.com', smtpPort: 587, smtpSecurity: 'starttls', hint: '微软账户需要在安全设置里开启 IMAP' },
+  { label: 'Gmail', email: '', imapHost: 'imap.gmail.com', imapPort: 993, smtpHost: 'smtp.gmail.com', smtpPort: 465, oauthProvider: 'gmail', hint: '需要开启两步验证并使用应用专用密码' },
+  { label: 'Outlook', email: '', imapHost: 'outlook.office365.com', imapPort: 993, smtpHost: 'smtp.office365.com', smtpPort: 587, smtpSecurity: 'starttls', oauthProvider: 'outlook', authKind: 'oauth2', hint: '微软账户需要在安全设置里开启 IMAP' },
   { label: '腾讯企业邮', email: '', imapHost: 'imap.exmail.qq.com', imapPort: 993, smtpHost: 'smtp.exmail.qq.com', smtpPort: 465, hint: '登录名可能是完整邮箱' },
   { label: '阿里企业邮', email: '', imapHost: 'imap.qiye.aliyun.com', imapPort: 993, smtpHost: 'smtp.qiye.aliyun.com', smtpPort: 465, hint: '' },
 ]
+
+/**
+ * 常见服务商的服务器参数。选了已知服务商就自动填好，不该逼用户手抄
+ * IMAP/SMTP 地址——「开始授权」更不该因为服务器栏空着而拒绝。
+ */
+const KNOWN_SERVERS = {
+  outlook: {
+    imapHost: 'outlook.office365.com', imapPort: 993, imapSecurity: 'ssl',
+    smtpHost: 'smtp.office365.com', smtpPort: 587, smtpSecurity: 'starttls',
+  },
+  gmail: {
+    imapHost: 'imap.gmail.com', imapPort: 993, imapSecurity: 'ssl',
+    smtpHost: 'smtp.gmail.com', smtpPort: 465, smtpSecurity: 'ssl',
+  },
+}
+
+const DOMAIN_SERVERS = {
+  'outlook.com': KNOWN_SERVERS.outlook,
+  'hotmail.com': KNOWN_SERVERS.outlook,
+  'live.com': KNOWN_SERVERS.outlook,
+  'msn.com': KNOWN_SERVERS.outlook,
+  'gmail.com': KNOWN_SERVERS.gmail,
+  'googlemail.com': KNOWN_SERVERS.gmail,
+  'qq.com': { imapHost: 'imap.qq.com', imapPort: 993, imapSecurity: 'ssl', smtpHost: 'smtp.qq.com', smtpPort: 465, smtpSecurity: 'ssl' },
+  'foxmail.com': { imapHost: 'imap.qq.com', imapPort: 993, imapSecurity: 'ssl', smtpHost: 'smtp.qq.com', smtpPort: 465, smtpSecurity: 'ssl' },
+  '163.com': { imapHost: 'imap.163.com', imapPort: 993, imapSecurity: 'ssl', smtpHost: 'smtp.163.com', smtpPort: 465, smtpSecurity: 'ssl' },
+  '126.com': { imapHost: 'imap.126.com', imapPort: 993, imapSecurity: 'ssl', smtpHost: 'smtp.126.com', smtpPort: 465, smtpSecurity: 'ssl' },
+  'exmail.qq.com': { imapHost: 'imap.exmail.qq.com', imapPort: 993, imapSecurity: 'ssl', smtpHost: 'smtp.exmail.qq.com', smtpPort: 465, smtpSecurity: 'ssl' },
+}
 
 const editing = ref(false)
 const testing = ref(false)
@@ -341,6 +408,9 @@ const bypassText = ref('')
 const oauthState = ref('idle')
 const oauthError = ref('')
 const deviceCode = ref(null)
+/** 手动粘贴的回调地址（浏览器没能自动回到本机时使用）。 */
+const callbackUrl = ref('')
+const completing = ref(false)
 /** 这个账户还没有可用的令牌：保存并关闭前必须先完成授权。 */
 const awaitingAuth = ref(false)
 /** 落库时的服务商：改了服务商就必须重新授权，旧令牌对新服务商无效。 */
@@ -372,6 +442,66 @@ const blank = () => ({
 })
 
 const form = reactive(blank())
+/** 上一次自动填写的服务器；用户手动改过之后就不再覆盖。 */
+const autoServers = ref(null)
+
+function applyServers(defaults) {
+  form.imapHost = defaults.imapHost
+  form.imapPort = defaults.imapPort
+  form.imapSecurity = defaults.imapSecurity || 'ssl'
+  form.smtpHost = defaults.smtpHost
+  form.smtpPort = defaults.smtpPort
+  form.smtpSecurity = defaults.smtpSecurity || 'ssl'
+  autoServers.value = { imapHost: defaults.imapHost, smtpHost: defaults.smtpHost }
+}
+
+/** 按服务商 / 邮箱域名补服务器：已有服务器或用户手改过就不动。 */
+function fillKnownServers() {
+  const domain = String(form.email.split('@')[1] || '').trim().toLowerCase()
+  const defaults =
+    (form.authKind === 'oauth2' ? KNOWN_SERVERS[form.oauthProvider] : null) ||
+    DOMAIN_SERVERS[domain]
+  if (!defaults) return
+  const untouched =
+    (!form.imapHost.trim() && !form.smtpHost.trim()) ||
+    (autoServers.value &&
+      form.imapHost === autoServers.value.imapHost &&
+      form.smtpHost === autoServers.value.smtpHost)
+  if (untouched) applyServers(defaults)
+}
+
+/** 还缺哪些必填字段：报错时直接说清楚，别只给一句笼统提示。 */
+function missingFields() {
+  const missing = []
+  // OAuth 可以先不填邮箱：授权结果里的 id_token 会带回来真实地址。
+  const canOmitEmail = form.authKind === 'oauth2' && !form.email.trim()
+  if (!emailValid.value && !canOmitEmail) missing.push('完整邮箱地址')
+  if (!form.imapHost.trim()) missing.push('IMAP 服务器')
+  if (!form.smtpHost.trim()) missing.push('SMTP 服务器')
+  return missing
+}
+
+const OUTLOOK_DOMAINS = new Set(['outlook.com', 'hotmail.com', 'live.com', 'msn.com'])
+const GMAIL_DOMAINS = new Set(['gmail.com', 'googlemail.com'])
+
+/** 邮箱域名已经说明了服务商：OAuth 下自动选中对应项，避免 Outlook 邮箱配到 Gmail 端点。 */
+function syncProviderFromDomain() {
+  if (form.authKind !== 'oauth2') return
+  const domain = String(form.email.split('@')[1] || '').trim().toLowerCase()
+  if (OUTLOOK_DOMAINS.has(domain) && form.oauthProvider !== 'outlook') {
+    form.oauthProvider = 'outlook'
+  } else if (GMAIL_DOMAINS.has(domain) && form.oauthProvider !== 'gmail') {
+    form.oauthProvider = 'gmail'
+  }
+}
+
+watch(
+  [() => form.email, () => form.authKind, () => form.oauthProvider],
+  () => {
+    syncProviderFromDomain()
+    fillKnownServers()
+  },
+)
 
 watch(
   () => form.oauthProvider,
@@ -380,6 +510,7 @@ watch(
     // 换服务商后旧的设备码不再有效，否则「我已经授权了」会拿旧码去新端点轮询。
     if (deviceCode.value) {
       deviceCode.value = null
+      callbackUrl.value = ''
       oauthState.value = 'idle'
       oauthError.value = ''
     }
@@ -416,8 +547,15 @@ watch(
   },
 )
 
+// 只要求「本地部分@域名.后缀」：不追求 RFC 完整性，但一定要挡住
+// `name@` 这种缺域名的半截地址——它会让保存下来的账户永远连不上服务器。
+const emailValid = computed(() => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim()))
 const canSave = computed(
-  () => form.email.trim() && form.imapHost.trim() && form.smtpHost.trim(),
+  () =>
+    // OAuth 允许先空着邮箱，授权完成后再由服务商返回的地址补上。
+    (emailValid.value || (form.authKind === 'oauth2' && !form.email.trim())) &&
+    form.imapHost.trim() &&
+    form.smtpHost.trim(),
 )
 
 function pickAccent() {
@@ -437,6 +575,8 @@ function startNew() {
   awaitingAuth.value = false
   savedProvider.value = ''
   deviceCode.value = null
+  callbackUrl.value = ''
+  autoServers.value = null
   polling.value = false
   checkingAuth.value = false
   probeResult.value = null
@@ -448,6 +588,7 @@ function startNew() {
 function startEdit(account) {
   customMode.value = false
   checkingAuth.value = false
+  autoServers.value = null
   Object.assign(form, blank(), {
     ...account,
     proxy: account.proxy ? { ...account.proxy } : { mode: 'system', url: '', bypass: [] },
@@ -478,6 +619,7 @@ function startEdit(account) {
   oauthState.value = 'idle'
   oauthError.value = ''
   deviceCode.value = null
+  callbackUrl.value = ''
   if (account.authKind === 'oauth2' && props.oauthStatusFn) {
     checkingAuth.value = true
     props
@@ -503,6 +645,9 @@ function cancel() {
 /** 自定义 / 内网邮箱：清空预填，全部字段由用户填。 */
 function startCustom() {
   customMode.value = true
+  // 自建/公司邮件系统通常用密码或授权码；OAuth2 只对内置的两家服务商有端点。
+  form.authKind = 'password'
+  autoServers.value = null
   form.imapHost = ''
   form.imapPort = 993
   form.imapSecurity = 'ssl'
@@ -519,19 +664,32 @@ function applyPreset(preset) {
   form.smtpHost = preset.smtpHost
   form.smtpPort = preset.smtpPort
   form.smtpSecurity = preset.smtpSecurity || 'ssl'
+  // 服务商自带 OAuth 端点时顺手选中，避免服务器和认证方式对不上。
+  if (preset.oauthProvider) form.oauthProvider = preset.oauthProvider
+  if (preset.authKind) form.authKind = preset.authKind
+  autoServers.value = { imapHost: preset.imapHost, smtpHost: preset.smtpHost }
 }
 
 async function startAuth() {
   if (!props.oauthStartFn) return
-  if (!canSave.value) {
+  if (oauthState.value === 'starting' || polling.value) return
+  // 已知服务商先把服务器补好：Outlook/Gmail 的地址是固定的，不该让用户手填。
+  syncProviderFromDomain()
+  fillKnownServers()
+  const missing = missingFields()
+  if (missing.length) {
     oauthState.value = 'error'
-    oauthError.value = '请先填写邮箱地址、IMAP 与 SMTP 服务器，再开始授权'
+    oauthError.value = `请先填写${missing.join('、')}，再开始授权`
     return
   }
   oauthState.value = 'starting'
   oauthError.value = ''
   try {
-    deviceCode.value = await props.oauthStartFn(form.oauthProvider)
+    // Outlook 的回调线程要把令牌挂到账户上，所以先落库拿到 id。
+    awaitingAuth.value = true
+    if (!form.id) await save(false)
+    if (!form.id) throw new Error('账户还没有保存完成，无法开始授权')
+    deviceCode.value = await props.oauthStartFn(form.oauthProvider, form.id)
     oauthState.value = 'waiting'
     // 自动轮询：用户不用手动点「我已经授权了」，但保留按钮作为兜底。
     pollAuth().catch(() => {})
@@ -546,6 +704,72 @@ function restartAuth() {
   deviceCode.value = null
   oauthState.value = 'idle'
   oauthError.value = ''
+  callbackUrl.value = ''
+}
+
+/**
+ * 手动完成授权：把浏览器地址栏里的 `http://localhost:端口/?code=…&state=…`
+ * 交给后端换取令牌。`redirect_uri` 取自本次授权地址，保证与微软侧完全一致。
+ */
+async function completeManual() {
+  if (!props.oauthCompleteFn || !form.id || !deviceCode.value) return
+  oauthError.value = ''
+  let parsed
+  try {
+    parsed = new URL(callbackUrl.value.trim())
+  } catch {
+    oauthState.value = 'error'
+    oauthError.value = '请粘贴完整的回调地址（以 http://localhost: 开头）'
+    return
+  }
+  const code = parsed.searchParams.get('code')
+  const state = parsed.searchParams.get('state')
+  if (!code) {
+    oauthState.value = 'error'
+    oauthError.value = '地址里没有 code 参数，请确认复制的是登录完成后的地址'
+    return
+  }
+  if (state && state !== deviceCode.value.deviceCode) {
+    oauthState.value = 'error'
+    oauthError.value = '回调地址与本次授权不匹配，请重新发起授权'
+    return
+  }
+  let redirectUri = ''
+  try {
+    redirectUri =
+      new URL(deviceCode.value.verificationUrl).searchParams.get('redirect_uri') || ''
+  } catch {
+    redirectUri = ''
+  }
+  if (!redirectUri) {
+    oauthState.value = 'error'
+    oauthError.value = '授权地址缺少回调参数，请重新发起授权'
+    return
+  }
+  completing.value = true
+  try {
+    const email = await props.oauthCompleteFn(
+      form.id,
+      deviceCode.value.deviceCode,
+      form.oauthProvider,
+      redirectUri,
+      code,
+    )
+    if (typeof email === 'string' && email.trim()) form.email = email.trim()
+    awaitingAuth.value = false
+    callbackUrl.value = ''
+    if (!emailValid.value) {
+      oauthState.value = 'error'
+      oauthError.value = '授权已完成，但服务商没有返回邮箱地址；请手动填写后保存'
+      return
+    }
+    oauthState.value = 'done'
+  } catch (error) {
+    oauthState.value = 'error'
+    oauthError.value = String(error?.message || error)
+  } finally {
+    completing.value = false
+  }
 }
 
 async function pollAuth() {
@@ -560,8 +784,14 @@ async function pollAuth() {
     awaitingAuth.value = true
     if (!form.id) await save(false)
     if (!form.id) throw new Error('账户还没有保存完成，无法写入授权令牌')
-    await props.oauthPollFn(form.id, form.oauthProvider, deviceCode.value)
+    const email = await props.oauthPollFn(form.id, form.oauthProvider, deviceCode.value)
+    if (typeof email === 'string' && email.trim()) form.email = email.trim()
     awaitingAuth.value = false
+    if (!emailValid.value) {
+      oauthState.value = 'error'
+      oauthError.value = '授权已完成，但服务商没有返回邮箱地址；请手动填写后保存'
+      return
+    }
     oauthState.value = 'done'
   } catch (error) {
     oauthState.value = 'error'
@@ -631,6 +861,9 @@ async function save(closeAfter = true) {
   try {
     const account = {
       ...form,
+      email: form.email.trim(),
+      imapHost: form.imapHost.trim(),
+      smtpHost: form.smtpHost.trim(),
       proxy: overrideProxy.value ? { ...form.proxy } : null,
     }
     delete account.secret

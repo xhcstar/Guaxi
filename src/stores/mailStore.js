@@ -691,14 +691,14 @@ export const useMailStore = defineStore('mail', {
 
     // ---------------- OAuth2 ----------------
 
-    /** 发起设备码授权，返回给界面展示的短码与网址。 */
-    async startOAuth(provider, { clientId = null, scope = null } = {}) {
-      return invoke('mail_oauth_start', { provider, clientId, scope })
+    /** 发起授权，返回给界面展示的授权地址（设备码流程还会带短码）。 */
+    async startOAuth(provider, accountId = null, { clientId = null, scope = null } = {}) {
+      return invoke('mail_oauth_start', { provider, clientId, scope, accountId })
     },
 
-    /** 轮询等待用户在浏览器里完成授权。 */
+    /** 轮询等待用户在浏览器里完成授权，返回授权后的账户邮箱（服务商提供时）。 */
     async pollOAuth(accountId, provider, deviceCode, interval = 5) {
-      await invoke('mail_oauth_poll', {
+      const email = await invoke('mail_oauth_poll', {
         accountId,
         provider,
         deviceCode,
@@ -706,12 +706,25 @@ export const useMailStore = defineStore('mail', {
         clientId: null,
       })
       this.oauthStatus = await this.oauthStatusFor(accountId).catch(() => null)
-      return this.oauthStatus
+      return email || ''
     },
 
     async oauthStatusFor(accountId) {
       if (!accountId) return null
       return invoke('mail_oauth_status', { accountId })
+    },
+
+    /** 手动完成授权：把浏览器回跳地址里的 code 交给后端换取令牌。 */
+    async completeOAuth(accountId, flowId, provider, redirectUri, code) {
+      return (
+        (await invoke('mail_oauth_complete', {
+          accountId,
+          flowId,
+          provider,
+          redirectUri,
+          code,
+        })) || ''
+      )
     },
 
     async signOutOAuth(accountId) {

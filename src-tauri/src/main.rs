@@ -777,6 +777,7 @@ async fn main() {
             commands::mail::mail_builtin_themes,
             commands::mail::mail_oauth_start,
             commands::mail::mail_oauth_poll,
+            commands::mail::mail_oauth_complete,
             commands::mail::mail_oauth_sign_out,
             commands::mail::mail_oauth_status,
             commands::mail::mail_offline_list,

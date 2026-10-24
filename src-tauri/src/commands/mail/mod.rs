@@ -817,7 +817,15 @@ pub async fn mail_get_message(
 
     let mut detail = store::base_detail(&summary);
     if fetched && (!cached_text.is_empty() || cached_html.is_some()) {
-        detail.html = cached_html;
+        detail.html = cached_html.map(|html| {
+            // 旧缓存里可能残留邮件自带的 <style>（深色 media query 会让正文变黑）。
+            // 只对这类正文重洗一次，干净的缓存原样返回，避免每次打开都多解析一遍。
+            if html.to_ascii_lowercase().contains("<style") {
+                sanitize::resanitize_cached(&html)
+            } else {
+                html
+            }
+        });
         detail.text = cached_text;
         detail.attachments = serde_json::from_str(&cached_attachments).unwrap_or_default();
     } else {
@@ -2158,17 +2166,30 @@ pub async fn mail_delete_stashed_draft(app: AppHandle, id: String) -> Result<(),
 // OAuth2
 // ---------------------------------------------------------------------------
 
-/// 发起设备码授权：返回给用户一个短码与网址。
+/// 发起授权：返回给用户一个授权页地址。
+/// - Gmail：设备码流程（短码 + 网页输入）。
+/// - Outlook：授权码流程 + 本机 localhost 回调（避免设备码页面把浏览器导向
+///   127.0.0.1 的错误页）。回调线程拿到令牌后直接写库，`mail_oauth_poll` 只等结果。
 #[command]
 pub async fn mail_oauth_start(
     app: AppHandle,
     provider: String,
     client_id: Option<String>,
     scope: Option<String>,
+    account_id: Option<String>,
 ) -> Result<oauth::DeviceCode, String> {
     ensure_init(&app)?;
     let provider = oauth::provider_for(&provider)
         .ok_or_else(|| format!("不支持的 OAuth 服务商: {provider}"))?;
+    if provider.id == "outlook" {
+        let account_id = account_id.unwrap_or_default();
+        return oauth::start_loopback_flow(
+            &provider,
+            &account_id,
+            client_id.as_deref(),
+            scope.as_deref(),
+        );
+    }
     tauri::async_runtime::spawn_blocking(move || {
         oauth::start_device_flow(&provider, client_id.as_deref(), scope.as_deref())
     })
@@ -2185,7 +2206,7 @@ pub async fn mail_oauth_poll(
     device_code: String,
     interval: Option<u64>,
     client_id: Option<String>,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     ensure_init(&app)?;
     let account_id = account_id.trim().to_string();
     // 令牌必须挂在真实账户上。前端如果还没拿到保存后的 id（例如设备码流程里
@@ -2195,7 +2216,20 @@ pub async fn mail_oauth_poll(
         .ok_or_else(|| "账户还没有保存完成，无法写入授权令牌".to_string())?;
     let provider_info = oauth::provider_for(&provider)
         .ok_or_else(|| format!("不支持的 OAuth 服务商: {provider}"))?;
-    let tokens = tauri::async_runtime::spawn_blocking(move || {
+    // Outlook 走 localhost 回调：令牌已经由回调线程保存，这里只等它结束。
+    if provider_info.id == "outlook" {
+        let flow_id = device_code;
+        tauri::async_runtime::spawn_blocking(move || oauth::wait_loopback_flow(&flow_id))
+            .await
+            .map_err(|e| format!("等待授权失败: {e}"))??;
+        pool::invalidate(&account_id);
+        // 回调线程可能已经从 id_token 里补上了邮箱：把最新的地址带回前端。
+        let email = store::get_account(&account_id)?
+            .map(|a| a.email.trim().to_string())
+            .filter(|e| !e.is_empty());
+        return Ok(email);
+    }
+    let (tokens, oauth_email) = tauri::async_runtime::spawn_blocking(move || {
         oauth::poll_device_token(
             &provider_info,
             client_id.as_deref(),
@@ -2211,15 +2245,48 @@ pub async fn mail_oauth_poll(
     account.auth_kind = "oauth2".to_string();
     account.oauth_provider = provider;
     account.oauth_expires = tokens.expires_at;
+    // 用户没填邮箱时用授权结果里的真实地址补上。
+    if (account.email.trim().is_empty() || !account.email.contains('@')) && oauth_email.is_some() {
+        account.email = oauth_email.unwrap_or_default();
+    }
     store::upsert_account(&account)?;
     pool::invalidate(&account_id);
-    Ok(())
+    let email = account.email.trim().to_string();
+    Ok((!email.is_empty()).then_some(email))
+}
+
+/// 手动完成 Outlook 授权：浏览器没能自动回到本机时，把回调地址里的 code 交给
+/// 后端完成「授权码换令牌」。`flow_id` 用来找到同一次授权会话并唤醒等待方。
+#[command]
+pub async fn mail_oauth_complete(
+    app: AppHandle,
+    account_id: String,
+    flow_id: String,
+    provider: String,
+    redirect_uri: String,
+    code: String,
+) -> Result<Option<String>, String> {
+    ensure_init(&app)?;
+    if store::get_account(&account_id)?.is_none() {
+        return Err("账户还没有保存完成，无法写入授权令牌".to_string());
+    }
+    let provider = oauth::provider_for(&provider)
+        .ok_or_else(|| format!("不支持的 OAuth 服务商: {provider}"))?;
+    let flow_account = account_id.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        oauth::complete_loopback_flow(&flow_id, &flow_account, &provider, &redirect_uri, &code)
+    })
+    .await
+    .map_err(|e| format!("完成授权失败: {e}"))??;
+    let email = store::get_account(&account_id)?
+        .map(|a| a.email.trim().to_string())
+        .filter(|e| !e.is_empty());
+    Ok(email)
 }
 
 /// 退出 OAuth：清掉令牌并回到密码模式。
 #[command]
-pub async fn mail_oauth_sign_out(app: AppHandle, account_id: String) -> Result<(), String> {
-    ensure_init(&app)?;
+pub async fn mail_oauth_sign_out(app: AppHandle, account_id: String) -> Result<(), String> {    ensure_init(&app)?;
     oauth::delete_tokens(&account_id);
     if let Ok(Some(mut account)) = store::get_account(&account_id) {
         account.auth_kind = "password".to_string();
