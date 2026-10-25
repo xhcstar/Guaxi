@@ -816,7 +816,13 @@ pub async fn mail_get_message(
         cached.unwrap_or((None, String::new(), "[]".into(), false));
 
     let mut detail = store::base_detail(&summary);
-    if fetched && (!cached_text.is_empty() || cached_html.is_some()) {
+    // 老缓存里可能还留着 `cid:` 引用（旧版没有把内联图转成 data URI）：
+    // 重新取一次原始报文并解析，顺带把缓存刷新成可显示的内联图。
+    let cached_needs_inline = cached_html
+        .as_deref()
+        .map(|html| html.to_ascii_lowercase().contains("cid:"))
+        .unwrap_or(false);
+    if fetched && !cached_needs_inline && (!cached_text.is_empty() || cached_html.is_some()) {
         detail.html = cached_html.map(|html| {
             // 旧缓存里可能残留邮件自带的 <style>（深色 media query 会让正文变黑）。
             // 只对这类正文重洗一次，干净的缓存原样返回，避免每次打开都多解析一遍。

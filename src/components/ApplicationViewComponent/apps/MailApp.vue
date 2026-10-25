@@ -1,7 +1,10 @@
 <template>
   <div
     class="mail-root"
-    :class="[`mail-density-${settings.density || 'comfortable'}`]"
+    :class="[
+      `mail-density-${settings.density || 'comfortable'}`,
+      { 'mail-doc-dark': store.theme?.mode !== 'light' },
+    ]"
     :style="rootStyle"
   >
     <!-- 首次使用：没有任何账户时整页让位给引导，而不是显示一个空三栏 -->

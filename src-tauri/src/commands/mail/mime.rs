@@ -5,10 +5,14 @@
 
 use super::model::{AttachmentMeta, MailAddress, SendRequest};
 use super::sanitize;
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use lettre::message::header::{ContentType as LettreContentType, InReplyTo, References};
 use lettre::message::{Attachment, Mailbox, MultiPart};
 use lettre::Message;
 use mail_parser::{MessageParser, MimeHeaders};
+use once_cell::sync::Lazy;
+use regex::{Captures, Regex};
+use std::collections::HashMap;
 
 /// 解析后的来信。正文 HTML 已经清洗过。
 pub struct ParsedMessage {
@@ -101,6 +105,83 @@ fn to_unix(dt: &mail_parser::DateTime) -> i64 {
 }
 
 /// 解析一封完整的 RFC822 报文。`block_remote_images` 控制远端图片是否在清洗时被挡住。
+/// 收集内联图片：Content-ID → data URI。
+///
+/// 只收 `image/*`，单张上限 2MB、总计 8MB——内联图通常是签名 logo 或小图标，
+/// 超过这个量级的多半是把整张海报塞进了正文，放进 DOM 会让滚动明显变卡。
+fn collect_inline_images(msg: &mail_parser::Message<'_>) -> HashMap<String, String> {
+    let mut images = HashMap::new();
+    let mut total = 0usize;
+    for part in msg.attachments() {
+        let Some(raw_cid) = part.content_id() else {
+            continue;
+        };
+        let cid = normalize_cid(raw_cid);
+        if cid.is_empty() || images.contains_key(&cid) {
+            continue;
+        }
+        let Some(ctype) = part.content_type() else {
+            continue;
+        };
+        let Some(subtype) = ctype.subtype() else {
+            continue;
+        };
+        if ctype.ctype() != "image" {
+            continue;
+        }
+        let body: &[u8] = match &part.body {
+            mail_parser::PartType::Binary(bytes)
+            | mail_parser::PartType::InlineBinary(bytes) => bytes.as_ref(),
+            _ => continue,
+        };
+        if body.is_empty()
+            || body.len() > 2 * 1024 * 1024
+            || total + body.len() > 8 * 1024 * 1024
+        {
+            continue;
+        }
+        total += body.len();
+        images.insert(
+            cid,
+            format!("data:image/{subtype};base64,{}", STANDARD.encode(body)),
+        );
+    }
+    images
+}
+
+fn normalize_cid(raw: &str) -> String {
+    let trimmed = raw.trim().trim_start_matches('<').trim_end_matches('>');
+    let decoded = urlencoding::decode(trimmed)
+        .map(|value| value.into_owned())
+        .unwrap_or_else(|_| trimmed.to_string());
+    decoded.trim().to_ascii_lowercase()
+}
+
+/// 把 HTML 里的 `cid:xxx` 引用换成内联图片的 data URI。
+fn replace_cid_sources(html: &str, images: &HashMap<String, String>) -> String {
+    if images.is_empty() || !html.to_ascii_lowercase().contains("cid:") {
+        return html.to_string();
+    }
+    static CID_SRC: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r#"(?i)src\s*=\s*"cid:([^"]+)""#).unwrap());
+    static CID_URL: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r#"(?i)url\(\s*['"]?cid:([^'")]+)['"]?\s*\)"#).unwrap());
+    let replaced = CID_SRC.replace_all(html, |caps: &Captures| {
+        match images.get(&normalize_cid(&caps[1])) {
+            Some(data) => format!("src=\"{data}\""),
+            None => caps[0].to_string(),
+        }
+    });
+    CID_URL
+        .replace_all(&replaced, |caps: &Captures| {
+            match images.get(&normalize_cid(&caps[1])) {
+                Some(data) => format!("url(\"{data}\")"),
+                None => caps[0].to_string(),
+            }
+        })
+        .into_owned()
+}
+
 pub fn parse(raw: &[u8], block_remote_images: bool) -> Option<ParsedMessage> {
     let parser = MessageParser::default()
         .with_minimal_headers()
@@ -138,7 +219,10 @@ pub fn parse(raw: &[u8], block_remote_images: bool) -> Option<ParsedMessage> {
 
     let html = raw_html.as_deref().map(|html| {
         let quoted = sanitize::mark_quotes(html);
-        sanitize::ensure_viewport(&sanitize::sanitize(&quoted, block_remote_images))
+        let sanitized = sanitize::ensure_viewport(&sanitize::sanitize(&quoted, block_remote_images));
+        // `cid:` 是邮件协议里的内联图引用，WebView 不认识这个 scheme，必须换成
+        // data URI 才能真正显示出来（否则控制台报 ERR_UNKNOWN_URL_SCHEME）。
+        replace_cid_sources(&sanitized, &collect_inline_images(&msg))
     });
 
     let mut attachments: Vec<AttachmentMeta> = Vec::new();
@@ -632,4 +716,46 @@ Hello world\r\n";
         assert_eq!(parsed.message_id.as_deref(), Some("<abc@example.com>"));
     }
 
+    #[test]
+    fn cid_sources_become_data_uris() {
+        let mut images = HashMap::new();
+        images.insert(
+            "logo@x".to_string(),
+            "data:image/png;base64,AAAA".to_string(),
+        );
+        let html = r#"<img src="cid:LOGO@x"><img src="cid:logo%40x"><img src="cid:missing@x">"#;
+        let out = replace_cid_sources(html, &images);
+        assert_eq!(out.matches("data:image/png;base64,AAAA").count(), 2);
+        assert!(out.contains(r#"src="cid:missing@x""#));
+    }
+
+    #[test]
+    fn parse_embeds_inline_image_from_multipart_related() {
+        let raw = b"From: a@example.com\r\n\
+To: b@example.com\r\n\
+Subject: inline\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/related; boundary=\"b1\"\r\n\
+\r\n\
+--b1\r\n\
+Content-Type: text/html; charset=utf-8\r\n\
+Content-ID: <html@x>\r\n\
+\r\n\
+<html><body><img src=\"cid:img1@x\"></body></html>\r\n\
+--b1\r\n\
+Content-Type: image/png\r\n\
+Content-ID: <img1@x>\r\n\
+Content-Transfer-Encoding: base64\r\n\
+Content-Disposition: inline; filename=\"logo.png\"\r\n\
+\r\n\
+iVBORw0KGgo=\r\n\
+--b1--\r\n";
+        let parsed = parse(raw, false).unwrap();
+        let html = parsed.html.expect("html");
+        assert!(
+            html.contains(r#"src="data:image/png;base64,iVBORw0KGgo=""#),
+            "内联图应替换为 data URI: {html}"
+        );
+        assert!(!html.contains("cid:img1@x"));
+    }
 }

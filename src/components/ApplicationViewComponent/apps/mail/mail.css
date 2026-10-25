@@ -876,6 +876,24 @@
   max-width: 76ch;
 }
 
+/* ---------- 暗色阅读 ----------
+ * 邮件正文里写死的颜色太多（深色标题、白色卡片、品牌色），逐条覆盖既不现实
+ * 也会破坏排版。做法是：给正文整体加一层反色滤镜，再把图片反一次还原。
+ * 反色保持原有的明暗对比，所以「深底浅字」的邮件不会变成「深底深字」。
+ * 正文自己的背景要先写成浅色，滤镜会把它反成深色。
+ */
+.mail-doc-dark .mail-body {
+  background: #e8e8e6;
+  filter: invert(1) hue-rotate(180deg);
+}
+.mail-doc-dark .mail-body img,
+.mail-doc-dark .mail-body video,
+.mail-doc-dark .mail-body svg,
+.mail-doc-dark .mail-body canvas,
+.mail-doc-dark .mail-body iframe {
+  filter: invert(1) hue-rotate(180deg);
+}
+
 .mail-body--plain {
   white-space: pre-wrap;
   margin: 0;
