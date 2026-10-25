@@ -1195,21 +1195,28 @@ pub async fn mail_open_attachment(
     filename: String,
 ) -> Result<String, String> {
     ensure_init(&app)?;
-    let account = load_account(&account_id)?;
-    let password = account_password(&account)?;
-    let (f, safe_name) = (folder.clone(), sanitize_filename(&filename));
-    let raw =
-        tauri::async_runtime::spawn_blocking(move || imap::fetch_raw(&account, &password, &f, uid))
-            .await
-            .map_err(|e| format!("取信任务失败: {e}"))??;
-    let (bytes, _) = mime::extract_part(&raw, part).ok_or("找不到该附件")?;
+    let safe_name = sanitize_filename(&filename);
     let dir = store::data_root(&app)?
         .join("attachments")
         .join(sanitize_filename(&account_id))
-        .join(uid.to_string());
+        .join(uid.to_string())
+        // 同一封邮件的不同附件可能同名（received_1.pdf / received_1.pdf），按 MIME 部件分目录。
+        .join(part.to_string());
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建缓存目录失败: {e}"))?;
     let path = dir.join(safe_name);
-    std::fs::write(&path, &bytes).map_err(|e| format!("写入附件失败: {e}"))?;
+    if !path.exists() {
+        // 附件内容不会变，落过一次之后重复点击直接打开缓存，不再重下整封邮件。
+        let account = load_account(&account_id)?;
+        let password = account_password(&account)?;
+        let (f, uid_for_fetch) = (folder.clone(), uid);
+        let raw = tauri::async_runtime::spawn_blocking(move || {
+            imap::fetch_raw(&account, &password, &f, uid_for_fetch)
+        })
+        .await
+        .map_err(|e| format!("取信任务失败: {e}"))??;
+        let (bytes, _) = mime::extract_part(&raw, part).ok_or("找不到该附件")?;
+        std::fs::write(&path, &bytes).map_err(|e| format!("写入附件失败: {e}"))?;
+    }
     tauri_plugin_opener::open_path(&path, None::<&str>)
         .map_err(|e| format!("调用系统默认程序失败: {e}"))?;
     Ok(path.to_string_lossy().to_string())

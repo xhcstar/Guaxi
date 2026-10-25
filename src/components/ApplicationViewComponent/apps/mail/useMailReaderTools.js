@@ -124,18 +124,28 @@ export function useMailReaderTools({ getDetail, notify, settings }) {
       .join('')
       .slice(0, 80)
     const path = await save({
-      title: `导出为 ${kind}`,
+      title: kind === 'eml' ? '另存为 .eml' : `导出为 ${kind}`,
       defaultPath: `${stem}.${kind}`,
-      filters: [{ name: kind.toUpperCase(), extensions: [kind] }],
+      filters: [{ name: kind === 'eml' ? '邮件报文' : kind.toUpperCase(), extensions: [kind] }],
     })
     if (!path) return
-    await invoke('mail_export_message', {
-      accountId: detail.accountId,
-      folder: detail.folder,
-      uid: detail.uid,
-      format: kind,
-      targetPath: path,
-    })
+    if (kind === 'eml') {
+      // 原始报文：含邮件头与附件，可以直接拖回其他邮件客户端打开。
+      await invoke('mail_save_as_eml', {
+        accountId: detail.accountId,
+        folder: detail.folder,
+        uid: detail.uid,
+        targetPath: path,
+      })
+    } else {
+      await invoke('mail_export_message', {
+        accountId: detail.accountId,
+        folder: detail.folder,
+        uid: detail.uid,
+        format: kind,
+        targetPath: path,
+      })
+    }
     notify?.(`已导出到 ${path}`)
   }
 

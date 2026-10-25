@@ -74,6 +74,7 @@
           </button>
           <select class="mail-select" title="导出为…" aria-label="导出为" @change="onExportChange($event)">
             <option value="">导出…</option>
+            <option value="eml">原始邮件 (.eml)</option>
             <option value="md">Markdown</option>
             <option value="html">HTML</option>
             <option value="pdf">PDF</option>
@@ -232,7 +233,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { avatarSeed } from './theme'
 import { useMailReaderTools } from './useMailReaderTools'
 import MailIcon from './MailIcon.vue'
@@ -312,19 +313,34 @@ function restoreRemoteImages(html) {
 
 const scrollRef = ref(null)
 
-/** 颜色是否够浅：暗色正文整块反转后，这类背景会变成比纸面更暗的色块。 */
-function isLightColor(value) {
+/** 解析 rgb()/rgba()，返回相对亮度（0-1）与透明度。 */
+function colorInfo(value) {
   const match = String(value || '').match(
     /rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,/\s]+([\d.]+))?\s*\)/i,
   )
-  if (!match) return false
+  if (!match) return null
   const [r, g, b] = [Number(match[1]), Number(match[2]), Number(match[3])]
   const alpha = match[4] === undefined ? 1 : Number(match[4])
-  if (alpha < 0.15) return false
-  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 > 0.82
+  return { luminance: (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255, alpha }
 }
 
-/** 渐变的所有可见色标都是浅色（QQ 邮箱页脚那种 #F6F6F6 → #FFFFFF）。 */
+/**
+ * 颜色是否接近白色。
+ * 阈值取 0.95 而不是「比较亮」：只有近白背景反转后才会变成纯黑块；
+ * 暖色/品牌色背景（米色 #F3EFE6、浅蓝）反转成深色系是原设计的暗色版本，应当保留。
+ */
+function isLightColor(value, threshold = 0.95) {
+  const info = colorInfo(value)
+  return Boolean(info && info.alpha >= 0.15 && info.luminance > threshold)
+}
+
+/** 浅色小字（次要说明、页脚）：反色后会变成深字，需要按背景重新决定。 */
+function isLightText(value) {
+  const info = colorInfo(value)
+  return Boolean(info && info.alpha >= 0.5 && info.luminance > 0.6)
+}
+
+/** 渐变的所有可见色标都接近白色（QQ 邮箱页脚那种 #F6F6F6 → #FFFFFF）。 */
 function isLightGradient(image) {
   const text = String(image || '')
   if (!/gradient/i.test(text)) return false
@@ -332,13 +348,43 @@ function isLightGradient(image) {
   const visible = colors.filter(
     (color) => !/rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*0(?:\.0+)?\s*\)/i.test(color),
   )
-  return visible.length > 0 && visible.every(isLightColor)
+  return visible.length > 0 && visible.every((color) => isLightColor(color))
 }
 
 /**
- * 暗色正文靠 `invert(1)` 自动压暗，邮件里写死的浅色背景会反转成纯黑块。
- * 这里标记「浅底」元素，由 mail.css 在暗色主题下把它抹成透明；
- * 浅色渐变则去掉背景图。用 class 而不是内联样式：切回亮色主题规则自动失效。
+ * 元素背后的底色（含祖先）是不是浅色。
+ * 用来判断「浅色文字」在原设计里是不是写在浅底上的：是的话反转后会变成深字深底，
+ * 需要由 guaxi-soft-fg 把颜色换回来。
+ */
+function hasLightBackdrop(el) {
+  const body = el.closest('.mail-body')
+  let node = el
+  while (node) {
+    const style = getComputedStyle(node)
+    const image = style.backgroundImage
+    if (image && image !== 'none') {
+      // 浅色渐变算浅底；深色渐变/背景图（可能是深色照片）不猜，交给原来的反色。
+      if (isLightGradient(image)) return true
+      return false
+    }
+    const bg = style.backgroundColor
+    if (bg && !/rgba\([^)]*,\s*0(?:\.0+)?\s*\)/i.test(bg) && bg !== 'transparent') {
+      // 判断「文字原本写在什么底色上」用宽松一点的阈值：
+      // 米色、浅蓝这类品牌底色反转后是深色系，浅色文字同样需要换回浅色。
+      return isLightColor(bg, 0.7)
+    }
+    if (node === body) break
+    node = node.parentElement
+  }
+  // 没有任何显式底色时落到的就是阅读纸面（浅色）。
+  return true
+}
+
+/**
+ * 暗色正文靠 `invert(1)` 自动压暗，邮件里写死的浅色背景会反转成纯黑块，
+ * 写在浅底上的浅色文字也会变成「深字深底」。
+ * 这里标记「浅底」元素，由 mail.css 在暗色主题下把底色抹掉、把浅色文字换回浅色。
+ * 用 class 而不是内联样式：切回亮色主题规则自动失效。
  */
 function softenLightBackgrounds() {
   if (props.themeMode === 'light' || !scrollRef.value) return
@@ -346,6 +392,7 @@ function softenLightBackgrounds() {
     const style = getComputedStyle(el)
     if (isLightColor(style.backgroundColor)) el.classList.add('guaxi-soft-bg')
     if (isLightGradient(style.backgroundImage)) el.classList.add('guaxi-soft-bg-image')
+    if (isLightText(style.color) && hasLightBackdrop(el)) el.classList.add('guaxi-soft-fg')
   })
 }
 
@@ -360,16 +407,10 @@ const renderedHtml = computed(() => {
 // 正文 DOM 更新后（换信、显示图片、切暗色主题）重新标记浅色背景。
 watch(
   [renderedHtml, () => props.themeMode, () => props.thread, imagesAllowed],
-  async () => {
-    await nextTick()
-    softenLightBackgrounds()
-  },
+  () => softenLightBackgrounds(),
   { flush: 'post' },
 )
-onMounted(async () => {
-  await nextTick()
-  softenLightBackgrounds()
-})
+onMounted(() => softenLightBackgrounds())
 
 // ---------------- 会话卡片 ----------------
 

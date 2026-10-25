@@ -933,6 +933,11 @@
 .mail-doc-dark .mail-body .guaxi-soft-bg-image {
   background-image: none !important;
 }
+/* 写在浅底上的浅色小字：反色后会变成深字配深纸。这里把它换回浅色
+   （滤镜会把 #2f333a 反转成浅灰，和原来的层次接近）。 */
+.mail-doc-dark .mail-body .guaxi-soft-fg {
+  color: #2f333a !important;
+}
 
 /* ---------- 会话视图：每封邮件一张独立卡片 ---------- */
 .mail-thread {
