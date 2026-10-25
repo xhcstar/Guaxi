@@ -272,13 +272,24 @@ const hasRemoteImages = computed(() => {
 
 const imagesBlocked = computed(() => hasRemoteImages.value && !imagesAllowed.value)
 
+/**
+ * 把暂存的远端图片地址放回 `src`。
+ *
+ * 不能假设 `src=""` 一定还在：二次清洗（老缓存带 `<style>` 时会重新过一遍
+ * sanitize）会把空的 src 当成非法图片地址丢掉，只剩 `data-guaxi-remote-src`。
+ * 两种形态都要能恢复，否则点了「显示图片」只会留下碎图图标。
+ */
+function restoreRemoteImages(html) {
+  return String(html || '')
+    .replace(/data-guaxi-remote-src="([^"]*)"\s+src=""/g, 'src="$1"')
+    .replace(/data-guaxi-remote-src="([^"]*)"/g, 'src="$1"')
+}
+
 const renderedHtml = computed(() => {
   const html = props.detail?.html
   if (!html) return ''
-  const restored = imagesBlocked.value
-    ? html
-    : // 用户点了「显示图片」：把暂存地址放回 src。
-      html.replace(/data-guaxi-remote-src="([^"]*)"\s+src=""/g, 'src="$1"')
+  // 用户点了「显示图片」：把暂存地址放回 src。
+  const restored = imagesBlocked.value ? html : restoreRemoteImages(html)
   return upgradeQuoteCards(restored)
 })
 
@@ -325,9 +336,7 @@ function threadRecipients(message) {
 /** 会话里每封邮件的正文：历史和嵌套引用已经由上方卡片呈现，这里直接去掉。 */
 function threadBody(message) {
   if (message.html) {
-    const restored = imagesBlocked.value
-      ? message.html
-      : message.html.replace(/data-guaxi-remote-src="([^"]*)"\s+src=""/g, 'src="$1"')
+    const restored = imagesBlocked.value ? message.html : restoreRemoteImages(message.html)
     return upgradeQuoteCards(restored, { dropQuotes: true })
   }
   return `<pre class="mail-body--plain" style="white-space:pre-wrap;margin:0">${escapeHtml(

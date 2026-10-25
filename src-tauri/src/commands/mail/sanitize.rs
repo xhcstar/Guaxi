@@ -55,7 +55,16 @@ fn render_node(node: ego_tree::NodeRef<'_, scraper::Node>, out: &mut String, blo
                     continue;
                 }
                 if (name == "src" || name == "background") && !is_safe_image_src(&value) {
-                    continue;
+                    // 已经被封锁的远端图片写的是 `src=""`。二次清洗（老缓存重新过
+                    // sanitize 时）不能把这个空占位当成非法地址丢掉：前端「显示图片」
+                    // 要靠它把地址放回 src，丢了就只能看到碎图。
+                    let blocked_placeholder = name == "src"
+                        && value.trim().is_empty()
+                        && el.attrs()
+                            .any(|(attr, _)| attr.eq_ignore_ascii_case("data-guaxi-remote-src"));
+                    if !blocked_placeholder {
+                        continue;
+                    }
                 }
                 if name == "src" && block_remote && is_remote_url(&value) {
                     out.push_str(" data-guaxi-remote-src=\"");
@@ -337,6 +346,16 @@ mod tests {
     fn blocks_remote_images_when_asked() {
         let out = sanitize(r#"<img src="https://tracker/pixel.gif">"#, true);
         assert!(out.contains("data-guaxi-remote-src=\"https://tracker/pixel.gif\""));
+        assert!(out.contains("src=\"\""));
+    }
+
+    #[test]
+    fn resanitize_keeps_blocked_image_placeholder() {
+        // 老缓存重新清洗时，空的 src 是「已封锁图片」的占位，不能被当成非法地址丢掉。
+        let out = resanitize_cached(
+            r#"<div><img data-guaxi-remote-src="https://x/y.png" src="" /></div>"#,
+        );
+        assert!(out.contains("data-guaxi-remote-src=\"https://x/y.png\""));
         assert!(out.contains("src=\"\""));
     }
 
