@@ -8,19 +8,22 @@
 
     <!-- 右侧：功能图标 -->
     <div class="header-right">
-      <n-icon class="header-icon" size="20" :component="TextBulletListLtr20Filled"></n-icon>
-      <n-icon class="header-icon" size="20" :component="Screenshot24Regular"></n-icon>
+      <n-icon class="header-icon" size="20">
+        <Icon :icon="listTreeIcon" width="18" height="18" />
+      </n-icon>
+      <n-icon class="header-icon" size="20">
+        <Icon :icon="cameraIcon" width="18" height="18" />
+      </n-icon>
       <GuaxiSiderToggle view-key="app" side="right" />
     </div>
   </div>
 </template>
 
 <script setup>
+import { Icon } from '@iconify/vue'
+import listTreeIcon from '@iconify-icons/lucide/list-tree'
+import cameraIcon from '@iconify-icons/lucide/camera'
 import GuaxiSiderToggle from '../GuaxiSiderToggle.vue'
-import {
-  TextBulletListLtr20Filled,
-  Screenshot24Regular,
-} from '@vicons/fluent'
 </script>
 
 <style scoped>
@@ -58,18 +61,19 @@ import {
 }
 
 .header-icon {
+  flex: 0 0 auto;
   cursor: pointer;
-  transition: all 0.2s ease;
-  padding: 2px;
-  border-radius: 4px;
+  padding: 3px;
+  border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
+  color: var(--guaxi-text-secondary);
+  transition: color 0.16s ease, background-color 0.16s ease;
 }
 
 .header-icon:hover {
-  opacity: 0.8;
-  transform: scale(1.05);
-  background-color: rgba(0, 0, 0, 0.05);
+  color: var(--guaxi-text-primary);
+  background-color: rgba(127, 127, 127, 0.16);
 }
 </style>

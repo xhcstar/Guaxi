@@ -12,8 +12,9 @@
         阅读 PDF / 电子书 / 图片时它们不适用，收起来能把高度让给内容。
 
         默认显示 = 与改造前完全一致；状态存在 siderStore，按窗口记住。
-        图标用「收拢 / 展开」两态：上下双箭头向中线收 = 正在显示，点它把两条收起；
-        上下双箭头向外张开 = 已隐藏，点它让两条回来。比原先的「面板」图标更直白。
+        图标用「顶部面板」两态（与侧栏的 panel-left / panel-right 同一套面板语言）：
+        面板顶栏 + 向上收拢 = 正在显示，点它把两条收起；向下展开 = 已隐藏，点它让两条回来。
+        比双箭头（16px 下容易看成 ✕）更直白，也不会被误认成关闭窗口。
       -->
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
@@ -21,9 +22,10 @@
             class="header-icon editor-chrome-toggle"
             :class="{ active: isEditorChromeShown }"
             size="20"
-            :component="isEditorChromeShown ? ArrowMinimizeVertical20Filled : ArrowMaximizeVertical20Filled"
             @click="toggleEditorChrome"
-          />
+          >
+            <Icon :icon="isEditorChromeShown ? panelTopCloseIcon : panelTopOpenIcon" width="18" height="18" />
+          </n-icon>
         </template>
         {{ headerShortcutTooltip(isEditorChromeShown ? '隐藏工具栏与面包屑' : '显示工具栏与面包屑', 'toggleEditorChrome') }}
       </n-tooltip>
@@ -35,7 +37,9 @@
         <n-input ref="searchInputRef" v-model:value="searchQuery" placeholder="搜索文件或内容，输入 > 打开命令" round clearable
           @keydown="handleSearchKeydown" @focus="showSearchOptions" @blur="handleSearchBlur">
           <template #prefix>
-            <n-icon :component="Search32Filled" />
+            <n-icon :size="16">
+              <Icon :icon="searchIcon" width="16" height="16" />
+            </n-icon>
           </template>
           <template #suffix>
             <span class="search-mode-group">
@@ -56,9 +60,7 @@
               @mousedown.prevent
               @click="toggleFilters"
             >
-              <svg viewBox="0 0 24 24" width="15" height="15">
-                <path fill="currentColor" d="M3 4.5h18l-7.2 8.4v5.1l-3.6 1.8v-6.9z" />
-              </svg>
+              <Icon :icon="filterIcon" width="15" height="15" />
               <span v-if="activeFilterCount" class="search-filter-badge">{{ activeFilterCount }}</span>
             </span>
           </template>
@@ -70,14 +72,18 @@
     <div class="header-right">
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
-          <n-icon class="header-icon" size="20" data-tour="create-kb" :component="BookAdd20Regular" @click="openCreateKnowledgeBase" />
+          <n-icon class="header-icon" size="20" data-tour="create-kb" @click="openCreateKnowledgeBase">
+            <Icon :icon="bookPlusIcon" width="18" height="18" />
+          </n-icon>
         </template>
         {{ headerShortcutTooltip('新建知识库', 'createKnowledgeBase') }}
       </n-tooltip>
 
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
-          <n-icon class="header-icon" size="20" :component="TextBulletListLtr20Filled" @click="openOutlinePanel"></n-icon>
+          <n-icon class="header-icon" size="20" @click="openOutlinePanel">
+            <Icon :icon="listTreeIcon" width="18" height="18" />
+          </n-icon>
         </template>
         {{ headerShortcutTooltip('大纲', 'openOutline') }}
       </n-tooltip>
@@ -85,7 +91,7 @@
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
           <n-icon class="header-icon" size="20" @click="openAssistantPanel">
-            <Icon :icon="assistantIcon" width="18" height="18" />
+            <Icon :icon="botIcon" width="18" height="18" />
           </n-icon>
         </template>
         {{ headerShortcutTooltip('智能助手', 'openAssistant') }}
@@ -93,7 +99,9 @@
 
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
-          <n-icon class="header-icon" size="20" :component="Box20Regular" @click="openTemplateManager" />
+          <n-icon class="header-icon" size="20" @click="openTemplateManager">
+            <Icon :icon="packageIcon" width="18" height="18" />
+          </n-icon>
         </template>
         {{ headerShortcutTooltip('模板管理', 'openTemplateManager') }}
       </n-tooltip>
@@ -101,9 +109,7 @@
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
           <n-icon class="header-icon" size="20" @click="openSlidevManager">
-            <svg viewBox="0 0 24 24" width="18" height="18">
-              <path fill="currentColor" d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8.5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5zm2 0v8.5h12V5H6zm-1 14a1 1 0 0 1 1-1h4v-1h4v1h4a1 1 0 1 1 0 2H6a1 1 0 0 1-1-1z" />
-            </svg>
+            <Icon :icon="presentationIcon" width="18" height="18" />
           </n-icon>
         </template>
         PPT 制作与管理
@@ -111,14 +117,18 @@
 
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
-          <n-icon class="header-icon" size="20" :component="Folder20Regular" @click="openResourceRepoManager" />
+          <n-icon class="header-icon" size="20" @click="openResourceRepoManager">
+            <Icon :icon="folderOpenIcon" width="18" height="18" />
+          </n-icon>
         </template>
         {{ headerShortcutTooltip('知识库资源管理', 'openResourceRepoManager') }}
       </n-tooltip>
 
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
-          <n-icon class="header-icon" size="20" :component="TaskListSquareLtr20Regular" @click="openTaskManager" />
+          <n-icon class="header-icon" size="20" @click="openTaskManager">
+            <Icon :icon="listChecksIcon" width="18" height="18" />
+          </n-icon>
         </template>
         任务管理面板
       </n-tooltip>
@@ -126,11 +136,7 @@
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
           <n-icon class="header-icon" size="20" @click="openDiffCompare">
-            <svg viewBox="0 0 24 24" width="18" height="18">
-              <path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
-                stroke-linejoin="round"
-                d="M4 4h6v16H4zm10 0h6v16h-6zM6 8h2m-2 3.5h2M16 8h2m-2 3.5h2m-2 3.5h2" />
-            </svg>
+            <Icon :icon="gitCompareIcon" width="18" height="18" />
           </n-icon>
         </template>
         差异对比（任意文件 / 目录）
@@ -139,9 +145,7 @@
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
           <n-icon class="header-icon" size="20" @click="openLanguageLearningWindow">
-            <svg viewBox="0 0 24 24" width="18" height="18">
-              <path fill="none" stroke="currentColor" stroke-width="1.8" d="M4 5.5A2.5 2.5 0 0 1 6.5 3H11v16H6.5A2.5 2.5 0 0 0 4 21V5.5zm16 0A2.5 2.5 0 0 0 17.5 3H13v16h4.5A2.5 2.5 0 0 1 20 21V5.5zM8 8h2m-2 3h2m6-3h-2m2 3h-2" />
-            </svg>
+            <Icon :icon="languagesIcon" width="18" height="18" />
           </n-icon>
         </template>
         语言学习
@@ -154,7 +158,9 @@
       <n-dropdown trigger="click" :options="screenshotMenuOptions" @select="handleScreenshotMenuSelect">
         <n-tooltip placement="bottom" trigger="hover">
           <template #trigger>
-            <n-icon class="header-icon" size="20" :component="Screenshot24Regular"></n-icon>
+            <n-icon class="header-icon" size="20">
+              <Icon :icon="cameraIcon" width="18" height="18" />
+            </n-icon>
           </template>
           {{ headerShortcutTooltip('截图并插入', 'captureScreenshot') }}
         </n-tooltip>
@@ -163,10 +169,7 @@
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
           <n-icon class="header-icon" size="20" @click="splitVertical">
-            <svg viewBox="0 0 16 16" width="16" height="16">
-              <rect x="1.5" y="2.5" width="13" height="11" rx="1" ry="1" fill="none" stroke="currentColor" stroke-width="1" />
-              <line x1="8" y1="3" x2="8" y2="13" stroke="currentColor" stroke-width="1" />
-            </svg>
+            <Icon :icon="columnsIcon" width="18" height="18" />
           </n-icon>
         </template>
         {{ headerShortcutTooltip('纵向分屏', 'splitVertical') }}
@@ -175,10 +178,7 @@
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
           <n-icon class="header-icon" size="20" @click="splitHorizontal">
-            <svg viewBox="0 0 16 16" width="16" height="16">
-              <rect x="1.5" y="2.5" width="13" height="11" rx="1" ry="1" fill="none" stroke="currentColor" stroke-width="1" />
-              <line x1="2" y1="8" x2="14" y2="8" stroke="currentColor" stroke-width="1" />
-            </svg>
+            <Icon :icon="rowsIcon" width="18" height="18" />
           </n-icon>
         </template>
         {{ headerShortcutTooltip('横向分屏', 'splitHorizontal') }}
@@ -189,12 +189,7 @@
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
           <n-icon class="header-icon" size="20" @click="restartOnboardingTour">
-            <svg viewBox="0 0 24 24" width="18" height="18">
-              <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.7" />
-              <path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
-                d="M9.6 9.3a2.5 2.5 0 1 1 3.3 2.3c-.7.3-1 .9-1 1.6v.4" />
-              <circle cx="12" cy="16.7" r="1.05" fill="currentColor" />
-            </svg>
+            <Icon :icon="helpCircleIcon" width="18" height="18" />
           </n-icon>
         </template>
         重新观看新手引导
@@ -254,7 +249,7 @@
           @click="handleSearchSelect(item.key)"
         >
           <span class="search-dd-icon-wrap">
-            <n-icon :component="item.icon" />
+            <Icon :icon="item.icon" width="16" height="16" />
           </span>
           <span class="search-dd-row-text">{{ item.label }}</span>
         </div>
@@ -448,7 +443,7 @@
 import { createLogger } from '../../utils/logger'
 import { parseSearchQuery, matchesPathFilters } from '../../utils/searchQuerySyntax'
 import { computed, ref, h, onMounted, onUnmounted, nextTick, watch } from "vue";
-import { NDropdown, NIcon, NTooltip } from 'naive-ui'
+import { NDropdown, NTooltip } from 'naive-ui'
 import { useSiderStore } from '../../stores/useSiderStore'
 import GuaxiSiderToggle from '../GuaxiSiderToggle.vue'
 import { useOnboardingTour } from '../../composables/useOnboardingTour'
@@ -464,33 +459,38 @@ import CreateKnowledgeBaseForm from '../BrainViewComponent/CreateKnowledgeBaseFo
 import { useMessage } from 'naive-ui';
 import { debounce } from 'lodash-es'
 import { Icon } from '@iconify/vue'
-import assistantIcon from '@iconify-icons/mdi/robot-excited-outline'
-// 命令面板 / 历史记录的图标。和上面的 assistantIcon 一样 import 图标数据对象，
-// 而不是给 <Icon> 传 'mdi:xxx' 名字：名字得先在 src/main.js 里 addIcon 注册，
+// 顶栏图标统一走 Lucide（与 Obsidian 同一套图标语言），全部按数据对象静态 import：
+// 不依赖运行时按名字注册/下载，release 断网时也不会掉图标。
+import bookPlusIcon from '@iconify-icons/lucide/book-plus'
+import listTreeIcon from '@iconify-icons/lucide/list-tree'
+import botIcon from '@iconify-icons/lucide/bot'
+import packageIcon from '@iconify-icons/lucide/package'
+import presentationIcon from '@iconify-icons/lucide/presentation'
+import folderOpenIcon from '@iconify-icons/lucide/folder-open'
+import listChecksIcon from '@iconify-icons/lucide/list-checks'
+import gitCompareIcon from '@iconify-icons/lucide/git-compare'
+import languagesIcon from '@iconify-icons/lucide/languages'
+import cameraIcon from '@iconify-icons/lucide/camera'
+import columnsIcon from '@iconify-icons/lucide/columns'
+import rowsIcon from '@iconify-icons/lucide/rows'
+import helpCircleIcon from '@iconify-icons/lucide/help-circle'
+import panelTopCloseIcon from '@iconify-icons/lucide/panel-top-close'
+import panelTopOpenIcon from '@iconify-icons/lucide/panel-top-open'
+import searchIcon from '@iconify-icons/lucide/search'
+import filterIcon from '@iconify-icons/lucide/filter'
+import fileSearchIcon from '@iconify-icons/lucide/file-search'
+import textIcon from '@iconify-icons/lucide/text'
+import quoteIcon from '@iconify-icons/lucide/quote'
+import filterXIcon from '@iconify-icons/lucide/filter-x'
+import regexIcon from '@iconify-icons/lucide/regex'
+import wholeWordIcon from '@iconify-icons/lucide/whole-word'
+import caseSensitiveIcon from '@iconify-icons/lucide/case-sensitive'
+import historyIcon from '@iconify-icons/lucide/history'
+// 命令面板 / 历史记录的图标。和上面的顶栏图标一样 import 图标数据对象，
+// 而不是给 <Icon> 传 'lucide:xxx' 名字：名字得先在 src/main.js 里 addIcon 注册，
 // 漏注册的名字会让 <Icon> 去 api.iconify.design 现取——release 包在断网、内网、
 // CSP 收紧的机器上就是一排空白图标。传对象则被 Vite 打进 bundle，不碰网络，
 // 名字写错也在构建期就报"模块找不到"，不会留到运行时。
-import mdiFileSearchOutline from '@iconify-icons/mdi/file-search-outline'
-import mdiTextSearch from '@iconify-icons/mdi/text-search'
-import mdiFilterOffOutline from '@iconify-icons/mdi/filter-off-outline'
-import mdiRegex from '@iconify-icons/mdi/regex'
-import mdiFormatLetterMatches from '@iconify-icons/mdi/format-letter-matches'
-import mdiFormatLetterCase from '@iconify-icons/mdi/format-letter-case'
-import mdiHistory from '@iconify-icons/mdi/history'
-import {
-  Screenshot24Regular,
-  Search32Filled,
-  TextBulletListLtr20Filled,
-  DocumentSearch20Filled,
-  DocumentSearch24Regular,
-  NotebookSection24Regular,
-  BookAdd20Regular,
-  Box20Regular,
-  Folder20Regular,
-  TaskListSquareLtr20Regular,
-  ArrowMinimizeVertical20Filled,
-  ArrowMaximizeVertical20Filled
-} from '@vicons/fluent'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 
@@ -1317,9 +1317,9 @@ const SEARCH_TYPE_LABELS = {
 }
 
 const typeMenuItems = computed(() => ([
-  { key: 'file', label: SEARCH_TYPE_LABELS.file, icon: DocumentSearch20Filled },
-  { key: 'note', label: SEARCH_TYPE_LABELS.note, icon: DocumentSearch24Regular },
-  { key: 'excerpt', label: SEARCH_TYPE_LABELS.excerpt, icon: NotebookSection24Regular }
+  { key: 'file', label: SEARCH_TYPE_LABELS.file, icon: fileSearchIcon },
+  { key: 'note', label: SEARCH_TYPE_LABELS.note, icon: textIcon },
+  { key: 'excerpt', label: SEARCH_TYPE_LABELS.excerpt, icon: quoteIcon }
 ]))
 
 const basename = (p) => String(p || '').split(/[\\/]/).pop() || ''
@@ -1437,42 +1437,42 @@ const COMMAND_ITEMS = [
     label: '重建文件名索引',
     hint: '文件名搜索漏文件或明显变慢时用',
     keywords: 'rebuild file index 索引 文件名 chongjian',
-    icon: mdiFileSearchOutline,
+    icon: fileSearchIcon,
   },
   {
     id: 'rebuild-fulltext-index',
     label: '重建正文全文索引',
     hint: '正文搜索结果对不上磁盘内容时用',
     keywords: 'rebuild fulltext index 全文 正文 索引 chongjian',
-    icon: mdiTextSearch,
+    icon: textIcon,
   },
   {
     id: 'clear-filters',
     label: '清除全部筛选',
     hint: '时间段、文件类型、标签一起清掉',
     keywords: 'clear filter 清除 筛选 qingchu',
-    icon: mdiFilterOffOutline,
+    icon: filterXIcon,
   },
   {
     id: 'toggle-regex',
     label: '切换正则匹配',
     hint: '关闭时按字面量搜索，标点不当通配符',
     keywords: 'regex 正则 zhengze',
-    icon: mdiRegex,
+    icon: regexIcon,
   },
   {
     id: 'toggle-whole-word',
     label: '切换全词匹配',
     hint: '开启后只认整词，中文的词边界按分词判断',
     keywords: 'whole word 全词 quanci',
-    icon: mdiFormatLetterMatches,
+    icon: wholeWordIcon,
   },
   {
     id: 'toggle-case',
     label: '切换区分大小写',
     hint: '关闭时按智能大小写：查询里有大写才区分',
     keywords: 'case sensitive 大小写 daxiaoxie',
-    icon: mdiFormatLetterCase,
+    icon: caseSensitiveIcon,
   },
 ]
 
@@ -2021,7 +2021,7 @@ const renderHistoryOption = (entry) => {
   return h('div', { class: 'search-dd-item' }, [
     h('div', { class: 'search-dd-main' }, [
       h('span', { class: 'search-dd-icon-wrap' }, [
-        h(Icon, { icon: mdiHistory, width: 16, height: 16, class: 'search-dd-icon search-dd-icon-muted' })
+        h(Icon, { icon: historyIcon, width: 16, height: 16, class: 'search-dd-icon search-dd-icon-muted' })
       ]),
       h('div', { class: 'search-dd-filename' }, entry.query),
       h('div', { class: 'search-dd-path-inline' }, '')
@@ -2030,21 +2030,22 @@ const renderHistoryOption = (entry) => {
 }
 
 const dropdownOptions = computed(() => {
+  const typeIcon = (icon) => () => h(Icon, { icon, width: 16, height: 16 })
   const typeOptions = [
     {
       label: searchType.value === 'file' ? `${SEARCH_TYPE_LABELS.file}（当前）` : SEARCH_TYPE_LABELS.file,
       key: 'file',
-      icon: () => h(NIcon, null, { default: () => h(DocumentSearch20Filled) })
+      icon: typeIcon(fileSearchIcon)
     },
     {
       label: searchType.value === 'note' ? `${SEARCH_TYPE_LABELS.note}（当前）` : SEARCH_TYPE_LABELS.note,
       key: 'note',
-      icon: () => h(NIcon, null, { default: () => h(DocumentSearch24Regular) })
+      icon: typeIcon(textIcon)
     },
     {
       label: searchType.value === 'excerpt' ? `${SEARCH_TYPE_LABELS.excerpt}（当前）` : SEARCH_TYPE_LABELS.excerpt,
       key: 'excerpt',
-      icon: () => h(NIcon, null, { default: () => h(NotebookSection24Regular) })
+      icon: typeIcon(quoteIcon)
     }
   ]
 
@@ -2755,21 +2756,24 @@ onMounted(async () => {
   justify-content: flex-end;
 }
 
-/* 图标通用样式 */
+/* 图标通用样式：与 GuaxiSiderToggle 使用同一套 24px 点击区、6px 圆角和中性 hover，
+   18px 图形居中；不再用缩放做反馈，避免一排图标在悬停时互相挤动。 */
 .header-icon {
+  flex: 0 0 auto;
   cursor: pointer;
-  transition: all 0.2s ease;
-  padding: 2px;
-  border-radius: 4px;
+  padding: 3px;
+  box-sizing: content-box;
+  border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
+  color: var(--guaxi-text-secondary);
+  transition: color 0.16s ease, background-color 0.16s ease, opacity 0.16s ease;
 }
 
 .header-icon:hover {
-  opacity: 0.8;
-  transform: scale(1.05);
-  background-color: rgba(0, 0, 0, 0.05);
+  color: var(--guaxi-text-primary);
+  background-color: rgba(127, 127, 127, 0.16);
 }
 
 /* 编辑区装饰条开关：显示时给一点强调色，和侧栏开关的「已开启」观感一致。 */

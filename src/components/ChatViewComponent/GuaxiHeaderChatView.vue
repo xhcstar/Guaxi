@@ -12,7 +12,9 @@
       <div class="search-container">
         <n-input round clearable placeholder="搜索当前会话消息..." v-model:value="chatMessageSearchQuery" @focus="showSearchPlaceholder">
           <template #prefix>
-            <n-icon :component="Search20Filled" />
+            <n-icon :size="16">
+              <Icon :icon="searchIcon" width="16" height="16" />
+            </n-icon>
           </template>
         </n-input>
       </div>
@@ -20,7 +22,9 @@
 
     <!-- 右侧：功能图标 -->
     <div class="header-right">
-      <n-icon class="header-icon" size="20" :component="Open20Regular" @click="openWebModel"></n-icon>
+      <n-icon class="header-icon" size="20" @click="openWebModel">
+        <Icon :icon="externalLinkIcon" width="18" height="18" />
+      </n-icon>
       <GuaxiSiderToggle view-key="chat" side="right" />
     </div>
   </div>
@@ -34,13 +38,9 @@ import { useChatStore } from '../../stores/chatStore'
 import { computed } from 'vue'
 import ChatModelSelector from "./ChatModelSelector.vue"
 import GuaxiSiderToggle from '../GuaxiSiderToggle.vue'
-import {
-  Search20Filled,
-  TextBulletListLtr20Filled,
-  Screenshot24Regular,
-
-  Open20Regular,
-} from '@vicons/fluent'
+import { Icon } from '@iconify/vue'
+import searchIcon from '@iconify-icons/lucide/search'
+import externalLinkIcon from '@iconify-icons/lucide/external-link'
 
 const logger = createLogger('GuaxiHeaderChatView')
 const chatStore = useChatStore();
@@ -135,19 +135,20 @@ const openWebModel = async () => {
 
 /* 图标通用样式 */
 .header-icon {
+  flex: 0 0 auto;
   cursor: pointer;
-  transition: all 0.2s ease;
-  padding: 2px;
-  border-radius: 4px;
+  padding: 3px;
+  border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
+  color: var(--guaxi-text-secondary);
+  transition: color 0.16s ease, background-color 0.16s ease;
 }
 
 .header-icon:hover {
-  opacity: 0.8;
-  transform: scale(1.05);
-  background-color: rgba(0, 0, 0, 0.05);
+  color: var(--guaxi-text-primary);
+  background-color: rgba(127, 127, 127, 0.16);
 }
 
 /* 输入框样式 */

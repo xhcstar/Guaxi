@@ -12,7 +12,9 @@
         <n-input ref="searchInputRef" v-model:value="searchQuery" placeholder="搜索导入文件" round clearable
           @keyup.enter="handleSearchEnter" @focus="showSearchOptions" @blur="handleSearchBlur">
           <template #prefix>
-            <n-icon :component="Search32Filled" />
+            <n-icon :size="16">
+              <Icon :icon="searchIcon" width="16" height="16" />
+            </n-icon>
           </template>
         </n-input>
       </div>
@@ -20,8 +22,9 @@
 
     <!-- 右侧：功能图标 -->
     <div class="header-right">
-      <n-icon class="header-icon" size="20" :component="Share24Regular" title="资料库分享与发布"
-        @click="openLibrarySite"></n-icon>
+      <n-icon class="header-icon" size="20" title="资料库分享与发布" @click="openLibrarySite">
+        <Icon :icon="shareIcon" width="18" height="18" />
+      </n-icon>
       <GuaxiSiderToggle view-key="repo" side="right" />
     </div>
   </div>
@@ -40,13 +43,11 @@ import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { repoStore } from '../../stores/repoStore'
 import { useSearch } from './composables/useSearch.js'
 import GuaxiSiderToggle from '../GuaxiSiderToggle.vue'
+import { Icon } from '@iconify/vue'
+import searchIcon from '@iconify-icons/lucide/search'
+import shareIcon from '@iconify-icons/lucide/share-2'
 import {
-  Screenshot24Regular,
-  Search32Filled,
-  TextBulletListLtr20Filled,
-  DocumentSearch20Filled,
   DocumentSearch24Regular,
-  Share24Regular,
 } from '@vicons/fluent'
 import { invoke } from '@tauri-apps/api/core'
 import { sep } from '@tauri-apps/api/path'
@@ -368,19 +369,20 @@ async function handleSearchImported() {
 
 /* 图标通用样式 */
 .header-icon {
+  flex: 0 0 auto;
   cursor: pointer;
-  transition: all 0.2s ease;
-  padding: 2px;
-  border-radius: 4px;
+  padding: 3px;
+  border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
+  color: var(--guaxi-text-secondary);
+  transition: color 0.16s ease, background-color 0.16s ease;
 }
 
 .header-icon:hover {
-  opacity: 0.8;
-  transform: scale(1.05);
-  background-color: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-primary);
+  background-color: rgba(127, 127, 127, 0.16);
 }
 
 /* 下拉菜单样式 */

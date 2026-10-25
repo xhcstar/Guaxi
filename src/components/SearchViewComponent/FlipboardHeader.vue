@@ -14,7 +14,9 @@
         <n-input round placeholder="搜索知识主题、术语、问题..." clearable class="search-input" :value="searchQuery"
           @update:value="handleSearch">
           <template #prefix>
-            <n-icon :component="SearchIcon" />
+            <n-icon :size="16">
+              <Icon :icon="searchIcon" width="16" height="16" />
+            </n-icon>
           </template>
         </n-input>
       </div>
@@ -27,7 +29,7 @@
               <n-button circle size="small" @click="setViewMode('magazine')"
                 :type="currentView === 'magazine' ? 'primary' : 'default'">
                 <n-icon>
-                  <MagazineIcon />
+                  <Icon :icon="newspaperIcon" width="16" height="16" />
                 </n-icon>
               </n-button>
             </template>
@@ -39,7 +41,7 @@
               <n-button circle size="small" @click="setViewMode('grid')"
                 :type="currentView === 'grid' ? 'primary' : 'default'">
                 <n-icon>
-                  <GridIcon />
+                  <Icon :icon="layoutGridIcon" width="16" height="16" />
                 </n-icon>
               </n-button>
             </template>
@@ -51,7 +53,7 @@
               <n-button circle size="small" @click="setViewMode('list')"
                 :type="currentView === 'list' ? 'primary' : 'default'">
                 <n-icon>
-                  <ListIcon />
+                  <Icon :icon="listIcon" width="16" height="16" />
                 </n-icon>
               </n-button>
             </template>
@@ -63,7 +65,7 @@
           <template #trigger>
             <n-button class="header-circle-btn" circle size="small" secondary @click="refreshHealth" :disabled="isLoading" :type="healthType">
               <n-icon>
-                <HealthIcon />
+                <Icon :icon="activityIcon" width="16" height="16" />
               </n-icon>
             </n-button>
           </template>
@@ -87,8 +89,8 @@
             <n-button class="header-circle-btn" circle size="small" @click="toggleScraping"
               :type="scrapingEnabled ? 'success' : 'default'" :loading="scrapingBusy">
               <n-icon>
-                <PauseIcon v-if="scrapingEnabled" />
-                <PlayIcon v-else />
+                <Icon v-if="scrapingEnabled" :icon="pauseIcon" width="16" height="16" />
+                <Icon v-else :icon="playIcon" width="16" height="16" />
               </n-icon>
             </n-button>
           </template>
@@ -103,7 +105,7 @@
               <n-button class="header-circle-btn" circle size="small"
                 :type="pendingLogins.length ? 'warning' : 'default'">
                 <n-icon>
-                  <LoginIcon />
+                  <Icon :icon="logInIcon" width="16" height="16" />
                 </n-icon>
               </n-button>
             </n-badge>
@@ -126,7 +128,7 @@
             <n-button class="header-circle-btn" circle size="small" @click="toggleCollections"
               :type="collectionsVisible ? 'primary' : 'default'">
               <n-icon>
-                <CollectionsIcon />
+                <Icon :icon="bookmarkIcon" width="16" height="16" />
               </n-icon>
             </n-button>
           </template>
@@ -137,7 +139,7 @@
           <template #trigger>
             <n-button class="header-circle-btn" circle size="small" @click="refreshArticles" :disabled="isLoading">
               <n-icon :class="{ 'refresh-spin': isLoading }">
-                <RefreshIcon />
+                <Icon :icon="refreshIcon" width="16" height="16" />
               </n-icon>
             </n-button>
           </template>
@@ -154,30 +156,19 @@ import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useFlipboardStore } from '../../stores/flipboardStore.js'
 import GuaxiSiderToggle from '../GuaxiSiderToggle.vue'
-import {
-  SearchOutline,
-  GridOutline,
-  ListOutline,
-  NewspaperOutline,
-  RefreshOutline,
-  PulseOutline,
-  BookmarksOutline,
-  PlayOutline,
-  PauseOutline,
-  LogInOutline
-} from '@vicons/ionicons5'
+import { Icon } from '@iconify/vue'
+import searchIcon from '@iconify-icons/lucide/search'
+import layoutGridIcon from '@iconify-icons/lucide/layout-grid'
+import listIcon from '@iconify-icons/lucide/list'
+import newspaperIcon from '@iconify-icons/lucide/newspaper'
+import refreshIcon from '@iconify-icons/lucide/refresh-cw'
+import activityIcon from '@iconify-icons/lucide/activity'
+import bookmarkIcon from '@iconify-icons/lucide/bookmark'
+import playIcon from '@iconify-icons/lucide/play'
+import pauseIcon from '@iconify-icons/lucide/pause'
+import logInIcon from '@iconify-icons/lucide/log-in'
 
 const logger = createLogger('FlipboardHeader')
-const SearchIcon = SearchOutline
-const GridIcon = GridOutline
-const ListIcon = ListOutline
-const MagazineIcon = NewspaperOutline
-const RefreshIcon = RefreshOutline
-const HealthIcon = PulseOutline
-const CollectionsIcon = BookmarksOutline
-const PlayIcon = PlayOutline
-const PauseIcon = PauseOutline
-const LoginIcon = LogInOutline
 
 const store = useFlipboardStore()
 const message = useMessage()

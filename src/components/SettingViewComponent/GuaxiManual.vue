@@ -139,12 +139,83 @@
           </p>
 
           <h3 class="h3">顶部工具栏</h3>
+          <p class="p">
+            顶栏两端的 <span class="inline-icon"><Icon :icon="panelLeftIcon" width="14" height="14" /></span> /
+            <span class="inline-icon"><Icon :icon="panelRightIcon" width="14" height="14" /></span>
+            用来展开或收起左右侧栏（<b>Alt+[</b> / <b>Alt+]</b>）；侧栏收起时图标会变淡。
+          </p>
           <ul class="manual-ul">
             <li>全局搜索：搜索文件、正文关键字和摘录笔记，支持记号筛选、正则/全词/大小写开关和命令面板；可用 Ctrl+P 聚焦搜索框，用法见<button type="button" class="toc-link" @click="scrollToSection('search-local')">搜索与查询语法</button>。</li>
             <li>知识库与工具窗口：可新建知识库、打开大纲、智能助手、模板管理、PPT 制作与管理、知识库资源管理、任务管理、语言学习窗口。</li>
             <li>编辑增强：支持截图并插入、纵向/横向分屏、切换左右侧栏。</li>
             <li>资源库同步：启动/关闭时会尝试执行资源库自动同步，并记录同步状态。</li>
           </ul>
+
+          <div class="icon-legend">
+            <div class="icon-legend-title">顶栏图标速查</div>
+            <div class="icon-legend-grid">
+              <div class="icon-legend-item">
+                <span class="icon-legend-glyph"><Icon :icon="panelLeftIcon" width="16" height="16" /></span>
+                <span><b>侧栏开关</b>：左右各一个，展开或收起对应侧栏。</span>
+              </div>
+              <div class="icon-legend-item">
+                <span class="icon-legend-glyph"><Icon :icon="panelTopCloseIcon" width="16" height="16" /></span>
+                <span><b>编辑区装饰条</b>：隐藏或显示格式工具栏与面包屑（Ctrl+Alt+G）。</span>
+              </div>
+              <div class="icon-legend-item">
+                <span class="icon-legend-glyph"><Icon :icon="bookPlusIcon" width="16" height="16" /></span>
+                <span><b>新建知识库</b>：创建并打开一个新的知识库。</span>
+              </div>
+              <div class="icon-legend-item">
+                <span class="icon-legend-glyph"><Icon :icon="listTreeIcon" width="16" height="16" /></span>
+                <span><b>大纲</b>：打开当前文档的大纲面板。</span>
+              </div>
+              <div class="icon-legend-item">
+                <span class="icon-legend-glyph"><Icon :icon="botIcon" width="16" height="16" /></span>
+                <span><b>智能助手</b>：打开右侧 AI 助手面板。</span>
+              </div>
+              <div class="icon-legend-item">
+                <span class="icon-legend-glyph"><Icon :icon="packageIcon" width="16" height="16" /></span>
+                <span><b>模板管理</b>：管理 Markdown 模板。</span>
+              </div>
+              <div class="icon-legend-item">
+                <span class="icon-legend-glyph"><Icon :icon="presentationIcon" width="16" height="16" /></span>
+                <span><b>PPT 制作与管理</b>：打开 Slidev 演示文稿管理器。</span>
+              </div>
+              <div class="icon-legend-item">
+                <span class="icon-legend-glyph"><Icon :icon="folderOpenIcon" width="16" height="16" /></span>
+                <span><b>知识库资源管理</b>：管理资源库目录与文件。</span>
+              </div>
+              <div class="icon-legend-item">
+                <span class="icon-legend-glyph"><Icon :icon="listChecksIcon" width="16" height="16" /></span>
+                <span><b>任务管理</b>：打开任务管理面板。</span>
+              </div>
+              <div class="icon-legend-item">
+                <span class="icon-legend-glyph"><Icon :icon="gitCompareIcon" width="16" height="16" /></span>
+                <span><b>差异对比</b>：对比任意文件或目录。</span>
+              </div>
+              <div class="icon-legend-item">
+                <span class="icon-legend-glyph"><Icon :icon="languagesIcon" width="16" height="16" /></span>
+                <span><b>语言学习</b>：打开语言学习窗口。</span>
+              </div>
+              <div class="icon-legend-item">
+                <span class="icon-legend-glyph"><Icon :icon="cameraIcon" width="16" height="16" /></span>
+                <span><b>截图并插入</b>：选择是否隐藏窗口后截图，插入当前文档。</span>
+              </div>
+              <div class="icon-legend-item">
+                <span class="icon-legend-glyph"><Icon :icon="columnsIcon" width="16" height="16" /></span>
+                <span><b>纵向分屏</b>：左右两栏并排编辑。</span>
+              </div>
+              <div class="icon-legend-item">
+                <span class="icon-legend-glyph"><Icon :icon="rowsIcon" width="16" height="16" /></span>
+                <span><b>横向分屏</b>：上下两栏编辑。</span>
+              </div>
+              <div class="icon-legend-item">
+                <span class="icon-legend-glyph"><Icon :icon="helpCircleIcon" width="16" height="16" /></span>
+                <span><b>新手引导</b>：重新观看界面引导。</span>
+              </div>
+            </div>
+          </div>
 
           <h3 class="h3">文件树与目录</h3>
           <ul class="manual-ul">
@@ -158,7 +229,9 @@
           <h3 class="h3">工具栏与面包屑的显隐</h3>
           <p class="p">
             格式工具栏和面包屑导航会占掉两行高度。打开 PDF、电子书、图片这类只读内容时，
-            点主窗口左上角 Guaxi 标志右侧的<b>收起图标</b>（或按 <b>Ctrl+Alt+G</b>）可以把两条一起隐藏，
+            点主窗口左上角 Guaxi 标志右侧的
+            <span class="inline-icon"><Icon :icon="panelTopCloseIcon" width="14" height="14" /></span>
+            <b>收起图标</b>（或按 <b>Ctrl+Alt+G</b>）可以把两条一起隐藏，
             把高度让给正文；再点一次恢复。状态会按窗口记住，默认显示。
           </p>
 
@@ -990,6 +1063,25 @@ data: |
 <script setup>
 import { computed, onMounted, reactive } from 'vue'
 import { NAlert, NCard, NDivider, NSpace, NTag } from 'naive-ui'
+import { Icon } from '@iconify/vue'
+// 手册里的图标和顶栏使用同一份 Lucide 数据对象，按模块静态 import，
+// 保证 release 包断网时也能渲染（不依赖运行时按名字下载图标）。
+import panelLeftIcon from '@iconify-icons/lucide/panel-left'
+import panelRightIcon from '@iconify-icons/lucide/panel-right'
+import panelTopCloseIcon from '@iconify-icons/lucide/panel-top-close'
+import bookPlusIcon from '@iconify-icons/lucide/book-plus'
+import listTreeIcon from '@iconify-icons/lucide/list-tree'
+import botIcon from '@iconify-icons/lucide/bot'
+import packageIcon from '@iconify-icons/lucide/package'
+import presentationIcon from '@iconify-icons/lucide/presentation'
+import folderOpenIcon from '@iconify-icons/lucide/folder-open'
+import listChecksIcon from '@iconify-icons/lucide/list-checks'
+import gitCompareIcon from '@iconify-icons/lucide/git-compare'
+import languagesIcon from '@iconify-icons/lucide/languages'
+import cameraIcon from '@iconify-icons/lucide/camera'
+import columnsIcon from '@iconify-icons/lucide/columns'
+import rowsIcon from '@iconify-icons/lucide/rows'
+import helpCircleIcon from '@iconify-icons/lucide/help-circle'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { createLogger } from '../../utils/logger'
 
@@ -1201,6 +1293,69 @@ onMounted(() => {
 .manual-ul li,
 .ol li {
   margin: 2px 0;
+}
+
+/* 正文里引用顶栏图标时的小尺寸内联图形。 */
+.inline-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin: 0 2px;
+  vertical-align: -4px;
+}
+
+/* 顶栏图标速查：图标和说明成对出现，避免用户只能靠悬停猜图标含义。 */
+.icon-legend {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 10px;
+  background: var(--guaxi-panel-bg);
+}
+
+.icon-legend-title {
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+
+.icon-legend-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 16px;
+}
+
+.icon-legend-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--guaxi-text-secondary);
+}
+
+.icon-legend-item b {
+  color: var(--guaxi-text-primary);
+  font-weight: 600;
+}
+
+.icon-legend-glyph {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: rgba(127, 127, 127, 0.12);
+  color: var(--guaxi-text-primary);
+}
+
+@media (max-width: 720px) {
+  .icon-legend-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* 围栏示例：展示 ```chart / ```excalidraw 这类会「吃掉反引号」的语法。

@@ -26,7 +26,9 @@
           title="大脑：外部输入、待裁决的矛盾、结构缺口与今日简报"
           @click="cog.setViewMode('cognition')"
         >
-          <n-icon size="17" :component="BrainCircuit20Regular" />
+          <n-icon :size="17">
+            <Icon :icon="brainIcon" width="16" height="16" />
+          </n-icon>
           <span class="mode-label">大脑</span>
           <i v-if="cog.openNudgeCount" class="mode-badge">{{ badgeText }}</i>
         </button>
@@ -36,7 +38,9 @@
           title="图谱：知识结构的空间视图（关系 / 标签 / 时间 / 重要度）"
           @click="cog.setViewMode('graph')"
         >
-          <n-icon size="17" :component="Flowchart20Regular" />
+          <n-icon :size="17">
+            <Icon :icon="networkIcon" width="16" height="16" />
+          </n-icon>
           <span class="mode-label">图谱</span>
         </button>
       </div>
@@ -47,14 +51,12 @@
 
 <script setup>
 import { computed, onMounted } from 'vue'
+import { Icon } from '@iconify/vue'
+import brainIcon from '@iconify-icons/lucide/brain'
+import networkIcon from '@iconify-icons/lucide/network'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
 import { useCognitionStore } from '../../stores/cognitionStore'
 import GuaxiSiderToggle from '../GuaxiSiderToggle.vue'
-
-import {
-  BrainCircuit20Regular,
-  Flowchart20Regular
-} from '@vicons/fluent'
 
 const kbStore = useKnowledgeBaseStore();
 const cog = useCognitionStore();
