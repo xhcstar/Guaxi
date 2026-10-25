@@ -772,6 +772,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  row-gap: 6px;
   padding: 8px var(--mail-pad);
   border-bottom: 1px solid var(--mail-border);
   flex-wrap: wrap;
@@ -829,8 +830,18 @@
 
 .mail-reader-toolbar {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
   gap: 4px;
+  row-gap: 4px;
   margin-left: auto;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+/* 导出下拉是固定宽度；窗口窄时允许它跟着压缩，别把整排按钮顶出容器。 */
+.mail-reader-toolbar .mail-select {
+  max-width: 96px;
 }
 
 .mail-reader-scroll {
@@ -1976,4 +1987,15 @@
 }
 .mail-folder.is-nested {
   padding-left: 24px;
+}
+.mail-folder-more {
+  color: var(--mail-text-muted);
+}
+.mail-folder-more:hover {
+  color: var(--mail-text-secondary);
+}
+.mail-folder-more-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--mail-text-muted);
 }

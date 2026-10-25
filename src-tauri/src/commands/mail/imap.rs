@@ -1194,6 +1194,11 @@ fn move_with(
 ) -> Result<(), String> {
     let set = compact_uid_set(uids);
     let encoded_target = utf7::encode(target);
+    // imap crate 的 uid_copy 不会给邮箱名加引号（uid_mv 会），
+    // 像「其他文件夹/Deleted Items」这种带空格的目标会被拆成两个参数，
+    // QQ 直接回 [CLIENTBUG] UID parameters。这里自己引号化。
+    let quoted_target =
+        quote_mailbox(&encoded_target).ok_or_else(|| "目标文件夹名包含非法字符".to_string())?;
 
     if supports_move {
         session
@@ -1201,7 +1206,7 @@ fn move_with(
             .map_err(|e| format!("移动邮件失败: {e}"))?;
     } else {
         session
-            .uid_copy(&set, &encoded_target)
+            .uid_copy(&set, &quoted_target)
             .map_err(|e| format!("复制到目标文件夹失败: {e}"))?;
         session
             .uid_store(&set, "+FLAGS.SILENT (\\Deleted)")

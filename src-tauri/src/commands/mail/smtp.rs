@@ -31,6 +31,38 @@ fn io_err(context: &str, e: std::io::Error) -> String {
     format!("{context}: {e}")
 }
 
+/// 解析 EHLO 的多行能力响应。
+///
+/// 每行形如 `250-AUTH LOGIN PLAIN` / `250 STARTTLS`；必须去掉状态码再取能力名，
+/// 否则能力会变成 `250-AUTH`，AUTH / STARTTLS 全都识别不出来（曾导致跳过认证、
+/// MAIL FROM 被 503 拒绝）。
+fn parse_capabilities(lines: &[String]) -> Vec<String> {
+    lines
+        .iter()
+        .skip(1)
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            let body = trimmed
+                .as_bytes()
+                .get(3)
+                .filter(|b| **b == b'-' || **b == b' ')
+                .map(|_| trimmed.get(4..).unwrap_or(""))
+                .unwrap_or(trimmed);
+            let mut parts = body.split_whitespace();
+            let name = parts.next()?.to_ascii_uppercase();
+            if name.is_empty() {
+                return None;
+            }
+            let rest: Vec<String> = parts.map(|p| p.to_ascii_uppercase()).collect();
+            if rest.is_empty() {
+                Some(name)
+            } else {
+                Some(format!("{name} {}", rest.join(" ")))
+            }
+        })
+        .collect()
+}
+
 impl SmtpSession {
     /// 建连并完成 EHLO。`security` 为 starttls 时自动发 STARTTLS 再 EHLO 一次。
     pub fn connect(
@@ -76,14 +108,7 @@ impl SmtpSession {
     fn ehlo(&mut self, helo_name: &str) -> Result<(), String> {
         let reply = self.command(&format!("EHLO {helo_name}"))?;
         if reply.code == 250 {
-            self.capabilities = reply
-                .lines
-                .iter()
-                .skip(1)
-                .filter_map(|line| line.trim().split_whitespace().next())
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_ascii_uppercase())
-                .collect();
+            self.capabilities = parse_capabilities(&reply.lines);
             return Ok(());
         }
         // 老服务器只认 HELO。
@@ -116,13 +141,32 @@ impl SmtpSession {
             .iter()
             .map(|c| c.to_ascii_lowercase())
             .collect();
-        let has_login = lower
-            .iter()
-            .any(|c| c == "auth" || c.starts_with("auth=login") || c == "auth=login");
-        let has_plain = lower.iter().any(|c| c.starts_with("auth=plain"));
-        let has_xoauth2 = lower
-            .iter()
-            .any(|c| c.starts_with("auth=xoauth2") || c == "auth=xoauth2");
+        // 能力行有两种写法：`AUTH LOGIN PLAIN XOAUTH2` 与 `AUTH=LOGIN`。
+        // 旧实现只比对了 `auth=login`，遇到前者会误判成「服务器没有 AUTH」，
+        // 于是跳过认证、MAIL FROM 直接被 503 拒绝。
+        let mut mechanisms: Vec<String> = Vec::new();
+        let mut has_auth = false;
+        for capability in &lower {
+            if capability == "auth" {
+                has_auth = true;
+                continue;
+            }
+            let rest = if let Some(rest) = capability.strip_prefix("auth ") {
+                rest
+            } else if let Some(rest) = capability.strip_prefix("auth=") {
+                rest
+            } else {
+                continue;
+            };
+            has_auth = true;
+            for mechanism in rest.split_whitespace() {
+                mechanisms.push(mechanism.to_string());
+            }
+        }
+        let has_login =
+            mechanisms.iter().any(|m| m == "login") || (has_auth && mechanisms.is_empty());
+        let has_plain = mechanisms.iter().any(|m| m == "plain");
+        let has_xoauth2 = mechanisms.iter().any(|m| m == "xoauth2");
 
         if oauth {
             if !has_xoauth2 {
@@ -465,5 +509,28 @@ mod tests {
     fn redact_hides_long_tokens() {
         assert_eq!(redact(&"A".repeat(48)), "<credentials>");
         assert_eq!(redact("MAIL FROM:<a@b.c>"), "MAIL FROM:<a@b.c>");
+    }
+
+    #[test]
+    fn parses_multiline_ehlo_capabilities() {
+        let lines: Vec<String> = vec![
+            "250-newxmesmtplogicsvrszb51-0.qq.com XMail Esmtp QQ Mail Server.".into(),
+            "250-PIPELINING".into(),
+            "250-AUTH LOGIN PLAIN XOAUTH XOAUTH2".into(),
+            "250-AUTH=LOGIN".into(),
+            "250-STARTTLS".into(),
+            "250 8BITMIME".into(),
+        ];
+        let caps = parse_capabilities(&lines);
+        assert!(caps.contains(&"PIPELINING".to_string()));
+        assert!(caps.contains(&"STARTTLS".to_string()));
+        assert!(caps.contains(&"8BITMIME".to_string()));
+        assert!(
+            caps.iter().any(|c| c == "AUTH LOGIN PLAIN XOAUTH XOAUTH2"),
+            "AUTH 行必须保留机制列表，否则无法判断 LOGIN/XOAUTH2: {caps:?}"
+        );
+        assert!(caps.iter().any(|c| c == "AUTH=LOGIN"));
+        // 服务器名那一行会被跳过；带参数的能力名不能把状态码当成名字。
+        assert!(!caps.iter().any(|c| c.starts_with("250")));
     }
 }

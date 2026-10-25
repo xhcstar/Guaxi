@@ -30,7 +30,7 @@
       >
         <span class="mail-account-dot" :style="{ background: account.accent }"></span>
         <span class="mail-account-email" :title="account.email">{{ account.email }}</span>
-        <span v-if="unread[account.id]" class="mail-badge">{{ unread[account.id] }}</span>
+        <span v-if="accountUnread(account.id)" class="mail-badge">{{ accountUnread(account.id) }}</span>
       </button>
 
       <button class="mail-account is-add" @click="$emit('add-account')">＋ 添加账户</button>
@@ -89,34 +89,59 @@
           <span class="mail-folder-name">全部邮件</span>
         </button>
 
-        <!-- 用户自建的文件夹单独成区，避免与标准文件夹混在一起分不清 -->
-        <template v-if="customFolders.length">
-          <div class="mail-section-label is-row">
-            <span>我的文件夹</span>
-            <button
-              class="mail-section-action"
-              title="新建文件夹"
-              aria-label="新建文件夹"
-              @click="startCreateFolder"
-            >
-              ＋
-            </button>
-          </div>
+        <!-- 用户自建的文件夹单独成区。只把「有邮件」的顶层文件夹放进主列表，
+             邮件服务器自带的订阅目录 / 第三方客户端遗留的空文件夹收进「更多文件夹」，
+             默认不占版面，需要时仍能展开。 -->
+        <div class="mail-section-label is-row">
+          <span>我的文件夹</span>
           <button
-            v-for="folder in customFolders"
+            class="mail-section-action"
+            title="新建文件夹"
+            aria-label="新建文件夹"
+            @click="startCreateFolder"
+          >
+            ＋
+          </button>
+        </div>
+        <button
+          v-for="folder in primaryCustomFolders"
+          :key="folder.name"
+          class="mail-folder"
+          :class="{ 'is-active': scope === 'folder' && activeFolder === folder.name }"
+          @click="$emit('select-folder', folder.name)"
+          @contextmenu.prevent="openFolderMenu(folder, $event)"
+        >
+          <span class="mail-folder-icon">▢</span>
+          <span class="mail-folder-name" :title="folder.displayName">{{ folder.displayName }}</span>
+          <span v-if="folder.unread" class="mail-badge">{{ folder.unread }}</span>
+        </button>
+        <button
+          v-if="moreFolders.length"
+          class="mail-folder mail-folder-more"
+          :title="showMoreFolders ? '收起其他文件夹' : '展开其他文件夹'"
+          @click="showMoreFolders = !showMoreFolders"
+        >
+          <span class="mail-folder-icon">{{ showMoreFolders ? '▾' : '▸' }}</span>
+          <span class="mail-folder-name">更多文件夹</span>
+          <span class="mail-folder-more-count">{{ moreFolders.length }}</span>
+        </button>
+        <template v-if="showMoreFolders">
+          <button
+            v-for="folder in moreFolders"
             :key="folder.name"
-            class="mail-folder"
+            class="mail-folder is-nested"
             :class="{ 'is-active': scope === 'folder' && activeFolder === folder.name }"
+            :title="folder.name"
             @click="$emit('select-folder', folder.name)"
             @contextmenu.prevent="openFolderMenu(folder, $event)"
           >
             <span class="mail-folder-icon">▢</span>
-            <span class="mail-folder-name" :title="folder.displayName">{{ folder.displayName }}</span>
+            <span class="mail-folder-name">{{ folder.displayName }}</span>
             <span v-if="folder.unread" class="mail-badge">{{ folder.unread }}</span>
           </button>
         </template>
         <button
-          v-else
+          v-if="!customFolders.length"
           class="mail-folder mail-folder-add"
           title="新建文件夹"
           @click="startCreateFolder"
@@ -232,6 +257,8 @@ const creating = ref(false)
 const newFolderName = ref('')
 const createInput = ref(null)
 const folderMenu = ref(null)
+/** 「更多文件夹」是否展开：默认收起，避免 Mailspring / 订阅目录这类噪音占满侧栏。 */
+const showMoreFolders = ref(false)
 /** 拖拽悬停中的文件夹（用于高亮可放区域）。 */
 const dropTarget = ref('')
 
@@ -349,6 +376,21 @@ const customFolders = computed(() => {
   )
 })
 
+/** 主列表只放「顶层且有邮件」的自建文件夹：Mailspring、订阅目录、空文件夹不占版面。 */
+const primaryCustomFolders = computed(() =>
+  customFolders.value.filter(
+    (folder) =>
+      !folder.name.includes('/') &&
+      ((Number(folder.total) || 0) > 0 || (Number(folder.unread) || 0) > 0),
+  ),
+)
+
+/** 其余文件夹收进「更多文件夹」，需要时展开，仍可点击/右键。 */
+const moreFolders = computed(() => {
+  const primary = new Set(primaryCustomFolders.value.map((f) => f.name))
+  return customFolders.value.filter((f) => !primary.has(f.name))
+})
+
 /**
  * 共享邮箱：按邮箱地址分组展示。
  *
@@ -395,9 +437,32 @@ function selectStandard(entry) {
   emit('select-scope', entry.role)
 }
 
-const totalUnread = computed(() =>
-  Object.values(props.unread).reduce((sum, n) => sum + (Number(n) || 0), 0),
-)
+/**
+ * 账户角标与文件夹角标同源：取该账户收件箱的未读数（服务端 STATUS）。
+ * 以前账户角标读数据库、文件夹角标读 STATUS，两边数字经常对不上。
+ */
+function accountUnread(accountId) {
+  const list = props.foldersByAccount[accountId]
+  if (list?.length && list.some((f) => f.role === 'inbox')) {
+    return list
+      .filter((f) => f.role === 'inbox')
+      .reduce((sum, f) => sum + (Number(f.unread) || 0), 0)
+  }
+  return Number(props.unread[accountId]) || 0
+}
+
+const totalUnread = computed(() => {
+  let total = 0
+  const known = new Set()
+  for (const account of props.accounts) {
+    known.add(account.id)
+    total += accountUnread(account.id)
+  }
+  for (const [id, count] of Object.entries(props.unread || {})) {
+    if (!known.has(id)) total += Number(count) || 0
+  }
+  return total
+})
 
 function folderIcon(role) {
   return (

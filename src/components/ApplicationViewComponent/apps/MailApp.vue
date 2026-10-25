@@ -304,17 +304,21 @@
       <button v-if="contextInJunk" class="mail-context-item" @click="contextAction('unmarkJunk')">
         不是垃圾邮件
       </button>
+      <!-- 删除是高频危险动作：放在菜单上半段，不能因为条数多被挤到屏幕外。 -->
+      <button class="mail-context-item is-danger" @click="contextAction('delete')">删除</button>
+      <div class="mail-context-sep"></div>
       <button class="mail-context-item is-danger" @click="contextAction('blockSender')">
         把发件人加入黑名单
       </button>
       <button class="mail-context-item" @click="contextAction('allowSender')">
         把发件人加入白名单
       </button>
-      <div class="mail-context-sep"></div>
+      <div v-if="contextFolders.length" class="mail-context-sep"></div>
       <button
         v-for="folder in contextFolders"
         :key="folder.name"
         class="mail-context-item"
+        :title="folder.name"
         @click="contextAction('move', folder.name)"
       >
         移到「{{ folder.displayName }}」
@@ -322,8 +326,6 @@
       <div class="mail-context-sep"></div>
       <button class="mail-context-item" @click="contextAction('saveEml')">另存为 .eml（含附件）</button>
       <button class="mail-context-item" @click="contextAction('saveHtml')">另存为 .html（正文）</button>
-      <div class="mail-context-sep"></div>
-      <button class="mail-context-item is-danger" @click="contextAction('delete')">删除</button>
     </div>
 
     <!-- 底部提示 -->
@@ -476,6 +478,15 @@ function toggleList() {
   store.saveSettings({ listCollapsed: next }).catch(() => {})
 }
 
+const ROLE_TITLES = {
+  inbox: '收件箱',
+  drafts: '草稿',
+  sent: '已发送',
+  archive: '存档',
+  junk: '垃圾邮件',
+  trash: '已删除',
+}
+
 const listTitle = computed(() => {
   if (store.activeLabel) return `分类：${store.activeLabel}`
   if (store.searchQuery.trim()) return '搜索结果'
@@ -483,12 +494,28 @@ const listTitle = computed(() => {
   if (store.scope === 'flagged') return '已加星标'
   if (store.scope === 'attachments') return '带附件的邮件'
   if (store.scope === 'all') return '全部邮件'
+  // 按角色聚合的视图（垃圾邮件 / 已删除 / 已发送…）以前没有分支，
+  // 会错误地沿用上一次打开的文件夹名（例如选了垃圾邮件却显示 INBOX）。
+  if (ROLE_TITLES[store.scope]) return ROLE_TITLES[store.scope]
   return store.currentFolder?.displayName || '收件箱'
 })
 
+/** 右键菜单里的「移到」只列关键去向；全部文件夹在批量操作栏的下拉里。 */
+const MOVE_ROLES = ['inbox', 'archive', 'junk', 'trash']
 const contextFolders = computed(() => {
-  const accountId = contextMenu.value?.row?.accountId || store.activeAccountId
-  return (store.foldersByAccount[accountId] || []).filter((f) => f.selectable)
+  const menu = contextMenu.value
+  if (!menu) return []
+  const accountId = menu.row?.accountId || store.activeAccountId
+  const current = menu.row?.folder
+  const seen = new Set()
+  const out = []
+  for (const folder of store.foldersByAccount[accountId] || []) {
+    if (!MOVE_ROLES.includes(folder.role)) continue
+    if (folder.name === current || seen.has(folder.role)) continue
+    seen.add(folder.role)
+    out.push(folder)
+  }
+  return out.sort((a, b) => MOVE_ROLES.indexOf(a.role) - MOVE_ROLES.indexOf(b.role))
 })
 
 function notify(text, error = false) {
@@ -783,9 +810,19 @@ function buildQuote(detail) {
     : ''
   const who = detail.fromName ? `${detail.fromName} <${detail.fromAddr}>` : detail.fromAddr
   const textBody = `在 ${when}，${who} 写道：\n${detail.text || ''}`
-  const htmlBody = `<blockquote>在 ${when}，${escapeHtml(who)} 写道：<br>${
+  // 引用块用「卡片 + 头信息 + 左边条」的结构：回复窗口里一眼能分清哪些是原信，
+  // 不再是几行灰字堆在一起。颜色用半透明灰/继承色，深色编辑器里也不会出现
+  // 一块刺眼的白卡片；样式同时写成内联，收件端没有我们的 CSS 也能看。
+  const quotedBody =
     detail.html || escapeHtml(detail.text || '').replace(/\n/g, '<br>')
-  }</blockquote>`
+  const htmlBody =
+    '<div class="mail-quote" style="margin:16px 0;border:1px solid rgba(128,128,128,0.28);border-radius:10px;overflow:hidden;background:rgba(127,127,127,0.06)">' +
+    '<div class="mail-quote-head" style="display:flex;align-items:baseline;gap:10px;padding:8px 14px;border-bottom:1px solid rgba(128,128,128,0.22);background:rgba(127,127,127,0.10);font-size:12px;color:inherit;opacity:0.85">' +
+    `<span class="mail-quote-from" style="font-weight:600">${escapeHtml(who)}</span>` +
+    `<span class="mail-quote-date" style="margin-left:auto;white-space:nowrap">${escapeHtml(when)}</span>` +
+    '</div>' +
+    `<blockquote class="mail-quote-body" style="margin:0;padding:12px 16px;border-left:3px solid #2f6df6;background:transparent;color:inherit">${quotedBody}</blockquote>` +
+    '</div>'
   return { text: textBody, html: htmlBody }
 }
 
@@ -877,9 +914,12 @@ function onToggleFilter(key) {
 // ---------------- 右键菜单 ----------------
 
 function onRowContextMenu({ row, event }) {
-  const width = 200
-  const x = Math.min(event.clientX, window.innerWidth - width - 8)
-  const y = Math.min(event.clientY, window.innerHeight - 220)
+  const width = 220
+  // 菜单本身有 max-height + 滚动；这里把 top 限制在「一屏能放下菜单最大高度」的范围内，
+  // 避免在窗口下半部分右键时菜单底部（删除等）被屏幕裁掉。
+  const menuMaxHeight = Math.min(window.innerHeight * 0.7, 560)
+  const x = Math.max(8, Math.min(event.clientX, window.innerWidth - width - 8))
+  const y = Math.max(8, Math.min(event.clientY, window.innerHeight - menuMaxHeight - 8))
   // 右键不改变「勾选」状态：点中已勾选的行 → 整批；点在其他行 → 只作用于这一封，
   // 同时清掉之前的勾选，避免批量操作落到用户看不见的邮件上。
   const key = store.keyOf(row)
@@ -1018,7 +1058,11 @@ async function onSend({ useOutbox }) {
     }
     await store.sendCompose({ useOutbox: false })
     notify('已发送')
-    store.loadFolders(store.activeAccountId).catch(() => {})
+    // 发信会往「已发送」追加一封：刷新服务器计数，侧栏与列表才不会停在旧数字。
+    store
+      .loadFolders(store.activeAccountId, { refresh: true })
+      .then(() => Promise.all([store.reloadUnread(), store.loadMessages({ silent: true })]))
+      .catch(() => {})
   } catch (error) {
     notify(String(error?.message || error), true)
   }
@@ -1253,6 +1297,12 @@ defineExpose({ expandThread })
   position: fixed;
   z-index: 60;
   min-width: 190px;
+  max-width: 280px;
+  /* 条目多时菜单必须能滚动，否则底部（删除 / 另存为）会被屏幕裁掉。 */
+  max-height: min(70vh, 560px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
   padding: 4px;
   border: 1px solid var(--mail-border-strong);
   border-radius: 8px;
@@ -1271,6 +1321,9 @@ defineExpose({ expandThread })
   font: inherit;
   font-size: 12.5px;
   text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: pointer;
 }
 .mail-context-item:hover {

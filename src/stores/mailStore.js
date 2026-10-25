@@ -11,6 +11,25 @@ import { resolveTheme } from '../components/ApplicationViewComponent/apps/mail/t
 
 const logger = createLogger('MailStore')
 
+/** 正在同步的文件夹（`accountId:folder`），避免切来切去时并发拉同一个文件夹。 */
+const inflightFolderSyncs = new Set()
+
+/** 操作后的计数校正：合并短时间内的多次操作，避免每次都打一轮完整 STATUS。 */
+const folderRefreshTimers = new Map()
+
+function scheduleFolderRefresh(store, accountId) {
+  if (!accountId) return
+  clearTimeout(folderRefreshTimers.get(accountId))
+  const timer = setTimeout(() => {
+    folderRefreshTimers.delete(accountId)
+    store
+      .loadFolders(accountId, { refresh: true })
+      .then(() => store.reloadUnread())
+      .catch(() => {})
+  }, 4000)
+  folderRefreshTimers.set(accountId, timer)
+}
+
 /** 删除 keychain 里的账户口令（后端没有单独的删除命令时用「写入空串」不通用，
  * 这里需要真正的删除：调用 mail_delete_account 会连账户一起删，不适用。
  * 所以后端补一个 mail_delete_secret 命令，见 commands/mail/mod.rs。 */
@@ -325,6 +344,8 @@ export const useMailStore = defineStore('mail', {
       this.detail = null
       this.selected = null
       this.loadMessages()
+      // 切账户时顺手把收件箱拉到最新：列表和侧栏计数不该停留在上一次同步。
+      this.syncFolders([this.activeFolder])
     },
 
     // ---------------- 文件夹 ----------------
@@ -380,6 +401,8 @@ export const useMailStore = defineStore('mail', {
       this.detail = null
       this.selected = null
       this.loadMessages()
+      // 本地库里可能还没同步过这个文件夹（列表会是空的，计数也不准）。
+      this.syncFolders([name])
     },
 
     selectScope(scope, label = '') {
@@ -388,6 +411,52 @@ export const useMailStore = defineStore('mail', {
       this.detail = null
       this.selected = null
       this.loadMessages()
+      // 按角色聚合的视图同样要先同步：垃圾箱 / 已删除往往从没拉过邮件。
+      if (['inbox', 'sent', 'drafts', 'trash', 'junk', 'archive'].includes(scope)) {
+        const names = (this.foldersByAccount[this.activeAccountId] || [])
+          .filter((f) => f.role === scope)
+          .map((f) => f.name)
+        this.syncFolders(names)
+      }
+    },
+
+    /** 后台增量同步若干文件夹，完成后刷新本地目录计数与列表。 */
+    async syncFolders(names) {
+      const accountId = this.activeAccountId
+      if (!accountId) return
+      const targets = [...new Set(names || [])].filter(Boolean).slice(0, 4)
+      let changed = false
+      for (const name of targets) {
+        const key = `${accountId}:${name}`
+        if (inflightFolderSyncs.has(key)) continue
+        inflightFolderSyncs.add(key)
+        try {
+          await invoke('mail_sync_folder', { accountId, folder: name })
+          changed = true
+        } catch (error) {
+          logger.warn('同步文件夹失败', name, error)
+        } finally {
+          inflightFolderSyncs.delete(key)
+        }
+      }
+      if (!changed) return
+      // 同步只补邮件正文/列表；计数仍以服务端 STATUS（folders 表）为准，不动它。
+      await this.loadFolders(accountId)
+      await this.reloadUnread()
+      if (this.activeAccountId === accountId) {
+        this.loadMessages({ silent: true })
+      }
+    },
+
+    /** 本地乐观调整文件夹计数：操作后角标先动，后台再用服务端结果校正。 */
+    adjustFolderCount(accountId, folderName, { total = 0, unread = 0 } = {}) {
+      const list = this.foldersByAccount[accountId]
+      if (!list?.length || !folderName) return
+      const folder = list.find((f) => f.name === folderName)
+      if (!folder) return
+      folder.total = Math.max(0, Number(folder.total || 0) + total)
+      folder.unread = Math.max(0, Number(folder.unread || 0) + unread)
+      this.foldersByAccount = { ...this.foldersByAccount, [accountId]: [...list] }
     },
 
     /** 删除自建文件夹（服务器 + 本地缓存）。 */
@@ -865,6 +934,7 @@ export const useMailStore = defineStore('mail', {
     async openMessage(row) {
       this.selected = row
       this.detailLoading = true
+      const wasUnseen = !row.seen
       try {
         const detail = await invoke('mail_get_message', {
           accountId: row.accountId,
@@ -883,6 +953,11 @@ export const useMailStore = defineStore('mail', {
             if (match) match.seen = true
           }
         }
+        // 打开即已读：侧栏的未读角标先减一，稍后由服务端 STATUS 校正。
+        if (wasUnseen) {
+          this.adjustFolderCount(row.accountId, row.folder, { unread: -1 })
+          scheduleFolderRefresh(this, row.accountId)
+        }
         await this.reloadUnread()
       } catch (error) {
         logger.error('打开邮件失败', error)
@@ -894,7 +969,9 @@ export const useMailStore = defineStore('mail', {
     },
 
     async setSeen(rows, seen) {
+      const deltas = new Map()
       for (const row of rows) {
+        if (Boolean(row.seen) === seen) continue
         try {
           await invoke('mail_set_seen', {
             accountId: row.accountId,
@@ -904,13 +981,23 @@ export const useMailStore = defineStore('mail', {
           })
         } catch (error) {
           logger.warn('标记已读失败', error)
+          continue
         }
-      }
-      for (const row of rows) {
+        row.seen = seen
         const match = this.messages.find(
           (m) => m.accountId === row.accountId && m.folder === row.folder && m.uid === row.uid,
         )
         if (match) match.seen = seen
+        const key = `${row.accountId}\u0000${row.folder}`
+        const entry = deltas.get(key) || { accountId: row.accountId, folder: row.folder, count: 0 }
+        entry.count += 1
+        deltas.set(key, entry)
+      }
+      for (const entry of deltas.values()) {
+        this.adjustFolderCount(entry.accountId, entry.folder, {
+          unread: seen ? -entry.count : entry.count,
+        })
+        scheduleFolderRefresh(this, entry.accountId)
       }
       await this.reloadUnread()
     },
@@ -1049,17 +1136,25 @@ export const useMailStore = defineStore('mail', {
         if (!groups.has(key)) groups.set(key, [])
         groups.get(key).push(row)
       }
+      const accountsTouched = new Set()
+      const folderByRole = (accountId, role) =>
+        (this.foldersByAccount[accountId] || []).find((f) => f.role === role)
       for (const list of groups.values()) {
         const { accountId, folder } = list[0]
         const uids = list.map((m) => m.uid)
+        const total = list.length
+        const unseen = list.filter((m) => !m.seen).length
+        const seenCount = total - unseen
         switch (action) {
           case 'read':
             await invoke('mail_batch_flags', { accountId, folder, uids, seen: true, flagged: null })
             list.forEach((m) => (m.seen = true))
+            this.adjustFolderCount(accountId, folder, { unread: -unseen })
             break
           case 'unread':
             await invoke('mail_batch_flags', { accountId, folder, uids, seen: false, flagged: null })
             list.forEach((m) => (m.seen = false))
+            this.adjustFolderCount(accountId, folder, { unread: seenCount })
             break
           case 'flag':
             await invoke('mail_batch_flags', { accountId, folder, uids, seen: null, flagged: true })
@@ -1069,24 +1164,46 @@ export const useMailStore = defineStore('mail', {
             await invoke('mail_batch_flags', { accountId, folder, uids, seen: null, flagged: false })
             list.forEach((m) => (m.flagged = false))
             break
-          case 'junk':
+          case 'junk': {
             await invoke('mail_junk_messages', { accountId, folder, uids })
+            const junk = folderByRole(accountId, 'junk')
+            this.adjustFolderCount(accountId, folder, { total: -total, unread: -unseen })
+            if (junk) this.adjustFolderCount(accountId, junk.name, { total, unread: unseen })
             break
+          }
           case 'move':
             await invoke('mail_batch_flags', { accountId, folder, uids, seen: null, flagged: null }).catch(() => {})
             await invoke('mail_move_messages', { accountId, folder, uids, target })
+            this.adjustFolderCount(accountId, folder, { total: -total, unread: -unseen })
+            this.adjustFolderCount(accountId, target, { total, unread: unseen })
             break
-          case 'delete':
+          case 'delete': {
             await invoke('mail_batch_delete', { accountId, folder, uids })
+            this.adjustFolderCount(accountId, folder, { total: -total, unread: -unseen })
+            const isTrash = (this.foldersByAccount[accountId] || []).find(
+              (f) => f.name === folder,
+            )?.role === 'trash'
+            const trash = folderByRole(accountId, 'trash')
+            if (!isTrash && trash) {
+              this.adjustFolderCount(accountId, trash.name, { total, unread: unseen })
+            }
             break
-          case 'unmarkJunk':
+          }
+          case 'unmarkJunk': {
             await invoke('mail_unmark_junk', { accountId, folder, uids })
+            this.adjustFolderCount(accountId, folder, { total: -total, unread: -unseen })
+            const inbox = folderByRole(accountId, 'inbox')
+            if (inbox) this.adjustFolderCount(accountId, inbox.name, { total, unread: unseen })
             break
+          }
         }
+        accountsTouched.add(accountId)
       }
       this.clearSelection()
       await Promise.all([this.loadMessages({ silent: true }), this.reloadUnread()])
-      await this.loadFolders(this.activeAccountId).catch(() => {})
+      // 本地增量只是先让角标动起来；服务端计数（尤其目标文件夹）稍后用一次
+      // 完整的 STATUS 校正，并合并连续操作，避免每封邮件都触发一轮刷新。
+      for (const accountId of accountsTouched) scheduleFolderRefresh(this, accountId)
     },
 
     async suggest(prefix) {

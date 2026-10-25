@@ -3,7 +3,9 @@
     <div class="mail-list-head">
       <div class="mail-list-title-row">
         <h2 class="mail-list-title">{{ title }}</h2>
-        <span class="mail-list-meta">{{ visible.length }} 封</span>
+        <span class="mail-list-meta">
+          {{ visible.length }} 封<template v-if="unreadCount"> · {{ unreadCount }} 未读</template>
+        </span>
         <label class="mail-selectall">
           <input
             type="checkbox"
@@ -213,6 +215,8 @@ const props = defineProps({
   rowHeight: { type: Number, default: 76 },
 })
 const visible = computed(() => props.messages || [])
+/** 已加载邮件里的未读数：和左侧「未读」角标对照着看，避免总数/未读数被误读成同一个指标。 */
+const unreadCount = computed(() => visible.value.filter((m) => !m.seen).length)
 
 // ---------------- 虚拟滚动 ----------------
 
