@@ -21,18 +21,21 @@ export default defineConfig(async () => ({
   plugins: [
     vue(),
     {
-      // 阅读器入口（reader.html）是「秒开」的关键路径：它只挂阅读器子树。
+      // 阅读器入口（doc-reader.html）是「秒开」的关键路径：它只挂阅读器子树。
+      // 文件名刻意不叫 reader.html：知识库的旧阅读窗口走主应用路由 `/reader`，
+      // 而 Vite 的 html fallback（以及 Tauri 的资源 fallback）会把 `/reader`
+      // 解析成 `reader.html`，两个入口撞名后旧窗口就再也进不了主应用。
       // Rollup 仍会给它加一条对 docs chunk（vditor/mermaid/markdown-it 等，约 8 MB）
-      // 的纯副作用 import —— 入口与 docs 之间并没有任何真实依赖（reader.html 的
+      // 的纯副作用 import —— 入口与 docs 之间并没有任何真实依赖（doc-reader.html 的
       // 静态图只有 vue / reader-core / 自己的样式）。这条 import 会让每个阅读器
       // 窗口白下载并执行一整个无关的文档渲染大包，所以在这里从入口 chunk 里摘掉。
-      // 只动 isEntry 且 name === "reader" 的 chunk，主应用不受影响。
+      // 只动 isEntry 且 name === "doc-reader" 的 chunk，主应用不受影响。
       name: "reader-entry-drop-unused-docs",
       apply: "build",
       enforce: "post",
       generateBundle(_options, bundle) {
         const entry = Object.values(bundle).find(
-          (item) => item.type === "chunk" && item.isEntry && item.name === "reader"
+          (item) => item.type === "chunk" && item.isEntry && item.name === "doc-reader"
         );
         if (!entry) return;
         const dropped = entry.imports.filter((file) => /(^|\/)docs-[^/]*\.js$/.test(file));
@@ -44,7 +47,7 @@ export default defineConfig(async () => ({
         }
         // HTML 里的预加载/样式链接由 Vite 的构建期在 chunk 依赖快照上生成，
         // 这里一并摘掉 docs 的两种 link（同样的理由：阅读器不需要它们）。
-        const html = bundle["reader.html"];
+        const html = bundle["doc-reader.html"];
         if (html && html.type === "asset") {
           html.source = String(html.source).replace(
             /<link[^>]*(?:modulepreload|stylesheet)[^>]*href="\/assets\/docs-[^"]*"[^>]*>\s*/g,
@@ -104,11 +107,11 @@ export default defineConfig(async () => ({
     reportCompressedSize: false,
     chunkSizeWarningLimit: 20000,
     rollupOptions: {
-      // 独立阅读器窗口走自己的入口（reader.html）：它只需要阅读器子树，不能把
+      // 独立阅读器窗口走自己的入口（doc-reader.html）：它只需要阅读器子树，不能把
       // 整个应用（Monaco / LSP / 所有路由页面）的启动成本带进每一个新窗口。
       input: {
         main: path.resolve(projectRoot, "index.html"),
-        reader: path.resolve(projectRoot, "reader.html"),
+        "doc-reader": path.resolve(projectRoot, "doc-reader.html"),
       },
       onwarn(warning, defaultHandler) {
         const message = String(warning?.message || "");
@@ -122,7 +125,7 @@ export default defineConfig(async () => ({
         // 只为多钉一个虚拟模块：Vite 的动态 import 预加载 helper（vite/preload-helper）。
         // 不钉的话 Rollup 会把它塞进「第一个用到它的 chunk」，实测落进了 9.8 MB 的
         // monaco —— 阅读器入口只 import 了这一个 helper，却因此把整个 Monaco 变成静态
-        // 依赖并预加载，reader.html 的「秒开」收益全没了。
+        // 依赖并预加载，doc-reader.html 的「秒开」收益全没了。
         manualChunks(id) {
           // ReaderPane 同时被主编辑器（标签内预览）和独立阅读器窗口使用。两端共享的
           // 模块会被 Rollup 塞进某个「两端都会加载」的既有 chunk；实测落进了 docs

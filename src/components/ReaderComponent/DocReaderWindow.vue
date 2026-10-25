@@ -207,7 +207,6 @@ onMounted(async () => {
       const nextPath = String(event?.payload?.path || '').trim()
       if (!nextPath) return
       logger.info('[DocReaderWindow] switch to exported pdf', { path: nextPath })
-      switchingPath.value = nextPath
       const name = nextPath.replace(/\\/g, '/').split('/').filter(Boolean).pop() || ''
       try {
         const { getCurrentWindow } = await import('@tauri-apps/api/window')

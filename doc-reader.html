@@ -1,0 +1,21 @@
+<!doctype html>
+<!--
+  独立文档阅读器窗口的入口（create_doc_reader_window 打开的就是它）。
+
+  文件名刻意不叫 reader.html：知识库的旧阅读窗口用的是主应用路由 `/reader`，
+  而 Vite 开发期的 html fallback 与 Tauri 生产期的资源 fallback 都会先尝试
+  `<path>.html`，叫 reader.html 会把旧窗口整个抢走（表现为「缺少文件路径」）。
+-->
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>文档阅读器</title>
+  </head>
+
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/reader-main.js"></script>
+  </body>
+</html>

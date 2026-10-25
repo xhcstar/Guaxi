@@ -11,6 +11,7 @@
     "check:search-preview": "node ./tools/check_search_preview.mjs",
     "check:icons": "node ./tools/check_offline_icons.mjs",
     "check:reactivity": "node ./tools/check_reactivity.mjs",
+    "check:window-routes": "node ./tools/check_window_routes.mjs",
     "test:frontend": "node --test \"tests/*.test.mjs\"",
     "prepare:tauri-assets": "node ./tools/copy_excalidraw_assets.mjs",
     "prepare:excalidraw-export": "node ./tools/build_excalidraw_export_bundle.mjs",

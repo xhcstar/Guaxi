@@ -78,9 +78,13 @@ pub async fn create_doc_reader_window(
     if theme == "dark" || theme == "light" {
         query.push_str(&format!("&theme={}", encode(&theme)));
     }
-    // 专用入口 reader.html：只挂载阅读器子树。走主入口（/doc-reader 路由）会连带启动
+    // 专用入口 doc-reader.html：只挂载阅读器子树。走主入口（/doc-reader 路由）会连带启动
     // Monaco/LSP 并加载全部路由页面，每个新窗口都要多花数秒。
-    let url = WebviewUrl::App(format!("/reader.html?{}", query).into());
+    //
+    // 文件名不能叫 reader.html：知识库的旧阅读窗口走主应用路由 `/reader`，而 Tauri 的
+    // 资源解析（以及开发期 Vite 的 html fallback）会先把 `/reader` 当作 `reader.html`，
+    // 两个入口撞名后旧窗口会被这个入口抢走，最后停在「缺少文件路径」。
+    let url = WebviewUrl::App(format!("/doc-reader.html?{}", query).into());
 
     info!(
         "[DocReader] create window label={} kind={} reader={} path={}",
