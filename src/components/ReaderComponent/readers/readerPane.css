@@ -599,6 +599,80 @@
   gap: 1px;
 }
 
+/* 划词操作条：浮在选区上方（宿主文档内），深色玻璃底 + 图标按钮。
+   translateX(-50%) 与 syncSelectionBar 里「以选区中心为 left」的算法配套。 */
+.gdr-ebook__selbar {
+  position: absolute;
+  z-index: 30;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border-radius: 9px;
+  background: rgba(24, 26, 30, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  color: rgba(255, 255, 255, 0.9);
+  user-select: none;
+}
+
+.gdr-ebook__selbar-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.gdr-ebook__selbar-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.gdr-ebook__selbar-btn.is-on {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.gdr-ebook__selbar-btn:focus-visible {
+  outline: 2px solid #2f6fdf;
+  outline-offset: 1px;
+}
+
+.gdr-ebook__selbar-sep {
+  width: 1px;
+  height: 14px;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.gdr-ebook__selbar-swatches {
+  display: inline-flex;
+  gap: 5px;
+  padding: 0 2px;
+}
+
+.gdr-ebook__selbar-swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.28);
+  cursor: pointer;
+  transition: transform 0.12s;
+}
+
+.gdr-ebook__selbar-swatch:hover {
+  transform: scale(1.14);
+}
+
 .gdr-ebook__zoom-val {
   min-width: 40px;
   text-align: center;

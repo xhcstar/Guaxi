@@ -225,6 +225,74 @@
       @close="selectionTranslate.close()"
     />
 
+    <!--
+      划词操作条：浮在选区上方，图标按钮 + title 提示。
+      高亮图标直接用默认颜色落笔；调色盘图标才展开颜色，避免常用动作前先挑颜色。
+    -->
+    <div
+      v-if="selectionVisible"
+      class="gdr-ebook__selbar"
+      :style="{ left: `${selectionPos.left}px`, top: `${selectionPos.top}px` }"
+      role="toolbar"
+      aria-label="选中文字操作"
+      @mousedown.prevent
+    >
+      <button
+        class="gdr-ebook__selbar-btn"
+        title="翻译选中的文字"
+        aria-label="翻译"
+        @click="translateSelectionText"
+      >
+        <Icon :icon="languagesIcon" width="15" height="15" />
+      </button>
+      <button
+        class="gdr-ebook__selbar-btn"
+        title="朗读选中的文字"
+        aria-label="朗读"
+        @click="speakSelectionText"
+      >
+        <Icon :icon="volumeIcon" width="15" height="15" />
+      </button>
+      <span class="gdr-ebook__selbar-sep" />
+      <button
+        class="gdr-ebook__selbar-btn"
+        title="高亮（默认颜色）"
+        aria-label="高亮"
+        @click="highlightSelection(DEFAULT_HIGHLIGHT_COLOR)"
+      >
+        <Icon :icon="highlighterIcon" width="15" height="15" />
+      </button>
+      <button
+        class="gdr-ebook__selbar-btn"
+        :class="{ 'is-on': selectionPaletteOpen }"
+        title="选择高亮颜色"
+        aria-label="高亮颜色"
+        :aria-expanded="selectionPaletteOpen"
+        @click.stop="selectionPaletteOpen = !selectionPaletteOpen"
+      >
+        <Icon :icon="paletteIcon" width="15" height="15" />
+      </button>
+      <span v-if="selectionPaletteOpen" class="gdr-ebook__selbar-swatches">
+        <button
+          v-for="preset in HIGHLIGHT_PRESETS"
+          :key="preset.color"
+          class="gdr-ebook__selbar-swatch"
+          :style="{ background: preset.color }"
+          :title="`${preset.label}色高亮`"
+          :aria-label="`${preset.label}色高亮`"
+          @click.stop="highlightSelection(preset.color)"
+        />
+      </span>
+      <button
+        class="gdr-ebook__selbar-btn"
+        title="关闭（Esc）"
+        aria-label="关闭"
+        @click="hideSelectionBar"
+      >
+        <Icon :icon="closeIcon" width="13" height="13" />
+      </button>
+    </div>
+
     <div v-if="loading" class="guaxi-doc-reader__body">
       <div class="guaxi-doc-reader__center">
         <div>正在解析电子书…</div>
@@ -267,22 +335,19 @@
           用 blob URL + src 而不是 srcdoc：章节文档一次成型、可直接挂载，
           切章时 revoke 掉即可释放内存；也避开 srcdoc 先创建 about:blank
           过渡文档的那一跳。
-        -->
-        <!--
+
           v-if 而不是常驻：iframe 一旦插入就会先创建一个 about:blank 文档；
           只有 frameSrc 就绪才挂载，且挂载时直接 src 到 blob，跳过空白文档阶段。
 
-          sandbox 同时给 allow-scripts 与 allow-same-origin：前者让漏网脚本不再刷
-          "Blocked script execution" 报错、依赖 JS 的交互式章节也能渲染，后者用来
-          读 contentDocument 拦截书籍内链接，让 `<a href="ch2.xhtml">` 在阅读器内
-          跳转。这两项的组合按规范等于取消沙箱，所以脚本安全性完全由「剥离 + 自检」
-          保证（见 sanitizeSectionHtml），不能把净化当成可选步骤。
+          不加 sandbox：Tauri 会往每个新文档注入 IPC 初始化脚本，sandbox 一开，
+          这份注入脚本就会被 Chromium 拦住并逐帧打印 "Blocked script execution…"；
+          书籍脚本的防线改为「送进 iframe 前彻底剥离 + 文档内 CSP script-src 'none'」
+          （见 sanitizeSectionHtml 与 buildFrameDoc）。
         -->
         <iframe
           v-if="frameSrc"
           ref="frameRef"
           class="gdr-ebook__frame"
-          :sandbox="frameSandbox"
           referrerpolicy="no-referrer"
           :src="frameSrc"
           @load="onFrameLoad"
@@ -424,6 +489,9 @@ import volumeIcon from '@iconify-icons/lucide/volume-2'
 import stopIcon from '@iconify-icons/lucide/square'
 import minusIcon from '@iconify-icons/lucide/minus'
 import plusIcon from '@iconify-icons/lucide/plus'
+import highlighterIcon from '@iconify-icons/lucide/highlighter'
+import paletteIcon from '@iconify-icons/lucide/palette'
+import languagesIcon from '@iconify-icons/lucide/languages'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { createLogger } from '../../../utils/logger'
 import { useReaderReadAloud } from '../../../composables/useReaderReadAloud'
@@ -470,6 +538,10 @@ const kindLabel = computed(() => String(props.kind || '').toUpperCase())
 // 字体与主题只影响 iframe 内部的 CSS，不改任何章节 HTML。
 
 const FONT_STACKS = {
+  // 「默认」= 主界面 / 编辑器同一套字体（--guaxi-editor-font-family）。
+  // iframe 是独立文档，拿不到父页面的 CSS 变量，只能把同一份字体栈再写一遍。
+  system:
+    "'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New'",
   serif: '"Noto Serif SC", "Songti SC", "SimSun", Georgia, serif',
   sans: '"Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif',
   mono: '"Maple Mono NF CN", "JetBrainsMono Nerd Font Mono", Consolas, monospace',
@@ -483,6 +555,7 @@ const THEME_VARS = {
 }
 
 const fontOptions = [
+  { value: 'system', label: '默认' },
   { value: 'serif', label: '衬线' },
   { value: 'sans', label: '黑体' },
   { value: 'mono', label: '等宽' },
@@ -494,10 +567,13 @@ const themeOptions = [
   { value: 'dark', label: '深色' },
 ]
 
+/** 与后端 ReaderPrefs::default() 保持一致；prefsVersion 用于迁移旧默认（16px 衬线）。 */
+const PREFS_VERSION = 2
 const prefs = ref({
-  fontSize: 16,
+  prefsVersion: PREFS_VERSION,
+  fontSize: 18,
   lineHeight: 1.8,
-  fontFamily: 'serif',
+  fontFamily: 'system',
   theme: 'light',
   layoutMode: 'scroll',
   maxWidth: 860,
@@ -753,24 +829,17 @@ const zoomBy = (factor) => {
 }
 
 /**
- * 去掉章节 HTML 里的脚本与内联事件，避免浏览器控制台刷屏。
- *
- * 一本排版工具导出的 epub 常常有几十个 <script>，不剥离就是几十条红色报错，
- * 看起来像软件坏了。脚本的拦截现在由 sandbox 的 allow-scripts 放开了，
- * 所以剥离不再有「消音」这层收益，但它是阻止书籍脚本拿到父窗口（进而拿到
- * Tauri IPC）的唯一防线，必须保留。
+ * 章节文档的 CSP。iframe 不设 sandbox（原因见模板注释），书籍脚本的防线在这里：
+ * script/object/frame 全部禁止；样式允许内联与 data:（书籍 CSS 已内联），
+ * 图片/媒体允许 data: 与 blob:（资源在本进程内联成 data URI）。
+ * 这条 meta 必须放在文档 <head> 的最前面，浏览器只认先到达的那一条。
+ * 与 sanitizeSectionHtml 的「剥离 + 自检」是两层独立防线，任何一层都不该被当成可选。
  */
-/**
- * iframe 的沙箱策略。
- *
- * 只需 allow-same-origin：读 contentDocument 做书内跳转、滚动同步、主题注入。
- *
- * 不再给 allow-scripts。按规范这两项同时出现等于取消沙箱，WebView2 每创建一个
- * iframe 都会打印 "An iframe which has both allow-scripts and allow-same-origin…"，
- * 翻几节就刷满控制台。章节里的脚本在 sanitizeSectionHtml 阶段已经剥离（有残留就整章
- * 降级为纯文本），没有 allow-scripts 也不会再出现 "Blocked script execution" 噪音。
- */
-const frameSandbox = 'allow-same-origin'
+const FRAME_CSP =
+  "default-src 'none'; img-src data: blob:; media-src data: blob:; font-src data:; " +
+  "style-src 'unsafe-inline' data:; script-src 'none'; object-src 'none'; " +
+  "frame-src 'none'; form-action 'none'; base-uri 'none'"
+const FRAME_CSP_META = `<meta http-equiv="Content-Security-Policy" content="${FRAME_CSP}">`
 
 /** 净化并自检（剥离逻辑与判据见 ebookSanitize.js）；退化时记一条日志便于排查。 */
 const sanitizeSection = (html) => {
@@ -806,7 +875,7 @@ const buildFrameDoc = () => {
   // 显示设置全部落到这里：字号 / 行距 / 页宽 / 字体 / 主题。
   // 主题用 CSS 变量注入到 iframe 内部，避免每章正文写死颜色。
   const p = prefs.value
-  const fontStack = FONT_STACKS[p.fontFamily] || FONT_STACKS.serif
+  const fontStack = FONT_STACKS[p.fontFamily] || FONT_STACKS.system
   const themeVars = THEME_VARS[p.theme] || THEME_VARS.light
   const baseCss = `
     html, body { margin: 0 !important; padding: 0 !important; background: transparent; }
@@ -871,19 +940,26 @@ const buildFrameDoc = () => {
   `
 
   if (isFullDoc) {
-    // 完整文档：把基础样式插在 </head> 前；没有 head 就补一个。
-    let next = raw.replace(/<\/head>/i, `<style>${baseCss}</style></head>`)
-    if (next === raw) {
-      next = raw.replace(/<html([^>]*)>/i, `<html$1><head><style>${baseCss}</style></head>`)
-      if (!/<head/i.test(next)) {
-        next = `<style>${baseCss}</style>${raw}`
-      }
+    // 完整文档：CSP 与本阅读器的基础样式都插进 head。
+    // CSP meta 必须尽量靠前，否则浏览器可能已经完成策略选择。
+    let next = raw
+    if (/<head[^>]*>/i.test(next)) {
+      next = next
+        .replace(/<head([^>]*)>/i, `<head$1>${FRAME_CSP_META}`)
+        .replace(/<\/head>/i, `<style>${baseCss}</style></head>`)
+    } else if (/<html[^>]*>/i.test(next)) {
+      next = next.replace(
+        /<html([^>]*)>/i,
+        `<html$1><head>${FRAME_CSP_META}<style>${baseCss}</style></head>`
+      )
+    } else {
+      next = `<!doctype html><html><head><meta charset="utf-8">${FRAME_CSP_META}<style>${baseCss}</style></head><body>${next}</body></html>`
     }
     frameDoc.value = next
     return
   }
 
-  frameDoc.value = `<!doctype html><html><head><meta charset="utf-8"><style>${baseCss}</style></head><body>${raw}</body></html>`
+  frameDoc.value = `<!doctype html><html><head><meta charset="utf-8">${FRAME_CSP_META}<style>${baseCss}</style></head><body>${raw}</body></html>`
 }
 
 /** 切到指定章节（越界自动收敛）。 */
@@ -1081,11 +1157,20 @@ const writeFrameDocument = () => {
 }
 
 const onFrameLoad = () => {
-  // 保留 allow-same-origin 就是为了这里：读一次内部文档，挂上链接拦截，
-  // 让 `<a href="ch2.xhtml">` 在阅读器内跳转，而不是把 iframe 导航到不存在的地址。
+  // 换文档后旧的选区与操作条都不再成立。
+  hideSelectionBar()
+  // 读一次内部文档，挂上链接拦截：`<a href="ch2.xhtml">` 要在阅读器内跳转，
+  // 而不是把 iframe 导航到不存在的地址。（blob 文档与宿主同源，可直接访问。）
   try {
     const doc = frameRef.value?.contentDocument
     if (!doc) return
+    // iframe 内的按键不会冒泡到宿主窗口，Esc 收起操作条要在这里单独听一次。
+    doc.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && selectionVisible.value) {
+        event.preventDefault()
+        hideSelectionBar()
+      }
+    })
     doc.addEventListener('click', (event) => {
       const anchor = event.target?.closest?.('a')
       if (!anchor) return
@@ -1114,8 +1199,12 @@ const onFrameLoad = () => {
     })
     // 滚动进度跟踪：用于保存阅读位置。
     doc.addEventListener('scroll', onFrameScroll, { passive: true })
-    // 划词高亮：选中文字后浮出「高亮」小条。
-    doc.addEventListener('mouseup', onFrameSelection)
+    // 划词操作条：鼠标选择、Shift+方向键选择（selectionchange）都要跟手；
+    // 章节滚动时收起，避免操作条悬在已经离开的段落上。
+    doc.addEventListener('mouseup', scheduleSelectionSync)
+    doc.addEventListener('keyup', scheduleSelectionSync)
+    doc.addEventListener('selectionchange', scheduleSelectionSync)
+    doc.addEventListener('scroll', hideSelectionBar, { passive: true })
     // 恢复本节滚动位置（首次进书或跳转书签后由调用方设置）。
     applyPendingRestore()
     // 跨节链接的落点：新文档就绪后滚到锚点（优先于上面恢复的滚动位置）。
@@ -1241,82 +1330,121 @@ const removeBookmark = async (bm) => {
   }
 }
 
-// ───────────────────────── 标注 ─────────────────────────
+// ───────────────────────── 划词操作条 ─────────────────────────
 
-/** 选中文字后浮出的小操作条。 */
-let selectionBar = null
+/**
+ * 划词后的悬浮操作条（属于**宿主文档**，不是 iframe 里）。
+ *
+ * 为什么从 iframe 内挪出来：
+ *  1. iframe 内的 `position:absolute` 是相对章节文档定位的，滚动后坐标会飘；
+ *  2. 在宿主里才能复用 @iconify 图标与 title 提示，不用往书籍文档里塞按钮；
+ *  3. 选区变化（`selectionchange`）与鼠标抬起都能驱动，按住 Shift 选词也能即时出现。
+ *
+ * 位置换算：iframe 内的 range 矩形是 iframe 视口坐标，加上 iframe 在阅读器容器里的
+ * 偏移即得宿主坐标；横向以选区中心对齐（CSS translateX(-50%)）。
+ */
+const DEFAULT_HIGHLIGHT_COLOR = '#ffd600'
+const HIGHLIGHT_PRESETS = [
+  { color: '#ffd600', label: '黄' },
+  { color: '#a5d6a7', label: '绿' },
+  { color: '#90caf9', label: '蓝' },
+  { color: '#f48fb1', label: '粉' },
+  { color: '#ffab91', label: '橙' },
+]
 
-const onFrameSelection = () => {
-  const doc = frameRef.value?.contentDocument
+const selectionVisible = ref(false)
+const selectionPaletteOpen = ref(false)
+const selectionText = ref('')
+/** 选区矩形（iframe 视口坐标），翻译面板定位仍用它。 */
+const selectionRect = ref({ left: 0, top: 0, bottom: 0, width: 0, height: 0 })
+/** 操作条中心点（相对阅读器容器）。 */
+const selectionPos = ref({ left: 0, top: 0 })
+
+const hideSelectionBar = () => {
+  selectionVisible.value = false
+  selectionPaletteOpen.value = false
+}
+
+/** 点击宿主界面（工具栏、目录、侧栏）时收起操作条；iframe 内的点击由 mouseup 流程负责。 */
+const onHostMouseDown = (event) => {
+  if (!selectionVisible.value) return
+  if (event.target?.closest?.('.gdr-ebook__selbar')) return
+  hideSelectionBar()
+}
+
+/** 读取 iframe 当前的选区并更新操作条位置；没有有效选区就收起。 */
+const syncSelectionBar = () => {
+  const frame = frameRef.value
+  const doc = frame?.contentDocument
   if (!doc) return
   const selection = doc.getSelection?.()
   const text = String(selection?.toString?.() || '').trim()
-  removeSelectionBar()
-  if (!text || text.length < 2) return
-
+  if (!text || text.length < 2) {
+    hideSelectionBar()
+    selectionText.value = ''
+    return
+  }
   const range = selection.getRangeAt?.(0)
   if (!range) return
   const rect = range.getBoundingClientRect()
+  if (!rect || (!rect.width && !rect.height)) return
 
-  const bar = doc.createElement('div')
-  bar.className = 'gx-selbar'
-  bar.style.cssText = `position:absolute;left:${Math.max(4, rect.left)}px;top:${Math.max(4, rect.top - 34)}px;z-index:9999;display:flex;gap:4px;background:#222;border-radius:6px;padding:4px;box-shadow:0 4px 12px rgba(0,0,0,.3);`
+  const root = ebookRoot.value
+  if (!root) return
+  const fr = frame.getBoundingClientRect()
+  const cr = root.getBoundingClientRect()
+  const BAR_H = 36
+  const BAR_W = 320
+  let left = fr.left - cr.left + rect.left + rect.width / 2
+  left = Math.max(BAR_W / 2 - 40, Math.min(left, cr.width - BAR_W / 2 + 40))
+  let top = fr.top - cr.top + rect.top - BAR_H - 8
+  if (top < 8) top = fr.top - cr.top + rect.bottom + 8
 
-  // 实用动作：翻译这段文字、朗读这段文字。放在颜色之前 —— 「想弄懂它」比「想标记它」
-  // 更常发生在第一次划词的时候。
-  const actionBtn = (label, title, onClick) => {
-    const btn = doc.createElement('button')
-    btn.textContent = label
-    btn.title = title
-    btn.style.cssText =
-      'border:0;background:#3a3f47;color:#eaeaea;border-radius:4px;height:22px;padding:0 7px;font-size:11px;cursor:pointer;'
-    btn.addEventListener('mousedown', (event) => {
-      event.preventDefault()
-      event.stopPropagation()
-      onClick()
-    })
-    bar.appendChild(btn)
+  selectionText.value = text
+  selectionRect.value = {
+    left: rect.left,
+    top: rect.top,
+    bottom: rect.bottom,
+    width: rect.width,
+    height: rect.height,
   }
-  const sep = doc.createElement('span')
-  sep.style.cssText = 'width:1px;height:16px;background:rgba(255,255,255,.18);align-self:center;'
-  actionBtn('译', '翻译选中的文字', () => {
-    removeSelectionBar()
-    openTranslate(text, rect)
-  })
-  actionBtn('读', '朗读选中的文字', () => {
-    removeSelectionBar()
-    speakSelection(text)
-  })
-  bar.appendChild(sep)
-
-  const colors = { '#ffd600': '黄', '#a5d6a7': '绿', '#90caf9': '蓝', '#f48fb1': '粉' }
-  Object.entries(colors).forEach(([color, label]) => {
-    const btn = doc.createElement('button')
-    btn.textContent = label
-    btn.style.cssText = `border:0;background:${color};color:#222;border-radius:4px;width:24px;height:22px;font-size:11px;cursor:pointer;`
-    btn.addEventListener('mousedown', (event) => {
-      event.preventDefault()
-      event.stopPropagation()
-      void addAnnotationFromSelection(text, color)
-    })
-    bar.appendChild(btn)
-  })
-
-  doc.body.appendChild(bar)
-  selectionBar = bar
+  selectionPos.value = { left: Math.round(left), top: Math.round(top) }
+  selectionVisible.value = true
 }
 
-const removeSelectionBar = () => {
-  try {
-    selectionBar?.remove?.()
-  } catch {
-    /* 已移除 */
-  }
-  selectionBar = null
+/** selectionchange / mouseup / keyup 统一走一个短防抖：既跟手又不重复计算。 */
+let selectionSyncTimer = null
+const scheduleSelectionSync = () => {
+  if (selectionSyncTimer) clearTimeout(selectionSyncTimer)
+  selectionSyncTimer = setTimeout(() => {
+    selectionSyncTimer = null
+    syncSelectionBar()
+  }, 20)
+}
+
+const translateSelectionText = () => {
+  const text = selectionText.value
+  const rect = selectionRect.value
+  hideSelectionBar()
+  if (text) openTranslate(text, rect)
+}
+
+const speakSelectionText = () => {
+  const text = selectionText.value
+  hideSelectionBar()
+  if (text) speakSelection(text)
+}
+
+/** 高亮选中的文字（默认颜色或调色盘里挑的颜色）。 */
+const highlightSelection = (color) => {
+  const text = selectionText.value
+  const chosen = color || DEFAULT_HIGHLIGHT_COLOR
+  hideSelectionBar()
+  if (!text) return
+  void addAnnotationFromSelection(text, chosen)
 }
 
 const addAnnotationFromSelection = async (text, color) => {
-  removeSelectionBar()
   if (!bookKey.value) return
   try {
     const an = await invoke('reader_add_annotation', {
@@ -1328,7 +1456,8 @@ const addAnnotationFromSelection = async (text, color) => {
     })
     annotations.value = [...annotations.value, an]
     applyAnnotationHighlights()
-    panelMode.value = 'notes'
+    // 标注是在正文里完成的，不再顺手把右侧「标注与笔记」面板拉开 ——
+    // 高亮只是一个阅读动作，读者的视线不应该被整块侧栏打断。
     logger.info('[DocEbookReader] annotation added', { chars: text.length })
   } catch (error) {
     logger.warn('[DocEbookReader] add annotation failed', { error: String(error?.message || error) })
@@ -1441,7 +1570,24 @@ const loadReaderSettings = async () => {
       invoke('reader_list_bookmarks', { bookKey: bookKey.value }),
       invoke('reader_list_annotations', { bookKey: bookKey.value }),
     ])
-    if (savedPrefs) prefs.value = { ...prefs.value, ...savedPrefs }
+    if (savedPrefs) {
+      const merged = { ...prefs.value, ...savedPrefs }
+      // 旧版默认是「16px + 衬线」；升级到 v2 后统一改为「界面默认字体 + 18px」。
+      // 只在旧默认上迁移，用户自己调过的字号/字体保持不动。
+      const version = Number(savedPrefs.prefsVersion) || 0
+      if (version < PREFS_VERSION) {
+        if (!merged.fontFamily || merged.fontFamily === 'serif') merged.fontFamily = 'system'
+        if (!(Number(merged.fontSize) > 16)) merged.fontSize = 18
+        merged.prefsVersion = PREFS_VERSION
+        // 把迁移结果写回，避免每次打开都重跑一次迁移。
+        invoke('reader_save_prefs', { bookKey: bookKey.value, prefs: merged }).catch((error) => {
+          logger.debug('[DocEbookReader] persist migrated prefs failed', {
+            error: String(error?.message || error),
+          })
+        })
+      }
+      prefs.value = merged
+    }
     bookmarks.value = Array.isArray(savedBookmarks) ? savedBookmarks : []
     annotations.value = Array.isArray(savedAnnotations) ? savedAnnotations : []
     logger.info('[DocEbookReader] reader settings loaded', {
@@ -1474,7 +1620,11 @@ const onKeydown = (event) => {
     return
   }
   if (event.key === 'Escape') {
-    removeSelectionBar()
+    // 操作条开着时，Esc 只负责收起它，不顺手关掉搜索/笔记面板。
+    if (selectionVisible.value) {
+      hideSelectionBar()
+      return
+    }
     if (searchOpen.value) toggleSearch()
     else if (panelMode.value) panelMode.value = ''
     return
@@ -1593,6 +1743,7 @@ const loadBook = async () => {
 
 onMounted(() => {
   window.addEventListener('keydown', onKeydown)
+  window.addEventListener('mousedown', onHostMouseDown)
   void loadBook()
 })
 
@@ -1668,6 +1819,11 @@ const openTranslate = (text, rect) => {
 onBeforeUnmount(() => {
   loadToken += 1
   window.removeEventListener('keydown', onKeydown)
+  window.removeEventListener('mousedown', onHostMouseDown)
+  if (selectionSyncTimer) {
+    clearTimeout(selectionSyncTimer)
+    selectionSyncTimer = null
+  }
   stopTocResize()
   revokeFrameBlob()
   // 卸载前把最后位置写回，否则「读完关窗」会丢掉这段进度。

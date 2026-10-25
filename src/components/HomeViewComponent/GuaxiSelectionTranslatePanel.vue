@@ -1,6 +1,13 @@
 <template>
-  <div ref="panelRef" class="pot-selection-translate-panel" :style="{ left: `${pos.left}px`, top: `${pos.top}px` }"
-    @mousedown.stop="onPanelMouseDown" @click.stop @wheel.stop>
+  <!--
+    面板自己带一层 NConfigProvider：
+    · 主窗口里它嵌在 App 的 provider 内，这里只补颜色变量；
+    · 独立阅读器窗口（doc-reader.html）没有 App 那层 provider，naive 的 Select /
+      弹层会退回亮色主题，深色模式下出现白底下拉 —— 这层 provider 让两处一致。
+  -->
+  <n-config-provider :theme="naiveTheme" :theme-overrides="naiveThemeOverrides">
+    <div ref="panelRef" class="pot-selection-translate-panel" :style="{ left: `${pos.left}px`, top: `${pos.top}px` }"
+      @mousedown.stop="onPanelMouseDown" @click.stop @wheel.stop>
     <div class="panel-header" @mousedown.prevent="onHeaderMouseDown">
       <div class="panel-header-left">
         <n-button text size="tiny" :title="pinned ? '取消固定' : '固定'" @click.stop="emit('toggle-pin')">
@@ -159,12 +166,13 @@
           <div v-if="!items || items.length === 0" class="section-content section-result">{{ result || '—' }}</div>
       </div>
     </div>
-  </div>
+    </div>
+  </n-config-provider>
 </template>
 
 <script setup>
 import { ref, onUnmounted, computed, onMounted, nextTick } from 'vue'
-import { NButton, NSpin, NSelect, NTag } from 'naive-ui'
+import { NButton, NConfigProvider, NSelect, NSpin, NTag, darkTheme } from 'naive-ui'
 import { Icon } from '@iconify/vue'
 import pinIcon from '@iconify-icons/lucide/pin'
 import pinOffIcon from '@iconify-icons/lucide/pin-off'
@@ -508,7 +516,48 @@ const onPanelBodyKeydown = (e) => {
   else if (e.key === 'End') el.scrollTop = el.scrollHeight
 }
 
+// ── 面板主题 ───────────────────────────────────────────────────────────
+// 面板外壳用的是 --guaxi-* 变量，但 naive 的 Select / 下拉弹层不吃这些变量。
+// 独立阅读器窗口没有 App.vue 那层 NConfigProvider，所以这里补一层：跟随
+// <html data-guaxi-theme> 切换亮/暗，并把弹层底色对齐面板变量。
+const panelDark = ref(false)
+const naiveTheme = computed(() => (panelDark.value ? darkTheme : null))
+const naiveThemeOverrides = ref(undefined)
+let panelThemeObserver = null
+
+const syncPanelTheme = () => {
+  const el = typeof document !== 'undefined' ? document.documentElement : null
+  if (!el) return
+  panelDark.value = el.dataset?.guaxiTheme === 'dark'
+  try {
+    const cs = getComputedStyle(el)
+    const read = (name) => cs.getPropertyValue(name).trim()
+    const panelBg = read('--guaxi-panel-bg')
+    const border = read('--guaxi-border')
+    const text = read('--guaxi-text-primary')
+    const font = read('--guaxi-editor-font-family')
+    naiveThemeOverrides.value = {
+      common: {
+        ...(panelBg ? { popoverColor: panelBg, cardColor: panelBg, modalColor: panelBg } : {}),
+        ...(border ? { borderColor: border, dividerColor: border } : {}),
+        ...(text ? { textColorBase: text, textColor1: text } : {}),
+        ...(font ? { fontFamily: font } : {}),
+      },
+    }
+  } catch {
+    naiveThemeOverrides.value = undefined
+  }
+}
+
 onMounted(async () => {
+  syncPanelTheme()
+  if (typeof MutationObserver !== 'undefined') {
+    panelThemeObserver = new MutationObserver(syncPanelTheme)
+    panelThemeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-guaxi-theme', 'class'],
+    })
+  }
   await nextTick()
   ensureClampedPos()
   if (typeof ResizeObserver !== 'undefined' && panelRef.value) {
@@ -521,6 +570,10 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  if (panelThemeObserver) {
+    panelThemeObserver.disconnect()
+    panelThemeObserver = null
+  }
   if (panelPronounceAudio) {
     panelPronounceAudio.pause()
     panelPronounceAudio = null
@@ -535,6 +588,12 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/* NConfigProvider 在我们的模板里只是主题容器，不参与布局：
+   display:contents 让面板的绝对定位仍以阅读器容器为参照。 */
+.n-config-provider {
+  display: contents;
+}
+
 .pot-selection-translate-panel {
   position: absolute;
   z-index: 20;
@@ -552,7 +611,7 @@ onUnmounted(() => {
   overflow: hidden;
   resize: both;
   user-select: none;
-  font-family: var(--editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New');
+  font-family: var(--guaxi-editor-font-family, var(--editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New'));
 }
 
 .panel-header {

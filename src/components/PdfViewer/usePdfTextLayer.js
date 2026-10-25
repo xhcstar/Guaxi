@@ -53,40 +53,65 @@ export function buildLines(chars, { spaceRatio = 0.25, lineTolRatio = 0.6 } = {}
   }
   if (cur) groups.push(cur)
 
-  return groups.map((group) => {
+  return groups.flatMap((group) => {
+    // 同一基线（垂直中心相同）不代表同一段文字：双栏排版、表格、目录页里，
+    // 左右两栏/两列的每一行都恰好共线。若把它们并进一个 span，选区会跨越中间
+    // 的整段空白，浏览器就把这一整行（含两栏之间的空隙）整块涂蓝 —— 表现为
+    // 「划一个词，满屏都是蓝色方块」。这里按「横向大间隙」把行再切成若干段，
+    // 每一段各自成为一个可独立选中的 span。
     const cs = group.chars.slice().sort((a, b) => a.x - b.x)
-    let text = ''
-    let left = Infinity
-    let top = Infinity
-    let right = -Infinity
-    let bottom = -Infinity
-    let fsSum = 0
-    let prevRight = null
+    const runs = []
+    let run = []
     for (const ch of cs) {
-      fsSum += ch.fs
-      if (prevRight != null) {
-        const gap = ch.x - prevRight
-        if (gap > ch.fs * spaceRatio) {
-          const spaces = Math.min(8, Math.max(1, Math.round(gap / (ch.fs * 0.5))))
-          text += ' '.repeat(spaces)
+      if (run.length) {
+        const prev = run[run.length - 1]
+        const gap = ch.x - prev.right
+        // 阈值取字号的 1.5 倍：普通词间距（≤0.5em）与两端对齐的宽词距都会保留，
+        // 而双栏间距、表格列距通常远大于 1.5em。下限 4pt 防止小字号误切。
+        if (gap > Math.max(4, ch.fs * 1.5)) {
+          runs.push(run)
+          run = []
         }
       }
-      text += ch.c
-      prevRight = ch.right
-      if (ch.x < left) left = ch.x
-      if (ch.y < top) top = ch.y
-      if (ch.right > right) right = ch.right
-      if (ch.bottom > bottom) bottom = ch.bottom
+      run.push(ch)
     }
-    return {
-      text,
-      leftPt: left,
-      topPt: top,
-      widthPt: Math.max(0, right - left),
-      heightPt: Math.max(0, bottom - top),
-      fontSizePt: fsSum / cs.length,
-      // 测量后回填；scaleX 与缩放无关（分子分母都随 scale 线性变化），测一次即可复用。
-      scaleX: 1,
-    }
+    if (run.length) runs.push(run)
+
+    return runs.map((runChars) => {
+      let text = ''
+      let left = Infinity
+      let top = Infinity
+      let right = -Infinity
+      let bottom = -Infinity
+      let fsSum = 0
+      let prevRight = null
+      for (const ch of runChars) {
+        fsSum += ch.fs
+        if (prevRight != null) {
+          const gap = ch.x - prevRight
+          if (gap > ch.fs * spaceRatio) {
+            // 段内的小间隙补空格即可；上限 3 个，避免把宽间隙拉成一长串空格。
+            const spaces = Math.min(3, Math.max(1, Math.round(gap / (ch.fs * 0.5))))
+            text += ' '.repeat(spaces)
+          }
+        }
+        text += ch.c
+        prevRight = ch.right
+        if (ch.x < left) left = ch.x
+        if (ch.y < top) top = ch.y
+        if (ch.right > right) right = ch.right
+        if (ch.bottom > bottom) bottom = ch.bottom
+      }
+      return {
+        text,
+        leftPt: left,
+        topPt: top,
+        widthPt: Math.max(0, right - left),
+        heightPt: Math.max(0, bottom - top),
+        fontSizePt: fsSum / runChars.length,
+        // 测量后回填；scaleX 与缩放无关（分子分母都随 scale 线性变化），测一次即可复用。
+        scaleX: 1,
+      }
+    })
   })
 }

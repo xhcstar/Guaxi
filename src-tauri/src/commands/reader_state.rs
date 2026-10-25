@@ -55,8 +55,13 @@ pub struct Annotation {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReaderPrefs {
+    /// 设置结构版本：旧记录没有这个字段（反序列化为 0），前端据此把旧默认
+    /// （16px 衬线）迁移到新的「界面默认字体 + 18px」。
+    #[serde(default)]
+    pub prefs_version: u32,
     pub font_size: f64,
     pub line_height: f64,
+    /// system | serif | sans | mono
     pub font_family: String,
     /// light | dark | sepia | gray
     pub theme: String,
@@ -68,9 +73,12 @@ pub struct ReaderPrefs {
 impl Default for ReaderPrefs {
     fn default() -> Self {
         Self {
-            font_size: 16.0,
+            prefs_version: 2,
+            // 默认值刻意与前端 DEFAULT_READER_PREFS 保持一致：正文用界面默认字体，
+            // 字号比常规 UI 大一点，长时间阅读更舒服。
+            font_size: 18.0,
             line_height: 1.8,
-            font_family: "serif".to_string(),
+            font_family: "system".to_string(),
             theme: "light".to_string(),
             layout_mode: "scroll".to_string(),
             max_width: 860.0,
@@ -368,6 +376,7 @@ mod tests {
     fn prefs_round_trip_through_json() {
         // 前端存的是 camelCase；serde(rename_all) 必须一致，否则设置存进去读不回来。
         let p = ReaderPrefs {
+            prefs_version: 2,
             font_size: 22.0,
             line_height: 2.0,
             font_family: "sans".into(),

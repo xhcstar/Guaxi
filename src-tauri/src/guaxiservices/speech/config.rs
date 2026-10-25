@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::guaxiservices::bundled_resources;
 
@@ -378,6 +378,18 @@ pub fn cuda_available() -> bool {
 fn probe_cuda() -> bool {
     if !cfg!(target_os = "windows") {
         // 其它平台暂不探测：判不准就退回 CPU，宁可慢一点也不要崩。
+        return false;
+    }
+
+    // 没编 gpu feature 时，sherpa-onnx 是**静态 CPU 版**：进程里根本没有 onnxruntime.dll，
+    // 动态加载 CUDA EP 必然失败（错误码 1114），和「这台机器有没有 GPU」无关。
+    // 这种构建下直接判定不可用，并明确告诉用户该用哪条命令，免得把构建配置问题
+    // 误读成显卡/驱动问题。
+    if !cfg!(feature = "gpu") {
+        info!(
+            "当前为 CPU 版构建（未启用 gpu feature，sherpa-onnx 静态链接）；\
+             需要 GPU 加速请用 `npm run tauri:gpu` 启动，或构建时加 --features gpu"
+        );
         return false;
     }
 

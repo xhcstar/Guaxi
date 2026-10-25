@@ -38,7 +38,32 @@ test('剥离内联事件与 javascript: 链接', () => {
   assert.match(out, /文字/, '正文必须保留')
 })
 
-test('保留正文、图片与样式', () => {
+test('剥离不带引号的内联事件与伪协议', () => {
+  // 没有引号的写法在正则里要单独覆盖，否则 CSP 会把它当内联脚本拦下并报警。
+  const out = stripScripts(
+    '<p onclick=alert(1)>甲</p><a href=javascript:evil()>乙</a><img src=javascript:x()>'
+  )
+  NO_EVENT(out)
+  assert.doesNotMatch(out, /javascript:/i)
+  assert.match(out, /甲/)
+  assert.match(out, /乙/)
+})
+
+test('剥离 meta refresh 与 base（不依赖脚本的跳转/基址改写）', () => {
+  const out = stripScripts(
+    '<head><meta http-equiv="refresh" content="0;url=https://evil"><base href="https://evil/"></head><p>x</p>'
+  )
+  assert.doesNotMatch(out, /http-equiv=["']?refresh/i)
+  assert.doesNotMatch(out, /<base/i)
+  assert.doesNotMatch(out, /https:\/\/evil/)
+})
+
+test('剥离 xlink:href 上的 javascript:', () => {
+  const out = stripScripts('<svg><a xlink:href="javascript:go()">x</a></svg>')
+  assert.doesNotMatch(out, /javascript:/i)
+})
+
+test('净化后仍保留正文、图片与样式', () => {
   const src = '<style>p{color:red}</style><p>正常正文</p><img src="data:image/png;base64,AAA"><table><tr><td>1</td></tr></table>'
   const out = stripScripts(src)
   assert.match(out, /<style>/)

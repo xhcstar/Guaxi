@@ -183,20 +183,45 @@
         <span class="gdr-pdf-hl-bar__hint">{{ pdfSelectionPreview }}</span>
         <!--
           译 / 读：读完一段想弄懂它，比「想标记它」更常见，
-          所以这两个动作排在高亮色之前。
+          所以这两个动作排在高亮之前。图标按钮都带 title 提示。
         -->
-        <button class="gdr-pdf-hl-bar__action" title="翻译选中的文字" @click="openPdfTranslate">
-          翻译
+        <button
+          class="gdr-pdf-hl-bar__icon"
+          title="翻译选中的文字"
+          aria-label="翻译"
+          @click="openPdfTranslate"
+        >
+          <Icon :icon="translateIcon" width="15" height="15" />
         </button>
         <button
-          class="gdr-pdf-hl-bar__action"
+          class="gdr-pdf-hl-bar__icon"
           :title="pdfReadAloudPlaying ? '停止朗读' : '朗读选中的文字'"
+          aria-label="朗读"
           @click="speakPdfSelection"
         >
-          {{ pdfReadAloudPlaying ? '停止' : '朗读' }}
+          <Icon :icon="volumeIcon" width="15" height="15" />
         </button>
         <span class="gdr-pdf-hl-bar__sep" />
-        <span class="gdr-pdf-hl-bar__swatches">
+        <!-- 高亮图标直接用当前颜色落笔；调色盘图标才展开颜色。 -->
+        <button
+          class="gdr-pdf-hl-bar__icon"
+          title="高亮（当前颜色）"
+          aria-label="高亮"
+          @click="addPdfHighlightFromSelection(PDF_HL_PRESETS[pdfHighlightPresetIdx])"
+        >
+          <Icon :icon="highlighterIcon" width="15" height="15" />
+        </button>
+        <button
+          class="gdr-pdf-hl-bar__icon"
+          :class="{ 'is-on': pdfPaletteOpen }"
+          title="选择高亮颜色"
+          aria-label="高亮颜色"
+          :aria-expanded="pdfPaletteOpen"
+          @click.stop="pdfPaletteOpen = !pdfPaletteOpen"
+        >
+          <Icon :icon="paletteIcon" width="15" height="15" />
+        </button>
+        <span v-if="pdfPaletteOpen" class="gdr-pdf-hl-bar__swatches">
           <button
             v-for="(c, i) in PDF_HL_PRESETS"
             :key="i"
@@ -207,8 +232,13 @@
             @click="addPdfHighlightFromSelection(c)"
           />
         </span>
-        <button class="gdr-pdf-hl-bar__cancel" title="取消选择（Esc）" @click="clearPdfSelection">
-          Esc
+        <button
+          class="gdr-pdf-hl-bar__icon"
+          title="取消选择（Esc）"
+          aria-label="取消选择"
+          @click="clearPdfSelection"
+        >
+          <Icon :icon="closeIcon" width="13" height="13" />
         </button>
       </div>
 
@@ -362,6 +392,9 @@ import translateIcon from '@iconify-icons/lucide/languages'
 import folderIcon from '@iconify-icons/lucide/folder'
 import convertIcon from '@iconify-icons/lucide/file-output'
 import codeIcon from '@iconify-icons/lucide/code'
+import volumeIcon from '@iconify-icons/lucide/volume-2'
+import highlighterIcon from '@iconify-icons/lucide/highlighter'
+import paletteIcon from '@iconify-icons/lucide/palette'
 import { openPath } from '@tauri-apps/plugin-opener'
 import { createLogger } from '../../utils/logger'
 import { usePageTranslate, splitIntoParagraphs } from '../../composables/usePageTranslate'
@@ -564,6 +597,8 @@ const PDF_HL_PRESETS = [
   [255, 159, 67, 110],   // 橙
 ]
 const pdfHighlightPresetIdx = ref(0)
+/** 调色盘是否展开：默认收起，高亮图标直接用当前颜色落笔。 */
+const pdfPaletteOpen = ref(false)
 const pdfSelectionToolbar = ref(false)
 const pdfSelectionText = ref('')
 /** 浮动条的左上角（相对阅读器容器）。 */
@@ -609,6 +644,7 @@ const syncPdfSelectionToolbar = () => {
   if (!text) {
     pdfSelectionToolbar.value = false
     pdfSelectionText.value = ''
+    pdfPaletteOpen.value = false
     return
   }
   pdfSelectionText.value = text
@@ -619,6 +655,7 @@ const clearPdfSelection = () => {
   window.getSelection?.()?.removeAllRanges()
   pdfSelectionToolbar.value = false
   pdfSelectionText.value = ''
+  pdfPaletteOpen.value = false
 }
 
 /**
@@ -628,6 +665,7 @@ const clearPdfSelection = () => {
  * removeAllRanges，如果宿主这边先清，它拿到的就是空选区。
  */
 const addPdfHighlightFromSelection = async (color) => {
+  pdfPaletteOpen.value = false
   const idx = PDF_HL_PRESETS.indexOf(color)
   if (idx >= 0) pdfHighlightPresetIdx.value = idx
   const viewer = pdfViewerRef.value
@@ -825,8 +863,8 @@ watch(
       // 稍等阅读器打开文档，避免与它自己的加载撞在一起。
       setTimeout(() => {
         void refreshPdfHighlights()
-        // 批注存在时默认打开批注页，让用户看到「这本书有笔记」。
-        if (pdfHighlights.value.length) pdfAside.value = 'notes'
+        // 批注列表只预热，不主动展开侧栏：打开文档时更重要的是正文，
+        // 侧栏留给读者自己按需要打开（点正文里的高亮仍会自动切到批注页）。
       }, 1200)
     }
   },
@@ -1122,6 +1160,28 @@ const openExternally = async () => {
   transition: background 0.12s;
 }
 .gdr-pdf-hl-bar__action:hover { background: rgba(255, 255, 255, 0.16); }
+
+/* 图标按钮：与电子书阅读器的划词条同一套交互（title 提示 + 悬停底色）。 */
+.gdr-pdf-hl-bar__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.gdr-pdf-hl-bar__icon:hover { background: rgba(255, 255, 255, 0.12); }
+.gdr-pdf-hl-bar__icon.is-on {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+.gdr-pdf-hl-bar__icon:focus-visible { outline: 2px solid #2f6fdf; outline-offset: 1px; }
 /* 译文侧栏：原文/译文逐段对照。原文用稍弱的颜色，译文是正文色。 */
 .gdr-xlate {
   display: flex;
