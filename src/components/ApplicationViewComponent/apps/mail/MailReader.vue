@@ -109,7 +109,7 @@
         <span class="mail-reader-when">{{ dateLabel }}</span>
       </div>
 
-      <div class="mail-reader-scroll">
+      <div ref="scrollRef" class="mail-reader-scroll">
         <!-- 远端图片默认不加载：先问一句，避免打开即给发件人回一个「已读+IP」的信标 -->
         <div v-if="hasRemoteImages && imagesBlocked" class="mail-remote-banner">
           <span>这封邮件包含外部图片，默认没有加载。</span>
@@ -162,17 +162,29 @@
               @click="onBodyClick"
             ></div>
             <div v-if="msg.attachments?.length" class="mail-attachments">
-              <button
+              <div
                 v-for="att in msg.attachments"
                 :key="att.part + att.filename"
-                class="mail-attachment"
-                :title="att.filename"
-                @click="$emit('save-attachment', { attachment: att, detail: msg })"
+                class="mail-attachment-item"
               >
-                <span aria-hidden="true">{{ iconFor(att.contentType) }}</span>
-                <span class="mail-attachment-name">{{ att.filename }}</span>
-                <span class="mail-attachment-size">{{ sizeLabel(att.size) }}</span>
-              </button>
+                <button
+                  class="mail-attachment"
+                  :title="`用系统默认程序打开 ${att.filename}`"
+                  @click="$emit('open-attachment', { attachment: att, detail: msg })"
+                >
+                  <span aria-hidden="true">{{ iconFor(att.contentType) }}</span>
+                  <span class="mail-attachment-name">{{ att.filename }}</span>
+                  <span class="mail-attachment-size">{{ sizeLabel(att.size) }}</span>
+                </button>
+                <button
+                  class="mail-attachment-save"
+                  title="保存到本地"
+                  aria-label="保存到本地"
+                  @click="$emit('save-attachment', { attachment: att, detail: msg })"
+                >
+                  <MailIcon name="download" />
+                </button>
+              </div>
             </div>
           </article>
         </div>
@@ -189,17 +201,29 @@
           <pre v-else class="mail-body mail-body--plain">{{ detail.text }}</pre>
 
           <div v-if="detail.attachments?.length" class="mail-attachments">
-            <button
+            <div
               v-for="att in detail.attachments"
               :key="att.part + att.filename"
-              class="mail-attachment"
-              :title="att.filename"
-              @click="$emit('save-attachment', { attachment: att, detail })"
+              class="mail-attachment-item"
             >
-              <span aria-hidden="true">{{ iconFor(att.contentType) }}</span>
-              <span class="mail-attachment-name">{{ att.filename }}</span>
-              <span class="mail-attachment-size">{{ sizeLabel(att.size) }}</span>
-            </button>
+              <button
+                class="mail-attachment"
+                :title="`用系统默认程序打开 ${att.filename}`"
+                @click="$emit('open-attachment', { attachment: att, detail })"
+              >
+                <span aria-hidden="true">{{ iconFor(att.contentType) }}</span>
+                <span class="mail-attachment-name">{{ att.filename }}</span>
+                <span class="mail-attachment-size">{{ sizeLabel(att.size) }}</span>
+              </button>
+              <button
+                class="mail-attachment-save"
+                title="保存到本地"
+                aria-label="保存到本地"
+                @click="$emit('save-attachment', { attachment: att, detail })"
+              >
+                <MailIcon name="download" />
+              </button>
+            </div>
           </div>
         </template>
       </div>
@@ -208,7 +232,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { avatarSeed } from './theme'
 import { useMailReaderTools } from './useMailReaderTools'
 import MailIcon from './MailIcon.vue'
@@ -233,6 +257,7 @@ defineEmits([
   'toggle-flag',
   'toggle-unread',
   'save-attachment',
+  'open-attachment',
   'close',
 ])
 
@@ -285,12 +310,65 @@ function restoreRemoteImages(html) {
     .replace(/data-guaxi-remote-src="([^"]*)"/g, 'src="$1"')
 }
 
+const scrollRef = ref(null)
+
+/** 颜色是否够浅：暗色正文整块反转后，这类背景会变成比纸面更暗的色块。 */
+function isLightColor(value) {
+  const match = String(value || '').match(
+    /rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,/\s]+([\d.]+))?\s*\)/i,
+  )
+  if (!match) return false
+  const [r, g, b] = [Number(match[1]), Number(match[2]), Number(match[3])]
+  const alpha = match[4] === undefined ? 1 : Number(match[4])
+  if (alpha < 0.15) return false
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 > 0.82
+}
+
+/** 渐变的所有可见色标都是浅色（QQ 邮箱页脚那种 #F6F6F6 → #FFFFFF）。 */
+function isLightGradient(image) {
+  const text = String(image || '')
+  if (!/gradient/i.test(text)) return false
+  const colors = text.match(/rgba?\([^)]*\)/gi) || []
+  const visible = colors.filter(
+    (color) => !/rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*0(?:\.0+)?\s*\)/i.test(color),
+  )
+  return visible.length > 0 && visible.every(isLightColor)
+}
+
+/**
+ * 暗色正文靠 `invert(1)` 自动压暗，邮件里写死的浅色背景会反转成纯黑块。
+ * 这里标记「浅底」元素，由 mail.css 在暗色主题下把它抹成透明；
+ * 浅色渐变则去掉背景图。用 class 而不是内联样式：切回亮色主题规则自动失效。
+ */
+function softenLightBackgrounds() {
+  if (props.themeMode === 'light' || !scrollRef.value) return
+  scrollRef.value.querySelectorAll('.mail-body [style]').forEach((el) => {
+    const style = getComputedStyle(el)
+    if (isLightColor(style.backgroundColor)) el.classList.add('guaxi-soft-bg')
+    if (isLightGradient(style.backgroundImage)) el.classList.add('guaxi-soft-bg-image')
+  })
+}
+
 const renderedHtml = computed(() => {
   const html = props.detail?.html
   if (!html) return ''
   // 用户点了「显示图片」：把暂存地址放回 src。
   const restored = imagesBlocked.value ? html : restoreRemoteImages(html)
   return upgradeQuoteCards(restored)
+})
+
+// 正文 DOM 更新后（换信、显示图片、切暗色主题）重新标记浅色背景。
+watch(
+  [renderedHtml, () => props.themeMode, () => props.thread, imagesAllowed],
+  async () => {
+    await nextTick()
+    softenLightBackgrounds()
+  },
+  { flush: 'post' },
+)
+onMounted(async () => {
+  await nextTick()
+  softenLightBackgrounds()
 })
 
 // ---------------- 会话卡片 ----------------

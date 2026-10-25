@@ -1181,6 +1181,40 @@ fn sanitize_filename(name: &str) -> String {
     }
 }
 
+/// 下载附件到本地缓存，并交给系统默认程序打开（阅读页点附件的行为）。
+///
+/// 和「保存到…」分开：这个路径是确定性的（同一封邮件的同一个附件始终落到同一处），
+/// 重复点击不会堆出 `file (1).pdf`、`file (2).pdf`；用户想留档时再用保存按钮选目录。
+#[command]
+pub async fn mail_open_attachment(
+    app: AppHandle,
+    account_id: String,
+    folder: String,
+    uid: u32,
+    part: u32,
+    filename: String,
+) -> Result<String, String> {
+    ensure_init(&app)?;
+    let account = load_account(&account_id)?;
+    let password = account_password(&account)?;
+    let (f, safe_name) = (folder.clone(), sanitize_filename(&filename));
+    let raw =
+        tauri::async_runtime::spawn_blocking(move || imap::fetch_raw(&account, &password, &f, uid))
+            .await
+            .map_err(|e| format!("取信任务失败: {e}"))??;
+    let (bytes, _) = mime::extract_part(&raw, part).ok_or("找不到该附件")?;
+    let dir = store::data_root(&app)?
+        .join("attachments")
+        .join(sanitize_filename(&account_id))
+        .join(uid.to_string());
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建缓存目录失败: {e}"))?;
+    let path = dir.join(safe_name);
+    std::fs::write(&path, &bytes).map_err(|e| format!("写入附件失败: {e}"))?;
+    tauri_plugin_opener::open_path(&path, None::<&str>)
+        .map_err(|e| format!("调用系统默认程序失败: {e}"))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
 fn unique_path(dir: &std::path::Path, filename: &str) -> std::path::PathBuf {
     let candidate = dir.join(filename);
     if !candidate.exists() {

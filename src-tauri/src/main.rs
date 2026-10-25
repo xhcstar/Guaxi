@@ -758,6 +758,7 @@ async fn main() {
             commands::mail::mail_move_messages,
             commands::mail::mail_delete_messages,
             commands::mail::mail_save_attachment,
+            commands::mail::mail_open_attachment,
             commands::mail::mail_send,
             commands::mail::mail_queue_send,
             commands::mail::mail_list_outbox,

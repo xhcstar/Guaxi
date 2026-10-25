@@ -180,6 +180,7 @@
           @toggle-flag="onToggleFlagCurrent"
           @toggle-unread="onToggleUnreadCurrent"
           @save-attachment="onSaveAttachment"
+          @open-attachment="onOpenAttachment"
           :close-label="settings.listCollapsed ? '收起邮件' : '返回列表'"
           @close="closeReader"
         />
@@ -931,6 +932,34 @@ async function onSaveAttachment({ attachment, detail }) {
       parts.join('/'),
     )
     notify(`已保存到 ${path}`)
+  } catch (error) {
+    notify(String(error?.message || error), true)
+  }
+}
+
+/** 点附件：下载到本地缓存后交给系统默认程序打开；脚本/可执行文件先确认。 */
+async function onOpenAttachment({ attachment, detail }) {
+  const message = detail || store.detail
+  if (!message) return
+  try {
+    const dangerous = await invoke('mail_is_dangerous_attachment', {
+      name: attachment.filename,
+    }).catch(() => false)
+    if (
+      dangerous &&
+      !window.confirm(
+        `「${attachment.filename}」是脚本或可执行文件，打开它可能运行代码。\n确定要用系统默认程序打开吗？`,
+      )
+    ) {
+      return
+    }
+    await invoke('mail_open_attachment', {
+      accountId: message.accountId,
+      folder: message.folder,
+      uid: message.uid,
+      part: attachment.part,
+      filename: attachment.filename,
+    })
   } catch (error) {
     notify(String(error?.message || error), true)
   }

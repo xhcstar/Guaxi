@@ -924,6 +924,16 @@
   filter: invert(1) hue-rotate(180deg);
 }
 
+/* 邮件里写死的浅色底（白色卡片、#F6F6F6 渐变、引用头 <pre> 的 rgb(248,249,250)）
+   会被整块反色压成纯黑，和纸面 #23262b 撞出突兀的色块。阅读页会给这类元素
+   打上 guaxi-soft-bg 标记：暗色下抹掉底色，让正文回到统一的纸面。 */
+.mail-doc-dark .mail-body .guaxi-soft-bg {
+  background-color: transparent !important;
+}
+.mail-doc-dark .mail-body .guaxi-soft-bg-image {
+  background-image: none !important;
+}
+
 /* ---------- 会话视图：每封邮件一张独立卡片 ---------- */
 .mail-thread {
   display: flex;
@@ -1243,6 +1253,42 @@
   font-size: 10.5px;
   color: var(--mail-text-muted);
   font-variant-numeric: tabular-nums;
+}
+
+/* 阅读区的附件：点主体用系统默认程序打开，右侧按钮另存到本地。 */
+.mail-attachment-item {
+  display: flex;
+  align-items: stretch;
+  max-width: 300px;
+  border: 1px solid var(--mail-border);
+  border-radius: var(--mail-radius-sm);
+  background: var(--mail-panel);
+  overflow: hidden;
+}
+.mail-attachment-item:hover {
+  border-color: var(--mail-border-strong);
+}
+.mail-attachment-item .mail-attachment {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  max-width: 260px;
+  min-width: 0;
+}
+.mail-attachment-save {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  border: 0;
+  border-left: 1px solid var(--mail-border);
+  background: transparent;
+  color: var(--mail-text-muted);
+  cursor: pointer;
+}
+.mail-attachment-save:hover {
+  background: var(--mail-panel-hover);
+  color: var(--mail-text);
 }
 
 /* 原始头部（调试 / 排查用） */
