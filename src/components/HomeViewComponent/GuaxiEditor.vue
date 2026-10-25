@@ -1574,7 +1574,7 @@ import tableColumnRemove from '@iconify-icons/mdi/table-column-remove'
 import { dirname, homeDir } from '@tauri-apps/api/path'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { renderMarkdown, addCopyButtons, addMediaViewerButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
-import { renderChartEmbeds, disposeChartInstances, bindExcalidrawOpenButtons, materializeChartEmbedsForExport, renderChartFenceToSvg, renderExcalidrawFenceToSvg } from '../GuaxiMarkdownRender/guaxiChartEmbeds'
+import { renderChartEmbeds, disposeChartInstances, bindExcalidrawOpenButtons, materializeChartEmbedsForExport, renderChartFenceToSvg, renderExcalidrawFenceToSvg, collectFenceBlocks } from '../GuaxiMarkdownRender/guaxiChartEmbeds'
 import { svgToPngBlob } from '../GuaxiMarkdownRender/guaxiChartExport'
 // 渲染结果的持久缓存：Worker 里没有 invoke，所以由主线程代查、代写（见 renderPreviewMarkdownHtmlWithWorker）。
 import {
@@ -24192,15 +24192,10 @@ const prerenderDisplayMathForPandoc = async (markdown) => {
 
 const prerenderMermaidForPandoc = async (markdown) => {
   const text = String(markdown || '')
-  if (!text.includes('```mermaid') && !text.includes('~~~mermaid')) return text
 
   // 收集所有 mermaid 代码块（支持 ``` 和 ~~~ 两种围栏）。
-  const fenceRe = /(`{3,}|~{3,})[ \t]*mermaid[^\n]*\n([\s\S]*?)\n?\1/g
-  const blocks = []
-  let match
-  while ((match = fenceRe.exec(text)) !== null) {
-    blocks.push({ full: match[0], code: match[2] })
-  }
+  // 围栏必须从行首开始，理由见 collectFenceBlocks：正文/标题里的字面量会吞掉后面的代码块。
+  const blocks = collectFenceBlocks(text, ['mermaid']).map((block) => ({ ...block, code: block.body }))
   if (!blocks.length) return text
 
   let tempDir
@@ -24297,7 +24292,8 @@ const prerenderMermaidForPandoc = async (markdown) => {
         const displayWidthIn = Math.min(6, Math.max(1, finalWidth / 96))
         const ref = `![mermaid diagram](${filePath.replace(/\\/g, '/')}){width=${displayWidthIn.toFixed(2)}in}`
         // 用函数式 replace，避免文件路径里出现 $ 时被当成替换占位符。
-        result = result.replace(blocks[i].full, () => ref)
+        // full 里包含触发匹配的换行，替换时补回去，否则相邻段落会被粘成一行。
+        result = result.replace(blocks[i].full, () => `${blocks[i].lead}${ref}`)
         rendered += 1
       } catch (error) {
         failures += 1
@@ -24363,7 +24359,11 @@ const svgToPngBlobBytes = async (svgText) => {
  */
 const prerenderChartEmbedsForPandoc = async (markdown, baseDocPath) => {
   const text = String(markdown || '')
-  if (!/```\s*chart\b/.test(text) && !/```\s*excalidraw\b/.test(text)) return text
+
+  // 围栏必须从行首开始：正文/标题里出现的「```chart」「```excalidraw」字面量
+  // 不应被当成代码块开头，否则会吞掉后面第一个真正的围栏，那块图表就漏掉预渲染。
+  const blocks = collectFenceBlocks(text, ['chart', 'excalidraw'])
+  if (!blocks.length) return text
 
   let join
   let writeFile
@@ -24381,14 +24381,6 @@ const prerenderChartEmbedsForPandoc = async (markdown, baseDocPath) => {
     })
     return text
   }
-
-  const fenceRe = /(`{3,})[ \t]*(chart|excalidraw)[^\n]*\n([\s\S]*?)\n?\1/g
-  const blocks = []
-  let match
-  while ((match = fenceRe.exec(text)) !== null) {
-    blocks.push({ full: match[0], kind: match[2].toLowerCase(), body: match[3] })
-  }
-  if (!blocks.length) return text
 
   let result = text
   let rendered = 0
@@ -24410,8 +24402,8 @@ const prerenderChartEmbedsForPandoc = async (markdown, baseDocPath) => {
       await writeFile(filePath, png.bytes)
       const displayWidthIn = Math.min(6, Math.max(1, png.width / 96))
       const ref = `![${blocks[i].kind}](${filePath.replace(/\\/g, '/')}){width=${displayWidthIn.toFixed(2)}in}`
-      // 函数式 replace：路径里出现 $ 时不会被当成替换占位符。
-      result = result.replace(blocks[i].full, () => ref)
+      // 函数式 replace：路径里出现 $ 时不会被当成替换占位符；lead 是触发匹配的换行。
+      result = result.replace(blocks[i].full, () => `${blocks[i].lead}${ref}`)
       rendered += 1
     } catch (error) {
       failures += 1
