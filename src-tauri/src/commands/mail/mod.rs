@@ -806,12 +806,19 @@ pub async fn mail_get_message(
     account_id: String,
     folder: String,
     uid: u32,
+    // 跳过正文缓存、重新取原始报文。续写草稿时要读自定义头（组芯片），
+    // 而缓存路径不带完整头部。
+    force: Option<bool>,
 ) -> Result<MessageDetail, String> {
     ensure_init(&app)?;
     let mut summary = store::get_summary(&account_id, &folder, uid)?
         .ok_or_else(|| "本地没有这封邮件的记录".to_string())?;
 
-    let cached = store::get_body(&account_id, &folder, uid)?;
+    let cached = if force.unwrap_or(false) {
+        None
+    } else {
+        store::get_body(&account_id, &folder, uid)?
+    };
     let (cached_html, cached_text, cached_attachments, fetched) =
         cached.unwrap_or((None, String::new(), "[]".into(), false));
 
@@ -1551,6 +1558,22 @@ pub async fn mail_send(app: AppHandle, request: SendRequest) -> Result<(), Strin
 }
 
 async fn send_inner(app: &AppHandle, request: &SendRequest) -> Result<(), String> {
+    // 写信页的通讯组只以 `组名 <group:ID>` 存在收件人里；真正投递前展开成成员地址。
+    // 这一步必须在组装 MIME 之前：邮件头里不能出现 `group:` 这种非地址串，
+    // 否则收信端解析不到收件人，回复全部也会丢人。
+    let mut request = request.clone();
+    let mut expanded = contacts::store::expand_recipient_lists(&[
+        request.to.clone(),
+        request.cc.clone(),
+        request.bcc.clone(),
+    ])?;
+    request.bcc = expanded.pop().unwrap_or_default();
+    request.cc = expanded.pop().unwrap_or_default();
+    request.to = expanded.pop().unwrap_or_default();
+    if request.to.is_empty() && request.cc.is_empty() && request.bcc.is_empty() {
+        return Err("收件人为空".to_string());
+    }
+
     let account = load_account(&request.account_id)?;
     let password = account_password(&account)?;
     let from = MailAddress {
@@ -1572,7 +1595,7 @@ async fn send_inner(app: &AppHandle, request: &SendRequest) -> Result<(), String
         ));
     }
 
-    let mut raw = mime::build(request, &from, &account.signature)?;
+    let mut raw = mime::build(&request, &from, &account.signature)?;
 
     // 端到端加密 / 签名：在 SMTP 之前对整份 MIME 再做一层封装。
     let mode = request.crypto_mode.as_str();
@@ -1615,6 +1638,8 @@ async fn send_inner(app: &AppHandle, request: &SendRequest) -> Result<(), String
         .map_err(|e| format!("加密封装失败: {e}"))??;
     }
 
+    // 信封收件人去重：同一个人既在「收件人」又在「抄送」，或者两个通讯组都包含他时，
+    // 服务器会收到两条 RCPT，部分服务器会因此重复投递。邮件头保持原样（各字段各自的收件人）。
     let mut recipients: Vec<String> = Vec::new();
     for addr in request
         .to
@@ -1622,25 +1647,37 @@ async fn send_inner(app: &AppHandle, request: &SendRequest) -> Result<(), String
         .chain(request.cc.iter())
         .chain(request.bcc.iter())
     {
-        recipients.push(mime::parse_mailbox(addr)?.email.to_string());
+        let email = mime::parse_mailbox(addr)?.email.to_string();
+        let normalized = email.trim().to_ascii_lowercase();
+        if !normalized.is_empty()
+            && !recipients
+                .iter()
+                .any(|seen: &String| seen.eq_ignore_ascii_case(&email))
+        {
+            recipients.push(email);
+        }
     }
 
     let acc = account.clone();
     let envelope_from = account.email.clone();
     let raw_for_send = raw.clone();
     let pw_for_send = password.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        smtp::send_raw(
-            &acc,
-            &pw_for_send,
-            effective_proxy(&acc),
-            &envelope_from,
-            &recipients,
-            &raw_for_send,
-        )
+    let recipient_count = recipients.len();
+    let send_result = tauri::async_runtime::spawn_blocking(move || {
+        send_in_batches(&acc, &pw_for_send, &envelope_from, &raw_for_send, &recipients)
     })
     .await
-    .map_err(|e| format!("发信任务失败: {e}"))??;
+    .map_err(|e| format!("发信任务失败: {e}"))?;
+    if let Err(error) = send_result {
+        // 大通讯组最常见的失败是服务器对「单封收件人数」设了上限（Gmail 100、
+        // Exchange 默认 500），报错往往只指向某一个地址，很难看出是人数问题。
+        if recipient_count > 50 && error.contains("被拒绝") {
+            return Err(format!(
+                "{error}\n这封邮件共 {recipient_count} 位收件人，超过了邮件服务器允许的单封收件人数。请把通讯组拆小后分批发送，或改用密送。"
+            ));
+        }
+        return Err(error);
+    }
 
     if save_to_sent {
         if let Some(sent) = imap::sent_folder_name(&account) {
@@ -1657,6 +1694,115 @@ async fn send_inner(app: &AppHandle, request: &SendRequest) -> Result<(), String
     Ok(())
 }
 
+/// 服务器拒绝 RCPT 是不是因为「这一封的收件人太多」。
+///
+/// Gmail 返回 `452 4.5.3 Too many recipients`；Exchange 常见 `550 5.5.3` 且正文里
+/// 带 recipient limit。只有明确是人数问题时才拆分发，普通地址无效（550 5.1.1）不该重发。
+fn recipient_limit_hit(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("too many recipient")
+        || lower.contains("recipient limit")
+        || error.contains("（452）")
+        || error.contains("(452)")
+        || error.contains("收件人数")
+        || error.contains("收件人数量")
+}
+
+/// 逐批投递：先按整份名单发，被服务器以「收件人过多」拒绝时对半拆分重试。
+///
+/// 拆分只改信封收件人，报文（含邮件头）保持不变；每个收件人只会落在其中一批里。
+/// 所以同一封邮件不会重复投递，只是服务器会收到多次 DATA。
+fn send_in_batches(
+    account: &Account,
+    password: &str,
+    envelope_from: &str,
+    raw: &[u8],
+    recipients: &[String],
+) -> Result<(), String> {
+    fn attempt(
+        account: &Account,
+        password: &str,
+        envelope_from: &str,
+        raw: &[u8],
+        batch: &[String],
+        depth: usize,
+    ) -> Result<(), String> {
+        match smtp::send_raw(
+            account,
+            password,
+            effective_proxy(account),
+            envelope_from,
+            batch,
+            raw,
+        ) {
+            Ok(()) => Ok(()),
+            Err(error)
+                if depth < 4 && batch.len() > 1 && recipient_limit_hit(&error) =>
+            {
+                let middle = batch.len() / 2;
+                warn!(
+                    recipients = batch.len(),
+                    "mail: 服务器限制单封收件人数，拆分后重发"
+                );
+                attempt(account, password, envelope_from, raw, &batch[..middle], depth + 1)?;
+                attempt(account, password, envelope_from, raw, &batch[middle..], depth + 1)
+            }
+            Err(error) => Err(error),
+        }
+    }
+    attempt(account, password, envelope_from, raw, recipients, 0)
+}
+
+/// 草稿里保留写信页的原始收件人清单（含 `名称 <group:ID>` 芯片）。
+///
+/// 草稿正文头必须写展开后的真实地址（别的客户端要能读懂），
+/// 所以把用户看到的清单单独塞进 `X-Guaxi-Draft-Recipients`（base64 JSON）。
+/// 本应用续写草稿时优先用它恢复组芯片；其他客户端会忽略这个头。
+fn insert_draft_recipients_header(raw: Vec<u8>, recipients: &serde_json::Value) -> Vec<u8> {
+    use base64::Engine as _;
+    let Ok(json) = serde_json::to_vec(recipients) else {
+        return raw;
+    };
+    let encoded = base64::engine::general_purpose::STANDARD.encode(json);
+    let mut header = String::from("X-Guaxi-Draft-Recipients:");
+    for (index, chunk) in encoded.as_bytes().chunks(74).enumerate() {
+        header.push_str(if index == 0 { " " } else { "\r\n " });
+        header.push_str(std::str::from_utf8(chunk).unwrap_or(""));
+    }
+    header.push_str("\r\n");
+    let separator = b"\r\n\r\n";
+    let Some(pos) = raw
+        .windows(separator.len())
+        .position(|window| window == separator.as_slice())
+    else {
+        return raw;
+    };
+    let mut out = Vec::with_capacity(raw.len() + header.len());
+    out.extend_from_slice(&raw[..pos + 2]);
+    out.extend_from_slice(header.as_bytes());
+    out.extend_from_slice(&raw[pos + 2..]);
+    out
+}
+
+/// 延迟发送列表里展示的收件人：通讯组只显示组名，别把 `group:` 内部标记露给用户。
+fn display_recipients(list: &[String]) -> String {
+    list.iter()
+        .map(|raw| {
+            if let Some(open) = raw.rfind("<group:") {
+                let name = raw[..open].trim();
+                if name.is_empty() {
+                    "通讯组".to_string()
+                } else {
+                    format!("{name}（通讯组）")
+                }
+            } else {
+                raw.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// 延迟发送：先进 outbox，倒计时结束后由 `mail_flush_outbox` 投递。
 #[command]
 pub async fn mail_queue_send(app: AppHandle, request: SendRequest) -> Result<OutboxItem, String> {
@@ -1668,7 +1814,7 @@ pub async fn mail_queue_send(app: AppHandle, request: SendRequest) -> Result<Out
         id: Uuid::new_v4().to_string(),
         account_id: request.account_id.clone(),
         subject: request.subject.clone(),
-        to: request.to.join(", "),
+        to: display_recipients(&request.to),
         due_at: now + delay.max(1),
         created_at: now,
         attempts: 0,
@@ -1735,11 +1881,29 @@ pub async fn mail_save_draft(app: AppHandle, request: SendRequest) -> Result<(),
     ensure_init(&app)?;
     let account = load_account(&request.account_id)?;
     let password = account_password(&account)?;
+    // 草稿和正式发送一样要展开通讯组：IMAP 草稿箱里的地址必须是真实邮箱。
+    // 但「组芯片」本身要留着，否则续写草稿时会看到上百个地址——
+    // 这正是写信页想避免的。原始收件人清单单独编码进一个自定义头。
+    let original_recipients = serde_json::json!({
+        "to": request.to.clone(),
+        "cc": request.cc.clone(),
+        "bcc": request.bcc.clone(),
+    });
+    let mut request = request;
+    let mut expanded = contacts::store::expand_recipient_lists(&[
+        request.to.clone(),
+        request.cc.clone(),
+        request.bcc.clone(),
+    ])?;
+    request.bcc = expanded.pop().unwrap_or_default();
+    request.cc = expanded.pop().unwrap_or_default();
+    request.to = expanded.pop().unwrap_or_default();
     let from = MailAddress {
         name: account.display_name.clone(),
         address: account.email.clone(),
     };
     let raw = mime::build(&request, &from, &account.signature)?;
+    let raw = insert_draft_recipients_header(raw, &original_recipients);
     let drafts = store::list_folders(&account.id)?
         .into_iter()
         .find(|f| f.role == FolderRole::Drafts)
@@ -2820,4 +2984,35 @@ pub async fn mail_reset_connections(
         None => pool::invalidate_all(),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn draft_recipient_header_is_inserted_before_body() {
+        let raw = b"From: a@b.c\r\nSubject: x\r\n\r\nbody".to_vec();
+        let recipients = serde_json::json!({
+            "to": ["财务组 <group:g1>"],
+            "cc": [],
+            "bcc": [],
+        });
+        let text = String::from_utf8(insert_draft_recipients_header(raw, &recipients)).unwrap();
+        let header = text.find("X-Guaxi-Draft-Recipients:").expect("缺少自定义头");
+        let body = text.find("\r\n\r\nbody").expect("正文分隔丢了");
+        assert!(header < body);
+        assert!(text.starts_with("From: a@b.c\r\n"));
+    }
+
+    #[test]
+    fn recipient_limit_errors_are_detected() {
+        assert!(recipient_limit_hit(
+            "收件人 a@b.c 被拒绝（452）: 4.5.3 Too many recipients"
+        ));
+        assert!(recipient_limit_hit("RCPT failed: too many recipients"));
+        assert!(!recipient_limit_hit(
+            "收件人 a@b.c 被拒绝（550）: 5.1.1 unknown user"
+        ));
+    }
 }

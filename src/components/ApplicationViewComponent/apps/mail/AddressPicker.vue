@@ -23,7 +23,7 @@
         >
           <span class="address-picker-kind">组</span>
           <span class="address-picker-name">{{ group.name }}</span>
-          <span class="address-picker-meta">{{ group.members.length }} 人</span>
+          <span class="address-picker-meta">{{ groupCount(group) }} 人</span>
         </button>
         <div class="address-picker-section">常用联系人</div>
         <button
@@ -87,6 +87,11 @@ onMounted(async () => {
 })
 
 const groups = computed(() => book.groups)
+
+/** 组的真实人数：嵌套组展开、地址去重。 */
+function groupCount(group) {
+  return book.groupCounts?.[group.id] ?? group.members?.length ?? 0
+}
 const frequent = computed(() =>
   [...book.contacts]
     .filter((c) => c.emails?.length && !isExcluded(c.emails[0].value))

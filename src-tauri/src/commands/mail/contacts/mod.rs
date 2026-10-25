@@ -14,7 +14,8 @@ pub mod store;
 pub mod vcard;
 
 use model::{
-    Contact, ContactGroup, ContactMessage, ContactQuery, ContactSuggestion, ImportReport,
+    Contact, ContactGroup, ContactMessage, ContactQuery, ContactSuggestion, ExpandedMember,
+    ImportReport,
 };
 use tauri::command;
 
@@ -53,7 +54,7 @@ pub async fn mail_contact_stats() -> Result<serde_json::Value, String> {
 /// 写信地址栏补全。
 #[command]
 pub async fn mail_contact_suggest(prefix: String) -> Result<Vec<ContactSuggestion>, String> {
-    store::suggest(&prefix, 8)
+    store::suggest(&prefix, 12)
 }
 
 /// 与某联系人的往来邮件。
@@ -82,9 +83,12 @@ pub async fn mail_delete_contact_group(id: String) -> Result<(), String> {
     store::delete_group(&id)
 }
 
-/// 展开通讯组为地址列表（写信时点选组）。
+/// 展开通讯组为成员列表（嵌套组递归解开、地址去重）。
+///
+/// 写信页不再用它把组拆成一串地址——地址栏只保留组名，发送时才在 Rust 侧展开；
+/// 这里主要供通讯录详情页展示「这个组最终包含哪些人」。
 #[command]
-pub async fn mail_expand_contact_group(id: String) -> Result<Vec<String>, String> {
+pub async fn mail_expand_contact_group(id: String) -> Result<Vec<ExpandedMember>, String> {
     store::expand_group(&id)
 }
 
@@ -109,7 +113,8 @@ pub async fn mail_import_contacts(path: String) -> Result<ImportReport, String> 
 #[command]
 pub async fn mail_export_contacts(path: String, group_id: Option<String>) -> Result<u32, String> {
     let text = store::export_vcards(group_id.as_deref())?;
-    let count = text.matches("BEGIN:VCARD").count() as u32;
+    let group_cards = text.matches("X-ADDRESSBOOKSERVER-KIND:group").count() as u32;
+    let count = (text.matches("BEGIN:VCARD").count() as u32).saturating_sub(group_cards);
     std::fs::write(&path, text).map_err(|e| format!("写入文件失败（{path}）: {e}"))?;
     Ok(count)
 }

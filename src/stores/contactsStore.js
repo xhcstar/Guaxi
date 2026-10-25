@@ -57,6 +57,14 @@ export const useContactsStore = defineStore('contacts', {
     groupsById(state) {
       return Object.fromEntries(state.groups.map((g) => [g.id, g]))
     },
+    /** 每个组「最终会发给多少人」：嵌套组展开、地址去重。 */
+    groupCounts(state) {
+      const counts = {}
+      for (const group of state.groups) {
+        counts[group.id] = expandGroupMembers(state.groups, group.id).length
+      }
+      return counts
+    },
   },
 
   actions: {
@@ -202,7 +210,7 @@ export const useContactsStore = defineStore('contacts', {
       })
       if (!path) return null
       const report = await invoke('mail_import_contacts', { path })
-      await Promise.all([this.reload(), this.reloadStats()])
+      await Promise.all([this.reload(), this.reloadGroups(), this.reloadStats()])
       return report
     },
 
@@ -286,4 +294,46 @@ export function blankGroup() {
     createdAt: 0,
     updatedAt: 0,
   }
+}
+
+/**
+ * 在纯前端展开一个通讯组：嵌套组递归解开、同地址去重。
+ *
+ * 写信页只在地址栏放一个「组名」芯片，人数提示与发送确认都靠它；
+ * 真正投递时的展开以 Rust 侧为准（那边也做了同样的递归与去重）。
+ */
+export function expandGroupMembers(groups, id, seen = []) {
+  if (!id || seen.includes(id)) return []
+  const group = (groups || []).find((g) => g.id === id)
+  if (!group) return []
+  const path = [...seen, id]
+  const out = []
+  for (const member of group.members || []) {
+    if (member.kind === 'group') {
+      for (const nested of expandGroupMembers(groups, member.groupId, path)) {
+        if (!out.some((m) => m.email.toLowerCase() === nested.email.toLowerCase())) out.push(nested)
+      }
+      continue
+    }
+    const email = String(member.email || '').trim()
+    if (!email) continue
+    if (out.some((m) => m.email.toLowerCase() === email.toLowerCase())) continue
+    out.push({ name: member.name || '', email })
+  }
+  return out
+}
+
+/** 地址栏里的通讯组芯片：`组名 <group:ID>`；发送前由 Rust 侧展开。 */
+export function groupRecipientToken(group) {
+  const name = String(group?.name || '')
+    .replace(/[<>"]/g, '')
+    .trim()
+  return `${name || '通讯组'} <group:${group?.id || ''}>`
+}
+
+/** 从收件人字符串里认出通讯组芯片。 */
+export function parseGroupToken(value) {
+  const match = String(value || '').match(/^\s*(.*?)\s*<group:([^>]+)>\s*$/)
+  if (!match) return null
+  return { name: match[1], id: match[2] }
 }

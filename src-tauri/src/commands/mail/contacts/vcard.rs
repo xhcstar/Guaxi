@@ -11,7 +11,7 @@
 //! 2. **转义**：`\n` `\,` `\;` `\\`，2.1/3.0 里逗号和分号都要转义；
 //! 3. **编码**：3.0 的 `ENCODING=QUOTED-PRINTABLE`（中文名字常见）与 `CHARSET=GBK`。
 
-use super::model::{Contact, ContactGroup, LabeledValue};
+use super::model::{Contact, ContactGroup, GroupMember, LabeledValue};
 use uuid::Uuid;
 
 /// 逻辑行（已展开折叠）。
@@ -248,8 +248,12 @@ fn mail_label(params: &[(String, String)]) -> String {
 pub fn parse(text: &str) -> (Vec<Contact>, Vec<ContactGroup>, Vec<String>) {
     let lines = unfold(text);
     let mut contacts: Vec<Contact> = Vec::new();
-    let groups: Vec<ContactGroup> = Vec::new();
+    let mut groups: Vec<ContactGroup> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
+    // 苹果导出的组卡片用 `urn:uuid:<联系人 UID>` 引用成员，而联系人本身在另一张卡片里。
+    // 先记下 UID → (姓名, 邮箱)，等整份文件解析完再把 URN 换成邮箱。
+    let mut uid_to_email: std::collections::HashMap<String, (String, String)> =
+        std::collections::HashMap::new();
 
     let mut i = 0;
     while i < lines.len() {
@@ -266,6 +270,9 @@ pub fn parse(text: &str) -> (Vec<Contact>, Vec<ContactGroup>, Vec<String>) {
             ..Default::default()
         };
         let mut group_names: Vec<String> = Vec::new();
+        let mut is_group = false;
+        let mut uid = String::new();
+        let mut group_members: Vec<GroupMember> = Vec::new();
         let mut ended = false;
 
         while i < lines.len() {
@@ -351,6 +358,18 @@ pub fn parse(text: &str) -> (Vec<Contact>, Vec<ContactGroup>, Vec<String>) {
                         }
                     }
                 }
+                "KIND" | "X-ADDRESSBOOKSERVER-KIND" => {
+                    // vCard 4.0 的 KIND:group，或苹果 3.0 扩展的同义字段。
+                    if decoded(&value).trim().eq_ignore_ascii_case("group") {
+                        is_group = true;
+                    }
+                }
+                "UID" => uid = decoded(&value).trim().to_string(),
+                "MEMBER" | "X-ADDRESSBOOKSERVER-MEMBER" | "X-MEMBER" => {
+                    if let Some(member) = parse_group_member(&params, &decoded(&value)) {
+                        group_members.push(member);
+                    }
+                }
                 _ => {}
             }
         }
@@ -361,6 +380,39 @@ pub fn parse(text: &str) -> (Vec<Contact>, Vec<ContactGroup>, Vec<String>) {
             }
             continue;
         }
+
+        // 通讯组卡片：成员是「组引用」或「直接邮箱」，不是联系人本身。
+        if is_group {
+            let name = contact.display_name.trim().to_string();
+            if name.is_empty() {
+                if errors.len() < 20 {
+                    errors.push("有一张通讯组卡片没有组名（已跳过）".to_string());
+                }
+                continue;
+            }
+            let mut members: Vec<GroupMember> = Vec::new();
+            for member in group_members {
+                let duplicate = members.iter().any(|existing| {
+                    if existing.kind == "group" || member.kind == "group" {
+                        existing.kind == member.kind && existing.group_id == member.group_id
+                    } else {
+                        existing.email.to_lowercase() == member.email.to_lowercase()
+                    }
+                });
+                if !duplicate {
+                    members.push(member);
+                }
+            }
+            groups.push(ContactGroup {
+                id: uid,
+                name,
+                description: contact.note.trim().to_string(),
+                members,
+                ..Default::default()
+            });
+            continue;
+        }
+
         if contact.display_name.is_empty() {
             let name = contact.best_name();
             contact.display_name = name;
@@ -373,10 +425,164 @@ pub fn parse(text: &str) -> (Vec<Contact>, Vec<ContactGroup>, Vec<String>) {
         if !group_names.is_empty() {
             contact.groups = group_names;
         }
+        if !uid.is_empty() {
+            let email = contact.primary_email();
+            if !email.is_empty() {
+                uid_to_email.insert(uid.clone(), (contact.display_name.clone(), email));
+            }
+        }
         contacts.push(contact);
     }
 
+    // 组卡片里的 `urn:uuid:` 成员：能对上联系人 UID 的换成邮箱；
+    // 对不上但确实是本文件里的另一个组，就保留成嵌套组；其余丢弃并说明原因。
+    let group_ids: Vec<String> = groups
+        .iter()
+        .map(|group| group.id.clone())
+        .filter(|id| !id.is_empty())
+        .collect();
+    for group in groups.iter_mut() {
+        let mut kept: Vec<GroupMember> = Vec::new();
+        let mut dropped = 0usize;
+        for member in group.members.drain(..) {
+            if member.kind == "group" {
+                if let Some((name, email)) = uid_to_email.get(&member.group_id) {
+                    kept.push(GroupMember {
+                        kind: "email".into(),
+                        email: email.clone(),
+                        name: name.clone(),
+                        ..Default::default()
+                    });
+                } else if group_ids.iter().any(|id| id == &member.group_id) {
+                    kept.push(member);
+                } else {
+                    dropped += 1;
+                }
+            } else {
+                kept.push(member);
+            }
+        }
+        group.members = kept;
+        if dropped > 0 && errors.len() < 20 {
+            errors.push(format!(
+                "通讯组「{}」有 {dropped} 个成员在文件里找不到对应联系人（已跳过）",
+                group.name
+            ));
+        }
+    }
+
     (contacts, groups, errors)
+}
+
+/// 解析 `MEMBER` / `X-ADDRESSBOOKSERVER-MEMBER` 的值。
+///
+/// 三种形态都要认：
+/// - `mailto:a@b.c`（vCard 4.0 / 苹果）；
+/// - `urn:uuid:...`（指向另一张卡片：通讯组嵌套，或苹果导出的联系人 UUID）；
+/// - 裸邮箱（部分国产客户端）。
+fn parse_group_member(params: &[(String, String)], value: &str) -> Option<GroupMember> {
+    let value = value.trim().to_string();
+    if value.is_empty() {
+        return None;
+    }
+    let name = param(params, "CN")
+        .map(|cn| unescape(cn).trim().to_string())
+        .unwrap_or_default();
+    if let Some(rest) = value
+        .strip_prefix("urn:uuid:")
+        .or_else(|| value.strip_prefix("URN:UUID:"))
+    {
+        let group_id = rest.trim().to_string();
+        return (!group_id.is_empty()).then_some(GroupMember {
+            kind: "group".into(),
+            group_id,
+            name,
+            ..Default::default()
+        });
+    }
+    let address = value
+        .strip_prefix("mailto:")
+        .or_else(|| value.strip_prefix("MAILTO:"))
+        .unwrap_or(&value)
+        .trim();
+    let (name, address) = match (address.rfind('<'), address.rfind('>')) {
+        (Some(open), Some(close)) if close > open => (
+            if name.is_empty() {
+                address[..open].trim().trim_matches('"').to_string()
+            } else {
+                name
+            },
+            address[open + 1..close].trim().to_string(),
+        ),
+        _ => (name, address.trim_matches(['<', '>']).to_string()),
+    };
+    if address.is_empty() {
+        return None;
+    }
+    Some(GroupMember {
+        kind: "email".into(),
+        email: address,
+        name,
+        ..Default::default()
+    })
+}
+
+/// 通讯组导出卡片的内容（邮箱已经解析成具体地址）。
+#[derive(Debug, Clone, Default)]
+pub struct GroupCard {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    /// (显示名, 邮箱)。收件端看到的名字越完整，回信时越不容易选错人。
+    pub emails: Vec<(String, String)>,
+    /// 嵌套的子通讯组 id。
+    pub child_group_ids: Vec<String>,
+}
+
+/// 把通讯组编码成 vCard。同时写苹果的 `X-ADDRESSBOOKSERVER-*` 与
+/// vCard 4.0 的 `KIND:group` / `MEMBER`，让 Windows、苹果、安卓都能读回成员。
+pub fn encode_group_card(card: &GroupCard) -> String {
+    let mut out = String::with_capacity(256);
+    out.push_str("BEGIN:VCARD\r\n");
+    out.push_str("VERSION:3.0\r\n");
+    out.push_str("PRODID:-//Guaxi//Contacts//CN\r\n");
+    if !card.id.trim().is_empty() {
+        out.push_str(&format!("UID:{}\r\n", escape_text(card.id.trim())));
+    }
+    // 组卡片用组名占住 N，部分客户端只读 N 不读 FN。
+    out.push_str(&format!("N:{};;;;\r\n", escape_text(card.name.trim())));
+    out.push_str(&format!("FN:{}\r\n", escape_text(card.name.trim())));
+    if !card.description.trim().is_empty() {
+        out.push_str(&format!("NOTE:{}\r\n", escape_text(card.description.trim())));
+    }
+    out.push_str("KIND:group\r\n");
+    out.push_str("X-ADDRESSBOOKSERVER-KIND:group\r\n");
+    for (name, email) in &card.emails {
+        let email = email.trim();
+        if email.is_empty() {
+            continue;
+        }
+        let uri = format!("mailto:{email}");
+        if name.trim().is_empty() {
+            out.push_str(&format!("MEMBER:{uri}\r\n"));
+            out.push_str(&format!("X-ADDRESSBOOKSERVER-MEMBER:{uri}\r\n"));
+        } else {
+            let label = name.trim().replace('"', "");
+            out.push_str(&format!("MEMBER;CN=\"{label}\":{uri}\r\n"));
+            out.push_str(&format!("X-ADDRESSBOOKSERVER-MEMBER;CN=\"{label}\":{uri}\r\n"));
+        }
+    }
+    for child in &card.child_group_ids {
+        let child = child.trim();
+        if child.is_empty() {
+            continue;
+        }
+        let uri = format!("urn:uuid:{child}");
+        out.push_str(&format!("MEMBER:{uri}\r\n"));
+        out.push_str(&format!("X-ADDRESSBOOKSERVER-MEMBER:{uri}\r\n"));
+    }
+    out.push_str("END:VCARD\r\n");
+    out
 }
 
 /// 把联系人编码成 vCard 3.0。
@@ -566,5 +772,66 @@ NOTE:第一行\\n第二行\r\nEMAIL:a@b.c\r\nEND:VCARD\r\n";
         let parts = split_semicolon("EMAIL;TYPE=\"a;b\";X:y");
         assert_eq!(parts[0], "EMAIL");
         assert_eq!(parts[1], "TYPE=\"a;b\"");
+    }
+
+    #[test]
+    fn group_card_round_trip() {
+        let card = GroupCard {
+            id: "g-1".into(),
+            name: "研发组".into(),
+            description: "研发同事".into(),
+            emails: vec![("张三".into(), "zs@corp.com".into())],
+            child_group_ids: vec!["g-2".into()],
+        };
+        let child = GroupCard {
+            id: "g-2".into(),
+            name: "前端".into(),
+            description: String::new(),
+            emails: vec![("李四".into(), "ls@corp.com".into())],
+            child_group_ids: Vec::new(),
+        };
+        let text = format!("{}{}", encode_group_card(&card), encode_group_card(&child));
+        let (contacts, groups, errors) = parse(&text);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!(contacts.is_empty());
+        assert_eq!(groups.len(), 2);
+        let group = groups.iter().find(|g| g.id == "g-1").expect("缺少 g-1");
+        assert_eq!(group.name, "研发组");
+        assert_eq!(group.description, "研发同事");
+        assert_eq!(group.members.len(), 2, "{:?}", group.members);
+        assert_eq!(group.members[0].email, "zs@corp.com");
+        assert_eq!(group.members[0].name, "张三");
+        assert_eq!(group.members[1].kind, "group");
+        assert_eq!(group.members[1].group_id, "g-2");
+    }
+
+    #[test]
+    fn apple_group_urns_resolve_to_contact_emails() {
+        // 苹果通讯录：联系人卡片带 UID，组卡片用 urn:uuid 引用它。
+        let text = "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:person-1\r\n\
+FN:王五\r\nEMAIL:ww@corp.com\r\nEND:VCARD\r\n\
+BEGIN:VCARD\r\nVERSION:3.0\r\nUID:group-1\r\nFN:项目组\r\n\
+X-ADDRESSBOOKSERVER-KIND:group\r\n\
+X-ADDRESSBOOKSERVER-MEMBER:urn:uuid:person-1\r\nEND:VCARD\r\n";
+        let (contacts, groups, errors) = parse(text);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(contacts.len(), 1);
+        assert_eq!(groups[0].name, "项目组");
+        assert_eq!(groups[0].members[0].kind, "email");
+        assert_eq!(groups[0].members[0].email, "ww@corp.com");
+        assert_eq!(groups[0].members[0].name, "王五");
+    }
+
+    #[test]
+    fn vcard4_group_card_is_recognized() {
+        let text = "BEGIN:VCARD\r\nVERSION:4.0\r\nKIND:group\r\nFN:财务组\r\n\
+UID:fin\r\nMEMBER:mailto:a@corp.com\r\nMEMBER:mailto:b@corp.com\r\nEND:VCARD\r\n";
+        let (contacts, groups, errors) = parse(text);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!(contacts.is_empty());
+        assert_eq!(groups[0].name, "财务组");
+        assert_eq!(groups[0].id, "fin");
+        assert_eq!(groups[0].members.len(), 2);
+        assert_eq!(groups[0].members[1].email, "b@corp.com");
     }
 }

@@ -130,11 +130,15 @@ pub struct ContactGroup {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GroupMember {
-    /// 指向联系人时为 `contact`，直接写在组里的地址为 `email`。
+    /// 指向联系人时为 `contact`，直接写在组里的地址为 `email`，嵌套另一个组为 `group`。
     #[serde(default = "default_member_kind")]
     pub kind: String,
     #[serde(default)]
     pub contact_id: String,
+    /// `kind == "group"` 时指向子通讯组。
+    #[serde(default)]
+    pub group_id: String,
+    /// 联系人成员选用的邮箱（为空表示用联系人的主邮箱）。
     #[serde(default)]
     pub email: String,
     #[serde(default)]
@@ -143,6 +147,18 @@ pub struct GroupMember {
 
 fn default_member_kind() -> String {
     "contact".to_string()
+}
+
+/// 展开后的通讯组成员（嵌套组已经递归解开、地址已去重）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpandedMember {
+    #[serde(default)]
+    pub name: String,
+    pub email: String,
+    /// 经由哪个（外层）通讯组进来的；直接成员为空。
+    #[serde(default)]
+    pub via_group: String,
 }
 
 /// 通讯录查询条件。
@@ -215,6 +231,9 @@ pub struct ImportReport {
     pub imported: u32,
     pub merged: u32,
     pub skipped: u32,
+    /// 导入/合并的通讯组数量。
+    #[serde(default)]
+    pub groups: u32,
     /// 前若干条失败原因，够用户判断是文件格式问题还是个别条目问题。
     #[serde(default)]
     pub errors: Vec<String>,

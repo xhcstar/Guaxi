@@ -8,11 +8,12 @@
 //! 按姓名合并一定会把不同的人并掉。
 
 use super::model::{
-    Contact, ContactGroup, ContactMessage, ContactQuery, ContactSuggestion, GroupMember,
-    ImportReport, LabeledValue,
+    Contact, ContactGroup, ContactMessage, ContactQuery, ContactSuggestion, ExpandedMember,
+    GroupMember, ImportReport, LabeledValue,
 };
 use crate::commands::mail::store;
 use rusqlite::{params, OptionalExtension, Row};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 pub fn init() -> Result<(), String> {
@@ -73,6 +74,34 @@ pub fn init() -> Result<(), String> {
         "#,
     )
     .map_err(|e| format!("创建通讯录表失败: {e}"))?;
+    // 旧库补列：嵌套通讯组建库时还没有 target_group_id。
+    ensure_column(
+        &conn,
+        "contact_group_members",
+        "target_group_id",
+        "target_group_id TEXT NOT NULL DEFAULT ''",
+    )?;
+    Ok(())
+}
+
+/// `ALTER TABLE ... ADD COLUMN` 只在缺列时执行：SQLite 没有 `IF NOT EXISTS`。
+fn ensure_column(
+    conn: &rusqlite::Connection,
+    table: &str,
+    column: &str,
+    ddl: &str,
+) -> Result<(), String> {
+    let present: i64 = conn
+        .query_row(
+            &format!("SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name='{column}'"),
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if present == 0 {
+        conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {ddl}"), [])
+            .map_err(|e| format!("升级 {table} 表结构失败: {e}"))?;
+    }
     Ok(())
 }
 
@@ -537,14 +566,26 @@ pub fn suggest(prefix: &str, limit: u32) -> Result<Vec<ContactSuggestion>, Strin
         }
     }
 
-    // 3) 通讯组
+    // 3) 通讯组：组名、说明、成员姓名/邮箱都能命中。
     {
         let mut stmt = conn
             .prepare(
-                "SELECT g.id, g.name, COUNT(m.contact_id) FROM contact_groups g
-                 LEFT JOIN contact_group_members m ON m.group_id = g.id
+                "SELECT g.id, g.name,
+                        CASE WHEN LOWER(g.name) LIKE ?1 ESCAPE '\\'
+                                  OR LOWER(g.description) LIKE ?1 ESCAPE '\\'
+                             THEN 1 ELSE 0 END AS name_hit
+                 FROM contact_groups g
                  WHERE LOWER(g.name) LIKE ?1 ESCAPE '\\'
-                 GROUP BY g.id ORDER BY g.name LIMIT ?2",
+                    OR LOWER(g.description) LIKE ?1 ESCAPE '\\'
+                    OR EXISTS (
+                        SELECT 1 FROM contact_group_members m
+                        LEFT JOIN contacts c ON c.id = m.contact_id
+                        WHERE m.group_id = g.id
+                          AND (LOWER(c.display_name) LIKE ?1 ESCAPE '\\'
+                               OR LOWER(m.email) LIKE ?1 ESCAPE '\\'
+                               OR LOWER(m.name) LIKE ?1 ESCAPE '\\')
+                    )
+                 ORDER BY g.name LIMIT ?2",
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
@@ -555,16 +596,39 @@ pub fn suggest(prefix: &str, limit: u32) -> Result<Vec<ContactSuggestion>, Strin
                     r.get::<_, i64>(2)?,
                 ))
             })
-            .map_err(|e| e.to_string())?;
-        for (id, name, count) in rows.flatten() {
-            out.push(ContactSuggestion {
-                display: format!("{name}（通讯组 · {count} 人）"),
-                email: format!("group:{id}"),
-                contact_id: Some(id),
-                kind: "group".into(),
-                score: score_match(&name, &q) + 30,
-                member_count: count as u32,
-            });
+            .map_err(|e| e.to_string())?
+            .flatten()
+            .collect::<Vec<_>>();
+        if !rows.is_empty() {
+            // 只有真的命中通讯组时才整表读联系人来算人数：绝大多数按键输入
+            // 只命中联系人，不该为此把几千条联系人读一遍。
+            let groups_all = list_groups()?;
+            let contacts_all = list(&ContactQuery::default())?;
+            let by_id: HashMap<String, Contact> =
+                contacts_all.into_iter().map(|c| (c.id.clone(), c)).collect();
+            for (id, name, name_hit) in rows {
+                let mut path = Vec::new();
+                let mut members = Vec::new();
+                let count = match expand_into(&groups_all, &by_id, &id, &mut path, &mut members) {
+                    Ok(()) => members.len() as u32,
+                    Err(_) => 0,
+                };
+                // 按成员命中时给一个固定的中档分：让「组里有这个人」的组仍能挤进前几条，
+                // 但不要盖过直接命中联系人姓名/邮箱的结果。
+                let score = if name_hit == 1 {
+                    score_match(&name, &q) + 30
+                } else {
+                    55
+                };
+                out.push(ContactSuggestion {
+                    display: name.clone(),
+                    email: format!("group:{id}"),
+                    contact_id: Some(id),
+                    kind: "group".into(),
+                    score,
+                    member_count: count,
+                });
+            }
         }
     }
 
@@ -668,7 +732,7 @@ pub fn list_groups() -> Result<Vec<ContactGroup>, String> {
 
     let mut count_stmt = conn
         .prepare(
-            "SELECT kind, contact_id, email, name FROM contact_group_members
+            "SELECT kind, contact_id, target_group_id, email, name FROM contact_group_members
              WHERE group_id=?1 ORDER BY position",
         )
         .map_err(|e| e.to_string())?;
@@ -678,8 +742,9 @@ pub fn list_groups() -> Result<Vec<ContactGroup>, String> {
                 Ok(GroupMember {
                     kind: r.get(0)?,
                     contact_id: r.get(1)?,
-                    email: r.get(2)?,
-                    name: r.get(3)?,
+                    group_id: r.get(2)?,
+                    email: r.get(3)?,
+                    name: r.get(4)?,
                 })
             })
             .map_err(|e| e.to_string())?
@@ -694,6 +759,14 @@ pub fn upsert_group(group: ContactGroup) -> Result<ContactGroup, String> {
     let mut group = group;
     if group.id.trim().is_empty() {
         group.id = Uuid::new_v4().to_string();
+    }
+    if group.name.trim().is_empty() {
+        return Err("通讯组名称不能为空".to_string());
+    }
+    for member in &group.members {
+        if member.kind == "group" && member.group_id == group.id {
+            return Err("通讯组不能包含自身".to_string());
+        }
     }
     let now = chrono::Utc::now().timestamp();
     let mut conn = store::connection()?;
@@ -719,21 +792,74 @@ pub fn upsert_group(group: ContactGroup) -> Result<ContactGroup, String> {
     .ok();
     for (position, member) in group.members.iter().enumerate() {
         tx.execute(
-            "INSERT INTO contact_group_members (group_id, position, kind, contact_id, email, name)
-             VALUES (?1,?2,?3,?4,?5,?6)",
+            "INSERT INTO contact_group_members
+                (group_id, position, kind, contact_id, target_group_id, email, name)
+             VALUES (?1,?2,?3,?4,?5,?6,?7)",
             params![
                 group.id,
                 position as i64,
                 if member.kind.is_empty() { "contact" } else { &member.kind },
                 member.contact_id,
+                member.group_id,
                 member.email,
                 member.name
             ],
         )
         .map_err(|e| format!("写入组成员失败: {e}"))?;
     }
+    let cycle = group_cycle_names(&tx, &group.id).map_err(|e| e.to_string())?;
+    if let Some(names) = cycle {
+        return Err(format!("通讯组存在循环引用：{}", names.join(" → ")));
+    }
     tx.commit().map_err(|e| e.to_string())?;
     Ok(group)
+}
+
+/// 从 `start` 出发做一次 DFS；发现回到 `start` 就返回环上的组名。
+fn group_cycle_names(
+    tx: &rusqlite::Transaction<'_>,
+    start: &str,
+) -> rusqlite::Result<Option<Vec<String>>> {
+    fn walk(
+        tx: &rusqlite::Transaction<'_>,
+        start: &str,
+        current: &str,
+        path: &mut Vec<String>,
+        depth: usize,
+    ) -> rusqlite::Result<Option<Vec<String>>> {
+        if depth > 16 {
+            return Ok(None);
+        }
+        let name: Option<String> = tx
+            .query_row("SELECT name FROM contact_groups WHERE id=?1", params![current], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        let Some(name) = name else { return Ok(None) };
+        if current == start && !path.is_empty() {
+            let mut names = path.clone();
+            names.push(name);
+            return Ok(Some(names));
+        }
+        path.push(name);
+        let mut stmt = tx.prepare(
+            "SELECT target_group_id FROM contact_group_members
+             WHERE group_id=?1 AND kind='group' AND target_group_id <> ''",
+        )?;
+        let children = stmt
+            .query_map(params![current], |r| r.get::<_, String>(0))?
+            .flatten()
+            .collect::<Vec<_>>();
+        for child in children {
+            if let Some(found) = walk(tx, start, &child, path, depth + 1)? {
+                return Ok(Some(found));
+            }
+        }
+        path.pop();
+        Ok(None)
+    }
+    let mut path = Vec::new();
+    walk(tx, start, start, &mut path, 0)
 }
 
 pub fn delete_group(id: &str) -> Result<(), String> {
@@ -742,32 +868,212 @@ pub fn delete_group(id: &str) -> Result<(), String> {
     tx.execute("DELETE FROM contact_groups WHERE id=?1", params![id]).ok();
     tx.execute("DELETE FROM contact_group_members WHERE group_id=?1", params![id])
         .ok();
+    // 其他组里指向这个组的嵌套成员一并去掉，避免展开时撞到「组不存在」。
+    tx.execute(
+        "DELETE FROM contact_group_members WHERE kind='group' AND target_group_id=?1",
+        params![id],
+    )
+    .ok();
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
 }
 
-/// 把一个通讯组展开成地址列表（写信时点选组、或规则转发到组）。
-pub fn expand_group(id: &str) -> Result<Vec<String>, String> {
+/// 把一个通讯组展开成成员列表（嵌套组递归解开、地址去重）。
+///
+/// 写信时地址栏只保留组名，真正投递前由这里展开；通讯录详情页也用它
+/// 展示「这个组最终会发给哪些人」。
+pub fn expand_group(id: &str) -> Result<Vec<ExpandedMember>, String> {
     let groups = list_groups()?;
-    let Some(group) = groups.into_iter().find(|g| g.id == id) else {
-        return Ok(Vec::new());
+    let contacts = list(&ContactQuery::default())?;
+    let by_id: HashMap<String, Contact> = contacts.into_iter().map(|c| (c.id.clone(), c)).collect();
+    let mut path = Vec::new();
+    let mut out = Vec::new();
+    expand_into(&groups, &by_id, id, &mut path, &mut out)?;
+    Ok(out)
+}
+
+/// 一次展开多组收件人（收件人 / 抄送 / 密送）。只读一次通讯录，
+/// 也保证三份名单看到的是同一时刻的组成员。
+pub fn expand_recipient_lists(lists: &[Vec<String>]) -> Result<Vec<Vec<String>>, String> {
+    let groups = list_groups()?;
+    let contacts = list(&ContactQuery::default())?;
+    let by_id: HashMap<String, Contact> = contacts.into_iter().map(|c| (c.id.clone(), c)).collect();
+    let mut result: Vec<Vec<String>> = Vec::with_capacity(lists.len());
+    for list in lists {
+        let mut out: Vec<String> = Vec::new();
+        for raw in list {
+            match group_token_id(raw) {
+                Some(id) => {
+                    let mut path = Vec::new();
+                    let mut members = Vec::new();
+                    expand_into(&groups, &by_id, &id, &mut path, &mut members)
+                        .map_err(|e| format!("展开通讯组失败：{e}"))?;
+                    if members.is_empty() {
+                        let name = groups
+                            .iter()
+                            .find(|g| g.id == id)
+                            .map(|g| g.name.clone())
+                            .unwrap_or_else(|| id.clone());
+                        return Err(format!("通讯组「{name}」没有可用的收件人"));
+                    }
+                    for member in members {
+                        push_formatted_address(&mut out, &member.name, &member.email);
+                    }
+                }
+                None => {
+                    let email = address_of(raw);
+                    push_unique(&mut out, raw.trim(), &email);
+                }
+            }
+        }
+        result.push(out);
+    }
+    Ok(result)
+}
+
+/// 收件人里的通讯组标记：`名称 <group:ID>` 或裸 `group:ID`。
+fn group_token_id(raw: &str) -> Option<String> {
+    let value = match (raw.rfind('<'), raw.rfind('>')) {
+        (Some(open), Some(close)) if close > open => &raw[open + 1..close],
+        _ => raw.trim(),
     };
-    let mut out: Vec<String> = Vec::new();
+    value
+        .trim()
+        .strip_prefix("group:")
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+}
+
+fn address_of(raw: &str) -> String {
+    match (raw.rfind('<'), raw.rfind('>')) {
+        (Some(open), Some(close)) if close > open => raw[open + 1..close].trim().to_string(),
+        _ => raw.trim().to_string(),
+    }
+}
+
+fn push_formatted_address(out: &mut Vec<String>, name: &str, email: &str) {
+    let email = email.trim();
+    if email.is_empty() {
+        return;
+    }
+    let label = name.trim().replace(['"', '<', '>'], "");
+    let formatted = if label.is_empty() {
+        email.to_string()
+    } else if label.contains(',')
+        || label.contains(';')
+        || label.contains(':')
+        || label.contains('@')
+    {
+        // 显示名里有逗号/分号时按 RFC 5322 加引号，否则地址解析会把名字切成两个人。
+        format!("\"{label}\" <{email}>")
+    } else {
+        format!("{label} <{email}>")
+    };
+    push_unique(out, &formatted, email);
+}
+
+fn push_unique(out: &mut Vec<String>, value: &str, email: &str) {
+    if value.is_empty() {
+        return;
+    }
+    let duplicate = out
+        .iter()
+        .any(|item| normalize_email(&address_of(item)) == normalize_email(email));
+    if !duplicate {
+        out.push(value.to_string());
+    }
+}
+
+fn expand_into(
+    groups: &[ContactGroup],
+    contacts: &HashMap<String, Contact>,
+    id: &str,
+    path: &mut Vec<String>,
+    out: &mut Vec<ExpandedMember>,
+) -> Result<(), String> {
+    let Some(group) = groups.iter().find(|g| g.id == id) else {
+        return Err(format!("通讯组不存在（{id}）"));
+    };
+    if path.iter().any(|seen| seen == id) {
+        let mut names: Vec<String> = path
+            .iter()
+            .filter_map(|seen| groups.iter().find(|g| &g.id == seen).map(|g| g.name.clone()))
+            .collect();
+        names.push(group.name.clone());
+        return Err(format!("通讯组存在循环引用：{}", names.join(" → ")));
+    }
+    if path.len() >= 8 {
+        return Err("通讯组嵌套层级过深（超过 8 层）".to_string());
+    }
+    path.push(id.to_string());
+    let via_group = path[..path.len() - 1]
+        .iter()
+        .filter_map(|seen| groups.iter().find(|g| &g.id == seen).map(|g| g.name.clone()))
+        .collect::<Vec<_>>()
+        .join(" › ");
+
     for member in &group.members {
-        let addr = if member.kind == "email" {
-            member.email.trim().to_string()
-        } else {
-            get(&member.contact_id)
-                .ok()
-                .flatten()
-                .map(|c| c.primary_email())
-                .unwrap_or_default()
-        };
-        if !addr.trim().is_empty() && !out.iter().any(|e| normalize_email(e) == normalize_email(&addr)) {
-            out.push(addr);
+        match member.kind.as_str() {
+            "group" => {
+                let child = member.group_id.trim();
+                if child.is_empty() {
+                    continue;
+                }
+                expand_into(groups, contacts, child, path, out)?;
+            }
+            "email" => push_member(out, member.name.clone(), member.email.clone(), &via_group),
+            _ => {
+                let contact = contacts.get(&member.contact_id);
+                let email = match contact {
+                    Some(contact) => {
+                        // 成员上记的是「选中的邮箱」；联系人后来改过地址时，
+                        // 优先用它仍在用的那个，避免组里一直发到已经失效的旧地址。
+                        let chosen = member.email.trim();
+                        let still_valid = !chosen.is_empty()
+                            && contact
+                                .emails
+                                .iter()
+                                .any(|email| normalize_email(&email.value) == normalize_email(chosen));
+                        if still_valid {
+                            chosen.to_string()
+                        } else {
+                            contact.primary_email()
+                        }
+                    }
+                    None => member.email.trim().to_string(),
+                };
+                let name = contact
+                    .map(|c| c.display_name.trim().to_string())
+                    .filter(|name| !name.is_empty())
+                    .or_else(|| {
+                        let fallback = member.name.trim().to_string();
+                        (!fallback.is_empty()).then_some(fallback)
+                    })
+                    .unwrap_or_default();
+                push_member(out, name, email, &via_group);
+            }
         }
     }
-    Ok(out)
+    path.pop();
+    Ok(())
+}
+
+fn push_member(out: &mut Vec<ExpandedMember>, name: String, email: String, via_group: &str) {
+    let email = email.trim().to_string();
+    if email.is_empty() {
+        return;
+    }
+    if out
+        .iter()
+        .any(|member| normalize_email(&member.email) == normalize_email(&email))
+    {
+        return;
+    }
+    out.push(ExpandedMember {
+        name,
+        email,
+        via_group: via_group.to_string(),
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -776,7 +1082,7 @@ pub fn expand_group(id: &str) -> Result<Vec<String>, String> {
 
 /// 导入 vCard 文本。已存在的邮箱合并（补空字段、追加电话），不重复建人。
 pub fn import_vcards(text: &str) -> Result<ImportReport, String> {
-    let (contacts, _, errors) = super::vcard::parse(text);
+    let (contacts, imported_groups, errors) = super::vcard::parse(text);
     let mut report = ImportReport {
         skipped: errors.len() as u32,
         errors,
@@ -849,27 +1155,199 @@ pub fn import_vcards(text: &str) -> Result<ImportReport, String> {
         }
     }
     tx.commit().map_err(|e| e.to_string())?;
+
+    // 通讯组只有在联系人落库之后才能按名字/邮箱合并，所以放在同一个事务提交后处理。
+    if !imported_groups.is_empty() {
+        let mut existing = list_groups()?;
+        let known_group_ids: Vec<String> = existing
+            .iter()
+            .map(|g| g.id.clone())
+            .chain(imported_groups.iter().map(|g| g.id.clone()))
+            .filter(|id| !id.is_empty())
+            .collect();
+        for group in imported_groups {
+            let mut members: Vec<GroupMember> = Vec::new();
+            for member in &group.members {
+                match member.kind.as_str() {
+                    "group" => {
+                        let child = member.group_id.trim();
+                        if !child.is_empty()
+                            && child != group.id
+                            && known_group_ids.iter().any(|id| id == child)
+                        {
+                            members.push(GroupMember {
+                                kind: "group".into(),
+                                group_id: child.to_string(),
+                                ..Default::default()
+                            });
+                        }
+                    }
+                    _ => {
+                        let email = member.email.trim();
+                        if !email.is_empty() {
+                            members.push(GroupMember {
+                                kind: "email".into(),
+                                email: email.to_string(),
+                                name: member.name.clone(),
+                                ..Default::default()
+                            });
+                        }
+                    }
+                }
+            }
+
+            // 有 UID 的组按 id 合并；没有 UID 的按同名组合并，避免导入两次变两组。
+            // `existing` 会随每条导入更新，同一个文件里重复的组名也能合并到刚建的那一个。
+            let target_index = existing
+                .iter()
+                .position(|g| !group.id.is_empty() && g.id == group.id)
+                .or_else(|| {
+                    existing
+                        .iter()
+                        .position(|g| g.name.eq_ignore_ascii_case(&group.name))
+                });
+            let mut merged = target_index
+                .and_then(|index| existing.get(index).cloned())
+                .unwrap_or_default();
+            if let Some(target) = target_index.and_then(|index| existing.get(index)) {
+                for member in &target.members {
+                    if !members.iter().any(|m| same_group_member(m, member)) {
+                        members.push(member.clone());
+                    }
+                }
+            }
+            merged.id = if merged.id.is_empty() { group.id.clone() } else { merged.id };
+            merged.name = group.name.clone();
+            if merged.description.trim().is_empty() {
+                merged.description = group.description.clone();
+            }
+            merged.members = members;
+            let saved = upsert_group(merged)?;
+            match target_index {
+                Some(index) => existing[index] = saved,
+                None => existing.push(saved),
+            }
+            report.groups += 1;
+        }
+    }
     Ok(report)
 }
 
-/// 导出全部联系人为一个 .vcf 文本。
+fn same_group_member(a: &GroupMember, b: &GroupMember) -> bool {
+    if a.kind == "group" || b.kind == "group" {
+        return a.kind == b.kind && !a.group_id.is_empty() && a.group_id == b.group_id;
+    }
+    !a.email.trim().is_empty() && normalize_email(&a.email) == normalize_email(&b.email)
+}
+
+/// 导出一个通讯组（含嵌套组）或全部联系人为 .vcf 文本。
+///
+/// 通讯组写成「组卡片」：Apple 通讯录与多数客户端的 `X-ADDRESSBOOKSERVER-*`
+/// 约定 + vCard 4.0 的 `KIND:group` / `MEMBER`，两边都认。
 pub fn export_vcards(group_id: Option<&str>) -> Result<String, String> {
+    let groups = list_groups()?;
     let contacts = list(&ContactQuery::default())?;
-    let selected: Vec<Contact> = match group_id {
-        Some(id) => contacts
-            .into_iter()
-            .filter(|c| c.groups.iter().any(|g| g == id))
-            .collect(),
-        None => contacts,
+    let by_id: HashMap<&str, &Contact> = contacts.iter().map(|c| (c.id.as_str(), c)).collect();
+
+    let (used_groups, used_contacts): (Vec<&ContactGroup>, Vec<&Contact>) = match group_id {
+        Some(id) => {
+            let mut group_ids = Vec::new();
+            let mut contact_ids = Vec::new();
+            collect_group_refs(&groups, id, &mut group_ids, &mut contact_ids);
+            if group_ids.is_empty() {
+                return Err("通讯组不存在".to_string());
+            }
+            let used_groups = group_ids
+                .iter()
+                .filter_map(|gid| groups.iter().find(|g| &g.id == gid))
+                .collect();
+            let used_contacts = contact_ids
+                .iter()
+                .filter_map(|cid| by_id.get(cid.as_str()).copied())
+                .collect();
+            (used_groups, used_contacts)
+        }
+        None => (groups.iter().collect(), contacts.iter().collect()),
     };
+
     let mut out = String::new();
-    for contact in &selected {
+    for contact in &used_contacts {
         out.push_str(&super::vcard::encode_contact(contact));
+    }
+    for group in &used_groups {
+        let mut card = super::vcard::GroupCard {
+            id: group.id.clone(),
+            name: group.name.clone(),
+            description: group.description.clone(),
+            emails: Vec::new(),
+            child_group_ids: Vec::new(),
+        };
+        for member in &group.members {
+            match member.kind.as_str() {
+                "group" => {
+                    let child = member.group_id.trim();
+                    if !child.is_empty() {
+                        card.child_group_ids.push(child.to_string());
+                    }
+                }
+                "email" => {
+                    if !member.email.trim().is_empty() {
+                        card.emails
+                            .push((member.name.clone(), member.email.clone()));
+                    }
+                }
+                _ => {
+                    let contact = by_id.get(member.contact_id.as_str()).copied();
+                    let email = if !member.email.trim().is_empty() {
+                        member.email.clone()
+                    } else {
+                        contact.map(|c| c.primary_email()).unwrap_or_default()
+                    };
+                    let name = contact
+                        .map(|c| c.display_name.clone())
+                        .filter(|name| !name.trim().is_empty())
+                        .unwrap_or_else(|| member.name.clone());
+                    if !email.trim().is_empty() {
+                        card.emails.push((name, email));
+                    }
+                }
+            }
+        }
+        out.push_str(&super::vcard::encode_group_card(&card));
     }
     if out.is_empty() {
         return Err("没有可导出的联系人".to_string());
     }
     Ok(out)
+}
+
+/// 收集一个通讯组（含嵌套组）用到的组 id 与联系人 id，按出现顺序、去重。
+fn collect_group_refs(
+    groups: &[ContactGroup],
+    id: &str,
+    group_ids: &mut Vec<String>,
+    contact_ids: &mut Vec<String>,
+) {
+    if group_ids.iter().any(|seen| seen == id) {
+        return;
+    }
+    let Some(group) = groups.iter().find(|g| g.id == id) else {
+        return;
+    };
+    group_ids.push(id.to_string());
+    for member in &group.members {
+        match member.kind.as_str() {
+            "group" => collect_group_refs(groups, member.group_id.trim(), group_ids, contact_ids),
+            "email" => {}
+            _ => {
+                if !member.contact_id.is_empty()
+                    && !contact_ids.iter().any(|seen| seen == &member.contact_id)
+                {
+                    contact_ids.push(member.contact_id.clone());
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -893,5 +1371,88 @@ mod tests {
     fn score_prefers_prefix() {
         assert!(score_match("张三", "张") > score_match("我是张三", "张"));
         assert!(score_match("Zhang San", "zh") > score_match("San Zhang", "zh"));
+    }
+
+    fn email_member(email: &str) -> GroupMember {
+        GroupMember {
+            kind: "email".into(),
+            email: email.into(),
+            ..Default::default()
+        }
+    }
+
+    fn nested(group_id: &str) -> GroupMember {
+        GroupMember {
+            kind: "group".into(),
+            group_id: group_id.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn nested_groups_expand_and_dedupe() {
+        let groups = vec![
+            ContactGroup {
+                id: "a".into(),
+                name: "全公司".into(),
+                members: vec![
+                    email_member("boss@x.com"),
+                    nested("b"),
+                    nested("c"),
+                ],
+                ..Default::default()
+            },
+            ContactGroup {
+                id: "b".into(),
+                name: "财务".into(),
+                members: vec![email_member("finance@x.com"), email_member("boss@x.com")],
+                ..Default::default()
+            },
+            ContactGroup {
+                id: "c".into(),
+                name: "技术".into(),
+                members: vec![nested("b")],
+                ..Default::default()
+            },
+        ];
+        let mut out = Vec::new();
+        expand_into(&groups, &HashMap::new(), "a", &mut Vec::new(), &mut out).unwrap();
+        let emails: Vec<&str> = out.iter().map(|m| m.email.as_str()).collect();
+        assert_eq!(emails, vec!["boss@x.com", "finance@x.com"]);
+        // finance 先经由直挂的「财务」组进来，后面「技术 → 财务」的重复地址被丢掉。
+        assert_eq!(out[1].via_group, "全公司");
+    }
+
+    #[test]
+    fn group_cycles_are_reported_instead_of_looping() {
+        let groups = vec![
+            ContactGroup {
+                id: "a".into(),
+                name: "A 组".into(),
+                members: vec![nested("b")],
+                ..Default::default()
+            },
+            ContactGroup {
+                id: "b".into(),
+                name: "B 组".into(),
+                members: vec![nested("a")],
+                ..Default::default()
+            },
+        ];
+        let error = expand_into(&groups, &HashMap::new(), "a", &mut Vec::new(), &mut Vec::new())
+            .unwrap_err();
+        assert!(error.contains("循环引用"), "{error}");
+    }
+
+    #[test]
+    fn group_tokens_are_recognized() {
+        assert_eq!(
+            group_token_id("财务组 <group:abc-123>").as_deref(),
+            Some("abc-123")
+        );
+        assert_eq!(group_token_id("  group:bare  ").as_deref(), Some("bare"));
+        assert_eq!(group_token_id("张三 <a@b.c>"), None);
+        assert_eq!(group_token_id("a@b.c"), None);
+        assert_eq!(address_of("张三 <a@b.c>"), "a@b.c");
     }
 }

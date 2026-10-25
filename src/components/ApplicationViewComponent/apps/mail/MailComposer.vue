@@ -35,7 +35,7 @@
           label="收件人"
           placeholder="输入姓名或邮箱，回车确认"
           :suggest="suggestAddress"
-          :expand-group="expandGroup"
+          :groups="contacts.groups"
           @update:model-value="$emit('update', { to: $event })"
         >
           <template #actions>
@@ -48,8 +48,8 @@
             <button
               class="mail-fmt-btn"
               title="从通讯录选择"
-              :class="{ 'is-on': pickerOpen }"
-              @click="pickerOpen = !pickerOpen"
+              :class="{ 'is-on': pickerOpen && pickerTarget === 'to' }"
+              @click="openPicker('to')"
             >
               通讯录
             </button>
@@ -62,18 +62,40 @@
           label="抄送"
           placeholder="抄送地址"
           :suggest="suggestAddress"
-          :expand-group="expandGroup"
+          :groups="contacts.groups"
           @update:model-value="$emit('update', { cc: $event })"
-        />
+        >
+          <template #actions>
+            <button
+              class="mail-fmt-btn"
+              title="从通讯录选择抄送人"
+              :class="{ 'is-on': pickerOpen && pickerTarget === 'cc' }"
+              @click="openPicker('cc')"
+            >
+              通讯录
+            </button>
+          </template>
+        </AddressInput>
         <AddressInput
           v-if="draft.showBcc"
           :model-value="draft.bcc"
           label="密送"
           placeholder="密送地址"
           :suggest="suggestAddress"
-          :expand-group="expandGroup"
+          :groups="contacts.groups"
           @update:model-value="$emit('update', { bcc: $event })"
-        />
+        >
+          <template #actions>
+            <button
+              class="mail-fmt-btn"
+              title="从通讯录选择密送人"
+              :class="{ 'is-on': pickerOpen && pickerTarget === 'bcc' }"
+              @click="openPicker('bcc')"
+            >
+              通讯录
+            </button>
+          </template>
+        </AddressInput>
         <div class="mail-compose-line">
           <span class="key">主题</span>
           <input
@@ -254,7 +276,7 @@ import { NIcon } from 'naive-ui'
 import { ContractOutline, ExpandOutline } from '@vicons/ionicons5'
 import { open } from '@tauri-apps/plugin-dialog'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
-import { useContactsStore } from '../../../../stores/contactsStore'
+import { useContactsStore, expandGroupMembers, groupRecipientToken, parseGroupToken } from '../../../../stores/contactsStore'
 import AddressInput from './AddressInput.vue'
 import AddressPicker from './AddressPicker.vue'
 import { createLogger } from '../../../../utils/logger'
@@ -284,6 +306,8 @@ const emit = defineEmits([
 const editorRef = ref(null)
 const maximized = ref(false)
 const pickerOpen = ref(false)
+/** 通讯录选择器当前给哪个字段加人：收件人 / 抄送 / 密送。 */
+const pickerTarget = ref('to')
 const contacts = useContactsStore()
 const sourceMode = ref(false)
 const htmlSource = ref(props.draft.html || '')
@@ -305,6 +329,9 @@ const canSend = computed(
 )
 
 onMounted(async () => {
+  // 通讯组只在地址栏放芯片，成员人数与发送确认要读 contacts.groups；
+  // 这里顺手初始化一次，没打开过通讯录页时也能算出真实人数。
+  contacts.init().catch(() => {})
   if (!editorRef.value) return
   // 直接把已有 HTML 灌进 contenteditable：用 innerHTML 而不是 v-html，
   // 避免 Vue 与浏览器的编辑结果互相覆盖（contenteditable 里的 DOM 是浏览器在管）。
@@ -562,26 +589,33 @@ async function suggestAddress(prefix) {
   return contacts.suggest(prefix)
 }
 
-/** 点选通讯组：展开成成员地址追加到当前字段。 */
-async function expandGroup(id) {
-  return contacts.expandGroup(id)
+/** 通讯录选择器：同一个面板可以给收件人、抄送或密送加人。 */
+function openPicker(field) {
+  if (pickerOpen.value && pickerTarget.value === field) {
+    pickerOpen.value = false
+    return
+  }
+  pickerTarget.value = field
+  pickerOpen.value = true
+}
+
+function appendToTarget(addresses) {
+  const key = pickerTarget.value
+  const current = [...(props.draft[key] || [])]
+  for (const address of addresses) {
+    const value = String(address || '').trim()
+    if (value && !current.some((item) => sameAddress(item, value))) current.push(value)
+  }
+  emit('update', { [key]: current })
 }
 
 function onPickAddress(address) {
-  const value = String(address || '').trim()
-  if (!value) return
-  if (!draft.to.some((item) => sameAddress(item, value))) {
-    emit('update', { to: [...draft.to, value] })
-  }
+  appendToTarget([address])
 }
 
-async function onPickGroup(groupId) {
-  const addresses = await contacts.expandGroup(groupId)
-  const next = [...draft.to]
-  for (const address of addresses || []) {
-    if (!next.some((item) => sameAddress(item, address))) next.push(address)
-  }
-  emit('update', { to: next })
+function onPickGroup(groupId) {
+  const group = (contacts.groups || []).find((g) => g.id === groupId)
+  appendToTarget([groupRecipientToken(group || { id: groupId, name: '通讯组' })])
   pickerOpen.value = false
 }
 
@@ -591,6 +625,31 @@ function sameAddress(a, b) {
     return (match ? match[1] : value).trim().toLowerCase()
   }
   return norm(a) === norm(b)
+}
+
+/**
+ * 收件人合计：通讯组按展开后的唯一地址计数，跨收件人/抄送/密送去重。
+ * 大组发送前用它给一次确认，避免用户不知道这一封会发给上百人。
+ */
+function recipientSummary() {
+  const seen = new Set()
+  let groups = 0
+  for (const list of [props.draft.to, props.draft.cc, props.draft.bcc]) {
+    for (const token of list || []) {
+      const group = parseGroupToken(token)
+      if (group) {
+        groups += 1
+        for (const member of expandGroupMembers(contacts.groups, group.id)) {
+          seen.add(member.email.toLowerCase())
+        }
+        continue
+      }
+      const match = String(token || '').match(/<([^>]+)>/)
+      const email = (match ? match[1] : token).trim().toLowerCase()
+      if (email) seen.add(email)
+    }
+  }
+  return { groups, total: seen.size }
 }
 
 async function pickAttachments() {
@@ -862,6 +921,16 @@ function removeAttachment(path) {
 
 async function send(useOutbox) {
   if (sending.value) return
+  // 大通讯组：地址栏只有一个组名，用户看不出真实人数；先报一次总数再发。
+  const summary = recipientSummary()
+  if (summary.total > 50) {
+    const groupHint = summary.groups ? `（其中 ${summary.groups} 个通讯组）` : ''
+    const confirmed = window.confirm(
+      `这封邮件将发给 ${summary.total} 位收件人${groupHint}。\n` +
+        '部分邮件服务器对单封收件人数有上限（如 Gmail 100 人），超出时整封会被拒收。仍要发送吗？',
+    )
+    if (!confirmed) return
+  }
   // 把编辑区最新内容并入草稿（用户可能还没触发 input 事件）。
   if (!sourceMode.value && editorRef.value) {
     const html = serializeEditorHtml()

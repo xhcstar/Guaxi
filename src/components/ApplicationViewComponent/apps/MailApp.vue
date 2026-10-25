@@ -233,6 +233,7 @@
       v-if="showContacts"
       @close="showContacts = false"
       @compose-to="onComposeTo"
+      @compose-group="onComposeGroup"
       @open-message="onOpenContactMessage"
     />
 
@@ -348,6 +349,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useMailStore } from '../../../stores/mailStore'
+import { groupRecipientToken } from '../../../stores/contactsStore'
 import { avatarSeed, densityMetrics, monoFontStack, readingFontStack, themeToStyle } from './mail/theme'
 import { SHORTCUT_LIST, useMailShortcuts } from './mail/useMailShortcuts'
 import MailToolbar from './mail/MailToolbar.vue'
@@ -1244,6 +1246,14 @@ function onComposeTo(email) {
   showContacts.value = false
   store.startCompose('new')
   if (store.composing && address) store.composing.to = [address]
+}
+
+/** 「写信给全组」：地址栏只放一个组芯片，发送时才展开成员。 */
+function onComposeGroup(group) {
+  if (!group?.id) return
+  showContacts.value = false
+  store.startCompose('new')
+  if (store.composing) store.composing.to = [groupRecipientToken(group)]
 }
 
 /** 通讯录里点历史邮件：关掉通讯录，在阅读窗格打开那一封。 */

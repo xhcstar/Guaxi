@@ -599,14 +599,38 @@ export const useMailStore = defineStore('mail', {
       const account = this.accountsById[row.accountId] || this.activeAccount || this.accounts[0]
       if (!account) return
       try {
-        const detail = await invoke('mail_get_message', {
-          accountId: row.accountId,
-          folder: row.folder,
-          uid: row.uid,
-        })
+        let detail
+        try {
+          detail = await invoke('mail_get_message', {
+            accountId: row.accountId,
+            folder: row.folder,
+            uid: row.uid,
+            // 草稿的自定义头只在原始报文里有；缓存路径拿不到组芯片信息。
+            force: true,
+          })
+        } catch {
+          // 离线时退回缓存正文：至少能继续写，只是组芯片会显示成成员地址。
+          detail = await invoke('mail_get_message', {
+            accountId: row.accountId,
+            folder: row.folder,
+            uid: row.uid,
+            force: false,
+          })
+        }
         const draft = buildCompose('new', null, account, this.settings)
-        draft.to = (detail.to || []).map((a) => (a.name ? `${a.name} <${a.address}>` : a.address))
-        draft.cc = (detail.cc || []).map((a) => (a.name ? `${a.name} <${a.address}>` : a.address))
+        // 本应用保存草稿时会把「组芯片」原样留在自定义头里；有它就用回原清单，
+        // 否则通讯组会被展开成上百个地址，正好破坏写信页的显示方式。
+        const restored = decodeDraftRecipients(detail)
+        draft.to = restored
+          ? restored.to
+          : (detail.to || []).map((a) => (a.name ? `${a.name} <${a.address}>` : a.address))
+        draft.cc = restored
+          ? restored.cc
+          : (detail.cc || []).map((a) => (a.name ? `${a.name} <${a.address}>` : a.address))
+        if (restored) {
+          draft.bcc = restored.bcc
+          draft.showBcc = draft.bcc.length > 0
+        }
         draft.showCc = draft.cc.length > 0
         draft.subject = detail.subject || ''
         draft.text = detail.text || ''
@@ -947,6 +971,7 @@ export const useMailStore = defineStore('mail', {
           accountId: row.accountId,
           folder: row.folder,
           uid: row.uid,
+          force: false,
         })
         this.detail = detail
         // 本地列表同步标记已读，不再等下一次同步。
@@ -1019,6 +1044,7 @@ export const useMailStore = defineStore('mail', {
               accountId: item.accountId,
               folder: item.folder,
               uid: item.uid,
+              force: false,
             }).catch(() => null),
           ),
         )
@@ -1632,4 +1658,30 @@ export function forwardSubject(subject) {
   const lower = text.toLowerCase()
   if (lower.startsWith('fw:') || lower.startsWith('fwd:') || lower.startsWith('转发')) return text
   return `Fwd: ${text}`
+}
+
+/**
+ * 从草稿的自定义头里取回写信页的原始收件人清单（含通讯组芯片）。
+ * 值由 Rust 侧写入：base64(JSON)，按 RFC 折行；解析时先去掉行间空白。
+ */
+function decodeDraftRecipients(detail) {
+  const header = (detail?.headers || []).find(
+    ([name]) => String(name).toLowerCase() === 'x-guaxi-draft-recipients',
+  )
+  if (!header) return null
+  try {
+    const raw = String(header[1] || '').replace(/\s+/g, '')
+    // atob 给的是字节串，JSON 里的中文要先按 UTF-8 解回来。
+    const binary = atob(raw)
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+    const data = JSON.parse(new TextDecoder().decode(bytes))
+    if (!data || !Array.isArray(data.to)) return null
+    return {
+      to: data.to.map(String),
+      cc: Array.isArray(data.cc) ? data.cc.map(String) : [],
+      bcc: Array.isArray(data.bcc) ? data.bcc.map(String) : [],
+    }
+  } catch {
+    return null
+  }
 }

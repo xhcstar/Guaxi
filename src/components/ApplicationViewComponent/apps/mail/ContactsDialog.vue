@@ -34,7 +34,7 @@
           >
             <span class="mail-folder-icon">▣</span>
             <span class="mail-folder-name" :title="group.name">{{ group.name }}</span>
-            <span class="mail-badge">{{ group.members.length }}</span>
+            <span class="mail-badge">{{ book.groupCounts[group.id] ?? group.members.length }}</span>
           </button>
           <button class="mail-folder contacts-add-group" @click="startNewGroup">＋ 新建通讯组</button>
 
@@ -130,6 +130,7 @@
             <GroupEditor
               :group="draftGroup"
               :contacts="book.contacts"
+              :groups="book.groups"
               :saving="saving"
               @save="saveGroup"
               @cancel="editingGroup = false"
@@ -242,6 +243,7 @@
               <GroupMembers
                 :group="book.groupsById[book.activeGroupId]"
                 @compose-to="(email) => $emit('compose-to', email)"
+                @compose-group="(group) => $emit('compose-group', group)"
                 @edit="startEditGroup"
               />
             </div>
@@ -267,7 +269,7 @@ const props = defineProps({
   /** 打开时是否直接进入「新建联系人」。 */
   startNew: { type: Boolean, default: false },
 })
-const emit = defineEmits(['close', 'compose-to', 'open-message'])
+const emit = defineEmits(['close', 'compose-to', 'compose-group', 'open-message'])
 
 const book = useContactsStore()
 const editing = ref(false)
@@ -407,6 +409,9 @@ async function saveGroup(group) {
     const saved = await book.saveGroup(group)
     editingGroup.value = false
     await book.selectGroup(saved.id)
+  } catch (error) {
+    // 例如组之间形成了循环引用，后端会拒绝；要让用户看到原因而不是静默失败。
+    window.alert(String(error?.message || error))
   } finally {
     saving.value = false
   }
@@ -419,6 +424,7 @@ async function importFile() {
     const report = await book.importFromFile()
     if (!report) return
     const parts = [`导入 ${report.imported} 位`, `合并 ${report.merged} 位`]
+    if (report.groups) parts.push(`通讯组 ${report.groups} 个`)
     if (report.skipped) parts.push(`跳过 ${report.skipped} 条`)
     window.alert(parts.join('，') + (report.errors?.length ? `\n\n${report.errors.join('\n')}` : ''))
   } catch (error) {
@@ -429,7 +435,7 @@ async function importFile() {
 async function exportAll() {
   try {
     const count = await book.exportToFile(book.activeGroupId || null)
-    if (count) window.alert(`已导出 ${count} 位联系人`)
+    window.alert(count ? `已导出 ${count} 位联系人` : '已导出通讯组（成员为直接邮箱）')
   } catch (error) {
     window.alert(String(error?.message || error))
   }

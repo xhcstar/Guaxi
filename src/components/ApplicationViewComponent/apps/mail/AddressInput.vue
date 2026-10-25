@@ -3,8 +3,19 @@
       <span class="key">{{ label }}</span>
       <div class="address-field">
         <!-- 已选地址渲染成胶囊：点整块可删，点邮箱回改 -->
-        <span v-for="(token, index) in tokens" :key="`${token}-${index}`" class="address-chip">
-          {{ token }}
+        <span
+          v-for="(token, index) in tokens"
+          :key="`${token}-${index}`"
+          class="address-chip"
+          :class="{ 'is-group': groupOf(token) }"
+          :title="chipTitle(token)"
+        >
+          <template v-if="groupOf(token)">
+            <span class="address-chip-badge">组</span>
+            <span class="address-chip-name">{{ groupOf(token).name || '通讯组' }}</span>
+            <span v-if="groupCount(token)" class="address-chip-count">{{ groupCount(token) }} 人</span>
+          </template>
+          <template v-else>{{ token }}</template>
           <button class="address-chip-remove" title="移除" @click="removeToken(index)">×</button>
         </span>
         <input
@@ -51,6 +62,11 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import {
+  expandGroupMembers,
+  groupRecipientToken,
+  parseGroupToken,
+} from '../../../../stores/contactsStore'
 
 const props = defineProps({
   modelValue: { type: Array, default: () => [] },
@@ -58,8 +74,8 @@ const props = defineProps({
   placeholder: { type: String, default: '输入姓名或邮箱，回车确认' },
   /** 由父组件提供的补全函数，返回 ContactSuggestion[]。 */
   suggest: { type: Function, default: null },
-  /** 由父组件提供的「展开通讯组」函数。 */
-  expandGroup: { type: Function, default: null },
+  /** 通讯组清单（contacts.groups），用来显示组名与人数。 */
+  groups: { type: Array, default: () => [] },
 })
 const emit = defineEmits(['update:modelValue'])
 
@@ -107,25 +123,18 @@ function closeSuggestions() {
   activeIndex.value = 0
 }
 
-async function pick(item) {
-  if (item.kind === 'group' && props.expandGroup) {
-    try {
-      const addresses = await props.expandGroup(item.contactId || item.email.replace('group:', ''))
-      const next = [...tokens.value]
-      for (const addr of addresses || []) {
-        if (!next.some((t) => normalize(t) === normalize(addr))) next.push(addr)
-      }
-      emit('update:modelValue', next)
-    } catch {
-      /* 展开失败就什么都不做，用户还能手动输入 */
-    }
+function pick(item) {
+  if (item.kind === 'group') {
+    // 组只放一个芯片：地址栏里不铺开上百个地址，发送时由 Rust 侧展开。
+    const id = item.contactId || String(item.email || '').replace(/^group:/, '')
+    const group = (props.groups || []).find((g) => g.id === id)
+    addToken(groupRecipientToken(group || { id, name: item.display }))
   } else {
     addToken(item.email)
   }
   query.value = ''
   closeSuggestions()
-  await nextTick()
-  inputRef.value?.focus()
+  nextTick(() => inputRef.value?.focus())
 }
 
 function commitTyped(options = {}) {
@@ -198,6 +207,27 @@ function normalize(value) {
   return (match ? match[1] : value).trim().toLowerCase()
 }
 
+/** 解析通讯组芯片；普通地址返回 null。 */
+function groupOf(token) {
+  const parsed = parseGroupToken(token)
+  if (!parsed) return null
+  const group = (props.groups || []).find((g) => g.id === parsed.id)
+  return { ...parsed, name: group?.name || parsed.name, group }
+}
+
+/** 组芯片上的人数：嵌套组展开、去重后的真实收件人数。 */
+function groupCount(token) {
+  const info = groupOf(token)
+  return info ? expandGroupMembers(props.groups, info.id).length : 0
+}
+
+function chipTitle(token) {
+  const info = groupOf(token)
+  if (!info) return token
+  const count = groupCount(token)
+  return count ? `${info.name}（通讯组，${count} 人）` : `${info.name}（通讯组）`
+}
+
 function kindLabel(kind) {
   return { contact: '联系人', history: '历史', group: '通讯组' }[kind] || ''
 }
@@ -256,6 +286,36 @@ defineExpose({
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.address-chip.is-group {
+  gap: 5px;
+  border: 1px solid var(--mail-accent);
+  background: var(--mail-accent-soft);
+}
+
+.address-chip-badge {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--mail-accent);
+  color: var(--mail-accent-contrast, #fff);
+  font-size: 9px;
+  line-height: 14px;
+  letter-spacing: 0.5px;
+}
+
+.address-chip-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.address-chip-count {
+  flex: 0 0 auto;
+  color: var(--mail-text-muted);
+  font-size: 10px;
 }
 
 .address-chip-remove {
