@@ -50,6 +50,7 @@ src-tauri/utils/Models/punctuation/*
 src-tauri/utils/Models/translate/*
 src-tauri/utils/python_runtime/*
 src-tauri/utils/convert_provision.json
+src-tauri/utils/Models/embedding/*
 
 # sherpa-onnx 原生库归档与下载暂存（约 118MB，由 tools/fetch_sherpa_onnx_libs.mjs 预取，
 # 构建时经 SHERPA_ONNX_ARCHIVE_DIR 指向它，避免 build.rs 联网下载）
