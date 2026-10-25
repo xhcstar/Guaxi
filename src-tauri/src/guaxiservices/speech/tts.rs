@@ -180,3 +180,37 @@ fn describe_model(model: &TtsModel) -> &str {
         TtsModel::Kokoro { model, .. } | TtsModel::Vits { model, .. } => model,
     }
 }
+
+#[cfg(test)]
+mod tmp_gpu_smoke {
+    use super::*;
+
+    /// 临时冒烟：在 gpu 构建里直接以 cuda provider 建引擎并合成，
+    /// 用来验证「原始 LoadLibrary 探测 1114」是否是误报。
+    #[test]
+    fn tmp_gpu_tts_smoke() {
+        if !cfg!(feature = "gpu") {
+            return;
+        }
+        let base =
+            r"D:\MyProject\Guaxi\Guaxi\guaxi\src-tauri\utils\Models\tts\kokoro_multi_lang";
+        let cfg = TtsEngineConfig {
+            model: TtsModel::Kokoro {
+                model: format!("{base}\model.onnx"),
+                tokens: format!("{base}\tokens.txt"),
+                voices: Some(format!("{base}\voices.bin")),
+                data_dir: Some(format!("{base}\espeak-ng-data")),
+                dict_dir: None,
+                lexicon: Some(format!("{base}\lexicon-us-en.txt")),
+            },
+            rule_fsts: None,
+            provider: "cuda".to_string(),
+            num_threads: 2,
+            instance_tag: "tmp-gpu-smoke".to_string(),
+        };
+        let audio = synthesize(&cfg, "Hello world", 0, 1.0).expect("cuda 合成应成功");
+        println!("samples={} rate={}", audio.samples.len(), audio.sample_rate);
+        assert!(!audio.samples.is_empty());
+        release_engine(&cfg);
+    }
+}
