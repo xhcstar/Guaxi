@@ -106,16 +106,22 @@ pub struct PrepareRequest {
     /// 书所在的库与文件名：用来定位"这本书自己"的语音留存目录。
     pub library: String,
     pub file_name: String,
-    /// 语速，1.0 为原速。进缓存键：不同语速各自缓存。
-    #[serde(default = "default_speed")]
-    pub speed: f32,
+    /// 语速，1.0 为原速；缺省用设置页的全局朗读语速。进缓存键：不同语速各自缓存。
+    #[serde(default)]
+    pub speed: Option<f32>,
     /// 音色编号；缺省用设置页配的。
     #[serde(default)]
     pub speaker_id: Option<i32>,
 }
 
-fn default_speed() -> f32 {
-    1.0
+/// 朗读语速：请求没传（None 或非正数）时用设置页配的全局语速，并夹到可读区间。
+fn resolve_readaloud_speed(requested: Option<f32>) -> f32 {
+    let speed = requested
+        .filter(|value| *value > 0.0)
+        .unwrap_or_else(|| {
+            crate::commands::settingview::get_tts_config().speed as f32
+        });
+    speed.clamp(0.5, 2.0)
 }
 
 #[derive(Debug, Serialize)]
@@ -268,6 +274,7 @@ pub async fn readaloud_prepare(request: PrepareRequest) -> Result<PrepareRespons
     // 而不是等第一句合成失败才让用户面对一个沉默的播放按钮。
     let engine = resolve_readaloud_engine()?;
     let speaker = request.speaker_id.unwrap_or_else(configured_speaker);
+    let speed = resolve_readaloud_speed(request.speed);
 
     let mut segments = split_segments(&request.text);
     if segments.is_empty() {
@@ -276,11 +283,11 @@ pub async fn readaloud_prepare(request: PrepareRequest) -> Result<PrepareRespons
 
     // 先看这本书有没有留存好的整本语音：有且参数一致就直接用它——
     // 重听零合成，跳句只是一次 seek，这是"再听一遍要快"的全部实现。
-    if let Some(complete) = load_complete_book(&request, &engine, speaker, segments.clone()) {
+    if let Some(complete) = load_complete_book(&request, &engine, speaker, speed, segments.clone()) {
         return Ok(complete);
     }
 
-    let dir = cache_dir(&request.library, &request.file_name, &request.text, &engine, request.speed);
+    let dir = cache_dir(&request.library, &request.file_name, &request.text, &engine, speed);
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建朗读缓存目录失败：{e}"))?;
     prune_cache(&dir);
 
@@ -319,7 +326,7 @@ pub async fn readaloud_prepare(request: PrepareRequest) -> Result<PrepareRespons
         segments: segments.clone(),
         engine,
         speaker,
-        speed: request.speed,
+        speed,
         outcomes: Mutex::new(outcomes),
         playhead: AtomicU64::new(0),
         target_ms: AtomicU64::new(0),
@@ -918,6 +925,7 @@ fn load_complete_book(
     request: &PrepareRequest,
     engine: &TtsEngineConfig,
     speaker: i32,
+    speed: f32,
     segments: Vec<Segment>,
 ) -> Option<PrepareResponse> {
     let dir = audio_dir_for(&request.library, &request.file_name).ok()?;
@@ -935,7 +943,7 @@ fn load_complete_book(
     if manifest.version != MANIFEST_VERSION
         || manifest.text_hash != text_hash(&request.text)
         || manifest.speaker != speaker
-        || (manifest.speed - request.speed).abs() > 1e-3
+        || (manifest.speed - speed).abs() > 1e-3
         || manifest.model != model_label(engine)
         || manifest.segments.len() != segments.len()
     {

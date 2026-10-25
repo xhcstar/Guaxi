@@ -1,0 +1,9 @@
+{
+  "provisioned": [
+    "md-table-total",
+    "code-tidy",
+    "cite-tidy",
+    "data-summary",
+    "frontmatter-doctor"
+  ]
+}

@@ -1969,30 +1969,58 @@ const formatFinishedAt = (value) => {
   min-height: 0;
   min-width: 0;
   background: var(--tts-panel);
+  container-type: inline-size;
 }
 
 .lib-toolbar {
   display: grid;
-  grid-template-columns: minmax(160px, 280px) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 320px) minmax(0, 1fr) auto;
+  grid-template-areas: 'search facets tools';
   align-items: center;
-  gap: 12px;
+  gap: 8px 12px;
   padding: 10px 12px;
   border-bottom: 1px solid var(--tts-hairline);
 }
 
+.lib-search {
+  grid-area: search;
+  min-width: 0;
+  max-width: 360px;
+}
+
 .facet-row {
+  grid-area: facets;
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.facet-row::-webkit-scrollbar {
+  display: none;
+}
+
+/* 窄容器：筛选条整行下沉，搜索框与视图工具留在首行。
+   单行模式需要约 880px（搜索 320 + 筛选 384 + 工具 148 + 间距），留出余量后取 940。 */
+@container (max-width: 939px) {
+  .lib-toolbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'search tools'
+      'facets facets';
+  }
 }
 
 .facet {
   display: inline-flex;
   align-items: center;
+  flex: 0 0 auto;
   gap: 6px;
   padding: 4px 10px;
+  white-space: nowrap;
   border-radius: 999px;
   border: 1px solid var(--tts-hairline);
   background: transparent;
@@ -2026,6 +2054,7 @@ const formatFinishedAt = (value) => {
 }
 
 .lib-tools {
+  grid-area: tools;
   display: flex;
   align-items: center;
   gap: 8px;

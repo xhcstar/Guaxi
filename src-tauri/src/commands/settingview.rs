@@ -264,6 +264,9 @@ pub struct TtsConfig {
     /// 这样各个朗读入口不必各自硬编码一个编号。
     #[serde(default = "default_tts_speaker_id")]
     pub speaker_id: String,
+    /// 全局朗读语速（1.0 = 原速）。各朗读入口未显式指定语速时用它。
+    #[serde(default = "default_tts_speed")]
+    pub speed: f64,
 }
 
 impl Default for TtsConfig {
@@ -275,6 +278,7 @@ impl Default for TtsConfig {
             exe: default_tts_exe(),
             output_dir: default_tts_output_dir(),
             speaker_id: default_tts_speaker_id(),
+            speed: default_tts_speed(),
         }
     }
 }
@@ -522,9 +526,23 @@ fn default_tts_exe() -> String {
     String::new()
 }
 
-/// 默认音色。Kokoro 名单里 0 是 af_maple（美式女声），中英文都可用。
+/// 默认朗读音色：Kokoro 名单里的 3 号 zf_001（中文女声）。
+/// 0 号是英文女声 af_maple，对中文书默认读英文音色并不合适。
 fn default_tts_speaker_id() -> String {
-    "0".to_string()
+    "3".to_string()
+}
+
+fn default_tts_speed() -> f64 {
+    1.0
+}
+
+/// 语速夹到可读区间：0.5x–2.0x。写入与读取两端都夹一次，旧配置/手改 JSON 也不会出怪速。
+pub fn clamp_tts_speed(speed: f64) -> f64 {
+    if speed.is_finite() {
+        speed.clamp(0.5, 2.0)
+    } else {
+        default_tts_speed()
+    }
 }
 
 fn default_tts_output_dir() -> String {
@@ -1814,6 +1832,8 @@ pub fn get_tts_config() -> TtsConfig {
     if tts.speaker_id.trim().is_empty() {
         tts.speaker_id = default_tts_speaker_id();
     }
+    // 语速只接受可读区间；旧配置缺这个字段时 serde 会给默认 1.0。
+    tts.speed = clamp_tts_speed(tts.speed);
     tts
 }
 
@@ -1832,6 +1852,7 @@ pub fn set_tts_config(tts_config: TtsConfig) {
         } else {
             tts_config.speaker_id.trim().to_string()
         },
+        speed: clamp_tts_speed(tts_config.speed),
     };
     if config.tts_config.provider.is_empty() {
         config.tts_config.provider = default_tts_provider();

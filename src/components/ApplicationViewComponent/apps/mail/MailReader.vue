@@ -70,6 +70,7 @@
           <span class="mail-reader-from-addr">
             {{ detail.fromAddr }}
             <template v-if="detail.to?.length"> · 发给 {{ toSummary }}</template>
+            <template v-if="ccSummary"> · 抄送 {{ ccSummary }}</template>
           </span>
         </div>
         <span class="mail-reader-when">{{ dateLabel }}</span>
@@ -183,12 +184,98 @@ const imagesBlocked = computed(() => hasRemoteImages.value && !imagesAllowed.val
 const renderedHtml = computed(() => {
   const html = props.detail?.html
   if (!html) return ''
-  if (!imagesBlocked.value) {
-    // 用户点了「显示图片」：把暂存地址放回 src。
-    return html.replace(/data-guaxi-remote-src="([^"]*)"\s+src=""/g, 'src="$1"')
-  }
-  return html
+  const restored = imagesBlocked.value
+    ? html
+    : // 用户点了「显示图片」：把暂存地址放回 src。
+      html.replace(/data-guaxi-remote-src="([^"]*)"\s+src=""/g, 'src="$1"')
+  return upgradeQuoteCards(restored)
 })
+
+/**
+ * 把引用历史重排成 Apple Mail 式的消息卡片。
+ *
+ * 收件时的清洗层会剥掉 class，但保留 `data-*` 与内联样式：
+ * - 新邮件靠 `data-guaxi-quote-*` 找结构；
+ * - 旧邮件没有标记，按「10/14px 圆角外框 + 内含 blockquote」识别。
+ * 处理方式：去掉旧的内联样式、补头像与主题占位，再交给 mail.css 的卡片样式。
+ * DOMParser 解析出来的是惰性文档，不会执行脚本；正文本身也已在清洗层过滤过。
+ */
+function upgradeQuoteCards(html) {
+  if (!html || !html.includes('blockquote')) return html
+  try {
+    const doc = new DOMParser().parseFromString(html, 'text/html')
+    const cards = [...doc.querySelectorAll('div')].filter((div) => {
+      if (div.dataset.guaxiQuoteCard) return true
+      const style = div.getAttribute('style') || ''
+      if (!/border-radius\s*:\s*(10|14)px/i.test(style)) return false
+      const head = div.firstElementChild
+      if (!head || head.tagName !== 'DIV' || !div.querySelector('blockquote')) return false
+      // 只升级「像历史邮件头」的圆角块（含邮箱地址或时间），避免误伤普通内容卡片。
+      const text = head.textContent || ''
+      return /@|写道|wrote/i.test(text) || /\d{1,2}:\d{2}/.test(text)
+    })
+    for (const card of cards) {
+      card.classList.add('mail-quote--card')
+      delete card.dataset.guaxiQuoteCard
+      card.removeAttribute('style')
+      const head = card.querySelector('[data-guaxi-quote-head]') || card.firstElementChild
+      const body =
+        card.querySelector('[data-guaxi-quote-body]') || card.querySelector('blockquote')
+      if (head instanceof HTMLElement && head.tagName === 'DIV') {
+        head.classList.add('mail-quote-head--card')
+        head.removeAttribute('style')
+      }
+      if (body instanceof HTMLElement) {
+        body.classList.add('mail-quote-body--card')
+        body.removeAttribute('style')
+      }
+      if (head instanceof HTMLElement) {
+        for (const [selector, className] of QUOTE_PARTS) {
+          const part = card.querySelector(selector)
+          if (part) part.classList.add(className)
+        }
+        ensureQuoteHeader(doc, head)
+      }
+    }
+    return doc.body.innerHTML
+  } catch {
+    return html
+  }
+}
+
+const QUOTE_PARTS = [
+  ['[data-guaxi-quote-avatar]', 'mail-quote-avatar'],
+  ['[data-guaxi-quote-meta]', 'mail-quote-meta'],
+  ['[data-guaxi-quote-from]', 'mail-quote-from'],
+  ['[data-guaxi-quote-subject]', 'mail-quote-subject'],
+  ['[data-guaxi-quote-date]', 'mail-quote-date'],
+]
+
+/** 旧卡片没有头像/主题行：用发件人名字首字补一个头像，主题给个占位。 */
+function ensureQuoteHeader(doc, head) {
+  if (head.querySelector('.mail-quote-avatar')) return
+  const spans = [...head.children].filter((el) => el.tagName === 'SPAN')
+  if (!spans.length) return
+  const fromSpan = spans[0]
+  const dateSpan = spans.length > 1 ? spans[spans.length - 1] : null
+  const text = (fromSpan.textContent || '').trim()
+  const avatar = doc.createElement('span')
+  avatar.className = 'mail-quote-avatar'
+  avatar.textContent = text ? [...text][0].toUpperCase() : '✉'
+  head.insertBefore(avatar, head.firstChild)
+  if (dateSpan && dateSpan !== fromSpan) {
+    fromSpan.classList.add('mail-quote-from')
+    dateSpan.classList.add('mail-quote-date')
+    const meta = doc.createElement('span')
+    meta.className = 'mail-quote-meta'
+    head.insertBefore(meta, fromSpan)
+    meta.appendChild(fromSpan)
+    const subject = doc.createElement('span')
+    subject.className = 'mail-quote-subject'
+    subject.textContent = '历史消息'
+    meta.appendChild(subject)
+  }
+}
 
 const avatar = computed(() => avatarSeed(props.detail?.fromName, props.detail?.fromAddr))
 const avatarLetter = computed(() => avatar.value.letter)
@@ -202,6 +289,13 @@ const fromLabel = computed(() => {
 
 const toSummary = computed(() => {
   const list = props.detail?.to || []
+  if (!list.length) return ''
+  const first = list[0].name || list[0].address
+  return list.length > 1 ? `${first} 等 ${list.length} 人` : first
+})
+
+const ccSummary = computed(() => {
+  const list = props.detail?.cc || []
   if (!list.length) return ''
   const first = list[0].name || list[0].address
   return list.length > 1 ? `${first} 等 ${list.length} 人` : first

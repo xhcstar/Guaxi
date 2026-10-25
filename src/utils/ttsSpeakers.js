@@ -32,12 +32,46 @@ export function isKokoroModel(modelPath) {
 }
 
 /**
+ * 解析音色前缀，得到语言与性别。
+ * 前缀约定：z=中文，a=美式英语，b=英式英语；f=女声，m=男声（如 zf_/zm_/af_/bf_）。
+ * 非 Kokoro 模型或编号不在名单里时返回空串，调用方据此隐藏分类筛选。
+ */
+export function speakerMeta(modelPath, speakerId) {
+  if (!isKokoroModel(modelPath)) {
+    return { language: '', gender: '', name: '' }
+  }
+  const index = Number(speakerId)
+  const name = Number.isInteger(index) ? KOKORO_SPEAKER_NAMES[index] || '' : ''
+  if (!name) return { language: '', gender: '', name: '' }
+  const region = name.split('_')[0]
+  const language = region.startsWith('z') ? 'zh' : region.startsWith('a') || region.startsWith('b') ? 'en' : ''
+  const gender = region.endsWith('m') ? 'male' : region.endsWith('f') ? 'female' : ''
+  return { language, gender, name }
+}
+
+/** 用中文描述音色的语言与性别，设置页的筛选与提示共用。 */
+export function describeSpeakerMeta(modelPath, speakerId) {
+  const meta = speakerMeta(modelPath, speakerId)
+  if (!meta.name) return ''
+  const language = meta.language === 'zh' ? '中文' : meta.language === 'en' ? '英文' : ''
+  const gender = meta.gender === 'female' ? '女声' : meta.gender === 'male' ? '男声' : ''
+  return `${language}${gender}`.trim() || '其他'
+}
+
+/**
  * 生成音色下拉选项。
  *
  * Kokoro 给分组+具名，中文/英文音色一目了然；其它模型只给编号，
  * 并由调用方开启 `tag` 允许手填编号（不同 VITS 模型的说话人数并不统一）。
+ *
+ * @param {string} modelPath
+ * @param {{language?: 'auto'|'zh'|'en', gender?: 'auto'|'female'|'male'}} [filters]
+ *   设置页的「语言 / 性别」筛选；默认不过滤。筛完为空时返回空数组，由 UI 给出提示。
  */
-export function buildSpeakerOptions(modelPath) {
+export function buildSpeakerOptions(modelPath, filters = {}) {
+  const language = filters.language || 'auto'
+  const gender = filters.gender || 'auto'
+
   if (!isKokoroModel(modelPath)) {
     return Array.from({ length: GENERIC_SPEAKER_COUNT }, (_, index) => ({
       label: `Speaker ${index}`,
@@ -61,13 +95,30 @@ export function buildSpeakerOptions(modelPath) {
     else groups.other.push(option)
   })
 
-  return [
+  const allGroups = [
     { type: 'group', label: '中文女声', key: 'chinese-female', children: groups.chineseFemale },
     { type: 'group', label: '中文男声', key: 'chinese-male', children: groups.chineseMale },
     { type: 'group', label: '美式女声', key: 'american-female', children: groups.americanFemale },
     { type: 'group', label: '英式女声', key: 'british-female', children: groups.britishFemale },
     { type: 'group', label: '其他', key: 'other', children: groups.other },
-  ].filter((group) => group.children.length > 0)
+  ]
+
+  if (language === 'auto' && gender === 'auto') {
+    return allGroups.filter((group) => group.children.length > 0)
+  }
+
+  // 有筛选时按语言/性别过滤，并保留分组（筛掉空组）。
+  return allGroups
+    .map((group) => ({
+      ...group,
+      children: group.children.filter((option) => {
+        const meta = speakerMeta(modelPath, option.value)
+        if (language !== 'auto' && meta.language !== language) return false
+        if (gender !== 'auto' && meta.gender !== gender) return false
+        return true
+      }),
+    }))
+    .filter((group) => group.children.length > 0)
 }
 
 /** 把 speaker id 还原成便于阅读的说明，用于设置页的提示行。 */
@@ -76,7 +127,8 @@ export function describeSpeaker(modelPath, speakerId) {
   if (!isKokoroModel(modelPath)) {
     return `Speaker ${id}（当前模型非 Kokoro，多数只有 1 个音色）`
   }
-  const index = Number(id)
-  const name = Number.isInteger(index) ? KOKORO_SPEAKER_NAMES[index] : undefined
-  return name ? `Speaker ${id} · ${name}` : `Speaker ${id}（该编号不在 Kokoro 名单内）`
+  const meta = speakerMeta(modelPath, id)
+  if (!meta.name) return `Speaker ${id}（该编号不在 Kokoro 名单内）`
+  const kind = describeSpeakerMeta(modelPath, id)
+  return `${kind} · ${meta.name}（编号 ${id}）`
 }

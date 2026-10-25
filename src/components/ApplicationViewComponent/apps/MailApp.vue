@@ -346,7 +346,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useMailStore } from '../../../stores/mailStore'
-import { densityMetrics, monoFontStack, readingFontStack, themeToStyle } from './mail/theme'
+import { avatarSeed, densityMetrics, monoFontStack, readingFontStack, themeToStyle } from './mail/theme'
 import { SHORTCUT_LIST, useMailShortcuts } from './mail/useMailShortcuts'
 import MailToolbar from './mail/MailToolbar.vue'
 import MailSidebar from './mail/MailSidebar.vue'
@@ -810,18 +810,48 @@ function buildQuote(detail) {
     : ''
   const who = detail.fromName ? `${detail.fromName} <${detail.fromAddr}>` : detail.fromAddr
   const textBody = `在 ${when}，${who} 写道：\n${detail.text || ''}`
-  // 引用块用「卡片 + 头信息 + 左边条」的结构：回复窗口里一眼能分清哪些是原信，
-  // 不再是几行灰字堆在一起。颜色用半透明灰/继承色，深色编辑器里也不会出现
-  // 一块刺眼的白卡片；样式同时写成内联，收件端没有我们的 CSS 也能看。
+  // 引用历史按「Apple Mail 会话卡片」排版：头像 + 姓名 + 主题 + 收件人 + 右上角时间，
+  // 正文跟在卡片里，而不是一个套一个的灰色引用框。颜色用半透明灰和继承色，
+  // 深色编辑器里也不会出现刺眼的白块；内联样式保证收件端没有我们的 CSS 也能看。
   const quotedBody =
     detail.html || escapeHtml(detail.text || '').replace(/\n/g, '<br>')
+  const seed = avatarSeed(detail.fromName, detail.fromAddr)
+  const recipients = []
+  const toLine = (detail.to || [])
+    .map((item) => item?.name || item?.address)
+    .filter(Boolean)
+    .join('、')
+  const ccLine = (detail.cc || [])
+    .map((item) => item?.name || item?.address)
+    .filter(Boolean)
+    .join('、')
+  if (toLine) recipients.push(`发给 ${toLine}`)
+  if (ccLine) recipients.push(`抄送 ${ccLine}`)
+  const recipientLine = recipients.length
+    ? `<span style="font-size:11.5px;opacity:.62;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(
+        recipients.join(' · '),
+      )}</span>`
+    : ''
   const htmlBody =
-    '<div class="mail-quote" style="margin:16px 0;border:1px solid rgba(128,128,128,0.28);border-radius:10px;overflow:hidden;background:rgba(127,127,127,0.06)">' +
-    '<div class="mail-quote-head" style="display:flex;align-items:baseline;gap:10px;padding:8px 14px;border-bottom:1px solid rgba(128,128,128,0.22);background:rgba(127,127,127,0.10);font-size:12px;color:inherit;opacity:0.85">' +
-    `<span class="mail-quote-from" style="font-weight:600">${escapeHtml(who)}</span>` +
-    `<span class="mail-quote-date" style="margin-left:auto;white-space:nowrap">${escapeHtml(when)}</span>` +
+    '<div class="mail-quote" data-guaxi-quote-card="1" style="margin:18px 0 0;border-radius:14px;background:rgba(127,127,127,0.07);overflow:hidden">' +
+    '<div class="mail-quote-head" data-guaxi-quote-head="1" style="display:flex;align-items:flex-start;gap:10px;padding:12px 16px">' +
+    `<span class="mail-quote-avatar" data-guaxi-quote-avatar="1" style="flex:0 0 auto;width:30px;height:30px;border-radius:50%;background:hsl(${seed.hue} 42% 48%);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600">${escapeHtml(
+      seed.letter,
+    )}</span>` +
+    '<span class="mail-quote-meta" data-guaxi-quote-meta="1" style="display:flex;flex-direction:column;gap:2px;min-width:0">' +
+    `<span class="mail-quote-from" data-guaxi-quote-from="1" style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(
+      who,
+    )}</span>` +
+    `<span class="mail-quote-subject" data-guaxi-quote-subject="1" style="font-size:12px;opacity:.72;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(
+      detail.subject || '（无主题）',
+    )}</span>` +
+    recipientLine +
+    '</span>' +
+    `<span class="mail-quote-date" data-guaxi-quote-date="1" style="margin-left:auto;font-size:11.5px;opacity:.65;white-space:nowrap">${escapeHtml(
+      when,
+    )}</span>` +
     '</div>' +
-    `<blockquote class="mail-quote-body" style="margin:0;padding:12px 16px;border-left:3px solid #2f6df6;background:transparent;color:inherit">${quotedBody}</blockquote>` +
+    `<blockquote class="mail-quote-body" data-guaxi-quote-body="1" style="margin:0;padding:0 16px 14px;border:0;background:transparent;color:inherit">${quotedBody}</blockquote>` +
     '</div>'
   return { text: textBody, html: htmlBody }
 }

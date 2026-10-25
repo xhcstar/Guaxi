@@ -132,8 +132,7 @@ export function useReaderReadAloud(options) {
       const ready = await prepareSession(index.text, {
         library: identity.library,
         fileName: identity.fileName,
-        // 语速固定 1.0：它是合成参数、进缓存键，等有语速 UI 时再传。
-        speed: 1,
+        // 不传语速：后端会用设置页「朗读声音」里的全局语速（并夹在 0.5–2.0）。
       })
       if (!ready) {
         message.warning('这篇文档没有可朗读的内容')

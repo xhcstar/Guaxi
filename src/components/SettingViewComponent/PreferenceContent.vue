@@ -34,48 +34,63 @@
       <!-- 语音能力:朗读(TTS) + 语音转写(ASR) 同主题合并 -->
       <n-card id="pref-voice" class="pref-card" title="语音能力">
         <div class="pref-block">
-          <h3>TTS 朗读配置</h3>
+          <h3>朗读声音</h3>
           <p class="description">
-            配置朗读服务提供方与本地 sherpa-onnx 路径。设置保存到 guaxi_config.json，不再使用 localStorage。
+            划词朗读、逐句朗读、PDF 朗读与有声书默认都使用这里的音色与语速；设置保存到 guaxi_config.json。
           </p>
           <n-form label-placement="left" label-width="auto" :show-require-mark="false">
-            <n-form-item label="Provider">
-              <n-select
-                v-model:value="ttsProvider"
-                :options="ttsProviderOptions"
-                :disabled="loading || ttsSaving"
-                style="width: 240px"
-              />
-            </n-form-item>
-            <n-form-item label="Model 路径">
-              <n-input
-                v-model:value="ttsModel"
-                placeholder="utils/Models/tts/kokoro_multi_lang/model.onnx"
-                :disabled="loading || ttsSaving"
-              />
-            </n-form-item>
-            <n-form-item v-if="ttsProvider === 'sherpa-onnx'" label="Tokens 路径">
-              <n-input
-                v-model:value="ttsTokens"
-                placeholder="utils/Models/tts/kokoro_multi_lang/tokens.txt"
-                :disabled="loading || ttsSaving"
-              />
-            </n-form-item>
-            <n-form-item v-if="ttsProvider === 'sherpa-onnx'" label="音色">
-              <n-space vertical :size="4">
+            <template v-if="ttsProvider === 'sherpa-onnx'">
+              <n-form-item label="语言">
                 <n-select
-                  v-model:value="ttsSpeakerId"
-                  :options="ttsSpeakerOptions"
-                  filterable
-                  tag
-                  placeholder="选择朗读音色"
+                  v-model:value="ttsLanguage"
+                  :options="ttsLanguageOptions"
                   :disabled="loading || ttsSaving"
-                  style="width: 320px"
+                  style="width: 240px"
                 />
-                <span class="description">{{ ttsSpeakerHint }}</span>
+              </n-form-item>
+              <n-form-item label="性别">
+                <n-select
+                  v-model:value="ttsGender"
+                  :options="ttsGenderOptions"
+                  :disabled="loading || ttsSaving"
+                  style="width: 240px"
+                />
+              </n-form-item>
+              <n-form-item label="音色">
+                <n-space vertical :size="4">
+                  <n-select
+                    v-model:value="ttsSpeakerId"
+                    :options="ttsSpeakerOptions"
+                    filterable
+                    tag
+                    placeholder="选择朗读音色"
+                    :disabled="loading || ttsSaving"
+                    style="width: 320px"
+                  />
+                  <span class="description">{{ ttsSpeakerHint }}</span>
+                  <span v-if="!ttsSpeakerOptions.length" class="description">
+                    当前语言/性别组合下没有可用音色（Kokoro 英文音色只有女声），换一个组合试试。
+                  </span>
+                </n-space>
+              </n-form-item>
+            </template>
+            <n-form-item label="语速">
+              <n-space align="center" :size="12">
+                <n-slider
+                  v-model:value="ttsSpeed"
+                  :min="0.5"
+                  :max="2"
+                  :step="0.05"
+                  :disabled="loading || ttsSaving"
+                  style="width: 220px"
+                />
+                <span class="description">{{ Number(ttsSpeed).toFixed(2) }}×</span>
+                <n-button size="tiny" quaternary :disabled="loading || ttsSaving" @click="ttsSpeed = 1">
+                  原速
+                </n-button>
               </n-space>
             </n-form-item>
-            <n-form-item label="测试文本">
+            <n-form-item label="试听文本">
               <n-input
                 v-model:value="ttsTestText"
                 placeholder="输入一行用于试听的文本"
@@ -110,6 +125,32 @@
                 </n-button>
               </n-space>
             </n-form-item>
+            <n-collapse>
+              <n-collapse-item title="高级：朗读服务与模型路径" name="advanced">
+                <n-form-item label="Provider">
+                  <n-select
+                    v-model:value="ttsProvider"
+                    :options="ttsProviderOptions"
+                    :disabled="loading || ttsSaving"
+                    style="width: 240px"
+                  />
+                </n-form-item>
+                <n-form-item label="Model 路径">
+                  <n-input
+                    v-model:value="ttsModel"
+                    placeholder="utils/Models/tts/kokoro_multi_lang/model.onnx"
+                    :disabled="loading || ttsSaving"
+                  />
+                </n-form-item>
+                <n-form-item v-if="ttsProvider === 'sherpa-onnx'" label="Tokens 路径">
+                  <n-input
+                    v-model:value="ttsTokens"
+                    placeholder="utils/Models/tts/kokoro_multi_lang/tokens.txt"
+                    :disabled="loading || ttsSaving"
+                  />
+                </n-form-item>
+              </n-collapse-item>
+            </n-collapse>
           </n-form>
         </div>
 
@@ -475,8 +516,8 @@
 <script setup>
 import { createLogger } from '../../utils/logger'
 import { ref, computed, onBeforeUnmount, onMounted, watch } from 'vue'
-import { buildSpeakerOptions, describeSpeaker } from '../../utils/ttsSpeakers'
-import { NCard, NSpace, NDivider, NForm, NFormItem, NInputNumber, NInput, NButton, NAlert, NSwitch, NSelect } from 'naive-ui'
+import { buildSpeakerOptions, describeSpeaker, speakerMeta } from '../../utils/ttsSpeakers'
+import { NCard, NSpace, NDivider, NForm, NFormItem, NInputNumber, NInput, NButton, NAlert, NSwitch, NSelect, NSlider, NCollapse, NCollapseItem } from 'naive-ui'
 import { DEFAULT_CODE_THEME_ID, GUAXI_CODE_THEMES } from '../../monaco/codeThemes'
 import { invoke } from '@tauri-apps/api/core'
 import {
@@ -618,10 +659,56 @@ const ttsModel = ref('')
 const ttsTokens = ref('')
 const ttsExe = ref('')
 /// 默认音色（Speaker ID）。各朗读入口在未显式指定时都会用它，
-/// 所以这里是"全局音色"的唯一入口。
-const ttsSpeakerId = ref('0')
-const ttsSpeakerOptions = computed(() => buildSpeakerOptions(ttsModel.value))
+/// 所以这里是"全局音色"的唯一入口。3 号 = zf_001（中文女声）。
+const ttsSpeakerId = ref('3')
+/// 全局朗读语速：0.5–2.0，1.0 为原速。划词/逐句朗读没显式传语速时由后端取它。
+const ttsSpeed = ref(1)
+/// 设置页的筛选条件：只影响下拉列表，不单独保存；音色本身仍以 speaker id 为准。
+const ttsLanguage = ref('auto')
+const ttsGender = ref('auto')
+const ttsLanguageOptions = [
+  { label: '不限', value: 'auto' },
+  { label: '中文', value: 'zh' },
+  { label: '英文', value: 'en' },
+]
+const ttsGenderOptions = [
+  { label: '不限', value: 'auto' },
+  { label: '女声', value: 'female' },
+  { label: '男声', value: 'male' },
+]
+const ttsSpeakerOptions = computed(() =>
+  buildSpeakerOptions(ttsModel.value, { language: ttsLanguage.value, gender: ttsGender.value })
+)
 const ttsSpeakerHint = computed(() => describeSpeaker(ttsModel.value, ttsSpeakerId.value))
+
+const speakerValuesOf = (options) =>
+  (Array.isArray(options) ? options : []).flatMap((option) =>
+    option?.type === 'group' ? (option.children || []).map((child) => child.value) : [option?.value]
+  )
+
+/** 当前音色不在筛选结果里时，自动落到第一个匹配项，避免下拉显示空值。 */
+watch([ttsLanguage, ttsGender], () => {
+  const values = speakerValuesOf(ttsSpeakerOptions.value)
+  if (!values.length) return
+  if (!values.includes(String(ttsSpeakerId.value ?? ''))) {
+    ttsSpeakerId.value = values[0]
+  }
+})
+
+/** 从已保存的 speaker id 反推语言/性别筛选，打开设置页时展示对应的那一组。 */
+const syncSpeakerFiltersFromId = () => {
+  const meta = speakerMeta(ttsModel.value, ttsSpeakerId.value)
+  ttsLanguage.value = meta.language || 'auto'
+  ttsGender.value = meta.gender || 'auto'
+}
+
+// 直接在下拉里换了一个音色时，筛选条件跟着它走（否则会出现「筛选是中文、
+// 选中的却是英文音色」的错位）。筛选 watch 可能回写 id，两边的终态一致，不会循环。
+watch(ttsSpeakerId, () => {
+  const meta = speakerMeta(ttsModel.value, ttsSpeakerId.value)
+  if (meta.language && meta.language !== ttsLanguage.value) ttsLanguage.value = meta.language
+  if (meta.gender && meta.gender !== ttsGender.value) ttsGender.value = meta.gender
+})
 const ttsTestText = ref('你好，这是测试朗读。')
 const asrProvider = ref('sherpa-onnx')
 const asrModel = ref('')
@@ -697,7 +784,9 @@ onMounted(async () => {
         ttsModel.value = String(ttsConfig?.model || '').trim()
         ttsTokens.value = String(ttsConfig?.tokens || '').trim()
         ttsExe.value = String(ttsConfig?.exe || '').trim()
-        ttsSpeakerId.value = String(ttsConfig?.speaker_id || '0').trim() || '0'
+        ttsSpeakerId.value = String(ttsConfig?.speaker_id || '3').trim() || '3'
+        ttsSpeed.value = Number(ttsConfig?.speed) > 0 ? Number(ttsConfig.speed) : 1
+        syncSpeakerFiltersFromId()
         asrProvider.value = String(asrConfig?.provider || 'sherpa-onnx').trim() || 'sherpa-onnx'
         asrModel.value = String(asrConfig?.model || '').trim()
         asrExe.value = String(asrConfig?.exe || '').trim()
@@ -907,7 +996,8 @@ const handleTtsConfigSave = async () => {
         model: String(ttsModel.value || '').trim(),
         tokens: String(ttsTokens.value || '').trim(),
         exe: String(ttsExe.value || '').trim(),
-        speaker_id: String(ttsSpeakerId.value || '0').trim() || '0',
+        speaker_id: String(ttsSpeakerId.value || '3').trim() || '3',
+        speed: Number(ttsSpeed.value) || 1,
         output_dir: String(current?.output_dir || '').trim(),
       }
     })
@@ -916,7 +1006,9 @@ const handleTtsConfigSave = async () => {
     ttsModel.value = String(saved?.model || '').trim()
     ttsTokens.value = String(saved?.tokens || '').trim()
     ttsExe.value = String(saved?.exe || '').trim()
-    ttsSpeakerId.value = String(saved?.speaker_id || '0').trim() || '0'
+    ttsSpeakerId.value = String(saved?.speaker_id || '3').trim() || '3'
+    ttsSpeed.value = Number(saved?.speed) > 0 ? Number(saved.speed) : 1
+    syncSpeakerFiltersFromId()
   } catch (error) {
     logger.error('保存 TTS 配置失败:', error)
   } finally {
@@ -929,6 +1021,9 @@ const handleTtsConfigReset = async () => {
   ttsModel.value = 'utils/Models/tts/kokoro_multi_lang/model.onnx'
   ttsTokens.value = 'utils/Models/tts/kokoro_multi_lang/tokens.txt'
   ttsExe.value = 'utils/sherpa-onnx/sherpa-onnx-offline-tts.exe'
+  ttsSpeakerId.value = '3'
+  ttsSpeed.value = 1
+  syncSpeakerFiltersFromId()
   await handleTtsConfigSave()
 }
 
@@ -1054,8 +1149,9 @@ const handleTtsTestReadAloud = async () => {
           tokens,
         },
         input: text,
-        // 试听直接用当前选中的音色，这样不用先保存就能比较不同音色。
-        voice: provider === 'sherpa-onnx' ? String(ttsSpeakerId.value || '0').trim() : 'alex',
+        // 试听直接用当前选中的音色与语速，这样不用先保存就能比较。
+        voice: provider === 'sherpa-onnx' ? String(ttsSpeakerId.value || '3').trim() : 'alex',
+        speed: Number(ttsSpeed.value) || 1,
         response_format: responseFormat,
         stream: false,
       },

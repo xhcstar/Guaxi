@@ -1736,7 +1736,12 @@ async fn audio_text_to_speech_sherpa_onnx(request: TextToSpeechRequest) -> Resul
     }
 
     let speaker = resolve_tts_speaker(&request.voice);
-    let speed = request.speed.unwrap_or(1.0);
+    // 请求没带语速时用设置页的全局朗读语速（0.5–2.0）；带上就以请求为准。
+    let speed = request
+        .speed
+        .filter(|value| *value > 0.0)
+        .map(|value| value.clamp(0.5, 2.0))
+        .unwrap_or_else(|| crate::commands::settingview::get_tts_config().speed as f32);
     // 与 ASR 同一条规矩：请求没带模型/tokens 就用设置里的默认值。
     // 各朗读入口只传自己关心的字段，不该因为漏传一个路径就整条链路失败。
     let configured = settingview::get_tts_config();
@@ -1871,9 +1876,13 @@ pub async fn audio_text_to_speech(request: TextToSpeechRequest) -> Result<TextTo
     if let Some(sample_rate) = request.sample_rate {
         body["sample_rate"] = json!(sample_rate);
     }
-    if let Some(speed) = request.speed {
-        body["speed"] = json!(speed);
-    }
+    // 与本地 sherpa 路径一致：请求没带语速时用设置页的全局朗读语速。
+    let speed = request
+        .speed
+        .filter(|value| *value > 0.0)
+        .unwrap_or_else(|| crate::commands::settingview::get_tts_config().speed as f32)
+        .clamp(0.5, 2.0);
+    body["speed"] = json!(speed);
     if let Some(gain) = request.gain {
         body["gain"] = json!(gain);
     }

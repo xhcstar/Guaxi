@@ -1048,9 +1048,14 @@ export const useMailStore = defineStore('mail', {
       this.messages = this.messages.filter(
         (m) => !keys.has(`${m.accountId}:${m.folder}:${m.uid}`),
       )
-      if (this.selected) {
-        this.selected = null
+      // 阅读区跟着删：以前只在 `selected` 非空时才清，用键盘/通讯录打开的邮件
+      // 删掉后正文会留在右边，形成一个已经不存在的「幽灵邮件」。
+      if (
+        this.detail &&
+        keys.has(`${this.detail.accountId}:${this.detail.folder}:${this.detail.uid}`)
+      ) {
         this.detail = null
+        this.selected = null
       }
       this.loadFolders(this.activeAccountId).catch(() => {})
       this.reloadUnread().catch(() => {})
@@ -1137,6 +1142,10 @@ export const useMailStore = defineStore('mail', {
         groups.get(key).push(row)
       }
       const accountsTouched = new Set()
+      const affectsList = ['delete', 'move', 'junk', 'unmarkJunk'].includes(action)
+      const affectedKeys = new Set(
+        rows.map((row) => `${row.accountId}:${row.folder}:${row.uid}`),
+      )
       const folderByRole = (accountId, role) =>
         (this.foldersByAccount[accountId] || []).find((f) => f.role === role)
       for (const list of groups.values()) {
@@ -1200,6 +1209,16 @@ export const useMailStore = defineStore('mail', {
         accountsTouched.add(accountId)
       }
       this.clearSelection()
+      // 删除 / 移走的是当前正在读的邮件：列表里已经没有了，阅读区也要一并收起，
+      // 否则会留下「正文还在、列表里却找不到这封邮件」的断链状态。
+      if (
+        affectsList &&
+        this.detail &&
+        affectedKeys.has(`${this.detail.accountId}:${this.detail.folder}:${this.detail.uid}`)
+      ) {
+        this.detail = null
+        this.selected = null
+      }
       await Promise.all([this.loadMessages({ silent: true }), this.reloadUnread()])
       // 本地增量只是先让角标动起来；服务端计数（尤其目标文件夹）稍后用一次
       // 完整的 STATUS 校正，并合并连续操作，避免每封邮件都触发一轮刷新。

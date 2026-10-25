@@ -56,7 +56,8 @@ export function useReadAloud(options = {}) {
   const audioContext = shallowRef(null)
   let sessionId = ''
   let docKey = ''
-  let speed = 1
+  // null = 没显式指定，由后端使用设置页「朗读声音」里的全局语速。
+  let speed = null
   let speakerId = null
   let unlisten = null
   let ticker = null
@@ -97,7 +98,7 @@ export function useReadAloud(options = {}) {
     if (!plain.trim()) return false
 
     docKey = String(opts.docKey || '')
-    speed = Number(opts.speed) || 1
+    speed = Number(opts.speed) > 0 ? Number(opts.speed) : null
     speakerId = opts.speakerId ?? null
     sessionId = `readaloud-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 
