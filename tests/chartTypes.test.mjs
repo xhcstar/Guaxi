@@ -1,7 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { buildChartOption } from '../src/components/GuaxiMarkdownRender/guaxiChartData.js'
+import {
+  buildChartOption,
+  collectFenceBlocks,
+} from '../src/components/GuaxiMarkdownRender/guaxiChartData.js'
 import {
   CHART_TYPES,
   normalizeChartType,
@@ -148,6 +151,130 @@ test('gauge 单值走指针模式，多记录走多环', () => {
   const multi = buildChartOption({ type: 'gauge', x: 'name', y: ['value'] }, RECORD_SET)
   assert.equal(multi.series.length, 3)
   assert.match(multi.series[1].radius, /%/)
+})
+
+test('gauge 单值的数值与名字留足垂直间距，不会叠字', () => {
+  // 回归：旧值 detail 72% / title 92% 只差 20% 半径。240px 高的画布半径 90px，
+  // 两个文本框（值 22px、名字 12px）正好压在一起，截图表现为“文字糊成一团”。
+  const single = buildChartOption(
+    { type: 'gauge', x: 'name', y: ['value'], formatter: '{value}%' },
+    [RECORD_SET[0]],
+  )
+  const s = single.series[0]
+  const pct = (v) => Number.parseFloat(String(v)) / 100
+  // offsetCenter 的百分比相对半径；文字垂直居中，半高约是行高/字号的一半。
+  const valueHalf = Number(s.detail.lineHeight) / 2
+  const nameHalf = Number(s.title.fontSize) / 2
+  const radius = 90 // 画布 240px 高：radius 75% × (240 / 2)
+  const gap = (pct(s.title.offsetCenter[1]) - pct(s.detail.offsetCenter[1])) * radius
+  assert.ok(
+    gap >= valueHalf + nameHalf,
+    `数值与名字的垂直间隔应不小于两者半高之和：gap=${gap}px, halves=${valueHalf + nameHalf}px`,
+  )
+  // 名字不能压到圆环内缘（r - 线宽/2），否则会和环重叠。
+  const ringInner = radius - Number(s.axisLine.lineStyle.width) / 2
+  const nameBottom = pct(s.title.offsetCenter[1]) * radius + nameHalf
+  assert.ok(nameBottom <= ringInner, `名字底边 ${nameBottom}px 不应越过圆环内缘 ${ringInner}px`)
+})
+
+test('gauge 多环不在圆心重复画名字，改由底部图例标注', () => {
+  // 回归：多环每圈共用一个圆心，ECharts 的 title 默认 show:true，
+  // 各圈名字会画在同一像素附近互相覆盖（用户截图里“文字糊成一团”的成因）。
+  const multi = buildChartOption({ type: 'gauge', x: 'name', y: ['value'] }, RECORD_SET)
+  for (const s of multi.series) {
+    assert.equal(s.title?.show, false, '多环环内标题必须关闭')
+    assert.equal(s.detail?.show, false, '多环环内数值必须关闭')
+    assert.ok(s.name, '系列名应取自记录名，供图例与 tooltip 使用')
+  }
+  assert.equal(multi.legend?.bottom, 0, '图例放在底部留白处，避免压住圆环')
+
+  // 环数多时外圈要收在 72% 以内，否则会压到底部图例上。
+  const five = [...RECORD_SET, { name: 'D', value: 40 }, { name: 'E', value: 50 }]
+  const many = buildChartOption({ type: 'gauge', x: 'name', y: ['value'] }, five)
+  const outer = Math.max(...many.series.map((s) => Number.parseFloat(s.radius)))
+  assert.ok(outer <= 72, `最外圈半径 ${outer}% 应留在图例上方`)
+  // 半径仍然彼此分开，不会叠成一个环。
+  const radii = many.series.map((s) => Number.parseFloat(s.radius))
+  assert.equal(new Set(radii).size, radii.length, '各环半径必须互不相同')
+})
+
+test('scatter 使用数值轴，坐标对不会被当成类目索引', () => {
+  // 回归：散点交给默认的 category 轴时，160 这类坐标会被当成“第 160 个类目”，
+  // 点全被挤出绘图区——预览和 pandoc 导出里都只剩坐标轴。
+  const opt = buildChartOption({ type: 'scatter', y: ['height', 'weight'] }, RECORD_SET)
+  assert.equal(opt.xAxis.type, 'value')
+  assert.equal(opt.yAxis.type, 'value')
+  assert.equal(opt.series[0].type, 'scatter')
+  assert.deepEqual(opt.series[0].data[0], [170, 60])
+})
+
+test('瀑布图图例不列出内部占位序列，标题与图例留出间距', () => {
+  const opt = buildChartOption(
+    { type: 'waterfall', x: 'month', y: ['value'], title: 'W' },
+    RECORD_SET,
+  )
+  assert.ok(Array.isArray(opt.legend.data), '图例应显式给出数据项')
+  assert.ok(!opt.legend.data.includes('_placeholder'), '透明占位柱不应出现在图例里')
+  assert.deepEqual(opt.legend.data, ['增加', '减少'])
+  // 标题 18px 字号在默认位置下底边约 38px，图例启动位置必须让开。
+  assert.ok(Number(opt.legend.top) >= 42)
+})
+
+test('围栏切分只认行首，标题里的字面量不会吞掉后面的代码块', () => {
+  // 回归：旧正则允许 ```chart 出现在任意位置，于是
+  // 「## 10A. 内嵌图表（```chart）」这样的标题会把紧随其后的第一个图表块吞掉，
+  // 那块图在 Word/EPUB 导出里就仍然是源码。
+  const md = [
+    '## 10A. 内嵌图表（```chart）',
+    '',
+    '```chart',
+    'spec:',
+    '  type: line',
+    'data: |',
+    '  x,y',
+    '  1,2',
+    '```',
+    '',
+    '### 白板（```excalidraw）',
+    '',
+    '```excalidraw',
+    'C:/tmp/a.excalidraw',
+    '```',
+  ].join('\n')
+
+  const blocks = collectFenceBlocks(md, ['chart', 'excalidraw'])
+  assert.deepEqual(blocks.map((b) => b.kind), ['chart', 'excalidraw'])
+  assert.match(blocks[0].body, /type: line/)
+  assert.equal(blocks[1].body.trim(), 'C:/tmp/a.excalidraw')
+  // lead 保留触发匹配的换行，替换整块时补回去，段落才不会粘连。
+  assert.equal(blocks[0].lead, '\n')
+
+  // 行内字面量本身不构成围栏。
+  assert.equal(collectFenceBlocks('正文里的 ```chart 不是围栏', ['chart']).length, 0)
+  // 没有行尾闭合的围栏也不算。
+  assert.equal(collectFenceBlocks('```chart\nspec:\n  type: line', ['chart']).length, 0)
+})
+
+test('围栏切分支持 4 个反引号与 ~~~ 围栏，并按内容里的长度配对闭合', () => {
+  const md = [
+    '````chart',
+    'spec:',
+    '  type: bar',
+    '```',
+    'data: |',
+    '  x,y',
+    '  1,2',
+    '````',
+    '',
+    '~~~mermaid',
+    'graph TD',
+    '  A-->B',
+    '~~~',
+  ].join('\n')
+  const blocks = collectFenceBlocks(md, ['chart', 'mermaid'])
+  assert.equal(blocks.length, 2)
+  assert.match(blocks[0].body, /```/g, '内容里的三反引号不应提前闭合四反引号围栏')
+  assert.equal(blocks[1].kind, 'mermaid')
 })
 
 test('sankey 从 source/target/value 三列建图', () => {

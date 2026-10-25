@@ -185,18 +185,33 @@ export async function renderChartSvg(option, { width = 900, height = 520 } = {})
  * 这里显式铺一层白底再栅格化。
  */
 export async function svgToPngBlob(svgText, { scale = 2 } = {}) {
-  const withBg = ensureSvgBackground(svgText)
-  const blob = new Blob([withBg], { type: 'image/svg+xml;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
+  const withBg = ensureSvgBackground(normalizeSvgNamespaces(svgText))
 
+  // 与 mermaid 导出的栅格化同源：优先 base64 data URL。
+  // blob: URL 在 Tauri 的 WebView 里偶尔解码失败（表现为整块导出变成空白/源码），
+  // 而 data URL 不依赖 Blob 生命周期；只有它失败时才退回 blob。
+  const loadImage = (src) => new Promise((resolve, reject) => {
+    const image = new Image()
+    image.decoding = 'sync'
+    image.onload = () => resolve(image)
+    image.onerror = () => reject(new Error('SVG 解码失败'))
+    image.src = src
+  })
+
+  let objectUrl = ''
   try {
-    const img = new Image()
-    img.decoding = 'sync'
-    await new Promise((resolve, reject) => {
-      img.onload = resolve
-      img.onerror = () => reject(new Error('SVG 解码失败'))
-      img.src = url
-    })
+    let img
+    try {
+      const dataUrl = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(withBg)))}`
+      img = await loadImage(dataUrl)
+    } catch (dataUrlError) {
+      logger.debug('[ChartExport] data-url decode failed, fallback to blob url', {
+        error: String(dataUrlError?.message || dataUrlError),
+      })
+      const blob = new Blob([withBg], { type: 'image/svg+xml;charset=utf-8' })
+      objectUrl = URL.createObjectURL(blob)
+      img = await loadImage(objectUrl)
+    }
 
     const w = Math.max(1, Math.round((img.naturalWidth || 900) * scale))
     const h = Math.max(1, Math.round((img.naturalHeight || 520) * scale))
@@ -212,8 +227,27 @@ export async function svgToPngBlob(svgText, { scale = 2 } = {}) {
       canvas.toBlob((out) => (out ? resolve(out) : reject(new Error('PNG 编码失败'))), 'image/png')
     })
   } finally {
-    URL.revokeObjectURL(url)
+    if (objectUrl) URL.revokeObjectURL(objectUrl)
   }
+}
+
+/**
+ * 补齐 XML 命名空间。
+ *
+ * 浏览器把 SVG 当图片解码时要求根元素声明 xmlns；ECharts 会带上，
+ * 但 Excalidraw 的 `outerHTML` 未必。缺失时 <img> 会直接 onerror，
+ * 整块导出失败、最终退回源码 —— 也就是“白板图表没有正常导出”。
+ */
+function normalizeSvgNamespaces(svgText) {
+  let svg = String(svgText || '')
+  if (!svg.trim()) return ''
+  if (!/xmlns=/.test(svg)) {
+    svg = svg.replace(/<svg\b/i, '<svg xmlns="http://www.w3.org/2000/svg"')
+  }
+  if (!/xmlns:xlink=/.test(svg)) {
+    svg = svg.replace(/<svg\b/i, '<svg xmlns:xlink="http://www.w3.org/1999/xlink"')
+  }
+  return svg
 }
 
 /** 给 SVG 补一层白色背板（没有 <rect> 背板时）。 */

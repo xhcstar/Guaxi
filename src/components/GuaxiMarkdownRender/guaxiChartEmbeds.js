@@ -45,6 +45,7 @@ export {
   normalizeDataset,
   parseChartFence,
   buildChartOption,
+  collectFenceBlocks,
 } from './guaxiChartData'
 
 import {

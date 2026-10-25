@@ -45,12 +45,23 @@ export const titleOf = (spec, extra = {}) =>
 /**
  * 图例：多序列或无分类轴时显示。
  * `spec.legend === false` 可显式关掉。
+ *
+ * `names` 由外层从已生成的 series 里收集：给出时写成显式 data，
+ * 这样内部占位系列（水瀑图的 `_placeholder`）不会渗进图例。
  */
-export const legendOf = (spec, { seriesCount = 1, extra = {} } = {}) => {
+export const legendOf = (spec, { seriesCount = 1, names = [], extra = {} } = {}) => {
   if (spec?.legend === false) return undefined
   const want = spec?.legend === true || seriesCount > 1
   if (!want) return undefined
-  return { top: spec?.title ? 32 : 0, type: 'scroll', ...extra }
+  const data = (Array.isArray(names) ? names : []).filter(Boolean)
+  return {
+    // 标题默认占据顶部（18px 字号，文字底边约在 38px）。图例贴到 42px 起步，
+    // 否则在当前 240px 高的画布里图例与标题会直接贴在一起（截图里“快重合”）。
+    top: spec?.title ? 42 : 0,
+    type: 'scroll',
+    ...(data.length ? { data } : {}),
+    ...extra,
+  }
 }
 
 /** 把 spec 里的样式片段合并进 series（用户可用 seriesStyle 覆盖任意 ECharts 字段）。 */
@@ -205,6 +216,16 @@ function buildWaterfall(spec, records, xKey, yKeys) {
   }
 }
 
+/** 数值轴（散点等以数据本身为坐标的图用）。 */
+const numericAxis = (spec, { nameKey, minKey, maxKey, styleKey }) => {
+  const axis = { type: 'value' }
+  if (spec?.[nameKey]) axis.name = String(spec[nameKey])
+  if (spec?.[minKey] !== undefined) axis.min = spec[minKey]
+  if (spec?.[maxKey] !== undefined) axis.max = spec[maxKey]
+  if (spec?.[styleKey] && typeof spec[styleKey] === 'object') Object.assign(axis, spec[styleKey])
+  return axis
+}
+
 /** scatter / effectScatter：二维散点，第三维可映射到点大小。 */
 function buildScatter(spec, records, xKey, yKeys, { effect = false } = {}) {
   const sizeKey = spec.size ? String(spec.size) : ''
@@ -230,7 +251,15 @@ function buildScatter(spec, records, xKey, yKeys, { effect = false } = {}) {
     },
     spec
   )
-  return [series]
+  // 设计说明（关键 · 对应“散点图的点全消失”）：
+  // 散点的 x 维来自数据本身（y 给两列就是坐标对），必须用数值轴。
+  // 交给外层默认的 category 轴时，160 这样的坐标会被当成“第 160 个类目”，
+  // 点全部落在绘图区之外——预览与 pandoc 导出里都只剩坐标轴。
+  return {
+    series: [series],
+    xAxis: numericAxis(spec, { nameKey: 'xName', minKey: 'xMin', maxKey: 'xMax', styleKey: 'xAxisStyle' }),
+    yAxis: valueAxis(spec),
+  }
 }
 
 /** candlestick：K 线，接受 [open, close, low, high] 四列。 */
@@ -477,6 +506,7 @@ function buildGauge(spec, records, xKey, yKeys) {
   const valueKey = yKeys[0]
   const max = spec.max != null ? Number(spec.max) : Math.max(...records.map((r) => num(r[valueKey]) ?? 0), 100)
   if (records.length === 1 && !spec.multi) {
+    const detailFontSize = Number(spec.detailFontSize || 22)
     return [withStyle({
       type: 'gauge',
       min: spec.min != null ? Number(spec.min) : 0,
@@ -486,10 +516,16 @@ function buildGauge(spec, records, xKey, yKeys) {
       pointer: spec.pointer === false ? { show: false } : undefined,
       detail: {
         formatter: spec.formatter || '{value}',
-        fontSize: Number(spec.detailFontSize || 22),
-        offsetCenter: [0, '72%'],
+        fontSize: detailFontSize,
+        // ECharts 的 detail 默认 lineHeight 固定为 30px：字号调小时文字框并不会跟着变矮，
+        // 会向下压到标题上。按字号显式给行高，让「值」和「名字」的垂直占位可预测。
+        lineHeight: Math.round(detailFontSize * 1.25),
+        // 值在上、名字在下，两者按半径的百分比分开：
+        // 旧值 72% / 92% 只差 20% 半径（240px 高的画布里约 18px），
+        // 而值的行高就有 20~30px，名字必然叠进数值里，且 92% 已经贴到圆环内缘。
+        offsetCenter: [0, '44%'],
       },
-      title: { offsetCenter: [0, '92%'], fontSize: 12 },
+      title: { offsetCenter: [0, '78%'], fontSize: 12 },
       data: [{
         value: num(records[0][valueKey]) ?? 0,
         name: xKey ? String(raw(records[0][xKey])) : '',
@@ -497,11 +533,21 @@ function buildGauge(spec, records, xKey, yKeys) {
     }, spec)]
   }
   // 多环：每个环一个 series，半径依次外扩。
-  return records.map((r, i) => withStyle({
+  const showLegend = spec.legend === true || (spec.legend !== false && records.length > 1)
+  const ringBase = Number(spec.baseRadius || 45)
+  const ringGap = Number(spec.ringGap || 12)
+  // 底部图例大约占 20px（240px 高的画布上约 8% 半径），外圈半径收在 72% 以内才不会压到图例。
+  // 环数少时（默认 3 环）间距不变；环数多时按需压缩，避免最外圈顶到图例上。
+  const ringStep = showLegend && records.length > 1
+    ? Math.min(ringGap, Math.max(5, (72 - ringBase) / (records.length - 1)))
+    : ringGap
+  const series = records.map((r, i) => withStyle({
     type: 'gauge',
+    // 名字放在系列名上：图例与 tooltip 靠它区分各环。
+    name: xKey ? String(raw(r[xKey])) : '',
     min: spec.min != null ? Number(spec.min) : 0,
     max,
-    radius: `${(spec.baseRadius || 45) + i * (spec.ringGap || 12)}%`,
+    radius: `${Math.round(ringBase + i * ringStep)}%`,
     startAngle: 90,
     endAngle: -270,
     pointer: { show: false },
@@ -510,9 +556,19 @@ function buildGauge(spec, records, xKey, yKeys) {
     splitLine: { show: false },
     axisTick: { show: false },
     axisLabel: { show: false },
+    // 多环共用同一个圆心，ECharts 的 title 默认 show:true、offsetCenter [0,'20%']：
+    // 三个环的名字会画在同一像素附近互相压住（截图里“文字糊成一团”的成因）。
+    // 名字改由图例承载，这里关掉环内文本。
+    title: { show: false },
     detail: { show: false },
     data: [{ value: num(r[valueKey]) ?? 0, name: xKey ? String(raw(r[xKey])) : '' }],
   }, spec))
+
+  // 图例固定放底部：圆环是满圆，顶部既要留给标题又要留给环，底部留白才放得下。
+  return {
+    series,
+    legend: showLegend ? { bottom: 0, type: 'scroll' } : undefined,
+  }
 }
 
 /** funnel：漏斗图。 */

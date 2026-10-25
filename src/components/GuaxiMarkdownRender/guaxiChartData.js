@@ -299,6 +299,46 @@ export function parseChartFence(source) {
   return result
 }
 
+/**
+ * 从 Markdown 文本里切出指定类型的代码围栏块。
+ *
+ * 设计说明（关键 · 对应导出时“部分图表没被替换成图片”）：
+ * 围栏必须**从行首开始**。旧实现允许围栏出现在行中间，于是标题里的字面量
+ * （例如本项目的示例文档就写成「## 10A. 内嵌图表（```chart）」）会被当成围栏开头，
+ * 把紧随其后的第一个真正的代码块吞掉一半 —— 被吞掉的那块永远拿不到预渲染，
+ * 导出成品里就仍然是源码。
+ *
+ * @param {string} markdown
+ * @param {string|string[]} kinds 围栏语言（chart / excalidraw / mermaid …）
+ * @returns {{full:string, lead:string, fence:string, kind:string, body:string}[]}
+ *   `lead` 是匹配到的换行，替换整块时需原样补回（否则相邻段落会被粘在一起）。
+ */
+export function collectFenceBlocks(markdown, kinds) {
+  const text = String(markdown || '')
+  const list = (Array.isArray(kinds) ? kinds : [kinds])
+    .map((kind) => String(kind || '').trim())
+    .filter(Boolean)
+    .map((kind) => kind.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  if (!text || !list.length) return []
+
+  const re = new RegExp(
+    `(^|\\n)[ \\t]*(\`{3,}|~{3,})[ \\t]*(${list.join('|')})[^\\n]*\\n([\\s\\S]*?)\\n[ \\t]*\\2[ \\t]*(?=\\n|$)`,
+    'g',
+  )
+  const blocks = []
+  let match
+  while ((match = re.exec(text)) !== null) {
+    blocks.push({
+      full: match[0],
+      lead: match[1],
+      fence: match[2],
+      kind: match[3].toLowerCase(),
+      body: match[4],
+    })
+  }
+  return blocks
+}
+
 /** 依据 spec.type + 数据列，构建一个可直接喂给 ECharts 的 option。 */
 export function buildChartOption(spec, records) {
   if (!spec || typeof spec !== 'object') {
@@ -355,8 +395,14 @@ export function buildChartOption(spec, records) {
     throw new Error('图表构造器没有返回任何 series')
   }
 
-  const seriesCount = Array.isArray(series) ? series.length : 1
-  const legend = legendOf(spec, { seriesCount })
+  const seriesList = Array.isArray(series) ? series : [series]
+  const seriesCount = seriesList.length
+  // 图例只列真正的序列：下划线开头的是内部占位（瀑布图垫底的透明柱），
+  // 让 ECharts 自动收集会把它也画成一个图例项，看起来像多了一条莫名其妙的系列。
+  const legendNames = seriesList
+    .map((s) => (s && typeof s === 'object' ? String(s.name || '').trim() : ''))
+    .filter((name) => name && !name.startsWith('_'))
+  const legend = legendOf(spec, { seriesCount, names: legendNames })
   const tooltip = tooltipOf(spec, entry.family === 'cartesian' ? 'axis' : 'item')
 
   // 独立布局：图表自己管坐标，不拼 grid / axis。
