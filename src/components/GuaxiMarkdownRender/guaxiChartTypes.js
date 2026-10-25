@@ -541,6 +541,14 @@ function buildGauge(spec, records, xKey, yKeys) {
   const ringStep = showLegend && records.length > 1
     ? Math.min(ringGap, Math.max(5, (72 - ringBase) / (records.length - 1)))
     : ringGap
+  // 环内名字：多圈共用同一个圆心，ECharts 默认把每个 series 的 title 画在同一点，
+  // 几条名字完全叠住（截图里“文字糊成一团”的成因）。这里把每圈的名字逐行错开，
+  // 既保留“哪一圈是什么”的说明，又不互相压住。
+  // 注意用**像素**而不是百分比：offsetCenter 的百分比是相对各圈自己的半径换算的
+  // （半径 45%/57%/69% 各不相同），同一百分比在不同圈上会得到不同行距，仍然会叠。
+  const ringCount = records.length
+  const centerStepPx = 16
+  const centerStartPx = -((ringCount - 1) * centerStepPx) / 2
   const series = records.map((r, i) => withStyle({
     type: 'gauge',
     // 名字放在系列名上：图例与 tooltip 靠它区分各环。
@@ -556,10 +564,12 @@ function buildGauge(spec, records, xKey, yKeys) {
     splitLine: { show: false },
     axisTick: { show: false },
     axisLabel: { show: false },
-    // 多环共用同一个圆心，ECharts 的 title 默认 show:true、offsetCenter [0,'20%']：
-    // 三个环的名字会画在同一像素附近互相压住（截图里“文字糊成一团”的成因）。
-    // 名字改由图例承载，这里关掉环内文本。
-    title: { show: false },
+    title: {
+      // 没有名称列（x）时没有文字可画，直接关掉；颜色沿用 ECharts 默认的次要文字色。
+      show: Boolean(xKey),
+      fontSize: 12,
+      offsetCenter: [0, centerStartPx + i * centerStepPx],
+    },
     detail: { show: false },
     data: [{ value: num(r[valueKey]) ?? 0, name: xKey ? String(raw(r[xKey])) : '' }],
   }, spec))

@@ -177,15 +177,24 @@ test('gauge 单值的数值与名字留足垂直间距，不会叠字', () => {
   assert.ok(nameBottom <= ringInner, `名字底边 ${nameBottom}px 不应越过圆环内缘 ${ringInner}px`)
 })
 
-test('gauge 多环不在圆心重复画名字，改由底部图例标注', () => {
-  // 回归：多环每圈共用一个圆心，ECharts 的 title 默认 show:true，
-  // 各圈名字会画在同一像素附近互相覆盖（用户截图里“文字糊成一团”的成因）。
+test('gauge 多环把各圈名字错开画在圆心，不再叠字，并保留底部图例', () => {
+  // 回归：多环每圈共用一个圆心，ECharts 默认把各 series 的 title 画在同一点，
+  // 名字会糊成一团；但直接关掉又会让圆心完全没有说明。这里要求逐行错开且间距够用。
   const multi = buildChartOption({ type: 'gauge', x: 'name', y: ['value'] }, RECORD_SET)
   for (const s of multi.series) {
-    assert.equal(s.title?.show, false, '多环环内标题必须关闭')
+    assert.equal(s.title?.show, true, '环内仍应显示每圈的名字')
     assert.equal(s.detail?.show, false, '多环环内数值必须关闭')
     assert.ok(s.name, '系列名应取自记录名，供图例与 tooltip 使用')
   }
+  const offsets = multi.series.map((s) => Number(s.title.offsetCenter[1]))
+  assert.deepEqual(offsets, [-16, 0, 16], '三圈名字应按固定像素间距错开')
+  // 相邻两行的间距必须大于 12px 字号，否则仍会叠字。
+  assert.ok(offsets[1] - offsets[0] >= 12, '行距应不小于字号 12px')
+
+  // 没有名称列（x）时不画空文字。
+  const noNames = buildChartOption({ type: 'gauge', y: ['value'], multi: true }, RECORD_SET)
+  assert.equal(noNames.series.every((s) => s.title.show === false), true)
+
   assert.equal(multi.legend?.bottom, 0, '图例放在底部留白处，避免压住圆环')
 
   // 环数多时外圈要收在 72% 以内，否则会压到底部图例上。
@@ -196,6 +205,9 @@ test('gauge 多环不在圆心重复画名字，改由底部图例标注', () =>
   // 半径仍然彼此分开，不会叠成一个环。
   const radii = many.series.map((s) => Number.parseFloat(s.radius))
   assert.equal(new Set(radii).size, radii.length, '各环半径必须互不相同')
+  // 5 环时最外侧一行仍在最内圈以内（240px 高画布：45% 半径 = 54px，文字半高 6px）。
+  const manyOffsets = many.series.map((s) => Math.abs(Number(s.title.offsetCenter[1])))
+  assert.ok(Math.max(...manyOffsets) + 6 <= 54, '名字整叠不应越过最内圈')
 })
 
 test('scatter 使用数值轴，坐标对不会被当成类目索引', () => {
