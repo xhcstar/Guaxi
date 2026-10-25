@@ -32,6 +32,18 @@
   </div>
 
   <div class="mail-row-snippet">{{ row.snippet || '（无正文预览）' }}</div>
+
+  <!-- 行内删除：悬停出现，省得每次都先选中再右键/点工具栏。 -->
+  <span class="mail-row-actions">
+    <button
+      class="mail-row-delete"
+      title="删除"
+      aria-label="删除这封邮件"
+      @click.stop="$emit('delete')"
+    >
+      <MailIcon name="trash" :size="14" />
+    </button>
+  </span>
 </template>
 
 <script setup>
@@ -40,13 +52,14 @@
 // 这里把计算（头像色、日期格式）也一并放进来，父组件只负责定位。
 import { computed } from 'vue'
 import { avatarSeed } from './theme'
+import MailIcon from './MailIcon.vue'
 
 const props = defineProps({
   row: { type: Object, required: true },
   checked: { type: Boolean, default: false },
 })
 
-defineEmits(['toggle', 'star'])
+defineEmits(['toggle', 'star', 'delete'])
 
 const avatar = computed(() => avatarSeed(props.row.fromName, props.row.fromAddr))
 const avatarLetter = computed(() => avatar.value.letter)

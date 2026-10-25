@@ -10,40 +10,69 @@
           ‹ {{ closeLabel }}
         </button>
         <div class="mail-reader-toolbar">
-          <button class="mail-btn" @click="$emit('reply', detail)">回复</button>
-          <button class="mail-btn" @click="$emit('reply-all', detail)">全部回复</button>
-          <button class="mail-btn" @click="$emit('forward', detail)">转发</button>
+          <button class="mail-btn is-icon" title="回复" aria-label="回复" @click="$emit('reply', detail)">
+            <MailIcon name="reply" />
+          </button>
+          <button
+            class="mail-btn is-icon"
+            title="全部回复"
+            aria-label="全部回复"
+            @click="$emit('reply-all', detail)"
+          >
+            <MailIcon name="replyAll" />
+          </button>
+          <button class="mail-btn is-icon" title="转发" aria-label="转发" @click="$emit('forward', detail)">
+            <MailIcon name="forward" />
+          </button>
           <span class="mail-toolbar-sep"></span>
           <button
-            class="mail-btn"
-            :class="{ 'is-primary': !detail.flagged }"
+            class="mail-btn is-icon"
+            :class="{ 'is-on': detail.flagged }"
+            :title="detail.flagged ? '取消星标' : '加星标'"
+            :aria-label="detail.flagged ? '取消星标' : '加星标'"
             @click="$emit('toggle-flag', detail)"
           >
-            {{ detail.flagged ? '取消星标' : '加星标' }}
+            <MailIcon name="star" :filled="detail.flagged" />
           </button>
-          <button class="mail-btn" @click="$emit('toggle-unread', detail)">
-            {{ detail.seen ? '标为未读' : '标为已读' }}
+          <button
+            class="mail-btn is-icon"
+            :title="detail.seen ? '标为未读' : '标为已读'"
+            :aria-label="detail.seen ? '标为未读' : '标为已读'"
+            @click="$emit('toggle-unread', detail)"
+          >
+            <MailIcon name="unread" :filled="!detail.seen" />
           </button>
-          <button class="mail-btn" @click="$emit('archive', detail)">归档</button>
-          <button class="mail-btn is-danger" @click="$emit('delete', detail)">删除</button>
+          <button class="mail-btn is-icon" title="归档" aria-label="归档" @click="$emit('archive', detail)">
+            <MailIcon name="archive" />
+          </button>
+          <button
+            class="mail-btn is-icon is-danger"
+            title="删除"
+            aria-label="删除"
+            @click="$emit('delete', detail)"
+          >
+            <MailIcon name="trash" />
+          </button>
           <span class="mail-toolbar-sep"></span>
           <button
-            class="mail-btn"
+            class="mail-btn is-icon"
             :disabled="tools.translating.value"
             :title="'把正文整封翻译成 ' + tools.targetLang.value"
+            aria-label="翻译全文"
             @click="tools.translateAll()"
           >
-            {{ tools.translating.value ? '翻译中…' : '翻译全文' }}
+            <MailIcon name="translate" />
           </button>
           <button
-            class="mail-btn"
-            :class="{ 'is-primary': tools.readAloud.isPlaying.value }"
+            class="mail-btn is-icon"
+            :class="{ 'is-on': tools.readAloud.isPlaying.value }"
             :title="tools.readAloud.isPlaying.value ? '暂停朗读' : '朗读正文'"
+            :aria-label="tools.readAloud.isPlaying.value ? '暂停朗读' : '朗读正文'"
             @click="tools.toggleReadAloud()"
           >
-            {{ tools.readAloud.isPlaying.value ? '⏸ 暂停朗读' : '🔊 朗读' }}
+            <MailIcon name="speak" />
           </button>
-          <select class="mail-select" title="导出为…" @change="onExportChange($event)">
+          <select class="mail-select" title="导出为…" aria-label="导出为" @change="onExportChange($event)">
             <option value="">导出…</option>
             <option value="md">Markdown</option>
             <option value="html">HTML</option>
@@ -51,14 +80,18 @@
             <option value="docx">Word</option>
             <option value="txt">纯文本</option>
           </select>
-          <button class="mail-btn" title="保存到笔记库" @click="tools.saveToNotes()">存入笔记</button>
-          <button class="mail-btn" title="转成一条任务" @click="tools.toTask()">转为任务</button>
+          <button class="mail-btn is-icon" title="保存到笔记库" aria-label="保存到笔记库" @click="tools.saveToNotes()">
+            <MailIcon name="note" />
+          </button>
+          <button class="mail-btn is-icon" title="转成一条任务" aria-label="转成一条任务" @click="tools.toTask()">
+            <MailIcon name="task" />
+          </button>
         </div>
 
         <h1 class="mail-reader-subject">{{ detail.subject || '（无主题）' }}</h1>
       </header>
 
-      <div class="mail-reader-meta">
+      <div v-if="!isThread" class="mail-reader-meta">
         <span
           class="mail-avatar mail-reader-avatar"
           :style="{ background: `hsl(${avatarHue} 42% 48%)` }"
@@ -95,33 +128,80 @@
           <div class="mail-body" v-html="tools.translatedHtml.value"></div>
         </div>
 
-        <div v-if="showHeaders" class="mail-headers">
+        <div v-if="!isThread && showHeaders" class="mail-headers">
           <pre>{{ headerText }}</pre>
         </div>
 
-        <div
-          v-if="renderedHtml"
-          ref="bodyRef"
-          class="mail-body"
-          :style="readingStyle"
-          v-html="renderedHtml"
-          @click="onBodyClick"
-        ></div>
-        <pre v-else class="mail-body mail-body--plain">{{ detail.text }}</pre>
-
-        <div v-if="detail.attachments?.length" class="mail-attachments">
-          <button
-            v-for="att in detail.attachments"
-            :key="att.part + att.filename"
-            class="mail-attachment"
-            :title="att.filename"
-            @click="$emit('save-attachment', { attachment: att, detail })"
+        <!-- 会话视图：同一 thread 的每封邮件一张独立卡片，不再把历史塞进当前正文。 -->
+        <div v-if="isThread" class="mail-thread">
+          <article
+            v-for="msg in threadMessages"
+            :key="threadKeyOf(msg)"
+            class="mail-thread-card"
           >
-            <span aria-hidden="true">{{ iconFor(att.contentType) }}</span>
-            <span class="mail-attachment-name">{{ att.filename }}</span>
-            <span class="mail-attachment-size">{{ sizeLabel(att.size) }}</span>
-          </button>
+            <header class="mail-thread-head">
+              <span
+                class="mail-thread-avatar"
+                :style="{ background: `hsl(${threadSeed(msg).hue} 42% 48%)` }"
+              >
+                {{ threadSeed(msg).letter }}
+              </span>
+              <div class="mail-thread-who">
+                <span class="mail-thread-name">{{ threadName(msg) }}</span>
+                <span class="mail-thread-subject">{{ msg.subject || '（无主题）' }}</span>
+                <span v-if="threadRecipients(msg)" class="mail-thread-to">
+                  {{ threadRecipients(msg) }}
+                </span>
+              </div>
+              <span class="mail-thread-date">{{ threadDate(msg) }}</span>
+            </header>
+            <div
+              class="mail-body mail-thread-body"
+              :style="readingStyle"
+              v-html="threadBody(msg)"
+              @click="onBodyClick"
+            ></div>
+            <div v-if="msg.attachments?.length" class="mail-attachments">
+              <button
+                v-for="att in msg.attachments"
+                :key="att.part + att.filename"
+                class="mail-attachment"
+                :title="att.filename"
+                @click="$emit('save-attachment', { attachment: att, detail: msg })"
+              >
+                <span aria-hidden="true">{{ iconFor(att.contentType) }}</span>
+                <span class="mail-attachment-name">{{ att.filename }}</span>
+                <span class="mail-attachment-size">{{ sizeLabel(att.size) }}</span>
+              </button>
+            </div>
+          </article>
         </div>
+
+        <template v-else>
+          <div
+            v-if="renderedHtml"
+            ref="bodyRef"
+            class="mail-body"
+            :style="readingStyle"
+            v-html="renderedHtml"
+            @click="onBodyClick"
+          ></div>
+          <pre v-else class="mail-body mail-body--plain">{{ detail.text }}</pre>
+
+          <div v-if="detail.attachments?.length" class="mail-attachments">
+            <button
+              v-for="att in detail.attachments"
+              :key="att.part + att.filename"
+              class="mail-attachment"
+              :title="att.filename"
+              @click="$emit('save-attachment', { attachment: att, detail })"
+            >
+              <span aria-hidden="true">{{ iconFor(att.contentType) }}</span>
+              <span class="mail-attachment-name">{{ att.filename }}</span>
+              <span class="mail-attachment-size">{{ sizeLabel(att.size) }}</span>
+            </button>
+          </div>
+        </template>
       </div>
     </template>
   </section>
@@ -131,9 +211,12 @@
 import { computed, ref, watch } from 'vue'
 import { avatarSeed } from './theme'
 import { useMailReaderTools } from './useMailReaderTools'
+import MailIcon from './MailIcon.vue'
 
 const props = defineProps({
   detail: { type: Object, default: null },
+  /** 会话内每封邮件的详情（按时间升序）；为空表示普通单封阅读。 */
+  thread: { type: Array, default: () => [] },
   loading: { type: Boolean, default: false },
   settings: { type: Object, default: () => ({}) },
   themeMode: { type: String, default: 'dark' },
@@ -177,7 +260,15 @@ watch(
   },
 )
 
-const hasRemoteImages = computed(() => /data-guaxi-remote-src=/.test(props.detail?.html || ''))
+const isThread = computed(() => (props.thread?.length || 0) > 1)
+const threadMessages = computed(() => (isThread.value ? props.thread : []))
+
+const hasRemoteImages = computed(() => {
+  const html = isThread.value
+    ? threadMessages.value.map((message) => message.html || '').join('')
+    : props.detail?.html || ''
+  return /data-guaxi-remote-src=/.test(html)
+})
 
 const imagesBlocked = computed(() => hasRemoteImages.value && !imagesAllowed.value)
 
@@ -191,6 +282,66 @@ const renderedHtml = computed(() => {
   return upgradeQuoteCards(restored)
 })
 
+// ---------------- 会话卡片 ----------------
+
+function threadKeyOf(message) {
+  return `${message.accountId}:${message.folder}:${message.uid}`
+}
+
+function threadSeed(message) {
+  return avatarSeed(message.fromName, message.fromAddr)
+}
+
+function threadName(message) {
+  return (message.fromName || '').trim() || message.fromAddr || '（未知发件人）'
+}
+
+function threadDate(message) {
+  if (!message.date) return ''
+  return new Date(message.date * 1000).toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+}
+
+function threadRecipients(message) {
+  const names = (list) =>
+    (list || [])
+      .map((item) => item?.name || item?.address)
+      .filter(Boolean)
+      .slice(0, 4)
+  const to = names(message.to)
+  const cc = names(message.cc)
+  const parts = []
+  if (to.length) parts.push(`发给 ${to.join('、')}`)
+  if (cc.length) parts.push(`抄送 ${cc.join('、')}`)
+  return parts.join(' · ')
+}
+
+/** 会话里每封邮件的正文：历史和嵌套引用已经由上方卡片呈现，这里直接去掉。 */
+function threadBody(message) {
+  if (message.html) {
+    const restored = imagesBlocked.value
+      ? message.html
+      : message.html.replace(/data-guaxi-remote-src="([^"]*)"\s+src=""/g, 'src="$1"')
+    return upgradeQuoteCards(restored, { dropQuotes: true })
+  }
+  return `<pre class="mail-body--plain" style="white-space:pre-wrap;margin:0">${escapeHtml(
+    message.text || '',
+  )}</pre>`
+}
+
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
 /**
  * 把引用历史重排成 Apple Mail 式的消息卡片。
  *
@@ -200,7 +351,7 @@ const renderedHtml = computed(() => {
  * 处理方式：去掉旧的内联样式、补头像与主题占位，再交给 mail.css 的卡片样式。
  * DOMParser 解析出来的是惰性文档，不会执行脚本；正文本身也已在清洗层过滤过。
  */
-function upgradeQuoteCards(html) {
+function upgradeQuoteCards(html, { dropQuotes = false } = {}) {
   if (!html || !html.includes('blockquote')) return html
   try {
     const doc = new DOMParser().parseFromString(html, 'text/html')
@@ -214,6 +365,11 @@ function upgradeQuoteCards(html) {
       const text = head.textContent || ''
       return /@|写道|wrote/i.test(text) || /\d{1,2}:\d{2}/.test(text)
     })
+    // 会话视图：历史邮件已经是上方的独立卡片，正文里的引用块直接去掉，避免重复。
+    if (dropQuotes) {
+      for (const card of cards) card.remove()
+      return doc.body.innerHTML
+    }
     for (const card of cards) {
       card.classList.add('mail-quote--card')
       delete card.dataset.guaxiQuoteCard

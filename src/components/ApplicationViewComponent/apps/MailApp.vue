@@ -141,6 +141,7 @@
           @drag-start="onDragStart"
           @drag-end="onDragEnd"
           @load-more="store.loadMore"
+          @delete="onDeleteRow"
         />
 
         <div
@@ -166,6 +167,7 @@
         <MailReader
           v-if="store.detail || store.detailLoading"
           :detail="store.detail"
+          :thread="store.thread"
           :loading="store.detailLoading"
           :settings="settings"
           :theme-mode="store.theme?.mode || 'dark'"
@@ -731,6 +733,15 @@ async function saveMessageAs(row, kind) {
   notify(`已保存到 ${path}`)
 }
 
+async function onDeleteRow(row) {
+  try {
+    await store.runBatch('delete', null, [row])
+    notify('已删除')
+  } catch (error) {
+    notify(String(error?.message || error), true)
+  }
+}
+
 async function onRefreshFolders() {
   await store.refreshFolders()
   await store.loadMessages({ silent: true })
@@ -742,11 +753,9 @@ async function onOpenMessage(row) {
   if (settings.value.listCollapsed) {
     store.saveSettings({ listCollapsed: false }).catch(() => {})
   }
-  // 聚合行：先展开整个会话的列表，再打开最新那封，用户点一下就能看到来龙去脉。
+  // 聚合行：整个会话按封展开成独立卡片，而不是只打开最新一封再靠正文里的引用块。
   if (row?.threadUids?.length > 1) {
-    await store.loadThread(row)
-    const newest = row.threadUids.reduce((a, b) => (b.date > a.date ? b : a))
-    await store.openMessage(newest)
+    await store.openThread(row)
     return
   }
   await store.openMessage(row)
@@ -903,7 +912,10 @@ async function onToggleUnreadCurrent(detail) {
   detail.seen = !detail.seen
 }
 
-async function onSaveAttachment({ attachment }) {
+async function onSaveAttachment({ attachment, detail }) {
+  // 会话视图里附件可能属于任意一封邮件，不能固定用 store.detail（最新一封）。
+  const message = detail || store.detail
+  if (!message) return
   try {
     const { save } = await import('@tauri-apps/plugin-dialog')
     const dir = await save({ defaultPath: attachment.filename })
@@ -912,7 +924,7 @@ async function onSaveAttachment({ attachment }) {
     const parts = dir.replace(/\\/g, '/').split('/')
     const filename = parts.pop()
     const path = await store.saveAttachment(
-      store.detail,
+      message,
       { ...attachment, filename },
       parts.join('/'),
     )
@@ -925,6 +937,7 @@ async function onSaveAttachment({ attachment }) {
 function closeReader() {
   store.selected = null
   store.detail = null
+  store.thread = []
 }
 
 // ---------------- 搜索 ----------------

@@ -95,6 +95,8 @@ export const useMailStore = defineStore('mail', {
     activeLabel: '',
     selected: null,
     detail: null,
+    /** 会话视图：同一 thread 内每封邮件的详情（按时间升序）。 */
+    thread: [],
     detailLoading: false,
     composing: null,
     outbox: [],
@@ -342,6 +344,7 @@ export const useMailStore = defineStore('mail', {
       this.scope = 'all'
       this.activeLabel = ''
       this.detail = null
+      this.thread = []
       this.selected = null
       this.loadMessages()
       // 切账户时顺手把收件箱拉到最新：列表和侧栏计数不该停留在上一次同步。
@@ -399,6 +402,7 @@ export const useMailStore = defineStore('mail', {
       this.scope = 'folder'
       this.activeLabel = ''
       this.detail = null
+      this.thread = []
       this.selected = null
       this.loadMessages()
       // 本地库里可能还没同步过这个文件夹（列表会是空的，计数也不准）。
@@ -409,6 +413,7 @@ export const useMailStore = defineStore('mail', {
       this.scope = scope
       this.activeLabel = label
       this.detail = null
+      this.thread = []
       this.selected = null
       this.loadMessages()
       // 按角色聚合的视图同样要先同步：垃圾箱 / 已删除往往从没拉过邮件。
@@ -556,8 +561,9 @@ export const useMailStore = defineStore('mail', {
 
     async groupThreadsIfNeeded(rows) {
       if (!this.settings.groupThreads) return rows
-      // 只在「全部邮件」这类混合视图里聚合；搜索与按文件夹查看时用户要的是逐封结果。
-      if (this.searchQuery.trim() || this.scope !== 'all') return rows
+      // 搜索时用户要的是逐封结果；收件箱 / 全部邮件这类列表都按会话聚合，
+      // 这样点开任意一封都会进入「每封一张卡片」的会话视图。
+      if (this.searchQuery.trim()) return rows
 
       const buckets = new Map()
       for (const row of rows) {
@@ -933,6 +939,7 @@ export const useMailStore = defineStore('mail', {
 
     async openMessage(row) {
       this.selected = row
+      this.thread = []
       this.detailLoading = true
       const wasUnseen = !row.seen
       try {
@@ -962,6 +969,84 @@ export const useMailStore = defineStore('mail', {
       } catch (error) {
         logger.error('打开邮件失败', error)
         this.lastError = String(error?.message || error)
+        this.detail = null
+      } finally {
+        this.detailLoading = false
+      }
+    },
+
+    /**
+     * 打开一个会话：把同一 thread 的每封邮件都取出来，按时间升序展示成独立卡片。
+     * 以前只打开最新一封、把历史留在正文的引用块里；现在阅读区本身就是会话。
+     */
+    async openThread(row) {
+      let rows = (row.threadUids || []).filter(Boolean)
+      // 列表里的聚合行只包含当前文件夹的邮件；到库里按 thread_key 再查一次，
+      // 才能把「已发送」里的回复也带进会话。只取同一个账户，避免不同账户
+      // 恰好同主题的邮件被误并进同一个会话。
+      if (row.threadKey) {
+        try {
+          const threadRows = await invoke('mail_thread', { threadKey: row.threadKey })
+          const sameAccount = (threadRows || []).filter(
+            (item) => item.accountId === row.accountId,
+          )
+          if (sameAccount.length > rows.length) rows = sameAccount
+        } catch (error) {
+          logger.warn('加载会话列表失败', error)
+        }
+      }
+      rows = rows.slice().sort((a, b) => (Number(a.date) || 0) - (Number(b.date) || 0)).slice(-30)
+      if (rows.length < 2) return this.openMessage(row)
+      this.selected = row
+      this.thread = []
+      this.detailLoading = true
+      const deltas = new Map()
+      for (const item of rows) {
+        if (item.seen) continue
+        const key = `${item.accountId}\u0000${item.folder}`
+        const entry = deltas.get(key) || {
+          accountId: item.accountId,
+          folder: item.folder,
+          count: 0,
+        }
+        entry.count += 1
+        deltas.set(key, entry)
+      }
+      try {
+        const details = await Promise.all(
+          rows.map((item) =>
+            invoke('mail_get_message', {
+              accountId: item.accountId,
+              folder: item.folder,
+              uid: item.uid,
+            }).catch(() => null),
+          ),
+        )
+        const list = details
+          .filter(Boolean)
+          .sort((a, b) => (Number(a.date) || 0) - (Number(b.date) || 0))
+        if (!list.length) throw new Error('会话内容加载失败')
+        this.thread = list
+        this.detail = list[list.length - 1]
+        const seenKeys = new Set(
+          rows.map((item) => `${item.accountId}:${item.folder}:${item.uid}`),
+        )
+        for (const item of rows) item.seen = true
+        // 列表里同一批邮件的行也要同步成已读，否则会话卡片已是已读、列表还是粗体。
+        for (const message of this.messages) {
+          if (seenKeys.has(`${message.accountId}:${message.folder}:${message.uid}`)) {
+            message.seen = true
+          }
+        }
+        for (const entry of deltas.values()) {
+          this.adjustFolderCount(entry.accountId, entry.folder, { unread: -entry.count })
+          scheduleFolderRefresh(this, entry.accountId)
+        }
+        await this.reloadUnread()
+      } catch (error) {
+        logger.error('打开会话失败', error)
+        this.lastError = String(error?.message || error)
+        this.thread = []
         this.detail = null
       } finally {
         this.detailLoading = false
@@ -1470,16 +1555,36 @@ function buildCompose(mode, source, account, settings) {
   if (!source) return base
 
   const from = source.fromAddr || ''
-  const isMine = from === account.email
+  const self = String(account.email || '').trim().toLowerCase()
+  const isMine = from.trim().toLowerCase() === self
   if (mode === 'reply' || mode === 'replyAll') {
     // 自己发的邮件点「回复」应当回给原收件人，而不是自己。
-    const primary = isMine ? source.toJson : from
-    base.to = parseAddressList(primary)
+    const primary = parseAddressList(isMine ? source.toJson : from)
     if (mode === 'replyAll') {
-      base.cc = parseAddressList(source.ccJson).filter(
-        (addr) => !addr.includes(account.email) && !base.to.includes(addr),
-      )
+      // 全部回复 = 原发件人 + 原收件人 + 原抄送，去掉自己、按地址去重。
+      // 以前只带「发件人 + 原抄送」，原 To 里的其他收件人会被丢掉。
+      const addressKey = (token) => {
+        const text = String(token || '')
+        const match = text.match(/<([^>]+)>/)
+        return (match ? match[1] : text).trim().toLowerCase()
+      }
+      const seen = new Set()
+      const add = (tokens, target) => {
+        for (const token of tokens) {
+          const key = addressKey(token)
+          if (!key || key === self || seen.has(key)) continue
+          seen.add(key)
+          target.push(token)
+        }
+      }
+      base.to = []
+      add(primary, base.to)
+      add(parseAddressList(source.toJson), base.to)
+      base.cc = []
+      add(parseAddressList(source.ccJson), base.cc)
       base.showCc = base.cc.length > 0
+    } else {
+      base.to = primary
     }
     base.subject = replySubject(source.subject)
     base.inReplyTo = source.messageId || null

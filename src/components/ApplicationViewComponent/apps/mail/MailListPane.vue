@@ -124,6 +124,7 @@
             :checked="isChecked(item.row)"
             @toggle="(v) => $emit('toggle-select', item.row, v)"
             @star="(v) => $emit('toggle-star', item.row, v)"
+            @delete="$emit('delete', item.row)"
           />
         </article>
       </div>
@@ -153,6 +154,7 @@
             :checked="isChecked(row)"
             @toggle="(v) => $emit('toggle-select', row, v)"
             @star="(v) => $emit('toggle-star', row, v)"
+            @delete="$emit('delete', row)"
           />
         </article>
       </template>
@@ -187,6 +189,7 @@ const emit = defineEmits([
   'drag-end',
   'load-more',
   'active-change',
+  'delete',
 ])
 
 const props = defineProps({

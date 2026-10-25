@@ -89,6 +89,7 @@
 .mail-shell {
   flex: 1 1 auto;
   display: grid;
+  position: relative;
   /* 宽度由 MailApp 写在行内样式里（可拖拽），这里只给兜底值。 */
   /* 侧栏 / 分隔条 / 列表 / 分隔条 / 阅读器
      分隔条净占 6px（元素 11px + margin-left:-5px），刚好够画出细线与手柄。 */
@@ -124,19 +125,21 @@
 }
 
 .mail-shell.is-list-collapsed {
-  grid-template-columns: var(--mail-sidebar-w, 232px) 6px 24px minmax(0, 1fr);
+  /* 展开入口改成浮在阅读区左缘的小胶囊，不占一列——以前留 24px 展开条，
+     和侧栏折叠后的干净边缘对比起来像一道难看的缝。 */
+  grid-template-columns: var(--mail-sidebar-w, 232px) 6px minmax(0, 1fr);
 }
 /* 侧栏折叠 + 列表折叠：子节点是「展开条 + 阅读器」，没有侧栏也没有侧栏分隔条。 */
 .mail-shell.is-sidebar-collapsed.is-list-collapsed {
-  grid-template-columns: 24px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .mail-shell.is-list-collapsed:not(:has(.mail-reader)) {
-  grid-template-columns: var(--mail-sidebar-w, 232px) 6px 24px;
+  grid-template-columns: var(--mail-sidebar-w, 232px) 6px minmax(0, 1fr);
 }
 
 .mail-shell.is-sidebar-collapsed.is-list-collapsed:not(:has(.mail-reader)) {
-  grid-template-columns: 24px;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 /* ---------- 栏边界：可拖拽的分隔条 + 折叠手柄 ---------- */
@@ -216,13 +219,25 @@
   border-right: 1px solid var(--mail-border);
 }
 
-/* 列表折叠后的展开条：跟左侧栏同一个底色，看起来是「列表栏被收成了一条」，
-   而不是阅读区边上悬着一个孤零零的按钮。 */
+/* 列表折叠后的展开条：浮在阅读区左缘的小胶囊，不占布局宽度。 */
 .mail-expand-rail.is-list {
-  width: 24px;
-  background: var(--mail-sidebar);
-  border-right: 1px solid var(--mail-border);
-  padding-left: 2px;
+  position: absolute;
+  z-index: 6;
+  top: 50%;
+  left: calc(var(--mail-sidebar-w, 232px) + 3px);
+  transform: translate(-50%, -50%);
+  width: 16px;
+  height: 46px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  background: var(--mail-panel);
+  border: 1px solid var(--mail-border);
+  border-radius: 9px;
+  box-shadow: var(--mail-shadow);
+}
+.mail-shell.is-sidebar-collapsed .mail-expand-rail.is-list {
+  left: 8px;
 }
 
 .mail-expand-rail .mail-collapse-handle {
@@ -608,7 +623,7 @@
   /* 三列：复选框槽 + 头像 + 内容。复选框必须有自己的列——
      以前用绝对定位压在左上角，会和头像（以及第一行文字）重叠。
      日期与标记都靠 flex 的 margin-left:auto 贴右，不再单开一列。 */
-  grid-template-columns: 16px 30px minmax(0, 1fr);
+  grid-template-columns: 16px 30px minmax(0, 1fr) 22px;
   grid-template-rows: auto auto auto;
   column-gap: 8px;
   row-gap: 2px;
@@ -885,7 +900,9 @@
 }
 
 .mail-body .guaxi-mail-body {
-  max-width: 76ch;
+  /* 卡片占满整个正文列：以前限制 76ch 会在右侧留出一大块空白。 */
+  max-width: none;
+  width: 100%;
 }
 
 /* ---------- 暗色阅读 ----------
@@ -905,6 +922,72 @@
 .mail-doc-dark .mail-body canvas,
 .mail-doc-dark .mail-body iframe {
   filter: invert(1) hue-rotate(180deg);
+}
+
+/* ---------- 会话视图：每封邮件一张独立卡片 ---------- */
+.mail-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.mail-thread-card {
+  min-width: 0;
+  border: 1px solid var(--mail-border);
+  border-radius: 12px;
+  background: var(--mail-reader-bg);
+  overflow: hidden;
+}
+.mail-thread-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--mail-border);
+}
+.mail-thread-avatar {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+}
+.mail-thread-who {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.mail-thread-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--mail-text);
+}
+.mail-thread-subject,
+.mail-thread-to {
+  font-size: 11.5px;
+  color: var(--mail-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mail-thread-date {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--mail-text-muted);
+  white-space: nowrap;
+}
+/* 卡片内的正文不再单独铺一张纸：继承卡片的底色，只保留排版。
+   注意放在 .mail-doc-dark .mail-body 之后，覆盖掉它的信纸背景。 */
+.mail-thread-card .mail-body {
+  margin: 0;
+  padding: 12px 16px 16px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .mail-body--plain {
@@ -1206,6 +1289,18 @@
 }
 .mail-btn.is-primary:hover {
   filter: brightness(1.08);
+}
+/* 工具栏图标按钮：28×28 的方钮，悬停/激活只换颜色（tooltip 由 title 提供）。 */
+.mail-btn.is-icon {
+  width: 28px;
+  min-width: 28px;
+  padding: 0;
+  justify-content: center;
+}
+.mail-btn.is-icon.is-on {
+  background: var(--mail-accent-soft);
+  border-color: transparent;
+  color: var(--mail-accent);
 }
 .mail-btn.is-danger:hover {
   border-color: var(--mail-danger);
@@ -1666,12 +1761,21 @@
 }
 .mail-compose-editor img {
   max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 10px 0;
+  border-radius: 6px;
 }
 .mail-compose-editor blockquote {
   margin: 10px 0;
   padding-left: 12px;
   border-left: 2px solid var(--mail-quote-bar);
   color: var(--mail-text-secondary);
+}
+/* 发送是主操作：保持宽度与字重，窗口变窄时也不会被挤成小按钮。 */
+.mail-send-btn {
+  min-width: 84px;
+  font-weight: 600;
 }
 
 .mail-compose-source {
@@ -1752,11 +1856,12 @@
 }
 
 .mail-row-check {
-  /* 复选框有自己的网格列，垂直居中，不再用绝对定位压在头像上。 */
+  /* 复选框有自己的网格列，靠近行首左上角（Apple Mail 的列表习惯），不再垂直居中。 */
   grid-column: 1;
   grid-row: 1 / span 3;
-  align-self: center;
+  align-self: start;
   justify-self: center;
+  margin-top: 8px;
   display: grid;
   place-items: center;
   width: 16px;
@@ -1779,6 +1884,36 @@
 .mail-row-check input {
   accent-color: var(--mail-accent);
   cursor: pointer;
+}
+
+/* 行内删除：悬停/聚焦时出现在最右侧，避免每次都先选中再翻工具栏。 */
+.mail-row-actions {
+  grid-column: 4;
+  grid-row: 1 / span 3;
+  align-self: center;
+  justify-self: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+.mail-row:hover .mail-row-actions,
+.mail-row:focus-within .mail-row-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+.mail-row-delete {
+  border: 0;
+  background: transparent;
+  color: var(--mail-text-muted);
+  padding: 3px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.mail-row-delete:hover {
+  color: var(--mail-danger);
+  background: var(--mail-panel-hover);
 }
 
 .mail-selectall input {

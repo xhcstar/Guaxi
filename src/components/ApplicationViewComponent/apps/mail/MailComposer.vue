@@ -176,17 +176,22 @@
 
         <span style="margin-left: auto"></span>
         <button class="mail-btn" :disabled="sending" @click="$emit('save-draft')">保存草稿</button>
-        <button class="mail-btn" :disabled="sending || !canSend" @click="send(false)">
-          {{ sending ? '发送中…' : '发送' }}
-        </button>
         <button
           v-if="undoSeconds > 0"
-          class="mail-btn is-primary"
+          class="mail-btn"
           :disabled="sending || !canSend"
           :title="`${undoSeconds} 秒内可以撤回`"
           @click="send(true)"
         >
           延迟 {{ undoSeconds }} 秒发送
+        </button>
+        <!-- 发送是主操作：只有它是实心主按钮；延迟发送退成次要按钮。 -->
+        <button
+          class="mail-btn is-primary mail-send-btn"
+          :disabled="sending || !canSend"
+          @click="send(false)"
+        >
+          {{ sending ? '发送中…' : '发送' }}
         </button>
       </div>
 
@@ -248,7 +253,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
 import { ContractOutline, ExpandOutline } from '@vicons/ionicons5'
 import { open } from '@tauri-apps/plugin-dialog'
-import { invoke } from '@tauri-apps/api/core'
+import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { useContactsStore } from '../../../../stores/contactsStore'
 import AddressInput from './AddressInput.vue'
 import AddressPicker from './AddressPicker.vue'
@@ -305,6 +310,7 @@ onMounted(async () => {
   // 避免 Vue 与浏览器的编辑结果互相覆盖（contenteditable 里的 DOM 是浏览器在管）。
   editorRef.value.innerHTML = props.draft.html || ''
   lastHtml = props.draft.html || ''
+  resolveCidImages()
   await nextTick()
   editorRef.value.focus()
 })
@@ -316,17 +322,51 @@ watch(sourceMode, async (on) => {
     if (editorRef.value) {
       editorRef.value.innerHTML = htmlSource.value
       lastHtml = htmlSource.value
+      resolveCidImages()
     }
   } else {
-    htmlSource.value = editorRef.value?.innerHTML || props.draft.html || ''
+    htmlSource.value = serializeEditorHtml() || props.draft.html || ''
   }
 })
 
 function onEditorInput() {
-  const html = editorRef.value?.innerHTML || ''
+  const html = serializeEditorHtml()
   if (html === lastHtml) return
   lastHtml = html
   emit('update', { html, text: htmlToText(html) })
+}
+
+/**
+ * 编辑器里的 `cid:` 图片没法直接显示：用 asset URL 映射到本地临时文件，
+ * 并把原始 cid 记在 `data-cid` 上；序列化时再换回 `cid:`（发信/存草稿要用）。
+ */
+function resolveCidImages() {
+  if (!editorRef.value) return
+  const images = props.draft.inlineImages || []
+  if (!images.length) return
+  const map = new Map(
+    images.map((img) => [String(img.contentId || '').replace(/^<|>$/g, ''), img.path]),
+  )
+  editorRef.value.querySelectorAll('img').forEach((img) => {
+    const src = img.getAttribute('src') || ''
+    if (!/^cid:/i.test(src)) return
+    const cid = decodeURIComponent(src.slice(4)).replace(/^<|>$/g, '')
+    const path = map.get(cid)
+    if (!path) return
+    img.dataset.cid = cid
+    img.src = convertFileSrc(path)
+  })
+}
+
+/** 生成用于草稿/发送的 HTML：把显示用的 asset URL 换回 `cid:`。 */
+function serializeEditorHtml() {
+  if (!editorRef.value) return ''
+  const clone = editorRef.value.cloneNode(true)
+  clone.querySelectorAll('img[data-cid]').forEach((img) => {
+    img.setAttribute('src', `cid:${img.dataset.cid}`)
+    img.removeAttribute('data-cid')
+  })
+  return clone.innerHTML
 }
 
 function format(command, value = null) {
@@ -362,24 +402,45 @@ function toggleSource() {
 /** 粘贴时只保留纯文本与基本行内格式：外部网页的样式会毁掉整封邮件的排版。 */
 function onPaste(event) {
   // 剪贴板里的图片：优先作为内联图（截图贴进正文是最常见的用法）。
-  const files = Array.from(event.clipboardData?.files || []).filter((f) =>
-    String(f.type || '').startsWith('image/'),
+  // 有些环境只填 clipboardData.files、有些只填 items，两种都取。
+  const imageItems = Array.from(event.clipboardData?.items || []).filter(
+    (item) => item.kind === 'file' && String(item.type || '').startsWith('image/'),
   )
+  const files = imageItems.length
+    ? imageItems.map((item) => item.getAsFile()).filter(Boolean)
+    : Array.from(event.clipboardData?.files || []).filter((file) =>
+        String(file.type || '').startsWith('image/'),
+      )
   if (files.length) {
     event.preventDefault()
-    for (const file of files) {
-      const reader = new FileReader()
-      reader.onload = () => {
-        const dataUrl = String(reader.result || '')
-        const match = dataUrl.match(/^data:([^;]+);base64,(.*)$/)
-        if (!match) return
-        // 粘贴的图片没有本地路径：直接以 data URL 插入正文。
-        // 发送时仍能显示（邮件客户端都支持内联 data URL 的降级渲染）。
-        document.execCommand('insertHTML', false, `<img src="${dataUrl}" alt="粘贴的图片" />`)
-        onEditorInput()
+    // 异步读文件期间编辑器可能失焦：先记住光标位置，读完再插回去。
+    const range = currentRange()
+    Promise.all(files.map(readFileAsDataUrl)).then(async (urls) => {
+      const added = []
+      const parts = []
+      for (let index = 0; index < urls.length; index += 1) {
+        const url = urls[index]
+        if (!url) continue
+        const inline = await materializePastedImage(url, index).catch((error) => {
+          logger.warn('粘贴图片落盘失败，保留 data URL', error)
+          return null
+        })
+        if (inline) {
+          added.push(inline)
+          parts.push(
+            `<img src="cid:${inline.contentId}" data-cid="${inline.contentId}" alt="粘贴的图片" />`,
+          )
+        } else {
+          parts.push(`<img src="${url}" alt="粘贴的图片" />`)
+        }
       }
-      reader.readAsDataURL(file)
-    }
+      if (added.length) {
+        emit('update', { inlineImages: [...(props.draft.inlineImages || []), ...added] })
+      }
+      insertHtmlAt(range, parts.join(''))
+      onEditorInput()
+      nextTick(resolveCidImages)
+    })
     return
   }
   const html = event.clipboardData?.getData('text/html')
@@ -387,6 +448,8 @@ function onPaste(event) {
     event.preventDefault()
     const cleaned = sanitizePastedHtml(html)
     document.execCommand('insertHTML', false, cleaned)
+    // 有些浏览器会把刚插入的表格/图片整块选中，留下一条蓝色高亮。
+    collapseSelectionToEnd()
     onEditorInput()
     return
   }
@@ -394,8 +457,71 @@ function onPaste(event) {
   if (text != null) {
     event.preventDefault()
     document.execCommand('insertText', false, text)
+    collapseSelectionToEnd()
     onEditorInput()
   }
+}
+
+function currentRange() {
+  const selection = window.getSelection()
+  if (!selection || !selection.rangeCount) return null
+  return selection.getRangeAt(0).cloneRange()
+}
+
+function collapseSelectionToEnd() {
+  const selection = window.getSelection()
+  if (!selection || !selection.rangeCount) return
+  const range = selection.getRangeAt(0)
+  range.collapse(false)
+  selection.removeAllRanges()
+  selection.addRange(range)
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => resolve('')
+    reader.readAsDataURL(file)
+  })
+}
+
+/**
+ * 粘贴的图片先落到系统临时目录，再以内联附件（cid）插入正文：
+ * 直接发 data URL，多数邮箱（Gmail/Outlook）会把图片当不安全内容剥掉。
+ */
+async function materializePastedImage(dataUrl, index) {
+  const match = dataUrl.match(/^data:image\/([a-zA-Z0-9.+-]+);base64,([\s\S]+)$/)
+  if (!match) return null
+  const extension =
+    match[1].toLowerCase() === 'jpeg' ? 'jpg' : match[1].replace(/[^a-z0-9]/gi, '') || 'png'
+  const [{ writeFile, mkdir }, { appDataDir, join }] = await Promise.all([
+    import('@tauri-apps/plugin-fs'),
+    import('@tauri-apps/api/path'),
+  ])
+  // 放应用数据目录而不是系统临时目录：草稿可能留几天，TEMP 被清理会让图片变破图。
+  const dir = await join(await appDataDir(), 'mail-inline')
+  await mkdir(dir, { recursive: true }).catch(() => {})
+  const contentId = `guaxi-${Date.now().toString(36)}-${index}-${Math.random().toString(36).slice(2, 8)}@guaxi`
+  const name = `粘贴图片-${Date.now()}-${index}.${extension}`
+  const path = await join(dir, name)
+  const binary = atob(match[2].replace(/\s/g, ''))
+  const bytes = Uint8Array.from(binary, (ch) => ch.charCodeAt(0))
+  await writeFile(path, bytes)
+  return { contentId, path, name }
+}
+
+/** 把 HTML 插到记下的光标处，末尾补一个换行并把光标放过去。 */
+function insertHtmlAt(range, html) {
+  if (!html) return
+  const selection = window.getSelection()
+  if (range && selection) {
+    selection.removeAllRanges()
+    selection.addRange(range)
+  }
+  document.execCommand('insertHTML', false, `${html}<br>`)
+  collapseSelectionToEnd()
+  editorRef.value?.focus()
 }
 
 /** 只保留白色名单里的标签；class/id/style 全部丢弃。 */
@@ -531,6 +657,7 @@ function addInlineImages(paths) {
     )
   }
   emit('update', { inlineImages: next })
+  nextTick(resolveCidImages)
   onEditorInput()
 }
 
@@ -540,7 +667,9 @@ function removeInlineImage(contentId) {
   // 正文里对应的 img 一并删掉，否则收信端会看到一个破图。
   if (editorRef.value) {
     editorRef.value.querySelectorAll('img').forEach((img) => {
-      if (img.getAttribute('src') === `cid:${contentId}`) img.remove()
+      if (img.dataset.cid === contentId || img.getAttribute('src') === `cid:${contentId}`) {
+        img.remove()
+      }
     })
     onEditorInput()
   }
@@ -689,7 +818,7 @@ async function stashNow() {
       ...props.draft,
       id: draftId.value,
       // 编辑区里的最新内容优先：用户可能还没触发 input 事件。
-      html: editorRef.value && !sourceMode.value ? editorRef.value.innerHTML : htmlSource.value,
+      html: editorRef.value && !sourceMode.value ? serializeEditorHtml() : htmlSource.value,
     }
     await invoke('mail_stash_draft', { draft: payload })
     lastSavedAt.value = Date.now()
@@ -735,7 +864,7 @@ async function send(useOutbox) {
   if (sending.value) return
   // 把编辑区最新内容并入草稿（用户可能还没触发 input 事件）。
   if (!sourceMode.value && editorRef.value) {
-    const html = editorRef.value.innerHTML
+    const html = serializeEditorHtml()
     emit('update', { html, text: htmlToText(html) })
   } else {
     emit('update', { html: htmlSource.value, text: htmlToText(htmlSource.value) })
