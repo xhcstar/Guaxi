@@ -381,10 +381,9 @@ fn probe_cuda() -> bool {
         return false;
     }
 
-    // 没编 gpu feature 时，sherpa-onnx 是**静态 CPU 版**：进程里根本没有 onnxruntime.dll，
-    // 动态加载 CUDA EP 必然失败（错误码 1114），和「这台机器有没有 GPU」无关。
-    // 这种构建下直接判定不可用，并明确告诉用户该用哪条命令，免得把构建配置问题
-    // 误读成显卡/驱动问题。
+    // 没编 gpu feature 时，sherpa-onnx 是**静态 CPU 版**：进程里根本没有动态
+    // onnxruntime，CUDA EP 无从加载，和「这台机器有没有 GPU」无关。这种构建下
+    // 直接判定不可用，并明确告诉用户该用哪条命令。
     if !cfg!(feature = "gpu") {
         info!(
             "当前为 CPU 版构建（未启用 gpu feature，sherpa-onnx 静态链接）；\
@@ -399,29 +398,46 @@ fn probe_cuda() -> bool {
         return false;
     }
 
-    let mut attempted = Vec::new();
-    let mut loaded = false;
-    for candidate in cuda_provider_dll_candidates() {
-        match load_dynamic_library(&candidate) {
-            Ok(()) => {
-                loaded = true;
-                break;
-            }
-            Err(err) => attempted.push(format!("{}（{}）", candidate.display(), err)),
-        }
-    }
-    if !loaded {
+    // 只判断 EP 文件在不在于 onnxruntime 的搜索路径上，**不**自己 LoadLibrary 它。
+    //
+    // 为什么不能裸加载：CUDA EP 的 DllMain 依赖 onnxruntime 在创建 Env/Session 时
+    // 才装配好的 shared-provider 回调；进程里直接 LoadLibrary 会在它自己的初始化
+    // 里空指针崩溃（Windows 错误码 1114），而 ORT 真正建会话时加载同一个 DLL 是
+    // 正常的——2026-10-25 用同一份 EP 分别在 sherpa CLI 与进程内 TTS 里验证过。
+    // 所以裸加载是**误报**，EP 交给 onnxruntime 自己加载。
+    let candidates = cuda_provider_dll_candidates();
+    let Some(ep_path) = candidates.iter().find(|path| path.is_file()) else {
+        let tried = candidates
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join("；");
         warn!(
-            "CUDA 不可用（CUDA EP 动态库加载失败，通常是 CUDA 运行时版本旧于 EP 库要求的版本），\
-             本次改用 CPU：{}",
-            attempted.join("；")
+            "CUDA 不可用（找不到 onnxruntime_providers_cuda.dll，候选：{}），本次改用 CPU",
+            tried
         );
+        return false;
+    };
+
+    // EP 静态导入 cudart 的 4 个新符号（CUDA 12.8+ 才有）。旧运行时缺这些符号时，
+    // ORT 加载 EP 会直接 abort，Rust 拦不住，所以这里先替它确认一遍。
+    if let Err(err) = check_cudart_symbols() {
+        warn!("CUDA 不可用（{}），本次改用 CPU", err);
         return false;
     }
 
-    // EP 库自己的导入表只挂了 cudart/cublas/cublasLt，cuDNN 是它建会话时再去加载的。
-    // 少一个 cuDNN，ORT 就在那里抛 C++ 异常把进程带走（同上，Rust 拦不住），
-    // 所以这里替它先试一次。
+    // EP 的静态导入还有 cublas / cublasLt；缺任何一个，ORT 加载 EP 时会抛异常 abort。
+    for dll in ["cublas64_12.dll", "cublasLt64_12.dll"] {
+        if let Err(err) = load_dynamic_library_by_name(dll) {
+            warn!(
+                "CUDA 不可用（{} 加载失败：{}），本次改用 CPU",
+                dll, err
+            );
+            return false;
+        }
+    }
+
+    // cuDNN 是 EP 建会话时才按名字加载的；缺了同样会把进程带走，先试一次。
     if let Err(err) = load_dynamic_library_by_name(CUDNN_DLL) {
         warn!(
             "CUDA 不可用（cuDNN 加载失败：{}），本次改用 CPU；缺 cuDNN {}",
@@ -430,17 +446,21 @@ fn probe_cuda() -> bool {
         return false;
     }
 
+    info!(
+        provider_dll = %ep_path.display(),
+        "CUDA 运行库检查通过；CUDA EP 将由 onnxruntime 在建会话时加载"
+    );
     true
 }
 
 /// cuDNN 9 的主库名。CUDA 12 / 13 两种变体都叫这个名字。
 const CUDNN_DLL: &str = "cudnn64_9.dll";
 
-/// CUDA EP 动态库的候选位置。
+/// CUDA EP 动态库的候选位置（只用来判断「文件在不在」）。
 ///
 /// onnxruntime 是拿裸文件名去 LoadLibrary 的，命中的是 Windows 的标准搜索顺序；
-/// exe 目录排第一，与实测崩溃时它选中的那个路径一致。打包分发会把 sherpa 的运行库
-/// 收在 `utils/sherpa-onnx` 下，那里也列一个候选。
+/// exe 目录排第一，打包分发会把 sherpa 的运行库收在 `utils/sherpa-onnx` 下，
+/// 那里也列一个候选。真正加载由 onnxruntime 在建会话时完成，见 `probe_cuda`。
 fn cuda_provider_dll_candidates() -> Vec<PathBuf> {
     const EP_DLL: &str = "onnxruntime_providers_cuda.dll";
 
@@ -457,39 +477,59 @@ fn cuda_provider_dll_candidates() -> Vec<PathBuf> {
     ]
 }
 
-/// 真正加载一次动态库，失败原因里带上 Windows 错误码。
+/// CUDA 运行时库名。
+const CUDART_DLL: &str = "cudart64_12.dll";
+
+/// 确认 CUDA 运行时具备 EP 需要的 4 个新导出。
 ///
-/// 只 LoadLibrary 不取符号：导入表解析本身就覆盖了「依赖 DLL 缺失」和
-/// 「依赖 DLL 版本旧、没有需要的导出」这两种情形，正是要拦下的两类问题。
+/// 这 4 个符号从 CUDA 12.8 才有；旧 cudart 会让 ORT 在加载 EP 时 abort。
+/// 这里只加载 cudart（不加载 EP）、逐个 GetProcAddress，命中不了就明确报出缺哪个。
 #[cfg(target_os = "windows")]
-fn load_dynamic_library(path: &Path) -> Result<(), String> {
-    use std::ffi::OsStr;
+fn check_cudart_symbols() -> Result<(), String> {
+    use std::ffi::{c_void, CString, OsStr};
     use std::iter::once;
     use std::os::windows::ffi::OsStrExt;
 
     #[link(name = "kernel32")]
     extern "system" {
-        fn LoadLibraryW(lp_lib_file_name: *const u16) -> *mut std::ffi::c_void;
-        fn FreeLibrary(h_lib_module: *mut std::ffi::c_void) -> i32;
+        fn LoadLibraryW(lp_lib_file_name: *const u16) -> *mut c_void;
+        fn GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void;
         fn GetLastError() -> u32;
     }
 
-    let wide = OsStr::new(path.as_os_str())
+    let wide = OsStr::new(CUDART_DLL)
         .encode_wide()
         .chain(once(0))
         .collect::<Vec<u16>>();
     let handle = unsafe { LoadLibraryW(wide.as_ptr()) };
     if handle.is_null() {
-        return Err(format!("错误码={}", unsafe { GetLastError() }));
+        return Err(format!(
+            "{} 无法加载（错误码={}）",
+            CUDART_DLL,
+            unsafe { GetLastError() }
+        ));
     }
-    unsafe {
-        let _ = FreeLibrary(handle);
+
+    for symbol in [
+        "cudaLibraryLoadData",
+        "cudaLibraryGetKernel",
+        "cudaLibraryUnload",
+        "cudaKernelSetAttributeForDevice",
+    ] {
+        let name = CString::new(symbol).map_err(|e| e.to_string())?;
+        let proc = unsafe { GetProcAddress(handle, name.as_ptr() as *const u8) };
+        if proc.is_null() {
+            return Err(format!(
+                "{} 缺少导出 {}（CUDA 运行时版本过旧，需要 12.8+）",
+                CUDART_DLL, symbol
+            ));
+        }
     }
     Ok(())
 }
 
 #[cfg(not(target_os = "windows"))]
-fn load_dynamic_library(_path: &Path) -> Result<(), String> {
+fn check_cudart_symbols() -> Result<(), String> {
     Ok(())
 }
 

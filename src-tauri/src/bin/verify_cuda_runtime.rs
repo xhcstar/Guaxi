@@ -6,8 +6,9 @@
 //! 下载的 GPU 版其实一直在跑 CPU。
 //!
 //! 判定口径与运行期 `guaxiservices::speech::config::cuda_available()` 保持一致：
-//! 加载 EP 库（顺带覆盖它对 cudart / cublas / cublasLt 的静态导入），再按名加载 cuDNN。
-//! 两处口径要一起改，否则会出现「构建说能用、运行却不用」的偏差。
+//! 检查 EP 文件、cudart 的关键导出与 cuDNN 是否齐备；**不**在独立进程里裸加载
+//! CUDA EP——那会在 EP 自己的 DllMain 里误报 1114（原因见 `check` 内注释）。
+//! 两处口径要一起改，否则会出现「构建说不能用、运行却能用」的偏差。
 //!
 //! 退出码刻意区分两类问题，让调用方决定是中断构建还是只提醒：
 //!   0 = 通过
@@ -114,15 +115,35 @@ fn check(dir: &Path) -> i32 {
         return EXIT_ENVIRONMENT;
     }
 
-    match load_library(&dir.join(EP_DLL)) {
+    // 不在这里 LoadLibrary CUDA EP。
+    //
+    // 原因（2026-10-25 实测）：EP 的 DllMain 依赖 onnxruntime 在创建 Env/Session 时
+    // 才装配的 shared-provider 回调。进程里裸加载它会在自己的初始化里空指针崩溃
+    // （错误码 1114），但 ORT 真正建会话时加载同一个 DLL 完全正常——同一份 EP 已经
+    // 在 sherpa CLI 与进程内合成里跑通。裸加载是误报，所以自检改为「运行库齐备性」：
+    //   · cudart 具备 EP 需要的 4 个 12.8+ 导出；
+    //   · cuDNN 9 能按名加载（EP 建会话时才会用到它）。
+    match check_cudart_symbols() {
         Ok(()) => {}
-        Err(code) => {
-            eprintln!(
-                "[cuda-verify] CUDA EP 加载失败（Windows 错误码={}）：{}",
-                code,
-                explain(code)
-            );
+        Err(message) => {
+            eprintln!("[cuda-verify] CUDA 运行库不满足要求：{message}");
             return EXIT_ENVIRONMENT;
+        }
+    }
+
+    // EP 的静态导入还有 cublas / cublasLt。
+    for name in ["cublas64_12.dll", "cublasLt64_12.dll"] {
+        match load_library_by_name(name) {
+            Ok(()) => {}
+            Err(code) => {
+                eprintln!(
+                    "[cuda-verify] {} 加载失败（Windows 错误码={}）：{}",
+                    name,
+                    code,
+                    explain(code)
+                );
+                return EXIT_ENVIRONMENT;
+            }
         }
     }
 
@@ -138,7 +159,7 @@ fn check(dir: &Path) -> i32 {
         }
     }
 
-    println!("[cuda-verify] 通过：CUDA EP 与 cuDNN 均可加载，GPU 可启用。");
+    println!("[cuda-verify] 通过：CUDA 运行库与 cuDNN 齐备；EP 将由 onnxruntime 建会话时加载。");
     EXIT_OK
 }
 
@@ -166,15 +187,16 @@ fn nvcuda_present() -> bool {
 
 #[cfg(target_os = "windows")]
 mod win {
-    use std::ffi::OsStr;
+    use std::ffi::{c_void, CString, OsStr};
     use std::iter::once;
     use std::os::windows::ffi::OsStrExt;
     use std::path::Path;
 
     #[link(name = "kernel32")]
     extern "system" {
-        fn LoadLibraryW(lp_lib_file_name: *const u16) -> *mut std::ffi::c_void;
-        fn FreeLibrary(h_lib_module: *mut std::ffi::c_void) -> i32;
+        fn LoadLibraryW(lp_lib_file_name: *const u16) -> *mut c_void;
+        fn FreeLibrary(h_lib_module: *mut c_void) -> i32;
+        fn GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void;
         fn SetDllDirectoryW(lp_path_name: *const u16) -> i32;
         fn GetLastError() -> u32;
     }
@@ -189,17 +211,39 @@ mod win {
         unsafe { SetDllDirectoryW(wide.as_ptr()) != 0 }
     }
 
-    /// 只加载、不取符号：导入表解析本身就能同时覆盖「依赖缺失」和「依赖版本旧、没有需要的导出」。
-    pub fn load_library(path: &Path) -> Result<(), u32> {
-        let wide = wide(path.as_os_str());
-        let handle = unsafe { LoadLibraryW(wide.as_ptr()) };
+    /// 校验 cudart 是否具备 CUDA EP 需要的 4 个 12.8+ 导出。
+    pub fn check_cudart_symbols() -> Result<(), String> {
+        let handle = unsafe { LoadLibraryW(wide(OsStr::new("cudart64_12.dll")).as_ptr()) };
         if handle.is_null() {
-            return Err(unsafe { GetLastError() });
+            return Err(format!(
+                "cudart64_12.dll 无法加载（Windows 错误码={}）",
+                unsafe { GetLastError() }
+            ));
+        }
+        let mut missing = Vec::new();
+        for symbol in [
+            "cudaLibraryLoadData",
+            "cudaLibraryGetKernel",
+            "cudaLibraryUnload",
+            "cudaKernelSetAttributeForDevice",
+        ] {
+            let name = CString::new(symbol).map_err(|e| e.to_string())?;
+            let proc = unsafe { GetProcAddress(handle, name.as_ptr() as *const u8) };
+            if proc.is_null() {
+                missing.push(symbol);
+            }
         }
         unsafe {
             let _ = FreeLibrary(handle);
         }
-        Ok(())
+        if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "cudart64_12.dll 缺少导出 {}（需要 CUDA 12.8+ 运行时）",
+                missing.join("、")
+            ))
+        }
     }
 
     /// 按裸文件名加载，走标准搜索顺序（含 prepend_search_dir 加进去的那个目录）。
@@ -217,4 +261,4 @@ mod win {
 }
 
 #[cfg(target_os = "windows")]
-use win::{load_library, load_library_by_name, prepend_search_dir};
+use win::{check_cudart_symbols, load_library_by_name, prepend_search_dir};
