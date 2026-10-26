@@ -639,8 +639,9 @@
   border-bottom: 1px solid var(--mail-border);
   border-left: 2px solid transparent;
   /* 列表行是「选中的对象」而不是链接：Outlook / Mailspring 都用默认箭头，
-     手型会让人以为点了会跳转到别处。 */
-  cursor: default;
+     手型会让人以为点了会跳转到别处。用 !important 挡住宿主/第三方样式里
+     可能存在的 article / 可点击元素手型规则；行内按钮自己声明的 pointer 不受影响。 */
+  cursor: default !important;
   transition: background-color 0.12s ease;
 }
 /* 行内真正的链接型元素（星标、删除）才用手型。 */
@@ -651,6 +652,15 @@
 }
 .mail-row:hover {
   background: var(--mail-panel-hover);
+}
+/* 行内文字/头像也显式用箭头：某些宿主样式会把可点击容器里的 <span> 设成手型。 */
+.mail-row .mail-row-line,
+.mail-row .mail-row-from,
+.mail-row .mail-row-subject,
+.mail-row .mail-row-snippet,
+.mail-row .mail-row-date,
+.mail-row .mail-avatar {
+  cursor: default;
 }
 .mail-row.is-selected {
   background: var(--mail-selection);
@@ -1802,6 +1812,25 @@
   overflow: hidden;
 }
 
+/* 发送类操作放在标题栏右侧，给工具栏腾出整行。 */
+.mail-composer .mail-modal-head {
+  flex-wrap: wrap;
+}
+.mail-compose-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.mail-composer .mail-modal-close {
+  margin-left: 0;
+}
+.mail-compose-actions .mail-btn {
+  height: 28px;
+}
+
 /* 最大化：铺满整个可用区域，正文获得全部剩余高度。 */
 .mail-composer.is-maximized {
   width: 96vw !important;
@@ -1875,6 +1904,92 @@
   background: var(--mail-accent-soft);
   color: var(--mail-accent);
 }
+
+/* 工具栏里的字体 / 字号下拉：保持和其他图标按钮同高，不把工具栏撑成两行高。 */
+.mail-compose-toolbar .mail-fmt-select {
+  height: 26px;
+  max-width: 108px;
+  padding: 0 6px;
+  border: 1px solid var(--mail-border);
+  border-radius: 5px;
+  font-size: 11.5px;
+}
+.mail-compose-toolbar .mail-fmt-select.mail-fmt-font {
+  max-width: 118px;
+}
+.mail-fmt-strike {
+  text-decoration: line-through;
+}
+.mail-color-btn {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  line-height: 1;
+  overflow: hidden;
+}
+.mail-color-btn input[type='color'] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.mail-color-letter {
+  font-size: 12px;
+  font-weight: 600;
+}
+.mail-hilite-letter {
+  padding: 0 2px;
+  border-radius: 2px;
+  background: #fff3a3;
+  color: #22262c;
+  font-size: 11px;
+  font-weight: 600;
+}
+.mail-color-bar {
+  width: 14px;
+  height: 2.5px;
+  margin-top: 1px;
+  border-radius: 2px;
+}
+
+.mail-btn.is-on {
+  border-color: var(--mail-accent);
+  color: var(--mail-accent);
+  background: var(--mail-accent-soft);
+}
+
+/* 定时发送面板：贴在工具栏下方，不打断写信区的高度。 */
+.mail-schedule-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--mail-border);
+  background: var(--mail-bg-sunken);
+}
+.mail-schedule-presets,
+.mail-schedule-custom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.mail-schedule-custom {
+  margin-left: auto;
+}
+.mail-schedule-custom .mail-input {
+  width: 210px;
+  height: 28px;
+  flex: 0 0 auto;
+}
 .mail-fmt-sep {
   width: 1px;
   height: 16px;
@@ -1938,6 +2053,14 @@
   line-height: 1.65;
   resize: vertical;
   outline: 0;
+}
+
+/* Monaco 源码编辑器：占满正文区，自身负责滚动与布局。 */
+.mail-compose-source-editor {
+  position: relative;
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 260px;
 }
 
 .mail-attach-list {

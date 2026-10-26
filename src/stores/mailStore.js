@@ -109,6 +109,7 @@ export const useMailStore = defineStore('mail', {
     lastSyncAt: 0,
     lastError: '',
     pollTimer: null,
+    outboxTimer: null,
     unlisten: [],
     /** 已加载的页码（「加载更多」按页累加，不再硬编码 300 条）。 */
     pageCount: 1,
@@ -252,6 +253,10 @@ export const useMailStore = defineStore('mail', {
 
     dispose() {
       this.stopPolling()
+      if (this.outboxTimer) {
+        clearTimeout(this.outboxTimer)
+        this.outboxTimer = null
+      }
       for (const off of this.unlisten) {
         try {
           off?.()
@@ -480,24 +485,78 @@ export const useMailStore = defineStore('mail', {
 
     async deleteFolder(name) {
       if (!this.activeAccountId) throw new Error('请先选择账户')
-      await invoke('mail_delete_folder', { accountId: this.activeAccountId, name })
-      const list = (this.foldersByAccount[this.activeAccountId] || []).filter(
-        (f) => f.name !== name,
-      )
-      this.foldersByAccount = { ...this.foldersByAccount, [this.activeAccountId]: list }
-      if (this.activeFolder === name) {
-        const inbox = list.find((f) => f.role === 'inbox')
+      const accountId = this.activeAccountId
+      const before = this.foldersByAccount[accountId] || []
+      const wasActive = this.activeFolder === name
+      const previousFolder = this.activeFolder
+      const previousScope = this.scope
+      // 先移除本地行：IMAP 删除可能要等服务器几百毫秒到几秒，界面不能一直没有任何反应。
+      const after = before.filter((f) => f.name !== name)
+      this.foldersByAccount = { ...this.foldersByAccount, [accountId]: after }
+      if (wasActive) {
+        const inbox = after.find((f) => f.role === 'inbox')
         this.activeFolder = inbox?.name || 'INBOX'
         this.scope = 'all'
         this.loadMessages()
       }
-      await this.reloadUnread()
+      try {
+        await invoke('mail_delete_folder', { accountId, name })
+        // 后端已删掉本地行；读一次本地表，避免期间的后台刷新把旧文件夹又带回来。
+        await this.loadFolders(accountId)
+        await this.reloadUnread()
+      } catch (error) {
+        // 服务器拒绝（离线、系统文件夹、权限不足）时把侧栏恢复原样。
+        this.foldersByAccount = { ...this.foldersByAccount, [accountId]: before }
+        if (wasActive) {
+          this.activeFolder = previousFolder
+          this.scope = previousScope
+          this.loadMessages()
+        }
+        throw error
+      }
     },
 
     async createFolder(name) {
       if (!this.activeAccountId) throw new Error('请先选择账户')
-      await invoke('mail_create_folder', { accountId: this.activeAccountId, name })
-      await this.loadFolders(this.activeAccountId, { refresh: true })
+      const accountId = this.activeAccountId
+      const clean = String(name || '').trim()
+      if (!clean) throw new Error('文件夹名不能为空')
+      const before = this.foldersByAccount[accountId] || []
+      const existing = before.find((f) => f.name === clean)
+      if (!existing) {
+        // 乐观插入：服务器 CREATE 返回前侧栏就能看到新文件夹。
+        const optimistic = {
+          accountId,
+          name: clean,
+          displayName: clean,
+          delimiter: null,
+          role: 'custom',
+          unread: 0,
+          total: 0,
+          uidValidity: 0,
+          uidNext: 0,
+          selectable: true,
+          localOnly: false,
+          userCreated: true,
+        }
+        this.foldersByAccount = { ...this.foldersByAccount, [accountId]: [...before, optimistic] }
+      }
+      try {
+        await invoke('mail_create_folder', { accountId, name: clean })
+        // 只读本地库：服务器创建成功后后端已经补了本地行，不必再 LIST 一次。
+        await this.loadFolders(accountId)
+        await this.reloadUnread()
+      } catch (error) {
+        if (!existing) {
+          this.foldersByAccount = {
+            ...this.foldersByAccount,
+            [accountId]: (this.foldersByAccount[accountId] || []).filter(
+              (f) => f.name !== clean,
+            ),
+          }
+        }
+        throw error
+      }
     },
 
     // ---------------- 邮件列表 ----------------
@@ -1420,7 +1479,7 @@ export const useMailStore = defineStore('mail', {
       }
     },
 
-    async sendCompose({ useOutbox = false } = {}) {
+    async sendCompose({ useOutbox = false, scheduledAt = 0 } = {}) {
       if (!this.composing) return
       // 附件体积与危险类型检查：超限直接拦下，危险类型由界面确认过后再走到这里。
       const paths = (this.composing.attachments || []).map((a) => a.path)
@@ -1451,13 +1510,17 @@ export const useMailStore = defineStore('mail', {
         cryptoMode: this.composing.cryptoMode || '',
         saveToSent: true,
       }
-      if (useOutbox && this.settings.undoSendSeconds > 0) {
-        const item = await invoke('mail_queue_send', { request })
+      if (scheduledAt || (useOutbox && this.settings.undoSendSeconds > 0)) {
+        // 定时发送用绝对时间戳；撤回窗口用后端设置里的秒数。
+        const sendAt = scheduledAt ? Math.floor(Number(scheduledAt) / 1000) : null
+        const item = await invoke('mail_queue_send', { request, sendAt })
         this.outbox.push(item)
         await this._discardSourceDraft(this.composing)
         this.composing = null
         await this.refreshConnection().catch(() => {})
-        return { queued: item }
+        await this.loadOutbox().catch(() => {})
+        this.scheduleOutboxFlush()
+        return { queued: item, scheduled: Boolean(scheduledAt) }
       }
       const sourceDraft = this.composing
       await invoke('mail_send', { request })
@@ -1515,14 +1578,46 @@ export const useMailStore = defineStore('mail', {
     async loadOutbox() {
       try {
         this.outbox = (await invoke('mail_list_outbox')) || []
+        this.scheduleOutboxFlush()
       } catch (error) {
         logger.warn('加载待发箱失败', error)
       }
     },
 
+    /**
+     * 按最早的到期时间安排一次投递。
+     *
+     * 长定时拆成最多 1 小时一段：浏览器定时器有上限，应用也可能休眠；
+     * 每次醒来重新看 outbox 里最早的一条，既不会漏发，也不会提前发。
+     */
+    scheduleOutboxFlush() {
+      if (this.outboxTimer) {
+        clearTimeout(this.outboxTimer)
+        this.outboxTimer = null
+      }
+      const due = this.outbox
+        .filter((item) => !item.staged)
+        // 失败过的邮件有退避时间：到期后要等 nextAttemptAt 才重试，否则会每秒空转。
+        .map((item) =>
+          Math.max(Number(item.dueAt) || 0, Number(item.nextAttemptAt) || 0) * 1000,
+        )
+        .filter((value) => Number.isFinite(value) && value > 0)
+        .sort((a, b) => a - b)[0]
+      if (!due) return
+      const wait = Math.max(0, due - Date.now())
+      // 最短 5 秒：flush 失败时给 loadOutbox / 退避写入留出时间，避免定时器空转。
+      const delay = Math.min(Math.max(wait + 300, 5_000), 60 * 60 * 1000)
+      this.outboxTimer = setTimeout(async () => {
+        this.outboxTimer = null
+        if (wait <= 1_500) await this.flushOutbox()
+        this.scheduleOutboxFlush()
+      }, delay)
+    },
+
     async cancelOutbox(id) {
       await invoke('mail_cancel_outbox', { id })
       this.outbox = this.outbox.filter((item) => item.id !== id)
+      this.scheduleOutboxFlush()
     },
 
     /** 发件箱里点「重试」：立刻再投递一次（不等待退避）。 */

@@ -209,6 +209,7 @@
       :attachment-checks="attachmentChecks"
       @update="(patch) => Object.assign(store.composing, patch)"
       @send="onSend"
+      @schedule="onScheduleSend"
       @save-draft="onSaveDraft"
       @apply-template="(tpl) => store.applyTemplate(tpl)"
       @check-attachments="onCheckAttachments"
@@ -366,6 +367,32 @@
       <button class="mail-btn" @click="undoSend">撤回</button>
       <button class="mail-btn is-primary" @click="sendNow">立即发送</button>
     </div>
+
+    <!-- 定时发送 / 待发队列 -->
+    <div v-if="scheduledSends.length" class="mail-scheduled">
+      <span>待发送 {{ scheduledSends.length }} 封，最近一封：{{ scheduleLabel(scheduledSends[0]) }}</span>
+      <button class="mail-btn" @click="scheduledOpen = true">管理</button>
+    </div>
+
+    <div v-if="scheduledOpen" class="mail-modal-backdrop" @click.self="scheduledOpen = false">
+      <div class="mail-modal mail-schedule-modal" role="dialog" aria-label="待发送邮件">
+        <div class="mail-modal-head">
+          <h2 class="mail-modal-title">待发送邮件</h2>
+          <button class="mail-modal-close" title="关闭" @click="scheduledOpen = false">×</button>
+        </div>
+        <div class="mail-schedule-list">
+          <div v-for="item in scheduledSends" :key="item.id" class="mail-schedule-item">
+            <div class="mail-schedule-info">
+              <div class="mail-schedule-subject">{{ item.subject || '（无主题）' }}</div>
+              <div class="mail-schedule-meta">{{ item.to }} · {{ scheduleLabel(item) }}</div>
+            </div>
+            <button class="mail-btn" @click="onSendScheduledNow(item.id)">立即发送</button>
+            <button class="mail-btn" @click="onCancelScheduled(item.id)">撤回</button>
+          </div>
+          <div v-if="!scheduledSends.length" class="mail-hint">没有待发送的邮件。</div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -396,6 +423,14 @@ const showShortcuts = ref(false)
 const toast = ref(null)
 const contextMenu = ref(null)
 const pendingSend = ref(null)
+const scheduledOpen = ref(false)
+/** 待发队列：排除正在倒计时撤回的那一条，其余（含定时邮件）都可以管理。 */
+const scheduledSends = computed(() =>
+  store.outbox
+    .filter((item) => !item.staged && (!pendingSend.value || item.id !== pendingSend.value.id))
+    .slice()
+    .sort((a, b) => Number(a.dueAt) - Number(b.dueAt)),
+)
 const listPaneRef = ref(null)
 const activeKey = ref('')
 const attachmentChecks = ref([])
@@ -1264,6 +1299,50 @@ async function onSend({ useOutbox }) {
   }
 }
 
+/** 定时发送：进 outbox，由 store 的定时器在到期后投递。 */
+async function onScheduleSend(at) {
+  try {
+    const result = await store.sendCompose({ scheduledAt: at })
+    if (result?.queued) notify(`已安排在 ${scheduleLabel(result.queued)} 发送`)
+  } catch (error) {
+    notify(String(error?.message || error), true)
+  }
+}
+
+function scheduleLabel(item) {
+  const unix = Number(item?.dueAt)
+  if (!unix) return '—'
+  return new Date(unix * 1000).toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+}
+
+async function onCancelScheduled(id) {
+  try {
+    await store.cancelOutbox(id)
+    notify('已撤回定时邮件')
+    if (!store.outbox.length) scheduledOpen.value = false
+  } catch (error) {
+    notify(String(error?.message || error), true)
+  }
+}
+
+async function onSendScheduledNow(id) {
+  try {
+    const result = await store.retryOutbox(id)
+    if (result?.errors?.length) notify(result.errors[0], true)
+    else notify('已发送')
+    if (!store.outbox.length) scheduledOpen.value = false
+  } catch (error) {
+    notify(String(error?.message || error), true)
+  }
+}
+
 function startPendingCountdown(item) {
   clearInterval(pendingTimer)
   const due = item.dueAt * 1000
@@ -1629,6 +1708,65 @@ defineExpose({ expandThread })
   color: var(--mail-text-secondary);
   font-size: 12.5px;
   box-shadow: var(--mail-shadow);
+}
+
+.mail-scheduled {
+  position: fixed;
+  left: 50%;
+  bottom: 122px;
+  transform: translateX(-50%);
+  z-index: 69;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px 8px 16px;
+  border: 1px solid var(--mail-border-strong);
+  border-radius: 999px;
+  background: var(--mail-panel);
+  color: var(--mail-text-secondary);
+  font-size: 12.5px;
+  box-shadow: var(--mail-shadow);
+}
+
+.mail-schedule-modal {
+  max-width: 620px;
+  width: min(620px, 92vw);
+}
+.mail-schedule-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 10px 16px 16px;
+}
+.mail-schedule-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--mail-border);
+}
+.mail-schedule-item:last-child {
+  border-bottom: 0;
+}
+.mail-schedule-info {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.mail-schedule-subject {
+  font-size: 13px;
+  color: var(--mail-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mail-schedule-meta {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--mail-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 首次使用引导 */

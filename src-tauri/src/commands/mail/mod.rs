@@ -2161,18 +2161,30 @@ fn stage_outbox_into_folder(request: &SendRequest, error: &str) {
 }
 
 /// 延迟发送：先进 outbox，倒计时结束后由 `mail_flush_outbox` 投递。
+///
+/// `send_at`（Unix 秒）用于「定时发送」：给了就按这个时间投递，
+/// 不再叠加设置里的撤回窗口；没给则沿用原来的倒计时撤回逻辑。
 #[command]
-pub async fn mail_queue_send(app: AppHandle, request: SendRequest) -> Result<OutboxItem, String> {
+pub async fn mail_queue_send(
+    app: AppHandle,
+    request: SendRequest,
+    send_at: Option<i64>,
+) -> Result<OutboxItem, String> {
     ensure_init(&app)?;
     let settings = store::load_settings();
     let delay = settings.undo_send_seconds as i64;
     let now = chrono::Utc::now().timestamp();
+    let due_at = match send_at {
+        Some(at) if at > now => at,
+        Some(_) => return Err("定时发送时间必须晚于当前时间".to_string()),
+        None => now + delay.max(1),
+    };
     let item = OutboxItem {
         id: Uuid::new_v4().to_string(),
         account_id: request.account_id.clone(),
         subject: request.subject.clone(),
         to: display_recipients(&request.to),
-        due_at: now + delay.max(1),
+        due_at,
         created_at: now,
         attempts: 0,
         next_attempt_at: 0,
