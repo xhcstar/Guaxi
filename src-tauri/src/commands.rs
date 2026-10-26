@@ -35,6 +35,8 @@ pub mod serverview;
 pub mod settingview;
 pub mod templateview;
 pub mod resource_repo_window;
+/// 资源库管理器的只读支撑：一次扫描拿到全库条目、按需生成缩略图、反查资源被哪些文档引用。
+pub mod resource_repo;
 pub mod slidev;
 pub mod cloudsync;
 pub mod p2psync;
