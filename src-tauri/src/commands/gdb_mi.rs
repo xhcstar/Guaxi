@@ -636,6 +636,21 @@ pub async fn gdb_mi_start(
         if let Ok(mut sessions) = session_store().lock() {
             sessions.remove(&sid);
         }
+        // 会话收尾：先把远端 gdb 真正结束掉，再断开通道。
+        //
+        // 只发 eof 断开通道并不会让 gdb 退出：远端 gdb 仍挂在目标进程上
+        // （尤其附加模式下），下一次再启动会因为"目标已被 trace"而失败，
+        // 表现出"只能调试一次"。所以这里显式 quit：先 -gdb-exit（MI 方式，
+        // 顺带 detach），再退到 CLI 的 quit 兜底。
+        let _ = transport.send("-gdb-exit\n").await;
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        // gdb 有活动会话时会追问一句 "Quit anyway? (y or n)"。
+        let _ = transport.send("y\n").await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let _ = transport.send("quit\n").await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let _ = transport.send("y\n").await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
         // 会话收尾：标记不存活 → 唤醒所有等待者（它们会立刻收到"已断开"而不是干等到超时），
         // 并把还没被取走的应答清掉。
         alive.store(false, Ordering::SeqCst);
@@ -647,6 +662,7 @@ pub async fn gdb_mi_start(
         // SSH 通道要显式 eof；串口/Telnet 不关闭（那是用户的控制台会话，留着继续用）。
         if let GdbTransport::Ssh { channel, .. } = &mut transport {
             let _ = channel.eof().await;
+            let _ = channel.close().await;
         }
         // 保持 SSH handle 存活至会话结束——否则连接会随 gdb_mi_start 返回而关闭。
         drop(ssh_handle);

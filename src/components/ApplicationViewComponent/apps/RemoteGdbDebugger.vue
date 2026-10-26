@@ -857,7 +857,11 @@ async function refreshOnStop() {
   await refreshThreads()
   await refreshStack()
   await refreshLocals()
-  if (followFrame.value) await refreshSource()
+  if (followFrame.value) {
+    // 停下时取第 0 帧（栈顶）的 file/line 作兜底，保证一定跳到"当前执行行"。
+    const top = callStack.value.find(f => String(f.level) === String(curFrame.value)) || callStack.value[0] || null
+    await refreshSource(top)
+  }
   if (watches.value.length) await refreshWatch()
 }
 
@@ -917,17 +921,37 @@ async function start() {
         await refreshThreads(); await refreshStack(); await refreshLocals(); await refreshSource()
       }
     }
-  } catch (e) { error.value = '启动失败: ' + (e?.message || e) } finally { starting.value = false }
+  } catch (e) {
+    const msg = e?.message || String(e)
+    // gdb 会话没能正常结束（目标仍被 trace、端口/控制台被占）时给出可操作的说明，
+    // 而不是只甩一句"启动失败"。
+    if (/already being traced|ptrace|Text file busy|Device or resource busy/i.test(msg)) {
+      error.value = '启动失败：目标可能仍被上一次的 gdb 附加着（上次会话未正常退出）。'
+        + ' 请在目标机上执行 `pkill -f "gdb -q -nx -i=mi"` 后重试。\n原始错误：' + msg
+    } else {
+      error.value = '启动失败: ' + msg
+    }
+  } finally { starting.value = false }
 }
 
 async function stop() {
   if (sessionId.value) {
+    // 后端会在关闭会话时先让远端 gdb 退出（-gdb-exit / quit），再断通道；
+    // 这里等它完成，避免紧接着再启动时连到一个尚未退出的旧 gdb。
     await invoke('gdb_mi_close', { sessionId: sessionId.value }).catch(() => {})
+    // 给远端 gdb 收尾留一点时间（附加模式下要先 detach 目标）。
+    await new Promise(r => setTimeout(r, 600))
     sessionId.value = ''
     statusText.value = '已结束'
     isRunning.value = false
     gdbReady.value = false
     inflight.value = []
+    // 清掉上一轮的调试数据，否则重开后看到的是旧栈/旧变量，容易误判成"没连上"。
+    callStack.value = []
+    locals.value = []
+    threads.value = []
+    registers.value = []
+    varRoots.value = []
     stopTickerIfIdle()
     clearNote()
   }
@@ -1144,7 +1168,10 @@ async function selectFrame(level) {
   if (!sessionId.value) return
   curFrame.value = level
   await runCmd(`-stack-select-frame ${level}`)
-  await refreshLocals(); await refreshSource(); await refreshWatch()
+  // 栈列表里已经有这条帧的 file/line，直接带过去兜底：
+  // -stack-info-frame 对部分帧（尤其系统库）会缺 fullname，靠它自己拿不到就永远不跳转。
+  const hint = callStack.value.find(f => String(f.level) === String(level)) || null
+  await refreshLocals(); await refreshSource(hint); await refreshWatch()
 }
 /// 点击源码行：查看该行是否可下断点，并在该行设置断点（VS Code 式点击跳转/下断点）。
 /// 左键单击 = 跳到该行；如已在断点则提示；双击 = 在该行 toggle 断点。
@@ -1284,16 +1311,43 @@ function remoteChoose() {
   note('源码根（编译机）已设为 ' + sourceRoot.value)
 }
 
-async function refreshSource() {
+/// 取当前帧的源码位置。`hint` 是栈列表里那条帧（可能有 file/line），作为最后兜底。
+///
+/// 为什么需要兜底：`-stack-info-frame` 对某些帧（系统库、被内联的函数）只回
+/// `func`+`addr`，没有 `file`/`fullname`；而 `-stack-list-frames` 里常常是有文件名和行号的。
+/// 只用前者会导致"点了栈帧但源码不动"。
+async function refreshSource(hint = null) {
   if (!sessionId.value || blockedWhileRunning('当前帧源码')) return
   const r = await runCmd('-stack-info-frame')
-  const fr = r?.payload?.frame
-  if (!fr) { sourceHint.value = '当前无栈帧（先运行到断点）。'; return }
-  const full = fr.fullname || fr.file || ''
-  const line = parseInt(fr.line || '0', 10)
+  const fr = r?.payload?.frame || null
+  let full = fr?.fullname || fr?.file || ''
+  let line = parseInt(fr?.line || '0', 10)
+
+  // 2) gdb 自己知道当前源码文件时，它能给出完整路径（比栈里的相对文件名更可靠）。
+  if (!full) {
+    const sf = await runCmd('-file-list-exec-source-file')
+    const p = sf?.payload
+    if (p && (p.fullname || p.file)) {
+      full = p.fullname || p.file
+      line = line || parseInt(p.line || '0', 10)
+    }
+  }
+
+  // 3) 兜底：用栈列表里那条帧的 file/line。
+  if (!full && hint?.fullname) full = hint.fullname
+  if (!full && hint?.file) full = hint.file
+  if (!line && hint?.line) line = parseInt(hint.line, 10) || 0
+
   sourceFile.value = full
   sourceCurLine.value = line
-  if (!full) { sourceLines.value = []; sourceHint.value = '当前帧无源码信息。'; locateInfo.value = ''; return }
+  if (!full) {
+    sourceLines.value = []
+    sourceHint.value = fr
+      ? `当前帧「${fr.func || '?'}」没有调试信息（通常是系统库/无符号构建）。请点调用栈里带文件名的帧。`
+      : '当前无栈帧（先运行到断点）。'
+    locateInfo.value = ''
+    return
+  }
   if (!sourceRoot.value.trim()) {
     sourceLines.value = []
     sourceHint.value = '请先选「源码工程根」（本机目录，或切到「编译机源码」浏览远端目录）。'
@@ -1330,7 +1384,8 @@ async function refreshSource() {
       await runCmd(`-interpreter-exec console ${miQuote(`set substitute-path ${srcFromPrefix.value.trim()} ${sourceRoot.value.trim()}`)}`)
     }
     await nextTick()
-    if (curLineEl && curLineEl.scrollIntoView) curLineEl.scrollIntoView({ block: 'center' })
+    // 不用 smooth：窗口隐藏（后台/最小化）时平滑滚动会整次失效，表现为"点了没跳"。
+    if (curLineEl && curLineEl.scrollIntoView) curLineEl.scrollIntoView({ block: 'center', behavior: 'instant' })
   } catch (e) {
     sourceLines.value = []
     sourceHint.value = `读取源码失败（${shortFile(full)}）：${e?.message || e}`

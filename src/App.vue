@@ -173,6 +173,9 @@ const themeOverrides = computed(() => {
   /* 别名：部分组件误用了 --guaxi-border-color（带 -color 后缀），此前从未定义，
      导致回退到亮色 #e0e0e6，在暗色模式下形成亮边。这里补齐别名。 */
   --guaxi-border-color: var(--guaxi-border);
+  /* 弱分隔线（表格行、面板底边等）。此前从未定义，所有用它的地方都回退到
+     rgba(0,0,0,.06)——在暗色下等于不可见，于是表格行边界整片消失。 */
+  --guaxi-border-weak: rgba(0, 0, 0, 0.08);
   --guaxi-text-primary: #1f2328;
   --guaxi-text-secondary: #57606a;
   /* 别名：部分组件（统计看板图表、影像工坊、首页面板等）误用了 --guaxi-text-color
@@ -261,6 +264,8 @@ const themeOverrides = computed(() => {
   --guaxi-panel-bg: #21252b;
   --guaxi-border: #3e4451;
   --guaxi-border-color: var(--guaxi-border);
+  /* 暗色下的弱分隔线要比亮色更亮一档，否则表格行边界完全看不见。 */
+  --guaxi-border-weak: rgba(255, 255, 255, 0.11);
   --guaxi-text-primary: #d8e0eb;
   --guaxi-text-secondary: #9da5b4;
   --guaxi-text-color: var(--guaxi-text-primary);

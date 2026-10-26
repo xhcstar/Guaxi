@@ -2049,6 +2049,9 @@ const multiChartOption = computed(() => {
 .tb-kv td:first-child { color: var(--guaxi-text-secondary, #9ca3af); }
 .tb-table { width: 100%; border-collapse: collapse; font-size: 15px; }
 .tb-table th, .tb-table td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--guaxi-border-weak, rgba(0,0,0,0.06)); }
+/* 列之间也画一条很淡的竖线，暗色模式下光靠行线仍然容易糊成一片。 */
+.tb-table th + th, .tb-table td + td { border-left: 1px solid var(--guaxi-border-weak, rgba(0,0,0,0.06)); }
+.tb-table thead th { border-bottom-color: var(--guaxi-border, rgba(0,0,0,0.14)); }
 .tb-ent { position: relative; background: var(--guaxi-border-weak, rgba(0,0,0,0.08)); border-radius: 3px; height: 16px; min-width: 120px; }
 .tb-ent-bar { height: 100%; border-radius: 3px; }
 .tb-ent span { position: absolute; left: 6px; top: 0; font-size: 14px; line-height: 16px; }
