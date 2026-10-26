@@ -10,6 +10,7 @@
  * 现在的做法：**不反色**，逐元素把写死的颜色映射到当前纸面上——
  * 浅色底 → 深色表面（保留色相），深色文字 → 浅色文字（按原来的强调层次给亮度），
  * 彩色文字（链接 / 品牌强调）保留色相只提亮；中间调的色块（品牌按钮）原样保留。
+ * 纯白 / 近白的段落底与渐变没有层次含义，直接透出纸面，避免逐行白底铺成一层层色块。
  *
  * 这里只放纯函数与一个 DOM 应用器，便于用 node --test 锁住映射规则。
  */
@@ -307,6 +308,31 @@ function backdropLuminance(el, paperLum) {
   return paperLum
 }
 
+/**
+ * 近乎无彩色的近白色。
+ *
+ * 邮箱客户端（Outlook / Seznam）常给**每个段落**套一层 `background-color:#fff`。
+ * 这类底色没有设计含义，暗色下如果映射成「比纸面亮一档的表面」，就会变成一条条
+ * 分层色块——正是用户说的「没必要包裹多层区域」。所以这类白底在暗色下直接透明，
+ * 让正文回到同一张纸面；真正有颜色的浅底（米色 banner、浅蓝卡片）仍按色相映射。
+ */
+function isNeutralNearWhite(value) {
+  const color = typeof value === 'string' ? parseCssColor(value) : value
+  if (!color || color.a < 0.12) return false
+  const max = Math.max(color.r, color.g, color.b)
+  const min = Math.min(color.r, color.g, color.b)
+  return luminance(color) > 0.9 && (max - min) / 255 <= 0.04
+}
+
+/** 整条渐变是否都是这类近白色。 */
+function isNeutralNearWhiteGradient(value) {
+  const colors = gradientColors(value)
+    .map(parseCssColor)
+    .filter(Boolean)
+    .filter((color) => color.a >= 0.12)
+  return colors.length > 0 && colors.every((color) => isNeutralNearWhite(color))
+}
+
 /** 元素自己声明的颜色：内联 style 优先，其次 `font color` / `bgcolor` 这类表现属性。 */
 function declared(el) {
   const style = el.style || {}
@@ -401,7 +427,8 @@ export function applyBodyTheme(root, mode = 'dark') {
     const own = declared(el)
     const bgOriginal = el.getAttribute(ORIG.bgAttr) || own.bgcolorAttr
     const bgSource = bgOriginal || own.background
-    const nextBg = mapBackgroundColor(bgSource, mode)
+    // 纯白段落底不保留「表面」这一层：直接透明，避免正文变成条带状的分层色块。
+    const nextBg = isNeutralNearWhite(bgSource) ? 'transparent' : mapBackgroundColor(bgSource, mode)
     if (nextBg) {
       if (!bgOriginal && own.background) {
         el.setAttribute(ORIG.bg, own.background)
@@ -412,7 +439,9 @@ export function applyBodyTheme(root, mode = 'dark') {
       }
     }
     const imageOriginal = el.getAttribute(ORIG.image) || own.backgroundImage
-    const nextImage = mapBackgroundImage(imageOriginal, mode)
+    const nextImage = isNeutralNearWhiteGradient(imageOriginal)
+      ? 'none'
+      : mapBackgroundImage(imageOriginal, mode)
     if (nextImage) {
       el.setAttribute(ORIG.image, imageOriginal)
       el.style.backgroundImage = nextImage
@@ -429,7 +458,10 @@ export function applyBodyTheme(root, mode = 'dark') {
     if (el.hasAttribute(ORIG.fgAttr) || (!own.styleColor && own.colorAttr)) {
       const original = el.getAttribute(ORIG.fgAttr) || own.colorAttr
       el.setAttribute(ORIG.fgAttr, original)
-      el.setAttribute('color', next)
+      // 旧式 `color` 属性只认 #hex / 颜色名；把 rgb() 写进去会被按「无效颜色」处理
+      // （Chromium 会落成绿色）。所以用内联 style 覆盖，属性保持原值供切回亮色时还原。
+      if (!el.hasAttribute(ORIG.fg)) el.setAttribute(ORIG.fg, own.styleColor || '')
+      el.style.color = next
     } else {
       const original = el.getAttribute(ORIG.fg) || own.styleColor
       el.setAttribute(ORIG.fg, original)

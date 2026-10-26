@@ -290,7 +290,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUpdated, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { avatarSeed } from './theme'
 import { applyBodyTheme } from './colors'
@@ -436,6 +436,10 @@ watch(
   { flush: 'post' },
 )
 onMounted(() => applyThemeColors())
+// Vue 在每次组件更新时都会无条件重设 v-html 的 innerHTML；颜色映射写在 DOM 上，
+// 会被下一次更新（标记已读、工具栏状态变化等）整个冲掉。只在 watch 里跑不够，
+// 这里在每次 patch 之后补一遍。映射是幂等的，重复执行不会越改越暗。
+onUpdated(() => applyThemeColors())
 
 // ---------------- 会话卡片 ----------------
 

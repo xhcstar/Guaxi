@@ -1126,10 +1126,10 @@
 .mail-body table {
   max-width: 100%;
   border-collapse: collapse;
-  table-layout: auto;
   border: 0;
-  /* Outlook 常给 table 写死 width="600"，窄阅读区里会横向溢出。 */
-  width: auto;
+  /* 不要强制 width:auto：营销邮件常用百分比宽度做两栏（本例是 49% 的嵌套表），
+     改成内容宽会把内层表格压扁，箭头 / 按钮就会偏离原邮件的位置。
+     width 属性继续生效，max-width 负责窄阅读区的兜底。 */
 }
 
 .mail-body table table,
@@ -1161,7 +1161,9 @@
 /* 单元格里直接放图（邮件常见的「图片按钮」）不要圆角，否则会出现一圈内框。 */
 .mail-body table img {
   border-radius: 0;
-  display: block;
+  /* 不能设 display:block：邮件常把箭头图标 <img> 直接嵌在文字链接里
+     （`<a>进一步了解<img chevron></a>`）。块级化会把图标挤出 inline 行盒，
+     掉到单元格左侧单独一行，版式就和发件人看到的不一样了。 */
 }
 
 .mail-body a {

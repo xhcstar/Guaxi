@@ -172,13 +172,19 @@ test('applyBodyTheme 对同一份 DOM 重复执行结果不变', async () => {
     return api
   }
 
-  // 卡片：白底 + 深色标题；页脚：浅灰底 + 中灰字。
+  // 卡片：白底 + 深色标题；页脚：浅灰底 + 中灰字；页脚 banner：近白渐变。
   const title = makeEl({}, { color: 'rgb(29, 29, 31)' })
   const note = makeEl({}, { color: '#ffffff' })
   const card = makeEl({}, { backgroundColor: '#ffffff' })
   const footer = makeEl({}, { backgroundColor: 'rgb(245, 245, 247)' })
+  const gradient = makeEl(
+    {},
+    { backgroundImage: 'linear-gradient(rgb(246, 246, 246) 0%, rgb(255, 255, 255) 59%)' },
+  )
+  // 旧式 <font color>：颜色写在属性里，映射必须走内联 style（属性写 rgb() 会变绿）。
+  const legacyFont = makeEl({ color: '#212121' })
   const body = makeEl({ class: 'mail-body' })
-  const all = [body, card, title, note, footer]
+  const all = [body, card, title, note, footer, gradient, legacyFont]
   const root = {
     querySelectorAll: (selector) => (selector === '.mail-body' ? [body] : all),
   }
@@ -194,6 +200,7 @@ test('applyBodyTheme 对同一份 DOM 重复执行结果不变', async () => {
   const first = {
     card: card.style.backgroundColor,
     footer: footer.style.backgroundColor,
+    gradient: gradient.style.backgroundImage,
     title: title.style.color,
     note: note.style.color,
   }
@@ -201,15 +208,25 @@ test('applyBodyTheme 对同一份 DOM 重复执行结果不变', async () => {
   const second = {
     card: card.style.backgroundColor,
     footer: footer.style.backgroundColor,
+    gradient: gradient.style.backgroundImage,
     title: title.style.color,
     note: note.style.color,
   }
   assert.deepEqual(second, first, '第二次应用不能改变已有结果')
+  // 纯白/近白的段落底和渐变不再铺成「一层层表面」，直接透出纸面。
+  assert.equal(first.card, 'transparent', '白底段落应直接透明')
+  assert.equal(first.footer, 'transparent', '近白页脚也透明')
+  assert.equal(first.gradient, 'none', '近白渐变不应再画出色带')
   assert.ok(lumOf(first.title) > 0.7, `标题应被提亮：${first.title}`)
   assert.equal(first.note, '#ffffff', '白字本来就适合深底，不能再改')
+  assert.ok(lumOf(legacyFont.style.color) > 0.7, 'font color 属性也要提亮')
+  assert.equal(legacyFont.getAttribute('color'), '#212121', 'color 属性不能写 rgb()')
 
   // 切回亮色：原值要能还原，不能留下暗色的痕迹。
   applyBodyTheme(root, 'light')
   assert.equal(card.style.backgroundColor, '#ffffff')
+  assert.equal(gradient.style.backgroundImage, 'linear-gradient(rgb(246, 246, 246) 0%, rgb(255, 255, 255) 59%)')
   assert.equal(title.style.color, 'rgb(29, 29, 31)')
+  assert.equal(legacyFont.style.color, '', 'font 的内联覆盖应被移除')
+  assert.equal(legacyFont.getAttribute('color'), '#212121')
 })
