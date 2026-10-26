@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
+import fs from "node:fs";
 import path from "node:path";
 import monacoEditorPlugin from "vite-plugin-monaco-editor";
 
@@ -9,6 +10,59 @@ const ignoredBuildWarnings = [
   /Module level directives cause errors when bundled, "use client" .* was ignored\./,
   /dynamic import will not move module into another chunk\./,
 ];
+
+/**
+ * 独立阅读器窗口（doc-reader.html）的源码子树根。
+ *
+ * 这些目录/文件里的模块必须整体钉进 reader-core，见下面 manualChunks 的说明。
+ */
+const READER_SUBTREE_PATHS = [
+  "/src/components/HomeViewComponent/ReaderPane.vue",
+  "/src/components/ReaderComponent/DocReaderWindow.vue",
+  "/src/components/ReaderComponent/readers/",
+  "/src/components/PdfViewer/",
+  "/src/components/HomeViewComponent/GuaxiSelectionTranslatePanel.vue",
+  // 通用 composable / util。阅读器与主应用都在用，正是它们被 Rollup 并进 main 的：
+  // reader chunk 一旦从 main 取这几个导出，整条静态边就把主应用入口拉了进来。
+  "/src/composables/useReaderReadAloud.js",
+  "/src/composables/useSelectionReadAloud.js",
+  "/src/composables/useSelectionTranslate.js",
+  "/src/composables/usePageTranslate.js",
+  "/src/composables/useReadAloud.js",
+  "/src/utils/readaloudEvents.js",
+  "/src/utils/textOffsets.js",
+  "/src/utils/logger.js",
+];
+
+/**
+ * 扫描阅读器子树，收集它实际 import 的 @iconify 图标名。
+ *
+ * 图标是纯数据模块（`{width,height,body}`），阅读器放进了近 40 个，主应用也注册了一大批。
+ * 不钉住它们，它们就会成为 reader 与 main 之间又一条共享边；整包钉
+ * （`@iconify-icons/lucide/`）又会把主应用那 200 个图标一起搬进 reader-core。
+ * 所以这里按实际引用精确收集：少一个的后果是那个图标退回成 main 里的共享边，
+ * 多一个只是多几百字节。
+ */
+const collectReaderIconIds = () => {
+  const icons = new Set();
+  const iconRe = /@iconify-icons\/([a-z0-9-]+)\/([a-z0-9-]+)/g;
+  const walk = (rel) => {
+    const abs = path.join(projectRoot, rel);
+    if (!fs.existsSync(abs)) return;
+    const stat = fs.statSync(abs);
+    if (stat.isDirectory()) {
+      for (const entry of fs.readdirSync(abs)) walk(path.posix.join(rel, entry));
+      return;
+    }
+    if (!/\.(vue|js|ts)$/.test(abs)) return;
+    const text = fs.readFileSync(abs, "utf8");
+    for (const m of text.matchAll(iconRe)) icons.add(`/node_modules/@iconify-icons/${m[1]}/${m[2]}.js`);
+  };
+  for (const rel of READER_SUBTREE_PATHS) walk(rel);
+  return icons;
+};
+
+const READER_ICON_IDS = collectReaderIconIds();
 
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
@@ -127,19 +181,33 @@ export default defineConfig(async () => ({
         // monaco —— 阅读器入口只 import 了这一个 helper，却因此把整个 Monaco 变成静态
         // 依赖并预加载，doc-reader.html 的「秒开」收益全没了。
         manualChunks(id) {
-          // ReaderPane 同时被主编辑器（标签内预览）和独立阅读器窗口使用。两端共享的
-          // 模块会被 Rollup 塞进某个「两端都会加载」的既有 chunk；实测落进了 docs
-          // （pdfjs/vditor/mermaid，接近 10 MB），阅读器首帧因此被迫加载无关代码。
-          // 钉到自己的小 chunk 里，两端都只多付几十 KB。
-          if (
-            id.includes("/src/components/HomeViewComponent/ReaderPane.vue") ||
-            id.includes("/src/components/ReaderComponent/DocReaderWindow.vue")
-          ) {
+          // —— 阅读器窗口的独立闭包（顺序敏感，必须排在所有通用分组之前）——
+          //
+          // 背景：阅读器窗口走独立入口 doc-reader.html，但它与主编辑器共用 ReaderPane。
+          // Rollup 把「两端都会用到的模块」归进了主应用入口 chunk（main-*.js），而那个
+          // chunk 顶层就执行着 main.js 的 bootstrap()。于是阅读器窗口一旦异步加载任一
+          // 阅读器（DocEbookReader 等），就会把整个主应用拉起来、挂到同一个 #app 上，
+          // 把阅读器已经渲染好的 DOM 清空 —— release 里表现为「阅读器新窗口是空的」。
+          // dev 下 Vite 按源码模块图逐个请求，不会执行 main.js，所以只有 release 复现。
+          //
+          // 修法：凡是阅读器子树用到的模块，一律钉进 reader-core，让 reader-core 成为
+          // 自足闭包，从根上切断 reader → main 的静态边。
+          //
+          // 判断用正斜杠：Rollup 传给 manualChunks 的 id 永远是 `/` 分隔，与宿主平台无关。
+          if (READER_SUBTREE_PATHS.some((p) => id.includes(p))) {
             return "reader-core";
           }
+          if (READER_ICON_IDS.has(id.slice(id.indexOf("/node_modules/"))) || READER_ICON_IDS.has(id)) {
+            return "reader-core";
+          }
+
           // 阅读器自己的两份 CSS 单独成 chunk。不钉的话，它们的空模块会被 Rollup
           // 并进 docs chunk，阅读器入口就会为了这点样式去静态加载 pdfjs/vditor 那个大包。
           if (id.includes("/src/styles/guaxiBase.css") || id.includes("/readers/readerPane.css")) {
+            return "reader-styles";
+          }
+          // 阅读器共用的外壳样式同理。
+          if (id.includes("/src/components/ReaderComponent/readerChrome.css")) {
             return "reader-styles";
           }
           if (id.includes('vite/preload-helper') || id.includes('vite/modulepreload')) {

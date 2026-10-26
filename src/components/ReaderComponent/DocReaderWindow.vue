@@ -222,7 +222,42 @@ onMounted(async () => {
       error: String(error?.message || error),
     })
   }
+
+  // 窗口是由后端以「隐藏」状态创建的，显示时机交给这里：等外壳与目标都定下来、
+  // 浏览器也真正画过一帧之后再 show()。这样慢机器上用户看到的第一眼就是内容，
+  // 而不是一块白底；后端还留了一个超时兜底，脚本崩了也不会永远不显示。
+  await revealAfterFirstPaint()
 })
+
+/**
+ * 等首帧画完再显示窗口。
+ *
+ * 为什么是两段 rAF：一次 rAF 只代表「下一帧开始前」的回调，此时布局与绘制尚未提交；
+ * 再等一次才确保这一帧真的上屏。Vue 的 DOM 更新本身走微任务，这里已经 await 过
+ * loadTarget()/外观加载，组件内容已确定，不需要再 nextTick。
+ *
+ * 失败不抛：这个窗口可能跑在非 Tauri 环境（浏览器里调试 doc-reader.html），
+ * 那时没有 window API 可调，静默跳过即可。
+ */
+const revealAfterFirstPaint = async () => {
+  const nextFrame = () => new Promise((resolve) => {
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => resolve())
+    else setTimeout(resolve, 16)
+  })
+  await nextFrame()
+  await nextFrame()
+  try {
+    const { getCurrentWindow } = await import('@tauri-apps/api/window')
+    const win = getCurrentWindow()
+    await win.show()
+    await win.setFocus()
+    logger.info('[DocReaderWindow] window revealed after first paint', { path: path.value })
+  } catch (error) {
+    logger.warn('[DocReaderWindow] reveal window failed', {
+      error: String(error?.message || error),
+    })
+  }
+}
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)

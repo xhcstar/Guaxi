@@ -24,6 +24,13 @@ pub struct OpenReaderWindow {
     pub existed: bool,
 }
 
+/// 等前端「首帧就绪」信号的最长时间。
+///
+/// 正常情况下前端渲染完会立刻 show()，远早于这个期限。它的作用是兜底：前端脚本
+/// 崩了、或某个资源缺失导致渲染永远不完成时，至少在这个时间后把窗口显示出来，
+/// 让用户看到内容（或错误提示），而不是对着一个永远不出现的窗口干等。
+const FIRST_PAINT_FALLBACK_MS: u64 = 5_000;
+
 /// 窗口标签：以文件路径的稳定哈希命名，保证同一文件只有一扇窗口。
 ///
 /// 不能用纯路径（含 `/`、`\`、`:` 等非法字符），也不能用时间戳（那样每次点都开新窗）。
@@ -108,10 +115,22 @@ pub async fn create_doc_reader_window(
         .build()
         .map_err(|e| format!("创建阅读器窗口失败: {}", e))?;
 
-    // 先隐藏构建再显示，避免白屏闪一下。
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    window.show().map_err(|e| format!("显示窗口失败: {}", e))?;
-    window.set_focus().ok();
+    // 窗口以隐藏状态创建，真正显示的时刻交给前端：DocReaderWindow 等到阅读器渲染出
+    // 首帧后才调用 show()，用户看到的第一眼就是内容，而不是一块白底。
+    //
+    // 这里不再用固定 sleep 猜时间 —— 慢机器上 100ms 远远不够（那正是「窗口先白一下」
+    // 的来源），快机器上又白等。但这个兜底是必需的：前端脚本报错、资源缺失时
+    // show() 永远不会被调用，窗口就会无声地一直隐藏，用户只会以为程序没反应。
+    let fallback = window.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(FIRST_PAINT_FALLBACK_MS)).await;
+        if fallback.is_visible().unwrap_or(false) {
+            return;
+        }
+        info!("[DocReader] no first-paint signal from frontend, showing window as fallback");
+        fallback.show().ok();
+        fallback.set_focus().ok();
+    });
 
     Ok(OpenReaderWindow {
         label,
