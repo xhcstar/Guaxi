@@ -137,6 +137,7 @@
                 </select>
               </span>
               <span class="otp-actions">
+                <button class="otp-mini" title="大窗预览整条" @click.stop="openCardZoom(b)">⛶</button>
                 <button class="otp-mini" title="编辑" @click="startEdit(b)">✎</button>
                 <button class="otp-mini" :class="{ ok: flashed === 'copy:' + b.blockStartLine }" title="复制 Bug 信息" @click="copyCard(b)">{{ flashed === 'copy:' + b.blockStartLine ? '✓' : '⧉' }}</button>
                 <button class="otp-mini" :class="{ ok: flashed === 'export:' + b.blockStartLine }" title="导出提交信息" @click="exportCard(b)">{{ flashed === 'export:' + b.blockStartLine ? '✓' : '⇪' }}</button>
@@ -167,16 +168,16 @@
                 </span>
               </div>
               <div v-show="!isCollapsed(b.blockStartLine, sec.key, sec.defaultCollapsed)" class="otp-sec-body">
-                <div v-if="sec.type === 'text'" class="otp-text" v-html="hl(sec.value)" />
-                <pre v-else-if="sec.type === 'pre'" class="otp-pre" v-html="hl(sec.value)" />
-                <div v-else-if="sec.type === 'md'" class="gmd" v-html="renderMd(sec.value)" />
+                <div v-if="sec.type === 'text'" class="otp-text" v-html="renderText(sec.value)" />
+                <pre v-else-if="sec.type === 'pre'" class="otp-pre" v-html="renderPreText(sec.value)" />
+                <div v-else-if="sec.type === 'md'" class="otp-md" v-html="renderMd(sec.value)" />
                 <a v-else-if="sec.type === 'link'" class="otp-link" :href="sec.value" target="_blank" rel="noreferrer">{{ sec.value }}</a>
                 <template v-else-if="sec.type === 'notes'">
-                  <div v-if="sec.value.kind === 'inline'" class="gmd" v-html="renderMd(sec.value.value)" />
+                  <div v-if="sec.value.kind === 'inline'" class="otp-md" v-html="renderMd(sec.value.value)" />
                   <a v-else class="otp-notes-file" href="#" @click.prevent="$emit('open-notes', sec.value.value)">📄 {{ sec.value.value }}（点击打开）</a>
                 </template>
                 <div v-else-if="sec.type === 'extra'" class="otp-extra-list">
-                  <pre v-for="(ei, i) in sec.value" :key="i" class="otp-pre">{{ ei }}</pre>
+                  <pre v-for="(ei, i) in sec.value" :key="i" class="otp-pre" v-html="renderPreText(ei)" />
                 </div>
               </div>
             </section>
@@ -307,6 +308,57 @@
       </div>
     </div>
 
+    <!-- 大窗预览浮层：把整条任务按阅读态展开到接近整窗大小。
+         卡片列宽度有限，长正文（日志、表格）挤在里面很难读；这里复用同一套分区渲染，
+         只换更大的排版尺度，不引入第二套内容渲染逻辑。 -->
+    <div v-if="cardZoomBlock" class="otp-bigedit-mask" @mousedown.self="closeCardZoom">
+      <div class="otp-bigedit otp-cardzoom">
+        <div class="otp-bigedit-head">
+          <strong>大窗预览</strong>
+          <span class="otp-type" :class="'type-' + (cardZoomBlock.taskType || 'task')">{{ typeLabel(cardZoomBlock.taskType) }}</span>
+          <span class="otp-cardzoom-title">{{ cardZoomBlock.description || cardZoomBlock.id || '(未命名)' }}</span>
+          <span class="otp-spacer" />
+          <button class="otp-btn" @click="$emit('goto-line', cardZoomBlock.blockStartLine)">定位源码</button>
+          <button class="otp-btn" @click="startEditFromZoom">编辑</button>
+          <button class="otp-btn" @click="closeCardZoom">关闭 (Esc)</button>
+        </div>
+        <div class="otp-cardzoom-body">
+          <div class="otp-props">
+            <div v-if="cardZoomBlock.id" class="otp-prop"><span class="k">ID</span><span class="v">{{ cardZoomBlock.id }}</span></div>
+            <div v-if="cardZoomBlock.parentId" class="otp-prop"><span class="k">父任务</span><span class="v">{{ cardZoomBlock.parentId }}</span></div>
+            <div class="otp-prop"><span class="k">状态</span><span class="v">{{ statusLabel(cardZoomBlock.status) }}</span></div>
+            <div v-if="cardZoomBlock.priority" class="otp-prop"><span class="k">优先级</span><span class="v">#{{ cardZoomBlock.priority }}</span></div>
+            <div v-if="cardZoomBlock.severity" class="otp-prop"><span class="k">严重度</span><span class="v">{{ cardZoomBlock.severity }}</span></div>
+            <div v-if="cardZoomBlock.origin" class="otp-prop"><span class="k">来源</span><span class="v">{{ cardZoomBlock.origin }}</span></div>
+            <div v-if="cardZoomBlock.fixStatus" class="otp-prop"><span class="k">修复</span><span class="v">{{ cardZoomBlock.fixStatus }}</span></div>
+            <div v-if="cardZoomBlock.progress" class="otp-prop"><span class="k">进度</span><span class="v">{{ cardZoomBlock.progress }}</span></div>
+            <div v-if="cardZoomBlock.deadline" class="otp-prop"><span class="k">截止</span><span class="v">{{ cardZoomBlock.deadline }}</span></div>
+            <div v-if="cardZoomBlock.createTime" class="otp-prop"><span class="k">创建</span><span class="v">{{ cardZoomBlock.createTime }}</span></div>
+            <div v-if="cardZoomBlock.completedTime" class="otp-prop"><span class="k">完成</span><span class="v">{{ cardZoomBlock.completedTime }}</span></div>
+            <div v-if="cardZoomBlock.affectedRelease" class="otp-prop"><span class="k">影响版本</span><span class="v">{{ cardZoomBlock.affectedRelease }}</span></div>
+          </div>
+          <section v-for="sec in sectionsOf(cardZoomBlock)" :key="sec.key" class="otp-sec">
+            <div class="otp-sec-head static">
+              <h4>{{ sec.title }}</h4>
+            </div>
+            <div class="otp-sec-body">
+              <div v-if="sec.type === 'text'" class="otp-text" v-html="renderText(sec.value)" />
+              <pre v-else-if="sec.type === 'pre'" class="otp-pre" v-html="renderPreText(sec.value)" />
+              <div v-else-if="sec.type === 'md'" class="otp-md" v-html="renderMd(sec.value)" />
+              <a v-else-if="sec.type === 'link'" class="otp-link" :href="sec.value" target="_blank" rel="noreferrer">{{ sec.value }}</a>
+              <template v-else-if="sec.type === 'notes'">
+                <div v-if="sec.value.kind === 'inline'" class="otp-md" v-html="renderMd(sec.value.value)" />
+                <a v-else class="otp-notes-file" href="#" @click.prevent="$emit('open-notes', sec.value.value)">📄 {{ sec.value.value }}（点击打开）</a>
+              </template>
+              <div v-else-if="sec.type === 'extra'" class="otp-extra-list">
+                <pre v-for="(ei, i) in sec.value" :key="i" class="otp-pre" v-html="renderPreText(ei)" />
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+
     <!-- 放大编辑浮层：把可编辑文本区展开到接近整窗大小，便于大段文本编辑 -->
     <div v-if="bigEdit.open" class="otp-bigedit-mask" @mousedown.self="cancelBigEdit">
       <div class="otp-bigedit">
@@ -323,7 +375,7 @@
         </div>
         <div class="otp-bigedit-body" :class="'view-' + bigEdit.view">
           <textarea v-show="bigEdit.view !== 'preview'" ref="bigEditRef" v-model="bigEdit.text" class="otp-bigedit-area" />
-          <div v-show="bigEdit.view !== 'edit'" class="otp-bigedit-preview gmd" v-html="renderMd(bigEdit.text)" />
+          <div v-show="bigEdit.view !== 'edit'" class="otp-bigedit-preview" v-html="renderMd(bigEdit.text)" />
         </div>
       </div>
     </div>
@@ -334,7 +386,7 @@
 import { ref, reactive, computed, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { parseTaskBlocks, validateTaskBlocks, serializeBlock, STATUS_LABELS } from '../../utils/guaxiTaskParser'
-import { renderMiniMarkdown } from '../../utils/guaxiMiniMarkdown'
+import { renderOrgMarkdown } from '../../utils/guaxiOrgMarkdown'
 import { createLogger } from '../../utils/logger'
 
 const logger = createLogger('GuaxiOrgTaskPreview')
@@ -437,7 +489,22 @@ const typeOptions = computed(() => (props.category === 'life' || props.category 
 
 const typeLabel = (t) => ({ bug: 'Bug', task: '任务', other: '其他' }[t] || (t || '任务'))
 const statusLabel = (s) => STATUS_LABELS[s] || s || '待办'
-const renderMd = (text) => renderMiniMarkdown(text, convertFileSrc)
+// CONTENT / NOTES 走完整 Markdown（标题、列表、表格、引用、加粗，单换行即换行）。
+// 搜索词在渲染阶段高亮，所以这里要带上 search。
+const renderMd = (text) => renderOrgMarkdown(text, convertFileSrc, { query: search.value })
+
+// 纯文本字段（根本原因 / 自定义字段）与预格式字段（复现步骤 / 修复详情 / 测试建议 / Extra Impact）
+// 不套 Markdown 语法：这些内容常粘着 shell 输出与编号，套上去会把 `#`、`1.` 误当语法改写原意。
+// 它们保持原样文本（换行由 white-space: pre-wrap 呈现），只额外把 `<br>` 折成真正的换行。
+const BR_SPLIT_RE = /<br\s*\/?>/i
+const BR_SPLIT_ALL_RE = /<br\s*\/?>/gi
+const renderText = (text) => {
+  const raw = String(text ?? '')
+  if (!BR_SPLIT_RE.test(raw)) return hl(raw)
+  return raw.split(BR_SPLIT_ALL_RE).map((part) => hl(part)).join('<br/>')
+}
+// 预格式区块里，`<br>` 之外的一切（含缩进与空白）都按原样保留。
+const renderPreText = renderText
 
 // ── 分区（含顺序：Review 倒数第二、Extra Impact 最后且默认折叠）──
 const sectionsOf = (b) => {
@@ -569,6 +636,23 @@ const hl = (text) => {
   return esc.replace(new RegExp(qe, 'gi'), (m) => `<mark class="otp-hit">${m}</mark>`)
 }
 
+// ── 大窗预览：把整条任务按阅读态展开 ──
+// 只记块首行号，块对象每次从 blocks 现取：源文件被编辑后 props.content 会重建 blocks，
+// 留住旧对象就会在大窗里显示已经过期的内容。
+const cardZoomLine = ref(0)
+const cardZoomBlock = computed(() => blocks.value.find((b) => b.blockStartLine === cardZoomLine.value) || null)
+const openCardZoom = (b) => {
+  if (!b) return
+  cardZoomLine.value = b.blockStartLine
+}
+const closeCardZoom = () => { cardZoomLine.value = 0 }
+// 从大窗里点「编辑」：关掉浮层，回到卡片原位进入编辑态。
+const startEditFromZoom = () => {
+  const target = cardZoomBlock.value
+  closeCardZoom()
+  if (target) startEdit(target)
+}
+
 // ── 放大编辑浮层 ──
 // 任意可编辑文本区（根本原因/复现步骤/修复详情/测试建议/详情/笔记/Extra Impact）都能放大到接近整窗，
 // 通过 apply 回调把内容写回对应 draft 字段，做到与原位编辑等价。
@@ -603,6 +687,7 @@ const onPreviewKeydown = (e) => {
     return
   }
   if (e.key === 'Escape' && bigEdit.open) { e.preventDefault(); cancelBigEdit(); return }
+  if (e.key === 'Escape' && cardZoomBlock.value) { e.preventDefault(); closeCardZoom(); return }
   if (e.key === 'Escape' && editingLine.value && !bigEdit.open) { e.preventDefault(); cancelEdit() }
 }
 onMounted(() => { window.addEventListener('keydown', onPreviewKeydown, true) })
@@ -762,7 +847,9 @@ export default { name: 'GuaxiOrgTaskPreview' }
   --otp-editor-font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
   display: flex; flex-direction: column; height: 100%; min-width: 0;
   font-family: var(--otp-editor-font-family);
-  font-size: 14px;
+  /* 阅读态的字号基线。任务条目常是大段日志与步骤，14px 在 ≥2K 屏上明显偏小；
+     这里整体抬到 16px，正文行高同步放大，标题/属性等各自在此基础上按比例上调。 */
+  font-size: 16px;
 }
 
 /* Bug/Task 的所有条目、操作控件和编辑区统一继承主编辑器字体。
@@ -781,9 +868,11 @@ export default { name: 'GuaxiOrgTaskPreview' }
   font-family: var(--otp-editor-font-family) !important;
 }
 
-/* renderMiniMarkdown 生成的节点位于 v-html 内容中，需要通过 :deep 明确覆盖其段落、代码及链接字体。 */
-.org-task-preview :deep(.gmd),
-.org-task-preview :deep(.gmd *) {
+/* 条目正文的 Markdown 产物位于 v-html 内容中，需要通过 :deep 明确覆盖其字体。 */
+.org-task-preview :deep(.otp-md),
+.org-task-preview :deep(.otp-md *),
+.org-task-preview :deep(.otp-bigedit-preview),
+.org-task-preview :deep(.otp-bigedit-preview *) {
   font-family: var(--otp-editor-font-family) !important;
 }
 
@@ -792,10 +881,10 @@ export default { name: 'GuaxiOrgTaskPreview' }
 .org-task-preview { background: var(--otp-bg); color: var(--otp-text); }
 
 .otp-toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--otp-border); flex: 0 0 auto; }
-.otp-title { font-weight: 700; font-size: 15px; }
-.otp-count { font-size: 12px; color: var(--otp-sub); }
+.otp-title { font-weight: 700; font-size: 17px; }
+.otp-count { font-size: 13px; color: var(--otp-sub); }
 .otp-spacer { flex: 1; }
-.otp-btn { background: transparent; border: 1px solid var(--otp-border); color: var(--otp-text); border-radius: 7px; cursor: pointer; padding: 3px 10px; font-size: 13px; }
+.otp-btn { background: transparent; border: 1px solid var(--otp-border); color: var(--otp-text); border-radius: 7px; cursor: pointer; padding: 3px 10px; font-size: 14px; }
 .otp-btn.icon { padding: 3px 9px; font-weight: 700; }
 .otp-btn.sm { padding: 2px 8px; }
 .otp-btn.on { background: #2080f0; color: #fff; border-color: #2080f0; }
@@ -804,16 +893,16 @@ export default { name: 'GuaxiOrgTaskPreview' }
 .otp-btn:disabled { opacity: 0.4; cursor: default; }
 
 .otp-searchbar { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--otp-border); flex: 0 0 auto; }
-.otp-sel, .otp-search { background: var(--otp-card); border: 1px solid var(--otp-border); color: var(--otp-text); border-radius: 6px; padding: 4px 8px; font-size: 12px; font-family: inherit; }
+.otp-sel, .otp-search { background: var(--otp-card); border: 1px solid var(--otp-border); color: var(--otp-text); border-radius: 6px; padding: 4px 8px; font-size: 13px; font-family: inherit; }
 .otp-search { flex: 1; }
-.otp-search-count { font-size: 12px; color: var(--otp-sub); min-width: 42px; text-align: center; }
+.otp-search-count { font-size: 13px; color: var(--otp-sub); min-width: 42px; text-align: center; }
 
 /* 批量操作栏 */
 .otp-batchbar { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--otp-border); flex: 0 0 auto; background: var(--otp-chip); }
-.otp-batch-all { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; cursor: pointer; }
-.otp-batch-count { font-size: 12px; color: var(--otp-sub); }
+.otp-batch-all { display: inline-flex; align-items: center; gap: 5px; font-size: 14px; cursor: pointer; }
+.otp-batch-count { font-size: 13px; color: var(--otp-sub); }
 .otp-batch-sep { width: 1px; align-self: stretch; background: var(--otp-border); margin: 2px 4px; }
-.otp-batch-num { width: 52px; background: var(--otp-card); border: 1px solid var(--otp-border); color: var(--otp-text); border-radius: 6px; padding: 3px 6px; font-size: 12px; font-family: inherit; }
+.otp-batch-num { width: 52px; background: var(--otp-card); border: 1px solid var(--otp-border); color: var(--otp-text); border-radius: 6px; padding: 3px 6px; font-size: 13px; font-family: inherit; }
 .otp-btn.danger { border-color: #d03050; color: #d03050; }
 .otp-btn.danger:hover:not(:disabled) { background: rgba(208,48,80,0.12); }
 
@@ -824,8 +913,8 @@ export default { name: 'GuaxiOrgTaskPreview' }
 .otp-empty code, .otp-empty b { background: var(--otp-chip); padding: 1px 5px; border-radius: 4px; }
 
 .otp-diags { border: 1px solid var(--otp-border); border-radius: 8px; overflow: hidden; }
-.otp-diags-head { padding: 6px 10px; background: var(--otp-chip); font-size: 12px; font-weight: 700; }
-.otp-diag { display: flex; gap: 8px; padding: 5px 10px; font-size: 12px; cursor: pointer; border-top: 1px solid var(--otp-border); }
+.otp-diags-head { padding: 6px 10px; background: var(--otp-chip); font-size: 13px; font-weight: 700; }
+.otp-diag { display: flex; gap: 8px; padding: 5px 10px; font-size: 13px; cursor: pointer; border-top: 1px solid var(--otp-border); }
 .otp-diag:hover { background: var(--otp-chip); }
 .otp-diag.error { color: #e45649; } .otp-diag.warning { color: #c18401; }
 .otp-diag-line { flex: 0 0 auto; opacity: 0.8; }
@@ -840,18 +929,18 @@ export default { name: 'GuaxiOrgTaskPreview' }
 .otp-ins { display: flex; align-items: center; gap: 6px; opacity: 0; transition: opacity .15s; margin: 2px 0; }
 .otp-ins.bottom { margin-top: 10px; justify-content: flex-start; }
 .otp-card:hover .otp-ins { opacity: 1; }
-.otp-ins-label { font-size: 11px; color: var(--otp-sub); }
-.otp-ins-btn { font-size: 11px; padding: 1px 8px; border-radius: 10px; border: 1px dashed var(--otp-border); background: transparent; color: var(--otp-sub); cursor: pointer; }
+.otp-ins-label { font-size: 12px; color: var(--otp-sub); }
+.otp-ins-btn { font-size: 12px; padding: 1px 8px; border-radius: 10px; border: 1px dashed var(--otp-border); background: transparent; color: var(--otp-sub); cursor: pointer; }
 .otp-ins-btn.bug:hover { border-color: #d03050; color: #d03050; }
 .otp-ins-btn.task:hover { border-color: #2080f0; color: #2080f0; }
 .otp-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.otp-card-title { font-size: 16px; font-weight: 700; flex: 1; min-width: 120px; word-break: break-word; cursor: pointer; line-height: 1.5; }
+.otp-card-title { font-size: 18px; font-weight: 700; flex: 1; min-width: 120px; word-break: break-word; cursor: pointer; line-height: 1.5; }
 .otp-card-title:hover { color: #2080f0; }
-.otp-type { font-size: 12px; padding: 2px 9px; border-radius: 10px; color: #fff; font-weight: 600; }
+.otp-type { font-size: 13px; padding: 2px 9px; border-radius: 10px; color: #fff; font-weight: 600; }
 .type-bug { background: #d03050; } .type-task { background: #2080f0; } .type-other { background: #8a8f99; }
-.otp-pri { font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 5px; color: #fff; }
+.otp-pri { font-size: 13px; font-weight: 700; padding: 2px 8px; border-radius: 5px; color: #fff; }
 .pri-A { background: #d03050; } .pri-B { background: #f0a020; } .pri-C { background: #909399; }
-.otp-status { font-size: 13px; padding: 3px 11px; border-radius: 10px; background: var(--otp-chip); color: var(--otp-text); font-weight: 600; }
+.otp-status { font-size: 14px; padding: 3px 11px; border-radius: 10px; background: var(--otp-chip); color: var(--otp-text); font-weight: 600; }
 .st-DONE { background: rgba(24,160,88,0.18); color: #18a058; }
 .st-DOING, .st-NEXT { background: rgba(32,128,240,0.18); color: #2080f0; }
 .st-PAUSED, .st-WAITING, .st-HOLD { background: rgba(240,160,32,0.18); color: #f0a020; }
@@ -870,56 +959,56 @@ export default { name: 'GuaxiOrgTaskPreview' }
 .otp-pri.pri-none { background: transparent; color: var(--otp-sub); border: 1px dashed var(--otp-border); }
 .otp-pri-wrap:hover .otp-pri.pri-none { color: #2080f0; border-color: #2080f0; }
 .otp-title-input {
-  flex: 1; min-width: 120px; font-size: 16px; font-weight: 700; line-height: 1.5;
+  flex: 1; min-width: 120px; font-size: 18px; font-weight: 700; line-height: 1.5;
   background: var(--otp-bg); border: 1px solid #2080f0; border-radius: 6px; padding: 2px 8px;
   color: var(--otp-text); font-family: inherit;
 }
 .otp-title-input:focus { outline: none; box-shadow: 0 0 0 2px rgba(32,128,240,0.18); }
-.otp-mini { background: var(--otp-chip); border: 1px solid var(--otp-border); color: var(--otp-text); border-radius: 6px; cursor: pointer; width: 28px; height: 28px; line-height: 1; font-size: 14px; }
-.otp-mini.xs { width: 22px; height: 22px; font-size: 12px; }
+.otp-mini { background: var(--otp-chip); border: 1px solid var(--otp-border); color: var(--otp-text); border-radius: 6px; cursor: pointer; width: 28px; height: 28px; line-height: 1; font-size: 15px; }
+.otp-mini.xs { width: 22px; height: 22px; font-size: 13px; }
 .otp-mini:hover { background: var(--otp-border); }
 .otp-mini.ok { background: rgba(24,160,88,0.2); color: #18a058; border-color: #18a058; }
 .otp-mini.danger:hover { background: rgba(208,48,80,0.18); color: #d03050; border-color: #d03050; }
 
 .otp-props { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
-.otp-prop { display: inline-flex; align-items: center; gap: 5px; background: var(--otp-chip); border-radius: 6px; padding: 3px 9px; font-size: 13px; }
+.otp-prop { display: inline-flex; align-items: center; gap: 5px; background: var(--otp-chip); border-radius: 6px; padding: 3px 9px; font-size: 14px; }
 .otp-prop .k { color: var(--otp-sub); }
 .otp-prop.done-t .v { color: #18a058; }
 
 .otp-sec { margin-top: 14px; }
 .otp-sec-head { display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; padding: 3px 0; border-bottom: 1px solid var(--otp-border); }
-.otp-sec-caret { color: var(--otp-sub); font-size: 12px; width: 14px; }
-.otp-sec-head h4 { margin: 0; font-size: 15px; font-weight: 700; flex: 1; letter-spacing: 0.01em; }
+.otp-sec-caret { color: var(--otp-sub); font-size: 13px; width: 15px; }
+.otp-sec-head h4 { margin: 0; font-size: 16px; font-weight: 700; flex: 1; letter-spacing: 0.01em; }
 .otp-sec-actions { opacity: 0; transition: opacity .15s; }
 .otp-sec-head:hover .otp-sec-actions { opacity: 1; }
 .otp-sec-body { margin-top: 7px; }
-.otp-text { font-size: 14px; line-height: 1.75; white-space: pre-wrap; word-break: break-word; }
-.otp-pre { margin: 0 0 6px; font-size: 13.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; background: var(--otp-chip); border-radius: 8px; padding: 10px 12px; }
+.otp-text { font-size: 15px; line-height: 1.8; white-space: pre-wrap; word-break: break-word; }
+.otp-pre { margin: 0 0 6px; font-size: 14.5px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; background: var(--otp-chip); border-radius: 8px; padding: 10px 12px; }
 .otp-extra-list { display: flex; flex-direction: column; gap: 8px; }
-.otp-link, .otp-notes-file { color: #2080f0; word-break: break-all; font-size: 14px; }
+.otp-link, .otp-notes-file { color: #2080f0; word-break: break-all; font-size: 15px; }
 :deep(mark.otp-hit) { background: var(--otp-hit); color: inherit; border-radius: 3px; padding: 0 1px; }
 
 /* 编辑表单：大字段全宽 + 高文本域 */
-.otp-edit-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 15px; }
+.otp-edit-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 16px; }
 .otp-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
-.otp-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--otp-sub); font-weight: 600; }
+.otp-form label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; color: var(--otp-sub); font-weight: 600; }
 .otp-form .full { grid-column: 1 / -1; }
 .otp-form input, .otp-form select, .otp-form textarea {
   background: var(--otp-bg); border: 1px solid var(--otp-border); color: var(--otp-text);
-  border-radius: 8px; padding: 8px 10px; font-size: 14px; font-family: inherit; resize: vertical; line-height: 1.6;
+  border-radius: 8px; padding: 8px 10px; font-size: 15px; font-family: inherit; resize: vertical; line-height: 1.65;
 }
 .otp-form textarea.ta-md { min-height: 110px; }
 .otp-form textarea.ta-lg { min-height: 170px; }
 .otp-form textarea.ta-xl { min-height: 240px; }
 .otp-form input:focus, .otp-form select:focus, .otp-form textarea:focus { outline: none; border-color: #2080f0; box-shadow: 0 0 0 2px rgba(32,128,240,0.18); }
 .otp-ei-edit { display: flex; flex-direction: column; gap: 6px; }
-.otp-ei-head { display: flex; align-items: center; justify-content: space-between; font-size: 13px; color: var(--otp-sub); font-weight: 600; }
+.otp-ei-head { display: flex; align-items: center; justify-content: space-between; font-size: 14px; color: var(--otp-sub); font-weight: 600; }
 .otp-ei-row { display: flex; gap: 6px; }
 .otp-ei-row textarea { flex: 1; }
 .otp-ei-row-actions { display: flex; flex-direction: column; gap: 6px; }
 /* 自定义字段编辑 */
 .otp-cf-edit { display: flex; flex-direction: column; gap: 6px; }
-.otp-cf-hint { font-size: 12px; color: var(--otp-sub); }
+.otp-cf-hint { font-size: 13px; color: var(--otp-sub); }
 .otp-cf-hint code { background: var(--otp-chip); padding: 1px 5px; border-radius: 4px; }
 .otp-cf-row { display: flex; gap: 6px; align-items: flex-start; }
 .otp-cf-name { flex: 0 0 160px; text-transform: uppercase; }
@@ -932,14 +1021,14 @@ export default { name: 'GuaxiOrgTaskPreview' }
 /* 放大编辑浮层：接近整窗的大文本编辑区 */
 .otp-bigedit-mask { position: fixed; inset: 0; z-index: 3000; background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center; }
 .otp-bigedit { width: 92vw; height: 88vh; background: var(--otp-card); color: var(--otp-text); border: 1px solid var(--otp-border); border-radius: 12px; display: flex; flex-direction: column; padding: 14px 16px; box-shadow: 0 12px 40px rgba(0,0,0,0.3); }
-.otp-bigedit-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 15px; }
+.otp-bigedit-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 16px; }
 .otp-bigedit-views { display: inline-flex; gap: 4px; }
 .otp-bigedit-body { flex: 1 1 auto; min-height: 0; display: flex; gap: 10px; }
 .otp-bigedit-body.view-split .otp-bigedit-area,
 .otp-bigedit-body.view-split .otp-bigedit-preview { flex: 1 1 50%; width: 50%; }
-.otp-bigedit-area { flex: 1 1 auto; width: 100%; box-sizing: border-box; resize: none; background: var(--otp-bg); border: 1px solid var(--otp-border); color: var(--otp-text); border-radius: 8px; padding: 12px 14px; font-size: 14px; line-height: 1.7; font-family: inherit; }
+.otp-bigedit-area { flex: 1 1 auto; width: 100%; box-sizing: border-box; resize: none; background: var(--otp-bg); border: 1px solid var(--otp-border); color: var(--otp-text); border-radius: 8px; padding: 12px 14px; font-size: 15px; line-height: 1.75; font-family: inherit; }
 .otp-bigedit-area:focus { outline: none; border-color: #2080f0; box-shadow: 0 0 0 2px rgba(32,128,240,0.18); }
-.otp-bigedit-preview { flex: 1 1 auto; min-width: 0; overflow: auto; background: var(--otp-bg); border: 1px solid var(--otp-border); border-radius: 8px; padding: 12px 14px; font-size: 14px; line-height: 1.7; }
+.otp-bigedit-preview { flex: 1 1 auto; min-width: 0; overflow: auto; background: var(--otp-bg); border: 1px solid var(--otp-border); border-radius: 8px; padding: 12px 14px; font-size: 15px; line-height: 1.75; }
 
 /* 截止/创建时间：单输入框 + 右侧日历图标。
  * 原生日期控件以透明层叠加在图标上方，真实点击落在“日历指示器”上即可弹出系统日历，
@@ -965,13 +1054,92 @@ export default { name: 'GuaxiOrgTaskPreview' }
   opacity: 0; cursor: pointer;
 }
 
-.gmd :deep(.gmd-p) { margin: 4px 0; font-size: 14px; line-height: 1.7; word-break: break-word; }
-.gmd :deep(.gmd-pre) { background: var(--otp-chip); border-radius: 8px; padding: 10px 12px; overflow-x: auto; font-size: 13.5px; line-height: 1.55; }
-.gmd :deep(.gmd-code-inline) { background: var(--otp-chip); border-radius: 4px; padding: 1px 5px; font-size: 13.5px; }
-.gmd :deep(.gmd-hr) { border: none; border-top: 1px solid var(--otp-border); margin: 10px 0; }
-.gmd :deep(.gmd-img), .gmd :deep(.gmd-img-wrap img) { max-width: 100%; border-radius: 6px; display: block; margin: 6px 0; }
-.gmd :deep(.gmd-link) { color: #2080f0; word-break: break-all; }
+/* ── 条目正文的 Markdown 产物 ──
+ * 这些节点来自 v-html，scoped 样式够不到，必须用 :deep。
+ * 只覆盖阅读需要的间距与字重，颜色一律跟随主题变量，避免暗色下出现黑字。 */
+.otp-md, .otp-bigedit-preview {
+  font-size: 15px;
+  line-height: 1.8;
+  word-break: break-word;
+}
+.otp-md :deep(p), .otp-bigedit-preview :deep(p) { margin: 6px 0; }
+.otp-md :deep(p:first-child), .otp-bigedit-preview :deep(p:first-child) { margin-top: 0; }
+.otp-md :deep(p:last-child), .otp-bigedit-preview :deep(p:last-child) { margin-bottom: 0; }
 
-.otp-body::-webkit-scrollbar, .otp-bigedit-area::-webkit-scrollbar { width: 9px; }
-.otp-body::-webkit-scrollbar-thumb, .otp-bigedit-area::-webkit-scrollbar-thumb { background: rgba(140,140,150,0.38); border-radius: 10px; border: 2.5px solid transparent; background-clip: padding-box; }
+.otp-md :deep(h1), .otp-md :deep(h2), .otp-md :deep(h3),
+.otp-md :deep(h4), .otp-md :deep(h5), .otp-md :deep(h6),
+.otp-bigedit-preview :deep(h1), .otp-bigedit-preview :deep(h2), .otp-bigedit-preview :deep(h3),
+.otp-bigedit-preview :deep(h4), .otp-bigedit-preview :deep(h5), .otp-bigedit-preview :deep(h6) {
+  margin: 14px 0 6px; line-height: 1.45; font-weight: 700;
+}
+.otp-md :deep(h1), .otp-bigedit-preview :deep(h1) { font-size: 1.42em; }
+.otp-md :deep(h2), .otp-bigedit-preview :deep(h2) { font-size: 1.28em; }
+.otp-md :deep(h3), .otp-bigedit-preview :deep(h3) { font-size: 1.16em; }
+.otp-md :deep(h4), .otp-md :deep(h5), .otp-md :deep(h6),
+.otp-bigedit-preview :deep(h4), .otp-bigedit-preview :deep(h5), .otp-bigedit-preview :deep(h6) { font-size: 1.04em; }
+.otp-md :deep(h1:first-child), .otp-md :deep(h2:first-child), .otp-md :deep(h3:first-child),
+.otp-bigedit-preview :deep(h1:first-child),
+.otp-bigedit-preview :deep(h2:first-child),
+.otp-bigedit-preview :deep(h3:first-child) { margin-top: 0; }
+
+/* 列表：默认的左内边距在窄卡片里太吃宽度，收到刚好容纳标记。
+ * 嵌套层级按 ul 深度自己叠加，不依赖浏览器默认值。 */
+.otp-md :deep(ul), .otp-md :deep(ol),
+.otp-bigedit-preview :deep(ul), .otp-bigedit-preview :deep(ol) { margin: 6px 0; padding-left: 1.55em; }
+.otp-md :deep(li), .otp-bigedit-preview :deep(li) { margin: 3px 0; }
+.otp-md :deep(li > p), .otp-bigedit-preview :deep(li > p) { margin: 3px 0; }
+.otp-md :deep(ul ul), .otp-md :deep(ol ol), .otp-md :deep(ul ol), .otp-md :deep(ol ul),
+.otp-bigedit-preview :deep(ul ul), .otp-bigedit-preview :deep(ol ol),
+.otp-bigedit-preview :deep(ul ol), .otp-bigedit-preview :deep(ol ul) { margin: 2px 0; }
+
+.otp-md :deep(blockquote), .otp-bigedit-preview :deep(blockquote) {
+  margin: 8px 0; padding: 2px 0 2px 12px;
+  border-left: 3px solid var(--otp-border); color: var(--otp-sub);
+}
+
+.otp-md :deep(pre), .otp-bigedit-preview :deep(pre) {
+  background: var(--otp-chip); border-radius: 8px; padding: 10px 12px;
+  overflow-x: auto; font-size: 0.94em; line-height: 1.6; margin: 8px 0;
+}
+.otp-md :deep(code), .otp-bigedit-preview :deep(code) { font-size: 0.94em; }
+.otp-md :deep(:not(pre) > code), .otp-bigedit-preview :deep(:not(pre) > code) {
+  background: var(--otp-chip); border-radius: 4px; padding: 1px 5px;
+}
+.otp-md :deep(hr), .otp-bigedit-preview :deep(hr) { border: none; border-top: 1px solid var(--otp-border); margin: 12px 0; }
+.otp-md :deep(a), .otp-bigedit-preview :deep(a) { color: #2080f0; word-break: break-all; }
+.otp-md :deep(img), .otp-bigedit-preview :deep(img) { max-width: 100%; border-radius: 6px; display: block; margin: 8px 0; }
+
+/* 表格：任务条目里的对照表常常肩并肩挤在一起，给单元格留出可读的内边距并允许横向滚动。 */
+.otp-md :deep(table), .otp-bigedit-preview :deep(table) {
+  border-collapse: collapse; margin: 8px 0; display: block; overflow-x: auto; max-width: 100%;
+}
+.otp-md :deep(th), .otp-md :deep(td),
+.otp-bigedit-preview :deep(th), .otp-bigedit-preview :deep(td) {
+  border: 1px solid var(--otp-border); padding: 5px 10px; text-align: left;
+}
+.otp-md :deep(th), .otp-bigedit-preview :deep(th) { background: var(--otp-chip); font-weight: 700; }
+
+/* ── 大窗预览 ── */
+.otp-cardzoom { width: 94vw; height: 90vh; }
+.otp-cardzoom-title {
+  font-size: 18px; font-weight: 700; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.otp-cardzoom-body {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  padding: 4px 2px 12px; font-size: 16px; line-height: 1.8;
+}
+/* 大窗里的分区标题只是标签，不参与折叠，所以去掉手型与悬停效果。 */
+.otp-sec-head.static { cursor: default; }
+.otp-cardzoom-body .otp-sec { margin-top: 18px; }
+.otp-cardzoom-body .otp-text { font-size: 16px; line-height: 1.85; }
+.otp-cardzoom-body .otp-pre { font-size: 15.5px; line-height: 1.75; }
+.otp-cardzoom-body .otp-md,
+.otp-cardzoom-body .otp-md :deep(p),
+.otp-cardzoom-body .otp-md :deep(li) { font-size: 16px; line-height: 1.85; }
+
+.otp-body::-webkit-scrollbar, .otp-bigedit-area::-webkit-scrollbar,
+.otp-cardzoom-body::-webkit-scrollbar { width: 9px; }
+.otp-body::-webkit-scrollbar-thumb, .otp-bigedit-area::-webkit-scrollbar-thumb,
+.otp-cardzoom-body::-webkit-scrollbar-thumb { background: rgba(140,140,150,0.38); border-radius: 10px; border: 2.5px solid transparent; background-clip: padding-box; }
 </style>
