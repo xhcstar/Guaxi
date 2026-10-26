@@ -38,9 +38,6 @@
   },
   "bundle": {
     "active": true,
-    "externalBin": [
-      "binaries/guaxi_mcp"
-    ],
     "targets": ["nsis"],
     "windows": {
       "webviewInstallMode": {

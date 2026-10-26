@@ -143,20 +143,18 @@ test('截图能作为图片回到模型（dynamicTools inputImage）', () => {
 // 这两条对应真实踩过的两个坑，任何一个复发都会让「模型没有工具」原样重演，
 // 而现象看起来完全不像打包问题。
 
-test('安装包分发 guaxi_mcp sidecar', () => {
+test('不把 guaxi_mcp 声明成 externalBin', () => {
+  // externalBin 在**编译期**就要求那个带目标三元组后缀的文件存在。
+  // 而它是构建产物、不该进版本库，于是任何新检出直接 `cargo build` 都会
+  // 因为「resource path ... doesn't exist」失败。工具面改走主程序的
+  // `--mcp-server` 模式（下面那条测试保证它不再 panic）。
   const conf = JSON.parse(
     readFileSync(join(here, '..', 'src-tauri', 'tauri.conf.json'), 'utf8'),
   )
-  assert.ok(
-    (conf.bundle?.externalBin || []).includes('binaries/guaxi_mcp'),
-    'externalBin 必须包含 binaries/guaxi_mcp，否则安装目录里不会有桥接程序',
-  )
-  const wrapper = readFileSync(join(here, '..', 'tools', 'run_tauri_with_utils.mjs'), 'utf8')
-  assert.match(wrapper, /stageMcpSidecar\(\)/, '打包前必须把 sidecar 放到 Tauri 要的位置')
-  assert.match(
-    wrapper,
-    /--bin',\s*'guaxi_mcp'/,
-    'staging 之前必须确保桥接已被构建',
+  assert.equal(
+    conf.bundle?.externalBin,
+    undefined,
+    '不要让 externalBin 依赖一个不在版本库里的构建产物',
   )
 })
 
