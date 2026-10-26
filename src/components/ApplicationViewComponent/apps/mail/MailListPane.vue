@@ -84,6 +84,17 @@
 
     <div v-if="searchError" class="mail-search-error">{{ searchError }}</div>
 
+    <!-- 发件箱：这里的邮件是「多次投递失败后暂存」的，列表上方给一条说明与
+         「全部重试」，用户不必逐封点开才知道该怎么办。 -->
+    <div v-if="outboxItems.length" class="mail-outbox-banner">
+      <span>
+        有 {{ outboxItems.length }} 封邮件多次发送失败，已暂存在发件箱里。
+      </span>
+      <button class="mail-btn" :disabled="retrying" @click="$emit('retry-outbox')">
+        {{ retrying ? '重试中…' : '全部重试' }}
+      </button>
+    </div>
+
     <div
       ref="scrollRef"
       class="mail-list-scroll"
@@ -190,6 +201,7 @@ const emit = defineEmits([
   'load-more',
   'active-change',
   'delete',
+  'retry-outbox',
 ])
 
 const props = defineProps({
@@ -216,6 +228,9 @@ const props = defineProps({
   virtual: { type: Boolean, default: true },
   /** 行高（px），虚拟滚动按它计算偏移。与 mail.css 里的 --mail-row-height 保持一致。 */
   rowHeight: { type: Number, default: 76 },
+  /** 当前文件夹是不是发件箱（列表上方显示失败说明与重试按钮）。 */
+  outboxItems: { type: Array, default: () => [] },
+  retrying: { type: Boolean, default: false },
 })
 const visible = computed(() => props.messages || [])
 /** 已加载邮件里的未读数：和左侧「未读」角标对照着看，避免总数/未读数被误读成同一个指标。 */

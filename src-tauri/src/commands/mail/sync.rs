@@ -12,6 +12,7 @@
 //! 守卫可以直接跨线程持有，不需要任何 unsafe。
 
 use parking_lot::{ArcMutexGuard, Mutex};
+use std::collections::HashSet;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -41,6 +42,35 @@ pub fn lock_account(account_id: &str) -> AccountLock {
     }
 }
 
+
+// ---------------------------------------------------------------------------
+// 用户文件夹快照
+// ---------------------------------------------------------------------------
+//
+// 「哪些文件夹是用户自己建的」只能在本地判断：服务器下发的 LIST 里，用户的
+// 「工作/2026」和服务商遗留的「其他文件夹/QQ邮件订阅」长得完全一样。
+// 这里缓存每个账户最近一次同步**之前**的文件夹表快照，由 `imap::list_folders`
+// 在解析前读取：快照里出现过的就是用户这边的既有文件夹，新出现的才需要判断归属。
+//
+// 用快照而不是直接查库：`list_folders` 处在连接 / STATUS 的同步阻塞路径上，
+// 不该再开一次数据库连接。
+
+static FOLDER_SNAPSHOTS: once_cell::sync::Lazy<Mutex<HashMap<String, HashSet<String>>>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// 记下这次同步之前本地已知的文件夹名（同步结束后会被服务器结果覆盖）。
+pub fn remember_folder_names(account_id: &str, names: HashSet<String>) {
+    FOLDER_SNAPSHOTS.lock().insert(account_id.to_string(), names);
+}
+
+/// 取出快照；没有快照（首次同步 / 刚启动）时返回空集合。
+pub fn folder_names(account_id: &str) -> HashSet<String> {
+    FOLDER_SNAPSHOTS
+        .lock()
+        .get(account_id)
+        .cloned()
+        .unwrap_or_default()
+}
 
 /// 当前正被占用的账户（供诊断面板展示「哪个账户在同步」）。
 pub fn busy_accounts() -> Vec<String> {

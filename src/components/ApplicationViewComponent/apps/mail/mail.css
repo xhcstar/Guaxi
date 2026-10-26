@@ -24,9 +24,15 @@
   --mail-reading-size: 15px;
   --mail-radius: 10px;
   --mail-radius-sm: 6px;
-  /* 正文纸面：与界面主题解耦，默认浅色。 */
+  /* 正文纸面：跟着界面明暗一起切（见下方 .mail-doc-dark）。
+     邮件里写死的颜色由 MailReader 按主题改写，这里只给「没有指定颜色」的
+     那部分文字与底色定调。 */
   --mail-doc-bg: #ffffff;
   --mail-doc-text: #22262c;
+  /* 未加载的远端图片占位：两套主题各一组，保证不出现「黑块」。 */
+  --mail-noimg-bg: #f4f4f6;
+  --mail-noimg-line: #e3e4e9;
+  --mail-noimg-icon: #b3b8c2;
 
   display: flex;
   flex-direction: column;
@@ -632,8 +638,16 @@
   min-height: var(--mail-row-height);
   border-bottom: 1px solid var(--mail-border);
   border-left: 2px solid transparent;
-  cursor: pointer;
+  /* 列表行是「选中的对象」而不是链接：Outlook / Mailspring 都用默认箭头，
+     手型会让人以为点了会跳转到别处。 */
+  cursor: default;
   transition: background-color 0.12s ease;
+}
+/* 行内真正的链接型元素（星标、删除）才用手型。 */
+.mail-row .mail-star,
+.mail-row .mail-row-delete,
+.mail-row .mail-row-check input {
+  cursor: pointer;
 }
 .mail-row:hover {
   background: var(--mail-panel-hover);
@@ -805,7 +819,7 @@
 
 .mail-reader-meta {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   padding: 10px var(--mail-pad);
   border-bottom: 1px solid var(--mail-border);
@@ -821,19 +835,67 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
-  gap: 1px;
+  gap: 3px;
+  flex: 1 1 auto;
 }
-.mail-reader-from-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--mail-text);
+
+/* 邮件头每一行：「发件人 / 收件人 / 抄送」标签 + 地址。
+   标签列固定宽度，三行地址左缘对齐——这是 Outlook 那种「一眼看完收发关系」的方式。 */
+.mail-reader-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
 }
-.mail-reader-from-addr {
-  font-size: 11.5px;
+.mail-reader-key {
+  flex: 0 0 42px;
+  font-size: 11px;
   color: var(--mail-text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-align: right;
+  user-select: none;
+}
+.mail-reader-addrs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  min-width: 0;
+}
+
+/* 阅读区较窄时（列表与阅读器并排），标签列收窄、地址允许换行，
+   避免「收件人」这一行把头像与时间挤出去。 */
+.mail-reader-meta .mail-avatar {
+  margin-top: 1px;
+}
+
+/* 可悬停的地址：看起来像文字，悬停时才有下划线——地址栏不该像一排按钮。 */
+.mail-addr {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--mail-text);
+  text-align: left;
+  cursor: default;
+  border-bottom: 1px solid transparent;
+}
+.mail-addr:hover {
+  border-bottom-color: var(--mail-text-muted);
+}
+.mail-addr-raw {
+  margin-left: 4px;
+  color: var(--mail-text-muted);
+  font-size: 11.5px;
+}
+.mail-addr-more {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--mail-accent);
+  cursor: pointer;
 }
 .mail-reader-when {
   margin-left: auto;
@@ -906,37 +968,23 @@
 }
 
 /* ---------- 暗色阅读 ----------
- * 邮件正文里写死的颜色太多（深色标题、白色卡片、品牌色），逐条覆盖既不现实
- * 也会破坏排版。做法是：给正文整体加一层反色滤镜，再把图片反一次还原。
- * 反色保持原有的明暗对比，所以「深底浅字」的邮件不会变成「深底深字」。
- * 正文自己的背景要先写成浅色，滤镜会把它反成深色。
+ * 邮件正文里写死的颜色太多（深色标题、白色卡片、品牌色），逐条用 CSS 覆盖既不现实，
+ * 也没法选中「内联 style 里那一处」。以前的做法是给正文整体加 `filter: invert(1)`，
+ * 但它有两条硬伤，正是「暗色下一块块黑板」的来源：
+ *   1. 反色只换明暗不换语义——邮件里 #F5F5F7 的浅灰卡片、白色 banner 全部压成纯黑，
+ *      连「未加载的远端图片」那个破图图标也一起反成黑块；
+ *   2. 反色后的对比度是机械的，浅色纸面变成暗色后，原本为白底挑的灰字会发暗。
+ * 现在改成：**纸面跟着主题走，颜色由 MailReader 逐元素映射**（浅色背景→低一档的表面、
+ * 深色文字→浅色文字，并按对比度保留强调色），CSS 这边只负责底色与占位。
  */
 .mail-doc-dark .mail-body {
-  /* 反色后约 #23262b：比阅读区底色（#171a20）略亮一档，读起来像一张独立的信纸卡片。 */
-  background: #dcd9d4;
-  filter: invert(1) hue-rotate(180deg);
-}
-.mail-doc-dark .mail-body img,
-.mail-doc-dark .mail-body video,
-.mail-doc-dark .mail-body svg,
-.mail-doc-dark .mail-body canvas,
-.mail-doc-dark .mail-body iframe {
-  filter: invert(1) hue-rotate(180deg);
-}
-
-/* 邮件里写死的浅色底（白色卡片、#F6F6F6 渐变、引用头 <pre> 的 rgb(248,249,250)）
-   会被整块反色压成纯黑，和纸面 #23262b 撞出突兀的色块。阅读页会给这类元素
-   打上 guaxi-soft-bg 标记：暗色下抹掉底色，让正文回到统一的纸面。 */
-.mail-doc-dark .mail-body .guaxi-soft-bg {
-  background-color: transparent !important;
-}
-.mail-doc-dark .mail-body .guaxi-soft-bg-image {
-  background-image: none !important;
-}
-/* 写在浅底上的浅色小字：反色后会变成深字配深纸。这里把它换回浅色
-   （滤镜会把 #2f333a 反转成浅灰，和原来的层次接近）。 */
-.mail-doc-dark .mail-body .guaxi-soft-fg {
-  color: #2f333a !important;
+  --mail-doc-bg: #23262b;
+  --mail-doc-text: #e4e7ec;
+  --mail-noimg-bg: rgba(255, 255, 255, 0.05);
+  --mail-noimg-line: rgba(255, 255, 255, 0.1);
+  --mail-noimg-icon: rgba(255, 255, 255, 0.28);
+  /* 深色纸面：系统处于深色模式时，正文里残留的原生滚动条也跟着变暗。 */
+  color-scheme: dark;
 }
 
 /* ---------- 会话视图：每封邮件一张独立卡片 ---------- */
@@ -1003,6 +1051,10 @@
   border: 0;
   border-radius: 0;
   background: transparent;
+  /* 卡片底色来自 .mail-thread-card（阅读区底色），这里不能套用暗色纸面的文字色：
+     邮件里没写颜色的那部分文字应继承卡片的前景色，而不是纸面的 #e4e7ec。 */
+  color: inherit;
+  color-scheme: inherit;
 }
 
 .mail-body--plain {
@@ -1029,6 +1081,42 @@
   height: auto;
   border-radius: 4px;
 }
+
+/* ---------- 未加载的远端图片 ---------- *
+ * 清洗层把远端图片的 src 换成了空串，WebView 于是画浏览器的「破图」图标：
+ * 深色纸面上那就是一块深灰，反色时代更是一片纯黑。
+ * 渲染时会把这类图片的 src 换成 1×1 透明像素并加 `guaxi-noimg`（见 MailReader）：
+ * 宽高由邮件自己写在 width / height 上，这里只负责底色与标记，破图图标不再出现。
+ * 用户点「显示图片」后 src 换回真实地址，这个类也会被摘掉。 */
+.mail-body img.guaxi-noimg {
+  box-sizing: border-box;
+  background-color: var(--mail-noimg-bg);
+  border: 1px solid var(--mail-noimg-line);
+  border-radius: 4px;
+  /* 占位标记：一个简笔的「山与太阳」，用背景渐变画，不依赖字体或图片资源。 */
+  background-image:
+    radial-gradient(circle at 66% 34%, var(--mail-noimg-icon) 0 2px, transparent 2.5px),
+    linear-gradient(135deg, transparent 56%, var(--mail-noimg-icon) 56% 60%, transparent 60%);
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 20px 20px;
+}
+/* 邮件常写 height="auto" + width="100%"（图片本来的比例由服务端知道）。
+   没有真实图片时高度会塌成 0，阅读时像少了一段；给一个不抢戏的最小高度，
+   让用户知道「这里本来有张图」。选择器要压过 .mail-body img 的 height:auto。 */
+.mail-body img.guaxi-noimg[height='auto'] {
+  /* 用 px 不用 em：邮件给图片写了 font-size:0，em 会算成 0。 */
+  min-height: 64px;
+}
+/* 小箭头一类的装饰图：不画标记，也不额外占高。 */
+.mail-body img.guaxi-noimg[width='8'],
+.mail-body img.guaxi-noimg[width='10'],
+.mail-body img.guaxi-noimg[width='12'] {
+  background-image: none;
+  min-height: 0;
+  aspect-ratio: auto;
+}
+
 
 /* 邮件正文的表格：出版级邮件几乎全靠 table 排版，而且层层嵌套。
    清洗层已经剥掉了 border / cellpadding / bgcolor 这些装饰属性，
@@ -1566,6 +1654,12 @@
 }
 .mail-check input {
   accent-color: var(--mail-accent);
+}
+
+/* 收信协议切换：两个胶囊并排，与上方「常用邮箱」的预设胶囊同一套视觉。 */
+.mail-protocol-toggle {
+  display: flex;
+  gap: 6px;
 }
 
 .mail-preset {
@@ -2263,4 +2357,107 @@
   margin-left: auto;
   font-size: 11px;
   color: var(--mail-text-muted);
+}
+
+
+/* ---------- 地址悬停卡片 ---------- *
+ * 阅读区每个地址悬停出来的小卡片：名字、地址、组织、往来统计与两个动作。
+ * Teleport 到 body，所以定位是视口坐标（见 MailAddressCard.vue）。 */
+.mail-addr-card {
+  position: fixed;
+  z-index: 80;
+  width: 280px;
+  padding: 10px 12px;
+  border: 1px solid var(--mail-border-strong);
+  border-radius: 10px;
+  background: var(--mail-panel);
+  color: var(--mail-text);
+  box-shadow: var(--mail-shadow);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.mail-addr-card-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.mail-addr-card-avatar {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  font-size: 13px;
+}
+.mail-addr-card-who {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+.mail-addr-card-name {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mail-addr-card-addr {
+  font-size: 11.5px;
+  color: var(--mail-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mail-addr-card-close {
+  margin-left: auto;
+  align-self: flex-start;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--mail-text-muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.mail-addr-card-org {
+  margin-top: 6px;
+  color: var(--mail-text-secondary);
+  font-size: 11.5px;
+}
+.mail-addr-card-stats {
+  margin-top: 6px;
+  color: var(--mail-text-muted);
+  font-size: 11.5px;
+}
+.mail-addr-card-tag {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--mail-accent-soft);
+  color: var(--mail-accent);
+  font-size: 10.5px;
+}
+.mail-addr-card-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+/* ---------- 发件箱提示条 ---------- *
+ * 列表上方的一条说明：多次投递失败的邮件已经暂存在这里，给一个「全部重试」。 */
+.mail-outbox-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 var(--mail-pad) 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--mail-border);
+  border-radius: var(--mail-radius-sm);
+  background: color-mix(in srgb, var(--mail-warning) 12%, transparent);
+  color: var(--mail-text-secondary);
+  font-size: 12px;
+}
+.mail-outbox-banner .mail-btn {
+  margin-left: auto;
+  height: 24px;
+  font-size: 11.5px;
 }

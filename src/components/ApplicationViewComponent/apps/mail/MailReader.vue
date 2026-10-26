@@ -92,6 +92,9 @@
         <h1 class="mail-reader-subject">{{ detail.subject || '（无主题）' }}</h1>
       </header>
 
+      <!-- 邮件头信息：与 Outlook 一样把「谁发给谁、什么时候」摊开写清楚。
+           每个地址都能悬停出通讯录卡片（复制地址 / 加进通讯录），
+           收件人多的时候可以点「展开」。 -->
       <div v-if="!isThread" class="mail-reader-meta">
         <span
           class="mail-avatar mail-reader-avatar"
@@ -100,15 +103,69 @@
           {{ avatarLetter }}
         </span>
         <div class="mail-reader-from">
-          <span class="mail-reader-from-name">{{ fromLabel }}</span>
-          <span class="mail-reader-from-addr">
-            {{ detail.fromAddr }}
-            <template v-if="detail.to?.length"> · 发给 {{ toSummary }}</template>
-            <template v-if="ccSummary"> · 抄送 {{ ccSummary }}</template>
-          </span>
+          <div class="mail-reader-line">
+            <span class="mail-reader-key">发件人</span>
+            <button
+              class="mail-addr"
+              @mouseenter="showAddressCard(detail.fromAddr, $event)"
+              @mouseleave="addressCard?.scheduleHide()"
+              @click="showAddressCard(detail.fromAddr, $event)"
+            >
+              {{ detail.fromName || detail.fromAddr }}
+              <span v-if="detail.fromName" class="mail-addr-raw">&lt;{{ detail.fromAddr }}&gt;</span>
+            </button>
+          </div>
+          <div class="mail-reader-line">
+            <span class="mail-reader-key">收件人</span>
+            <span class="mail-reader-addrs">
+              <button
+                v-for="addr in visibleTo"
+                :key="'to-' + addr.address"
+                class="mail-addr"
+                @mouseenter="showAddressCard(addr.address, $event)"
+                @mouseleave="addressCard?.scheduleHide()"
+                @click="showAddressCard(addr.address, $event)"
+              >
+                {{ addr.name || addr.address }}
+              </button>
+              <button
+                v-if="hiddenToCount > 0"
+                class="mail-addr-more"
+                :title="hiddenToNames"
+                @click="showAllTo = !showAllTo"
+              >
+                {{ showAllTo ? '收起' : `还有 ${hiddenToCount} 人` }}
+              </button>
+            </span>
+          </div>
+          <div v-if="visibleCc.length || hiddenCcCount > 0" class="mail-reader-line">
+            <span class="mail-reader-key">抄送</span>
+            <span class="mail-reader-addrs">
+              <button
+                v-for="addr in visibleCc"
+                :key="'cc-' + addr.address"
+                class="mail-addr"
+                @mouseenter="showAddressCard(addr.address, $event)"
+                @mouseleave="addressCard?.scheduleHide()"
+                @click="showAddressCard(addr.address, $event)"
+              >
+                {{ addr.name || addr.address }}
+              </button>
+              <button
+                v-if="hiddenCcCount > 0"
+                class="mail-addr-more"
+                :title="hiddenCcNames"
+                @click="showAllCc = !showAllCc"
+              >
+                {{ showAllCc ? '收起' : `还有 ${hiddenCcCount} 人` }}
+              </button>
+            </span>
+          </div>
         </div>
-        <span class="mail-reader-when">{{ dateLabel }}</span>
+        <span class="mail-reader-when" :title="fullDateLabel">{{ dateLabel }}</span>
       </div>
+
+      <MailAddressCard ref="addressCard" />
 
       <div ref="scrollRef" class="mail-reader-scroll">
         <!-- 远端图片默认不加载：先问一句，避免打开即给发件人回一个「已读+IP」的信标 -->
@@ -234,8 +291,11 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
 import { avatarSeed } from './theme'
+import { applyBodyTheme } from './colors'
 import { useMailReaderTools } from './useMailReaderTools'
+import MailAddressCard from './MailAddressCard.vue'
 import MailIcon from './MailIcon.vue'
 
 const props = defineProps({
@@ -308,109 +368,74 @@ const imagesBlocked = computed(() => hasRemoteImages.value && !imagesAllowed.val
 function restoreRemoteImages(html) {
   return String(html || '')
     .replace(/data-guaxi-remote-src="([^"]*)"\s+src=""/g, 'src="$1"')
+    .replace(/data-guaxi-remote-src="([^"]*)"\s+src="data:image\/gif;base64,[^"]*"/g, 'src="$1"')
     .replace(/data-guaxi-remote-src="([^"]*)"/g, 'src="$1"')
+    .replace(/\sclass="guaxi-noimg"/g, '')
+}
+
+/** 1×1 透明 GIF：给被封锁的远端图当占位 src，浏览器就不会画「破图」图标。 */
+const BLANK_PIXEL = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
+
+/**
+ * 未加载（被封锁）的远端图片：`src=""` 会让浏览器画出破图图标，
+ * 深色纸面上那就是一块深灰/纯黑。换成透明像素 + 占位类，尺寸仍由 width/height 撑住。
+ *
+ * 高度必须写成行内样式：`.mail-body img { height: auto }`（防止大图撑破版心）
+ * 会让占位图按 1×1 透明像素的原始比例变成正方形，把邮件版式挤坏。
+ */
+function maskBlockedImages(html) {
+  return String(html || '').replace(/<img\b[^>]*>/gi, (tag) => {
+    const remote = tag.match(/data-guaxi-remote-src="([^"]*)"/i)
+    if (!remote) return tag
+    const src = tag.match(/\ssrc="([^"]*)"/i)
+    // 已经有真实地址（用户点过「显示图片」）：原样返回。
+    if (src && src[1].trim() && !src[1].startsWith(BLANK_PIXEL)) return tag
+    const height = tag.match(/\sheight="(\d+)"/i)
+    const style = tag.match(/\sstyle="([^"]*)"/i)
+    const extra = height ? `height:${height[1]}px;` : ''
+    const mergedStyle = extra
+      ? ` style="${extra}${style ? style[1] : ''}"`
+      : style
+        ? ` style="${style[1]}"`
+        : ''
+    const cleaned = tag
+      .replace(/\ssrc="[^"]*"/gi, '')
+      .replace(/\sclass="[^"]*"/gi, '')
+      .replace(/\sstyle="[^"]*"/gi, '')
+      .replace(/^<img/i, '<img class="guaxi-noimg"')
+    return cleaned.replace(/>$/, `${mergedStyle} src="${BLANK_PIXEL}">`)
+  })
 }
 
 const scrollRef = ref(null)
 
-/** 解析 rgb()/rgba()，返回相对亮度（0-1）与透明度。 */
-function colorInfo(value) {
-  const match = String(value || '').match(
-    /rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,/\s]+([\d.]+))?\s*\)/i,
-  )
-  if (!match) return null
-  const [r, g, b] = [Number(match[1]), Number(match[2]), Number(match[3])]
-  const alpha = match[4] === undefined ? 1 : Number(match[4])
-  return { luminance: (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255, alpha }
-}
-
 /**
- * 颜色是否接近白色。
- * 阈值取 0.95 而不是「比较亮」：只有近白背景反转后才会变成纯黑块；
- * 暖色/品牌色背景（米色 #F3EFE6、浅蓝）反转成深色系是原设计的暗色版本，应当保留。
+ * 暗色纸面上，邮件里写死的颜色要逐元素映射（浅底→深表面、深字→浅字）。
+ * 映射逻辑与判定规则都在 colors.js：这里是唯一调用点。
+ *
+ * 亮色也要调一次：映射会先把元素还原成邮件原值，切回亮色时正文才能回到原样，
+ * 不留下暗色模式的痕迹。
  */
-function isLightColor(value, threshold = 0.95) {
-  const info = colorInfo(value)
-  return Boolean(info && info.alpha >= 0.15 && info.luminance > threshold)
-}
-
-/** 浅色小字（次要说明、页脚）：反色后会变成深字，需要按背景重新决定。 */
-function isLightText(value) {
-  const info = colorInfo(value)
-  return Boolean(info && info.alpha >= 0.5 && info.luminance > 0.6)
-}
-
-/** 渐变的所有可见色标都接近白色（QQ 邮箱页脚那种 #F6F6F6 → #FFFFFF）。 */
-function isLightGradient(image) {
-  const text = String(image || '')
-  if (!/gradient/i.test(text)) return false
-  const colors = text.match(/rgba?\([^)]*\)/gi) || []
-  const visible = colors.filter(
-    (color) => !/rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*0(?:\.0+)?\s*\)/i.test(color),
-  )
-  return visible.length > 0 && visible.every((color) => isLightColor(color))
-}
-
-/**
- * 元素背后的底色（含祖先）是不是浅色。
- * 用来判断「浅色文字」在原设计里是不是写在浅底上的：是的话反转后会变成深字深底，
- * 需要由 guaxi-soft-fg 把颜色换回来。
- */
-function hasLightBackdrop(el) {
-  const body = el.closest('.mail-body')
-  let node = el
-  while (node) {
-    const style = getComputedStyle(node)
-    const image = style.backgroundImage
-    if (image && image !== 'none') {
-      // 浅色渐变算浅底；深色渐变/背景图（可能是深色照片）不猜，交给原来的反色。
-      if (isLightGradient(image)) return true
-      return false
-    }
-    const bg = style.backgroundColor
-    if (bg && !/rgba\([^)]*,\s*0(?:\.0+)?\s*\)/i.test(bg) && bg !== 'transparent') {
-      // 判断「文字原本写在什么底色上」用宽松一点的阈值：
-      // 米色、浅蓝这类品牌底色反转后是深色系，浅色文字同样需要换回浅色。
-      return isLightColor(bg, 0.7)
-    }
-    if (node === body) break
-    node = node.parentElement
-  }
-  // 没有任何显式底色时落到的就是阅读纸面（浅色）。
-  return true
-}
-
-/**
- * 暗色正文靠 `invert(1)` 自动压暗，邮件里写死的浅色背景会反转成纯黑块，
- * 写在浅底上的浅色文字也会变成「深字深底」。
- * 这里标记「浅底」元素，由 mail.css 在暗色主题下把底色抹掉、把浅色文字换回浅色。
- * 用 class 而不是内联样式：切回亮色主题规则自动失效。
- */
-function softenLightBackgrounds() {
-  if (props.themeMode === 'light' || !scrollRef.value) return
-  scrollRef.value.querySelectorAll('.mail-body [style]').forEach((el) => {
-    const style = getComputedStyle(el)
-    if (isLightColor(style.backgroundColor)) el.classList.add('guaxi-soft-bg')
-    if (isLightGradient(style.backgroundImage)) el.classList.add('guaxi-soft-bg-image')
-    if (isLightText(style.color) && hasLightBackdrop(el)) el.classList.add('guaxi-soft-fg')
-  })
+function applyThemeColors() {
+  applyBodyTheme(scrollRef.value, props.themeMode === 'light' ? 'light' : 'dark')
 }
 
 const renderedHtml = computed(() => {
   const html = props.detail?.html
   if (!html) return ''
-  // 用户点了「显示图片」：把暂存地址放回 src。
-  const restored = imagesBlocked.value ? html : restoreRemoteImages(html)
-  return upgradeQuoteCards(restored)
+  // 用户点了「显示图片」：把暂存地址放回 src；否则把空 src 换成透明占位，
+  // 免得浏览器在深色纸面上画出一块「破图」。
+  const prepared = imagesBlocked.value ? maskBlockedImages(html) : restoreRemoteImages(html)
+  return upgradeQuoteCards(prepared)
 })
 
-// 正文 DOM 更新后（换信、显示图片、切暗色主题）重新标记浅色背景。
+// 正文 DOM 更新后（换信、显示图片、切主题）重新映射一次颜色。
 watch(
   [renderedHtml, () => props.themeMode, () => props.thread, imagesAllowed],
-  () => softenLightBackgrounds(),
+  () => applyThemeColors(),
   { flush: 'post' },
 )
-onMounted(() => softenLightBackgrounds())
+onMounted(() => applyThemeColors())
 
 // ---------------- 会话卡片 ----------------
 
@@ -455,8 +480,10 @@ function threadRecipients(message) {
 /** 会话里每封邮件的正文：历史和嵌套引用已经由上方卡片呈现，这里直接去掉。 */
 function threadBody(message) {
   if (message.html) {
-    const restored = imagesBlocked.value ? message.html : restoreRemoteImages(message.html)
-    return upgradeQuoteCards(restored, { dropQuotes: true })
+    const prepared = imagesBlocked.value
+      ? maskBlockedImages(message.html)
+      : restoreRemoteImages(message.html)
+    return upgradeQuoteCards(prepared, { dropQuotes: true })
   }
   return `<pre class="mail-body--plain" style="white-space:pre-wrap;margin:0">${escapeHtml(
     message.text || '',
@@ -565,26 +592,51 @@ const avatar = computed(() => avatarSeed(props.detail?.fromName, props.detail?.f
 const avatarLetter = computed(() => avatar.value.letter)
 const avatarHue = computed(() => avatar.value.hue)
 
-const fromLabel = computed(() => {
-  const d = props.detail
-  if (!d) return ''
-  return d.fromName?.trim() || d.fromAddr || '（未知发件人）'
-})
+// ---------------- 邮件头信息 ----------------
 
-const toSummary = computed(() => {
+/** 收件人 / 抄送过多时默认只显示前几个，其余折叠——Outlook 的「+ N」同一套思路。 */
+const showAllTo = ref(false)
+const showAllCc = ref(false)
+const ADDRESS_PREVIEW = 3
+
+const visibleTo = computed(() => {
   const list = props.detail?.to || []
-  if (!list.length) return ''
-  const first = list[0].name || list[0].address
-  return list.length > 1 ? `${first} 等 ${list.length} 人` : first
+  return showAllTo.value ? list : list.slice(0, ADDRESS_PREVIEW)
 })
+const hiddenToCount = computed(() =>
+  Math.max(0, (props.detail?.to?.length || 0) - ADDRESS_PREVIEW),
+)
+const hiddenToNames = computed(() =>
+  (props.detail?.to || [])
+    .slice(ADDRESS_PREVIEW)
+    .map((a) => a.name || a.address)
+    .join('、'),
+)
 
-const ccSummary = computed(() => {
+const visibleCc = computed(() => {
   const list = props.detail?.cc || []
-  if (!list.length) return ''
-  const first = list[0].name || list[0].address
-  return list.length > 1 ? `${first} 等 ${list.length} 人` : first
+  return showAllCc.value ? list : list.slice(0, ADDRESS_PREVIEW)
 })
+const hiddenCcCount = computed(() =>
+  Math.max(0, (props.detail?.cc?.length || 0) - ADDRESS_PREVIEW),
+)
+const hiddenCcNames = computed(() =>
+  (props.detail?.cc || [])
+    .slice(ADDRESS_PREVIEW)
+    .map((a) => a.name || a.address)
+    .join('、'),
+)
 
+/** 换邮件时收起展开状态，否则上一封「展开的收件人」会带到下一封。 */
+watch(
+  () => `${props.detail?.accountId}:${props.detail?.folder}:${props.detail?.uid}`,
+  () => {
+    showAllTo.value = false
+    showAllCc.value = false
+  },
+)
+
+/** 日期：列表里放短格式，悬停给出完整时间（含秒与时区偏移）。 */
 const dateLabel = computed(() => {
   const unix = props.detail?.date
   if (!unix) return ''
@@ -597,6 +649,59 @@ const dateLabel = computed(() => {
     hour12: false,
   })
 })
+
+const fullDateLabel = computed(() => {
+  const unix = props.detail?.date
+  if (!unix) return ''
+  return new Date(unix * 1000).toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    weekday: 'long',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  })
+})
+
+// ---------------- 地址悬停卡片 ----------------
+//
+// 卡片信息一次批量取（发件人 + 全部收件人 + 抄送），悬停时按地址从缓存里拿：
+// 鼠标划过整行地址不会触发一串 IPC，也不会因为某次请求慢而「卡片迟迟不出来」。
+const addressCard = ref(null)
+const addressCache = ref({})
+
+async function loadAddressCards() {
+  const d = props.detail
+  if (!d) return
+  const addresses = [d.fromAddr, ...(d.to || []).map((a) => a.address), ...(d.cc || []).map((a) => a.address)]
+    .map((a) => String(a || '').trim())
+    .filter(Boolean)
+  if (!addresses.length) return
+  try {
+    const cards = await invoke('mail_address_cards', { addresses })
+    const next = { ...addressCache.value }
+    for (const card of cards || []) next[String(card.email).toLowerCase()] = card
+    addressCache.value = next
+  } catch {
+    /* 通讯录查询失败不该挡住阅读：卡片会退回只显示地址本身 */
+  }
+}
+
+watch(
+  () => `${props.detail?.accountId}:${props.detail?.folder}:${props.detail?.uid}`,
+  () => loadAddressCards(),
+  { immediate: true },
+)
+
+function showAddressCard(address, event) {
+  if (!address || !addressCard.value) return
+  const data = addressCache.value[String(address).toLowerCase()]
+  const rect = event.currentTarget?.getBoundingClientRect?.()
+  if (!rect) return
+  addressCard.value.show(address, data, rect)
+}
 
 const headerText = computed(() =>
   (props.detail?.headers || []).map(([name, value]) => `${name}: ${value}`).join('\n'),

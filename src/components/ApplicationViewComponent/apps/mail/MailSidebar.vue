@@ -89,9 +89,10 @@
           <span class="mail-folder-name">全部邮件</span>
         </button>
 
-        <!-- 用户自建的文件夹单独成区。只把「有邮件」的顶层文件夹放进主列表，
-             邮件服务器自带的订阅目录 / 第三方客户端遗留的空文件夹收进「更多文件夹」，
-             默认不占版面，需要时仍能展开。 -->
+        <!-- 用户自建的文件夹全部平铺：以前把「没有邮件」的文件夹塞进「更多文件夹」，
+             结果是 QQ / 163 带下来的「其他文件夹」根节点和一堆遗留目录占了半屏，
+             用户自己建的反倒找不到。现在只保留用户自己建的、且是顶层可选的文件夹，
+             其余（服务器遗留的订阅目录、共享邮箱子树）交给各自的区块处理。 -->
         <div class="mail-section-label is-row">
           <span>我的文件夹</span>
           <button
@@ -115,31 +116,6 @@
           <span class="mail-folder-name" :title="folder.displayName">{{ folder.displayName }}</span>
           <span v-if="folder.unread" class="mail-badge">{{ folder.unread }}</span>
         </button>
-        <button
-          v-if="moreFolders.length"
-          class="mail-folder mail-folder-more"
-          :title="showMoreFolders ? '收起其他文件夹' : '展开其他文件夹'"
-          @click="showMoreFolders = !showMoreFolders"
-        >
-          <span class="mail-folder-icon">{{ showMoreFolders ? '▾' : '▸' }}</span>
-          <span class="mail-folder-name">更多文件夹</span>
-          <span class="mail-folder-more-count">{{ moreFolders.length }}</span>
-        </button>
-        <template v-if="showMoreFolders">
-          <button
-            v-for="folder in moreFolders"
-            :key="folder.name"
-            class="mail-folder is-nested"
-            :class="{ 'is-active': scope === 'folder' && activeFolder === folder.name }"
-            :title="folder.name"
-            @click="$emit('select-folder', folder.name)"
-            @contextmenu.prevent="openFolderMenu(folder, $event)"
-          >
-            <span class="mail-folder-icon">▢</span>
-            <span class="mail-folder-name">{{ folder.displayName }}</span>
-            <span v-if="folder.unread" class="mail-badge">{{ folder.unread }}</span>
-          </button>
-        </template>
         <button
           v-if="!customFolders.length"
           class="mail-folder mail-folder-add"
@@ -215,6 +191,14 @@
     >
       <button class="mail-context-item" @click="menuAction('select')">打开</button>
       <button class="mail-context-item" @click="menuAction('create')">新建文件夹…</button>
+      <!-- 服务器带下来的模板目录默认不进侧栏；用户想留着某个时可以在这里钉住。 -->
+      <button
+        v-if="folderMenu.folder.role === 'custom'"
+        class="mail-context-item"
+        @click="menuAction('pin')"
+      >
+        {{ folderMenu.folder.userCreated ? '从侧栏隐藏' : '保留在侧栏' }}
+      </button>
       <div class="mail-context-sep"></div>
       <button
         class="mail-context-item is-danger"
@@ -249,6 +233,7 @@ const emit = defineEmits([
   'add-account',
   'create-folder',
   'delete-folder',
+  'pin-folder',
   'settings',
   'drop-on-folder',
 ])
@@ -257,8 +242,6 @@ const creating = ref(false)
 const newFolderName = ref('')
 const createInput = ref(null)
 const folderMenu = ref(null)
-/** 「更多文件夹」是否展开：默认收起，避免 Mailspring / 订阅目录这类噪音占满侧栏。 */
-const showMoreFolders = ref(false)
 /** 拖拽悬停中的文件夹（用于高亮可放区域）。 */
 const dropTarget = ref('')
 
@@ -311,6 +294,7 @@ async function menuAction(action) {
   if (!folder) return
   if (action === 'select') emit('select-folder', folder.name)
   if (action === 'create') await startCreateFolder()
+  if (action === 'pin') emit('pin-folder', folder.name, !folder.userCreated)
   if (action === 'delete') emit('delete-folder', folder)
 }
 
@@ -325,6 +309,8 @@ const folders = computed(() => {
 const STANDARD_ROLES = [
   { role: 'inbox', label: '收件箱', icon: '▣' },
   { role: 'drafts', label: '草稿', icon: '✎' },
+  // 发件箱：多次投递失败后暂存在这里的邮件，平时不占版面（有内容才显示）。
+  { role: 'outbox', label: '发件箱', icon: '◷', onlyWhenUsed: true },
   { role: 'sent', label: '已发送', icon: '↗' },
   { role: 'archive', label: '存档', icon: '▤' },
   { role: 'junk', label: '垃圾邮件', icon: '⚠' },
@@ -345,19 +331,24 @@ const standardFolders = computed(() => {
     const current = byRole.get(folder.role)
     if (!current || folder.name.length < current.name.length) byRole.set(folder.role, folder)
   }
-  return STANDARD_ROLES.filter((entry) => entry.role !== 'archive' || byRole.has('archive')).map(
-    (entry) => {
-      const folder = byRole.get(entry.role) || null
-      return {
-        key: entry.role,
-        role: entry.role,
-        label: entry.label,
-        icon: entry.icon,
-        unread: folder?.unread || 0,
-        folder,
-      }
-    },
-  )
+  return STANDARD_ROLES.map((entry) => {
+    const folder = byRole.get(entry.role) || null
+    return {
+      key: entry.role,
+      role: entry.role,
+      label: entry.label,
+      icon: entry.icon,
+      unread: folder?.unread || 0,
+      total: Number(folder?.total) || 0,
+      onlyWhenUsed: Boolean(entry.onlyWhenUsed),
+      folder,
+    }
+  }).filter((entry) => {
+    // 存档没有后端占位时也保留入口（点它时后端会提示建一个）；
+    // 发件箱只在真的有失败邮件时才出现，免得侧栏常驻一个空入口。
+    if (entry.onlyWhenUsed) return Boolean(entry.folder) && entry.total > 0
+    return true
+  })
 })
 
 /** 共享邮箱文件夹：名字带 `Other Users/...`、`Shared/...`、`共享文件夹/...` 前缀。 */
@@ -371,25 +362,23 @@ const customFolders = computed(() => {
   return folders.value.filter(
     (f) =>
       f.role === 'custom' &&
+      // 只展示用户自己建的：服务器同步带下来的「其他文件夹」这类模板目录
+      // 不是用户的整理方式，侧栏里不该出现（想留可以在右键菜单里「保留在侧栏」）。
+      f.userCreated !== false &&
       !standardNames.has(f.name) &&
       !DELEGATE_PREFIXES.some((p) => f.name.toLowerCase().startsWith(p)),
   )
 })
 
-/** 主列表只放「顶层且有邮件」的自建文件夹：Mailspring、订阅目录、空文件夹不占版面。 */
+/**
+ * 自建文件夹：全部平铺，不再按「有没有邮件」分组。
+ *
+ * 只隐藏服务器自动带来的层级根节点（名字里带分隔符的父目录本身不可选，
+ * 选它也没有邮件可看），其余交给用户自己建、自己删。
+ */
 const primaryCustomFolders = computed(() =>
-  customFolders.value.filter(
-    (folder) =>
-      !folder.name.includes('/') &&
-      ((Number(folder.total) || 0) > 0 || (Number(folder.unread) || 0) > 0),
-  ),
+  customFolders.value.filter((folder) => !folder.name.includes('/')),
 )
-
-/** 其余文件夹收进「更多文件夹」，需要时展开，仍可点击/右键。 */
-const moreFolders = computed(() => {
-  const primary = new Set(primaryCustomFolders.value.map((f) => f.name))
-  return customFolders.value.filter((f) => !primary.has(f.name))
-})
 
 /**
  * 共享邮箱：按邮箱地址分组展示。
@@ -470,6 +459,7 @@ function folderIcon(role) {
       inbox: '▣',
       sent: '↗',
       drafts: '✎',
+      outbox: '◷',
       trash: '🗑',
       junk: '⚠',
       archive: '▤',

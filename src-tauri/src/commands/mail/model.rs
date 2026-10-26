@@ -82,6 +82,21 @@ pub struct Account {
     pub imap_port: u16,
     #[serde(default)]
     pub imap_security: Security,
+    /// 收信协议：`imap`（默认）| `pop3`。POP3 只有单一个收件箱，没有文件夹与服务器端标记，
+    /// 接进模型时仍然落成一条 `INBOX`，标记类操作全部走本地。
+    #[serde(default = "default_protocol")]
+    pub protocol: String,
+    /// POP3 服务器。`imap_*` 那组字段在 POP3 账户里不用（保持空值，避免界面上
+    /// 出现「填了但没生效」的服务器地址）。
+    #[serde(default)]
+    pub pop3_host: String,
+    #[serde(default = "default_pop3_port")]
+    pub pop3_port: u16,
+    #[serde(default)]
+    pub pop3_security: Security,
+    /// 收完是否从服务器删除（POP3 的经典两派：`keep` 留在服务器，`delete` 收完即删）。
+    #[serde(default = "default_pop3_leave")]
+    pub pop3_leave_on_server: bool,
     #[serde(default)]
     pub smtp_host: String,
     #[serde(default = "default_smtp_port")]
@@ -176,6 +191,15 @@ fn default_sieve_script() -> String {
 fn default_imap_port() -> u16 {
     993
 }
+fn default_protocol() -> String {
+    "imap".to_string()
+}
+fn default_pop3_port() -> u16 {
+    995
+}
+fn default_pop3_leave() -> bool {
+    true
+}
 fn default_smtp_port() -> u16 {
     465
 }
@@ -207,6 +231,9 @@ pub enum FolderRole {
     Trash,
     Junk,
     Archive,
+    /// 发件箱：**只存在于本地**。延迟发送 / 发送多次失败后暂存在这里的邮件，
+    /// 服务器上没有对应文件夹，同步与标记类操作都要绕开它。
+    Outbox,
     Custom,
 }
 
@@ -219,8 +246,17 @@ impl FolderRole {
             FolderRole::Trash => "trash",
             FolderRole::Junk => "junk",
             FolderRole::Archive => "archive",
+            FolderRole::Outbox => "outbox",
             FolderRole::Custom => "custom",
         }
+    }
+
+    /// 这个角色是不是「只有本地才有、服务器上不存在」。
+    ///
+    /// 发件箱的邮件从来没有真正投递出去，把它当成服务器文件夹会去 SELECT 一个
+    /// 不存在的名字，同步与标记全都会失败。
+    pub fn is_local_only(self) -> bool {
+        matches!(self, FolderRole::Outbox)
     }
 
     pub fn parse(value: &str) -> Self {
@@ -231,6 +267,7 @@ impl FolderRole {
             "trash" => FolderRole::Trash,
             "junk" => FolderRole::Junk,
             "archive" => FolderRole::Archive,
+            "outbox" => FolderRole::Outbox,
             _ => FolderRole::Custom,
         }
     }
@@ -255,6 +292,13 @@ pub struct MailFolder {
     pub uid_next: u32,
     #[serde(default)]
     pub selectable: bool,
+    /// 只有本地才有的文件夹（发件箱）：同步与服务器写入必须跳过它。
+    #[serde(default)]
+    pub local_only: bool,
+    /// 用户自己建的（或显式保留的）文件夹。服务器同步带下来的遗留目录为 false，
+    /// 侧栏不展示它们——那是服务商的结构，不是用户的整理方式。
+    #[serde(default)]
+    pub user_created: bool,
 }
 
 /// 邮件主题行（列表用）。正文与附件单独按需拉取，列表页不碰大字段。
@@ -757,6 +801,9 @@ pub struct OutboxItem {
     pub next_attempt_at: i64,
     #[serde(default)]
     pub last_error: String,
+    /// 已经多次投递失败、不再自动重试，在「发件箱」里等用户处置。
+    #[serde(default)]
+    pub staged: bool,
 }
 
 /// 通信测试结果（连接诊断页用）。

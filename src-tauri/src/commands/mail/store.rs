@@ -99,7 +99,7 @@ fn open() -> Result<Connection, String> {
 /// 为什么必须做版本化迁移：老用户的 `mail.db` 已经存在，`CREATE TABLE IF NOT EXISTS`
 /// 只会补新表、不会补新列；一旦某天查询里用到新列，整个邮件页会直接报
 /// 「no such column」而不是「少一个功能」。
-pub const SCHEMA_VERSION: i32 = 3;
+pub const SCHEMA_VERSION: i32 = 5;
 
 pub fn init(app: &AppHandle) -> Result<(), String> {
     let path = db_path(app)?;
@@ -282,6 +282,84 @@ fn migrate(conn: &mut Connection) -> Result<(), String> {
         )
         .map_err(|e| format!("迁移到 v3 失败: {e}"))?;
     }
+    if version < 4 {
+        // v4：POP3 账户。POP3 没有 UID，服务器给的 UIDL 才是跨会话稳定的身份，
+        // 而列表 / 正文 / 搜索都以 (account, folder, uid) 为主键。这里把 UIDL 映射成
+        // 一个稳定的整数 uid：**同一个 UIDL 永远得到同一个 uid**，换会话也不会漂移。
+        add_column(&tx, "accounts", "protocol", "TEXT NOT NULL DEFAULT 'imap'")?;
+        add_column(&tx, "accounts", "pop3_host", "TEXT NOT NULL DEFAULT ''")?;
+        add_column(&tx, "accounts", "pop3_port", "INTEGER NOT NULL DEFAULT 995")?;
+        add_column(&tx, "accounts", "pop3_security", "TEXT NOT NULL DEFAULT 'ssl'")?;
+        add_column(
+            &tx,
+            "accounts",
+            "pop3_leave_on_server",
+            "INTEGER NOT NULL DEFAULT 1",
+        )?;
+        tx.execute_batch(
+            r#"
+            -- UIDL → uid 的稳定映射。POP3 服务器只给 UIDL，模型里的主键却是整数 uid；
+            -- 映射表保证「同一封邮件」无论在哪个会话、经过几次同步都落到同一行。
+            CREATE TABLE IF NOT EXISTS pop3_uids (
+                account_id TEXT NOT NULL,
+                uidl TEXT NOT NULL,
+                uid INTEGER NOT NULL,
+                PRIMARY KEY (account_id, uidl),
+                UNIQUE (account_id, uid)
+            );
+            "#,
+        )
+        .map_err(|e| format!("迁移到 v4 失败: {e}"))?;
+    }
+    if version < 5 {
+        // v5：三件互相独立、但都是「本地状态」的事。
+        //
+        // 1) message_bodies.raw：整封原文缓存。POP3 没有「按 uid 取单个附件」的接口，
+        //    IMAP 也得重下一整封；缓存之后附件打开 / 另存 .eml / 导出都能立刻命中。
+        //    只对「打开过的邮件」缓存，按单封大小封顶（见 `RAW_CACHE_LIMIT`）。
+        add_column(&tx, "message_bodies", "raw", "BLOB")?;
+        // 2) outbox.staged：多次投递失败后不再自动重试，转为「在发件箱里等用户处置」。
+        add_column(&tx, "outbox", "staged", "INTEGER NOT NULL DEFAULT 0")?;
+        // 3) folders.local_only：只有本地才有的文件夹（发件箱）。服务器同步必须绕开它，
+        //    否则会去 SELECT 一个永远不存在的名字，每一轮同步都报错。
+        add_column(&tx, "folders", "local_only", "INTEGER NOT NULL DEFAULT 0")?;
+        // 4) folders.user_created：是不是用户自己建（或显式保留）的文件夹。
+        //    服务器同步会把 QQ / 163 自带的「其他文件夹」及其遗留子目录一起带下来，
+        //    这些不是用户要的；侧栏只展示用户自己建的。老库里已有的文件夹
+        //    一律按「有邮件的算用户在用」回填一次，不把用户之前建的目录藏起来。
+        add_column(&tx, "folders", "user_created", "INTEGER NOT NULL DEFAULT 0")?;
+        tx.execute(
+            "UPDATE folders SET user_created = 1 WHERE total > 0 OR unread > 0",
+            [],
+        )
+        .ok();
+        // 老库补一次「存档」占位：这个角色以前没被自动补齐，用户的账户里往往没有。
+        // 按**角色**判断是否已有（而不是按名字）：服务器上叫「存档」/「Archive」/
+        // 「All Mail」的都有，只有缺这个角色时才补，否则会多出一个空文件夹。
+        tx.execute(
+            "INSERT OR IGNORE INTO folders
+                 (account_id, name, display_name, delimiter, role, unread, total,
+                  uid_validity, uid_next, selectable, local_only)
+             SELECT a.id, 'Archive', '存档', NULL, 'archive', 0, 0, 0, 0, 1, 0
+             FROM accounts a
+             WHERE NOT EXISTS (SELECT 1 FROM folders f
+                               WHERE f.account_id = a.id AND f.role = 'archive')",
+            [],
+        )
+        .ok();
+        // 发件箱是纯本地文件夹：每个账户都补一条。
+        tx.execute(
+            "INSERT OR IGNORE INTO folders
+                 (account_id, name, display_name, delimiter, role, unread, total,
+                  uid_validity, uid_next, selectable, local_only)
+             SELECT a.id, 'Outbox', '发件箱', NULL, 'outbox', 0, 0, 0, 0, 1, 1
+             FROM accounts a
+             WHERE NOT EXISTS (SELECT 1 FROM folders f
+                               WHERE f.account_id = a.id AND f.role = 'outbox')",
+            [],
+        )
+        .ok();
+    }
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)
         .map_err(|e| format!("写入 schema 版本失败: {e}"))?;
     tx.commit().map_err(|e| e.to_string())?;
@@ -435,7 +513,7 @@ fn reindex_message(
 const ACCOUNT_COLS: &str = "id, email, display_name, imap_host, imap_port, imap_security, \
     smtp_host, smtp_port, smtp_security, username, auth_kind, proxy_json, accent, signature, \
     folder_map_json, created_at, last_sync_at, oauth_provider, oauth_expires, delegate_json, \
-    sieve_json";
+    sieve_json, protocol, pop3_host, pop3_port, pop3_security, pop3_leave_on_server";
 
 fn row_to_account(row: &Row<'_>) -> rusqlite::Result<Account> {
     let proxy_json: Option<String> = row.get(11)?;
@@ -466,6 +544,11 @@ fn row_to_account(row: &Row<'_>) -> rusqlite::Result<Account> {
         sieve: serde_json::from_str(&sieve_json).ok(),
         created_at: row.get(15)?,
         last_sync_at: row.get(16)?,
+        protocol: row.get(21)?,
+        pop3_host: row.get(22)?,
+        pop3_port: row.get(23)?,
+        pop3_security: super::model::Security::parse(&row.get::<_, String>(24)?),
+        pop3_leave_on_server: row.get::<_, i32>(25)? != 0,
     })
 }
 
@@ -501,8 +584,10 @@ pub fn upsert_account(account: &Account) -> Result<(), String> {
         r#"INSERT INTO accounts (id, email, display_name, imap_host, imap_port, imap_security,
                 smtp_host, smtp_port, smtp_security, username, auth_kind, proxy_json, accent,
                 signature, folder_map_json, created_at, last_sync_at,
-                oauth_provider, oauth_expires, delegate_json, sieve_json)
-           VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)
+                oauth_provider, oauth_expires, delegate_json, sieve_json,
+                protocol, pop3_host, pop3_port, pop3_security, pop3_leave_on_server)
+           VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,
+                   ?22,?23,?24,?25,?26)
            ON CONFLICT(id) DO UPDATE SET
                 email=excluded.email, display_name=excluded.display_name,
                 imap_host=excluded.imap_host, imap_port=excluded.imap_port,
@@ -512,7 +597,10 @@ pub fn upsert_account(account: &Account) -> Result<(), String> {
                 proxy_json=excluded.proxy_json, accent=excluded.accent,
                 signature=excluded.signature, folder_map_json=excluded.folder_map_json,
                 oauth_provider=excluded.oauth_provider, oauth_expires=excluded.oauth_expires,
-                delegate_json=excluded.delegate_json, sieve_json=excluded.sieve_json"#,
+                delegate_json=excluded.delegate_json, sieve_json=excluded.sieve_json,
+                protocol=excluded.protocol, pop3_host=excluded.pop3_host,
+                pop3_port=excluded.pop3_port, pop3_security=excluded.pop3_security,
+                pop3_leave_on_server=excluded.pop3_leave_on_server"#,
         params![
             account.id,
             account.email,
@@ -546,6 +634,11 @@ pub fn upsert_account(account: &Account) -> Result<(), String> {
                 .as_ref()
                 .and_then(|s| serde_json::to_string(s).ok())
                 .unwrap_or_default(),
+            account.protocol,
+            account.pop3_host,
+            account.pop3_port,
+            account.pop3_security.as_str(),
+            account.pop3_leave_on_server as i32,
         ],
     )
     .map_err(|e| format!("保存账户失败: {e}"))?;
@@ -582,6 +675,8 @@ pub fn delete_account(id: &str) -> Result<(), String> {
         .ok();
     tx.execute("DELETE FROM message_bodies WHERE account_id = ?1", params![id])
         .ok();
+    tx.execute("DELETE FROM pop3_uids WHERE account_id = ?1", params![id])
+        .ok();
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -598,16 +693,77 @@ pub fn touch_account_sync(id: &str, at: i64) -> Result<(), String> {
 
 // ---------------- 文件夹 ----------------
 
+/// 用服务器返回的文件夹表替换本地表。
+///
+/// `user_created` 是用户本地的判断（「这个目录是不是我自己建的」），服务器不知道，
+/// 所以刷新时必须从旧行里继承，否则每同步一次用户的标记就丢一次。
+/// 发件箱这类纯本地文件夹不会出现在服务器的列表里，要原样保留。
 pub fn replace_folders(account_id: &str, folders: &[MailFolder]) -> Result<(), String> {
     let mut conn = open()?;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
+    let mut kept: std::collections::HashMap<String, (bool, bool)> = std::collections::HashMap::new();
+    {
+        let mut stmt = tx
+            .prepare("SELECT name, user_created, local_only FROM folders WHERE account_id=?1")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![account_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i32>(1)? != 0,
+                    row.get::<_, i32>(2)? != 0,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows.flatten() {
+            kept.insert(row.0, (row.1, row.2));
+        }
+    }
+    // 纯本地的文件夹（发件箱）不在服务器列表里：先取出来，等服务器结果写完再放回去。
+    let mut local_only_rows: Vec<MailFolder> = Vec::new();
+    {
+        let mut stmt = tx
+            .prepare(
+                "SELECT account_id, name, display_name, delimiter, role, unread, total,
+                        uid_validity, uid_next, selectable, local_only, user_created
+                 FROM folders WHERE account_id=?1 AND local_only=1",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![account_id], |row| {
+                Ok(MailFolder {
+                    account_id: row.get(0)?,
+                    name: row.get(1)?,
+                    display_name: row.get(2)?,
+                    delimiter: row.get(3)?,
+                    role: FolderRole::parse(&row.get::<_, String>(4)?),
+                    unread: row.get(5)?,
+                    total: row.get(6)?,
+                    uid_validity: row.get(7)?,
+                    uid_next: row.get(8)?,
+                    selectable: row.get::<_, i32>(9)? != 0,
+                    local_only: row.get::<_, i32>(10)? != 0,
+                    user_created: row.get::<_, i32>(11)? != 0,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows.flatten() {
+            local_only_rows.push(row);
+        }
+    }
+
     tx.execute("DELETE FROM folders WHERE account_id = ?1", params![account_id])
         .ok();
-    for f in folders {
+    for f in folders.iter().chain(local_only_rows.iter()) {
+        let inherited = kept.get(&f.name).copied().unwrap_or((false, false));
+        // 服务器同步带下来的文件夹：沿用旧的 user_created；新出现的按「没有标记」处理，
+        // 由侧栏决定只展示用户自己建的那些。
+        let user_created = f.user_created || inherited.0;
+        let local_only = f.local_only || inherited.1;
         tx.execute(
             r#"INSERT OR REPLACE INTO folders
-               (account_id, name, display_name, delimiter, role, unread, total, uid_validity, uid_next, selectable)
-               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)"#,
+               (account_id, name, display_name, delimiter, role, unread, total, uid_validity, uid_next, selectable, local_only, user_created)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"#,
             params![
                 account_id,
                 f.name,
@@ -619,6 +775,8 @@ pub fn replace_folders(account_id: &str, folders: &[MailFolder]) -> Result<(), S
                 f.uid_validity,
                 f.uid_next,
                 f.selectable as i32,
+                local_only as i32,
+                user_created as i32,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -631,7 +789,8 @@ pub fn list_folders(account_id: &str) -> Result<Vec<MailFolder>, String> {
     let conn = open()?;
     let mut stmt = conn
         .prepare(
-            "SELECT account_id, name, display_name, delimiter, role, unread, total, uid_validity, uid_next, selectable
+            "SELECT account_id, name, display_name, delimiter, role, unread, total,
+                    uid_validity, uid_next, selectable, local_only, user_created
              FROM folders WHERE account_id = ?1 ORDER BY role ASC, display_name ASC",
         )
         .map_err(|e| e.to_string())?;
@@ -648,6 +807,8 @@ pub fn list_folders(account_id: &str) -> Result<Vec<MailFolder>, String> {
                 uid_validity: row.get(7)?,
                 uid_next: row.get(8)?,
                 selectable: row.get::<_, i32>(9)? != 0,
+                local_only: row.get::<_, i32>(10)? != 0,
+                user_created: row.get::<_, i32>(11)? != 0,
             })
         })
         .map_err(|e| e.to_string())?
@@ -690,6 +851,53 @@ pub fn unread_counts() -> Result<Vec<(String, u32)>, String> {
 }
 
 /// 删除文件夹行及其本地缓存（服务器侧已由 imap::delete_folder 删掉）。
+/// 插入 / 更新一条文件夹记录（本地新建文件夹、或者服务器创建成功后同步本地表）。
+pub fn insert_folder_row(folder: &MailFolder) -> Result<(), String> {
+    let conn = open()?;
+    // 不覆盖已有的 user_created / local_only 携带的信息：以调用方给的为准，
+    // 但同名已存在时保留原来的「用户建的」标记。
+    let existing_user: Option<i32> = conn
+        .query_row(
+            "SELECT user_created FROM folders WHERE account_id=?1 AND name=?2",
+            params![folder.account_id, folder.name],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    conn.execute(
+        r#"INSERT OR REPLACE INTO folders
+           (account_id, name, display_name, delimiter, role, unread, total, uid_validity, uid_next, selectable, local_only, user_created)
+           VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"#,
+        params![
+            folder.account_id,
+            folder.name,
+            folder.display_name,
+            folder.delimiter,
+            folder.role.as_str(),
+            folder.unread,
+            folder.total,
+            folder.uid_validity,
+            folder.uid_next,
+            folder.selectable as i32,
+            folder.local_only as i32,
+            (folder.user_created || existing_user.unwrap_or(0) != 0) as i32,
+        ],
+    )
+    .map_err(|e| format!("写入文件夹失败: {e}"))?;
+    Ok(())
+}
+
+/// 把文件夹标成 / 取消「保留在侧栏」（用户右键菜单里的动作）。
+pub fn set_folder_user_created(account_id: &str, name: &str, value: bool) -> Result<(), String> {
+    let conn = open()?;
+    conn.execute(
+        "UPDATE folders SET user_created=?1 WHERE account_id=?2 AND name=?3",
+        params![value as i32, account_id, name],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 pub fn delete_folder_row(account_id: &str, name: &str) -> Result<(), String> {
     let mut conn = open()?;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
@@ -769,6 +977,95 @@ pub fn clear_folder_messages(account_id: &str, folder: &str) -> Result<(), Strin
     .ok();
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+// ---------------- POP3：UIDL ↔ uid ----------------
+
+/// 把服务器给的 UIDL 映射成一个稳定的本地 uid。
+///
+/// POP3 只有「本次会话的序号」和「跨会话稳定的 UIDL」，而本地模型的主键是整数 uid。
+/// 这里在同一个事务里查表、必要时分配新号：**同一个 UIDL 永远得到同一个 uid**，
+/// 所以重复下载同一封邮件不会产生两行，列表里的已读 / 星标也不会丢。
+///
+/// 分配规则是 `MAX(uid) + 1`（从 1 开始）。用自增而不是哈希：UIDL 长度与字符集
+/// 由服务器决定（有的给 `<abc>@host`，有的给一串数字），哈希既可能撞号也没有必要。
+pub fn pop3_uid_for(account_id: &str, uidl: &str) -> Result<u32, String> {
+    if uidl.trim().is_empty() {
+        return Err("UIDL 为空".to_string());
+    }
+    let mut conn = open()?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    if let Ok(uid) = tx.query_row(
+        "SELECT uid FROM pop3_uids WHERE account_id=?1 AND uidl=?2",
+        params![account_id, uidl],
+        |r| r.get::<_, i64>(0),
+    ) {
+        return Ok(uid as u32);
+    }
+    let next: i64 = tx
+        .query_row(
+            "SELECT COALESCE(MAX(uid), 0) + 1 FROM pop3_uids WHERE account_id=?1",
+            params![account_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(1);
+    // 同一账户的 uid 还要和 messages 里已存在的 uid 错开：切换协议或导入历史数据时，
+    // pop3_uids 可能比 messages 里的 uid 小，直接分配就会撞上已有邮件。
+    let next: i64 = next.max(
+        tx.query_row(
+            "SELECT COALESCE(MAX(uid), 0) + 1 FROM messages WHERE account_id=?1",
+            params![account_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(1),
+    );
+    tx.execute(
+        "INSERT INTO pop3_uids (account_id, uidl, uid) VALUES (?1, ?2, ?3)",
+        params![account_id, uidl, next],
+    )
+    .map_err(|e| format!("分配 POP3 uid 失败: {e}"))?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(next as u32)
+}
+
+/// 该账户已经收过的 UIDL（用于「只拉新邮件」）。
+pub fn pop3_known_uids(account_id: &str) -> Result<std::collections::HashSet<String>, String> {
+    let conn = open()?;
+    let mut stmt = conn
+        .prepare("SELECT uidl FROM pop3_uids WHERE account_id=?1")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![account_id], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?;
+    let mut out = std::collections::HashSet::new();
+    for row in rows {
+        out.insert(row.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
+/// 反查：某个本地 uid 对应的 UIDL（POP3 打开单封时用）。
+pub fn pop3_uidl_for(account_id: &str, uid: u32) -> Result<Option<String>, String> {
+    let conn = open()?;
+    conn.query_row(
+        "SELECT uidl FROM pop3_uids WHERE account_id=?1 AND uid=?2",
+        params![account_id, uid],
+        |r| r.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+}
+
+/// 删除某封 POP3 邮件后清掉它的 UIDL 映射：服务器上已经没有了，
+/// 留着只会让「下一封刚好复用同一个 UIDL」的服务器（少见）误判成已收过。
+pub fn pop3_forget_uidl(account_id: &str, uidl: &str) -> Result<(), String> {
+    let conn = open()?;
+    conn.execute(
+        "DELETE FROM pop3_uids WHERE account_id=?1 AND uidl=?2",
+        params![account_id, uidl],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }
 
 /// 文件夹里本地已知的最大 UID（增量同步的起点）。
@@ -983,6 +1280,11 @@ pub fn upsert_summaries(items: &[MessageSummary]) -> Result<(), String> {
     Ok(())
 }
 
+/// 整封原文缓存的大小上限。超过这个值的邮件不缓存原文：
+/// 附件打开本来就要多等一会儿，而把 50 MB 的原文塞进库里会让选择变慢、
+/// 备份变大，得不偿失。打开过的普通邮件（绝大多数在几百 KB 以内）则秒开。
+pub const RAW_CACHE_LIMIT: usize = 32 * 1024 * 1024;
+
 /// 正文入库时同步刷新全文索引。
 pub fn upsert_body(
     account_id: &str,
@@ -1014,6 +1316,7 @@ pub fn upsert_body(
         attachments_json.to_string()
     };
 
+    // 注意不要覆盖 raw：正文与原文是两次不同的写入（正文先到，原文在打开邮件时补）。
     tx.execute(
         r#"INSERT INTO message_bodies (account_id, folder, uid, html, text, attachments_json, body_fetched)
            VALUES (?1,?2,?3,?4,?5,?6,1)
@@ -1026,6 +1329,58 @@ pub fn upsert_body(
     reindex_message(&tx, account_id, folder, uid)?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// 缓存一封邮件的完整原文（RFC822 字节）。
+///
+/// 为什么值得单独存一份：附件打开、另存 .eml、导出 PDF/Word 都要「整封原文」，
+/// 而这些操作以前每次都重新从服务器拉一遍——QQ 上一封 800 KB 的邮件，
+/// 拉取 + TLS 往返就是十秒级。缓存之后同一封邮件的后续操作全是本地读盘。
+///
+/// 只缓存「用户已经打开过」的邮件；超过 `RAW_CACHE_LIMIT` 的不缓存。
+/// 原文与正文一样走本地加密：里面有附件内容，不能明文躺在库里。
+pub fn cache_raw_body(account_id: &str, folder: &str, uid: u32, raw: &[u8]) -> Result<(), String> {
+    if raw.is_empty() || raw.len() > RAW_CACHE_LIMIT {
+        return Ok(());
+    }
+    let payload = if encryption_enabled() {
+        super::crypto::encrypt_bytes(account_id, raw)?
+    } else {
+        raw.to_vec()
+    };
+    let conn = open()?;
+    // 必须是 UPSERT 而不是 UPDATE：第一次打开邮件时正文行还没写（upsert_body 在解析之后），
+    // 用 UPDATE 会静默命中 0 行，原文缓存永远存不进去——附件依旧每次重新下载。
+    conn.execute(
+        // 只写 raw 这一列：正文（html / text）与 body_fetched 由 `upsert_body` 负责，
+        // 这里既不能把它们清空，也不能谎报「正文已取」。
+        r#"INSERT INTO message_bodies (account_id, folder, uid, raw)
+           VALUES (?1,?2,?3,?4)
+           ON CONFLICT(account_id, folder, uid) DO UPDATE SET raw=excluded.raw"#,
+        params![payload, account_id, folder, uid],
+    )
+    .map_err(|e| format!("缓存邮件原文失败: {e}"))?;
+    Ok(())
+}
+
+/// 取缓存的原文；没有（或解密失败）返回 None，调用方回退到「连服务器重新拉」。
+pub fn cached_raw_body(account_id: &str, folder: &str, uid: u32) -> Option<Vec<u8>> {
+    let conn = open().ok()?;
+    let payload: Option<Vec<u8>> = conn
+        .query_row(
+            "SELECT raw FROM message_bodies WHERE account_id=?1 AND folder=?2 AND uid=?3",
+            params![account_id, folder, uid],
+            |row| row.get::<_, Option<Vec<u8>>>(0),
+        )
+        .optional()
+        .ok()?
+        .flatten();
+    let bytes = payload?;
+    if bytes.is_empty() {
+        return None;
+    }
+    // 历史 / 未加密的缓存是裸字节：前缀不匹配时原样返回。
+    super::crypto::decrypt_bytes(account_id, &bytes).ok()
 }
 
 /// 本地加密开关的进程内缓存。默认开启——「默认安全」比「默认好用」更该是默认值。
@@ -1681,8 +2036,8 @@ pub fn delete_template(id: &str) -> Result<(), String> {
 pub fn enqueue_outbox(item: &OutboxItem, payload_json: &str) -> Result<(), String> {
     let conn = open()?;
     conn.execute(
-        "INSERT OR REPLACE INTO outbox (id, account_id, subject, to_addrs, payload_json, due_at, created_at, sent)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,0)",
+        "INSERT OR REPLACE INTO outbox (id, account_id, subject, to_addrs, payload_json, due_at, created_at, sent, staged)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,0,0)",
         params![
             item.id,
             item.account_id,
@@ -1701,7 +2056,8 @@ pub fn list_outbox() -> Result<Vec<OutboxItem>, String> {
     let conn = open()?;
     let mut stmt = conn
         .prepare(
-            "SELECT id, account_id, subject, to_addrs, due_at, created_at, attempts, next_attempt_at, last_error
+            "SELECT id, account_id, subject, to_addrs, due_at, created_at, attempts,
+                    next_attempt_at, last_error, staged
              FROM outbox WHERE sent=0 ORDER BY due_at ASC",
         )
         .map_err(|e| e.to_string())?;
@@ -1717,6 +2073,7 @@ pub fn list_outbox() -> Result<Vec<OutboxItem>, String> {
                 attempts: row.get(6)?,
                 next_attempt_at: row.get(7)?,
                 last_error: row.get(8)?,
+                staged: row.get::<_, i32>(9)? != 0,
             })
         })
         .map_err(|e| e.to_string())?
@@ -1738,7 +2095,8 @@ pub fn take_due_outbox(now: i64) -> Result<Vec<(String, String)>, String> {
         let mut stmt = tx
             .prepare(
                 "SELECT id FROM outbox
-                 WHERE sent=0 AND due_at<=?1 AND claimed_at<=?2 AND next_attempt_at<=?1
+                 WHERE sent=0 AND staged=0 AND due_at<=?1 AND claimed_at<=?2
+                   AND next_attempt_at<=?1
                  ORDER BY due_at ASC",
             )
             .map_err(|e| e.to_string())?;
@@ -1820,6 +2178,40 @@ pub fn note_outbox_failure(id: &str, error: &str) -> Result<i64, String> {
     )
     .map_err(|e| e.to_string())?;
     Ok(delay)
+}
+
+/// 暂存一条始终发不出去的邮件：不再自动重试，改由发件箱展示给用户处置。
+pub fn stage_outbox(id: &str, error: &str) -> Result<(), String> {
+    let conn = open()?;
+    conn.execute(
+        "UPDATE outbox SET staged=1, claimed_at=0, last_error=?1, attempts=attempts+1 WHERE id=?2",
+        params![error, id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 重新入队（发件箱里点「重试」）。退避与计数一起清零，否则用户刚点重试又要等一小时。
+pub fn requeue_outbox(id: &str) -> Result<(), String> {
+    let conn = open()?;
+    conn.execute(
+        "UPDATE outbox SET staged=0, claimed_at=0, attempts=0, next_attempt_at=0 WHERE id=?1",
+        params![id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 一条待发邮件的原始请求（发件箱里点开查看 / 撤回时用）。
+pub fn outbox_payload(id: &str) -> Result<Option<String>, String> {
+    let conn = open()?;
+    conn.query_row(
+        "SELECT payload_json FROM outbox WHERE id=?1",
+        params![id],
+        |r| r.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(|e| e.to_string())
 }
 
 pub fn drop_outbox(id: &str) -> Result<(), String> {

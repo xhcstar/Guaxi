@@ -465,6 +465,19 @@ export const useMailStore = defineStore('mail', {
     },
 
     /** 删除自建文件夹（服务器 + 本地缓存）。 */
+    /** 文件夹「保留在侧栏」：服务器带下来的模板目录默认不显示，用户可以手动留下。 */
+    async setFolderPinned(name, pinned) {
+      if (!this.activeAccountId) return
+      await invoke('mail_set_folder_pinned', {
+        accountId: this.activeAccountId,
+        name,
+        pinned,
+      })
+      const list = this.foldersByAccount[this.activeAccountId] || []
+      const folder = list.find((f) => f.name === name)
+      if (folder) folder.userCreated = pinned
+    },
+
     async deleteFolder(name) {
       if (!this.activeAccountId) throw new Error('请先选择账户')
       await invoke('mail_delete_folder', { accountId: this.activeAccountId, name })
@@ -1510,6 +1523,14 @@ export const useMailStore = defineStore('mail', {
     async cancelOutbox(id) {
       await invoke('mail_cancel_outbox', { id })
       this.outbox = this.outbox.filter((item) => item.id !== id)
+    },
+
+    /** 发件箱里点「重试」：立刻再投递一次（不等待退避）。 */
+    async retryOutbox(id) {
+      const result = await invoke('mail_retry_outbox', { id })
+      await this.loadOutbox()
+      await this.loadMessages({ silent: true })
+      return result
     },
 
     /** 启动与轮询时把到期的待发邮件投出去（撤回窗口结束后真正发送）。 */

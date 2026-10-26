@@ -212,6 +212,47 @@ pub fn decrypt(account_id: &str, stored: &str) -> Result<Option<String>, String>
         .map_err(|e| format!("解密结果不是有效文本: {e}"))
 }
 
+/// 加密一段字节（整封原文缓存用）。
+///
+/// 与 `encrypt` 同一套格式，只是入参是二进制：原始报文的附件部分不是 UTF-8，
+/// 先转成字符串再加密会把二进制附件写坏。
+pub fn encrypt_bytes(account_id: &str, plain: &[u8]) -> Result<Vec<u8>, String> {
+    if plain.is_empty() {
+        return Ok(Vec::new());
+    }
+    let cipher = cipher(account_id)?;
+    let mut nonce_bytes = [0u8; 12];
+    OsRng
+        .try_fill_bytes(&mut nonce_bytes)
+        .map_err(|e| format!("生成随机数失败: {e}"))?;
+    let sealed = cipher
+        .encrypt(Nonce::from_slice(&nonce_bytes), plain)
+        .map_err(|e| format!("加密失败: {e}"))?;
+    let mut blob = Vec::with_capacity(ENC_PREFIX.len() + 16 + sealed.len());
+    // 前缀是 ASCII：与正文密文同一个标记，`decrypt` / `decrypt_bytes` 都能认出它。
+    blob.extend_from_slice(ENC_PREFIX.as_bytes());
+    blob.extend_from_slice(&nonce_bytes);
+    blob.extend_from_slice(&sealed);
+    Ok(blob)
+}
+
+/// 解密 `encrypt_bytes` 的结果。返回原文；不是本模块的密文时原样返回。
+pub fn decrypt_bytes(account_id: &str, stored: &[u8]) -> Result<Vec<u8>, String> {
+    let Some(payload) = stored.strip_prefix(ENC_PREFIX.as_bytes()) else {
+        return Ok(stored.to_vec());
+    };
+    let blob = STANDARD
+        .decode(payload)
+        .map_err(|e| format!("密文格式无效: {e}"))?;
+    if blob.len() <= 12 {
+        return Err("密文长度异常".to_string());
+    }
+    let cipher = cipher(account_id)?;
+    cipher
+        .decrypt(Nonce::from_slice(&blob[..12]), &blob[12..])
+        .map_err(|_| "无法解密（密钥已变更或数据来自另一台设备）".to_string())
+}
+
 /// 清掉密钥缓存（账户删除后调用，避免内存里留着一把没用的密钥）。
 pub fn forget(account_id: &str) {
     if let Ok(mut guard) = KEY_CACHE.lock() {

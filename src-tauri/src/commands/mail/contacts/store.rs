@@ -8,8 +8,8 @@
 //! 按姓名合并一定会把不同的人并掉。
 
 use super::model::{
-    Contact, ContactGroup, ContactMessage, ContactQuery, ContactSuggestion, ExpandedMember,
-    GroupMember, ImportReport, LabeledValue,
+    AddressCard, Contact, ContactGroup, ContactMessage, ContactQuery, ContactSuggestion,
+    ExpandedMember, GroupMember, ImportReport, LabeledValue,
 };
 use crate::commands::mail::store;
 use rusqlite::{params, OptionalExtension, Row};
@@ -704,6 +704,135 @@ pub fn messages_with(contact: &Contact, limit: u32) -> Result<Vec<ContactMessage
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| e.to_string())?;
     Ok(rows)
+}
+
+// ---------------------------------------------------------------------------
+// 地址悬停卡片
+// ---------------------------------------------------------------------------
+
+/// 批量取若干地址的「悬停卡片」信息。
+///
+/// 阅读区一次要展示发件人 + 全部收件人 + 抄送，逐个查会变成十几次 IPC；
+/// 这里一次查完：通讯录条目（JOIN 邮箱索引）+ 本地邮件里的往来次数与最近时间。
+/// 没有收录的地址也返回一条（`contact_id` 为空），前端据此显示「加进通讯录」按钮。
+pub fn address_cards(addresses: &[String]) -> Result<Vec<AddressCard>, String> {
+    let wanted: Vec<String> = addresses
+        .iter()
+        .map(|a| normalize_email(a))
+        .filter(|a| !a.is_empty())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    if wanted.is_empty() {
+        return Ok(Vec::new());
+    }
+    let conn = store::connection()?;
+    let mut out: Vec<AddressCard> = Vec::with_capacity(wanted.len());
+    for email in wanted {
+        let mut card = AddressCard {
+            email: email.clone(),
+            ..Default::default()
+        };
+        // 1) 通讯录：邮箱索引是唯一键，一个人只可能有一条。
+        let row: Option<(String, String, String, String, i64, String)> = conn
+            .query_row(
+                "SELECT c.id, c.display_name, c.organization, c.title, c.starred, c.emails_json
+                 FROM contact_emails e JOIN contacts c ON c.id = e.contact_id
+                 WHERE e.email = ?1",
+                params![email],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if let Some((id, name, org, title, starred, emails_json)) = row {
+            card.contact_id = Some(id);
+            card.display_name = name;
+            card.organization = org;
+            card.title = title;
+            card.starred = starred != 0;
+            // 通讯录里可能存了好几个地址：卡片上只展示主地址，其余在打开联系人详情时可见。
+            let _ = emails_json;
+        }
+        // 2) 往来统计：收件（from）与发件（to/cc 里出现过）都算。
+        let like = format!("%{email}%");
+        let stats: Option<(i64, i64, String)> = conn
+            .query_row(
+                "SELECT COUNT(*), COALESCE(MAX(date), 0),
+                        COALESCE(MAX(CASE WHEN from_name <> '' THEN from_name END), '')
+                 FROM messages
+                 WHERE LOWER(from_addr) = ?1
+                    OR LOWER(to_json) LIKE ?2 OR LOWER(cc_json) LIKE ?2",
+                params![email, like],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if let Some((count, last, header_name)) = stats {
+            card.message_count = count.max(0) as u32;
+            card.last_seen_at = last;
+            card.header_name = header_name;
+        }
+        out.push(card);
+    }
+    Ok(out)
+}
+
+/// 把一个地址收进通讯录（地址悬停卡片上的「加进通讯录」）。
+///
+/// 地址已经属于某个联系人时直接返回它，不重复建人——「同一个地址只能挂一个人」
+/// 是库层的约束，这里只是把结果解释得对用户友好一点。
+pub fn save_address_contact(email: &str, display_name: &str) -> Result<Contact, String> {
+    let addr = normalize_email(email);
+    if addr.is_empty() {
+        return Err("邮箱地址为空".to_string());
+    }
+    if let Some(existing) = get_by_email(&addr)? {
+        return Ok(existing);
+    }
+    let name = display_name.trim();
+    let contact = Contact {
+        id: String::new(),
+        display_name: name.to_string(),
+        emails: vec![LabeledValue {
+            label: "work".into(),
+            value: addr.clone(),
+        }],
+        source: "manual".into(),
+        last_seen_at: chrono::Utc::now().timestamp(),
+        first_seen_at: chrono::Utc::now().timestamp(),
+        ..Default::default()
+    };
+    upsert(contact)
+}
+
+/// 按邮箱地址找联系人（规范化后精确匹配）。
+pub fn get_by_email(email: &str) -> Result<Option<Contact>, String> {
+    let addr = normalize_email(email);
+    if addr.is_empty() {
+        return Ok(None);
+    }
+    let conn = store::connection()?;
+    let id: Option<String> = conn
+        .query_row(
+            "SELECT contact_id FROM contact_emails WHERE email=?1",
+            params![addr],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    match id {
+        Some(id) => get(&id),
+        None => Ok(None),
+    }
 }
 
 // ---------------------------------------------------------------------------

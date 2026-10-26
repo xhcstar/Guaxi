@@ -14,8 +14,11 @@
             <div class="meta">
               <span class="email">{{ account.email }}</span>
               <span class="servers">
-                IMAP {{ account.imapHost }}:{{ account.imapPort }} · SMTP
-                {{ account.smtpHost }}:{{ account.smtpPort }}
+                {{ account.protocol === 'pop3' ? 'POP3' : 'IMAP' }}
+                {{ account.protocol === 'pop3' ? account.pop3Host : account.imapHost }}:{{
+                  account.protocol === 'pop3' ? account.pop3Port : account.imapPort
+                }}
+                · SMTP {{ account.smtpHost }}:{{ account.smtpPort }}
               </span>
             </div>
             <button class="mail-btn" @click="$emit('select', account.id)">切换</button>
@@ -62,15 +65,49 @@
 
           <div class="mail-field-row">
             <div class="mail-field">
+              <label class="mail-flabel">收信协议</label>
+              <div class="mail-protocol-toggle">
+                <button
+                  v-for="option in PROTOCOL_OPTIONS"
+                  :key="option.value"
+                  type="button"
+                  class="mail-chip"
+                  :class="{ 'is-on': form.protocol === option.value }"
+                  :title="option.hint"
+                  @click="setProtocol(option.value)"
+                >
+                  {{ option.label }}
+                </button>
+              </div>
+            </div>
+            <div class="mail-field">
               <label class="mail-flabel">登录用户名（留空 = 邮箱地址）</label>
               <input v-model="form.username" class="mail-input" placeholder="可选" />
             </div>
+          </div>
+
+          <div class="mail-field-row">
             <div class="mail-field">
               <label class="mail-flabel">认证方式</label>
-              <select v-model="form.authKind" class="mail-input">
+              <select v-model="form.authKind" class="mail-input" :disabled="form.protocol === 'pop3'">
                 <option value="password">密码 / 授权码</option>
                 <option value="oauth2">OAuth2（Gmail / Outlook 推荐）</option>
               </select>
+              <span v-if="form.protocol === 'pop3'" class="mail-hint">
+                POP3 只能用密码 / 授权码：服务商没有为它提供 OAuth2 端点。
+              </span>
+            </div>
+            <div class="mail-field">
+              <label class="mail-flabel">
+                {{ form.protocol === 'pop3' ? '本地保留' : '同步范围' }}
+              </label>
+              <span class="mail-hint mail-protocol-note">
+                {{
+                  form.protocol === 'pop3'
+                    ? '下载到本机后从本地库读取，已发送 / 草稿 / 删除都只在本机。'
+                    : '文件夹、已读与星标都保存在服务器上，多设备一致。'
+                }}
+              </span>
             </div>
           </div>
 
@@ -170,7 +207,38 @@
             </div>
           </div>
 
-          <div class="mail-field-row">
+          <template v-if="form.protocol === 'pop3'">
+            <div class="mail-field-row">
+              <div class="mail-field">
+                <label class="mail-flabel">POP3 服务器</label>
+                <input v-model="form.pop3Host" class="mail-input" placeholder="pop.example.com" />
+              </div>
+              <div class="mail-field">
+                <label class="mail-flabel">端口 / 加密</label>
+                <div style="display: flex; gap: 6px">
+                  <input v-model.number="form.pop3Port" class="mail-input" type="number" style="width: 90px" />
+                  <select v-model="form.pop3Security" class="mail-input">
+                    <option value="ssl">SSL/TLS（995）</option>
+                    <option value="starttls">STARTTLS（110）</option>
+                    <option value="none">不加密（110）</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+            <div class="mail-field">
+              <label class="mail-flabel">收信后</label>
+              <label class="mail-check">
+                <input v-model="form.pop3LeaveOnServer" type="checkbox" />
+                在服务器上保留副本
+              </label>
+              <span class="mail-hint">
+                勾选时删除邮件只影响本机；取消勾选后，本机删除的邮件会在下一次同步时从服务器删掉。
+                多半只有一台设备用这个邮箱时，取消勾选可以避免服务器空间被占满。
+              </span>
+            </div>
+          </template>
+
+          <div v-else class="mail-field-row">
             <div class="mail-field">
               <label class="mail-flabel">IMAP 服务器</label>
               <input v-model="form.imapHost" class="mail-input" placeholder="imap.example.com" />
@@ -355,9 +423,9 @@ const props = defineProps({
 const emit = defineEmits(['close', 'saved', 'deleted', 'select'])
 
 const presets = [
-  { label: 'QQ 邮箱', email: '', imapHost: 'imap.qq.com', imapPort: 993, smtpHost: 'smtp.qq.com', smtpPort: 465, hint: '需要 QQ 邮箱设置里生成的授权码' },
-  { label: '163 邮箱', email: '', imapHost: 'imap.163.com', imapPort: 993, smtpHost: 'smtp.163.com', smtpPort: 465, hint: '需要客户端授权密码' },
-  { label: '126 邮箱', email: '', imapHost: 'imap.126.com', imapPort: 993, smtpHost: 'smtp.126.com', smtpPort: 465, hint: '需要客户端授权密码' },
+  { label: 'QQ 邮箱', email: '', imapHost: 'imap.qq.com', imapPort: 993, pop3Host: 'pop.qq.com', smtpHost: 'smtp.qq.com', smtpPort: 465, hint: '需要 QQ 邮箱设置里生成的授权码' },
+  { label: '163 邮箱', email: '', imapHost: 'imap.163.com', imapPort: 993, pop3Host: 'pop.163.com', smtpHost: 'smtp.163.com', smtpPort: 465, hint: '需要客户端授权密码' },
+  { label: '126 邮箱', email: '', imapHost: 'imap.126.com', imapPort: 993, pop3Host: 'pop.126.com', smtpHost: 'smtp.126.com', smtpPort: 465, hint: '需要客户端授权密码' },
   { label: 'Gmail', email: '', imapHost: 'imap.gmail.com', imapPort: 993, smtpHost: 'smtp.gmail.com', smtpPort: 465, oauthProvider: 'gmail', hint: '需要开启两步验证并使用应用专用密码' },
   { label: 'Outlook', email: '', imapHost: 'outlook.office365.com', imapPort: 993, smtpHost: 'smtp.office365.com', smtpPort: 587, smtpSecurity: 'starttls', oauthProvider: 'outlook', authKind: 'oauth2', hint: '微软账户需要在安全设置里开启 IMAP' },
   { label: '腾讯企业邮', email: '', imapHost: 'imap.exmail.qq.com', imapPort: 993, smtpHost: 'smtp.exmail.qq.com', smtpPort: 465, hint: '登录名可能是完整邮箱' },
@@ -371,13 +439,20 @@ const presets = [
 const KNOWN_SERVERS = {
   outlook: {
     imapHost: 'outlook.office365.com', imapPort: 993, imapSecurity: 'ssl',
+    pop3Host: 'outlook.office365.com',
     smtpHost: 'smtp.office365.com', smtpPort: 587, smtpSecurity: 'starttls',
   },
   gmail: {
     imapHost: 'imap.gmail.com', imapPort: 993, imapSecurity: 'ssl',
+    pop3Host: 'pop.gmail.com',
     smtpHost: 'smtp.gmail.com', smtpPort: 465, smtpSecurity: 'ssl',
   },
 }
+
+const PROTOCOL_OPTIONS = [
+  { value: 'imap', label: 'IMAP（推荐）', hint: '多设备同步，文件夹与已读状态都在服务器上' },
+  { value: 'pop3', label: 'POP3', hint: '只收件箱，下载到本机；部分老邮箱只支持这个' },
+]
 
 const DOMAIN_SERVERS = {
   'outlook.com': KNOWN_SERVERS.outlook,
@@ -386,10 +461,10 @@ const DOMAIN_SERVERS = {
   'msn.com': KNOWN_SERVERS.outlook,
   'gmail.com': KNOWN_SERVERS.gmail,
   'googlemail.com': KNOWN_SERVERS.gmail,
-  'qq.com': { imapHost: 'imap.qq.com', imapPort: 993, imapSecurity: 'ssl', smtpHost: 'smtp.qq.com', smtpPort: 465, smtpSecurity: 'ssl' },
-  'foxmail.com': { imapHost: 'imap.qq.com', imapPort: 993, imapSecurity: 'ssl', smtpHost: 'smtp.qq.com', smtpPort: 465, smtpSecurity: 'ssl' },
-  '163.com': { imapHost: 'imap.163.com', imapPort: 993, imapSecurity: 'ssl', smtpHost: 'smtp.163.com', smtpPort: 465, smtpSecurity: 'ssl' },
-  '126.com': { imapHost: 'imap.126.com', imapPort: 993, imapSecurity: 'ssl', smtpHost: 'smtp.126.com', smtpPort: 465, smtpSecurity: 'ssl' },
+  'qq.com': { imapHost: 'imap.qq.com', imapPort: 993, imapSecurity: 'ssl', pop3Host: 'pop.qq.com', smtpHost: 'smtp.qq.com', smtpPort: 465, smtpSecurity: 'ssl' },
+  'foxmail.com': { imapHost: 'imap.qq.com', imapPort: 993, imapSecurity: 'ssl', pop3Host: 'pop.qq.com', smtpHost: 'smtp.qq.com', smtpPort: 465, smtpSecurity: 'ssl' },
+  '163.com': { imapHost: 'imap.163.com', imapPort: 993, imapSecurity: 'ssl', pop3Host: 'pop.163.com', smtpHost: 'smtp.163.com', smtpPort: 465, smtpSecurity: 'ssl' },
+  '126.com': { imapHost: 'imap.126.com', imapPort: 993, imapSecurity: 'ssl', pop3Host: 'pop.126.com', smtpHost: 'smtp.126.com', smtpPort: 465, smtpSecurity: 'ssl' },
   'exmail.qq.com': { imapHost: 'imap.exmail.qq.com', imapPort: 993, imapSecurity: 'ssl', smtpHost: 'smtp.exmail.qq.com', smtpPort: 465, smtpSecurity: 'ssl' },
 }
 
@@ -420,9 +495,14 @@ const blank = () => ({
   id: '',
   email: '',
   displayName: '',
+  protocol: 'imap',
   imapHost: '',
   imapPort: 993,
   imapSecurity: 'ssl',
+  pop3Host: '',
+  pop3Port: 995,
+  pop3Security: 'ssl',
+  pop3LeaveOnServer: true,
   smtpHost: '',
   smtpPort: 465,
   smtpSecurity: 'ssl',
@@ -449,10 +529,28 @@ function applyServers(defaults) {
   form.imapHost = defaults.imapHost
   form.imapPort = defaults.imapPort
   form.imapSecurity = defaults.imapSecurity || 'ssl'
+  form.pop3Host = defaults.pop3Host || derivePop3Host(defaults.imapHost)
+  form.pop3Port = defaults.pop3Port || 995
+  form.pop3Security = defaults.pop3Security || 'ssl'
   form.smtpHost = defaults.smtpHost
   form.smtpPort = defaults.smtpPort
   form.smtpSecurity = defaults.smtpSecurity || 'ssl'
-  autoServers.value = { imapHost: defaults.imapHost, smtpHost: defaults.smtpHost }
+  autoServers.value = {
+    imapHost: defaults.imapHost,
+    pop3Host: form.pop3Host,
+    smtpHost: defaults.smtpHost,
+  }
+}
+
+/**
+ * 从 IMAP 主机名推一个 POP3 主机名。常见写法是 `imap.example.com` → `pop.example.com`；
+ * 已知服务商都在预设表里单独写好了，这里只是自建邮箱的兜底，用户可以改。
+ */
+function derivePop3Host(imapHost) {
+  const host = String(imapHost || '').trim()
+  if (!host) return ''
+  if (/^imap\./i.test(host)) return host.replace(/^imap\./i, 'pop.')
+  return host
 }
 
 /** 按服务商 / 邮箱域名补服务器：已有服务器或用户手改过就不动。 */
@@ -468,6 +566,25 @@ function fillKnownServers() {
       form.imapHost === autoServers.value.imapHost &&
       form.smtpHost === autoServers.value.smtpHost)
   if (untouched) applyServers(defaults)
+  // POP3 账户只有 POP3 服务器在界面上；它单独填，与 IMAP 的自动补全互不影响。
+  if (form.protocol === 'pop3' && !form.pop3Host.trim() && defaults.pop3Host) {
+    form.pop3Host = defaults.pop3Host
+  }
+}
+
+/** 切换收信协议：只切换界面字段，不动用户已经填好的另一套服务器。 */
+function setProtocol(next) {
+  if (form.protocol === next) return
+  form.protocol = next
+  if (next === 'pop3') {
+    // POP3 不能用 OAuth2：服务商不提供它的授权端点。
+    form.authKind = 'password'
+    if (!form.pop3Host.trim()) {
+      // 已知服务商用精确的 POP3 主机名（pop.qq.com 这类），其余按 imap.→pop. 推。
+      const domain = String(form.email.split('@')[1] || '').trim().toLowerCase()
+      form.pop3Host = DOMAIN_SERVERS[domain]?.pop3Host || derivePop3Host(form.imapHost)
+    }
+  }
 }
 
 /** 还缺哪些必填字段：报错时直接说清楚，别只给一句笼统提示。 */
@@ -476,7 +593,11 @@ function missingFields() {
   // OAuth 可以先不填邮箱：授权结果里的 id_token 会带回来真实地址。
   const canOmitEmail = form.authKind === 'oauth2' && !form.email.trim()
   if (!emailValid.value && !canOmitEmail) missing.push('完整邮箱地址')
-  if (!form.imapHost.trim()) missing.push('IMAP 服务器')
+  if (form.protocol === 'pop3') {
+    if (!form.pop3Host.trim()) missing.push('POP3 服务器')
+  } else if (!form.imapHost.trim()) {
+    missing.push('IMAP 服务器')
+  }
   if (!form.smtpHost.trim()) missing.push('SMTP 服务器')
   return missing
 }
@@ -554,7 +675,8 @@ const canSave = computed(
   () =>
     // OAuth 允许先空着邮箱，授权完成后再由服务商返回的地址补上。
     (emailValid.value || (form.authKind === 'oauth2' && !form.email.trim())) &&
-    form.imapHost.trim() &&
+    // 收信服务器按协议二选一：POP3 账户没有 IMAP 服务器，反之亦然。
+    (form.protocol === 'pop3' ? form.pop3Host.trim() : form.imapHost.trim()) &&
     form.smtpHost.trim(),
 )
 
@@ -651,6 +773,9 @@ function startCustom() {
   form.imapHost = ''
   form.imapPort = 993
   form.imapSecurity = 'ssl'
+  form.pop3Host = ''
+  form.pop3Port = 995
+  form.pop3Security = 'ssl'
   form.smtpHost = ''
   form.smtpPort = 465
   form.smtpSecurity = 'ssl'
@@ -841,7 +966,13 @@ async function test() {
 async function save(closeAfter = true) {
   if (saving.value) return null
   if (!canSave.value) {
-    if (!closeAfter) throw new Error('请先填写邮箱地址、IMAP 与 SMTP 服务器')
+    if (!closeAfter) {
+      throw new Error(
+        form.protocol === 'pop3'
+          ? '请先填写邮箱地址、POP3 与 SMTP 服务器'
+          : '请先填写邮箱地址、IMAP 与 SMTP 服务器',
+      )
+    }
     return null
   }
   // OAuth2 账户还没有可用令牌时，保存只会得到一个「永远提示未授权」的账户。

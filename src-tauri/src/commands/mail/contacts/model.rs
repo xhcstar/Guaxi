@@ -224,6 +224,37 @@ pub struct ContactMessage {
     pub direction: String,
 }
 
+/// 地址悬停卡片：某个邮箱地址的「这人是谁、和他来回多少封、有没有存进通讯录」。
+///
+/// 阅读区把发件人 / 收件人做成可悬停的地址，卡片一次取全——
+/// 打开正文时批量查一次，悬停时不再发 IPC，鼠标划过整行地址也不会闪。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddressCard {
+    pub email: String,
+    /// 通讯录里存的名字 / 显示名；空表示没在通讯录里。
+    #[serde(default)]
+    pub display_name: String,
+    /// 通讯录里的联系人 id；`None` 表示这个地址还没收录。
+    #[serde(default)]
+    pub contact_id: Option<String>,
+    #[serde(default)]
+    pub organization: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub starred: bool,
+    /// 与这个地址往来的邮件数（收发都算）。
+    #[serde(default)]
+    pub message_count: u32,
+    /// 最近一次往来时间（Unix 秒）。
+    #[serde(default)]
+    pub last_seen_at: i64,
+    /// 在本地库里出现过的显示名（邮件头里的 From 名字），没进通讯录时用它兜底。
+    #[serde(default)]
+    pub header_name: String,
+}
+
 /// vCard 导入结果。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

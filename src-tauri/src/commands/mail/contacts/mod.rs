@@ -14,8 +14,8 @@ pub mod store;
 pub mod vcard;
 
 use model::{
-    Contact, ContactGroup, ContactMessage, ContactQuery, ContactSuggestion, ExpandedMember,
-    ImportReport,
+    AddressCard, Contact, ContactGroup, ContactMessage, ContactQuery, ContactSuggestion,
+    ExpandedMember, ImportReport,
 };
 use tauri::command;
 
@@ -27,6 +27,27 @@ pub async fn mail_list_contacts(query: ContactQuery) -> Result<Vec<Contact>, Str
 #[command]
 pub async fn mail_get_contact(id: String) -> Result<Option<Contact>, String> {
     store::get(&id)
+}
+
+/// 阅读区地址悬停卡片：一次批量查完发件人 / 收件人 / 抄送。
+#[command]
+pub async fn mail_address_cards(addresses: Vec<String>) -> Result<Vec<AddressCard>, String> {
+    store::address_cards(&addresses)
+}
+
+/// 把一个地址收进通讯录（地址卡片上的「加进通讯录」）。
+#[command]
+pub async fn mail_save_address_contact(
+    email: String,
+    display_name: String,
+) -> Result<Contact, String> {
+    store::save_address_contact(&email, &display_name)
+}
+
+/// 按邮箱地址查联系人：正文里的地址被点开时看「有没有存过」。
+#[command]
+pub async fn mail_contact_by_email(email: String) -> Result<Option<Contact>, String> {
+    store::get_by_email(&email)
 }
 
 #[command]

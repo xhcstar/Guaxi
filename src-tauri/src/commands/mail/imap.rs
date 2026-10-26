@@ -356,6 +356,20 @@ fn detect_role(name: &str, attributes: &[NameAttribute<'_>]) -> FolderRole {
     FolderRole::Custom
 }
 
+/// 服务器下发、但几乎肯定是服务商自动套结构的目录（QQ / 163 / 企业邮常见）。
+///
+/// 判断依据是「文件夹树的上层节点」而不是名字本身：一个不可选的父目录，
+/// 下面只有系统子目录（已删除 / 已发送 / 邮件订阅）时，它只是服务商模板留下的，
+/// 用户在别的客户端建的是具体文件夹（`工作/2026` 的 `工作` 是可选的）。
+fn looks_like_provider_container(name: &str, selectable: bool) -> bool {
+    if selectable {
+        return false;
+    }
+    // 顶层节点（或共享邮箱的「其他用户」节点）多半是壳：下面挂的是别人 / 别的邮箱。
+    let depth = name.split(['/', '.']).filter(|s| !s.trim().is_empty()).count();
+    depth <= 1
+}
+
 /// 列出文件夹并带回未读数。`LIST "" "*"` 一次拿全，`STATUS` 逐个查未读。
 pub fn list_folders(account: &Account, password: &str) -> Result<Vec<MailFolder>, String> {
     // 文件夹发现是一次性重活，走短连接：它自己会 LOGOUT，
@@ -389,12 +403,19 @@ pub fn list_folders(account: &Account, password: &str) -> Result<Vec<MailFolder>
 
     let mut statuses = StatusReader::new(session, account, password);
     let mut folders: Vec<MailFolder> = Vec::new();
+    // 同步前本地已有的文件夹名：出现过的沿用「用户自己的」，新出现的按结构判断。
+    let known = super::sync::folder_names(&account.id);
     for (raw_name, delimiter, selectable, role) in listed {
         let (unread, total) = if selectable {
             statuses.counts(&raw_name)
         } else {
             (0, 0)
         };
+        let is_known = known.contains(&raw_name);
+        let user_created = role != FolderRole::Custom
+            || is_known
+            || (!looks_like_provider_container(&raw_name, selectable)
+                && (total > 0 || unread > 0));
 
         folders.push(MailFolder {
             account_id: account.id.clone(),
@@ -407,6 +428,8 @@ pub fn list_folders(account: &Account, password: &str) -> Result<Vec<MailFolder>
             uid_validity: 0,
             uid_next: 0,
             selectable,
+            local_only: false,
+            user_created,
         });
     }
 
@@ -416,11 +439,15 @@ pub fn list_folders(account: &Account, password: &str) -> Result<Vec<MailFolder>
     // 固定位置——Mailspring / Outlook 都会把这类入口一直显示出来。
     // 这里补成占位项；第一次往里写（保存草稿 / 发信存档）时再由调用方 CREATE。
     //
-    // 只补 草稿 / 已发送 / 已删除 这三个「必须有」的：
-    // 存档在部分服务商那里是 Gmail 的 All Mail（语义不同），不强行造一个。
+    // 补 草稿 / 发件箱 / 已发送 / 存档 / 已删除：前四个都该有固定位置。
+    // 发件箱只是本地文件夹（`is_local_only`），不参与服务器同步；
+    // 「存档」补成占位项后，归档动作第一次使用时会由 `append_to_folder` 自动 CREATE。
     for (role, display, default_name) in [
         (FolderRole::Drafts, "草稿", "Drafts"),
+        // 发件箱只在本地存在（`local_only`），不会去服务器 CREATE。
+        (FolderRole::Outbox, "发件箱", "Outbox"),
         (FolderRole::Sent, "已发送", "Sent"),
+        (FolderRole::Archive, "存档", "Archive"),
         (FolderRole::Trash, "已删除", "Trash"),
     ] {
         if folders.iter().any(|f| f.role == role) {
@@ -437,6 +464,9 @@ pub fn list_folders(account: &Account, password: &str) -> Result<Vec<MailFolder>
             uid_validity: 0,
             uid_next: 0,
             selectable: true,
+            local_only: role.is_local_only(),
+            // 标准角色是内置的固定位置，侧栏总是显示；这里不参与「用户建没建」的判断。
+            user_created: false,
         });
     }
 
@@ -586,11 +616,12 @@ fn role_order(role: FolderRole) -> u8 {
     match role {
         FolderRole::Inbox => 0,
         FolderRole::Drafts => 1,
-        FolderRole::Sent => 2,
-        FolderRole::Archive => 3,
-        FolderRole::Junk => 4,
-        FolderRole::Trash => 5,
-        FolderRole::Custom => 6,
+        FolderRole::Outbox => 2,
+        FolderRole::Sent => 3,
+        FolderRole::Archive => 4,
+        FolderRole::Junk => 5,
+        FolderRole::Trash => 6,
+        FolderRole::Custom => 7,
     }
 }
 
@@ -1009,6 +1040,8 @@ pub fn list_delegate_folders(
             uid_validity: 0,
             uid_next: 0,
             selectable: true,
+            local_only: false,
+            user_created: true,
         });
     }
     statuses.logout();
@@ -1170,6 +1203,16 @@ pub fn move_messages(
     if let Ok(mut lease) = try_lease(account) {
         let supports_move = lease.supports("MOVE");
         lease.select(folder)?;
+        let first = move_with(lease.session(), supports_move, uids, target);
+        if first.is_ok() {
+            return first;
+        }
+        // 目标文件夹在服务器上还不存在（后端补齐的「存档」占位就是这种情况）：
+        // 建一个再试一次，而不是让「归档」直接失败。
+        let encoded = utf7::encode(target);
+        if lease.session().create(&encoded).is_err() {
+            return first;
+        }
         return move_with(lease.session(), supports_move, uids, target);
     }
     let secret = if password.is_empty() { auth_secret(account)? } else { password.to_string() };
@@ -1457,6 +1500,11 @@ mod tests {
             imap_host: "127.0.0.1".into(),
             imap_port: port,
             imap_security: Security::None,
+            protocol: "imap".into(),
+            pop3_host: String::new(),
+            pop3_port: 995,
+            pop3_security: Security::None,
+            pop3_leave_on_server: true,
             smtp_host: String::new(),
             smtp_port: 0,
             smtp_security: Security::None,

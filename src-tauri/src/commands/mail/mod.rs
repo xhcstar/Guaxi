@@ -30,6 +30,10 @@ pub mod offline;
 pub mod oauth;
 pub mod pgp;
 pub mod pool;
+/// POP3 会话（RFC 1939）：手写在 `net` 之上，与 SMTP 同一套代理 / TLS。
+pub mod pop3;
+/// POP3 账户的同步与本地文件夹模型。
+pub mod pop3_sync;
 pub mod rules;
 pub mod sanitize;
 /// 服务器端规则（Sieve，RFC 5228 / RFC 5804）。
@@ -122,6 +126,58 @@ fn load_account(account_id: &str) -> Result<Account, String> {
     store::get_account(account_id)?.ok_or_else(|| "账户不存在".to_string())
 }
 
+/// 这封邮件的原始报文。POP3 账户没有按 uid 取单封的接口，走 `pop3_sync` 重新下载。
+///
+/// 所有「先拿原文再解析」的路径（打开正文、存 .eml、导出附件、规则转发）都走这里，
+/// 协议差异就只收敛在这一个地方。
+///
+/// 先查本地原文缓存：打开过一封邮件之后，附件、另存 .eml、导出都直接读盘。
+/// 以前每次都重新 `BODY.PEEK[]` 拉整封（QQ 上 800 KB 的往来邮件 + TLS 往返
+/// 经常十秒起步），用户点开附件时看到的是一段没有任何反馈的等待。
+async fn fetch_raw_bytes(
+    account: &Account,
+    password: &str,
+    folder: &str,
+    uid: u32,
+) -> Result<Vec<u8>, String> {
+    let (account_id, folder_owned) = (account.id.clone(), folder.to_string());
+    let cached = tauri::async_runtime::spawn_blocking(move || {
+        store::cached_raw_body(&account_id, &folder_owned, uid)
+    })
+    .await
+    .ok()
+    .flatten();
+    if let Some(raw) = cached {
+        return Ok(raw);
+    }
+
+    let raw = if pop3_sync::is_pop3(account) {
+        let acc = account.clone();
+        let parsed =
+            tauri::async_runtime::spawn_blocking(move || pop3_sync::fetch_message(&acc, uid))
+                .await
+                .map_err(|e| format!("取信任务失败: {e}"))??;
+        parsed.raw.ok_or_else(|| "POP3 邮件原文不可用".to_string())?
+    } else {
+        let (acc, f, pw) = (account.clone(), folder.to_string(), password.to_string());
+        tauri::async_runtime::spawn_blocking(move || imap::fetch_raw(&acc, &pw, &f, uid))
+            .await
+            .map_err(|e| format!("取信任务失败: {e}"))??
+    };
+    // 缓存失败不影响本次读取（最多下次再拉一遍），所以这里只记日志。
+    let (account_id, folder_owned, bytes) = (account.id.clone(), folder.to_string(), raw.clone());
+    if let Err(error) =
+        tauri::async_runtime::spawn_blocking(move || {
+            store::cache_raw_body(&account_id, &folder_owned, uid, &bytes)
+        })
+        .await
+        .unwrap_or_else(|e| Err(e.to_string()))
+    {
+        warn!(error = %error, "mail: 缓存邮件原文失败");
+    }
+    Ok(raw)
+}
+
 /// 执行一次「会写到服务器」的操作；断网失败时按配置入离线队列。
 ///
 /// 关键点：**本地状态先改，服务器同步失败不算失败**。用户点了已读就应当立刻变已读，
@@ -182,6 +238,21 @@ pub async fn mail_save_account(
     if account.accent.trim().is_empty() {
         account.accent = "#5b7cfa".to_string();
     }
+    // 协议字段来自前端表单，可能缺失（老账户 / 手工调用）：统一成合法值，
+    // 否则 `is_pop3` 之外的每一处判断都要再兜一次。
+    account.protocol = if pop3_sync::is_pop3(&account) {
+        "pop3".to_string()
+    } else {
+        "imap".to_string()
+    };
+    if account.protocol == "pop3" {
+        // POP3 账户不填 IMAP 地址（界面上也没有那一栏）：存一个空值，
+        // 避免将来切回 IMAP 时悄悄连到一个过期的旧服务器。
+        account.imap_host = String::new();
+        account.pop3_host = account.pop3_host.trim().to_string();
+    } else {
+        account.pop3_host = String::new();
+    }
     if let Some(secret) = secret
         .as_deref()
         .map(|s| s.trim())
@@ -190,7 +261,43 @@ pub async fn mail_save_account(
         write_secret(&account.id, secret)?;
     }
     store::upsert_account(&account)?;
+    // 新账户一接进来就有「存档 / 发件箱」两个固定入口：否则用户第一次点归档时
+    // 侧栏里还找不到存档，要等下次同步才补出来。
+    ensure_standard_folders(&account);
     Ok(account)
+}
+
+/// 补齐账户的标准文件夹占位（存档 / 发件箱）。失败只记日志——文件夹会在下次
+/// 同步时再补，不该让「保存账户」因为它失败。
+fn ensure_standard_folders(account: &Account) {
+    let Ok(existing) = store::list_folders(&account.id) else {
+        return;
+    };
+    for (role, name, display) in [
+        (FolderRole::Archive, "Archive", "存档"),
+        (FolderRole::Outbox, "Outbox", "发件箱"),
+    ] {
+        if existing.iter().any(|f| f.role == role) {
+            continue;
+        }
+        let folder = MailFolder {
+            account_id: account.id.clone(),
+            name: name.to_string(),
+            display_name: display.to_string(),
+            delimiter: None,
+            role,
+            unread: 0,
+            total: 0,
+            uid_validity: 0,
+            uid_next: 0,
+            selectable: true,
+            local_only: role.is_local_only(),
+            user_created: false,
+        };
+        if let Err(error) = store::insert_folder_row(&folder) {
+            warn!(error = %error, "mail: 补标准文件夹失败");
+        }
+    }
 }
 
 #[command]
@@ -240,10 +347,16 @@ pub async fn mail_test_account(
         })
         .unwrap_or_default();
 
-    let imap_probe = tauri::async_runtime::spawn_blocking({
+    let receive_probe = tauri::async_runtime::spawn_blocking({
         let account = account.clone();
         let password = password.clone();
-        move || imap::probe(&account, &password)
+        move || {
+            if pop3_sync::is_pop3(&account) {
+                pop3_sync::probe(&account, &password)
+            } else {
+                imap::probe(&account, &password)
+            }
+        }
     })
     .await
     .map_err(|e| format!("诊断任务失败: {e}"))?;
@@ -252,7 +365,7 @@ pub async fn mail_test_account(
         .await
         .map_err(|e| format!("诊断任务失败: {e}"))?;
 
-    Ok(vec![imap_probe, smtp_probe])
+    Ok(vec![receive_probe, smtp_probe])
 }
 
 fn smtp_probe(account: &Account, password: &str) -> model::ConnectionProbe {
@@ -328,11 +441,70 @@ pub async fn mail_create_folder(
 ) -> Result<(), String> {
     ensure_init(&app)?;
     let account = load_account(&account_id)?;
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("文件夹名不能为空".to_string());
+    }
+
+    // POP3 只有一个服务器邮箱，但用户仍然需要在自己这边分门别类：
+    // 建一个纯本地的文件夹即可，不碰服务器。
+    if pop3_sync::is_pop3(&account) {
+        note_local_folder(&account.id, &name)?;
+        return Ok(());
+    }
+
     let password = account_password(&account)?;
-    tauri::async_runtime::spawn_blocking(move || imap::create_folder(&account, &password, &name))
+    {
+        let (acc, folder_name) = (account.clone(), name.clone());
+        tauri::async_runtime::spawn_blocking(move || {
+            imap::create_folder(&acc, &password, &folder_name)
+        })
         .await
         .map_err(|e| format!("创建文件夹任务失败: {e}"))??;
+    }
+    // 服务器上建好了，本地表也要立刻能看到；并标记成「用户自己建的」，
+    // 否则下一次文件夹刷新时它会被当成服务商遗留目录从侧栏里藏起来。
+    note_local_folder(&account.id, &name)?;
     Ok(())
+}
+
+/// 本地新建文件夹（POP3 直接建在本地；IMAP 在服务器创建成功后补一条本地记录）。
+fn note_local_folder(account_id: &str, name: &str) -> Result<(), String> {
+    if store::list_folders(account_id)?
+        .iter()
+        .any(|f| f.name == name)
+    {
+        return Ok(());
+    }
+    store::insert_folder_row(&MailFolder {
+        account_id: account_id.to_string(),
+        name: name.to_string(),
+        display_name: name.to_string(),
+        delimiter: None,
+        role: FolderRole::Custom,
+        unread: 0,
+        total: 0,
+        uid_validity: 0,
+        uid_next: 0,
+        selectable: true,
+        local_only: pop3_sync::is_pop3(&load_account(account_id)?),
+        user_created: true,
+    })
+}
+
+/// 把文件夹标记为「用户自己建的 / 保留在侧栏」（或取消）。
+///
+/// 服务器同步会把 QQ / 163 自带的模板目录一起带下来；用户想留着某个的话，
+/// 右键点一下就能让它常驻侧栏，而不必去服务器上改结构。
+#[command]
+pub async fn mail_set_folder_pinned(
+    app: AppHandle,
+    account_id: String,
+    name: String,
+    pinned: bool,
+) -> Result<(), String> {
+    ensure_init(&app)?;
+    store::set_folder_user_created(&account_id, &name, pinned)
 }
 
 /// 删除自建文件夹。角色文件夹（收件箱/已发送/草稿/垃圾箱/归档）一律拒绝——
@@ -355,6 +527,11 @@ pub async fn mail_delete_folder(
             "「{}」是系统文件夹，不能删除",
             folder.display_name
         ));
+    }
+    if pop3_sync::is_pop3(&account) {
+        // POP3 只有本地文件夹：删掉它以及里面的邮件，不碰服务器。
+        store::delete_folder_row(&account_id, &name)?;
+        return Ok(());
     }
     let password = account_password(&account)?;
     let (acc, folder_name) = (account.clone(), name.clone());
@@ -408,6 +585,32 @@ async fn sync_folder_guarded(
 
     let items = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<MessageSummary>, String> {
         let _guard = sync::lock_account(&account_id);
+        // POP3 没有文件夹与服务器端标记：整轮同步就是「把收件箱里没见过的取下来」。
+        // 已发送 / 草稿 / 删除都是本地文件夹，没有可同步的东西，直接返回空列表
+        // （否则在「已发送」里点刷新会收到收件箱的行，计数与列表对不上）。
+        if pop3_sync::is_pop3(&acc) {
+            if folder_name != pop3_sync::INBOX {
+                return Ok(Vec::new());
+            }
+            return pop3_sync::sync_inbox(&acc, settings.snippet_len as usize);
+        }
+        // 纯本地文件夹（发件箱）在服务器上不存在：去 SELECT 只会每轮报错。
+        if store::list_folders(&account_id)
+            .ok()
+            .and_then(|list| list.into_iter().find(|f| f.name == folder_name))
+            .map(|f| f.local_only)
+            .unwrap_or(false)
+        {
+            return Ok(Vec::new());
+        }
+        // 记下同步前的文件夹名：`imap::list_folders` 用它区分「用户原本就有的」
+        // 与「服务器这次新带下来的」目录（后者多半是服务商的遗留结构）。
+        if let Ok(existing) = store::list_folders(&account_id) {
+            sync::remember_folder_names(
+                &account_id,
+                existing.into_iter().map(|f| f.name).collect(),
+            );
+        }
         let (uid_validity, _) = store::folder_uid_state(&account_id, &folder_name)?;
         let last_uid = store::last_uid(&account_id, &folder_name)?;
         let items = imap::sync_folder_pooled(
@@ -740,6 +943,13 @@ pub async fn mail_sync_all(app: AppHandle) -> Result<serde_json::Value, String> 
 }
 
 async fn refresh_folders_inner(account: &Account) -> Result<Vec<MailFolder>, String> {
+    // POP3 的文件夹是固定的本地列表，不需要也不会去服务器「发现」。
+    if pop3_sync::is_pop3(account) {
+        let acc = account.clone();
+        return tauri::async_runtime::spawn_blocking(move || pop3_sync::ensure_folders(&acc))
+            .await
+            .map_err(|e| format!("刷新文件夹任务失败: {e}"))?;
+    }
     let password = account_password(account)?;
     let acc = account.clone();
     let folders = tauri::async_runtime::spawn_blocking(move || imap::list_folders(&acc, &password))
@@ -845,12 +1055,7 @@ pub async fn mail_get_message(
         let account = load_account(&account_id)?;
         let password = account_password(&account)?;
         let settings = store::load_settings();
-        let (f, u) = (folder.clone(), uid);
-        let acc = account.clone();
-        let raw =
-            tauri::async_runtime::spawn_blocking(move || imap::fetch_raw(&acc, &password, &f, u))
-                .await
-                .map_err(|e| format!("取信任务失败: {e}"))??;
+        let raw = fetch_raw_bytes(&account, &password, &folder, uid).await?;
         // 端到端加密 / 签名：在解析 MIME 之前先解开。
         //
         // 这里只做「能解就解、解不开就说清楚」：拿不到私钥时把原始提示
@@ -973,6 +1178,14 @@ async fn mark_seen_inner(
     seen: bool,
 ) -> Result<(), String> {
     let account = load_account(account_id)?;
+    // POP3 没有服务器端标记：已读只写本地，不需要服务器往返，也不该进重放队列。
+    if pop3_sync::is_pop3(&account) {
+        store::set_local_flags(account_id, folder, uids, Some(seen), None, None)?;
+        if folder == pop3_sync::INBOX {
+            let _ = pop3_sync::sync_counts(&account);
+        }
+        return Ok(());
+    }
     let (f, u) = (folder.to_string(), uids.to_vec());
     let op = offline::OfflineOp {
         id: Uuid::new_v4().to_string(),
@@ -1010,6 +1223,10 @@ pub async fn mail_set_flagged(
 ) -> Result<(), String> {
     ensure_init(&app)?;
     let account = load_account(&account_id)?;
+    if pop3_sync::is_pop3(&account) {
+        store::set_local_flags(&account_id, &folder, &uids, None, Some(flagged), None)?;
+        return Ok(());
+    }
     let (f, u) = (folder.clone(), uids.clone());
     let op = offline::OfflineOp {
         id: Uuid::new_v4().to_string(),
@@ -1072,6 +1289,10 @@ pub async fn mail_move_messages(
         attempts: 0,
         last_error: String::new(),
     };
+    if pop3_sync::is_pop3(&account) {
+        // POP3 的文件夹都在本机：移动就是「删掉旧行、在新文件夹写一份」。
+        return move_locally(&account_id, &folder, &uids, &target);
+    }
     let acc = account.clone();
     let server = tauri::async_runtime::spawn_blocking(move || {
         imap::move_messages(&acc, "", &f, &u, &t)
@@ -1087,6 +1308,35 @@ pub async fn mail_move_messages(
     }
 }
 
+/// POP3 账户的本地移动：把（摘要 + 正文）复制到目标文件夹，再删掉原行。
+///
+/// uid 只在同一文件夹内唯一，换文件夹后沿用同一个 uid 是安全的；
+/// 目标文件夹里已经有同 uid 时顺延，避免覆盖别的邮件。
+fn move_locally(account_id: &str, folder: &str, uids: &[u32], target: &str) -> Result<(), String> {
+    let mut next_uid = store::last_uid(account_id, target)?.saturating_add(1).max(1);
+    for uid in uids {
+        let Some(mut summary) = store::get_summary(account_id, folder, *uid)? else {
+            continue;
+        };
+        summary.folder = target.to_string();
+        summary.uid = next_uid;
+        next_uid += 1;
+        store::upsert_summaries(std::slice::from_ref(&summary))?;
+        if let Some((html, text, attachments, _)) = store::get_body(account_id, folder, *uid)? {
+            store::upsert_body(
+                account_id,
+                target,
+                summary.uid,
+                html.as_deref(),
+                &text,
+                &attachments,
+            )?;
+        }
+        let _ = store::delete_message(account_id, folder, *uid);
+    }
+    Ok(())
+}
+
 /// 删除：默认移入垃圾箱；已经在垃圾箱里则永久删除。
 #[command]
 pub async fn mail_delete_messages(
@@ -1097,6 +1347,16 @@ pub async fn mail_delete_messages(
 ) -> Result<(), String> {
     ensure_init(&app)?;
     let account = load_account(&account_id)?;
+    // POP3 的删除只碰本地：服务器上的那一份由「收信后是否保留副本」决定。
+    if pop3_sync::is_pop3(&account) {
+        for uid in &uids {
+            let _ = store::delete_message(&account_id, &folder, *uid);
+        }
+        if folder == pop3_sync::INBOX {
+            let _ = pop3_sync::sync_counts(&account);
+        }
+        return Ok(());
+    }
     let password = account_password(&account)?;
     let folders = store::list_folders(&account_id)?;
     let current_role = folders
@@ -1149,11 +1409,8 @@ pub async fn mail_save_attachment(
     ensure_init(&app)?;
     let account = load_account(&account_id)?;
     let password = account_password(&account)?;
-    let (f, safe_name) = (folder.clone(), sanitize_filename(&filename));
-    let raw =
-        tauri::async_runtime::spawn_blocking(move || imap::fetch_raw(&account, &password, &f, uid))
-            .await
-            .map_err(|e| format!("取信任务失败: {e}"))??;
+    let safe_name = sanitize_filename(&filename);
+    let raw = fetch_raw_bytes(&account, &password, &folder, uid).await?;
     let (bytes, _) = mime::extract_part(&raw, part).ok_or("找不到该附件")?;
     let dir = std::path::PathBuf::from(target_dir);
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建目录失败: {e}"))?;
@@ -1208,12 +1465,7 @@ pub async fn mail_open_attachment(
         // 附件内容不会变，落过一次之后重复点击直接打开缓存，不再重下整封邮件。
         let account = load_account(&account_id)?;
         let password = account_password(&account)?;
-        let (f, uid_for_fetch) = (folder.clone(), uid);
-        let raw = tauri::async_runtime::spawn_blocking(move || {
-            imap::fetch_raw(&account, &password, &f, uid_for_fetch)
-        })
-        .await
-        .map_err(|e| format!("取信任务失败: {e}"))??;
+        let raw = fetch_raw_bytes(&account, &password, &folder, uid).await?;
         let (bytes, _) = mime::extract_part(&raw, part).ok_or("找不到该附件")?;
         std::fs::write(&path, &bytes).map_err(|e| format!("写入附件失败: {e}"))?;
     }
@@ -1262,11 +1514,7 @@ pub async fn mail_save_as_eml(
     ensure_init(&app)?;
     let account = load_account(&account_id)?;
     let password = account_password(&account)?;
-    let (f, u) = (folder.clone(), uid);
-    let raw =
-        tauri::async_runtime::spawn_blocking(move || imap::fetch_raw(&account, &password, &f, u))
-            .await
-            .map_err(|e| format!("取信任务失败: {e}"))??;
+    let raw = fetch_raw_bytes(&account, &password, &folder, uid).await?;
     std::fs::write(&target_path, &raw).map_err(|e| format!("写入文件失败: {e}"))?;
     Ok(target_path)
 }
@@ -1371,6 +1619,9 @@ async fn move_batch(
         return Ok(());
     }
     let account = load_account(account_id)?;
+    if pop3_sync::is_pop3(&account) {
+        return move_locally(account_id, folder, uids, target);
+    }
     let password = account_password(&account)?;
     let (acc, f, t) = (account.clone(), folder.to_string(), target.to_string());
     let batch = uids.to_vec();
@@ -1398,6 +1649,13 @@ pub async fn mail_batch_flags(
         return Ok(());
     }
     let account = load_account(&account_id)?;
+    if pop3_sync::is_pop3(&account) {
+        let result = store::set_local_flags(&account_id, &folder, &uids, seen, flagged, None);
+        if folder == pop3_sync::INBOX {
+            let _ = pop3_sync::sync_counts(&account);
+        }
+        return result;
+    }
     let password = account_password(&account)?;
     let (acc, f) = (account.clone(), folder.clone());
     let batch = uids.clone();
@@ -1419,6 +1677,16 @@ pub async fn mail_batch_delete(
 ) -> Result<(), String> {
     ensure_init(&app)?;
     if uids.is_empty() {
+        return Ok(());
+    }
+    let account_for_protocol = load_account(&account_id)?;
+    if pop3_sync::is_pop3(&account_for_protocol) {
+        for uid in &uids {
+            let _ = store::delete_message(&account_id, &folder, *uid);
+        }
+        if folder == pop3_sync::INBOX {
+            let _ = pop3_sync::sync_counts(&account_for_protocol);
+        }
         return Ok(());
     }
     let folders = store::list_folders(&account_id)?;
@@ -1721,7 +1989,21 @@ async fn send_inner(app: &AppHandle, request: &SendRequest) -> Result<(), String
     }
 
     if save_to_sent {
-        if let Some(sent) = imap::sent_folder_name(&account) {
+        if pop3_sync::is_pop3(&account) {
+            // POP3 没有服务器端的「已发送」：把副本落到本地库的 Sent 文件夹。
+            // 发送本身已经成功，这里失败只留日志——不该反过来告诉用户「发送失败」。
+            let acc = account.clone();
+            let raw_clone = raw.clone();
+            if let Err(error) = tauri::async_runtime::spawn_blocking(move || {
+                pop3_sync::save_sent_copy(&acc, &raw_clone)
+            })
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r)
+            {
+                warn!(account = %account.email, error = %error, "mail: 保存 POP3 已发送副本失败");
+            }
+        } else if let Some(sent) = imap::sent_folder_name(&account) {
             let acc = account.clone();
             let pw = password.clone();
             let raw_clone = raw.clone();
@@ -1844,6 +2126,40 @@ fn display_recipients(list: &[String]) -> String {
         .join(", ")
 }
 
+/// 把一条发不出去的待发邮件写进本地「发件箱」文件夹，侧栏与列表里就能看到它。
+///
+/// 与 `outbox` 表是两份数据：表里留着原始请求（重试 / 撤回都靠它），
+/// 文件夹里是给人看的一封「邮件」（可打开、可另存、可删除）。
+/// 失败只记日志——这一步是善后，不该让「发送失败」的报错被它盖住。
+fn stage_outbox_into_folder(request: &SendRequest, error: &str) {
+    let Ok(account) = load_account(&request.account_id) else {
+        return;
+    };
+    let Ok(folders) = store::list_folders(&account.id) else {
+        return;
+    };
+    let Some(outbox) = folders.iter().find(|f| f.role == FolderRole::Outbox) else {
+        return;
+    };
+    let from = MailAddress {
+        name: account.display_name.clone(),
+        address: account.email.clone(),
+    };
+    // 正文后面附一句失败原因：用户打开这封「没发出去的邮件」时第一眼要知道为什么。
+    let mut request = request.clone();
+    let note = format!(
+        "<p style=\"margin:12px 0 0;padding:8px 10px;border-radius:6px;background:#fff4e5;color:#8a5a00;font-size:12px\">上次发送失败：{}</p>",
+        escape_html(error)
+    );
+    request.html = Some(format!("{}{}", request.html.unwrap_or_default(), note));
+    let Ok(raw) = mime::build(&request, &from, &account.signature) else {
+        return;
+    };
+    let _ = pop3_sync::save_copy_to(&account, &outbox.name, &raw, false);
+    // 侧栏「发件箱」只在有内容时出现：写入后刷新计数。
+    refresh_folder_totals(&account.id, &outbox.name);
+}
+
 /// 延迟发送：先进 outbox，倒计时结束后由 `mail_flush_outbox` 投递。
 #[command]
 pub async fn mail_queue_send(app: AppHandle, request: SendRequest) -> Result<OutboxItem, String> {
@@ -1861,11 +2177,18 @@ pub async fn mail_queue_send(app: AppHandle, request: SendRequest) -> Result<Out
         attempts: 0,
         next_attempt_at: 0,
         last_error: String::new(),
+        staged: false,
     };
     let payload = serde_json::to_string(&request).map_err(|e| e.to_string())?;
     store::enqueue_outbox(&item, &payload)?;
     Ok(item)
 }
+
+/// 投递失败多少次之后不再自动重试，转进「发件箱」等用户处置。
+///
+/// 取 6 次：按退避（60s 起步、逐次翻倍、上限 1 小时）大约是「隔一夜还发不出去」。
+/// 再自动重试只会在用户不知情的情况下反复撞服务器，不如把问题摆到台面上。
+const OUTBOX_STAGE_AFTER: u32 = 6;
 
 #[command]
 pub async fn mail_list_outbox(app: AppHandle) -> Result<Vec<OutboxItem>, String> {
@@ -1873,11 +2196,92 @@ pub async fn mail_list_outbox(app: AppHandle) -> Result<Vec<OutboxItem>, String>
     store::list_outbox()
 }
 
-/// 撤回一条待发邮件（只在倒计时窗口内有效）。
+/// 撤回一条待发邮件（倒计时窗口内，或发件箱里点「撤回」）。
 #[command]
 pub async fn mail_cancel_outbox(app: AppHandle, id: String) -> Result<(), String> {
     ensure_init(&app)?;
     store::drop_outbox(&id)
+}
+
+/// 重试一条暂存在发件箱里的邮件：清零退避后立刻尝试投递一次。
+///
+/// 用户在发件箱里点「重试」时往往刚修好网络或改好口令，不该再等一小时退避。
+#[command]
+pub async fn mail_retry_outbox(app: AppHandle, id: String) -> Result<serde_json::Value, String> {
+    ensure_init(&app)?;
+    let payload = store::outbox_payload(&id)?.ok_or_else(|| "这条待发邮件不存在".to_string())?;
+    let request: SendRequest = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
+    store::requeue_outbox(&id)?;
+    match send_inner(&app, &request).await {
+        Ok(()) => {
+            store::mark_outbox_sent(&id)?;
+            // 成功了就从发件箱文件夹里把暂存的那一封也删掉。
+            remove_staged_copy(&request);
+            Ok(serde_json::json!({ "sent": true }))
+        }
+        Err(error) => {
+            // 仍然是失败：立刻退回「暂存」状态，不要在后台又开始自动重试。
+            store::stage_outbox(&id, &error).ok();
+            Err(error)
+        }
+    }
+}
+
+/// 发件箱里暂存的那封「邮件」（与 outbox 表里的待发请求是两份数据）。
+/// 发送成功后要把它从文件夹里删掉，否则用户会看到「已发送」和「发件箱」各有一份。
+fn remove_staged_copy(request: &SendRequest) {
+    let Ok(account) = load_account(&request.account_id) else {
+        return;
+    };
+    let Ok(folders) = store::list_folders(&account.id) else {
+        return;
+    };
+    let Some(outbox) = folders.iter().find(|f| f.role == FolderRole::Outbox) else {
+        return;
+    };
+    let Ok(rows) = store::list_recent(&account.id, &outbox.name, 500, 0) else {
+        return;
+    };
+    let subject = request.subject.trim();
+    for row in rows {
+        if row.subject.trim() == subject {
+            let _ = store::delete_message(&account.id, &outbox.name, row.uid);
+            refresh_folder_totals(&account.id, &outbox.name);
+            return;
+        }
+    }
+}
+
+/// 按本地库的实际行数刷新某个本地文件夹的 total / unread。
+///
+/// 服务器文件夹的计数来自 IMAP STATUS；本地文件夹（发件箱、POP3 的已发送 / 草稿）
+/// 只能自己算，否则侧栏角标会一直是 0。
+fn refresh_folder_totals(account_id: &str, folder: &str) {
+    let Ok(rows) = store::list_recent(account_id, folder, u32::MAX, 0) else {
+        return;
+    };
+    let unread = rows.iter().filter(|row| !row.seen).count() as u32;
+    let _ = store::update_folder_counts(account_id, folder, unread, rows.len() as u32, 0, 0);
+}
+
+/// POP3 账户的草稿：落到本地 `Drafts` 文件夹，与「已发送」副本同一套写库路径。
+fn save_draft_locally(account: &Account, mut request: SendRequest) -> Result<(), String> {
+    // 收件人里可能有通讯组芯片（`组名 <group:ID>`）：正文头要展开成真实地址，
+    // 但本地草稿的列表行只关心主题与时间，展开结果不影响它。
+    let mut expanded = contacts::store::expand_recipient_lists(&[
+        request.to.clone(),
+        request.cc.clone(),
+        request.bcc.clone(),
+    ])?;
+    request.bcc = expanded.pop().unwrap_or_default();
+    request.cc = expanded.pop().unwrap_or_default();
+    request.to = expanded.pop().unwrap_or_default();
+    let from = MailAddress {
+        name: account.display_name.clone(),
+        address: account.email.clone(),
+    };
+    let raw = mime::build(&request, &from, &account.signature)?;
+    pop3_sync::save_draft_copy(account, &raw)
 }
 
 /// 投递所有到期的待发邮件。返回成功 / 失败数与失败原因。
@@ -1899,6 +2303,23 @@ pub async fn mail_flush_outbox(app: AppHandle) -> Result<serde_json::Value, Stri
                 // 同时把认领时间归零，下一次轮询会立刻重试；否则要等 5 分钟认领窗口过期，
                 // 用户会以为「点了立即发送没反应」。
                 Err(e) => {
+                    let attempts = store::list_outbox()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .find(|item| item.id == id)
+                        .map(|item| item.attempts)
+                        .unwrap_or(0);
+                    if attempts >= OUTBOX_STAGE_AFTER {
+                        // 反复失败：不再自动重试，转进发件箱让用户看到并处置。
+                        if store::stage_outbox(&id, &e).is_ok() {
+                            stage_outbox_into_folder(&request, &e);
+                            errors.push(format!(
+                                "「{}」多次发送失败，已放入发件箱：{e}",
+                                request.subject.trim()
+                            ));
+                            continue;
+                        }
+                    }
                     // 指数退避：失败后不立刻重试，而是把下次尝试时间推后。
                     // 网络抖动时「每 90 秒猛撞一次」是最容易被服务器拉黑的形态。
                     match store::note_outbox_failure(&id, &e) {
@@ -1921,6 +2342,10 @@ pub async fn mail_flush_outbox(app: AppHandle) -> Result<serde_json::Value, Stri
 pub async fn mail_save_draft(app: AppHandle, request: SendRequest) -> Result<(), String> {
     ensure_init(&app)?;
     let account = load_account(&request.account_id)?;
+    // POP3 没有服务器端的草稿箱：草稿只落本地库的 Drafts，不发 IMAP APPEND。
+    if pop3_sync::is_pop3(&account) {
+        return save_draft_locally(&account, request);
+    }
     let password = account_password(&account)?;
     // 草稿和正式发送一样要展开通讯组：IMAP 草稿箱里的地址必须是真实邮箱。
     // 但「组芯片」本身要留着，否则续写草稿时会看到上百个地址——
@@ -2074,12 +2499,7 @@ async fn export_input(
         _ => {
             let account = load_account(account_id)?;
             let password = account_password(&account)?;
-            let (f, u) = (folder.to_string(), uid);
-            let raw = tauri::async_runtime::spawn_blocking(move || {
-                imap::fetch_raw(&account, &password, &f, u)
-            })
-            .await
-            .map_err(|e| format!("取信任务失败: {e}"))??;
+            let raw = fetch_raw_bytes(&account, &password, folder, uid).await?;
             let parsed = mime::parse(&raw, false).ok_or("无法解析邮件内容")?;
             (parsed.html, parsed.text)
         }
@@ -2302,6 +2722,11 @@ pub async fn mail_discard_draft(
 ) -> Result<(), String> {
     ensure_init(&app)?;
     let account = load_account(&account_id)?;
+    // POP3 的草稿只在本机：删掉本地行就是全部。
+    if pop3_sync::is_pop3(&account) {
+        let _ = store::delete_message(&account_id, &folder, uid);
+        return Ok(());
+    }
     let password = account_password(&account)?;
     let (f, u) = (folder.clone(), uid);
     let acc = account.clone();
@@ -2555,6 +2980,14 @@ pub async fn mail_offline_replay(
     };
     let mut combined = offline::ReplayResult::default();
     for account in accounts {
+        // POP3 的写操作全是本地的，进不了队列；万一有（老队列 / 手工导入），
+        // 在这里直接丢弃，避免无限重放一个永远会失败的服务器操作。
+        if pop3_sync::is_pop3(&account) {
+            for op in offline::list(Some(&account.id))? {
+                let _ = offline::remove(&op.id);
+            }
+            continue;
+        }
         let ops = offline::list(Some(&account.id))?;
         for op in ops {
             if op.attempts >= 5 {
@@ -2636,6 +3069,10 @@ pub async fn mail_start_idle(
 ) -> Result<bool, String> {
     ensure_init(&app)?;
     let account = load_account(&account_id)?;
+    // POP3 没有 IDLE（RFC 2177 是 IMAP 扩展）：保持轮询。
+    if pop3_sync::is_pop3(&account) {
+        return Ok(false);
+    }
     let settings = store::load_settings();
     if settings.fetch_mode != "idle" {
         return Ok(false);

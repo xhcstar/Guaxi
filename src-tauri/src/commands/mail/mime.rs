@@ -34,6 +34,9 @@ pub struct ParsedMessage {
     pub has_attachments: bool,
     /// 列表预览用：从正文抽出的纯文本。
     pub snippet_source: String,
+    /// 原始报文。POP3 打开单封时没有「按 uid 取正文」的接口，`pop3_sync` 必须把
+    /// 刚下载的这一份带出去；IMAP 路径不解码它，一律 `None`，避免多留一份正文副本。
+    pub raw: Option<Vec<u8>>,
 }
 
 /// 线程归并键：去掉回复/转发前缀、折叠空白、转小写后的主题。
@@ -296,6 +299,8 @@ pub fn parse(raw: &[u8], block_remote_images: bool) -> Option<ParsedMessage> {
         headers,
         has_attachments,
         snippet_source,
+        // 默认不带原文：只有 POP3 的调用方会自己补上（见 pop3_sync::fetch_message）。
+        raw: None,
     })
 }
 

@@ -13,8 +13,8 @@
         <div class="mail-onboard-mark">✉</div>
         <h1>把邮箱接进来</h1>
         <p>
-          支持 IMAP / SMTP 的邮箱都可以添加，包括 QQ、163、Gmail、Outlook
-          与企业邮箱。口令只存在系统凭据库里，不会随数据库备份外流。
+          支持 IMAP 或 POP3 收信、SMTP 发信的邮箱都可以添加，包括 QQ、163、Gmail、
+          Outlook 与企业邮箱。口令只存在系统凭据库里，不会随数据库备份外流。
         </p>
         <div class="mail-onboard-actions">
           <button class="mail-btn is-primary" @click="openAccounts">添加账户</button>
@@ -71,6 +71,7 @@
           @add-account="openAccounts"
           @create-folder="onCreateFolder"
           @delete-folder="onDeleteFolder"
+          @pin-folder="onPinFolder"
           @settings="showSettings = true"
           @drop-on-folder="onDropOnFolder"
         />
@@ -123,6 +124,9 @@
           :row-height="rowHeightPx"
           :has-more="store.hasMore"
           :loading-more="store.loadingMore"
+          :outbox-items="stageOutboxItems"
+          :retrying="retryingOutbox"
+          @retry-outbox="onRetryOutbox"
           @update:search-query="onSearchInput"
           @update:search-field="(v) => (store.searchField = v)"
           @search="store.runSearch"
@@ -317,16 +321,35 @@
       <button class="mail-context-item" @click="contextAction('allowSender')">
         把发件人加入白名单
       </button>
-      <div v-if="contextFolders.length" class="mail-context-sep"></div>
-      <button
-        v-for="folder in contextFolders"
-        :key="folder.name"
-        class="mail-context-item"
-        :title="folder.name"
-        @click="contextAction('move', folder.name)"
-      >
-        移到「{{ folder.displayName }}」
+      <!-- 「移动」与 Outlook 一致：一个主条目，常用去向（存档 / 收件箱）直接列出来，
+           其余全部文件夹收进子菜单。子菜单是悬停打开的，列表来自当前账户实时的
+           文件夹表，新同步到 / 新建的文件夹不需要重启就能出现在这里。 -->
+      <button class="mail-context-item" @click="contextAction('archive')">
+        存档
+        <span class="mail-context-hint">移动到的默认文件夹</span>
       </button>
+      <div
+        class="mail-context-item is-parent"
+        :class="{ 'is-open': contextSubmenu === 'move' }"
+        @mouseenter="openSubmenu('move')"
+        @mouseleave="scheduleSubmenuClose"
+      >
+        <span>移动</span>
+        <span class="mail-context-chevron" aria-hidden="true">›</span>
+        <div v-if="contextSubmenu === 'move'" class="mail-context-submenu" @click.stop>
+          <div v-if="!contextFolders.length" class="mail-context-empty">没有可移动到的文件夹</div>
+          <button
+            v-for="folder in contextFolders"
+            :key="folder.name"
+            class="mail-context-item"
+            :class="{ 'is-current': folder.name === contextMenu.row?.folder }"
+            :title="folder.name"
+            @click="contextAction('move', folder.name)"
+          >
+            {{ folder.displayName }}
+          </button>
+        </div>
+      </div>
       <div class="mail-context-sep"></div>
       <button class="mail-context-item" @click="contextAction('saveEml')">另存为 .eml（含附件）</button>
       <button class="mail-context-item" @click="contextAction('saveHtml')">另存为 .html（正文）</button>
@@ -505,22 +528,29 @@ const listTitle = computed(() => {
   return store.currentFolder?.displayName || '收件箱'
 })
 
-/** 右键菜单里的「移到」只列关键去向；全部文件夹在批量操作栏的下拉里。 */
-const MOVE_ROLES = ['inbox', 'archive', 'junk', 'trash']
+/**
+ * 右键菜单「移动」子菜单里的全部去向。
+ *
+ * 不再只列几个角色：Outlook 用户习惯了「移动 → 随便哪个文件夹」，
+ * 漏掉任何一个都会让人以为那封信移动不了。这里取当前账户实时的文件夹表，
+ * 排除源文件夹与纯本地的发件箱，标准角色排前面、自建文件夹按名字排后面。
+ */
+const FOLDER_ROLE_ORDER = ['inbox', 'archive', 'sent', 'drafts', 'junk', 'trash', 'outbox', 'custom']
 const contextFolders = computed(() => {
   const menu = contextMenu.value
   if (!menu) return []
   const accountId = menu.row?.accountId || store.activeAccountId
   const current = menu.row?.folder
-  const seen = new Set()
-  const out = []
-  for (const folder of store.foldersByAccount[accountId] || []) {
-    if (!MOVE_ROLES.includes(folder.role)) continue
-    if (folder.name === current || seen.has(folder.role)) continue
-    seen.add(folder.role)
-    out.push(folder)
-  }
-  return out.sort((a, b) => MOVE_ROLES.indexOf(a.role) - MOVE_ROLES.indexOf(b.role))
+  return (store.foldersByAccount[accountId] || [])
+    .filter((folder) => folder.selectable !== false)
+    .filter((folder) => folder.name !== current)
+    .filter((folder) => folder.role !== 'outbox')
+    .sort((a, b) => {
+      const ai = FOLDER_ROLE_ORDER.indexOf(a.role)
+      const bi = FOLDER_ROLE_ORDER.indexOf(b.role)
+      if (ai !== bi) return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi)
+      return String(a.displayName).localeCompare(String(b.displayName), 'zh-CN')
+    })
 })
 
 function notify(text, error = false) {
@@ -689,6 +719,48 @@ async function onDeleteFolder(folder) {
   try {
     await store.deleteFolder(folder.name)
     notify(`已删除「${folder.displayName}」`)
+  } catch (error) {
+    notify(String(error?.message || error), true)
+  }
+}
+
+// ---------------- 发件箱 ----------------
+
+/** 当前列表就是发件箱时，把失败待发的邮件摆到列表上方。 */
+const stageOutboxItems = computed(() => {
+  const folder = store.currentFolder
+  if (!folder || folder.role !== 'outbox') return []
+  return store.outbox.filter((item) => item.staged)
+})
+const retryingOutbox = ref(false)
+
+async function onRetryOutbox() {
+  if (retryingOutbox.value) return
+  retryingOutbox.value = true
+  let ok = 0
+  let failed = 0
+  try {
+    for (const item of [...stageOutboxItems.value]) {
+      try {
+        await store.retryOutbox(item.id)
+        ok += 1
+      } catch {
+        failed += 1
+      }
+    }
+    if (ok && failed) notify(`已发出 ${ok} 封，仍有 ${failed} 封未发出`, true)
+    else if (ok) notify(`已发出 ${ok} 封`)
+    else notify('仍然发送失败，请检查网络或账户设置', true)
+  } finally {
+    retryingOutbox.value = false
+  }
+}
+
+/** 侧栏文件夹右键的「保留在侧栏 / 从侧栏隐藏」。 */
+async function onPinFolder(name, pinned) {
+  try {
+    await store.setFolderPinned(name, pinned)
+    notify(pinned ? '已保留在侧栏' : '已从侧栏隐藏')
   } catch (error) {
     notify(String(error?.message || error), true)
   }
@@ -887,13 +959,26 @@ async function onDeleteCurrent(detail) {
 }
 
 async function onArchiveCurrent(detail) {
-  const archive = (store.foldersByAccount[detail.accountId] || []).find((f) => f.role === 'archive')
+  const accountId = detail.accountId
+  // 存档是账户的固定入口（后端同步时总会补齐）；万一还没有，先建一个再归档，
+  // 而不是让用户为了「归档」按钮去侧栏手动建文件夹。
+  let archive = (store.foldersByAccount[accountId] || []).find((f) => f.role === 'archive')
   if (!archive) {
-    notify('该账户没有归档文件夹，可以先在文件夹列表里新建', true)
+    try {
+      // createFolder 内部已经刷新过文件夹表，这里只取结果。
+      await store.createFolder('Archive')
+      archive = (store.foldersByAccount[accountId] || []).find((f) => f.role === 'archive')
+    } catch (error) {
+      notify(String(error?.message || error), true)
+      return
+    }
+  }
+  if (!archive) {
+    notify('没法创建存档文件夹，请检查账户连接', true)
     return
   }
   try {
-    await store.moveMessages([store.selected], archive.name)
+    await store.moveMessages([store.selected || detail], archive.name)
     notify(`已归档到「${archive.displayName}」`)
   } catch (error) {
     notify(String(error?.message || error), true)
@@ -941,6 +1026,9 @@ async function onSaveAttachment({ attachment, detail }) {
 async function onOpenAttachment({ attachment, detail }) {
   const message = detail || store.detail
   if (!message) return
+  // 打开后要下载 + 落盘 + 拉起系统程序，旧代码在这里没有任何反馈，
+  // 服务器慢的时候用户会以为点击没生效而反复点。先给一条提示。
+  notify(`正在打开「${attachment.filename}」…`)
   try {
     const dangerous = await invoke('mail_is_dangerous_attachment', {
       name: attachment.filename,
@@ -1001,11 +1089,13 @@ function onRowContextMenu({ row, event }) {
   if (!inSelection && store.selectedKeys.length) store.clearSelection()
   const rows = inSelection ? store.selectedRows() : [row]
   contextMenu.value = { row, rows, x, y }
+  contextSubmenu.value = ''
   setTimeout(() => document.addEventListener('click', closeContextMenu, { once: true }), 0)
 }
 
 function closeContextMenu() {
   contextMenu.value = null
+  contextSubmenu.value = ''
 }
 
 async function contextAction(action, target) {
@@ -1040,6 +1130,18 @@ async function contextAction(action, target) {
       notify(`已移回收件箱（${rows.length} 封）`)
       return
     }
+    if (action === 'archive') {
+      const archive = (store.foldersByAccount[row.accountId] || []).find(
+        (f) => f.role === 'archive',
+      )
+      if (!archive) {
+        notify('该账户没有存档文件夹，可以先用侧栏的「＋」新建一个', true)
+        return
+      }
+      await store.runBatch('move', archive.name, rows)
+      notify(`已存档 ${rows.length} 封`)
+      return
+    }
     if (action === 'move' && target) {
       await store.runBatch('move', target, rows)
       notify(`已移动 ${rows.length} 封`)
@@ -1067,6 +1169,26 @@ async function contextAction(action, target) {
     notify(String(error?.message || error), true)
   }
 }
+/** 右键菜单里正在展开的子菜单（目前只有「移动」）。 */
+const contextSubmenu = ref('')
+let submenuTimer = null
+
+function openSubmenu(name) {
+  clearTimeout(submenuTimer)
+  contextSubmenu.value = name
+}
+
+/**
+ * 收起子菜单前留一点延迟：鼠标从父项斜着移进子菜单时会短暂离开父项，
+ * 立刻收起的话子菜单根本点不到。
+ */
+function scheduleSubmenuClose() {
+  clearTimeout(submenuTimer)
+  submenuTimer = setTimeout(() => {
+    contextSubmenu.value = ''
+  }, 220)
+}
+
 const contextCount = computed(() => contextMenu.value?.rows?.length || 1)
 const contextInJunk = computed(() => {
   const row = contextMenu.value?.row
@@ -1419,6 +1541,57 @@ defineExpose({ expandThread })
   height: 1px;
   margin: 4px 6px;
   background: var(--mail-border);
+}
+
+/* 「移动」这类带子菜单的条目：右缘一个箭头，悬停时在右侧展开子菜单。
+   子菜单不参与父菜单的滚动，所以父菜单要允许溢出（详见 .is-parent）。 */
+.mail-context-item.is-parent {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  position: relative;
+}
+.mail-context-item.is-parent.is-open {
+  background: var(--mail-panel-hover);
+  color: var(--mail-text);
+}
+.mail-context-chevron {
+  margin-left: auto;
+  color: var(--mail-text-muted);
+  font-size: 13px;
+  line-height: 1;
+}
+.mail-context-hint {
+  margin-left: auto;
+  color: var(--mail-text-muted);
+  font-size: 10.5px;
+}
+.mail-context-submenu {
+  position: absolute;
+  left: calc(100% - 4px);
+  top: -5px;
+  z-index: 61;
+  min-width: 180px;
+  max-width: 300px;
+  max-height: min(60vh, 460px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  padding: 4px;
+  border: 1px solid var(--mail-border-strong);
+  border-radius: 8px;
+  background: var(--mail-panel);
+  box-shadow: var(--mail-shadow);
+  /* 子菜单用块级布局而不是从父项的 flex 里继承：条目仍是整行可点。 */
+  display: block;
+}
+.mail-context-submenu .mail-context-item.is-current {
+  color: var(--mail-accent);
+}
+.mail-context-empty {
+  padding: 6px 10px;
+  font-size: 11.5px;
+  color: var(--mail-text-muted);
 }
 
 .mail-toast {
