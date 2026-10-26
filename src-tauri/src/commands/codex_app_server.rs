@@ -537,6 +537,112 @@ fn notification_thread_id(payload: &Value) -> String {
         .to_string()
 }
 
+/// 审批事件的载荷。`mcpServer/elicitation/request` 额外带上工具身份，
+/// 否则审批卡只能显示一句 "Allow the tool call?"，用户没法判断自己在批准什么。
+fn approval_payload(method: &str, params: &Value) -> Value {
+    let mut payload = json!({
+        "threadId": notification_thread_id(params),
+        "turnId": params.get("turnId").and_then(|v| v.as_str()).unwrap_or(""),
+        "params": params,
+    });
+    if method == "mcpServer/elicitation/request" {
+        let meta = params.get("_meta").cloned().unwrap_or(Value::Null);
+        payload["mcp"] = json!({
+            "server": params.get("serverName").and_then(|v| v.as_str()).unwrap_or(""),
+            "approvalKind": meta.get("codex_approval_kind").and_then(|v| v.as_str()).unwrap_or(""),
+            "toolDescription": meta.get("tool_description").cloned().unwrap_or(Value::Null),
+            "toolParams": meta.get("tool_params").cloned().unwrap_or(Value::Null),
+            "message": params.get("message").cloned().unwrap_or(Value::Null),
+        });
+    }
+    payload
+}
+
+/// 把一条审批请求挂到 `PENDING_APPROVALS` 上、发给前端、等回包。
+///
+/// 抽出来是因为两条链路共用它：codex 自己发来的审批请求，以及 Guaxi 工具层的
+/// 逐动作确认（`cognition::tools::dispatch`）。两者对前端的形状完全一致，
+/// 前端只需要认 `kind`。
+async fn wait_for_approval(
+    app: &AppHandle,
+    id: u64,
+    kind: &str,
+    method: &str,
+    payload: Value,
+) -> Value {
+    let (tx, rx) = oneshot::channel();
+    if let Ok(mut m) = PENDING_APPROVALS.lock() {
+        m.insert(id, tx);
+    }
+    let mut event = json!({
+        "requestId": id,
+        "kind": kind,
+        "method": method,
+    });
+    if let (Some(obj), Value::Object(extra)) = (event.as_object_mut(), payload) {
+        obj.extend(extra);
+    }
+    let _ = app.emit(EVENT_APPROVAL, event);
+
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(APPROVAL_TIMEOUT_SECS),
+        rx,
+    )
+    .await
+    {
+        Ok(Ok(decision)) => decision,
+        _ => {
+            if let Ok(mut m) = PENDING_APPROVALS.lock() {
+                m.remove(&id);
+            }
+            warn!(id, method, "[codex_app_server] 审批超时，按拒绝处理");
+            json!({ "decision": "decline" })
+        }
+    }
+}
+
+/// Guaxi 工具层的逐动作确认。
+///
+/// 与 codex 自己的审批共用一个通道：前端按 `kind = "tool"` 渲染，
+/// 回包只要 `decision`。没有 AppHandle（后台循环、单测）时按拒绝处理——
+/// 「问不到人」不等于「可以动手」。
+pub async fn request_tool_confirmation(
+    caller: &str,
+    spec: &crate::cognition::tools::ToolSpec,
+    args: &Value,
+) -> bool {
+    let Some(app) = crate::cognition::runtime::app_handle() else {
+        warn!(
+            tool = %spec.name,
+            "[codex_app_server] 没有 AppHandle，无法确认工具调用，按拒绝处理"
+        );
+        return false;
+    };
+    let id = next_id();
+    let payload = json!({
+        "threadId": "",
+        "turnId": "",
+        "params": {
+            "caller": caller,
+            "tool": spec.name,
+            "tier": spec.tier.as_str(),
+            "description": spec.description,
+            "arguments": args,
+        },
+        "mcp": {
+            "server": "guaxi",
+            "approvalKind": "guaxi_tool_call",
+            "toolDescription": spec.description,
+            "toolParams": args,
+        },
+    });
+    let decision = wait_for_approval(&app, id, "tool", "guaxi/tool/confirm", payload).await;
+    match decision.get("decision").and_then(|v| v.as_str()) {
+        Some("accept") | Some("acceptForSession") => true,
+        _ => false,
+    }
+}
+
 async fn handle_server_request(app: AppHandle, id: u64, method: &str, params: Value) {
     match method {
         // 审批类：转发给前端，等裁决。
@@ -547,39 +653,11 @@ async fn handle_server_request(app: AppHandle, id: u64, method: &str, params: Va
         | "mcpServer/elicitation/request"
         | "execCommandApproval"
         | "applyPatchApproval" => {
-            let (tx, rx) = oneshot::channel();
-            if let Ok(mut m) = PENDING_APPROVALS.lock() {
-                m.insert(id, tx);
-            }
             let kind = approval_kind(method);
-            let _ = app.emit(
-                EVENT_APPROVAL,
-                json!({
-                    "requestId": id,
-                    "kind": kind,
-                    "method": method,
-                    "threadId": notification_thread_id(&params),
-                    "turnId": params.get("turnId").and_then(|v| v.as_str()).unwrap_or(""),
-                    "params": params,
-                    "at": chrono::Utc::now().timestamp_millis(),
-                }),
-            );
-
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(APPROVAL_TIMEOUT_SECS),
-                rx,
-            )
-            .await
-            {
-                Ok(Ok(decision)) => rpc_reply(id, decision),
-                _ => {
-                    if let Ok(mut m) = PENDING_APPROVALS.lock() {
-                        m.remove(&id);
-                    }
-                    warn!(id, method, "[codex_app_server] 审批超时，按拒绝处理");
-                    rpc_reply(id, json!({ "decision": "decline" }));
-                }
-            }
+            let mut payload = approval_payload(method, &params);
+            payload["at"] = json!(chrono::Utc::now().timestamp_millis());
+            let decision = wait_for_approval(&app, id, kind, method, payload).await;
+            rpc_reply(id, decision);
         }
         // 客户端工具调用：模型要跑 Guaxi 侧的工具。走认知层同一套 dispatch，
         // 授权/审计/不可信闸都在那里，不在这里另开一条捷径。
@@ -589,25 +667,7 @@ async fn handle_server_request(app: AppHandle, id: u64, method: &str, params: Va
             let call_id = params.get("callId").and_then(|v| v.as_str()).unwrap_or("");
             debug!(tool, call_id, "[codex_app_server] 客户端工具调用");
             let result = crate::cognition::tools::dispatch("codex", tool, &args, false).await;
-            match result {
-                Ok(v) => rpc_reply(
-                    id,
-                    json!({
-                        "contentItems": [{
-                            "type": "inputText",
-                            "text": serde_json::to_string_pretty(&v).unwrap_or_default()
-                        }],
-                        "success": true
-                    }),
-                ),
-                Err(e) => rpc_reply(
-                    id,
-                    json!({
-                        "contentItems": [{ "type": "inputText", "text": format!("工具执行失败: {e}") }],
-                        "success": false
-                    }),
-                ),
-            }
+            rpc_reply(id, dynamic_tool_response(tool, result));
         }
         // ChatGPT 账号态刷新、attestation：Guaxi 不用官方登录态（走 cc-switch / 自定义 Key），
         // 明确回错误而不是挂住。
@@ -723,6 +783,14 @@ pub async fn agent_start_thread(
     if request.ephemeral {
         params["ephemeral"] = json!(true);
     }
+    // 电脑操控：截图必须真的到模型眼前，而 MCP 的 `tools/call` 只能回文本。
+    // app-server 的 dynamicTools 支持 `inputImage` 回包（实测可用），
+    // 所以 GUI 类工具额外作为客户端工具声明一份；MCP 那份保留给外部客户端。
+    // 声明与否只看授权：用户没开「操控本机」时，模型连看都看不见。
+    let dynamic = gui_dynamic_tools();
+    if !dynamic.is_empty() {
+        params["dynamicTools"] = json!(dynamic);
+    }
 
     let resp = rpc_call("thread/start", params).await?;
     let thread_id = resp
@@ -749,7 +817,75 @@ pub async fn agent_start_thread(
     Ok(resp)
 }
 
-/// 恢复既有线程（软件重启 / 切换会话后接着用）。
+/// 把已授权、且回包里可能带图片的工具声明成 dynamicTools。
+///
+/// 只挑 GUI 组的「看」这一半：截屏与 OCR 的结果主要是一张图，
+/// 走 MCP 只能变成文字路径，模型等于瞎着操作。其余 GUI 工具照旧走 MCP——
+/// 同一件事不必注册两次，重复注册只会让模型在两个名字之间纠结。
+fn gui_dynamic_tools() -> Vec<Value> {
+    use crate::cognition::tools::Tier;
+    if !crate::cognition::tools::tier_granted(Tier::Gui) {
+        return Vec::new();
+    }
+    // 与 codex 桌面版的 Computer Use 对齐：截图 + OCR 一起给。
+    // OCR 带坐标文本块，是模型定位「那行字在哪」的另一条路（看图之外）。
+    const VISUAL: [&str; 2] = ["guaxi_screen_capture", "guaxi_screen_ocr"];
+    crate::cognition::tools::list_tools()
+        .into_iter()
+        .filter(|t| t.tier == Tier::Gui && VISUAL.contains(&t.name.as_str()))
+        .map(|t| {
+            json!({
+                "type": "function",
+                "name": t.name,
+                "description": format!("{}。返回的截图会作为图片给你，可以直接看。", t.description),
+                "inputSchema": t.input_schema,
+            })
+        })
+        .collect()
+}
+
+/// 把 dynamicTool 的结果翻译成 app-server 要的 `contentItems`。
+///
+/// 截图工具回的是路径与尺寸，这里把那张 PNG 读出来转成 `inputImage`：
+/// 图片走 `imageUrl`（data URL），文字说明走 `inputText`，两者一起给。
+fn dynamic_tool_response(tool: &str, result: Result<Value, String>) -> Value {
+    let Ok(value) = result else {
+        let message = result.err().unwrap_or_default();
+        return json!({
+            "contentItems": [{ "type": "inputText", "text": format!("工具执行失败: {message}") }],
+            "success": false
+        });
+    };
+
+    let mut items: Vec<Value> = Vec::new();
+    // 截图工具的返回里 `path` 指向叠加网格后的图，`rawPath` 是原图。
+    if tool == "guaxi_screen_capture" {
+        let image_path = value
+            .get("path")
+            .and_then(|v| v.as_str())
+            .or_else(|| value.get("rawPath").and_then(|v| v.as_str()));
+        if let Some(path) = image_path {
+            match std::fs::read(path) {
+                Ok(bytes) => {
+                    use base64::Engine;
+                    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                    items.push(json!({
+                        "type": "inputImage",
+                        "imageUrl": format!("data:image/png;base64,{encoded}")
+                    }));
+                }
+                Err(e) => warn!(path, "[codex_app_server] 读取截图失败: {e}"),
+            }
+        }
+    }
+    items.push(json!({
+        "type": "inputText",
+        "text": serde_json::to_string_pretty(&value).unwrap_or_default()
+    }));
+    json!({ "contentItems": items, "success": true })
+}
+
+
 #[tauri::command]
 pub async fn agent_resume_thread(
     app: AppHandle,

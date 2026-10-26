@@ -117,7 +117,19 @@ async fn handle_one(req: &Value) -> Option<Value> {
                     json!({
                         "name": t.name,
                         "description": format!("[{}] {}", t.tier.as_str(), t.description),
-                        "inputSchema": t.input_schema
+                        "inputSchema": t.input_schema,
+                        // annotations 不是装饰：codex 0.149 在 approval_policy=never 下
+                        // 只放行带 readOnlyHint 的工具，缺了它所有 MCP 调用都会被拒。
+                        // 另外两个提示让 codex 的审批文案说得准（会不会改东西、是不是出网）。
+                        "annotations": {
+                            "readOnlyHint": t.tier == tools::Tier::Read,
+                            "destructiveHint": matches!(
+                                t.tier,
+                                tools::Tier::Write | tools::Tier::Exec | tools::Tier::Gui
+                            ),
+                            "openWorldHint": t.tier == tools::Tier::Network,
+                            "idempotentHint": t.tier == tools::Tier::Read,
+                        }
                     })
                 })
                 .collect();

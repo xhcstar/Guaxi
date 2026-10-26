@@ -35,12 +35,19 @@ pub struct CognitionStatus {
 }
 
 #[tauri::command]
-pub async fn cognition_status() -> Result<CognitionStatus, String> {
-    let embedding_ready = crate::commands::embedding::kg_embedding_status()
-        .await
-        .map(|s| s.ready)
-        .unwrap_or(false);
-    let prof = profile::load_profile().unwrap_or_default();
+pub async fn cognition_status(probe: Option<bool>) -> Result<CognitionStatus, String> {
+    // embedding 是否就绪**默认不探测**：以前这里同步 `await` 一次没有超时的
+    // 健康检查，llama-server 没起时状态刷新会被这一下拖住，连设置页的开关都显得卡。
+    // 现在默认报「进程态」（打分循环本来就在用它），要真实探测时显式传 probe=true。
+    let embedding_ready = if probe.unwrap_or(false) {
+        crate::commands::embedding::kg_embedding_status()
+            .await
+            .map(|s| s.ready)
+            .unwrap_or(false)
+    } else {
+        crate::commands::embedding::embed_ready_cached()
+    };
+    let prof = profile::load_profile_unchecked().unwrap_or_default();
     Ok(CognitionStatus {
         enabled: runtime::enabled(),
         db_path: store::cog_db_path()
@@ -56,10 +63,10 @@ pub async fn cognition_status() -> Result<CognitionStatus, String> {
         belief: belief::stats().unwrap_or_default(),
         eval_items: evolve::eval_set_size(),
         recall_weights: recall::channel_weights(),
-        // 遍历 Tier::ALL 而不是手写清单：新增等级时状态面板会自动跟上。
-        tiers: tools::Tier::ALL
-            .iter()
-            .map(|t| (t.as_str().to_string(), tools::tier_granted(*t)))
+        // 一次读完所有等级，不再逐项开连接。
+        tiers: tools::tier_grants()
+            .into_iter()
+            .map(|(t, granted)| (t.as_str().to_string(), granted))
             .collect(),
         deliberate_interval_secs: store::get_i64("deliberate_interval_secs", 300),
         deliberate_modelid: store::get_i64("deliberate_modelid", 6),

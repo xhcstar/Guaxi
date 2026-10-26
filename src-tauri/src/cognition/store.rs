@@ -105,6 +105,26 @@ pub fn set_setting(key: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// 按前缀批量读取设置，一次查询。
+///
+/// 给「一次要用到很多个设置」的调用方用（例如工具等级授权）。逐项 `get_setting`
+/// 每次都新开连接并重跑 PRAGMA，几十项就是几十次连接开销。
+pub fn settings_with_prefix(prefix: &str) -> Vec<(String, String)> {
+    let Ok(conn) = ensure_db() else {
+        return Vec::new();
+    };
+    let Ok(mut stmt) = conn.prepare("SELECT key, value FROM cog_settings WHERE key LIKE ?1") else {
+        return Vec::new();
+    };
+    let pattern = format!("{prefix}%");
+    let Ok(rows) = stmt.query_map(params![pattern], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    }) else {
+        return Vec::new();
+    };
+    rows.filter_map(|x| x.ok()).collect()
+}
+
 /// 读取布尔设置（缺省值由调用方给）。
 pub fn get_bool(key: &str, default: bool) -> bool {
     match get_setting(key).as_deref() {

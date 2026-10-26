@@ -319,6 +319,8 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Memory",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
+    # 电脑操控的 DPI 感知声明。只多加一张绑定表，不新增原生依赖。
+    "Win32_UI_HiDpi",
     # Office/WPS 检测：只读 HKCU/HKLM 的 App Paths 与 .docx 关联，
     # 用系统自带注册表 API，不引 winreg 之类的新依赖。
     "Win32_System_Registry",

@@ -81,6 +81,51 @@ function usesGpuFeature(commandArgs) {
 /// 权限分明：退出码 2（目录里缺该有的文件）是打包缺陷，直接中断构建，别发出去；
 /// 退出码 3（文件都在但本机加载不了——没插 N 卡、驱动太旧之类）只提醒，
 /// 因为包本身可能是好的，换台有 N 卡的机器就能用。
+/**
+ * 把 `guaxi_mcp`（stdio ⇄ HTTP 桥接）放到 Tauri 要的 sidecar 位置。
+ *
+ * 为什么必须有这一步：codex 的 `mcp_servers` 只能拉起子进程，所以「Guaxi 的工具面」
+ * 需要一个能被它拉起的可执行文件。主程序的 `--mcp-server` 模式是退路，但那条路
+ * 一旦出问题（历史上因为运行时嵌套 panic 过），模型就完全看不见工具——
+ * 而用户只会看到「Agent 不会用工具」，很难定位。
+ *
+ * Tauri 的 `externalBin` 要求文件名带目标三元组后缀，安装时会去掉后缀放进安装目录。
+ * 这里在 tauri build 之前把刚编出来的二进制复制到那个位置。
+ */
+async function stageMcpSidecar() {
+  const triple = process.env.TAURI_TARGET_TRIPLE || (await detectHostTriple());
+  if (!triple) {
+    throw new Error('无法确定目标三元组，guaxi_mcp sidecar 未就绪（打包会失败）');
+  }
+  const releaseDir = path.join(projectRoot, 'src-tauri', 'target', 'release');
+  const sourceName = process.platform === 'win32' ? 'guaxi_mcp.exe' : 'guaxi_mcp';
+  const source = path.join(releaseDir, sourceName);
+  const destDir = path.join(projectRoot, 'src-tauri', 'binaries');
+  const dest = path.join(destDir, `${sourceName}-${triple}`);
+  if (!existsSync(source)) {
+    throw new Error(
+      `未找到 ${source}。tauri build 之前需要先构建这个 bin：` +
+        'cargo build --release --bin guaxi_mcp',
+    );
+  }
+  await mkdir(destDir, { recursive: true });
+  await cp(source, dest);
+  console.log(`[tauri] guaxi_mcp sidecar 已就绪: ${path.relative(projectRoot, dest)}`);
+}
+
+async function detectHostTriple() {
+  const out = [];
+  const code = await new Promise((resolve) => {
+    const child = spawn('rustc', ['-vV'], { cwd: projectRoot, stdio: ['ignore', 'pipe', 'ignore'] });
+    child.stdout.on('data', (chunk) => out.push(chunk.toString()));
+    child.on('exit', (c) => resolve(c ?? 1));
+    child.on('error', () => resolve(1));
+  });
+  if (code !== 0) return null;
+  const match = /host:\s*(\S+)/.exec(out.join(''));
+  return match ? match[1] : null;
+}
+
 async function verifyCudaRuntimeForRelease() {
   if (process.platform !== 'win32') {
     return;
@@ -335,6 +380,18 @@ async function main() {
   }
 
   if (shouldPrepareForTauriCommand) {
+    // 先编出桥接，再 stage 到 Tauri 的 externalBin 位置：`externalBin` 的文件
+    // 必须在 tauri build 开始时就已经存在，否则打包直接报错。
+    const mcpBuildExit = await run(
+      'cargo',
+      ['build', '--release', '--quiet', '--manifest-path', 'src-tauri/Cargo.toml', '--bin', 'guaxi_mcp'],
+      { ...releaseCargoEnv(), GUAXI_SKIP_BUNDLE_PREPARE: '1' },
+    );
+    if (mcpBuildExit !== 0) {
+      throw new Error('构建 guaxi_mcp 失败，打包已中止');
+    }
+    await stageMcpSidecar();
+
     // Release packaging depends on pre-copied frontend assets because the final
     // bundle cannot fetch editor/viewer assets from the network at runtime.
     const prepareAssetsExitCode = await run('node', ['./tools/copy_excalidraw_assets.mjs']);

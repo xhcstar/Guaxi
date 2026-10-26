@@ -1057,16 +1057,23 @@ pub fn stats() -> Result<PerceptStats, String> {
         }
     }
     // 被中和的片段总数：安全面板的核心指标，用户能看出被投毒的频率。
-    if let Ok(mut stmt) = conn.prepare("SELECT COALESCE(meta,'{}') FROM percepts") {
-        if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) {
-            for m in rows.filter_map(|x| x.ok()) {
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&m) {
-                    s.neutralized_total += v.get("neutralized").and_then(|n| n.as_i64()).unwrap_or(0);
-                }
-            }
-        }
-    }
+    s.neutralized_total = neutralized_total_on(&conn);
     Ok(s)
+}
+
+/// 在给定连接上求「被中和的片段总数」。
+///
+/// 以前这里把整张表逐行搬进 Rust 再 parse JSON；感知条目一多，
+/// 一次状态刷新就会被这个循环拖住。改成让 SQLite 在库内求和——
+/// json_extract 对坏 JSON 返回 NULL，COALESCE 兜成 0，不需要额外容错。
+fn neutralized_total_on(conn: &rusqlite::Connection) -> i64 {
+    conn.query_row(
+        "SELECT COALESCE(SUM(CAST(json_extract(meta, '$.neutralized') AS INTEGER)), 0) \
+         FROM percepts WHERE meta IS NOT NULL AND meta <> ''",
+        [],
+        |r| r.get::<_, i64>(0),
+    )
+    .unwrap_or(0)
 }
 
 #[cfg(test)]

@@ -424,8 +424,35 @@ export const useCognitionStore = defineStore('cognitionStore', {
     },
 
     async setTier(tier, granted) {
-      await invoke('cognition_tool_set_tier', { tier, granted })
-      await Promise.all([this.refreshTools(), this.refreshStatus()])
+      // 乐观更新：开关必须立刻动。写库是一次 SQLite upsert（毫秒级），
+      // 慢的是它后面那串状态重读——以前 await 完整体刷新，用户看到的是
+      // 「点了没反应」。这里先就地翻转，再写库，失败时回滚。
+      const prevTiers = Array.isArray(this.status?.tiers)
+        ? this.status.tiers.map(([k, v]) => [k, v])
+        : null
+      const prevTools = this.tools.map((t) => ({ ...t }))
+
+      this.applyTierLocal(tier, granted)
+      try {
+        await invoke('cognition_tool_set_tier', { tier, granted })
+      } catch (e) {
+        if (prevTiers) this.status = { ...this.status, tiers: prevTiers }
+        this.tools = prevTools
+        throw e
+      }
+      // 状态里的统计数字与服务无关，后台补一下即可，不阻塞开关。
+      this.refreshStatus().catch(() => {})
+    },
+
+    /** 只改本地状态：等级行与工具行的 enabled 字段。 */
+    applyTierLocal(tier, granted) {
+      if (this.status && Array.isArray(this.status.tiers)) {
+        this.status = {
+          ...this.status,
+          tiers: this.status.tiers.map(([k, v]) => [k, k === tier ? granted : v]),
+        }
+      }
+      this.tools = this.tools.map((t) => (t.tier === tier ? { ...t, enabled: granted } : t))
     },
 
     async callTool(name, args = {}) {

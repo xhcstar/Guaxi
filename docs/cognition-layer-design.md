@@ -257,7 +257,24 @@ SHA256。理由是同一篇文章经 RSS 摘要、整站抓取、浏览器插件
 
 codex 只会说 stdio，所以有 `guaxi_mcp` 薄桥接（stdio JSONL ⇄ HTTP POST）。
 `codex_agent.rs::mcp_server_toml` 在生成 `config.toml` 时追加 `[mcp_servers.guaxi]`，
-**桥接可执行文件不存在就不写这一段**——写了 codex 每轮都会尝试拉起不存在的进程并报错。
+优先指向安装目录里的 `guaxi_mcp.exe`（由 `bundle.externalBin` 随包分发），
+找不到时退回主程序的 `--mcp-server` 模式。
+
+这一段还必须带三样东西，缺一样「模型没有工具」就会原样复现：
+
+- `default_tools_approval_mode`：codex 0.149 对所有 MCP 调用都要求审批，
+  没有 UI 的 exec 链路写 `auto`（只读直接跑），app-server 写 `prompt`（弹到前端）；
+- `enabled_tools`：按 Guaxi 的等级授权下发白名单，未授权的工具根本不进模型视野；
+- `startup_timeout_sec = 60`：首次拉起桥接要等主进程 8888 就绪，默认 30 秒不够。
+
+另外三点是踩过的坑，改这里时不要退回去：
+
+1. **桥接必须按字节读写 stdio**。用 `writeln!` 会走平台编码，Windows 中文环境下
+   把 JSON 写坏，codex 表现为「握手超时」。
+2. **`tools/list` 必须带 `annotations.readOnlyHint`**。这是 `approval_policy=never`
+   下只读工具能执行的唯一凭据。
+3. **`--mcp-server` 的分叉必须在 `#[tokio::main]` 之外**。桥接用 `reqwest::blocking`，
+   在异步上下文里跑会在退出时 panic（`Cannot drop a runtime ...`），进程直接死。
 
 外部客户端（Claude Code / Cursor）用同一个桥接即可接入，配置片段由
 `cognition_mcp_info` 直接给出可复制的 JSON。

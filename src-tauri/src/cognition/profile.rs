@@ -232,6 +232,31 @@ pub fn in_quiet_hours() -> bool {
     }
 }
 
+/// 读画像，但**不做派生层同步**。
+///
+/// 给「只想看一眼状态」的调用方用（状态面板要 quiet hours 与简报时刻）。
+/// `load_profile()` 会顺手把 markdown 里的手工关注项同步进兴趣表——那是写库，
+/// 一次 UI 刷新不该触发它。
+pub fn load_profile_unchecked() -> Result<Profile, String> {
+    let path = ensure_profile_file()?;
+    let markdown = fs::read_to_string(&path).map_err(|e| format!("读画像失败: {e}"))?;
+    let (quiet_hours, brief_hour) = parse_quiet(&markdown);
+    Ok(Profile {
+        expertise: section_items(&markdown, "专长"),
+        projects: section_items(&markdown, "在做的项目"),
+        answer_style: section_text(&markdown, "回答偏好"),
+        path: path.to_string_lossy().to_string(),
+        updated_at: fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .map(|t| chrono::DateTime::<chrono::Local>::from(t).to_rfc3339())
+            .unwrap_or_else(|_| now_iso()),
+        interests: list_interests(64).unwrap_or_default(),
+        markdown,
+        quiet_hours,
+        brief_hour,
+    })
+}
+
 /// 读画像：markdown 为准，兴趣表合并了手工项与派生项。
 pub fn load_profile() -> Result<Profile, String> {
     let path = ensure_profile_file()?;

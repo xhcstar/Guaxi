@@ -97,3 +97,11 @@ async def dispatch(name: str, args: dict[str, Any], work_dir: str = "") -> str:
 from . import filesystem as _filesystem  # noqa: E402,F401
 from . import web as _web  # noqa: E402,F401
 from . import code_exec as _code_exec  # noqa: E402,F401
+
+# Guaxi 认知层工具面的代理：启动时向主进程要一份已授权清单。
+# 放在最后导入，因为它依赖上面的 register()；失败不阻断（主进程可能还没起来）。
+try:
+    from . import guaxi_proxy as _guaxi_proxy  # noqa: E402,F401
+    _guaxi_proxy.register_guaxi_tools()
+except Exception:  # pragma: no cover - 纯兜底
+    pass

@@ -52,6 +52,18 @@
         <div v-else class="approval-empty">没有列出具体权限</div>
       </template>
 
+      <!-- Guaxi 工具调用：工具名、等级、参数，按「名字 = 值」摊开。 -->
+      <template v-else-if="kind === 'tool'">
+        <div v-if="toolRows.length" class="approval-perms">
+          <div v-for="(entry, i) in toolRows" :key="i" class="approval-perm">
+            <dt class="mono">{{ entry.key }}</dt>
+            <dd class="mono">{{ entry.value }}</dd>
+          </div>
+        </div>
+        <div v-else class="approval-empty">这次调用没有参数</div>
+        <p v-if="params.description" class="approval-sub">{{ params.description }}</p>
+      </template>
+
       <!-- 用户输入请求：每个问题一组选项，或一个输入框。 -->
       <template v-else-if="isInput">
         <div class="approval-questions">
@@ -213,7 +225,12 @@ const isInput = computed(() =>
 
 const kind = computed(() => {
   if (isInput.value) return 'input'
-  if (isElicitation.value) return 'elicitation'
+  if (isElicitation.value) {
+    // Guaxi 工具层的逐动作确认与 MCP 连接器请求走同一个 RPC 方法，
+    // 但前者要展示的是「哪个工具、什么参数」，靠 `_meta` 区分。
+    const approvalKind = String(current.value?.mcp?.approvalKind || params.value._meta?.codex_approval_kind || '')
+    return approvalKind === 'guaxi_tool_call' ? 'tool' : 'elicitation'
+  }
   const k = String(current.value?.kind || '')
   if (k) return k
   if (params.value.command) return 'command'
@@ -228,6 +245,7 @@ const kindLabel = computed(() => ({
   permission: '额外权限',
   input: '需要信息',
   elicitation: '连接器请求',
+  tool: '调用工具',
   other: '请求',
 }[kind.value] || '请求'))
 
@@ -246,9 +264,29 @@ const headline = computed(() => {
       return '模型需要你补充信息才能继续'
     case 'elicitation':
       return p.message || '一个连接器请求你提供信息'
+    case 'tool':
+      return p.tool ? `模型请求调用 ${p.tool}` : '模型请求调用一个工具'
     default:
       return '模型请求执行一个受限操作'
   }
+})
+
+/** 工具确认卡的内容：工具名、能力等级，其余参数逐项摊开。 */
+const toolRows = computed(() => {
+  const p = params.value || {}
+  const rows = []
+  if (p.tool) rows.push({ key: '工具', value: String(p.tool) })
+  if (p.tier) rows.push({ key: '等级', value: String(p.tier) })
+  const args = p.arguments
+  if (args && typeof args === 'object') {
+    for (const [k, v] of Object.entries(args)) {
+      rows.push({
+        key: k,
+        value: typeof v === 'string' ? v : JSON.stringify(v),
+      })
+    }
+  }
+  return rows
 })
 
 const subline = computed(() => {

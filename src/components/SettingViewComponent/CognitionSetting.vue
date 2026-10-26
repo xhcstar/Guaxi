@@ -253,11 +253,22 @@
 
         <div class="cog-tool-list">
           <div class="cog-sub">共 {{ store.tools.length }} 个工具，已启用 {{ enabledToolCount }} 个</div>
-          <div v-for="tool in store.tools" :key="tool.name" class="cog-tool">
-            <span class="cog-tool-tier" :class="'tier-' + tool.tier">{{ tool.tier }}</span>
-            <span class="cog-tool-name" :class="{ off: !tool.enabled }">{{ tool.name }}</span>
-            <span class="cog-tool-desc">{{ tool.description }}</span>
-          </div>
+          <template v-for="group in toolGroups" :key="group.key">
+            <div v-if="group.tools.length" class="cog-tool-group-head">
+              {{ group.label }}
+              <span class="cog-tool-group-count">{{ group.tools.filter((t) => t.enabled).length }}/{{ group.tools.length }}</span>
+            </div>
+            <div v-for="tool in group.tools" :key="tool.name" class="cog-tool">
+              <span class="cog-tool-tier" :class="'tier-' + tool.tier">{{ tool.tier }}</span>
+              <span class="cog-tool-name" :class="{ off: !tool.enabled }">{{ tool.name }}</span>
+              <span
+                v-if="tool.requiresConfirm"
+                class="cog-tool-confirm"
+                title="每次调用都会弹确认，不会一次授权就连续动手"
+              >逐次确认</span>
+              <span class="cog-tool-desc">{{ tool.description }}</span>
+            </div>
+          </template>
         </div>
 
         <div class="cog-actions">
@@ -598,6 +609,26 @@ const weightsText = computed(() => {
 })
 
 const enabledToolCount = computed(() => store.tools.filter((t) => t.enabled).length)
+
+/**
+ * 工具按等级分组。
+ *
+ * 40 条平铺看不出结构——用户关心的是「这类能力开了几个、哪些每次都会问我」，
+ * 不是逐条读描述。分组之后每个开关下面就是它管的那些工具。
+ */
+const toolGroups = computed(() => {
+  const order = ['read', 'write', 'network', 'exec', 'gui']
+  const byTier = new Map(order.map((k) => [k, []]))
+  for (const tool of store.tools) {
+    const list = byTier.get(tool.tier)
+    if (list) list.push(tool)
+  }
+  return order.map((k) => ({
+    key: k,
+    label: { read: '只读', write: '写入', network: '出网', exec: '重活', gui: '操控本机' }[k] || k,
+    tools: byTier.get(k) || [],
+  }))
+})
 
 const TIER_HINTS = {
   read: '只读：召回、图谱查询、收件箱、任务、画像。始终开启——关了大脑就瞎了。',
@@ -1117,6 +1148,35 @@ onMounted(async () => {
 }
 .cog-tool-desc {
   color: var(--guaxi-text-secondary);
+}
+
+/* 等级分组标题：小一号、压暗，只做分隔，不和工具行抢注意力。 */
+.cog-tool-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 14px 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--guaxi-text-secondary);
+  letter-spacing: 0.04em;
+}
+
+.cog-tool-group-count {
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+/* 「逐次确认」标记：只给写/操控类工具，说明它不会一次授权就连续动手。 */
+.cog-tool-confirm {
+  flex: 0 0 auto;
+  font-size: 11px;
+  padding: 0 5px;
+  border-radius: 3px;
+  color: #b47d1a;
+  background: rgba(180, 125, 26, 0.12);
+  white-space: nowrap;
 }
 
 .cog-audit,

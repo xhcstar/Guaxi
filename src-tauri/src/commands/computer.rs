@@ -47,7 +47,10 @@ pub struct WindowInfo {
     pub minimized: bool,
 }
 
-/// 屏幕逻辑尺寸（未乘 DPI 缩放，与鼠标坐标同一坐标系）。
+/// 屏幕逻辑尺寸（未乘 DPI 缩放，与 `SetCursorPos` 的坐标系一致）。
+///
+/// 这里返回的是**逻辑**像素（`GetSystemMetrics` 在 DPI 感知进程里就是逻辑值），
+/// 而 `capture_screen` 出的图是**物理**像素。两者由 `dpi_scale()` 换算。
 pub fn screen_size() -> Result<(i32, i32), String> {
     #[cfg(windows)]
     {
@@ -63,6 +66,68 @@ pub fn screen_size() -> Result<(i32, i32), String> {
     #[cfg(not(windows))]
     {
         Err("电脑操控目前只支持 Windows".to_string())
+    }
+}
+
+/// 物理像素 / 逻辑像素的比例（125% 缩放返回 1.25）。
+///
+/// 用 `GetDeviceCaps(LOGPIXELSX)` 而不是读窗口 DPI：这里没有具体窗口，
+/// 要的是整块主屏的缩放比例。失败时返回 1.0——宁可当 100% 处理，
+/// 也不要在拿不到信息时把坐标算歪。
+pub fn dpi_scale() -> f32 {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::HWND;
+        use windows_sys::Win32::Graphics::Gdi::{GetDC, GetDeviceCaps, LOGPIXELSX, ReleaseDC};
+        // SAFETY: GetDC/ReleaseDC 成对调用；只读取设备能力，不写任何状态。
+        unsafe {
+            let dc = GetDC(std::ptr::null_mut() as HWND);
+            if dc.is_null() {
+                return 1.0;
+            }
+            let dpi = GetDeviceCaps(dc, LOGPIXELSX as i32);
+            ReleaseDC(std::ptr::null_mut() as HWND, dc);
+            if dpi <= 0 {
+                1.0
+            } else {
+                dpi as f32 / 96.0
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        1.0
+    }
+}
+
+/// 声明进程 DPI 感知。
+///
+/// 不声明时 Windows 会把整个进程的坐标「虚拟化」成 96 DPI 视角：
+/// `GetSystemMetrics`、`SetCursorPos`、窗口矩形全是缩放后的值，而 GDI 的
+/// `BitBlt` 抓到的却是真实像素——两套坐标混在一起，高缩放下必然错位。
+/// 应当在 `main` 创建任何窗口之前调用一次。
+pub fn init_dpi_awareness() {
+    #[cfg(windows)]
+    {
+        // 优先用 PER_MONITOR_AWARE_V2（Windows 10 1703+），失败再退旧接口。
+        #[link(name = "user32")]
+        extern "system" {
+            fn SetProcessDpiAwarenessContext(value: isize) -> i32;
+        }
+        // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = (DPI_AWARENESS_CONTEXT)-4
+        const PER_MONITOR_AWARE_V2: isize = -4;
+        // SAFETY: 只是设置本进程的 DPI 策略，无参数校验风险。
+        let ok = unsafe { SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2) };
+        if ok != 0 {
+            return;
+        }
+        use windows_sys::Win32::UI::HiDpi::{
+            SetProcessDpiAwareness, PROCESS_PER_MONITOR_DPI_AWARE,
+        };
+        // SAFETY: 同上；返回 E_ACCESSDENIED 说明已经设过，忽略即可。
+        unsafe {
+            let _ = SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
+        }
     }
 }
 
@@ -125,6 +190,21 @@ fn capture_screen_win(
     // SAFETY: 这一段全是 Win32 GDI 调用，所有句柄在函数末尾按创建逆序释放；
     // 任何一步失败都走 early return 且已创建的句柄由 RAII guard 回收（见下方结构）。
     unsafe {
+        // 传入的 region 是**逻辑像素**（与模型从截图上读到的坐标同一套），
+        // 而 BitBlt 取的是物理像素。高缩放下两者不相等，必须换算，
+        // 否则 150% 缩放的机器上截出来的区域会整体偏移、只抓到左上角一块。
+        let scale = dpi_scale();
+        let (px, py, pw, ph) = if (scale - 1.0).abs() < 0.01 {
+            (sx, sy, sw, sh)
+        } else {
+            (
+                (sx as f32 * scale).round() as i32,
+                (sy as f32 * scale).round() as i32,
+                (sw as f32 * scale).round() as i32,
+                (sh as f32 * scale).round() as i32,
+            )
+        };
+
         let screen_dc = GetDC(std::ptr::null_mut() as HWND);
         if screen_dc.is_null() {
             return Err("获取屏幕 DC 失败".to_string());
@@ -134,21 +214,21 @@ fn capture_screen_win(
             ReleaseDC(std::ptr::null_mut() as HWND, screen_dc);
             return Err("创建内存 DC 失败".to_string());
         }
-        let bitmap = CreateCompatibleBitmap(screen_dc, sw, sh);
+        let bitmap = CreateCompatibleBitmap(screen_dc, pw, ph);
         if bitmap.is_null() {
             DeleteDC(mem_dc);
             ReleaseDC(std::ptr::null_mut() as HWND, screen_dc);
             return Err("创建位图失败".to_string());
         }
         let old = SelectObject(mem_dc, bitmap);
-        let copied = BitBlt(mem_dc, 0, 0, sw, sh, screen_dc, sx, sy, SRCCOPY | CAPTUREBLT);
+        let copied = BitBlt(mem_dc, 0, 0, pw, ph, screen_dc, px, py, SRCCOPY | CAPTUREBLT);
 
         let mut pixels: Vec<u8> = Vec::new();
         let mut header = BITMAPINFOHEADER {
             biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: sw,
+            biWidth: pw,
             // 负高度 = 自上而下，省掉一次翻行。
-            biHeight: -sh,
+            biHeight: -ph,
             biPlanes: 1,
             biBitCount: 32,
             biCompression: BI_RGB,
@@ -159,12 +239,12 @@ fn capture_screen_win(
             biClrImportant: 0,
         };
         if copied != 0 {
-            pixels.resize((sw as usize) * (sh as usize) * 4, 0);
+            pixels.resize((pw as usize) * (ph as usize) * 4, 0);
             let scan_lines = GetDIBits(
                 mem_dc,
                 bitmap,
                 0,
-                sh as u32,
+                ph as u32,
                 pixels.as_mut_ptr() as *mut _,
                 &mut header as *mut BITMAPINFOHEADER as *mut _,
                 DIB_RGB_COLORS,
@@ -189,7 +269,7 @@ fn capture_screen_win(
             px[3] = 255;
         }
 
-        let img = image::RgbaImage::from_raw(sw as u32, sh as u32, pixels)
+        let img = image::RgbaImage::from_raw(pw as u32, ph as u32, pixels)
             .ok_or_else(|| "构造图像缓冲失败".to_string())?;
         if let Some(parent) = out_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("创建截图目录失败: {e}"))?;
@@ -199,11 +279,11 @@ fn capture_screen_win(
 
         return Ok(CaptureResult {
             path: out_path.to_string_lossy().to_string(),
-            width: sw as u32,
-            height: sh as u32,
-            // GDI BitBlt 拿到的是物理像素；此处按逻辑坐标裁剪，二者一致，
-            // 因此 scale 为 1。真要做高 DPI 精确换算，需要从窗口 DPI 反推，见 `dpi_scale`。
-            scale: 1.0,
+            // 图片本身是物理像素；模型读到的坐标也是这张图上的像素，
+            // 往 `mouse` 传时会按同一个 scale 换算回逻辑坐标，所以两边自洽。
+            width: pw as u32,
+            height: ph as u32,
+            scale,
             origin_x: sx,
             origin_y: sy,
         });
@@ -443,8 +523,21 @@ pub struct MouseAction {
 pub fn mouse(action: &MouseAction) -> Result<Value, String> {
     #[cfg(windows)]
     {
+        // 工具层约定：模型给的是截图上的像素（物理像素），这里换算成
+        // SetCursorPos 要的逻辑坐标；`ScreenShotTool` 与设置页的「试一下」
+        // 传的也是同一套截图坐标。100% 缩放下 scale=1，行为与以前完全一致。
+        let scale = dpi_scale();
+        let to_logical = |v: i32| -> i32 {
+            if (scale - 1.0).abs() < 0.01 {
+                v
+            } else {
+                (v as f32 / scale).round() as i32
+            }
+        };
         let (x, y) = match action.action.as_str() {
-            "move" | "click" | "double_click" | "right_click" | "drag" => (action.x, action.y),
+            "move" | "click" | "double_click" | "right_click" | "drag" => {
+                (to_logical(action.x), to_logical(action.y))
+            }
             "scroll" => cursor_position().unwrap_or((0, 0)),
             other => return Err(format!("未知鼠标动作: {other}")),
         };
@@ -456,7 +549,7 @@ pub fn mouse(action: &MouseAction) -> Result<Value, String> {
             "right_click" => click_at(x, y, Button::Right, 1)?,
             "drag" => {
                 button(Button::Left, true)?;
-                move_to(action.to_x, action.to_y)?;
+                move_to(to_logical(action.to_x), to_logical(action.to_y))?;
                 button(Button::Left, false)?;
             }
             "scroll" => scroll(action.amount)?,
@@ -466,6 +559,8 @@ pub fn mouse(action: &MouseAction) -> Result<Value, String> {
             "ok": true,
             "action": action.action,
             "x": x, "y": y,
+            "logicalX": x, "logicalY": y,
+            "scale": scale,
             "toX": action.to_x, "toY": action.to_y,
         }));
     }

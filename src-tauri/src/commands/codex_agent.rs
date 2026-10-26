@@ -283,6 +283,9 @@ fn resolve_sandbox_mode() -> String {
 ///
 /// `wire_api` 固定 `responses`：codex 0.149 起明确移除了 `wire_api = "chat"`
 /// （启动时直接报 "no longer supported" 并拒绝加载配置）。
+///
+/// `approval_policy` 决定 MCP 工具的审批行为（见 `mcp_server_toml` 的说明），
+/// 所以这里必须把它一并传下去，而不是在段里写死一个值。
 fn write_codex_config(
     home: &PathBuf,
     provider: &CodexProvider,
@@ -298,9 +301,10 @@ fn write_codex_config(
             "approval_policy = \"{approval_policy}\"\n",
             "sandbox_mode = \"{sandbox}\"\n",
             "disable_response_storage = true\n",
-            // codex 原生的联网搜索。cached 只吃索引、live 会真的打开网页；
-            // 少了这一行，模型只能靠 Guaxi MCP 里的兜底搜索，覆盖面窄一截。
-            "web_search = \"live\"\n",
+            // codex 原生的联网搜索。cached 只吃索引、live 会真的打开网页。
+            // 它的开关必须跟随 Guaxi 的「出网」授权：否则设置页关着出网，
+            // codex 自己却仍在联网，授权就形同虚设。
+            "web_search = \"{web_search}\"\n",
             // 不给推理摘要的话，工作台中间栏就只剩工具卡片，看不见模型在想什么。
             "model_reasoning_summary = \"auto\"\n",
             "\n",
@@ -314,6 +318,11 @@ fn write_codex_config(
         provider_id = CODEX_PROVIDER_ID,
         approval_policy = approval_policy,
         sandbox = sandbox,
+        web_search = if crate::cognition::tools::tier_granted(crate::cognition::tools::Tier::Network) {
+            "live"
+        } else {
+            "disabled"
+        },
         source = provider.source,
         base_url = toml_escape(&provider.base_url),
         env_key = CODEX_API_KEY_ENV,
@@ -325,7 +334,7 @@ fn write_codex_config(
     //
     // 走 stdio 桥接进程而不是直连 HTTP：codex 的 mcp_servers 只支持派生子进程。
     // 桥接缺失时**不写**这一段——写了 codex 每轮都会尝试拉起一个不存在的进程并报错。
-    let content = match mcp_server_toml() {
+    let content = match mcp_server_toml(approval_policy) {
         Some(extra) => format!("{content}{extra}"),
         None => content,
     };
@@ -343,37 +352,93 @@ fn write_codex_config(
 
 /// 生成 `[mcp_servers.guaxi]` 配置片段。
 ///
-/// 优先用独立桥接二进制；找不到时退到主程序自己的 `--mcp-server` 模式。
-/// 主程序必然存在且一定在运行（codex 是它的子进程），所以这条退路几乎是稳的——
-/// 开发构建里没有旁挂的 `guaxi_mcp.exe`，之前整段 MCP 就被跳过了。
-fn mcp_server_toml() -> Option<String> {
+/// 三件事必须同时成立，工具才真的能调：
+///
+/// 1. **挂得上**。优先用独立桥接二进制；找不到时退到主程序自己的
+///    `--mcp-server` 模式（开发构建里通常没有旁挂的 `guaxi_mcp.exe`）。
+/// 2. **只列已授权的工具**。`enabled_tools` 直接把未授权的等级挡在模型视野外——
+///    让模型看见它调不动的东西，只会换来一串失败重试。这里与 `tools::dispatch`
+///    的服务端强拦是两层，不是重复：一层省 token 和误判，一层是真正的边界。
+/// 3. **审批模式与 approval_policy 配套**。codex 0.149 对所有 MCP 调用都要求审批，
+///    唯一例外是工具带 `readOnlyHint`（已由服务端 `tools/list` 提供）。
+///    - `never`（exec 链路，没有 UI 接审批）→ `auto`：只读直接跑，写/GUI 被 codex 拦下。
+///    - 有审批 UI 的 app-server → `prompt`：每次需要确认的调用都弹到前端。
+///    不能写 `approve`：那等于把所有写权限都交给模型。
+fn mcp_server_toml(approval_policy: &str) -> Option<String> {
     let bridge = crate::cognition::commands::bridge_binary_path();
-    if bridge.is_file() {
-        return Some(format!(
-            concat!(
-                "\n",
-                "# Guaxi 认知层工具面（召回 / 图谱 / 感知 / 信念 / 任务）。\n",
-                "# 由 stdio 桥接转发到主进程 127.0.0.1:8888/mcp；工具的读写授权在 Guaxi 设置里控制。\n",
-                "[mcp_servers.guaxi]\n",
-                "command = \"{cmd}\"\n",
-                "args = []\n",
-            ),
-            cmd = toml_escape(&bridge.to_string_lossy())
-        ));
-    }
+    let (command, args) = if bridge.is_file() {
+        (bridge.to_string_lossy().to_string(), "args = []")
+    } else {
+        let exe = std::env::current_exe().ok()?;
+        (exe.to_string_lossy().to_string(), "args = [\"--mcp-server\"]")
+    };
 
-    let exe = std::env::current_exe().ok()?;
-    Some(format!(
+    let approval_mode = if approval_policy == "never" {
+        "auto"
+    } else {
+        "prompt"
+    };
+    let enabled = enabled_tool_names();
+
+    let mut extra = format!(
         concat!(
             "\n",
             "# Guaxi 认知层工具面（召回 / 图谱 / 感知 / 信念 / 任务）。\n",
-            "# 主程序以 --mcp-server 模式充当 stdio 桥接，再转发到 127.0.0.1:8888/mcp。\n",
+            "# 由 stdio 桥接转发到主进程 127.0.0.1:8888/mcp；工具的读写授权在 Guaxi 设置里控制。\n",
             "[mcp_servers.guaxi]\n",
             "command = \"{cmd}\"\n",
-            "args = [\"--mcp-server\"]\n",
+            "{args}\n",
+            // 首次拉起桥接要等主进程 8888 就绪；默认 30 秒在冷启动（同时起 embedding、
+            // Python agent_server）时不够，会被判成握手超时。
+            "startup_timeout_sec = 60\n",
+            "default_tools_approval_mode = \"{approval_mode}\"\n",
         ),
-        cmd = toml_escape(&exe.to_string_lossy())
-    ))
+        cmd = toml_escape(&command),
+        args = args,
+        approval_mode = approval_mode,
+    );
+    if !enabled.is_empty() {
+        let list = enabled
+            .iter()
+            .map(|n| format!("\"{}\"", toml_escape(n)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        extra.push_str(&format!("enabled_tools = [{list}]\n"));
+    }
+    Some(extra)
+}
+
+/// 当前已授权的工具名，供 codex 的 `enabled_tools` 白名单使用。
+fn enabled_tool_names() -> Vec<String> {
+    crate::cognition::tools::list_tools()
+        .into_iter()
+        .filter(|t| t.enabled)
+        .map(|t| t.name)
+        .collect()
+}
+
+/// 写完配置后做一次可用性自检：真的拉起 codex 问它认不认这个 MCP 服务器。
+///
+/// 没有这一步时，"桥接没被分发"或"配置写错"与"工具层坏了"是同一个症状——
+/// 模型只是不用工具。这里把原因变成一条可读日志，而不是让用户猜。
+pub async fn verify_mcp_bridge(binary: &PathBuf, home: &PathBuf) -> Result<usize, String> {
+    let output = Command::new(binary)
+        .arg("mcp")
+        .arg("list")
+        .env("CODEX_HOME", home)
+        .output()
+        .await
+        .map_err(|e| format!("运行 codex mcp list 失败: {e}"))?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let line = text.lines().find(|l| l.trim_start().starts_with("guaxi"));
+    match line {
+        Some(l) if l.contains("enabled") => Ok(enabled_tool_names().len()),
+        Some(l) => Err(format!("codex 认到了 guaxi，但状态不是 enabled: {}", l.trim())),
+        None => Err(format!(
+            "codex 没有注册 guaxi MCP 服务器。原始输出: {}",
+            text.trim()
+        )),
+    }
 }
 
 /// codex item 的 `item_type` → 前端工具卡片用的工具名。
@@ -700,6 +765,15 @@ pub async fn run_codex_agent(app: &AppHandle, request: &CodexAgentRequest) -> Re
     write_codex_config(&home, &provider, &sandbox, "never")?;
 
     let work_dir = resolve_work_dir(request, &home)?;
+
+    // 自检：确认 codex 真的注册了 guaxi 的 MCP 服务器。失败不阻断这一轮
+    // （文件工具仍然可用），但必须留下可读原因——否则"工具没接上"和
+    // "模型不想用工具"在用户眼里是同一件事。
+    match verify_mcp_bridge(&binary, &home).await {
+        Ok(n) => info!(tools = n, "[codex_agent] guaxi MCP 已就绪"),
+        Err(e) => warn!("[codex_agent] guaxi MCP 未接上，本轮只能用 codex 内置工具：{e}"),
+    }
+
     let args = build_args(request, &work_dir, &sandbox, &provider.model);
 
     info!(

@@ -190,6 +190,15 @@
               <div v-if="isOpen(item.id, item.status === 'inProgress')" class="tool-detail">
                 <pre class="tool-pre">{{ pretty(item.arguments) }}</pre>
                 <pre v-if="item.progress" class="tool-pre tool-progress">{{ item.progress }}</pre>
+                <div v-if="toolImages(item).length" class="tool-images">
+                  <img
+                    v-for="(src, i) in toolImages(item)"
+                    :key="i"
+                    :src="src"
+                    alt="工具返回的图片"
+                    @click="$emit('open-image', src)"
+                  />
+                </div>
                 <pre v-if="toolResult(item)" class="tool-pre">{{ toolResult(item) }}</pre>
               </div>
             </div>
@@ -527,18 +536,41 @@ function toolResult(item) {
   }
   if (item.contentItems?.length) {
     return item.contentItems
-      .map((c) => c?.text || c?.inputText || pretty(c))
+      // 图片项没有 text，`pretty()` 会把整段 base64 摊到卡片里。
+      // 图片交给 `toolImages()` 单独渲染缩略图，这里只留一行说明。
+      .map((c) => c?.text || c?.inputText || (c?.imageUrl ? '（截图见上方缩略图）' : pretty(c)))
       .join('\n')
   }
   if (item.result) {
     if (Array.isArray(item.result.content)) {
       return item.result.content
-        .map((c) => c?.text || pretty(c))
+        .map((c) => c?.text || (c?.type === 'image' ? '（返回了一张图片）' : pretty(c)))
         .join('\n')
     }
     return pretty(item.result)
   }
   return ''
+}
+
+/**
+ * 工具结果里可以渲染成缩略图的图片。
+ *
+ * 两个来源：app-server dynamicTool 的 `inputImage`（截屏走这条路），
+ * 以及 MCP 回包里的 `{type:"image", data, mimeType}`。
+ */
+function toolImages(item) {
+  if (!item) return []
+  const out = []
+  for (const c of item.contentItems || []) {
+    const url = c?.imageUrl || c?.url
+    if (url) out.push(url)
+  }
+  for (const c of item.result?.content || []) {
+    if (c?.type === 'image' && c?.data) {
+      out.push(`data:${c.mimeType || 'image/png'};base64,${c.data}`)
+    }
+  }
+  return out
 }
 
 function resultTitle(result) {
@@ -1086,6 +1118,25 @@ async function copy(text) {
 
 .tool-progress {
   color: #b47d1a;
+}
+
+/* 工具返回的图片（截屏）：缩略图而不是原图，点开看全尺寸。
+   限制高度是为了不让一张 4K 截图把整条转录挤到屏幕外。 */
+.tool-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 11px;
+  border-top: 1px dashed var(--guaxi-border);
+}
+
+.tool-images img {
+  max-height: 160px;
+  max-width: 100%;
+  border-radius: var(--guaxi-radius-sm, 4px);
+  border: 1px solid var(--guaxi-border);
+  cursor: zoom-in;
+  object-fit: contain;
 }
 
 /* ── 搜索 ───────────────────────────── */

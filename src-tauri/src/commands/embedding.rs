@@ -421,6 +421,20 @@ pub async fn kg_ensure_embedding_service() -> Result<EmbeddingServiceStatus, Str
     })
 }
 
+/// 缓存的 embedding 就绪状态：只反映「进程还活着」，不发 HTTP 探测。
+///
+/// 打分循环每 20 秒就会真的用一次 embedding 服务，顺带把结果写进这个标记。
+/// 状态面板读它即可，不必为了一次页面刷新去打一次没有超时的健康检查。
+pub fn embed_ready_cached() -> bool {
+    refresh_process_state();
+    EMBED_PROCESS
+        .lock()
+        .ok()
+        .and_then(|g| g.child.as_ref().map(|_| true))
+        .unwrap_or(false)
+        || crate::cognition::store::get_bool("embed_ready_hint", false)
+}
+
 /// 命令:查询 embedding 服务/模型状态(不强制启动)。
 #[tauri::command]
 pub async fn kg_embedding_status() -> Result<EmbeddingServiceStatus, String> {

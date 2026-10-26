@@ -1649,6 +1649,11 @@ function buildApprovalDecision(approval, action, options) {
   const allow = action === 'accept' || action === 'acceptForSession'
   const isInput = kind === 'input' || method.includes('requestUserInput')
 
+  // Guaxi 工具层的逐动作确认也走这个方法，但回包只认 decision。
+  if (approval?.kind === 'tool') {
+    return { decision: allow ? (action === 'acceptForSession' ? 'acceptForSession' : 'accept') : 'decline' }
+  }
+
   if (method === 'mcpServer/elicitation/request') {
     return {
       action: allow ? 'accept' : 'decline',

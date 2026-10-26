@@ -196,18 +196,29 @@ fn shutdown_background_processes(reason: &str) {
     );
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     // MCP stdio 模式：codex 把主程序自己当作 MCP 服务器拉起来时走这里。
-    // 必须在 Tauri / 日志 / 数据库初始化之前分叉——这条进程只该转发 JSONL，
-    // 不该再开一个窗口，也不该抢单实例锁。
+    //
+    // 必须在 `#[tokio::main]` **之外**分叉：桥接用的是 `reqwest::blocking`，
+    // 它内部会建一个阻塞运行时；若此时已有 tokio 运行时就绪（`#[tokio::main]`
+    // 已经建好），退出时会 panic「Cannot drop a runtime in a context where
+    // blocking is not allowed」，进程直接死，codex 那侧只看到握手失败。
+    // 这条路径在安装包里是**唯一**可用的（不额外分发 guaxi_mcp.exe），
+    // 所以它必须是普通同步入口。
     if std::env::args().any(|arg| arg == "--mcp-server") {
         cognition::mcp_bridge::run_stdio_bridge();
         return;
     }
+    app_main()
+}
 
+#[tokio::main]
+async fn app_main() {
     let has_debug_flag = std::env::args().any(|arg| arg == "--debug");
     let enable_verbose_logs = cfg!(debug_assertions) || has_debug_flag;
+    // 必须在任何窗口创建之前声明 DPI 感知：否则 Windows 会把坐标虚拟化成
+    // 96 DPI 视角，而 GDI 截图拿到的是真实像素，高缩放下模型算出的点击位置会错位。
+    commands::computer::init_dpi_awareness();
     // iroh 的中继重连与网络探测在国内环境会大量打 WARN（relay 断连、net_report 等），
     // 但属于正常瞬态行为，统一降到 error 级别避免刷屏；真正致命错误仍可见。可用 RUST_LOG 覆盖。
     let iroh_noise_filter =
