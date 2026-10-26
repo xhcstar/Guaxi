@@ -124,30 +124,64 @@ pub struct ThreadStartRequest {
     /// 工作模式：explore | code | research | computer
     #[serde(default)]
     pub mode: String,
+    /// 归入哪个会话分区（thread section）。
+    #[serde(default)]
+    pub section_id: String,
+    /// 不落盘的临时线程（用于「快速问一句」）。
+    #[serde(default)]
+    pub ephemeral: bool,
+}
+
+/// 一条附加输入。与 `UserInput` 的几种类型一一对应：
+/// text / mention / skill / localImage / image / localAudio / audio。
+#[derive(Deserialize, Debug, Default, Clone)]
+pub struct UserInputAttachment {
+    #[serde(default, rename = "type")]
+    pub kind: String,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub detail: String,
 }
 
 #[derive(Deserialize, Debug, Default)]
 pub struct TurnStartRequest {
+    #[serde(default)]
     pub thread_id: String,
+    #[serde(default)]
     pub text: String,
     #[serde(default)]
     pub model: String,
     /// low | medium | high | xhigh | max | ultra
     #[serde(default)]
     pub effort: String,
+    /// auto | concise | detailed | none
+    #[serde(default)]
+    pub summary: String,
+    /// 本轮覆盖的工作目录。
+    #[serde(default)]
+    pub cwd: String,
+    /// 本轮覆盖的审批策略。
+    #[serde(default)]
+    pub approval_policy: String,
+    /// 本轮覆盖的沙箱：read-only | workspace-write | danger-full-access
+    #[serde(default)]
+    pub sandbox: String,
     /// 本地图片路径（「操作电脑」模式把截图交给模型）。
     #[serde(default)]
     pub images: Vec<String>,
-}
-
-#[derive(Serialize, Debug, Default)]
-pub struct ThreadSummary {
-    pub thread_id: String,
-    pub cwd: String,
-    pub model: String,
-    pub sandbox: String,
-    pub approval_policy: String,
-    pub path: String,
+    /// 附件 / 文件引用 / 技能，按顺序插在正文之后。
+    #[serde(default)]
+    pub attachments: Vec<UserInputAttachment>,
+    /// 客户端生成的消息 id，用于回流去重。
+    #[serde(default)]
+    pub client_user_message_id: String,
 }
 
 #[derive(Serialize, Debug, Default)]
@@ -166,6 +200,14 @@ pub struct EngineStatus {
 
 /// 发一条 JSON-RPC 请求并等响应。
 async fn rpc_call(method: &str, params: Value) -> Result<Value, String> {
+    rpc_call_with_timeout(method, params, 30).await
+}
+
+async fn rpc_call_with_timeout(
+    method: &str,
+    params: Value,
+    timeout_secs: u64,
+) -> Result<Value, String> {
     let id = next_id();
     let (tx, rx) = oneshot::channel();
     PENDING_RPC
@@ -176,7 +218,7 @@ async fn rpc_call(method: &str, params: Value) -> Result<Value, String> {
     let line = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
     sender_line()?.send(line.to_string()).map_err(|e| e.to_string())?;
 
-    match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
+    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), rx).await {
         Ok(Ok(v)) => v,
         Ok(Err(_)) => {
             take_pending_rpc(id);
@@ -464,15 +506,35 @@ async fn dispatch_incoming(app: AppHandle, msg: Value) {
     }
 
     // 3) 通知：补齐 threadId/turnId 之外，原样透传，同时给出一个稳定的 kind 供前端分流。
+    //    把 threadId 提到顶层很关键：工作台同时开着多个会话，事件必须能直接归账，
+    //    否则前端要在每个 payload 里按类型去猜字段。
     let payload = msg.get("params").cloned().unwrap_or(Value::Null);
+    let thread_id = notification_thread_id(&payload);
+    let turn_id = payload
+        .get("turnId")
+        .and_then(|v| v.as_str())
+        .or_else(|| payload.pointer("/turn/id").and_then(|v| v.as_str()))
+        .unwrap_or("");
     let _ = app.emit(
         EVENT_NOTIFICATION,
         json!({
             "kind": method,
+            "threadId": thread_id,
+            "turnId": turn_id,
             "payload": payload,
             "at": chrono::Utc::now().timestamp_millis(),
         }),
     );
+}
+
+/// 从通知参数里取线程 id。`thread/started` 把线程放在 `thread` 里，其余大多直接在 `threadId`。
+fn notification_thread_id(payload: &Value) -> String {
+    payload
+        .get("threadId")
+        .and_then(|v| v.as_str())
+        .or_else(|| payload.pointer("/thread/id").and_then(|v| v.as_str()))
+        .unwrap_or("")
+        .to_string()
 }
 
 async fn handle_server_request(app: AppHandle, id: u64, method: &str, params: Value) {
@@ -496,6 +558,8 @@ async fn handle_server_request(app: AppHandle, id: u64, method: &str, params: Va
                     "requestId": id,
                     "kind": kind,
                     "method": method,
+                    "threadId": notification_thread_id(&params),
+                    "turnId": params.get("turnId").and_then(|v| v.as_str()).unwrap_or(""),
                     "params": params,
                     "at": chrono::Utc::now().timestamp_millis(),
                 }),
@@ -619,17 +683,22 @@ pub async fn agent_engine_ready() -> bool {
 /// 可用模型清单。`model/list` 不需要供应商凭证（实测），所以即使还没配 Key 也能拉出来，
 /// 设置页模型下拉可以直接用这份数据。
 #[tauri::command]
-pub async fn agent_list_models(app: AppHandle) -> Result<Value, String> {
+pub async fn agent_list_models(app: AppHandle, include_hidden: Option<bool>) -> Result<Value, String> {
     ensure_started(&app).await?;
-    rpc_call("model/list", json!({})).await
+    let mut params = json!({});
+    if include_hidden.unwrap_or(false) {
+        params["includeHidden"] = json!(true);
+    }
+    rpc_call("model/list", params).await
 }
 
-/// 开一条新线程。
+/// 开一条新线程。返回 thread/start 的完整响应：前端需要 thread.id、模型、
+/// 实际生效的沙箱/审批、以及 instructionSources（Environment 面板要显示）。
 #[tauri::command]
 pub async fn agent_start_thread(
     app: AppHandle,
     request: ThreadStartRequest,
-) -> Result<ThreadSummary, String> {
+) -> Result<Value, String> {
     ensure_started(&app).await?;
     let home = codex_agent::codex_home_dir()?;
     let cwd = resolve_work_dir(&request.cwd, &home)?;
@@ -651,69 +720,127 @@ pub async fn agent_start_thread(
     if !request.model.trim().is_empty() {
         params["model"] = json!(request.model.trim());
     }
+    if request.ephemeral {
+        params["ephemeral"] = json!(true);
+    }
 
     let resp = rpc_call("thread/start", params).await?;
-    let thread = resp.get("thread").cloned().unwrap_or(Value::Null);
-    let summary = ThreadSummary {
-        thread_id: thread
-            .get("id")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string(),
-        cwd: thread
-            .get("cwd")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string(),
-        model: resp
-            .get("model")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string(),
-        sandbox: sandbox_string(&resp),
-        approval_policy: resp
-            .get("approvalPolicy")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string(),
-        path: thread
-            .get("path")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string(),
-    };
+    let thread_id = resp
+        .pointer("/thread/id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    // section 归属在 thread 创建之后单独设：thread/start 不接受 section 字段。
+    if !request.section_id.trim().is_empty() && !thread_id.is_empty() {
+        let _ = rpc_call(
+            "thread/section/move",
+            json!({ "threadId": thread_id, "sectionId": request.section_id.trim() }),
+        )
+        .await;
+    }
+
     info!(
-        thread_id = %summary.thread_id,
-        cwd = %summary.cwd,
-        model = %summary.model,
+        thread_id = %thread_id,
+        cwd = %cwd.to_string_lossy(),
+        model = resp.get("model").and_then(|v| v.as_str()).unwrap_or(""),
         "[codex_app_server] thread/start"
     );
-    Ok(summary)
+    Ok(resp)
 }
 
-/// 恢复既有线程（软件重启后接着用）。
+/// 恢复既有线程（软件重启 / 切换会话后接着用）。
 #[tauri::command]
-pub async fn agent_resume_thread(app: AppHandle, thread_id: String) -> Result<Value, String> {
+pub async fn agent_resume_thread(
+    app: AppHandle,
+    thread_id: String,
+    cwd: Option<String>,
+    model: Option<String>,
+    sandbox: Option<String>,
+    approval_policy: Option<String>,
+    mode: Option<String>,
+) -> Result<Value, String> {
     ensure_started(&app).await?;
-    rpc_call("thread/resume", json!({ "threadId": thread_id })).await
+    let mut params = json!({ "threadId": thread_id });
+    if let Some(cwd) = cwd.filter(|v| !v.trim().is_empty()) {
+        params["cwd"] = json!(cwd);
+    }
+    if let Some(model) = model.filter(|v| !v.trim().is_empty()) {
+        params["model"] = json!(model);
+    }
+    if let Some(sandbox) = sandbox.filter(|v| !v.trim().is_empty()) {
+        params["sandbox"] = json!(normalize_sandbox(&sandbox));
+    }
+    if let Some(approval) = approval_policy.filter(|v| !v.trim().is_empty()) {
+        params["approvalPolicy"] = json!(normalize_approval(&approval));
+    }
+    let (base, developer) = mode_instructions(mode.as_deref().unwrap_or(""));
+    if let Some(v) = base {
+        params["baseInstructions"] = json!(v);
+    }
+    if let Some(v) = developer {
+        params["developerInstructions"] = json!(v);
+    }
+    rpc_call_with_timeout("thread/resume", params, 60).await
 }
 
 /// 线程历史（会话恢复时补渲染用）。
 #[tauri::command]
-pub async fn agent_read_thread(app: AppHandle, thread_id: String) -> Result<Value, String> {
+pub async fn agent_read_thread(
+    app: AppHandle,
+    thread_id: String,
+    include_turns: Option<bool>,
+) -> Result<Value, String> {
     ensure_started(&app).await?;
-    rpc_call("thread/read", json!({ "threadId": thread_id })).await
+    rpc_call_with_timeout(
+        "thread/read",
+        json!({ "threadId": thread_id, "includeTurns": include_turns.unwrap_or(true) }),
+        60,
+    )
+    .await
 }
 
 /// 历史会话列表。直接吃 codex 自己的 rollout 索引，Guaxi 不另存一份会话正文。
+///
+/// `params` 原样透传 thread/list 的过滤条件（archived / sectionId / searchTerm /
+/// cwd / cursor / sortKey …），前端只需要理解协议，不需要为每个筛选开一条命令。
 #[tauri::command]
-pub async fn agent_list_threads(app: AppHandle, limit: Option<u32>) -> Result<Value, String> {
+pub async fn agent_list_threads(app: AppHandle, params: Option<Value>) -> Result<Value, String> {
     ensure_started(&app).await?;
-    rpc_call(
-        "thread/list",
-        json!({ "limit": limit.unwrap_or(50), "sortKeys": ["recency_at"] }),
-    )
-    .await
+    let mut p = params.unwrap_or_else(|| json!({}));
+    if !p.is_object() {
+        p = json!({});
+    }
+    if p.get("limit").is_none() {
+        p["limit"] = json!(50);
+    }
+    if p.get("sortKey").is_none() {
+        p["sortKey"] = json!("recency_at");
+    }
+    rpc_call_with_timeout("thread/list", p, 60).await
+}
+
+/// 从某个节点分叉（Codex 的「从这里重新开始」）。
+#[tauri::command]
+pub async fn agent_fork_thread(
+    app: AppHandle,
+    thread_id: String,
+    last_turn_id: Option<String>,
+    cwd: Option<String>,
+    model: Option<String>,
+) -> Result<Value, String> {
+    ensure_started(&app).await?;
+    let mut params = json!({ "threadId": thread_id });
+    if let Some(t) = last_turn_id.filter(|v| !v.trim().is_empty()) {
+        params["lastTurnId"] = json!(t);
+    }
+    if let Some(c) = cwd.filter(|v| !v.trim().is_empty()) {
+        params["cwd"] = json!(c);
+    }
+    if let Some(m) = model.filter(|v| !v.trim().is_empty()) {
+        params["model"] = json!(m);
+    }
+    rpc_call_with_timeout("thread/fork", params, 60).await
 }
 
 /// 发一轮指令。
@@ -723,19 +850,10 @@ pub async fn agent_start_turn(app: AppHandle, request: TurnStartRequest) -> Resu
     if request.thread_id.trim().is_empty() {
         return Err("缺少 thread_id".to_string());
     }
-    if request.text.trim().is_empty() && request.images.is_empty() {
-        return Err("输入为空".to_string());
-    }
 
-    let mut input: Vec<Value> = Vec::new();
-    if !request.text.trim().is_empty() {
-        input.push(json!({ "type": "text", "text": request.text }));
-    }
-    for path in &request.images {
-        if path.trim().is_empty() {
-            continue;
-        }
-        input.push(json!({ "type": "localImage", "path": path }));
+    let input = build_turn_input(&request);
+    if input.is_empty() {
+        return Err("输入为空".to_string());
     }
 
     let mut params = json!({
@@ -748,6 +866,23 @@ pub async fn agent_start_turn(app: AppHandle, request: TurnStartRequest) -> Resu
     if !request.effort.trim().is_empty() {
         params["effort"] = json!(request.effort.trim());
     }
+    if !request.summary.trim().is_empty() {
+        params["summary"] = json!(request.summary.trim());
+    }
+    if !request.cwd.trim().is_empty() {
+        params["cwd"] = json!(request.cwd.trim());
+    }
+    if !request.approval_policy.trim().is_empty() {
+        params["approvalPolicy"] = json!(normalize_approval(&request.approval_policy));
+    }
+    if !request.sandbox.trim().is_empty() {
+        if let Some(policy) = sandbox_policy_value(&request.sandbox, &request.cwd) {
+            params["sandboxPolicy"] = policy;
+        }
+    }
+    if !request.client_user_message_id.trim().is_empty() {
+        params["clientUserMessageId"] = json!(request.client_user_message_id.trim());
+    }
 
     let resp = rpc_call("turn/start", params).await?;
     info!(
@@ -758,6 +893,82 @@ pub async fn agent_start_turn(app: AppHandle, request: TurnStartRequest) -> Resu
     Ok(resp)
 }
 
+/// 把正文、附件、文件引用、技能拼成 `UserInput[]`。
+///
+/// 顺序很重要：正文在前，引用在后。模型读到的第一条永远是用户真正说的话，
+/// 而不是一串路径。
+fn build_turn_input(request: &TurnStartRequest) -> Vec<Value> {
+    let mut input: Vec<Value> = Vec::new();
+    if !request.text.trim().is_empty() {
+        input.push(json!({ "type": "text", "text": request.text, "text_elements": [] }));
+    }
+
+    for attachment in &request.attachments {
+        let kind = attachment.kind.trim();
+        let value = match kind {
+            "mention" => {
+                if attachment.path.trim().is_empty() {
+                    continue;
+                }
+                json!({ "type": "mention", "name": attachment.name, "path": attachment.path })
+            }
+            "skill" => {
+                if attachment.path.trim().is_empty() {
+                    continue;
+                }
+                json!({ "type": "skill", "name": attachment.name, "path": attachment.path })
+            }
+            "image" => {
+                if attachment.url.trim().is_empty() {
+                    continue;
+                }
+                let mut v = json!({ "type": "image", "url": attachment.url });
+                if !attachment.detail.trim().is_empty() {
+                    v["detail"] = json!(attachment.detail.trim());
+                }
+                v
+            }
+            "localImage" => {
+                if attachment.path.trim().is_empty() {
+                    continue;
+                }
+                let mut v = json!({ "type": "localImage", "path": attachment.path });
+                if !attachment.detail.trim().is_empty() {
+                    v["detail"] = json!(attachment.detail.trim());
+                }
+                v
+            }
+            "localAudio" => {
+                if attachment.path.trim().is_empty() {
+                    continue;
+                }
+                json!({ "type": "localAudio", "path": attachment.path })
+            }
+            "audio" => {
+                if attachment.url.trim().is_empty() {
+                    continue;
+                }
+                json!({ "type": "audio", "url": attachment.url })
+            }
+            _ => {
+                if attachment.text.trim().is_empty() {
+                    continue;
+                }
+                json!({ "type": "text", "text": attachment.text, "text_elements": [] })
+            }
+        };
+        input.push(value);
+    }
+
+    for path in &request.images {
+        if path.trim().is_empty() {
+            continue;
+        }
+        input.push(json!({ "type": "localImage", "path": path }));
+    }
+    input
+}
+
 /// 中途改指令（不打断当前回合）。
 #[tauri::command]
 pub async fn agent_steer_turn(
@@ -765,14 +976,29 @@ pub async fn agent_steer_turn(
     thread_id: String,
     turn_id: String,
     text: String,
+    attachments: Option<Vec<UserInputAttachment>>,
 ) -> Result<Value, String> {
     ensure_started(&app).await?;
+    let mut input: Vec<Value> = Vec::new();
+    if !text.trim().is_empty() {
+        input.push(json!({ "type": "text", "text": text, "text_elements": [] }));
+    }
+    for attachment in attachments.unwrap_or_default() {
+        let request = TurnStartRequest {
+            attachments: vec![attachment],
+            ..Default::default()
+        };
+        input.extend(build_turn_input(&request));
+    }
+    if input.is_empty() {
+        return Err("输入为空".to_string());
+    }
     rpc_call(
         "turn/steer",
         json!({
             "threadId": thread_id,
             "turnId": turn_id,
-            "input": [{ "type": "text", "text": text }]
+            "input": input
         }),
     )
     .await
@@ -821,6 +1047,297 @@ pub async fn agent_archive_thread(app: AppHandle, thread_id: String) -> Result<V
     rpc_call("thread/archive", json!({ "threadId": thread_id })).await
 }
 
+/// 取消归档。
+#[tauri::command]
+pub async fn agent_unarchive_thread(app: AppHandle, thread_id: String) -> Result<Value, String> {
+    ensure_started(&app).await?;
+    rpc_call("thread/unarchive", json!({ "threadId": thread_id })).await
+}
+
+/// 永久删除线程。调用方（会话栏）必须先做二次确认。
+#[tauri::command]
+pub async fn agent_delete_thread(app: AppHandle, thread_id: String) -> Result<Value, String> {
+    ensure_started(&app).await?;
+    rpc_call("thread/delete", json!({ "threadId": thread_id })).await
+}
+
+/// 压缩会话上下文（Codex 的 compact）。
+#[tauri::command]
+pub async fn agent_compact_thread(app: AppHandle, thread_id: String) -> Result<Value, String> {
+    ensure_started(&app).await?;
+    rpc_call_with_timeout(
+        "thread/compact/start",
+        json!({ "threadId": thread_id }),
+        120,
+    )
+    .await
+}
+
+/// 起一次代码审查。
+#[tauri::command]
+pub async fn agent_review_start(
+    app: AppHandle,
+    thread_id: String,
+    target: Value,
+    delivery: Option<String>,
+) -> Result<Value, String> {
+    ensure_started(&app).await?;
+    let mut params = json!({ "threadId": thread_id, "target": target });
+    if let Some(d) = delivery.filter(|v| !v.trim().is_empty()) {
+        params["delivery"] = json!(d);
+    }
+    rpc_call_with_timeout("review/start", params, 120).await
+}
+
+// ───────────────────────────── 会话分区 / 环境 / 搜索
+
+/// 分区（Codex 左侧的会话分组）列表。
+#[tauri::command]
+pub async fn agent_section_list(app: AppHandle, limit: Option<u32>) -> Result<Value, String> {
+    ensure_started(&app).await?;
+    rpc_call(
+        "threadSection/list",
+        json!({ "limit": limit.unwrap_or(100) }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn agent_section_create(
+    app: AppHandle,
+    name: String,
+    icon: Option<String>,
+    color: Option<String>,
+) -> Result<Value, String> {
+    ensure_started(&app).await?;
+    let mut params = json!({ "name": name });
+    let appearance = json!({ "icon": icon, "color": color });
+    if appearance["icon"].is_string() || appearance["color"].is_string() {
+        params["appearance"] = appearance;
+    }
+    rpc_call("threadSection/create", params).await
+}
+
+#[tauri::command]
+pub async fn agent_section_update(
+    app: AppHandle,
+    section_id: String,
+    name: String,
+    icon: Option<String>,
+    color: Option<String>,
+) -> Result<Value, String> {
+    ensure_started(&app).await?;
+    let mut params = json!({ "sectionId": section_id, "name": name });
+    let appearance = json!({ "icon": icon, "color": color });
+    if appearance["icon"].is_string() || appearance["color"].is_string() {
+        params["appearance"] = appearance;
+    }
+    rpc_call("threadSection/update", params).await
+}
+
+#[tauri::command]
+pub async fn agent_section_delete(app: AppHandle, section_id: String) -> Result<Value, String> {
+    ensure_started(&app).await?;
+    rpc_call("threadSection/delete", json!({ "sectionId": section_id })).await
+}
+
+/// 把线程移入 / 移出分区，或调整分区内顺序。
+#[tauri::command]
+pub async fn agent_thread_move_section(
+    app: AppHandle,
+    thread_id: String,
+    section_id: Option<String>,
+    before_thread_id: Option<String>,
+) -> Result<Value, String> {
+    ensure_started(&app).await?;
+    let mut params = json!({
+        "threadId": thread_id,
+        "sectionId": section_id.filter(|v| !v.is_empty()),
+    });
+    if let Some(before) = before_thread_id.filter(|v| !v.is_empty()) {
+        params["beforeThreadId"] = json!(before);
+    }
+    rpc_call("thread/section/move", params).await
+}
+
+/// 权限预设（read-only / workspace / full access）。
+#[tauri::command]
+pub async fn agent_list_permission_profiles(app: AppHandle) -> Result<Value, String> {
+    ensure_started(&app).await?;
+    rpc_call("permissionProfile/list", json!({})).await
+}
+
+/// MCP 连接器状态。`detail` 传 "toolsAndAuthOnly" 时不拉完整 schema，开面板更快。
+#[tauri::command]
+pub async fn agent_list_mcp_servers(
+    app: AppHandle,
+    thread_id: Option<String>,
+    detail: Option<String>,
+) -> Result<Value, String> {
+    ensure_started(&app).await?;
+    let mut params = json!({ "detail": detail.unwrap_or_else(|| "toolsAndAuthOnly".into()) });
+    if let Some(t) = thread_id.filter(|v| !v.is_empty()) {
+        params["threadId"] = json!(t);
+    }
+    rpc_call_with_timeout("mcpServerStatus/list", params, 60).await
+}
+
+/// 重载 MCP 配置（用户在设置里改了工具授权后点一下）。
+#[tauri::command]
+pub async fn agent_reload_mcp_servers(app: AppHandle) -> Result<Value, String> {
+    ensure_started(&app).await?;
+    rpc_call_with_timeout("config/mcpServer/reload", Value::Null, 60).await
+}
+
+/// 技能清单（Codex 的 skills）。工作台用来做 `/` 命令面板的补全。
+#[tauri::command]
+pub async fn agent_list_skills(
+    app: AppHandle,
+    cwds: Option<Vec<String>>,
+    force_reload: Option<bool>,
+) -> Result<Value, String> {
+    ensure_started(&app).await?;
+    let cwds = cwds.unwrap_or_default();
+    rpc_call_with_timeout(
+        "skills/list",
+        json!({ "cwds": cwds, "forceReload": force_reload.unwrap_or(false) }),
+        60,
+    )
+    .await
+}
+
+/// 文件提及（`@`）用的模糊搜索。
+#[tauri::command]
+pub async fn agent_fuzzy_file_search(
+    app: AppHandle,
+    query: String,
+    roots: Vec<String>,
+    cancellation_token: Option<String>,
+) -> Result<Value, String> {
+    ensure_started(&app).await?;
+    rpc_call(
+        "fuzzyFileSearch",
+        json!({
+            "query": query,
+            "roots": roots,
+            "cancellationToken": cancellation_token,
+        }),
+    )
+    .await
+}
+
+/// 引擎实际生效的配置（Environment 面板展示 + 排障）。
+#[tauri::command]
+pub async fn agent_read_config(app: AppHandle, cwd: Option<String>) -> Result<Value, String> {
+    ensure_started(&app).await?;
+    let mut params = json!({ "includeLayers": false });
+    if let Some(c) = cwd.filter(|v| !v.is_empty()) {
+        params["cwd"] = json!(c);
+    }
+    rpc_call("config/read", params).await
+}
+
+/// 工作目录的 git 概览。Changes 面板据此显示分支与未提交行数。
+#[tauri::command]
+pub async fn agent_git_status(cwd: String) -> Result<Value, String> {
+    let dir = resolve_work_dir(&cwd, &codex_agent::codex_home_dir()?)?;
+    let inside = run_git(&dir, &["rev-parse", "--is-inside-work-tree"]).await;
+    if !matches!(&inside, Ok(out) if out.trim() == "true") {
+        return Ok(json!({ "isRepo": false }));
+    }
+    let branch = run_git(&dir, &["branch", "--show-current"])
+        .await
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let porcelain = run_git(&dir, &["status", "--porcelain=v1"])
+        .await
+        .unwrap_or_default();
+    let (mut added, mut removed, mut files) = (0i64, 0i64, 0i64);
+    for line in porcelain.lines().filter(|l| !l.trim().is_empty()) {
+        files += 1;
+        let path = line.get(3..).unwrap_or("").trim();
+        if path.is_empty() {
+            continue;
+        }
+        let unstaged = run_git(&dir, &["diff", "--numstat", "--", path])
+            .await
+            .unwrap_or_default();
+        let staged = run_git(&dir, &["diff", "--cached", "--numstat", "--", path])
+            .await
+            .unwrap_or_default();
+        for text in [unstaged, staged] {
+            for row in text.lines() {
+                let mut cols = row.split('\t');
+                if let (Some(a), Some(r)) = (cols.next(), cols.next()) {
+                    added += a.trim().parse::<i64>().unwrap_or(0);
+                    removed += r.trim().parse::<i64>().unwrap_or(0);
+                }
+            }
+        }
+    }
+    Ok(json!({
+        "isRepo": true,
+        "branch": branch,
+        "files": files,
+        "added": added,
+        "removed": removed,
+        "dirty": files > 0,
+    }))
+}
+
+/// 把工作区改动提交到 git。调用方必须已经让用户确认过提交信息。
+#[tauri::command]
+pub async fn agent_commit_changes(
+    cwd: String,
+    message: String,
+    paths: Option<Vec<String>>,
+) -> Result<Value, String> {
+    if message.trim().is_empty() {
+        return Err("提交信息不能为空".to_string());
+    }
+    let dir = resolve_work_dir(&cwd, &codex_agent::codex_home_dir()?)?;
+    let mut add_args: Vec<String> = vec!["add".to_string()];
+    match paths {
+        Some(list) if !list.is_empty() => {
+            add_args.push("--".to_string());
+            add_args.extend(list);
+        }
+        _ => add_args.push("-A".to_string()),
+    }
+    let add_refs: Vec<&str> = add_args.iter().map(|s| s.as_str()).collect();
+    run_git(&dir, &add_refs).await?;
+    let output = run_git(&dir, &["commit", "-m", message.trim()]).await?;
+
+    let head = run_git(&dir, &["rev-parse", "--short", "HEAD"])
+        .await
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    Ok(json!({ "commit": head, "output": output }))
+}
+
+/// 跑一条 git 命令并取 stdout。非零退出码转成带 stderr 的错误。
+async fn run_git(dir: &std::path::Path, args: &[&str]) -> Result<String, String> {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(dir).args(args);
+    if let Some(path) = std::env::var_os("PATH") {
+        cmd.env("PATH", path);
+    }
+    apply_no_window(&mut cmd);
+    let output = cmd
+        .output()
+        .await
+        .map_err(|e| format!("执行 git 失败: {e}"))?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        Err(if stderr.is_empty() { stdout } else { stderr })
+    }
+}
+
 /// 主动重置连接（设置页「重启引擎」）。
 #[tauri::command]
 pub async fn agent_restart_engine(app: AppHandle) -> Result<EngineStatus, String> {
@@ -864,11 +1381,33 @@ fn normalize_approval(raw: &str) -> &'static str {
     }
 }
 
-fn sandbox_string(resp: &Value) -> String {
-    resp.pointer("/sandbox/type")
-        .and_then(|v| v.as_str())
-        .unwrap_or("workspace-write")
-        .to_string()
+/// 把界面的沙箱模式转成 `TurnStartParams.sandboxPolicy` 的对象形式。
+///
+/// turn/start 只接受完整 policy，不接受模式字符串；workspace-write 还需要显式
+/// 给出可写根目录，否则 codex 会按全局配置而不是当前工作目录来算。
+fn sandbox_policy_value(mode: &str, cwd: &str) -> Option<Value> {
+    match normalize_sandbox(mode) {
+        "read-only" => Some(json!({ "type": "readOnly", "networkAccess": false })),
+        "danger-full-access" => Some(json!({ "type": "dangerFullAccess" })),
+        _ => {
+            let root = if cwd.trim().is_empty() {
+                String::new()
+            } else {
+                cwd.trim().to_string()
+            };
+            let mut roots = Vec::new();
+            if !root.is_empty() {
+                roots.push(root);
+            }
+            Some(json!({
+                "type": "workspaceWrite",
+                "writableRoots": roots,
+                "networkAccess": true,
+                "excludeTmpdirEnvVar": false,
+                "excludeSlashTmp": false,
+            }))
+        }
+    }
 }
 
 /// 工作模式 → (baseInstructions, developerInstructions)。

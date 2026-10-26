@@ -198,6 +198,14 @@ fn shutdown_background_processes(reason: &str) {
 
 #[tokio::main]
 async fn main() {
+    // MCP stdio 模式：codex 把主程序自己当作 MCP 服务器拉起来时走这里。
+    // 必须在 Tauri / 日志 / 数据库初始化之前分叉——这条进程只该转发 JSONL，
+    // 不该再开一个窗口，也不该抢单实例锁。
+    if std::env::args().any(|arg| arg == "--mcp-server") {
+        cognition::mcp_bridge::run_stdio_bridge();
+        return;
+    }
+
     let has_debug_flag = std::env::args().any(|arg| arg == "--debug");
     let enable_verbose_logs = cfg!(debug_assertions) || has_debug_flag;
     // iroh 的中继重连与网络探测在国内环境会大量打 WARN（relay 断连、net_report 等），
@@ -442,6 +450,24 @@ async fn main() {
             commands::codex_app_server::agent_resolve_approval,
             commands::codex_app_server::agent_rename_thread,
             commands::codex_app_server::agent_archive_thread,
+            commands::codex_app_server::agent_unarchive_thread,
+            commands::codex_app_server::agent_delete_thread,
+            commands::codex_app_server::agent_fork_thread,
+            commands::codex_app_server::agent_compact_thread,
+            commands::codex_app_server::agent_review_start,
+            commands::codex_app_server::agent_section_list,
+            commands::codex_app_server::agent_section_create,
+            commands::codex_app_server::agent_section_update,
+            commands::codex_app_server::agent_section_delete,
+            commands::codex_app_server::agent_thread_move_section,
+            commands::codex_app_server::agent_list_permission_profiles,
+            commands::codex_app_server::agent_list_mcp_servers,
+            commands::codex_app_server::agent_reload_mcp_servers,
+            commands::codex_app_server::agent_list_skills,
+            commands::codex_app_server::agent_fuzzy_file_search,
+            commands::codex_app_server::agent_read_config,
+            commands::codex_app_server::agent_git_status,
+            commands::codex_app_server::agent_commit_changes,
             commands::codex_app_server::agent_restart_engine,
             commands::cc_switch::detect_cc_switch_config,
             commands::chatview::audio_text_to_speech,

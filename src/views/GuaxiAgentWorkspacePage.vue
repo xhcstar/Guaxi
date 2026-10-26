@@ -1,9 +1,6 @@
 <template>
   <n-message-provider placement="bottom">
     <div class="agent-page">
-      <div class="main-header">
-        <GuaxiHeaderAgentWorkspace />
-      </div>
       <!-- 全局导航列：工作台自己的三段布局占满右侧，导航列单独占 44px。
            用户从这里可以随时切走，不会困在 /chat 里。 -->
       <div class="agent-body">
@@ -18,14 +15,13 @@
 /**
  * Agent 工作台页面宿主。
  *
- * 只做三件事：撑满窗口、提供消息容器、给出与其他页面一致的顶栏。
- * 旧版聊天页（GuaxiChatPage）仍在 `/chat-legacy`，它的头部工具栏与左右侧栏是那一版的结构；
- * 工作台自己的三段布局（会话 / 转录 / 仪表）由 AgentWorkspace 负责，
- * 顶栏只放左右侧栏的展开 / 收起按钮。
+ * 只做三件事：撑满窗口、提供消息容器、放全局导航列。
+ * 旧版聊天页（GuaxiChatPage）仍在 `/chat-legacy`；工作台的顶栏、
+ * 三段布局（会话 / 转录 / 仪表）与面板开关全部由 AgentWorkspace 自己负责，
+ * 页面层不再叠一条应用顶栏。
  */
 import { NMessageProvider } from 'naive-ui'
 import AgentWorkspace from '../components/AgentWorkspace/AgentWorkspace.vue'
-import GuaxiHeaderAgentWorkspace from '../components/AgentWorkspace/GuaxiHeaderAgentWorkspace.vue'
 import GuaxiNavRail from '../components/GuaxiNavRail.vue'
 import { useSiderStore } from '../stores/useSiderStore'
 import { createLogger } from '../utils/logger'
@@ -56,14 +52,7 @@ logger.info('Agent 工作台页面已挂载')
   background: var(--guaxi-content-bg);
 }
 
-/* 顶栏保持固定高度，下方三段布局吸收剩余空间。 */
-.main-header {
-  flex: 0 0 auto;
-  height: 35px;
-  position: relative;
-  z-index: 3;
-}
-
+/* 顶栏由工作台自己画，页面层只负责把剩余高度交给三段布局。 */
 .agent-body {
   flex: 1 1 auto;
   display: flex;

@@ -195,7 +195,7 @@ pub fn write_codex_config_for_engine(
         model: provider.model.clone(),
         source: provider.source,
     };
-    write_codex_config(home, &inner, sandbox)
+    write_codex_config(home, &inner, sandbox, "on-request")
 }
 
 /// 读取 codex 版本号（设置页状态面板）。
@@ -287,6 +287,7 @@ fn write_codex_config(
     home: &PathBuf,
     provider: &CodexProvider,
     sandbox: &str,
+    approval_policy: &str,
 ) -> Result<(), String> {
     let content = format!(
         concat!(
@@ -294,9 +295,14 @@ fn write_codex_config(
             "# 它只作用于 Guaxi 内置的 codex，与用户自己的 ~/.codex 完全无关。\n",
             "model = \"{model}\"\n",
             "model_provider = \"{provider_id}\"\n",
-            "approval_policy = \"never\"\n",
+            "approval_policy = \"{approval_policy}\"\n",
             "sandbox_mode = \"{sandbox}\"\n",
             "disable_response_storage = true\n",
+            // codex 原生的联网搜索。cached 只吃索引、live 会真的打开网页；
+            // 少了这一行，模型只能靠 Guaxi MCP 里的兜底搜索，覆盖面窄一截。
+            "web_search = \"live\"\n",
+            // 不给推理摘要的话，工作台中间栏就只剩工具卡片，看不见模型在想什么。
+            "model_reasoning_summary = \"auto\"\n",
             "\n",
             "[model_providers.{provider_id}]\n",
             "name = \"Guaxi ({source})\"\n",
@@ -306,6 +312,7 @@ fn write_codex_config(
         ),
         model = toml_escape(&provider.model),
         provider_id = CODEX_PROVIDER_ID,
+        approval_policy = approval_policy,
         sandbox = sandbox,
         source = provider.source,
         base_url = toml_escape(&provider.base_url),
@@ -334,26 +341,38 @@ fn write_codex_config(
     Ok(())
 }
 
-/// 生成 `[mcp_servers.guaxi]` 配置片段。桥接可执行文件不存在时返回 None。
+/// 生成 `[mcp_servers.guaxi]` 配置片段。
+///
+/// 优先用独立桥接二进制；找不到时退到主程序自己的 `--mcp-server` 模式。
+/// 主程序必然存在且一定在运行（codex 是它的子进程），所以这条退路几乎是稳的——
+/// 开发构建里没有旁挂的 `guaxi_mcp.exe`，之前整段 MCP 就被跳过了。
 fn mcp_server_toml() -> Option<String> {
     let bridge = crate::cognition::commands::bridge_binary_path();
-    if !bridge.is_file() {
-        warn!(
-            path = %bridge.to_string_lossy(),
-            "[codex_agent] 未找到 guaxi_mcp 桥接，本轮 codex 不挂载 Guaxi 工具面"
-        );
-        return None;
+    if bridge.is_file() {
+        return Some(format!(
+            concat!(
+                "\n",
+                "# Guaxi 认知层工具面（召回 / 图谱 / 感知 / 信念 / 任务）。\n",
+                "# 由 stdio 桥接转发到主进程 127.0.0.1:8888/mcp；工具的读写授权在 Guaxi 设置里控制。\n",
+                "[mcp_servers.guaxi]\n",
+                "command = \"{cmd}\"\n",
+                "args = []\n",
+            ),
+            cmd = toml_escape(&bridge.to_string_lossy())
+        ));
     }
+
+    let exe = std::env::current_exe().ok()?;
     Some(format!(
         concat!(
             "\n",
             "# Guaxi 认知层工具面（召回 / 图谱 / 感知 / 信念 / 任务）。\n",
-            "# 由 stdio 桥接转发到主进程 127.0.0.1:8888/mcp；工具的读写授权在 Guaxi 设置里控制。\n",
+            "# 主程序以 --mcp-server 模式充当 stdio 桥接，再转发到 127.0.0.1:8888/mcp。\n",
             "[mcp_servers.guaxi]\n",
             "command = \"{cmd}\"\n",
-            "args = []\n",
+            "args = [\"--mcp-server\"]\n",
         ),
-        cmd = toml_escape(&bridge.to_string_lossy())
+        cmd = toml_escape(&exe.to_string_lossy())
     ))
 }
 
@@ -677,7 +696,8 @@ pub async fn run_codex_agent(app: &AppHandle, request: &CodexAgentRequest) -> Re
     let home = codex_home_dir()?;
     let provider = resolve_provider()?;
     let sandbox = resolve_sandbox_mode();
-    write_codex_config(&home, &provider, &sandbox)?;
+    // exec 链路没有 UI 可以接审批，保持 never；审批只由 app-server 那条路承担。
+    write_codex_config(&home, &provider, &sandbox, "never")?;
 
     let work_dir = resolve_work_dir(request, &home)?;
     let args = build_args(request, &work_dir, &sandbox, &provider.model);

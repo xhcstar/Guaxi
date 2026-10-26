@@ -1,39 +1,71 @@
 <template>
-  <div
-    class="workspace-root"
-    :class="{
-      'is-rail-collapsed': railCollapsed,
-      'is-instrument-collapsed': instrumentCollapsed,
-    }"
-  >
-    <AgentSessionRail
-      v-if="!railCollapsed"
-      class="workspace-rail"
-      :sessions="store.sessions"
-      :current-key="store.currentKey"
-      :running-key="runningKey"
-      :engine="store.engine"
-      @new="onNew"
-      @select="onSelect"
-      @remove="onRemove"
-    />
+  <div class="workspace-root">
+    <AgentSessionRail v-if="!railCollapsed" class="workspace-rail" />
 
     <main class="workspace-main">
-      <header class="workspace-head">
-        <h1 class="workspace-title">{{ session?.title || '新任务' }}</h1>
-        <span class="workspace-sub">{{ modeLabel }}</span>
-        <button
-          v-if="session?.diff"
-          type="button"
-          class="workspace-link"
-          @click="openDiff"
-        >
-          查看 diff
-        </button>
+      <header class="workspace-bar">
+        <div class="bar-left">
+          <button
+            type="button"
+            class="bar-icon"
+            :title="railCollapsed ? '显示会话栏' : '隐藏会话栏'"
+            @click="toggleRail"
+          >
+            <Icon :icon="panelLeftIcon" width="15" height="15" />
+          </button>
+          <h1 class="bar-title" :title="title">{{ title }}</h1>
+          <span v-if="statusText" class="bar-state" :class="`bar-state--${stateKind}`">
+            <span class="state-dot" />
+            {{ statusText }}
+          </span>
+        </div>
+
+        <div class="bar-right">
+          <button
+            type="button"
+            class="cwd-chip"
+            :title="cwd || '选择工作目录'"
+            @click="pickWorkspace"
+          >
+            <Icon :icon="folderIcon" width="12" height="12" />
+            <span>{{ cwdLabel }}</span>
+          </button>
+
+          <button
+            v-if="diffStats.count"
+            type="button"
+            class="diff-chip"
+            title="查看本次改动"
+            @click="openDiff"
+          >
+            <Icon :icon="fileDiffIcon" width="13" height="13" />
+            <span>{{ diffStats.count }}</span>
+            <span v-if="diffStats.added" class="num-add">+{{ diffStats.added }}</span>
+            <span v-if="diffStats.removed" class="num-del">−{{ diffStats.removed }}</span>
+          </button>
+
+          <n-dropdown
+            :options="threadActions"
+            trigger="click"
+            placement="bottom-end"
+            @select="onThreadAction"
+          >
+            <button type="button" class="bar-icon" title="会话操作">
+              <Icon :icon="moreIcon" width="15" height="15" />
+            </button>
+          </n-dropdown>
+
+          <button
+            type="button"
+            class="bar-icon"
+            :title="instrumentCollapsed ? '显示仪表' : '隐藏仪表'"
+            @click="toggleInstrument"
+          >
+            <Icon :icon="panelRightIcon" width="15" height="15" />
+          </button>
+        </div>
       </header>
 
-      <!-- 引擎连不上时把原因摆在最上面，并给一个重试入口。
-           不给重试的话，用户只会看到「未运行」，既不知道能不能修，也不知道该等还是该动。 -->
       <div v-if="engineBlocked" class="workspace-alert">
         <span class="alert-text">{{ engineBlocked }}</span>
         <button type="button" class="alert-btn" :disabled="retrying" @click="onRetryEngine">
@@ -42,51 +74,16 @@
       </div>
 
       <div ref="scrollRef" class="workspace-transcript" @scroll="onScroll">
-        <div v-if="!messages.length" class="workspace-empty">
-          <p class="empty-title">给这台机器一个任务</p>
-          <p class="empty-body">
-            说清楚要达成什么即可。它会自己读文件、跑命令、查资料；每一步都在右侧账本里。
-            需要你决定的时候，会在输入框上方问你。
-          </p>
-          <div class="empty-mode-list">
-            <button
-              v-for="m in AGENT_MODES"
-              :key="m.id"
-              type="button"
-              class="empty-mode"
-              @click="onPickMode(m.id)"
-            >
-              <span class="empty-mode-label">{{ m.label }}</span>
-              <span class="empty-mode-hint">{{ m.hint }}</span>
-            </button>
-          </div>
-        </div>
-
         <div class="transcript-inner">
-          <article
-            v-for="msg in messages"
-            :key="msg.id"
-            class="msg"
-            :class="`msg--${msg.role}`"
-          >
-            <div v-if="msg.role === 'user'" class="msg-user">
-              <div class="msg-user-text">{{ msg.text }}</div>
-              <span v-if="msg.steer" class="msg-steer">转向</span>
-              <div v-if="msg.images?.length" class="msg-images">
-                <span v-for="(p, i) in msg.images" :key="i" class="msg-image">{{ baseName(p) }}</span>
-              </div>
-            </div>
-            <div v-else-if="msg.role === 'system'" class="msg-system">{{ msg.text }}</div>
-            <AgentMarkdown v-else :text="msg.text" :streaming="Boolean(msg.streaming)" />
-          </article>
+          <AgentTimeline
+            :turns="turns"
+            :running="running"
+            @suggest="onSuggest"
+            @open-diff="onOpenFileDiff"
+            @open-image="previewImage"
+            @fork="onForkAt"
+          />
         </div>
-
-        <AgentRunLedger
-          v-if="session?.ledger?.length"
-          class="transcript-ledger"
-          :ledger="session.ledger"
-          :running="store.running"
-        />
       </div>
 
       <button
@@ -96,72 +93,66 @@
         title="跳到最新"
         @click="jumpToBottom"
       >
-        ↓
+        <Icon :icon="arrowDownIcon" width="14" height="14" />
       </button>
 
-      <AgentComposer
-        :mode="store.currentMode"
-        :cwd="session?.cwd || ''"
-        :model="session?.model || ''"
-        :models="store.models"
-        :pending="store.running"
-        :gui-enabled="guiEnabled"
-        @send="onSend"
-        @steer="onSteer"
-        @stop="onStop"
-        @update:mode="onPickMode"
-        @update:model="onPickModel"
-        @pick-workspace="onPickWorkspace"
-      />
+      <div class="composer-zone">
+        <AgentComposer
+          :pending="running"
+          @send="onSend"
+          @steer="onSteer"
+          @stop="onStop"
+          @new="onNew"
+          @open-diff="openDiff"
+        />
+      </div>
     </main>
 
     <AgentInstrument
       v-if="!instrumentCollapsed"
       class="workspace-instrument"
-      :running="store.running"
-      :approvals="store.approvals"
-      :plan="session?.plan || []"
-      :ledger="session?.ledger || []"
-      :usage="session?.usage || null"
-      :stats="store.runStats"
-      :diff="session?.diff || ''"
-      :mode-label="modeLabel"
-      :sandbox="session?.sandbox || 'workspace-write'"
-      :engine="store.engine"
-      :session="session"
       @review-approval="showApproval = true"
       @open-diff="openDiff"
     />
 
     <AgentApprovalSheet
-      v-if="showApproval && store.approvals.length"
-      :queue="store.approvals"
+      v-if="showApproval && approvals.length"
+      :queue="approvals"
       :index="approvalIndex"
       @decide="onDecide"
     />
+
+    <div v-if="preview" class="image-layer" title="点击关闭" @click="preview = ''">
+      <img :src="preview" alt="预览" />
+    </div>
   </div>
 </template>
 
 <script setup>
 /**
- * Agent 工作台。
+ * Agent 工作台外壳。
  *
- * 布局：会话栏 | 转录（≤68ch 正文） | 仪表。
- * - 转录列是左对齐的阅读栏，仪表再好看也不抢它的宽度；
- * - 仪表只读，不参与操作——操作全在输入区与审批浮层；
- * - 审批浮层在需要时盖住一切，处理完自动让位。
+ * 三段式：会话栏 | 转录 | 仪表。中间栏自己拥有顶栏——会话标题、工作目录、
+ * 改动摘要和面板开关都在这里，和 Codex 的「对话头部」而不是应用头部对齐。
+ *
+ * 这一层只做编排：所有状态都在 agentWorkspaceStore，所有交互都落到 codex
+ * 的 thread/turn 上。外壳不缓存消息，也不替 store 判断运行态。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
 import { useMessage } from 'naive-ui'
+import { Icon } from '@iconify/vue'
+import panelLeftIcon from '@iconify-icons/lucide/panel-left'
+import panelRightIcon from '@iconify-icons/lucide/panel-right'
+import moreIcon from '@iconify-icons/lucide/more-horizontal'
+import folderIcon from '@iconify-icons/lucide/folder'
+import fileDiffIcon from '@iconify-icons/lucide/file-diff'
+import arrowDownIcon from '@iconify-icons/lucide/arrow-down'
 import AgentSessionRail from './AgentSessionRail.vue'
+import AgentTimeline from './AgentTimeline.vue'
 import AgentComposer from './AgentComposer.vue'
-import AgentRunLedger from './AgentRunLedger.vue'
 import AgentInstrument from './AgentInstrument.vue'
 import AgentApprovalSheet from './AgentApprovalSheet.vue'
-import AgentMarkdown from './AgentMarkdown.vue'
-import { AGENT_MODES, useAgentWorkspaceStore } from '../../stores/agentWorkspaceStore'
-import { useCognitionStore } from '../../stores/cognitionStore'
+import { useAgentWorkspaceStore } from '../../stores/agentWorkspaceStore'
 import { useDiffCompareStore } from '../../stores/diffCompareStore'
 import { useSiderStore } from '../../stores/useSiderStore'
 import { createLogger } from '../../utils/logger'
@@ -169,34 +160,285 @@ import { createLogger } from '../../utils/logger'
 const logger = createLogger('AgentWorkspace')
 const message = useMessage()
 const store = useAgentWorkspaceStore()
-const cognition = useCognitionStore()
 const diffStore = useDiffCompareStore()
 const siderStore = useSiderStore()
 
 const railCollapsed = computed(() => siderStore.isLeftSiderCollapsed.chat === true)
 const instrumentCollapsed = computed(() => siderStore.isRightSiderCollapsed.chat === true)
 
+const toggleRail = () => siderStore.setLeftSiderCollapsed('chat', !railCollapsed.value)
+const toggleInstrument = () => siderStore.setRightSiderCollapsed('chat', !instrumentCollapsed.value)
+
 const scrollRef = ref(null)
+const preview = ref('')
 const showApproval = ref(false)
 const showJump = ref(false)
 const approvalIndex = ref(0)
+const retrying = ref(false)
 
-const session = computed(() => store.currentSession)
-const messages = computed(() => session.value?.messages || [])
-const runningKey = computed(() => (store.running ? store.currentKey : ''))
+const turns = computed(() => store.currentState?.turns || [])
+const running = computed(() => store.currentRunning)
+const approvals = computed(() => store.approvalsForCurrent)
 
-const modeLabel = computed(() => store.currentMode?.label || '编码')
+const title = computed(() => {
+  if (store.currentIsDraft) return '新任务'
+  const state = store.currentState
+  return String(state?.name || state?.preview || '').trim() || '未命名会话'
+})
 
-/** GUI 是否已授权：设置里的总开关 + 认知层的 Tier::Gui 两者都开才可用。 */
-/** 引擎不可用的可读原因；为空表示一切正常。 */
+const stateKind = computed(() => {
+  if (approvals.value.length) return 'waiting'
+  if (running.value) return 'running'
+  const status = String(store.currentState?.status || 'idle')
+  if (status === 'failed' || status === 'systemError') return 'failed'
+  return 'idle'
+})
+
+const statusText = computed(() => ({
+  waiting: '等待确认',
+  running: '运行中',
+  failed: '上次失败',
+  idle: '',
+}[stateKind.value]))
+
+const cwd = computed(() => store.currentState?.cwd || store.settings.cwd || '')
+const cwdLabel = computed(() => {
+  const parts = String(cwd.value || '').split(/[\\/]/).filter(Boolean)
+  if (!parts.length) return '选择目录'
+  return parts.length > 2 ? `…/${parts.slice(-2).join('/')}` : parts.join('/')
+})
+
+const diffStats = computed(() => {
+  const files = store.currentDiffFiles
+  return {
+    count: files.length,
+    added: files.reduce((n, f) => n + (Number(f.added) || 0), 0),
+    removed: files.reduce((n, f) => n + (Number(f.removed) || 0), 0),
+  }
+})
+
 const engineBlocked = computed(() => {
-  const e = store.engine
   if (store.engineError) return store.engineError
-  if (e && !e.binary_exists) return '没有找到 codex 可执行文件，Agent 无法运行'
+  const engine = store.engine
+  if (engine && !engine.binary_exists) return '没有找到 codex 可执行文件，Agent 无法运行'
   return ''
 })
 
-const retrying = ref(false)
+const threadActions = computed(() => [
+  { label: '分叉出新会话', key: 'fork', disabled: store.currentIsDraft },
+  { label: '压缩上下文', key: 'compact', disabled: store.currentIsDraft },
+  { label: '审查未提交改动', key: 'review', disabled: store.currentIsDraft },
+  { type: 'divider', key: 'd1' },
+  { label: '归档会话', key: 'archive', disabled: store.currentIsDraft },
+])
+
+// ───────────── 滚动跟随
+
+const BOTTOM_THRESHOLD = 60
+const stickToBottom = ref(true)
+
+const isNearBottom = () => {
+  const el = scrollRef.value
+  if (!el) return true
+  return el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_THRESHOLD
+}
+
+const scrollToBottom = (smooth = false) => {
+  const el = scrollRef.value
+  if (!el) return
+  el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
+}
+
+const jumpToBottom = () => {
+  stickToBottom.value = true
+  showJump.value = false
+  scrollToBottom(true)
+}
+
+const onScroll = () => {
+  stickToBottom.value = isNearBottom()
+  showJump.value = !stickToBottom.value
+}
+
+/**
+ * 流式内容的高度是异步长出来的：只盯「新增了几个 item」会漏掉正在增补的
+ * 同一段文本。这里把最后一项的文本、输出、思考摘要长度也纳入信号。
+ */
+const streamSignal = computed(() => {
+  const list = turns.value
+  const lastTurn = list[list.length - 1]
+  const lastItem = lastTurn?.items?.[lastTurn.items.length - 1]
+  const lengthOf = (value) => String(value || '').length
+  return [
+    list.length,
+    lastTurn?.status || '',
+    lastItem?.id || '',
+    lastItem?.status || '',
+    lengthOf(lastItem?.text),
+    lengthOf(lastItem?.output),
+    lengthOf(lastItem?.progress),
+    lengthOf(lastItem?.summary?.[0]),
+  ].join(':')
+})
+
+watch(streamSignal, () => {
+  if (stickToBottom.value) nextTick(() => scrollToBottom(false))
+})
+
+// 切换会话时直接落到最新，不沿用上一段会话的浏览位置。
+watch(
+  () => store.currentThreadId,
+  () => {
+    stickToBottom.value = true
+    showJump.value = false
+    approvalIndex.value = 0
+    showApproval.value = approvals.value.length > 0
+    nextTick(() => scrollToBottom(false))
+  },
+)
+
+// ───────────── 审批
+
+watch(
+  () => approvals.value.length,
+  (count, prev) => {
+    if (count && !prev) {
+      approvalIndex.value = 0
+      showApproval.value = true
+    }
+    if (!count) {
+      showApproval.value = false
+      approvalIndex.value = 0
+    } else if (approvalIndex.value >= count) {
+      approvalIndex.value = Math.max(0, count - 1)
+    }
+  },
+)
+
+const onDecide = async ({ requestId, action, options }) => {
+  await store.resolveApproval(requestId, action, options)
+  const left = approvals.value.length
+  if (approvalIndex.value >= left) approvalIndex.value = Math.max(0, left - 1)
+  if (!left) showApproval.value = false
+}
+
+// ───────────── 发送
+
+const onSend = async (text, attachments = []) => {
+  try {
+    await store.sendTurn(text, { attachments })
+    nextTick(() => scrollToBottom(true))
+  } catch (err) {
+    message.error(String(err?.message || err))
+  }
+}
+
+const onSteer = async (text, attachments = []) => {
+  await store.steer(text, { attachments })
+  nextTick(() => scrollToBottom(true))
+}
+
+const onStop = async () => {
+  await store.interrupt()
+}
+
+const onSuggest = (prompt) => {
+  if (prompt) onSend(prompt)
+}
+
+const onNew = () => {
+  store.newDraft()
+}
+
+const onForkAt = async (turnId) => {
+  if (!store.currentThreadId) return
+  try {
+    await store.forkThread(store.currentThreadId, turnId)
+    message.success('已分叉出新会话')
+  } catch (err) {
+    message.error(String(err?.message || err))
+  }
+}
+
+// ───────────── 顶栏动作
+
+const onThreadAction = async (key) => {
+  if (key === 'archive') {
+    if (!store.currentThreadId) return
+    try {
+      await store.archiveThread(store.currentThreadId)
+    } catch (err) {
+      message.error(String(err?.message || err))
+    }
+    return
+  }
+  if (!store.currentThreadId) {
+    message.info('先发一条消息建立会话')
+    return
+  }
+  try {
+    if (key === 'fork') {
+      await store.forkThread(store.currentThreadId)
+      message.success('已分叉出新会话')
+    } else if (key === 'compact') {
+      await store.compactThread()
+      message.success('已开始压缩上下文')
+    } else if (key === 'review') {
+      await store.startReview()
+      message.success('已开始审查未提交改动')
+    }
+  } catch (err) {
+    message.error(String(err?.message || err))
+  }
+}
+
+const pickWorkspace = async () => {
+  try {
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    const picked = await open({ directory: true, multiple: false, title: '选择工作目录' })
+    if (typeof picked === 'string' && picked) {
+      store.setCwd(picked)
+      if (store.currentThreadId) message.info('工作目录从下一轮开始生效')
+    }
+  } catch (err) {
+    logger.warn('[workspace] pick workspace failed', { error: String(err?.message || err) })
+  }
+}
+
+// ───────────── diff / 图片
+
+const currentDiffText = () => {
+  const state = store.currentState
+  if (state?.diff) return String(state.diff)
+  return store.currentDiffFiles
+    .map((file) => file.patch)
+    .filter(Boolean)
+    .join('\n\n')
+}
+
+const openDiff = () => {
+  const text = currentDiffText()
+  if (!text) {
+    message.info('本次运行还没有产生 diff')
+    return
+  }
+  diffStore.compareTexts('', text, '原始', '本次运行')
+}
+
+const onOpenFileDiff = (file) => {
+  const patch = String(file?.patch || '')
+  if (patch) {
+    diffStore.compareTexts('', patch, '原始', String(file?.path || '改动'))
+    return
+  }
+  openDiff()
+}
+
+const previewImage = (src) => {
+  preview.value = String(src || '')
+}
+
+// ───────────── 引擎 / 生命周期
 
 const onRetryEngine = async () => {
   retrying.value = true
@@ -210,209 +452,39 @@ const onRetryEngine = async () => {
   }
 }
 
-const guiEnabled = computed(() => {
-  const tier = cognition.status?.tiers?.find?.((t) => t?.[0] === 'gui')
-  return Boolean(tier?.[1])
-})
+let observer = null
 
-const baseName = (p) => String(p || '').split(/[\\/]/).pop()
-
-// ───────────── 滚动
-
-const BOTTOM_THRESHOLD = 60
-
-const isNearBottom = () => {
-  const el = scrollRef.value
-  if (!el) return true
-  return el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_THRESHOLD
+const onKeydown = (event) => {
+  if (event.key === 'Escape' && preview.value) preview.value = ''
 }
-
-/**
- * 是否跟随底部。流式渲染时正文高度是异步长出来的：按文本长度滚到底之后，
- * Markdown 渲染完成还会再把内容撑高，所以不能只看「此刻离底部多远」——
- * 用户往回翻的那一刻记为不跟随，之后高度再怎么变都不拽他。
- */
-const stickToBottom = ref(true)
-
-const scrollToBottom = (smooth = false) => {
-  const el = scrollRef.value
-  if (!el) return
-  el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
-}
-
-const jumpToBottom = () => {
-  stickToBottom.value = true
-  scrollToBottom(true)
-}
-
-const onScroll = () => {
-  stickToBottom.value = isNearBottom()
-  showJump.value = !stickToBottom.value
-}
-
-// 只有本来就在底部时才自动跟随；用户往回翻的时候就不要再把他拽下去。
-watch(
-  () => [messages.value.length, messages.value.at(-1)?.text?.length, session.value?.ledger?.length],
-  () => {
-    if (stickToBottom.value) nextTick(() => scrollToBottom(false))
-  },
-)
-
-// ───────────── 生命周期
-
-let offNotification = null
-let transcriptObserver = null
 
 onMounted(async () => {
-  await store.ensureListening()
-  await store.loadEngine()
-  await store.loadModels()
-  // 启动时就查一次 GUI 授权，避免「操作电脑」看起来能用其实会被拒。
-  try {
-    await cognition.refreshStatus?.()
-  } catch (err) {
-    logger.warn('[agent] cognition status failed', { error: String(err?.message || err) })
-  }
-  // 正文高度由 Markdown 渲染异步决定（渲染完成才撑高），只盯文本长度的滚动
-  // 追不上这一次增长；跟随状态下按实际高度补滚一次。
+  await store.bootstrap()
+  nextTick(() => scrollToBottom(false))
   const inner = scrollRef.value?.querySelector('.transcript-inner')
   if (inner && typeof ResizeObserver !== 'undefined') {
-    transcriptObserver = new ResizeObserver(() => {
+    observer = new ResizeObserver(() => {
       if (stickToBottom.value) scrollToBottom(false)
     })
-    transcriptObserver.observe(inner)
+    observer.observe(inner)
   }
-  nextTick(() => scrollToBottom(false))
+  window.addEventListener('keydown', onKeydown)
 })
 
 onBeforeUnmount(() => {
-  if (typeof offNotification === 'function') offNotification()
-  if (transcriptObserver) {
-    transcriptObserver.disconnect()
-    transcriptObserver = null
+  if (observer) {
+    observer.disconnect()
+    observer = null
   }
+  window.removeEventListener('keydown', onKeydown)
 })
-
-// ───────────── 审批
-
-// 有待批时自动弹出来。这是整块界面唯一会主动打断你的地方——
-// 因为它的全部意义就是"现在必须你决定"。
-watch(
-  () => store.approvals.length,
-  (n, prev) => {
-    if (n && !prev) {
-      approvalIndex.value = 0
-      showApproval.value = true
-    }
-    if (!n) showApproval.value = false
-  },
-)
-
-const onDecide = async ({ requestId, decision }) => {
-  await store.resolveApproval(requestId, decision)
-  if (approvalIndex.value >= store.approvals.length) {
-    approvalIndex.value = Math.max(0, store.approvals.length - 1)
-  }
-  if (!store.approvals.length) showApproval.value = false
-}
-
-// ───────────── 发送
-
-const onSend = async (text) => {
-  try {
-    await store.sendTurn(text)
-    store.suggestTitle()
-    nextTick(() => scrollToBottom(true))
-  } catch (err) {
-    message.error(String(err?.message || err))
-  }
-}
-
-const onSteer = async (text) => {
-  await store.steer(text)
-  nextTick(() => scrollToBottom(true))
-}
-
-const onStop = async () => {
-  await store.interrupt()
-  store.finishStreamingMessages()
-}
-
-// ───────────── 模式 / 模型 / 工作区
-
-const onPickMode = (id) => {
-  const mode = AGENT_MODES.find((m) => m.id === id)
-  if (!mode) return
-  if (mode.requiresGui && !guiEnabled.value) {
-    message.warning('「操作电脑」需要先在 设置 → 认知层 → 工具授权 里开启 gui 级')
-  }
-  store.patchSession({
-    mode: id,
-    sandbox: mode.sandbox,
-  })
-}
-
-const onPickModel = (model) => {
-  store.patchSession({ model })
-}
-
-const onPickWorkspace = async () => {
-  try {
-    const { open } = await import('@tauri-apps/plugin-dialog')
-    const picked = await open({ directory: true, multiple: false, title: '选择工作目录' })
-    if (typeof picked === 'string' && picked) {
-      // 换目录意味着换线程：codex 的工作目录在建线程时固定，不能中途改。
-      store.patchSession({ cwd: picked, threadId: '', messages: [], ledger: [], plan: [], diff: '' })
-    }
-  } catch (err) {
-    logger.warn('[agent] pick workspace failed', { error: String(err?.message || err) })
-  }
-}
-
-// ───────────── 会话
-
-const onNew = () => {
-  store.newSession({ mode: store.currentMode?.id || 'code' })
-}
-
-const onSelect = (key) => {
-  if (key === store.currentKey) return
-  store.selectSession(key)
-  nextTick(() => scrollToBottom(false))
-}
-
-const onRemove = (key) => {
-  const target = store.sessions.find((s) => s.key === key)
-  if (!target) return
-  if (store.running && key === store.currentKey) {
-    message.warning('运行中的任务不能删除，先停止它')
-    return
-  }
-  store.deleteSession(key)
-}
-
-// ───────────── diff
-
-const openDiff = () => {
-  const diff = session.value?.diff
-  if (!diff) {
-    message.info('本次运行还没有产生 diff')
-    return
-  }
-  // 复用既有的独立 diff 窗口：它已经处理了虚拟滚动、分栏、目录树这些。
-  // 这里给的是「空 → 当前 diff」的文本对比，读起来就是这次 run 改了什么。
-  diffStore.compareTexts('', diff, '原始', '本次运行')
-}
 </script>
 
 <style scoped>
 .workspace-root {
-  display: grid;
-  /* 会话栏固定，转录弹性，仪表固定。仪表再宽也不挤占正文。
-     两侧宽度放在变量里：收起时只改变量，窄屏断点仍能整体换一套宽度。 */
-  --rail-width: 196px;
-  --instrument-width: 268px;
-  grid-template-columns: var(--rail-width) minmax(0, 1fr) var(--instrument-width);
+  --rail-width: 236px;
+  --instrument-width: 320px;
+  display: flex;
   height: 100%;
   min-height: 0;
   overflow: hidden;
@@ -420,85 +492,196 @@ const openDiff = () => {
   color: var(--guaxi-text-primary);
 }
 
-.workspace-root.is-rail-collapsed {
-  --rail-width: 0px;
-}
-
-.workspace-root.is-instrument-collapsed {
-  --instrument-width: 0px;
+.workspace-rail {
+  flex: 0 0 var(--rail-width);
+  width: var(--rail-width);
+  min-width: 0;
 }
 
 .workspace-main {
   position: relative;
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  /* 收起左右栏时对应轨道会被压到 0，这里按列固定位置：
-     否则只剩中间一栏时，它会被自动排进第一列（宽度 0）。 */
-  grid-column: 2;
-}
-
-.workspace-rail {
-  grid-column: 1;
 }
 
 .workspace-instrument {
-  grid-column: 3;
+  flex: 0 0 var(--instrument-width);
+  width: var(--instrument-width);
+  min-width: 0;
 }
 
-.workspace-head {
+/* ── 顶栏 ───────────────────────────── */
+
+.workspace-bar {
   display: flex;
-  align-items: baseline;
-  gap: 10px;
-  padding: 12px 24px 10px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 10px 0 8px;
   border-bottom: 1px solid var(--guaxi-border);
+  background: var(--guaxi-content-bg);
 }
 
-.workspace-title {
+.bar-left {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.bar-right {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+}
+
+.bar-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 27px;
+  height: 27px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--guaxi-text-secondary);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.bar-icon:hover {
+  background: var(--guaxi-hover-bg);
+  color: var(--guaxi-text-primary);
+}
+
+.bar-title {
   margin: 0;
-  font-size: 14px;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
   font-weight: 500;
   line-height: 1.4;
+}
+
+.bar-state {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--guaxi-editor-font-family);
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  color: var(--guaxi-text-secondary);
+}
+
+.state-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.65;
+}
+
+.bar-state--waiting,
+.bar-state--running { color: #b47d1a; }
+
+.bar-state--running .state-dot {
+  animation: bar-pulse 1.6s ease-in-out infinite;
+}
+
+.bar-state--failed { color: #b42318; }
+
+@keyframes bar-pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
+.cwd-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 210px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--guaxi-text-secondary);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.cwd-chip:hover {
+  background: var(--guaxi-hover-bg);
+  color: var(--guaxi-text-primary);
+}
+
+.cwd-chip span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.workspace-sub {
-  font-size: 11.5px;
-  color: var(--guaxi-text-secondary);
+.cwd-chip :deep(svg) {
+  flex: 0 0 auto;
+  opacity: 0.6;
 }
 
-.workspace-link {
-  margin-left: auto;
-  padding: 0;
-  border: none;
+.diff-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 25px;
+  padding: 0 8px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 6px;
   background: transparent;
   color: var(--guaxi-text-secondary);
-  font-size: 12px;
-  text-decoration: underline;
-  text-underline-offset: 3px;
+  font-family: var(--guaxi-editor-font-family);
+  font-size: 10px;
   cursor: pointer;
+  transition: background 120ms ease;
 }
 
-.workspace-link:hover { color: var(--guaxi-text-primary); }
+.diff-chip:hover {
+  background: var(--guaxi-hover-bg);
+  color: var(--guaxi-text-primary);
+}
+
+.num-add { color: #4f8a5b; }
+.num-del { color: #b42318; }
+
+/* ── 引擎告警 ───────────────────────── */
 
 .workspace-alert {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 10px;
-  margin: 0 24px 8px;
-  padding: 8px 12px;
-  border: 1px solid rgba(180, 125, 26, 0.45);
+  margin: 8px 16px 0;
+  padding: 7px 11px;
+  border: 1px solid rgba(180, 125, 26, 0.42);
   border-radius: 6px;
-  background: rgba(180, 125, 26, 0.08);
+  background: rgba(180, 125, 26, 0.07);
 }
 
 .alert-text {
   flex: 1 1 auto;
-  font-size: 12.5px;
+  font-size: 12px;
   line-height: 1.5;
   color: #b47d1a;
   word-break: break-word;
@@ -506,13 +689,14 @@ const openDiff = () => {
 
 .alert-btn {
   flex: 0 0 auto;
-  height: 24px;
+  height: 23px;
   padding: 0 10px;
   border-radius: 5px;
-  border: 1px solid rgba(180, 125, 26, 0.55);
+  border: 1px solid rgba(180, 125, 26, 0.5);
   background: transparent;
   color: #b47d1a;
-  font-size: 12px;
+  font-size: 11.5px;
+  font-family: inherit;
   cursor: pointer;
 }
 
@@ -521,166 +705,99 @@ const openDiff = () => {
   cursor: default;
 }
 
+/* ── 转录 ───────────────────────────── */
+
 .workspace-transcript {
   flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
-  padding: 18px 24px 8px;
-  scroll-behavior: auto;
+  padding: 0 24px;
+  scrollbar-width: thin;
 }
 
 .transcript-inner {
-  /* 正文限宽：超过 68ch 之后眼睛要来回扫，读起来很累。 */
-  max-width: 68ch;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 20px 0 8px;
 }
 
-.transcript-ledger {
-  max-width: 68ch;
-  margin-top: 18px;
-}
-
-.workspace-empty {
-  max-width: 58ch;
-  padding: 26px 0 18px;
-}
-
-.empty-title {
-  margin: 0 0 8px;
-  font-size: 17px;
-  font-weight: 500;
-  line-height: 1.5;
-}
-
-.empty-body {
-  margin: 0 0 18px;
-  font-size: 13.5px;
-  line-height: 1.75;
-  color: var(--guaxi-text-secondary);
-}
-
-.empty-mode-list {
-  display: grid;
-  gap: 1px;
-  border: 1px solid var(--guaxi-border);
-  border-radius: 7px;
-  overflow: hidden;
-}
-
-.empty-mode {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  padding: 9px 12px;
-  border: none;
-  background: var(--guaxi-panel-bg);
-  text-align: left;
-  cursor: pointer;
-  color: var(--guaxi-text-primary);
-}
-
-.empty-mode + .empty-mode {
-  border-top: 1px solid var(--guaxi-border);
-}
-
-.empty-mode:hover {
-  background: var(--guaxi-hover-bg);
-}
-
-.empty-mode-label {
-  flex: 0 0 56px;
-  font-size: 12.5px;
-}
-
-.empty-mode-hint {
-  font-size: 12px;
-  color: var(--guaxi-text-secondary);
-}
-
-.msg {
-  min-width: 0;
-}
-
-.msg--user {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.msg-user {
-  max-width: 82%;
-  padding: 8px 12px;
-  border-radius: 8px;
-  background: var(--guaxi-panel-bg);
-  border: 1px solid var(--guaxi-border);
-}
-
-.msg-user-text {
-  font-size: 14px;
-  line-height: 1.65;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.msg-steer {
-  display: inline-block;
-  margin-top: 4px;
-  font-size: 10.5px;
-  color: #b47d1a;
-}
-
-.msg-images {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 6px;
-}
-
-.msg-image {
-  padding: 1px 7px;
-  border-radius: 4px;
-  background: var(--guaxi-hover-bg);
-  font-family: var(--guaxi-editor-font-family);
-  font-size: 11px;
-  color: var(--guaxi-text-secondary);
-}
-
-.msg-system {
-  font-size: 12.5px;
-  line-height: 1.6;
-  color: var(--guaxi-text-secondary);
-  padding-left: 9px;
-  border-left: 2px solid var(--guaxi-border);
+.transcript-inner :deep(.timeline-empty) {
+  margin: 6vh auto 0;
 }
 
 .workspace-jump {
   position: absolute;
   right: 24px;
-  bottom: 120px;
+  bottom: 132px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 28px;
   height: 28px;
   border-radius: 50%;
   border: 1px solid var(--guaxi-border);
   background: var(--guaxi-panel-bg);
   color: var(--guaxi-text-secondary);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
   cursor: pointer;
 }
 
-@media (max-width: 1200px) {
-  .workspace-root {
-    --rail-width: 170px;
-    --instrument-width: 232px;
-  }
+.workspace-jump:hover {
+  color: var(--guaxi-text-primary);
 }
 
-@media (max-width: 980px) {
-  /* 窄屏先收起仪表：正文比仪表重要。 */
-  .workspace-root {
-    grid-template-columns: var(--rail-width) minmax(0, 1fr);
-  }
+/* ── 输入区 ─────────────────────────── */
 
-  .workspace-instrument {
-    display: none;
-  }
+.composer-zone {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--guaxi-border);
+  background: var(--guaxi-content-bg);
+}
+
+.composer-zone :deep(.composer-root) {
+  width: 100%;
+  max-width: 808px;
+  margin: 0 auto;
+  border-top: none;
+}
+
+/* ── 图片预览 ───────────────────────── */
+
+.image-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  background: rgba(8, 10, 12, 0.7);
+  backdrop-filter: blur(3px);
+  cursor: zoom-out;
+}
+
+.image-layer img {
+  max-width: 88vw;
+  max-height: 84vh;
+  border-radius: 8px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+}
+
+@media (max-width: 1320px) {
+  .workspace-root { --instrument-width: 288px; }
+}
+
+@media (max-width: 1080px) {
+  .workspace-instrument { display: none; }
+}
+
+@media (max-width: 860px) {
+  .workspace-rail { display: none; }
+  .transcript-inner { max-width: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bar-state--running .state-dot { animation: none; }
 }
 </style>

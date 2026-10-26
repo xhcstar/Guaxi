@@ -36,6 +36,7 @@ pub mod episode;
 pub mod evolve;
 pub mod hooks;
 pub mod mcp;
+pub mod mcp_bridge;
 pub mod nudge;
 pub mod percept;
 pub mod profile;
