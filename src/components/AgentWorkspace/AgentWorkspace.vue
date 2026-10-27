@@ -459,7 +459,13 @@ const onKeydown = (event) => {
 }
 
 onMounted(async () => {
-  await store.bootstrap()
+  try {
+    await store.bootstrap()
+  } catch (err) {
+    // 启动失败要留在面板里，而不是中断挂载：下面的滚动跟随与快捷键仍需生效。
+    store.engineError = store.engineError || String(err?.message || err)
+    logger.error('[workspace] bootstrap failed', err)
+  }
   nextTick(() => scrollToBottom(false))
   const inner = scrollRef.value?.querySelector('.transcript-inner')
   if (inner && typeof ResizeObserver !== 'undefined') {

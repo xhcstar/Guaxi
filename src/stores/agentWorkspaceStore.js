@@ -478,10 +478,15 @@ export const useAgentWorkspaceStore = defineStore('agentWorkspace', {
       await this.ensureListening()
       const ok = await this.loadEngine()
       if (ok) {
+        // 线程列表依赖 app-server 就绪；启动竞态或引擎中途退出时不能把异常
+        // 抛给挂载钩子，否则整段 mounted 后面的监听/滚动逻辑都会中断。
         await Promise.all([
           this.loadModels(),
           this.loadSections(),
-          this.loadThreads(),
+          this.loadThreads().catch((err) => {
+            this.engineError = this.engineError || String(err?.message || err)
+            logger.warn('[agent] thread list failed', { error: String(err?.message || err) })
+          }),
           this.loadPermissionProfiles(),
         ])
         // 恢复上次打开的会话；线程可能已被删除，失败就退回草稿。
@@ -582,11 +587,9 @@ export const useAgentWorkspaceStore = defineStore('agentWorkspace', {
       }
       if (!this.engine?.binary_exists) return false
       if (!this.engine?.running) {
-        try {
-          await this.warmUpEngine()
-        } catch (err) {
-          logger.warn('[agent] engine warm-up failed', { error: String(err?.message || err) })
-        }
+        // 预热失败只记 engineError，挡住的是「引擎没起来」这条路，不是启动本身：
+        // model/list 失败不代表线程列表也拿不到。
+        await this.warmUpEngine()
       }
       return true
     },
