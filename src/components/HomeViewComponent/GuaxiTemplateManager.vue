@@ -1,1065 +1,753 @@
 <template>
-  <n-message-provider placement="bottom">
-    <div class="page">
-      <div class="header">
-        <div class="header-main">
-          <div class="title">模板管理器</div>
-          <div class="header-summary">
-            <span class="status-pill">{{ templateStorageStatus }}</span>
-            <span>内置 {{ builtInTemplateCount }} 个</span>
-            <span>自定义 {{ userTemplateCount }} 个</span>
-            <span>分类 {{ templateCategoryCount }} 个</span>
-          </div>
-        </div>
-        <div class="header-fields">
-          <label class="header-field">
-            <span>名称</span>
-            <n-input
-              v-model:value="editName"
-              class="header-field-input"
-              size="small"
-              :disabled="loading"
-              placeholder="模板名称"
-            />
-          </label>
-          <label class="header-field">
-            <span>类型</span>
-            <n-input
-              v-model:value="editType"
-              class="header-field-input"
-              size="small"
-              :disabled="loading"
-              placeholder="模板分类"
-            />
-          </label>
-        </div>
-        <div class="header-actions">
-          <n-tooltip trigger="hover" placement="bottom">
-            <template #trigger>
-              <n-button size="small" circle :loading="loading" aria-label="刷新模板列表" @click="refresh">
-                <template #icon>
-                  <Icon :icon="refreshCwIcon" width="16" height="16" />
-                </template>
-              </n-button>
-            </template>
-            刷新模板列表
-          </n-tooltip>
-          <n-tooltip trigger="hover" placement="bottom">
-            <template #trigger>
-              <n-button size="small" circle :disabled="loading" aria-label="导入 Markdown 文件" @click="importFromFile">
-                <template #icon>
-                  <Icon :icon="uploadIcon" width="16" height="16" />
-                </template>
-              </n-button>
-            </template>
-            导入 Markdown 文件
-          </n-tooltip>
-          <n-tooltip trigger="hover" placement="bottom">
-            <template #trigger>
-              <n-button size="small" circle type="primary" :disabled="loading" aria-label="新建模板" @click="newTemplate">
-                <template #icon>
-                  <Icon :icon="filePlusIcon" width="16" height="16" />
-                </template>
-              </n-button>
-            </template>
-            新建模板
-          </n-tooltip>
-          <n-tooltip trigger="hover" placement="bottom">
-            <template #trigger>
-              <n-button
-                size="small"
-                circle
-                :disabled="loading || !editContent"
-                aria-label="插入当前模板内容到主编辑器光标处"
-                @click="insertCurrentTemplateToEditor"
-              >
-                <template #icon>
-                  <Icon :icon="sendIcon" width="16" height="16" />
-                </template>
-              </n-button>
-            </template>
-            插入当前内容到主编辑器光标处
-          </n-tooltip>
-          <n-tooltip trigger="hover" placement="bottom">
-            <template #trigger>
-              <n-button
-                size="small"
-                circle
-                type="primary"
-                :disabled="loading || !editName"
-                aria-label="保存当前模板"
-                @click="save"
-              >
-                <template #icon>
-                  <Icon :icon="saveIcon" width="16" height="16" />
-                </template>
-              </n-button>
-            </template>
-            保存当前模板
-          </n-tooltip>
-          <n-tooltip trigger="hover" placement="bottom">
-            <template #trigger>
-              <n-button
-                size="small"
-                circle
-                tertiary
-                type="error"
-                :disabled="loading || !selectedName"
-                aria-label="删除当前自定义模板"
-                @click="remove"
-              >
-                <template #icon>
-                  <Icon :icon="trash2Icon" width="16" height="16" />
-                </template>
-              </n-button>
-            </template>
-            删除当前自定义模板
-          </n-tooltip>
-        </div>
+  <div
+    ref="pageRef"
+    class="tm"
+    :class="{
+      'is-inspector-collapsed': inspectorCollapsed,
+      'is-dragging': dragActive,
+    }"
+    tabindex="-1"
+    @keydown="onKeydown"
+  >
+    <!-- ───────────── 顶栏 ───────────── -->
+    <header class="tm-header">
+      <div class="tm-brand">
+        <span class="tm-brand-mark" aria-hidden="true">
+          <Icon :icon="libraryIcon" width="17" height="17" />
+        </span>
+        <h1 class="tm-title">模板</h1>
+        <button
+          type="button"
+          class="tm-sync-pill"
+          :class="{ 'is-busy': loading }"
+          :title="repoTitle"
+          @click="revealRepo"
+        >
+          <span class="tm-sync-dot" :data-state="loading ? 'running' : repoPath ? 'success' : 'idle'" />
+          {{ repoPath ? '模板库已连接' : '仅内置模板' }}
+        </button>
       </div>
 
-      <div
-        ref="mainRef"
-        class="main"
-        :class="{ 'is-resizing-sidebar': sidebarResizing }"
-        :style="{ gridTemplateColumns: `${sidebarWidth}px 6px minmax(0, 1fr)` }"
-      >
-        <div class="left">
-          <n-input v-model:value="filter" size="small" placeholder="搜索模板..." clearable />
-          <div class="left-body">
-            <n-collapse accordion>
-              <n-collapse-item
-                v-for="group in groupedTemplates"
-                :key="group.type"
-                :title="`${group.type} (${group.items.length})`"
-                :name="group.type"
-              >
-                <n-list hoverable clickable>
-                  <n-list-item
-                    v-for="t in group.items"
-                    :key="t.name"
-                    :class="{ active: t.name === selectedName }"
-                    @click="selectTemplate(t.name)"
-                  >
-                    <div class="row">
-                      <div class="row-name">
-                        <span class="row-name-text">{{ t.name }}</span>
-                        <span v-if="t.builtin" class="builtin-tag">内置</span>
-                      </div>
-                      <n-tooltip trigger="hover" placement="left">
-                        <template #trigger>
-                          <n-button
-                            size="tiny"
-                            tertiary
-                            circle
-                            aria-label="插入模板到编辑器"
-                            @click.stop="insertToEditor(t.name)"
-                            :disabled="loading"
-                          >
-                            <template #icon>
-                              <Icon :icon="sendIcon" width="14" height="14" />
-                            </template>
-                          </n-button>
-                        </template>
-                        插入到编辑器
-                      </n-tooltip>
-                    </div>
-                  </n-list-item>
-                </n-list>
-              </n-collapse-item>
-            </n-collapse>
-          </div>
-        </div>
-        <div
-          class="sidebar-resizer"
-          title="拖动调整模板列表宽度"
-          role="separator"
-          aria-orientation="vertical"
-          @pointerdown="startSidebarResize"
-        >
-          <span></span>
-        </div>
+      <div class="tm-search">
+        <Icon :icon="searchIcon" width="15" height="15" class="tm-search-icon" />
+        <input
+          ref="searchRef"
+          v-model="search"
+          type="search"
+          class="tm-search-input"
+          placeholder="搜索模板名称、分类或正文"
+          spellcheck="false"
+          @keydown.esc="search = ''"
+        />
+        <kbd v-if="!search" class="tm-kbd">/</kbd>
+        <button v-else type="button" class="tm-search-clear" title="清除搜索" @click="search = ''">
+          <Icon :icon="xIcon" width="13" height="13" />
+        </button>
+      </div>
 
-        <div class="right">
-          <div ref="contentEditorContainer" class="template-monaco-editor"></div>
-          <GuaxiAuxEditorStatusBar :editor-instance="contentEditorInstance" language="markdown" />
+      <div class="tm-header-actions">
+        <button type="button" class="tm-btn" :disabled="busy" @click="openDraft">
+          <Icon :icon="plusIcon" width="15" height="15" />
+          <span>新建</span>
+        </button>
+        <button type="button" class="tm-btn" :disabled="busy" @click="importFromFile">
+          <Icon :icon="fileUpIcon" width="15" height="15" />
+          <span>导入</span>
+        </button>
+        <button
+          type="button"
+          class="tm-icon-btn"
+          :class="{ 'is-busy': loading }"
+          title="刷新模板列表（F5）"
+          aria-label="刷新模板列表"
+          @click="refresh({ reason: 'manual' })"
+        >
+          <Icon :icon="refreshIcon" width="16" height="16" />
+        </button>
+        <button
+          type="button"
+          class="tm-icon-btn"
+          :title="inspectorCollapsed ? '显示预览面板' : '收起预览面板'"
+          :aria-label="inspectorCollapsed ? '显示预览面板' : '收起预览面板'"
+          @click="toggleInspector"
+        >
+          <Icon :icon="inspectorCollapsed ? panelOpenIcon : panelCloseIcon" width="16" height="16" />
+        </button>
+      </div>
+    </header>
+
+    <!-- ───────────── 工具栏 ───────────── -->
+    <div class="tm-toolbar">
+      <div class="tm-filters" role="group" aria-label="按分类筛选">
+        <button
+          type="button"
+          class="tm-chip"
+          :class="{ 'is-active': familyFilter === 'all' }"
+          @click="setFamilyFilter('all')"
+        >
+          全部
+          <span class="tm-chip-count">{{ summary.total }}</span>
+        </button>
+        <button
+          v-for="chip in familyChips"
+          :key="chip.family"
+          type="button"
+          class="tm-chip"
+          :class="{ 'is-active': familyFilter === chip.family }"
+          :title="chip.family"
+          @click="setFamilyFilter(chip.family)"
+        >
+          {{ chip.family }}
+          <span class="tm-chip-count">{{ chip.count }}</span>
+        </button>
+      </div>
+
+      <div class="tm-view-actions">
+        <button
+          v-if="searchActive"
+          type="button"
+          class="tm-scope-pill"
+          :class="{ 'is-on': searchContent }"
+          :title="searchContent ? '正文命中也会列出来' : '只在名称和分类里找'"
+          @click="toggleSearchContent"
+        >
+          <Icon :icon="searchContent ? fileTextIcon : textIcon" width="13" height="13" />
+          {{ searchContent ? '含正文' : '仅标题' }}
+        </button>
+
+        <div class="tm-segmented" role="group" aria-label="视图">
+          <button
+            v-for="mode in viewModes"
+            :key="mode.key"
+            type="button"
+            class="tm-seg"
+            :class="{ 'is-active': viewMode === mode.key }"
+            :title="mode.title"
+            :aria-pressed="viewMode === mode.key"
+            @click="setViewMode(mode.key)"
+          >
+            <Icon :icon="mode.icon" width="15" height="15" />
+          </button>
         </div>
       </div>
     </div>
-  </n-message-provider>
+
+    <!-- ───────────── 主体：列表 + 文档 ───────────── -->
+    <main class="tm-main" :style="mainStyle">
+      <section class="tm-browser">
+        <div v-if="loadError" class="tm-banner is-danger">
+          <Icon :icon="alertIcon" width="15" height="15" />
+          <span class="tm-banner-text">{{ loadError }}</span>
+          <button type="button" class="tm-link-btn" @click="refresh({ reason: 'retry' })">重试</button>
+        </div>
+        <div v-if="truncated" class="tm-banner is-warning">
+          <Icon :icon="alertIcon" width="15" height="15" />
+          自定义模板超过 {{ formatCount(MAX_TEMPLATES) }} 个，只载入了前一部分。
+        </div>
+
+        <div v-if="loading && !templates.length" class="tm-state">
+          <span class="tm-spinner" />
+          <p>正在读取模板库…</p>
+        </div>
+
+        <div v-else-if="!groups.length" class="tm-state">
+          <div class="tm-state-glyph">
+            <Icon :icon="searchActive ? searchIcon : folderSearchIcon" width="32" height="32" />
+          </div>
+          <h2>{{ emptyTitle }}</h2>
+          <p>{{ emptyHint }}</p>
+          <button v-if="searchActive" type="button" class="tm-btn" @click="search = ''">清除搜索</button>
+          <button v-else-if="canMutate" type="button" class="tm-btn" @click="openDraft">
+            <Icon :icon="plusIcon" width="15" height="15" />
+            新建第一个模板
+          </button>
+        </div>
+
+        <div
+          v-else
+          ref="listRef"
+          class="tm-list"
+          :class="`is-${searchActive ? 'results' : viewMode}`"
+          role="tree"
+          aria-label="模板列表"
+        >
+          <template v-if="searchActive">
+            <div
+              v-for="result in searchResults"
+              :key="result.item.name"
+              class="tm-row is-result"
+              :class="{
+                'is-selected': result.item.name === selectedName,
+                'is-primary': result.item.name === selectedName,
+                'is-dirty': isDirty(result.item.name),
+              }"
+              :data-name="result.item.name"
+              role="treeitem"
+              :aria-selected="result.item.name === selectedName"
+              @click="selectTemplate(result.item.name)"
+              @dblclick="insertTemplate(result.item)"
+              @contextmenu.prevent="openMenu(result.item, $event)"
+            >
+              <span class="tm-row-main">
+                <span class="tm-type-icon" :data-kind="result.item.kind">
+                  <Icon :icon="result.item.kind === 'python' ? codeIcon : fileTextIcon" width="15" height="15" />
+                </span>
+                <span class="tm-row-text">
+                  <span class="tm-row-title">
+                    <span class="tm-row-name">{{ result.item.name }}</span>
+                    <span v-if="result.hit.field === 'content' && result.hit.snippet" class="tm-row-snippet">
+                      <span class="tm-snippet-line">第 {{ result.hit.snippet.line }} 行</span>
+                      <span class="tm-snippet-text">
+                        {{ result.hit.snippet.prefix }}<mark>{{ result.hit.snippet.match }}</mark>{{ result.hit.snippet.suffix }}
+                      </span>
+                    </span>
+                    <span v-else class="tm-row-sub">{{ result.item.type }}</span>
+                  </span>
+                </span>
+                <span v-if="result.item.builtin" class="tm-badge">内置</span>
+                <span v-else-if="result.item.overriddenBuiltin" class="tm-badge is-user">已改</span>
+              </span>
+              <button
+                type="button"
+                class="tm-row-insert"
+                title="插入到编辑器（Enter）"
+                aria-label="插入到编辑器"
+                @click.stop="insertTemplate(result.item)"
+              >
+                <Icon :icon="sendIcon" width="14" height="14" />
+              </button>
+            </div>
+          </template>
+
+          <template v-else-if="viewMode === 'grid'">
+            <button
+              v-for="item in flatTemplates"
+              :key="item.name"
+              type="button"
+              class="tm-tile"
+              :class="{
+                'is-primary': item.name === selectedName,
+                'is-dirty': isDirty(item.name),
+              }"
+              :data-name="item.name"
+              @click="selectTemplate(item.name)"
+              @dblclick="insertTemplate(item)"
+              @contextmenu.prevent="openMenu(item, $event)"
+            >
+              <span class="tm-tile-head">
+                <span class="tm-type-icon" :data-kind="item.kind">
+                  <Icon :icon="item.kind === 'python' ? codeIcon : fileTextIcon" width="14" height="14" />
+                </span>
+                <span class="tm-tile-family">{{ templateFamilyOf(item.type) }}</span>
+                <span v-if="item.builtin" class="tm-badge is-quiet">内置</span>
+              </span>
+              <span class="tm-tile-name" :title="item.name">{{ item.name }}</span>
+              <span class="tm-tile-excerpt">{{ excerptOf(item.content) || '（空模板）' }}</span>
+              <span class="tm-tile-foot">
+                <span class="tm-tile-variant">{{ templateVariantOf(item.type) || item.type }}</span>
+                <span class="tm-tile-len">{{ formatChars(item.content.length) }}</span>
+              </span>
+            </button>
+          </template>
+
+          <template v-else>
+            <section
+              v-for="group in groups"
+              :key="group.family"
+              class="tm-group"
+            >
+              <header class="tm-group-head">
+                <button type="button" class="tm-group-toggle" @click="toggleGroup(group.family)">
+                  <Icon
+                    :icon="chevronRightIcon"
+                    width="12"
+                    height="12"
+                    class="tm-chevron"
+                    :class="{ 'is-open': !collapsedGroups.has(group.family) }"
+                  />
+                  <span class="tm-group-name">{{ group.family }}</span>
+                  <span class="tm-group-count">{{ group.items.length }}</span>
+                </button>
+                <span v-if="group.variantized" class="tm-group-hint">按子类排序</span>
+              </header>
+
+              <template v-if="!collapsedGroups.has(group.family)">
+                <div
+                  v-for="item in group.items"
+                  :key="item.name"
+                  class="tm-row"
+                  :class="{
+                    'is-selected': item.name === selectedName,
+                    'is-primary': item.name === selectedName,
+                    'is-dirty': isDirty(item.name),
+                  }"
+                  :data-name="item.name"
+                  role="treeitem"
+                  :aria-selected="item.name === selectedName"
+                  @click="selectTemplate(item.name)"
+                  @dblclick="insertTemplate(item)"
+                  @contextmenu.prevent="openMenu(item, $event)"
+                >
+                  <span class="tm-row-main">
+                    <span class="tm-type-icon" :data-kind="item.kind">
+                      <Icon :icon="item.kind === 'python' ? codeIcon : fileTextIcon" width="15" height="15" />
+                    </span>
+                    <span class="tm-row-text">
+                      <span class="tm-row-name">{{ item.name }}</span>
+                      <span v-if="group.variantized" class="tm-row-variant">{{ templateVariantOf(item.type) }}</span>
+                    </span>
+                    <span v-if="isDirty(item.name)" class="tm-dirty-dot" title="有未保存的改动" />
+                    <span v-if="item.builtin" class="tm-badge is-quiet">内置</span>
+                    <span v-else-if="item.overriddenBuiltin" class="tm-badge is-user">已改</span>
+                  </span>
+                  <button
+                    type="button"
+                    class="tm-row-insert"
+                    title="插入到编辑器（Enter）"
+                    aria-label="插入到编辑器"
+                    @click.stop="insertTemplate(item)"
+                  >
+                    <Icon :icon="sendIcon" width="14" height="14" />
+                  </button>
+                </div>
+              </template>
+            </section>
+          </template>
+        </div>
+
+        <footer class="tm-status">
+          <span>{{ formatCount(visibleCount) }} 个模板</span>
+          <span class="tm-status-sep">·</span>
+          <span>内置 {{ formatCount(summary.builtin) }}</span>
+          <span class="tm-status-sep">·</span>
+          <span>自定义 {{ formatCount(summary.user) }}</span>
+          <span class="tm-status-spacer" />
+          <span v-if="dirtyName" class="tm-status-dirty">
+            <span class="tm-dirty-dot" />
+            未保存
+          </span>
+          <span v-else-if="selectedName" class="tm-status-path" :title="selectedName">{{ selectedName }}</span>
+        </footer>
+      </section>
+
+      <div
+        v-if="!inspectorCollapsed"
+        class="tm-resizer"
+        title="拖动调整文档宽度"
+        @pointerdown="startResize"
+      />
+
+      <aside v-if="!inspectorCollapsed" class="tm-inspector">
+        <template v-if="hasDraft">
+          <div class="tm-doc-head">
+            <div class="tm-doc-title">
+              <span class="tm-type-icon" :data-kind="draftKind">
+                <Icon :icon="draftKind === 'python' ? codeIcon : fileTextIcon" width="15" height="15" />
+              </span>
+              <span class="tm-doc-name" :title="draft.name">{{ draft.name || '未命名模板' }}</span>
+              <span v-if="draft.builtin" class="tm-badge">内置</span>
+              <span v-else-if="draft.isUser" class="tm-badge is-user">自定义</span>
+            </div>
+            <div class="tm-doc-head-actions">
+              <button
+                type="button"
+                class="tm-btn"
+                :disabled="busy || !draft.content.trim()"
+                title="把正文插入到主编辑器光标处（Ctrl+Enter）"
+                @click="insertDraft"
+              >
+                <Icon :icon="sendIcon" width="15" height="15" />
+                <span>插入</span>
+              </button>
+              <button
+                type="button"
+                class="tm-btn is-primary"
+                :disabled="busy || !dirty"
+                :title="dirty ? '保存模板（Ctrl+S）' : '没有改动'"
+                @click="saveDraft"
+              >
+                <Icon :icon="saveIcon" width="15" height="15" />
+                <span>保存</span>
+              </button>
+              <button
+                type="button"
+                class="tm-icon-btn is-small"
+                title="关闭文档"
+                @click="closeDraft"
+              >
+                <Icon :icon="xIcon" width="14" height="14" />
+              </button>
+            </div>
+          </div>
+
+          <div class="tm-doc-fields">
+            <label class="tm-field">
+              <span class="tm-field-label">名称</span>
+              <input
+                v-model="draft.name"
+                class="tm-text-input"
+                placeholder="模板名称"
+                spellcheck="false"
+                @input="markDirty"
+              />
+            </label>
+            <label class="tm-field">
+              <span class="tm-field-label">分类</span>
+              <input
+                v-model="draft.type"
+                class="tm-text-input"
+                placeholder="例如 工作 / 周报"
+                spellcheck="false"
+                list="tm-type-options"
+                @input="markDirty"
+              />
+            </label>
+          </div>
+
+          <div class="tm-doc-preview-toggle">
+            <button
+              type="button"
+              class="tm-tab"
+              :class="{ 'is-active': docMode === 'edit' }"
+              @click="setDocMode('edit')"
+            >
+              <Icon :icon="pencilIcon" width="13" height="13" />
+              编辑
+            </button>
+            <button
+              type="button"
+              class="tm-tab"
+              :class="{ 'is-active': docMode === 'preview' }"
+              @click="setDocMode('preview')"
+            >
+              <Icon :icon="eyeIcon" width="13" height="13" />
+              预览
+            </button>
+            <span class="tm-doc-stats">
+              {{ stats.lines }} 行 · {{ formatChars(stats.chars) }}
+            </span>
+          </div>
+
+          <div class="tm-doc-stage">
+            <div
+              ref="editorContainer"
+              class="tm-monaco"
+              :class="{ 'is-hidden': docMode !== 'edit' }"
+            />
+            <div
+              v-if="docMode === 'edit'"
+              class="tm-empty-overlay"
+              :class="{ 'is-visible': !draft.content.trim() }"
+              aria-hidden="true"
+            >
+              <p class="tm-empty-title">{{ emptyStageTitle }}</p>
+              <p class="tm-empty-hint">{{ emptyStageHint }}</p>
+            </div>
+            <div v-else class="tm-preview">
+              <div v-if="previewLoading" class="tm-preview-loading">
+                <span class="tm-spinner is-small" />
+                正在渲染预览…
+              </div>
+              <div v-else-if="previewError" class="tm-preview-fallback">
+                <p class="tm-empty-title">预览暂时不可用</p>
+                <p class="tm-empty-hint">{{ previewError }}</p>
+                <button type="button" class="tm-btn is-quiet" @click="renderPreview">重试</button>
+              </div>
+              <div
+                v-else
+                ref="previewRef"
+                class="tm-preview-body markdown-content"
+                v-html="previewHtml"
+              />
+            </div>
+          </div>
+
+          <div class="tm-doc-foot">
+            <GuaxiAuxEditorStatusBar :editor-instance="editorInstance" :language="draftKind" />
+          </div>
+        </template>
+
+        <div v-else class="tm-inspector-empty">
+          <div class="tm-state-glyph is-quiet">
+            <Icon :icon="fileTextIcon" width="30" height="30" />
+          </div>
+          <h2>选一个模板，或新建一个</h2>
+          <p>左侧选中模板后在这里编辑正文与分类；插入按钮会把内容送到主编辑器光标处。</p>
+          <dl class="tm-facts">
+            <div><dt>模板</dt><dd>{{ formatCount(summary.total) }}</dd></div>
+            <div><dt>分类</dt><dd>{{ formatCount(summary.categories) }}</dd></div>
+            <div><dt>内置</dt><dd>{{ formatCount(summary.builtin) }}</dd></div>
+            <div><dt>自定义</dt><dd>{{ formatCount(summary.user) }}</dd></div>
+          </dl>
+          <button v-if="canMutate" type="button" class="tm-btn is-quiet" @click="openDraft">
+            <Icon :icon="plusIcon" width="15" height="15" />
+            新建模板
+          </button>
+        </div>
+      </aside>
+    </main>
+
+    <!-- 分类的补全候选：文档字段与导入弹窗共用一份，放在根节点下即可被两处 list= 引用。 -->
+    <datalist id="tm-type-options">
+      <option v-for="type in typeSuggestions" :key="type" :value="type" />
+    </datalist>
+
+    <!-- ───────────── 拖放导入 ───────────── -->
+    <div v-if="dragActive" class="tm-drop">
+      <div class="tm-drop-card">
+        <Icon :icon="fileUpIcon" width="26" height="26" />
+        <div class="tm-drop-title">释放以导入 Markdown 模板</div>
+        <div class="tm-drop-hint">每份文件会成为一份独立模板，同名时自动加序号。</div>
+      </div>
+    </div>
+
+    <n-dropdown
+      trigger="manual"
+      placement="bottom-start"
+      :show="menu.show"
+      :x="menu.x"
+      :y="menu.y"
+      :options="menuOptions"
+      @select="onMenuSelect"
+      @clickoutside="menu.show = false"
+    />
+
+    <!-- ───────────── 导入确认 ───────────── -->
+    <n-modal
+      v-model:show="importModal.show"
+      preset="card"
+      class="tm-modal"
+      title="导入模板"
+      :bordered="false"
+      @after-enter="focusImportInput"
+    >
+      <div class="tm-modal-body">
+        <p class="tm-modal-hint">
+          共 {{ importModal.items.length }} 份 Markdown，导入到
+          <strong>{{ importModal.type || '未分类' }}</strong>
+        </p>
+        <ul class="tm-import-list">
+          <li v-for="item in importModal.items.slice(0, 6)" :key="item.source">
+            <Icon :icon="fileTextIcon" width="13" height="13" />
+            <span class="tm-import-origin">{{ item.origin }}</span>
+            <span class="tm-import-arrow">→</span>
+            <span class="tm-import-name">{{ item.name }}</span>
+          </li>
+          <li v-if="importModal.items.length > 6" class="tm-import-more">
+            还有 {{ importModal.items.length - 6 }} 份…
+          </li>
+        </ul>
+        <label class="tm-field">
+          <span class="tm-field-label">分类</span>
+          <input
+            ref="importTypeRef"
+            v-model="importModal.type"
+            class="tm-text-input"
+            placeholder="例如 工作 / 会议"
+            list="tm-type-options"
+            @keydown.enter.prevent="confirmImport"
+            @keydown.esc.prevent="importModal.show = false"
+          />
+        </label>
+      </div>
+      <template #footer>
+        <div class="tm-modal-actions">
+          <button type="button" class="tm-btn" @click="importModal.show = false">取消</button>
+          <button type="button" class="tm-btn is-primary" :disabled="busy" @click="confirmImport">
+            导入
+          </button>
+        </div>
+      </template>
+    </n-modal>
+
+    <!-- ───────────── 删除确认 ───────────── -->
+    <n-modal v-model:show="deleteModal.show" preset="card" class="tm-modal" title="删除模板" :bordered="false">
+      <div class="tm-modal-body">
+        <p class="tm-modal-danger">确定删除「{{ deleteModal.name }}」吗？</p>
+        <p class="tm-modal-hint">
+          {{ deleteModal.overridden
+            ? '这是覆盖了内置模板的版本。删除后会恢复成内置模板的原样。'
+            : '模板文件会从模板库目录里移除，应用内无法撤销。' }}
+        </p>
+      </div>
+      <template #footer>
+        <div class="tm-modal-actions">
+          <button type="button" class="tm-btn" @click="deleteModal.show = false">取消</button>
+          <button type="button" class="tm-btn is-danger" :disabled="busy" @click="confirmDelete">
+            {{ deleteModal.overridden ? '移除自定义版本' : '删除' }}
+          </button>
+        </div>
+      </template>
+    </n-modal>
+
+    <!-- ───────────── 离开确认 ───────────── -->
+    <n-modal v-model:show="leaveModal.show" preset="card" class="tm-modal" title="有未保存的改动" :bordered="false">
+      <div class="tm-modal-body">
+        <p class="tm-modal-danger">「{{ leaveModal.name }}」有未保存的改动。</p>
+        <p class="tm-modal-hint">保存后再继续，还是丢弃这些改动？</p>
+      </div>
+      <template #footer>
+        <div class="tm-modal-actions">
+          <button type="button" class="tm-btn" @click="resolveLeave('discard')">丢弃改动</button>
+          <button type="button" class="tm-btn" @click="leaveModal.show = false">取消</button>
+          <button type="button" class="tm-btn is-primary" :disabled="busy" @click="resolveLeave('save')">
+            保存并继续
+          </button>
+        </div>
+      </template>
+    </n-modal>
+  </div>
 </template>
 
 <script setup>
-import { createLogger } from '../../utils/logger'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
-import { NButton, NCollapse, NCollapseItem, NInput, NList, NListItem, NTooltip, createDiscreteApi } from 'naive-ui'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { Icon } from '@iconify/vue'
+import { NModal, NDropdown, useMessage } from 'naive-ui'
+import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import * as monaco from 'monaco-editor'
 import 'monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution'
+import 'monaco-editor/esm/vs/basic-languages/python/python.contribution'
+
+import alertIcon from '@iconify-icons/lucide/alert-triangle'
+import chevronRightIcon from '@iconify-icons/lucide/chevron-right'
+import codeIcon from '@iconify-icons/lucide/code-2'
+import eyeIcon from '@iconify-icons/lucide/eye'
+import fileTextIcon from '@iconify-icons/lucide/file-text'
+import fileUpIcon from '@iconify-icons/lucide/file-up'
+import folderSearchIcon from '@iconify-icons/lucide/folder-search'
+import gridIcon from '@iconify-icons/lucide/layout-grid'
+import libraryIcon from '@iconify-icons/lucide/library'
+import listTreeIcon from '@iconify-icons/lucide/list-tree'
+import panelCloseIcon from '@iconify-icons/lucide/panel-right-close'
+import panelOpenIcon from '@iconify-icons/lucide/panel-right-open'
+import pencilIcon from '@iconify-icons/lucide/pencil'
+import plusIcon from '@iconify-icons/lucide/plus'
+import refreshIcon from '@iconify-icons/lucide/refresh-cw'
+import saveIcon from '@iconify-icons/lucide/save'
+import searchIcon from '@iconify-icons/lucide/search'
+import sendIcon from '@iconify-icons/lucide/send'
+import textIcon from '@iconify-icons/lucide/text-cursor-input'
+import xIcon from '@iconify-icons/lucide/x'
+
 import GuaxiAuxEditorStatusBar from './GuaxiAuxEditorStatusBar.vue'
+import { createLogger } from '../../utils/logger'
 import { attachSharedEditorFeatures, resolveSharedEditorDisplayOptions, startSharedLsp } from '../../monaco/editorFeatures'
 import { GUAXI_MONACO_SEMANTIC_TOKEN_COLORS, GUAXI_MONACO_THEME_RULES } from '../../monaco/guaxiMonacoThemes'
-import filePlusIcon from '@iconify-icons/lucide/file-plus'
-import refreshCwIcon from '@iconify-icons/lucide/refresh-cw'
-import saveIcon from '@iconify-icons/lucide/save'
-import sendIcon from '@iconify-icons/lucide/send'
-import trash2Icon from '@iconify-icons/lucide/trash-2'
-import uploadIcon from '@iconify-icons/lucide/upload'
-import { invoke } from '@tauri-apps/api/core'
-import { open } from '@tauri-apps/plugin-dialog'
+import { DEFAULT_TEMPLATES, TEMPLATE_TYPE_ORDER } from './templateManager/builtinTemplates'
+import {
+  excerptOf,
+  formatChars,
+  formatCount,
+  groupTemplatesByFamily,
+  mergeTemplates,
+  searchTemplates,
+  summarizeFamilies,
+  summarizeTemplates,
+  templateFamilyOf,
+  templateKindOf,
+  templateVariantOf,
+  textStatsOf,
+  validateTemplateName,
+  normalizeTemplateName,
+  normalizeTemplateType,
+} from './templateManager/templateModel'
 
 const logger = createLogger('GuaxiTemplateManager')
-const { message } = createDiscreteApi(['message'])
+const message = useMessage()
+
+const PREFS_KEY = 'guaxi:templateManager:prefs:v1'
+const COLLAPSED_KEY = 'guaxi:templateManager:collapsed:v1'
+const INSPECTOR_MIN = 380
+const INSPECTOR_MAX = 860
+const MAX_TEMPLATES = 4000
+
+const builtinIndex = new Map(DEFAULT_TEMPLATES.map((item) => [item.name, item]))
+
+// ───────────────────────── 状态 ─────────────────────────
+
+const pageRef = ref(null)
+const listRef = ref(null)
+const searchRef = ref(null)
+const editorContainer = ref(null)
+const previewRef = ref(null)
+const importTypeRef = ref(null)
 
 const loading = ref(false)
-const templateRepoPath = ref('')
+const busy = ref(false)
+const loadError = ref('')
+const truncated = ref(false)
+const repoPath = ref('')
+
 const templates = ref([])
-const filter = ref('')
+// 已读过的自定义模板正文，按名称缓存：搜索正文与卡片摘要都要用，不需要先点开。
+const contentCache = ref(new Map())
+const contentLoaded = ref(new Set())
 
 const selectedName = ref('')
-const editName = ref('')
-const editType = ref('未分类')
-const editContent = ref('')
-const contentEditorContainer = ref(null)
-const mainRef = ref(null)
-const sidebarWidth = ref(360)
-const sidebarResizing = ref(false)
+const search = ref('')
+const searchContent = ref(true)
+const familyFilter = ref('all')
+const collapsedGroups = ref(new Set())
 
-const TEMPLATE_EDITOR_FONT_FAMILY = "'Maple Mono NF CN','JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New'"
-const TEMPLATE_EDITOR_FONT_SIZE = 18
-const TEMPLATE_MANAGER_SIDEBAR_WIDTH_KEY = 'guaxi.template_manager.sidebar_width'
-const SIDEBAR_MIN_WIDTH = 240
-const SIDEBAR_MAX_WIDTH = 720
-let contentEditor = null
-let contentModel = null
-// 供底部状态栏使用：shallowRef 不代理 Monaco 实例，只用来触发一次渲染。
-const contentEditorInstance = shallowRef(null)
-let featuresDisposable = null
-let suppressEditorChange = false
-let themeObserver = null
-let sidebarResizeStartX = 0
-let sidebarResizeStartWidth = 360
+const viewMode = ref('list')
+const docMode = ref('edit')
 
-const PYTHON_CELL_TEMPLATE_GROUP = '探索者 / Python Cell'
-const py = String.raw
+const inspectorWidth = ref(560)
+const inspectorViewWidth = ref(0)
+const inspectorCollapsed = ref(false)
+const resizing = ref(false)
+let resizeState = null
 
-// 设计说明：
-// 1. 模板管理器只维护可读、可复制的 Python 代码正文，不再写入 Python Cell 的内部存储哨兵标记。
-// 2. 每个模板开头保留用途、依赖和改造点说明，插入到主编辑器或 Python Cell 后都可以直接阅读和二次修改。
-// 3. 模板按数据、网络、文本、多媒体、二进制、自动化、机器学习等常见工作流拆分，避免用户在一个超大模板里反复删改。
-const buildPythonCellTemplate = (name, category, code) => ({
-  name: `Python Cell｜${name}`,
-  templateType: `${PYTHON_CELL_TEMPLATE_GROUP} / ${category}`,
-  content: `# 用途：${name}\n# 使用说明：按你的真实路径、字段名、接口地址和依赖库安装情况修改 TODO 位置。\n# 建议：先小样本运行，确认输出正确后再处理全量数据。\n\n${String(code || '').trim()}\n`
+const dragActive = ref(false)
+
+// 草稿就是文档面板的真相源：内置模板被选中时也是一份「未保存的副本」，
+// 第一次保存才落盘成自定义模板（后端 save_template 只写文件）。
+const draft = reactive({
+  name: '',
+  type: '未分类',
+  content: '',
+  builtin: false,
+  isUser: false,
+  overriddenBuiltin: false,
+  originName: '',
 })
 
-const PYTHON_CELL_TEMPLATES = [
-  buildPythonCellTemplate('数据读取：CSV / Excel / JSON', '数据读取', py`
-from pathlib import Path
-import json
-import pandas as pd
-
-DATA_DIR = Path("data")
-csv_path = DATA_DIR / "sample.csv"
-excel_path = DATA_DIR / "sample.xlsx"
-json_path = DATA_DIR / "sample.json"
-
-# 根据真实文件类型保留一种读取方式即可。
-df_csv = pd.read_csv(csv_path, encoding="utf-8")
-df_excel = pd.read_excel(excel_path, sheet_name=0)
-with json_path.open("r", encoding="utf-8") as f:
-    raw_json = json.load(f)
-df_json = pd.json_normalize(raw_json)
-
-print(df_csv.head())
-print(df_csv.info())
-`),
-  buildPythonCellTemplate('数据读取：SQLite 查询', '数据读取', py`
-from pathlib import Path
-import sqlite3
-import pandas as pd
-
-db_path = Path("data/app.db")
-sql = """
-SELECT *
-FROM your_table
-LIMIT 100
-"""
-
-with sqlite3.connect(db_path) as conn:
-    df = pd.read_sql_query(sql, conn)
-
-print(df.head())
-print(f"rows={len(df)}, columns={len(df.columns)}")
-`),
-  buildPythonCellTemplate('数据清洗：缺失值 / 重复值 / 类型', '数据清洗', py`
-import pandas as pd
-
-df = pd.read_csv("data/raw.csv", encoding="utf-8")
-
-print("原始形状:", df.shape)
-print("缺失值统计:")
-print(df.isna().sum().sort_values(ascending=False).head(20))
-
-df = df.drop_duplicates()
-df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
-
-for col in df.select_dtypes(include="object").columns:
-    df[col] = df[col].astype(str).str.strip()
-
-if "date" in df.columns:
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-
-df = df.dropna(how="all")
-print("清洗后形状:", df.shape)
-df.head()
-`),
-  buildPythonCellTemplate('数据整理：分组聚合 / 透视表', '数据整理', py`
-import pandas as pd
-
-df = pd.read_csv("data/clean.csv", encoding="utf-8")
-
-summary = (
-    df.groupby(["category"], dropna=False)
-      .agg(
-          count=("category", "size"),
-          amount_sum=("amount", "sum"),
-          amount_mean=("amount", "mean"),
-      )
-      .reset_index()
-      .sort_values("amount_sum", ascending=False)
-)
-
-pivot = pd.pivot_table(
-    df,
-    index="category",
-    columns="month",
-    values="amount",
-    aggfunc="sum",
-    fill_value=0,
-)
-
-print(summary.head(20))
-pivot.head()
-`),
-  buildPythonCellTemplate('数据整理：多表合并', '数据整理', py`
-import pandas as pd
-
-orders = pd.read_csv("data/orders.csv", encoding="utf-8")
-users = pd.read_csv("data/users.csv", encoding="utf-8")
-
-merged = orders.merge(
-    users,
-    how="left",
-    on="user_id",
-    validate="many_to_one",
-)
-
-missing_user = merged["user_id"].isna().sum()
-print(f"合并后行数: {len(merged)}, 缺失 user_id: {missing_user}")
-merged.head()
-`),
-  buildPythonCellTemplate('数据处理：特征工程 / 时间窗口', '数据处理', py`
-import pandas as pd
-
-df = pd.read_csv("data/events.csv", encoding="utf-8")
-df["event_time"] = pd.to_datetime(df["event_time"], errors="coerce")
-df = df.sort_values(["user_id", "event_time"])
-
-df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0)
-df["amount_7d_avg"] = (
-    df.groupby("user_id")["amount"]
-      .rolling(window=7, min_periods=1)
-      .mean()
-      .reset_index(level=0, drop=True)
-)
-df["event_hour"] = df["event_time"].dt.hour
-df["is_weekend"] = df["event_time"].dt.dayofweek >= 5
-
-df.head()
-`),
-  buildPythonCellTemplate('绘图：趋势线 / 分布图', '绘图', py`
-import pandas as pd
-import matplotlib.pyplot as plt
-
-df = pd.read_csv("data/clean.csv", encoding="utf-8")
-df["date"] = pd.to_datetime(df["date"], errors="coerce")
-
-daily = (
-    df.dropna(subset=["date"])
-      .groupby(pd.Grouper(key="date", freq="D"))["amount"]
-      .sum()
-)
-
-fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-daily.plot(ax=axes[0], title="Daily Amount")
-df["amount"].dropna().hist(ax=axes[1], bins=30)
-axes[1].set_title("Amount Distribution")
-plt.tight_layout()
-plt.show()
-`),
-  buildPythonCellTemplate('绘图：相关性热力图', '绘图', py`
-import pandas as pd
-import matplotlib.pyplot as plt
-
-df = pd.read_csv("data/clean.csv", encoding="utf-8")
-numeric = df.select_dtypes(include="number")
-corr = numeric.corr()
-
-fig, ax = plt.subplots(figsize=(8, 6))
-im = ax.imshow(corr, cmap="RdBu_r", vmin=-1, vmax=1)
-ax.set_xticks(range(len(corr.columns)), corr.columns, rotation=45, ha="right")
-ax.set_yticks(range(len(corr.index)), corr.index)
-fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-ax.set_title("Correlation Heatmap")
-plt.tight_layout()
-plt.show()
-`),
-  buildPythonCellTemplate('数据导出：CSV / Excel / Markdown', '数据导出', py`
-from pathlib import Path
-import pandas as pd
-
-output_dir = Path("output")
-output_dir.mkdir(parents=True, exist_ok=True)
-
-df = pd.read_csv("data/clean.csv", encoding="utf-8")
-
-df.to_csv(output_dir / "result.csv", index=False, encoding="utf-8-sig")
-df.to_excel(output_dir / "result.xlsx", index=False)
-
-markdown_table = df.head(20).to_markdown(index=False)
-(output_dir / "preview.md").write_text(markdown_table, encoding="utf-8")
-
-print(f"已导出到: {output_dir.resolve()}")
-`),
-  buildPythonCellTemplate('网络抓取：网页下载 / 链接提取', '网络抓取', py`
-from html.parser import HTMLParser
-from urllib.parse import urljoin
-from urllib.request import Request, urlopen
-
-class LinkParser(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self.links = []
-
-    def handle_starttag(self, tag, attrs):
-        if tag != "a":
-            return
-        attrs = dict(attrs)
-        href = attrs.get("href")
-        text = attrs.get("title", "")
-        if href:
-            self.links.append((href, text))
-
-url = "https://example.com"
-request = Request(url, headers={"User-Agent": "GuaxiTemplate/1.0"})
-html = urlopen(request, timeout=20).read().decode("utf-8", errors="ignore")
-
-parser = LinkParser()
-parser.feed(html)
-for href, text in parser.links[:20]:
-    print(urljoin(url, href), text)
-`),
-  buildPythonCellTemplate('网络抓取：分页 API JSON', '网络抓取', py`
-import time
-from urllib.parse import urlencode
-from urllib.request import Request, urlopen
-import json
-import pandas as pd
-
-base_url = "https://api.example.com/items"
-all_items = []
-
-for page in range(1, 6):
-    query = urlencode({"page": page, "page_size": 100})
-    request = Request(f"{base_url}?{query}", headers={"User-Agent": "GuaxiTemplate/1.0"})
-    with urlopen(request, timeout=20) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-    items = payload.get("items", payload if isinstance(payload, list) else [])
-    all_items.extend(items)
-    print(f"page={page}, items={len(items)}")
-    time.sleep(0.5)
-
-df = pd.json_normalize(all_items)
-df.head()
-`),
-  buildPythonCellTemplate('文本处理：正则清洗 / 词频统计', '文本处理', py`
-from collections import Counter
-from pathlib import Path
-import re
-
-text_path = Path("data/input.txt")
-text = text_path.read_text(encoding="utf-8")
-
-clean_text = re.sub(r"\s+", " ", text)
-tokens = re.findall(r"[\w\u4e00-\u9fff]+", clean_text.lower())
-stopwords = {"the", "a", "and", "的", "了", "是"}
-tokens = [token for token in tokens if token not in stopwords and len(token) > 1]
-
-counter = Counter(tokens)
-for word, count in counter.most_common(30):
-    print(word, count)
-`),
-  buildPythonCellTemplate('图片处理：批量缩放 / 转格式', '图片视频处理', py`
-from pathlib import Path
-
-from PIL import Image
-
-input_dir = Path("images")
-output_dir = Path("output/images")
-output_dir.mkdir(parents=True, exist_ok=True)
-
-for path in input_dir.glob("*"):
-    if path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
-        continue
-    with Image.open(path) as img:
-        img.thumbnail((1280, 1280))
-        target = output_dir / f"{path.stem}.jpg"
-        img.convert("RGB").save(target, quality=88, optimize=True)
-        print(f"{path.name} -> {target.name}")
-`),
-  buildPythonCellTemplate('视频处理：抽帧', '图片视频处理', py`
-from pathlib import Path
-
-import cv2
-
-video_path = Path("videos/input.mp4")
-output_dir = Path("output/frames")
-output_dir.mkdir(parents=True, exist_ok=True)
-
-cap = cv2.VideoCapture(str(video_path))
-fps = cap.get(cv2.CAP_PROP_FPS) or 25
-interval = int(fps * 2)
-frame_index = 0
-saved = 0
-
-while True:
-    ok, frame = cap.read()
-    if not ok:
-        break
-    if frame_index % interval == 0:
-        target = output_dir / f"frame_{frame_index:06d}.jpg"
-        cv2.imwrite(str(target), frame)
-        saved += 1
-    frame_index += 1
-
-cap.release()
-print(f"保存帧数: {saved}")
-`),
-  buildPythonCellTemplate('二进制文件：哈希 / Hex 预览', '二进制文件处理', py`
-from pathlib import Path
-import hashlib
-
-path = Path("data/sample.bin")
-data = path.read_bytes()
-
-sha256 = hashlib.sha256(data).hexdigest()
-head = data[:128]
-
-print(f"file={path}")
-print(f"size={len(data)} bytes")
-print(f"sha256={sha256}")
-print("hex preview:")
-print(head.hex(" ", 1))
-`),
-  buildPythonCellTemplate('二进制文件：struct 解析记录', '二进制文件处理', py`
-from pathlib import Path
-import struct
-
-path = Path("data/records.bin")
-record_struct = struct.Struct("<I f 16s")
-
-data = path.read_bytes()
-records = []
-for offset in range(0, len(data), record_struct.size):
-    chunk = data[offset:offset + record_struct.size]
-    if len(chunk) < record_struct.size:
-        break
-    item_id, score, raw_name = record_struct.unpack(chunk)
-    name = raw_name.rstrip(b"\x00").decode("utf-8", errors="ignore")
-    records.append({"id": item_id, "score": score, "name": name})
-
-print(records[:10])
-print(f"records={len(records)}")
-`),
-  buildPythonCellTemplate('文件批处理：目录扫描 / 清单导出', '文件处理', py`
-from pathlib import Path
-import pandas as pd
-
-root = Path(".")
-rows = []
-
-for path in root.rglob("*"):
-    if path.is_file():
-        stat = path.stat()
-        rows.append({
-            "path": str(path),
-            "suffix": path.suffix.lower(),
-            "size": stat.st_size,
-            "modified": stat.st_mtime,
-        })
-
-df = pd.DataFrame(rows).sort_values("size", ascending=False)
-df.to_csv("output/file_inventory.csv", index=False, encoding="utf-8-sig")
-df.head(30)
-`),
-  buildPythonCellTemplate('数值计算：NumPy 向量化 / 统计量', '数值计算', py`
-import numpy as np
-
-# TODO: 替换为你的原始数组或 DataFrame 列。
-values = np.array([12.5, 18.0, 21.3, 19.8, 30.2], dtype=float)
-
-normalized = (values - values.mean()) / values.std(ddof=1)
-rolling_mean = np.convolve(values, np.ones(3) / 3, mode="valid")
-
-print("count:", values.size)
-print("mean:", values.mean())
-print("median:", np.median(values))
-print("p95:", np.percentile(values, 95))
-print("z-score:", normalized)
-print("rolling_mean:", rolling_mean)
-`),
-  buildPythonCellTemplate('统计分析：SciPy 假设检验', '统计分析', py`
-import numpy as np
-from scipy import stats
-
-# TODO: 替换为两组实验 / 对照样本。
-control = np.array([10.1, 9.8, 10.5, 10.0, 9.9])
-experiment = np.array([11.2, 10.9, 11.5, 11.1, 10.8])
-
-t_stat, p_value = stats.ttest_ind(experiment, control, equal_var=False)
-effect_size = (experiment.mean() - control.mean()) / np.sqrt((experiment.var(ddof=1) + control.var(ddof=1)) / 2)
-
-print(f"control_mean={control.mean():.4f}")
-print(f"experiment_mean={experiment.mean():.4f}")
-print(f"t={t_stat:.4f}, p={p_value:.6f}, cohen_d={effect_size:.4f}")
-`),
-  buildPythonCellTemplate('机器学习：scikit-learn 训练评估', '机器学习', py`
-import pandas as pd
-from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.impute import SimpleImputer
-from sklearn.metrics import classification_report, confusion_matrix
-from sklearn.model_selection import train_test_split
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
-
-df = pd.read_csv("data/train.csv", encoding="utf-8")
-target_col = "target"  # TODO: 替换目标列。
-
-X = df.drop(columns=[target_col])
-y = df[target_col]
-numeric_cols = X.select_dtypes(include="number").columns.tolist()
-category_cols = X.select_dtypes(exclude="number").columns.tolist()
-
-preprocess = ColumnTransformer([
-    ("num", Pipeline([("imputer", SimpleImputer(strategy="median")), ("scaler", StandardScaler())]), numeric_cols),
-    ("cat", Pipeline([("imputer", SimpleImputer(strategy="most_frequent")), ("onehot", OneHotEncoder(handle_unknown="ignore"))]), category_cols),
-])
-
-model = Pipeline([
-    ("preprocess", preprocess),
-    ("classifier", RandomForestClassifier(n_estimators=200, random_state=42)),
-])
-
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
-model.fit(X_train, y_train)
-pred = model.predict(X_test)
-
-print(classification_report(y_test, pred))
-print(confusion_matrix(y_test, pred))
-`),
-  buildPythonCellTemplate('机器学习：模型保存 / 加载', '机器学习', py`
-from pathlib import Path
-import joblib
-
-model_path = Path("output/model.joblib")
-model_path.parent.mkdir(parents=True, exist_ok=True)
-
-# TODO: 将 model 替换为你训练好的 sklearn Pipeline / 模型对象。
-joblib.dump(model, model_path)
-print(f"模型已保存: {model_path.resolve()}")
-
-loaded_model = joblib.load(model_path)
-# pred = loaded_model.predict(new_data)
-`),
-  buildPythonCellTemplate('深度学习：PyTorch 最小训练循环', '机器学习', py`
-import torch
-from torch import nn
-from torch.utils.data import DataLoader, TensorDataset
-
-device = "cuda" if torch.cuda.is_available() else "cpu"
-
-# TODO: 替换为真实特征和标签。
-X = torch.randn(128, 10)
-y = (X.sum(dim=1) > 0).long()
-loader = DataLoader(TensorDataset(X, y), batch_size=32, shuffle=True)
-
-model = nn.Sequential(nn.Linear(10, 32), nn.ReLU(), nn.Linear(32, 2)).to(device)
-loss_fn = nn.CrossEntropyLoss()
-optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
-
-for epoch in range(5):
-    model.train()
-    total_loss = 0.0
-    for xb, yb in loader:
-        xb, yb = xb.to(device), yb.to(device)
-        optimizer.zero_grad()
-        loss = loss_fn(model(xb), yb)
-        loss.backward()
-        optimizer.step()
-        total_loss += loss.item() * xb.size(0)
-    print(f"epoch={epoch + 1}, loss={total_loss / len(loader.dataset):.4f}")
-`),
-  buildPythonCellTemplate('可视化：Seaborn 统计图', '绘图', py`
-import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
-
-df = pd.read_csv("data/clean.csv", encoding="utf-8")
-
-sns.set_theme(style="whitegrid", font="Microsoft YaHei")
-fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-
-sns.boxplot(data=df, x="category", y="amount", ax=axes[0])
-axes[0].tick_params(axis="x", rotation=30)
-sns.scatterplot(data=df, x="amount", y="score", hue="category", ax=axes[1])
-
-plt.tight_layout()
-plt.show()
-`),
-  buildPythonCellTemplate('可视化：Plotly 交互图导出 HTML', '绘图', py`
-from pathlib import Path
-import pandas as pd
-import plotly.express as px
-
-df = pd.read_csv("data/clean.csv", encoding="utf-8")
-fig = px.line(df, x="date", y="amount", color="category", title="趋势分析")
-
-output_path = Path("output/interactive_chart.html")
-output_path.parent.mkdir(parents=True, exist_ok=True)
-fig.write_html(output_path, include_plotlyjs="cdn")
-print(f"交互图已导出: {output_path.resolve()}")
-fig.show()
-`),
-  buildPythonCellTemplate('Excel 自动化：openpyxl 格式化报表', '办公自动化', py`
-from pathlib import Path
-from openpyxl import load_workbook
-from openpyxl.styles import Font, PatternFill
-from openpyxl.utils import get_column_letter
-
-path = Path("output/result.xlsx")
-wb = load_workbook(path)
-ws = wb.active
-
-header_fill = PatternFill("solid", fgColor="1F6FEB")
-for cell in ws[1]:
-    cell.font = Font(color="FFFFFF", bold=True)
-    cell.fill = header_fill
-
-for col in ws.columns:
-    max_len = max(len(str(cell.value or "")) for cell in col)
-    ws.column_dimensions[get_column_letter(col[0].column)].width = min(max(max_len + 2, 10), 40)
-
-target = path.with_name(f"{path.stem}_formatted.xlsx")
-wb.save(target)
-print(f"格式化报表已保存: {target.resolve()}")
-`),
-  buildPythonCellTemplate('配置读取：YAML / TOML / 环境变量', '配置与日志', py`
-import os
-from pathlib import Path
-import tomllib
-import yaml
-
-yaml_config = yaml.safe_load(Path("config/app.yaml").read_text(encoding="utf-8"))
-with Path("config/pyproject.toml").open("rb") as f:
-    toml_config = tomllib.load(f)
-
-api_key = os.getenv("API_KEY", "")
-debug = os.getenv("DEBUG", "false").lower() == "true"
-
-print("yaml keys:", yaml_config.keys())
-print("toml keys:", toml_config.keys())
-print("debug:", debug, "api_key configured:", bool(api_key))
-`),
-  buildPythonCellTemplate('日志与异常：logging 标准模板', '配置与日志', py`
-import logging
-from pathlib import Path
-
-log_dir = Path("logs")
-log_dir.mkdir(parents=True, exist_ok=True)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-    handlers=[
-        logging.FileHandler(log_dir / "task.log", encoding="utf-8"),
-        logging.StreamHandler(),
-    ],
-)
-logger = logging.getLogger("guaxi.task")
-
-try:
-    logger.info("任务开始")
-    # TODO: 在这里放置你的处理逻辑。
-    result = 1 / 1
-    logger.info("任务完成 result=%s", result)
-except Exception:
-    logger.exception("任务失败")
-    raise
-`),
-  buildPythonCellTemplate('批处理进度：tqdm 扫描处理', '文件处理', py`
-from pathlib import Path
-from tqdm import tqdm
-
-input_dir = Path("data")
-output_dir = Path("output/processed")
-output_dir.mkdir(parents=True, exist_ok=True)
-
-files = [p for p in input_dir.rglob("*.txt") if p.is_file()]
-for path in tqdm(files, desc="处理文本文件"):
-    text = path.read_text(encoding="utf-8", errors="ignore")
-    cleaned = "\n".join(line.strip() for line in text.splitlines() if line.strip())
-    target = output_dir / path.relative_to(input_dir)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(cleaned, encoding="utf-8")
-
-print(f"处理完成: {len(files)} 个文件")
-`),
-  buildPythonCellTemplate('并发处理：ThreadPoolExecutor', '性能并发', py`
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
-
-def process_file(path: Path) -> dict:
-    text = path.read_text(encoding="utf-8", errors="ignore")
-    return {"path": str(path), "chars": len(text), "lines": text.count("\n") + 1}
-
-files = list(Path("data").rglob("*.txt"))
-results = []
-
-with ThreadPoolExecutor(max_workers=8) as executor:
-    future_map = {executor.submit(process_file, path): path for path in files}
-    for future in as_completed(future_map):
-        path = future_map[future]
-        try:
-            results.append(future.result())
-        except Exception as exc:
-            print(f"处理失败: {path} -> {exc}")
-
-print(results[:10])
-`),
-  buildPythonCellTemplate('命令行脚本：argparse 入口', '自动化脚本', py`
-import argparse
-from pathlib import Path
-
-def main():
-    parser = argparse.ArgumentParser(description="批量处理文件")
-    parser.add_argument("input", type=Path, help="输入目录或文件")
-    parser.add_argument("-o", "--output", type=Path, default=Path("output"), help="输出目录")
-    parser.add_argument("--dry-run", action="store_true", help="只打印计划，不实际写入")
-    args = parser.parse_args()
-
-    print("input:", args.input)
-    print("output:", args.output)
-    print("dry_run:", args.dry_run)
-    # TODO: 在这里调用你的处理函数。
-
-if __name__ == "__main__":
-    main()
-`),
-  buildPythonCellTemplate('数据校验：Pydantic Schema', '数据校验', py`
-from datetime import datetime
-from pydantic import BaseModel, Field, ValidationError
-
-class EventRecord(BaseModel):
-    user_id: str = Field(min_length=1)
-    event_name: str
-    amount: float = 0
-    event_time: datetime
-
-raw_records = [
-    {"user_id": "u001", "event_name": "purchase", "amount": 19.9, "event_time": "2026-01-01T12:00:00"},
+// 打开时的快照。不能拿「库里同名那份」当基线：新草稿刚填了分类就改名成某个已存在的名字时，
+// 会被误判成「没有改动」，保存按钮直接是灰的。
+const baseline = reactive({ name: '', type: '未分类', content: '' })
+
+const editorInstance = shallowRef(null)
+const previewHtml = ref('')
+const previewLoading = ref(false)
+const previewError = ref('')
+
+const menu = reactive({ show: false, x: 0, y: 0, item: null })
+const importModal = reactive({ show: false, items: [], type: '' })
+const deleteModal = reactive({ show: false, name: '', overridden: false })
+const leaveModal = reactive({ show: false, name: '', resolve: null })
+
+const viewModes = [
+  { key: 'list', title: '分组列表', icon: listTreeIcon },
+  { key: 'grid', title: '卡片', icon: gridIcon },
 ]
 
-valid_records = []
-for item in raw_records:
-    try:
-        valid_records.append(EventRecord.model_validate(item))
-    except ValidationError as exc:
-        print("校验失败:", item, exc)
+// ───────────────────────── 编辑器 ─────────────────────────
 
-print(valid_records)
-`),
-  buildPythonCellTemplate('API 请求：requests 会话 / 重试', '网络抓取', py`
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+let editor = null
+let model = null
+let featuresDisposable = null
+let themeObserver = null
+let suppressChange = false
+let currentLanguage = ''
+let currentUri = ''
 
-session = requests.Session()
-retry = Retry(total=3, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504])
-session.mount("https://", HTTPAdapter(max_retries=retry))
-session.headers.update({"User-Agent": "GuaxiTemplate/1.0"})
-
-url = "https://api.example.com/items"
-response = session.get(url, params={"page": 1}, timeout=20)
-response.raise_for_status()
-
-payload = response.json()
-print(payload if isinstance(payload, dict) else payload[:3])
-`),
-  buildPythonCellTemplate('HTML 解析：BeautifulSoup 表格提取', '网络抓取', py`
-import pandas as pd
-import requests
-from bs4 import BeautifulSoup
-
-url = "https://example.com"
-html = requests.get(url, timeout=20, headers={"User-Agent": "GuaxiTemplate/1.0"}).text
-soup = BeautifulSoup(html, "html.parser")
-
-rows = []
-for tr in soup.select("table tr"):
-    cells = [cell.get_text(" ", strip=True) for cell in tr.select("th,td")]
-    if cells:
-        rows.append(cells)
-
-df = pd.DataFrame(rows[1:], columns=rows[0] if rows else None)
-df.head()
-`),
-  buildPythonCellTemplate('PDF 文本提取：pypdf', '文档处理', py`
-from pathlib import Path
-from pypdf import PdfReader
-
-pdf_path = Path("data/sample.pdf")
-reader = PdfReader(str(pdf_path))
-
-pages = []
-for index, page in enumerate(reader.pages, start=1):
-    text = page.extract_text() or ""
-    pages.append({"page": index, "text": text})
-
-output_path = Path("output/pdf_text.txt")
-output_path.parent.mkdir(parents=True, exist_ok=True)
-output_path.write_text("\n\n".join(f"## Page {p['page']}\n{p['text']}" for p in pages), encoding="utf-8")
-print(f"提取页数: {len(pages)}, 输出: {output_path.resolve()}")
-`),
-  buildPythonCellTemplate('Word 文档生成：python-docx', '文档处理', py`
-from pathlib import Path
-from docx import Document
-
-doc = Document()
-doc.add_heading("自动生成报告", level=1)
-doc.add_paragraph("这里写报告摘要。")
-
-table = doc.add_table(rows=1, cols=3)
-header = table.rows[0].cells
-header[0].text = "指标"
-header[1].text = "数值"
-header[2].text = "说明"
-
-for metric, value, note in [("样本数", "100", "示例"), ("准确率", "95%", "示例")]:
-    cells = table.add_row().cells
-    cells[0].text = metric
-    cells[1].text = value
-    cells[2].text = note
-
-output_path = Path("output/report.docx")
-output_path.parent.mkdir(parents=True, exist_ok=True)
-doc.save(output_path)
-print(f"Word 报告已保存: {output_path.resolve()}")
-`)
-]
-
-const DEFAULT_TEMPLATES = [
-  {
-    name: '会议纪要（通用）',
-    templateType: '会议',
-    content: '# 📝 会议纪要\n\n## 基本信息\n\n| 项目 | 内容 |\n| --- | --- |\n| 会议主题 |  |\n| 时间 |  |\n| 地点/会议链接 |  |\n| 主持人 |  |\n| 记录人 |  |\n| 参会人员 |  |\n| 缺席人员 |  |\n\n---\n\n## 会议目标\n\n- 目标 1：\n- 目标 2：\n\n## 议程\n\n1. \n2. \n3. \n\n---\n\n## 讨论纪要（按议题）\n\n### 议题 1：\n\n- 背景：\n- 讨论要点：\n  - \n- 结论/共识：\n- 未决问题：\n  - \n\n### 议题 2：\n\n- 背景：\n- 讨论要点：\n  - \n- 结论/共识：\n- 未决问题：\n  - \n\n---\n\n## 决议（Decisions）\n\n| 序号 | 决议 | 影响范围 | 生效时间 | 备注 |\n| --- | --- | --- | --- | --- |\n| 1 |  |  |  |  |\n\n## 行动项（Action Items）\n\n| 序号 | 事项 | 负责人 | 截止日期 | 状态 | 关联议题 |\n| --- | --- | --- | --- | --- | --- |\n| 1 |  |  |  | 待开始 |  |\n\n## 风险与依赖\n\n- 风险：\n- 依赖：\n\n## 附录\n\n- 资料链接：\n- 截图/录屏：\n'
-  },
-  {
-    name: '日报',
-    templateType: '工作',
-    content: '# 🗓️ 日报\n\n## 基本信息\n\n- 日期：\n- 负责人：\n- 所属项目/团队：\n\n---\n\n## 今日完成（Done）\n\n- [ ] 事项 1（结果/产出：）\n- [ ] 事项 2（结果/产出：）\n\n## 今日产出物\n\n| 类型 | 链接/路径 | 说明 |\n| --- | --- | --- |\n| PR/提交 |  |  |\n| 文档 |  |  |\n| 会议纪要 |  |  |\n\n## 进展与数据（可选）\n\n- 进度：%\n- 关键指标：\n\n---\n\n## 问题/风险（Blockers & Risks）\n\n| 问题/风险 | 影响 | 当前状态 | 需要谁协助 |\n| --- | --- | --- | --- |\n|  |  |  |  |\n\n## 明日计划（Next）\n\n- [ ] 事项 1\n- [ ] 事项 2\n\n## 备注\n\n- \n'
-  },
-  {
-    name: '周报',
-    templateType: '工作',
-    content: '# 📆 周报\n\n## 基本信息\n\n- 周期：\n- 负责人：\n- 项目/团队：\n\n---\n\n## 本周概览\n\n- 本周重点：\n- 总体进度：\n\n## 本周产出\n\n| 类别 | 条目 | 说明 |\n| --- | --- | --- |\n| 功能 |  |  |\n| 修复 |  |  |\n| 性能/体验 |  |  |\n| 文档/流程 |  |  |\n\n## 关键数据（可选）\n\n| 指标 | 本周 | 上周 | 环比 | 备注 |\n| --- | --- | --- | --- | --- |\n|  |  |  |  |  |\n\n---\n\n## 问题与风险\n\n- 问题：\n- 风险：\n- 复盘点：\n\n## 下周计划\n\n- [ ] 事项 1（交付物：）\n- [ ] 事项 2（交付物：）\n\n## 需要协助\n\n| 事项 | 需要谁 | 希望时间 | 说明 |\n| --- | --- | --- | --- |\n|  |  |  |  |\n'
-  },
-  {
-    name: 'TODO（清单）',
-    templateType: 'TODO',
-    content: '# ✅ TODO\n\n## 今日（Today）\n\n- [ ] 最重要的一件事：\n- [ ] \n- [ ] \n\n## 本周（This Week）\n\n- [ ] \n- [ ] \n\n## 待办池（Backlog）\n\n- [ ] \n- [ ] \n\n---\n\n## 进行中（WIP）\n\n| 事项 | 优先级 | 预计完成 | 状态 | 备注 |\n| --- | --- | --- | --- | --- |\n|  | P1 |  | 进行中 |  |\n\n## 已完成（Done）\n\n- [x] \n'
-  },
-  {
-    name: '阅读笔记',
-    templateType: '学习',
-    content: '# 📚 阅读笔记\n\n## 书目信息\n\n| 项目 | 内容 |\n| --- | --- |\n| 书/文章 |  |\n| 作者 |  |\n| 来源/链接 |  |\n| 阅读时间 |  |\n| 主题标签 |  |\n\n---\n\n## 一句话总结\n\n> \n\n## 摘要（Summary）\n\n- \n\n## 核心观点（Key Points）\n\n1. \n2. \n3. \n\n## 证据与例子（Evidence）\n\n- 例子 1：\n- 例子 2：\n\n## 金句/引用（Quotes）\n\n> \n\n## 我的思考（Thoughts）\n\n- 同意的点：\n- 不同意的点：\n- 可以迁移到哪里：\n\n## 可行动项（Actions）\n\n- [ ] \n- [ ] \n\n## 相关链接\n\n- \n'
-  },
-  {
-    name: '学习笔记（课程/视频）',
-    templateType: '学习',
-    content: '# 🎓 学习笔记\n\n## 基本信息\n\n- 主题：\n- 来源：\n- 学习时间：\n- 讲师/作者：\n- 关联项目：\n\n---\n\n## 学习目标\n\n- 目标 1：\n- 目标 2：\n\n## 知识点结构\n\n- 概念：\n- 方法：\n- 工具：\n- 注意事项：\n\n## 关键结论\n\n1. \n2. \n\n## 例子 / 代码\n\n```\n\n```\n\n## 常见坑\n\n- \n\n## 疑问与待查\n\n- [ ] \n\n## 复盘\n\n- 今天最大的收获：\n- 下一步练习：\n'
-  },
-  {
-    name: '项目需求（PRD 简版）',
-    templateType: '项目',
-    content: '# 📌 需求说明（PRD 简版）\n\n## 基本信息\n\n| 项目 | 内容 |\n| --- | --- |\n| 需求名称 |  |\n| 负责人 |  |\n| 关联项目 |  |\n| 版本/里程碑 |  |\n| 优先级 | P0 / P1 / P2 |\n| 评审时间 |  |\n\n---\n\n## 背景与问题\n\n- 现状：\n- 痛点：\n- 为什么现在做：\n\n## 目标（Goals）\n\n- 业务目标：\n- 用户目标：\n- 成功指标（可量化）：\n\n## 非目标（Non-goals）\n\n- 本期不做：\n\n---\n\n## 用户画像与场景\n\n- 用户 A：\n- 场景：\n\n## 方案概述\n\n- 方案一：\n- 方案二：\n- 选型结论：\n\n## 需求范围\n\n### In Scope\n\n- \n\n### Out of Scope\n\n- \n\n---\n\n## 功能列表\n\n| 模块 | 功能点 | 描述 | 优先级 | 备注 |\n| --- | --- | --- | --- | --- |\n|  |  |  | P1 |  |\n\n## 交互/原型\n\n- 原型链接：\n- 关键页面说明：\n\n## 数据与埋点（可选）\n\n| 事件 | 触发时机 | 属性 | 用途 |\n| --- | --- | --- | --- |\n|  |  |  |  |\n\n## 风险与依赖\n\n- 风险：\n- 依赖：\n\n## 验收标准\n\n- [ ] 功能验收：\n- [ ] 性能/稳定性：\n- [ ] 兼容性：\n- [ ] 回滚预案：\n'
-  },
-  {
-    name: 'Bug 报告',
-    templateType: '项目',
-    content: '# 🐞 Bug 报告\n\n## 基本信息\n\n- 标题：\n- 严重程度：致命 / 高 / 中 / 低\n- 优先级：P0 / P1 / P2\n- 影响范围：\n- 发现版本/分支：\n- 环境：系统/浏览器/设备/网络\n\n---\n\n## 复现步骤\n\n1. \n2. \n3. \n\n## 实际结果（Actual）\n\n- \n\n## 期望结果（Expected）\n\n- \n\n---\n\n## 复现概率\n\n- 必现 / 高概率 / 低概率 / 偶现\n\n## 影响评估\n\n- 用户影响：\n- 业务影响：\n- 是否可绕过：是 / 否（绕过方式：）\n\n## 日志/截图/录屏\n\n- \n\n## 初步定位（可选）\n\n- 可疑模块：\n- 最近变更：\n- 相关提交/PR：\n\n## 修复建议（可选）\n\n- \n\n## 验证要点\n\n- [ ] 主路径\n- [ ] 边界条件\n- [ ] 回归范围\n'
-  },
-  {
-    name: '日记',
-    templateType: '日记',
-    content: '# 🌙 日记\n\n## 今日信息\n\n- 日期：\n- 心情：\n- 天气：\n- 关键词：\n\n---\n\n## 记录\n\n### 今天发生了什么\n\n- \n\n### 今天我做得好的地方\n\n- \n\n### 今天的困扰与应对\n\n- 困扰：\n- 我采取的行动：\n- 结果：\n\n---\n\n## 反思与成长\n\n- 我学到了什么：\n- 下一次我想怎么做：\n\n## 感谢\n\n- \n\n## 明日计划\n\n- [ ] \n'
-  },
-  ...PYTHON_CELL_TEMPLATES
-]
-
-const TEMPLATE_TYPE_ORDER = [
-  '会议',
-  '工作',
-  'TODO',
-  '学习',
-  '项目',
-  '日记',
-  `${PYTHON_CELL_TEMPLATE_GROUP} / 数据读取`,
-  `${PYTHON_CELL_TEMPLATE_GROUP} / 数据清洗`,
-  `${PYTHON_CELL_TEMPLATE_GROUP} / 数据整理`,
-  `${PYTHON_CELL_TEMPLATE_GROUP} / 数据处理`,
-  `${PYTHON_CELL_TEMPLATE_GROUP} / 数值计算`,
-  `${PYTHON_CELL_TEMPLATE_GROUP} / 统计分析`,
-  `${PYTHON_CELL_TEMPLATE_GROUP} / 机器学习`,
-  `${PYTHON_CELL_TEMPLATE_GROUP} / 绘图`,
-  `${PYTHON_CELL_TEMPLATE_GROUP} / 数据导出`,
-  `${PYTHON_CELL_TEMPLATE_GROUP} / 网络抓取`,
-  `${PYTHON_CELL_TEMPLATE_GROUP} / 文本处理`,
-  `${PYTHON_CELL_TEMPLATE_GROUP} / 图片视频处理`,
-  `${PYTHON_CELL_TEMPLATE_GROUP} / 二进制文件处理`,
-  `${PYTHON_CELL_TEMPLATE_GROUP} / 文件处理`,
-  `${PYTHON_CELL_TEMPLATE_GROUP} / 文档处理`,
-  `${PYTHON_CELL_TEMPLATE_GROUP} / 办公自动化`,
-  `${PYTHON_CELL_TEMPLATE_GROUP} / 配置与日志`,
-  `${PYTHON_CELL_TEMPLATE_GROUP} / 性能并发`,
-  `${PYTHON_CELL_TEMPLATE_GROUP} / 自动化脚本`,
-  `${PYTHON_CELL_TEMPLATE_GROUP} / 数据校验`,
-  '未分类'
-]
-
-const builtInTemplateCount = DEFAULT_TEMPLATES.length
-const userTemplateCount = computed(() => (templates.value || []).length)
-const templateStorageStatus = computed(() => templateRepoPath.value ? '模板库已连接' : '仅显示内置模板')
-
-const defineTemplateEditorThemes = () => {
-  // 设计说明：模板管理器是独立窗口时不一定会先加载主编辑器，因此这里注册一份轻量主题兜底。
-  // 字体与字号继续使用主编辑器同款配置，颜色仅做面板级适配，避免 Monaco 回落到刺眼默认背景。
+const defineEditorThemes = () => {
+  // 模板窗口是独立 webview，不一定会先加载主编辑器；这里注册一份与主编辑器同色板的主题兜底。
   monaco.editor.defineTheme('guaxi-template-light', {
     base: 'vs',
     inherit: true,
-    // 语法色板复用主编辑器那一份：设置页切换「代码配色主题」后，
-    // 这里通过 attachSharedEditorFeatures 的 ensureThemes 重注册，颜色跟着变。
     rules: GUAXI_MONACO_THEME_RULES.light,
     semanticHighlighting: true,
     semanticTokenColors: GUAXI_MONACO_SEMANTIC_TOKEN_COLORS.light,
@@ -1091,829 +779,2635 @@ const defineTemplateEditorThemes = () => {
   })
 }
 
-const getTemplateEditorTheme = () => {
-  const theme = document.documentElement?.getAttribute('data-guaxi-theme') || 'light'
-  return theme === 'dark' ? 'guaxi-template-dark' : 'guaxi-template-light'
-}
+const themeName = () =>
+  document.documentElement?.getAttribute('data-guaxi-theme') === 'dark'
+    ? 'guaxi-template-dark'
+    : 'guaxi-template-light'
 
-const clampSidebarWidth = (value) => {
-  const mainWidth = mainRef.value instanceof HTMLElement ? mainRef.value.clientWidth : window.innerWidth
-  const dynamicMax = Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, mainWidth - 420))
-  return Math.round(Math.max(SIDEBAR_MIN_WIDTH, Math.min(dynamicMax, Number(value) || 360)))
-}
-
-const loadSidebarWidth = () => {
-  try {
-    const saved = Number(localStorage.getItem(TEMPLATE_MANAGER_SIDEBAR_WIDTH_KEY) || '')
-    if (Number.isFinite(saved) && saved > 0) {
-      sidebarWidth.value = clampSidebarWidth(saved)
-    }
-  } catch (error) {
-    logger.debug('[TemplateManager] load sidebar width failed', error)
-  }
-}
-
-const persistSidebarWidth = () => {
-  try {
-    localStorage.setItem(TEMPLATE_MANAGER_SIDEBAR_WIDTH_KEY, String(sidebarWidth.value))
-  } catch (error) {
-    logger.debug('[TemplateManager] persist sidebar width failed', error)
-  }
-}
-
-const handleSidebarResizeMove = (event) => {
-  if (!sidebarResizing.value) return
-  const delta = Number(event.clientX || 0) - sidebarResizeStartX
-  sidebarWidth.value = clampSidebarWidth(sidebarResizeStartWidth + delta)
-  contentEditor?.layout?.()
-}
-
-const stopSidebarResize = () => {
-  if (!sidebarResizing.value) return
-  sidebarResizing.value = false
-  document.body.style.cursor = ''
-  document.body.style.userSelect = ''
-  window.removeEventListener('pointermove', handleSidebarResizeMove)
-  window.removeEventListener('pointerup', stopSidebarResize)
-  window.removeEventListener('pointercancel', stopSidebarResize)
-  persistSidebarWidth()
-  contentEditor?.layout?.()
-  logger.info('[TemplateManager] sidebar resize finished', {
-    width: sidebarWidth.value,
-  })
-}
-
-const startSidebarResize = (event) => {
-  sidebarResizing.value = true
-  sidebarResizeStartX = Number(event.clientX || 0)
-  sidebarResizeStartWidth = sidebarWidth.value
-  document.body.style.cursor = 'col-resize'
-  document.body.style.userSelect = 'none'
-  window.addEventListener('pointermove', handleSidebarResizeMove)
-  window.addEventListener('pointerup', stopSidebarResize)
-  window.addEventListener('pointercancel', stopSidebarResize)
-  event.preventDefault?.()
-  logger.info('[TemplateManager] sidebar resize started', {
-    width: sidebarWidth.value,
-  })
-}
-
-const applyTemplateEditorTheme = () => {
-  if (!contentEditor) return
-  monaco.editor.setTheme(getTemplateEditorTheme())
-}
-
-const setEditorContent = (value) => {
-  if (!contentModel) return
-  const next = String(value || '')
-  if (contentModel.getValue() === next) return
-  suppressEditorChange = true
-  contentModel.setValue(next)
-  suppressEditorChange = false
-}
-
-// 模板内容不是磁盘文件，但 LSP 需要 file:// 文档，而且扩展名决定语言服务器是否接管
-// （pyright 只分析 .py，markdown 服务只分析 .md），所以按语言各用一个虚拟文件。
-const buildTemplateVirtualUri = (language) => {
+// LSP 只认真实后缀：pyright 只分析 .py，markdown 服务只分析 .md。
+const virtualUriOf = (language) => {
   const ext = language === 'python' ? 'py' : 'md'
-  return monaco.Uri.parse(`file:///guaxi-template-manager/template-${Date.now()}.${ext}`)
+  const slug = encodeURIComponent(selectedName.value || draft.name || 'draft')
+  return monaco.Uri.parse(`file:///guaxi-template-manager/${slug}-${Date.now()}.${ext}`)
 }
 
-// Python Cell 模板正文是纯 Python，若按 markdown 打开就永远拿不到 Python 语义补全。
-const PYTHON_TEMPLATE_TYPE_RE = /python\s*cell|python\s*模板|^python$/i
-
-const resolveTemplateLanguage = () => {
-  const type = String(editType.value || '').trim()
-  const name = String(editName.value || selectedName.value || '').trim()
-  return (PYTHON_TEMPLATE_TYPE_RE.test(type) || PYTHON_TEMPLATE_TYPE_RE.test(name)) ? 'python' : 'markdown'
-}
-
-let currentEditorLanguage = 'markdown'
-
-const handleContentModelChange = () => {
-  if (suppressEditorChange) return
-  editContent.value = contentModel?.getValue() || ''
-}
-
-const createTemplateModel = (language, content) => {
-  const nextModel = monaco.editor.createModel(
-    String(content || ''),
-    language,
-    buildTemplateVirtualUri(language)
-  )
-  nextModel.updateOptions({ tabSize: language === 'python' ? 4 : 2, insertSpaces: true })
-  nextModel.onDidChangeContent(handleContentModelChange)
-  return nextModel
-}
-
-const applyTemplateEditorLanguage = (reason = 'manual') => {
-  if (!contentEditor || !contentModel) return
-  const next = resolveTemplateLanguage()
-  if (next === currentEditorLanguage) return
-
-  const prev = currentEditorLanguage
-  const content = contentModel.getValue()
-  const previousModel = contentModel
-  contentModel = createTemplateModel(next, content)
-  contentEditor.setModel(contentModel)
-  previousModel?.dispose?.()
-  currentEditorLanguage = next
-
-  // 补全提供方按语言注册；换语言后为目标语言重新起一次 LSP，Python 模板才拿得到语义补全。
-  void startSharedLsp(contentEditor, next, contentModel.uri.toString(), {
-    requestSource: 'template-manager',
-    documentUri: contentModel.uri.toString(),
+const createModel = (language, content) => {
+  const uri = virtualUriOf(language)
+  const next = monaco.editor.createModel(String(content || ''), language, uri)
+  next.updateOptions({ tabSize: language === 'python' ? 4 : 2, insertSpaces: true })
+  next.onDidChangeContent(() => {
+    if (suppressChange) return
+    draft.content = next.getValue()
   })
-  logger.info('[TemplateManager] editor language switched', { from: prev, to: next, reason })
+  currentUri = uri.toString()
+  return next
 }
 
-const initContentEditor = () => {
-  if (contentEditor || !contentEditorContainer.value) return
+const applyLanguage = (reason = 'manual') => {
+  if (!editor || !model) return
+  const next = templateKindOf({ name: draft.name, type: draft.type })
+  if (next === currentLanguage) return
+  const content = model.getValue()
+  const previous = model
+  model = createModel(next, content)
+  editor.setModel(model)
+  previous?.dispose?.()
+  currentLanguage = next
+  void startSharedLsp(editor, next, currentUri, {
+    requestSource: 'template-manager',
+    documentUri: currentUri,
+  })
+  logger.info('[TemplateManager] language switched', { to: next, reason })
+}
 
-  defineTemplateEditorThemes()
+const setEditorValue = (value) => {
+  if (!model) return
+  const next = String(value || '')
+  if (model.getValue() === next) return
+  suppressChange = true
+  model.setValue(next)
+  suppressChange = false
+}
+
+const mountEditor = () => {
+  if (editor || !editorContainer.value) return
+  defineEditorThemes()
   const display = resolveSharedEditorDisplayOptions()
-  const initialLanguage = resolveTemplateLanguage()
-  contentModel = createTemplateModel(initialLanguage, editContent.value)
-  currentEditorLanguage = initialLanguage
-  contentEditor = monaco.editor.create(contentEditorContainer.value, {
-    model: contentModel,
+  currentLanguage = templateKindOf({ name: draft.name, type: draft.type })
+  model = createModel(currentLanguage, draft.content)
+  editor = monaco.editor.create(editorContainer.value, {
+    model,
     automaticLayout: true,
-    // 右键菜单由 editorFeatures 提供，关掉 Monaco 自带菜单避免双弹。
     contextmenu: false,
     minimap: display.minimap,
     scrollBeyondLastLine: false,
     wordWrap: 'on',
     lineNumbers: 'on',
     renderWhitespace: 'selection',
-    tabSize: 2,
-    insertSpaces: true,
     fontFamily: display.fontFamily,
     fontSize: display.fontSize,
     lineHeight: display.lineHeight,
-    readOnly: loading.value,
-    theme: getTemplateEditorTheme(),
+    padding: { top: 12, bottom: 24 },
+    theme: themeName(),
   })
-
-  // 与主编辑器一致的基础能力：Markdown 片段、右键菜单、格式化、LSP、主题同步。
   featuresDisposable = attachSharedEditorFeatures({
     monaco,
-    editor: contentEditor,
-    language: initialLanguage,
-    filePath: contentModel.uri.toString(),
+    editor,
+    language: currentLanguage,
+    filePath: currentUri,
     enableLsp: true,
-    lspDocumentUri: contentModel.uri.toString(),
+    lspDocumentUri: currentUri,
     lspRequestSource: 'template-manager',
-    ensureThemes: defineTemplateEditorThemes,
+    ensureThemes: defineEditorThemes,
     resolveThemeName: (dark) => (dark ? 'guaxi-template-dark' : 'guaxi-template-light'),
   })
-  contentEditorInstance.value = contentEditor
+  editorInstance.value = editor
 
-  themeObserver = new MutationObserver(() => applyTemplateEditorTheme())
-  themeObserver.observe(document.documentElement, {
-    attributes: true,
-    attributeFilter: ['data-guaxi-theme'],
+  themeObserver = new MutationObserver(() => {
+    try {
+      monaco.editor.setTheme(themeName())
+    } catch (error) {
+      logger.debug('[TemplateManager] theme reapply failed', { error })
+    }
+    // 预览的代码块配色是渲染期注入的，主题切换后要重跑一次（有则重跑）。
+    if (docMode.value === 'preview') void renderPreview()
   })
-
-  logger.info('[TemplateManager] Monaco editor initialized', {
-    fontFamily: TEMPLATE_EDITOR_FONT_FAMILY,
-    fontSize: TEMPLATE_EDITOR_FONT_SIZE,
-  })
+  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-guaxi-theme'] })
 }
 
-const getTemplateTypeRank = (type) => {
-  const index = TEMPLATE_TYPE_ORDER.indexOf(String(type || ''))
-  return index >= 0 ? index : TEMPLATE_TYPE_ORDER.length
+const unmountEditor = () => {
+  featuresDisposable?.()
+  featuresDisposable = null
+  themeObserver?.disconnect?.()
+  themeObserver = null
+  editorInstance.value = null
+  editor?.dispose?.()
+  editor = null
+  model?.dispose?.()
+  model = null
+  currentUri = ''
+  currentLanguage = ''
 }
 
-const hasUserTemplate = (name) => {
-  const n = String(name || '').trim()
-  if (!n) return false
-  return (templates.value || []).some(t => String(t?.name || '').trim() === n)
-}
+// ───────────────────────── 派生数据 ─────────────────────────
 
-const getBuiltInTemplate = (name) => {
-  const n = String(name || '').trim()
-  if (!n) return null
-  return DEFAULT_TEMPLATES.find(t => String(t?.name || '').trim() === n) || null
-}
+const canMutate = computed(() => Boolean(repoPath.value))
 
-const refresh = async () => {
-  try {
-    loading.value = true
-    logger.info('[TemplateManager] refresh requested')
-    const [path, list] = await Promise.all([
-      invoke('get_template_repo_path'),
-      invoke('list_templates')
-    ])
-    templateRepoPath.value = typeof path === 'string' ? path : ''
-    templates.value = Array.isArray(list) ? list : []
-    logger.info('[TemplateManager] refresh finished', {
-      pathConfigured: !!templateRepoPath.value,
-      builtinCount: builtInTemplateCount,
-      userCount: templates.value.length,
-    })
-  } catch (e) {
-    logger.error('加载模板失败:', e)
-    message.error('加载模板失败')
-  } finally {
-    loading.value = false
+const merged = computed(() => mergeTemplates(DEFAULT_TEMPLATES, templates.value, contentCache.value))
+
+const summary = computed(() => summarizeTemplates(merged.value))
+
+const familyChips = computed(() => summarizeFamilies(merged.value))
+
+const searchActive = computed(() => search.value.trim().length > 0)
+
+const visibleTemplates = computed(() => {
+  let list = merged.value
+  if (familyFilter.value !== 'all') {
+    list = list.filter((item) => templateFamilyOf(item.type) === familyFilter.value)
   }
-}
-
-const mergedTemplates = computed(() => {
-  const byName = new Map()
-
-  for (const t of DEFAULT_TEMPLATES) {
-    const name = String(t?.name || '').trim()
-    if (!name) continue
-    const tp = String(t?.templateType || '未分类').trim() || '未分类'
-    byName.set(name, {
-      name,
-      template_type: tp,
-      builtin: true,
-    })
-  }
-
-  for (const t of templates.value || []) {
-    const name = String(t?.name || '').trim()
-    if (!name) continue
-    const tp = String(t?.template_type || '未分类').trim() || '未分类'
-    byName.set(name, {
-      name,
-      template_type: tp,
-      builtin: false,
-    })
-  }
-
-  const q = filter.value.trim().toLowerCase()
-  let list = Array.from(byName.values())
-  if (q) {
-    list = list.filter(t => {
-      const n = String(t?.name || '').toLowerCase()
-      const tp = String(t?.template_type || '').toLowerCase()
-      return n.includes(q) || tp.includes(q)
-    })
-  }
-
   return list
 })
 
-const groupedTemplates = computed(() => {
-  const map = new Map()
-  for (const t of mergedTemplates.value) {
-    const tp = String(t?.template_type || '未分类') || '未分类'
-    if (!map.has(tp)) map.set(tp, [])
-    map.get(tp).push(t)
+const searchResults = computed(() => {
+  if (!searchActive.value) return []
+  const query = search.value.trim()
+  const list = visibleTemplates.value
+  if (!searchContent.value) {
+    return searchTemplates(list.map((item) => ({ ...item, content: '' })), query)
   }
-  return Array.from(map.entries()).map(([type, items]) => ({
-    type,
-    items: items.slice().sort((a, b) => String(a.name).localeCompare(String(b.name)))
-  })).sort((a, b) => {
-    const rankDiff = getTemplateTypeRank(a.type) - getTemplateTypeRank(b.type)
-    if (rankDiff !== 0) return rankDiff
-    return String(a.type).localeCompare(String(b.type))
-  })
+  return searchTemplates(list, query)
 })
 
-const templateCategoryCount = computed(() => groupedTemplates.value.length)
+const groups = computed(() => {
+  if (searchActive.value) {
+    // 搜索结果自带片段，不再需要分类分组；用一个虚拟组包住以便统一渲染。
+    return searchResults.value.length ? [{ family: '搜索结果', items: [] }] : []
+  }
+  return groupTemplatesByFamily(visibleTemplates.value, TEMPLATE_TYPE_ORDER)
+})
 
-const newTemplate = () => {
-  logger.info('[TemplateManager] create draft template')
-  selectedName.value = ''
-  editName.value = ''
-  editType.value = '未分类'
-  editContent.value = ''
+const flatTemplates = computed(() => visibleTemplates.value.slice())
+
+const visibleCount = computed(() => (searchActive.value ? searchResults.value.length : visibleTemplates.value.length))
+
+const emptyTitle = computed(() => {
+  if (searchActive.value) return '没有匹配的模板'
+  if (familyFilter.value !== 'all') return '这个分类下还没有模板'
+  return '模板库还是空的'
+})
+
+const emptyHint = computed(() => {
+  if (searchActive.value) return '换个关键词，或只在标题里找。正文命中需要打开「含正文」。'
+  if (!canMutate.value) return '模板库目录不可用，暂时只能使用内置模板。'
+  return '新建一份，或者把 Markdown 文件拖进来。'
+})
+
+const stats = computed(() => textStatsOf(draft.content))
+
+const draftKind = computed(() => templateKindOf({ name: draft.name, type: draft.type }))
+
+const draftItemName = computed(() => draft.originName || draft.name)
+
+// draft 是 reactive 对象，恒为真；用它判断「有没有打开文档」会永远成立。
+// 新建的空草稿也必须有名字，所以另用一个显式开关。
+const hasDraft = ref(false)
+
+const setBaseline = (item) => {
+  baseline.name = item ? item.name : ''
+  baseline.type = item ? normalizeTemplateType(item.type) : '未分类'
+  baseline.content = item ? String(item.content || '') : ''
+}
+
+const dirty = computed(() => {
+  // 空草稿（既没名字也没正文）不算改动，否则刚点「新建」就弹离开确认。
+  if (!draft.name && !draft.content.trim()) return false
+  return (
+    String(draft.name || '') !== baseline.name ||
+    normalizeTemplateType(draft.type) !== baseline.type ||
+    String(draft.content || '') !== baseline.content
+  )
+})
+
+const dirtyName = computed(() => (dirty.value ? draft.originName || draft.name : ''))
+
+const typeSuggestions = computed(() => {
+  const set = new Set(TEMPLATE_TYPE_ORDER)
+  for (const item of merged.value) {
+    const type = normalizeTemplateType(item.type)
+    set.add(type)
+    const family = templateFamilyOf(type)
+    if (family) set.add(family)
+  }
+  return [...set]
+})
+
+const emptyStageTitle = computed(() => (draft.builtin ? '内置模板可以直接改造' : '从一段正文开始'))
+const emptyStageHint = computed(() =>
+  draft.builtin
+    ? '改动后保存会生成一份同名的自定义模板，内置那份作为退路一直留着。'
+    : '写操作步骤、检查清单或代码骨架，插入时会原样送到编辑器光标处。'
+)
+
+const repoTitle = computed(() =>
+  repoPath.value ? `${repoPath.value}\n点击在文件管理器中打开` : '模板库目录不可用，点击查看设置提示'
+)
+
+const mainStyle = computed(() => ({
+  '--tm-inspector-width': `${inspectorViewWidth.value || inspectorWidth.value}px`,
+}))
+
+const isDirty = (name) => {
+  if (!name) return false
+  return Boolean(dirty.value && (draft.originName || draft.name) === name)
+}
+
+const menuOptions = computed(() => {
+  const item = menu.item
+  if (!item) return []
+  const options = [
+    { label: '插入到编辑器', key: 'insert' },
+    { label: '复制正文', key: 'copy-content' },
+    { type: 'divider', key: 'd1' },
+    { label: '编辑', key: 'edit' },
+    { label: '复制为新模板', key: 'duplicate' },
+  ]
+  if (item.overriddenBuiltin) {
+    options.push({ type: 'divider', key: 'd2' })
+    options.push({ label: '恢复内置版本', key: 'restore' })
+  }
+  options.push({ type: 'divider', key: 'd3' })
+  options.push({ label: item.builtin ? '删除（内置不可删）' : '删除', key: 'delete', disabled: item.builtin })
+  return options
+})
+
+// ───────────────────────── 偏好 ─────────────────────────
+
+const clampInspectorWidth = (width) => {
+  const viewport = window.innerWidth || 0
+  const available = viewport > 0 ? Math.max(INSPECTOR_MIN, viewport - 420) : INSPECTOR_MAX
+  return Math.max(INSPECTOR_MIN, Math.min(INSPECTOR_MAX, available, Math.round(Number(width) || inspectorWidth.value)))
+}
+
+const loadPrefs = () => {
+  try {
+    const raw = localStorage.getItem(PREFS_KEY)
+    if (raw) {
+      const value = JSON.parse(raw)
+      if (['list', 'grid'].includes(value?.viewMode)) viewMode.value = value.viewMode
+      if (['edit', 'preview'].includes(value?.docMode)) docMode.value = value.docMode
+      if (typeof value?.searchContent === 'boolean') searchContent.value = value.searchContent
+      if (Number(value?.inspectorWidth) > 0) inspectorWidth.value = Math.round(Number(value.inspectorWidth))
+      if (typeof value?.inspectorCollapsed === 'boolean') inspectorCollapsed.value = value.inspectorCollapsed
+      if (typeof value?.selectedName === 'string') selectedName.value = value.selectedName
+      if (typeof value?.familyFilter === 'string') familyFilter.value = value.familyFilter
+    }
+  } catch (error) {
+    logger.debug('[TemplateManager] read prefs failed', { error })
+  }
+  try {
+    const raw = localStorage.getItem(COLLAPSED_KEY)
+    const list = raw ? JSON.parse(raw) : []
+    collapsedGroups.value = new Set(Array.isArray(list) ? list.filter(Boolean) : [])
+  } catch {
+    collapsedGroups.value = new Set()
+  }
+  inspectorViewWidth.value = clampInspectorWidth(inspectorWidth.value)
+}
+
+let savePrefsTimer = null
+const savePrefs = () => {
+  clearTimeout(savePrefsTimer)
+  savePrefsTimer = setTimeout(() => {
+    try {
+      localStorage.setItem(
+        PREFS_KEY,
+        JSON.stringify({
+          viewMode: viewMode.value,
+          docMode: docMode.value,
+          searchContent: searchContent.value,
+          inspectorWidth: inspectorWidth.value,
+          inspectorCollapsed: inspectorCollapsed.value,
+          selectedName: selectedName.value || '',
+          familyFilter: familyFilter.value,
+        })
+      )
+      localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...collapsedGroups.value]))
+    } catch {}
+  }, 400)
+}
+
+// ───────────────────────── 加载 ─────────────────────────
+
+const errorText = (error) => {
+  const raw = error?.message ?? (typeof error?.toString === 'function' ? error.toString() : String(error))
+  return String(raw || '').trim() || '操作失败'
+}
+
+/**
+ * 只把界面需要的名称/分类拉回来；正文按需读。
+ *
+ * 搜索正文与卡片摘要都依赖正文，所以加载后会在空闲时把自定义模板正文补齐，
+ * 但不阻塞首屏——先让用户看到列表。
+ */
+const refresh = async ({ reason = 'manual', preserveDraft = true } = {}) => {
+  loading.value = true
+  loadError.value = ''
+  try {
+    const [path, list] = await Promise.all([
+      invoke('get_template_repo_path').catch((error) => {
+        logger.warn('[TemplateManager] read repo path failed', { error })
+        return ''
+      }),
+      invoke('list_templates'),
+    ])
+    repoPath.value = typeof path === 'string' ? path : ''
+    const items = Array.isArray(list) ? list : []
+    truncated.value = items.length > MAX_TEMPLATES
+    templates.value = items.slice(0, MAX_TEMPLATES)
+
+    // 缓存里的正文仍有效，只补新出现、还没读过的。
+    await hydrateContents()
+
+    if (preserveDraft && draft.name && dirty.value) {
+      // 刷新不该踩掉用户正在写的东西；只是把它的「原始版本」指针尽量保持有效。
+      logger.info('[TemplateManager] refresh kept dirty draft', { name: draft.name })
+    } else if (preserveDraft && draft.originName) {
+      const stillThere = merged.value.find((item) => item.name === draft.originName)
+      if (stillThere) {
+        loadIntoDraft(stillThere)
+      }
+    } else if (!draft.name && selectedName.value) {
+      const target = merged.value.find((item) => item.name === selectedName.value)
+      if (target) loadIntoDraft(target)
+    }
+    if (selectedName.value && !merged.value.some((item) => item.name === selectedName.value)) {
+      selectedName.value = ''
+    }
+    logger.info('[TemplateManager] templates loaded', {
+      reason,
+      user: templates.value.length,
+      builtin: DEFAULT_TEMPLATES.length,
+    })
+  } catch (error) {
+    const detail = errorText(error)
+    loadError.value = detail
+    repoPath.value = ''
+    logger.error('[TemplateManager] load templates failed', error)
+  } finally {
+    loading.value = false
+  }
+}
+
+const hydrateContents = async () => {
+  const nextCache = new Map(contentCache.value)
+  const nextLoaded = new Set(contentLoaded.value)
+  const pending = templates.value
+    .map((item) => String(item?.name || '').trim())
+    .filter((name) => name && !nextLoaded.has(name))
+
+  // 并发读，但限个宽度：几十份模板一起 invoke 会把窗口的 IPC 队列堵住。
+  const queue = pending.slice()
+  const workerCount = Math.min(6, queue.length)
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (queue.length) {
+        const name = queue.shift()
+        try {
+          const data = await invoke('read_template', { name })
+          nextCache.set(name, String(data?.content ?? ''))
+          nextLoaded.add(name)
+        } catch (error) {
+          // 读失败就当作空内容，不阻断其它模板；名字仍在列表里，点开时会再试一次。
+          logger.warn('[TemplateManager] read template content failed', { name, error: errorText(error) })
+        }
+      }
+    })
+  )
+  // 已被删掉的模板不要一直占着缓存。
+  const alive = new Set(templates.value.map((item) => String(item?.name || '').trim()))
+  for (const name of [...nextCache.keys()]) {
+    if (!alive.has(name)) nextCache.delete(name)
+  }
+  for (const name of [...nextLoaded]) {
+    if (!alive.has(name)) nextLoaded.delete(name)
+  }
+  contentCache.value = nextCache
+  contentLoaded.value = nextLoaded
+}
+
+// ───────────────────────── 选中与草稿 ─────────────────────────
+
+const loadIntoDraft = (item) => {
+  draft.originName = item.name
+  draft.name = item.name
+  draft.type = normalizeTemplateType(item.type)
+  draft.builtin = Boolean(item.builtin)
+  draft.isUser = !item.builtin
+  draft.overriddenBuiltin = Boolean(item.overriddenBuiltin)
+  draft.content = String(item.content || '')
+  setBaseline(item)
+  selectedName.value = item.name
+  hasDraft.value = true
+  setEditorValue(draft.content)
+  applyLanguage('load')
+  savePrefs()
+}
+
+/** 切走之前先处理未保存改动：返回 false 表示用户取消了这次切换。 */
+const guardDirty = async () => {
+  if (!dirty.value) return true
+  return new Promise((resolve) => {
+    leaveModal.name = draft.originName || draft.name || '当前模板'
+    leaveModal.resolve = resolve
+    leaveModal.show = true
+  })
+}
+
+const resolveLeave = async (action) => {
+  const resolve = leaveModal.resolve
+  leaveModal.resolve = null
+  leaveModal.show = false
+  if (!resolve) return
+  if (action === 'save') {
+    const ok = await saveDraft()
+    resolve(Boolean(ok))
+    return
+  }
+  // 丢弃：把草稿恢复成打开时的快照（新草稿则是清空）。
+  draft.name = baseline.name
+  draft.type = baseline.type || '未分类'
+  draft.content = baseline.content
+  setEditorValue(draft.content)
+  resolve(true)
 }
 
 const selectTemplate = async (name) => {
-  const n = String(name || '').trim()
-  if (!n) return
+  const target = normalizeTemplateName(name)
+  if (!target || target === draftItemName.value) {
+    selectedName.value = target
+    return
+  }
+  const ok = await guardDirty()
+  if (!ok) return
 
+  let item = merged.value.find((entry) => entry.name === target)
+  if (!item) return
+
+  // 还没读过正文的自定义/被覆盖模板：点开时补读一次。
+  if (!item.builtin && !item.loaded) {
+    try {
+      const data = await invoke('read_template', { name: target })
+      const nextCache = new Map(contentCache.value)
+      nextCache.set(target, String(data?.content ?? ''))
+      contentCache.value = nextCache
+      const nextLoaded = new Set(contentLoaded.value)
+      nextLoaded.add(target)
+      contentLoaded.value = nextLoaded
+      item = merged.value.find((entry) => entry.name === target) || item
+    } catch (error) {
+      message.error(`读取模板失败：${errorText(error)}`)
+      return
+    }
+  }
+
+  loadIntoDraft(item)
+  nextTick(() => scrollRowIntoView(target))
+  logger.info('[TemplateManager] template selected', { name: target, builtin: item.builtin })
+}
+
+const openDraft = async () => {
+  const ok = await guardDirty()
+  if (!ok) return
+  draft.originName = ''
+  draft.name = ''
+  draft.type = familyFilter.value !== 'all' ? familyFilter.value : '未分类'
+  draft.content = ''
+  draft.builtin = false
+  draft.isUser = true
+  draft.overriddenBuiltin = false
+  setBaseline(null)
+  selectedName.value = ''
+  hasDraft.value = true
+  setEditorValue('')
+  applyLanguage('new')
+  docMode.value = 'edit'
+  nextTick(() => {
+    editor?.focus?.()
+    editor?.setPosition?.({ lineNumber: 1, column: 1 })
+  })
+  logger.info('[TemplateManager] draft opened')
+}
+
+const closeDraft = async () => {
+  const ok = await guardDirty()
+  if (!ok) return
+  draft.originName = ''
+  draft.name = ''
+  draft.type = '未分类'
+  draft.content = ''
+  draft.builtin = false
+  draft.isUser = false
+  draft.overriddenBuiltin = false
+  setBaseline(null)
+  selectedName.value = ''
+  hasDraft.value = false
+  setEditorValue('')
+  savePrefs()
+}
+
+const markDirty = () => {
+  applyLanguage('field-change')
+  savePrefs()
+}
+
+// ───────────────────────── 保存 / 删除 ─────────────────────────
+
+const saveDraft = async () => {
+  if (busy.value) return false
+  const checked = validateTemplateName(draft.name)
+  if (!checked.ok) {
+    message.warning(checked.reason)
+    return false
+  }
+  const name = checked.value
+  const type = normalizeTemplateType(draft.type)
+
+  // 改成另一个已存在的名字会覆盖它，得先问一声。
+  if (name !== draft.originName) {
+    const clash = merged.value.find((item) => item.name === name)
+    if (clash && !(clash.builtin && !clash.loaded)) {
+      message.warning(`「${name}」已存在，换个名称或先删除它`)
+      return false
+    }
+  }
+
+  busy.value = true
   try {
-    loading.value = true
-    logger.info('[TemplateManager] select template', { name: n, builtin: !!getBuiltInTemplate(n), user: hasUserTemplate(n) })
-
-    if (hasUserTemplate(n)) {
-      const data = await invoke('read_template', { name: n })
-      selectedName.value = data?.name || n
-      editName.value = data?.name || n
-      editType.value = data?.template_type || '未分类'
-      editContent.value = data?.content || ''
-      return
+    // 重命名：后端只搬文件与 meta，然后把正文写到新名字下。
+    if (draft.originName && draft.originName !== name) {
+      await invoke('rename_template', { oldName: draft.originName, newName: name })
+      const nextCache = new Map(contentCache.value)
+      nextCache.delete(draft.originName)
+      contentCache.value = nextCache
     }
+    await invoke('save_template', { name, templateType: type, content: draft.content || '' })
+    const nextCache = new Map(contentCache.value)
+    nextCache.set(name, String(draft.content || ''))
+    contentCache.value = nextCache
+    const nextLoaded = new Set(contentLoaded.value)
+    nextLoaded.add(name)
+    contentLoaded.value = nextLoaded
 
-    const builtIn = getBuiltInTemplate(n)
-    if (builtIn) {
-      selectedName.value = builtIn.name
-      editName.value = builtIn.name
-      editType.value = builtIn.templateType || '未分类'
-      editContent.value = builtIn.content || ''
-      logger.info('[TemplateManager] selected built-in template', {
-        name: builtIn.name,
-        templateType: builtIn.templateType || '未分类',
-      })
-      return
-    }
-
-    const data = await invoke('read_template', { name: n })
-    selectedName.value = data?.name || n
-    editName.value = data?.name || n
-    editType.value = data?.template_type || '未分类'
-    editContent.value = data?.content || ''
-  } catch (e) {
-    logger.error('读取模板失败:', e)
-    message.error('读取模板失败')
+    draft.originName = name
+    draft.name = name
+    draft.type = type
+    draft.builtin = false
+    draft.isUser = true
+    draft.overriddenBuiltin = builtinIndex.has(name)
+    setBaseline({ name, type, content: draft.content || '' })
+    selectedName.value = name
+    await refresh({ reason: 'after-save' })
+    applyLanguage('saved')
+    message.success(builtinIndex.has(name) ? '已保存，内置版本仍保留' : '已保存')
+    logger.info('[TemplateManager] template saved', { name, type, length: draft.content.length })
+    return true
+  } catch (error) {
+    message.error(`保存失败：${errorText(error)}`)
+    logger.error('[TemplateManager] save failed', error)
+    return false
   } finally {
-    loading.value = false
+    busy.value = false
   }
 }
 
-const save = async () => {
-  const name = editName.value.trim()
-  if (!name) {
-    logger.info('[TemplateManager] save skipped: empty template name')
-    message.warning('请输入模板名称')
+const requestDelete = (item) => {
+  if (!item || item.builtin) {
+    if (item?.builtin) message.info('内置模板不可删除；改动会存成同名的自定义模板')
     return
   }
-
-  try {
-    loading.value = true
-    logger.info('[TemplateManager] save template requested', {
-      previousName: selectedName.value,
-      nextName: name,
-      templateType: editType.value.trim() || '未分类',
-    })
-
-    if (selectedName.value && selectedName.value !== name && hasUserTemplate(selectedName.value)) {
-      await invoke('rename_template', { oldName: selectedName.value, newName: name })
-      selectedName.value = name
-    } else {
-      selectedName.value = name
-    }
-
-    await invoke('save_template', {
-      name,
-      templateType: editType.value.trim() || '未分类',
-      content: editContent.value || ''
-    })
-
-    message.success('已保存')
-    logger.info('[TemplateManager] save template finished', { name })
-    await refresh()
-  } catch (e) {
-    logger.error('保存模板失败:', e)
-    message.error('保存模板失败')
-  } finally {
-    loading.value = false
-  }
+  deleteModal.name = item.name
+  deleteModal.overridden = Boolean(item.overriddenBuiltin)
+  deleteModal.show = true
 }
 
-const remove = async () => {
-  if (!selectedName.value) return
-
-  if (!hasUserTemplate(selectedName.value) && getBuiltInTemplate(selectedName.value)) {
-    logger.info('[TemplateManager] delete skipped for built-in template', { name: selectedName.value })
-    message.info('内置模板不可删除')
-    return
-  }
-
-  const ok = window.confirm(`确认删除模板「${selectedName.value}」？`)
-  if (!ok) {
-    logger.info('[TemplateManager] delete cancelled', { name: selectedName.value })
-    return
-  }
-
+const confirmDelete = async () => {
+  const name = deleteModal.name
+  if (!name || busy.value) return
+  busy.value = true
   try {
-    loading.value = true
-    logger.info('[TemplateManager] delete template requested', { name: selectedName.value })
-    await invoke('delete_template', { name: selectedName.value })
+    await invoke('delete_template', { name })
+    deleteModal.show = false
+    const nextCache = new Map(contentCache.value)
+    nextCache.delete(name)
+    contentCache.value = nextCache
+    const nextLoaded = new Set(contentLoaded.value)
+    nextLoaded.delete(name)
+    contentLoaded.value = nextLoaded
+    if (draft.originName === name) {
+      // 删掉的就是当前打开的这份：退回内置原样（同名内置存在时），否则清空文档。
+      const builtin = builtinIndex.get(name)
+      draft.originName = ''
+      draft.name = name
+      draft.type = builtin ? normalizeTemplateType(builtin.templateType) : draft.type
+      draft.builtin = Boolean(builtin)
+      draft.isUser = false
+      draft.overriddenBuiltin = false
+      draft.content = builtin ? String(builtin.content || '') : ''
+      setBaseline(builtin ? {
+        name,
+        type: normalizeTemplateType(builtin.templateType),
+        content: String(builtin.content || ''),
+      } : null)
+      setEditorValue(draft.content)
+    }
+    if (selectedName.value === name) {
+      selectedName.value = builtinIndex.has(name) ? name : ''
+    }
+    await refresh({ reason: 'after-delete' })
     message.success('已删除')
-    newTemplate()
-    await refresh()
-  } catch (e) {
-    logger.error('删除模板失败:', e)
-    message.error('删除模板失败')
+    logger.info('[TemplateManager] template deleted', { name })
+  } catch (error) {
+    message.error(`删除失败：${errorText(error)}`)
+    logger.error('[TemplateManager] delete failed', error)
   } finally {
-    loading.value = false
+    busy.value = false
   }
 }
 
-const insertToEditor = async (name) => {
-  const n = String(name || '').trim()
-  if (!n) return
+// ───────────────────────── 插入 / 复制 ─────────────────────────
 
-  try {
-    loading.value = true
-    logger.info('[TemplateManager] insert template requested', { name: n, builtin: !!getBuiltInTemplate(n), user: hasUserTemplate(n) })
-
-    if (hasUserTemplate(n)) {
-      const data = await invoke('read_template', { name: n })
-      const content = typeof data?.content === 'string' ? data.content : ''
-      if (!content) {
-        logger.info('[TemplateManager] insert skipped: empty user template', { name: n })
-        return
-      }
-      await invoke('emit_template_insert', { content })
-      message.success('已发送到编辑器窗口')
-      logger.info('[TemplateManager] inserted user template', { name: n, length: content.length })
+const insertTemplate = async (item) => {
+  if (!item || busy.value) return
+  let content = String(item.content || '')
+  // 卡片/搜索结果里可能只有缓存正文；没有就现读。
+  if (!content && !item.builtin) {
+    try {
+      const data = await invoke('read_template', { name: item.name })
+      content = String(data?.content || '')
+    } catch (error) {
+      message.error(`读取模板失败：${errorText(error)}`)
       return
     }
-
-    const builtIn = getBuiltInTemplate(n)
-    const content = typeof builtIn?.content === 'string' ? builtIn.content : ''
-    if (!content) {
-      logger.info('[TemplateManager] insert skipped: empty built-in template', { name: n })
-      return
-    }
-    await invoke('emit_template_insert', { content })
-    message.success('已发送到编辑器窗口')
-    logger.info('[TemplateManager] inserted built-in template', { name: n, length: content.length })
-  } catch (e) {
-    logger.error('插入失败:', e)
-    message.error('插入失败')
-  } finally {
-    loading.value = false
   }
-}
-
-const insertCurrentTemplateToEditor = async () => {
-  const content = String(editContent.value || '')
   if (!content.trim()) {
-    logger.info('[TemplateManager] insert current skipped: empty content', {
-      name: editName.value,
-    })
-    message.warning('当前模板内容为空')
+    message.warning('模板正文是空的，没有可插入的内容')
     return
   }
-
   try {
-    loading.value = true
-    logger.info('[TemplateManager] insert current editor content requested', {
-      name: editName.value,
-      templateType: editType.value,
-      length: content.length,
-    })
     await invoke('emit_template_insert', { content })
-    message.success('已插入到主编辑器光标位置')
-    logger.info('[TemplateManager] inserted current editor content', {
-      name: editName.value,
-      length: content.length,
-    })
-  } catch (e) {
-    logger.error('插入当前模板内容失败:', e)
-    message.error('插入当前模板内容失败')
-  } finally {
-    loading.value = false
+    message.success(`已插入「${item.name}」`)
+    logger.info('[TemplateManager] template inserted', { name: item.name, length: content.length })
+  } catch (error) {
+    message.error(`插入失败：${errorText(error)}`)
+    logger.error('[TemplateManager] insert failed', error)
   }
+}
+
+const insertDraft = () => {
+  if (!draft.content.trim()) {
+    message.warning('当前正文是空的')
+    return
+  }
+  insertTemplate({ name: draft.name || '未命名模板', content: draft.content, builtin: draft.builtin })
+}
+
+const writeClipboard = async (text) => {
+  try {
+    const { writeText } = await import('@tauri-apps/plugin-clipboard-manager')
+    await writeText(text)
+    return true
+  } catch (error) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return true
+    } catch (fallbackError) {
+      logger.warn('[TemplateManager] clipboard write failed', { error: fallbackError, first: error })
+      return false
+    }
+  }
+}
+
+const copyText = async (text, label) => {
+  const ok = await writeClipboard(text)
+  if (ok) message.success(`已复制${label ? `：${label}` : ''}`)
+  else message.error('复制失败')
+}
+
+const duplicateTemplate = async (item) => {
+  if (!item) return
+  const base = item.name
+  let candidate = `${base} 副本`
+  let i = 2
+  const names = new Set(merged.value.map((entry) => entry.name))
+  while (names.has(candidate)) {
+    candidate = `${base} 副本 ${i}`
+    i += 1
+  }
+  const source = merged.value.find((entry) => entry.name === base) || item
+  draft.originName = ''
+  draft.name = candidate
+  draft.type = normalizeTemplateType(source.type)
+  draft.content = String(source.content || '')
+  draft.builtin = false
+  draft.isUser = false
+  draft.overriddenBuiltin = false
+  setBaseline(null)
+  selectedName.value = candidate
+  hasDraft.value = true
+  setEditorValue(draft.content)
+  applyLanguage('duplicate')
+  docMode.value = 'edit'
+  message.info('已复制到文档，保存后会生成新模板')
+}
+
+/** 把自定义模板退回内置原样：删掉文件，草稿换成内置正文。 */
+const restoreBuiltin = async (item) => {
+  if (!item?.overriddenBuiltin || busy.value) return
+  busy.value = true
+  try {
+    await invoke('delete_template', { name: item.name })
+    const nextCache = new Map(contentCache.value)
+    nextCache.delete(item.name)
+    contentCache.value = nextCache
+    await refresh({ reason: 'after-restore' })
+    const restored = merged.value.find((entry) => entry.name === item.name)
+    if (restored) loadIntoDraft(restored)
+    message.success('已恢复内置版本')
+    logger.info('[TemplateManager] restored builtin', { name: item.name })
+  } catch (error) {
+    message.error(`恢复失败：${errorText(error)}`)
+    logger.error('[TemplateManager] restore failed', error)
+  } finally {
+    busy.value = false
+  }
+}
+
+// ───────────────────────── 导入 ─────────────────────────
+
+const baseNameOf = (path) =>
+  String(path || '')
+    .replace(/\\/g, '/')
+    .split('/')
+    .pop()
+    .replace(/\.(md|markdown)$/i, '')
+    .trim()
+
+const buildImportEntries = (paths) => {
+  const existing = new Set(merged.value.map((item) => item.name))
+  return paths.map((source) => {
+    const origin = baseNameOf(source) || '未命名模板'
+    let name = origin
+    let i = 2
+    while (existing.has(name)) {
+      name = `${origin} (${i})`
+      i += 1
+    }
+    existing.add(name)
+    return { source, origin, name }
+  })
 }
 
 const importFromFile = async () => {
+  if (!canMutate.value) {
+    message.warning('模板库目录不可用，无法导入')
+    return
+  }
   try {
-    logger.info('[TemplateManager] import markdown requested')
-    const selected = await open({
-      multiple: false,
-      filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }]
+    const picked = await openDialog({
+      multiple: true,
+      directory: false,
+      title: '导入 Markdown 模板',
+      filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }],
     })
-    if (!selected) {
-      logger.info('[TemplateManager] import markdown cancelled')
-      return
-    }
-
-    const defaultName = String(selected).split(/[\\/]/).pop()?.replace(/\.(md|markdown)$/i, '') || '新模板'
-    const name = window.prompt('模板名称', defaultName) || ''
-    if (!name.trim()) {
-      logger.info('[TemplateManager] import skipped: empty template name', { sourcePath: selected })
-      return
-    }
-    const type = window.prompt('模板类型（用于分类）', '未分类') || '未分类'
-
-    loading.value = true
-    logger.info('[TemplateManager] import markdown confirmed', {
-      sourcePath: selected,
-      name: name.trim(),
-      templateType: type.trim() || '未分类',
-    })
-    await invoke('import_template_from_file', {
-      sourcePath: selected,
-      name: name.trim(),
-      templateType: type.trim() || '未分类'
-    })
-    message.success('导入成功')
-    logger.info('[TemplateManager] import markdown finished', { name: name.trim() })
-    await refresh()
-  } catch (e) {
-    logger.error('导入失败:', e)
-    message.error('导入失败')
-  } finally {
-    loading.value = false
+    const list = Array.isArray(picked) ? picked : picked ? [picked] : []
+    if (!list.length) return
+    await stageImport(list)
+  } catch (error) {
+    message.error(`导入失败：${errorText(error)}`)
+    logger.error('[TemplateManager] import dialog failed', error)
   }
 }
 
-watch(editContent, (value) => {
-  setEditorContent(value)
+const stageImport = async (paths) => {
+  const items = buildImportEntries(paths.filter(Boolean))
+  if (!items.length) return
+  importModal.items = items
+  importModal.type = familyFilter.value !== 'all' ? familyFilter.value : '未分类'
+  importModal.show = true
+  await nextTick()
+  importTypeRef.value?.focus?.()
+  logger.info('[TemplateManager] import staged', { count: items.length })
+}
+
+const focusImportInput = () => importTypeRef.value?.focus?.()
+
+const confirmImport = async () => {
+  if (busy.value || !importModal.items.length) return
+  const type = normalizeTemplateType(importModal.type)
+  busy.value = true
+  let imported = 0
+  try {
+    for (const item of importModal.items) {
+      await invoke('import_template_from_file', {
+        sourcePath: item.source,
+        name: item.name,
+        templateType: type,
+      })
+      imported += 1
+    }
+    importModal.show = false
+    await refresh({ reason: 'after-import' })
+    const lastName = importModal.items[importModal.items.length - 1]?.name
+    if (lastName) await selectTemplate(lastName)
+    message.success(imported === 1 ? '已导入 1 份模板' : `已导入 ${imported} 份模板`)
+    logger.info('[TemplateManager] import finished', { imported, type })
+  } catch (error) {
+    message.error(`导入失败：${errorText(error)}`)
+    logger.error('[TemplateManager] import failed', error)
+    await refresh({ reason: 'import-recover' }).catch(() => {})
+  } finally {
+    busy.value = false
+  }
+}
+
+// ───────────────────────── 拖放 ─────────────────────────
+
+let unlistenDrop = null
+const setupDragDrop = async () => {
+  try {
+    unlistenDrop = await getCurrentWindow().onDragDropEvent(async (event) => {
+      const payload = event?.payload || {}
+      if (payload.type === 'enter' || payload.type === 'over') {
+        dragActive.value = true
+        return
+      }
+      if (payload.type === 'leave') {
+        dragActive.value = false
+        return
+      }
+      if (payload.type === 'drop') {
+        dragActive.value = false
+        const md = (payload.paths || []).filter((path) => /\.(md|markdown)$/i.test(String(path)))
+        if (!md.length) {
+          message.warning('只支持 .md / .markdown 文件')
+          return
+        }
+        await stageImport(md)
+      }
+    })
+  } catch (error) {
+    logger.warn('[TemplateManager] drag drop listener failed', { error })
+  }
+}
+
+// ───────────────────────── 右键菜单 ─────────────────────────
+
+const openMenu = (item, event) => {
+  if (!item) return
+  menu.item = item
+  menu.x = event?.clientX || 0
+  menu.y = event?.clientY || 0
+  menu.show = true
+}
+
+const closeMenu = (event) => {
+  if (!menu.show) return
+  const target = event?.target
+  if (target instanceof Element && target.closest('.n-dropdown-menu, .n-dropdown')) return
+  menu.show = false
+}
+
+const onMenuSelect = async (key) => {
+  const item = menu.item
+  menu.show = false
+  if (!key || !item) return
+  switch (key) {
+    case 'insert':
+      await insertTemplate(item)
+      break
+    case 'copy-content':
+      await copyText(String(item.content || ''), '模板正文')
+      break
+    case 'edit':
+      await selectTemplate(item.name)
+      break
+    case 'duplicate':
+      await duplicateTemplate(item)
+      break
+    case 'restore':
+      await restoreBuiltin(item)
+      break
+    case 'delete':
+      requestDelete(item)
+      break
+    default:
+      break
+  }
+}
+
+// ───────────────────────── 预览 ─────────────────────────
+
+let previewToken = 0
+const renderPreview = async () => {
+  if (docMode.value !== 'preview') return
+  const token = ++previewToken
+  previewLoading.value = true
+  previewError.value = ''
+  try {
+    const { renderMarkdown } = await import('../GuaxiMarkdownRender/GuaxiMarker')
+    const html = await renderMarkdown(draft.content || '', {
+      buttons: false,
+      mermaid: true,
+      math: true,
+      codeHighlight: true,
+      theme: document.documentElement?.getAttribute('data-guaxi-theme') === 'dark' ? 'dark' : 'light',
+      basePath: '',
+    })
+    if (token !== previewToken) return
+    previewHtml.value = typeof html === 'string' ? html : ''
+  } catch (error) {
+    if (token !== previewToken) return
+    previewHtml.value = ''
+    previewError.value = errorText(error)
+    logger.warn('[TemplateManager] preview render failed', { error: errorText(error) })
+  } finally {
+    if (token === previewToken) previewLoading.value = false
+  }
+}
+
+const setDocMode = (mode) => {
+  docMode.value = mode === 'preview' ? 'preview' : 'edit'
+  savePrefs()
+  if (docMode.value === 'preview') void renderPreview()
+  else nextTick(() => editor?.layout?.())
+}
+
+// ───────────────────────── 视图交互 ─────────────────────────
+
+const setViewMode = (mode) => {
+  if (!['list', 'grid'].includes(mode)) return
+  viewMode.value = mode
+  savePrefs()
+}
+
+const setFamilyFilter = (family) => {
+  familyFilter.value = family
+  savePrefs()
+}
+
+const toggleSearchContent = () => {
+  searchContent.value = !searchContent.value
+  savePrefs()
+}
+
+const toggleGroup = (family) => {
+  const next = new Set(collapsedGroups.value)
+  if (next.has(family)) next.delete(family)
+  else next.add(family)
+  collapsedGroups.value = next
+  savePrefs()
+}
+
+const toggleInspector = () => {
+  inspectorCollapsed.value = !inspectorCollapsed.value
+  savePrefs()
+  if (!inspectorCollapsed.value) nextTick(() => editor?.layout?.())
+}
+
+const scrollRowIntoView = async (name) => {
+  await nextTick()
+  const container = listRef.value
+  if (!container) return
+  const escaped = String(name).replace(/["\\]/g, '\\$&')
+  const el = container.querySelector(`[data-name="${escaped}"]`)
+  el?.scrollIntoView?.({ block: 'nearest' })
+}
+
+const revealRepo = async () => {
+  if (!repoPath.value) {
+    message.info('模板库目录不可用，请到「设置 → 模板」里指定一个目录')
+    return
+  }
+  try {
+    await invoke('open_in_file_explorer', { path: repoPath.value })
+  } catch (error) {
+    message.error(errorText(error))
+  }
+}
+
+const startResize = (event) => {
+  if (!event) return
+  event.preventDefault?.()
+  resizing.value = true
+  resizeState = { startX: Number(event.clientX || 0), startWidth: inspectorWidth.value }
+  try {
+    document.body.classList.add('template-inspector-resizing')
+  } catch {}
+  window.addEventListener('pointermove', onResizeMove)
+  window.addEventListener('pointerup', stopResize)
+  window.addEventListener('pointercancel', stopResize)
+}
+
+const onResizeMove = (event) => {
+  if (!resizeState) return
+  const delta = resizeState.startX - Number(event?.clientX || 0)
+  inspectorWidth.value = clampInspectorWidth(resizeState.startWidth + delta)
+  inspectorViewWidth.value = inspectorWidth.value
+}
+
+const stopResize = () => {
+  if (!resizing.value) return
+  resizing.value = false
+  resizeState = null
+  window.removeEventListener('pointermove', onResizeMove)
+  window.removeEventListener('pointerup', stopResize)
+  window.removeEventListener('pointercancel', stopResize)
+  try {
+    document.body.classList.remove('template-inspector-resizing')
+  } catch {}
+  editor?.layout?.()
+  savePrefs()
+}
+
+const onWindowResize = () => {
+  if (resizing.value) return
+  inspectorViewWidth.value = clampInspectorWidth(inspectorWidth.value)
+  editor?.layout?.()
+}
+
+const isTypingTarget = (target) => {
+  const tag = String(target?.tagName || '').toLowerCase()
+  return tag === 'input' || tag === 'textarea' || target?.isContentEditable
+}
+
+// Monaco 内部是 contenteditable，方向键与 Ctrl+S 得让它自己处理；
+// 这里只认「焦点不在编辑器/输入框」时的快捷键。
+const isEditorFocused = () => {
+  const active = document.activeElement
+  return Boolean(active && (active.closest?.('.tm-monaco') || active.classList?.contains('monaco-editor')))
+}
+
+const onKeydown = (event) => {
+  if (importModal.show || deleteModal.show || leaveModal.show) return
+  if ((event.ctrlKey || event.metaKey) && String(event.key).toLowerCase() === 's') {
+    event.preventDefault()
+    if (draft.name) void saveDraft()
+    return
+  }
+
+  const typing = isTypingTarget(event.target) || isEditorFocused()
+
+  if (event.key === '/' && !typing) {
+    event.preventDefault()
+    searchRef.value?.focus?.()
+    return
+  }
+  if (event.key === 'Escape') {
+    if (menu.show) {
+      menu.show = false
+      return
+    }
+    if (search.value) {
+      search.value = ''
+      return
+    }
+    if (event.target === searchRef.value) event.target.blur?.()
+    return
+  }
+  if (typing) return
+
+  if (event.key === 'F5') {
+    event.preventDefault()
+    void refresh({ reason: 'keyboard' })
+    return
+  }
+  if (event.key === 'Enter') {
+    const item = merged.value.find((entry) => entry.name === selectedName.value)
+    if (item) {
+      event.preventDefault()
+      void insertTemplate(item)
+    }
+    return
+  }
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault()
+    void moveSelection(event.key === 'ArrowDown' ? 1 : -1)
+    return
+  }
+  if (event.key === 'Delete' && selectedName.value) {
+    const item = merged.value.find((entry) => entry.name === selectedName.value)
+    if (item) {
+      event.preventDefault()
+      requestDelete(item)
+    }
+  }
+}
+
+const moveSelection = async (delta) => {
+  const list = searchActive.value
+    ? searchResults.value.map((result) => result.item)
+    : visibleTemplates.value
+  if (!list.length) return
+  const index = list.findIndex((item) => item.name === selectedName.value)
+  const nextIndex = index < 0 ? (delta > 0 ? 0 : list.length - 1) : Math.max(0, Math.min(list.length - 1, index + delta))
+  const target = list[nextIndex]
+  if (!target) return
+  // 上下键就是「换一份看」，和单击一样走完整流程（含未保存改动确认）。
+  await selectTemplate(target.name)
+  scrollRowIntoView(target.name)
+}
+
+// ───────────────────────── 生命周期 ─────────────────────────
+
+const onBeforeUnload = (event) => {
+  if (!dirty.value) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+
+watch(docMode, (mode) => {
+  if (mode === 'preview') void renderPreview()
 })
 
-// 切换模板时类型跟着变：Python Cell 模板自动切到 python 语言，才能拿到 LSP 补全。
-watch(editType, () => {
-  applyTemplateEditorLanguage('type-change')
-})
-
-watch(loading, (value) => {
-  contentEditor?.updateOptions?.({ readOnly: !!value })
-})
+watch(
+  () => [draft.name, draft.type],
+  () => {
+    if (!editor) return
+    // 名称里出现 Python Cell 时切到 Python，LSP 才会接管。
+    applyLanguage('identity-change')
+  }
+)
 
 onMounted(async () => {
-  await nextTick()
-  loadSidebarWidth()
-  initContentEditor()
-  await refresh()
+  loadPrefs()
+  window.addEventListener('resize', onWindowResize)
+  window.addEventListener('pointerdown', closeMenu, true)
+  window.addEventListener('blur', closeMenu)
+  window.addEventListener('beforeunload', onBeforeUnload)
+  await refresh({ reason: 'mounted', preserveDraft: false })
+  await setupDragDrop()
+  // 恢复上次选中：直接打开那份模板，免得每次进来都是空面板。
+  if (selectedName.value) {
+    const target = merged.value.find((item) => item.name === selectedName.value)
+    if (target) await selectTemplate(target.name)
+  } else if (familyFilter.value !== 'all' && !familyChips.value.some((c) => c.family === familyFilter.value)) {
+    familyFilter.value = 'all'
+  }
+  if (!inspectorCollapsed.value) {
+    await nextTick()
+    mountEditor()
+  }
+  nextTick(() => pageRef.value?.focus?.())
 })
 
 onBeforeUnmount(() => {
-  stopSidebarResize()
-  themeObserver?.disconnect?.()
-  themeObserver = null
-  featuresDisposable?.()
-  featuresDisposable = null
-  contentEditorInstance.value = null
-  contentEditor?.dispose?.()
-  contentEditor = null
-  contentModel?.dispose?.()
-  contentModel = null
+  stopResize()
+  clearTimeout(savePrefsTimer)
+  savePrefs()
+  window.removeEventListener('resize', onWindowResize)
+  window.removeEventListener('pointerdown', closeMenu, true)
+  window.removeEventListener('blur', closeMenu)
+  window.removeEventListener('beforeunload', onBeforeUnload)
+  if (unlistenDrop) {
+    try {
+      unlistenDrop()
+    } catch {}
+    unlistenDrop = null
+  }
+  unmountEditor()
+})
+
+// 收起预览栏时也会卸载编辑器；重新展开要把它接回来。
+watch(inspectorCollapsed, async (collapsed) => {
+  if (collapsed) {
+    unmountEditor()
+    return
+  }
+  await nextTick()
+  mountEditor()
+})
+
+// 草稿第一次出现时编辑器可能还没建好（比如收起状态挂载后直接选中模板）。
+watch(hasDraft, async (open) => {
+  if (!open || inspectorCollapsed.value) return
+  await nextTick()
+  if (!editor) mountEditor()
+  if (editor) setEditorValue(draft.content)
 })
 </script>
 
 <style scoped>
-.page {
+/* ─────────────────────────────────────────────────────────────
+   模板管理器
+
+   视觉取向延续资源库那张「灯箱」：右侧文档区是主角，左边列表安静、
+   只有分组标题与极轻的类型色。区别在于模板不是文件而是「可复用的文字」，
+   所以列表第二行显示的是分类或正文命中片段，而不是大小和修改时间。
+
+   编辑器字号比主编辑器大一档（模板大多是短文本，读得多、改得少），
+   但字体跟随设置，避免同一份文字在两个窗口里长得不一样。
+   ───────────────────────────────────────────────────────────── */
+.tm {
+  --tm-fg: var(--guaxi-text-primary, #1f2328);
+  --tm-fg-2: var(--guaxi-text-secondary, #57606a);
+  --tm-fg-3: color-mix(in srgb, var(--guaxi-text-secondary, #57606a) 72%, transparent);
+  --tm-bg: var(--guaxi-app-bg, #ffffff);
+  --tm-panel: var(--guaxi-panel-bg, #ffffff);
+  --tm-line: color-mix(in srgb, var(--guaxi-border, #d0d7de) 82%, transparent);
+  --tm-line-soft: color-mix(in srgb, var(--guaxi-border, #d0d7de) 48%, transparent);
+  --tm-hover: color-mix(in srgb, var(--guaxi-text-primary, #1f2328) 5%, transparent);
+  --tm-sel: color-mix(in srgb, var(--n-primary-color, #4078f2) 13%, transparent);
+  --tm-sel-strong: color-mix(in srgb, var(--n-primary-color, #4078f2) 20%, transparent);
+  --tm-accent: var(--n-primary-color, #4078f2);
+  --tm-danger: var(--n-error-color, #e45649);
+  --tm-radius: 9px;
+  --tm-tone-markdown: #4078f2;
+  --tm-tone-python: #a4761c;
+
   height: 100vh;
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  padding: 0;
-  box-sizing: border-box;
-  gap: 0;
   overflow: hidden;
-  background: var(--guaxi-content-bg);
-  color: var(--guaxi-text-primary);
-  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
+  background: var(--tm-bg);
+  color: var(--tm-fg);
+  font-family: var(--guaxi-editor-font-family, 'Maple Mono NF CN', Consolas, monospace);
+  font-size: 13px;
+  line-height: 1.45;
+  outline: none;
 }
 
-.header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 48px;
-  padding: 8px 12px;
-  background: var(--guaxi-panel-bg);
-  border: 0;
-  border-bottom: 1px solid var(--guaxi-border);
-  box-shadow: none;
+:root[data-guaxi-theme='dark'] .tm {
+  --tm-fg-3: color-mix(in srgb, var(--guaxi-text-secondary, #9da5b4) 66%, transparent);
+  --tm-hover: color-mix(in srgb, #ffffff 6%, transparent);
+  --tm-tone-markdown: #61afef;
+  --tm-tone-python: #e5c07b;
+}
+
+.tm * {
   box-sizing: border-box;
 }
 
-.header-main {
-  min-width: 0;
+.tm :focus-visible {
+  outline: 2px solid var(--tm-accent);
+  outline-offset: -1px;
+  border-radius: 6px;
+}
+
+/* ───────────── 顶栏 ───────────── */
+
+.tm-header {
+  flex: 0 0 auto;
+  height: 50px;
   display: flex;
   align-items: center;
   gap: 14px;
-  flex: 0 1 520px;
+  padding: 0 12px 0 14px;
+  border-bottom: 1px solid var(--tm-line);
+  background: var(--tm-panel);
 }
 
-.title {
+.tm-brand {
   flex: 0 0 auto;
-  font-size: 16px;
-  font-weight: 650;
-  letter-spacing: 0.2px;
-}
-
-.header-summary {
-  min-width: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
-  overflow: hidden;
-  white-space: nowrap;
-  color: var(--guaxi-text-secondary);
-  font-size: 12px;
-  line-height: 22px;
+  gap: 9px;
 }
 
-.header-summary > span {
-  flex: 0 0 auto;
-}
-
-.header-summary span:not(.status-pill) {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.header-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 0 0 auto;
-}
-
-.header-fields {
-  min-width: 640px;
-  max-width: none;
+.tm-brand-mark {
   display: grid;
-  grid-template-columns: minmax(380px, 1.5fr) minmax(260px, 1fr);
-  gap: 14px;
-  flex: 1 1 820px;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  color: var(--tm-accent);
+  background: var(--tm-sel);
 }
 
-.header-field {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+.tm-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.tm-sync-pill {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  color: var(--guaxi-text-secondary);
-  font-size: 12px;
-  font-weight: 650;
-}
-
-.header-field-input {
-  min-width: 0;
-}
-
-.header-field-input :deep(.n-input) {
-  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
-}
-
-.header-field-input :deep(.n-input__input-el) {
-  text-overflow: clip;
-}
-
-.status-pill {
-  color: var(--guaxi-text-primary);
-  font-weight: 650;
-  padding: 0 8px;
+  gap: 6px;
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid var(--tm-line);
   border-radius: 999px;
-  background: rgba(45, 212, 191, 0.12);
+  background: transparent;
+  color: var(--tm-fg-2);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
 }
 
-.main {
+.tm-sync-pill:hover {
+  background: var(--tm-hover);
+  color: var(--tm-fg);
+}
+
+.tm-sync-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--tm-fg-3);
+}
+
+.tm-sync-dot[data-state='success'] {
+  background: var(--n-success-color, #50a14f);
+}
+
+.tm-sync-dot[data-state='running'] {
+  background: var(--n-info-color, #56b6c2);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--n-info-color, #56b6c2) 22%, transparent);
+}
+
+.tm-search {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 180px;
+  max-width: 620px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--tm-line);
+  border-radius: var(--tm-radius);
+  background: color-mix(in srgb, var(--tm-panel) 82%, var(--tm-bg));
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.tm-search:focus-within {
+  border-color: var(--tm-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--tm-accent) 16%, transparent);
+}
+
+.tm-search-icon {
+  flex: 0 0 auto;
+  color: var(--tm-fg-3);
+}
+
+.tm-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--tm-fg);
+  font: inherit;
+}
+
+.tm-search-input::placeholder {
+  color: var(--tm-fg-3);
+}
+
+.tm-search-input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.tm-kbd {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border: 1px solid var(--tm-line);
+  border-radius: 5px;
+  color: var(--tm-fg-3);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.tm-search-clear {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--tm-fg-3);
+  cursor: pointer;
+}
+
+.tm-search-clear:hover {
+  background: var(--tm-hover);
+  color: var(--tm-fg);
+}
+
+.tm-header-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ───────────── 通用按钮 ───────────── */
+
+.tm-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 11px;
+  border: 1px solid var(--tm-line);
+  border-radius: 8px;
+  background: var(--tm-panel);
+  color: var(--tm-fg);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tm-btn:hover:not(:disabled) {
+  background: var(--tm-hover);
+}
+
+.tm-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.tm-btn.is-primary {
+  border-color: transparent;
+  background: var(--tm-accent);
+  color: #fff;
+}
+
+.tm-btn.is-primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.tm-btn.is-primary:disabled {
+  background: color-mix(in srgb, var(--tm-accent) 34%, var(--tm-panel));
+  color: color-mix(in srgb, #ffffff 78%, var(--tm-accent));
+  opacity: 1;
+}
+
+.tm-btn.is-danger {
+  border-color: transparent;
+  background: var(--tm-danger);
+  color: #fff;
+}
+
+.tm-btn.is-quiet {
+  border-style: dashed;
+  background: transparent;
+  color: var(--tm-fg-2);
+}
+
+.tm-icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--tm-fg-2);
+  cursor: pointer;
+}
+
+.tm-icon-btn:hover:not(:disabled) {
+  background: var(--tm-hover);
+  color: var(--tm-fg);
+}
+
+.tm-icon-btn.is-small {
+  width: 26px;
+  height: 26px;
+}
+
+.tm-icon-btn.is-busy {
+  color: var(--tm-accent);
+}
+
+.tm-icon-btn.is-busy :deep(svg) {
+  animation: tm-spin 0.9s linear infinite;
+}
+
+/* ───────────── 工具栏 ───────────── */
+
+.tm-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 38px;
+  padding: 5px 12px 5px 14px;
+  border-bottom: 1px solid var(--tm-line-soft);
+  background: var(--tm-panel);
+}
+
+.tm-filters {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tm-filters::-webkit-scrollbar {
+  display: none;
+}
+
+.tm-chip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 220px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--tm-fg-2);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tm-chip:hover {
+  background: var(--tm-hover);
+}
+
+.tm-chip.is-active {
+  border-color: var(--tm-line);
+  background: var(--tm-sel);
+  color: var(--tm-fg);
+}
+
+.tm-chip-count {
+  color: var(--tm-fg-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.tm-view-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tm-scope-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--tm-line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--tm-fg-2);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.tm-scope-pill:hover {
+  background: var(--tm-hover);
+}
+
+.tm-scope-pill.is-on {
+  border-color: color-mix(in srgb, var(--tm-accent) 40%, var(--tm-line));
+  background: var(--tm-sel);
+  color: var(--tm-accent);
+}
+
+.tm-segmented {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--tm-line);
+  border-radius: 8px;
+  background: var(--tm-bg);
+}
+
+.tm-seg {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 22px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--tm-fg-3);
+  cursor: pointer;
+}
+
+.tm-seg:hover {
+  color: var(--tm-fg);
+}
+
+.tm-seg.is-active {
+  background: var(--tm-panel);
+  color: var(--tm-fg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+/* ───────────── 主体 ───────────── */
+
+.tm-main {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-rows: minmax(0, 1fr);
-  gap: 0;
+  grid-template-columns: minmax(0, 1fr) 7px var(--tm-inspector-width, 560px);
   overflow: hidden;
-  background: var(--guaxi-panel-bg);
 }
 
-.left {
+.tm.is-inspector-collapsed .tm-main {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.tm-browser {
+  min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
   overflow: hidden;
-  border: 0;
-  border-radius: 0;
-  padding: 10px 10px 8px 12px;
-  background: var(--guaxi-panel-bg);
-  box-shadow: none;
 }
 
-.left-body {
+.tm-banner {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  font-size: 11.5px;
+  border-bottom: 1px solid var(--tm-line-soft);
+}
+
+.tm-banner.is-warning {
+  color: var(--n-warning-color, #c18401);
+  background: color-mix(in srgb, var(--n-warning-color, #c18401) 9%, transparent);
+}
+
+.tm-banner.is-danger {
+  color: var(--tm-danger);
+  background: color-mix(in srgb, var(--tm-danger) 9%, transparent);
+}
+
+.tm-banner-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tm-state {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 32px 24px;
+  text-align: center;
+}
+
+.tm-state h2 {
+  margin: 4px 0 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.tm-state p {
+  margin: 0;
+  max-width: 380px;
+  color: var(--tm-fg-2);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.tm-state-glyph {
+  display: grid;
+  place-items: center;
+  width: 58px;
+  height: 58px;
+  border-radius: 18px;
+  color: var(--tm-fg-3);
+  background: var(--tm-hover);
+}
+
+.tm-state-glyph.is-quiet {
+  opacity: 0.75;
+}
+
+.tm-spinner {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--tm-line);
+  border-top-color: var(--tm-accent);
+  animation: tm-spin 0.8s linear infinite;
+}
+
+.tm-spinner.is-small {
+  width: 13px;
+  height: 13px;
+  border-width: 1.5px;
+}
+
+@keyframes tm-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ───────────── 列表 ───────────── */
+
+.tm-list {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  padding: 4px 6px 8px;
+  scrollbar-width: thin;
 }
 
-.right {
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-  border: 0;
-  border-radius: 0;
-  padding: 0;
-  box-sizing: border-box;
-  background: var(--guaxi-panel-bg);
-  box-shadow: none;
-  display: flex;
-  flex-direction: column;
+.tm-group {
+  padding-top: 4px;
 }
 
-.sidebar-resizer {
-  position: relative;
-  min-width: 6px;
-  width: 6px;
-  cursor: col-resize;
-  background: var(--guaxi-content-bg);
-  border-left: 1px solid var(--guaxi-border);
-  border-right: 1px solid var(--guaxi-border);
-  box-sizing: border-box;
-  z-index: 2;
-}
-
-.sidebar-resizer span {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 2px;
-  width: 2px;
-  background: transparent;
-  transition: background 0.12s ease;
-}
-
-.sidebar-resizer:hover span,
-.main.is-resizing-sidebar .sidebar-resizer span {
-  background: rgba(45, 212, 191, 0.72);
-}
-
-.template-monaco-editor {
-  flex: 1;
-  min-height: 0;
-  height: 100%;
-  width: 100%;
-  box-sizing: border-box;
-  overflow: hidden;
-  border: 0;
-  border-radius: 0;
-  background: var(--guaxi-editor-bg, var(--guaxi-panel-bg));
-}
-
-.template-monaco-editor :deep(.monaco-editor),
-.template-monaco-editor :deep(.monaco-editor-background),
-.template-monaco-editor :deep(.monaco-editor .margin) {
-  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New' !important;
-}
-
-.row {
+.tm-group-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  min-width: 0;
+  height: 26px;
+  padding: 0 10px 0 6px;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--tm-bg);
 }
 
-.row-name {
-  display: flex;
+.tm-group-toggle {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--tm-fg-2);
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
 }
 
-.row-name-text {
+.tm-group-toggle:hover {
+  color: var(--tm-fg);
+}
+
+.tm-chevron {
+  flex: 0 0 auto;
+  transition: transform 0.14s ease;
+}
+
+.tm-chevron.is-open {
+  transform: rotate(90deg);
+}
+
+.tm-group-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.builtin-tag {
+.tm-group-count {
+  color: var(--tm-fg-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.tm-group-hint {
   flex: 0 0 auto;
+  color: var(--tm-fg-3);
+  font-size: 10px;
+}
+
+.tm-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 8px 4px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--tm-fg);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: default;
+  user-select: none;
+  position: relative;
+}
+
+.tm-row:hover {
+  background: var(--tm-hover);
+}
+
+.tm-row.is-selected {
+  background: var(--tm-sel);
+}
+
+.tm-row.is-primary {
+  background: var(--tm-sel-strong);
+}
+
+.tm-row.is-primary::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--tm-accent);
+}
+
+.tm-row-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.tm-row-text {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.tm-row-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tm-row-variant {
+  flex: 0 0 auto;
+  color: var(--tm-fg-3);
+  font-size: 10.5px;
+}
+
+.tm-row-sub {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--tm-fg-3);
   font-size: 11px;
-  line-height: 18px;
-  padding: 0 8px;
+}
+
+.tm-row-snippet {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+  color: var(--tm-fg-2);
+  font-size: 11px;
+}
+
+.tm-snippet-line {
+  flex: 0 0 auto;
+  color: var(--tm-fg-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.tm-snippet-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tm-snippet-text mark {
+  padding: 0 1px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--n-warning-color, #c18401) 30%, transparent);
+  color: inherit;
+}
+
+.tm-row.is-result .tm-row-text {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+}
+
+.tm-row.is-result {
+  min-height: 40px;
+  align-items: flex-start;
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+.tm-row.is-result .tm-row-main {
+  align-items: flex-start;
+}
+
+.tm-row.is-result .tm-type-icon {
+  margin-top: 1px;
+}
+
+.tm-row.is-result .tm-row-title,
+.tm-row.is-result .tm-row-snippet {
+  display: flex;
+}
+
+.tm-row-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.tm-type-icon {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  color: var(--tm-fg-2);
+}
+
+.tm-type-icon[data-kind='markdown'] {
+  color: var(--tm-tone-markdown);
+}
+
+.tm-type-icon[data-kind='python'] {
+  color: var(--tm-tone-python);
+}
+
+.tm-badge {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, var(--tm-accent) 36%, var(--tm-line));
   border-radius: 999px;
-  border: 1px solid var(--guaxi-border);
-  background: var(--guaxi-header-bg);
-  opacity: 0.85;
+  color: var(--tm-accent);
+  font-size: 10px;
+  line-height: 16px;
 }
 
-.active {
-  background: rgba(45, 212, 191, 0.12);
+.tm-badge.is-quiet {
+  border-color: var(--tm-line);
+  color: var(--tm-fg-3);
 }
 
-:global(:root[data-guaxi-theme='dark']) .active {
-  background: rgba(97, 175, 239, 0.16);
+.tm-badge.is-user {
+  border-color: color-mix(in srgb, var(--n-warning-color, #c18401) 40%, var(--tm-line));
+  color: var(--n-warning-color, #c18401);
 }
 
-:global(:root[data-guaxi-theme='dark']) .status-pill {
-  background: rgba(97, 175, 239, 0.16);
+.tm-dirty-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--n-warning-color, #c18401);
 }
 
-:global(:root[data-guaxi-theme='dark']) .sidebar-resizer:hover span,
-:global(:root[data-guaxi-theme='dark']) .main.is-resizing-sidebar .sidebar-resizer span {
-  background: rgba(97, 175, 239, 0.78);
+.tm-row-insert {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--tm-fg-3);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
 }
 
-@media (max-width: 920px) {
-  .header {
-    align-items: flex-start;
+.tm-row:hover .tm-row-insert,
+.tm-row.is-primary .tm-row-insert,
+.tm-row-insert:focus-visible {
+  opacity: 1;
+}
+
+.tm-row-insert:hover {
+  background: var(--tm-sel-strong);
+  color: var(--tm-accent);
+}
+
+/* 卡片视图：与列表共用同一套排版层级，只是把每项铺成一张方块。 */
+.tm-list.is-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 10px;
+  align-content: start;
+  padding: 10px;
+}
+
+.tm-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-height: 128px;
+  padding: 11px 12px;
+  border: 1px solid var(--tm-line-soft);
+  border-radius: 10px;
+  background: var(--tm-panel);
+  color: var(--tm-fg);
+  font: inherit;
+  text-align: left;
+  cursor: default;
+}
+
+.tm-tile:hover {
+  border-color: var(--tm-line);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.09);
+}
+
+.tm-tile.is-primary {
+  border-color: var(--tm-accent);
+  box-shadow: 0 0 0 1px var(--tm-accent) inset;
+}
+
+.tm-tile-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tm-tile-family {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--tm-fg-3);
+  font-size: 10.5px;
+}
+
+.tm-tile-name {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  word-break: break-all;
+}
+
+.tm-tile-excerpt {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  color: var(--tm-fg-2);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.tm-tile-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--tm-fg-3);
+  font-size: 10.5px;
+}
+
+.tm-tile-variant {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tm-tile-len {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ───────────── 状态栏 ───────────── */
+
+.tm-status {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 14px;
+  border-top: 1px solid var(--tm-line-soft);
+  color: var(--tm-fg-3);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.tm-status-sep {
+  opacity: 0.5;
+}
+
+.tm-status-spacer {
+  flex: 1;
+}
+
+.tm-status-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 60%;
+}
+
+.tm-status-dirty {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--n-warning-color, #c18401);
+}
+
+.tm-link-btn {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--tm-accent);
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+/* ───────────── 右侧文档 ───────────── */
+
+.tm-resizer {
+  position: relative;
+  width: 7px;
+  cursor: col-resize;
+  background: linear-gradient(
+    to right,
+    transparent 0,
+    transparent 3px,
+    var(--tm-line) 3px,
+    var(--tm-line) 4px,
+    transparent 4px
+  );
+}
+
+.tm-resizer:hover {
+  background: linear-gradient(
+    to right,
+    transparent 1px,
+    var(--tm-accent) 1px,
+    var(--tm-accent) 3px,
+    transparent 3px
+  );
+}
+
+.tm-inspector {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid var(--tm-line-soft);
+  background: color-mix(in srgb, var(--tm-panel) 62%, var(--tm-bg));
+}
+
+.tm-doc-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 0 10px 0 14px;
+  border-bottom: 1px solid var(--tm-line-soft);
+}
+
+.tm-doc-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tm-doc-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.tm-doc-head-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tm-doc-fields {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 10px;
+  padding: 9px 12px 8px;
+  border-bottom: 1px solid var(--tm-line-soft);
+}
+
+.tm-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.tm-field-label {
+  color: var(--tm-fg-3);
+  font-size: 10.5px;
+}
+
+.tm-text-input {
+  width: 100%;
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--tm-line);
+  border-radius: 7px;
+  background: var(--tm-bg);
+  color: var(--tm-fg);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+.tm-text-input:focus {
+  border-color: var(--tm-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--tm-accent) 16%, transparent);
+}
+
+.tm-doc-preview-toggle {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--tm-line-soft);
+}
+
+.tm-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--tm-fg-2);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.tm-tab:hover {
+  background: var(--tm-hover);
+}
+
+.tm-tab.is-active {
+  border-color: var(--tm-line);
+  background: var(--tm-panel);
+  color: var(--tm-fg);
+}
+
+.tm-doc-stats {
+  margin-left: auto;
+  color: var(--tm-fg-3);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tm-doc-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.tm-monaco {
+  position: absolute;
+  inset: 0;
+  background: var(--tm-bg);
+}
+
+.tm-monaco.is-hidden {
+  visibility: hidden;
+}
+
+.tm-monaco :deep(.monaco-editor),
+.tm-monaco :deep(.monaco-editor-background),
+.tm-monaco :deep(.monaco-editor .margin) {
+  font-family: var(--guaxi-editor-font-family, 'Maple Mono NF CN', Consolas, monospace) !important;
+}
+
+/* 空正文时盖一层提示，但不挡住编辑：它只是把「这里可以写什么」说清楚。 */
+.tm-empty-overlay {
+  position: absolute;
+  left: 64px;
+  right: 24px;
+  top: 18px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.tm-empty-overlay.is-visible {
+  opacity: 1;
+}
+
+.tm-empty-title {
+  margin: 0 0 3px;
+  color: var(--tm-fg-2);
+  font-size: 12.5px;
+}
+
+.tm-empty-hint {
+  margin: 0;
+  max-width: 460px;
+  color: var(--tm-fg-3);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.tm-preview {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  padding: 6px 18px 24px;
+  scrollbar-width: thin;
+}
+
+.tm-preview-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 18px 4px;
+  color: var(--tm-fg-3);
+  font-size: 11.5px;
+}
+
+.tm-preview-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 18px 4px;
+}
+
+.tm-preview-body {
+  max-width: 860px;
+}
+
+.tm-doc-foot {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--tm-line-soft);
+}
+
+.tm-doc-foot :deep(.aux-status-bar) {
+  border-top: 0;
+  background: transparent;
+}
+
+.tm-inspector-empty {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 24px 22px;
+  text-align: center;
+}
+
+.tm-inspector-empty h2 {
+  margin: 2px 0 0;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.tm-inspector-empty p {
+  margin: 0;
+  max-width: 320px;
+  color: var(--tm-fg-2);
+  font-size: 11.5px;
+  line-height: 1.65;
+}
+
+.tm-facts {
+  width: 100%;
+  max-width: 320px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin: 8px 0 2px;
+  border: 1px solid var(--tm-line-soft);
+  border-radius: 9px;
+  overflow: hidden;
+}
+
+.tm-facts > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  background: var(--tm-panel);
+}
+
+.tm-facts dt {
+  color: var(--tm-fg-3);
+  font-size: 10.5px;
+}
+
+.tm-facts dd {
+  margin: 0;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ───────────── 拖放 / 弹窗 ───────────── */
+
+.tm.is-dragging::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+  border: 2px dashed var(--tm-accent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--tm-accent) 7%, transparent);
+}
+
+.tm-drop {
+  position: fixed;
+  inset: 0;
+  z-index: 41;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.tm-drop-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  padding: 22px 30px;
+  border-radius: 14px;
+  color: var(--tm-fg);
+  background: var(--tm-panel);
+  border: 1px solid var(--tm-line);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.22);
+}
+
+.tm-drop-title {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.tm-drop-hint {
+  color: var(--tm-fg-2);
+  font-size: 11px;
+}
+
+.tm-modal {
+  width: min(460px, calc(100vw - 40px));
+}
+
+.tm-modal-body {
+  display: grid;
+  gap: 10px;
+}
+
+.tm-modal-hint {
+  margin: 0;
+  color: var(--tm-fg-2);
+  font-size: 12px;
+  word-break: break-word;
+}
+
+.tm-modal-danger {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.tm-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.tm-import-list {
+  margin: 0;
+  padding: 7px 9px;
+  max-height: 190px;
+  overflow: auto;
+  list-style: none;
+  border: 1px solid var(--tm-line-soft);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--tm-panel) 70%, var(--tm-bg));
+}
+
+.tm-import-list li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 24px;
+  color: var(--tm-fg-2);
+  font-size: 11.5px;
+}
+
+.tm-import-origin {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tm-import-arrow {
+  flex: 0 0 auto;
+  color: var(--tm-fg-3);
+}
+
+.tm-import-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--tm-fg);
+}
+
+.tm-import-more {
+  color: var(--tm-fg-3);
+  font-size: 10.5px;
+}
+
+body.template-inspector-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+/* ───────────── 窄窗口 ───────────── */
+
+@media (max-width: 1080px) {
+  .tm-toolbar {
     flex-wrap: wrap;
+    gap: 6px 12px;
+    padding-bottom: 6px;
   }
 
-  .header-main {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 6px;
+  .tm-view-actions {
+    margin-left: auto;
   }
 
-  .header-summary {
-    max-width: 100%;
-    overflow-x: auto;
+  .tm-header-actions .tm-btn span {
+    display: none;
   }
 
-  .header-fields {
-    order: 3;
-    flex-basis: 100%;
-    max-width: none;
-    grid-template-columns: 1fr;
+  .tm-header-actions .tm-btn {
+    width: 28px;
+    padding: 0;
+    justify-content: center;
+  }
+}
+
+@media (max-width: 820px) {
+  .tm-main {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tm-resizer,
+  .tm-inspector {
+    display: none;
+  }
+
+  .tm-search {
+    min-width: 120px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tm-chevron,
+  .tm-search,
+  .tm-row-insert,
+  .tm-empty-overlay {
+    transition: none;
+  }
+
+  .tm-spinner,
+  .tm-icon-btn.is-busy :deep(svg) {
+    animation-duration: 2.4s;
   }
 }
 </style>
