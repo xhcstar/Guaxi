@@ -141,9 +141,17 @@ test('收信规则：编辑器与弹层同底色，且条件支持从通讯录�
 
 test('回复 / 转发直接长在阅读区顶部，不再弹满屏浮层', () => {
   assert.ok(reader.includes('name="inline-composer"'), '阅读区应留出内联回复插槽')
+  // 插槽必须在正文滚动区里：回复占满一屏高度，原文/历史卡片排在它下面滚动查看。
+  assert.ok(
+    /mail-reader-scroll[\s\S]{0,400}name="inline-composer"/.test(reader),
+    '回复卡片应位于正文滚动区顶部',
+  )
   assert.ok(mailApp.includes('#inline-composer'), '应把回复编辑器放进插槽')
   assert.ok(/MailComposer[\s\S]{0,80}inline/.test(mailApp), '编辑器应以内联模式渲染')
-  assert.ok(css.includes('.mail-inline-composer'), '应有内联卡片的外层样式')
+  assert.ok(
+    /\.mail-inline-composer\s*\{[\s\S]{0,60}height:\s*100%/.test(css),
+    '内联卡片应占满正文区高度',
+  )
   assert.ok(/\.mail-composer\.is-inline/.test(css), '内联卡片应有独立的尺寸/圆角样式')
 })
 

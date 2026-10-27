@@ -960,6 +960,10 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  /* 内边距挪到内容层：内联回复要占满一屏高度，不能被滚动容器的 padding 削掉。 */
+  padding: 0;
+}
+.mail-reader-content {
   padding: 18px var(--mail-pad) 40px;
 }
 
@@ -1968,20 +1972,25 @@
   padding: 10px 14px;
 }
 
-/* 阅读区内联回复：卡片嵌在邮件顶部，宽度跟随阅读区，高度固定后正文区自己滚。 */
+/* 阅读区内联回复：卡片占满一屏正文高度，原文/历史卡片排在它下面随滚动查看。
+   高度按滚动容器（.mail-reader-scroll）的视口高度算，不跟正文抢空间。 */
 .mail-inline-composer {
-  flex: 0 0 auto;
-  padding: 10px var(--mail-pad);
+  height: 100%;
+  box-sizing: border-box;
+  padding: 10px var(--mail-pad) 14px;
   border-bottom: 1px solid var(--mail-border);
   background: var(--mail-reader-bg);
 }
+.mail-composer-inline {
+  height: 100%;
+}
 .mail-composer-inline .mail-composer.is-inline {
   width: 100%;
-  height: clamp(340px, 48vh, 540px);
+  height: 100%;
+  min-height: 320px;
   max-width: none;
   max-height: none;
   min-width: 0;
-  min-height: 0;
   border-radius: var(--mail-radius);
   box-shadow: none;
   resize: none;
