@@ -363,7 +363,7 @@ fn word_bounds(text: &str) -> Vec<usize> {
 /// 这一层遇到 CJK 同样判不出来（一串汉字里没有任何分隔符），所以它又叠了一层
 /// `Intl.Segmenter(granularity: 'word')`：拿分词结果去校验命中的两端有没有落在
 /// 词的边界上。这里做的是同一件事，分词器换成 jieba。
-pub(crate) struct SearchMatcher {
+pub struct SearchMatcher {
     inner: RegexMatcher,
     /// true 时每条命中都要过一遍词边界校验
     whole_word: bool,
@@ -396,7 +396,7 @@ impl SearchMatcher {
     }
 
     /// 是否至少有一条通过校验的命中。
-    pub(crate) fn is_match(&self, haystack: &str) -> bool {
+    pub fn is_match(&self, haystack: &str) -> bool {
         if !self.whole_word {
             return self.inner.is_match(haystack.as_bytes()).unwrap_or(false);
         }
@@ -453,7 +453,7 @@ impl SearchMatcher {
 ///
 /// `fixed_strings` 交给 grep-regex 自己转义，比手写 `regex::escape` 稳：
 /// 它在开了智能大小写时会走"转义后再解析"的路径，大小写分析仍然生效。
-pub(crate) fn build_matcher(pattern: &str, opts: &MatchOptions) -> Result<SearchMatcher, String> {
+pub fn build_matcher(pattern: &str, opts: &MatchOptions) -> Result<SearchMatcher, String> {
     let mut builder = RegexMatcherBuilder::new();
     builder
         .fixed_strings(!opts.is_regex())
@@ -732,7 +732,7 @@ pub async fn fd_search(
 ///
 /// `max_lines` 到量就让 grep 提前收工。全文索引只需要前几行做预览，
 /// 没必要把一个几万行的日志整个扫完。
-pub(crate) fn grep_file_matches(
+pub fn grep_file_matches(
     matcher: &SearchMatcher,
     path: &Path,
     rel: &str,

@@ -342,6 +342,16 @@ async function main() {
       process.exit(prepareAssetsExitCode);
     }
 
+    // 浏览器预览页（/browser/preview）的 ```chart 围栏复用软件内同一份图表模块。
+    // 这里生成它的单文件产物，产物由 Rust 侧 include_str! 打进二进制；
+    // 不重新生成的话，发布包里会带着 build 前那一版（或根本不存在，直接编译失败）。
+    const prepareChartPreviewExitCode = await run('node', [
+      './tools/build_chart_preview_bundle.mjs',
+    ]);
+    if (prepareChartPreviewExitCode !== 0) {
+      process.exit(prepareChartPreviewExitCode);
+    }
+
     // RSSHub 进程内集成：把 rsshub 装进 SlidevEnv/node_modules（复用其 node.exe），
     // 必须在 prepare_utils_zip 打包 utils 树之前，装好的 rsshub 才会被一起打进离线包。
     // 幂等（已装则跳过）、不校验退出码（缺失只降级，不阻断 build）。

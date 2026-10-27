@@ -221,9 +221,13 @@ fn resolve_allowed_markdown_file(raw_path: &str) -> Result<PathBuf, String> {
 ///
 /// 允许的根与 markdown 预览一致：所有知识库根 + 资源库根。
 /// 只放行纯文本类扩展名 —— 这个端点是为了让图表读到 CSV/JSON，不是通用文件读取接口。
-fn resolve_allowed_data_file(raw_path: &str) -> Result<PathBuf, String> {
+///
+/// `note` 是预览页正在渲染的笔记路径。笔记本身若来自一次「在浏览器中查看」的明确授权，
+/// 就放行它引用的数据文件 —— 与软件内一致：软件内的 `read_file_content` 本来就对
+/// 已打开笔记的引用不做目录限制，否则白板场景放在 `~/Downloads`、图表数据放在
+/// `D:/datasets` 这类手册里明确示范的写法，在浏览器预览里会全部 403。
+fn resolve_allowed_data_file(raw_path: &str, note: Option<&str>) -> Result<PathBuf, String> {
     const DATA_EXTS: [&str; 6] = ["csv", "tsv", "json", "md", "markdown", "excalidraw"];
-
     let decoded = decode(raw_path)
         .map_err(|_| "Invalid path encoding".to_string())?
         .into_owned();
@@ -258,6 +262,17 @@ fn resolve_allowed_data_file(raw_path: &str) -> Result<PathBuf, String> {
     // 已显式放行预览的笔记本身，及其同目录下的数据文件。
     if is_remembered_preview_file(&file_canon) || is_sibling_of_remembered_preview(&file_canon) {
         return Ok(file_canon);
+    }
+
+    // 预览页报告的当前笔记必须**本身**是已授权预览的笔记；
+    // 否则任何人构造一个 `note=` 参数就能读到任意路径。
+    if let Some(note) = note {
+        let note_canon = PathBuf::from(note.trim_start_matches(r"\\?\")).canonicalize();
+        if let Ok(note_canon) = note_canon {
+            if is_remembered_preview_file(&note_canon) && is_markdown_file(&note_canon) {
+                return Ok(file_canon);
+            }
+        }
     }
 
     if allowed_roots.is_empty() {
@@ -362,33 +377,35 @@ async fn browser_knowledge_bases() -> HttpResponse {
 async fn browser_knowledge_base_files(id: web::Path<i32>) -> HttpResponse {
     let kb_id = id.into_inner();
 
-    let result = web::block(|| get_knowledge_base_list()).await;
-    let kbs = match result {
+    let kbs = match web::block(get_knowledge_base_list).await {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => return HttpResponse::InternalServerError().body(e),
         Err(_) => return HttpResponse::InternalServerError().finish(),
     };
-
-    let kb = match kbs.into_iter().find(|x| x.id == kb_id) {
-        Some(v) => v,
-        None => return HttpResponse::NotFound().body("Knowledge base not found"),
+    let Some(kb) = kbs.into_iter().find(|x| x.id == kb_id) else {
+        return HttpResponse::NotFound().body("Knowledge base not found");
     };
+    let kb_name = kb.knowledge_base_name.clone();
 
-    let root = PathBuf::from(&kb.location);
-    let root_canon = match root.canonicalize() {
-        Ok(v) => v,
-        Err(_) => return HttpResponse::NotFound().body("Knowledge base path not found"),
-    };
-
-    let root_canon_for_list = root_canon.clone();
-    let files = match web::block(move || {
-        let mut out = Vec::new();
-        collect_markdown_files(&root_canon_for_list, &mut out).map(|_| out)
+    let listing = web::block(move || {
+        let (root, files) = kb_root_and_files(&kb.location)?;
+        Ok::<_, String>(
+            files
+                .into_iter()
+                .map(|file| {
+                    let (rel, name) = kb_rel_and_name(&root, &file);
+                    let abs = file.to_string_lossy().trim_start_matches(r"\\?\").to_string();
+                    (abs, rel, name)
+                })
+                .collect::<Vec<_>>(),
+        )
     })
-    .await
-    {
+    .await;
+
+    let files = match listing {
         Ok(Ok(v)) => v,
-        _ => return HttpResponse::InternalServerError().finish(),
+        Ok(Err(e)) => return HttpResponse::NotFound().body(e),
+        Err(_) => return HttpResponse::InternalServerError().finish(),
     };
 
     info!(
@@ -397,31 +414,17 @@ async fn browser_knowledge_base_files(id: web::Path<i32>) -> HttpResponse {
         "browser preview: knowledge base markdown files collected"
     );
 
-    let mut items = String::new();
-    for file in files {
-        let display = file
-            .strip_prefix(&root_canon)
-            .ok()
-            .map(|p| p.to_string_lossy().replace('\\', "/"))
-            .unwrap_or_else(|| file.to_string_lossy().replace('\\', "/"));
+    HttpResponse::Ok()
+        .content_type("text/html; charset=utf-8")
+        .body(kb_list_page_html(kb_id, &kb_name, &files))
+}
 
-        let abs = file.to_string_lossy();
-        let abs = abs.trim_start_matches(r"\\?\");
-
-        let href_preview = format!("/browser/preview?path={}", encode(abs));
-        let href_download = format!("/browser/download?path={}", encode(abs));
-
-        let name = escape_html(file.file_name().and_then(|n| n.to_str()).unwrap_or(""));
-
-        items.push_str(&format!(
-            "<li><div class=\"row\"><a class=\"name\" href=\"{href_preview}\">{name}</a><a class=\"dl\" href=\"{href_download}\" title=\"下载\" aria-label=\"下载\">⭳</a></div><div class=\"sub\">{path}</div></li>",
-            href_preview = href_preview,
-            href_download = href_download,
-            name = name,
-            path = escape_html(&display)
-        ));
+/// 知识库文件列表页的 HTML（首屏就带完整列表，检索在其上增量过滤）。
+fn kb_list_page_html(kb_id: i32, kb_name: &str, files: &[(String, String, String)]) -> String {
+    let mut items = String::with_capacity(files.len() * 220);
+    for (abs, rel, name) in files {
+        items.push_str(&kb_file_row(abs, rel, name, None, None));
     }
-
     let html = format!(
         r#"<!doctype html>
         <html lang="zh">
@@ -430,11 +433,22 @@ async fn browser_knowledge_base_files(id: web::Path<i32>) -> HttpResponse {
           <meta name="viewport" content="width=device-width, initial-scale=1" />
           <title>Guaxi - {kb_name}</title>
           <style>
-            body {{ font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,'Noto Sans','PingFang SC','Microsoft YaHei',sans-serif; margin: 24px; color: #1f2328; }}
-            h1 {{ font-size: 18px; margin: 0 0 8px; }}
+            :root {{ color-scheme: light; }}
+            body {{ font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,'Noto Sans','PingFang SC','Microsoft YaHei',sans-serif; margin: 0; color: #1f2328; }}
+            .wrap {{ max-width: 1020px; margin: 0 auto; padding: 24px 20px 60px; }}
+            h1 {{ font-size: 18px; margin: 0 0 12px; }}
             .back {{ display: inline-block; margin: 0 0 14px; font-size: 13px; }}
+            .searchbar {{ position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+              padding: 10px 0 12px; margin-bottom: 6px; background: rgba(255,255,255,0.94); backdrop-filter: blur(8px);
+              border-bottom: 1px solid rgba(0,0,0,0.08); }}
+            .searchbar input[type="search"] {{ flex: 1 1 240px; min-width: 0; padding: 8px 10px; font-size: 13px;
+              border: 1px solid rgba(0,0,0,0.16); border-radius: 8px; outline: none; }}
+            .searchbar input[type="search"]:focus {{ border-color: rgba(9,105,218,0.55); box-shadow: 0 0 0 3px rgba(9,105,218,0.12); }}
+            .searchbar label {{ display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: rgba(31,35,40,0.72); white-space: nowrap; }}
+            .status {{ font-size: 12px; color: rgba(31,35,40,0.6); margin: 8px 0 12px; min-height: 16px; }}
             ul {{ list-style: none; padding: 0; margin: 0; }}
             li {{ padding: 10px 12px; border: 1px solid rgba(0,0,0,0.08); border-radius: 10px; margin-bottom: 10px; }}
+            li.hidden {{ display: none; }}
             a {{ color: #0969da; text-decoration: none; font-weight: 600; }}
             a:hover {{ text-decoration: underline; }}
             .row {{ display: flex; align-items: center; justify-content: space-between; gap: 10px; }}
@@ -442,26 +456,372 @@ async fn browser_knowledge_base_files(id: web::Path<i32>) -> HttpResponse {
             .dl {{ flex: 0 0 auto; font-weight: 700; padding: 2px 6px; border-radius: 8px; color: rgba(31,35,40,0.75); border: 1px solid rgba(0,0,0,0.08); }}
             .dl:hover {{ text-decoration: none; color: #0969da; border-color: rgba(9,105,218,0.35); background: rgba(9,105,218,0.06); }}
             .sub {{ margin-top: 6px; font-size: 12px; color: rgba(31,35,40,0.6); word-break: break-all; }}
+            .hits {{ margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }}
+            .hit {{ font-size: 12px; line-height: 1.5; padding: 5px 8px; border-radius: 6px; background: rgba(9,105,218,0.05);
+              color: rgba(31,35,40,0.8); text-decoration: none; font-weight: 400; word-break: break-all; }}
+            .hit:hover {{ background: rgba(9,105,218,0.1); text-decoration: none; }}
+            .hit .ln {{ color: rgba(31,35,40,0.45); margin-right: 6px; font-variant-numeric: tabular-nums; }}
+            mark {{ background: #fff3b0; color: inherit; padding: 0 1px; border-radius: 2px; }}
+            .empty {{ display: none; padding: 24px 8px; text-align: center; font-size: 13px; color: rgba(31,35,40,0.5); }}
+            .empty.show {{ display: block; }}
           </style>
         </head>
         <body>
-          <a class="back" href="/browser/knowledge-bases">← 返回知识库列表</a>
-          <h1>{kb_name}</h1>
-          <ul>{items}</ul>
+          <div class="wrap">
+            <a class="back" href="/browser/knowledge-bases">← 返回知识库列表</a>
+            <h1>{kb_name}</h1>
+            <div class="searchbar">
+              <input id="q" type="search" placeholder="按文件名或路径筛选，回车直接搜正文" autocomplete="off" spellcheck="false" />
+              <label><input id="content-mode" type="checkbox" /> 搜正文</label>
+              <label id="content-hint" style="display:none;color:rgba(31,35,40,0.5)">正文检索按行命中，最多每篇 5 行</label>
+            </div>
+            <div class="status" id="status"></div>
+            <ul id="list">{items}</ul>
+            <div class="empty" id="empty">没有匹配的文件</div>
+          </div>
+          <script>
+            const KB_ID = {kb_id};
+            const listEl = document.getElementById('list');
+            const qEl = document.getElementById('q');
+            const contentModeEl = document.getElementById('content-mode');
+            const contentHintEl = document.getElementById('content-hint');
+            const statusEl = document.getElementById('status');
+            const emptyEl = document.getElementById('empty');
+            // 首屏行（含锚点数据）缓存下来：正文模式退出时直接还原，不必重新请求。
+            const rows = new Map();
+            for (const li of listEl.querySelectorAll('li')) {{
+              rows.set(li.dataset.path, {{
+                el: li,
+                name: (li.dataset.name || '').toLowerCase(),
+                rel: (li.dataset.rel || '').toLowerCase(),
+              }});
+            }}
+
+            const escapeHtml = (s) => String(s)
+              .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+
+            function setStatus(text) {{ statusEl.textContent = text || ''; }}
+
+            function markText(text, needle) {{
+              const safe = escapeHtml(text);
+              if (!needle) return safe;
+              const idx = safe.toLowerCase().indexOf(needle.toLowerCase());
+              if (idx < 0) return safe;
+              return safe.slice(0, idx) + '<mark>' + safe.slice(idx, idx + needle.length) + '</mark>'
+                + safe.slice(idx + needle.length);
+            }}
+
+            /** 本地按文件名/路径过滤：几十毫秒内完成，不必打后端。 */
+            function filterByName(needle) {{
+              const q = String(needle || '').trim().toLowerCase();
+              let shown = 0;
+              for (const row of rows.values()) {{
+                const hit = !q || row.name.includes(q) || row.rel.includes(q);
+                row.el.classList.toggle('hidden', !hit);
+                const nameLink = row.el.querySelector('.name');
+                if (nameLink) {{
+                  const raw = row.el.dataset.name || '';
+                  nameLink.innerHTML = markText(raw, q);
+                }}
+                if (hit) shown += 1;
+              }}
+              emptyEl.classList.toggle('show', shown === 0);
+              setStatus(q ? ('匹配 ' + shown + ' / ' + rows.size + ' 个文件') : (rows.size + ' 个文件'));
+            }}
+
+            /** 正文检索：走后端端点，结果按文件分组渲染在对应行下面。 */
+            async function searchContent(needle) {{
+              const q = String(needle || '').trim();
+              if (!q) {{ restoreRows(); filterByName(qEl.value); return; }}
+              setStatus('正在检索正文…');
+              try {{
+                const resp = await fetch('/browser/knowledge-bases/' + KB_ID + '/search?content='
+                  + encodeURIComponent(q) + '&q=' + encodeURIComponent(qEl.value.trim()));
+                if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + (await resp.text()).slice(0, 80));
+                const data = await resp.json();
+                renderHits(data.hits || [], q);
+                const fileCount = new Set((data.hits || []).map((h) => h.path)).size;
+                setStatus('正文命中 ' + (data.total || 0) + ' 行，分布在 ' + fileCount + ' 个文件');
+              }} catch (error) {{
+                setStatus('正文检索失败：' + ((error && error.message) || error));
+              }}
+            }}
+
+            function renderHits(hits, needle) {{
+              restoreRows();
+              const byPath = new Map();
+              for (const hit of hits) {{
+                if (!byPath.has(hit.path)) byPath.set(hit.path, []);
+                byPath.get(hit.path).push(hit);
+              }}
+              for (const row of rows.values()) row.el.classList.add('hidden');
+              for (const [path, list] of byPath) {{
+                const row = rows.get(path);
+                if (!row) continue;
+                row.el.classList.remove('hidden');
+                const nameLink = row.el.querySelector('.name');
+                if (nameLink) nameLink.innerHTML = markText(row.el.dataset.name || '', needle);
+                const box = document.createElement('div');
+                box.className = 'hits';
+                for (const hit of list) {{
+                  const a = document.createElement('a');
+                  a.className = 'hit';
+                  a.href = '/browser/preview?path=' + encodeURIComponent(path);
+                  a.innerHTML = '<span class="ln">' + (hit.line_number || '') + '</span>'
+                    + markText(hit.line || '', needle);
+                  box.appendChild(a);
+                }}
+                row.el.appendChild(box);
+              }}
+              emptyEl.classList.toggle('show', byPath.size === 0);
+            }}
+
+            /** 清掉正文检索挂上去的命中块，回到初始行结构。 */
+            function restoreRows() {{
+              for (const row of rows.values()) {{
+                row.el.querySelectorAll('.hits').forEach((el) => el.remove());
+                row.el.classList.remove('hidden');
+                const nameLink = row.el.querySelector('.name');
+                if (nameLink) nameLink.textContent = row.el.dataset.name || '';
+              }}
+              emptyEl.classList.remove('show');
+            }}
+
+            let timer = 0;
+            qEl.addEventListener('input', () => {{
+              clearTimeout(timer);
+              const value = qEl.value;
+              timer = setTimeout(() => {{
+                if (contentModeEl.checked) waitAndSearch(value);
+                else {{ restoreRows(); filterByName(value); }}
+              }}, 120);
+            }});
+            qEl.addEventListener('keydown', (event) => {{
+              if (event.key !== 'Enter') return;
+              event.preventDefault();
+              if (!contentModeEl.checked) {{
+                contentModeEl.checked = true;
+                contentHintEl.style.display = '';
+              }}
+              searchContent(qEl.value);
+            }});
+            contentModeEl.addEventListener('change', () => {{
+              contentHintEl.style.display = contentModeEl.checked ? '' : 'none';
+              if (contentModeEl.checked) searchContent(qEl.value);
+              else {{ restoreRows(); filterByName(qEl.value); }}
+            }});
+
+            function waitAndSearch(value) {{
+              clearTimeout(timer);
+              timer = setTimeout(() => searchContent(value), 320);
+            }}
+
+            filterByName('');
+            qEl.focus();
+          </script>
         </body>
         </html>"#,
-        kb_name = escape_html(&kb.knowledge_base_name),
+        kb_name = escape_html(kb_name),
+        kb_id = kb_id,
         items = items
     );
 
-    HttpResponse::Ok()
-        .content_type("text/html; charset=utf-8")
-        .body(html)
+    html
+}
+
+/// 知识库文件列表的一行。`line` / `line_number` 给出时附带一条命中预览。
+fn kb_file_row(abs: &str, rel: &str, name: &str, line: Option<&str>, line_number: Option<u64>) -> String {
+    let href_preview = format!("/browser/preview?path={}", encode(abs));
+    let href_download = format!("/browser/download?path={}", encode(abs));
+    let hits = match (line, line_number) {
+        (Some(text), Some(no)) => format!(
+            "<div class=\"hits\"><a class=\"hit\" href=\"{href_preview}\"><span class=\"ln\">{no}</span>{text}</a></div>",
+            href_preview = href_preview,
+            no = no,
+            text = escape_html(text)
+        ),
+        _ => String::new(),
+    };
+    format!(
+        "<li data-path=\"{abs}\" data-name=\"{name}\" data-rel=\"{rel}\"><div class=\"row\"><a class=\"name\" href=\"{href_preview}\">{name}</a><a class=\"dl\" href=\"{href_download}\" title=\"下载\" aria-label=\"下载\">⭳</a></div><div class=\"sub\">{rel}</div>{hits}</li>",
+        abs = escape_html(abs),
+        name = escape_html(name),
+        rel = escape_html(rel),
+        href_preview = href_preview,
+        href_download = href_download,
+        hits = hits
+    )
+}
+
+#[derive(Deserialize)]
+struct KbFileQuery {
+    /// 文件名模糊检索词。空 = 不筛选（但仍受 `q` 的内容筛选约束）。
+    #[serde(default)]
+    q: Option<String>,
+    /// 正文检索词。非空时按行搜内容，结果里带命中行与行号。
+    #[serde(default)]
+    content: Option<String>,
+}
+
+/// 知识库文件列表的检索结果（`/browser/knowledge-bases/{id}/search` 的响应）。
+#[derive(serde::Serialize)]
+struct KbSearchHit {
+    path: String,
+    name: String,
+    rel: String,
+    /// 命中行文本（正文检索时才有）。
+    line: Option<String>,
+    line_number: Option<u64>,
+}
+
+#[derive(serde::Serialize)]
+struct KbSearchResponse {
+    total: usize,
+    hits: Vec<KbSearchHit>,
+}
+
+/// 解析知识库根目录并收集其中的 Markdown 文件（阻塞版本，供 `web::block` 调用）。
+fn kb_root_and_files(kb_location: &str) -> Result<(PathBuf, Vec<PathBuf>), String> {
+    let root = PathBuf::from(kb_location)
+        .canonicalize()
+        .map_err(|_| "Knowledge base path not found".to_string())?;
+    let mut out = Vec::new();
+    collect_markdown_files(&root, &mut out).map_err(|e| e.to_string())?;
+    Ok((root, out))
+}
+
+fn kb_rel_and_name(root: &Path, file: &Path) -> (String, String) {
+    let rel = file
+        .strip_prefix(root)
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|_| file.to_string_lossy().replace('\\', "/"));
+    let name = file
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .to_string();
+    (rel, name)
+}
+
+/// 文件名检索：按相对路径做不区分大小写的子串匹配。
+///
+/// 刻意不用模糊匹配：知识库动辄几百上千篇，模糊排序会把「看起来像」的结果
+/// 混在前面，用户找的是「我记得名字里有这几个字」，子串语义更可预期。
+fn kb_filter_by_name(files: Vec<PathBuf>, root: &Path, needle: &str) -> Vec<(PathBuf, String, String)> {
+    let needle = needle.trim().to_lowercase();
+    files
+        .into_iter()
+        .filter_map(|file| {
+            let (rel, name) = kb_rel_and_name(root, &file);
+            if needle.is_empty() || rel.to_lowercase().contains(&needle) {
+                Some((file, rel, name))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// 正文检索：复用软件内全文搜索的同一套 matcher（字面量、智能大小写、全词分词）。
+///
+/// 与软件内搜索面板同一套语义，用户不必在两处记两套规则。
+fn kb_search_content(
+    files: Vec<(PathBuf, String, String)>,
+    pattern: &str,
+) -> Result<Vec<KbSearchHit>, String> {
+    use crate::commands::searcher::{build_matcher, grep_file_matches, MatchOptions};
+
+    let matcher = build_matcher(pattern.trim(), &MatchOptions::default())?;
+    let mut hits = Vec::new();
+
+    for (file, rel, name) in files {
+        let mtime = crate::commands::searcher::file_mtime_ms(&file);
+        // 每个文件最多取 5 行，避免一篇长文档把整个结果列表刷满。
+        let Some((_, file_hits)) = grep_file_matches(&matcher, &file, &rel, mtime, Some(5)) else {
+            continue;
+        };
+        for hit in file_hits {
+            hits.push(KbSearchHit {
+                path: file.to_string_lossy().trim_start_matches(r"\\?\").to_string(),
+                name: name.clone(),
+                rel: rel.clone(),
+                line: hit.preview.map(|p| p.trim_end().to_string()),
+                line_number: hit.line_number,
+            });
+        }
+    }
+
+    Ok(hits)
+}
+
+/// 知识库文件检索的 JSON 接口：给列表页的搜索框用。
+///
+/// 做成独立端点而不是「重渲染整页」：整页接口每次都要重新遍历目录，用户在搜索框里
+/// 每敲一个字就重排一次滚动位置，体验很差。这里只返回结构化结果，由页面增量渲染。
+#[get("/browser/knowledge-bases/{id}/search")]
+async fn browser_kb_search(id: web::Path<i32>, query: web::Query<KbFileQuery>) -> HttpResponse {
+    let kb_id = id.into_inner();
+    let kbs = match web::block(get_knowledge_base_list).await {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => return HttpResponse::InternalServerError().body(e),
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
+    let Some(kb) = kbs.into_iter().find(|x| x.id == kb_id) else {
+        return HttpResponse::NotFound().body("Knowledge base not found");
+    };
+
+    let name_query = query.q.clone().unwrap_or_default();
+    let content_query = query.content.clone().unwrap_or_default();
+
+    let result = web::block(move || -> Result<KbSearchResponse, String> {
+        let (root, files) = kb_root_and_files(&kb.location)?;
+        let candidates = kb_filter_by_name(files, &root, &name_query);
+        if content_query.trim().is_empty() {
+            let hits: Vec<KbSearchHit> = candidates
+                .into_iter()
+                .map(|(file, rel, name)| KbSearchHit {
+                    path: file.to_string_lossy().trim_start_matches(r"\\?\").to_string(),
+                    name,
+                    rel,
+                    line: None,
+                    line_number: None,
+                })
+                .collect();
+            Ok(KbSearchResponse {
+                total: hits.len(),
+                hits,
+            })
+        } else {
+            let hits = kb_search_content(candidates, &content_query)?;
+            Ok(KbSearchResponse {
+                total: hits.len(),
+                hits,
+            })
+        }
+    })
+    .await;
+
+    match result {
+        Ok(Ok(payload)) => HttpResponse::Ok()
+            .content_type("application/json; charset=utf-8")
+            .append_header(("Cache-Control", "no-store"))
+            .json(payload),
+        Ok(Err(msg)) => HttpResponse::BadRequest().body(msg),
+        Err(_) => HttpResponse::InternalServerError().finish(),
+    }
 }
 
 #[derive(Deserialize)]
 struct PathQuery {
     path: String,
+}
+
+/// `/browser/file` 的查询参数：额外带上当前笔记，用于放行它引用的数据文件。
+#[derive(Deserialize)]
+struct DataFileQuery {
+    path: String,
+    #[serde(default)]
+    note: Option<String>,
 }
 
 #[get("/browser/raw")]
@@ -519,8 +879,8 @@ async fn browser_raw(query: web::Query<PathQuery>) -> HttpResponse {
 /// 图表要的是原始 CSV/JSON 文本。允许的根目录与 markdown 预览完全一致
 /// （知识库根 + 资源库根），不会因为多开一个端点而放宽可见范围。
 #[get("/browser/file")]
-async fn browser_file(query: web::Query<PathQuery>) -> HttpResponse {
-    let file_path = match resolve_allowed_data_file(&query.path) {
+async fn browser_file(query: web::Query<DataFileQuery>) -> HttpResponse {
+    let file_path = match resolve_allowed_data_file(&query.path, query.note.as_deref()) {
         Ok(v) => v,
         Err(msg) => {
             warn!(
@@ -826,6 +1186,7 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
           <script src="/browser/assets/echarts/echarts.min.js"></script>
           <script src="/browser/assets/echarts/echarts-liquidfill.min.js"></script>
           <script src="/browser/assets/echarts/echarts-wordcloud.min.js"></script>
+          <script src="/browser/assets/chart-preview/guaxi-chart-preview.js"></script>
           <script>window.process={{env:{{NODE_ENV:'production'}},platform:'browser',versions:{{}}}};window.global=window;</script>
           <script src="/browser/assets/excalidraw/excalidraw-export.js"></script>
           </head>
@@ -842,6 +1203,8 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
           <script>
             const contentEl = document.getElementById('content');
             const filePathEncoded = {filePathJson};
+            // 原始绝对路径：使用时统一 encodeURIComponent 一次，避免二次编码。
+            const notePath = {notePathJson};
             const baseDir = {baseDirJson};
 
             function escapeHtml(s) {{
@@ -923,8 +1286,9 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
              * 画面还是空的；此时若被截图或打印，结果就是一张空图。
              * 非扩展类型同步绘制，第一次探测就会命中，不产生可感知的等待。
              */
-            async function waitForChartPaint(chart, spec, timeoutMs = 3000) {{
-              const isWordCloud = /^wordcloud$/i.test(String((spec && spec.type) || ''));
+            async function waitForChartPaint(chart, option, timeoutMs = 3000) {{
+              const series = Array.isArray(option && option.series) ? option.series : [];
+              const isWordCloud = series.some((s) => /^wordcloud$/i.test(String((s && s.type) || '')));
               const deadline = Date.now() + timeoutMs;
               const painted = () => {{
                 try {{
@@ -998,20 +1362,16 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
                 const el = root.querySelector('#' + draft.id);
                 if (!el) continue;
                 try {{
-                  const parsed = parseChartSource(draft.source);
-                  if (!parsed.spec) throw new Error('spec 不是合法 JSON');
-                  let text = parsed.data;
-                  if (parsed.dataRef) {{
-                    text = await loadChartData(parsed.dataRef, baseDirHint);
-                  }}
-                  const rows = parseChartRows(text);
-                  if (!rows.length) throw new Error('数据为空');
+                  const built = await buildChartPreviewOption(draft.source, baseDirHint);
+                  // 数据为空只在「围栏声明了 data」时算错误。手册允许直接贴整段
+                  // ECharts option，那种围栏本来就没有 data，数据全在 option 里。
+                  if (built.expectsData && !built.records.length) throw new Error('数据为空');
                   el.style.height = '360px';
                   const chart = window.echarts.init(el, guaxiPreviewChartTheme(), {{ renderer: 'svg' }});
-                  chart.setOption(buildChartOption(parsed.spec, rows), true);
+                  chart.setOption(built.option, true);
                   // 词云布局是异步的（离屏 canvas 逐轮摆放文字），这里等它真正出字，
                   // 否则静态页截图/打印时会得到一张空图。其余类型同步绘制，循环立刻结束。
-                  await waitForChartPaint(chart, parsed.spec);
+                  await waitForChartPaint(chart, built.option);
                   window.addEventListener('resize', () => {{
                     try {{ chart.resize(); }} catch (_) {{}}
                   }});
@@ -1021,357 +1381,84 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
               }}
             }}
 
-            // 围栏解析：与软件内同构的极简版（spec 用 JSON，data 支持内联块与路径）。
-            function parseChartSource(source) {{
-              const text = String(source || '');
-              let spec = null;
-              let data = '';
-              let dataRef = '';
-              const lines = text.split(/\r?\n/);
-              let mode = '';
-              const specLines = [];
-              const dataLines = [];
+            // ── 图表：解析与 option 组装复用软件内同一份模块 ──────────────────────
+            //
+            // 这些函数以前在这里各写了一份「精简版」，结果是两边逐渐漂移：
+            // 软件内已登记的树图 / 旭日 / 关系 / 热力 / K线 / 甘特在软件里能画，
+            // 浏览器预览却报「静态预览暂不支持该图表类型」；连「直接贴完整 ECharts
+            // option」这种手册明确承诺的写法也会被判成非法 spec。
+            //
+            // 现在解析与组装全部交给 /browser/assets/chart-preview/guaxi-chart-preview.js
+            // （由 tools/build_chart_preview_bundle.mjs 从 guaxiChartData / guaxiChartTypes
+            // 打包而来）。这里只保留静态页特有的两件事：取数据、交给 ECharts。
 
-              for (const line of lines) {{
-                const trimmed = line.trim();
-                if (!trimmed) {{ if (mode === 'data') dataLines.push(''); continue; }}
-                const m = trimmed.match(/^(spec|data)\s*:\s*(.*)$/i);
-                if (m && !/^\s/.test(line)) {{
-                  mode = m[1].toLowerCase();
-                  const rest = m[2].trim();
-                  if (mode === 'data' && rest && rest !== '|' && rest !== '>') {{
-                    const looksPath = /^resource:/i.test(rest) || /^\.{{0,2}}\//.test(rest)
-                      || /^[a-zA-Z]:[\\/]/.test(rest) || /\.(csv|tsv|json)$/i.test(rest);
-                    if (looksPath) dataRef = rest;
-                    else dataLines.push(rest);
-                  }}
-                  continue;
-                }}
-                if (mode === 'data') dataLines.push(line);
-                else if (mode === 'spec') specLines.push(line);
+            /** 取不到共享模块时给出可读原因，而不是让每张图各自报一句空话。 */
+            function chartPreviewApi() {{
+              const api = window.GuaxiChartPreview;
+              if (!api || typeof api.buildChartOption !== 'function') {{
+                throw new Error('图表模块未加载（/browser/assets/chart-preview/guaxi-chart-preview.js）');
               }}
-
-              const specText = specLines.join('\n').trim();
-              if (specText) {{
-                try {{ spec = JSON.parse(specText); }} catch (_) {{
-                  try {{ spec = parseSimpleYaml(specText); }} catch (_) {{ spec = null; }}
-                }}
-              }}
-              data = dataLines.join('\n').trim();
-              return {{ spec: spec, data: data, dataRef: dataRef }};
+              return api;
             }}
 
-            // 极简 YAML 子集：只支持「key: value」与「[a, b]」数组，覆盖手册里所有 spec 写法。
-            // 不处理嵌套对象 —— 遇到就原样留成字符串，由 ECharts 自己忽略。
-            function parseSimpleYaml(text) {{
-              const out = {{}};
-              for (const raw of String(text).split(/\r?\n/)) {{
-                const line = raw.replace(/\t/g, '  ');
-                const trimmed = line.trim();
-                if (!trimmed || trimmed.startsWith('#')) continue;
-                const m = trimmed.match(/^([^:]+):\s*(.*)$/);
-                if (!m) continue;
-                const key = m[1].trim();
-                const value = m[2].trim();
-                if (!value) {{ out[key] = true; continue; }}
-                if (/^\[.*\]$/.test(value)) {{
-                  out[key] = value.slice(1, -1).split(',').map((v) => v.trim()).filter(Boolean);
-                  continue;
-                }}
-                if (/^['"].*['"]$/.test(value)) {{ out[key] = value.slice(1, -1); continue; }}
-                if (/^(true|false)$/i.test(value)) {{ out[key] = value.toLowerCase() === 'true'; continue; }}
-                if (/^-?\d+(\.\d+)?$/.test(value)) {{ out[key] = Number(value); continue; }}
-                out[key] = value;
-              }}
-              return Object.keys(out).length ? out : null;
-            }}
-
-            function parseChartRows(text) {{
-              const raw = String(text || '').trim();
-              if (!raw) return [];
-              if (/^[[{{]/.test(raw)) {{
-                try {{
-                  const parsed = JSON.parse(raw);
-                  const arr = Array.isArray(parsed) ? parsed : (parsed.data || parsed.rows || []);
-                  return Array.isArray(arr) ? arr : [];
-                }} catch (_) {{ return []; }}
-              }}
-              const delim = raw.indexOf('\t') >= 0 ? '\t' : ',';
-              const lines = raw.split(/\r?\n/).filter((l) => l.trim());
-              if (lines.length < 2) return [];
-              const header = lines[0].split(delim).map((h) => h.trim());
-              return lines.slice(1).map((line) => {{
-                const cells = line.split(delim);
-                const row = {{}};
-                header.forEach((key, i) => {{
-                  const v = String(cells[i] == null ? '' : cells[i]).trim();
-                  row[key] = v !== '' && /^-?\d+(\.\d+)?$/.test(v) ? Number(v) : v;
-                }});
-                return row;
-              }});
-            }}
-
+            /** bundled / 资源库 / 相对 / 绝对四种引用统一的取文本入口。 */
             async function loadChartData(ref, baseDirHint) {{
+              const api = chartPreviewApi();
+              const value = String(ref || '').trim();
+              // bundled: 样本已随包打进页面，不碰文件系统，任何机器都能画。
+              if (api.isBundledRef(value)) {{
+                const sample = api.getBundledSample(value);
+                if (!sample) {{
+                  throw new Error('没有内置样本「' + value + '」。可用：\n'
+                    + api.listBundledSamples().map((k) => '  - bundled:' + k).join('\n'));
+                }}
+                return sample.text;
+              }}
               // 1) 资源库引用：交给后端解析，前端不需要知道库根目录。
-              if (/^resource:/i.test(ref)) {{
-                const rel = ref.replace(/^resource:/i, '').replace(/^[/\\]+/, '');
+              if (/^resource:/i.test(value)) {{
+                const rel = value.replace(/^resource:/i, '').replace(/^[/\\]+/, '');
                 const resp = await fetch('/browser/resource?path=' + encodeURIComponent(rel));
                 if (!resp.ok) throw new Error('资源库数据读取失败: ' + resp.status);
                 return await resp.text();
               }}
-              // 2) 相对路径：相对当前笔记目录，经 /browser/raw 同源的静态读取端点。
-              const absolute = /^([a-zA-Z]:[\\/]|\/|~[\\/])/.test(ref)
-                ? ref
-                : ((baseDirHint ? baseDirHint.replace(/[\\/]+$/, '') + '/' : '') + ref.replace(/^\.\//, ''));
-              const resp = await fetch('/browser/file?path=' + encodeURIComponent(absolute));
+              // 2) 相对路径：相对当前笔记目录，经 /browser/file 的静态读取端点。
+              const absolute = /^([a-zA-Z]:[\\/]|\/|~[\\/])/.test(value)
+                ? value
+                : ((baseDirHint ? baseDirHint.replace(/[\\/]+$/, '') + '/' : '') + value.replace(/^\.\//, ''));
+              const resp = await fetch('/browser/file?path=' + encodeURIComponent(absolute)
+                + '&note=' + encodeURIComponent(notePath));
               if (!resp.ok) throw new Error('数据文件读取失败: ' + resp.status + ' ' + absolute);
               return await resp.text();
             }}
 
-            /**
-             * 组装 ECharts option。
-             *
-             * 只覆盖通用族（直角坐标系的 line/bar/area/waterfall/scatter + 饼图家族）：
-             * 这是手册与日常笔记里 95% 的用法。未覆盖的类型会明确提示，
-             * 而不是画出一张错图 —— 静态预览是只读视图，宁缺毋滥。
-             */
-            function buildChartOption(spec, rows) {{
-              const type = String(spec.type || 'line').toLowerCase().replace(/[\s_-]/g, '');
-              const xKey = String(spec.x || Object.keys(rows[0] || {{}})[0] || '');
-              let yKeys = Array.isArray(spec.y) ? spec.y.map(String)
-                : (spec.y ? [String(spec.y)] : Object.keys(rows[0] || {{}}).filter((k) => k !== xKey));
-              if (!yKeys.length) yKeys = ['value'];
+            /** 围栏里 `data:` 写的是外部引用，而不是内联文本。 */
+            function isExternalDataRef(parsed) {{
+              const value = String(parsed && parsed.data ? parsed.data : '');
+              if (!value || parsed.dataInline) return false;
+              if (/\r?\n/.test(value)) return false;
+              return /^(bundled|resource):/i.test(value)
+                || /^([a-zA-Z]:[\\/]|\/|~[\\/])/.test(value)
+                || /^(\.[\\/]|\.\.[\\/])/.test(value)
+                || /\.(csv|tsv|json|excalidraw)$/i.test(value);
+            }}
 
-              const cats = rows.map((r) => String(r[xKey] === undefined ? '' : r[xKey]));
-              const num = (v) => (typeof v === 'number' ? v : (Number.isFinite(Number(v)) && v !== '' ? Number(v) : null));
-              const title = spec.title ? {{ text: String(spec.title), left: 'center' }} : undefined;
-              const legend = spec.legend === false ? undefined : {{ bottom: 0 }};
-              const tooltip = spec.tooltip === false ? undefined : {{ trigger: 'axis' }};
-              const grid = {{ left: 48, right: 24, top: title ? 56 : 24, bottom: legend ? 48 : 32 }};
-
-              const isPie = ['pie', 'doughnut', 'donut', 'ring', 'circle', 'rosetype'].includes(type);
-              if (type === 'liquidfill') {{
-                // 水球图：扩展包已由页面脚本注册；未注册时 ECharts 会画空白，这里显式提示。
-                const val = num(rows[0][yKeys[0]]) || 0;
-                return {{
-                  title: title,
-                  series: [{{
-                    type: 'liquidFill',
-                    data: [Math.max(0, Math.min(1, (spec.max ? val / Number(spec.max) : val)))],
-                    radius: '78%',
-                    label: {{ formatter: spec.formatter || '{{c}}' }},
-                  }}],
-                }};
+            /** 围栏正文 → ECharts option，语义与软件内渲染链路完全一致。 */
+            async function buildChartPreviewOption(source, baseDirHint) {{
+              const api = chartPreviewApi();
+              const parsed = api.parseChartFence(source);
+              if (!parsed.spec) {{
+                throw new Error('无法解析 chart 围栏（spec 需要是 JSON 或 key: value 列表）');
               }}
-
-              if (type === 'wordcloud') {{
-                const wordKey = xKey;
-                const weightKey = yKeys[0];
-                return {{
-                  title: title,
-                  series: [{{
-                    type: 'wordCloud',
-                    shape: 'circle',
-                    sizeRange: Array.isArray(spec.sizeRange) ? spec.sizeRange : [14, 56],
-                    rotationRange: [0, 0],
-                    gridSize: 8,
-                    textStyle: {{ color: () => 'rgb(' + [
-                      60 + Math.round(Math.random() * 120),
-                      80 + Math.round(Math.random() * 100),
-                      140 + Math.round(Math.random() * 100),
-                    ].join(',') + ')' }},
-                    data: rows.map((r) => ({{ name: String(r[wordKey] === undefined ? '' : r[wordKey]), value: num(r[weightKey]) || 0 }})),
-                  }}],
-                }};
+              let raw = parsed.data;
+              let format = parsed.dataFormat;
+              if (isExternalDataRef(parsed)) {{
+                raw = await loadChartData(parsed.data, baseDirHint);
+                format = 'auto';
               }}
-
-              if (type === 'funnel') {{
-                const nameKey = xKey;
-                const valueKey = yKeys[0];
-                return {{
-                  title: title,
-                  tooltip: {{ trigger: 'item' }},
-                  legend: legend,
-                  series: [{{
-                    type: 'funnel',
-                    left: '12%', right: '12%', top: title ? 64 : 24, bottom: legend ? 48 : 24,
-                    sort: 'descending',
-                    gap: 2,
-                    label: {{ position: 'inside', formatter: '{{b}} {{c}}' }},
-                    data: rows.map((r) => ({{ name: String(r[nameKey] === undefined ? '' : r[nameKey]), value: num(r[valueKey]) || 0 }})),
-                  }}],
-                }};
-              }}
-
-              if (type === 'gauge') {{
-                // 单行数据 = 单环；多行 = 多环（与软件内语义一致）。
-                const valueKey = yKeys[0];
-                const nameKey = spec.x ? String(spec.x) : '';
-                const max = Number(spec.max) || 100;
-                const items = rows.slice(0, 6).map((r, i) => ({{
-                  name: nameKey ? String(r[nameKey] === undefined ? '' : r[nameKey]) : (spec.title ? String(spec.title) : ('指标 ' + (i + 1))),
-                  value: num(r[valueKey]) || 0,
-                }}));
-                const axisLine = {{ lineStyle: {{ width: 12 }} }};
-                const series = items.map((item, i) => ({{
-                  type: 'gauge',
-                  name: item.name,
-                  min: 0,
-                  max: max,
-                  radius: (items.length > 1 ? (86 - i * 14) : 78) + '%',
-                  startAngle: 210, endAngle: -30,
-                  splitNumber: 5,
-                  axisLine: axisLine,
-                  pointer: {{ width: 4 }},
-                  detail: {{ formatter: spec.formatter || '{{value}}', fontSize: 16, offsetCenter: [0, '62%'] }},
-                  title: {{ fontSize: 12, offsetCenter: [0, '82%'] }},
-                  data: [item],
-                }}));
-                return {{ title: title, series: series }};
-              }}
-
-              if (type === 'radar') {{
-                const nameKey = xKey;
-                const indicators = yKeys.map((k) => ({{ name: k, max: Math.max(...rows.map((r) => num(r[k]) || 0)) * 1.2 || 1 }}));
-                return {{
-                  title: title,
-                  tooltip: spec.tooltip === false ? undefined : {{}},
-                  legend: legend,
-                  radar: {{ indicator: indicators, radius: '62%', center: ['50%', title ? '56%' : '52%'] }},
-                  series: [{{
-                    type: 'radar',
-                    data: rows.slice(0, 8).map((r) => ({{
-                      name: String(r[nameKey] === undefined ? '' : r[nameKey]),
-                      value: yKeys.map((k) => num(r[k]) || 0),
-                    }})),
-                  }}],
-                }};
-              }}
-
-              if (type === 'sankey') {{
-                const sourceKey = String(spec.source || xKey);
-                const targetKey = spec.target ? String(spec.target) : (yKeys[0] || 'target');
-                const valueKey = spec.value ? String(spec.value) : (yKeys[1] || 'value');
-                const names = [];
-                const links = [];
-                rows.forEach((r) => {{
-                  const s = String(r[sourceKey] === undefined ? '' : r[sourceKey]);
-                  const t = String(r[targetKey] === undefined ? '' : r[targetKey]);
-                  if (!names.includes(s)) names.push(s);
-                  if (!names.includes(t)) names.push(t);
-                  links.push({{ source: s, target: t, value: num(r[valueKey]) || 0 }});
-                }});
-                return {{
-                  title: title,
-                  tooltip: {{ trigger: 'item' }},
-                  series: [{{
-                    type: 'sankey',
-                    left: 24, right: 24, top: title ? 56 : 24, bottom: 24,
-                    data: names.map((n) => ({{ name: n }})),
-                    links: links,
-                    emphasis: {{ focus: 'adjacency' }},
-                  }}],
-                }};
-              }}
-
-              // 未覆盖的类型在函数末尾统一报错（见 buildChartOption 结尾）。
-
-              if (isPie) {{
-                const nameKey = xKey;
-                const valueKey = yKeys[0];
-                return {{
-                  title: title,
-                  tooltip: spec.tooltip === false ? undefined : {{ trigger: 'item' }},
-                  legend: legend,
-                  series: [{{
-                    name: spec.title ? String(spec.title) : '占比',
-                    type: 'pie',
-                    radius: (type === 'pie') ? (spec.radius || '62%') : (spec.radius || ['42%', '66%']),
-                    itemStyle: {{ borderRadius: 4, borderColor: '#fff', borderWidth: 1 }},
-                    label: {{ formatter: '{{b}}: {{d}}%' }},
-                    data: rows.map((r) => ({{ name: String(r[nameKey] === undefined ? '' : r[nameKey]), value: num(r[valueKey]) || 0 }})),
-                  }}],
-                }};
-              }}
-
-              // 走到这里只剩直角坐标系的通用族；其余类型明确报错而不是画一张错图。
-              const supportedCartesian = ['line', 'area', 'bar', 'column', 'waterfall', 'pictorialbar', 'scatter', 'bubble'];
-              if (!supportedCartesian.includes(type)) {{
-                throw new Error('静态预览暂不支持该图表类型：' + type + '（请在软件内查看完整图表）');
-              }}
-              const scatterLike = ['scatter', 'bubble'].includes(type);
-              if (scatterLike) {{
-                return {{
-                  title: title,
-                  tooltip: {{ trigger: 'item' }},
-                  legend: legend,
-                  grid: grid,
-                  xAxis: {{ type: 'category', data: cats, name: spec.xName || '' }},
-                  yAxis: {{ type: 'value', name: spec.yName || '' }},
-                  series: yKeys.map((k) => ({{
-                    name: k,
-                    type: 'scatter',
-                    symbolSize: Number(spec.symbolSize) || 10,
-                    data: rows.map((r) => num(r[k])),
-                  }})),
-                }};
-              }}
-
-              const isStack = spec.stack === true || typeof spec.stack === 'string';
-              if (type === 'waterfall') {{
-                // 瀑布图：由增量推累计。
-                const deltas = rows.map((r) => num(r[yKeys[0]]) || 0);
-                const base = [];
-                const value = [];
-                let acc = 0;
-                deltas.forEach((d, i) => {{
-                  if (spec.total === true && i === deltas.length - 1) {{
-                    base.push(0); value.push(acc);
-                  }} else {{
-                    base.push(d >= 0 ? acc : acc + d); value.push(Math.abs(d)); acc += d;
-                  }}
-                }});
-                const series = [
-                  {{ name: 'base', type: 'bar', stack: 'wf', itemStyle: {{ color: 'transparent' }}, emphasis: {{ itemStyle: {{ color: 'transparent' }} }}, data: base }},
-                  {{ name: yKeys[0], type: 'bar', stack: 'wf', data: value }},
-                ];
-                return {{ title: title, tooltip: tooltip, legend: legend, grid: grid,
-                  xAxis: {{ type: 'category', data: cats }}, yAxis: {{ type: 'value' }}, series: series }};
-              }}
-
-              const horizontal = String(spec.orient || '').toLowerCase() === 'horizontal';
-              const isBar = ['bar', 'waterfall', 'pictorialbar', 'column'].includes(type) || horizontal;
-              const series = yKeys.map((k, i) => {{
-                const base = {{
-                  name: k,
-                  type: isBar ? 'bar' : 'line',
-                  data: rows.map((r) => num(r[k])),
-                }};
-                if (isBar) {{
-                  base.barMaxWidth = 42;
-                  if (spec.showBackground) base.showBackground = true;
-                  if (isStack) base.stack = typeof spec.stack === 'string' ? spec.stack : 'total';
-                  if (Array.isArray(spec.itemColors) && spec.itemColors[i]) base.itemStyle = {{ color: spec.itemColors[i] }};
-                }} else {{
-                  if (spec.smooth) base.smooth = true;
-                  if (spec.step) base.step = spec.step === true ? 'middle' : String(spec.step);
-                  base.symbolSize = Number(spec.symbolSize) || 6;
-                  if (type === 'area' || spec.areaStyle) base.areaStyle = {{ opacity: 0.25 }};
-                }}
-                return base;
-              }});
-
-              const catAxis = {{ type: 'category', data: cats, name: spec.xName || '' }};
-              const valAxis = {{ type: 'value', name: spec.yName || '', min: spec.axisMin, max: spec.axisMax }};
-              return {{
-                title: title,
-                tooltip: tooltip,
-                legend: legend,
-                grid: grid,
-                xAxis: horizontal ? valAxis : catAxis,
-                yAxis: horizontal ? catAxis : valAxis,
-                series: series,
-              }};
+              const records = api.normalizeDataset(raw, format);
+              const option = api.buildChartOption(parsed.spec, records);
+              // 「围栏写了 data」= 需要外部数据；直接贴整段 option 的写法没有 data。
+              return {{ option: option, records: records, expectsData: !!raw && raw.trim() !== '' }};
             }}
 
             async function loadAndRender() {{
@@ -1527,6 +1614,9 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
         title = escape_html(title),
         path = escape_html(file_path.to_string_lossy().as_ref()),
         filePathJson = serde_json::to_string(&encoded_path).unwrap_or_else(|_| "\"\"".to_string()),
+        // 数据文件端点要带着当前笔记一起请求：只有「在软件内点开预览」的那份笔记
+        // 才有资格放行它引用的白板场景 / CSV，避免这条通道变成任意路径读取。
+        notePathJson = serde_json::to_string(abs).unwrap_or_else(|_| "\"\"".to_string()),
         baseDirJson = serde_json::to_string(&base_dir).unwrap_or_else(|_| "\"\"".to_string()),
         encodedPath = encoded_path
     );
@@ -1611,6 +1701,19 @@ async fn browser_asset_excalidraw_export() -> HttpResponse {
         .body(include_str!("../../assets/vendor/excalidraw-export.js"))
 }
 
+/// 图表解析 / option 组装的共享模块（软件内同一份纯逻辑的 IIFE 打包）。
+///
+/// 页面里不再自备一份精简解析器：那份副本已经和软件内漂移，导致树图、旭日、
+/// 关系图、热力图、K 线、甘特图在浏览器预览里全部报「暂不支持」。
+/// 产物由 `node ./tools/build_chart_preview_bundle.mjs` 生成。
+#[get("/browser/assets/chart-preview/guaxi-chart-preview.js")]
+async fn browser_asset_chart_preview() -> HttpResponse {
+    HttpResponse::Ok()
+        .content_type("application/javascript; charset=utf-8")
+        .append_header(("Cache-Control", "no-store"))
+        .body(include_str!("../../assets/vendor/guaxi-chart-preview.js"))
+}
+
 #[get("/browser/assets/highlightjs/styles/atom-one-light.css")]
 async fn browser_asset_highlight_css() -> HttpResponse {
     HttpResponse::Ok()
@@ -1624,6 +1727,7 @@ pub fn browser_preview_config(cfg: &mut web::ServiceConfig) {
         .service(browser_index)
         .service(browser_knowledge_bases)
         .service(browser_knowledge_base_files)
+        .service(browser_kb_search)
         .service(browser_raw)
         .service(browser_file)
         .service(browser_resource)
@@ -1636,6 +1740,7 @@ pub fn browser_preview_config(cfg: &mut web::ServiceConfig) {
         .service(browser_asset_echarts_liquidfill)
         .service(browser_asset_echarts_wordcloud)
         .service(browser_asset_excalidraw_export)
+        .service(browser_asset_chart_preview)
         .service(browser_asset_highlight_css)
         .service(browser_preview);
 }
@@ -1724,8 +1829,46 @@ mod tests {
         let source = include_str!("markdown_browser.rs");
         assert!(source.contains("waitForChartPaint"), "缺少等待绘制的逻辑");
         assert!(
-            source.contains("await waitForChartPaint(chart, parsed.spec)"),
+            source.contains("await waitForChartPaint(chart, built.option)"),
             "渲染入口没有调用等待逻辑"
         );
+    }
+
+    /// 图表解析必须复用软件内的共享模块，而不是页面里自带的精简副本。
+    ///
+    /// 这条约束曾经以最隐蔽的方式失效：页面里那份副本能画出折线/柱状，
+    /// 于是「预览看起来是好的」；直到用户画树图、旭日、关系图、热力、K 线或甘特，
+    /// 才报「静态预览暂不支持该图表类型」。共享模块一旦被删回去，这里立刻报警。
+    #[test]
+    fn preview_page_reuses_shared_chart_module() {
+        let source = include_str!("markdown_browser.rs");
+        assert!(
+            source.contains("/browser/assets/chart-preview/guaxi-chart-preview.js"),
+            "预览页没有引入共享图表模块"
+        );
+        assert!(
+            source.contains("buildChartPreviewOption"),
+            "预览页没有走共享模块的解析入口"
+        );
+        // 拼出名字再比对：直接写全名会让断言匹配到它自己。
+        for gone in ["parseChartSource", "parseChartRows", "parseSimpleYaml"] {
+            let needle = format!("function {}", gone);
+            assert!(
+                !source.contains(&needle),
+                "页面里又出现了自带的精简解析器：{needle}"
+            );
+        }
+    }
+
+    /// 知识库列表页必须带检索能力，而不是只能一篇篇点。
+    #[test]
+    fn knowledge_base_page_offers_search() {
+        let source = include_str!("markdown_browser.rs");
+        assert!(
+            source.contains("/browser/knowledge-bases/{id}/search"),
+            "缺少正文检索端点"
+        );
+        assert!(source.contains("filterByName"), "缺少文件名筛选");
+        assert!(source.contains("searchContent"), "缺少正文检索");
     }
 }
