@@ -338,7 +338,8 @@ import { useMailSelectionTranslate } from './useMailSelectionTranslate'
 
 // 翻译面板是邮件页里唯一依赖 naive-ui 的组件：只在真正划词时加载。
 const GuaxiSelectionTranslatePanel = defineAsyncComponent(
-  () => import('../../HomeViewComponent/GuaxiSelectionTranslatePanel.vue'),
+  // 本文件在 apps/mail/ 下，到 HomeViewComponent 要上三级（apps → ApplicationViewComponent → components）。
+  () => import('../../../HomeViewComponent/GuaxiSelectionTranslatePanel.vue'),
 )
 import MailIcon from './MailIcon.vue'
 
