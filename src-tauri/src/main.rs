@@ -1423,7 +1423,16 @@ async fn app_main() {
                                 }
 
                                 if shortcut.matches(GLOBAL_MODS, Code::KeyA) {
+                                    // 用户当时在不在本应用里。App 在后台 / 最小化时按下这个键，
+                                    // 用户要的是「把助手唤出来」，这时前端必须只展开、不能再 toggle 一次收起；
+                                    // 只有窗口本来就在眼前（可见 + 最小化否 + 有焦点），才把它当成开/关切换。
+                                    let mut was_revealed = false;
                                     if let Some(window) = _app.get_webview_window("main") {
+                                        let visible = window.is_visible().unwrap_or(false);
+                                        let minimized = window.is_minimized().unwrap_or(false);
+                                        let focused = window.is_focused().unwrap_or(false);
+                                        was_revealed = !visible || minimized || !focused;
+
                                         if let Err(e) = window.show() {
                                             error!("显示主窗口失败: {}", e);
                                         }
@@ -1434,7 +1443,12 @@ async fn app_main() {
                                             error!("主窗口聚焦失败: {}", e);
                                         }
                                     }
-                                    if let Err(e) = _app.emit("assistant_global_shortcut", "wake_assistant")
+                                    let payload = if was_revealed {
+                                        "reveal_assistant"
+                                    } else {
+                                        "toggle_assistant"
+                                    };
+                                    if let Err(e) = _app.emit("assistant_global_shortcut", payload)
                                     {
                                         error!("发送助手唤醒事件失败: {}", e);
                                     }

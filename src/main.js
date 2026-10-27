@@ -162,17 +162,44 @@ const OPEN_ASSISTANT_EVENT = 'assistant_global_shortcut'
 let unlistenOpenFileInHome = null
 let unlistenOpenAssistant = null
 
-const openAssistantPanel = async (source = 'unknown') => {
+/**
+ * 唤醒 / 收起智能助手侧栏。
+ *
+ * Ctrl+Alt+A 在 Rust 端注册成了**系统级全局快捷键**（见 main.rs 的 global shortcut 插件），
+ * 按下后按键被操作系统截走，不会再送进 webview —— 也就是说 GuaxiHeader 里那份会 toggle
+ * 的热键处理根本收不到这个键。真正响应的是这里的 `assistant_global_shortcut` 事件，
+ * 所以"再按一次收起"必须由这里自己判断，否则快捷键只能展开、永远收不回来。
+ *
+ * 判断与 Header 的 openAssistantPanel 保持同一套条件：回到首页、右侧栏展开着、且当前面板就是助手。
+ *
+ * @param {{ mode?: 'toggle' | 'reveal' }} options
+ *   `reveal` 只展开不收起 —— 后端在主窗口本来最小化/隐藏、被这个快捷键唤回时用这一档。
+ */
+const toggleAssistantPanelFromShortcut = async (source = 'unknown', options = {}) => {
+  const mode = options.mode === 'reveal' ? 'reveal' : 'toggle'
   try {
+    const isOnHome = router?.currentRoute?.value?.path === '/'
+    const isVisible = siderStore.isRightSiderCollapsed?.['home'] === false
+
+    const isAssistantOpen =
+      isOnHome && isVisible && rightSiderStore.isOpen && rightSiderStore.panel === 'assistant'
+
+    if (mode === 'toggle' && isAssistantOpen) {
+      rightSiderStore.close()
+      siderStore.setRightSiderCollapsed('home', true)
+      logger.info('[Main] assistant panel closed', { source })
+      return
+    }
+
     rightSiderStore.setPanel('assistant')
     rightSiderStore.open()
     siderStore.setRightSiderCollapsed('home', false)
-    if (router?.currentRoute?.value?.path !== '/') {
+    if (!isOnHome) {
       await router.push('/').catch(() => {})
     }
     logger.info('[Main] assistant panel opened', { source })
   } catch (e) {
-    logger.error('[Main] open assistant panel failed:', e)
+    logger.error('[Main] toggle assistant panel failed:', e)
   }
 }
 
@@ -232,8 +259,12 @@ if (windowLabel === 'main') {
     logger.error('[Main] open_file_in_home listener register failed:', e)
   })
 
-  listen(OPEN_ASSISTANT_EVENT, () => {
-    openAssistantPanel('global_shortcut')
+  listen(OPEN_ASSISTANT_EVENT, (event) => {
+    // 后端会区分「窗口本就在前台 → toggle」和「窗口刚被唤回 → 只展开」：
+    // 最小化状态下按快捷键，用户要的是看到助手，不该因为侧栏上次是开着的就把它关掉。
+    const payload = String(event?.payload || '')
+    const mode = payload === 'reveal_assistant' ? 'reveal' : 'toggle'
+    toggleAssistantPanelFromShortcut('global_shortcut', { mode })
   }).then((unlisten) => {
     unlistenOpenAssistant = unlisten
     logger.info('[Main] assistant_global_shortcut listener registered')

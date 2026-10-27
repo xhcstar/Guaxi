@@ -143,6 +143,8 @@
             顶栏两端的 <span class="inline-icon"><Icon :icon="panelLeftIcon" width="14" height="14" /></span> /
             <span class="inline-icon"><Icon :icon="panelRightIcon" width="14" height="14" /></span>
             用来展开或收起左右侧栏（<b>Alt+[</b> / <b>Alt+]</b>）；侧栏收起时图标会变淡。
+            带快捷键的图标都改成了<b>两键</b>组合（<b>Alt+字母</b>），鼠标悬停图标就能看到属于它的那一个；
+            少数没有快捷键的图标在下表里标了「无快捷键」。
           </p>
           <ul class="manual-ul">
             <li>全局搜索：搜索文件、正文关键字和摘录笔记，支持记号筛选、正则/全词/大小写开关和命令面板；可用 Ctrl+P 聚焦搜索框，用法见<button type="button" class="toc-link" @click="scrollToSection('search-local')">搜索与查询语法</button>。</li>
@@ -156,66 +158,104 @@
             <div class="icon-legend-grid">
               <div class="icon-legend-item">
                 <span class="icon-legend-glyph"><Icon :icon="panelLeftIcon" width="16" height="16" /></span>
-                <span><b>侧栏开关</b>：左右各一个，展开或收起对应侧栏。</span>
+                <span><b>侧栏开关</b>：左右各一个，展开或收起对应侧栏（Alt+[ / Alt+]）。</span>
               </div>
               <div class="icon-legend-item">
                 <span class="icon-legend-glyph"><Icon :icon="panelTopCloseIcon" width="16" height="16" /></span>
-                <span><b>编辑区装饰条</b>：隐藏或显示格式工具栏与面包屑（Ctrl+Alt+G）。</span>
+                <span><b>编辑区装饰条</b>：隐藏或显示格式工具栏与面包屑（Alt+G）。</span>
               </div>
               <div class="icon-legend-item">
                 <span class="icon-legend-glyph"><Icon :icon="bookPlusIcon" width="16" height="16" /></span>
-                <span><b>新建知识库</b>：创建并打开一个新的知识库。</span>
+                <span><b>新建知识库</b>：创建并打开一个新的知识库（Alt+B）。</span>
               </div>
               <div class="icon-legend-item">
                 <span class="icon-legend-glyph"><Icon :icon="listTreeIcon" width="16" height="16" /></span>
-                <span><b>大纲</b>：打开当前文档的大纲面板。</span>
+                <span><b>大纲</b>：打开当前文档的大纲面板（Alt+D）。</span>
               </div>
               <div class="icon-legend-item">
                 <span class="icon-legend-glyph"><Icon :icon="botIcon" width="16" height="16" /></span>
-                <span><b>智能助手</b>：打开右侧 AI 助手面板。</span>
+                <span><b>智能助手</b>：打开或收起右侧 AI 助手面板（Alt+A）。</span>
               </div>
               <div class="icon-legend-item">
                 <span class="icon-legend-glyph"><Icon :icon="packageIcon" width="16" height="16" /></span>
-                <span><b>模板管理</b>：管理 Markdown 模板。</span>
+                <span><b>模板管理</b>：管理 Markdown 模板（Alt+E）。</span>
               </div>
               <div class="icon-legend-item">
                 <span class="icon-legend-glyph"><Icon :icon="presentationIcon" width="16" height="16" /></span>
-                <span><b>PPT 制作与管理</b>：打开 Slidev 演示文稿管理器。</span>
+                <span><b>PPT 制作与管理</b>：打开 Slidev 演示文稿管理器（无快捷键）。</span>
               </div>
               <div class="icon-legend-item">
                 <span class="icon-legend-glyph"><Icon :icon="folderOpenIcon" width="16" height="16" /></span>
-                <span><b>知识库资源管理</b>：管理资源库目录与文件。</span>
+                <span><b>知识库资源管理</b>：管理资源库目录与文件（Alt+R）。</span>
               </div>
               <div class="icon-legend-item">
                 <span class="icon-legend-glyph"><Icon :icon="listChecksIcon" width="16" height="16" /></span>
-                <span><b>任务管理</b>：打开任务管理面板。</span>
+                <span><b>任务管理</b>：打开任务管理面板（无快捷键）。</span>
               </div>
               <div class="icon-legend-item">
                 <span class="icon-legend-glyph"><Icon :icon="gitCompareIcon" width="16" height="16" /></span>
-                <span><b>差异对比</b>：对比任意文件或目录。</span>
+                <span><b>差异对比</b>：对比任意文件或目录（无快捷键）。</span>
               </div>
               <div class="icon-legend-item">
                 <span class="icon-legend-glyph"><Icon :icon="languagesIcon" width="16" height="16" /></span>
-                <span><b>语言学习</b>：打开语言学习窗口。</span>
+                <span><b>语言学习</b>：打开语言学习窗口（无快捷键）。</span>
               </div>
               <div class="icon-legend-item">
                 <span class="icon-legend-glyph"><Icon :icon="cameraIcon" width="16" height="16" /></span>
-                <span><b>截图并插入</b>：选择是否隐藏窗口后截图，插入当前文档。</span>
+                <span><b>截图并插入</b>：选择是否隐藏窗口后截图，插入当前文档（Alt+S）。</span>
               </div>
               <div class="icon-legend-item">
                 <span class="icon-legend-glyph"><Icon :icon="columnsIcon" width="16" height="16" /></span>
-                <span><b>纵向分屏</b>：左右两栏并排编辑。</span>
+                <span><b>纵向分屏</b>：左右两栏并排编辑（Alt+V）。</span>
               </div>
               <div class="icon-legend-item">
                 <span class="icon-legend-glyph"><Icon :icon="rowsIcon" width="16" height="16" /></span>
-                <span><b>横向分屏</b>：上下两栏编辑。</span>
+                <span><b>横向分屏</b>：上下两栏编辑（Alt+H）。</span>
               </div>
               <div class="icon-legend-item">
                 <span class="icon-legend-glyph"><Icon :icon="helpCircleIcon" width="16" height="16" /></span>
-                <span><b>新手引导</b>：重新观看界面引导。</span>
+                <span><b>新手引导</b>：重新观看界面引导（无快捷键）。</span>
               </div>
             </div>
           </div>
+
+          <h3 class="h3">快捷键速查</h3>
+          <p class="p">
+            顶栏图标一律用<b>两键</b>组合（Alt+字母），字母取自动作英文名的首字母；
+            首字母已被其他功能占用时换个有辨识度的字母，例如大纲（Document outline）用 D、模板（第二个字母）用 E。
+            下面这张表按用途分三组，最后一组是应用内快捷键里最常按的那几个。
+          </p>
+          <div class="shortcut-table">
+            <div class="shortcut-group-title">顶栏图标</div>
+            <div class="shortcut-row"><span class="shortcut-name">新建知识库</span><span class="shortcut-keys">Alt+B</span></div>
+            <div class="shortcut-row"><span class="shortcut-name">大纲</span><span class="shortcut-keys">Alt+D</span></div>
+            <div class="shortcut-row"><span class="shortcut-name">智能助手（开 / 关）</span><span class="shortcut-keys">Alt+A</span></div>
+            <div class="shortcut-row"><span class="shortcut-name">模板管理</span><span class="shortcut-keys">Alt+E</span></div>
+            <div class="shortcut-row"><span class="shortcut-name">知识库资源管理</span><span class="shortcut-keys">Alt+R</span></div>
+            <div class="shortcut-row"><span class="shortcut-name">截图并插入</span><span class="shortcut-keys">Alt+S</span></div>
+            <div class="shortcut-row"><span class="shortcut-name">纵向分屏</span><span class="shortcut-keys">Alt+V</span></div>
+            <div class="shortcut-row"><span class="shortcut-name">横向分屏</span><span class="shortcut-keys">Alt+H</span></div>
+            <div class="shortcut-row"><span class="shortcut-name">工具栏与面包屑显隐</span><span class="shortcut-keys">Alt+G</span></div>
+            <div class="shortcut-row"><span class="shortcut-name">展开 / 收起左、右侧栏</span><span class="shortcut-keys">Alt+[　Alt+]</span></div>
+            <div class="shortcut-row"><span class="shortcut-name">聚焦全局搜索框</span><span class="shortcut-keys">Ctrl+P</span></div>
+
+            <div class="shortcut-group-title">左栏文件树</div>
+            <div class="shortcut-row"><span class="shortcut-name">新建文件</span><span class="shortcut-keys">Ctrl+Alt+N</span></div>
+            <div class="shortcut-row"><span class="shortcut-name">新建文件夹</span><span class="shortcut-keys">Ctrl+Alt+Shift+N</span></div>
+            <div class="shortcut-row"><span class="shortcut-name">导入文件</span><span class="shortcut-keys">Ctrl+Alt+I</span></div>
+
+            <div class="shortcut-group-title">页面导航与面板</div>
+            <div class="shortcut-row"><span class="shortcut-name">左栏导航：知识编辑 / 智能助手 / 仓库 / 知识图谱 / 应用 / 统计 / 搜索 / 白板 / 设置</span><span class="shortcut-keys">Ctrl+Alt+1 ~ 9</span></div>
+            <div class="shortcut-row"><span class="shortcut-name">搜索结果面板：文件 / 内容 / 摘录</span><span class="shortcut-keys">Alt+1　Alt+2　Alt+3</span></div>
+          </div>
+          <p class="p">
+            两条容易踩的边界：<b>Alt+1/2/3 归搜索结果面板</b>，所以页面导航仍然用 Ctrl+Alt+数字，不会互相抢；
+            探索者（笔记本）工具栏的 <b>Alt+P / Alt+M / Alt+K / Alt+I / Alt+O / Alt+L / Alt+T</b> 也没有被顶栏占用。
+          </p>
+          <p class="p">
+            <b>Ctrl+Alt+A</b>（三个键）保留给<b>系统级唤醒</b>：即使主窗口最小化或在别的应用后面，
+            按它也会把窗口拉到前台并打开助手。窗口本来就在前台时，这个键和 Alt+A 一样可以开关助手。
+          </p>
 
           <h3 class="h3">文件树与目录</h3>
           <ul class="manual-ul">
@@ -231,7 +271,7 @@
             格式工具栏和面包屑导航会占掉两行高度。打开 PDF、电子书、图片这类只读内容时，
             点主窗口左上角 Guaxi 标志右侧的
             <span class="inline-icon"><Icon :icon="panelTopCloseIcon" width="14" height="14" /></span>
-            <b>收起图标</b>（或按 <b>Ctrl+Alt+G</b>）可以把两条一起隐藏，
+            <b>收起图标</b>（或按 <b>Alt+G</b>）可以把两条一起隐藏，
             把高度让给正文；再点一次恢复。状态会按窗口记住，默认显示。
           </p>
 
@@ -1356,6 +1396,54 @@ onMounted(() => {
   .icon-legend-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* 快捷键速查表：名字靠左、按键靠右，按键用等宽字体带底色，扫一眼就能对上。
+   行内不写序号，用分组标题分隔三块，免得读者一长串往下数。 */
+.shortcut-table {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 10px;
+  background: var(--guaxi-panel-bg);
+}
+
+.shortcut-group-title {
+  margin: 12px 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--guaxi-text-primary);
+}
+
+.shortcut-group-title:first-child {
+  margin-top: 0;
+}
+
+.shortcut-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 3px 0;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--guaxi-text-secondary);
+}
+
+.shortcut-name {
+  min-width: 0;
+}
+
+.shortcut-keys {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border-radius: 5px;
+  border: 1px solid var(--guaxi-border);
+  background: rgba(127, 127, 127, 0.1);
+  font-family: var(--guaxi-editor-font-family, monospace);
+  font-size: 12px;
+  color: var(--guaxi-text-primary);
+  white-space: nowrap;
 }
 
 /* 围栏示例：展示 ```chart / ```excalidraw 这类会「吃掉反引号」的语法。
