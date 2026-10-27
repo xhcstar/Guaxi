@@ -2565,8 +2565,13 @@ const handleMarkdownLeave = () => {
   });
 }
 
+// 库里以「无扩展名的 file_stem」作为目录名（见 repofileproc.rs），
+// 而 fileName 是带扩展名的原始文件名。EPUB 与 Kindle 系（mobi/azw/azw3）共用本组件，
+// 不能只摘掉某一个后缀。
+const bookStem = computed(() => props.fileName.replace(/\.[^./\\]+$/, ''))
+
 const updateMarkdownPath = async () => {
-  const baseFileName = props.fileName.replace('.epub', '')
+  const baseFileName = bookStem.value
   markdownFilePath.value = await join(
     librariesRoot.value,
     'Libraries',
@@ -2579,7 +2584,7 @@ const updateMarkdownPath = async () => {
 }
 
 const getNotesDirectory = async () => {
-  const baseFileName = props.fileName.replace('.epub', '');
+  const baseFileName = bookStem.value;
   return await join(
     librariesRoot.value,
     'Libraries',
@@ -2590,7 +2595,7 @@ const getNotesDirectory = async () => {
 };
 
 const getImagesDirectory = async () => {
-  const baseFileName = props.fileName.replace('.md', '');
+  const baseFileName = bookStem.value;
   return await join(
     librariesRoot.value,
     'Libraries',

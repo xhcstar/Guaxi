@@ -96,10 +96,6 @@ pub fn add_repo_import_file(library: String, file_path: String) -> Result<AddRes
         .and_then(|ext| ext.to_str())
         .map(|ext| match ext {
             "doc" | "docx" => "word",
-            // Kindle 系（mobi / azw / azw3）与 EPUB 同属「电子书」，共用一个目录：
-            // 库结构里 `epub/` 是电子书的固定分类，多开两个同名目录只会让目录树变乱，
-            // 而阅读器本身是按真实扩展名决定用哪个解析器的（见 doc_reader.rs）。
-            "mobi" | "azw" | "azw3" => "epub",
             ext => ext,
         })
         .unwrap_or(""); // 如果文件没有后缀名，则默认为空字符串
@@ -107,7 +103,7 @@ pub fn add_repo_import_file(library: String, file_path: String) -> Result<AddRes
 
     match file_extension {
         "txt" | "pdf" | "word" | "epub" | "html" | "png" | "jpg" | "jpeg" | "pptx"
-        | "ppt" | "xlsx" | "xls" => {}
+        | "ppt" | "xlsx" | "xls" | "mobi" | "azw" | "azw3" => {}
         _ => {
             return Err("UnsupportedFileType".to_string());
         }

@@ -138,7 +138,7 @@ pub async fn create_reader_window(
 
 /// 从库网站(iframe)条目在本地阅读器打开文件库里的文件。
 /// 由磁盘布局 <libraries_root>/Libraries/<library>/<stem>/<type_dir>/<filename> 重建绝对路径,
-/// 再复用 create_reader_window。file_type 为已映射的类型目录名(pdf/markdown/word/epub/html/txt)。
+/// 再复用 create_reader_window。file_type 为已映射的类型目录名(pdf/markdown/word/epub/html/txt/mobi/azw/azw3)。
 #[tauri::command]
 pub async fn open_repo_reader(
     app: tauri::AppHandle,

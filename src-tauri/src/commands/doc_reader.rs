@@ -441,9 +441,9 @@ fn flatten_nav(points: &[ebook_rs::NavPoint], depth: usize, out: &mut Vec<EbookT
     }
 }
 
-/// MOBI 家族（MOBI/AZW3/KFX）在 ebook-rs 内部用 OEBPS 拍平结构，图片路径需要按该布局解析。
+/// MOBI 家族（MOBI/AZW/AZW3/KFX）在 ebook-rs 内部用 OEBPS 拍平结构，图片路径需要按该布局解析。
 fn is_mobi_family(kind: &str) -> bool {
-    matches!(kind, "mobi" | "azw3" | "kfx")
+    matches!(kind, "mobi" | "azw" | "azw3" | "kfx")
 }
 
 /// 判断字节流是否为 PalmDB/MOBI 容器。
@@ -2607,7 +2607,7 @@ pub async fn read_document_for_reader(path: String, kind: String) -> Result<Read
     let kind_lower = kind.trim().to_ascii_lowercase();
 
     match kind_lower.as_str() {
-        "epub" | "mobi" | "azw3" | "kfx" | "fb2" | "lit" | "cbz" => {
+        "epub" | "mobi" | "azw" | "azw3" | "kfx" | "fb2" | "lit" | "cbz" => {
             let kind_for_task = kind_lower.clone();
             let payload = tauri::async_runtime::spawn_blocking(move || {
                 read_ebook_blocking(&p, &kind_for_task)

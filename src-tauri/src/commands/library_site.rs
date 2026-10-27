@@ -46,7 +46,7 @@ struct Doc {
     library: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     repo: Option<String>,
-    /// 已映射到磁盘的类型目录名(pdf/markdown/word/epub/html/txt),阅读器按它定位文件。
+    /// 已映射到磁盘的类型目录名(pdf/markdown/word/epub/html/txt/mobi/azw/azw3),阅读器按它定位文件。
     #[serde(skip_serializing_if = "Option::is_none")]
     ftype: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -90,6 +90,9 @@ fn map_type_dir(raw: &str) -> Option<&'static str> {
         "md" | "markdown" => Some("markdown"),
         "html" | "htm" => Some("html"),
         "epub" => Some("epub"),
+        "mobi" => Some("mobi"),
+        "azw" => Some("azw"),
+        "azw3" => Some("azw3"),
         "doc" | "docx" | "word" => Some("word"),
         "txt" => Some("txt"),
         _ => None,

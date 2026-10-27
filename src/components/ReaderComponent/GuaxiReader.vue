@@ -106,7 +106,7 @@ const readerComponent = computed(() => {
     htm: GuaxiHtmlReader,
     epub: GuaxiEpubReader,
     // Kindle 系电子书复用 EPUB 阅读器：它是「源文件 + 转换后 Markdown」双栏的通用电子书壳，
-    // 章节与目录由后端解析器产出；后端 read_document_for_reader 已经认得 mobi / azw3，
+    // 章节与目录由后端解析器产出；后端 read_document_for_reader 已经认得 mobi / azw / azw3，
     // 前端只需把真实类型透传下去。
     mobi: GuaxiEpubReader,
     azw: GuaxiEpubReader,
